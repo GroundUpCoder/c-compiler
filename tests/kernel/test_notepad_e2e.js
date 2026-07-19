@@ -188,8 +188,8 @@ const out = boot([
   // 2px well (surface x 382..398), arrows 16px tall at its ends; the
   // hbar strip is the bottom 16px of the EDIT interior (SBY-18..SBY-2),
   // so the down arrow spans SBY-34..SBY-18 (center SBY-26).
-  // Scroll position is probed by CLICKING the top text row (surface y=25
-  // -> EDIT row 0 -> caret = topLine) and reading the status bar's
+  // Scroll position is probed by CLICKING the top text row (surface y=40,
+  // under the 30px menu bar -> EDIT row 0 -> caret = topLine) and the status bar's
   // "Line N" — scrollbar/wheel scrolling itself must NOT move the caret.
   'wmctl resize $SID 400 300',
   'wmctl wait dim $SID 400x300 4000',
@@ -209,24 +209,30 @@ const out = boot([
   // too, so the vbar ends 16px higher — all y offsets hang off SBY (the
   // tree-derived EDIT bottom) so a status-bar height change can't shear
   // the clicks onto the wrong furniture.
-  'wmctl click $SID 30 25',                       // probe: caret on top row
+  'wmctl click $SID 30 40',                       // probe: caret on top row
   'wmctl wait text msctls_statusbar32:0 "Line 1," 4000',
   'wmctl click $SID 390 $((SBY-26))',             // down arrow: +1 line
   'wmctl click $SID 390 $((SBY-26))',             // +1 more
-  'wmctl click $SID 30 25',
+  'wmctl click $SID 30 40',
   'wmctl wait text msctls_statusbar32:0 "Line 3," 4000',
-  'wmctl click $SID 390 30',                      // up arrow: -1 line
-  'wmctl click $SID 30 25',
+  'wmctl click $SID 390 40',                      // up arrow: -1 line
+  'wmctl click $SID 30 40',
   'wmctl wait text msctls_statusbar32:0 "Line 2," 4000',
   'wmctl click $SID 390 $((SBY-42))',             // channel below thumb: +page
-  'wmctl click $SID 30 25',
+  'wmctl click $SID 30 40',
   'n=0; while [ $n -lt 40 ]; do wmctl gettext msctls_statusbar32:0 | grep -q "Line 2," || break; sleep 0.1; n=$((n+1)); done',
   'echo ==pgdn',
   'wmctl gettext msctls_statusbar32:0',
   'echo ==cut',
+  // Reset to the top so the thumb is at a known y (grab just below the up
+  // arrow), then drag it to the channel bottom — the shorter 20px-font EDIT
+  // moves the thumb, so grabbing at a fixed y only works from a fixed start.
+  'wmctl wheel $SID 99',
+  'wmctl click $SID 30 40',
+  'wmctl wait text msctls_statusbar32:0 "Line 1," 4000',
   'PG="$(wmctl gettext msctls_statusbar32:0)"',
-  'wmctl drag $SID 390 80 390 $((SBY-36))',       // thumb drag to the bottom
-  'wmctl click $SID 30 25',
+  'wmctl drag $SID 390 55 390 $((SBY-20))',       // thumb drag to the bottom
+  'wmctl click $SID 30 40',
   'n=0; while [ $n -lt 40 ]; do [ "$(wmctl gettext msctls_statusbar32:0)" = "$PG" ] || break; sleep 0.1; n=$((n+1)); done',
   'echo ==thumbdrag',
   'wmctl gettext msctls_statusbar32:0',
@@ -237,20 +243,20 @@ const out = boot([
   'TD="$(wmctl gettext msctls_statusbar32:0)"',
   'wmctl hover $SID 200 150',
   'wmctl wheel $SID 2',                           // 2 notches up = -6 lines
-  'wmctl click $SID 30 25',
+  'wmctl click $SID 30 40',
   'n=0; while [ $n -lt 40 ]; do [ "$(wmctl gettext msctls_statusbar32:0)" = "$TD" ] || break; sleep 0.1; n=$((n+1)); done',
   'echo ==wheelup',
   'wmctl gettext msctls_statusbar32:0',
   'echo ==cut',
   'WU="$(wmctl gettext msctls_statusbar32:0)"',
   'wmctl wheel $SID -1',                          // 1 notch down = +3 lines
-  'wmctl click $SID 30 25',
+  'wmctl click $SID 30 40',
   'n=0; while [ $n -lt 40 ]; do [ "$(wmctl gettext msctls_statusbar32:0)" = "$WU" ] || break; sleep 0.1; n=$((n+1)); done',
   'echo ==wheeldn',
   'wmctl gettext msctls_statusbar32:0',
   'echo ==cut',
   'wmctl wheel $SID 99',                          // clamp at the top
-  'wmctl click $SID 30 25',
+  'wmctl click $SID 30 40',
   'wmctl wait text msctls_statusbar32:0 "Line 1," 4000',
   // New Window (ShellExecuteW spawns GetModuleFileName's answer)
   'wmctl click "New Window"',
@@ -427,7 +433,7 @@ check('WS_HSCROLL draws the bottom-edge scrollbar', hbGray > 1500,
   'gray=' + hbGray + ' of 3120');
 const pgdnLine = +((section(out, 'pgdn').match(/Line (\d+),/) || [])[1] || 0);
 check('channel click below the thumb pages down (caret probe on the top row)',
-  pgdnLine >= 10 && pgdnLine <= 30, 'line=' + pgdnLine);
+  pgdnLine >= 8 && pgdnLine <= 30, 'line=' + pgdnLine);
 const dragLine = +((section(out, 'thumbdrag').match(/Line (\d+),/) || [])[1] || 0);
 check('thumb drag scrolls to the bottom of the document',
   dragLine >= 60, 'line=' + dragLine + ' pgdn=' + pgdnLine);

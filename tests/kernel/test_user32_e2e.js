@@ -191,10 +191,11 @@ for (const probe of [
  * The 0229/0230 disease at its root: static_proc used to TOP-align
  * single-line text, so a Win95-sized (18px) STATIC clipped the stock
  * cell's descender row at its bottom edge. ctldemo carries three "No gyp"
- * STATICs at 288,44/70/96 — plain-DrawText 18px, mnemonic ('&') 18px, and
- * a 30px tall UNCLIPPED reference. In the 8px-advance mono stock font 'o'
- * spans cols x+8..16 (x-height, the baseline anchor) and 'gyp' cols
- * x+24..48 (descenders): dj = maxInk(gyp) - maxInk(o) is the descender
+ * STATICs at 288,44/78/112 — plain-DrawText 28px, mnemonic ('&') 28px, and
+ * a 40px tall UNCLIPPED reference (the font-20 retune resized them for
+ * the 28px stock cell). In the 12px-advance mono stock font 'o'
+ * spans cols x+12..26 (x-height, the baseline anchor) and 'gyp' cols
+ * x+36..74 (descenders): dj = maxInk(gyp) - maxInk(o) is the descender
  * extent, invariant under vertical placement — it only shrinks when the
  * bottom edge CLIPS. Each short static must show the reference's full dj. */
 function parsePpm(b64) {
@@ -217,11 +218,11 @@ function maxInkRow(P, x0, x1, y0, y1) {          // last row with any dark px
 const dP = parsePpm(section('dshot'));
 check('ctldemo shot is a P6 frame', dP.magic === 'P6', dP.magic);
 const dj = (sy, sh) => {
-  const o = maxInkRow(dP, 288 + 8, 288 + 16, sy, sy + sh);
-  const g = maxInkRow(dP, 288 + 24, 288 + 48, sy, sy + sh);
+  const o = maxInkRow(dP, 288 + 12, 288 + 26, sy, sy + sh);
+  const g = maxInkRow(dP, 288 + 36, 288 + 74, sy, sy + sh);
   return { o, g, dj: g - o };
 };
-const ref = dj(96, 30), plain = dj(44, 18), mn = dj(70, 18);
+const ref = dj(112, 40), plain = dj(44, 28), mn = dj(78, 28);
 check('reference STATIC shows real descenders (dj >= 3)',
   ref.dj >= 3, JSON.stringify(ref));
 /* 0236 red->green pins. Pre-fix, top-aligned text sat the stock cell
@@ -233,19 +234,19 @@ check('reference STATIC shows real descenders (dj >= 3)',
  * bottom ON the control's last row — edge-riding is now the CORRECT
  * placement (one row deeper and dj shrinks, which stays the guard);
  * the old >=1-clear-row clause was a Roboto-cell property. */
-check("plain-branch 18px STATIC: full descender extent, within the control",
-  plain.dj === ref.dj && plain.g <= 44 + 18 - 1,
+check("plain-branch 28px STATIC: full descender extent, within the control",
+  plain.dj === ref.dj && plain.g <= 44 + 28 - 1,
   JSON.stringify({ plain, ref }));
-check("mnemonic-branch 18px STATIC: full descender extent, within the control",
-  mn.dj === ref.dj && mn.g <= 70 + 18 - 1, JSON.stringify({ mn, ref }));
+check("mnemonic-branch 28px STATIC: full descender extent, within the control",
+  mn.dj === ref.dj && mn.g <= 78 + 28 - 1, JSON.stringify({ mn, ref }));
 /* the mnemonic underline (under 'N', cols x..x+8) draws just below the
  * BASELINE (the real-GDI position, Phase D — a cell-bottom underline
  * fell outside short controls under Noto's 20px cell): strictly below
  * the 'N'/'o' glyph bottoms ('N' sits on the baseline), inside the
  * control. dj above already guards the descenders. */
-const mnUl = maxInkRow(dP, 288, 288 + 8, 70, 70 + 18);
+const mnUl = maxInkRow(dP, 288, 288 + 12, 78, 78 + 28);
 check("mnemonic underline renders below the baseline, unclipped",
-  mnUl > mn.o && mnUl <= 70 + 18 - 1, JSON.stringify({ mnUl, mn }));
+  mnUl > mn.o && mnUl <= 78 + 28 - 1, JSON.stringify({ mnUl, mn }));
 
 /* label click -> WM_COMMAND */
 check('wmctl click Greet fires WM_COMMAND (no pixels)',

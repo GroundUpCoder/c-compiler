@@ -17,8 +17,8 @@
 //     Files flips dotfile visibility
 //   - Alt+Left walks the back history
 //
-// Row geometry (measured): row height 18px, so surface y=30 hits row 0,
-// y=50 row 1, y=78 row 2 (listbox top TOP_H=26). Keyboard selection
+// Row geometry: row height is font-derived (20px em ~29px rows, listbox
+// top TOP_H=26); clickRow(n) computes row n's center. Keyboard selection
 // (click + HOME + DOWN) stays row-height-agnostic where it can.
 //
 // Run: node tests/kernel/test_fileman_nav_e2e.js
@@ -57,7 +57,9 @@ const CTRL_UP = 'wmctl keyup $SID 224 1073742048 0';
 const SHIFT_DOWN_KEY = ['wmctl keydown $SID 225 1073742049 1',
                         'wmctl key $SID 81 1073741905 1',
                         'wmctl keyup $SID 225 1073742049 0'].join('\n');
-const clickRow = (y) => `wmctl click $SID 100 ${y}`;
+// Row pitch is font-derived (20px em -> ~29px rows, listbox top TOP_H=26):
+// clickRow(n) targets the CENTER of visual row n.
+const clickRow = (n) => `wmctl click $SID 100 ${26 + n * 29 + 14}`;
 const RC_PANE = 'wmctl click $SID 100 320 3';
 
 const out = boot([
@@ -86,9 +88,9 @@ const out = boot([
 
   // ---- Ctrl-click multi-select: row 0 (sub/) + row 3 (b.txt) ----
   // rows: sub/(0) a.txt(1) b.txt(2) c.txt(3) run.sh(4)  (dirs first, name sort)
-  clickRow(30),                              // plain click -> {row0}
+  clickRow(0),                               // plain click -> {row0}
   CTRL_DOWN,
-  clickRow(78),                              // ctrl-click row2 -> add {row0,row2}
+  clickRow(2),                               // ctrl-click row2 -> add {row0,row2}
   CTRL_UP,
   // 0154: these injects are FIFO in the one input ring, so the two guess-sleeps
   // around the ctrl-click are redundant — poll until the multi-selection marker
@@ -119,7 +121,7 @@ const out = boot([
 
   // ---- Shift+Down extends a range (a.txt row0 + c.txt row1 now) ----
   // remaining: a.txt(0) c.txt(1) run.sh(2)
-  clickRow(30),                              // {row0}
+  clickRow(0),                               // {row0}
   SHIFT_DOWN_KEY,                            // extend -> {row0,row1}
   // 0154: FIFO injects again; poll until the range's second row (c.txt) is
   // marked (replaces both guess-sleeps).
@@ -137,7 +139,7 @@ const out = boot([
   'wmctl settext EDIT:0 /root',
   'wmctl click Go',
   'wmctl wait win "File Manager - /root" 8000',
-  clickRow(30),                              // row 0 of /root: a directory
+  clickRow(0),                               // row 0 of /root: a directory
   // (the click -> ENTER pair is FIFO in the ring; no gap needed)
   'echo ==beforeenter',
   'wmctl tree',
@@ -167,7 +169,7 @@ const out = boot([
   'wmctl settext EDIT:0 /root/nav2',
   'wmctl click Go',
   'wmctl wait win "File Manager - /root/nav2" 8000',
-  'wmctl click $SID 100 100',                // focus the listbox
+  'wmctl click $SID 100 260',                // focus the listbox (empty space)
   ALT_LEFT,                                  // back to /root/nav
   // 0154: Alt+Left walks back to nav — poll for that exact title (nav2 != nav).
   'wmctl wait win "File Manager - /root/nav" 8000',
@@ -184,7 +186,7 @@ const out = boot([
   'echo ==autorefresh',
   'wmctl gettext LISTBOX:0',
   'echo ==cut',
-  'wmctl click $SID 100 100',                // focus listbox
+  'wmctl click $SID 100 260',                // focus listbox (empty space)
   F5,
   'wmctl wait text LISTBOX:0 "late.txt" 8000',
   'echo ==afterf5',

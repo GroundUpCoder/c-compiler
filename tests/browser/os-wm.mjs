@@ -57,10 +57,10 @@ try {
   const BARY = SH - 14;                          // mid-strip sample row
   await waitPixel(400, BARY, FACE, 60000);
   check('taskbar strip composited (wm autostart)', true);
-  await waitPixel(SW - 40, BARY, FACE, 30000);
+  await waitPixel(SW - 200, BARY, FACE, 30000);
   check('taskbar spans the RESIZED screen width (EV_SCREEN re-lay)', true);
   check('taskbar is borderless (no chrome band above it)',
-    near(await sample(400, SH - 32), TEAL), await sample(400, SH - 32));
+    near(await sample(400, SH - 40), TEAL), await sample(400, SH - 40));
 
   // Launch the seeded windowed app from the shell (real tty path).
   await setVt(1);
@@ -92,7 +92,7 @@ try {
   // clicking it minimizes, clicking again restores — the wm's policy loop
   // driven through its OWN surface's input ring. Button 0 sits right of
   // the Start button since todos/0028 (x in [56, 160)).
-  await waitPixel(100, BARY, FACE_DOWN);
+  await waitPixel(230, BARY, FACE_DOWN);
   check('taskbar button sunken while winbox focused', true);
   await clickAt(100, BARY);                      // minimize
   await waitPixel(WX + 120, WY + 80, TEAL);
@@ -165,7 +165,7 @@ try {
   // gesture (EV_TITLE_ACTIVATE), /bin/wm answers with MOVE + RESIZE to the
   // work area (screen minus taskbar, client top below the kernel title
   // bar): winbox re-renders at SW x (SH - 56), position (0, 28).
-  await page.mouse.dblclick(rect.x + NX + 100, rect.y + NY - 12);
+  await page.mouse.dblclick(rect.x + NX + 100, rect.y + NY - 14);
   const MW = SW, MH = SH - 56;                   // wm.c work area (BAR_H + TITLE_H)
   await waitPixel(MW - 30, 28 + MH - 30, GREEN, 30000);
   check('title double-click maximized winbox to the work area', true);
@@ -189,26 +189,26 @@ try {
   // metrics + 2px gaps: centers at RW-48 / RW-30 / RW-12 from the left
   // edge, mid-title. Min box -> kernel wmMinimize directly; max box ->
   // EV_TITLE_ACTIVATE -> the same wm.c toggle as the double-click.
-  check('min/max box faces composited', near(await sample(NX + RW - 48, NY - 12), FACE)
-    && near(await sample(NX + RW - 27, NY - 12), FACE),   // hollow-box interior
-    [await sample(NX + RW - 48, NY - 12), await sample(NX + RW - 27, NY - 12)]);
-  await clickAt(NX + RW - 48, NY - 12);          // min box
+  check('min/max box faces composited', near(await sample(NX + RW - 58, NY - 14), FACE)
+    && near(await sample(NX + RW - 36, NY - 14), FACE),   // hollow-box interior
+    [await sample(NX + RW - 58, NY - 14), await sample(NX + RW - 36, NY - 14)]);
+  await clickAt(NX + RW - 58, NY - 14);          // min box
   await waitPixel(NX + 120, NY + 80, TEAL);
   check('min box minimized the window', true);
-  await waitPixel(100, BARY, FACE);              // its button un-sunken
+  await waitPixel(230, BARY, FACE);              // its button un-sunken
   await clickAt(100, BARY);                      // restore via the taskbar
   await waitPixel(NX + 120, NY + 80, GREEN);
   check('taskbar restored after the min box', true);
-  await clickAt(NX + RW - 30, NY - 12);          // max box
+  await clickAt(NX + RW - 36, NY - 14);          // max box
   await waitPixel(MW - 30, 28 + MH - 30, GREEN, 30000);
   check('max box maximized to the work area (same policy as the double-click)', true);
-  await clickAt(MW - 30, 16);                    // max box at the maximized spot
+  await clickAt(MW - 36, 16);                    // max box at the maximized spot
   await waitPixel(NX + RW - 20, NY + RH - 20, GREEN, 30000);
   await waitPixel(MW - 30, 28 + MH - 30, TEAL);
   check('max box again restored the saved geometry', true);
 
   // Close box -> SDL_EVENT_QUIT -> app exits -> window gone.
-  await clickAt(NX + RW - 12, NY - 12);
+  await clickAt(NX + RW - 14, NY - 14);
   await waitPixel(NX + 120, NY + 80, TEAL);
   check('close box quit the app; desktop restored', true);
 
@@ -238,10 +238,10 @@ try {
   const AX = 40, AY = 60, BX = 68, BY = 84;      // cascade slots 1 and 2
   await waitPixel(BX + 200, BY + 100, ORANGE, 60000);   // B's client, clear of A
   check('two more winboxes composited', true);
-  await waitPixel(BX + 150, BY - 12, NAVY);
+  await waitPixel(BX + 150, BY - 14, NAVY);
   check('second winbox focused (navy title)', true);
   check('first winbox blurred (gray title)',
-    near(await sample(AX + 150, AY - 12), [128, 128, 128]), await sample(AX + 150, AY - 12));
+    near(await sample(AX + 150, AY - 14), [128, 128, 128], 20), await sample(AX + 150, AY - 14));
 
   const chord = async () => {
     await page.keyboard.down('Control');
@@ -252,10 +252,10 @@ try {
   };
   await clickAt(BX + 200, BY + 100);             // focus the canvas (B stays focused)
   await chord();
-  await waitPixel(AX + 100, AY - 12, NAVY);      // A's title, clear of B's bar
+  await waitPixel(AX + 100, AY - 14, NAVY);      // A's title, clear of B's bar
   check('chord flipped focus to the other winbox', true);
   await chord();
-  await waitPixel(BX + 150, BY - 12, NAVY);
+  await waitPixel(BX + 150, BY - 14, NAVY);
   check('chord again flipped back', true);
 
   // ---- window system menu (todos/0102): Alt+Space raises the sysmenu on
@@ -279,7 +279,7 @@ try {
   // click mark sat exactly on the green-swallow probe below. The navy
   // title composites only once C is mapped, and create-focus (kernel
   // mechanism) makes it C's — after it the geometry is settled.
-  await waitPixel(CX + 150, CY - 12, NAVY, 60000, "C's focused title — C mapped + focused");
+  await waitPixel(CX + 150, CY - 14, NAVY, 60000, "C's focused title — C mapped + focused");
   await waitPixel(CX + 200, CY + 100, ORANGE, 30000, "C's fill at the swallow-probe point");
   check('third winbox (C) composited and focused', true);
   // Focus click for the canvas — on C, but AWAY from every later probe:
@@ -340,7 +340,7 @@ try {
   check('strip is furniture before the drag', near(preStrip, FACE) || near(preStrip, FACE_DOWN), preStrip);
   // Grab B's title, drop so the client top lands at SH-60: the window then
   // overlaps the strip (which starts at SH-28).
-  await page.mouse.move(rect.x + BX + 100, rect.y + BY - 12);
+  await page.mouse.move(rect.x + BX + 100, rect.y + BY - 14);
   await page.mouse.down();
   await page.mouse.move(rect.x + BX + 100, rect.y + SH - 72, { steps: 8 });
   await page.mouse.up();
@@ -351,10 +351,10 @@ try {
     near(strip, FACE) || near(strip, FACE_DOWN), strip);
   // The button UNDER the overlap still clicks: B is focused, so its button
   // click must minimize it (pre-0038 the click landed in B's client).
-  await clickAt(200, BARY);
+  await clickAt(300, BARY);
   await waitPixel(BX + 120, SH - 45, TEAL);
   check('taskbar button under the overlap still clicks (B minimized)', true);
-  await clickAt(200, BARY);                      // restore
+  await clickAt(300, BARY);                      // restore
   await waitPixel(BX + 120, SH - 45, ORANGE);
   check('...and restores', true);
   // wmctl agrees: the LAST list row (top of z) is the pinned taskbar.
@@ -369,7 +369,7 @@ try {
   await page.mouse.down();
   await page.mouse.move(rect.x + BX + 100, rect.y + BY - 6, { steps: 8 });
   await page.mouse.up();
-  await waitPixel(BX + 150, BY - 12, NAVY);
+  await waitPixel(BX + 150, BY - 14, NAVY);
   check('winbox dragged back off the strip', true);
 
   // Kill the wm: the chord passes through — the focused winbox sees the

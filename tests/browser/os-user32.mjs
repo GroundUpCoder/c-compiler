@@ -90,7 +90,7 @@ try {
   check('BTNFACE class background composited', true);
   check('single-line EDIT well white', near(await sample(...at(166, 22)), WHITE), await sample(...at(166, 22)));
   check('LISTBOX well white', near(await sample(...at(100, 100)), WHITE), await sample(...at(100, 100)));
-  check('multiline EDIT well white', near(await sample(...at(100, 220)), WHITE), await sample(...at(100, 220)));
+  check('multiline EDIT well white', near(await sample(...at(200, 255)), WHITE), await sample(...at(200, 255)));
   // Control text renders: the STATIC "Name:" band carries non-BTNFACE ink.
   let ink = null;
   for (let x = 14; x < 60 && !ink; x += 2) {

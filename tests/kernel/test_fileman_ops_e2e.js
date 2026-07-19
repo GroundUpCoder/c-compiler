@@ -56,23 +56,23 @@ const DOWN = 'wmctl key $SID 81 1073741905';
 const F2 = 'wmctl key $SID 59 1073741883';
 const DEL = 'wmctl key $SID 76 127';
 const ESC = 'wmctl key $SID 41 27';
-const sel = (row) => ['wmctl click $SID 100 100', HOME,
+const sel = (row) => ['wmctl click $SID 100 250', HOME,
                       ...Array(row).fill(DOWN)].join('\n');
-// Row 0 of the LISTBOX starts at surface y = TOP_H(26) + 2 for any row
-// height; (100, 30) is inside it. (100, 300) is past a short listing.
+// The LISTBOX row height is font-derived (20px em ~29px rows); the sel()
+// focus click at y=250 is empty for the ≤5-item test listings (keyboard
+// HOME+DOWN drives selection). (100, 30) is row 0; (100, 300) is empty pane.
 const RC_ROW0 = 'wmctl click $SID 100 30 3';
 const RC_PANE = 'wmctl click $SID 100 300 3';
 
-// The wm.c desktop menus (menucore engine geometry since 0259: 18px
-// rows, 8px sep, 1px border — the ctxmenu goldens' move-together rule):
-// on a DOCUMENT icon (regular, not runnable — both targets here are
-// .txt) the rows are Open 1-19 / Edit 19-37 (0202) / sep / Cut 45-63 /
-// Copy 63-81 / Delete 81-99; desktop menu New / Sort by / Refresh /
-// Paste 55-73 / sep / Display. Desktop cells are derived from the
+// The wm.c desktop menus (menucore engine geometry since 0259, font-20
+// retune: 30px rows, 10px sep, 1px border): on a DOCUMENT icon (regular,
+// not runnable — both targets here are .txt) the rows are Open / Edit /
+// sep / Cut (center 86) / Copy (116) / Delete; desktop menu New / Sort by /
+// Refresh / Paste (center 106) / sep / Display. Desktop cells are derived from the
 // drive.js grid model (deskEntries/deskCell — dirs first, Recycle Bin
 // tail-pinned, column wrap at 11 rows; todos/0184/0185), never "icon 0"
 // row math.
-const ICON_CUT_Y = 54, ICON_COPY_Y = 72, DESK_PASTE_Y = 64;
+const ICON_CUT_Y = 86, ICON_COPY_Y = 116, DESK_PASTE_Y = 106;
 
 const script = [
   // -- fixtures --
@@ -272,7 +272,7 @@ const script = [
   // KEEP: coarse desktop-icon tick — wm.c re-reads the Desktop dir on a
   // timer, so the new icon has no event to wait on before the icon click.
   'sleep 1.5',
-  `wmctl click $DSID ${DFILE.x + 42} ${DFILE.y + 32} 3`,   // dfile.txt's sorted cell
+  `wmctl click $DSID ${DFILE.x + 58} ${DFILE.y + 48} 3`,   // dfile.txt's sorted cell
   'wmctl wait win ctxmenu 8000',                  // icon context menu up
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 30 ${ICON_COPY_Y}`,
@@ -287,7 +287,7 @@ const script = [
   // KEEP: coarse desktop-icon tick — the just-pasted "Copy of dfile.txt"
   // icon only appears after wm.c's next timed Desktop re-read.
   'sleep 1.5',
-  `wmctl click $DSID ${DCOPY.x + 42} ${DCOPY.y + 32} 3`,   // "Copy of dfile.txt"'s cell
+  `wmctl click $DSID ${DCOPY.x + 58} ${DCOPY.y + 48} 3`,   // "Copy of dfile.txt"'s cell
   'wmctl wait win ctxmenu 8000',                  // icon context menu up
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 30 ${ICON_CUT_Y}`,
@@ -349,12 +349,12 @@ check('status-strip shot is a P6 frame', ssP.magic === 'P6', ssP.magic);
 /* 0230 red->green pin: the old STATUS_H 18 vs the 19px stock cell. */
 check('status-strip height derives from the stock font cell (0230)',
   ssH >= 21, 'H=' + ssH + ' row=' + JSON.stringify(ssRow.slice(0, 120)));
-// "3 object(s)" in the 8px-advance mono stock font, drawn DT_LEFT with the
-// STATUSBAR's 6px well inset: 'j' occupies cell cols x+38..46, 'ect' (no
-// descenders) cols x+46..70 — the descender must reach >=3 rows below the
-// x-height.
-const jMax = maxInkRow(ssP, ssX + 38, ssX + 46, ssY, ssY + ssH);
-const ectMax = maxInkRow(ssP, ssX + 46, ssX + 70, ssY, ssY + ssH);
+// "3 object(s)" in the 12px-advance mono stock font (font-20 retune), drawn
+// DT_LEFT with the STATUSBAR's 6px well inset: "3 obj" puts 'j' at cell
+// cols x+54..66, 'ect' (no descenders) at x+66..102 — the descender must
+// reach >=3 rows below the x-height.
+const jMax = maxInkRow(ssP, ssX + 54, ssX + 66, ssY, ssY + ssH);
+const ectMax = maxInkRow(ssP, ssX + 66, ssX + 102, ssY, ssY + ssH);
 check("descenders render: 'j' reaches >=3 rows below the x-height glyphs",
   jMax - ectMax >= 3, 'j=' + jMax + ' ect=' + ectMax);
 /* Unclipped means CLEARANCE: ink ON the strip's bottom row is exactly what

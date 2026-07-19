@@ -125,7 +125,7 @@ const out = boot([
   'R=$(wmctl tree | grep "text=.7.$" | head -1)',
   'BX=$(echo "$R" | sed "s/.*rect=\\([0-9]*\\),.*/\\1/")',
   'BY=$(echo "$R" | sed "s/.*rect=[0-9]*,\\([0-9]*\\) .*/\\1/")',
-  'wmctl click $SID $((BX+24)) $((BY+22+20)) 3',
+  'wmctl click $SID $((BX+24)) $((BY+22+30)) 3',
   'wmctl wait label "Quick help" 4000',
   'echo ==ctxtree',
   'wmctl tree',
@@ -152,8 +152,8 @@ const out = boot([
 const list1 = section(out, 'list1');
 const row1 = list1.split('\n').find(l => l.endsWith('\tCalculator')) || '';
 check('window titled "Calculator"', row1 !== '', JSON.stringify(list1.slice(0, 300)));
-check('standard surface is 338x340 (template client + menu bar; Noto 20px stock cell, Phase D)',
-  row1.includes('338x340'), row1);
+check('standard surface is 507x478 (template client + 30px menu bar; 20px stock cell)',
+  row1.includes('507x478'), row1);
 check('window is fixed-size (no R flag)', !(row1.split('\t')[5] || '').includes('R'), row1);
 
 const tree1 = section(out, 'tree1');
@@ -189,8 +189,8 @@ check('popup item fires by label and the popup closes',
 /* view switch */
 const list2 = section(out, 'list2');
 const row2 = list2.split('\n').find(l => l.endsWith('\tCalculator')) || '';
-check('View->Scientific recreates the dialog (632x407 surface; Noto metrics, Phase D)',
-  row2.includes('632x407'), row2);
+check('View->Scientific recreates the dialog (948x570 surface; 20px stock cell)',
+  row2.includes('948x570'), row2);
 check('scientific template has the base radios',
   /class=BUTTON [^\n]*text='Hex'/.test(section(out, 'scitree')), section(out, 'scitree').slice(0, 400));
 

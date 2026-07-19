@@ -963,10 +963,13 @@ var WM_SOCK_PATH = '/run/wm.sock';
  * on the frame: right edge -> E, bottom edge -> S, within WM_GRIP of the
  * bottom-right corner -> SE (left/top edges just focus — moving-edge
  * resizes are deliberately not in this version). */
-var WM_TITLE_H = 24;
-var WM_CLOSE_W = 16, WM_CLOSE_PAD = 4;       // close box, right-aligned in the bar
+var WM_TITLE_H = 28;                         // font-20 retune: fits the 18px
+                                             // compositor label (compositor.js
+                                             // LABEL_FONT/LABEL_H must agree —
+                                             // the shared-chrome rule)
+var WM_CLOSE_W = 20, WM_CLOSE_PAD = 4;       // close box, right-aligned in the bar
 var WM_BOX_GAP = 2;                          // between the [min][max][close] boxes
-                                             // (todos/0030; same 16px metrics)
+                                             // (todos/0030; same 20px metrics)
 var WM_BORDER = 4;                           // resize frame around title+client
 var WM_GRIP = 16;                            // SE-corner zone (resizes both axes)
 var WM_MIN_SIZE = 32;                        // client floor for resize requests
@@ -5464,14 +5467,14 @@ Kernel.prototype.wmScreenshotScreen = function () {
       fill(bx, by, WM_CLOSE_W, WM_CLOSE_W, WM_COLORS.closeBox);
       if (mxx >= s.x) {
         fill(mxx, by, WM_CLOSE_W, WM_CLOSE_W, WM_COLORS.closeBox);
-        fill(mxx + 3, by + 3, 10, 2, glyph);             // max: hollow box
-        fill(mxx + 3, by + 11, 10, 1, glyph);
-        fill(mxx + 3, by + 3, 1, 9, glyph);
-        fill(mxx + 12, by + 3, 1, 9, glyph);
+        fill(mxx + 4, by + 4, 12, 2, glyph);             // max: hollow box
+        fill(mxx + 4, by + 14, 12, 1, glyph);
+        fill(mxx + 4, by + 4, 1, 11, glyph);
+        fill(mxx + 15, by + 4, 1, 11, glyph);
       }
       if (nxx >= s.x) {
         fill(nxx, by, WM_CLOSE_W, WM_CLOSE_W, WM_COLORS.closeBox);
-        fill(nxx + 3, by + 11, 8, 2, glyph);             // min: the bar
+        fill(nxx + 4, by + 14, 10, 2, glyph);            // min: the bar
       }
     }
     // Client pixels: front buffer rows, clipped to the screen.

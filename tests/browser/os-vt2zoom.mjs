@@ -84,7 +84,7 @@ try {
       return s && s.w === Math.floor(p.clientWidth / z) && s.h === Math.floor(p.clientHeight / z);
     }, Z, { timeout: 30000, polling: 150 });
     const s = await page.evaluate(() => window.__osScreen);
-    await waitPixel(s.w - 40, s.h - 14, FACE, 60000, 'taskbar re-laid at zoom');
+    await waitPixel(Math.floor(s.w * 0.62), s.h - 8, FACE, 60000, 'taskbar re-laid at zoom');
     return s;
   };
 
@@ -202,8 +202,8 @@ try {
   // ---- taskbar still works under zoom: its strip is FACE at the bottom edge.
   await setVt(2);
   check('taskbar strip renders under zoom (FACE at the logical bottom)',
-    near(await sample(Math.floor(s2.w / 2), s2.h - 14), FACE),
-    await sample(Math.floor(s2.w / 2), s2.h - 14));
+    near(await sample(Math.floor(s2.w * 0.72), s2.h - 8), FACE),
+    await sample(Math.floor(s2.w * 0.72), s2.h - 8));
 
   // ---- persistence across a reload: Z=2 restored, backing re-halved.
   await page.reload();

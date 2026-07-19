@@ -74,11 +74,11 @@ try {
     for (let i = 0; i < d.length; i += 4)
       if (d[i] < 40 && d[i + 1] < 40 && d[i + 2] < 40) n++;
     return n;
-  }, [SW - 14 - 45, SH - 20, 42, 12]);
+  }, [SW - 18 - 75, SH - 28, 72, 18]);
   check('taskbar clock digits present (black-pixel histogram)', clockBlack >= 15, clockBlack);
   // The Start button face, right of the "START" label glyphs (x 8..38).
-  check('Start button face at the taskbar left', near(await sample(44, BARY), FACE),
-    await sample(44, BARY));
+  check('Start button face at the taskbar left', near(await sample(74, BARY), FACE),
+    await sample(74, BARY));
 
   // The single-column root (os/wm.c, todos/0098+0132 + follow-up): a fixed
   // 192x274 panel above the 28px taskbar. A 22px gucOS branding BAND runs down
@@ -89,15 +89,15 @@ try {
   // All Programs] at rows 0-2, AP_ROW=2); "All Programs" cascades the tree
   // snugly off the column's right edge — startmenu2 lists the GROUPS,
   // startmenu3 a group's leaves. Item x is offset past the SM_SIDE band.
-  const SM_SIDE = 22, SM_COL = 170;
-  const SM_W = SM_SIDE + SM_COL, SM_H = 274, SM_ROW_H = 20, SM_PAD = 4, SM_ROWS = 12;
-  const SM_Y = SH - 28 - SM_H;
+  const SM_SIDE = 30, SM_COL = 260;
+  const SM_W = SM_SIDE + SM_COL, SM_H = 378, SM_ROW_H = 28, SM_PAD = 4, SM_ROWS = 12;
+  const SM_Y = SH - 36 - SM_H;
   const AP_ROW = SM_ROWS - 1;                    // All Programs DISPLAY row: pinned to
                                                  // the bottom (XP/Win7), above search
   const SM_SEARCH_Y = SM_Y + SM_PAD + SM_ROWS * SM_ROW_H + 4;
   // Flyout columns are menucore chain levels since 0259: 18px rows, 1px
   // border, measured widths (edge-scanned below, never a constant).
-  const MC_ROW = 18;
+  const MC_ROW = 30;
   const flyRowY = (i) => 1 + i * MC_ROW + 9;
   const flyH = (n) => 4 + n * MC_ROW;
   // Walk right from x0 along y until the desktop TEAL reappears — the
@@ -185,7 +185,7 @@ try {
   // The gucOS branding band down the left (x < SM_SIDE): a blue gradient
   // (blue channel high, red low).
   {
-    const b = await sample(10, SM_Y + Math.floor(SM_H / 2));
+    const b = await sample(15, SM_Y + Math.floor(SM_H / 4));
     check('gucOS branding band is a blue gradient down the left',
       b && b[2] > 60 && b[0] < 40, b);
   }
@@ -266,7 +266,7 @@ try {
   await clearRecents();
   await clickAt(25, BARY);
   await waitPixel(120, SM_Y + 74, FACE);
-  await clickAt(60, SM_Y + SM_PAD + 1 * SM_ROW_H + 10);   // column row 1 = Run...
+  await clickAt(60, SM_Y + SM_PAD + 1 * SM_ROW_H + 14);   // column row 1 = Run...
   await waitPixel(120, SM_Y + 74, TEAL);
   check('Run... click dismisses the menu (opens the dialog)', true);
   await page.keyboard.press('Escape');           // close the run dialog
@@ -355,25 +355,41 @@ try {
   // LIVE screen height). Probes below use doom (a 4-char label like the
   // old term probe: label starts at cell x+30) in column 0; term now sits
   // in column 1 and keeps the double-click-launch role.
+  // Clear the winboxes the Start-menu legs launched — they cascade over
+  // column 0 and would intercept the marquee's mouse-down (the icons live
+  // at the bottom of z, but a floating window is not). Close them from VT1.
+  await setVt(1);
+  await page.keyboard.type('for s in $(wmctl list | grep winbox$ | sed "s/[^0-9].*//"); do wmctl close $s; done; echo WB""-CLEARED\r', { delay: 20 });
+  await page.waitForFunction(() => window.__osOut.includes('WB-CLEARED'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => !/\twinbox$/m.test(window.__osOut) || true, { timeout: 5000, polling: 200 }).catch(() => {});
+  await new Promise(r => setTimeout(r, 800));
+  await setVt(2);
+  await new Promise(r => setTimeout(r, 800));
+
   const DESK_ENTRIES = deskEntries();
   const cell = (name) => deskCell(DESK_ENTRIES, name, SH);
+  // The selection strip is `lx-2 .. lx+lw+2` at cy+40..63; its 2px LEFT
+  // MARGIN (before the white label text) is the reliable pure-navy probe.
+  // lw ~= min(len,9)*12 at the 12px mono advance; sample the margin center.
+  const stripL = (c, name) =>
+    [c.x + Math.floor((116 - Math.min(name.length, 9) * 12) / 2) - 1, c.y + 50];
   const DC = cell('doom');
-  const I3X = DC.x + 30, I3Y = DC.y + 6;         // doom's icon tile origin
+  const I3X = DC.x + 42, I3Y = DC.y + 6;         // doom's icon tile origin
   await waitPixel(I3X + 2, I3Y + 2, WHITE);
   check(`desktop icon tile composited (doom, cell ${DC.col},${DC.row})`, true);
-  check('icon glyph navy center', near(await sample(I3X + 12, I3Y + 12), NAVY),
-    await sample(I3X + 12, I3Y + 12));
+  check('icon glyph navy center', near(await sample(I3X + 16, I3Y + 16), NAVY),
+    await sample(I3X + 16, I3Y + 16));
   // The Presentations folder icon (todos/0185): tab+body glyph — the tab
   // notch leaves (+16,+6) of the tile white where a launcher block is navy.
   const FC = cell('Presentations');
   check('folder glyph on the Presentations icon (white tab notch, navy body)',
-    near(await sample(FC.x + 30 + 16, FC.y + 6 + 6), WHITE) &&
-    near(await sample(FC.x + 30 + 8, FC.y + 6 + 12), NAVY),
-    [await sample(FC.x + 30 + 16, FC.y + 6 + 6), await sample(FC.x + 30 + 8, FC.y + 6 + 12)]);
+    near(await sample(FC.x + 42 + 21, FC.y + 6 + 8), WHITE) &&
+    near(await sample(FC.x + 42 + 10, FC.y + 6 + 16), NAVY),
+    [await sample(FC.x + 42 + 21, FC.y + 6 + 8), await sample(FC.x + 42 + 10, FC.y + 6 + 16)]);
 
   // Single click: selection highlight (navy label strip), NO launch.
-  await clickAt(DC.x + 42, I3Y + 10);
-  await waitPixel(DC.x + 29, DC.y + 24 + 10 + 3, NAVY);   // label bg, left of text
+  await clickAt(DC.x + 58, I3Y + 16);
+  { const [lx, ly] = stripL(DC, 'doom'); await waitPixel(lx, ly, NAVY); }   // label strip left
   check('single click selects (navy label strip)', true);
 
   // ---- selection & manipulation (todos/0077) ----
@@ -381,28 +397,38 @@ try {
   // and navigation keys reach the icon grid from here on.
   // Ctrl+click mario: additive — doom stays.
   const MC = cell('mario');
-  const MSTRIP = [MC.x + 26, MC.y + 37];         // mario len 5 -> label x 43
+  const MSTRIP = stripL(MC, 'mario');            // mario label strip left margin
   await page.keyboard.down('Control');
-  await clickAt(MC.x + 42, MC.y + 30);
+  await clickAt(MC.x + 58, MC.y + 48);
   await page.keyboard.up('Control');
   await waitPixel(MSTRIP[0], MSTRIP[1], NAVY);
   check('ctrl+click adds to the selection (mario strip navy)', true);
-  check('...and doom stays selected', near(await sample(DC.x + 29, DC.y + 37), NAVY),
-    await sample(DC.x + 29, DC.y + 37));
+  { const [lx, ly] = stripL(DC, 'doom');
+    check('...and doom stays selected', near(await sample(lx, ly), NAVY), await sample(lx, ly)); }
 
   // Marquee from empty desktop over the column-0 row 5-6 tiles (fileman,
   // gameboy — column 1's few icons sit above row 3, clear of the sweep):
   // REPLACES the set — mario drops out.
   const FMC = cell('fileman'), GC = cell('gameboy');
-  await page.mouse.move(rect.x + 150, rect.y + 310);
+  // Box the two icon TILES (icon at cell.x+42..74, y cell.y+6..38): start
+  // at empty desktop above-right of fileman, drag through both down to just
+  // above mario's row (fileman row 5 + gameboy row 6, mario row 7 excluded).
+  // The marquee must START in an EMPTY cell: desk_hit is CELL-based (a
+  // press anywhere inside an occupied cell selects that icon and arms an
+  // icon-move, not a marquee). Column 1 has only 5 icons, so its lower
+  // cells and everything from column 3 right are empty — start 3 columns
+  // right of fileman and sweep back-left across the two tiles, staying
+  // above mario's row.
+  const mqTop = Math.min(FMC.y, GC.y) - 14, mqBot = Math.max(FMC.y, GC.y) + 44;
+  await page.mouse.move(rect.x + FMC.x + 360, rect.y + mqTop);
   await page.mouse.down();
-  await page.mouse.move(rect.x + 95, rect.y + 360, { steps: 4 });
-  await page.mouse.move(rect.x + 40, rect.y + 430, { steps: 4 });
+  await page.mouse.move(rect.x + FMC.x + 180, rect.y + (mqTop + mqBot) / 2, { steps: 6 });
+  await page.mouse.move(rect.x + FMC.x + 40, rect.y + mqBot, { steps: 6 });
   await page.mouse.up();
-  await waitPixel(FMC.x + 20, FMC.y + 37, NAVY);     // fileman len 7 -> x 37
+  { const [lx, ly] = stripL(FMC, 'fileman'); await waitPixel(lx, ly, NAVY); }  // fileman strip
   check('marquee selects the intersected icons (fileman strip navy)', true);
-  check('gameboy caught by the marquee too', near(await sample(GC.x + 20, GC.y + 37), NAVY),
-    await sample(GC.x + 20, GC.y + 37));
+  { const [lx, ly] = stripL(GC, 'gameboy');
+    check('gameboy caught by the marquee too', near(await sample(lx, ly), NAVY), await sample(lx, ly)); }
   check('marquee replaces: mario deselected', near(await sample(MSTRIP[0], MSTRIP[1]), TEAL),
     await sample(MSTRIP[0], MSTRIP[1]));
 
@@ -410,31 +436,31 @@ try {
   // it (mouseup rule); past the 500ms double-click window, drag it two
   // columns right — (0,r) -> (2,r), snapped and persisted (.icons).
   const PC = cell('pokemon');
-  await clickAt(PC.x + 42, PC.y + 30);
+  await clickAt(PC.x + 58, PC.y + 48);
   await new Promise(r => setTimeout(r, 600));
-  await page.mouse.move(rect.x + (PC.x + 42), rect.y + (PC.y + 30));
+  await page.mouse.move(rect.x + (PC.x + 58), rect.y + (PC.y + 48));
   await page.mouse.down();
-  await page.mouse.move(rect.x + (PC.x + 42 + 84), rect.y + (PC.y + 30), { steps: 3 });
-  await page.mouse.move(rect.x + (PC.x + 42 + 168), rect.y + (PC.y + 30), { steps: 3 });
+  await page.mouse.move(rect.x + (PC.x + 58 + 116), rect.y + (PC.y + 48), { steps: 3 });
+  await page.mouse.move(rect.x + (PC.x + 58 + 232), rect.y + (PC.y + 48), { steps: 3 });
   await page.mouse.up();
-  await waitPixel(PC.x + 168 + 32, PC.y + 8, WHITE);   // tile ring at the new cell
+  await waitPixel(PC.x + 232 + 44, PC.y + 8, WHITE);   // tile ring at the new cell
   check('drag repositions the icon (tile at col 2)', true);
-  check('the old cell is teal again', near(await sample(PC.x + 42, PC.y + 18), TEAL),
-    await sample(PC.x + 42, PC.y + 18));
+  check('the old cell is teal again', near(await sample(PC.x + 58, PC.y + 22), TEAL),
+    await sample(PC.x + 58, PC.y + 22));
   check('moved icon stays selected (strip navy at the new cell)',
-    near(await sample(PC.x + 168 + 20, PC.y + 37), NAVY),
-    await sample(PC.x + 168 + 20, PC.y + 37));
+    near(await sample(PC.x + 232 + (stripL(PC,'pokemon')[0]-PC.x), stripL(PC,'pokemon')[1]), NAVY),
+    await sample(PC.x + 232 + (stripL(PC,'pokemon')[0]-PC.x), stripL(PC,'pokemon')[1]));
 
   // Esc clears the selection (the desktop holds focus).
   await page.keyboard.press('Escape');
-  await waitPixel(PC.x + 168 + 20, PC.y + 37, TEAL);
+  await waitPixel(PC.x + 232 + (stripL(PC,'pokemon')[0]-PC.x), stripL(PC,'pokemon')[1], TEAL);
   check('Esc clears the selection', true);
 
   // Double-click launches term (640x456 at the cascade slot; term's live
   // cell — column 1 since the wrap). Sample a point inside term but
   // outside winbox; wait for it to leave teal.
   const TC = cell('term');
-  await page.mouse.dblclick(rect.x + (TC.x + 42), rect.y + (TC.y + 16));
+  await page.mouse.dblclick(rect.x + (TC.x + 58), rect.y + (TC.y + 22));
   await waitNotPixel(500, 300, TEAL, 90000);     // freetype startup is slow
   check('double-click launched term (window composited)', true);
 
@@ -465,8 +491,9 @@ try {
   await clearRecents();
   await clickAt(25, BARY);
   await waitPixel(120, SM_Y + 74, FACE);
-  await clickAt(60, SM_Y + SM_PAD + 1 * SM_ROW_H + 10);   // Run... (column row 1)
-  await waitPixel(200, SH - 28 - 70 - 6 + 35, WHITE2);   // the input box
+  await clickAt(60, SM_Y + SM_PAD + 1 * SM_ROW_H + 14);   // Run... (column row 1)
+  await new Promise(r => setTimeout(r, 500));            // RUN dialog composite settle
+  await waitPixel(200, SH - 36 - 78 + 44, WHITE2);   // the input box (RUN 340x78 above the 36px bar)
   check('Run... place opens the run dialog', true);
   check('the menu closed behind it', near(await sample(120, SM_Y + 74), TEAL),
     await sample(120, SM_Y + 74));
@@ -651,30 +678,32 @@ try {
   await waitPixel(350, 350, ORANGE);
   check('a winbox is parked over the sample point (orange)', true);
 
-  // Right-click the clock cell (x = SW-40: always past the button run) ->
-  // the strip menu (CTX_W 120, clamped to the right edge, 96 tall above the
-  // 28px bar). Sample a blank face-gray spot inside it (menu-local x~100).
-  const rclickStrip = () => page.mouse.click(rect.x + SW - 40, rect.y + BARY, { button: 'right' });
+  // Right-click the EMPTY strip (x = SW/2: past the term button, left of the
+  // 75px clock cell) -> the strip menu (opens above the 36px bar). Sample a
+  // blank face-gray spot inside it, near its left edge.
+  const STRIPX = Math.floor(SW / 2), MENUPROBEX = STRIPX + 8, MENUPROBEY = SH - 90;
+  const rclickStrip = () => page.mouse.click(rect.x + STRIPX, rect.y + BARY, { button: 'right' });
   await rclickStrip();
-  await waitPixel(SW - 20, SH - 74, FACE);
+  await waitPixel(MENUPROBEX, MENUPROBEY, FACE);
   check('right-click the taskbar strip opens the menu (face gray above the bar)', true);
   // an outside-click (on the empty desktop) dismisses it (the 0091 rule).
   await clickAt(200, 200);
-  await waitNotPixel(SW - 20, SH - 74, FACE);    // observable: wait for the menu face to clear (was a blind settle)
+  await waitNotPixel(MENUPROBEX, MENUPROBEY, FACE);
   check('outside-click dismisses the strip menu',
-    !near(await sample(SW - 20, SH - 74), FACE), await sample(SW - 20, SH - 74));
+    !near(await sample(MENUPROBEX, MENUPROBEY), FACE), await sample(MENUPROBEX, MENUPROBEY));
   // re-open and dismiss with Esc.
   await rclickStrip();
-  await waitPixel(SW - 20, SH - 74, FACE);
+  await waitPixel(MENUPROBEX, MENUPROBEY, FACE);
   await page.keyboard.press('Escape');
-  await waitNotPixel(SW - 20, SH - 74, FACE);    // observable: wait for the menu face to clear (was a blind settle)
+  await waitNotPixel(MENUPROBEX, MENUPROBEY, FACE);
   check('Esc also dismisses the strip menu',
-    !near(await sample(SW - 20, SH - 74), FACE), await sample(SW - 20, SH - 74));
+    !near(await sample(MENUPROBEX, MENUPROBEY), FACE), await sample(MENUPROBEX, MENUPROBEY));
 
-  // The clock date tooltip: HOVER the clock cell -> "datepop" (104x22,
-  // light-yellow face above the clock). Sample its blank right end.
-  await page.mouse.move(rect.x + SW - 40, rect.y + BARY);
-  await waitPixel(SW - 8, SH - 43, [255, 255, 225]);
+  // The clock date tooltip: HOVER the clock cell -> "datepop" (184x30,
+  // light-yellow face above the clock, at x=SW-184). Sample its blank area.
+  await page.mouse.move(rect.x + SW - 55, rect.y + BARY);
+  await new Promise(r => setTimeout(r, 400));            // hover-raise settle
+  await waitPixel(SW - 100, SH - 56, [255, 255, 225]);
   check('clock hover shows the date tooltip', true);
   await page.mouse.move(rect.x + 200, rect.y + 300);   // off the clock: it idles out
 
@@ -722,12 +751,12 @@ try {
   await clickAt(500, 400);
   await new Promise(r => setTimeout(r, 400));
   await page.keyboard.press('ArrowRight');
-  await waitPixel(49, 48, NAVY);                     // aaa label strip padding (row 0)
+  await waitPixel(55, 66, NAVY);                     // aaa label strip left margin (row 0)
   check('top-left icon selected (navy label strip)', true);
   // F2 opens the inline editor: a solid white box over the label cell. Sample
   // just above the text row — teal on the plain desktop, white with the box.
   await page.keyboard.press('F2');
-  await waitPixel(48, 47, WHITE);
+  await waitPixel(55, 60, WHITE);
   check('F2 opens the inline editor (white box over the label)', true);
   // Clear "aaa" (3 Backspaces), type "bbb", Enter commits the rename.
   await page.keyboard.press('Backspace');
@@ -737,7 +766,7 @@ try {
   await page.keyboard.press('Enter');
   await new Promise(r => setTimeout(r, 700));
   // The editor closed (box gone) and the grid relabelled — verify on disk.
-  await waitPixel(48, 47, TEAL);
+  await waitPixel(55, 60, TEAL);
   check('editor closes after commit (box gone)', true);
   await setVt(1);
   await page.keyboard.type('test -e /root/Desktop/bbb && echo RN-BBB""-YES; test -e /root/Desktop/aaa || echo RN-AAA""-GONE\r', { delay: 20 });
@@ -763,12 +792,12 @@ try {
   await new Promise(r => setTimeout(r, 2500));       // desk_load re-read tick
   await setVt(2);
   const ln0 = await winCount();                      // winCount() ends back on VT2
-  await page.mouse.dblclick(rect.x + 58, rect.y + 16 + 0 * 64 + 32);   // row 0 = 'My App'
+  await page.mouse.dblclick(rect.x + 74, rect.y + 16 + 0 * 96 + 48);   // row 0 = 'My App'
   await new Promise(r => setTimeout(r, 3500));        // sh -> winbox spawn
   const ln1 = await winCount();
   check('short spaced Desktop name launches on dblclick (winbox +1)',
     ln1 === ln0 + 1, { ln0, ln1 });
-  await page.mouse.dblclick(rect.x + 58, rect.y + 16 + 1 * 64 + 32);   // row 1 = 36-char name
+  await page.mouse.dblclick(rect.x + 74, rect.y + 16 + 1 * 96 + 48);   // row 1 = 36-char name
   await new Promise(r => setTimeout(r, 3500));
   const ln2 = await winCount();
   check('36-char spaced Desktop name launches on dblclick (no name[32] truncation)',

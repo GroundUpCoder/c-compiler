@@ -91,7 +91,7 @@ try {
   check('dragover lit the drop highlight', hl.lit && hl.cleared, hl);
   await waitDropLog(page, 'blob.bin -> /root/Desktop/blob.bin (256 bytes)');
   check('kernel logged the write', true);
-  await waitPixel(B1.x + 32, B1.y + 6 + 2, WHITE, 15000);   // the bin's post-drop tile
+  await waitPixel(B1.x + 44, B1.y + 6 + 2, WHITE, 15000);   // the bin's post-drop tile
   check(`icon appeared without a reboot (${GRID1.length}-cell grid)`, true);
 
   // Byte-identity through the shell (busybox md5sum over the brokered fs).
@@ -115,9 +115,9 @@ try {
   const GRID = deskEntries(['blob.bin', 'blob-1.bin', 'run-winbox']);
   const RW = deskCell(GRID, 'run-winbox', SH);
   const B2 = deskCell(GRID, 'Recycle Bin', SH);
-  await waitPixel(B2.x + 32, B2.y + 6 + 2, WHITE, 15000);
+  await waitPixel(B2.x + 44, B2.y + 6 + 2, WHITE, 15000);
   check(`launcher icon appeared (${GRID.length}-cell grid)`, true);
-  await page.mouse.dblclick(rect.x + (RW.x + 42), rect.y + (RW.y + 6 + 10));
+  await page.mouse.dblclick(rect.x + (RW.x + 58), rect.y + (RW.y + 6 + 16));
   await waitPixel(12 + 120, 36 + 80, ORANGE, 60000);   // first client window
   check('double-click ran the dropped launcher (winbox composited)', true);
 

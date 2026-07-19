@@ -99,11 +99,11 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
          * mnemonic draw_label_mn path) — plus a tall unclipped reference
          * the pixel test measures the true descender extent against. */
         CreateWindowEx(0, "STATIC", "No gyp", WS_CHILD | WS_VISIBLE,
-                       288, 44, 96, 18, hwnd, (HMENU)IDC_DESC_PLAIN, NULL, NULL);
+                       288, 44, 130, 28, hwnd, (HMENU)IDC_DESC_PLAIN, NULL, NULL);
         CreateWindowEx(0, "STATIC", "&No gyp", WS_CHILD | WS_VISIBLE,
-                       288, 70, 96, 18, hwnd, (HMENU)IDC_DESC_MN, NULL, NULL);
+                       288, 78, 130, 28, hwnd, (HMENU)IDC_DESC_MN, NULL, NULL);
         CreateWindowEx(0, "STATIC", "No gyp", WS_CHILD | WS_VISIBLE,
-                       288, 96, 96, 30, hwnd, (HMENU)IDC_DESC_REF, NULL, NULL);
+                       288, 112, 130, 40, hwnd, (HMENU)IDC_DESC_REF, NULL, NULL);
         CreateWindowEx(0, "EDIT", "line one\nline two",
                        WS_CHILD | WS_VISIBLE | ES_MULTILINE,
                        12, 176, 268, 96, hwnd, (HMENU)IDC_NOTES_EDIT, NULL, NULL);

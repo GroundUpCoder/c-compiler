@@ -155,8 +155,8 @@ function sessionApps() {
     out.includes('Using built-in test ROM') && out.includes('SameBoy core, model DMG-B'),
     JSON.stringify(out.slice(0, 120)));
   check('sameboy opens a window titled "SameBoy"', row !== '', JSON.stringify(list1));
-  check('sameboy window is 480x452 (160x144 tripled + the menu bar strip)',
-    row.includes('480x452'), row);
+  check('sameboy window is 480x462 (160x144 tripled + the menu bar strip)',
+    row.includes('480x462'), row);
   check('DMG shot series written', out.includes('shots-ok'));
 
   /* ---- the menu model in the agent tree (same engine as gpubox/notepad) ---- */
@@ -183,7 +183,7 @@ function sessionApps() {
     win1 && bar1 && bar1.x === win1.x && bar1.y === win1.y,
     JSON.stringify({ win1, bar1 }));
   check('strip spans the window width at MENU_BAR_H',
-    win1 && bar1 && bar1.w === win1.w && bar1.h === 20,
+    win1 && bar1 && bar1.w === win1.w && bar1.h === 30,
     JSON.stringify({ win1, bar1 }));
 
   /* ---- popup child over the live client ---- */
@@ -191,7 +191,7 @@ function sessionApps() {
   const pop = rowsOf(plist, '#32768')[0];
   check('bar click opened a real "#32768" popup child', !!pop, plist);
   check('popup hangs off the bar (anchored below MENU_BAR_H)',
-    pop && win1 && pop.y === win1.y + 20 && pop.x >= win1.x,
+    pop && win1 && pop.y === win1.y + 30 && pop.x >= win1.x,
     JSON.stringify({ pop, win1 }));
   check('menu screen shot written', out.includes('shot-menu-ok'));
 
@@ -261,8 +261,8 @@ function sessionFrames(geom) {
     series.push(p);
     cursor = p.end;
   }
-  check('all 8 DMG series shots parse as P6 at full window size 480x452',
-    series.length === 8 && series.every(p => p.w === 480 && p.h === 452),
+  check('all 8 DMG series shots parse as P6 at full window size 480x462',
+    series.length === 8 && series.every(p => p.w === 480 && p.h === 462),
     series.length + ' parsed');
   if (!series.length) return;
 
@@ -271,7 +271,7 @@ function sessionFrames(geom) {
   // not a histogram guess. The checkerboard uses at least 3 of them; scan
   // for the first frame past dmg_boot's logo.
   const GREYS = new Set([0x000000, 0x555555, 0xAAAAAA, 0xFFFFFF]);
-  const sets = series.map(p => colorSet(b.stdout, p, 20));
+  const sets = series.map(p => colorSet(b.stdout, p, 30));
   const k = sets.findIndex(s => s.size >= 3 && [...s].every(c => GREYS.has(c)));
   check('a series frame reaches the checkerboard (>=3 exact GB_PALETTE_GREY shades)',
     k >= 0, sets.map(s => s.size).join(','));
@@ -295,8 +295,8 @@ function sessionFrames(geom) {
   /* ---- Pause really froze the frame loop: byte-identical shots 2s apart ---- */
   const q1 = parsePPM(b.stdout, cursor);
   const q2 = q1 ? parsePPM(b.stdout, q1.end) : null;
-  check('pause shots parse at 480x452',
-    q1 && q2 && q1.w === 480 && q1.h === 452 && q2.w === 480 && q2.h === 452);
+  check('pause shots parse at 480x462',
+    q1 && q2 && q1.w === 480 && q1.h === 462 && q2.w === 480 && q2.h === 462);
   if (q1 && q2) {
     let pdiff = 0;
     for (let i = 0; i < q1.end - q1.data; i++) {
@@ -318,15 +318,15 @@ function sessionFrames(geom) {
     pals.push(p);
     cursor = p.end;
   }
-  check('all 3 palette shots parse at 480x452',
-    pals.length === 3 && pals.every(p => p.w === 480 && p.h === 452),
+  check('all 3 palette shots parse at 480x462',
+    pals.length === 3 && pals.every(p => p.w === 480 && p.h === 462),
     pals.length + ' parsed');
   {
     // GB_PALETTE_DMG, exactly as display.c defines it (5 entries incl. the
     // LCD-off shade) — the swizzle chain (rgb_encode -> DIB -> SetDIBits ->
     // StretchBlt -> shot) must round-trip these bytes exactly.
     const DMGPAL = new Set([0x081810, 0x396139, 0x84A563, 0xC6DE8C, 0xD2E6A6]);
-    const psets = pals.map(p => colorSet(b.stdout, p, 20));
+    const psets = pals.map(p => colorSet(b.stdout, p, 30));
     check('a palette shot is fully DMG Green (>=3 exact GB_PALETTE_DMG shades, no others)',
       psets.some(s => s.size >= 3 && [...s].every(c => DMGPAL.has(c))),
       psets.map(s => [...s].map(c => c.toString(16)).join('/')).join(' | '));
@@ -354,10 +354,10 @@ function sessionFrames(geom) {
 
   if (HAVE_GBC) {
     const p3 = parsePPM(b.stdout, cursor);
-    check('CGB shot parses at 480x452', p3 !== null && p3.w === 480 && p3.h === 452);
+    check('CGB shot parses at 480x462', p3 !== null && p3.w === 480 && p3.h === 462);
     if (p3) {
       const GREYS2 = new Set([0x000000, 0x555555, 0xAAAAAA, 0xFFFFFF]);
-      const c3 = colorSet(b.stdout, p3, 20);
+      const c3 = colorSet(b.stdout, p3, 30);
       const nonGrey = [...c3].filter(c => !GREYS2.has(c));
       check('CGB frame is colorful (>=6 distinct colors — real cgb_boot handoff)',
         c3.size >= 6, c3.size + ' colors');

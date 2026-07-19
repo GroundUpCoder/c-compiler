@@ -119,12 +119,12 @@ try {
   await waitPixel(132, 116, ORANGE, 60000);      // winbox client at 12,36
   // Button 0 spans x [56,160); the h-84 menu parks above the 28px bar
   // (engine rows: 4 items + sep). Gutter sample at row 2 (+5, +40).
-  const BARY = SH - 14, BMX = 56, BMY = SH - 28 - 84;
+  const BARY = SH - 14, BMX = 88, BMY = SH - 36 - 134;
   await clickAt(100, BARY, 'right');
-  await waitPixel(BMX + 5, BMY + 40, FACE);
+  await waitPixel(BMX + 4, BMY + 46, FACE);
   check('right-click on a taskbar button raises the window menu above the bar', true);
   await page.keyboard.press('Escape');
-  await waitPixel(BMX + 5, BMY + 40, TEAL);
+  await waitPixel(BMX + 4, BMY + 46, TEAL);
   check('Esc dismisses the taskbar menu', true);
 
   // ---- EDIT context menu (user32, in-surface): clipboard-backed Paste ----

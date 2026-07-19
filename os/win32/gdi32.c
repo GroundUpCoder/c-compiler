@@ -73,7 +73,9 @@ void __win32_unsupported(const char *fmt, ...) {
 
 #define FONT_PATH     "/etc/fonts/mono.ttf"
 #define FONT_FALLBACK "/usr/share/fonts/mono.ttf"
-#define STOCK_FONT_PX 14
+#define STOCK_FONT_PX 20  /* THE system size (font-20 retune): equals the
+                             wm chrome_font, so chrome, menus, controls and
+                             the software center all share one 20px-AA face */
 #define FT_MONO_THRESHOLD 96   /* NONANTIALIASED coverage cut (tuning knob) */
 
 /* ============================================================ objects */

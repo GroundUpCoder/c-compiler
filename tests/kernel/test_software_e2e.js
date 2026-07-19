@@ -83,7 +83,7 @@ async function main() {
     `wmctl wait label '${names[0]} ${idx.packages[names[0]].version} [available]'`,
     'SWID=$(wmctl list | grep "Software$" | sed "s/[^0-9].*//")',
     ...Array.from({ length: Math.max(0, names.indexOf('punes') - 2) },
-      () => 'wmctl down $SWID 552 376 && wmctl up $SWID 552 376'),
+      () => 'wmctl down $SWID 632 420 && wmctl up $SWID 632 420'),
     `wmctl wait label 'punes ${pv} [available]'`,
     'echo ==cattree',
     'wmctl tree',

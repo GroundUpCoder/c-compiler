@@ -64,7 +64,7 @@ try {
       return s && s.w === Math.floor(p.clientWidth / z) && s.h === Math.floor(p.clientHeight / z);
     }, Z, { timeout: 30000, polling: 150 });
     const s = await page.evaluate(() => window.__osScreen);
-    await waitPixel(s.w - 40, s.h - 14, FACE, 60000, 'taskbar re-laid');
+    await waitPixel(s.w - 9, s.h - 18, FACE, 60000, 'taskbar re-laid');   // Show Desktop sliver face (right edge)
     return s;
   };
   // wmctl list geometry for an exact title. The line is TAB-separated:

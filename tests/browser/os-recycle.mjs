@@ -47,8 +47,8 @@ try {
   const BIN0 = deskCell(deskEntries(), 'Recycle Bin', SH);
   const BINJ = deskCell(deskEntries(['junk.txt']), 'Recycle Bin', SH);
   const JUNK = deskCell(deskEntries(['junk.txt']), 'junk.txt', SH);
-  const binX = BIN0.x + 42;
-  const rimY = BIN0.y + 10, cenY = BIN0.y + 18, clkY = BIN0.y + 30;
+  const binX = BIN0.x + 58;
+  const rimY = BIN0.y + 10, cenY = BIN0.y + 22, clkY = BIN0.y + 48;
   const rect = await page.evaluate(() => {
     const r = document.getElementById('screen').getBoundingClientRect();
     return { x: r.x, y: r.y };
@@ -73,11 +73,11 @@ try {
   await page.keyboard.type('DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")\r', { delay: 40 });
   await pause(800);
   // junk.txt's derived cell (dirs first + the 0184 launchers shift it)
-  await page.keyboard.type(`wmctl click $DSID ${JUNK.x + 42} ${JUNK.y + 32} 3\r`, { delay: 40 });
+  await page.keyboard.type(`wmctl click $DSID ${JUNK.x + 58} ${JUNK.y + 48} 3\r`, { delay: 40 });
   await pause(800);
   await page.keyboard.type('CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")\r', { delay: 40 });
   await pause(800);
-  await page.keyboard.type('wmctl click $CXSID 30 90\r', { delay: 40 });  // Delete (Edit shifted it, 0202; engine rows 0259)
+  await page.keyboard.type('wmctl click $CXSID 30 146\r', { delay: 40 });  // Delete (Edit shifted it, 0202; engine rows 0259)
   await pause(800);
   await page.keyboard.type('test ! -f /root/Desktop/junk.txt && test -f /root/.recycle/files/junk.txt && echo DESK-TRASH-O""K\r', { delay: 50 });
   await waitOut('DESK-TRASH-OK');
@@ -110,7 +110,7 @@ try {
   await setVt(2);
   // junk.txt is back on the desktop, so the tail-pinned bin sits one cell
   // further along (BINJ — derived, column-aware).
-  await waitPixel(BINJ.x + 42, BINJ.y + 18, WHITE, 30000);
+  await waitPixel(BINJ.x + 58, BINJ.y + 22, WHITE, 30000);
   check('bin glyph flips back EMPTY (at its new lower cell)', true);
 
   await setVt(1);

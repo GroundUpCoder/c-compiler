@@ -126,11 +126,11 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   const bad = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 32, h: 32, title: 'x' });
   check('create without SABs -> EINVAL', bad.errno === 'EINVAL');
 
-  const fb1 = makeFb(64, 48);
+  const fb1 = makeFb(80, 48);
   const ring1 = makeRing(256);
   workers.get(appPid).msg({ type: 'wm-sabs', fb: fb1.sab, ring: ring1.sab });
   // flags bit2 = resizable (todos/0021) — the resize legs below need it.
-  const c1 = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 64, h: 48, title: 'app one', flags: 4 });
+  const c1 = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 80, h: 48, title: 'app one', flags: 4 });
   check('create -> sid 1', c1.sid === 1, JSON.stringify(c1));
   check('placement below the title bar', c1.y >= K.WM_TITLE_H, c1.y);
 
@@ -252,16 +252,16 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('two SLOW clicks never activate', act === 'drag-start', act);
   kernel.wmPointer('up', m0.x + 5, m0.y - 10, { t: 2010 });
   // (x offset 0: >slop from the last down at +5, and still left of the
-  // 0030 min box — on this 64px window the boxes start at x+8.)
+  // 0030 min box — on this 80px window the boxes start at x+12.)
   act = kernel.wmPointer('down', m0.x, m0.y - 10, { t: 2100 });
   check('quick pair outside the slop still drags', act === 'drag-start', act);
   kernel.wmPointer('up', m0.x, m0.y - 10, { t: 2110 });
   check('double-click leg leaked no app events', drain(ring1).length === 0);
 
   // ---- second window: z-order, focus, occlusion ----
-  const fb2 = makeFb(64, 48);
+  const fb2 = makeFb(80, 48);
   workers.get(appPid).msg({ type: 'wm-sabs', fb: fb2.sab, ring: null });
-  const c2 = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 64, h: 48, title: 'app two' });
+  const c2 = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 80, h: 48, title: 'app two' });
   check('second window focused on create', kernel.wmList().find(s => s.sid === c2.sid).focused);
   present(fb2, [0, 0, 255, 255]);
   // Move window 2 exactly over window 1: topmost wins the composite + hit test.
@@ -338,9 +338,9 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
     String(px(screen, bxN + 8, byB + 4)) === '192,192,192,255',
     JSON.stringify([px(screen, bxC + 8, byB + 2), px(screen, bxM + 8, byB + 7), px(screen, bxN + 8, byB + 4)]));
   check('composite: min bar + max frame glyph pixels',
-    String(px(screen, bxN + 4, byB + 12)) === '0,0,0,255' &&
+    String(px(screen, bxN + 5, byB + 14)) === '0,0,0,255' &&
     String(px(screen, bxM + 4, byB + 4)) === '0,0,0,255',
-    JSON.stringify([px(screen, bxN + 4, byB + 12), px(screen, bxM + 4, byB + 4)]));
+    JSON.stringify([px(screen, bxN + 5, byB + 14), px(screen, bxM + 4, byB + 4)]));
 
   // ---- agent inject API (targeted, post-hit-test) ----
   kernel.wmInjectKey(1, true, 44, 32, 0);
@@ -378,7 +378,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   // ---- client resize: SURFACE_CONFIGURE renegotiation (todos/0019) ----
   check('wmResize asks the client', kernel.wmResize(1, 96, 80) === 0);
   let s1r = kernel.wmList().find(s => s.sid === 1);
-  check('geometry unchanged while pending', s1r.w === 64 && s1r.h === 48 &&
+  check('geometry unchanged while pending', s1r.w === 80 && s1r.h === 48 &&
     s1r.configurePending === true, JSON.stringify(s1r));
   let revs = drain(ring1);
   check('WINDOW_RESIZED event in the ring', revs.length === 1 &&
@@ -388,7 +388,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   present(fb1, [255, 255, 0, 255]);
   shot = kernel.wmScreenshot(1);
   check('old-size in-flight frame still shows (old buffer live)',
-    shot.w === 64 && String(px(shot, 1, 1)) === '255,255,0,255', px(shot, 1, 1));
+    shot.w === 80 && String(px(shot, 1, 1)) === '255,255,0,255', px(shot, 1, 1));
   // Bad acks: no SAB handshake; SAB header dims that contradict the RPC.
   const noSab = await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 96, h: 80 });
   check('CONFIGURE without a new SAB -> EINVAL', noSab.errno === 'EINVAL');

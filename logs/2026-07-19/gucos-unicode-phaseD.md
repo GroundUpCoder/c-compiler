@@ -155,3 +155,84 @@ After `gucman install font-unifont`: the 日本語.txt that showed tofu in
 v132 renders REAL glyphs — terminal (double-width cells), notepad/EDIT,
 desktop icon labels + wm chrome (the gdi32 chain feeds wm.c's freetype
 chrome from Phase C). Captured before/after → s3://groundupcoder/gucos/phaseD-cjk/.
+
+---
+
+# FONT-20px RETUNE (folded into Phase D, 2026-07-20)
+
+jku switched sequencing b→a: the "chrome font 20px + AA + unify + full
+layout re-tune" work (spec `~/git/meta/gucos/notes/font-bigger-aa-retune-
+kickoff.md`, RCA `ui-polish-font-blur-rca-2026-07-19.md`) folds ONTO the
+Noto commit in the SAME `unicode-phaseD` branch → ONE combined Noto+20px
+increment, ONE user look-confirm. Image stays **v133** (no double bump).
+
+## The one-line goal + why
+
+ONE font, 20px, antialiased, EVERYWHERE — kill the 10px/14px size split
+AND the 1-bit/AA split. Root cause of the blur/grain (RCA): the vendored
+freetype has NO hinter, so unhinted outlines at ppem ≤12 smear; the 10px
+chrome ALSO thresholded to 1-bit which amplified it. At 20px grayscale AA
+is clean without a hinter (same reason the 14px nested menus already read
+well). So: bigger + AA on, no hinter work.
+
+## The change (chrome_font is now THE system font)
+
+- **`wm.c` chrome_font**: `CHROME_PPEM` 10→**20**, `NONANTIALIASED_QUALITY`
+  →**`DEFAULT_QUALITY`** (grayscale AA). Baseline math generalized: the
+  bitmap-era `y+7-ascent` "7px cap cell" contract → `y+CHROME_CAP(14)`
+  from real Noto@20 metrics (advance 12, cap 14, ascent 22, descent 6);
+  every `(H-7)/2` centering → `(H-CHROME_CAP)/2`.
+- **Unify — the anti-shortcut core** (RCA's three other text paths onto
+  the SAME 20px-AA face):
+  - `gdi32 STOCK_FONT_PX` 14→**20** — SYSTEM_FONT (user32 controls, the
+    software center's default) now equals chrome_font.
+  - `wm.c wmmc_win_begin` **selects chrome_font into the menucore DC** —
+    nested Start-menu flyouts + ctx menus draw with the exact chrome
+    font object, no fall-through (RCA Q6: the two-size/two-AA menu seam).
+  - `software.c` font trio 20/15/12 → **-26/-20/-16** (body = the 20px
+    em; RCA Q1 "software center grainy").
+  - `compositor.js LABEL_FONT` bold 11px→**18px** + `LABEL_H` 16→26,
+    coordinated with **`kernel.js WM_TITLE_H` 24→28 + WM_CLOSE_W 16→20**
+    (the shared window-chrome rule — BOTH sides, plus the [min][max] box
+    glyph interiors scaled identically in kernel.js headless composite
+    AND compositor.js).
+- **`menucore.h`**: MENU_BAR_H 20→30, MENU_ITEM_H 18→30, MENU_SEP_H 8→10,
+  MENU_GUTTER 16→20 (menus fit the 20px rows).
+
+## Full layout re-tune (every constant keyed to the old 6px/7px glyph)
+
+wm.c: `BAR_H` 28→36, `START_W` 50→80, `BTN_W` 104→160, `CLOCK_W` 45→75,
+`SHOWDESK_W`/`DATE_W`/`DATE_H`, `SM_SIDE_W` 22→30, `SM_COL_W` 170→260,
+`SM_ROW_H` 20→28, `SM_SEARCH_H` 22→30, `RUN_W` 240→340, `RUN_H` 70→78,
+desktop icon cell `CELL_W` 84→116 / `CELL_H` 64→96 / `ICON_W` 24→32 (all
+seven procedural glyphs re-scaled inside the #82 center-pixel contract:
+navy=program/dir/full-bin, white=data/empty-bin), label truncation
+`text_fit(…,78)`→`CELL_W-8`, the RUN/rename/search field + caret heights,
+the All-Programs cascade arrow, `saver_zoom` range halved (the 20px mask
+is ~3× the 7px cell). paint.c sizes its window with
+`GetSystemMetrics(SM_CYMENU)` instead of a hardcoded +20.
+
+## Goldens re-baked (root cause on each, not blessed regressions)
+
+Kernel (95/95): test_wm (80px test windows so the 20px title boxes fit;
+box-glyph pixel probes), test_snap (BAR_H 36 → work-area 704, halves/
+quarters/fixbox letterbox), test_wm_service (SM_*/BAR/CLOCK/RUN/DATE/peek/
+datepop/taskbar-button/desktop-icon geometry — derived from the header
+constants, one edit), test_ctxmenu + test_recycle + test_fileman_ops
+(30px menu rows, 116×96 desktop cells, icon glyph pixels), test_desk_icons
+(deskCell 116×96 in drive.js + 32px tile probes), test_calc (507×478 /
+948×570 dialogs), test_winmine (BAR 30), test_notepad (30px menu shifts
+the EDIT + status strip; probe/arrow/thumb clicks), test_paint (BAR 30 +
+SM_CYMENU sizing), test_user32 (0236 statics regrown for the 28px cell +
+12px-advance columns), test_sameboy/test_gpubox_menu (30px bar strip),
+test_software (640×460 window, scrollbar at x=632). The fileman-family
+`sel()` focus-click moved off the (100,100) row (29px rows made it a real
+row that could double-click-open a file) to empty listbox space; row
+clicks compute from the font-derived 29px pitch.
+
+## Gate
+
+compiler.js UNTOUCHED (no SameBoy). Kernel 95/95, browser sweep 33/33,
+win32 ports 7/7. Image v133 (combined Noto + 20px). Before/after at 10px
+(grainy) vs 20px (AA) + a 16px reference: s3://groundupcoder/gucos/font20-
+retune/ (per-surface `-10px/-16px/-20px` + labeled `pairs/` side-by-sides).

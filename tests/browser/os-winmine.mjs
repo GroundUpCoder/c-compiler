@@ -64,7 +64,7 @@ try {
   await new Promise(r => setTimeout(r, 500));
 
   // The WM places the first window at (12,36). Beginner surface 154x202:
-  // 20px user32 menu bar over a 154x182 board client.
+  // 30px user32 menu bar over a 154x182 board client.
   const WX = 12, WY = 36;
   const at = (x, y) => [WX + x, WY + y];
   const rect = await page.evaluate(() => {
@@ -73,27 +73,27 @@ try {
   });
   const clickAt = (x, y) => page.mouse.click(rect.x + WX + x, rect.y + WY + y);
 
-  // x=140 sits past the "Options"/"Info" titles — empty bar face (text
-  // ink would fail a color probe).
-  await waitPixel(...at(140, 10), BTNFACE, 90000);
+  // The far top-right corner of the 30px bar is clear of the menu titles
+  // (whose 20px text hugs the left) and above the text baseline.
+  await waitPixel(...at(148, 4), BTNFACE, 90000);
   check('menu bar composited (BTNFACE strip)', true);
 
-  // The timer LEDs sit under the bar at client (5,5) => surface y 25..48;
-  // their face is dark — the popup will cover it with BTNFACE.
-  const led = await sample(...at(10, 30));
+  // The timer LEDs sit under the bar at client (5,5) => surface y 35..58
+  // (30px menu bar); their face is dark — the popup covers it with BTNFACE.
+  const led = await sample(...at(10, 42));
   check('timer LED area is dark (LoadBitmapW leds.bmp)', led[0] < 90 && led[1] < 90, led);
 
   // REAL mouse: open the Options popup, pixels appear over the LED area.
   await new Promise(r => setTimeout(r, 400));
   await clickAt(10, 10);
-  const overLed = await waitChange(...at(10, 30), led, 30000);
+  const overLed = await waitChange(...at(10, 42), led, 30000);
   check('bar click opens the popup (pixels over the LEDs)', near(overLed, BTNFACE, 24), overLed);
   await page.keyboard.press('Escape');
-  await waitPixel(...at(10, 30), led, 30000, 24);
+  await waitPixel(...at(10, 42), led, 30000, 24);
   check('ESC closes the popup (LEDs restored)', true);
 
   // REAL mouse: reveal a board cell — mines rect starts at client (5,33)
-  // => surface (5,53); cell (1,1) center (13,61). Diff the WHOLE 16x16
+  // => surface (5,63); cell (1,1) center (13,71). Diff the WHOLE 16x16
   // cell rect, not one center pixel: a blank reveal (no adjacent mines —
   // roughly a third of random boards) flood-fills FLAT, so the center
   // stays face gray and only the raised border changes. The headless twin
@@ -112,10 +112,10 @@ try {
     }
     return sig;
   }, [x, y, w, h]);
-  const CELL_RECT = [...at(5, 53), 16, 16];
+  const CELL_RECT = [...at(5, 63), 16, 16];
   const cell = await rectSig(...CELL_RECT);
   await new Promise(r => setTimeout(r, 300));
-  await clickAt(13, 61);
+  await clickAt(13, 71);
   {
     const t0 = Date.now();
     for (;;) {
@@ -134,7 +134,7 @@ try {
   await setVt(2);
   // Advanced surface is 266x314: a cell INTERIOR past the beginner width
   // fills in (col 13 center — edges carry the 3D highlight, not BTNFACE).
-  await waitPixel(...at(221, 157), BTNFACE, 30000, 24);
+  await waitPixel(...at(221, 167), BTNFACE, 30000, 24);
   check('wmctl click Advanced resizes the board (266x314 surface)', true);
 
   // Exit via the menu (agent path); desktop teal restored, shell alive.
