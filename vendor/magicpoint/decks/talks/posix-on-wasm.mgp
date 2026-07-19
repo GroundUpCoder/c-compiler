@@ -27,6 +27,7 @@ The dream is old
 		file manager, mail, media player, DOS prompt
 	the vision ran ahead of the runtime
 	16 years later, the runtime caught up
+	still at it - daedalOS: 4 years, 4100 commits, solo
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
@@ -60,6 +61,20 @@ gucOS: a fifth way
 	built by its own compiler, inside it
 		emulators pay at every instruction
 		gucOS pays only at syscalls
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+This actually runs
+
+%size 6, center, fore "white", vgap 50
+DOOM    Quake    SameBoy
+lua    sqlite3    busybox
+%size 5, fore "yellow"
+
+...and the desktop you are looking at
+%size 3, fore "gray70"
+
+the full tour comes at the end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
@@ -109,28 +124,33 @@ DON'T NEED TO
 --------------  
 %cont, fore "DeepSkyBlue"
 --------------
+%pause
 %fore "SpringGreen"
 processes       
 %cont, fore "orange"
 threads         
 %cont, fore "DeepSkyBlue"
 a scheduler
+%pause
 %fore "SpringGreen"
 pipes, ptys     
 %cont, fore "orange"
 fork            
 %cont, fore "DeepSkyBlue"
 drivers
+%pause
 %fore "SpringGreen"
 signals         
 %cont, fore "orange"
 preemption      
 %cont, fore "DeepSkyBlue"
 an MMU
+%pause
 %fore "SpringGreen"
 a filesystem    
 %cont, fore "DeepSkyBlue"
                 boot
+%pause
 %fore "SpringGreen"
 a desktop       
 %cont, fore "DeepSkyBlue"
