@@ -150,9 +150,17 @@ try {
     font: window.__osVt1Font,
     stored: localStorage.getItem('gucos.vt1.fontSize'),
     strip: document.getElementById('keystrip').offsetParent !== null,
+    osk: window.__osOsk && window.__osOsk.open,
   }));
-  check('narrow viewport defaults larger (26px, unpersisted) with the strip shown',
-    narrow.font === 26 && narrow.stored === null && narrow.strip, narrow);
+  // Since the mobile OSK: a phone-shaped viewport auto-OPENS the on-screen
+  // keyboard, which supersedes the keystrip (a strict superset of its keys)
+  // — so the strip is hidden here BY DESIGN. Closing the OSK brings it back.
+  check('narrow viewport defaults larger (26px, unpersisted); OSK open supersedes the strip',
+    narrow.font === 26 && narrow.stored === null && !narrow.strip && narrow.osk, narrow);
+  await page2.evaluate(() => window.__osOskToggle(false));
+  check('closing the OSK restores the keystrip',
+    await page2.evaluate(() =>
+      document.getElementById('keystrip').offsetParent !== null), true);
   await ctx2.close();
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));

@@ -51,9 +51,15 @@
   .vttab.active {
     color: #e0e0f0; background: #22223a; border-color: #4a4a77;
   }
+  /* OSK toggle (mobile OSK): visible on BOTH VTs and NOT gated on
+     data-touchui — it costs nothing on desktop, stays drivable in tests,
+     and mouse users can use it too. It heads the tab bar's right cluster,
+     so it carries the auto margin (fontctl/zoomctl follow it). */
+  #oskbtn { margin-left: auto; }
+  #oskbtn.on { background: #4a4a77; color: #ffffff; }
   /* VT1 font-size steps (todos/0212): right-aligned in the tab bar, only
      meaningful while the tty is visible. */
-  #fontctl { display: flex; gap: 2px; margin-left: auto; }
+  #fontctl { display: flex; gap: 2px; }
   body[data-vt="2"] #fontctl { display: none; }
   .fontbtn {
     font: 12px 'Menlo', 'Consolas', monospace; color: #8888a8;
@@ -65,7 +71,7 @@
   .fontbtn:hover { color: #c0c0d8; }
   /* VT2 desktop zoom (integer downscale): only meaningful while the desktop
      is visible, and touch-gated (a non-touch desktop keeps Z=1). */
-  #zoomctl { display: none; gap: 2px; margin-left: auto; }
+  #zoomctl { display: none; gap: 2px; }
   body[data-vt="2"][data-touchui] #zoomctl { display: flex; }
   /* "Desktop site" toggle (#69 D6): the standard mobile-browser affordance —
      opt out of the auto-2× mobile default back to the unzoomed 1× desktop
@@ -90,6 +96,31 @@
   }
   .stripkey:hover { color: #e0e0f0; border-color: #4a4a77; }
   .stripkey.armed { background: #4a4a77; color: #ffffff; }
+  /* On-screen keyboard (mobile OSK, os/osk.js): a flex SIBLING of the VT
+     panes at its NATURAL layout height — opening it shrinks the flex:1 pane
+     above it, which on VT2 flows through syncScreenSize -> screen-resize ->
+     the wm re-lays the taskbar and re-clamps windows (occlusion solved by
+     the 0023 dynamic screen; composes with zoom's floor(pane/Z) for free).
+     touch-action none: the OSK owns its touches (no browser gestures). */
+  #osk { display: none; padding: 2px 6px 6px; touch-action: none;
+         user-select: none; -webkit-user-select: none; }
+  body[data-osk] #osk { display: block; }
+  body[data-guard] #osk { display: none; }
+  /* The OSK supersedes the 0212 keystrip while open (it is a superset).
+     The full attribute chain out-specifies the keystrip's show rule. */
+  body[data-osk][data-vt="1"][data-touchui] #keystrip { display: none; }
+  .oskin { max-width: 760px; margin: 0 auto; }
+  .oskrow { display: flex; gap: 4px; margin-top: 4px; }
+  .oskkey {
+    flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap;
+    font: 13px 'Menlo', 'Consolas', monospace; color: #c0c0d8;
+    background: #16162a; border: 1px solid #333355; border-radius: 5px;
+    padding: 9px 0; text-align: center; cursor: pointer;
+    user-select: none; -webkit-user-select: none;
+  }
+  .oskkey:hover { color: #e0e0f0; border-color: #4a4a77; }
+  .oskkey.armed { background: #4a4a77; color: #ffffff; }
+  .oskkey.locked { background: #6a6ab7; color: #ffffff; border-color: #9a9ad7; }
   /* The desktop (todos/WM.md): the kernel composites windows onto this
      canvas in its worker; the page only forwards raw input. At zoom Z=1 the
      canvas is natural-size (backing store == pane == CSS size), so event
@@ -136,6 +167,7 @@
   <div id="vtbar">
     <span id="vt1tab" class="vttab active" title="the tty, VT1 (Ctrl+Alt+F1)">Terminal</span>
     <span id="vt2tab" class="vttab" title="the desktop, VT2 (Ctrl+Alt+F2). Ctrl+Alt+Tab cycles windows, +Shift for previous (todos/0032); Ctrl+Esc opens the Start menu (todos/0078)">Desktop</span>
+    <span id="oskbtn" class="fontbtn" title="on-screen keyboard">&#9000;</span>
     <span id="fontctl" title="terminal font size">
       <span id="fontminus" class="fontbtn">A&minus;</span><span id="fontplus" class="fontbtn">A+</span>
     </span>
@@ -147,6 +179,7 @@
   <div id="desktop"><canvas id="screen" width="800" height="500" tabindex="0"></canvas></div>
   <div id="terminal"></div>
   <div id="keystrip"></div>
+  <div id="osk"></div>
   <div id="guard">
     <div id="guardMsg">gucOS is already running in another tab.<br>
          Close that tab, then retry — the lock frees when it closes.</div>
@@ -160,6 +193,8 @@
      mixer's output ring plays through the same Web Audio path standalone
      pages use. The page stays a dumb bridge — no other host.js use here. -->
 <script src="../host.js"></script>
+<!-- The on-screen keyboard component (mobile OSK) — page-side only. -->
+<script src="osk.js"></script>
 <script>
 'use strict';
 
@@ -698,6 +733,9 @@ var vtTouched = false;
 function setVt(n) {
   n = n === 2 ? 2 : 1;
   if (n === vt) return;
+  // OSK sticky mods release through the OUTGOING backend (their keyups must
+  // land where the arm keydowns did); held OSK keys release the same way.
+  if (oskComp) oskComp.vtWillChange();
   if (vt === 2) {
     if (ptrLocked() && document.exitPointerLock) document.exitPointerLock();
     // Release the switch chord's modifiers into the focused surface: their
@@ -734,6 +772,54 @@ window.addEventListener('keydown', function (e) {
   e.stopPropagation();   // capture phase: beats xterm's and the canvas's handlers
   userSetVt(n);
 }, true);
+
+// On-screen keyboard (mobile OSK, os/osk.js): ONE component, TWO first-class
+// backends — on VT2 every tap ships the same plain {kind:'key'} record the
+// physical-keyboard listeners above send (bit-identical at routeInput; the
+// kernel/wm never learns the OSK exists), on VT1 it ships tty bytes through
+// the vt1Input funnel (so the 0212 keystrip's sticky Ctrl composes). The
+// #osk pane is a flex sibling: opening it shrinks the visible pane — xterm
+// refits, the desktop re-syncs (screen-resize -> wm re-lay + re-clamp).
+// Sticky modifiers, layers, and key repeat live in the component.
+var oskComp = OSK.create({
+  container: document.getElementById('osk'),
+  mode: function () { return vt === 2 ? 'wm' : 'tty'; },
+  sendWmKey: wmSend,
+  sendTtyBytes: vt1Input,
+  onChange: function (st) { window.__osOsk = st; },   // agent probe
+});
+function oskSetOpen(on, persist) {
+  on = !!on;
+  oskComp.setOpen(on);
+  if (on) document.body.setAttribute('data-osk', '1');
+  else document.body.removeAttribute('data-osk');
+  document.getElementById('oskbtn').className = 'fontbtn' + (on ? ' on' : '');
+  if (persist) try { localStorage.setItem('gucos.osk.open', on ? '1' : '0'); } catch (e) {}
+  // The displaced pane re-measures NOW (the vt2SetZoom precedent): xterm
+  // refits; the desktop resends its logical size -> wm re-lay + re-clamp.
+  if (vt === 1) fitAddon.fit();
+  else syncScreenSize();
+}
+document.getElementById('oskbtn').addEventListener('pointerdown', function (e) {
+  e.preventDefault();   // keep the pane focused (keystrip precedent)
+  oskSetOpen(!oskComp.isOpen(), true);
+});
+window.__osOskToggle = function (on) {   // agent probe (tests drive sans click)
+  oskSetOpen(on === undefined ? !oskComp.isOpen() : !!on, true);
+};
+window.__osOskTap = function (k) { oskComp.tap(k); };     // agent probe
+window.__osOskDown = function (k) { oskComp.down(k); };   // agent probe
+window.__osOskUp = function () { oskComp.up(); };         // agent probe
+window.__osOskSent = function () { return oskComp.sentLog(); };   // agent probe
+// Open state: saved-else-viewport-default (the #69 D6 / 0212 shape) — an
+// explicit toggle persists and always wins; with nothing stored, a
+// phone-shaped viewport boots with the keyboard OPEN (a phone has no other
+// keys), everything else closed.
+(function () {
+  var saved = null;
+  try { saved = localStorage.getItem('gucos.osk.open'); } catch (e) {}
+  if (saved === null ? mobileViewport() : saved === '1') oskSetOpen(true, false);
+})();
 
 // Agent/test probe (OS.md "agent-friendly by construction"): every tty
 // output byte also lands in window.__osOut, and __osState tracks the boot,
