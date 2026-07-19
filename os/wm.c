@@ -576,80 +576,209 @@ static int idle_pending = 0;       /* GET_IDLE in flight */
 static int marq_x, marq_y;         /* marquee banner position */
 static float star_x[SAVER_STARS], star_y[SAVER_STARS], star_z[SAVER_STARS];
 
-/* ---- 5x7 font (classic HD44780-style patterns), A-Z 0-9 - . ---- */
-static const uint8_t F_AZ[26][7] = {
-    {0x0E,0x11,0x11,0x1F,0x11,0x11,0x11}, {0x1E,0x11,0x11,0x1E,0x11,0x11,0x1E},
-    {0x0E,0x11,0x10,0x10,0x10,0x11,0x0E}, {0x1E,0x11,0x11,0x11,0x11,0x11,0x1E},
-    {0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F}, {0x1F,0x10,0x10,0x1E,0x10,0x10,0x10},
-    {0x0E,0x11,0x10,0x17,0x11,0x11,0x0F}, {0x11,0x11,0x11,0x1F,0x11,0x11,0x11},
-    {0x0E,0x04,0x04,0x04,0x04,0x04,0x0E}, {0x07,0x02,0x02,0x02,0x02,0x12,0x0C},
-    {0x11,0x12,0x14,0x18,0x14,0x12,0x11}, {0x10,0x10,0x10,0x10,0x10,0x10,0x1F},
-    {0x11,0x1B,0x15,0x15,0x11,0x11,0x11}, {0x11,0x11,0x19,0x15,0x13,0x11,0x11},
-    {0x0E,0x11,0x11,0x11,0x11,0x11,0x0E}, {0x1E,0x11,0x11,0x1E,0x10,0x10,0x10},
-    {0x0E,0x11,0x11,0x11,0x15,0x12,0x0D}, {0x1E,0x11,0x11,0x1E,0x14,0x12,0x11},
-    {0x0F,0x10,0x10,0x0E,0x01,0x01,0x1E}, {0x1F,0x04,0x04,0x04,0x04,0x04,0x04},
-    {0x11,0x11,0x11,0x11,0x11,0x11,0x0E}, {0x11,0x11,0x11,0x11,0x11,0x0A,0x04},
-    {0x11,0x11,0x11,0x15,0x15,0x15,0x0A}, {0x11,0x11,0x0A,0x04,0x0A,0x11,0x11},
-    {0x11,0x11,0x11,0x0A,0x04,0x04,0x04}, {0x1F,0x01,0x02,0x04,0x08,0x10,0x1F},
-};
-static const uint8_t F_09[10][7] = {
-    {0x0E,0x11,0x13,0x15,0x19,0x11,0x0E}, {0x04,0x0C,0x04,0x04,0x04,0x04,0x0E},
-    {0x0E,0x11,0x01,0x02,0x04,0x08,0x1F}, {0x1F,0x02,0x04,0x02,0x01,0x11,0x0E},
-    {0x02,0x06,0x0A,0x12,0x1F,0x02,0x02}, {0x1F,0x10,0x1E,0x01,0x01,0x11,0x0E},
-    {0x06,0x08,0x10,0x1E,0x11,0x11,0x0E}, {0x1F,0x01,0x02,0x04,0x08,0x08,0x08},
-    {0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E}, {0x0E,0x11,0x11,0x0F,0x01,0x02,0x0C},
-};
-static const uint8_t F_DASH[7] = {0,0,0,0x1F,0,0,0};
-static const uint8_t F_DOT[7]  = {0,0,0,0,0,0x0C,0x0C};
-
-static const uint8_t *glyph(char c) {
-    if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
-    if (c >= 'A' && c <= 'Z') return F_AZ[c - 'A'];
-    if (c >= '0' && c <= '9') return F_09[c - '0'];
-    if (c == '-') return F_DASH;
-    if (c == '.') return F_DOT;
-    return NULL;                       /* space / unknown: blank */
-}
-
 static uint32_t rgb(int r, int g, int b) {
     return (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) | 0xFF000000u;
 }
 
-/* Drawing helpers over any surface (sw x sh) — the taskbar and the Start
- * menu share them (todos/0028). */
-static void draw_text_s(uint32_t *px, int sw, int sh, int x, int y,
-                        const char *s, uint32_t col) {
-    for (; *s; s++, x += 6) {
-        if (x + 5 > sw) break;
-        const uint8_t *g = glyph(*s);
-        if (!g) continue;
-        for (int r = 0; r < 7; r++) {
-            if (y + r >= sh) break;
-            for (int c = 0; c < 5; c++)
-                if (g[r] & (0x10 >> c)) px[(y + r) * sw + x + c] = col;
-        }
-    }
+/* ---- chrome text via freetype/gdi32 (Unicode Phase C, the D1 ruling) ----
+ *
+ * ONE glyph facility: the same gdi32/freetype path the menus (menucore)
+ * already draw with, reached through the __gdi_dc_wrap seam (the
+ * child-control precedent) — no second glyph cache, no second text path.
+ * The Win95 look is preserved by RENDERING CHOICE, not codepath:
+ * NONANTIALIASED_QUALITY (1-bit mono hinting, hard edges) at CHROME_PPEM.
+ * At ppem 10 Roboto Mono's 0.6em advance is exactly 6px and caps stand
+ * ~7px — the retired 5x7 bitmap table's metrics — so the chrome geometry (6px pitch,
+ * 7px cell centering) carries over unchanged; only truncation/caret math
+ * moved from byte-count*6 to measured codepoint-aware widths. */
+#define CHROME_PPEM 10
+
+static HFONT chrome_font(void) {
+    static HFONT f;
+    if (!f)
+        f = CreateFont(-CHROME_PPEM, 0, 0, 0, FW_NORMAL, 0, 0, 0,
+                       ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                       NONANTIALIASED_QUALITY, FIXED_PITCH, "mono");
+    return f;
 }
 
-/* draw_text_s rotated 90° CCW as a vertical label reading BOTTOM-to-TOP —
- * the Win95 sidebar title (todos/0132 follow-up): upright and correctly
- * ordered when the head tilts left. (bx, by) is the bottom-left of the
- * 7px-wide strip; the first char sits at the bottom and each advances UP by
- * 6px. A glyph pixel (row r, col c) maps to horizontal r and vertical -c, a
- * true (non-mirrored) rotation. */
-static void draw_text_vert_s(uint32_t *px, int sw, int sh, int bx, int by,
-                             const char *s, uint32_t col) {
-    for (; *s; s++, by -= 6) {
-        const uint8_t *g = glyph(*s);
-        if (!g) continue;
-        for (int r = 0; r < 7; r++)
-            for (int c = 0; c < 5; c++)
-                if (g[r] & (0x10 >> c)) {
-                    int xx = bx + r, yy = by - c;
-                    if (xx >= 0 && xx < sw && yy >= 0 && yy < sh)
-                        px[yy * sw + xx] = col;
-                }
+/* The persistent 1x1 measure DC (user32's g_scratchPx precedent). */
+static HDC chrome_mdc(void) {
+    static HDC mdc;
+    static uint32_t dot;
+    if (!mdc) {
+        mdc = __gdi_dc_wrap(&dot, 1, 1, 1);
+        if (mdc) SelectObject(mdc, chrome_font());
     }
+    return mdc;
+}
+
+static int chrome_ascent(void) {
+    static int asc;
+    if (!asc) {
+        TEXTMETRIC tm;
+        asc = chrome_mdc() && GetTextMetrics(chrome_mdc(), &tm) ? tm.tmAscent
+                                                                : 8;
+    }
+    return asc;
+}
+
+static int chrome_cell_h(void) {
+    static int ch;
+    if (!ch) {
+        TEXTMETRIC tm;
+        ch = chrome_mdc() && GetTextMetrics(chrome_mdc(), &tm)
+                 ? tm.tmHeight : 11;
+    }
+    return ch;
+}
+
+static int text_w(const char *s) {
+    SIZE sz;
+    if (!chrome_mdc() ||
+        !GetTextExtentPoint32(chrome_mdc(), s, (int)strlen(s), &sz))
+        return 0;
+    return (int)sz.cx;
+}
+
+/* Byte count of the longest prefix of s fitting in maxw px — codepoint-
+ * aware (never splits a UTF-8 sequence); replaces the byte-count*6
+ * truncation loops. */
+static int text_fit(const char *s, int maxw) {
+    int len = (int)strlen(s), i = 0, w = 0;
+    while (i < len) {
+        int j = i;
+        __u8_next(s, len, &j);
+        char cpb[8];
+        memcpy(cpb, s + i, (size_t)(j - i));
+        cpb[j - i] = 0;
+        w += text_w(cpb);
+        if (w > maxw) break;
+        i = j;
+    }
+    return i;
+}
+
+/* Byte index where the TAIL of s that fits in maxw px begins (input
+ * fields keep the end of the line visible). */
+static int text_tail(const char *s, int maxw) {
+    int len = (int)strlen(s), i = len, w = 0;
+    while (i > 0) {
+        int p = __u8_prev(s, i);
+        char cpb[8];
+        memcpy(cpb, s + p, (size_t)(i - p));
+        cpb[i - p] = 0;
+        w += text_w(cpb);
+        if (w > maxw) break;
+        i = p;
+    }
+    return i;
+}
+
+/* UTF-8-encode one keysym code point (the VT2 input ring carries Unicode
+ * code points since Phase A). Returns byte count, 0 on a non-character. */
+static int u8_enc(unsigned cp, char *out) {
+    if (cp < 0x80) { out[0] = (char)cp; return 1; }
+    if (cp < 0x800) {
+        out[0] = (char)(0xC0 | cp >> 6);
+        out[1] = (char)(0x80 | (cp & 0x3F));
+        return 2;
+    }
+    if (cp < 0x10000) {
+        out[0] = (char)(0xE0 | cp >> 12);
+        out[1] = (char)(0x80 | (cp >> 6 & 0x3F));
+        out[2] = (char)(0x80 | (cp & 0x3F));
+        return 3;
+    }
+    if (cp <= 0x10FFFF) {
+        out[0] = (char)(0xF0 | cp >> 18);
+        out[1] = (char)(0x80 | (cp >> 12 & 0x3F));
+        out[2] = (char)(0x80 | (cp >> 6 & 0x3F));
+        out[3] = (char)(0x80 | (cp & 0x3F));
+        return 4;
+    }
+    return 0;
+}
+
+/* Is this keysym printable TEXT for the wm's own input fields (RUN,
+ * search, icon rename)? Named keys live at 0x40000000+, DEL is 127. */
+static int sym_text(int sym) {
+    return sym >= 32 && sym != 127 && sym < 0x40000000;
+}
+
+/* Drawing helpers over any surface (sw x sh) — the taskbar and the Start
+ * menu share them (todos/0028). (x, y) keeps its 5x7 meaning: y is the
+ * top of the 7px CAP cell, so the baseline sits at y+7 and every
+ * (H - 7) / 2 centering in the chrome carries over; descenders extend
+ * below the old cell, which every surface has room for. */
+static void draw_text_s(uint32_t *px, int sw, int sh, int x, int y,
+                        const char *s, uint32_t col) {
+    HDC dc = __gdi_dc_wrap(px, sw, sh, sw);
+    if (!dc) return;
+    SelectObject(dc, chrome_font());
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, (COLORREF)(col & 0x00FFFFFFu));
+    TextOut(dc, x, y + 7 - chrome_ascent(), s, (int)strlen(s));
+    __gdi_dc_unwrap(dc);
+}
+
+/* Render s through the chrome font into a transient ink MASK (1 byte per
+ * pixel, nonzero = ink) trimmed to the ink bounding box — the substrate
+ * the rotated (gucOS band) and zoomed (marquee) transforms operate on.
+ * Returns NULL when s has no ink; caller frees. */
+static unsigned char *text_mask(const char *s, int *tw, int *th) {
+    int w = text_w(s) + 2, h = chrome_cell_h() + 4;
+    if (w < 3) return NULL;
+    uint32_t *tmp = (uint32_t *)calloc((size_t)w * h, 4);
+    if (!tmp) return NULL;
+    HDC dc = __gdi_dc_wrap(tmp, w, h, w);
+    if (!dc) { free(tmp); return NULL; }
+    SelectObject(dc, chrome_font());
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(255, 255, 255));
+    TextOut(dc, 0, 2, s, (int)strlen(s));
+    __gdi_dc_unwrap(dc);
+    int x0 = w, y0 = h, x1 = -1, y1 = -1;
+    for (int j = 0; j < h; j++)
+        for (int i = 0; i < w; i++)
+            if (tmp[j * w + i]) {
+                if (i < x0) x0 = i;
+                if (i > x1) x1 = i;
+                if (j < y0) y0 = j;
+                if (j > y1) y1 = j;
+            }
+    if (x1 < 0) { free(tmp); return NULL; }
+    int mw = x1 - x0 + 1, mh = y1 - y0 + 1;
+    unsigned char *m = (unsigned char *)malloc((size_t)mw * mh);
+    if (!m) { free(tmp); return NULL; }
+    for (int j = 0; j < mh; j++)
+        for (int i = 0; i < mw; i++)
+            m[j * mw + i] = tmp[(y0 + j) * w + x0 + i] ? 1 : 0;
+    free(tmp);
+    *tw = mw;
+    *th = mh;
+    return m;
+}
+
+/* Vertical label reading BOTTOM-to-TOP — the Win95 sidebar title
+ * (todos/0132 follow-up): upright and correctly ordered when the head
+ * tilts left. (cx, cy) is the CENTER of the band area; a mask pixel
+ * (hx, hy) maps to horizontal +hy and vertical -hx, a true (non-mirrored)
+ * 90° CCW rotation of the freetype-rendered text. */
+static void draw_text_vert_s(uint32_t *px, int sw, int sh, int cx, int cy,
+                             const char *s, uint32_t col) {
+    int tw, th;
+    unsigned char *m = text_mask(s, &tw, &th);
+    if (!m) return;
+    int bx = cx - th / 2, by = cy + tw / 2;
+    for (int hy = 0; hy < th; hy++)
+        for (int hx = 0; hx < tw; hx++)
+            if (m[hy * tw + hx]) {
+                int xx = bx + hy, yy = by - hx;
+                if (xx >= 0 && xx < sw && yy >= 0 && yy < sh)
+                    px[yy * sw + xx] = col;
+            }
+    free(m);
 }
 
 static void fill_s(uint32_t *px, int sw, int sh, int x, int y, int w, int h,
@@ -989,8 +1118,8 @@ static void snapprev_show(int edge) {
 
 /* ---- the screensaver (todos/0096) ---- */
 
-/* The marquee's glyph zoom for the current screen: the 5x7 font scaled to
- * a banner that reads across the room, clamped sane on tiny screens. */
+/* The marquee's glyph zoom for the current screen: the chrome font scaled
+ * to a banner that reads across the room, clamped sane on tiny screens. */
 static int saver_zoom(void) {
     int z = scr_h / 64;
     if (z < 2) z = 2;
@@ -998,19 +1127,28 @@ static int saver_zoom(void) {
     return z;
 }
 
-/* draw_text_s at an integer zoom — each font pixel becomes a z x z block.
- * Off-surface glyphs clip in fill_s, so the banner can enter and leave. */
+/* The zoomed banner's pixel size (the wrap / vertical-centering math). */
+static void text_zoom_size(const char *s, int z, int *bw, int *bh) {
+    int tw = 0, th = 7;
+    unsigned char *m = text_mask(s, &tw, &th);
+    free(m);
+    *bw = tw * z;
+    *bh = th * z;
+}
+
+/* draw_text_s at an integer zoom — each ink pixel of the freetype-rendered
+ * mask becomes a z x z block. Off-surface blocks clip in fill_s, so the
+ * banner can enter and leave. */
 static void draw_text_zoom(uint32_t *px, int sw, int sh, int x, int y,
                            const char *s, int z, uint32_t col) {
-    for (; *s; s++, x += 6 * z) {
-        if (x >= sw || x + 5 * z <= 0) continue;
-        const uint8_t *g = glyph(*s);
-        if (!g) continue;
-        for (int r = 0; r < 7; r++)
-            for (int c = 0; c < 5; c++)
-                if (g[r] & (0x10 >> c))
-                    fill_s(px, sw, sh, x + c * z, y + r * z, z, z, col);
-    }
+    int tw, th;
+    unsigned char *m = text_mask(s, &tw, &th);
+    if (!m) return;
+    for (int hy = 0; hy < th; hy++)
+        for (int hx = 0; hx < tw; hx++)
+            if (m[hy * tw + hx])
+                fill_s(px, sw, sh, x + hx * z, y + hy * z, z, z, col);
+    free(m);
 }
 
 /* One star back to the far plane ("deep") or anywhere along the flight
@@ -1057,7 +1195,11 @@ static void saver_show(void) {
     for (int i = 0; i < nwins; i++)
         if (wins[i].focused && !wins[i].minimized) { saver_prev = wins[i].sid; break; }
     marq_x = scr_w;
-    marq_y = (scr_h - 7 * saver_zoom()) / 2;
+    {
+        int bw, bh;
+        text_zoom_size(saver_cfg.text, saver_zoom(), &bw, &bh);
+        marq_y = (scr_h - bh) / 2;
+    }
     for (int i = 0; i < SAVER_STARS; i++) star_respawn(i, 0);
     saver_win = SDL_CreateWindow("screensaver", scr_w, scr_h,
                                  SDL_WINDOW_BORDERLESS);
@@ -1106,12 +1248,13 @@ static void draw_saver(void) {
     fill_s(px, scr_w, scr_h, 0, 0, scr_w, scr_h, black);
     if (saver_kind == 1) {             /* the scrolling marquee */
         int z = saver_zoom();
-        int bw = (int)strlen(saver_cfg.text) * 6 * z;
+        int bw, bh;
+        text_zoom_size(saver_cfg.text, z, &bw, &bh);
         draw_text_zoom(px, scr_w, scr_h, marq_x, marq_y, saver_cfg.text, z, white);
         marq_x -= 4;
         if (marq_x + bw < 0) {         /* wrapped: new pass, new height */
             marq_x = scr_w;
-            int span = scr_h - 7 * z - 2 * DESK_MARGIN;
+            int span = scr_h - bh - 2 * DESK_MARGIN;
             marq_y = DESK_MARGIN + (span > 0 ? rand() % span : 0);
         }
     } else {                           /* the starfield flythrough */
@@ -1463,12 +1606,20 @@ static void run_key(int sym) {
         return;
     }
     if (sym == SDLK_BACKSPACE) {
-        if (run_len > 0) run_buf[--run_len] = 0;
+        if (run_len > 0) {             /* pop one CODE POINT (Phase C) */
+            run_len = __u8_prev(run_buf, run_len);
+            run_buf[run_len] = 0;
+        }
         return;
     }
-    if (sym >= 32 && sym < 127 && run_len < RUN_MAX) {
-        run_buf[run_len++] = (char)sym;
-        run_buf[run_len] = 0;
+    if (sym_text(sym)) {
+        char b[4];
+        int n = u8_enc((unsigned)sym, b);
+        if (n > 0 && run_len + n <= RUN_MAX) {
+            memcpy(run_buf + run_len, b, (size_t)n);
+            run_len += n;
+            run_buf[run_len] = 0;
+        }
     }
 }
 
@@ -1488,10 +1639,9 @@ static void draw_run(void) {
     fill_s(px, RUN_W, RUN_H, 8, 26, RUN_W - 16, 1, sh);
     fill_s(px, RUN_W, RUN_H, 8, 26, 1, 22, sh);
     /* The tail of the input that fits, plus a block caret. */
-    int maxn = (RUN_W - 16 - 12 - 6) / 6;
-    const char *s = run_len > maxn ? run_buf + (run_len - maxn) : run_buf;
+    const char *s = run_buf + text_tail(run_buf, RUN_W - 16 - 12 - 6);
     draw_text_s(px, RUN_W, RUN_H, 12, 33, s, txt);
-    fill_s(px, RUN_W, RUN_H, 12 + (int)strlen(s) * 6, 32, 2, 10, txt);
+    fill_s(px, RUN_W, RUN_H, 12 + text_w(s), 32, 2, 10, txt);
     SDL_UpdateWindowSurface(run_win);
 }
 
@@ -1798,18 +1948,24 @@ static void sm_root_key(int sym) {
         return;
     }
     if (sym == SDLK_BACKSPACE) {
-        if (sm_search_len > 0) {
-            sm_search[--sm_search_len] = 0;
+        if (sm_search_len > 0) {       /* pop one CODE POINT (Phase C) */
+            sm_search_len = __u8_prev(sm_search, sm_search_len);
+            sm_search[sm_search_len] = 0;
             sm_rebuild_left();
             sm_lhover = sm_nleft > 0 ? 0 : -1;
         }
         return;
     }
-    if (sym >= 32 && sym < 127 && sm_search_len < (int)sizeof sm_search - 1) {
-        sm_search[sm_search_len++] = (char)sym;
-        sm_search[sm_search_len] = 0;
-        sm_rebuild_left();
-        sm_lhover = sm_nleft > 0 ? 0 : -1;       /* preselect the top hit */
+    if (sym_text(sym)) {
+        char b[4];
+        int n = u8_enc((unsigned)sym, b);
+        if (n > 0 && sm_search_len + n < (int)sizeof sm_search) {
+            memcpy(sm_search + sm_search_len, b, (size_t)n);
+            sm_search_len += n;
+            sm_search[sm_search_len] = 0;
+            sm_rebuild_left();
+            sm_lhover = sm_nleft > 0 ? 0 : -1;   /* preselect the top hit */
+        }
     }
 }
 
@@ -1835,7 +1991,7 @@ static void draw_root_menu(void) {
         int b = 72 + (j * 140) / h;        /* darker at top, brighter at foot */
         fill_s(px, w, h, 1, j, SM_SIDE_W - 2, 1, rgb(0, 16, b));
     }
-    draw_text_vert_s(px, w, h, (SM_SIDE_W - 7) / 2, (h + 28) / 2, "gucOS",
+    draw_text_vert_s(px, w, h, SM_SIDE_W / 2, h / 2, "gucOS",
                      rgb(224, 224, 240));
     fill_s(px, w, h, SM_SIDE_W - 1, 1, 1, h - 2, sh);      /* divider shadow */
     fill_s(px, w, h, SM_SIDE_W, 1, 1, h - 2, hi);          /* divider hilite */
@@ -1867,11 +2023,9 @@ static void draw_root_menu(void) {
     fill_s(px, w, h, bx, by, bw, 1, sh);
     fill_s(px, w, h, bx, by, 1, bh, sh);
     if (sm_search_len > 0) {
-        int maxn = (bw - 8) / 6;
-        const char *s = sm_search_len > maxn ? sm_search + (sm_search_len - maxn)
-                                             : sm_search;
+        const char *s = sm_search + text_tail(sm_search, bw - 8 - 3);
         draw_text_s(px, w, h, bx + 4, by + (bh - 7) / 2, s, txt);
-        fill_s(px, w, h, bx + 4 + (int)strlen(s) * 6, by + (bh - 9) / 2, 2, 9, txt);
+        fill_s(px, w, h, bx + 4 + text_w(s), by + (bh - 9) / 2, 2, 9, txt);
     } else {
         draw_text_s(px, w, h, bx + 4, by + (bh - 7) / 2, "Search", ghost);
     }
@@ -2372,14 +2526,23 @@ static void desk_key(int sym) {
         if (sym == SDLK_ESCAPE) { desk_edit_cancel(); return; }
         if (sym == SDLK_RETURN) { desk_edit_commit(); return; }
         if (sym == SDLK_BACKSPACE) {
-            if (desk_elen > 0) { desk_ebuf[--desk_elen] = 0; desk_dirty = 1; }
+            if (desk_elen > 0) {       /* pop one CODE POINT (Phase C) */
+                desk_elen = __u8_prev(desk_ebuf, desk_elen);
+                desk_ebuf[desk_elen] = 0;
+                desk_dirty = 1;
+            }
             return;
         }
         if (mod_ctrl || mod_gui) return;   /* chords are not text (0149) */
-        if (sym >= 32 && sym < 127 && desk_elen < (int)sizeof desk_ebuf - 1) {
-            desk_ebuf[desk_elen++] = (char)sym;
-            desk_ebuf[desk_elen] = 0;
-            desk_dirty = 1;
+        if (sym_text(sym)) {
+            char b[4];
+            int n = u8_enc((unsigned)sym, b);
+            if (n > 0 && desk_elen + n < (int)sizeof desk_ebuf) {
+                memcpy(desk_ebuf + desk_elen, b, (size_t)n);
+                desk_elen += n;
+                desk_ebuf[desk_elen] = 0;
+                desk_dirty = 1;
+            }
         }
         return;                        /* modal: swallow everything else */
     }
@@ -2510,31 +2673,28 @@ static void draw_desk(void) {
                                           a sunken white box + black text +
                                           caret over the label cell, sized to
                                           the tail that fits and clamped on. */
-            int vis = desk_elen > 18 ? 18 : desk_elen;
-            const char *tail = desk_elen > 18 ? desk_ebuf + (desk_elen - 18)
-                                              : desk_ebuf;
-            int bw = vis * 6 + 8;
+            const char *tail = desk_ebuf + text_tail(desk_ebuf, 108);
+            int tw = text_w(tail);
+            int bw = tw + 8;
             int bx = cx + (CELL_W - bw) / 2, by = cy + ICON_W + 6;
             if (bx < 0) bx = 0;
             if (bx + bw > w) bx = w - bw;
-            fill_s(px, w, h, bx, by, bw, 13, white);
-            rect_s(px, w, h, bx, by, bw, 13, black);
-            char eb[19];
-            memcpy(eb, tail, (size_t)vis);
-            eb[vis] = 0;
-            draw_text_s(px, w, h, bx + 3, by + 3, eb, black);
-            fill_s(px, w, h, bx + 3 + vis * 6, by + 2, 2, 9, black);   /* caret */
+            fill_s(px, w, h, bx, by, bw, 14, white);
+            rect_s(px, w, h, bx, by, bw, 14, black);
+            draw_text_s(px, w, h, bx + 3, by + 3, tail, black);
+            fill_s(px, w, h, bx + 3 + tw, by + 2, 2, 10, black);   /* caret */
             continue;
         }
-        int len = (int)strlen(desk[i].name);
-        if (len > 13) len = 13;
-        int lx = cx + (CELL_W - len * 6) / 2, ly = cy + ICON_W + 10;
+        char label[64];
+        int n = text_fit(desk[i].name, 78);
+        if (n > (int)sizeof label - 1) n = (int)sizeof label - 1;
+        memcpy(label, desk[i].name, (size_t)n);
+        label[n] = 0;
+        int lw = text_w(label);
+        int lx = cx + (CELL_W - lw) / 2, ly = cy + ICON_W + 10;
         /* Selection highlight: the 0029 navy label strip, per-set (0077). */
         if (desk_selmask >> i & 1)
-            fill_s(px, w, h, lx - 2, ly - 2, len * 6 + 3, 11, navy);
-        char label[14];
-        memcpy(label, desk[i].name, (size_t)len);
-        label[len] = 0;
+            fill_s(px, w, h, lx - 2, ly - 2, lw + 3, 12, navy);
         draw_text_s(px, w, h, lx, ly, label, white);
     }
     if (desk_drag == 1) {              /* the marquee rubber-band (0077) */
@@ -3729,10 +3889,10 @@ static void draw_bar(void) {
         fill(px, x, 3, 1, BAR_H - 6, down ? sh : hi);
         fill(px, x, BAR_H - 4, bw, 1, down ? hi : sh);
         fill(px, x + bw - 1, 3, 1, BAR_H - 6, down ? hi : sh);
-        char label[17];
-        int n = 0, maxn = (bw - 10) / 6;
-        if (maxn > 16) maxn = 16;
-        for (const char *s = wins[i].title; *s && n < maxn; s++) label[n++] = *s;
+        char label[40];
+        int n = text_fit(wins[i].title, bw - 10);
+        if (n > (int)sizeof label - 1) n = (int)sizeof label - 1;
+        memcpy(label, wins[i].title, (size_t)n);
         label[n] = 0;
         draw_text(px, x + 6, (BAR_H - 7) / 2, label,
                   wins[i].minimized ? rgb(80, 80, 80) : txt);

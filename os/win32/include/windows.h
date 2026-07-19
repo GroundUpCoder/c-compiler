@@ -310,6 +310,7 @@ typedef const RECT *LPCRECT;
 #define OUT_DEFAULT_PRECIS  0
 #define CLIP_DEFAULT_PRECIS 0
 #define DEFAULT_QUALITY     0
+#define NONANTIALIASED_QUALITY 3
 #define ANTIALIASED_QUALITY 4
 #define DEFAULT_PITCH       0
 #define FIXED_PITCH         1

@@ -190,10 +190,11 @@ try {
       b && b[2] > 60 && b[0] < 40, b);
   }
   // The search box is a sunken white field at the foot of the column (right
-  // of the band).
+  // of the band). Sample clear of the "Search" ghost: the freetype glyphs
+  // (Phase C) cover x up to ~SM_SIDE+45 where the 5x7 left this spot blank.
   check('search box is a white field at the foot of the column',
-    near(await sample(SM_SIDE + 18, SM_SEARCH_Y + 8), [255, 255, 255]),
-    await sample(SM_SIDE + 18, SM_SEARCH_Y + 8));
+    near(await sample(SM_SIDE + 150, SM_SEARCH_Y + 8), [255, 255, 255]),
+    await sample(SM_SIDE + 150, SM_SEARCH_Y + 8));
 
   // All Programs (the BOTTOM row) cascades the tree flyout of groups
   // (startmenu2 at x = SM_W - 3), which cascades UPWARD via the work-area

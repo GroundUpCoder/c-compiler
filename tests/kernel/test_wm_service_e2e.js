@@ -1190,9 +1190,11 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
       for (let x = SM_SIDE + 8; x < SM_SIDE + 70; x++)
         if (String(mpx(x, y)) === '0,0,0') fBlack++;
     check('fixed places text present in the column (Settings / Run...)', fBlack >= 30, fBlack);
+    // Sample clear of the "Search" ghost: the freetype glyphs (Phase C)
+    // cover x up to ~SM_SIDE+45, where the old 5x7 left this spot blank.
     check('search box is a sunken white field',
-      String(mpx(SM_SIDE + 18, SM_SEARCH_Y + 8)) === '255,255,255',
-      mpx(SM_SIDE + 18, SM_SEARCH_Y + 8));
+      String(mpx(SM_SIDE + 150, SM_SEARCH_Y + 8)) === '255,255,255',
+      mpx(SM_SIDE + 150, SM_SEARCH_Y + 8));
     let ghost = 0;
     for (let y = SM_SEARCH_Y; y < SM_SEARCH_Y + 20; y++)
       for (let x = SM_SIDE + 8; x < SM_SIDE + 60; x++)

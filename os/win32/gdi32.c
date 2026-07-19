@@ -68,6 +68,7 @@ void __win32_unsupported(const char *fmt, ...) {
 #define FONT_PATH     "/etc/fonts/mono.ttf"
 #define FONT_FALLBACK "/usr/share/fonts/mono.ttf"
 #define STOCK_FONT_PX 14
+#define FT_MONO_THRESHOLD 96   /* NONANTIALIASED coverage cut (tuning knob) */
 
 /* ============================================================ objects */
 
@@ -91,6 +92,7 @@ struct __GDIOBJ {
     uint32_t *bits;             /* RGBA rows, tight stride */
     FT_Face face;               /* font (NULL until first use) */
     int fontPx, fontLoaded, fontFailed;
+    int fontMono;               /* NONANTIALIASED_QUALITY: 1-bit rendering */
     int ascent, descent, lineH, maxAdv;
     GlyphG *glyphs;             /* [95], ASCII 32..126 */
     GlyphG *xglyphs;            /* non-ASCII code points (0211), paired */
@@ -259,6 +261,17 @@ static GlyphG *glyph_render(HGDIOBJ f, GlyphG *g, unsigned cp) {
         if (!g->bmp) { g->w = g->h = 0; return g; }
         for (int y = 0; y < g->h; y++)
             memcpy(&g->bmp[y * g->w], &bm->buffer[y * bm->pitch], (size_t)g->w);
+        if (f->fontMono) {
+            /* 1-bit output by THRESHOLDING the smooth coverage: the
+             * vendored freetype registers only the smooth renderer and no
+             * hinter (demo/myftmodule.h, myftoption.h), so raster1/MONO
+             * would fail — and over the same unhinted outlines it would
+             * produce equivalent pixels anyway. 96 (not 128) keeps 1px
+             * stems alive at small ppem (measured: >=128 drops the 'T'
+             * stem of Roboto Mono at ppem 10). */
+            for (int i = 0; i < g->w * g->h; i++)
+                g->bmp[i] = g->bmp[i] >= FT_MONO_THRESHOLD ? 255 : 0;
+        }
     }
     return g;
 }
@@ -303,7 +316,7 @@ HFONT CreateFont(int height, int width, int escapement, int orientation,
                  DWORD charset, DWORD outPrecision, DWORD clipPrecision,
                  DWORD quality, DWORD pitchAndFamily, LPCSTR faceName) {
     (void)width; (void)escapement; (void)orientation;
-    (void)charset; (void)outPrecision; (void)clipPrecision; (void)quality;
+    (void)charset; (void)outPrecision; (void)clipPrecision;
     (void)pitchAndFamily; (void)faceName;
     if (weight >= FW_BOLD || italic || underline || strikeout)
         WIN32_UNSUPPORTED("font styles (bold/italic/underline — one face, "
@@ -311,6 +324,10 @@ HFONT CreateFont(int height, int width, int escapement, int orientation,
     HGDIOBJ o = obj_new(OBJ_FONT);
     if (!o) return NULL;
     o->fontPx = font_px_for_height(height);
+    /* NONANTIALIASED_QUALITY = real GDI semantics: 1-bit (aliased) glyph
+     * rendering. The wm chrome's Win95-crisp knob (Phase C / D1); any app
+     * may ask for it. Other quality values keep the AA default. */
+    o->fontMono = quality == NONANTIALIASED_QUALITY;
     /* Positive height means "cell height": load lazily, then shrink the
      * pixel size so ascent+descent <= height. Approximated at ensure time
      * by scaling with units_per_EM / (ascender - descender). */
@@ -1022,9 +1039,12 @@ static BOOL text_run(HDC dc, int x, int y, LPCSTR s, int len, const INT *dx,
                     uint32_t *p = &dc->bits[yy * dc->stride + xx];
                     int br = (int)(*p & 0xFF), bg = (int)((*p >> 8) & 0xFF),
                         bb = (int)((*p >> 16) & 0xFF);
-                    int rr = br + (int)(a * (unsigned)(fr - br) / 255);
-                    int gg = bg + (int)(a * (unsigned)(fg - bg) / 255);
-                    int bv = bb + (int)(a * (unsigned)(fb - bb) / 255);
+                    /* SIGNED blend: the old (unsigned)(fr - br) wrapped a
+                     * negative delta, so full-coverage dark-on-light text
+                     * landed at fr+1 per channel ((1,1,1) "black"). */
+                    int rr = br + (int)a * (fr - br) / 255;
+                    int gg = bg + (int)a * (fg - bg) / 255;
+                    int bv = bb + (int)a * (fb - bb) / 255;
                     *p = (uint32_t)rr | ((uint32_t)gg << 8) | ((uint32_t)bv << 16) |
                          0xFF000000u;
                 }
