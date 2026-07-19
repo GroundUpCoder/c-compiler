@@ -51,7 +51,10 @@
 /* ---- cell grid ---- */
 
 typedef struct {
-    unsigned char ch;      /* 32..126; anything else renders as space */
+    uint32_t cp;           /* Unicode code point; one per cell (combining
+                              marks get their own spacing cell — D5, and
+                              everything renders width 1 until the Phase D
+                              wcwidth/CJK work) */
     unsigned char fg, bg;  /* palette index: 0..15 ANSI, 16 defFg, 17 defBg */
     unsigned char attr;    /* bit0 bold, bit1 reverse */
 } Cell;
@@ -114,14 +117,23 @@ static FT_Library ft_lib;
 static FT_Face face;
 static int cell_w, cell_h, ascent;
 
-typedef struct { int w, h, left, top; unsigned char *bmp; } Glyph;
+/* Two-tier glyph cache (the gdi32 font_glyph shape, todos/0211): ASCII in
+ * a flat array rendered eagerly at startup, everything else in a
+ * lazily-grown linear-scan side cache. A code point the face lacks
+ * renders as a synthesized tofu box — a LOUD gap marker, never a '?'
+ * that reads as data corruption. NB a side-cache pointer is only stable
+ * until the next cp_glyph call (the cache reallocs). */
+typedef struct { int w, h, left, top, loaded; unsigned char *bmp; } Glyph;
 static Glyph glyphs[95];           /* ASCII 32..126, rendered once */
+static Glyph *xglyphs;             /* codepoint side cache */
+static uint32_t *xcps;
+static int xn, xcap;
 
 /* ============================================================ grid ops */
 
 static Cell blank_cell(void) {
     Cell c;
-    c.ch = ' ';
+    c.cp = ' ';
     c.fg = cur_fg;
     c.bg = cur_bg;
     c.attr = 0;
@@ -157,14 +169,14 @@ static void linefeed(void) {
     else if (cy < rows - 1) cy++;
 }
 
-static void put_char(unsigned char b) {
+static void put_char(uint32_t cp) {
     if (wrap_pending && autowrap) {
         cx = 0;
         linefeed();
     }
     wrap_pending = 0;
     Cell *c = &grid[cy * cols + cx];
-    c->ch = (b >= 32 && b < 127) ? b : '?';
+    c->cp = cp;
     c->fg = cur_fg;
     c->bg = cur_bg;
     c->attr = cur_attr;
@@ -398,21 +410,63 @@ static void csi_dispatch(unsigned char final) {
     }
 }
 
+/* Stateful UTF-8 accumulator (todos: gucOS Unicode Phase A). Lives across
+ * term_putc calls because pty reads split sequences arbitrarily (the drain
+ * loop feeds byte-at-a-time). Malformed input — stray/invalid lead, bad
+ * continuation, overlong, surrogate, > U+10FFFF — becomes U+FFFD; an
+ * interrupted sequence stamps U+FFFD and the interrupting byte is
+ * reprocessed from ground. Only consulted in ST_GROUND: escape sequences
+ * are pure ASCII (OSC title bytes pass through raw, still UTF-8). */
+static uint32_t u8_acc;            /* accumulated code point bits */
+static int u8_more;                /* continuation bytes still expected */
+static uint32_t u8_min;            /* lowest cp the sequence may encode */
+
+static void ground_byte(unsigned char b);
+
+static void ground_utf8(unsigned char b) {
+    if (u8_more) {
+        if ((b & 0xC0) == 0x80) {
+            u8_acc = (u8_acc << 6) | (b & 0x3Fu);
+            if (--u8_more == 0) {
+                uint32_t cp = u8_acc;
+                if (cp < u8_min || cp > 0x10FFFF ||
+                    (cp >= 0xD800 && cp <= 0xDFFF))
+                    cp = 0xFFFD;             /* overlong / surrogate / range */
+                put_char(cp);
+            }
+            return;
+        }
+        u8_more = 0;                         /* interrupted sequence */
+        put_char(0xFFFD);
+        ground_byte(b);                      /* reprocess from ground */
+        return;
+    }
+    if (b >= 0xF0 && b <= 0xF4) { u8_more = 3; u8_acc = b & 0x07u; u8_min = 0x10000; }
+    else if (b >= 0xE0)         { u8_more = 2; u8_acc = b & 0x0Fu; u8_min = 0x800; }
+    else if (b >= 0xC2)         { u8_more = 1; u8_acc = b & 0x1Fu; u8_min = 0x80; }
+    else put_char(0xFFFD);      /* stray continuation, 0xC0/0xC1, 0xF5+ */
+}
+
+static void ground_byte(unsigned char b) {
+    if (b >= 0x80 || u8_more) { ground_utf8(b); return; }
+    if (b == 0x1b) { pstate = ST_ESC; return; }
+    if (b == 0x08) { if (cx > 0) cx--; wrap_pending = 0; return; }
+    if (b == 0x09) {
+        cx = ((cx / 8) + 1) * 8;
+        if (cx > cols - 1) cx = cols - 1;
+        wrap_pending = 0;
+        return;
+    }
+    if (b == 0x0a || b == 0x0b || b == 0x0c) { linefeed(); return; }
+    if (b == 0x0d) { cx = 0; wrap_pending = 0; return; }
+    if (b == 0x07 || b < 32) return;         /* BEL + other C0: ignore */
+    put_char(b);
+}
+
 static void term_putc(unsigned char b) {
     switch (pstate) {
     case ST_GROUND:
-        if (b == 0x1b) { pstate = ST_ESC; break; }
-        if (b == 0x08) { if (cx > 0) cx--; wrap_pending = 0; break; }
-        if (b == 0x09) {
-            cx = ((cx / 8) + 1) * 8;
-            if (cx > cols - 1) cx = cols - 1;
-            wrap_pending = 0;
-            break;
-        }
-        if (b == 0x0a || b == 0x0b || b == 0x0c) { linefeed(); break; }
-        if (b == 0x0d) { cx = 0; wrap_pending = 0; break; }
-        if (b == 0x07 || b < 32) break;      /* BEL + other C0: ignore */
-        put_char(b);
+        ground_byte(b);
         break;
     case ST_ESC:
         switch (b) {
@@ -477,6 +531,28 @@ static void term_putc(unsigned char b) {
 /* ============================================================ selection
  * / clipboard (todos/0090) */
 
+/* Encode cp as UTF-8 into u (>= 4 bytes); returns the byte count. Cells
+ * and keysyms are already validated, so > U+10FFFF cannot occur. */
+static int u8_encode(uint32_t cp, char *u) {
+    if (cp < 0x80) { u[0] = (char)cp; return 1; }
+    if (cp < 0x800) {
+        u[0] = (char)(0xC0 | (cp >> 6));
+        u[1] = (char)(0x80 | (cp & 0x3F));
+        return 2;
+    }
+    if (cp < 0x10000) {
+        u[0] = (char)(0xE0 | (cp >> 12));
+        u[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        u[2] = (char)(0x80 | (cp & 0x3F));
+        return 3;
+    }
+    u[0] = (char)(0xF0 | (cp >> 18));
+    u[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+    u[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    u[3] = (char)(0x80 | (cp & 0x3F));
+    return 4;
+}
+
 static int cell_clamp(int v, int lim) {
     if (v < 0) return 0;
     if (v >= lim) return lim - 1;
@@ -502,8 +578,8 @@ static void copy_selection(void) {
     int s, e;
     sel_bounds(&s, &e);
     int r0 = s / cols, r1 = e / cols;
-    /* worst case: every cell + a newline per row + NUL */
-    char *buf = malloc((size_t)(e - s + 1) + (size_t)(r1 - r0) + 1);
+    /* worst case: 4 UTF-8 bytes per cell + a newline per row + NUL */
+    char *buf = malloc((size_t)(e - s + 1) * 4 + (size_t)(r1 - r0) + 1);
     if (!buf) return;
     int n = 0;
     for (int r = r0; r <= r1; r++) {
@@ -511,8 +587,9 @@ static void copy_selection(void) {
         int c1 = r == r1 ? e % cols : cols - 1;
         int line = n;
         for (int c = c0; c <= c1; c++) {
-            unsigned char ch = grid[r * cols + c].ch;
-            buf[n++] = (ch >= 32 && ch <= 126) ? (char)ch : ' ';
+            uint32_t cp = grid[r * cols + c].cp;
+            if (cp < 32) cp = ' ';           /* defensive: cells never hold C0 */
+            n += u8_encode(cp, buf + n);
         }
         while (n > line && buf[n - 1] == ' ') n--;   /* trim trailing blanks */
         if (r < r1) buf[n++] = '\n';
@@ -580,7 +657,7 @@ static void handle_key(const SDL_KeyboardEvent *k) {
     if (sym == SDLK_ESCAPE) { b = 0x1b; write(mfd, &b, 1); return; }
     if (sym == SDLK_DELETE) { reply("\x1b[3~"); return; }
     if (sym >= 0x40000000) { send_named(sym); return; }
-    if (sym < 32 || sym > 126) return;
+    if (sym < 32 || sym == 127 || sym > 0x10FFFF) return;
     if (mod & SDL_KMOD_CTRL) {
         /* SDL3 keycodes are modifier-applied chars; fold to the control
            code the tty expects (^A..^Z, ^@ ^[ ^\ ^] ^^ ^_). */
@@ -596,8 +673,78 @@ static void handle_key(const SDL_KeyboardEvent *k) {
         return;
     }
     if (mod & SDL_KMOD_ALT) { b = 0x1b; write(mfd, &b, 1); }  /* ESC prefix */
-    b = (char)sym;
-    write(mfd, &b, 1);
+    /* The keysym IS a Unicode code point (host.js carries BMP chars and —
+       via the surrogate-pair fix — astral chars in the ring's Int32 word);
+       UTF-8-encode it onto the wire, 1-4 bytes. */
+    char u[4];
+    write(mfd, u, u8_encode((uint32_t)sym, u));
+}
+
+/* ============================================================ glyphs */
+
+/* Synthesized tofu box for a code point the face lacks (the gdi32
+ * glyph_tofu shape, 0211): a LOUD visible gap marker, never a '?' that
+ * reads as data corruption. (Roboto Mono's own .notdef is EMPTY —
+ * rendering glyph 0 would be invisible.) */
+static void glyph_tofu(Glyph *g) {
+    int w = cell_w > 4 ? cell_w - 2 : 6;
+    int h = ascent > 4 ? ascent - 1 : 8;
+    g->bmp = malloc((size_t)w * h);
+    if (!g->bmp) return;
+    memset(g->bmp, 0, (size_t)w * h);
+    g->w = w;
+    g->h = h;
+    g->left = 1;
+    g->top = ascent - 1;                     /* box base sits on baseline */
+    for (int x = 0; x < w; x++)
+        g->bmp[x] = g->bmp[(h - 1) * w + x] = 255;
+    for (int y = 0; y < h; y++)
+        g->bmp[y * w] = g->bmp[y * w + w - 1] = 255;
+}
+
+static Glyph *glyph_render(Glyph *g, uint32_t cp) {
+    g->loaded = 1;
+    FT_UInt gi = FT_Get_Char_Index(face, (FT_ULong)cp);
+    if (gi == 0 && cp > 126) { glyph_tofu(g); return g; }
+    if (FT_Load_Glyph(face, gi, FT_LOAD_DEFAULT)) return g;
+    if (FT_Render_Glyph(face->glyph, FT_RENDER_MODE_NORMAL)) return g;
+    FT_Bitmap *bm = &face->glyph->bitmap;
+    g->w = (int)bm->width;
+    g->h = (int)bm->rows;
+    g->left = face->glyph->bitmap_left;
+    g->top = face->glyph->bitmap_top;
+    if (g->w > 0 && g->h > 0) {
+        g->bmp = malloc((size_t)g->w * g->h);
+        if (!g->bmp) { g->w = g->h = 0; return g; }
+        for (int y = 0; y < g->h; y++)
+            memcpy(&g->bmp[y * g->w], &bm->buffer[y * bm->pitch], (size_t)g->w);
+    }
+    return g;
+}
+
+/* Glyph for one code point: ASCII from the flat array, everything else
+ * from the linear-scan side cache, rendered on first use. */
+static Glyph *cp_glyph(uint32_t cp) {
+    if (cp < 32) cp = ' ';                   /* defensive: never stamped */
+    if (cp <= 126) {
+        Glyph *g = &glyphs[cp - 32];
+        return g->loaded ? g : glyph_render(g, cp);
+    }
+    for (int i = 0; i < xn; i++)
+        if (xcps[i] == cp) return &xglyphs[i];
+    if (xn == xcap) {
+        int nc = xcap ? xcap * 2 : 16;
+        Glyph *ng = realloc(xglyphs, (size_t)nc * sizeof(Glyph));
+        uint32_t *np = realloc(xcps, (size_t)nc * sizeof(uint32_t));
+        if (ng) xglyphs = ng;
+        if (np) xcps = np;
+        if (!ng || !np) return cp_glyph('?');    /* OOM: keep drawing */
+        xcap = nc;
+    }
+    xcps[xn] = cp;
+    Glyph *g = &xglyphs[xn++];
+    memset(g, 0, sizeof *g);
+    return glyph_render(g, cp);
 }
 
 /* ============================================================ render */
@@ -623,8 +770,8 @@ static void render(void) {
                 uint32_t *rowp = &px[y * sw];
                 for (int x = x0; x < x0 + cell_w && x < sw; x++) rowp[x] = bgp;
             }
-            if (cell->ch <= 32 || cell->ch > 126) continue;
-            Glyph *g = &glyphs[cell->ch - 32];
+            if (cell->cp <= 32) continue;    /* space + defensive C0: bg only */
+            Glyph *g = cp_glyph(cell->cp);
             if (!g->bmp) continue;
             int gx0 = x0 + g->left;
             int gy0 = y0 + ascent - g->top;
@@ -782,23 +929,8 @@ static int load_glyphs(void) {
     if (FT_Load_Glyph(face, mi, FT_LOAD_DEFAULT)) return -1;
     cell_w = (int)(face->glyph->advance.x >> 6);
     if (cell_w <= 0) cell_w = (FONT_SIZE * 3) / 5;
-    for (int ch = 32; ch < 127; ch++) {
-        Glyph *g = &glyphs[ch - 32];
-        FT_UInt gi = FT_Get_Char_Index(face, (FT_ULong)ch);
-        if (FT_Load_Glyph(face, gi, FT_LOAD_DEFAULT)) continue;
-        if (FT_Render_Glyph(face->glyph, FT_RENDER_MODE_NORMAL)) continue;
-        FT_Bitmap *bm = &face->glyph->bitmap;
-        g->w = (int)bm->width;
-        g->h = (int)bm->rows;
-        g->left = face->glyph->bitmap_left;
-        g->top = face->glyph->bitmap_top;
-        if (g->w > 0 && g->h > 0) {
-            g->bmp = malloc((size_t)g->w * g->h);
-            if (!g->bmp) return -1;
-            for (int y = 0; y < g->h; y++)
-                memcpy(&g->bmp[y * g->w], &bm->buffer[y * bm->pitch], (size_t)g->w);
-        }
-    }
+    for (int ch = 32; ch < 127; ch++)
+        glyph_render(&glyphs[ch - 32], (uint32_t)ch);
     return 0;
 }
 

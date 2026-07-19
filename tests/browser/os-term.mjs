@@ -116,6 +116,41 @@ try {
   })();
   check('typed command echoed + rendered (bright pixels grew)', after > before + 100, `${before} -> ${after}`);
 
+  // Unicode input through the REAL page key path (gucOS Unicode Phase A —
+  // W1/W2/W5). Playwright's keyboard.type sends non-US chars as insertText
+  // (no keydown), so dispatch synthetic KeyboardEvents at the screen canvas
+  // — the same listener hardware keys hit: os.html capture -> host.js
+  // keysym (é as a BMP char, 😀 as a surrogate PAIR exercising the
+  // codePointAt fix) -> ring -> term UTF-8-encode -> pty -> hush. The
+  // redirected file, catted on VT1 (xterm renders UTF-8 natively), proves
+  // the exact bytes end to end.
+  const typeVt2 = (s) => page.evaluate((str) => {
+    const scr = document.getElementById('screen');
+    for (const ch of str) {   // for..of iterates CODE POINTS
+      const key = ch === '\r' ? 'Enter' : ch;
+      scr.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+      scr.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true }));
+    }
+  }, s);
+  const uniBefore = await bright(TX, TY, TW, TH);
+  await typeVt2('echo héllo€😀 >/tmp/uni.txt\r');
+  const uniAfter = await (async () => {
+    const t0 = Date.now();
+    for (;;) {
+      const n = await bright(TX, TY, TW, TH);
+      if (n > uniBefore + 30) return n;
+      if (Date.now() - t0 > 30000) return n;
+      await new Promise(r => setTimeout(r, 300));
+    }
+  })();
+  check('unicode echo rendered on VT2 (glyph pixels grew)', uniAfter > uniBefore + 30,
+    `${uniBefore} -> ${uniAfter}`);
+  await setVt(1);
+  await page.keyboard.type('cat /tmp/uni.txt\r');
+  await page.waitForFunction(() => window.__osOut.includes('héllo€😀'), { timeout: 20000, polling: 200 });
+  check('typed é/€/😀 reached the app as correct UTF-8 (VT1 cat round-trip)', true);
+  await setVt(2);
+
   // wmctl from the system shell sees the terminal window.
   await setVt(1);
   await page.keyboard.type('wmctl list\r');

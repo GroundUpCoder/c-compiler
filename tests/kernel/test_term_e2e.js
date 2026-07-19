@@ -294,11 +294,117 @@ function sessionLess() {
   }
 }
 
+/* ---- session U: Unicode (gucOS Unicode Phase A — W1/W2/W5) ----
+ * Input: typed keysyms ARE code points (2-byte é, 3-byte €, 4-byte astral
+ * 😀) — term UTF-8-encodes them onto the pty, hush redirects them into a
+ * file, and the system-shell cat proves the exact bytes. Output: the term
+ * decodes a multi-script UTF-8 stream (stateful across split pty reads)
+ * into uint32 cells and renders real glyphs through the codepoint cache;
+ * a CJK char the face lacks renders a tofu BOX and malformed bytes become
+ * U+FFFD (never '?'). Selection copy re-encodes cell code points to UTF-8
+ * into the clipboard (clip -o proves the bytes). */
+function sessionUnicode() {
+  // Type by CODE POINT: [...s] iterates code points, so astral chars inject
+  // as one keysym (the ring word is Int32 — the host.js surrogate-pair fix
+  // is browser-side; headless injection carries the code point directly).
+  const keysU = (s) => [...s].map((ch) => 'wmctl key $TSID 0 ' + ch.codePointAt(0)).join('\n');
+  const script = [
+    // Multi-script sample seeded byte-clean from the SYSTEM shell (the
+    // drive script is piped UTF-8; printf only expands the \n).
+    "printf 'héllo €αλж\\n' > /tmp/uu.txt",
+    'term &',
+    'wmctl wait win term',                         // window spawn (0155)
+    'sleep 2',                                     // timing subject: hush banner + prompt render (multi-frame)
+    'TSID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
+    'wmctl shot $TSID /root/u0.ppm && echo shotu0-ok',
+    // W1: typed non-ASCII reaches the app as correct UTF-8 bytes.
+    keysU('echo héllo€😀 >/tmp/u1.txt\r'),
+    'for i in $(seq 1 120); do [ -s /tmp/u1.txt ] && break; sleep 0.05; done',  // typed redirect landed (bounded poll, 0155)
+    'echo ==u1',
+    'cat /tmp/u1.txt',
+    // W2 output: real glyphs for everything the baked face covers.
+    keysU('cat /tmp/uu.txt\r'),
+    'sleep 2',                                     // timing subject: freetype glyph render (multi-frame)
+    'wmctl shot $TSID /root/u1.ppm && echo shotu1-ok',
+    // Tofu + U+FFFD: CJK the face lacks draws a box; malformed bytes
+    // (invalid lead FF, stray continuation 80) become U+FFFD.
+    keysU('printf "\\xe6\\xb1\\x89 \\xff\\x80 x\\n"\r'),
+    'sleep 2',                                     // timing subject: tofu render (multi-frame)
+    'wmctl shot $TSID /root/u2.ppm && echo shotu2-ok',
+    // Selection copy: clear + print héllo at home, drag cells 0..4 of row
+    // 0 (8x18 cells; BUTTON_UP does not extend, so hover supplies the
+    // final motion), chord-copy, read the kernel slot from the system
+    // shell. 5 cells -> 6 UTF-8 bytes.
+    keysU('printf "\\033[2J\\033[H"; echo héllo\r'),
+    'sleep 1.5',                                   // timing subject: clear + echo render (multi-frame)
+    'wmctl down $TSID 2 9',
+    'wmctl hover $TSID 38 9',
+    'wmctl up $TSID 38 9',
+    'wmctl key $TSID 0 67 65',                     // Ctrl+Shift+C (SDL LCTRL|LSHIFT) -> KA_COPY
+    'for i in $(seq 1 120); do clip -o >/dev/null 2>&1 && break; sleep 0.05; done',  // copy landed in the kernel slot (bounded poll, 0155)
+    'echo ==uclip',
+    'clip -o',
+    'echo ==uclipend',
+    keysU('exit\r'),
+    'wmctl wait nowin term',                       // hush exits -> term reaps -> window gone (0155)
+    '',
+  ].join('\n');
+  const u = driveBoot(script, { image, timeout: 420000 });
+  const out = u.stdout;
+
+  check('unicode: all three shots written',
+    out.includes('shotu0-ok') && out.includes('shotu1-ok') && out.includes('shotu2-ok'));
+  const u1 = (out.split('==u1\n')[1] || '').split('==')[0];
+  check('unicode: typed é/€/😀 reached the app as correct UTF-8 bytes',
+    u1.startsWith('héllo€😀'), JSON.stringify(u1.slice(0, 40)));
+  const clip = (out.split('==uclip\n')[1] || '').split('==uclipend')[0].replace(/\n$/, '');
+  check('unicode: selection copy re-encoded cell code points to UTF-8 (clip bytes)',
+    clip === 'héllo', JSON.stringify(clip));
+
+  // Pixel pass: the Unicode output rendered real glyphs, and the tofu/
+  // U+FFFD line added more (a box outline is pixel-heavy).
+  const b = driveBoot('cat /root/u0.ppm /root/u1.ppm /root/u2.ppm\n',
+    { image, timeout: 120000, maxBuffer: 16 * 1024 * 1024, encoding: null });
+  function parsePPM(buf, off) {
+    const head = buf.toString('latin1', off, off + 32);
+    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
+    if (!m) return null;
+    const w = +m[1], h = +m[2], data = off + m[0].length;
+    return { w, h, data, end: data + w * h * 3 };
+  }
+  function fgPixels(buf, ppm) {
+    let n = 0;
+    for (let y = 0; y < ppm.h; y++) {
+      for (let x = 0; x < ppm.w; x++) {
+        const i = ppm.data + (y * ppm.w + x) * 3;
+        if (buf[i] | buf[i + 1] | buf[i + 2]) n++;
+      }
+    }
+    return n;
+  }
+  const p0 = parsePPM(b.stdout, 0);
+  check('unicode: baseline shot parses at 640x432', p0 && p0.w === 640 && p0.h === 432);
+  if (!p0) return;
+  const p1 = parsePPM(b.stdout, p0.end);
+  check('unicode: post-cat shot parses', !!p1);
+  if (!p1) return;
+  const f0 = fgPixels(b.stdout, p0), f1 = fgPixels(b.stdout, p1);
+  check('unicode: é/€/α/λ/ж rendered as real glyphs (fg pixels grew)',
+    f1 > f0 + 200, `${f0} -> ${f1}`);
+  const p2 = parsePPM(b.stdout, p1.end);
+  check('unicode: tofu shot parses', !!p2);
+  if (!p2) return;
+  const f2 = fgPixels(b.stdout, p2);
+  check('unicode: CJK tofu box + U+FFFD rendered (fg pixels grew again)',
+    f2 > f1 + 50, `${f1} -> ${f2}`);
+}
+
 (async () => {
   sessionTerm();
   sessionFrames();
   sessionNested();
   sessionLess();
+  sessionUnicode();
 
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(failures ? `\nterm e2e: ${failures} FAILED` : '\nterm e2e: PASS');

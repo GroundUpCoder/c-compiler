@@ -8758,6 +8758,12 @@ const SDL_WEB = (function () {
        todos/SDL3.md (audit false positive) and tests/browser/
        sdl-shifted-keysym-check.mjs, which pins this. */
     if (typeof e.key === 'string' && e.key.length === 1) return e.key.charCodeAt(0);
+    /* Astral chars (host IME emoji etc.) arrive as one surrogate pair; the
+       ring's keysym word is Int32, so the full code point (≤ U+10FFFF, below
+       the 0x40000000 named-key bit) rides it directly. */
+    if (typeof e.key === 'string' && e.key.length === 2 &&
+        e.key.charCodeAt(0) >= 0xD800 && e.key.charCodeAt(0) <= 0xDBFF)
+      return e.key.codePointAt(0);
     if (NAMED_KEYSYMS[e.key] !== undefined) return NAMED_KEYSYMS[e.key];
     return (SCANCODE_MAP[e.code] || 0) | 0x40000000;
   }
