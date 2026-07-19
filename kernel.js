@@ -963,10 +963,13 @@ var WM_SOCK_PATH = '/run/wm.sock';
  * on the frame: right edge -> E, bottom edge -> S, within WM_GRIP of the
  * bottom-right corner -> SE (left/top edges just focus — moving-edge
  * resizes are deliberately not in this version). */
-var WM_TITLE_H = 28;                         // font-20 retune: fits the 18px
-                                             // compositor label (compositor.js
-                                             // LABEL_FONT/LABEL_H must agree —
-                                             // the shared-chrome rule)
+var WM_TITLE_H = 30;                         // font-20 retune (v133-qa): the
+                                             // caption must read >= the 30px
+                                             // MENU_BAR_H, not under it (was 28,
+                                             // undersized) — 30px holds the 20px
+                                             // bold compositor label (compositor.js
+                                             // LABEL_FONT/LABEL_H must agree — the
+                                             // shared-chrome rule)
 var WM_CLOSE_W = 20, WM_CLOSE_PAD = 4;       // close box, right-aligned in the bar
 var WM_BOX_GAP = 2;                          // between the [min][max][close] boxes
                                              // (todos/0030; same 20px metrics)

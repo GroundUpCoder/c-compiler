@@ -338,11 +338,12 @@ function startCompositor(kernel, canvas, device) {
   // ---- label textures: title text and the close 'x' rasterized via a
   // throwaway 2D canvas (a texture SOURCE, not scene assembly), uploaded
   // once per distinct string+width and reused every frame.
-  var LABEL_FONT = 'bold 18px sans-serif';   // font-20 retune: sized to the
-                                              // 28px kernel.js WM_TITLE_H (the
-                                              // shared-chrome rule; browser-
-                                              // hinted, already crisp)
-  var LABEL_H = 26;   // fits 18px bold with middle baseline at LABEL_H/2
+  var LABEL_FONT = 'bold 20px sans-serif';   // font-20 retune (v133-qa): the
+                                              // caption now matches the in-OS
+                                              // 20px chrome — sized to the 30px
+                                              // kernel.js WM_TITLE_H (shared-
+                                              // chrome rule; browser-hinted)
+  var LABEL_H = 28;   // fits 20px bold, centered in the 30px title bar
   var labelCanvas = new OffscreenCanvas(8, LABEL_H);
   var labelCtx = labelCanvas.getContext('2d');
   var labels = new Map();   // color|width|text -> { tex, bind, w }
