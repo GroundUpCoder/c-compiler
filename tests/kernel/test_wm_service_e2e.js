@@ -525,9 +525,11 @@ const script = [
   'wmctl drag $DSID 160 10 40 250',
   'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (marquee replace, no window observable)
   'wmctl shot $DSID /root/s3.ppm && echo s3-ok',
-  // drag-move: press term (its sorted DESK_ACT cell, column 1) and drop at
-  // (2,1); the plain press on the unselected icon first collapses the set
-  `wmctl drag $DSID ${desk(DESK_ACT, 'term')} 306 160`,
+  // drag-move: press term (its sorted DESK_ACT cell) and drop at (2,2) — the
+  // first empty column-2 cell (term sorts to 2,0 and the Recycle Bin to 2,1
+  // once `software` joins the seeded set); the plain press on the unselected
+  // icon first collapses the set
+  `wmctl drag $DSID ${desk(DESK_ACT, 'term')} 306 256`,
   'sleep 2.5',                                   // timing subject: wm.c desk_load re-read poll (~1s tick) persists the moved .icons
   'echo ==sel1',
   'cat /root/Desktop/.icons',
@@ -1302,7 +1304,7 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
 // ---- desktop icon selection & manipulation (todos/0077) ----
 // Selection = the navy label strip under an icon (the 0029 highlight,
 // per-set since 0077). Sample 1px left of the label text: navy when
-// selected, teal when not. Cells are (col, row); term moves to (2,1).
+// selected, teal when not. Cells are (col, row); term moves to (2,2).
 {
   const { BLOCK_FS } = require(path.join(ROOT, 'host.js'));
   const COMMON = require(path.join(ROOT, 'os/os-common.js'));
@@ -1351,27 +1353,27 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     strip(p3, ...at('gameboy')) === TEAL && strip(p3, ...at('mario')) === TEAL,
     [strip(p3, ...at('Presentations')), strip(p3, ...at('gameboy'))]);
   const icons = section('sel1');
-  check('.icons persists the whole layout (term at 2,1; Presentations pinned 0,0)',
-    icons.includes('2 1 term') && icons.includes('0 0 Presentations') &&
+  check('.icons persists the whole layout (term at 2,2; Presentations pinned 0,0)',
+    icons.includes('2 2 term') && icons.includes('0 0 Presentations') &&
     icons.includes('0 1 alauncher'), icons);
   const termCell = deskCell(DESK_ACT, 'term');
   const p4 = readPpm('s4.ppm');
-  check('drag-move relocated term to (2,1): tile there, old cell teal, still selected',
-    p4(293, 121) === WHITE &&
+  check('drag-move relocated term to (2,2): tile there, old cell teal, still selected',
+    p4(293, 217) === WHITE &&
     p4(termCell.x + 58, termCell.y + 22) === TEAL &&   // old cell, derived (todos/0166)
-    strip(p4, 'term', 2, 1) === NAVY,
-    [p4(293, 121), p4(termCell.x + 58, termCell.y + 22), strip(p4, 'term', 2, 1)]);
+    strip(p4, 'term', 2, 2) === NAVY,
+    [p4(293, 217), p4(termCell.x + 58, termCell.y + 22), strip(p4, 'term', 2, 2)]);
   const p5 = readPpm('s5.ppm');
   check('Ctrl+A selects all (alauncher, notes.txt, moved term navy)',
     strip(p5, ...at('alauncher')) === NAVY && strip(p5, ...at('notes.txt')) === NAVY &&
-    strip(p5, 'term', 2, 1) === NAVY,
+    strip(p5, 'term', 2, 2) === NAVY,
     [strip(p5, ...at('alauncher')), strip(p5, ...at('notes.txt'))]);
   check('Enter on the multi-selection is a no-op (the multi-launch guard)',
     out.includes('NOOP-DELTA-0'), out.slice(out.indexOf('NOOP-DELTA')).slice(0, 20));
   const p6 = readPpm('s6.ppm');
   check('Esc clears the selection',
-    strip(p6, ...at('gameboy')) === TEAL && strip(p6, 'term', 2, 1) === TEAL,
-    [strip(p6, ...at('gameboy')), strip(p6, 'term', 2, 1)]);
+    strip(p6, ...at('gameboy')) === TEAL && strip(p6, 'term', 2, 2) === TEAL,
+    [strip(p6, ...at('gameboy')), strip(p6, 'term', 2, 2)]);
   check('Right selects the top-left icon; Enter launches it (winbox +1)',
     out.includes('LAUNCH-DELTA-1'), out.slice(out.indexOf('LAUNCH-DELTA')).slice(0, 20));
 }

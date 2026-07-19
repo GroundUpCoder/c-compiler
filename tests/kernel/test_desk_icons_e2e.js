@@ -130,6 +130,16 @@ glyph('Recycle Bin', 'bin', [
   [16, 5, NAVY, 'basket rim'],
   [16, 16, WHITE, 'empty-bin white center'],
 ]);
+// DK_STORE — the software-center storefront (Q2): a shopping bag, keyed by
+// the "software" name (like the bin) so its symlink icon isn't a plain
+// DK_EXEC block. Launcher → navy center; twin handle loops (with the white
+// gap between them) read it as a bag rather than a briefcase.
+glyph('software', 'store', [
+  [16, 16, NAVY, 'bag body center'],
+  [11, 8, NAVY, 'left handle'],
+  [20, 8, NAVY, 'right handle'],
+  [16, 7, WHITE, 'gap between the two handles'],
+]);
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures ? `\ndesk icons e2e: ${failures} FAILED` : '\ndesk icons e2e: PASS');

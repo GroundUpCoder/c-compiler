@@ -367,6 +367,7 @@ enum {
     DK_IMAGE,                      /* image: framed sun + ridge */
     DK_DECK,                       /* presentation deck: screen on stand */
     DK_BIN,                        /* the Recycle Bin basket (todos/0093) */
+    DK_STORE,                      /* software center: shopping bag (Q2) */
 };
 typedef struct { char name[ENT_NAME]; int is_link; int is_dir; int kind; } menu_ent;
 static struct {                    /* the root panel window; NULL = closed */
@@ -2166,6 +2167,7 @@ static const struct { const char *ext; int kind; } desk_ext_map[] = {
 
 static int desk_kind(const menu_ent *e) {
     if (strcmp(e->name, "Recycle Bin") == 0) return DK_BIN;
+    if (strcmp(e->name, "software") == 0) return DK_STORE;  /* storefront glyph (Q2) */
     if (e->is_dir) return DK_DIR;
     char path[300];
     snprintf(path, sizeof path, "/root/Desktop/%s", e->name);
@@ -2660,6 +2662,19 @@ static void draw_icon_glyph(uint32_t *px, int w, int h, int ix, int iy,
         fill_s(px, w, h, ix + 9, iy + 13, 10, 2, navy);          /* bullet */
         fill_s(px, w, h, ix + 15, iy + 20, 3, 4, navy);          /* stand */
         fill_s(px, w, h, ix + 11, iy + 24, 10, 3, navy);         /* base */
+        break;
+    case DK_STORE:                     /* shopping bag (Q2 software center):
+                                          two handle loops rising from the mouth
+                                          of a filled navy bag — the twin arches
+                                          read it as a bag, not a briefcase.
+                                          Launcher → navy center (16,16). */
+        fill_s(px, w, h, ix + 10, iy + 6, 2, 6, navy);           /* L handle outer */
+        fill_s(px, w, h, ix + 13, iy + 6, 2, 6, navy);           /* L handle inner */
+        fill_s(px, w, h, ix + 10, iy + 6, 5, 2, navy);           /* L handle top */
+        fill_s(px, w, h, ix + 17, iy + 6, 2, 6, navy);           /* R handle inner */
+        fill_s(px, w, h, ix + 20, iy + 6, 2, 6, navy);           /* R handle outer */
+        fill_s(px, w, h, ix + 17, iy + 6, 5, 2, navy);           /* R handle top */
+        fill_s(px, w, h, ix + 7, iy + 11, ICON_W - 14, ICON_W - 15, navy); /* bag body */
         break;
     default:                           /* DK_FILE: dog-eared page */
         rect_s(px, w, h, ix + 7, iy + 4, 18, 24, navy);

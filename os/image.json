@@ -554,6 +554,9 @@
       "/root/Desktop/ctlpanel": {
         "link": "/usr/bin/ctlpanel"
       },
+      "/root/Desktop/software": {
+        "link": "/usr/bin/software"
+      },
       "/root/Desktop/Presentations/MagicPoint Tutorial/01-welcome.mgp": {
         "bin": "vendor/magicpoint/decks/tutorial/01-welcome.mgp"
       },
