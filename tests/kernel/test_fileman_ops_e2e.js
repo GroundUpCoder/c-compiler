@@ -58,10 +58,12 @@ const DEL = 'wmctl key $SID 76 127';
 const ESC = 'wmctl key $SID 41 27';
 const sel = (row) => ['wmctl click $SID 100 250', HOME,
                       ...Array(row).fill(DOWN)].join('\n');
-// The LISTBOX row height is font-derived (20px em ~29px rows); the sel()
+// The LISTBOX row height is font-derived (20px em, 30px rows); the sel()
 // focus click at y=250 is empty for the ≤5-item test listings (keyboard
-// HOME+DOWN drives selection). (100, 30) is row 0; (100, 300) is empty pane.
-const RC_ROW0 = 'wmctl click $SID 100 30 3';
+// HOME+DOWN drives selection). The listbox starts at TOP_H (36 since the
+// v133-qa 20px-font retune), so row 0 centres at y=51; (100, 300) is empty
+// pane. A click above TOP_H lands on the toolbar strip (no context menu).
+const RC_ROW0 = 'wmctl click $SID 100 51 3';
 const RC_PANE = 'wmctl click $SID 100 300 3';
 
 // The wm.c desktop menus (menucore engine geometry since 0259, font-20
@@ -131,7 +133,8 @@ const script = [
   'wmctl click OK',                              // dismiss the error box
   'wmctl wait count "Rename" 1 6000',             // error box gone, dialog remains
   'RSID=$(wmctl list | grep "Rename$" | sed "s/[^0-9].*//")',
-  'wmctl click $RSID 100 36',                    // refocus the name EDIT
+  'wmctl click $RSID 100 55',                    // refocus the name EDIT (y=55: the
+                                                 // EDIT is at y=40 h=30 since the retune)
   'wmctl settext EDIT:1 y.txt',
   'wmctl key $RSID 40 13',                       // Enter commits (loop path)
   'wmctl wait text LISTBOX:0 y.txt 8000',         // retyped name committed (dialog closed)

@@ -156,7 +156,7 @@ check('Open on a plain file opens the GUI default (notepad, todos/0072)',
 
 const tree2 = section(out, 'tree2');
 check('resize reflows the listbox (592 wide)',
-  /class=LISTBOX [^\n]*rect=4,26 592x/.test(tree2), tree2);
+  /class=LISTBOX [^\n]*rect=4,36 592x/.test(tree2), tree2);
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures ? `FAILURES: ${failures}` : 'ALL OK');

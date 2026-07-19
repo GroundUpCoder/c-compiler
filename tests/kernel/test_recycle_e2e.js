@@ -62,7 +62,8 @@ const { dir: tmp, image } = freshImage('os-recycle-');
 const HOME = 'wmctl key $SID 74 1073741898';
 const DEL = 'wmctl key $SID 76 127';
 const sel0 = ['wmctl click $SID 100 250', HOME].join('\n');
-const RC_ROW0 = 'wmctl click $SID 100 30 3';
+const RC_ROW0 = 'wmctl click $SID 100 51 3';  // row 0: listbox starts at TOP_H
+                                              // (36 since the v133-qa 20px retune)
 const RC_PANE = 'wmctl click $SID 100 300 3';
 
 // 0154 event-based waits. Two agent-tree polls carry most of the sync here:

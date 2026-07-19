@@ -100,7 +100,7 @@ try {
   // -- Restore returns it to the desktop; the glyph flips back --
   await page.keyboard.type('SID=$(wmctl list | grep "File Manager" | sed "s/[^0-9].*//")\r', { delay: 40 });
   await pause(800);
-  await page.keyboard.type('wmctl click $SID 100 30 3\r', { delay: 40 });  // row 0
+  await page.keyboard.type('wmctl click $SID 100 51 3\r', { delay: 40 });  // row 0 (listbox at TOP_H=36)
   await pause(800);
   await page.keyboard.type('wmctl click Restore\r', { delay: 40 });
   await pause(800);

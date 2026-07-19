@@ -63,9 +63,10 @@ const out = boot([
   'wmctl tree',
   'echo ==cut',
   // Status-bar part clipping (regression): shot the untitled window while
-  // the EOLN pane still reads the wide "Windows (CR + LF)" — at the default
-  // 400px width that text overflows its 120px cell and MUST clip at the
-  // border, not bleed into the "UTF-8" pane (comctl32 ExtTextOut ETO_CLIPPED).
+  // the EOLN pane reads the wide "Windows (CR + LF)". Since the v133-qa
+  // retune the default window is 640px and the EOLN pane is 210px so the
+  // text now FITS — but this still guards that it stays within its cell and
+  // does not bleed into the "UTF-8" pane (comctl32 ExtTextOut ETO_CLIPPED).
   'wmctl shot $SID /root/sbar.ppm && echo sbar-shot-ok',
   'echo ==sbarshot',
   'base64 /root/sbar.ppm',
@@ -334,7 +335,9 @@ check('status-bar shot is a P6 frame', sp.magic === 'P6', sp.magic);
 // at the client bottom == the surface bottom, so its surface top is h-H.
 const sbTreeRow = tree1.split('\n').find(l => /class=msctls_statusbar32/.test(l)) || '';
 const sbH = +((sbTreeRow.match(/rect=-?\d+,-?\d+ \d+x(\d+) /) || [])[1] || 0);
-const bx = sp.w - 120, by = sp.h - sbH;   // pane2|pane3 border sits at width-120
+const bx = sp.w - 130, by = sp.h - sbH;   // pane2|pane3 border sits at width-130
+                                          // (ENCODING pane widened to 130 in the
+                                          // v133-qa 20px-font status-bar retune)
 /* 0229 red->green pins: the old SB_H 20 + y=3 Win95 arithmetic sat the 19px
  * stock-font cell 3px low — baseline ON the well's border row, descenders
  * clipped by ETO_CLIPPED. Font-derived height + DT_VCENTER fixes all three. */

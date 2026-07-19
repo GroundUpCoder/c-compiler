@@ -237,7 +237,8 @@ const out = boot([
   'wmctl click Go',
   'wmctl wait text LISTBOX:0 01-welcome.mgp 8000',
   // the fileman row menu's Edit: the deck TEXT in notepad, not the viewer
-  'wmctl click $SID 100 30 3',                   // right-click row 0
+  'wmctl click $SID 100 51 3',                   // right-click row 0 (listbox at
+                                                 // TOP_H=36 since the v133-qa retune)
   'wmctl wait label Edit 8000',                  // row menu up (Edit row, 0202)
   'echo ==editmenu',
   'wmctl tree',

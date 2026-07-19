@@ -87,7 +87,8 @@ try {
   // Frame top-left corner pixel: pre-0063 this was square chrome (FACE);
   // the radius-7 SDF clips it, leaving shadowed desktop — teal-family,
   // never gray.
-  const corner = await sample(WX - 3, WY - 31);
+  const corner = await sample(WX - 3, WY - 33);   // frame top rose 2px with the
+                                                  // 30px WM_TITLE_H (v133-qa retune)
   check('frame corner rounded off (no square chrome pixel)',
     !near(corner, FACE, 40) && corner[0] < 40, corner);
   check('frame edge chrome intact away from the corners',

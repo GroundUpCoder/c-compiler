@@ -87,7 +87,7 @@ try {
   // -- Copy row 0 then Paste in the pane (wmctl surface coords). Every
   // click-by-label waits for the popup to be POPULATED first (the label
   // lookup races the app's event processing otherwise). --
-  await page.keyboard.type('wmctl click $SID 100 30 3\r', { delay: 40 });        // right-click row 0
+  await page.keyboard.type('wmctl click $SID 100 51 3\r', { delay: 40 });        // right-click row 0
   await shLine('wmctl wait label Copy 8000', 'RM1-OK');
   await page.keyboard.type('wmctl click Copy\r', { delay: 40 });
   await shLine('wmctl wait nolabel Copy 6000', 'RM2-OK');        // Copy dispatched, menu closed
@@ -100,7 +100,7 @@ try {
 
   // -- F2 rename dialog renders + commits --
   // Rows (name sort): "Copy of note.txt"(0), note.txt(1). Select row 0.
-  await page.keyboard.type('wmctl click $SID 100 30\r', { delay: 40 });          // focus + select row 0
+  await page.keyboard.type('wmctl click $SID 100 51\r', { delay: 40 });          // focus + select row 0
   await page.keyboard.type('wmctl key $SID 59 1073741883\r', { delay: 40 });     // F2
   await shLine('wmctl wait label OK 8000', 'RENAME-DLG-OK');     // dialog controls exist
   check('F2 opens the rename dialog', true);
@@ -111,7 +111,7 @@ try {
   check('rename commits (renamed.txt on disk)', true);
 
   // -- Del confirm box appears; Yes deletes --
-  await page.keyboard.type('wmctl click $SID 100 30\r', { delay: 40 });          // select row 0
+  await page.keyboard.type('wmctl click $SID 100 51\r', { delay: 40 });          // select row 0
   await page.keyboard.type('wmctl key $SID 76 127\r', { delay: 40 });            // Del
   await shLine('wmctl wait win "Confirm File Delete" 8000', 'DEL-BOX-OK');
   check('Del raises the confirm MessageBox', true);
@@ -133,7 +133,7 @@ try {
   // rows now (name sort): ma.txt(0) mb.txt(1) renamed.txt(2). Ctrl-click
   // row 0 (y=30) then row 1 (y=68, 29px rows) -> {ma.txt, mb.txt}. The injections ride
   // the app's input ring in order — no pacing needed between them.
-  await page.keyboard.type('wmctl click $SID 100 30\r', { delay: 40 });           // plain -> {row0}
+  await page.keyboard.type('wmctl click $SID 100 51\r', { delay: 40 });           // plain -> {row0}
   await page.keyboard.type('wmctl keydown $SID 224 1073742048 64\r', { delay: 40 });   // Ctrl down
   await page.keyboard.type('wmctl click $SID 100 68\r', { delay: 40 });           // ctrl-click row1
   await page.keyboard.type('wmctl keyup $SID 224 1073742048 0\r', { delay: 40 }); // Ctrl up
