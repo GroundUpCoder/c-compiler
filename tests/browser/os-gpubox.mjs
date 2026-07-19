@@ -69,12 +69,12 @@ try {
     const s = window.__osScreen;
     return s && Math.abs(r.width - s.w) < 2 && Math.abs(r.height - s.h) < 2;
   }, { timeout: 30000, polling: 200 });
-  // 0258: the top MENU_BAR_H(20)px of the window are the "menubar" anchored
+  // 0258: the top MENU_BAR_H(30)px of the window are the "menubar" anchored
   // child strip — client probes sit BELOW it (the clear-color corner moved
   // from +4 to BAR+4).
-  const BAR = 20;
+  const BAR = 30;
   const MENUFACE = [192, 192, 192];           // COLOR_MENU, gdi32 SYSCOLORS
-  const WX = 12, WY = 36, CX = WX + 128, CY = WY + 128;
+  const WX = 12, WY = 36, CX = WX + 128, CY = WY + BAR + 113;
 
   // Cube covers the window center from every rotation angle; wait for ANY
   // non-desktop, non-clear color there (face colors vary as it spins). Also

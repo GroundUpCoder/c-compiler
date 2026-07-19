@@ -131,11 +131,11 @@ try {
   await page.keyboard.type('wmctl key $SID 62 1073741886\r', { delay: 40 });      // F5 re-list
   await shLine('wmctl wait text LISTBOX:0 ma.txt 8000', 'F5-OK');                 // re-listed
   // rows now (name sort): ma.txt(0) mb.txt(1) renamed.txt(2). Ctrl-click
-  // row 0 (y=30) then row 1 (y=50) -> {ma.txt, mb.txt}. The injections ride
+  // row 0 (y=30) then row 1 (y=68, 29px rows) -> {ma.txt, mb.txt}. The injections ride
   // the app's input ring in order — no pacing needed between them.
   await page.keyboard.type('wmctl click $SID 100 30\r', { delay: 40 });           // plain -> {row0}
   await page.keyboard.type('wmctl keydown $SID 224 1073742048 64\r', { delay: 40 });   // Ctrl down
-  await page.keyboard.type('wmctl click $SID 100 50\r', { delay: 40 });           // ctrl-click row1
+  await page.keyboard.type('wmctl click $SID 100 68\r', { delay: 40 });           // ctrl-click row1
   await page.keyboard.type('wmctl keyup $SID 224 1073742048 0\r', { delay: 40 }); // Ctrl up
   await page.keyboard.type('wmctl key $SID 76 127\r', { delay: 40 });             // Del
   await shLine('wmctl wait win "Confirm Multiple Item Delete" 8000', 'MULTI-BOX-OK');

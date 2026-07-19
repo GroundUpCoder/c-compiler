@@ -51,7 +51,7 @@ round-trip through the vendored libpng:
 
 ```bash
 node compiler.js vendor/cairo/bin.json -o build/cairo-test.wasm
-node --experimental-wasm-exnref host.js build/cairo-test.wasm vendor/freetype/demo/robotomono.ttf
+node --experimental-wasm-exnref host.js build/cairo-test.wasm vendor/fonts/NotoSansMono-Regular.ttf
 # -> cairo 1.18.4 ok
 ```
 

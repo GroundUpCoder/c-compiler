@@ -44,7 +44,7 @@ function bootBin(script) {       // binary stdout (Buffer)
 function section(out, name) { return (out.split('==' + name + '\n')[1] || '').split('==cut')[0]; }
 
 /* ---- geometry (paint.c mirror) ---- */
-const BAR = 20, CANVAS_X = 56, CANVAS_Y = 6, CW = 400, CH = 300;
+const BAR = 30, CANVAS_X = 56, CANVAS_Y = 6, CW = 400, CH = 300;
 const PAL_Y = CANVAS_Y + CH + 12;                 // 318
 const CLIENT_W = Math.max(CANVAS_X + CW + 8, CANVAS_X + 8 * 16 + 8);   // 464
 const CLIENT_H = Math.max(PAL_Y + 2 * 16 + 8, 4 + 4 * 22 + 8);        // 358

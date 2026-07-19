@@ -34,22 +34,22 @@ const { dir: tmp, image } = freshImage('os-ctx-');
 // fork rows are gone): MENU_ITEM_H 18, MENU_SEP_H 8, 1px raised border on
 // each side (h = 4 + rows), WIDTH MEASURED from freetype text (not a
 // constant — asserted structurally, never as a literal), clamped to the
-// 1024x768 work area above the 28px bar. Desktop menu: New / Sort by /
-// Refresh / Paste / --- / Display -> h 102; taskbar-button menu: Restore /
-// Minimize / Maximize / --- / Close -> h 84; icon menu on a RUNNABLE icon:
-// Open / --- / Cut / Copy / Delete / Rename -> h 102 (documents grow an
-// Edit row after Open -> h 120, todos/0202 — alauncher stays 102). A
+// 1024x768 work area above the 36px bar. Desktop menu: New / Sort by /
+// Refresh / Paste / --- / Display -> h 164; taskbar-button menu: Restore /
+// Minimize / Maximize / --- / Close -> h 134; icon menu on a RUNNABLE icon:
+// Open / --- / Cut / Copy / Delete / Rename -> h 164 (documents grow an
+// Edit row after Open -> h 194, todos/0202 — alauncher stays 164). A
 // cascade parks at parent-right - 3 with its first row aligned to the
-// anchor row's drawn top (New: Folder + Text File -> h 40; Sort by:
-// Name -> h 22). Row centers at 1 + sum(prev rows) + 9.
-const rowY = (i) => 1 + i * 18 + 9;                // rows above the groove
-const DESK_MENU_H = 4 + 5 * 18 + 8;                // 102
-const NEW_FLY_H = 4 + 2 * 18;                      // 40
-const SORT_FLY_H = 4 + 1 * 18;                     // 22
-const BAR_MENU_H = 4 + 4 * 18 + 8;                 // 84
-const ICON_MENU_H = 4 + 5 * 18 + 8;                // 102
-const DISPLAY_ROW_Y = 1 + 4 * 18 + 8 + 9;          // below the groove: 90
-const CLOSE_ROW_Y = 1 + 3 * 18 + 8 + 9;            // bar menu groove: 72
+// anchor row's drawn top (New: Folder + Text File -> h 64; Sort by:
+// Name -> h 34). Row centers at 1 + sum(prev rows) + 15.
+const rowY = (i) => 1 + i * 30 + 15;               // rows above the groove
+const DESK_MENU_H = 4 + 5 * 30 + 10;               // 164
+const NEW_FLY_H = 4 + 2 * 30;                      // 64
+const SORT_FLY_H = 4 + 1 * 30;                     // 34
+const BAR_MENU_H = 4 + 4 * 30 + 10;                // 134
+const ICON_MENU_H = 4 + 5 * 30 + 10;               // 164
+const DISPLAY_ROW_Y = 1 + 4 * 30 + 10 + 15;        // below the groove: 146
+const CLOSE_ROW_Y = 1 + 3 * 30 + 10 + 15;          // bar menu groove: 115
 // Parse "WxH+X+Y" out of a wmctl list row.
 const g4 = (line) => {
   const m = /(\d+)x(\d+)\+(\d+)\+(\d+)/.exec((line.split('\t')[2] || ''));
@@ -65,7 +65,7 @@ const DESK1 = deskEntries([{ name: 'New Folder', dir: true },
                            'New File.txt', 'zzz.txt', 'alauncher']);
 const desk = (list, name) => {
   const c = deskCell(list, name);
-  return `${c.x + 42} ${c.y + 32}`;
+  return `${c.x + 58} ${c.y + 48}`;
 };
 
 const script = [
@@ -211,7 +211,7 @@ const script = [
   'sleep 0.3',                                   // KEEP: negative check — bounded settle to prove NO menu opened (nothing to wait ON)
   'echo ==bar1',
   'wmctl list',
-  'wmctl click $TSID 60 14 3',                   // button 0
+  'wmctl click $TSID 120 18 3',                   // button 0
   'wmctl wait win ctxmenu 8000',                 // window menu up
   'echo ==bar2',
   'wmctl list',
@@ -224,28 +224,28 @@ const script = [
   'wmctl wait flag $WSID m 8000',                // minimized (menu dismisses in the same handler)
   'echo ==bar4',
   'wmctl list',
-  'wmctl click $TSID 60 14 3',
+  'wmctl click $TSID 120 18 3',
   'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 30 ${rowY(0)}`,            // RESTORE (now active)
   'wmctl wait noflag $WSID m 8000',              // restored + focused
   'echo ==bar5',
   'wmctl list',
-  'wmctl click $TSID 60 14 3',
+  'wmctl click $TSID 120 18 3',
   'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 30 ${rowY(2)}`,            // MAXIMIZE
   'sleep 1',                                     // KEEP: RESIZE round-trip geometry settle — winbox renegotiates its surface to 1024x712, no geom-match wait primitive
   'echo ==bar6',
   'wmctl list',
-  'wmctl click $TSID 60 14 3',
+  'wmctl click $TSID 120 18 3',
   'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 30 ${rowY(0)}`,            // RESTORE from maximized
   'sleep 1',                                     // KEEP: RESIZE round-trip geometry settle back to the saved 240x160+12+36
   'echo ==bar7',
   'wmctl list',
-  'wmctl click $TSID 60 14 3',
+  'wmctl click $TSID 120 18 3',
   'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 30 ${CLOSE_ROW_Y}`,        // CLOSE -> request-close
@@ -314,7 +314,7 @@ const c9 = section('ctx9');
 const c9root = g4(row(c9, 'ctxmenu')), c9fly = g4(row(c9, 'ctxmenu2'));
 check(`Sort by cascades its flyout (h ${SORT_FLY_H}, row-1 aligned)`,
   c9root && c9fly && c9fly.h === SORT_FLY_H &&
-  c9fly.x === c9root.x + c9root.w - 3 && c9fly.y === c9root.y + 1 + 18,
+  c9fly.x === c9root.x + c9root.w - 3 && c9fly.y === c9root.y + 1 + 30,
   JSON.stringify(c9));
 check('Sort by Name forgets the .icons placements', out.includes('icons-gone'));
 
@@ -381,7 +381,7 @@ check('right-click the Start strip raises nothing (reserved)',
 const b2 = section('bar2');
 const bg = g4(row(b2, 'ctxmenu'));
 check(`right-click button 0 opens the window menu (h ${BAR_MENU_H}, above the bar)`,
-  bg && bg.h === BAR_MENU_H && bg.x === 56 && bg.y === 768 - 28 - BAR_MENU_H,
+  bg && bg.h === BAR_MENU_H && bg.x === 86 && bg.y === 768 - 36 - BAR_MENU_H,
   JSON.stringify(b2));
 const b3 = section('bar3');
 check('grayed RESTORE click: menu stays open, window untouched',
@@ -395,7 +395,7 @@ const b5 = section('bar5');
 check('RESTORE restores + focuses (the 0014 rule)',
   flags(wrow(b5))[0] === 'f' && !flags(wrow(b5)).includes('m'),
   JSON.stringify(b5));
-check('MAXIMIZE fills the work area', geom(wrow(section('bar6'))) === '1024x712+0+28',
+check('MAXIMIZE fills the work area', geom(wrow(section('bar6'))) === '1024x704+0+28',
   wrow(section('bar6')));
 check('RESTORE from maximized returns the saved geometry',
   geom(wrow(section('bar7'))) === '240x160+12+36',
@@ -421,10 +421,10 @@ check('CLOSE request-closes the window (button 0 winbox gone)',
     return (x, y) => String(Array.from(
       ppm.subarray(off + (y * w + x) * 3, off + (y * w + x) * 3 + 3)));
   };
-  // c1.ppm: the measured-width x 102 desktop menu on the ENGINE raster
+  // c1.ppm: the measured-width x 164 desktop menu on the ENGINE raster
   // (menucore, 0259): Win95 raised edge (outer white/black, inner
   // face/shadow), face, black freetype item text, the separator groove at
-  // y 73..81, the flyout arrows on the sub rows at the right gutter.
+  // y 121..130, the flyout arrows on the sub rows at the right gutter.
   const p = readPpm('c1.ppm', null);
   const W = cg1.w;                     // the listed menu width
   check('menu face is the Win95 gray with a raised edge',
@@ -432,22 +432,22 @@ check('CLOSE request-closes the window (button 0 winbox gone)',
     p(W - 1, 50) === '0,0,0' && p(W - 2, 50) === '128,128,128',
     [p(5, 40), p(0, 0), p(W - 1, 50), p(W - 2, 50)].join(' | '));
   let text = 0;                        /* freetype antialiases: count DARK */
-  for (let y = 3; y < 17; y++)
+  for (let y = 3; y < 29; y++)
     for (let x = 16; x < W - 12; x++)
       if (parseInt(p(x, y), 10) < 100) text++;
   check('row 0 (New) has dark label text', text >= 10, text);
   check('separator groove present (dark over light)',
-    p(30, 76) === '128,128,128' && p(30, 77) === '255,255,255',
-    [p(30, 76), p(30, 77)].join(' | '));
-  check('sub rows carry the flyout arrow', p(W - 8, 10) === '0,0,0',
-    p(W - 8, 10));
+    p(30, 125) === '128,128,128' && p(30, 126) === '255,255,255',
+    [p(30, 125), p(30, 126)].join(' | '));
+  check('sub rows carry the flyout arrow', p(W - 10, 16) === '0,0,0',
+    p(W - 10, 16));
   // d2.ppm: right-click selected the alauncher icon alone (navy strip).
   const d = readPpm('d2.ppm', 1024);
   const strip = (name) => {
     const c = deskCell(DESK1, name);
     const len = Math.min(13, name.length);
-    const lx = c.x + Math.floor((84 - len * 6) / 2);
-    return d(lx - 1, c.y + 34 + 3);
+    const lx = c.x + Math.floor((116 - len * 12) / 2);
+    return d(lx - 1, c.y + 42 + 3);
   };
   check('right-click selected the icon alone (alauncher navy, doom teal)',
     strip('alauncher') === '0,0,128' && strip('doom') === '0,128,128',
@@ -458,7 +458,7 @@ check('CLOSE request-closes the window (button 0 winbox gone)',
   let white = 0;
   const zc = deskCell(DESK1, 'zzz.txt');
   for (let y = zc.y; y < zc.y + 48; y++)
-    for (let x = zc.x; x < zc.x + 84; x++) if (d1(x, y) === '255,255,255') white++;
+    for (let x = zc.x; x < zc.x + 116; x++) if (d1(x, y) === '255,255,255') white++;
   check('zzz.txt icon tile present right after REFRESH', white > 250, white);
 }
 

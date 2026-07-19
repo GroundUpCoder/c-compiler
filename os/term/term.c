@@ -38,6 +38,8 @@
 #include <sys/wait.h>
 #include "../keys.h"     /* the system keyboard scheme (todos/0149) */
 #include "../launch.h"   /* LAUNCH_ENV_PATH/HOME — the canonical env strings */
+#include "../fontchain.h" /* fallback face list (Unicode Phase D, W7) */
+#include "../wcwidth.h"   /* double-width cells; MUST MATCH kernel.js twin */
 
 /* User-override font first, then the baked vendor default (todos/0040 —
  * systemd-style /etc: an empty /etc must boot). */
@@ -52,12 +54,20 @@
 
 typedef struct {
     uint32_t cp;           /* Unicode code point; one per cell (combining
-                              marks get their own spacing cell — D5, and
-                              everything renders width 1 until the Phase D
-                              wcwidth/CJK work) */
+                              marks get their own spacing cell — D5). A
+                              wide (wcwidth 2) char owns TWO cells: the
+                              lead cell holds the cp, its right neighbor
+                              holds CP_WIDE_CONT (Phase D) */
     unsigned char fg, bg;  /* palette index: 0..15 ANSI, 16 defFg, 17 defBg */
     unsigned char attr;    /* bit0 bold, bit1 reverse */
 } Cell;
+
+/* The continuation half of a wide pair. Renders as bg only (its colors
+ * mirror the lead's at write time so reverse/selection span the pair);
+ * an ORPHANED continuation (its lead overwritten by grid surgery like
+ * ICH/DCH) degrades to a blank cell — never a stray glyph. Copy skips
+ * it. 0 can't collide with content: cells otherwise never hold < 32. */
+#define CP_WIDE_CONT 0u
 
 #define A_BOLD    1
 #define A_REVERSE 2
@@ -170,18 +180,38 @@ static void linefeed(void) {
 }
 
 static void put_char(uint32_t cp) {
+    int w = wcwidth_cp(cp);          /* 1 or 2 (D5: combining = own cell) */
     if (wrap_pending && autowrap) {
         cx = 0;
         linefeed();
     }
     wrap_pending = 0;
-    Cell *c = &grid[cy * cols + cx];
+    if (w == 2 && cx == cols - 1) {  /* wide chars never split across rows */
+        if (autowrap) { cx = 0; linefeed(); }
+        else w = 1;                  /* no-wrap edge: clipped single cell */
+    }
+    Cell *row = &grid[cy * cols];
+    /* Overwriting half of an existing wide pair blanks the other half —
+     * a lead may not survive without its continuation or vice versa. */
+    uint32_t old = row[cx].cp;
+    if (old == CP_WIDE_CONT && cx > 0 && wcwidth_cp(row[cx - 1].cp) == 2)
+        row[cx - 1].cp = ' ';
+    if (wcwidth_cp(old) == 2 && cx + 1 < cols && row[cx + 1].cp == CP_WIDE_CONT)
+        row[cx + 1].cp = ' ';
+    Cell *c = &row[cx];
     c->cp = cp;
     c->fg = cur_fg;
     c->bg = cur_bg;
     c->attr = cur_attr;
-    if (cx == cols - 1) wrap_pending = 1;
-    else cx++;
+    if (w == 2) {
+        Cell *n = c + 1;             /* guaranteed in-row by the check above */
+        n->cp = CP_WIDE_CONT;
+        n->fg = cur_fg;
+        n->bg = cur_bg;
+        n->attr = cur_attr;
+    }
+    if (cx + w > cols - 1) { cx = cols - 1; wrap_pending = 1; }
+    else cx += w;
 }
 
 static void full_reset(void) {
@@ -588,6 +618,7 @@ static void copy_selection(void) {
         int line = n;
         for (int c = c0; c <= c1; c++) {
             uint32_t cp = grid[r * cols + c].cp;
+            if (cp == CP_WIDE_CONT) continue; /* the lead already encoded it */
             if (cp < 32) cp = ' ';           /* defensive: cells never hold C0 */
             n += u8_encode(cp, buf + n);
         }
@@ -682,12 +713,14 @@ static void handle_key(const SDL_KeyboardEvent *k) {
 
 /* ============================================================ glyphs */
 
-/* Synthesized tofu box for a code point the face lacks (the gdi32
+/* Synthesized tofu box for a code point NO chain face covers (the gdi32
  * glyph_tofu shape, 0211): a LOUD visible gap marker, never a '?' that
- * reads as data corruption. (Roboto Mono's own .notdef is EMPTY —
- * rendering glyph 0 would be invisible.) */
-static void glyph_tofu(Glyph *g) {
-    int w = cell_w > 4 ? cell_w - 2 : 6;
+ * reads as data corruption (a face's own .notdef can be EMPTY —
+ * rendering glyph 0 could be invisible). A wide code point gets a
+ * 2-cell box — the honest footprint of the missing glyph. */
+static void glyph_tofu(Glyph *g, uint32_t cp) {
+    int span = cell_w * (wcwidth_cp(cp) == 2 ? 2 : 1);
+    int w = span > 4 ? span - 2 : 6;
     int h = ascent > 4 ? ascent - 1 : 8;
     g->bmp = malloc((size_t)w * h);
     if (!g->bmp) return;
@@ -702,17 +735,58 @@ static void glyph_tofu(Glyph *g) {
         g->bmp[y * w] = g->bmp[y * w + w - 1] = 255;
 }
 
+/* ---- the fallback chain (Unicode Phase D, W7) ----
+ * Face 0 is the baked/user mono face `face`; fc_paths load once at
+ * startup and each fallback face opens LAZILY the first time a code
+ * point misses face 0 (a pure-ASCII session never touches a 12 MB CJK
+ * face). The rendered bitmap lands in the cp glyph cache, so the chain
+ * is probed once per code point, never per paint. */
+static char fc_paths[FC_MAX_FALLBACKS][FC_PATH_MAX];
+static int fc_n;
+static FT_Face fc_faces[FC_MAX_FALLBACKS];
+static signed char fc_state[FC_MAX_FALLBACKS]; /* 0 untried / 1 open / -1 bad */
+
+static FT_Face fc_face(int i) {
+    if (fc_state[i] < 0) return NULL;
+    if (fc_state[i] == 0) {
+        if (FT_New_Face(ft_lib, fc_paths[i], 0, &fc_faces[i])) {
+            fc_state[i] = -1;
+            fprintf(stderr, "term: fallback face %s failed to load (skipping)\n",
+                    fc_paths[i]);
+            return NULL;
+        }
+        FT_Set_Pixel_Sizes(fc_faces[i], 0, FONT_SIZE);
+        fc_state[i] = 1;
+    }
+    return fc_faces[i];
+}
+
+/* The face covering cp: face 0, else the chain in list order, else NULL
+ * (tofu). ASCII always renders from face 0. */
+static FT_Face face_for(uint32_t cp, FT_UInt *gi) {
+    *gi = FT_Get_Char_Index(face, (FT_ULong)cp);
+    if (*gi || cp <= 126) return face;
+    for (int i = 0; i < fc_n; i++) {
+        FT_Face ff = fc_face(i);
+        if (!ff) continue;
+        *gi = FT_Get_Char_Index(ff, (FT_ULong)cp);
+        if (*gi) return ff;
+    }
+    return NULL;
+}
+
 static Glyph *glyph_render(Glyph *g, uint32_t cp) {
     g->loaded = 1;
-    FT_UInt gi = FT_Get_Char_Index(face, (FT_ULong)cp);
-    if (gi == 0 && cp > 126) { glyph_tofu(g); return g; }
-    if (FT_Load_Glyph(face, gi, FT_LOAD_DEFAULT)) return g;
-    if (FT_Render_Glyph(face->glyph, FT_RENDER_MODE_NORMAL)) return g;
-    FT_Bitmap *bm = &face->glyph->bitmap;
+    FT_UInt gi;
+    FT_Face f = face_for(cp, &gi);
+    if (!f) { glyph_tofu(g, cp); return g; }
+    if (FT_Load_Glyph(f, gi, FT_LOAD_DEFAULT)) return g;
+    if (FT_Render_Glyph(f->glyph, FT_RENDER_MODE_NORMAL)) return g;
+    FT_Bitmap *bm = &f->glyph->bitmap;
     g->w = (int)bm->width;
     g->h = (int)bm->rows;
-    g->left = face->glyph->bitmap_left;
-    g->top = face->glyph->bitmap_top;
+    g->left = f->glyph->bitmap_left;
+    g->top = f->glyph->bitmap_top;
     if (g->w > 0 && g->h > 0) {
         g->bmp = malloc((size_t)g->w * g->h);
         if (!g->bmp) { g->w = g->h = 0; return g; }
@@ -753,26 +827,50 @@ static uint32_t pack(const uint8_t *rgb) {
     return (uint32_t)rgb[0] | ((uint32_t)rgb[1] << 8) | ((uint32_t)rgb[2] << 16) | 0xFF000000u;
 }
 
+/* Resolve a cell's effective fg/bg (bold brighten, reverse, selection,
+ * cursor inversion — the pre-Phase-D inline logic, shared by both render
+ * passes). */
+static void cell_colors(const Cell *cell, int r, int c, int *fgo, int *bgo) {
+    int fg = cell->fg, bg = cell->bg;
+    if (cell->attr & A_BOLD) { if (fg < 8) fg += 8; }
+    if (cell->attr & A_REVERSE) { int t = fg; fg = bg; bg = t; }
+    if (sel_has(r, c)) { int t = fg; fg = bg; bg = t; }           /* 0090 */
+    if (cursor_visible && r == cy && c == cx) { int t = fg; fg = bg; bg = t; }
+    *fgo = fg;
+    *bgo = bg;
+}
+
 static void render(void) {
     uint32_t *px = (uint32_t *)surf->pixels;
     int sw = surf->w, sh = surf->h;
     for (int r = 0; r < rows; r++) {
+        /* Pass 1: every cell's background. Separate from the glyph pass
+         * because a wide lead's glyph spills into the continuation cell —
+         * a single fused loop would paint the continuation's bg OVER the
+         * spill (Phase D). */
         for (int c = 0; c < cols; c++) {
-            Cell *cell = &grid[r * cols + c];
-            int fg = cell->fg, bg = cell->bg;
-            if (cell->attr & A_BOLD) { if (fg < 8) fg += 8; }
-            if (cell->attr & A_REVERSE) { int t = fg; fg = bg; bg = t; }
-            if (sel_has(r, c)) { int t = fg; fg = bg; bg = t; }   /* 0090 */
-            if (cursor_visible && r == cy && c == cx) { int t = fg; fg = bg; bg = t; }
+            int fg, bg;
+            cell_colors(&grid[r * cols + c], r, c, &fg, &bg);
             int x0 = c * cell_w, y0 = r * cell_h;
             uint32_t bgp = pack(PAL[bg]);
             for (int y = y0; y < y0 + cell_h && y < sh; y++) {
                 uint32_t *rowp = &px[y * sw];
                 for (int x = x0; x < x0 + cell_w && x < sw; x++) rowp[x] = bgp;
             }
-            if (cell->cp <= 32) continue;    /* space + defensive C0: bg only */
+        }
+        /* Pass 2: glyphs. */
+        for (int c = 0; c < cols; c++) {
+            Cell *cell = &grid[r * cols + c];
+            int fg, bg;
+            cell_colors(cell, r, c, &fg, &bg);
+            int x0 = c * cell_w, y0 = r * cell_h;
+            if (cell->cp <= 32) continue;    /* space + defensive C0 +
+                                                CP_WIDE_CONT: bg only */
             Glyph *g = cp_glyph(cell->cp);
             if (!g->bmp) continue;
+            /* A wide lead draws across its own cell AND the continuation
+             * cell to its right (Phase D). */
+            int clip_w = cell_w * (wcwidth_cp(cell->cp) == 2 ? 2 : 1);
             int gx0 = x0 + g->left;
             int gy0 = y0 + ascent - g->top;
             int fr = PAL[fg][0], fgg = PAL[fg][1], fb = PAL[fg][2];
@@ -782,7 +880,7 @@ static void render(void) {
                 if (dy < y0 || dy >= y0 + cell_h || dy >= sh) continue;
                 for (int gx = 0; gx < g->w; gx++) {
                     int dx = gx0 + gx;
-                    if (dx < x0 || dx >= x0 + cell_w || dx >= sw) continue;
+                    if (dx < x0 || dx >= x0 + clip_w || dx >= sw) continue;
                     unsigned a = g->bmp[gy * g->w + gx];
                     if (!a) continue;
                     int rr = br + (int)(a * (unsigned)(fr - br) / 255);
@@ -920,6 +1018,8 @@ static int load_glyphs(void) {
     if (FT_Init_FreeType(&ft_lib)) return -1;
     if (FT_New_Face(ft_lib, FONT_PATH, 0, &face) &&
         FT_New_Face(ft_lib, FONT_FALLBACK, 0, &face)) return -1;
+    fc_n = fc_load(fc_paths, FC_MAX_FALLBACKS);   /* fallback chain paths;
+                                                     faces open lazily */
     FT_Set_Pixel_Sizes(face, 0, FONT_SIZE);
     cell_h = (int)(face->size->metrics.height >> 6);
     ascent = (int)(face->size->metrics.ascender >> 6);

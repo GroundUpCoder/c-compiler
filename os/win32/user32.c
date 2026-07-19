@@ -2976,7 +2976,13 @@ static void draw_label_mn(HDC dc, int x, int y, const char *raw, const char *str
     GetTextExtentPoint32(dc, stripped + idx, 1, &ch);
     HPEN pen = CreatePen(PS_SOLID, 1, GetTextColor(dc));
     HGDIOBJ op = SelectObject(dc, (HGDIOBJ)pen);
-    int uy = y + ch.cy - 1;
+    /* Underline just below the BASELINE (real GDI keys this on the font's
+     * underline metrics, ~1-2px under the baseline, crossing descender
+     * tails) — NOT on the glyph cell's bottom row: Noto's 20px stock cell
+     * put that row outside a Win95-sized 18px control, so a cell-bottom
+     * underline clipped away entirely (Unicode Phase D). */
+    TEXTMETRIC utm;
+    int uy = GetTextMetrics(dc, &utm) ? y + utm.tmAscent + 2 : y + ch.cy - 1;
     MoveToEx(dc, x + pre.cx, uy, NULL);
     LineTo(dc, x + pre.cx + ch.cx, uy);
     SelectObject(dc, op);

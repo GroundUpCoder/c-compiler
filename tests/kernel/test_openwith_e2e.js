@@ -84,7 +84,7 @@ const DECK = deskCell(deskEntries(['game.gb', 'deck.mgp']), 'deck.mgp');
  * listbox, HOME selects row 0, VK_DOWN steps — no row-height pixel math. */
 const HOME = 'wmctl key $SID 74 1073741898';
 const DOWN = 'wmctl key $SID 81 1073741905';
-const sel = (row) => ['wmctl click $SID 200 100', HOME,
+const sel = (row) => ['wmctl click $SID 200 260', HOME,
                       ...Array(row).fill(DOWN)].join('\n');
 
 /* fileman's picker/Open launches (activate() -> spawn, WNOHANG-reaped) run the
@@ -192,7 +192,7 @@ const out = boot([
   // (0083 rule).
   'sleep 1',
   'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
-  `wmctl dblclick $DSID ${GB.x + 42} ${GB.y + 32}`,
+  `wmctl dblclick $DSID ${GB.x + 58} ${GB.y + 48}`,
   'wmctl wait count SameBoy 2 8000',             // second sameboy window up
   'echo ==list4',
   'wmctl list',
@@ -202,7 +202,7 @@ const out = boot([
   'cp /usr/share/mgp/tutorial/01-welcome.mgp /root/Desktop/deck.mgp',
   // Same coarse desk re-read tick as game.gb above (0083 rule, annotated).
   'sleep 1',
-  `wmctl dblclick $DSID ${DECK.x + 42} ${DECK.y + 32}`,
+  `wmctl dblclick $DSID ${DECK.x + 58} ${DECK.y + 48}`,
   'wmctl wait win MagicPoint 15000 && echo MGP-DESK-OK', // desktop dblclick -> viewer
   'MSID=$(wmctl list | grep MagicPoint | sed "s/[^0-9].*//")',
   'wmctl key $MSID 0 113',                       // q quits the viewer
@@ -245,7 +245,7 @@ const out = boot([
   'wmctl click Edit',
   'wmctl wait win "01-welcome.mgp - Notepad" 15000 && echo EDIT-FM-OK',
   // the desktop icon menu's EDIT row (documents only, row 1 under OPEN)
-  `wmctl click $DSID ${DECK.x + 42} ${DECK.y + 32} 3`,
+  `wmctl click $DSID ${DECK.x + 58} ${DECK.y + 48} 3`,
   'wmctl wait win ctxmenu 8000',                 // icon menu up
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   'wmctl click $CXSID 60 34',                    // EDIT (row 1 on a document, 0202)

@@ -72,7 +72,7 @@ try {
 
   // Window geometry: surface at (12,36), 480x452 — the top 20px are the
   // anchored "menubar" strip child, the GB client (160x144 tripled) below.
-  const BAR = 20;
+  const BAR = 30;
   const WX = 12, WY = 36;
   const CX = WX + 240, CY = WY + BAR + 216;   // client center
 
@@ -115,7 +115,7 @@ try {
   await setVt(2);
   const tP = Date.now();
   for (;;) {
-    const got = await sample(WX + 2 + 8, WY + BAR + 9);   // popup-rel (8,9): row-0 gutter
+    const got = await sample(WX + 2 + 8, WY + BAR + 15);  // popup-rel (8,15): row-0 gutter
     if (near(got, MENUFACE)) break;
     if (Date.now() - tP > 30000) throw new Error(`popup never composited over the client; probe ${got}`);
     await new Promise(r => setTimeout(r, 250));
@@ -126,7 +126,7 @@ try {
   await setVt(2);
   const tE = Date.now();
   for (;;) {
-    const got = await sample(WX + 2 + 8, WY + BAR + 9);
+    const got = await sample(WX + 2 + 8, WY + BAR + 15);
     if (!near(got, MENUFACE)) break;
     if (Date.now() - tE > 30000) throw new Error(`popup never dismissed; probe ${got}`);
     await new Promise(r => setTimeout(r, 250));

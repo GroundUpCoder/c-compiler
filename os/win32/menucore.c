@@ -292,10 +292,10 @@ void mc_draw_tbl(HDC dc, MenuTbl *m, const RECT *prp, int hotRow) {
                         tab + 1, (int)strlen(tab + 1));
             if (it->kind == 1) {                              /* cascade ► (0211) */
                 POINT tri[3];
-                int cx = pr.right - 8, cy = y + rh / 2;
-                tri[0].x = cx + 3; tri[0].y = cy;
-                tri[1].x = cx - 2; tri[1].y = cy - 4;
-                tri[2].x = cx - 2; tri[2].y = cy + 4;
+                int cx = pr.right - 10, cy = y + rh / 2;
+                tri[0].x = cx + 4; tri[0].y = cy;
+                tri[1].x = cx - 3; tri[1].y = cy - 6;
+                tri[2].x = cx - 3; tri[2].y = cy + 6;
                 HBRUSH tb = CreateSolidBrush(
                     GetSysColor(hot ? COLOR_HIGHLIGHTTEXT : COLOR_MENUTEXT));
                 HGDIOBJ ob = SelectObject(dc, (HGDIOBJ)tb);

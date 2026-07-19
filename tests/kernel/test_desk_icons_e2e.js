@@ -6,7 +6,7 @@
 // shots the desktop layer, and probes each glyph's signature pixels.
 //
 // CENTER-PIXEL CONTRACT (updated deliberately by #82, mirrored in wm.c's
-// draw_icon_glyph comment): tile center (ix+12, iy+12) is NAVY for
+// draw_icon_glyph comment): tile center (ix+16, iy+16) is NAVY for
 // programs (solid block), folders (tab+body) and the FULL Recycle Bin;
 // WHITE for every data-file glyph and the empty bin. Exec/dir/bin pixels
 // are byte-identical to pre-#82 (the wm_service/recycle/os-shell probes).
@@ -72,10 +72,11 @@ const px = (x, y) => String(Array.from(
   ppm.subarray(off + (y * W + x) * 3, off + (y * W + x) * 3 + 3)));
 
 const WHITE = '255,255,255', NAVY = '0,0,128';
-// Icon tile origin inside a cell: ix = cell.x + 30, iy = cell.y + 6.
+// Icon tile origin inside a cell: ix = cell.x + (116-32)/2 = +42,
+// iy = cell.y + 6 (font-20 retune: 116x96 cells, 32px tiles).
 const at = (name, dx, dy) => {
   const c = cellOf(name);
-  return px(c.x + 30 + dx, c.y + 6 + dy);
+  return px(c.x + 42 + dx, c.y + 6 + dy);
 };
 // Probe a glyph: list of [dx, dy, expected, what] triples.
 const glyph = (name, kind, probes) => {
@@ -86,48 +87,48 @@ const glyph = (name, kind, probes) => {
 
 // DK_EXEC — a #! script keeps the pre-#82 solid block (navy center).
 glyph('alauncher', 'exec', [
-  [12, 12, NAVY, 'solid block center'],
-  [5, 3, WHITE, 'no page outline'],
-  [12, 5, WHITE, 'white above the block'],
+  [16, 16, NAVY, 'solid block center'],
+  [7, 4, WHITE, 'no page outline'],
+  [16, 6, WHITE, 'white above the block'],
 ]);
 // DK_TEXT — page outline + text lines, white center.
 glyph('notes.txt', 'text', [
-  [5, 3, NAVY, 'page outline corner'],
-  [9, 10, NAVY, 'text line'],
-  [12, 12, WHITE, 'data-file white center'],
-  [16, 5, WHITE, 'no dog-ear fold'],
+  [7, 4, NAVY, 'page outline corner'],
+  [12, 13, NAVY, 'text line'],
+  [16, 16, WHITE, 'data-file white center'],
+  [21, 7, WHITE, 'no dog-ear fold'],
 ]);
 // DK_FILE — dog-eared page, no lines.
 glyph('blob.dat', 'generic', [
-  [5, 3, NAVY, 'page outline corner'],
-  [16, 5, NAVY, 'dog-ear fold'],
-  [9, 10, WHITE, 'no text lines'],
-  [12, 12, WHITE, 'data-file white center'],
+  [7, 4, NAVY, 'page outline corner'],
+  [21, 7, NAVY, 'dog-ear fold'],
+  [12, 13, WHITE, 'no text lines'],
+  [16, 16, WHITE, 'data-file white center'],
 ]);
 // DK_IMAGE — frame + sun + ridge.
 glyph('photo.ppm', 'image', [
-  [4, 12, NAVY, 'frame left edge'],
-  [8, 9, NAVY, 'sun'],
-  [12, 16, NAVY, 'mountain ridge'],
-  [12, 12, WHITE, 'data-file white center'],
+  [5, 16, NAVY, 'frame left edge'],
+  [10, 12, NAVY, 'sun'],
+  [16, 21, NAVY, 'mountain ridge'],
+  [16, 16, WHITE, 'data-file white center'],
 ]);
 // DK_DECK — presentation screen on a stand.
 glyph('deck.mgp', 'deck', [
-  [4, 8, NAVY, 'screen border'],
-  [7, 6, NAVY, 'title stripe'],
-  [12, 18, NAVY, 'stand base'],
-  [12, 12, WHITE, 'data-file white center'],
+  [5, 10, NAVY, 'screen border'],
+  [10, 9, NAVY, 'title stripe'],
+  [15, 25, NAVY, 'stand base'],
+  [16, 16, WHITE, 'data-file white center'],
 ]);
 // DK_DIR — the seeded Presentations folder keeps the 0185 tab+body.
 glyph('Presentations', 'dir', [
-  [16, 6, WHITE, 'tab notch'],
-  [8, 12, NAVY, 'folder body'],
-  [12, 12, NAVY, 'container navy center'],
+  [21, 8, WHITE, 'tab notch'],
+  [10, 16, NAVY, 'folder body'],
+  [16, 16, NAVY, 'container navy center'],
 ]);
 // DK_BIN — empty basket (the recycle-e2e contract, cheap to re-assert).
 glyph('Recycle Bin', 'bin', [
-  [12, 4, NAVY, 'basket rim'],
-  [12, 12, WHITE, 'empty-bin white center'],
+  [16, 5, NAVY, 'basket rim'],
+  [16, 16, WHITE, 'empty-bin white center'],
 ]);
 
 fs.rmSync(tmp, { recursive: true, force: true });

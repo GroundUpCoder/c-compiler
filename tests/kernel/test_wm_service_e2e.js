@@ -30,11 +30,11 @@ function check(name, cond, extra) {
 const { dir: tmp, image } = freshImage('os-wm-');
 
 // The single-column Start menu (os/wm.c, todos/0098+0132 + follow-up): a
-// FIXED 192x274 root parked above the 28px taskbar on the 1024x768 headless
-// screen. A 22px gucOS branding BAND runs down the left, then a 170px
+// FIXED 290x378 root parked above the 36px taskbar on the 1024x768 headless
+// screen. A 30px gucOS branding BAND runs down the left, then a 260px
 // column: pinned + MRU recents, a groove and the fixed places Settings/Run...,
 // a groove, and — XP/Vista/7 style — the "All Programs" row at the BOTTOM,
-// with a search box at its foot (y 248). "All Programs" cascades the menu
+// with a search box at its foot (y 344). "All Programs" cascades the menu
 // tree as flyout columns snugly off the column's right edge — startmenu2
 // lists the baked GROUPS (dirs-first sort), startmenu3 a group's leaves.
 // Recents (~/.config/recent) grow via the wm's activate() on every real
@@ -42,24 +42,24 @@ const { dir: tmp, image } = freshImage('os-wm-');
 // "All Programs" to the BOTTOM display row (SM_ROWS-1) above the search box,
 // an empty gap between (XP/Win7). Item x is offset by the SM_SIDE band. Bump
 // the leaf lists when image.json's menu tree changes.
-const SM_SIDE = 22, SM_COL = 170;
-const SM_W = SM_SIDE + SM_COL, SM_H = 274, SM_ROW_H = 20, SM_PAD = 4, SM_ROWS = 12;
-const SM_Y = 768 - 28 - SM_H;                    // 466
+const SM_SIDE = 30, SM_COL = 260;
+const SM_W = SM_SIDE + SM_COL, SM_H = 378, SM_ROW_H = 28, SM_PAD = 4, SM_ROWS = 12;
+const SM_Y = 768 - 36 - SM_H;                    // 354
 const AP_ROW = SM_ROWS - 1;                       // All Programs DISPLAY row: pinned
                                                   // to the bottom (XP/Win7), above search
 const SM_GEOM = `${SM_W}x${SM_H}+0+${SM_Y}`;
-const SM_SEARCH_Y = SM_PAD + SM_ROWS * SM_ROW_H + 4;  // 248
+const SM_SEARCH_Y = SM_PAD + SM_ROWS * SM_ROW_H + 4;  // 344
 const SM_ROOT = { x: 0, y: SM_Y, w: SM_W };
-// Flyout columns are menucore chain levels since todos/0259: 18px rows,
-// 1px border (h = 4 + 18n), WIDTH MEASURED from freetype (asserted
+// Flyout columns are menucore chain levels since todos/0259: 30px rows,
+// 1px border (h = 4 + 30n), WIDTH MEASURED from freetype (asserted
 // structurally, never as a literal); a level parks at parent-right - 3
 // with row 0 aligned to the anchor row's drawn top, clamped to the work
 // area by the wm's win_create op. flyH/flyY compute the deterministic
 // parts; x/w come from the live `wmctl list` rows.
-const MC_ROW = 18, MC_SEP = 8;
+const MC_ROW = 30, MC_SEP = 10;
 const flyH = (n) => 4 + n * MC_ROW;
-const flyClampY = (y, h) => Math.max(0, Math.min(y, 740 - h));
-const flyRowY = (i) => 1 + i * MC_ROW + 9;            // window-local click y
+const flyClampY = (y, h) => Math.max(0, Math.min(y, 732 - h));
+const flyRowY = (i) => 1 + i * MC_ROW + 15;           // window-local click y
 // Parse "WxH+X+Y" out of a wmctl list row.
 const g4 = (line) => {
   const m = /(\d+)x(\d+)\+(\d+)\+(\d+)/.exec((line.split('\t')[2] || ''));
@@ -67,11 +67,11 @@ const g4 = (line) => {
 };
 // Context-menu row center (menucore geometry since 0259) — the 0101
 // taskbar-strip menu rows (Cascade 0, Tile 1, Minimize All 2).
-const rowY101 = (i) => 1 + i * MC_ROW + 9;
+const rowY101 = (i) => 1 + i * MC_ROW + 15;
 // Window system-menu row centers (todos/0102): Restore/Move/Size/Minimize/
 // Maximize, an 8px sep, then Close — rows past the sep shift down by 8.
 const rowYsys = (i) => (i < 5 ? 1 + i * MC_ROW
-                              : 1 + 5 * MC_ROW + MC_SEP + (i - 6) * MC_ROW) + 9;
+                              : 1 + 5 * MC_ROW + MC_SEP + (i - 6) * MC_ROW) + 15;
 const MENU_GROUPS = ['Accessories', 'Demos', 'Games'];
 const DEMOS = ['cairodemo', 'ctldemo', 'gdidemo', 'gpubox', 'learn-mgp', 'mgp', 'slides', 'winbox'];
 
@@ -86,7 +86,7 @@ const DEMOS = ['cairodemo', 'ctldemo', 'gdidemo', 'gpubox', 'learn-mgp', 'mgp', 
 const DESK_ENTRIES = deskEntries();      // files + dirs + the Recycle Bin
 const desk = (list, name) => {
   const c = deskCell(list, name);
-  return `${c.x + 42} ${c.y + 32}`;
+  return `${c.x + 58} ${c.y + 48}`;
 };
 // the activate leg drops two more files in and re-sorts
 const DESK_ACT = deskEntries(['alauncher', 'notes.txt']);
@@ -105,7 +105,7 @@ const script = [
   'wmctl wait flag $WSID m',
   'echo ==list2',
   'wmctl list',
-  'wmctl click $TSID 60 14',                     // taskbar button 0 -> restore
+  'wmctl click $TSID 120 18',                     // taskbar button 0 -> restore
   'wmctl wait flag $WSID f',
   'echo ==list3',
   'wmctl list',
@@ -120,7 +120,7 @@ const script = [
   'echo ==list6',
   'wmctl list',
   'wmctl max $WSID && echo max-ok',              // maximize/restore (todos/0025)
-  'wmctl wait dim $WSID 1024x712',               // maximize RESIZE ack landed (0155)
+  'wmctl wait dim $WSID 1024x704',               // maximize RESIZE ack landed (0155)
   'echo ==list7',
   'wmctl list',
   'wmctl max $WSID',                             // toggle back
@@ -216,9 +216,9 @@ const script = [
   'W2=$(wmctl list | grep winbox$ | sed "s/[^0-9].*//" | sort -n | tail -4 | head -2 | tail -1)',
   'wmctl close $W2',
   'wmctl wait gone $W2',
-  // Buttons: [4 pre-existing][W1][W3][W4] now; button 5 (x center 650)
+  // Buttons: [4 pre-existing][W1][W3][W4] now; button 5 (x center 744)
   // must focus W3 (compaction) — swap-remove would put W4 there.
-  'wmctl click $TSID 650 14',
+  'wmctl click $TSID 744 18',
   'sleep 0.3',                                   // timing subject: taskbar-button focus/compaction settle (target sid computed post-hoc in JS)
   'echo ==bar2',
   'wmctl list',
@@ -321,7 +321,7 @@ const script = [
   // ---- Aero effects (todos/0063) ----
   // Aero Peek: injected motion over taskbar button 0 raises the "peek"
   // thumbnail popup; motion over the Start strip drops it.
-  'wmctl hover $TSID 60 14',
+  'wmctl hover $TSID 120 18',
   'wmctl wait win peek',
   'echo ==aero1',
   'wmctl list',
@@ -521,13 +521,13 @@ const script = [
   'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (shift+click range, no window observable)
   'wmctl shot $DSID /root/s2b.ppm && echo s2b-ok',
   // marquee from empty desktop over the column-0 tiles of rows 0-2:
-  // REPLACES the set (x stays short of column 1's tiles at x>=130)
-  'wmctl drag $DSID 128 10 40 200',
+  // REPLACES the set (x stays short of column 1's tiles at x>=174)
+  'wmctl drag $DSID 160 10 40 250',
   'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (marquee replace, no window observable)
   'wmctl shot $DSID /root/s3.ppm && echo s3-ok',
   // drag-move: press term (its sorted DESK_ACT cell, column 1) and drop at
   // (2,1); the plain press on the unselected icon first collapses the set
-  `wmctl drag $DSID ${desk(DESK_ACT, 'term')} 226 112`,
+  `wmctl drag $DSID ${desk(DESK_ACT, 'term')} 306 160`,
   'sleep 2.5',                                   // timing subject: wm.c desk_load re-read poll (~1s tick) persists the moved .icons
   'echo ==sel1',
   'cat /root/Desktop/.icons',
@@ -600,7 +600,7 @@ const script = [
   'wmctl wait win ctxmenu',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 30 ${rowY101(0)}`,          // Cascade (row 0)
-  'wmctl wait dim $TWA 614x427',                   // Cascade resized to the uniform box (0155)
+  'wmctl wait dim $TWA 614x422',                   // Cascade resized to the uniform box (0155)
   'echo ==tp5',
   'wmctl list',
   // clock date tooltip: a click in the clock cell (x=980) raises "datepop"
@@ -791,7 +791,7 @@ const script = [
   'echo ==rn5',
   'wmctl list',                                    // ctxmenu (icon menu) up
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  'wmctl click $CXSID 30 108',                     // Rename row (row 6 on a document — Edit precedes, 0202; 1 + 2*18 + 8 + 3*18 + 9)
+  'wmctl click $CXSID 30 176',                     // Rename row (row 6 on a document — Edit precedes, 0202; 1 + 2*30 + 10 + 3*30 + 15)
   'wmctl wait nowin ctxmenu',
   'wmctl key $DSID 42 8',                          // clear "aab"
   'wmctl key $DSID 42 8',
@@ -825,7 +825,7 @@ const script = [
   'wmctl wait atleast winbox $((LN0+1))',          // the short-name launcher spawns
   'LN1=$(wmctl list | grep -c winbox$)',
   'echo LN-SHORT-DELTA-$((LN1-LN0))',
-  'wmctl dblclick $DSID 58 112',                   // row 1 = the 36-char spaced name
+  'wmctl dblclick $DSID 58 160',                   // row 1 = the 36-char spaced name
   'wmctl wait atleast winbox $((LN1+1))',          // the 36-char launcher spawns (0151 witness)
   'LN2=$(wmctl list | grep -c winbox$)',
   'echo LN-LONG-DELTA-$((LN2-LN1))',
@@ -865,7 +865,7 @@ const dst = (line) => line.split('\t')[3] || '';    // the DST column
 const bar1 = row(l1, 'taskbar'), win1 = row(l1, 'winbox');
 check('wm autostarted: taskbar surface exists', bar1 !== '', JSON.stringify(l1));
 check('taskbar is borderless, parked at the bottom edge (0,740 @1024x768)',
-  bar1.includes('1024x28+0+740') && bar1.includes('b'), bar1);
+  bar1.includes('1024x36+0+732') && bar1.includes('b'), bar1);
 check('winbox placed by the WM policy (12,36 — not the kernel cascade)',
   win1.includes('240x160+12+36'), win1);
 check('winbox focused + resizable (R flag, todos/0021)',
@@ -905,13 +905,13 @@ check('winbox unscaled: DST column is -', win6.includes('\t-\t'), win6);
 // ---- maximize/restore (todos/0025): wmctl max -> EV_TITLE_ACTIVATE ->
 // wm.c policy, dispatching on the RESIZABLE bit ----
 check('wmctl max on the resizable winbox succeeds', out.includes('max-ok'));
-check('maximized winbox fills the work area (1024x712+0+28: screen minus taskbar, below the title bar)',
-  geom(row(l7, 'winbox')) === '1024x712+0+28', row(l7, 'winbox'));
+check('maximized winbox fills the work area (1024x704+0+28: screen minus taskbar, below the title bar)',
+  geom(row(l7, 'winbox')) === '1024x704+0+28', row(l7, 'winbox'));
 check('second max restores the exact saved geometry',
   geom(row(l8, 'winbox')) === geom(win1) && geom(win1) === '240x160+12+36',
   row(l8, 'winbox'));
 check('max on the fixed-size fixbox: aspect-fit scale-to-fit (960x640, integer-snapped 4x), centered',
-  dst(row(l9, 'fixbox')) === '960x640' && geom(row(l9, 'fixbox')) === '240x160+32+64',
+  dst(row(l9, 'fixbox')) === '960x640' && geom(row(l9, 'fixbox')) === '240x160+32+60',
   row(l9, 'fixbox'));
 check('fixbox buffer untouched by max (still 240x160)',
   geom(row(l9, 'fixbox')).startsWith('240x160'), row(l9, 'fixbox'));
@@ -928,7 +928,7 @@ check('wmctl max with no WM names the cause (ENODEV, todos/0242)',
   err.includes('wmctl: max: No such device (no WM subscribed)'), err.slice(-400));
 const bar5 = row(l5, 'taskbar');
 check('wm & respawns: taskbar back at the bottom edge',
-  bar5.includes('1024x28+0+740'), JSON.stringify(l5));
+  bar5.includes('1024x36+0+732'), JSON.stringify(l5));
 
 // ---- the Start menu (todos/0028; single-column todos/0098+0132) ----
 const menu1 = row(m1, 'startmenu');
@@ -1106,8 +1106,8 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     const off = head.indexOf('255\n') + 4, W = 1024;
     const px = (x, y) => Array.from(ppm.subarray(off + (y * W + x) * 3, off + (y * W + x) * 3 + 3));
     let white = 0, navy = 0, black = 0, teal = 0;
-    for (let y = 16; y < 80; y++) {
-      for (let x = 16; x < 100; x++) {
+    for (let y = 16; y < 112; y++) {
+      for (let x = 16; x < 132; x++) {
         const p = px(x, y), s = String(p);
         if (s === '255,255,255') white++;
         else if (s === '0,0,128') navy++;
@@ -1121,18 +1121,18 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
       white > 250 && navy > 100 && black === 0 && teal > 3000,
       JSON.stringify({ white, navy, black, teal }));
     // Cell 1 is calc, a symlink: the black launcher notch sits at the
-    // tile's bottom-left (ix+2..7, iy+16..21).
+    // tile's bottom-left (ix+3..10, iy+21..28).
     check('link notch on the calc symlink icon (cell 1)',
-      String(px(46 + 4, 22 + 64 + 18)) === '0,0,0', px(46 + 4, 22 + 64 + 18));
+      String(px(58 + 5, 118 + 24)) === '0,0,0', px(58 + 5, 118 + 24));
     check('empty desktop area is pure teal', String(px(500, 400)) === '0,128,128', px(500, 400));
     // Folder glyph (todos/0185): cell 0 is the Presentations dir — tab +
-    // body leave (ix+16, iy+6) WHITE where a launcher's solid block is
+    // body leave (ix+21, iy+8) WHITE where a launcher's solid block is
     // navy (cell 1 = calc); the folder body itself is navy.
     check('folder glyph distinct from launcher block (Presentations vs calc)',
-      String(px(46 + 16, 22 + 6)) === '255,255,255' &&
-      String(px(46 + 8, 22 + 12)) === '0,0,128' &&
-      String(px(46 + 16, 22 + 64 + 6)) === '0,0,128',
-      [px(46 + 16, 22 + 6), px(46 + 8, 22 + 12), px(46 + 16, 22 + 64 + 6)].join(' | '));
+      String(px(58 + 21, 22 + 8)) === '255,255,255' &&
+      String(px(58 + 10, 22 + 16)) === '0,0,128' &&
+      String(px(58 + 16, 118 + 16)) === '0,0,128',
+      [px(58 + 21, 22 + 8), px(58 + 10, 22 + 16), px(58 + 16, 118 + 16)].join(' | '));
   }
 
   // The taskbar shot (todos/0031): clock digits render in the right-aligned
@@ -1140,14 +1140,14 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   const bppm = COMMON.readFileBytes(ufs, '/root/bar.ppm');
   const bhead = Buffer.from(bppm.subarray(0, 20)).toString('latin1');
   const bm = /^P6\n(\d+) (\d+)\n255\n/.exec(bhead);
-  check('taskbar shot is a 1024x28 P6', !!bm && bm[1] === '1024' && bm[2] === '28', bhead);
+  check('taskbar shot is a 1024x36 P6', !!bm && bm[1] === '1024' && bm[2] === '36', bhead);
   if (bm) {
     const boff = bhead.indexOf('255\n') + 4, BW = 1024;
     let clock = 0;
     // clock cell moved left of the 0101 Show Desktop sliver: left edge is
-    // clock_left()=1024-14-45=965, digits drawn at cx+8=973.
-    for (let y = 8; y < 20; y++) {
-      for (let x = 973; x < 1010; x++) {
+    // clock_left()=1024-18-75=931, digits drawn at cx+8=939.
+    for (let y = 10; y < 28; y++) {
+      for (let x = 939; x < 1006; x++) {
         const i = boff + (y * BW + x) * 3;
         if (bppm[i] === 0 && bppm[i + 1] === 0 && bppm[i + 2] === 0) clock++;
       }
@@ -1171,14 +1171,14 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     const mpx = (x, y) =>
       Array.from(mppm.subarray(moff + (y * MW + x) * 3, moff + (y * MW + x) * 3 + 3));
     // the gucOS branding band: a blue gradient (blue channel high, red low)
-    const band = mpx(10, Math.floor(SM_H / 2));
+    const band = mpx(15, Math.floor(SM_H / 4));
     check('gucOS branding band is a blue gradient down the left',
       band[2] > 60 && band[0] < 40, band);
     // All Programs is the BOTTOM row (row 2) and carries the cascade arrow at
     // the column's right edge
     const apY = SM_PAD + AP_ROW * SM_ROW_H;
     check('All Programs (bottom row) carries the cascade arrow',
-      String(mpx(SM_W - 12, apY + 9)) === '0,0,0', mpx(SM_W - 12, apY + 9));
+      String(mpx(SM_W - 16, apY + 14)) === '0,0,0', mpx(SM_W - 16, apY + 14));
     let lBlack = 0;
     for (let y = apY; y < apY + SM_ROW_H; y++)
       for (let x = SM_SIDE + 8; x < SM_W - 14; x++)
@@ -1226,8 +1226,8 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     JSON.stringify([row(s4a, 'startmenu') !== '', row(s4b, 'startmenu') !== '']));
   check('a second Esc dismisses the menu', row(s4c, 'startmenu') === '',
     JSON.stringify(s4c));
-  check('the Run... place (column row 1) opens the run dialog (240x70, above the bar)',
-    row(s5, 'startrun').includes('240x70+6+664') && row(s5, 'startmenu') === '',
+  check('the Run... place (column row 1) opens the run dialog (340x78, above the bar)',
+    row(s5, 'startrun').includes('340x78+6+648') && row(s5, 'startmenu') === '',
     JSON.stringify(s5));
   check('typed command + Enter launches it (sh -c winbox: +1) and closes the dialog',
     count(s6, 'winbox') === count(s5, 'winbox') + 1 && row(s6, 'startrun') === '',
@@ -1235,7 +1235,7 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   // The 0259 menu-tree UNION red→green: with /etc/menu/Apps present the
   // tree flyout lists it ALONGSIDE the baked groups — pre-union,
   // first-existing-dir made /etc/menu shadow the ENTIRE baked tree, so
-  // the flyout would have held ONLY Apps (h 22, one row) and this height
+  // the flyout would have held ONLY Apps (h 34, one row) and this height
   // assert fails on the old wm.c.
   const s7g = (() => {
     const l = row(s7, 'startmenu2');
@@ -1268,11 +1268,11 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
 {
   const ae1 = section('aero1'), ae2 = section('aero2'), ae3 = section('aero3');
   // Aero Peek: injected hover over button 0 raised the popup (wm furniture,
-  // borderless, 160x120, parked above the 28px bar); hover elsewhere drops it.
+  // borderless, 160x120, parked above the 36px bar); hover elsewhere drops it.
   const peek = row(ae1, 'peek');
   check('taskbar hover raises the Aero Peek popup (todos/0063)',
-    peek.includes('160x120') && peek.includes('b') && peek.includes('+616'),
-    JSON.stringify(ae1));   // parked at 768 - 28(bar) - 120 - 4
+    peek.includes('160x120') && peek.includes('b') && peek.includes('+608'),
+    JSON.stringify(ae1));   // parked at 768 - 36(bar) - 120 - 4
   check('peek popup rides the TOP layer like the bar',
     (peek.split('\t')[5] || '').includes('T'), peek);
   check('peek popup is shot-able (pixels live)', out.includes('peek-shot-ok'));
@@ -1319,9 +1319,9 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   };
   const NAVY = '0,0,128', TEAL = '0,128,128', WHITE = '255,255,255';
   const strip = (px, name, c, r) => {
-    const len = Math.min(13, name.length);
-    const lx = 16 + c * 84 + Math.floor((84 - len * 6) / 2);
-    return px(lx - 1, 16 + r * 64 + 34 + 3);
+    const len = Math.min(9, name.length);   // text_fit caps at CELL_W-8 = 108px = 9 chars
+    const lx = 16 + c * 116 + Math.floor((116 - len * 12) / 2);
+    return px(lx - 1, 16 + r * 96 + 42 + 3);
   };
   const at = (name) => {                                    // pre-move cells
     const c = deskCell(DESK_ACT, name);
@@ -1357,10 +1357,10 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   const termCell = deskCell(DESK_ACT, 'term');
   const p4 = readPpm('s4.ppm');
   check('drag-move relocated term to (2,1): tile there, old cell teal, still selected',
-    p4(216, 88) === WHITE &&
-    p4(termCell.x + 42, termCell.y + 18) === TEAL &&   // old cell, derived (todos/0166)
+    p4(293, 121) === WHITE &&
+    p4(termCell.x + 58, termCell.y + 22) === TEAL &&   // old cell, derived (todos/0166)
     strip(p4, 'term', 2, 1) === NAVY,
-    [p4(216, 88), p4(termCell.x + 42, termCell.y + 18), strip(p4, 'term', 2, 1)]);
+    [p4(293, 121), p4(termCell.x + 58, termCell.y + 22), strip(p4, 'term', 2, 1)]);
   const p5 = readPpm('s5.ppm');
   check('Ctrl+A selects all (alauncher, notes.txt, moved term navy)',
     strip(p5, ...at('alauncher')) === NAVY && strip(p5, ...at('notes.txt')) === NAVY &&
@@ -1393,11 +1393,11 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   // right-click the clock cell -> the taskbar-strip menu (Cascade, Tile,
   // Minimize All, sep, Properties -> h = 4 + 4*18 + 8 = 84 on the engine
   // rows, 0259; width measured), clamped right (x = 1024 - w) and above
-  // the bar (y = 740 - 84 = 656).
+  // the bar (y = 732 - 134 = 598).
   const cm = row(tp1, 'ctxmenu');
   const cmg = g4(cm);
-  check('right-click the taskbar strip opens the menu (h 84, clamped above the bar)',
-    cmg && cmg.h === 84 && cmg.x === 1024 - cmg.w && cmg.y === 740 - 84 &&
+  check('right-click the taskbar strip opens the menu (h 134, clamped above the bar)',
+    cmg && cmg.h === 134 && cmg.x === 1024 - cmg.w && cmg.y === 732 - 134 &&
     cm.includes('b'), JSON.stringify(tp1));
   check('the strip menu rides the TOP layer like the bar',
     (cm.split('\t')[5] || '').includes('T'), cm);
@@ -1412,17 +1412,17 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     JSON.stringify([flg(tp4, A), flg(tp4, B)]));
   // Cascade resizes every visible resizable window to the uniform 3/5 box
   // (1024*3/5 = 614, (768-28-28)*3/5 = 427) and diagonally offsets them.
-  check('Cascade resizes the fresh winboxes to the uniform 614x427 box',
-    geom(rowSid(tp5, A)).startsWith('614x427') && geom(rowSid(tp5, B)).startsWith('614x427'),
+  check('Cascade resizes the fresh winboxes to the uniform 614x422 box',
+    geom(rowSid(tp5, A)).startsWith('614x422') && geom(rowSid(tp5, B)).startsWith('614x422'),
     JSON.stringify([geom(rowSid(tp5, A)), geom(rowSid(tp5, B))]));
   check('Cascade offsets them (the two boxes are at different origins)',
     geom(rowSid(tp5, A)) !== geom(rowSid(tp5, B)),
     JSON.stringify([geom(rowSid(tp5, A)), geom(rowSid(tp5, B))]));
   // the clock date tooltip: a click raises "datepop" (borderless, top layer,
-  // DATE_W x DATE_H = 104x22, right-aligned above the bar: 768-28-22-4 = 714).
+  // DATE_W x DATE_H = 184x30, right-aligned above the bar: 768-36-30-4 = 698).
   const dp = row(tp6, 'datepop');
-  check('a clock-cell click raises the datepop tooltip (104x22, above the bar)',
-    dp.includes('104x22+920+714') && dp.includes('b'), JSON.stringify(tp6));
+  check('a clock-cell click raises the datepop tooltip (184x30, above the bar)',
+    dp.includes('184x30+840+698') && dp.includes('b'), JSON.stringify(tp6));
   check('datepop rides the TOP layer', (dp.split('\t')[5] || '').includes('T'), dp);
   check('datepop is shot-able (pixels live)', out.includes('date-shot-ok'));
   check('a second clock-cell click toggles the tooltip off',

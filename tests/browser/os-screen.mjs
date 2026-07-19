@@ -67,7 +67,7 @@ try {
   const d1 = await screenDims();
   check('VT2 entry re-modes the screen to the viewport pane',
     d1.w === 1000 && d1.h > 500 && d1.h < 800, d1);
-  await waitPixel(d1.w - 40, d1.h - 14, FACE, 60000);    // taskbar re-laid
+  await waitPixel(d1.w - 200, d1.h - 18, FACE, 60000);   // taskbar re-laid (blank strip, left of the clock)
   check('wm re-laid the taskbar at the new bottom edge (EV_SCREEN)', true);
   check('desktop fills the new area (teal at the far corner)',
     near(await sample(d1.w - 20, d1.h - 60), TEAL), await sample(d1.w - 20, d1.h - 60));
@@ -77,7 +77,7 @@ try {
   await settle();
   const d2 = await screenDims();
   check('live viewport grow re-modes the screen', d2.w === 1200 && d2.h > d1.h, d2);
-  await waitPixel(d2.w - 40, d2.h - 14, FACE, 60000);
+  await waitPixel(d2.w - 200, d2.h - 18, FACE, 60000);
   check('taskbar re-laid after the grow (full new width)', true);
   check('old bottom strip is desktop again',
     near(await sample(400, d1.h - 14), TEAL), await sample(400, d1.h - 14));
@@ -102,7 +102,7 @@ try {
   await settle();
   const d3 = await screenDims();
   check('VT2 entry applies the shrink', d3.w === 760 && d3.h < d2.h, d3);
-  await waitPixel(d3.w - 120, d3.h - 14, FACE, 60000);   // bar at the new bottom
+  await waitPixel(d3.w - 200, d3.h - 18, FACE, 60000);   // bar at the new bottom (blank strip)
   check('taskbar re-laid after the shrink', true);
   await setVt(1);
   await page.keyboard.type("wmctl list | grep winbox$ && echo LIST-O''K\r");
@@ -113,7 +113,7 @@ try {
   });
   const m = row.match(/(\d+)x(\d+)\+(-?\d+)\+(-?\d+)/);
   check('winbox re-clamped: title bar reachable, clear of the taskbar',
-    m && +m[3] === d3.w - 40 && +m[4] === d3.h - 36, { row, d3 });
+    m && +m[3] === d3.w - 40 && +m[4] === d3.h - 44, { row, d3 });
 
   // ---- VT1 unchanged throughout: the tty still works at the small size.
   await page.keyboard.type("echo END-O''K\r");

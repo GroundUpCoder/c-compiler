@@ -11,8 +11,8 @@
 // plain drags keep working).
 //
 // Geometry on the 1024x768 headless screen (wm.c metrics): work area =
-// 1024 x 712 at y 28 (BAR_H 28, TITLE_H 28); halves 512x712; quarters
-// 512x342 (top y 28, bottom y 398 — the bottom row's own title bar fits).
+// 1024 x 704 at y 28 (BAR_H 36, TITLE_H 28); halves 512x704; quarters
+// 512x338 (top y 28, bottom y 394 — the bottom row's own title bar fits).
 //
 // Run: node tests/kernel/test_snap_e2e.js
 'use strict';
@@ -158,8 +158,8 @@ check('winbox placed by the WM (240x160+12+36)',
 {
   const mid = section('mid');
   const prev = row(mid, 'snappreview');
-  check('mid-drag: snappreview window covers the left half + title band (512x740+0+0)',
-    geom(prev) === '512x740+0+0', JSON.stringify(mid));
+  check('mid-drag: snappreview window covers the left half + title band (512x732+0+0)',
+    geom(prev) === '512x732+0+0', JSON.stringify(mid));
   check('preview is borderless + per-pixel alpha + top layer (b, A, T flags)',
     flags(prev).includes('b') && flags(prev).includes('A') && flags(prev).includes('T'),
     prev);
@@ -175,8 +175,8 @@ check('winbox placed by the WM (240x160+12+36)',
 // ---- the drop: left half; preview gone ----
 {
   const left = section('left');
-  check('drop on the left edge snaps to the left half (512x712+0+28)',
-    geom(row(left, 'winbox')) === '512x712+0+28', row(left, 'winbox'));
+  check('drop on the left edge snaps to the left half (512x704+0+28)',
+    geom(row(left, 'winbox')) === '512x704+0+28', row(left, 'winbox'));
   check('the preview is gone at the drop', row(left, 'snappreview') === '',
     JSON.stringify(left));
 }
@@ -187,25 +187,25 @@ check('dragging the snapped window off restores its floating size at the drop (2
   row(section('dragoff'), 'winbox'));
 
 // ---- right-edge drag (the mirrored zone) ----
-check('right-edge drop snaps to the right half (512x712+512+28)',
-  geom(row(section('rightdrag'), 'winbox')) === '512x712+512+28',
+check('right-edge drop snaps to the right half (512x704+512+28)',
+  geom(row(section('rightdrag'), 'winbox')) === '512x704+512+28',
   row(section('rightdrag'), 'winbox'));
 
 // ---- corner quarter ----
-check('corner drop snaps to the top-left quarter (512x342+0+28)',
-  geom(row(section('quarter'), 'winbox')) === '512x342+0+28',
+check('corner drop snaps to the top-left quarter (512x338+0+28)',
+  geom(row(section('quarter'), 'winbox')) === '512x338+0+28',
   row(section('quarter'), 'winbox'));
 
 // ---- the command path (= Win+arrow) ----
 check('wmctl snap right accepted', out.includes('snap-right-ok'));
-check('snap right: the right half (512x712+512+28)',
-  geom(row(section('right'), 'winbox')) === '512x712+512+28',
+check('snap right: the right half (512x704+512+28)',
+  geom(row(section('right'), 'winbox')) === '512x704+512+28',
   row(section('right'), 'winbox'));
 check('snap right again wraps across to the left half',
-  geom(row(section('wrap'), 'winbox')) === '512x712+0+28',
+  geom(row(section('wrap'), 'winbox')) === '512x704+0+28',
   row(section('wrap'), 'winbox'));
-check('snap up maximizes to the work area (1024x712+0+28)',
-  geom(row(section('max'), 'winbox')) === '1024x712+0+28',
+check('snap up maximizes to the work area (1024x704+0+28)',
+  geom(row(section('max'), 'winbox')) === '1024x704+0+28',
   row(section('max'), 'winbox'));
 check('snap down restores the floating rect saved at the last snap-out (240x160+212+314)',
   geom(row(section('floatback'), 'winbox')) === '240x160+212+314',
@@ -217,8 +217,8 @@ check('snap down on a floating window minimizes it',
 // ---- fixed-size branch: letterboxed halves ----
 {
   const fx = row(section('fixleft'), 'fixbox');
-  check('fixed-size snap left: buffer untouched, aspect-fit dst centered in the half (240x160+16+224, DST 480x320)',
-    geom(fx) === '240x160+16+224' && dst(fx) === '480x320', fx);
+  check('fixed-size snap left: buffer untouched, aspect-fit dst centered in the half (240x160+16+220, DST 480x320)',
+    geom(fx) === '240x160+16+220' && dst(fx) === '480x320', fx);
   const fr = row(section('fixrestore'), 'fixbox');
   check('fixed-size snap down restores the pre-snap dst and spot (240x160+40+60, DST -)',
     geom(fr) === '240x160+40+60' && dst(fr) === '-', fr);

@@ -2,7 +2,7 @@
 // 0020 acceptance, headless: the wasm terminal (/bin/term — SDL surface +
 // kernel pty + freetype, seeded from os/term/bin.json) runs hush on a pty
 // inside a WM window, driven through os/boot.js:
-//   - `term &` opens a 640x432 window (80x24 at the mono font's 8x18 cell)
+//   - `term &` opens a 640x456 window (80x24 at the mono font's 8x19 cell)
 //   - injected SDL keys become pty bytes: `ls /bin` renders MORE text
 //     (screenshot pixel deltas prove the echo + output path)
 //   - busybox vi works INSIDE the terminal: alt screen, insert, :wq — the
@@ -82,8 +82,8 @@ function sessionTerm() {
   const list1 = (out.split('==list1\n')[1] || '').split('==')[0];
   const termRow = list1.split('\n').find((l) => l.endsWith('\tterm')) || '';
   check('term opens a WM window titled "term"', termRow !== '', JSON.stringify(list1));
-  check('term window is 640x432 (80x24 at the 8x18 mono cell)',
-    termRow.includes('640x432'), termRow);
+  check('term window is 640x456 (80x24 at the 8x19 mono cell)',
+    termRow.includes('640x456'), termRow);
   check('all four shots written',
     out.includes('shot1-ok') && out.includes('shot2-ok') &&
     out.includes('shotvi-ok') && out.includes('shotrs-ok'));
@@ -128,21 +128,21 @@ function sessionFrames() {
   }
 
   const t1 = parsePPM(b.stdout, 0);
-  check('shot1 parses at 640x432', t1 && t1.w === 640 && t1.h === 432,
+  check('shot1 parses at 640x456', t1 && t1.w === 640 && t1.h === 456,
     t1 && `${t1.w}x${t1.h}`);
   if (!t1) return;
   const t1fg = fgPixels(b.stdout, t1);
   check('shot1 shows rendered text (hush banner + prompt)', t1fg > 1500, String(t1fg));
 
   const t2 = parsePPM(b.stdout, t1.end);
-  check('shot2 parses at 640x432', t2 && t2.w === 640 && t2.h === 432);
+  check('shot2 parses at 640x456', t2 && t2.w === 640 && t2.h === 456);
   if (!t2) return;
   const t2fg = fgPixels(b.stdout, t2);
   check('ls /bin rendered more text (echo + output over the pty)',
     t2fg > t1fg + 1000, `${t1fg} -> ${t2fg}`);
 
   const tvi = parsePPM(b.stdout, t2.end);
-  check('vi shot parses at 640x432', tvi && tvi.w === 640 && tvi.h === 432);
+  check('vi shot parses at 640x456', tvi && tvi.w === 640 && tvi.h === 456);
   if (!tvi) return;
   // The alternate screen replaced the shell: mostly empty rows of tildes +
   // the status line in the bottom cell row (cell height 18).
@@ -273,7 +273,7 @@ function sessionLess() {
   const b = driveBoot('cat /root/tless.ppm\n', { image, timeout: 120000, maxBuffer: 16 * 1024 * 1024, encoding: null });
   const head = b.stdout.toString('latin1', 0, 32);
   const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-  check('less shot parses at 640x432', !!m && +m[1] === 640 && +m[2] === 432,
+  check('less shot parses at 640x456', !!m && +m[1] === 640 && +m[2] === 456,
     JSON.stringify(head.slice(0, 16)));
   if (m) {
     const w = +m[1], h = +m[2], data = m[0].length;
@@ -332,7 +332,7 @@ function sessionUnicode() {
     'sleep 2',                                     // timing subject: tofu render (multi-frame)
     'wmctl shot $TSID /root/u2.ppm && echo shotu2-ok',
     // Selection copy: clear + print héllo at home, drag cells 0..4 of row
-    // 0 (8x18 cells; BUTTON_UP does not extend, so hover supplies the
+    // 0 (8x19 cells; BUTTON_UP does not extend, so hover supplies the
     // final motion), chord-copy, read the kernel slot from the system
     // shell. 5 cells -> 6 UTF-8 bytes.
     keysU('printf "\\033[2J\\033[H"; echo héllo\r'),
@@ -383,7 +383,7 @@ function sessionUnicode() {
     return n;
   }
   const p0 = parsePPM(b.stdout, 0);
-  check('unicode: baseline shot parses at 640x432', p0 && p0.w === 640 && p0.h === 432);
+  check('unicode: baseline shot parses at 640x456', p0 && p0.w === 640 && p0.h === 456);
   if (!p0) return;
   const p1 = parsePPM(b.stdout, p0.end);
   check('unicode: post-cat shot parses', !!p1);
@@ -399,12 +399,92 @@ function sessionUnicode() {
     f2 > f1 + 50, `${f1} -> ${f2}`);
 }
 
+/* ---- session W: double-width cells + wcwidth erase (Unicode Phase D) ----
+ * A CJK code point (wcwidth 2) owns TWO terminal cells: the glyph — here
+ * the 2-cell tofu box, the minimal image bakes only Noto Sans Mono — spans
+ * both, the cursor advances 2, and the tty's canonical-mode ERASE echoes
+ * 2x[BS SP BS] so the erase wipes BOTH cells (the kernel wcwidthCp /
+ * os/wcwidth.h twin tables). */
+function sessionWide() {
+  const keysU = (s) => [...s].map((ch) => 'wmctl key $TSID 0 ' + ch.codePointAt(0)).join('\n');
+  const script = [
+    'term &',
+    'wmctl wait win term',
+    'sleep 2',                                     // timing subject: hush banner + prompt render (multi-frame)
+    'TSID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
+    // Wide output: clear + home, then 日 (U+65E5, 3 bytes) followed by a
+    // narrow X — 日 must own cells 0+1 and X land at cell 2.
+    keysU('printf "\\033[2J\\033[H\\xe6\\x97\\xa5X\\n"\r'),
+    'sleep 2',                                     // timing subject: glyph render (multi-frame)
+    'wmctl shot $TSID /root/w0.ppm && echo shotw0-ok',
+    // Canonical-mode wide ERASE: `read` holds the tty canonical at home;
+    // type 日 (tty echo renders its 2-cell tofu), then ONE Backspace —
+    // the width-aware erase echo must wipe BOTH cells.
+    keysU('printf "\\033[2J\\033[H"; read x; echo got:$x\r'),
+    'sleep 1.5',                                   // timing subject: clear + read prompt (multi-frame)
+    keysU('日'),
+    'sleep 1',                                     // timing subject: echo render (multi-frame)
+    'wmctl shot $TSID /root/w1.ppm && echo shotw1-ok',
+    'wmctl key $TSID 0 8',                         // Backspace -> tty ERASE
+    'sleep 1',                                     // timing subject: erase echo render (multi-frame)
+    'wmctl shot $TSID /root/w2.ppm && echo shotw2-ok',
+    keysU('ok\r'),
+    keysU('exit\r'),
+    'wmctl wait nowin term',
+    '',
+  ].join('\n');
+  const w = driveBoot(script, { image, timeout: 420000 });
+  check('wide: all three shots written',
+    w.stdout.includes('shotw0-ok') && w.stdout.includes('shotw1-ok') &&
+    w.stdout.includes('shotw2-ok'));
+
+  const b = driveBoot('cat /root/w0.ppm /root/w1.ppm /root/w2.ppm\n',
+    { image, timeout: 120000, maxBuffer: 16 * 1024 * 1024, encoding: null });
+  function parsePPM(buf, off) {
+    const head = buf.toString('latin1', off, off + 32);
+    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
+    if (!m) return null;
+    const w2 = +m[1], h = +m[2], data = off + m[0].length;
+    return { w: w2, h, data, end: data + w2 * h * 3 };
+  }
+  // Ink pixels of one 8x19 cell at (col, row 0).
+  function cellInk(buf, ppm, col) {
+    let n = 0;
+    for (let y = 0; y < 19; y++) {
+      for (let x = col * 8; x < col * 8 + 8; x++) {
+        const i = ppm.data + (y * ppm.w + x) * 3;
+        if (buf[i] | buf[i + 1] | buf[i + 2]) n++;
+      }
+    }
+    return n;
+  }
+  const p0 = parsePPM(b.stdout, 0);
+  check('wide: w0 parses', !!p0);
+  if (!p0) return;
+  const c0 = cellInk(b.stdout, p0, 0), c1 = cellInk(b.stdout, p0, 1),
+        c2 = cellInk(b.stdout, p0, 2), c3 = cellInk(b.stdout, p0, 3);
+  check('wide: 2-cell tofu spans cells 0 AND 1', c0 > 0 && c1 > 0, `${c0},${c1}`);
+  check('wide: narrow X advanced to cell 2 (cursor moved 2)', c2 > 0, String(c2));
+  check('wide: cell 3 stays blank', c3 === 0, String(c3));
+  const p1 = parsePPM(b.stdout, p0.end);
+  check('wide: w1 parses', !!p1);
+  if (!p1) return;
+  check('wide: typed CJK echo renders into the continuation cell',
+    cellInk(b.stdout, p1, 1) > 0, String(cellInk(b.stdout, p1, 1)));
+  const p2 = parsePPM(b.stdout, p1.end);
+  check('wide: w2 parses', !!p2);
+  if (!p2) return;
+  check('wide: ONE erase wiped the continuation cell too',
+    cellInk(b.stdout, p2, 1) === 0, String(cellInk(b.stdout, p2, 1)));
+}
+
 (async () => {
   sessionTerm();
   sessionFrames();
   sessionNested();
   sessionLess();
   sessionUnicode();
+  sessionWide();
 
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(failures ? `\nterm e2e: ${failures} FAILED` : '\nterm e2e: PASS');

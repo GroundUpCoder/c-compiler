@@ -140,7 +140,7 @@ try {
   const rows = [...osOut.matchAll(/^(\d+)\t\d+\t\S+\t\S+\t-?\d+\t\S+\tWineMine/gm)];
   check('winmine window listed', rows.length > 0);
   const sid = rows[rows.length - 1][1];
-  await vt1(`wmctl click ${sid} 13 61`);                // cell (1,1): timer starts
+  await vt1(`wmctl click ${sid} 13 71`);                // cell (1,1): timer starts (30px menu bar)
   // NB no settle() here: the 1 Hz timer means there is never a 900ms flat
   // window — that's the point. The park/wake cycle itself is the assertion:
   // each tick's present rings the doorbell (submits advance), the compositor

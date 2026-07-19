@@ -164,9 +164,11 @@ const watchdog = setTimeout(() => {
   kernel.wmPointerLockChanged(false);
 
   // Title drag moves the window (kernel-chrome policy).
-  kernel.wmPointer('down', w.x + 30, w.y - 10, {});
-  kernel.wmPointer('move', w.x + 80, w.y + 15, {});
-  kernel.wmPointer('up', w.x + 80, w.y + 15, {});
+  // x+10: left of the title boxes, which start at x+W-68 = x+28 with the
+  // font-20 retune's 20px boxes (x+30 would hit the min box now).
+  kernel.wmPointer('down', w.x + 10, w.y - 10, {});
+  kernel.wmPointer('move', w.x + 60, w.y + 15, {});
+  kernel.wmPointer('up', w.x + 60, w.y + 15, {});
   const moved = kernel.wmList()[0];
   check('title drag moved the window', moved.x === w.x + 50 && moved.y === w.y + 25,
     JSON.stringify([w.x, w.y, moved.x, moved.y]));

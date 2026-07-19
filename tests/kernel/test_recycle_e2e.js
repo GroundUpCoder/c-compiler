@@ -61,7 +61,7 @@ const { dir: tmp, image } = freshImage('os-recycle-');
 
 const HOME = 'wmctl key $SID 74 1073741898';
 const DEL = 'wmctl key $SID 76 127';
-const sel0 = ['wmctl click $SID 100 100', HOME].join('\n');
+const sel0 = ['wmctl click $SID 100 250', HOME].join('\n');
 const RC_ROW0 = 'wmctl click $SID 100 30 3';
 const RC_PANE = 'wmctl click $SID 100 300 3';
 
@@ -194,7 +194,7 @@ const script = [
   'wmctl settext EDIT:0 /root/t1',
   'wmctl click Go',
   'wmctl wait text "LISTBOX:0" z.txt 8000',      // back at t1 with z.txt listed
-  'wmctl click $SID 100 100',
+  'wmctl click $SID 100 250',
   'wmctl key $SID 74 1073741898',
   'wmctl key $SID 81 1073741905',                // Down (a.txt, dup.txt, z.txt: z row 2)
   'wmctl key $SID 81 1073741905',
@@ -244,20 +244,20 @@ const script = [
   // sorted cell, are derived from the drive.js grid model (deskEntries/
   // deskCell over os/image.json, the 0166 rule), so a new seeded icon —
   // or the 0184 column wrap — can't silently shift them.
-  `BINX=${BIN.x + 42}`,
-  `BINY=${BIN.y + 30}`,
+  `BINX=${BIN.x + 58}`,
+  `BINY=${BIN.y + 22}`,
   'wmctl shot $DSID /root/e.ppm && echo E-SHOT',
   'printf junk > /root/Desktop/junk.txt',
   'sleep 1.5',                                   // the coarse desk tick (wm.c re-reads Desktop on a timer — no event)
   // junk.txt's sorted cell; icon menu
-  `wmctl click $DSID ${JUNK.x + 42} ${JUNK.y + 32} 3`,
+  `wmctl click $DSID ${JUNK.x + 58} ${JUNK.y + 48} 3`,
   'wmctl wait win ctxmenu 8000',                 // wm.c's ctxmenu IS a real WM window
   'echo ==iconmenu',
   'wmctl list',
   'echo ==cut',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  'wmctl click $CXSID 30 90',                    // Delete (Edit shifted it, 0202;
-                                                 // engine rows 0259: 1+2*18+8+2*18+9)
+  'wmctl click $CXSID 30 146',                   // Delete (Edit shifted it, 0202;
+                                                 // engine rows 0259: 1+4*30+10+15)
   'sleep 1.5',                                   // wm.c trashes + the coarse glyph tick must flip empty->full before F-SHOT (no event)
   'test ! -f /root/Desktop/junk.txt && test -f /root/.recycle/files/junk.txt && echo DESK-TRASH',
   'wmctl shot $DSID /root/f.ppm && echo F-SHOT',
@@ -268,7 +268,7 @@ const script = [
   'wmctl list',
   'echo ==cut',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  'wmctl click $CXSID 30 36',                    // Empty Recycle Bin (1+18+8+9)
+  'wmctl click $CXSID 30 56',                    // Empty Recycle Bin (1+1*30+10+15)
   'sleep 1.5',                                   // wm.c empties + the coarse glyph tick must flip full->empty before G-SHOT (no event)
   'echo "==binleft B$(ls /root/.recycle/files | wc -l | tr -d \\" \\")-END"',
   'wmctl shot $DSID /root/g.ppm && echo G-SHOT',
@@ -276,7 +276,7 @@ const script = [
   'wmctl click $DSID $BINX $BINY 3',
   'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  'wmctl click $CXSID 30 36',
+  'wmctl click $CXSID 30 56',
   'sleep 0.5',                                   // negative check: a grayed EMPTY click must NOT close the menu (nothing to poll for)
   'echo ==graystay',
   'wmctl list',
@@ -286,7 +286,7 @@ const script = [
   // ---- the Del KEY on a selected icon ----
   'printf k > /root/Desktop/kdel.txt',
   'sleep 1.5',                                   // coarse desk tick so the new icon is laid out (no event)
-  `wmctl click $DSID ${KDEL.x + 42} ${KDEL.y + 32}`,   // kdel.txt's sorted cell, select
+  `wmctl click $DSID ${KDEL.x + 58} ${KDEL.y + 48}`,   // kdel.txt's sorted cell, select
   'sleep 0.7',                                   // let wm.c register the single-click selection (no queryable selection state)
   'wmctl key $DSID 76 127',
   'sleep 1.5',                                   // wm.c trashes the selection (no event; coarse tick)
@@ -370,12 +370,12 @@ check('a failed trash leaves NO stray store entry (the fo_trash sweep)',
 
 // ---- the wm.c desktop ----
 const im = section('iconmenu');
-check('icon menu grew Delete + Rename + Edit (h 120 on a document, 0103/0202)',
-  /x120\+/.test(row(im, 'ctxmenu')), JSON.stringify(im));
+check('icon menu grew Delete + Rename + Edit (h 194 on a document, 0103/0202)',
+  /x194\+/.test(row(im, 'ctxmenu')), JSON.stringify(im));
 check('icon DELETE trashes the desktop file', out.includes('DESK-TRASH'));
 const bm = section('binmenu');
-check('the bin icon gets its own Open/Empty menu (h 48)',
-  /x48\+/.test(row(bm, 'ctxmenu')), JSON.stringify(bm));
+check('the bin icon gets its own Open/Empty menu (h 74)',
+  /x74\+/.test(row(bm, 'ctxmenu')), JSON.stringify(bm));
 check('EMPTY RECYCLE BIN empties the store', out.includes('==binleft B0-END'),
   out.slice(out.indexOf('==binleft')).slice(0, 24));
 check('grayed EMPTY leaves the menu open (0091 rule)',
@@ -403,9 +403,9 @@ check('double-clicking the bin opens fileman at the store',
   for (const s of ['E', 'F', 'G']) check(`${s} shot written`, out.includes(s + '-SHOT'));
   const WHITE = '255,255,255', NAVY = '0,0,128';
   // The bin sits at its derived cell (BIN — column 1 since the 0184 wrap);
-  // the basket rim samples at +10 (navy) and the center at +18 (white
+  // the basket rim samples at +10 (navy) and the center at +22 (white
   // empty / navy full), x at the tile center (+42).
-  const BX = BIN.x + 42, CEN = BIN.y + 18, RIM = BIN.y + 10;
+  const BX = BIN.x + 58, CEN = BIN.y + 22, RIM = BIN.y + 10;
   check('bin glyph starts empty (white center, navy rim)',
     px('e.ppm', BX, CEN) === WHITE && px('e.ppm', BX, RIM) === NAVY,
     [px('e.ppm', BX, CEN), px('e.ppm', BX, RIM)].join(' | '));

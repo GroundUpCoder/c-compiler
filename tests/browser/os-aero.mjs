@@ -87,24 +87,24 @@ try {
   // Frame top-left corner pixel: pre-0063 this was square chrome (FACE);
   // the radius-7 SDF clips it, leaving shadowed desktop — teal-family,
   // never gray.
-  const corner = await sample(WX - 3, WY - 27);
+  const corner = await sample(WX - 3, WY - 31);
   check('frame corner rounded off (no square chrome pixel)',
     !near(corner, FACE, 40) && corner[0] < 40, corner);
   check('frame edge chrome intact away from the corners',
     near(await sample(WX - 2, WY + 80), FACE), await sample(WX - 2, WY + 80));
 
   // ---- Aero Peek: taskbar hover raises the live thumbnail ----
-  // One window: button 0 spans x in [56, 160) (START_W 50 + gap, BTN_W
-  // 104). The popup (160x120) parks above the bar centered on the button,
-  // clamped: x = 56 + 52 - 80 = 28. Its client center shows the box-filtered
+  // One window: button 0 spans x in [86, 246) (START_W 80 + gap, BTN_W
+  // 160). The popup (160x120) parks above the bar centered on the button
+  // (center ~166), clamped to x=86. Its client center shows the box-filtered
   // alphabox front buffer — pure blue (the thumbnail drops alpha).
   const BARY = SH - 14;
-  const PEEKX = 28 + 80, PEEKY = SH - 28 - 4 - 60;   // popup center
+  const PEEKX = 86 + 80, PEEKY = SH - 36 - 4 - 60;   // popup center
   await page.mouse.move(rect.x + 100, rect.y + BARY);
   await waitPixel(PEEKX, PEEKY, [0, 0, 255], 30000);
   check('taskbar hover raised the Aero Peek thumbnail (live blue client)', true);
   check('popup face border around the thumbnail',
-    near(await sample(28 + 3, SH - 32 - 117), FACE), await sample(28 + 3, SH - 32 - 117));
+    near(await sample(86 + 3, SH - 40 - 117), FACE), await sample(86 + 3, SH - 40 - 117));
   // Motion off the bar (over the desktop) dismisses the popup.
   await page.mouse.move(rect.x + SW - 60, rect.y + Math.floor(SH / 2));
   await waitPixel(PEEKX, PEEKY, TEAL);

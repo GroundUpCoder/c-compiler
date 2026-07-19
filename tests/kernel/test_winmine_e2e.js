@@ -22,7 +22,7 @@
 //
 // Geometry mirrors vendor/winmine/main.h: MINE_WIDTH/HEIGHT 16, LED_HEIGHT
 // 23, BOARD_W/HMARGIN 5 — beginner 9x9 board => client 154x182, surface
-// 154x202 (MENU_BAR_H 20). Change together with os/win32/user32.c.
+// 154x212 (MENU_BAR_H 30). Change together with os/win32/user32.c.
 //
 // Run: node tests/kernel/test_winmine_e2e.js
 'use strict';
@@ -82,7 +82,7 @@ function crop(img, x, y, w, h) {
 function readShot(name) { return shots[name.replace('.ppm', '')]; }
 
 /* Geometry (main.h mirror). Client coords + the 20px menu bar on top. */
-const BAR = 20;
+const BAR = 30;
 const BEG_W = 9 * 16 + 10, BEG_H = 9 * 16 + 23 + 15;        /* 154 x 182 */
 const ADV_W = 16 * 16 + 10, ADV_H = 16 * 16 + 23 + 15;      /* 266 x 294 */
 const CUS_W = 11 * 16 + 10, CUS_H = 12 * 16 + 23 + 15;      /* 186 x 215 */

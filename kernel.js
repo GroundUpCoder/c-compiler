@@ -963,10 +963,13 @@ var WM_SOCK_PATH = '/run/wm.sock';
  * on the frame: right edge -> E, bottom edge -> S, within WM_GRIP of the
  * bottom-right corner -> SE (left/top edges just focus — moving-edge
  * resizes are deliberately not in this version). */
-var WM_TITLE_H = 24;
-var WM_CLOSE_W = 16, WM_CLOSE_PAD = 4;       // close box, right-aligned in the bar
+var WM_TITLE_H = 28;                         // font-20 retune: fits the 18px
+                                             // compositor label (compositor.js
+                                             // LABEL_FONT/LABEL_H must agree —
+                                             // the shared-chrome rule)
+var WM_CLOSE_W = 20, WM_CLOSE_PAD = 4;       // close box, right-aligned in the bar
 var WM_BOX_GAP = 2;                          // between the [min][max][close] boxes
-                                             // (todos/0030; same 16px metrics)
+                                             // (todos/0030; same 20px metrics)
 var WM_BORDER = 4;                           // resize frame around title+client
 var WM_GRIP = 16;                            // SE-corner zone (resizes both axes)
 var WM_MIN_SIZE = 32;                        // client floor for resize requests
@@ -1516,18 +1519,52 @@ Tty.prototype._echo = function (bytes) {
   if (bytes.length) this._output(Uint8Array.from(bytes));
 };
 
+/* Terminal display width of a code point: 2 for East-Asian Wide/Fullwidth
+ * blocks, 1 for everything else INCLUDING combining marks (the D5 ruling:
+ * a combining mark renders as its own spacing cell, so its erase is one
+ * cell). MUST MATCH os/wcwidth.h `wcwidth_cp` (the terminal's cell-layout
+ * twin) — change both together or a wide char erases the wrong number of
+ * cells. Condensed Unicode 15.0 EAW W/F table. */
+var WCWIDTH_WIDE = [
+  [0x1100, 0x115F], [0x2329, 0x232A], [0x2E80, 0x303E], [0x3041, 0x33FF],
+  [0x3400, 0x4DBF], [0x4E00, 0x9FFF], [0xA000, 0xA4CF], [0xA960, 0xA97F],
+  [0xAC00, 0xD7A3], [0xF900, 0xFAFF], [0xFE10, 0xFE19], [0xFE30, 0xFE6B],
+  [0xFF00, 0xFF60], [0xFFE0, 0xFFE6], [0x16FE0, 0x16FE4], [0x17000, 0x187F7],
+  [0x18800, 0x18CD5], [0x1B000, 0x1B2FF], [0x1F300, 0x1F64F],
+  [0x1F680, 0x1F6FF], [0x1F900, 0x1F9FF], [0x1FA70, 0x1FAFF],
+  [0x20000, 0x2FFFD], [0x30000, 0x3FFFD],
+];
+function wcwidthCp(cp) {
+  if (cp < 0x1100) return 1;
+  for (var i = 0; i < WCWIDTH_WIDE.length; i++)
+    if (cp >= WCWIDTH_WIDE[i][0] && cp <= WCWIDTH_WIDE[i][1]) return 2;
+  return 1;
+}
+
 /* Remove one CHARACTER from the tail of the canonical edit buffer. With
  * IUTF8 set (Linux semantics; gucOS default) trailing UTF-8 continuation
  * bytes fall with their lead byte, so one ERASE deletes a whole multi-byte
  * character; with it clear the pop stays byte-wise (the historical mode).
- * The erase echo is ONE cell per character regardless of display width —
- * a wcwidth-aware 2-cell echo for double-width characters is deferred to
- * the width work (Unicode Phase D). */
+ * Returns the DISPLAY width of what fell (1 or 2 cells): the caller echoes
+ * one [BS SP BS] triple per cell, so a double-width CJK char visually
+ * erases both of its cells (Unicode Phase D; both term.c and xterm.js
+ * render such chars across 2 cells). Byte-wise mode always reports 1. */
 Tty.prototype._popChar = function (t) {
-  if (t.iflag & T_IUTF8)
-    while (this._line.length > 1 && (this._line[this._line.length - 1] & 0xC0) === 0x80)
-      this._line.pop();
-  this._line.pop();
+  if (!(t.iflag & T_IUTF8)) { this._line.pop(); return 1; }
+  var tail = [];
+  while (this._line.length > 1 && (this._line[this._line.length - 1] & 0xC0) === 0x80)
+    tail.unshift(this._line.pop());
+  var lead = this._line.pop();
+  // Decode the popped bytes into a code point (the sequence was intact
+  // when typed; anything malformed just reports width 1).
+  var cp;
+  if (lead < 0x80 && tail.length === 0) cp = lead;
+  else if ((lead & 0xE0) === 0xC0 && tail.length === 1) cp = lead & 0x1F;
+  else if ((lead & 0xF0) === 0xE0 && tail.length === 2) cp = lead & 0x0F;
+  else if ((lead & 0xF8) === 0xF0 && tail.length === 3) cp = lead & 0x07;
+  else return 1;
+  for (var i = 0; i < tail.length; i++) cp = (cp << 6) | (tail[i] & 0x3F);
+  return wcwidthCp(cp);
 };
 
 Tty.prototype._echoNl = function () {
@@ -1569,14 +1606,18 @@ Tty.prototype.input = function (data) {
     if (t.lflag & T_ICANON) {
       if (b === t.cc[V_ERASE]) {
         if (this._line.length) {
-          this._popChar(t);
-          if ((t.lflag & T_ECHO) && (t.lflag & T_ECHOE)) this._echo([8, 32, 8]);
+          var ew = this._popChar(t);   // display cells (2 for CJK-wide)
+          if ((t.lflag & T_ECHO) && (t.lflag & T_ECHOE))
+            while (ew-- > 0) this._echo([8, 32, 8]);
         }
         continue;
       }
       if (b === t.cc[V_KILL]) {
         if ((t.lflag & T_ECHO) && (t.lflag & T_ECHOK)) {
-          while (this._line.length) { this._popChar(t); this._echo([8, 32, 8]); }
+          while (this._line.length) {
+            var kw = this._popChar(t);
+            while (kw-- > 0) this._echo([8, 32, 8]);
+          }
         } else {
           this._line.length = 0;
         }
@@ -5426,14 +5467,14 @@ Kernel.prototype.wmScreenshotScreen = function () {
       fill(bx, by, WM_CLOSE_W, WM_CLOSE_W, WM_COLORS.closeBox);
       if (mxx >= s.x) {
         fill(mxx, by, WM_CLOSE_W, WM_CLOSE_W, WM_COLORS.closeBox);
-        fill(mxx + 3, by + 3, 10, 2, glyph);             // max: hollow box
-        fill(mxx + 3, by + 11, 10, 1, glyph);
-        fill(mxx + 3, by + 3, 1, 9, glyph);
-        fill(mxx + 12, by + 3, 1, 9, glyph);
+        fill(mxx + 4, by + 4, 12, 2, glyph);             // max: hollow box
+        fill(mxx + 4, by + 14, 12, 1, glyph);
+        fill(mxx + 4, by + 4, 1, 11, glyph);
+        fill(mxx + 15, by + 4, 1, 11, glyph);
       }
       if (nxx >= s.x) {
         fill(nxx, by, WM_CLOSE_W, WM_CLOSE_W, WM_COLORS.closeBox);
-        fill(nxx + 3, by + 11, 8, 2, glyph);             // min: the bar
+        fill(nxx + 4, by + 14, 10, 2, glyph);            // min: the bar
       }
     }
     // Client pixels: front buffer rows, clipped to the screen.

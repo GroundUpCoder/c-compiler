@@ -34,8 +34,9 @@
 #include <string.h>
 
 /* ------------------------------------------------------------ layout */
-/* All client coords (the 20px menu bar sits above client space, drawn by
- * user32; injected pointer coords are surface coords = client + 20). */
+/* All client coords (the menu bar sits above client space, drawn by
+ * user32; injected pointer coords are surface coords = client +
+ * GetSystemMetrics(SM_CYMENU)). */
 #define TB_X       4
 #define TB_Y       4
 #define TB_CELL    22
@@ -319,7 +320,8 @@ static int bmp_load(const char *path) {
     if (!ok) { free(buf); return 0; }
     if (w != g_cw || h != g_ch) {
         if (!canvas_make(w, h)) { free(buf); return 0; }
-        MoveWindow(g_hwnd, 0, 0, client_w(), client_h() + 20, TRUE);
+        MoveWindow(g_hwnd, 0, 0, client_w(),
+                   client_h() + GetSystemMetrics(SM_CYMENU), TRUE);
     }
     BITMAPINFO bmi; memset(&bmi, 0, sizeof bmi);
     bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -681,7 +683,8 @@ int main(int argc, char **argv) {
     HWND hwnd = CreateWindowEx(0, "Paint", "untitled - Paint",
                                WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
                                CW_USEDEFAULT, CW_USEDEFAULT,
-                               client_w(), client_h() + 20,
+                               client_w(),
+                               client_h() + GetSystemMetrics(SM_CYMENU),
                                NULL, menu, NULL, NULL);
     if (!hwnd) return 3;
 

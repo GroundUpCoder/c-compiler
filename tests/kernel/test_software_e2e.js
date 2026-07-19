@@ -74,6 +74,16 @@ async function main() {
     'echo ==catalog',
     `echo http://127.0.0.1:${goodPort} > /etc/gucman/repos`,
     'wmctl click Refresh',
+    // catalog-loaded barrier = the FIRST card (always above the fold);
+    // punes sits below the 5-card fold since the Phase D font packages
+    // joined the pool, and `wait label` needs a VISIBLE card — scroll it
+    // into view by clicking the SCROLLBAR's down arrow (SB_LINEDOWN,
+    // card-granular; focus-independent, unlike VK_DOWN — the Refresh
+    // click leaves keyboard focus on that button).
+    `wmctl wait label '${names[0]} ${idx.packages[names[0]].version} [available]'`,
+    'SWID=$(wmctl list | grep "Software$" | sed "s/[^0-9].*//")',
+    ...Array.from({ length: Math.max(0, names.indexOf('punes') - 2) },
+      () => 'wmctl down $SWID 632 420 && wmctl up $SWID 632 420'),
     `wmctl wait label 'punes ${pv} [available]'`,
     'echo ==cattree',
     'wmctl tree',

@@ -1,0 +1,10 @@
+{
+  "name": "font-noto-cjk-mono",
+  "version": "2.004",
+  "summary": "Noto Sans Mono CJK JP — real CJK quality, family-consistent with the baked Noto Sans Mono base",
+  "files": {
+    "NotoSansMonoCJKjp-VF.ttf": { "bin": "vendor/fonts/NotoSansMonoCJKjp-VF.ttf" },
+    "LICENSE": { "bin": "vendor/fonts/LICENSE-NotoCJK.txt" }
+  },
+  "fonts": [ "NotoSansMonoCJKjp-VF.ttf" ]
+}

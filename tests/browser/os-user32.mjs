@@ -57,7 +57,12 @@ try {
   };
   const waitDialogFace = async (title, ms) => {
     const g = await dialogGeom(title, ms);
-    await waitPixel(g.x + Math.round(g.w / 2), g.y + 40, BTNFACE, 30000);
+    // Probe the BOTTOM-LEFT corner interior: dialog-face by construction
+    // (controls cluster top/right), and stable when the stock font's
+    // metrics rescale the template layout — the old center/+40y probe
+    // landed on the Options EDIT after the Phase D Noto swap grew the
+    // dialog units.
+    await waitPixel(g.x + 12, g.y + g.h - 12, BTNFACE, 30000);
     return g;
   };
 
@@ -85,7 +90,7 @@ try {
   check('BTNFACE class background composited', true);
   check('single-line EDIT well white', near(await sample(...at(166, 22)), WHITE), await sample(...at(166, 22)));
   check('LISTBOX well white', near(await sample(...at(100, 100)), WHITE), await sample(...at(100, 100)));
-  check('multiline EDIT well white', near(await sample(...at(100, 220)), WHITE), await sample(...at(100, 220)));
+  check('multiline EDIT well white', near(await sample(...at(200, 255)), WHITE), await sample(...at(200, 255)));
   // Control text renders: the STATIC "Name:" band carries non-BTNFACE ink.
   let ink = null;
   for (let x = 14; x < 60 && !ink; x += 2) {

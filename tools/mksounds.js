@@ -5,7 +5,7 @@
 // ding, exclamation chimes); real Windows media files are copyrighted, so the
 // clips are synthesized here — pure deterministic math, so re-running always
 // reproduces byte-identical files. The outputs are COMMITTED (the
-// robotomono.ttf / *.res sidecar precedent): the image bake (os/image.json
+// vendor/fonts ttfs / *.res sidecar precedent): the image bake (os/image.json
 // `bin` entries) reads os/sounds/*.wav like any other repo blob, no build
 // step. Re-run only when changing a clip, then re-commit.
 //

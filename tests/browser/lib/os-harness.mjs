@@ -231,15 +231,15 @@ export function deskSort(ents) {
     return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
   }).map((e) => e.name);
 }
-// wm.c geometry: 16px margin, 84x64 cells, 28px taskbar; rows/col =
-// (scrH - 60) / 64. x/y are the cell origin; cx/cy the icon-click center
-// (old column-0 tests clicked x=58 = 16+42).
+// wm.c geometry (font-20 retune): 16px margin, 116x96 cells, 36px taskbar;
+// rows/col = (scrH - 68) / 96. x/y are the cell origin; cx/cy the icon-click
+// center (58 = 16+42 -> now 16+58).
 export function deskCell(list, name, scrH) {
-  const rows = Math.max(1, Math.floor((scrH - 28 - 32) / 64));
+  const rows = Math.max(1, Math.floor((scrH - 36 - 32) / 96));
   const i = list.indexOf(name);
   if (i < 0) throw new Error('deskCell: "' + name + '" not on the desktop');
   const col = Math.floor(i / rows), row = i % rows;
   return { index: i, col, row, rows,
-           x: 16 + col * 84, y: 16 + row * 64,
-           cx: 16 + col * 84 + 42, cy: 16 + row * 64 + 30 };
+           x: 16 + col * 116, y: 16 + row * 96,
+           cx: 16 + col * 116 + 58, cy: 16 + row * 96 + 48 };
 }

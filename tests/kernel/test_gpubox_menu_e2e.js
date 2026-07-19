@@ -140,7 +140,7 @@ check('menubar strip is an anchored child at the window origin',
   win1 && bar1 && bar1.x === win1.x && bar1.y === win1.y,
   JSON.stringify({ win1, bar1 }));
 check('strip spans the window width at MENU_BAR_H',
-  win1 && bar1 && bar1.w === win1.w && bar1.h === 20,
+  win1 && bar1 && bar1.w === win1.w && bar1.h === 30,
   JSON.stringify({ win1, bar1 }));
 
 /* ---- popup child over the dead client ---- */
@@ -148,7 +148,7 @@ const plist = section(out, 'plist');
 const pop = rowsOf(plist, '#32768')[0];
 check('bar click opened a real "#32768" popup child', !!pop, plist);
 check('popup hangs off the bar (anchored below MENU_BAR_H)',
-  pop && win1 && pop.y === win1.y + 20 && pop.x >= win1.x,
+  pop && win1 && pop.y === win1.y + 30 && pop.x >= win1.x,
   JSON.stringify({ pop, win1 }));
 
 /* ---- deterministic headless composite: menu pixels over a black client

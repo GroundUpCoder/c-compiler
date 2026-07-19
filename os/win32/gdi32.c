@@ -10,12 +10,16 @@
  *
  * Text goes through freetype (the vendored lib /bin/term uses), font at
  * /etc/fonts/mono.ttf with the baked /usr/share/fonts/mono.ttf fallback;
- * faceName is ignored (one font in the image). Strings are UTF-8 (0211):
- * draw/measure step by code point; a code point the face lacks renders
- * the .notdef tofu box (a LOUD gap, never a '?' that reads as data
- * corruption) and reports once via WIN32_UNSUPPORTED. Control chars draw
- * '?' (term's rule). Glyphs cache lazily per HFONT (ASCII flat array +
- * a code-point side cache).
+ * faceName is ignored (the baked face is the one family). Strings are
+ * UTF-8 (0211): draw/measure step by code point; a code point face 0
+ * lacks probes the FALLBACK CHAIN (fontchain.h — /etc/fonts/fallback
+ * face list, populated by gucman font packages; Unicode Phase D) and a
+ * code point NO face covers renders the synthesized tofu box (a LOUD
+ * gap, never a '?' that reads as data corruption) and reports once via
+ * WIN32_UNSUPPORTED. Control chars draw '?' (term's rule). Glyphs cache
+ * lazily per HFONT (ASCII flat array + a code-point side cache — the
+ * cached bitmap remembers whichever face rendered it, so the chain is
+ * probed once per cp, never per paint).
  *
  * Deliberate 0057 simplifications (grow under 0060's missing-symbol log):
  *   - pens: PS_SOLID/PS_NULL honored, other styles draw solid; wide pens
@@ -40,6 +44,8 @@
 #include FT_FREETYPE_H
 
 #include "win32_internal.h"
+#include "../fontchain.h"   /* the fallback-face list (Unicode Phase D, W7) */
+#include "../wcwidth.h"     /* wide-cp tofu spans 2 cells */
 
 #include <math.h>
 #include <stdarg.h>
@@ -67,7 +73,9 @@ void __win32_unsupported(const char *fmt, ...) {
 
 #define FONT_PATH     "/etc/fonts/mono.ttf"
 #define FONT_FALLBACK "/usr/share/fonts/mono.ttf"
-#define STOCK_FONT_PX 14
+#define STOCK_FONT_PX 20  /* THE system size (font-20 retune): equals the
+                             wm chrome_font, so chrome, menus, controls and
+                             the software center all share one 20px-AA face */
 #define FT_MONO_THRESHOLD 96   /* NONANTIALIASED coverage cut (tuning knob) */
 
 /* ============================================================ objects */
@@ -90,10 +98,12 @@ struct __GDIOBJ {
     int brushStyle, hatch;
     int bmW, bmH;               /* bitmap */
     uint32_t *bits;             /* RGBA rows, tight stride */
-    FT_Face face;               /* font (NULL until first use) */
+    FT_Face face;               /* font face 0 (NULL until first use) */
+    FT_Face fbFace[FC_MAX_FALLBACKS];   /* fallback chain faces (Phase D), */
+    signed char fbState[FC_MAX_FALLBACKS]; /* 0 untried / 1 open / -1 failed */
     int fontPx, fontLoaded, fontFailed;
     int fontMono;               /* NONANTIALIASED_QUALITY: 1-bit rendering */
-    int ascent, descent, lineH, maxAdv;
+    int ascent, descent, lineH, maxAdv, monoAdv;
     GlyphG *glyphs;             /* [95], ASCII 32..126 */
     GlyphG *xglyphs;            /* non-ASCII code points (0211), paired */
     unsigned *xcps;             /*   with their cp; linear-scan cache */
@@ -195,6 +205,13 @@ static int ft_ready(void) {
     return g_ftInit == 1;
 }
 
+static int font_px_clamped(HGDIOBJ f) {
+    int px = f->fontPx;
+    if (px < 4) px = 4;
+    if (px > 256) px = 256;
+    return px;
+}
+
 static int font_ensure(HGDIOBJ f) {
     if (!f || f->type != OBJ_FONT) return -1;
     if (f->fontLoaded) return 0;
@@ -204,14 +221,19 @@ static int font_ensure(HGDIOBJ f) {
         f->fontFailed = 1;
         return -1;
     }
-    int px = f->fontPx;
-    if (px < 4) px = 4;
-    if (px > 256) px = 256;
-    FT_Set_Pixel_Sizes(f->face, 0, px);
+    FT_Set_Pixel_Sizes(f->face, 0, font_px_clamped(f));
     f->ascent = (int)(f->face->size->metrics.ascender >> 6);
     f->descent = (int)(-(f->face->size->metrics.descender >> 6));
     f->lineH = (int)(f->face->size->metrics.height >> 6);
     f->maxAdv = (int)(f->face->size->metrics.max_advance >> 6);
+    /* The mono cell pitch = 'M' advance (term's rule). max_advance is the
+     * WIDEST glyph in the face — Noto Sans Mono carries a few wide forms,
+     * so tofu geometry keys on the cell pitch, not on maxAdv. */
+    f->monoAdv = 0;
+    FT_UInt mi = FT_Get_Char_Index(f->face, 'M');
+    if (mi && !FT_Load_Glyph(f->face, mi, FT_LOAD_DEFAULT))
+        f->monoAdv = (int)(f->face->glyph->advance.x >> 6);
+    if (f->monoAdv <= 0) f->monoAdv = f->maxAdv;
     if (f->descent < 0) f->descent = 0;
     if (f->lineH < f->ascent + f->descent) f->lineH = f->ascent + f->descent;
     f->glyphs = (GlyphG *)calloc(95, sizeof(GlyphG));
@@ -220,13 +242,59 @@ static int font_ensure(HGDIOBJ f) {
     return 0;
 }
 
-/* Synthesized tofu box for a code point the face lacks (0211): a LOUD
- * visible gap marker, never a '?' that reads as data corruption. (Roboto
- * Mono's own .notdef is EMPTY — rendering glyph 0 would be invisible.) */
-static void glyph_tofu(HGDIOBJ f, GlyphG *g) {
-    int w = f->maxAdv > 4 ? f->maxAdv - 2 : 6;
+/* ---- the fallback chain (Unicode Phase D, W7) ----
+ * The face PATH list loads once per process (fontchain.h); each HFONT
+ * opens a chain face lazily at ITS pixel size the first time a code
+ * point misses face 0 — apps that never draw exotic text never pay. */
+static char g_fcPaths[FC_MAX_FALLBACKS][FC_PATH_MAX];
+static int g_fcCount = -1;
+
+static int fc_count(void) {
+    if (g_fcCount < 0) g_fcCount = fc_load(g_fcPaths, FC_MAX_FALLBACKS);
+    return g_fcCount;
+}
+
+static FT_Face fb_face(HGDIOBJ f, int i) {
+    if (f->fbState[i] < 0) return NULL;
+    if (f->fbState[i] == 0) {
+        if (FT_New_Face(g_ft, g_fcPaths[i], 0, &f->fbFace[i])) {
+            f->fbState[i] = -1;
+            WIN32_UNSUPPORTED("fallback face %s (cannot load; skipping)",
+                              g_fcPaths[i]);
+            return NULL;
+        }
+        FT_Set_Pixel_Sizes(f->fbFace[i], 0, font_px_clamped(f));
+        f->fbState[i] = 1;
+    }
+    return f->fbFace[i];
+}
+
+/* The face that covers cp: face 0, else the chain in list order, else
+ * NULL (tofu). ASCII always renders from face 0 (glyph 0 included — the
+ * pre-chain contract). */
+static FT_Face font_face_for(HGDIOBJ f, unsigned cp, FT_UInt *gi) {
+    *gi = FT_Get_Char_Index(f->face, (FT_ULong)cp);
+    if (*gi || cp <= 126) return f->face;
+    for (int i = 0; i < fc_count(); i++) {
+        FT_Face ff = fb_face(f, i);
+        if (!ff) continue;
+        *gi = FT_Get_Char_Index(ff, (FT_ULong)cp);
+        if (*gi) return ff;
+    }
+    return NULL;
+}
+
+/* Synthesized tofu box for a code point NO chain face covers (0211): a
+ * LOUD visible gap marker, never a '?' that reads as data corruption
+ * (a face's own .notdef can be EMPTY — rendering glyph 0 could be
+ * invisible). A wide (wcwidth 2) code point gets a 2-cell box: the gap
+ * marker occupies the room the real glyph would. */
+static void glyph_tofu(HGDIOBJ f, GlyphG *g, unsigned cp) {
+    int cell = f->monoAdv > 0 ? f->monoAdv : f->maxAdv;
+    int adv = cell * (wcwidth_cp(cp) == 2 ? 2 : 1);
+    int w = adv > 4 ? adv - 2 : 6;
     int h = f->ascent > 4 ? f->ascent - 1 : 8;
-    g->advance = f->maxAdv > 0 ? f->maxAdv : w + 2;
+    g->advance = adv > 0 ? adv : w + 2;
     g->left = 1;
     g->top = f->ascent - 1;                      /* box base sits on baseline */
     g->bmp = (unsigned char *)calloc((size_t)w * h, 1);
@@ -241,21 +309,22 @@ static void glyph_tofu(HGDIOBJ f, GlyphG *g) {
 
 static GlyphG *glyph_render(HGDIOBJ f, GlyphG *g, unsigned cp) {
     g->loaded = 1;
-    FT_UInt gi = FT_Get_Char_Index(f->face, (FT_ULong)cp);
-    if (gi == 0 && cp > 126) {
-        WIN32_UNSUPPORTED("font glyph U+%04X (face lacks it; drawing tofu)",
-                          cp);
-        glyph_tofu(f, g);
+    FT_UInt gi;
+    FT_Face face = font_face_for(f, cp, &gi);   /* chain probe (Phase D) */
+    if (!face) {
+        WIN32_UNSUPPORTED("font glyph U+%04X (no chain face has it; "
+                          "drawing tofu)", cp);
+        glyph_tofu(f, g, cp);
         return g;
     }
-    if (FT_Load_Glyph(f->face, gi, FT_LOAD_DEFAULT)) return g;
-    g->advance = (int)(f->face->glyph->advance.x >> 6);
-    if (FT_Render_Glyph(f->face->glyph, FT_RENDER_MODE_NORMAL)) return g;
-    FT_Bitmap *bm = &f->face->glyph->bitmap;
+    if (FT_Load_Glyph(face, gi, FT_LOAD_DEFAULT)) return g;
+    g->advance = (int)(face->glyph->advance.x >> 6);
+    if (FT_Render_Glyph(face->glyph, FT_RENDER_MODE_NORMAL)) return g;
+    FT_Bitmap *bm = &face->glyph->bitmap;
     g->w = (int)bm->width;
     g->h = (int)bm->rows;
-    g->left = f->face->glyph->bitmap_left;
-    g->top = f->face->glyph->bitmap_top;
+    g->left = face->glyph->bitmap_left;
+    g->top = face->glyph->bitmap_top;
     if (g->w > 0 && g->h > 0) {
         g->bmp = (unsigned char *)malloc((size_t)g->w * g->h);
         if (!g->bmp) { g->w = g->h = 0; return g; }
@@ -478,6 +547,8 @@ BOOL DeleteObject(HGDIOBJ obj) {
         free(obj->xglyphs);
         free(obj->xcps);
         if (obj->face) FT_Done_Face(obj->face);
+        for (int i = 0; i < FC_MAX_FALLBACKS; i++)
+            if (obj->fbState[i] == 1) FT_Done_Face(obj->fbFace[i]);
     }
     free(obj);
     g_objCount--;

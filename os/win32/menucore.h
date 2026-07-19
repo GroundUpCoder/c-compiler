@@ -45,10 +45,10 @@
 #include <windows.h>
 
 /* Engine geometry (shared with any front-end; SM_CYMENU must agree). */
-#define MENU_BAR_H 20
-#define MENU_ITEM_H 18
-#define MENU_SEP_H 8
-#define MENU_GUTTER 16
+#define MENU_BAR_H 30
+#define MENU_ITEM_H 30
+#define MENU_SEP_H 10
+#define MENU_GUTTER 20
 
 /* Open-chain depth bound (A12: a CHAIN, the Win32 #32768 stack — not the
  * old one-nested-level scalar). 16 is far past what any screen can hang;

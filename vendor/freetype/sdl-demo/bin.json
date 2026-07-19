@@ -9,7 +9,7 @@
     "../include"
   ],
   "dataFiles": {
-    "../demo/robotomono.ttf": "/font.ttf"
+    "../../fonts/NotoSansMono-Regular.ttf": "/font.ttf"
   },
   "sources": [
     "main.c"

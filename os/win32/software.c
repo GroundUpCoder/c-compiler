@@ -19,7 +19,7 @@
  *     child). Exit code + output tail are the outcome — no synthesized
  *     "installed" claims; the post-job state re-reads the real DB.
  *
- * UI: one fixed 560x412 window. White header (title, count subtitle,
+ * UI: one fixed 640x460 window. White header (title, count subtitle,
  * Refresh), a card list (one "PkgCard" child per package: name+version,
  * summary, colored state, one Install/Remove button), a vertical
  * scrollbar (card-granular — child DCs clamp to the surface, not the
@@ -55,18 +55,18 @@
 #define GM_DB_DIR  "/var/lib/gucman"
 #define OS_RELEASE "/usr/share/os-release"
 
-#define WIN_W     560
-#define WIN_H     412
-#define HEADER_H  64
-#define STATUS_H  22
-#define CARD_H    64
+#define WIN_W     640
+#define WIN_H     460
+#define HEADER_H  76
+#define STATUS_H  30
+#define CARD_H    88
 #define SB_W      16
 #define LIST_Y    HEADER_H
-#define LIST_H    (WIN_H - HEADER_H - STATUS_H)  /* 326 */
-#define VIS_CARDS (LIST_H / CARD_H)              /* 5 full cards */
+#define LIST_H    (WIN_H - HEADER_H - STATUS_H)  /* 354 */
+#define VIS_CARDS (LIST_H / CARD_H)              /* 4 full cards */
 #define CARD_W    (WIN_W - SB_W)
-#define BTN_W     92
-#define BTN_H     24
+#define BTN_W     110
+#define BTN_H     32
 #define BTN_X     (CARD_W - BTN_W - 12)
 
 #define ID_REFRESH 100
@@ -627,13 +627,13 @@ static LRESULT CALLBACK card_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             /* line 1: name, then version in gray */
             SelectObject(dc, g_fName);
             SetTextColor(dc, RGB(24, 24, 28));
-            TextOut(dc, 14, 9, p->name, (int)strlen(p->name));
+            TextOut(dc, 14, 10, p->name, (int)strlen(p->name));
             SIZE sz;
             GetTextExtentPoint32(dc, p->name, (int)strlen(p->name), &sz);
             SelectObject(dc, g_fSmall);
             SetTextColor(dc, RGB(118, 118, 124));
             if (p->version[0])
-                TextOut(dc, 14 + sz.cx + 8, 12, p->version,
+                TextOut(dc, 14 + sz.cx + 8, 14, p->version,
                         (int)strlen(p->version));
             /* state, right-aligned left of the button */
             char st[64];
@@ -660,7 +660,7 @@ static LRESULT CALLBACK card_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if (st[0]) {
                 GetTextExtentPoint32(dc, st, (int)strlen(st), &sz);
                 SetTextColor(dc, stc);
-                TextOut(dc, BTN_X - 10 - sz.cx, 12, st, (int)strlen(st));
+                TextOut(dc, BTN_X - 10 - sz.cx, 14, st, (int)strlen(st));
             }
             /* line 2: summary (+ deps), ellipsized, gray */
             char sum[320];
@@ -671,7 +671,7 @@ static LRESULT CALLBACK card_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 snprintf(sum, sizeof sum, "%s", p->summary);
             ellipsize(dc, sum, sizeof sum, BTN_X - 14 - 10);
             SetTextColor(dc, RGB(96, 96, 104));
-            TextOut(dc, 14, 36, sum, (int)strlen(sum));
+            TextOut(dc, 14, 50, sum, (int)strlen(sum));
         }
         /* hairline separator at the card's foot */
         RECT r;
@@ -704,15 +704,15 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CREATE:
         g_refresh = CreateWindowEx(0, "BUTTON", "Refresh",
                                    WS_CHILD | WS_VISIBLE,
-                                   WIN_W - 96, 20, 84, BTN_H, h,
+                                   WIN_W - 126, 20, 110, BTN_H, h,
                                    (HMENU)ID_REFRESH, NULL, NULL);
         g_status = CreateWindowEx(0, "STATIC", "Loading the package catalog...",
                                   WS_CHILD | WS_VISIBLE,
-                                  8, WIN_H - STATUS_H + 4, WIN_W - 16, 15, h,
+                                  8, WIN_H - STATUS_H + 4, WIN_W - 16, 22, h,
                                   (HMENU)ID_STATUS, NULL, NULL);
         g_notice = CreateWindowEx(0, "STATIC", "Loading catalog...",
                                   WS_CHILD | WS_VISIBLE | SS_CENTER,
-                                  40, LIST_Y + 56, WIN_W - 80, 18, h,
+                                  40, LIST_Y + 56, WIN_W - 80, 26, h,
                                   (HMENU)ID_NOTICE, NULL, NULL);
         g_scrollbar = CreateWindowEx(0, "SCROLLBAR", "",
                                      WS_CHILD | SBS_VERT,
@@ -732,7 +732,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (g_subtitle[0]) {
             SelectObject(dc, g_fSmall);
             SetTextColor(dc, RGB(118, 118, 124));
-            TextOut(dc, 15, 38, g_subtitle, (int)strlen(g_subtitle));
+            TextOut(dc, 15, 46, g_subtitle, (int)strlen(g_subtitle));
         }
         RECT r;
         SetRect(&r, 0, HEADER_H - 1, WIN_W, HEADER_H);        /* header rule */
@@ -815,9 +815,12 @@ int main(void) {
 
     g_brWhite = CreateSolidBrush(RGB(255, 255, 255));
     g_brSep = CreateSolidBrush(RGB(225, 225, 228));
-    g_fTitle = CreateFont(20, 0, 0, 0, FW_NORMAL, 0, 0, 0, 0, 0, 0, 0, 0, NULL);
-    g_fName = CreateFont(15, 0, 0, 0, FW_NORMAL, 0, 0, 0, 0, 0, 0, 0, 0, NULL);
-    g_fSmall = CreateFont(12, 0, 0, 0, FW_NORMAL, 0, 0, 0, 0, 0, 0, 0, 0, NULL);
+    /* The 20px family (font-20 retune): body text IS the unified 20px
+     * em; title one step up, annotations one step down — nothing at the
+     * fuzzy ppem-9..12 sizes that motivated the retune. */
+    g_fTitle = CreateFont(-26, 0, 0, 0, FW_NORMAL, 0, 0, 0, 0, 0, 0, 0, 0, NULL);
+    g_fName = CreateFont(-20, 0, 0, 0, FW_NORMAL, 0, 0, 0, 0, 0, 0, 0, 0, NULL);
+    g_fSmall = CreateFont(-16, 0, 0, 0, FW_NORMAL, 0, 0, 0, 0, 0, 0, 0, 0, NULL);
 
     WNDCLASS wc;
     memset(&wc, 0, sizeof wc);

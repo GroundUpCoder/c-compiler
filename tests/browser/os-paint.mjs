@@ -64,7 +64,7 @@ try {
 
   // The WM places the first window at (12,36). paint.c geometry mirror: menu
   // bar 20px, canvas at client (56,6). Surface pixel (sp) -> screen.
-  const WX = 12, WY = 36, BAR = 20, CANVAS_X = 56, CANVAS_Y = 6;
+  const WX = 12, WY = 36, BAR = 30, CANVAS_X = 56, CANVAS_Y = 6;
   const rect = await page.evaluate(() => {
     const r = document.getElementById('screen').getBoundingClientRect();
     return { x: r.x, y: r.y };

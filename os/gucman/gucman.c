@@ -16,7 +16,8 @@
  * that served the OS, described by /packages/index.json. Install target is
  * /opt/<name>/ with tracked symlinks into /usr/local/bin (already first on
  * PATH). The manifest is FULLY DECLARATIVE — a package's control.json lists
- * its bin commands, openwith keys and menu entries; install records the
+ * its bin commands, openwith keys, menu entries and font faces (fallback-
+ * chain lines in /etc/fonts/fallback, Unicode Phase D); install records the
  * EXACT planted list in the install DB /var/lib/gucman/<name>.json and
  * remove replays that record in reverse. No custom scripts in Slice 1
  * (postinst/prerm are a reserved narrow escape hatch, not yet implemented —
@@ -67,6 +68,8 @@
 #define GM_REPOS_USR    "/usr/share/gucman/repos"
 #define GM_OPENWITH     "/etc/openwith"
 #define GM_MENU_DIR     "/etc/menu"
+#define GM_FONTS_DIR    "/etc/fonts"
+#define GM_FONT_LIST    "/etc/fonts/fallback"   /* the fontchain.h /etc layer */
 #define GM_BIN_DIR      "/usr/local/bin"
 #define GM_OS_RELEASE   "/usr/share/os-release"
 #define GM_NAME_MAX     64
@@ -552,6 +555,46 @@ static int gm_openwith_set(const char *key, const char *value) {
     return rc;
 }
 
+/* ==================== font fallback-line add/remove ==================== */
+
+/* Add (add=1) or remove (add=0) one face-path LINE in /etc/fonts/fallback
+ * (fontchain.h's /etc layer — one absolute path per line; the /etc lines
+ * CONCATENATE ahead of the baked /usr/share list, so this only ever
+ * touches the delta). Preserves every other line, comments included;
+ * creates the file (and /etc/fonts) when absent; removing the last line
+ * unlinks the file so a package-less system carries no empty config. */
+static int gm_fontline_set(const char *path, int add) {
+    size_t len = 0;
+    char *old = gm_read_file(GM_FONT_LIST, &len);
+    size_t cap = (old ? len : 0) + strlen(path) + 16;
+    char *out = malloc(cap);
+    if (!out) { free(old); return -1; }
+    size_t o = 0;
+    size_t pl = strlen(path);
+    if (old) {
+        for (char *line = old; line && *line; ) {
+            char *nl = strchr(line, '\n');
+            size_t ll = nl ? (size_t)(nl - line) + 1 : strlen(line);
+            size_t body = ll - (nl ? 1 : 0);
+            int is_path = body == pl && strncmp(line, path, pl) == 0;
+            if (!is_path) { memcpy(out + o, line, ll); o += ll; }
+            line = nl ? nl + 1 : NULL;
+        }
+    }
+    if (o && out[o - 1] != '\n') out[o++] = '\n';
+    if (add) o += (size_t)snprintf(out + o, cap - o, "%s\n", path);
+    free(old);
+    if (o == 0) {                        /* nothing left: drop the file */
+        free(out);
+        if (unlink(GM_FONT_LIST) != 0 && errno != ENOENT) return -1;
+        return 0;
+    }
+    if (gm_mkdir_p(GM_FONTS_DIR) != 0) { free(out); return -1; }
+    int rc = gm_write_file_atomic(GM_FONT_LIST, out, o, 0644);
+    free(out);
+    return rc;
+}
+
 /* ============================ install DB =============================== */
 
 static void gm_db_path(const char *name, char *out, size_t cap) {
@@ -591,10 +634,12 @@ struct gm_undo {
     cJSON *openwith;            /* array of planted keys */
     cJSON *menu;                /* array of planted menu entry paths */
     cJSON *menu_dirs;           /* array of menu dirs WE created */
+    cJSON *fonts;               /* array of planted fallback face lines */
 };
 
 static void gm_unwind(const char *name, struct gm_undo *u) {
     cJSON *it;
+    cJSON_ArrayForEach(it, u->fonts) gm_fontline_set(it->valuestring, 0);
     cJSON_ArrayForEach(it, u->menu) unlink(it->valuestring);
     cJSON_ArrayForEach(it, u->menu_dirs) rmdir(it->valuestring);
     cJSON_ArrayForEach(it, u->openwith) gm_openwith_set(it->valuestring, NULL);
@@ -722,6 +767,7 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
     cJSON *db_ow = cJSON_AddArrayToObject(db, "openwith_keys");
     cJSON *db_menu = cJSON_AddArrayToObject(db, "menu_entries");
     cJSON *db_menu_dirs = cJSON_AddArrayToObject(db, "menu_dirs");
+    cJSON *db_fonts = cJSON_AddArrayToObject(db, "font_faces");
 
     char *control_text = NULL;
     if (tar_extract(tar, tarlen, name, stage, &control_text, db_files, db_dirs) != 0) {
@@ -768,7 +814,7 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
     }
 
     /* plant the declarative surface; unwind everything on any failure */
-    struct gm_undo undo = { db_links, db_ow, db_menu, db_menu_dirs };
+    struct gm_undo undo = { db_links, db_ow, db_menu, db_menu_dirs, db_fonts };
     int fail = 0;
     cJSON *cbin = cJSON_GetObjectItemCaseSensitive(control, "bin");
     cJSON *it;
@@ -851,6 +897,31 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
         }
         cJSON_AddItemToArray(db_menu, cJSON_CreateString(epath));
     }
+    /* font packages (Unicode Phase D): each `fonts` entry is a packaged
+     * face file appended to the /etc/fonts/fallback chain — newly started
+     * apps' glyph caches (gdi32 + term, via fontchain.h) pick it up. */
+    cJSON *cfonts = fail ? NULL : cJSON_GetObjectItemCaseSensitive(control, "fonts");
+    cJSON_ArrayForEach(it, cfonts) {
+        char fpath[GM_PATH_MAX];
+        if (!cJSON_IsString(it) || !gm_safe_rel(it->valuestring)) {
+            fprintf(stderr, "gucman: '%s' has a malformed fonts entry — refusing\n", name);
+            fail = 1;
+            break;
+        }
+        snprintf(fpath, sizeof fpath, GM_OPT_DIR "/%s/%s", name, it->valuestring);
+        if (!gm_exists(fpath)) {
+            fprintf(stderr, "gucman: '%s' fonts %s names no packaged file — refusing\n",
+                    name, it->valuestring);
+            fail = 1;
+            break;
+        }
+        if (gm_fontline_set(fpath, 1) != 0) {
+            fprintf(stderr, "gucman: writing %s: %s\n", GM_FONT_LIST, strerror(errno));
+            fail = 1;
+            break;
+        }
+        cJSON_AddItemToArray(db_fonts, cJSON_CreateString(fpath));
+    }
 
     if (fail) {
         gm_unwind(name, &undo);
@@ -926,6 +997,8 @@ static int cmd_remove(const char *name) {
     /* Replay the recorded plant in reverse install order. ENOENT along the
      * way is fine — a crashed remove re-runs to completion. */
     cJSON *it;
+    cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "font_faces"))
+        if (cJSON_IsString(it)) gm_fontline_set(it->valuestring, 0);
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "menu_entries"))
         if (cJSON_IsString(it)) unlink(it->valuestring);
     /* menu dirs we created, innermost first (recorded outermost first) */
@@ -1203,6 +1276,7 @@ static int cmd_info(const char *name) {
         gm_info_strings(db, "symlinks", "planted symlinks:");
         gm_info_strings(db, "openwith_keys", "openwith keys:");
         gm_info_strings(db, "menu_entries", "menu entries:");
+        gm_info_strings(db, "font_faces", "font faces:");
     }
     cJSON_Delete(db);
     cJSON_Delete(index);

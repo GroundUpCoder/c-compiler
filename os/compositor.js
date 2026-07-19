@@ -338,8 +338,11 @@ function startCompositor(kernel, canvas, device) {
   // ---- label textures: title text and the close 'x' rasterized via a
   // throwaway 2D canvas (a texture SOURCE, not scene assembly), uploaded
   // once per distinct string+width and reused every frame.
-  var LABEL_FONT = 'bold 11px sans-serif';
-  var LABEL_H = 16;   // fits 11px bold with middle baseline at LABEL_H/2
+  var LABEL_FONT = 'bold 18px sans-serif';   // font-20 retune: sized to the
+                                              // 28px kernel.js WM_TITLE_H (the
+                                              // shared-chrome rule; browser-
+                                              // hinted, already crisp)
+  var LABEL_H = 26;   // fits 18px bold with middle baseline at LABEL_H/2
   var labelCanvas = new OffscreenCanvas(8, LABEL_H);
   var labelCtx = labelCanvas.getContext('2d');
   var labels = new Map();   // color|width|text -> { tex, bind, w }
@@ -588,12 +591,12 @@ function startCompositor(kernel, canvas, device) {
       // kernel hit test and the headless composite.
       if (mxx >= s.x) pushQuad(whiteBind, mxx, by, K.WM_CLOSE_W, K.WM_CLOSE_W, COL_CLOSE);
       if (nxx >= s.x) pushQuad(whiteBind, nxx, by, K.WM_CLOSE_W, K.WM_CLOSE_W, COL_CLOSE);
-      if (nxx >= s.x) pushQuad(whiteBind, nxx + 3, by + 11, 8, 2, BLACK);   // min: the bar
+      if (nxx >= s.x) pushQuad(whiteBind, nxx + 4, by + 14, 10, 2, BLACK);  // min: the bar
       if (mxx >= s.x) {                                                    // max: hollow box
-        pushQuad(whiteBind, mxx + 3, by + 3, 10, 2, BLACK);
-        pushQuad(whiteBind, mxx + 3, by + 11, 10, 1, BLACK);
-        pushQuad(whiteBind, mxx + 3, by + 3, 1, 9, BLACK);
-        pushQuad(whiteBind, mxx + 12, by + 3, 1, 9, BLACK);
+        pushQuad(whiteBind, mxx + 4, by + 4, 12, 2, BLACK);
+        pushQuad(whiteBind, mxx + 4, by + 14, 12, 1, BLACK);
+        pushQuad(whiteBind, mxx + 4, by + 4, 1, 11, BLACK);
+        pushQuad(whiteBind, mxx + 15, by + 4, 1, 11, BLACK);
       }
       var xg = labelFor('x', 32, '#000');
       pushQuad(xg.bind, bx + 5, by + K.WM_CLOSE_W / 2 + 1 - LABEL_H / 2, xg.w, LABEL_H, WHITE);

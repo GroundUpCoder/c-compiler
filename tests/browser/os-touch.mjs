@@ -156,7 +156,7 @@ try {
     'TEXT-SET');
   // Dark-glyph census over the EDIT's TOP text rows in ONE evaluate: x past
   // the '.' filler glyphs (they hug the left pad), y below the 20px user32
-  // menu bar and bounded to the M block's own three 19px rows — only the M
+  // menu bar and bounded to the M block's own three 27px rows — only the M
   // blocks can put dark pixels there, and the band stays clear of the
   // WS_HSCROLL strip and the status bar however tall the font-derived bar
   // is (0229: the old np.h-26 bottom cropped the strip's dark edge only
@@ -173,7 +173,7 @@ try {
     for (let i = 0; i < img.length; i += 4)
       if (img[i] < 100 && img[i + 1] < 100 && img[i + 2] < 100) n++;
     return n;
-  }, [np.x + 40, np.y + 24, np.x + 130, np.y + 24 + 3 * 19 + 5]);
+  }, [np.x + 40, np.y + 34, np.x + 130, np.y + 34 + 3 * 27 + 5]);
   const t0 = Date.now();
   let before = 0;
   while ((before = await darkCount()) === 0 && Date.now() - t0 < 20000)
@@ -217,13 +217,13 @@ try {
     near(await sample(wb.x + 4, wb.y + 4), TEAL), await sample(wb.x + 4, wb.y + 4));
 
   // ---- long-press on its taskbar button -> window menu above the bar ----
-  const BMX = 56, BMY = SH - 28 - 84;   // button 0 spans x [56,160); h-84 menu
+  const BMX = 88, BMY = SH - 36 - 134;   // button 0 gutter; h-134 menu (30px rows)
                                         // (engine rows since 0259)
   await longPress(100, SH - 14);
-  await waitPixel(BMX + 5, BMY + 40, FACE);
+  await waitPixel(BMX + 4, BMY + 46, FACE);
   check('long-press on the taskbar button raises the window menu', true);
   await page.keyboard.press('Escape');
-  await waitPixel(BMX + 5, BMY + 40, TEAL);
+  await waitPixel(BMX + 4, BMY + 46, TEAL);
   check('Esc dismisses the taskbar menu', true);
 
   await setVt(1);

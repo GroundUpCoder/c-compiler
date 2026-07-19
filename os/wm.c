@@ -192,15 +192,15 @@
  * drains (the 0161 spurious-wake contract). */
 __import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
 
-#define BAR_H     28
-#define START_W   50    /* the Start button strip at the taskbar's left (0028) */
-#define BTN_W     104   /* preferred button width; shrinks on overflow (0031) */
-#define BTN_MIN   24    /* ...but never below a clickable floor */
+#define BAR_H     36
+#define START_W   80    /* the Start button strip at the taskbar's left (0028) */
+#define BTN_W     160   /* preferred button width; shrinks on overflow (0031) */
+#define BTN_MIN   32    /* ...but never below a clickable floor */
 #define BTN_GAP   4
-#define CLOCK_W   45    /* right-aligned HH.MM cell: 8 + 5*6-1 + 8 (0031) */
-#define SHOWDESK_W 14   /* the Show Desktop sliver at the far right (0101) */
-#define DATE_W    104   /* the clock-hover date tooltip (0101): "SAT 2026-07-11" */
-#define DATE_H    22
+#define CLOCK_W   75    /* right-aligned HH.MM cell: 8 + 5*12-1 + 8 (0031) */
+#define SHOWDESK_W 18   /* the Show Desktop sliver at the far right (0101) */
+#define DATE_W    184   /* the clock-hover date tooltip (0101): "SAT 2026-07-11" */
+#define DATE_H    30
 #define MAX_WIN   64
 #define TITLE_H   28    /* keep placements below the kernel title bar (>= WM_TITLE_H) */
 
@@ -228,26 +228,26 @@ __import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
  * PAST the second pane; a bottom All-Programs cascades UPWARD via the
  * work-area clamp (the win_create op), exactly like Win7. The root is a FIXED
  * size so its geometry doesn't shift with the recents count. */
-#define SM_SIDE_W    22     /* the gucOS branding band down the left */
-#define SM_COL_W     170    /* the item column, right of the band */
-#define SM_ROW_H     20
+#define SM_SIDE_W    30     /* the gucOS branding band down the left */
+#define SM_COL_W     260    /* the item column, right of the band */
+#define SM_ROW_H     28
 #define SM_PAD       4
 #define SM_ROWS      12     /* column row slots (also the item cap) */
 #define SM_FIXED     2      /* fixed rows folded into the column: Settings, Run... */
-#define SM_SEARCH_H  22     /* the search box at the foot of the column */
+#define SM_SEARCH_H  30     /* the search box at the foot of the column */
 #define SM_ROOT_W    (SM_SIDE_W + SM_COL_W)
 #define SM_ROOT_H    (SM_PAD + SM_ROWS * SM_ROW_H + 4 + SM_SEARCH_H + SM_PAD)
 #define SM_SEARCH_Y  (SM_PAD + SM_ROWS * SM_ROW_H + 4)
 #define RECENT_MAX   8      /* MRU cap in ~/.config/recent */
 
-#define RUN_W        240    /* the RUN... dialog (todos/0078) */
-#define RUN_H        70
+#define RUN_W        340    /* the RUN... dialog (todos/0078) */
+#define RUN_H        78
 #define RUN_MAX      100
 
 #define DESK_MARGIN  16     /* the icon grid (todos/0029) */
-#define CELL_W       84
-#define CELL_H       64
-#define ICON_W       24
+#define CELL_W       116
+#define CELL_H       96
+#define ICON_W       32
 #define MAX_DESK     64
 #define DBLCLICK_NS  500000000ULL   /* 500ms, the SDL click-count window */
 #define DRAG_SLOP    4      /* px of button-held travel before a press
@@ -580,25 +580,30 @@ static uint32_t rgb(int r, int g, int b) {
     return (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) | 0xFF000000u;
 }
 
-/* ---- chrome text via freetype/gdi32 (Unicode Phase C, the D1 ruling) ----
+/* ---- chrome text via freetype/gdi32 (Phase C facility, 20px-AA retune) ----
  *
  * ONE glyph facility: the same gdi32/freetype path the menus (menucore)
  * already draw with, reached through the __gdi_dc_wrap seam (the
  * child-control precedent) — no second glyph cache, no second text path.
- * The Win95 look is preserved by RENDERING CHOICE, not codepath:
- * NONANTIALIASED_QUALITY (1-bit mono hinting, hard edges) at CHROME_PPEM.
- * At ppem 10 Roboto Mono's 0.6em advance is exactly 6px and caps stand
- * ~7px — the retired 5x7 bitmap table's metrics — so the chrome geometry (6px pitch,
- * 7px cell centering) carries over unchanged; only truncation/caret math
- * moved from byte-count*6 to measured codepoint-aware widths. */
-#define CHROME_PPEM 10
+ * The font-20 retune (folded into Phase D): CHROME_PPEM 20 with
+ * DEFAULT_QUALITY grayscale AA — unhinted freetype at ppem 10 was the
+ * grain/blur root cause (no hinter is vendored; at 20px AA is clean
+ * without one), and the 1-bit threshold amplified it. This font is now
+ * THE system font everywhere: it equals the gdi32 SYSTEM_FONT stock
+ * (STOCK_FONT_PX 20), so wm chrome, menucore menus at every level,
+ * user32 controls and the software center all render identically.
+ * Noto Sans Mono at ppem 20: advance 12px, caps 14px (CHROME_CAP),
+ * ascent 22, descent 6. */
+#define CHROME_PPEM 20
+#define CHROME_CAP  14   /* cap height at CHROME_PPEM — the layout unit that
+                            replaced the retired 5x7 table's 7px cap cell */
 
 static HFONT chrome_font(void) {
     static HFONT f;
     if (!f)
         f = CreateFont(-CHROME_PPEM, 0, 0, 0, FW_NORMAL, 0, 0, 0,
                        ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                       NONANTIALIASED_QUALITY, FIXED_PITCH, "mono");
+                       DEFAULT_QUALITY, FIXED_PITCH, "mono");
     return f;
 }
 
@@ -707,10 +712,12 @@ static int sym_text(int sym) {
 }
 
 /* Drawing helpers over any surface (sw x sh) — the taskbar and the Start
- * menu share them (todos/0028). (x, y) keeps its 5x7 meaning: y is the
- * top of the 7px CAP cell, so the baseline sits at y+7 and every
- * (H - 7) / 2 centering in the chrome carries over; descenders extend
- * below the old cell, which every surface has room for. */
+ * menu share them (todos/0028). (x, y) addresses the top of the CAP cell
+ * (CHROME_CAP px tall — the generalization of the retired 5x7 table's
+ * 7px cell): the baseline sits at y + CHROME_CAP and every
+ * (H - CHROME_CAP) / 2 centering in the chrome derives from the real
+ * font metrics; descenders extend below the cap cell, which every
+ * surface budgets room for. */
 static void draw_text_s(uint32_t *px, int sw, int sh, int x, int y,
                         const char *s, uint32_t col) {
     HDC dc = __gdi_dc_wrap(px, sw, sh, sw);
@@ -718,7 +725,7 @@ static void draw_text_s(uint32_t *px, int sw, int sh, int x, int y,
     SelectObject(dc, chrome_font());
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, (COLORREF)(col & 0x00FFFFFFu));
-    TextOut(dc, x, y + 7 - chrome_ascent(), s, (int)strlen(s));
+    TextOut(dc, x, y + CHROME_CAP - chrome_ascent(), s, (int)strlen(s));
     __gdi_dc_unwrap(dc);
 }
 
@@ -1121,9 +1128,11 @@ static void snapprev_show(int edge) {
 /* The marquee's glyph zoom for the current screen: the chrome font scaled
  * to a banner that reads across the room, clamped sane on tiny screens. */
 static int saver_zoom(void) {
-    int z = scr_h / 64;
-    if (z < 2) z = 2;
-    if (z > 8) z = 8;
+    /* The 20px chrome mask is ~3x the retired 7px cell, so the zoom
+     * range halves to keep the banner a comparable screen fraction. */
+    int z = scr_h / 128;
+    if (z < 1) z = 1;
+    if (z > 4) z = 4;
     return z;
 }
 
@@ -1552,7 +1561,14 @@ static HDC wmmc_win_begin(MCWIN win, int *wOut, int *hOut) {
     if (!sf) return NULL;
     if (wOut) *wOut = sf->w;
     if (hOut) *hOut = sf->h;
-    return __gdi_dc_wrap(sf->pixels, sf->w, sf->h, sf->pitch / 4);
+    HDC dc = __gdi_dc_wrap(sf->pixels, sf->w, sf->h, sf->pitch / 4);
+    /* The ONE chrome font, selected explicitly (font-20 retune): nested
+     * menu columns draw with the exact font object the taskbar/Start
+     * root/desktop use — no fall-through to the DC default (which is
+     * ALSO this font now that SYSTEM_FONT is 20px, but explicit beats
+     * coincidental). */
+    if (dc) SelectObject(dc, chrome_font());
+    return dc;
 }
 
 static void wmmc_win_present(MCWIN win, HDC dc) {
@@ -1633,15 +1649,15 @@ static void draw_run(void) {
     fill_s(px, RUN_W, RUN_H, 0, 0, 1, RUN_H, hi);
     fill_s(px, RUN_W, RUN_H, 0, RUN_H - 1, RUN_W, 1, sh);
     fill_s(px, RUN_W, RUN_H, RUN_W - 1, 0, 1, RUN_H, sh);
-    draw_text_s(px, RUN_W, RUN_H, 8, 10, "RUN", txt);
+    draw_text_s(px, RUN_W, RUN_H, 8, 12, "RUN", txt);
     /* Sunken white input box: dark top/left. */
-    fill_s(px, RUN_W, RUN_H, 8, 26, RUN_W - 16, 22, hi);
-    fill_s(px, RUN_W, RUN_H, 8, 26, RUN_W - 16, 1, sh);
-    fill_s(px, RUN_W, RUN_H, 8, 26, 1, 22, sh);
+    fill_s(px, RUN_W, RUN_H, 8, 34, RUN_W - 16, 30, hi);
+    fill_s(px, RUN_W, RUN_H, 8, 34, RUN_W - 16, 1, sh);
+    fill_s(px, RUN_W, RUN_H, 8, 34, 1, 30, sh);
     /* The tail of the input that fits, plus a block caret. */
     const char *s = run_buf + text_tail(run_buf, RUN_W - 16 - 12 - 6);
-    draw_text_s(px, RUN_W, RUN_H, 12, 33, s, txt);
-    fill_s(px, RUN_W, RUN_H, 12 + text_w(s), 32, 2, 10, txt);
+    draw_text_s(px, RUN_W, RUN_H, 12, 42, s, txt);
+    fill_s(px, RUN_W, RUN_H, 12 + text_w(s), 41, 2, 16, txt);
     SDL_UpdateWindowSurface(run_win);
 }
 
@@ -2008,12 +2024,12 @@ static void draw_root_menu(void) {
         if ((sm_left[i].kind == SMI_ALLPROGS ||
              (i > 0 && sm_left[i].kind == SMI_SETTINGS)))
             fill_s(px, w, h, X0 + 6, y - 1, SM_COL_W - 12, 1, sh);
-        draw_text_s(px, w, h, X0 + 10, y + (SM_ROW_H - 7) / 2, sm_left[i].name,
+        draw_text_s(px, w, h, X0 + 10, y + (SM_ROW_H - CHROME_CAP) / 2, sm_left[i].name,
                     hl ? seltxt : txt);
         if (sm_left[i].kind == SMI_ALLPROGS) {            /* cascade arrow */
-            int ax = X0 + SM_COL_W - 12, ay = y + (SM_ROW_H - 7) / 2;
-            for (int t = 0; t < 4; t++)
-                fill_s(px, w, h, ax + t, ay + t, 1, 7 - 2 * t, hl ? seltxt : txt);
+            int ax = X0 + SM_COL_W - 16, ay = y + (SM_ROW_H - 11) / 2;
+            for (int t = 0; t < 6; t++)
+                fill_s(px, w, h, ax + t, ay + t, 1, 11 - 2 * t, hl ? seltxt : txt);
         }
     }
     /* the search box (sunken white field) at the foot of the column */
@@ -2024,10 +2040,10 @@ static void draw_root_menu(void) {
     fill_s(px, w, h, bx, by, 1, bh, sh);
     if (sm_search_len > 0) {
         const char *s = sm_search + text_tail(sm_search, bw - 8 - 3);
-        draw_text_s(px, w, h, bx + 4, by + (bh - 7) / 2, s, txt);
-        fill_s(px, w, h, bx + 4 + text_w(s), by + (bh - 9) / 2, 2, 9, txt);
+        draw_text_s(px, w, h, bx + 4, by + (bh - CHROME_CAP) / 2, s, txt);
+        fill_s(px, w, h, bx + 4 + text_w(s), by + (bh - 16) / 2, 2, 16, txt);
     } else {
-        draw_text_s(px, w, h, bx + 4, by + (bh - 7) / 2, "Search", ghost);
+        draw_text_s(px, w, h, bx + 4, by + (bh - CHROME_CAP) / 2, "Search", ghost);
     }
     SDL_UpdateWindowSurface(smroot.win);
 }
@@ -2611,43 +2627,43 @@ static void draw_icon_glyph(uint32_t *px, int w, int h, int ix, int iy,
     switch (kind) {
     case DK_BIN:                       /* basket (todos/0093): hollow when
                                           empty, contents block when full */
-        fill_s(px, w, h, ix + 3, iy + 3, ICON_W - 6, 2, navy);   /* rim */
-        fill_s(px, w, h, ix + 5, iy + 5, 2, ICON_W - 10, navy);  /* walls */
-        fill_s(px, w, h, ix + ICON_W - 7, iy + 5, 2, ICON_W - 10, navy);
-        fill_s(px, w, h, ix + 5, iy + ICON_W - 7, ICON_W - 10, 2, navy);
+        fill_s(px, w, h, ix + 4, iy + 4, ICON_W - 8, 3, navy);   /* rim */
+        fill_s(px, w, h, ix + 7, iy + 7, 3, ICON_W - 14, navy);  /* walls */
+        fill_s(px, w, h, ix + ICON_W - 10, iy + 7, 3, ICON_W - 14, navy);
+        fill_s(px, w, h, ix + 7, iy + ICON_W - 10, ICON_W - 14, 3, navy);
         if (desk_trash_full)
-            fill_s(px, w, h, ix + 8, iy + 8, ICON_W - 16, ICON_W - 16, navy);
+            fill_s(px, w, h, ix + 11, iy + 11, ICON_W - 22, ICON_W - 22, navy);
         break;
     case DK_DIR:                       /* folder tab + body (todos/0185) */
-        fill_s(px, w, h, ix + 5, iy + 5, (ICON_W - 10) / 2, 3, navy);
-        fill_s(px, w, h, ix + 5, iy + 8, ICON_W - 10, ICON_W - 13, navy);
+        fill_s(px, w, h, ix + 7, iy + 7, (ICON_W - 14) / 2, 4, navy);
+        fill_s(px, w, h, ix + 7, iy + 11, ICON_W - 14, ICON_W - 18, navy);
         break;
     case DK_EXEC:                      /* the pre-#82 solid block */
-        fill_s(px, w, h, ix + 6, iy + 6, ICON_W - 12, ICON_W - 12, navy);
+        fill_s(px, w, h, ix + 8, iy + 8, ICON_W - 16, ICON_W - 16, navy);
         break;
     case DK_TEXT:                      /* page outline + text lines */
-        rect_s(px, w, h, ix + 5, iy + 3, 14, 18, navy);
-        fill_s(px, w, h, ix + 8, iy + 7, 8, 1, navy);
-        fill_s(px, w, h, ix + 8, iy + 10, 8, 1, navy);
-        fill_s(px, w, h, ix + 8, iy + 13, 8, 1, navy);
-        fill_s(px, w, h, ix + 8, iy + 16, 5, 1, navy);
+        rect_s(px, w, h, ix + 7, iy + 4, 18, 24, navy);
+        fill_s(px, w, h, ix + 11, iy + 9, 10, 2, navy);
+        fill_s(px, w, h, ix + 11, iy + 13, 10, 2, navy);
+        fill_s(px, w, h, ix + 11, iy + 17, 10, 2, navy);
+        fill_s(px, w, h, ix + 11, iy + 21, 6, 2, navy);
         break;
     case DK_IMAGE:                     /* frame, sun, mountain ridge */
-        rect_s(px, w, h, ix + 4, iy + 5, 16, 14, navy);
-        fill_s(px, w, h, ix + 7, iy + 8, 3, 3, navy);            /* sun */
-        fill_s(px, w, h, ix + 6, iy + 15, 12, 3, navy);          /* ridge */
-        fill_s(px, w, h, ix + 10, iy + 13, 4, 2, navy);          /* peak */
+        rect_s(px, w, h, ix + 5, iy + 6, 22, 19, navy);
+        fill_s(px, w, h, ix + 9, iy + 10, 4, 4, navy);           /* sun */
+        fill_s(px, w, h, ix + 8, iy + 20, 16, 4, navy);          /* ridge */
+        fill_s(px, w, h, ix + 13, iy + 17, 6, 3, navy);          /* peak */
         break;
     case DK_DECK:                      /* presentation screen on a stand */
-        rect_s(px, w, h, ix + 4, iy + 4, 16, 11, navy);
-        fill_s(px, w, h, ix + 6, iy + 6, 10, 2, navy);           /* title */
-        fill_s(px, w, h, ix + 7, iy + 10, 7, 1, navy);           /* bullet */
-        fill_s(px, w, h, ix + 11, iy + 15, 2, 3, navy);          /* stand */
-        fill_s(px, w, h, ix + 8, iy + 18, 8, 2, navy);           /* base */
+        rect_s(px, w, h, ix + 5, iy + 5, 22, 15, navy);
+        fill_s(px, w, h, ix + 8, iy + 8, 14, 3, navy);           /* title */
+        fill_s(px, w, h, ix + 9, iy + 13, 10, 2, navy);          /* bullet */
+        fill_s(px, w, h, ix + 15, iy + 20, 3, 4, navy);          /* stand */
+        fill_s(px, w, h, ix + 11, iy + 24, 10, 3, navy);         /* base */
         break;
     default:                           /* DK_FILE: dog-eared page */
-        rect_s(px, w, h, ix + 5, iy + 3, 14, 18, navy);
-        fill_s(px, w, h, ix + 14, iy + 3, 5, 5, navy);           /* fold */
+        rect_s(px, w, h, ix + 7, iy + 4, 18, 24, navy);
+        fill_s(px, w, h, ix + 19, iy + 4, 6, 6, navy);           /* fold */
         break;
     }
 }
@@ -2668,25 +2684,25 @@ static void draw_desk(void) {
          * launcher notch at the bottom-left (the Win95 arrow). */
         draw_icon_glyph(px, w, h, ix, iy, desk[i].kind);
         if (desk[i].is_link)
-            fill_s(px, w, h, ix + 2, iy + ICON_W - 8, 6, 6, black);
+            fill_s(px, w, h, ix + 3, iy + ICON_W - 11, 8, 8, black);
         if (i == desk_edit) {          /* inline rename editor (todos/0103):
                                           a sunken white box + black text +
                                           caret over the label cell, sized to
                                           the tail that fits and clamped on. */
-            const char *tail = desk_ebuf + text_tail(desk_ebuf, 108);
+            const char *tail = desk_ebuf + text_tail(desk_ebuf, CELL_W - 8);
             int tw = text_w(tail);
             int bw = tw + 8;
             int bx = cx + (CELL_W - bw) / 2, by = cy + ICON_W + 6;
             if (bx < 0) bx = 0;
             if (bx + bw > w) bx = w - bw;
-            fill_s(px, w, h, bx, by, bw, 14, white);
-            rect_s(px, w, h, bx, by, bw, 14, black);
-            draw_text_s(px, w, h, bx + 3, by + 3, tail, black);
-            fill_s(px, w, h, bx + 3 + tw, by + 2, 2, 10, black);   /* caret */
+            fill_s(px, w, h, bx, by, bw, 24, white);
+            rect_s(px, w, h, bx, by, bw, 24, black);
+            draw_text_s(px, w, h, bx + 3, by + 4, tail, black);
+            fill_s(px, w, h, bx + 3 + tw, by + 4, 2, 16, black);   /* caret */
             continue;
         }
         char label[64];
-        int n = text_fit(desk[i].name, 78);
+        int n = text_fit(desk[i].name, CELL_W - 8);
         if (n > (int)sizeof label - 1) n = (int)sizeof label - 1;
         memcpy(label, desk[i].name, (size_t)n);
         label[n] = 0;
@@ -2694,7 +2710,7 @@ static void draw_desk(void) {
         int lx = cx + (CELL_W - lw) / 2, ly = cy + ICON_W + 10;
         /* Selection highlight: the 0029 navy label strip, per-set (0077). */
         if (desk_selmask >> i & 1)
-            fill_s(px, w, h, lx - 2, ly - 2, lw + 3, 12, navy);
+            fill_s(px, w, h, lx - 2, ly - 2, lw + 4, 23, navy);
         draw_text_s(px, w, h, lx, ly, label, white);
     }
     if (desk_drag == 1) {              /* the marquee rubber-band (0077) */
@@ -3731,7 +3747,7 @@ static void date_draw(void) {
     char s[32];
     snprintf(s, sizeof s, "%s %04d-%02d-%02d", wday[tm->tm_wday % 7],
              tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday);
-    draw_text_s(px, DATE_W, DATE_H, 8, (DATE_H - 7) / 2, s, txt);
+    draw_text_s(px, DATE_W, DATE_H, 8, (DATE_H - CHROME_CAP) / 2, s, txt);
     SDL_UpdateWindowSurface(date_win);
 }
 
@@ -3875,7 +3891,7 @@ static void draw_bar(void) {
         fill(px, 2, 3, 1, BAR_H - 6, down ? sh : hi);
         fill(px, 2, BAR_H - 4, START_W - 4, 1, down ? hi : sh);
         fill(px, START_W - 3, 3, 1, BAR_H - 6, down ? hi : sh);
-        draw_text(px, 8, (BAR_H - 7) / 2, "START", txt);
+        draw_text(px, 8, (BAR_H - CHROME_CAP) / 2, "START", txt);
     }
     int bw = btn_width();              /* overflow shrink (todos/0031) */
     int cx = clock_left();
@@ -3894,7 +3910,7 @@ static void draw_bar(void) {
         if (n > (int)sizeof label - 1) n = (int)sizeof label - 1;
         memcpy(label, wins[i].title, (size_t)n);
         label[n] = 0;
-        draw_text(px, x + 6, (BAR_H - 7) / 2, label,
+        draw_text(px, x + 6, (BAR_H - CHROME_CAP) / 2, label,
                   wins[i].minimized ? rgb(80, 80, 80) : txt);
     }
     /* The clock (todos/0031): right-aligned HH.MM, local time; draw_bar
@@ -3905,7 +3921,7 @@ static void draw_bar(void) {
         struct tm *tm = localtime(&now);
         char hhmm[6];
         snprintf(hhmm, sizeof hhmm, "%02d.%02d", tm->tm_hour, tm->tm_min);
-        draw_text(px, cx + 8, (BAR_H - 7) / 2, hhmm, txt);
+        draw_text(px, cx + 8, (BAR_H - CHROME_CAP) / 2, hhmm, txt);
     }
     /* The Show Desktop sliver (todos/0101): a thin Win7 affordance at the
      * far right edge, a raised divider then a strip that reads pressed while
