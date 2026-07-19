@@ -71,8 +71,8 @@ try {
   };
 
   const TEAL = [0, 128, 128], NAVY = [0, 0, 128], BLACK = [0, 0, 0];
-  // The WM places the first window at (12,36); term is 640x432 (80x24).
-  const TX = 12, TY = 36, TW = 640, TH = 432;
+  // The WM places the first window at (12,36); term is 640x456 (80x24).
+  const TX = 12, TY = 36, TW = 640, TH = 456;
 
   // VTs (todos/0022): shell typing on VT1, canvas pixels/input on VT2 (the
   // compositor may idle while its placeholder canvas is hidden). Deep VT
@@ -157,7 +157,7 @@ try {
   await page.waitForFunction(() => /\tterm/.test(window.__osOut), { timeout: 20000, polling: 200 });
   check('wmctl list sees the term window', true);
 
-  // SE drag-resize: 640x432 -> 500x260 (todos/0019 renegotiation; term
+  // SE drag-resize: 640x456 -> 500x260 (todos/0019 renegotiation; term
   // reflows the grid + TIOCSWINSZ). Outline preview, one configure at drop.
   await setVt(2);
   await page.mouse.move(rect.x + TX + TW + 2, rect.y + TY + TH + 2);

@@ -430,7 +430,7 @@ try {
   await waitPixel(PC.x + 168 + 20, PC.y + 37, TEAL);
   check('Esc clears the selection', true);
 
-  // Double-click launches term (640x432 at the cascade slot; term's live
+  // Double-click launches term (640x456 at the cascade slot; term's live
   // cell — column 1 since the wrap). Sample a point inside term but
   // outside winbox; wait for it to leave teal.
   const TC = cell('term');

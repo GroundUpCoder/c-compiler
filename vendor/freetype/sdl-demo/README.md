@@ -2,7 +2,7 @@
 
 A minimal text editor that uses FreeType for glyph rasterization and SDL for
 window management and pixel rendering. Runs in the browser (Canvas) or
-natively (via `@kmamal/sdl`). The font is Roboto Mono (shared with `demo/`).
+natively (via `@kmamal/sdl`). The font is Noto Sans Mono (vendor/fonts, shared with `demo/`).
 
 ## Building
 
@@ -16,7 +16,7 @@ node --experimental-wasm-exnref build/freetype-editor.js
 
 # Standalone WASM (font path passed as argv)
 node compiler.js vendor/freetype/sdl-demo/bin.json -o build/freetype-editor.wasm
-node --experimental-wasm-exnref host.js build/freetype-editor.wasm vendor/freetype/demo/robotomono.ttf
+node --experimental-wasm-exnref host.js build/freetype-editor.wasm vendor/fonts/NotoSansMono-Regular.ttf
 ```
 
 To serve the HTML output:

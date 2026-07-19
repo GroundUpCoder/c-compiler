@@ -224,23 +224,28 @@ const dj = (sy, sh) => {
 const ref = dj(96, 30), plain = dj(44, 18), mn = dj(70, 18);
 check('reference STATIC shows real descenders (dj >= 3)',
   ref.dj >= 3, JSON.stringify(ref));
-/* 0236 red->green pins. Pre-fix, top-aligned text sat the 19px stock cell
- * flush-top in the 18px control: the descenders' bottom row landed ON the
- * control's last row (the 0230 razor edge — ink at the clip edge is what
- * a clipped render looks like, one hinting change from visible loss) and
- * the mnemonic underline one row below it was ALREADY clipped off.
- * Vcentered (floored, so the deficit lands on the cell's blank leading
- * row) the full extent renders WITH clearance. Both draw branches. */
-check("plain-branch 18px STATIC: full descender extent, >=1 clear row",
-  plain.dj === ref.dj && plain.g <= 44 + 18 - 2,
+/* 0236 red->green pins. Pre-fix, top-aligned text sat the stock cell
+ * flush-top in the 18px control and clipped the descender rows off the
+ * bottom edge; vcentered, the FULL extent renders (dj === ref.dj is the
+ * no-clip invariant). Phase D re-bake: Noto Sans Mono's stock cell is
+ * 20px (ascent 15 + descent 5, vs Roboto's 19), so in an 18px control
+ * the Windows DT_VCENTER arithmetic necessarily puts the descender
+ * bottom ON the control's last row — edge-riding is now the CORRECT
+ * placement (one row deeper and dj shrinks, which stays the guard);
+ * the old >=1-clear-row clause was a Roboto-cell property. */
+check("plain-branch 18px STATIC: full descender extent, within the control",
+  plain.dj === ref.dj && plain.g <= 44 + 18 - 1,
   JSON.stringify({ plain, ref }));
-check("mnemonic-branch 18px STATIC: full descender extent, >=1 clear row",
-  mn.dj === ref.dj && mn.g <= 70 + 18 - 2, JSON.stringify({ mn, ref }));
-/* the mnemonic underline (under 'N', cols x..x+8) draws one row below the
- * glyph bottoms — pre-fix it fell off the clip edge; vcentered it renders. */
+check("mnemonic-branch 18px STATIC: full descender extent, within the control",
+  mn.dj === ref.dj && mn.g <= 70 + 18 - 1, JSON.stringify({ mn, ref }));
+/* the mnemonic underline (under 'N', cols x..x+8) draws just below the
+ * BASELINE (the real-GDI position, Phase D — a cell-bottom underline
+ * fell outside short controls under Noto's 20px cell): strictly below
+ * the 'N'/'o' glyph bottoms ('N' sits on the baseline), inside the
+ * control. dj above already guards the descenders. */
 const mnUl = maxInkRow(dP, 288, 288 + 8, 70, 70 + 18);
-check("mnemonic underline survives the clip edge",
-  mnUl > mn.g, JSON.stringify({ mnUl, mn }));
+check("mnemonic underline renders below the baseline, unclipped",
+  mnUl > mn.o && mnUl <= 70 + 18 - 1, JSON.stringify({ mnUl, mn }));
 
 /* label click -> WM_COMMAND */
 check('wmctl click Greet fires WM_COMMAND (no pixels)',

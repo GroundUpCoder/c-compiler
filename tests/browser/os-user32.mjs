@@ -57,7 +57,12 @@ try {
   };
   const waitDialogFace = async (title, ms) => {
     const g = await dialogGeom(title, ms);
-    await waitPixel(g.x + Math.round(g.w / 2), g.y + 40, BTNFACE, 30000);
+    // Probe the BOTTOM-LEFT corner interior: dialog-face by construction
+    // (controls cluster top/right), and stable when the stock font's
+    // metrics rescale the template layout — the old center/+40y probe
+    // landed on the Options EDIT after the Phase D Noto swap grew the
+    // dialog units.
+    await waitPixel(g.x + 12, g.y + g.h - 12, BTNFACE, 30000);
     return g;
   };
 

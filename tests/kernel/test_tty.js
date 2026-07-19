@@ -121,6 +121,24 @@ const bit = (sig) => 1 << (sig - 1);
   tty.input('\x15');                     // VKILL
   check('IUTF8 kill echoes one cell per char', takeEcho() === '\b \b\b \b');
   tty.input('\r'); ringTake(); takeEcho();
+
+  // ---- Phase D: wcwidth-aware erase — a double-width char erases BOTH
+  // its cells (terminals render CJK across 2 cells; one [BS SP BS] triple
+  // per cell, per the kernel.js wcwidthCp / os/wcwidth.h twin tables) ----
+  tty.input('a日');                      // U+65E5, 3 UTF-8 bytes, width 2
+  takeEcho();
+  tty.input('\x7f');                     // ONE erase
+  check('IUTF8 erase echoes TWO cells for a double-width char',
+    takeEcho() === '\b \b\b \b');
+  tty.input('\r');
+  check('IUTF8 wide erase removed the whole char', ringTake() === 'a\n');
+  takeEcho();
+  tty.input('日é');                      // wide + narrow, mixed line
+  takeEcho();
+  tty.input('\x15');                     // VKILL
+  check('IUTF8 kill echoes width-true cells per char (1 + 2)',
+    takeEcho() === '\b \b\b \b\b \b');
+  tty.input('\r'); ringTake(); takeEcho();
   tty.termios.iflag &= ~0x4000;          // historical byte-wise mode
   tty.input('aé');
   takeEcho();

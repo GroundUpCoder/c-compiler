@@ -627,6 +627,19 @@ function foldPackages(fsMod, pathMod, rootDir, manifest, which) {
         throw new Error('folding package openwith keys needs an inline-content /usr/share/openwith seed');
       ow.content += ext + '\t/bin/' + cmd + '\n';
     });
+    // `fonts` (fallback-chain faces, Unicode Phase D) deliberately do NOT
+    // fold: they never lived in the baked /usr (nothing for the fat image
+    // to restore), they'd add tens of MB to every dev/test image fetch,
+    // and — /usr being read-only while the /etc fallback layer CONCATS
+    // ahead of the baked one — a folded face could never be removed, so
+    // the no-package tofu state (a real deploy state) would be untestable
+    // on the fat fixture. Install/remove is fully exercisable on any
+    // image via gucman's /etc/fonts/fallback delta. Validate loudly here
+    // (the fold is still the pre-bake definition linter), plant nothing.
+    (pkg.fonts || []).forEach(function (rel) {
+      if (!(pkg.files || {})[rel])
+        throw new Error("package '" + name + "': fonts " + rel + ' names no package file');
+    });
   });
   m.packagesBaked = names;
   return { manifest: m, names: names };

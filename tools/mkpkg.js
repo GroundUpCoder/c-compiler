@@ -9,7 +9,8 @@
 //     files: { "<rel>": <image.json entry> },
 //     bin:   { "<cmd>": "<rel>" },          // /usr/local/bin/<cmd> symlinks
 //     openwith: { "<ext>": "<cmd>" },       // /etc/openwith delta keys
-//     menu:  [ { group, entry, cmd } ] }    // /etc/menu/<group>/<entry>
+//     menu:  [ { group, entry, cmd } ],     // /etc/menu/<group>/<entry>
+//     fonts: [ "<rel>" ] }                  // /etc/fonts/fallback face lines
 //
 // The package tree is assembled by the EXACT bake pipeline — os-common's
 // seedEntries/buildProject/createCcDriver over an in-memory BlockFS — so a
@@ -263,6 +264,9 @@ async function buildPackage(name, poolDir) {
   for (const me of pkg.menu || []) {
     if (!me.group || !me.entry || !bin[me.cmd]) throw new Error(`package '${name}': bad menu entry ${JSON.stringify(me)}`);
   }
+  for (const fp of pkg.fonts || []) {
+    if (typeof fp !== 'string' || !pkg.files[fp]) throw new Error(`package '${name}': fonts ${fp} names no package file`);
+  }
 
   const entryFor = (file, sha, size) => ({
     version: pkg.version,
@@ -297,6 +301,7 @@ async function buildPackage(name, poolDir) {
     bin,
     openwith: pkg.openwith || {},
     menu: pkg.menu || [],
+    fonts: pkg.fonts || [],
   };
   const members = [
     { name: 'control.json', data: Buffer.from(JSON.stringify(control, null, 2) + '\n'), mode: 0o644 },

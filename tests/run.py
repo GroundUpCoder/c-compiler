@@ -695,7 +695,7 @@ def run_lua_tests(results, filter_str=None):
 
 # --- FreeType tests ---
 
-FREETYPE_FONT = os.path.join(FREETYPE_DEMO_DIR, "robotomono.ttf")
+FREETYPE_FONT = os.path.join(ROOT_DIR, "vendor", "fonts", "NotoSansMono-Regular.ttf")
 
 
 def run_freetype_tests(results, filter_str=None):
