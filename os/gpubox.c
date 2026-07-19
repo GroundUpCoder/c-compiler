@@ -177,7 +177,7 @@ static void build_cube(void) {
 }
 
 static void update_uniforms(long pose) {
-    float angle = 0.02f * (float)pose;
+    float angle = 0.01f * (float)pose;
     float rx[16], ry[16], model[16], proj[16], mvp[16];
     mat_rot_y(ry, angle);
     mat_rot_x(rx, angle * 0.7f);
