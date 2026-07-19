@@ -67,6 +67,12 @@
      is visible, and touch-gated (a non-touch desktop keeps Z=1). */
   #zoomctl { display: none; gap: 2px; margin-left: auto; }
   body[data-vt="2"][data-touchui] #zoomctl { display: flex; }
+  /* "Desktop site" toggle (#69 D6): the standard mobile-browser affordance —
+     opt out of the auto-2× mobile default back to the unzoomed 1× desktop
+     (and back). Same visibility gate as the zoom control it drives. */
+  #desksite { display: none; }
+  body[data-vt="2"][data-touchui] #desksite { display: inline-block; }
+  #desksite.on { background: #4a4a77; color: #ffffff; }
   .fontlabel {
     font: 12px 'Menlo', 'Consolas', monospace; color: #8888a8;
     padding: 5px 6px; user-select: none; -webkit-user-select: none;
@@ -136,6 +142,7 @@
     <span id="zoomctl" title="desktop zoom (integer, crisp)">
       <span id="zoomminus" class="fontbtn">&minus;</span><span id="zoomlabel" class="fontlabel">1&times;</span><span id="zoomplus" class="fontbtn">+</span>
     </span>
+    <span id="desksite" class="fontbtn" title="desktop site: the unzoomed 1&times; desktop (tap again for the 2&times; mobile zoom)">Desktop site</span>
   </div>
   <div id="desktop"><canvas id="screen" width="800" height="500" tabindex="0"></canvas></div>
   <div id="terminal"></div>
@@ -167,6 +174,16 @@ if (typeof SharedArrayBuffer === 'undefined') {
   throw new Error('no SAB');
 }
 
+// The phone-shaped-viewport predicate: the auto-default signal shared by the
+// VT1 font bump (todos/0212) and the VT2 zoom default (#69 D6). Deliberately
+// NARROWER than touchUiSync's touch-or-narrow predicate — a touch-capable
+// wide viewport (a tablet, a touchscreen laptop) gets the mobile CONTROLS
+// but keeps desktop-density defaults; only a viewport that is actually
+// phone-sized gets bigger-by-default. Explicit choices always override.
+function mobileViewport() {
+  return Math.min(window.innerWidth, window.innerHeight) <= 700;
+}
+
 // VT1 font-size steps (todos/0212): an explicit choice persists in
 // localStorage; with nothing stored, a narrow (phone-shaped) viewport
 // defaults one step larger than the desktop's 14.
@@ -174,7 +191,7 @@ var VT1_FONTS = [12, 14, 18, 22, 26, 30, 34];
 var vt1FontIdx = (function () {
   var saved = 0;
   try { saved = parseInt(localStorage.getItem('gucos.vt1.fontSize'), 10) || 0; } catch (e) {}
-  var px = saved || (Math.min(window.innerWidth, window.innerHeight) <= 700 ? 26 : 14);
+  var px = saved || (mobileViewport() ? 26 : 14);
   var i = VT1_FONTS.indexOf(px);
   return i >= 0 ? i : 1;
 })();
@@ -296,11 +313,17 @@ function wmSend(ev) { kernel.postMessage({ type: 'wm-input', ev: ev }); }
 // path is UNTOUCHED (still 1 logical px = 1 screen px, todos/0023's ruling
 // holds) — the ONLY thing zoom taints is the page's pointer seam, confined
 // to mapX/mapY (absolute coords) and the /vt2Zoom delta divides below.
+// Defaulting (#69 D6): an explicit choice (the ± control or the Desktop-site
+// toggle, both through vt2SetZoom) persists in localStorage and always wins;
+// with nothing stored, a phone-shaped viewport boots at 2× (the readable
+// mobile default over the shipped crisp-zoom mechanism) and everything else
+// at 1× — the same saved-else-viewport-default shape as the VT1 font above.
 var VT2_ZOOMS = [1, 2, 3];
 var vt2Zoom = (function () {
-  var z = 1;
-  try { z = parseInt(localStorage.getItem('gucos.vt2.zoom'), 10) || 1; } catch (e) {}
-  return (z >= VT2_ZOOMS[0] && z <= VT2_ZOOMS[VT2_ZOOMS.length - 1]) ? z : 1;
+  var z = 0;
+  try { z = parseInt(localStorage.getItem('gucos.vt2.zoom'), 10) || 0; } catch (e) {}
+  if (!(z >= VT2_ZOOMS[0] && z <= VT2_ZOOMS[VT2_ZOOMS.length - 1])) z = 0;
+  return z || (mobileViewport() ? 2 : 1);
 })();
 window.__osVt2Zoom = vt2Zoom;   // agent probe
 // The pointer seam: a CSS-pixel coord maps to logical (backing) px. With the
@@ -312,6 +335,9 @@ function mapY(c) { return Math.round(c / vt2Zoom); }
 function updateZoomLabel() {
   var el = document.getElementById('zoomlabel');
   if (el) el.textContent = vt2Zoom + '×';
+  // The Desktop-site toggle lights while the desktop (1×) view is active.
+  var d = document.getElementById('desksite');
+  if (d) d.className = 'fontbtn' + (vt2Zoom === 1 ? ' on' : '');
 }
 function vt2SetZoom(z) {
   z = z | 0;
@@ -331,6 +357,12 @@ function vt2SetZoom(z) {
 updateZoomLabel();
 document.getElementById('zoomminus').addEventListener('click', function () { vt2SetZoom(vt2Zoom - 1); });
 document.getElementById('zoomplus').addEventListener('click', function () { vt2SetZoom(vt2Zoom + 1); });
+// Desktop-site toggle (#69 D6): zoomed -> the 1× desktop; at 1× -> back to
+// the 2× mobile zoom. Routes through vt2SetZoom, so the choice persists and
+// overrides the viewport auto-default on the next boot.
+document.getElementById('desksite').addEventListener('click', function () {
+  vt2SetZoom(vt2Zoom === 1 ? 2 : 1);
+});
 window.__osVt2SetZoom = vt2SetZoom;   // agent probe (tests drive zoom without a click)
 
 // Dynamic screen resolution (todos/0023): on VT2 the screen tracks the
