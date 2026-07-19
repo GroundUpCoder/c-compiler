@@ -101,8 +101,12 @@
 
 #define WM_FSCHANGE (WM_APP + 1)     /* cwd changed on disk (FS_WATCH wake) */
 
-#define TOP_H  26                    /* the path/button strip */
-#define BTN_W  46
+#define TOP_H  36                    /* the path/button strip (20px-font retune:
+                                        strip height = one 30px control line box
+                                        + 6px vertical margin; EDIT/buttons get
+                                        TOP_H-6 = 30 >= tmHeight 28) */
+#define BTN_W  60                     /* fits a 4-char label ("Open"/"With" =
+                                        48px advance at 12px/char) + padding */
 
 static HWND g_win, g_path, g_go, g_up, g_open, g_with, g_list, g_status;
 static char g_cwd[512] = "/root";
@@ -403,16 +407,19 @@ static LRESULT CALLBACK ow_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (has_ext) snprintf(label, sizeof label, "Always for .%s", key);
         else snprintf(label, sizeof label, "Always (GUI default)");
         const char *base = strrchr(g_ow_file, '/');
+        /* 20px-font retune: rows on a 32px pitch, controls a 28-30px line
+         * box; the checkbox spans the full width so "Always (GUI default)"
+         * (~240px) fits; buttons a 30px line box on the bottom row. */
         CreateWindowEx(0, "STATIC", base ? base + 1 : g_ow_file,
-                       WS_CHILD | WS_VISIBLE, 8, 6, 304, 16, h, NULL, NULL, NULL);
+                       WS_CHILD | WS_VISIBLE, 8, 8, 344, 28, h, NULL, NULL, NULL);
         CreateWindowEx(0, "EDIT", cmd, WS_CHILD | WS_VISIBLE,
-                       8, 26, 304, 20, h, (HMENU)ID_OW_CMD, NULL, NULL);
+                       8, 40, 344, 30, h, (HMENU)ID_OW_CMD, NULL, NULL);
         CreateWindowEx(0, "BUTTON", label, WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                       8, 52, 200, 18, h, (HMENU)ID_OW_ALWAYS, NULL, NULL);
+                       8, 78, 344, 28, h, (HMENU)ID_OW_ALWAYS, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "OK", WS_CHILD | WS_VISIBLE,
-                       160, 76, 72, 22, h, (HMENU)ID_OW_OK, NULL, NULL);
+                       188, 116, 80, 30, h, (HMENU)ID_OW_OK, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "Cancel", WS_CHILD | WS_VISIBLE,
-                       240, 76, 72, 22, h, (HMENU)ID_OW_CANCEL, NULL, NULL);
+                       272, 116, 80, 30, h, (HMENU)ID_OW_CANCEL, NULL, NULL);
         return 0;
     }
     case WM_COMMAND:
@@ -454,7 +461,7 @@ static void with_selected(void) {
     snprintf(g_ow_file, sizeof g_ow_file, "%s", full);
     g_ow_win = CreateWindowEx(0, "OpenWith", "Open with",
                               WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-                              CW_USEDEFAULT, CW_USEDEFAULT, 320, 106,
+                              CW_USEDEFAULT, CW_USEDEFAULT, 360, 160,
                               NULL, NULL, NULL, NULL);
 }
 
@@ -652,14 +659,16 @@ static LRESULT CALLBACK rn_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         base = base ? base + 1 : g_rn_file;
         char label[300];
         snprintf(label, sizeof label, "Rename '%s' to:", base);
+        /* 20px-font retune: same rhythm as the Open-with picker (32px row
+         * pitch, 28-30px control line boxes, 30px buttons on the foot). */
         CreateWindowEx(0, "STATIC", label, WS_CHILD | WS_VISIBLE,
-                       8, 6, 304, 16, h, NULL, NULL, NULL);
+                       8, 8, 344, 28, h, NULL, NULL, NULL);
         HWND ed = CreateWindowEx(0, "EDIT", base, WS_CHILD | WS_VISIBLE,
-                                 8, 26, 304, 20, h, (HMENU)ID_RN_NAME, NULL, NULL);
+                                 8, 40, 344, 30, h, (HMENU)ID_RN_NAME, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "OK", WS_CHILD | WS_VISIBLE,
-                       160, 52, 72, 22, h, (HMENU)ID_RN_OK, NULL, NULL);
+                       188, 78, 80, 30, h, (HMENU)ID_RN_OK, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "Cancel", WS_CHILD | WS_VISIBLE,
-                       240, 52, 72, 22, h, (HMENU)ID_RN_CANCEL, NULL, NULL);
+                       272, 78, 80, 30, h, (HMENU)ID_RN_CANCEL, NULL, NULL);
         SetFocus(ed);
         SendMessage(ed, EM_SETSEL, 0, (LPARAM)-1);
         return 0;
@@ -709,7 +718,7 @@ static void rename_selected(void) {
     snprintf(g_rn_file, sizeof g_rn_file, "%s", full);
     g_rn_win = CreateWindowEx(0, "Rename", "Rename",
                               WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-                              CW_USEDEFAULT, CW_USEDEFAULT, 320, 82,
+                              CW_USEDEFAULT, CW_USEDEFAULT, 360, 130,
                               NULL, NULL, NULL, NULL);
 }
 

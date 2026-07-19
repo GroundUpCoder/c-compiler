@@ -112,20 +112,20 @@ static LRESULT CALLBACK sound_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
          * "Sound" must stay unique to the hub icon for agent_find) */
         CreateWindowEx(0, "BUTTON", "Master Volume",
                        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-                       8, 6, 264, 88, h, NULL, NULL, NULL);
+                       8, 6, 300, 138, h, NULL, NULL, NULL);
         g_label = CreateWindowEx(0, "STATIC", "Volume:", WS_CHILD | WS_VISIBLE,
-                                 16, 24, 140, 16, h, (HMENU)ID_LABEL, NULL, NULL);
+                                 20, 32, 260, 28, h, (HMENU)ID_LABEL, NULL, NULL);
         g_bar = CreateWindowEx(0, "SCROLLBAR", "", WS_CHILD | WS_VISIBLE, /* SBS_HORZ */
-                               16, 44, 192, 16, h, (HMENU)ID_BAR, NULL, NULL);
+                               20, 68, 196, 18, h, (HMENU)ID_BAR, NULL, NULL);
         SetScrollRange(g_bar, SB_CTL, 0, 200, FALSE);
         CreateWindowEx(0, "BUTTON", "Vol -", WS_CHILD | WS_VISIBLE,
-                       216, 40, 48, 20, h, (HMENU)ID_DOWN, NULL, NULL);
+                       224, 62, 64, 30, h, (HMENU)ID_DOWN, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "Vol +", WS_CHILD | WS_VISIBLE,
-                       216, 64, 48, 20, h, (HMENU)ID_UP, NULL, NULL);
+                       224, 100, 64, 30, h, (HMENU)ID_UP, NULL, NULL);
         g_edit = CreateWindowEx(0, "EDIT", "", WS_CHILD | WS_VISIBLE,
-                                16, 66, 60, 20, h, (HMENU)ID_EDIT, NULL, NULL);
+                                20, 100, 64, 30, h, (HMENU)ID_EDIT, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "Set", WS_CHILD | WS_VISIBLE,
-                       82, 66, 40, 20, h, (HMENU)ID_SET, NULL, NULL);
+                       92, 100, 56, 30, h, (HMENU)ID_SET, NULL, NULL);
         g_gain = __audio_gain(-1);
         show_gain();
         return 0;
@@ -168,13 +168,13 @@ static LRESULT CALLBACK sounds_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CREATE:
         CreateWindowEx(0, "BUTTON", "Event Sounds",
                        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-                       8, 6, 264, 88, h, NULL, NULL, NULL);
+                       8, 6, 300, 110, h, NULL, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "Enable event sounds",
                        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                       16, 26, 200, 16, h, (HMENU)ID_SNDCHK, NULL, NULL);
+                       20, 34, 272, 28, h, (HMENU)ID_SNDCHK, NULL, NULL);
         SendMessage(GetDlgItem(h, ID_SNDCHK), BM_SETCHECK, !snd_muted(), 0);
         CreateWindowEx(0, "BUTTON", "Test", WS_CHILD | WS_VISIBLE,
-                       16, 56, 60, 22, h, (HMENU)ID_SNDTEST, NULL, NULL);
+                       20, 72, 72, 30, h, (HMENU)ID_SNDTEST, NULL, NULL);
         return 0;
     case WM_COMMAND:
         switch (LOWORD(wp)) {
@@ -208,9 +208,10 @@ static void add_info(HWND parent, int *y) {
     while (f && fgets(line, sizeof line, f)) {
         line[strcspn(line, "\n")] = 0;
         snprintf(text, sizeof text, "%s", line);
+        /* 20px-font retune: 28px line box, 30px pitch, wider column. */
         CreateWindowEx(0, "STATIC", text, WS_CHILD | WS_VISIBLE,
-                       16, *y, 248, 16, parent, NULL, NULL, NULL);
-        *y += 18;
+                       16, *y, 352, 28, parent, NULL, NULL, NULL);
+        *y += 30;
     }
     if (f) fclose(f);
     f = fopen("/proc/uptime", "r");
@@ -219,8 +220,8 @@ static void add_info(HWND parent, int *y) {
         if (fscanf(f, "%lf", &up) == 1) {
             snprintf(text, sizeof text, "UPTIME=%ds", (int)up);
             CreateWindowEx(0, "STATIC", text, WS_CHILD | WS_VISIBLE,
-                           16, *y, 248, 16, parent, NULL, NULL, NULL);
-            *y += 18;
+                           16, *y, 352, 28, parent, NULL, NULL, NULL);
+            *y += 30;
         }
         fclose(f);
     }
@@ -246,9 +247,9 @@ static LRESULT CALLBACK display_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE:
         CreateWindowEx(0, "STATIC", "Wallpaper and appearance settings",
-                       WS_CHILD | WS_VISIBLE, 16, 14, 248, 16, h, NULL, NULL, NULL);
+                       WS_CHILD | WS_VISIBLE, 16, 16, 412, 28, h, NULL, NULL, NULL);
         CreateWindowEx(0, "STATIC", "arrive with todos/0049.",
-                       WS_CHILD | WS_VISIBLE, 16, 32, 248, 16, h, NULL, NULL, NULL);
+                       WS_CHILD | WS_VISIBLE, 16, 48, 412, 28, h, NULL, NULL, NULL);
         return 0;
     case WM_DESTROY:
         g_applet[APP_DISPLAY] = NULL;
@@ -274,7 +275,7 @@ static LRESULT CALLBACK datetime_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE:
         CreateWindowEx(0, "STATIC", "", WS_CHILD | WS_VISIBLE,
-                       16, 20, 200, 16, h, (HMENU)ID_CLOCK, NULL, NULL);
+                       16, 24, 268, 28, h, (HMENU)ID_CLOCK, NULL, NULL);
         clock_update(h);
         SetTimer(h, 1, 1000, NULL);
         return 0;
@@ -321,24 +322,24 @@ static LRESULT CALLBACK saver_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CREATE: {
         CreateWindowEx(0, "BUTTON", "Screen Saver",
                        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-                       8, 6, 264, 148, h, NULL, NULL, NULL);
+                       8, 6, 316, 190, h, NULL, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "None",
                        WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
-                       16, 26, 120, 16, h, (HMENU)ID_SVNONE, NULL, NULL);
+                       20, 34, 240, 28, h, (HMENU)ID_SVNONE, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "Marquee",
                        WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
-                       16, 46, 120, 16, h, (HMENU)ID_SVMARQ, NULL, NULL);
+                       20, 64, 240, 28, h, (HMENU)ID_SVMARQ, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "Starfield",
                        WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
-                       16, 66, 120, 16, h, (HMENU)ID_SVSTAR, NULL, NULL);
+                       20, 94, 240, 28, h, (HMENU)ID_SVSTAR, NULL, NULL);
         CreateWindowEx(0, "STATIC", "Wait (sec):", WS_CHILD | WS_VISIBLE,
-                       16, 96, 68, 16, h, NULL, NULL, NULL);
+                       20, 128, 140, 28, h, NULL, NULL, NULL);
         CreateWindowEx(0, "EDIT", "", WS_CHILD | WS_VISIBLE,
-                       90, 92, 50, 20, h, (HMENU)ID_SVWAIT, NULL, NULL);
+                       164, 126, 64, 30, h, (HMENU)ID_SVWAIT, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "Apply", WS_CHILD | WS_VISIBLE,
-                       146, 92, 50, 20, h, (HMENU)ID_SVAPPLY, NULL, NULL);
+                       236, 126, 76, 30, h, (HMENU)ID_SVAPPLY, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "Preview", WS_CHILD | WS_VISIBLE,
-                       16, 122, 70, 22, h, (HMENU)ID_SVPREV, NULL, NULL);
+                       20, 160, 96, 30, h, (HMENU)ID_SVPREV, NULL, NULL);
         saver_sync(h);
         return 0;
     }
@@ -406,20 +407,22 @@ static LRESULT CALLBACK keyboard_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CREATE:
         CreateWindowEx(0, "BUTTON", "Keyboard Scheme",
                        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-                       8, 6, 264, 118, h, NULL, NULL, NULL);
+                       8, 6, 480, 130, h, NULL, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "Windows (Ctrl)",
                        WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
-                       16, 26, 200, 16, h, (HMENU)ID_KBWIN, NULL, NULL);
+                       20, 34, 300, 28, h, (HMENU)ID_KBWIN, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "macOS (Cmd)",
                        WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
-                       16, 46, 200, 16, h, (HMENU)ID_KBMAC, NULL, NULL);
+                       20, 64, 300, 28, h, (HMENU)ID_KBMAC, NULL, NULL);
         /* the 0150 axis: only the macos table HAS the emacs rows (in the
          * windows table Ctrl is the verb modifier), so this is a
          * macos-scheme refinement — running apps pick either change up
-         * within ~1s (the keys.h cached revalidate) */
+         * within ~1s (the keys.h cached revalidate). The label is 36 chars
+         * (~432px at 12px/char) PLUS the ~20px check glyph/gap, so the
+         * control is 464px and the group + window widen to hold it. */
         CreateWindowEx(0, "BUTTON", "Emacs editing in text fields (macOS)",
                        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                       16, 76, 244, 16, h, (HMENU)ID_KBRL, NULL, NULL);
+                       20, 94, 464, 28, h, (HMENU)ID_KBRL, NULL, NULL);
         kb_sync(h);
         return 0;
     case WM_COMMAND:
@@ -455,13 +458,17 @@ typedef LRESULT (CALLBACK *WndProcFn)(HWND, UINT, WPARAM, LPARAM);
 
 static const struct { const char *cls; WndProcFn proc; int w, h; }
 APP_DEF[APP_N] = {
-    { "CplSound",    sound_proc,    280, 102 },
-    { "CplSndScheme", sounds_proc,  280, 102 },
-    { "CplSystem",   system_proc,   280, 82  },
-    { "CplDisplay",  display_proc,  280, 62  },
-    { "CplDateTime", datetime_proc, 232, 56  },
-    { "CplSaver",    saver_proc,    280, 162 },
-    { "CplKeyboard", keyboard_proc, 280, 132 },
+    /* 20px-font retune (v133-qa): every applet's window + control geometry
+     * was Win95-sized; grown to the 28px text line box / 30px control rhythm
+     * and the real 12px/char label advances (group labels clear their frame
+     * before the first child row, buttons/statics fit their text). */
+    { "CplSound",    sound_proc,    324, 156 },
+    { "CplSndScheme", sounds_proc,  324, 126 },
+    { "CplSystem",   system_proc,   384, 220 },
+    { "CplDisplay",  display_proc,  444, 96  },
+    { "CplDateTime", datetime_proc, 300, 76  },
+    { "CplSaver",    saver_proc,    336, 212 },
+    { "CplKeyboard", keyboard_proc, 496, 150 },
 };
 
 static void open_applet(int i) {
@@ -482,10 +489,16 @@ static void select_icon(int i) {
     InvalidateRect(g_icon[i], NULL, TRUE);
 }
 
-/* icon cell geometry (hub client space) */
-#define CELL_W  84
-#define ICON_W  76
-#define ICON_H  60
+/* icon cell geometry (hub client space). 20px-font retune (v133-qa): the
+ * old 76px label box clipped every wide label ("Screen Saver" is ~144px at
+ * 12px/char, "Keyboard" ~96px). The label is now a two-line word-wrapped
+ * box (real Win95/XP CPL behaviour) so a 120px cell holds the widest single
+ * word AND "Date/Time" (108px, no break point) on one line, while
+ * "Screen Saver" wraps to two. */
+#define CELL_W  120
+#define ICON_W  112
+#define ICON_H  96
+#define ICON_LBL_TOP 36                 /* art occupies the top ~34px */
 
 static int icon_index(HWND h) {
     for (int i = 0; i < APP_N; i++)
@@ -621,18 +634,27 @@ static LRESULT CALLBACK icon_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         HDC dc = BeginPaint(h, &ps);
         if (dc && i >= 0) {
             draw_art(dc, i, (ICON_W - 32) / 2, 2);
-            RECT lr = { 2, 38, ICON_W - 2, 56 };
+            RECT lr = { 2, ICON_LBL_TOP, ICON_W - 2, ICON_H - 2 };
             SetBkMode(dc, TRANSPARENT);
+            /* Word-wrapped label (20px-font retune): measure the wrapped
+             * height first so the navy selection strip hugs the actual text
+             * (one line for "Sound", two for "Screen Saver") instead of a
+             * fixed 18px box that clipped both. */
+            RECT mr = lr;
+            DrawText(dc, APP_NAME[i], -1, &mr,
+                     DT_CENTER | DT_WORDBREAK | DT_CALCRECT);
+            int th = mr.bottom - mr.top;
+            if (th > lr.bottom - lr.top) th = lr.bottom - lr.top;
+            RECT box = { lr.left, lr.top, lr.right, lr.top + th };
             if (i == g_sel) {                    /* selection = navy strip */
                 HBRUSH b = CreateSolidBrush(RGB(0, 0, 128));
-                FillRect(dc, &lr, b);
+                FillRect(dc, &box, b);
                 DeleteObject(b);
                 SetTextColor(dc, RGB(255, 255, 255));
             } else {
                 SetTextColor(dc, RGB(0, 0, 0));
             }
-            DrawText(dc, APP_NAME[i], -1, &lr,
-                     DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            DrawText(dc, APP_NAME[i], -1, &box, DT_CENTER | DT_WORDBREAK);
         }
         if (dc) EndPaint(h, &ps);
         return 0;

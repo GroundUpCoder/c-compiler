@@ -107,14 +107,19 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         CreateWindowEx(0, "EDIT", "line one\nline two",
                        WS_CHILD | WS_VISIBLE | ES_MULTILINE,
                        12, 176, 268, 96, hwnd, (HMENU)IDC_NOTES_EDIT, NULL, NULL);
+        /* 20px-font retune: the bottom row was left at Win95 heights (the
+         * DESC_* labels above got bumped, this row was missed) — the
+         * checkbox clipped its baseline at h=20 and "Options" (7ch = 84px)
+         * overflowed a 76px button. Line box = 28px text, 30px buttons;
+         * "Options" grows to 96px. */
         CreateWindowEx(0, "BUTTON", "Verbose", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                       12, 284, 120, 20, hwnd, (HMENU)IDC_CHECK, NULL, NULL);
+                       12, 284, 120, 28, hwnd, (HMENU)IDC_CHECK, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "Options", WS_CHILD | WS_VISIBLE,
-                       140, 284, 76, 26, hwnd, (HMENU)IDB_OPTIONS, NULL, NULL);
+                       140, 284, 96, 30, hwnd, (HMENU)IDB_OPTIONS, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "About", WS_CHILD | WS_VISIBLE,
-                       300, 284, 76, 26, hwnd, (HMENU)IDB_ABOUT, NULL, NULL);
+                       300, 284, 76, 30, hwnd, (HMENU)IDB_ABOUT, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "Quit", WS_CHILD | WS_VISIBLE,
-                       388, 284, 76, 26, hwnd, (HMENU)IDB_QUIT, NULL, NULL);
+                       388, 284, 76, 30, hwnd, (HMENU)IDB_QUIT, NULL, NULL);
         SetScrollRange(GetDlgItem(hwnd, IDC_SCROLL), SB_CTL, 0, 20, FALSE);
         return 0;
 

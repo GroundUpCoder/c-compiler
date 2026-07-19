@@ -67,8 +67,8 @@ static int cd_a2w(const char *s, LPWSTR out, int cap) {
 #define IDC_LIST  101
 #define IDC_NAME  102
 
-#define FD_W 380
-#define FD_H 300
+#define FD_W 460
+#define FD_H 340
 #define FD_MAX_ENT 512   /* listing snapshot capacity; past it fd_refill
                             renders an explicit "(N more...)" row (0255) */
 
@@ -307,25 +307,38 @@ static BOOL file_dialog(OPENFILENAMEW *ofn, int saving) {
                               NULL, NULL, NULL, NULL);
     free(title);
     if (!g_fd.win) return FALSE;
+    /* 20px-font retune: the row labels ("Directory:"/"File name:" = ~120px
+     * at 12px/char) overflowed a 70px STATIC under the x=80 EDIT, so widen
+     * the label column to 130 and start the fields at x=142; controls are
+     * a 30px line box, buttons 30px. The list height snaps to a whole
+     * number of item rows (rh = tmHeight+2, the user32 lb_row_h formula) so
+     * the last row is never a clipped sliver. */
+    int rh = 30;                                 /* fallback = 20px-font row */
+    { HDC mdc = GetDC(g_fd.win);
+      if (mdc) { TEXTMETRIC tm;
+                 if (GetTextMetrics(mdc, &tm)) rh = tm.tmHeight + 2;
+                 ReleaseDC(g_fd.win, mdc); } }
+    int listTop = 42, listBot = FD_H - 78;       /* name row starts at -72 */
+    int listH = ((listBot - listTop) / rh) * rh; /* whole rows only */
     CreateWindowEx(0, "STATIC", "Directory:", WS_CHILD | WS_VISIBLE,
-                   8, 8, 70, 18, g_fd.win, NULL, NULL, NULL);
+                   8, 8, 130, 28, g_fd.win, NULL, NULL, NULL);
     g_fd.dir = CreateWindowEx(0, "EDIT", "", WS_CHILD | WS_VISIBLE | ES_READONLY,
-                              80, 6, FD_W - 88, 20, g_fd.win, (HMENU)IDC_DIR, NULL, NULL);
+                              142, 6, FD_W - 150, 30, g_fd.win, (HMENU)IDC_DIR, NULL, NULL);
     /* keyboard-navigable (0104): the list, name box and buttons are
      * tabstops; the OK/Save button is the default (Enter accepts). */
     g_fd.list = CreateWindowEx(0, "LISTBOX", "", WS_CHILD | WS_VISIBLE | LBS_NOTIFY | WS_TABSTOP,
-                               8, 32, FD_W - 16, FD_H - 100, g_fd.win,
+                               8, listTop, FD_W - 16, listH, g_fd.win,
                                (HMENU)IDC_LIST, NULL, NULL);
     CreateWindowEx(0, "STATIC", "File name:", WS_CHILD | WS_VISIBLE,
-                   8, FD_H - 60, 70, 18, g_fd.win, NULL, NULL, NULL);
+                   8, FD_H - 70, 130, 28, g_fd.win, NULL, NULL, NULL);
     g_fd.name = CreateWindowEx(0, "EDIT", seedname, WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-                               80, FD_H - 62, FD_W - 200, 20, g_fd.win,
+                               142, FD_H - 72, FD_W - 272, 30, g_fd.win,
                                (HMENU)IDC_NAME, NULL, NULL);
     CreateWindowEx(0, "BUTTON", saving ? "Save" : "Open",
                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-                   FD_W - 112, FD_H - 64, 100, 24, g_fd.win, (HMENU)IDOK, NULL, NULL);
+                   FD_W - 120, FD_H - 72, 108, 30, g_fd.win, (HMENU)IDOK, NULL, NULL);
     CreateWindowEx(0, "BUTTON", "Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-                   FD_W - 112, FD_H - 34, 100, 24, g_fd.win, (HMENU)IDCANCEL, NULL, NULL);
+                   FD_W - 120, FD_H - 38, 108, 30, g_fd.win, (HMENU)IDCANCEL, NULL, NULL);
     fd_refill();
     SetFocus(g_fd.name);                          /* type-and-Enter to accept */
 

@@ -5189,15 +5189,23 @@ int MessageBox(HWND owner, LPCSTR text, LPCSTR caption, UINT type) {
     ensure_dialog_class();
     MessageBeep(type);                           /* icon sound (todos/0094) */
 
-    /* Measure the text on a memory DC (the image font). */
+    /* Measure the TRUE text extent on a memory DC (the same image font the
+     * STATIC below paints with). DT_CALCRECT with NO width cap and NO
+     * DT_WORDBREAK returns the widest line + '\n'-aware total height —
+     * which is exactly how the single-line STATIC renders. The old code
+     * seeded the rect at 320px AND passed DT_WORDBREAK: gdi32 leaves
+     * r->right untouched under WORDBREAK, so any message wider than 320px
+     * (e.g. a ~396px line at the 20px font) was measured short and the box
+     * — sized to that stale width — clipped the text at its right edge.
+     * Measuring the real extent auto-sizes the box for ANY message. */
     HDC mdc = CreateCompatibleDC(NULL);
     RECT tr;
-    SetRect(&tr, 0, 0, 320, 200);
+    SetRect(&tr, 0, 0, 0, 0);
     int textH = 16, lineH = 16;
     if (mdc) {
         TEXTMETRIC tm;
         if (GetTextMetrics(mdc, &tm)) lineH = tm.tmHeight;
-        textH = DrawText(mdc, text ? text : "", -1, &tr, DT_CALCRECT | DT_WORDBREAK);
+        textH = DrawText(mdc, text ? text : "", -1, &tr, DT_CALCRECT);
         DeleteDC(mdc);
     }
     /* Button set from the TYPE nibble (0048: MB_YESNOCANCEL is notepad's
@@ -5234,7 +5242,7 @@ int MessageBox(HWND owner, LPCSTR text, LPCSTR caption, UINT type) {
         DWORD bs = WS_CHILD | WS_VISIBLE | WS_TABSTOP |
                    (i == 0 ? BS_DEFPUSHBUTTON : BS_PUSHBUTTON);
         HWND b = CreateWindowEx(0, "BUTTON", BTNSETS[set][i].label, bs,
-                                bx + i * (bw + 10), by, bw, 24, box,
+                                bx + i * (bw + 10), by, bw, 28, box,
                                 (HMENU)(UINT_PTR)BTNSETS[set][i].id, NULL, NULL);
         if (i == 0) firstBtn = b;
     }
