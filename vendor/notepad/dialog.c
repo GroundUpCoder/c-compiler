@@ -146,7 +146,11 @@ VOID WaitCursor(BOOL bBegin)
 
 VOID DIALOG_StatusBarAlignParts(VOID)
 {
-    static const int defaultWidths[] = {120, 120, 120};
+    /* gucOS 20px-font retune (v133-qa): sized to the real text at 12px/char
+     * — "Line 1, column 1" ~192px (CURPOS, the flex left part, min 200),
+     * "Windows (CR + LF)" ~204px (EOLN, 210), common encodings up to
+     * "UTF-8 with BOM" (ENCODING, 130). Was {120,120,120} (old-font). */
+    static const int defaultWidths[] = {200, 210, 130};
     RECT rcStatusBar;
     int parts[3];
 

@@ -605,8 +605,12 @@ int WINAPI _tWinMain(HINSTANCE hInstance, HINSTANCE prev, LPTSTR cmdline, int sh
                  WS_OVERLAPPEDWINDOW,
                  CW_USEDEFAULT,
                  CW_USEDEFAULT,
-                 CW_USEDEFAULT,
-                 CW_USEDEFAULT,
+                 /* gucOS 20px-font retune (v133-qa): CW_USEDEFAULT resolves
+                  * to 400x300 in the veneer, too cramped for the 20px status
+                  * bar (its three parts alone need ~460px). Open at a proper
+                  * default so the edit area and status parts both fit. */
+                 640,
+                 480,
                  NULL,
                  NULL,
                  Globals.hInstance,
