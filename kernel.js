@@ -449,6 +449,8 @@ function traceQuoteByte(c) {
 function traceStr(s, max) {
   var body = '';
   var n = Math.min(s.length, max);
+  // ASCII-only fallback by design: non-ASCII units render as \xNN escapes
+  // (strace output is a diagnostic byte dump, not a text surface).
   for (var i = 0; i < n; i++) body += traceQuoteByte(s.charCodeAt(i) & 0xff);
   return '"' + body + '"' + (s.length > max ? '...' : '');
 }
@@ -1416,7 +1418,8 @@ var SI_SEQ = 0, SI_AVAIL = 1, SI_WRITEPOS = 2, SI_READPOS = 3,
 var SI_HDR_BYTES = 32;
 
 /* termios bits the line discipline consults — MUST match <termios.h>. */
-var T_ICRNL = 0x100, T_INLCR = 0x40, T_IGNCR = 0x80;          // c_iflag
+var T_ICRNL = 0x100, T_INLCR = 0x40, T_IGNCR = 0x80,
+    T_IUTF8 = 0x4000;                                          // c_iflag
 var T_OPOST = 0x1, T_ONLCR = 0x2;                              // c_oflag
 var T_ECHOE = 0x2, T_ECHOK = 0x4, T_ECHO = 0x8, T_ECHONL = 0x10,
     T_ISIG = 0x80, T_ICANON = 0x100;                           // c_lflag
@@ -1464,7 +1467,7 @@ function Tty(kernel, opts) {
   // tty-kind (isatty true -> shells prompt). See Kernel._stdOfds.
   this.interactiveOut = !!opts.interactiveOut;
   this.termios = {
-    iflag: T_ICRNL,
+    iflag: T_ICRNL | T_IUTF8,
     oflag: T_OPOST | T_ONLCR,
     cflag: 0xB00,               // CS8|CREAD (matches the legacy canned value)
     lflag: T_ISIG | T_ICANON | T_ECHO | T_ECHOE | T_ECHOK,
@@ -1513,6 +1516,20 @@ Tty.prototype._echo = function (bytes) {
   if (bytes.length) this._output(Uint8Array.from(bytes));
 };
 
+/* Remove one CHARACTER from the tail of the canonical edit buffer. With
+ * IUTF8 set (Linux semantics; gucOS default) trailing UTF-8 continuation
+ * bytes fall with their lead byte, so one ERASE deletes a whole multi-byte
+ * character; with it clear the pop stays byte-wise (the historical mode).
+ * The erase echo is ONE cell per character regardless of display width —
+ * a wcwidth-aware 2-cell echo for double-width characters is deferred to
+ * the width work (Unicode Phase D). */
+Tty.prototype._popChar = function (t) {
+  if (t.iflag & T_IUTF8)
+    while (this._line.length > 1 && (this._line[this._line.length - 1] & 0xC0) === 0x80)
+      this._line.pop();
+  this._line.pop();
+};
+
 Tty.prototype._echoNl = function () {
   var t = this.termios;
   this._echo((t.oflag & T_OPOST) && (t.oflag & T_ONLCR) ? [13, 10] : [10]);
@@ -1552,14 +1569,14 @@ Tty.prototype.input = function (data) {
     if (t.lflag & T_ICANON) {
       if (b === t.cc[V_ERASE]) {
         if (this._line.length) {
-          this._line.pop();
+          this._popChar(t);
           if ((t.lflag & T_ECHO) && (t.lflag & T_ECHOE)) this._echo([8, 32, 8]);
         }
         continue;
       }
       if (b === t.cc[V_KILL]) {
         if ((t.lflag & T_ECHO) && (t.lflag & T_ECHOK)) {
-          while (this._line.length) { this._line.pop(); this._echo([8, 32, 8]); }
+          while (this._line.length) { this._popChar(t); this._echo([8, 32, 8]); }
         } else {
           this._line.length = 0;
         }
@@ -5638,7 +5655,11 @@ Kernel.prototype.wmScene = function () {
 function wmpTitle32(title) {
   var out = new Uint8Array(32);
   var enc = textEncoder.encode(String(title || ''));
-  out.set(enc.subarray(0, Math.min(31, enc.length)));   // always NUL-terminated
+  var n = Math.min(31, enc.length);
+  // Truncation snaps back to a whole UTF-8 sequence (the user32.c
+  // w2a_trunc "no split UTF-8" rule) so the record never renders tofu.
+  while (n > 0 && n < enc.length && (enc[n] & 0xC0) === 0x80) n--;
+  out.set(enc.subarray(0, n));                          // always NUL-terminated
   return out;
 }
 
@@ -7773,8 +7794,8 @@ ProcFS.prototype._genBytes = function (hit) {
   var text = this._render(hit);
   if (text === null || text === undefined) return null;
   if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(text);
-  var out = new Uint8Array(text.length);   // content is pure ASCII
-  for (var i = 0; i < text.length; i++) out[i] = text.charCodeAt(i) & 0xff;
+  var out = new Uint8Array(text.length);   // ASCII-only fallback: /proc content
+  for (var i = 0; i < text.length; i++) out[i] = text.charCodeAt(i) & 0xff;  // is pure ASCII; TextEncoder-less envs only
   return out;
 };
 

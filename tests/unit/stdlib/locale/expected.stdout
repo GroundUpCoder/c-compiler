@@ -1,6 +1,6 @@
 default=C
 set_C=C
-set_empty=C
+set_empty=C.UTF-8
 set_POSIX=C
 set_fr=1
 decimal_point=.

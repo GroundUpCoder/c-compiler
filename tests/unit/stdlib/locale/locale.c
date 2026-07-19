@@ -10,7 +10,8 @@ int main() {
   loc = setlocale(LC_ALL, "C");
   printf("set_C=%s\n", loc);
 
-  // setlocale: set to ""  (should default to "C")
+  // setlocale: "" selects the native locale — C.UTF-8, the libc's
+  // unconditional UTF-8 charset (Unicode Phase B; see tests/unit/locale)
   loc = setlocale(LC_ALL, "");
   printf("set_empty=%s\n", loc);
 

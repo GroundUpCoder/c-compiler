@@ -25,6 +25,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "win32_internal.h"     /* __u8_next — the one veneer UTF-8 decoder */
+
 /* ========================================================== _tcs* CRT */
 
 size_t _tcslen(const WCHAR *s) {
@@ -197,11 +199,20 @@ static int w16_vformat(WCHAR *out, int cap, const WCHAR *fmt, va_list ap) {
             static const WCHAR NULLW[] = u"(null)";
             const WCHAR *ws = NULL;
             const char *ns = NULL;
-            int len = 0;
+            int len = 0, nbytes = 0;
             if (narrow) {
+                /* Narrow args are UTF-8 (kernel32's CP_ACP == CP_UTF8):
+                 * decode per code point — the same conversion
+                 * MultiByteToWideChar performs — with surrogate pairs
+                 * for astral, never Latin-1 zero-extension. len counts
+                 * UTF-16 units so width/precision stay unit-based. */
                 ns = va_arg(ap, const char *);
                 if (!ns) ns = "(null)";
-                while (ns[len]) len++;
+                while (ns[nbytes]) nbytes++;
+                for (int i = 0; i < nbytes; ) {
+                    unsigned cp = __u8_next(ns, nbytes, &i);
+                    len += cp >= 0x10000 ? 2 : 1;
+                }
             } else {
                 ws = va_arg(ap, const WCHAR *);
                 if (!ws) ws = NULLW;
@@ -210,7 +221,24 @@ static int w16_vformat(WCHAR *out, int cap, const WCHAR *fmt, va_list ap) {
             if (prec >= 0 && len > prec) len = prec;
             int pad = width - len;
             if (!strchr(flags, '-')) while (pad-- > 0) PUTW(' ');
-            for (int i = 0; i < len; i++) PUTW(narrow ? (WCHAR)(unsigned char)ns[i] : ws[i]);
+            if (narrow) {
+                int left = len;
+                for (int i = 0; i < nbytes && left > 0; ) {
+                    unsigned cp = __u8_next(ns, nbytes, &i);
+                    if (cp >= 0x10000) {
+                        if (left < 2) break;   /* precision never splits a pair */
+                        unsigned v = cp - 0x10000;
+                        PUTW(0xD800 | (v >> 10));
+                        PUTW(0xDC00 | (v & 0x3FF));
+                        left -= 2;
+                    } else {
+                        PUTW(cp);
+                        left--;
+                    }
+                }
+            } else {
+                for (int i = 0; i < len; i++) PUTW(ws[i]);
+            }
             if (strchr(flags, '-')) while (pad-- > 0) PUTW(' ');
             continue;
         }

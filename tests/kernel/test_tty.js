@@ -101,6 +101,36 @@ const bit = (sig) => 1 << (sig - 1);
   check('kill wipes the line', ringTake() === 'done\n');
   takeEcho();
 
+  // ---- IUTF8: char-wise ERASE/KILL on multi-byte input (Unicode Phase B) ----
+  check('IUTF8 defaults on', (tty.termios.iflag & 0x4000) !== 0,
+    '0x' + tty.termios.iflag.toString(16));
+  tty.input('aé');                       // é = 2 UTF-8 bytes (C3 A9)
+  takeEcho();
+  tty.input('\x7f');                     // ONE erase
+  check('IUTF8 erase echoes ONE cell for a 2-byte char', takeEcho() === '\b \b');
+  tty.input('\r');
+  check('IUTF8 erase removed the whole char', ringTake() === 'a\n');
+  takeEcho();
+  tty.input('x😀');                      // U+1F600 = 4 UTF-8 bytes
+  takeEcho();
+  tty.input('\x7f\r');
+  check('IUTF8 erase pops all 4 bytes of an astral char', ringTake() === 'x\n');
+  takeEcho();
+  tty.input('éé');                       // 2 chars, 4 bytes
+  takeEcho();
+  tty.input('\x15');                     // VKILL
+  check('IUTF8 kill echoes one cell per char', takeEcho() === '\b \b\b \b');
+  tty.input('\r'); ringTake(); takeEcho();
+  tty.termios.iflag &= ~0x4000;          // historical byte-wise mode
+  tty.input('aé');
+  takeEcho();
+  tty.input('\x7f\x7f');                 // TWO erases for the 2-byte char
+  check('without IUTF8 erase is byte-wise', takeEcho() === '\b \b\b \b');
+  tty.input('\r');
+  check('without IUTF8 both bytes gone after two erases', ringTake() === 'a\n');
+  takeEcho();
+  tty.termios.iflag |= 0x4000;
+
   // ---- VEOF: commit-without-NL, sticky EOF on empty line ----
   tty.input('ab\x04');                   // ^D commits "ab" with no newline
   check('VEOF commits partial line', ringTake() === 'ab');

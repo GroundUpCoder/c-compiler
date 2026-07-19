@@ -624,6 +624,33 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('parked read woken by EV_TITLE', f.type === WMP.EV_TITLE && f.g(0) === c1.sid &&
     title === 'renamed', JSON.stringify([f.type, title]));
 
+  // ---- title[32] truncation snaps to a whole UTF-8 sequence (Unicode
+  // Phase B): 30 ASCII + 'é' is 32 UTF-8 bytes, so the 31-byte cap would
+  // split é mid-sequence — the record must carry exactly the 30 ASCII
+  // bytes, never a dangling lead byte (tofu at render). ----
+  await rpc(appPid, K.OP.SURFACE_SET_TITLE, { sid: c1.sid, title: 'x'.repeat(30) + 'é' });
+  f = await readEvent(wm);
+  {
+    const tb = [];
+    for (let i = 12; i < 44 && f.bytes[i]; i++) tb.push(f.bytes[i]);
+    check('EV_TITLE truncation snaps to a whole UTF-8 sequence',
+      f.type === WMP.EV_TITLE && tb.length === 30 && tb.every((c) => c === 120),
+      JSON.stringify([f.type, tb.length, tb.slice(28)]));
+  }
+  // an untruncated multi-byte title still rides whole
+  await rpc(appPid, K.OP.SURFACE_SET_TITLE, { sid: c1.sid, title: 'é-app' });
+  f = await readEvent(wm);
+  {
+    const tb = [];
+    for (let i = 12; i < 44 && f.bytes[i]; i++) tb.push(f.bytes[i]);
+    check('EV_TITLE carries whole UTF-8 when it fits',
+      f.type === WMP.EV_TITLE && String(tb) === String([0xC3, 0xA9, 45, 97, 112, 112]),
+      JSON.stringify(tb));
+  }
+  await rpc(appPid, K.OP.SURFACE_SET_TITLE, { sid: c1.sid, title: 'renamed' });
+  f = await readEvent(wm);
+  check('title restored for the later legs', f.type === WMP.EV_TITLE && idle(wm));
+
   // ---- second client (wmctl-style): commands work, no event spam ----
   r = await rpc(wmPid, K.OP.SOCK_SOCKET, {});
   const ctlFd = r.fd;

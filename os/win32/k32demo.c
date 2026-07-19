@@ -262,6 +262,15 @@ static void test_strings(void) {
     int len = wsprintfW(out, u"%s=%d 0x%X [%3u]", u"n", -5, 0xBEEF, 7u);
     check("wsprintfW", lstrcmpW(out, u"n=-5 0xBEEF [  7]") == 0 && len == 17);
 
+    /* narrow %hs decodes UTF-8 (CP_ACP == CP_UTF8), not Latin-1
+       zero-extension; astral code points become surrogate pairs */
+    static const WCHAR expu8[] = { 'h', 0x00E9, 'l', 'l', 'o', ' ', 0x20AC, '|', 'w', 0 };
+    len = wsprintfW(out, u"%hs|%s", "h\xc3\xa9llo \xe2\x82\xac", u"w");
+    check("wsprintfW %hs decodes UTF-8", len == 9 && lstrcmpW(out, expu8) == 0);
+    static const WCHAR expsp[] = { 0xD83D, 0xDE00, '!', 0 };
+    len = wsprintfW(out, u"%hs!", "\xf0\x9f\x98\x80");
+    check("wsprintfW %hs astral -> surrogate pair", len == 3 && lstrcmpW(out, expsp) == 0);
+
     /* the wide CRT */
     check("_tcslen/_tcscmp", _tcslen(u"abc") == 3 && _tcscmp(u"a", u"b") < 0);
     check("_tcsicmp", _tcsicmp(u"WinMine", u"WINMINE") == 0);

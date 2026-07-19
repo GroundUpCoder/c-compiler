@@ -23351,6 +23351,76 @@ struct lconv {
 char *setlocale(int category, const char *locale);
 struct lconv *localeconv(void);
   `,
+  "langinfo.h": `
+#pragma once
+__require_source("__locale.c");
+
+/* POSIX <langinfo.h> over the C/C.UTF-8 locale pair. CODESET is the
+   load-bearing item: this libc's mb/wc codec is unconditionally UTF-8
+   (MB_CUR_MAX 4), so CODESET answers "UTF-8" regardless of the name set
+   via setlocale (the musl model). The remaining items answer with the
+   portable C-locale strings. Item numbering is libc-private — there is
+   no external ABI to match. */
+typedef int nl_item;
+
+#define CODESET     0
+#define D_T_FMT     1
+#define D_FMT       2
+#define T_FMT       3
+#define T_FMT_AMPM  4
+#define AM_STR      5
+#define PM_STR      6
+#define DAY_1       7
+#define DAY_2       8
+#define DAY_3       9
+#define DAY_4       10
+#define DAY_5       11
+#define DAY_6       12
+#define DAY_7       13
+#define ABDAY_1     14
+#define ABDAY_2     15
+#define ABDAY_3     16
+#define ABDAY_4     17
+#define ABDAY_5     18
+#define ABDAY_6     19
+#define ABDAY_7     20
+#define MON_1       21
+#define MON_2       22
+#define MON_3       23
+#define MON_4       24
+#define MON_5       25
+#define MON_6       26
+#define MON_7       27
+#define MON_8       28
+#define MON_9       29
+#define MON_10      30
+#define MON_11      31
+#define MON_12      32
+#define ABMON_1     33
+#define ABMON_2     34
+#define ABMON_3     35
+#define ABMON_4     36
+#define ABMON_5     37
+#define ABMON_6     38
+#define ABMON_7     39
+#define ABMON_8     40
+#define ABMON_9     41
+#define ABMON_10    42
+#define ABMON_11    43
+#define ABMON_12    44
+#define RADIXCHAR   45
+#define THOUSEP     46
+#define YESEXPR     47
+#define NOEXPR      48
+#define CRNCYSTR    49
+#define ERA         50
+#define ERA_D_FMT   51
+#define ERA_D_T_FMT 52
+#define ERA_T_FMT   53
+#define ALT_DIGITS  54
+
+char *nl_langinfo(nl_item item);
+  `,
   "math.h": `
 #pragma once
 __require_source("__math.c");
@@ -24499,6 +24569,7 @@ struct termios {
 #define IXOFF   0x00400
 #define IXANY   0x00800
 #define IMAXBEL 0x02000
+#define IUTF8   0x04000
 
 #define OPOST   0x00001
 #define ONLCR   0x00002
@@ -27528,6 +27599,7 @@ unsigned ualarm(unsigned usecs, unsigned interval) {
   `,
   "__locale.c": `
 #include <locale.h>
+#include <langinfo.h>
 #include <string.h>
 
 static struct lconv __c_lconv = {
@@ -27551,15 +27623,51 @@ static struct lconv __c_lconv = {
   127,
 };
 
+/* The libc's charset is UTF-8 unconditionally (the real mb/wc UTF-8
+   codec, MB_CUR_MAX 4) — "C" and "C.UTF-8" differ only in the reported
+   name, and "" selects the native locale, which IS C.UTF-8. Apps probe
+   exactly this pair (setlocale then nl_langinfo(CODESET)) to key
+   UTF-8-aware behavior, so the probe must succeed. */
+static char __locale_name[12] = "C";
+
 char *setlocale(int category, const char *locale) {
-  if (locale == 0) return "C";
-  if (locale[0] == '\\0' || strcmp(locale, "C") == 0 || strcmp(locale, "POSIX") == 0)
-    return "C";
+  if (locale == 0) return __locale_name;
+  if (locale[0] == '\\0' || strcmp(locale, "C.UTF-8") == 0) {
+    strcpy(__locale_name, "C.UTF-8");
+    return __locale_name;
+  }
+  if (strcmp(locale, "C") == 0 || strcmp(locale, "POSIX") == 0) {
+    strcpy(__locale_name, "C");
+    return __locale_name;
+  }
   return 0;
 }
 
 struct lconv *localeconv(void) {
   return &__c_lconv;
+}
+
+/* nl_langinfo: C-locale answers; CODESET pinned to UTF-8 (see above).
+   Indices MUST match the <langinfo.h> item constants. */
+static const char *__nl_items[] = {
+  "UTF-8",                                          /* CODESET */
+  "%a %b %e %H:%M:%S %Y", "%m/%d/%y", "%H:%M:%S",   /* D_T_FMT D_FMT T_FMT */
+  "%I:%M:%S %p", "AM", "PM",                        /* T_FMT_AMPM AM_STR PM_STR */
+  "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+  "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat",
+  "January", "February", "March", "April", "May", "June", "July",
+  "August", "September", "October", "November", "December",
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul",
+  "Aug", "Sep", "Oct", "Nov", "Dec",
+  ".", "",                                          /* RADIXCHAR THOUSEP */
+  "^[yY]", "^[nN]",                                 /* YESEXPR NOEXPR */
+  "", "", "", "", "", "",                           /* CRNCYSTR ERA.. ALT_DIGITS */
+};
+
+char *nl_langinfo(nl_item item) {
+  if (item < 0 || item >= (int)(sizeof __nl_items / sizeof __nl_items[0]))
+    return "";
+  return (char *)__nl_items[item];
 }
   `,
   "__malloc.c": `
