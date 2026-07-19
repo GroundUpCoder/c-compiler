@@ -1,7 +1,7 @@
 %% posix-on-wasm.mgp - POSIX on WebAssembly (or: what is an OS anyway?)
-%% A gucOS talk (todos/0221): the list of things operating systems do and
-%% how each applies to gucOS - DO / DON'T / DON'T NEED TO. Uses only
-%% directives the 0119 port renders (the 0202 whitelist).
+%% A gucOS talk (todos/0221): what an OS does, the DO / DON'T / DON'T
+%% NEED TO split, and similar projects. Uses only directives the 0119
+%% port renders (the 0202 whitelist).
 %deffont "standard" tfont "/usr/share/fonts/mono.ttf"
 %default 1 area 90 90, size 2, fore "white", back "#301848", font "standard"
 %default 2 size 9, vgap 20, prefix " ", center
@@ -23,127 +23,74 @@ space / click: next page    b: back    q: quit
 
 What is an OS anyway?
 
-	"a thing that talks to the hardware
-	directly on behalf of host programs"
-		that is just ONE of the many things
-		an operating system does
-	this talk: the list of things an OS does,
-	and how each one applies to gucOS
+	hardware abstraction (HAL)
+	scheduling - who runs, and when
+	memory management
+	file system access
+	inter-process communication
+	device and I/O management
+	protection and isolation
+	a user interface - shell or desktop
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
 What is POSIX?
 
-	basically an operating system in the browser
+	Portable Operating System Interface
+	system-call C-library API
+	shell and command-line utilities
+	process, file and I/O model
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
-Isn't emscripten POSIX?
+gucOS
 
-	yes and no
-	emscripten lets you compile many programs
-	that expect a posix environment and
-	run them in the browser
-		but it doesn't give you the process
-		management features of an OS
+%area 28 60 5 32
+%size 6, center, fore "SpringGreen"
+DO
+%size 5, left, fore "white", vgap 32
+processes
+sound
+compositor
+file system
+shell
+isolation
+signals
+
+%area 28 60 36 32
+%size 6, center, fore "gold"
+DON'T
+%size 5, left, fore "white", vgap 32
+threads
+atomics
+fork / exec
+preemption
+
+%area 28 60 67 32
+%size 6, center, fore "orange"
+DON'T NEED TO
+%size 5, left, fore "white", vgap 32
+SMP
+drivers
+scheduler
+disk FS
+MMU
+boot
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
-But no desktop for free
+Similar projects
 
-	so it doesn't exactly give you a desktop
-	or window manager where you can click on
-	apps and have them all just run in
-	parallel and stuff, for free
-	you could build on top of it to do that
-		but that is actual real work
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%page
-
-What makes gucOS different?
-
-	so what is it, and what does it do?
-	(and don't operating systems normally
-	run on the hardware directly?)
-		sort the OS job list three ways:
-		DO / DON'T / DON'T NEED TO
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%page
-
-gucOS: DO
-
-	process management
-	sound server
-		mixes audio from multiple processes
-	desktop compositor and window manager
-	persistent file system - blockfs
-	real shell - busybox hush
-	address space isolation
-		(but see the MMU slide)
-	signals - cooperative
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%page
-
-gucOS: DON'T
-
-	threads - pthreads etc
-		tricky with shared memory,
-		adds overhead
-	atomics
-	fork / exec
-		also doesn't work well with wasm
-	preemptive signals
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%page
-
-gucOS: DON'T NEED TO
-
-	SMP - multicore handled by the browser
-	low-level drivers - just web APIs
-		the browser is the HAL
-		(hardware abstraction layer)
-	preemptive scheduler
-		doesn't work well with wasm / web
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%page
-
-DON'T NEED TO, part 2
-
-	raw-disk-friendly file systems
-		ext4 / ntfs are built for spinning
-		disks and ssds
-	MMU - direct hardware for memory management
-	boot - bootloader / BIOS / UEFI
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%page
-
-Why not just emulate?
-
-	emulators like tinyemu or v86 CAN have
-	preemptive threads
-		you can run custom code after
-		every cpu cycle
-	but that's insanely slow
-		the trade-off of emulation
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%page
-
-Prior art
-
-	Browsix - similar architecture, has fork,
-		but no window manager
-	Wasix - ambition for full POSIX on wasm,
-		but pays a lot for it
-	emulators - tinyemu, v86
-	JIT emulators - WebVM / CheerpX
+	emscripten - single process
+	emulators - emulate a whole x86 / ARM cpu,
+		so expensive
+	wasix / browsix - pay for fork / exec
+		to get full POSIX
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
 The end
 
-%size 5, center
-gucOS: POSIX enough, in a browser tab
 %size 3, fore "gray70", center
 
-this deck is plain text - right-click it,
-pick Edit, and make it yours    (q quits)
+(q quits)
