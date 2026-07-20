@@ -30,6 +30,11 @@ const TokenKind = Object.freeze({
   INT: "INT",
   FLOAT: "FLOAT",
   PLACEMARKER: "PLACEMARKER",
+  // A structural pragma the parser needs positionally (currently only
+  // `#pragma pack`). The preprocessor emits it into the token stream;
+  // postProcess resolves it into a per-struct pack value and drops it, so
+  // it never reaches the parser (todos/0191).
+  PRAGMA: "PRAGMA",
   // A non-white-space character that forms no other token (C11 6.4p1's
   // "each non-white-space character that cannot be one of the above" —
   // @, $, `). Valid as a pp-token; diagnosed only if it survives
@@ -226,6 +231,13 @@ class Token {
     // own macro's expansion — never eligible for macro replacement again.
     this.noExpand = false;
     this.flags = new TokenFlags();
+    // PRAGMA tokens carry their directive here ({op, n} for `#pragma pack`);
+    // postProcess consumes and drops them (todos/0191).
+    this.pragma = null;
+    // Pack alignment cap (bytes) in effect where a `struct`/`union` keyword
+    // sits, stamped by postProcess from the resolved `#pragma pack` stack.
+    // 0 = natural alignment (no pack pragma active).
+    this.packValue = 0;
     Object.seal(this);
   }
 
@@ -1189,6 +1201,32 @@ function postProcess(lexResult) {
     }
   }
 
+  // Resolve `#pragma pack` (todos/0191): walk the stream keeping the MSVC/gcc
+  // pack stack, stamp the alignment cap in effect onto each `struct`/`union`
+  // keyword (parseTagSpecifier reads it), and drop the PRAGMA markers so the
+  // parser never sees them.
+  if (lexResult.tokens.some((t) => t.kind === TokenKind.PRAGMA)) {
+    const kept = [];
+    let cur = 0;              // current pack cap in bytes (0 = natural)
+    const stack = [];
+    for (const t of lexResult.tokens) {
+      if (t.kind === TokenKind.PRAGMA) {
+        const p = t.pragma;
+        if (p && p.op === "set") cur = p.n > 0 ? p.n : 0;
+        else if (p && p.op === "reset") cur = 0;
+        else if (p && p.op === "push") { stack.push(cur); if (p.n != null && p.n > 0) cur = p.n; }
+        else if (p && p.op === "pop") { if (stack.length) cur = stack.pop(); }
+        continue; // drop the marker
+      }
+      if (t.kind === TokenKind.KEYWORD &&
+          (t.keyword === Keyword.STRUCT || t.keyword === Keyword.UNION)) {
+        t.packValue = cur;
+      }
+      kept.push(t);
+    }
+    lexResult.tokens = kept;
+  }
+
   return lexResult;
 }
 
@@ -1350,6 +1388,38 @@ function preprocess(filename, initialTokens, ppRegistry) {
     }
   }
 
+  // `#pragma pack` (todos/0191): parse the MSVC/gcc-compatible forms into an
+  // op the parser applies to struct layout. Returns a PRAGMA marker token
+  // to splice into the stream, or null if `toks` is not a pack pragma.
+  //   pack(n)        -> {op:'set', n}
+  //   pack()         -> {op:'reset'}      (back to default alignment)
+  //   pack(push)     -> {op:'push'}
+  //   pack(push, n)  -> {op:'push', n}
+  //   pack(pop)      -> {op:'pop'}
+  function packPragmaMarker(toks, currentFile, line) {
+    if (toks.length === 0 || !toks[0].atIdent("pack")) return null;
+    // Collect the tokens inside pack( ... ), ignoring the parentheses.
+    const inner = toks.slice(1).filter(
+      (t) => !t.atPunct(Punct.LPAREN) && !t.atPunct(Punct.RPAREN) &&
+             !t.atPunct(Punct.COMMA));
+    let op;
+    if (inner.length === 0) {
+      op = { op: "reset", n: null };
+    } else if (inner[0].atIdent("push")) {
+      const n = inner[1] ? parseInt(inner[1].text, 10) : null;
+      op = { op: "push", n: Number.isFinite(n) ? n : null };
+    } else if (inner[0].atIdent("pop")) {
+      op = { op: "pop", n: null };
+    } else {
+      const n = parseInt(inner[0].text, 10);
+      if (!Number.isFinite(n)) return null;
+      op = { op: "set", n };
+    }
+    const marker = new Token(currentFile, line || 0, 0, TokenKind.PRAGMA, "#pragma pack");
+    marker.pragma = op;
+    return marker;
+  }
+
   // C11 6.10.9p1 destringize: drop any encoding prefix and the quotes,
   // then \" -> " and \\ -> \.
   function destringize(text) {
@@ -1362,6 +1432,51 @@ function preprocess(filename, initialTokens, ppRegistry) {
     const toks = lexed.tokens.filter(tk =>
       tk.kind !== TokenKind.EOS && tk.kind !== TokenKind.NEWLINE);
     applyPragma(toks, currentFile);
+    // C11 6.10.9: `_Pragma("pack(1)")` is equivalent to `#pragma pack(1)`.
+    return packPragmaMarker(toks, currentFile, strTok.line);
+  }
+
+  // Does `tok` name the `defined` operator, directly or through an
+  // object-like macro alias chain (`#define D defined`)? gcc/clang honor a
+  // `defined` produced by such an expansion inside `#if`/`#elif` — strictly
+  // UB per C11 6.10.1p4, but portable config headers rely on it (todos/0195).
+  function aliasesToDefined(tok, seen) {
+    if (tok.atIdent("defined")) return true;
+    if (tok.kind !== TokenKind.IDENT || !macros.has(tok.text) || seen.has(tok.text)) return false;
+    const m = macros.get(tok.text);
+    if (m.isFunctionLike || m.replacement.length !== 1) return false;
+    seen.add(tok.text);
+    return aliasesToDefined(m.replacement[0], seen);
+  }
+
+  // Resolve `defined` operators on a #if/#elif controlling line BEFORE macro
+  // expansion, so the operand is taken literally and never macro-expanded
+  // (C11 6.10.1p1). Handles both the literal `defined X`/`defined(X)` forms
+  // and a `defined` reached through an object-like alias (todos/0195). The
+  // operand identifier is looked up as a macro NAME for defined-ness; it does
+  // not go through expansion, so `#define FOO 1` / `#if D(FOO)` sees FOO the
+  // name (defined) rather than its replacement 1.
+  function resolveDefinedOperators(tokens) {
+    const out = [];
+    for (let i = 0; i < tokens.length; i++) {
+      const t = tokens[i];
+      if (aliasesToDefined(t, new Set())) {
+        let j = i + 1, paren = false;
+        if (j < tokens.length && tokens[j].atPunct(Punct.LPAREN)) { paren = true; j++; }
+        if (j < tokens.length && tokens[j].kind === TokenKind.IDENT) {
+          const resultTok = cloneToken(t);
+          resultTok.kind = TokenKind.PP_NUMBER;
+          resultTok.text = macros.has(tokens[j].text) ? "1" : "0";
+          out.push(resultTok);
+          i = j;
+          if (paren && i + 1 < tokens.length && tokens[i + 1].atPunct(Punct.RPAREN)) i++;
+          continue;
+        }
+        // Malformed `defined` — leave as-is; expand/evaluate reports it.
+      }
+      out.push(t);
+    }
+    return out;
   }
 
   // --- 2. CENTRALIZED EXPANSION HELPER ---
@@ -1450,6 +1565,11 @@ function preprocess(filename, initialTokens, ppRegistry) {
             argStart++;
           if (argStart < tokens.length && tokens[argStart].atPunct(Punct.LPAREN)) {
             const args = [];
+            // Leading-whitespace flag of each argument-separating comma, so a
+            // stringized __VA_ARGS__ keeps the space BEFORE the delimiter
+            // (`#__VA_ARGS__` of `S(a , b)` is "a , b" — todos/0196).
+            // argCommaSpace[k] is the comma between args[k] and args[k+1].
+            const argCommaSpace = [];
             let currentArg = [];
             let parenDepth = 1;
             let j = argStart + 1;
@@ -1466,6 +1586,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
                 if (parenDepth > 0) currentArg.push(argTok);
               } else if (argTok.atPunct(Punct.COMMA) && parenDepth === 1) {
                 args.push(currentArg);
+                argCommaSpace.push(argTok.flags.hasSpace);
                 currentArg = [];
               } else {
                 currentArg.push(argTok);
@@ -1496,6 +1617,9 @@ function preprocess(filename, initialTokens, ppRegistry) {
                 if (p > m.params.length) {
                   const comma = new Token(null, 0, 0, TokenKind.PUNCT, intern(","));
                   comma.punct = Punct.COMMA;
+                  // Carry the original delimiter comma's leading-whitespace bit
+                  // so `#__VA_ARGS__` preserves the space before it (todos/0196).
+                  comma.flags.hasSpace = argCommaSpace[p - 1] || false;
                   vaRaw.push(comma);
                   vaArgs.push(comma);
                 }
@@ -1995,7 +2119,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
             // nesting (C11 6.10p6) — expanding/evaluating them there would
             // diagnose expressions the standard says to ignore.
             if (isActive()) {
-              const expandedTokens = expand(lineTokens, new Set());
+              const expandedTokens = expand(resolveDefinedOperators(lineTokens), new Set());
               condition = evaluateExpression(expandedTokens, (msg) =>
                 result.errors.push(new LexError(msg, state.currentFile, dir.line))) !== 0n;
             }
@@ -2025,7 +2149,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
             // means the expression is ignored per C11 6.10p6.
             let condition = false;
             if (parentActive && !top.anyBranchRan) {
-              const expandedTokens = expand(lineTokens, new Set());
+              const expandedTokens = expand(resolveDefinedOperators(lineTokens), new Set());
               condition = evaluateExpression(expandedTokens, (msg) =>
                 result.errors.push(new LexError(msg, state.currentFile, dir.line))) !== 0n;
             }
@@ -2216,6 +2340,8 @@ function preprocess(filename, initialTokens, ppRegistry) {
             while (!state.atEnd && state.peek().kind !== TokenKind.NEWLINE)
               lineTokens.push(state.consume());
             applyPragma(lineTokens, state.currentFile);
+            const packMarker = packPragmaMarker(lineTokens, state.currentFile, dir.line);
+            if (packMarker) output.push(packMarker);
           } else if (dir.kind === TokenKind.IDENT) {
             // C11 6.10p1: a '#' line whose first token names no directive
             // is a non-directive — a constraint violation clang/gcc
@@ -2253,7 +2379,8 @@ function preprocess(filename, initialTokens, ppRegistry) {
           if (state.peek().atPunct(Punct.LPAREN)) {
             state.consume();
             if (!state.atEnd && state.peek().kind === TokenKind.STRING) {
-              executePragmaOperator(state.consume(), state.currentFile);
+              const packMarker = executePragmaOperator(state.consume(), state.currentFile);
+              if (packMarker) output.push(packMarker);
               if (!state.atEnd && state.peek().atPunct(Punct.RPAREN)) {
                 state.consume();
               }
@@ -2801,6 +2928,17 @@ class TagType extends TypeInfo {
   isStruct() { return this.tagKind === TagKind.STRUCT; }
   isUnion()  { return this.tagKind === TagKind.UNION; }
   isEnum()   { return this.tagKind === TagKind.ENUM; }
+  // The signedness of the enum's implementation-defined compatible type
+  // (C11 6.7.2.2p4). clang/gcc pick `unsigned int` when every enumerator is
+  // >= 0, else `int`. Used for enum bit-field read extension (todos/0189).
+  // An incomplete/forward enum has no enumerators yet — treat as signed.
+  enumIsUnsigned() {
+    if (this.tagKind !== TagKind.ENUM || !this.tagDecl) return false;
+    for (const m of this.tagDecl.members) {
+      if (m.value < 0n) return false;
+    }
+    return true;
+  }
   isAggregate() { return this.isStruct() || this.isUnion(); }
   _toString() { return this.tagKind + " " + this.tagName; }
   _eqStructure(other, _seen) {
@@ -3063,14 +3201,25 @@ function gcArrayOf(elementType) {
   return t;
 }
 
-function computeStructLayout(members, isPacked = false) {
+function computeStructLayout(members, packAlign = 0) {
+  // packAlign: `#pragma pack`/attribute alignment cap in bytes (0 = natural).
+  // A cap of 1 is full byte-packing (`__attribute__((packed))` / pack(1)):
+  // the bit-field internals below key on that for contiguous byte-anchored
+  // packing; a cap of 2/4/8 only lowers each member's alignment (todos/0191).
+  const isPacked = packAlign === 1;
   let size = 0;
   let maxAlign = 1;
-  // Bitfield packing state
-  let bfBitsUsed = 0;
-  let bfUnitSize = 0;
-  let bfMaxAccess = 0;  // widest named-member access window in the run
+  // Bit-field packing state. Placement follows the psABI (Itanium / what
+  // clang tracks on wasm32): bit-fields of ANY declared type share one
+  // packed bit region measured from the struct start; each field goes at
+  // the current bit cursor unless it would straddle a container boundary of
+  // its own declared type, in which case it advances to the next such
+  // boundary (todos/0190 — keying the "unit" on the declared type split
+  // adjacent mixed-type fields into separate units, diverging from clang on
+  // sizeof and on every following member's offset).
+  let bfCursor = 0;     // absolute bit position (from struct start) of the next field
   let inBitField = false;
+  let bfPackedEnd = 0;  // packed: max byte-end of any access window in the run
 
   // A bit-field's access window: the smallest power-of-2 byte count,
   // anchored at the storage unit's start, that covers the member's bits.
@@ -3081,7 +3230,7 @@ function computeStructLayout(members, isPacked = false) {
   const windowBytes = (m, endBit) => {
     if (m.type.size === 8) return 8;
     const b = (endBit + 7) >> 3;
-    return b <= 1 ? 1 : b <= 2 ? 2 : 4;
+    return b <= 1 ? 1 : b <= 2 ? 2 : b <= 4 ? 4 : 8;
   };
   // Close the open unit: advance past the USED bytes only — a following
   // member packs into the unit's unused tail bytes exactly as clang wasm32
@@ -3090,13 +3239,18 @@ function computeStructLayout(members, isPacked = false) {
   // structs advance past the widest access window instead, so no member's
   // RMW load/store can reach beyond the struct.
   const closeBfUnit = () => {
-    const usedBytes = (bfBitsUsed + 7) >> 3;
-    size += isPacked ? Math.max(usedBytes, bfMaxAccess) : usedBytes;
-    inBitField = false; bfBitsUsed = 0; bfMaxAccess = 0;
+    size = Math.max(size, (bfCursor + 7) >> 3);
+    // Packed: a member's RMW window can extend past its used bits; the
+    // struct must cover it so the store never runs off the end (todos/0216).
+    if (isPacked) size = Math.max(size, bfPackedEnd);
+    inBitField = false; bfCursor = 0; bfPackedEnd = 0;
   };
 
   for (const m of members) {
-    const naturalAlign = isPacked ? 1 : (m.type.align || 1);
+    // `#pragma pack(N)` / attribute packed lower each member's alignment to
+    // at most the pack cap; an explicit _Alignas/aligned still raises it.
+    const nat = m.type.align || 1;
+    const naturalAlign = packAlign > 0 ? Math.min(nat, packAlign) : nat;
     const mAlign = m.requestedAlignment > 0 ? Math.max(naturalAlign, m.requestedAlignment) : naturalAlign;
     const mSize = m.type.size;
 
@@ -3115,34 +3269,41 @@ function computeStructLayout(members, isPacked = false) {
 
     if (m.bitWidth >= 0) {
       const bw = m.bitWidth;
-      const unitBits = mSize * 8;
+      const containerBits = mSize * 8;
 
-      // Bit-fields share a storage unit when their declared types have the
-      // same size and the bits fit. Signedness does NOT split the unit —
-      // every major ABI (and clang/gcc) packs `int a:3; unsigned b:3`
-      // into one unit; sign extension is applied per-member at access
-      // time from bitWidth + the member's own type.
-      if (inBitField && mSize === bfUnitSize &&
-          bfBitsUsed + bw <= unitBits) {
-        // Fits in current storage unit
-        m.bitOffset = bfBitsUsed;
-        m.byteOffset = size;
-        bfBitsUsed += bw;
-      } else {
-        // Finish previous unit if any
-        if (inBitField) closeBfUnit();
-        // Start new storage unit
-        size = (size + mAlign - 1) & ~(mAlign - 1);
-        m.bitOffset = 0;
-        m.byteOffset = size;
-        bfBitsUsed = bw;
-        bfUnitSize = mSize;
-        inBitField = true;
+      // All adjacent bit-fields share one bit region regardless of declared
+      // type (signedness never splits it either — `int a:3; unsigned b:3`
+      // is one region; sign extension is per-member at access time).
+      if (!inBitField) { bfCursor = size * 8; inBitField = true; }
+      let absStart = bfCursor;
+      if (!isPacked && bw > 0 &&
+          Math.floor(absStart / containerBits) !== Math.floor((absStart + bw - 1) / containerBits)) {
+        // Would straddle a container boundary of the declared type: advance
+        // to the next such boundary (psABI). A same-type run fills its
+        // container in order and never trips this; a wider following type
+        // that doesn't fit the remaining bits starts a fresh container.
+        absStart = Math.ceil(absStart / containerBits) * containerBits;
       }
+      if (isPacked) {
+        // No container constraint: bits pack contiguously, byte-anchored.
+        m.byteOffset = absStart >> 3;
+        m.bitOffset = absStart & 7;
+      } else {
+        // Anchor the access window at the field's declared-type container.
+        // The field can't straddle it, so the window stays inside — and a
+        // store RMW preserves any member tail-packed into the same bytes.
+        const containerByte = Math.floor(absStart / containerBits) * mSize;
+        m.byteOffset = containerByte;
+        m.bitOffset = absStart - containerByte * 8;
+      }
+      bfCursor = absStart + bw;
       m.bfAccessBytes = windowBytes(m, m.bitOffset + bw);
       // Anonymous bit-fields reserve bits but are never accessed, so they
       // don't widen the packed advance past their used bytes.
-      if (m.name && m.bfAccessBytes > bfMaxAccess) bfMaxAccess = m.bfAccessBytes;
+      if (isPacked && m.name) {
+        const endByte = m.byteOffset + m.bfAccessBytes;
+        if (endByte > bfPackedEnd) bfPackedEnd = endByte;
+      }
     } else {
       // Regular (non-bitfield) member: finish any pending bitfield unit
       if (inBitField) closeBfUnit();
@@ -3158,7 +3319,7 @@ function computeStructLayout(members, isPacked = false) {
   return { size, align: maxAlign };
 }
 
-function computeUnionLayout(members, isPacked = false) {
+function computeUnionLayout(members, packAlign = 0) {
   let maxSize = 0;
   let maxAlign = 1;
   for (const m of members) {
@@ -3167,7 +3328,9 @@ function computeUnionLayout(members, isPacked = false) {
     // Per-member _Alignas/__attribute__((aligned)) raises the union's
     // alignment exactly as the struct path does (todos/0216 — it was
     // silently ignored here, diverging from clang on align AND size).
-    const naturalAlign = isPacked ? 1 : (m.type.align || 1);
+    // `#pragma pack(N)`/packed cap the natural alignment (todos/0191).
+    const nat = m.type.align || 1;
+    const naturalAlign = packAlign > 0 ? Math.min(nat, packAlign) : nat;
     const mAlign = m.requestedAlignment > 0 ? Math.max(naturalAlign, m.requestedAlignment) : naturalAlign;
     if (mAlign > maxAlign) maxAlign = mAlign;
   }
@@ -3758,6 +3921,9 @@ class Expr {
       this.bitWidth = -1; this.bitOffset = 0; this.byteOffset = 0;
       this.bfAccessBytes = 0;  // bit-field RMW window, set by computeStructLayout
       this.requestedAlignment = 0;
+      // For an enum bit-field: the pre-erasure enum type, whose compatible
+      // type drives the read sign/zero-extension (todos/0189). Null otherwise.
+      this.enumBitField = null;
       Object.seal(this);
     }
   }
@@ -5231,7 +5397,7 @@ function makeIdent(loc, name, scope) {
 }
 
 // Build an ESubscript, applying C semantics:
-//   - reject commutative form `0[arr]` (we choose not to support it)
+//   - normalize the commutative form `N[arr]` to `arr[N]` (C11 6.5.2.1p2)
 //   - reject subscript on a reference type
 //   - decay an array base to a pointer (GC arrays stay — they aren't C arrays)
 //   - infer element type from the base's pointer/array element
@@ -5239,13 +5405,16 @@ function makeIdent(loc, name, scope) {
 // Diagnostics flow through the active `withDiag` sink. Always returns an
 // ESubscript (best-effort even on errors).
 function makeSubscript(loc, base, index) {
-  const baseUt = base.type.removeQualifiers();
-  const idxUt = index.type.removeQualifiers();
-  // Reverse-order subscript (`5[arr]`) — rejected as our compiler
-  // doesn't support C99's commutative form.
-  if (baseUt.isInteger() &&
-      (idxUt.isPointer() || idxUt.isArray())) {
-    reportError(loc, "Commutative subscript (e.g. 0[arr]) is not supported; write arr[0] instead");
+  let baseUt = base.type.removeQualifiers();
+  let idxUt = index.type.removeQualifiers();
+  // C11 6.5.2.1p2: `E1[E2]` is defined as `*((E1)+(E2))`, and addition is
+  // commutative, so `N[arr]` is legal and equal to `arr[N]`. Normalize it by
+  // swapping to the array/pointer-first form before the usual lowering
+  // (todos/0193).
+  if (baseUt.isInteger() && (idxUt.isPointer() || idxUt.isArray())) {
+    const tmp = base; base = index; index = tmp;
+    baseUt = base.type.removeQualifiers();
+    idxUt = index.type.removeQualifiers();
   }
   // Base must be pointer / array / GC-array. Without this check
   // codegen would emit `base_addr + idx*sizeof(elem)` against a
@@ -10222,9 +10391,13 @@ class Parser {
           this.error(alignTok, "_Alignas value must be a positive power of 2");
         }
         // C11 6.2.8: extended alignments (> max_align_t = 8 on wasm32) are
-        // implementation-defined. We don't support them.
-        if (alignVal > 8) {
-          this.error(alignTok, `_Alignas(${alignVal}) exceeds maximum supported alignment of 8`);
+        // implementation-defined. This compiler honors them for both static
+        // storage (data section, region base 64 KiB-aligned) and automatic
+        // storage (over-aligned frame slot — same path as the already-uncapped
+        // __attribute__((aligned(N)))), so `_Alignas` no longer caps at 8
+        // (todos/0194). Guard only the data-section alignment ceiling here.
+        if (alignVal > 65536) {
+          this.error(alignTok, `_Alignas(${alignVal}) exceeds maximum supported alignment of 65536`);
         }
         if (alignVal > requestedAlignment) requestedAlignment = alignVal;
         continue;
@@ -10358,18 +10531,26 @@ class Parser {
     }
 
     // In C, enum types are compatible with int. Erase enum types to int
-    // early so codegen never needs to handle them as a special case.
+    // early so codegen never needs to handle them as a special case. Keep
+    // the pre-erasure enum around: an enum *bit-field* must follow the
+    // enum's compatible-type signedness for its read extension (C11
+    // 6.7.2.2p4 — clang/gcc make an all-non-negative enum unsigned int, so
+    // the field zero-extends). See emitBitFieldLoad / todos/0189.
+    const enumType = type.isEnum() ? type : null;
     if (type.isEnum()) type = Types.TINT;
 
     if (isConst) type = type.addConst();
     if (isVolatile) type = type.addVolatile();
 
-    return { type, storageClass, isInline, attrFlags, requestedAlignment, importModule, importName };
+    return { type, enumType, storageClass, isInline, attrFlags, requestedAlignment, importModule, importName };
   }
 
   // --- Tag specifier (struct/union) ---
   parseTagSpecifier() {
     let tagKind;
+    // The `#pragma pack` cap in effect at this keyword (stamped by
+    // postProcess; 0 = natural alignment). todos/0191.
+    const pragmaPack = this.peek().packValue || 0;
     if (this.matchKW(Lexer.Keyword.STRUCT)) tagKind = Types.TagKind.STRUCT;
     else { this.advance(); tagKind = Types.TagKind.UNION; }
 
@@ -10510,6 +10691,11 @@ class Parser {
           const mVar = new AST.DVar({ filename: this.peek().filename, line: this.peek().line },
             mName, mType, Types.StorageClass.NONE, null);
           mVar.bitWidth = bitWidth;
+          // An enum bit-field reads back with the signedness of the enum's
+          // compatible type, not of the erased `int` (todos/0189). The enum
+          // is erased to int in parseDeclSpecifiers; carry the original for
+          // emitBitFieldLoad's sign/zero-extension choice.
+          if (bitWidth >= 0 && memSpecs.enumType) mVar.enumBitField = memSpecs.enumType;
           if (memSpecs.requestedAlignment > 0) {
             if (bitWidth >= 0) {
               this.error(this.peek(), "_Alignas cannot be applied to a bit-field");
@@ -10529,13 +10715,17 @@ class Parser {
       const postTagAttrs = this.parseGCCAttributes();
       if (tagAttrs.packed || postTagAttrs.packed) tagDecl.isPacked = true;
 
+      // Effective pack cap (bytes): `__attribute__((packed))` is the strongest
+      // (byte-tight, cap 1); otherwise the `#pragma pack(N)` cap in effect.
+      const packAlign = tagDecl.isPacked ? 1 : pragmaPack;
+
       // Compute layout
       if (tagKind === Types.TagKind.STRUCT) {
-        const layout = Types.computeStructLayout(members, tagDecl.isPacked);
+        const layout = Types.computeStructLayout(members, packAlign);
         tagType.size = layout.size;
         tagType.align = layout.align;
       } else if (tagKind === Types.TagKind.UNION) {
-        const layout = Types.computeUnionLayout(members, tagDecl.isPacked);
+        const layout = Types.computeUnionLayout(members, packAlign);
         tagType.size = layout.size;
         tagType.align = layout.align;
       }
@@ -10897,12 +11087,22 @@ class Parser {
         const fitsI32 = val <= 0x7FFFFFFFn;
         const fitsU32 = val <= 0xFFFFFFFFn;
         const fitsI64 = val <= 0x7FFFFFFFFFFFFFFFn;
+        // A decimal constant that fits no SIGNED candidate type (> LLONG_MAX)
+        // but fits unsigned long long: C11 6.4.4.1p5's candidate list is
+        // signed-only, so this is ill-formed — but gcc/clang extend it to
+        // `unsigned long long` with a warning rather than silently wrapping
+        // it negative (todos/0192; the old `isDecimal ? TLLONG` wrapped it,
+        // flipping the signedness of every surrounding conversion).
+        const oorDecimalToULL = () => {
+          this.warning(t, `integer constant ${val} is so large that it is unsigned`);
+          return Types.TULLONG;
+        };
 
         if (!t.flags.isUnsigned && !t.flags.isLong && !t.flags.isLongLong) {
           if (fitsI32) type = Types.TINT;
           else if (!isDecimal && fitsU32) type = Types.TUINT;
           else if (fitsI64) type = Types.TLLONG;
-          else type = isDecimal ? Types.TLLONG : Types.TULLONG;
+          else type = isDecimal ? oorDecimalToULL() : Types.TULLONG;
         } else if (t.flags.isUnsigned && !t.flags.isLong && !t.flags.isLongLong) {
           if (fitsU32) type = Types.TUINT;
           else type = Types.TULLONG;
@@ -10910,13 +11110,13 @@ class Parser {
           if (fitsI32) type = Types.TLONG;
           else if (!isDecimal && fitsU32) type = Types.TULONG;
           else if (fitsI64) type = Types.TLLONG;
-          else type = isDecimal ? Types.TLLONG : Types.TULLONG;
+          else type = isDecimal ? oorDecimalToULL() : Types.TULLONG;
         } else if (t.flags.isUnsigned && t.flags.isLong && !t.flags.isLongLong) {
           if (fitsU32) type = Types.TULONG;
           else type = Types.TULLONG;
         } else if (!t.flags.isUnsigned && t.flags.isLongLong) {
           if (fitsI64) type = Types.TLLONG;
-          else type = isDecimal ? Types.TLLONG : Types.TULLONG;
+          else type = isDecimal ? oorDecimalToULL() : Types.TULLONG;
         }
         // ULL: always Types.TULLONG, already set
       }
@@ -18339,7 +18539,12 @@ class CodeGenerator {
   }
   emitBitFieldLoad(field) {
     const bw = field.bitWidth, bo = field.bitOffset;
-    const isUnsigned = this.isUnsignedType(field.type);
+    // An enum bit-field extends per its enum's compatible-type signedness
+    // (C11 6.7.2.2p4), not the erased `int`: an all-non-negative enum is
+    // unsigned int in clang/gcc, so the field zero-extends (todos/0189).
+    const isUnsigned = field.enumBitField
+      ? field.enumBitField.enumIsUnsigned()
+      : this.isUnsignedType(field.type);
     const unitBytes = this._bfUnitBytes(field);
     // i32 path covers 1/2/4-byte windows; i64 path covers 8-byte storage
     // (8-byte units never narrow, so the value domain matches the type).
