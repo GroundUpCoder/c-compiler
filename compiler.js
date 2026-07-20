@@ -11028,12 +11028,22 @@ class Parser {
         const fitsI32 = val <= 0x7FFFFFFFn;
         const fitsU32 = val <= 0xFFFFFFFFn;
         const fitsI64 = val <= 0x7FFFFFFFFFFFFFFFn;
+        // A decimal constant that fits no SIGNED candidate type (> LLONG_MAX)
+        // but fits unsigned long long: C11 6.4.4.1p5's candidate list is
+        // signed-only, so this is ill-formed — but gcc/clang extend it to
+        // `unsigned long long` with a warning rather than silently wrapping
+        // it negative (todos/0192; the old `isDecimal ? TLLONG` wrapped it,
+        // flipping the signedness of every surrounding conversion).
+        const oorDecimalToULL = () => {
+          this.warning(t, `integer constant ${val} is so large that it is unsigned`);
+          return Types.TULLONG;
+        };
 
         if (!t.flags.isUnsigned && !t.flags.isLong && !t.flags.isLongLong) {
           if (fitsI32) type = Types.TINT;
           else if (!isDecimal && fitsU32) type = Types.TUINT;
           else if (fitsI64) type = Types.TLLONG;
-          else type = isDecimal ? Types.TLLONG : Types.TULLONG;
+          else type = isDecimal ? oorDecimalToULL() : Types.TULLONG;
         } else if (t.flags.isUnsigned && !t.flags.isLong && !t.flags.isLongLong) {
           if (fitsU32) type = Types.TUINT;
           else type = Types.TULLONG;
@@ -11041,13 +11051,13 @@ class Parser {
           if (fitsI32) type = Types.TLONG;
           else if (!isDecimal && fitsU32) type = Types.TULONG;
           else if (fitsI64) type = Types.TLLONG;
-          else type = isDecimal ? Types.TLLONG : Types.TULLONG;
+          else type = isDecimal ? oorDecimalToULL() : Types.TULLONG;
         } else if (t.flags.isUnsigned && t.flags.isLong && !t.flags.isLongLong) {
           if (fitsU32) type = Types.TULONG;
           else type = Types.TULLONG;
         } else if (!t.flags.isUnsigned && t.flags.isLongLong) {
           if (fitsI64) type = Types.TLLONG;
-          else type = isDecimal ? Types.TLLONG : Types.TULLONG;
+          else type = isDecimal ? oorDecimalToULL() : Types.TULLONG;
         }
         // ULL: always Types.TULLONG, already set
       }
