@@ -120,6 +120,26 @@ enum {
                                           default table reproducing the legacy
                                           cycle/menu/snap/sysmenu chords; last-
                                           subscriber-gone resets to it */
+    /* Window overview / Exposé (todos/EXPOSE-MISSION-CONTROL.md). NOTE the
+     * numbering: the design doc drafted these at 0x35/0x92 as "the next free
+     * slots", but the keybind grab-table chunk landed 0x35 (GRAB_SET) and 0x92
+     * (EV_HOTKEY) first — so they take the ACTUAL next-free slots (0x36-0x38
+     * commands, 0x93-0x94 events), honouring the doc's stated intent. */
+    WMP_OVERVIEW_SET = 0x36,           /* { n, n x (sid, x, y, w, h) }: enter the
+                                          overview (or relayout if already up)
+                                          with these miniature cell rects. Kernel
+                                          validates sids (dead dropped), stores,
+                                          bumps. Subscriber-only (R_ERR otherwise
+                                          — a presentation takeover) */
+    WMP_OVERVIEW_END = 0x37,           /* { }: leave the overview. Subscriber-
+                                          only. Pure presentation clear — no
+                                          focus/z/geometry change */
+    WMP_OVERVIEW = 0x38,               /* { }: command-side gesture (the CYCLE/
+                                          MENU pattern) — fires EV_OVERVIEW at the
+                                          subscriber; R_ERR with no WM. Serves
+                                          `wmctl overview`. (The Ctrl+Alt+E chord
+                                          rides the grab table's KTOK_OVERVIEW ->
+                                          EV_HOTKEY instead — see keys.h) */
     /* replies */
     WMP_R_OK = 0x40, WMP_R_ERR = 0x41, WMP_R_LIST = 0x42, WMP_R_SHOT = 0x43,
     WMP_R_IDLE = 0x44,                 /* { ms }: the GET_IDLE reply (todos/
@@ -199,6 +219,20 @@ enum {
                                           table's RESERVED tokens (high bit)
                                           emit the legacy events instead; only
                                           with a subscriber */
+    WMP_EV_OVERVIEW = 0x93,           /* { }: toggle the window overview
+                                          (todos/EXPOSE-MISSION-CONTROL.md) — an
+                                          OVERVIEW command (wmctl overview). The
+                                          Ctrl+Alt+E chord reaches wm.c via
+                                          EV_HOTKEY { KTOK_OVERVIEW } instead
+                                          (the grab table); this is the command-
+                                          side twin, the EV_MENU pattern. Only
+                                          with a subscriber */
+    WMP_EV_OVERVIEW_PICK = 0x94,      /* { sid }: while the overview is up the
+                                          user chose — a pointer-down landed in
+                                          cell `sid`, or dismissed (sid = 0:
+                                          background click or Esc). Policy exits
+                                          and (sid != 0) restores+focuses+raises
+                                          that window */
 };
 
 #define WMP_GRAB_MAX 64                /* GRAB_SET n cap (kernel WM_GRAB_MAX) */
@@ -279,11 +313,12 @@ static int wmp_send(int fd, uint32_t type, const int32_t *args, int nargs) {
 }
 
 /* Send one command frame with n i32 args, n NOT capped at wmp_send's small
- * fast-path limit — GRAB_SET's replace-whole-table payload is 1 + 3*n triples,
- * up to 1 + 3*WMP_GRAB_MAX. Same wire format as wmp_send (a single write, so
- * the frame is atomic on the stream). Returns 0, or -1. */
+ * fast-path limit — GRAB_SET's replace-whole-table payload is 1 + 3*n triples
+ * (up to 1 + 3*WMP_GRAB_MAX), and OVERVIEW_SET's is 1 + 5*n cell tuples (up to
+ * 1 + 5*WMP_GRAB_MAX; MAX_WIN <= WMP_GRAB_MAX). Same wire format as wmp_send (a
+ * single write, so the frame is atomic on the stream). Returns 0, or -1. */
 static int wmp_sendv(int fd, uint32_t type, const int32_t *args, int nargs) {
-    uint32_t buf[2 + 1 + 3 * WMP_GRAB_MAX];      /* header + max GRAB_SET payload */
+    uint32_t buf[2 + 1 + 5 * WMP_GRAB_MAX];      /* header + largest such payload */
     if (nargs < 0 || (size_t)nargs > (sizeof buf / sizeof buf[0]) - 2) return -1;
     buf[0] = 4u + (uint32_t)nargs * 4u;
     buf[1] = type;

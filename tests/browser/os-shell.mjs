@@ -477,8 +477,9 @@ try {
 
   // Minimize term via its taskbar button (button 0 — the winboxes were
   // closed above, so term is the sole button): the desktop shows through
-  // where the window was.
-  await clickAt(100, BARY);
+  // where the window was. The app strip starts past the Start strip AND the
+  // Task-View/overview button (todos/EXPOSE), so button 0 is at x~112.
+  await clickAt(150, BARY);
   await waitPixel(500, 300, TEAL);
   check('minimize reveals the desktop', true);
 

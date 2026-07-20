@@ -58,10 +58,11 @@ static void test_registry_defaults(void) {
     CHECK("sysmenu = alt+space both schemes",
         ks_action_default(KSA_SYSMENU, KS_WINDOWS, d) == 1 && chord_is(d[0], KM_ALT, KK_SPACE) &&
         ks_action_default(KSA_SYSMENU, KS_MACOS, d) == 1 && chord_is(d[0], KM_ALT, KK_SPACE));
-    /* overview: F3 both schemes (the decided Exposé trigger) */
-    CHECK("overview = f3 both schemes",
-        ks_action_default(KSA_OVERVIEW, KS_WINDOWS, d) == 1 && chord_is(d[0], 0, KK_F1 + 2) &&
-        ks_action_default(KSA_OVERVIEW, KS_MACOS, d) == 1 && chord_is(d[0], 0, KK_F1 + 2));
+    /* overview: Ctrl+Alt+E both schemes (the decided Exposé trigger, todos/
+     * EXPOSE — scheme-independent; F3 was rejected as a macOS host-collision) */
+    CHECK("overview = ctrl+alt+e both schemes",
+        ks_action_default(KSA_OVERVIEW, KS_WINDOWS, d) == 1 && chord_is(d[0], KM_CTRL | KM_ALT, 'e') &&
+        ks_action_default(KSA_OVERVIEW, KS_MACOS, d) == 1 && chord_is(d[0], KM_CTRL | KM_ALT, 'e'));
 
     /* app — defaults derived from the KS_TABLE rows by (scheme, KA_*, ctx) */
     CHECK("edit.copy windows = ctrl+c",

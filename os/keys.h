@@ -259,7 +259,10 @@ static const KsAction KS_ACTIONS[] = {
   { "wm.sysmenu",    KAK_SYS, 0, KTOK_SYSMENU,
     { {{KM_ALT,KK_SPACE}}, {{KM_ALT,KK_SPACE}} } },
   { "wm.overview",   KAK_SYS, 0, KTOK_OVERVIEW,
-    { {{0,KK_F1+2}},       {{0,KK_F1+2}}       } },   /* F3 both schemes */
+    { {{KM_CTRL|KM_ALT,'e'}}, {{KM_CTRL|KM_ALT,'e'}} } },  /* Ctrl+Alt+E both
+      schemes (todos/EXPOSE-MISSION-CONTROL.md open-Q1): F3 is a macOS Mission-
+      Control media key the host eats — the wm-chord namespace, host-collision-
+      free, and scheme-independent (unlike snap's win/mac split) */
   /* --- app (defaults derived from KS_TABLE by KA_*+ctx) --- */
   { "edit.select-all", KAK_APP, KCTX_EDIT | KCTX_LIST, KA_SELECT_ALL },
   { "edit.copy",       KAK_APP, KCTX_EDIT,             KA_COPY },

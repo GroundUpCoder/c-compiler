@@ -21,8 +21,8 @@
 //   3. a bind.<action> override MOVES a chord live — rebinding wm.snap-left to
 //      Ctrl+Alt+J makes that chord tile left and Ctrl+Alt+Left inert, within
 //      the config poll, no restart.
-// Plus the F3 overview grab is installed in both schemes (swallowed, not seen
-// by the app) — its dispatch is a stub until the Exposé chunk.
+// Plus the Ctrl+Alt+E overview grab is installed in both schemes (swallowed,
+// not seen by the app) and toggles the Exposé window overview (todos/EXPOSE).
 //
 // Config propagation to wm.c's grab table is a two-timer (~1 Hz) settle with NO
 // completion marker, so instead of a fixed sleep the positive checks POLL the
@@ -172,15 +172,23 @@ try {
   g = await winGeom('winbox');
   check('macos: GUI+Left did NOT snap (released, not grabbed)', g.w === 240, g);
 
-  // === F3 overview grab installed in the macos table too: swallowed, so
-  //     winbox's fill does NOT toggle. EV_HOTKEY dispatch is a stub this
-  //     chunk (Exposé consumes it next). ===
+  // === Ctrl+Alt+E: the window overview / Exposé chord (todos/EXPOSE),
+  //     installed in BOTH schemes and scheme-independent. Pressing it is
+  //     GRABBED (winbox never sees 'e') and toggles the overview — the
+  //     compositor takes over the screen, so winbox's normal client pixel
+  //     changes; pressing again restores it. (The dedicated overview visuals
+  //     live in os-overview.mjs; here we only prove the chord is wired.) ===
   await focus();
-  const preF3 = await sample(px, py);
-  await page.keyboard.press('F3');
-  await new Promise(r => setTimeout(r, 600));
-  check('F3 grab installed: swallowed, winbox fill unchanged (overview stub)',
-    near(await sample(px, py), preF3), { preF3, got: await sample(px, py) });
+  const preE = await sample(px, py);
+  await chord(['Control', 'Alt'], 'KeyE');
+  await new Promise(r => setTimeout(r, 700));
+  const inOv = await sample(px, py);
+  check('Ctrl+Alt+E entered the overview (compositor took over winbox\'s spot)',
+    !near(inOv, preE), { preE, inOv });
+  await chord(['Control', 'Alt'], 'KeyE');
+  await new Promise(r => setTimeout(r, 700));
+  check('Ctrl+Alt+E again exited the overview (winbox restored)',
+    near(await sample(px, py), preE), { preE, got: await sample(px, py) });
 
   // === 3. a bind.<action> override MOVES the chord live (no restart). ===
   await setKeys('scheme macos\\nbind.wm.snap-left ctrl+alt+j\\n');

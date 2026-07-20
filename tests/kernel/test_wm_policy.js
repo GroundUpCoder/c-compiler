@@ -224,6 +224,15 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   let f = await cmd(wm, WMP.MENU);
   check('MENU with no subscriber -> R_ERR ENODEV (todos/0242)',
     f.type === WMP.R_ERR && f.g(0) === 19, JSON.stringify([f.type, f.g(0)]));
+  // Overview is policy too: every op refuses ENODEV before a WM subscribes
+  // (todos/EXPOSE — the command, and the SET/END takeovers a non-subscriber
+  // must never seize).
+  f = await cmd(wm, WMP.OVERVIEW);
+  check('OVERVIEW with no subscriber -> R_ERR ENODEV', f.type === WMP.R_ERR && f.g(0) === 19);
+  f = await cmd(wm, WMP.OVERVIEW_SET, [1, 1, 0, 0, 10, 10]);
+  check('OVERVIEW_SET with no subscriber -> R_ERR ENODEV', f.type === WMP.R_ERR && f.g(0) === 19);
+  f = await cmd(wm, WMP.OVERVIEW_END);
+  check('OVERVIEW_END with no subscriber -> R_ERR ENODEV', f.type === WMP.R_ERR && f.g(0) === 19);
 
   // ---- subscribe on an empty scene: R_OK + focus-0 snapshot ----
   f = await cmd(wm, WMP.SUBSCRIBE);
@@ -956,6 +965,67 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
     f.type === WMP.EV_SNAP_DROP && f.g(1) === 0 && idle(wm2),
     JSON.stringify([f.type, f.g(1)]));
 
+  // ---- window overview / Exposé (todos/EXPOSE-MISSION-CONTROL.md) ----
+  // The OVERVIEW command rides EV_OVERVIEW (the CYCLE/MENU pattern); the
+  // Ctrl+Alt+E chord reaches wm.c via the grab table's EV_HOTKEY instead.
+  // (c1 is focused from the INJECT_SCREEN title-drag above — so the "app ring
+  // stays empty" swallow checks below are meaningful, not vacuous.)
+  f = await cmd(wm2, WMP.OVERVIEW, []);
+  check('OVERVIEW command -> R_OK', f.type === WMP.R_OK);
+  f = await readEvent(wm2);
+  check('OVERVIEW rides EV_OVERVIEW (wmctl overview = the chord)',
+    f.type === WMP.EV_OVERVIEW && idle(wm2), JSON.stringify([f.type]));
+  // OVERVIEW_SET stores the cell rects (subscriber-only); a DEAD sid is dropped.
+  f = await cmd(wm2, WMP.OVERVIEW_SET,
+    [2, c1.sid, 300, 200, 120, 90, 88888, 0, 0, 10, 10]);
+  check('OVERVIEW_SET -> R_OK', f.type === WMP.R_OK);
+  let ov = kernel.wmScene().overview;
+  check('overview scene set with the live cell only (dead sid dropped)',
+    ov && ov.cells.length === 1 && ov.cells[0].sid === c1.sid &&
+    ov.cells[0].x === 300 && ov.cells[0].w === 120 && ov.hoverSid === 0,
+    JSON.stringify(ov));
+  // Hover: a pointer move inside the cell sets hoverSid; outside clears it.
+  kernel.wmPointer('move', 340, 240, {});               // inside (300,200,120,90)
+  check('overview hover: pointer inside the cell sets hoverSid',
+    kernel.wmScene().overview.hoverSid === c1.sid);
+  kernel.wmPointer('move', 5, 5, {});
+  check('overview hover: pointer outside all cells clears hoverSid',
+    kernel.wmScene().overview.hoverSid === 0);
+  // A pointer-down in the cell -> EV_OVERVIEW_PICK{sid}; input fully swallowed.
+  drainRing(ring1);                                     // clear any pending
+  kernel.wmPointer('down', 340, 240, {});
+  f = await readEvent(wm2);
+  check('overview PICK: down in a cell -> EV_OVERVIEW_PICK{sid}',
+    f.type === WMP.EV_OVERVIEW_PICK && f.g(0) === c1.sid,
+    JSON.stringify([f.type, f.g(0)]));
+  kernel.wmPointer('up', 340, 240, {});
+  check('overview swallows all pointer input (app ring stays empty)',
+    drainRing(ring1).length === 0);
+  // A down on empty space -> PICK{0} (dismiss).
+  kernel.wmPointer('down', 5, 5, {});
+  f = await readEvent(wm2);
+  check('overview PICK: down on empty space -> EV_OVERVIEW_PICK{0}',
+    f.type === WMP.EV_OVERVIEW_PICK && f.g(0) === 0, JSON.stringify([f.type, f.g(0)]));
+  kernel.wmPointer('up', 5, 5, {});
+  // Esc DOWN -> PICK{0}; every other key swallowed (both edges, no delivery).
+  kernel.wmKey(true, 41, 0, 0, false);                  // Esc (scancode 41)
+  f = await readEvent(wm2);
+  check('overview: Esc down -> EV_OVERVIEW_PICK{0}',
+    f.type === WMP.EV_OVERVIEW_PICK && f.g(0) === 0, JSON.stringify([f.type, f.g(0)]));
+  kernel.wmKey(false, 41, 0, 0, false);
+  kernel.wmKey(true, 8, 0, 0, false);                   // 'e' (non-Esc key)
+  kernel.wmKey(false, 8, 0, 0, false);
+  check('overview swallows all keys (app ring stays empty)',
+    drainRing(ring1).length === 0);
+  // OVERVIEW_END clears the presentation override.
+  f = await cmd(wm2, WMP.OVERVIEW_END, []);
+  check('OVERVIEW_END -> R_OK', f.type === WMP.R_OK);
+  check('overview scene cleared', kernel.wmScene().overview === null);
+  // OVERVIEW_SET with ONLY dead sids leaves nothing to show -> force-ends.
+  f = await cmd(wm2, WMP.OVERVIEW_SET, [1, 77777, 0, 0, 10, 10]);
+  check('OVERVIEW_SET with only dead sids -> R_OK + no overview',
+    f.type === WMP.R_OK && kernel.wmScene().overview === null);
+
   // ---- z layers (todos/0038): SET_LAYER pins furniture above (+1, the
   // taskbar) or below (-1, the desktop layer) the normal windows; EVERY
   // z-order op — create-raise, focus-raise, restack — stays within its
@@ -1200,8 +1270,15 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   await readEvent(wm2); await readEvent(wm2);          // EV_CREATED + EV_FOCUS
   check('pending unmapped before the WM dies',
     kernel.wmList().find(s => s.sid === cm4.sid).mapped === false);
+  // Overview force-end valve (todos/EXPOSE, the 0069 rule): a killed WM must
+  // never leave the screen stuck in a mode only the WM can exit.
+  f = await cmd(wm2, WMP.OVERVIEW_SET, [1, cm4.sid, 0, 0, 10, 10]);
+  check('overview active before the WM dies', f.type === WMP.R_OK &&
+    kernel.wmScene().overview !== null);
   await rpc(wmPid, K.OP.FS_CLOSE, { fd: wmFd2 });
   await tick();
+  check('last subscriber gone: overview force-ended (the safety valve)',
+    kernel.wmScene().overview === null);
   check('last subscriber gone: everything pending maps at once',
     kernel.wmList().every(s => s.mapped === true),
     JSON.stringify(kernel.wmList().map(s => [s.sid, s.mapped])));

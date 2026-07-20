@@ -907,6 +907,19 @@ var WMP = {
                                         last-subscriber-gone resets to it. km is
                                         the canonical KM_* mask (Shift excluded
                                         unless the entry names it) */
+  // Window overview / Exposé (todos/EXPOSE-MISSION-CONTROL.md). The design doc
+  // drafted these at 0x35/0x92 as the then-next-free slots; the keybind grab
+  // chunk took 0x35 (GRAB_SET) / 0x92 (EV_HOTKEY) first, so these use the
+  // ACTUAL next-free slots. MUST MATCH wm_proto.h.
+  OVERVIEW_SET: 0x36,                /* { n, n x (sid, x, y, w, h) }: enter/
+                                        relayout the overview with these
+                                        miniature rects; subscriber-only,
+                                        validates sids, stores, bumps */
+  OVERVIEW_END: 0x37,                /* { }: leave the overview; subscriber-only.
+                                        Pure presentation clear */
+  OVERVIEW: 0x38,                    /* { }: command gesture (the CYCLE/MENU
+                                        pattern) — fire EV_OVERVIEW; R_ERR with
+                                        no WM. Serves `wmctl overview` */
   R_OK: 0x40, R_ERR: 0x41, R_LIST: 0x42, R_SHOT: 0x43,
   R_IDLE: 0x44,                      /* { ms }: the GET_IDLE reply (todos/
                                         0096) — its own type so /bin/wm's
@@ -971,6 +984,18 @@ var WMP = {
                                         byte-identical; the EV_CYCLE
                                         pass-through rule (no subscriber, the
                                         chord reaches the app unchanged) */
+  EV_OVERVIEW: 0x93,                  /* { }: toggle the window overview (todos/
+                                        EXPOSE-MISSION-CONTROL.md) — an OVERVIEW
+                                        command (wmctl overview). The Ctrl+Alt+E
+                                        chord reaches wm.c via EV_HOTKEY
+                                        { KTOK_OVERVIEW } instead; this is the
+                                        command-side twin (the EV_MENU pattern).
+                                        Only emitted with a subscriber */
+  EV_OVERVIEW_PICK: 0x94,             /* { sid }: overview pick — a pointer-down
+                                        landed in cell `sid`, or dismissed
+                                        (sid = 0: background click or Esc).
+                                        Policy exits and restores/focuses/raises
+                                        the picked window */
 };
 
 /* R_ERR errno values (arch CS7, todos/0242). The wm* command methods below
@@ -1982,6 +2007,19 @@ function Kernel(opts) {
   this._wmKeyGrabs = null;    // installed key-grab table (GRAB_SET); null =
                               // use the built-in WM_DEFAULT_GRABS. Reset to
                               // null when the last subscriber goes (0069 valve)
+  this._wmOverview = null;    // window overview / Exposé (todos/EXPOSE-MISSION-
+                              // CONTROL.md): null = inactive; else { cells:
+                              // [{sid,x,y,w,h}], hoverSid }. A PURE presentation
+                              // override — the WM sends the cell rects
+                              // (OVERVIEW_SET), the kernel composites live
+                              // miniatures and routes hover/pick, and changes
+                              // NO focus/z/minimize/geometry (every real state
+                              // change is the WM's after the PICK). Force-ended
+                              // when the last subscriber goes (the 0069 valve).
+  this._wmOverviewAnims = []; // transient enter/exit fly records (todos/0063
+                              // shape): [{sid, fx,fy,fw,fh, tx,ty,tw,th, t0,
+                              // reverse}], browser-visual only, pruned after
+                              // WM_ANIM_MS. Never read by the headless composite.
   this._wmPtrLockWanted = false;  // last wanted state emitted to the bridge
   this._wmPtrLockActive = false;  // actual lock state (bridge-reported); while
                                   // true, pointer input routes RELATIVE to the
@@ -4161,6 +4199,9 @@ Kernel.prototype._wmSubDrop = function (conn) {
   this._wmKeyGrabs = null;   // reset to the default table — a dead WM must not
                              // leave stale grabs eating keys for the next
                              // subscriber (the 0069 valve; KEYBIND §3)
+  this._wmOverviewForceEnd();  // a killed WM must never leave the screen stuck
+                               // in overview — only the WM can exit it, so the
+                               // valve does it here (the 0069 rule, EXPOSE doc)
   var self = this;
   this._surfaces.forEach(function (s) { self._wmMap(s.sid); });
 };
@@ -4809,6 +4850,16 @@ Kernel.prototype.wmKey = function (down, scancode, keysym, mod, repeat) {
         (fold & KM_SHIFT) ? 1 : 0, repeat ? 1 : 0);
     }
   }
+  // Overview active (todos/EXPOSE-MISSION-CONTROL.md): a pure presentation
+  // override that swallows ALL input so apps never see half-gestures. The
+  // toggle chord already fired above (the grab table reaches its intercept
+  // first — that is how Ctrl+Alt+E exits). Esc DOWN dismisses via a PICK{0};
+  // every other key is eaten (both edges). The kernel changes no state here —
+  // the WM acts on the PICK.
+  if (this._wmOverview) {
+    if (down && (scancode | 0) === 41) this._wmEmit(WMP.EV_OVERVIEW_PICK, [0]);  // Esc
+    return true;   // swallowed (never delivered to the focused app)
+  }
   if (!this._focusSid) return false;
   // Boolean by contract (the raw UI-bridge seam, not a WMP op): true =
   // delivered, false = dropped — _wmEventTo's errno name is a 0242 shape.
@@ -4863,6 +4914,92 @@ Kernel.prototype.wmGrabSet = function (conn, dv, plen) {
                token: dv.getInt32(o + 8, true) | 0 });
   }
   this._wmKeyGrabs = tbl;
+  return 0;
+};
+
+/* ---- window overview / Exposé (todos/EXPOSE-MISSION-CONTROL.md) ----
+ * The kernel mechanism: it renders and routes; wm.c decides. OVERVIEW_SET
+ * hands us the miniature cell rects (WM policy), we store them as a pure
+ * presentation override and composite live seq-gated miniatures + route
+ * hover/pick; we NEVER change focus/z/minimize/geometry — every real state
+ * change is the WM's move after the PICK. */
+
+/* Enter the overview (or relayout if already active) with the given cell
+ * rects. Subscriber-only — a presentation takeover nothing else may seize.
+ * dv/plen are the raw frame payload: i32 n, then n x (sid, x, y, w, h). Dead
+ * sids are dropped (the WM's model can lag a destroy). N = 0 leaves nothing
+ * to show, so it exits rather than showing an empty screen. */
+Kernel.prototype.wmOverviewSet = function (conn, dv, plen) {
+  if (!this._wmSubs.has(conn)) return 'ENODEV';   // only the WM drives overview
+  var n = plen >= 4 ? dv.getInt32(8, true) : 0;
+  if (n < 0 || n > 256) return 'EINVAL';          // MAX_WIN is 64; a sane cap
+  if (plen < 4 * (1 + 5 * n)) return 'EINVAL';    // short frame
+  var cells = [];
+  for (var i = 0; i < n; i++) {
+    var o = 8 + 4 * (1 + 5 * i);
+    var sid = dv.getInt32(o, true) | 0;
+    if (!this._surfaces.get(sid)) continue;       // dropped: dead sid
+    cells.push({ sid: sid, x: dv.getInt32(o + 4, true) | 0,
+                 y: dv.getInt32(o + 8, true) | 0,
+                 w: Math.max(1, dv.getInt32(o + 12, true) | 0),
+                 h: Math.max(1, dv.getInt32(o + 16, true) | 0) });
+  }
+  if (!cells.length) { this._wmOverviewForceEnd(); return 0; }
+  // Preserve a live hover across a relayout; else start un-hovered.
+  var prevHover = this._wmOverview ? this._wmOverview.hoverSid : 0;
+  var keep = 0;
+  for (var h = 0; h < cells.length; h++) if (cells[h].sid === prevHover) keep = prevHover;
+  var entering = !this._wmOverview;
+  this._wmOverview = { cells: cells, hoverSid: keep };
+  // Enter/exit fly (todos/0063 shape): only on the first SET (entering) — a
+  // relayout while up must not re-fly. Browser-visual only; the headless
+  // composite ignores it, so goldens are unaffected.
+  if (entering) this._wmOverviewFlies(cells, false);
+  this._bumpWm();
+  return 0;
+};
+
+/* Leave the overview (WMP_OVERVIEW_END). Subscriber-only. Pure presentation
+ * clear — no focus/z/geometry touched (the WM already moved, or is about to). */
+Kernel.prototype.wmOverviewEnd = function (conn) {
+  if (!this._wmSubs.has(conn)) return 'ENODEV';
+  this._wmOverviewForceEnd();
+  return 0;
+};
+
+/* Force-end the overview (the last-subscriber-gone valve + the N=0 exit +
+ * OVERVIEW_END). Records the reverse fly for the browser, then clears. */
+Kernel.prototype._wmOverviewForceEnd = function () {
+  if (!this._wmOverview) return;
+  this._wmOverviewFlies(this._wmOverview.cells, true);
+  this._wmOverview = null;
+  this._bumpWm();
+};
+
+/* Build the enter/exit fly records: each cell miniature flies between its
+ * window's REAL on-screen rect and the cell rect (reverse on exit). Browser-
+ * visual only (compositor interpolates + prunes past WM_ANIM_MS). */
+Kernel.prototype._wmOverviewFlies = function (cells, reverse) {
+  var t0 = Date.now();
+  var anims = [];
+  for (var i = 0; i < cells.length; i++) {
+    var c = cells[i];
+    var s = this._surfaces.get(c.sid);
+    if (!s) continue;
+    anims.push({ sid: c.sid, reverse: !!reverse, t0: t0,
+                 rx: s.x, ry: s.y, rw: s.dstW, rh: s.dstH,     // real rect
+                 cx: c.x, cy: c.y, cw: c.w, ch: c.h });        // cell rect
+  }
+  this._wmOverviewAnims = anims;
+};
+
+/* Command-side overview gesture (WMP_OVERVIEW): fire EV_OVERVIEW at the WM,
+ * the CYCLE/MENU pattern. R_ERR with no subscriber (overview IS policy — the
+ * kernel never invents the candidate set or layout). The Ctrl+Alt+E chord
+ * rides the grab table's KTOK_OVERVIEW -> EV_HOTKEY instead. */
+Kernel.prototype.wmOverview = function () {
+  if (!this._wmSubs.size) return 'ENODEV';
+  this._wmEmit(WMP.EV_OVERVIEW, []);
   return 0;
 };
 
@@ -4936,6 +5073,26 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
                                        // included; per-window INJECT_POINTER
                                        // deliberately does not (tests can
                                        // poke apps without waking the saver)
+  // Overview active (todos/EXPOSE-MISSION-CONTROL.md): a pure presentation
+  // override. Pointer input drives hover + pick over the WM's cell rects and
+  // is otherwise fully swallowed (no hit test, no chrome, no client delivery).
+  // move -> update hoverSid (topmost = last cell in order); down -> PICK{cell
+  // sid or 0}; up/wheel eaten. The kernel changes nothing itself — the WM acts
+  // on the PICK.
+  if (this._wmOverview) {
+    var ov = this._wmOverview;
+    var hit = 0;
+    for (var ci = 0; ci < ov.cells.length; ci++) {
+      var c = ov.cells[ci];
+      if (x >= c.x && x < c.x + c.w && y >= c.y && y < c.y + c.h) hit = c.sid;
+    }
+    if (kind === 'move') {
+      if (hit !== ov.hoverSid) { ov.hoverSid = hit; this._bumpWm(); }
+    } else if (kind === 'down') {
+      this._wmEmit(WMP.EV_OVERVIEW_PICK, [hit | 0]);
+    }
+    return 'overview';   // swallowed whole (down/up/move/wheel)
+  }
   // Cursor (todos/0105): recompute the effective cursor on every move (chrome
   // overlay + hovered surface's client cursor), debounced. Before the lock/
   // drag branches so it also updates mid-drag (they early-return); _wmCursorAt
@@ -5579,6 +5736,42 @@ Kernel.prototype.wmScreenshotScreen = function () {
     }
   };
   fill(0, 0, W, H, WM_COLORS.desktop);
+  // Overview / Exposé (todos/EXPOSE-MISSION-CONTROL.md): the SAME presentation
+  // the browser compositor draws, minus the browser-only affordances (captions
+  // + shadows + rounded corners — text is not part of the deterministic
+  // composite, exactly like title text). Per cell in order: a border frame
+  // (navy when hovered, face gray otherwise — hover follows the injected
+  // pointer, so it is deterministic) then the window's LIVE front buffer NN
+  // scale-blitted into the cell rect. Minimized windows composite their still-
+  // live buffers like any other. Goldens stay bit-exact and `wmctl shot` sees
+  // the overview — which is what makes the e2e honest.
+  if (this._wmOverview) {
+    var ovcells = this._wmOverview.cells;
+    var hoverSid = this._wmOverview.hoverSid | 0;
+    var OVB = 3;                                    // border-frame thickness
+    for (var oi = 0; oi < ovcells.length; oi++) {
+      var oc = ovcells[oi];
+      var os = this._surfaces.get(oc.sid);
+      if (!os) continue;
+      fill(oc.x - OVB, oc.y - OVB, oc.w + 2 * OVB, oc.h + 2 * OVB,
+           oc.sid === hoverSid ? WM_COLORS.titleFocused : WM_COLORS.border);
+      var ofront = Atomics.load(os.i32, SH_FLIP) & 1;
+      var obase = SH_HDR_BYTES + ofront * os.w * os.h * 4;
+      var ox0 = Math.max(0, -oc.x), oy0 = Math.max(0, -oc.y);
+      var ox1 = Math.min(oc.w, W - oc.x), oy1 = Math.min(oc.h, H - oc.y);
+      for (var ody = oy0; ody < oy1; ody++) {
+        var osrow = obase + Math.floor(ody * os.h / oc.h) * os.w * 4;
+        var odrow = ((oc.y + ody) * W + oc.x) * 4;
+        for (var odx = ox0; odx < ox1; odx++) {
+          var osi = osrow + Math.floor(odx * os.w / oc.w) * 4;
+          var odi = odrow + odx * 4;
+          out[odi] = os.u8[osi]; out[odi + 1] = os.u8[osi + 1];
+          out[odi + 2] = os.u8[osi + 2]; out[odi + 3] = 255;
+        }
+      }
+    }
+    return { w: W, h: H, rgba: out };
+  }
   for (var i = 0; i < this._zOrder.length; i++) {
     var s = this._surfaces.get(this._zOrder[i]);
     if (!s || s.minimized || !s.mapped) continue;   // unmapped: todos/0069
@@ -5806,6 +5999,10 @@ Kernel.prototype.wmScene = function () {
   this._wmAnims.forEach(function (a, sid) {
     if (now - a.t0 > WM_ANIM_MS) self._wmAnims.delete(sid);
   });
+  // Overview enter/exit flies (todos/EXPOSE): prune past WM_ANIM_MS so a
+  // settled overview (or a settled exit) stops churning the compositor.
+  if (this._wmOverviewAnims.length &&
+      now - this._wmOverviewAnims[0].t0 > WM_ANIM_MS) this._wmOverviewAnims = [];
   return {
     version: this._wmVersion,
     screen: { w: this._wmScreen.w, h: this._wmScreen.h },
@@ -5813,6 +6010,9 @@ Kernel.prototype.wmScene = function () {
     pointerLockWanted: this._wmPtrLockWanted,   // relative mouse (todos/0018)
     resizeDrag: this._wmResizeDrag,   // rubber-band preview (todos/0019)
     glass: this._wmGlassOn,           // Aero glass tier (todos/0063)
+    overview: this._wmOverview,       // window overview / Exposé (todos/EXPOSE):
+                                      // null or { cells:[{sid,x,y,w,h}], hoverSid }
+    overviewAnims: this._wmOverviewAnims,   // enter/exit flies (browser-only)
     anims: Array.from(this._wmAnims.values()),  // minimize/restore (todos/0063)
     surfaces: this._zOrder.map(function (sid) { return self._surfaces.get(sid); })
       .filter(function (s) {
@@ -5958,6 +6158,9 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
     case WMP.SAVER: ok(this.wmSaver()); break;         // screensaver (0096)
     case WMP.SYSMENU: ok(this.wmSysMenu()); break;     // window sys menu (0102)
     case WMP.GRAB_SET: ok(this.wmGrabSet(conn, dv, plen)); break;  // key grabs
+    case WMP.OVERVIEW_SET: ok(this.wmOverviewSet(conn, dv, plen)); break;  // Exposé
+    case WMP.OVERVIEW_END: ok(this.wmOverviewEnd(conn)); break;
+    case WMP.OVERVIEW: ok(this.wmOverview()); break;   // wmctl overview gesture
 
     case WMP.SET_LAYER: ok(this.wmSetLayer(g(0), g(1))); break;
     case WMP.GLASS: ok(this.wmGlass(g(0) !== 0)); break;   // Aero tier (0063)

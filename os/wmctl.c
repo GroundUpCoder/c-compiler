@@ -42,6 +42,9 @@
  *   wmctl sysmenu                     open the window system menu (todos/
  *                                     0102) on the FOCUSED window — the
  *                                     Alt+Space chord's event; needs a WM
+ *   wmctl overview                    toggle the window overview / Exposé
+ *                                     (todos/EXPOSE) — the Ctrl+Alt+E chord's
+ *                                     event; needs a WM
  *   wmctl layer SID L                 pin to a z layer (todos/0038): -1
  *                                     bottom, 0 normal, 1 top; z ops never
  *                                     cross layers (list flags: T/B)
@@ -144,6 +147,7 @@ static int usage(void) {
         "       wmctl cursor X Y\n"
         "       wmctl saver\n"
         "       wmctl sysmenu\n"
+        "       wmctl overview\n"
         "       wmctl layer SID -1|0|1\n"
         "       wmctl key SID SCANCODE [KEYSYM [MOD]]\n"
         "       wmctl keydown|keyup SID SCANCODE [KEYSYM [MOD]]\n"
@@ -637,6 +641,10 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(cmd, "saver")) {        /* screensaver preview (0096) */
         return wmp_cmd(fd, WMP_SAVER, NULL, 0) ? failop("saver") : 0;
+    }
+    if (!strcmp(cmd, "overview")) {     /* window overview / Exposé (EXPOSE) —
+                                           toggle; policy owns layout + pick */
+        return wmp_cmd(fd, WMP_OVERVIEW, NULL, 0) ? failop("overview") : 0;
     }
     if (!strcmp(cmd, "sysmenu")) {      /* window system menu (0102) — the
                                            Alt+Space path; opens on the
