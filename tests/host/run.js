@@ -28,6 +28,9 @@ var tests = [
   ['test_gpu_present_binding.js', []],   // per-window GPU present tail: canvasBySid + bind-at-GetWGPUSurface (A4)
   ['../serve/test_first_run.js', []],    // `node serve.js .` prints a URL that 200s (COOP/COEP)
   ['../serve/test_clang_overlay.js', []],// `serve.js --clang` overlay on-ramp: fold-in vs sibling-absent (0141)
+  ['../serve/test_clang_base_purity.js', []], // CLANG-CPP-EPIC II guardrail (a): NO -clang name in the base set
+  ['../serve/test_serve_with_clang.js', []],  // guardrail (b): serve-with-clang preflight → loud exit 1, never base fallback
+  ['../serve/test_mkpkg_clang.js', []],       // guardrail (c): mkpkg --clang clangApp sha256 round-trip
 ];
 
 var failures = 0;

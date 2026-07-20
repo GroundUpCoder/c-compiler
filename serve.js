@@ -9,10 +9,18 @@ const path = require('path');
 // `--overlay=<id>` is the generic form, mirroring tools/mkimage.js.
 const positionals = [];
 const requestedOverlays = new Set();
+// `--packages-index=clang` (set by serve-with-clang.js) asserts the served
+// /packages repo is the SUPERSET index — dist/packages/index.json must exist
+// and list at least one *-clang package (built by the wrapper's `mkpkg --clang`
+// preflight). It never MUTATES anything (serve.js serves dist/packages
+// verbatim, as today); it's a guard so a clang-mandatory serve can't silently
+// serve a stale base index. Flagless serve.js is byte-identical to today.
+let assertClangPackages = false;
 for (const a of process.argv.slice(2)) {
   if (a === '--clang') requestedOverlays.add('clang-apps');
   else if (a.startsWith('--overlay=')) requestedOverlays.add(a.slice(10));
   else if (a.startsWith('--overlays=')) a.slice(11).split(',').forEach((id) => id && requestedOverlays.add(id));
+  else if (a === '--packages-index=clang') assertClangPackages = true;
   else if (a.startsWith('-')) { console.error(`serve.js: unknown option ${a}`); process.exit(2); }
   else positionals.push(a);
 }
@@ -138,6 +146,25 @@ if (!singleFile) {
       console.log(`[serve] overlay ${e.id} folded in (${e.producer}@${e.commitShort})`);
     }
   }
+}
+
+// --packages-index=clang guard: the served /packages repo must be the clang
+// superset (serve-with-clang.js builds it via `mkpkg --clang` before spawning
+// us). A base index here means the wrapper's preflight was bypassed — fail loud
+// rather than serve a clang-mandatory origin without its *-clang cards.
+if (assertClangPackages && !singleFile) {
+  const idxPath = path.join(root, 'dist', 'packages', 'index.json');
+  let clangNames = [];
+  try {
+    const idx = JSON.parse(fs.readFileSync(idxPath, 'utf-8'));
+    clangNames = Object.keys(idx.packages || {}).filter((n) => /-clang$/.test(n));
+  } catch (e) { /* handled below */ }
+  if (!clangNames.length) {
+    console.error(`serve.js --packages-index=clang: ${path.relative(root, idxPath)} is not the clang superset`);
+    console.error('  expected at least one *-clang package (run tools/mkpkg.js --clang, or use serve-with-clang.js)');
+    process.exit(1);
+  }
+  console.log(`[serve] clang package index: ${clangNames.length} *-clang card(s)`);
 }
 
 // When an overlay is active, the browser still fetches `os-system.img` beside

@@ -52,11 +52,25 @@ const COMMON = require(path.join(OS_DIR, 'os-common.js'));
 let outDir = path.join(ROOT, 'dist', 'packages');
 let quiet = false;
 let force = false;
+// `--clang` builds the SUPERSET index: it additionally includes the gated
+// `requires:"clang-sibling"` package definitions (the *-clang variants), whose
+// `clangApp` payloads are copied — sha256-verified — from the sibling
+// clang-simplified repo's published `out-image/overlay.json` (the overlay@1
+// producer this repo already consumes for the bake overlay, CLANG-CPP-EPIC
+// Part II §7). Plain mkpkg builds the BASE index — no -clang name anywhere,
+// by construction of listPackages' default filter. `--clang-root=PATH` points
+// at the sibling (default ../clang-simplified, the same relative convention as
+// os/image.json's overlay manifest); missing sibling/overlay under --clang is a
+// LOUD hard failure (exit 1 with the fix command), never a silent skip.
+let withClang = false;
+let clangRoot = path.resolve(ROOT, '..', 'clang-simplified');
 const requested = [];
 for (const a of process.argv.slice(2)) {
   if (a.startsWith('--out=')) outDir = path.resolve(a.slice(6));
   else if (a === '--quiet') quiet = true;
   else if (a === '--force') force = true;
+  else if (a === '--clang') withClang = true;
+  else if (a.startsWith('--clang-root=')) clangRoot = path.resolve(a.slice(13));
   else if (a.startsWith('-')) {
     process.stderr.write(`mkpkg: unknown option ${a}\n`);
     process.exit(2);
@@ -65,7 +79,44 @@ for (const a of process.argv.slice(2)) {
 const log = quiet ? () => {} : (m) => process.stderr.write('[mkpkg] ' + m + '\n');
 
 const imageManifest = JSON.parse(fs.readFileSync(path.join(OS_DIR, 'image.json'), 'utf-8'));
-const avail = COMMON.listPackages(fs, path, ROOT);
+
+// The sibling overlay artifact — the single source of every `clangApp` payload.
+// Resolved + hard-preflighted only under --clang (the base pipeline never
+// touches it). The bytes are verified through os-common's loadOverlays (the
+// EXACT same sha256/size enforcement mkimage's bake uses — one verifier, no
+// drift). Memoized: read + verify once, index by absolute /usr path.
+const clangOverlayPath = path.join(clangRoot, 'out-image', 'overlay.json');
+let _clangOverlayMap = null;
+function clangOverlay() {
+  if (_clangOverlayMap) return _clangOverlayMap;
+  const loaded = COMMON.loadOverlays(
+    [{ id: 'clang-apps', manifestPath: clangOverlayPath }],
+    COMMON.nodeOverlayIo(fs, path, crypto), false, log);
+  const map = new Map();
+  for (const f of loaded[0].files) map.set(f.path, f);
+  _clangOverlayMap = map;
+  return map;
+}
+if (withClang) {
+  // Preflight the sibling BEFORE any build (same loud-failure discipline as
+  // serve-with-clang.js §6): absence is a fatal, actionable error — an
+  // explicit clang request never degrades to the base set.
+  if (!fs.existsSync(clangRoot)) {
+    process.stderr.write(
+      `mkpkg --clang: clang-simplified sibling not found at ${clangRoot}\n` +
+      `  the *-clang packages need the clang toolchain repo (plain mkpkg needs nothing)\n` +
+      `  fix: clone it next to this repo, or pass --clang-root=PATH\n`);
+    process.exit(1);
+  }
+  if (!fs.existsSync(clangOverlayPath)) {
+    process.stderr.write(
+      `mkpkg --clang: sibling overlay artifact not found at ${clangOverlayPath}\n` +
+      `  fix: node ${path.join(clangRoot, 'wasm', 'tools', 'mk-overlay.mjs')}\n`);
+    process.exit(1);
+  }
+}
+
+const avail = COMMON.listPackages(fs, path, ROOT, { withClang });
 const names = requested.length ? requested : avail;
 for (const n of names) {
   if (!avail.includes(n)) {
@@ -133,6 +184,9 @@ function newestPkgInput(name, pkg) {
       statFile(path.join(OS_DIR, entry.c));
       (entry.hdrs || []).forEach((h) => statFile(path.join(OS_DIR, h)));
     }
+    // A clangApp payload's freshness is the sibling overlay manifest's mtime —
+    // re-publishing overlay.json (new sha256s) re-materializes the package.
+    if (entry.clangApp !== undefined) statFile(clangOverlayPath);
   }
   return newest;
 }
@@ -195,6 +249,7 @@ async function assembleTree(name, pkg) {
   mfs.mkdir('/etc', 0o755);   // seedEntries' c-compile staging area
   const base = '/opt/' + name;
   const section = { dirs: ['/opt', base], files: {} };
+  const clangPlants = [];   // { abs, app, mode } — planted AFTER seedEntries
   for (const rel of Object.keys(pkg.files).sort()) {
     const entry = pkg.files[rel];
     if (entry.link !== undefined) {
@@ -206,7 +261,20 @@ async function assembleTree(name, pkg) {
       cur += '/' + parts[i];
       if (!section.dirs.includes(cur)) section.dirs.push(cur);
     }
-    section.files[base + '/' + rel] = entry;
+    // A `clangApp` entry is NOT bake vocabulary (seedEntries refuses it, like
+    // `link`): its bytes come pre-built from the sibling overlay, not from
+    // compiler.js. It's resolved + planted after seedEntries builds the dirs.
+    if (entry.clangApp !== undefined) {
+      if (typeof entry.clangApp !== 'string' || !entry.clangApp.length) {
+        throw new Error(`package '${name}': ${rel} — clangApp must name an app`);
+      }
+      if (!withClang) {
+        throw new Error(`package '${name}': ${rel} — clangApp entries require mkpkg --clang`);
+      }
+      clangPlants.push({ abs: base + '/' + rel, app: entry.clangApp, mode: 0o755 });
+    } else {
+      section.files[base + '/' + rel] = entry;
+    }
   }
   await COMMON.seedEntries(mfs, section, {
     readAsset: (n) => fs.readFileSync(path.join(OS_DIR, n), 'utf-8'),
@@ -216,6 +284,21 @@ async function assembleTree(name, pkg) {
     compile: COMMON.createCcDriver(CompilerJS, mfs),
     log: () => {},
   });
+  // Plant each clangApp: pull /usr/bin/<app> out of the sibling overlay (bytes
+  // ALREADY sha256+size verified by loadOverlays) and write it into the tree.
+  if (clangPlants.length) {
+    const ov = clangOverlay();
+    for (const p of clangPlants) {
+      const f = ov.get('/usr/bin/' + p.app);
+      if (!f) {
+        throw new Error(`package '${name}': clangApp '${p.app}' — no /usr/bin/${p.app} in the sibling overlay (${clangOverlayPath})`);
+      }
+      if (f.bytes === undefined) {
+        throw new Error(`package '${name}': clangApp '${p.app}' — /usr/bin/${p.app} is a symlink in the overlay, not a binary payload`);
+      }
+      COMMON.writeFile(mfs, p.abs, f.bytes, p.mode);
+    }
+  }
   // Walk the assembled tree into sorted tar members (dirs before children).
   const members = [];
   const walk = (abs, rel) => {

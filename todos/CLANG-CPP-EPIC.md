@@ -419,3 +419,33 @@ sibling from this repo's tools beyond the opt-in `--build-overlay`.
 4. Sibling-side (their queue): M0 measurement memo; M1 Support milestone —
    the sibling's 0030 epic owns Part I's ladder, with 0041/0042 as the
    running starts.
+
+---
+
+# Part II — LANDED (2026-07-20, branch `clang-infra`)
+
+The optional `*-clang` build/package infra from §6–7 is built (this-repo
+JS/packaging only; NO base `image.json` bump — base OS image byte-unaffected).
+Dev log: `logs/2026-07-20/clang-infra-part-ii.md`.
+
+- **`serve-with-clang.js`** (§6) — hard-fail WRAPPER (not a fork): preflights
+  the sibling (present / `simple1/out/clang` built / `out-image/overlay.json`
+  present+parseable), runs `mkpkg --clang` foreground, then delegates to the
+  unmodified `serve.js` with `--clang --packages-index=clang`. Every preflight
+  miss is a loud `exit(1)` + fix command; never falls back to base.
+  `--clang-root=PATH`, `--build-overlay` opt-in.
+- **`mkpkg --clang`** (§7) — `requires:"clang-sibling"` gate field (filtered at
+  `listPackages`, the base-purity choke point) + `clangApp` entry type (copies
+  `/usr/bin/<app>` from the sibling overlay, sha256-verified through the SAME
+  `os-common.loadOverlays` the bake uses). Plain `mkpkg` writes the base index
+  (no `-clang` name); `--clang` writes the superset; orphan-prune self-cleans.
+- **`serve.js --packages-index=clang`** — one new flag: asserts the served
+  `/packages` index is the clang superset; flagless serve.js byte-identical.
+- **`packages/doom-clang.json`** — the shipped example `-clang` def.
+- **3 guardrail tests** (all green, in `tests/host/run.js` + `tests/run.js`
+  RULES): base-purity (a), serve-with-clang preflight exit-1 (b), mkpkg --clang
+  sha256 round-trip (c).
+
+Not yet built (as designed — no mechanism gap): the real per-app `-clang` defs
+and the toolchain packages (`clang-toolchain-clang`, `clang-src-clang`) — they
+ride the same `clangApp` type once the sibling publishes their overlay payloads.
