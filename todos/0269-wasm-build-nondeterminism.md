@@ -1,7 +1,11 @@
 # 0269 — Nondeterministic wasm output: one function-table slot drifts run-to-run
 
-- **Status**: open — diagnosed 2026-07-20 (COULD-NOT-REPRODUCE; ASLR/stack
-  hypothesis REFUTED). No fix landed; awaiting a reclassify/gate-hardening thread.
+- **Status**: CLOSED 2026-07-20 — COULD-NOT-REPRODUCE (ASLR/stack hypothesis
+  REFUTED; 0 outliers in 185 fresh/repeat builds). No product bug: `buildProject`
+  is a pure function of its inputs; the 2026-07-19 outlier was an uncontrolled
+  input over a live-edited tree, not nondeterminism. Optional gate-hardening
+  (pristine-worktree + >=20 fresh-process hashes; harness in `build/nondeterminism-0269/`)
+  filed as a NON-BLOCKING follow-up, not a P0.
 - **Design**: Root-cause diagnostic in
   `logs/2026-07-20/wasm-nondeterminism-rootcause.md`; repro harness in
   `build/nondeterminism-0269/`.
