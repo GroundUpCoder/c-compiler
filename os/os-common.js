@@ -538,11 +538,39 @@ function plantOverlays(mfs, loaded, log) {
  * blob and a fat blob share a VERSION_ID, so freshness gates that want a
  * specific set must compare it, not just the version. Node-only (reads
  * packages/ from the repo), like newestBakeInput. */
-function listPackages(fsMod, pathMod, rootDir) {
+/* opts (all optional):
+ *   packagesDir : the directory to enumerate (default rootDir/packages) — a
+ *                 test seam; the shipping callers always pass rootDir.
+ *   withClang   : include GATED definitions (those carrying a `requires`
+ *                 field, e.g. requires:"clang-sibling" — the *-clang packages).
+ *                 DEFAULT false: gated defs are EXCLUDED from every default
+ *                 enumeration. This one choke point is what keeps "base gucOS
+ *                 ships with NO clang" true by CONSTRUCTION rather than by
+ *                 convention (CLANG-CPP-EPIC Part II §7): mkpkg-no-flag,
+ *                 foldPackages('all') (→ serve.js's fat image, boot.js
+ *                 --packages=all, tests/lib/image-fixture.js) all go through
+ *                 the default path and never see a gated package; only an
+ *                 explicit mkpkg --clang / withClang opt-in includes them.
+ * A def is "gated" iff it declares a non-empty `requires` — determined by
+ * parsing each json (cheap; packages/ is a handful of small files). A
+ * malformed def is NOT excluded (its breakage must surface loudly downstream
+ * in buildPackage/foldPackages, not vanish silently from the base image). */
+function listPackages(fsMod, pathMod, rootDir, opts) {
+  opts = opts || {};
+  var dir = opts.packagesDir || pathMod.join(rootDir, 'packages');
+  var withClang = !!opts.withClang;
   var names = [];
   try {
-    fsMod.readdirSync(pathMod.join(rootDir, 'packages')).forEach(function (f) {
-      if (/\.json$/.test(f)) names.push(f.slice(0, -5));
+    fsMod.readdirSync(dir).forEach(function (f) {
+      if (!/\.json$/.test(f)) return;
+      var name = f.slice(0, -5);
+      if (!withClang) {
+        var req;
+        try { req = JSON.parse(fsMod.readFileSync(pathMod.join(dir, f), 'utf-8')).requires; }
+        catch (e) { req = undefined; }   // malformed → not excluded; fails loud downstream
+        if (req !== undefined && req !== null && req !== '') return;
+      }
+      names.push(name);
     });
   } catch (e) { /* no packages/ dir — nothing to fold */ }
   return names.sort();

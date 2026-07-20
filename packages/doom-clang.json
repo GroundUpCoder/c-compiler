@@ -1,0 +1,13 @@
+{
+  "name": "doom-clang",
+  "version": "1.0.0",
+  "summary": "DOOM (clang-built variant — real Clang/LLVM cross-compile, CLANG-CPP-EPIC)",
+  "requires": "clang-sibling",
+  "files": {
+    "doom-clang": { "clangApp": "doom-clang" }
+  },
+  "bin": { "doom-clang": "doom-clang" },
+  "menu": [
+    { "group": "Demos", "entry": "doom-clang", "cmd": "doom-clang" }
+  ]
+}

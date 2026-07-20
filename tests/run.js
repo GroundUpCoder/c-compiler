@@ -97,13 +97,21 @@ const RULES = [
 
   // The reference OS build: seeded C, boot, compositor, the image manifest.
   [/^os\//, ['kernel', 'sweep'], 'seeded OS sources restale the image; e2e + browser cover it'],
+  // os-common's listPackages filter is the base-purity choke point (CLANG-CPP-
+  // EPIC II §7) — host holds that guardrail (rules accumulate, so this ADDS host
+  // to the ^os/ kernel+sweep above).
+  [/^os\/os-common\.js$/, ['host'], 'the listPackages base-purity gate — host guardrail'],
   [/^image\.json$/, ['kernel', 'sweep'], 'the bake manifest'],
   [/^serve\.js$/, ['sweep', 'host'], 'the browser test server + its first-run/overlay checks'],
+  // The clang-mandatory dev server (CLANG-CPP-EPIC Part II §6): host holds its
+  // preflight guardrail (test_serve_with_clang.js).
+  [/^serve-with-clang\.js$/, ['host'], 'the clang-mandatory serve wrapper — its preflight guardrail is a host test'],
 
   // gucman packages: definitions fold into the fat fixture (--packages=all)
-  // AND feed tools/mkpkg.js payloads; test_gucman_e2e consumes both.
-  [/^packages\//, ['kernel', 'sweep'], 'package definitions restale the fat fixture + the mkpkg pool'],
-  [/^tools\/mkpkg\.js$/, ['kernel'], 'builds the gucman package pool test_gucman_e2e installs from'],
+  // AND feed tools/mkpkg.js payloads; test_gucman_e2e consumes both; the base-
+  // purity + clangApp guardrails (host) also read them (CLANG-CPP-EPIC II §7).
+  [/^packages\//, ['kernel', 'sweep', 'host'], 'package definitions restale the fat fixture + the mkpkg pool + the base-purity guardrail'],
+  [/^tools\/mkpkg\.js$/, ['kernel', 'host'], 'builds the gucman package pool test_gucman_e2e installs from; host holds the mkpkg --clang guardrail'],
 
   // Shared test engine → every suite-runner-backed suite.
   [/^tests\/lib\//, ['unit', 'blockfs', 'kernel', 'sweep'], 'the shared suite-runner/image-fixture engine'],
