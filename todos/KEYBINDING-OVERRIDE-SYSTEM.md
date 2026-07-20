@@ -92,6 +92,37 @@ config mechanism, no new propagation mechanism, no new store.
 
 ## 2. The model: actions, defaults, overrides
 
+> **PROGRESS — CHUNK 2 (sub-step ii) LANDED** on branch `keybind-registry`
+> (2026-07-20, dev log `logs/2026-07-20/keybind-registry.md`, awaiting master
+> review + sequencing; NOT merged). The keys.h POLICY layer only — registry +
+> override resolution + chord parse/format; NOT wm.c (chunk iii), ctlpanel
+> (chunk iv), or Expose. Landed: the `KS_ACTIONS` registry (8 system + 13 app
+> = 21 actions; SYSTEM rows carry per-scheme defaults, APP defaults derive
+> from the KS_TABLE rows by KA_*+ctx); the KK_* vocabulary extension
+> (F1–F12, tab/esc/space/enter/backspace/pgup/pgdn/ins/delete) +
+> `ks_chord_scancode` twin of the kernel scancodes; `ks_parse_chord`/
+> `ks_chord_str` (canonical round-trip, hand-rolled '+'-split — no strtok_r in
+> the OS libc); override-aware `key_action` + `ks_get` parsing `bind.<action>`
+> (none unbinds, `default` restores, malformed falls back LOUDLY on stderr,
+> readline rows immune, a rebind MOVES); `ks_action_default`/`ks_action_binding`
+> for the chunk-iii/iv consumers; the four new macos rows (⌘←/→ line,
+> ⌘↑/↓ doc — inert until wm.c releases GUI+arrow). The four grab tokens for
+> wm.c are `KTOK_SNAP_*`/`KTOK_CYCLE`/`KTOK_START_MENU`/`KTOK_SYSMENU`/
+> `KTOK_OVERVIEW` (non-reserved → EV_HOTKEY). Tests:
+> `tests/kernel/test_keybind_registry.js` (native-C probe
+> `keybind_registry_probe.c`, ~60 checks + the JS-side scancode twin vs
+> `WM_DEFAULT_GRABS`). Full kernel suite green (99/99). os/keys.h IS a bake
+> input → an image version bump is DUE when this deploys (bundled with chunk
+> iii, when the feature first goes user-visible); NOT bumped now.
+>
+> Follow-on for the consumer chunks (noted, not a chunk-2 task): user32's
+> `kk_from_vk` folds only arrows/Home/End to KK_* today, and term folds its
+> own keysyms — so an APP-action rebind to a key outside those (e.g. a
+> function key) resolves correctly in keys.h but won't be REACHED until each
+> consumer extends its fold to the new KK_* vocabulary. `key_action` is
+> already override-correct for the full vocabulary; wiring the consumer folds
+> is part of making rebinds user-reachable (chunk iii/iv).
+
 **Every rebindable behavior is a named ACTION in one fixed registry**
 (`KS_ACTIONS`, a new table in keys.h — names are stable public API, like
 config keys). Two kinds:
