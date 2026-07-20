@@ -5345,7 +5345,7 @@ function makeIdent(loc, name, scope) {
 }
 
 // Build an ESubscript, applying C semantics:
-//   - reject commutative form `0[arr]` (we choose not to support it)
+//   - normalize the commutative form `N[arr]` to `arr[N]` (C11 6.5.2.1p2)
 //   - reject subscript on a reference type
 //   - decay an array base to a pointer (GC arrays stay — they aren't C arrays)
 //   - infer element type from the base's pointer/array element
@@ -5353,13 +5353,16 @@ function makeIdent(loc, name, scope) {
 // Diagnostics flow through the active `withDiag` sink. Always returns an
 // ESubscript (best-effort even on errors).
 function makeSubscript(loc, base, index) {
-  const baseUt = base.type.removeQualifiers();
-  const idxUt = index.type.removeQualifiers();
-  // Reverse-order subscript (`5[arr]`) — rejected as our compiler
-  // doesn't support C99's commutative form.
-  if (baseUt.isInteger() &&
-      (idxUt.isPointer() || idxUt.isArray())) {
-    reportError(loc, "Commutative subscript (e.g. 0[arr]) is not supported; write arr[0] instead");
+  let baseUt = base.type.removeQualifiers();
+  let idxUt = index.type.removeQualifiers();
+  // C11 6.5.2.1p2: `E1[E2]` is defined as `*((E1)+(E2))`, and addition is
+  // commutative, so `N[arr]` is legal and equal to `arr[N]`. Normalize it by
+  // swapping to the array/pointer-first form before the usual lowering
+  // (todos/0193).
+  if (baseUt.isInteger() && (idxUt.isPointer() || idxUt.isArray())) {
+    const tmp = base; base = index; index = tmp;
+    baseUt = base.type.removeQualifiers();
+    idxUt = index.type.removeQualifiers();
   }
   // Base must be pointer / array / GC-array. Without this check
   // codegen would emit `base_addr + idx*sizeof(elem)` against a
