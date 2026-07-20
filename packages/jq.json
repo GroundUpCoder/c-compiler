@@ -1,0 +1,9 @@
+{
+  "name": "jq",
+  "version": "1.7.1",
+  "summary": "jq 1.7.1 — command-line JSON processor (filters, math, dates, and full Oniguruma regex; behaviourally identical to upstream jq)",
+  "files": {
+    "jq": { "project": "vendor/jq/bin.json" }
+  },
+  "bin": { "jq": "jq" }
+}
