@@ -10339,9 +10339,13 @@ class Parser {
           this.error(alignTok, "_Alignas value must be a positive power of 2");
         }
         // C11 6.2.8: extended alignments (> max_align_t = 8 on wasm32) are
-        // implementation-defined. We don't support them.
-        if (alignVal > 8) {
-          this.error(alignTok, `_Alignas(${alignVal}) exceeds maximum supported alignment of 8`);
+        // implementation-defined. This compiler honors them for both static
+        // storage (data section, region base 64 KiB-aligned) and automatic
+        // storage (over-aligned frame slot — same path as the already-uncapped
+        // __attribute__((aligned(N)))), so `_Alignas` no longer caps at 8
+        // (todos/0194). Guard only the data-section alignment ceiling here.
+        if (alignVal > 65536) {
+          this.error(alignTok, `_Alignas(${alignVal}) exceeds maximum supported alignment of 65536`);
         }
         if (alignVal > requestedAlignment) requestedAlignment = alignVal;
         continue;
