@@ -1436,6 +1436,49 @@ function preprocess(filename, initialTokens, ppRegistry) {
     return packPragmaMarker(toks, currentFile, strTok.line);
   }
 
+  // Does `tok` name the `defined` operator, directly or through an
+  // object-like macro alias chain (`#define D defined`)? gcc/clang honor a
+  // `defined` produced by such an expansion inside `#if`/`#elif` — strictly
+  // UB per C11 6.10.1p4, but portable config headers rely on it (todos/0195).
+  function aliasesToDefined(tok, seen) {
+    if (tok.atIdent("defined")) return true;
+    if (tok.kind !== TokenKind.IDENT || !macros.has(tok.text) || seen.has(tok.text)) return false;
+    const m = macros.get(tok.text);
+    if (m.isFunctionLike || m.replacement.length !== 1) return false;
+    seen.add(tok.text);
+    return aliasesToDefined(m.replacement[0], seen);
+  }
+
+  // Resolve `defined` operators on a #if/#elif controlling line BEFORE macro
+  // expansion, so the operand is taken literally and never macro-expanded
+  // (C11 6.10.1p1). Handles both the literal `defined X`/`defined(X)` forms
+  // and a `defined` reached through an object-like alias (todos/0195). The
+  // operand identifier is looked up as a macro NAME for defined-ness; it does
+  // not go through expansion, so `#define FOO 1` / `#if D(FOO)` sees FOO the
+  // name (defined) rather than its replacement 1.
+  function resolveDefinedOperators(tokens) {
+    const out = [];
+    for (let i = 0; i < tokens.length; i++) {
+      const t = tokens[i];
+      if (aliasesToDefined(t, new Set())) {
+        let j = i + 1, paren = false;
+        if (j < tokens.length && tokens[j].atPunct(Punct.LPAREN)) { paren = true; j++; }
+        if (j < tokens.length && tokens[j].kind === TokenKind.IDENT) {
+          const resultTok = cloneToken(t);
+          resultTok.kind = TokenKind.PP_NUMBER;
+          resultTok.text = macros.has(tokens[j].text) ? "1" : "0";
+          out.push(resultTok);
+          i = j;
+          if (paren && i + 1 < tokens.length && tokens[i + 1].atPunct(Punct.RPAREN)) i++;
+          continue;
+        }
+        // Malformed `defined` — leave as-is; expand/evaluate reports it.
+      }
+      out.push(t);
+    }
+    return out;
+  }
+
   // --- 2. CENTRALIZED EXPANSION HELPER ---
   function expand(tokens, hideset) {
     const expanded = [];
@@ -2067,7 +2110,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
             // nesting (C11 6.10p6) — expanding/evaluating them there would
             // diagnose expressions the standard says to ignore.
             if (isActive()) {
-              const expandedTokens = expand(lineTokens, new Set());
+              const expandedTokens = expand(resolveDefinedOperators(lineTokens), new Set());
               condition = evaluateExpression(expandedTokens, (msg) =>
                 result.errors.push(new LexError(msg, state.currentFile, dir.line))) !== 0n;
             }
@@ -2097,7 +2140,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
             // means the expression is ignored per C11 6.10p6.
             let condition = false;
             if (parentActive && !top.anyBranchRan) {
-              const expandedTokens = expand(lineTokens, new Set());
+              const expandedTokens = expand(resolveDefinedOperators(lineTokens), new Set());
               condition = evaluateExpression(expandedTokens, (msg) =>
                 result.errors.push(new LexError(msg, state.currentFile, dir.line))) !== 0n;
             }
