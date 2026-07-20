@@ -30,6 +30,11 @@ const TokenKind = Object.freeze({
   INT: "INT",
   FLOAT: "FLOAT",
   PLACEMARKER: "PLACEMARKER",
+  // A structural pragma the parser needs positionally (currently only
+  // `#pragma pack`). The preprocessor emits it into the token stream;
+  // postProcess resolves it into a per-struct pack value and drops it, so
+  // it never reaches the parser (todos/0191).
+  PRAGMA: "PRAGMA",
   // A non-white-space character that forms no other token (C11 6.4p1's
   // "each non-white-space character that cannot be one of the above" —
   // @, $, `). Valid as a pp-token; diagnosed only if it survives
@@ -226,6 +231,13 @@ class Token {
     // own macro's expansion — never eligible for macro replacement again.
     this.noExpand = false;
     this.flags = new TokenFlags();
+    // PRAGMA tokens carry their directive here ({op, n} for `#pragma pack`);
+    // postProcess consumes and drops them (todos/0191).
+    this.pragma = null;
+    // Pack alignment cap (bytes) in effect where a `struct`/`union` keyword
+    // sits, stamped by postProcess from the resolved `#pragma pack` stack.
+    // 0 = natural alignment (no pack pragma active).
+    this.packValue = 0;
     Object.seal(this);
   }
 
@@ -1189,6 +1201,32 @@ function postProcess(lexResult) {
     }
   }
 
+  // Resolve `#pragma pack` (todos/0191): walk the stream keeping the MSVC/gcc
+  // pack stack, stamp the alignment cap in effect onto each `struct`/`union`
+  // keyword (parseTagSpecifier reads it), and drop the PRAGMA markers so the
+  // parser never sees them.
+  if (lexResult.tokens.some((t) => t.kind === TokenKind.PRAGMA)) {
+    const kept = [];
+    let cur = 0;              // current pack cap in bytes (0 = natural)
+    const stack = [];
+    for (const t of lexResult.tokens) {
+      if (t.kind === TokenKind.PRAGMA) {
+        const p = t.pragma;
+        if (p && p.op === "set") cur = p.n > 0 ? p.n : 0;
+        else if (p && p.op === "reset") cur = 0;
+        else if (p && p.op === "push") { stack.push(cur); if (p.n != null && p.n > 0) cur = p.n; }
+        else if (p && p.op === "pop") { if (stack.length) cur = stack.pop(); }
+        continue; // drop the marker
+      }
+      if (t.kind === TokenKind.KEYWORD &&
+          (t.keyword === Keyword.STRUCT || t.keyword === Keyword.UNION)) {
+        t.packValue = cur;
+      }
+      kept.push(t);
+    }
+    lexResult.tokens = kept;
+  }
+
   return lexResult;
 }
 
@@ -1350,6 +1388,38 @@ function preprocess(filename, initialTokens, ppRegistry) {
     }
   }
 
+  // `#pragma pack` (todos/0191): parse the MSVC/gcc-compatible forms into an
+  // op the parser applies to struct layout. Returns a PRAGMA marker token
+  // to splice into the stream, or null if `toks` is not a pack pragma.
+  //   pack(n)        -> {op:'set', n}
+  //   pack()         -> {op:'reset'}      (back to default alignment)
+  //   pack(push)     -> {op:'push'}
+  //   pack(push, n)  -> {op:'push', n}
+  //   pack(pop)      -> {op:'pop'}
+  function packPragmaMarker(toks, currentFile, line) {
+    if (toks.length === 0 || !toks[0].atIdent("pack")) return null;
+    // Collect the tokens inside pack( ... ), ignoring the parentheses.
+    const inner = toks.slice(1).filter(
+      (t) => !t.atPunct(Punct.LPAREN) && !t.atPunct(Punct.RPAREN) &&
+             !t.atPunct(Punct.COMMA));
+    let op;
+    if (inner.length === 0) {
+      op = { op: "reset", n: null };
+    } else if (inner[0].atIdent("push")) {
+      const n = inner[1] ? parseInt(inner[1].text, 10) : null;
+      op = { op: "push", n: Number.isFinite(n) ? n : null };
+    } else if (inner[0].atIdent("pop")) {
+      op = { op: "pop", n: null };
+    } else {
+      const n = parseInt(inner[0].text, 10);
+      if (!Number.isFinite(n)) return null;
+      op = { op: "set", n };
+    }
+    const marker = new Token(currentFile, line || 0, 0, TokenKind.PRAGMA, "#pragma pack");
+    marker.pragma = op;
+    return marker;
+  }
+
   // C11 6.10.9p1 destringize: drop any encoding prefix and the quotes,
   // then \" -> " and \\ -> \.
   function destringize(text) {
@@ -1362,6 +1432,8 @@ function preprocess(filename, initialTokens, ppRegistry) {
     const toks = lexed.tokens.filter(tk =>
       tk.kind !== TokenKind.EOS && tk.kind !== TokenKind.NEWLINE);
     applyPragma(toks, currentFile);
+    // C11 6.10.9: `_Pragma("pack(1)")` is equivalent to `#pragma pack(1)`.
+    return packPragmaMarker(toks, currentFile, strTok.line);
   }
 
   // --- 2. CENTRALIZED EXPANSION HELPER ---
@@ -2216,6 +2288,8 @@ function preprocess(filename, initialTokens, ppRegistry) {
             while (!state.atEnd && state.peek().kind !== TokenKind.NEWLINE)
               lineTokens.push(state.consume());
             applyPragma(lineTokens, state.currentFile);
+            const packMarker = packPragmaMarker(lineTokens, state.currentFile, dir.line);
+            if (packMarker) output.push(packMarker);
           } else if (dir.kind === TokenKind.IDENT) {
             // C11 6.10p1: a '#' line whose first token names no directive
             // is a non-directive — a constraint violation clang/gcc
@@ -2253,7 +2327,8 @@ function preprocess(filename, initialTokens, ppRegistry) {
           if (state.peek().atPunct(Punct.LPAREN)) {
             state.consume();
             if (!state.atEnd && state.peek().kind === TokenKind.STRING) {
-              executePragmaOperator(state.consume(), state.currentFile);
+              const packMarker = executePragmaOperator(state.consume(), state.currentFile);
+              if (packMarker) output.push(packMarker);
               if (!state.atEnd && state.peek().atPunct(Punct.RPAREN)) {
                 state.consume();
               }
@@ -3074,7 +3149,12 @@ function gcArrayOf(elementType) {
   return t;
 }
 
-function computeStructLayout(members, isPacked = false) {
+function computeStructLayout(members, packAlign = 0) {
+  // packAlign: `#pragma pack`/attribute alignment cap in bytes (0 = natural).
+  // A cap of 1 is full byte-packing (`__attribute__((packed))` / pack(1)):
+  // the bit-field internals below key on that for contiguous byte-anchored
+  // packing; a cap of 2/4/8 only lowers each member's alignment (todos/0191).
+  const isPacked = packAlign === 1;
   let size = 0;
   let maxAlign = 1;
   // Bit-field packing state. Placement follows the psABI (Itanium / what
@@ -3115,7 +3195,10 @@ function computeStructLayout(members, isPacked = false) {
   };
 
   for (const m of members) {
-    const naturalAlign = isPacked ? 1 : (m.type.align || 1);
+    // `#pragma pack(N)` / attribute packed lower each member's alignment to
+    // at most the pack cap; an explicit _Alignas/aligned still raises it.
+    const nat = m.type.align || 1;
+    const naturalAlign = packAlign > 0 ? Math.min(nat, packAlign) : nat;
     const mAlign = m.requestedAlignment > 0 ? Math.max(naturalAlign, m.requestedAlignment) : naturalAlign;
     const mSize = m.type.size;
 
@@ -3184,7 +3267,7 @@ function computeStructLayout(members, isPacked = false) {
   return { size, align: maxAlign };
 }
 
-function computeUnionLayout(members, isPacked = false) {
+function computeUnionLayout(members, packAlign = 0) {
   let maxSize = 0;
   let maxAlign = 1;
   for (const m of members) {
@@ -3193,7 +3276,9 @@ function computeUnionLayout(members, isPacked = false) {
     // Per-member _Alignas/__attribute__((aligned)) raises the union's
     // alignment exactly as the struct path does (todos/0216 — it was
     // silently ignored here, diverging from clang on align AND size).
-    const naturalAlign = isPacked ? 1 : (m.type.align || 1);
+    // `#pragma pack(N)`/packed cap the natural alignment (todos/0191).
+    const nat = m.type.align || 1;
+    const naturalAlign = packAlign > 0 ? Math.min(nat, packAlign) : nat;
     const mAlign = m.requestedAlignment > 0 ? Math.max(naturalAlign, m.requestedAlignment) : naturalAlign;
     if (mAlign > maxAlign) maxAlign = mAlign;
   }
@@ -10404,6 +10489,9 @@ class Parser {
   // --- Tag specifier (struct/union) ---
   parseTagSpecifier() {
     let tagKind;
+    // The `#pragma pack` cap in effect at this keyword (stamped by
+    // postProcess; 0 = natural alignment). todos/0191.
+    const pragmaPack = this.peek().packValue || 0;
     if (this.matchKW(Lexer.Keyword.STRUCT)) tagKind = Types.TagKind.STRUCT;
     else { this.advance(); tagKind = Types.TagKind.UNION; }
 
@@ -10568,13 +10656,17 @@ class Parser {
       const postTagAttrs = this.parseGCCAttributes();
       if (tagAttrs.packed || postTagAttrs.packed) tagDecl.isPacked = true;
 
+      // Effective pack cap (bytes): `__attribute__((packed))` is the strongest
+      // (byte-tight, cap 1); otherwise the `#pragma pack(N)` cap in effect.
+      const packAlign = tagDecl.isPacked ? 1 : pragmaPack;
+
       // Compute layout
       if (tagKind === Types.TagKind.STRUCT) {
-        const layout = Types.computeStructLayout(members, tagDecl.isPacked);
+        const layout = Types.computeStructLayout(members, packAlign);
         tagType.size = layout.size;
         tagType.align = layout.align;
       } else if (tagKind === Types.TagKind.UNION) {
-        const layout = Types.computeUnionLayout(members, tagDecl.isPacked);
+        const layout = Types.computeUnionLayout(members, packAlign);
         tagType.size = layout.size;
         tagType.align = layout.align;
       }
