@@ -113,14 +113,22 @@
   .oskrow { display: flex; gap: 4px; margin-top: 4px; }
   .oskkey {
     flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap;
-    font: 13px 'Menlo', 'Consolas', monospace; color: #c0c0d8;
+    /* Bigger, touch-friendly keys: font + vertical padding scale up with the
+       viewport (clamp) so a ~390px phone gets ~44px-tall targets while large
+       screens stay reasonable. Horizontal padding stays 0 so the flex row
+       (flex 1 1 0) shares width evenly and never overflows. */
+    font-family: 'Menlo', 'Consolas', monospace;
+    font-size: clamp(15px, 4vw, 17px); line-height: 1.25; color: #c0c0d8;
     background: #16162a; border: 1px solid #333355; border-radius: 5px;
-    padding: 9px 0; text-align: center; cursor: pointer;
+    padding: clamp(11px, 3.2vw, 14px) 0; text-align: center; cursor: pointer;
     user-select: none; -webkit-user-select: none;
   }
   .oskkey:hover { color: #e0e0f0; border-color: #4a4a77; }
   .oskkey.armed { background: #4a4a77; color: #ffffff; }
   .oskkey.locked { background: #6a6ab7; color: #ffffff; border-color: #9a9ad7; }
+  /* On narrow phones, reclaim the side padding so the board uses full viewport
+     width (the .oskin 760px cap only bites on tablets/desktop). */
+  @media (max-width: 480px) { #osk { padding: 2px 2px 6px; } }
   /* The desktop (todos/WM.md): the kernel composites windows onto this
      canvas in its worker; the page only forwards raw input. At zoom Z=1 the
      canvas is natural-size (backing store == pane == CSS size), so event
