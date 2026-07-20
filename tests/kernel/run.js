@@ -48,6 +48,7 @@ const tests = [
   ['test_strace_e2e.js', IMG],   // 0046: /bin/strace in-OS — cat's fd stream, exit/signal status propagation, -f, -o
   ['test_pty.js'],          // 0020: pty pair semantics over the SAB protocol (no wasm)
   ['test_pty_e2e.js'],      // 0020: real C over a pty — openpty, spawn-on-slave, winsize, SIGHUP
+  ['test_zerolen_read.js'], // 0253: read(fd, buf, 0) returns 0 immediately (never parks) on every brokered read kind — pipe/socket/pty-master (_streamRead) + tty FS_READ, empty stream + live writer; count>0 blocking semantics unchanged (no wasm)
   ['test_sockets.js'],      // 0008: AF_UNIX OFD semantics over the SAB protocol (no wasm)
   ['test_sockets_e2e.js'],  // 0008: real C client/server — accept/connect/send/recv, poll
   ['test_http.js'],         // 0172: HTTP transport (0x06xx) over the SAB protocol with a fake fetch — deferred status, streaming, backpressure, EOF/error split, teardown (no wasm)

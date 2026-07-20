@@ -3036,6 +3036,10 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       if (o1.kind === 'tty') {
         var tty = o1.tty || pcb.tty;
         if (!tty) { this._respondRaw(pcb, new Uint8Array(0)); return; }
+        // POSIX read(fd, buf, 0): return 0 immediately, no data transfer, no
+        // parking (0253) — and before the job-control check, since a
+        // zero-length read moves no bytes (the simple conforming choice).
+        if (count === 0) { this._respondRaw(pcb, new Uint8Array(0)); return; }
         // Job control (todos/0003): a background pgroup reading the tty gets
         // SIGTTIN (stop class); if it's ignored or blocked, POSIX says the
         // read fails with EIO instead. The read itself returns EINTR — after
@@ -6092,6 +6096,11 @@ Kernel.prototype._clearFlags = function (waiter) {
  * pipe-shaped direction. Deferred waiters register under the pipe op names
  * so _pipeNotify/_cancelWaiter serve both kinds unchanged. */
 Kernel.prototype._streamRead = function (pcb, dir, count) {
+  // POSIX read(fd, buf, 0): return 0 immediately, never park — even on an
+  // empty stream with a live writer (the 0252 R1 class, kernel-brokered
+  // side: pipes / sockets / pty master). BEFORE any avail check or waiter
+  // enqueue, matching the host.js R1 short-circuit.
+  if (count === 0) { this._respondRaw(pcb, new Uint8Array(0)); return; }
   var avail = this._pipeAvail(dir);
   if (avail > 0) {
     this._respondRaw(pcb, this._pipeTake(dir, Math.min(count, avail)));
