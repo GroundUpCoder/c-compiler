@@ -1,6 +1,9 @@
-// Struct with mixed 32-bit and 64-bit bit-fields. They go in different
-// storage units (different declared types — `unsigned int` vs
-// `unsigned long long`).
+// Struct with mixed 32-bit and 64-bit bit-fields. Adjacent bit-fields of
+// different declared types share one packed bit region (psABI / clang
+// wasm32): each field is placed at the running bit offset unless it would
+// straddle a container boundary of its own declared type, in which case it
+// advances to the next such boundary (todos/0190). sizeof is 24 — verified
+// against clang; the pre-0190 unit-per-type split gave 32.
 #include <stdio.h>
 
 struct S {

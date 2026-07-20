@@ -3077,11 +3077,17 @@ function gcArrayOf(elementType) {
 function computeStructLayout(members, isPacked = false) {
   let size = 0;
   let maxAlign = 1;
-  // Bitfield packing state
-  let bfBitsUsed = 0;
-  let bfUnitSize = 0;
-  let bfMaxAccess = 0;  // widest named-member access window in the run
+  // Bit-field packing state. Placement follows the psABI (Itanium / what
+  // clang tracks on wasm32): bit-fields of ANY declared type share one
+  // packed bit region measured from the struct start; each field goes at
+  // the current bit cursor unless it would straddle a container boundary of
+  // its own declared type, in which case it advances to the next such
+  // boundary (todos/0190 — keying the "unit" on the declared type split
+  // adjacent mixed-type fields into separate units, diverging from clang on
+  // sizeof and on every following member's offset).
+  let bfCursor = 0;     // absolute bit position (from struct start) of the next field
   let inBitField = false;
+  let bfPackedEnd = 0;  // packed: max byte-end of any access window in the run
 
   // A bit-field's access window: the smallest power-of-2 byte count,
   // anchored at the storage unit's start, that covers the member's bits.
@@ -3092,7 +3098,7 @@ function computeStructLayout(members, isPacked = false) {
   const windowBytes = (m, endBit) => {
     if (m.type.size === 8) return 8;
     const b = (endBit + 7) >> 3;
-    return b <= 1 ? 1 : b <= 2 ? 2 : 4;
+    return b <= 1 ? 1 : b <= 2 ? 2 : b <= 4 ? 4 : 8;
   };
   // Close the open unit: advance past the USED bytes only — a following
   // member packs into the unit's unused tail bytes exactly as clang wasm32
@@ -3101,9 +3107,11 @@ function computeStructLayout(members, isPacked = false) {
   // structs advance past the widest access window instead, so no member's
   // RMW load/store can reach beyond the struct.
   const closeBfUnit = () => {
-    const usedBytes = (bfBitsUsed + 7) >> 3;
-    size += isPacked ? Math.max(usedBytes, bfMaxAccess) : usedBytes;
-    inBitField = false; bfBitsUsed = 0; bfMaxAccess = 0;
+    size = Math.max(size, (bfCursor + 7) >> 3);
+    // Packed: a member's RMW window can extend past its used bits; the
+    // struct must cover it so the store never runs off the end (todos/0216).
+    if (isPacked) size = Math.max(size, bfPackedEnd);
+    inBitField = false; bfCursor = 0; bfPackedEnd = 0;
   };
 
   for (const m of members) {
@@ -3126,34 +3134,41 @@ function computeStructLayout(members, isPacked = false) {
 
     if (m.bitWidth >= 0) {
       const bw = m.bitWidth;
-      const unitBits = mSize * 8;
+      const containerBits = mSize * 8;
 
-      // Bit-fields share a storage unit when their declared types have the
-      // same size and the bits fit. Signedness does NOT split the unit —
-      // every major ABI (and clang/gcc) packs `int a:3; unsigned b:3`
-      // into one unit; sign extension is applied per-member at access
-      // time from bitWidth + the member's own type.
-      if (inBitField && mSize === bfUnitSize &&
-          bfBitsUsed + bw <= unitBits) {
-        // Fits in current storage unit
-        m.bitOffset = bfBitsUsed;
-        m.byteOffset = size;
-        bfBitsUsed += bw;
-      } else {
-        // Finish previous unit if any
-        if (inBitField) closeBfUnit();
-        // Start new storage unit
-        size = (size + mAlign - 1) & ~(mAlign - 1);
-        m.bitOffset = 0;
-        m.byteOffset = size;
-        bfBitsUsed = bw;
-        bfUnitSize = mSize;
-        inBitField = true;
+      // All adjacent bit-fields share one bit region regardless of declared
+      // type (signedness never splits it either — `int a:3; unsigned b:3`
+      // is one region; sign extension is per-member at access time).
+      if (!inBitField) { bfCursor = size * 8; inBitField = true; }
+      let absStart = bfCursor;
+      if (!isPacked && bw > 0 &&
+          Math.floor(absStart / containerBits) !== Math.floor((absStart + bw - 1) / containerBits)) {
+        // Would straddle a container boundary of the declared type: advance
+        // to the next such boundary (psABI). A same-type run fills its
+        // container in order and never trips this; a wider following type
+        // that doesn't fit the remaining bits starts a fresh container.
+        absStart = Math.ceil(absStart / containerBits) * containerBits;
       }
+      if (isPacked) {
+        // No container constraint: bits pack contiguously, byte-anchored.
+        m.byteOffset = absStart >> 3;
+        m.bitOffset = absStart & 7;
+      } else {
+        // Anchor the access window at the field's declared-type container.
+        // The field can't straddle it, so the window stays inside — and a
+        // store RMW preserves any member tail-packed into the same bytes.
+        const containerByte = Math.floor(absStart / containerBits) * mSize;
+        m.byteOffset = containerByte;
+        m.bitOffset = absStart - containerByte * 8;
+      }
+      bfCursor = absStart + bw;
       m.bfAccessBytes = windowBytes(m, m.bitOffset + bw);
       // Anonymous bit-fields reserve bits but are never accessed, so they
       // don't widen the packed advance past their used bytes.
-      if (m.name && m.bfAccessBytes > bfMaxAccess) bfMaxAccess = m.bfAccessBytes;
+      if (isPacked && m.name) {
+        const endByte = m.byteOffset + m.bfAccessBytes;
+        if (endByte > bfPackedEnd) bfPackedEnd = endByte;
+      }
     } else {
       // Regular (non-bitfield) member: finish any pending bitfield unit
       if (inBitField) closeBfUnit();
