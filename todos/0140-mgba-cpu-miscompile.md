@@ -1,5 +1,21 @@
 # 0140 — mGBA: real GBA games derail — ROOT-CAUSED to an in-OS short-read (NOT compiler.js codegen)
 
+- **FIX LANDED 2026-07-20 (option B, `logs/2026-07-20/os-read-fill-0140.md`,
+  branch `os-read-fill-0140`) — awaiting master's review of the kernel
+  read-path diff before merge + deploy.** jku picked **option B only** (the
+  general in-OS read-fill; option A — patching mGBA's unlooped read — was
+  rejected: the bug is ours, not upstream's). `RemoteFS.prototype.read`
+  (kernel.js) now FILLS a regular-file `read(fd, buf, N>KP_FS_CHUNK)` up to
+  `count` by looping the `FS_READ` RPC (each reply is payload-capped, so the
+  loop is process-side), matching native/Node `fs.readSync`. **Scoped to
+  regular files** via a `_isRegularFd` fstat (S_IFREG) + a first-chunk-full
+  gate — ttys/pipes/sockets/char-devices keep POSIX short-read semantics
+  untouched. Regression: `tests/kernel/test_read_fill_e2e.js` (fails pre-fix
+  `rv=60000`, passes after; includes a pipe scope-proof leg). Verified:
+  kernel gate 95/95 real (the 1 fail is the known gucman_quake cold-bake
+  flake), and the real Mario Tennis ROM boots in-OS with mGBA source UNCHANGED
+  — **0** invalid-address lines (was 1.5 M), **1417** DMA-to-VRAM/OAM, a
+  88.2%-non-white composited title frame. compiler.js untouched.
 - **ROOT CAUSE FOUND 2026-07-20 (`logs/2026-07-20/mgba-crt0-codegen-fix.md`,
   branch `mgba-crt0-codegen-fix`) — the whole "compiler.js miscompiles the
   ARM/THUMB core" premise is WRONG.** The Mario Tennis crt0 derail (`BX` →
