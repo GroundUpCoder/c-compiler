@@ -1,0 +1,13 @@
+{
+  "name": "imgui-clang",
+  "version": "1.0.0",
+  "summary": "Dear ImGui demo + Process Inspector (clang-built C++ — ocornut/imgui, T1 of the C++ port ladder)",
+  "requires": "clang-sibling",
+  "files": {
+    "imgui-clang": { "clangApp": "imgui-clang" }
+  },
+  "bin": { "imgui-clang": "imgui-clang" },
+  "menu": [
+    { "group": "Demos", "entry": "imgui-clang", "cmd": "imgui-clang" }
+  ]
+}

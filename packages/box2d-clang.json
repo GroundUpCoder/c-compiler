@@ -1,0 +1,13 @@
+{
+  "name": "box2d-clang",
+  "version": "1.0.0",
+  "summary": "Box2D sandbox (clang-built C++ — erincatto/box2d 2.4, T1 of the C++ port ladder)",
+  "requires": "clang-sibling",
+  "files": {
+    "box2d-clang": { "clangApp": "box2d-clang" }
+  },
+  "bin": { "box2d-clang": "box2d-clang" },
+  "menu": [
+    { "group": "Demos", "entry": "box2d-clang", "cmd": "box2d-clang" }
+  ]
+}
