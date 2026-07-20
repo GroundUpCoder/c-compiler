@@ -30243,6 +30243,27 @@ char *strerror(int errnum) {
   case ENAMETOOLONG: return "File name too long";
   case ENOSYS:     return "Function not implemented";
   case ENOTEMPTY:  return "Directory not empty";
+  case ENOLCK:     return "No locks available";
+  case EOVERFLOW:  return "Value too large for defined data type";
+  /* Socket family (todos/0008 errno.h; strings match glibc wording). */
+  case ENOTSOCK:   return "Socket operation on non-socket";
+  case EDESTADDRREQ: return "Destination address required";
+  case EPROTOTYPE: return "Protocol wrong type for socket";
+  case EPROTONOSUPPORT: return "Protocol not supported";
+  case EOPNOTSUPP: return "Operation not supported"; /* == ENOTSUP */
+  case EAFNOSUPPORT: return "Address family not supported by protocol";
+  case EADDRINUSE: return "Address already in use";
+  case EADDRNOTAVAIL: return "Cannot assign requested address";
+  case ECONNABORTED: return "Software caused connection abort";
+  case ECONNRESET: return "Connection reset by peer";
+  case ENOBUFS:    return "No buffer space available";
+  case EISCONN:    return "Transport endpoint is already connected";
+  case ENOTCONN:   return "Transport endpoint is not connected";
+  case ETIMEDOUT:  return "Connection timed out";
+  case ECONNREFUSED: return "Connection refused";
+  case EHOSTUNREACH: return "No route to host";
+  case EALREADY:   return "Operation already in progress";
+  case EINPROGRESS: return "Operation now in progress";
   default:         return "Unknown error";
   }
 }
