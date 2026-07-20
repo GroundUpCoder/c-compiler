@@ -69,6 +69,17 @@ Free, redistributable ARM test ROMs from **jsmolka/gba-tests** (MIT):
 | `thumb.gba` | **Failed test 230** | tests 1–229 pass |
 | `memory.gba` | (run pending) | |
 
+> **Both jsmolka CPU-suite ROMs are now RETIRED as compiler.js oracles.**
+> ARM 235 is an upstream v0.10.5 bug (fixed upstream by `d031892e55`, backported
+> in `dc7054e`; `logs/2026-07-18/mgba-shared-jsmolka-bug.md`). THUMB 230 was
+> triaged 2026-07-20 (`logs/2026-07-20/mgba-thumb230-triage.md`): a fresh *native*
+> upstream v0.10.5 run fails `thumb.gba` at **test 102** (overflow-flag ADD), not
+> 230 — agreeing with the clang golden build. Test 230 ("Base in rlist") is itself
+> a genuine, still-unfixed upstream v0.10.5 bug (STMIA writeback-after-loop stores
+> the old base); the *only* compiler.js `thumb.gba` divergence is at test 102,
+> where compiler.js is coincidentally more hardware-correct. Use **Mario Tennis
+> crt0** (clang differential) as the clean compiler.js codegen oracle, not these.
+
 Tests are numbered by category (conditions 1+, branches 50+, flags 100+,
 shifts 150+, data_processing 200+, psr 250+, multiply 300+, single_transfer
 350+, halfword 400+, data_swap 450+, block_transfer 500+). arm.gba stops at the

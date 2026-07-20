@@ -5,6 +5,22 @@
   interpreter; fixing it is an open-ended compiler correctness hunt with no
   committed timebox. Design + full evidence: `todos/MGBA.md`. Investigation
   narrative: `logs/2026-07-12/mgba-real-games-cpu-miscompile.md`.
+- **THUMB-230 triage verdict (2026-07-20, `logs/2026-07-20/mgba-thumb230-triage.md`)**:
+  jsmolka `thumb.gba` "test 230" is a **muddy oracle — retired** (like ARM-235).
+  Fresh native upstream mGBA **v0.10.5** (`26b7884bc`, matches vendored) run:
+  `thumb.gba` → **Failed test 102** (not 230); `arm.gba` → Failed 235 (oracle
+  validated vs the ARM-235 result). So native + the clang golden build **agree**
+  (both halt at 102); compiler.js is the lone outlier at 230. Two facts: (1) test
+  230 ("Base in rlist", `stm r1!,{r0-r3}`) is a genuine **upstream** v0.10.5 bug
+  (STMIA writeback runs after the store loop → stores old base; hardware stores
+  the new base) with **no upstream fix** (handler byte-identical in current
+  master) — so nothing to backport; (2) the *only* compiler.js `thumb.gba`
+  divergence is at test 102 (overflow-flag ADD), where compiler.js is
+  *coincidentally more* hardware-correct. **The real, actionable compiler.js
+  codegen bug for 0140 remains the Mario Tennis crt0 derail** (`BX`→`0x09000000`),
+  cleanly pinned by the clang differential — the fix must anchor there, NOT on
+  jsmolka thumb. That fix re-enters the deliberately-untouched `compiler.js` →
+  **go/no-go for jku**. No backport, no compiler.js edit, no deploy this pass.
 - **Design**: todos/MGBA.md
 
 ## Goal
