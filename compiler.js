@@ -2801,6 +2801,17 @@ class TagType extends TypeInfo {
   isStruct() { return this.tagKind === TagKind.STRUCT; }
   isUnion()  { return this.tagKind === TagKind.UNION; }
   isEnum()   { return this.tagKind === TagKind.ENUM; }
+  // The signedness of the enum's implementation-defined compatible type
+  // (C11 6.7.2.2p4). clang/gcc pick `unsigned int` when every enumerator is
+  // >= 0, else `int`. Used for enum bit-field read extension (todos/0189).
+  // An incomplete/forward enum has no enumerators yet — treat as signed.
+  enumIsUnsigned() {
+    if (this.tagKind !== TagKind.ENUM || !this.tagDecl) return false;
+    for (const m of this.tagDecl.members) {
+      if (m.value < 0n) return false;
+    }
+    return true;
+  }
   isAggregate() { return this.isStruct() || this.isUnion(); }
   _toString() { return this.tagKind + " " + this.tagName; }
   _eqStructure(other, _seen) {
@@ -3758,6 +3769,9 @@ class Expr {
       this.bitWidth = -1; this.bitOffset = 0; this.byteOffset = 0;
       this.bfAccessBytes = 0;  // bit-field RMW window, set by computeStructLayout
       this.requestedAlignment = 0;
+      // For an enum bit-field: the pre-erasure enum type, whose compatible
+      // type drives the read sign/zero-extension (todos/0189). Null otherwise.
+      this.enumBitField = null;
       Object.seal(this);
     }
   }
@@ -10358,13 +10372,18 @@ class Parser {
     }
 
     // In C, enum types are compatible with int. Erase enum types to int
-    // early so codegen never needs to handle them as a special case.
+    // early so codegen never needs to handle them as a special case. Keep
+    // the pre-erasure enum around: an enum *bit-field* must follow the
+    // enum's compatible-type signedness for its read extension (C11
+    // 6.7.2.2p4 — clang/gcc make an all-non-negative enum unsigned int, so
+    // the field zero-extends). See emitBitFieldLoad / todos/0189.
+    const enumType = type.isEnum() ? type : null;
     if (type.isEnum()) type = Types.TINT;
 
     if (isConst) type = type.addConst();
     if (isVolatile) type = type.addVolatile();
 
-    return { type, storageClass, isInline, attrFlags, requestedAlignment, importModule, importName };
+    return { type, enumType, storageClass, isInline, attrFlags, requestedAlignment, importModule, importName };
   }
 
   // --- Tag specifier (struct/union) ---
@@ -10510,6 +10529,11 @@ class Parser {
           const mVar = new AST.DVar({ filename: this.peek().filename, line: this.peek().line },
             mName, mType, Types.StorageClass.NONE, null);
           mVar.bitWidth = bitWidth;
+          // An enum bit-field reads back with the signedness of the enum's
+          // compatible type, not of the erased `int` (todos/0189). The enum
+          // is erased to int in parseDeclSpecifiers; carry the original for
+          // emitBitFieldLoad's sign/zero-extension choice.
+          if (bitWidth >= 0 && memSpecs.enumType) mVar.enumBitField = memSpecs.enumType;
           if (memSpecs.requestedAlignment > 0) {
             if (bitWidth >= 0) {
               this.error(this.peek(), "_Alignas cannot be applied to a bit-field");
@@ -18339,7 +18363,12 @@ class CodeGenerator {
   }
   emitBitFieldLoad(field) {
     const bw = field.bitWidth, bo = field.bitOffset;
-    const isUnsigned = this.isUnsignedType(field.type);
+    // An enum bit-field extends per its enum's compatible-type signedness
+    // (C11 6.7.2.2p4), not the erased `int`: an all-non-negative enum is
+    // unsigned int in clang/gcc, so the field zero-extends (todos/0189).
+    const isUnsigned = field.enumBitField
+      ? field.enumBitField.enumIsUnsigned()
+      : this.isUnsignedType(field.type);
     const unitBytes = this._bfUnitBytes(field);
     // i32 path covers 1/2/4-byte windows; i64 path covers 8-byte storage
     // (8-byte units never narrow, so the value domain matches the type).
