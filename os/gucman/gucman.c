@@ -71,6 +71,8 @@
 #define GM_FONTS_DIR    "/etc/fonts"
 #define GM_FONT_LIST    "/etc/fonts/fallback"   /* the fontchain.h /etc layer */
 #define GM_BIN_DIR      "/usr/local/bin"
+#define GM_DESKTOP_DIR  "/root/Desktop"          /* where the wm scans icons */
+#define GM_DESKTOP_FLAG GM_DB_DIR "/desktop_shortcuts"  /* Q5/#90 persistent toggle */
 #define GM_OS_RELEASE   "/usr/share/os-release"
 #define GM_NAME_MAX     64
 #define GM_PATH_MAX     768
@@ -625,6 +627,26 @@ static int gm_base_version(void) {
     return v;
 }
 
+/* ====================== install-to-Desktop toggle ===================== */
+
+/* Q5/#90: the persistent "add new installs to Desktop" flag, shared with
+ * the storefront GUI (software.c writes the same one-line file). ON iff the
+ * file's first line is exactly "on"; absent/anything-else = OFF (opt-in
+ * default). A CLI `gucman install` honours it just like the GUI does — the
+ * setting lives with gucman, not in the front-end. */
+static int gm_desktop_flag(void) {
+    size_t len;
+    char *t = gm_read_file(GM_DESKTOP_FLAG, &len);
+    if (!t) return 0;
+    char *nl = strchr(t, '\n');
+    if (nl) *nl = 0;
+    char *e = t + strlen(t);
+    while (e > t && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r')) *--e = 0;
+    int on = strcmp(t, "on") == 0;
+    free(t);
+    return on;
+}
+
 /* ============================== install ================================ */
 
 /* Undo bookkeeping so a failed plant unwinds what it already did (the DB
@@ -635,10 +657,12 @@ struct gm_undo {
     cJSON *menu;                /* array of planted menu entry paths */
     cJSON *menu_dirs;           /* array of menu dirs WE created */
     cJSON *fonts;               /* array of planted fallback face lines */
+    cJSON *desktop;             /* array of planted Desktop shortcut paths (Q5) */
 };
 
 static void gm_unwind(const char *name, struct gm_undo *u) {
     cJSON *it;
+    cJSON_ArrayForEach(it, u->desktop) unlink(it->valuestring);
     cJSON_ArrayForEach(it, u->fonts) gm_fontline_set(it->valuestring, 0);
     cJSON_ArrayForEach(it, u->menu) unlink(it->valuestring);
     cJSON_ArrayForEach(it, u->menu_dirs) rmdir(it->valuestring);
@@ -768,6 +792,7 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
     cJSON *db_menu = cJSON_AddArrayToObject(db, "menu_entries");
     cJSON *db_menu_dirs = cJSON_AddArrayToObject(db, "menu_dirs");
     cJSON *db_fonts = cJSON_AddArrayToObject(db, "font_faces");
+    cJSON *db_desktop = cJSON_AddArrayToObject(db, "desktop");
 
     char *control_text = NULL;
     if (tar_extract(tar, tarlen, name, stage, &control_text, db_files, db_dirs) != 0) {
@@ -814,8 +839,9 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
     }
 
     /* plant the declarative surface; unwind everything on any failure */
-    struct gm_undo undo = { db_links, db_ow, db_menu, db_menu_dirs, db_fonts };
+    struct gm_undo undo = { db_links, db_ow, db_menu, db_menu_dirs, db_fonts, db_desktop };
     int fail = 0;
+    char primary[GM_NAME_MAX] = "";     /* the command a Desktop shortcut launches (Q5) */
     cJSON *cbin = cJSON_GetObjectItemCaseSensitive(control, "bin");
     cJSON *it;
     cJSON_ArrayForEach(it, cbin) {
@@ -844,6 +870,12 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
             break;
         }
         cJSON_AddItemToArray(db_links, cJSON_CreateString(link));
+        /* the Desktop shortcut launches the package's primary command:
+         * the one named exactly like the package if present, else the
+         * first planted command (a font/library with no command gets no
+         * shortcut — nothing to launch). */
+        if (primary[0] == 0 || strcmp(it->string, name) == 0)
+            snprintf(primary, sizeof primary, "%s", it->string);
     }
     cJSON *cow = fail ? NULL : cJSON_GetObjectItemCaseSensitive(control, "openwith");
     cJSON_ArrayForEach(it, cow) {
@@ -923,6 +955,31 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
         cJSON_AddItemToArray(db_fonts, cJSON_CreateString(fpath));
     }
 
+    /* Desktop shortcut (Q5 / #90): planted LAST, only for the user-requested
+     * package (depth 0 — transitive library deps never clutter the desktop),
+     * only when the persistent flag is on, and only when the package ships a
+     * launchable command. It reuses the same symlink model as menu/bin
+     * entries and is RECORDED in db_desktop so uninstall's reverse replay
+     * removes exactly this and nothing else. A name collision or FS error is
+     * a warning, never an install failure — the icon is cosmetic; the
+     * install is not. */
+    if (!fail && depth == 0 && primary[0] && gm_desktop_flag()) {
+        char link[GM_PATH_MAX], target[GM_PATH_MAX];
+        snprintf(link, sizeof link, GM_DESKTOP_DIR "/%s", name);
+        snprintf(target, sizeof target, GM_BIN_DIR "/%s", primary);
+        if (gm_exists(link)) {
+            fprintf(stderr, "gucman: %s already exists — Desktop shortcut skipped\n", link);
+        } else if (gm_mkdir_p(GM_DESKTOP_DIR) != 0) {
+            fprintf(stderr, "gucman: %s: %s — Desktop shortcut skipped\n",
+                    GM_DESKTOP_DIR, strerror(errno));
+        } else if (symlink(target, link) != 0) {
+            fprintf(stderr, "gucman: planting %s: %s — Desktop shortcut skipped\n",
+                    link, strerror(errno));
+        } else {
+            cJSON_AddItemToArray(db_desktop, cJSON_CreateString(link));
+        }
+    }
+
     if (fail) {
         gm_unwind(name, &undo);
         cJSON_Delete(control);
@@ -997,6 +1054,8 @@ static int cmd_remove(const char *name) {
     /* Replay the recorded plant in reverse install order. ENOENT along the
      * way is fine — a crashed remove re-runs to completion. */
     cJSON *it;
+    cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "desktop"))
+        if (cJSON_IsString(it)) unlink(it->valuestring);      /* Q5: remove the shortcut we planted */
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "font_faces"))
         if (cJSON_IsString(it)) gm_fontline_set(it->valuestring, 0);
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "menu_entries"))
@@ -1277,6 +1336,7 @@ static int cmd_info(const char *name) {
         gm_info_strings(db, "openwith_keys", "openwith keys:");
         gm_info_strings(db, "menu_entries", "menu entries:");
         gm_info_strings(db, "font_faces", "font faces:");
+        gm_info_strings(db, "desktop", "desktop shortcuts:");
     }
     cJSON_Delete(db);
     cJSON_Delete(index);

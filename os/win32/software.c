@@ -53,6 +53,7 @@
 #include "../fswatch.h"
 
 #define GM_DB_DIR  "/var/lib/gucman"
+#define GM_DESKTOP_FLAG GM_DB_DIR "/desktop_shortcuts"  /* Q5/#90 toggle, shared with gucman */
 #define OS_RELEASE "/usr/share/os-release"
 
 #define WIN_W     640
@@ -73,6 +74,7 @@
 #define ID_STATUS  101
 #define ID_NOTICE  102
 #define ID_SCROLL  103
+#define ID_DESKTOP 104                           /* "install to Desktop" toggle (Q5) */
 #define ID_ACTION  1                             /* the button inside a card */
 
 #define MSG_FSCHANGE (WM_APP + 1)
@@ -124,7 +126,7 @@ static char g_lastLine[200];                     /* last status line shown */
 
 /* ---------------------------------------------------------------- ui -- */
 
-static HWND g_win, g_status, g_notice, g_scrollbar, g_refresh;
+static HWND g_win, g_status, g_notice, g_scrollbar, g_refresh, g_deskChk;
 static char g_subtitle[96];                      /* header count line */
 static HFONT g_fTitle, g_fName, g_fSmall;
 static HBRUSH g_brWhite, g_brSep;
@@ -230,6 +232,34 @@ static int os_base_version(void) {
     if (m && (m == text || m[-1] == '\n')) v = atoi(m + 11);
     free(text);
     return v;
+}
+
+/* ------------------------------------------ install-to-Desktop toggle -- */
+
+/* The persistent Q5/#90 flag, shared with gucman (the engine reads it on
+ * every install). ON iff the first line is exactly "on"; absent = OFF. */
+static int desk_flag_read(void) {
+    size_t len;
+    char *t = read_whole(GM_DESKTOP_FLAG, &len);
+    if (!t) return 0;
+    char *nl = strchr(t, '\n');
+    if (nl) *nl = 0;
+    int on = strcmp(t, "on") == 0;
+    free(t);
+    return on;
+}
+
+/* Atomic one-line write (tmp + rename) so a concurrent gucman read never
+ * sees a torn value. Best-effort: a failure just leaves the setting as-is. */
+static void desk_flag_write(int on) {
+    char tmp[320];
+    snprintf(tmp, sizeof tmp, "%s.tmp", GM_DESKTOP_FLAG);
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return;
+    const char *s = on ? "on\n" : "off\n";
+    if (write(fd, s, strlen(s)) < 0) { close(fd); unlink(tmp); return; }
+    if (close(fd) != 0) { unlink(tmp); return; }
+    rename(tmp, GM_DESKTOP_FLAG);
 }
 
 /* ------------------------------------------------------- install DB --- */
@@ -706,6 +736,13 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                                    WS_CHILD | WS_VISIBLE,
                                    WIN_W - 126, 20, 110, BTN_H, h,
                                    (HMENU)ID_REFRESH, NULL, NULL);
+        /* Q5/#90: header toggle, left of Refresh, above the subtitle line.
+         * BS_AUTOCHECKBOX flips itself; we mirror it to the shared flag. */
+        g_deskChk = CreateWindowEx(0, "BUTTON", "Install to Desktop",
+                                   WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                                   WIN_W - 126 - 8 - 240, 16, 240, 28, h,
+                                   (HMENU)ID_DESKTOP, NULL, NULL);
+        SendMessage(g_deskChk, BM_SETCHECK, desk_flag_read(), 0);
         g_status = CreateWindowEx(0, "STATIC", "Loading the package catalog...",
                                   WS_CHILD | WS_VISIBLE,
                                   8, WIN_H - STATUS_H + 4, WIN_W - 16, 22, h,
@@ -745,6 +782,8 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_COMMAND:
         if (LOWORD(wp) == ID_REFRESH && g_job == JOB_NONE)
             job_begin(JOB_INDEX, -1);
+        else if (LOWORD(wp) == ID_DESKTOP)       /* auto-toggled; persist it (Q5) */
+            desk_flag_write((int)SendMessage(g_deskChk, BM_GETCHECK, 0, 0) == BST_CHECKED);
         return 0;
     case MSG_ACTION: {
         int i = (int)wp;

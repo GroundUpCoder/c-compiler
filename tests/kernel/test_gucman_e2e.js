@@ -229,6 +229,42 @@ async function main() {
   check('removing a non-installed package fails loud', rerun.includes('RC=1'), rerun);
   check('punes really gone from PATH', rerun.includes('RC2=127'), rerun);
 
+  /* ---- session C: the Q5/#90 install-to-Desktop toggle ---- *
+   * The persistent flag /var/lib/gucman/desktop_shortcuts gates whether an
+   * install also plants /root/Desktop/<name>; uninstall removes exactly what
+   * it planted. Default OFF (opt-in) → no shortcut; flip ON → the symlink
+   * appears and is recorded in the DB; remove → gone. */
+  const scriptC = [
+    'echo ==deskoff',
+    'mkdir -p /var/lib/gucman',
+    'rm -f /var/lib/gucman/desktop_shortcuts',           // default OFF
+    'gucman install punes; echo RC=$?',
+    'test ! -e /root/Desktop/punes && echo NO-DESK-OFF',
+    'gucman remove punes >/dev/null; echo RCr=$?',
+    'echo ==deskon',
+    'echo on > /var/lib/gucman/desktop_shortcuts',       // opt in
+    'gucman install punes; echo RC2=$?',
+    'readlink /root/Desktop/punes',
+    'grep -q "/root/Desktop/punes" /var/lib/gucman/punes.json && echo DB-DESK-OK',
+    'echo ==deskrm',
+    'gucman remove punes; echo RC3=$?',
+    'test ! -e /root/Desktop/punes && echo DESK-GONE',
+    'echo ==done',
+  ];
+  const c = driveBoot(scriptC, BOOT_ARGS);
+  const cout = String(c.stdout || '');
+
+  const off = section(cout, 'deskoff');
+  check('toggle OFF: install plants no Desktop shortcut', off.includes('NO-DESK-OFF'), off);
+
+  const on = section(cout, 'deskon');
+  check('toggle ON: install plants /root/Desktop/punes -> /usr/local/bin/punes',
+    on.split('\n').some((l) => l.trim() === '/usr/local/bin/punes'), on);
+  check('toggle ON: the Desktop shortcut is recorded in the DB', on.includes('DB-DESK-OK'), on);
+
+  const drm = section(cout, 'deskrm');
+  check('uninstall removes the planted Desktop shortcut', drm.includes('DESK-GONE'), drm);
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(failures ? `\ngucman e2e: ${failures} FAILED` : '\ngucman e2e: PASS');
   process.exit(failures ? 1 : 0);

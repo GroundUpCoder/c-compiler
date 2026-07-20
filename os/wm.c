@@ -2683,6 +2683,42 @@ static void draw_icon_glyph(uint32_t *px, int w, int h, int ix, int iy,
     }
 }
 
+/* Wrap a desktop icon label to at most two lines within maxw px (#91). A
+ * label that fits whole stays ONE line (l2 emptied) — byte-identical to the
+ * pre-#91 single-line render, so only genuinely-too-wide labels change.
+ * Otherwise it breaks at the last space that keeps line 1 within maxw
+ * (greedy word wrap, the space dropped); a single over-wide word breaks on
+ * the codepoint boundary via text_fit. Line 2 gets a "..." tail when the
+ * remainder still overflows. Returns the line count (1 or 2). */
+static int desk_label_wrap(const char *name, int maxw, char *l1, char *l2, size_t cap) {
+    l2[0] = 0;
+    int fit = text_fit(name, maxw);
+    if (name[fit] == 0) {                          /* whole label fits: one line */
+        snprintf(l1, cap, "%s", name);
+        return 1;
+    }
+    int brk = -1;                                  /* last space at/before the break */
+    for (int i = 0; i < fit; i++)
+        if (name[i] == ' ') brk = i;
+    int l1len = brk > 0 ? brk : (fit > 0 ? fit : 1);
+    int l2start = brk > 0 ? brk + 1 : l1len;
+    if (l1len > (int)cap - 1) l1len = (int)cap - 1;
+    memcpy(l1, name, (size_t)l1len);
+    l1[l1len] = 0;
+    const char *rest = name + l2start;
+    if (rest[text_fit(rest, maxw)] == 0) {         /* remainder fits on line 2 */
+        snprintf(l2, cap, "%s", rest);
+    } else {                                       /* trim, leave room for "..." */
+        char tmp[64];
+        int room = text_fit(rest, maxw - text_w("..."));
+        if (room > (int)sizeof tmp - 1) room = (int)sizeof tmp - 1;
+        memcpy(tmp, rest, (size_t)room);
+        tmp[room] = 0;
+        snprintf(l2, cap, "%s...", tmp);
+    }
+    return 2;
+}
+
 static void draw_desk(void) {
     if (!desk_win || !desk_dirty) return;
     desk_dirty = 0;
@@ -2716,17 +2752,25 @@ static void draw_desk(void) {
             fill_s(px, w, h, bx + 3 + tw, by + 4, 2, 16, black);   /* caret */
             continue;
         }
-        char label[64];
-        int n = text_fit(desk[i].name, CELL_W - 8);
-        if (n > (int)sizeof label - 1) n = (int)sizeof label - 1;
-        memcpy(label, desk[i].name, (size_t)n);
-        label[n] = 0;
-        int lw = text_w(label);
-        int lx = cx + (CELL_W - lw) / 2, ly = cy + ICON_W + 10;
-        /* Selection highlight: the 0029 navy label strip, per-set (0077). */
+        /* Label: full short names fit on one line; longer ones wrap to a
+         * second line (#91) rather than hard-truncating ("Recycle Bin" no
+         * longer clips to "Recycle B"). */
+        char l1[64], l2[64];
+        int nlines = desk_label_wrap(desk[i].name, CELL_W - 8, l1, l2, sizeof l1);
+        int ly = cy + ICON_W + 10;
+        int lw1 = text_w(l1), lx1 = cx + (CELL_W - lw1) / 2;
+        /* Selection highlight: the 0029 navy label strip, per-set (0077),
+         * one strip per rendered line. */
         if (desk_selmask >> i & 1)
-            fill_s(px, w, h, lx - 2, ly - 2, lw + 4, 23, navy);
-        draw_text_s(px, w, h, lx, ly, label, white);
+            fill_s(px, w, h, lx1 - 2, ly - 2, lw1 + 4, 23, navy);
+        draw_text_s(px, w, h, lx1, ly, l1, white);
+        if (nlines == 2) {
+            int ly2 = ly + CHROME_CAP + 6;         /* compact second-line pitch */
+            int lw2 = text_w(l2), lx2 = cx + (CELL_W - lw2) / 2;
+            if (desk_selmask >> i & 1)
+                fill_s(px, w, h, lx2 - 2, ly2 - 2, lw2 + 4, 23, navy);
+            draw_text_s(px, w, h, lx2, ly2, l2, white);
+        }
     }
     if (desk_drag == 1) {              /* the marquee rubber-band (0077) */
         int x0 = desk_cur_x < desk_press_x ? desk_cur_x : desk_press_x;

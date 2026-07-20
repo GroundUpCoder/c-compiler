@@ -54,7 +54,9 @@ async function main() {
 
   const names = Object.keys(idx.packages).sort();
   const pv = idx.packages.punes.version;
-  const punesBtn = 1 + names.indexOf('punes');   // Refresh, then card order
+  // header chrome buttons precede the cards in tree order: Refresh, then the
+  // "Install to Desktop" toggle (Q5/#90), then one Install/Remove per card.
+  const punesBtn = 2 + names.indexOf('punes');
 
   const goodPort = await startServer(require('path').join(
     require('path').resolve(__dirname, '../..'), 'dist', 'packages'));
@@ -126,6 +128,8 @@ async function main() {
       cat.includes(`${n} ${idx.packages[n].version} [available]`));
   check('catalog: notice hidden', !/vis=1[^\n]*text='Cannot reach/.test(cat),
     cat.slice(0, 200));
+  check('header carries the Install-to-Desktop toggle (Q5/#90)',
+    /class=BUTTON [^\n]*text='Install to Desktop'/.test(cat), cat.slice(0, 400));
   // re-verify the BUTTON:n prediction: the first BUTTON after punes's card
   // line is the (punesBtn+1)th BUTTON line overall (tree order)
   {
