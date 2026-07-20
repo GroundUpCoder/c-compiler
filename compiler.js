@@ -1565,6 +1565,11 @@ function preprocess(filename, initialTokens, ppRegistry) {
             argStart++;
           if (argStart < tokens.length && tokens[argStart].atPunct(Punct.LPAREN)) {
             const args = [];
+            // Leading-whitespace flag of each argument-separating comma, so a
+            // stringized __VA_ARGS__ keeps the space BEFORE the delimiter
+            // (`#__VA_ARGS__` of `S(a , b)` is "a , b" — todos/0196).
+            // argCommaSpace[k] is the comma between args[k] and args[k+1].
+            const argCommaSpace = [];
             let currentArg = [];
             let parenDepth = 1;
             let j = argStart + 1;
@@ -1581,6 +1586,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
                 if (parenDepth > 0) currentArg.push(argTok);
               } else if (argTok.atPunct(Punct.COMMA) && parenDepth === 1) {
                 args.push(currentArg);
+                argCommaSpace.push(argTok.flags.hasSpace);
                 currentArg = [];
               } else {
                 currentArg.push(argTok);
@@ -1611,6 +1617,9 @@ function preprocess(filename, initialTokens, ppRegistry) {
                 if (p > m.params.length) {
                   const comma = new Token(null, 0, 0, TokenKind.PUNCT, intern(","));
                   comma.punct = Punct.COMMA;
+                  // Carry the original delimiter comma's leading-whitespace bit
+                  // so `#__VA_ARGS__` preserves the space before it (todos/0196).
+                  comma.flags.hasSpace = argCommaSpace[p - 1] || false;
                   vaRaw.push(comma);
                   vaArgs.push(comma);
                 }
