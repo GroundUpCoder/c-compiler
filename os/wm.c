@@ -573,6 +573,7 @@ static int32_t saver_prev = 0;     /* the window to re-focus at dismissal */
 static int saver_kind = 0;         /* 1 marquee, 2 starfield (from config) */
 static sv_cfg saver_cfg;           /* last polled configuration */
 static uint64_t saver_poll_ms = 0; /* coarse once-a-second poll stamp */
+static uint64_t grab_poll_ms = 0;  /* key-grab-table rebuild stamp (0 = due) */
 static int idle_pending = 0;       /* GET_IDLE in flight */
 static int marq_x, marq_y;         /* marquee banner position */
 static float star_x[SAVER_STARS], star_y[SAVER_STARS], star_z[SAVER_STARS];
@@ -1228,6 +1229,64 @@ static void saver_poll(void) {
         return;
     if (idle_pending) return;
     if (wmp_send(sock, WMP_GET_IDLE, NULL, 0) == 0) idle_pending = 1;
+}
+
+/* ---- the kernel key-grab table (todos/KEYBINDING-OVERRIDE-SYSTEM.md §4) ----
+ * wm.c is the POLICY owner of the global chords: it computes the desired grab
+ * table from the keys.h registry (active scheme + user bind.<action> overrides,
+ * resolved per-action by ks_action_binding) and PUSHES it to the config-blind
+ * kernel via WMP_GRAB_SET whenever it changes. Rebuilt on the 1 Hz config poll
+ * (the saver_poll cadence — a Control Panel Apply lands within ~1s); steady
+ * state sends nothing. In the windows scheme the table is the legacy chords —
+ * behaviour identical to the kernel's WM_DEFAULT_GRABS, just carried by the
+ * non-reserved KTOK_* tokens that ride EV_HOTKEY instead of the default table's
+ * reserved twins. In the macos scheme snap RELOCATES to Ctrl+Alt+arrow and
+ * GUI+arrow is simply not installed — that omission IS the whole "⌘+arrow
+ * reaches the app for line/doc nav" story (an uninstalled chord passes through;
+ * no release op). F3 (wm.overview) is installed in BOTH schemes; its EV_HOTKEY
+ * is a stub until the Exposé chunk (hotkey_dispatch below). */
+typedef struct { int32_t scancode, km, token; } grab_ent;
+static grab_ent grab_last[WMP_GRAB_MAX];
+static int grab_last_n = -1;             /* -1 = never pushed (force first) */
+
+static void grab_table_push(void) {
+    grab_ent tbl[WMP_GRAB_MAX];
+    int n = 0;
+    for (int i = 0; i < KSA_COUNT && n < WMP_GRAB_MAX; i++) {
+        if (KS_ACTIONS[i].kind != KAK_SYS) continue;   /* system chords only */
+        KsChord ch[2];
+        int nc = ks_action_binding(i, ch);             /* override-or-scheme */
+        for (int c = 0; c < nc && n < WMP_GRAB_MAX; c++) {
+            int sc = ks_chord_scancode(ch[c].key);
+            if (sc < 0) continue;                       /* unmappable key */
+            /* Dedupe (scancode, km): the kernel takes the FIRST match, and
+             * registry order is the §7.3 conflict tie-break — the earlier
+             * action wins a collision, the later one is dropped, so we never
+             * install a duplicate row that would eat a key for a shadowed
+             * action. (Also collapses cycle's dual default cleanly: its two
+             * chords differ, so both survive.) */
+            int dup = 0;
+            for (int j = 0; j < n; j++)
+                if (tbl[j].scancode == sc && tbl[j].km == ch[c].mods) { dup = 1; break; }
+            if (dup) continue;
+            tbl[n].scancode = sc;
+            tbl[n].km = ch[c].mods;
+            tbl[n].token = KS_ACTIONS[i].token;
+            n++;
+        }
+    }
+    if (n == grab_last_n && memcmp(tbl, grab_last, (size_t)n * sizeof *tbl) == 0)
+        return;                          /* unchanged: steady state is silent */
+    int32_t args[1 + 3 * WMP_GRAB_MAX];
+    args[0] = n;
+    for (int i = 0; i < n; i++) {
+        args[1 + 3 * i] = tbl[i].scancode;
+        args[2 + 3 * i] = tbl[i].km;
+        args[3 + 3 * i] = tbl[i].token;
+    }
+    wmp_sendv(sock, WMP_GRAB_SET, args, 1 + 3 * n);   /* n triples exceed wmp_send's 8-arg cap */
+    memcpy(grab_last, tbl, (size_t)n * sizeof *tbl);
+    grab_last_n = n;
 }
 
 /* An R_IDLE reply landed (drain_socket routes every one here). Compare in
@@ -3395,6 +3454,41 @@ static void screen_changed(void) {
     }
 }
 
+/* wm.overview (F3): the window overview / Exposé toggle. STUB for this chunk
+ * — the grab IS installed (grab_table_push) and its EV_HOTKEY dispatched here,
+ * but the overview compositor (Mission Control thumbnails) is the NEXT chunk
+ * (todos/EXPOSE-MISSION-CONTROL.md), which consumes this token. Until then it
+ * is a VISIBLE no-op, not a silent drop: one stderr line per real press. */
+static void overview_toggle(void) {
+    fprintf(stderr, "wm: overview (F3) not yet implemented (Expose is the next chunk)\n");
+}
+
+/* WMP_EV_HOTKEY (todos/KEYBINDING-OVERRIDE-SYSTEM.md §4): a non-reserved
+ * grab-table entry matched. Dispatch by KTOK_* token to the SAME policy
+ * handlers the legacy events reach — which still arrive from wmctl commands and,
+ * pre-GRAB_SET at startup, from the kernel's default table, so wm.c keeps its
+ * EV_CYCLE/MENU/SNAP_KEY/SYSMENU cases too. flags bit0 = Shift (cycle-reverse),
+ * bit1 = key repeat; sid = the focused surface the event carries. */
+static void hotkey_dispatch(int token, int flags, int sid) {
+    switch (token) {
+        case KTOK_SNAP_LEFT:  snap_key(0); break;
+        case KTOK_SNAP_RIGHT: snap_key(1); break;
+        case KTOK_SNAP_UP:    snap_key(2); break;
+        case KTOK_SNAP_DOWN:  snap_key(3); break;
+        case KTOK_CYCLE:      cycle((flags & 1) ? -1 : 1); break;
+        case KTOK_START_MENU: menu_toggle(); break;
+        case KTOK_SYSMENU: {
+            win_t *w = find(sid);
+            if (w && !w->minimized) ctx_open_sysmenu(w);
+            break;
+        }
+        case KTOK_OVERVIEW:
+            if (!(flags & 2)) overview_toggle();   /* skip auto-repeat */
+            break;
+        default: break;                  /* unknown token: ignore, never crash */
+    }
+}
+
 static void handle_event(wmp_hdr *h) {
     if (h->type == WMP_EV_CREATED) {
         wmp_rec r;
@@ -3728,6 +3822,11 @@ static void handle_event(wmp_hdr *h) {
         snap_key(p[0]);
         break;
     }
+    case WMP_EV_HOTKEY: {               /* user grab-table chord (KEYBINDING §4) */
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_HOTKEY read");
+        hotkey_dispatch(p[0], p[1], p[2]);   /* token, flags, focused sid */
+        break;
+    }
     case WMP_EV_SAVER: {                /* wmctl saver / Preview (0096) */
         if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_SAVER read");
         saver_force();
@@ -4011,6 +4110,9 @@ static void frame_cb(void) {
     if (now_ms - desk_poll_ms >= 1000) { desk_poll_ms = now_ms; desk_load(); }
     /* The screensaver's idle poll rides the same cadence (todos/0096). */
     if (now_ms - saver_poll_ms >= 1000) { saver_poll_ms = now_ms; saver_poll(); }
+    /* Rebuild+push the kernel key-grab table when scheme/overrides change
+     * (todos/KEYBINDING-OVERRIDE-SYSTEM.md §4) — same 1 Hz config cadence. */
+    if (now_ms - grab_poll_ms >= 1000) { grab_poll_ms = now_ms; grab_table_push(); }
     /* Many windows, one queue: dispatch by windowID (0028/0029/0063/0078).
      * Menu columns and the run dialog come and go inside handlers, so
      * their ids are resolved per event (ov_level_for), not cached. */
@@ -4215,6 +4317,13 @@ int main(void) {
     if (wmp_read_all(sock, dims, 8) != 0) die("subscribe reply read");
     if (wmp_skip(sock, h.plen - 8) != 0) die("subscribe reply skip");
     scr_w = dims[0]; scr_h = dims[1];
+
+    /* Push the key-grab table BEFORE the loop so the active scheme is in
+     * effect from boot (todos/KEYBINDING-OVERRIDE-SYSTEM.md §4) — otherwise
+     * the macos scheme would spend the first poll interval on the kernel
+     * default (windows) table. In the windows scheme this is behaviour-
+     * identical to that default, so it changes nothing there. */
+    grab_table_push();
 
     /* The snapshot (EV_CREATED per existing surface + EV_FOCUS) follows on
      * the socket; the frame loop's drain consumes it like live events, so

@@ -278,6 +278,19 @@ static int wmp_send(int fd, uint32_t type, const int32_t *args, int nargs) {
     return wmp_write_all(fd, buf, 8 + nargs * 4);
 }
 
+/* Send one command frame with n i32 args, n NOT capped at wmp_send's small
+ * fast-path limit — GRAB_SET's replace-whole-table payload is 1 + 3*n triples,
+ * up to 1 + 3*WMP_GRAB_MAX. Same wire format as wmp_send (a single write, so
+ * the frame is atomic on the stream). Returns 0, or -1. */
+static int wmp_sendv(int fd, uint32_t type, const int32_t *args, int nargs) {
+    uint32_t buf[2 + 1 + 3 * WMP_GRAB_MAX];      /* header + max GRAB_SET payload */
+    if (nargs < 0 || (size_t)nargs > (sizeof buf / sizeof buf[0]) - 2) return -1;
+    buf[0] = 4u + (uint32_t)nargs * 4u;
+    buf[1] = type;
+    for (int i = 0; i < nargs; i++) buf[2 + i] = (uint32_t)args[i];
+    return wmp_write_all(fd, buf, 8 + nargs * 4);
+}
+
 /* Read the next frame header; the payload (h->plen bytes) is then read by
  * the caller (wmp_read_all / wmp_skip). Returns 0, or -1 on EOF/error. */
 static int wmp_next(int fd, wmp_hdr *h) {
