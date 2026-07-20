@@ -1,0 +1,21 @@
+88 Socket operation on non-socket
+89 Destination address required
+91 Protocol wrong type for socket
+93 Protocol not supported
+95 Operation not supported
+95 Operation not supported
+97 Address family not supported by protocol
+98 Address already in use
+99 Cannot assign requested address
+103 Software caused connection abort
+104 Connection reset by peer
+105 No buffer space available
+106 Transport endpoint is already connected
+107 Transport endpoint is not connected
+110 Connection timed out
+111 Connection refused
+113 No route to host
+114 Operation already in progress
+115 Operation now in progress
+37 No locks available
+75 Value too large for defined data type
