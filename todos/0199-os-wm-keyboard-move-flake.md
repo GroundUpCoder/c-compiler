@@ -1,7 +1,41 @@
 # 0199 — os-wm.mjs 'keyboard Move relocated C' leg flakes under load
 
-- **Status**: open
+- **Status**: fixed on branch `fix-0199-wm-flake` (awaiting review + merge)
 - **Design**: tests/browser/os-wm.mjs (the 0102 sysmenu keyboard-Move leg), CLAUDE.md "Test-sync discipline"
+
+## Resolution (2026-07-20)
+
+Two things, one of which was already fixed:
+
+1. **The described move-proof symptom was already cured by todos/0238**
+   (commit 579f277, 2026-07-17 — filed AFTER this item): the
+   `waitPixel(CX+240, CY+116, GREEN)` *instant sample racing the move
+   composite* became the `waitPixel(CX+5, CY+5, ORANGE)` marker wait. That
+   is the exact "33% flake" 0238's message names.
+
+2. **The `wmctl list | grep ctxmenu` presence check → a FOCUS marker**
+   (the 0199/0171 ask). The hypothesised focus race does not actually
+   manifest — create-focus (kernel.js `_wmSetFocus` at SURFACE_CREATE, line
+   ~3901) sets kernel focus on the popup synchronously, in the same RPC that
+   lists it, so presence already implies the `f` flag (empirically: the
+   ctxmenu was `f-b---T` in every pre-arrows snapshot across dozens of
+   runs). The check now ASSERTS focus anyway — `wmctl wait win ctxmenu &&
+   wmctl list | awk '$NF=="ctxmenu" && $(NF-1)~/^f/'` — so a create-focus
+   regression fails LOUD instead of racing the arrows onto winbox C.
+
+**Bonus flake found + fixed under load** (same instant-sample class): the
+early-boot `desktop teal before any window` check (line 52) did a bare
+`near(sample(...), TEAL)` with NO composite barrier — `waitScreen()` settles
+canvas GEOMETRY, not the desktop-layer teal paint. Reproduced 1/10 under
+`--under-load=12` (the condition sample read a pre-composite frame while the
+diagnostic re-sample already read teal). Converted to a `waitPixel(TEAL)`
+marker.
+
+os-wm added to the `tests/flake.js` browser tripwire set (twice-flaky now).
+
+**Verification**: `node tests/flake.js --filter=os-wm` green; 42 runs under
+`--under-load=12..14` post-fix, 0 failures (the teal flake reproduced 1/10
+pre-fix in the same config). No product code touched — tests only.
 
 ## Goal
 

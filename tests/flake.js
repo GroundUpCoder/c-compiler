@@ -21,8 +21,10 @@
 //
 // The tripwire set = the files whose sync was a fixed `sleep` before the
 // 0083/0154/0155 event-wait sweep (the documented 0074 os-doom flake + the
-// boot-heavy wm/term/app e2es). Grep the runners for `'sleep ` to see what
-// still carries an annotated timing subject.
+// boot-heavy wm/term/app e2es), plus os-wm (todos/0238 move-composite race +
+// todos/0199 sysmenu-focus / early-boot-teal races — twice-flaky, so it earns
+// a tripwire slot). Grep the runners for `'sleep ` to see what still carries
+// an annotated timing subject.
 
 const { spawnSync } = require('child_process');
 const path = require('path');
@@ -35,7 +37,7 @@ const LEGS = [
   { name: 'kernel', cmd: ['tests/kernel/run.js'],
     filter: 'wm_service_e2e,term_e2e,os_apps_e2e,comp_park_e2e', optional: false },
   { name: 'browser', cmd: ['tests/browser/os-sweep.mjs'],
-    filter: 'os-doom,os-term,os-compositor', optional: true },
+    filter: 'os-doom,os-term,os-compositor,os-wm', optional: true },
 ];
 
 function parse(argv) {
@@ -69,7 +71,7 @@ function usage() {
   --filter=S        intersect the tripwire set with S (comma = OR)
 
 Legs: kernel (wm_service/term/os_apps/comp_park e2es), browser
-(os-doom/os-term/os-compositor).
+(os-doom/os-term/os-compositor/os-wm).
 A FLAKY verdict = a fixed-sleep/timing dependency regressed.
 `);
 }
