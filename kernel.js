@@ -892,6 +892,21 @@ var WMP = {
                                         overlay + per-surface client cursor,
                                         side-effect-free (mechanism, assertable
                                         headless; browser draws it) */
+  GRAB_SET: 0x35,                    /* { n, n x (scancode, km, token) }:
+                                        REPLACE the whole kernel key-grab table
+                                        (todos/KEYBINDING-OVERRIDE-SYSTEM.md §3,
+                                        the X11-passive-grab shape). Idempotent;
+                                        n = 0 installs an EMPTY table (a WM that
+                                        wants NO chord interception — a policy
+                                        choice the mechanism must allow); n
+                                        capped at WM_GRAB_MAX (R_ERR beyond).
+                                        Subscriber-only (R_ERR otherwise). Until
+                                        a WM sends this, the kernel uses a
+                                        built-in default table reproducing the
+                                        legacy cycle/menu/snap/sysmenu chords;
+                                        last-subscriber-gone resets to it. km is
+                                        the canonical KM_* mask (Shift excluded
+                                        unless the entry names it) */
   R_OK: 0x40, R_ERR: 0x41, R_LIST: 0x42, R_SHOT: 0x43,
   R_IDLE: 0x44,                      /* { ms }: the GET_IDLE reply (todos/
                                         0096) — its own type so /bin/wm's
@@ -944,6 +959,18 @@ var WMP = {
                                         (the focused) window; the EV_CYCLE
                                         pass-through rule (no subscriber, the
                                         chord reaches the app unchanged) */
+  EV_HOTKEY: 0x92,                    /* { token, flags, focusSid }: a
+                                        NON-reserved key-grab table entry
+                                        matched (todos/KEYBINDING-OVERRIDE-
+                                        SYSTEM.md §3) — the ONE event for every
+                                        user-installed chord. flags bit0 = Shift
+                                        held, bit1 = key repeat. The default
+                                        table's RESERVED tokens (high bit) emit
+                                        the legacy EV_CYCLE/MENU/SNAP_KEY/SYSMENU
+                                        instead, so pre-grab-table clients are
+                                        byte-identical; the EV_CYCLE
+                                        pass-through rule (no subscriber, the
+                                        chord reaches the app unchanged) */
 };
 
 /* R_ERR errno values (arch CS7, todos/0242). The wm* command methods below
@@ -954,6 +981,62 @@ var WMP = {
 var WMP_ERRNO = { EPERM: 1, ESRCH: 3, EAGAIN: 11, ENODEV: 19, EINVAL: 22, ENOSYS: 38 };
 var WMP_REC_BYTES = 80;
 var WM_SOCK_PATH = '/run/wm.sock';
+
+/* ---- kernel key-grab table (todos/KEYBINDING-OVERRIDE-SYSTEM.md §3) ----
+ * Canonical modifier mask — the TWIN of os/keys.h KM_* + km_from_sdl(). The
+ * two folds are kept in lockstep by hand (kernel is per-SYSTEM, keys.h is
+ * app-side); test_keybind.js asserts they agree on a table of raw SDL words.
+ * The kernel is scheme- and config-blind: it stores (scancode, km, token)
+ * rows and routes matches; it never reads /etc/keys and never learns what a
+ * token means. */
+var KM_SHIFT = 0x1, KM_CTRL = 0x2, KM_ALT = 0x4, KM_GUI = 0x8;
+
+/* Fold the raw SDL modifier word (SDL_KMOD_*: SHIFT 0x0003, CTRL 0x00C0,
+ * ALT 0x0300, GUI 0x0C00) to the canonical KM_* bits — twin of keys.h. */
+function wmKmFromSdl(sdlmod) {
+  return ((sdlmod & 0x0003) ? KM_SHIFT : 0) |
+         ((sdlmod & 0x00C0) ? KM_CTRL : 0) |
+         ((sdlmod & 0x0300) ? KM_ALT : 0) |
+         ((sdlmod & 0x0C00) ? KM_GUI : 0);
+}
+
+/* GRAB_SET's n cap (a runaway backstop far above the registry's size). */
+var WM_GRAB_MAX = 64;
+
+/* Reserved grab tokens (high bit set): the built-in DEFAULT TABLE carries
+ * these, and a match on one emits the LEGACY WMP event with its historical
+ * payload (and returns wmKey's historical action string) instead of
+ * EV_HOTKEY. That is the whole back-compat story — every pre-grab-table WM
+ * client and every scripted-WM test keeps working byte-identically; wm.c
+ * opting in via GRAB_SET is what upgrades it to the token world. A
+ * non-reserved token (any wm.c-installed chord) rides EV_HOTKEY. */
+var WM_TOK_RESERVED = 0x80000000 | 0;      // high bit = reserved (legacy emit)
+var WM_TOK_CYCLE   = 0x80000001 | 0;
+var WM_TOK_MENU    = 0x80000002 | 0;
+var WM_TOK_SNAP    = 0x80000003 | 0;
+var WM_TOK_SYSMENU = 0x80000004 | 0;
+
+/* The built-in default table — reproduces the four historical hardcoded chord
+ * blocks VERBATIM under exact-modifier matching. Cycle keeps its dual default
+ * (bare Alt+Tab where the browser delivers it, and Ctrl+Alt+Tab) as TWO rows,
+ * so both fold-exactly and stay recognized; the old looser family masks
+ * (mod & 0xC0 etc.) TIGHTEN to exact match here — an intended change (e.g.
+ * Ctrl+Alt+Esc no longer opens Start), and no existing test injects an
+ * extra-modifier chord that relied on the loose match (grep-verified). The
+ * Shift bit is never named in a default row, so the amendment's non-Shift
+ * branch always applies — today's Shift-reverses-cycle and Shift-extends
+ * behavior are byte-identical. Scancodes: 43 Tab, 41 Esc, 44 Space,
+ * 79 Right / 80 Left / 81 Down / 82 Up. */
+var WM_DEFAULT_GRABS = [
+  { scancode: 43, km: KM_ALT,           token: WM_TOK_CYCLE },    // Alt+Tab
+  { scancode: 43, km: KM_CTRL | KM_ALT, token: WM_TOK_CYCLE },    // Ctrl+Alt+Tab
+  { scancode: 41, km: KM_CTRL,          token: WM_TOK_MENU },     // Ctrl+Esc
+  { scancode: 79, km: KM_GUI,           token: WM_TOK_SNAP },     // GUI+Right
+  { scancode: 80, km: KM_GUI,           token: WM_TOK_SNAP },     // GUI+Left
+  { scancode: 81, km: KM_GUI,           token: WM_TOK_SNAP },     // GUI+Down
+  { scancode: 82, km: KM_GUI,           token: WM_TOK_SNAP },     // GUI+Up
+  { scancode: 44, km: KM_ALT,           token: WM_TOK_SYSMENU },  // Alt+Space
+];
 
 /* Kernel-drawn chrome, v1 (WM.md "Decorations — staged"): fixed Win95-ish
  * metrics, deterministic — the same numbers drive hit-testing here, the
@@ -1896,6 +1979,9 @@ function Kernel(opts) {
   this._wmVersion = 0;        // bumped on any scene change (create/destroy/
                               // move/focus/title) — compositor idle-skip aid
   this._wmSubs = new Set();   // WM-protocol connections subscribed to events
+  this._wmKeyGrabs = null;    // installed key-grab table (GRAB_SET); null =
+                              // use the built-in WM_DEFAULT_GRABS. Reset to
+                              // null when the last subscriber goes (0069 valve)
   this._wmPtrLockWanted = false;  // last wanted state emitted to the bridge
   this._wmPtrLockActive = false;  // actual lock state (bridge-reported); while
                                   // true, pointer input routes RELATIVE to the
@@ -4072,6 +4158,9 @@ Kernel.prototype._wmSubOwned = function (pid) {
  * scene immediately. */
 Kernel.prototype._wmSubDrop = function (conn) {
   if (!this._wmSubs.delete(conn) || this._wmSubs.size) return;
+  this._wmKeyGrabs = null;   // reset to the default table — a dead WM must not
+                             // leave stale grabs eating keys for the next
+                             // subscriber (the 0069 valve; KEYBIND §3)
   var self = this;
   this._surfaces.forEach(function (s) { self._wmMap(s.sid); });
 };
@@ -4691,48 +4780,90 @@ Kernel.prototype._wmEventTo = function (sid, words) {
 
 Kernel.prototype.wmKey = function (down, scancode, keysym, mod, repeat) {
   this._wmLastInput = Date.now();      // idle clock (todos/0096)
-  // Window cycling (todos/0032): ONE kernel chord — Tab with Alt held
-  // (Ctrl+Alt+Tab; plain Alt+Tab where the browser delivers it, e.g.
-  // macOS) — is intercepted at this routing seam and emitted as WMP
-  // EV_CYCLE (Shift reverses) instead of being delivered. ONLY with a WM
-  // subscribed: cycling is pure policy, and the kernel never silently
-  // eats keystrokes — no WM, and the chord isn't recognized at all (the
-  // focused app gets its Tab). The matching keyup is swallowed too, so
-  // apps never see half a chord; key repeat keeps cycling.
-  if ((scancode | 0) === 43 && (mod & 0x300) && this._wmSubs.size) {
-    if (down) this._wmEmit(WMP.EV_CYCLE, [(mod & 0x3) ? -1 : 1]);
-    return 'cycle';
-  }
-  // Start menu (todos/0078): Esc with Ctrl held — the classic Win95
-  // chord — rides WMP EV_MENU under the exact same rules: only with a
-  // WM subscribed (otherwise the app gets its Ctrl+Esc), keyup swallowed.
-  if ((scancode | 0) === 41 && (mod & 0xC0) && this._wmSubs.size) {
-    if (down) this._wmEmit(WMP.EV_MENU, []);
-    return 'menu';
-  }
-  // Aero Snap (todos/0095): arrows with GUI (Win/Cmd) held ride WMP
-  // EV_SNAP_KEY under the same rules — only with a WM subscribed (else the
-  // app gets its GUI+arrow), keyup swallowed, repeat keeps snapping.
-  // Scancodes 79-82 = Right/Left/Down/Up; direction 0 L / 1 R / 2 U / 3 D.
-  var sc95 = scancode | 0;
-  if (sc95 >= 79 && sc95 <= 82 && (mod & 0xC00) && this._wmSubs.size) {
-    if (down) this._wmEmit(WMP.EV_SNAP_KEY,
-      [sc95 === 80 ? 0 : sc95 === 79 ? 1 : sc95 === 82 ? 2 : 3]);
-    return 'snap';
-  }
-  // Window system menu (todos/0102): Space with Alt held — the classic
-  // Alt+Space chord — rides WMP EV_SYSMENU under the same rules: only with
-  // a WM subscribed (else the app gets its Alt+Space), keyup swallowed. The
-  // event carries the FOCUSED sid so policy raises the menu on it.
-  if ((scancode | 0) === 44 && (mod & 0x300) && this._wmSubs.size) {
-    if (down) this._wmEmit(WMP.EV_SYSMENU, [this._focusSid | 0]);
-    return 'sysmenu';
+  // Kernel key-grab table (todos/KEYBINDING-OVERRIDE-SYSTEM.md §3): ONE
+  // data-driven passive-grab table replaces the four historical hardcoded
+  // chord blocks (cycle/menu/snap/sysmenu). Evaluated at the TOP of wmKey,
+  // BEFORE focus routing, and ONLY with a WM subscribed — the unchanged
+  // no-WM rule: no subscriber, no interception, the chord isn't recognized
+  // and the focused app gets the key (the kernel never silently eats
+  // keystrokes). Until a WM sends GRAB_SET the kernel uses WM_DEFAULT_GRABS,
+  // whose reserved tokens emit the LEGACY events so pre-grab-table clients
+  // stay byte-identical. A match swallows BOTH edges (apps never see half a
+  // chord); repeat keeps firing.
+  if (this._wmSubs.size) {
+    var grabs = this._wmKeyGrabs || WM_DEFAULT_GRABS;
+    var fold = wmKmFromSdl(mod | 0);
+    var sc = scancode | 0;
+    for (var gi = 0; gi < grabs.length; gi++) {
+      var e = grabs[gi];
+      if ((e.scancode | 0) !== sc) continue;
+      // Exact modifier match on the non-Shift families. The Shift rule
+      // (Fable amendment): an entry that NAMES Shift requires it exactly;
+      // one that does NOT still matches with Shift held (Shift masked out),
+      // so cycle-reverse rides the reported Shift bit and a user override
+      // like ctrl+shift+e never collapses to ctrl+e.
+      var matched = (e.km & KM_SHIFT) ? (fold === (e.km | 0))
+                                      : ((fold & ~KM_SHIFT) === (e.km | 0));
+      if (!matched) continue;
+      return this._wmGrabHit(down, e.token | 0, sc,
+        (fold & KM_SHIFT) ? 1 : 0, repeat ? 1 : 0);
+    }
   }
   if (!this._focusSid) return false;
   // Boolean by contract (the raw UI-bridge seam, not a WMP op): true =
   // delivered, false = dropped — _wmEventTo's errno name is a 0242 shape.
   return this._wmEventTo(this._focusSid,
     [down ? WMEV.KEYDOWN : WMEV.KEYUP, 0, scancode | 0, keysym | 0, mod | 0, repeat ? 1 : 0, 0, 0]) === 0;
+};
+
+/* A key-grab entry matched (todos/KEYBINDING-OVERRIDE-SYSTEM.md §3). The
+ * matching keydown emits an event; both edges are swallowed (apps never see
+ * half a chord). Returns wmKey's action string. RESERVED tokens (high bit)
+ * belong to WM_DEFAULT_GRABS and emit the LEGACY event with its historical
+ * payload + return its historical string, so scripted-WM tests and pre-grab-
+ * table clients are byte-identical; any other token rides EV_HOTKEY. */
+Kernel.prototype._wmGrabHit = function (down, token, scancode, shift, repeat) {
+  switch (token | 0) {
+    case WM_TOK_CYCLE:
+      if (down) this._wmEmit(WMP.EV_CYCLE, [shift ? -1 : 1]);
+      return 'cycle';
+    case WM_TOK_MENU:
+      if (down) this._wmEmit(WMP.EV_MENU, []);
+      return 'menu';
+    case WM_TOK_SNAP:
+      // direction 0 L / 1 R / 2 U / 3 D from the arrow scancode (0095).
+      if (down) this._wmEmit(WMP.EV_SNAP_KEY,
+        [scancode === 80 ? 0 : scancode === 79 ? 1 : scancode === 82 ? 2 : 3]);
+      return 'snap';
+    case WM_TOK_SYSMENU:
+      if (down) this._wmEmit(WMP.EV_SYSMENU, [this._focusSid | 0]);
+      return 'sysmenu';
+    default:
+      // A wm.c-installed chord: the one event for all user grabs. flags
+      // bit0 = Shift held, bit1 = key repeat; focusSid rides along.
+      if (down) this._wmEmit(WMP.EV_HOTKEY,
+        [token | 0, (shift ? 1 : 0) | (repeat ? 2 : 0), this._focusSid | 0]);
+      return 'grab';
+  }
+};
+
+/* Install a new key-grab table (WMP_GRAB_SET) — replace the whole table
+ * (idempotent; n = 0 = empty = no interception). Subscriber-only. dv/plen are
+ * the raw frame payload: i32 n, then n x (scancode, km, token). */
+Kernel.prototype.wmGrabSet = function (conn, dv, plen) {
+  if (!this._wmSubs.has(conn)) return 'ENODEV';   // only the WM may grab keys
+  var n = plen >= 4 ? dv.getInt32(8, true) : 0;
+  if (n < 0 || n > WM_GRAB_MAX) return 'EINVAL';
+  if (plen < 4 * (1 + 3 * n)) return 'EINVAL';    // short frame
+  var tbl = [];
+  for (var i = 0; i < n; i++) {
+    var o = 8 + 4 * (1 + 3 * i);
+    tbl.push({ scancode: dv.getInt32(o, true) | 0,
+               km: dv.getInt32(o + 4, true) | 0,
+               token: dv.getInt32(o + 8, true) | 0 });
+  }
+  this._wmKeyGrabs = tbl;
+  return 0;
 };
 
 /* ---- cursor shapes (todos/0105) ----
@@ -5826,6 +5957,8 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
       break;
     case WMP.SAVER: ok(this.wmSaver()); break;         // screensaver (0096)
     case WMP.SYSMENU: ok(this.wmSysMenu()); break;     // window sys menu (0102)
+    case WMP.GRAB_SET: ok(this.wmGrabSet(conn, dv, plen)); break;  // key grabs
+
     case WMP.SET_LAYER: ok(this.wmSetLayer(g(0), g(1))); break;
     case WMP.GLASS: ok(this.wmGlass(g(0) !== 0)); break;   // Aero tier (0063)
     case WMP.FOCUS: ok(this.wmFocus(g(0))); break;
@@ -8125,6 +8258,15 @@ var KERNEL_EXPORTS = {
   WM_COLORS: WM_COLORS,
   // The WM protocol (todos/0014) — MUST MATCH os/wm_proto.h.
   WMP: WMP, WMP_REC_BYTES: WMP_REC_BYTES, WM_SOCK_PATH: WM_SOCK_PATH,
+  // Key-grab table (todos/KEYBINDING-OVERRIDE-SYSTEM.md §3): the canonical
+  // modifier fold + masks (twin of os/keys.h km_from_sdl / KM_*), the reserved
+  // default-table tokens, and the built-in default table — exported so the
+  // mechanism + km-fold-twin tests can assert against them.
+  wmKmFromSdl: wmKmFromSdl, WM_GRAB_MAX: WM_GRAB_MAX,
+  KM_SHIFT: KM_SHIFT, KM_CTRL: KM_CTRL, KM_ALT: KM_ALT, KM_GUI: KM_GUI,
+  WM_TOK_RESERVED: WM_TOK_RESERVED, WM_TOK_CYCLE: WM_TOK_CYCLE,
+  WM_TOK_MENU: WM_TOK_MENU, WM_TOK_SNAP: WM_TOK_SNAP,
+  WM_TOK_SYSMENU: WM_TOK_SYSMENU, WM_DEFAULT_GRABS: WM_DEFAULT_GRABS,
   // Audio mixer (todos/0017) — ring layout MUST MATCH host.js
   // createSharedAudioBuffer; format words MUST MATCH <SDL3/SDL_audio.h>.
   AU_WPOS: AU_WPOS, AU_QUEUED: AU_QUEUED, AU_PLAYING: AU_PLAYING,

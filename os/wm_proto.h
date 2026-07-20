@@ -107,6 +107,19 @@ enum {
                                           -1 hidden). Pure query — chrome
                                           overlay + per-surface client cursor,
                                           side-effect-free */
+    WMP_GRAB_SET = 0x35,               /* { n, n x (scancode, km, token) }:
+                                          REPLACE the whole kernel key-grab
+                                          table (todos/KEYBINDING-OVERRIDE-
+                                          SYSTEM.md §3). Idempotent; n = 0 =
+                                          empty table (no interception); n
+                                          capped at WMP_GRAB_MAX. Subscriber-
+                                          only (R_ERR otherwise). km is the
+                                          canonical KM_* mask (keys.h), Shift
+                                          excluded unless the entry names it.
+                                          Until sent, the kernel uses a built-in
+                                          default table reproducing the legacy
+                                          cycle/menu/snap/sysmenu chords; last-
+                                          subscriber-gone resets to it */
     /* replies */
     WMP_R_OK = 0x40, WMP_R_ERR = 0x41, WMP_R_LIST = 0x42, WMP_R_SHOT = 0x43,
     WMP_R_IDLE = 0x44,                 /* { ms }: the GET_IDLE reply (todos/
@@ -177,7 +190,19 @@ enum {
                                           Close) on that (the focused) window;
                                           only with a subscriber, else the
                                           chord passes through */
+    WMP_EV_HOTKEY = 0x92,              /* { token, flags, sid }: a NON-reserved
+                                          key-grab table entry matched (todos/
+                                          KEYBINDING-OVERRIDE-SYSTEM.md §3) —
+                                          the ONE event for every user-installed
+                                          chord. flags bit0 = Shift, bit1 =
+                                          repeat; sid = focused. The default
+                                          table's RESERVED tokens (high bit)
+                                          emit the legacy events instead; only
+                                          with a subscriber */
 };
+
+#define WMP_GRAB_MAX 64                /* GRAB_SET n cap (kernel WM_GRAB_MAX) */
+#define WMP_TOK_RESERVED 0x80000000    /* grab token high bit = legacy emit */
 
 /* The fixed 80-byte window record (EV_CREATED payload; R_LIST carries
  * u32 count then count of these). No padding: 12 i32 + 32 bytes.

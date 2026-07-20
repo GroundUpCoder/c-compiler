@@ -169,6 +169,27 @@ bit (§3). A chord that DOES name shift requires it, exactly as today.
 
 ## 3. The shared kernel key-grab table (mechanism)
 
+> **PROGRESS — CHUNK 1 (sub-step i) LANDED** on branch `keybind-grab-table`
+> (2026-07-20, dev log `logs/2026-07-20/keybind-grab-table.md`, awaiting master
+> review + sequencing; NOT merged). Kernel mechanism only: `WMP_GRAB_SET =
+> 0x35` (replace-whole-table, n=0 empty, cap `WM_GRAB_MAX = 64`,
+> subscriber-only) and `WMP_EV_HOTKEY = 0x92` `{ token, flags, focusSid }`
+> added; the four hardcoded `wmKey` chord blocks DELETED and replaced by one
+> data-driven match loop over `_wmKeyGrabs || WM_DEFAULT_GRABS`; the built-in
+> default table's reserved tokens (high bit) emit the legacy
+> EV_CYCLE/MENU/SNAP_KEY/SYSMENU so every existing scripted-WM test passes
+> UNMODIFIED (that green-against-unmodified-tests IS the back-compat proof);
+> last-subscriber-gone resets to the default table; the km-fold twin
+> `wmKmFromSdl` mirrors keys.h. The Fable Shift amendment is in
+> (`(entry.km & KM_SHIFT) ? fold==entry.km : (fold & ~KM_SHIFT)==entry.km`).
+> Note the actual legacy event opcodes are EV_CYCLE **0x8B** / EV_MENU **0x8C**
+> / EV_SNAP_KEY **0x8F** / EV_SYSMENU **0x91** (the §3 back-compat table's
+> 0x88/0x8A were stale — the code uses the real WMP constants). Tightening
+> (Ctrl+Alt+Esc etc.) is intended and grep-verified to break no existing test.
+> Tests: `tests/kernel/test_keybind.js` (34 legs). NOT done: keys.h registry,
+> wm.c policy, macos rows, F3 overview, ctlpanel UI (later chunks).
+
+
 This makes META-ARROW's "shared mechanism opportunity" and
 EXPOSE-MISSION-CONTROL's flagged coordination concrete: ONE X11-passive-grab-
 shaped table replaces per-feature chord ops, and ALL chord features — Snap
