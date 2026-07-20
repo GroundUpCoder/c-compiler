@@ -49,7 +49,13 @@ try {
   await waitScreen();
   const { w: SW, h: SH } = await page.evaluate(() => window.__osScreen);
   check('VT2 screen tracks the viewport pane (todos/0023)', SW > 800 && SH > 500, { SW, SH });
-  check('desktop teal before any window', near(await sample(SW - 20, SH - 60), TEAL), await sample(SW - 20, SH - 60));
+  // Marker WAIT, not an instant sample (todos/0199, the 0238/0171 rule):
+  // waitScreen() settles the canvas GEOMETRY but not the desktop-layer teal
+  // COMPOSITE at this pixel, so under load a bare near(sample(...)) raced the
+  // first painted frame and failed while the diagnostic re-sample already
+  // read teal (a 10%-under-load flake). Wait for teal to actually composite.
+  await waitPixel(SW - 20, SH - 60, TEAL, 30000, 'desktop teal before any window');
+  check('desktop teal before any window', true);
 
   // 0014: the autostarted /bin/wm parks its borderless taskbar at the
   // bottom edge (strip y in [SH-28, SH)) — with 0023 it RE-LAYS there on
@@ -290,10 +296,22 @@ try {
   await page.keyboard.down('Alt');
   await page.keyboard.press('Space');
   await page.keyboard.up('Alt');
+  // Wait on a FOCUS marker, not mere presence (todos/0199, the 0171 rule):
+  // the arrows below only nav the menu if the sysmenu popup already holds
+  // KERNEL focus (the kernel routes keys to the focused surface's owner —
+  // an unfocused-yet-listed popup would drop them onto winbox C, leaving
+  // the menu on the wrong row when Enter fires). `grep ctxmenu` proved the
+  // popup EXISTS but not that it holds focus; the `f` flag in `wmctl list`
+  // (FLAGS = the second-to-last field, `f` when focused) is that proof. In
+  // practice create-focus (kernel SURFACE_CREATE) sets focus synchronously,
+  // so the flag is already up when the popup lists — but asserting it makes
+  // the leg fail LOUD if that ever regresses, instead of racing the arrows.
   await setVt(1);
-  await page.keyboard.type("wmctl list | grep -q ctxmenu$ && echo SYSMENU-U''P\r");
-  await page.waitForFunction(() => window.__osOut.includes('SYSMENU-UP'), { timeout: 20000, polling: 200 });
-  check('Alt+Space opened the window system menu', true);
+  await page.keyboard.type(
+    "wmctl wait win ctxmenu 8000 && wmctl list | " +
+    "awk '$NF==\"ctxmenu\"&&$(NF-1)~/^f/{print \"SYSMENU-FOCUS\" \"ED\"}'\r");
+  await page.waitForFunction(() => window.__osOut.includes('SYSMENU-FOCUSED'), { timeout: 20000, polling: 200 });
+  check('Alt+Space opened the window system menu (popup holds focus)', true);
   await setVt(2);
   await waitPixel(CX + 200, CY + 100, GREEN, 30000,
     'the Alt-toggled fill; black = a click mark landed on the probe (0215)');
@@ -322,9 +340,12 @@ try {
   await page.keyboard.down('Alt');
   await page.keyboard.press('Space');
   await page.keyboard.up('Alt');
-  await setVt(1);
-  await page.keyboard.type("wmctl list | grep -q ctxmenu$ && echo SYSMENU2-U''P\r");
-  await page.waitForFunction(() => window.__osOut.includes('SYSMENU2-UP'), { timeout: 20000, polling: 200 });
+  await setVt(1);   // focus marker again (todos/0199) — the Down x5 -> Close
+                    // nav needs the re-opened popup to hold focus first.
+  await page.keyboard.type(
+    "wmctl wait win ctxmenu 8000 && wmctl list | " +
+    "awk '$NF==\"ctxmenu\"&&$(NF-1)~/^f/{print \"SYSMENU2-FOCUS\" \"ED\"}'\r");
+  await page.waitForFunction(() => window.__osOut.includes('SYSMENU2-FOCUSED'), { timeout: 20000, polling: 200 });
   await setVt(2);
   for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');            // Close
