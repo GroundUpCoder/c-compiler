@@ -1,10 +1,30 @@
-# 0140 — mGBA: real GBA games derail — ARM/THUMB core miscompiled by compiler.js codegen (deferred)
+# 0140 — mGBA: real GBA games derail — ROOT-CAUSED to an in-OS short-read (NOT compiler.js codegen)
 
-- **Status**: deferred (mass-deferred 2026-07-12; was: open — DEFERRED INDEFINITELY (P3/background). Root-cause is a)
-  compiler.js codegen bug in the (unmodified, upstream) mGBA ARM/THUMB
-  interpreter; fixing it is an open-ended compiler correctness hunt with no
-  committed timebox. Design + full evidence: `todos/MGBA.md`. Investigation
-  narrative: `logs/2026-07-12/mgba-real-games-cpu-miscompile.md`.
+- **ROOT CAUSE FOUND 2026-07-20 (`logs/2026-07-20/mgba-crt0-codegen-fix.md`,
+  branch `mgba-crt0-codegen-fix`) — the whole "compiler.js miscompiles the
+  ARM/THUMB core" premise is WRONG.** The Mario Tennis crt0 derail (`BX` →
+  `0x09000000`) is **not a codegen bug**: the *identical* mgba wasm boots the
+  ROM **clean** under bare `node host.js` (compiler.js AND clang agree); it
+  derails **only in-OS**. Trigger: the in-OS RemoteFS/kernel `read()` caps each
+  `FS_READ` RPC at `KP_FS_CHUNK` (a **short read** — proven by `dd`: a single
+  16 MB / 1 MB read returns one *partial* block, `bs=64k` → `0+280` partial
+  blocks). mGBA's non-`mmap` `_vfdMap` (`vfs-fd.c`) loads the 16 MB ROM with a
+  **single unlooped `read(fd, mem, 16MB)` whose return value is ignored**, so
+  the `calloc`-zeroed ROM buffer is left mostly empty → the emulated CPU reads
+  open-bus ROM → `0x09000000`. Bare `fs.readSync` fills 16 MB in one call, so
+  bare boots. **Causation proven bare:** capping bare `readImpl` to 60 KB/call
+  reproduces the exact derail; looping `_vfdMap`'s read fixes it (clean boot).
+  compiler.js is UNTOUCHED and no conformance test was added (no C codegen
+  defect exists). **Awaiting master:** pick the fix site — **(A)** loop
+  `_vfdMap`'s read (mgba-only, upstream-worthy), or **(B, recommended P0)** make
+  the in-OS `read()` fill up to `count` for regular files (fixes the WHOLE class
+  — any in-OS program doing one large `read()` of a regular file is silently
+  truncated today). Reclassify accordingly; the codegen framing below is retired.
+- **Status**: was deferred (mass-deferred 2026-07-12) as an open-ended compiler
+  correctness hunt. That framing is RETIRED by the 2026-07-20 root cause above —
+  it is an FS short-read / mgba VFS-fallback bug, not a compiler bug. Design +
+  historical evidence: `todos/MGBA.md`. Historical narrative:
+  `logs/2026-07-12/mgba-real-games-cpu-miscompile.md`.
 - **THUMB-230 triage verdict (2026-07-20, `logs/2026-07-20/mgba-thumb230-triage.md`)**:
   jsmolka `thumb.gba` "test 230" is a **muddy oracle — retired** (like ARM-235).
   Fresh native upstream mGBA **v0.10.5** (`26b7884bc`, matches vendored) run:

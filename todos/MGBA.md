@@ -53,11 +53,23 @@ ROMs):
 
 ## What it IS
 
-**A `compiler.js` codegen bug**: compiler.js miscompiles the (correct, upstream)
-mGBA ARM/THUMB interpreter. mGBA passes jsmolka's suites natively, so a failure
-in our build is our compiler miscompiling correct C — the same class of finding
-that the 0112 port already surfaced four times (angle-includes, `__builtin_bswap`,
-`exp2`, `rewinddir`).
+> **ROOT-CAUSED 2026-07-20 — it is NOT a compiler.js codegen bug.** See
+> `logs/2026-07-20/mgba-crt0-codegen-fix.md`. The *identical* mgba wasm boots
+> Mario Tennis **clean** under bare `node host.js` (compiler.js and clang agree);
+> it derails **only in-OS**. The trigger is a **short `read(2)`**: the in-OS
+> RemoteFS/kernel `read()` caps each `FS_READ` RPC at `KP_FS_CHUNK`, and mGBA's
+> non-`mmap` `_vfdMap` (`vfs-fd.c`) loads the 16 MB ROM with a single unlooped
+> `read(fd, mem, 16MB)` (return value ignored) — so the `calloc`-zeroed ROM
+> buffer is left mostly empty and the CPU reads open-bus ROM → `0x09000000`.
+> Proven both ways: capping bare `read()` to 60 KB reproduces the derail;
+> looping `_vfdMap`'s read fixes it. Fix site is master's call — (A) loop
+> `_vfdMap`, or (B, recommended P0) make the in-OS `read()` fill regular-file
+> reads (fixes the whole class). **The historical "codegen bug" text below is
+> retired**; kept for provenance only.
+
+**[RETIRED premise]** ~~A `compiler.js` codegen bug: compiler.js miscompiles the
+(correct, upstream) mGBA ARM/THUMB interpreter.~~ The bare/in-OS differential
+above refutes this — the wasm is fine; the OS `read()` path truncates the ROM.
 
 ## Reproductions (deterministic)
 
