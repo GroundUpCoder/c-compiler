@@ -1482,6 +1482,40 @@ function preprocess(filename, initialTokens, ppRegistry) {
   // --- 2. CENTRALIZED EXPANSION HELPER ---
   function expand(tokens, hideset) {
     const expanded = [];
+    // Rescan the tail of a freshly produced expansion: if `replacement` ends in
+    // a function-like macro NAME whose `( … )` argument list is supplied by the
+    // tokens that FOLLOW position `i` in the current stream — i.e. the call was
+    // formed only during this expansion, out of the SAME replacement list — apply
+    // it. C11 6.10.3.4 requires the fully rescanned sequence to include calls
+    // formed after the inner expansion (e.g. `#define IDX(...) SEL_1` selected by
+    // a count-dispatch macro, with the `(args)` glued on in the same replacement
+    // list — jq's `JV_ARRAY`/`BLOCK` idiom). Shared by BOTH the object-like and
+    // function-like branches, since the top-level rescan never sees the
+    // `name(args)` pairing when the call site is itself inside another expansion.
+    // Mutates `replacement` in place; returns the advanced input index.
+    function applyTrailingCall(replacement, hs, i) {
+      while (replacement.length > 0) {
+        const last = replacement[replacement.length - 1];
+        if (last.kind !== TokenKind.IDENT || last.noExpand || !macros.has(last.text) ||
+            !macros.get(last.text).isFunctionLike || hs.has(last.text))
+          break;
+        let k = i + 1;
+        while (k < tokens.length && tokens[k].kind === TokenKind.NEWLINE) k++;
+        if (k >= tokens.length || !tokens[k].atPunct(Punct.LPAREN)) break;
+        const call = [last, tokens[k]];
+        let depth = 1, k2 = k + 1;
+        while (k2 < tokens.length && depth > 0) {
+          const tt = tokens[k2];
+          if (tt.atPunct(Punct.LPAREN)) depth++;
+          else if (tt.atPunct(Punct.RPAREN)) depth--;
+          call.push(tt);
+          k2++;
+        }
+        i = k2 - 1;
+        replacement.splice(replacement.length - 1, 1, ...expand(call, new Set(hs)));
+      }
+      return i;
+    }
     for (let i = 0; i < tokens.length; ++i) {
       const t = tokens[i];
 
@@ -1529,34 +1563,12 @@ function preprocess(filename, initialTokens, ppRegistry) {
             c.column = t.column;
             return c;
           });
-          let replacement = expand(relocated, nextHideset);
+          const replacement = expand(relocated, nextHideset);
           // Object-like macro whose expansion ends in a function-like macro
-          // name: if the tokens that follow in the current stream supply its
-          // argument list, apply it. Needed when the call site is itself inside
-          // another macro expansion, so the top-level rescanTrailingMacros never
-          // sees the `name(args)` pairing — e.g. `#define h g` (object-like)
-          // where g(a,b) is function-like and `h(2,3)` appears in another
-          // macro's replacement list.
-          while (replacement.length > 0) {
-            const last = replacement[replacement.length - 1];
-            if (last.kind !== TokenKind.IDENT || last.noExpand || !macros.has(last.text) ||
-                !macros.get(last.text).isFunctionLike || hideset.has(last.text))
-              break;
-            let k = i + 1;
-            while (k < tokens.length && tokens[k].kind === TokenKind.NEWLINE) k++;
-            if (k >= tokens.length || !tokens[k].atPunct(Punct.LPAREN)) break;
-            const call = [last, tokens[k]];
-            let depth = 1, k2 = k + 1;
-            while (k2 < tokens.length && depth > 0) {
-              const tt = tokens[k2];
-              if (tt.atPunct(Punct.LPAREN)) depth++;
-              else if (tt.atPunct(Punct.RPAREN)) depth--;
-              call.push(tt);
-              k2++;
-            }
-            i = k2 - 1;
-            replacement = [...replacement.slice(0, -1), ...expand(call, new Set(hideset))];
-          }
+          // name (e.g. `#define h g` where g(a,b) is function-like and `h(2,3)`
+          // appears in another macro's replacement list): pull its argument list
+          // from the following tokens. See applyTrailingCall.
+          i = applyTrailingCall(replacement, hideset, i);
           expanded.push(...replacement);
         } else {
           // Function-style macro: need to check for '(' and collect arguments
@@ -1794,10 +1806,15 @@ function preprocess(filename, initialTokens, ppRegistry) {
             const nextHideset = new Set(hideset);
             nextHideset.add(t.text);
             const expandedResult = expand(substituted, nextHideset);
-            expanded.push(...expandedResult);
 
             // Advance past the macro invocation
             i = j - 1; // -1 because loop will increment
+            // The expansion may END in a function-like macro name whose `(args)`
+            // are glued on in the SAME replacement list (a count-dispatch
+            // selector: `IDX(__VA_ARGS__, …)(__VA_ARGS__)` — jq's JV_ARRAY/BLOCK).
+            // Pull them from the following tokens, same as the object-like branch.
+            i = applyTrailingCall(expandedResult, hideset, i);
+            expanded.push(...expandedResult);
           } else {
             // Function-like macro not followed by '(' - don't expand
             expanded.push(t);

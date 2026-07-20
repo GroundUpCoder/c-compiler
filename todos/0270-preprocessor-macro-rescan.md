@@ -1,7 +1,26 @@
 # 0270 — compiler.js preprocessor: function-like macro name from inner expansion not re-scanned when its args come from the same replacement list
 
-- **Status**: open
-- **Design**: —
+- **Status**: fix built on `fix-0270-pp-rescan`, gates green, awaiting
+  coordinator review/merge (compiler.js is codegen-sensitive — master reviews
+  the diff + sequences before the C++ ladder T2 ETL rung).
+- **Design**: dev log `logs/2026-07-20/pp-macro-rescan-0270.md`.
+
+## Resolution
+
+Root cause: `expand()` had a trailing-rescan loop for the **object-like** macro
+branch (expansion ending in a function-like macro name whose `(args)` follow in
+the current stream) but the **function-like** branch had no equivalent — so the
+`IDX(__VA_ARGS__, …)` selector's result (`SUM_1`) was never re-invoked with the
+trailing `(__VA_ARGS__)`. Fix: factored that loop into a shared helper
+`applyTrailingCall` and applied it to both branches (general C11 6.10.3.4
+rescan; blue-paint guards prevent self-referential loops).
+
+- Conformance guard: `tests/unit/conformance/pp_variadic_argcount_rescan/`
+  (fails pre-fix, passes post-fix, clang-verified `11 32 63`).
+- SameBoy byte-identity: sha256 unchanged pre/post (`3c8e7b3d…`).
+- jq's `JV_PP_EXPAND`/`BLOCK_PP_EXPAND` workaround confirmed redundant (jq's
+  real 9-/8-arg macros expand identically to clang without the wrap); removing
+  it is optional cleanup at the next jq re-bake.
 
 ## Goal
 
