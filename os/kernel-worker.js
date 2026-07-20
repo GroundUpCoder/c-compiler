@@ -93,6 +93,16 @@ var compositor = null; // {scheduleFrame,setFrozen,stats} once wm-canvas
 var gpuDevice = null;  // the compositor's WebGPU device (todos/0055 boot guard)
 var post = function (m) { self.postMessage(m); };
 var pending = [];   // input that raced the boot
+// Host keyboard-scheme auto-detect hint (META-ARROW-KEYBIND.md decision 4).
+// os.html reads navigator (or a ?hostkeys= test override) and passes the
+// verdict on THIS worker's URL, because startBoot() runs on load — before any
+// postMessage could arrive. 'mac' seeds the macos scheme as the fresh-volume
+// default; anything else (incl. absent) is a no-op = the baked windows scheme.
+var HOST_PLATFORM = (function () {
+  try {
+    return new URLSearchParams(self.location.search).get('hostkeys') || 'other';
+  } catch (e) { return 'other'; }
+})();
 
 self.onmessage = function (e) {
   var m = e.data;
@@ -393,6 +403,10 @@ async function boot() {
     post({ type: 'boot-log', msg: 'seeding user volume (manifest v' + manifest.version + ')…' });
     OS_COMMON.initRootVolume(kfs);
     await OS_COMMON.seedEntries(kfs, manifest.user, seedIo);
+    // Host keyboard-scheme auto-detect (META-ARROW-KEYBIND.md decision 4):
+    // a Mac host defaults to the macos scheme (admin layer; user config wins).
+    if (OS_COMMON.seedHostKeyScheme(kfs, HOST_PLATFORM))
+      post({ type: 'boot-log', msg: 'host keyboard scheme -> macos (Mac host default)' });
   }
   var ccCompile = OS_COMMON.createCcDriver(CompilerJS, kfs);
 

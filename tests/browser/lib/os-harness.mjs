@@ -20,7 +20,15 @@ import fs from 'node:fs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.resolve(__dirname, '../../..');
 
-export const osUrl = (port) => `http://localhost:${port}/os/os.html`;
+// The os.html URL. `hostKeys` PINS the keyboard-scheme host auto-detect
+// (META-ARROW-KEYBIND.md decision 4): default 'off' suppresses the seed so
+// every browser test is byte-identical to the baked windows scheme regardless
+// of the CI host — a Mac would otherwise auto-select macos and break the
+// GUI+arrow snap legs (os-snap/os-wm). A test that wants the macos default
+// passes hostKeys: 'mac'. Pass '' to omit the param entirely (raw os.html).
+export const osUrl = (port, hostKeys = 'off') =>
+  `http://localhost:${port}/os/os.html` +
+  (hostKeys ? `?hostkeys=${encodeURIComponent(hostKeys)}` : '');
 
 // serve.js over the repo root (COOP/COEP for SAB), exactly like a developer's
 // `node serve.js .`. stdio is piped but left UNREAD by default — matching the
@@ -154,8 +162,14 @@ export async function openOsSession(opts = {}) {
     browserArgs,
     browserOpts,
     onServerLog,
+    // Host keyboard-scheme auto-detect (META-ARROW-KEYBIND.md decision 4).
+    // Default 'off' PINS the seed off so the sweep is byte-identical to the
+    // baked windows scheme regardless of the CI host (a Mac would otherwise
+    // auto-select macos and break the GUI+arrow snap legs). A test that wants
+    // the auto-detect exercises it with hostKeys: 'mac'.
+    hostKeys = 'off',
   } = opts;
-  const url = osUrl(port);
+  const url = osUrl(port, hostKeys);
   const server = startServer(port, { onLog: onServerLog });
   const browser = await launchBrowser(browserArgs, browserOpts);
   const { check, state } = makeCheck({ stringify });

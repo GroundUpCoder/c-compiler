@@ -44,6 +44,11 @@
 //                  (os-common.bakedPackages) against this set, so a minimal
 //                  blob is only reused under --packages=none (the
 //                  test_gucman_e2e mode) and a bake folds exactly this set.
+//   --host-platform=mac   seed the macos keyboard scheme as the DEFAULT on a
+//                  freshly-created root volume (META-ARROW-KEYBIND.md decision
+//                  4; the browser twin auto-detects via navigator). Any other
+//                  value (default) leaves the baked windows scheme. A manual
+//                  ~/.config/keys always overrides — this only sets the default.
 //   --quiet        suppress boot progress on stderr
 //   --tty-out      fd 1/2 tty-kind even under pipes (isatty(1) true, so
 //                  shells go interactive — drive prompts/job control from
@@ -74,6 +79,10 @@ let ttyOut = false;   // force fd1/2 tty-kind under pipes (drive interactive she
 let requireCleanOverlays = false;
 let allOverlays = false;
 let packagesWant = 'all';   // the package set the blob must carry (see header)
+let hostPlatform = 'other'; // --host-platform: the keyboard-scheme auto-detect
+                            // hint (META-ARROW-KEYBIND.md). Default 'other' =
+                            // no seed = the baked windows scheme, so every
+                            // headless boot stays byte-identical unless asked.
 const requestedOverlays = new Set();
 for (const a of process.argv.slice(2)) {
   if (a.startsWith('--image=')) imagePath = path.resolve(a.slice(8));
@@ -92,6 +101,7 @@ for (const a of process.argv.slice(2)) {
   else if (a === '--packages=all') packagesWant = 'all';
   else if (a.startsWith('--packages='))
     packagesWant = a.slice(11) === 'none' ? [] : a.slice(11).split(',').filter(Boolean);
+  else if (a.startsWith('--host-platform=')) hostPlatform = a.slice(16);
   else {
     process.stderr.write(`boot.js: unknown option ${a}\n`);
     process.exit(2);
@@ -257,6 +267,10 @@ async function mountAndBoot() {
     bootLog('seeding user volume (manifest v' + manifest.version + ')');
     COMMON.initRootVolume(kfs);
     await COMMON.seedEntries(kfs, manifest.user, seedIo);
+    // Host keyboard-scheme auto-detect (META-ARROW-KEYBIND.md decision 4):
+    // seed macos as the DEFAULT on a Mac host (admin layer; user config wins).
+    if (COMMON.seedHostKeyScheme(kfs, hostPlatform))
+      bootLog('host keyboard scheme -> macos (Mac host default)');
     rootStore.flush();
   }
   bootLog('image ' + imagePath + ' (' + sysMode + ')' +

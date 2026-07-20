@@ -41,10 +41,10 @@
  * text<->(mods,key)<->scancode surface.
  *
  * Notes (todos/KEYMAP.md, superseded/updated by the override system):
- *   - ⌘+arrow rows now EXIST in the macos table (line/doc nav) — reached
- *     once wm.c relocates tiling off GUI+arrow to Ctrl+Alt+arrow (chunk iii,
- *     META-ARROW-KEYBIND.md); until then the kernel's snap grab still eats
- *     ⌘+arrow, so these rows are inert on the current build.
+ *   - ⌘+arrow rows EXIST in the macos table (⌘←/→ line nav, ⌘↑/↓ doc nav)
+ *     and are LIVE: wm.c relocated tiling off GUI+arrow to Ctrl+Alt+arrow
+ *     (the grab-table push, META-ARROW-KEYBIND.md), so ⌘+arrow now passes
+ *     through the kernel to the focused app where key_action resolves it.
  *   - browser-eaten ⌘ chords (⌘N/W/Q/T/Tab/Space): never bound; the
  *     passthrough spike table in KEYMAP.md records the real list.
  *   - kernel global chords (snap/cycle/menu/sysmenu/overview) are SYSTEM
@@ -141,7 +141,8 @@ static const KeyBinding KS_TABLE[] = {
     { KS_WINDOWS, KCTX_TERM, KM_CTRL | KM_SHIFT,  0, 'v',      KA_PASTE },
 
     /* ---- macos: ⌘ takes the verbs, freeing Ctrl for the emacs rows.
-     * NO ⌘+arrow rows (Aero Snap owns GUI+arrow in the kernel). ---- */
+     * ⌘+arrow rows below are LIVE — tiling moved to Ctrl+Alt+arrow, so
+     * GUI+arrow reaches the app (META-ARROW-KEYBIND.md). ---- */
     { KS_MACOS, KCTX_EDIT | KCTX_LIST, KM_GUI, 0, 'a',     KA_SELECT_ALL },
     { KS_MACOS, KCTX_EDIT | KCTX_TERM, KM_GUI, 0, 'c',     KA_COPY },
     { KS_MACOS, KCTX_EDIT,             KM_GUI, 0, 'x',     KA_CUT },
@@ -151,10 +152,9 @@ static const KeyBinding KS_TABLE[] = {
     { KS_MACOS, KCTX_EDIT,             KM_ALT, 0, KK_RIGHT, KA_WORD_RIGHT },
     /* ⌘←/→ line nav, ⌘↑/↓ doc nav (todos/KEYBINDING-OVERRIDE-SYSTEM.md +
      * META-ARROW-KEYBIND.md, jku-decided). rl=0: these are the native macOS
-     * idiom, not the readline bundle — always on in macos scheme. They reach
-     * apps only once wm.c stops grabbing GUI+arrow in macos (chunk iii);
-     * until then the kernel's snap grab still intercepts ⌘+arrow. Shift
-     * extends selection for free (the context rule, keys.h:206-207). */
+     * idiom, not the readline bundle — always on in macos scheme. LIVE: wm.c
+     * relocated tiling to Ctrl+Alt+arrow, so GUI+arrow passes through to the
+     * app. Shift extends selection for free (the context rule, keys.h:206-207). */
     { KS_MACOS, KCTX_EDIT,             KM_GUI, 0, KK_LEFT,  KA_LINE_START },
     { KS_MACOS, KCTX_EDIT,             KM_GUI, 0, KK_RIGHT, KA_LINE_END },
     { KS_MACOS, KCTX_EDIT,             KM_GUI, 0, KK_UP,    KA_DOC_START },

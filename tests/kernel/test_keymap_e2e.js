@@ -151,7 +151,7 @@ function sessionMac() {
     'echo ==rl_k',
     'wmctl gettext EDIT:0',
     'echo ==cut',
-    // ⌥Right word-nav (the macos word chord; ⌘arrows stay Aero Snap's)
+    // ⌥Right word-nav (the macos word chord; ⌘arrows are line/doc nav below)
     'wmctl settext EDIT:0 "one two"',
     key('$NSID', 79, 1073741903, 256),           // ⌥Right
     type('$NSID', 'x'),
@@ -159,6 +159,37 @@ function sessionMac() {
     'echo ==wordnav',
     'wmctl gettext EDIT:0',
     'echo ==cut',
+    // ⌘←/→ line nav + ⌘↑/↓ doc nav — the META-ARROW feature, LIVE now that
+    // tiling relocated to Ctrl+Alt+arrow (keys.h macos rows). `wmctl key`
+    // injects straight to the app (INJECT_KEY bypasses the kernel grab), so
+    // this proves the APP-side verb routing under the macos scheme; that the
+    // kernel PASSES ⌘+arrow through (not snap) is os-keybind.mjs's leg — the
+    // two together are the full path. Each verb is tested from a FRESH settext
+    // with a single caret-setup chord and a single TRAILING gettext: a gettext
+    // RPC interleaved between a chord and the next injected key races the
+    // agent's key delivery (a test-harness ordering quirk, not a product bug),
+    // so state is read only after the 'Z' marker lands. Marker at buffer start
+    // vs end is unambiguous ('abc' -> 'Zabc' means the caret was at 0).
+    'wmctl settext EDIT:0 "abc"',
+    key('$NSID', 80, 1073741904, 1024),          // ⌘Left  -> caret 0
+    key('$NSID', 79, 1073741903, 1024),          // ⌘Right -> line end
+    type('$NSID', 'Z'),
+    'echo ==lineend', 'wmctl gettext EDIT:0', 'echo ==cut',
+    'wmctl settext EDIT:0 "abc"',
+    key('$NSID', 79, 1073741903, 1024),          // ⌘Right -> line end
+    key('$NSID', 80, 1073741904, 1024),          // ⌘Left  -> line start
+    type('$NSID', 'Z'),
+    'echo ==linestart', 'wmctl gettext EDIT:0', 'echo ==cut',
+    'wmctl settext EDIT:0 "abc"',
+    key('$NSID', 79, 1073741903, 1024),          // ⌘Right -> line end
+    key('$NSID', 82, 1073741906, 1024),          // ⌘Up    -> doc start
+    type('$NSID', 'Z'),
+    'echo ==docstart', 'wmctl gettext EDIT:0', 'echo ==cut',
+    'wmctl settext EDIT:0 "abc"',
+    key('$NSID', 80, 1073741904, 1024),          // ⌘Left  -> line start
+    key('$NSID', 81, 1073741905, 1024),          // ⌘Down  -> doc end
+    type('$NSID', 'Z'),
+    'echo ==docend', 'wmctl gettext EDIT:0', 'echo ==cut',
     // readline off (the escape hatch): ^E must go inert — poll until the
     // 1 Hz cache picks the flip up (stale iterations produce "abz")
     'printf "scheme\\tmacos\\nreadline\\toff\\n" > /etc/keys',
@@ -199,6 +230,14 @@ function sessionMac() {
     JSON.stringify(section(out, 'rl_k')));
   check('macos: ⌥Right word-nav', section(out, 'wordnav').trim() === 'one xtwo',
     JSON.stringify(section(out, 'wordnav')));
+  check('macos: ⌘Right = line end', section(out, 'lineend').trim() === 'abcZ',
+    JSON.stringify(section(out, 'lineend')));
+  check('macos: ⌘Left = line start', section(out, 'linestart').trim() === 'Zabc',
+    JSON.stringify(section(out, 'linestart')));
+  check('macos: ⌘Up = doc start', section(out, 'docstart').trim() === 'Zabc',
+    JSON.stringify(section(out, 'docstart')));
+  check('macos: ⌘Down = doc end', section(out, 'docend').trim() === 'abcZ',
+    JSON.stringify(section(out, 'docend')));
   check('readline off disarms the rows (live, no restart)',
     section(out, 'rloff').trim() === 'zab', JSON.stringify(section(out, 'rloff')));
   check('live /etc/keys flip reaches a running app within the 1 Hz revalidate',
@@ -328,11 +367,88 @@ function sessionApplet() {
     JSON.stringify(section(out, 'cfg3')));
 }
 
+/* ---- session F: host keyboard-scheme auto-detect (META-ARROW-KEYBIND.md
+ * decision 4). boot.js --host-platform=mac (the headless twin of os.html's
+ * navigator probe) seeds the macos scheme as the DEFAULT on a fresh root
+ * volume's admin /etc/keys — proven behaviorally: under the seed, ⌘A/⌘C ARE
+ * the EDIT verbs (fill the slot) with no /etc/keys or user config written by
+ * the test. A non-mac hint would leave the baked windows default (that path is
+ * every other session here). ---- */
+function sessionAutodetectMac() {
+  const { image: img } = freshImage('os-keymap-hostmac-');
+  const out = driveBoot([
+    'echo ==keysfile',
+    'cat /etc/keys 2>/dev/null',                 // the admin seed the boot wrote
+    'echo ==cut',
+    'notepad &',
+    'wmctl wait label EDIT:0 12000',
+    'NSID=$(wmctl list | grep "Notepad" | sed "s/[^0-9].*//")',
+    'wmctl settext EDIT:0 "auto mac"',
+    key('$NSID', 4, 97, 1024),                   // ⌘A  (a macos verb)
+    key('$NSID', 6, 99, 1024),                   // ⌘C  (a macos verb)
+    waitClipHas('auto mac'),
+    'echo ==maccopy',
+    'clip -o',
+    'echo ==done',
+    '',
+  ], { image: img, args: ['--host-platform=mac'], maxBuffer: 32 * 1024 * 1024 }).stdout;
+
+  check('autodetect: Mac host seeds scheme macos into the admin /etc/keys',
+    /scheme\tmacos/.test(section(out, 'keysfile')), JSON.stringify(section(out, 'keysfile')));
+  check('autodetect: the seeded macos default makes ⌘A/⌘C the EDIT verbs',
+    section(out, 'maccopy').trim() === 'auto mac', JSON.stringify(section(out, 'maccopy')));
+}
+
+/* ---- session G: the manual override still wins over the host default. Same
+ * Mac host (admin /etc/keys seeded macos), but the user picked windows in
+ * ~/.config/keys (the HIGHER cfgstore layer the ctlpanel applet writes). The
+ * effective scheme must be windows: ^A/^C are the verbs and ⌘C is unbound
+ * (drops, does not type). ---- */
+function sessionAutodetectOverride() {
+  const { image: img } = freshImage('os-keymap-hostovr-');
+  const out = driveBoot([
+    'mkdir -p /root/.config',
+    'printf "scheme\\twindows\\n" > /root/.config/keys',   // the manual override
+    'echo ==keysfile',
+    'cat /etc/keys 2>/dev/null',                 // admin layer is STILL macos-seeded
+    'echo ==cut',
+    'notepad &',
+    'wmctl wait label EDIT:0 12000',
+    'NSID=$(wmctl list | grep "Notepad" | sed "s/[^0-9].*//")',
+    'wmctl settext EDIT:0 "user win"',
+    key('$NSID', 4, 97, 64),                     // ^A  (windows verb)
+    key('$NSID', 6, 99, 64),                     // ^C  (windows verb)
+    waitClipHas('user win'),
+    'echo ==wincopy',
+    'clip -o',
+    'echo ==cut',
+    // ⌘C is unbound under windows -> it must DROP, not type its 'c': ⌘C then
+    // '!' lands at the unmoved caret 0; a leaked 'c' would show.
+    'wmctl settext EDIT:0 "CLEAN"',
+    key('$NSID', 6, 99, 1024),                   // ⌘C — unbound under the override
+    type('$NSID', '!'),
+    waitText('EDIT:0', '!CLEAN'),
+    'echo ==guidrop',
+    'wmctl gettext EDIT:0',
+    'echo ==done',
+    '',
+  ], { image: img, args: ['--host-platform=mac'], maxBuffer: 32 * 1024 * 1024 }).stdout;
+
+  check('autodetect: the admin /etc/keys seed is still macos (default, not choice)',
+    /scheme\tmacos/.test(section(out, 'keysfile')), JSON.stringify(section(out, 'keysfile')));
+  check('override wins: user ~/.config/keys=windows -> ^A/^C are the verbs',
+    section(out, 'wincopy').trim() === 'user win', JSON.stringify(section(out, 'wincopy')));
+  check('override wins: ⌘C is unbound under the windows override (drops, no typed c)',
+    section(out, 'guidrop').trim() === '!CLEAN', JSON.stringify(section(out, 'guidrop')));
+}
+
 sessionWindows();
 sessionMac();
 sessionAccel();
 sessionTerm();
 sessionApplet();
+sessionAutodetectMac();
+sessionAutodetectOverride();
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures ? `\nkeymap e2e: ${failures} FAILED` : '\nkeymap e2e: PASS');
