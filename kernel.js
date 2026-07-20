@@ -7108,7 +7108,40 @@ RemoteFS.prototype.read = function (fd, buf, count) {
   if (r.errno) return this._setErr(r.errno);
   if (!r.raw) return this._setErr('EIO');
   buf.set(r.raw);
-  return r.raw.length;
+  var got = r.raw.length;
+  // Regular-file fill (todos/0140): a single guest read() of a regular file
+  // must return min(count, bytes-to-EOF) in ONE call — matching native/Node's
+  // fs.readSync and the RO-volume fast path above — NOT one KP_FS_CHUNK-capped
+  // chunk. Each FS_READ reply is bounded by the transport payload, so a
+  // >KP_FS_CHUNK request came back short; we loop the RPC until the caller's
+  // count is satisfied or EOF. Programs that trust a regular-file read to fill
+  // (mGBA's unlooped 16 MB ROM load was the first victim — the zero-tailed ROM
+  // derailed the emulated CPU) were silently truncated. SCOPE: regular files
+  // ONLY — ttys/pipes/sockets/char-devices keep POSIX short-read semantics
+  // (looping them would block on data that may never come), so we only fill
+  // when the first chunk came back FULL (a short first chunk is already EOF)
+  // and fstat confirms S_IFREG. The classification (one extra RPC) is paid
+  // only on the rare >KP_FS_CHUNK read whose first chunk filled — ordinary
+  // small reads never reach it.
+  if (got < count && got === KP_FS_CHUNK && this._isRegularFd(fd)) {
+    while (got < count) {
+      var want = Math.min(count - got, KP_FS_CHUNK);
+      var rr = this._c.call(OP.FS_READ, { fd: fd, count: want }, true);
+      if (rr.errno) return got > 0 ? got : this._setErr(rr.errno);
+      if (!rr.raw || rr.raw.length === 0) break;   // EOF
+      buf.set(rr.raw, got);
+      got += rr.raw.length;
+      if (rr.raw.length < want) break;             // short chunk = EOF, done
+    }
+  }
+  return got;
+};
+/* Regular-file test for read-fill scoping (todos/0140): fstat the fd and
+ * check S_IFREG. Every path-opened brokered fd is a 'file' OFD kernel-side,
+ * but inherited/dup'd fds carry no process-side kind, so we ask the kernel. */
+RemoteFS.prototype._isRegularFd = function (fd) {
+  var r = this._ok(this._c.call(OP.FS_FSTAT, { fd: fd }));
+  return !!(r && r.st && (r.st.mode & 0xF000) === 0x8000);
 };
 RemoteFS.prototype.write = function (fd, buf, count) {
   if (this._roFd(fd)) {
