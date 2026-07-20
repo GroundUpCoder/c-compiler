@@ -6,6 +6,18 @@ increasing C++-ness, so each language level gets proven SMOOTHLY and FULLY by
 several real consumers before we ratchet to the next. The user picks; picks
 become queue items.
 
+> **Progress (2026-07-20): TIER 1 GREEN — Box2D + Dear ImGui promoted.**
+> Both ship as optional `*-clang` gucman packages (CLANG-CPP-EPIC Part II
+> channel; base image stays clang-free): `box2d-clang` (interactive sandbox,
+> mouse-spawn/drag over a real b2MouseJoint; shared-core scenario matches
+> native within 3.4e-4 over 240 frames) and `imgui-clang` (demo + a Process
+> Inspector reading the real /proc in-OS). Sibling branch `t1-clang-apps`
+> (front-ends + harnesses + overlay), this repo's branch `t1-ladder`
+> (package defs + `tests/kernel/test_clang_pkgs_e2e.js`, 15/15). Dev log:
+> `logs/2026-07-20/t1-ladder-box2d-imgui.md`. Note: sameboy-clang left the
+> sibling overlay (0260 made vendor/sameboy win32 — cc2wasm can't build it).
+> Next rung on ratchet: Tier 2 (ETL + GLM).
+
 ---
 
 ## 1. Ground truth: what the toolchains compile TODAY
