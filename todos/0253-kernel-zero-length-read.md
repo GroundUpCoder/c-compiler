@@ -1,7 +1,31 @@
 # 0253 — kernel-brokered zero-length reads park: _streamRead / tty FS_READ ignore count===0
 
-- **Status**: open
+- **Status**: fixed (branch `fix-0253-zerolen-read`; kernel.js only — a
+  STATIC asset, no image bump)
 - **Design**: —
+
+## Resolution
+
+Two early `count === 0 → return 0` short-circuits in `kernel.js`, ahead of
+every avail-check / waiter-enqueue path — matching POSIX (a zero-length read
+transfers no data and returns 0 at once) and the host.js R1 fix:
+
+- `_streamRead` (top): covers pipes, sockets, and the pty master (`ptm`) —
+  the three stream kinds that route through it. Was `avail > 0`, so count 0
+  fell through to the `piperead` park.
+- the `tty` branch of `FS_READ`: before the job-control (SIGTTIN) check and
+  the `ttyread` park — a zero-length read moves no bytes, so the simple
+  conforming choice is to return 0 without touching job control.
+
+The regular-file read path (the 0140 read-fill) is untouched: count 0 there
+already flows through `fs.read(..., 0) → 0`, a different branch entirely.
+
+Test: `tests/kernel/test_zerolen_read.js` (registered in
+`tests/kernel/run.js`) — a fake-worker kernel test driving count-0 FS_READ on
+an empty pipe / socket / pty master / tty each with a LIVE writer, asserting
+immediate return of 0 bytes (not parked), plus a count>0 sanity read on each
+that STILL defers (blocking semantics unchanged). Red before the fix (the
+count-0 read hangs forever), green after.
 
 ## Goal
 
