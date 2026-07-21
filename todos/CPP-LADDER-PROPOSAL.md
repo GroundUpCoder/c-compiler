@@ -36,6 +36,32 @@ become queue items.
 > (package defs + the extended `tests/kernel/test_clang_pkgs_e2e.js`).
 > Next rung on ratchet: Tier 3 (Ninja + tinyrenderer).
 
+> **Progress (2026-07-21): TIER 3 GREEN — Ninja + tinyrenderer landed.**
+> `ninja-clang` is Ninja v1.12.1 with its subprocess layer riding gucOS
+> posix_spawn UNPATCHED (upstream already speaks posix_spawn/file_actions/
+> pipe/waitpid — 6 thin `__wasm__` patches elsewhere: setsigmask/pselect
+> skips under the cooperative signal model, st_mtim, loadavg/nproc/truncate;
+> 1 MiB stack for BuildLog's 256K on-stack buffer): **the killer leg runs —
+> in-OS ninja spawns `/bin/sh -c "cc hello.c -o hello"`, the product runs,
+> and a second invocation says "no work to do"** (incremental stat semantics
+> on the brokered fs). Headless harness `run-ninja-test.sh` 13/13 (dry-run +
+> `-t` tool suite vs a native ninja from the SAME sources). `tinyrenderer-
+> clang` is ssloy's 2025 renderer PRISTINE (zero patches) as a `--sdl`
+> spinning head + packaged model assets (the new mkpkg `clangFile` entries);
+> `run-tinyrenderer-test.sh` 7/7 with the 800x800 render **BIT-IDENTICAL
+> wasm-vs-native** — the native leg needs `-ffp-contract=off` (default fma
+> contraction, not a wasm bug, caused a 40%-of-pixels divergence), and the
+> in-OS e2e re-verifies the checkpoint series byte-exact vs the sibling
+> golden. Mini-STL growth: `<queue>`/`<stack>`, ofstream + `std::ios`,
+> istream read/float-extraction/pushback-fix, string/vector swap +
+> const-ref access, map `insert(P&&)` ambiguity fix, `mem_fn`,
+> unordered_set emplace, il min/max/minmax. `test_clang_pkgs_e2e.js` 39/39
+> over six packages; base stays clang-free (plain mkpkg indexes/pools zero
+> `-clang`). Sibling landed on `main` (@1beacf2), this repo's branch
+> `t3-ladder`. Dev logs: sibling `logs/2026-07-21/t3-clang-apps.md`, here
+> `logs/2026-07-21/t3-ladder-ninja-tinyrenderer.md`.
+> Next rung on ratchet: Tier 4 (jsonq — exceptions/RTTI at app scale).
+
 ---
 
 ## 1. Ground truth: what the toolchains compile TODAY
