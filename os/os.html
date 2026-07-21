@@ -109,20 +109,30 @@
   /* The OSK supersedes the 0212 keystrip while open (it is a superset).
      The full attribute chain out-specifies the keystrip's show rule. */
   body[data-osk][data-vt="1"][data-touchui] #keystrip { display: none; }
-  .oskin { max-width: 760px; margin: 0 auto; }
+  .oskin { max-width: 760px; margin: 0 auto; --oskfs: clamp(17px, 5vw, 20px); }
   .oskrow { display: flex; gap: 4px; margin-top: 4px; }
   .oskkey {
     flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap;
     /* Bigger, touch-friendly keys: font + vertical padding scale up with the
-       viewport (clamp) so a ~390px phone gets ~44px-tall targets while large
-       screens stay reasonable. Horizontal padding stays 0 so the flex row
-       (flex 1 1 0) shares width evenly and never overflows. */
+       viewport (clamp). Key height = line box + 2*pad + 2px border, and the
+       line box is calc'd from --oskfs (not the key's own font-size) so the
+       long-legend tier below keeps the same row rhythm: at 390px that's
+       19.5*1.25 + 2*14.8 + 2 = ~56px-tall targets; small phones bottom out
+       near ~49px and the clamp caps hold desktop at ~59px. Horizontal
+       padding stays 0 so the flex row (flex 1 1 0) shares width evenly and
+       never overflows. */
     font-family: 'Menlo', 'Consolas', monospace;
-    font-size: clamp(15px, 4vw, 17px); line-height: 1.25; color: #c0c0d8;
+    font-size: var(--oskfs); line-height: calc(var(--oskfs) * 1.25);
+    color: #c0c0d8;
     background: #16162a; border: 1px solid #333355; border-radius: 5px;
-    padding: clamp(11px, 3.2vw, 14px) 0; text-align: center; cursor: pointer;
+    padding: clamp(13px, 3.8vw, 16px) 0; text-align: center; cursor: pointer;
     user-select: none; -webkit-user-select: none;
   }
+  /* Multi-char legends (Ctrl, PgUp, ?123, ...) get a smaller font so they
+     still fit their flex share at phone widths; the inherited calc()
+     line-height (from --oskfs, above) keeps every key in the row the same
+     height and the text vertically centered. */
+  .oskkey.long { font-size: clamp(13px, 3.4vw, 16px); }
   .oskkey:hover { color: #e0e0f0; border-color: #4a4a77; }
   .oskkey.armed { background: #4a4a77; color: #ffffff; }
   .oskkey.locked { background: #6a6ab7; color: #ffffff; border-color: #9a9ad7; }
