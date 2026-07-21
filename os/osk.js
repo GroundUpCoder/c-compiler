@@ -306,8 +306,12 @@ var OSK = (function () {
             if (mods[leg.mod] === 1) cls += ' armed';
             else if (mods[leg.mod] === 2) cls += ' locked';
           }
+          var label = (mods.Shift > 0 && leg.K) ? leg.K : leg.l;
+          /* Multi-char legends take the .long CSS tier (smaller font, same
+             row height) so they fit their flex share at phone widths. */
+          if (label.length >= 3) cls += ' long';
           b.className = cls;
-          b.textContent = (mods.Shift > 0 && leg.K) ? leg.K : leg.l;
+          b.textContent = label;
           b.setAttribute('data-k', leg.id || leg.l);
           if (leg.w) b.style.flexGrow = leg.w;
           /* pointerdown (keystrip precedent): preventDefault keeps the
