@@ -18,7 +18,17 @@
 //     kernel's brokered fs/tty rather than bare host.js
 //   - `gucman install glm-clang` (T2): the spinning-cube app launches
 //     (window "GLM (clang)", "glm_app: glm 1.0.1 ready" banner)
-//   - all four remove cleanly (symlink + menu entry gone)
+//   - `gucman install tinyrenderer-clang` (T3): the software-rasterized
+//     spinning head launches against the PACKAGED model assets (clangFile
+//     entries), self-quits at the 12-frame limit, and its checkpoint series
+//     is BYTE-EXACT against the sibling's committed golden — the render is
+//     deterministic across bare host.js AND the kernel's brokered fs
+//   - `gucman install ninja-clang` (T3): THE ladder's killer leg — ninja
+//     parses a manifest in-OS, spawns `/bin/sh -c "cc hello.c -o hello"`
+//     through the gucOS posix_spawn broker, the product runs, and a second
+//     ninja invocation correctly says "no work to do." (real incremental
+//     stat semantics on the brokered fs)
+//   - all six remove cleanly (symlink + menu entry gone)
 //
 // Requires the clang-simplified sibling's published overlay (out-image/
 // overlay.json). Absent sibling → SKIP (exit 0): the base estate must never
@@ -63,7 +73,8 @@ async function main() {
     return;
   }
 
-  ensureClangPackages(['box2d-clang', 'imgui-clang', 'etl-clang', 'glm-clang']);
+  ensureClangPackages(['box2d-clang', 'imgui-clang', 'etl-clang', 'glm-clang',
+                       'tinyrenderer-clang', 'ninja-clang']);
   const MIN = ensureMinimalImage();
   const { image } = freshImage('os-clangpkgs-');
   fs.copyFileSync(MIN, image);
@@ -83,6 +94,8 @@ async function main() {
     'gucman install imgui-clang; echo RC2=$?',
     'gucman install etl-clang; echo RC3=$?',
     'gucman install glm-clang; echo RC4=$?',
+    'gucman install tinyrenderer-clang; echo RC5=$?',
+    'gucman install ninja-clang; echo RC6=$?',
     'readlink /usr/local/bin/box2d-clang',
     'readlink /usr/local/bin/imgui-clang',
     'readlink /usr/local/bin/etl-clang',
@@ -92,6 +105,10 @@ async function main() {
     'readlink /etc/menu/Demos/etl-tests',   // the term-wrapper launcher, not the tty binary
     'readlink /etc/menu/Demos/glm-clang',
     'readlink /usr/local/bin/etl-tests',
+    'readlink /usr/local/bin/tinyrenderer-clang',
+    'readlink /usr/local/bin/ninja-clang',
+    'readlink /etc/menu/Demos/tinyrenderer-demo',
+    'readlink /usr/local/bin/tinyrenderer-demo',
     'echo ==box2d',
     'box2d-clang > /tmp/b.log 2>&1 &',
     'wmctl wait win "Box2D (clang)"',
@@ -115,7 +132,39 @@ async function main() {
     'kill %1',
     'wmctl wait nowin "GLM (clang)"',
     'cat /tmp/g.log',
+    'echo ==tinyrenderer',
+    // frame-limit mode: renders 12 spin frames against the PACKAGED model,
+    // prints the checkpoint series, self-quits (no kill needed).
+    'tinyrenderer-clang /opt/tinyrenderer-clang/african_head.obj 12 > /tmp/t.log 2>&1 &',
+    'wmctl wait win "tinyrenderer (clang)"',
+    'wmctl wait nowin "tinyrenderer (clang)"',
+    'cat /tmp/t.log',
+    'echo ==ninja',
+    // THE killer leg: a real incremental build inside gucOS, ninja driving
+    // the in-OS cc through the posix_spawn broker. Quoted heredocs: ninja's
+    // $in/$out must reach build.ninja unexpanded.
+    'mkdir -p /tmp/nb',
+    "cat > /tmp/nb/build.ninja <<'NINJA'",
+    'rule cc',
+    '  command = cc $in -o $out',
+    '  description = CC $out',
+    'build hello: cc hello.c',
+    'default hello',
+    'NINJA',
+    "cat > /tmp/nb/hello.c <<'CEOF'",
+    '#include <stdio.h>',
+    'int main(){ printf("hello from ninja+cc in gucOS\\n"); return 0; }',
+    'CEOF',
+    'cd /tmp/nb && ninja-clang; echo NRC=$?',
+    '/tmp/nb/hello; echo HRC=$?',
+    'cd /tmp/nb && ninja-clang; echo NRC2=$?',
+    'cd /root',
     'echo ==remove',
+    'gucman remove tinyrenderer-clang; echo RRC5=$?',
+    'gucman remove ninja-clang; echo RRC6=$?',
+    'test ! -e /usr/local/bin/tinyrenderer-clang && echo TR-GONE',
+    'test ! -e /etc/menu/Demos/tinyrenderer-demo && echo TR-MENU-GONE',
+    'test ! -e /usr/local/bin/ninja-clang && echo NINJA-GONE',
     'gucman remove box2d-clang; echo RRC=$?',
     'gucman remove imgui-clang; echo RRC2=$?',
     'gucman remove etl-clang; echo RRC3=$?',
@@ -126,7 +175,7 @@ async function main() {
     'test ! -e /etc/menu/Demos/glm-clang && echo GLM-MENU-GONE',
     'echo ==done',
   ];
-  const r = driveBoot(script, { image, args: ['--packages=none'], timeout: 420000 });
+  const r = driveBoot(script, { image, args: ['--packages=none'], timeout: 480000 });
   const out = String(r.stdout || '');
 
   const purity = section(out, 'purity');
@@ -137,12 +186,16 @@ async function main() {
   check('catalog lists imgui-clang', cat.includes('imgui-clang'), cat);
   check('catalog lists etl-clang', cat.includes('etl-clang'), cat);
   check('catalog lists glm-clang', cat.includes('glm-clang'), cat);
+  check('catalog lists tinyrenderer-clang', cat.includes('tinyrenderer-clang'), cat);
+  check('catalog lists ninja-clang', cat.includes('ninja-clang'), cat);
 
   const inst = section(out, 'install');
   check('box2d-clang installs (exit 0)', inst.includes('RC=0'), inst);
   check('imgui-clang installs (exit 0)', inst.includes('RC2=0'), inst);
   check('etl-clang installs (exit 0)', inst.includes('RC3=0'), inst);
   check('glm-clang installs (exit 0)', inst.includes('RC4=0'), inst);
+  check('tinyrenderer-clang installs (exit 0)', inst.includes('RC5=0'), inst);
+  check('ninja-clang installs (exit 0)', inst.includes('RC6=0'), inst);
   check('/usr/local/bin/box2d-clang -> /opt/box2d-clang/box2d-clang',
     inst.includes('/opt/box2d-clang/box2d-clang'), inst);
   check('/usr/local/bin/imgui-clang -> /opt/imgui-clang/imgui-clang',
@@ -156,6 +209,12 @@ async function main() {
     inst.includes('/usr/local/bin/etl-tests') && inst.includes('/usr/local/bin/glm-clang'), inst);
   check('etl-tests launcher resolves into the package tree',
     inst.includes('/opt/etl-clang/etl-tests'), inst);
+  check('/usr/local/bin/tinyrenderer-clang -> /opt/tinyrenderer-clang/tinyrenderer-clang',
+    inst.includes('/opt/tinyrenderer-clang/tinyrenderer-clang'), inst);
+  check('/usr/local/bin/ninja-clang -> /opt/ninja-clang/ninja-clang',
+    inst.includes('/opt/ninja-clang/ninja-clang'), inst);
+  check('tinyrenderer-demo launcher resolves into the package tree',
+    inst.includes('/opt/tinyrenderer-clang/tinyrenderer-demo'), inst);
 
   const box = section(out, 'box2d');
   check('box2d-clang window appeared + app quit clean', !/timed out/.test(box), box);
@@ -176,11 +235,36 @@ async function main() {
   check('glm-clang window appeared + app quit clean', !/timed out/.test(gl), gl);
   check('glm banner names glm 1.0.1', gl.includes('glm_app: glm 1.0.1 ready'), gl);
 
+  const tr = section(out, 'tinyrenderer');
+  check('tinyrenderer-clang window appeared + self-quit at the frame limit',
+    !/timed out/.test(tr), tr);
+  check('tinyrenderer banner present (packaged model, 2492 faces)',
+    tr.includes('tinyrenderer_app: tinyrenderer ready') && tr.includes('faces=2492'), tr);
+  // The determinism capstone: the in-OS checkpoint series must be BYTE-EXACT
+  // against the sibling's committed harness golden (same binary bytes, same
+  // model bytes, brokered fs instead of bare host.js).
+  const golden = fs.readFileSync(
+    path.join(CLANG_ROOT, 'wasm', 'tools', 'tinyrenderer-golden.txt'), 'utf-8').trim().split('\n');
+  const trLines = tr.split('\n').filter((l) => l.startsWith('tinyrenderer_scene: spin='));
+  check('tinyrenderer in-OS checkpoint series is byte-exact vs the sibling golden',
+    trLines.length === golden.length && trLines.every((l, i) => l === golden[i]),
+    trLines.join('|'));
+
+  const nj = section(out, 'ninja');
+  check('ninja builds hello via the in-OS cc (spawn broker; exit 0)',
+    nj.includes('NRC=0') && /\[1\/1\] CC hello/.test(nj), nj);
+  check('the ninja-built product runs', nj.includes('hello from ninja+cc in gucOS') && nj.includes('HRC=0'), nj);
+  check('second ninja run: no work to do (incremental stat semantics)',
+    nj.includes('ninja: no work to do.') && nj.includes('NRC2=0'), nj);
+
   const rm = section(out, 'remove');
-  check('all four removes exit 0',
-    rm.includes('RRC=0') && rm.includes('RRC2=0') && rm.includes('RRC3=0') && rm.includes('RRC4=0'), rm);
-  check('bin symlink gone after remove', rm.includes('BOX2D-GONE') && rm.includes('ETL-GONE'), rm);
-  check('menu entry gone after remove', rm.includes('IMGUI-MENU-GONE') && rm.includes('GLM-MENU-GONE'), rm);
+  check('all six removes exit 0',
+    rm.includes('RRC=0') && rm.includes('RRC2=0') && rm.includes('RRC3=0') && rm.includes('RRC4=0') &&
+    rm.includes('RRC5=0') && rm.includes('RRC6=0'), rm);
+  check('bin symlink gone after remove',
+    rm.includes('BOX2D-GONE') && rm.includes('ETL-GONE') && rm.includes('TR-GONE') && rm.includes('NINJA-GONE'), rm);
+  check('menu entry gone after remove',
+    rm.includes('IMGUI-MENU-GONE') && rm.includes('GLM-MENU-GONE') && rm.includes('TR-MENU-GONE'), rm);
 
   console.log(failures ? `FAILURES: ${failures}` : 'PASS');
   process.exit(failures ? 1 : 0);
