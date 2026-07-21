@@ -18,6 +18,24 @@ become queue items.
 > sibling overlay (0260 made vendor/sameboy win32 — cc2wasm can't build it).
 > Next rung on ratchet: Tier 2 (ETL + GLM).
 
+> **Progress (2026-07-21): TIER 2 GREEN — ETL + GLM landed.** `etl-clang`
+> is the ETL 20.48.1 unit-test suite as the tier's conformance battery —
+> 45 TUs / **1984 UnitTest++ tests pass on wasm** (native clang++ 1983;
+> the wasm run is a verified name-superset — the one extra test is
+> upstream-gated off on Apple+clang only), run in-OS by the e2e; the menu
+> launches it through a `term`-wrapper launcher. `glm-clang` is a `--sdl`
+> spinning cube over GLM 1.0.1 — wasm bit-identical to native over 240
+> frames (`run-glm-test.sh` 4/4). The battery drove the largest
+> libcxx-mini growth since Stockfish (`<bit>`/`<compare>`/`<span>`, the
+> f128 long-double runtime, C++-aware NULL at libc vendoring, container
+> API tails — sibling dev log `logs/2026-07-21/t2-clang-apps.md`).
+> `test_string_view` excluded by design (wide basic_string/basic_ostream
+> stack is a rejected mini-STL refactor); known toolchain debt: no builtin
+> `wchar_t` in cc2wasm C++ mode (one guarded ETL hash.h specialization).
+> Sibling branch `t2-clang-apps`, this repo's branch `t2-ladder`
+> (package defs + the extended `tests/kernel/test_clang_pkgs_e2e.js`).
+> Next rung on ratchet: Tier 3 (Ninja + tinyrenderer).
+
 ---
 
 ## 1. Ground truth: what the toolchains compile TODAY
