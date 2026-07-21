@@ -25,6 +25,14 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!-- The viewport meta is the OSK v2 Phase 1 root-cause fix (and it is GLOBAL):
+     without it mobile Safari lays the page out at ~980px and scales down, so
+     innerWidth lies to every mobile-keyed default -- mobileViewport() reads
+     false on a real phone. With it, phones report device width: the VT1 font
+     default, VT2 auto-2x zoom, and OSK auto-open all activate for the first
+     time on real devices. viewport-fit=cover exposes env(safe-area-inset-*)
+     for the OSK's notch/home-indicator padding. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>gucOS</title>
 <link rel="stylesheet" href="../vendor/xterm/xterm.css">
 <style>
@@ -102,8 +110,15 @@
      the wm re-lays the taskbar and re-clamps windows (occlusion solved by
      the 0023 dynamic screen; composes with zoom's floor(pane/Z) for free).
      touch-action none: the OSK owns its touches (no browser gestures). */
-  #osk { display: none; padding: 2px 6px 6px; touch-action: none;
-         user-select: none; -webkit-user-select: none; }
+  #osk { display: none; touch-action: none;
+         user-select: none; -webkit-user-select: none;
+         /* Safe-area insets (viewport-fit=cover): the bottom row clears the
+            home indicator, the side keys clear a landscape notch; on
+            inset-less displays the max() floors keep a slim 2px gutter. */
+         padding-top: 2px;
+         padding-left:   max(2px, env(safe-area-inset-left));
+         padding-right:  max(2px, env(safe-area-inset-right));
+         padding-bottom: max(6px, env(safe-area-inset-bottom)); }
   body[data-osk] #osk { display: block; }
   body[data-guard] #osk { display: none; }
   /* The OSK supersedes the 0212 keystrip while open (it is a superset).
@@ -136,9 +151,16 @@
   .oskkey:hover { color: #e0e0f0; border-color: #4a4a77; }
   .oskkey.armed { background: #4a4a77; color: #ffffff; }
   .oskkey.locked { background: #6a6ab7; color: #ffffff; border-color: #9a9ad7; }
-  /* On narrow phones, reclaim the side padding so the board uses full viewport
-     width (the .oskin 760px cap only bites on tablets/desktop). */
-  @media (max-width: 480px) { #osk { padding: 2px 2px 6px; } }
+  /* Touch devices get bigger keys now that the viewport meta makes the
+     width real: at 390px this is ~20px glyphs on ~62px-tall targets, edge
+     to edge. Gated on pointer:coarse so mouse desktops are provably
+     untouched (they keep the clamps above). The .oskin 760px cap stays
+     as-is everywhere -- it is inert on phones (390 < 760) and is the
+     centering guard on tablets/touch desktops; don't remove it. */
+  @media (pointer: coarse) {
+    .oskin  { --oskfs: clamp(17px, 5.2vw, 22px); }
+    .oskkey { padding: clamp(14px, 4.4vw, 18px) 0; }
+  }
   /* The desktop (todos/WM.md): the kernel composites windows onto this
      canvas in its worker; the page only forwards raw input. At zoom Z=1 the
      canvas is natural-size (backing store == pane == CSS size), so event
