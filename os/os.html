@@ -36,13 +36,21 @@
 <title>gucOS</title>
 <link rel="stylesheet" href="../vendor/xterm/xterm.css">
 <style>
-  html, body { height: 100%; margin: 0; background: #0d0d1a; }
+  /* touch-action manipulation: kill iOS Safari's native double-tap-to-zoom
+     (which fights the OS's own -/2x/+ zoom) app-wide. Keeps panning and
+     pinch-zoom; only the double-tap gesture is dropped. #screen/#osk narrow
+     further to `none` below. */
+  html, body { height: 100%; margin: 0; background: #0d0d1a; touch-action: manipulation; }
   #wrap { display: flex; flex-direction: column; height: 100%; }
   #status {
     font: 12px 'Menlo', 'Consolas', monospace; color: #557755;
     padding: 2px 8px; white-space: nowrap; overflow: hidden;
   }
   #status.error { color: #cc5555; }
+  /* When the OSK is open the status strip sits directly under the bottom key
+     row (Esc/arrows) — hide it so a thumb on the down-arrow can't graze or
+     text-select it while typing. It returns when the keyboard closes. */
+  body[data-osk] #status { display: none; }
   /* VT tabs (todos/0022): the primary, discoverable switch — one tab per
      VT, browser-tab styling. Ctrl+Alt+F1/F2 (or 1/2) are quiet aliases. */
   #vtbar {
