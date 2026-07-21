@@ -12,13 +12,20 @@ excludes every chord the spike is expected to find eaten.
 
 ## As built — deviations from the original table (5 decisions, all shipped)
 
-1. **Cmd+arrows stay Aero Snap**, unchanged, kernel-side (`kernel.js:4623`
-   intercepts GUI+arrow before any app sees it). The macOS keymap therefore
-   has **no ⌘←/→/↑/↓ bindings at all** — line/doc nav is ^A/^E (readline) and
-   the native Home/End VKs in both schemes. This supersedes the original
-   table's "Line start/end: ⌘← / →, and ^A / ^E" and "Doc start/end: ⌘↑ / ↓"
-   rows below — read KA_LINE_START/END and KA_DOC_START/END in `os/keys.h`
-   as the authoritative binding, not the table.
+1. **Cmd+arrows are line/doc nav in the macOS scheme** (⌘←/→ =
+   KA_LINE_START/END, ⌘↑/↓ = KA_DOC_START/END) — restoring the original
+   table's rows. This REVERSES the original 0149/0150 "As built" decision that
+   ⌘+arrow stays Aero Snap: the kernel snap grab was scheme-blind and had to
+   cede ⌘+arrow, so line/doc nav shipped only on ^A/^E (readline) + Home/End.
+   The keybinding-override grab table (todos/KEYBINDING-OVERRIDE-SYSTEM.md)
+   made the grab scheme-aware, so **META-ARROW-KEYBIND.md** relocated macOS
+   tiling to **Ctrl+Alt+arrow** (Rectangle-style) and RELEASED GUI+arrow to the
+   focused app, where `os/keys.h`'s macos rows resolve it. The **windows scheme
+   is unchanged** — Win+arrow is still Aero Snap. `os/keys.h`
+   (KA_LINE_START/END, KA_DOC_START/END rows + the KS_ACTIONS snap defaults) is
+   the authoritative binding. Host auto-detect (META-ARROW decision 4) defaults
+   the scheme to macos on a Mac host (`os-common.js seedHostKeyScheme`, seeded
+   into the admin `/etc/keys`); the per-user ~/.config/keys override always wins.
 2. **Redo (⌘⇧Z / Ctrl+Y) is not implemented** — `os/keys.h` binds KA_UNDO only,
    consistent with EDIT having no undo buffer yet (`todos/0135`); the
    original table's Redo cell is aspirational, not shipped.

@@ -210,6 +210,10 @@ function startCompositor(kernel, canvas, device) {
   }
 
   // ---- Aero chrome constants (todos/0063) ----
+  var OV_CAPTION_H = 24;                    // overview caption strip per row —
+                                           // MUST MATCH wm.c OV_CAPTION_H so the
+                                           // browser caption lands in the space
+                                           // the layout reserved (todos/EXPOSE)
   var CORNER_R = 7;                        // frame corner radius, px
   var SHADOW_EXT = 14;                     // MUST MATCH the shader constant
   var SHADOW_DY = 3;                       // shadow drop below the frame
@@ -384,6 +388,57 @@ function startCompositor(kernel, canvas, device) {
              w: a.w + (tw - a.w) * k, h: a.h + (th - a.h) * k };
   }
 
+  // Linear interpolate a rect (todos/EXPOSE enter/exit flies) — k in [0,1].
+  function lerpRect(x0, y0, w0, h0, x1, y1, w1, h1, k) {
+    return { x: x0 + (x1 - x0) * k, y: y0 + (y1 - y0) * k,
+             w: w0 + (w1 - w0) * k, h: h0 + (h1 - h0) * k };
+  }
+
+  // Overview / Exposé pass (todos/EXPOSE-MISSION-CONTROL.md): live seq-gated
+  // miniatures at the WM's cell rects — each a drop shadow + rounded border
+  // (the 0063 SDF chrome) under the surface's OWN texture quad (shmBindFor/
+  // gpuBindFor unchanged, so gpu apps miniature LIVE, not black), a caption
+  // under the cell, and a navy highlight border on the hovered cell. Minimized
+  // windows draw their still-live buffers like any other. The enter fly
+  // (forward records) interpolates each miniature from its window's real rect.
+  function drawOverview(scene, now) {
+    var ov = scene.overview;
+    var flying = scene.overviewAnims && scene.overviewAnims.length &&
+                 !scene.overviewAnims[0].reverse;
+    for (var i = 0; i < ov.cells.length; i++) {
+      var c = ov.cells[i];
+      var s = surfById(scene, c.sid);
+      if (!s) continue;
+      var rect = { x: c.x, y: c.y, w: c.w, h: c.h };
+      if (flying) {
+        for (var a = 0; a < scene.overviewAnims.length; a++) {
+          var an = scene.overviewAnims[a];
+          if (an.sid !== c.sid) continue;
+          var lin = (now - an.t0) / K.WM_ANIM_MS;
+          if (lin >= 0 && lin < 1) {
+            var k = 1 - (1 - lin) * (1 - lin);   // ease-out, real -> cell
+            rect = lerpRect(an.rx, an.ry, an.rw, an.rh, an.cx, an.cy, an.cw, an.ch, k);
+          }
+          break;
+        }
+      }
+      var hov = c.sid === ov.hoverSid;
+      pushQuad(whiteBind, rect.x - SHADOW_EXT, rect.y + SHADOW_DY - SHADOW_EXT,
+        rect.w + 2 * SHADOW_EXT, rect.h + 2 * SHADOW_EXT, SHADOW_BLUR,
+        { mode: 2, radius: CORNER_R, mx: rect.x, my: rect.y + SHADOW_DY,
+          mw: rect.w, mh: rect.h });
+      var B = 3;
+      pushQuad(whiteBind, rect.x - B, rect.y - B, rect.w + 2 * B, rect.h + 2 * B,
+        hov ? COL_FOCUS : COL_BORDER, { mode: 1, radius: CORNER_R });
+      pushQuad(s.bitmap ? gpuBindFor(s) : shmBindFor(s),
+               rect.x, rect.y, rect.w, rect.h, WHITE);
+      // Caption in the reserved strip under the SETTLED cell (browser-only,
+      // like title text — the headless composite has none).
+      var cap = labelFor(s.title || ('pid ' + s.pid), Math.max(8, c.w), '#fff');
+      pushQuad(cap.bind, c.x + (c.w - cap.w) / 2, c.y + c.h + 2, cap.w, LABEL_H, WHITE);
+    }
+  }
+
   // Resize rubber band (todos/0019): Win95 outline semantics — 4-on/4-off
   // hairline dashes (was setLineDash([4,4]) strokeRect), outer 1px ring.
   function dashOutline(x, y, w, h) {
@@ -437,6 +492,20 @@ function startCompositor(kernel, canvas, device) {
 
   function sceneSignature(scene) {
     var sig = [scene.version, frameW, frameH, scene.anims.length];
+    // Overview (todos/EXPOSE): fold its identity + hover + live-miniature
+    // pixels (INCLUDING minimized windows, which the normal loop skips but the
+    // overview draws) and the active enter/exit fly count so the anim ticks.
+    if (scene.overview) {
+      sig.push('ov', scene.overview.hoverSid | 0, scene.overview.cells.length);
+      for (var oi = 0; oi < scene.overview.cells.length; oi++) {
+        var oc = scene.overview.cells[oi];
+        var osf = surfById(scene, oc.sid);
+        sig.push(oc.sid, oc.x, oc.y, oc.w, oc.h,
+          osf ? (osf.bitmap ? osf.bitmap : Atomics.load(osf.i32, K.SH_SEQ)) : 0);
+      }
+    }
+    if (scene.overviewAnims && scene.overviewAnims.length)
+      sig.push('ova', scene.overviewAnims.length, scene.overviewAnims[0].t0);
     for (var i = 0; i < scene.surfaces.length; i++) {
       var s = scene.surfaces[i];
       if (!s.mapped || s.minimized) continue;   // not sampled this frame
@@ -445,6 +514,11 @@ function startCompositor(kernel, canvas, device) {
       sig.push(s.sid, s.bitmap ? s.bitmap : Atomics.load(s.i32, K.SH_SEQ));
     }
     return sig;
+  }
+  function surfById(scene, sid) {
+    for (var i = 0; i < scene.surfaces.length; i++)
+      if (scene.surfaces[i].sid === sid) return scene.surfaces[i];
+    return null;
   }
   function sigEqual(a, b) {
     if (!a || !b || a.length !== b.length) return false;
@@ -501,7 +575,10 @@ function startCompositor(kernel, canvas, device) {
     // Damage skip: identical scene and no active animation — keep ticking
     // (or park via maybePark), but don't re-submit the pass.
     var sig = sceneSignature(scene);
-    if (lastSig !== null && scene.anims.length === 0 && sigEqual(sig, lastSig)) {
+    var ovAnimActive = scene.overviewAnims && scene.overviewAnims.length &&
+                       (Date.now() - scene.overviewAnims[0].t0) < K.WM_ANIM_MS;
+    if (lastSig !== null && scene.anims.length === 0 && !ovAnimActive &&
+        sigEqual(sig, lastSig)) {
       stats.skipped++;
       if (grace > 0) grace--;
       maybePark();
@@ -518,6 +595,12 @@ function startCompositor(kernel, canvas, device) {
     vfloats = 0; segments.length = 0; newSegment(false);
     var now = Date.now();   // anim clock — the epoch the kernel stamps t0 with
 
+    // Overview / Exposé (todos/EXPOSE-MISSION-CONTROL.md): a full presentation
+    // takeover — the normal surface loop is replaced by the overview pass
+    // (live seq-gated miniatures at the WM's cell rects). The exit fly runs on
+    // the normal path (overview already cleared) as an overlay below.
+    if (scene.overview) drawOverview(scene, now);
+    else {
     for (var i = 0; i < scene.surfaces.length; i++) {
       var s = scene.surfaces[i];
       // Minimize/restore animation (todos/0063): a transient kernel record;
@@ -615,6 +698,25 @@ function startCompositor(kernel, canvas, device) {
           scene.resizeDrag.curW + 2, K.WM_TITLE_H + scene.resizeDrag.curH + 2);
         break;
       }
+    }
+    // Overview EXIT fly (todos/EXPOSE): overview is already cleared (windows
+    // drawn normally above), so overlay each reverse fly — the miniature
+    // shrinking back out of its cell into the window — as a fading scaled quad.
+    if (scene.overviewAnims && scene.overviewAnims.length &&
+        scene.overviewAnims[0].reverse) {
+      for (var xa = 0; xa < scene.overviewAnims.length; xa++) {
+        var xan = scene.overviewAnims[xa];
+        var xlin = (now - xan.t0) / K.WM_ANIM_MS;
+        if (xlin < 0 || xlin >= 1) continue;
+        var xk = 1 - (1 - xlin) * (1 - xlin);   // ease-out, cell -> real
+        var xs = surfById(scene, xan.sid);
+        if (!xs) continue;
+        var xr = lerpRect(xan.cx, xan.cy, xan.cw, xan.ch,
+                          xan.rx, xan.ry, xan.rw, xan.rh, xk);
+        pushQuad(xs.bitmap ? gpuBindFor(xs) : shmBindFor(xs),
+                 xr.x, xr.y, xr.w, xr.h, [1, 1, 1, 1 - xk]);
+      }
+    }
     }
     // Drop caches of destroyed surfaces.
     if (shmCache.size + gpuCache.size > scene.surfaces.length) {

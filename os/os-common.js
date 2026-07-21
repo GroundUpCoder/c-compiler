@@ -923,6 +923,40 @@ function initRootVolume(mfs) {
   if (mfs.lstat('/bin') === null) mfs.symlink('/usr/bin', '/bin');
 }
 
+/* ---- host keyboard-scheme auto-detect (META-ARROW-KEYBIND.md decision 4) ----
+ * On a Mac HOST, default the keyboard scheme to `macos` so ⌘←/→ line-nav and
+ * ⌘↑/↓ doc-nav (with tiling relocated to Ctrl+Alt+arrow — keys.h) are the
+ * out-of-box idiom, instead of a Control Panel visit. `platform` is the host
+ * hint ('mac' | anything else) supplied by the two boot paths: os/boot.js's
+ * --host-platform flag and os/kernel-worker.js's navigator probe. Non-'mac'
+ * is a NO-OP — `windows` is the baked /usr/share/keys default, so every
+ * non-Mac host (and every headless/test boot with no hint) is byte-identical
+ * to before.
+ *
+ * The seed writes ONLY the admin layer /etc/keys, and only when no `scheme`
+ * is already set there. Two properties fall out:
+ *   - Auto-detect sets the DEFAULT, not the choice: ~/.config/keys (the layer
+ *     the ctlpanel Keyboard applet's ks_set writes) is a HIGHER cfgstore
+ *     overlay, so a manual override always wins at resolution time — we don't
+ *     even consult it here.
+ *   - Idempotent: a prior seed or a hand-edited admin scheme is never
+ *     clobbered, so re-running it (and the every-fresh-boot call site) is safe.
+ * Called on a freshly-created root volume (the 0040 seed-once contract).
+ * Returns true iff it wrote the seed. */
+function seedHostKeyScheme(kfs, platform) {
+  if (platform !== 'mac') return false;
+  var existing = readFileText(kfs, '/etc/keys');
+  // A non-commented `scheme` line already present -> respect it (admin choice
+  // or a prior seed); '#'-prefixed lines are comments and don't count.
+  if (existing !== null && /^[ \t]*scheme[ \t]/im.test(existing)) return false;
+  if (kfs.stat('/etc') === null) kfs.mkdir('/etc', 0o755);
+  var body = existing === null ? '' : existing;
+  if (body && body[body.length - 1] !== '\n') body += '\n';
+  body += 'scheme\tmacos\n';
+  writeFile(kfs, '/etc/keys', body, 0o644);
+  return true;
+}
+
 /* ---- NodeFileStore: the ByteStore interface over a plain file ----
  * The headless twin of host.js's SyncAccessHandleStore (OPFS). Takes the
  * caller's `fs` module so this file stays environment-neutral (os/boot.js
@@ -972,6 +1006,7 @@ var OS_COMMON = {
   bakedPackages: bakedPackages,
   newestBakeInput: newestBakeInput,
   initRootVolume: initRootVolume,
+  seedHostKeyScheme: seedHostKeyScheme,
   NodeFileStore: NodeFileStore,
   readFileBytes: readFileBytes,
   readFileText: readFileText,

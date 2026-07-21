@@ -96,14 +96,15 @@ try {
 
   // 0014: winbox has a taskbar button (button 0, sunken while focused);
   // clicking it minimizes, clicking again restores — the wm's policy loop
-  // driven through its OWN surface's input ring. Button 0 sits right of
-  // the Start button since todos/0028 (x in [56, 160)).
+  // driven through its OWN surface's input ring. Button 0 sits right of the
+  // Start strip AND the Task-View/overview button (todos/EXPOSE shifted the
+  // app strip by TASKVIEW_W): with 1 window it spans x [112, 272).
   await waitPixel(230, BARY, FACE_DOWN);
   check('taskbar button sunken while winbox focused', true);
-  await clickAt(100, BARY);                      // minimize
+  await clickAt(150, BARY);                      // minimize
   await waitPixel(WX + 120, WY + 80, TEAL);
   check('taskbar click minimized winbox (window off screen)', true);
-  await clickAt(100, BARY);                      // restore
+  await clickAt(150, BARY);                      // restore
   await waitPixel(WX + 120, WY + 80, ORANGE);
   check('taskbar click restored winbox', true);
 
@@ -202,7 +203,7 @@ try {
   await waitPixel(NX + 120, NY + 80, TEAL);
   check('min box minimized the window', true);
   await waitPixel(230, BARY, FACE);              // its button un-sunken
-  await clickAt(100, BARY);                      // restore via the taskbar
+  await clickAt(150, BARY);                      // restore via the taskbar (button 0)
   await waitPixel(NX + 120, NY + 80, GREEN);
   check('taskbar restored after the min box', true);
   await clickAt(NX + RW - 36, NY - 14);          // max box
@@ -218,8 +219,9 @@ try {
   await waitPixel(NX + 120, NY + 80, TEAL);
   check('close box quit the app; desktop restored', true);
 
-  // ... and its taskbar button is gone (EV_DESTROYED -> wm model -> redraw).
-  await waitPixel(100, BARY, FACE);
+  // ... and its taskbar button is gone (EV_DESTROYED -> wm model -> redraw):
+  // the button-0 slot (x~150) is now empty strip face.
+  await waitPixel(150, BARY, FACE);
   check('taskbar button removed after close', true);
 
   // The shell survives its windowed child (background job reaped). Back to

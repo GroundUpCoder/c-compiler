@@ -253,6 +253,14 @@ __import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
 #define DRAG_SLOP    4      /* px of button-held travel before a press
                                becomes a marquee or icon drag (todos/0077) */
 
+/* Window overview / Exposé (todos/EXPOSE-MISSION-CONTROL.md) */
+#define OV_GAP       16     /* grid gap between miniature cells */
+#define OV_CAPTION_H 24     /* per-row caption strip — MUST MATCH the compositor
+                               (compositor.js OV_CAPTION_H) so the browser
+                               caption lands where the layout reserved room */
+#define TASKVIEW_W   26     /* the Task-View button right of the Start strip
+                               (Win10 position); shifts the app-button strip */
+
 
 #define PEEK_W       160    /* Aero Peek popup (todos/0063) */
 #define PEEK_H       120
@@ -325,6 +333,10 @@ static win_t wins[MAX_WIN];
 static int nwins = 0;
 static int32_t bar_sid = 0;        /* our own taskbar surface */
 static int own_pid = 0;
+static int overview_active = 0;    /* window overview / Exposé (todos/EXPOSE):
+                                      1 while the miniature grid is up. Declared
+                                      here (not with the overview functions) so
+                                      saver_show can end it — mutual exclusion */
 static int place_k = 0;            /* cascade counter */
 static SDL_Window *bar_win;
 static SDL_Surface *bar_surf;
@@ -573,6 +585,7 @@ static int32_t saver_prev = 0;     /* the window to re-focus at dismissal */
 static int saver_kind = 0;         /* 1 marquee, 2 starfield (from config) */
 static sv_cfg saver_cfg;           /* last polled configuration */
 static uint64_t saver_poll_ms = 0; /* coarse once-a-second poll stamp */
+static uint64_t grab_poll_ms = 0;  /* key-grab-table rebuild stamp (0 = due) */
 static int idle_pending = 0;       /* GET_IDLE in flight */
 static int marq_x, marq_y;         /* marquee banner position */
 static float star_x[SAVER_STARS], star_y[SAVER_STARS], star_z[SAVER_STARS];
@@ -1201,6 +1214,10 @@ static void saver_show(void) {
     ctx_dismiss();
     date_dismiss();
     snapprev_dismiss();
+    if (overview_active) {             /* mutually exclusive (todos/EXPOSE) */
+        wmp_send(sock, WMP_OVERVIEW_END, NULL, 0);
+        overview_active = 0;
+    }
     saver_prev = 0;
     for (int i = 0; i < nwins; i++)
         if (wins[i].focused && !wins[i].minimized) { saver_prev = wins[i].sid; break; }
@@ -1228,6 +1245,64 @@ static void saver_poll(void) {
         return;
     if (idle_pending) return;
     if (wmp_send(sock, WMP_GET_IDLE, NULL, 0) == 0) idle_pending = 1;
+}
+
+/* ---- the kernel key-grab table (todos/KEYBINDING-OVERRIDE-SYSTEM.md §4) ----
+ * wm.c is the POLICY owner of the global chords: it computes the desired grab
+ * table from the keys.h registry (active scheme + user bind.<action> overrides,
+ * resolved per-action by ks_action_binding) and PUSHES it to the config-blind
+ * kernel via WMP_GRAB_SET whenever it changes. Rebuilt on the 1 Hz config poll
+ * (the saver_poll cadence — a Control Panel Apply lands within ~1s); steady
+ * state sends nothing. In the windows scheme the table is the legacy chords —
+ * behaviour identical to the kernel's WM_DEFAULT_GRABS, just carried by the
+ * non-reserved KTOK_* tokens that ride EV_HOTKEY instead of the default table's
+ * reserved twins. In the macos scheme snap RELOCATES to Ctrl+Alt+arrow and
+ * GUI+arrow is simply not installed — that omission IS the whole "⌘+arrow
+ * reaches the app for line/doc nav" story (an uninstalled chord passes through;
+ * no release op). Ctrl+Alt+E (wm.overview) is installed in BOTH schemes; its
+ * EV_HOTKEY toggles the window overview / Exposé (hotkey_dispatch below). */
+typedef struct { int32_t scancode, km, token; } grab_ent;
+static grab_ent grab_last[WMP_GRAB_MAX];
+static int grab_last_n = -1;             /* -1 = never pushed (force first) */
+
+static void grab_table_push(void) {
+    grab_ent tbl[WMP_GRAB_MAX];
+    int n = 0;
+    for (int i = 0; i < KSA_COUNT && n < WMP_GRAB_MAX; i++) {
+        if (KS_ACTIONS[i].kind != KAK_SYS) continue;   /* system chords only */
+        KsChord ch[2];
+        int nc = ks_action_binding(i, ch);             /* override-or-scheme */
+        for (int c = 0; c < nc && n < WMP_GRAB_MAX; c++) {
+            int sc = ks_chord_scancode(ch[c].key);
+            if (sc < 0) continue;                       /* unmappable key */
+            /* Dedupe (scancode, km): the kernel takes the FIRST match, and
+             * registry order is the §7.3 conflict tie-break — the earlier
+             * action wins a collision, the later one is dropped, so we never
+             * install a duplicate row that would eat a key for a shadowed
+             * action. (Also collapses cycle's dual default cleanly: its two
+             * chords differ, so both survive.) */
+            int dup = 0;
+            for (int j = 0; j < n; j++)
+                if (tbl[j].scancode == sc && tbl[j].km == ch[c].mods) { dup = 1; break; }
+            if (dup) continue;
+            tbl[n].scancode = sc;
+            tbl[n].km = ch[c].mods;
+            tbl[n].token = KS_ACTIONS[i].token;
+            n++;
+        }
+    }
+    if (n == grab_last_n && memcmp(tbl, grab_last, (size_t)n * sizeof *tbl) == 0)
+        return;                          /* unchanged: steady state is silent */
+    int32_t args[1 + 3 * WMP_GRAB_MAX];
+    args[0] = n;
+    for (int i = 0; i < n; i++) {
+        args[1 + 3 * i] = tbl[i].scancode;
+        args[2 + 3 * i] = tbl[i].km;
+        args[3 + 3 * i] = tbl[i].token;
+    }
+    wmp_sendv(sock, WMP_GRAB_SET, args, 1 + 3 * n);   /* n triples exceed wmp_send's 8-arg cap */
+    memcpy(grab_last, tbl, (size_t)n * sizeof *tbl);
+    grab_last_n = n;
 }
 
 /* An R_IDLE reply landed (drain_socket routes every one here). Compare in
@@ -3395,6 +3470,147 @@ static void screen_changed(void) {
     }
 }
 
+/* ---- window overview / Exposé (todos/EXPOSE-MISSION-CONTROL.md) ----
+ * The policy half of the 0025/0095 mechanism-split: the kernel composites live
+ * miniatures at the cell rects WE compute and routes hover/pick; wm.c owns the
+ * candidate set + grid layout + what a pick does. (overview_active is declared
+ * up top with the other statics — saver_show references it.) */
+
+/* Compute the Exposé grid and push it as WMP_OVERVIEW_SET. Candidate set =
+ * every tracked window (wins[], LAUNCH order so the grid reads like the taskbar
+ * — NOT recency; minimized INCLUDED, "find the window I lost" being the point;
+ * furniture and foreign borderless popups never enter wins[], so nothing to
+ * filter). Grid is aspect-fit (todos/EXPOSE §3): cols ~ sqrt(N*W/H), each
+ * window letterboxed into its cell at scale <= 1 (never magnified), last row
+ * centered. Returns the candidate count (0 = nothing to show). */
+static int overview_layout_send(void) {
+    int n = nwins;
+    if (n <= 0) return 0;
+    if (n > MAX_WIN) n = MAX_WIN;
+    int wx = 0, wy = TITLE_H;                      /* work area: below the kernel
+                                                      title bar, above the bar */
+    int W = scr_w, H = scr_h - BAR_H - TITLE_H;
+    if (W < 32 || H < 32) return 0;                /* degenerate screen */
+    /* cols = ceil(sqrt(N*W/H)), clamped [1,N] — integer isqrt (no libm, the
+     * tile_windows precedent): the least cols with cols*cols*H >= N*W. */
+    int cols = 1;
+    while ((long)cols * cols * H < (long)n * W) cols++;
+    if (cols < 1) cols = 1;
+    if (cols > n) cols = n;
+    int rows = (n + cols - 1) / cols;
+    int cellW = (W - (cols + 1) * OV_GAP) / cols;
+    int cellH = (H - (rows + 1) * OV_GAP - rows * OV_CAPTION_H) / rows;
+    if (cellW < 8) cellW = 8;                       /* no min-size floor (v1),
+                                                       just a positive clamp */
+    if (cellH < 8) cellH = 8;
+    int32_t args[1 + 5 * MAX_WIN];
+    args[0] = n;
+    for (int i = 0; i < n; i++) {
+        win_t *w = &wins[i];
+        int r = i / cols, c = i % cols;
+        int rowN = (r == rows - 1) ? (n - r * cols) : cols;    /* last row count */
+        int rowW = rowN * cellW + (rowN + 1) * OV_GAP;
+        int rowX0 = wx + (W - rowW) / 2 + OV_GAP;              /* centers the last
+                                                                 row; full rows
+                                                                 land at wx+GAP */
+        int cellX = rowX0 + c * (cellW + OV_GAP);
+        int cellY = wy + OV_GAP + r * (cellH + OV_CAPTION_H + OV_GAP);
+        /* Aspect-fit the window's ON-SCREEN size into the cell, scale <= 1
+         * (never magnify a small window), centered. It is a presentation rect,
+         * not a SET_DST — no interaction with the scaled/configurable
+         * exclusivity (todos/0024). */
+        int sw = w->dst_w > 0 ? w->dst_w : (w->w > 0 ? w->w : cellW);
+        int sh = w->dst_h > 0 ? w->dst_h : (w->h > 0 ? w->h : cellH);
+        double sc = (double)cellW / (double)sw;
+        double scy = (double)cellH / (double)sh;
+        if (scy < sc) sc = scy;
+        if (sc > 1.0) sc = 1.0;
+        int fw = (int)(sw * sc + 0.5); if (fw < 1) fw = 1;
+        int fh = (int)(sh * sc + 0.5); if (fh < 1) fh = 1;
+        args[1 + 5 * i] = w->sid;
+        args[2 + 5 * i] = cellX + (cellW - fw) / 2;
+        args[3 + 5 * i] = cellY + (cellH - fh) / 2;
+        args[4 + 5 * i] = fw;
+        args[5 + 5 * i] = fh;
+    }
+    wmp_sendv(sock, WMP_OVERVIEW_SET, args, 1 + 5 * n);
+    return n;
+}
+
+/* Recompute + re-push while active (EV_SCREEN / window created / destroyed):
+ * a vacated cell closes up, a new window joins. If the last window went, exit. */
+static void overview_relayout(void) {
+    if (!overview_active) return;
+    if (overview_layout_send() == 0) {
+        wmp_send(sock, WMP_OVERVIEW_END, NULL, 0);
+        overview_active = 0;
+    }
+}
+
+/* wm.overview (Ctrl+Alt+E, `wmctl overview`, or the taskbar Task-View button):
+ * toggle the window overview. Entering dismisses open popup furniture (the
+ * saver_show precedent) and is mutually exclusive with the screensaver; N=0
+ * refuses to enter (nothing to pick). */
+static void overview_toggle(void) {
+    if (overview_active) {
+        wmp_send(sock, WMP_OVERVIEW_END, NULL, 0);
+        overview_active = 0;
+        return;
+    }
+    if (saver_win) { saver_dismiss(); return; }    /* mutually exclusive: the
+                                                      chord just woke the saver */
+    if (nwins <= 0) return;                         /* N=0: no empty state */
+    menu_dismiss();
+    ctx_dismiss();
+    run_dismiss();
+    peek_dismiss();
+    date_dismiss();
+    snapprev_dismiss();
+    if (overview_layout_send() > 0) overview_active = 1;
+}
+
+/* The user picked (WMP_EV_OVERVIEW_PICK): sid 0 = dismiss (background click or
+ * Esc), else that window — restore-if-minimized, focus, raise to top (the
+ * taskbar-click codepath). Always exit first (a pure presentation clear). */
+static void overview_pick(int32_t sid) {
+    if (!overview_active) return;
+    wmp_send(sock, WMP_OVERVIEW_END, NULL, 0);
+    overview_active = 0;
+    if (sid == 0) return;                           /* dismissed */
+    win_t *w = find(sid);
+    if (!w) return;
+    int32_t f[1] = { sid };
+    wmp_send(sock, WMP_FOCUS, f, 1);                /* focus un-minimizes (0014) */
+    int32_t rs[2] = { sid, 0 };
+    wmp_send(sock, WMP_RESTACK, rs, 2);             /* raise to top of its layer */
+}
+
+/* WMP_EV_HOTKEY (todos/KEYBINDING-OVERRIDE-SYSTEM.md §4): a non-reserved
+ * grab-table entry matched. Dispatch by KTOK_* token to the SAME policy
+ * handlers the legacy events reach — which still arrive from wmctl commands and,
+ * pre-GRAB_SET at startup, from the kernel's default table, so wm.c keeps its
+ * EV_CYCLE/MENU/SNAP_KEY/SYSMENU cases too. flags bit0 = Shift (cycle-reverse),
+ * bit1 = key repeat; sid = the focused surface the event carries. */
+static void hotkey_dispatch(int token, int flags, int sid) {
+    switch (token) {
+        case KTOK_SNAP_LEFT:  snap_key(0); break;
+        case KTOK_SNAP_RIGHT: snap_key(1); break;
+        case KTOK_SNAP_UP:    snap_key(2); break;
+        case KTOK_SNAP_DOWN:  snap_key(3); break;
+        case KTOK_CYCLE:      cycle((flags & 1) ? -1 : 1); break;
+        case KTOK_START_MENU: menu_toggle(); break;
+        case KTOK_SYSMENU: {
+            win_t *w = find(sid);
+            if (w && !w->minimized) ctx_open_sysmenu(w);
+            break;
+        }
+        case KTOK_OVERVIEW:
+            if (!(flags & 2)) overview_toggle();   /* skip auto-repeat */
+            break;
+        default: break;                  /* unknown token: ignore, never crash */
+    }
+}
+
 static void handle_event(wmp_hdr *h) {
     if (h->type == WMP_EV_CREATED) {
         wmp_rec r;
@@ -3567,6 +3783,7 @@ static void handle_event(wmp_hdr *h) {
             w->title[31] = 0;
         }
         place(r.sid, r.w, r.h);
+        overview_relayout();            /* a new window joins the grid (EXPOSE) */
         return;
     }
     /* All other events lead with the sid; none exceeds 8 words except
@@ -3593,6 +3810,7 @@ static void handle_event(wmp_hdr *h) {
                 nwins--;
                 break;
             }
+        overview_relayout();            /* a vacated cell closes up (EXPOSE) */
         break;
     }
     case WMP_EV_FOCUS: {
@@ -3728,9 +3946,24 @@ static void handle_event(wmp_hdr *h) {
         snap_key(p[0]);
         break;
     }
+    case WMP_EV_HOTKEY: {               /* user grab-table chord (KEYBINDING §4) */
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_HOTKEY read");
+        hotkey_dispatch(p[0], p[1], p[2]);   /* token, flags, focused sid */
+        break;
+    }
     case WMP_EV_SAVER: {                /* wmctl saver / Preview (0096) */
         if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_SAVER read");
         saver_force();
+        break;
+    }
+    case WMP_EV_OVERVIEW: {             /* wmctl overview / command twin (EXPOSE) */
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_OVERVIEW read");
+        overview_toggle();
+        break;
+    }
+    case WMP_EV_OVERVIEW_PICK: {        /* overview pick / dismiss (EXPOSE) */
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_OVERVIEW_PICK read");
+        overview_pick(p[0]);
         break;
     }
     case WMP_EV_SYSMENU: {              /* Alt+Space / wmctl sysmenu (0102) */
@@ -3743,6 +3976,7 @@ static void handle_event(wmp_hdr *h) {
         if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_SCREEN read");
         scr_w = p[0]; scr_h = p[1];
         screen_changed();
+        overview_relayout();            /* re-fit the grid to the new screen */
         break;
     }
     default:
@@ -3778,6 +4012,11 @@ static int drain_socket(void) {
  * sliver sits past it, so the button strip and clock both budget against
  * this, not bar_w. */
 static int clock_left(void) { return bar_w - SHOWDESK_W - CLOCK_W; }
+
+/* Left edge of the app-button strip: past the Start strip AND the Task-View
+ * (overview) button right of it (Win10 position, todos/EXPOSE). btn_width /
+ * draw_bar / bar_click / bar_rclick / bar_motion all budget from here. */
+static int strip_left(void) { return START_W + TASKVIEW_W; }
 
 /* ---- the clock-hover date tooltip (todos/0101) ---- */
 
@@ -3836,7 +4075,7 @@ static void date_toggle(void) {
  * mapping share this. */
 static int btn_width(void) {
     if (nwins == 0) return BTN_W;
-    int avail = clock_left() - START_W - BTN_GAP - 2;
+    int avail = clock_left() - strip_left() - BTN_GAP - 2;
     int w = avail / nwins - BTN_GAP;
     if (w > BTN_W) w = BTN_W;
     if (w < BTN_MIN) w = BTN_MIN;
@@ -3859,9 +4098,9 @@ static void bar_motion(float fx) {
     }
     if (date_win && !date_pinned) date_dismiss();   /* left the clock: drop */
     int bw = btn_width();
-    int rel = (int)fx - START_W - BTN_GAP;
+    int rel = (int)fx - strip_left() - BTN_GAP;
     int i = rel / (bw + BTN_GAP);
-    int x = START_W + BTN_GAP + i * (bw + BTN_GAP) + 2;
+    int x = strip_left() + BTN_GAP + i * (bw + BTN_GAP) + 2;
     if (rel >= 0 && rel % (bw + BTN_GAP) < bw && i < nwins &&
         x + bw <= cx) {                /* same overflow gate as draw_bar */
         peek_show(wins[i].sid, x, bw);
@@ -3874,13 +4113,16 @@ static void bar_click(float fx) {
     if ((int)fx < START_W) { date_dismiss(); menu_toggle(); return; }  /* Start */
     menu_dismiss();                    /* any other taskbar click dismisses */
     ctx_dismiss();                     /* likewise (todos/0091) */
+    /* The Task-View button right of Start (todos/EXPOSE): toggle the overview
+     * straight to layout+SET — no self-round-trip through the kernel needed. */
+    if ((int)fx < strip_left()) { date_dismiss(); overview_toggle(); return; }
     /* Show Desktop sliver, then the clock cell (todos/0101): the sliver
      * toggles minimize-all/restore, the clock toggles the date tooltip. */
     if ((int)fx >= bar_w - SHOWDESK_W) { date_dismiss(); show_desktop_toggle(); return; }
     if ((int)fx >= clock_left()) { date_toggle(); return; }
     date_dismiss();
     int bw = btn_width();
-    int rel = (int)fx - START_W - BTN_GAP;
+    int rel = (int)fx - strip_left() - BTN_GAP;
     int i = rel / (bw + BTN_GAP);
     if (rel < 0 || rel % (bw + BTN_GAP) >= bw || i >= nwins) return;
     int32_t a[1] = { wins[i].sid };
@@ -3895,11 +4137,12 @@ static void bar_rclick(float fx) {
     peek_dismiss();
     menu_dismiss();
     date_dismiss();
-    if ((int)fx < START_W) { ctx_dismiss(); return; }   /* Start: reserved */
+    if ((int)fx < strip_left()) { ctx_dismiss(); return; }   /* Start + Task-View:
+                                                                reserved */
     int bw = btn_width();
-    int rel = (int)fx - START_W - BTN_GAP;
+    int rel = (int)fx - strip_left() - BTN_GAP;
     int i = rel / (bw + BTN_GAP);
-    int x = START_W + BTN_GAP + i * (bw + BTN_GAP) + 2;
+    int x = strip_left() + BTN_GAP + i * (bw + BTN_GAP) + 2;
     if (rel >= 0 && rel % (bw + BTN_GAP) < bw && i < nwins &&
         x + bw <= clock_left()) {      /* on a drawn button */
         ctx_open_bar(&wins[i], x);
@@ -3952,10 +4195,25 @@ static void draw_bar(void) {
         fill(px, START_W - 3, 3, 1, BAR_H - 6, down ? hi : sh);
         draw_text(px, 8, (BAR_H - CHROME_CAP) / 2, "START", txt);
     }
+    /* The Task-View / overview button (todos/EXPOSE): right of Start, a small
+     * three-pane glyph; sunken while the overview is active. */
+    {
+        int bx = START_W, down = overview_active;
+        fill(px, bx + 1, 3, TASKVIEW_W - 2, BAR_H - 6, down ? rgb(222, 222, 222) : face);
+        fill(px, bx + 1, 3, TASKVIEW_W - 2, 1, down ? sh : hi);
+        fill(px, bx + 1, 3, 1, BAR_H - 6, down ? sh : hi);
+        fill(px, bx + 1, BAR_H - 4, TASKVIEW_W - 2, 1, down ? hi : sh);
+        fill(px, bx + TASKVIEW_W - 2, 3, 1, BAR_H - 6, down ? hi : sh);
+        uint32_t g = rgb(0, 0, 128);              /* three offset window panes */
+        int gx = bx + 4, gy = 9;
+        fill(px, gx, gy, 8, 6, g);                /* top-left */
+        fill(px, gx + 10, gy, 6, 6, g);           /* top-right */
+        fill(px, gx + 3, gy + 8, 10, 6, g);       /* bottom-center */
+    }
     int bw = btn_width();              /* overflow shrink (todos/0031) */
     int cx = clock_left();
     for (int i = 0; i < nwins; i++) {
-        int x = START_W + BTN_GAP + i * (bw + BTN_GAP) + 2;
+        int x = strip_left() + BTN_GAP + i * (bw + BTN_GAP) + 2;
         if (x + bw > cx) break;                /* never under the clock */
         int down = wins[i].focused && !wins[i].minimized;
         /* Win95 button relief: raised normally, sunken when active. */
@@ -4011,6 +4269,9 @@ static void frame_cb(void) {
     if (now_ms - desk_poll_ms >= 1000) { desk_poll_ms = now_ms; desk_load(); }
     /* The screensaver's idle poll rides the same cadence (todos/0096). */
     if (now_ms - saver_poll_ms >= 1000) { saver_poll_ms = now_ms; saver_poll(); }
+    /* Rebuild+push the kernel key-grab table when scheme/overrides change
+     * (todos/KEYBINDING-OVERRIDE-SYSTEM.md §4) — same 1 Hz config cadence. */
+    if (now_ms - grab_poll_ms >= 1000) { grab_poll_ms = now_ms; grab_table_push(); }
     /* Many windows, one queue: dispatch by windowID (0028/0029/0063/0078).
      * Menu columns and the run dialog come and go inside handlers, so
      * their ids are resolved per event (ov_level_for), not cached. */
@@ -4215,6 +4476,13 @@ int main(void) {
     if (wmp_read_all(sock, dims, 8) != 0) die("subscribe reply read");
     if (wmp_skip(sock, h.plen - 8) != 0) die("subscribe reply skip");
     scr_w = dims[0]; scr_h = dims[1];
+
+    /* Push the key-grab table BEFORE the loop so the active scheme is in
+     * effect from boot (todos/KEYBINDING-OVERRIDE-SYSTEM.md §4) — otherwise
+     * the macos scheme would spend the first poll interval on the kernel
+     * default (windows) table. In the windows scheme this is behaviour-
+     * identical to that default, so it changes nothing there. */
+    grab_table_push();
 
     /* The snapshot (EV_CREATED per existing surface + EV_FOCUS) follows on
      * the socket; the frame loop's drain consumes it like live events, so

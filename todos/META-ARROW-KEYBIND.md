@@ -5,6 +5,34 @@ mode, Meta(⌘)+Left/Right should mean go-to-start/end-of-line — the native
 macOS text idiom — not window tiling. This doc anchors the current wiring,
 answers the Mac-mode feasibility question, and recommends a split.
 
+## STATUS — IMPLEMENTED (jku-approved decisions, all 5 open questions resolved)
+
+Landed on top of the keybinding-override grab table (CHUNK 1-3,
+todos/KEYBINDING-OVERRIDE-SYSTEM.md). The BAKED decisions:
+
+1. **Mode-dependent** (scheme-keyed), NOT universal — the recommendation below.
+2. **All four arrows** — ⌘←/→ line nav, ⌘↑/↓ doc nav (`os/keys.h` macos rows).
+3. **Tiling relocated to Ctrl+Alt+arrow** in the macos scheme (Rectangle-style;
+   `KS_ACTIONS` macos snap column). windows scheme = Win+arrow Aero Snap,
+   byte-identical.
+4. **Host auto-detect** — a Mac host defaults the scheme to macos
+   (`os-common.js seedHostKeyScheme`, seeded into the admin `/etc/keys` on a
+   fresh root volume; os.html's navigator probe → the kernel-worker URL, or
+   boot.js `--host-platform=mac`). The per-user `~/.config/keys` (the ctlpanel
+   Keyboard applet's layer) ALWAYS wins — auto-detect only sets the default.
+5. **Exposé** reserved F3 (`wm.overview`, both schemes) — a visible stub for the
+   sibling pass; it does NOT take Ctrl+Alt+arrow.
+
+Where the mechanism actually lives: keys.h (CHUNK 2) already carried the macos
+⌘+arrow rows + the relocated snap defaults; wm.c's `grab_table_push` (CHUNK 3)
+resolves them per-scheme and pushes the grab table, so GUI+arrow passes through
+to the app in macos. This item added the host auto-detect + the app-side
+⌘+arrow e2e legs + doc updates. Tests: `test_keymap_e2e.js` (⌘←/→/↑/↓ verbs +
+autodetect-default + override-wins), `keybind_registry_probe.c` (scheme
+defaults), `os-keybind.mjs` (grab relocation + GUI+arrow release). The browser
+test harness pins the auto-detect OFF (`osUrl(..., 'off')`) so the sweep stays
+windows byte-identical on a Mac.
+
 **This deliberately revisits a recorded decision**: `todos/KEYMAP.md`
 "As built" §1 ("Cmd+arrows stay Aero Snap, unchanged, kernel-side") and the
 `os/keys.h` header note ("Deliberately NOT in the table … ⌘+arrow rows").

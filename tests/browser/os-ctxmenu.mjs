@@ -117,10 +117,11 @@ try {
   await pause(800);                              // the job-notice race
   await setVt(2);
   await waitPixel(132, 116, ORANGE, 60000);      // winbox client at 12,36
-  // Button 0 spans x [56,160); the h-84 menu parks above the 28px bar
-  // (engine rows: 4 items + sep). Gutter sample at row 2 (+5, +40).
-  const BARY = SH - 14, BMX = 88, BMY = SH - 36 - 134;
-  await clickAt(100, BARY, 'right');
+  // Button 0 sits at x~112 — past the Start strip AND the Task-View/overview
+  // button (todos/EXPOSE shifted the app strip by TASKVIEW_W); the menu parks
+  // above the 28px bar at the button's left edge. Gutter sample at row 2.
+  const BARY = SH - 14, BMX = 114, BMY = SH - 36 - 134;
+  await clickAt(150, BARY, 'right');
   await waitPixel(BMX + 4, BMY + 46, FACE);
   check('right-click on a taskbar button raises the window menu above the bar', true);
   await page.keyboard.press('Escape');

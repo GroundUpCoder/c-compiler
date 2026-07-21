@@ -174,7 +174,7 @@
 <div id="wrap">
   <div id="vtbar">
     <span id="vt1tab" class="vttab active" title="the tty, VT1 (Ctrl+Alt+F1)">Terminal</span>
-    <span id="vt2tab" class="vttab" title="the desktop, VT2 (Ctrl+Alt+F2). Ctrl+Alt+Tab cycles windows, +Shift for previous (todos/0032); Ctrl+Esc opens the Start menu (todos/0078)">Desktop</span>
+    <span id="vt2tab" class="vttab" title="the desktop, VT2 (Ctrl+Alt+F2). Ctrl+Alt+Tab cycles windows, +Shift for previous (todos/0032); Ctrl+Esc opens the Start menu (todos/0078); Ctrl+Alt+E shows all windows (Exposé — the Task-View button right of Start does the same)">Desktop</span>
     <span id="oskbtn" class="fontbtn" title="on-screen keyboard">&#9000;</span>
     <span id="fontctl" title="terminal font size">
       <span id="fontminus" class="fontbtn">A&minus;</span><span id="fontplus" class="fontbtn">A+</span>
@@ -254,7 +254,25 @@ term.loadAddon(fitAddon);
 term.open(document.getElementById('terminal'));
 fitAddon.fit();
 
-var kernel = new Worker('kernel-worker.js');
+// Host keyboard-scheme auto-detect (META-ARROW-KEYBIND.md decision 4): a Mac
+// host defaults to the `macos` scheme (⌘←/→ line-nav, tiling on Ctrl+Alt+arrow)
+// so a Mac user gets the native idiom without visiting Control Panel — the
+// manual ctlpanel Keyboard applet override always wins (it writes the higher
+// ~/.config/keys layer). The verdict rides the WORKER URL because the worker's
+// startBoot() runs on load, before any postMessage; the seed only touches a
+// FRESH root volume's admin /etc/keys. A `?hostkeys=` page param overrides the
+// probe (the test harness pins it for determinism; `off`/`other`/`windows`
+// suppress the seed so a Mac CI run is byte-identical to the baked default).
+var hostKeys = (function () {
+  try {
+    var q = new URLSearchParams(location.search).get('hostkeys');
+    if (q) return q === 'off' ? 'other' : q;
+    var uad = navigator.userAgentData && navigator.userAgentData.platform;
+    var plat = uad || navigator.platform || navigator.userAgent || '';
+    return /mac|iphone|ipad|ipod/i.test(plat) ? 'mac' : 'other';
+  } catch (e) { return 'other'; }
+})();
+var kernel = new Worker('kernel-worker.js?hostkeys=' + encodeURIComponent(hostKeys));
 
 // ALL tty input funnels through vt1Input so the key strip's sticky Ctrl
 // (todos/0212, below) composes with the soft keyboard too.

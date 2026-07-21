@@ -84,7 +84,11 @@ try {
       return s && s.w === Math.floor(p.clientWidth / z) && s.h === Math.floor(p.clientHeight / z);
     }, Z, { timeout: 30000, polling: 150 });
     const s = await page.evaluate(() => window.__osScreen);
-    await waitPixel(Math.floor(s.w * 0.62), s.h - 8, FACE, 60000, 'taskbar re-laid at zoom');
+    // Sample the empty strip just LEFT of the clock (s.w - 108): reliably bar
+    // face, clear of the app-button strip — which since todos/EXPOSE starts
+    // further right (past the Start strip AND the Task-View button), so the
+    // old 0.62*w point now lands on a focused button (sunken 222) at Z=2.
+    await waitPixel(Math.floor(s.w - 108), s.h - 8, FACE, 60000, 'taskbar re-laid at zoom');
     return s;
   };
 

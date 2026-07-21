@@ -13,7 +13,7 @@
 //     divergence here would silently mis-target the kernel grab table.
 //
 // The probe itself covers: registry defaults per scheme (windows vs macos incl
-// the new macos line/doc-nav + relocated Ctrl+Alt+arrow tiling + F3 overview),
+// the new macos line/doc-nav + relocated Ctrl+Alt+arrow tiling + Ctrl+Alt+E overview),
 // bind.<action> override change/move/unbind, the `default` sentinel, malformed
 // loud-fallback, readline-row immunity, scheme-independence, and chord
 // parse/format round-trip.

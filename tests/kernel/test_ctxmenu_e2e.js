@@ -380,8 +380,10 @@ check('right-click the Start strip raises nothing (reserved)',
   row(section('bar1'), 'ctxmenu') === '', JSON.stringify(section('bar1')));
 const b2 = section('bar2');
 const bg = g4(row(b2, 'ctxmenu'));
+// Button 0 anchors at x=112 since todos/EXPOSE inserted the Task-View button
+// (TASKVIEW_W) between the Start strip and the app-button strip.
 check(`right-click button 0 opens the window menu (h ${BAR_MENU_H}, above the bar)`,
-  bg && bg.h === BAR_MENU_H && bg.x === 86 && bg.y === 768 - 36 - BAR_MENU_H,
+  bg && bg.h === BAR_MENU_H && bg.x === 112 && bg.y === 768 - 36 - BAR_MENU_H,
   JSON.stringify(b2));
 const b3 = section('bar3');
 check('grayed RESTORE click: menu stays open, window untouched',
