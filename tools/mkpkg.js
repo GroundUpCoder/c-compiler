@@ -184,9 +184,10 @@ function newestPkgInput(name, pkg) {
       statFile(path.join(OS_DIR, entry.c));
       (entry.hdrs || []).forEach((h) => statFile(path.join(OS_DIR, h)));
     }
-    // A clangApp payload's freshness is the sibling overlay manifest's mtime —
-    // re-publishing overlay.json (new sha256s) re-materializes the package.
-    if (entry.clangApp !== undefined) statFile(clangOverlayPath);
+    // A clangApp/clangFile payload's freshness is the sibling overlay
+    // manifest's mtime — re-publishing overlay.json (new sha256s)
+    // re-materializes the package.
+    if (entry.clangApp !== undefined || entry.clangFile !== undefined) statFile(clangOverlayPath);
   }
   return newest;
 }
@@ -271,7 +272,17 @@ async function assembleTree(name, pkg) {
       if (!withClang) {
         throw new Error(`package '${name}': ${rel} — clangApp entries require mkpkg --clang`);
       }
-      clangPlants.push({ abs: base + '/' + rel, app: entry.clangApp, mode: 0o755 });
+      clangPlants.push({ abs: base + '/' + rel, ovPath: '/usr/bin/' + entry.clangApp, mode: 0o755 });
+    } else if (entry.clangFile !== undefined) {
+      // clangFile: any non-binary overlay payload by absolute /usr path (T3:
+      // tinyrenderer's model assets). Same verifier, same --clang gating.
+      if (typeof entry.clangFile !== 'string' || !entry.clangFile.startsWith('/usr/')) {
+        throw new Error(`package '${name}': ${rel} — clangFile must be an absolute /usr overlay path`);
+      }
+      if (!withClang) {
+        throw new Error(`package '${name}': ${rel} — clangFile entries require mkpkg --clang`);
+      }
+      clangPlants.push({ abs: base + '/' + rel, ovPath: entry.clangFile, mode: 0o644 });
     } else {
       section.files[base + '/' + rel] = entry;
     }
@@ -284,17 +295,18 @@ async function assembleTree(name, pkg) {
     compile: COMMON.createCcDriver(CompilerJS, mfs),
     log: () => {},
   });
-  // Plant each clangApp: pull /usr/bin/<app> out of the sibling overlay (bytes
-  // ALREADY sha256+size verified by loadOverlays) and write it into the tree.
+  // Plant each clangApp/clangFile: pull the named payload out of the sibling
+  // overlay (bytes ALREADY sha256+size verified by loadOverlays) and write it
+  // into the tree.
   if (clangPlants.length) {
     const ov = clangOverlay();
     for (const p of clangPlants) {
-      const f = ov.get('/usr/bin/' + p.app);
+      const f = ov.get(p.ovPath);
       if (!f) {
-        throw new Error(`package '${name}': clangApp '${p.app}' — no /usr/bin/${p.app} in the sibling overlay (${clangOverlayPath})`);
+        throw new Error(`package '${name}': no ${p.ovPath} in the sibling overlay (${clangOverlayPath})`);
       }
       if (f.bytes === undefined) {
-        throw new Error(`package '${name}': clangApp '${p.app}' — /usr/bin/${p.app} is a symlink in the overlay, not a binary payload`);
+        throw new Error(`package '${name}': ${p.ovPath} is a symlink in the overlay, not a payload`);
       }
       COMMON.writeFile(mfs, p.abs, f.bytes, p.mode);
     }
