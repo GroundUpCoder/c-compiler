@@ -148,6 +148,7 @@
  * os/boot.js; seeded by os/image.json.
  */
 #include <SDL.h>
+#include <SDL_popup.h>     /* anchored menu columns (todos/0282 over 0256) */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -393,13 +394,20 @@ static int nkids = 0;              /* live spawned children (reap on frame) */
 /* ---- the menucore front-end (todos/0259) --------------------------
  * One tracking at a time (menus are modal): mc_kind says which consumer
  * owns the open chain; ov[] is the overlay-window substrate — one
- * borderless top-layer furniture window per open chain level, parked at
- * its EV_CREATED echo like every other wm popup ("ctxmenu"/"ctxmenu2"/
- * ... for context menus, "startmenu2"/... for Start flyouts, so tests
- * and the 0091/0078 furniture rules keep their handles). Level 0 of a
- * ctx tracking HOLDS kernel focus (the create steal) so keyboard nav
- * reaches this process even over a foreign focused window; Start
- * flyouts hand focus back to the root panel (the 0078 rule). */
+ * furniture window per open chain level. Since todos/0282 every level
+ * with an owner surface is a kernel ANCHORED CHILD (0256, created via
+ * SDL_CreatePopupWindow): positioned kernel-side from the owner +
+ * offset, layer-inherited, re-slotted above the owner after every z
+ * mutation (a column can never render below the panel it cascades
+ * from — the 0282 bug), and never focused, so the root keeps the
+ * keyboard with no FOCUS hand-back. Titles ("ctxmenu"/"ctxmenu2"/...
+ * for context menus, "startmenu2"/... for Start flyouts) still land
+ * via SET_TITLE so tests keep their handles; the sid is recorded at
+ * the EV_CREATED echo by creation order (anchored echoes carry no
+ * title). Only a ctx-menu ROOT — no owner surface, it opens at the
+ * pointer — stays an ownerless borderless top-level parked at its
+ * echo; it HOLDS kernel focus (the create steal) so keyboard nav
+ * reaches this process even over a foreign focused window. */
 enum { MK_NONE = 0, MK_START, MK_CTX };
 static int mc_kind = MK_NONE;
 static struct {
@@ -1594,18 +1602,31 @@ static void wmmc_popup_opening(void *owner, void *tbl, int idx) {
 
 static MCWIN wmmc_win_create(MCWIN parent, int dx, int dy, int w, int h,
                              int grab) {
-    (void)grab;                        /* wm popups hold kernel focus for
-                                          keyboard nav instead; dismissal is
-                                          the 0091 focus-leave rule */
+    (void)grab;                        /* no kernel grab (TOOLTIP flavor):
+                                          dismissal stays the 0091 focus-leave
+                                          rule, keyboard stays on the root */
     int lvl = __mc.nlev;
     if (lvl < 0 || lvl >= MENU_MAX_DEPTH) return NULL;
+    /* The surface this level hangs off (todos/0282): deeper levels anchor to
+     * the previous column, the level-0 Start flyout to the root panel. A
+     * ctx-menu ROOT has no owner surface (it opens at the pointer over the
+     * desktop/taskbar/an icon) and stays an ownerless top-level. */
+    SDL_Window *aw = (SDL_Window *)parent;
+    int ax = 0, ay = 0;
     int px = dx, py = dy;
     if (parent) {                      /* deeper level: parent-relative */
-        int pi = ov_index((SDL_Window *)parent);
-        if (pi >= 0) { px += ov[pi].x; py += ov[pi].y; }
+        int pi = ov_index(aw);
+        if (pi >= 0) { ax = ov[pi].x; ay = ov[pi].y; }
+        px += ax; py += ay;
+    } else if (mc_kind == MK_START) {
+        aw = smroot.win;
+        ax = smroot.x; ay = smroot.y;
     }
     /* Work-area clamp (the 0091 rules: a py at/past the bottom — the
-     * taskbar anchor — lands the menu exactly above the bar). */
+     * taskbar anchor — lands the menu exactly above the bar). Done in
+     * SCREEN coords BEFORE the parent-relative conversion below, so the
+     * kernel's own into-the-screen clamp for anchored children is already
+     * satisfied and never fights this one. */
     if (px + w > scr_w) px = scr_w - w;
     if (px < 0) px = 0;
     if (py + h > scr_h - BAR_H) py = scr_h - BAR_H - h;
@@ -1617,7 +1638,21 @@ static MCWIN wmmc_win_create(MCWIN parent, int dx, int dy, int w, int h,
     } else {
         snprintf(title, sizeof title, "startmenu%d", lvl + 2);
     }
-    SDL_Window *win = SDL_CreateWindow(title, w, h, SDL_WINDOW_BORDERLESS);
+    SDL_Window *win;
+    if (aw) {
+        /* A kernel anchored child (todos/0256): _wmZNormalize re-slots it
+         * above its owner after every z mutation, so the column can never
+         * render below the panel it cascades from — the 0282 fix. It
+         * inherits the owner's layer and never takes focus by construction
+         * (the root keeps the keyboard with zero FOCUS juggling). Title
+         * after create: the popup API takes none, and the EV_CREATED echo
+         * is matched by the ANCHORED flag + creation order, not title. */
+        win = SDL_CreatePopupWindow(aw, px - ax, py - ay, w, h,
+                                    SDL_WINDOW_TOOLTIP);
+        if (win) SDL_SetWindowTitle(win, title);
+    } else {
+        win = SDL_CreateWindow(title, w, h, SDL_WINDOW_BORDERLESS);
+    }
     if (!win) return NULL;
     ov[lvl].win = win;
     ov[lvl].sid = 0;
@@ -3616,35 +3651,29 @@ static void handle_event(wmp_hdr *h) {
         wmp_rec r;
         if (h->plen != sizeof r || wmp_read_all(sock, &r, (int)sizeof r) != 0) die("EV_CREATED read");
         if (r.pid == own_pid) {        /* our own furniture: park by title */
+            if (r.flags & WMP_F_ANCHORED) {
+                /* A menucore chain level (todos/0282): kernel-positioned
+                 * from its owner + (dx,dy), layer-inherited, re-slotted
+                 * above the owner by _wmZNormalize, never focused — nothing
+                 * to park, and policy ops would EPERM (0256). The echo
+                 * carries no title (the popup API takes none; it lands via
+                 * SET_TITLE right after create), so record the sid by
+                 * CREATION ORDER: echoes are emitted inside the create RPC,
+                 * so the lowest live-but-unfilled ov slot is this level. */
+                for (int d = 0; d < MENU_MAX_DEPTH; d++)
+                    if (ov[d].win && !ov[d].sid) { ov[d].sid = r.sid; break; }
+                return;
+            }
             if (strncmp(r.title, "startmenu", 9) == 0) {   /* 0028/0078 */
-                if (!r.title[9]) {                 /* the root panel */
-                    if (!smroot.win) return;       /* dismissed pre-echo */
-                    smroot.sid = r.sid;
-                    int32_t a[3] = { r.sid, smroot.x, smroot.y };
-                    wmp_send(sock, WMP_MOVE, a, 3);
-                    /* Top layer like the bar (todos/0038) — created later,
-                     * so the stable sort keeps the menu above it. */
-                    int32_t ly[2] = { r.sid, 1 };
-                    wmp_send(sock, WMP_SET_LAYER, ly, 2);
-                } else {           /* a chain level: "startmenu<lvl+2>" (0259) */
-                    int lvl = atoi(r.title + 9) - 2;
-                    if (mc_kind != MK_START || lvl < 0 ||
-                        lvl >= MENU_MAX_DEPTH || !ov[lvl].win) return;
-                    ov[lvl].sid = r.sid;
-                    int32_t a[3] = { r.sid, ov[lvl].x, ov[lvl].y };
-                    wmp_send(sock, WMP_MOVE, a, 3);
-                    int32_t ly[2] = { r.sid, 1 };
-                    wmp_send(sock, WMP_SET_LAYER, ly, 2);
-                    if (smroot.sid) {
-                        /* Flyouts must not hold focus: closing one on a
-                         * hover re-target would bounce focus to an app and
-                         * the EV_FOCUS rule would dismiss the whole menu.
-                         * The ROOT panel keeps the keyboard (the Aero-Peek
-                         * hand-back precedent, todos/0078). */
-                        int32_t f[1] = { smroot.sid };
-                        wmp_send(sock, WMP_FOCUS, f, 1);
-                    }
-                }
+                /* the root panel — chain levels are anchored (0282, above) */
+                if (r.title[9] || !smroot.win) return;    /* dismissed pre-echo */
+                smroot.sid = r.sid;
+                int32_t a[3] = { r.sid, smroot.x, smroot.y };
+                wmp_send(sock, WMP_MOVE, a, 3);
+                /* Top layer like the bar (todos/0038) — created later,
+                 * so the stable sort keeps the menu above it. */
+                int32_t ly[2] = { r.sid, 1 };
+                wmp_send(sock, WMP_SET_LAYER, ly, 2);
             } else if (strncmp(r.title, "startrun", 9) == 0) {   /* 0078 */
                 if (!run_win) return;          /* dismissed before the echo */
                 run_sid = r.sid;
@@ -3712,20 +3741,15 @@ static void handle_event(wmp_hdr *h) {
                         break;
                     }
             } else if (strncmp(r.title, "ctxmenu", 7) == 0) {   /* 0091 */
-                int lvl = r.title[7] ? atoi(r.title + 7) - 1 : 0;
-                if (mc_kind != MK_CTX || lvl < 0 ||
-                    lvl >= MENU_MAX_DEPTH || !ov[lvl].win) return;
-                ov[lvl].sid = r.sid;
-                int32_t a[3] = { r.sid, ov[lvl].x, ov[lvl].y };
+                /* the ROOT level only — it opens at the pointer with no
+                 * owner surface; chain levels ("ctxmenu2"+) are anchored
+                 * children handled above (todos/0282) */
+                if (r.title[7] || mc_kind != MK_CTX || !ov[0].win) return;
+                ov[0].sid = r.sid;
+                int32_t a[3] = { r.sid, ov[0].x, ov[0].y };
                 wmp_send(sock, WMP_MOVE, a, 3);
                 int32_t ly[2] = { r.sid, 1 };  /* top layer, like the menu */
                 wmp_send(sock, WMP_SET_LAYER, ly, 2);
-                if (lvl > 0 && ov[0].sid) {
-                    /* Flyout levels must not hold focus — the root level
-                     * keeps the keyboard (the Start-menu rule, 0078). */
-                    int32_t f[1] = { ov[0].sid };
-                    wmp_send(sock, WMP_FOCUS, f, 1);
-                }
             } else if (strncmp(r.title, "datepop", 7) == 0) {   /* 0101 */
                 if (!date_win) return;         /* dismissed before the echo */
                 date_sid = r.sid;

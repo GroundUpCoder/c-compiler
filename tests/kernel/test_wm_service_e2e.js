@@ -954,6 +954,20 @@ const fg2 = g4(fly2);
 check(`hovering the Demos group cascades its leaves (h ${demosH}, parent-right - 3)`,
   fg1 && fg2 && fg2.h === demosH && fg2.x === fg1.x + fg1.w - 3 &&
   fg2.y === demosY && fly2.includes('b'), JSON.stringify(m1c));
+// Anchored-child z-order (todos/0282): `wmctl list` rows are z-ordered
+// bottom -> top, and each flyout column must sort ABOVE the panel it
+// cascades from — pre-0282 the root's keep-the-keyboard WMP_FOCUS raised
+// it over its own (then-ownerless) flyout, so an overlapping child drew
+// BELOW its parent (forced overlap on small viewports).
+const zrow = (sec, title) =>
+  sec.split('\n').findIndex(l => l.endsWith('\t' + title));
+check('flyout z-sorts above the root panel (anchored child, todos/0282)',
+  zrow(m1b, 'startmenu2') > zrow(m1b, 'startmenu') &&
+  zrow(m1b, 'startmenu') >= 0, JSON.stringify(m1b));
+check('nested flyout z-sorts above its parent column (todos/0282)',
+  zrow(m1c, 'startmenu3') > zrow(m1c, 'startmenu2') &&
+  zrow(m1c, 'startmenu2') > zrow(m1c, 'startmenu') &&
+  zrow(m1c, 'startmenu') >= 0, JSON.stringify(m1c));
 check('nested flyout click launches winbox (second instance)',
   m2.split('\n').filter(l => l.endsWith('\twinbox')).length === 2, JSON.stringify(m2));
 check('selection dismissed the whole cascade',
