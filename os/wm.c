@@ -3792,6 +3792,21 @@ static void handle_event(wmp_hdr *h) {
             return;
         }
         if (r.flags & WMP_F_BORDERLESS) return;   /* not ours to manage */
+        if (r.flags & WMP_F_TRANSIENT) {
+            /* Owned/modal popup (todos/0281): a real framed, focusable window
+             * — a MessageBox or dialog — but Win95 never lists owned dialogs
+             * in the taskbar, so it stays OUT of wins[]: no taskbar button,
+             * and cycle/cascade/tile/minimize-all (all wins[] walks) skip it.
+             * It IS non-borderless, so the kernel keeps it unmapped until our
+             * first geometry op (map-on-placement, 0069) — place() maps it and
+             * gives it a sensible cascade position; the kernel owns its chrome
+             * (title bar, drag, close box) from there. Its create-focus stands
+             * (we send no FOCUS), so the modal has the keyboard as it should.
+             * (The WMP_F_TRANSIENT flag could later also suppress the min/max
+             * title-bar boxes on modals — deliberately NOT done here, 0281.) */
+            place(r.sid, r.w, r.h);
+            return;
+        }
         if (nwins < MAX_WIN) {
             win_t *w = &wins[nwins++];
             w->sid = r.sid; w->pid = r.pid;

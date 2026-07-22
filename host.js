@@ -6289,8 +6289,11 @@ function createSurfaceSDL({ ctx, hooks }) {
     // resize — drag zones, wmResize — only to surfaces that carry it);
     // SDL_WINDOW_TRANSPARENT (0x40000000) -> bit3 (todos/0063: per-pixel
     // alpha, composited src-over in both composites).
+    // SDL_WINDOW_UTILITY (0x20000) -> bit4 (todos/0281: transient/owned window
+    // — /bin/wm gives it no taskbar button and skips it when cycling; owned
+    // modals like MessageBox/dialogs are never taskbar entries in Win95).
     let kFlags = ((sdlFlags & 0x10) ? 1 : 0) | ((sdlFlags & 0x20) ? 4 : 0) |
-                 ((sdlFlags & 0x40000000) ? 8 : 0);
+                 ((sdlFlags & 0x40000000) ? 8 : 0) | ((sdlFlags & 0x20000) ? 16 : 0);
     // SDL_CreatePopupWindow (todos/0256): an anchored child surface — kernel
     // flag bit6 + parentSid/dx/dy, implicitly borderless (bit0), and
     // SDL_WINDOW_POPUP_MENU (0x80000) carries the kernel GRAB (bit7, menu

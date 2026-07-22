@@ -871,7 +871,7 @@ check('taskbar is borderless, parked at the bottom edge (0,740 @1024x768)',
 check('winbox placed by the WM policy (12,36 — not the kernel cascade)',
   win1.includes('240x160+12+36'), win1);
 check('winbox focused + resizable (R flag, todos/0021)',
-  win1.includes('\tf---R-\t'), win1);   // FLAGS grew the 0063 'A' slot
+  win1.includes('\tf---R---\t'), win1);   // FLAGS: 0063 'A' slot + 0281 'U' slot
 
 // ---- minimize via wmctl -> EV to the wm ----
 const win2 = row(l2, 'winbox');

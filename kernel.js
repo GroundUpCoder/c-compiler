@@ -265,7 +265,8 @@ var OP = {
   // kernel swaps buffers atomically here, so the compositor never tears.
   // SURFACE_SET_FLAGS (todos/0018) updates the surface flag word (bit0
   // borderless, bit1 relative-mouse, bit2 resizable, bit3 has-alpha —
-  // todos/0063: per-pixel alpha, composited src-over in both composites);
+  // todos/0063: per-pixel alpha, composited src-over in both composites; bit4
+  // transient/owned — todos/0281, create-only, not settable here);
   // the relative-mouse bit round-trips to the UI bridge as a pointer-lock
   // request
   // (onPointerLock). The resizable bit (todos/0021, SDL3 semantics: only
@@ -3971,6 +3972,11 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         hasAlpha: !!((req.flags | 0) & 8),        // bit3: SDL_WINDOW_TRANSPARENT
                                                   // (todos/0063): per-pixel alpha,
                                                   // composited src-over
+        transient: !!((req.flags | 0) & 16),      // bit4: SDL_WINDOW_UTILITY
+                                                  // (todos/0281): owned/modal —
+                                                  // no taskbar button, skipped by
+                                                  // window cycling (create-only,
+                                                  // never toggled via SET_FLAGS)
         cursor: 0,                // per-surface client cursor shape (todos/0105,
                                   // SDL_SystemCursor; -1 hidden). SDL_SetCursor
                                   // via SURFACE_SET_CURSOR; chrome cursors
@@ -6131,7 +6137,8 @@ Kernel.prototype._wmpRecord = function (s) {
   var flags = (s.sid === this._focusSid ? 1 : 0) | (s.minimized ? 2 : 0) |
               (s.borderless ? 4 : 0) | (s.relativeMouse ? 8 : 0) |
               (s.resizable ? 16 : 0) | (s.hasAlpha ? 32 : 0) |
-              (s.parentSid ? 64 : 0);   // WMP_F_ANCHORED (todos/0256)
+              (s.parentSid ? 64 : 0) |    // WMP_F_ANCHORED (todos/0256)
+              (s.transient ? 128 : 0);   // WMP_F_TRANSIENT (todos/0281)
   var fields = [s.sid, s.pid, s.x, s.y, s.w, s.h,
                 this._zOrder.indexOf(s.sid), flags, Atomics.load(s.i32, SH_SEQ),
                 s.dstW, s.dstH, s.layer | 0];

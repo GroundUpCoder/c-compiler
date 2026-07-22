@@ -324,11 +324,12 @@ static int do_agent(const char *cmd, const char *label, const char *text) {
 
 static int32_t f32bits(float v) { int32_t b; memcpy(&b, &v, 4); return b; }
 
-/* The 7-char FLAGS column (shared by `list` and `wait`): f m b r R A then
- * a T/B slot for pinned z-layers (todos/0038). Kept in one place so the two
- * readers never drift. */
-static void rec_flags(const wmp_rec *r, char flags[8]) {
-    memcpy(flags, "------", 7);
+/* The 8-char FLAGS column (shared by `list` and `wait`): f m b r R A, a T/B
+ * slot for pinned z-layers (todos/0038), then U for a transient/owned modal
+ * (todos/0281 — no taskbar button, skipped by cycling). Kept in one place so
+ * the two readers never drift. */
+static void rec_flags(const wmp_rec *r, char flags[9]) {
+    memcpy(flags, "--------", 8);
     if (r->flags & WMP_F_FOCUSED)    flags[0] = 'f';
     if (r->flags & WMP_F_MINIMIZED)  flags[1] = 'm';
     if (r->flags & WMP_F_BORDERLESS) flags[2] = 'b';
@@ -337,7 +338,8 @@ static void rec_flags(const wmp_rec *r, char flags[8]) {
     if (r->flags & WMP_F_ALPHA)      flags[5] = 'A';
     if (r->layer > 0) flags[6] = 'T';
     else if (r->layer < 0) flags[6] = 'B';
-    flags[7] = 0;
+    if (r->flags & WMP_F_TRANSIENT)  flags[7] = 'U';
+    flags[8] = 0;
 }
 
 /* ---- event-based waits (todos/0083) ----
@@ -404,7 +406,7 @@ static int wm_cond_met(const char *cond, char **a, const wmp_rec *recs, int n) {
     if (!strcmp(cond, "flag") || !strcmp(cond, "noflag")) {
         const wmp_rec *r = wm_by_sid(recs, n, (int32_t)atoi(a[0]));
         if (!r) return 0;
-        char flags[8]; rec_flags(r, flags);
+        char flags[9]; rec_flags(r, flags);
         int has = strchr(flags, a[1][0]) != NULL;
         return cond[0] == 'n' ? !has : has;
     }
@@ -497,8 +499,8 @@ static int do_list(int fd) {
     for (int32_t i = 0; i < count; i++) {
         wmp_rec r;
         if (wmp_read_all(fd, &r, (int)sizeof r) != 0) return fail("short record");
-        char flags[8];
-        rec_flags(&r, flags);          /* [6] only for pinned layers (0038) */
+        char flags[9];
+        rec_flags(&r, flags);          /* [6] layer (0038), [7] transient (0281) */
         r.title[31] = 0;
         char dst[32] = "-";            /* scaled viewport (todos/0024), or - */
         if (r.dst_w != r.w || r.dst_h != r.h)

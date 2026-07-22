@@ -307,6 +307,23 @@ check('scrollbar SB_LINEUP walks back', /vscroll pos=2[\s\S]*vscroll pos=1/.test
 const mblist = section('mblist');
 check('MessageBox is a second kernel surface titled "About ctldemo"',
   mblist.split('\n').some(l => l.endsWith('\tAbout ctldemo')), mblist);
+/* todos/0281: the MessageBox is a TRANSIENT/owned modal. It must carry the
+ * WMP_F_TRANSIENT flag ('U' in wmctl FLAGS) and — the actual bug — get NO
+ * taskbar button. wm.c gives a taskbar button to every non-borderless,
+ * non-transient top-level; count those in the live list while the modal is up.
+ * Pre-fix the modal lacked 'U' and showed as a SECOND taskbar entry (exactly
+ * the "notepad save-confirm is a second Notepad button" report). */
+const taskbarBtns = (listOut) =>
+  listOut.split('\n')
+    .filter(l => l.includes('\t') && !l.startsWith('SID\t'))
+    .map(l => l.split('\t'))
+    .filter(f => f.length >= 7 && !f[5].includes('b') && !f[5].includes('U'));
+const mbRow = mblist.split('\n').find(l => l.endsWith('\tAbout ctldemo'));
+check('MessageBox surface carries the transient flag (U in FLAGS)',
+  !!mbRow && (mbRow.split('\t')[5] || '').includes('U'), mbRow);
+check('exactly ONE taskbar button while the modal is up (no 2nd button)',
+  taskbarBtns(mblist).length === 1,
+  taskbarBtns(mblist).map(f => f[6]).join(' | '));
 const mbtree = section('mbtree');
 check('modal disables the owner (en=0 in the tree)',
   /class=ctldemo id=0 [^\n]*en=0/.test(mbtree), mbtree.slice(0, 300));
