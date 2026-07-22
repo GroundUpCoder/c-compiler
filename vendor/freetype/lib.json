@@ -12,6 +12,7 @@
     "src/base/ftsystem.c",
     "src/base/ftdebug.c",
     "src/base/ftinit.c",
+    "src/autofit/autofit.c",
     "src/base/ftbitmap.c",
     "src/base/ftmm.c",
     "src/base/ftsynth.c",

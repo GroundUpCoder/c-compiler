@@ -99,7 +99,7 @@ static SizeSlot *slot_for(int px, int flags) {
      * cell rhythm matches term/gdi32 regardless of the bold flag. */
     s->cell = (int)(f0->size->metrics.max_advance >> 6);
     FT_UInt mi = FT_Get_Char_Index(f0, 'M');
-    if (mi && !FT_Load_Glyph(f0, mi, FT_LOAD_DEFAULT)) {
+    if (mi && !FT_Load_Glyph(f0, mi, fc_load_flags(f0))) {
         int madv = (int)(f0->glyph->advance.x >> 6);
         if (madv > 0) s->cell = madv;
     }

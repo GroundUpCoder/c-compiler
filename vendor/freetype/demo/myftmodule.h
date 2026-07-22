@@ -1,7 +1,8 @@
 /*
  * Minimal FreeType module list for C-to-WASM compiler.
- * Only TrueType driver + smooth renderer + dependencies.
+ * TrueType driver + smooth renderer + autohinter + dependencies.
  */
+FT_USE_MODULE( FT_Module_Class, autofit_module_class )
 FT_USE_MODULE( FT_Driver_ClassRec, tt_driver_class )
 FT_USE_MODULE( FT_Module_Class, sfnt_module_class )
 FT_USE_MODULE( FT_Module_Class, psnames_module_class )
