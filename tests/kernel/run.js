@@ -88,6 +88,7 @@ const tests = [
   ['test_wm_service_e2e.js', IMG], // 0014: real /bin/wm + wmctl through os/boot.js — autostart, taskbar, crash+respawn
   ['test_snap_e2e.js', IMG],     // 0095: Aero Snap — drag-to-edge tiling via wmctl sdown/smove/sup, translucent preview pixels, drag-off restore, quarters, wmctl snap (= Win+arrow), fixed-size letterbox, no-WM refusal
   ['test_overview_e2e.js', IMG], // EXPOSE: window overview / Exposé — wmctl overview enters (live miniatures in wmctl shot), PICK focuses+raises+exits, background dismiss, relayout on create/destroy, N=0 no-op, no-WM refusal
+  ['test_ksvc_e2e.js', IMG],     // 0275: the ksvc kernel-C text service — headless composite label text (titles, close 'x', Exposé captions) bit-compared against os/ksvc.js rendering over the SAME image (the same-bytes assertion), ellipsis on overlong titles, CJK tofu parity
   ['test_saver_e2e.js', IMG],    // 0096: the screensaver — kernel idle clock (wmctl idle), idle raise + input dismissal + clock reset, marquee animation shots, saver none, wmctl saver (= ctlpanel Preview), the Screen Saver applet store writes, no-WM refusal
   ['test_cursor_e2e.js', IMG],   // 0105: pointer cursor shapes — per-surface SDL_SetCursor readback (wmctl cursor = CURSOR_AT/R_CURSOR), chrome resize cursors on resizable frames (EW/NS/NWSE), title/desktop/fixed-frame arrow
   ['test_os_apps_e2e.js', IMG],  // 0015: seeded vendor apps windowed in-OS — bin-entry game data, real frames via wmctl shot

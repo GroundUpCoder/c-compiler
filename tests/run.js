@@ -97,6 +97,10 @@ const RULES = [
 
   // The reference OS build: seeded C, boot, compositor, the image manifest.
   [/^os\//, ['kernel', 'sweep'], 'seeded OS sources restale the image; e2e + browser cover it'],
+  // The ksvc kernel service blob (todos/0275): /usr/lib/ksvc.wasm + its
+  // loader feed BOTH composites' label text — explicit so a future ^os/
+  // rule split can't orphan it (same suites as ^os/ today).
+  [/^os\/ksvc(\/|\.js$)/, ['kernel', 'sweep'], 'the kernel text service — chrome text in both composites'],
   // os-common's listPackages filter is the base-purity choke point (CLANG-CPP-
   // EPIC II §7) — host holds that guardrail (rules accumulate, so this ADDS host
   // to the ^os/ kernel+sweep above).

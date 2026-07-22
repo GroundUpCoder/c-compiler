@@ -1,6 +1,6 @@
 // compositor.js — the browser half of the kernel compositor (todos/WM.md;
 // scene state lives in kernel.js "WM surfaces"). Runs INSIDE the kernel
-// worker on a master OffscreenCanvas transferred from os.html: per rAF it
+// worker on the master offscreen canvas transferred from os.html: per rAF it
 // renders the scene bottom-up in ONE WebGPU render pass (todos/0055, the
 // pass WM.md designed) — desktop clear, then per surface its pixels as a
 // z-ordered textured quad + its kernel chrome (same WM_* metrics/colors
@@ -75,6 +75,11 @@ const SHADOW_EXT: f32 = 14.0;        // shadow reach in px — MUST MATCH the
 
 function startCompositor(kernel, canvas, device) {
   var K = KERNEL;
+  // Label text renders via the kernel's ksvc text service (todos/0275) —
+  // unreachable in a real boot (kernel-worker hard-failed before us), but
+  // the compositor states its requirement: no quiet textless desktop.
+  var svc = kernel.textService;
+  if (!svc) throw new Error('compositor: kernel has no text service (ksvc)');
   var gctx = canvas.getContext('webgpu');
   if (!gctx) throw new Error('compositor: no webgpu canvas context');
   var format = navigator.gpu.getPreferredCanvasFormat();
@@ -339,41 +344,35 @@ function startCompositor(kernel, canvas, device) {
     return c.bind;
   }
 
-  // ---- label textures: title text and the close 'x' rasterized via a
-  // throwaway 2D canvas (a texture SOURCE, not scene assembly), uploaded
-  // once per distinct string+width and reused every frame.
-  var LABEL_FONT = 'bold 20px sans-serif';   // font-20 retune (v133-qa): the
-                                              // caption now matches the in-OS
-                                              // 20px chrome — sized to the 30px
-                                              // kernel.js WM_TITLE_H (shared-
-                                              // chrome rule; browser-hinted)
-  var LABEL_H = 28;   // fits 20px bold, centered in the 30px title bar
-  var labelCanvas = new OffscreenCanvas(8, LABEL_H);
-  var labelCtx = labelCanvas.getContext('2d');
-  var labels = new Map();   // color|width|text -> { tex, bind, w }
-  function labelFor(text, maxW, cssColor) {
-    labelCtx.font = LABEL_FONT;   // canvas resizes reset context state
-    var w = Math.max(1, Math.min(Math.ceil(labelCtx.measureText(text).width), Math.ceil(maxW)));
-    var key = cssColor + '|' + w + '|' + text;
+  // ---- label textures: title text, the close 'x' and Exposé captions
+  // rasterized by the kernel's ksvc text service (todos/0275 — OUR
+  // FreeType/fontchain stack; the Canvas2D path is DELETED, not gated),
+  // uploaded via writeTexture once per distinct string+width and reused
+  // every frame. Straight-alpha bytes + the pipeline's src-alpha blend =
+  // correct output; heights come from the render header (~28 at 20px, the
+  // v133 rhythm). Placement contract: quad y = centerY - h/2, matching
+  // kernel.js _blitLabel — the two composites place text identically.
+  var LABEL_PX = K.WM_LABEL_PX;              // 20 — the ONE shared constant
+  var labels = new Map();   // rgba|width|text -> { tex, bind, w, h }
+  function labelFor(text, maxW, rgba) {
+    // measure-first key: a short title doesn't churn the cache as maxW
+    // slides during a resize drag (sub-ms warm-cache wasm call).
+    var w = Math.max(1, Math.min(svc.measure(text, LABEL_PX, 1), Math.ceil(maxW)));
+    var key = rgba + '|' + w + '|' + text;
     var c = labels.get(key);
     if (c) return c;
     if (labels.size >= 96) {   // bounded: titles are few; rebuilt next frame
       labels.forEach(function (v) { v.tex.destroy(); });
       labels.clear();
     }
-    labelCanvas.width = w; labelCanvas.height = LABEL_H;
-    labelCtx.font = LABEL_FONT;
-    labelCtx.textBaseline = 'middle';
-    labelCtx.fillStyle = cssColor;
-    labelCtx.fillText(text, 0, LABEL_H / 2, maxW);   // maxWidth squishes, as before
+    var r = svc.render(text, LABEL_PX, Math.ceil(maxW), rgba, 1 /* bold */);
     var tex = device.createTexture({
-      size: { width: w, height: LABEL_H }, format: 'rgba8unorm',
-      usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING |
-             GPUTextureUsage.RENDER_ATTACHMENT,
+      size: { width: Math.max(1, r.w), height: r.h }, format: 'rgba8unorm',
+      usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
     });
-    device.queue.copyExternalImageToTexture({ source: labelCanvas }, { texture: tex },
-      { width: w, height: LABEL_H });
-    c = { tex: tex, bind: bindFor(tex), w: w };
+    if (r.w) device.queue.writeTexture({ texture: tex }, r.bytes,
+      { bytesPerRow: r.w * 4 }, { width: r.w, height: r.h });
+    c = { tex: tex, bind: bindFor(tex), w: r.w, h: r.h };
     labels.set(key, c);
     return c;
   }
@@ -432,10 +431,10 @@ function startCompositor(kernel, canvas, device) {
         hov ? COL_FOCUS : COL_BORDER, { mode: 1, radius: CORNER_R });
       pushQuad(s.bitmap ? gpuBindFor(s) : shmBindFor(s),
                rect.x, rect.y, rect.w, rect.h, WHITE);
-      // Caption in the reserved strip under the SETTLED cell (browser-only,
-      // like title text — the headless composite has none).
-      var cap = labelFor(s.title || ('pid ' + s.pid), Math.max(8, c.w), '#fff');
-      pushQuad(cap.bind, c.x + (c.w - cap.w) / 2, c.y + c.h + 2, cap.w, LABEL_H, WHITE);
+      // Caption in the reserved strip under the SETTLED cell — same text +
+      // geometry as the headless composite's _blitLabel (todos/0275).
+      var cap = labelFor(s.title || ('pid ' + s.pid), Math.max(8, c.w), 0xFFFFFFFF);
+      pushQuad(cap.bind, c.x + (c.w - cap.w) / 2, c.y + c.h + 2, cap.w, cap.h, WHITE);
     }
   }
 
@@ -587,7 +586,7 @@ function startCompositor(kernel, canvas, device) {
     lastSig = sig;
     grace = GRACE_FRAMES;
     // Reconfigure on screen-resize (todos/0023) — the canonical dance;
-    // resizing the OffscreenCanvas invalidates the swap chain size.
+    // resizing the offscreen canvas invalidates the swap chain size.
     if (frameW !== confW || frameH !== confH) {
       gctx.configure({ device: device, format: format, alphaMode: 'opaque' });
       confW = frameW; confH = frameH;
@@ -682,11 +681,11 @@ function startCompositor(kernel, canvas, device) {
         pushQuad(whiteBind, mxx + 4, by + 4, 1, 11, BLACK);
         pushQuad(whiteBind, mxx + 15, by + 4, 1, 11, BLACK);
       }
-      var xg = labelFor('x', 32, '#000');
-      pushQuad(xg.bind, bx + 5, by + K.WM_CLOSE_W / 2 + 1 - LABEL_H / 2, xg.w, LABEL_H, WHITE);
+      var xg = labelFor('x', 32, 0x000000FF);
+      pushQuad(xg.bind, bx + 5, by + K.WM_CLOSE_W / 2 + 1 - xg.h / 2, xg.w, xg.h, WHITE);
       var tl = labelFor(s.title || ('pid ' + s.pid),
-        Math.max(8, dw - 3 * (K.WM_CLOSE_W + K.WM_BOX_GAP) - 16), '#fff');
-      pushQuad(tl.bind, s.x + 6, s.y - K.WM_TITLE_H / 2 - LABEL_H / 2, tl.w, LABEL_H, WHITE);
+        Math.max(8, dw - 3 * (K.WM_CLOSE_W + K.WM_BOX_GAP) - 16), 0xFFFFFFFF);
+      pushQuad(tl.bind, s.x + 6, s.y - K.WM_TITLE_H / 2 - tl.h / 2, tl.w, tl.h, WHITE);
     }
     // Resize rubber band (todos/0019): the drag only previews; the client
     // renegotiates once, at release.

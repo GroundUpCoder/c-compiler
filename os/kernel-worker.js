@@ -75,7 +75,7 @@
 //                                                cursors overlay app cursors
 'use strict';
 
-importScripts('../host.js', '../kernel.js', '../compiler.js', 'os-common.js', 'compositor.js');
+importScripts('../host.js', '../kernel.js', '../compiler.js', 'os-common.js', 'ksvc.js', 'compositor.js');
 try {
   // Optional libc extension (fnmatch/glob/regex — busybox hush needs it).
   // compiler.js's getExtLibMap picks up the EXT_LIB_MAP global it defines.
@@ -410,8 +410,17 @@ async function boot() {
   }
   var ccCompile = OS_COMMON.createCcDriver(CompilerJS, kfs);
 
+  // Kernel text service (todos/0275): the ksvc blob from the sealed system
+  // image, instantiated synchronously in THIS worker. A throw here is a
+  // boot-error (boot()'s catch) — no zombie Canvas2D fallback exists, so a
+  // boot that can't render chrome text must not reach the desktop.
+  var textService = OS_KSVC.load(kfs, {
+    log: function (m) { post({ type: 'boot-log', msg: m }); },
+  });
+
   kernel = new KERNEL.Kernel({
     fs: kfs,
+    textService: textService,   // todos/0275 — compositor + headless text
     roImage: { prefix: '/usr', sab: roSab },   // todos/0180
     vsync: true,   // the compositor rAF calls vsyncTick() (todos/0100)
     createWorker: createWorker,
