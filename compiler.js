@@ -4981,6 +4981,12 @@ function makeBinary(loc, op, left, right) {
       reportError(loc, `cannot assign to ${constViol}`);
       return new EBinary(loc, Types.TDIVERGENT, op, left, right);
     }
+    // todos/0228: a provable store through a string literal is read-only
+    // storage — UB, diagnosed loudly.
+    if (exprWritesStringLiteral(left)) {
+      reportError(loc, `assignment to read-only string literal`);
+      return new EBinary(loc, Types.TDIVERGENT, op, left, right);
+    }
   }
   // Decay array/function operands. ASSIGN/compound's left is the lvalue
   // target — never decayed. ASSIGN's right decays only if the left is a
@@ -5138,6 +5144,47 @@ function basePathConstViolation(e) {
   return null;
 }
 
+// todos/0228: a store whose target PROVABLY addresses a string literal is a
+// write into read-only storage. Standard C gives string literals non-const
+// array type, so the type system alone won't reject `"abc"[0] = 'x'` — but
+// the write is unconditionally UB (it faults against a real .rodata target
+// and silently corrupts linear memory here). We diagnose the statically
+// provable shapes loudly at compile time; the runtime cost is nil because
+// nothing correct ever hits it. A write through an indirection whose value
+// merely HAPPENS to be a literal at runtime (`char *p = "x"; p[0] = 'y'`) is
+// NOT provable and is left to the dedup-off default, which keeps such a UB
+// write local to that one literal instead of corrupting every same-spelling
+// use. `exprRootsAtStringLiteral` walks the pointer-producing shapes down to
+// their root, looking through decays, casts, pointer±integer arithmetic, and
+// ternaries whose every branch is itself a literal.
+function exprRootsAtStringLiteral(e) {
+  if (!e) return false;
+  if (e instanceof EString) return true;
+  if (e instanceof EDecay) return exprRootsAtStringLiteral(e.operand);
+  if (e instanceof EImplicitCast) return exprRootsAtStringLiteral(e.expr);
+  if (e instanceof ECast) return exprRootsAtStringLiteral(e.expr);
+  if (e instanceof EBinary && (e.op === "ADD" || e.op === "SUB")) {
+    // pointer ± integer: whichever operand carries the pointer carries the root.
+    return exprRootsAtStringLiteral(e.left) || exprRootsAtStringLiteral(e.right);
+  }
+  if (e instanceof ETernary) {
+    // Provable only when BOTH arms are literals (`(c?"a":"b")[0] = ..`).
+    return exprRootsAtStringLiteral(e.thenExpr) && exprRootsAtStringLiteral(e.elseExpr);
+  }
+  return false;
+}
+// Returns true when the lvalue `e` is a provable write THROUGH a string
+// literal: `LIT[i]` (either subscript operand — C allows `0["x"]`) or `*LIT`.
+function exprWritesStringLiteral(e) {
+  if (e instanceof ESubscript) {
+    return exprRootsAtStringLiteral(e.array) || exprRootsAtStringLiteral(e.index);
+  }
+  if (e instanceof EUnary && e.op === "OP_DEREF") {
+    return exprRootsAtStringLiteral(e.operand);
+  }
+  return false;
+}
+
 // Mark `expr` as having its address taken — promotes the underlying
 // DVar from REGISTER to MEMORY allocation. Walks through EMember and
 // (for array elements) ESubscript to find the root storage.
@@ -5176,6 +5223,11 @@ function makeUnary(loc, op, operand) {
     // (todos/0227 G22).
     const constViol = operand.type && exprConstWriteViolation(operand);
     if (constViol) reportError(loc, `cannot ${what} ${constViol}`);
+    // todos/0228: ++/-- through a provable string-literal address is a
+    // read-only write — UB, diagnosed loudly.
+    else if (exprWritesStringLiteral(operand)) {
+      reportError(loc, `cannot ${what} read-only string literal`);
+    }
   };
   switch (op) {
     case "OP_PRE_INC": case "OP_POST_INC":
@@ -16546,7 +16598,9 @@ function vaSlotSize(type) {
 // arithmetic / ternary / cast subset still works for both backends.
 //
 // Policy interface (each method returns a number or null):
-//   getStringAddr(uint8Array)    — address of a string literal
+//   getStringAddr(uint8Array, node) — address of a string literal (node = the
+//                                     lexical EString, so the default no-dedup
+//                                     policy can key storage by occurrence)
 //   getGlobalAddr(varDecl)       — address of a global variable's storage
 //   getFuncAddr(funcDef)         — funcref-table index of a function
 //   getCompoundLitAddr(expr)     — address of a file-scope compound literal
@@ -16612,7 +16666,7 @@ function constEvalExpr(expr, policy) {
     case AST.EInt: return { kind: "int", intVal: expr.value };
     case AST.EFloat: return { kind: "float", floatVal: expr.value };
     case AST.EString: {
-      const addr = policy.getStringAddr(expr.value);
+      const addr = policy.getStringAddr(expr.value, expr);
       if (addr === null || addr === undefined) return null;
       return { kind: "addr", addrVal: addr };
     }
@@ -16917,6 +16971,13 @@ class CodeGenerator {
     this.staticDataOffset = 0;
     this.staticData = [];
     this.stringLiteralAddrs = new Map();
+    // todos/0228: literal-merge policy. OFF by default — each lexical string
+    // literal gets its OWN linear-memory storage, so a UB write through a
+    // char* stays local to that literal instead of silently corrupting every
+    // same-spelling literal (wasm has no page protection to fault on it). The
+    // opt-in --dedup-literals flag restores content-keyed merging when a build
+    // wants the data-segment size back (a `-fmerge-constants` analog).
+    this.dedupLiterals = !!this.compilerOptions.dedupLiterals;
     // __gcstr dedup: literal content (decoded UTF-8) → imported-global idx.
     // Populated by generateCode's pre-scan BEFORE any defined global exists.
     this.gcstrGlobalIdx = new Map();
@@ -17031,10 +17092,19 @@ class CodeGenerator {
   sizeOf(type) { return type.size; }
   alignOf(type) { return type.align; }
 
-  // --- String literal deduplication ---
-  getStringAddress(valueArray) {
-    // valueArray is a Uint8Array or regular array of bytes
-    const key = Array.from(valueArray).join(",");
+  // --- String literal storage (todos/0228) ---
+  // `valueArray` is the literal's bytes; `node` is the lexical EString AST
+  // node (its object identity), if the caller has it. Default policy: each
+  // lexical literal gets its OWN storage, keyed by node identity so the SAME
+  // occurrence visited across passes (const-eval + codegen) stays one address
+  // while two same-spelling literals never alias. --dedup-literals restores
+  // content-keyed merging. A caller with neither dedup nor a node (there are
+  // none today) falls to a fresh-key allocation, which never merges.
+  getStringAddress(valueArray, node) {
+    let key;
+    if (this.dedupLiterals) key = "c:" + Array.from(valueArray).join(",");
+    else if (node) key = node;
+    else key = {};
     if (this.stringLiteralAddrs.has(key)) return this.stringLiteralAddrs.get(key);
     const baseAddr = this.stackPages * 65536;
     const addr = baseAddr + this.staticDataOffset;
@@ -17168,7 +17238,7 @@ class CodeGenerator {
   _getConstEvalPolicy() {
     if (!this.__constEvalPolicy) {
       this.__constEvalPolicy = {
-        getStringAddr: (v) => this.getStringAddress(v),
+        getStringAddr: (v, node) => this.getStringAddress(v, node),
         getGlobalAddr: (vd) => {
           const a = this.globalArrayAddrs.get(vd);
           return a !== undefined ? a : null;
@@ -17419,11 +17489,11 @@ class CodeGenerator {
   }
 
   // --- Init to frame slot ---
-  emitStringToFrameSlot(strValue, arrayType, frameOffset) {
+  emitStringToFrameSlot(strValue, arrayType, frameOffset, strNode) {
     const arraySize = this.sizeOf(arrayType);
     const strLen = strValue.length;
     const copyLen = Math.min(arraySize, strLen);
-    const srcAddr = this.getStringAddress(strValue);
+    const srcAddr = this.getStringAddress(strValue, strNode);
     this.emitFrameAddr(frameOffset);
     this.body.i32Const(srcAddr);
     this.body.i32Const(copyLen);
@@ -17437,14 +17507,14 @@ class CodeGenerator {
   }
   emitInitToFrameSlot(type, initExpr, frameOffset) {
     if (type.isArray() && initExpr instanceof AST.EString) {
-      this.emitStringToFrameSlot(initExpr.value, type, frameOffset);
+      this.emitStringToFrameSlot(initExpr.value, type, frameOffset, initExpr);
       return;
     }
     if (type.isAggregate() && initExpr instanceof AST.EInitList) {
       const il = initExpr;
       if (type.isArray() && il.elements.length === 1 && il.elements[0] instanceof AST.EString &&
           stringLiteralCanInitArray(type, il.elements[0])) {
-        this.emitStringToFrameSlot(il.elements[0].value, type, frameOffset);
+        this.emitStringToFrameSlot(il.elements[0].value, type, frameOffset, il.elements[0]);
         return;
       }
       const srcAddr = this.allocateInitListStatic(il, type);
@@ -19185,7 +19255,7 @@ class CodeGenerator {
         break;
       }
       case AST.EString: {
-        const addr = this.getStringAddress(expr.value);
+        const addr = this.getStringAddress(expr.value, expr);
         this.body.i32Const(addr);
         break;
       }
@@ -20399,7 +20469,7 @@ function generateCode(units, outputFile, options) {
         if (wtEquals(wt, WT_F32)) globalIdx = wmod.addGlobalF32(varDef.initExpr.value, true);
         else globalIdx = wmod.addGlobalF64(varDef.initExpr.value, true);
       } else if (varDef.initExpr && varDef.initExpr instanceof AST.EString) {
-        const addr = cg.getStringAddress(varDef.initExpr.value);
+        const addr = cg.getStringAddress(varDef.initExpr.value, varDef.initExpr);
         globalIdx = wmod.addGlobalI32(addr, true);
       } else if (varDef.initExpr) {
         const val = cg._constEvalExpr(varDef.initExpr);
@@ -31799,7 +31869,7 @@ function main() {
   const opfsFiles = [];
   const runArgs = [];
   const warningFlags = { pointerDecay: false, circularDependency: false, largeStackFrame: true };
-  const compilerOptions = { debugSwitch: false, allowImplicitInt: false, allowEmptyParams: false, allowKnRDefinitions: false, allowImplicitFunctionDecl: false, allowUndefined: false, allowZeroLengthArrays: false, gcSections: false, gcNoExportRoots: false, noUndefined: false, timeReport: false, requireSources: [], backend: "default" };
+  const compilerOptions = { debugSwitch: false, allowImplicitInt: false, allowEmptyParams: false, allowKnRDefinitions: false, allowImplicitFunctionDecl: false, allowUndefined: false, allowZeroLengthArrays: false, gcSections: false, gcNoExportRoots: false, noUndefined: false, timeReport: false, dedupLiterals: false, requireSources: [], backend: "default" };
   let noXterm = false;
   // Emitted .html pages always use the synchronous single-file BLOCK_FS
   // image. It runs on every engine (Chrome, Firefox, Safari/iOS) because
@@ -31887,6 +31957,13 @@ function main() {
       compilerOptions.forceIrreducibleLowering = true;
     } else if (args[i] === "--trapping-float-conversions") {
       compilerOptions.trappingFloatConversions = true;
+    } else if (args[i] === "--dedup-literals" || args[i] === "-fmerge-constants") {
+      // todos/0228: opt back into content-keyed string-literal merging (off
+      // by default, so a UB write through one literal can't corrupt every
+      // same-spelling literal). Trades that safety for data-segment size.
+      compilerOptions.dedupLiterals = true;
+    } else if (args[i] === "-fno-merge-constants" || args[i] === "--no-dedup-literals") {
+      compilerOptions.dedupLiterals = false;
     } else if (args[i] === "-v" || args[i] === "--verbose") {
       compilerOptions.verbose = true;
     } else if (args[i] === "--dump-irred-segments") {
