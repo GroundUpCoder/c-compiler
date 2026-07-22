@@ -96,6 +96,20 @@ const DESK_ACT = deskEntries(['alauncher', 'notes.txt']);
 const script = [
   'winbox &',
   'wmctl wait win winbox',
+  // Settle-wait before snapshotting list1 (todos/0283): `wait win winbox` only
+  // proves the winbox SURFACE exists (kernel-side) — NOT that the wm has drained
+  // its startup event backlog and PLACED it. Under load the wm can still be
+  // mid-startup here, so list1 would catch the taskbar at its raw create
+  // position (e.g. 1024x36+56+86, create-focus still on it) and winbox at the
+  // kernel cascade (240x160+8+38, unfocused) — the ~33% flake. winbox's `f`
+  // flag is set by kernel create-focus only when the wm MAPS it (its first
+  // WMP_MOVE via place(), todos/0069), and the taskbar's EV_CREATED is drained
+  // BEFORE winbox's on the wm's in-order socket, so the taskbar MOVE(0,732) is
+  // guaranteed already processed by the kernel (FIFO) once winbox reads focused.
+  // Waiting on it settles BOTH placements. (WSID is recomputed below for the
+  // later legs; this early read is just to name the wait target.)
+  'WSID=$(wmctl list | grep winbox$ | sed "s/[^0-9].*//")',
+  'wmctl wait flag $WSID f',
   'echo ==list1',
   'wmctl list',
   'WSID=$(wmctl list | grep winbox$ | sed "s/[^0-9].*//")',
