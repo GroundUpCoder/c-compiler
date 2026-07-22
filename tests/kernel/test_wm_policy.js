@@ -1261,6 +1261,31 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('its self-park MOVE maps it', f.type === WMP.R_OK &&
     kernel.wmList().find(s => s.sid === cf.sid).mapped === true);
   await readEvent(wm2);                                // EV_MOVED echo
+  // Subscriber-owned ANCHORED children (todos/0282 — wm.c's own menu
+  // flyouts) are exempt from the gate: their placement is materialized
+  // from the parent at create, and no map ack could ever land anyway
+  // (every WM geometry/stacking op refuses children with EPERM), so
+  // gating one would strand it on the backstop timer.
+  const fbFly = makeFb(80, 60);
+  workers.get(wmPid).msg({ type: 'wm-sabs', fb: fbFly.sab, ring: null });
+  const cfly = await rpc(wmPid, K.OP.SURFACE_CREATE,
+    { w: 80, h: 60, title: '', flags: 64, parentSid: cf.sid, dx: 140, dy: 10 });
+  await readEvent(wm2);              // EV_CREATED only — no create-focus steal
+  check('subscriber-owned anchored child maps AT CREATE (todos/0282)',
+    cfly.sid > 0 && kernel.wmList().find(s => s.sid === cfly.sid).mapped === true,
+    JSON.stringify(kernel.wmList().find(s => s.sid === cfly.sid)));
+  // ...and raising its owner cannot sink it: _wmZNormalize re-slots the
+  // child above the root after every z mutation — the exact 0282
+  // start-menu inversion (wmFocus(root) used to raise the root above its
+  // then-ownerless flyout).
+  f = await cmd(wm2, WMP.FOCUS, [cf.sid]);
+  check('FOCUS the flyout\'s owner -> R_OK', f.type === WMP.R_OK);
+  {
+    const zt = kernel.wmList().map(s => s.sid);
+    check('anchored flyout stays ABOVE its owner after the owner raise (0282)',
+      zt.indexOf(cfly.sid) > zt.indexOf(cf.sid),
+      JSON.stringify(kernel.wmList().map(s => [s.sid, s.title])));
+  }
   // The last subscriber going away maps everything pending at once — a
   // dead WM can never hide windows (the kernel-chrome fallback shows the
   // full scene immediately).

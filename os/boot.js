@@ -50,6 +50,8 @@
 //                  value (default) leaves the baked windows scheme. A manual
 //                  ~/.config/keys always overrides — this only sets the default.
 //   --quiet        suppress boot progress on stderr
+//   --screen=WxH   headless screen dims (default: the kernel's 1024x768) —
+//                  small-viewport runs (todos/0282)
 //   --tty-out      fd 1/2 tty-kind even under pipes (isatty(1) true, so
 //                  shells go interactive — drive prompts/job control from
 //                  a script; output gains prompts/echo, no longer byte-clean)
@@ -76,6 +78,7 @@ let freshSystem = false;   // re-bake only the system blob (user files survive)
 let staleOk = false;       // skip the 0082 input-freshness check
 let quiet = false;
 let dumpState = false;
+let screenDims = null; // --screen=WxH: headless screen dims (kernel default 1024x768)
 let ttyOut = false;   // force fd1/2 tty-kind under pipes (drive interactive shells)
 let requireCleanOverlays = false;
 let allOverlays = false;
@@ -93,6 +96,11 @@ for (const a of process.argv.slice(2)) {
   else if (a === '--fresh') freshBoot = true;
   else if (a === '--fresh-system') freshSystem = true;
   else if (a === '--quiet') quiet = true;
+  else if (a.startsWith('--screen=')) {           // WxH (todos/0282: small-
+    const m = /^(\d+)x(\d+)$/.exec(a.slice(9));   // viewport headless runs)
+    if (!m) { process.stderr.write('boot: bad --screen (want WxH)\n'); process.exit(2); }
+    screenDims = { w: +m[1], h: +m[2] };
+  }
   else if (a === '--dump-state') dumpState = true;
   else if (a === '--tty-out') ttyOut = true;
   else if (a === '--overlays=all') allOverlays = true;
@@ -287,6 +295,7 @@ async function mountAndBoot() {
 
   const kernel = new K.Kernel({
     fs: kfs,
+    screen: screenDims || undefined,   // --screen=WxH (todos/0282)
     textService,   // todos/0275 — headless composite label text
     roImage: { prefix: '/usr', sab: roSab },   // todos/0180
     createWorker: K.nodeCreateWorker({ hostPath: HOST, kernelPath: KERNEL }),

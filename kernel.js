@@ -4014,8 +4014,13 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       // owns them (wm.c deliberately ignores foreign borderless surfaces —
       // taskbar-class, owner-positioned — but parks its OWN furniture, the
       // start menu being the worst teleport case); and a WM_MAP_TIMEOUT_MS
-      // backstop maps anything a wedged WM never places.
-      if (this._wmSubs.size &&
+      // backstop maps anything a wedged WM never places. Anchored children
+      // are exempt (todos/0282): their placement is materialized from the
+      // parent at create (_wmAnchorApply above) — placement IS decided —
+      // and no map ack could ever land anyway (every WM geometry/stacking
+      // op refuses children with EPERM), so gating a subscriber-owned one
+      // (wm.c's own menu flyouts) would strand it on the backstop timer.
+      if (this._wmSubs.size && !parent &&
           (!surf.borderless || this._wmSubOwned(pcb.pid))) {
         surf.mapped = false;
         var mapSelf = this;
