@@ -19,11 +19,8 @@
  * order, opened LAZILY at first codepoint miss; ASCII <=126 always
  * renders from face 0 (the pre-chain contract); a total miss draws the
  * synthesized tofu box (cell * wcwidth), never '?'. */
-#include <ft2build.h>
-#include FT_FREETYPE_H
-#include FT_OUTLINE_H
-#include "../fontchain.h"
-#include "../wcwidth.h"
+#include "../fontcore.h"   /* the shared glyph pipeline (todos/0277) —
+                            * pulls ft2build/freetype, fontchain.h, wcwidth.h */
 #include <stdlib.h>
 #include <string.h>
 
@@ -41,74 +38,37 @@
 #define KSVC_FACE0_ETC   "/etc/fonts/mono.ttf"
 #define KSVC_FACE0_BAKED "/usr/share/fonts/mono.ttf"
 
-/* ---- faces (shared across size slots; one pixel size active at a
- * time per face, re-set on demand) ------------------------------- */
+/* ---- faces (fontcore chain + face 0; one pixel size active at a time
+ * per face, re-set on demand) ------------------------------------ */
 static FT_Library g_ft;
 static FT_Face g_face0;
+static int g_face0Px;            /* current FT_Set_Pixel_Sizes on face 0 */
 static char g_fcPaths[FC_MAX_FALLBACKS][FC_PATH_MAX];
-static int g_fcCount;
-static FT_Face g_fbFace[FC_MAX_FALLBACKS];
-static signed char g_fbState[FC_MAX_FALLBACKS]; /* 0 untried / 1 open / -1 dead */
-static int g_facePx[1 + FC_MAX_FALLBACKS];      /* current FT_Set_Pixel_Sizes */
+static FcChain g_chain;          /* fallback chain (lazy open, resize-on-demand) */
 
-static FT_Face face_at(int idx, int px) {
-    FT_Face f;
-    if (idx == 0) {
-        f = g_face0;
-    } else {
-        int i = idx - 1;
-        if (g_fbState[i] < 0) return NULL;
-        if (g_fbState[i] == 0) {
-            if (FT_New_Face(g_ft, g_fcPaths[i], 0, &g_fbFace[i])) {
-                g_fbState[i] = -1;             /* dead: skip forever */
-                return NULL;
-            }
-            g_fbState[i] = 1;
-            g_facePx[idx] = 0;
-        }
-        f = g_fbFace[i];
+/* Face 0 sized to px, resized on demand (shared across size slots). */
+static FT_Face face_at0(int px) {
+    if (g_face0Px != px) {
+        if (FT_Set_Pixel_Sizes(g_face0, 0, (FT_UInt)px)) return NULL;
+        g_face0Px = px;
     }
-    if (g_facePx[idx] != px) {
-        if (FT_Set_Pixel_Sizes(f, 0, (FT_UInt)px)) return NULL;
-        g_facePx[idx] = px;
-    }
-    return f;
+    return g_face0;
 }
 
 /* The face that covers cp: face 0, else the chain in list order, else
- * NULL (tofu). ASCII always renders from face 0 (glyph 0 included). */
+ * NULL (tofu). ASCII always renders from face 0 (fontcore fc_probe). */
 static FT_Face face_for(unsigned cp, int px, FT_UInt *gi) {
-    FT_Face f0 = face_at(0, px);
+    FT_Face f0 = face_at0(px);
     if (!f0) return NULL;
-    *gi = FT_Get_Char_Index(f0, (FT_ULong)cp);
-    if (*gi || cp <= 126) return f0;
-    for (int i = 0; i < g_fcCount; i++) {
-        FT_Face ff = face_at(1 + i, px);
-        if (!ff) continue;
-        *gi = FT_Get_Char_Index(ff, (FT_ULong)cp);
-        if (*gi) return ff;
-    }
-    return NULL;
+    return fc_probe(f0, &g_chain, px, cp, gi);
 }
 
-/* ---- per-(px,flags) glyph caches (the gdi32 cache shape: flat [95]
- * ASCII array + linear-scan side cache of rendered A8 glyphs) ------ */
-typedef struct {
-    int loaded;
-    int advance;                 /* px */
-    int left, top;               /* bitmap_left / bitmap_top */
-    int w, h;
-    unsigned char *bmp;          /* A8 coverage, w*h, cache-owned */
-} Glyph;
-
+/* ---- per-(px,flags) glyph caches (the fontcore two-tier cache) ---- */
 typedef struct {
     int px, flags;
     int ascent, descent;         /* face-0 metrics at px; strip h = a+d */
     int cell;                    /* mono advance (tofu cell) */
-    Glyph ascii[95];             /* cp 32..126 */
-    unsigned *xcps;              /* side cache, linear scan */
-    Glyph *xglyphs;
-    int xn, xcap;
+    FcCache cache;               /* flat [95] ASCII + linear-scan side */
 } SizeSlot;
 
 static SizeSlot *g_slots;
@@ -119,7 +79,7 @@ static SizeSlot *slot_for(int px, int flags) {
     for (int i = 0; i < g_nslots; i++)
         if (g_slots[i].px == px && g_slots[i].flags == flags)
             return &g_slots[i];
-    FT_Face f0 = face_at(0, px);
+    FT_Face f0 = face_at0(px);
     if (!f0) return NULL;
     if (g_nslots == g_slotCap) {
         int nc = g_slotCap ? g_slotCap * 2 : 4;
@@ -146,101 +106,28 @@ static SizeSlot *slot_for(int px, int flags) {
     return s;
 }
 
-/* Synthesized tofu box (the gdi32 glyph_tofu rule): a LOUD visible gap
- * marker for a code point NO chain face covers — cell * wcwidth wide,
- * never a '?' that reads as data corruption. */
-static void glyph_tofu(SizeSlot *s, Glyph *g, unsigned cp) {
-    int adv = s->cell * (wcwidth_cp(cp) == 2 ? 2 : 1);
-    int w = adv > 4 ? adv - 2 : 6;
-    int h = s->ascent > 4 ? s->ascent - 1 : 8;
-    g->advance = adv > 0 ? adv : w + 2;
-    g->left = 1;
-    g->top = s->ascent - 1;                    /* box base sits on baseline */
-    g->bmp = calloc((size_t)w * h, 1);
-    if (!g->bmp) return;
-    g->w = w;
-    g->h = h;
-    for (int x = 0; x < w; x++)
-        g->bmp[x] = g->bmp[(h - 1) * w + x] = 255;
-    for (int y = 0; y < h; y++)
-        g->bmp[y * w] = g->bmp[y * w + w - 1] = 255;
-}
-
-static Glyph *glyph_render(SizeSlot *s, Glyph *g, unsigned cp) {
+/* Render callback (fontcore cache seam): fill g for cp in this slot —
+ * the covering face via fc_probe, else the tofu box; ksvc's title
+ * weight is the only per-render knob (bold flag -> outline embolden). */
+static FcGlyph *ksvc_render(void *ctx, FcGlyph *g, unsigned cp) {
+    SizeSlot *s = (SizeSlot *)ctx;
     g->loaded = 1;
     FT_UInt gi;
     FT_Face face = face_for(cp, s->px, &gi);
     if (!face) {
-        glyph_tofu(s, g, cp);
+        fc_tofu(g, s->cell, s->ascent, cp);
         return g;
     }
-    if (FT_Load_Glyph(face, gi, FT_LOAD_DEFAULT)) return g;
-    FT_GlyphSlot slot = face->glyph;
-    if (s->flags & 1) {
-        /* embolden affects advances too, so measure and render agree by
-         * construction (both come through this one cache fill). */
-        FT_Pos xstr = (FT_Pos)face->size->metrics.x_ppem * KSVC_BOLD_XDELTA / 1024;
-        if (slot->format == FT_GLYPH_FORMAT_OUTLINE && xstr > 0) {
-            FT_Outline_EmboldenXY(&slot->outline, xstr, xstr);
-            slot->advance.x += xstr;
-        }
-    }
-    g->advance = (int)(slot->advance.x >> 6);
-    if (FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL)) return g;
-    FT_Bitmap *bm = &slot->bitmap;
-    g->w = (int)bm->width;
-    g->h = (int)bm->rows;
-    g->left = slot->bitmap_left;
-    g->top = slot->bitmap_top;
-    if (g->w > 0 && g->h > 0) {
-        g->bmp = malloc((size_t)g->w * g->h);
-        if (!g->bmp) { g->w = g->h = 0; return g; }
-        for (int y = 0; y < g->h; y++)
-            memcpy(&g->bmp[y * g->w], &bm->buffer[y * bm->pitch], (size_t)g->w);
-    }
-    return g;
+    FcRenderOpts o = { 0, (s->flags & 1) ? KSVC_BOLD_XDELTA : 0 };
+    return fc_render_face(g, face, gi, o);
 }
 
-/* Glyph for one CODE POINT. NB the returned pointer is only stable
- * until the next glyph() call on the same slot (side cache reallocs). */
-static Glyph *glyph(SizeSlot *s, unsigned cp) {
+/* Glyph for one CODE POINT (control chars -> '?', ksvc's rule). NB the
+ * returned pointer is only stable until the next glyph() call on the
+ * same slot (side cache reallocs). */
+static FcGlyph *glyph(SizeSlot *s, unsigned cp) {
     if (cp < 32) cp = '?';                     /* control chars, term's rule */
-    if (cp <= 126) {
-        Glyph *g = &s->ascii[cp - 32];
-        return g->loaded ? g : glyph_render(s, g, cp);
-    }
-    for (int i = 0; i < s->xn; i++)
-        if (s->xcps[i] == cp) return &s->xglyphs[i];
-    if (s->xn == s->xcap) {
-        int nc = s->xcap ? s->xcap * 2 : 16;
-        Glyph *ng = realloc(s->xglyphs, (size_t)nc * sizeof(Glyph));
-        unsigned *np = realloc(s->xcps, (size_t)nc * sizeof(unsigned));
-        if (ng) s->xglyphs = ng;
-        if (np) s->xcps = np;
-        if (!ng || !np) return glyph(s, '?');  /* OOM: keep drawing */
-        s->xcap = nc;
-    }
-    s->xcps[s->xn] = cp;
-    Glyph *g = &s->xglyphs[s->xn++];
-    memset(g, 0, sizeof *g);
-    return glyph_render(s, g, cp);
-}
-
-/* ---- UTF-8 stepping — the win32_internal.h __u8_next rules verbatim
- * (malformed bytes decode as U+FFFD past the bad lead byte only; the
- * tri-plication is the recorded §14.4 follow-up). ------------------ */
-static unsigned u8_next(const char *s, int len, int *i) {
-    unsigned char c = (unsigned char)s[(*i)++];
-    if (c < 0x80) return c;
-    int cont = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : -1;
-    if (cont < 0) return 0xFFFD;               /* stray continuation byte */
-    unsigned cp = c & (unsigned)(0x3F >> cont);
-    for (int k = 0; k < cont; k++) {
-        if (*i >= len || ((unsigned char)s[*i] & 0xC0) != 0x80)
-            return 0xFFFD;                     /* truncated sequence */
-        cp = (cp << 6) | ((unsigned char)s[(*i)++] & 0x3Fu);
-    }
-    return cp;
+    return fc_cache_get(&s->cache, cp, ksvc_render, s);
 }
 
 /* ---- ABI (design §4) --------------------------------------------- */
@@ -253,7 +140,8 @@ int ksvc_abi(void) { return KSVC_ABI_VERSION; }
  * chrome at next boot (the settled item's per-boot discipline). */
 int ksvc_init(void) {
     if (FT_Init_FreeType(&g_ft)) return -1;
-    g_fcCount = fc_load(g_fcPaths, FC_MAX_FALLBACKS);
+    int n = fc_load(g_fcPaths, FC_MAX_FALLBACKS);
+    fc_chain_init(&g_chain, g_ft, g_fcPaths, n, NULL);   /* silent on load fail */
     if (FT_New_Face(g_ft, KSVC_FACE0_ETC, 0, &g_face0) &&
         FT_New_Face(g_ft, KSVC_FACE0_BAKED, 0, &g_face0))
         return -2;
@@ -285,7 +173,7 @@ int ksvc_text_measure(const char *utf8, int len, int px, int flags) {
     if (!s) return 0;
     int w = 0;
     for (int i = 0; i < len; )
-        w += glyph(s, u8_next(utf8, len, &i))->advance;
+        w += glyph(s, fc_u8_next(utf8, len, &i))->advance;
     return w;
 }
 
@@ -300,7 +188,7 @@ static unsigned char *g_out;
 static int g_outCap;
 
 static void blit(unsigned char *px0, int outW, int outH, int stride,
-                 Glyph *g, int penX, int baseline,
+                 FcGlyph *g, int penX, int baseline,
                  unsigned fr, unsigned fg_, unsigned fb, unsigned fa) {
     int x0 = penX + g->left;
     int y0 = baseline - g->top;
@@ -336,7 +224,7 @@ unsigned char *ksvc_text_render(const char *utf8, int len, int px, int maxW,
      * if no face covers it), else the raw string hard-clipped at maxW. */
     int total = 0;
     for (int i = 0; i < len; )
-        total += glyph(s, u8_next(utf8, len, &i))->advance;
+        total += glyph(s, fc_u8_next(utf8, len, &i))->advance;
     int endByte = len;          /* bytes of the string we draw */
     int ell = 0;                /* 0 none / 1 U+2026 / 3 "..." */
     int w;
@@ -355,7 +243,7 @@ unsigned char *ksvc_text_render(const char *utf8, int len, int px, int maxW,
             int acc = 0, i = 0;
             endByte = 0;
             while (i < len) {
-                int adv = glyph(s, u8_next(utf8, len, &i))->advance;
+                int adv = glyph(s, fc_u8_next(utf8, len, &i))->advance;
                 if (acc + adv + ellW > maxW) break;
                 acc += adv;
                 endByte = i;
@@ -386,16 +274,16 @@ unsigned char *ksvc_text_render(const char *utf8, int len, int px, int maxW,
     unsigned fb = (rgba_fg >> 8) & 0xFF, fa = rgba_fg & 0xFF;
     int pen = 0;
     for (int i = 0; i < endByte; ) {
-        Glyph *g = glyph(s, u8_next(utf8, endByte, &i));
+        FcGlyph *g = glyph(s, fc_u8_next(utf8, endByte, &i));
         blit(px0, w, h, stride, g, pen, s->ascent, fr, fg_, fb, fa);
         pen += g->advance;
     }
     if (ell == 1) {
-        Glyph *g = glyph(s, 0x2026);
+        FcGlyph *g = glyph(s, 0x2026);
         blit(px0, w, h, stride, g, pen, s->ascent, fr, fg_, fb, fa);
     } else if (ell == 3) {
         for (int k = 0; k < 3; k++) {
-            Glyph *g = glyph(s, '.');
+            FcGlyph *g = glyph(s, '.');
             blit(px0, w, h, stride, g, pen, s->ascent, fr, fg_, fb, fa);
             pen += g->advance;
         }

@@ -38,8 +38,9 @@
 #include <sys/wait.h>
 #include "../keys.h"     /* the system keyboard scheme (todos/0149) */
 #include "../launch.h"   /* LAUNCH_ENV_PATH/HOME — the canonical env strings */
-#include "../fontchain.h" /* fallback face list (Unicode Phase D, W7) */
-#include "../wcwidth.h"   /* double-width cells; MUST MATCH kernel.js twin */
+#include "../fontcore.h"  /* the shared glyph pipeline (todos/0277) — pulls
+                           * freetype, fontchain.h (fallback list) and
+                           * wcwidth.h (double-width; MUST MATCH kernel.js) */
 
 /* User-override font first, then the baked vendor default (todos/0040 —
  * systemd-style /etc: an empty /etc must boot). */
@@ -127,17 +128,13 @@ static FT_Library ft_lib;
 static FT_Face face;
 static int cell_w, cell_h, ascent;
 
-/* Two-tier glyph cache (the gdi32 font_glyph shape, todos/0211): ASCII in
- * a flat array rendered eagerly at startup, everything else in a
- * lazily-grown linear-scan side cache. A code point the face lacks
- * renders as a synthesized tofu box — a LOUD gap marker, never a '?'
- * that reads as data corruption. NB a side-cache pointer is only stable
- * until the next cp_glyph call (the cache reallocs). */
-typedef struct { int w, h, left, top, loaded; unsigned char *bmp; } Glyph;
-static Glyph glyphs[95];           /* ASCII 32..126, rendered once */
-static Glyph *xglyphs;             /* codepoint side cache */
-static uint32_t *xcps;
-static int xn, xcap;
+/* Two-tier glyph cache (fontcore FcCache, todos/0277): ASCII in a flat
+ * array rendered eagerly at startup, everything else in a lazily-grown
+ * linear-scan side cache. A code point the face lacks renders as a
+ * synthesized tofu box — a LOUD gap marker, never a '?' that reads as
+ * data corruption. NB a side-cache pointer is only stable until the next
+ * cp_glyph call (the cache reallocs). */
+static FcCache g_cache;
 
 /* ============================================================ grid ops */
 
@@ -713,112 +710,44 @@ static void handle_key(const SDL_KeyboardEvent *k) {
 
 /* ============================================================ glyphs */
 
-/* Synthesized tofu box for a code point NO chain face covers (the gdi32
- * glyph_tofu shape, 0211): a LOUD visible gap marker, never a '?' that
- * reads as data corruption (a face's own .notdef can be EMPTY —
- * rendering glyph 0 could be invisible). A wide code point gets a
- * 2-cell box — the honest footprint of the missing glyph. */
-static void glyph_tofu(Glyph *g, uint32_t cp) {
-    int span = cell_w * (wcwidth_cp(cp) == 2 ? 2 : 1);
-    int w = span > 4 ? span - 2 : 6;
-    int h = ascent > 4 ? ascent - 1 : 8;
-    g->bmp = malloc((size_t)w * h);
-    if (!g->bmp) return;
-    memset(g->bmp, 0, (size_t)w * h);
-    g->w = w;
-    g->h = h;
-    g->left = 1;
-    g->top = ascent - 1;                     /* box base sits on baseline */
-    for (int x = 0; x < w; x++)
-        g->bmp[x] = g->bmp[(h - 1) * w + x] = 255;
-    for (int y = 0; y < h; y++)
-        g->bmp[y * w] = g->bmp[y * w + w - 1] = 255;
-}
-
-/* ---- the fallback chain (Unicode Phase D, W7) ----
+/* ---- the fallback chain (Unicode Phase D, W7; fontcore FcChain) ----
  * Face 0 is the baked/user mono face `face`; fc_paths load once at
  * startup and each fallback face opens LAZILY the first time a code
  * point misses face 0 (a pure-ASCII session never touches a 12 MB CJK
  * face). The rendered bitmap lands in the cp glyph cache, so the chain
  * is probed once per code point, never per paint. */
 static char fc_paths[FC_MAX_FALLBACKS][FC_PATH_MAX];
-static int fc_n;
-static FT_Face fc_faces[FC_MAX_FALLBACKS];
-static signed char fc_state[FC_MAX_FALLBACKS]; /* 0 untried / 1 open / -1 bad */
+static FcChain g_chain;
 
-static FT_Face fc_face(int i) {
-    if (fc_state[i] < 0) return NULL;
-    if (fc_state[i] == 0) {
-        if (FT_New_Face(ft_lib, fc_paths[i], 0, &fc_faces[i])) {
-            fc_state[i] = -1;
-            fprintf(stderr, "term: fallback face %s failed to load (skipping)\n",
-                    fc_paths[i]);
-            return NULL;
-        }
-        FT_Set_Pixel_Sizes(fc_faces[i], 0, FONT_SIZE);
-        fc_state[i] = 1;
-    }
-    return fc_faces[i];
+static void term_fc_fail(const char *p) {
+    fprintf(stderr, "term: fallback face %s failed to load (skipping)\n", p);
 }
 
 /* The face covering cp: face 0, else the chain in list order, else NULL
- * (tofu). ASCII always renders from face 0. */
+ * (tofu). ASCII always renders from face 0 (fontcore fc_probe). */
 static FT_Face face_for(uint32_t cp, FT_UInt *gi) {
-    *gi = FT_Get_Char_Index(face, (FT_ULong)cp);
-    if (*gi || cp <= 126) return face;
-    for (int i = 0; i < fc_n; i++) {
-        FT_Face ff = fc_face(i);
-        if (!ff) continue;
-        *gi = FT_Get_Char_Index(ff, (FT_ULong)cp);
-        if (*gi) return ff;
-    }
-    return NULL;
+    return fc_probe(face, &g_chain, FONT_SIZE, cp, gi);
 }
 
-static Glyph *glyph_render(Glyph *g, uint32_t cp) {
+/* Render callback (fontcore cache seam): fill g for cp — the covering
+ * face via fc_probe, else the tofu box (cell_w x wcwidth). Term is
+ * plain AA at one fixed size: no mono threshold, no embolden. */
+static FcGlyph *term_render(void *ctx, FcGlyph *g, unsigned cp) {
+    (void)ctx;
     g->loaded = 1;
     FT_UInt gi;
     FT_Face f = face_for(cp, &gi);
-    if (!f) { glyph_tofu(g, cp); return g; }
-    if (FT_Load_Glyph(f, gi, FT_LOAD_DEFAULT)) return g;
-    if (FT_Render_Glyph(f->glyph, FT_RENDER_MODE_NORMAL)) return g;
-    FT_Bitmap *bm = &f->glyph->bitmap;
-    g->w = (int)bm->width;
-    g->h = (int)bm->rows;
-    g->left = f->glyph->bitmap_left;
-    g->top = f->glyph->bitmap_top;
-    if (g->w > 0 && g->h > 0) {
-        g->bmp = malloc((size_t)g->w * g->h);
-        if (!g->bmp) { g->w = g->h = 0; return g; }
-        for (int y = 0; y < g->h; y++)
-            memcpy(&g->bmp[y * g->w], &bm->buffer[y * bm->pitch], (size_t)g->w);
-    }
-    return g;
+    if (!f) { fc_tofu(g, cell_w, ascent, cp); return g; }
+    FcRenderOpts o = { 0, 0 };
+    return fc_render_face(g, f, gi, o);
 }
 
-/* Glyph for one code point: ASCII from the flat array, everything else
- * from the linear-scan side cache, rendered on first use. */
-static Glyph *cp_glyph(uint32_t cp) {
+/* Glyph for one code point (control chars -> ' ', defensive; the render
+ * loop already skips cp <= 32). ASCII from the flat array, everything
+ * else from the linear-scan side cache, rendered on first use. */
+static FcGlyph *cp_glyph(uint32_t cp) {
     if (cp < 32) cp = ' ';                   /* defensive: never stamped */
-    if (cp <= 126) {
-        Glyph *g = &glyphs[cp - 32];
-        return g->loaded ? g : glyph_render(g, cp);
-    }
-    for (int i = 0; i < xn; i++)
-        if (xcps[i] == cp) return &xglyphs[i];
-    if (xn == xcap) {
-        int nc = xcap ? xcap * 2 : 16;
-        Glyph *ng = realloc(xglyphs, (size_t)nc * sizeof(Glyph));
-        uint32_t *np = realloc(xcps, (size_t)nc * sizeof(uint32_t));
-        if (ng) xglyphs = ng;
-        if (np) xcps = np;
-        if (!ng || !np) return cp_glyph('?');    /* OOM: keep drawing */
-        xcap = nc;
-    }
-    xcps[xn] = cp;
-    Glyph *g = &xglyphs[xn++];
-    memset(g, 0, sizeof *g);
-    return glyph_render(g, cp);
+    return fc_cache_get(&g_cache, cp, term_render, NULL);
 }
 
 /* ============================================================ render */
@@ -866,7 +795,7 @@ static void render(void) {
             int x0 = c * cell_w, y0 = r * cell_h;
             if (cell->cp <= 32) continue;    /* space + defensive C0 +
                                                 CP_WIDE_CONT: bg only */
-            Glyph *g = cp_glyph(cell->cp);
+            FcGlyph *g = cp_glyph(cell->cp);
             if (!g->bmp) continue;
             /* A wide lead draws across its own cell AND the continuation
              * cell to its right (Phase D). */
@@ -1018,8 +947,9 @@ static int load_glyphs(void) {
     if (FT_Init_FreeType(&ft_lib)) return -1;
     if (FT_New_Face(ft_lib, FONT_PATH, 0, &face) &&
         FT_New_Face(ft_lib, FONT_FALLBACK, 0, &face)) return -1;
-    fc_n = fc_load(fc_paths, FC_MAX_FALLBACKS);   /* fallback chain paths;
-                                                     faces open lazily */
+    int n = fc_load(fc_paths, FC_MAX_FALLBACKS);   /* fallback chain paths;
+                                                      faces open lazily */
+    fc_chain_init(&g_chain, ft_lib, fc_paths, n, term_fc_fail);
     FT_Set_Pixel_Sizes(face, 0, FONT_SIZE);
     cell_h = (int)(face->size->metrics.height >> 6);
     ascent = (int)(face->size->metrics.ascender >> 6);
@@ -1029,8 +959,8 @@ static int load_glyphs(void) {
     if (FT_Load_Glyph(face, mi, FT_LOAD_DEFAULT)) return -1;
     cell_w = (int)(face->glyph->advance.x >> 6);
     if (cell_w <= 0) cell_w = (FONT_SIZE * 3) / 5;
-    for (int ch = 32; ch < 127; ch++)
-        glyph_render(&glyphs[ch - 32], (uint32_t)ch);
+    for (uint32_t ch = 32; ch < 127; ch++)
+        term_render(NULL, &g_cache.ascii[ch - 32], ch);
     return 0;
 }
 
