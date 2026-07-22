@@ -1,8 +1,16 @@
 # 0273 — term: scrollback + scrollbar + menu bar + settings window (macOS Terminal parity)
 
-- **Status**: open (user-requested 2026-07-21)
+- **Status**: open — child (a) scrollback DONE; b/c/d remain (user-requested 2026-07-21)
 - **Design**: — (source `os/term/term.c`, ~1118 lines; VT100/ANSI emulator)
 - **Difficulty**: heavy (umbrella — split into children when scoped)
+- **Progress**: child **(a) scrollback history ring SHIPPED in v145** (2026-07-23,
+  merge `24a97c0`, image bump `5cb90c4`, live on apex). Ring (`SCROLLBACK_MAX=2000`,
+  view-offset, wheel + PageUp/PageDown + snap-to-live) independent of the ANSI
+  scroll region (`scroll_up` gained a `to_hist` flag fed only by true top-of-screen
+  main-grid scrolling). Remaining children: **(b) side scrollbar** wired to (a),
+  **(c) menu bar** (must ride the anchored-child uniform-menu facility —
+  `notes/menu-uniform-arch-2026-07-16.md`, NOT a 2nd menu path), **(d) settings
+  window + persistence**. Sequence b → c → d as separate lanes.
 
 ## Goal
 
