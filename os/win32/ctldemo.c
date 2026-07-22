@@ -29,6 +29,7 @@
 #define IDC_DESC_PLAIN 106
 #define IDC_DESC_MN    107
 #define IDC_DESC_REF   108
+#define IDC_DESC_CHK   109
 #define IDB_ADD        200
 #define IDB_GREET      201
 #define IDB_ABOUT      202
@@ -120,6 +121,12 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                        300, 284, 76, 30, hwnd, (HMENU)IDB_ABOUT, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "Quit", WS_CHILD | WS_VISIBLE,
                        388, 284, 76, 30, hwnd, (HMENU)IDB_QUIT, NULL, NULL);
+        /* check/radio label vcenter acceptance (0278, the 0236 pattern):
+         * a 28px descender-labelled checkbox — the pixel test measures its
+         * label's descender extent against IDC_DESC_REF. Created LAST so
+         * existing BUTTON:n agent indices stay stable. */
+        CreateWindowEx(0, "BUTTON", "No gyp", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                       288, 160, 130, 28, hwnd, (HMENU)IDC_DESC_CHK, NULL, NULL);
         SetScrollRange(GetDlgItem(hwnd, IDC_SCROLL), SB_CTL, 0, 20, FALSE);
         return 0;
 

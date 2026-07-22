@@ -247,6 +247,20 @@ check("mnemonic-branch 28px STATIC: full descender extent, within the control",
 const mnUl = maxInkRow(dP, 288, 288 + 12, 78, 78 + 28);
 check("mnemonic underline renders below the baseline, unclipped",
   mnUl > mn.o && mnUl <= 78 + 28 - 1, JSON.stringify({ mnUl, mn }));
+/* 0278 red->green pin: btn_paint's check/radio branch drew the label at
+ * (h-14)/2 — the retired 5x7-era text height — so with the 28px stock cell
+ * the baseline landed at row 29 of a 28px control and the descender rows
+ * clipped off the bottom edge. Measured like the STATICs above, offset by
+ * the label's x+18 start (past the 13px box, which stays left of the
+ * measured columns). Full descender extent inside the control is the
+ * no-clip invariant. */
+const cdj = {
+  o: maxInkRow(dP, 288 + 18 + 12, 288 + 18 + 26, 160, 160 + 28),
+  g: maxInkRow(dP, 288 + 18 + 36, 288 + 18 + 74, 160, 160 + 28),
+};
+cdj.dj = cdj.g - cdj.o;
+check("28px checkbox label (0278): full descender extent, within the control",
+  cdj.dj === ref.dj && cdj.g <= 160 + 28 - 1, JSON.stringify({ cdj, ref }));
 
 /* label click -> WM_COMMAND */
 check('wmctl click Greet fires WM_COMMAND (no pixels)',

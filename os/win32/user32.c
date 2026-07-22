@@ -3049,7 +3049,11 @@ static void btn_paint(HWND h) {
                 DeleteObject((HGDIOBJ)p);
             }
         }
-        draw_label_mn(dc, 18, (h->h - 14) / 2, text_get(h), label);
+        SIZE sz;
+        GetTextExtentPoint32(dc, label, (int)strlen(label), &sz);
+        int ty = (h->h - sz.cy) / 2;
+        if (ty < 0) ty = 0;
+        draw_label_mn(dc, 18, ty, text_get(h), label);
     } else {                                     /* push button */
         FillRect(dc, &r, GetSysColorBrush(COLOR_BTNFACE));
         RECT face = r;
