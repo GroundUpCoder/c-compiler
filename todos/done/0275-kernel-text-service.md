@@ -1,9 +1,13 @@
 # 0275 — kernel-C text service: FreeType label rasterizer replaces compositor Canvas2D text
 
-- **Status**: open (user-directed 2026-07-22 — the direction is settled, do
-  not re-litigate; from the host-borrowed-shortcut audit,
+- **Status**: DONE (landed 2026-07-22, branch ksvc-impl — image v139;
+  implementation log `logs/2026-07-22/ksvc-text.md`; was user-directed
+  2026-07-22 from the host-borrowed-shortcut audit,
   `logs/2026-07-22/host-borrow-audit.md`)
-- **Design**: this file (promote to a topic doc if the blob grows)
+- **Design**: `todos/0275-kernel-text-service-design.md` (committed 2026-07-22,
+  branch ksvc-design — ABI, import env, integration, implementation plan;
+  feasibility spike: **GO**, FreeType builds/instantiates/rasterizes under
+  our compiler with a minimal kernel-side env, spike at `os/ksvc/spike/`)
 - **Difficulty**: heavy
 
 ## Goal

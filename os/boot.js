@@ -66,6 +66,7 @@ const K = require(KERNEL);
 const { BLOCK_FS } = require(HOST);
 const CompilerJS = require(path.join(ROOT, 'compiler.js'));
 const COMMON = require(path.join(__dirname, 'os-common.js'));
+const OS_KSVC = require(path.join(__dirname, 'ksvc.js'));
 
 /* ---- args ---- */
 let imagePath = path.join(__dirname, 'os-system.img');
@@ -279,8 +280,14 @@ async function mountAndBoot() {
   const ccCompile = COMMON.createCcDriver(CompilerJS, kfs);
   const interactive = !!process.stdin.isTTY;
 
+  // Kernel text service (todos/0275): same blob, same loader as the browser
+  // kernel worker — a throw here fails the boot loudly (nonzero exit), so
+  // headless composites can never quietly go textless.
+  const textService = OS_KSVC.load(kfs, { log: quiet ? () => {} : bootLog });
+
   const kernel = new K.Kernel({
     fs: kfs,
+    textService,   // todos/0275 — headless composite label text
     roImage: { prefix: '/usr', sab: roSab },   // todos/0180
     createWorker: K.nodeCreateWorker({ hostPath: HOST, kernelPath: KERNEL }),
     loadImage: (p) => COMMON.readFileBytes(kfs, p),

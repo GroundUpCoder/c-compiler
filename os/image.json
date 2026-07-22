@@ -1,5 +1,5 @@
 {
-  "version": 138,
+  "version": 139,
   "overlays": [
     {
       "id": "clang-apps",
@@ -12,6 +12,7 @@
   "system": {
     "dirs": [
       "/usr/bin",
+      "/usr/lib",
       "/usr/share",
       "/usr/share/fonts",
       "/usr/share/gucman",
@@ -25,6 +26,9 @@
       "/usr/share/sounds"
     ],
     "files": {
+      "/usr/lib/ksvc.wasm": {
+        "project": "os/ksvc/bin.json"
+      },
       "/usr/bin/sh": {
         "project": "vendor/busybox/bin.json"
       },

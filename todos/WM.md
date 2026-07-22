@@ -187,8 +187,10 @@ deferred.
 this pass as the ONLY compositor: shm surfaces seq-gated into cached
 per-surface GPUTextures via `writeTexture`, gpu surfaces imported once per
 ImageBitmap via `copyExternalImageToTexture`, chrome as flat quads over a
-1×1 white texture, title text + the close 'x' as cached label textures,
-nearest sampling at the dst viewport. No Canvas2D fallback — WebGPU
+1×1 white texture, title text + the close 'x' as cached label textures
+(rasterized by the ksvc kernel text service since todos/0275 — our
+FreeType/fontchain stack, straight-alpha bytes via `writeTexture`; the
+Canvas2D label path is deleted), nearest sampling at the dst viewport. No Canvas2D fallback — WebGPU
 missing in the kernel worker is a loud `boot-nogpu` guard
 (kernel-worker.js probe + os.html screen). The kernel-drawn cursor sprite
 is still not-yet (native browser cursor — see the deviations list). WebGPU
@@ -1048,7 +1050,10 @@ overlap). Image v27.
   gpu surfaces imported once per ImageBitmap via
   `copyExternalImageToTexture`, chrome as flat quads over a 1×1 white
   texture, title text + the close 'x' as cached label textures (rasterized
-  through a throwaway 2D canvas — a texture source, not scene assembly).
+  by the kernel's ksvc text service since todos/0275 — kernel.textService,
+  the same blob the headless composite blits through, so browser and
+  headless text agree byte-for-byte; the old throwaway-2D-canvas path is
+  DELETED and the compositor throws without a text service).
   No fallback: kernel-worker.js's `boot-nogpu` guard is the failure mode.
   `routeInput` maps the bridge's raw events through SDL_WEB's tables into
   `wmKey`/`wmPointer`.

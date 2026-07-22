@@ -1,0 +1,14 @@
+{
+  "name": "ksvc",
+  "description": "Kernel service blob (todos/0275): FreeType label rasterizer, kernel-worker-instantiated (no process)",
+  "deps": [
+    "../../vendor/freetype/lib.json"
+  ],
+  "includes": [
+    "../../vendor/freetype/demo",
+    "../../vendor/freetype/include"
+  ],
+  "sources": [
+    "ksvc.c"
+  ]
+}

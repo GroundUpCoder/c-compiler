@@ -1075,9 +1075,16 @@ var WM_TITLE_H = 30;                         // font-20 retune (v133-qa): the
                                              // caption must read >= the 30px
                                              // MENU_BAR_H, not under it (was 28,
                                              // undersized) — 30px holds the 20px
-                                             // bold compositor label (compositor.js
-                                             // LABEL_FONT/LABEL_H must agree — the
+                                             // bold label (WM_LABEL_PX — the
                                              // shared-chrome rule)
+var WM_LABEL_PX = 20;                        // label text pixel size (todos/0275):
+                                             // BOTH composites — the browser
+                                             // compositor's labelFor and the
+                                             // headless _blitLabel — render
+                                             // chrome text via the ksvc blob at
+                                             // this ONE size; strip height comes
+                                             // from the render header (~28 at
+                                             // 20px, the v133 rhythm)
 var WM_CLOSE_W = 20, WM_CLOSE_PAD = 4;       // close box, right-aligned in the bar
 var WM_BOX_GAP = 2;                          // between the [min][max][close] boxes
                                              // (todos/0030; same 20px metrics)
@@ -1913,6 +1920,14 @@ function Kernel(opts) {
   // only: standalone processes already own a private in-process fs.
   this._roImage = (this._brokered && opts.roImage && opts.roImage.sab &&
                    opts.roImage.prefix) ? opts.roImage : null;
+  // Kernel text service (todos/0275): the ksvc blob handle (os/ksvc.js
+  // load()), PUBLIC — the browser compositor reads kernel.textService, the
+  // headless composite blits through _blitLabel. OS embedders (kernel-worker,
+  // boot.js) hard-fail the boot when the blob won't load, so an OS kernel
+  // always has one; a bare Kernel without it (non-OS embedders, unit tests —
+  // nothing to read a font from) composites textless chrome. That is
+  // capability ABSENCE, not a fallback renderer.
+  this.textService = opts.textService || null;
   // System clipboard (todos/0090): { fmt, bytes: Uint8Array } or null.
   // Kernel-owned so it outlives the copying process; see OP.CLIP_SET.
   this._clipboard = null;
@@ -5716,11 +5731,47 @@ Kernel.prototype.wmScreenshot = function (sid) {
   return { w: s.w, h: s.h, rgba: rgba };
 };
 
+/* Label text into an RGBA composite (todos/0275): render via the ksvc blob
+ * at WM_LABEL_PX and src-over the straight-alpha bytes with the exact 0063
+ * integer formula, clipped to W*H. Geometry contract with compositor.js
+ * (the two composites MUST place text identically): x is the left edge
+ * (opts.cx: the center — the caller passes the strip's center x), y is the
+ * vertical CENTER (opts.top: the top edge); the label centers itself from
+ * the render header's h. No textService (bare-Kernel embedders): no text. */
+Kernel.prototype._blitLabel = function (out, W, H, x, y, text, maxW, rgba, opts) {
+  if (!this.textService) return;
+  var r = this.textService.render(text, WM_LABEL_PX, Math.ceil(maxW), rgba, 1);
+  var x0 = Math.round(opts && opts.cx ? x - r.w / 2 : x);
+  var y0 = Math.round(opts && opts.top ? y : y - r.h / 2);
+  var b = r.bytes;
+  for (var gy = 0; gy < r.h; gy++) {
+    var oy = y0 + gy;
+    if (oy < 0 || oy >= H) continue;
+    for (var gx = 0; gx < r.w; gx++) {
+      var ox = x0 + gx;
+      if (ox < 0 || ox >= W) continue;
+      var si = (gy * r.w + gx) * 4;
+      var a = b[si + 3];
+      if (!a) continue;
+      var di = (oy * W + ox) * 4, inv = 255 - a;
+      out[di] = (b[si] * a + out[di] * inv + 127) / 255 | 0;
+      out[di + 1] = (b[si + 1] * a + out[di + 1] * inv + 127) / 255 | 0;
+      out[di + 2] = (b[si + 2] * a + out[di + 2] * inv + 127) / 255 | 0;
+      out[di + 3] = 255;
+    }
+  }
+};
+
 /* Screenshot the screen: CPU composite of the scene in z-order — desktop
- * fill, then each surface's front buffer + its kernel chrome (solid fills;
- * text is a browser-compositor affordance, not part of the deterministic
- * composite). Row blits when unscaled; a nearest-neighbor loop maps the
- * buffer into the dst viewport when scaled (todos/0024). */
+ * fill, then each surface's front buffer + its kernel chrome. Since
+ * todos/0275 label TEXT is part of the deterministic composite too: title
+ * captions, the close-box 'x' and Exposé captions render via the kernel's
+ * ksvc text service (the SAME blob the browser compositor uses — same
+ * bytes, same rasterizer, same geometry, so the two composites agree on
+ * text everywhere; browser-only affordances left are furniture: AA
+ * shadows, rounded corners, glass). Row blits when unscaled; a
+ * nearest-neighbor loop maps the buffer into the dst viewport when scaled
+ * (todos/0024). */
 Kernel.prototype.wmScreenshotScreen = function () {
   var W = this._wmScreen.w, H = this._wmScreen.h;
   var out = new Uint8Array(W * H * 4);
@@ -5737,14 +5788,15 @@ Kernel.prototype.wmScreenshotScreen = function () {
   };
   fill(0, 0, W, H, WM_COLORS.desktop);
   // Overview / Exposé (todos/EXPOSE-MISSION-CONTROL.md): the SAME presentation
-  // the browser compositor draws, minus the browser-only affordances (captions
-  // + shadows + rounded corners — text is not part of the deterministic
-  // composite, exactly like title text). Per cell in order: a border frame
-  // (navy when hovered, face gray otherwise — hover follows the injected
-  // pointer, so it is deterministic) then the window's LIVE front buffer NN
-  // scale-blitted into the cell rect. Minimized windows composite their still-
-  // live buffers like any other. Goldens stay bit-exact and `wmctl shot` sees
-  // the overview — which is what makes the e2e honest.
+  // the browser compositor draws, minus the browser-only furniture (shadows +
+  // rounded corners). Per cell in order: a border frame (navy when hovered,
+  // face gray otherwise — hover follows the injected pointer, so it is
+  // deterministic) then the window's LIVE front buffer NN scale-blitted into
+  // the cell rect, then the caption centered under the cell (ksvc text,
+  // todos/0275 — the same blob and geometry as compositor.js drawOverview).
+  // Minimized windows composite their still-live buffers like any other.
+  // Goldens stay bit-exact and `wmctl shot` sees the overview — which is
+  // what makes the e2e honest.
   if (this._wmOverview) {
     var ovcells = this._wmOverview.cells;
     var hoverSid = this._wmOverview.hoverSid | 0;
@@ -5769,6 +5821,11 @@ Kernel.prototype.wmScreenshotScreen = function () {
           out[odi + 2] = os.u8[osi + 2]; out[odi + 3] = 255;
         }
       }
+      // Caption centered under the cell (compositor drawOverview's exact
+      // formula: x centered on rendered width, top edge = cell bottom + 2).
+      this._blitLabel(out, W, H, oc.x + oc.w / 2, oc.y + oc.h + 2,
+        os.title || ('pid ' + os.pid), Math.max(8, oc.w), 0xFFFFFFFF,
+        { cx: true, top: true });
     }
     return { w: W, h: H, rgba: out };
   }
@@ -5786,16 +5843,24 @@ Kernel.prototype.wmScreenshotScreen = function () {
         dw + 2 * WM_BORDER, WM_TITLE_H + dh + 2 * WM_BORDER, WM_COLORS.border);
       fill(s.x, s.y - WM_TITLE_H, dw, WM_TITLE_H,
         s.sid === this._focusSid ? WM_COLORS.titleFocused : WM_COLORS.titleBlurred);
+      // Title text (todos/0275): the SAME string + maxW arithmetic + center
+      // formula as compositor.js's title labelFor call — the two composites'
+      // text contract.
+      this._blitLabel(out, W, H, s.x + 6, s.y - WM_TITLE_H / 2,
+        s.title || ('pid ' + s.pid),
+        Math.max(8, dw - 3 * (WM_CLOSE_W + WM_BOX_GAP) - 16), 0xFFFFFFFF);
       // Title-bar boxes, Win95 order [min][max][close] (todos/0030) — the
       // same offsets and fit-gating the hit test uses. Glyphs are
-      // deterministic flat rects (bar / hollow box), part of the composite
-      // unlike title TEXT.
+      // deterministic flat rects (bar / hollow box) plus the ksvc-rasterized
+      // close 'x' (todos/0275).
       var bx = s.x + dw - WM_CLOSE_W - WM_CLOSE_PAD;
       var by = s.y - WM_TITLE_H + WM_CLOSE_PAD;
       var mxx = bx - WM_CLOSE_W - WM_BOX_GAP;
       var nxx = mxx - WM_CLOSE_W - WM_BOX_GAP;
       var glyph = [0, 0, 0, 255];
       fill(bx, by, WM_CLOSE_W, WM_CLOSE_W, WM_COLORS.closeBox);
+      this._blitLabel(out, W, H, bx + 5, by + WM_CLOSE_W / 2 + 1,
+        'x', 32, 0x000000FF);
       if (mxx >= s.x) {
         fill(mxx, by, WM_CLOSE_W, WM_CLOSE_W, WM_COLORS.closeBox);
         fill(mxx + 4, by + 4, 12, 2, glyph);             // max: hollow box
@@ -8454,7 +8519,7 @@ var KERNEL_EXPORTS = {
   WMEV: WMEV,
   WM_SAB_LAYOUT: WM_SAB_LAYOUT,   // the published copy host.js checks (CD26)
   WM_TITLE_H: WM_TITLE_H, WM_CLOSE_W: WM_CLOSE_W, WM_CLOSE_PAD: WM_CLOSE_PAD,
-  WM_BOX_GAP: WM_BOX_GAP,
+  WM_BOX_GAP: WM_BOX_GAP, WM_LABEL_PX: WM_LABEL_PX,
   WM_BORDER: WM_BORDER, WM_GRIP: WM_GRIP, WM_MIN_SIZE: WM_MIN_SIZE,
   WM_MAP_TIMEOUT_MS: WM_MAP_TIMEOUT_MS,
   WM_ANIM_MS: WM_ANIM_MS,

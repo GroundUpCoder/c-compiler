@@ -21,6 +21,10 @@ const fs = require('fs');
 const path = require('path');
 const { driveBoot, freshImage, section } = require('./lib/drive.js');
 const { ROOT, ensureMinimalImage, ensurePackages, startServer } = require('./lib/gucman.js');
+const K = require(path.join(ROOT, 'kernel.js'));
+const { BLOCK_FS } = require(path.join(ROOT, 'host.js'));
+const COMMON = require(path.join(ROOT, 'os', 'os-common.js'));
+const OS_KSVC = require(path.join(ROOT, 'os', 'ksvc.js'));
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -187,6 +191,87 @@ async function main() {
   const t2 = [0, 1, 2].map((i) => pairBits(b.stdout, p2, i));
   check('removed: back to the identical tofu box', t2[0].equals(t[0]) &&
     t2[0].equals(t2[1]) && t2[1].equals(t2[2]));
+
+  // ---- 0275 ksvc title leg: the chain reaches window CHROME ----
+  // Reinstall the CJK face (the removes above emptied the chain), then a
+  // FRESH boot (ksvc reads the chain once, at ksvc_init) renders a CJK
+  // winbox TITLE with real glyphs — bit-compared against os/ksvc.js over
+  // the SAME image pair (the test_ksvc_e2e same-bytes assertion, now with
+  // the package chain resolving through /opt on the root volume).
+  const CJK_TXT = '日本語';
+  const c = driveBoot(['gucman install font-noto-cjk-mono; echo RC4=$?'], BOOT_ARGS);
+  check('title leg: reinstall font-noto-cjk-mono (exit 0)',
+    String(c.stdout || '').includes('RC4=0'));
+
+  const d = driveBoot([
+    `winbox title "${CJK_TXT}" &`,
+    `wmctl wait win "${CJK_TXT}"`,
+    'sleep 1',   // genuine no-marker settle: wm.c EV_CREATED MOVE (map ack)
+    'echo ==tlist',
+    'wmctl list',
+    'wmctl shot screen /root/title.ppm && echo title-shot-ok',
+    'pkill winbox',
+  ], BOOT_ARGS);
+  const dout = String(d.stdout || '');
+  check('title leg: CJK-title shot written', dout.includes('title-shot-ok'));
+
+  const e = driveBoot('cat /root/title.ppm\n', { image, args: ['--packages=none'],
+    timeout: 120000, maxBuffer: 16 * 1024 * 1024, encoding: null });
+  const tp = parsePPM(e.stdout, 0);
+  check('title leg: shot parses', !!tp);
+  let wg = null;
+  for (const line of section(dout, 'tlist').split('\n')) {
+    const f = line.split('\t');
+    if (f.length >= 7 && f[6] === CJK_TXT) {
+      const m = f[2].match(/^(\d+)x(\d+)\+(-?\d+)\+(-?\d+)$/);
+      if (m) wg = { w: +m[1], h: +m[2], x: +m[3], y: +m[4] };
+    }
+  }
+  check('title leg: window listed with geometry', !!wg);
+  if (tp && wg) {
+    // Oracle: os/ksvc.js over the SAME system+root pair — the chain resolves
+    // the /opt face exactly like the booted kernel's ksvc did.
+    const sysStore = new COMMON.NodeFileStore(fs, image, false);
+    const rootStore = new COMMON.NodeFileStore(fs,
+      image.slice(0, -4) + '-root.img', false);
+    const kfs = new BLOCK_FS.MountFS({
+      '/': BLOCK_FS.createV4(rootStore), '/usr': BLOCK_FS.createV4(sysStore, { readonly: true }),
+    });
+    const svc = OS_KSVC.load(kfs, {});
+    const maxW = Math.max(8, wg.w - 3 * (K.WM_CLOSE_W + K.WM_BOX_GAP) - 16);
+    const lab = svc.render(CJK_TXT, K.WM_LABEL_PX, maxW, 0xFFFFFFFF, 1);
+    const NAVY = K.WM_COLORS.titleFocused;
+    const so = (s, a2, dd) => (s * a2 + dd * (255 - a2) + 127) / 255 | 0;
+    const x0 = wg.x + 6, y0 = Math.round((wg.y - K.WM_TITLE_H / 2) - lab.h / 2);
+    let mm = null;
+    for (let gy = 0; gy < lab.h && !mm; gy++)
+      for (let gx = 0; gx < lab.w && !mm; gx++) {
+        const si = (gy * lab.w + gx) * 4, al = lab.bytes[si + 3];
+        const di = tp.data + ((y0 + gy) * tp.w + (x0 + gx)) * 3;
+        for (let ch = 0; ch < 3; ch++)
+          if (e.stdout[di + ch] !== so(lab.bytes[si + ch], al, NAVY[ch])) {
+            mm = { x: x0 + gx, y: y0 + gy, ch }; break;
+          }
+      }
+    check('title leg: CJK title strip is bit-exact ksvc bytes (real glyphs)',
+      !mm, mm && JSON.stringify(mm));
+    // Real glyphs, not tofu: 日/本/語 advance-bands pairwise DISTINCT (the
+    // tofu box repeats identically). Bands compare from the ORACLE bytes,
+    // which the strip was just proven byte-identical to.
+    const adv = Math.floor(lab.w / 3);
+    const band = (i) => {
+      const out = Buffer.alloc(adv * lab.h);
+      for (let y = 0; y < lab.h; y++)
+        for (let x = 0; x < adv; x++)
+          out[y * adv + x] = lab.bytes[(y * lab.w + i * adv + x) * 4 + 3];
+      return out;
+    };
+    const bands = [0, 1, 2].map(band);
+    check('title leg: the three CJK title glyphs are DISTINCT (not tofu)',
+      !bands[0].equals(bands[1]) && !bands[1].equals(bands[2]) &&
+      !bands[0].equals(bands[2]));
+    sysStore.close(); rootStore.close();
+  }
 
   finish(tmp);
 }

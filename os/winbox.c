@@ -85,9 +85,14 @@ int main(int argc, char **argv) {
     int fixed = argc > 1 && strcmp(argv[1], "fixed") == 0;
     alpha = argc > 1 && strcmp(argv[1], "alpha") == 0;
     int cursor = argc > 1 && strcmp(argv[1], "cursor") == 0;
+    /* `winbox title <utf8>`: arbitrary window title (todos/0275 — the ksvc
+     * label-text acceptance hook: overlong titles ellipsize, CJK titles
+     * exercise the fallback chain). Window otherwise a stock winbox. */
+    const char *title = alpha ? "alphabox" : fixed ? "fixbox"
+                        : cursor ? "curbox" : "winbox";
+    if (argc > 2 && strcmp(argv[1], "title") == 0) title = argv[2];
     SDL_Init(SDL_INIT_VIDEO);
-    win = SDL_CreateWindow(alpha ? "alphabox" : fixed ? "fixbox"
-                           : cursor ? "curbox" : "winbox", W, H,
+    win = SDL_CreateWindow(title, W, H,
                            alpha ? SDL_WINDOW_TRANSPARENT
                                  : fixed ? 0 : SDL_WINDOW_RESIZABLE);
     if (!win) return 3;
