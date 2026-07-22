@@ -1,8 +1,23 @@
 # 0140 — mGBA: real GBA games derail — ROOT-CAUSED to an in-OS short-read (NOT compiler.js codegen)
 
+- **CLOSED — DONE 2026-07-22 (@master cont-19).** The option-B in-OS read-fill
+  fix is **MERGED to main (`2eb7e4e`, "Merge 0140 fix: in-OS read() fills
+  regular-file reads (option B) — mGBA short-read class") and LIVE** — kernel.js
+  ships as a static OS asset and this change rode into the deployed apex (v139 or
+  earlier). Meaningful acceptance is MET: a real commercial ROM (Mario Tennis)
+  boots in-OS with mGBA source UNCHANGED (0 invalid-address lines, 1417
+  DMA-to-VRAM/OAM, 88.2%-non-white composited title). The layered
+  "compiler.js miscompiles the ARM/THUMB core" framing below is **RETIRED** — the
+  crt0 derail was the FS short-read, not codegen (proven bare: capping bare
+  readImpl to 60 KB reproduces it; compiler.js was never edited, no conformance
+  defect exists). The jsmolka `arm.gba`/`thumb.gba`-all-pass acceptance line is
+  **moot**: the THUMB-230/ARM-235 oracles were triaged as muddy/genuine-upstream
+  bugs with NO upstream fix (thumb 102 is where compiler.js is *coincidentally
+  more* hardware-correct). No product code, no compiler.js edit, no separate
+  deploy pending. Reopen only if a NEW real-ROM derail surfaces.
+
 - **FIX LANDED 2026-07-20 (option B, `logs/2026-07-20/os-read-fill-0140.md`,
-  branch `os-read-fill-0140`) — awaiting master's review of the kernel
-  read-path diff before merge + deploy.** jku picked **option B only** (the
+  branch `os-read-fill-0140`).** jku picked **option B only** (the
   general in-OS read-fill; option A — patching mGBA's unlooped read — was
   rejected: the bug is ours, not upstream's). `RemoteFS.prototype.read`
   (kernel.js) now FILLS a regular-file `read(fd, buf, N>KP_FS_CHUNK)` up to
