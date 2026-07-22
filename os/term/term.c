@@ -97,6 +97,33 @@ static int appcursor;              /* DECCKM: arrows send ESC O x */
 static unsigned char cur_fg = DEF_FG, cur_bg = DEF_BG, cur_attr = 0;
 static int dirty = 1;
 
+/* ---- scrollback history ring (todos/0273a) ----
+ * Lines that scroll off the TOP of the main screen (a real terminal scroll:
+ * a linefeed at the bottom with the scroll region anchored at row 0) are
+ * pushed here instead of discarded, so the user can scroll UP into output
+ * that has left the viewport. This is DELIBERATELY independent of the ANSI
+ * scroll region (scroll_top/scroll_bot): that region is an in-screen VT100
+ * concept (DECSTBM, IL/DL, SU/SD); this is user-facing history. Only
+ * linefeed() with scroll_top==0 on the main grid feeds it — DL/IL/SU and
+ * any scroll under a non-top region do NOT (xterm's rule), so an editor's
+ * in-screen scrolling never pollutes history.
+ *
+ * Each history line stores its own captured width (HistLine.len), so a
+ * resize needs no reflow and can't corrupt the ring: render clamps to the
+ * live cols and pads short/absent cells with the default background. The
+ * alt screen has no scrollback (vi/less); entering it forces the view live.
+ *
+ * view_off is how many lines the viewport is scrolled UP from the live
+ * bottom (0 = live grid). Writing ALWAYS targets the live grid regardless
+ * of view_off; only rendering reads the offset. New output or any non-
+ * scroll keypress snaps back to live (Terminal behaviour). */
+#define SCROLLBACK_MAX 2000
+typedef struct { Cell *cells; int len; } HistLine;
+static HistLine hist[SCROLLBACK_MAX];
+static int hist_count;              /* valid lines, <= SCROLLBACK_MAX */
+static int hist_head;               /* ring index of the oldest line */
+static int view_off;                /* lines scrolled up from live; 0 = live */
+
 /* ---- pty / child ---- */
 static int mfd = -1;
 static pid_t child = -1;
@@ -152,10 +179,55 @@ static void clear_cells(Cell *g, int from, int count) {
     for (int i = 0; i < count; i++) g[from + i] = b;
 }
 
-static void scroll_up(int n) {
+/* The i-th oldest history line (0 = oldest). */
+static HistLine *hist_at(int i) { return &hist[(hist_head + i) % SCROLLBACK_MAX]; }
+
+/* Push one about-to-be-discarded screen row into the ring (oldest evicted
+ * at the cap). The line keeps the width it was captured at. */
+static void hist_push(const Cell *row, int len) {
+    HistLine *slot;
+    if (hist_count < SCROLLBACK_MAX) {
+        slot = &hist[(hist_head + hist_count) % SCROLLBACK_MAX];
+        hist_count++;
+    } else {
+        slot = &hist[hist_head];
+        free(slot->cells);
+        hist_head = (hist_head + 1) % SCROLLBACK_MAX;
+    }
+    slot->cells = malloc((size_t)len * sizeof(Cell));
+    if (!slot->cells) { slot->len = 0; return; }
+    memcpy(slot->cells, row, (size_t)len * sizeof(Cell));
+    slot->len = len;
+}
+
+static void hist_clear(void) {
+    for (int i = 0; i < hist_count; i++) free(hist_at(i)->cells);
+    hist_count = 0; hist_head = 0; view_off = 0;
+}
+
+/* Scroll the viewport by delta lines (+ = toward history/up), clamped to
+ * [0, hist_count]. */
+static void scroll_view(int delta) {
+    int nv = view_off + delta;
+    if (nv < 0) nv = 0;
+    if (nv > hist_count) nv = hist_count;
+    if (nv != view_off) { view_off = nv; dirty = 1; }
+}
+
+/* Snap the viewport back to the live bottom. */
+static void snap_live(void) {
+    if (view_off != 0) { view_off = 0; dirty = 1; }
+}
+
+/* to_hist: this is a real top-of-screen scroll that should feed scrollback
+ * (linefeed at the bottom). DL/IL/SU pass 0 — they scroll in-screen only. */
+static void scroll_up(int n, int to_hist) {
     if (n < 1) n = 1;
     int span = scroll_bot - scroll_top + 1;
     if (n > span) n = span;
+    if (to_hist && !on_alt && scroll_top == 0)
+        for (int i = 0; i < n; i++)
+            hist_push(&grid[(scroll_top + i) * cols], cols);
     memmove(&grid[scroll_top * cols], &grid[(scroll_top + n) * cols],
             (size_t)(span - n) * cols * sizeof(Cell));
     clear_cells(grid, (scroll_bot - n + 1) * cols, n * cols);
@@ -172,7 +244,7 @@ static void scroll_down(int n) {
 
 static void linefeed(void) {
     wrap_pending = 0;
-    if (cy == scroll_bot) scroll_up(1);
+    if (cy == scroll_bot) scroll_up(1, 1);   /* real scroll: feed scrollback */
     else if (cy < rows - 1) cy++;
 }
 
@@ -220,6 +292,7 @@ static void full_reset(void) {
     on_alt = 0; grid = grid_main;
     clear_cells(grid_main, 0, rows * cols);
     clear_cells(grid_alt, 0, rows * cols);
+    hist_clear();          /* RIS clears scrollback (and snaps the view live) */
 }
 
 /* ============================================================ parser */
@@ -312,6 +385,7 @@ static void enter_alt(int enter) {
         scroll_top = 0; scroll_bot = rows - 1;
         clamp_cursor();
     }
+    view_off = 0;          /* alt screen has no scrollback; keep the view live */
     wrap_pending = 0;
 }
 
@@ -378,7 +452,7 @@ static void csi_dispatch(unsigned char final) {
         if (cy >= scroll_top && cy <= scroll_bot) {
             int save = scroll_top;
             scroll_top = cy;
-            scroll_up(P(0, 1));
+            scroll_up(P(0, 1), 0);   /* DL: in-screen only, not scrollback */
             scroll_top = save;
         }
         break;
@@ -405,7 +479,7 @@ static void csi_dispatch(unsigned char final) {
         clear_cells(grid, cy * cols + cx, n);
         break;
     }
-    case 'S': scroll_up(P(0, 1)); break;
+    case 'S': scroll_up(P(0, 1), 0); break;   /* SU: in-screen, not scrollback */
     case 'T': scroll_down(P(0, 1)); break;
     case 'r': {  /* DECSTBM */
         int top = P(0, 1) - 1;
@@ -666,6 +740,16 @@ static void handle_key(const SDL_KeyboardEvent *k) {
     int sym = (int)k->key;
     int mod = (int)k->mod;
     char b;
+    /* Scrollback navigation (todos/0273a): plain PageUp/PageDown page through
+     * history on the MAIN screen — alt-screen apps (vi/less, no scrollback)
+     * keep the keys for themselves. These deliberately do NOT snap to live;
+     * scrolling into history is the point. */
+    if (!on_alt && (mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI | SDL_KMOD_ALT)) == 0) {
+        if (sym == SDLK_PAGEUP)   { scroll_view(rows > 1 ? rows - 1 : 1); return; }
+        if (sym == SDLK_PAGEDOWN) { scroll_view(-(rows > 1 ? rows - 1 : 1)); return; }
+    }
+    /* Any other key snaps the viewport back to the live bottom (Terminal). */
+    snap_live();
     /* The terminal's copy/paste chords resolve through the scheme table
        (todos/0149, os/keys.h): Ctrl+Shift+C/V under the windows keymap,
        ⌘C/V under macos — plain Ctrl+C stays the tty's SIGINT byte either
@@ -758,28 +842,52 @@ static uint32_t pack(const uint8_t *rgb) {
 
 /* Resolve a cell's effective fg/bg (bold brighten, reverse, selection,
  * cursor inversion — the pre-Phase-D inline logic, shared by both render
- * passes). */
-static void cell_colors(const Cell *cell, int r, int c, int *fgo, int *bgo) {
+ * passes). live_r is the cell's LIVE grid row (or -1 for a history line —
+ * no cursor, no selection there); show_sel gates selection to the live view
+ * (view_off==0), since sel_* coords are live-grid, not history (0273a). */
+static void cell_colors(const Cell *cell, int live_r, int c, int show_sel,
+                        int *fgo, int *bgo) {
     int fg = cell->fg, bg = cell->bg;
     if (cell->attr & A_BOLD) { if (fg < 8) fg += 8; }
     if (cell->attr & A_REVERSE) { int t = fg; fg = bg; bg = t; }
-    if (sel_has(r, c)) { int t = fg; fg = bg; bg = t; }           /* 0090 */
-    if (cursor_visible && r == cy && c == cx) { int t = fg; fg = bg; bg = t; }
+    if (show_sel && live_r >= 0 && sel_has(live_r, c)) { int t = fg; fg = bg; bg = t; } /* 0090 */
+    if (cursor_visible && live_r >= 0 && live_r == cy && c == cx) { int t = fg; fg = bg; bg = t; }
     *fgo = fg;
     *bgo = bg;
+}
+
+/* Source cells for viewport row vr: a history line (sets *live_r = -1) when
+ * the row is scrolled up into history, else the live grid row (0273a). The
+ * returned run is *slen cells wide (a history line's captured width); the
+ * caller pads columns past it with the default background. */
+static const Cell *view_row(int vr, int *slen, int *live_r) {
+    int virt = hist_count - view_off + vr;   /* view_off <= hist_count, vr >= 0 */
+    if (virt < hist_count) {
+        HistLine *h = hist_at(virt);
+        *slen = h->len; *live_r = -1;
+        return h->cells;
+    }
+    int lr = virt - hist_count;
+    *slen = cols; *live_r = lr;
+    return &grid[lr * cols];
 }
 
 static void render(void) {
     uint32_t *px = (uint32_t *)surf->pixels;
     int sw = surf->w, sh = surf->h;
+    int show_sel = (view_off == 0);
+    Cell pad; pad.cp = ' '; pad.fg = DEF_FG; pad.bg = DEF_BG; pad.attr = 0;
     for (int r = 0; r < rows; r++) {
+        int slen, live_r;
+        const Cell *src = view_row(r, &slen, &live_r);
         /* Pass 1: every cell's background. Separate from the glyph pass
          * because a wide lead's glyph spills into the continuation cell —
          * a single fused loop would paint the continuation's bg OVER the
          * spill (Phase D). */
         for (int c = 0; c < cols; c++) {
+            const Cell *cell = c < slen ? &src[c] : &pad;
             int fg, bg;
-            cell_colors(&grid[r * cols + c], r, c, &fg, &bg);
+            cell_colors(cell, live_r, c, show_sel, &fg, &bg);
             int x0 = c * cell_w, y0 = r * cell_h;
             uint32_t bgp = pack(PAL[bg]);
             for (int y = y0; y < y0 + cell_h && y < sh; y++) {
@@ -789,9 +897,9 @@ static void render(void) {
         }
         /* Pass 2: glyphs. */
         for (int c = 0; c < cols; c++) {
-            Cell *cell = &grid[r * cols + c];
+            const Cell *cell = c < slen ? &src[c] : &pad;
             int fg, bg;
-            cell_colors(cell, r, c, &fg, &bg);
+            cell_colors(cell, live_r, c, show_sel, &fg, &bg);
             int x0 = c * cell_w, y0 = r * cell_h;
             if (cell->cp <= 32) continue;    /* space + defensive C0 +
                                                 CP_WIDE_CONT: bg only */
@@ -869,6 +977,10 @@ static void apply_resize(int ncols, int nrows) {
     clamp_cursor();
     if (saved_cx > cols - 1) saved_cx = cols - 1;
     if (saved_cy > rows - 1) saved_cy = rows - 1;
+    /* History survives resize untouched: each HistLine keeps its captured
+     * width, render clamps to the new cols — no reflow, no corruption
+     * (0273a). view_off stays valid (hist_count is unchanged); clamp anyway. */
+    if (view_off > hist_count) view_off = hist_count;
     sel_on = sel_drag = 0;         /* stale cell coords (0090) */
     set_winsize();                 /* SIGWINCH: the session reflows */
     dirty = 1;
@@ -908,6 +1020,11 @@ static void frame_cb(void) {
             }
         } else if (e.type == SDL_EVENT_MOUSE_BUTTON_UP && e.button.button == 1) {
             sel_drag = 0;
+        } else if (e.type == SDL_EVENT_MOUSE_WHEEL) {
+            /* Wheel scrolls scrollback on the main screen; alt-screen apps
+             * own the viewport (no history). wheel.y > 0 = away = up into
+             * history, one notch ~ 3 lines (0273a). */
+            if (!on_alt) scroll_view((int)e.wheel.y * 3);
         } else if (e.type == SDL_EVENT_WINDOW_RESIZED) {
             surf = SDL_GetWindowSurface(win);   /* re-derive (SDL3 contract) */
             apply_resize(surf->w / cell_w, surf->h / cell_h);
@@ -935,6 +1052,7 @@ static void frame_cb(void) {
         for (ssize_t i = 0; i < n; i++) term_putc((unsigned char)buf[i]);
         budget -= (int)n;
         dirty = 1;
+        view_off = 0;    /* new output snaps the view back to live (0273a) */
     }
     if (dirty) {
         render();

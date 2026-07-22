@@ -478,13 +478,107 @@ function sessionWide() {
     cellInk(b.stdout, p2, 1) === 0, String(cellInk(b.stdout, p2, 1)));
 }
 
+/* ---- session S: scrollback history ring (todos/0273a) ----
+ * Lines that scroll off the top of the viewport are kept in a history ring;
+ * the user scrolls UP into them with the mouse-wheel and PageUp/PageDown,
+ * and new output or a keypress snaps back to the live bottom. The probe: a
+ * full-width '#' marker line is printed, then `seq 300` floods it off the
+ * top (it becomes the OLDEST history line). row-0 ink cleanly discriminates
+ * the marker (a 40-# row, ~2000 ink px) from the live seq numbers (3 digits,
+ * ~140 px). RED without the ring: PageUp/wheel are inert and row 0 stays a
+ * live seq number, so the marker is never seen (verified 2026-07-23). */
+function sessionScrollback() {
+  const PGUP = 1073741899, PGDN = 1073741902;   // SDLK_PAGEUP / SDLK_PAGEDOWN
+  const HASH = '#'.repeat(40);
+  const script = [
+    'term &',
+    'wmctl wait win term',                         // window spawn (0155)
+    'sleep 2',                                     // timing subject: hush banner + prompt render (multi-frame)
+    'TSID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
+    // clear+home, a full-ink marker line, then flood past the 24-row viewport.
+    keys("printf '\\033[2J\\033[H'; printf '" + HASH + "\\n'; seq 300\r"),
+    'sleep 3',                                     // timing subject: 300 lines echo + scroll (multi-frame)
+    'wmctl shot $TSID /root/sb_live.ppm && echo sb-live-ok',
+    // PageUp to the top of history (clamps at the oldest line = the marker).
+    ...Array(20).fill('wmctl key $TSID 0 ' + PGUP),
+    'sleep 1',                                     // timing subject: scrolled-view repaint (multi-frame)
+    'wmctl shot $TSID /root/sb_up.ppm && echo sb-up-ok',
+    // PageDown back down: clamps exactly at the live bottom.
+    ...Array(20).fill('wmctl key $TSID 0 ' + PGDN),
+    'sleep 1',                                     // timing subject: repaint back to live (multi-frame)
+    'wmctl shot $TSID /root/sb_pgdn.ppm && echo sb-pgdn-ok',
+    // Mouse-wheel up to the marker (the other scroll input, todos/0210).
+    'wmctl wheel $TSID 100',
+    'sleep 1',                                     // timing subject: wheel-scrolled repaint (multi-frame)
+    'wmctl shot $TSID /root/sb_wheel.ppm && echo sb-wheel-ok',
+    // New output snaps the view back to the live bottom (Terminal behaviour).
+    keys('echo SNAPMARK\r'),
+    'sleep 2',                                     // timing subject: echo output + snap repaint (multi-frame)
+    'wmctl shot $TSID /root/sb_snap.ppm && echo sb-snap-ok',
+    keys('exit\r'),
+    'wmctl wait nowin term',                       // hush exits -> term reaps -> window gone (0155)
+    '',
+  ].join('\n');
+  const s = driveBoot(script, { image, timeout: 420000 });
+  const out = s.stdout;
+  check('scrollback: all five shots written',
+    out.includes('sb-live-ok') && out.includes('sb-up-ok') &&
+    out.includes('sb-pgdn-ok') && out.includes('sb-wheel-ok') &&
+    out.includes('sb-snap-ok'), out.slice(-300));
+
+  const b = driveBoot('cat /root/sb_live.ppm /root/sb_up.ppm /root/sb_pgdn.ppm /root/sb_wheel.ppm /root/sb_snap.ppm\n',
+    { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });
+  function parsePPM(buf, off) {
+    const head = buf.toString('latin1', off, off + 32);
+    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
+    if (!m) return null;
+    const w = +m[1], h = +m[2], data = off + m[0].length;
+    return { w, h, data, end: data + w * h * 3 };
+  }
+  // Ink pixels of the TOP cell row (y 0..18 — the 8x19 mono cell).
+  function row0Ink(buf, ppm) {
+    let n = 0;
+    for (let y = 0; y < 19; y++)
+      for (let x = 0; x < ppm.w; x++) {
+        const i = ppm.data + (y * ppm.w + x) * 3;
+        if (buf[i] | buf[i + 1] | buf[i + 2]) n++;
+      }
+    return n;
+  }
+  let off = 0;
+  const shots = {};
+  for (const nm of ['live', 'up', 'pgdn', 'wheel', 'snap']) {
+    const p = parsePPM(b.stdout, off);
+    if (!p) { check('scrollback: ' + nm + ' shot parses', false); return; }
+    shots[nm] = row0Ink(b.stdout, p);
+    off = p.end;
+  }
+  // The marker line is a full row of '#': ~2000 ink px. A live seq number is
+  // ~140. Thresholds sit well clear of both (measured live 139, marker 1960).
+  check('scrollback: live view shows a seq number at the top (not the marker)',
+    shots.live < 500, `row0=${shots.live}`);
+  check('scrollback: PageUp scrolls UP into history — the off-screen marker is now visible',
+    shots.up > 1000, `row0=${shots.up} (live was ${shots.live})`);
+  check('scrollback: PageDown returns to the live bottom (clamped)',
+    shots.pgdn < 500, `row0=${shots.pgdn}`);
+  check('scrollback: mouse-wheel scrolls UP into history (marker visible)',
+    shots.wheel > 1000, `row0=${shots.wheel}`);
+  check('scrollback: new output snaps the view back to live',
+    shots.snap < 500, `row0=${shots.snap}`);
+}
+
 (async () => {
-  sessionTerm();
-  sessionFrames();
-  sessionNested();
-  sessionLess();
-  sessionUnicode();
-  sessionWide();
+  // Sessions run in order; an optional argv list of name substrings selects a
+  // subset (e.g. `node test_term_e2e.js scrollback frames`). No args = all —
+  // the kernel runner invokes with none, so full-estate behaviour is unchanged.
+  const ALL = {
+    term: sessionTerm, frames: sessionFrames, nested: sessionNested,
+    less: sessionLess, unicode: sessionUnicode, wide: sessionWide,
+    scrollback: sessionScrollback,
+  };
+  const want = process.argv.slice(2);
+  for (const [name, fn] of Object.entries(ALL))
+    if (!want.length || want.some((w) => name.includes(w))) fn();
 
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(failures ? `\nterm e2e: ${failures} FAILED` : '\nterm e2e: PASS');
