@@ -240,7 +240,7 @@ static int font_ensure(HGDIOBJ f) {
      * so tofu geometry keys on the cell pitch, not on maxAdv. */
     f->monoAdv = 0;
     FT_UInt mi = FT_Get_Char_Index(f->face, 'M');
-    if (mi && !FT_Load_Glyph(f->face, mi, FT_LOAD_DEFAULT))
+    if (mi && !FT_Load_Glyph(f->face, mi, fc_load_flags(f->face)))
         f->monoAdv = (int)(f->face->glyph->advance.x >> 6);
     if (f->monoAdv <= 0) f->monoAdv = f->maxAdv;
     if (f->descent < 0) f->descent = 0;

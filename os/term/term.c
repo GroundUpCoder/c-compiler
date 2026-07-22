@@ -954,9 +954,10 @@ static int load_glyphs(void) {
     cell_h = (int)(face->size->metrics.height >> 6);
     ascent = (int)(face->size->metrics.ascender >> 6);
     if (cell_h < FONT_SIZE) cell_h = FONT_SIZE + 3;
-    /* Monospace: every advance matches 'M'. */
+    /* Monospace: every advance matches 'M' (fc_load_flags so the cell
+     * pitch agrees with the hinted render path, todos/0279). */
     FT_UInt mi = FT_Get_Char_Index(face, 'M');
-    if (FT_Load_Glyph(face, mi, FT_LOAD_DEFAULT)) return -1;
+    if (FT_Load_Glyph(face, mi, fc_load_flags(face))) return -1;
     cell_w = (int)(face->glyph->advance.x >> 6);
     if (cell_w <= 0) cell_w = (FONT_SIZE * 3) / 5;
     for (uint32_t ch = 32; ch < 127; ch++)

@@ -219,11 +219,29 @@ typedef struct {
     int bold_xdelta;
 } FcRenderOpts;
 
+/* Load flags for the face's CURRENT ppem (todos/0279). Small sizes get
+ * light autohinting (vertical-only stem snapping) — unhinted stems land
+ * between pixel boundaries and read as mush below ~16px. The tuned 20px
+ * system size stays UNHINTED and must say so EXPLICITLY: with autofit
+ * registered and the TT bytecode interpreter compiled out, a plain
+ * FT_LOAD_DEFAULT would silently full-autohint (no native hinter, see
+ * ftobjs.c), so FT_LOAD_NO_AUTOHINT is what keeps 20px bit-identical to
+ * the Phase C/D metrics the ksvc/fontpkg same-bytes e2es pin. Light
+ * hinting rounds advances to whole pixels (afloader.c) where unhinted
+ * loads truncate — every metric probe ('M'-advance cell sizing) must use
+ * THESE flags too, so measure and render agree at every size. */
+#define FONTCORE_HINTED_PPEM_EXEMPT 20
+static FT_Int32 fc_load_flags(FT_Face face) {
+    return face->size->metrics.y_ppem == FONTCORE_HINTED_PPEM_EXEMPT
+        ? FT_LOAD_DEFAULT | FT_LOAD_NO_AUTOHINT
+        : FT_LOAD_TARGET_LIGHT | FT_LOAD_FORCE_AUTOHINT;
+}
+
 /* Load glyph `gi` from `face` into `g` (the caller already resolved the
  * covering face + set g->loaded). The one FT_Load / embolden / advance /
  * FT_Render / copy / threshold sequence the three consumers shared. */
 static FcGlyph *fc_render_face(FcGlyph *g, FT_Face face, FT_UInt gi, FcRenderOpts o) {
-    if (FT_Load_Glyph(face, gi, FT_LOAD_DEFAULT)) return g;
+    if (FT_Load_Glyph(face, gi, fc_load_flags(face))) return g;
     FT_GlyphSlot slot = face->glyph;
     if (o.bold_xdelta) {
         /* embolden affects advances too, so measure and render agree. */

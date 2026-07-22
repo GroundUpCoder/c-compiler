@@ -350,7 +350,9 @@ tfc_alloc(code, size, fontname, registry)
 	if (gidx == 0 && verbose)
 		fprintf(stderr, "no glyph for 0x%04lx in \"%s\"\n",
 			unicode, tfloadedfont[tfcuridx]);
-	if (FT_Load_Glyph(f, gidx, FT_LOAD_DEFAULT))
+	/* NO_AUTOHINT: keep pre-autofit rendering now the gucOS freetype
+	 * build registers a hinter (todos/0279). */
+	if (FT_Load_Glyph(f, gidx, FT_LOAD_DEFAULT | FT_LOAD_NO_AUTOHINT))
 		return NULL;
 	if (FT_Render_Glyph(f->glyph, FT_RENDER_MODE_NORMAL))
 		return NULL;

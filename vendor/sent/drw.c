@@ -119,7 +119,9 @@ drw_fontset_getwidth(Drw *drw, const char *text)
 	setsize(drw->fonts->px);
 	while (*text) {
 		cp = utf8decode(&text);
-		if (FT_Load_Char(ftface, cp, FT_LOAD_DEFAULT))
+		/* NO_AUTOHINT: keep pre-autofit rendering now the gucOS
+		 * freetype build registers a hinter (todos/0279). */
+		if (FT_Load_Char(ftface, cp, FT_LOAD_DEFAULT | FT_LOAD_NO_AUTOHINT))
 			continue;
 		w += (unsigned int)(ftface->glyph->advance.x >> 6);
 	}
@@ -209,7 +211,7 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 		int gx0, gy0, gy, gx;
 
 		cp = utf8decode(&text);
-		if (FT_Load_Char(ftface, cp, FT_LOAD_RENDER))
+		if (FT_Load_Char(ftface, cp, FT_LOAD_RENDER | FT_LOAD_NO_AUTOHINT))
 			continue;
 		bm = &ftface->glyph->bitmap;
 		gx0 = penx + ftface->glyph->bitmap_left;
