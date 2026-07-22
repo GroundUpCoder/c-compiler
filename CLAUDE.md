@@ -343,7 +343,15 @@ browser compositor is ONE WebGPU render pass per rAF in the kernel
 worker (todos/0055, `os/compositor.js`: shm surfaces seq-gated
 `writeTexture` into cached GPUTextures, gpu surfaces
 `copyExternalImageToTexture` per ImageBitmap, chrome as white-texture
-flat quads, title/'x' text as cached label textures) with NO Canvas2D
+flat quads, title/'x'/Exposé-caption text as cached label textures
+rasterized by the ksvc kernel text service — todos/0275: os/ksvc/ksvc.c,
+FreeType+fontchain built by OUR compiler to /usr/lib/ksvc.wasm, loaded
+sync in the kernel thread by os/ksvc.js over a minimal read-only env,
+`Kernel({textService})`; the headless wmScreenshotScreen composite blits
+the SAME blob's text via _blitLabel, so browser/headless label text is
+byte-identical (WM_LABEL_PX=20, ellipsis not squish; load-fail = loud
+boot-error, the Canvas2D label path is DELETED; seam doc: KERNEL.md
+"ksvc service seam") — with NO Canvas2D
 fallback: kernel-worker probes adapter→device BEFORE the boot lock;
 failure → `boot-nogpu` → os.html guard screen (`__osState === 'nogpu'`,
 no retry). Boot thus REQUIRES worker WebGPU — every browser os test
@@ -824,7 +832,7 @@ default to the FAT image so the estate needs no test changes;
 Repo URL: /etc/gucman/repos > baked /usr/share/gucman/repos
 (origin-relative `/packages`). punes is the first package (Slice 1);
 deploy leg + pulling the other apps are follow-ons.
-Image version is **v123**.
+Image version is **v139**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

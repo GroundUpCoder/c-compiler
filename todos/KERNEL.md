@@ -833,6 +833,38 @@ apps size to content), reusing the 0019 WINDOW_RESIZED → SURFACE_CONFIGURE
 renegotiation and deliberately not gated on the resizable bit (that bit
 protects fixed-size apps from the WM, not from themselves).
 
+## The ksvc service seam — the kernel's C half (2026-07-22, todos/0275)
+
+ksvc is the kernel's C half: capabilities the kernel needs that are best
+written in C land as new `__export`s on ONE growable blob
+(`os/ksvc/ksvc.c` → `/usr/lib/ksvc.wasm`, built at bake time by our
+compiler like any manifest `project` entry), loaded once per boot by the
+embedder via `OS_KSVC.load(kfs)` (`os/ksvc.js`) and reached synchronously
+through `kernel.textService`-style handles. First capability: label TEXT
+(FreeType + fontchain.h) — compositor.js `labelFor` and the headless
+`wmScreenshotScreen`/`_blitLabel` render titles, the close `'x'` and
+Exposé captions from the SAME blob, so the two composites agree on text
+byte-for-byte. Rules:
+
+- **No process, no pcb, no RPC** — same-thread sync calls only; blob
+  memory is the interchange (staging via `ksvc_buf`, results as
+  pointer+header with documented lifetime: valid until the next call).
+- **The import env is explicit and minimal** (os/ksvc.js): read-only fs
+  over `kfs` (write-intent opens are EROFS'd before reaching the fs),
+  fd 1/2 `write` forwarded to the boot log, a `%s`-grade vsnprintf
+  mini-formatter, loud named traps on everything else. It grows
+  import-by-import with capabilities, never speculatively — a new blob
+  import the env lacks throws AT INSTANTIATION, naming the import.
+- **`ksvc_abi` gates JS↔blob pairing**; breaking ABI changes bump it in
+  the same commit as the wrapper.
+- **Load failure at OS boot is a boot error** (kernel-worker `boot-error`,
+  boot.js nonzero exit), never a degraded desktop — the Canvas2D label
+  path is deleted, not gated. A bare `Kernel` without `opts.textService`
+  (non-OS embedders, unit tests — no fs to read a font from) composites
+  textless chrome: capability absence, not a fallback renderer.
+
+Design + ABI details: `todos/0275-kernel-text-service-design.md`.
+
 ## The vsync broadcast (2026-07-10, todos/0100)
 
 Process workers are NESTED workers (kernel-worker spawns them), and
