@@ -166,6 +166,9 @@
       "/usr/bin/gdidemo": {
         "project": "os/win32/gdidemo.json"
       },
+      "/usr/bin/fontramp": {
+        "project": "os/win32/fontramp.json"
+      },
       "/usr/bin/ctldemo": {
         "project": "os/win32/ctldemo.json"
       },

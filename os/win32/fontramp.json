@@ -1,0 +1,11 @@
+{
+  "bin": true,
+  "name": "fontramp",
+  "description": "bughunt probe: text ramp at many CreateFont sizes (AA + mono)",
+  "deps": [
+    "lib.json"
+  ],
+  "sources": [
+    "fontramp.c"
+  ]
+}
