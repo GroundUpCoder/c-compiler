@@ -3304,6 +3304,9 @@ typedef struct {
     HLOCAL hlocal;              /* EM_GETHANDLE/EM_SETHANDLE (0048): the
                                    external WCHAR buffer notepad manages —
                                    see edit_sync_handle */
+    int *tabs;                  /* EM_SETTABSTOPS stops in dialog units, or
+                                   NULL for the default 8-char grid (0274) */
+    int ntabs;                  /* count of tabs[] */
 } EditState;
 
 #define EDIT_PAD 3
@@ -3398,6 +3401,7 @@ static int edit_rows(HWND h, int lh) {          /* visible whole rows */
 }
 
 static void edit_notify(HWND h, int code);
+static int edit_x_of(HWND h, EditState *st, HDC dc, int lineStart, int pos);
 
 static int edit_view_w(HWND h) {                /* text viewport width */
     int w = h->w - 2 * EDIT_PAD - 4 - (edit_sb(h) ? EDIT_SB_W : 0);
@@ -3412,10 +3416,8 @@ static int edit_content_w(HWND h, EditState *st) {
     int maxW = 0, i = 0;
     while (i <= st->len) {
         int end = edit_line_end(st, i);
-        SIZE sz;
-        if (end > i && GetTextExtentPoint32(dc, st->buf + i, end - i, &sz) &&
-            sz.cx > maxW)
-            maxW = sz.cx;
+        int w = edit_x_of(h, st, dc, i, end);    /* tab-expanded width (0274) */
+        if (w > maxW) maxW = w;
         if (end >= st->len) break;
         i = end + 1;
     }
@@ -3502,11 +3504,78 @@ static void edit_hsb_geom(HWND h, EditState *st, RECT *bar,
         (maxSx > 0 ? (chan - tw) * st->scrollX / maxSx : 0);
 }
 
+/* Tab expansion (0274): a literal '\t' advances to the next tab stop instead
+ * of falling through to gdi32's control-char '?' glyph. Real Win32 EDIT
+ * measures stops in dialog units (1 unit = 1/4 avg char width); the default
+ * grid is one stop every 8 characters (32 dialog units), which is the only
+ * path any in-OS app exercises. EM_SETTABSTOPS overrides it. */
+static int edit_avg_char(HDC dc) {
+    TEXTMETRIC tm;
+    int a = (GetTextMetrics(dc, &tm) && tm.tmAveCharWidth > 0)
+                ? (int)tm.tmAveCharWidth : 8;
+    return a > 0 ? a : 8;
+}
+
+/* First tab-stop pixel strictly greater than x, measured from the line
+ * origin (before EDIT_PAD/scrollX). */
+static int edit_next_tab(HDC dc, EditState *st, int x) {
+    int avg = edit_avg_char(dc);
+    if (st->tabs && st->ntabs > 1) {              /* explicit list of stops */
+        for (int k = 0; k < st->ntabs; k++) {
+            int tp = st->tabs[k] * avg / 4;
+            if (tp > x) return tp;
+        }
+        /* past the last stop: real EDIT falls back to the default grid */
+    }
+    int step = (st->tabs && st->ntabs == 1)       /* single uniform pitch */
+                   ? st->tabs[0] * avg / 4
+                   : avg * 8;                      /* default 8-char grid */
+    if (step <= 0) step = avg * 8;
+    return (x / step + 1) * step;
+}
+
+/* Pixel x-offset of byte `pos` within the line starting at `lineStart`,
+ * expanding tabs (0274). Non-tab runs are measured by the font; each '\t'
+ * jumps to the next stop. O(line) — fine at in-OS edit sizes. */
 static int edit_x_of(HWND h, EditState *st, HDC dc, int lineStart, int pos) {
-    SIZE sz;
+    (void)h;
     if (pos <= lineStart) return 0;
-    GetTextExtentPoint32(dc, st->buf + lineStart, pos - lineStart, &sz);
-    return sz.cx;
+    int x = 0, seg = lineStart;
+    for (int i = lineStart; i < pos; i++) {
+        if (st->buf[i] != '\t') continue;
+        if (i > seg) {                            /* run before the tab */
+            SIZE sz;
+            GetTextExtentPoint32(dc, st->buf + seg, i - seg, &sz);
+            x += sz.cx;
+        }
+        x = edit_next_tab(dc, st, x);
+        seg = i + 1;
+    }
+    if (pos > seg) {
+        SIZE sz;
+        GetTextExtentPoint32(dc, st->buf + seg, pos - seg, &sz);
+        x += sz.cx;
+    }
+    return x;
+}
+
+/* Draw line bytes [from,to) with tabs rendered as gaps (0274). baseX is the
+ * line's left pixel (EDIT_PAD - scrollX); each non-tab run is placed at its
+ * tab-expanded offset via edit_x_of, so glyphs and metrics never disagree —
+ * and the raw '\t' never reaches gdi32 (whose < 32 rule would draw '?'). */
+static void edit_draw_run(HWND h, EditState *st, HDC dc, int baseX, int y,
+                          int lineStart, int from, int to) {
+    int seg = from;
+    for (int i = from; i < to; i++) {
+        if (st->buf[i] != '\t') continue;
+        if (i > seg)
+            TextOut(dc, baseX + edit_x_of(h, st, dc, lineStart, seg), y,
+                    st->buf + seg, i - seg);
+        seg = i + 1;
+    }
+    if (to > seg)
+        TextOut(dc, baseX + edit_x_of(h, st, dc, lineStart, seg), y,
+                st->buf + seg, to - seg);
 }
 
 static void edit_notify(HWND h, int code) {
@@ -3649,14 +3718,13 @@ static void edit_paint(HWND h) {
                 }
             }
             SetTextColor(dc, GetSysColor(hwnd_able(h) ? COLOR_WINDOWTEXT : COLOR_GRAYTEXT));
-            TextOut(dc, x, y, st->buf + i, end - i);
+            edit_draw_run(h, st, dc, x, y, i, i, end);   /* tab-aware (0274) */
             /* selection text repaint in highlight color */
             if (focused && e > s) {
                 int ss = s > i ? s : i, se = e < end ? e : end;
                 if (se > ss) {
                     SetTextColor(dc, GetSysColor(COLOR_HIGHLIGHTTEXT));
-                    TextOut(dc, x + edit_x_of(h, st, dc, i, ss), y,
-                            st->buf + ss, se - ss);
+                    edit_draw_run(h, st, dc, x, y, i, ss, se);
                 }
             }
             /* solid caret */
@@ -4235,6 +4303,22 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         return FALSE;
     case EM_EMPTYUNDOBUFFER:
         return 0;
+    case EM_SETTABSTOPS: {                        /* (0274) stops in dialog units */
+        int n = (int)wp;
+        const int *src = (const int *)lp;
+        free(st->tabs);
+        st->tabs = NULL;
+        st->ntabs = 0;
+        if (n > 0 && src) {
+            st->tabs = (int *)malloc((size_t)n * sizeof(int));
+            if (st->tabs) {
+                for (int k = 0; k < n; k++) st->tabs[k] = src[k];
+                st->ntabs = n;
+            }
+        }
+        InvalidateRect(h, NULL, TRUE);
+        return TRUE;
+    }
     case EM_GETHANDLE:
         return (LRESULT)edit_sync_handle(st);
     case EM_SETHANDLE:
@@ -4343,6 +4427,9 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (st) {
             free(st->buf);
             st->buf = NULL;
+            free(st->tabs);
+            st->tabs = NULL;
+            st->ntabs = 0;
             if (st->hlocal) { LocalFree(st->hlocal); st->hlocal = NULL; }
         }
         return 0;

@@ -347,6 +347,42 @@ static int selftest(void) {
     GetWindowText(ed, buf, sizeof buf);
     st_check("backspace deletes a whole cp", strcmp(buf, "ABx") == 0);
 
+    /* ---- tab expansion (0274): a literal '\t' advances to the next tab
+     * stop, so mouse column mapping across a tab is a WIDE gap, not one
+     * glyph. Default stop = 8 avg-char columns; EM_SETTABSTOPS overrides
+     * it. All synchronous WM_LBUTTONDOWN + EM_GETSEL — the '?'-free paint
+     * leg is the browser sweep (os-edittab.mjs). */
+    HDC mdc = GetDC(ed);
+    TEXTMETRIC tmv;
+    GetTextMetrics(mdc, &tmv);
+    ReleaseDC(ed, mdc);
+    int avg = tmv.tmAveCharWidth > 0 ? (int)tmv.tmAveCharWidth : 8;
+    int pad = 3;                                  /* mirrors EDIT_PAD in user32.c */
+    SetWindowText(ed, "a\tb");                    /* col0 'a', col1 tab, col2 'b' */
+    /* click at client (px, y=5 on line 0) then read the collapsed caret */
+#define TAB_CARET(px) (SendMessage(ed, WM_LBUTTONDOWN, 0, MAKELPARAM((px), 5)), \
+                       (int)LOWORD(SendMessage(ed, EM_GETSEL, 0, 0)))
+    int c_a   = TAB_CARET(pad + 1);              /* on 'a' */
+    int c_gap = TAB_CARET(pad + 3 * avg);        /* near half of the tab gap */
+    int c_far = TAB_CARET(pad + 7 * avg);        /* far half of the tab gap */
+    int c_b   = TAB_CARET(pad + 8 * avg + 2);    /* on 'b', past the stop */
+    printf("ctldemo tabmap: a=%d gap=%d far=%d b=%d avg=%d\n",
+           c_a, c_gap, c_far, c_b, avg);
+    fflush(stdout);
+    st_check("tab: click on 'a' -> caret 0", c_a == 0);
+    st_check("tab: near-gap click lands before tab (col 1)", c_gap == 1);
+    st_check("tab: far-gap click lands after tab (col 2)", c_far == 2);
+    st_check("tab: click on 'b' -> caret 2", c_b == 2);
+    /* EM_SETTABSTOPS: a 4-char stop (16 dialog units) narrows the grid, so
+     * the same near-gap pixel now falls PAST the tab (col 2). */
+    int stops[1] = { 16 };
+    st_check("EM_SETTABSTOPS accepted",
+             SendMessage(ed, EM_SETTABSTOPS, 1, (LPARAM)stops) == TRUE);
+    SetWindowText(ed, "a\tb");
+    st_check("EM_SETTABSTOPS narrows the stop", TAB_CARET(pad + 3 * avg) == 2);
+    SendMessage(ed, EM_SETTABSTOPS, 0, 0);        /* back to the default grid */
+#undef TAB_CARET
+
     /* fail-loud probe: a LISTBOX has no SB_VERT plumbing — the call must
      * fail AND say so on stderr (the e2e asserts the stderr line) */
     HWND lb = CreateWindowEx(0, "LISTBOX", "", WS_CHILD | WS_VISIBLE,

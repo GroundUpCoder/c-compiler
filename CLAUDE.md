@@ -832,7 +832,7 @@ default to the FAT image so the estate needs no test changes;
 Repo URL: /etc/gucman/repos > baked /usr/share/gucman/repos
 (origin-relative `/packages`). punes is the first package (Slice 1);
 deploy leg + pulling the other apps are follow-ons.
-Image version is **v139**.
+Image version is **v140**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

@@ -431,6 +431,13 @@ check('ctldemo selftest passes in-OS',
   /ctldemo selftest: \d+ checks, 0 failed/.test(outE),
   (outE.match(/FAIL [^\n]*/g) || []).join(' | '));
 check('selftest exits 0', outE.includes('selftest-rc=0'));
+/* tab expansion (0274): the '\t' occupies a WIDE gap — a near-gap click lands
+ * before it (col 1), a far-gap click after it (col 2). Under the pre-fix bug
+ * (tab = one '?' glyph) both would land at/after the last byte. */
+const tabmap = (outE.match(/ctldemo tabmap: a=(\d+) gap=(\d+) far=(\d+) b=(\d+) avg=(\d+)/) || []);
+check('tab caret mapping is tab-stop wide (0274)',
+  tabmap[1] === '0' && tabmap[2] === '1' && tabmap[3] === '2' && tabmap[4] === '2',
+  tabmap[0] || '(no tabmap line)');
 check('fail-loud: unsupported scrollbar target says so on stderr',
   /win32: unsupported GetScrollPos: no SB_VERT scrollbar[^\n]*LISTBOX/.test(outE),
   (outE.split('selftest-rc=')[1] || '').slice(0, 200));
