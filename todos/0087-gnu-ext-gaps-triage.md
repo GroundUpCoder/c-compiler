@@ -10,11 +10,17 @@
 
 ## The gaps, roughly by expected payoff
 
-1. **`offsetof` as an integer constant expression.** `((size_t)&((T*)0)->m)`
-   doesn't const-fold, so `uint8_t buf[offsetof(...) - offsetof(...)]` is
-   rejected as a VLA (SameBoy gb.c rtc snapshot). Either fold the
-   null-pointer member-access address pattern in ConstEval or add a real
-   `__builtin_offsetof`. Broadly useful (container_of-style code).
+1. **`offsetof` as an integer constant expression.** — ✅ **FIXED** (verified
+   2026-07-22, cont-20/cont-22). No longer repros: `unsigned char
+   buf[offsetof(T,c) - offsetof(T,b)]` compiles and const-folds (the bound is
+   accepted as an ICE, NOT rejected as a VLA), and a false negative-size bound
+   is still correctly rejected — proving real const-folding, not a silently
+   ignored bound. Housekeeping-lag class (fix landed under another item; only
+   the triage note was stale). Locked by conformance test
+   `tests/unit/core/offsetof_array_bound` (offsetof-difference array bound
+   folds to the expected size). Original bug: `((size_t)&((T*)0)->m)` didn't
+   const-fold, so `uint8_t buf[offsetof(...) - offsetof(...)]` was rejected as
+   a VLA (SameBoy gb.c rtc snapshot).
 2. **GNU statement expressions `({ … })`.** Blocks MIN/MAX-style macros all
    over real-world code (SameBoy defs.h, Linux-adjacent headers).
    Medium-size parser+codegen feature; the payoff is fewer vendored macro
