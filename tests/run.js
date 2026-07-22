@@ -169,7 +169,7 @@ const RULES = [
   [/^vendor\/libgit2\//, ['fakegit', 'projects'], null],
   // OS-seeded vendor apps (doom/quake/gameboy/sameboy/busybox/…) restale the
   // image and are exercised by the OS e2es + the browser sweep.
-  [/^vendor\/(doom|quake|gameboy|sameboy|snake|busybox|tinyemu|micropython)\//,
+  [/^vendor\/(doom|quake|gameboy|sameboy|snake|busybox|tinyemu|micropython|magicpoint|sent)\//,
     ['projects', 'kernel', 'sweep'], 'seeded into the OS image'],
   // Any other vendor dir: at least a project build check.
   [/^vendor\//, ['projects'], 'a vendored project build'],

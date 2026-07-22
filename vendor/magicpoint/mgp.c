@@ -997,6 +997,21 @@ handle_xevent(e)
 		if (e->xany.window == window) {
 			if (e->xbutton.button == 1) {
 				struct render_state tstate;
+#ifdef MGPP
+				/* MagicPointPlus (todos/0272): a left-half click
+				 * goes BACKWARD (mirrors button 3 / 'b'), a
+				 * right-half click keeps the upstream forward
+				 * behaviour below.  Hit-test on the rendered
+				 * window width, the same geometry the click path
+				 * already reads. */
+				if (e->xbutton.x < (int)window_width / 2) {
+					if (sp->page > 1)
+						state_goto(sp, sp->page - 1, 0);
+					else
+						beep();
+					break;
+				}
+#endif
 				tstate = *sp;
 
 				if (!fl_shift && sp->cp
@@ -1056,6 +1071,9 @@ handle_xevent(e)
 		case XK_Down:
 		case XK_Next:
 		case XK_space:
+#ifdef MGPP
+		case XK_Right:		/* MagicPointPlus (todos/0272): forward */
+#endif
 		    {
 			struct render_state tstate;
 			tstate = *sp;
@@ -1091,6 +1109,9 @@ handle_xevent(e)
 		case XK_Prior:
 		case XK_BackSpace:
 		case XK_Delete:
+#ifdef MGPP
+		case XK_Left:		/* MagicPointPlus (todos/0272): backward */
+#endif
 			if (fl_number == 0) fl_number = 1;
 			if (sp->page - fl_number >= 1) {
 				state_goto(sp,
