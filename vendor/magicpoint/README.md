@@ -71,5 +71,28 @@ page-list/page-guide UI, html dump (`-D`), `xwintoppm` screendumps.
 The forward cache (`-F`) draws into pixmaps and works; its idle-time
 pre-caching runs on the 2s tick.
 
+### MagicPointPlus — the `/bin/mgpp` fork (todos/0272)
+
+`mgpp.json` builds a second binary, **MagicPointPlus** (`/bin/mgpp`), from the
+exact same sources as `bin.json` plus `-DMGPP`. It is a THIN compile-time delta
+over `mgp.c` (three small `#ifdef MGPP` blocks in `handle_xevent`), not a copy —
+every other behaviour, directive and the 0202 whitelist are byte-identical to
+`mgp`. The delta adds two navigation conveniences the user asked for:
+
+- a **left-half** click on the slide goes BACKWARD (previous page), a
+  **right-half** click keeps the upstream forward behaviour (hit-test on
+  `window_width / 2`, reading the same `e->xbutton.x` the click path already
+  reads);
+- **Left arrow** → back, **Right arrow** → forward (folded into the existing
+  back/forward keysym case groups; upstream leaves Left/Right unbound).
+
+`space` (next), `b` (back), `q` (quit) and everything else are unchanged. mgpp
+is seeded to `/usr/bin/mgpp`, has a Start▸Demos launcher, and — since the
+"Open with" picker is free-text — a `.mgp` deck opens in it by typing `mgpp`
+(the default double-click viewer stays `mgp`). Tests:
+`tests/kernel/test_mgpp_e2e.js` (headless page-identity off `wmctl shot`, with a
+`node … test_mgpp_e2e.js mgp` RED harness) + `tests/browser/os-mgpp.mjs`
+(real mouse/arrow input through the compositor).
+
 Tests: `tests/kernel/test_present_e2e.js` (headless pixels via `wmctl
 shot`), `tests/browser/os-present.mjs` (compositor pixels).

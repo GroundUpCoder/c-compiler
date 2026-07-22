@@ -97,6 +97,9 @@
       "/usr/bin/mgp": {
         "project": "vendor/magicpoint/bin.json"
       },
+      "/usr/bin/mgpp": {
+        "project": "vendor/magicpoint/mgpp.json"
+      },
       "/usr/share/mgp/demo.mgp": {
         "bin": "vendor/magicpoint/demo.mgp"
       },
@@ -231,6 +234,9 @@
       },
       "/usr/share/menu/Demos/learn-mgp": {
         "content": "#!/bin/sh\nmgp /usr/share/mgp/tutorial/01-welcome.mgp\n"
+      },
+      "/usr/share/menu/Demos/mgp-plus": {
+        "content": "#!/bin/sh\nmgpp /usr/share/mgp/demo.mgp\n"
       },
       "/usr/share/menu/Demos/winbox": {
         "link": "/usr/bin/winbox"
