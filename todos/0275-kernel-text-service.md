@@ -3,7 +3,10 @@
 - **Status**: open (user-directed 2026-07-22 — the direction is settled, do
   not re-litigate; from the host-borrowed-shortcut audit,
   `logs/2026-07-22/host-borrow-audit.md`)
-- **Design**: this file (promote to a topic doc if the blob grows)
+- **Design**: `todos/0275-kernel-text-service-design.md` (committed 2026-07-22,
+  branch ksvc-design — ABI, import env, integration, implementation plan;
+  feasibility spike: **GO**, FreeType builds/instantiates/rasterizes under
+  our compiler with a minimal kernel-side env, spike at `os/ksvc/spike/`)
 - **Difficulty**: heavy
 
 ## Goal
