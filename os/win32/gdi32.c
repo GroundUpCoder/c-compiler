@@ -44,8 +44,9 @@
 #include FT_FREETYPE_H
 
 #include "win32_internal.h"
-#include "../fontchain.h"   /* the fallback-face list (Unicode Phase D, W7) */
-#include "../wcwidth.h"     /* wide-cp tofu spans 2 cells */
+#include "../fontcore.h"    /* the shared glyph pipeline (todos/0277) — pulls
+                            * the fallback-face list (fontchain.h) and wcwidth.h
+                            * (wide-cp tofu spans 2 cells) */
 
 #include <math.h>
 #include <stdarg.h>
@@ -82,12 +83,7 @@ void __win32_unsupported(const char *fmt, ...) {
 
 enum { OBJ_PEN = 1, OBJ_BRUSH, OBJ_FONT, OBJ_BITMAP };
 
-typedef struct {
-    int loaded;                 /* 0 = not yet rendered */
-    int w, h, left, top;        /* freetype bitmap + placement */
-    int advance;
-    unsigned char *bmp;         /* alpha, w*h (NULL if blank) */
-} GlyphG;
+/* one cached glyph == fontcore FcGlyph (todos/0277). */
 
 struct __GDIOBJ {
     int type;
@@ -99,15 +95,11 @@ struct __GDIOBJ {
     int bmW, bmH;               /* bitmap */
     uint32_t *bits;             /* RGBA rows, tight stride */
     FT_Face face;               /* font face 0 (NULL until first use) */
-    FT_Face fbFace[FC_MAX_FALLBACKS];   /* fallback chain faces (Phase D), */
-    signed char fbState[FC_MAX_FALLBACKS]; /* 0 untried / 1 open / -1 failed */
+    FcChain fbc;                /* fallback chain faces (Phase D; fontcore) */
     int fontPx, fontLoaded, fontFailed;
     int fontMono;               /* NONANTIALIASED_QUALITY: 1-bit rendering */
     int ascent, descent, lineH, maxAdv, monoAdv;
-    GlyphG *glyphs;             /* [95], ASCII 32..126 */
-    GlyphG *xglyphs;            /* non-ASCII code points (0211), paired */
-    unsigned *xcps;             /*   with their cp; linear-scan cache */
-    int xn, xcap;
+    FcCache fontCache;          /* flat [95] ASCII + linear-scan side (0211) */
 };
 
 struct __DC {
@@ -212,6 +204,23 @@ static int font_px_clamped(HGDIOBJ f) {
     return px;
 }
 
+/* ---- the fallback chain (Unicode Phase D, W7; fontcore FcChain) ----
+ * The face PATH list loads once per process (fontchain.h); each HFONT
+ * opens a chain face lazily at ITS pixel size the first time a code
+ * point misses face 0 — apps that never draw exotic text never pay. */
+static char g_fcPaths[FC_MAX_FALLBACKS][FC_PATH_MAX];
+static int g_fcCount = -1;
+
+static int fc_count(void) {
+    if (g_fcCount < 0) g_fcCount = fc_load(g_fcPaths, FC_MAX_FALLBACKS);
+    return g_fcCount;
+}
+
+/* Chain-face load-failure hook (once-guarded via WIN32_UNSUPPORTED). */
+static void gdi_fc_fail(const char *p) {
+    WIN32_UNSUPPORTED("fallback face %s (cannot load; skipping)", p);
+}
+
 static int font_ensure(HGDIOBJ f) {
     if (!f || f->type != OBJ_FONT) return -1;
     if (f->fontLoaded) return 0;
@@ -236,140 +245,42 @@ static int font_ensure(HGDIOBJ f) {
     if (f->monoAdv <= 0) f->monoAdv = f->maxAdv;
     if (f->descent < 0) f->descent = 0;
     if (f->lineH < f->ascent + f->descent) f->lineH = f->ascent + f->descent;
-    f->glyphs = (GlyphG *)calloc(95, sizeof(GlyphG));
-    if (!f->glyphs) { f->fontFailed = 1; return -1; }
+    fc_chain_init(&f->fbc, g_ft, g_fcPaths, fc_count(), gdi_fc_fail);
     f->fontLoaded = 1;
     return 0;
 }
 
-/* ---- the fallback chain (Unicode Phase D, W7) ----
- * The face PATH list loads once per process (fontchain.h); each HFONT
- * opens a chain face lazily at ITS pixel size the first time a code
- * point misses face 0 — apps that never draw exotic text never pay. */
-static char g_fcPaths[FC_MAX_FALLBACKS][FC_PATH_MAX];
-static int g_fcCount = -1;
-
-static int fc_count(void) {
-    if (g_fcCount < 0) g_fcCount = fc_load(g_fcPaths, FC_MAX_FALLBACKS);
-    return g_fcCount;
-}
-
-static FT_Face fb_face(HGDIOBJ f, int i) {
-    if (f->fbState[i] < 0) return NULL;
-    if (f->fbState[i] == 0) {
-        if (FT_New_Face(g_ft, g_fcPaths[i], 0, &f->fbFace[i])) {
-            f->fbState[i] = -1;
-            WIN32_UNSUPPORTED("fallback face %s (cannot load; skipping)",
-                              g_fcPaths[i]);
-            return NULL;
-        }
-        FT_Set_Pixel_Sizes(f->fbFace[i], 0, font_px_clamped(f));
-        f->fbState[i] = 1;
-    }
-    return f->fbFace[i];
-}
-
-/* The face that covers cp: face 0, else the chain in list order, else
- * NULL (tofu). ASCII always renders from face 0 (glyph 0 included — the
- * pre-chain contract). */
-static FT_Face font_face_for(HGDIOBJ f, unsigned cp, FT_UInt *gi) {
-    *gi = FT_Get_Char_Index(f->face, (FT_ULong)cp);
-    if (*gi || cp <= 126) return f->face;
-    for (int i = 0; i < fc_count(); i++) {
-        FT_Face ff = fb_face(f, i);
-        if (!ff) continue;
-        *gi = FT_Get_Char_Index(ff, (FT_ULong)cp);
-        if (*gi) return ff;
-    }
-    return NULL;
-}
-
-/* Synthesized tofu box for a code point NO chain face covers (0211): a
- * LOUD visible gap marker, never a '?' that reads as data corruption
- * (a face's own .notdef can be EMPTY — rendering glyph 0 could be
- * invisible). A wide (wcwidth 2) code point gets a 2-cell box: the gap
- * marker occupies the room the real glyph would. */
-static void glyph_tofu(HGDIOBJ f, GlyphG *g, unsigned cp) {
-    int cell = f->monoAdv > 0 ? f->monoAdv : f->maxAdv;
-    int adv = cell * (wcwidth_cp(cp) == 2 ? 2 : 1);
-    int w = adv > 4 ? adv - 2 : 6;
-    int h = f->ascent > 4 ? f->ascent - 1 : 8;
-    g->advance = adv > 0 ? adv : w + 2;
-    g->left = 1;
-    g->top = f->ascent - 1;                      /* box base sits on baseline */
-    g->bmp = (unsigned char *)calloc((size_t)w * h, 1);
-    if (!g->bmp) return;
-    g->w = w;
-    g->h = h;
-    for (int x = 0; x < w; x++)
-        g->bmp[x] = g->bmp[(h - 1) * w + x] = 255;
-    for (int y = 0; y < h; y++)
-        g->bmp[y * w] = g->bmp[y * w + w - 1] = 255;
-}
-
-static GlyphG *glyph_render(HGDIOBJ f, GlyphG *g, unsigned cp) {
+/* Render callback (fontcore cache seam): fill g for cp on this HFONT —
+ * the covering face via fc_probe (chain sized to the HFONT's px), else
+ * the tofu box. gdi32's only per-render knob is the NONANTIALIASED mono
+ * threshold; the 1-bit cut THRESHOLDS the smooth coverage (this
+ * freetype registers only the smooth renderer + no hinter, so raster1/
+ * MONO would fail — and over the same unhinted outlines it yields
+ * equivalent pixels; 96 not 128 keeps 1px stems alive at small ppem —
+ * measured: >=128 drops the Roboto Mono 'T' stem at ppem 10). */
+static FcGlyph *gdi_render(void *ctx, FcGlyph *g, unsigned cp) {
+    HGDIOBJ f = (HGDIOBJ)ctx;
     g->loaded = 1;
     FT_UInt gi;
-    FT_Face face = font_face_for(f, cp, &gi);   /* chain probe (Phase D) */
+    FT_Face face = fc_probe(f->face, &f->fbc, font_px_clamped(f), cp, &gi);
     if (!face) {
         WIN32_UNSUPPORTED("font glyph U+%04X (no chain face has it; "
                           "drawing tofu)", cp);
-        glyph_tofu(f, g, cp);
+        int cell = f->monoAdv > 0 ? f->monoAdv : f->maxAdv;
+        fc_tofu(g, cell, f->ascent, cp);
         return g;
     }
-    if (FT_Load_Glyph(face, gi, FT_LOAD_DEFAULT)) return g;
-    g->advance = (int)(face->glyph->advance.x >> 6);
-    if (FT_Render_Glyph(face->glyph, FT_RENDER_MODE_NORMAL)) return g;
-    FT_Bitmap *bm = &face->glyph->bitmap;
-    g->w = (int)bm->width;
-    g->h = (int)bm->rows;
-    g->left = face->glyph->bitmap_left;
-    g->top = face->glyph->bitmap_top;
-    if (g->w > 0 && g->h > 0) {
-        g->bmp = (unsigned char *)malloc((size_t)g->w * g->h);
-        if (!g->bmp) { g->w = g->h = 0; return g; }
-        for (int y = 0; y < g->h; y++)
-            memcpy(&g->bmp[y * g->w], &bm->buffer[y * bm->pitch], (size_t)g->w);
-        if (f->fontMono) {
-            /* 1-bit output by THRESHOLDING the smooth coverage: the
-             * vendored freetype registers only the smooth renderer and no
-             * hinter (demo/myftmodule.h, myftoption.h), so raster1/MONO
-             * would fail — and over the same unhinted outlines it would
-             * produce equivalent pixels anyway. 96 (not 128) keeps 1px
-             * stems alive at small ppem (measured: >=128 drops the 'T'
-             * stem of Roboto Mono at ppem 10). */
-            for (int i = 0; i < g->w * g->h; i++)
-                g->bmp[i] = g->bmp[i] >= FT_MONO_THRESHOLD ? 255 : 0;
-        }
-    }
-    return g;
+    FcRenderOpts o = { f->fontMono ? FT_MONO_THRESHOLD : 0, 0 };
+    return fc_render_face(g, face, gi, o);
 }
 
 /* Glyph for one CODE POINT (0211: the text loops decode UTF-8 and pass
  * code points here). ASCII stays the flat [95] array; everything else
  * lands in a linear-scan side cache. NB the returned pointer is only
  * stable until the next font_glyph call (the side cache reallocs). */
-static GlyphG *font_glyph(HGDIOBJ f, unsigned cp) {
+static FcGlyph *font_glyph(HGDIOBJ f, unsigned cp) {
     if (cp < 32) cp = '?';                       /* control chars, term's rule */
-    if (cp <= 126) {
-        GlyphG *g = &f->glyphs[cp - 32];
-        return g->loaded ? g : glyph_render(f, g, cp);
-    }
-    for (int i = 0; i < f->xn; i++)
-        if (f->xcps[i] == cp) return &f->xglyphs[i];
-    if (f->xn == f->xcap) {
-        int nc = f->xcap ? f->xcap * 2 : 16;
-        GlyphG *ng = (GlyphG *)realloc(f->xglyphs, (size_t)nc * sizeof(GlyphG));
-        unsigned *np = (unsigned *)realloc(f->xcps, (size_t)nc * sizeof(unsigned));
-        if (ng) f->xglyphs = ng;
-        if (np) f->xcps = np;
-        if (!ng || !np) return font_glyph(f, '?');     /* OOM: keep drawing */
-        f->xcap = nc;
-    }
-    f->xcps[f->xn] = cp;
-    GlyphG *g = &f->xglyphs[f->xn++];
-    memset(g, 0, sizeof *g);
-    return glyph_render(f, g, cp);
+    return fc_cache_get(&f->fontCache, cp, gdi_render, f);
 }
 
 /* lfHeight < 0: character (em) height in px. lfHeight > 0: cell height —
@@ -539,16 +450,14 @@ BOOL DeleteObject(HGDIOBJ obj) {
     }
     if (obj->type == OBJ_BITMAP) free(obj->bits);
     if (obj->type == OBJ_FONT) {
-        if (obj->glyphs) {
-            for (int i = 0; i < 95; i++) free(obj->glyphs[i].bmp);
-            free(obj->glyphs);
-        }
-        for (int i = 0; i < obj->xn; i++) free(obj->xglyphs[i].bmp);
-        free(obj->xglyphs);
-        free(obj->xcps);
+        FcCache *fcache = &obj->fontCache;
+        for (int i = 0; i < 95; i++) free(fcache->ascii[i].bmp);
+        for (int i = 0; i < fcache->xn; i++) free(fcache->xglyphs[i].bmp);
+        free(fcache->xglyphs);
+        free(fcache->xcps);
         if (obj->face) FT_Done_Face(obj->face);
         for (int i = 0; i < FC_MAX_FALLBACKS; i++)
-            if (obj->fbState[i] == 1) FT_Done_Face(obj->fbFace[i]);
+            if (obj->fbc.state[i] == 1) FT_Done_Face(obj->fbc.face[i]);
     }
     free(obj);
     g_objCount--;
@@ -1095,7 +1004,7 @@ static BOOL text_run(HDC dc, int x, int y, LPCSTR s, int len, const INT *dx,
     int penX = x, baseline = y + f->ascent;
     for (int i = 0, n = 0; i < len; n++) {
         unsigned cp = __u8_next(s, len, &i);
-        GlyphG *g = font_glyph(f, cp);
+        FcGlyph *g = font_glyph(f, cp);
         if (g->bmp) {
             int gx0 = penX + g->left, gy0 = baseline - g->top;
             for (int gy = 0; gy < g->h; gy++) {
