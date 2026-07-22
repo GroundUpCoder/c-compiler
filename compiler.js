@@ -20890,6 +20890,12 @@ typedef Uint64 SDL_WindowFlags;
    is honored — the compositor blends it src-over (todos/0063). Standalone
    runtimes ignore it (the page canvas is opaque). */
 #define SDL_WINDOW_TRANSPARENT 0x0000000040000000ULL
+/* Utility (SDL3 value): a transient/owned window that does NOT appear in the
+   taskbar — under the OS WM the surface is marked transient (kernel flag bit4,
+   todos/0281) so /bin/wm gives it no taskbar button and skips it when cycling
+   (owned modals — MessageBox, dialogs — are never taskbar entries in Win95).
+   Standalone runtimes ignore it. */
+#define SDL_WINDOW_UTILITY 0x0000000000020000ULL
 /* Popup windows (SDL3 values; todos/0256): created via SDL_CreatePopupWindow
    as kernel ANCHORED CHILD surfaces — borderless, pinned to their parent at
    a fixed offset, moved/hidden/raised/destroyed/scaled with it, never

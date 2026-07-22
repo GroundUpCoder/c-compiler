@@ -2482,8 +2482,14 @@ static HWND create_window_impl(DWORD exStyle, LPCSTR className, LPCSTR windowNam
         static int sdlInited;
         if (!sdlInited) { SDL_Init(SDL_INIT_VIDEO); sdlInited = 1; }
         hw->top = hw;
-        hw->win = SDL_CreateWindow(windowName ? windowName : "",
-                                   w, h, (style & WS_THICKFRAME) ? SDL_WINDOW_RESIZABLE : 0);
+        /* Owned dialogs and MessageBoxes (the "#32770" class) are transient:
+         * SDL_WINDOW_UTILITY keeps them out of the taskbar and window cycle
+         * (todos/0281 — Win95 never lists owned modals). notepad's dirty-close
+         * "Save changes?" confirm must not add a second "Notepad" button. */
+        int transient = className && ci_eq(className, "#32770");
+        hw->win = SDL_CreateWindow(windowName ? windowName : "", w, h,
+                                   ((style & WS_THICKFRAME) ? SDL_WINDOW_RESIZABLE : 0) |
+                                   (transient ? SDL_WINDOW_UTILITY : 0));
         if (!hw->win) { free(hw->text); free(hw); return NULL; }
         int placed = 0;
         for (int i = 0; i < g_nTops; i++)
