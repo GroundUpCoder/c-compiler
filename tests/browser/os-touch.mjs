@@ -217,9 +217,13 @@ try {
     near(await sample(wb.x + 4, wb.y + 4), TEAL), await sample(wb.x + 4, wb.y + 4));
 
   // ---- long-press on its taskbar button -> window menu above the bar ----
-  const BMX = 88, BMY = SH - 36 - 134;   // button 0 gutter; h-134 menu (30px rows)
-                                        // (engine rows since 0259)
-  await longPress(100, SH - 14);
+  // Button 0 sits at x~112 — past the Start strip AND the Task-View/overview
+  // button (todos/EXPOSE shifted the app strip by TASKVIEW_W = 26px); the menu
+  // parks above the 36px bar at the button's left edge. Coordinates mirror the
+  // (green) mouse leg in os-ctxmenu.mjs: press at x=150 (inside [112,272)),
+  // sample the FACE gutter at BMX+4 with BMX = the menu's left edge (114).
+  const BMX = 114, BMY = SH - 36 - 134;   // h-134 menu (30px rows, engine since 0259)
+  await longPress(150, SH - 14);
   await waitPixel(BMX + 4, BMY + 46, FACE);
   check('long-press on the taskbar button raises the window menu', true);
   await page.keyboard.press('Escape');
