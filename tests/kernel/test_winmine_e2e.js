@@ -53,7 +53,7 @@ function section(out, name) {
 /* Shots are written in-OS under /root; a follow-up boot session cats the
  * concatenation to stdout (the test_gdi32_e2e pattern) and we split the
  * P6 stream back into images here. */
-const SHOTS = ['base', 'popup', 'closed', 'fresh', 'revealed', 'ticking', 'reset'];
+const SHOTS = ['bar', 'base', 'popup', 'closed', 'fresh', 'revealed', 'ticking', 'reset'];
 const shots = {};
 
 function extractShots() {
@@ -110,6 +110,10 @@ const out = boot([
   // deliberately not GETTEXT-resolvable (0171) — waiting on one is a dead wait.
   'wmctl wait label WineMine 10000',
   'SID=$(wmctl list | grep "WineMine$" | sed "s/[^0-9].*//")',
+  // 0280: the menu bar lives on its own strip child surface ("menubar");
+  // shot it for the "last title fits" pixel probe below.
+  'MSID=$(wmctl list | grep "menubar$" | sed "s/[^0-9].*//")',
+  'wmctl shot $MSID /root/bar.ppm',
   'echo ==list1',
   'wmctl list',
   'echo ==cut',
@@ -209,6 +213,30 @@ check('Exit item present (label cut at tab)', /menuitem id=1002 text='Exit'/.tes
  * the parent's client pixels must be BYTE-IDENTICAL across open and close —
  * menu pixels never touch the app's surface anymore. */
 extractShots();
+
+/* 0280: the last bar title ("Info") must render COMPLETE inside the window.
+ * At the 20px font the classic 16px/item bar padding needed ~164px — wider
+ * than beginner's 154 — and "Info" clipped mid-glyph at the right edge (the
+ * label-click path can't see that). The bar now tightens its padding when
+ * the titles wouldn't fit. Probe the strip surface: text ink (near-black,
+ * AA-safe threshold) must reach past mid-bar (so the probe can't pass on an
+ * empty bar) yet leave the rightmost columns clean; the bottom BTNSHADOW
+ * edge row is excluded. */
+{
+  const bar = readShot('bar.ppm');
+  check(`menubar strip spans the beginner window (${BEG_W}px)`, bar.w === BEG_W, bar.w);
+  let rightmost = -1;
+  for (let y = 0; y < bar.h - 1; y++)
+    for (let x = rightmost + 1; x < bar.w; x++) {
+      const o = (y * bar.w + x) * 3;
+      if (bar.data[o] < 0x60 && bar.data[o + 1] < 0x60 && bar.data[o + 2] < 0x60)
+        if (x > rightmost) rightmost = x;
+    }
+  check('bar titles render (text ink past mid-bar)', rightmost > bar.w / 2, rightmost);
+  check(`"Info" not clipped (rightmost ink column ${rightmost} clears the edge)`,
+    rightmost >= 0 && rightmost < bar.w - 2, `rightmost=${rightmost} w=${bar.w}`);
+}
+
 {
   const base = readShot('base.ppm'), popup = readShot('popup.ppm'), closed = readShot('closed.ppm');
   // popup area: below the bar at the Options title; 60x60 probe

@@ -1293,13 +1293,30 @@ BOOL DrawMenuBar(HWND h) {
 /* ---- bar geometry + drawing (the strip is user32 furniture; popup
  * geometry/raster live in the engine) ---- */
 
+/* Per-item horizontal padding. Classic is 16 (8 a side), but a window too
+ * narrow for its titles at that spread (beginner winmine's "Options"+"Info"
+ * after the 20px font, todos/0280) tightens evenly — floor 6 — so the last
+ * title still renders complete; bars that fit are untouched. */
+static int menu_bar_pad(HWND top) {
+    MenuTbl *m = MENU_T(top->menu);
+    int pw, ph;
+    if (!m || !m->n || !top->win || !SDL_GetWindowSize(top->win, &pw, &ph))
+        return 16;
+    int text = 0;
+    for (int i = 0; i < m->n; i++) text += mc_text_w(m->items[i].text);
+    if (2 + text + m->n * 16 <= pw) return 16;
+    int pad = (pw - 2 - text) / m->n;
+    return pad < 6 ? 6 : pad;
+}
+
 /* Bar item i's rect in SURFACE coords; returns 0 past the end. */
 static int menu_bar_rect(HWND top, int i, RECT *r) {
     MenuTbl *m = MENU_T(top->menu);
     if (!m || i < 0 || i >= m->n) return 0;
+    int pad = menu_bar_pad(top);
     int x = 2;
-    for (int k = 0; k < i; k++) x += mc_text_w(m->items[k].text) + 16;
-    SetRect(r, x, 0, x + mc_text_w(m->items[i].text) + 16, MENU_BAR_H);
+    for (int k = 0; k < i; k++) x += mc_text_w(m->items[k].text) + pad;
+    SetRect(r, x, 0, x + mc_text_w(m->items[i].text) + pad, MENU_BAR_H);
     return 1;
 }
 
@@ -1322,6 +1339,7 @@ static void menu_draw_bar_into(HWND top, HDC dc, int surfW) {
     FillRect(dc, &edge, GetSysColorBrush(COLOR_BTNSHADOW));
     SetBkMode(dc, TRANSPARENT);
     MenuTbl *m = MENU_T(top->menu);
+    int pad = menu_bar_pad(top);
     for (int i = 0; m && i < m->n; i++) {
         RECT r;
         if (!menu_bar_rect(top, i, &r)) break;
@@ -1330,7 +1348,7 @@ static void menu_draw_bar_into(HWND top, HDC dc, int surfW) {
         SetTextColor(dc, GetSysColor(open ? COLOR_HIGHLIGHTTEXT : COLOR_BTNTEXT));
         char label[128];
         strip_amp(m->items[i].text ? m->items[i].text : "", label, sizeof label);
-        TextOut(dc, r.left + 8, 2, label, (int)strlen(label));
+        TextOut(dc, r.left + pad / 2, 2, label, (int)strlen(label));
     }
 }
 
