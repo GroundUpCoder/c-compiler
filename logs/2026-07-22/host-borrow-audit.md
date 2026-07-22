@@ -73,3 +73,20 @@ AudioContext output device, rAF-as-vsync per 0100) are not findings.
 
 Verdicts on the borderlines are the user's; the queue items stand on
 their own either way.
+
+## Rulings (user, same day)
+
+- **VT1 xterm**: NOT a borrow — "different in nature. VT2 presents itself
+  as a full windowing setup; VT1 could theoretically be backed by a BIOS
+  or some other fake 'terminal'." VT1 is host-side console territory by
+  design. Closed, no item.
+- **OSK/keystrip** and **long-press+vibrate**: agreed, not queued.
+- **0276 (composited cursor): DROPPED.** The one-frame latency of a
+  compositor-drawn cursor is not worth paying — the native CSS cursor is
+  BLESSED as the deliberate design (WM.md deviations entry updated from
+  "the deviation stands" to "ruled deliberate"). Shape policy remains
+  kernel-owned (0105).
+- **Headless composite text: IN SCOPE for 0275.** Title text gets baked
+  into the deterministic composite via the same blob (goldens rebaked,
+  visually verified per the v133 lesson); the cursor stays out of both
+  composites.

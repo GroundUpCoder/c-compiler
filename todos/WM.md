@@ -1083,8 +1083,13 @@ overlap). Image v27.
   surface yet — the split layout was the honest v1; the positioned-xterm
   (clip-path) design stays queued.
 - **Cursor is the native browser cursor** (no kernel sprite; headless
-  composite has no cursor). The DEVIATION stands, but which native cursor
-  shows is now driven (todos/0105): per-surface `SDL_SetCursor` shape
+  composite has no cursor). RULED DELIBERATE (user, 2026-07-22, via the
+  host-borrow audit — todos/done/0276, `logs/2026-07-22/host-borrow-audit.md`):
+  a compositor-drawn sprite would trail the hardware cursor by one rAF
+  frame, and that latency is not worth paying for cursor pixels — the
+  browser is the hardware here, like the display itself. Not architectural
+  debt; revisit only if a real need (e.g. cursor-in-capture) appears.
+  Which native cursor shows IS ours to decide (todos/0105): per-surface `SDL_SetCursor` shape
   (SURFACE_SET_CURSOR RPC, an SDL_SystemCursor enum; -1 hidden) is OVERLAID
   with chrome resize cursors derived from the kernel's own frame hit test
   (resizable-only: EW/NS side edges, NWSE corner; fixed frames + title +

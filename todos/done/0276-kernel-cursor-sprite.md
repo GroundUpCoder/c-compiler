@@ -1,8 +1,11 @@
 # 0276 — Kernel-composited mouse cursor sprite (retire the CSS cursor deviation)
 
-- **Status**: open (from the host-borrowed-shortcut audit,
-  `logs/2026-07-22/host-borrow-audit.md`; the WM.md "Cursor is the native
-  browser cursor" deviation — promoted to committed work)
+- **Status**: DROPPED (user ruling 2026-07-22 — the one-frame composited-
+  cursor latency is not worth paying; the native CSS cursor is BLESSED as
+  the deliberate design, not a debt item. Shape policy stays kernel-owned
+  per 0105; the ruling is recorded in the WM.md deviations list and
+  `logs/2026-07-22/host-borrow-audit.md`. Revisit only if requirements
+  change, e.g. cursor-in-capture becomes a need.)
 - **Design**: todos/WM.md deviations list (~1085) has the standing state
 - **Difficulty**: medium
 

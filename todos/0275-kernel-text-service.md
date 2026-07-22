@@ -65,13 +65,19 @@ its first capability, not its shape.
   at maxW instead of fillText's squish; title weight via
   `FT_GlyphSlot_Embolden` (browser used bold) — tune visually at 20px
   against the v133 chrome rhythm.
-- **Headless**: the blob is plain wasm — Node's kernel (boot.js/tests) CAN
-  load it, which would end the "text is a browser-compositor affordance"
-  split in `wmScreenshotScreen` (kernel.js:5719). Default OFF initially:
-  goldens are bit-exact and text would touch ~all of them. Land the
-  browser compositor swap first; deterministic headless title text is an
-  explicit follow-up decision (it becomes POSSIBLE, and bit-exact, once
-  the rasterizer is ours).
+- **Headless — IN SCOPE (user ruling 2026-07-22)**: the blob is plain
+  wasm, so Node's kernel (boot.js/tests) loads it too, and
+  `wmScreenshotScreen` (kernel.js:5719) draws title text for real —
+  ending the "text is a browser-compositor affordance" split: browser and
+  headless composites agree, and title text becomes assertable in
+  goldens/`wmctl shot`. Our rasterizer = same bytes everywhere, so the
+  composite stays deterministic. Rebake the affected goldens — and per
+  the v133 lesson, VISUALLY verify each before rebaking (goldens can
+  encode bugs); text stays out of NOTHING else (chrome fills/geometry
+  unchanged). The cursor stays out of the headless composite (and out of
+  the browser one — see the 0276 DROPPED ruling: the CSS cursor stands).
+  Sequence within the item: land the browser swap and the headless text
+  in one change so the two composites never diverge on text again.
 - **Failure mode**: no zombie fallbacks — if the blob fails to
   load/instantiate at boot, that's a loud boot-error, not a quiet
   fillText revival. The Canvas2D path is DELETED.
@@ -86,8 +92,11 @@ its first capability, not its shape.
   a set title) renders real glyphs with `font-noto-cjk-mono` installed and
   honest tofu without — matching gdi32/term coverage on the same image.
 - Overlong titles ellipsize instead of squishing.
-- Kernel suite + browser sweep green; goldens byte-identical (headless
-  composite untouched in this item).
+- `wmScreenshotScreen` renders title text via the same blob — headless
+  and browser composites agree; affected goldens rebaked (each visually
+  verified before rebake, the v133 rule) and bit-exact ACROSS
+  environments thereafter.
+- Kernel suite + browser sweep green.
 - The service seam is documented (KERNEL.md or a ksvc README): how kernel
   JS loads/calls the blob, and that new kernel-C capabilities land as new
   exports on this blob.
