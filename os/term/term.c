@@ -20,6 +20,12 @@
  *     reflows vi); closing the window (or the child exiting) ends the
  *     session — the kernel HUPs the pty's foreground pgroup at master
  *     close, so a plain exit(0) is a clean teardown.
+ *   - A macOS-Terminal-style menu bar (todos/0273c): a "menubar" strip
+ *     child window over the top MENU_BAR_H px (the kernel anchored-child
+ *     primitive, todos/0256) whose dropdowns ride the ONE menu engine
+ *     (os/win32/menucore.h — term is customer #3 after user32 and wm.c)
+ *     as real POPUP_MENU anchored children titled "#32768". The grid
+ *     renders below the bar (GRID_Y offset).
  */
 #include <SDL.h>
 #include <ft2build.h>
@@ -41,6 +47,13 @@
 #include "../fontcore.h"  /* the shared glyph pipeline (todos/0277) — pulls
                            * freetype, fontchain.h (fallback list) and
                            * wcwidth.h (double-width; MUST MATCH kernel.js) */
+#include <SDL_popup.h>    /* the kernel anchored-child popup primitive (0256) */
+#include "../win32/menucore.h"        /* the ONE menu engine (0259 A13): term
+                                       * is customer #3 — the wm.c pattern,
+                                       * menucore.json only, no user32/
+                                       * kernel32 (todos/0273c) */
+#include "../win32/win32_internal.h"  /* __gdi_dc_wrap: engine raster over an
+                                       * SDL surface's pixels */
 
 /* User-override font first, then the baked vendor default (todos/0040 —
  * systemd-style /etc: an empty /etc must boot). */
@@ -837,6 +850,340 @@ static void handle_key(const SDL_KeyboardEvent *k) {
     write(mfd, u, u8_encode((uint32_t)sym, u));
 }
 
+/* ============================================================ menu bar
+ * (todos/0273c) — a macOS-Terminal-style top menu riding the OS's ONE
+ * menu facility at both layers: the strip and every dropdown are kernel
+ * anchored-child popup surfaces (SDL_CreatePopupWindow, todos/0256), and
+ * the dropdown model/geometry/tracking/raster are the menucore engine
+ * (todos/0259 A13) — term is the engine's customer #3 after user32 and
+ * wm.c, linking win32/menucore.json (menucore.c + gdi32.c) WITHOUT
+ * user32/kernel32, exactly the wm.c pattern. The bar strip itself is
+ * front-end furniture (as in user32): painted through a __gdi_dc_wrap DC
+ * in the engine's own font/colors, so bar and dropdowns are pixel-uniform
+ * with every other OS menu. Dropdown levels hold the kernel grab
+ * (SDL_WINDOW_POPUP_MENU, titled "#32768" like any Win32 menu window —
+ * `wmctl wait win "#32768"` works on term's menus too); an outside press
+ * dismisses kernel-side (CLOSE_REQUESTED) and is consumed. While a chain
+ * is open the menu is MODAL: keys drive the engine (never the pty, so
+ * browsing a menu can't snap the scrollback view or type into the shell)
+ * and a main-window press just closes it. The grid lives below the strip:
+ * everything grid-facing offsets by GRID_Y. */
+#define GRID_Y MENU_BAR_H
+
+enum { CM_NEWWIN = 1, CM_SETTINGS, CM_CLOSEWIN,
+       CM_COPY, CM_PASTE, CM_SELALL,
+       CM_TOP, CM_BOTTOM, CM_CLEARSB };
+
+static SDL_Window *bar_win;        /* the persistent "menubar" strip child */
+static MenuTbl *menu_root;         /* bar level: Shell / Edit / View */
+static int bar_idx = -1;           /* open bar title, -1 none */
+/* Live-grayed items, refreshed in the popup_opening op (the
+ * WM_INITMENUPOPUP analog — fired before the level is measured, so the
+ * paint reflects the moment it opens). */
+static MenuItem *mi_copy, *mi_paste, *mi_top, *mi_bottom, *mi_clear;
+
+static void bar_paint(void);
+
+/* Window (Minimize/Zoom) and Help menus are deliberately absent: they
+ * need WMP chrome ops term doesn't speak (it is not a wm.sock client) /
+ * dialog furniture term doesn't have — recorded in the 0273c design
+ * note, not silently cut. */
+static void menu_build(void) {
+    MenuTbl *shell = mc_menu_create(), *edit = mc_menu_create(),
+            *view = mc_menu_create();
+    mc_append(shell, 0, CM_NEWWIN, "New Window", NULL);
+    /* The 0273 (d) settings-window entry point: visible but GRAYED until
+     * that lane lands — an explicit stub, not a hidden cut. */
+    MenuItem *st = mc_append(shell, 0, CM_SETTINGS, "Settings...", NULL);
+    if (st) st->state = MF_GRAYED;
+    mc_append(shell, 2, 0, NULL, NULL);
+    mc_append(shell, 0, CM_CLOSEWIN, "Close Window", NULL);
+    mi_copy = mc_append(edit, 0, CM_COPY, "Copy", NULL);
+    mi_paste = mc_append(edit, 0, CM_PASTE, "Paste", NULL);
+    mc_append(edit, 0, CM_SELALL, "Select All", NULL);
+    mi_top = mc_append(view, 0, CM_TOP, "Scroll to Top", NULL);
+    mi_bottom = mc_append(view, 0, CM_BOTTOM, "Scroll to Bottom", NULL);
+    mc_append(view, 2, 0, NULL, NULL);
+    mi_clear = mc_append(view, 0, CM_CLEARSB, "Clear Scrollback", NULL);
+    menu_root = mc_menu_create();
+    mc_append(menu_root, 1, 0, "Shell", shell);
+    mc_append(menu_root, 1, 0, "Edit", edit);
+    mc_append(menu_root, 1, 0, "View", view);
+}
+
+static void spawn_sibling_term(void) {
+    /* Shell > New Window: an independent sibling session (macOS
+     * Terminal's ⌘N shape, not a nested term). Own pgroup; the pty
+     * master must NOT leak into it (a second holder would defeat
+     * master-close EOF). Reaped by frame_cb's WNOHANG loop. */
+    char *argv[] = { "term", NULL };
+    char *envp[] = { LAUNCH_ENV_PATH, LAUNCH_ENV_HOME,
+                     "TERM=xterm-256color", NULL };
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addclose(&fa, mfd);
+    posix_spawnattr_t at;
+    posix_spawnattr_init(&at);
+    posix_spawnattr_setflags(&at, POSIX_SPAWN_SETPGROUP);
+    posix_spawnattr_setpgroup(&at, 0);
+    pid_t pid;
+    posix_spawnp(&pid, "/bin/term", &fa, &at, argv, envp);
+    posix_spawnattr_destroy(&at);
+    posix_spawn_file_actions_destroy(&fa);
+}
+
+/* ---- the menucore seam instance (A7) — the u32_mc / wmmc pattern ---- */
+
+static void tmc_post_command(void *owner, int id) {
+    (void)owner;                       /* one window; the ids say it all */
+    switch (id) {
+    case CM_NEWWIN:   spawn_sibling_term(); break;
+    case CM_CLOSEWIN: exit(0); break;  /* master close HUPs the session (0020) */
+    case CM_COPY:     copy_selection(); break;
+    case CM_PASTE:    paste_clipboard(); break;
+    case CM_SELALL:
+        sel_ax = 0; sel_ay = 0; sel_ex = cols - 1; sel_ey = rows - 1;
+        sel_on = 1; sel_drag = 0;
+        dirty = 1;
+        break;
+    case CM_TOP:      scroll_view(hist_count); break;
+    case CM_BOTTOM:   snap_live(); break;
+    case CM_CLEARSB:  hist_clear(); dirty = 1; break;
+    default: break;                    /* CM_SETTINGS stays grayed (0273 d) */
+    }
+}
+
+static void tmc_track_state(void *owner, int entering, int standalone) {
+    (void)owner; (void)standalone;
+    if (!entering) { bar_idx = -1; bar_paint(); }    /* un-highlight */
+}
+
+static void tmc_popup_opening(void *owner, void *tbl, int idx) {
+    (void)owner; (void)tbl; (void)idx;
+    mi_copy->state = sel_on ? 0 : MF_GRAYED;
+    mi_paste->state = SDL_HasClipboardText() ? 0 : MF_GRAYED;
+    /* View drives the (a) scrollback model; the alt screen has none. */
+    mi_top->state = (!on_alt && view_off < hist_count) ? 0 : MF_GRAYED;
+    mi_bottom->state = (!on_alt && view_off > 0) ? 0 : MF_GRAYED;
+    mi_clear->state = (!on_alt && hist_count > 0) ? 0 : MF_GRAYED;
+}
+
+static MCWIN tmc_win_create(MCWIN parent, int dx, int dy, int w, int h,
+                            int grab) {
+    SDL_Window *pw = SDL_CreatePopupWindow((SDL_Window *)parent, dx, dy, w, h,
+                                           grab ? SDL_WINDOW_POPUP_MENU
+                                                : SDL_WINDOW_TOOLTIP);
+    if (!pw) {
+        fprintf(stderr, "term: menu overlay window failed: %s\n",
+                SDL_GetError());
+        return NULL;
+    }
+    /* The real Win32 menu window class name: tests wait on it exactly as
+     * on any win32 app's menus. */
+    SDL_SetWindowTitle(pw, grab ? "#32768" : "menubar");
+    return (MCWIN)pw;
+}
+
+static void tmc_win_destroy(MCWIN w) { SDL_DestroyWindow((SDL_Window *)w); }
+
+static HDC tmc_win_begin(MCWIN w, int *wOut, int *hOut) {
+    SDL_Surface *s = SDL_GetWindowSurface((SDL_Window *)w);
+    if (!s) return NULL;
+    if (wOut) *wOut = s->w;
+    if (hOut) *hOut = s->h;
+    return __gdi_dc_wrap(s->pixels, s->w, s->h, s->pitch / 4);
+}
+
+static void tmc_win_present(MCWIN w, HDC dc) {
+    __gdi_dc_unwrap(dc);
+    SDL_UpdateWindowSurface((SDL_Window *)w);
+}
+
+static void tmc_screen_size(int *wOut, int *hOut) {
+    SDL_Rect scr;
+    if (SDL_GetDisplayBounds(0, &scr)) { *wOut = scr.w; *hOut = scr.h; }
+    else { *wOut = 0; *hOut = 0; }     /* no cap */
+}
+
+static const MenuCoreOps term_mc = {
+    tmc_post_command, tmc_track_state, tmc_popup_opening,
+    tmc_win_create, tmc_win_destroy, tmc_win_begin, tmc_win_present,
+    tmc_screen_size,
+};
+
+/* ---- bar furniture (the user32 menu_bar_* shape, single top-level) ---- */
+
+static int bar_pad(void) {
+    int pw, ph;
+    if (!menu_root || !menu_root->n || !win ||
+        !SDL_GetWindowSize(win, &pw, &ph))
+        return 16;
+    int text = 0;
+    for (int i = 0; i < menu_root->n; i++)
+        text += mc_text_w(menu_root->items[i].text);
+    if (2 + text + menu_root->n * 16 <= pw) return 16;
+    int pad = (pw - 2 - text) / menu_root->n;   /* overflow: shrink (0280) */
+    return pad < 6 ? 6 : pad;
+}
+
+/* Bar title i's rect in strip coords; 0 past the end. */
+static int bar_rect(int i, RECT *r) {
+    if (!menu_root || i < 0 || i >= menu_root->n) return 0;
+    int pad = bar_pad();
+    int x = 2;
+    for (int k = 0; k < i; k++)
+        x += mc_text_w(menu_root->items[k].text) + pad;
+    SetRect(r, x, 0, x + mc_text_w(menu_root->items[i].text) + pad,
+            MENU_BAR_H);
+    return 1;
+}
+
+static int bar_at(int x, int y) {
+    if (y < 0 || y >= MENU_BAR_H) return -1;
+    for (int i = 0; menu_root && i < menu_root->n; i++) {
+        RECT r;
+        if (bar_rect(i, &r) && x >= r.left && x < r.right) return i;
+    }
+    return -1;
+}
+
+/* Presented only on menu-STATE changes (open/close/switch/resize ack) —
+ * never per term frame; the strip and the grid never touch each other's
+ * pixels. */
+static void bar_paint(void) {
+    if (!bar_win) return;
+    SDL_Surface *s = SDL_GetWindowSurface(bar_win);
+    if (!s) return;
+    HDC dc = __gdi_dc_wrap(s->pixels, s->w, s->h, s->pitch / 4);
+    if (!dc) return;
+    RECT r;
+    SetRect(&r, 0, 0, s->w, s->h);
+    FillRect(dc, &r, GetSysColorBrush(COLOR_BTNFACE));
+    SetRect(&r, 0, MENU_BAR_H - 1, s->w, MENU_BAR_H);
+    FillRect(dc, &r, GetSysColorBrush(COLOR_BTNSHADOW));
+    SetBkMode(dc, TRANSPARENT);
+    int pad = bar_pad();
+    for (int i = 0; menu_root && i < menu_root->n; i++) {
+        if (!bar_rect(i, &r)) break;
+        int open = __mc.open && bar_idx == i;
+        if (open) FillRect(dc, &r, GetSysColorBrush(COLOR_HIGHLIGHT));
+        SetTextColor(dc, GetSysColor(open ? COLOR_HIGHLIGHTTEXT
+                                          : COLOR_BTNTEXT));
+        const char *t = menu_root->items[i].text ? menu_root->items[i].text
+                                                 : "";
+        TextOut(dc, r.left + pad / 2, 2, t, (int)strlen(t));
+    }
+    __gdi_dc_unwrap(dc);
+    SDL_UpdateWindowSurface(bar_win);
+}
+
+/* Open bar title idx as chain level 0 (a hover/click switch reuses the
+ * live tracking — the user32 menu_open_popup shape). */
+static void bar_open(int idx) {
+    if (!menu_root || idx < 0 || idx >= menu_root->n) return;
+    MenuItem *it = &menu_root->items[idx];
+    if (it->kind != 1 || !it->sub) return;
+    if (__mc.open) mc_trunc(0);
+    else mc_track_begin(&term_mc, (void *)&term_mc, (void *)&term_mc, 0, 0);
+    /* NB the owner token must be non-NULL: mc_fire posts a bar tracking's
+     * command only `if (owner)` (the wm.c pattern — the vtable address). */
+    bar_idx = idx;
+    RECT br;
+    bar_rect(idx, &br);
+    mc_level_open(it->sub, idx, (MCWIN)win, br.left, MENU_BAR_H);
+    bar_paint();                       /* highlight the open title */
+}
+
+static void bar_mouse(int press, int x, int y) {
+    int bi = bar_at(x, y);
+    if (!press) {                      /* motion: hover-switch while open */
+        if (__mc.open && bi >= 0 && bi != bar_idx) bar_open(bi);
+        return;
+    }
+    if (__mc.open && bi == bar_idx) { mc_close(); return; }
+    if (bi >= 0) bar_open(bi);
+    else if (__mc.open) mc_close();
+}
+
+static int menu_level_by_wid(Uint32 id) {
+    for (int k = 0; k < __mc.nlev; k++)
+        if (__mc.lev[k].win &&
+            SDL_GetWindowID((SDL_Window *)__mc.lev[k].win) == id)
+            return k;
+    return -1;
+}
+
+/* Menu-layer event demux, FIRST in frame_cb's poll loop (the user32
+ * pump's coupling-#5 shape: real input arrives on the CHILD windowIDs
+ * with child-local coords). Returns 1 when the event was the menu's. */
+static int menu_event(const SDL_Event *e) {
+    switch (e->type) {
+    case SDL_EVENT_KEY_DOWN: {
+        if (!__mc.open) return 0;
+        int sym = (int)e->key.key;     /* modal: engine keys, rest swallowed */
+        if (!mc_route_key(sym) && sym >= 32 && sym <= 126)
+            mc_typeahead(sym);         /* wm.c's opt-in first-letter cycle */
+        return 1;
+    }
+    case SDL_EVENT_MOUSE_MOTION: {
+        int k = menu_level_by_wid(e->motion.windowID);
+        if (k >= 0) {
+            mc_level_mouse(k, WM_MOUSEMOVE,
+                           (int)e->motion.x, (int)e->motion.y);
+            return 1;
+        }
+        if (bar_win && e->motion.windowID == SDL_GetWindowID(bar_win)) {
+            bar_mouse(0, (int)e->motion.x, (int)e->motion.y);
+            return 1;
+        }
+        return 0;
+    }
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP: {
+        int down = e->type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+        int k = menu_level_by_wid(e->button.windowID);
+        if (k >= 0) {
+            if (e->button.button == 1)
+                mc_level_mouse(k, down ? WM_LBUTTONDOWN : WM_LBUTTONUP,
+                               (int)e->button.x, (int)e->button.y);
+            return 1;
+        }
+        if (bar_win && e->button.windowID == SDL_GetWindowID(bar_win)) {
+            if (down && e->button.button == 1)
+                bar_mouse(1, (int)e->button.x, (int)e->button.y);
+            return 1;
+        }
+        if (__mc.open) {               /* main window while open: modal — a
+                                          press closes (the in-window twin
+                                          of the kernel grab) and is
+                                          swallowed */
+            if (down) mc_close();
+            return 1;
+        }
+        return 0;
+    }
+    case SDL_EVENT_MOUSE_WHEEL:
+        return __mc.open ||
+               menu_level_by_wid(e->wheel.windowID) >= 0 ||
+               (bar_win && e->wheel.windowID == SDL_GetWindowID(bar_win));
+    case SDL_EVENT_WINDOW_RESIZED:
+        if (bar_win && e->window.windowID == SDL_GetWindowID(bar_win)) {
+            bar_paint();               /* the strip's own resize ack (A5) */
+            return 1;
+        }
+        return 0;
+    case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+        if (menu_level_by_wid(e->window.windowID) >= 0) {
+            mc_close();                /* kernel grab: the outside press
+                                          dismissed the chain (consumed) */
+            return 1;
+        }
+        return 0;
+    default:
+        return 0;
+    }
+}
+
 /* ============================================================ glyphs */
 
 /* ---- the fallback chain (Unicode Phase D, W7; fontcore FcChain) ----
@@ -933,7 +1280,7 @@ static void render(void) {
             const Cell *cell = c < slen ? &src[c] : &pad;
             int fg, bg;
             cell_colors(cell, live_r, c, show_sel, &fg, &bg);
-            int x0 = c * cell_w, y0 = r * cell_h;
+            int x0 = c * cell_w, y0 = GRID_Y + r * cell_h;
             uint32_t bgp = pack(PAL[bg]);
             for (int y = y0; y < y0 + cell_h && y < sh; y++) {
                 uint32_t *rowp = &px[y * sw];
@@ -945,7 +1292,7 @@ static void render(void) {
             const Cell *cell = c < slen ? &src[c] : &pad;
             int fg, bg;
             cell_colors(cell, live_r, c, show_sel, &fg, &bg);
-            int x0 = c * cell_w, y0 = r * cell_h;
+            int x0 = c * cell_w, y0 = GRID_Y + r * cell_h;
             if (cell->cp <= 32) continue;    /* space + defensive C0 +
                                                 CP_WIDE_CONT: bg only */
             FcGlyph *g = cp_glyph(cell->cp);
@@ -974,12 +1321,17 @@ static void render(void) {
             }
         }
     }
-    /* Uncovered right/bottom margins (window not an exact cell multiple). */
+    /* Uncovered right/bottom margins (window not an exact cell multiple)
+     * and the top GRID_Y band — the strip child covers the band visually,
+     * but the surface pixels under it stay deterministic (0273c). */
     uint32_t defbg = pack(PAL[DEF_BG]);
     for (int y = 0; y < sh; y++) {
         for (int x = cols * cell_w; x < sw; x++) px[y * sw + x] = defbg;
     }
-    for (int y = rows * cell_h; y < sh; y++) {
+    for (int y = 0; y < GRID_Y && y < sh; y++) {
+        for (int x = 0; x < cols * cell_w && x < sw; x++) px[y * sw + x] = defbg;
+    }
+    for (int y = GRID_Y + rows * cell_h; y < sh; y++) {
         for (int x = 0; x < cols * cell_w; x++) px[y * sw + x] = defbg;
     }
     /* Side scrollbar overlay (0273b): full-height track, proportional
@@ -987,13 +1339,15 @@ static void render(void) {
      * stays legible. Integer blends — the shm shot stays bit-exact:
      * track 25% toward mid-gray (over black bg -> 32,32,32), thumb 75%
      * toward light gray (-> ~150+, clearly brighter than the track). */
-    if (sb_visible()) {
+    if (sb_visible() && sh > GRID_Y) {
+        /* The bar spans the GRID band only (0273c: the strip child owns
+         * the top GRID_Y px); geometry is band-local. */
         int ty, th;
-        sb_geom(sh, &ty, &th);
+        sb_geom(sh - GRID_Y, &ty, &th);
         int x0 = sw - SB_W;
         if (x0 < 0) x0 = 0;
-        for (int y = 0; y < sh; y++) {
-            int thumb = y >= ty && y < ty + th;
+        for (int y = GRID_Y; y < sh; y++) {
+            int thumb = y - GRID_Y >= ty && y - GRID_Y < ty + th;
             for (int x = x0; x < sw; x++) {
                 uint32_t p = px[y * sw + x];
                 unsigned r = p & 0xFF, g = (p >> 8) & 0xFF, b = (p >> 16) & 0xFF;
@@ -1075,33 +1429,39 @@ static void on_chld(int sig) { (void)sig; chld_seen = 1; }
 static void frame_cb(void) {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
+        /* Menu layer first (0273c): bar strip + open dropdown chain, and
+         * the modal swallow while a chain is open. */
+        if (menu_event(&e)) continue;
         if (e.type == SDL_EVENT_KEY_DOWN) {
             handle_key(&e.key);
         } else if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == 1 &&
-                   sb_visible() && (int)e.button.x >= surf->w - SB_W) {
+                   sb_visible() && (int)e.button.x >= surf->w - SB_W &&
+                   (int)e.button.y >= GRID_Y) {
             /* Scrollbar press (0273b): thumb -> start a drag; track ->
              * page toward the click (one viewport, like PageUp/Down).
              * Never anchors a selection; with the bar hidden the region
-             * falls through to the selection branch below unchanged. */
-            int y = (int)e.button.y, ty, th;
-            sb_geom(surf->h, &ty, &th);
+             * falls through to the selection branch below unchanged.
+             * Band-local coords (0273c: the strip owns y < GRID_Y). */
+            int y = (int)e.button.y - GRID_Y, ty, th;
+            sb_geom(surf->h - GRID_Y, &ty, &th);
             if (y >= ty && y < ty + th) { sb_drag = 1; sb_grab = y - ty; }
             else scroll_view(y < ty ? (rows > 1 ? rows - 1 : 1)
                                     : -(rows > 1 ? rows - 1 : 1));
         } else if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == 1) {
             /* Left press: clear any selection, anchor a new one (0090). */
             sel_ax = sel_ex = cell_clamp((int)e.button.x / cell_w, cols);
-            sel_ay = sel_ey = cell_clamp((int)e.button.y / cell_h, rows);
+            sel_ay = sel_ey = cell_clamp(((int)e.button.y - GRID_Y) / cell_h, rows);
             sel_drag = 1;
             if (sel_on) { sel_on = 0; dirty = 1; }
         } else if (e.type == SDL_EVENT_MOUSE_MOTION && sb_drag) {
             /* Thumb drag (0273b). Gated on visibility so an alt-screen
              * entry mid-drag (vi launched by the session) can't write
              * view_off under a screen that must stay live. */
-            if (sb_visible()) sb_drag_to((int)e.motion.y, surf->h);
+            if (sb_visible()) sb_drag_to((int)e.motion.y - GRID_Y,
+                                         surf->h - GRID_Y);
         } else if (e.type == SDL_EVENT_MOUSE_MOTION && sel_drag) {
             int c = cell_clamp((int)e.motion.x / cell_w, cols);
-            int r = cell_clamp((int)e.motion.y / cell_h, rows);
+            int r = cell_clamp(((int)e.motion.y - GRID_Y) / cell_h, rows);
             if (c != sel_ex || r != sel_ey || !sel_on) {
                 sel_ex = c;
                 sel_ey = r;
@@ -1118,15 +1478,33 @@ static void frame_cb(void) {
             if (!on_alt) scroll_view((int)e.wheel.y * 3);
         } else if (e.type == SDL_EVENT_WINDOW_RESIZED) {
             surf = SDL_GetWindowSurface(win);   /* re-derive (SDL3 contract) */
-            apply_resize(surf->w / cell_w, surf->h / cell_h);
+            if (__mc.open) mc_close();          /* geometry moved under the chain */
+            apply_resize(surf->w / cell_w, (surf->h - GRID_Y) / cell_h);
+            /* A5: the strip width-follows the parent; its repaint rides
+             * its own RESIZED ack (menu_event). Same width = same paint. */
+            if (bar_win) {
+                SDL_Surface *bs = SDL_GetWindowSurface(bar_win);
+                if (bs && bs->w != surf->w)
+                    SDL_SetWindowSize(bar_win, surf->w, MENU_BAR_H);
+            }
+        } else if (e.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
+                   e.window.windowID == SDL_GetWindowID(win)) {
+            /* With the bar strip child alive term is a MULTI-window app,
+             * so the close box arrives as a per-window close request
+             * (todos/0089), never the single-window QUIT. Menu levels'
+             * close requests were consumed in menu_event; the main
+             * window's ends the session (0273c). */
+            exit(0);
         } else if (e.type == SDL_EVENT_QUIT) {
             exit(0);   /* master close HUPs the pty's foreground pgroup */
         }
     }
-    if (child > 0) {
-        int st;
-        if (waitpid(child, &st, WNOHANG) == child) exit(0);   /* session over */
-    }
+    /* Reap: the session child's exit ends the session; New Window
+     * siblings (0273c) are just collected. */
+    pid_t rp;
+    int st;
+    while ((rp = waitpid(-1, &st, WNOHANG)) > 0)
+        if (rp == child) exit(0);                             /* session over */
     /* Drain the master (bounded per frame so rendering stays live). */
     int budget = 65536;
     while (budget > 0) {
@@ -1236,10 +1614,22 @@ int main(int argc, char **argv) {
     close(sfd);   /* the child holds the slave; master EOF = session end */
 
     SDL_Init(SDL_INIT_VIDEO);
-    win = SDL_CreateWindow("term", cols * cell_w, rows * cell_h,
+    win = SDL_CreateWindow("term", cols * cell_w, GRID_Y + rows * cell_h,
                            SDL_WINDOW_RESIZABLE);
     if (!win) return 3;
     surf = SDL_GetWindowSurface(win);
+    /* The menu bar strip child (0273c). Hard require, loud failure — no
+     * bar-less tier: term already requires the kernel (openpty above),
+     * and under a kernel the anchored-child primitive always exists. */
+    menu_build();
+    bar_win = SDL_CreatePopupWindow(win, 0, 0, cols * cell_w, MENU_BAR_H,
+                                    SDL_WINDOW_TOOLTIP);
+    if (!bar_win) {
+        fprintf(stderr, "term: menu bar window failed: %s\n", SDL_GetError());
+        return 3;
+    }
+    SDL_SetWindowTitle(bar_win, "menubar");
+    bar_paint();
     render();
     SDL_UpdateWindowSurface(win);
     /* Event-driven main loop (todos/0178): term was a frame-callback app —

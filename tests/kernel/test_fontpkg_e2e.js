@@ -159,12 +159,14 @@ async function main() {
     return { w, h, data, end: data + w * h * 3 };
   }
   // One 16x19 cell-PAIR bitmap at row 0 (pair i = cells 2i,2i+1) as a
-  // Buffer slice for exact comparison.
+  // Buffer slice for exact comparison. Row 0 sits below the 30px menu bar
+  // band (todos/0273c — the grid renders at y offset 30).
+  const GRID_Y = 30;
   function pairBits(buf, ppm, i) {
     const out = Buffer.alloc(16 * 19 * 3);
     for (let y = 0; y < 19; y++) {
       for (let x = 0; x < 16; x++) {
-        const s = ppm.data + (y * ppm.w + (i * 16 + x)) * 3;
+        const s = ppm.data + ((GRID_Y + y) * ppm.w + (i * 16 + x)) * 3;
         buf.copy(out, (y * 16 + x) * 3, s, s + 3);
       }
     }

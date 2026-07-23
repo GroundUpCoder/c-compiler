@@ -2,7 +2,9 @@
 // 0020 acceptance, headless: the wasm terminal (/bin/term — SDL surface +
 // kernel pty + freetype, seeded from os/term/bin.json) runs hush on a pty
 // inside a WM window, driven through os/boot.js:
-//   - `term &` opens a 640x456 window (80x24 at the mono font's 8x19 cell)
+//   - `term &` opens a 640x486 window (80x24 at the mono font's 8x19 cell
+//     + the 30px menu bar strip on top, todos/0273c — the grid renders at
+//     y offset 30, so every row-anchored pixel probe below adds GRID_Y)
 //   - injected SDL keys become pty bytes: `ls /bin` renders MORE text
 //     (screenshot pixel deltas prove the echo + output path)
 //   - busybox vi works INSIDE the terminal: alt screen, insert, :wq — the
@@ -29,6 +31,11 @@ function check(name, cond, extra) {
 }
 
 const { dir: tmp, image } = freshImage('os-term-');
+
+// The 0273c menu bar: a "menubar" strip child owns the top GRID_Y px of the
+// window; the grid band starts below it (shots are the term SURFACE — the
+// strip child is a separate surface, so the band renders as background).
+const GRID_Y = 30;
 
 // Inject a string as SDL key events (down+up per char). SDL3 keysyms are
 // modifier-applied characters, so term maps them straight to pty bytes;
@@ -82,8 +89,8 @@ function sessionTerm() {
   const list1 = (out.split('==list1\n')[1] || '').split('==')[0];
   const termRow = list1.split('\n').find((l) => l.endsWith('\tterm')) || '';
   check('term opens a WM window titled "term"', termRow !== '', JSON.stringify(list1));
-  check('term window is 640x456 (80x24 at the 8x19 mono cell)',
-    termRow.includes('640x456'), termRow);
+  check('term window is 640x486 (80x24 at the 8x19 mono cell + the menu bar)',
+    termRow.includes('640x486'), termRow);
   check('all four shots written',
     out.includes('shot1-ok') && out.includes('shot2-ok') &&
     out.includes('shotvi-ok') && out.includes('shotrs-ok'));
@@ -128,27 +135,27 @@ function sessionFrames() {
   }
 
   const t1 = parsePPM(b.stdout, 0);
-  check('shot1 parses at 640x456', t1 && t1.w === 640 && t1.h === 456,
+  check('shot1 parses at 640x486', t1 && t1.w === 640 && t1.h === 486,
     t1 && `${t1.w}x${t1.h}`);
   if (!t1) return;
   const t1fg = fgPixels(b.stdout, t1);
   check('shot1 shows rendered text (hush banner + prompt)', t1fg > 1500, String(t1fg));
 
   const t2 = parsePPM(b.stdout, t1.end);
-  check('shot2 parses at 640x456', t2 && t2.w === 640 && t2.h === 456);
+  check('shot2 parses at 640x486', t2 && t2.w === 640 && t2.h === 486);
   if (!t2) return;
   const t2fg = fgPixels(b.stdout, t2);
   check('ls /bin rendered more text (echo + output over the pty)',
     t2fg > t1fg + 1000, `${t1fg} -> ${t2fg}`);
 
   const tvi = parsePPM(b.stdout, t2.end);
-  check('vi shot parses at 640x456', tvi && tvi.w === 640 && tvi.h === 456);
+  check('vi shot parses at 640x486', tvi && tvi.w === 640 && tvi.h === 486);
   if (!tvi) return;
   // The alternate screen replaced the shell: mostly empty rows of tildes +
   // the status line in the bottom cell row (cell height 18).
   const statusFg = fgPixels(b.stdout, tvi, tvi.h - 18, tvi.h);
   check('vi status line rendered in the bottom row', statusFg > 100, String(statusFg));
-  const middleFg = fgPixels(b.stdout, tvi, 5 * 18, 6 * 18);
+  const middleFg = fgPixels(b.stdout, tvi, GRID_Y + 5 * 19, GRID_Y + 6 * 19);
   check('vi cleared the shell scrollback (alt screen row is tilde-only)',
     middleFg > 0 && middleFg < 200, String(middleFg));
 
@@ -273,7 +280,7 @@ function sessionLess() {
   const b = driveBoot('cat /root/tless.ppm\n', { image, timeout: 120000, maxBuffer: 16 * 1024 * 1024, encoding: null });
   const head = b.stdout.toString('latin1', 0, 32);
   const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-  check('less shot parses at 640x456', !!m && +m[1] === 640 && +m[2] === 456,
+  check('less shot parses at 640x486', !!m && +m[1] === 640 && +m[2] === 486,
     JSON.stringify(head.slice(0, 16)));
   if (m) {
     const w = +m[1], h = +m[2], data = m[0].length;
@@ -337,9 +344,9 @@ function sessionUnicode() {
     // shell. 5 cells -> 6 UTF-8 bytes.
     keysU('printf "\\033[2J\\033[H"; echo héllo\r'),
     'sleep 1.5',                                   // timing subject: clear + echo render (multi-frame)
-    'wmctl down $TSID 2 9',
-    'wmctl hover $TSID 38 9',
-    'wmctl up $TSID 38 9',
+    'wmctl down $TSID 2 39',
+    'wmctl hover $TSID 38 39',
+    'wmctl up $TSID 38 39',
     'wmctl key $TSID 0 67 65',                     // Ctrl+Shift+C (SDL LCTRL|LSHIFT) -> KA_COPY
     'for i in $(seq 1 120); do clip -o >/dev/null 2>&1 && break; sleep 0.05; done',  // copy landed in the kernel slot (bounded poll, 0155)
     'echo ==uclip',
@@ -383,7 +390,7 @@ function sessionUnicode() {
     return n;
   }
   const p0 = parsePPM(b.stdout, 0);
-  check('unicode: baseline shot parses at 640x456', p0 && p0.w === 640 && p0.h === 456);
+  check('unicode: baseline shot parses at 640x486', p0 && p0.w === 640 && p0.h === 486);
   if (!p0) return;
   const p1 = parsePPM(b.stdout, p0.end);
   check('unicode: post-cat shot parses', !!p1);
@@ -447,10 +454,10 @@ function sessionWide() {
     const w2 = +m[1], h = +m[2], data = off + m[0].length;
     return { w: w2, h, data, end: data + w2 * h * 3 };
   }
-  // Ink pixels of one 8x19 cell at (col, row 0).
+  // Ink pixels of one 8x19 cell at (col, row 0) — below the menu bar band.
   function cellInk(buf, ppm, col) {
     let n = 0;
-    for (let y = 0; y < 19; y++) {
+    for (let y = GRID_Y; y < GRID_Y + 19; y++) {
       for (let x = col * 8; x < col * 8 + 8; x++) {
         const i = ppm.data + (y * ppm.w + x) * 3;
         if (buf[i] | buf[i + 1] | buf[i + 2]) n++;
@@ -535,10 +542,10 @@ function sessionScrollback() {
     const w = +m[1], h = +m[2], data = off + m[0].length;
     return { w, h, data, end: data + w * h * 3 };
   }
-  // Ink pixels of the TOP cell row (y 0..18 — the 8x19 mono cell).
+  // Ink pixels of the TOP cell row (below the bar band — the 8x19 cell).
   function row0Ink(buf, ppm) {
     let n = 0;
-    for (let y = 0; y < 19; y++)
+    for (let y = GRID_Y; y < GRID_Y + 19; y++)
       for (let x = 0; x < ppm.w; x++) {
         const i = ppm.data + (y * ppm.w + x) * 3;
         if (buf[i] | buf[i + 1] | buf[i + 2]) n++;
@@ -594,12 +601,13 @@ function sessionScrollbar() {
     'sleep 3',                                     // timing subject: 300 lines echo + scroll (multi-frame)
     'wmctl shot $TSID /root/bar1.ppm && echo bar1-ok',
     // Thumb drag to the top: press inside the bottom-anchored thumb
-    // (window 640x456; the thumb ends at y=456 and is >=12 tall, so
-    // y=446 is always inside it), drag to y=2, release. The drag clamps
-    // at the oldest line = the marker row becomes visible.
-    'wmctl down $TSID 636 446',
-    'wmctl hover $TSID 636 2',
-    'wmctl up $TSID 636 2',
+    // (window 640x486; the thumb ends at y=486 and is >=12 tall, so
+    // y=476 is always inside it), drag to the grid-band top (y=32; the
+    // bar strip owns y<30), release. The drag clamps at the oldest
+    // line = the marker row becomes visible.
+    'wmctl down $TSID 636 476',
+    'wmctl hover $TSID 636 32',
+    'wmctl up $TSID 636 32',
     'sleep 1',                                     // timing subject: scrolled-view repaint (multi-frame)
     'wmctl shot $TSID /root/bar2.ppm && echo bar2-ok',
     // Track click below the (now top-parked) thumb: pages DOWN one
@@ -638,10 +646,10 @@ function sessionScrollbar() {
       }
     return n;
   }
-  // Ink of the TOP cell row (y 0..18) — the session-S marker probe.
+  // Ink of the TOP cell row (below the bar band) — the session-S probe.
   function row0Ink(buf, ppm) {
     let n = 0;
-    for (let y = 0; y < 19; y++)
+    for (let y = GRID_Y; y < GRID_Y + 19; y++)
       for (let x = 0; x < ppm.w; x++) {
         const i = ppm.data + (y * ppm.w + x) * 3;
         if (buf[i] | buf[i + 1] | buf[i + 2]) n++;
@@ -665,13 +673,141 @@ function sessionScrollbar() {
   check('scrollbar: live view parks the bright thumb at the bottom',
     S('bar1', h - 40, h, 100) > 50, String(S('bar1', h - 40, h, 100)));
   check('scrollbar: no thumb at the top while live (track only)',
-    S('bar1', 0, 40, 100) === 0, String(S('bar1', 0, 40, 100)));
+    S('bar1', GRID_Y, GRID_Y + 40, 100) === 0, String(S('bar1', GRID_Y, GRID_Y + 40, 100)));
   check('scrollbar: thumb drag scrolled the view to the top (marker row visible)',
     row0Ink(b.stdout, shots.bar2.p) > 1000, String(row0Ink(b.stdout, shots.bar2.p)));
   check('scrollbar: the thumb followed the drag to the top of the track',
-    S('bar2', 0, 40, 100) > 50, String(S('bar2', 0, 40, 100)));
+    S('bar2', GRID_Y, GRID_Y + 40, 100) > 50, String(S('bar2', GRID_Y, GRID_Y + 40, 100)));
   check('scrollbar: track click below the thumb pages down (marker leaves row 0)',
     row0Ink(b.stdout, shots.bar3.p) < 500, String(row0Ink(b.stdout, shots.bar3.p)));
+}
+
+/* ---- session M: menu bar (todos/0273c) ----
+ * The bar is a "menubar" strip child (the 0256 kernel anchored-child
+ * primitive); dropdowns are menucore-ENGINE levels — real POPUP_MENU
+ * anchored children titled "#32768" (the Win32 menu window class) holding
+ * the kernel grab. Everything drives the REAL path: pointer injection on
+ * the bar child opens Shell, an item click on the popup child fires
+ * New Window (an independent second term appears), a SCREEN press on the
+ * grid exercises the kernel grab's outside-press dismissal
+ * (CLOSE_REQUESTED, press consumed), Esc drives the engine's modal
+ * keyboard (never the pty), and a metrics-independent hover sweep
+ * switches titles to View whose "Scroll to Top" moves the (a) scrollback
+ * view — the marker row appears at the grid top. RED without the bar: no
+ * "menubar"/"#32768" windows exist and the driveBoot wait-timeout guard
+ * fails the session. */
+function sessionMenubar() {
+  const HASH = '#'.repeat(40);
+  const DOWN = 1073741905, ENTER = 13, ESC = 27;   // SDLK_DOWN/RETURN/ESCAPE
+  const script = [
+    'term &',
+    'wmctl wait win term',                         // window spawn (0155)
+    'sleep 2',                                     // timing subject: hush banner + prompt render (multi-frame)
+    'TSID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
+    'BSID=$(wmctl list | grep "\tmenubar$" | sed "s/[^0-9].*//")',
+    'wmctl move $TSID 80 10',                      // pin screen coords for the sdown leg
+    'wmctl wait seq $BSID 1 8000',                 // the strip PRESENTED its labels
+    'wmctl shot $BSID /root/mb_bar.ppm && echo mb-bar-ok',
+    // History for the View leg (the 0273a marker probe).
+    keys("printf '\\033[2J\\033[H'; printf '" + HASH + "\\n'; seq 300\r"),
+    'sleep 3',                                     // timing subject: 300 lines echo + scroll (multi-frame)
+    // --- a bar click opens Shell: the dropdown is a REAL anchored child ---
+    'wmctl click $BSID 20 15',
+    'wmctl wait win "#32768" 8000',
+    'PSID=$(wmctl list | grep "#32768" | sed "s/[^0-9].*//")',
+    'wmctl wait seq $PSID 1 8000',                 // the engine painted the level
+    'wmctl shot $PSID /root/mb_pop.ppm && echo mb-pop-ok',
+    // --- item click: New Window (row 0) -> an independent sibling term ---
+    'wmctl click $PSID 60 15',
+    'wmctl wait nowin "#32768"',                   // the fire closed the chain
+    'for i in $(seq 1 200); do [ $(wmctl list | grep -c "\tterm$") -ge 2 ] && break; sleep 0.05; done',  // sibling window up (bounded poll, 0155)
+    'echo ==mterms',
+    'wmctl list | grep -c "\tterm$"',
+    // --- outside-press dismissal: the kernel grab over the full pointer path ---
+    'wmctl click $BSID 20 15',
+    'wmctl wait win "#32768" 8000',
+    'wmctl sdown 460 320',                         // the grid at screen (80+380, 10+310): outside the popup tree
+    'wmctl sup 460 320',
+    'wmctl wait nowin "#32768"',                   // CLOSE_REQUESTED: chain closed, press consumed kernel-side
+    // --- Esc dismissal: modal keys route to the engine, never the pty ---
+    'wmctl click $BSID 20 15',
+    'wmctl wait win "#32768" 8000',
+    'wmctl key $TSID 0 ' + DOWN,                   // hot-row walk (engine-swallowed)
+    'wmctl key $TSID 0 ' + ESC,
+    'wmctl wait nowin "#32768"',
+    // --- hover-switch to View (metrics-independent sweep), fire Scroll to Top ---
+    'wmctl click $BSID 20 15',                     // Shell open again
+    'wmctl wait win "#32768" 8000',
+    ...Array.from({ length: 11 }, (_, i) => 'wmctl hover $BSID ' + (40 + i * 20) + ' 15'),
+    'sleep 1',                                     // timing subject: hover-switch reopen settles (multi-frame)
+    'wmctl key $TSID 0 ' + DOWN,                   // first enabled View row = Scroll to Top
+    'wmctl key $TSID 0 ' + ENTER,
+    'wmctl wait nowin "#32768"',
+    'sleep 1',                                     // timing subject: scrolled-view repaint (multi-frame)
+    'wmctl shot $TSID /root/mb_top.ppm && echo mb-top-ok',
+    // Teardown: end session 1, then the New Window sibling.
+    keys('exit\r'),
+    'sleep 1',                                     // timing subject: term1 teardown settles before the pkill
+    'pkill term',
+    'wmctl wait nowin term',
+    '',
+  ].join('\n');
+  const m = driveBoot(script, { image, timeout: 420000 });
+  const out = m.stdout;
+  check('menubar: bar/popup/top shots written',
+    out.includes('mb-bar-ok') && out.includes('mb-pop-ok') &&
+    out.includes('mb-top-ok'), out.slice(-300));
+  const nterms = ((out.split('==mterms\n')[1] || '').split('\n')[0] || '').trim();
+  check('menubar: New Window item spawned an independent sibling term',
+    parseInt(nterms, 10) >= 2, JSON.stringify(nterms));
+
+  const b = driveBoot('cat /root/mb_bar.ppm /root/mb_pop.ppm /root/mb_top.ppm\n',
+    { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });
+  function parsePPM(buf, off) {
+    const head = buf.toString('latin1', off, off + 32);
+    const m2 = head.match(/^P6\n(\d+) (\d+)\n255\n/);
+    if (!m2) return null;
+    const w = +m2[1], h = +m2[2], data = off + m2[0].length;
+    return { w, h, data, end: data + w * h * 3 };
+  }
+  // Dark ink = all channels < 100 (label text is BTNTEXT black on the
+  // BTNFACE/MENU 192-gray ground; GRAYTEXT 128 stays excluded).
+  function darkInk(buf, ppm) {
+    let n = 0;
+    for (let y = 0; y < ppm.h; y++)
+      for (let x = 0; x < ppm.w; x++) {
+        const i = ppm.data + (y * ppm.w + x) * 3;
+        if (buf[i] < 100 && buf[i + 1] < 100 && buf[i + 2] < 100) n++;
+      }
+    return n;
+  }
+  function row0Ink(buf, ppm) {
+    let n = 0;
+    for (let y = GRID_Y; y < GRID_Y + 19; y++)
+      for (let x = 0; x < ppm.w; x++) {
+        const i = ppm.data + (y * ppm.w + x) * 3;
+        if (buf[i] | buf[i + 1] | buf[i + 2]) n++;
+      }
+    return n;
+  }
+  const pb = parsePPM(b.stdout, 0);
+  check('menubar: bar strip shot parses at 640x30 (the full-width GRID_Y band)',
+    pb && pb.w === 640 && pb.h === GRID_Y, pb && `${pb.w}x${pb.h}`);
+  if (!pb) return;
+  check('menubar: Shell/Edit/View labels rendered on the strip (dark ink)',
+    darkInk(b.stdout, pb) > 80, String(darkInk(b.stdout, pb)));
+  const pp = parsePPM(b.stdout, pb.end);
+  check('menubar: dropdown shot parses (3 x MENU_ITEM_H rows + separator)',
+    pp && pp.h >= 95 && pp.h <= 115 && pp.w >= 100 && pp.w <= 320,
+    pp && `${pp.w}x${pp.h}`);
+  if (!pp) return;
+  check('menubar: engine-drawn item labels on the dropdown (dark ink)',
+    darkInk(b.stdout, pp) > 100, String(darkInk(b.stdout, pp)));
+  const pt = parsePPM(b.stdout, pp.end);
+  check('menubar: Scroll-to-Top shot parses', !!pt);
+  if (!pt) return;
+  check('menubar: View > Scroll to Top moved the view — the marker row is at the grid top',
+    row0Ink(b.stdout, pt) > 1000, String(row0Ink(b.stdout, pt)));
 }
 
 (async () => {
@@ -682,6 +818,7 @@ function sessionScrollbar() {
     term: sessionTerm, frames: sessionFrames, nested: sessionNested,
     less: sessionLess, unicode: sessionUnicode, wide: sessionWide,
     scrollback: sessionScrollback, scrollbar: sessionScrollbar,
+    menubar: sessionMenubar,
   };
   const want = process.argv.slice(2);
   for (const [name, fn] of Object.entries(ALL))
