@@ -1374,40 +1374,23 @@ static void draw_saver(void) {
  * via launch.h; the wm passes its own kid counter and "wm" as the
  * diagnostic prefix. */
 
+/* activate()'s directory policy: a folder opens in fileman (todos/0185).
+ * Start-menu dirs are flyout groups and never reach here. */
+static void dir_open_fileman(const char *path) {
+    char *argv[3] = { "fileman", (char *)path, 0 };
+    spawn_path("/bin/fileman", argv, &nkids, "wm");
+}
+
 /* One "activate a path" (todos/0066), shared by the Start menu and the
- * desktop grid (fileman keeps its policy copy in step — unifying the two
- * is todos/0240): anything runnable after
- * symlink resolution — ow_is_runnable peeks through links, so a menu link
- * to a binary still spawns via the link path — runs directly (launchers
- * are ordinary #!/bin/sh scripts); directories open in fileman
- * (todos/0185); anything else opens through the openwith associations in
- * the GUI context (todos/0072). */
+ * desktop grid: the launch.h ladder (todos/0240 — fileman rides the same
+ * one) with wm's policies — directories open in a new fileman, direct
+ * launches push the MRU recents (0098). The stat follows links, matching
+ * the grid's is_dir; a gone/dangling link is a no-op. */
 static void activate(const char *path) {
     struct stat st;
     if (stat(path, &st) != 0) return;            /* gone, or a dangling link */
-    if (S_ISDIR(st.st_mode)) {                   /* a folder opens in fileman
-                                                    (todos/0185; stat follows
-                                                    links, matching the grid's
-                                                    is_dir). Start-menu dirs
-                                                    are flyout groups and
-                                                    never reach here. */
-        char *argv[3] = { "fileman", (char *)path, 0 };
-        spawn_path("/bin/fileman", argv, &nkids, "wm");
-        return;
-    }
-    if (S_ISREG(st.st_mode) && ow_is_runnable(path)) {
-        const char *name = strrchr(path, '/');
-        name = name ? name + 1 : path;
-        char *argv[2] = { (char *)name, 0 };
-        sm_record_recent(path);                  /* MRU recents (0098) */
-        spawn_path(path, argv, &nkids, "wm");
-        return;
-    }
-    char cmd[OW_CMD_MAX], buf[512], prog[300];
-    char *argv[10];
-    ow_resolve(path, 1 /* GUI context */, cmd, sizeof cmd);
-    if (ow_build(cmd, path, argv, 10, buf, sizeof buf, prog, sizeof prog) > 0)
-        spawn_path(prog, argv, &nkids, "wm");
+    launch_activate(path, &st, dir_open_fileman, sm_record_recent,
+                    &nkids, "wm");
 }
 
 static int entcmp(const void *a, const void *b) {
@@ -3242,12 +3225,10 @@ static void ctx_command(int id) {
     case CM_OPEN: desk_launch(icon); break;
     case CM_EDIT: {                    /* 0202: open in the GUI text editor */
         if (icon < 0 || icon >= desk_n) break;
-        char path[300], cmd[OW_CMD_MAX], buf[512], prog[300];
-        char *argv[10];
+        char path[300], cmd[OW_CMD_MAX];
         snprintf(path, sizeof path, "/root/Desktop/%s", desk[icon].name);
         ow_editor(cmd, sizeof cmd);
-        if (ow_build(cmd, path, argv, 10, buf, sizeof buf, prog, sizeof prog) > 0)
-            spawn_path(prog, argv, &nkids, "wm");
+        launch_assoc(cmd, path, &nkids, "wm");
         break;
     }
     case CM_RENAME: desk_edit_start(icon); break;   /* 0103: inline editor */

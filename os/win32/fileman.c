@@ -131,17 +131,9 @@ static HWND g_rn_win;                /* the rename dialog (one at a time, 0092) 
 static char g_rn_file[800];          /* the file it targets */
 static HACCEL g_accel;               /* F2/Del/^C/^X/^V (listbox focus only) */
 
-/* ---- the 0066 activate() shape (wm.c is the reference copy; the spawn
- * primitive itself comes from ../launch.h — fileman passes its own kid
- * counter and "fileman" as the diagnostic prefix) ---- */
-
-/* Open `path` with a resolved association command (`cmd path`). */
-static void spawn_assoc(const char *cmd, const char *path) {
-    char buf[512], prog[300];
-    char *argv[10];
-    if (ow_build(cmd, path, argv, 10, buf, sizeof buf, prog, sizeof prog) > 0)
-        spawn_path(prog, argv, &g_nkids, "fileman");
-}
+/* Launching rides ../launch.h's shared ladder (spawn_path/launch_assoc/
+ * launch_activate, todos/0239+0240) — fileman passes its own kid counter
+ * and "fileman" as the diagnostic prefix. */
 
 /* ---- listing ---- */
 
@@ -363,18 +355,15 @@ static void open_selected(void) {
     char full[800];
     int isdir;
     if (!sel_path(full, sizeof full, &isdir)) return;
+    /* Dirs navigate IN-PLACE — fileman's flavor of the shared ladder's
+     * directory policy, peeled here off the listing's isdir (no extra
+     * stat). The rest is launch.h's activate() ladder (todos/0240): no
+     * MRU push (wm-only), and a dangling row's failed stat still falls
+     * through to its association. */
     if (isdir) { navigate(full); return; }
-    /* activate() (0066/0072): runnable spawns, anything else associates */
     struct stat st;
-    if (stat(full, &st) == 0 && S_ISREG(st.st_mode) && ow_is_runnable(full)) {
-        const char *name = strrchr(full, '/');
-        char *argv[2] = { (char *)(name ? name + 1 : full), 0 };
-        spawn_path(full, argv, &g_nkids, "fileman");
-        return;
-    }
-    char cmd[OW_CMD_MAX];
-    ow_resolve(full, 1 /* GUI context */, cmd, sizeof cmd);
-    spawn_assoc(cmd, full);
+    launch_activate(full, stat(full, &st) == 0 ? &st : 0, 0, 0,
+                    &g_nkids, "fileman");
 }
 
 /* Edit (0202): Open follows the association — for a document that's its
@@ -386,7 +375,7 @@ static void edit_selected(void) {
     if (!sel_path(full, sizeof full, &isdir) || isdir) return;
     char cmd[OW_CMD_MAX];
     ow_editor(cmd, sizeof cmd);
-    spawn_assoc(cmd, full);
+    launch_assoc(cmd, full, &g_nkids, "fileman");
 }
 
 /* ---- the "Open with" picker (todos/0072) ----
@@ -436,7 +425,7 @@ static LRESULT CALLBACK ow_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                                ? key : "default.gui", cmd) != 0)
                         op_error("save the association for", g_ow_file);
                 }
-                spawn_assoc(cmd, g_ow_file);
+                launch_assoc(cmd, g_ow_file, &g_nkids, "fileman");
             }
             DestroyWindow(h);
             return 0;
