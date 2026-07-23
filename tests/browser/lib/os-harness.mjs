@@ -16,6 +16,13 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
+// The baked Start-menu tree model (menuGroups/menuLeaves) is re-exported
+// from the kernel drive.js via CJS interop rather than twinned like
+// deskEntries below: a hardcoded/duplicated menu list is exactly the drift
+// that let 0272's mgp-plus entry shift winbox's flyout row unnoticed.
+import driveCjs from '../../kernel/lib/drive.js';
+export const menuGroups = driveCjs.menuGroups;
+export const menuLeaves = driveCjs.menuLeaves;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.resolve(__dirname, '../../..');

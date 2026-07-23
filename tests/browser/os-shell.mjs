@@ -18,7 +18,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl, deskEntries, deskCell } from './lib/os-harness.mjs';
+import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl, deskEntries, deskCell, menuGroups, menuLeaves } from './lib/os-harness.mjs';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PORT = 3197;
@@ -107,8 +107,11 @@ try {
       if (near(await sample(x, y), TEAL)) return x;
     return -1;
   };
-  const MENU_GROUPS = ['Accessories', 'Demos', 'Games'];
-  const DEMOS = ['cairodemo', 'ctldemo', 'gdidemo', 'gpubox', 'learn-mgp', 'mgp', 'slides', 'winbox'];
+  // DERIVED from os/image.json + the non-gated packages/ defs (os-harness
+  // menuGroups/menuLeaves — the 0164/0166 rule): the old hardcoded lists let
+  // 0272's mgp-plus entry silently shift winbox's flyout row.
+  const MENU_GROUPS = menuGroups();
+  const DEMOS = menuLeaves('Demos');
   const winCount = async () => {
     await setVt(1);
     await page.waitForTimeout(400);              // timing subject: VT1 prompt-settle pacing (no page-observable marker)

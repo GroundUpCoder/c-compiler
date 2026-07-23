@@ -17,7 +17,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
-const { driveBoot, freshImage, deskEntries, deskCell } = require('./lib/drive.js');
+const { driveBoot, freshImage, deskEntries, deskCell,
+        menuGroups, menuLeaves } = require('./lib/drive.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -40,8 +41,8 @@ const { dir: tmp, image } = freshImage('os-wm-');
 // Recents (~/.config/recent) grow via the wm's activate() on every real
 // launch; clearing recents+pinned puts Settings/Run... at rows 0-1 and pins
 // "All Programs" to the BOTTOM display row (SM_ROWS-1) above the search box,
-// an empty gap between (XP/Win7). Item x is offset by the SM_SIDE band. Bump
-// the leaf lists when image.json's menu tree changes.
+// an empty gap between (XP/Win7). Item x is offset by the SM_SIDE band. The
+// group/leaf lists are DERIVED from the manifest + package defs below.
 const SM_SIDE = 30, SM_COL = 260;
 const SM_W = SM_SIDE + SM_COL, SM_H = 378, SM_ROW_H = 28, SM_PAD = 4, SM_ROWS = 12;
 const SM_Y = 768 - 36 - SM_H;                    // 354
@@ -72,8 +73,12 @@ const rowY101 = (i) => 1 + i * MC_ROW + 15;
 // Maximize, an 8px sep, then Close — rows past the sep shift down by 8.
 const rowYsys = (i) => (i < 5 ? 1 + i * MC_ROW
                               : 1 + 5 * MC_ROW + MC_SEP + (i - 6) * MC_ROW) + 15;
-const MENU_GROUPS = ['Accessories', 'Demos', 'Games'];
-const DEMOS = ['cairodemo', 'ctldemo', 'gdidemo', 'gpubox', 'learn-mgp', 'mgp', 'slides', 'winbox'];
+// DERIVED from os/image.json + the non-gated packages/ defs (drive.js
+// menuGroups/menuLeaves — the 0164/0166 rule): a hardcoded leaf list is how
+// 0272's mgp-plus entry silently shifted winbox's row and this test clicked
+// "slides" for 14 hours.
+const MENU_GROUPS = menuGroups();
+const DEMOS = menuLeaves('Demos');
 
 // The seeded /root/Desktop icons, DERIVED from os/image.json's user section
 // (the manifest that seeds a fresh root volume — these e2es always boot one),
