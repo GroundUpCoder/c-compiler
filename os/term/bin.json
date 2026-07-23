@@ -1,7 +1,8 @@
 {
   "name": "term",
-  "description": "The wasm terminal (todos/0020): SDL surface + kernel pty + freetype",
+  "description": "The wasm terminal (todos/0020): SDL surface + kernel pty + freetype; menu bar rides the ONE menu engine as customer #3 (win32/menucore.json, todos/0273c)",
   "deps": [
+    "../win32/menucore.json",
     "../../vendor/freetype/lib.json"
   ],
   "includes": [

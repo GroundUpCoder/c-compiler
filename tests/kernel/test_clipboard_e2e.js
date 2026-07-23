@@ -170,9 +170,10 @@ function sessionTerm() {
     'TSID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
     keys('echo TERMCOPY-MARKER\r'),
     'sleep 2',                                    // hush echoes + runs + renders the marker (pixel-only, no signal)
-    // whole-screen drag-selection (640x456 = 80x24 at the 8x19 cell), then
-    // Ctrl+Shift+C: keysym 67 ('C'), mod 65 = LSHIFT|LCTRL
-    'wmctl drag $TSID 4 4 636 428',
+    // whole-screen drag-selection (640x486: 80x24 at the 8x19 cell below
+    // the 30px menu bar band, todos/0273c), then Ctrl+Shift+C: keysym 67
+    // ('C'), mod 65 = LSHIFT|LCTRL
+    'wmctl drag $TSID 4 34 636 480',
     'sleep 1',                                    // in-term selection registers (pixel-only, no signal)
     'wmctl key $TSID 0 67 65',
     waitClipHas('TERMCOPY-MARKER'),              // Ctrl+Shift+C filled the slot

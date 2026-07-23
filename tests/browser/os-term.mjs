@@ -71,8 +71,9 @@ try {
   };
 
   const TEAL = [0, 128, 128], NAVY = [0, 0, 128], BLACK = [0, 0, 0];
-  // The WM places the first window at (12,36); term is 640x456 (80x24).
-  const TX = 12, TY = 36, TW = 640, TH = 456;
+  // The WM places the first window at (12,36); term is 640x486 (80x24 below
+  // the 30px menu bar strip, todos/0273c — the grid band starts at TY+30).
+  const TX = 12, TY = 36, TW = 640, TH = 486;
 
   // VTs (todos/0022): shell typing on VT1, canvas pixels/input on VT2 (the
   // compositor may idle while its placeholder canvas is hidden). Deep VT
@@ -92,7 +93,7 @@ try {
   await waitPixel(TX + 320, TY + 300, BLACK, 90000);   // client fill composited
   check('term window composited (black client)', true);
   check('focused title bar navy', near(await sample(TX + 300, TY - 12), NAVY), await sample(TX + 300, TY - 12));
-  await waitBright(TX, TY, TW, 60, 50, 60000);          // hush banner + prompt
+  await waitBright(TX, TY + 30, TW, 60, 50, 60000);     // hush banner + prompt (grid band — the bar above is uniformly bright)
   check('freetype text rendered (banner region has glyph pixels)', true);
 
   const rect = await page.evaluate(() => {
@@ -157,7 +158,31 @@ try {
   await page.waitForFunction(() => /\tterm/.test(window.__osOut), { timeout: 20000, polling: 200 });
   check('wmctl list sees the term window', true);
 
-  // SE drag-resize: 640x456 -> 500x260 (todos/0019 renegotiation; term
+  // Menu bar (todos/0273c): the "menubar" strip child composites over the
+  // top 30px; a bar click opens an engine dropdown — a REAL anchored child
+  // titled "#32768" — and Esc (dispatched at the canvas: page.keyboard
+  // focus is unreliable on VT2) dismisses it, both verified over VT1 wmctl.
+  await setVt(2);
+  check('menu bar strip composited (BTNFACE band over the client)',
+    near(await sample(TX + 320, TY + 15), [192, 192, 192]), await sample(TX + 320, TY + 15));
+  await page.mouse.click(rect.x + TX + 20, rect.y + TY + 15);   // "Shell"
+  await setVt(1);
+  await page.keyboard.type('wmctl wait win "#32768" && echo MENUOPEN-OK\r');
+  await page.waitForFunction(() => window.__osOut.includes('MENUOPEN-OK'), { timeout: 20000, polling: 200 });
+  check('bar click opened the engine dropdown (anchored child "#32768")', true);
+  await setVt(2);
+  await page.evaluate(() => {
+    const scr = document.getElementById('screen');
+    scr.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    scr.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', bubbles: true }));
+  });
+  await setVt(1);
+  await page.keyboard.type('wmctl wait nowin "#32768" && echo MENUGONE-OK\r');
+  await page.waitForFunction(() => window.__osOut.includes('MENUGONE-OK'), { timeout: 20000, polling: 200 });
+  check('Esc dismissed the dropdown', true);
+  await setVt(2);
+
+  // SE drag-resize: 640x486 -> 500x260 (todos/0019 renegotiation; term
   // reflows the grid + TIOCSWINSZ). Outline preview, one configure at drop.
   await setVt(2);
   await page.mouse.move(rect.x + TX + TW + 2, rect.y + TY + TH + 2);
@@ -166,7 +191,7 @@ try {
   await page.mouse.up();
   await waitPixel(TX + 550, TY + 100, TEAL, 30000);     // beyond the new width
   check('drag-resize shrank the window (desktop beyond new edge)', true);
-  await waitBright(TX, TY, 500, 260, 30, 30000);
+  await waitBright(TX, TY + 30, 500, 230, 30, 30000);
   check('reflowed terminal still renders text', true);
 
   // Close box -> SDL_EVENT_QUIT -> master close HUPs hush -> window gone.
