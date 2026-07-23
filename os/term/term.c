@@ -219,6 +219,51 @@ static void snap_live(void) {
     if (view_off != 0) { view_off = 0; dirty = 1; }
 }
 
+/* ---- side scrollbar (todos/0273b) ----
+ * A macOS-style OVERLAY bar at the surface's right edge — a pure view +
+ * controller over the (a) model above: hist_count/view_off are the ONLY
+ * position state (wheel, keys and bar can never disagree). Overlay, not
+ * reserved columns: cols stays surf->w / cell_w, so the 80x24-at-640x456
+ * geometry contract is untouched; the bar alpha-blends over the last
+ * column's pixels instead. Hidden when there is no history (and on the
+ * alt screen — no scrollback there), so a no-history term renders
+ * byte-identical to the pre-scrollbar output; persistent while history
+ * exists — a macOS-style fade-out would need timed wakeups, and term is
+ * an event-driven zero-wakes-when-idle app (0178). */
+#define SB_W    8                  /* overlay width, px */
+#define SB_MIN 12                  /* thumb never shrinks below a grab target */
+static int sb_drag;                /* left button holds the thumb */
+static int sb_grab;                /* pointer offset into the thumb at grab */
+
+static int sb_visible(void) { return !on_alt && hist_count > 0; }
+
+/* Thumb geometry at surface height sh (only called when sb_visible():
+ * hist_count > 0). Proportional to viewport/total with a floor; view_off
+ * 0 lands the thumb flush at the bottom (ty + th == sh exactly). */
+static void sb_geom(int sh, int *ty, int *th) {
+    int total = hist_count + rows;
+    int t = sh * rows / total;
+    if (t < SB_MIN) t = SB_MIN;
+    if (t > sh) t = sh;
+    int travel = sh - t;
+    *ty = travel > 0 ? travel * (hist_count - view_off) / hist_count : 0;
+    *th = t;
+}
+
+/* Map a dragged pointer y back to view_off (the sb_geom inverse, with
+ * symmetric rounding), clamped like scroll_view. */
+static void sb_drag_to(int y, int sh) {
+    int ty, th;
+    sb_geom(sh, &ty, &th);
+    int travel = sh - th;
+    if (travel < 1) return;
+    int ny = y - sb_grab;
+    if (ny < 0) ny = 0;
+    if (ny > travel) ny = travel;
+    int nv = hist_count - (ny * hist_count + travel / 2) / travel;
+    if (nv != view_off) { view_off = nv; dirty = 1; }
+}
+
 /* to_hist: this is a real top-of-screen scroll that should feed scrollback
  * (linefeed at the bottom). DL/IL/SU pass 0 — they scroll in-screen only. */
 static void scroll_up(int n, int to_hist) {
@@ -937,6 +982,35 @@ static void render(void) {
     for (int y = rows * cell_h; y < sh; y++) {
         for (int x = 0; x < cols * cell_w; x++) px[y * sw + x] = defbg;
     }
+    /* Side scrollbar overlay (0273b): full-height track, proportional
+     * thumb, alpha-blended over the content so the tinted last column
+     * stays legible. Integer blends — the shm shot stays bit-exact:
+     * track 25% toward mid-gray (over black bg -> 32,32,32), thumb 75%
+     * toward light gray (-> ~150+, clearly brighter than the track). */
+    if (sb_visible()) {
+        int ty, th;
+        sb_geom(sh, &ty, &th);
+        int x0 = sw - SB_W;
+        if (x0 < 0) x0 = 0;
+        for (int y = 0; y < sh; y++) {
+            int thumb = y >= ty && y < ty + th;
+            for (int x = x0; x < sw; x++) {
+                uint32_t p = px[y * sw + x];
+                unsigned r = p & 0xFF, g = (p >> 8) & 0xFF, b = (p >> 16) & 0xFF;
+                if (thumb) {
+                    r = (r + 3 * 200) / 4;
+                    g = (g + 3 * 200) / 4;
+                    b = (b + 3 * 200) / 4;
+                } else {
+                    r = (3 * r + 128) / 4;
+                    g = (3 * g + 128) / 4;
+                    b = (3 * b + 128) / 4;
+                }
+                px[y * sw + x] = (uint32_t)r | ((uint32_t)g << 8) |
+                                 ((uint32_t)b << 16) | 0xFF000000u;
+            }
+        }
+    }
 }
 
 /* ============================================================ resize */
@@ -1003,12 +1077,28 @@ static void frame_cb(void) {
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_EVENT_KEY_DOWN) {
             handle_key(&e.key);
+        } else if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == 1 &&
+                   sb_visible() && (int)e.button.x >= surf->w - SB_W) {
+            /* Scrollbar press (0273b): thumb -> start a drag; track ->
+             * page toward the click (one viewport, like PageUp/Down).
+             * Never anchors a selection; with the bar hidden the region
+             * falls through to the selection branch below unchanged. */
+            int y = (int)e.button.y, ty, th;
+            sb_geom(surf->h, &ty, &th);
+            if (y >= ty && y < ty + th) { sb_drag = 1; sb_grab = y - ty; }
+            else scroll_view(y < ty ? (rows > 1 ? rows - 1 : 1)
+                                    : -(rows > 1 ? rows - 1 : 1));
         } else if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == 1) {
             /* Left press: clear any selection, anchor a new one (0090). */
             sel_ax = sel_ex = cell_clamp((int)e.button.x / cell_w, cols);
             sel_ay = sel_ey = cell_clamp((int)e.button.y / cell_h, rows);
             sel_drag = 1;
             if (sel_on) { sel_on = 0; dirty = 1; }
+        } else if (e.type == SDL_EVENT_MOUSE_MOTION && sb_drag) {
+            /* Thumb drag (0273b). Gated on visibility so an alt-screen
+             * entry mid-drag (vi launched by the session) can't write
+             * view_off under a screen that must stay live. */
+            if (sb_visible()) sb_drag_to((int)e.motion.y, surf->h);
         } else if (e.type == SDL_EVENT_MOUSE_MOTION && sel_drag) {
             int c = cell_clamp((int)e.motion.x / cell_w, cols);
             int r = cell_clamp((int)e.motion.y / cell_h, rows);
@@ -1020,6 +1110,7 @@ static void frame_cb(void) {
             }
         } else if (e.type == SDL_EVENT_MOUSE_BUTTON_UP && e.button.button == 1) {
             sel_drag = 0;
+            sb_drag = 0;
         } else if (e.type == SDL_EVENT_MOUSE_WHEEL) {
             /* Wheel scrolls scrollback on the main screen; alt-screen apps
              * own the viewport (no history). wheel.y > 0 = away = up into
@@ -1052,7 +1143,10 @@ static void frame_cb(void) {
         for (ssize_t i = 0; i < n; i++) term_putc((unsigned char)buf[i]);
         budget -= (int)n;
         dirty = 1;
-        view_off = 0;    /* new output snaps the view back to live (0273a) */
+        /* New output snaps the view back to live (0273a) — unless the
+         * thumb is HELD (0273b): snapping mid-drag would rip the thumb
+         * out of the user's hand; the next output after release snaps. */
+        if (!sb_drag) view_off = 0;
     }
     if (dirty) {
         render();
