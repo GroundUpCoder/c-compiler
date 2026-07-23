@@ -364,7 +364,12 @@ async function boot() {
   if (OS_COMMON.bakedVersion(BLOCK_FS, sysStore) < (manifest.version | 0)) {
     sysMode = null;
     try {
-      var r = await fetch('os-system.img');
+      // manifest.image (todos/0249): a DEPLOY may publish the blob under a
+      // content-hashed name (os-system.<sha>.img, immutable cache headers)
+      // and names it here via its transformed image.json. The repo manifest
+      // carries no `image` field, so every dev/test path (serve.js overlay
+      // swaps, boot.js, the fixtures) keeps fetching the fixed name.
+      var r = await fetch(manifest.image || 'os-system.img');
       if (r.ok) {
         var blob = new Uint8Array(await r.arrayBuffer());
         var memStore = new BLOCK_FS.MemoryByteStore(blob.length);

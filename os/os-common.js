@@ -714,8 +714,21 @@ function bakeSystemImage(BLOCK_FS, CompilerJS, sysStore, manifest, io) {
     ? loadOverlays(overlaySpecs, io.overlayIo, !!io.requireCleanOverlays, log)
     : [];
   if (sysStore.size() >= 256) sysStore.setBytes(0, new Uint8Array(256)); // force format
-  var sys = BLOCK_FS.createV4(sysStore, { noDevNodes: true });
-  var tmpRoot = BLOCK_FS.createV4(new BLOCK_FS.MemoryByteStore(1 << 20), { noDevNodes: true });
+  // Deterministic bake clock (todos/0249): every inode a/m/c/btime in the
+  // sealed blob comes from BlockFS._now(); with the wall clock two bakes of
+  // an identical tree differ → different sha256 → the deploy's
+  // content-hashed image name churns on every rebuild. Stamp everything
+  // with ONE manifest-version-derived instant instead: unchanged tree →
+  // unchanged version → byte-identical blob, and a higher version always
+  // stamps later than a lower one (an upgraded /usr never looks older than
+  // its predecessor). BAKE-ONLY — live volumes keep the real Date.now()
+  // (createV4's default); the throwaway tmpRoot gets it too so the whole
+  // bake namespace shares one clock. Epoch base: gucOS's own era, so ls -l
+  // in-OS reads as an obviously synthetic 2026 stamp, not 1970.
+  var bakeEpochMs = Date.UTC(2026, 0, 1) + (manifest.version | 0) * 1000;
+  var bakeClock = function () { return bakeEpochMs; };
+  var sys = BLOCK_FS.createV4(sysStore, { noDevNodes: true, clock: bakeClock });
+  var tmpRoot = BLOCK_FS.createV4(new BLOCK_FS.MemoryByteStore(1 << 20), { noDevNodes: true, clock: bakeClock });
   var mfs = new BLOCK_FS.MountFS({ '/': tmpRoot, '/usr': sys });
   mfs.mkdir('/etc', 0o755);   // seedEntries' compile staging area (throwaway)
   var bakeIo = {
