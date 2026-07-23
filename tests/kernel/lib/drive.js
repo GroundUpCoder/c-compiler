@@ -164,5 +164,63 @@ function deskCell(list, name, scrH = 768) {
            cx: 16 + col * 116 + 58, cy: 16 + row * 96 + 48 };
 }
 
+// ---- the baked Start-menu tree model (the 0164/0166 rule applied to menu
+// rows — a291187/0272 added a Demos entry and the hardcoded DEMOS lists in
+// wm_service/os-shell silently clicked the wrong row for ~14h) ----
+// The FAT test image (mkimage --packages=all, what image-fixture/serve.js
+// bake) unions image.json's /usr/share/menu tree with every NON-GATED
+// package's menu entries (foldPackages plants them at
+// /usr/share/menu/<group>/<entry>; gating rule = os-common listPackages, the
+// single source — a def with a non-empty `requires` stays out of the fold).
+// A fresh boot has an empty /etc/menu, so the baked tree IS wm.c's
+// menu_load_union result; sort replicates entcmp (groups first, byte strcmp;
+// no Recycle Bin in menu land). menuGroups() = the top-level flyout rows,
+// menuLeaves(group) = one group's rows.
+function menuTree() {
+  const OS_COMMON = require(path.join(ROOT, 'os/os-common.js'));
+  const sys = JSON.parse(
+    fs.readFileSync(path.join(ROOT, 'os/image.json'), 'utf8')).system;
+  const kids = new Map();   // parent rel ('' = top) -> Map(name -> isDir)
+  const put = (rel, dir) => {
+    const i = rel.lastIndexOf('/');
+    const parent = i < 0 ? '' : rel.slice(0, i);
+    const name = i < 0 ? rel : rel.slice(i + 1);
+    if (!kids.has(parent)) kids.set(parent, new Map());
+    kids.get(parent).set(name, dir || kids.get(parent).get(name) || false);
+  };
+  const under = (p) => p.startsWith('/usr/share/menu/')
+    ? p.slice('/usr/share/menu/'.length) : null;
+  for (const p of sys.dirs || []) {
+    const rel = under(p);
+    if (rel) put(rel, true);
+  }
+  for (const p of Object.keys(sys.files || {})) {
+    const rel = under(p);
+    if (rel) put(rel, false);
+  }
+  for (const name of OS_COMMON.listPackages(fs, path, ROOT)) {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(ROOT, 'packages', name + '.json'), 'utf8'));
+    for (const me of pkg.menu || []) {
+      put(me.group, true);
+      put(me.group + '/' + me.entry, false);
+    }
+  }
+  return kids;
+}
+function menuSort(m) {
+  return Array.from(m.entries()).sort((a, b) => {
+    if (a[1] !== b[1]) return a[1] ? -1 : 1;              // groups first
+    return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;        // byte strcmp
+  }).map((e) => e[0]);
+}
+function menuGroups() { return menuSort(menuTree().get('') || new Map()); }
+function menuLeaves(group) {
+  const m = menuTree().get(group);
+  if (!m) throw new Error('menuLeaves: no baked menu group "' + group + '"');
+  return menuSort(m);
+}
+
 module.exports = { ROOT, BOOT, freshImage, driveBoot, section,
-                   deskEntries, deskSort, deskCell };
+                   deskEntries, deskSort, deskCell,
+                   menuGroups, menuLeaves };
