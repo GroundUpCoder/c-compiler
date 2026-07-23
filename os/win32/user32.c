@@ -314,6 +314,8 @@ struct __HWND {
     int needPaint;
     int inDestroy;
     LONG_PTR userdata;
+    HFONT hfont;                /* WM_SETFONT font (todos/0223), app-owned;
+                                   NULL = the stock DC default */
     void *ctl;                  /* control state (edit/listbox/scrollbar/dialog) */
 };
 
@@ -389,6 +391,16 @@ static const char *text_get(HWND h) { return h->text ? h->text : ""; }
 
 static uint32_t g_scratchPx[1];  /* degenerate rects draw here, discarded */
 
+/* WM_SETFONT (todos/0223) rides the DC seam: GetDC is the ONE place every
+ * control draw AND measure obtains its DC, so selecting the per-HWND font
+ * here keeps glyphs and metrics (edit_line_h/edit_rows/caret x, button and
+ * listbox extents) in agreement by construction. The scratch path selects
+ * too — a clipped-out control's measures must still report the font. */
+static HDC dc_with_font(HWND h, HDC dc) {
+    if (dc && h->hfont) SelectObject(dc, (HGDIOBJ)h->hfont);
+    return dc;
+}
+
 HDC GetDC(HWND h) {
     if (!h) return NULL;                 /* no whole-screen DC in this OS */
     HWND top = h->top;
@@ -409,9 +421,10 @@ HDC GetDC(HWND h) {
     if (ox + cw > s->w) cw = s->w - ox;
     if (oy + ch > s->h) ch = s->h - oy;
     if (ox < 0 || oy < 0 || cw < 1 || ch < 1)
-        return __gdi_dc_wrap(g_scratchPx, 1, 1, 1);
+        return dc_with_font(h, __gdi_dc_wrap(g_scratchPx, 1, 1, 1));
     int stride = s->pitch / 4;
-    return __gdi_dc_wrap((uint32_t *)s->pixels + oy * stride + ox, cw, ch, stride);
+    return dc_with_font(h, __gdi_dc_wrap((uint32_t *)s->pixels + oy * stride + ox,
+                                         cw, ch, stride));
 }
 
 int ReleaseDC(HWND h, HDC dc) {
@@ -2656,6 +2669,16 @@ LRESULT DefWindowProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (dc) EndPaint(h, &ps);
         return 0;
     }
+    case WM_SETFONT:
+        /* Stored, not owned (Windows: the app keeps the HFONT alive); every
+         * draw/measure picks it up at the GetDC choke (dc_with_font, 0223).
+         * All control procs fall through here, so EDIT/BUTTON/STATIC/
+         * LISTBOX/SCROLLBAR honor it uniformly — no per-proc font path. */
+        h->hfont = (HFONT)wp;
+        if (LOWORD(lp)) InvalidateRect(h, NULL, TRUE);
+        return 0;
+    case WM_GETFONT:
+        return (LRESULT)h->hfont;                /* NULL = the stock default */
     case WM_SETTEXT:
         text_set(h, (const char *)lp);
         if (is_top(h) && h->win) SDL_SetWindowTitle(h->win, text_get(h));

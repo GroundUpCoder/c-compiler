@@ -17,11 +17,17 @@
  * notepad protocol end to end. Direction is always DOWN (the up/down
  * radios are not worth their pixels here); Match case is honored.
  *
- * ChooseFontW / PrintDlgW / PageSetupDlgW return FALSE (the user
- * "cancelled"): fonts are the one image font and there is no printer —
- * a cancel is the honest answer, and the apps' cancel paths are exactly
- * the well-tested ones. Agent-drivable throughout (OS.md pillar):
- * `wmctl settext EDIT:n` + `wmctl click OK|Open|Save|"Find Next"`. */
+ * ChooseFontW is REAL (todos/0223): the file-dialog modal shape with a
+ * face LISTBOX (the ONE image font family — CreateFont ignores faceName,
+ * so listing more would be fake), a size EDIT + point-size LISTBOX, and a
+ * live sample STATIC driven through WM_SETFONT (dogfooding the 0223
+ * user32 plumbing). OK fills the caller's LOGFONTW (negative lfHeight =
+ * em px, the CreateFont convention) and returns TRUE.
+ *
+ * PrintDlgW / PageSetupDlgW return FALSE (the user "cancelled"): there is
+ * no printer — a cancel is the honest answer, and the apps' cancel paths
+ * are exactly the well-tested ones. Agent-drivable throughout (OS.md
+ * pillar): `wmctl settext EDIT:n` + `wmctl click OK|Open|Save|"Find Next"`. */
 
 #undef UNICODE
 #undef _UNICODE
@@ -488,17 +494,216 @@ static HWND fr_dialog(FINDREPLACEW *fr, int replace) {
 HWND FindTextW(FINDREPLACEW *fr) { return fr_dialog(fr, 0); }
 HWND ReplaceTextW(FINDREPLACEW *fr) { return fr_dialog(fr, 1); }
 
+/* ---- the font dialog (todos/0223) ----
+ * The file_dialog shape verbatim: own class + WS_POPUP top-level, child
+ * controls, the MessageBox owner-disable + local pump. Content is honest
+ * about the platform: ONE face row ("mono" — gdi32's CreateFont ignores
+ * faceName; every font is the image family at some pixel size), a size
+ * EDIT + the classic point-size list, a live sample STATIC re-fonted via
+ * WM_SETFONT on every size change (the 0223 user32 plumbing, dogfooded
+ * here), OK/Cancel. Sizes are POINTS at the synthetic 96dpi
+ * (GetDeviceCaps LOGPIXELSY): px = pt * 96 / 72. */
+
+#define IDC_FACE   110
+#define IDC_SIZEED 111
+#define IDC_SIZES  112
+#define IDC_SAMPLE 113
+
+#define CFD_W 380
+#define CFD_H 380
+
+/* the classic list, plus 15 — the stock 20px cell is 15pt at 96dpi, so
+ * the platform default preselects a real row */
+static const int cf_ptsizes[] =
+    { 8, 9, 10, 11, 12, 14, 15, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72 };
+#define CF_NSIZES ((int)(sizeof cf_ptsizes / sizeof cf_ptsizes[0]))
+
+static struct {
+    HWND win, face, sizeEd, sizes, sample;
+    CHOOSEFONTW *cf;
+    HFONT sampleFont;           /* transient preview HFONT (we own this one) */
+    int done;                   /* 1 = accepted, -1 = cancelled */
+} g_cf;
+
+/* Selected point size, or 0 when the EDIT doesn't hold a usable number. */
+static int cf_cur_pt(void) {
+    char s[16];
+    GetWindowText(g_cf.sizeEd, s, sizeof s);
+    int pt = atoi(s);
+    return pt >= 1 && pt <= 999 ? pt : 0;
+}
+
+/* Re-font the sample through WM_SETFONT — the exact consumer contract
+ * (ChooseFont -> CreateFontIndirect -> WM_SETFONT) the caller will run. */
+static void cf_preview(void) {
+    int pt = cf_cur_pt();
+    if (!pt) return;
+    HFONT nf = CreateFont(-MulDiv(pt, 96, 72), 0, 0, 0, FW_NORMAL,
+                          0, 0, 0, 0, 0, 0, 0, 0, "mono");
+    if (!nf) return;
+    SendMessage(g_cf.sample, WM_SETFONT, (WPARAM)nf, TRUE);
+    if (g_cf.sampleFont) DeleteObject((HGDIOBJ)g_cf.sampleFont);
+    g_cf.sampleFont = nf;
+}
+
+static void cf_accept(void) {
+    int pt = cf_cur_pt();
+    if (!pt) return;                             /* no size: stay open */
+    LOGFONTW *lf = g_cf.cf->lpLogFont;
+    lf->lfHeight = -MulDiv(pt, 96, 72);          /* negative = em px, the
+                                                    CreateFont convention */
+    lf->lfWidth = 0;
+    char face[64] = "mono";
+    int sel = (int)SendMessage(g_cf.face, LB_GETCURSEL, 0, 0);
+    if (sel >= 0)
+        SendMessage(g_cf.face, LB_GETTEXT, (WPARAM)sel, (LPARAM)face);
+    cd_a2w(face, lf->lfFaceName, LF_FACESIZE);
+    g_cf.cf->iPointSize = pt * 10;               /* tenths, per the contract */
+    g_cf.done = 1;
+}
+
+static LRESULT CALLBACK cf_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_COMMAND:
+        switch (LOWORD(wp)) {
+        case IDOK:
+            cf_accept();
+            return 0;
+        case IDCANCEL:
+            g_cf.done = -1;
+            return 0;
+        case IDC_SIZES: {
+            char row[16];
+            int sel = (int)SendMessage(g_cf.sizes, LB_GETCURSEL, 0, 0);
+            if (sel < 0 ||
+                SendMessage(g_cf.sizes, LB_GETTEXT, (WPARAM)sel, (LPARAM)row) == LB_ERR)
+                return 0;
+            if (HIWORD(wp) == LBN_SELCHANGE)
+                SetWindowText(g_cf.sizeEd, row);  /* EN_CHANGE previews */
+            else if (HIWORD(wp) == LBN_DBLCLK) {
+                SetWindowText(g_cf.sizeEd, row);
+                cf_accept();
+            }
+            return 0;
+        }
+        case IDC_SIZEED:
+            if (HIWORD(wp) == EN_CHANGE) cf_preview();
+            return 0;
+        }
+        return 0;
+    case WM_CLOSE:
+        g_cf.done = -1;
+        return 0;
+    }
+    return DefWindowProc(h, msg, wp, lp);
+}
+
+static void cf_class(void) {
+    static int done;
+    if (done) return;
+    done = 1;
+    WNDCLASS wc;
+    memset(&wc, 0, sizeof wc);
+    wc.lpfnWndProc = cf_proc;
+    wc.lpszClassName = "WCFontDlg";
+    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    RegisterClass(&wc);
+}
+
+BOOL ChooseFontW(CHOOSEFONTW *cf) {
+    if (!cf || !cf->lpLogFont) return FALSE;
+    cf_class();
+    memset(&g_cf, 0, sizeof g_cf);
+    g_cf.cf = cf;
+
+    /* Initial size: CF_INITTOLOGFONTSTRUCT reads the incoming LOGFONT
+     * (lfHeight < 0 = em px; > 0 = cell height, taken as px — close
+     * enough for a preselect; 0 = default). Default = the 20px stock
+     * (gdi32 STOCK_FONT_PX) = 15pt at 96dpi. */
+    int px = 20;
+    if ((cf->Flags & CF_INITTOLOGFONTSTRUCT) && cf->lpLogFont->lfHeight)
+        px = cf->lpLogFont->lfHeight < 0 ? -cf->lpLogFont->lfHeight
+                                         : cf->lpLogFont->lfHeight;
+    int pt0 = MulDiv(px, 72, 96);
+    if (pt0 < 1) pt0 = 15;
+
+    g_cf.win = CreateWindowEx(0, "WCFontDlg", "Font",
+                              WS_POPUP | WS_VISIBLE, 0, 0, CFD_W, CFD_H,
+                              NULL, NULL, NULL, NULL);
+    if (!g_cf.win) return FALSE;
+    /* the fd row-height snap: lists show whole rows only */
+    int rh = 30;
+    { HDC mdc = GetDC(g_cf.win);
+      if (mdc) { TEXTMETRIC tm;
+                 if (GetTextMetrics(mdc, &tm)) rh = tm.tmHeight + 2;
+                 ReleaseDC(g_cf.win, mdc); } }
+    int listTop = 66, listBot = CFD_H - 140;     /* sample sits below */
+    int listH = ((listBot - listTop) / rh) * rh;
+    CreateWindowEx(0, "STATIC", "Font:", WS_CHILD | WS_VISIBLE,
+                   8, 8, 150, 28, g_cf.win, NULL, NULL, NULL);
+    g_cf.face = CreateWindowEx(0, "LISTBOX", "", WS_CHILD | WS_VISIBLE | LBS_NOTIFY | WS_TABSTOP,
+                               8, listTop, 190, listH, g_cf.win,
+                               (HMENU)IDC_FACE, NULL, NULL);
+    CreateWindowEx(0, "STATIC", "Size:", WS_CHILD | WS_VISIBLE,
+                   210, 8, 80, 28, g_cf.win, NULL, NULL, NULL);
+    g_cf.sizeEd = CreateWindowEx(0, "EDIT", "", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                 210, 34, 80, 30, g_cf.win,
+                                 (HMENU)IDC_SIZEED, NULL, NULL);
+    g_cf.sizes = CreateWindowEx(0, "LISTBOX", "", WS_CHILD | WS_VISIBLE | LBS_NOTIFY | WS_TABSTOP,
+                                210, listTop, 80, listH, g_cf.win,
+                                (HMENU)IDC_SIZES, NULL, NULL);
+    CreateWindowEx(0, "STATIC", "Sample:", WS_CHILD | WS_VISIBLE,
+                   8, CFD_H - 136, 150, 28, g_cf.win, NULL, NULL, NULL);
+    g_cf.sample = CreateWindowEx(0, "STATIC", "AaBbYyZz", WS_CHILD | WS_VISIBLE | SS_SUNKEN,
+                                 8, CFD_H - 108, CFD_W - 16, 64, g_cf.win,
+                                 (HMENU)IDC_SAMPLE, NULL, NULL);
+    CreateWindowEx(0, "BUTTON", "OK",
+                   WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                   CFD_W - 220, CFD_H - 38, 100, 30, g_cf.win, (HMENU)IDOK, NULL, NULL);
+    CreateWindowEx(0, "BUTTON", "Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                   CFD_W - 112, CFD_H - 38, 104, 30, g_cf.win, (HMENU)IDCANCEL, NULL, NULL);
+
+    /* ONE face today (single-family platform; see the header comment) */
+    SendMessage(g_cf.face, LB_ADDSTRING, 0, (LPARAM)"mono");
+    SendMessage(g_cf.face, LB_SETCURSEL, 0, 0);
+    for (int i = 0; i < CF_NSIZES; i++) {
+        char row[16];
+        snprintf(row, sizeof row, "%d", cf_ptsizes[i]);
+        SendMessage(g_cf.sizes, LB_ADDSTRING, 0, (LPARAM)row);
+        if (cf_ptsizes[i] == pt0)
+            SendMessage(g_cf.sizes, LB_SETCURSEL, (WPARAM)i, 0);
+    }
+    { char seed[16];
+      snprintf(seed, sizeof seed, "%d", pt0);
+      SetWindowText(g_cf.sizeEd, seed); }        /* EN_CHANGE seeds the sample */
+    SetFocus(g_cf.sizeEd);                       /* type-and-Enter accepts */
+
+    /* the MessageBox modal shape: disable the owner, pump, re-enable */
+    HWND owner = cf->hwndOwner;
+    int reenable = 0;
+    if (owner && IsWindowEnabled(owner)) {
+        EnableWindow(owner, FALSE);
+        reenable = 1;
+    }
+    MSG m;
+    memset(&m, 0, sizeof m);
+    while (!g_cf.done && IsWindow(g_cf.win) && GetMessage(&m, NULL, 0, 0)) {
+        if (IsDialogMessageW(g_cf.win, &m)) continue;
+        TranslateMessage(&m);
+        DispatchMessage(&m);
+    }
+    if (!g_cf.done && m.message == WM_QUIT) PostQuitMessage((int)m.wParam);
+    if (reenable && IsWindow(owner)) EnableWindow(owner, TRUE);
+    if (IsWindow(g_cf.win)) DestroyWindow(g_cf.win);
+    if (g_cf.sampleFont) DeleteObject((HGDIOBJ)g_cf.sampleFont);
+    return g_cf.done == 1;
+}
+
 /* ---- the honest cancels ----
  * Each reports loudly (0211 fail-loud policy) so a menu item landing here
  * reads as a missing feature, not a dead click: there is no printing
- * subsystem (Print/Page Setup), and a real ChooseFont needs per-HWND font
- * plumbing through the control paint paths (todos/0223). */
+ * subsystem (Print/Page Setup). */
 
-BOOL ChooseFontW(CHOOSEFONTW *cf) {
-    (void)cf;
-    WIN32_UNSUPPORTED("ChooseFontW: no font dialog yet (returns cancel)");
-    return FALSE;
-}
 BOOL PrintDlgW(PRINTDLGW *pd) {
     (void)pd;
     WIN32_UNSUPPORTED("PrintDlgW: no printing subsystem (returns cancel)");

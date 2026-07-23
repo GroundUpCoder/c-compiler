@@ -390,6 +390,51 @@ static int selftest(void) {
     SendMessage(ed, EM_SETTABSTOPS, 0, 0);        /* back to the default grid */
 #undef TAB_CARET
 
+    /* ---- WM_SETFONT (0223): the per-HWND font drives BOTH raster and
+     * measure — GetDC on the control hands back a DC with the set font
+     * selected, so tmHeight, text extents, visible rows (the vbar page)
+     * and caret x math all move together. Metrics-level proof independent
+     * of notepad (the pixel leg lives in test_notepad_menu_e2e.js). */
+    SetWindowText(ed, text);                      /* the 30-line corpus again */
+    HDC fdc = GetDC(ed);
+    TEXTMETRIC ftm0, ftm1;
+    SIZE fex0, fex1;
+    GetTextMetrics(fdc, &ftm0);
+    GetTextExtentPoint32(fdc, "MMMM", 4, &fex0);
+    ReleaseDC(ed, fdc);
+    memset(&si, 0, sizeof si);
+    si.cbSize = sizeof si;
+    si.fMask = SIF_ALL;
+    GetScrollInfo(ed, SB_VERT, &si);
+    int fpage0 = (int)si.nPage;
+    st_check("WM_GETFONT default is NULL",
+             SendMessage(ed, WM_GETFONT, 0, 0) == 0);
+    HFONT big = CreateFont(-2 * (int)ftm0.tmHeight, 0, 0, 0, FW_NORMAL,
+                           0, 0, 0, 0, 0, 0, 0, 0, "mono");
+    st_check("CreateFont(2x em)", big != NULL);
+    SendMessage(ed, WM_SETFONT, (WPARAM)big, TRUE);
+    st_check("WM_GETFONT returns the set font",
+             (HFONT)SendMessage(ed, WM_GETFONT, 0, 0) == big);
+    fdc = GetDC(ed);
+    GetTextMetrics(fdc, &ftm1);
+    GetTextExtentPoint32(fdc, "MMMM", 4, &fex1);
+    ReleaseDC(ed, fdc);
+    st_check("control DC tmHeight follows WM_SETFONT", ftm1.tmHeight > ftm0.tmHeight);
+    st_check("control DC extents follow WM_SETFONT", fex1.cx > fex0.cx);
+    memset(&si, 0, sizeof si);
+    si.cbSize = sizeof si;
+    si.fMask = SIF_ALL;
+    GetScrollInfo(ed, SB_VERT, &si);
+    st_check("visible rows (vbar page) shrink under the bigger font",
+             (int)si.nPage < fpage0 && si.nPage > 0);
+    SendMessage(ed, WM_SETFONT, 0, 0);            /* NULL = stock default */
+    fdc = GetDC(ed);
+    GetTextMetrics(fdc, &ftm1);
+    ReleaseDC(ed, fdc);
+    st_check("WM_SETFONT NULL restores stock metrics",
+             ftm1.tmHeight == ftm0.tmHeight);
+    st_check("DeleteObject on the deselected font", DeleteObject((HGDIOBJ)big));
+
     /* fail-loud probe: a LISTBOX has no SB_VERT plumbing — the call must
      * fail AND say so on stderr (the e2e asserts the stderr line) */
     HWND lb = CreateWindowEx(0, "LISTBOX", "", WS_CHILD | WS_VISIBLE,
