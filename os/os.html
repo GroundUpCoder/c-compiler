@@ -959,9 +959,9 @@ kernel.onmessage = function (e) {
       status('WebGPU unavailable — cannot boot', true);
       window.__osState = 'nogpu';    // agent probe (tests/browser/os-boots.mjs)
       document.getElementById('guardMsg').innerHTML =
-        'gucOS requires WebGPU — the desktop compositor renders with it<br>' +
-        '(no fallback). Use a browser with WebGPU available in workers,<br>' +
-        'e.g. current Chrome or Edge.';
+        'gucOS requires WebGPU in Web Workers — the desktop compositor<br>' +
+        'renders with it (no fallback). This browser did not provide a<br>' +
+        'worker WebGPU adapter: unsupported here, or disabled in settings.';
       document.getElementById('guardRetry').style.display = 'none';
       document.body.setAttribute('data-guard', '1');
       break;
