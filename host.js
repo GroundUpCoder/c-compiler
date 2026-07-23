@@ -2459,11 +2459,16 @@ var BLOCK_FS = (function () {
   // BlockFS — the filesystem proper
   // =================================================================
 
-  function BlockFS(store, alloc, inodeTable, rootIno, sbFormat, fmt) {
+  function BlockFS(store, alloc, inodeTable, rootIno, sbFormat, fmt, clock) {
     this._s = store;           // ByteStore
     this._alloc = alloc;       // TLSFAllocator / TLSF64Allocator
     this._inodes = inodeTable; // InodeTable / InodeTable128
     this._fmt = fmt || FMT_V3; // version-specific bits (FMT_V3 = original behavior)
+    // Injectable timestamp source (createV4 opts.clock, todos/0249): a
+    // () -> ms-since-epoch function _now() uses instead of Date.now().
+    // Must be set BEFORE _createRootDir below — the root inode's times
+    // come from _now() too. Null = wall clock (every live volume).
+    this._clock = clock || null;
     this._rootIno = rootIno;   // root inode ID (always 1)
     // next free inode ID lives in the superblock (SB_NEXT_INODE_ID), read
     // THROUGH the store so concurrent live instances don't both hand out the
@@ -2530,9 +2535,12 @@ var BLOCK_FS = (function () {
   }
 
   BlockFS.prototype._now = function () {
-    // Date.now() is fine here — this is sync code in a worker. Returns the inode's
+    // Date.now() is fine here — this is sync code in a worker. _clock (an
+    // injected () -> ms source, createV4 opts.clock) overrides it for the
+    // deterministic system-image bake (todos/0249). Returns the inode's
     // native storage unit: seconds (v3) or milliseconds (v4, timeScale 1000).
-    return this._fmt.timeScale === 1 ? Math.floor(Date.now() / 1000) : Date.now();
+    var ms = this._clock ? this._clock() : Date.now();
+    return this._fmt.timeScale === 1 ? Math.floor(ms / 1000) : ms;
   };
 
   BlockFS.prototype._setErr = function (name) {
@@ -4812,6 +4820,10 @@ var BLOCK_FS = (function () {
   // mutating op returns EROFS, the store is wrapped in ReadOnlyStore as a
   // backstop, and an unformatted/non-v4 store throws (a readonly mount must
   // never format). This is how the baked system blob is mounted at /usr.
+  // opts.clock (todos/0249): a () -> ms-since-epoch function _now() uses
+  // instead of Date.now() for every inode a/m/c/btime stamp. The system-image
+  // bake passes a fixed manifest-derived value so two bakes of an identical
+  // tree are byte-identical (content-hash-stable); live volumes never set it.
   BlockFS.createV4 = function (store, opts) {
     if (opts && opts.readonly) {
       if (store.size() < SUPERBLOCK_SIZE ||
@@ -4841,14 +4853,14 @@ var BLOCK_FS = (function () {
       alloc = new TLSF64Allocator(store, SUPERBLOCK_SIZE, storeSize - TLSF_POOL_OFFSET64);
       inodeTable = new InodeTable128(alloc);
       inodeTable.init(INITIAL_INODE_CAPACITY);
-      fs = new BlockFS(store, alloc, inodeTable, 1, true, FMT_V4);
+      fs = new BlockFS(store, alloc, inodeTable, 1, true, FMT_V4, opts && opts.clock);
       fs._writeSuperblock();
       if (!(opts && opts.noDevNodes)) fs.ensureDevNodes();
       return fs;
     }
     alloc = new TLSF64Allocator(store, SUPERBLOCK_SIZE, 0); // load existing metadata
     inodeTable = new InodeTable128(alloc);
-    fs = new BlockFS(store, alloc, inodeTable, store.getUint32(SB_ROOT_INODE), false, FMT_V4);
+    fs = new BlockFS(store, alloc, inodeTable, store.getUint32(SB_ROOT_INODE), false, FMT_V4, opts && opts.clock);
     if (!(opts && opts.noDevNodes)) fs.ensureDevNodes(); // self-heal /dev on every v4 mount (idempotent)
     return fs;
   };
