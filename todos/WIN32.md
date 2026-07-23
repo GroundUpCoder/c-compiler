@@ -267,7 +267,15 @@ custom templates deliberately not run — notepad's encoding combo
 degrades to the current value), FindTextW/ReplaceTextW as modeless
 dialogs speaking the RegisterWindowMessageW("commdlg_FindReplace")
 protocol (FR_FINDNEXT/FR_REPLACE/FR_REPLACEALL/FR_DIALOGTERM; always
-FR_DOWN), and ChooseFont/PrintDlg/PageSetupDlg as honest cancels; the
+FR_DOWN), and ChooseFont/PrintDlg/PageSetupDlg as honest cancels
+(ChooseFontW became REAL in todos/0223: the file-dialog modal shape —
+one honest "mono" face row, point-size EDIT + list, a live sample
+STATIC driven by WM_SETFONT; OK fills lfHeight = -px (em) at 96dpi and
+iPointSize tenths. user32 stores the WM_SETFONT/WM_GETFONT font on the
+HWND and selects it into every GetDC/BeginPaint DC — the one choke all
+control draws AND measures share, so edit_line_h/edit_rows/caret x and
+the glyph raster move together; PrintDlg/PageSetupDlg stay honest
+cancels — no printing subsystem); the
 comctl32 STATUS BAR (self-bottom-parking, SB_SETPARTS/SB_SETTEXTW,
 parts joined in WM_GETTEXT for the agent). user32 grew
 RegisterWindowMessageW (per-process atoms — both protocol ends live in

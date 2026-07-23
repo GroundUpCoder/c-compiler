@@ -10,7 +10,9 @@
 //         Paste, Delete, Find..., Find Next, Replace..., Go To... (+ the
 //         out-of-range error box), Select All, Time/Date
 //   Format: Word Wrap (checkmark + Go To grays + buffer survives the EDIT
-//         recreate), Font... (loud cancel — todos/0223 is the real dialog)
+//         recreate), Font... (the REAL ChooseFontW dialog, todos/0223 —
+//         pick a larger size, OK, and the EDIT's rendered line height
+//         visibly grows: shot-before/shot-after last-ink-row pixel assert)
 //   View: Status Bar (hide/show, tree vis flag)
 //   Help: View Help (grayed at WM_CREATE), About Notepad (ShellAbout box;
 //         the win32rc \r fix keeps 'Palamarchuk' intact)
@@ -255,8 +257,34 @@ const r = driveBoot([
   'wmctl tree | grep msctls',
   'echo ==cut',
 
-  // ---- Format > Font..., File > Page Setup... / Print...: LOUD cancels ----
+  // ---- Format > Font...: the REAL ChooseFontW dialog (todos/0223) ----
+  // Seed ink-heavy lines, shot, pick a larger size through the dialog,
+  // shot again: the EDIT's last ink row must move DOWN (line height grew).
+  'wmctl settext EDIT:0 "$(printf \'MMMM\\nMMMM\\nMMMM\')"',
+  'wmctl tree > /dev/null',                      // paint barrier (agent served at queue-dry, after WM_PAINT)
+  'wmctl shot $SID /root/font-before.ppm && echo fshot0-ok',
+  'echo ==fshot0',
+  'base64 /root/font-before.ppm',
+  'echo ==cut',
   'wmctl click "Font..."',
+  'wmctl wait win Font 8000',
+  'echo ==fonttree',
+  'wmctl tree',
+  'echo ==cut',
+  'wmctl settext EDIT:1 28',                     // the size box (EDIT:0 = notepad)
+  'wmctl click OK',
+  'wmctl wait nowin Font 8000',
+  'wmctl tree > /dev/null',                      // paint barrier for the re-font
+  'wmctl shot $SID /root/font-after.ppm && echo fshot1-ok',
+  'echo ==fshot1',
+  'base64 /root/font-after.ppm',
+  'echo ==cut',
+  // settext cleared EM_GETMODIFY; the New leg below expects the modified
+  // prompt — re-modify with a real keystroke
+  'wmctl key $SID 20 113',                       // q
+  'wmctl wait text EDIT:0 q 6000',
+
+  // ---- File > Page Setup... / Print...: LOUD cancels ----
   'wmctl click "Page Setup..."',
   'wmctl click "Print..."',
   'sleep 0.5',                                   // reports flush to the tty (no window/marker to wait on)
@@ -423,9 +451,53 @@ check('Status Bar toggle hides the bar (vis=0)', /vis=0/.test(section(out, 'sbar
 check('Status Bar toggle shows it again (vis=1)', /vis=1/.test(section(out, 'sbaron')),
   section(out, 'sbaron'));
 
-/* ---- the loud cancels: Font / Page Setup / Print */
-check('Font... reports loudly (ChooseFontW, todos/0223)',
-  /win32: unsupported ChooseFontW/.test(all), 'no ChooseFontW report');
+/* ---- Format > Font...: the REAL ChooseFontW dialog (todos/0223) */
+check('Font... loud-cancel report is GONE (real ChooseFontW)',
+  !/win32: unsupported ChooseFontW/.test(all), 'stale ChooseFontW report');
+const ftree = section(out, 'fonttree');
+check('Font dialog opens (WCFontDlg, the file_dialog shape)',
+  /class=WCFontDlg[^\n]*text='Font'/.test(ftree), ftree.slice(0, 400));
+check('one honest face row, selected ("mono" — single-family platform)',
+  /class=LISTBOX[^\n]*text='> mono\\n'/.test(ftree), ftree.slice(-600));
+check('CF_INITTOLOGFONTSTRUCT preselects the stock size (15pt = 20px)',
+  /class=EDIT[^\n]*text='15'/.test(ftree) &&
+  /class=LISTBOX[^\n]*> 15\\n/.test(ftree), ftree.slice(-600));
+check('live sample STATIC present (WM_SETFONT-driven preview)',
+  /text='AaBbYyZz'/.test(ftree), ftree.slice(-600));
+
+/* the pixel proof: 3 lines of 'M' — the LAST ink row inside the EDIT
+ * (x past the caret/border, y between the well top and the status bar)
+ * must move DOWN when 28pt (37px em) replaces the 20px stock. */
+function parsePpm(b64) {
+  const buf = Buffer.from(String(b64).replace(/\s+/g, ''), 'base64');
+  let p = 0;
+  const tok = () => { while ([32, 10, 9, 13].includes(buf[p])) p++;
+                      let s = p; while (![32, 10, 9, 13].includes(buf[p])) p++;
+                      return buf.slice(s, p).toString(); };
+  const magic = tok(); const w = +tok(), h = +tok(); tok(); p++;
+  return { buf, w, h, data: p, magic };
+}
+function lastInkRow(P, x0, x1, y0, y1) {
+  let m = -1;
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    const i = P.data + (y * P.w + x) * 3;
+    if (P.buf[i] < 100 && P.buf[i + 1] < 100 && P.buf[i + 2] < 100) { m = y; break; }
+  }
+  return m;
+}
+check('font-change shots captured', out.includes('fshot0-ok') && out.includes('fshot1-ok'),
+  out.slice(-400));
+const fp0 = parsePpm(section(out, 'fshot0'));
+const fp1 = parsePpm(section(out, 'fshot1'));
+check('font shots are P6 frames', fp0.magic === 'P6' && fp1.magic === 'P6',
+  fp0.magic + '/' + fp1.magic);
+const ink0 = lastInkRow(fp0, 10, 200, 36, 340);
+const ink1 = lastInkRow(fp1, 10, 200, 36, 340);
+console.log('  info fontink ' + JSON.stringify({ ink0, ink1 }));
+check('EDIT line height visibly grew (last ink row moved down >= 30px)',
+  ink0 > 0 && ink1 > ink0 + 30, JSON.stringify({ ink0, ink1 }));
+
+/* ---- the loud cancels: Page Setup / Print */
 check('Page Setup... reports loudly (PageSetupDlgW)',
   /win32: unsupported PageSetupDlgW/.test(all), 'no PageSetupDlgW report');
 check('Print... reports loudly (PrintDlgW)',
