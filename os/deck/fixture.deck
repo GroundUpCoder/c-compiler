@@ -1,0 +1,95 @@
+{
+  "deck": 1,
+  "size": { "w": 1280, "h": 720 },
+  "theme": {
+    "background": "#101418",
+    "text": { "font": "sans", "size": 32, "color": "#e8e8e8" },
+    "stroke": { "color": "#e8e8e8", "width": 3 },
+    "fill": "#1d2733"
+  },
+  "slides": [
+    {
+      "id": "title",
+      "notes": "Lane 1 fixture: wrapped text + image; notes are never rendered.",
+      "elements": [
+        { "id": "h1", "type": "text",
+          "x": 80, "y": 200, "w": 1120, "h": 200,
+          "text": "gucOS deck: a slide tool you can own",
+          "style": { "size": 64, "align": "center", "valign": "middle",
+                     "color": "#ffffff", "wrap": true } },
+        { "id": "sub", "type": "text",
+          "x": 240, "y": 420, "w": 800, "h": 120,
+          "text": "Every visible thing is an element with a stable id and explicit geometry, so agents edit slides the way they edit code.",
+          "style": { "size": 26, "align": "center", "valign": "top",
+                     "color": "#9fb4c8", "wrap": true } },
+        { "id": "cat", "type": "image", "src": "nyan.png",
+          "x": 1020, "y": 80, "w": 180, "h": 120, "fit": "contain" }
+      ]
+    },
+    {
+      "id": "arch",
+      "notes": "Labeled boxes + arrows: the 90% diagram case.",
+      "elements": [
+        { "id": "hdr", "type": "text",
+          "x": 80, "y": 40, "w": 1120, "h": 80,
+          "text": "Architecture",
+          "style": { "size": 44, "align": "left", "valign": "middle",
+                     "color": "#ffffff" } },
+        { "id": "box-kernel", "type": "rect",
+          "x": 120, "y": 420, "w": 300, "h": 120,
+          "style": { "fill": "#1d2733", "stroke": "#7fd4ff",
+                     "strokeWidth": 3, "radius": 12 },
+          "label": { "text": "kernel.js", "size": 28 } },
+        { "id": "box-host", "type": "rect",
+          "x": 120, "y": 200, "w": 300, "h": 120,
+          "style": { "fill": "#1d2733", "stroke": "#7fff9e",
+                     "strokeWidth": 3, "radius": 12 },
+          "label": { "text": "host.js (per process)", "size": 24 } },
+        { "id": "e1", "type": "ellipse",
+          "x": 760, "y": 400, "w": 320, "h": 160,
+          "style": { "fill": "none", "stroke": "#ffd27f", "strokeWidth": 3 },
+          "label": { "text": "BlockFS", "size": 28, "color": "#ffd27f" } },
+        { "id": "a1", "type": "line",
+          "x1": 270, "y1": 320, "x2": 270, "y2": 420,
+          "style": { "width": 3, "endArrow": true, "startArrow": true } },
+        { "id": "a2", "type": "line",
+          "x1": 420, "y1": 480, "x2": 760, "y2": 480,
+          "style": { "stroke": "#7fd4ff", "width": 3, "endArrow": true } },
+        { "id": "a3", "type": "line",
+          "x1": 420, "y1": 260, "x2": 920, "y2": 400,
+          "style": { "width": 3, "endArrow": true, "dash": [8, 6] } },
+        { "id": "flow", "type": "polyline",
+          "points": [[180, 600], [520, 600], [520, 660], [900, 660]],
+          "style": { "stroke": "#7fff9e", "width": 3, "endArrow": true } },
+        { "id": "veil", "type": "rect",
+          "x": 950, "y": 90, "w": 240, "h": 130,
+          "style": { "fill": "#7fd4ff33", "stroke": "none", "radius": 16 } },
+        { "id": "veil-t", "type": "text",
+          "x": 950, "y": 90, "w": 240, "h": 130,
+          "text": "alpha fill",
+          "style": { "size": 24, "align": "center", "valign": "middle" } }
+      ]
+    },
+    {
+      "id": "aa",
+      "notes": "The AA-gate case in-format: thin diagonal arrows at presentation size.",
+      "elements": [
+        { "id": "hdr", "type": "text",
+          "x": 80, "y": 40, "w": 1120, "h": 80,
+          "text": "Thin diagonals (AA gate)",
+          "style": { "size": 44, "align": "left", "valign": "middle",
+                     "color": "#ffffff" } },
+        { "id": "f1", "type": "line", "x1": 200, "y1": 500, "x2": 1150, "y2": 160,
+          "style": { "width": 3, "endArrow": true } },
+        { "id": "f2", "type": "line", "x1": 200, "y1": 500, "x2": 1150, "y2": 320,
+          "style": { "width": 3, "endArrow": true } },
+        { "id": "f3", "type": "line", "x1": 200, "y1": 500, "x2": 1150, "y2": 480,
+          "style": { "width": 3, "endArrow": true } },
+        { "id": "f4", "type": "line", "x1": 200, "y1": 500, "x2": 1150, "y2": 640,
+          "style": { "width": 2, "endArrow": true } },
+        { "id": "d1", "type": "line", "x1": 160, "y1": 660, "x2": 700, "y2": 140,
+          "style": { "stroke": "#ffd27f", "width": 3, "dash": [8, 6] } }
+      ]
+    }
+  ]
+}
