@@ -1,5 +1,5 @@
 {
-  "version": 151,
+  "version": 152,
   "overlays": [
     {
       "id": "clang-apps",
@@ -62,6 +62,9 @@
       },
       "/usr/bin/gcode": {
         "project": "os/gcode/bin.json"
+      },
+      "/usr/bin/curl": {
+        "project": "os/curl/cli.json"
       },
       "/usr/bin/gucman": {
         "project": "os/gucman/bin.json"
