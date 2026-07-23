@@ -810,6 +810,153 @@ function sessionMenubar() {
     row0Ink(b.stdout, pt) > 1000, String(row0Ink(b.stdout, pt)));
 }
 
+/* ---- session P: settings window + cfgstore persistence (todos/0273d) ----
+ * Shell > Settings... (fired by the engine's modal keyboard — Down Down
+ * Enter, metrics-independent) opens the hand-drawn "Term Settings" pane;
+ * each button click applies LIVE and delta-writes ONE key to
+ * /root/.config/term (cfgstore CS3). Legs: theme > flips a SECOND term's
+ * band to light via the ~/.config FS_WATCH reload (cross-process live
+ * apply); fontsize + re-sizes the live window off 640x486; scrollback -,
+ * cursor >, bell > land in the user file; Esc closes the pane; a
+ * relaunched term comes up at the SAME re-sized geometry with the light
+ * band — the acceptance round-trip (change -> live -> persists). */
+function sessionSettings() {
+  const DOWN = 1073741905, ENTER = 13, ESC = 27;   // SDLK_DOWN/RETURN/ESCAPE
+  const script = [
+    'term &',
+    'wmctl wait win term',                         // window spawn (0155)
+    'sleep 2',                                     // timing subject: hush banner + prompt render (multi-frame)
+    'TSID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
+    'BSID=$(wmctl list | grep "\tmenubar$" | sed "s/[^0-9].*//")',
+    'wmctl wait seq $BSID 1 8000',                 // the strip presented
+    // --- Shell > Settings... via the engine's modal keyboard ---
+    'wmctl click $BSID 20 15',
+    'wmctl wait win "#32768" 8000',
+    'wmctl key $TSID 0 ' + DOWN,                   // New Window
+    'wmctl key $TSID 0 ' + DOWN,                   // Settings... (ungrayed, 0273d)
+    'wmctl key $TSID 0 ' + ENTER,
+    'wmctl wait nowin "#32768"',
+    'wmctl wait win "Term Settings" 8000',
+    'SSID=$(wmctl list | grep "\tTerm Settings$" | sed "s/[^0-9].*//")',
+    'wmctl wait seq $SSID 1 8000',                 // the pane painted
+    'echo ==setlist',
+    'wmctl list | grep "\tTerm Settings$"',
+    'wmctl shot $SSID /root/sset.ppm && echo sset-ok',
+    // --- a second term BEFORE any change: baked defaults, watching ~/.config ---
+    'term &',
+    'for i in $(seq 1 200); do [ $(wmctl list | grep -c "\tterm$") -ge 2 ] && break; sleep 0.05; done',  // sibling up (bounded poll, 0155)
+    'T2SID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//" | grep -v "^$TSID\\$" | head -1)',
+    'sleep 2',                                     // timing subject: term2 banner render + its config watch armed
+    // --- Theme > (dark -> light): pane term applies direct, term2 via FS_WATCH ---
+    'wmctl click $SSID 281 56',                    // row 1 cycler > (244/270 x 22-tall boxes)
+    'sleep 2',                                     // timing subject: cross-process watch reload + repaint (multi-frame)
+    'wmctl shot $T2SID /root/st2.ppm && echo st2-ok',
+    // --- Font Size + (14 -> 15): window re-sizes, SAME 80x24 grid ---
+    'wmctl click $SSID 281 22',                    // row 0 stepper +
+    'for i in $(seq 1 100); do wmctl list | grep "^$TSID\t" | grep -q 640x486 || break; sleep 0.1; done',  // re-size ack (bounded poll, 0155)
+    'echo ==t1row',
+    'wmctl list | grep "^$TSID\t"',
+    // --- Scrollback - (2000 -> 1500), Cursor > (block -> under), Bell > (sound -> visual) ---
+    'wmctl click $SSID 255 90',                    // row 2 stepper -
+    'wmctl click $SSID 281 124',                   // row 3 cycler >
+    'wmctl click $SSID 281 158',                   // row 4 cycler >
+    'sleep 1',                                     // timing subject: the last delta-write's tmp+rename settles
+    'echo ==cfg',
+    'cat /root/.config/term',
+    // --- Esc on the pane's windowID closes it (never reaches the pty) ---
+    'wmctl key $SSID 0 ' + ESC,
+    'wmctl wait nowin "Term Settings"',
+    // --- relaunch: startup loads ~/.config/term (the persistence round-trip) ---
+    'pkill term',
+    'wmctl wait nowin term',
+    'term &',
+    'wmctl wait win term',
+    'sleep 2',                                     // timing subject: banner render at the persisted config (multi-frame)
+    'T3SID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
+    'echo ==t3row',
+    'wmctl list | grep "^$T3SID\t"',
+    'wmctl shot $T3SID /root/st3.ppm && echo st3-ok',
+    'pkill term',
+    'wmctl wait nowin term',
+    '',
+  ].join('\n');
+  const s = driveBoot(script, { image, timeout: 420000 });
+  const out = s.stdout;
+
+  const setrow = ((out.split('==setlist\n')[1] || '').split('\n')[0] || '');
+  check('settings: "Term Settings" opened at 300x192 via Shell > Settings...',
+    setrow.includes('300x192'), setrow);
+  check('settings: pane/term2/relaunch shots written',
+    out.includes('sset-ok') && out.includes('st2-ok') &&
+    out.includes('st3-ok'), out.slice(-300));
+  const t1row = ((out.split('==t1row\n')[1] || '').split('\n')[0] || '');
+  const t1dims = (t1row.match(/\d+x\d+/) || [''])[0];
+  check('settings: Font Size + re-sized the live window off 640x486',
+    t1dims !== '' && t1dims !== '640x486', t1row);
+  const cfgTxt = (out.split('==cfg\n')[1] || '').split('==')[0];
+  for (const [k, v] of [['fontsize', '15'], ['theme', 'light'],
+                        ['scrollback', '1500'], ['cursor', 'under'],
+                        ['bell', 'visual']])
+    check('settings: user layer persisted ' + k + ' ' + v,
+      new RegExp('^' + k + '\\s+' + v + '$', 'm').test(cfgTxt),
+      JSON.stringify(cfgTxt.slice(0, 200)));
+  const t3row = ((out.split('==t3row\n')[1] || '').split('\n')[0] || '');
+  const t3dims = (t3row.match(/\d+x\d+/) || [''])[0];
+  check('settings: relaunch equals the live-applied geometry (fontsize persisted)',
+    t3dims === t1dims && t3dims !== '640x486', t1dims + ' vs ' + t3row);
+
+  // Pixel pass: pane labels inked; the LIGHT band on term2 (cross-process
+  // live reload) and on the relaunched term (startup load).
+  const b = driveBoot('cat /root/sset.ppm /root/st2.ppm /root/st3.ppm\n',
+    { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });
+  function parsePPM(buf, off) {
+    const head = buf.toString('latin1', off, off + 32);
+    const m2 = head.match(/^P6\n(\d+) (\d+)\n255\n/);
+    if (!m2) return null;
+    const w = +m2[1], h = +m2[2], data = off + m2[0].length;
+    return { w, h, data, end: data + w * h * 3 };
+  }
+  function darkInk(buf, ppm) {
+    let n = 0;
+    for (let y = 0; y < ppm.h; y++)
+      for (let x = 0; x < ppm.w; x++) {
+        const i = ppm.data + (y * ppm.w + x) * 3;
+        if (buf[i] < 100 && buf[i + 1] < 100 && buf[i + 2] < 100) n++;
+      }
+    return n;
+  }
+  // Light-theme pixels (all channels >= 200) in the grid band below GRID_Y.
+  function lightBand(buf, ppm) {
+    let n = 0;
+    for (let y = GRID_Y; y < ppm.h; y++)
+      for (let x = 0; x < ppm.w; x++) {
+        const i = ppm.data + (y * ppm.w + x) * 3;
+        if (buf[i] >= 200 && buf[i + 1] >= 200 && buf[i + 2] >= 200) n++;
+      }
+    return n;
+  }
+  const ps = parsePPM(b.stdout, 0);
+  check('settings: pane shot parses at 300x192', ps && ps.w === 300 && ps.h === 192,
+    ps && `${ps.w}x${ps.h}`);
+  if (!ps) return;
+  check('settings: pane labels rendered (dark ink on BTNFACE)',
+    darkInk(b.stdout, ps) > 150, String(darkInk(b.stdout, ps)));
+  const p2 = parsePPM(b.stdout, ps.end);
+  check('settings: term2 shot parses', !!p2);
+  if (!p2) return;
+  const band2 = p2.w * (p2.h - GRID_Y);
+  check('settings: term2 band went LIGHT via the FS_WATCH cross-process reload',
+    lightBand(b.stdout, p2) > band2 * 0.6,
+    lightBand(b.stdout, p2) + '/' + band2);
+  const p3 = parsePPM(b.stdout, p2.end);
+  check('settings: relaunch shot parses', !!p3);
+  if (!p3) return;
+  const band3 = p3.w * (p3.h - GRID_Y);
+  check('settings: relaunched term band is LIGHT (theme persisted to startup)',
+    lightBand(b.stdout, p3) > band3 * 0.6,
+    lightBand(b.stdout, p3) + '/' + band3);
+}
+
 (async () => {
   // Sessions run in order; an optional argv list of name substrings selects a
   // subset (e.g. `node test_term_e2e.js scrollback frames`). No args = all —
@@ -818,7 +965,7 @@ function sessionMenubar() {
     term: sessionTerm, frames: sessionFrames, nested: sessionNested,
     less: sessionLess, unicode: sessionUnicode, wide: sessionWide,
     scrollback: sessionScrollback, scrollbar: sessionScrollbar,
-    menubar: sessionMenubar,
+    menubar: sessionMenubar, settings: sessionSettings,
   };
   const want = process.argv.slice(2);
   for (const [name, fn] of Object.entries(ALL))

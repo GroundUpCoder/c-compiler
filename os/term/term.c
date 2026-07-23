@@ -26,6 +26,11 @@
  *     (os/win32/menucore.h — term is customer #3 after user32 and wm.c)
  *     as real POPUP_MENU anchored children titled "#32768". The grid
  *     renders below the bar (GRID_Y offset).
+ *   - Shell > Settings… (todos/0273d) opens a hand-drawn settings window
+ *     (font size / theme / scrollback / cursor / bell); config lives in
+ *     the cfgstore.h three-layer overlay `~/.config/term > /etc/term >
+ *     /usr/share/term`, loads at startup, applies live, and live-reloads
+ *     across processes via an FS_WATCH on ~/.config.
  */
 #include <SDL.h>
 #include <ft2build.h>
@@ -44,6 +49,12 @@
 #include <sys/wait.h>
 #include "../keys.h"     /* the system keyboard scheme (todos/0149) */
 #include "../launch.h"   /* LAUNCH_ENV_PATH/HOME — the canonical env strings */
+#include "../cfgstore.h" /* the three-layer per-key config overlay (CS3) —
+                          * term's settings store (todos/0273d) */
+#include "../sounds.h"   /* the 0094 event-sound scheme: the audible bell */
+#include "../fswatch.h"  /* FS_WATCH (#75): live settings reload across
+                          * processes — term is consumer #3 after mgp and
+                          * fileman (todos/0273d) */
 #include "../fontcore.h"  /* the shared glyph pipeline (todos/0277) — pulls
                            * freetype, fontchain.h (fallback list) and
                            * wcwidth.h (double-width; MUST MATCH kernel.js) */
@@ -59,7 +70,6 @@
  * systemd-style /etc: an empty /etc must boot). */
 #define FONT_PATH      "/etc/fonts/mono.ttf"
 #define FONT_FALLBACK  "/usr/share/fonts/mono.ttf"
-#define FONT_SIZE  14
 #define INIT_COLS  80
 #define INIT_ROWS  24
 #define MAX_PARAMS 16
@@ -88,7 +98,11 @@ typedef struct {
 #define DEF_FG    16
 #define DEF_BG    17
 
-static const uint8_t PAL[18][3] = {
+/* Slots 16/17 (default fg/bg) are the THEME pair — the one mutable part
+ * of the palette (todos/0273d): a theme swaps the default pair only, the
+ * 16 ANSI colors stay fixed, so SGR-colored output keeps its colors on
+ * any theme (Terminal profiles behave the same). */
+static uint8_t PAL[18][3] = {
     {0, 0, 0},       {205, 49, 49},   {13, 188, 121},  {229, 229, 16},
     {36, 114, 200},  {188, 63, 188},  {17, 168, 205},  {229, 229, 229},
     {102, 102, 102}, {241, 76, 76},   {35, 209, 139},  {245, 245, 67},
@@ -110,6 +124,98 @@ static int appcursor;              /* DECCKM: arrows send ESC O x */
 static unsigned char cur_fg = DEF_FG, cur_bg = DEF_BG, cur_attr = 0;
 static int dirty = 1;
 
+/* ---- configuration (todos/0273d) ----
+ * The store is `term` in the cfgstore.h three-layer per-key overlay
+ * (arch CS3): ~/.config/term (what the settings window's cfg_set writes,
+ * one key per change) > /etc/term > baked /usr/share/term. Keys — the
+ * defaults below EQUAL the baked file, so a factory image and a
+ * storeless run agree:
+ *   fontsize    14      (grid font px, 8..32)
+ *   theme       dark    (dark | light | green | amber | ocean)
+ *   scrollback  2000    (history lines, 0..10000; 0 disables)
+ *   cursor      block   (block | under | bar)
+ *   bell        sound   (sound | visual | none)
+ * Loaded BEFORE glyph metrics / ring allocation at startup; applied live
+ * by the settings window; live-reloaded on a ~/.config FS_WATCH event so
+ * a settings change in ANY term reaches every open one (macOS Terminal
+ * applies profile edits to all windows). */
+#define TC_DEF_FONTSIZE   14
+#define TC_FONT_MIN        8
+#define TC_FONT_MAX       32
+#define TC_DEF_SCROLLBACK 2000
+#define TC_SB_CAP         10000
+#define TC_SB_STEP        500
+
+typedef struct { const char *name; uint8_t fg[3], bg[3]; } Theme;
+static const Theme THEMES[] = {
+    { "dark",  { 220, 220, 220 }, { 0, 0, 0 } },     /* the classic default */
+    { "light", { 0, 0, 0 },       { 255, 255, 255 } },
+    { "green", { 51, 255, 51 },   { 0, 0, 0 } },
+    { "amber", { 255, 191, 0 },   { 0, 0, 0 } },
+    { "ocean", { 224, 236, 255 }, { 16, 44, 84 } },
+};
+#define N_THEMES ((int)(sizeof THEMES / sizeof THEMES[0]))
+
+enum { CUR_BLOCK, CUR_UNDER, CUR_BAR };
+enum { BELL_SOUND, BELL_VISUAL, BELL_NONE };
+static const char *const CURSOR_NAMES[3] = { "block", "under", "bar" };
+static const char *const BELL_NAMES[3]   = { "sound", "visual", "none" };
+
+static int font_size = TC_DEF_FONTSIZE;
+static int theme_idx;              /* index into THEMES */
+static int cursor_style = CUR_BLOCK;
+static int bell_mode = BELL_SOUND;
+static int bell_pending;           /* BELs coalesce: one per drain pass */
+static int flash_on;               /* visual bell: grid band inverted */
+
+static void theme_apply(int idx) {
+    if (idx < 0 || idx >= N_THEMES) idx = 0;
+    theme_idx = idx;
+    memcpy(PAL[DEF_FG], THEMES[idx].fg, 3);
+    memcpy(PAL[DEF_BG], THEMES[idx].bg, 3);
+    dirty = 1;
+}
+
+static int tc_clamp(int v, int lo, int hi) {
+    return v < lo ? lo : v > hi ? hi : v;
+}
+
+static int tc_enum(const char *val, const char *const names[], int n,
+                   int def) {
+    for (int i = 0; i < n; i++)
+        if (strcasecmp(val, names[i]) == 0) return i;
+    return def;
+}
+
+typedef struct { int fontsize, theme, scrollback, cursor, bell; } TermCfg;
+
+/* The effective configuration: defaults overlaid by whatever store
+ * layers exist (cfg_load3 already reported any read error loudly; a
+ * partial load degrades to the valid prefix). Malformed values fall back
+ * per key. */
+static void tc_load(TermCfg *c) {
+    char text[CFG_STORE_MAX], val[64], user[300];
+    c->fontsize = TC_DEF_FONTSIZE;
+    c->theme = 0;
+    c->scrollback = TC_DEF_SCROLLBACK;
+    c->cursor = CUR_BLOCK;
+    c->bell = BELL_SOUND;
+    cfg_user_path(user, sizeof user, "term");
+    text[0] = 0;
+    cfg_load3(text, sizeof text, user, "/etc/term", "/usr/share/term");
+    if (cfg_find(text, "fontsize", val, sizeof val))
+        c->fontsize = tc_clamp(atoi(val), TC_FONT_MIN, TC_FONT_MAX);
+    if (cfg_find(text, "theme", val, sizeof val))
+        for (int i = 0; i < N_THEMES; i++)
+            if (strcasecmp(val, THEMES[i].name) == 0) c->theme = i;
+    if (cfg_find(text, "scrollback", val, sizeof val))
+        c->scrollback = tc_clamp(atoi(val), 0, TC_SB_CAP);
+    if (cfg_find(text, "cursor", val, sizeof val))
+        c->cursor = tc_enum(val, CURSOR_NAMES, 3, CUR_BLOCK);
+    if (cfg_find(text, "bell", val, sizeof val))
+        c->bell = tc_enum(val, BELL_NAMES, 3, BELL_SOUND);
+}
+
 /* ---- scrollback history ring (todos/0273a) ----
  * Lines that scroll off the TOP of the main screen (a real terminal scroll:
  * a linefeed at the bottom with the scroll region anchored at row 0) are
@@ -129,11 +235,13 @@ static int dirty = 1;
  * view_off is how many lines the viewport is scrolled UP from the live
  * bottom (0 = live grid). Writing ALWAYS targets the live grid regardless
  * of view_off; only rendering reads the offset. New output or any non-
- * scroll keypress snaps back to live (Terminal behaviour). */
-#define SCROLLBACK_MAX 2000
+ * scroll keypress snaps back to live (Terminal behaviour). The ring's
+ * capacity is the `scrollback` config key (todos/0273d, default 2000):
+ * a heap array of sb_max slots, re-sized live by sb_set_max. */
 typedef struct { Cell *cells; int len; } HistLine;
-static HistLine hist[SCROLLBACK_MAX];
-static int hist_count;              /* valid lines, <= SCROLLBACK_MAX */
+static HistLine *hist;              /* ring, sb_max slots (todos/0273d) */
+static int sb_max;                  /* configured capacity; 0 = disabled */
+static int hist_count;              /* valid lines, <= sb_max */
 static int hist_head;               /* ring index of the oldest line */
 static int view_off;                /* lines scrolled up from live; 0 = live */
 
@@ -192,20 +300,22 @@ static void clear_cells(Cell *g, int from, int count) {
     for (int i = 0; i < count; i++) g[from + i] = b;
 }
 
-/* The i-th oldest history line (0 = oldest). */
-static HistLine *hist_at(int i) { return &hist[(hist_head + i) % SCROLLBACK_MAX]; }
+/* The i-th oldest history line (0 = oldest). Callers guarantee
+ * hist_count > 0, which implies sb_max > 0. */
+static HistLine *hist_at(int i) { return &hist[(hist_head + i) % sb_max]; }
 
 /* Push one about-to-be-discarded screen row into the ring (oldest evicted
  * at the cap). The line keeps the width it was captured at. */
 static void hist_push(const Cell *row, int len) {
     HistLine *slot;
-    if (hist_count < SCROLLBACK_MAX) {
-        slot = &hist[(hist_head + hist_count) % SCROLLBACK_MAX];
+    if (!sb_max) return;               /* scrollback disabled (0273d) */
+    if (hist_count < sb_max) {
+        slot = &hist[(hist_head + hist_count) % sb_max];
         hist_count++;
     } else {
         slot = &hist[hist_head];
         free(slot->cells);
-        hist_head = (hist_head + 1) % SCROLLBACK_MAX;
+        hist_head = (hist_head + 1) % sb_max;
     }
     slot->cells = malloc((size_t)len * sizeof(Cell));
     if (!slot->cells) { slot->len = 0; return; }
@@ -230,6 +340,27 @@ static void scroll_view(int delta) {
 /* Snap the viewport back to the live bottom. */
 static void snap_live(void) {
     if (view_off != 0) { view_off = 0; dirty = 1; }
+}
+
+/* Re-size the ring to the configured capacity (todos/0273d): keep the
+ * NEWEST min(count, n) lines, free the rest, compact to index 0. Also
+ * the startup allocator (sb_max starts 0). */
+static void sb_set_max(int n) {
+    if (n < 0) n = 0;
+    if (n > TC_SB_CAP) n = TC_SB_CAP;
+    if (n == sb_max) return;
+    HistLine *nh = n ? calloc((size_t)n, sizeof(HistLine)) : NULL;
+    if (n && !nh) return;              /* OOM: keep the old ring */
+    int keep = hist_count < n ? hist_count : n;
+    for (int i = 0; i < hist_count - keep; i++) free(hist_at(i)->cells);
+    for (int i = 0; i < keep; i++) nh[i] = *hist_at(hist_count - keep + i);
+    free(hist);
+    hist = nh;
+    sb_max = n;
+    hist_head = 0;
+    hist_count = keep;
+    if (view_off > hist_count) view_off = hist_count;
+    dirty = 1;
 }
 
 /* ---- side scrollbar (todos/0273b) ----
@@ -618,7 +749,9 @@ static void ground_byte(unsigned char b) {
     }
     if (b == 0x0a || b == 0x0b || b == 0x0c) { linefeed(); return; }
     if (b == 0x0d) { cx = 0; wrap_pending = 0; return; }
-    if (b == 0x07 || b < 32) return;         /* BEL + other C0: ignore */
+    if (b == 0x07) { bell_pending = 1; return; }   /* BEL: serviced once per
+                                                      drain pass (0273d) */
+    if (b < 32) return;                      /* other C0: ignore */
     put_char(b);
 }
 
@@ -883,6 +1016,7 @@ static int bar_idx = -1;           /* open bar title, -1 none */
 static MenuItem *mi_copy, *mi_paste, *mi_top, *mi_bottom, *mi_clear;
 
 static void bar_paint(void);
+static void settings_open(void);   /* the 0273d settings window, below */
 
 /* Window (Minimize/Zoom) and Help menus are deliberately absent: they
  * need WMP chrome ops term doesn't speak (it is not a wm.sock client) /
@@ -892,10 +1026,7 @@ static void menu_build(void) {
     MenuTbl *shell = mc_menu_create(), *edit = mc_menu_create(),
             *view = mc_menu_create();
     mc_append(shell, 0, CM_NEWWIN, "New Window", NULL);
-    /* The 0273 (d) settings-window entry point: visible but GRAYED until
-     * that lane lands — an explicit stub, not a hidden cut. */
-    MenuItem *st = mc_append(shell, 0, CM_SETTINGS, "Settings...", NULL);
-    if (st) st->state = MF_GRAYED;
+    mc_append(shell, 0, CM_SETTINGS, "Settings...", NULL);
     mc_append(shell, 2, 0, NULL, NULL);
     mc_append(shell, 0, CM_CLOSEWIN, "Close Window", NULL);
     mi_copy = mc_append(edit, 0, CM_COPY, "Copy", NULL);
@@ -938,6 +1069,7 @@ static void tmc_post_command(void *owner, int id) {
     (void)owner;                       /* one window; the ids say it all */
     switch (id) {
     case CM_NEWWIN:   spawn_sibling_term(); break;
+    case CM_SETTINGS: settings_open(); break;      /* todos/0273d */
     case CM_CLOSEWIN: exit(0); break;  /* master close HUPs the session (0020) */
     case CM_COPY:     copy_selection(); break;
     case CM_PASTE:    paste_clipboard(); break;
@@ -949,7 +1081,7 @@ static void tmc_post_command(void *owner, int id) {
     case CM_TOP:      scroll_view(hist_count); break;
     case CM_BOTTOM:   snap_live(); break;
     case CM_CLEARSB:  hist_clear(); dirty = 1; break;
-    default: break;                    /* CM_SETTINGS stays grayed (0273 d) */
+    default: break;
     }
 }
 
@@ -1202,7 +1334,7 @@ static void term_fc_fail(const char *p) {
 /* The face covering cp: face 0, else the chain in list order, else NULL
  * (tofu). ASCII always renders from face 0 (fontcore fc_probe). */
 static FT_Face face_for(uint32_t cp, FT_UInt *gi) {
-    return fc_probe(face, &g_chain, FONT_SIZE, cp, gi);
+    return fc_probe(face, &g_chain, font_size, cp, gi);
 }
 
 /* Render callback (fontcore cache seam): fill g for cp — the covering
@@ -1226,6 +1358,315 @@ static FcGlyph *cp_glyph(uint32_t cp) {
     return fc_cache_get(&g_cache, cp, term_render, NULL);
 }
 
+/* ============================================================ settings
+ * runtime (todos/0273d) — the live-apply paths shared by the settings
+ * window below, the startup load and the FS_WATCH reload. Each is
+ * idempotent (same value = no work), so "reload everything and apply"
+ * is safe from any of the three callers. */
+
+/* Grid metrics at the current font_size (the load_glyphs math, factored
+ * so a live size change reuses it verbatim). */
+static void set_metrics(void) {
+    FT_Set_Pixel_Sizes(face, 0, font_size);
+    cell_h = (int)(face->size->metrics.height >> 6);
+    ascent = (int)(face->size->metrics.ascender >> 6);
+    if (cell_h < font_size) cell_h = font_size + 3;
+    /* Monospace: every advance matches 'M' (fc_load_flags so the cell
+     * pitch agrees with the hinted render path, todos/0279). */
+    FT_UInt mi = FT_Get_Char_Index(face, 'M');
+    cell_w = 0;
+    if (!FT_Load_Glyph(face, mi, fc_load_flags(face)))
+        cell_w = (int)(face->glyph->advance.x >> 6);
+    if (cell_w <= 0) cell_w = (font_size * 3) / 5;
+}
+
+/* Drop every cached glyph (both tiers) — bitmaps are size-specific. */
+static void flush_glyphs(void) {
+    for (int i = 0; i < 95; i++) free(g_cache.ascii[i].bmp);
+    memset(g_cache.ascii, 0, sizeof g_cache.ascii);
+    for (int i = 0; i < g_cache.xn; i++) free(g_cache.xglyphs[i].bmp);
+    free(g_cache.xglyphs);
+    free(g_cache.xcps);
+    g_cache.xglyphs = NULL;
+    g_cache.xcps = NULL;
+    g_cache.xn = g_cache.xcap = 0;
+}
+
+/* Live font-size change: new metrics, fresh glyph caches (the fallback
+ * chain re-probes at the new px on demand), and a window re-size to the
+ * SAME cols x rows grid at the new cell — macOS Terminal keeps the grid
+ * and grows the window. SDL_SetWindowSize renegotiates the surface
+ * (0019); the existing RESIZED handler re-derives it and reflows — to
+ * identical cols/rows by construction. History stores CELLS, so
+ * scrollback re-renders at the new size for free. */
+static void apply_font_size(int n) {
+    n = tc_clamp(n, TC_FONT_MIN, TC_FONT_MAX);
+    if (n == font_size) return;
+    font_size = n;
+    set_metrics();
+    flush_glyphs();
+    for (uint32_t ch = 32; ch < 127; ch++)
+        term_render(NULL, &g_cache.ascii[ch - 32], ch);
+    if (win) SDL_SetWindowSize(win, cols * cell_w, GRID_Y + rows * cell_h);
+    dirty = 1;
+}
+
+/* ---- the settings window ----
+ * Shell > Settings…: a fixed-size top-level window (kernel chrome gives
+ * move/close; not RESIZABLE, so it can't be sheared) hand-drawn in the
+ * SAME __gdi_dc_wrap + gdi32 idiom as the 0273c bar strip — term links
+ * the engine's raster already; user32's control tree would put a second
+ * event model in the process (the 0273b scrollbar call, one level up —
+ * design log logs/2026-07-23/term-settings-0273d.md). macOS Terminal is
+ * the structural reference: five rows, every change applies IMMEDIATELY
+ * and delta-writes its ONE key to ~/.config/term — no OK/Cancel row.
+ * Numeric rows step (- / +), enum rows cycle (< / >); Esc or the close
+ * box dismisses. Pointer-driven by scope (like the reference's pane);
+ * keys on its windowID never reach the pty. */
+#define SET_W      300
+#define SET_ROW_H  34
+#define SET_TOP    12
+#define SET_H      (SET_TOP + 5 * SET_ROW_H + 10)
+#define SET_LBL_X  12
+#define SET_VAL_X  120
+#define SET_VAL_W  112
+#define SET_BTN1_X 244
+#define SET_BTN2_X 270
+#define SET_BTN_W  22
+#define SET_BOX_H  22
+
+static SDL_Window *set_win;
+
+static const char *const SET_LABELS[5] =
+    { "Font Size", "Theme", "Scrollback", "Cursor", "Bell" };
+
+static void set_row_value(int row, char *out, size_t sz) {
+    switch (row) {
+    case 0: snprintf(out, sz, "%d px", font_size); break;
+    case 1: snprintf(out, sz, "%s", THEMES[theme_idx].name); break;
+    case 2: snprintf(out, sz, "%d lines", sb_max); break;
+    case 3: snprintf(out, sz, "%s", CURSOR_NAMES[cursor_style]); break;
+    case 4: snprintf(out, sz, "%s", BELL_NAMES[bell_mode]); break;
+    }
+}
+
+/* A 1px BTNSHADOW frame around a filled box (the pane's only border
+ * furniture). */
+static void set_box(HDC dc, int x0, int y0, int x1, int y1, HBRUSH fill) {
+    RECT r;
+    SetRect(&r, x0, y0, x1, y1);
+    FillRect(dc, &r, GetSysColorBrush(COLOR_BTNSHADOW));
+    SetRect(&r, x0 + 1, y0 + 1, x1 - 1, y1 - 1);
+    FillRect(dc, &r, fill);
+}
+
+static void settings_paint(void) {
+    if (!set_win) return;
+    SDL_Surface *s = SDL_GetWindowSurface(set_win);
+    if (!s) return;
+    HDC dc = __gdi_dc_wrap(s->pixels, s->w, s->h, s->pitch / 4);
+    if (!dc) return;
+    RECT r;
+    SetRect(&r, 0, 0, s->w, s->h);
+    FillRect(dc, &r, GetSysColorBrush(COLOR_BTNFACE));
+    SetBkMode(dc, TRANSPARENT);
+    char val[40];
+    for (int i = 0; i < 5; i++) {
+        int y = SET_TOP + i * SET_ROW_H;
+        SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
+        TextOut(dc, SET_LBL_X, y + 3, SET_LABELS[i],
+                (int)strlen(SET_LABELS[i]));
+        /* Value box; the theme row previews its own fg-on-bg pair. */
+        if (i == 1) {
+            HBRUSH tb = CreateSolidBrush(RGB(THEMES[theme_idx].bg[0],
+                                             THEMES[theme_idx].bg[1],
+                                             THEMES[theme_idx].bg[2]));
+            set_box(dc, SET_VAL_X, y, SET_VAL_X + SET_VAL_W, y + SET_BOX_H, tb);
+            DeleteObject(tb);
+            SetTextColor(dc, RGB(THEMES[theme_idx].fg[0],
+                                 THEMES[theme_idx].fg[1],
+                                 THEMES[theme_idx].fg[2]));
+        } else {
+            set_box(dc, SET_VAL_X, y, SET_VAL_X + SET_VAL_W, y + SET_BOX_H,
+                    GetSysColorBrush(COLOR_WINDOW));
+            SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+        }
+        set_row_value(i, val, sizeof val);
+        TextOut(dc, SET_VAL_X + 6, y + 3, val, (int)strlen(val));
+        /* Stepper (- +) on numeric rows, cycler (< >) on enum rows. */
+        SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
+        int num = i == 0 || i == 2;
+        set_box(dc, SET_BTN1_X, y, SET_BTN1_X + SET_BTN_W, y + SET_BOX_H,
+                GetSysColorBrush(COLOR_BTNFACE));
+        TextOut(dc, SET_BTN1_X + 7, y + 3, num ? "-" : "<", 1);
+        set_box(dc, SET_BTN2_X, y, SET_BTN2_X + SET_BTN_W, y + SET_BOX_H,
+                GetSysColorBrush(COLOR_BTNFACE));
+        TextOut(dc, SET_BTN2_X + 7, y + 3, num ? "+" : ">", 1);
+    }
+    __gdi_dc_unwrap(dc);
+    SDL_UpdateWindowSurface(set_win);
+}
+
+static void settings_open(void) {
+    if (set_win) { settings_paint(); return; }     /* one pane, no dupes */
+    set_win = SDL_CreateWindow("Term Settings", SET_W, SET_H, 0);
+    if (!set_win) {
+        fprintf(stderr, "term: settings window failed: %s\n", SDL_GetError());
+        return;
+    }
+    settings_paint();
+}
+
+static void settings_close(void) {
+    if (!set_win) return;
+    SDL_DestroyWindow(set_win);
+    set_win = NULL;
+}
+
+static void set_persist(const char *key, const char *value) {
+    if (cfg_set("term", key, value) != 0)
+        fprintf(stderr, "term: settings write (%s): %s\n", key,
+                strerror(errno));
+}
+
+/* One click on row `row`'s left (-1) / right (+1) button: apply LIVE,
+ * then delta-write exactly that key to the user layer (the admin/baked
+ * layers keep serving every other key — CS3). */
+static void settings_adjust(int row, int dir) {
+    char val[40];
+    switch (row) {
+    case 0:
+        apply_font_size(font_size + dir);
+        snprintf(val, sizeof val, "%d", font_size);
+        set_persist("fontsize", val);
+        break;
+    case 1:
+        theme_apply((theme_idx + dir + N_THEMES) % N_THEMES);
+        set_persist("theme", THEMES[theme_idx].name);
+        break;
+    case 2:
+        sb_set_max(tc_clamp(sb_max + dir * TC_SB_STEP, 0, TC_SB_CAP));
+        snprintf(val, sizeof val, "%d", sb_max);
+        set_persist("scrollback", val);
+        break;
+    case 3:
+        cursor_style = (cursor_style + dir + 3) % 3;
+        dirty = 1;
+        set_persist("cursor", CURSOR_NAMES[cursor_style]);
+        break;
+    case 4:
+        bell_mode = (bell_mode + dir + 3) % 3;
+        set_persist("bell", BELL_NAMES[bell_mode]);
+        break;
+    default:
+        return;
+    }
+    settings_paint();
+}
+
+static void settings_mouse(int x, int y) {
+    if (y < SET_TOP) return;
+    int row = (y - SET_TOP) / SET_ROW_H;
+    if (row > 4 || (y - SET_TOP) % SET_ROW_H >= SET_BOX_H) return;
+    if (x >= SET_BTN1_X && x < SET_BTN1_X + SET_BTN_W)
+        settings_adjust(row, -1);
+    else if (x >= SET_BTN2_X && x < SET_BTN2_X + SET_BTN_W)
+        settings_adjust(row, +1);
+}
+
+/* Settings-window event demux (after the menu layer in frame_cb):
+ * everything on its windowID is the pane's — keys there never reach the
+ * pty, Esc and the close box dismiss. */
+static int settings_event(const SDL_Event *e) {
+    if (!set_win) return 0;
+    Uint32 sid = SDL_GetWindowID(set_win);
+    switch (e->type) {
+    case SDL_EVENT_KEY_DOWN:
+        if (e->key.windowID != sid) return 0;
+        if ((int)e->key.key == SDLK_ESCAPE) settings_close();
+        return 1;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        if (e->button.windowID != sid) return 0;
+        if (e->button.button == 1)
+            settings_mouse((int)e->button.x, (int)e->button.y);
+        return 1;
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        return e->button.windowID == sid;
+    case SDL_EVENT_MOUSE_MOTION:
+        return e->motion.windowID == sid;
+    case SDL_EVENT_MOUSE_WHEEL:
+        return e->wheel.windowID == sid;
+    case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+        if (e->window.windowID != sid) return 0;
+        settings_close();
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* ---- live config reload (FS_WATCH consumer #3, after mgp and fileman)
+ * ---- a settings change in ANY term (or a hand edit of ~/.config/term)
+ * reaches every open one: cfg_set's tmp+rename lands as a same-dir
+ * RENAME record naming `term` under a ~/.config dir watch (a dir watch
+ * survives the file not existing yet — __fs_watch is ENOENT on a missing
+ * path, and a fresh HOME has no user file). Applies through the same
+ * idempotent paths the settings window uses, so our own writes reload as
+ * no-ops. */
+static int cfgwatch_fd = -1;
+
+static void cfg_apply(const TermCfg *c) {
+    apply_font_size(c->fontsize);
+    if (c->theme != theme_idx) theme_apply(c->theme);
+    sb_set_max(c->scrollback);
+    if (c->cursor != cursor_style) { cursor_style = c->cursor; dirty = 1; }
+    bell_mode = c->bell;
+    if (set_win) settings_paint();     /* the pane mirrors the store */
+}
+
+static void cfgwatch_arm(void) {
+    char dir[300];
+    snprintf(dir, sizeof dir, "%s/.config", cfg_home());
+    mkdir(dir, 0755);                  /* EEXIST fine; the watch path must
+                                          exist at creation */
+    cfgwatch_fd = __fs_watch(dir, 0, 0);   /* settled mask */
+    if (cfgwatch_fd < 0)
+        fprintf(stderr, "term: config watch on %s failed: %s — "
+                "cross-process settings sync off\n", dir, strerror(errno));
+}
+
+/* Drain the watch fd (never blocks: EAGAIN when dry) and reload once if
+ * any settled event names `term` — RENAME carries "old\0new\0", so check
+ * both — or the queue overflowed (rescan is the reload). */
+static void cfgwatch_drain(void) {
+    if (cfgwatch_fd < 0) return;
+    char buf[512];
+    int hit = 0;
+    for (;;) {
+        ssize_t n = read(cfgwatch_fd, buf, sizeof buf);
+        if (n <= 0) break;
+        for (ssize_t off = 0; off + 4 <= n; ) {
+            const struct fsw_event *ev = (const struct fsw_event *)(buf + off);
+            if (ev->len < 4 || off + ev->len > n) break;
+            const char *name = ev->name;
+            if (ev->type == FSW_OVERFLOW || strcmp(name, "term") == 0)
+                hit = 1;
+            else if (ev->type == FSW_RENAME) {
+                const char *second = name + strlen(name) + 1;
+                if (second < buf + off + ev->len &&
+                    strcmp(second, "term") == 0)
+                    hit = 1;
+            }
+            off += ev->len;
+        }
+    }
+    if (hit) {
+        TermCfg c;
+        tc_load(&c);
+        cfg_apply(&c);
+    }
+}
+
 /* ============================================================ render */
 
 static uint32_t pack(const uint8_t *rgb) {
@@ -1243,7 +1684,10 @@ static void cell_colors(const Cell *cell, int live_r, int c, int show_sel,
     if (cell->attr & A_BOLD) { if (fg < 8) fg += 8; }
     if (cell->attr & A_REVERSE) { int t = fg; fg = bg; bg = t; }
     if (show_sel && live_r >= 0 && sel_has(live_r, c)) { int t = fg; fg = bg; bg = t; } /* 0090 */
-    if (cursor_visible && live_r >= 0 && live_r == cy && c == cx) { int t = fg; fg = bg; bg = t; }
+    /* The block cursor is the classic cell inversion; under/bar draw an
+     * overlay strip after the glyph pass instead (todos/0273d). */
+    if (cursor_style == CUR_BLOCK && cursor_visible && live_r >= 0 &&
+        live_r == cy && c == cx) { int t = fg; fg = bg; bg = t; }
     *fgo = fg;
     *bgo = bg;
 }
@@ -1321,6 +1765,19 @@ static void render(void) {
             }
         }
     }
+    /* Non-block cursor styles (0273d): a 2px default-fg strip — bottom
+     * (under) or left (bar) of the cursor cell, live view only. The
+     * block style is the classic cell inversion in cell_colors. */
+    if (cursor_style != CUR_BLOCK && cursor_visible && view_off == 0) {
+        int x0 = cx * cell_w, y0 = GRID_Y + cy * cell_h;
+        uint32_t fgp = pack(PAL[DEF_FG]);
+        int xa = x0, xb = x0 + cell_w, ya = y0, yb = y0 + cell_h;
+        if (cursor_style == CUR_UNDER) ya = yb - 2;
+        else xb = xa + 2;
+        for (int y = ya; y < yb && y < sh; y++)
+            for (int x = xa; x < xb && x < sw; x++)
+                px[y * sw + x] = fgp;
+    }
     /* Uncovered right/bottom margins (window not an exact cell multiple)
      * and the top GRID_Y band — the strip child covers the band visually,
      * but the surface pixels under it stay deterministic (0273c). */
@@ -1364,6 +1821,13 @@ static void render(void) {
                                  ((uint32_t)b << 16) | 0xFF000000u;
             }
         }
+    }
+    /* Visual bell (0273d): the whole grid band inverted while the flash
+     * is on — cleared by the main loop's one-shot 120ms wait timeout. */
+    if (flash_on) {
+        for (int y = GRID_Y; y < sh; y++)
+            for (int x = 0; x < sw; x++)
+                px[y * sw + x] = (~px[y * sw + x] & 0x00FFFFFFu) | 0xFF000000u;
     }
 }
 
@@ -1430,8 +1894,10 @@ static void frame_cb(void) {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         /* Menu layer first (0273c): bar strip + open dropdown chain, and
-         * the modal swallow while a chain is open. */
+         * the modal swallow while a chain is open. Then the settings
+         * pane's windowID (0273d) — its keys never reach the pty. */
         if (menu_event(&e)) continue;
+        if (settings_event(&e)) continue;
         if (e.type == SDL_EVENT_KEY_DOWN) {
             handle_key(&e.key);
         } else if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == 1 &&
@@ -1480,6 +1946,11 @@ static void frame_cb(void) {
             surf = SDL_GetWindowSurface(win);   /* re-derive (SDL3 contract) */
             if (__mc.open) mc_close();          /* geometry moved under the chain */
             apply_resize(surf->w / cell_w, (surf->h - GRID_Y) / cell_h);
+            /* Repaint even when cols x rows are unchanged (a font-size
+             * renegotiation, 0273d): the 0019 configure ack rides the
+             * first present AT the new size — without it the kernel
+             * keeps the old geometry forever. */
+            dirty = 1;
             /* A5: the strip width-follows the parent; its repaint rides
              * its own RESIZED ack (menu_event). Same width = same paint. */
             if (bar_win) {
@@ -1505,6 +1976,8 @@ static void frame_cb(void) {
     int st;
     while ((rp = waitpid(-1, &st, WNOHANG)) > 0)
         if (rp == child) exit(0);                             /* session over */
+    /* Live config reload (0273d): a ~/.config event naming `term`. */
+    cfgwatch_drain();
     /* Drain the master (bounded per frame so rendering stays live). */
     int budget = 65536;
     while (budget > 0) {
@@ -1526,6 +1999,13 @@ static void frame_cb(void) {
          * out of the user's hand; the next output after release snaps. */
         if (!sb_drag) view_off = 0;
     }
+    /* BELs coalesced per drain pass (0273d): a \a flood rings once per
+     * frame, never once per byte. */
+    if (bell_pending) {
+        bell_pending = 0;
+        if (bell_mode == BELL_SOUND) snd_play_event("Bell");
+        else if (bell_mode == BELL_VISUAL) { flash_on = 1; dirty = 1; }
+    }
     if (dirty) {
         render();
         SDL_UpdateWindowSurface(win);
@@ -1540,22 +2020,23 @@ static int load_glyphs(void) {
     int n = fc_load(fc_paths, FC_MAX_FALLBACKS);   /* fallback chain paths;
                                                       faces open lazily */
     fc_chain_init(&g_chain, ft_lib, fc_paths, n, term_fc_fail);
-    FT_Set_Pixel_Sizes(face, 0, FONT_SIZE);
-    cell_h = (int)(face->size->metrics.height >> 6);
-    ascent = (int)(face->size->metrics.ascender >> 6);
-    if (cell_h < FONT_SIZE) cell_h = FONT_SIZE + 3;
-    /* Monospace: every advance matches 'M' (fc_load_flags so the cell
-     * pitch agrees with the hinted render path, todos/0279). */
-    FT_UInt mi = FT_Get_Char_Index(face, 'M');
-    if (FT_Load_Glyph(face, mi, fc_load_flags(face))) return -1;
-    cell_w = (int)(face->glyph->advance.x >> 6);
-    if (cell_w <= 0) cell_w = (FONT_SIZE * 3) / 5;
+    set_metrics();                     /* at the configured font_size (0273d) */
     for (uint32_t ch = 32; ch < 127; ch++)
         term_render(NULL, &g_cache.ascii[ch - 32], ch);
     return 0;
 }
 
 int main(int argc, char **argv) {
+    /* Config BEFORE metrics/ring: fontsize feeds load_glyphs, scrollback
+     * sizes the ring, the rest assign directly (todos/0273d). */
+    TermCfg cfg;
+    tc_load(&cfg);
+    font_size = cfg.fontsize;
+    theme_apply(cfg.theme);
+    cursor_style = cfg.cursor;
+    bell_mode = cfg.bell;
+    sb_set_max(cfg.scrollback);
+
     if (load_glyphs() != 0) {
         fprintf(stderr, "term: cannot load %s (or %s)\n", FONT_PATH, FONT_FALLBACK);
         return 1;
@@ -1642,10 +2123,16 @@ int main(int argc, char **argv) {
      * while grandchildren still hold the slave — the EINTR wake runs
      * frame_cb's waitpid promptly instead of at the next output. */
     signal(SIGCHLD, on_chld);
+    cfgwatch_arm();                    /* live settings reload (0273d) */
     for (;;) {
         frame_cb();
         if (chld_seen) { chld_seen = 0; continue; }   /* claimed mid-frame:
                                                          re-run the waitpid */
-        __wait(&mfd, 1, 1, -1);
+        /* Park on {master ⊕ config watch ⊕ ring}; a live visual-bell
+         * flash turns the park into its one-shot 120ms clear timer —
+         * the only timed wake term ever takes (0273d). */
+        int fds[2] = { mfd, cfgwatch_fd };
+        __wait(fds, cfgwatch_fd >= 0 ? 2 : 1, 1, flash_on ? 120 : -1);
+        if (flash_on) { flash_on = 0; dirty = 1; }
     }
 }
