@@ -39,7 +39,9 @@ subset as an app-side library (`os/curl/`, todos/done/0173) backed by the
 kernel fetch RPC family (opcode space 0x06xx, todos/done/0172; see
 KERNEL.md "HTTP transport"). `curl_easy_perform` blocks via the deferred-RPC
 machinery; the kernel worker does the actual `fetch()`. The `/bin/curl`
-CLI did not fall out for free — it is `todos/0182`.
+CLI did not fall out for free — it is `todos/0182`, done 2026-07-23:
+`os/curl/curl-cli.c` over the unchanged easy veneer (`-s -o -X -H -d -f
+-L`, curl-idiom exit codes), seeded as `/usr/bin/curl` (image v152).
 
 Asymmetry: in the browser this is **CORS-gated** (same-origin +
 CORS-permissive hosts only); headless Node fetch is unrestricted.

@@ -15,6 +15,14 @@
 // CONNECT), total-timeout abort on a stalled body (CURLE_OPERATION_TIMEDOUT),
 // escape/unescape.
 //
+// CLI leg (todos/0182): /bin/curl (os/curl/curl-cli.c, seeded via
+// os/curl/cli.json) driven through a real OS boot — os/boot.js + hush —
+// against the SAME local server: body to stdout, status line to stderr,
+// -s/-o/-X/-H/-d/-f/-L, bundled + attached flag forms, curl-idiom exit
+// codes (refused = 7, -f on HTTP >= 400 = 22, usage = 2).
+// Browser CORS asymmetry is inherited from 0172 — documented there, NOT
+// re-tested here (this leg is headless Node fetch; no CORS applies).
+//
 // Run: node tests/kernel/test_curl_e2e.js
 'use strict';
 const fs = require('fs');
@@ -55,6 +63,10 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (u === '/missing') { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('nope'); return; }
+  if (u === '/method') { res.writeHead(200); res.end(req.method); return; }   // 0182: -X proof
+  if (u === '/hdr') {                                                         // 0182: -H proof
+    res.writeHead(200); res.end(String(req.headers['x-cli-test'] || 'MISSING')); return;
+  }
   if (u === '/stall') {
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.write('partial-');                          // then never finish
@@ -96,10 +108,12 @@ function normalize(out) {
   });
   const refused = `http://127.0.0.1:${refusedPort}`;
 
+  // 480s: the 0182 CLI leg boots the real OS — a cold (no-fixture) image
+  // bake alone can run ~100s+.
   const watchdog = setTimeout(() => {
     console.error('TIMEOUT');
     process.exit(1);
-  }, 120000);
+  }, 480000);
 
   // ---- gucOS leg: build the smoke via the veneer lib.json, boot it ----
   const readHostFile = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
@@ -180,6 +194,139 @@ function normalize(out) {
     fs.rmSync(tmp, { recursive: true, force: true });
   } else {
     console.log('  skip native differential leg (clang not found)');
+  }
+
+  // ---- CLI leg (todos/0182): /bin/curl through a real OS boot ----
+  // NB an ASYNC spawn, not lib/drive.js's spawnSync driveBoot: the fake
+  // server shares this event loop (the same rule as the native leg above) —
+  // a sync spawn would deadlock the in-OS curl against an unresponsive
+  // server.
+  {
+    const { freshImage, section } = require('./lib/drive.js');
+    const { image } = freshImage('os-curl-cli-');
+    const bootAsync = (script) => new Promise((resolve, reject) => {
+      const child = cp.spawn('node',
+        [path.join(ROOT, 'os/boot.js'), '--image=' + image, '--quiet'],
+        { stdio: ['pipe', 'pipe', 'pipe'] });
+      let so = '', se = '';
+      child.stdout.on('data', (d) => { so += d; });
+      child.stderr.on('data', (d) => { se += d; });
+      const t = setTimeout(() => child.kill('SIGKILL'), 420000);
+      child.on('close', () => { clearTimeout(t); resolve({ stdout: so, stderr: se }); });
+      child.on('error', reject);
+      child.stdin.write(script.endsWith('\n') ? script : script + '\n');
+      child.stdin.end();
+    });
+
+    const script = [
+      'echo ==get',
+      `curl -s ${base}/hello`,
+      'echo "|RC=$?"',
+      'echo ==status',
+      `curl ${base}/hello >/root/o.txt 2>/root/e.txt`,
+      'echo RC=$?',
+      'cat /root/e.txt',
+      'cat /root/o.txt',
+      'echo "|"',
+      'echo ==post',
+      `curl -s -d ping-cli-77 ${base}/echo`,
+      'echo "|RC=$?"',
+      'echo ==postjoin',
+      `curl -s -d a=1 -d b=2 ${base}/echo`,
+      'echo "|RC=$?"',
+      'echo ==method',
+      `curl -s -X PUT ${base}/method`,
+      'echo "|RC=$?"',
+      'echo ==hdr',
+      `curl -s -H "X-Cli-Test: hdr-42" ${base}/hdr`,
+      'echo "|RC=$?"',
+      'echo ==ofile',
+      `curl -s -o /root/dl.txt ${base}/hello`,
+      'echo RC=$?',
+      'cat /root/dl.txt',
+      'echo "|"',
+      'echo ==obundle',
+      `curl -so/root/dl2.txt ${base}/hello`,     // bundled bool + attached value
+      'echo RC=$?',
+      'cat /root/dl2.txt',
+      'echo "|"',
+      'echo ==refused',
+      `curl -s ${refused}/`,
+      'echo RC=$?',
+      `curl ${refused}/ 2>/root/e2.txt`,
+      'echo RC2=$?',
+      'cat /root/e2.txt',
+      'echo ==404',
+      `curl -s ${base}/missing`,
+      'echo "|RC=$?"',
+      'echo ==404f',
+      `curl -sf -o /root/f.out ${base}/missing`,
+      'echo RC=$?',
+      'wc -c /root/f.out',
+      'echo ==404loud',
+      `curl -f ${base}/missing >/root/junk.txt 2>/root/e3.txt`,
+      'echo RC=$?',
+      'cat /root/e3.txt',
+      'wc -c /root/junk.txt',
+      'echo ==redir',
+      `curl -sL ${base}/hello`,
+      'echo "|RC=$?"',
+      'echo ==usage',
+      'curl -s 2>/root/junk2.txt',
+      'echo RC=$?',
+      `curl -Z ${base}/hello 2>/root/junk3.txt`,
+      'echo RC2=$?',
+      'echo ==cli-done',
+      '',
+    ].join('\n');
+
+    const r = await bootAsync(script);
+    const out = r.stdout;
+    const sec = (name) => section(out, name);
+    const secHas = (name, needle) => {
+      const s = sec(name);
+      check(`cli [${name}] has ${JSON.stringify(needle)}`, s.includes(needle),
+        JSON.stringify(s.slice(0, 200)) || r.stderr.slice(0, 200));
+    };
+    check('cli reached done marker', out.includes('==cli-done'),
+      out.slice(-400) + '\nstderr: ' + r.stderr.slice(-400));
+    // body to stdout, -s silences the status line, exit 0
+    secHas('get', 'Hello, world!|RC=0');
+    // without -s: status line on stderr, body untouched on stdout
+    secHas('status', 'RC=0');
+    secHas('status', 'curl: HTTP 200');
+    secHas('status', 'Hello, world!|');
+    // -d POST round-trips through /echo
+    secHas('post', 'ping-cli-77|RC=0');
+    // repeated -d joins with '&' (real curl semantics)
+    secHas('postjoin', 'a=1&b=2|RC=0');
+    // -X reaches the wire
+    secHas('method', 'PUT|RC=0');
+    // -H reaches the wire
+    secHas('hdr', 'hdr-42|RC=0');
+    // -o writes the body to FILE, nothing on stdout
+    check('cli [ofile] file has body, stdout clean', sec('ofile') === 'RC=0\nHello, world!|\n',
+      JSON.stringify(sec('ofile')));
+    // bundled -so/root/dl2.txt: bool bundle + attached value form
+    check('cli [obundle] bundled/attached flags', sec('obundle') === 'RC=0\nHello, world!|\n',
+      JSON.stringify(sec('obundle')));
+    // refused connection: exit 7 (CURLE_COULDNT_CONNECT), strerror unless -s
+    secHas('refused', 'RC=7');
+    secHas('refused', 'RC2=7');
+    secHas('refused', 'curl: (7)');
+    // HTTP 404 without -f is SUCCESS (curl idiom): body printed, exit 0
+    secHas('404', 'nope|RC=0');
+    // -f: exit 22, body suppressed (0-byte -o file)
+    secHas('404f', 'RC=22');
+    secHas('404f', '0 /root/f.out');
+    secHas('404loud', 'RC=22');
+    secHas('404loud', 'curl: (22)');
+    secHas('404loud', '0 /root/junk.txt');
+    // -L accepted (no-op: the veneer always follows redirects — documented)
+    secHas('redir', 'Hello, world!|RC=0');
+    // usage errors: exit 2 (missing URL, unknown option)
+    secHas('usage', 'RC=2');
+    secHas('usage', 'RC2=2');
   }
 
   clearTimeout(watchdog);

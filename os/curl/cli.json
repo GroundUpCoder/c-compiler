@@ -1,0 +1,11 @@
+{
+  "bin": true,
+  "name": "curl",
+  "description": "/bin/curl (todos/0182): small fetch CLI in the curl idiom over the 0173 easy veneer — NOT a port of real curl's CLI; dual-target with the native clang -lcurl build (os/curl/build-native-cli.sh)",
+  "deps": [
+    "lib.json"
+  ],
+  "sources": [
+    "curl-cli.c"
+  ]
+}
