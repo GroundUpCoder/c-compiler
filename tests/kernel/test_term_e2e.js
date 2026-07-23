@@ -567,6 +567,113 @@ function sessionScrollback() {
     shots.snap < 500, `row0=${shots.snap}`);
 }
 
+/* ---- session R: side scrollbar (todos/0273b) ----
+ * The 8px overlay bar at the right edge is a pure view + controller over
+ * the (a) ring: hidden with no history, track (dim, 25% blend) + thumb
+ * (bright, 75% blend -> channel ~150 over the black bg) once output has
+ * scrolled off the top, thumb drag scrolls the view, track click pages.
+ * Probes: right-edge 8px strip ink (any nonzero = bar present) and strip
+ * BRIGHT pixels (>100 = thumb; the dim track never crosses it on the
+ * blank right column). The (a) marker discriminates the view position:
+ * a full-width '#' row (~2000 row-0 ink px) vs live seq numbers (~140,
+ * +152 for the bar strip's track). RED without the bar: the strip stays
+ * black and down/hover/up in the strip is inert (or starts a selection,
+ * never a view change). */
+function sessionScrollbar() {
+  const HASH = '#'.repeat(40);
+  const script = [
+    'term &',
+    'wmctl wait win term',                         // window spawn (0155)
+    'sleep 2',                                     // timing subject: hush banner + prompt render (multi-frame)
+    'TSID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
+    // No history yet: the bar must be hidden (byte-identical right strip).
+    'wmctl shot $TSID /root/bar0.ppm && echo bar0-ok',
+    // Marker + flood (the session-S probe): history forms, the bar appears
+    // with the thumb flush at the live bottom.
+    keys("printf '\\033[2J\\033[H'; printf '" + HASH + "\\n'; seq 300\r"),
+    'sleep 3',                                     // timing subject: 300 lines echo + scroll (multi-frame)
+    'wmctl shot $TSID /root/bar1.ppm && echo bar1-ok',
+    // Thumb drag to the top: press inside the bottom-anchored thumb
+    // (window 640x456; the thumb ends at y=456 and is >=12 tall, so
+    // y=446 is always inside it), drag to y=2, release. The drag clamps
+    // at the oldest line = the marker row becomes visible.
+    'wmctl down $TSID 636 446',
+    'wmctl hover $TSID 636 2',
+    'wmctl up $TSID 636 2',
+    'sleep 1',                                     // timing subject: scrolled-view repaint (multi-frame)
+    'wmctl shot $TSID /root/bar2.ppm && echo bar2-ok',
+    // Track click below the (now top-parked) thumb: pages DOWN one
+    // viewport toward the click — the marker leaves row 0.
+    'wmctl click $TSID 636 450',
+    'sleep 1',                                     // timing subject: paged-view repaint (multi-frame)
+    'wmctl shot $TSID /root/bar3.ppm && echo bar3-ok',
+    keys('exit\r'),
+    'wmctl wait nowin term',                       // hush exits -> term reaps -> window gone (0155)
+    '',
+  ].join('\n');
+  const s = driveBoot(script, { image, timeout: 420000 });
+  const out = s.stdout;
+  check('scrollbar: all four shots written',
+    out.includes('bar0-ok') && out.includes('bar1-ok') &&
+    out.includes('bar2-ok') && out.includes('bar3-ok'), out.slice(-300));
+
+  const b = driveBoot('cat /root/bar0.ppm /root/bar1.ppm /root/bar2.ppm /root/bar3.ppm\n',
+    { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });
+  function parsePPM(buf, off) {
+    const head = buf.toString('latin1', off, off + 32);
+    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
+    if (!m) return null;
+    const w = +m[1], h = +m[2], data = off + m[0].length;
+    return { w, h, data, end: data + w * h * 3 };
+  }
+  // Right-edge 8px strip, rows y0..y1: ink = any nonzero pixel (track OR
+  // thumb), bright = any channel > 100 (thumb only — the 25% track blend
+  // over the blank black right column is 32).
+  function strip(buf, ppm, y0, y1, minCh) {
+    let n = 0;
+    for (let y = y0; y < y1; y++)
+      for (let x = ppm.w - 8; x < ppm.w; x++) {
+        const i = ppm.data + (y * ppm.w + x) * 3;
+        if (buf[i] > minCh || buf[i + 1] > minCh || buf[i + 2] > minCh) n++;
+      }
+    return n;
+  }
+  // Ink of the TOP cell row (y 0..18) — the session-S marker probe.
+  function row0Ink(buf, ppm) {
+    let n = 0;
+    for (let y = 0; y < 19; y++)
+      for (let x = 0; x < ppm.w; x++) {
+        const i = ppm.data + (y * ppm.w + x) * 3;
+        if (buf[i] | buf[i + 1] | buf[i + 2]) n++;
+      }
+    return n;
+  }
+  let off = 0;
+  const shots = {};
+  for (const nm of ['bar0', 'bar1', 'bar2', 'bar3']) {
+    const p = parsePPM(b.stdout, off);
+    if (!p) { check('scrollbar: ' + nm + ' shot parses', false); return; }
+    shots[nm] = { p };
+    off = p.end;
+  }
+  const S = (nm, y0, y1, minCh) => strip(b.stdout, shots[nm].p, y0, y1, minCh);
+  const h = shots.bar0.p.h;
+  check('scrollbar: hidden with no history (right strip is pure background)',
+    S('bar0', 0, h, 0) === 0, String(S('bar0', 0, h, 0)));
+  check('scrollbar: appears once history exists (right strip has ink)',
+    S('bar1', 0, h, 0) > 500, String(S('bar1', 0, h, 0)));
+  check('scrollbar: live view parks the bright thumb at the bottom',
+    S('bar1', h - 40, h, 100) > 50, String(S('bar1', h - 40, h, 100)));
+  check('scrollbar: no thumb at the top while live (track only)',
+    S('bar1', 0, 40, 100) === 0, String(S('bar1', 0, 40, 100)));
+  check('scrollbar: thumb drag scrolled the view to the top (marker row visible)',
+    row0Ink(b.stdout, shots.bar2.p) > 1000, String(row0Ink(b.stdout, shots.bar2.p)));
+  check('scrollbar: the thumb followed the drag to the top of the track',
+    S('bar2', 0, 40, 100) > 50, String(S('bar2', 0, 40, 100)));
+  check('scrollbar: track click below the thumb pages down (marker leaves row 0)',
+    row0Ink(b.stdout, shots.bar3.p) < 500, String(row0Ink(b.stdout, shots.bar3.p)));
+}
+
 (async () => {
   // Sessions run in order; an optional argv list of name substrings selects a
   // subset (e.g. `node test_term_e2e.js scrollback frames`). No args = all —
@@ -574,7 +681,7 @@ function sessionScrollback() {
   const ALL = {
     term: sessionTerm, frames: sessionFrames, nested: sessionNested,
     less: sessionLess, unicode: sessionUnicode, wide: sessionWide,
-    scrollback: sessionScrollback,
+    scrollback: sessionScrollback, scrollbar: sessionScrollbar,
   };
   const want = process.argv.slice(2);
   for (const [name, fn] of Object.entries(ALL))

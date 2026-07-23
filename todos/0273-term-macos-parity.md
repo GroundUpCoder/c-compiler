@@ -1,16 +1,25 @@
 # 0273 — term: scrollback + scrollbar + menu bar + settings window (macOS Terminal parity)
 
-- **Status**: open — child (a) scrollback DONE; b/c/d remain (user-requested 2026-07-21)
+- **Status**: open — children (a) scrollback + (b) scrollbar DONE; c/d remain (user-requested 2026-07-21)
 - **Design**: — (source `os/term/term.c`, ~1118 lines; VT100/ANSI emulator)
 - **Difficulty**: heavy (umbrella — split into children when scoped)
 - **Progress**: child **(a) scrollback history ring SHIPPED in v145** (2026-07-23,
   merge `24a97c0`, image bump `5cb90c4`, live on apex). Ring (`SCROLLBACK_MAX=2000`,
   view-offset, wheel + PageUp/PageDown + snap-to-live) independent of the ANSI
   scroll region (`scroll_up` gained a `to_hist` flag fed only by true top-of-screen
-  main-grid scrolling). Remaining children: **(b) side scrollbar** wired to (a),
-  **(c) menu bar** (must ride the anchored-child uniform-menu facility —
-  `notes/menu-uniform-arch-2026-07-16.md`, NOT a 2nd menu path), **(d) settings
-  window + persistence**. Sequence b → c → d as separate lanes.
+  main-grid scrolling). Child **(b) side scrollbar built** (2026-07-23, branch
+  `term-scrollbar`; design log `logs/2026-07-23/term-scrollbar-0273b.md`): an 8px
+  macOS-style OVERLAY bar at the right edge — pure view/controller over (a)'s
+  `hist_count`/`view_off` (no second position state), hidden when no history (a
+  no-history term renders byte-identical to v145) and on the alt screen,
+  proportional thumb (12px floor), thumb drag + track paging, presses in the bar
+  never anchor a selection, output-snap held only while the thumb is gripped.
+  Reuse call: user32's SCROLLBAR/EDIT bars are HWND/GDI-coupled — term draws its
+  own in its pixel idiom (rationale in the log). e2e: `test_term_e2e.js` session
+  `scrollbar` (hidden/appears/thumb-drag/track-page via wmctl pointer injection).
+  Remaining children: **(c) menu bar** (must ride the anchored-child uniform-menu
+  facility — `notes/menu-uniform-arch-2026-07-16.md`, NOT a 2nd menu path),
+  **(d) settings window + persistence**. Sequence c → d as separate lanes.
 
 ## Goal
 
