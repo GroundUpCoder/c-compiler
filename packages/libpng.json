@@ -1,0 +1,18 @@
+{
+  "name": "libpng",
+  "version": "1.6.58",
+  "summary": "libpng + zlib source library — decode/encode PNG with the in-OS cc",
+  "files": {
+    "include/png.h":        { "bin": "vendor/libpng/png.h" },
+    "include/pngconf.h":    { "bin": "vendor/libpng/pngconf.h" },
+    "include/pnglibconf.h": { "bin": "vendor/libpng/pnglibconf.h" },
+    "include/zlib.h":       { "bin": "vendor/zlib/src/zlib.h" },
+    "include/zconf.h":      { "bin": "vendor/zlib/src/zconf.h" },
+    "src/png":              { "tree": "vendor/libpng", "exclude": ["testdata", "test_main.c", "bin.json", "lib.json", "LICENSE"] },
+    "src/z":                { "tree": "vendor/zlib/src" }
+  },
+  "srclib": {
+    "include": [ "include" ],
+    "src": { "png": "src/png", "z": "src/z" }
+  }
+}

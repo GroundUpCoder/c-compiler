@@ -3,6 +3,7 @@
   "name": "libpng",
   "description": "libpng 1.6.58 — PNG reference library",
   "includes": ["."],
+  "srcRoots": { "png": "." },
   "deps": ["../zlib/lib.json"],
   "sources": [
     "png.c",

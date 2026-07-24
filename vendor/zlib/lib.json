@@ -3,6 +3,7 @@
   "name": "zlib",
   "description": "zlib compression library",
   "includes": ["src"],
+  "srcRoots": { "z": "src" },
   "sources": [
     "src/adler32.c",
     "src/compress.c",
