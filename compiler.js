@@ -20857,6 +20857,14 @@ typedef struct SDL_Surface {
     void *reserved;
 } SDL_Surface;
 
+/* Veneer-internal sentinel in SDL_Surface.flags: a heap surface this runtime
+   OWNS (its pixels + the struct were malloc'd — e.g. by IMG_Load). Window
+   surfaces (SDL_GetWindowSurface) carry flags==0 and are NOT heap, so
+   SDL_DestroySurface frees iff this bit is set. A high bit keeps it clear of
+   real SDL_SurfaceFlags (SDL_SURFACE_PREALLOCATED=1, ...). Shared by __SDL.c
+   (SDL_DestroySurface) and __SDL_image.c (IMG_Load). */
+#define IMG_SURFACE_OWNED 0x80000000u
+
 typedef struct SDL_Window SDL_Window;
 
 typedef struct SDL_Rect {
@@ -21166,6 +21174,91 @@ typedef Uint64 SDL_WindowFlags;
 #define SDL_KMOD_ALT   (SDL_KMOD_LALT | SDL_KMOD_RALT)
 #define SDL_KMOD_GUI   (SDL_KMOD_LGUI | SDL_KMOD_RGUI)
 
+/* ---- SDL_Scancode (SDL_scancode.h) — the physical-key table ----
+   SDL3 flattened the keyboard event to carry a scancode directly
+   (event.key.scancode). These are the full USB-HID usage-page numbers — the
+   SAME values host.js maps DOM KeyboardEvent.code onto (SCANCODE_MAP), so a
+   C-side SDL_SCANCODE_* compares equal to what the host delivers. This is the
+   complete standard table, not just one app's keys: a physical-key table is a
+   fixed ABI, so ship it whole. */
+enum {
+    SDL_SCANCODE_UNKNOWN = 0,
+    SDL_SCANCODE_A = 4, SDL_SCANCODE_B = 5, SDL_SCANCODE_C = 6, SDL_SCANCODE_D = 7,
+    SDL_SCANCODE_E = 8, SDL_SCANCODE_F = 9, SDL_SCANCODE_G = 10, SDL_SCANCODE_H = 11,
+    SDL_SCANCODE_I = 12, SDL_SCANCODE_J = 13, SDL_SCANCODE_K = 14, SDL_SCANCODE_L = 15,
+    SDL_SCANCODE_M = 16, SDL_SCANCODE_N = 17, SDL_SCANCODE_O = 18, SDL_SCANCODE_P = 19,
+    SDL_SCANCODE_Q = 20, SDL_SCANCODE_R = 21, SDL_SCANCODE_S = 22, SDL_SCANCODE_T = 23,
+    SDL_SCANCODE_U = 24, SDL_SCANCODE_V = 25, SDL_SCANCODE_W = 26, SDL_SCANCODE_X = 27,
+    SDL_SCANCODE_Y = 28, SDL_SCANCODE_Z = 29,
+    SDL_SCANCODE_1 = 30, SDL_SCANCODE_2 = 31, SDL_SCANCODE_3 = 32, SDL_SCANCODE_4 = 33,
+    SDL_SCANCODE_5 = 34, SDL_SCANCODE_6 = 35, SDL_SCANCODE_7 = 36, SDL_SCANCODE_8 = 37,
+    SDL_SCANCODE_9 = 38, SDL_SCANCODE_0 = 39,
+    SDL_SCANCODE_RETURN = 40, SDL_SCANCODE_ESCAPE = 41, SDL_SCANCODE_BACKSPACE = 42,
+    SDL_SCANCODE_TAB = 43, SDL_SCANCODE_SPACE = 44,
+    SDL_SCANCODE_MINUS = 45, SDL_SCANCODE_EQUALS = 46, SDL_SCANCODE_LEFTBRACKET = 47,
+    SDL_SCANCODE_RIGHTBRACKET = 48, SDL_SCANCODE_BACKSLASH = 49, SDL_SCANCODE_NONUSHASH = 50,
+    SDL_SCANCODE_SEMICOLON = 51, SDL_SCANCODE_APOSTROPHE = 52, SDL_SCANCODE_GRAVE = 53,
+    SDL_SCANCODE_COMMA = 54, SDL_SCANCODE_PERIOD = 55, SDL_SCANCODE_SLASH = 56,
+    SDL_SCANCODE_CAPSLOCK = 57,
+    SDL_SCANCODE_F1 = 58, SDL_SCANCODE_F2 = 59, SDL_SCANCODE_F3 = 60, SDL_SCANCODE_F4 = 61,
+    SDL_SCANCODE_F5 = 62, SDL_SCANCODE_F6 = 63, SDL_SCANCODE_F7 = 64, SDL_SCANCODE_F8 = 65,
+    SDL_SCANCODE_F9 = 66, SDL_SCANCODE_F10 = 67, SDL_SCANCODE_F11 = 68, SDL_SCANCODE_F12 = 69,
+    SDL_SCANCODE_PRINTSCREEN = 70, SDL_SCANCODE_SCROLLLOCK = 71, SDL_SCANCODE_PAUSE = 72,
+    SDL_SCANCODE_INSERT = 73, SDL_SCANCODE_HOME = 74, SDL_SCANCODE_PAGEUP = 75,
+    SDL_SCANCODE_DELETE = 76, SDL_SCANCODE_END = 77, SDL_SCANCODE_PAGEDOWN = 78,
+    SDL_SCANCODE_RIGHT = 79, SDL_SCANCODE_LEFT = 80, SDL_SCANCODE_DOWN = 81, SDL_SCANCODE_UP = 82,
+    SDL_SCANCODE_NUMLOCKCLEAR = 83, SDL_SCANCODE_KP_DIVIDE = 84, SDL_SCANCODE_KP_MULTIPLY = 85,
+    SDL_SCANCODE_KP_MINUS = 86, SDL_SCANCODE_KP_PLUS = 87, SDL_SCANCODE_KP_ENTER = 88,
+    SDL_SCANCODE_KP_1 = 89, SDL_SCANCODE_KP_2 = 90, SDL_SCANCODE_KP_3 = 91, SDL_SCANCODE_KP_4 = 92,
+    SDL_SCANCODE_KP_5 = 93, SDL_SCANCODE_KP_6 = 94, SDL_SCANCODE_KP_7 = 95, SDL_SCANCODE_KP_8 = 96,
+    SDL_SCANCODE_KP_9 = 97, SDL_SCANCODE_KP_0 = 98, SDL_SCANCODE_KP_PERIOD = 99,
+    SDL_SCANCODE_NONUSBACKSLASH = 100, SDL_SCANCODE_APPLICATION = 101, SDL_SCANCODE_POWER = 102,
+    SDL_SCANCODE_KP_EQUALS = 103,
+    SDL_SCANCODE_F13 = 104, SDL_SCANCODE_F14 = 105, SDL_SCANCODE_F15 = 106, SDL_SCANCODE_F16 = 107,
+    SDL_SCANCODE_F17 = 108, SDL_SCANCODE_F18 = 109, SDL_SCANCODE_F19 = 110, SDL_SCANCODE_F20 = 111,
+    SDL_SCANCODE_F21 = 112, SDL_SCANCODE_F22 = 113, SDL_SCANCODE_F23 = 114, SDL_SCANCODE_F24 = 115,
+    SDL_SCANCODE_EXECUTE = 116, SDL_SCANCODE_HELP = 117, SDL_SCANCODE_MENU = 118,
+    SDL_SCANCODE_SELECT = 119, SDL_SCANCODE_STOP = 120, SDL_SCANCODE_AGAIN = 121,
+    SDL_SCANCODE_UNDO = 122, SDL_SCANCODE_CUT = 123, SDL_SCANCODE_COPY = 124,
+    SDL_SCANCODE_PASTE = 125, SDL_SCANCODE_FIND = 126, SDL_SCANCODE_MUTE = 127,
+    SDL_SCANCODE_VOLUMEUP = 128, SDL_SCANCODE_VOLUMEDOWN = 129,
+    SDL_SCANCODE_KP_COMMA = 133, SDL_SCANCODE_KP_EQUALSAS400 = 134,
+    SDL_SCANCODE_INTERNATIONAL1 = 135, SDL_SCANCODE_INTERNATIONAL2 = 136,
+    SDL_SCANCODE_INTERNATIONAL3 = 137, SDL_SCANCODE_INTERNATIONAL4 = 138,
+    SDL_SCANCODE_INTERNATIONAL5 = 139, SDL_SCANCODE_INTERNATIONAL6 = 140,
+    SDL_SCANCODE_INTERNATIONAL7 = 141, SDL_SCANCODE_INTERNATIONAL8 = 142,
+    SDL_SCANCODE_INTERNATIONAL9 = 143,
+    SDL_SCANCODE_LANG1 = 144, SDL_SCANCODE_LANG2 = 145, SDL_SCANCODE_LANG3 = 146,
+    SDL_SCANCODE_LANG4 = 147, SDL_SCANCODE_LANG5 = 148, SDL_SCANCODE_LANG6 = 149,
+    SDL_SCANCODE_LANG7 = 150, SDL_SCANCODE_LANG8 = 151, SDL_SCANCODE_LANG9 = 152,
+    SDL_SCANCODE_ALTERASE = 153, SDL_SCANCODE_SYSREQ = 154, SDL_SCANCODE_CANCEL = 155,
+    SDL_SCANCODE_CLEAR = 156, SDL_SCANCODE_PRIOR = 157, SDL_SCANCODE_RETURN2 = 158,
+    SDL_SCANCODE_SEPARATOR = 159, SDL_SCANCODE_OUT = 160, SDL_SCANCODE_OPER = 161,
+    SDL_SCANCODE_CLEARAGAIN = 162, SDL_SCANCODE_CRSEL = 163, SDL_SCANCODE_EXSEL = 164,
+    SDL_SCANCODE_KP_00 = 176, SDL_SCANCODE_KP_000 = 177, SDL_SCANCODE_THOUSANDSSEPARATOR = 178,
+    SDL_SCANCODE_DECIMALSEPARATOR = 179, SDL_SCANCODE_CURRENCYUNIT = 180,
+    SDL_SCANCODE_CURRENCYSUBUNIT = 181, SDL_SCANCODE_KP_LEFTPAREN = 182,
+    SDL_SCANCODE_KP_RIGHTPAREN = 183, SDL_SCANCODE_KP_LEFTBRACE = 184,
+    SDL_SCANCODE_KP_RIGHTBRACE = 185, SDL_SCANCODE_KP_TAB = 186, SDL_SCANCODE_KP_BACKSPACE = 187,
+    SDL_SCANCODE_KP_A = 188, SDL_SCANCODE_KP_B = 189, SDL_SCANCODE_KP_C = 190,
+    SDL_SCANCODE_KP_D = 191, SDL_SCANCODE_KP_E = 192, SDL_SCANCODE_KP_F = 193,
+    SDL_SCANCODE_KP_XOR = 194, SDL_SCANCODE_KP_POWER = 195, SDL_SCANCODE_KP_PERCENT = 196,
+    SDL_SCANCODE_KP_LESS = 197, SDL_SCANCODE_KP_GREATER = 198, SDL_SCANCODE_KP_AMPERSAND = 199,
+    SDL_SCANCODE_KP_DBLAMPERSAND = 200, SDL_SCANCODE_KP_VERTICALBAR = 201,
+    SDL_SCANCODE_KP_DBLVERTICALBAR = 202, SDL_SCANCODE_KP_COLON = 203, SDL_SCANCODE_KP_HASH = 204,
+    SDL_SCANCODE_KP_SPACE = 205, SDL_SCANCODE_KP_AT = 206, SDL_SCANCODE_KP_EXCLAM = 207,
+    SDL_SCANCODE_KP_MEMSTORE = 208, SDL_SCANCODE_KP_MEMRECALL = 209, SDL_SCANCODE_KP_MEMCLEAR = 210,
+    SDL_SCANCODE_KP_MEMADD = 211, SDL_SCANCODE_KP_MEMSUBTRACT = 212, SDL_SCANCODE_KP_MEMMULTIPLY = 213,
+    SDL_SCANCODE_KP_MEMDIVIDE = 214, SDL_SCANCODE_KP_PLUSMINUS = 215, SDL_SCANCODE_KP_CLEAR = 216,
+    SDL_SCANCODE_KP_CLEARENTRY = 217, SDL_SCANCODE_KP_BINARY = 218, SDL_SCANCODE_KP_OCTAL = 219,
+    SDL_SCANCODE_KP_DECIMAL = 220, SDL_SCANCODE_KP_HEXADECIMAL = 221,
+    SDL_SCANCODE_LCTRL = 224, SDL_SCANCODE_LSHIFT = 225, SDL_SCANCODE_LALT = 226,
+    SDL_SCANCODE_LGUI = 227, SDL_SCANCODE_RCTRL = 228, SDL_SCANCODE_RSHIFT = 229,
+    SDL_SCANCODE_RALT = 230, SDL_SCANCODE_RGUI = 231,
+    SDL_SCANCODE_MODE = 257,
+    SDL_SCANCODE_COUNT = 512
+};
+
 /* SDL_MouseWheelDirection */
 #define SDL_MOUSEWHEEL_NORMAL  0
 #define SDL_MOUSEWHEEL_FLIPPED 1
@@ -21210,6 +21303,17 @@ SDL_Surface *SDL_GetWindowSurface(SDL_Window *window);
 bool SDL_UpdateWindowSurface(SDL_Window *window);
 bool SDL_GetWindowSize(SDL_Window *window, int *w, int *h);
 bool SDL_SetWindowSize(SDL_Window *window, int w, int h);
+/* Window placement is the WM's job in gucOS, so SDL_SetWindowPosition is an
+   honest accept-and-succeed no-op (a self-placing app would only fight the
+   compositor). SDL_SetWindowIcon likewise succeeds without a taskbar-icon
+   pipe yet — the game treats icon failure as fatal, so it MUST return true;
+   the RGBA pixels are simply not consumed. Both keep the app source
+   unmodified; both are drop-in upgradeable to real kernel hooks later. */
+bool SDL_SetWindowPosition(SDL_Window *window, int x, int y);
+bool SDL_SetWindowIcon(SDL_Window *window, SDL_Surface *icon);
+/* Free a heap surface this runtime owns (IMG_SURFACE_OWNED); a no-op on a
+   window surface or NULL. */
+void SDL_DestroySurface(SDL_Surface *surface);
 bool SDL_PollEvent(SDL_Event *event);
 bool SDL_WaitEvent(SDL_Event *event);
 bool SDL_WaitEventTimeout(SDL_Event *event, Sint32 timeoutMS);
@@ -21325,6 +21429,42 @@ bool SDL_RenderLine(SDL_Renderer *renderer, float x1, float y1, float x2, float 
 bool SDL_RenderPoint(SDL_Renderer *renderer, float x, float y);
 bool SDL_RenderGeometry(SDL_Renderer *renderer, SDL_Texture *texture, const SDL_Vertex *vertices, int num_vertices, const int *indices, int num_indices);
 void SDL_RenderPresent(SDL_Renderer *renderer);
+  `,
+  /* SDL3 spells its umbrella header <SDL3/SDL.h>; this runtime's veneer is
+     keyed <SDL.h> (the SDL2-era spelling every vendored app still uses).
+     Forward so unmodified SDL3 sources compile against the same builtin. */
+  "SDL3/SDL.h": `
+#pragma once
+#include <SDL.h>
+  `,
+  /* <SDL3/SDL_main.h> — real SDL defines main()-rename machinery here so an
+     app's main becomes SDL_main and the library supplies the true entry.
+     gucOS runs a plain int main(void), so this MUST be a no-op that does NOT
+     redefine main. SDL_MAIN_HANDLED tells any SDL code we own the entry. */
+  "SDL3/SDL_main.h": `
+#pragma once
+#ifndef SDL_MAIN_HANDLED
+#define SDL_MAIN_HANDLED
+#endif
+  `,
+  /* SDL_image veneer (builtin, mirroring how <SDL.h> itself is builtin). The
+     surface is a real SDL_image API with a decoder-dispatch extension point
+     (IMG_Load picks a decoder by content/extension); PNG is the only decoder
+     shipped because libpng is the only codec we have. The impl __SDL_image.c
+     is the CONSUMER that carries the libpng/zlib __require_source block, so
+     only programs that use SDL_image pull libpng into the link — a program
+     including just <SDL3/SDL.h> stays libpng-free. libpng's <png.h> is reached
+     through the system-include tier (the libpng source-lib package); a loud
+     link error if that package is absent is honest. */
+  "SDL3_image/SDL_image.h": `
+#pragma once
+#include <SDL3/SDL.h>
+__require_source("__SDL_image.c");
+
+SDL_Surface *IMG_Load(const char *file);
+SDL_Texture *IMG_LoadTexture(SDL_Renderer *renderer, const char *file);
+/* SDL_image shares SDL's per-thread error string. */
+const char *IMG_GetError(void);
   `,
   "webgpu.h": `
 #pragma once
@@ -25569,6 +25709,34 @@ bool SDL_SetWindowSize(SDL_Window *window, int w, int h) {
     return 1;
 }
 
+/* Placement is the WM's; accept and succeed (see SDL.h). Validate the handle
+   so a NULL window still reports the SDL error a program might check. */
+bool SDL_SetWindowPosition(SDL_Window *window, int x, int y) {
+    (void)x; (void)y;
+    if (!window) return SDL_InvalidParamError("window");
+    return 1;
+}
+
+/* No taskbar/title icon pipe yet — succeed so an icon-fatal app runs (see
+   SDL.h). The surface stays owned by the caller (the game frees it). */
+bool SDL_SetWindowIcon(SDL_Window *window, SDL_Surface *icon) {
+    if (!window) return SDL_InvalidParamError("window");
+    (void)icon;
+    return 1;
+}
+
+/* Free a surface this runtime malloc'd (IMG_Load sets IMG_SURFACE_OWNED).
+   Window surfaces (flags==0, embedded in the SDL_Window record) and NULL are
+   left alone — matching SDL3, where SDL_DestroySurface ignores NULL and only
+   frees heap surfaces. */
+void SDL_DestroySurface(SDL_Surface *surface) {
+    if (!surface) return;
+    if (surface->flags & IMG_SURFACE_OWNED) {
+        free(surface->pixels);
+        free(surface);
+    }
+}
+
 bool SDL_UpdateWindowSurface(SDL_Window *window) {
     if (!window) return SDL_InvalidParamError("window");
     SDL_Surface *s = &window->surface;
@@ -26354,6 +26522,91 @@ void SDL_RenderPresent(SDL_Renderer *renderer) {
 
 void __setAnimationFrameFunc(void (*callback)(void)) {
     __sdl_set_animation_frame_func(callback);
+}
+  `,
+  /* SDL_image veneer impl (builtin; the <SDL.h>/__SDL.c pattern). This TU is
+     the CONSUMER that carries the libpng+zlib __require_source block, so
+     libpng is linked ONLY into programs that use SDL_image. Decode is the
+     libpng "simplified API" (png_image_*) — the same path /bin/deck uses —
+     forced to RGBA32, wrapped in a heap SDL_Surface tagged IMG_SURFACE_OWNED
+     so SDL_DestroySurface reclaims it. IMG_Load dispatches on content later;
+     today PNG is the only decoder (libpng is the only codec). */
+  "__SDL_image.c": `
+#include <SDL3_image/SDL_image.h>
+#include <png.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* zlib first (libpng depends on it), then libpng — the vendor lib.json source
+   sets (vendor/zlib/lib.json ∪ vendor/libpng/lib.json), resolved in-OS from
+   /usr/src/{z,png} (the libpng source-lib package) via the __require_source
+   FS tiers. Keep in sync with those lib.json 'sources' arrays. */
+__require_source("z/adler32.c"); __require_source("z/crc32.c");
+__require_source("z/inflate.c"); __require_source("z/inftrees.c");
+__require_source("z/inffast.c"); __require_source("z/zutil.c");
+__require_source("z/compress.c"); __require_source("z/uncompr.c");
+__require_source("z/deflate.c"); __require_source("z/trees.c");
+__require_source("png/png.c"); __require_source("png/pngerror.c");
+__require_source("png/pngget.c"); __require_source("png/pngmem.c");
+__require_source("png/pngpread.c"); __require_source("png/pngread.c");
+__require_source("png/pngrio.c"); __require_source("png/pngrtran.c");
+__require_source("png/pngrutil.c"); __require_source("png/pngset.c");
+__require_source("png/pngtrans.c"); __require_source("png/pngwio.c");
+__require_source("png/pngwrite.c"); __require_source("png/pngwtran.c");
+__require_source("png/pngwutil.c");
+
+const char *IMG_GetError(void) { return SDL_GetError(); }
+
+/* Decode 'file' to a freshly-malloc'd RGBA32 SDL_Surface (caller owns it;
+   free with SDL_DestroySurface). NULL + SDL error on any failure. */
+SDL_Surface *IMG_Load(const char *file) {
+    if (!file) { SDL_InvalidParamError("file"); return NULL; }
+
+    png_image pi;
+    memset(&pi, 0, sizeof pi);
+    pi.version = PNG_IMAGE_VERSION;
+    if (!png_image_begin_read_from_file(&pi, file)) {
+        SDL_SetError("IMG_Load('%s'): %s", file, pi.message);
+        return NULL;
+    }
+    pi.format = PNG_FORMAT_RGBA;   /* force 8-bit RGBA, matching SDL_PIXELFORMAT_RGBA32 */
+
+    int w = (int)pi.width, h = (int)pi.height, pitch = w * 4;
+    void *px = malloc(PNG_IMAGE_SIZE(pi));
+    if (!px) {
+        png_image_free(&pi);
+        SDL_SetError("IMG_Load('%s'): out of memory", file);
+        return NULL;
+    }
+    /* row_stride 0 → libpng packs tightly (w*4 for RGBA), == pitch. */
+    if (!png_image_finish_read(&pi, NULL, px, 0, NULL)) {
+        SDL_SetError("IMG_Load('%s'): %s", file, pi.message);
+        free(px);
+        png_image_free(&pi);
+        return NULL;
+    }
+
+    SDL_Surface *s = (SDL_Surface *)calloc(1, sizeof *s);
+    if (!s) {
+        free(px);
+        SDL_SetError("IMG_Load('%s'): out of memory", file);
+        return NULL;
+    }
+    s->flags = IMG_SURFACE_OWNED;   /* SDL_DestroySurface reclaims px + s */
+    s->format = SDL_PIXELFORMAT_RGBA32;
+    s->w = w; s->h = h; s->pitch = pitch;
+    s->pixels = px; s->refcount = 1;
+    return s;
+}
+
+/* Decode straight to a renderer texture (IMG_Load + upload + free surface),
+   as SDL3_image's IMG_LoadTexture does. */
+SDL_Texture *IMG_LoadTexture(SDL_Renderer *renderer, const char *file) {
+    SDL_Surface *s = IMG_Load(file);
+    if (!s) return NULL;
+    SDL_Texture *t = SDL_CreateTextureFromSurface(renderer, s);
+    SDL_DestroySurface(s);
+    return t;
 }
   `,
   "__webgpu.c": `
