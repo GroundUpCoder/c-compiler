@@ -13232,6 +13232,16 @@ class Parser {
           // Attributes on an earlier prototype apply to the definition
           // (gcc semantics, per-TU) — todos/0214.
           funcDecl.fnAttrs = this._mergeFnAttrs(funcDecl.fnAttrs, prev.fnAttrs);
+          // C11 6.2.2p4 (via p5 for no-storage-class): a DEFINITION without
+          // the `static` keyword after a visible internal-linkage declaration
+          // inherits internal linkage — `static int f(void); int f(void)
+          // {...}` defines the internal f, not a new external one (NetSurf
+          // libcss parse.c/language.c pattern, ~60 sites).
+          if (prev.storageClass === Types.StorageClass.STATIC &&
+              specs.storageClass !== Types.StorageClass.STATIC &&
+              specs.storageClass !== Types.StorageClass.IMPORT) {
+            funcDecl.storageClass = Types.StorageClass.STATIC;
+          }
         }
 
         // Register function in scope before pushing param scope (so it persists globally)
@@ -13284,9 +13294,10 @@ class Parser {
         this.currentParsingFunc = savedFunc;
         this.typeScope.pop(); this.tagScope.pop(); this.varScope.pop();
 
-        // Categorize
-        if (specs.storageClass === Types.StorageClass.IMPORT) unit.importedFunctions.push(funcDecl);
-        else if (specs.storageClass === Types.StorageClass.STATIC) unit.staticFunctions.push(funcDecl);
+        // Categorize (funcDecl.storageClass, not specs: a no-keyword
+        // definition may have inherited internal linkage above)
+        if (funcDecl.storageClass === Types.StorageClass.IMPORT) unit.importedFunctions.push(funcDecl);
+        else if (funcDecl.storageClass === Types.StorageClass.STATIC) unit.staticFunctions.push(funcDecl);
         else unit.definedFunctions.push(funcDecl);
 
         // Move extern locals to unit
@@ -13384,6 +13395,14 @@ class Parser {
       if (type.isAggregate() || type.isArray()) dvar.allocClass = Types.AllocClass.MEMORY;
       else if (specs.storageClass === Types.StorageClass.EXTERN) dvar.allocClass = Types.AllocClass.MEMORY;
 
+      // C11 6.2.1p7: the identifier's scope begins at the END of its
+      // declarator — BEFORE the initializer — so a self-referential
+      // initializer (`static struct SN e = { 5, &e, &e };`, the NetSurf
+      // urldb.c pattern) sees its own declaration. Register only a NEW
+      // name; a re-declaration keeps the prior binding so the
+      // linkage-inheritance logic below sees the true predecessor.
+      if (!prevVar) this.varScope.set(name, dvar);
+
       if (this.matchText("=")) {
         const eqTok = this.peek(-1);
         if (this.atText("{")) {
@@ -13447,7 +13466,9 @@ class Parser {
       }
 
       // Check for previous declaration and update scope
-      const prevDecl = this.varScope.get(name);
+      // The binding captured BEFORE the early self-registration above —
+      // a fresh name must not see itself as its own predecessor here.
+      const prevDecl = prevVar;
       // C11 6.2.2p7 (todos/0227 G22): a static (internal-linkage)
       // declaration after a visible declaration with EXTERNAL linkage
       // conflicts — the p4 inheritance only runs the other way
@@ -16698,6 +16719,16 @@ function constEvalAddr(expr, policy) {
     }
     return null;
   }
+  // Identifier LVALUE: its address is the global's address regardless of
+  // type — this is the base of &g.inner.field / &g.arr[i] chains and of
+  // EDecay. (constEvalExpr's EIdent case deliberately resolves only
+  // ARRAY-typed identifiers, because there the VALUE is the address;
+  // here we want the address of the object itself.)
+  if (expr instanceof AST.EIdent && expr.decl instanceof AST.DVar) {
+    const varDecl = expr.decl.definition || expr.decl;
+    const addr = policy.getGlobalAddr(varDecl);
+    return (addr !== null && addr !== undefined) ? addr : null;
+  }
   // General: try constEvalExpr and extract address
   const v = constEvalExpr(expr, policy);
   if (v && v.kind === "addr") return v.addrVal;
@@ -16725,9 +16756,21 @@ function constEvalExpr(expr, policy) {
         if (tIdx !== null && tIdx !== undefined) return { kind: "addr", addrVal: tIdx };
       }
       if (expr.decl && expr.decl instanceof AST.DVar) {
-        const varDecl = expr.decl.definition || expr.decl;
-        const addr = policy.getGlobalAddr(varDecl);
-        if (addr !== null && addr !== undefined) return { kind: "addr", addrVal: addr };
+        // Only an ARRAY-typed identifier used as a value is a constant —
+        // its implicit decay is the array's address (init-list elements
+        // carry no EDecay wrapper; the EMember/ESubscript case below is
+        // the same rule, todos/0220). A scalar/pointer/struct global's
+        // STORED value is runtime state, not a constant: returning the
+        // address here made local aggregate initializers bake `&var`
+        // where var's VALUE belonged (`struct W w = { ptr };` — the
+        // NetSurf monkey silent-wrong-code bug). Lvalue-address uses
+        // (member/subscript base chains) resolve via constEvalAddr's
+        // own EIdent case instead.
+        if (expr.type.isArray()) {
+          const varDecl = expr.decl.definition || expr.decl;
+          const addr = policy.getGlobalAddr(varDecl);
+          if (addr !== null && addr !== undefined) return { kind: "addr", addrVal: addr };
+        }
       }
       return null;
     }
@@ -18322,7 +18365,10 @@ class CodeGenerator {
             }
             minVal = min; maxVal = max;
             const nonDefaultCount = valueEntries.length;
-            range = nonDefaultCount > 0 ? (maxVal - minVal + 1) >>> 0 : 0;
+            // Plain double arithmetic: the true range can be up to 2^32
+            // (case values spanning INT_MIN..INT_MAX), which a `>>> 0`
+            // would wrap to 0 and wrongly classify as dense.
+            range = nonDefaultCount > 0 ? maxVal - minVal + 1 : 0;
             dense = nonDefaultCount >= 4 && range <= 512 &&
                 (nonDefaultCount * 10 / range) >= 4; // density >= 40%
           }
@@ -23257,6 +23303,7 @@ extern int errno;
 #define EDOM    33
 #define ERANGE  34
 #define EOVERFLOW 75
+#define EILSEQ  84
 #define ENAMETOOLONG 36
 #define ENOSYS  38
 #define ENOTEMPTY 39
@@ -24721,6 +24768,25 @@ __import int usleep(unsigned int usec);
 /* wasm linear memory grows in 64KiB pages — that IS the page size here. */
 static inline int getpagesize(void) { return 65536; }
 __import int ftruncate(int fd, long long length);
+/* Positioned I/O (POSIX pread/pwrite). The process model is single-
+   threaded, so save/seek/io/restore over the shared file offset is
+   race-free; a non-seekable fd fails with lseek's own errno (ESPIPE). */
+static inline long pread(int fd, void *buf, unsigned long count, long long offset) {
+  long long save = lseek(fd, 0, SEEK_CUR);
+  if (save < 0) return -1;
+  if (lseek(fd, offset, SEEK_SET) < 0) return -1;
+  long r = read(fd, buf, (long)count);
+  lseek(fd, save, SEEK_SET);
+  return r;
+}
+static inline long pwrite(int fd, const void *buf, unsigned long count, long long offset) {
+  long long save = lseek(fd, 0, SEEK_CUR);
+  if (save < 0) return -1;
+  if (lseek(fd, offset, SEEK_SET) < 0) return -1;
+  long r = write(fd, buf, (long)count);
+  lseek(fd, save, SEEK_SET);
+  return r;
+}
 __import long readlink(const char *path, char *buf, long bufsize);
 __import int fsync(int fd);
 __import int fdatasync(int fd);
@@ -30383,6 +30449,7 @@ char *strerror(int errnum) {
   case ENOTEMPTY:  return "Directory not empty";
   case ENOLCK:     return "No locks available";
   case EOVERFLOW:  return "Value too large for defined data type";
+  case EILSEQ:     return "Invalid or incomplete multibyte or wide character";
   /* Socket family (todos/0008 errno.h; strings match glibc wording). */
   case ENOTSOCK:   return "Socket operation on non-socket";
   case EDESTADDRREQ: return "Destination address required";

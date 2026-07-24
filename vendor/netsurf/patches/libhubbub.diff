@@ -1,0 +1,16 @@
+diff --git a/src/treebuilder/treebuilder.c b/src/treebuilder/treebuilder.c
+index 91cbe3d..3d7f2a1 100644
+--- a/src/treebuilder/treebuilder.c
++++ b/src/treebuilder/treebuilder.c
+@@ -213,7 +213,10 @@ hubbub_error hubbub_treebuilder_token_handler(const hubbub_token *token,
+ 	assert((signed) treebuilder->context.current_node >= 0);
+ 
+ /* A slightly nasty debugging hook, but very useful */
+-#ifdef NDEBUG
++/* gucOS: opt-in (HUBBUB_TRACE_MODES) rather than !NDEBUG — the gucOS
++ * build keeps asserts live everywhere, and this trace would spam every
++ * page parse onto stdout */
++#ifndef HUBBUB_TRACE_MODES
+ # define mode(x) \
+ 		case x:
+ #else

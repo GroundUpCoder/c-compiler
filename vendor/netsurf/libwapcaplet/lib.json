@@ -1,0 +1,12 @@
+{
+ "type": "lib",
+ "name": "libwapcaplet",
+ "description": "libwapcaplet \u2014 string internment (NetSurf constellation; see ../README.md)",
+ "includes": [
+  "include",
+  "src"
+ ],
+ "sources": [
+  "src/libwapcaplet.c"
+ ]
+}

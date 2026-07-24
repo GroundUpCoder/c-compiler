@@ -1,0 +1,13 @@
+{
+ "type": "lib",
+ "name": "libnsgif",
+ "description": "libnsgif \u2014 GIF decoder (NetSurf constellation; see ../README.md)",
+ "includes": [
+  "include",
+  "src"
+ ],
+ "sources": [
+  "src/gif.c",
+  "src/lzw.c"
+ ]
+}

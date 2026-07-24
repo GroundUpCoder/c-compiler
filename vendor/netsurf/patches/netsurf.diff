@@ -1,0 +1,279 @@
+diff --git a/content/fetch.c b/content/fetch.c
+index f090039..bf218f4 100644
+--- a/content/fetch.c
++++ b/content/fetch.c
+@@ -54,7 +54,9 @@
+ #include "content/fetchers.h"
+ #include "content/fetchers/resource.h"
+ #include "content/fetchers/about/about.h"
++#ifdef WITH_CURL
+ #include "content/fetchers/curl.h"
++#endif
+ #include "content/fetchers/data.h"
+ #include "content/fetchers/file/file.h"
+ #include "javascript/fetcher.h"
+diff --git a/content/handlers/image/png.c b/content/handlers/image/png.c
+index 97a5795..e1d0dd0 100644
+--- a/content/handlers/image/png.c
++++ b/content/handlers/image/png.c
+@@ -354,7 +354,11 @@ static bool nspng_process_data(struct content *c, const char *data,
+ 		return ret;
+ 	}
+ 
+-	switch (setjmp(png_jmpbuf(png_c->png))) {
++	/* gucOS: compiler.js recognises setjmp only in if-condition form
++	 * (`if ((v = setjmp(buf)))`), not as a switch controlling expression */
++	int sjval = 0;
++	if ((sjval = setjmp(png_jmpbuf(png_c->png)))) {}
++	switch (sjval) {
+ 	case CBERR_NONE: /* direct return */	
+ 		png_process_data(png_c->png, png_c->info, (uint8_t *)data, size);
+ 		break;
+diff --git a/desktop/frames.c b/desktop/frames.c
+index 85f1879..25a12ac 100644
+--- a/desktop/frames.c
++++ b/desktop/frames.c
+@@ -331,8 +331,11 @@ nserror browser_window_destroy_iframes(struct browser_window *bw)
+  */
+ static void browser_window_recalculate_frameset_internal(struct browser_window *bw)
+ {
+-	int widths[bw->cols][bw->rows];
+-	int heights[bw->cols][bw->rows];
++	/* compiler.js has no VLAs: the [cols][rows] grids live on the heap,
++	 * indexed through GRID() below. */
++	int *widths;
++	int *heights;
++#define GRID(g, c, r) ((g)[(c) * bw->rows + (r)])
+ 	int bw_width, bw_height;
+ 	int avail_width, avail_height;
+ 	int row, row2, col, index;
+@@ -344,6 +347,14 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
+ 
+ 	assert(bw);
+ 
++	widths = malloc(sizeof(*widths) * bw->cols * bw->rows);
++	heights = malloc(sizeof(*heights) * bw->cols * bw->rows);
++	if (widths == NULL || heights == NULL) {
++		free(widths);
++		free(heights);
++		return;
++	}
++
+ 	/* window dimensions */
+ 	if (!bw->parent) {
+ 		browser_window_get_dimensions(bw, &bw_width, &bw_height);
+@@ -370,21 +381,21 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
+ 
+ 			switch (window->frame_width.unit) {
+ 			case FRAME_DIMENSION_PIXELS:
+-				widths[col][row] = window->frame_width.value *
++				GRID(widths, col, row) = window->frame_width.value *
+ 						window->scale;
+ 				if (window->border) {
+ 					if (col != 0)
+-						widths[col][row] += 1;
++						GRID(widths, col, row) += 1;
+ 					if (col != bw->cols - 1)
+-						widths[col][row] += 1;
++						GRID(widths, col, row) += 1;
+ 				}
+ 				break;
+ 			case FRAME_DIMENSION_PERCENT:
+-				widths[col][row] = bw_width *
++				GRID(widths, col, row) = bw_width *
+ 						window->frame_width.value / 100;
+ 				break;
+ 			case FRAME_DIMENSION_RELATIVE:
+-				widths[col][row] = 0;
++				GRID(widths, col, row) = 0;
+ 				relative += window->frame_width.value;
+ 				break;
+ 			default:
+@@ -397,7 +408,7 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
+ 						FRAME_DIMENSION_RELATIVE);
+ 				break;
+ 			}
+-			avail_width -= widths[col][row];
++			avail_width -= GRID(widths, col, row);
+ 		}
+ 
+ 		/* Redistribute to fit window */
+@@ -414,7 +425,7 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
+ 							relative;
+ 					avail_width -= size;
+ 					relative -= window->frame_width.value;
+-					widths[col][row] += size;
++					GRID(widths, col, row) += size;
+ 				}
+ 			}
+ 		} else if (bw_width != avail_width) {
+@@ -424,16 +435,16 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
+ 			for (col = 0; col < bw->cols; col++) {
+ 				if (col == bw->cols - 1) {
+ 					/* Last cell, use up remainder */
+-					widths[col][row] += extent - applied;
+-					widths[col][row] =
+-							widths[col][row] < 0 ?
+-							0 : widths[col][row];
++					GRID(widths, col, row) += extent - applied;
++					GRID(widths, col, row) =
++							GRID(widths, col, row) < 0 ?
++							0 : GRID(widths, col, row);
+ 				} else {
+ 					/* Find size of cell adjustment */
+-					size = (widths[col][row] * extent) /
++					size = (GRID(widths, col, row) * extent) /
+ 							(bw_width - extent);
+ 					/* Modify cell */
+-					widths[col][row] += size;
++					GRID(widths, col, row) += size;
+ 					applied += size;
+ 				}
+ 			}
+@@ -450,21 +461,21 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
+ 
+ 			switch (window->frame_height.unit) {
+ 			case FRAME_DIMENSION_PIXELS:
+-				heights[col][row] = window->frame_height.value *
++				GRID(heights, col, row) = window->frame_height.value *
+ 						window->scale;
+ 				if (window->border) {
+ 					if (row != 0)
+-						heights[col][row] += 1;
++						GRID(heights, col, row) += 1;
+ 					if (row != bw->rows - 1)
+-						heights[col][row] += 1;
++						GRID(heights, col, row) += 1;
+ 				}
+ 				break;
+ 			case FRAME_DIMENSION_PERCENT:
+-				heights[col][row] = bw_height *
++				GRID(heights, col, row) = bw_height *
+ 						window->frame_height.value / 100;
+ 				break;
+ 			case FRAME_DIMENSION_RELATIVE:
+-				heights[col][row] = 0;
++				GRID(heights, col, row) = 0;
+ 				relative += window->frame_height.value;
+ 				break;
+ 			default:
+@@ -477,7 +488,7 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
+ 						FRAME_DIMENSION_RELATIVE);
+ 				break;
+ 			}
+-			avail_height -= heights[col][row];
++			avail_height -= GRID(heights, col, row);
+ 		}
+ 
+ 		if (avail_height == 0)
+@@ -497,7 +508,7 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
+ 							relative;
+ 					avail_height -= size;
+ 					relative -= window->frame_height.value;
+-					heights[col][row] += size;
++					GRID(heights, col, row) += size;
+ 				}
+ 			}
+ 		} else if (bw_height != avail_height) {
+@@ -507,16 +518,16 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
+ 			for (row = 0; row < bw->rows; row++) {
+ 				if (row == bw->rows - 1) {
+ 					/* Last cell, use up remainder */
+-					heights[col][row] += extent - applied;
+-					heights[col][row] =
+-							heights[col][row] < 0 ?
+-							0 : heights[col][row];
++					GRID(heights, col, row) += extent - applied;
++					GRID(heights, col, row) =
++							GRID(heights, col, row) < 0 ?
++							0 : GRID(heights, col, row);
+ 				} else {
+ 					/* Find size of cell adjustment */
+-					size = (heights[col][row] * extent) /
++					size = (GRID(heights, col, row) * extent) /
+ 							(bw_height - extent);
+ 					/* Modify cell */
+-					heights[col][row] += size;
++					GRID(heights, col, row) += size;
+ 					applied += size;
+ 				}
+ 			}
+@@ -532,13 +543,13 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
+ 
+ 			y = 0;
+ 			for (row2 = 0; row2 < row; row2++)
+-				y+= heights[col][row2];
++				y+= GRID(heights, col, row2);
+ 
+ 			window->x = x;
+ 			window->y = y;
+ 
+-			new_width = widths[col][row] - 1;
+-			new_height = heights[col][row] - 1;
++			new_width = GRID(widths, col, row) - 1;
++			new_height = GRID(heights, col, row) - 1;
+ 
+ 			if (window->width != new_width ||
+ 					window->height != new_height) {
+@@ -552,12 +563,16 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
+ 				browser_window_handle_scrollbars(window);
+ 			}
+ 
+-			x += widths[col][row];
++			x += GRID(widths, col, row);
+ 
+ 			if (window->children)
+ 				browser_window_recalculate_frameset_internal(window);
+ 		}
+ 	}
++
++	free(widths);
++	free(heights);
++#undef GRID
+ }
+ 
+ 
+diff --git a/utils/config.h b/utils/config.h
+index 3914771..de398fd 100644
+--- a/utils/config.h
++++ b/utils/config.h
+@@ -208,4 +208,26 @@ char *realpath(const char *path, char *resolved_path);
+ 	#define NO_IPV6
+ #endif
+ 
++
++/* gucOS / wasm32 platform section (the _WIN32 lines above are the
++ * precedent).  Flip to the gucOS libc where it provides the extension
++ * (strcasestr, strchrnul) and to upstream's own portable fallbacks for
++ * the rest (scandir, dirfd/unlinkat/fstatat, regex, utsname, mmap).
++ * See vendor/netsurf/README.md for the full patch table. */
++#if defined(__wasm__)
++#include <strings.h>
++#define HAVE_STRCASESTR
++#define HAVE_STRCHRNUL
++#undef HAVE_SCANDIR
++#undef HAVE_DIRFD
++#undef HAVE_UNLINKAT
++#undef HAVE_FSTATAT
++#undef HAVE_REGEX
++#undef HAVE_UTSNAME
++#undef HAVE_MMAP
++#ifndef isascii
++#define isascii(c) (((c) & ~0x7f) == 0)
++#endif
++#endif /* __wasm__ */
++
+ #endif
+diff --git a/utils/talloc.c b/utils/talloc.c
+index 408e94b..389648c 100644
+--- a/utils/talloc.c
++++ b/utils/talloc.c
+@@ -55,7 +55,7 @@
+ #include "replace.h"
+ #else
+ #include <stdarg.h>
+-#if !defined(__BEOS__) && __GNUC__ > 2
++#if (!defined(__BEOS__) && __GNUC__ > 2) || defined(__wasm__)
+ /* Assume we've got va_copy */
+ #define HAVE_VA_COPY
+ #include <string.h>

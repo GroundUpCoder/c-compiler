@@ -1,0 +1,33 @@
+diff --git a/src/charset/codec.c b/src/charset/codec.c
+index 3267f1f..eff205c 100644
+--- a/src/charset/codec.c
++++ b/src/charset/codec.c
+@@ -10,13 +10,13 @@
+ #include "charset/aliases.h"
+ #include "charset/codecs/codec_impl.h"
+ 
+-extern parserutils_charset_handler charset_ascii_codec_handler;
+-extern parserutils_charset_handler charset_8859_codec_handler;
+-extern parserutils_charset_handler charset_ext8_codec_handler;
+-extern parserutils_charset_handler charset_utf8_codec_handler;
+-extern parserutils_charset_handler charset_utf16_codec_handler;
++extern const parserutils_charset_handler charset_ascii_codec_handler;
++extern const parserutils_charset_handler charset_8859_codec_handler;
++extern const parserutils_charset_handler charset_ext8_codec_handler;
++extern const parserutils_charset_handler charset_utf8_codec_handler;
++extern const parserutils_charset_handler charset_utf16_codec_handler;
+ 
+-static parserutils_charset_handler *handler_table[] = {
++static const parserutils_charset_handler * const handler_table[] = {
+ 	&charset_utf8_codec_handler,
+ 	&charset_utf16_codec_handler,
+ 	&charset_8859_codec_handler,
+@@ -39,7 +39,7 @@ parserutils_error parserutils_charset_codec_create(const char *charset,
+ 		parserutils_charset_codec **codec)
+ {
+ 	parserutils_charset_codec *c;
+-	parserutils_charset_handler **handler;
++	const parserutils_charset_handler * const *handler;
+ 	const parserutils_charset_aliases_canon * canon;
+ 	parserutils_error error;
+ 

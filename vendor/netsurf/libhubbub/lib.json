@@ -1,0 +1,44 @@
+{
+ "type": "lib",
+ "name": "libhubbub",
+ "description": "libhubbub \u2014 HTML5 tokeniser/treebuilder (NetSurf constellation; see ../README.md)",
+ "includes": [
+  "include",
+  "src"
+ ],
+ "sources": [
+  "src/charset/detect.c",
+  "src/parser.c",
+  "src/tokeniser/entities.c",
+  "src/tokeniser/tokeniser.c",
+  "src/treebuilder/after_after_body.c",
+  "src/treebuilder/after_after_frameset.c",
+  "src/treebuilder/after_body.c",
+  "src/treebuilder/after_frameset.c",
+  "src/treebuilder/after_head.c",
+  "src/treebuilder/before_head.c",
+  "src/treebuilder/before_html.c",
+  "src/treebuilder/element-type.c",
+  "src/treebuilder/generic_rcdata.c",
+  "src/treebuilder/in_body.c",
+  "src/treebuilder/in_caption.c",
+  "src/treebuilder/in_cell.c",
+  "src/treebuilder/in_column_group.c",
+  "src/treebuilder/in_foreign_content.c",
+  "src/treebuilder/in_frameset.c",
+  "src/treebuilder/in_head.c",
+  "src/treebuilder/in_head_noscript.c",
+  "src/treebuilder/in_row.c",
+  "src/treebuilder/in_select.c",
+  "src/treebuilder/in_select_in_table.c",
+  "src/treebuilder/in_table.c",
+  "src/treebuilder/in_table_body.c",
+  "src/treebuilder/initial.c",
+  "src/treebuilder/treebuilder.c",
+  "src/utils/errors.c",
+  "src/utils/string.c"
+ ],
+ "deps": [
+  "../libparserutils/lib.json"
+ ]
+}

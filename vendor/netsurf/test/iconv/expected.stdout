@@ -1,0 +1,7 @@
+ISO-8859-1->UTF-8 r=0 left=0 out=[636166c3a9]
+UTF-8->ISO-8859-1 r=0 left=0 out=[636166e9]
+Windows-1252->UTF-8 r=0 left=0 out=[e282ac]
+open UTF-8->UTF-16LE FAIL
+latin1->utf8 r=0 left=0 out=[c3a9]
+bogus open: EINVAL ok
+e2big: r=-1 (want -1), then grow: r=0 out=[c3a9c3a9]

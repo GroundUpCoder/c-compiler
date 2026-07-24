@@ -1,0 +1,24 @@
+{
+ "type": "lib",
+ "name": "libnsfb",
+ "description": "libnsfb \u2014 framebuffer surface + 32bpp software plotters (portable subset; NetSurf constellation)",
+ "includes": [
+  "include",
+  "src"
+ ],
+ "sources": [
+  "src/cursor.c",
+  "src/dump.c",
+  "src/libnsfb.c",
+  "src/palette.c",
+  "src/plot/16bpp.c",
+  "src/plot/32bpp-xbgr8888.c",
+  "src/plot/32bpp-xrgb8888.c",
+  "src/plot/8bpp.c",
+  "src/plot/api.c",
+  "src/plot/generic.c",
+  "src/plot/util.c",
+  "src/surface/ram.c",
+  "src/surface/surface.c"
+ ]
+}

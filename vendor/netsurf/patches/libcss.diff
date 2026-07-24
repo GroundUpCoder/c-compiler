@@ -1,0 +1,12 @@
+diff --git a/src/parse/mq.c b/src/parse/mq.c
+index 5031e34..1a83ca6 100644
+--- a/src/parse/mq.c
++++ b/src/parse/mq.c
+@@ -7,6 +7,7 @@
+ 
+ /* https://drafts.csswg.org/mediaqueries/ */
+ 
++#include <strings.h>
+ #include <string.h>
+ 
+ #include <libcss/fpmath.h>
