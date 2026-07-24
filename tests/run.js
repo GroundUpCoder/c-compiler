@@ -167,6 +167,10 @@ const RULES = [
   [/^vendor\/libc-test\//, ['libc'], null],
   [/^vendor\/disw\//, ['disw', 'projects'], null],
   [/^vendor\/libgit2\//, ['fakegit', 'projects'], null],
+  // NetSurf constellation: bin.json (monkey smoke) is a projects build; the
+  // gucOS frontend (gucos/) is exercised in-window by test_netsurf_e2e (not
+  // yet seeded into the image — Lane 3 adds sweep when it lands the seeds).
+  [/^vendor\/netsurf\//, ['projects', 'kernel'], 'the browser constellation + its in-window e2e'],
   // OS-seeded vendor apps (doom/quake/gameboy/sameboy/busybox/…) restale the
   // image and are exercised by the OS e2es + the browser sweep.
   [/^vendor\/(doom|quake|gameboy|sameboy|snake|busybox|tinyemu|micropython|magicpoint|sent)\//,

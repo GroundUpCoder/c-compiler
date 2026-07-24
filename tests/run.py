@@ -491,6 +491,13 @@ def discover_projects():
         with open(pj) as f:
             proj = json.load(f)
         projects.append((proj.get("name", entry), pj))
+    # NetSurf gucOS frontend app: nested under vendor/netsurf/, so the
+    # vendor/*/bin.json glob above never sees it — list it explicitly
+    # (vendor/netsurf/bin.json, the monkey smoke binary, is discovered
+    # normally).
+    gucos = os.path.join(VENDOR_DIR, "netsurf", "gucos", "bin.json")
+    if os.path.isfile(gucos):
+        projects.append(("netsurf-gucos", gucos))
     return projects
 
 

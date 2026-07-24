@@ -72,7 +72,7 @@ echo "generating…"
 
 # ---- 3. curated patches (content changes only; see README.md table) ----
 echo "patching…"
-for c in netsurf libparserutils libhubbub libcss; do
+for c in netsurf libparserutils libhubbub libcss libnsfb; do
   [ -f "$HERE/patches/$c.diff" ] || continue
   ( cd "$STAGE/$c" && patch -p1 --no-backup-if-mismatch -s < "$HERE/patches/$c.diff" )
 done

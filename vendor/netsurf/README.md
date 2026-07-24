@@ -21,12 +21,13 @@ Dev).  Licences: MIT (libs), GPLv2 (netsurf core) — each tree keeps its
 | `netsurf/` | Browser core subset: `utils/ content/ desktop/ include/ frontends/monkey/ resources/` (no other frontends; `duktape/`+`WebIDL/` dropped — JS is off; `ca-bundle` + non-en locales dropped) |
 | `libwapcaplet/ libparserutils/ libhubbub/ libdom/ libcss/` | The parse/style stack (`include/ src/`, libdom also `bindings/hubbub/`) |
 | `libnsgif/ libnsbmp/ libnsutils/` | GIF/BMP-ICO decode, small utils |
-| `libnsfb/` | Framebuffer surface + 32bpp software plotters (portable subset; the Lane-2 frontend's raster layer — not linked by nsmonkey) |
+| `libnsfb/` | Framebuffer surface + 32bpp software plotters (portable subset; the gucOS frontend's raster layer — not linked by nsmonkey) |
+| `gucos/` | **The gucOS frontend** (Lane 2): renders into a real gucOS window — libnsfb XBGR8888 RAM surface blitted to the SDL3-veneer window surface (same byte layout, alpha forced opaque), freetype text via a frontend-owned glyph cache (the upstream fb frontend's `font_freetype.c` minus FTC, which the vendored freetype doesn't carry), the fb frontend's scheduler, SDL input map (mouse click/drag/wheel, keys), drag-resize → synchronous reformat, SDL clipboard, per-`<title>` window titles.  `gucos/bin.json` is the app build graph (dep order rule applies; also compile-checked as `projects/netsurf-gucos`) |
 | `shim/` | gucOS glue: productized `iconv` over libparserutils' charset codecs, `inet_aton/inet_pton` (address parsing only), `testament.h`, install-tree alias headers (`dom/bindings/hubbub/*`), `arpa/ netinet/` headers |
 | `*/lib.json`, `netsurf-core.json`, `bin.json` | The build graph (below) |
 | `patches/` | Curated content patches (table below) |
 | `update.sh`, `relativize.mjs`, `UPSTREAM.json` | Re-runnable vendor pipeline |
-| `smoke.mjs`, `test/hello.html` | Build + end-to-end smoke recipe |
+| `smoke.mjs`, `test/hello.html` | Build + end-to-end smoke recipe (`test/squares.html` + `test/two.html` drive the in-window e2e, `tests/kernel/test_netsurf_e2e.js`) |
 
 ## Build graph & the include-order rule
 
@@ -47,7 +48,17 @@ Runtime resources: the engine needs `default.css`/`quirks.css`/
 They live in `netsurf/resources/` (`Messages.en` is the committed
 en split of `FatMessages`); monkey finds them via the `NETSURFRES` env
 var (smoke.mjs assembles `build/netsurf-smoke/res/`), and the OS image
-will seed them at `/usr/share/netsurf/` (Lane 3).
+will seed them at `/usr/share/netsurf/` (Lane 3).  The gucOS frontend
+searches `${HOME}/.netsurf/`, `${NETSURFRES}`, `/usr/local/share/netsurf/`
+then `/usr/share/netsurf/`.
+
+Fonts (gucOS frontend): generic families resolve via the `fb_face_*`
+options (upstream fb names, `gucos/options.h`), then `/etc/fonts/` >
+`/usr/share/fonts/` by generic filename (`sans.ttf`, `serif.ttf`,
+`mono.ttf`, …); the sans default falls back to the always-baked
+`mono.ttf`, so a stock image renders real freetype AA text everywhere —
+seeding a proportional face (Lane 3 candidate) upgrades every family
+that isn't explicitly configured.
 
 ## Patch table (all in `patches/`, applied by update.sh)
 
@@ -65,6 +76,16 @@ netsurf core:
   `GRID()` accessor (compiler.js has no VLAs).
 - `utils/talloc.c` — `|| defined(__wasm__)` on the `__GNUC__ > 2`
   va_copy probe.
+- `utils/nsoption.h` + `utils/nsoption.c` — an `nsgucos` branch in the
+  per-frontend options include chain (the same 3 sites every upstream
+  frontend hooks), pulling `gucos/options.h`.
+
+libnsfb:
+- `src/surface.h` + `src/surface/surface.c` — `NSFB_SURFACE_DEF`'s
+  `__attribute__((constructor))` registration (unsupported by
+  compiler.js) becomes, under `__wasm__`, an explicit registration
+  entry called lazily from the surface lookup paths (the vendored
+  subset ships only the ram surface).
 
 libs:
 - `libparserutils src/charset/codec.c` — const-correct codec handler

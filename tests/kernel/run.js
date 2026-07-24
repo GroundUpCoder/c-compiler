@@ -113,6 +113,7 @@ const tests = [
   ['test_recycle_e2e.js', IMG],  // 0093: the Recycle Bin — trash/restore/empty through fileman + the wm.c desktop (bin icon glyph, icon DELETE, bin menu), sidecars, Shift+Del bypass, EROFS no-stray
   ['test_ctlpanel_e2e.js', IMG], // 0048: control panel — AUDIO_GAIN control plane end to end (__audio_gain import, kernel state across processes), os-release//proc info panel
   ['test_term_e2e.js', IMG],     // 0020: /bin/term — hush on a pty in a window, vi inside, resize reflow, shot pixels
+  ['test_netsurf_e2e.js', IMG],  // NetSurf Lane 2: the gucOS frontend renders real documents in-window — ~600-TU build, freetype AA text pixels, title-follows-<title>, resize reflow (float re-wrap), wheel/PageDown/Home scroll, click-a-link navigation, wmctl close exit
   ['test_present_e2e.js', IMG],  // 0119: /bin/sent + /bin/mgp — demo decks render (glyphs, %default bg, %tab icons), paging, q quits
   ['test_mgpp_e2e.js', IMG],     // 0272: /bin/mgpp — MagicPointPlus fork (-DMGPP): left-half click / Left arrow go BACK, right-half / Right arrow forward; space/b/q unchanged (pixel-identity page assertions)
   ['test_mgp_livereload_e2e.js', IMG], // #75/0264: mgp live-reload — the deck watch is wantreload()'s ONE source (ctime poll gone): external tmp+rename-over and truncate-rewrite saves re-render, background-color-proven

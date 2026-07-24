@@ -84,12 +84,27 @@ static int surface_parameters(nsfb_t *nsfb, const char *parameters)
     return 0;
 }
 
+#ifdef __wasm__
+/* no constructors on the wasm toolchain (see surface.h): register the
+ * surfaces of the vendored subset — just ram — on first lookup. */
+void ram_register_surface(void);
+static void surface_ensure(void)
+{
+    if (surface_count == 0)
+        ram_register_surface();
+}
+#else
+#define surface_ensure()
+#endif
+
 /* exported interface documented in surface.h */
 nsfb_surface_rtns_t *
 nsfb_surface_get_rtns(enum nsfb_type_e type)
 {
     int fend_loop;
     nsfb_surface_rtns_t *rtns = NULL;
+
+    surface_ensure();
 
     for (fend_loop = 0; fend_loop < surface_count; fend_loop++) {
 	/* surface type must match and have a initialisor, finaliser
@@ -143,6 +158,8 @@ enum nsfb_type_e
 nsfb_type_from_name(const char *name)
 {
     int fend_loop;
+
+    surface_ensure();
 
     for (fend_loop = 0; fend_loop < surface_count; fend_loop++) {
         if (strcmp(surfaces[fend_loop].name, name) == 0)

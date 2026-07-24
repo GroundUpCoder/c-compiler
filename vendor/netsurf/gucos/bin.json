@@ -1,0 +1,39 @@
+{
+ "bin": true,
+ "name": "netsurf",
+ "description": "NetSurf with the gucOS frontend — renders into a real gucOS window (SDL3 veneer shm surface, libnsfb 32bpp software plotters, freetype text). Dep order is load-bearing: netsurf-core.json first (see ../README.md).",
+ "deps": [
+  "../netsurf-core.json",
+  "../libwapcaplet/lib.json",
+  "../libparserutils/lib.json",
+  "../libhubbub/lib.json",
+  "../libdom/lib.json",
+  "../libcss/lib.json",
+  "../libnsgif/lib.json",
+  "../libnsbmp/lib.json",
+  "../libnsutils/lib.json",
+  "../libnsfb/lib.json",
+  "../../libpng/lib.json",
+  "../../freetype/lib.json"
+ ],
+ "includes": [
+  "..",
+  "../../freetype/demo",
+  "../../freetype/include"
+ ],
+ "compilerArgs": [
+  "-Dnsgucos",
+  "-DGUCOS_RESPATH=\"/usr/local/share/netsurf/:/usr/share/netsurf/\""
+ ],
+ "sources": [
+  "../netsurf/frontends/monkey/filetype.c",
+  "bitmap.c",
+  "clipboard.c",
+  "fetch.c",
+  "font.c",
+  "gui.c",
+  "main.c",
+  "plot.c",
+  "schedule.c"
+ ]
+}

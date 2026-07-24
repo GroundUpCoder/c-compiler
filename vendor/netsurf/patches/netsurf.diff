@@ -277,3 +277,34 @@ index 408e94b..389648c 100644
  /* Assume we've got va_copy */
  #define HAVE_VA_COPY
  #include <string.h>
+--- a/utils/nsoption.c
++++ b/utils/nsoption.c
+@@ -82,6 +82,8 @@ static struct nsoption_s defaults[] = {
+ #include "windows/options.h"
+ #elif defined(nsqt)
+ #include "qt/options.h"
++#elif defined(nsgucos)
++#include "gucos/options.h"
+ #endif
+ 	{ NULL, 0, OPTION_INTEGER, { 0 } }
+ };
+--- a/utils/nsoption.h
++++ b/utils/nsoption.h
+@@ -75,6 +75,8 @@
+ #include "windows/options.h"
+ #elif defined(nsqt)
+ #include "qt/options.h"
++#elif defined(nsgucos)
++#include "gucos/options.h"
+ #endif
+ 
+ #undef NSOPTION_BOOL
+@@ -150,6 +152,8 @@ enum nsoption_e {
+ #include "windows/options.h"
+ #elif defined(nsqt)
+ #include "qt/options.h"
++#elif defined(nsgucos)
++#include "gucos/options.h"
+ #endif
+ 	NSOPTION_LISTEND /* end of list */
+ };

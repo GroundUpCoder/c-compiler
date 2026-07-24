@@ -75,6 +75,8 @@
 #include "windows/options.h"
 #elif defined(nsqt)
 #include "qt/options.h"
+#elif defined(nsgucos)
+#include "gucos/options.h"
 #endif
 
 #undef NSOPTION_BOOL
@@ -150,6 +152,8 @@ enum nsoption_e {
 #include "windows/options.h"
 #elif defined(nsqt)
 #include "qt/options.h"
+#elif defined(nsgucos)
+#include "gucos/options.h"
 #endif
 	NSOPTION_LISTEND /* end of list */
 };

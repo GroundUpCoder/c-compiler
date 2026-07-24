@@ -1,0 +1,66 @@
+--- a/src/surface.h
++++ b/src/surface.h
+@@ -47,11 +47,22 @@ void _nsfb_register_surface(const enum nsfb_type_e type, const nsfb_surface_rtns
+ 
+ 
+ /* macro which adds a builtin command with no argument limits */
++#ifdef __wasm__
++/* no __attribute__((constructor)) on the wasm toolchain: surfaces
++ * expose an explicit registration entry, called lazily from the
++ * surface lookup paths (surface.c surface_ensure). */
++#define NSFB_SURFACE_DEF(__name, __type, __rtns)                       \
++    void __name##_register_surface(void);                               \
++    void __name##_register_surface(void) {                              \
++        _nsfb_register_surface(__type, __rtns, #__name);               \
++    }
++#else
+ #define NSFB_SURFACE_DEF(__name, __type, __rtns)                       \
+     static void __name##_register_surface(void) __attribute__((constructor)); \
+     void __name##_register_surface(void) {                              \
+         _nsfb_register_surface(__type, __rtns, #__name);               \
+-    }                                                                   
++    }
++#endif
+ 
+ /** Obtain routines for a surface 
+  *
+--- a/src/surface/surface.c
++++ b/src/surface/surface.c
+@@ -84,6 +84,19 @@ static int surface_parameters(nsfb_t *nsfb, const char *parameters)
+     return 0;
+ }
+ 
++#ifdef __wasm__
++/* no constructors on the wasm toolchain (see surface.h): register the
++ * surfaces of the vendored subset — just ram — on first lookup. */
++void ram_register_surface(void);
++static void surface_ensure(void)
++{
++    if (surface_count == 0)
++        ram_register_surface();
++}
++#else
++#define surface_ensure()
++#endif
++
+ /* exported interface documented in surface.h */
+ nsfb_surface_rtns_t *
+ nsfb_surface_get_rtns(enum nsfb_type_e type)
+@@ -91,6 +104,8 @@ nsfb_surface_get_rtns(enum nsfb_type_e type)
+     int fend_loop;
+     nsfb_surface_rtns_t *rtns = NULL;
+ 
++    surface_ensure();
++
+     for (fend_loop = 0; fend_loop < surface_count; fend_loop++) {
+ 	/* surface type must match and have a initialisor, finaliser
+ 	 * and input method 
+@@ -144,6 +159,8 @@ nsfb_type_from_name(const char *name)
+ {
+     int fend_loop;
+ 
++    surface_ensure();
++
+     for (fend_loop = 0; fend_loop < surface_count; fend_loop++) {
+         if (strcmp(surfaces[fend_loop].name, name) == 0)
+             return surfaces[fend_loop].type;
