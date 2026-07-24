@@ -176,10 +176,14 @@
      store shrinks to floor(pane/Z) while the CSS display size is pinned to
      the full pane, so the render stays 1 logical px = 1 screen px and only
      the page's pointer seam divides CSS coords by Z (see syncScreenSize /
-     mapX). image-rendering:pixelated makes the integer upscale crisp NxN
-     blocks (nearest-neighbor) — integer scale + pixelated = zero blur, which
-     is the whole reason zoom is integer-only. overflow hidden covers the
-     resize transient while the worker's canvas commit lags the layout. */
+     mapX). At Z<1 (high-density mode) the backing store GROWS past the pane
+     and downscales into it — more logical px, everything smaller. The
+     image-rendering below is the Z>=1 default: pixelated makes the integer
+     upscale crisp NxN blocks (nearest-neighbor, zero blur — why upscale
+     steps are integer-only); Z<1 flips it to auto in JS (vt2ApplyRenderMode)
+     because a nearest-neighbor DOWNSCALE drops pixels — smooth filtering of
+     the oversampled render is what looks right there. overflow hidden covers
+     the resize transient while the worker's canvas commit lags the layout. */
   #desktop { flex: 1; min-height: 0; display: flex; justify-content: center;
              align-items: center; background: #06131a; overflow: hidden; }
   /* Host-file drop target highlight (todos/0067): while a drag hovers the
@@ -219,7 +223,7 @@
     <span id="fontctl" title="terminal font size">
       <span id="fontminus" class="fontbtn">A&minus;</span><span id="fontplus" class="fontbtn">A+</span>
     </span>
-    <span id="zoomctl" title="desktop zoom (integer, crisp)">
+    <span id="zoomctl" title="desktop zoom (below 1&times; = denser: more fits)">
       <span id="zoomminus" class="fontbtn">&minus;</span><span id="zoomlabel" class="fontlabel">1&times;</span><span id="zoomplus" class="fontbtn">+</span>
     </span>
     <span id="desksite" class="fontbtn" title="desktop site: the unzoomed 1&times; desktop (tap again for the 2&times; mobile zoom)">Desktop site</span>
@@ -404,35 +408,60 @@ var offscreen = screen.transferControlToOffscreen();
 kernel.postMessage({ type: 'wm-canvas', canvas: offscreen }, [offscreen]);
 function wmSend(ev) { kernel.postMessage({ type: 'wm-input', ev: ev }); }
 
-// VT2 desktop zoom (integer downscale). The clean decoupled approach:
-// render FEWER pixels (backing store = floor(pane/Z)) but DISPLAY at the
-// full pane (CSS size pinned below) with image-rendering:pixelated, so the
-// wm lays everything out on a smaller screen that upscales Z× and stays
-// crisp. Integer-only ON PURPOSE: integer scale + nearest-neighbor = zero
-// blur, and c/Z is an integer-clean pointer map; a fractional Z would
-// reintroduce bilinear blur AND non-integer pointer drift. The render/wm
-// path is UNTOUCHED (still 1 logical px = 1 screen px, todos/0023's ruling
-// holds) — the ONLY thing zoom taints is the page's pointer seam, confined
-// to mapX/mapY (absolute coords) and the /vt2Zoom delta divides below.
+// VT2 desktop zoom. The clean decoupled approach: render floor(pane/Z)
+// logical pixels but DISPLAY at the full pane (CSS size pinned below), so
+// the wm lays everything out in a logical space that scales Z× into the
+// pane. Z>1 = magnified (fewer logical px, integer steps ONLY: integer
+// scale + nearest-neighbor = zero blur; a fractional upscale would
+// reintroduce bilinear mush). Z<1 = high-density mode (MORE logical px
+// than the pane — fixed-pixel icons/windows occupy a smaller fraction, so
+// more fits on a small screen); a downscale is inherently filtered, so
+// fractional steps are fine there and the render-mode flips to smooth
+// (vt2ApplyRenderMode below). The render/wm path is UNTOUCHED (still
+// 1 logical px = 1 backing px, todos/0023's ruling holds) — the ONLY thing
+// zoom taints is the page's pointer seam, confined to mapX/mapY (absolute
+// coords) and the /vt2Eff delta divides below.
 // Defaulting (#69 D6): an explicit choice (the ± control or the Desktop-site
 // toggle, both through vt2SetZoom) persists in localStorage and always wins;
 // with nothing stored, a phone-shaped viewport boots at 2× (the readable
 // mobile default over the shipped crisp-zoom mechanism) and everything else
 // at 1× — the same saved-else-viewport-default shape as the VT1 font above.
-var VT2_ZOOMS = [1, 2, 3];
+var VT2_ZOOMS = [0.5, 0.75, 1, 2, 3];   // ordered; ± walks it. <1 fractional
+                                        // (filtered downscale), >=1 integer
+                                        // (crisp NN upscale) — see above.
+// Backing-store ceiling: at Z<1 the logical screen EXCEEDS the pane, so a
+// huge pane at 0.5 could ask for an absurd OffscreenCanvas. 8192 is WebGPU's
+// default maxTextureDimension2D (the compositor's requestDevice() takes the
+// defaults), so any canvas dimension past it couldn't composite anyway —
+// clamp the EFFECTIVE zoom so floor(pane/eff) never exceeds it (this also
+// covers a >8192-px pane at Z=1, which would have overflowed before Z<1
+// existed). vt2Eff is the one divisor the pointer seam and syncScreenSize
+// share; it equals vt2Zoom except when this cap engages.
+var VT2_MAX_DIM = 8192;
+// The SOURCE OF TRUTH is the OS's display cfgstore (key `zoom` in
+// ~/.config/display > /etc/display > /usr/share/display — hires-display):
+// the kernel worker resolves the overlay and posts {type:'display-config'}
+// before 'ready' and on every settled write (the Control Panel Display
+// applet's live Apply). localStorage stays as the page-local EXPLICIT
+// choice: the instant pre-boot value, the legacy (pre-bridge) store, and
+// the migration source when the OS store has no key yet.
+var vt2Stored = false;   // an explicit localStorage choice existed at boot
 var vt2Zoom = (function () {
   var z = 0;
-  try { z = parseInt(localStorage.getItem('gucos.vt2.zoom'), 10) || 0; } catch (e) {}
-  if (!(z >= VT2_ZOOMS[0] && z <= VT2_ZOOMS[VT2_ZOOMS.length - 1])) z = 0;
+  try { z = parseFloat(localStorage.getItem('gucos.vt2.zoom')) || 0; } catch (e) {}
+  if (VT2_ZOOMS.indexOf(z) < 0) z = 0;   // membership, not range: old 1/2/3
+                                         // persisted values are all members
+  vt2Stored = z > 0;
   return z || (mobileViewport() ? 2 : 1);
 })();
+var vt2Eff = vt2Zoom;   // effective divisor (== vt2Zoom unless the cap bites)
 window.__osVt2Zoom = vt2Zoom;   // agent probe
 // The pointer seam: a CSS-pixel coord maps to logical (backing) px. With the
-// CSS display size pinned to the pane and the backing store at floor(pane/Z),
-// dividing by Z is that map (correct to within edge rounding; the kernel
-// clamps positions to the screen anyway).
-function mapX(c) { return Math.round(c / vt2Zoom); }
-function mapY(c) { return Math.round(c / vt2Zoom); }
+// CSS display size pinned to the pane and the backing store at floor(pane/E),
+// dividing by the effective factor is that map (correct to within edge
+// rounding; the kernel clamps positions to the screen anyway).
+function mapX(c) { return Math.round(c / vt2Eff); }
+function mapY(c) { return Math.round(c / vt2Eff); }
 function updateZoomLabel() {
   var el = document.getElementById('zoomlabel');
   if (el) el.textContent = vt2Zoom + '×';
@@ -440,24 +469,75 @@ function updateZoomLabel() {
   var d = document.getElementById('desksite');
   if (d) d.className = 'fontbtn' + (vt2Zoom === 1 ? ' on' : '');
 }
-function vt2SetZoom(z) {
-  z = z | 0;
-  if (z < VT2_ZOOMS[0]) z = VT2_ZOOMS[0];
-  else if (z > VT2_ZOOMS[VT2_ZOOMS.length - 1]) z = VT2_ZOOMS[VT2_ZOOMS.length - 1];
-  if (z === vt2Zoom) return;
-  vt2Zoom = z;
-  window.__osVt2Zoom = z;   // agent probe
-  try { localStorage.setItem('gucos.vt2.zoom', String(z)); } catch (e) {}
+// Render mode follows the scale direction: upscale (Z>=1) wants pixelated
+// (crisp NxN blocks), downscale (Z<1) wants smooth filtering of the
+// oversampled render (nearest-neighbor would just drop pixels — aliased
+// text/edges). Inline style overrides the stylesheet's pixelated default.
+function vt2ApplyRenderMode() {
+  screen.style.imageRendering = vt2Zoom < 1 ? 'auto' : 'pixelated';
+}
+// src: undefined = a user gesture (the ± strip, the Desktop-site toggle,
+// the __osVt2SetZoom probe) — persist to localStorage AND the OS display
+// cfgstore (display-set; the worker's watch echoes it back, idempotent).
+// 'config' = the value CAME from the cfgstore (display-config below) —
+// apply only, never write back (no loops, and a hand-edited store value
+// that snapped must not be "corrected" on disk).
+function vt2SetZoom(z, src) {
+  // Snap to the nearest allowed factor (agent probes may pass anything).
+  z = +z;
+  if (!isFinite(z) || z <= 0) return;
+  var snapped = VT2_ZOOMS[0];
+  for (var i = 1; i < VT2_ZOOMS.length; i++)
+    if (Math.abs(VT2_ZOOMS[i] - z) < Math.abs(snapped - z)) snapped = VT2_ZOOMS[i];
+  if (snapped === vt2Zoom) return;
+  vt2Zoom = snapped;
+  window.__osVt2Zoom = snapped;   // agent probe
   updateZoomLabel();
-  // Re-pin the CSS display size and resend the (now different) logical dims.
-  // A Z change keeps the pane px but changes floor(pane/Z), so the screenSent
-  // dedupe passes and the worker gets a real screen-resize (VT2 only — the
-  // pane is measurable only while visible; VT2 entry re-syncs otherwise).
+  vt2ApplyRenderMode();
+  if (src !== 'config') {
+    try { localStorage.setItem('gucos.vt2.zoom', String(snapped)); } catch (e) {}
+    vt2Stored = true;
+    kernel.postMessage({ type: 'display-set', zoom: String(snapped) });
+  }
+  // Re-pin the CSS display size and resend the (now different) logical
+  // dims. A Z change keeps the pane px but changes floor(pane/Z), so the
+  // screenSent dedupe passes and the worker gets a real screen-resize
+  // (VT2 only — the pane is measurable only while visible; VT2 entry
+  // re-syncs otherwise).
   syncScreenSize();
 }
+// The cfgstore verdict (worker display-config): null = no `zoom` key in any
+// layer, 'auto' = explicit automatic, number = an explicit factor.
+function applyDisplayConfig(z) {
+  if (z === null || z === undefined) {
+    // No OS-side setting yet. If the page holds a pre-bridge explicit
+    // choice, migrate it forward ONCE so the Display applet shows the
+    // truth from now on; otherwise keep the viewport auto-default.
+    if (vt2Stored) kernel.postMessage({ type: 'display-set', zoom: String(vt2Zoom) });
+    return;
+  }
+  if (z === 'auto') {
+    // Explicit automatic: drop the page-local choice too, back to the
+    // viewport default — the applet's "Automatic" must win everywhere.
+    try { localStorage.removeItem('gucos.vt2.zoom'); } catch (e) {}
+    vt2Stored = false;
+    vt2SetZoom(mobileViewport() ? 2 : 1, 'config');
+    return;
+  }
+  if (isFinite(+z) && +z > 0) vt2SetZoom(+z, 'config');
+}
+// ± walk the ordered factor list: − is the next-smaller factor (denser past
+// 1× — the sub-1 high-density steps), + the next-bigger (magnified).
+function vt2Step(dir) {
+  var i = VT2_ZOOMS.indexOf(vt2Zoom);
+  if (i < 0) i = VT2_ZOOMS.indexOf(1);   // unreachable; belt and braces
+  var j = Math.max(0, Math.min(VT2_ZOOMS.length - 1, i + dir));
+  vt2SetZoom(VT2_ZOOMS[j]);
+}
 updateZoomLabel();
-document.getElementById('zoomminus').addEventListener('click', function () { vt2SetZoom(vt2Zoom - 1); });
-document.getElementById('zoomplus').addEventListener('click', function () { vt2SetZoom(vt2Zoom + 1); });
+vt2ApplyRenderMode();
+document.getElementById('zoomminus').addEventListener('click', function () { vt2Step(-1); });
+document.getElementById('zoomplus').addEventListener('click', function () { vt2Step(1); });
 // Desktop-site toggle (#69 D6): zoomed -> the 1× desktop; at 1× -> back to
 // the 2× mobile zoom. Routes through vt2SetZoom, so the choice persists and
 // overrides the viewport auto-default on the next boot.
@@ -485,10 +565,14 @@ function syncScreenSize() {
   var pw = pane.clientWidth, ph = pane.clientHeight;
   if (pw <= 0 || ph <= 0) return;                        // hidden/degenerate
   // Pin the canvas DISPLAY size to the full pane (idempotent) — the backing
-  // store (worker-owned) shrinks to floor(pane/Z) and upscales into this.
+  // store (worker-owned) resizes to floor(pane/Z) and scales into this.
   screen.style.width = pw + 'px';
   screen.style.height = ph + 'px';
-  var w = Math.floor(pw / vt2Zoom), h = Math.floor(ph / vt2Zoom);
+  // The backing-store ceiling (see VT2_MAX_DIM): raise the effective factor
+  // just enough that neither logical dimension exceeds the cap — one shared
+  // divisor keeps the aspect exact and the pointer map consistent.
+  vt2Eff = Math.max(vt2Zoom, pw / VT2_MAX_DIM, ph / VT2_MAX_DIM);
+  var w = Math.floor(pw / vt2Eff), h = Math.floor(ph / vt2Eff);
   if (w <= 0 || h <= 0) return;
   if (w === screenSent.w && h === screenSent.h) return;
   screenSent = { w: w, h: h };
@@ -552,7 +636,7 @@ screen.addEventListener('mouseup', function (e) {
 screen.addEventListener('mousemove', function (e) {
   if (ptrLocked()) {
     // Relative deltas scale too: a lock drag of N CSS px = N/Z logical px.
-    wmSend({ kind: 'move', locked: 1, dx: e.movementX / vt2Zoom, dy: e.movementY / vt2Zoom, buttons: e.buttons });
+    wmSend({ kind: 'move', locked: 1, dx: e.movementX / vt2Eff, dy: e.movementY / vt2Eff, buttons: e.buttons });
     return;
   }
   wmSend({ kind: 'move', x: mapX(e.offsetX), y: mapY(e.offsetY), buttons: e.buttons });
@@ -1006,6 +1090,13 @@ kernel.onmessage = function (e) {
     // desktop canvas. Ignore while pointer-locked (no cursor exists then).
     case 'cursor':
       if (!ptrLocked()) applyCursor(m.shape | 0);
+      break;
+    // The display-density bridge (hires-display): the worker resolved the
+    // display cfgstore overlay — at boot (pre-'ready', so this lands before
+    // the VT2 auto-switch) and on every settled store write (the Control
+    // Panel Display applet's live Apply).
+    case 'display-config':
+      applyDisplayConfig(m.zoom);
       break;
     // The audio mixer's output ring (todos/0017): play it with host.js's
     // createAudioReceiver — one synthetic device, resumed on the first user

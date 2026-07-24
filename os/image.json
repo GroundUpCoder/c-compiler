@@ -1,5 +1,5 @@
 {
-  "version": 161,
+  "version": 162,
   "overlays": [
     {
       "id": "clang-apps",
@@ -332,6 +332,9 @@
       },
       "/usr/share/keys": {
         "content": "# Keyboard scheme (todos/0149), consulted by user32 (EDIT/LISTBOX verbs +\n# accelerators), term (copy/paste chord), the wm desktop and the Control\n# Panel Keyboard applet through os/keys.h. Three layers overlaid per key,\n# highest wins: ~/.config/keys, /etc/keys, /usr/share/keys. Keys:\n# scheme (windows | macos \u2014 which keymap; windows = Ctrl verbs, macos =\n# Cmd verbs + the emacs Ctrl rows in GUI text fields), readline (on |\n# off \u2014 those emacs rows; only meaningful under the macos scheme).\nscheme\twindows\nreadline\ton\n"
+      },
+      "/usr/share/display": {
+        "content": "# Display configuration (hires-display), consulted by the Control Panel\n# Display applet (os/display.h) and the kernel worker's display-config\n# bridge to the page (os/kernel-worker.js). Three layers overlaid per key,\n# highest wins: ~/.config/display, /etc/display, /usr/share/display. Keys:\n# zoom (auto | 0.5 | 0.75 | 1 | 2 | 3 — the VT2 desktop zoom factor; >1\n# magnifies, <1 is high-density (more fits), auto = viewport default:\n# phone-shaped boots 2x, everything else 1x).\n# NB deliberately no baked `zoom` line: an ABSENT key is the automatic\n# default AND lets the page honor a pre-bridge localStorage choice; an\n# explicit user-layer `zoom auto` (the applet's Automatic) overrides that.\n"
       },
       "/usr/share/screensaver": {
         "content": "# Screensaver configuration (todos/0096), consulted by /bin/wm (the idle\n# raise) and the Control Panel Screen Saver applet through os/saver.h.\n# Three layers overlaid per key, highest wins: ~/.config/screensaver,\n# /etc/screensaver, /usr/share/screensaver. Keys: saver (none | marquee |\n# starfield), timeout (idle seconds; 0 disables), text (marquee banner).\nsaver\tstarfield\ntimeout\t900\ntext\tgucOS\n"

@@ -91,6 +91,7 @@ var wmCanvas = null;   // the desktop OffscreenCanvas (screen-resize target)
 var compositor = null; // {scheduleFrame,setFrozen,stats} once wm-canvas
                        // arrives (todos/0169 — the on-demand rAF)
 var gpuDevice = null;  // the compositor's WebGPU device (todos/0055 boot guard)
+var displayAnnounce = null;   // display-density bridge (set at boot, below)
 var post = function (m) { self.postMessage(m); };
 var pending = [];   // input that raced the boot
 // Host keyboard-scheme auto-detect hint (META-ARROW-KEYBIND.md decision 4).
@@ -136,6 +137,8 @@ self.onmessage = function (e) {
   } else if (m.type === 'drop-file') {
     dropFile(m);
     if (compositor) compositor.scheduleFrame();     // wake table (todos/0169)
+  } else if (m.type === 'display-set') {
+    displaySet(m.zoom);
   } else if (m.type === 'clipboard') {
     // Host -> gucOS (ticket #79): the page's focus/paste-chord sync read the
     // host clipboard; land it in the kernel slot as fmt 1 (UTF-8 text). An
@@ -204,6 +207,36 @@ function dropFile(m) {
     note(final + ' -> ' + path + ' (' + bytes.length + ' bytes)');
   } catch (e) {
     note(name + ': write failed — ' + String((e && e.message) || e));
+  }
+}
+
+// Persist the page's zoom control into the display cfgstore — the cfg_set
+// delta-write, JS flavor: replace-or-append the ONE `zoom` line in the USER
+// layer (duplicates collapse), write a tmp sibling, rename over. Then
+// kernel.notifySettled: a direct kfs write bypasses the RPC-level FSW
+// choke, so watchers (the displayAnnounce watch above, any process
+// FS_WATCH on the path) only see it if the embedder says so — which also
+// closes the loop: strip press -> this write -> watch -> display-config
+// echo -> page (idempotent). One flow, whoever the writer is.
+function displaySet(zoom) {
+  if (!/^(auto|[0-9]+(\.[0-9]+)?)$/.test(String(zoom))) return;   // page sends list members only
+  var user = '/root/.config/display', tmp = '/root/.config/.display.tmp';
+  try {
+    kfs.mkdir('/root/.config', 0o755);   // EEXIST is fine
+    var text = OS_COMMON.readFileText(kfs, user);
+    var out = [], replaced = false;
+    (text === null ? [] : text.split('\n')).forEach(function (line) {
+      if (/^zoom[ \t]/i.test(line)) {
+        if (!replaced) { out.push('zoom\t' + zoom); replaced = true; }
+      } else if (line.length) out.push(line);
+    });
+    if (!replaced) out.push('zoom\t' + zoom);
+    OS_COMMON.writeFile(kfs, tmp, out.join('\n') + '\n', 0o644);
+    if (kfs.rename(tmp, user) === null)
+      throw new Error(kfs._lastError || 'EIO');
+    kernel.notifySettled(user);
+  } catch (e) {
+    post({ type: 'boot-log', msg: '[display] zoom persist failed: ' + String((e && e.message) || e) });
   }
 }
 
@@ -450,6 +483,37 @@ async function boot() {
     output: function (b) { post({ type: 'out', bytes: b instanceof Uint8Array ? b.slice() : Uint8Array.from(b) }); },
     interactiveOut: true,   // xterm IS a human terminal: shells go interactive
   });
+
+  // The display-density bridge (hires-display): the page's VT2 zoom factor
+  // is an OS SETTING now — cfgstore `display`, key `zoom` (auto | 0.5 |
+  // 0.75 | 1 | 2 | 3), written by the Control Panel Display applet
+  // (os/display.h) and by the page's −/+ quick control (the display-set
+  // message below). This worker resolves the three-layer per-key overlay
+  // (user > admin > baked — the cfg_load3 rule, JS flavor) and posts the
+  // effective value to the page: once here (BEFORE 'ready', so the page
+  // applies it ahead of the VT2 auto-switch — no boot flash), and again on
+  // every settled write to a layer (kernel.watchPath rides the FSW choke,
+  // which is what makes an applet radio click reflow the desktop live).
+  displayAnnounce = function () {
+    var layers = ['/root/.config/display', '/etc/display', '/usr/share/display'];
+    var v = null;
+    for (var i = 0; i < layers.length && v === null; i++) {
+      var text = OS_COMMON.readFileText(kfs, layers[i]);
+      if (text === null) continue;
+      var lines = text.split('\n');
+      for (var j = 0; j < lines.length; j++) {
+        var m2 = /^zoom[ \t]+(\S+)/i.exec(lines[j]);   // '#' comments can't match
+        if (m2) { v = m2[1].toLowerCase(); break; }
+      }
+    }
+    // zoom: null = no key in any layer (the page keeps its own default),
+    // 'auto' = explicit automatic, else the numeric factor.
+    post({ type: 'display-config',
+           zoom: v === null || v === 'auto' ? v : parseFloat(v) });
+  };
+  ['/root/.config/display', '/etc/display', '/usr/share/display']
+    .forEach(function (p) { kernel.watchPath(p, displayAnnounce); });
+  displayAnnounce();
 
   // The WM control plane (todos/0014): the kernel-owned endpoint first, then
   // /bin/wm as a kernel service after pid 1. Failure is non-fatal by design —

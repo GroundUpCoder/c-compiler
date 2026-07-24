@@ -111,6 +111,19 @@ const out = boot([
   'echo ==tree5',
   'wmctl tree',
   'echo ==cut',
+  // the Display applet (hires-display): density radios delta-write `zoom`
+  // to ~/.config/display (the Sounds mute-key pattern) — the browser side
+  // of the bridge (worker watch -> page reflow) lives in os-hires.mjs.
+  'wmctl click "Densest (0.5x)"',
+  waitFileHas('/root/.config/display', 'zoom.0.5'),
+  'echo ==dp1',
+  'cat /root/.config/display',
+  'echo ==cut',
+  'wmctl click "Automatic (default)"',
+  waitFileHas('/root/.config/display', 'zoom.auto'),
+  'echo ==dp2',
+  'cat /root/.config/display',
+  'echo ==cut',
   // the Sounds applet (0094): the event-scheme mute toggle writes just the
   // mute key to ~/.config/sounds (CS3 cfgstore delta — baked events keep
   // reaching through the per-key overlay)
@@ -191,10 +204,13 @@ check('System applet reads os-release + /proc/uptime',
   /NAME=gucOS/.test(tree3) && /VERSION_ID=/.test(tree3) && /UPTIME=/.test(tree3),
   tree3);
 
-// -- Display stub + Date/Time clock --
+// -- Display applet (density picker) + Date/Time clock --
 const tree4 = section(out, 'tree4');
-check('Display applet opens (the 0049 stub)',
+check('Display applet opens with the density radios (+ the 0049 wallpaper note)',
   /class=CplDisplay [^\n]*text='Display Properties'/.test(tree4) &&
+  /text='Automatic \(default\)'/.test(tree4) &&
+  /text='Native \(1x\)'/.test(tree4) &&
+  /text='Densest \(0\.5x\)'/.test(tree4) &&
   /todos\/0049/.test(tree4), tree4.slice(0, 800));
 const CLOCK_RE = /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/;
 const clock1 = (section(out, 'tree4').match(CLOCK_RE) || [''])[0];
@@ -217,6 +233,14 @@ check('the user store is a pure override delta (CS3: no baked-table snapshot)',
 const snd2 = section(out, 'snd2');
 check('rechecking flips it to mute off',
   /^mute\toff$/m.test(snd2) && !/^mute\ton$/m.test(snd2), snd2);
+
+// -- Display applet: density radios write the display cfgstore --
+const dp1 = section(out, 'dp1');
+check('Densest (0.5x) delta-writes zoom 0.5 to ~/.config/display',
+  /^zoom\t0\.5$/m.test(dp1), dp1);
+const dp2 = section(out, 'dp2');
+check('Automatic writes an explicit zoom auto (replacing, not appending)',
+  /^zoom\tauto$/m.test(dp2) && !/0\.5/.test(dp2), dp2);
 
 // -- hub close quits the whole panel --
 const list3 = section(out, 'list3');

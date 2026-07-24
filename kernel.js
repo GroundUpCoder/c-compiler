@@ -3569,10 +3569,60 @@ Kernel.prototype._watchQueue = function (w, type, flags, name) {
   if (q.length >= FSW_QUEUE_CAP) {
     q.length = 0;
     w.overflowed = true;
+    if (w.cb) this._watchCbArm(w);
     return true;
   }
   q.push({ t: type, f: flags, n: name });
+  if (w.cb) this._watchCbArm(w);
   return true;
+};
+
+/* Embedder watches (watchPath below) have no fd to drain: the queued
+ * records collapse into ONE deferred callback per event batch. The
+ * setTimeout(0) matters twice — a watcher must never run inside the
+ * mutating RPC's dispatch, and a burst (tmp write + rename-over) fires
+ * the callback once, after the batch settled. */
+Kernel.prototype._watchCbArm = function (w) {
+  if (w.cbArmed) return;
+  w.cbArmed = true;
+  setTimeout(function () {
+    w.cbArmed = false;
+    w.queue.length = 0;
+    w.overflowed = false;
+    w.cb();
+  }, 0);
+};
+
+/* Embedder-side path watch: the SAME per-mutation choke FS_WATCH rides,
+ * minus the fd machinery — the embedder (kernel-worker) registers a
+ * callback on an absolute path and gets one coalesced "this path changed"
+ * call per settled batch (no records: the consumer re-reads the file, the
+ * cfgstore way). Exact-path semantics only (PATH-keyed like FS_WATCH, so
+ * the path may not exist yet and a rename-over save keeps notifying);
+ * lifetime is the kernel's — there is no unwatch, embedder watches are
+ * boot-scoped by design. First user: the display-density bridge
+ * (os/kernel-worker.js watches the display cfgstore layers and re-posts
+ * the effective zoom to the page). */
+Kernel.prototype.watchPath = function (absPath, cb) {
+  this._embWatchN = (this._embWatchN || 0) + 1;
+  this._watches.set('embedder:' + this._embWatchN, {
+    path: this._watchCanon(absPath),
+    isDir: false,
+    mask: FSW_MASK_DEFAULT,
+    queue: [],
+    overflowed: false,
+    cb: cb,
+    cbArmed: false,
+  });
+};
+
+/* An embedder-side WRITE participating in the watch contract: the FSW
+ * choke lives in the RPC dispatch, so a direct kfs write from the embedder
+ * (e.g. kernel-worker persisting the page's zoom control) is invisible to
+ * watchers — both process FS_WATCH fds and watchPath — unless it announces
+ * the settled content here. */
+Kernel.prototype.notifySettled = function (absPath) {
+  this._watchEmit(absPath, FSW_CLOSE_WRITE, FSW_CLOSE_WRITE, false);
 };
 
 /* Fan a mutation at `absPath` out to the live watches: selfType lands on

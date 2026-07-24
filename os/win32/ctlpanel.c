@@ -25,8 +25,11 @@
  *               the volume knob, this is the scheme.
  *   System    — the 0048 info readout (/usr/share/os-release + the 0043
  *               synthetic /proc/uptime), plain POSIX.
- *   Display   — a stub naming todos/0049 (the wallpaper picker lands
- *               there; this window is its Control Panel home).
+ *   Display   — the screen-density picker (hires-display, os/display.h):
+ *               radios choose the VT2 zoom factor (auto/3x/2x/1x/0.75x/
+ *               0.5x — sub-1x = denser, more fits) and apply LIVE through
+ *               the display cfgstore -> kernel-worker watch -> page
+ *               bridge. Wallpaper still lands with todos/0049.
  *   Date/Time — live clock over SetTimer/WM_TIMER (the 0068 timer).
  *   Screen Saver — the 0096 saver config (os/saver.h): pick None/Marquee/
  *               Starfield (radios apply on click), set the idle timeout
@@ -45,6 +48,7 @@
 #include "../sounds.h"
 #include "../saver.h"
 #include "../keys.h"
+#include "../display.h"
 #include "../wm_proto.h"
 
 /* A config-store write failed — read-only or full $HOME (todos/0234).
@@ -241,16 +245,75 @@ static LRESULT CALLBACK system_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProc(h, msg, wp, lp);
 }
 
-/* -------------------------------------------------- Display (0049 stub) */
+/* ------------------------- Display (hires-display: the density picker) */
+
+/* The screen density / resolution setting, the real-OS home for the VT2
+ * zoom factor (os/display.h): radios apply on click (the Sounds checkbox
+ * rule) by delta-writing `zoom` to ~/.config/display; the kernel worker
+ * watches the store and re-posts the value to the page, which reflows the
+ * desktop LIVE — sub-1x factors render MORE logical pixels than the pane
+ * (everything smaller, more fits), >1x fewer (everything bigger).
+ * Wallpaper/appearance still arrive with todos/0049. */
+
+#define ID_DPBASE 600                            /* radios in DP_OPT order */
+
+static const struct { const char *label; const char *value; } DP_OPT[] = {
+    { "Automatic (default)", "auto" },
+    { "Largest (3x)",        "3" },
+    { "Larger (2x)",         "2" },
+    { "Native (1x)",         "1" },
+    { "Denser (0.75x)",      "0.75" },
+    { "Densest (0.5x)",      "0.5" },
+};
+#define DP_N ((int)(sizeof DP_OPT / sizeof DP_OPT[0]))
+
+/* Sync the radios to the STORED config — WM_CREATE and the write-failure
+ * reverts (the saver_sync discipline, todos/0234). A numeric value snaps
+ * to the nearest offered factor (the page snaps the same way, so the UI
+ * shows what a hand-edited store effectively does); non-numeric = auto. */
+static void dp_sync(HWND h) {
+    dp_cfg c;
+    dp_get(&c);
+    int sel = 0;
+    double z = atof(c.zoom);
+    if (strcasecmp(c.zoom, "auto") != 0 && z > 0) {
+        double best = 10;
+        for (int i = 1; i < DP_N; i++) {
+            double d = atof(DP_OPT[i].value) - z;
+            if (d < 0) d = -d;
+            if (d < best) { best = d; sel = i; }
+        }
+    }
+    for (int i = 0; i < DP_N; i++)
+        SendMessage(GetDlgItem(h, ID_DPBASE + i), BM_SETCHECK, i == sel, 0);
+}
 
 static LRESULT CALLBACK display_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE:
-        CreateWindowEx(0, "STATIC", "Wallpaper and appearance settings",
-                       WS_CHILD | WS_VISIBLE, 16, 16, 412, 28, h, NULL, NULL, NULL);
-        CreateWindowEx(0, "STATIC", "arrive with todos/0049.",
-                       WS_CHILD | WS_VISIBLE, 16, 48, 412, 28, h, NULL, NULL, NULL);
+        CreateWindowEx(0, "BUTTON", "Screen Density",
+                       WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+                       8, 6, 300, 214, h, NULL, NULL, NULL);
+        for (int i = 0; i < DP_N; i++)
+            CreateWindowEx(0, "BUTTON", DP_OPT[i].label,
+                           WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
+                           20, 34 + i * 30, 272, 28, h,
+                           (HMENU)(ID_DPBASE + i), NULL, NULL);
+        CreateWindowEx(0, "STATIC", "Wallpaper arrives with todos/0049.",
+                       WS_CHILD | WS_VISIBLE, 16, 228, 292, 28, h, NULL, NULL, NULL);
+        dp_sync(h);
         return 0;
+    case WM_COMMAND: {
+        int id = LOWORD(wp);
+        if (id >= ID_DPBASE && id < ID_DPBASE + DP_N) {
+            /* auto-toggled; apply on click (the Sounds checkbox rule) */
+            if (dp_set("zoom", DP_OPT[id - ID_DPBASE].value) != 0) {
+                dp_sync(h);                      /* store write failed: revert */
+                store_fail(h, "the screen density");
+            }
+        }
+        return 0;
+    }
     case WM_DESTROY:
         g_applet[APP_DISPLAY] = NULL;
         return 0;
@@ -465,7 +528,7 @@ APP_DEF[APP_N] = {
     { "CplSound",    sound_proc,    324, 156 },
     { "CplSndScheme", sounds_proc,  324, 126 },
     { "CplSystem",   system_proc,   384, 220 },
-    { "CplDisplay",  display_proc,  444, 96  },
+    { "CplDisplay",  display_proc,  324, 288 },
     { "CplDateTime", datetime_proc, 300, 76  },
     { "CplSaver",    saver_proc,    336, 212 },
     { "CplKeyboard", keyboard_proc, 496, 150 },

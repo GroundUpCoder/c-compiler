@@ -102,12 +102,17 @@ export function osHelpers(page) {
 
   // Sample one composited pixel off the (transferred) desktop canvas, sizing
   // the temp canvas from the LIVE layout rect (0023: the screen tracks the
-  // viewport — never trust the stale width/height attributes).
+  // viewport — never trust the stale width/height attributes) OR the last
+  // logical size, whichever is larger: at sub-1× zoom (hires-display) the
+  // backing store EXCEEDS the CSS rect, and logical sample coords past the
+  // pane would otherwise fall off the temp canvas and read [0,0,0].
   const sample = (x, y) => page.evaluate(([sx, sy]) => {
     const c = document.getElementById('screen');
     const r = c.getBoundingClientRect();
+    const s = window.__osScreen || { w: 0, h: 0 };
     const t = document.createElement('canvas');
-    t.width = Math.round(r.width); t.height = Math.round(r.height);
+    t.width = Math.max(Math.round(r.width), s.w);
+    t.height = Math.max(Math.round(r.height), s.h);
     const ctx = t.getContext('2d');
     ctx.drawImage(c, 0, 0);
     const d = ctx.getImageData(sx, sy, 1, 1).data;
