@@ -17,8 +17,11 @@
  * that served the OS, described by /packages/index.json. Install target is
  * /opt/<name>/ with tracked symlinks into /usr/local/bin (already first on
  * PATH). The manifest is FULLY DECLARATIVE — a package's control.json lists
- * its bin commands, openwith keys, menu entries and font faces (fallback-
- * chain lines in /etc/fonts/fallback, Unicode Phase D); install records the
+ * its bin commands, openwith keys, menu entries, font faces (fallback-
+ * chain lines in /etc/fonts/fallback, Unicode Phase D) and srclib tiers
+ * (win32 source-lib design §3.1: header + require-source symlink farms at
+ * /usr/local/include + /usr/local/src/<ns>, the standard install locations
+ * the in-OS cc searches); install records the
  * EXACT planted list in the install DB /var/lib/gucman/<name>.json and
  * remove replays that record in reverse. No custom scripts in Slice 1
  * (postinst/prerm are a reserved narrow escape hatch, not yet implemented —
@@ -72,6 +75,8 @@
 #define GM_FONTS_DIR    "/etc/fonts"
 #define GM_FONT_LIST    "/etc/fonts/fallback"   /* the fontchain.h /etc layer */
 #define GM_BIN_DIR      "/usr/local/bin"
+#define GM_INCLUDE_DIR  "/usr/local/include"     /* srclib header tier (§3.1) */
+#define GM_SRC_DIR      "/usr/local/src"         /* srclib require-source tier */
 #define GM_DESKTOP_DIR  "/root/Desktop"          /* where the wm scans icons */
 #define GM_DESKTOP_FLAG GM_DB_DIR "/desktop_shortcuts"  /* Q5/#90 persistent toggle */
 #define GM_OS_RELEASE   "/usr/share/os-release"
@@ -244,6 +249,16 @@ static int gm_valid_name(const char *n) {
     if (!n || !*n || strlen(n) >= GM_NAME_MAX) return 0;
     if (!islower((unsigned char)n[0]) && !isdigit((unsigned char)n[0])) return 0;
     for (const char *p = n; *p; p++)
+        if (!islower((unsigned char)*p) && !isdigit((unsigned char)*p) && *p != '-' && *p != '_')
+            return 0;
+    return 1;
+}
+
+/* srclib require namespace: [a-z0-9_-]+ (mkpkg's rule — builtin require
+ * names carry no '/', so namespaced names can never collide with them). */
+static int gm_valid_ns(const char *s) {
+    if (!s || !*s) return 0;
+    for (const char *p = s; *p; p++)
         if (!islower((unsigned char)*p) && !isdigit((unsigned char)*p) && *p != '-' && *p != '_')
             return 0;
     return 1;
@@ -699,11 +714,17 @@ struct gm_undo {
     cJSON *menu_dirs;           /* array of menu dirs WE created */
     cJSON *fonts;               /* array of planted fallback face lines */
     cJSON *desktop;             /* array of planted Desktop shortcut paths (Q5) */
+    cJSON *srclib_inc;          /* array of planted include-tier symlink paths (§3.1) */
+    cJSON *srclib_ns;           /* array of planted src-namespace symlink paths */
+    cJSON *srclib_dirs;         /* array of srclib tier dirs WE created */
 };
 
 static void gm_unwind(const char *name, struct gm_undo *u) {
     cJSON *it;
     cJSON_ArrayForEach(it, u->desktop) unlink(it->valuestring);
+    cJSON_ArrayForEach(it, u->srclib_inc) unlink(it->valuestring);
+    cJSON_ArrayForEach(it, u->srclib_ns) unlink(it->valuestring);
+    cJSON_ArrayForEach(it, u->srclib_dirs) rmdir(it->valuestring);
     cJSON_ArrayForEach(it, u->fonts) gm_fontline_set(it->valuestring, 0);
     cJSON_ArrayForEach(it, u->menu) unlink(it->valuestring);
     cJSON_ArrayForEach(it, u->menu_dirs) rmdir(it->valuestring);
@@ -712,6 +733,19 @@ static void gm_unwind(const char *name, struct gm_undo *u) {
     char opt[GM_PATH_MAX];
     snprintf(opt, sizeof opt, GM_OPT_DIR "/%s", name);
     fo_delete(opt);
+}
+
+/* mkdir-if-absent one srclib tier dir (/usr/local/include, /usr/local/src —
+ * neither exists on a virgin root), RECORDING a dir WE created so
+ * remove/unwind can rmdir it once it is empty again (the menu-dir rule). */
+static int gm_tier_mkdir(const char *dir, cJSON *db_dirs) {
+    if (gm_exists(dir)) return 0;
+    if (mkdir(dir, 0755) != 0) {
+        fprintf(stderr, "gucman: mkdir %s: %s\n", dir, strerror(errno));
+        return -1;
+    }
+    cJSON_AddItemToArray(db_dirs, cJSON_CreateString(dir));
+    return 0;
 }
 
 static cJSON *gm_fetch_index(const char *base) {
@@ -834,6 +868,9 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
     cJSON *db_menu_dirs = cJSON_AddArrayToObject(db, "menu_dirs");
     cJSON *db_fonts = cJSON_AddArrayToObject(db, "font_faces");
     cJSON *db_desktop = cJSON_AddArrayToObject(db, "desktop");
+    cJSON *db_inc = cJSON_AddArrayToObject(db, "include_entries");
+    cJSON *db_srcns = cJSON_AddArrayToObject(db, "src_namespaces");
+    cJSON *db_sldirs = cJSON_AddArrayToObject(db, "srclib_dirs");
 
     char *control_text = NULL;
     if (tar_extract(tar, tarlen, name, stage, &control_text, db_files, db_dirs) != 0) {
@@ -880,7 +917,8 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
     }
 
     /* plant the declarative surface; unwind everything on any failure */
-    struct gm_undo undo = { db_links, db_ow, db_menu, db_menu_dirs, db_fonts, db_desktop };
+    struct gm_undo undo = { db_links, db_ow, db_menu, db_menu_dirs, db_fonts, db_desktop,
+                            db_inc, db_srcns, db_sldirs };
     int fail = 0;
     char primary[GM_NAME_MAX] = "";     /* the command a Desktop shortcut launches (Q5) */
     cJSON *cbin = cJSON_GetObjectItemCaseSensitive(control, "bin");
@@ -996,6 +1034,96 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
         cJSON_AddItemToArray(db_fonts, cJSON_CreateString(fpath));
     }
 
+    /* Source-lib plant (win32 source-lib design §3.1): a package carrying
+     * `srclib` exposes headers and require-able sources at the standard
+     * install locations the in-OS cc searches (os-common createCcDriver:
+     * /usr/local/include, /usr/local/src). Both tiers are symlink farms
+     * over the payload, mirroring the bin plant: per TOP-LEVEL entry for
+     * each `include` dir (files or subdirs, so a freetype/ header tree
+     * rides as one link), one link per `src` require namespace. Same
+     * refuse-on-exists + unwind rules; recorded in the DB so remove
+     * replays them exactly. */
+    cJSON *csl = fail ? NULL : cJSON_GetObjectItemCaseSensitive(control, "srclib");
+    cJSON *sinc = csl ? cJSON_GetObjectItemCaseSensitive(csl, "include") : NULL;
+    cJSON_ArrayForEach(it, sinc) {
+        char pdir[GM_PATH_MAX];
+        if (!cJSON_IsString(it) || !gm_safe_rel(it->valuestring)) {
+            fprintf(stderr, "gucman: '%s' has a malformed srclib include entry — refusing\n", name);
+            fail = 1;
+            break;
+        }
+        snprintf(pdir, sizeof pdir, GM_OPT_DIR "/%s/%s", name, it->valuestring);
+        DIR *d = opendir(pdir);
+        if (!d) {
+            fprintf(stderr, "gucman: '%s' srclib include %s names no packaged dir — refusing\n",
+                    name, it->valuestring);
+            fail = 1;
+            break;
+        }
+        if (gm_tier_mkdir(GM_INCLUDE_DIR, db_sldirs) != 0) {
+            closedir(d);
+            fail = 1;
+            break;
+        }
+        struct dirent *de;
+        while (!fail && (de = readdir(d)) != NULL) {
+            if (de->d_name[0] == '.') continue;
+            char link[GM_PATH_MAX], target[GM_PATH_MAX];
+            if (snprintf(link, sizeof link, GM_INCLUDE_DIR "/%s", de->d_name) >= (int)sizeof link ||
+                snprintf(target, sizeof target, "%s/%s", pdir, de->d_name) >= (int)sizeof target) {
+                fprintf(stderr, "gucman: srclib include path too long — refusing\n");
+                fail = 1;
+                break;
+            }
+            if (gm_exists(link)) {
+                fprintf(stderr, "gucman: %s already exists — refusing to overwrite\n", link);
+                fail = 1;
+                break;
+            }
+            if (symlink(target, link) != 0) {
+                fprintf(stderr, "gucman: planting %s: %s\n", link, strerror(errno));
+                fail = 1;
+                break;
+            }
+            cJSON_AddItemToArray(db_inc, cJSON_CreateString(link));
+        }
+        closedir(d);
+        if (fail) break;
+    }
+    cJSON *ssrc = (fail || !csl) ? NULL : cJSON_GetObjectItemCaseSensitive(csl, "src");
+    cJSON_ArrayForEach(it, ssrc) {
+        char link[GM_PATH_MAX], target[GM_PATH_MAX];
+        struct stat sst;
+        if (!cJSON_IsString(it) || !gm_valid_ns(it->string) || !gm_safe_rel(it->valuestring)) {
+            fprintf(stderr, "gucman: '%s' has a malformed srclib src entry — refusing\n", name);
+            fail = 1;
+            break;
+        }
+        snprintf(target, sizeof target, GM_OPT_DIR "/%s/%s", name, it->valuestring);
+        if (stat(target, &sst) != 0 || !S_ISDIR(sst.st_mode)) {
+            fprintf(stderr, "gucman: '%s' srclib namespace %s -> %s names no packaged dir — refusing\n",
+                    name, it->string, it->valuestring);
+            fail = 1;
+            break;
+        }
+        if (gm_tier_mkdir(GM_SRC_DIR, db_sldirs) != 0) {
+            fail = 1;
+            break;
+        }
+        snprintf(link, sizeof link, GM_SRC_DIR "/%s", it->string);
+        if (gm_exists(link)) {
+            fprintf(stderr, "gucman: %s already exists — refusing to overwrite\n", link);
+            fail = 1;
+            break;
+        }
+        if (symlink(target, link) != 0) {
+            fprintf(stderr, "gucman: planting %s: %s\n", link, strerror(errno));
+            fail = 1;
+            break;
+        }
+        cJSON_AddItemToArray(db_srcns, cJSON_CreateString(link));
+    }
+
     /* Desktop shortcut (Q5 / #90): planted LAST, only for the user-requested
      * package (depth 0 — transitive library deps never clutter the desktop),
      * only when the persistent flag is on, and only when the package ships a
@@ -1097,6 +1225,18 @@ static int cmd_remove(const char *name) {
     cJSON *it;
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "desktop"))
         if (cJSON_IsString(it)) unlink(it->valuestring);      /* Q5: remove the shortcut we planted */
+    /* srclib plants (§3.1): the include-tier and namespace symlinks, then
+     * the tier dirs WE created — innermost-first replay like menu_dirs;
+     * rmdir on a now-shared (non-empty) tier just keeps it. */
+    cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "include_entries"))
+        if (cJSON_IsString(it)) unlink(it->valuestring);
+    cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "src_namespaces"))
+        if (cJSON_IsString(it)) unlink(it->valuestring);
+    cJSON *sldirs = cJSON_GetObjectItemCaseSensitive(db, "srclib_dirs");
+    for (int i = cJSON_GetArraySize(sldirs) - 1; i >= 0; i--) {
+        cJSON *d = cJSON_GetArrayItem(sldirs, i);
+        if (cJSON_IsString(d)) rmdir(d->valuestring);         /* ENOTEMPTY: shared now, keep */
+    }
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "font_faces"))
         if (cJSON_IsString(it)) gm_fontline_set(it->valuestring, 0);
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "menu_entries"))
@@ -1407,6 +1547,8 @@ static int cmd_info(const char *name) {
         gm_info_strings(db, "menu_entries", "menu entries:");
         gm_info_strings(db, "font_faces", "font faces:");
         gm_info_strings(db, "desktop", "desktop shortcuts:");
+        gm_info_strings(db, "include_entries", "include entries:");
+        gm_info_strings(db, "src_namespaces", "source namespaces:");
     }
     cJSON_Delete(db);
     cJSON_Delete(index);

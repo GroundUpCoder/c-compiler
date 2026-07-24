@@ -16,6 +16,11 @@
 //   - `gucman remove punes` replays the DB record in reverse: /opt tree,
 //     symlink, openwith key, menu entry AND the menu dirs gucman created
 //     are all gone; the DB record goes last
+//   - the win32 source-lib package (Lane B1, design §3.1): install plants
+//     the srclib symlink farms — /usr/local/include/<entry> per top-level
+//     include entry, /usr/local/src/<ns> per require namespace — creating
+//     the tier dirs (absent on a virgin root) and recording everything in
+//     the DB; remove leaves NO residue (links gone, created tiers rmdir'd)
 //
 // Repo servers: serve.js itself, serving dist/packages (tools/mkpkg.js
 // output) as its root — the tree has no os/image.json, so serve.js's image
@@ -36,7 +41,7 @@ function check(name, cond, extra) {
 }
 
 async function main() {
-  const idx = ensurePackages(['punes']);
+  const idx = ensurePackages(['punes', 'win32']);
   const MIN = ensureMinimalImage();
   const { dir: tmp, image } = freshImage('os-gucman-');
   fs.copyFileSync(MIN, image);   // copy mtime = now -> input-fresh at boot
@@ -264,6 +269,109 @@ async function main() {
 
   const drm = section(cout, 'deskrm');
   check('uninstall removes the planted Desktop shortcut', drm.includes('DESK-GONE'), drm);
+
+  /* ---- session D: the win32 source-lib package (Lane B1, §3.1) ---- *
+   * A srclib package plants header + require-source symlink farms at the
+   * standard install locations the in-OS cc searches. The tier dirs do not
+   * exist on a virgin root — install creates and records them; remove
+   * unlinks every plant and rmdirs the created tiers, leaving no residue. */
+  const scriptD = [
+    'echo ==virgin',
+    'test ! -e /usr/local/include && echo NO-INC-TIER',
+    'test ! -e /usr/local/src && echo NO-SRC-TIER',
+    'echo ==slinstall',
+    'gucman install win32; echo RC=$?',
+    'readlink /usr/local/include/windows.h',
+    'readlink /usr/local/src/win32',
+    'test -f /usr/local/include/windows.h && echo INC-RESOLVES',
+    'test -f /usr/local/src/win32/user32.c && echo SRC-RESOLVES',
+    'test -f /usr/local/include/ft2build.h && echo FT2BUILD-OK',
+    'test -f /usr/local/include/freetype/freetype.h && echo FT-TREE-OK',
+    'test -f /usr/local/src/freetype/ftbase.c && echo FT-NS-OK',
+    // the §3.3 layout invariants relative quote-includes depend on, asserted
+    // IN THE PAYLOAD (real dirs, where lexical `..` == physical): fontcore.h
+    // one level above src/win32/ (gdi32.c's "../fontcore.h"), the freetype
+    // upstream src/ tree beside the shim dir ("../src/base/ftbase.c").
+    // NB the visible-tier form (/usr/local/src/win32/../fontcore.h) does NOT
+    // resolve: BlockFS collapses `..` LEXICALLY before the walk (host.js
+    // _walkPath — logical, not physical), so `..` never enters the namespace
+    // symlink. How the in-OS compile crosses that is Lane B2's seam.
+    'test -f /opt/win32/src/win32/../fontcore.h && echo FONTCORE-LAYOUT-OK',
+    'test -f /opt/win32/src/freetype/srclib/../src/base/ftbase.c && echo FT-LAYOUT-OK',
+    'grep -q include_entries /var/lib/gucman/win32.json && echo DB-INC-OK',
+    'grep -q src_namespaces /var/lib/gucman/win32.json && echo DB-NS-OK',
+    'grep -q srclib_dirs /var/lib/gucman/win32.json && echo DB-DIRS-OK',
+    'echo ==slremove',
+    'gucman remove win32; echo RC=$?',
+    'test ! -e /usr/local/include && echo INC-TIER-GONE',
+    'test ! -e /usr/local/src && echo SRC-TIER-GONE',
+    'test ! -e /opt/win32 && echo OPT-GONE',
+    'test ! -e /var/lib/gucman/win32.json && echo DB-GONE',
+    'echo ==done',
+  ];
+  const d = driveBoot(scriptD, BOOT_ARGS);
+  const dout = String(d.stdout || '');
+
+  const virgin = section(dout, 'virgin');
+  check('virgin root has no /usr/local/include tier', virgin.includes('NO-INC-TIER'), virgin);
+  check('virgin root has no /usr/local/src tier', virgin.includes('NO-SRC-TIER'));
+
+  const sli = section(dout, 'slinstall');
+  check('win32 install succeeds (exit 0)', sli.includes('RC=0'), sli);
+  check('/usr/local/include/windows.h -> /opt/win32/include/windows.h',
+    sli.includes('/opt/win32/include/windows.h'), sli);
+  check('/usr/local/src/win32 -> /opt/win32/src/win32',
+    sli.split('\n').some((l) => l.trim() === '/opt/win32/src/win32'), sli);
+  check('include-tier link resolves to a real header', sli.includes('INC-RESOLVES'));
+  check('src-namespace link resolves to user32.c', sli.includes('SRC-RESOLVES'));
+  check('demo ft2build.h planted as a top-level include entry', sli.includes('FT2BUILD-OK'));
+  check('freetype/ header tree rides as ONE include link', sli.includes('FT-TREE-OK'));
+  check('freetype require namespace maps to the shim dir', sli.includes('FT-NS-OK'));
+  check('payload layout: fontcore.h one level above src/win32/', sli.includes('FONTCORE-LAYOUT-OK'));
+  check('payload layout: freetype src/ tree beside the shim dir', sli.includes('FT-LAYOUT-OK'));
+  check('DB records include_entries', sli.includes('DB-INC-OK'));
+  check('DB records src_namespaces', sli.includes('DB-NS-OK'));
+  check('DB records the created tier dirs', sli.includes('DB-DIRS-OK'));
+
+  const slr = section(dout, 'slremove');
+  check('win32 remove succeeds (exit 0)', slr.includes('RC=0'), slr);
+  check('created include tier rmdir\'d on remove', slr.includes('INC-TIER-GONE'), slr);
+  check('created src tier rmdir\'d on remove', slr.includes('SRC-TIER-GONE'));
+  check('/opt/win32 fully removed', slr.includes('OPT-GONE'));
+  check('win32 DB record removed', slr.includes('DB-GONE'));
+
+  /* ---- session E: the FAT image carries the baked srclib fold ---- *
+   * foldPackages' twin of the gucman plant: /usr/include + /usr/src symlink
+   * farms over the sealed /usr/opt/win32 payload (no --packages flag =
+   * boot.js's fat default). */
+  const scriptE = [
+    'echo ==fat',
+    'test -f /usr/include/windows.h && echo BAKED-INC-OK',
+    'readlink /usr/include/windows.h',
+    'readlink /usr/src/win32',
+    'test -f /usr/src/win32/user32.c && echo BAKED-SRC-OK',
+    'test -f /usr/src/freetype/ftbase.c && echo BAKED-FT-OK',
+    'test -f /usr/include/freetype/freetype.h && echo BAKED-FT-TREE-OK',
+    // the baked payload's §3.3 layout invariants (see session D note: `..`
+    // is asserted through the REAL payload dirs, not the symlink tier)
+    'test -f /usr/opt/win32/src/win32/../fontcore.h && echo BAKED-LAYOUT-OK',
+    'test -f /usr/opt/win32/src/freetype/srclib/../src/base/ftbase.c && echo BAKED-FT-LAYOUT-OK',
+    'echo ==done',
+  ];
+  const e = driveBoot(scriptE, { timeout: 420000 });
+  const eout = String(e.stdout || '');
+
+  const fat = section(eout, 'fat');
+  check('fat: /usr/include/windows.h resolves', fat.includes('BAKED-INC-OK'), fat);
+  check('fat: windows.h links into the sealed payload',
+    fat.includes('/usr/opt/win32/include/windows.h'), fat);
+  check('fat: /usr/src/win32 links into the sealed payload',
+    fat.split('\n').some((l) => l.trim() === '/usr/opt/win32/src/win32'), fat);
+  check('fat: /usr/src/win32/user32.c resolves', fat.includes('BAKED-SRC-OK'));
+  check('fat: freetype shim namespace resolves', fat.includes('BAKED-FT-OK'));
+  check('fat: freetype header tree resolves', fat.includes('BAKED-FT-TREE-OK'));
+  check('fat: baked payload layout (fontcore.h above src/win32/)', fat.includes('BAKED-LAYOUT-OK'));
+  check('fat: baked payload layout (freetype src/ beside shims)', fat.includes('BAKED-FT-LAYOUT-OK'));
 
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(failures ? `\ngucman e2e: ${failures} FAILED` : '\ngucman e2e: PASS');

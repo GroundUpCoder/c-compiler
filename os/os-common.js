@@ -613,6 +613,115 @@ function validRelPath(rel) {
   return true;
 }
 
+/* ---- `tree` manifest entries (win32 source-lib design §3.2) ----
+ *
+ * listTreeFiles(fsMod, pathMod, rootDir, entry, label) -> sorted array of
+ * tree-relative file paths for a `{"tree": "<repo-relative dir>",
+ * "exclude": [glob, ...]}` package-file entry — the recursive-directory-copy
+ * vocabulary that spares a definition ~120 hand-listed entries per vendored
+ * source tree. Rules (mirroring gucman's tar_validate): dotfiles/dotdirs
+ * are ALWAYS excluded; symlinks are REFUSED loudly (payloads carry files
+ * and dirs only); `exclude` globs match tree-relative paths (`*`/`?` stay
+ * within a path component, `**` crosses them) and a glob matching a
+ * directory prunes its whole subtree. Dirs derive from the file paths, so
+ * an empty directory does not ride.
+ *
+ * Node-only BY CONSTRUCTION: tree entries are expanded where packages are
+ * expanded — mkpkg's assembleTree and foldPackages below — which never run
+ * in the browser worker (the in-worker fallback bake uses the raw minimal
+ * manifest), so the XHR reader's inability to enumerate directories is
+ * never hit. The SAME enumeration drives the freshness scans
+ * (newestBakeInput here, mkpkg's newestPkgInput), so "what's in the
+ * payload" and "what makes it stale" agree by construction. */
+function treeGlobRe(glob) {
+  var re = '';
+  for (var i = 0; i < glob.length; i++) {
+    var ch = glob.charAt(i);
+    if (ch === '*') {
+      if (glob.charAt(i + 1) === '*') { re += '.*'; i++; }
+      else re += '[^/]*';
+    } else if (ch === '?') {
+      re += '[^/]';
+    } else {
+      re += ch.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+    }
+  }
+  return new RegExp('^' + re + '$');
+}
+
+function listTreeFiles(fsMod, pathMod, rootDir, entry, label) {
+  if (!validRelPath(entry.tree))
+    throw new Error(label + ': tree must be a repo-relative directory path');
+  if (entry.exclude !== undefined && !Array.isArray(entry.exclude))
+    throw new Error(label + ': exclude must be an array of globs');
+  var excludes = (entry.exclude || []).map(function (g) {
+    if (typeof g !== 'string' || !g.length)
+      throw new Error(label + ': bad exclude glob ' + JSON.stringify(g));
+    return treeGlobRe(g);
+  });
+  var excluded = function (rel) {
+    for (var i = 0; i < excludes.length; i++) if (excludes[i].test(rel)) return true;
+    return false;
+  };
+  var rootAbs = pathMod.join(rootDir, entry.tree);
+  var st;
+  try { st = fsMod.lstatSync(rootAbs); } catch (e) { st = null; }
+  if (!st || !st.isDirectory())
+    throw new Error(label + ': tree dir ' + entry.tree + ' is not a directory');
+  var files = [];
+  (function walk(rel) {
+    var abs = rel ? pathMod.join(rootAbs, rel) : rootAbs;
+    fsMod.readdirSync(abs).sort().forEach(function (nm) {
+      if (nm.charAt(0) === '.') return;                    // dotfiles never ride
+      var crel = rel ? rel + '/' + nm : nm;
+      if (excluded(crel)) return;
+      var cst = fsMod.lstatSync(pathMod.join(abs, nm));
+      if (cst.isSymbolicLink())
+        throw new Error(label + ': ' + entry.tree + '/' + crel +
+          ' is a symlink — tree payloads carry files and dirs only');
+      if (cst.isDirectory()) walk(crel);
+      else if (cst.isFile()) files.push(crel);
+      else throw new Error(label + ': ' + entry.tree + '/' + crel + ' has an unsupported file type');
+    });
+  })('');
+  return files;
+}
+
+/* ---- the `srclib` package section (win32 source-lib design §3.1) ----
+ *
+ * Shape validation shared by mkpkg (which also checks the mapped dirs
+ * against the ASSEMBLED payload and copies the section into control.json)
+ * and foldPackages (which checks them against the folded manifest and
+ * plants the baked twin of gucman's install plant). Returns
+ * { include: [payload-relative dir, ...], src: { ns: payload-relative dir } }.
+ * Namespaces are `[a-z0-9_-]+`: builtin require names carry no '/', so
+ * namespaced names (`<ns>/<file>.c`) can never collide with them. */
+function validateSrclibShape(srclib, label) {
+  if (typeof srclib !== 'object' || srclib === null || Array.isArray(srclib))
+    throw new Error(label + ': srclib must be an object');
+  Object.keys(srclib).forEach(function (k) {
+    if (k !== 'include' && k !== 'src')
+      throw new Error(label + ': srclib has an unknown key ' + JSON.stringify(k));
+  });
+  var include = srclib.include || [];
+  if (!Array.isArray(include))
+    throw new Error(label + ': srclib.include must be an array of payload-relative dirs');
+  include.forEach(function (dir) {
+    if (!validRelPath(dir))
+      throw new Error(label + ': bad srclib include dir ' + JSON.stringify(dir));
+  });
+  var src = srclib.src || {};
+  if (typeof src !== 'object' || src === null || Array.isArray(src))
+    throw new Error(label + ': srclib.src must be a { namespace: payload-relative dir } map');
+  Object.keys(src).forEach(function (ns) {
+    if (!/^[a-z0-9_-]+$/.test(ns))
+      throw new Error(label + ": srclib namespace '" + ns + "' must match [a-z0-9_-]+");
+    if (!validRelPath(src[ns]))
+      throw new Error(label + ': bad srclib src dir ' + JSON.stringify(src[ns]) + " for namespace '" + ns + "'");
+  });
+  return { include: include, src: src };
+}
+
 /* which: 'all' | array of names | [] (fold nothing). Returns
  * { manifest, names } — `manifest` is a deep copy with the packages folded
  * into the system section and `packagesBaked` set (which bakeSystemImage
@@ -657,10 +766,52 @@ function foldPackages(fsMod, pathMod, rootDir, manifest, which) {
       var entry = pkg.files[rel];
       if (entry.link !== undefined)
         throw new Error("package '" + name + "': " + rel + ' — link entries are not supported in packages (v1 tar+gzip payloads carry files and dirs only)');
+      if (entry.tree !== undefined) {
+        // Recursive directory copy (§3.2): one `bin` (repo-relative bytes)
+        // entry per enumerated file; dirs derive from the file paths.
+        var treeFiles = listTreeFiles(fsMod, pathMod, rootDir, entry,
+          "package '" + name + "': " + rel);
+        treeFiles.forEach(function (tf) {
+          var tparts = (rel + '/' + tf).split('/'), tcur = base;
+          for (var ti = 0; ti < tparts.length - 1; ti++) { tcur += '/' + tparts[ti]; pushDir(tcur); }
+          claim(name, base + '/' + rel + '/' + tf, { bin: entry.tree + '/' + tf });
+        });
+        return;
+      }
       var parts = rel.split('/'), cur = base;
       for (var i = 0; i < parts.length - 1; i++) { cur += '/' + parts[i]; pushDir(cur); }
       claim(name, base + '/' + rel, entry);
     });
+    if (pkg.srclib !== undefined) {
+      // The baked twin of gucman's srclib install plant (§3.1): both
+      // visible tiers are symlink farms over the payload — per TOP-LEVEL
+      // entry for include dirs (files or subdirs, so a freetype/ header
+      // tree rides as one link), one link per source namespace. /usr/include
+      // and /usr/src join the system dir set the moment any folded package
+      // carries srclib; collisions across packages are claim()'s loud throw.
+      var sl = validateSrclibShape(pkg.srclib, "package '" + name + "'");
+      sl.include.forEach(function (dir) {
+        var payloadDir = base + '/' + dir;
+        if (!dirSeen[payloadDir])
+          throw new Error("package '" + name + "': srclib include dir " + dir + ' is not in the payload');
+        pushDir('/usr/include');
+        var tops = {};
+        Object.keys(m.system.files).forEach(function (p) {
+          if (p.lastIndexOf(payloadDir + '/', 0) === 0)
+            tops[p.slice(payloadDir.length + 1).split('/')[0]] = true;
+        });
+        Object.keys(tops).sort().forEach(function (t) {
+          claim(name, '/usr/include/' + t, { link: payloadDir + '/' + t });
+        });
+      });
+      Object.keys(sl.src).sort().forEach(function (ns) {
+        var payloadDir = base + '/' + sl.src[ns];
+        if (!dirSeen[payloadDir])
+          throw new Error("package '" + name + "': srclib src dir " + sl.src[ns] + ' is not in the payload');
+        pushDir('/usr/src');
+        claim(name, '/usr/src/' + ns, { link: payloadDir });
+      });
+    }
     Object.keys(bin).sort().forEach(function (cmd) {
       var rel = bin[cmd];
       if (!(pkg.files || {})[rel])
@@ -939,6 +1090,14 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest) {
     Object.keys(pf).forEach(function (fp) {
       if (pf[fp].project !== undefined) addProject(pf[fp].project);
       if (pf[fp].bin !== undefined) statFile(pathMod.join(rootDir, pf[fp].bin));
+      // `tree` entries: the SAME enumeration that expands the payload
+      // drives the freshness scan, so they agree by construction.
+      if (pf[fp].tree !== undefined) {
+        var tfs;
+        try { tfs = listTreeFiles(fsMod, pathMod, rootDir, pf[fp], n + ': ' + fp); }
+        catch (e) { return; }   // malformed → fails loud in the fold, not here
+        tfs.forEach(function (tf) { statFile(pathMod.join(rootDir, pf[fp].tree, tf)); });
+      }
     });
   });
   var files = (manifest.system && manifest.system.files) || {};
@@ -1042,6 +1201,8 @@ var OS_COMMON = {
   nodeOverlayIo: nodeOverlayIo,
   listPackages: listPackages,
   foldPackages: foldPackages,
+  listTreeFiles: listTreeFiles,
+  validateSrclibShape: validateSrclibShape,
   bakedVersion: bakedVersion,
   bakedOverlays: bakedOverlays,
   bakedPackages: bakedPackages,

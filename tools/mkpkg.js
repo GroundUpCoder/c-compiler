@@ -4,13 +4,18 @@
 // Input: packages/<name>.json — a package definition whose `files` entries
 // use the SAME vocab as os/image.json (project/bin/text/content/c; `link`
 // is refused — the v1 tar+gzip payload carries files and dirs only), plus
+// `tree` (win32 source-lib design §3.2, Node-only): a recursive directory
+// copy `{"tree": "<repo-relative dir>", "exclude": [glob, ...]}` — dotfiles
+// always excluded, symlinks refused (os-common listTreeFiles) — plus
 // the declarative surface gucman plants at install time:
 //   { name, version, summary, [minBase], [deps],
 //     files: { "<rel>": <image.json entry> },
 //     bin:   { "<cmd>": "<rel>" },          // /usr/local/bin/<cmd> symlinks
 //     openwith: { "<ext>": "<cmd>" },       // /etc/openwith delta keys
 //     menu:  [ { group, entry, cmd } ],     // /etc/menu/<group>/<entry>
-//     fonts: [ "<rel>" ] }                  // /etc/fonts/fallback face lines
+//     fonts: [ "<rel>" ],                   // /etc/fonts/fallback face lines
+//     srclib: { include: ["<dir>"],         // source-lib §3.1: header +
+//               src: { "<ns>": "<dir>" } }} //   require-source install tiers
 //
 // The package tree is assembled by the EXACT bake pipeline — os-common's
 // seedEntries/buildProject/createCcDriver over an in-memory BlockFS — so a
@@ -184,6 +189,15 @@ function newestPkgInput(name, pkg) {
       statFile(path.join(OS_DIR, entry.c));
       (entry.hdrs || []).forEach((h) => statFile(path.join(OS_DIR, h)));
     }
+    // `tree` entries: the SAME enumeration that expands the payload drives
+    // the freshness scan (a changed source anywhere under the tree dir
+    // marks the package stale).
+    if (entry.tree !== undefined) {
+      let tfs;
+      try { tfs = COMMON.listTreeFiles(fs, path, ROOT, entry, rel); }
+      catch (e) { continue; }   // malformed → fails loud in the build, not here
+      tfs.forEach((tf) => statFile(path.join(ROOT, entry.tree, tf)));
+    }
     // A clangApp/clangFile payload's freshness is the sibling overlay
     // manifest's mtime — re-publishing overlay.json (new sha256s)
     // re-materializes the package.
@@ -251,17 +265,40 @@ async function assembleTree(name, pkg) {
   const base = '/opt/' + name;
   const section = { dirs: ['/opt', base], files: {} };
   const clangPlants = [];   // { abs, app, mode } — planted AFTER seedEntries
-  for (const rel of Object.keys(pkg.files).sort()) {
-    const entry = pkg.files[rel];
-    if (entry.link !== undefined) {
-      throw new Error(`package '${name}': ${rel} — link entries are not supported in packages (v1 tar+gzip payloads carry files and dirs only)`);
+  // One payload path, one producer: tree expansion introduces the class of
+  // two entries writing the same path (a tree file shadowed by an explicit
+  // entry), which Object assignment would resolve silently — refuse instead.
+  const claim = (p, entry) => {
+    if (section.files[p] !== undefined) {
+      throw new Error(`package '${name}': payload path ${p.slice(base.length + 1)} is produced twice`);
     }
+    section.files[p] = entry;
+  };
+  const pushDirs = (rel) => {
     const parts = rel.split('/');
     let cur = base;
     for (let i = 0; i < parts.length - 1; i++) {
       cur += '/' + parts[i];
       if (!section.dirs.includes(cur)) section.dirs.push(cur);
     }
+  };
+  for (const rel of Object.keys(pkg.files).sort()) {
+    const entry = pkg.files[rel];
+    if (entry.link !== undefined) {
+      throw new Error(`package '${name}': ${rel} — link entries are not supported in packages (v1 tar+gzip payloads carry files and dirs only)`);
+    }
+    // `tree` (source-lib §3.2, Node-only): recursive directory copy — one
+    // `bin` (repo-relative bytes) entry per enumerated file, dirs derived
+    // from the file paths. Same enumeration as the freshness scan below.
+    if (entry.tree !== undefined) {
+      const treeFiles = COMMON.listTreeFiles(fs, path, ROOT, entry, `package '${name}': ${rel}`);
+      for (const tf of treeFiles) {
+        pushDirs(rel + '/' + tf);
+        claim(base + '/' + rel + '/' + tf, { bin: entry.tree + '/' + tf });
+      }
+      continue;
+    }
+    pushDirs(rel);
     // A `clangApp` entry is NOT bake vocabulary (seedEntries refuses it, like
     // `link`): its bytes come pre-built from the sibling overlay, not from
     // compiler.js. It's resolved + planted after seedEntries builds the dirs.
@@ -284,7 +321,7 @@ async function assembleTree(name, pkg) {
       }
       clangPlants.push({ abs: base + '/' + rel, ovPath: entry.clangFile, mode: 0o644 });
     } else {
-      section.files[base + '/' + rel] = entry;
+      claim(base + '/' + rel, entry);
     }
   }
   await COMMON.seedEntries(mfs, section, {
@@ -362,6 +399,15 @@ async function buildPackage(name, poolDir) {
   for (const fp of pkg.fonts || []) {
     if (typeof fp !== 'string' || !pkg.files[fp]) throw new Error(`package '${name}': fonts ${fp} names no package file`);
   }
+  // srclib (source-lib design §3.1): shape-validate early; the mapped dirs
+  // are checked against the ASSEMBLED payload after the build, and the
+  // section rides into control.json for gucman's install plant.
+  // TODO(Lane B2): the §4.4 drift gate belongs here — assert windows.h's
+  // require set == lib.json ∪ menucore.json sources (as win32/<basename>)
+  // and gdi32.c's freetype require set == freetype lib.json sources, once
+  // the require blocks exist.
+  const srclib = pkg.srclib !== undefined
+    ? COMMON.validateSrclibShape(pkg.srclib, `package '${name}'`) : null;
 
   const entryFor = (file, sha, size) => ({
     version: pkg.version,
@@ -398,9 +444,19 @@ async function buildPackage(name, poolDir) {
     menu: pkg.menu || [],
     fonts: pkg.fonts || [],
   };
+  const payload = await assembleTree(name, pkg);
+  if (srclib) {
+    const dirSet = new Set(payload.filter((m) => m.dir).map((m) => m.name));
+    for (const d of srclib.include.concat(Object.values(srclib.src))) {
+      if (!dirSet.has(`opt/${name}/${d}`)) {
+        throw new Error(`package '${name}': srclib dir ${d} is not in the assembled payload`);
+      }
+    }
+    control.srclib = { include: srclib.include, src: srclib.src };
+  }
   const members = [
     { name: 'control.json', data: Buffer.from(JSON.stringify(control, null, 2) + '\n'), mode: 0o644 },
-    ...await assembleTree(name, pkg),
+    ...payload,
   ];
   const gz = zlib.gzipSync(tarball(members), { level: 9 });
   const sha = crypto.createHash('sha256').update(gz).digest('hex');

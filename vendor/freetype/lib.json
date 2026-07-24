@@ -8,17 +8,17 @@
     "-DFT_CONFIG_OPTION_NO_ASSEMBLER"
   ],
   "sources": [
-    "src/base/ftbase.c",
-    "src/base/ftsystem.c",
-    "src/base/ftdebug.c",
-    "src/base/ftinit.c",
-    "src/autofit/autofit.c",
-    "src/base/ftbitmap.c",
-    "src/base/ftmm.c",
-    "src/base/ftsynth.c",
-    "src/sfnt/sfnt.c",
-    "src/truetype/truetype.c",
-    "src/smooth/smooth.c",
-    "src/psnames/psnames.c"
+    "srclib/ftbase.c",
+    "srclib/ftsystem.c",
+    "srclib/ftdebug.c",
+    "srclib/ftinit.c",
+    "srclib/autofit.c",
+    "srclib/ftbitmap.c",
+    "srclib/ftmm.c",
+    "srclib/ftsynth.c",
+    "srclib/sfnt.c",
+    "srclib/truetype.c",
+    "srclib/smooth.c",
+    "srclib/psnames.c"
   ]
 }

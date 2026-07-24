@@ -1,0 +1,33 @@
+{
+  "name": "win32",
+  "version": "1.0.0",
+  "summary": "Win32 source library — build windows.h apps with the in-OS cc",
+  "files": {
+    "include":              { "tree": "os/win32/include" },
+    "include/ft2build.h":   { "bin": "vendor/freetype/demo/ft2build.h" },
+    "include/myftmodule.h": { "bin": "vendor/freetype/demo/myftmodule.h" },
+    "include/myftoption.h": { "bin": "vendor/freetype/demo/myftoption.h" },
+    "include/freetype":     { "tree": "vendor/freetype/include/freetype" },
+    "src/fontcore.h":       { "text": "fontcore.h" },
+    "src/win32/user32.c":   { "text": "win32/user32.c" },
+    "src/win32/gdi32.c":    { "text": "win32/gdi32.c" },
+    "src/win32/gdi32w.c":   { "text": "win32/gdi32w.c" },
+    "src/win32/kernel32.c": { "text": "win32/kernel32.c" },
+    "src/win32/advapi32.c": { "text": "win32/advapi32.c" },
+    "src/win32/crt16.c":    { "text": "win32/crt16.c" },
+    "src/win32/shell32.c":  { "text": "win32/shell32.c" },
+    "src/win32/winmm.c":    { "text": "win32/winmm.c" },
+    "src/win32/comctl32.c": { "text": "win32/comctl32.c" },
+    "src/win32/comdlg32.c": { "text": "win32/comdlg32.c" },
+    "src/win32/menucore.c": { "text": "win32/menucore.c" },
+    "src/win32/menucore.h": { "text": "win32/menucore.h" },
+    "src/win32/win32_internal.h": { "text": "win32/win32_internal.h" },
+    "src/win32/wwinmain.c": { "text": "win32/wwinmain.c" },
+    "src/freetype/srclib":  { "tree": "vendor/freetype/srclib" },
+    "src/freetype/src":     { "tree": "vendor/freetype/src" }
+  },
+  "srclib": {
+    "include": [ "include" ],
+    "src": { "win32": "src/win32", "freetype": "src/freetype/srclib" }
+  }
+}
