@@ -64,7 +64,8 @@ try {
 
   // #83: the human catalog + per-package info ride the same browser realm.
   // The FAT image bakes package twins under /usr/opt with NO install-DB
-  // records, so only the live-installed lua reads "installed" here.
+  // records, so those read "built-in" (win32 Lane 0) — only the
+  // live-installed lua reads "installed" here.
   await page.keyboard.type('gucman list --all; echo CAT-""RC=$?\r');
   await waitOut('CAT-RC=', 60000);
   const cat = await page.evaluate(() => window.__osOut);
@@ -73,7 +74,8 @@ try {
     /NAME\s+AVAILABLE\s+INSTALLED\s+SUMMARY/.test(cat));
   check('catalog row shows lua installed at the available version',
     /^lua\s+(\S+)\s+\1\s/m.test(cat));
-  check('catalog row shows punes not installed', /^punes\s+\S+\s+no\s/m.test(cat));
+  check('catalog row shows punes built-in (baked, no DB record)',
+    /^punes\s+\S+\s+built-in\s/m.test(cat));
 
   await page.keyboard.type('gucman info lua; echo INFO-""RC=$?\r');
   await waitOut('INFO-RC=', 60000);
@@ -85,8 +87,8 @@ try {
   check('info lua exits 0', /INFO-RC=0/.test(inf));
   check('info shows lua installed', /installed:\s+yes/.test(luaInfo));
   check('info2 punes exits 0', /INFO2-RC=0/.test(inf));
-  check('info shows punes not installed',
-    /package:\s+punes/.test(punesInfo) && /installed:\s+no\b/.test(punesInfo));
+  check('info shows punes built-in',
+    /package:\s+punes/.test(punesInfo) && /installed:\s+built-in\b/.test(punesInfo));
 
   // Clean removal replays the DB (also proves the install recorded one).
   await page.keyboard.type('gucman remove lua; echo RM-RC""=$?\r');

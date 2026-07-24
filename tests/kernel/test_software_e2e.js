@@ -18,6 +18,11 @@
 //     + symlink + DB record gone
 //   - FS_WATCH liveness: a CLI `gucman install` / `remove` beside the open
 //     storefront flips the card with no clicks at all
+//   - FAT-fixture leg (win32 Lane 0): packages folded into the sealed /usr
+//     (os-release PACKAGES=) render [built-in] with Install DISABLED,
+//     `gucman list --all`/`info` print built-in, and an install-over-the-top
+//     round-trips [installed] -> remove -> [built-in]; the minimal-image
+//     session doubles as the negative control (no PACKAGES=, all [available])
 //
 // The punes Install button's agent address is BUTTON:n with
 // n = 1 + sortedIndex(punes): button creation order is Refresh first, then
@@ -163,6 +168,82 @@ async function main() {
   check('CLI remove beside the storefront succeeds', watch.includes('CLI-REM-RC=0'));
   check('session reached the end', out.includes('==done'));
 
+  // ---- FAT-fixture leg (win32 Lane 0): a package folded into the sealed
+  // /usr (os-release PACKAGES=) has no install-DB record, but it is NOT
+  // available — its card reads [built-in] with the Install button DISABLED,
+  // `gucman list --all` / `info` print built-in, and an install-over-the-top
+  // keeps plain installed semantics (remove returns to built-in, never to
+  // available). The minimal-image session above stays the negative control:
+  // no PACKAGES= line, everything [available]. Boots the default fat image
+  // (boot.js installs the prebaked os/os-system.img fixture; a cold
+  // standalone run bakes it privately — run the suite prebake first).
+  const fat = freshImage('os-software-fat-');
+  const fatScript = [
+    'echo ==fatboot',
+    'mkdir -p /etc/gucman',
+    `echo http://127.0.0.1:${goodPort} > /etc/gucman/repos`,
+    'software &',
+    'wmctl wait win Software',
+    // catalog-loaded barrier (startup auto-fetch), then scroll punes into
+    // view — same SB_LINEDOWN trick as the minimal leg (wait label needs
+    // a VISIBLE card).
+    `wmctl wait label '${names[0]} ${idx.packages[names[0]].version} [built-in]'`,
+    'SWID=$(wmctl list | grep "Software$" | sed "s/[^0-9].*//")',
+    ...Array.from({ length: Math.max(0, names.indexOf('punes') - 2) },
+      () => 'wmctl down $SWID 632 420 && wmctl up $SWID 632 420'),
+    `wmctl wait label 'punes ${pv} [built-in]'`,
+    'echo ==fattree',
+    'wmctl tree',
+    // the CLI surfaces agree with the cards
+    'echo ==fatcli',
+    'gucman list --all 2>/dev/null | grep "^punes"; echo LIST-RC=$?',
+    'gucman info punes 2>/dev/null | grep "installed:"; echo INFO-RC=$?',
+    // install-over-the-top: a DB record on top of the baked twin flips the
+    // card to plain [installed]; remove replays the record and lands back
+    // at [built-in] — the sealed base twin never leaves the system
+    'echo ==fatover',
+    'gucman install punes >/dev/null 2>&1; echo OVER-RC=$?',
+    `wmctl wait label 'punes ${pv} [installed]'`,
+    'gucman remove punes >/dev/null 2>&1; echo OVERRM-RC=$?',
+    `wmctl wait label 'punes ${pv} [built-in]'`,
+    'echo ==fatdone',
+  ];
+  const rf = driveBoot(fatScript, { image: fat.image, timeout: 420000 });
+  const fout = String(rf.stdout || '');
+
+  const ftree = between(fout, 'fattree', 'fatcli');
+  check('fat: punes card shows [built-in]', ftree.includes(`punes ${pv} [built-in]`),
+    ftree.slice(0, 400));
+  check('fat: no card shows [available] (every catalog package is baked)',
+    !ftree.includes('[available]'));
+  {
+    // the BUTTON right after punes's card line is its action button:
+    // label Install, DISABLED (a sealed /usr/opt package is not installable)
+    const lines = ftree.split('\n');
+    let btn = null;
+    for (let i = 0; i < lines.length; i++) {
+      if (/ class=PkgCard /.test(lines[i]) && lines[i].includes(`text='punes `)) {
+        for (let j = i + 1; j < lines.length && !btn; j++)
+          if (/ class=BUTTON /.test(lines[j])) btn = lines[j];
+        break;
+      }
+    }
+    check('fat: punes Install button is disabled',
+      btn !== null && /en=0/.test(btn) && /text='Install'/.test(btn), btn);
+  }
+  const fcli = between(fout, 'fatcli', 'fatover');
+  check('fat: gucman list --all prints built-in',
+    /^punes\s+\S+\s+built-in\s/m.test(fcli) && fcli.includes('LIST-RC=0'), fcli);
+  check('fat: gucman info prints installed: built-in',
+    /installed:\s*built-in/.test(fcli) && fcli.includes('INFO-RC=0'), fcli);
+  const fover = between(fout, 'fatover', 'fatdone');
+  check('fat: install-over-the-top succeeds (plain installed semantics)',
+    fover.includes('OVER-RC=0'), fover);
+  check('fat: remove-over-the-top succeeds (card returned to built-in)',
+    fover.includes('OVERRM-RC=0'));
+  check('fat session reached the end', fout.includes('==fatdone'));
+
+  fs.rmSync(fat.dir, { recursive: true, force: true });
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(failures ? `\nsoftware e2e: ${failures} FAILED` : '\nsoftware e2e: PASS');
   process.exit(failures ? 1 : 0);

@@ -7,7 +7,8 @@
  * storefront GUI parses it; never reformat those bytes). The HUMAN
  * surfaces are `list` (installed packages, aligned table, no network),
  * `list --all` (the full catalog cross-referenced with the install DB,
- * so every row shows installed y/n and at which version) and
+ * so every row shows installed y/n and at which version — a package baked
+ * into the sealed /usr with no DB record reads `built-in`) and
  * `info <name>` (catalog fields + install state + the planted lists
  * from the DB record).
  *
@@ -627,6 +628,46 @@ static int gm_base_version(void) {
     return v;
 }
 
+/* ========================= baked-package set =========================== */
+
+/* PACKAGES= in /usr/share/os-release names the packages folded into the
+ * sealed /usr blob (os-common.js foldPackages — the fat-image identity
+ * axis). One of these with NO install-DB record is BUILT-IN: present
+ * under /usr/opt by construction, not installable or removable. A
+ * DB record on top (installed over the base twin) keeps plain installed
+ * semantics. Comma-separated, one line; absent on a minimal image. */
+static char *gm_baked;                  /* the raw comma list, or NULL */
+static int gm_baked_loaded;
+
+static const char *gm_baked_list(void) {
+    if (gm_baked_loaded) return gm_baked;
+    gm_baked_loaded = 1;
+    size_t len;
+    char *text = gm_read_file(GM_OS_RELEASE, &len);
+    if (!text) return NULL;
+    char *m = strstr(text, "PACKAGES=");
+    if (m && (m == text || m[-1] == '\n')) {
+        char *e = strchr(m + 9, '\n');
+        size_t n = e ? (size_t)(e - (m + 9)) : strlen(m + 9);
+        gm_baked = malloc(n + 1);
+        if (gm_baked) { memcpy(gm_baked, m + 9, n); gm_baked[n] = 0; }
+    }
+    free(text);
+    return gm_baked;
+}
+
+static int gm_is_baked(const char *name) {
+    const char *p = gm_baked_list();
+    size_t nl = strlen(name);
+    while (p && *p) {
+        const char *c = strchr(p, ',');
+        size_t l = c ? (size_t)(c - p) : strlen(p);
+        if (l == nl && strncmp(p, name, nl) == 0) return 1;
+        p = c ? c + 1 : p + l;
+    }
+    return 0;
+}
+
 /* ====================== install-to-Desktop toggle ===================== */
 
 /* Q5/#90: the persistent "add new installs to Desktop" flag, shared with
@@ -1203,7 +1244,13 @@ static int cmd_list(int all) {
     int navail = 0;
     cJSON *e;
     cJSON_ArrayForEach(e, pkgs) navail++;
-    struct gm_row *rows = calloc((size_t)(navail + ninst) + 1, sizeof *rows);
+    const char *baked = gm_baked_list();
+    int nbaked = 0;
+    if (baked && *baked) {
+        nbaked = 1;
+        for (const char *p = baked; *p; p++) if (*p == ',') nbaked++;
+    }
+    struct gm_row *rows = calloc((size_t)(navail + ninst + nbaked) + 1, sizeof *rows);
     if (!rows) { cJSON_Delete(index); return 1; }
     int n = 0;
     cJSON_ArrayForEach(e, pkgs) {
@@ -1215,7 +1262,8 @@ static int cmd_list(int all) {
         snprintf(r->summary, sizeof r->summary, "%s", cJSON_IsString(s) ? s->valuestring : "");
         cJSON *db = gm_db_load(e->string);
         if (!db) {
-            snprintf(r->inst, sizeof r->inst, "no");
+            snprintf(r->inst, sizeof r->inst, "%s",
+                     gm_is_baked(e->string) ? "built-in" : "no");
         } else {
             char iv[64];
             gm_db_fields(db, iv, sizeof iv, NULL, 0);
@@ -1235,6 +1283,28 @@ static int cmd_list(int all) {
         gm_db_fields(db, iv, sizeof iv, r->summary, sizeof r->summary);
         snprintf(r->inst, sizeof r->inst, "%s (not in repository)", iv);
         cJSON_Delete(db);
+    }
+    /* baked (folded) packages the index no longer carries: still present
+     * under the sealed /usr/opt, so they stay honest rows too (the
+     * installed-not-in-repository rule, built-in flavored) */
+    for (const char *p = baked; p && *p; ) {
+        const char *c = strchr(p, ',');
+        size_t l = c ? (size_t)(c - p) : strlen(p);
+        char nm[GM_NAME_MAX];
+        if (l && l < sizeof nm) {
+            memcpy(nm, p, l);
+            nm[l] = 0;
+            char dbp[GM_PATH_MAX];
+            gm_db_path(nm, dbp, sizeof dbp);
+            if (!(pkgs && cJSON_GetObjectItemCaseSensitive(pkgs, nm)) &&
+                !gm_exists(dbp)) {
+                struct gm_row *r = &rows[n++];
+                snprintf(r->name, sizeof r->name, "%s", nm);
+                snprintf(r->ver, sizeof r->ver, "-");
+                snprintf(r->inst, sizeof r->inst, "built-in (not in repository)");
+            }
+        }
+        p = c ? c + 1 : p + l;
     }
     cJSON_Delete(index);
     qsort(rows, (size_t)n, sizeof *rows, gm_row_cmp);
@@ -1278,7 +1348,7 @@ static int cmd_info(const char *name) {
     if (gm_repo_base(base, sizeof base) == 0) index = gm_fetch_index(base);
     cJSON *pkgs = index ? cJSON_GetObjectItemCaseSensitive(index, "packages") : NULL;
     cJSON *ent = pkgs ? cJSON_GetObjectItemCaseSensitive(pkgs, name) : NULL;
-    if (!ent && !db) {
+    if (!ent && !db && !gm_is_baked(name)) {
         if (index)
             fprintf(stderr, "gucman: package '%s' is not installed and not in the repository index\n", name);
         cJSON_Delete(index);
@@ -1322,7 +1392,7 @@ static int cmd_info(const char *name) {
     }
 
     if (!db) {
-        printf("%-11s%s\n", "installed:", "no");
+        printf("%-11s%s\n", "installed:", gm_is_baked(name) ? "built-in" : "no");
     } else {
         char iv[64];
         gm_db_fields(db, iv, sizeof iv, NULL, 0);

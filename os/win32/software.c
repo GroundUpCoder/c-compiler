@@ -8,7 +8,9 @@
  *     parse its output — the one network stack stays in gucman, and a
  *     repo failure surfaces gucman's own stderr verbatim.
  *   - Install state: the install DB /var/lib/gucman/<name>.json —
- *     record-exists == installed (gucman's crash-safe contract). An
+ *     record-exists == installed (gucman's crash-safe contract); a
+ *     package folded into the sealed /usr (os-release PACKAGES=) with
+ *     no record renders "Built-in", action button disabled. An
  *     FS_WATCH on the DB dir (RegisterFdWake seam, the fileman 0123
  *     pattern) keeps the view live when a CLI `gucman install` runs
  *     beside the storefront.
@@ -98,7 +100,7 @@ static struct cat_ent *g_cat;
 static int g_ncat;
 static int g_catValid;                           /* index fetched + parsed */
 
-enum { PS_AVAILABLE, PS_INSTALLED, PS_ORPHAN, PS_NEEDSBASE };
+enum { PS_AVAILABLE, PS_INSTALLED, PS_ORPHAN, PS_NEEDSBASE, PS_BUILTIN };
 
 /* The rendered list: catalog entries + installed-but-not-in-catalog. */
 struct pkg {
@@ -234,6 +236,41 @@ static int os_base_version(void) {
     return v;
 }
 
+/* PACKAGES= in os-release names the packages folded into the sealed
+ * /usr blob (os-common.js foldPackages — the fat-image identity axis).
+ * One of these with NO install-DB record is BUILT-IN: present under
+ * /usr/opt by construction, not installable or removable; a DB record
+ * on top (installed over the base twin) keeps plain installed
+ * semantics. Comma-separated, one line; absent on a minimal image.
+ * Loaded once at startup — /usr is sealed, the line cannot change. */
+static char *g_baked;
+
+static void baked_load(void) {
+    size_t len;
+    char *text = read_whole(OS_RELEASE, &len);
+    if (!text) return;
+    char *m = strstr(text, "PACKAGES=");
+    if (m && (m == text || m[-1] == '\n')) {
+        char *e = strchr(m + 9, '\n');
+        size_t n = e ? (size_t)(e - (m + 9)) : strlen(m + 9);
+        g_baked = malloc(n + 1);
+        if (g_baked) { memcpy(g_baked, m + 9, n); g_baked[n] = 0; }
+    }
+    free(text);
+}
+
+static int is_baked(const char *name) {
+    const char *p = g_baked;
+    size_t nl = strlen(name);
+    while (p && *p) {
+        const char *c = strchr(p, ',');
+        size_t l = c ? (size_t)(c - p) : strlen(p);
+        if (l == nl && strncmp(p, name, nl) == 0) return 1;
+        p = c ? c + 1 : p + l;
+    }
+    return 0;
+}
+
 /* ------------------------------------------ install-to-Desktop toggle -- */
 
 /* The persistent Q5/#90 flag, shared with gucman (the engine reads it on
@@ -354,6 +391,7 @@ static const char *state_token(const struct pkg *p, int i) {
     case PS_INSTALLED: return "installed";
     case PS_ORPHAN:    return "installed, not in catalog";
     case PS_NEEDSBASE: return "needs newer OS";
+    case PS_BUILTIN:   return "built-in";
     default:           return "available";
     }
 }
@@ -380,6 +418,12 @@ static void model_refresh(void) {
             installed++;
             snprintf(p->version, sizeof p->version, "%s",
                      iver[0] ? iver : g_cat[i].version);
+        } else if (is_baked(p->name)) {
+            /* folded into the sealed /usr, no DB record: built-in wins
+             * over the minBase gate (it's already part of this OS) */
+            p->state = PS_BUILTIN;
+            installed++;
+            snprintf(p->version, sizeof p->version, "%s", g_cat[i].version);
         } else {
             p->state = (g_cat[i].minBase > 0 && g_base >= 0 &&
                         g_base < g_cat[i].minBase) ? PS_NEEDSBASE : PS_AVAILABLE;
@@ -415,6 +459,29 @@ static void model_refresh(void) {
             installed++;
         }
         closedir(d);
+    }
+
+    /* baked packages the catalog doesn't carry (repo changed, or the
+     * catalog is unreachable): present under the sealed /usr regardless,
+     * so they stay listed — the orphan rule, built-in flavored */
+    for (const char *bp = g_baked; bp && *bp; ) {
+        const char *c = strchr(bp, ',');
+        size_t l = c ? (size_t)(c - bp) : strlen(bp);
+        char name[64];
+        if (l && l < sizeof name) {
+            memcpy(name, bp, l);
+            name[l] = 0;
+            int known = 0;
+            for (int i = 0; i < g_ncat && !known; i++)
+                known = strcmp(g_cat[i].name, name) == 0;
+            if (!known && !db_lookup(name, NULL, 0, NULL, 0)) {
+                struct pkg *p = pkg_add();
+                snprintf(p->name, sizeof p->name, "%s", name);
+                p->state = PS_BUILTIN;           /* version unknown offline */
+                installed++;
+            }
+        }
+        bp = c ? c + 1 : bp + l;
     }
 
     /* header subtitle + empty-list notice */
@@ -470,7 +537,9 @@ static void card_sync(int i) {
     SetWindowText(p->card, text);
     int inst = p->state == PS_INSTALLED || p->state == PS_ORPHAN;
     SetWindowText(p->btn, inst ? "Remove" : "Install");
-    EnableWindow(p->btn, g_job == JOB_NONE && p->state != PS_NEEDSBASE);
+    /* built-in: sealed /usr/opt — neither installable nor removable */
+    EnableWindow(p->btn, g_job == JOB_NONE && p->state != PS_NEEDSBASE &&
+                         p->state != PS_BUILTIN);
     InvalidateRect(p->card, NULL, TRUE);
 }
 
@@ -678,6 +747,9 @@ static LRESULT CALLBACK card_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             } else if (p->state == PS_ORPHAN) {
                 snprintf(st, sizeof st, "Installed (not in catalog)");
                 stc = RGB(0, 128, 48);
+            } else if (p->state == PS_BUILTIN) {
+                snprintf(st, sizeof st, "Built-in");
+                stc = RGB(0, 128, 48);
             } else if (p->state == PS_NEEDSBASE) {
                 snprintf(st, sizeof st, "Needs OS v%d",
                          p->cat ? p->cat->minBase : 0);
@@ -844,6 +916,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 
 int main(void) {
     g_base = os_base_version();
+    baked_load();
     const char *home = getenv("HOME");
     if (!home || !*home) home = "/root";
     char cache[280];
