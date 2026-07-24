@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<!-- NetSurf Lane 4 layout-fidelity fixture: table row/column geometry.
+     A collapsed 3x2 table of exact 100x50 solid-colour cells at the
+     document origin — test_netsurf_layout_e2e.js asserts every cell
+     centre colour and the cell boundaries at exact pixel coordinates,
+     so any table-layout regression (spacing, sizing, row heights)
+     moves probed pixels. -->
+<html>
+<head><title>Table</title></head>
+<body style="margin:0;background:#ffffff">
+<table style="border-collapse:collapse;border-spacing:0" cellpadding="0" cellspacing="0">
+<tr>
+<td style="width:100px;height:50px;padding:0;background:#ff0000"></td>
+<td style="width:100px;height:50px;padding:0;background:#00c800"></td>
+<td style="width:100px;height:50px;padding:0;background:#0000ff"></td>
+</tr>
+<tr>
+<td style="width:100px;height:50px;padding:0;background:#ffd800"></td>
+<td style="width:100px;height:50px;padding:0;background:#ff00ff"></td>
+<td style="width:100px;height:50px;padding:0;background:#00ffff"></td>
+</tr>
+</table>
+</body>
+</html>

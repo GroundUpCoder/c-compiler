@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <limits.h>
 #include <unistd.h>
 
@@ -249,12 +250,37 @@ static void gucos_run(void)
 }
 
 /**
+ * true when an argument starts with an RFC 3986 scheme (ALPHA
+ * *( ALPHA / DIGIT / "+" / "-" / "." ) ":") — which is what makes
+ * scheme-only urls like data: and about: reachable from the command
+ * line (a bare "://" test missed them).
+ */
+static bool arg_has_scheme(const char *arg)
+{
+	size_t i;
+
+	if (!isalpha((unsigned char)arg[0])) {
+		return false;
+	}
+	for (i = 1; arg[i] != '\0'; i++) {
+		if (arg[i] == ':') {
+			return true;
+		}
+		if (!isalnum((unsigned char)arg[i]) &&
+		    (arg[i] != '+') && (arg[i] != '-') && (arg[i] != '.')) {
+			return false;
+		}
+	}
+	return false;
+}
+
+/**
  * turn a command line argument into a url to open: an url scheme is
  * used as-is, anything else is a filesystem path.
  */
 static nserror gucos_url_from_arg(const char *arg, nsurl **url_out)
 {
-	if (strstr(arg, "://") != NULL) {
+	if (arg_has_scheme(arg)) {
 		return nsurl_create(arg, url_out);
 	}
 
@@ -348,11 +374,14 @@ int main(int argc, char **argv)
 	urldb_load(nsoption_charp(url_file));
 	urldb_load_cookies(nsoption_charp(cookie_file));
 
-	/* open the initial browsing context */
+	/* open the initial browsing context: about:welcome redirects to
+	 * resource:welcome.html — the baked gucOS start page under
+	 * /usr/share/netsurf/ (a user drop-in at ~/.netsurf/welcome.html
+	 * wins, the respath order) */
 	if (argc > 1) {
 		ret = gucos_url_from_arg(argv[1], &url);
 	} else {
-		ret = nsurl_create("about:blank", &url);
+		ret = nsurl_create("about:welcome", &url);
 	}
 	if (ret != NSERROR_OK) {
 		die("bad initial url");

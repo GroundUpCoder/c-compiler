@@ -114,6 +114,8 @@ const tests = [
   ['test_ctlpanel_e2e.js', IMG], // 0048: control panel — AUDIO_GAIN control plane end to end (__audio_gain import, kernel state across processes), os-release//proc info panel
   ['test_term_e2e.js', IMG],     // 0020: /bin/term — hush on a pty in a window, vi inside, resize reflow, shot pixels
   ['test_netsurf_e2e.js', IMG],  // NetSurf Lane 2: the gucOS frontend renders real documents in-window — ~600-TU build, freetype AA text pixels, title-follows-<title>, resize reflow (float re-wrap), wheel/PageDown/Home scroll, click-a-link navigation, wmctl close exit
+  ['test_netsurf_layout_e2e.js', IMG],  // NetSurf Lane 4: layout fidelity as exact box geometry — table cell grid, margin/border/padding arithmetic, inline-block wrap, form-control rendering, serif/mono-bold faces really load
+  ['test_netsurf_content_e2e.js', IMG], // NetSurf Lane 4: in-app image decode (GIF/BMP/ICO/PNG + data:-URI + scaled), data:text/html from the CLI, the fetch-error page, the baked welcome page + about:logo, the Desktop icon seed
   ['test_present_e2e.js', IMG],  // 0119: /bin/sent + /bin/mgp — demo decks render (glyphs, %default bg, %tab icons), paging, q quits
   ['test_mgpp_e2e.js', IMG],     // 0272: /bin/mgpp — MagicPointPlus fork (-DMGPP): left-half click / Left arrow go BACK, right-half / Right arrow forward; space/b/q unchanged (pixel-identity page assertions)
   ['test_mgp_livereload_e2e.js', IMG], // #75/0264: mgp live-reload — the deck watch is wantreload()'s ONE source (ctime poll gone): external tmp+rename-over and truncate-rewrite saves re-render, background-color-proven

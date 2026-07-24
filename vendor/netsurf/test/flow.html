@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<!-- NetSurf Lane 4 layout-fidelity fixture: block box model + inline-
+     block flow. Box 1 exercises margin/border/padding arithmetic (navy
+     5px border box at x 20..250, y 20..110; yellow background paints
+     content + padding; a red 100x40 inner block at content origin).
+     Box 2 exercises inline-block wrapping: three 150x40 blocks in a
+     320px container (font-size:0 kills whitespace gaps) — two fit on
+     line one, the third wraps. test_netsurf_layout_e2e.js probes exact
+     coordinates derived from this arithmetic. -->
+<html>
+<head><title>Flow</title></head>
+<body style="margin:0;background:#ffffff">
+<div style="margin:20px 0 0 20px;border:5px solid #000080;padding:10px;width:200px;height:60px;background:#ffd800">
+<div style="width:100px;height:40px;background:#ff0000"></div>
+</div>
+<div style="margin:20px 0 0 0;width:320px;background:#c0c0c0;font-size:0">
+<span style="display:inline-block;width:150px;height:40px;background:#00c800"></span>
+<span style="display:inline-block;width:150px;height:40px;background:#0000ff"></span>
+<span style="display:inline-block;width:150px;height:40px;background:#ff00ff"></span>
+</div>
+</body>
+</html>

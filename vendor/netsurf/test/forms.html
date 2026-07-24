@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<!-- NetSurf Lane 4 layout-fidelity fixture: form control RENDERING
+     (no submit — file-only browser). Each control sits in its own
+     40px yellow row strip so the e2e can locate it without pinning
+     the internal.css control metrics: per row it asserts the control
+     painted (enough non-yellow pixels in the band), and rows 3 vs 4
+     (unchecked vs checked checkbox, otherwise identical) must differ
+     — the check glyph itself. -->
+<html>
+<head><title>Forms</title></head>
+<body style="margin:0;background:#ffffff">
+<div style="height:40px;background:#ffd800"><input type="text" value="hello" style="width:150px"></div>
+<div style="height:40px;background:#ffd800"><input type="button" value="Press"></div>
+<div style="height:40px;background:#ffd800"><input type="checkbox"></div>
+<div style="height:40px;background:#ffd800"><input type="checkbox" checked></div>
+<div style="height:40px;background:#ffd800"><input type="radio" checked></div>
+<div style="height:40px;background:#ffd800"><select><option>One</option><option>Two</option></select></div>
+<div style="height:60px;background:#ffd800"><textarea rows="2" cols="12">text</textarea></div>
+</body>
+</html>

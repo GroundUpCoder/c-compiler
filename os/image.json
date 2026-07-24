@@ -1,5 +1,5 @@
 {
-  "version": 159,
+  "version": 160,
   "overlays": [
     {
       "id": "clang-apps",
@@ -134,6 +134,9 @@
       },
       "/usr/share/netsurf/favicon.png": {
         "bin": "vendor/netsurf/netsurf/resources/favicon.png"
+      },
+      "/usr/share/netsurf/welcome.html": {
+        "text": "welcome.html"
       },
       "/usr/share/netsurf/mime.types": {
         "content": "# Extension -> MIME type map for file:// browsing, consulted by\n# /bin/netsurf (the monkey filetype resolver; /etc/mime.types, if\n# present, is preferred over this file). Standard mime.types lines:\n# TYPE<ws>EXT [EXT...].\ntext/html\thtml htm\ntext/css\tcss\ntext/plain\ttxt text conf log md\nimage/png\tpng\nimage/jpeg\tjpg jpeg\nimage/gif\tgif\nimage/bmp\tbmp\nimage/ico\tico\n"
@@ -314,6 +317,15 @@
       },
       "/usr/share/fonts/sans_italic_bold.ttf": {
         "bin": "vendor/fonts/NotoSans-BoldItalic.ttf"
+      },
+      "/usr/share/fonts/serif.ttf": {
+        "bin": "vendor/fonts/NotoSerif-Regular.ttf"
+      },
+      "/usr/share/fonts/serif_bold.ttf": {
+        "bin": "vendor/fonts/NotoSerif-Bold.ttf"
+      },
+      "/usr/share/fonts/mono_bold.ttf": {
+        "bin": "vendor/fonts/NotoSansMono-Bold.ttf"
       },
       "/usr/share/sounds/scheme": {
         "content": "# Event-sound scheme (todos/0094), consulted by PlaySound/MessageBeep\n# (os/win32) and the wm startup chime through os/sounds.h. Three layers\n# overlaid per key, highest wins: ~/.config/sounds, /etc/sounds,\n# /usr/share/sounds/scheme. Lines: EVENT<ws>WAV-PATH; the value `none`\n# silences that event; the reserved key `mute on` silences all of them\n# (the Control Panel Sounds applet toggles it).\nSystemStart\t/usr/share/sounds/startup.wav\nSystemDefault\t/usr/share/sounds/ding.wav\nSystemHand\t/usr/share/sounds/chord.wav\nSystemQuestion\t/usr/share/sounds/ding.wav\nSystemExclamation\t/usr/share/sounds/chimes.wav\nSystemAsterisk\t/usr/share/sounds/ding.wav\nBell\t/usr/share/sounds/ding.wav\n"
@@ -620,6 +632,9 @@
       },
       "/root/Desktop/fileman": {
         "link": "/usr/bin/fileman"
+      },
+      "/root/Desktop/netsurf": {
+        "link": "/usr/bin/netsurf"
       },
       "/root/Desktop/calc": {
         "link": "/usr/bin/calc"

@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<!-- The gucOS browser start page, baked to /usr/share/netsurf/welcome.html
+     (os/image.json). A bare `netsurf` opens about:welcome, which the about
+     fetcher redirects to resource:welcome.html — resolving here through
+     the respaths (a user copy at ~/.netsurf/welcome.html wins). File-only
+     by design: every link below is a file: or about: url the v1 browser
+     can actually fetch (no networking, no JavaScript). -->
+<html>
+<head>
+<title>Welcome to gucOS</title>
+<style type="text/css">
+body { margin: 0; background: #ffffff; color: #202020;
+       font-family: sans-serif; }
+#band { background: #000080; color: #ffffff; padding: 12px 20px; }
+#band h1 { margin: 0; font-size: 28px; }
+#band p { margin: 2px 0 0 0; font-size: 15px; font-style: italic; }
+#page { padding: 12px 20px; }
+h2 { font-family: serif; font-size: 20px; color: #000080;
+     border-bottom: 1px solid #c0c0c0; padding-bottom: 2px; }
+td { padding: 2px 14px 2px 0; }
+kbd { font-family: monospace; background: #eeeeee; padding: 0 4px;
+      border: 1px solid #c0c0c0; }
+</style>
+</head>
+<body>
+<div id="band">
+<img src="about:logo" alt="NetSurf" width="32" height="32" style="float:right">
+<h1>Welcome to gucOS</h1>
+<p>NetSurf &mdash; a real browser engine, compiled to WebAssembly, running in your OS-in-a-tab.</p>
+</div>
+<div id="page">
+<h2>Browse your files</h2>
+<p>This browser speaks <b>file:</b> and <b>data:</b> urls &mdash; no network, no scripts, just documents.</p>
+<table>
+<tr><td><a href="file:///root/">Your home folder</a></td>
+    <td>directory listings are pages too</td></tr>
+<tr><td><a href="file:///usr/share/netsurf/">Browser resources</a></td>
+    <td>the engine's own files</td></tr>
+</table>
+<h2>Keys</h2>
+<table>
+<tr><td><kbd>Alt</kbd>+<kbd>&larr;</kbd> / <kbd>Alt</kbd>+<kbd>&rarr;</kbd></td><td>history back / forward</td></tr>
+<tr><td><kbd>Backspace</kbd></td><td>back</td></tr>
+<tr><td><kbd>PageUp</kbd> / <kbd>PageDown</kbd> / wheel</td><td>scroll</td></tr>
+<tr><td><kbd>Home</kbd> / <kbd>End</kbd></td><td>top / bottom of the page</td></tr>
+</table>
+<h2>Opening pages</h2>
+<p>Double-click any <b>.html</b> file on the desktop or in the file manager,
+or run <kbd>netsurf /path/page.html</kbd> from a terminal.</p>
+</div>
+</body>
+</html>

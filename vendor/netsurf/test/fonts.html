@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<!-- NetSurf Lane 4 font-family fixture: the same word at the same
+     origin in four generic families, one 40px row each. The e2e
+     asserts row 1 (sans) vs row 2 (serif) render DIFFERENT pixels —
+     proving the baked serif.ttf actually loads (without it, serif
+     falls back to sans and the rows are identical) — and row 3
+     (mono) vs row 4 (mono bold) differ likewise for mono_bold.ttf. -->
+<html>
+<head><title>Fonts</title></head>
+<body style="margin:0;background:#ffffff;font-size:24px">
+<div style="height:40px"><span style="font-family:sans-serif">Waxy quill</span></div>
+<div style="height:40px"><span style="font-family:serif">Waxy quill</span></div>
+<div style="height:40px"><span style="font-family:monospace">Waxy quill</span></div>
+<div style="height:40px"><span style="font-family:monospace;font-weight:bold">Waxy quill</span></div>
+</body>
+</html>
