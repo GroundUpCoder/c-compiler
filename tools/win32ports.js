@@ -27,6 +27,7 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const CompilerJS = require(path.join(ROOT, 'compiler.js'));
+const COMMON = require(path.join(ROOT, 'os/os-common.js'));
 const MANIFEST = path.join(ROOT, 'os/win32/ports.json');
 const REPORT = path.join(ROOT, 'os/win32/PORTS.md');
 
@@ -59,6 +60,11 @@ function compileTarget(projPath) {
                                             os-common buildProject — freetype
                                             rides under both menucore.json
                                             and lib.json since 0259) */
+  const srcRootDirs = {};                /* Lane A srcRoots plumbing, the
+                                            buildProject twin: the require
+                                            blocks in windows.h/gdi32.c (B2)
+                                            resolve against these and dedup
+                                            against the explicit TU list */
   (function expand(p) {
     if (seen.has(p)) return;
     seen.add(p);
@@ -66,6 +72,18 @@ function compileTarget(projPath) {
     const proj = JSON.parse(fs.readFileSync(path.join(ROOT, p), 'utf8'));
     for (const d of proj.deps || []) expand(normalize(dir + '/' + d));
     for (const inc of proj.includes || []) pp.includePaths.push(normalize(dir + '/' + inc));
+    for (const ns of Object.keys(proj.srcRoots || {})) {
+      const mapped = normalize(dir + '/' + proj.srcRoots[ns]);
+      if (srcRootDirs[ns] !== undefined) {
+        if (srcRootDirs[ns] !== mapped) {
+          throw new Error(projPath + ': conflicting srcRoot remap of "' + ns + '": ' +
+            srcRootDirs[ns] + ' vs ' + mapped);
+        }
+        continue;
+      }
+      srcRootDirs[ns] = mapped;
+      pp.sourceRoots.push({ prefix: ns, dir: mapped });
+    }
     for (const a of proj.compilerArgs || []) {
       if (a.startsWith('-D')) {
         const def = a.substring(2), eq = def.indexOf('=');
@@ -129,6 +147,15 @@ function generateReport(manifest, results) {
   L.push('Do not edit by hand — regenerate after changing os/win32 or a vendored');
   L.push('port, and keep it committed (`--check` verifies freshness).');
   L.push('');
+  L.push('win32 apps also build IN-OS (the source-lib design, Lane B2): `cc app.c`');
+  L.push('with `#include <windows.h>` pulls the whole veneer + freetype through the');
+  L.push('header\'s `__require_source` block; wWinMain apps compile');
+  L.push('`cc -DUNICODE app.c /usr/src/win32/wwinmain.c` (the CRT shim stays an');
+  L.push('explicit per-app TU). On a minimal image, `gucman install win32` plants');
+  L.push('the headers/sources under /usr/local/{include,src} first; the fat image');
+  L.push('bakes them at /usr/{include,src}. `.res` resource sidecars remain');
+  L.push('host-only (tools/win32rc.js — an in-OS rc compiler is a follow-on).');
+  L.push('');
   L.push('| target | status | missing |');
   L.push('|--------|--------|---------|');
   for (const t of manifest.targets) {
@@ -188,6 +215,22 @@ function generateReport(manifest, results) {
 const manifest = JSON.parse(fs.readFileSync(MANIFEST, 'utf8'));
 const results = new Map();
 let failed = false;
+
+/* The §4.4 require-block drift gate (Lane B2): the hand-written
+ * __require_source blocks in windows.h/menucore.h/gdi32.c must equal the
+ * lib.json truth (os-common win32RequireDriftErrors is the ONE checker,
+ * shared with tools/mkpkg.js). Runs first — a drifted block makes every
+ * target result suspect. --check runs in the kernel suite, so this is the
+ * CI tripwire. */
+const drift = COMMON.win32RequireDriftErrors((rel) => {
+  try { return fs.readFileSync(path.join(ROOT, rel), 'utf8'); } catch (e) { return null; }
+});
+if (drift.length) {
+  for (const d of drift) console.error('FAIL ' + d);
+  failed = true;
+} else {
+  console.log('ok   require blocks in sync with lib.json (§4.4 drift gate)');
+}
 
 for (const t of manifest.targets) {
   const r = compileTarget(t.project);

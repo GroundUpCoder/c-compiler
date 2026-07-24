@@ -42,6 +42,15 @@
  */
 #pragma once
 
+/* menucore.h wants windows.h for DECLARATIONS only — an engine consumer
+ * (wm.c, term, the menucore.json subset link) links menucore.c + gdi32.c
+ * (+ freetype), never the full veneer, so windows.h's §4.1 require block
+ * must not fire on its behalf (see the guard note in windows.h: define
+ * before the FIRST windows.h inclusion of the compile; a TU wanting the
+ * full veneer includes <windows.h> before this header). */
+#ifndef WIN32_NO_REQUIRE_SOURCES
+#define WIN32_NO_REQUIRE_SOURCES
+#endif
 #include <windows.h>
 
 /* Engine geometry (shared with any front-end; SM_CYMENU must agree). */
@@ -195,3 +204,12 @@ void mc_level_paint(int k);
  * behavior, kept front-end-opt-in): cycle the hot row to the next
  * enabled row whose label starts with `ch` (case-insensitive). */
 void mc_typeahead(int ch);
+
+/* ---------------- the menucore require block (source-lib design §4.1) ----
+ * The menucore.json split, FS-shaped: an in-OS menucore-only consumer
+ * (the wm.c link set — engine + its gdi32 raster base, NO user32) pulls
+ * exactly these two TUs; host-side menucore.json lists them explicitly
+ * and the path-identity dedup no-ops the require. gdi32.c carries the
+ * freetype requires (§4.2), so they chain transitively from here. */
+__require_source("win32/menucore.c");
+__require_source("win32/gdi32.c");

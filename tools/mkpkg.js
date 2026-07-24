@@ -402,12 +402,21 @@ async function buildPackage(name, poolDir) {
   // srclib (source-lib design §3.1): shape-validate early; the mapped dirs
   // are checked against the ASSEMBLED payload after the build, and the
   // section rides into control.json for gucman's install plant.
-  // TODO(Lane B2): the §4.4 drift gate belongs here — assert windows.h's
-  // require set == lib.json ∪ menucore.json sources (as win32/<basename>)
-  // and gdi32.c's freetype require set == freetype lib.json sources, once
-  // the require blocks exist.
   const srclib = pkg.srclib !== undefined
     ? COMMON.validateSrclibShape(pkg.srclib, `package '${name}'`) : null;
+  // The §4.4 require-block drift gate (Lane B2): the win32 payload ships
+  // windows.h/menucore.h/gdi32.c whose hand-written __require_source
+  // blocks must equal the lib.json truth — refuse to build a package that
+  // would plant a drifted veneer. (tools/win32ports.js runs the same gate
+  // host-side; os-common win32RequireDriftErrors is the ONE checker.)
+  if (name === 'win32') {
+    const drift = COMMON.win32RequireDriftErrors((rel) => {
+      try { return fs.readFileSync(path.join(ROOT, rel), 'utf8'); } catch (e) { return null; }
+    });
+    if (drift.length) {
+      throw new Error(`package '${name}': require-block drift\n  ` + drift.join('\n  '));
+    }
+  }
 
   const entryFor = (file, sha, size) => ({
     version: pkg.version,

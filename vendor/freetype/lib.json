@@ -7,6 +7,7 @@
     "-DFT_MAKE_OPTION_SINGLE_OBJECT",
     "-DFT_CONFIG_OPTION_NO_ASSEMBLER"
   ],
+  "srcRoots": { "freetype": "srclib" },
   "sources": [
     "srclib/ftbase.c",
     "srclib/ftsystem.c",

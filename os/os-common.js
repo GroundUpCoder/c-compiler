@@ -88,10 +88,19 @@ function createCcDriver(CompilerJS, kfs) {
     // (/usr/local/*, writable) precedes the baked tier (/usr/*, sealed) —
     // the PATH/cfgstore convention. Builtin headers/sources still ALWAYS
     // beat these ambient dirs; only an explicit -I may shadow a builtin.
-    // '..' inside resolved paths is handed to kfs UN-normalized; the
-    // BlockFS/MountFS walk resolves it POSIX-style through symlinks.
     pp.systemIncludePaths = ['/usr/local/include', '/usr/include'];
     pp.sourcePaths = ['/usr/local/src', '/usr/src'];
+    // Physical TU paths (Lane B2, amending the design's §1.5 premise): kfs
+    // collapses '..' LEXICALLY before its walk (host.js _walkPath —
+    // logical, not physical), so a TU compiled under its VISIBLE tier path
+    // (/usr/src/win32/gdi32.c, a symlink-farm entry) would mis-resolve its
+    // own '..'-relative includes ("../fontcore.h" -> /usr/src/fontcore.h,
+    // ENOENT — never entering the symlink). The realpath hook makes
+    // parseAllUnits compile every TU under its PHYSICAL path
+    // (/usr/opt/win32/src/win32/gdi32.c), inside the payload's real tree
+    // where lexical == physical. realpathPhysical exists on BlockFS,
+    // MountFS and RemoteFS alike (todos/0263).
+    pp.realpath = function (p) { return kfs.realpathPhysical(p); };
 
     var outputFile = 'a.out';
     var sources = [];
@@ -722,6 +731,62 @@ function validateSrclibShape(srclib, label) {
   return { include: include, src: src };
 }
 
+/* ---- the require-block drift gate (source-lib design §4.4, Lane B2) ----
+ *
+ * The hand-written __require_source blocks in the win32 veneer WILL drift
+ * from the lib.json truth without a tripwire. Given a repo-relative text
+ * reader (string|null), cross-checks:
+ *   - os/win32/include/windows.h's require set == lib.json ∪ menucore.json
+ *     sources, as win32/<basename> (§4.1)
+ *   - os/win32/menucore.h's require set == menucore.json sources (§4.1 —
+ *     the menucore-only in-OS link set)
+ *   - os/win32/gdi32.c's require set == vendor/freetype/lib.json sources,
+ *     as freetype/<shim basename> (§4.2 — vendor knowledge stays with its
+ *     consumer)
+ * Returns an array of human-readable mismatch strings (empty = in sync).
+ * Callers fail LOUD: tools/mkpkg.js refuses to build the win32 package,
+ * tools/win32ports.js fails its run and its --check (the kernel-suite
+ * tripwire). */
+function win32RequireDriftErrors(readText) {
+  function mustRead(relPath) {
+    var text = readText(relPath);
+    if (text === null || text === undefined)
+      throw new Error('require-drift gate: cannot read ' + relPath);
+    return text;
+  }
+  function requiresOf(relPath) {
+    var out = [], re = /^__require_source\("([^"]+)"\);/gm, m;
+    var text = mustRead(relPath);
+    while ((m = re.exec(text)) !== null) out.push(m[1]);
+    return out;
+  }
+  function sourcesOf(relPath, ns) {
+    return (JSON.parse(mustRead(relPath)).sources || []).map(function (s) {
+      return ns + '/' + s.replace(/^.*\//, '');
+    });
+  }
+  function diff(label, actual, expected) {
+    var errs = [], a = {}, e = {};
+    actual.forEach(function (n) { a[n] = true; });
+    expected.forEach(function (n) { e[n] = true; });
+    expected.forEach(function (n) {
+      if (!a[n]) errs.push(label + ' is missing __require_source("' + n + '") (require-block drift, design §4.4)');
+    });
+    actual.forEach(function (n) {
+      if (!e[n]) errs.push(label + ' has a stray __require_source("' + n + '") no lib.json source backs (require-block drift, design §4.4)');
+    });
+    return errs;
+  }
+  var veneer = sourcesOf('os/win32/lib.json', 'win32')
+    .concat(sourcesOf('os/win32/menucore.json', 'win32'));
+  return diff('os/win32/include/windows.h',
+      requiresOf('os/win32/include/windows.h'), veneer)
+    .concat(diff('os/win32/menucore.h',
+      requiresOf('os/win32/menucore.h'), sourcesOf('os/win32/menucore.json', 'win32')))
+    .concat(diff('os/win32/gdi32.c',
+      requiresOf('os/win32/gdi32.c'), sourcesOf('vendor/freetype/lib.json', 'freetype')));
+}
+
 /* which: 'all' | array of names | [] (fold nothing). Returns
  * { manifest, names } — `manifest` is a deep copy with the packages folded
  * into the system section and `packagesBaked` set (which bakeSystemImage
@@ -1203,6 +1268,7 @@ var OS_COMMON = {
   foldPackages: foldPackages,
   listTreeFiles: listTreeFiles,
   validateSrclibShape: validateSrclibShape,
+  win32RequireDriftErrors: win32RequireDriftErrors,
   bakedVersion: bakedVersion,
   bakedOverlays: bakedOverlays,
   bakedPackages: bakedPackages,

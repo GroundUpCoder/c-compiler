@@ -39,6 +39,14 @@
  * A). Ported apps build -DUNICODE (0060); the implementation must not. */
 #undef UNICODE
 #undef _UNICODE
+/* A veneer-internal TU must not fire windows.h's §4.1 require block in its
+ * own TU (macro/once state is per-TU): gdi32.c is the base layer of the
+ * menucore.json SUBSET link (wm.c/term), which must never pull user32 and
+ * friends. The freetype require block at the END of this file is gdi32's
+ * own implementation dependency and stays unconditional. */
+#ifndef WIN32_NO_REQUIRE_SOURCES
+#define WIN32_NO_REQUIRE_SOURCES
+#endif
 #include <windows.h>
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -1568,3 +1576,24 @@ int StartPage(HDC hdc) { (void)hdc; return print_stub("StartPage"); }
 int EndPage(HDC hdc) { (void)hdc; return print_stub("EndPage"); }
 int EndDoc(HDC hdc) { (void)hdc; return print_stub("EndDoc"); }
 int AbortDoc(HDC hdc) { (void)hdc; return print_stub("AbortDoc"); }
+
+/* ---------------- freetype requires (source-lib design §4.2) ----
+ * Vendor knowledge stays with its consumer: gdi32.c is the TU that uses
+ * freetype, so IT names the srclib shims — not windows.h. Host-side these
+ * dedup against the freetype lib.json TUs (srcRoots {freetype: srclib});
+ * in-OS the transitive require drain pulls them from /usr/src/freetype.
+ * The set MUST equal vendor/freetype/lib.json sources — the §4.4 drift
+ * gate enforces it. Each shim is a SELF-CONTAINED TU (the three build
+ * defines live in-file, §3.4). */
+__require_source("freetype/ftbase.c");
+__require_source("freetype/ftsystem.c");
+__require_source("freetype/ftdebug.c");
+__require_source("freetype/ftinit.c");
+__require_source("freetype/autofit.c");
+__require_source("freetype/ftbitmap.c");
+__require_source("freetype/ftmm.c");
+__require_source("freetype/ftsynth.c");
+__require_source("freetype/sfnt.c");
+__require_source("freetype/truetype.c");
+__require_source("freetype/smooth.c");
+__require_source("freetype/psnames.c");

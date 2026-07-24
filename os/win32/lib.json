@@ -11,6 +11,7 @@
     "../../vendor/freetype/demo",
     "../../vendor/freetype/include"
   ],
+  "srcRoots": { "win32": "." },
   "sources": [
     "user32.c",
     "gdi32w.c",

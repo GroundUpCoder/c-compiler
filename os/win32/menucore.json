@@ -10,6 +10,7 @@
     "../../vendor/freetype/demo",
     "../../vendor/freetype/include"
   ],
+  "srcRoots": { "win32": "." },
   "sources": [
     "menucore.c",
     "gdi32.c"

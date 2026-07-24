@@ -2011,3 +2011,41 @@ int  SetMapMode(HDC hdc, int mode);
 #define SetWindowTextA        SetWindowText
 #define MessageBoxA           MessageBox
 #endif /* !UNICODE */
+
+/* ---------------- the veneer require block (source-lib design §4.1) ----
+ * ONE windows.h serves both build flavors: host-side project builds
+ * (lib.json/menucore.json list these TUs explicitly, srcRoots {win32: .}
+ * resolves each name to the SAME path, and the compiler's path-identity
+ * dedup no-ops the require — baked apps byte-identical); the in-OS cc
+ * resolves them via /usr/local/src -> /usr/src (the srclib install tiers,
+ * planted by the win32 package) and pulls the whole veneer, SDL.h-style.
+ * The set below MUST equal lib.json ∪ menucore.json sources — the §4.4
+ * drift gate (tools/mkpkg.js + tools/win32ports.js --check) enforces it.
+ * Freetype requires live with their consumer, gdi32.c (§4.2), not here.
+ * wwinmain.c is deliberately absent: the wWinMain CRT shim is a per-app
+ * explicit TU (cc -DUNICODE app.c /usr/src/win32/wwinmain.c).
+ *
+ * WIN32_NO_REQUIRE_SOURCES (the WIN32_LEAN_AND_MEAN of this veneer)
+ * suppresses the block: a SUBSET consumer that includes windows.h only
+ * for its declarations (menucore.h and the veneer's own internal TUs —
+ * the wm.c/term engine-only link set) must not pull the full veneer.
+ * Macro and pragma-once state are per-TU; required-source NAMES dedup
+ * per-compile. So the block fires once per compile, from the first TU
+ * whose windows.h inclusion sees the guard undefined — an app TU
+ * including <windows.h> directly. A TU that wants the full veneer must
+ * include <windows.h> BEFORE any subset header that defines the guard
+ * (getting it wrong surfaces as loud undefined-veneer-symbol link
+ * errors). */
+#ifndef WIN32_NO_REQUIRE_SOURCES
+__require_source("win32/user32.c");
+__require_source("win32/gdi32.c");
+__require_source("win32/gdi32w.c");
+__require_source("win32/menucore.c");
+__require_source("win32/kernel32.c");
+__require_source("win32/advapi32.c");
+__require_source("win32/crt16.c");
+__require_source("win32/shell32.c");
+__require_source("win32/winmm.c");
+__require_source("win32/comctl32.c");
+__require_source("win32/comdlg32.c");
+#endif /* !WIN32_NO_REQUIRE_SOURCES */

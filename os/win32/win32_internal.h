@@ -9,6 +9,16 @@
  */
 #pragma once
 
+/* A veneer-INTERNAL TU must never be the one that fires windows.h's §4.1
+ * require block: in a subset link (menucore.json — wm.c/term) the dep TUs
+ * compile BEFORE the front-end's sources, and an unguarded include here
+ * would pull the full veneer into an engine-only binary. Every build that
+ * legitimately wants the block has an app TU including <windows.h> first
+ * (in-OS input TUs compile before required TUs) or lists the veneer
+ * explicitly (host lib.json builds — path-identity dedup). */
+#ifndef WIN32_NO_REQUIRE_SOURCES
+#define WIN32_NO_REQUIRE_SOURCES
+#endif
 #include <windows.h>
 #include <stdint.h>
 

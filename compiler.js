@@ -1295,6 +1295,19 @@ class PPRegistry {
     this.systemIncludePaths = []; // string[] — include dirs searched AFTER builtin standardHeaders
     this.sourceRoots = [];        // [{prefix, dir}] — exact-map tier for require names (host builds)
     this.sourcePaths = [];        // string[] — search-dir tier for require names (in-OS)
+    // Optional physical-path canonicalizer for TU paths (Lane B2): a
+    // function(path) -> canonical-path|null that resolves every symlink
+    // component (realpath(3) semantics). When set, parseAllUnits compiles
+    // each TU — input files and FS-resolved required sources alike — under
+    // its PHYSICAL path, so the TU's own '..'-relative quote-includes
+    // resolve against where the file really lives. This matters when the
+    // embedder's filesystem collapses '..' LEXICALLY before its walk (the
+    // OS kfs: host.js _walkPath, "logical not physical"): a TU reached
+    // through a symlink farm (/usr/src/win32/gdi32.c) would otherwise
+    // mis-resolve "../fontcore.h" to /usr/src/fontcore.h instead of the
+    // payload's real tree. Null (the default) keeps lexical paths — host
+    // builds run on a physical-'..' filesystem and need no canonicalizing.
+    this.realpath = null;
   }
 
   loadFile(path) {
@@ -31052,11 +31065,26 @@ function parseAllUnits(fs, pp, inputFiles, options) {
   // `requiredSources`.
   const resolvedSourcePaths = new Set();
 
+  // Canonicalize a TU path to its physical location when the embedder
+  // provided a pp.realpath hook (see PPRegistry) — the canonical path is
+  // both the dedup key and the TU filename, so a TU listed explicitly and
+  // the same TU pulled through a require via a symlink farm land on ONE
+  // path, and its '..'-relative includes resolve where the file really
+  // lives. Hook absent (every host build) → the path passes through
+  // untouched, byte-identical with the pre-hook behavior. A hook miss
+  // (e.g. the probe raced a deletion) also passes through: the subsequent
+  // read produces the real diagnostic.
+  const canonicalSourcePath = (p) => {
+    const rp = pp.realpath ? pp.realpath(p) : null;
+    return (typeof rp === "string" && rp.length > 0) ? normalizeSourcePath(rp) : p;
+  };
+
   for (const file of inputFiles) {
     const source = fs.readFileSync(file, "utf-8");
-    pp.sourceBuffers.set(file, source);
-    resolvedSourcePaths.add(normalizeSourcePath(file));
-    processSource(file, source);
+    const canon = canonicalSourcePath(file);
+    pp.sourceBuffers.set(canon, source);
+    resolvedSourcePaths.add(normalizeSourcePath(canon));
+    processSource(canon, source);
   }
 
   // Resolve a validated non-builtin require name through the filesystem
@@ -31112,12 +31140,17 @@ function parseAllUnits(fs, pp, inputFiles, options) {
       hasErrors = true;
       continue;
     }
-    if (resolvedSourcePaths.has(hit.path)) continue; // path-identity dedup
-    resolvedSourcePaths.add(hit.path);
-    // Compile with the resolved path as the TU filename so the source's own
-    // quote-includes resolve relative to where it really lives; its own
-    // __require_source directives joined the drain in processSource.
-    processSource(hit.path, hit.content);
+    // Canonicalize to the physical path (pp.realpath hook, no-op host-side)
+    // BEFORE the dedup: an explicit-TU path and a require resolved through
+    // a symlink farm must land on the same key.
+    const canonPath = canonicalSourcePath(hit.path);
+    if (resolvedSourcePaths.has(canonPath)) continue; // path-identity dedup
+    resolvedSourcePaths.add(canonPath);
+    // Compile with the resolved (physical) path as the TU filename so the
+    // source's own quote-includes — '..'-relative ones included — resolve
+    // relative to where it really lives; its own __require_source
+    // directives joined the drain in processSource.
+    processSource(canonPath, hit.content);
   }
 
   if (hasErrors) {
