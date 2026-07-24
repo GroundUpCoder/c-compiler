@@ -7,6 +7,7 @@
     "imgui-clang": { "clangApp": "imgui-clang" }
   },
   "bin": { "imgui-clang": "imgui-clang" },
+  "desktop": { "cmd": "imgui-clang" },
   "menu": [
     { "group": "Demos", "entry": "imgui-clang", "cmd": "imgui-clang" }
   ]

@@ -7,6 +7,7 @@
     "glm-clang": { "clangApp": "glm-clang" }
   },
   "bin": { "glm-clang": "glm-clang" },
+  "desktop": { "cmd": "glm-clang" },
   "menu": [
     { "group": "Demos", "entry": "glm-clang", "cmd": "glm-clang" }
   ]

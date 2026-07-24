@@ -396,6 +396,22 @@ async function buildPackage(name, poolDir) {
   for (const me of pkg.menu || []) {
     if (!me.group || !me.entry || !bin[me.cmd]) throw new Error(`package '${name}': bad menu entry ${JSON.stringify(me)}`);
   }
+  // Explicit desktop eligibility (win32 source-lib design §5): an object so
+  // it can grow (icon asset, label, …); today exactly {cmd}. Absent = the
+  // package is desktop-ineligible — gucman plants icons by THIS field, not
+  // by any launchable-command heuristic.
+  if (pkg.desktop !== undefined) {
+    const d = pkg.desktop;
+    if (typeof d !== 'object' || d === null || Array.isArray(d)) {
+      throw new Error(`package '${name}': desktop must be an object {cmd}`);
+    }
+    for (const k of Object.keys(d)) {
+      if (k !== 'cmd') throw new Error(`package '${name}': desktop has an unknown key ${JSON.stringify(k)}`);
+    }
+    if (typeof d.cmd !== 'string' || !bin[d.cmd]) {
+      throw new Error(`package '${name}': desktop.cmd ${JSON.stringify(d.cmd)} names no bin command`);
+    }
+  }
   for (const fp of pkg.fonts || []) {
     if (typeof fp !== 'string' || !pkg.files[fp]) throw new Error(`package '${name}': fonts ${fp} names no package file`);
   }
@@ -453,6 +469,7 @@ async function buildPackage(name, poolDir) {
     menu: pkg.menu || [],
     fonts: pkg.fonts || [],
   };
+  if (pkg.desktop !== undefined) control.desktop = pkg.desktop;  // §5: absent = ineligible
   const payload = await assembleTree(name, pkg);
   if (srclib) {
     const dirSet = new Set(payload.filter((m) => m.dir).map((m) => m.name));

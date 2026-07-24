@@ -16,6 +16,10 @@
 //   - `gucman remove punes` replays the DB record in reverse: /opt tree,
 //     symlink, openwith key, menu entry AND the menu dirs gucman created
 //     are all gone; the DB record goes last
+//   - desktop eligibility is DATA (design §5): only a package whose def
+//     declares `desktop: {cmd}` may get a /root/Desktop icon (punes), a
+//     bin-bearing CLI tool without the field never does (jq), and mkpkg
+//     refuses a def whose desktop.cmd names no bin command
 //   - the win32 source-lib package (Lane B1, design §3.1): install plants
 //     the srclib symlink farms — /usr/local/include/<entry> per top-level
 //     include entry, /usr/local/src/<ns> per require namespace — creating
@@ -41,8 +45,39 @@ function check(name, cond, extra) {
 }
 
 async function main() {
-  const idx = ensurePackages(['punes', 'win32']);
+  const idx = ensurePackages(['punes', 'win32', 'jq']);
   const MIN = ensureMinimalImage();
+
+  /* ---- mkpkg validation (source-lib §5): desktop.cmd must name a bin ---- *
+   * Host-side negative check: a def whose desktop.cmd names no bin command
+   * FAILS the package build loudly (the field is validated at build time so
+   * gucman never sees a malformed one through the official pipeline). The
+   * bad def is written into packages/ (mkpkg has no packages-dir seam),
+   * built with --out into the temp dir, and removed again in finally. */
+  {
+    const cp = require('child_process');
+    const badDef = path.join(ROOT, 'packages', 'test-bad-desktop.json');
+    const badOut = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mkpkg-bad-'));
+    try {
+      fs.writeFileSync(badDef, JSON.stringify({
+        name: 'test-bad-desktop', version: '1.0', summary: 'negative fixture',
+        files: { tool: { content: '#!/bin/sh\necho hi\n', mode: 0o755 } },
+        bin: { tool: 'tool' },
+        desktop: { cmd: 'nope' },
+      }, null, 2) + '\n');
+      const r = cp.spawnSync(process.execPath,
+        [path.join(ROOT, 'tools', 'mkpkg.js'), '--quiet', `--out=${badOut}`, 'test-bad-desktop'],
+        { encoding: 'utf-8', timeout: 60000 });
+      check('mkpkg refuses desktop.cmd naming no bin command (exit 1)', r.status === 1,
+        `status=${r.status}`);
+      check('mkpkg refusal names the desktop.cmd cause',
+        /desktop\.cmd .* names no bin command/.test(String(r.stderr)), String(r.stderr));
+    } finally {
+      fs.rmSync(badDef, { force: true });
+      fs.rmSync(badOut, { recursive: true, force: true });
+    }
+  }
+
   const { dir: tmp, image } = freshImage('os-gucman-');
   fs.copyFileSync(MIN, image);   // copy mtime = now -> input-fresh at boot
 
@@ -254,6 +289,15 @@ async function main() {
     'echo ==deskrm',
     'gucman remove punes; echo RC3=$?',
     'test ! -e /root/Desktop/punes && echo DESK-GONE',
+    /* §5: eligibility is data, not a heuristic — a bin-bearing CLI tool
+     * (jq ships /usr/local/bin/jq but no `desktop` field) gets NO icon
+     * even with the toggle ON. This is the regression Lane C exists to
+     * create: pre-§5 the launchable-command heuristic planted one. */
+    'echo ==deskcli',
+    'gucman install jq; echo RC4=$?',
+    'readlink /usr/local/bin/jq',
+    'test ! -e /root/Desktop/jq && echo NO-CLI-DESK',
+    'gucman remove jq; echo RC5=$?',
     'echo ==done',
   ];
   const c = driveBoot(scriptC, BOOT_ARGS);
@@ -270,6 +314,12 @@ async function main() {
   const drm = section(cout, 'deskrm');
   check('uninstall removes the planted Desktop shortcut', drm.includes('DESK-GONE'), drm);
 
+  const dcli = section(cout, 'deskcli');
+  check('jq (bin-bearing CLI, no desktop field) installs fine', dcli.includes('RC4=0'), dcli);
+  check('jq bin symlink planted', dcli.includes('/opt/jq/jq'), dcli);
+  check('toggle ON + no desktop field: NO Desktop icon for jq', dcli.includes('NO-CLI-DESK'), dcli);
+  check('jq removes cleanly', dcli.includes('RC5=0'), dcli);
+
   /* ---- session D: the win32 source-lib package (Lane B1, §3.1) ---- *
    * A srclib package plants header + require-source symlink farms at the
    * standard install locations the in-OS cc searches. The tier dirs do not
@@ -280,7 +330,10 @@ async function main() {
     'test ! -e /usr/local/include && echo NO-INC-TIER',
     'test ! -e /usr/local/src && echo NO-SRC-TIER',
     'echo ==slinstall',
+    'mkdir -p /var/lib/gucman',
+    'echo on > /var/lib/gucman/desktop_shortcuts',   // §5: even with the toggle ON…
     'gucman install win32; echo RC=$?',
+    'test ! -e "/root/Desktop/win32" && echo NO-SRCLIB-DESK',  // …no bin, no field ⇒ no icon
     'readlink /usr/local/include/windows.h',
     'readlink /usr/local/src/win32',
     'test -f /usr/local/include/windows.h && echo INC-RESOLVES',
@@ -318,6 +371,8 @@ async function main() {
 
   const sli = section(dout, 'slinstall');
   check('win32 install succeeds (exit 0)', sli.includes('RC=0'), sli);
+  check('toggle ON + srclib package (no bin, no field): NO Desktop icon',
+    sli.includes('NO-SRCLIB-DESK'), sli);
   check('/usr/local/include/windows.h -> /opt/win32/include/windows.h',
     sli.includes('/opt/win32/include/windows.h'), sli);
   check('/usr/local/src/win32 -> /opt/win32/src/win32',

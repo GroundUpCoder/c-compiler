@@ -12,6 +12,7 @@
     }
   },
   "bin": { "quake": "quake" },
+  "desktop": { "cmd": "quake" },
   "menu": [
     { "group": "Games", "entry": "quake", "cmd": "quake" }
   ]

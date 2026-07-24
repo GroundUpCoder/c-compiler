@@ -920,7 +920,6 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
     struct gm_undo undo = { db_links, db_ow, db_menu, db_menu_dirs, db_fonts, db_desktop,
                             db_inc, db_srcns, db_sldirs };
     int fail = 0;
-    char primary[GM_NAME_MAX] = "";     /* the command a Desktop shortcut launches (Q5) */
     cJSON *cbin = cJSON_GetObjectItemCaseSensitive(control, "bin");
     cJSON *it;
     cJSON_ArrayForEach(it, cbin) {
@@ -949,12 +948,6 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
             break;
         }
         cJSON_AddItemToArray(db_links, cJSON_CreateString(link));
-        /* the Desktop shortcut launches the package's primary command:
-         * the one named exactly like the package if present, else the
-         * first planted command (a font/library with no command gets no
-         * shortcut — nothing to launch). */
-        if (primary[0] == 0 || strcmp(it->string, name) == 0)
-            snprintf(primary, sizeof primary, "%s", it->string);
     }
     cJSON *cow = fail ? NULL : cJSON_GetObjectItemCaseSensitive(control, "openwith");
     cJSON_ArrayForEach(it, cow) {
@@ -1124,28 +1117,39 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
         cJSON_AddItemToArray(db_srcns, cJSON_CreateString(link));
     }
 
-    /* Desktop shortcut (Q5 / #90): planted LAST, only for the user-requested
+    /* Desktop shortcut (Q5 / #90; explicit eligibility per the win32
+     * source-lib design §5): planted LAST, only for the user-requested
      * package (depth 0 — transitive library deps never clutter the desktop),
-     * only when the persistent flag is on, and only when the package ships a
-     * launchable command. It reuses the same symlink model as menu/bin
-     * entries and is RECORDED in db_desktop so uninstall's reverse replay
-     * removes exactly this and nothing else. A name collision or FS error is
-     * a warning, never an install failure — the icon is cosmetic; the
-     * install is not. */
-    if (!fail && depth == 0 && primary[0] && gm_desktop_flag()) {
-        char link[GM_PATH_MAX], target[GM_PATH_MAX];
-        snprintf(link, sizeof link, GM_DESKTOP_DIR "/%s", name);
-        snprintf(target, sizeof target, GM_BIN_DIR "/%s", primary);
-        if (gm_exists(link)) {
-            fprintf(stderr, "gucman: %s already exists — Desktop shortcut skipped\n", link);
-        } else if (gm_mkdir_p(GM_DESKTOP_DIR) != 0) {
-            fprintf(stderr, "gucman: %s: %s — Desktop shortcut skipped\n",
-                    GM_DESKTOP_DIR, strerror(errno));
-        } else if (symlink(target, link) != 0) {
-            fprintf(stderr, "gucman: planting %s: %s — Desktop shortcut skipped\n",
-                    link, strerror(errno));
+     * only when the persistent flag is on, and only when control.json
+     * DECLARES eligibility via `desktop: {cmd}` — mkpkg validates cmd
+     * against `bin` at package-build time, so eligibility is data, not a
+     * heuristic: a CLI tool or library ships no field and never gets an
+     * icon, whatever it plants in /usr/local/bin. It reuses the same
+     * symlink model as menu/bin entries and is RECORDED in db_desktop so
+     * uninstall's reverse replay removes exactly this and nothing else. A
+     * name collision, malformed field or FS error is a warning, never an
+     * install failure — the icon is cosmetic; the install is not. */
+    cJSON *cdesk = fail ? NULL : cJSON_GetObjectItemCaseSensitive(control, "desktop");
+    if (cdesk && depth == 0 && gm_desktop_flag()) {
+        cJSON *dcmd = cJSON_GetObjectItemCaseSensitive(cdesk, "cmd");
+        if (!cJSON_IsString(dcmd) || !gm_valid_name(dcmd->valuestring) ||
+            !cbin || !cJSON_GetObjectItemCaseSensitive(cbin, dcmd->valuestring)) {
+            fprintf(stderr, "gucman: '%s' has a malformed desktop entry — shortcut skipped\n", name);
         } else {
-            cJSON_AddItemToArray(db_desktop, cJSON_CreateString(link));
+            char link[GM_PATH_MAX], target[GM_PATH_MAX];
+            snprintf(link, sizeof link, GM_DESKTOP_DIR "/%s", name);
+            snprintf(target, sizeof target, GM_BIN_DIR "/%s", dcmd->valuestring);
+            if (gm_exists(link)) {
+                fprintf(stderr, "gucman: %s already exists — Desktop shortcut skipped\n", link);
+            } else if (gm_mkdir_p(GM_DESKTOP_DIR) != 0) {
+                fprintf(stderr, "gucman: %s: %s — Desktop shortcut skipped\n",
+                        GM_DESKTOP_DIR, strerror(errno));
+            } else if (symlink(target, link) != 0) {
+                fprintf(stderr, "gucman: planting %s: %s — Desktop shortcut skipped\n",
+                        link, strerror(errno));
+            } else {
+                cJSON_AddItemToArray(db_desktop, cJSON_CreateString(link));
+            }
         }
     }
 

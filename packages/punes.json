@@ -6,6 +6,7 @@
     "punes": { "project": "vendor/punes/bin.json" }
   },
   "bin": { "punes": "punes" },
+  "desktop": { "cmd": "punes" },
   "openwith": { "nes": "punes" },
   "menu": [
     { "group": "Games", "entry": "punes", "cmd": "punes" }

@@ -13,6 +13,7 @@
     }
   },
   "bin": { "sent": "sent", "slides": "slides" },
+  "desktop": { "cmd": "slides" },
   "openwith": { "sent": "sent" },
   "menu": [
     { "group": "Demos", "entry": "slides", "cmd": "slides" }

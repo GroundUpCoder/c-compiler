@@ -7,6 +7,7 @@
     "winmine.res": { "bin": "vendor/winmine/winmine.res" }
   },
   "bin": { "winmine": "winmine" },
+  "desktop": { "cmd": "winmine" },
   "menu": [
     { "group": "Games", "entry": "winmine", "cmd": "winmine" }
   ]

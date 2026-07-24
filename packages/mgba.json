@@ -6,6 +6,7 @@
     "mgba": { "project": "vendor/mgba/bin.json" }
   },
   "bin": { "mgba": "mgba" },
+  "desktop": { "cmd": "mgba" },
   "openwith": { "gba": "mgba" },
   "menu": [
     { "group": "Games", "entry": "mgba", "cmd": "mgba" }

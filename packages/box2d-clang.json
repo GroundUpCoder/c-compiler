@@ -7,6 +7,7 @@
     "box2d-clang": { "clangApp": "box2d-clang" }
   },
   "bin": { "box2d-clang": "box2d-clang" },
+  "desktop": { "cmd": "box2d-clang" },
   "menu": [
     { "group": "Demos", "entry": "box2d-clang", "cmd": "box2d-clang" }
   ]

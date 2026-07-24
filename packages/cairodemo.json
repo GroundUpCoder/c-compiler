@@ -6,6 +6,7 @@
     "cairodemo": { "project": "vendor/cairo/demo/bin.json" }
   },
   "bin": { "cairodemo": "cairodemo" },
+  "desktop": { "cmd": "cairodemo" },
   "menu": [
     { "group": "Demos", "entry": "cairodemo", "cmd": "cairodemo" }
   ]

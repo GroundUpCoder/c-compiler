@@ -15,6 +15,7 @@
     }
   },
   "bin": { "tinyrenderer-clang": "tinyrenderer-clang", "tinyrenderer-demo": "tinyrenderer-demo" },
+  "desktop": { "cmd": "tinyrenderer-demo" },
   "menu": [
     { "group": "Demos", "entry": "tinyrenderer-demo", "cmd": "tinyrenderer-demo" }
   ]
