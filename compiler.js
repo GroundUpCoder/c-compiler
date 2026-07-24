@@ -1289,6 +1289,12 @@ class PPRegistry {
     this.onceGuards = new Set();    // Set<string> — files with #pragma once
     this.standardHeaders = new Map(); // Map<string, string> — header name -> content
     this.fileReader = null;   // function(path) -> string|null — callback to read files
+    // Filesystem resolution tiers (todos/WIN32 source-lib design, Lane A).
+    // All empty by default so every existing embedding is byte-identical
+    // until an embedder opts in.
+    this.systemIncludePaths = []; // string[] — include dirs searched AFTER builtin standardHeaders
+    this.sourceRoots = [];        // [{prefix, dir}] — exact-map tier for require names (host builds)
+    this.sourcePaths = [];        // string[] — search-dir tier for require names (in-OS)
   }
 
   loadFile(path) {
@@ -2025,13 +2031,37 @@ function preprocess(filename, initialTokens, ppRegistry) {
       incPaths.push(path + target);
     }
 
+    // System include dirs (PPRegistry.systemIncludePaths — e.g. the in-OS
+    // driver's /usr/local/include, /usr/include). Searched AFTER the builtin
+    // standardHeaders on both include flavors: the builtins are the
+    // compiler's ABI surface, paired with host imports — an ambient
+    // /usr/local/include/stdio.h planted by a package or admin mistake must
+    // never hijack every compile. Only an EXPLICIT -I may shadow a builtin
+    // (existing semantics, kept). The dirs are probed in array order, so the
+    // admin tier (/usr/local/include) deliberately precedes the baked one.
+    const loadSystem = () => {
+      const sys = ppRegistry.systemIncludePaths;
+      if (!sys || sys.length === 0) return null;
+      for (const p of sys) {
+        let path = p;
+        if (path.length > 0 && path[path.length - 1] !== "/" && path[path.length - 1] !== "\\")
+          path += "/";
+        const r = loadReal(path + target);
+        if (r) return r;
+      }
+      return null;
+    };
+
     if (!angled) {
       // Quote include (C11 6.10.2p3): the including file's own directory first,
-      // then the -I paths, then the system headers.
+      // then the -I paths, then the system headers (builtins, then the
+      // system include dirs).
       let r = loadReal(baseDir + target);
       if (r) return r;
       for (const fullPath of incPaths) { r = loadReal(fullPath); if (r) return r; }
-      return loadStandard();
+      r = loadStandard();
+      if (r) return r;
+      return loadSystem();
     }
 
     // Angle include (C11 6.10.2p2): search only the -I paths and the system
@@ -2045,6 +2075,8 @@ function preprocess(filename, initialTokens, ppRegistry) {
     for (const fullPath of incPaths) { const r = loadReal(fullPath); if (r) return r; }
     const std = loadStandard();
     if (std) return std;
+    const sys = loadSystem();
+    if (sys) return sys;
     return loadReal(baseDir + target);
   }
 
@@ -30890,6 +30922,38 @@ function createDefaultPPRegistry() {
   return pp;
 }
 
+// Textual path normalization for the require-resolution path-identity dedup:
+// collapse '.'/empty components and fold 'a/b/../c' -> 'a/c'. Purely
+// lexical and deterministic — no filesystem access, no symlink resolution
+// (require-name validation forbids '..' in names, and registered source
+// roots/paths are normalized at registration, so '..' only appears here
+// from caller-supplied input paths).
+function normalizeSourcePath(p) {
+  const isAbs = p.length > 0 && p.charCodeAt(0) === 47; // '/'
+  const out = [];
+  for (const seg of p.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === ".." && out.length > 0 && out[out.length - 1] !== "..") out.pop();
+    else out.push(seg);
+  }
+  return (isAbs ? "/" : "") + out.join("/");
+}
+
+// A require name that misses the builtin and libc-ext tiers is validated
+// BEFORE any filesystem probe (the security seam): it must be a relative
+// path of [A-Za-z0-9._-]+ components — no leading '/', no '.' or '..'
+// components, no '\', no empty components. Closes
+// __require_source("../../etc/shadow")-class traversal through the resolver.
+function isValidRequireName(name) {
+  if (typeof name !== "string" || name.length === 0) return false;
+  if (name.indexOf("\\") >= 0 || name.charCodeAt(0) === 47) return false;
+  for (const seg of name.split("/")) {
+    if (seg === "" || seg === "." || seg === "..") return false;
+    if (!/^[A-Za-z0-9._-]+$/.test(seg)) return false;
+  }
+  return true;
+}
+
 function parseAllUnits(fs, pp, inputFiles, options) {
   const units = [];
   const requiredSources = new Set();
@@ -30978,22 +31042,82 @@ function parseAllUnits(fs, pp, inputFiles, options) {
     units.push(unit);
   };
 
+  // Path-identity dedup for FS-resolved required sources (the one-windows.h
+  // enabler): the set holds the textually-normalized paths of (a) the input
+  // files and (b) every FS-resolved required source. A require name whose
+  // resolved path is already in the set is skipped silently — a host-side
+  // project build that lists a TU explicitly and an in-OS compile that pulls
+  // the same TU through a require both compile it exactly once, from the
+  // same path. Builtin-name resolution keeps its name-keyed dedup via
+  // `requiredSources`.
+  const resolvedSourcePaths = new Set();
+
   for (const file of inputFiles) {
     const source = fs.readFileSync(file, "utf-8");
     pp.sourceBuffers.set(file, source);
+    resolvedSourcePaths.add(normalizeSourcePath(file));
     processSource(file, source);
   }
 
+  // Resolve a validated non-builtin require name through the filesystem
+  // tiers: sourceRoots exact map (prefix match on the FIRST path component)
+  // first, then the sourcePaths search dirs, in order. Returns
+  // {path, content} on a hit, {searched} on a miss (for the diagnostic).
+  const resolveRequiredFromFS = (name) => {
+    const searched = [];
+    const slash = name.indexOf("/");
+    if (slash > 0) {
+      const ns = name.substring(0, slash);
+      const rest = name.substring(slash + 1);
+      for (const root of pp.sourceRoots || []) {
+        if (root.prefix !== ns) continue;
+        const p = normalizeSourcePath(root.dir + "/" + rest);
+        searched.push(root.dir + " (srcRoot " + ns + ")");
+        const content = pp.loadFile(p);
+        if (content !== null) return { path: p, content };
+      }
+    }
+    for (const dir of pp.sourcePaths || []) {
+      const p = normalizeSourcePath(dir + "/" + name);
+      searched.push(dir);
+      const content = pp.loadFile(p);
+      if (content !== null) return { path: p, content };
+    }
+    return { searched };
+  };
+
   while (pendingRequiredSources.length > 0) {
     const name = pendingRequiredSources.shift();
+    // Builtin tier, then the libc-ext tier — a builtin name ALWAYS wins
+    // over the filesystem tiers: the builtin sources are the compiler's ABI
+    // surface, paired with host imports; a planted /usr/src/__SDL.c must
+    // never hijack the real one.
     const source = stdlibSources[name] || getExtLibMap()[name];
-    if (!source) {
-      writeErr(`Unknown stdlib source: ${name}\n`);
+    if (source) {
+      pp.sourceBuffers.set(name, source);
+      processSource(name, source);
+      continue;
+    }
+    if (!isValidRequireName(name)) {
+      writeErr(`invalid required source name "${name}": must be a relative path of [A-Za-z0-9._-] components (no leading '/', no '.' or '..' components, no '\\')\n`);
       hasErrors = true;
       continue;
     }
-    pp.sourceBuffers.set(name, source);
-    processSource(name, source);
+    const hit = resolveRequiredFromFS(name);
+    if (!hit.path) {
+      const where = hit.searched.length
+        ? hit.searched.join(", ")
+        : "no source roots or source paths configured";
+      writeErr(`unknown required source ${name} (not builtin; searched ${where})\n`);
+      hasErrors = true;
+      continue;
+    }
+    if (resolvedSourcePaths.has(hit.path)) continue; // path-identity dedup
+    resolvedSourcePaths.add(hit.path);
+    // Compile with the resolved path as the TU filename so the source's own
+    // quote-includes resolve relative to where it really lives; its own
+    // __require_source directives joined the drain in processSource.
+    processSource(hit.path, hit.content);
   }
 
   if (hasErrors) {
@@ -31828,6 +31952,15 @@ function main() {
         else result.push(ca);
       }
     }
+    if (proj.srcRoots) {
+      // Source-root namespaces for FS-resolved __require_source names
+      // (Lane A): each entry registers ns -> absolute dir on the registry
+      // via the --srcroot flag below; a conflicting remap of the same
+      // namespace fails loud there.
+      for (const [ns, dir] of Object.entries(proj.srcRoots)) {
+        result.push("--srcroot", ns + "=" + path.resolve(projDir, dir));
+      }
+    }
     if (proj.sources) {
       for (const src of proj.sources) result.push(path.resolve(projDir, src));
     }
@@ -31980,6 +32113,32 @@ function main() {
         process.exit(1);
       }
       compilerOptions.requireSources.push(args[++i]);
+    } else if (args[i] === "--srcroot") {
+      // Repeatable: --srcroot ns=dir registers a source-root namespace for
+      // FS-resolved __require_source names ('ns/file.c' -> dir/file.c). No
+      // default system dirs on the host CLI — host builds are explicit.
+      if (i + 1 >= args.length) {
+        process.stderr.write("Error: --srcroot requires a ns=dir argument\n");
+        process.exit(1);
+      }
+      const spec = args[++i];
+      const eqIdx = spec.indexOf("=");
+      if (eqIdx <= 0 || eqIdx === spec.length - 1) {
+        process.stderr.write("Error: --srcroot requires ns=dir format (e.g. --srcroot win32=os/win32)\n");
+        process.exit(1);
+      }
+      const ns = spec.substring(0, eqIdx);
+      const dir = path.resolve(spec.substring(eqIdx + 1));
+      const prev = pp.sourceRoots.find((r) => r.prefix === ns);
+      if (prev) {
+        if (prev.dir !== dir) {
+          process.stderr.write(`Error: conflicting --srcroot remap of namespace "${ns}": ${prev.dir} vs ${dir}\n`);
+          process.exit(1);
+        }
+        // Same namespace, same dir (diamond deps): no-op.
+      } else {
+        pp.sourceRoots.push({ prefix: ns, dir });
+      }
     } else if (args[i] === "--opfs-file") {
       if (i + 1 >= args.length) {
         process.stderr.write("Error: --opfs-file requires src:dest argument\n");

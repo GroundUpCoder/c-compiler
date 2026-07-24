@@ -83,6 +83,15 @@ function createCcDriver(CompilerJS, kfs) {
 
     var pp = CompilerJS.createDefaultPPRegistry();
     pp.fileReader = function (filePath) { return readFileText(kfs, abs(filePath)); };
+    // Standard OS install locations for system headers and require-able
+    // sources (Lane A of the source-lib design): the admin tier
+    // (/usr/local/*, writable) precedes the baked tier (/usr/*, sealed) —
+    // the PATH/cfgstore convention. Builtin headers/sources still ALWAYS
+    // beat these ambient dirs; only an explicit -I may shadow a builtin.
+    // '..' inside resolved paths is handed to kfs UN-normalized; the
+    // BlockFS/MountFS walk resolves it POSIX-style through symlinks.
+    pp.systemIncludePaths = ['/usr/local/include', '/usr/include'];
+    pp.sourcePaths = ['/usr/local/src', '/usr/src'];
 
     var outputFile = 'a.out';
     var sources = [];
@@ -177,6 +186,7 @@ function buildProject(CompilerJS, projPath, readHostFile) {
    * Diamond deps dedup on normalized path (todos/0079, matching
    * compiler.js's expandProjectJson — no realpath here, XHR context). */
   var seenProjects = {};
+  var srcRootDirs = {};   // ns -> normalized dir (conflicting-remap gate)
   (function expand(p) {
     var key = normalize(p);
     if (seenProjects[key]) return;
@@ -185,6 +195,24 @@ function buildProject(CompilerJS, projPath, readHostFile) {
     var proj = JSON.parse(readHostFile(p));
     (proj.deps || []).forEach(function (d) { expand(normalize(dir + '/' + d)); });
     (proj.includes || []).forEach(function (inc) { pp.includePaths.push(normalize(dir + '/' + inc)); });
+    /* srcRoots (Lane A): {"<ns>": "<dir-relative-to-json>"} registers a
+     * source-root namespace for FS-resolved __require_source names —
+     * 'ns/file.c' resolves to <dir>/file.c and path-identity-dedups against
+     * explicitly listed TUs. Diamond deps re-declaring the same ns -> same
+     * dir no-op; a conflicting remap of the namespace throws. */
+    Object.keys(proj.srcRoots || {}).forEach(function (ns) {
+      if (!/^[A-Za-z0-9._-]+$/.test(ns))
+        throw new Error('buildProject ' + projPath + ': invalid srcRoot namespace "' + ns + '"');
+      var mapped = normalize(dir + '/' + proj.srcRoots[ns]);
+      if (srcRootDirs[ns] !== undefined) {
+        if (srcRootDirs[ns] !== mapped)
+          throw new Error('buildProject ' + projPath + ': conflicting srcRoot remap of "' + ns +
+            '": ' + srcRootDirs[ns] + ' vs ' + mapped);
+        return;
+      }
+      srcRootDirs[ns] = mapped;
+      pp.sourceRoots.push({ prefix: ns, dir: mapped });
+    });
     (proj.compilerArgs || []).forEach(function (a) {
       if (a.lastIndexOf('-D', 0) === 0) {
         var def = a.substring(2), eq = def.indexOf('=');
