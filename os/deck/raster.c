@@ -38,10 +38,16 @@ void rc_clear(RCanvas *c, uint8_t r, uint8_t g, uint8_t b) {
 int rm_init(RMask *m, int w, int h) {
     m->w = w;
     m->h = h;
-    m->cov = (uint8_t *)calloc((size_t)w * h, 1);
-    rm_reset(m);
-    m->dx0 = m->dy0 = 0;         /* fresh calloc is already clean */
-    m->dx1 = m->dy1 = 0;
+    m->cov = (uint8_t *)calloc((size_t)w * h, 1);   /* fresh = already clean */
+    /* Empty dirty rect (rm_reset's post-state), set DIRECTLY: rm_reset here
+     * would walk the still-uninitialized bbox fields — with a garbage bbox
+     * and a failed calloc that was a wild memset (the Lane 2 maximized-
+     * render crash), and even on success the old 0-init pinned dx0/dy0 at 0
+     * and defeated the min/max bbox narrowing. */
+    m->dx0 = w;
+    m->dy0 = h;
+    m->dx1 = 0;
+    m->dy1 = 0;
     return m->cov ? 0 : -1;
 }
 

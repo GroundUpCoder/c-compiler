@@ -1,4 +1,4 @@
-/* deck.c — /bin/deck, the gucOS slide presenter (todos/0284 Lane 1;
+/* deck.c — /bin/deck, the gucOS slide presenter (todos/0284;
  * design ~/git/meta/gucos/notes/slide-tool-design.md §1). Reads the
  * frozen .deck v1 JSON (model.h), renders through the supersample-AA
  * rasterizer (raster.h) + the fontcore text layer (text.h), presents in
@@ -15,9 +15,20 @@
  *   --slide N|ID                       1-based index or slide id
  *   --ss N                             supersample override (default DECK_SS)
  *
- * Warnings always print to stderr (visible, never fatal); hard errors
- * print the structured where/offset and exit 1 — Lane 2 renders the same
- * DeckErr/DeckWarn structures on the in-window placard. */
+ * Live reload (Lane 2, the mgp blueprint over os/fswatch.h): a PATH-keyed
+ * FS_WATCH on the deck file joins the idle park (the sdlx_wait_event_fd
+ * idiom), so an external settled save — including an editor's tmp+
+ * rename-over — wakes and reloads immediately, on any slide. The
+ * RELOAD-SAFETY CONTRACT (design §1.2, the on-camera moment): a
+ * successful reload swaps decks preserving the current slide BY ID
+ * (index-clamp fallback); a broken save keeps the LAST-GOOD deck
+ * rendered under a red error banner naming the failure — the screen
+ * never blanks, the page is never lost. Ctrl-R reloads by hand (works
+ * even where FS_WATCH is ENOSYS). Warnings render as a bottom placard
+ * (strictness VISIBLE, never fatal — agents iterate) and always also
+ * print to stderr. Images are re-read on every slide render, so an image
+ * overwrite shows on the next reload/nav/resize — a per-image watch set
+ * is explicitly v1.1, not here. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,9 +36,15 @@
 #include <SDL.h>
 #include <png.h>
 
+#include "../fswatch.h"
 #include "model.h"
 #include "raster.h"
 #include "text.h"
+
+/* The kernel's unified WAIT (todos/0178): fds ⊕ input ring ⊕ timeout —
+ * how the watch fd composes into the SDL idle park (sdlx.c precedent).
+ * -2 = no kernel WAIT in this flavor (fall back to the plain park). */
+__import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
 
 /* ---- image loading (sent's pngload shape, alpha kept straight) ------ */
 
@@ -262,6 +279,77 @@ static SDL_Surface *g_surf;
 static RCanvas g_lo;               /* cached composed fit-rect canvas */
 static int g_haveLo;
 
+/* Lane 2: reload + placard state. g_warns holds the CURRENT deck's load
+ * warnings (rendered on the bottom placard); g_rlErr/g_haveErr the last
+ * failed reload (the red banner over the last-good deck). */
+static const char *g_file;         /* the deck path (reload re-reads it) */
+static int g_fsw = -1;             /* FS_WATCH fd on the deck, -1 = none */
+static DeckWarn *g_warns;
+static int g_nwarns;
+static DeckErr g_rlErr;
+static int g_haveErr;
+
+/* Reload (auto via the watch, or Ctrl-R): re-read + re-parse the deck.
+ * Success swaps decks preserving the current slide by ID (an agent
+ * reordering slides keeps the presenter where the author is working);
+ * a vanished id falls back to the index clamp. Failure keeps the
+ * LAST-GOOD deck + arms the banner — never blank, never lose the page. */
+static void reload_deck(void) {
+    DeckErr err;
+    DeckWarn *warns;
+    int nwarns;
+    Deck *nd = deck_load(g_file, &err, &warns, &nwarns);
+    if (!nd) {
+        print_warns(warns, nwarns);
+        free(warns);
+        print_err(g_file, &err);
+        fprintf(stderr, "deck: holding last-good deck (%d slide%s)\n",
+                g_deck->nslides, g_deck->nslides == 1 ? "" : "s");
+        g_rlErr = err;
+        g_haveErr = 1;
+        g_dirty = 1;
+        return;
+    }
+    int idx = deck_slide_index(nd, g_deck->slides[g_cur].id);
+    if (idx < 0)
+        idx = g_cur < nd->nslides ? g_cur : nd->nslides - 1;
+    print_warns(warns, nwarns);
+    free(g_warns);
+    g_warns = warns;
+    g_nwarns = nwarns;
+    deck_free(g_deck);
+    g_deck = nd;
+    g_cur = idx;
+    g_haveErr = 0;
+    g_dirty = 1;
+    fprintf(stderr, "deck: reloaded %s: %d slide%s, %d warning%s\n",
+            g_file, nd->nslides, nd->nslides == 1 ? "" : "s",
+            nwarns, nwarns == 1 ? "" : "s");
+}
+
+/* WAIT-first contract (fswatch.h): the park already happened; drain the
+ * watch until EAGAIN, then act ONCE. React on CLOSE_WRITE (a settled
+ * save — plain or rename-over) and OVERFLOW (records dropped: re-read is
+ * exactly the rescan). CREATE/DELETE/SELF_GONE alone are mid-save shapes
+ * (delete-then-recreate editors); the settle that follows lands
+ * CLOSE_WRITE — the mgp wantreload() rule. */
+static int want_reload(void) {
+    if (g_fsw < 0)
+        return 0;
+    return (fsw_drain(g_fsw) &
+            (FSW_BIT(FSW_CLOSE_WRITE) | FSW_BIT(FSW_OVERFLOW))) != 0;
+}
+
+/* Idle park: block on the OS input ring ⊕ the deck watch fd (kernel
+ * unified WAIT), peek semantics — a waking input event stays queued for
+ * the next frame's SDL_PollEvent; a waking watch fd is drained by
+ * want_reload() at the next frame entry. No kernel WAIT -> plain park. */
+static void park(int ms) {
+    if (g_fsw >= 0 && __wait(&g_fsw, 1, 1, ms) != -2)
+        return;
+    SDL_WaitEventTimeout(NULL, ms);
+}
+
 static void nav_to(int idx) {
     if (idx < 0)
         idx = 0;
@@ -306,6 +394,65 @@ static void blit(void) {
     SDL_UpdateWindowSurface(g_win);
 }
 
+/* ---- placards (Lane 2): the reload-safety contract, rendered -------- */
+
+/* A full-width translucent band + wrapped text, composited over the slide
+ * canvas (so shots and the compositor both carry it). Present-mode only —
+ * render_slide stays pure and --shot goldens never see a placard. */
+static void placard_band(RCanvas *c, float y, float h,
+                         uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+    RMask m;
+    if (rm_init(&m, c->w, c->h))
+        return;
+    rm_fill_rrect(&m, 0, y, (float)c->w, h, 0);
+    rm_composite(c, &m, r, g, b, a);
+    rm_free(&m);
+}
+
+static void draw_placards(RCanvas *c) {
+    int px = c->h / 34;                 /* placard text size tracks canvas */
+    if (px < 11)
+        px = 11;
+    float lh = px * 1.45f;
+    float pad = px * 0.6f;
+    DColor white = { 255, 255, 255, 255 };
+
+    if (g_haveErr) {                    /* red banner, top: the broken save */
+        char buf[560];
+        int n = snprintf(buf, sizeof buf,
+                         "RELOAD FAILED - showing last-good deck\n%s",
+                         g_rlErr.msg);
+        if (g_rlErr.offset >= 0 && n < (int)sizeof buf)
+            n += snprintf(buf + n, sizeof buf - n, " at byte %ld",
+                          g_rlErr.offset);
+        if (g_rlErr.where[0] && n < (int)sizeof buf)
+            snprintf(buf + n, sizeof buf - n, "\nin %s", g_rlErr.where);
+        int lines = 2 + (g_rlErr.where[0] != 0);
+        float bh = lines * lh + 2 * pad;
+        placard_band(c, 0, bh, 178, 24, 32, 235);
+        dtext_draw(c, buf, px, pad, pad, c->w - 2 * pad, bh - 2 * pad,
+                   DALIGN_LEFT, DVALIGN_TOP, 1, white);
+    }
+
+    if (g_nwarns > 0) {                 /* amber strip, bottom: warnings */
+        char buf[560];
+        int n = snprintf(buf, sizeof buf, "%d warning%s:", g_nwarns,
+                         g_nwarns == 1 ? "" : "s");
+        int show = g_nwarns < 3 ? g_nwarns : 3;
+        for (int i = 0; i < show && n < (int)sizeof buf; i++)
+            n += snprintf(buf + n, sizeof buf - n, "\n%s%s%s%s",
+                          g_warns[i].where[0] ? g_warns[i].where : "",
+                          g_warns[i].where[0] ? ": " : "",
+                          g_warns[i].msg,
+                          i == show - 1 && g_nwarns > show ? " ..." : "");
+        float bh = (1 + show) * lh + 2 * pad;
+        placard_band(c, c->h - bh, bh, 138, 96, 12, 225);
+        dtext_draw(c, buf, px, pad, c->h - bh + pad,
+                   c->w - 2 * pad, bh - 2 * pad,
+                   DALIGN_LEFT, DVALIGN_TOP, 1, white);
+    }
+}
+
 static void present_render(void) {
     float sc = (float)g_surf->w / g_deck->w;
     float sch = (float)g_surf->h / g_deck->h;
@@ -319,15 +466,32 @@ static void present_render(void) {
         rc_free(&g_lo);
         g_haveLo = 0;
     }
-    if (render_slide(g_deck, &g_deck->slides[g_cur], fitW, fitH, g_ss, &g_lo)) {
+    /* re-read images on every present render (documented v1 contract: an
+     * image overwrite shows on the next reload/nav/resize; renders are
+     * state-change-rare, so the decode cost is paid rarely) */
+    DSlide *sl = &g_deck->slides[g_cur];
+    for (int i = 0; i < sl->nels; i++) {
+        if (sl->els[i].img) {
+            free(sl->els[i].img);
+            sl->els[i].img = NULL;
+        }
+        sl->els[i].imgFailed = 0;
+    }
+    if (render_slide(g_deck, sl, fitW, fitH, g_ss, &g_lo)) {
         fprintf(stderr, "deck: out of memory rendering slide %d\n", g_cur + 1);
         return;
     }
+    draw_placards(&g_lo);
     g_haveLo = 1;
     blit();
 }
 
-static void key_down(SDL_Keycode k) {
+static void key_down(SDL_Keycode k, SDL_Keymod mod) {
+    if ((mod & SDL_KMOD_CTRL) && k == 'r') {   /* manual reload (mgp) */
+        g_acc = -1;
+        reload_deck();
+        return;
+    }
     if (k >= '0' && k <= '9') {
         g_acc = (g_acc < 0 ? 0 : g_acc) * 10 + (int)(k - '0');
         return;
@@ -364,10 +528,16 @@ static void key_down(SDL_Keycode k) {
  * peek semantics: a waking event stays queued for the next frame). */
 static void frame_cb(void) {
     SDL_Event ev;
+    /* watch check FIRST, every frame entry: covers both the parked wake
+     * (the fd woke __wait; nothing was queued SDL-side) and a save landing
+     * mid-interaction — and guarantees the fd is drained to EAGAIN before
+     * the next park, so a readable fd can never hot-spin the park. */
+    if (want_reload())
+        reload_deck();
     while (SDL_PollEvent(&ev)) {
         switch (ev.type) {
         case SDL_EVENT_KEY_DOWN:
-            key_down(ev.key.key);
+            key_down(ev.key.key, ev.key.mod);
             break;
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
             if (ev.button.x < (float)g_surf->w * 0.5f)
@@ -396,7 +566,7 @@ static void frame_cb(void) {
     else if (g_dirty == 2)
         blit();
     else {
-        SDL_WaitEventTimeout(NULL, 1000);           /* idle park, peek */
+        park(1000);                    /* idle park: input ring ⊕ watch fd */
         return;
     }
     g_dirty = 0;
@@ -438,11 +608,8 @@ int main(int argc, char **argv) {
         usage();
 
     DeckErr err;
-    DeckWarn *warns;
-    int nwarns;
-    g_deck = deck_load(file, &err, &warns, &nwarns);
-    print_warns(warns, nwarns);
-    free(warns);
+    g_deck = deck_load(file, &err, &g_warns, &g_nwarns);
+    print_warns(g_warns, g_nwarns);
     if (!g_deck) {
         print_err(file, &err);
         return 1;
@@ -451,7 +618,7 @@ int main(int argc, char **argv) {
     if (validate) {
         printf("deck: OK: %d slide%s, %d warning%s\n",
                g_deck->nslides, g_deck->nslides == 1 ? "" : "s",
-               nwarns, nwarns == 1 ? "" : "s");
+               g_nwarns, g_nwarns == 1 ? "" : "s");
         return 0;
     }
 
@@ -524,6 +691,25 @@ int main(int argc, char **argv) {
         fprintf(stderr, "deck: cannot create window: %s\n", SDL_GetError());
         return 1;
     }
+
+    /* live reload: PATH-keyed watch on the deck (mgp's arm site). ENOSYS
+     * or a vanished file -> -1 = no auto-reload; Ctrl-R still works. */
+    g_file = file;
+    g_fsw = fsw_open(file, 0);
+
+    /* Present mode is maximized (design §1.3): spawn wmctl on our own
+     * TITLE (the SDL window id is a per-process handle, NOT the kernel
+     * sid — the kernel sid never reaches C, so resolve it the way the
+     * tests do: wmctl list). Our window exists by now (SDL_CreateWindow
+     * returned), and our EV_CREATED is queued on the WM socket before
+     * the ACTIVATE this triggers, so the WM has placed us when it acts.
+     * Silent no-op without a WM (wmctl exits nonzero). */
+    char cmd[256];
+    snprintf(cmd, sizeof cmd,
+             "wmctl max $(wmctl list | grep -F '%s' | sed 's/[^0-9].*//' "
+             "| head -1) >/dev/null 2>&1", title);
+    system(cmd);
+
     __setAnimationFrameFunc(frame_cb);
     return 0;
 }
