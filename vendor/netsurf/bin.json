@@ -1,0 +1,35 @@
+{
+ "bin": true,
+ "name": "nsmonkey",
+ "description": "NetSurf with the upstream monkey headless frontend \u2014 the vendored-tree smoke binary (see smoke.mjs). Dep order is load-bearing: netsurf-core.json first.",
+ "deps": [
+  "netsurf-core.json",
+  "libwapcaplet/lib.json",
+  "libparserutils/lib.json",
+  "libhubbub/lib.json",
+  "libdom/lib.json",
+  "libcss/lib.json",
+  "libnsgif/lib.json",
+  "libnsbmp/lib.json",
+  "libnsutils/lib.json",
+  "../libpng/lib.json"
+ ],
+ "compilerArgs": [
+  "-Dnsmonkey",
+  "-DMONKEY_RESPATH=\"/usr/share/netsurf/\""
+ ],
+ "sources": [
+  "netsurf/frontends/monkey/401login.c",
+  "netsurf/frontends/monkey/bitmap.c",
+  "netsurf/frontends/monkey/browser.c",
+  "netsurf/frontends/monkey/dispatch.c",
+  "netsurf/frontends/monkey/download.c",
+  "netsurf/frontends/monkey/fetch.c",
+  "netsurf/frontends/monkey/filetype.c",
+  "netsurf/frontends/monkey/layout.c",
+  "netsurf/frontends/monkey/main.c",
+  "netsurf/frontends/monkey/output.c",
+  "netsurf/frontends/monkey/plot.c",
+  "netsurf/frontends/monkey/schedule.c"
+ ]
+}

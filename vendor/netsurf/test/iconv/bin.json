@@ -1,0 +1,8 @@
+{
+ "bin": true,
+ "name": "iconvtest",
+ "description": "Exercises shim/iconv.c over the parserutils codecs. Build with buildProject, run under host.js; expected output in expected.stdout. (UTF-16LE open fails by design — parserutils' codec surface is UTF-8/UTF-16/ASCII/8859-x/Ext8; NetSurf handles the EINVAL fallback.)",
+ "deps": ["../../libparserutils/lib.json"],
+ "includes": ["../../shim"],
+ "sources": ["main.c", "../../shim/iconv.c"]
+}

@@ -1,0 +1,12 @@
+{
+ "type": "lib",
+ "name": "libnsbmp",
+ "description": "libnsbmp \u2014 BMP/ICO decoder (NetSurf constellation; see ../README.md)",
+ "includes": [
+  "include",
+  "src"
+ ],
+ "sources": [
+  "src/libnsbmp.c"
+ ]
+}

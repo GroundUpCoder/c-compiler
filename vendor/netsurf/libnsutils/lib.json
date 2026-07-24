@@ -1,0 +1,14 @@
+{
+ "type": "lib",
+ "name": "libnsutils",
+ "description": "libnsutils \u2014 base64/time/positioned-io utilities (NetSurf constellation; see ../README.md)",
+ "includes": [
+  "include",
+  "src"
+ ],
+ "sources": [
+  "src/base64.c",
+  "src/time.c",
+  "src/unistd.c"
+ ]
+}

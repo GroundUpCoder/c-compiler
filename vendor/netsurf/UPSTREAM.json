@@ -1,0 +1,15 @@
+{
+ "comment": "Pinned upstream revisions for the vendored NetSurf constellation (2026-02 master; NetSurf 3.12 Dev). update.sh consumes this. Keep shim/testament.h WT_REVID in sync with the netsurf pin.",
+ "components": {
+  "netsurf":        { "url": "https://github.com/netsurf-browser/netsurf",        "rev": "39da3c3a40af4566d86500ff3052dfdc7f9a0378" },
+  "libwapcaplet":   { "url": "https://github.com/netsurf-browser/libwapcaplet",   "rev": "c7c128d3eb3223b216c974471f82e9337fbcf4ba" },
+  "libparserutils": { "url": "https://github.com/netsurf-browser/libparserutils", "rev": "6b0cbf086ca8eb8fe74b69f0c9ecf274eb2397ca" },
+  "libhubbub":      { "url": "https://github.com/netsurf-browser/libhubbub",      "rev": "6651b8cf87a4aa87bcdb2ff024a02659cd3f9402" },
+  "libdom":         { "url": "https://github.com/netsurf-browser/libdom",         "rev": "f69781e1f062444b5af3f62d431d7d94018da53b" },
+  "libcss":         { "url": "https://github.com/netsurf-browser/libcss",         "rev": "104d87fde48b9e022cd3cdad28aeb4d8cc0a0c5a" },
+  "libnsgif":       { "url": "https://github.com/netsurf-browser/libnsgif",       "rev": "5d5d750f32755d415fd232c607e6ef64dcc5aa8a" },
+  "libnsbmp":       { "url": "https://github.com/netsurf-browser/libnsbmp",       "rev": "ea063c9f46acb43e90208da14073332b505ef7e7" },
+  "libnsutils":     { "url": "https://github.com/netsurf-browser/libnsutils",     "rev": "0bd39060740b6163bd50875326654a722df97eb2" },
+  "libnsfb":        { "url": "https://github.com/netsurf-browser/libnsfb",        "rev": "b701cdce7241c3747ccd78658a365db0983ebe24" }
+ }
+}
