@@ -29,6 +29,11 @@
  * kernel.  Input arrives on the SDL event queue (the kernel input
  * ring) and maps to browser_window_* core calls; the window is
  * created SDL_WINDOW_RESIZABLE and reformats on every RESIZED event.
+ *
+ * The bottom STATUS_H rows are the status bar (gui_window_set_status:
+ * loading progress / the hovered link URL) — the only chrome; the
+ * content viewport is the window minus that strip.  Alt+Left /
+ * Alt+Right (and unclaimed Backspace) walk the local history.
  */
 
 #include <stdbool.h>
@@ -46,9 +51,11 @@
 #include "utils/nsurl.h"
 #include "netsurf/browser_window.h"
 #include "netsurf/plotters.h"
+#include "netsurf/plot_style.h"
 #include "netsurf/window.h"
 #include "netsurf/keypress.h"
 #include "netsurf/content.h"
+#include "desktop/browser_history.h"
 
 #include "gucos/gui.h"
 #include "gucos/plot.h"
@@ -63,7 +70,19 @@
 /** scroll step for wheel ticks and arrow keys, px */
 #define SCROLL_STEP 100
 
+/** status bar height, px (content viewport = window minus this strip) */
+#define STATUS_H 18
+
+/** status bar text inset, px */
+#define STATUS_PAD 4
+
 static struct gui_window *window_list;
+
+/** height of the content viewport (the window minus the status bar) */
+static int gucos_content_h(const struct gui_window *gw)
+{
+	return (gw->surf->h > STATUS_H) ? (gw->surf->h - STATUS_H) : 0;
+}
 
 bool gucos_done;
 
@@ -127,7 +146,7 @@ static void gucos_scroll_to(struct gui_window *gw, int sx, int sy)
 	}
 
 	if (sx > cw - gw->surf->w) sx = cw - gw->surf->w;
-	if (sy > ch - gw->surf->h) sy = ch - gw->surf->h;
+	if (sy > ch - gucos_content_h(gw)) sy = ch - gucos_content_h(gw);
 	if (sx < 0) sx = 0;
 	if (sy < 0) sy = 0;
 
@@ -170,12 +189,50 @@ static void gucos_present(struct gui_window *gw, const nsfb_bbox_t *box)
 	SDL_UpdateWindowSurface(gw->win);
 }
 
+/**
+ * Paint the status bar strip (below the content viewport) into the
+ * render surface: silver ground, hairline top edge, the status text.
+ * The plot target must already be gw->fb.
+ */
+static void gucos_draw_status(struct gui_window *gw)
+{
+	int ch = gucos_content_h(gw);
+	nsfb_bbox_t bar = { 0, ch, gw->surf->w, gw->surf->h };
+	nsfb_bbox_t edge = { 0, ch, gw->surf->w, ch + 1 };
+
+	nsfb_plot_set_clip(gw->fb, &bar);
+	nsfb_plot_rectangle_fill(gw->fb, &bar, 0xFFC0C0C0);
+	nsfb_plot_rectangle_fill(gw->fb, &edge, 0xFF808080);
+
+	if ((gw->status != NULL) && (gw->status[0] != '\0')) {
+		struct redraw_context ctx = {
+			.interactive = true,
+			.plot = &gucos_plotters,
+		};
+		plot_font_style_t fstyle = {
+			.family = PLOT_FONT_FAMILY_SANS_SERIF,
+			.size = 11 * PLOT_STYLE_SCALE,
+			.weight = 400,
+			.foreground = 0xFF000000,
+			.background = 0xFFC0C0C0,
+		};
+		nsfb_bbox_t tclip = { STATUS_PAD, ch + 1,
+				      gw->surf->w - STATUS_PAD, gw->surf->h };
+
+		nsfb_plot_set_clip(gw->fb, &tclip);
+		gucos_plotters.text(&ctx, &fstyle,
+				    STATUS_PAD, gw->surf->h - 5,
+				    gw->status, strlen(gw->status));
+	}
+}
+
 /** redraw the damaged region of one window and present it */
 static void gucos_redraw_window(struct gui_window *gw)
 {
 	struct rect clip;
 	nsfb_bbox_t box;
 	nsfb_t *prev;
+	int content_h = gucos_content_h(gw);
 	struct redraw_context ctx = {
 		.interactive = true,
 		.background_images = true,
@@ -185,19 +242,22 @@ static void gucos_redraw_window(struct gui_window *gw)
 	box = gw->dirty_box;
 	gw->dirty = false;
 
+	/* content redraw is clipped to the viewport above the bar */
 	clip.x0 = box.x0;
 	clip.y0 = box.y0;
 	clip.x1 = box.x1;
-	clip.y1 = box.y1;
+	clip.y1 = (box.y1 < content_h) ? box.y1 : content_h;
 
 	prev = gucos_plot_set_target(gw->fb);
 
 	nsfb_claim(gw->fb, &box);
 
-	browser_window_redraw(gw->bw,
-			      -gw->scrollx,
-			      -gw->scrolly,
-			      &clip, &ctx);
+	if ((clip.x0 < clip.x1) && (clip.y0 < clip.y1)) {
+		browser_window_redraw(gw->bw,
+				      -gw->scrollx,
+				      -gw->scrolly,
+				      &clip, &ctx);
+	}
 
 	if (gw->caret_on) {
 		/* draw the caret over the redraw (fb frontend style) */
@@ -214,6 +274,10 @@ static void gucos_redraw_window(struct gui_window *gw)
 		pen.stroke_colour = 0xFF0000FF;
 
 		nsfb_plot_line(gw->fb, &line, &pen);
+	}
+
+	if (box.y1 > content_h) {
+		gucos_draw_status(gw);
 	}
 
 	nsfb_update(gw->fb, &box);
@@ -298,6 +362,7 @@ static void gui_window_destroy(struct gui_window *gw)
 
 	gucos_fb_free(gw->fb);
 	SDL_DestroyWindow(gw->win);
+	free(gw->status);
 	free(gw);
 
 	if (window_list == NULL) {
@@ -341,7 +406,7 @@ static nserror
 gui_window_get_dimensions(struct gui_window *gw, int *width, int *height)
 {
 	*width = gw->surf->w;
-	*height = gw->surf->h;
+	*height = gucos_content_h(gw);
 	return NSERROR_OK;
 }
 
@@ -390,6 +455,21 @@ static void gui_window_set_title(struct gui_window *gw, const char *title)
 	SDL_SetWindowTitle(gw->win,
 			   ((title != NULL) && (title[0] != '\0')) ?
 			   title : "NetSurf");
+}
+
+static void gui_window_set_status(struct gui_window *gw, const char *text)
+{
+	if (text == NULL) {
+		text = "";
+	}
+	if ((gw->status != NULL) && (strcmp(gw->status, text) == 0)) {
+		return;
+	}
+
+	free(gw->status);
+	gw->status = strdup(text);
+
+	gucos_damage(gw, 0, gucos_content_h(gw), gw->surf->w, gw->surf->h);
 }
 
 static void
@@ -481,6 +561,7 @@ static struct gui_window_table window_table = {
 	.event = gui_window_event,
 
 	.set_title = gui_window_set_title,
+	.set_status = gui_window_set_status,
 	.set_pointer = gui_window_set_pointer,
 	.place_caret = gui_window_place_caret,
 };
@@ -511,8 +592,18 @@ static browser_mouse_state gucos_mouse_state(struct gui_window *gw)
 static void
 gucos_mouse_motion(struct gui_window *gw, const SDL_MouseMotionEvent *m)
 {
-	int cx = (int)m->x + gw->scrollx;
-	int cy = (int)m->y + gw->scrolly;
+	int my = (int)m->y;
+	int cx, cy;
+
+	/* the status bar is chrome: clamp motion to the viewport */
+	if (my >= gucos_content_h(gw)) {
+		my = gucos_content_h(gw) - 1;
+		if (my < 0) {
+			return;
+		}
+	}
+	cx = (int)m->x + gw->scrollx;
+	cy = my + gw->scrolly;
 
 	if ((gw->mouse_pressed != 0) && !gw->dragging &&
 	    ((abs(cx - gw->press_x) > DRAG_SLOP) ||
@@ -538,6 +629,12 @@ gucos_mouse_button(struct gui_window *gw, const SDL_MouseButtonEvent *b)
 
 	if ((b->button != SDL_BUTTON_LEFT) &&
 	    (b->button != SDL_BUTTON_RIGHT)) {
+		return;
+	}
+
+	/* presses on the status bar are chrome, not content (releases
+	 * still flow so an in-content drag can end anywhere) */
+	if (b->down && ((int)b->y >= gucos_content_h(gw))) {
 		return;
 	}
 
@@ -575,8 +672,18 @@ gucos_mouse_wheel(struct gui_window *gw, const SDL_MouseWheelEvent *w)
 {
 	int dx = (int)(-w->x * SCROLL_STEP);
 	int dy = (int)(-w->y * SCROLL_STEP);
-	int cx = (int)w->mouse_x + gw->scrollx;
-	int cy = (int)w->mouse_y + gw->scrolly;
+	int my = (int)w->mouse_y;
+	int cx, cy;
+
+	/* a wheel over the status bar scrolls the viewport proper */
+	if (my >= gucos_content_h(gw)) {
+		my = gucos_content_h(gw) - 1;
+		if (my < 0) {
+			return;
+		}
+	}
+	cx = (int)w->mouse_x + gw->scrollx;
+	cy = my + gw->scrolly;
 
 	if ((dx == 0) && (dy == 0)) {
 		return;
@@ -594,6 +701,26 @@ gucos_key(struct gui_window *gw, const SDL_KeyboardEvent *k)
 {
 	uint32_t key = k->key;
 	uint32_t nskey = 0;
+
+	/* Alt+Left / Alt+Right walk the local history (the gucOS
+	 * browser navigation chord — there is no toolbar chrome) */
+	if (k->mod & SDL_KMOD_ALT) {
+		switch (key) {
+		case SDLK_LEFT:
+			if (browser_window_history_back_available(gw->bw)) {
+				browser_window_history_back(gw->bw, false);
+			}
+			break;
+		case SDLK_RIGHT:
+			if (browser_window_history_forward_available(gw->bw)) {
+				browser_window_history_forward(gw->bw, false);
+			}
+			break;
+		default:
+			break;
+		}
+		return;
+	}
 
 	if (k->mod & SDL_KMOD_CTRL) {
 		switch (key) {
@@ -643,6 +770,13 @@ gucos_key(struct gui_window *gw, const SDL_KeyboardEvent *k)
 
 	/* unclaimed navigation keys scroll the viewport */
 	switch (key) {
+	case SDLK_BACKSPACE:
+		/* the classic browser chord: Backspace outside a text
+		 * input goes back in history */
+		if (browser_window_history_back_available(gw->bw)) {
+			browser_window_history_back(gw->bw, false);
+		}
+		break;
 	case SDLK_LEFT:
 		gucos_scroll_to(gw, gw->scrollx - SCROLL_STEP, gw->scrolly);
 		break;
@@ -656,10 +790,12 @@ gucos_key(struct gui_window *gw, const SDL_KeyboardEvent *k)
 		gucos_scroll_to(gw, gw->scrollx, gw->scrolly + SCROLL_STEP);
 		break;
 	case SDLK_PAGEUP:
-		gucos_scroll_to(gw, gw->scrollx, gw->scrolly - gw->surf->h);
+		gucos_scroll_to(gw, gw->scrollx,
+				gw->scrolly - gucos_content_h(gw));
 		break;
 	case SDLK_PAGEDOWN:
-		gucos_scroll_to(gw, gw->scrollx, gw->scrolly + gw->surf->h);
+		gucos_scroll_to(gw, gw->scrollx,
+				gw->scrolly + gucos_content_h(gw));
 		break;
 	case SDLK_HOME:
 		gucos_scroll_to(gw, gw->scrollx, 0);
@@ -687,7 +823,8 @@ static void gucos_resized(struct gui_window *gw)
 	 * precedent): the first present at the new geometry, which is
 	 * also the kernel's configure ack, already carries the
 	 * reflowed layout — no stale-crop frame is ever shown */
-	browser_window_reformat(gw->bw, false, gw->surf->w, gw->surf->h);
+	browser_window_reformat(gw->bw, false, gw->surf->w,
+				gucos_content_h(gw));
 	gucos_scroll_to(gw, gw->scrollx, gw->scrolly);
 	gw->dirty = false;
 	gucos_damage_all(gw);

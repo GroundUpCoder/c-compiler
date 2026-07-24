@@ -1,5 +1,5 @@
 {
-  "version": 158,
+  "version": 159,
   "overlays": [
     {
       "id": "clang-apps",
@@ -24,6 +24,7 @@
       "/usr/share/mgp",
       "/usr/share/mgp/talks",
       "/usr/share/mgp/tutorial",
+      "/usr/share/netsurf",
       "/usr/share/sounds"
     ],
     "files": {
@@ -109,6 +110,33 @@
       },
       "/usr/share/deck/deck-title.png": {
         "bin": "os/deck/demo/deck-title.png"
+      },
+      "/usr/bin/netsurf": {
+        "project": "vendor/netsurf/gucos/bin.json"
+      },
+      "/usr/share/netsurf/Messages": {
+        "bin": "vendor/netsurf/netsurf/resources/Messages.en"
+      },
+      "/usr/share/netsurf/default.css": {
+        "bin": "vendor/netsurf/netsurf/resources/default.css"
+      },
+      "/usr/share/netsurf/quirks.css": {
+        "bin": "vendor/netsurf/netsurf/resources/quirks.css"
+      },
+      "/usr/share/netsurf/internal.css": {
+        "bin": "vendor/netsurf/netsurf/resources/internal.css"
+      },
+      "/usr/share/netsurf/adblock.css": {
+        "bin": "vendor/netsurf/netsurf/resources/adblock.css"
+      },
+      "/usr/share/netsurf/netsurf.png": {
+        "bin": "vendor/netsurf/netsurf/resources/netsurf.png"
+      },
+      "/usr/share/netsurf/favicon.png": {
+        "bin": "vendor/netsurf/netsurf/resources/favicon.png"
+      },
+      "/usr/share/netsurf/mime.types": {
+        "content": "# Extension -> MIME type map for file:// browsing, consulted by\n# /bin/netsurf (the monkey filetype resolver; /etc/mime.types, if\n# present, is preferred over this file). Standard mime.types lines:\n# TYPE<ws>EXT [EXT...].\ntext/html\thtml htm\ntext/css\tcss\ntext/plain\ttxt text conf log md\nimage/png\tpng\nimage/jpeg\tjpg jpeg\nimage/gif\tgif\nimage/bmp\tbmp\nimage/ico\tico\n"
       },
       "/usr/bin/mgp": {
         "project": "vendor/magicpoint/bin.json"
@@ -242,6 +270,9 @@
       "/usr/share/menu/Accessories/paint": {
         "link": "/usr/bin/paint"
       },
+      "/usr/share/menu/Accessories/netsurf": {
+        "link": "/usr/bin/netsurf"
+      },
       "/usr/share/menu/Accessories/software": {
         "link": "/usr/bin/software"
       },
@@ -272,6 +303,18 @@
       "/usr/share/fonts/mono.ttf": {
         "bin": "vendor/fonts/NotoSansMono-Regular.ttf"
       },
+      "/usr/share/fonts/sans.ttf": {
+        "bin": "vendor/fonts/NotoSans-Regular.ttf"
+      },
+      "/usr/share/fonts/sans_bold.ttf": {
+        "bin": "vendor/fonts/NotoSans-Bold.ttf"
+      },
+      "/usr/share/fonts/sans_italic.ttf": {
+        "bin": "vendor/fonts/NotoSans-Italic.ttf"
+      },
+      "/usr/share/fonts/sans_italic_bold.ttf": {
+        "bin": "vendor/fonts/NotoSans-BoldItalic.ttf"
+      },
       "/usr/share/sounds/scheme": {
         "content": "# Event-sound scheme (todos/0094), consulted by PlaySound/MessageBeep\n# (os/win32) and the wm startup chime through os/sounds.h. Three layers\n# overlaid per key, highest wins: ~/.config/sounds, /etc/sounds,\n# /usr/share/sounds/scheme. Lines: EVENT<ws>WAV-PATH; the value `none`\n# silences that event; the reserved key `mute on` silences all of them\n# (the Control Panel Sounds applet toggles it).\nSystemStart\t/usr/share/sounds/startup.wav\nSystemDefault\t/usr/share/sounds/ding.wav\nSystemHand\t/usr/share/sounds/chord.wav\nSystemQuestion\t/usr/share/sounds/ding.wav\nSystemExclamation\t/usr/share/sounds/chimes.wav\nSystemAsterisk\t/usr/share/sounds/ding.wav\nBell\t/usr/share/sounds/ding.wav\n"
       },
@@ -297,7 +340,7 @@
         "bin": "os/sounds/chimes.wav"
       },
       "/usr/share/openwith": {
-        "content": "# File associations (todos/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). Three layers overlaid per key, highest wins:\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\ngb\t/bin/sameboy\ngbc\t/bin/sameboy\nbmp\t/bin/paint\ndeck\t/bin/deck\nmgp\t/bin/mgp\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"
+        "content": "# File associations (todos/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). Three layers overlaid per key, highest wins:\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\ngb\t/bin/sameboy\ngbc\t/bin/sameboy\nbmp\t/bin/paint\ndeck\t/bin/deck\nmgp\t/bin/mgp\nhtml\t/bin/netsurf\nhtm\t/bin/netsurf\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"
       },
       "/usr/bin/coreutils": {
         "project": "vendor/busybox/coreutils.json"

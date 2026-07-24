@@ -58,6 +58,10 @@ struct gui_window {
 	bool dragging;
 
 	bool throbbing;
+
+	/* status line text (loading progress / hovered link URL),
+	 * drawn in the bar below the content viewport */
+	char *status;
 };
 
 /** resource search path vector (fetch.c get_resource_url, fonts) */
