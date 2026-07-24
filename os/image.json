@@ -1,5 +1,5 @@
 {
-  "version": 152,
+  "version": 153,
   "overlays": [
     {
       "id": "clang-apps",
@@ -14,6 +14,7 @@
       "/usr/bin",
       "/usr/lib",
       "/usr/share",
+      "/usr/share/deck",
       "/usr/share/fonts",
       "/usr/share/gucman",
       "/usr/share/menu",
@@ -96,6 +97,15 @@
       },
       "/usr/bin/sameboy": {
         "project": "vendor/sameboy/bin.json"
+      },
+      "/usr/bin/deck": {
+        "project": "os/deck/bin.json"
+      },
+      "/usr/share/deck/gucos.deck": {
+        "bin": "os/deck/demo/gucos.deck"
+      },
+      "/usr/share/deck/deck-title.png": {
+        "bin": "os/deck/demo/deck-title.png"
       },
       "/usr/bin/mgp": {
         "project": "vendor/magicpoint/bin.json"
@@ -232,6 +242,9 @@
       "/usr/share/menu/Accessories/software": {
         "link": "/usr/bin/software"
       },
+      "/usr/share/menu/Demos/deck": {
+        "content": "#!/bin/sh\ndeck /usr/share/deck/gucos.deck\n"
+      },
       "/usr/share/menu/Demos/mgp": {
         "content": "#!/bin/sh\nmgp /usr/share/mgp/demo.mgp\n"
       },
@@ -281,7 +294,7 @@
         "bin": "os/sounds/chimes.wav"
       },
       "/usr/share/openwith": {
-        "content": "# File associations (todos/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). Three layers overlaid per key, highest wins:\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\ngb\t/bin/sameboy\ngbc\t/bin/sameboy\nbmp\t/bin/paint\nmgp\t/bin/mgp\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"
+        "content": "# File associations (todos/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). Three layers overlaid per key, highest wins:\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\ngb\t/bin/sameboy\ngbc\t/bin/sameboy\nbmp\t/bin/paint\ndeck\t/bin/deck\nmgp\t/bin/mgp\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"
       },
       "/usr/bin/coreutils": {
         "project": "vendor/busybox/coreutils.json"
@@ -537,6 +550,7 @@
       "/root/Desktop/Presentations",
       "/root/Desktop/Presentations/MagicPoint Tutorial",
       "/root/Desktop/Presentations/POSIX on WebAssembly",
+      "/root/Desktop/Presentations/gucOS",
       "/root/roms"
     ],
     "files": {
@@ -605,6 +619,12 @@
       },
       "/root/Desktop/Presentations/POSIX on WebAssembly/posix-on-wasm.mgp": {
         "bin": "vendor/magicpoint/decks/talks/posix-on-wasm.mgp"
+      },
+      "/root/Desktop/Presentations/gucOS/gucos.deck": {
+        "bin": "os/deck/demo/gucos.deck"
+      },
+      "/root/Desktop/Presentations/gucOS/deck-title.png": {
+        "bin": "os/deck/demo/deck-title.png"
       },
       "/root/Desktop/pokemon": {
         "content": "#!/bin/sh\nsameboy $HOME/roms/PokemonBlue.gb\n",

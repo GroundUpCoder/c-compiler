@@ -2255,7 +2255,7 @@ static const struct { const char *ext; int kind; } desk_ext_map[] = {
     { "pbm", DK_IMAGE }, { "bmp", DK_IMAGE },  { "gif", DK_IMAGE },
     { "jpg", DK_IMAGE }, { "jpeg", DK_IMAGE }, { "xpm", DK_IMAGE },
     { "xbm", DK_IMAGE }, { "ico", DK_IMAGE },
-    { "mgp", DK_DECK },  { "sent", DK_DECK },
+    { "mgp", DK_DECK },  { "sent", DK_DECK },  { "deck", DK_DECK },
 };
 
 static int desk_kind(const menu_ent *e) {
