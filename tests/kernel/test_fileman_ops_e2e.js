@@ -70,11 +70,12 @@ const RC_PANE = 'wmctl click $SID 100 300 3';
 // retune: 30px rows, 10px sep, 1px border): on a DOCUMENT icon (regular,
 // not runnable — both targets here are .txt) the rows are Open / Edit /
 // sep / Cut (center 86) / Copy (116) / Delete; desktop menu New / Sort by /
-// Refresh / Paste (center 106) / sep / Display. Desktop cells are derived from the
+// Refresh / Add Default Icons / Paste (center 136) / sep / Display (the
+// Lane D row shifted Paste down one). Desktop cells are derived from the
 // drive.js grid model (deskEntries/deskCell — dirs first, Recycle Bin
 // tail-pinned, column wrap at 11 rows; todos/0184/0185), never "icon 0"
 // row math.
-const ICON_CUT_Y = 86, ICON_COPY_Y = 116, DESK_PASTE_Y = 106;
+const ICON_CUT_Y = 86, ICON_COPY_Y = 116, DESK_PASTE_Y = 136;   // Paste row 4 since Lane D's Add Default Icons
 
 const script = [
   // -- fixtures --

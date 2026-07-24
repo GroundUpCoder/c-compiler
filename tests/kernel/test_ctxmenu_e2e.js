@@ -35,7 +35,8 @@ const { dir: tmp, image } = freshImage('os-ctx-');
 // each side (h = 4 + rows), WIDTH MEASURED from freetype text (not a
 // constant — asserted structurally, never as a literal), clamped to the
 // 1024x768 work area above the 36px bar. Desktop menu: New / Sort by /
-// Refresh / Paste / --- / Display -> h 164; taskbar-button menu: Restore /
+// Refresh / Add Default Icons (Lane D) / Paste / --- / Display -> h 194;
+// taskbar-button menu: Restore /
 // Minimize / Maximize / --- / Close -> h 134; icon menu on a RUNNABLE icon:
 // Open / --- / Cut / Copy / Delete / Rename -> h 164 (documents grow an
 // Edit row after Open -> h 194, todos/0202 — alauncher stays 164). A
@@ -43,12 +44,12 @@ const { dir: tmp, image } = freshImage('os-ctx-');
 // anchor row's drawn top (New: Folder + Text File -> h 64; Sort by:
 // Name -> h 34). Row centers at 1 + sum(prev rows) + 15.
 const rowY = (i) => 1 + i * 30 + 15;               // rows above the groove
-const DESK_MENU_H = 4 + 5 * 30 + 10;               // 164
+const DESK_MENU_H = 4 + 6 * 30 + 10;               // 194 (Lane D added a row)
 const NEW_FLY_H = 4 + 2 * 30;                      // 64
 const SORT_FLY_H = 4 + 1 * 30;                     // 34
 const BAR_MENU_H = 4 + 4 * 30 + 10;                // 134
 const ICON_MENU_H = 4 + 5 * 30 + 10;               // 164
-const DISPLAY_ROW_Y = 1 + 4 * 30 + 10 + 15;        // below the groove: 146
+const DISPLAY_ROW_Y = 1 + 5 * 30 + 10 + 15;        // below the groove: 176
 const CLOSE_ROW_Y = 1 + 3 * 30 + 10 + 15;          // bar menu groove: 115
 // Parse "WxH+X+Y" out of a wmctl list row.
 const g4 = (line) => {
@@ -423,10 +424,11 @@ check('CLOSE request-closes the window (button 0 winbox gone)',
     return (x, y) => String(Array.from(
       ppm.subarray(off + (y * w + x) * 3, off + (y * w + x) * 3 + 3)));
   };
-  // c1.ppm: the measured-width x 164 desktop menu on the ENGINE raster
+  // c1.ppm: the measured-width x 194 desktop menu on the ENGINE raster
   // (menucore, 0259): Win95 raised edge (outer white/black, inner
   // face/shadow), face, black freetype item text, the separator groove at
-  // y 121..130, the flyout arrows on the sub rows at the right gutter.
+  // y 151..160 (5 rows above it since Lane D's Add Default Icons), the
+  // flyout arrows on the sub rows at the right gutter.
   const p = readPpm('c1.ppm', null);
   const W = cg1.w;                     // the listed menu width
   check('menu face is the Win95 gray with a raised edge',
@@ -439,8 +441,8 @@ check('CLOSE request-closes the window (button 0 winbox gone)',
       if (parseInt(p(x, y), 10) < 100) text++;
   check('row 0 (New) has dark label text', text >= 10, text);
   check('separator groove present (dark over light)',
-    p(30, 125) === '128,128,128' && p(30, 126) === '255,255,255',
-    [p(30, 125), p(30, 126)].join(' | '));
+    p(30, 155) === '128,128,128' && p(30, 156) === '255,255,255',
+    [p(30, 155), p(30, 156)].join(' | '));
   check('sub rows carry the flyout arrow', p(W - 10, 16) === '0,0,0',
     p(W - 10, 16));
   // d2.ppm: right-click selected the alauncher icon alone (navy strip).

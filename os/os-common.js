@@ -917,6 +917,61 @@ function foldPackages(fsMod, pathMod, rootDir, manifest, which) {
   return { manifest: m, names: names };
 }
 
+/* ---- the baked Desktop-defaults rendering (source-lib design §6.1, Lane D) ----
+ *
+ * foldDesktopDefaults(manifest) -> manifest' — a PURE transform (no fs, no
+ * clock; it runs inside bakeSystemImage, which the browser worker's
+ * fallback bake also calls): every `user.dirs` entry under /root/Desktop
+ * and every `user.files` entry under /root/Desktop/ gains a TWIN system
+ * entry at /usr/share/desktop/default/<rel>. The manifest stays the single
+ * author-side truth; the sealed blob carries a rendered copy version-locked
+ * to it, which /usr/bin/desktop-defaults (os/deskdefaults.c) re-applies
+ * ADDITIVELY onto the live Desktop. Entries ride verbatim (deep-copied):
+ * links stay links (absolute /usr/bin targets), launcher scripts and deck
+ * data keep their kinds, modes and `optional` semantics. The Recycle Bin
+ * is not in the manifest, so it never enters the default set (wm.c's
+ * ensure_recycle stays its owner); non-Desktop user seeds (doom1.wad,
+ * roms, /etc/profile) are naturally outside the prefix filter. With no
+ * user Desktop entries the input manifest is returned untouched (the
+ * foldPackages empty-fold identity rule). */
+function foldDesktopDefaults(manifest) {
+  var PRE = '/root/Desktop';
+  var BASE = '/usr/share/desktop/default';
+  var user = manifest.user || {};
+  var underPrefix = function (p) { return p.lastIndexOf(PRE + '/', 0) === 0; };
+  var dirs = (user.dirs || []).filter(function (d) {
+    return d === PRE || underPrefix(d);
+  });
+  var fileKeys = Object.keys(user.files || {}).filter(underPrefix).sort();
+  if (!dirs.length && !fileKeys.length) return manifest;
+  var m = JSON.parse(JSON.stringify(manifest));
+  m.system = m.system || {};
+  m.system.dirs = m.system.dirs || [];
+  m.system.files = m.system.files || {};
+  var dirSeen = {};
+  m.system.dirs.forEach(function (d) { dirSeen[d] = true; });
+  function pushDir(d) {
+    if (!dirSeen[d]) { dirSeen[d] = true; m.system.dirs.push(d); }
+  }
+  var twin = function (p) { return BASE + p.slice(PRE.length); };
+  pushDir('/usr/share');
+  pushDir('/usr/share/desktop');
+  pushDir(BASE);
+  // user.dirs is parent-before-child (seedEntries mkdirs in order) — the
+  // twins inherit that; file parents derive too, so a file whose parent
+  // dir the manifest forgot to list still bakes.
+  dirs.forEach(function (d) { if (d !== PRE) pushDir(twin(d)); });
+  fileKeys.forEach(function (p) {
+    var t = twin(p);
+    var parts = t.slice(BASE.length + 1).split('/'), cur = BASE;
+    for (var i = 0; i < parts.length - 1; i++) { cur += '/' + parts[i]; pushDir(cur); }
+    if (m.system.files[t])
+      throw new Error('foldDesktopDefaults: ' + t + ' conflicts with an existing image entry');
+    m.system.files[t] = JSON.parse(JSON.stringify(user.files[p]));
+  });
+  return m;
+}
+
 /* Build the Node-side overlay io from injected modules (keeps os-common
  * environment-neutral; only mkimage.js/boot.js — both Node — call this). */
 function nodeOverlayIo(fsMod, pathMod, cryptoMod) {
@@ -949,6 +1004,9 @@ function nodeOverlayIo(fsMod, pathMod, cryptoMod) {
 function bakeSystemImage(BLOCK_FS, CompilerJS, sysStore, manifest, io) {
   var log = io.log || function () {};
   log('baking system image (manifest v' + manifest.version + ')');
+  // The default-Desktop rendering (§6.1) folds here — the ONE bake choke
+  // point, so mkimage/boot.js/the in-worker fallback bake all agree.
+  manifest = foldDesktopDefaults(manifest);
   // Overlays (todos/0118): read + verify BEFORE the ~minute-long bake so a bad
   // flag fails fast. Off by default — an empty/absent io.overlays leaves the
   // base bake byte-identical to today (no overlay dirs, files, provenance, or
@@ -1165,7 +1223,12 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest) {
       }
     });
   });
-  var files = (manifest.system && manifest.system.files) || {};
+  // Scan the manifest AS BAKED: foldDesktopDefaults twins the user
+  // Desktop set into the system section, so its `bin` blobs (deck/mgp
+  // data) are blob bytes now — the scan and the bake agree by
+  // construction (the listTreeFiles rule).
+  var baked = foldDesktopDefaults(manifest);
+  var files = (baked.system && baked.system.files) || {};
   Object.keys(files).forEach(function (fp) {
     var entry = files[fp];
     if (entry.project !== undefined) addProject(entry.project);
@@ -1266,6 +1329,7 @@ var OS_COMMON = {
   nodeOverlayIo: nodeOverlayIo,
   listPackages: listPackages,
   foldPackages: foldPackages,
+  foldDesktopDefaults: foldDesktopDefaults,
   listTreeFiles: listTreeFiles,
   validateSrclibShape: validateSrclibShape,
   win32RequireDriftErrors: win32RequireDriftErrors,

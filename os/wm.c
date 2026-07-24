@@ -95,7 +95,9 @@
  *
  * Context menus (todos/0091): right-click raises a two-window popup (root
  * "ctxmenu" + at most one "ctxmenu2" flyout — the v1 depth cap) built from
- * fixed item lists. Empty desktop: New >, Sort by >, Refresh, Display
+ * fixed item lists. Empty desktop: New >, Sort by >, Refresh, Add Default
+ * Icons (Lane D: spawns /usr/bin/desktop-defaults, the additive default-
+ * Desktop reconcile), Display
  * (ctlpanel's Display applet); an icon: Open, Cut/Copy (0092) and Delete
  * to the Recycle Bin (0093 — the bin icon itself gets Open + Empty
  * instead, and pins to the grid's tail); a taskbar button:
@@ -518,6 +520,7 @@ static int desk_edit_armed = 0;    /* the editor's desktop focus has landed —
 enum {                             /* command ids (ctx_command dispatch) */
     CM_NONE = 0,
     CM_REFRESH, CM_DISPLAY,        /* desktop */
+    CM_ADD_DEFAULTS,               /* desktop (Lane D: /usr/bin/desktop-defaults) */
     CM_PASTE,                      /* desktop (0092: the fileops clipboard) */
     CM_NEW_FOLDER, CM_NEW_FILE, CM_SORT_NAME,      /* New/Sort by cascades */
     CM_OPEN,                       /* icon */
@@ -2931,6 +2934,7 @@ static void ctx_open_desktop(int x, int y) {
     mc_append(sb, 0, CM_SORT_NAME, "Name", NULL);
     mc_append(t, 1, 0, "Sort by", sb);
     mc_append(t, 0, CM_REFRESH, "Refresh", NULL);
+    mc_append(t, 0, CM_ADD_DEFAULTS, "Add Default Icons", NULL);   /* Lane D */
     ctx_grayable(t, CM_PASTE, "Paste", !fo_clip_has());   /* 0092 */
     mc_append(t, 2, 0, NULL, NULL);
     mc_append(t, 0, CM_DISPLAY, "Display", NULL);
@@ -3220,6 +3224,12 @@ static void ctx_command(int id) {
     case CM_DISPLAY: {
         char *argv[3] = { (char *)"ctlpanel", (char *)"Display", 0 };
         spawn_path("/bin/ctlpanel", argv, &nkids, "wm");
+        break;
+    }
+    case CM_ADD_DEFAULTS: {        /* Lane D §6.3: fire-and-forget; the
+                                      1s desk poll surfaces the result */
+        char *argv[2] = { (char *)"desktop-defaults", 0 };
+        spawn_path("/usr/bin/desktop-defaults", argv, &nkids, "wm");
         break;
     }
     case CM_OPEN: desk_launch(icon); break;
