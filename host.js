@@ -6596,6 +6596,154 @@ function createSurfaceSDL({ ctx, hooks }) {
     }
   }
 
+  // ---- Software SDL 2D renderer (SDL_Render*) over the shm window surface ----
+  // The OS process worker has no working per-process GPU 2D-renderer path (the
+  // compositor owns the one WebGPU pass in the kernel worker; the browser
+  // flavor's GPU SDL renderer needs a device this nested worker never drives),
+  // so the SDL 2D accelerated renderer is rasterized in SOFTWARE and flipped
+  // into the window's shm back buffer — the SAME transport doom's
+  // SDL_UpdateWindowSurface uses, so 2D-renderer apps composite uniformly with
+  // direct-surface apps and with GPU (webgpu.h) apps. Used by BOTH flavors:
+  // the browser branch overrides createBrowserSDL's GPU renderer with this
+  // (raw webgpu.h/gpubox keeps the GPU path), and the headless/shm branch uses
+  // it directly. `winFor(handle)` returns the window's shm framebuffer record
+  // ({ fb, pendingCfg? }); pendingCfg drives the resize ack where present.
+  // Covers the sprite-blit surface real SDL games use (RenderClear +
+  // RenderTexture, nearest/linear sampling, per-texture color/alpha mod,
+  // src-over BLEND). Arbitrary affine quads (__sdl_render_quad off the axis)
+  // and __sdl_render_geometry degrade to a bbox / no-op — no sprite-blit game
+  // needs them (a noted follow-up).
+  function makeSoftwareRenderer(winFor) {
+    const rends = [];   // 1-based renderer records
+    const texs = [];    // 1-based texture records
+    const clamp = (v) => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
+    // src-over into fb at byte offset o; NONE (blend 0) writes an opaque copy
+    // so the window surface stays opaque (it composites over the desktop).
+    const put = (f, o, r, g, b, a, blend) => {
+      if (blend === 0 || a >= 255) { f[o] = r | 0; f[o + 1] = g | 0; f[o + 2] = b | 0; f[o + 3] = 255; return; }
+      if (a <= 0) return;
+      const ia = a / 255, na = 1 - ia;
+      f[o] = (r * ia + f[o] * na) | 0; f[o + 1] = (g * ia + f[o + 1] * na) | 0;
+      f[o + 2] = (b * ia + f[o + 2] * na) | 0; f[o + 3] = 255;
+    };
+    const ensureFb = (rd) => {
+      const win = winFor(rd.win);
+      const cfg = win && win.pendingCfg;
+      const tw = cfg ? cfg.w : (win && win.fb ? win.fb.w : (rd.fbw || 1));
+      const th = cfg ? cfg.h : (win && win.fb ? win.fb.h : (rd.fbh || 1));
+      if (!rd.fb || rd.fbw !== tw || rd.fbh !== th) { rd.fb = new Uint8Array(tw * th * 4); rd.fbw = tw; rd.fbh = th; }
+      return rd.fb;
+    };
+    const present = (rd) => {
+      const win = winFor(rd.win); if (!win) return;
+      const cfg = win.pendingCfg;
+      const fb = (cfg && rd.fbw === cfg.w && rd.fbh === cfg.h) ? cfg.fb : win.fb;
+      if (!fb) return;
+      const cw = Math.min(rd.fbw, fb.w), ch = Math.min(rd.fbh, fb.h);
+      const back = 1 - (Atomics.load(fb.i32, WMSH_FLIP) & 1);
+      const base = WMSH_HDR_BYTES + back * fb.w * fb.h * 4;
+      if (cw === fb.w && rd.fbw === fb.w) {
+        fb.u8.set(rd.fb.subarray(0, cw * 4 * ch), base);
+      } else {
+        for (let row = 0; row < ch; row++)
+          fb.u8.set(rd.fb.subarray(row * rd.fbw * 4, row * rd.fbw * 4 + cw * 4), base + row * fb.w * 4);
+      }
+      Atomics.store(fb.i32, WMSH_FLIP, back);
+      Atomics.add(fb.i32, WMSH_SEQ, 1);
+      ringIfParked();
+      if (fb !== win.fb && win.pendingCfg) ackConfigure(win);
+    };
+    // Blit texture sub-rect (sx,sy,sw,sh texels) scaled into dst (dx,dy,dw,dh);
+    // texH 0 = fill dst with the draw color.
+    const quad = (rd, texH, dx, dy, dw, dh, sx, sy, sw, sh) => {
+      if (!rd.fb) ensureFb(rd);
+      const f = rd.fb, FW = rd.fbw, FH = rd.fbh;
+      let x0 = Math.round(dx), y0 = Math.round(dy), x1 = Math.round(dx + dw), y1 = Math.round(dy + dh);
+      if (x1 < x0) { const t = x0; x0 = x1; x1 = t; }
+      if (y1 < y0) { const t = y0; y0 = y1; y1 = t; }
+      const cx0 = Math.max(0, x0), cy0 = Math.max(0, y0), cx1 = Math.min(FW, x1), cy1 = Math.min(FH, y1);
+      if (cx1 <= cx0 || cy1 <= cy0) return;
+      if (texH === 0) {
+        const R = rd.drawR, G = rd.drawG, B = rd.drawB, A = rd.drawA, bl = rd.drawBlend;
+        for (let y = cy0; y < cy1; y++) { let o = (y * FW + cx0) * 4; for (let x = cx0; x < cx1; x++, o += 4) put(f, o, R, G, B, A, bl); }
+        return;
+      }
+      const tx = texs[texH - 1]; if (!tx || !tx.cpuPixels) return;
+      const tp = tx.cpuPixels, TW = tx.w, TH = tx.h;
+      const bl = tx.blendMode, cmR = tx.colorR, cmG = tx.colorG, cmB = tx.colorB, cmA = tx.alpha;
+      const ddw = (x1 - x0) || 1, ddh = (y1 - y0) || 1;
+      for (let y = cy0; y < cy1; y++) {
+        const syf = sy + ((y + 0.5 - y0) / ddh) * sh;
+        let iy = Math.floor(syf); if (iy < 0) iy = 0; else if (iy >= TH) iy = TH - 1;
+        const rowBase = iy * TW; let o = (y * FW + cx0) * 4;
+        for (let x = cx0; x < cx1; x++, o += 4) {
+          const sxf = sx + ((x + 0.5 - x0) / ddw) * sw;
+          let ix = Math.floor(sxf); if (ix < 0) ix = 0; else if (ix >= TW) ix = TW - 1;
+          const so = (rowBase + ix) * 4;
+          put(f, o, tp[so] * cmR, tp[so + 1] * cmG, tp[so + 2] * cmB, tp[so + 3] * cmA, bl);
+        }
+      }
+    };
+    return {
+      __sdl_create_renderer: function (windowHandle) {
+        rends.push({ win: windowHandle, fb: null, fbw: 0, fbh: 0, drawR: 0, drawG: 0, drawB: 0, drawA: 255, drawBlend: 0 });
+        return rends.length;
+      },
+      __sdl_destroy_renderer: function (r) { if (r > 0 && rends[r - 1]) rends[r - 1] = null; },
+      __sdl_create_texture: function (r, access, w, h) {
+        texs.push({ w: w, h: h, access: access, cpuPixels: null, pitch: w * 4, colorR: 1, colorG: 1, colorB: 1, alpha: 1, blendMode: 0, scaleMode: 1 });
+        return texs.length;
+      },
+      __sdl_destroy_texture: function (t) { if (t > 0 && texs[t - 1]) texs[t - 1] = null; },
+      __sdl_update_texture: function (t, pixelsPtr, pitch, x, y, w, h) {
+        const tx = texs[t - 1]; if (!tx) return;
+        const fullPitch = tx.w * 4;
+        if (!tx.cpuPixels || tx.cpuPixels.length !== fullPitch * tx.h) tx.cpuPixels = new Uint8Array(fullPitch * tx.h);
+        const mem = new Uint8Array(getMemory().buffer);
+        const rowBytes = w * 4;
+        for (let row = 0; row < h; row++) {
+          const srcOff = pixelsPtr + row * pitch;
+          tx.cpuPixels.set(mem.subarray(srcOff, srcOff + rowBytes), (y + row) * fullPitch + x * 4);
+        }
+      },
+      __sdl_set_texture_color_mod: function (t, rr, gg, bb) { const tx = texs[t - 1]; if (tx) { tx.colorR = rr; tx.colorG = gg; tx.colorB = bb; } },
+      __sdl_set_texture_alpha_mod: function (t, a) { const tx = texs[t - 1]; if (tx) tx.alpha = a; },
+      __sdl_set_texture_blend_mode: function (t, mode) {
+        if (mode !== 0 && mode !== 1 && mode !== 2 && mode !== 4) throw new Error('SDL: unsupported blend mode ' + mode + ' (supported: NONE=0, BLEND=1, ADD=2, MOD=4)');
+        const tx = texs[t - 1]; if (tx) tx.blendMode = mode;
+      },
+      __sdl_get_texture_blend_mode: function (t) { const tx = texs[t - 1]; return tx ? tx.blendMode : 0; },
+      __sdl_set_texture_scale_mode: function (t, mode) {
+        if (mode !== 0 && mode !== 1) throw new Error('SDL: unsupported scale mode ' + mode + ' (supported: NEAREST=0, LINEAR=1)');
+        const tx = texs[t - 1]; if (tx) tx.scaleMode = mode;
+      },
+      __sdl_get_texture_scale_mode: function (t) { const tx = texs[t - 1]; return tx ? tx.scaleMode : 1; },
+      __sdl_set_draw_color: function (r, rr, gg, bb, aa) {
+        const rd = rends[r - 1]; if (!rd) return;
+        rd.drawR = clamp(rr * 255); rd.drawG = clamp(gg * 255); rd.drawB = clamp(bb * 255); rd.drawA = clamp(aa * 255);
+      },
+      __sdl_set_draw_blend_mode: function (r, mode) { const rd = rends[r - 1]; if (rd) rd.drawBlend = mode; },
+      __sdl_render_clear: function (r) {
+        const rd = rends[r - 1]; if (!rd) return;
+        const f = ensureFb(rd), R = rd.drawR, G = rd.drawG, B = rd.drawB;
+        for (let i = 0; i < f.length; i += 4) { f[i] = R; f[i + 1] = G; f[i + 2] = B; f[i + 3] = 255; }
+      },
+      // SDL_RenderTexture/FillRect/Rect/Point/Line funnel through the C-side
+      // __sdl_quad_rect -> __sdl_render_quad (TL,TR,BR,BL corners + a src rect).
+      // Every quad __sdl_quad_rect produces is axis-aligned, so the corner bbox
+      // IS the dst rect; a rotated thin-quad (RenderLine diagonal) degrades to
+      // its bbox — no sprite-blit game draws them.
+      __sdl_render_quad: function (r, texH, x0, y0, x1, y1, x2, y2, x3, y3, sx, sy, sw, sh) {
+        const rd = rends[r - 1]; if (!rd) return;
+        const minx = Math.min(x0, x1, x2, x3), miny = Math.min(y0, y1, y2, y3);
+        const maxx = Math.max(x0, x1, x2, x3), maxy = Math.max(y0, y1, y2, y3);
+        quad(rd, texH, minx, miny, maxx - minx, maxy - miny, sx, sy, sw, sh);
+      },
+      __sdl_render_geometry: function () {},
+      __sdl_render_present: function (r) { const rd = rends[r - 1]; if (rd) present(rd); },
+    };
+  }
+
   /* ---- browser flavor: the real WebGPU SDL backend on a worker-local
    * OffscreenCanvas, presents handed to the kernel as ImageBitmaps ---- */
   if (typeof OffscreenCanvas !== 'undefined' &&
@@ -6644,7 +6792,14 @@ function createSurfaceSDL({ ctx, hooks }) {
     const inner = createBrowserSDL({ canvas, ctx, onPresent: presentFrame });
     // Audio goes to the kernel mixer, not the page: override the inner
     // backend's ring-less stubs (it was built without sharedAudioBuffer).
-    const env = Object.assign({}, inner[ENV_KEY], audioEnv);
+    // The SDL 2D renderer (SDL_Render*) is overridden with the SOFTWARE
+    // rasterizer flipping into each window's shm surface: this nested worker
+    // never drives createBrowserSDL's GPU renderer device, so its frames were
+    // silently dropped. Raw webgpu.h/gpubox keeps the GPU present path (this
+    // only replaces the __sdl_render_*/texture imports). fbByHandle is
+    // declared just below; the accessor is called lazily at render time.
+    const env = Object.assign({}, inner[ENV_KEY], audioEnv,
+      makeSoftwareRenderer(function (handle) { const w = fbByHandle.get(handle); return w ? { fb: w.fb } : null; }));
     const innerCreate = env.__sdl_create_window;
     const innerDestroy = env.__sdl_destroy_window;
     const innerSetTitle = env.__sdl_set_window_title;
@@ -6765,7 +6920,7 @@ function createSurfaceSDL({ ctx, hooks }) {
   let animationFrameFunc = null;
   let sdlTicksBase = null;
   const windows = [];                // handle-1 -> { sid, w, h, fb, pendingCfg? } | null
-  const nullTextures = [];
+
   onConfigure = function (sid, w, h) {
     const win = windows[(handleBySid.get(sid) || 0) - 1];
     if (win) beginConfigure(win, w, h);
@@ -6870,36 +7025,6 @@ function createSurfaceSDL({ ctx, hooks }) {
         const win = windows[handle - 1];
         return win ? shmPresent(win, pixelsPtr, w, h, pitch) : -1;
       },
-      /* Renderer API: null-backend contract (tier 0 — no GPU pixels headless;
-       * Dawn or the browser flavor provide them). Validation mirrors
-       * createNullSDL so the C<->host contract stays testable. */
-      __sdl_create_renderer: function () { return 1; },
-      __sdl_destroy_renderer: function () {},
-      __sdl_create_texture: function () { nullTextures.push({ scaleMode: 1, blendMode: 0 }); return nullTextures.length; },
-      __sdl_destroy_texture: function (t) { if (t > 0 && nullTextures[t - 1]) nullTextures[t - 1] = null; },
-      __sdl_update_texture: function () {},
-      __sdl_set_texture_color_mod: function () {},
-      __sdl_set_texture_alpha_mod: function () {},
-      __sdl_set_texture_blend_mode: function (t, mode) {
-        if (mode !== 0 && mode !== 1 && mode !== 2 && mode !== 4) throw new Error('SDL: unsupported blend mode ' + mode + ' (supported: NONE=0, BLEND=1, ADD=2, MOD=4)');
-        const tx = nullTextures[t - 1]; if (tx) tx.blendMode = mode;
-      },
-      __sdl_get_texture_blend_mode: function (t) {
-        const tx = nullTextures[t - 1]; return tx ? tx.blendMode : 0;
-      },
-      __sdl_set_texture_scale_mode: function (t, mode) {
-        if (mode !== 0 && mode !== 1) throw new Error('SDL: unsupported scale mode ' + mode + ' (supported: NEAREST=0, LINEAR=1)');
-        const tx = nullTextures[t - 1]; if (tx) tx.scaleMode = mode;
-      },
-      __sdl_get_texture_scale_mode: function (t) {
-        const tx = nullTextures[t - 1]; return tx ? tx.scaleMode : 1;
-      },
-      __sdl_set_draw_color: function () {},
-      __sdl_set_draw_blend_mode: function () {},
-      __sdl_render_clear: function () {},
-      __sdl_render_quad: function () {},
-      __sdl_render_geometry: function () {},
-      __sdl_render_present: function () {},
       __sdl_set_animation_frame_func: function (callbackPtr) { animationFrameFunc = callbackPtr; },
       __sdl_push_key_event: function () {},
       __sdl_push_mouse_button_event: function () {},
@@ -6912,7 +7037,9 @@ function createSurfaceSDL({ ctx, hooks }) {
       __wait: waitMulti,           // unified multi-source wait (0178)
       // Audio: real source rings into the kernel mixer in both flavors
       // (todos/0017) — see buildAudioEnv above.
-    }, audioEnv),
+      // SDL 2D renderer (SDL_Render*): the software rasterizer over each
+      // window's shm surface (headless/Node has no GPU renderer at all).
+    }, audioEnv, makeSoftwareRenderer(function (h) { return windows[h - 1]; })),
   };
 }
 
