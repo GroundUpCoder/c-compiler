@@ -5995,7 +5995,11 @@ function createNullSDL() {
         const tx = nullTextures[t - 1]; return tx ? tx.scaleMode : 1;
       },
       __sdl_set_draw_color: function () {},
-      __sdl_set_draw_blend_mode: function () {},
+      __sdl_set_draw_blend_mode: function (r, mode) {
+        // Validate like the texture setter above — every backend rejects the
+        // same set, so an unsupported mode fails identically everywhere.
+        if (mode !== 0 && mode !== 1 && mode !== 2 && mode !== 4) throw new Error('SDL: unsupported blend mode ' + mode + ' (supported: NONE=0, BLEND=1, ADD=2, MOD=4)');
+      },
       __sdl_render_clear: function () {},
       __sdl_render_quad: function () {},
       __sdl_render_geometry: function () {},
@@ -6617,15 +6621,40 @@ function createSurfaceSDL({ ctx, hooks }) {
     const rends = [];   // 1-based renderer records
     const texs = [];    // 1-based texture records
     const clamp = (v) => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
-    // src-over into fb at byte offset o; NONE (blend 0) writes an opaque copy
-    // so the window surface stays opaque (it composites over the desktop).
+    // Blend src (r,g,b,a — floats fine, color-mod pre-applied) into fb at byte
+    // offset o. The arms mirror SDL_BLEND_DESC (the GPU tier's pipelines), so
+    // both tiers produce the same pixels; the fb alpha stays opaque in every
+    // mode (the window surface composites over the desktop).
+    //   NONE:  dst = src            BLEND: dst = src*srcA + dst*(1-srcA)
+    //   ADD:   dst = dst + src*srcA (clamped)     MOD: dst = src*dst
     const put = (f, o, r, g, b, a, blend) => {
+      if (blend === 2) {                       // ADD
+        if (a <= 0) return;
+        const sa = a / 255;
+        f[o] = clamp(f[o] + r * sa); f[o + 1] = clamp(f[o + 1] + g * sa);
+        f[o + 2] = clamp(f[o + 2] + b * sa); f[o + 3] = 255;
+        return;
+      }
+      if (blend === 4) {                       // MOD (srcA ignored, like the GPU desc)
+        f[o] = (f[o] * r / 255) | 0; f[o + 1] = (f[o + 1] * g / 255) | 0;
+        f[o + 2] = (f[o + 2] * b / 255) | 0; f[o + 3] = 255;
+        return;
+      }
       if (blend === 0 || a >= 255) { f[o] = r | 0; f[o + 1] = g | 0; f[o + 2] = b | 0; f[o + 3] = 255; return; }
       if (a <= 0) return;
       const ia = a / 255, na = 1 - ia;
       f[o] = (r * ia + f[o] * na) | 0; f[o + 1] = (g * ia + f[o + 1] * na) | 0;
       f[o + 2] = (b * ia + f[o + 2] * na) | 0; f[o + 3] = 255;
     };
+    // Resize renegotiation (todos/0019): pendingCfg only exists once drainInput
+    // delivered the RESIZED event (created in the same drain iteration that
+    // queues it and re-derives the C-side window surface in place). ensureFb
+    // then adopts the pending dims at the next RenderClear — the renderer
+    // backbuffer tracks the window, SDL3 semantics, the exact counterpart of
+    // the shm path's in-place surface re-derivation — and present() acks ONLY
+    // once a full frame was rendered at the pending dims, landing it in the
+    // new SAB (the shmPresent gate, tear-free by construction). A binary that
+    // never pumps never drains → no pendingCfg → keeps its old geometry.
     const ensureFb = (rd) => {
       const win = winFor(rd.win);
       const cfg = win && win.pendingCfg;
@@ -6672,15 +6701,44 @@ function createSurfaceSDL({ ctx, hooks }) {
       const tp = tx.cpuPixels, TW = tx.w, TH = tx.h;
       const bl = tx.blendMode, cmR = tx.colorR, cmG = tx.colorG, cmB = tx.colorB, cmA = tx.alpha;
       const ddw = (x1 - x0) || 1, ddh = (y1 - y0) || 1;
+      const linear = tx.scaleMode === 1;   // SDL3 default LINEAR; NEAREST = 0
       for (let y = cy0; y < cy1; y++) {
         const syf = sy + ((y + 0.5 - y0) / ddh) * sh;
-        let iy = Math.floor(syf); if (iy < 0) iy = 0; else if (iy >= TH) iy = TH - 1;
-        const rowBase = iy * TW; let o = (y * FW + cx0) * 4;
-        for (let x = cx0; x < cx1; x++, o += 4) {
-          const sxf = sx + ((x + 0.5 - x0) / ddw) * sw;
-          let ix = Math.floor(sxf); if (ix < 0) ix = 0; else if (ix >= TW) ix = TW - 1;
-          const so = (rowBase + ix) * 4;
-          put(f, o, tp[so] * cmR, tp[so + 1] * cmG, tp[so + 2] * cmB, tp[so + 3] * cmA, bl);
+        let o = (y * FW + cx0) * 4;
+        if (!linear) {
+          let iy = Math.floor(syf); if (iy < 0) iy = 0; else if (iy >= TH) iy = TH - 1;
+          const rowBase = iy * TW;
+          for (let x = cx0; x < cx1; x++, o += 4) {
+            const sxf = sx + ((x + 0.5 - x0) / ddw) * sw;
+            let ix = Math.floor(sxf); if (ix < 0) ix = 0; else if (ix >= TW) ix = TW - 1;
+            const so = (rowBase + ix) * 4;
+            put(f, o, tp[so] * cmR, tp[so + 1] * cmG, tp[so + 2] * cmB, tp[so + 3] * cmA, bl);
+          }
+        } else {
+          // Bilinear — texel centers at integer+0.5, clamp-to-edge: the GPU
+          // sampler's semantics, so the two tiers scale identically. An
+          // unscaled 1:1 blit lands frac 0 on exact texels (no blur).
+          const v = syf - 0.5;
+          let ty0 = Math.floor(v); const fy = v - ty0;
+          let ty1 = ty0 + 1;
+          if (ty0 < 0) ty0 = 0; else if (ty0 >= TH) ty0 = TH - 1;
+          if (ty1 < 0) ty1 = 0; else if (ty1 >= TH) ty1 = TH - 1;
+          const r0 = ty0 * TW, r1 = ty1 * TW;
+          for (let x = cx0; x < cx1; x++, o += 4) {
+            const u = sx + ((x + 0.5 - x0) / ddw) * sw - 0.5;
+            let tx0 = Math.floor(u); const fx = u - tx0;
+            let tx1 = tx0 + 1;
+            if (tx0 < 0) tx0 = 0; else if (tx0 >= TW) tx0 = TW - 1;
+            if (tx1 < 0) tx1 = 0; else if (tx1 >= TW) tx1 = TW - 1;
+            const a00 = (r0 + tx0) * 4, a01 = (r0 + tx1) * 4, a10 = (r1 + tx0) * 4, a11 = (r1 + tx1) * 4;
+            const w00 = (1 - fx) * (1 - fy), w01 = fx * (1 - fy), w10 = (1 - fx) * fy, w11 = fx * fy;
+            put(f, o,
+              (tp[a00] * w00 + tp[a01] * w01 + tp[a10] * w10 + tp[a11] * w11) * cmR,
+              (tp[a00 + 1] * w00 + tp[a01 + 1] * w01 + tp[a10 + 1] * w10 + tp[a11 + 1] * w11) * cmG,
+              (tp[a00 + 2] * w00 + tp[a01 + 2] * w01 + tp[a10 + 2] * w10 + tp[a11 + 2] * w11) * cmB,
+              (tp[a00 + 3] * w00 + tp[a01 + 3] * w01 + tp[a10 + 3] * w10 + tp[a11 + 3] * w11) * cmA,
+              bl);
+          }
         }
       }
     };
@@ -6722,7 +6780,10 @@ function createSurfaceSDL({ ctx, hooks }) {
         const rd = rends[r - 1]; if (!rd) return;
         rd.drawR = clamp(rr * 255); rd.drawG = clamp(gg * 255); rd.drawB = clamp(bb * 255); rd.drawA = clamp(aa * 255);
       },
-      __sdl_set_draw_blend_mode: function (r, mode) { const rd = rends[r - 1]; if (rd) rd.drawBlend = mode; },
+      __sdl_set_draw_blend_mode: function (r, mode) {
+        if (mode !== 0 && mode !== 1 && mode !== 2 && mode !== 4) throw new Error('SDL: unsupported blend mode ' + mode + ' (supported: NONE=0, BLEND=1, ADD=2, MOD=4)');
+        const rd = rends[r - 1]; if (rd) rd.drawBlend = mode;
+      },
       __sdl_render_clear: function (r) {
         const rd = rends[r - 1]; if (!rd) return;
         const f = ensureFb(rd), R = rd.drawR, G = rd.drawG, B = rd.drawB;
@@ -6792,18 +6853,47 @@ function createSurfaceSDL({ ctx, hooks }) {
     const inner = createBrowserSDL({ canvas, ctx, onPresent: presentFrame });
     // Audio goes to the kernel mixer, not the page: override the inner
     // backend's ring-less stubs (it was built without sharedAudioBuffer).
-    // The SDL 2D renderer (SDL_Render*) is overridden with the SOFTWARE
-    // rasterizer flipping into each window's shm surface: this nested worker
-    // never drives createBrowserSDL's GPU renderer device, so its frames were
-    // silently dropped. Raw webgpu.h/gpubox keeps the GPU present path (this
-    // only replaces the __sdl_render_*/texture imports). fbByHandle is
-    // declared just below; the accessor is called lazily at render time.
-    const env = Object.assign({}, inner[ENV_KEY], audioEnv,
-      makeSoftwareRenderer(function (handle) { const w = fbByHandle.get(handle); return w ? { fb: w.fb } : null; }));
+    const env = Object.assign({}, inner[ENV_KEY], audioEnv);
     const innerCreate = env.__sdl_create_window;
     const innerDestroy = env.__sdl_destroy_window;
     const innerSetTitle = env.__sdl_set_window_title;
     const fbByHandle = new Map();              // handle -> { sid, fb, w, h }
+
+    // ---- SDL 2D renderer backend: WebGPU is THE path, software the fallback ----
+    // The GPU renderer (createBrowserSDL's, kept from `inner` above) encodes
+    // each SDL_Render* frame on the per-process WebGPU device and presents
+    // through presentTo → transferToImageBitmap → hooks.surfaceFrame — the
+    // same gpu transport webgpu.h apps use, composited uniformly with them
+    // and with direct-surface (shm) apps.
+    //
+    // Its ONE missing piece in this nested worker was scheduling, not
+    // capability: device acquisition is an event-loop promise chain
+    // (requestAdapter → requestDevice → configure), historically kicked
+    // lazily at the app's first SDL_CreateRenderer — but OS SDL apps may
+    // legally BLOCK in their main loop (sdlDelay is a real Atomics.wait
+    // sleep, todos/0224), so once main() starts this worker's event loop
+    // never turns again and the chain can neither resolve nor reject;
+    // rdrPipelines stayed null and every present hit the drop-pre-device
+    // branch (verified: a setTimeout queued at create_renderer never fires).
+    // webgpu.h apps never hit this because their main() RETURNS (callback
+    // model) — the post-main loop keeps the event loop alive.
+    //
+    // Fix: runModule awaits gpuRendererReady() BEFORE main() for any module
+    // that imports __sdl_create_renderer (tree-shaken imports make that a
+    // precise "this app uses SDL_Render*" signal — plain processes pay
+    // nothing), so pipelines exist from frame one. The backend is locked
+    // exactly once there: GPU when the device landed; the software
+    // rasterizer (shm flip — the same tier the headless flavor uses) ONLY
+    // if acquisition genuinely failed. Browser boot already hard-requires
+    // worker WebGPU (boot-nogpu), so the fallback is a no-GPU escape hatch,
+    // never the shipping path.
+    const swRenderer = makeSoftwareRenderer(function (handle) { return fbByHandle.get(handle) || null; });
+    const gpuRenderer = {};
+    Object.keys(swRenderer).forEach(function (n) { gpuRenderer[n] = env[n]; });
+    let rdrBackend = gpuRenderer;
+    Object.keys(swRenderer).forEach(function (n) {
+      env[n] = function () { return rdrBackend[n].apply(null, arguments); };
+    });
     env.__sdl_create_window = function (titlePtr, x, y, w, h, flags) {
       const s = surfaceCreate(titlePtr, w, h, flags);
       if (!s) return 0;
@@ -6886,6 +6976,18 @@ function createSurfaceSDL({ ctx, hooks }) {
     const out = Object.assign({}, inner);
     out[ENV_KEY] = env;
     out.drainInput = drainInput;
+    // Awaited by runModule before main() for renderer-importing modules (see
+    // the renderer-backend block above). Resolves once the WebGPU device +
+    // pipelines landed (true) or acquisition failed (false — backend flips
+    // to the software rasterizer before the app can issue a single call).
+    out.gpuRendererReady = function () {
+      return new Promise(function (res) {
+        inner.whenRendererReady(function (ok) {
+          if (!ok) rdrBackend = swRenderer;
+          res(ok);
+        });
+      });
+    };
     // Vsync broadcast (todos/0100, wired by todos/0167): when the kernel
     // advertises a real frame clock (compositor rAF → vsyncTick), pace the
     // frame loop by awaiting the kernel-page tick word — phase-aligned with
@@ -7112,9 +7214,17 @@ function createCanvasGPU(canvas) {
       cg.ready = true;
       const ws = cg.waiters; cg.waiters = [];
       for (const fn of ws) { try { fn(); } catch (e) { console.error(e); } }
-    }).catch(function (e) { console.error('SDL/WebGPU: device init failed', e); });
+    }).catch(function (e) {
+      console.error('SDL/WebGPU: device init failed', e);
+      // Fire the waiters on FAILURE too (cg.device stays null — callbacks
+      // guard on it), so a caller waiting to pick a renderer backend can
+      // fall back instead of hanging forever on a never-resolving ready.
+      cg.failed = true;
+      const ws = cg.waiters; cg.waiters = [];
+      for (const fn of ws) { try { fn(); } catch (e2) { console.error(e2); } }
+    });
   };
-  cg.whenReady = function (cb) { if (cg.ready) cb(); else { cg.waiters.push(cb); cg.ensure(); } };
+  cg.whenReady = function (cb) { if (cg.ready || cg.failed) cb(); else { cg.waiters.push(cb); cg.ensure(); } };
   return cg;
 }
 
@@ -7161,6 +7271,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     cgpu.whenReady(function () {
       if (blit.pipeline) return;
       const dev = cgpu.device;
+      if (!dev) return;   // acquisition failed — waiters fire on failure too now
       blit.sampler = dev.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
       const shader = dev.createShaderModule({ code: BLIT_WGSL });
       blit.pipeline = dev.createRenderPipeline({
@@ -7255,6 +7366,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     cgpu.whenReady(function () {
       if (rdrPipelines) return;
       const dev = cgpu.device;
+      if (!dev) return;   // acquisition failed — waiters fire on failure too now
       rdrSamplerLinear = dev.createSampler({ magFilter: 'linear', minFilter: 'linear' });
       rdrSamplerNearest = dev.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
       rdrBindLayout = dev.createBindGroupLayout({
@@ -7764,6 +7876,18 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     // Each call arms a readback on the NEXT RenderPresent (on-demand — no GPU
     // readback cost on frames where nothing is capturing).
     getLastFrame: function () { rdrCapturePending = true; return blit.lastFrame; },
+    // Renderer readiness (Minesweeper lane): kick WebGPU device acquisition +
+    // pipeline build NOW and fire cb(deviceOk) once they've landed (or failed).
+    // Device acquisition is an event-loop promise chain, so an app that enters
+    // a BLOCKING main loop (legal in OS process workers — sdlDelay is a real
+    // Atomics.wait sleep) can never resolve it from inside the loop: the OS
+    // flavor awaits this BEFORE main() for any module that imports
+    // __sdl_create_renderer, so SDL_Render* frames hit live pipelines from
+    // frame one instead of the drop-pre-device branch.
+    whenRendererReady: function (cb) {
+      rdrEnsure();
+      cgpu.whenReady(function () { cb(!!cgpu.device); });
+    },
     // NESTED workers (OS process workers are workers-of-workers) expose
     // requestAnimationFrame as a global but THROW NotSupportedError on call
     // (Chromium). Latch to a setTimeout pacer on the first failure instead
@@ -11127,6 +11251,21 @@ async function runModule({
       try { spawnHooks.exit(status | 0); } catch (e) { /* kernel gone — fall through */ }
       return innerExit(status);
     };
+  }
+
+  /* SDL 2D renderer device pre-acquisition (OS surface flavor only): WebGPU
+     device acquisition is an event-loop promise chain, and an OS SDL app may
+     legally BLOCK in its main loop (cooperative Atomics.wait sleeps) — so the
+     device must exist BEFORE main() starts or SDL_Render* frames are dropped
+     forever. The event loop is alive here (runModule is async, main hasn't
+     been entered), and tree-shaken imports make "uses the renderer" precise:
+     only modules importing __sdl_create_renderer pay the (one-off, ~ms)
+     acquisition wait — hush/ls/doom/webgpu.h apps skip it entirely. */
+  if (sdl && typeof sdl.gpuRendererReady === 'function' &&
+      WebAssembly.Module.imports(module).some(function (im) {
+        return im.module === ENV_KEY && im.name === '__sdl_create_renderer';
+      })) {
+    await sdl.gpuRendererReady();
   }
 
   const instance = new WebAssembly.Instance(module, imports);

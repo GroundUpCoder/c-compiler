@@ -80,7 +80,7 @@ check('SDL_DestroySurface reclaimed the owned surface (no crash after free)',
   lines.includes('PNGRT-DONE') && lines.includes('rc=0'),
   JSON.stringify(lines.slice(-8)));
 check('libpng folded as a Built-in package (os-release PACKAGES=)',
-  /PACKAGES=(.*,)?libpng(,|$)/.test(r.stdout), JSON.stringify(lines.filter(l => l.includes('PACKAGES')).slice(0, 2)));
+  /^PACKAGES=(.*,)?libpng(,|$)/m.test(r.stdout), JSON.stringify(lines.filter(l => l.includes('PACKAGES')).slice(0, 2)));
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);
