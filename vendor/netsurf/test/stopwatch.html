@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+<head><title>stopwatch</title></head>
+<body>
+<h1>Stopwatch</h1>
+<p>Elapsed: <span id="t">0</span> ticks</p>
+<script>
+var n = 0;
+setInterval(function () {
+  n = n + 1;
+  document.getElementById("t").textContent = String(n);
+  console.log("TICK " + n);
+}, 100);
+</script>
+</body>
+</html>

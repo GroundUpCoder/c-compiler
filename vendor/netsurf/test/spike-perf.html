@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head><title>perf</title></head>
+<body style="margin:0;background:#ffffff">
+<p>Counter: <span id="t">0</span></p>
+<script>
+/* build a demo-scale-plus document: 300 paragraphs, each with styled
+ * inline children => ~1500 elements + ~1200 text nodes */
+for (var i = 0; i < 300; i++) {
+  document.write('<p id="row' + i + '">row ' + i +
+    ' <b>bold</b> <i>ital</i> <span>span text here</span>' +
+    ' <a href="#x">link</a></p>');
+}
+</script>
+<script>
+var t0 = Date.now(), last = t0, n = 0, worst = 0, sum = 0;
+var phase = 1;
+var span = document.getElementById("t");
+function tick() {
+  var now = Date.now(), d = now - last;
+  last = now;
+  n++;
+  if (n > 1) { sum += d; if (d > worst) worst = d; }
+  if (n > 1 && d > 200) { console.log("STALL phase=" + phase + " tick=" + n + " d=" + d); }
+  span.textContent = phase + "-" + n;
+  if (n === 40) {
+    console.log("PERF phase=" + phase +
+      " ticks=40 avg=" + (sum / 39).toFixed(1) +
+      " worst=" + worst +
+      " total=" + (now - t0));
+    if (phase === 1) {
+      /* phase 2: as fast as the 10 ms scheduler floor allows */
+      phase = 2; n = 0; worst = 0; sum = 0; t0 = last = Date.now();
+      clearInterval(iv);
+      iv = setInterval(tick, 0);
+    } else {
+      clearInterval(iv);
+      console.log("PERFDONE");
+    }
+  }
+}
+var iv = setInterval(tick, 50);
+console.log("READY nodes=" + document.getElementsByTagName("*").length);
+</script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head><title>danger</title></head>
+<body style="margin:0;background:#ffffff">
+<p id="status">S0</p>
+<div onclick="document.getElementById('status').textContent = 'S' + (++window.mutn); console.log('MUT ' + window.mutn);">MUTATE</div>
+<div onclick="document.getElementsByTagName('input')[0].value = 'world'; console.log('VALSET');">SETVAL</div>
+<div onclick="document.getElementById('prow-ra').setAttribute('style', 'display:none'); console.log('HID');">HIDEROW</div>
+<form name="f" action="submitted.html">
+<p id="prow-txt"><input type="text" name="txt" value="hello"></p>
+<p id="prow-chk"><input type="checkbox" name="chk" checked> check</p>
+<p id="prow-ra"><input type="radio" id="ra" name="r" value="a" checked> AAAA</p>
+<p id="prow-rb"><input type="radio" id="rb" name="r" value="b" onclick="console.log('RBCLICK checked=' + this.checked);"> BBBB</p>
+<p id="prow-sel"><select name="sel"><option>one</option><option selected>two</option></select></p>
+</form>
+<map name="m"><area shape="rect" coords="0,0,63,63" href="area-hit.html"></map>
+<img src="img/orange.png" width="64" height="64" usemap="#m">
+<p id="seltext">Selectable paragraph of text for the selection probe.</p>
+<script>
+window.mutn = 0;
+console.log("READY");
+</script>
+</body>
+</html>

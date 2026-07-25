@@ -596,6 +596,9 @@ dom_default_action_DOMNodeInserted_cb(struct dom_event *evt, void *pw)
 		/* an element node has been inserted */
 		dom_html_element_type tag_type;
 
+		/* any post-parse insertion changes the render tree */
+		html_schedule_reconvert(htmlc);
+
 		exc = dom_html_element_get_tag_type(node, &tag_type);
 		if (exc != DOM_NO_ERR) {
 			tag_type = DOM_HTML_ELEMENT_TYPE__UNKNOWN;
@@ -711,6 +714,13 @@ dom_default_action_DOMSubtreeModified_cb(struct dom_event *evt, void *pw)
 
 	exc = dom_event_get_target(evt, &node);
 	if ((exc == DOM_NO_ERR) && (node != NULL)) {
+		/* whether this modification invalidates the render tree;
+		 * libdom fires DOMSubtreeModified (targeting the parent
+		 * element) for node insertion/removal, character data
+		 * changes and attribute changes, so this ONE generic
+		 * hook covers all structural mutation classes */
+		bool reconvert = true;
+
 		if (htmlc->title == (dom_node *)node) {
 			/* Node is our title node */
 			html_process_title(htmlc, (dom_node *)node);
@@ -730,6 +740,8 @@ dom_default_action_DOMSubtreeModified_cb(struct dom_event *evt, void *pw)
 
 			switch (tag_type) {
 			case DOM_HTML_ELEMENT_TYPE_STYLE:
+				/* stylesheet path, not a render-tree edit */
+				reconvert = false;
 				if (nsoption_bool(author_level_css)) {
 					html_css_update_style(htmlc,
 							(dom_node *)node);
@@ -737,12 +749,22 @@ dom_default_action_DOMSubtreeModified_cb(struct dom_event *evt, void *pw)
 				break;
 			case DOM_HTML_ELEMENT_TYPE_TEXTAREA:
 			case DOM_HTML_ELEMENT_TYPE_INPUT:
+				/* value edits sync the existing gadget;
+				 * a whole-document re-box per keystroke
+				 * would destroy the textarea widget (and
+				 * caret) mid-edit */
+				reconvert = false;
 				html_texty_element_update(htmlc, (dom_node *)node);
 				fallthrough;
 			default:
 				break;
 			}
 		}
+
+		if (reconvert) {
+			html_schedule_reconvert(htmlc);
+		}
+
 		dom_node_unref(node);
 	}
 }

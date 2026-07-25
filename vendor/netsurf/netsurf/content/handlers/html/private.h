@@ -138,6 +138,14 @@ typedef struct html_content {
 	void *box_conversion_context;
 	/** Box tree, or NULL. */
 	struct box *layout;
+	/** Previous box tree talloc context, kept alive while a live
+	 * re-conversion (JS DOM mutation) builds its replacement; freed
+	 * at the swap. */
+	int *reconvert_old_bctx;
+	/** A live re-conversion is in progress */
+	bool reconverting;
+	/** Mutations arrived while a re-conversion was in progress */
+	bool reconvert_pending;
 	/** Document background colour. */
 	colour background_colour;
 
@@ -235,6 +243,17 @@ void html__redraw_a_box(html_content *htmlc, struct box *box);
  * \param htmlc Content to convert
  */
 void html_finish_conversion(html_content *htmlc);
+
+
+/**
+ * Schedule a live re-conversion (re-box + reflow + repaint) of a
+ * converted document whose DOM has been mutated (e.g. by script).
+ *
+ * Coalesces: any number of calls before the scheduled pass runs
+ * result in one re-conversion.  Safe to call at any time; ignored
+ * until the initial conversion has produced a layout.
+ */
+void html_schedule_reconvert(html_content *htmlc);
 
 
 /**
