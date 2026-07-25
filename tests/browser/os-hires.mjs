@@ -13,7 +13,11 @@
 // mode flips to smooth downscale; Z>=1 keeps the crisp pixelated upscale.
 //
 // This test proves, on a phone-shaped viewport:
-//   - the DEFAULT is untouched: auto-2× boot, no cfg file, nothing stored;
+//   - the DEFAULT is untouched: 1× boot (the v163 flip — auto-2× is gone,
+//     2× is one explicit Desktop-site gesture away), no cfg file, nothing
+//     stored; Z>=1 keeps the pixelated render mode;
+//   - the explicit Desktop-site toggle reaches 2× (persisted) and 2× keeps
+//     the crisp pixelated integer upscale;
 //   - Control Panel → Display → "Densest (0.5x)" applies LIVE through the
 //     full bridge (probe 0.5, label sync, logical screen doubles past the
 //     pane, more fixed-116px icon columns fit, smooth render mode);
@@ -22,7 +26,7 @@
 //   - the ± strip writes the SAME store (zoom 0.75 lands in
 //     ~/.config/display) — one source of truth, applet and strip agree;
 //   - the choice persists across a reload; the applet's "Automatic
-//     (default)" clears it everywhere (back to the 2× phone default, page
+//     (default)" clears it everywhere (back to the 1× default, page
 //     localStorage included);
 //   - the VT2_MAX_DIM backing-store ceiling clamps a 4200px pane at 0.5×
 //     to exactly 8192 logical px (WebGPU default maxTextureDimension2D),
@@ -68,7 +72,7 @@ async function snapshot(page, file) {
 try {
   await waitForServer(URL, { tries: 240, interval: 500 });
 
-  // ---- phone-shaped viewport: boots at the 2× mobile default ----
+  // ---- phone-shaped viewport: boots at the 1× default (v163) ----
   const mctx = await browser.newContext({
     viewport: { width: 390, height: 844 }, hasTouch: true });
   const page = await mctx.newPage();
@@ -100,17 +104,17 @@ try {
     return s;
   };
 
-  // ---- DEFAULT UNCHANGED: auto-2×, no cfg file, nothing persisted ----
-  const s2 = await settleZoom(2);
+  // ---- DEFAULT UNCHANGED (v163): 1×, no cfg file, nothing persisted ----
+  await settleZoom(1);
   const defState = await page.evaluate(() => ({
     z: window.__osVt2Zoom,
     label: document.getElementById('zoomlabel').textContent,
     stored: localStorage.getItem('gucos.vt2.zoom'),
     ir: getComputedStyle(document.getElementById('screen')).imageRendering,
   }));
-  check('phone default untouched: auto-2× (probe + "2×" label), UNPERSISTED',
-    defState.z === 2 && defState.label === '2×' && defState.stored === null, defState);
-  check('2× render mode is pixelated (crisp integer upscale unchanged)',
+  check('phone default untouched: 1× (probe + "1×" label), UNPERSISTED',
+    defState.z === 1 && defState.label === '1×' && defState.stored === null, defState);
+  check('1× render mode is pixelated (Z>=1 keeps the crisp upscale path)',
     defState.ir === 'pixelated', defState.ir);
   await setVt(1);
   await page.keyboard.type('cat /root/.config/display; echo CFG0-D""ONE\r');
@@ -119,7 +123,23 @@ try {
     await page.evaluate(() => /can't open|No such file/.test(
       window.__osOut.split('CFG0-DONE')[0].split('\n').slice(-3).join('\n'))), null);
   await setVt(2);
-  const beforePath = await snapshot(page, 'hires-before-2x.png');
+  const beforePath = await snapshot(page, 'hires-before-1x.png');
+
+  // ---- EXPLICIT 2×: the Desktop-site toggle is the post-v163 route ----
+  // (os-mobile2x.mjs owns the toggle policy; here it's just the way to
+  // reach an integer upscale so the render-mode contract can be asserted.)
+  await page.click('#desksite');
+  const exp2 = await page.evaluate(() => ({
+    z: window.__osVt2Zoom,
+    label: document.getElementById('zoomlabel').textContent,
+    stored: localStorage.getItem('gucos.vt2.zoom'),
+    ir: getComputedStyle(document.getElementById('screen')).imageRendering,
+  }));
+  check('Desktop-site toggle reaches 2× explicitly ("2×" label, PERSISTED)',
+    exp2.z === 2 && exp2.label === '2×' && exp2.stored === '2', exp2);
+  check('2× render mode is pixelated (crisp integer upscale unchanged)',
+    exp2.ir === 'pixelated', exp2.ir);
+  const s2 = await settleZoom(2);
 
   // ---- THE APPLET: Control Panel → Display → Densest (0.5x), LIVE ----
   await setVt(1);
@@ -148,7 +168,7 @@ try {
   const s05 = await settleZoom(0.5);
   check('0.5× logical screen is floor(pane/0.5) = 2× the pane per axis',
     s05.w === pane.w * 2 && s05.h === pane.h * 2, { s05, pane });
-  check('0.5× has 4× the logical width of the 2× default (denser: more fits)',
+  check('0.5× has 4× the logical width of the explicit 2× (denser: more fits)',
     s05.w >= s2.w * 3.9, { s05, s2 });
   // Fixed-pixel desktop icon cells (wm.c CELL_W 116): more COLUMNS fit now.
   check('more fixed-116px icon columns fit at 0.5× than at 2×',
@@ -221,9 +241,9 @@ try {
   await waitOut('DPW2-OK', 30000);
   await page.keyboard.type('wmctl click "Automatic (default)"\r');
   await page.waitForFunction(() =>
-    window.__osVt2Zoom === 2 && localStorage.getItem('gucos.vt2.zoom') === null,
+    window.__osVt2Zoom === 1 && localStorage.getItem('gucos.vt2.zoom') === null,
     { timeout: 15000, polling: 150 });
-  check('applet "Automatic (default)" returns to the 2× phone default and clears localStorage', true);
+  check('applet "Automatic (default)" returns to the 1× default (v163) and clears localStorage', true);
   await mctx.close();
 
   // ---- the VT2_MAX_DIM ceiling: a 4200px pane at 0.5 would want 8400 ----
