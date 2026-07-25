@@ -601,6 +601,52 @@ static int idle_pending = 0;       /* GET_IDLE in flight */
 static int marq_x, marq_y;         /* marquee banner position */
 static float star_x[SAVER_STARS], star_y[SAVER_STARS], star_z[SAVER_STARS];
 
+/* ---- transient hover furniture vs. focus-owning popups ----
+ *
+ * TRANSIENTS are the wm's hover-raised, purely informational surfaces: the
+ * Aero Peek thumbnail (0063) and the clock's date tooltip (0101). Being
+ * ownerless borderless top-levels they take the kernel's create-focus
+ * (kernel.js focuses every parentless new surface) and then hand it straight
+ * back to the focused app in their EV_CREATED echo ("must not steal focus
+ * from the app" — see handle_event).
+ *
+ * BOTH halves of that churn are fatal to a popup whose ROOT MUST KEEP FOCUS
+ * — the Start menu, the context menu, the run dialog. Each of those is
+ * dismissed by focus landing on a sid it does not own, and neither the
+ * transient's own sid nor the app it hands focus back to is such a sid. So a
+ * transient raised over an open menu kills it twice over, and a transient
+ * merely still ALIVE when a menu opens kills it later, when the idle
+ * auto-dismiss in the frame loop destroys it and focus falls again.
+ *
+ * ONE rule instead of a per-pairing guard at each site (the clock branch of
+ * bar_motion used to carry the only copy, which is why hovering a taskbar
+ * BUTTON — the same function, two lines down — killed the menu):
+ *
+ *   while a focus-owning popup is up, no transient surface EXISTS.
+ *
+ * Enforced at the two seams: transients refuse to be created
+ * (popup_holds_focus, checked inside peek_show/date_show themselves so any
+ * future caller inherits it), and raising a focus-owning popup first drops
+ * any transient already showing (transients_dismiss, from the ctx/Start/run
+ * open paths). Killing the CREATE is what makes this structural rather than
+ * a patch per focus op: no surface means no create-focus steal, no echo, no
+ * hand-back, and nothing for the idle timer to destroy later. A new
+ * transient added here needs the same two lines; a new focus-owning popup
+ * needs only to join the predicate. */
+static int popup_holds_focus(void) {
+    return smroot.win ||                             /* Start menu (0028/0078) */
+           run_win ||                                /* Run... dialog (0078) */
+           saver_win ||                              /* screensaver (0096) */
+           (__mc.open && mc_kind == MK_CTX);         /* context menu (0091) */
+    /* sys_mode (0102) needs no entry: its keyboard move/size mode keeps the
+     * sysmenu popup up as the grabber, so MK_CTX already covers it. */
+}
+
+static void transients_dismiss(void) {
+    peek_dismiss();
+    date_dismiss();
+}
+
 static uint32_t rgb(int r, int g, int b) {
     return (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) | 0xFF000000u;
 }
@@ -1699,6 +1745,8 @@ static void run_dismiss(void) {
  * keyboard here. */
 static void run_open(void) {
     if (run_win) return;
+    transients_dismiss();              /* likewise: run_dismiss is focus-leave
+                                          driven too */
     run_len = 0;
     run_buf[0] = 0;
     run_win = SDL_CreateWindow("startrun", RUN_W, RUN_H, SDL_WINDOW_BORDERLESS);
@@ -1779,6 +1827,10 @@ static void sm_rebuild_left(void);        /* build the root's left pane (0098) *
 /* Open the single-column root panel (0132), parked bottom-left above the
  * taskbar at its EV_CREATED echo (title "startmenu" — see handle_event). */
 static int menu_open_root(void) {
+    transients_dismiss();              /* the ctx_begin rule, for the Start
+                                          menu: Ctrl+Esc can fire with a
+                                          preview up (bar_click's own
+                                          dismissals only cover the button) */
     sm_search[0] = 0; sm_search_len = 0;
     sm_lhover = -1;
     sm_rebuild_left();
@@ -2900,6 +2952,10 @@ static void ctx_dismiss(void) {
 static MenuTbl *ctx_begin(void) {
     menu_dismiss();
     ctx_dismiss();
+    transients_dismiss();              /* before the root is created, so the
+                                          destroy's focus fall lands while
+                                          ov[0].sid is still 0 and the
+                                          EV_FOCUS gate ignores it */
     if (ctx_tbl) { mc_menu_destroy(ctx_tbl); ctx_tbl = NULL; }
     ctx_tbl = mc_menu_create();
     mc_kind = MK_CTX;
@@ -3407,6 +3463,7 @@ static void peek_consume(wmp_hdr *h) {
  * EV_CREATED echo ("peek") parks it above the bar on the TOP layer and
  * hands focus straight back to whatever had it. */
 static void peek_show(int32_t sid, int btn_x, int bw) {
+    if (popup_holds_focus()) return;   /* a menu owns the focus: stand down */
     if (peek_win && peek_for == sid) return;     /* already up: just hold */
     peek_dismiss();
     peek_for = sid;
@@ -4084,6 +4141,8 @@ static void date_draw(void) {
  * EV_CREATED echo ("datepop") parks it and hands focus back (the peek
  * pattern) so it never steals focus from an app. */
 static void date_show(int pin) {
+    if (popup_holds_focus()) return;   /* likewise (this branch had the only
+                                          copy of the rule before) */
     date_hover_ms = SDL_GetTicks();
     if (date_win) { if (pin) date_pinned = 1; return; }
     date_pinned = pin;
@@ -4114,14 +4173,15 @@ static int btn_width(void) {
 
 /* Taskbar hover (todos/0063 Aero Peek): motion over a drawn button raises
  * the live thumbnail popup for its window; anywhere else on the bar drops
- * it. The Start menu wins conflicts — no previews while it's open. */
+ * it. An open menu wins every conflict — both raises below go through
+ * peek_show/date_show, which stand down on popup_holds_focus(), so neither
+ * a preview nor a tooltip can appear while one is up (the Start-menu early
+ * return stays: with the root panel over the strip there is nothing here
+ * worth computing). */
 static void bar_motion(float fx) {
     if (smroot.win) return;
-    /* The clock cell raises the date tooltip (todos/0101) — but not over an
-     * open context menu, whose root must keep focus. */
-    int cx = clock_left();
-    if ((int)fx >= cx && (int)fx < cx + CLOCK_W &&
-        !(__mc.open && mc_kind == MK_CTX)) {
+    int cx = clock_left();             /* the clock cell: date tooltip (0101) */
+    if ((int)fx >= cx && (int)fx < cx + CLOCK_W) {
         date_show(0);
         peek_dismiss();
         return;

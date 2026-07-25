@@ -9,8 +9,12 @@
 // (Down/Right/Left/Enter), New Folder / New Text File uniquifier, Sort by
 // Name (.icons forgotten), Refresh, icon-menu Open (activate path),
 // taskbar-button Restore/Minimize/Maximize/Close with grayed-row
-// semantics, ctlpanel argv (Display Properties), and the EDIT menu's
-// state gating (Undo/Cut/Copy/Paste/Select All) + clipboard paste.
+// semantics, ctlpanel argv (Display Properties), the EDIT menu's
+// state gating (Undo/Cut/Copy/Paste/Select All) + clipboard paste, and
+// the 0063 x 0091 rule: no transient hover surface (Aero Peek preview,
+// clock date tooltip) may exist while a focus-owning popup is up — the
+// preview's create-focus and its EV_CREATED hand-back both used to fire
+// the EV_FOCUS dismissal and kill the menu on the first mouse move.
 //
 // Run: node tests/kernel/test_ctxmenu_e2e.js
 'use strict';
@@ -246,6 +250,55 @@ const script = [
   'sleep 1',                                     // KEEP: RESIZE round-trip geometry settle back to the saved 240x160+12+36
   'echo ==bar7',
   'wmctl list',
+  // ---- Aero Peek / date tooltip vs. an open menu (0063 x 0091) ----
+  // The reported symptom: right-click a taskbar button, then move the mouse
+  // AT ALL and the menu vanishes behind a hover preview. Both halves of the
+  // preview's focus churn — the kernel's create-focus on the new ownerless
+  // surface AND the EV_CREATED hand-back to the app — land on a sid the menu
+  // does not own, and the EV_FOCUS dismissal rule closes it. The fix keeps no
+  // transient ALIVE while a focus-owning popup is up, so nothing is created
+  // here at all.
+  'wmctl click $TSID 120 18 3',
+  'wmctl wait win ctxmenu 8000',
+  'wmctl hover $TSID 120 18',                    // over the right-clicked button
+  'wmctl hover $TSID 300 18',                    // across to the next button cell
+  'wmctl hover $TSID 960 18',                    // and over the clock (datepop cell)
+  'sleep 0.5',                                   // KEEP: negative check — nothing to wait ON; a bounded settle is what proves no peek/datepop appeared and the menu did not die
+  'echo ==peek1',
+  'wmctl list',
+  'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
+  `wmctl click $CXSID 30 ${rowY(1)}`,            // MINIMIZE still fires from it
+  'wmctl wait flag $WSID m 8000',
+  'echo ==peek2',
+  'wmctl list',
+  'wmctl focus $WSID',                           // restore for the legs below
+  'wmctl wait noflag $WSID m 8000',
+  // The reverse order: a preview already UP when the right-click lands must
+  // be dropped, not left stranded over the menu.
+  'wmctl hover $TSID 120 18',
+  'wmctl wait win peek 8000',
+  'wmctl click $TSID 120 18 3',
+  'wmctl wait nowin peek 1500',                  // short: PEEK_IDLE_MS is 2500,
+                                                 // so a longer wait could nap
+                                                 // past the auto-dismiss and
+                                                 // pass without the fix
+  'wmctl wait win ctxmenu 8000',
+  'echo ==peek3',
+  'wmctl list',
+  'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
+  'wmctl key $CXSID 41 27',                      // Esc
+  'wmctl wait nowin ctxmenu 8000',
+  // ...and the same rule for the Start menu (the other popup that must keep
+  // focus): Ctrl+Esc can fire with a preview up.
+  'wmctl hover $TSID 120 18',
+  'wmctl wait win peek 8000',
+  'wmctl menu',
+  'wmctl wait win startmenu 8000',
+  'wmctl wait nowin peek 1500',
+  'echo ==peek4',
+  'wmctl list',
+  'wmctl menu',
+  'wmctl wait nowin startmenu 8000',
   'wmctl click $TSID 120 18 3',
   'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
@@ -403,6 +456,21 @@ check('MAXIMIZE fills the work area', geom(wrow(section('bar6'))) === '1024x704+
 check('RESTORE from maximized returns the saved geometry',
   geom(wrow(section('bar7'))) === '240x160+12+36',
   wrow(section('bar7')));
+// ---- Aero Peek / date tooltip vs. an open menu (0063 x 0091) ----
+const p1 = section('peek1');
+check('taskbar motion with the window menu open raises no preview/tooltip',
+  row(p1, 'peek') === '' && row(p1, 'datepop') === '', JSON.stringify(p1));
+check('...and the window menu survives that motion',
+  row(p1, 'ctxmenu') !== '', JSON.stringify(p1));
+check('a row of the survived menu still fires (MINIMIZE)',
+  flags(wrow(section('peek2'))).includes('m'), JSON.stringify(section('peek2')));
+const p3 = section('peek3');
+check('right-clicking over a live preview drops it, stranding nothing',
+  row(p3, 'peek') === '' && row(p3, 'ctxmenu') !== '', JSON.stringify(p3));
+const p4 = section('peek4');
+check('opening the Start menu likewise drops a live preview',
+  row(p4, 'peek') === '' && row(p4, 'startmenu') !== '', JSON.stringify(p4));
+
 const b8 = section('bar8');
 check('CLOSE request-closes the window (button 0 winbox gone)',
   b8.split('\n').filter(l => l.endsWith('\twinbox')).length === 1,
