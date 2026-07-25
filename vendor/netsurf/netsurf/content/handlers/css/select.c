@@ -1729,6 +1729,27 @@ css_error ua_default_for_property(void *pw, uint32_t property, css_hint *hint)
 	return CSS_OK;
 }
 
+/* exported interface documented in select.h */
+void nscss_node_data_clear(struct dom_node *node)
+{
+	dom_exception err;
+	void *old = NULL;
+
+	err = dom_node_set_user_data(node,
+			corestring_dom___ns_key_libcss_node_data,
+			NULL, NULL, &old);
+	if (err == DOM_NO_ERR && old != NULL) {
+		css_error error = css_libcss_node_data_handler(
+				&selection_handler, CSS_NODE_DELETED,
+				NULL, node, NULL, old);
+		if (error != CSS_OK) {
+			NSLOG(netsurf, INFO,
+			      "Failed to delete libcss_node_data.");
+		}
+	}
+}
+
+
 css_error set_libcss_node_data(void *pw, void *node, void *libcss_node_data)
 {
 	dom_node *n = node;

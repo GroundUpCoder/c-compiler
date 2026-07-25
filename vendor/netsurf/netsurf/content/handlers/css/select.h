@@ -59,4 +59,15 @@ css_error named_ancestor_node(void *pw, void *node,
 
 css_error node_is_visited(void *pw, void *node, bool *match);
 
+/**
+ * Drop the cached libcss node data from a DOM node, freeing it properly.
+ *
+ * Used by the live re-conversion path: re-styling a document behaves
+ * like styling a fresh one, so every node's style cache must go first
+ * (set_libcss_node_data asserts no stale data is being replaced).
+ *
+ * \param node  DOM node to clear (no-op if it carries no data)
+ */
+void nscss_node_data_clear(struct dom_node *node);
+
 #endif

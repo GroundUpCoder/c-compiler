@@ -94,6 +94,50 @@ netsurf core:
   per-frontend options include chain (the same 3 sites every upstream
   frontend hooks), pulling `gucos/options.h`.
 
+netsurf core — **the Lane B live re-conversion bridge** (JS DOM mutation →
+re-box → reflow → repaint; design in `todos/NETSURF-JS.md`, rationale in
+`logs/2026-07-26/netsurf-lane-b.md`).  Upstream converts a document to
+boxes exactly ONCE, so all of this is "make box construction re-runnable
+on a live content":
+
+- `content/handlers/html/html.c` + `private.h` — `html_schedule_reconvert`
+  (the one choke point, coalesced through `schedule(0, …)`), the teardown
+  that clears everything pointing into the dying box tree, build-then-swap
+  re-conversion, and the focus/caret re-bind across the swap.  Carries the
+  build-time kill switch `-DNETSURF_NO_LIVE_RECONVERT`, which restores
+  upstream behaviour — `smoke-js.mjs` leg 8 builds that variant as its A/B
+  baseline.
+- `content/handlers/html/dom_event.c` — schedules a re-conversion from the
+  GENERIC insert/subtree-modified default actions.  libdom fires
+  `DOMSubtreeModified` at the parent for insertion, removal, character
+  data AND attribute changes, so one hook covers every structural class;
+  STYLE keeps the stylesheet path and INPUT/TEXTAREA keep the gadget-sync
+  path (a whole-document re-box per keystroke would be absurd).
+- `content/handlers/css/select.{c,h}` — `nscss_node_data_clear`, a proper
+  `CSS_NODE_DELETED` free of a node's cached style.  `set_libcss_node_data`
+  ASSERTS it never replaces live data, so re-styling a document needs the
+  cache cleared first.
+- `content/handlers/html/imagemap.c` — **upstream bug**:
+  `imagemap_addtolist` ran `strtok` directly on `dom_string_data(coords)`,
+  writing NULs into the interned DOM attribute.  Harmless when extraction
+  happens once per document; the moment it can re-run, every area collapses
+  to 0,0,0,0.  Now tokenises a copy.  Upstreamable.
+- `content/handlers/html/forms.c` + `private.h` — a control outside any
+  `<form>` is adopted onto the content (`formless_controls`) instead of
+  being owned by nobody, so it can be re-found by DOM node like any other
+  gadget.  Also fixes an upstream leak: nothing freed those at destroy.
+- `content/handlers/html/form.c` + `form_internal.h` —
+  `form_select_clear_options` (factored out of `form_free_control`) so a
+  re-boxed `<select>` refills its option list instead of appending a
+  duplicate set; plus the formless-list unlink.
+- `content/handlers/html/box_special.c` — call the above at select reuse.
+- `content/handlers/html/box_textarea.c` — release the previous
+  `textarea`/`dom_string` before rebuilding a text gadget's widget
+  (upstream overwrote the pointers: one leaked widget per re-box).
+- `desktop/textarea.{c,h}` — `textarea_get_caret_char`, the public inverse
+  of the existing `textarea_set_caret`, so a caret can be carried from a
+  destroyed widget to its replacement.  Purely additive; upstreamable.
+
 libdom:
 - `src/events/event_target.c` — a non-capture listener registered on the
   event TARGET fired twice per event.  `_dom_node_dispatch_event`

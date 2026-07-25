@@ -2109,6 +2109,26 @@ const char * textarea_data(struct textarea *ta, unsigned int *len)
 
 
 /* exported interface, documented in textarea.h */
+/* exported interface documented in desktop/textarea.h */
+int textarea_get_caret_char(struct textarea *ta)
+{
+	int b_off;
+
+	if (ta->caret_pos.byte_off < 0) {
+		return -1;
+	}
+
+	b_off = textarea_get_caret(ta);
+	if (b_off < 0) {
+		return -1;
+	}
+
+	/* the internal offset is in bytes; the public setter speaks
+	 * character indices, so convert to match it */
+	return (int) utf8_bounded_length(ta->show->data, b_off);
+}
+
+
 bool textarea_set_caret(struct textarea *ta, int caret)
 {
 	int b_off;

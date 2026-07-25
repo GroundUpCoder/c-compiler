@@ -1452,6 +1452,35 @@ void form_add_control(struct form *form, struct form_control *control)
 
 
 /* exported interface documented in html/form_internal.h */
+void form_select_clear_options(struct form_control *control)
+{
+	struct form_option *option, *next;
+
+	assert(control != NULL);
+	assert(control->type == GADGET_SELECT);
+
+	for (option = control->data.select.items; option; option = next) {
+		next = option->next;
+		NSLOG(netsurf, INFO, "select option:%p text:%p value:%p",
+		      option, option->text, option->value);
+		free(option->text);
+		free(option->value);
+		free(option);
+	}
+	if (control->data.select.menu != NULL) {
+		form_free_select_menu(control);
+	}
+
+	control->data.select.items = NULL;
+	control->data.select.last_item = NULL;
+	control->data.select.current = NULL;
+	control->data.select.menu = NULL;
+	control->data.select.num_items = 0;
+	control->data.select.num_selected = 0;
+}
+
+
+/* exported interface documented in html/form_internal.h */
 void form_free_control(struct form_control *control)
 {
 	struct form_control *c;
@@ -1467,21 +1496,7 @@ void form_free_control(struct form_control *control)
 	}
 
 	if (control->type == GADGET_SELECT) {
-		struct form_option *option, *next;
-
-		for (option = control->data.select.items; option;
-				option = next) {
-			next = option->next;
-			NSLOG(netsurf, INFO,
-			      "select option:%p text:%p value:%p", option,
-			      option->text, option->value);
-			free(option->text);
-			free(option->value);
-			free(option);
-		}
-		if (control->data.select.menu != NULL) {
-			form_free_select_menu(control);
-		}
+		form_select_clear_options(control);
 	}
 
 	if (control->type == GADGET_TEXTAREA ||
@@ -1494,6 +1509,18 @@ void form_free_control(struct form_control *control)
 
 		if (control->data.text.ta != NULL) {
 			textarea_destroy(control->data.text.ta);
+		}
+	}
+
+	/* unlink the control from the content's formless list */
+	if (control->form == NULL && control->html != NULL) {
+		if (control->prev != NULL) {
+			control->prev->next = control->next;
+		} else if (control->html->formless_controls == control) {
+			control->html->formless_controls = control->next;
+		}
+		if (control->next != NULL) {
+			control->next->prev = control->prev;
 		}
 	}
 

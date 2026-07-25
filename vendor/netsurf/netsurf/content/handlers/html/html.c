@@ -61,6 +61,7 @@
 #include "html/private.h"
 #include "html/dom_event.h"
 #include "html/css.h"
+#include "css/select.h"
 #include "html/object.h"
 #include "html/html_save.h"
 #include "html/interaction.h"
@@ -415,6 +416,287 @@ void html_finish_conversion(html_content *htmlc)
 }
 
 
+/**
+ * Clear the box-tree user data pointer on a DOM subtree.
+ *
+ * Before a live re-conversion tears down the box tree, every node's
+ * cached box pointer must be cleared: nodes that end up without a box
+ * in the new tree (removed, display:none) would otherwise keep a
+ * dangling pointer forever, and box_for_node() consumers would walk
+ * into freed memory.  Construction re-attaches boxes as it goes.
+ */
+static void html__clear_box_userdata(dom_node *node)
+{
+	dom_node *child, *next;
+	dom_exception exc;
+	void *old = NULL;
+
+	exc = dom_node_set_user_data(node,
+			corestring_dom___ns_key_box_node_data,
+			NULL, NULL, &old);
+	if (exc != DOM_NO_ERR) {
+		return;
+	}
+
+	/* the cached libcss style data must go with it: re-styling
+	 * asserts it never replaces live node data */
+	nscss_node_data_clear(node);
+
+	exc = dom_node_get_first_child(node, &child);
+	if (exc != DOM_NO_ERR) {
+		return;
+	}
+	while (child != NULL) {
+		html__clear_box_userdata(child);
+		exc = dom_node_get_next_sibling(child, &next);
+		dom_node_unref(child);
+		if (exc != DOM_NO_ERR) {
+			return;
+		}
+		child = next;
+	}
+}
+
+
+/**
+ * Completion callback for a live re-conversion's dom_to_box run.
+ *
+ * On success convert_xml_to_box has already swapped htmlc->layout to
+ * the new tree; free the old tree, rebuild the imagemap hash, reflow
+ * to the current viewport and repaint everything.
+ */
+static void html_reconvert_box_done(html_content *c, bool success)
+{
+	c->box_conversion_context = NULL;
+
+	if ((success == false) || (c->aborted)) {
+		/* Restore the old tree so the content stays renderable;
+		 * the partial new tree is discarded.  Node user data is
+		 * left cleared / partially rebound — both consumers
+		 * (texty update, canvas redraw) NULL-check, and the next
+		 * successful re-conversion rebinds everything. */
+		NSLOG(netsurf, ERROR,
+		      "live re-conversion failed (content %p); keeping old layout",
+		      c);
+		if (c->bctx != NULL) {
+			talloc_free(c->bctx);
+		}
+		c->bctx = c->reconvert_old_bctx;
+		c->reconvert_old_bctx = NULL;
+		if (c->reconvert_focus_node != NULL) {
+			/* the boxes it would have been re-bound to never
+			 * existed; the old tree is back but its focus was
+			 * already surrendered */
+			dom_node_unref(c->reconvert_focus_node);
+			c->reconvert_focus_node = NULL;
+		}
+		c->reconverting = false;
+		return;
+	}
+
+	/* the new tree took over c->layout inside convert_xml_to_box;
+	 * everything reachable from the old tree dies here (box
+	 * destructors unref nodes, destroy styles and scrollbars) */
+	if (c->reconvert_old_bctx != NULL) {
+		talloc_free(c->reconvert_old_bctx);
+		c->reconvert_old_bctx = NULL;
+	}
+
+	/* rebuild imagemaps from the current DOM */
+	imagemap_extract(c);
+
+	/* reflow at the current viewport and repaint everything */
+	content__reformat(&c->base, false,
+			  c->base.available_width,
+			  c->base.available_height);
+	content__request_redraw(&c->base, 0, 0,
+				c->base.width, c->base.height);
+
+	/* Hand the caret back to whatever now boxes the focused node.  This
+	 * runs AFTER the reformat because html_set_focus reports the caret's
+	 * screen position, which is only known once layout has run.  A node
+	 * that lost its box (removed, display:none) simply keeps the focus
+	 * on the document, which is what a browser does anyway. */
+	if (c->reconvert_focus_node != NULL) {
+		struct box *fb = box_for_node(c->reconvert_focus_node);
+
+		if ((fb != NULL) && (fb->gadget != NULL) &&
+		    (fb->gadget->data.text.ta != NULL)) {
+			union html_focus_owner fo;
+
+			/* Claim the focus with the caret HIDDEN first: only
+			 * the textarea knows where the caret actually is, and
+			 * it reports that through its own CARET_UPDATE
+			 * callback — which lands on html_set_focus again with
+			 * real coordinates.  Setting a position here would
+			 * just be a zero-height guess for it to correct. */
+			fo.textarea = fb;
+			html_set_focus(c, HTML_FOCUS_TEXTAREA, fo,
+				       true, 0, 0, 0, NULL);
+			if (c->reconvert_focus_caret >= 0) {
+				textarea_set_caret(fb->gadget->data.text.ta,
+						   c->reconvert_focus_caret);
+			}
+		}
+		dom_node_unref(c->reconvert_focus_node);
+		c->reconvert_focus_node = NULL;
+	}
+
+	c->reconverting = false;
+
+	/* mutations that arrived mid-conversion need another pass */
+	if (c->reconvert_pending) {
+		html_schedule_reconvert(c);
+	}
+}
+
+
+/**
+ * The scheduled (coalesced) live re-conversion pass.
+ *
+ * Tear down everything that points into the box tree, then re-run
+ * dom_to_box over the live document.  The old box tree stays alive —
+ * still serving redraw and input — until the new tree atomically
+ * replaces htmlc->layout at conversion completion.
+ */
+static void html__reconvert(void *p)
+{
+	html_content *c = p;
+	dom_exception exc;
+	dom_node *html;
+	struct form *f;
+	struct form_control *ctl;
+	nserror error;
+
+	/* conversion already in flight (initial or live): try again
+	 * once it completes */
+	if (c->box_conversion_context != NULL || c->reconverting) {
+		c->reconvert_pending = true;
+		return;
+	}
+	c->reconvert_pending = false;
+
+	/* dismiss any open core select menu; its gadget's box is dying */
+	if (c->visible_select_menu != NULL) {
+		form_free_select_menu(c->visible_select_menu);
+		c->visible_select_menu = NULL;
+	}
+
+	/* Remember which text gadget holds the caret, so the new tree can be
+	 * handed the focus back: the focus owner is a box pointer, and a
+	 * page that mutates the DOM while the user types would otherwise
+	 * swallow every keystroke after the first mutation. */
+	if (c->reconvert_focus_node != NULL) {
+		dom_node_unref(c->reconvert_focus_node);
+		c->reconvert_focus_node = NULL;
+	}
+	c->reconvert_focus_caret = -1;
+	if ((c->focus_type == HTML_FOCUS_TEXTAREA) &&
+	    (c->focus_owner.textarea != NULL) &&
+	    (c->focus_owner.textarea->gadget != NULL) &&
+	    (c->focus_owner.textarea->gadget->node != NULL)) {
+		struct form_control *fc = c->focus_owner.textarea->gadget;
+
+		c->reconvert_focus_node = dom_node_ref(fc->node);
+		if (fc->data.text.ta != NULL) {
+			c->reconvert_focus_caret =
+				textarea_get_caret_char(fc->data.text.ta);
+		}
+	}
+
+	/* drop interaction state that can point into the box tree */
+	c->drag_type = HTML_DRAG_NONE;
+	c->drag_owner.no_owner = true;
+	c->selection_type = HTML_SELECTION_NONE;
+	c->selection_owner.none = true;
+	c->focus_type = HTML_FOCUS_SELF;
+	c->focus_owner.self = true;
+
+	/* fully reset the selection object: selection_reinit (run later by
+	 * reformat) clamps indices but leaves a live drag_state, which
+	 * would swallow every later click */
+	selection_init(c->sel);
+
+	/* form gadgets survive re-conversion (box construction re-finds
+	 * them by DOM node) but their box back-pointers must not dangle */
+	for (f = c->forms; f != NULL; f = f->prev) {
+		for (ctl = f->controls; ctl != NULL; ctl = ctl->next) {
+			ctl->box = NULL;
+		}
+	}
+	for (ctl = c->formless_controls; ctl != NULL; ctl = ctl->next) {
+		ctl->box = NULL;
+	}
+
+	/* objects (images etc.) hold box pointers and fetch callbacks;
+	 * drop them all — construction refetches through the hlcache */
+	if (c->bw != NULL) {
+		html_object_close_objects(c);
+	}
+	html_object_free_objects(c);
+	c->num_objects = 0;
+
+	/* imagemap entries hold no box pointers but the hash must be
+	 * rebuilt against the current DOM (destroy does not NULL the
+	 * pointer; leaving it set would be a use-after-free) */
+	imagemap_destroy(c);
+	c->imagemaps = NULL;
+
+	exc = dom_document_get_document_element(c->document, (void *)&html);
+	if ((exc != DOM_NO_ERR) || (html == NULL)) {
+		NSLOG(netsurf, ERROR, "re-conversion: no document element");
+		return;
+	}
+
+	/* clear every node's cached box pointer (see helper comment) */
+	html__clear_box_userdata((dom_node *)c->document);
+
+	/* keep the old tree alive for redraw/input during construction;
+	 * dom_to_box allocates a fresh talloc context when bctx is NULL */
+	c->reconvert_old_bctx = c->bctx;
+	c->bctx = NULL;
+	c->reconverting = true;
+
+	error = dom_to_box(html, c, html_reconvert_box_done,
+			   &c->box_conversion_context);
+	dom_node_unref(html);
+	if (error != NSERROR_OK) {
+		NSLOG(netsurf, ERROR, "re-conversion: dom_to_box failed: %d",
+		      error);
+		c->bctx = c->reconvert_old_bctx;
+		c->reconvert_old_bctx = NULL;
+		c->reconverting = false;
+	}
+}
+
+
+/* exported function documented in html/private.h */
+void html_schedule_reconvert(html_content *htmlc)
+{
+#ifdef NETSURF_NO_LIVE_RECONVERT
+	/* Build-time kill switch for the whole live re-conversion bridge.
+	 * Defining this restores upstream's behaviour — a DOM mutated after
+	 * the load is invisible — which is what lets the gate A/B the two
+	 * behaviours from ONE source tree: a demo that paints the same with
+	 * the bridge on and off proves nothing about the bridge. */
+	(void) htmlc;
+	return;
+#else
+	/* mutations during parse / initial conversion are handled by the
+	 * normal conversion path; only a converted, laid-out document
+	 * re-converts */
+	if (htmlc->parser != NULL ||
+	    htmlc->select_ctx == NULL ||
+	    htmlc->layout == NULL) {
+		return;
+	}
+
+	/* coalesce: the scheduler dedups callback+context pairs */
+	guit->misc->schedule(0, html__reconvert, htmlc);
+#endif
+}
+
+
 static void
 html_document_user_data_handler(dom_node_operation operation,
 				dom_string *key, void *data,
@@ -475,6 +757,11 @@ html_create_html_data(html_content *c, const http_parameter *params)
 	c->title = NULL;
 	c->bctx = NULL;
 	c->layout = NULL;
+	c->reconvert_old_bctx = NULL;
+	c->reconverting = false;
+	c->reconvert_pending = false;
+	c->reconvert_focus_node = NULL;
+	c->reconvert_focus_caret = -1;
 	c->background_colour = NS_TRANSPARENT;
 	c->stylesheet_count = 0;
 	c->stylesheets = NULL;
@@ -484,6 +771,7 @@ html_create_html_data(html_content *c, const http_parameter *params)
 	c->num_objects = 0;
 	c->object_list = NULL;
 	c->forms = NULL;
+	c->formless_controls = NULL;
 	c->imagemaps = NULL;
 	c->bw = NULL;
 	c->frameset = NULL;
@@ -1123,13 +1411,24 @@ void html_redraw_a_box(hlcache_handle *h, struct box *box)
 /**
  * Redraw a box.
  *
+ * A NULL box is a legitimate "nothing to redraw": a form gadget outlives
+ * the box tree (live re-conversion re-binds gadgets by DOM node, and
+ * clears every control->box back-pointer while the new tree is built),
+ * and a gadget whose element is display:none never gets a box at all.
+ * Every gadget->box dereference in the redraw paths funnels through
+ * here, so one guard covers the whole class.
+ *
  * \param html  content containing the box, of type CONTENT_HTML
- * \param box  box to redraw.
+ * \param box  box to redraw, or NULL.
  */
 
 void html__redraw_a_box(struct html_content *html, struct box *box)
 {
 	int x, y;
+
+	if (box == NULL) {
+		return;
+	}
 
 	box_coords(box, &x, &y);
 
@@ -1193,6 +1492,13 @@ static void html_free_layout(html_content *htmlc)
 		 */
 		talloc_free(htmlc->bctx);
 	}
+
+	if (htmlc->reconvert_old_bctx != NULL) {
+		/* a live re-conversion was in flight; its outgoing tree
+		 * is owned here until the swap that never came */
+		talloc_free(htmlc->reconvert_old_bctx);
+		htmlc->reconvert_old_bctx = NULL;
+	}
 }
 
 /**
@@ -1205,6 +1511,13 @@ static void html_destroy(struct content *c)
 	struct form *f, *g;
 
 	NSLOG(netsurf, INFO, "content %p", c);
+
+	/* Cancel any coalesced live re-conversion pass */
+	guit->misc->schedule(-1, html__reconvert, html);
+	if (html->reconvert_focus_node != NULL) {
+		dom_node_unref(html->reconvert_focus_node);
+		html->reconvert_focus_node = NULL;
+	}
 
 	/* If we're still converting a layout, cancel it */
 	if (html->box_conversion_context != NULL) {
@@ -1221,6 +1534,7 @@ static void html_destroy(struct content *c)
 
 		form_free(f);
 	}
+	html_forms_free_formless_controls(html);
 
 	imagemap_destroy(html);
 

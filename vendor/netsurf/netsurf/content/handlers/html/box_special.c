@@ -801,7 +801,7 @@ box_button(dom_node *n,
 {
 	struct form_control *gadget;
 
-	gadget = html_forms_get_control_for_node(content->forms, n);
+	gadget = html_forms_get_control_for_node(content, n);
 	if (!gadget)
 		return false;
 
@@ -1241,7 +1241,7 @@ box_input(dom_node *n,
 	nsurl *url;
 	nserror error;
 
-	gadget = html_forms_get_control_for_node(content->forms, n);
+	gadget = html_forms_get_control_for_node(content, n);
 	if (gadget == NULL) {
 		return false;
 	}
@@ -1670,9 +1670,14 @@ box_select(dom_node *n,
 	dom_node *next, *next2;
 	dom_exception err;
 
-	gadget = html_forms_get_control_for_node(content->forms, n);
+	gadget = html_forms_get_control_for_node(content, n);
 	if (gadget == NULL)
 		return false;
+
+	/* A re-boxed select reuses its existing gadget, so the option list
+	 * it is about to be refilled from the DOM must be emptied first —
+	 * otherwise every live re-conversion appends a duplicate set. */
+	form_select_clear_options(gadget);
 
 	gadget->html = content;
 	err = dom_node_get_first_child(n, &c);
@@ -1827,7 +1832,7 @@ static bool box_textarea(dom_node *n,
 			bool *convert_children)
 {
 	/* Get the form_control for the DOM node */
-	box->gadget = html_forms_get_control_for_node(content->forms, n);
+	box->gadget = html_forms_get_control_for_node(content, n);
 	if (box->gadget == NULL)
 		return false;
 
