@@ -199,6 +199,16 @@ static nserror set_defaults(struct nsoption_s *defaults)
 	nsoption_setnull_charp(cookie_jar, strdup("~/.netsurf/Cookies"));
 	nsoption_setnull_charp(url_file, strdup("~/.netsurf/URLs"));
 
+	/* JavaScript ON by default (core default is off, upstream's
+	 * frontend-by-frontend choice).  Two rails bound it, and both are
+	 * live: dukky's per-entry execution watchdog aborts any script still
+	 * running after JS_EXEC_TIMEOUT_MS (10 s), and this is a *default* —
+	 * nsoption_init copies it into the working set, which the Choices file
+	 * and then the command line are read OVER (see gucos_main below), so
+	 * `enable_javascript:0` in Choices is still the admin off-switch and
+	 * `--enable_javascript=0` still wins for one run. */
+	nsoption_set_bool(enable_javascript, true);
+
 	return NSERROR_OK;
 }
 

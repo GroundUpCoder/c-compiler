@@ -1,10 +1,15 @@
 # NetSurf v2 — JavaScript support (duktape) — design & scoping
 
-Status: **DESIGN PASS COMPLETE (measure-only, 2026-07-25)** — no implementation
-lane started.  Everything below is evidence from a live probe on branch
-`netsurf-js-scope` (worktree); the probe scaffolding (grafted duktape +
-generated bindings + a `netsurf-core.json` edit) is left UNCOMMITTED in that
-worktree as a Lane A head start.
+Status: **LANE A LANDED (2026-07-25)**; design pass complete; lanes B–E open.
+Everything below is evidence from a live probe, with Lane A's own findings
+folded in (§8 records where the probe's expectations turned out wrong).
+
+Lane A shipped: vendored `duktape/`+`WebIDL/`, the committed nsgenbind output
+at `genjs/duktape/`, `regen-js-bindings.sh` + `genjs-sources.mjs`, the
+`netsurf-core.json` swap, `enable_javascript` defaulting ON in the gucOS
+frontend, one libdom event-dispatch fix, the `demos/` 1–3 pages, the
+`smoke-js.mjs` gate (5 legs) and `tests/kernel/test_netsurf_js_e2e.js`.
+See `vendor/netsurf/README.md` and `vendor/netsurf/demos/README.md`.
 
 ## Verdict
 
@@ -33,16 +38,25 @@ additional upstream-shaped lanes (mutation→reflow bridge, event coverage,
 binding fills) detailed below.  All are tractable; none needs compiler or
 kernel work.
 
-## Measured numbers (probe, 2026-07-25, M-series host)
+## Measured numbers
 
-| metric | JS off (v1, main) | JS on (grafted) | delta |
+Lane A re-measured both configurations on one machine, back to back (swapping
+only `netsurf-core.json`), for both link targets.  The probe's numbers held.
+
+| metric | JS off | JS on | delta |
 |---|---|---|---|
-| nsmonkey.wasm | 2.65 MB (2,782,582 B) | 5.0 MB | **+2.35 MB** |
-| full build (buildProject) | 26.2 s | 53.4 s | **+27 s** |
-| TUs | ~592 | +225 (duktape.c, dukky.c, 223 generated) | ~817 |
+| `nsmonkey.wasm` (bin.json) | 2,782,623 B (2.65 MB) | 5,210,211 B (4.97 MB) | **+2,427,588 B (+2.32 MB)** |
+| `nsmonkey` build (buildProject) | 27.2 s | 56.9 s | **+29.7 s** |
+| `nsmonkey` TUs (dep closure) | 622 | 846 | **+224** |
+| `/usr/bin/netsurf` (gucos/bin.json) | 3,183,445 B (3.04 MB) | 5,616,394 B (5.36 MB) | **+2,432,949 B (+2.32 MB)** |
+| `netsurf` build | 30.3 s | 61.2 s | **+30.9 s** |
+| `netsurf` TUs | 644 | 868 | **+224** |
 | duktape.c alone | — | compiles in ~1 s, links standalone at 702 KB | — |
 
-nsgenbind output: 227 files (223 `.c`), ~108 KLOC generated C.
++224, not the probe's +225: two files in (`dukky.c`, `duktape.c`) plus 223
+generated, one out (`javascript/none/none.c`).  The TU totals are higher than
+the probe's ~592/~817 because this count includes the whole dep closure
+(zlib/libpng).  nsgenbind output: 227 files (223 `.c`), ~108 KLOC.
 
 ## Evidence per question
 
@@ -206,6 +220,80 @@ Follow the established NetSurf harness stack, cheapest first:
 - Flake gate: `node tests/flake.js` after landing any new e2e (repo rule).
   No fixed sleeps — wait on console sentinels / pixel deltas.
 
+## 8. What Lane A found that this document had wrong
+
+Recorded so B–D plan against reality, not against the probe's guesses.
+
+1. **monkey CAN inject pointer clicks.**  §7 and the Lane A sketch both say
+   "monkey has no pointer injection — so counter clicks are the kernel e2e's
+   job".  Wrong: `WINDOW CLICK WIN n X x Y y BUTTON LEFT|RIGHT KIND SINGLE|
+   DOUBLE|TRIPLE` (`frontends/monkey/browser.c:665`) drives
+   `browser_window_mouse_click` directly.  So the whole demo-2/3 click story
+   is drivable in the cheap monkey gate, and `smoke-js.mjs` does it —
+   clicking by the coordinate the control's own label was PLOTTED at, which
+   is font-metric-derived and survives a font change.  The kernel e2e is
+   still worth having, but for what only it can prove (the frontend's option
+   default, scheduler and SDL input map), not for clicks per se.
+2. **A non-capture listener on the click TARGET fired twice per click** —
+   a plain counter counted 2.  Root cause in libdom, not dukky:
+   `_dom_node_dispatch_event` (`libdom/src/core/node.c:2525`) builds the
+   propagation chain starting AT the target, and
+   `_dom_event_target_dispatch` (`libdom/src/events/event_target.c:230`)
+   fired non-capture listeners for `phase == DOM_BUBBLING_PHASE` without
+   excluding `evt->current == evt->target` — so at-target ran, then the
+   bubble walk passed back over the target and ran it again.  FIXED in Lane
+   A (`patches/libdom.diff`, one hunk, upstreamable); it also halves the
+   duplicated work in libdom's own `classList` tokenlist handler and the
+   canvas2d `DOMSubtreeModified` handler.  Ancestor bubbling was and is
+   correct.  Guarded by `smoke-js.mjs` leg 2.
+3. **Capture-phase listeners never fire at all, and poison the element.**
+   `addEventListener(t, f, true)` / `{capture: true}` produces no
+   invocation in any phase; and because
+   `dukky_register_event_listener_for` (`dukky.c:1344`) keys its per-node
+   registration map on the event NAME only, the first capture registration
+   makes every LATER non-capture listener for that type on that element
+   silently dead too (registering capture-then-bubble on one element =
+   total silence).  NOT fixed — Lane C, with the rest of the dispatch work.
+   Diagnosed only as far as "the libdom listener is registered with
+   capture=true and the dukky handler is not reached"; finish the trace
+   there.
+4. **A global colliding with a Window IDL attribute is silently swallowed.**
+   `var frames = document.getElementById('frames')` leaves `frames`
+   undefined (`Window.frames` is a generated no-op stub with a no-op
+   setter), and the script dies at the first use with the error only at
+   NSLOG DEBUG.  This is §5's "silent no-op stub" class landing on the
+   GLOBAL object, which makes it a page-author footgun rather than a
+   missing feature; it cost real debugging time while writing
+   `sketch.html`.  Lane D should consider making unimplemented Window
+   attributes throw rather than read undefined.
+5. **Click events are plain `Event`s, so they carry no coordinates**
+   (`clientX`/`pageX` are `undefined`, `e.constructor.name === 'Object'`).
+   §5/Lane C imply this, but it is worth stating as a hard consequence:
+   demo 6 (`paint.html`) needs Lane C's `fire_dom_mouse_event` before a
+   draw-where-you-clicked canvas is possible at all, not merely nicer.
+6. **monkey's `WINDOW EXEC` is unusable as a probe: it reports success and
+   does nothing.**  It answers `WINDOW JS WIN n RET TRUE` while the injected
+   script has no effect (verified: an `input.value` assignment through EXEC
+   never lands).  `html_exec` (`html/html.c:2089`) appends a `<script>` node
+   carrying the source to the body and returns whether the *insert*
+   succeeded — the insert-time execution never happens.  That also says
+   something for Lane B: appending a script element from JS does not run it.
+   `smoke-js.mjs` therefore asserts through real clicks + the plot stream
+   instead, which is stronger anyway.
+7. **The two rails hold with JS on, verified rather than assumed.**  The
+   10 s watchdog aborts `while(true){}` (measured 10.2 s) and the browser
+   still renders and exits cleanly afterwards; `enable_javascript:0` in
+   `Choices` yields zero script output with the page still rendering —
+   both as `smoke-js.mjs` legs 4/5, and the Choices rail again in-OS at
+   `${HOME}/.netsurf/Choices` in the kernel e2e.
+8. Regeneration of the bindings is byte-identical at the pinned nsgenbind
+   revision — but only if the outdir is spelled `duktape` and the `.bnd`
+   path `../netsurf/…`, because nsgenbind bakes both verbatim into
+   self-includes and `#line`s.  `regen-js-bindings.sh` stages that geometry;
+   `--check` is the drift gate.  The graft's `.inc` files were NOT what
+   upstream's own `tools/xxd` emits (one trailing comma); Lane A switched
+   them to the real tool's output and vendored `tools/xxd.c` for it.
+
 ## Lane breakdown
 
 Lane A is proven by the probe; B–D are upstream-shaped NetSurf work (ours to
@@ -215,6 +303,7 @@ html handler, C = interaction.c + dukky.c, D = .bnd files); E's scaffold can
 start with A.
 
 **Lane A — vendor duktape + committed bindings + build integration (S-M).**
+**DONE 2026-07-25** — as planned below except where §8 says otherwise.
 - `update.sh`/`UPSTREAM.json`: stop excluding
   `content/handlers/javascript/duktape/` + `WebIDL/`.
 - Commit nsgenbind output at `vendor/netsurf/genjs/duktape/` (223 .c + hdrs,
@@ -235,10 +324,16 @@ start with A.
   watchdog bounds runaway scripts.  (`Choices` file at
   `/usr/share/netsurf/` remains the admin off-switch; frontend already
   reads it, `main.c:344`.)
-- Gates: smoke-js leg (script exec, timer, click→counter via monkey is not
-  drivable — monkey has no pointer injection — so counter clicks are the
-  kernel e2e's job); demos 1–3 seeded; image version bump.
-- Cost accepted: +2.35 MB wasm, +27 s bake-input compile.
+- Gates: `smoke-js.mjs` — 5 legs: demos 1–3 (script exec + console +
+  document.write; click→counter, which monkey CAN drive, see §8.1; canvas
+  ImageData + timer repaint), the 10 s watchdog, the Choices off-switch.
+  Plus `tests/kernel/test_netsurf_js_e2e.js` for what only the real frontend
+  can prove: JS on by DEFAULT, timer-driven repaint through
+  invalidate→damage→blit, a real SDL click reaching a DOM listener, and
+  `${HOME}/.netsurf/Choices` turning it all off.  Image version bumped to
+  164.  Demo *seeding* (`/usr/share/netsurf-demos/` + Demos menu) stays
+  Lane E; the e2e plants its page itself so it does not wait on that.
+- Cost accepted (measured, table above): +2.32 MB wasm, +30 s compile.
 
 **Lane B — mutation → re-box → reflow → repaint bridge (M-L, the big one).**
 Design: one choke point `html_schedule_reconvert(htmlc)` — the libdom
@@ -336,12 +431,20 @@ A).  A is small and unblocks everything; B is the schedule-critical path for
 - Nothing in the v1 (JS-off) path regressed during probing — baseline smoke
   re-run green; no P0s found.
 
-## Probe reproduction (for the implementing lane)
+## Reproduction (post-Lane A)
 
-Upstream checkouts + built tools live in `/tmp/netsurf-js-scope/` (netsurf
-@39da3c3a, nsgenbind + buildsystem HEAD, GNU bison 3.8.2 under `tools/`);
-the worktree `~/worktree/c-compiler/netsurf-js-scope` holds the uncommitted
-graft: vendored `duktape/`+`WebIDL/` copies, `genjs/duktape/` generated
-output, `.inc` files, and the `netsurf-core.json` swap.  `smoke.mjs --build`
-then a monkey stdin driver with `--enable_javascript=1` reproduces every
-live-JS claim above.
+Nothing volatile is needed any more — the graft is committed and the
+generator is pinned.
+
+- Every live-JS claim: `node vendor/netsurf/smoke-js.mjs` (add `--reuse`
+  while iterating; it refuses a stale wasm rather than trusting one).
+- One demo by hand: `node vendor/netsurf/smoke.mjs --build`, then
+  `node host.js build/netsurf-smoke/nsmonkey.wasm --enable_javascript=1`
+  with `NETSURFRES=build/netsurf-smoke/res/` and `WINDOW NEW file://…` on
+  stdin.
+- In the OS: `node tests/kernel/test_netsurf_js_e2e.js` (~5 s against a
+  prebaked fixture).
+- Regenerating bindings: `BISON=… vendor/netsurf/regen-js-bindings.sh`
+  (pins in `UPSTREAM.json`'s `tools`; `--check` is the drift gate).  The
+  probe's `/tmp/netsurf-js-scope/` bison-3.8.2 build is gone/volatile —
+  the script prints how to rebuild one.

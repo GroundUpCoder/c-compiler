@@ -1,5 +1,5 @@
 {
- "comment": "Pinned upstream revisions for the vendored NetSurf constellation (2026-02 master; NetSurf 3.12 Dev). update.sh consumes this. Keep shim/testament.h WT_REVID in sync with the netsurf pin.",
+ "comment": "Pinned upstream revisions for the vendored NetSurf constellation (2026-02 master; NetSurf 3.12 Dev). update.sh consumes 'components'. Keep shim/testament.h WT_REVID in sync with the netsurf pin.  'tools' pins the JS-binding generator used by regen-js-bindings.sh — a MAINTAINER-ONLY step: the generated output is committed at genjs/, so no normal build ever needs it.",
  "components": {
   "netsurf":        { "url": "https://github.com/netsurf-browser/netsurf",        "rev": "39da3c3a40af4566d86500ff3052dfdc7f9a0378" },
   "libwapcaplet":   { "url": "https://github.com/netsurf-browser/libwapcaplet",   "rev": "c7c128d3eb3223b216c974471f82e9337fbcf4ba" },
@@ -11,5 +11,9 @@
   "libnsbmp":       { "url": "https://github.com/netsurf-browser/libnsbmp",       "rev": "ea063c9f46acb43e90208da14073332b505ef7e7" },
   "libnsutils":     { "url": "https://github.com/netsurf-browser/libnsutils",     "rev": "0bd39060740b6163bd50875326654a722df97eb2" },
   "libnsfb":        { "url": "https://github.com/netsurf-browser/libnsfb",        "rev": "b701cdce7241c3747ccd78658a365db0983ebe24" }
+ },
+ "tools": {
+  "nsgenbind":      { "url": "https://github.com/netsurf-browser/nsgenbind",      "rev": "44c6736937ae17d4065d02959b82813b8f06a51e" },
+  "buildsystem":    { "url": "https://github.com/netsurf-browser/buildsystem",    "rev": "0005ae300283ff01c2e2b05e7376b3e55dea21f7" }
  }
 }

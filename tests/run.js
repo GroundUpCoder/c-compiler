@@ -168,9 +168,13 @@ const RULES = [
   [/^vendor\/disw\//, ['disw', 'projects'], null],
   [/^vendor\/libgit2\//, ['fakegit', 'projects'], null],
   // NetSurf constellation: bin.json (monkey smoke) is a projects build; the
-  // gucOS frontend (gucos/) is exercised in-window by test_netsurf_e2e (not
-  // yet seeded into the image — Lane 3 adds sweep when it lands the seeds).
-  [/^vendor\/netsurf\//, ['projects', 'kernel'], 'the browser constellation + its in-window e2e'],
+  // gucOS frontend (gucos/) is seeded as /usr/bin/netsurf and exercised
+  // in-window by the test_netsurf_*_e2e family (no browser leg, so no sweep —
+  // the OS-side coverage is the kernel e2es).  The two monkey harnesses,
+  // vendor/netsurf/smoke.mjs (JS off) and smoke-js.mjs (the JS gate), stay
+  // manual recipes documented in vendor/netsurf/README.md: they each rebuild
+  // the whole ~850-TU constellation, which the projects suite already covers.
+  [/^vendor\/netsurf\//, ['projects', 'kernel'], 'the browser constellation + its in-window e2es'],
   // OS-seeded vendor apps (doom/quake/gameboy/sameboy/busybox/…) restale the
   // image and are exercised by the OS e2es + the browser sweep.
   [/^vendor\/(doom|quake|gameboy|sameboy|snake|busybox|tinyemu|micropython|magicpoint|sent)\//,

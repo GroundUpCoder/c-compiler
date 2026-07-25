@@ -72,7 +72,7 @@ echo "generating…"
 
 # ---- 3. curated patches (content changes only; see README.md table) ----
 echo "patching…"
-for c in netsurf libparserutils libhubbub libcss libnsfb; do
+for c in netsurf libparserutils libhubbub libcss libdom libnsfb; do
   [ -f "$HERE/patches/$c.diff" ] || continue
   ( cd "$STAGE/$c" && patch -p1 --no-backup-if-mismatch -s < "$HERE/patches/$c.diff" )
 done
@@ -87,8 +87,10 @@ echo "pruning…"
   rm -rf frontends/monkey/res       # symlink farm for upstream's make; unused here
   rm -rf resources/ca-bundle resources/de resources/fr resources/it \
          resources/ja resources/nl resources/zh_CN
-  find tools -type f ! -name 'split-messages.pl' -delete && find tools -type d -empty -delete
-  rm -rf content/handlers/javascript/duktape content/handlers/javascript/WebIDL )
+  # xxd.c is kept for regen-js-bindings.sh's .inc step (built with cc there,
+  # the libcss gen_parser precedent) — nothing in THIS script needs it.
+  find tools -type f ! -name 'split-messages.pl' ! -name 'xxd.c' -delete
+  find tools -type d -empty -delete )
 for c in libwapcaplet libparserutils libhubbub libcss libnsgif libnsbmp libnsutils libnsfb; do
   ( cd "$STAGE/$c" && rm -rf test tests docs examples perf build )
 done

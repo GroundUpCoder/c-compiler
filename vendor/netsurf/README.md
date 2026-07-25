@@ -2,13 +2,23 @@
 
 The complete NetSurf browser — core plus its seven support libraries —
 vendored for the gucOS toolchain (`compiler.js`).  This is the foundation
-for `/bin/netsurf` (file-only, no networking, no JS in v1; see
-`todos/OS.md` and the netsurf lanes).  The whole constellation (~590 TUs)
-builds with compiler.js in ~26 s into a ~2.7 MB wasm and runs end-to-end:
+for `/bin/netsurf` (file-only, no networking; see `todos/OS.md` and the
+netsurf lanes).  The whole constellation (~850 TUs) builds with compiler.js
+in ~57 s into a ~5.0 MB wasm and runs end-to-end:
 `node vendor/netsurf/smoke.mjs` builds the upstream **monkey** headless
 frontend and drives a real `file://` page through
 fetch → hubbub parse → libdom → libcss style → layout → plot, asserting
 the plotted geometry and a clean exit.
+
+**JavaScript is in, and on** (duktape 2.7.0 + the nsgenbind WebIDL
+bindings; `todos/NETSURF-JS.md` Lane A).  `node vendor/netsurf/smoke-js.mjs`
+is its gate: script execution, console, parse-time `document.write`, click
+dispatch to real DOM listeners, canvas `getImageData`/`putImageData`,
+`setInterval`, the 10 s execution watchdog and the `Choices` off-switch, all
+driven over the monkey protocol against `demos/`.  The gucOS frontend
+defaults `enable_javascript` ON; `tests/kernel/test_netsurf_js_e2e.js` is
+the in-OS proof.  JS costs +2.32 MB of wasm and +30 s of build over the
+JS-off configuration — see the design doc for the accepted trade.
 
 Pinned upstream revisions: `UPSTREAM.json` (2026-02 master, NetSurf 3.12
 Dev).  Licences: MIT (libs), GPLv2 (netsurf core) — each tree keeps its
@@ -18,7 +28,9 @@ Dev).  Licences: MIT (libs), GPLv2 (netsurf core) — each tree keeps its
 
 | Path | What |
 |---|---|
-| `netsurf/` | Browser core subset: `utils/ content/ desktop/ include/ frontends/monkey/ resources/` (no other frontends; `duktape/`+`WebIDL/` dropped — JS is off; `ca-bundle` + non-en locales dropped) |
+| `netsurf/` | Browser core subset: `utils/ content/ desktop/ include/ frontends/monkey/ resources/` incl. `content/handlers/javascript/{duktape,WebIDL}/` (no other frontends; `ca-bundle` + non-en locales dropped) |
+| `genjs/duktape/` | **Committed** nsgenbind output — 223 `.c` + 3 headers + the two xxd'd JS blobs + nsgenbind's own source-list `Makefile`.  Regenerated only by `regen-js-bindings.sh` (needs bison ≥ 3); see "Committed generated sources" |
+| `demos/` | The JavaScript acceptance pages (`hello-js.html`, `counter.html`, `sketch.html`) driven by `smoke-js.mjs` |
 | `libwapcaplet/ libparserutils/ libhubbub/ libdom/ libcss/` | The parse/style stack (`include/ src/`, libdom also `bindings/hubbub/`) |
 | `libnsgif/ libnsbmp/ libnsutils/` | GIF/BMP-ICO decode, small utils |
 | `libnsfb/` | Framebuffer surface + 32bpp software plotters (portable subset; the gucOS frontend's raster layer — not linked by nsmonkey) |
@@ -27,7 +39,9 @@ Dev).  Licences: MIT (libs), GPLv2 (netsurf core) — each tree keeps its
 | `*/lib.json`, `netsurf-core.json`, `bin.json` | The build graph (below) |
 | `patches/` | Curated content patches (table below) |
 | `update.sh`, `relativize.mjs`, `UPSTREAM.json` | Re-runnable vendor pipeline |
+| `regen-js-bindings.sh`, `genjs-sources.mjs` | Re-runnable **binding** pipeline (maintainer-only; no build runs it) |
 | `smoke.mjs`, `test/hello.html` | Build + end-to-end smoke recipe (`test/squares.html` + `test/two.html` drive the in-window e2e, `tests/kernel/test_netsurf_e2e.js`) |
+| `smoke-js.mjs`, `demos/` | The JavaScript gate (5 legs; `--reuse` to skip a fresh link, `--leg N` for one) |
 
 ## Build graph & the include-order rule
 
@@ -80,6 +94,20 @@ netsurf core:
   per-frontend options include chain (the same 3 sites every upstream
   frontend hooks), pulling `gucos/options.h`.
 
+libdom:
+- `src/events/event_target.c` — a non-capture listener registered on the
+  event TARGET fired twice per event.  `_dom_node_dispatch_event`
+  (`src/core/node.c`) walks the target itself as part of both the capture
+  and the bubble chains, and `_dom_event_target_dispatch`'s bubble clause
+  did not exclude `evt->current == evt->target`, so the listener ran once
+  at-target and again as the bubble walk passed back over the target — one
+  click counted 2.  Now gated on `at_target`, which also puts a
+  capture-flag listener on the target in the AT_TARGET phase where DOM L3
+  wants it.  Upstreamable; also halves the duplicate work in libdom's own
+  tokenlist (`classList`) and the canvas2d `DOMSubtreeModified` handlers,
+  which are non-capture listeners on their own target too.  Regression
+  guard: `smoke-js.mjs` leg 2 ("one click = exactly ONE increment").
+
 libnsfb:
 - `src/surface.h` + `src/surface/surface.c` — `NSFB_SURFACE_DEF`'s
   `__attribute__((constructor))` registration (unsupported by
@@ -127,6 +155,46 @@ Perl generators run under `PERL_HASH_SEED=0 PERL_PERTURB_KEYS=0` —
 hash-iteration order leaks into the tables, and the pin makes
 regeneration at an unchanged revision byte-identical to the commit.
 
+### The JS bindings — `genjs/duktape/` (why they are committed)
+
+`genjs/duktape/` is nsgenbind's output over
+`netsurf/content/handlers/javascript/duktape/*.bnd` +
+`.../WebIDL/*.idl`: 223 `.c` (~108 KLOC), `binding.h`/`private.h`/
+`prototype.h`, the two `xxd -i`'d script blobs (`generics.js.inc`,
+`polyfill.js.inc`) and nsgenbind's own `Makefile` fragment, whose
+`NSGENBIND_SOURCES` is the authoritative source list.
+
+It is committed because **nsgenbind is a flex+bison tool that needs GNU
+bison ≥ 3 and Apple ships 2.3**, with no package manager on the reference
+machine.  Committing the output means a normal build — `smoke.mjs`,
+`smoke-js.mjs`, an image bake, the run.py projects suite — needs no bison,
+no flex and no nsgenbind at all.  Do NOT wire regeneration into a build
+graph.  It also makes a binding edit *reviewable*: the generated diff lands
+next to the `.bnd` change.
+
+```
+BISON=/path/to/bison-3.x/bin/bison vendor/netsurf/regen-js-bindings.sh
+BISON=… vendor/netsurf/regen-js-bindings.sh --check   # drift gate
+```
+
+The script pins nsgenbind + buildsystem in `UPSTREAM.json`'s `tools`
+section, gates on the bison version with build-it-from-source instructions,
+prunes nsgenbind's `-D` debug spill (and fails loudly on any output it
+cannot classify), and rewrites `netsurf-core.json`'s `genjs/duktape/*.c`
+block from `NSGENBIND_SOURCES` so the two can never drift.  Verified: at the
+pinned revisions regeneration reproduces every committed file
+byte-identically.  Two path spellings are load-bearing, because nsgenbind
+bakes the paths it is given straight into its output — outdir `duktape`
+(→ the `#include "duktape/binding.h"` self-includes, resolved by `genjs`
+being on the core's include list) and a `../netsurf/…` relative `.bnd`
+path (→ the `#line` directives).  The script stages that exact geometry.
+
+`netsurf/tools/xxd.c` is kept by `update.sh`'s prune whitelist for the
+`.inc` step (the libcss `gen_parser` precedent: a tiny host tool built with
+`cc` at vendor time).  `xxd -i` derives the array symbol from the input
+path, and upstream's sed rewrites exactly one spelling of it, so that step
+runs from the netsurf root with upstream's relative path.
+
 ## Updating
 
 ```
@@ -145,12 +213,21 @@ re-run, resolve patch fuzz, update `shim/testament.h`'s `WT_REVID`, then
 
 - **curl / networking** — `file:`/`data:`/`resource:`/`about:` fetchers
   only; `fetch.c`'s registration was already properly `#ifdef WITH_CURL`.
-- **Duktape / JS** — `NETSURF_USE_DUKTAPE := NO` config;
-  `javascript/none/none.c` links.  Later JS = revendor
-  `content/handlers/javascript/duktape/` + commit nsgenbind output.
 - **libnslog** (flex/bison; `NETSURF_USE_NSLOG := AUTO` off is a
   supported config), **libnspsl** (cookie/networking), **libutf8proc**
-  (IDN), **nsgenbind** (JS bindings).
+  (IDN).
+- **nsgenbind** — not vendored as a *tree*: its output is (see above), and
+  the generator is fetched at its `UPSTREAM.json` `tools` pin only when a
+  maintainer regenerates.
+- **JS is NOT excluded any more.**  `javascript/none/none.c` is unlinked;
+  `duktape/dukky.c` + `duktape/duktape.c` + the 223 `genjs/duktape/*.c`
+  take its place, with `-DDUK_OPT_HAVE_CUSTOM_H` (upstream's own
+  `CFLAGS` for this, from the duktape `Makefile` fragment the prune
+  drops).  duktape 2.7.0 compiles with compiler.js **unpatched** — its two
+  `setjmp` sites are both the `if (DUK_SETJMP(jb) == 0)` form the
+  setjmp/longjmp lowering recognises.  Upstream's own JS surface is
+  immature in ways that bound what pages can do; the audit and the
+  follow-on lanes are in `todos/NETSURF-JS.md`.
 - **libnsfb non-portable backends** (X11/SDL1.2/wayland/VNC/able
   surfaces, 1/24bpp depths) — gucOS renders through its own SDL3-shm
   frontend (Lane 2).

@@ -1,0 +1,36 @@
+--- a/src/events/event_target.c
++++ b/src/events/event_target.c
+@@ -220,18 +220,30 @@
+ {
+ 	if (eti->listeners != NULL) {
+ 		struct listener_entry *le = eti->listeners;
++		bool at_target;
+ 
+ 		evt->current = et;
++
++		/* _dom_node_dispatch_event walks the target ITSELF as part of
++		 * both the capture chain and the bubble chain, so the target's
++		 * own listeners must fire in the AT_TARGET phase only.  Without
++		 * the at_target guards below, a plain (non-capture) listener on
++		 * the target is invoked TWICE for one event: once at-target and
++		 * again when the bubble walk passes back over the target.  DOM
++		 * L3 Events: listeners registered on the event target are
++		 * invoked in the target phase, once each, whatever their
++		 * capture flag. */
++		at_target = (evt->target == evt->current);
+ 
+ 		do {
+ 			if (dom_string_isequal(le->type, evt->type)) {
+ 				assert(le->listener->handler != NULL);
+ 
+-				if ((le->capture && 
++				if ((at_target == false && le->capture &&
+ 						phase == DOM_CAPTURING_PHASE) ||
+-				    (le->capture == false && 
++				    (at_target == false && le->capture == false &&
+ 						phase == DOM_BUBBLING_PHASE) ||
+-				    (evt->target == evt->current && 
++				    (at_target &&
+ 						phase == DOM_AT_TARGET)) {
+ 					le->listener->handler(evt, 
+ 							le->listener->pw);
