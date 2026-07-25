@@ -15,7 +15,11 @@
  *   'tty' (VT1): every tap emits tty BYTES through the page's vt1Input
  *         funnel (escape sequences per the xterm conventions term.c also
  *         speaks; sticky mods become control folds / ESC prefixes / the
- *         xterm CSI 1;N modifier encodings).
+ *         xterm CSI 1;N modifier encodings) — EXCEPT Ctrl+Shift+C/V and
+ *         the Fn-layer Copy/Paste legends, which run the page-injected
+ *         ttyClip handlers (gesture-scoped clipboard, the keystrip path;
+ *         plain Ctrl+V stays the ^V literal-next fold, as in any real
+ *         terminal).
  *
  * Per-legend key tables, NOT runtime transforms: SDL3 keysyms are
  * modifier-applied (Shift+1 => '!'), and user32's vk_of reads the SCANCODE
@@ -95,6 +99,18 @@ var OSK = (function () {
   var LABC = { l: 'abc', id: 'abc', layer: 'abc', w: 1.3 };
   var LNUM = { l: 'Fn', id: 'Fn', layer: 'num' };
 
+  /* VT1 clipboard legends (the clipboard seam, landing 2): discoverability
+     keys for the tty copy/paste a phone user would never guess as
+     Ctrl+Shift+C/V on a soft keyboard. They run the page-injected ttyClip
+     handlers (the same gesture-scoped keystrip Copy/Paste path) and are
+     TTY-ONLY: on the wm backend there is no app-agnostic copy/paste key —
+     the focused app's own chord contract governs (keys.h: Ctrl+V in
+     editors, Ctrl+Shift+V in terminals), so the legends render dimmed and
+     inert there rather than injecting a chord that a terminal would read
+     as SIGINT/literal-next. Never repeat, like mod/layer keys. */
+  var KCOPY  = { l: 'Copy', id: 'Copy', clip: 'copy' };
+  var KPASTE = { l: 'Paste', id: 'Paste', clip: 'paste' };
+
   /* Three layers; the bottom row is uniform (mods + Space + arrows) except
      for which layer keys it offers. Duplicated legends across layers are
      shared objects on purpose — legends are read-only data. */
@@ -123,7 +139,8 @@ var OSK = (function () {
     num: [
       [ESC, fkey(1), fkey(2), fkey(3), fkey(4), fkey(5), fkey(6), fkey(7),
        fkey(8), fkey(9), fkey(10), BKSP],
-      [TAB, fkey(11), fkey(12), INS, DEL, HOME, END, PGUP, PGDN, ENTER],
+      [TAB, fkey(11), fkey(12), INS, DEL, HOME, END, PGUP, PGDN,
+       KCOPY, KPASTE, ENTER],
       [SHIFT, punct('`', 'Backquote'), shifted('~', 'Backquote'),
        punct('[', 'BracketLeft'), punct(']', 'BracketRight'),
        shifted('{', 'BracketLeft'), shifted('}', 'BracketRight'),
@@ -189,6 +206,8 @@ var OSK = (function () {
     var mode = opts.mode;                   /* () => 'wm' | 'tty' */
     var sendWm = opts.sendWmKey;            /* (plain key record) => void */
     var sendTty = opts.sendTtyBytes;        /* (string) => void */
+    var ttyClip = opts.ttyClip || null;     /* {copy, paste} — VT1 gesture-
+                                               scoped clipboard handlers */
     var onChange = opts.onChange || function () {};
 
     var layer = 'abc';
@@ -256,7 +275,22 @@ var OSK = (function () {
         var key = (mods.Shift > 0 && leg.K) ? leg.K : leg.k;
         injectWm(true, leg.c, key, leg.m, repeat);
       } else {
-        var b = vt1Bytes(leg, armedSt());
+        var st = armedSt();
+        /* Terminal clipboard chords (the clipboard seam, landing 2):
+           Ctrl+Shift+C/V run the gesture-scoped copy/paste — the xterm
+           convention keys.h's KCTX_TERM already encodes. A real terminal
+           never folds Ctrl+Shift+V to ^V (literal-next is PLAIN Ctrl+V's
+           job, untouched below), so neither does the OSK. Repeat is
+           swallowed: a held paste key must paste once. */
+        if (ttyClip && st.Control && st.Shift &&
+            (leg.c === 'KeyC' || leg.c === 'KeyV')) {
+          if (!repeat) {
+            log('tty', leg.c === 'KeyC' ? '<copy>' : '<paste>');
+            (leg.c === 'KeyC' ? ttyClip.copy : ttyClip.paste)();
+          }
+          return;
+        }
+        var b = vt1Bytes(leg, st);
         if (b) { log('tty', b); sendTty(b); }
       }
     }
@@ -273,6 +307,14 @@ var OSK = (function () {
       if (presses[pid]) pressEnd(pid);   /* stale same-pointer press */
       if (leg.mod) { modTap(leg.mod); return; }        /* never repeats */
       if (leg.layer) { layer = leg.layer; render(); changed(); return; }
+      if (leg.clip) {                                  /* never repeats */
+        if (ttyClip && mode() === 'tty') {
+          log('tty', '<' + leg.clip + '>');
+          (leg.clip === 'copy' ? ttyClip.copy : ttyClip.paste)();
+          consumeOneShots();   /* a legend tap consumes armed mods like any key */
+        }
+        return;               /* wm mode: dimmed + inert (see KCOPY/KPASTE) */
+      }
       keyDown(leg, false);
       var p = { leg: leg };
       p.delayT = setTimeout(function () {
@@ -306,6 +348,9 @@ var OSK = (function () {
             if (mods[leg.mod] === 1) cls += ' armed';
             else if (mods[leg.mod] === 2) cls += ' locked';
           }
+          /* tty-only clipboard legends dim (and no-op) on the wm backend —
+             see the KCOPY/KPASTE rationale above. */
+          if (leg.clip && (mode() === 'wm' || !ttyClip)) cls += ' dim';
           var label = (mods.Shift > 0 && leg.K) ? leg.K : leg.l;
           /* Multi-char legends take the .long CSS tier (smaller font, same
              row height) so they fit their flex share at phone widths. */
@@ -362,6 +407,9 @@ var OSK = (function () {
          every sticky mod through the OUTGOING backend (the keyups must land
          where the arm keydowns did). */
       vtWillChange: function () { releaseAll(); disarmAll(); },
+      /* Called by the page AFTER a VT switch: re-draw mode-dependent keys
+         (the tty-only Copy/Paste legends' dim state). */
+      refresh: render,
       state: state,
       /* Test/agent drivers, addressed by data-k id on the CURRENT layer. */
       tap: function (id) { var l = findLeg(id); pressStart(l, 'probe'); pressEnd('probe'); },

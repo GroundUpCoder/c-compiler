@@ -5751,16 +5751,21 @@ function hookPayloadChunk(hooks) {
 }
 
 /* ---- System clipboard (todos/0090) ----
-   __clip_set(fmt, ptr, len) / __clip_get(fmt, ptr, cap): the C-visible
-   primitives under SDL_SetClipboardText/SDL_GetClipboardText (__SDL.c) and
-   the win32 veneer's clipboard API. Kernel-backed when spawnHooks carry
+   __clip_set(fmt, ptr, len) / __clip_get(fmt, ptr, cap) / __clip_has(fmt):
+   the C-visible primitives under SDL_SetClipboardText/SDL_GetClipboardText/
+   SDL_HasClipboardText (__SDL.c), fileops.h's clip file list, and the win32
+   veneer's clipboard API. Kernel-backed when spawnHooks carry
    clipSet/clipGet — ONE system-wide slot, so copy/paste crosses processes
    and survives the writer exiting. Otherwise (standalone pages, embedder
    kernels predating the ops — detected by ENOSYS) a process-local slot with
    identical semantics, the two-transports-one-fs pattern. fmt 1 = UTF-8
    text; fmt 0 clears. __clip_get returns the TOTAL byte length (filling at
    most cap bytes) or -1 when empty / stored format differs — the C side
-   sizes with cap 0, then reads, retrying if the slot grew in between. */
+   sizes with cap 0, then reads, retrying if the slot grew in between.
+   __clip_has is the same total/-1 answer as a PEEK: served from the cached
+   slot, never triggering the kernel's deferred host-clipboard refresh (the
+   clipboard seam) — menu graying and Paste gates must not raise host paste
+   UI, so availability checks and data reads are distinct ops. */
 function createClipboard(ctx, hooks) {
   let kernelized = !!(hooks && typeof hooks.clipSet === 'function' &&
                       typeof hooks.clipGet === 'function');
@@ -5818,6 +5823,16 @@ function createClipboard(ctx, hooks) {
       const n = Math.min(cap, local.bytes.length);
       if (n > 0) new Uint8Array(ctx.getMemory().buffer).set(local.bytes.subarray(0, n), ptr);
       return local.bytes.length;
+    },
+    __clip_has: function (fmt) {
+      fmt >>>= 0;
+      while (kernelized) {
+        const r = hooks.clipGet(fmt, 0, true);   // peek: cached slot only
+        if (r && r.errno === 'ENOSYS') { kernelized = false; break; }
+        if (!r || r.errno || !r.raw || r.raw.length < 4) return -1;
+        return new DataView(r.raw.buffer, r.raw.byteOffset, r.raw.length).getInt32(0, true);
+      }
+      return (local && local.fmt === fmt) ? local.bytes.length : -1;
     },
   } };
 }

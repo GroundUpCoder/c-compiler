@@ -173,7 +173,11 @@
          padding-bottom: max(6px, env(safe-area-inset-bottom)); }
   body[data-osk] #osk { display: block; }
   body[data-guard] #osk { display: none; }
-  /* The OSK supersedes the 0212 keystrip while open (it is a superset).
+  /* The OSK supersedes the 0212 keystrip while open — a real superset
+     since the clipboard-seam landing: Ctrl+Shift+C/V run the keystrip's
+     gesture-scoped copy/paste and the Fn layer carries Copy/Paste legends
+     (os/osk.js ttyClip). Before that the OSK had NO clipboard keys and
+     hiding the strip took away a phone's only paste affordance.
      The full attribute chain out-specifies the keystrip's show rule. */
   body[data-osk][data-vt="1"][data-touchui] #keystrip { display: none; }
   .oskin { max-width: 760px; margin: 0 auto; --oskfs: clamp(17px, 5vw, 20px); }
@@ -206,6 +210,11 @@
   .oskkey:hover { color: #e0e0f0; border-color: #4a4a77; }
   .oskkey.armed { background: #4a4a77; color: #ffffff; }
   .oskkey.locked { background: #6a6ab7; color: #ffffff; border-color: #9a9ad7; }
+  /* Mode-inapplicable keys (the tty-only Copy/Paste legends while the OSK
+     serves VT2): visible but dimmed and inert — layout stays stable across
+     a VT switch. */
+  .oskkey.dim { color: #55556a; cursor: default; }
+  .oskkey.dim:hover { color: #55556a; border-color: #333355; }
   /* Touch devices get bigger keys now that the viewport meta makes the
      width real: at 390px this is ~20px glyphs on ~62px-tall targets, edge
      to edge. Gated on pointer:coarse so mouse desktops are provably
@@ -425,7 +434,9 @@ function vt1Input(data) {
 // flickers away — and pointerdown is an activation-triggering input event,
 // so the Copy/Paste keys' async Clipboard API calls run inside the tap's
 // transient user activation (the user gesture iOS Safari demands; the
-// automatic bridge below is gesture-less and rejects there).
+// bridge's window-FOCUS sync below is the one genuinely gesture-less
+// path iOS rejects — chord/tap-driven reads and writes ride the
+// activation their input event just opened).
 function stripKey(label, onTap) {
   var b = document.createElement('span');
   b.className = 'stripkey';
@@ -450,11 +461,16 @@ function stripKey(label, onTap) {
   });
   if (!k[1]) vt1CtrlEl = b;
 });
-// Copy/Paste strip keys (mobile-ux): the tap IS the clipboard gesture. The
-// ticket-#79 bridge below runs writeText at the kernel's CLIP_SET echo and
-// readText on window focus — both gesture-less, so iOS Safari rejects them
-// and a phone otherwise has NO clipboard path at all. These keys re-run
-// both directions inside a real activation:
+// VT1 gesture-scoped copy/paste (mobile-ux; extracted for the OSK on the
+// clipboard seam): the tap/chord IS the clipboard gesture. The ticket-#79
+// bridge below runs writeText at the kernel's CLIP_SET echo and readText on
+// window focus — the focus sync is genuinely gesture-less (iOS rejects it),
+// and the CLIP_SET echo only rides an activation when the copy was chord/
+// tap-driven — so these handlers re-run both directions inside a real
+// activation. THREE callers share them: the keystrip Copy/Paste keys, the
+// OSK's Ctrl+Shift+C/V tty chords, and the OSK's Fn-layer Copy/Paste
+// legends (os/osk.js ttyClip — landing the OSK's clipboard keys is what
+// made the "OSK supersedes the keystrip" rule true).
 //   Copy: the live xterm selection if there is one (drag/long-press select,
 //     then Copy) — exported to the host clipboard AND committed to the
 //     kernel slot so in-OS consumers (clip -o, term ^V) see it too; with no
@@ -466,8 +482,10 @@ function stripKey(label, onTap) {
 //     import it into the kernel slot (the clipFromHost contract, minus its
 //     dedupe early-out), and feed it to the tty through xterm's own paste
 //     path (term.paste — bracketed-paste aware, \n -> \r, then onData ->
-//     vt1Input like any typed byte).
-stripKey('Copy', function () {
+//     vt1Input like any typed byte). VT1 tty paste stays page-side byte
+//     injection BY DESIGN — the tty is a byte stream, not a CLIP_GET
+//     consumer, so the kernel's clipboard seam is not in this path.
+function vt1ClipCopy() {
   var text = term.hasSelection() ? term.getSelection() : clipSynced;
   if (!text) return;
   if (text !== clipSynced) {
@@ -477,27 +495,26 @@ stripKey('Copy', function () {
   window.__osStripCopy = (window.__osStripCopy || 0) + 1;   // agent probe
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(text).catch(function (e) {
-      console.warn('clipboard bridge: strip Copy writeText failed (' + e + ')');
+      console.warn('clipboard bridge: VT1 Copy writeText failed (' + e + ')');
     });
   }
-  term.focus();
-});
-stripKey('Paste', function () {
-  if (navigator.clipboard && navigator.clipboard.readText) {
-    navigator.clipboard.readText().then(function (text) {
-      if (typeof text !== 'string' || !text) return;
-      if (text !== clipSynced) {
-        clipSynced = text;
-        kernel.postMessage({ type: 'clipboard', text: text });
-      }
-      window.__osStripPaste = (window.__osStripPaste || 0) + 1;   // agent probe
-      term.paste(text);
-    }, function (e) {
-      console.warn('clipboard bridge: strip Paste readText failed (' + e + ')');
-    });
-  }
-  term.focus();
-});
+}
+function vt1ClipPaste() {
+  if (!navigator.clipboard || !navigator.clipboard.readText) return;
+  navigator.clipboard.readText().then(function (text) {
+    if (typeof text !== 'string' || !text) return;
+    if (text !== clipSynced) {
+      clipSynced = text;
+      kernel.postMessage({ type: 'clipboard', text: text });
+    }
+    window.__osStripPaste = (window.__osStripPaste || 0) + 1;   // agent probe
+    term.paste(text);
+  }, function (e) {
+    console.warn('clipboard bridge: VT1 Paste readText failed (' + e + ')');
+  });
+}
+stripKey('Copy', function () { vt1ClipCopy(); term.focus(); });
+stripKey('Paste', function () { vt1ClipPaste(); term.focus(); });
 function touchUiSync() {
   var on = ('ontouchstart' in window) || navigator.maxTouchPoints > 0 ||
            window.innerWidth <= 768;
@@ -877,11 +894,11 @@ screen.addEventListener('touchend', touchEnd, { passive: false });
 screen.addEventListener('touchcancel', touchEnd, { passive: false });
 
 screen.addEventListener('keydown', function (e) {
-  // Paste-chord clipboard refresh (ticket #79): a desktop paste is about to
-  // ask the kernel slot for text — re-read the host clipboard best-effort
-  // (async, so it aims at the next paste; the focus sync below is what
-  // covers this one). Fires alongside the key, never instead of it.
-  if ((e.ctrlKey || e.metaKey) && e.code === 'KeyV') clipFromHost();
+  // No paste-chord clipboard pre-read here: the old aim-at-the-NEXT-paste
+  // refresh is superseded by the clipboard seam — a paste consumer parks
+  // in the kernel on CLIP_GET and the clip-read handler below refreshes
+  // the slot inside this keystroke's still-live activation, so the FIRST
+  // paste is fresh by construction.
   wmSend({ kind: 'key', down: true, code: e.code, key: e.key, repeat: e.repeat, mods: mods(e) });
   e.preventDefault();
 });
@@ -948,13 +965,15 @@ uploadInput.addEventListener('change', function () {
 //     so a rejection (revoked permission, non-user-driven copy while
 //     unfocused) is logged and dropped, never retried: by the time focus
 //     returns, the HOST clipboard may be the newer intent (see below).
-//   host -> gucOS: readText on window FOCUS. To paste into gucOS the user
-//     must focus the tab first, and copying in any other app unfocuses it —
-//     so the focus sync lands in the kernel slot long before any humanly
-//     possible paste chord. The paste chords on the desktop canvas
-//     (Ctrl/Cmd+V, Ctrl+Shift+V) re-read as belt-and-braces for anything
-//     that slipped past focus; the refresh is async, so it aims at the NEXT
-//     paste — ordering input behind a clipboard read would be worse.
+//   host -> gucOS: readText on window FOCUS (keeps the slot warm for menu
+//     graying at zero cost), plus the clipboard SEAM: when a paste consumer
+//     asks the kernel slot for data, the kernel PARKS it and posts
+//     {type:'clip-read'} — the handler in kernel.onmessage below re-reads
+//     the host clipboard inside the still-live activation of the
+//     keystroke/tap that triggered the paste, so the FIRST paste is fresh
+//     by construction (the pre-seam chord listeners re-read asynchronously
+//     and aimed at the NEXT paste). Holding the parked CONSUMER — not the
+//     input stream — is what keeps key order/repeat/modifiers untouched.
 //     (VT1 needs none of this: xterm's native DOM paste already feeds the
 //     host clipboard into the tty as input.)
 // clipSynced = the last text both sides agreed on. It de-dups both
@@ -974,17 +993,26 @@ function clipToHost(text) {
     });
   }
 }
-function clipFromHost() {
-  if (!navigator.clipboard || !navigator.clipboard.readText) return;
+// done (optional) fires when the read SETTLES either way — the clipboard
+// seam needs a completion signal to release the parked consumer, and the
+// slot update (if any) is already posted by then (same FIFO channel).
+function clipFromHost(done) {
+  if (!navigator.clipboard || !navigator.clipboard.readText) {
+    if (done) done();
+    return;
+  }
   navigator.clipboard.readText().then(function (text) {
-    if (typeof text !== 'string' || !text || text === clipSynced) return;
-    clipSynced = text;
-    window.__osClipFromHost = (window.__osClipFromHost || 0) + 1;   // agent probe
-    kernel.postMessage({ type: 'clipboard', text: text });
+    if (typeof text === 'string' && text && text !== clipSynced) {
+      clipSynced = text;
+      window.__osClipFromHost = (window.__osClipFromHost || 0) + 1;   // agent probe
+      kernel.postMessage({ type: 'clipboard', text: text });
+    }
+    if (done) done();
   }, function () {
     // Unfocused read or permission denied — quiet by design: this fires on
     // every tab focus, and a user who denied the permission shouldn't be
     // nagged per focus. The next trigger simply tries again.
+    if (done) done();
   });
 }
 window.addEventListener('focus', clipFromHost);
@@ -1031,6 +1059,9 @@ function setVt(n) {
   // for the desktop pane (todos/0023: the screen syncs to it on VT2 entry).
   if (n === 1) { fitAddon.fit(); term.focus(); }
   else { syncScreenSize(); screen.focus(); }
+  // The OSK's mode-dependent keys (the tty-only Copy/Paste legends) re-draw
+  // for the VT the keyboard now serves.
+  if (oskComp) oskComp.refresh();
 }
 // Every USER-driven switch path goes through here so a choice made during
 // boot sticks (the 0070 auto-switch respects it). Internal forced switches
@@ -1060,19 +1091,17 @@ window.addEventListener('keydown', function (e) {
 var oskComp = OSK.create({
   container: document.getElementById('osk'),
   mode: function () { return vt === 2 ? 'wm' : 'tty'; },
-  // Paste-chord clipboard refresh on the wm backend, mirroring the physical
-  // screen-keydown path above (ticket #79): an OSK Ctrl/Cmd+V is about to
-  // ask the kernel slot for text, so re-read the host clipboard — and the
-  // OSK tap is a REAL pointer gesture, so on iOS (where the gesture-less
-  // focus sync always rejects) this is the one VT2 import path that can
-  // raise the paste callout. Async like the original: it aims at the next
-  // paste; ordering input behind a clipboard read would be worse.
-  sendWmKey: function (ev) {
-    if (ev.kind === 'key' && ev.down && ev.code === 'KeyV' &&
-        ev.mods && (ev.mods.Control || ev.mods.Meta)) clipFromHost();
-    wmSend(ev);
-  },
+  // No KeyV wrapper here anymore: OSK paste chords on VT2 ride the
+  // clipboard seam like physical ones — the parked CLIP_GET's clip-read
+  // refresh runs inside the OSK tap's activation (a REAL pointer gesture,
+  // so on iOS this is where the paste callout raises).
+  sendWmKey: wmSend,
   sendTtyBytes: vt1Input,
+  // VT1 tty clipboard (the OSK's Ctrl+Shift+C/V chords + Fn-layer
+  // Copy/Paste legends): the same gesture-scoped handlers the keystrip
+  // keys run — tty paste is page-side byte injection, not a CLIP_GET
+  // consumer, so the seam is deliberately not in this path.
+  ttyClip: { copy: vt1ClipCopy, paste: vt1ClipPaste },
   onChange: function (st) { window.__osOsk = st; },   // agent probe
 });
 function oskSetOpen(on, persist) {
@@ -1150,6 +1179,23 @@ kernel.onmessage = function (e) {
       window.__osClipLast = m.text;   // agent probe
       clipToHost(m.text);
       break;
+    // The clipboard seam: a paste consumer is PARKED in the kernel on
+    // CLIP_GET awaiting this refresh. The triggering keystroke/tap/click is
+    // milliseconds old, so its transient user activation legalizes readText
+    // here — on iOS this is where the paste callout raises, AT paste time
+    // (the platform's own paste-security UI, surfaced instead of failed
+    // around). A gesture-less consumer (a scripted `clip -o`) gets an
+    // immediate done and is served the cached slot — pre-seam semantics, no
+    // prompt spam. The done must ALWAYS post: the kernel worker's timeout
+    // is the backstop, not the plan.
+    case 'clip-read': {
+      window.__osClipRead = (window.__osClipRead || 0) + 1;   // agent probe
+      var clipDone = function () { kernel.postMessage({ type: 'clip-read-done' }); };
+      var uact = navigator.userActivation;
+      if (uact && !uact.isActive) clipDone();
+      else clipFromHost(clipDone);
+      break;
+    }
     case 'boot-log':
       status(m.msg);
       window.__osLogs.push(m.msg);

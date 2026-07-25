@@ -32,16 +32,33 @@
 //                                                ArrayBuffer (zero-copy).
 //                   {type:'clipboard', text}     host -> gucOS clipboard
 //                                                (ticket #79): the page read
-//                                                the host clipboard (focus /
-//                                                paste-chord sync); land it
-//                                                in the kernel's one slot so
-//                                                the next gucOS paste sees it
+//                                                the host clipboard (focus
+//                                                sync / clip-read refresh);
+//                                                land it in the kernel's one
+//                                                slot so the next gucOS
+//                                                paste sees it
+//                   {type:'clip-read-done'}      clipboard seam: the page's
+//                                                clip-read refresh settled
+//                                                (any {type:'clipboard'}
+//                                                update already landed —
+//                                                postMessage FIFO); resume
+//                                                every CLIP_GET parked on it
 //   kernel -> page: {type:'out', bytes}          tty output (program + echo)
 //                   {type:'clipboard', text}     gucOS -> host clipboard
 //                                                (ticket #79): a process
 //                                                committed a TEXT copy; the
 //                                                page mirrors it out via
 //                                                navigator.clipboard
+//                   {type:'clip-read'}           clipboard seam: a paste
+//                                                consumer is PARKED on
+//                                                CLIP_GET — re-read the host
+//                                                clipboard inside the
+//                                                triggering gesture's still-
+//                                                live activation, then
+//                                                answer clip-read-done
+//                                                (ALWAYS — the worker's
+//                                                timeout is the backstop,
+//                                                not the plan)
 //                   {type:'boot-log', msg}       boot progress / kernel log
 //                   {type:'boot-error', msg}
 //                   {type:'boot-locked'}         two-tab guard (todos/0045):
@@ -94,6 +111,21 @@ var gpuDevice = null;  // the compositor's WebGPU device (todos/0055 boot guard)
 var displayAnnounce = null;   // display-density bridge (set at boot, below)
 var post = function (m) { self.postMessage(m); };
 var pending = [];   // input that raced the boot
+// Deferred CLIP_GET refresh state (the clipboard seam — see onClipRead in
+// the Kernel opts below): parked-reader done callbacks sharing one page
+// round-trip, the freshness stamp that dedupes back-to-back reads, and the
+// timeout backstop that keeps the always-done contract.
+var CLIP_FRESH_MS = 300, CLIP_READ_TIMEOUT_MS = 10000;
+var clipReadPending = [];
+var clipReadTimer = null;
+var clipFreshAt = -1e9;
+function clipReadSettle() {
+  if (clipReadTimer !== null) { clearTimeout(clipReadTimer); clipReadTimer = null; }
+  clipFreshAt = Date.now();
+  var dones = clipReadPending;
+  clipReadPending = [];
+  for (var i = 0; i < dones.length; i++) dones[i]();
+}
 // Host keyboard-scheme auto-detect hint (META-ARROW-KEYBIND.md decision 4).
 // os.html reads navigator (or a ?hostkeys= test override) and passes the
 // verdict on THIS worker's URL, because startBoot() runs on load — before any
@@ -147,6 +179,12 @@ self.onmessage = function (e) {
     if (typeof m.text === 'string' && m.text) {
       kernel.clipSet(1, new TextEncoder().encode(m.text));
     }
+  } else if (m.type === 'clip-read-done') {
+    // The page's clip-read refresh settled; any slot update arrived just
+    // before this on the same FIFO channel. Wake the parked readers. A
+    // done that raced the timeout backstop still stamps freshness — the
+    // page really did just read the host clipboard.
+    clipReadSettle();
   } else if (m.type === 'compositor-stats') {
     // On-demand-compositor probe (todos/0169): frames/submits/skipped/
     // parks/wakes from the compositor + the kernel's cumulative per-pcb
@@ -476,6 +514,21 @@ async function boot() {
     onClipboard: function (clip) {
       if (!clip || clip.fmt !== 1) return;
       post({ type: 'clipboard', text: new TextDecoder().decode(clip.bytes) });
+    },
+    // Deferred CLIP_GET (the clipboard seam): the kernel parked a paste
+    // consumer; ask the page to refresh the slot from the host clipboard
+    // inside the still-live activation of the gesture that triggered the
+    // paste. One page round-trip serves every done that joins while it is
+    // in flight, and a completed refresh stays fresh for CLIP_FRESH_MS —
+    // SDL_GetClipboardText's size-then-read pair costs ONE round-trip.
+    // The timeout backstop keeps the always-done contract even if the
+    // page never answers (dead page, wedged permission UI).
+    onClipRead: function (done) {
+      if (Date.now() - clipFreshAt < CLIP_FRESH_MS) { done(); return; }
+      clipReadPending.push(done);
+      if (clipReadPending.length > 1) return;   // round-trip already in flight
+      post({ type: 'clip-read' });
+      clipReadTimer = setTimeout(clipReadSettle, CLIP_READ_TIMEOUT_MS);
     },
     log: function (m) { post({ type: 'boot-log', msg: '[kernel] ' + m }); },
   });

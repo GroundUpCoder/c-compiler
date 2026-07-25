@@ -55,6 +55,7 @@
  * redeclaring the __SDL.c imports is fine, imports dedup by name. */
 __import int __clip_set(int fmt, const void *bytes, int len);
 __import int __clip_get(int fmt, void *out, int cap);
+__import int __clip_has(int fmt);
 
 /* ---- the clipboard file list ---- */
 
@@ -72,8 +73,10 @@ static int fo_clip_set(int cut, const char *const *paths, int n) {
 
 static int fo_clip_clear(void) { return __clip_set(0, 0, 0); }
 
-/* True when a file list is on the clipboard (the Paste gate). */
-static int fo_clip_has(void) { return __clip_get(FO_CLIP_FMT, 0, 0) > 0; }
+/* True when a file list is on the clipboard (the Paste gate). A PEEK —
+ * fileman/wm.c call this per context-menu open, so it must serve the
+ * cached slot and never park on the clipboard seam's host refresh. */
+static int fo_clip_has(void) { return __clip_has(FO_CLIP_FMT) > 0; }
 
 /* Load the list into `buf`: each path NUL-terminated in place, *cut set
  * from the header. Returns the path count, 0 when the slot holds no file
