@@ -4363,18 +4363,30 @@ Kernel.prototype._wmSetFocus = function (sid) {
  * MUTATION site (create, parent move/drag/screen-clamp, wmSetDst, either
  * side's configure) and STORES the result (A11), so the scene walk, the
  * headless composite and the hit test read a plain per-surface rect and
- * stay anchor-blind — the consumers genuinely cost zero lines. The final
- * clamp slides the child into the screen (the xdg-positioner "slide"
- * shape): edge-avoiding popups without the app knowing screen dims, and
- * since geometry is re-derived from dx/dy each time, clamps never
- * accumulate. */
+ * stay anchor-blind — the consumers genuinely cost zero lines. (The ONE
+ * sanctioned exception is the group fly: wmScene marks children of an
+ * animating root with animRootSid so the browser compositor can ride the
+ * whole subtree along a minimize/restore fly — see the wmScene filter.)
+ *
+ * The into-the-screen slide (the xdg-positioner "slide" shape) applies to
+ * GRABBED children only — grab tells the kernel which of the two anchored
+ * kinds this is. A grabbed child is a TRANSIENT MENU (POPUP_MENU): it must
+ * stay reachable to be clickable, so it slides into the screen without the
+ * app knowing screen dims (re-derived from dx/dy each time, so clamps
+ * never accumulate). A non-grab child (TOOLTIP) is a STRUCTURAL ATTACHMENT
+ * — a menu-bar strip, a docked panel: it rigidly tracks the parent and
+ * clips at the viewport edge exactly like the parent's own client pixels
+ * (sliding one would shear it off its window frame whenever the parent
+ * hangs off-screen, e.g. a desktop-sized window on a phone viewport). */
 Kernel.prototype._wmAnchorApply = function (c, p) {
   c.dstW = Math.max(1, Math.round(c.w * p.dstW / p.w));
   c.dstH = Math.max(1, Math.round(c.h * p.dstH / p.h));
   c.x = p.x + Math.round(c.dx * p.dstW / p.w);
   c.y = p.y + Math.round(c.dy * p.dstH / p.h);
-  c.x = Math.max(0, Math.min(c.x, this._wmScreen.w - c.dstW));
-  c.y = Math.max(0, Math.min(c.y, this._wmScreen.h - c.dstH));
+  if (c.grab) {
+    c.x = Math.max(0, Math.min(c.x, this._wmScreen.w - c.dstW));
+    c.y = Math.max(0, Math.min(c.y, this._wmScreen.h - c.dstH));
+  }
 };
 
 /* Re-materialize every anchored DESCENDANT of s — the recursive subtree
@@ -6143,8 +6155,26 @@ Kernel.prototype.wmScene = function () {
     surfaces: this._zOrder.map(function (sid) { return self._surfaces.get(sid); })
       .filter(function (s) {
         // Anchored children hidden by an ancestor leave the scene entirely
-        // (todos/0256) — the browser compositor stays anchor-blind.
-        return s && !(s.parentSid && self._wmAnchorHidden(s));
+        // (todos/0256) — the browser compositor stays anchor-blind, with
+        // ONE sanctioned exception: the group fly (0256 menu arch). While
+        // the child's ROOT has a live minimize/restore animation, the
+        // whole anchored subtree must ride the fly as a rigid group (pre-
+        // 0259 the bar was painted INTO the parent's pixels and rode for
+        // free; a separate surface must be told to). The kernel computes
+        // the linkage — animRootSid names the root whose anim record the
+        // compositor should transform this child by — so the compositor
+        // stays geometry-dumb: it never walks parentSid chains, it just
+        // resolves the anim by (animRootSid || sid). A min-direction child
+        // is anchor-hidden (root minimized) but KEPT while the fly is
+        // live; restore-direction children are visible anyway (minimized
+        // clears before the restore push) and only need the linkage.
+        if (!s) return false;
+        if (!s.parentSid) return true;
+        var root = self._wmAnchorRoot(s);
+        var anim = self._wmAnims.get(root.sid);   // post-prune: live or absent
+        s.animRootSid = anim ? root.sid : 0;
+        if (!self._wmAnchorHidden(s)) return true;
+        return !!(anim && anim.kind === 'min');
       }),
   };
 };

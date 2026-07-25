@@ -3,13 +3,18 @@
 // menu-uniform architecture's Spike 1) without wasm: fake workers over a
 // brokered kernel (the test_wm.js pattern). Covers, at the kernel seam:
 //   - SURFACE_CREATE flag bit6 validation (parent exists, same pid), the
-//     materialized child rect (A11), the into-the-screen clamp, and
-//     no-focus-steal-at-create
+//     materialized child rect (A11), the grab-gated into-the-screen clamp
+//     (grabbed = transient menu, slides to stay reachable; non-grab =
+//     structural attachment, rigidly tracks the parent and clips at the
+//     viewport like client pixels), and no-focus-steal-at-create
 //   - move-with-parent through wmMove + the title drag (recursive over a
 //     2-level chain, A1), scale inheritance under wmSetDst, the A5
 //     owner-initiated child resize (SURFACE_RESIZE + CONFIGURE re-derive)
-//   - hide/show with the parent in the hit test + headless composite,
-//     raise-as-subtree z re-slotting, WM-op refusal (EPERM) on children,
+//   - hide/show with the parent in the hit test + headless composite, the
+//     group fly (wmScene keeps an anchor-hidden subtree + marks animRootSid
+//     while the root's minimize/restore fly is live — the one sanctioned
+//     anchor-blind exception), raise-as-subtree z re-slotting, WM-op
+//     refusal (EPERM) on children,
 //     click/wmFocus redirect to the anchor root, destroy cascade (whole
 //     tree AND mid-tree), thumbnail child compositing (A10)
 //   - the grab (A2): press outside the holder's window tree -> QUIT to the
@@ -200,15 +205,30 @@ const FOCUS_GAINED = K.WMEV.FOCUS_GAINED, FOCUS_LOST = K.WMEV.FOCUS_LOST,
     JSON.stringify(byTitle('c2')));
   kernel.wmSetDst(cP.sid, 100, 80);
 
-  // ---- into-the-screen clamp (screen 640x480) ----
+  // ---- into-the-screen clamp is GRAB-GATED (screen 640x480) ----
+  // A grabbed child is a transient menu: it slides into the screen (it must
+  // stay reachable to be clickable).
   const fbFar = makeFb(30, 20);
   workers.get(a).msg({ type: 'wm-sabs', fb: fbFar.sab, ring: null });
-  const cFar = await rpc(a, K.OP.SURFACE_CREATE, { w: 30, h: 20, title: 'far', flags: 64, parentSid: cP.sid, dx: 5000, dy: 10 });
-  check('child clamps into the screen at create', cFar.x === 610 && cFar.y === 110, JSON.stringify(cFar));
+  const cFar = await rpc(a, K.OP.SURFACE_CREATE, { w: 30, h: 20, title: 'far', flags: 64 | 128, parentSid: cP.sid, dx: 5000, dy: 10 });
+  check('grabbed child clamps into the screen at create', cFar.x === 610 && cFar.y === 110, JSON.stringify(cFar));
   kernel.wmMove(cP.sid, 100, 100);
   check('clamp re-derives on parent move (never accumulates)',
     byTitle('far').x === 610 && byTitle('far').y === 110, JSON.stringify(byTitle('far')));
-  await rpc(a, K.OP.SURFACE_DESTROY, { sid: cFar.sid });
+  await rpc(a, K.OP.SURFACE_DESTROY, { sid: cFar.sid });   // releases its grab
+  kernel.wmMove(cP.sid, 200, 100);
+  // A non-grab child is a structural attachment (a menu-bar strip): it
+  // rigidly tracks the parent and clips at the viewport edge like the
+  // parent's own client pixels — never slid off its window frame.
+  const fbRig = makeFb(30, 20);
+  workers.get(a).msg({ type: 'wm-sabs', fb: fbRig.sab, ring: null });
+  const cRig = await rpc(a, K.OP.SURFACE_CREATE, { w: 30, h: 20, title: 'rig', flags: 64, parentSid: cP.sid, dx: 5000, dy: 10 });
+  check('non-grab child is NOT clamped (rigid attachment)',
+    cRig.x === 5200 && cRig.y === 110, JSON.stringify(cRig));
+  kernel.wmMove(cP.sid, 100, 100);
+  check('non-grab child rigidly tracks the parent off-screen',
+    byTitle('rig').x === 5100 && byTitle('rig').y === 110, JSON.stringify(byTitle('rig')));
+  await rpc(a, K.OP.SURFACE_DESTROY, { sid: cRig.sid });
   kernel.wmMove(cP.sid, 200, 100);
 
   // ---- second process window Q; z re-slot + focus redirect ----
@@ -249,9 +269,36 @@ const FOCUS_GAINED = K.WMEV.FOCUS_GAINED, FOCUS_LOST = K.WMEV.FOCUS_LOST,
     [px(shot, 212, 122), px(shot, 217, 127)].join(' | '));
   check('hidden children leave the hit test', kernel.wmPointer('down', 212, 122, {}) === 'desktop');
   kernel.wmPointer('up', 212, 122, {});
-  check('scene excludes hidden children',
+  // Group fly (the ONE anchor-blind exception): while the root's minimize
+  // fly is live, the scene KEEPS the anchor-hidden subtree and marks each
+  // child with animRootSid, so the compositor rides the whole group along
+  // the fly. Re-stamp t0 (deterministic — no wall-clock dependence under
+  // load), then rewind it to expire the fly.
+  kernel._wmAnims.get(cP.sid).t0 = Date.now();
+  let scn = kernel.wmScene();
+  const sceneSid = (sc, sid) => sc.surfaces.find((s) => s.sid === sid);
+  check('scene keeps children during the live min fly (group fly)',
+    !!sceneSid(scn, cC1.sid) && !!sceneSid(scn, cC2.sid) &&
+    sceneSid(scn, cC1.sid).animRootSid === cP.sid &&
+    sceneSid(scn, cC2.sid).animRootSid === cP.sid,
+    JSON.stringify(scn.surfaces.map((s) => [s.title, s.animRootSid])));
+  kernel._wmAnims.get(cP.sid).t0 -= 100000;   // expire the fly
+  check('scene excludes hidden children once the fly expires',
     !kernel.wmScene().surfaces.some((s) => s.sid === cC1.sid), JSON.stringify(kernel.wmScene().surfaces.map((s) => s.title)));
   kernel.wmFocus(cP.sid);   // restore
+  // Restore direction: children are visible anyway (minimized cleared
+  // before the restore push) — the scene only adds the fly linkage.
+  kernel._wmAnims.get(cP.sid).t0 = Date.now();
+  scn = kernel.wmScene();
+  check('restore-direction children carry the group-fly linkage',
+    sceneSid(scn, cC1.sid).animRootSid === cP.sid &&
+    sceneSid(scn, cC2.sid).animRootSid === cP.sid,
+    JSON.stringify(scn.surfaces.map((s) => [s.title, s.animRootSid])));
+  kernel._wmAnims.get(cP.sid).t0 -= 100000;   // expire the restore fly
+  scn = kernel.wmScene();
+  check('linkage clears once the restore fly expires',
+    sceneSid(scn, cC1.sid).animRootSid === 0 && sceneSid(scn, cC2.sid).animRootSid === 0,
+    JSON.stringify(scn.surfaces.map((s) => [s.title, s.animRootSid])));
   shot = kernel.wmScreenshotScreen();
   check('restore shows the subtree again', String(px(shot, 212, 122)) === '0,255,0,255');
 

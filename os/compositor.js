@@ -605,14 +605,41 @@ function startCompositor(kernel, canvas, device) {
       // Minimize/restore animation (todos/0063): a transient kernel record;
       // the content flies to/from the taskbar strip and fades — a 200ms
       // flourish drawn WITHOUT chrome, never hit-testable (the kernel's
-      // minimized/hit-test state is already final).
+      // minimized/hit-test state is already final). An anchored child
+      // resolves its ROOT's record (animRootSid, the kernel-computed group
+      // fly linkage) so the whole subtree rides one fly as a rigid group.
+      var animKey = s.animRootSid || s.sid;
       var anim = null, ak = 0;
       for (var an = 0; an < scene.anims.length; an++)
-        if (scene.anims[an].sid === s.sid) { anim = scene.anims[an]; break; }
+        if (scene.anims[an].sid === animKey) { anim = scene.anims[an]; break; }
       if (anim) {
         var lin = (now - anim.t0) / K.WM_ANIM_MS;
         if (lin >= 1 || lin < 0) anim = null;
         else ak = 1 - (1 - lin) * (1 - lin);   // ease-out
+      }
+      // Group fly (the ONE anchor exception, see kernel wmScene): while the
+      // root's fly is live, draw the child ONLY as a quad inside the root's
+      // interpolated rect — its stored x/y is the settled position, so an
+      // ungated draw would park the bar detached at the destination for the
+      // whole fly (the pre-fix restore pop). The anim record carries the
+      // root's transition geometry (x/y/w/h), so the child maps into the
+      // flying rect by plain proportional transform, same fade as the root.
+      if (s.parentSid && s.animRootSid) {
+        if (anim) {
+          var gk = anim.kind === 'min' ? ak : 1 - ak;
+          var gr = animRect(anim, gk);
+          pushQuad(s.bitmap ? gpuBindFor(s) : shmBindFor(s),
+                   gr.x + (s.x - anim.x) * gr.w / anim.w,
+                   gr.y + (s.y - anim.y) * gr.h / anim.h,
+                   s.dstW * gr.w / anim.w, s.dstH * gr.h / anim.h,
+                   [1, 1, 1, anim.kind === 'min' ? 1 - ak : ak]);
+          continue;
+        }
+        // Fly expired between the kernel's prune and this frame: a still-
+        // minimized root means the child is about to leave the scene —
+        // draw nothing; a restored root falls through to the normal path.
+        var groot = surfById(scene, s.animRootSid);
+        if (groot && groot.minimized) continue;
       }
       if (s.minimized) {                       // off screen, still in the scene
         if (anim && anim.kind === 'min') {
