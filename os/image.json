@@ -1,5 +1,5 @@
 {
-  "version": 162,
+  "version": 163,
   "overlays": [
     {
       "id": "clang-apps",
@@ -612,6 +612,7 @@
       "/root/Desktop/Presentations/MagicPoint Tutorial",
       "/root/Desktop/Presentations/POSIX on WebAssembly",
       "/root/Desktop/Presentations/gucOS",
+      "/root/Desktop/Presentations/samples",
       "/root/roms"
     ],
     "files": {
@@ -689,6 +690,10 @@
       },
       "/root/Desktop/Presentations/gucOS/deck-title.png": {
         "bin": "os/deck/demo/deck-title.png"
+      },
+      "/root/Desktop/Presentations/samples/minesweeper-programming-rainbow.sh": {
+        "content": "#!/bin/sh\n# minesweeper-programming-rainbow.sh — tap-to-run sample. Builds Programming\n# Rainbow's Minesweeper (C/SDL3) live from GitHub, compiled in-OS. Tapped on the\n# Desktop this spawns headless (no terminal); the desktop launcher sets no TERM\n# while `term` does, so with TERM unset we re-exec into a term window to show the\n# fetch/compile progress and the game. Attribution: @ProgrammingRainbow.\n[ -n \"$TERM\" ] || exec term \"$0\"\nset -e\nREPO=https://raw.githubusercontent.com/ProgrammingRainbow/Minesweeper-C-SDL3/main\nmkdir -p \"$HOME/minesweeper/images\"\ncd \"$HOME/minesweeper\"\n# libpng+zlib are folded into the full image; on a minimal boot install them.\n[ -f /usr/include/png.h ] || [ -f /usr/local/include/png.h ] || gucman install libpng\necho \"fetching source…\"\nfor f in main game board border clock face init_sdl load_media mines; do\n    curl -sL \"$REPO/Video18/$f.c\" -o \"$f.c\"\n    curl -sL \"$REPO/Video18/$f.h\" -o \"$f.h\"\ndone\necho \"fetching art…\"\nfor f in board borders digits digitback faces icon; do\n    curl -sL \"$REPO/images/$f.png\" -o \"images/$f.png\"\ndone\n# this cc is __STDC_NO_VLA__ — swap game.c's one VLA for a fixed buffer\nsed -i 's/char title_str\\[length\\];/char title_str[512];/' game.c\necho \"compiling in-OS (cc *.c — pulls libpng + zlib)…\"\ncc *.c -o minesweeper\necho \"launching — left-click uncovers, right-click flags, 1-8 theme, face resets.\"\n# FOREGROUND on purpose: term ends the session (SIGHUPs the pty) when this\n# script exits, so `./minesweeper &` would kill the game the instant it launched.\n./minesweeper\n",
+        "mode": 493
       },
       "/root/Desktop/pokemon": {
         "content": "#!/bin/sh\nsameboy $HOME/roms/PokemonBlue.gb\n",

@@ -1,8 +1,11 @@
 #!/bin/sh
 # ---------------------------------------------------------------------------
 # Build + run @ProgrammingRainbow's Minesweeper-C-SDL3 IN gucOS, from source,
-# on your iPhone (or any gucOS terminal). Paste this whole block into a gucOS
-# shell (term / the VT1 console) and press Enter.
+# on your phone (or any gucOS terminal). Paste this whole block into a gucOS
+# shell (term / the VT1 console) and press Enter. The seeded tap-to-run twin
+# is /root/Desktop/Presentations/samples/minesweeper-programming-rainbow.sh
+# (image.json), which prepends a $TERM re-exec guard so a desktop tap opens
+# it in a term window.
 #
 # It fetches the game's Video18/ tree straight from GitHub with the built-in
 # /usr/bin/curl, compiles it in-OS with `cc *.c` (libpng + SDL3_image are
