@@ -55,6 +55,14 @@ try {
   check('boots to ready', true);
   await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
 
+  // The mobile Upload button is data-touchui-gated: this context is exactly
+  // the desktop UI (wide, no touch), so it must be hidden here — desktop
+  // keeps the drag-drop path this file drives (the touch flavor lives in
+  // os-vt1mobile.mjs).
+  check('Upload button hidden on the desktop UI (touch-gated)',
+    await page.evaluate(() => !document.body.hasAttribute('data-touchui') &&
+      document.getElementById('uploadbtn').offsetParent === null), true);
+
   // `let` so the persistence-reload leg can rebind these to the NEW page —
   // osHelpers closes over the page it was handed, and the reload below
   // reassigns `page` (a stale capture here would call evaluate() on the

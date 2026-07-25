@@ -54,10 +54,24 @@
   body[data-osk] #status { display: none; }
   /* VT tabs (todos/0022): the primary, discoverable switch — one tab per
      VT, browser-tab styling. Ctrl+Alt+F1/F2 (or 1/2) are quiet aliases. */
+  /* One row, sideways scroll on overflow: a phone-width bar holds more
+     controls than fit, so children never shrink or wrap and the bar pans.
+     The old border-bottom is an inset shadow + 1px bottom padding now: the
+     tabs' 1px descent (the active-tab seam trick, top:1px below) must stay
+     INSIDE the scroll container's padding box — a real border sits outside
+     it and the seam would be clipped once the bar scrolls. Same colors,
+     same outer height. Scrollbar hidden (iOS overlays it invisibly anyway);
+     touch pan / wheel still scroll. #oskbtn's margin-left:auto right-aligns
+     the cluster while the bar fits and collapses to 0 on overflow (no free
+     space), so the controls just trail off the right edge and scroll in. */
   #vtbar {
-    display: flex; gap: 2px; padding: 6px 8px 0;
-    border-bottom: 1px solid #333355;
+    display: flex; gap: 2px; padding: 6px 8px 1px;
+    box-shadow: inset 0 -1px 0 #333355;
+    overflow-x: auto; overflow-y: hidden; flex-wrap: nowrap;
+    scrollbar-width: none;
   }
+  #vtbar::-webkit-scrollbar { display: none; }
+  #vtbar > * { flex-shrink: 0; }
   .vttab {
     font: 12px 'Menlo', 'Consolas', monospace; color: #8888a8;
     cursor: pointer; user-select: none; padding: 5px 18px;
@@ -74,6 +88,12 @@
      so it carries the auto margin (fontctl/zoomctl follow it). */
   #oskbtn { margin-left: auto; }
   #oskbtn.on { background: #4a4a77; color: #ffffff; }
+  /* Upload (mobile file ingest): a visible file-picker button for touch
+     UIs, where host drag-drop doesn't exist (iOS). Desktop keeps the
+     drag-onto-the-pane path and hides this. touch-action per-element:
+     rapid taps must not iOS-double-tap-zoom. */
+  #uploadbtn { display: none; touch-action: manipulation; }
+  body[data-touchui] #uploadbtn { display: inline-block; }
   /* VT1 font-size steps (todos/0212): right-aligned in the tab bar, only
      meaningful while the tty is visible. */
   #fontctl { display: flex; gap: 2px; }
@@ -235,6 +255,8 @@
       <span id="zoomminus" class="fontbtn">&minus;</span><span id="zoomlabel" class="fontlabel">1&times;</span><span id="zoomplus" class="fontbtn">+</span>
     </span>
     <span id="desksite" class="fontbtn" title="desktop site: the unzoomed 1&times; desktop (tap again for the 2&times; mobile zoom)">Desktop site</span>
+    <span id="uploadbtn" class="fontbtn" title="upload a file to the OS desktop (lands in /root/Desktop)">Upload</span>
+    <input id="uploadinput" type="file" multiple style="display:none">
   </div>
   <div id="desktop"><canvas id="screen" width="800" height="500" tabindex="0"></canvas></div>
   <div id="terminal"></div>
@@ -849,14 +871,24 @@ screen.addEventListener('keyup', function (e) {
   e.preventDefault();
 });
 
-// Host-file drop (todos/0067): drag a file from the host onto the desktop
-// and it lands in /root/Desktop, where the wm's icon grid picks it up
-// within ~1s (no reboot). The page stays a dumb bridge: read the bytes,
-// post {type:'drop-file'} per file with the ArrayBuffer TRANSFERRED
-// (zero-copy); ALL policy (name sanitizing, collisions, size cap, the
-// actual fs write) lives in the kernel worker. Listeners sit on the
-// #desktop pane so the whole VT2 surface is a target; dragover's
-// preventDefault is what makes the drop legal.
+// Host-file ingest (todos/0067): files from the host land in /root/Desktop,
+// where the wm's icon grid picks them up within ~1s (no reboot). ONE loop
+// serves both entry points — desktop drag-drop below and the mobile Upload
+// button — so there is exactly one FS path. The page stays a dumb bridge:
+// read the bytes, post {type:'drop-file'} per file with the ArrayBuffer
+// TRANSFERRED (zero-copy); ALL policy (name sanitizing, collisions, size
+// cap, the actual fs write) lives in the kernel worker.
+function postHostFiles(files) {
+  Array.prototype.forEach.call(files || [], function (f) {
+    f.arrayBuffer().then(function (ab) {
+      kernel.postMessage({ type: 'drop-file', name: f.name, bytes: ab }, [ab]);
+    });
+  });
+}
+
+// Drag-drop flavor: listeners sit on the #desktop pane so the whole VT2
+// surface is a target; dragover's preventDefault is what makes the drop
+// legal.
 var desktopPane = document.getElementById('desktop');
 desktopPane.addEventListener('dragover', function (e) {
   e.preventDefault();
@@ -869,12 +901,21 @@ desktopPane.addEventListener('dragleave', function () {
 desktopPane.addEventListener('drop', function (e) {
   e.preventDefault();
   desktopPane.classList.remove('droptarget');
-  var files = (e.dataTransfer && e.dataTransfer.files) || [];
-  Array.prototype.forEach.call(files, function (f) {
-    f.arrayBuffer().then(function (ab) {
-      kernel.postMessage({ type: 'drop-file', name: f.name, bytes: ab }, [ab]);
-    });
-  });
+  postHostFiles(e.dataTransfer && e.dataTransfer.files);
+});
+
+// Upload-button flavor (mobile): iOS has no host drag-drop, so a hidden
+// <input type=file> stands in — the button tap IS the user gesture that
+// legalizes the programmatic .click(), and the picker's change feeds the
+// SAME drop-file loop. Clearing .value re-arms change for picking the same
+// file twice in a row (the File refs already captured stay readable).
+var uploadInput = document.getElementById('uploadinput');
+document.getElementById('uploadbtn').addEventListener('click', function () {
+  uploadInput.click();
+});
+uploadInput.addEventListener('change', function () {
+  postHostFiles(uploadInput.files);
+  uploadInput.value = '';
 });
 
 // Host <-> gucOS clipboard bridge (ticket #79). Two directions over the

@@ -11,7 +11,8 @@
 // with the keyboard = ^U line kill and ^D EOF.
 //
 // Usage: node os-vt1mobile.mjs
-import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl } from './lib/os-harness.mjs';
+import { createHash } from 'node:crypto';
+import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl, deskEntries, deskCell } from './lib/os-harness.mjs';
 const PORT = 3251;
 const URL = osUrl(PORT);
 const server = startServer(PORT);
@@ -33,7 +34,7 @@ try {
   check('boots to ready', true);
   await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
 
-  const { setVt, waitOut } = osHelpers(page);
+  const { setVt, waitOut, waitPixel, waitScreen } = osHelpers(page);
   // timing subject: VT1 input pacing and the vi-mode settles (annotated at
   // each site; vi's mode switches paint no page-observable marker).
   const pause = (ms) => page.waitForTimeout(ms);
@@ -183,6 +184,58 @@ try {
   await waitOut('SLOT-OK');
   check('strip Paste imported the host text into the kernel slot', true);
 
+  // ---- Upload button (mobile file ingest): visible on the touch UI; the
+  // picker's change handler feeds the SAME {type:'drop-file'} path as
+  // desktop drag-drop (os-drop.mjs owns that flavor + the hidden-on-desktop
+  // gate). The picker DIALOG itself is un-drivable headless (a real iOS
+  // Safari chooser) — synthesizing files onto the input and firing change
+  // exercises everything from the handler down. ----
+  check('Upload button visible on the touch UI',
+    await page.evaluate(() =>
+      document.getElementById('uploadbtn').offsetParent !== null), true);
+  // Every byte value once: any transport mangling breaks the md5.
+  const UP = Uint8Array.from({ length: 256 }, (_, i) => i);
+  const UP_MD5 = createHash('md5').update(UP).digest('hex');
+  await page.evaluate((arr) => {
+    const dt = new DataTransfer();
+    dt.items.add(new File([new Uint8Array(arr)], 'upload.bin'));
+    const input = document.getElementById('uploadinput');
+    input.files = dt.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }, Array.from(UP));
+  await page.waitForFunction(() => window.__osLogs.some(l =>
+    l.startsWith('[drop]') && l.includes('upload.bin -> /root/Desktop/upload.bin (256 bytes)')),
+    { timeout: 20000, polling: 200 });
+  check('picker change posted drop-file (kernel logged the write)', true);
+  check('input cleared after posting (same file re-pickable)',
+    await page.evaluate(() =>
+      document.getElementById('uploadinput').value === ''), true);
+  // The icon appears on the desktop without a reboot (the wm ~1s re-read).
+  await setVt(2);
+  await waitScreen();
+  const { h: UPSH } = await page.evaluate(() => window.__osScreen);
+  const UPGRID = deskEntries(['upload.bin']);
+  const UPBIN = deskCell(UPGRID, 'Recycle Bin', UPSH);
+  await waitPixel(UPBIN.x + 44, UPBIN.y + 6 + 2, [255, 255, 255], 15000);
+  check(`uploaded file's icon appeared (${UPGRID.length}-cell grid)`, true);
+  // Byte identity through the shell (md5 over the brokered fs).
+  await setVt(1);
+  await page.evaluate(() => { window.__osOut = ''; });
+  await page.keyboard.type('md5sum /root/Desktop/upload.bin\r', { delay: 60 });
+  await page.waitForFunction(() => /[0-9a-f]{32}/.test(window.__osOut),
+    { timeout: 20000, polling: 200 });
+  check('uploaded bytes byte-identical (md5)',
+    (await page.evaluate(() => window.__osOut)).includes(UP_MD5), true);
+  // While the bar FITS, #oskbtn's auto margin still right-aligns the
+  // control cluster (the overflow flavor is the ctx3 legs below).
+  check('right cluster right-aligned while the bar fits (oskbtn auto margin)',
+    await page.evaluate(() => {
+      const b = document.getElementById('vtbar');
+      const osk = document.getElementById('oskbtn').getBoundingClientRect();
+      const vt2 = document.getElementById('vt2tab').getBoundingClientRect();
+      return b.scrollWidth <= b.clientWidth && (osk.left - vt2.right) > 100;
+    }), true);
+
   // ---- the 18px choice survives a reload ----
   await page.reload();
   await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });
@@ -216,6 +269,39 @@ try {
     await page2.evaluate(() =>
       document.getElementById('keystrip').offsetParent !== null), true);
   await ctx2.close();
+
+  // ---- a REAL phone width (360px): the VT2 bar (tabs + osk + zoom +
+  // Desktop site + Upload) genuinely overflows — it must pan sideways on
+  // ONE row, with the tail controls reachable and the tabs' 1px active-seam
+  // descent NOT clipped by the scroll container (scrollHeight == clientHeight
+  // is exactly that assertion). ----
+  const ctx3 = await browser.newContext({
+    viewport: { width: 360, height: 780 }, hasTouch: true });
+  const page3 = await ctx3.newPage();
+  await page3.goto(URL);
+  await page3.waitForFunction(() => window.__osState === 'ready', { timeout: 240000, polling: 250 });
+  await page3.evaluate(() => window.__osVtSwitch(2));   // zoomctl/desksite/upload visible
+  const bar = await page3.evaluate(() => {
+    const b = document.getElementById('vtbar');
+    const s = getComputedStyle(b);
+    return { overflowX: s.overflowX, wrap: s.flexWrap, shrink: getComputedStyle(document.getElementById('vt1tab')).flexShrink,
+             scrollW: b.scrollWidth, clientW: b.clientWidth, atStart: b.scrollLeft === 0,
+             oneRow: b.scrollHeight <= b.clientHeight,
+             upVisible: document.getElementById('uploadbtn').offsetParent !== null };
+  });
+  check('phone VT2 bar overflows sideways (nowrap, unshrunk, scrollable, seam unclipped)',
+    bar.overflowX === 'auto' && bar.wrap === 'nowrap' && bar.shrink === '0' &&
+    bar.scrollW > bar.clientW && bar.atStart && bar.oneRow && bar.upVisible, bar);
+  const tail = await page3.evaluate(() => {
+    const b = document.getElementById('vtbar');
+    b.scrollLeft = 100000;                    // clamp to max = scroll to end
+    const br = b.getBoundingClientRect();
+    const ur = document.getElementById('uploadbtn').getBoundingClientRect();
+    return { moved: b.scrollLeft > 0, upRight: ur.right, barRight: br.right };
+  });
+  check('bar pans to the end; Upload (the tail control) reachable',
+    tail.moved && tail.upRight <= tail.barRight + 1, tail);
+  await ctx3.close();
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));
   try {
