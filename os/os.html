@@ -379,25 +379,83 @@ function vt1Input(data) {
   }
   kernel.postMessage({ type: 'input', data: data });
 }
+// One maker for every strip key. pointerdown, not click: preventDefault
+// keeps xterm's hidden textarea focused, so the soft keyboard never
+// flickers away — and pointerdown is an activation-triggering input event,
+// so the Copy/Paste keys' async Clipboard API calls run inside the tap's
+// transient user activation (the user gesture iOS Safari demands; the
+// automatic bridge below is gesture-less and rejects there).
+function stripKey(label, onTap) {
+  var b = document.createElement('span');
+  b.className = 'stripkey';
+  b.textContent = label;
+  b.setAttribute('data-key', label);
+  b.addEventListener('pointerdown', function (e) {
+    e.preventDefault();
+    onTap();
+  });
+  document.getElementById('keystrip').appendChild(b);
+  return b;
+}
 [
   ['Esc', '\x1b'], ['Tab', '\t'], ['Ctrl', null],
   ['←', '\x1b[D'], ['↑', '\x1b[A'], ['↓', '\x1b[B'], ['→', '\x1b[C'],
   ['|', '|'], ['~', '~'], ['/', '/'], ['-', '-'],
 ].forEach(function (k) {
-  var b = document.createElement('span');
-  b.className = 'stripkey';
-  b.textContent = k[0];
-  b.setAttribute('data-key', k[0]);
-  if (!k[1]) vt1CtrlEl = b;
-  // pointerdown, not click: preventDefault keeps xterm's hidden textarea
-  // focused, so the soft keyboard never flickers away.
-  b.addEventListener('pointerdown', function (e) {
-    e.preventDefault();
+  var b = stripKey(k[0], function () {
     if (!k[1]) { vt1CtrlSet(!vt1CtrlArmed); return; }
     vt1Input(k[1]);
     term.focus();
   });
-  document.getElementById('keystrip').appendChild(b);
+  if (!k[1]) vt1CtrlEl = b;
+});
+// Copy/Paste strip keys (mobile-ux): the tap IS the clipboard gesture. The
+// ticket-#79 bridge below runs writeText at the kernel's CLIP_SET echo and
+// readText on window focus — both gesture-less, so iOS Safari rejects them
+// and a phone otherwise has NO clipboard path at all. These keys re-run
+// both directions inside a real activation:
+//   Copy: the live xterm selection if there is one (drag/long-press select,
+//     then Copy) — exported to the host clipboard AND committed to the
+//     kernel slot so in-OS consumers (clip -o, term ^V) see it too; with no
+//     selection it re-exports the last agreed clipboard text (a gucOS
+//     in-app copy whose automatic writeText mirror was rejected). The
+//     writeText deliberately BYPASSES clipToHost's clipSynced dedupe — the
+//     retry case is exactly text the bridge already agrees on.
+//   Paste: read the host clipboard (on iOS this raises the paste callout),
+//     import it into the kernel slot (the clipFromHost contract, minus its
+//     dedupe early-out), and feed it to the tty through xterm's own paste
+//     path (term.paste — bracketed-paste aware, \n -> \r, then onData ->
+//     vt1Input like any typed byte).
+stripKey('Copy', function () {
+  var text = term.hasSelection() ? term.getSelection() : clipSynced;
+  if (!text) return;
+  if (text !== clipSynced) {
+    clipSynced = text;
+    kernel.postMessage({ type: 'clipboard', text: text });
+  }
+  window.__osStripCopy = (window.__osStripCopy || 0) + 1;   // agent probe
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).catch(function (e) {
+      console.warn('clipboard bridge: strip Copy writeText failed (' + e + ')');
+    });
+  }
+  term.focus();
+});
+stripKey('Paste', function () {
+  if (navigator.clipboard && navigator.clipboard.readText) {
+    navigator.clipboard.readText().then(function (text) {
+      if (typeof text !== 'string' || !text) return;
+      if (text !== clipSynced) {
+        clipSynced = text;
+        kernel.postMessage({ type: 'clipboard', text: text });
+      }
+      window.__osStripPaste = (window.__osStripPaste || 0) + 1;   // agent probe
+      term.paste(text);
+    }, function (e) {
+      console.warn('clipboard bridge: strip Paste readText failed (' + e + ')');
+    });
+  }
+  term.focus();
 });
 function touchUiSync() {
   var on = ('ontouchstart' in window) || navigator.maxTouchPoints > 0 ||
@@ -942,7 +1000,18 @@ window.addEventListener('keydown', function (e) {
 var oskComp = OSK.create({
   container: document.getElementById('osk'),
   mode: function () { return vt === 2 ? 'wm' : 'tty'; },
-  sendWmKey: wmSend,
+  // Paste-chord clipboard refresh on the wm backend, mirroring the physical
+  // screen-keydown path above (ticket #79): an OSK Ctrl/Cmd+V is about to
+  // ask the kernel slot for text, so re-read the host clipboard — and the
+  // OSK tap is a REAL pointer gesture, so on iOS (where the gesture-less
+  // focus sync always rejects) this is the one VT2 import path that can
+  // raise the paste callout. Async like the original: it aims at the next
+  // paste; ordering input behind a clipboard read would be worse.
+  sendWmKey: function (ev) {
+    if (ev.kind === 'key' && ev.down && ev.code === 'KeyV' &&
+        ev.mods && (ev.mods.Control || ev.mods.Meta)) clipFromHost();
+    wmSend(ev);
+  },
   sendTtyBytes: vt1Input,
   onChange: function (st) { window.__osOsk = st; },   // agent probe
 });

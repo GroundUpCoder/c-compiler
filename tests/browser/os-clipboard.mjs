@@ -73,6 +73,22 @@ try {
   await page.keyboard.type('clip -o\r');
   await waitOut('HOST-CHORD-79', 15000);
   check('chord-synced text reaches the kernel slot', true);
+
+  // ---- OSK paste chord on VT2 (mobile-ux): the wm-backend mirror of the
+  // same refresh. On iOS the gesture-less focus sync always rejects, so an
+  // OSK Ctrl+V tap (a real pointer gesture) is the one VT2 import path —
+  // headless it must behave exactly like the physical chord above.
+  await page.evaluate(() => navigator.clipboard.writeText('HOST-OSK-79'));
+  await page.evaluate(() => window.__osVtSwitch(2));
+  const pushes3 = await page.evaluate(() => window.__osClipFromHost || 0);
+  await page.evaluate(() => { window.__osOskTap('Ctrl'); window.__osOskTap('v'); });
+  await page.waitForFunction((n) => (window.__osClipFromHost || 0) > n, pushes3,
+    { timeout: 10000, polling: 100 });
+  check('OSK Ctrl+V on the desktop re-reads the host clipboard', true);
+  await page.evaluate(() => window.__osVtSwitch(1));
+  await page.keyboard.type('clip -o\r');
+  await waitOut('HOST-OSK-79', 15000);
+  check('OSK-chord-synced text reaches the kernel slot', true);
 } catch (e) {
   S.fail(e);
 } finally {

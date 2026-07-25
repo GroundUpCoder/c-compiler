@@ -129,6 +129,60 @@ try {
   await waitOut('CAT-OK');
   check('sticky Ctrl+d sent EOF (cat exited 0)', true);
 
+  // ---- Copy/Paste strip keys (mobile-ux): the tap-gesture clipboard path.
+  // Headless grantPermissions stands in for the browser's clipboard gates
+  // (same honest limit as os-clipboard.mjs): the iOS paste callout and the
+  // gesture-dependent grant need the on-device check — the plumbing on both
+  // sides of that gate is what these legs prove, with REAL key clicks.
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  check('.stripkey carries touch-action manipulation (iOS double-tap-zoom kill)',
+    await page.evaluate(() =>
+      getComputedStyle(document.querySelector('.stripkey')).touchAction === 'manipulation'), true);
+
+  // Copy of a live xterm selection: host clipboard AND kernel slot get it.
+  await page.keyboard.type('echo SEL-C""OPY-79\r', { delay: 60 });
+  await waitOut('SEL-COPY-79');
+  await page.evaluate(() => window.term.selectAll());
+  await page.click('[data-key="Copy"]');
+  await page.waitForFunction(() => (window.__osStripCopy || 0) >= 1,
+    { timeout: 5000, polling: 100 });
+  check('strip Copy fired (probe)', true);
+  await page.waitForFunction(
+    () => navigator.clipboard.readText().then((t) => t.includes('SEL-COPY-79')),
+    { timeout: 10000, polling: 200 });
+  check('strip Copy exported the xterm selection to the host clipboard', true);
+  await page.evaluate(() => window.term.clearSelection());
+  await page.keyboard.type('clip -o | grep "SEL-C""OPY-79" && echo CB-""HIT\r', { delay: 60 });
+  await waitOut('CB-HIT');
+  check('strip Copy committed the selection to the kernel slot (clip -o)', true);
+
+  // Selection-less Copy re-exports the last agreed text — the iOS retry
+  // path, where the automatic CLIP_SET writeText mirror was rejected for
+  // want of a gesture. The dedupe bypass is the point: the text ALREADY
+  // equals clipSynced, and the tap must still write it out.
+  await page.keyboard.type("printf 'GUC-RETRY-79' | clip\r", { delay: 60 });
+  await page.waitForFunction(() => window.__osClipLast === 'GUC-RETRY-79',
+    { timeout: 15000, polling: 100 });
+  await page.evaluate(() => navigator.clipboard.writeText('HOST-STOMP'));   // host moved on
+  await page.click('[data-key="Copy"]');
+  await page.waitForFunction(
+    () => navigator.clipboard.readText().then((t) => t === 'GUC-RETRY-79'),
+    { timeout: 10000, polling: 200 });
+  check('selection-less strip Copy re-exports the last gucOS copy (dedupe-bypass retry)', true);
+
+  // Paste: host clipboard -> tty bytes through xterm's paste path, plus the
+  // kernel-slot import. The seeded text is a runnable split-needle command,
+  // so the wait is only satisfied by hush EXECUTING the pasted line.
+  await page.evaluate(() => navigator.clipboard.writeText('echo PASTE-""RT-79\n'));
+  await page.click('[data-key="Paste"]');
+  await page.waitForFunction(() => (window.__osStripPaste || 0) >= 1,
+    { timeout: 10000, polling: 100 });
+  await waitOut('PASTE-RT-79');
+  check('strip Paste fed the host clipboard into the tty (pasted command ran)', true);
+  await page.keyboard.type('clip -o | grep "RT-79" && echo SL""OT-OK\r', { delay: 60 });
+  await waitOut('SLOT-OK');
+  check('strip Paste imported the host text into the kernel slot', true);
+
   // ---- the 18px choice survives a reload ----
   await page.reload();
   await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });

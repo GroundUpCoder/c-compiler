@@ -98,7 +98,7 @@ try {
   check('boots on layer abc with all mods off',
     d.osk.layer === 'abc' &&
     ['Control', 'Alt', 'Shift', 'Meta'].every(m => d.osk.mods[m] === 'off'), d.osk);
-  check('mobile 2x zoom default still holds beside the OSK', d.zoom === 2, d.zoom);
+  check('phone viewport boots at the 1x zoom default beside the OSK (v163 contract)', d.zoom === 1, d.zoom);
 
   // ==== VT1: the tty-byte backend =========================================
   await setVt(1);
@@ -274,9 +274,13 @@ try {
   await pause(400);             // output paint (no marker)
   // Drag corner-to-corner, clamped to the visible screen — motion routes to
   // term by hit test, so the pointer must stay on-canvas (the window's
-  // right edge is clipped at the phone-width screen).
-  const selX1 = Math.min(gTerm.x + gTerm.w - 8, s1.w - 4);
-  await page.mouse.move(rect.x + gTerm.x + 4, rect.y + gTerm.y + 4);
+  // right edge is clipped at the phone-width screen). Anchor BELOW the
+  // 0273c menu-bar strip (the top MENU_BAR_H=30px are a child window that
+  // swallows the down — a drag from y+4 opens the File menu, not a
+  // selection) and left of the 0273b scrollbar band at the right edge.
+  const GRID_Y = 30;   // term.c GRID_Y = MENU_BAR_H (menucore.h)
+  const selX1 = Math.min(gTerm.x + gTerm.w - 12, s1.w - 4);
+  await page.mouse.move(rect.x + gTerm.x + 4, rect.y + gTerm.y + GRID_Y + 4);
   await page.mouse.down();
   await page.mouse.move(rect.x + selX1, rect.y + gTerm.y + gTerm.h - 8, { steps: 8 });
   await page.mouse.up();
