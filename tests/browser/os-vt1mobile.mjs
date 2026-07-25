@@ -267,6 +267,75 @@ try {
   await waitOut('SLOT-OK');
   check('strip Paste imported the host text into the kernel slot', true);
 
+  // ---- OSK tty clipboard (the clipboard seam, landing 2): the OSK is now
+  // a REAL superset of the keystrip it hides — Ctrl+Shift+C/V run the same
+  // gesture-scoped handlers (the chords every real terminal pastes on;
+  // plain Ctrl+V stays the ^V literal-next fold), and the Fn layer carries
+  // Copy/Paste legends for anyone who'd never guess the chord on a soft
+  // keyboard. Synthetic __osOskTap probes are fine HERE: the VT1 handlers
+  // are page-side readText/writeText with granted permissions (the
+  // activation gate belongs to the VT2 seam, not this path).
+  await page.evaluate(() => window.__osOskToggle(true));
+  check('OSK open supersedes the keystrip (a true superset since the seam)',
+    await page.evaluate(() =>
+      document.getElementById('keystrip').offsetParent === null &&
+      document.getElementById('osk').offsetParent !== null), true);
+  // Ctrl+Shift+V pastes — a runnable split-needle command, so the wait is
+  // satisfied only by hush EXECUTING the pasted line, never the echo.
+  await page.evaluate(() => navigator.clipboard.writeText('echo OSK-PAS""TE-SEAM\n'));
+  const oskPaste0 = await page.evaluate(() => window.__osStripPaste || 0);
+  await page.evaluate(() => {
+    window.__osOskTap('Ctrl'); window.__osOskTap('Shift'); window.__osOskTap('v');
+  });
+  await waitOut('OSK-PASTE-SEAM');
+  check('OSK Ctrl+Shift+V pasted via the shared VT1 handler (command ran)', true);
+  check('shared paste probe bumped',
+    await page.evaluate((n) => (window.__osStripPaste || 0) > n, oskPaste0), true);
+  const oskSent = await page.evaluate(() =>
+    window.__osOskSent().filter(e => e.be === 'tty').map(e => e.ev));
+  check('the chord logged <paste>, never a ^V fold (terminal fidelity)',
+    oskSent.includes('<paste>') && !oskSent.includes('\x16'), oskSent);
+  check('one-shot mods consumed by the chord',
+    await page.evaluate(() =>
+      window.__osOsk.mods.Control === 'off' && window.__osOsk.mods.Shift === 'off'),
+    await page.evaluate(() => window.__osOsk.mods));
+  // Ctrl+Shift+C exports the live xterm selection (the strip Copy contract).
+  await page.keyboard.type('echo OSK-CO""PY-SEAM\r', { delay: 60 });
+  await waitOut('OSK-COPY-SEAM');
+  await page.evaluate(() => window.term.selectAll());
+  await page.evaluate(() => {
+    window.__osOskTap('Ctrl'); window.__osOskTap('Shift'); window.__osOskTap('c');
+  });
+  await page.waitForFunction(
+    () => navigator.clipboard.readText().then((t) => t.includes('OSK-COPY-SEAM')),
+    { timeout: 10000, polling: 200 });
+  check('OSK Ctrl+Shift+C exported the xterm selection to the host', true);
+  await page.evaluate(() => window.term.clearSelection());
+  // The Fn-layer legends: live (undimmed) on the tty backend, dimmed +
+  // inert on the wm backend (no app-agnostic copy/paste chord exists on
+  // VT2 — the focused app's own contract governs there).
+  await page.evaluate(() => window.__osOskTap('Fn'));
+  check('Fn layer carries live Copy/Paste legends on the tty backend',
+    await page.evaluate(() => {
+      const c = document.querySelector('#osk [data-k="Copy"]');
+      const p = document.querySelector('#osk [data-k="Paste"]');
+      return !!c && !!p && !c.classList.contains('dim') && !p.classList.contains('dim');
+    }), true);
+  await page.evaluate(() => navigator.clipboard.writeText('echo LEGEND-PAS""TE-SEAM\n'));
+  await page.evaluate(() => window.__osOskTap('Paste'));
+  await waitOut('LEGEND-PASTE-SEAM');
+  check('Fn-layer Paste legend runs the gesture-scoped paste', true);
+  await setVt(2);
+  check('legends dim on the wm backend (VT switch re-renders)',
+    await page.evaluate(() =>
+      document.querySelector('#osk [data-k="Paste"]').classList.contains('dim')), true);
+  await setVt(1);
+  await page.evaluate(() => window.__osOskTap('abc'));
+  await page.evaluate(() => window.__osOskToggle(false));
+  check('closing the OSK restores the keystrip (mid-file)',
+    await page.evaluate(() =>
+      document.getElementById('keystrip').offsetParent !== null), true);
+
   // ---- Upload button (mobile file ingest): visible on the touch UI; the
   // picker's change handler feeds the SAME {type:'drop-file'} path as
   // desktop drag-drop (os-drop.mjs owns that flavor + the hidden-on-desktop

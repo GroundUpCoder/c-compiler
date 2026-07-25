@@ -197,9 +197,12 @@ var OP = {
   // Payloads chunk through the 64KB kernel page: SET is a RAW request
   // [u32 fmt][u32 last][u32 off][bytes...] staged per-pcb and committed
   // only on last (a dying writer never leaves a torn slot); GET is JSON
-  // {fmt, off} -> RAW [i32 total][chunk], total -1 when empty or the
+  // {fmt, off, peek} -> RAW [i32 total][chunk], total -1 when empty or the
   // stored format differs. Cross-chunk reads are not snapshot-atomic by
   // design (single slot, last-write-wins; the C side retries on growth).
+  // peek 1 = availability probe (__clip_has), always the cached slot; a
+  // DATA read at off 0 may park on the embedder's host-clipboard refresh
+  // (opts.onClipRead — the clipboard seam, see the OP.CLIP_GET dispatch).
   CLIP_SET: 0x0302,
   CLIP_GET: 0x0303,
   // 0x04xx — the brokered filesystem (KERNEL.md "fd/data-plane amendment").
@@ -1421,7 +1424,12 @@ KernelClient.prototype.spawnHooks = function () {
     // see WM_SAB_LAYOUT.
     wmSabLayout: WM_SAB_LAYOUT,
     clipSet: function (bytes) { return self.callRaw(OP.CLIP_SET, bytes); },
-    clipGet: function (fmt, off) { return self.call(OP.CLIP_GET, { fmt: fmt, off: off }); },
+    // peek 1 = availability probe (__clip_has): always served from the
+    // cached slot — a data read (peek 0, off 0) may park on the embedder's
+    // host-clipboard refresh (the clipboard seam; see OP.CLIP_GET).
+    clipGet: function (fmt, off, peek) {
+      return self.call(OP.CLIP_GET, { fmt: fmt, off: off, peek: peek ? 1 : 0 });
+    },
     // HTTP transport (todos/0172): host.js's createHttp drives these; the
     // libcurl veneer (0173) and /bin/code (0174) sit on top. httpBody stages
     // request-body chunks (RAW [u32 off][bytes]); httpRead deferred-drains
@@ -1900,6 +1908,19 @@ function Kernel(opts) {
   // (Kernel.clipSet) deliberately do NOT fire it — a bidirectional bridge
   // would loop on its own echo.
   this._onClipboard = opts.onClipboard || null;
+  // Deferred CLIP_GET (the clipboard seam): the INBOUND twin of onClipboard.
+  // When present, a data read of the slot (CLIP_GET off 0, peek 0) PARKS the
+  // calling process and fires this hook with a done callback; the embedder
+  // refreshes the slot from the host clipboard (the browser page runs
+  // navigator.clipboard.readText inside the still-live activation of the
+  // keystroke/tap that triggered the paste) and calls done(), and the parked
+  // read is served from the possibly-just-updated slot. The consumer is
+  // held, never the input stream — key order/repeat/modifier tracking are
+  // untouched; the pasting app just blocks one host round-trip like any
+  // blocking read. The embedder OWNS the always-done guarantee (kernel-
+  // worker.js backstops with a timeout). No hook (boot.js, unit tests,
+  // standalone embedders) = the synchronous pre-seam path, byte-identical.
+  this._onClipRead = opts.onClipRead || null;
   this._log = opts.log || function () {};
   this._procs = new Map();   // pid -> PCB
   this._nextPid = 1;
@@ -2481,6 +2502,7 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
     // ONE deferred RPC at a time (the worker is parked):
     // {op:'wait',sel,options} | {op:'ttyread',count} | {op:'select',r,w,timer}
     // | {op:'piperead',pipe,count} | {op:'pipewrite',pipe,data}
+    // | {op:'clipget'} (the clipboard seam: parked on onClipRead's done)
     waiter: null,
     fds: new Map(),                // procFd -> ofdId (brokered mode)
     dirRpc: null,                  // cursor -> {dh, pending} parked FS_OPENDIR
@@ -3005,17 +3027,35 @@ Kernel.prototype._dispatchRpc = function (pcb) {
       break;
     }
     case OP.CLIP_GET: {
-      // JSON {fmt, off} -> RAW [i32 total][chunk]; total -1 = unavailable.
-      var clip = this._clipboard;
+      // JSON {fmt, off, peek} -> RAW [i32 total][chunk]; total -1 =
+      // unavailable. peek 1 (SDL_HasClipboardText / fo_clip_has — menu
+      // graying, Paste gates) ALWAYS serves the cached slot: an
+      // availability probe must never trigger a host clipboard read (on
+      // iOS that would raise the paste callout per menu open). A DATA read
+      // at off 0 defers through onClipRead when the embedder registered
+      // one — see the hook comment in the ctor; chunk continuations
+      // (off > 0) never re-refresh mid-read.
       var gfmt = req.fmt | 0, goff = req.off | 0;
-      var total = (clip && clip.fmt === gfmt) ? clip.bytes.length : -1;
-      var chunk = (total > 0 && goff >= 0 && goff < total)
-        ? clip.bytes.subarray(goff, goff + Math.min(total - goff, KP_PAYLOAD_CAP - 4))
-        : new Uint8Array(0);
-      var gresp = new Uint8Array(4 + chunk.length);
-      new DataView(gresp.buffer).setInt32(0, total, true);
-      gresp.set(chunk, 4);
-      this._respondRaw(pcb, gresp);
+      if (this._onClipRead && !req.peek && goff === 0) {
+        var cw = { op: 'clipget' };
+        pcb.waiter = cw;
+        var cself = this;
+        var cdone = function () {
+          // The waiter re-check every deferred service does: the process
+          // may have exited while parked (waiter dropped at _exitProcess),
+          // and a buggy embedder may call done twice.
+          if (pcb.waiter !== cw) return;
+          cself._cancelWaiter(pcb);
+          cself._clipServe(pcb, gfmt, goff);
+        };
+        try { this._onClipRead(cdone); }
+        catch (e) {
+          this._log('onClipRead threw: ' + (e && e.message));
+          cdone();   // never wedge the parked reader on a broken hook
+        }
+        break;
+      }
+      this._clipServe(pcb, gfmt, goff);
       break;
     }
     case OP.COMPILE:
@@ -3035,6 +3075,20 @@ Kernel.prototype._dispatchRpc = function (pcb) {
       if ((op & 0xf000) === 0x2000) { this._audioRpc(pcb, op, req); break; }
       this._respond(pcb, { errno: 'ENOSYS' });
   }
+};
+
+/* Serve a CLIP_GET reply from the slot as it stands NOW — the shared tail
+ * of the synchronous path and the deferred-refresh resume. */
+Kernel.prototype._clipServe = function (pcb, gfmt, goff) {
+  var clip = this._clipboard;
+  var total = (clip && clip.fmt === gfmt) ? clip.bytes.length : -1;
+  var chunk = (total > 0 && goff >= 0 && goff < total)
+    ? clip.bytes.subarray(goff, goff + Math.min(total - goff, KP_PAYLOAD_CAP - 4))
+    : new Uint8Array(0);
+  var gresp = new Uint8Array(4 + chunk.length);
+  new DataView(gresp.buffer).setInt32(0, total, true);
+  gresp.set(chunk, 4);
+  this._respondRaw(pcb, gresp);
 };
 
 Kernel.prototype._respondRaw = function (pcb, bytes) {

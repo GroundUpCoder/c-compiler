@@ -11,6 +11,15 @@
 //   - a second C copy fires again; SDL_ClearClipboardData reports null
 //   - embedder clear (fmt 0) empties the slot
 //
+// Phase 2 (the clipboard seam — deferred CLIP_GET): with opts.onClipRead
+// registered, a data read PARKS the calling process until the hook's done();
+// the slot the embedder feeds BEFORE done is what the parked read serves
+// (first-paste-fresh by construction). SDL_HasClipboardText is a PEEK
+// (__clip_has) and must never fire the hook — the menu-graying contract.
+// Phase 3: a process killed while parked on the refresh is torn down
+// cleanly, and the hook's late done() is a no-op (the waiter re-check).
+// Phase 1 runs WITHOUT the hook — the pre-seam synchronous path, unchanged.
+//
 // Run: node tests/kernel/test_hostclip_e2e.js
 'use strict';
 const fs = require('fs');
@@ -135,6 +144,94 @@ const watchdog = setTimeout(() => {
   kernel.clipSet(0, null);
   check('embedder fmt-0 clear empties the slot', kernel.clipGet() === null);
   check('no stray hook fires from embedder ops', events.length === 3, JSON.stringify(events));
+
+  // ---- Phase 2: the clipboard seam (deferred CLIP_GET + peek) ----
+  const SEAM_C = `
+#include <SDL.h>
+#include <stdio.h>
+int main(void) {
+    printf("START\\n"); fflush(stdout);
+    /* Parks on the deferred refresh; the harness feeds the slot BEFORE
+       done(), so this FIRST read must see the refreshed text. */
+    char *t = SDL_GetClipboardText();
+    printf("GOT:%s\\n", t); fflush(stdout);
+    SDL_free(t);
+    /* Peek: must NOT fire onClipRead (menu-graying never raises host UI). */
+    printf("HAS:%d\\n", SDL_HasClipboardText() ? 1 : 0); fflush(stdout);
+    t = SDL_GetClipboardText();
+    printf("GOT2:%s\\n", t); fflush(stdout);
+    SDL_free(t);
+    return 0;
+}
+`;
+  const seamC = path.join(tmp, 'seam.c');
+  const seamWasm = path.join(tmp, 'seam.wasm');
+  fs.writeFileSync(seamC, SEAM_C);
+  cp.execFileSync('node', [path.join(ROOT, 'compiler.js'), seamC, '-o', seamWasm], { stdio: 'pipe' });
+  const seamImage = fs.readFileSync(seamWasm);
+
+  out = '';
+  let reads = 0;
+  let k2halt = null;
+  const k2 = new K.Kernel({
+    createWorker: K.nodeCreateWorker({ hostPath: path.join(ROOT, 'host.js'), kernelPath: path.join(ROOT, 'kernel.js') }),
+    loadImage: (p) => (p === '/bin/seam' ? seamImage : null),
+    onOutput: (pid, fd, bytes) => { out += Buffer.from(bytes).toString(); },
+    onHalt: (status) => { k2halt = status; },
+    onClipRead: (done) => {
+      reads++;
+      if (reads === 1) {
+        // Hold the park across a real delay and feed the slot FIRST — the
+        // parked read must serve the refreshed text, proving both the park
+        // and the feed-before-done ordering.
+        setTimeout(() => { k2.clipSet(1, Buffer.from('REFRESHED')); done(); }, 60);
+      } else {
+        done();
+      }
+    },
+    log: () => {},
+  });
+  await k2.boot({ path: '/bin/seam', argv: ['seam'], envp: [], cwd: '/' });
+  await waitOut('GOT2:');
+  check('parked first read served the hook-fed slot (first paste fresh)',
+    out.includes('GOT:REFRESHED'), JSON.stringify(out));
+  check('peek saw the slot as available (HAS:1)', out.includes('HAS:1'),
+    JSON.stringify(out));
+  check('second read defers again and serves the slot',
+    out.includes('GOT2:REFRESHED'), JSON.stringify(out));
+  // End-state count: SDL_GetClipboardText = size probe + data read, each an
+  // off-0 data CLIP_GET that defers (the one-round-trip dedupe lives in
+  // kernel-worker.js, not the kernel) -> 2 per GetClipboardText, 4 total.
+  // The peek between them contributes ZERO — if SDL_HasClipboardText were
+  // data-shaped this would read 5, which is the menu-graying regression.
+  check('exactly 4 deferred reads; the peek fired none', reads === 4, reads);
+
+  // ---- Phase 3: killed while parked; late done is a no-op ----
+  out = '';
+  let lateDone = null;
+  let k3halt = null;
+  const k3 = new K.Kernel({
+    createWorker: K.nodeCreateWorker({ hostPath: path.join(ROOT, 'host.js'), kernelPath: path.join(ROOT, 'kernel.js') }),
+    loadImage: (p) => (p === '/bin/seam' ? seamImage : null),
+    onOutput: (pid, fd, bytes) => { out += Buffer.from(bytes).toString(); },
+    onHalt: (status) => { k3halt = status; },
+    onClipRead: (done) => { lateDone = done; },   // never answered
+    log: () => {},
+  });
+  const k3pid = await k3.boot({ path: '/bin/seam', argv: ['seam'], envp: [], cwd: '/' });
+  await waitOut('START');
+  // Let the CLIP_GET arrive and park (the hook capture is the marker).
+  const t0 = Date.now();
+  while (!lateDone && Date.now() - t0 < 10000) await new Promise((r) => setTimeout(r, 20));
+  check('reader parked on the never-answered hook', !!lateDone && !out.includes('GOT:'), out);
+  k3.kill(k3pid, 9);
+  const t1 = Date.now();
+  while (k3halt === null && Date.now() - t1 < 10000) await new Promise((r) => setTimeout(r, 20));
+  check('SIGKILL tears down the parked reader (halt observed)', k3halt !== null, k3halt);
+  lateDone();   // the waiter re-check must make this a silent no-op
+  await new Promise((r) => setTimeout(r, 100));
+  check('late done() after death is a no-op (no output, no crash)',
+    !out.includes('GOT:'), out);
 
   clearTimeout(watchdog);
   fs.rmSync(tmp, { recursive: true, force: true });

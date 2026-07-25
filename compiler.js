@@ -25542,9 +25542,14 @@ __import int __nanosleep(long sec, long nsec);
    so SDL_GetTicks can return a full Uint64 without the old 32-bit wrap. */
 __import double __sdl_get_ticks(void);
 __import void __sdl_set_animation_frame_func(void (*callback)(void));
-/* System clipboard (todos/0090; host.js createClipboard). */
+/* System clipboard (todos/0090; host.js createClipboard). __clip_has is
+   the PEEK: same total/-1 answer as a cap-0 __clip_get but served from the
+   cached slot — it never triggers the kernel's deferred host-clipboard
+   refresh (the clipboard seam), so availability probes (menu graying)
+   can't raise host paste UI. */
 __import int __clip_set(int fmt, const void *bytes, int len);
 __import int __clip_get(int fmt, void *out, int cap);
+__import int __clip_has(int fmt);
 /* HTTP transport (todos/0172; host.js createHttp). The libcurl veneer
    (0173) and /bin/code (0174) sit on these. headers is a NUL-terminated
    blob of "Name: Value" lines joined by newlines (or empty). */
@@ -26196,7 +26201,10 @@ char *SDL_GetClipboardText(void) {
 }
 
 bool SDL_HasClipboardText(void) {
-    return __clip_get(__CLIP_TEXT, 0, 0) > 0;
+    /* Peek, not a read: term's Edit menu (and every WM_INITMENUPOPUP
+       graying via IsClipboardFormatAvailable) calls this per menu open —
+       it must serve the cached slot, never park on a host refresh. */
+    return __clip_has(__CLIP_TEXT) > 0;
 }
 
 bool SDL_ClearClipboardData(void) {
