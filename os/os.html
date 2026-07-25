@@ -42,6 +42,26 @@
      pinch-zoom; only the double-tap gesture is dropped. #screen/#osk narrow
      further to `none` below. */
   html, body { height: 100%; margin: 0; background: #0d0d1a; touch-action: manipulation; }
+  /* ...and the same guard again, STRUCTURALLY, over the chrome bars and
+     everything inside them. touch-action does not inherit, and on iOS the
+     root declaration above provably does not cover a descendant control:
+     the OSK/keystrip keys only stopped double-tap-zooming once they carried
+     their own declaration, while the tab-bar cluster (Terminal/Desktop/kbd/
+     A-/A+/zoom/Desktop site/Upload) never got one and kept zooming — worst
+     on A-/A+/kbd, which are repeat-tap controls, so "tap it twice quickly"
+     IS the gesture. Written as one container-scoped rule rather than a
+     per-button copy because the per-button shape is precisely what failed:
+     #uploadbtn was added with its own guard and its neighbours were never
+     retrofitted. Membership is now WHERE a control lives, not whether
+     someone remembered a property. The descendant `*` (not `> *`) is
+     load-bearing: #fontctl/#zoomctl wrap their buttons, so a child selector
+     would miss exactly the worst offenders. `manipulation` is pan-x +
+     pan-y + pinch-zoom, so #vtbar's sideways scroll keeps panning and
+     page pinch-zoom stays live (a deliberate contract — see the viewport
+     meta above; never "fix" a zoom bug by disabling pinch). Deliberately
+     NOT extended to #screen/#osk: those own their touches with
+     `touch-action: none` and must stay that way. */
+  #vtbar, #vtbar *, #keystrip, #keystrip * { touch-action: manipulation; }
   #wrap { display: flex; flex-direction: column; height: 100%; }
   #status {
     font: 12px 'Menlo', 'Consolas', monospace; color: #557755;
@@ -90,9 +110,10 @@
   #oskbtn.on { background: #4a4a77; color: #ffffff; }
   /* Upload (mobile file ingest): a visible file-picker button for touch
      UIs, where host drag-drop doesn't exist (iOS). Desktop keeps the
-     drag-onto-the-pane path and hides this. touch-action per-element:
-     rapid taps must not iOS-double-tap-zoom. */
-  #uploadbtn { display: none; touch-action: manipulation; }
+     drag-onto-the-pane path and hides this. (Its double-tap-zoom guard
+     comes from the #vtbar subtree rule above — it no longer carries a
+     local copy.) */
+  #uploadbtn { display: none; }
   body[data-touchui] #uploadbtn { display: inline-block; }
   /* VT1 font-size steps (todos/0212): right-aligned in the tab bar, only
      meaningful while the tty is visible. */
@@ -131,9 +152,7 @@
     background: #16162a; border: 1px solid #333355; border-radius: 5px;
     padding: 7px 0; width: 44px; text-align: center; cursor: pointer;
     user-select: none; -webkit-user-select: none;
-    /* per-element (touch-action does NOT inherit): kill iOS double-tap
-       zoom on rapid key taps */
-    touch-action: manipulation;
+    /* (double-tap-zoom guard: the #keystrip subtree rule at the top) */
   }
   .stripkey:hover { color: #e0e0f0; border-color: #4a4a77; }
   .stripkey.armed { background: #4a4a77; color: #ffffff; }

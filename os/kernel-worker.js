@@ -558,11 +558,27 @@ async function boot() {
 // only the lock-lost path resets it. A real boot failure stays terminal
 // (reload to reboot), as before.
 var booting = false;
+// Failure text for the boot-error panel. This used to be `e.stack` alone,
+// which silently DROPS the message on WebKit: V8 renders stack as
+// "Error: <message>\n  at …", but JavaScriptCore's stack is the bare frame
+// list. So a real iOS boot failure printed frames only — and the message is
+// where the two facts that matter live (WHICH file, WHICH status; see the
+// `p + ': HTTP ' + xhr.status` throw in buildProject above), leaving them to
+// be reconstructed from line numbers. Lead with the message and append the
+// stack only when the engine hasn't already folded it in, so both engines
+// render the same thing once and neither duplicates it.
+function errText(e) {
+  if (!e || typeof e.message !== 'string') return String(e);
+  var head = (e.name || 'Error') + ': ' + e.message;
+  var stack = e.stack ? String(e.stack) : '';
+  if (!stack) return head;
+  return stack.indexOf(e.message) >= 0 ? stack : head + '\n' + stack;
+}
 function startBoot() {
   if (booting || tty) return;
   booting = true;
   boot().catch(function (e) {
-    post({ type: 'boot-error', msg: String((e && e.stack) || e) });
+    post({ type: 'boot-error', msg: errText(e) });
   });
 }
 startBoot();

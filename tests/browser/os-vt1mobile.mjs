@@ -130,15 +130,44 @@ try {
   await waitOut('CAT-OK');
   check('sticky Ctrl+d sent EOF (cat exited 0)', true);
 
+  // ---- touch-action contract (mobile-doubletap): every tappable chrome
+  // control must compute `manipulation` so iOS drops its native
+  // double-tap-to-zoom, while the two surfaces that own their touches keep
+  // `none`. This is a PROPERTY check, not a gesture check — headless
+  // Chromium cannot reproduce the iOS gesture, so what it guards is the CSS
+  // contract the gesture depends on. It exists because the tab-bar cluster
+  // shipped without the guard while the keys next to it had it: the
+  // per-button shape kept getting forgotten, so the rule went
+  // container-scoped (#vtbar/#keystrip subtrees) and this table asserts the
+  // whole cluster, not one sample. Add a control to the bar -> add it here.
+  const TOUCH_MANIP = ['.stripkey', '#vt1tab', '#vt2tab', '#oskbtn',
+    '#fontminus', '#fontplus', '#zoomminus', '#zoomplus', '#desksite',
+    '#uploadbtn', '#vtbar'];
+  const touchActions = await page.evaluate((sels) => {
+    const out = {};
+    for (const s of sels.concat(['#screen', '#osk'])) {
+      const el = document.querySelector(s);
+      out[s] = el ? getComputedStyle(el).touchAction : 'MISSING';
+    }
+    return out;
+  }, TOUCH_MANIP);
+  for (const sel of TOUCH_MANIP) {
+    check(`${sel} computes touch-action manipulation (iOS double-tap-zoom kill)`,
+      touchActions[sel] === 'manipulation', touchActions[sel]);
+  }
+  // The deliberate exceptions — these own every touch and must NOT be folded
+  // into the blanket rule (todos/0212; the OSK/desktop gesture layers).
+  check('#screen keeps touch-action none (owns its touches)',
+    touchActions['#screen'] === 'none', touchActions['#screen']);
+  check('#osk keeps touch-action none (owns its touches)',
+    touchActions['#osk'] === 'none', touchActions['#osk']);
+
   // ---- Copy/Paste strip keys (mobile-ux): the tap-gesture clipboard path.
   // Headless grantPermissions stands in for the browser's clipboard gates
   // (same honest limit as os-clipboard.mjs): the iOS paste callout and the
   // gesture-dependent grant need the on-device check — the plumbing on both
   // sides of that gate is what these legs prove, with REAL key clicks.
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
-  check('.stripkey carries touch-action manipulation (iOS double-tap-zoom kill)',
-    await page.evaluate(() =>
-      getComputedStyle(document.querySelector('.stripkey')).touchAction === 'manipulation'), true);
 
   // Copy of a live xterm selection: host clipboard AND kernel slot get it.
   await page.keyboard.type('echo SEL-C""OPY-79\r', { delay: 60 });
