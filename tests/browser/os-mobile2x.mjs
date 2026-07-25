@@ -1,13 +1,16 @@
-// Mobile 2x default + "Desktop site" toggle (gucOS #69 D6) — browser acceptance.
+// Mobile zoom defaulting + "Desktop site" toggle (gucOS #69 D6, revised
+// v163) — browser acceptance.
 //
 // The VT2 integer-zoom mechanism (os-vt2zoom.mjs) shipped earlier; this slice
-// is the page-side DEFAULTING + TOGGLE policy on top of it:
-//   (a) a phone-shaped viewport (min(innerW, innerH) <= 700, the same signal
-//       as the VT1 26px font default) boots the desktop at 2x with nothing
-//       persisted — an auto default, not a stored choice;
-//   (b) the "Desktop site" toggle flips to the unzoomed 1x desktop, persists,
-//       and OVERRIDES the auto default across a reload; toggling back to 2x
-//       persists too;
+// is the page-side DEFAULTING + TOGGLE policy on top of it. The v163 revision
+// DROPPED the phone auto-2x default — 1x is the boot default everywhere, 2x
+// is one explicit Desktop-site-toggle gesture away:
+//   (a) a phone-shaped viewport (min(innerW, innerH) <= 700) boots the
+//       desktop at 1x with nothing persisted — same as desktop — while the
+//       mobile controls (zoom ± and the Desktop-site toggle) stay visible;
+//   (b) the toggle flips to the 2x mobile zoom, PERSISTS, and the explicit
+//       choice OVERRIDES the 1x default across a reload (the "persisted
+//       zoom must still win" guarantee); toggling back to 1x persists too;
 //   (c) a desktop-shaped viewport is byte-identical to before: 1x, nothing
 //       stored, no mobile controls.
 // The zoom mechanism itself (backing floor(pane/Z), pinned CSS display,
@@ -16,6 +19,7 @@
 //
 // Usage: node os-mobile2x.mjs
 import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl } from './lib/os-harness.mjs';
+import fs from 'node:fs';
 
 const PORT = 3264;
 const URL = osUrl(PORT);
@@ -26,7 +30,7 @@ const { check, state } = makeCheck();
 try {
   await waitForServer(URL, { tries: 240, interval: 500 });
 
-  // ---- (a) phone-shaped viewport: auto-2x default, nothing persisted ----
+  // ---- (a) phone-shaped viewport: 1x default, nothing persisted ----
   const mctx = await browser.newContext({
     viewport: { width: 390, height: 844 }, hasTouch: true });
   const page = await mctx.newPage();
@@ -61,59 +65,65 @@ try {
     label: document.getElementById('zoomlabel').textContent,
     stored: localStorage.getItem('gucos.vt2.zoom'),
   }));
-  check('phone viewport defaults to 2x (probe + "2×" label), UNPERSISTED (auto, not a choice)',
-    autoState.z === 2 && autoState.label === '2×' && autoState.stored === null, autoState);
+  check('phone viewport defaults to 1x (probe + "1×" label), UNPERSISTED (auto, not a choice)',
+    autoState.z === 1 && autoState.label === '1×' && autoState.stored === null, autoState);
   let pane = await paneSize();
-  const s2 = await settleZoom(2);
-  check('auto-2x really applied: logical screen is floor(pane/2)',
-    s2.w === Math.floor(pane.w / 2) && s2.h === Math.floor(pane.h / 2), { s2, pane });
+  const s1a = await settleZoom(1);
+  check('1x default really applied: logical screen == full pane',
+    s1a.w === pane.w && s1a.h === pane.h, { s1a, pane });
   const ctl = await page.evaluate(() => ({
     desksite: document.getElementById('desksite').offsetParent !== null,
-    on: document.getElementById('desksite').classList.contains('on'),
     zoomctl: document.getElementById('zoomctl').offsetParent !== null,
   }));
-  check('Desktop-site toggle + zoom control visible on the mobile VT2 UI, toggle not lit at 2x',
-    ctl.desksite && !ctl.on && ctl.zoomctl, ctl);
+  check('Desktop-site toggle + zoom control still visible on the mobile VT2 UI',
+    ctl.desksite && ctl.zoomctl, ctl);
+  // The phone-1x-boot proof shot (v163 default flip).
+  fs.mkdirSync('build/mobile1x-shots', { recursive: true });
+  const shot = await page.evaluate(() => {
+    const c = document.getElementById('screen');
+    const r = c.getBoundingClientRect();
+    const t = document.createElement('canvas');
+    t.width = Math.round(r.width); t.height = Math.round(r.height);
+    t.getContext('2d').drawImage(c, 0, 0);
+    return t.toDataURL('image/png');
+  });
+  fs.writeFileSync('build/mobile1x-shots/phone-1x-boot.png',
+    Buffer.from(shot.split(',')[1], 'base64'));
 
-  // ---- (b) the toggle: -> 1x, persists across reload, -> back to 2x ----
+  // ---- (b) the toggle: -> 2x, persists across reload, -> back to 1x ----
   await page.click('#desksite');
   const dstate = await page.evaluate(() => ({
     z: window.__osVt2Zoom,
     stored: localStorage.getItem('gucos.vt2.zoom'),
-    on: document.getElementById('desksite').classList.contains('on'),
   }));
-  check('Desktop site click -> 1x, PERSISTED, toggle lit',
-    dstate.z === 1 && dstate.stored === '1' && dstate.on, dstate);
+  check('Desktop site click at 1x -> the 2x mobile zoom, PERSISTED',
+    dstate.z === 2 && dstate.stored === '2', dstate);
   pane = await paneSize();
-  const s1 = await settleZoom(1);
-  check('1x really applied: logical screen == full pane',
-    s1.w === pane.w && s1.h === pane.h, { s1, pane });
+  const s2 = await settleZoom(2);
+  check('2x really applied: logical screen is floor(pane/2)',
+    s2.w === Math.floor(pane.w / 2) && s2.h === Math.floor(pane.h / 2), { s2, pane });
 
   await page.reload();
   await page.waitForFunction(() => window.__osState === 'ready', { timeout: 240000, polling: 250 });
   await setVt(2);
-  const reload1 = await page.evaluate(() => ({
+  const reload2 = await page.evaluate(() => ({
     z: window.__osVt2Zoom, stored: localStorage.getItem('gucos.vt2.zoom') }));
-  check('persisted Desktop-site choice OVERRIDES the mobile auto-default after reload (still 1x)',
-    reload1.z === 1 && reload1.stored === '1', reload1);
-  pane = await paneSize();
-  const s1r = await settleZoom(1);
-  check('post-reload screen stays full-pane at 1x',
-    s1r.w === pane.w && s1r.h === pane.h, { s1r, pane });
+  check('persisted explicit 2x OVERRIDES the 1x default after reload (still 2x)',
+    reload2.z === 2 && reload2.stored === '2', reload2);
+  await settleZoom(2);
 
   await page.click('#desksite');
-  const back2 = await page.evaluate(() => ({
+  const back1 = await page.evaluate(() => ({
     z: window.__osVt2Zoom,
     stored: localStorage.getItem('gucos.vt2.zoom'),
-    on: document.getElementById('desksite').classList.contains('on'),
   }));
-  check('toggle again -> back to 2x, persisted, toggle unlit',
-    back2.z === 2 && back2.stored === '2' && !back2.on, back2);
-  await settleZoom(2);
+  check('toggle again -> back to 1x, persisted',
+    back1.z === 1 && back1.stored === '1', back1);
+  await settleZoom(1);
   await page.reload();
   await page.waitForFunction(() => window.__osState === 'ready', { timeout: 240000, polling: 250 });
-  check('2x choice persists across reload too',
-    await page.evaluate(() => window.__osVt2Zoom) === 2, null);
+  check('1x choice persists across reload too',
+    await page.evaluate(() => window.__osVt2Zoom) === 1, null);
   await mctx.close();
 
   // ---- (c) desktop-shaped viewport: unchanged — 1x, nothing stored ----

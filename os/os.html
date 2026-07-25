@@ -29,8 +29,9 @@
      without it mobile Safari lays the page out at ~980px and scales down, so
      innerWidth lies to every mobile-keyed default -- mobileViewport() reads
      false on a real phone. With it, phones report device width: the VT1 font
-     default, VT2 auto-2x zoom, and OSK auto-open all activate for the first
-     time on real devices. viewport-fit=cover exposes env(safe-area-inset-*)
+     default and OSK auto-open activate for the first time on real devices
+     (VT2 zoom now DEFAULTS to 1x everywhere; the Desktop-site toggle reaches
+     2x as an explicit gesture). viewport-fit=cover exposes env(safe-area-inset-*)
      for the OSK's notch/home-indicator padding. -->
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>gucOS</title>
@@ -90,8 +91,9 @@
   #zoomctl { display: none; gap: 2px; }
   body[data-vt="2"][data-touchui] #zoomctl { display: flex; }
   /* "Desktop site" toggle (#69 D6): the standard mobile-browser affordance —
-     opt out of the auto-2× mobile default back to the unzoomed 1× desktop
-     (and back). Same visibility gate as the zoom control it drives. */
+     flips between the unzoomed 1× desktop (the boot default everywhere) and
+     the 2× mobile zoom, as an explicit persisted gesture. Same visibility
+     gate as the zoom control it drives. */
   #desksite { display: none; }
   body[data-vt="2"][data-touchui] #desksite { display: inline-block; }
   #desksite.on { background: #4a4a77; color: #ffffff; }
@@ -109,6 +111,9 @@
     background: #16162a; border: 1px solid #333355; border-radius: 5px;
     padding: 7px 0; width: 44px; text-align: center; cursor: pointer;
     user-select: none; -webkit-user-select: none;
+    /* per-element (touch-action does NOT inherit): kill iOS double-tap
+       zoom on rapid key taps */
+    touch-action: manipulation;
   }
   .stripkey:hover { color: #e0e0f0; border-color: #4a4a77; }
   .stripkey.armed { background: #4a4a77; color: #ffffff; }
@@ -136,6 +141,9 @@
   .oskrow { display: flex; gap: 4px; margin-top: 4px; }
   .oskkey {
     flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap;
+    /* per-element (touch-action does NOT inherit): kill iOS double-tap
+       zoom on rapid key taps */
+    touch-action: manipulation;
     /* Bigger, touch-friendly keys: font + vertical padding scale up with the
        viewport (clamp). Key height = line box + 2*pad + 2px border, and the
        line box is calc'd from --oskfs (not the key's own font-size) so the
@@ -421,11 +429,11 @@ function wmSend(ev) { kernel.postMessage({ type: 'wm-input', ev: ev }); }
 // 1 logical px = 1 backing px, todos/0023's ruling holds) — the ONLY thing
 // zoom taints is the page's pointer seam, confined to mapX/mapY (absolute
 // coords) and the /vt2Eff delta divides below.
-// Defaulting (#69 D6): an explicit choice (the ± control or the Desktop-site
-// toggle, both through vt2SetZoom) persists in localStorage and always wins;
-// with nothing stored, a phone-shaped viewport boots at 2× (the readable
-// mobile default over the shipped crisp-zoom mechanism) and everything else
-// at 1× — the same saved-else-viewport-default shape as the VT1 font above.
+// Defaulting (#69 D6, revised): an explicit choice (the ± control or the
+// Desktop-site toggle, both through vt2SetZoom) persists in localStorage and
+// always wins; with nothing stored, EVERY viewport — phones included — boots
+// at 1× (the phone auto-2× default is gone; 2× stays one explicit
+// Desktop-site-toggle gesture away).
 var VT2_ZOOMS = [0.5, 0.75, 1, 2, 3];   // ordered; ± walks it. <1 fractional
                                         // (filtered downscale), >=1 integer
                                         // (crisp NN upscale) — see above.
@@ -452,7 +460,7 @@ var vt2Zoom = (function () {
   if (VT2_ZOOMS.indexOf(z) < 0) z = 0;   // membership, not range: old 1/2/3
                                          // persisted values are all members
   vt2Stored = z > 0;
-  return z || (mobileViewport() ? 2 : 1);
+  return z || 1;
 })();
 var vt2Eff = vt2Zoom;   // effective divisor (== vt2Zoom unless the cap bites)
 window.__osVt2Zoom = vt2Zoom;   // agent probe
@@ -521,7 +529,7 @@ function applyDisplayConfig(z) {
     // viewport default — the applet's "Automatic" must win everywhere.
     try { localStorage.removeItem('gucos.vt2.zoom'); } catch (e) {}
     vt2Stored = false;
-    vt2SetZoom(mobileViewport() ? 2 : 1, 'config');
+    vt2SetZoom(1, 'config');
     return;
   }
   if (isFinite(+z) && +z > 0) vt2SetZoom(+z, 'config');
@@ -538,9 +546,9 @@ updateZoomLabel();
 vt2ApplyRenderMode();
 document.getElementById('zoomminus').addEventListener('click', function () { vt2Step(-1); });
 document.getElementById('zoomplus').addEventListener('click', function () { vt2Step(1); });
-// Desktop-site toggle (#69 D6): zoomed -> the 1× desktop; at 1× -> back to
-// the 2× mobile zoom. Routes through vt2SetZoom, so the choice persists and
-// overrides the viewport auto-default on the next boot.
+// Desktop-site toggle (#69 D6): zoomed -> the 1× desktop; at 1× -> the 2×
+// mobile zoom. Routes through vt2SetZoom, so the choice persists and
+// overrides the 1× default on the next boot.
 document.getElementById('desksite').addEventListener('click', function () {
   vt2SetZoom(vt2Zoom === 1 ? 2 : 1);
 });
