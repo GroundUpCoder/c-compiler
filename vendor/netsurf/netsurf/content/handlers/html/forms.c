@@ -540,10 +540,11 @@ invent_fake_gadget(dom_node *node)
 	return ctl;
 }
 
-/* documented in html_internal.h */
+/* documented in html/private.h */
 struct form_control *
-html_forms_get_control_for_node(struct form *forms, dom_node *node)
+html_forms_get_control_for_node(html_content *c, dom_node *node)
 {
+	struct form *forms = c->forms;
 	struct form *f;
 	struct form_control *ctl = NULL;
 	dom_exception err;
@@ -555,6 +556,10 @@ html_forms_get_control_for_node(struct form *forms, dom_node *node)
 			if (ctl->node == node)
 				return ctl;
 		}
+	}
+	for (ctl = c->formless_controls; ctl != NULL; ctl = ctl->next) {
+		if (ctl->node == node)
+			return ctl;
 	}
 
 	/* Step two, extract the node's name so we can construct a gadget. */
@@ -588,5 +593,28 @@ html_forms_get_control_for_node(struct form *forms, dom_node *node)
 	if (ds_name != NULL)
 		dom_string_unref(ds_name);
 
+	/* A control outside any form was, before this, owned by nothing:
+	 * nobody could re-find it (so a re-box invented yet another one)
+	 * and nobody freed it.  Adopt it onto the content, mirroring what
+	 * form_add_control does for form-owned controls. */
+	if (ctl != NULL && ctl->form == NULL) {
+		ctl->html = c;
+		ctl->prev = NULL;
+		ctl->next = c->formless_controls;
+		if (c->formless_controls != NULL)
+			c->formless_controls->prev = ctl;
+		c->formless_controls = ctl;
+	}
+
 	return ctl;
+}
+
+
+/* documented in html/private.h */
+void html_forms_free_formless_controls(html_content *c)
+{
+	while (c->formless_controls != NULL) {
+		/* form_free_control unlinks it from this very list */
+		form_free_control(c->formless_controls);
+	}
 }

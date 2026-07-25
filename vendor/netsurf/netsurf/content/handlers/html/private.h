@@ -138,6 +138,23 @@ typedef struct html_content {
 	void *box_conversion_context;
 	/** Box tree, or NULL. */
 	struct box *layout;
+	/** Previous box tree talloc context, kept alive while a live
+	 * re-conversion (JS DOM mutation) builds its replacement; freed
+	 * at the swap. */
+	int *reconvert_old_bctx;
+	/** A live re-conversion is in progress */
+	bool reconverting;
+	/** Mutations arrived while a re-conversion was in progress */
+	bool reconvert_pending;
+	/** DOM node of the text gadget that held the caret when a live
+	 * re-conversion began, so focus can be handed back to its NEW box
+	 * once the swap lands (own reference, NULL if nothing was focused).
+	 * Focus points INTO the box tree exactly like the selection and the
+	 * gadget back-pointers do, so it has to be re-bound the same way —
+	 * otherwise typing dies at the first mutation the page makes. */
+	struct dom_node *reconvert_focus_node;
+	/** Caret character index to restore alongside it */
+	int reconvert_focus_caret;
 	/** Document background colour. */
 	colour background_colour;
 
@@ -170,6 +187,11 @@ typedef struct html_content {
 	struct content_html_object *object_list;
 	/** Forms, in reverse order to document. */
 	struct form *forms;
+	/** Controls belonging to no form, in reverse order to document.
+	 * Kept so a control can be re-found by DOM node exactly like a
+	 * form-owned one (live re-conversion re-binds gadgets that way),
+	 * and so it has an owner to be freed by. */
+	struct form_control *formless_controls;
 	/** Hash table of imagemaps. */
 	struct imagemap **imagemaps;
 
@@ -235,6 +257,17 @@ void html__redraw_a_box(html_content *htmlc, struct box *box);
  * \param htmlc Content to convert
  */
 void html_finish_conversion(html_content *htmlc);
+
+
+/**
+ * Schedule a live re-conversion (re-box + reflow + repaint) of a
+ * converted document whose DOM has been mutated (e.g. by script).
+ *
+ * Coalesces: any number of calls before the scheduled pass runs
+ * result in one re-conversion.  Safe to call at any time; ignored
+ * until the initial conversion has produced a layout.
+ */
+void html_schedule_reconvert(html_content *htmlc);
 
 
 /**
@@ -316,8 +349,30 @@ dom_hubbub_error html_process_script(void *ctx, dom_node *node);
 
 /* in html/forms.c */
 struct form *html_forms_get_forms(const char *docenc, dom_html_document *doc);
-struct form_control *html_forms_get_control_for_node(struct form *forms,
+
+/**
+ * Find (or make) the form control that belongs to a DOM node.
+ *
+ * Box construction calls this for every control element; a node that
+ * already has a control gets that SAME control back, which is what
+ * lets gadget state (and everything the frontend hangs off a gadget)
+ * survive a live re-conversion of the box tree.  A control invented
+ * for a node outside any form is remembered on the content so it is
+ * re-found — and freed — the same way.
+ *
+ * \param c     content the node belongs to
+ * \param node  the control's DOM node
+ * \return the control, or NULL on memory exhaustion
+ */
+struct form_control *html_forms_get_control_for_node(html_content *c,
 		dom_node *node);
+
+/**
+ * Free every control the content adopted for want of a form.
+ *
+ * \param c  content whose formless controls are to be freed
+ */
+void html_forms_free_formless_controls(html_content *c);
 
 
 /* in html/css_fetcher.c */

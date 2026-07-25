@@ -209,6 +209,19 @@ void form_free_control(struct form_control *control);
 
 
 /**
+ * Drop every option of a select control, leaving an empty gadget.
+ *
+ * Box construction fills a select's option list from the DOM, and a
+ * gadget SURVIVES re-boxing (it is re-found by DOM node), so the list
+ * must be emptied first or every live re-conversion would append a
+ * second copy of every option.
+ *
+ * \param  control  form control of type GADGET_SELECT
+ */
+void form_select_clear_options(struct form_control *control);
+
+
+/**
  * Add an option to a form select control.
  *
  * \param  control   form control of type GADGET_SELECT

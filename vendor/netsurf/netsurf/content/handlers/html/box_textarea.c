@@ -354,6 +354,21 @@ bool box_textarea_create_textarea(html_content *html,
 	ta_setup.selected_bg = fstyle.foreground;
 	ta_setup.selected_text = colour_to_bw_furthest(ta_setup.selected_bg);
 
+	/* A gadget SURVIVES re-boxing (it is re-found by DOM node) but its
+	 * widget does not: the old textarea belonged to the box tree being
+	 * replaced.  Drop it here rather than overwriting the pointers, or
+	 * every live re-conversion would leak a textarea plus a dom_string
+	 * reference.  The text itself lives in the DOM and is re-read
+	 * above, so nothing the user typed is lost. */
+	if (gadget->data.text.initial != NULL) {
+		dom_string_unref(gadget->data.text.initial);
+		gadget->data.text.initial = NULL;
+	}
+	if (gadget->data.text.ta != NULL) {
+		textarea_destroy(gadget->data.text.ta);
+		gadget->data.text.ta = NULL;
+	}
+
 	/* Hand reference to dom text over to gadget */
 	gadget->data.text.initial = dom_text;
 

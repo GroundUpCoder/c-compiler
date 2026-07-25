@@ -17,6 +17,17 @@
 //   5. Choices off-switch   `enable_javascript:0` in the Choices file keeps
 //                           scripts from running at all
 //
+// …and the Lane B legs, which need the mutation→re-box→reflow→repaint bridge:
+//
+//   6. demos/stopwatch.html a setInterval writing a <div>'s textContent moves
+//                           the visible number, and Lap inserts a real row
+//   7. demos/todo.html      removeChild unpaints a row and the counter's text
+//                           and class both re-render
+//   8. A/B baseline         the SAME two pages, rebuilt with the bridge
+//                           compiled out (-DNETSURF_NO_LIVE_RECONVERT), must
+//                           plot NOTHING changing — a demo that passes with
+//                           and without the change proves nothing
+//
 //   node vendor/netsurf/smoke-js.mjs             build + run + assert
 //   node vendor/netsurf/smoke-js.mjs --reuse     reuse build/netsurf-smoke's
 //                                                wasm if it is not stale
@@ -81,26 +92,64 @@ function newestInput() {
   return newest;
 }
 
-let built = false;
-if (REUSE && fs.existsSync(WASM) && fs.statSync(WASM).mtimeMs >= newestInput()) {
-  console.log(`reusing ${WASM} (${(fs.statSync(WASM).size / 1024 / 1024).toFixed(1)} MB, newer than every build input)`);
-} else {
-  if (REUSE) console.log('--reuse: wasm missing or older than a build input — rebuilding');
-  console.log('building vendor/netsurf/bin.json (817-TU class link, JS on)…');
+/* Build the monkey binary, optionally with extra -D flags folded into
+ * bin.json on the way past.  The read callback is the only seam needed:
+ * buildProject asks for every source through it, so the variant build is
+ * the SAME tree with one define, not a second checkout. */
+function buildWasm(outPath, extraArgs, label) {
   const t0 = Date.now();
   const OS_COMMON = require(path.join(ROOT, 'os', 'os-common.js'));
   const CompilerJS = require(path.join(ROOT, 'compiler.js'));
   const bytes = OS_COMMON.buildProject(
     CompilerJS,
     'vendor/netsurf/bin.json',
-    (p) => fs.readFileSync(path.join(ROOT, p), 'utf-8'),
+    (p) => {
+      const txt = fs.readFileSync(path.join(ROOT, p), 'utf-8');
+      if (extraArgs.length && p.replace(/\\/g, '/').endsWith('vendor/netsurf/bin.json')) {
+        const j = JSON.parse(txt);
+        j.compilerArgs = (j.compilerArgs || []).concat(extraArgs);
+        return JSON.stringify(j);
+      }
+      return txt;
+    },
   );
   fs.mkdirSync(OUT_DIR, { recursive: true });
-  fs.writeFileSync(WASM, bytes);
+  fs.writeFileSync(outPath, bytes);
+  console.log(`built ${outPath} (${(bytes.length / 1024 / 1024).toFixed(1)} MB, ${bytes.length} B) in ${((Date.now() - t0) / 1000).toFixed(1)}s${label ? ` — ${label}` : ''}`);
+  return bytes.length;
+}
+
+let built = false;
+if (REUSE && fs.existsSync(WASM) && fs.statSync(WASM).mtimeMs >= newestInput()) {
+  console.log(`reusing ${WASM} (${(fs.statSync(WASM).size / 1024 / 1024).toFixed(1)} MB, newer than every build input)`);
+} else {
+  if (REUSE) console.log('--reuse: wasm missing or older than a build input — rebuilding');
+  console.log('building vendor/netsurf/bin.json (817-TU class link, JS on)…');
+  buildWasm(WASM, [], 'the product build');
   built = true;
-  console.log(`built ${WASM} (${(bytes.length / 1024 / 1024).toFixed(1)} MB, ${bytes.length} B) in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 }
 if (BUILD_ONLY) process.exit(0);
+
+/* The A/B baseline (leg 8): the same sources with the live re-conversion
+ * bridge compiled out.  Built lazily — legs 1-7 do not need it. */
+let noBridgeWasm = null;
+function baselineWasm() {
+  if (noBridgeWasm) return noBridgeWasm;
+  const out = path.join(OUT_DIR, 'nsmonkey-nobridge.wasm');
+  if (REUSE && fs.existsSync(out) && fs.statSync(out).mtimeMs >= newestInput()) {
+    console.log(`  reusing baseline ${path.basename(out)}`);
+  } else {
+    console.log('  building the -DNETSURF_NO_LIVE_RECONVERT baseline…');
+    const n = buildWasm(out, ['-DNETSURF_NO_LIVE_RECONVERT'], 'Lane B compiled OUT');
+    /* A baseline that is byte-identical to the product build would make
+     * leg 8 a tautology, so say so loudly rather than pass. */
+    if (n === fs.statSync(WASM).size) {
+      throw new Error('baseline wasm is the same size as the product build — the kill switch did not take effect');
+    }
+  }
+  noBridgeWasm = out;
+  return out;
+}
 
 // ---- runtime resources ------------------------------------------------
 // Same assembly as smoke.mjs (the engine needs its resource: stylesheets and
@@ -123,8 +172,8 @@ const RES_JS_OFF = makeRes('res-jsoff', 'enable_javascript:0\n');
 
 // ---- the monkey driver ------------------------------------------------
 class Monkey {
-  constructor(res, { js = true } = {}) {
-    const args = [path.join(ROOT, 'host.js'), WASM];
+  constructor(res, { js = true, wasm = WASM } = {}) {
+    const args = [path.join(ROOT, 'host.js'), wasm];
     if (js) args.push('--enable_javascript=1');
     this.child = spawn(process.execPath, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -391,8 +440,172 @@ async function leg5() {
   } finally { mk.kill(); }
 }
 
+// ---- leg 6: stopwatch.html (Lane B, timer + insertion) ---------------
+/* The elapsed readout is the ONLY thing on the page that plots as a bare
+ * "<digits>.<digit>" run — the lap rows all carry a " s" suffix. */
+const elapsedOf = (frame) => {
+  const m = frame.match(/^PLOT TEXT X \d+ Y \d+ STR (\d+\.\d)$/m);
+  return m ? Number(m[1]) : null;
+};
+const lapsOf = (frame) => [...frame.matchAll(/^PLOT TEXT X \d+ Y \d+ STR (\d+\.\d) s$/gm)].map((m) => m[1]);
+
+async function leg6() {
+  console.log('\nleg 6 — demos/stopwatch.html: a <div> textContent tick REPAINTS (the bridge)');
+  const mk = new Monkey(RES_ON);
+  try {
+    await mk.open(demo('stopwatch.html'));
+    ok(mk.consoleLines().includes('stopwatch ready'), 'page script ran');
+
+    let frame = await mk.redraw();
+    const first = elapsedOf(frame);
+    ok(first !== null, 'the elapsed readout laid out',
+      `numeric runs: ${JSON.stringify([...frame.matchAll(/STR ([\d.]+)$/gm)].map((m) => m[1]))}`);
+    ok(/PLOT TEXT X \d+ Y \d+ STR running$/m.test(frame), 'the watch is running at load');
+
+    // No input at all from here: only the page's own setInterval can move
+    // the number, and only a re-box can make the move visible.  Redraw in a
+    // bounded loop until the PLOTTED value changes — a condition poll, not a
+    // fixed sleep, and it gives up loudly rather than napping out its clock.
+    let later = first;
+    for (let i = 0; i < 60 && later === first; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      frame = await mk.redraw();
+      later = elapsedOf(frame);
+    }
+    ok(later !== null && later > first,
+      'the readout ADVANCED with zero user input — mutation reached the screen',
+      `${first} -> ${later}`);
+
+    // Structural insertion, the other mutation class.
+    ok(lapsOf(frame).length === 0, 'no lap rows yet');
+    let mark = mk.mark();
+    mk.clickText(frame, 'Lap');
+    await mk.wait(/INVALIDATE_AREA WIN \d+/, { label: 'repaint after Lap', from: mark });
+    frame = await mk.redraw();
+    ok(lapsOf(frame).length === 1, 'createElement + appendChild produced a VISIBLE row',
+      `lap rows plotted: ${JSON.stringify(lapsOf(frame))}`);
+
+    mark = mk.mark();
+    mk.clickText(frame, 'Lap');
+    await mk.wait(/INVALIDATE_AREA WIN \d+/, { label: 'repaint after second Lap', from: mark });
+    frame = await mk.redraw();
+    ok(lapsOf(frame).length === 2, 'a second insertion lands too',
+      `lap rows plotted: ${JSON.stringify(lapsOf(frame))}`);
+
+    // Stop, and prove the readout then holds still: this is what makes the
+    // "it advanced" assertion above mean the TIMER moved it, not noise.
+    mark = mk.mark();
+    mk.clickText(frame, 'Stop');
+    await mk.wait(/INVALIDATE_AREA WIN \d+/, { label: 'repaint after Stop', from: mark });
+    frame = await mk.redraw();
+    ok(/PLOT TEXT X \d+ Y \d+ STR stopped$/m.test(frame), 'the button relabelled itself and the state text changed');
+    const held = elapsedOf(frame);
+    await new Promise((r) => setTimeout(r, 600));   // stopped: no marker to wait on
+    frame = await mk.redraw();
+    ok(elapsedOf(frame) === held, 'a stopped watch does NOT drift', `${held} -> ${elapsedOf(frame)}`);
+
+    ok(await mk.quit() === 0, 'clean exit');
+  } finally { mk.kill(); }
+}
+
+// ---- leg 7: todo.html (Lane B, removal + attribute restyle) ----------
+const countOf = (frame) => {
+  const m = frame.match(/^PLOT TEXT X \d+ Y \d+ STR (nothing to do|\d+ things? to do)$/m);
+  return m ? m[1] : null;
+};
+
+async function leg7() {
+  console.log('\nleg 7 — demos/todo.html: removeChild + a class change REPAINT');
+  const mk = new Monkey(RES_ON);
+  try {
+    await mk.open(demo('todo.html'));
+    ok(mk.consoleLines().includes('todo ready'), 'page script ran');
+
+    let frame = await mk.redraw();
+    // The two seed rows are added while the parser is still live, so they
+    // arrive through the NORMAL conversion — they are the control, not the
+    // proof.  Everything after this point is post-load and is the proof.
+    ok(/STR read the design doc$/m.test(frame) && /STR re-box the document$/m.test(frame),
+      'the seed rows laid out (via the normal load-time conversion)');
+    ok(countOf(frame) === '2 things to do', 'the counter starts at 2', `counter: ${countOf(frame)}`);
+
+    let mark = mk.mark();
+    mk.clickText(frame, 'Done read the design doc');
+    await mk.wait(/LOG todo removed read the design doc$/m, { label: 'the remove handler running', from: mark });
+    await mk.wait(/INVALIDATE_AREA WIN \d+/, { label: 'repaint after removeChild', from: mark });
+    frame = await mk.redraw();
+    ok(!/STR read the design doc$/m.test(frame),
+      'removeChild made the row DISAPPEAR from the layout');
+    ok(/STR re-box the document$/m.test(frame), 'the other row survived');
+    ok(countOf(frame) === '1 thing to do', 'the counter text re-rendered', `counter: ${countOf(frame)}`);
+
+    mark = mk.mark();
+    mk.clickText(frame, 'Done re-box the document');
+    await mk.wait(/LOG todo removed re-box the document$/m, { label: 'the second remove handler', from: mark });
+    await mk.wait(/INVALIDATE_AREA WIN \d+/, { label: 'repaint after the second removeChild', from: mark });
+    frame = await mk.redraw();
+    ok(!/STR re-box the document$/m.test(frame), 'the list emptied');
+    ok(countOf(frame) === 'nothing to do', 'the empty-state text is showing', `counter: ${countOf(frame)}`);
+    // The class flipped to .empty too; monkey's plot stream carries no
+    // colour, so the RESTYLE half of that is asserted by the kernel e2e's
+    // pixel probe (grey #888 vs green #063), not here.
+
+    ok(await mk.quit() === 0, 'clean exit');
+  } finally { mk.kill(); }
+}
+
+// ---- leg 8: the A/B baseline — with the bridge OFF, nothing moves -----
+async function leg8() {
+  console.log('\nleg 8 — A/B baseline: the SAME pages with the bridge compiled out must NOT change');
+  const wasm = baselineWasm();
+
+  const mk = new Monkey(RES_ON, { wasm });
+  try {
+    await mk.open(demo('stopwatch.html'));
+    ok(mk.consoleLines().includes('stopwatch ready'), 'the page script still runs with the bridge off');
+
+    let frame = await mk.redraw();
+    const first = elapsedOf(frame);
+    ok(first !== null, 'the readout laid out at load');
+
+    // Give the 100 ms ticker plenty of turns.  There is no marker to wait
+    // on here BECAUSE the thing being asserted is that no repaint is ever
+    // requested — so this leg, like leg 4, has to watch a clock.
+    const from = mk.mark();
+    await new Promise((r) => setTimeout(r, 2000));
+    const invalidates = (mk.out.slice(from).match(/INVALIDATE_AREA WIN \d+/g) || []).length;
+    frame = await mk.redraw();
+    ok(elapsedOf(frame) === first,
+      'STOPWATCH: 2 s and ~20 timer ticks later the readout is UNCHANGED',
+      `${first} -> ${elapsedOf(frame)} (${invalidates} repaint requests)`);
+    ok(mk.consoleLines().includes('stopwatch ready'), 'the timer was really running (script alive)');
+    ok(await mk.quit() === 0, 'clean exit');
+  } finally { mk.kill(); }
+
+  const mk2 = new Monkey(RES_ON, { wasm });
+  try {
+    await mk2.open(demo('todo.html'));
+    let frame = await mk2.redraw();
+    ok(countOf(frame) === '2 things to do', 'the load-time rows DO appear (they predate the bridge)');
+
+    const from = mk2.mark();
+    mk2.clickText(frame, 'Done read the design doc');
+    // The handler must still RUN — the DOM really changes; it is only the
+    // screen that does not follow.  That is the whole point of the A/B.
+    await mk2.wait(/LOG todo removed read the design doc$/m,
+      { label: 'the remove handler running with the bridge off', from });
+    await new Promise((r) => setTimeout(r, 500));
+    frame = await mk2.redraw();
+    ok(/STR read the design doc$/m.test(frame),
+      'TODO: the removed row is STILL PAINTED — the DOM changed, the screen did not');
+    ok(countOf(frame) === '2 things to do',
+      'the counter text is stale too', `counter: ${countOf(frame)}`);
+    ok(await mk2.quit() === 0, 'clean exit');
+  } finally { mk2.kill(); }
+}
+
 // ---- run --------------------------------------------------------------
-const LEGS = [leg1, leg2, leg3, leg4, leg5];
+const LEGS = [leg1, leg2, leg3, leg4, leg5, leg6, leg7, leg8];
 const t0 = Date.now();
 for (let i = 0; i < LEGS.length; i++) {
   if (ONLY.length && !ONLY.includes(i + 1)) continue;

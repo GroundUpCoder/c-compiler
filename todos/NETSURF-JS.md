@@ -1,8 +1,14 @@
 # NetSurf v2 — JavaScript support (duktape) — design & scoping
 
-Status: **LANE A LANDED (2026-07-25)**; design pass complete; lanes B–E open.
-Everything below is evidence from a live probe, with Lane A's own findings
-folded in (§8 records where the probe's expectations turned out wrong).
+Status: **LANE A LANDED (2026-07-25); LANE B LANDED (2026-07-26)**; lanes
+C–E open.  Everything below is evidence from a live probe, with each lane's
+findings folded in (§8 = where the probe's expectations turned out wrong,
+§9 = the same for Lane B).
+
+**§5's "THE KILLER GAP — DOM mutation is invisible" is no longer true**:
+Lane B's re-conversion bridge landed.  The paragraphs describing it are kept
+as written because they still document the upstream starting point, but read
+them past §9.
 
 Lane A shipped: vendored `duktape/`+`WebIDL/`, the committed nsgenbind output
 at `genjs/duktape/`, `regen-js-bindings.sh` + `genjs-sources.mjs`, the
@@ -336,6 +342,11 @@ start with A.
 - Cost accepted (measured, table above): +2.32 MB wasm, +30 s compile.
 
 **Lane B — mutation → re-box → reflow → repaint bridge (M-L, the big one).**
+**DONE 2026-07-26** — the design below landed as written; §9 records what
+this lane found the plan (and the spike) had wrong, and what it left open.
+Demos 4–5 (`stopwatch.html`, `todo.html`), `smoke-js.mjs` legs 6–8 (leg 8
+is the A/B baseline, built with the bridge compiled out) and
+`tests/kernel/test_netsurf_mutation_e2e.js` are the gate.
 Design: one choke point `html_schedule_reconvert(htmlc)` — the libdom
 default-action handlers (`dom_event.c`) call it for the *generic* node
 insert/remove/modify cases (post-parse only, `htmlc->parser == NULL` guard);
@@ -448,3 +459,90 @@ generator is pinned.
   (pins in `UPSTREAM.json`'s `tools`; `--check` is the drift gate).  The
   probe's `/tmp/netsurf-js-scope/` bison-3.8.2 build is gone/volatile —
   the script prints how to rebuild one.
+
+## 9. What Lane B found that this document (and the spike) had wrong
+
+Recorded so C, D and E plan against reality.  The spike's own residual list
+lives in `logs/2026-07-26/netsurf-lane-b-spike.md`; this is the delta after
+building the real lane on top of it.
+
+1. **Scroll preservation was never verified, and now is.**  The spike
+   reasoned it was "preserved by construction — frontend-owned and
+   document-relative" from a CODE READ only, and explicitly deferred the
+   live check.  It is genuinely preserved, but that is now a measurement:
+   `test_netsurf_mutation_e2e.js` scrolls a colour-coded ruler page by 700
+   px, DECODES the offset back out of the screenshot either side of two
+   re-conversions, and requires it unchanged and non-zero.
+2. **Focus is a box-tree pointer too, and the spike's teardown dropped
+   it.**  `html_content.focus_owner.textarea` is a `struct box *`, so the
+   re-conversion reset it to `HTML_FOCUS_SELF` exactly like the selection —
+   but unlike the selection nothing handed it back.  Consequence, measured:
+   typing six characters into a field on a page whose timer mutates an
+   unrelated element landed **52 ink pixels vs 285** on an otherwise
+   identical still page, i.e. every keystroke after the first mutation was
+   dropped.  Any page that edits the DOM while the user types was
+   unusable.  Fixed by saving the focused gadget's DOM node plus its caret
+   index before teardown and re-binding both to the new box after the swap
+   (`reconvert_focus_node`); the A/B is now 285 vs 285 and is a committed
+   leg.  This needed one new public accessor, `textarea_get_caret_char`,
+   the inverse of the existing `textarea_set_caret`.
+3. **Gadget reuse needed three fixes, not just the spike's inventory.**  A
+   gadget survives re-boxing by design, but three things hanging off one
+   did not: `<select>` refilled its option list from the DOM on every
+   re-box without emptying it first (duplicate options accumulated —
+   `form_select_clear_options`); `box_textarea_create_textarea` overwrote
+   `data.text.ta`/`data.text.initial` rather than releasing them (a leaked
+   textarea plus a leaked `dom_string` ref per re-box); and a control
+   outside any `<form>` was owned by NOBODY, so it could not be re-found
+   and a fresh one was invented per re-box (now adopted onto the content as
+   `formless_controls` — which also fixes an upstream leak at destroy,
+   since nothing freed them before either).
+4. **The NULL-box class is one choke point, not scattered guards.**  The
+   spike flagged `form_radio_set` for a missing `control->box` check.  Every
+   such dereference funnels through `html__redraw_a_box`, so the guard
+   lives there once: a gadget with no box (mid-re-conversion, or
+   `display:none`) is a legitimate "nothing to redraw".
+5. **`keydown` is dispatched at the document ROOT, and Enter has no key
+   name.**  `interaction.c` fires it at `html->layout->node`, not at the
+   focused element, so a listener must sit on `document`/the root element.
+   And `fire_dom_keyboard_event`'s special-key table (`html.c`) has no
+   `NS_KEY_CR`/`NS_KEY_NL`/`NS_KEY_TAB` case, so Enter reaches JS with
+   `event.key === null` — §6's demo-5 sketch assumed "text input +
+   Enter/keydown" and that half is **not possible today**.  `todo.html`
+   adds with a button instead.  Both are Lane C's to fix.
+6. **`Date.now()` has one-second resolution.**  duktape's platform probe
+   does not recognise this target and falls through to its "unknown OS"
+   branch (`duk_config.h:853` → `DUK_USE_DATE_NOW_TIME` → `time()`).
+   Verified: 200 000 consecutive `Date.now()` calls returned ONE value, and
+   it ended in `000`.  Our libc's `gettimeofday` does have real microsecond
+   resolution (checked directly), so the fix is one line in `duk_custom.h`
+   (`#define DUK_USE_DATE_NOW_GETTIMEOFDAY`).  Not taken here because it
+   changes JS `Date` semantics estate-wide and wants its own verification —
+   Lane D.  `stopwatch.html` counts `setInterval` ticks instead.
+7. **Mutations made during the parse are NOT bridge traffic.**  Script that
+   runs at load mutates the DOM while `htmlc->parser != NULL`, so
+   `html_schedule_reconvert` declines and the normal load-time conversion
+   picks the change up.  Useful (a page can seed itself and still render
+   with the bridge off) but it means a demo whose only mutations happen at
+   script-execution time proves NOTHING about this lane — which is exactly
+   why `todo.html`'s seed rows are the control and only the post-load
+   clicks are the proof.
+8. **The bridge has a build-time kill switch, and the gate uses it.**
+   `-DNETSURF_NO_LIVE_RECONVERT` makes `html_schedule_reconvert` a no-op,
+   restoring upstream behaviour.  `smoke-js.mjs` leg 8 builds that variant
+   from the same tree and requires the same two demo pages to plot NOTHING
+   changing (while their JS handlers still demonstrably run).  A demo that
+   passes with and without the change proves nothing; this is what stops
+   that.
+9. **Still open, deliberately.**  Whole-document re-box per mutation batch
+   is the shipped v1 (~1 ms at demo scale; ~152 ms at 1508 elements,
+   dominated by `convert_xml_to_box`'s yield-every-10-nodes scheduler
+   round-trips rather than compute — a reconvert-tuned
+   `max_processed_before_yield` is the obvious knob if a demo ever needs
+   it).  `html->forms` is still built once at `begin_conversion`, so a
+   JS-inserted `<form>` is not a real form and its controls get invented
+   gadgets.  Dynamically-inserted stylesheets still hit the static
+   `select_ctx` wall — the reconvert path is where a `select_ctx` rebuild
+   would slot in.  Caret position is preserved across a re-box but the
+   textarea widget itself is still rebuilt, so an in-progress *selection*
+   inside a field is not.

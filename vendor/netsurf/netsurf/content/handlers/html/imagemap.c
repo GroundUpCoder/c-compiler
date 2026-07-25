@@ -309,6 +309,7 @@ imagemap_addtolist(const struct html_content *c,
 	dom_exception exc;
 	dom_string *href = NULL, *target = NULL, *shape = NULL;
 	dom_string *coords = NULL;
+	char *coords_copy = NULL;
 	struct mapentry *new_map, *temp;
 	bool ret = true;
 
@@ -392,9 +393,19 @@ imagemap_addtolist(const struct html_content *c,
 	if (new_map->type != IMAGEMAP_DEFAULT) {
 		int x, y;
 		float *xcoords, *ycoords;
-		/* coordinates are a comma-separated list of values */
-		char *val = strtok((char *)dom_string_data(coords), ",");
+		/* coordinates are a comma-separated list of values;
+		 * strtok on a COPY — tokenizing dom_string_data in place
+		 * (as upstream did) writes NULs into the interned DOM
+		 * attribute, so any re-extraction (live re-conversion)
+		 * would parse a corrupted, comma-less string */
+		char *val;
 		int num = 1;
+
+		coords_copy = strdup(dom_string_data(coords));
+		if (coords_copy == NULL) {
+			goto bad_out;
+		}
+		val = strtok(coords_copy, ",");
 
 		switch (new_map->type) {
 		case IMAGEMAP_RECT:
@@ -512,6 +523,7 @@ ok_free_map_out:
 		free(new_map);
 	}
 ok_out:
+	free(coords_copy);
 	if (href != NULL)
 		dom_string_unref(href);
 	if (target != NULL)

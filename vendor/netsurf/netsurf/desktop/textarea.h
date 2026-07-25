@@ -234,6 +234,19 @@ bool textarea_set_caret(struct textarea *ta, int caret);
 
 
 /**
+ * Get the caret's position
+ *
+ * The inverse of \ref textarea_set_caret, in the same units, so a caret
+ * can be carried from one textarea to another (the HTML handler rebuilds
+ * a gadget's widget whenever the document is re-boxed).
+ *
+ * \param ta	Text area
+ * \return 0-based character index of the caret, or -1 if it has none
+ */
+int textarea_get_caret_char(struct textarea *ta);
+
+
+/**
  * Handle redraw requests for text areas
  *
  * \param ta	textarea to render
