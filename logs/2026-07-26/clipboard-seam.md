@@ -109,3 +109,28 @@ fix, not a leak).
    as the manual fallback either way).
 3. BT hardware-keyboard Cmd+V on iOS Safari reaching xterm as a native paste.
 4. Android Chrome equivalents of 1–3.
+
+## Post-gate addendum — the OSK Ctrl+V leg exposed a pre-existing user32 bug
+
+The rewritten (no-longer-vacuous) OSK leg failed on @master's gate run with a
+literal `v` in the EDIT: the paste chord decomposed. Probe evidence
+(page-side `__osOskSent` log perfect in every round, real AND synthetic taps;
+identical failure on a prebaked BASE worktree at 4bc04fc4): PRE-EXISTING, not
+a lane regression — the old leg's `check(..., true)` assertion had hidden it.
+
+Root cause: `pump_sdl` drains every pending SDL event in one loop, stamping
+the ONE global `g_mod` per event while messages queue; a starved worker
+(load, slow box) drains a whole `[Ctrl dn, V dn, V up, Ctrl up]` chord in one
+wake, so `g_mod` is 0 by the time the queued `WM_KEYDOWN V` reaches
+`TranslateMessage` → WM_CHAR 'v', not the 0x16 paste fold. Idle boxes get
+one event per wake and never see it; under load it hit 80% of runs.
+
+Fix (the existing `g_lastSym` pattern, and real Windows semantics — key
+state changes as the thread reads key messages): `QMsg` carries the SDL
+modifier word as of enqueue and `q_get` restores it per retrieved message,
+so TranslateMessage, GetKeyState-driven accelerators and EDIT chords see
+their own event's state. Flake gate: os-clipboard.mjs 1/5 → 5/5 stable
+under load ×10.
+
+Also hardened: `.oskkey` joined os-vt1mobile's enumerated TOUCH_MANIP table
+(the class guard the Copy/Paste legends inherit was asserted nowhere).
