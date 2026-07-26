@@ -473,10 +473,16 @@ rough priority order — full details in logs/2026-07-16/win32-compliance.md):**
   TME_LEAVE only fires via intra-surface movement (calc's hot button
   stays lit until re-entry). Needs a kernel leave event. Related:
   WM_MOUSEHOVER posts immediately, ignoring dwHoverTime.
-- **advapi32 hive**: per-process whole-file last-writer-wins — two live
-  win32 apps flush at exit and the second exiter reverts the first's
-  registry writes wholesale; writes since the last flush are lost on
-  SIGKILL. Fix shape: reload-merge dirty values at flush.
+- **advapi32 hive**: writes since the last flush are lost on SIGKILL
+  (flushing is batched to RegCloseKey/atexit), and there is no advisory
+  lock, so two flushes landing in the same instant still race on the
+  rename. The whole-file last-writer-wins that used to sit here — the
+  second exiter of two live apps reverting the first's writes wholesale
+  — was fixed by **todos/0288**: `hive_flush` re-reads the hive and
+  overlays only this process's dirty values + delete tombstones, and
+  conflicts on the SAME value resolve last-writer-wins **per value**
+  (rule + rationale in the header of `os/win32/advapi32.c`). A
+  genuinely transactional store is still `todos/0162`.
 - **No WM_SYSKEYDOWN/WM_SYSCOMMAND/activation protocol** (WM_ACTIVATE
   family never sent); menus have no Alt/F10 activation and no
   WM_MENUSELECT; TranslateMessage returns FALSE for non-char keys.

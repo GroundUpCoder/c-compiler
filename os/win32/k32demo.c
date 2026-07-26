@@ -444,7 +444,182 @@ static void test_process(void) {
           lstrcmpW(msg, u"The system cannot find the file specified.") == 0);
 }
 
+/* ------------------------------------------- the 0288 two-process legs
+ *
+ * The registry hive is shared by every live win32 process, so a flush
+ * must merge, not overwrite (see the header of os/win32/advapi32.c).
+ * `reg-race FIRST SECOND` reproduces the exact ordinary flow that used
+ * to lose data — two apps open, both mutate, both close:
+ *
+ *   1. spawn two agents; each opens the hive (taking its snapshot),
+ *      makes ITS OWN mutation, and then parks on a go-file — so both
+ *      snapshots are taken before either flush lands;
+ *   2. release FIRST, wait for it to exit (its flush lands);
+ *   3. release SECOND, wait for it to exit (its flush lands SECOND —
+ *      this is the flush that used to revert FIRST's write wholesale);
+ *   4. read the hive back in a THIRD process (this one, which has not
+ *      touched the registry yet, so its load is fresh) and print what
+ *      survived.
+ *
+ * Naming the winner on the command line makes both exit orders one
+ * argument apart. An agent spec of `-NAME` DELETES that value instead
+ * of writing it, which pins the other half of the merge rule: the
+ * delete must survive a peer's later flush (tombstone), and the peer —
+ * which loaded the value but never touched it — must NOT resurrect it
+ * (only DIRTY values are written back). `reg-set NAME` seeds a value
+ * from a throwaway process so a race has something to preserve. */
+
+#define RACE_KEY u"Software\\K32Race"
+
+/* an agent spec is NAME (write) or -NAME (delete) */
+static int spec_is_del(const char *spec) { return spec[0] == '-'; }
+static const char *spec_name(const char *spec) { return spec + (spec[0] == '-'); }
+
+static void race_wpath(const char *kind, const char *name, WCHAR *out, int cap) {
+    char p[256];
+    snprintf(p, sizeof p, "/root/k32race-%s-%s", kind, name);
+    MultiByteToWideChar(CP_UTF8, 0, p, -1, out, cap);
+}
+
+static int race_exists(const WCHAR *path) {
+    return GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES;
+}
+
+static void race_touch(const WCHAR *path) {
+    HANDLE h = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+}
+
+/* wait up to ~15s for `path` to appear; 1 = appeared, 0 = timed out */
+static int race_wait_file(const WCHAR *path) {
+    for (int i = 0; i < 750; i++) {
+        if (race_exists(path)) return 1;
+        Sleep(20);
+    }
+    return 0;
+}
+
+/* seed a value from a throwaway process (the "already in the hive" case) */
+static int reg_set(const char *name) {
+    WCHAR wname[64];
+    MultiByteToWideChar(CP_UTF8, 0, name, -1, wname, 64);
+    HKEY h;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, RACE_KEY, 0, NULL, 0,
+                        KEY_ALL_ACCESS, NULL, &h, NULL) != ERROR_SUCCESS)
+        return 2;
+    DWORD one = 1;
+    LONG r = RegSetValueExW(h, wname, 0, REG_DWORD, (const BYTE *)&one,
+                            sizeof one);
+    RegCloseKey(h);
+    return r == ERROR_SUCCESS ? 0 : 2;
+}
+
+/* one racing "app": snapshot the hive, make my mutation, park, then flush */
+static int reg_agent(const char *spec) {
+    const char *name = spec_name(spec);
+    WCHAR ready[256], go[256], wname[64];
+    race_wpath("ready", name, ready, 256);
+    race_wpath("go", name, go, 256);
+    MultiByteToWideChar(CP_UTF8, 0, name, -1, wname, 64);
+
+    HKEY h;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, RACE_KEY, 0, NULL, 0,
+                        KEY_ALL_ACCESS, NULL, &h, NULL) != ERROR_SUCCESS)
+        return 2;                       /* the hive snapshot is taken here */
+    if (spec_is_del(spec)) {
+        if (RegDeleteValueW(h, wname) != ERROR_SUCCESS) return 2;
+    } else {
+        DWORD one = 1;
+        if (RegSetValueExW(h, wname, 0, REG_DWORD, (const BYTE *)&one,
+                           sizeof one) != ERROR_SUCCESS)
+            return 2;
+    }
+    race_touch(ready);                  /* "loaded and mutated, not flushed" */
+    if (!race_wait_file(go)) return 3;
+    RegCloseKey(h);                     /* the flush under test */
+    return 0;
+}
+
+static int reg_race(const char *first, const char *second) {
+    const char *who[2] = { first, second };
+    HANDLE proc[2];
+    for (int i = 0; i < 2; i++) {
+        WCHAR ready[256], go[256];
+        race_wpath("ready", spec_name(who[i]), ready, 256);
+        race_wpath("go", spec_name(who[i]), go, 256);
+        DeleteFileW(ready);                          /* no stale handshakes */
+        DeleteFileW(go);
+        WCHAR cmd[256];
+        char line[256];
+        snprintf(line, sizeof line, "k32demo reg-agent %s", who[i]);
+        MultiByteToWideChar(CP_UTF8, 0, line, -1, cmd, 256);
+        STARTUPINFOW si;
+        GetStartupInfoW(&si);
+        PROCESS_INFORMATION pi;
+        if (!CreateProcessW(NULL, cmd, NULL, NULL, TRUE, 0, NULL, u"/root",
+                            &si, &pi)) {
+            printf("reg-race: CreateProcess %s failed\n", who[i]);
+            return 2;
+        }
+        proc[i] = pi.hProcess;
+    }
+    /* both agents must hold a pre-flush snapshot before EITHER flushes */
+    for (int i = 0; i < 2; i++) {
+        WCHAR ready[256];
+        race_wpath("ready", spec_name(who[i]), ready, 256);
+        if (!race_wait_file(ready)) {
+            printf("reg-race: agent %s never became ready\n", who[i]);
+            return 2;
+        }
+    }
+    /* release them one at a time, in the requested exit order */
+    for (int i = 0; i < 2; i++) {
+        WCHAR go[256];
+        race_wpath("go", spec_name(who[i]), go, 256);
+        race_touch(go);
+        if (WaitForSingleObject(proc[i], 20000) != WAIT_OBJECT_0) {
+            printf("reg-race: agent %s did not exit\n", who[i]);
+            return 2;
+        }
+        DWORD code = 1;
+        GetExitCodeProcess(proc[i], &code);
+        CloseHandle(proc[i]);
+        if (code != 0) {
+            printf("reg-race: agent %s exited %u\n", who[i], (unsigned)code);
+            return 2;
+        }
+    }
+    /* fresh reader: this process has not touched the registry until now */
+    HKEY h;
+    int got[2] = { 0, 0 };
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, RACE_KEY, 0, KEY_READ, &h) ==
+        ERROR_SUCCESS) {
+        for (int i = 0; i < 2; i++) {
+            WCHAR wname[64];
+            MultiByteToWideChar(CP_UTF8, 0, spec_name(who[i]), -1, wname, 64);
+            DWORD v = 0, type = 0, cb = sizeof v;
+            got[i] = RegQueryValueExW(h, wname, NULL, &type, (LPBYTE)&v, &cb) ==
+                         ERROR_SUCCESS && type == REG_DWORD && v == 1;
+        }
+        RegCloseKey(h);
+    }
+    /* a writer's value must be there, a deleter's must be gone */
+    int ok = 1;
+    for (int i = 0; i < 2; i++)
+        if (got[i] != !spec_is_del(who[i])) ok = 0;
+    printf("reg-race(%s,%s): %s=%d %s=%d -> %s\n", first, second,
+           spec_name(who[0]), got[0], spec_name(who[1]), got[1],
+           ok ? "OK" : "LOST");
+    return ok ? 0 : 1;
+}
+
 int main(int argc, char **argv) {
+    if (argc > 2 && strcmp(argv[1], "reg-set") == 0)
+        return reg_set(argv[2]);
+    if (argc > 2 && strcmp(argv[1], "reg-agent") == 0)
+        return reg_agent(argv[2]);
+    if (argc > 3 && strcmp(argv[1], "reg-race") == 0)
+        return reg_race(argv[2], argv[3]);
     if (argc > 1 && strcmp(argv[1], "reg-persist") == 0) {
         /* second-session probe: the hive persisted to $HOME/.win32reg */
         UINT v = GetProfileIntW(u"K32Demo", u"layout", 0);
