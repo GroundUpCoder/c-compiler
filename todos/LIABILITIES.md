@@ -111,11 +111,6 @@ thing this file exists to kill.
 - anchor: // Loud-symptom gate (todos/0171): a `wmctl wait` that can't be satisfied
 - provenance: 0171
 
-### L07 — the registry hive rewrites whole-file at exit, so the second exiter reverts the first
-- ticket: 0288
-- file: os/win32/advapi32.c
-- anchor: static void hive_flush(void) {
-
 ### L08 — NetSurf Lane C (UI events) was left open in a topic doc, which is not the queue
 - ticket: 0289
 - file: todos/NETSURF-JS.md
@@ -198,5 +193,15 @@ thing this file exists to kill.
 - ticket: 0301
 - file: os/os.html
 - anchor: // (900×600 — min() ≤ 700, innerWidth > 768) trips THIS predicate while
+
+### L23 — registry writes since the last flush are lost on SIGKILL (the price of the batched flush)
+- ticket: 0162
+- file: os/win32/advapi32.c
+- anchor: the last flush are lost on SIGKILL — flushing is batched to
+
+### L24 — two registry flushes in the same instant still race on the rename; there is no advisory lock
+- ticket: 0162
+- file: os/win32/advapi32.c
+- anchor: tmp+rename, and there is no advisory lock, so two flushes landing in
 
 <!-- END ENTRIES -->
