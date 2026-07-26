@@ -140,7 +140,13 @@ try {
   // per-button shape kept getting forgotten, so the rule went
   // container-scoped (#vtbar/#keystrip subtrees) and this table asserts the
   // whole cluster, not one sample. Add a control to the bar -> add it here.
-  const TOUCH_MANIP = ['.stripkey', '#vt1tab', '#vt2tab', '#oskbtn',
+  // .oskkey rides its CLASS rule (the one legitimate OSK-side guard: #osk is
+  // a SIBLING of #vtbar, outside the container-scoped subtree rule) — the
+  // clipboard-seam Copy/Paste legends inherit it by class membership, and
+  // this entry is what keeps that true for the next key someone adds. The
+  // OSK subtree is built at page load (display gated, elements present), so
+  // the computed style resolves here with the keyboard closed.
+  const TOUCH_MANIP = ['.stripkey', '.oskkey', '#vt1tab', '#vt2tab', '#oskbtn',
     '#fontminus', '#fontplus', '#zoomminus', '#zoomplus', '#desksite',
     '#uploadbtn', '#vtbar'];
   const touchActions = await page.evaluate((sels) => {
