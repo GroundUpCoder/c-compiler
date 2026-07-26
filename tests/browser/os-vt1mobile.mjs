@@ -130,37 +130,91 @@ try {
   await waitOut('CAT-OK');
   check('sticky Ctrl+d sent EOF (cat exited 0)', true);
 
-  // ---- touch-action contract (mobile-doubletap): every tappable chrome
-  // control must compute `manipulation` so iOS drops its native
+  // ---- touch-action contract (mobile-doubletap, osk-touchgap): every surface
+  // a finger can land on must compute `manipulation` so iOS drops its native
   // double-tap-to-zoom, while the two surfaces that own their touches keep
   // `none`. This is a PROPERTY check, not a gesture check — headless
   // Chromium cannot reproduce the iOS gesture, so what it guards is the CSS
-  // contract the gesture depends on. It exists because the tab-bar cluster
-  // shipped without the guard while the keys next to it had it: the
-  // per-button shape kept getting forgotten, so the rule went
-  // container-scoped (#vtbar/#keystrip subtrees) and this table asserts the
-  // whole cluster, not one sample. Add a control to the bar -> add it here.
+  // contract the gesture depends on. It exists because the per-element shape
+  // kept getting forgotten: first the tab-bar cluster shipped unguarded while
+  // the keys beside it had the property, then the OSK's 4px inter-key GAPS
+  // stayed at `auto` while .oskkey itself was guarded (a drifting repeat-tap
+  // on Enter zoomed — the reported repro). touch-action does not inherit and
+  // on iOS an ancestor's value does not cover a descendant, so the rule is
+  // container-scoped over #wrap and this table asserts SURFACES, not samples.
+  // Add an element anywhere under #wrap -> add it here.
   const TOUCH_MANIP = ['.stripkey', '#vt1tab', '#vt2tab', '#oskbtn',
     '#fontminus', '#fontplus', '#zoomminus', '#zoomplus', '#desksite',
-    '#uploadbtn', '#vtbar'];
+    '#uploadbtn', '#vtbar', '#wrap', '#terminal', '#desktop', '#status',
+    '#guard', '#guardRetry', '#keystrip'];
+  // The deliberate exceptions — these own every touch and must NOT be folded
+  // into the blanket rule (todos/0212; the desktop/OSK gesture layers). The
+  // OSK is `none` across its WHOLE subtree: keys and the gaps between them
+  // alike. That narrows the keep-pinch contract inside the keyboard rectangle
+  // on purpose (a pinch cannot start on the OSK; it still can over the
+  // terminal/desktop) — an interior that disagrees with its container is the
+  // bug class this rule exists to end.
+  const TOUCH_NONE = ['#screen', '#osk', '.oskin', '.oskrow', '.oskkey'];
+  // The OSK is closed on this wide viewport, and a display:none subtree has
+  // no rect for the hit-test below to sample — so open it for the duration
+  // and close it again (the strip legs after this one need #keystrip back,
+  // which the OSK hides while open).
+  await page.click('#oskbtn');
+  await page.waitForFunction(() => document.body.hasAttribute('data-osk'),
+    { timeout: 5000, polling: 50 });
   const touchActions = await page.evaluate((sels) => {
     const out = {};
-    for (const s of sels.concat(['#screen', '#osk'])) {
+    for (const s of sels) {
       const el = document.querySelector(s);
       out[s] = el ? getComputedStyle(el).touchAction : 'MISSING';
     }
     return out;
-  }, TOUCH_MANIP);
+  }, TOUCH_MANIP.concat(TOUCH_NONE));
   for (const sel of TOUCH_MANIP) {
     check(`${sel} computes touch-action manipulation (iOS double-tap-zoom kill)`,
       touchActions[sel] === 'manipulation', touchActions[sel]);
   }
-  // The deliberate exceptions — these own every touch and must NOT be folded
-  // into the blanket rule (todos/0212; the OSK/desktop gesture layers).
-  check('#screen keeps touch-action none (owns its touches)',
-    touchActions['#screen'] === 'none', touchActions['#screen']);
-  check('#osk keeps touch-action none (owns its touches)',
-    touchActions['#osk'] === 'none', touchActions['#osk']);
+  for (const sel of TOUCH_NONE) {
+    check(`${sel} computes touch-action none (owns its touches)`,
+      touchActions[sel] === 'none', touchActions[sel]);
+  }
+
+  // ...and the same contract BEHAVIOURALLY, by hit-test: the selector table
+  // above still passes if a refactor slips a new unguarded wrapper between
+  // .oskkey and #osk, which is exactly how the gap bug arrived. So sample the
+  // points a drifting thumb actually hits — a few px off a key's edge — and
+  // assert whatever element is really there computes `none`. NB the vertical
+  // gaps resolve to .oskin, not .oskrow: .oskrow's 4px row gap is margin-top,
+  // which sits OUTSIDE its border box, so a near-miss falls through to the
+  // wrapper. Enter is the probe key because it is the reported one, and at
+  // phone width it is a row-end key, so above/below/right of it are all
+  // non-key surface.
+  const gapHits = await page.evaluate(() => {
+    const k = document.querySelector('#osk [data-k="Enter"]');
+    if (!k) return null;
+    const r = k.getBoundingClientRect();
+    const at = (label, x, y) => {
+      const el = document.elementFromPoint(x, y);
+      return { label, tag: el ? (el.id || el.className || el.tagName) : 'none',
+        ta: el ? getComputedStyle(el).touchAction : 'MISSING' };
+    };
+    return [at('key centre', r.x + r.width / 2, r.y + r.height / 2),
+      at('2px above key', r.x + r.width / 2, r.top - 2),
+      at('2px below key', r.x + r.width / 2, r.bottom + 2),
+      at('2px left of key', r.left - 2, r.y + r.height / 2)];
+  });
+  check('OSK Enter key is hit-testable for the gap probe',
+    gapHits !== null && gapHits.every((h) => h.tag !== 'none'),
+    JSON.stringify(gapHits));
+  for (const h of gapHits || []) {
+    check(`OSK ${h.label} (${h.tag}) computes touch-action none`,
+      h.ta === 'none', `${h.tag} -> ${h.ta}`);
+  }
+  await page.click('#oskbtn');
+  await page.waitForFunction(() => !document.body.hasAttribute('data-osk'),
+    { timeout: 5000, polling: 50 });
+  check('OSK closed again (keystrip back for the legs below)',
+    await page.evaluate(() => document.getElementById('keystrip').offsetParent !== null));
 
   // ---- Copy/Paste strip keys (mobile-ux): the tap-gesture clipboard path.
   // Headless grantPermissions stands in for the browser's clipboard gates

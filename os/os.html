@@ -37,31 +37,58 @@
 <title>gucOS</title>
 <link rel="stylesheet" href="../vendor/xterm/xterm.css">
 <style>
-  /* touch-action manipulation: kill iOS Safari's native double-tap-to-zoom
-     (which fights the OS's own -/2x/+ zoom) app-wide. Keeps panning and
-     pinch-zoom; only the double-tap gesture is dropped. #screen/#osk narrow
-     further to `none` below. */
+  /* ============ Touch gestures — ONE contract, kept in ONE place ============
+     iOS Safari's native double-tap-to-zoom fights the OS's own zoom controls
+     (VT1 A-/A+, VT2 -/2x/+), so it is dropped app-wide. `manipulation` is
+     pan-x + pan-y + pinch-zoom: ONLY the double-tap goes. #vtbar's sideways
+     pan and page pinch-zoom both keep working — a deliberate contract. Never
+     "fix" a zoom bug with user-scalable=no or maximum-scale (iOS ignores the
+     first, and both cost accessibility); see the viewport meta above.
+
+     THE RULE THIS FILE KEEPS GETTING WRONG: touch-action DOES NOT INHERIT,
+     and on iOS an ANCESTOR's value provably does not cover a descendant
+     either. Per spec the effective behavior is the intersection down the
+     ancestor chain, so `html, body { manipulation }` alone should already
+     suffice — on a real iPhone it does not, three times running (7ae67648,
+     1a5a5b33, 4bc04fc4 each had to fix a surface an ancestor already
+     "covered"). Reason only from what getComputedStyle reports on the element
+     UNDER the touch, never from inheritance or from a container's value.
+     tests/browser/os-vt1mobile.mjs asserts exactly that, per surface.
+
+     Hence ONE container-scoped rule over the whole app subtree rather than a
+     per-control copy — the per-control shape is precisely what failed every
+     time: #uploadbtn shipped with its own guard while its neighbours were
+     never retrofitted, and .oskkey carried a guard while the 4px gaps BETWEEN
+     the keys did not (a repeat-tap on Enter that drifts ~2px off the key
+     lands on .oskin at `auto` and zooms — jku's iPhone repro, verified by
+     hit-test in Chromium and WebKit). Membership is now WHERE an element
+     lives, not whether someone remembered a property; anything added under
+     #wrap later, or generated at runtime (xterm builds its own DOM inside
+     #terminal), is covered by construction. The descendant `*` (not `> *`)
+     is load-bearing — #fontctl/#zoomctl/.oskin wrap their controls.
+
+     Two surfaces own every touch themselves and narrow to `none`:
+       #screen — the desktop canvas; the touch layer below it owns the
+                 gesture (todos/0212).
+       #osk AND ITS WHOLE SUBTREE — an on-screen keyboard wants no browser
+                 gesture at all, in the keys OR the gaps between them. This
+                 deliberately narrows the keep-pinch contract INSIDE the
+                 keyboard rectangle: a pinch cannot START on the OSK. That is
+                 the call, not an oversight — a two-finger gesture on a key
+                 grid is an accident, pinch stays live over the terminal and
+                 desktop above it, and a subtree whose interior disagrees with
+                 its container is the exact bug class this rule exists to end.
+
+     SPECIFICITY IS LOAD-BEARING. `#wrap *` is (1,0,1) and BEATS a bare
+     `#screen`/`#osk` (1,0,0) or `.oskkey` (0,1,0), which would hand those
+     gesture-owning surfaces back to the browser — so the narrowings are
+     raised to `#wrap #screen` (2,0,0) / `#wrap #osk *` (2,0,1). Keep them
+     here and keep them OUT of the #screen/#osk property blocks below: raising
+     THOSE selectors instead would out-specify
+     `body[data-osk] #osk { display: block }` and the OSK would never open. */
   html, body { height: 100%; margin: 0; background: #0d0d1a; touch-action: manipulation; }
-  /* ...and the same guard again, STRUCTURALLY, over the chrome bars and
-     everything inside them. touch-action does not inherit, and on iOS the
-     root declaration above provably does not cover a descendant control:
-     the OSK/keystrip keys only stopped double-tap-zooming once they carried
-     their own declaration, while the tab-bar cluster (Terminal/Desktop/kbd/
-     A-/A+/zoom/Desktop site/Upload) never got one and kept zooming — worst
-     on A-/A+/kbd, which are repeat-tap controls, so "tap it twice quickly"
-     IS the gesture. Written as one container-scoped rule rather than a
-     per-button copy because the per-button shape is precisely what failed:
-     #uploadbtn was added with its own guard and its neighbours were never
-     retrofitted. Membership is now WHERE a control lives, not whether
-     someone remembered a property. The descendant `*` (not `> *`) is
-     load-bearing: #fontctl/#zoomctl wrap their buttons, so a child selector
-     would miss exactly the worst offenders. `manipulation` is pan-x +
-     pan-y + pinch-zoom, so #vtbar's sideways scroll keeps panning and
-     page pinch-zoom stays live (a deliberate contract — see the viewport
-     meta above; never "fix" a zoom bug by disabling pinch). Deliberately
-     NOT extended to #screen/#osk: those own their touches with
-     `touch-action: none` and must stay that way. */
-  #vtbar, #vtbar *, #keystrip, #keystrip * { touch-action: manipulation; }
+  #wrap, #wrap * { touch-action: manipulation; }
+  #wrap #screen, #wrap #osk, #wrap #osk * { touch-action: none; }
   #wrap { display: flex; flex-direction: column; height: 100%; }
   #status {
     font: 12px 'Menlo', 'Consolas', monospace; color: #557755;
@@ -161,8 +188,12 @@
      above it, which on VT2 flows through syncScreenSize -> screen-resize ->
      the wm re-lays the taskbar and re-clamps windows (occlusion solved by
      the 0023 dynamic screen; composes with zoom's floor(pane/Z) for free).
-     touch-action none: the OSK owns its touches (no browser gestures). */
-  #osk { display: none; touch-action: none;
+     The OSK owns its touches — keys AND the gaps between them — via the
+     `#wrap #osk, #wrap #osk *` narrowing in the touch-gesture block at the
+     top of this stylesheet. Deliberately NOT declared here: a bare `#osk`
+     (1,0,0) loses to `#wrap *` (1,0,1), and raising this selector instead
+     would out-specify the display rules below. */
+  #osk { display: none;
          user-select: none; -webkit-user-select: none;
          /* Safe-area insets (viewport-fit=cover): the bottom row clears the
             home indicator, the side keys clear a landscape notch; on
@@ -180,9 +211,9 @@
   .oskrow { display: flex; gap: 4px; margin-top: 4px; }
   .oskkey {
     flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap;
-    /* per-element (touch-action does NOT inherit): kill iOS double-tap
-       zoom on rapid key taps */
-    touch-action: manipulation;
+    /* No touch-action here: guarding the KEY while leaving the 4px gaps
+       around it at `auto` is what let a drifting repeat-tap on Enter zoom
+       the page. The whole #osk subtree is `none` from the top block. */
     /* Bigger, touch-friendly keys: font + vertical padding scale up with the
        viewport (clamp). Key height = line box + 2*pad + 2px border, and the
        line box is calc'd from --oskfs (not the key's own font-size) so the
@@ -236,9 +267,11 @@
   /* Host-file drop target highlight (todos/0067): while a drag hovers the
      desktop pane, an inset ring says "this lands in ~/Desktop". */
   #desktop.droptarget { box-shadow: inset 0 0 0 3px #5599dd; }
-  /* touch-action none (todos/0212): the touch layer below owns every touch
-     gesture on the desktop canvas — no browser scroll/double-tap-zoom. */
-  #screen { outline: none; display: block; touch-action: none;
+  /* The touch layer below owns every touch gesture on the desktop canvas —
+     no browser scroll/double-tap-zoom (todos/0212). Declared as
+     `#wrap #screen` in the touch-gesture block at the top, not here: a bare
+     `#screen` (1,0,0) loses to `#wrap *` (1,0,1). */
+  #screen { outline: none; display: block;
             image-rendering: pixelated; }
   #terminal { flex: 1; min-height: 0; padding: 4px; }
   /* VTs: exactly one of tty/desktop is visible (todos/0022). */
