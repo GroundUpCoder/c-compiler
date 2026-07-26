@@ -18,6 +18,14 @@
 //     + symlink + DB record gone
 //   - FS_WATCH liveness: a CLI `gucman install` / `remove` beside the open
 //     storefront flips the card with no clicks at all
+//   - the minBase BOUNDARY: software.c gates listing on `g_base < minBase`.
+//     mkpkg stamps every package that declares no explicit minBase with the
+//     CURRENT image version, so minBase == base is the NORMAL case for a
+//     freshly shipped package — had that comparison been `<=`, every such
+//     package would have listed permanently greyed as "needs newer OS" on the
+//     exact version that introduced it. Both sides of the boundary are pinned
+//     here against a synthetic two-entry repo (minBase == base -> [available]
+//     with Install enabled; minBase == base + 1 -> [needs newer OS], disabled).
 //   - FAT-fixture leg (win32 Lane 0): packages folded into the sealed /usr
 //     (os-release PACKAGES=) render [built-in] with Install DISABLED,
 //     `gucman list --all`/`info` print built-in, and an install-over-the-top
@@ -32,6 +40,7 @@
 // Run: node tests/kernel/test_software_e2e.js
 'use strict';
 const fs = require('fs');
+const os = require('os');
 const { driveBoot, freshImage } = require('./lib/drive.js');
 
 // The stock section() helper ends at the NEXT `==` line — but `wmctl tree`
@@ -66,6 +75,36 @@ async function main() {
   const goodPort = await startServer(require('path').join(
     require('path').resolve(__dirname, '../..'), 'dist', 'packages'));
   console.log(`[software] repo :${goodPort}, ${names.length} packages, punes=BUTTON:${punesBtn}`);
+
+  // ---- the minBase boundary repo ----
+  // A synthetic two-entry index, one package on each side of software.c's
+  // `g_base < minBase` gate. `base` is DERIVED from os/image.json (the version
+  // the booted blob stamps into os-release VERSION_ID) — a literal here would
+  // silently stop testing the boundary at the next image bump.
+  const PATH = require('path');
+  const CCROOT = PATH.resolve(__dirname, '../..');
+  const base = JSON.parse(fs.readFileSync(PATH.join(CCROOT, 'os/image.json'), 'utf-8')).version | 0;
+  // The property that makes the boundary load-bearing rather than academic:
+  // mkpkg defaults an undeclared minBase to the CURRENT image version, so a
+  // freshly shipped package sits exactly ON the boundary. Pin it against the
+  // real index so the synthetic entries below keep testing the real case.
+  const onBoundary = names.filter((n) => idx.packages[n].minBase === base);
+  check('mkpkg stamps undeclared minBase with the current image version ' +
+        `(${onBoundary.length}/${names.length} catalog packages sit ON the boundary)`,
+    onBoundary.length > 0, JSON.stringify(names.map((n) => [n, idx.packages[n].minBase])));
+  const bEqual = 'zz-base-equal', bNewer = 'zz-base-newer';
+  const bdir = fs.mkdtempSync(PATH.join(os.tmpdir(), 'gucos-minbase-'));
+  const payload = (u) => ({ format: 'tar+gzip', url: u, size: 1, sha256: '0'.repeat(64) });
+  fs.writeFileSync(PATH.join(bdir, 'index.json'), JSON.stringify({
+    packages: {
+      [bEqual]: { version: '1', summary: 'minBase == the running base',
+                  minBase: base, deps: [], payload: payload('pool/e.pkg.tar.gz') },
+      [bNewer]: { version: '1', summary: 'minBase == the running base + 1',
+                  minBase: base + 1, deps: [], payload: payload('pool/n.pkg.tar.gz') },
+    },
+  }));
+  const bPort = await startServer(bdir);
+  console.log(`[software] minBase boundary repo :${bPort} (base=v${base})`);
 
   const script = [
     // -- honest failure: dead repo, real error surfaced, no hang --
@@ -116,6 +155,15 @@ async function main() {
     `wmctl wait label 'punes ${pv} [installed]'`,
     'gucman remove punes >/dev/null 2>&1; echo CLI-REM-RC=$?',
     `wmctl wait label 'punes ${pv} [available]'`,
+    // -- the minBase boundary, both sides, in the SAME live storefront --
+    'echo ==boundary',
+    `echo http://127.0.0.1:${bPort} > /etc/gucman/repos`,
+    'wmctl click Refresh',
+    // two cards only, so both are above the fold — no scrolling needed
+    `wmctl wait label '${bEqual} 1 [available]'`,
+    `wmctl wait label '${bNewer} 1 [needs newer OS]'`,
+    'echo ==btree',
+    'wmctl tree',
     'echo ==done',
   ];
   const r = driveBoot(script, { image, args: ['--packages=none'], timeout: 420000 });
@@ -163,9 +211,40 @@ async function main() {
   check('remove: symlink gone', rem.includes('LINK-GONE'));
   check('remove: DB record gone', rem.includes('DB-GONE'));
 
-  const watch = between(out, 'watch', 'done');
+  const watch = between(out, 'watch', 'boundary');
   check('CLI install beside the storefront succeeds', watch.includes('CLI-INST-RC=0'), watch);
   check('CLI remove beside the storefront succeeds', watch.includes('CLI-REM-RC=0'));
+
+  // ---- the minBase boundary ----
+  // `g_base < minBase` (software.c model_refresh). ON the boundary is the
+  // NORMAL case for a newly shipped package, so it must list [available] with
+  // a live Install button; one past it must list [needs newer OS] with the
+  // button disabled. `<=` would flip the first of these — the one-character
+  // failure this pins.
+  const btree = between(out, 'btree', 'done');
+  const cardBtn = (tree, name) => {
+    const lines = tree.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      if (/ class=PkgCard /.test(lines[i]) && lines[i].includes(`text='${name} `)) {
+        for (let j = i + 1; j < lines.length; j++)
+          if (/ class=BUTTON /.test(lines[j])) return lines[j];
+        return null;
+      }
+    }
+    return null;
+  };
+  check(`minBase == base (v${base}): card lists [available], NOT "needs newer OS"`,
+    btree.includes(`${bEqual} 1 [available]`) && !btree.includes(`${bEqual} 1 [needs newer OS]`),
+    btree.slice(0, 600));
+  check('minBase == base: Install button ENABLED',
+    (() => { const b = cardBtn(btree, bEqual); return !!b && /en=1/.test(b) && /text='Install'/.test(b); })(),
+    cardBtn(btree, bEqual));
+  check(`minBase == base + 1 (v${base + 1}): card lists [needs newer OS]`,
+    btree.includes(`${bNewer} 1 [needs newer OS]`), btree.slice(0, 600));
+  check('minBase == base + 1: Install button DISABLED',
+    (() => { const b = cardBtn(btree, bNewer); return !!b && /en=0/.test(b); })(),
+    cardBtn(btree, bNewer));
+
   check('session reached the end', out.includes('==done'));
 
   // ---- FAT-fixture leg (win32 Lane 0): a package folded into the sealed
@@ -245,6 +324,7 @@ async function main() {
 
   fs.rmSync(fat.dir, { recursive: true, force: true });
   fs.rmSync(tmp, { recursive: true, force: true });
+  fs.rmSync(bdir, { recursive: true, force: true });
   console.log(failures ? `\nsoftware e2e: ${failures} FAILED` : '\nsoftware e2e: PASS');
   process.exit(failures ? 1 : 0);
 }

@@ -49,8 +49,13 @@ export const osUrl = (port, hostKeys = 'off') =>
 // flag a squatted port fails immediately, naming the holder (see serve.js
 // tryListen). Ports are also REUSED across sweep files (3197 belongs to four),
 // so the flag carries a bounded same-port retry for the teardown race.
-export function startServer(port, { root = ROOT, onLog } = {}) {
-  const child = spawn('node', [path.join(ROOT, 'serve.js'), root, String(port), '--strict-port'],
+//
+// `serveArgs` appends extra serve.js flags — the seam os-minimal.mjs uses to
+// pass `--minimal` (the DEPLOY image shape: a plain bake + the /packages repo,
+// instead of serve.js's dev-convenience fat blob).
+export function startServer(port, { root = ROOT, onLog, serveArgs = [] } = {}) {
+  const child = spawn('node',
+    [path.join(ROOT, 'serve.js'), root, String(port), '--strict-port', ...serveArgs],
     { stdio: ['ignore', 'pipe', 'pipe'] });
   if (onLog) {
     child.stdout.on('data', (d) => onLog(d));
@@ -230,6 +235,8 @@ export async function openOsSession(opts = {}) {
     browserArgs,
     browserOpts,
     onServerLog,
+    // extra serve.js flags (see startServer) — e.g. ['--minimal']
+    serveArgs,
     // Host keyboard-scheme auto-detect (META-ARROW-KEYBIND.md decision 4).
     // Default 'off' PINS the seed off so the sweep is byte-identical to the
     // baked windows scheme regardless of the CI host (a Mac would otherwise
@@ -238,7 +245,7 @@ export async function openOsSession(opts = {}) {
     hostKeys = 'off',
   } = opts;
   const url = osUrl(port, hostKeys);
-  const server = startServer(port, { onLog: onServerLog });
+  const server = startServer(port, { onLog: onServerLog, serveArgs });
   const browser = await launchBrowser(browserArgs, browserOpts);
   const { check, state } = makeCheck({ stringify });
   try {
