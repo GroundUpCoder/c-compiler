@@ -143,6 +143,12 @@ try {
   // on iOS an ancestor's value does not cover a descendant, so the rule is
   // container-scoped over #wrap and this table asserts SURFACES, not samples.
   // Add an element anywhere under #wrap -> add it here.
+  // NB .oskkey is deliberately NOT here — it lives in TOUCH_NONE below. This
+  // branch originally added it to this table on the reasoning that "#osk is a
+  // SIBLING of #vtbar, outside the container-scoped subtree rule", which the
+  // osk-touchgap fix has since made false: the rule is now scoped to #wrap,
+  // #osk is inside it, and the whole OSK subtree resolves to `none`. The
+  // Copy/Paste legends still get an asserted contract, just the opposite one.
   const TOUCH_MANIP = ['.stripkey', '#vt1tab', '#vt2tab', '#oskbtn',
     '#fontminus', '#fontplus', '#zoomminus', '#zoomplus', '#desksite',
     '#uploadbtn', '#vtbar', '#wrap', '#terminal', '#desktop', '#status',

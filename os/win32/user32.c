@@ -346,7 +346,10 @@ static int g_nTops;
 static HWND g_capture;
 static HWND g_activeTop;        /* top-level that last received input */
 static int g_serial;
-static int g_mod;               /* last SDL key modifier word (SDL_KMOD_*) */
+static int g_mod;               /* SDL key modifier word (SDL_KMOD_*): live
+                                   during pump_sdl's drain, then RESTORED
+                                   per-message at q_get so queued dispatch
+                                   sees its own event's state (see QMsg) */
 static POINT g_lastPt;          /* last mouse position, top-level client */
 static int g_quitPosted, g_quitCode;
 
@@ -500,7 +503,15 @@ BOOL GetWindowRect(HWND h, RECT *r) {
 
 #define QLEN 512
 
-typedef struct { MSG m; int sym; } QMsg;   /* sym: SDL keysym for WM_CHAR */
+/* sym: SDL keysym for WM_CHAR; mod: the SDL modifier word AS OF enqueue.
+ * Both are restored at retrieval (q_get) so a message dispatched from a
+ * BATCHED pump drain sees its own event's state, not the batch-final one —
+ * Windows semantics ("the status changes as a thread reads key messages").
+ * Without the per-message mod, a starved worker draining a whole
+ * [Ctrl dn, V dn, V up, Ctrl up] chord in one wake left g_mod = 0 by the
+ * time WM_KEYDOWN V hit TranslateMessage, so Ctrl+V typed a literal 'v'
+ * instead of pasting — the load-flake the clipboard-seam OSK leg exposed. */
+typedef struct { MSG m; int sym; int mod; } QMsg;
 
 static QMsg g_q[QLEN];
 static int g_qh, g_qn;
@@ -516,6 +527,7 @@ static void q_push(HWND h, UINT msg, WPARAM wp, LPARAM lp, int sym) {
     e->m.time = (DWORD)SDL_GetTicks();
     e->m.pt = g_lastPt;
     e->sym = sym;
+    e->mod = g_mod;
     g_qn++;
 }
 
@@ -537,6 +549,7 @@ static int q_get(MSG *out, HWND hf, UINT mn, UINT mx, int remove) {
         *out = e->m;
         if (remove) {
             g_lastSym = e->sym;
+            g_mod = e->mod;                      /* per-message key state (see QMsg) */
             e->m.hwnd = NULL;                    /* tombstone; compacted above */
             e->m.message = WM_NULL;
             if (i == 0) { g_qh = (g_qh + 1) % QLEN; g_qn--; }
