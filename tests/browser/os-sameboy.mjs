@@ -183,7 +183,11 @@ try {
   check('File>Quit closed sameboy; desktop restored', true);
 
   await setVt(1);
-  await page.keyboard.type('echo SB-SHELL-OK\r');
+  // Split needle (the 0089 echo trap): the kernel tty line discipline
+  // echoes typed input into __osOut at TYPE time, so an unsplit `echo
+  // SB-SHELL-OK` needle is satisfied by its own echo — this leg passed
+  // with hush DEAD, which is the one thing it exists to rule out.
+  await page.keyboard.type("echo SB-SHELL-O''K\r");
   await page.waitForFunction(() => window.__osOut.includes('SB-SHELL-OK'), { timeout: 20000, polling: 200 });
   check('shell alive after the emulator exits', true);
 } catch (e) {

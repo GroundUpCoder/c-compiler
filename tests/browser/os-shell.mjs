@@ -326,7 +326,35 @@ try {
   await page.keyboard.type('rm -rf /etc/menu && echo MENU""-RESET\r', { delay: 40 });
   await page.waitForFunction(() => window.__osOut.includes('MENU-RESET'), { timeout: 20000, polling: 200 });
   await setVt(2);
-  check('override removed: back to the baked default', true);
+  // The revert is a MENU fact, not a filesystem one. The MENU-RESET marker is
+  // correctly split, so it genuinely proves `rm -rf /etc/menu` ran — but that
+  // is all it proves, and this leg used to claim the union had reverted purely
+  // on that. The feature's "on" direction was tested and its "off" direction
+  // asserted by fiat, so a stale-index bug in the 0259 /etc + /usr/share union
+  // would have been invisible here. Assert the inverse of the set side: re-open
+  // the menu and search `solo` — the top row must NOT highlight.
+  //
+  // An absence assertion needs a positive control, or a search box that stopped
+  // receiving keys entirely satisfies it just as well. So in the SAME open,
+  // Esc-clear the query and search the baked `winbox` leaf: that row must still
+  // highlight, which proves the box was live throughout.
+  await waitPixel(400, BARY, FACE);
+  await page.waitForTimeout(800);                // timing subject: the same coarse wm menu re-read tick the set side waits on (no marker)
+  await clickAt(25, BARY);
+  await waitPixel(120, SM_Y + 74, FACE);
+  await page.keyboard.type('solo', { delay: 60 });
+  await page.waitForTimeout(800);                // timing subject: an absence has no marker to wait on — settle, then sample
+  const soloRow = await sample(100, SM_Y + 14);
+  check('override removed: `solo` no longer hits the search', !near(soloRow, NAVY), soloRow);
+  await page.keyboard.press('Escape');           // clear the query (menu stays open)
+  await waitPixel(120, SM_Y + 74, FACE);
+  await page.keyboard.type('winbox', { delay: 60 });
+  await waitPixel(100, SM_Y + 14, NAVY);
+  check('...and the search box was live throughout (baked `winbox` still hits)', true);
+  await page.keyboard.press('Escape');           // clear the query
+  await waitPixel(120, SM_Y + 74, FACE);
+  await page.keyboard.press('Escape');           // close the menu
+  await waitPixel(120, SM_Y + 74, TEAL);
 
   // The Start-menu legs above launched several winboxes (recents, search, the
   // override); close them all so the desktop section starts from a clean
@@ -811,7 +839,11 @@ try {
   // no zombie pileup would show here, but the VT1 round-trip proves the
   // system is still driveable).
   await setVt(1);
-  await page.keyboard.type('echo SHELL-OK\r');
+  // Split needle (the 0089 echo trap): the kernel tty line discipline
+  // echoes typed input into __osOut at TYPE time, so an unsplit `echo
+  // SHELL-OK` needle is satisfied by its own echo — this leg passed
+  // with hush DEAD, which is the one thing it exists to rule out.
+  await page.keyboard.type("echo SHELL-O''K\r");
   await page.waitForFunction(() => window.__osOut.includes('SHELL-OK'), { timeout: 20000, polling: 200 });
   check('VT1 shell alive after menu driving', true);
 } catch (e) {

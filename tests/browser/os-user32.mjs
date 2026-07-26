@@ -193,7 +193,11 @@ try {
   check('Quit button exits the app; desktop restored', true);
 
   await setVt(1);
-  await page.keyboard.type('echo U32-SHELL-OK\r');
+  // Split needle (the 0089 echo trap): the kernel tty line discipline
+  // echoes typed input into __osOut at TYPE time, so an unsplit `echo
+  // U32-SHELL-OK` needle is satisfied by its own echo — this leg passed
+  // with hush DEAD, which is the one thing it exists to rule out.
+  await page.keyboard.type("echo U32-SHELL-O''K\r");
   await waitOut('U32-SHELL-OK', 20000);
   check('shell alive after ctldemo exits', true);
 } catch (e) {

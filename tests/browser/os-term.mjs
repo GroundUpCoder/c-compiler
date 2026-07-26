@@ -101,6 +101,37 @@ try {
     return { x: r.x, y: r.y };
   });
 
+  // -- VT1 shell helpers (the 0089 echo trap) --
+  // The kernel tty line discipline echoes typed input into __osOut at TYPE
+  // time (kernel.js Tty._echo -> the same callback os.html appends from), so
+  // a needle that appears literally in the typed line is satisfied BEFORE the
+  // command has run. Every marker below is therefore SPLIT (`echo FOO-O""K`,
+  // which the shell prints as FOO-OK but the echo shows with the quotes), and
+  // a marker that never arrives throws a NAMED error instead of silently
+  // burning its timeout — os-fileman.mjs's shLine is the model (todos/0171).
+  const shLine = async (cmd, mark, ms) => {
+    await page.keyboard.type(`${cmd} && echo ${mark[0]}""${mark.slice(1)}\r`, { delay: 40 });
+    try {
+      await page.waitForFunction(m => window.__osOut.includes(m), mark,
+        { timeout: ms || 30000, polling: 200 });
+    } catch { throw new Error(`shLine: ${mark} never echoed (after: ${cmd})`); }
+  };
+  // Read a `wmctl list` row for a title, DERIVING its live geometry rather
+  // than hardcoding menucore's anchor arithmetic. Output is fenced by split
+  // markers because __osOut is cumulative and never cleared.
+  const wmRow = async (needle, tag) => {
+    const [b, e] = [`${tag}-BEG`, `${tag}-END`];
+    await page.keyboard.type(
+      `echo ${b[0]}""${b.slice(1)}; wmctl list | grep -F '${needle}'; echo ${e[0]}""${e.slice(1)}\r`,
+      { delay: 40 });
+    await page.waitForFunction(m => window.__osOut.includes(m), e, { timeout: 20000, polling: 200 });
+    const out = await page.evaluate(() => window.__osOut);
+    const seg = out.slice(out.lastIndexOf(b) + b.length, out.lastIndexOf(e));
+    // SID \t PID \t WxH+X+Y \t DST \t Z \t FLAGS \t TITLE  (wmctl.c do_list)
+    const m = /(\d+)x(\d+)\+(-?\d+)\+(-?\d+)/.exec(seg);
+    return m ? { w: +m[1], h: +m[2], x: +m[3], y: +m[4] } : null;
+  };
+
   // Type INTO the terminal window: client click focuses it (kernel hit
   // test), then keys ride canvas -> ring -> SDL -> pty -> hush echo.
   await page.mouse.click(rect.x + TX + 320, rect.y + TY + 300);
@@ -161,26 +192,58 @@ try {
   // Menu bar (todos/0273c): the "menubar" strip child composites over the
   // top 30px; a bar click opens an engine dropdown — a REAL anchored child
   // titled "#32768" — and Esc (dispatched at the canvas: page.keyboard
-  // focus is unreliable on VT2) dismisses it, both verified over VT1 wmctl.
+  // focus is unreliable on VT2) dismisses it.
+  //
+  // Both legs are asserted TWICE and independently: the window must appear /
+  // disappear in `wmctl list` (a wm fact) AND the screen under the bar must
+  // flip to menu face / back to client pixels (a compositor fact). The
+  // window-side markers are split so the tty echo cannot satisfy them, and
+  // the popup's probe point is DERIVED from its live geometry rather than
+  // from menucore's anchor arithmetic. Before this, both legs waited on
+  // unsplit needles that were substrings of their own typed command lines —
+  // they were unconditionally true from the moment the line was typed, and
+  // since the browser harness has no `wmctl: wait ... timed out` guard (the
+  // kernel drive.js one is kernel-only) a 20s timeout here was silent.
+  const MENUFACE = [192, 192, 192];             // COLOR_MENU, gdi32 SYSCOLORS
   await setVt(2);
   check('menu bar strip composited (BTNFACE band over the client)',
-    near(await sample(TX + 320, TY + 15), [192, 192, 192]), await sample(TX + 320, TY + 15));
+    near(await sample(TX + 320, TY + 15), MENUFACE), await sample(TX + 320, TY + 15));
   await page.mouse.click(rect.x + TX + 20, rect.y + TY + 15);   // "Shell"
   await setVt(1);
-  await page.keyboard.type('wmctl wait win "#32768" && echo MENUOPEN-OK\r');
-  await page.waitForFunction(() => window.__osOut.includes('MENUOPEN-OK'), { timeout: 20000, polling: 200 });
-  check('bar click opened the engine dropdown (anchored child "#32768")', true);
+  await shLine('wmctl wait win "#32768" 20000', 'MENUOPEN-OK', 25000);
+  const pop = await wmRow('#32768', 'POP');
+  check('bar click opened the engine dropdown (anchored child "#32768")',
+    !!pop && pop.w > 0 && pop.h > 0, pop);
   await setVt(2);
+  // Popup-relative (8,9): row 0's gutter, the same probe os-gpubox.mjs uses
+  // for the identical menucore popup. Screen coords come from the wmctl row.
+  const [PPX, PPY] = [pop.x + 8, pop.y + 9];
+  await waitPixel(PPX, PPY, MENUFACE, 20000);
+  check('dropdown actually composited (menu face at its live geometry)', true);
   await page.evaluate(() => {
     const scr = document.getElementById('screen');
     scr.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     scr.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', bubbles: true }));
   });
   await setVt(1);
-  await page.keyboard.type('wmctl wait nowin "#32768" && echo MENUGONE-OK\r');
-  await page.waitForFunction(() => window.__osOut.includes('MENUGONE-OK'), { timeout: 20000, polling: 200 });
+  await shLine('wmctl wait nowin "#32768" 20000', 'MENUGONE-OK', 25000);
   check('Esc dismissed the dropdown', true);
   await setVt(2);
+  // Inverse probe: the spot the popup occupied is no longer menu face. This
+  // is what makes the dismissal leg discriminating — `wait nowin` alone
+  // succeeds trivially if the popup never opened, so it needs the open-side
+  // pixel above as its precondition and this one as its effect.
+  {
+    const t0 = Date.now();
+    for (;;) {
+      const got = await sample(PPX, PPY);
+      if (!near(got, MENUFACE)) break;
+      if (Date.now() - t0 > 20000)
+        throw new Error(`popup pixel (${PPX},${PPY}) still menu face after Esc; last ${got}`);
+      await new Promise(r => setTimeout(r, 250));
+    }
+  }
+  check('Esc un-composited the dropdown (client pixels back at its spot)', true);
 
   // SE drag-resize: 640x486 -> 500x260 (todos/0019 renegotiation; term
   // reflows the grid + TIOCSWINSZ). Outline preview, one configure at drop.
@@ -201,7 +264,11 @@ try {
 
   // The system shell survives.
   await setVt(1);
-  await page.keyboard.type('echo TERM-SHELL-OK\r');
+  // Split needle (the 0089 echo trap): the kernel tty line discipline
+  // echoes typed input into __osOut at TYPE time, so an unsplit `echo
+  // TERM-SHELL-OK` needle is satisfied by its own echo — this leg passed
+  // with hush DEAD, which is the one thing it exists to rule out.
+  await page.keyboard.type("echo TERM-SHELL-O''K\r");
   await page.waitForFunction(() => window.__osOut.includes('TERM-SHELL-OK'), { timeout: 20000, polling: 200 });
   check('shell alive after the terminal session', true);
 } catch (e) {

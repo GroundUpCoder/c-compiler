@@ -107,7 +107,11 @@ try {
 
   // The shell survives both windowed children.
   await setVt(1);
-  await page.keyboard.type('echo PRESENT-SHELL-OK\r');
+  // Split needle (the 0089 echo trap): the kernel tty line discipline
+  // echoes typed input into __osOut at TYPE time, so an unsplit `echo
+  // PRESENT-SHELL-OK` needle is satisfied by its own echo — this leg passed
+  // with hush DEAD, which is the one thing it exists to rule out.
+  await page.keyboard.type("echo PRESENT-SHELL-O''K\r");
   await page.waitForFunction(() => window.__osOut.includes('PRESENT-SHELL-OK'), { timeout: 20000, polling: 200 });
   check('shell alive after sent+mgp exit', true);
 } catch (e) {

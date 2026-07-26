@@ -139,8 +139,18 @@ try {
   await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
   check('reboots to ready on the persisted image', true);
   await setVt(1);   // 0070: ready lands on VT2; the checks below type on the tty
-  await page.keyboard.type('ls /root/Desktop\r');
-  await page.waitForFunction(() => window.__osOut.includes('run-winbox'), { timeout: 20000, polling: 200 });
+  // Wait for a marker that arrives AFTER the whole listing, not for one of the
+  // names being asserted on. `ls` column output is column-major, so with the
+  // 18 entries this directory now holds it lays out 6 cols x 3 ROWS and
+  // `run-winbox` lands at the end of row 1 while `blob-1.bin` is on row 3.
+  // Waiting on `run-winbox` therefore captured a TRUNCATED buffer and the leg
+  // failed ~1 run in 3 claiming a dropped file had not survived — while the
+  // very next leg md5sum'd that same file successfully. A split needle after
+  // the command (the echo shows LS-DO""NE, hush prints LS-DONE once ls has
+  // finished) makes the capture complete by construction.
+  await page.evaluate(() => { window.__osOut = ''; });
+  await page.keyboard.type('ls /root/Desktop; echo LS-DO""NE\r');
+  await page.waitForFunction(() => window.__osOut.includes('LS-DONE'), { timeout: 20000, polling: 200 });
   const ls = await page.evaluate(() => window.__osOut);
   check('dropped files survive the reload', ['blob.bin', 'blob-1.bin', 'run-winbox'].every(n => ls.includes(n)), ls);
   await page.evaluate(() => { window.__osOut = ''; });

@@ -146,7 +146,11 @@ try {
   check('Exit closes winmine; desktop restored', true);
 
   await setVt(1);
-  await page.keyboard.type('echo WINMINE-SHELL-OK\r');
+  // Split needle (the 0089 echo trap): the kernel tty line discipline
+  // echoes typed input into __osOut at TYPE time, so an unsplit `echo
+  // WINMINE-SHELL-OK` needle is satisfied by its own echo — this leg passed
+  // with hush DEAD, which is the one thing it exists to rule out.
+  await page.keyboard.type("echo WINMINE-SHELL-O''K\r");
   await waitOut('WINMINE-SHELL-OK', 20000);
   check('shell alive after winmine exits', true);
 } catch (e) {

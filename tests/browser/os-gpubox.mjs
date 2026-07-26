@@ -193,7 +193,11 @@ try {
   check('wmctl close quit gpubox; desktop restored', true);
 
   await setVt(1);
-  await page.keyboard.type('echo GPU-SHELL-OK\r');
+  // Split needle (the 0089 echo trap): the kernel tty line discipline
+  // echoes typed input into __osOut at TYPE time, so an unsplit `echo
+  // GPU-SHELL-OK` needle is satisfied by its own echo — this leg passed
+  // with hush DEAD, which is the one thing it exists to rule out.
+  await page.keyboard.type("echo GPU-SHELL-O''K\r");
   await page.waitForFunction(() => window.__osOut.includes('GPU-SHELL-OK'), { timeout: 20000, polling: 200 });
   check('shell alive after the GPU app exits', true);
 } catch (e) {

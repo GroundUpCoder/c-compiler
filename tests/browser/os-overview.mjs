@@ -74,6 +74,29 @@ try {
       await sleep(200);
     }
   };
+  // The overview is a TAKEOVER: compositor.js replaces the normal surface loop
+  // with the overview pass, so a window's OWN spot must stop showing its fill
+  // when the overview is up. Nothing used to assert that — and the two EXIT
+  // legs (Esc, Task-View) discriminate "exited" from "still up" ONLY through
+  // that precondition, so if the overview regressed to drawing miniatures
+  // WITHOUT taking over the screen, every enter leg would still pass and both
+  // exit legs would pass trivially while the feature was visibly broken.
+  //
+  // `probe` must lie inside the window but OUTSIDE its miniature, or the
+  // miniature's (identically-coloured) pixels answer the probe instead. For
+  // N=1 the miniature is the window at scale 1 CENTERED on (MCX,MCY) — wm.c
+  // never magnifies — so that containment test needs no copy of wm.c's cell
+  // arithmetic, just the window's own size. A probe that lands inside says so
+  // by name rather than failing as a mystery red.
+  const assertTakeover = async (label, probe, win, isFill) => {
+    if (Math.abs(probe.x - MCX) < win.w / 2 && Math.abs(probe.y - MCY) < win.h / 2)
+      throw new Error(`${label}: probe (${probe.x},${probe.y}) lies inside the N=1 ` +
+        `miniature centred at (${MCX},${MCY}) size ${win.w}x${win.h} — it cannot ` +
+        `distinguish the window from its own miniature; move the probe`);
+    const p = await waitSample(probe.x, probe.y, s => !isFill(s));
+    check(label, !isFill(p), p);
+  };
+
   // winbox/gpubox sid + client geometry off `wmctl list` (typed on VT1).
   const winGeom = async (title, ms = 20000) => {
     const t0 = Date.now();
@@ -109,6 +132,8 @@ try {
     await sample(GC.x, GC.y));
 
   await sh('wmctl overview && echo OV-E""NTER', 'OV-ENTER');
+  await assertTakeover('ENTER: the overview TOOK OVER (gpubox gone from its own spot)',
+    GC, gb, gpuContent);
   // For N=1 the single miniature is centred in the work area (= MCX,MCY): it
   // must show gpubox's LIVE gpu content (cube/clear) — a snapshot design would
   // render a gpu app BLACK, so non-black here is the Option-B proof.
@@ -133,7 +158,10 @@ try {
   await waitPixel(WP.x, WP.y, ORANGE, 40000);
   check('winbox composited at its spot (orange)', true);
 
+  const wbFill = p => near(p, ORANGE) || near(p, GREEN);
   await sh('wmctl overview && echo OV-E""NTER2', 'OV-ENTER2');
+  await assertTakeover('ENTER: the overview TOOK OVER (winbox gone from its own spot)',
+    WP, wb, wbFill);
   await waitSample(MCX, MCY, p => near(p, ORANGE));
   check('ENTER: winbox miniature shows its orange fill', near(await sample(MCX, MCY), ORANGE),
     await sample(MCX, MCY));
@@ -158,6 +186,8 @@ try {
   await clickAt(TVX, TVY);
   const tvIn = await waitSample(MCX, MCY, p => near(p, GREEN));   // winbox miniature
   check('Task-View button ENTERS the overview', near(tvIn, GREEN), tvIn);
+  await assertTakeover('Task-View ENTER also TOOK OVER (winbox gone from its own spot)',
+    WP, wb, wbFill);
   await clickAt(TVX, TVY);
   await waitSample(WP.x, WP.y, p => near(p, GREEN));
   check('Task-View button again EXITS the overview',

@@ -150,13 +150,47 @@ try {
 
   // ---- headline repro: open the actual deck in notepad. Lines 26+ begin
   // with a real '\t'; the app must render (no crash) and present its window.
+  //
+  // This leg used to be unconditionally true. Its needle — the window title —
+  // was a literal substring of the `wmctl wait win "..."` line typed one
+  // statement earlier, and the kernel tty line discipline echoes typed input
+  // into __osOut at TYPE time, so the wait was satisfied before `wmctl wait`
+  // had even been dispatched. A `.catch(() => {})` swallowed the timeout on
+  // top of that, and the final regex re-tested the same cumulative buffer.
+  // Nothing here proved notepad launched, opened this deck, survived rendering
+  // tab-indented lines, or ever created a window — i.e. the whole repro.
+  //
+  // Now: a SPLIT marker gated on `wmctl wait win` (the echo shows NP-DE""CK,
+  // the shell prints NP-DECK), no swallowed timeout, plus a client pixel — the
+  // multiline EDIT well goes white at the window's LIVE geometry, which is
+  // what "it rendered the tab-indented deck without crashing" actually means.
   await setVt(1);
   await page.keyboard.type('notepad /usr/share/mgp/talks/posix-on-wasm.mgp &\r');
-  await page.keyboard.type('wmctl wait win "posix-on-wasm.mgp - Notepad" 30000\r');
-  await waitOut('posix-on-wasm.mgp - Notepad', 40000).catch(() => {});
-  const nl = await page.evaluate(() => window.__osOut);
-  check('notepad opens the tab-indented deck (headline repro)',
-    /posix-on-wasm\.mgp - Notepad/.test(nl), nl.replace(/\n/g, ' ').slice(-160));
+  await page.keyboard.type(
+    'wmctl wait win "posix-on-wasm.mgp - Notepad" 30000 && echo NP-DE""CK\r');
+  let deckUp = true;
+  try { await waitOut('NP-DECK', 40000); }
+  catch { deckUp = false; }
+  check('notepad opens the tab-indented deck (headline repro)', deckUp,
+    (await page.evaluate(() => window.__osOut)).replace(/\n/g, ' ').slice(-160));
+  // Derive the window rect from `wmctl list` (never a constant) and assert the
+  // EDIT client actually painted.
+  await page.evaluate(() => { window.__osOut = ''; });
+  await page.keyboard.type('wmctl list\r');
+  await page.waitForFunction(() => /Notepad/.test(window.__osOut), { timeout: 20000, polling: 200 });
+  const npOut = await page.evaluate(() => window.__osOut);
+  const npRow = npOut.split('\n').filter(l => /posix-on-wasm\.mgp - Notepad$/.test(l.trim())).pop() || '';
+  const npGeom = /(\d+)x(\d+)\+(-?\d+)\+(-?\d+)/.exec(npRow);
+  check('notepad window has a real rect in wmctl list', !!npGeom, npRow.trim());
+  if (npGeom) {
+    const [, , , nx, ny] = npGeom.map(Number);
+    await setVt(2);
+    // Client-relative (40,60): inside the multiline EDIT well, below the menu
+    // bar (20px) and past the left margin — white when the control painted.
+    await waitPixel(nx + 40, ny + 60, [255, 255, 255], 30000);
+    check('the deck rendered into notepad\'s EDIT well (white client)', true);
+    await setVt(1);
+  }
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));
   try {
