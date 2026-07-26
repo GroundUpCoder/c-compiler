@@ -1,0 +1,22 @@
+/* sketch.css — this page's stylesheet, pulled in by
+   <link rel="stylesheet" href="sketch.css">. */
+body { font-family: sans-serif; margin: 1.5em; }
+h1 { font-size: 1.4em; }
+#c { border: 1px solid #444; }
+button { font-size: 1em; padding: 0.2em 0.8em; }
+.note { color: #555; font-size: 0.9em; margin-top: 1.2em; }
+
+/* The load check.  #nocss is in the markup and hidden HERE, so seeing it
+   means this file never arrived; #jswatch starts red and sketch.js turns it
+   green, so the pill reports both halves of "external resources work"
+   without lying about either. */
+.loadcheck { font-size: 0.9em; margin: 0.8em 0 1.2em 0; }
+#nocss { display: none; }
+#jswatch { background: #c00000; color: #ffffff; padding: 1px 6px; }
+/* id + class, not a bare .ran: #jswatch (1,0,0) out-specifies .ran (0,1,0),
+   so the plain class rule would never win. */
+#jswatch.ran { background: #008000; }
+/* These two colours are load-bearing for the in-OS gate: they are chosen
+   disjoint from every pixel the sketch demo's canvas patterns can produce,
+   so tests/kernel/test_netsurf_demos_e2e.js can just COUNT them.  Retune
+   them together with that test, never alone. */

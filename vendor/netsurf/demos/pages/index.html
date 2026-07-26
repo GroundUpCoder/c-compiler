@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<!-- Landing page for the gucOS NetSurf demo pages.  Seeded (as a copy you
+     own and may edit) at
+       ~/Desktop/Presentations/samples/Web Demos/
+     by the `netsurf-demos` package.  Every demo below lives in its own
+     folder with its own external stylesheet and external script, so each
+     folder can be copied somewhere else and still work. -->
+<html>
+<head>
+<title>Web Demos</title>
+<link rel="stylesheet" href="index.css">
+</head>
+<body>
+<h1>Web Demos</h1>
+
+<p class="loadcheck"><span id="nocss">stylesheet did not load &mdash; </span><span id="jswatch">script did not run</span></p>
+
+<p>Five pages for the browser in this OS.  Each one is a folder holding an
+<code>index.html</code>, a <code>.css</code> the page links to and a
+<code>.js</code> the page loads &mdash; nothing is inline, so opening a page
+proves the browser really fetches subresources next to it.</p>
+
+<ul id="demos">
+<li><a href="hello-js/index.html">Hello JavaScript</a> &mdash; a script runs,
+    logs to the console and writes into the page while it is still being
+    parsed.</li>
+<li><a href="counter/index.html">Counter</a> &mdash; real DOM
+    <code>click</code> listeners; the readout repaints as the handler
+    writes it.</li>
+<li><a href="sketch/index.html">Sketch</a> &mdash; a
+    <code>&lt;canvas&gt;</code> rasterised pixel by pixel in JavaScript and
+    repainted from a timer, with no input at all.</li>
+<li><a href="stopwatch/index.html">Stopwatch</a> &mdash; a
+    <code>setInterval</code> rewriting a plain <code>&lt;div&gt;</code>, and
+    laps built with <code>createElement</code>.</li>
+<li><a href="todo/index.html">Todo</a> &mdash; rows added and removed, and a
+    counter that re-renders both its text and its class.</li>
+</ul>
+
+<p class="note">These are editable copies.  Change one and reload; to get the
+shipped version of a file back, delete your copy and run
+<b>Add Default Icons</b> from the desktop's right-click menu.</p>
+
+<script src="index.js"></script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+/* todo.css — this page's stylesheet, pulled in by
+   <link rel="stylesheet" href="todo.css">. */
+body { font-family: sans-serif; margin: 1.5em; }
+h1 { font-size: 1.4em; }
+#task { font-size: 1.1em; }
+button { font-size: 1em; padding: 0.1em 0.7em; }
+#items { padding-left: 1.4em; }
+#items li { margin: 0.35em 0; }
+#count { margin-top: 0.8em; font-size: 0.95em; }
+#count.empty { color: #888; font-style: italic; }
+#count.some { color: #063; font-weight: bold; }
+.note { color: #555; font-size: 0.9em; margin-top: 1.4em; }
+
+/* The load check.  #nocss is in the markup and hidden HERE, so seeing it
+   means this file never arrived; #jswatch starts red and todo.js turns it
+   green, so the pill reports both halves of "external resources work"
+   without lying about either. */
+.loadcheck { font-size: 0.9em; margin: 0.8em 0 1.2em 0; }
+#nocss { display: none; }
+#jswatch { background: #c00000; color: #ffffff; padding: 1px 6px; }
+/* id + class, not a bare .ran: #jswatch (1,0,0) out-specifies .ran (0,1,0),
+   so the plain class rule would never win. */
+#jswatch.ran { background: #008000; }
+/* These two colours are load-bearing for the in-OS gate: they are chosen
+   disjoint from every pixel the sketch demo's canvas patterns can produce,
+   so tests/kernel/test_netsurf_demos_e2e.js can just COUNT them.  Retune
+   them together with that test, never alone. */

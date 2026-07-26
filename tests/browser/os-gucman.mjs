@@ -15,9 +15,15 @@
 // Usage: node os-gucman.mjs
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { openOsSession, ROOT } from './lib/os-harness.mjs';
 
 const PORT = 3252;
+const require = createRequire(import.meta.url);
+// The demo set + the seed destination, derived — never re-listed here.
+const NSDEMOS = require(path.join(ROOT, 'vendor/netsurf/demos/demos.js'));
+const SEED_DEST = Object.keys(require(
+  path.join(ROOT, 'packages/netsurf-demos.json')).seed)[0];
 
 // serve.js bakes/validates the FAT system image itself but does NOT run
 // mkpkg — build dist/packages here so the repo index matches the served
@@ -96,6 +102,49 @@ try {
   const out2 = await page.evaluate(() => window.__osOut);
   const rm = /RM-RC=(\d+)/.exec(out2);
   check('gucman remove exits 0', rm && rm[1] === '0', rm && rm[1]);
+
+  // ---- the `seed` content resource kind, in the BROWSER realm ----
+  // This is the one thing the kernel suite structurally cannot speak for:
+  // boot.js seeds a virgin root from the FOLDED manifest while
+  // kernel-worker.js seeds from the RAW fetched image.json, so a
+  // preinstalled seed that works headless can still be a no-op here. The
+  // design routes baked seeds through the BLOB (seedBakedSeeds over
+  // /usr/opt/<name>/control.json) precisely to be immune to that — and
+  // this leg is what proves it in a real browser fresh boot.
+  const LS = `ls "/root/${SEED_DEST}"`;
+  await page.keyboard.type(`${LS}; echo SEED-""RC=$?\r`);
+  await waitOut('SEED-RC=', 30000);
+  const seed1 = await page.evaluate(() => window.__osOut);
+  const seeded = seed1.slice(seed1.indexOf('RM-RC='));
+  check('the baked seed planted on a BROWSER virgin root', /SEED-RC=0/.test(seeded));
+  for (const name of NSDEMOS.demoNames()) {
+    check(`  seeded demo "${name}" is there`, seeded.includes(name));
+  }
+
+  // The interplay case (design §5): installing the package OVER its baked
+  // twin must skip-and-keep the already-planted files, and removing that
+  // overlay install must NOT strip the baked layer's seeds — because a
+  // skipped dest is never recorded, so remove has nothing to unlink.
+  await page.keyboard.type('gucman install netsurf-demos; echo NSI-""RC=$?\r');
+  await waitOut('NSI-RC=', 120000);
+  const ins = await page.evaluate(() => window.__osOut);
+  check('installing over the baked twin exits 0', /NSI-RC=0/.test(ins));
+  check('...and kept the files that were already planted',
+    ins.slice(ins.indexOf('SEED-RC=')).includes('kept existing'));
+
+  await page.keyboard.type('gucman remove netsurf-demos; echo NSR-""RC=$?\r');
+  await waitOut('NSR-RC=', 60000);
+  await page.keyboard.type(`${LS}; echo SEED2-""RC=$?\r`);
+  await waitOut('SEED2-RC=', 30000);
+  const after = await page.evaluate(() => window.__osOut);
+  const tail = after.slice(after.indexOf('NSI-RC='));
+  check('removing the overlay install exits 0', /NSR-RC=0/.test(tail));
+  // everything the second ls printed sits between the remove's rc and its own
+  const afterRemove = tail.slice(tail.indexOf('NSR-RC='));
+  check('...and the baked layer\'s seeds SURVIVE it', /SEED2-RC=0/.test(afterRemove));
+  for (const name of NSDEMOS.demoNames()) {
+    check(`  "${name}" still there after remove`, afterRemove.includes(name));
+  }
 } catch (e) {
   s.fail(e);
 } finally {

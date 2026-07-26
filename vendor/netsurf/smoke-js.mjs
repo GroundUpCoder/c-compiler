@@ -6,11 +6,18 @@
 // three demo pages the JS ladder's Lane A can satisfy, over the real monkey
 // protocol on stdio:
 //
-//   1. demos/hello-js.html  script executes, console.log reaches the frontend,
+//   0. contract + subresources  every shipped demo folder keeps the promises
+//                           in demos/demos.js (own folder, EXTERNAL
+//                           stylesheet, EXTERNAL script, linked from the
+//                           landing page), every demo has a leg below, and
+//                           each page's subresources really load: its
+//                           "stylesheet did not load" notice is hidden and
+//                           its "script ran" pill text is present
+//   1. hello-js/index.html  script executes, console.log reaches the frontend,
 //                           parse-time document.write lands in the layout
-//   2. demos/counter.html   a real DOM click listener fires EXACTLY ONCE per
+//   2. counter/index.html   a real DOM click listener fires EXACTLY ONCE per
 //                           click and its input.value write REPAINTS
-//   3. demos/sketch.html    canvas getImageData/putImageData + setInterval —
+//   3. sketch/index.html    canvas getImageData/putImageData + setInterval —
 //                           content-driven repaint with ZERO user input
 //   4. runaway script       the 10 s execution watchdog bounds `while(true){}`
 //                           and the browser is still alive afterwards
@@ -19,14 +26,19 @@
 //
 // …and the Lane B legs, which need the mutation→re-box→reflow→repaint bridge:
 //
-//   6. demos/stopwatch.html a setInterval writing a <div>'s textContent moves
+//   6. stopwatch/index.html a setInterval writing a <div>'s textContent moves
 //                           the visible number, and Lap inserts a real row
-//   7. demos/todo.html      removeChild unpaints a row and the counter's text
+//   7. todo/index.html      removeChild unpaints a row and the counter's text
 //                           and class both re-render
 //   8. A/B baseline         the SAME two pages, rebuilt with the bridge
 //                           compiled out (-DNETSURF_NO_LIVE_RECONVERT), must
 //                           plot NOTHING changing — a demo that passes with
 //                           and without the change proves nothing
+//
+// Every demo now lives in its own folder under demos/pages/ with its markup,
+// its stylesheet and its script in separate files — which is also what the
+// `netsurf-demos` package seeds onto the desktop.  Nothing here enumerates
+// them: demos/demos.js derives the set from the tree.
 //
 //   node vendor/netsurf/smoke-js.mjs             build + run + assert
 //   node vendor/netsurf/smoke-js.mjs --reuse     reuse build/netsurf-smoke's
@@ -53,7 +65,7 @@ const require = createRequire(import.meta.url);
 
 const OUT_DIR = path.join(ROOT, 'build', 'netsurf-smoke');
 const WASM = path.join(OUT_DIR, 'nsmonkey.wasm');
-const DEMOS = path.join(HERE, 'demos');
+const DEMOS = require(path.join(HERE, 'demos', 'demos.js'));
 
 const argv = process.argv.slice(2);
 const REUSE = argv.includes('--reuse');
@@ -281,20 +293,77 @@ function ok(cond, what, detail = '') {
   else { console.log(`  FAIL ${what}${detail ? `\n       ${detail}` : ''}`); fails.push(what); }
   return !!cond;
 }
-const demo = (n) => path.join(DEMOS, n);
+/* A demo's entry page, by folder name — the only spelling of a demo path in
+ * this file.  demos.js is the set; nothing here re-lists it. */
+const demo = (n) => path.join(DEMOS.PAGES_DIR, n, 'index.html');
 
-// ---- leg 1: hello-js.html --------------------------------------------
-async function leg1() {
-  console.log('\nleg 1 — demos/hello-js.html: script executes, console + document.write');
+/* Every demo declares, on the page, whether its two subresources arrived:
+ * the external stylesheet hides a "stylesheet did not load" notice that IS
+ * in the markup, and the external script rewrites the pill next to it.  Both
+ * are readable straight off the plot stream, so this is one assertion pair
+ * that works for every demo without a per-demo table. */
+function checkSubresources(frame, name) {
+  ok(!/STR stylesheet did not load/.test(frame),
+    `${name}: the EXTERNAL stylesheet loaded (its display:none hid the notice)`,
+    'the "stylesheet did not load" notice is still plotted');
+  ok(/PLOT TEXT X \d+ Y \d+ STR script ran$/m.test(frame),
+    `${name}: the EXTERNAL script ran (it rewrote the load-check pill)`,
+    `pill text plotted: ${JSON.stringify((frame.match(/STR script [a-z ]+$/m) || ['none'])[0])}`);
+}
+
+/* Which demos this file actually drives.  The coverage check in leg 0 is
+ * what makes adding a demo without a leg a LOUD failure instead of a
+ * silently untested page. */
+const COVERED = new Set(['hello-js', 'counter', 'sketch', 'stopwatch', 'todo']);
+
+// ---- leg 0: the shipped demo set ------------------------------------
+/* The set is derived from the tree, so this leg is what stops a demo from
+ * shipping half-wired (no stylesheet, not on the landing page) or untested
+ * (no leg below).  It also opens the landing page, which is the only page
+ * whose links are hand-written. */
+async function leg0() {
+  console.log('\nleg 0 — the shipped demo set: contract, coverage, landing page');
+  let names = [];
+  try {
+    names = DEMOS.checkContract();
+    ok(true, `every shipped demo keeps the folder/stylesheet/script contract (${names.join(', ')})`);
+  } catch (e) {
+    ok(false, 'the shipped demo tree keeps its contract', e.message);
+    names = DEMOS.demoNames();
+  }
+  const uncovered = names.filter((n) => !COVERED.has(n));
+  const stale = [...COVERED].filter((n) => !names.includes(n));
+  ok(uncovered.length === 0, 'every shipped demo has a leg in this file',
+    `no leg drives: ${uncovered.join(', ')} — add one (do not ship an undriven demo)`);
+  ok(stale.length === 0, 'no leg names a demo that is not shipped',
+    `legs claim missing demos: ${stale.join(', ')}`);
+
   const mk = new Monkey(RES_ON);
   try {
-    await mk.open(demo('hello-js.html'));
+    await mk.open(path.join(DEMOS.PAGES_DIR, 'index.html'));
+    const frame = await mk.redraw();
+    checkSubresources(frame, 'index');
+    for (const d of DEMOS.demos()) {
+      ok(new RegExp(`PLOT TEXT X \\d+ Y \\d+ STR ${d.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm').test(frame),
+        `the landing page lists "${d.title}"`);
+    }
+    ok(await mk.quit() === 0, 'clean exit');
+  } finally { mk.kill(); }
+}
+
+// ---- leg 1: hello-js ------------------------------------------------
+async function leg1() {
+  console.log('\nleg 1 — hello-js/index.html: script executes, console + document.write');
+  const mk = new Monkey(RES_ON);
+  try {
+    await mk.open(demo('hello-js'));
     const logs = mk.consoleLines();
     ok(logs.includes('hello from JavaScript'), 'console.log reached the frontend',
       `console lines: ${JSON.stringify(logs)}`);
     ok(logs.includes('engine reached the end of the script'),
       'the whole script ran (no mid-script abort)');
     const frame = await mk.redraw();
+    checkSubresources(frame, 'hello-js');
     ok(/PLOT TEXT X \d+ Y \d+ STR .*doubled: 1, 2, 4, 8/.test(frame),
       'document.write output was parsed and laid out');
     ok(/PLOT TEXT X \d+ Y \d+ STR .*sum 15/.test(frame),
@@ -305,13 +374,14 @@ async function leg1() {
 
 // ---- leg 2: counter.html --------------------------------------------
 async function leg2() {
-  console.log('\nleg 2 — demos/counter.html: click dispatch + repainting value write');
+  console.log('\nleg 2 — counter/index.html: click dispatch + repainting value write');
   const mk = new Monkey(RES_ON);
   try {
-    await mk.open(demo('counter.html'));
+    await mk.open(demo('counter'));
     ok(mk.consoleLines().includes('counter ready'), 'page script ran');
 
     let frame = await mk.redraw();
+    checkSubresources(frame, 'counter');
     ok(/PLOT TEXT X \d+ Y \d+ STR Add one$/m.test(frame), 'the buttons laid out');
 
     // One click -> exactly one increment.  This is the regression guard for the
@@ -351,10 +421,10 @@ async function leg2() {
 
 // ---- leg 3: sketch.html ---------------------------------------------
 async function leg3() {
-  console.log('\nleg 3 — demos/sketch.html: canvas ImageData + timer-driven repaint');
+  console.log('\nleg 3 — sketch/index.html: canvas ImageData + timer-driven repaint');
   const mk = new Monkey(RES_ON);
   try {
-    await mk.open(demo('sketch.html'));
+    await mk.open(demo('sketch'));
     ok(mk.consoleLines().includes('sketch ready'), 'canvas page script ran');
 
     // No input from here on: the ONLY thing that can ask for a repaint is the
@@ -365,6 +435,7 @@ async function leg3() {
     ok(true, 'setInterval + putImageData request repaints with ZERO user input');
 
     let frame = await mk.redraw();
+    checkSubresources(frame, 'sketch');
     ok(/PLOT BITMAP X \d+ Y \d+ WIDTH 128 HEIGHT 96/.test(frame),
       'the 128x96 canvas is plotted as a bitmap');
     const nframes = frame.match(/PLOT TEXT X \d+ Y \d+ STR (\d+) frames$/m);
@@ -428,7 +499,7 @@ async function leg5() {
   // only thing speaking, exactly as an admin would use it.
   const mk = new Monkey(RES_JS_OFF, { js: false });
   try {
-    await mk.open(demo('hello-js.html'));
+    await mk.open(demo('hello-js'));
     const logs = mk.consoleLines();
     ok(logs.length === 0, 'no script output at all with JS off',
       `console lines: ${JSON.stringify(logs)}`);
@@ -436,6 +507,14 @@ async function leg5() {
     ok(!/doubled: 1, 2, 4, 8/.test(frame), 'document.write output is absent with JS off');
     ok(/PLOT TEXT X \d+ Y \d+ STR Hello JavaScript$/m.test(frame),
       'the page itself still renders (JS off is not a broken page)');
+    // The two subresource kinds are independent: CSS is not scripting, so the
+    // external stylesheet must still load and hide its notice, while the pill
+    // must still read "did not run" — which is also the honest thing for a
+    // JS-off user to see.
+    ok(!/STR stylesheet did not load/.test(frame),
+      'the EXTERNAL stylesheet still loads with JS off');
+    ok(/PLOT TEXT X \d+ Y \d+ STR script did not run$/m.test(frame),
+      'the load-check pill reports, truthfully, that no script ran');
     ok(await mk.quit() === 0, 'clean exit');
   } finally { mk.kill(); }
 }
@@ -450,13 +529,14 @@ const elapsedOf = (frame) => {
 const lapsOf = (frame) => [...frame.matchAll(/^PLOT TEXT X \d+ Y \d+ STR (\d+\.\d) s$/gm)].map((m) => m[1]);
 
 async function leg6() {
-  console.log('\nleg 6 — demos/stopwatch.html: a <div> textContent tick REPAINTS (the bridge)');
+  console.log('\nleg 6 — stopwatch/index.html: a <div> textContent tick REPAINTS (the bridge)');
   const mk = new Monkey(RES_ON);
   try {
-    await mk.open(demo('stopwatch.html'));
+    await mk.open(demo('stopwatch'));
     ok(mk.consoleLines().includes('stopwatch ready'), 'page script ran');
 
     let frame = await mk.redraw();
+    checkSubresources(frame, 'stopwatch');
     const first = elapsedOf(frame);
     ok(first !== null, 'the elapsed readout laid out',
       `numeric runs: ${JSON.stringify([...frame.matchAll(/STR ([\d.]+)$/gm)].map((m) => m[1]))}`);
@@ -515,13 +595,14 @@ const countOf = (frame) => {
 };
 
 async function leg7() {
-  console.log('\nleg 7 — demos/todo.html: removeChild + a class change REPAINT');
+  console.log('\nleg 7 — todo/index.html: removeChild + a class change REPAINT');
   const mk = new Monkey(RES_ON);
   try {
-    await mk.open(demo('todo.html'));
+    await mk.open(demo('todo'));
     ok(mk.consoleLines().includes('todo ready'), 'page script ran');
 
     let frame = await mk.redraw();
+    checkSubresources(frame, 'todo');
     // The two seed rows are added while the parser is still live, so they
     // arrive through the NORMAL conversion — they are the control, not the
     // proof.  Everything after this point is post-load and is the proof.
@@ -561,7 +642,7 @@ async function leg8() {
 
   const mk = new Monkey(RES_ON, { wasm });
   try {
-    await mk.open(demo('stopwatch.html'));
+    await mk.open(demo('stopwatch'));
     ok(mk.consoleLines().includes('stopwatch ready'), 'the page script still runs with the bridge off');
 
     let frame = await mk.redraw();
@@ -584,7 +665,7 @@ async function leg8() {
 
   const mk2 = new Monkey(RES_ON, { wasm });
   try {
-    await mk2.open(demo('todo.html'));
+    await mk2.open(demo('todo'));
     let frame = await mk2.redraw();
     ok(countOf(frame) === '2 things to do', 'the load-time rows DO appear (they predate the bridge)');
 
@@ -605,15 +686,17 @@ async function leg8() {
 }
 
 // ---- run --------------------------------------------------------------
-const LEGS = [leg1, leg2, leg3, leg4, leg5, leg6, leg7, leg8];
+// Index IS the leg number (leg 0 is the shipped-set gate), so `--leg 2`
+// still means leg 2.
+const LEGS = [leg0, leg1, leg2, leg3, leg4, leg5, leg6, leg7, leg8];
 const t0 = Date.now();
 for (let i = 0; i < LEGS.length; i++) {
-  if (ONLY.length && !ONLY.includes(i + 1)) continue;
+  if (ONLY.length && !ONLY.includes(i)) continue;
   try {
     await LEGS[i]();
   } catch (e) {
-    console.log(`  FAIL leg ${i + 1} threw: ${e.message}`);
-    fails.push(`leg ${i + 1}: ${e.message.split('\n')[0]}`);
+    console.log(`  FAIL leg ${i} threw: ${e.message}`);
+    fails.push(`leg ${i}: ${e.message.split('\n')[0]}`);
   }
 }
 const secs = ((Date.now() - t0) / 1000).toFixed(1);

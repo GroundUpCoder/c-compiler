@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<!-- Demo 5 of the gucOS NetSurf JavaScript ladder (todos/NETSURF-JS.md §6).
+     Needs: Lane A (script + click) AND Lane B (the mutation -> re-box ->
+     reflow -> repaint bridge).
+
+     Where the stopwatch exercises the bridge from a timer, this one
+     exercises it from user input and covers the other two mutation
+     classes: element INSERTION (createElement + appendChild), element
+     REMOVAL (removeChild) and an ATTRIBUTE change that has to RE-SELECT
+     styles (the counter's class flips between .empty and .some, and
+     todo.css colours them differently -- which only shows up because a
+     re-box re-runs style selection from scratch).
+
+     The task text is typed into a real <input> and read back with .value:
+     the gadget syncs what you type into the DOM, so the script sees it.
+     Adding is a button rather than Enter because a keydown for Enter
+     reaches JS with event.key == null (the special-key table in html.c has
+     no NS_KEY_CR case) -- a Lane C gap, noted in the README.
+
+     Markup only: the look is in todo.css and the behaviour in todo.js,
+     both fetched as subresources of this file. -->
+<html>
+<head>
+<title>Todo</title>
+<link rel="stylesheet" href="todo.css">
+</head>
+<body>
+<h1>Todo</h1>
+
+<p class="loadcheck"><span id="nocss">stylesheet did not load &mdash; </span><span id="jswatch">script did not run</span></p>
+
+<p>
+<input id="task" type="text" size="24" value="">
+<button id="add">Add</button>
+</p>
+
+<ul id="items"></ul>
+
+<div id="count" class="empty">nothing to do</div>
+
+<script src="todo.js"></script>
+
+<p class="note">Every row is built with <code>createElement</code> and
+removed with <code>removeChild</code>; the counter above changes both its
+text and its <code>class</code>.  None of it is a form control or a canvas
+&mdash; the list is visible only because a DOM mutation re-boxes and repaints
+the page.  Each button says <q>Done <em>task</em></q> so it can be addressed
+by its own label rather than by pixel position.</p>
+</body>
+</html>

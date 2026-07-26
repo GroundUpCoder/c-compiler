@@ -1,42 +1,13 @@
-<!DOCTYPE html>
-<!-- Demo 4 of the gucOS NetSurf JavaScript ladder (todos/NETSURF-JS.md §6).
-     Needs: Lane A (script + timers + click) AND Lane B (the mutation ->
-     re-box -> reflow -> repaint bridge).
+/* stopwatch.js — loaded with <script src="stopwatch.js">. */
 
-     This is the FIRST page on the ladder that cannot be faked through a
-     channel that already repainted.  The readout is a plain <div> and the
-     only thing the script ever does to it is assign .textContent -- a
-     character-data mutation with no gadget and no canvas behind it.  With
-     the bridge disabled the number below is painted once, at load, and
-     then never changes again no matter how long the timer runs. -->
-<html>
-<head>
-<title>Stopwatch</title>
-<style>
-body { font-family: sans-serif; margin: 1.5em; }
-h1 { font-size: 1.4em; }
-#elapsed { font-size: 2.6em; font-family: monospace; margin: 0.3em 0; }
-#state { color: #555; }
-button { font-size: 1.1em; padding: 0.2em 0.9em; }
-#laps { margin-top: 1em; padding-left: 1.4em; }
-.note { color: #555; font-size: 0.9em; margin-top: 1.4em; }
-</style>
-</head>
-<body>
-<h1>Stopwatch</h1>
+/* The load-check pill: this file running at all is what it reports.  Both
+   edits happen while the parser is still live, so they arrive through the
+   normal load-time box construction rather than through the live
+   re-conversion bridge this page is otherwise about. */
+var jswatch = document.getElementById('jswatch');
+jswatch.className = 'ran';
+jswatch.textContent = 'script ran';
 
-<div id="elapsed">0.0</div>
-<div id="state">stopped</div>
-
-<p>
-<button id="go">Start</button>
-<button id="lap">Lap</button>
-<button id="zero">Reset</button>
-</p>
-
-<ol id="laps"></ol>
-
-<script>
 var readout = document.getElementById('elapsed');
 var stateBox = document.getElementById('state');
 var lapList = document.getElementById('laps');
@@ -119,13 +90,3 @@ setRunning(true);
 ticker = setInterval(tick, TICK_MS);
 
 console.log('stopwatch ready');
-</script>
-
-<p class="note">The elapsed time is a <code>&lt;div&gt;</code> whose
-<code>textContent</code> a <code>setInterval</code> rewrites ten times a
-second, and each lap is a <code>&lt;li&gt;</code> built with
-<code>createElement</code>.  Neither is a form control or a canvas: both
-only become visible because the DOM change re-boxes, re-lays-out and
-repaints the document.</p>
-</body>
-</html>

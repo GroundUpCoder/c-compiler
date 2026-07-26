@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<!-- Demo 1 of the gucOS NetSurf JavaScript ladder (todos/NETSURF-JS.md §6).
+     Needs: JS engine + console + parse-time document.write.  Nothing else.
+
+     Markup only: the look is in hello-js.css and the behaviour is in
+     hello-js.js, both fetched as subresources of this file. -->
+<html>
+<head>
+<title>Hello JavaScript</title>
+<link rel="stylesheet" href="hello-js.css">
+</head>
+<body>
+<h1>Hello JavaScript</h1>
+
+<p class="loadcheck"><span id="nocss">stylesheet did not load &mdash; </span><span id="jswatch">script did not run</span></p>
+
+<p>The paragraph below was not in the HTML.  It was computed by a script and
+written into the document while the page was still being parsed.</p>
+
+<div id="out">
+<script src="hello-js.js"></script>
+</div>
+
+<p class="note">The script that wrote it lives in <code>hello-js.js</code>
+next to this file &mdash; an external <code>&lt;script src&gt;</code>, fetched
+and executed mid-parse, which is why its output lands here rather than at the
+end of the page.  Open the console output (monkey:
+<code>WINDOW CONSOLE_LOG</code>) to see the two log lines it emits.</p>
+</body>
+</html>

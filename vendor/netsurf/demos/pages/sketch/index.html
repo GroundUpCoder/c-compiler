@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<!-- Demo 3 of the gucOS NetSurf JavaScript ladder (todos/NETSURF-JS.md §6).
+     Needs: canvas getContext("2d") + createImageData/putImageData +
+     setInterval.  putImageData is canvas's repainting channel (it marks the
+     bitmap modified and redraws the node), and the timer tick proves
+     content-driven repaint with ZERO user input.
+
+     Markup only: the look is in sketch.css and the behaviour in sketch.js,
+     both fetched as subresources of this file. -->
+<html>
+<head>
+<title>Sketch</title>
+<link rel="stylesheet" href="sketch.css">
+</head>
+<body>
+<h1>Sketch</h1>
+
+<p class="loadcheck"><span id="nocss">stylesheet did not load &mdash; </span><span id="jswatch">script did not run</span></p>
+
+<p><canvas id="c" width="128" height="96"></canvas></p>
+
+<p>
+<button id="next">Next pattern</button>
+<button id="stop">Stop / go</button>
+<input id="fps" type="text" size="10" value="0" readonly>
+</p>
+
+<script src="sketch.js"></script>
+
+<p class="note">Every pixel is written by JavaScript into an
+<code>ImageData</code> buffer and handed to <code>putImageData</code>; the
+browser repaints the canvas from the timer alone, with no input at all.</p>
+</body>
+</html>
