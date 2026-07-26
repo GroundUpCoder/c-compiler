@@ -93,7 +93,7 @@ non-black pixels). The screenshot lands at `shot-blockfs.png`.
 
 ```sh
 cd tests/browser
-pnpm install                       # Playwright (+ Chromium), one-time
+pnpm install --frozen-lockfile     # Playwright, one-time — see "Pinned deps" below
 pnpm exec playwright install chromium   # explicit browser install
 pnpm run build:quake               # compile and stage
 pnpm run test:quake                # boot in headless Chromium and assert
@@ -105,6 +105,30 @@ pnpm test
 (~150 MB) into Playwright's shared browser cache. If you'd rather use a
 system Chrome, set `PLAYWRIGHT_BROWSERS_PATH=0` before that command
 and configure Playwright to look for an existing browser.
+
+### Pinned deps — always `--frozen-lockfile`
+
+`package.json` names **exact** versions (playwright 1.61.0,
+selenium-webdriver 4.45.0) and `pnpm-lock.yaml` is **committed**. Both are
+deliberate: this tier gates the whole `os-*.mjs` sweep, and it used to be a
+caret range over a gitignored lockfile. A plain `pnpm install` in a fresh
+worktree therefore re-resolved to whatever was newest — on 2026-07-26 that was
+playwright 1.62.0, which wants a Chromium build that was not in the local
+cache, and every one of the 39 sweep files failed at launch. Thirty-nine
+spurious FAILs that read like an OS regression.
+
+Two guards now:
+
+- `pnpm install --frozen-lockfile` installs exactly the lockfile (a drifted
+  `package.json` makes the install fail instead of silently re-resolving).
+- `launchBrowser` in `lib/os-harness.mjs` compares the **resolved** playwright
+  against the pin and throws a named error before Chromium is touched, so a
+  drifted install names itself instead of masquerading as 39 product failures.
+  Bypass with `CC_NO_PLAYWRIGHT_PIN=1` when deliberately trying another version.
+
+To move the pin: bump the exact version in `package.json`, run `pnpm install`
+(unfrozen, once) to refresh the lockfile, `pnpm exec playwright install
+chromium`, and commit both files together.
 
 ## What the test asserts
 

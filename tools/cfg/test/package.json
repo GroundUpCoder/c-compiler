@@ -8,6 +8,6 @@
     "test": "node c0-cfg-smoke.mjs && node c1-cfg-smoke.mjs && node c2-cfg-smoke.mjs && node c2-ext-cfg-smoke.mjs"
   },
   "devDependencies": {
-    "playwright": "^1.60.0"
+    "playwright": "1.60.0"
   }
 }

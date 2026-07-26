@@ -70,12 +70,60 @@ export async function waitForServer(url, { tries = 50, interval = 100, fetchFn =
     `or an image rebake outran the wait (raise tries, or prebake with node tools/mkimage.js).`);
 }
 
+// The playwright this tier is PINNED to, read from tests/browser/package.json
+// (the one source of truth — no second copy of the number to drift).
+function pinnedPlaywright() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+    return (pkg.devDependencies || {}).playwright || null;
+  } catch { return null; }
+}
+
+// Resolve the playwright that Node actually loaded for THIS module. Walking up
+// from __dirname is what node's resolver does, so this reports the same copy
+// `import('playwright')` gets — including the case where tests/browser has no
+// node_modules and the import falls up to a repo-root or ambient install.
+function resolvedPlaywright() {
+  for (let dir = __dirname; ; dir = path.dirname(dir)) {
+    const p = path.join(dir, 'node_modules', 'playwright', 'package.json');
+    try { return { version: JSON.parse(fs.readFileSync(p, 'utf8')).version, path: p }; }
+    catch {}
+    if (path.dirname(dir) === dir) return null;
+  }
+}
+
 // The one WebGPU-flagged Chromium the whole sweep launches. Playwright is
 // pulled in here, lazily, so the module loads without it. `opts` merges into
 // chromium.launch (tools/os-drive.mjs passes { headless: false }).
+//
+// Before launching, assert the resolved playwright IS the pinned one (todos/
+// 0171 loud-symptom rule). This tier's deps used to be a caret range with a
+// gitignored lockfile, so a fresh worktree re-resolved to a NEWER playwright
+// whose Chromium build was not in the local cache — every one of the 39 sweep
+// files then failed at launch, which reads as "the OS is broken" rather than
+// "your install drifted". Observed 2026-07-26: 1.62.0 in a worktree vs the
+// 1.61.0 every other tree had, 39/39 spurious FAILs. Naming the cause here
+// costs one file read; diagnosing it downstream cost a whole sweep. Set
+// CC_NO_PLAYWRIGHT_PIN=1 to bypass when deliberately testing another version.
 export async function launchBrowser(args = ['--enable-unsafe-webgpu', '--enable-features=Vulkan'], opts = {}) {
+  checkPlaywrightPin();
   const { chromium } = await import('playwright');
   return chromium.launch({ args, ...opts });
+}
+
+export function checkPlaywrightPin() {
+  if (typeof process !== 'undefined' && process.env && process.env.CC_NO_PLAYWRIGHT_PIN) return;
+  const want = pinnedPlaywright();
+  if (!want || /[\^~*x><|| ]/.test(want)) return;   // not an exact pin — nothing to enforce
+  const got = resolvedPlaywright();
+  if (!got) return;                                  // no playwright at all: the import below says so
+  if (got.version === want) return;
+  throw new Error(
+    `playwright ${got.version} resolved, but tests/browser/package.json pins ${want} ` +
+    `(${got.path}). A drifted playwright wants a Chromium build that is probably not in the ` +
+    `local cache and will fail EVERY sweep file at launch — that is an install problem, not a ` +
+    `product problem. Fix: cd tests/browser && pnpm install --frozen-lockfile. ` +
+    `(Override with CC_NO_PLAYWRIGHT_PIN=1.)`);
 }
 
 // The `check`/`failures` scoreboard. `stringify` controls the FAIL tail: the

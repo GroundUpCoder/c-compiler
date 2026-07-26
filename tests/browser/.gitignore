@@ -7,7 +7,12 @@ www/doom-old.html
 www/doom-extract.html
 www/sdl-input-spike.html
 package-lock.json
-pnpm-lock.yaml
+# pnpm-lock.yaml is COMMITTED on purpose — this tier is a GATE. It used to be
+# ignored, which meant a fresh worktree re-resolved `^1.59.1` and could pull a
+# playwright whose Chromium build is not in the local cache: that turned the
+# whole 39-file sweep into spurious FAILs (observed 2026-07-26, 1.62.0 vs the
+# 1.61.0 every other tree had). Specifiers in package.json are EXACT and this
+# lockfile is the reproducibility contract — install with --frozen-lockfile.
 last-screenshot.png
 shot-*.png
 fail-*.png

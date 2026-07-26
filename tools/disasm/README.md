@@ -215,9 +215,14 @@ Browser tests use [Playwright](https://playwright.dev/) to drive the built
 
 ```sh
 cd tools/disasm
-pnpm install
+pnpm install --frozen-lockfile   # exact pins + committed pnpm-lock.yaml
 pnpm exec playwright install chromium
 ```
+
+Versions are exact and the lockfile is committed for the same reason as
+`tests/browser` — a re-resolved playwright pulls a Chromium build that is not
+in the local cache, and the failure surfaces as broken tests rather than as a
+broken install.
 
 ### Running tests
 

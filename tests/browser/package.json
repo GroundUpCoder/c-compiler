@@ -20,8 +20,9 @@
     "debug:doom-safari": "caffeinate -u -t 2; caffeinate -du node doom-debug.mjs"
   },
   "packageManager": "pnpm@10.33.0",
+  "comment": "EXACT versions on purpose (no caret): this tier is a GATE, and a drifting playwright pulls a Chromium build that is not in the local cache — which reads as 39 spurious sweep FAILs, not as an install problem. pnpm-lock.yaml is committed alongside; install with `pnpm install --frozen-lockfile`.",
   "devDependencies": {
-    "playwright": "^1.59.1",
-    "selenium-webdriver": "^4.45.0"
+    "playwright": "1.61.0",
+    "selenium-webdriver": "4.45.0"
   }
 }
