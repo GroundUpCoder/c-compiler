@@ -1385,18 +1385,32 @@ LIBC_TEST_SKIP = {
     # No SysV IPC / sockets
     "ipc_msg": "no SysV IPC", "ipc_sem": "no SysV IPC", "ipc_shm": "no SysV IPC",
     "socket": "no sockets", "inet_pton": "no networking",
-    # Library features not implemented (TODO candidates)
-    "fnmatch": "TODO: fnmatch()",
-    "search_hsearch": "TODO: search.h", "search_insque": "TODO: search.h",
-    "search_lsearch": "TODO: search.h", "search_tsearch": "TODO: search.h",
-    "random": "TODO: random()/srandom()/initstate()",
-    "strptime": "TODO: strptime()",
-    "setjmp": "TODO: sigsetjmp/siglongjmp aliases",
-    "fdopen": "TODO: mkstemp()",
-    "memstream": "TODO: open_memstream()",
-    "wcstol": "TODO: wcstol() family",
-    "fwscanf": "TODO: wide scanf",
-    "strftime": "TODO: width modifiers on %F, ISO %g/%G, %s (epoch)",
+    # Library features not implemented. Every entry here MUST cite the todos
+    # item that funds it (todos/0298) — a bare "TODO" is a hole the suite
+    # reports green over, which is how fnmatch/fdopen/utime sat skipped for
+    # months after they started passing.
+    "search_hsearch": "not implemented: search.h (todos/0305)",
+    "search_insque": "not implemented: search.h (todos/0305)",
+    "search_lsearch": "not implemented: search.h (todos/0305)",
+    "search_tsearch": "not implemented: search.h (todos/0305)",
+    "random": "not implemented: random()/srandom()/initstate()/setstate() (todos/0306)",
+    "strptime": "not implemented: strptime() (todos/0307)",
+    # Not a libc gap: the test writes the bare-assignment form `r = setjmp(jb);`
+    # (vendor/libc-test/src/functional/setjmp.c:23), which compiler.js rejects
+    # by design — it is UB per C11 7.13.1.1. sigsetjmp/siglongjmp DO exist
+    # (compiler.js:24116). See todos/CONFORMANCE-REMAINING.md:92-94.
+    "setjmp": "compiler.js rejects the C11-UB bare-assignment setjmp form "
+              "(todos/CONFORMANCE-REMAINING.md:92-94)",
+    "memstream": "not implemented: open_memstream()/fmemopen() (todos/0308)",
+    "wcstol": "not implemented: wcstol() family (todos/0309)",
+    "fwscanf": "not implemented: wide scanf (todos/0309)",
+    # %s and width/'+' parsing DO exist; absent are %F %g %G %r %T %V, width
+    # modifiers are honoured only by %C, and %y is wrong for negative years
+    # (todos/0307). %s additionally diverges from musl's expectation by the
+    # local UTC offset (todos/0310).
+    "strftime": "missing %F %g %G %r %T %V, width modifiers only on %C, "
+                "%y wrong for negative years (todos/0307); %s TZ divergence "
+                "(todos/0310)",
     "sscanf_long": "needs setrlimit",
     # Locale machinery
     "clocale_mbfuncs": "no langinfo/locale beyond C",
@@ -1404,7 +1418,6 @@ LIBC_TEST_SKIP = {
     "swprintf": "no langinfo/locale beyond C",
     "iconv_open": "no iconv",
     "mntent": "no /etc/mtab",
-    "utime": "TODO: utimensat()",
     "crypt": "no crypt()",
     "tgmath": "complex numbers not supported (__STDC_NO_COMPLEX__)",
 }
