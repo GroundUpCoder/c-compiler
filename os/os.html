@@ -1,9 +1,14 @@
 <!DOCTYPE html>
 <!-- os.html — the reference OS page (todos/0004; design: todos/OS.md
-     "Reference build"). Deliberately a dumb UI bridge: xterm renders bytes,
-     keystrokes go to the kernel worker, and EVERYTHING with logic lives in
-     kernel.js / host.js / os-common.js so it stays testable under Node
-     (os/boot.js is the same OS with the tty on stdio).
+     "Reference build"). A UI bridge: xterm renders bytes, keystrokes go to
+     the kernel worker, and every OS-side concern — fs, processes, wm policy,
+     compositing — lives in kernel.js / host.js / os-common.js so it stays
+     testable under Node (os/boot.js is the same OS with the tty on stdio).
+     What this page DOES own is the browser surface the headless twin has no
+     equivalent for: the touch gesture state machine, the zoom/CSS pointer
+     seam, the host-clipboard bridge, VT + OSK state. That is real logic and
+     it is NOT Node-testable — tests/browser/os-*.mjs is its only gate. Keep
+     it thin, and keep it covered there.
 
      VTs (todos/0022, Linux-console semantics): the xterm tty is VT1, the
      desktop VT2 — the page shows exactly one at a time, switched with the
@@ -79,13 +84,21 @@
                  desktop above it, and a subtree whose interior disagrees with
                  its container is the exact bug class this rule exists to end.
 
-     SPECIFICITY IS LOAD-BEARING. `#wrap *` is (1,0,1) and BEATS a bare
-     `#screen`/`#osk` (1,0,0) or `.oskkey` (0,1,0), which would hand those
-     gesture-owning surfaces back to the browser — so the narrowings are
-     raised to `#wrap #screen` (2,0,0) / `#wrap #osk *` (2,0,1). Keep them
-     here and keep them OUT of the #screen/#osk property blocks below: raising
-     THOSE selectors instead would out-specify
-     `body[data-osk] #osk { display: block }` and the OSK would never open. */
+     SPECIFICITY IS LOAD-BEARING — but count it correctly: the universal
+     selector contributes NOTHING, so `#wrap *` is (1,0,0), NOT (1,0,1).
+     Against `.oskkey` (0,1,0) that is an outright win, which is why the OSK
+     keys need no local guard. Against a bare `#screen`/`#osk` (1,0,0) it is
+     a TIE, broken by SOURCE ORDER — a bare `#screen { touch-action: none }`
+     down in its own property block does win today, but only because that
+     block sits after this one; it would flip to `manipulation` the day
+     someone reorders the stylesheet. So the narrowings live HERE and are
+     raised to `#wrap #screen` / `#wrap #osk *` — both (2,0,0), winning on
+     specificity alone, unorderable into a bug.
+     Keep them here and OUT of the #screen/#osk property blocks below for a
+     second, independent reason: raising THOSE selectors instead makes
+     `#wrap #osk` (2,0,0) out-specify `body[data-osk] #osk { display: block }`
+     (1,1,1) and the OSK would never open. Both halves of this paragraph were
+     re-checked against Chromium's computed styles, not inferred. */
   html, body { height: 100%; margin: 0; background: #0d0d1a; touch-action: manipulation; }
   #wrap, #wrap * { touch-action: manipulation; }
   #wrap #screen, #wrap #osk, #wrap #osk * { touch-action: none; }
@@ -138,8 +151,8 @@
   /* Upload (mobile file ingest): a visible file-picker button for touch
      UIs, where host drag-drop doesn't exist (iOS). Desktop keeps the
      drag-onto-the-pane path and hides this. (Its double-tap-zoom guard
-     comes from the #vtbar subtree rule above — it no longer carries a
-     local copy.) */
+     comes from the `#wrap *` subtree rule at the top of this stylesheet —
+     there is no #vtbar-scoped rule; it no longer carries a local copy.) */
   #uploadbtn { display: none; }
   body[data-touchui] #uploadbtn { display: inline-block; }
   /* VT1 font-size steps (todos/0212): right-aligned in the tab bar, only
@@ -154,8 +167,13 @@
     position: relative; top: 1px;
   }
   .fontbtn:hover { color: #c0c0d8; }
-  /* VT2 desktop zoom (integer downscale): only meaningful while the desktop
-     is visible, and touch-gated (a non-touch desktop keeps Z=1). */
+  /* VT2 desktop zoom (integer UPSCALE at Z>=1, fractional high-density
+     DOWNSCALE at Z<1 — VT2_ZOOMS in the script below): the ± strip is only
+     meaningful while the desktop is visible, so it is VT2- and touch-gated.
+     That gate is on the CONTROL only — the zoom FACTOR is settable on any
+     device by the Control Panel Display applet (applyDisplayConfig) or by a
+     localStorage choice persisted while the viewport was narrow, so a
+     non-touch desktop is NOT guaranteed Z=1. */
   #zoomctl { display: none; gap: 2px; }
   body[data-vt="2"][data-touchui] #zoomctl { display: flex; }
   /* "Desktop site" toggle (#69 D6): the standard mobile-browser affordance —
@@ -179,7 +197,8 @@
     background: #16162a; border: 1px solid #333355; border-radius: 5px;
     padding: 7px 0; width: 44px; text-align: center; cursor: pointer;
     user-select: none; -webkit-user-select: none;
-    /* (double-tap-zoom guard: the #keystrip subtree rule at the top) */
+    /* (double-tap-zoom guard: the `#wrap *` subtree rule at the top — there
+       is no #keystrip-scoped rule) */
   }
   .stripkey:hover { color: #e0e0f0; border-color: #4a4a77; }
   .stripkey.armed { background: #4a4a77; color: #ffffff; }
@@ -191,13 +210,15 @@
      The OSK owns its touches — keys AND the gaps between them — via the
      `#wrap #osk, #wrap #osk *` narrowing in the touch-gesture block at the
      top of this stylesheet. Deliberately NOT declared here: a bare `#osk`
-     (1,0,0) loses to `#wrap *` (1,0,1), and raising this selector instead
-     would out-specify the display rules below. */
+     (1,0,0) only TIES `#wrap *` (1,0,0) and would depend on source order,
+     and raising this selector instead would out-specify the display rules
+     below (both re-derived in the specificity note up there). */
   #osk { display: none;
          user-select: none; -webkit-user-select: none;
          /* Safe-area insets (viewport-fit=cover): the bottom row clears the
             home indicator, the side keys clear a landscape notch; on
-            inset-less displays the max() floors keep a slim 2px gutter. */
+            inset-less displays the max() floors keep a slim gutter — 2px at
+            the sides, 6px at the bottom. */
          padding-top: 2px;
          padding-left:   max(2px, env(safe-area-inset-left));
          padding-right:  max(2px, env(safe-area-inset-right));
@@ -279,7 +300,8 @@
   /* The touch layer below owns every touch gesture on the desktop canvas —
      no browser scroll/double-tap-zoom (todos/0212). Declared as
      `#wrap #screen` in the touch-gesture block at the top, not here: a bare
-     `#screen` (1,0,0) loses to `#wrap *` (1,0,1). */
+     `#screen` (1,0,0) only TIES `#wrap *` (1,0,0), so it would win by this
+     block's position alone. See the specificity note there. */
   #screen { outline: none; display: block;
             image-rendering: pixelated; }
   #terminal { flex: 1; min-height: 0; padding: 4px; }
@@ -352,19 +374,24 @@ if (typeof SharedArrayBuffer === 'undefined') {
   throw new Error('no SAB');
 }
 
-// The phone-shaped-viewport predicate: the auto-default signal shared by the
-// VT1 font bump (todos/0212) and the VT2 zoom default (#69 D6). Deliberately
-// NARROWER than touchUiSync's touch-or-narrow predicate — a touch-capable
-// wide viewport (a tablet, a touchscreen laptop) gets the mobile CONTROLS
-// but keeps desktop-density defaults; only a viewport that is actually
-// phone-sized gets bigger-by-default. Explicit choices always override.
+// The phone-shaped-viewport predicate: the auto-default signal behind the
+// VT1 font bump (todos/0212) and the OSK's open-by-default — those two call
+// sites and no others. It no longer drives any VT2 zoom default: #69 D6 was
+// revised to boot EVERY viewport at 1× (see vt2Zoom below).
+// It is a DIFFERENT predicate from touchUiSync's touch-or-narrow test, not a
+// subset of it. Intended: a touch-capable WIDE viewport (a tablet, a
+// touchscreen laptop) gets the mobile CONTROLS but keeps desktop-density
+// defaults. Also true, and less intended: a short-but-wide non-touch window
+// (900×600 — min() ≤ 700, innerWidth > 768) trips THIS predicate while
+// data-touchui stays off. Explicit choices override either way.
 function mobileViewport() {
   return Math.min(window.innerWidth, window.innerHeight) <= 700;
 }
 
 // VT1 font-size steps (todos/0212): an explicit choice persists in
 // localStorage; with nothing stored, a narrow (phone-shaped) viewport
-// defaults one step larger than the desktop's 14.
+// defaults to 26px against the desktop's 14 — THREE steps up VT1_FONTS, not
+// one (0212 shipped a one-step 18px mobile default; #69 D6 raised it).
 var VT1_FONTS = [12, 14, 18, 22, 26, 30, 34];
 var vt1FontIdx = (function () {
   var saved = 0;
@@ -512,9 +539,11 @@ function stripKey(label, onTap) {
 //     writeText deliberately BYPASSES clipToHost's clipSynced dedupe — the
 //     retry case is exactly text the bridge already agrees on.
 //   Paste: read the host clipboard (on iOS this raises the paste callout),
-//     import it into the kernel slot (the clipFromHost contract, minus its
-//     dedupe early-out), and feed it to the tty through xterm's own paste
-//     path (term.paste — bracketed-paste aware, \n -> \r, then onData ->
+//     import it into the kernel slot (the clipFromHost contract — the same
+//     `!== clipSynced` dedupe guards the kernel post here; what differs is
+//     that the PASTE happens either way), and feed it to the tty through
+//     xterm's own paste path (term.paste — bracketed-paste aware via
+//     decPrivateModes.bracketedPasteMode, \n -> \r, then onData ->
 //     vt1Input like any typed byte). VT1 tty paste stays page-side byte
 //     injection BY DESIGN — the tty is a byte stream, not a CLIP_GET
 //     consumer, so the kernel's clipboard seam is not in this path.
