@@ -643,14 +643,26 @@ def run_zlib_tests(results, filter_str=None):
 LUA_SKIP = {"files.lua", "heavy.lua", "verybig.lua", "big.lua", "memerr.lua", "cstack.lua", "main.lua"}
 
 
-def build_project(project_json_path, timeout=60):
+# Per-project build budget. This is a HANG catcher, not a performance budget:
+# the biggest projects legitimately take minutes to compile (netsurf measured
+# ~62s at 4bc04fc4 and ~77s once Lane B landed, against the old 60s value —
+# i.e. the suite had started failing on build DURATION alone). Keep it far
+# above the slowest honest build so only a genuine hang trips it.
+def build_project(project_json_path, timeout=300):
     """Build a project from its JSON file. Returns (wasm_path, error_string)."""
     with open(project_json_path) as f:
         proj = json.load(f)
     os.makedirs(BUILD_DIR, exist_ok=True)
     output = os.path.join(BUILD_DIR, f"{proj['name']}-js.wasm")
     cmd = [*COMPILER_CMD, "-o", output, project_json_path]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=ROOT_DIR)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                           cwd=ROOT_DIR)
+    except subprocess.TimeoutExpired:
+        # Report as an ordinary build failure. Letting TimeoutExpired escape
+        # aborted the whole projects run with a traceback, so one slow project
+        # hid the result of every project after it.
+        return None, f"build timed out after {timeout}s"
     if r.returncode != 0:
         return None, r.stderr
     return output, ""
