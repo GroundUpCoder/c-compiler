@@ -16,8 +16,9 @@
 // picks up from it).
 const path = require('path');
 const os = require('os');
-const { runSuite, parseSuiteArgs, usage, matchesFilter } = require('../lib/suite-runner.js');
+const { runSuite, parseSuiteArgs, usage, matchesFilter, memoryCappedJobs } = require('../lib/suite-runner.js');
 const { ensurePrebakedImage } = require('../lib/image-fixture.js');
+const { acquireHeavyLock } = require('../lib/heavy-lock.js');
 
 // Rows tagged IMG spawn os/boot.js and materialize their per-test image by
 // copying the prebaked os/os-system.img fixture (todos/0082) — the runner
@@ -146,14 +147,31 @@ const tests = [
 ];
 
 const defaults = {
-  // Boot-heavy files are compile-dominated; 4 concurrent full-OS boots keep
-  // this 10-core box responsive without starving the in-OS `sleep N` waits
-  // (the timing-flake class). Bump with -j if the machine is idle.
-  jobs: Math.max(1, Math.min(4, os.cpus().length - 2)),
+  // Boot-heavy files are compile-dominated; a few concurrent full-OS boots keep
+  // this box responsive without starving the in-OS `sleep N` waits (the
+  // timing-flake class). The CPU-based number is then RAM-capped: each job is
+  // ~4 GB resident (a boot + its nested os/boot.js node), so cpu count alone
+  // over-commits memory — 4 jobs ≈ 16.7 GB crashed a 16 GB box on 2026-07-25.
+  // Bump with -j if the machine is idle (still RAM-clamped; CC_NO_MEM_CAP=1 to
+  // override entirely).
+  jobs: memoryCappedJobs(Math.max(1, Math.min(4, os.cpus().length - 2)), 4),
   timeoutMs: 600000,
 };
 const opts = parseSuiteArgs(process.argv.slice(2), defaults);
 if (opts.help) { process.stdout.write(usage('tests/kernel/run.js', defaults)); process.exit(0); }
+
+// Crash safety: clamp EVEN an explicit -j to what RAM allows — an over-eager
+// -j8 on a 16 GB box is exactly the OOM that killed the GUI (2026-07-25).
+const safeJobs = memoryCappedJobs(opts.jobs, 4);
+if (safeJobs < opts.jobs) {
+  process.stderr.write(`[mem-cap] -j${opts.jobs} exceeds this host's safe RAM budget; clamping to -j${safeJobs} (CC_NO_MEM_CAP=1 to override)\n`);
+  opts.jobs = safeJobs;
+}
+
+// Heavy-suite mutual exclusion: refuse to start if another heavy runner (a
+// second kernel run, or a browser sweep) already owns the host — their overlap
+// is what exhausted RAM and crashed the machine. Skipped for --list (no boots).
+if (!opts.list) acquireHeavyLock({ name: 'kernel suite' });
 
 const entries = tests.map(([file, ...rest]) => Object.assign({ file }, ...rest.filter(x => typeof x === 'object')));
 

@@ -72,6 +72,22 @@ function parseSuiteArgs(argv, defaults) {
   return opts;
 }
 
+// Cap a requested worker count so the pool can't exhaust RAM. For the heavy
+// suites a job's real cost is MEMORY, not CPU: each kernel file boots a full
+// OS and spawns a nested os/boot.js node, ~PER_JOB_GB resident. Sizing `jobs`
+// off cpu count alone is what let 4 jobs ≈ 16.7 GB take down a 16 GB machine
+// (2026-07-25 OOM → WindowServer watchdog kill; see tests/lib/heavy-lock.js).
+// We keep the caller's number but clamp it to floor(usableRAM / perJobGb),
+// usableRAM = totalmem × memFraction (headroom for the OS, the GUI, and the
+// parent runner). Never below 1. Bypass with CC_NO_MEM_CAP=1 on a big/isolated
+// host where the caller's count is deliberate.
+function memoryCappedJobs(requested, perJobGb = 4, memFraction = 0.6) {
+  if (process.env.CC_NO_MEM_CAP === '1') return Math.max(1, requested);
+  const usableGb = (os.totalmem() / 2 ** 30) * memFraction;
+  const ramCap = Math.max(1, Math.floor(usableGb / perJobGb));
+  return Math.max(1, Math.min(requested, ramCap));
+}
+
 function usage(name, defaults) {
   return `Usage: node ${name} [-j N] [--filter=SUBSTR] [--timeout=MS] [--fail-fast] [--resume] [--list] [--repeat N] [--under-load[=N]]
 
@@ -335,4 +351,4 @@ async function runSuite(entries, opts) {
   return { passed, failed, resumed: resumed.length, bailed, flake };
 }
 
-module.exports = { runSuite, parseSuiteArgs, usage, matchesFilter };
+module.exports = { runSuite, parseSuiteArgs, usage, matchesFilter, memoryCappedJobs };

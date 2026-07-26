@@ -96,6 +96,31 @@ invocable; this just knows how to invoke them uniformly and, the point,
   (the suite-runner-backed suites), plus `--repeat N`/`--under-load[=N]`
   (kernel/blockfs/sweep — the flake gate, below).
 
+### Heavy-suite RAM policy — never run two at once (`tests/lib/heavy-lock.js`)
+
+The **kernel suite** (concurrent full-OS boots, each a nested `os/boot.js`
+node at ~4 GB) and the **browser sweep** (a real Chromium per file) are the
+RAM-heavy suites. Two of them at once — two lanes, a stray re-run, a
+coordinator kicking one while another holds one — stack their process trees
+and exhaust memory. On **2026-07-25** that OOM'd a 16 GB box into a jetsam
+death spiral → launchservicesd lock convoy → WindowServer watchdog kill (the
+GUI died; uptime intact — not a reboot). Two guards now enforce the policy,
+both invisible on a normal single run:
+
+- **Host lock (across processes):** kernel + sweep take an exclusive
+  `os.tmpdir()/cc-heavy-tests.lock` at startup and **fail fast (exit 3)** if
+  another heavy runner owns it — they are mutually exclusive, kernel ⟷ sweep
+  included. Self-heals from a stale lock left by a killed holder. Bypass on a
+  genuinely isolated host (own container/VM) with `CC_NO_HEAVY_LOCK=1`.
+- **Memory-aware `jobs` (within the kernel pool):** the kernel `-j` (default
+  AND explicit) is clamped to `floor(totalmem×0.6 / 4 GB)` so the pool can't
+  over-commit RAM — e.g. `-j2` on a 16 GB box regardless of core count.
+  `CC_NO_MEM_CAP=1` overrides.
+
+Net: **run heavy suites one at a time.** `tests/run.js all` already does
+(suites run sequentially); the guards catch the case where separate
+invocations overlap.
+
 ### Flake / under-load gate (`tests/flake.js`, todos/0147)
 
 Run this **after landing any new e2e/browser test** (and as a periodic

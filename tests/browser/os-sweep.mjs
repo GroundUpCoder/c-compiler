@@ -22,6 +22,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runSuite, parseSuiteArgs, usage } from '../lib/suite-runner.js';
 import { ensurePrebakedImage } from '../lib/image-fixture.js';
+import { acquireHeavyLock } from '../lib/heavy-lock.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -34,6 +35,12 @@ const defaults = { jobs: 1, timeoutMs: 600000 };
 const opts = parseSuiteArgs(process.argv.slice(2), defaults);
 if (opts.help) { process.stdout.write(usage('tests/browser/os-sweep.mjs', defaults)); process.exit(0); }
 if (opts.jobs !== 1) { process.stderr.write('os-sweep is serial by design (0045 boot lock + contention); ignoring -j\n'); opts.jobs = 1; }
+
+// Heavy-suite mutual exclusion: this sweep drives a real Chromium per file;
+// refuse to start if another heavy runner (the kernel suite, or a second
+// sweep) already owns the host — their overlap is what crashed the machine on
+// 2026-07-25. Taken before the bake so two sweeps can't both bake either.
+if (!opts.list) acquireHeavyLock({ name: 'browser os sweep' });
 
 // 0082 pre-step: a missing/version-stale/INPUT-stale prebaked
 // os/os-system.img re-bakes once, visibly, before Chromium ever launches.
