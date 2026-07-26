@@ -93,6 +93,19 @@ netsurf core:
 - `utils/nsoption.h` + `utils/nsoption.c` — an `nsgucos` branch in the
   per-frontend options include chain (the same 3 sites every upstream
   frontend hooks), pulling `gucos/options.h`.
+- `frontends/monkey/filetype.c` — **upstream gap**: `js` is missing from
+  the pre-seeded essentials mime table, and the fallback is `text/plain`,
+  which `javascript_content` does not register
+  (`content/handlers/javascript/content.c:115`). So an external
+  `<script src="x.js">` off a `file://` page *fetched fine*, arrived as
+  `CONTENT_TEXTPLAIN`, and `html/script.c`'s `select_script_handler`
+  (`:49`) returned NULL — the bytes were silently discarded and the
+  script never ran. Two lines seed `js`/`mjs` as `text/javascript`. Both
+  frontends here share this resolver (`gucos/fetch.c:55`), so the fix is
+  frontend-wide, and it holds with or without a `mime.types` file.
+  Upstreamable. Regression guard: `smoke-js.mjs` leg 0 plus the
+  per-demo subresource checks in legs 1-3/5-7, and
+  `tests/kernel/test_netsurf_demos_e2e.js` in-window.
 
 netsurf core — **the Lane B live re-conversion bridge** (JS DOM mutation →
 re-box → reflow → repaint; design in `todos/NETSURF-JS.md`, rationale in

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<!-- Demo 2 of the gucOS NetSurf JavaScript ladder (todos/NETSURF-JS.md §6).
+     Needs: click dispatch to JS + a mutation channel that actually REPAINTS.
+     Form-control value is such a channel (html/dom_event.c syncs the gadget
+     and redraws its box), which is why the readout here is an <input> and
+     not a <span> — it was written before the mutation->reflow bridge landed
+     and is kept that way as the narrower proof.
+
+     Markup only: the look is in counter.css and the behaviour in
+     counter.js, both fetched as subresources of this file. -->
+<html>
+<head>
+<title>Counter</title>
+<link rel="stylesheet" href="counter.css">
+</head>
+<body>
+<h1>Counter</h1>
+
+<p class="loadcheck"><span id="nocss">stylesheet did not load &mdash; </span><span id="jswatch">script did not run</span></p>
+
+<p>
+<input id="n" type="text" size="8" value="0" readonly>
+<button id="inc">Add one</button>
+<button id="dec">Take one</button>
+<button id="zero">Reset</button>
+</p>
+
+<script src="counter.js"></script>
+
+<p class="note">Each button is a real DOM <code>click</code> listener, living
+in <code>counter.js</code> next to this file.  The number is redrawn by the
+browser as soon as the handler assigns to <code>input.value</code> &mdash; no
+reload, no user redraw.</p>
+</body>
+</html>

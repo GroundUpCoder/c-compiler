@@ -27,7 +27,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const { driveBoot, freshImage, section } = require('./lib/drive.js');
+const { driveBoot, freshImage, section, bakedSeedPlants } = require('./lib/drive.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -45,7 +45,16 @@ const u = JSON.parse(
 const DEF_FILES = Object.keys(u.files)
   .filter((p) => p.startsWith('/root/Desktop/'));
 const DEF_DIRS = (u.dirs || []).filter((p) => p.startsWith('/root/Desktop/'));
-const TOTAL = DEF_FILES.length + DEF_DIRS.length;
+// Phase 3 (the BAKED seed reconcile) walks every folded package's declared
+// seeds too, and on a fresh boot they are all already planted — so each of
+// their nodes lands in the same `kept` counter. Derived, per package, from
+// the definition + the payload tree (drive.js): a new seed-carrying package
+// must move these counts on its own, not break this test.
+const BAKED_SEED_NODES = bakedSeedPlants().reduce((n, p) => n + p.dests.reduce(
+  (m, base) => m
+    + p.files.filter((f) => f === base || f.startsWith(base + '/')).length
+    + p.dirs.filter((d) => d === base || d.startsWith(base + '/')).length, 0), 0);
+const TOTAL = DEF_FILES.length + DEF_DIRS.length + BAKED_SEED_NODES;
 // The three deleted defaults the tool must restore — each a different
 // entry kind (link / content script / nested bin data). If a future
 // manifest edit renames one, fail loud here rather than mysteriously.

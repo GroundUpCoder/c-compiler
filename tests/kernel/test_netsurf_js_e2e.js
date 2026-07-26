@@ -7,7 +7,7 @@
 //   - `enable_javascript` is ON BY DEFAULT.  No flag, no Choices file: a
 //     plain `netsurf page.html` runs the page's scripts.
 //   - the frontend's scheduler + invalidate -> damage -> blit path really
-//     repaints content-driven changes with NO user input: sketch.html's
+//     repaints content-driven changes with NO user input: pages/sketch/'s
 //     setInterval rasterises into a canvas via putImageData and the window
 //     keeps changing on its own.
 //   - a real SDL pointer click reaches a DOM click listener and its
@@ -33,6 +33,8 @@ const path = require('path');
 const { driveBoot, freshImage } = require('./lib/drive.js');
 
 const ROOT = path.resolve(__dirname, '../..');
+/* the demo's own load-check pill, as pixel predicates (see demos.js) */
+const { PILL } = require(path.join(ROOT, 'vendor/netsurf/demos/demos.js'));
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -80,8 +82,16 @@ document.getElementById('hit').addEventListener('click', function () {
     rfs.write(fd, bytes, bytes.length);
     rfs.close(fd);
   };
-  put('/root/sketch.html',
-      fs.readFileSync(path.join(ROOT, 'vendor', 'netsurf', 'demos', 'sketch.html')));
+  /* A demo is a FOLDER (markup + its own stylesheet + its own script), so
+   * plant the whole thing: planting only the .html would quietly drop both
+   * subresources and test a differently-shaped page. */
+  {
+    const NSDEMOS = require(path.join(ROOT, 'vendor', 'netsurf', 'demos', 'demos.js'));
+    rfs.mkdir('/root/sketch', 0o755);
+    for (const f of NSDEMOS.demoFiles('sketch')) {
+      put('/root/sketch/' + f.rel, fs.readFileSync(f.abs));
+    }
+  }
   put('/root/jsclick.html', Buffer.from(CLICK_PAGE, 'utf-8'));
   rootStore.flush();
   rootStore.close();
@@ -151,7 +161,7 @@ const sidOf = (v, title) => `${v}=$(wmctl list | grep "\t${title}$" | sed "s/[^0
 const out = driveBoot([
   /* --- JS on by default: no flag, no Choices --- */
   '[ -e /root/.netsurf/Choices ] && echo UNEXPECTED-CHOICES',
-  'netsurf /root/sketch.html &',
+  'netsurf /root/sketch/index.html &',
   'wmctl wait win Sketch 30000',
   sidOf('SK', 'Sketch'),
   'wmctl shot $SK /root/j1.ppm && echo shot-j1-ok',
@@ -176,7 +186,7 @@ const out = driveBoot([
   'mkdir -p /root/.netsurf',
   'echo enable_javascript:0 > /root/.netsurf/Choices',
   'cat /root/.netsurf/Choices',
-  'netsurf /root/sketch.html &',
+  'netsurf /root/sketch/index.html &',
   'wmctl wait win Sketch 30000',
   sidOf('OF', 'Sketch'),
   ...pollStable('$OF', '/root/o1.ppm'),
@@ -202,7 +212,7 @@ const shots = parsePPMs(back.stdout, NAMES);
 /* --- JS on by default + canvas painted --- */
 const j1c = countContent(shots.j1, isColour);
 const j2c = countContent(shots.j2, isColour);
-check('JS runs by DEFAULT: sketch.html painted its canvas', j1c > 4000,
+check('JS runs by DEFAULT: the sketch demo painted its canvas', j1c > 4000,
       `coloured pixels in the first frame: ${j1c} (canvas is 128x96 = 12288)`);
 /* the animation advanced on its own — no input was sent between j1 and j2 */
 const moved = contentDiffers(shots.j1, shots.j2);
@@ -217,10 +227,28 @@ check('nothing green before the click', k1g < 200, `green pixels: ${k1g}`);
 check('a real pointer click reached the DOM listener and repainted the canvas',
       k2g > 15000, `green pixels after the click: ${k2g} (canvas is 200x100 = 20000)`);
 
-/* --- the off-switch --- */
-const o1c = countContent(shots.o1, isColour);
+/* --- the off-switch ---
+ * The demo now REPORTS its own state: its external stylesheet still loads
+ * with scripts off (CSS is not scripting), and paints the load-check pill
+ * RED; only the script can turn it green.  That is a direct proof, so use
+ * it — and note that it also puts ~2000 strongly-coloured pixels on the
+ * page, which is why the canvas check below excludes them by shape rather
+ * than by a bigger threshold.  Red and its antialiasing always have
+ * g == b (red is the only non-zero channel blending toward white); the
+ * canvas patterns essentially never do. */
+const pillGreen = (s) => countContent(s, (p) => PILL.isGreen(p[0], p[1], p[2]));
+const pillRed = (s) => countContent(s, (p) => PILL.isRed(p[0], p[1], p[2]));
+check('with JS ON the demo\'s pill is green (its external script ran)',
+      pillGreen(shots.j1) > 300 && pillRed(shots.j1) === 0,
+      `green=${pillGreen(shots.j1)} red=${pillRed(shots.j1)}`);
+check('Choices enable_javascript:0: the page itself reports that no script ran',
+      pillGreen(shots.o1) === 0 && pillRed(shots.o1) > 300,
+      `green=${pillGreen(shots.o1)} red=${pillRed(shots.o1)}`);
+const isCanvasColour = (p) => isColour(p) && p[1] !== p[2];
+const o1c = countContent(shots.o1, isCanvasColour);
 check('Choices enable_javascript:0 keeps the scripts from running',
-      o1c < 200, `coloured pixels with JS off: ${o1c} (was ${j1c} with JS on)`);
+      o1c < 200, `canvas-shaped coloured pixels with JS off: ${o1c} ` +
+      `(was ${countContent(shots.j1, isCanvasColour)} with JS on)`);
 
 /* ---- done ---- */
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (e) { /* leave it */ }

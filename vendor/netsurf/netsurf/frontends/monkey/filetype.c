@@ -67,6 +67,17 @@ void monkey_fetch_filetype_init(const char *mimefile)
 	hash_add(mime_hash, "css", "text/css");
 	hash_add(mime_hash, "htm", "text/html");
 	hash_add(mime_hash, "html", "text/html");
+	/* "js" is absent from upstream's essentials list, and the fallback at
+	 * the bottom of this file is "text/plain" -- which is not one of the
+	 * types javascript_content registers (content/handlers/javascript/
+	 * content.c: application/javascript, text/javascript, ...).  So an
+	 * external <script src="x.js"> off a file:// page fetched fine, came
+	 * back as CONTENT_TEXTPLAIN, and html/script.c's select_script_handler
+	 * returned NULL: the bytes were silently discarded and the script never
+	 * ran.  Seeding it here fixes every frontend that shares this resolver
+	 * (monkey and gucos), with or without a mime.types file. */
+	hash_add(mime_hash, "js", "text/javascript");
+	hash_add(mime_hash, "mjs", "text/javascript");
 	hash_add(mime_hash, "jpg", "image/jpeg");
 	hash_add(mime_hash, "jpeg", "image/jpeg");
 	hash_add(mime_hash, "bmp", "image/bmp");

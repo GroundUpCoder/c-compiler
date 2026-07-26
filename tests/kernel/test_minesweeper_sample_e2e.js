@@ -23,7 +23,8 @@
 // Run: node tests/kernel/test_minesweeper_sample_e2e.js
 'use strict';
 const path = require('path');
-const { driveBoot, freshImage, deskEntries, deskCell } = require('./lib/drive.js');
+const { driveBoot, freshImage, deskEntries, deskCell,
+        userDirEntries } = require('./lib/drive.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -44,12 +45,25 @@ const P = deskCell(LIST, 'Presentations');
 
 const SAMPLES = '/root/Desktop/Presentations/samples';
 const SH = 'minesweeper-programming-rainbow.sh';
-// fileman rows are strcmp-sorted dirs-first: Presentations lists
-// "MagicPoint Tutorial"(0) "POSIX on WebAssembly"(1) "gucOS"(2) "samples"(3);
-// samples lists only the .sh (row 0). Selection is driven by KEYBOARD
-// (click row 0 to focus the listbox, then HOME + DOWNs — the fileman_nav
-// "row-height-agnostic" pattern; a computed row-center click is a latent
-// off-by-one against the font-derived pitch).
+// fileman rows are strcmp-sorted dirs-first, and BOTH folders this test
+// walks are DERIVED (drive.js userDirEntries: image.json's user section +
+// every baked package's seeds) rather than counted by hand. That matters:
+// the netsurf-demos package seeds a folder INTO samples/, which moved the
+// .sh off row 0 — a hardcoded DOWN-count would have failed as a mystery
+// timeout instead of following the manifest. Selection is driven by
+// KEYBOARD (click row 0 to focus the listbox, then HOME + DOWNs — the
+// fileman_nav "row-height-agnostic" pattern; a computed row-center click is
+// a latent off-by-one against the font-derived pitch).
+const PRES_ROWS = userDirEntries('/root/Desktop/Presentations').map((e) => e.name);
+const SAMPLE_ROWS = userDirEntries(SAMPLES).map((e) => e.name);
+const rowOf = (rows, name, where) => {
+  const i = rows.indexOf(name);
+  if (i < 0) throw new Error(`${where} no longer holds "${name}" — the ` +
+    `manifest/package set changed; rows are ${JSON.stringify(rows)}`);
+  return i;
+};
+const SAMPLES_ROW = rowOf(PRES_ROWS, 'samples', 'Presentations/');
+const SH_ROW = rowOf(SAMPLE_ROWS, SH, 'samples/');
 const CLICK_TOP = 'wmctl click $SID 100 40';   // inside the listbox, row 0
 const HOME = 'wmctl key $SID 74 1073741898';
 const DOWN = 'wmctl key $SID 81 1073741905';
@@ -71,7 +85,7 @@ const r = driveBoot([
   'wmctl wait win "File Manager - /root/Desktop/Pr" 15000',
   'SID=$(wmctl list | grep "File Manager" | sed "s/[^0-9].*//")',
   'wmctl wait text LISTBOX:0 samples 8000',
-  CLICK_TOP, HOME, DOWN, DOWN, DOWN,
+  CLICK_TOP, HOME, ...Array(SAMPLES_ROW).fill(DOWN),
   'wmctl wait text LISTBOX:0 "> samples" 8000',
   ENTER,
   // Focus stays on the listbox across the navigate — HOME alone selects
@@ -79,7 +93,7 @@ const r = driveBoot([
   // double-click window when wmctl runs back-to-back and open the row
   // EARLY as LBN_DBLCLK — the ENTER then opens it again: two terms.)
   `wmctl wait text LISTBOX:0 "${SH}" 8000`,
-  HOME,
+  HOME, ...Array(SH_ROW).fill(DOWN),
   `wmctl wait text LISTBOX:0 "> ${SH}" 8000`,
   ENTER,
 
@@ -102,8 +116,9 @@ const r = driveBoot([
 
 const out = r.stdout || '';
 const seed = section(out, 'seed');
-check('exactly one sample file, seeded 0755',
-  (seed.match(/-rwxr-xr-x/g) || []).length === 1 && seed.includes(SH), seed);
+check('the sample is seeded 0755, and samples/ holds exactly the derived set',
+  (seed.match(/-rwxr-xr-x/g) || []).length === 1 && seed.includes(SH) &&
+  SAMPLE_ROWS.every((n) => seed.includes(n)), seed + '\nrows: ' + JSON.stringify(SAMPLE_ROWS));
 check('the script carries the $TERM re-exec guard',
   /^1$/m.test(seed), seed);
 check('it is a #!/bin/sh script', seed.includes('#!/bin/sh'), seed);

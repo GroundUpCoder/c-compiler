@@ -6,7 +6,7 @@
 // proves the three things only the real gucOS frontend can speak for:
 //
 //   - a timer-driven `textContent` write reaches REAL PIXELS.  demos/
-//     stopwatch.html is loaded unmodified and nothing is typed or clicked:
+//     pages/stopwatch/ is loaded unmodified and nothing is typed or clicked:
 //     the only thing that can change the screen is the page's own
 //     setInterval, and the change has to survive re-box -> reflow ->
 //     invalidate -> damage -> blit to be visible at all.
@@ -154,9 +154,17 @@ driveBoot('true', { image });
     rfs.write(fd, bytes, bytes.length);
     rfs.close(fd);
   };
-  /* the REAL demo page, byte for byte — this leg is the demo working */
-  put('/root/stopwatch.html',
-      fs.readFileSync(path.join(ROOT, 'vendor', 'netsurf', 'demos', 'stopwatch.html')));
+  /* the REAL demo, byte for byte — this leg is the demo working.  A demo is
+   * a FOLDER (markup + its own stylesheet + its own script), so plant the
+   * whole thing: planting only the .html would quietly drop both
+   * subresources and test a differently-shaped page. */
+  {
+    const NSDEMOS = require(path.join(ROOT, 'vendor', 'netsurf', 'demos', 'demos.js'));
+    rfs.mkdir('/root/stopwatch', 0o755);
+    for (const f of NSDEMOS.demoFiles('stopwatch')) {
+      put('/root/stopwatch/' + f.rel, fs.readFileSync(f.abs));
+    }
+  }
   put('/root/ruler.html', Buffer.from(rulerPage(), 'utf-8'));
   put('/root/toggle.html', Buffer.from(TOGGLE_PAGE, 'utf-8'));
   put('/root/static.html', Buffer.from(typingPage(false), 'utf-8'));
@@ -264,7 +272,7 @@ const SCROLL_NOTCHES = 7;   /* 7 * SCROLL_STEP = 700px down the ruler */
 
 const out = driveBoot([
   /* --- leg 1: the real stopwatch demo, no input at all --- */
-  'netsurf /root/stopwatch.html &',
+  'netsurf /root/stopwatch/index.html &',
   'wmctl wait win Stopwatch 30000',
   sidOf('SW', 'Stopwatch'),
   'wmctl shot $SW /root/m1.ppm && echo shot-m1-ok',

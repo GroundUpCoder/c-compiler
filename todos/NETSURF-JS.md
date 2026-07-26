@@ -403,9 +403,30 @@ reviewable):
 Gate: demos 6–7.
 
 **Lane E — gucOS demos + seeding + tests (S-M, scaffold parallel with A).**
-Demo pages (the ladder above) under `vendor/netsurf/demos/` seeded to
-`/usr/share/netsurf-demos/` + Demos menu entries (sent/mgp precedent);
-`image.json` version bump; the three test tiers of §7; dev log.
+**DONE** — but NOT as sketched here.  The seeding route changed: the pages
+are not baked into `/usr/share/netsurf-demos/` with Demos menu entries;
+they ship as `packages/netsurf-demos.json`, a preinstalled package using
+the gucman `seed` CONTENT resource kind (design:
+`gucman-content-resource-design.md` §7 stage 5), which plants them as
+**editable copies the user owns** at
+`~/Desktop/Presentations/samples/Web Demos/`.  A read-only baked copy
+would have been the wrong artifact for demo content — the point is that
+you can change one.  No menu entry and no `desktop:{cmd}`: there is
+nothing executable to point at, and `.html` already opens through the
+`html` openwith association.
+
+The pages were also restructured — one folder per demo, with a real
+external stylesheet and external script each (`vendor/netsurf/demos/`
+README).  That closed a genuine hole: with everything inline, nothing in
+the tree exercised subresource loading, and `<script src=>` turned out to
+be silently discarded (`js` missing from the frontend mime table; fixed in
+`patches/netsurf.diff`).
+
+Gates: `smoke-js.mjs` leg 0 (the demo-set contract + coverage) and the
+per-demo subresource checks, plus
+`tests/kernel/test_netsurf_demos_e2e.js` — a fresh fat boot carries every
+declared file byte-for-byte and every seeded demo really runs in a real
+window, with negative controls.
 
 Sequencing: **A → {B ∥ C ∥ D} → E-final** (E scaffold + demos 1–3 land with
 A).  A is small and unblocks everything; B is the schedule-critical path for

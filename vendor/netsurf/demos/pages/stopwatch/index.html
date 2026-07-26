@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<!-- Demo 4 of the gucOS NetSurf JavaScript ladder (todos/NETSURF-JS.md §6).
+     Needs: Lane A (script + timers + click) AND Lane B (the mutation ->
+     re-box -> reflow -> repaint bridge).
+
+     This is the FIRST page on the ladder that cannot be faked through a
+     channel that already repainted.  The readout is a plain <div> and the
+     only thing the script ever does to it is assign .textContent -- a
+     character-data mutation with no gadget and no canvas behind it.  With
+     the bridge disabled the number below is painted once, at load, and then
+     never changes again no matter how long the timer runs.
+
+     Markup only: the look is in stopwatch.css and the behaviour in
+     stopwatch.js, both fetched as subresources of this file. -->
+<html>
+<head>
+<title>Stopwatch</title>
+<link rel="stylesheet" href="stopwatch.css">
+</head>
+<body>
+<h1>Stopwatch</h1>
+
+<p class="loadcheck"><span id="nocss">stylesheet did not load &mdash; </span><span id="jswatch">script did not run</span></p>
+
+<div id="elapsed">0.0</div>
+<div id="state">stopped</div>
+
+<p>
+<button id="go">Start</button>
+<button id="lap">Lap</button>
+<button id="zero">Reset</button>
+</p>
+
+<ol id="laps"></ol>
+
+<script src="stopwatch.js"></script>
+
+<p class="note">The elapsed time is a <code>&lt;div&gt;</code> whose
+<code>textContent</code> a <code>setInterval</code> rewrites ten times a
+second, and each lap is a <code>&lt;li&gt;</code> built with
+<code>createElement</code>.  Neither is a form control or a canvas: both only
+become visible because the DOM change re-boxes, re-lays-out and repaints the
+document.</p>
+</body>
+</html>

@@ -232,6 +232,97 @@ function menuLeaves(group) {
   return menuSort(m);
 }
 
+// ---- the seed-carrying package model (the gucman `seed` content resource
+// kind; the 0166 "derive it, never hardcode it" rule applied to planted
+// content) ----
+// A package's `seed` section maps "<dest under /root>" -> "<payload-relative
+// src>", and its `files` section says what the payload holds. pkgSeedPlants()
+// composes the two into the exact /root paths a FAT image (or a `gucman
+// install`) must carry — using os-common's OWN tree enumeration, so a test
+// can never disagree with the bake about which files ship. Adding a file to
+// a seeded tree therefore lands in the assertions automatically; nothing here
+// lists a demo, a page or a count.
+//   -> { files: ['/root/Desktop/.../index.html', ...],   sorted
+//        dirs:  ['/root/Desktop/.../counter', ...] }      sorted, no dupes
+function pkgSeedPlants(name) {
+  const OS_COMMON = require(path.join(ROOT, 'os/os-common.js'));
+  const pkg = JSON.parse(fs.readFileSync(
+    path.join(ROOT, 'packages', name + '.json'), 'utf8'));
+  const label = `package '${name}'`;
+
+  // payload-relative path -> exists. `tree` expands; every other file kind
+  // (bin/content/project/...) is one payload path named by its key.
+  const payload = new Set();
+  for (const [key, entry] of Object.entries(pkg.files || {})) {
+    if (entry && entry.tree !== undefined) {
+      for (const rel of OS_COMMON.listTreeFiles(fs, path, ROOT, entry, label)) {
+        payload.add(key + '/' + rel);
+      }
+    } else {
+      payload.add(key);
+    }
+  }
+
+  const files = new Set(), dirs = new Set(), dests = [];
+  for (const [dest, src] of Object.entries(pkg.seed || {})) {
+    const base = '/root/' + dest;
+    dests.push(base);
+    for (const p of payload) {
+      let rel = null;
+      if (p === src) rel = '';
+      else if (p.startsWith(src + '/')) rel = p.slice(src.length + 1);
+      if (rel === null) continue;
+      const abs = rel ? base + '/' + rel : base;
+      files.add(abs);
+      for (let i = abs.lastIndexOf('/'); i > '/root'.length; i = abs.lastIndexOf('/', i - 1)) {
+        dirs.add(abs.slice(0, i));
+      }
+    }
+  }
+  return { files: [...files].sort(), dirs: [...dirs].sort(), dests: dests.sort() };
+}
+
+// Every package the FAT image folds (the non-gated set — os-common's
+// listPackages is the single source), paired with what it seeds.
+function bakedSeedPlants() {
+  const OS_COMMON = require(path.join(ROOT, 'os/os-common.js'));
+  return OS_COMMON.listPackages(fs, path, ROOT)
+    .map((name) => ({ name, ...pkgSeedPlants(name) }))
+    .filter((p) => p.dests.length > 0);
+}
+
+// The direct children of a /root directory on a FRESH boot, as the file
+// manager sorts them (directories first, then byte-order strcmp) — the
+// generalisation of deskEntries() to any user directory, and the model a
+// test must navigate by. Two sources, both derived: image.json's `user`
+// section and every baked package's seed plants. A new seed that lands in
+// a folder a test walks therefore MOVES that test's rows automatically
+// instead of silently breaking its DOWN-count.
+//   -> [{ name, dir }] sorted; names(absDir) for just the labels
+function userDirEntries(absDir) {
+  const base = absDir.replace(/\/+$/, '');
+  const u = JSON.parse(
+    fs.readFileSync(path.join(ROOT, 'os/image.json'), 'utf8')).user;
+  const ents = new Map();
+  const child = (p, dir) => {
+    if (!p.startsWith(base + '/')) return;
+    const n = p.slice(base.length + 1);
+    if (!n || n.includes('/') || n.charAt(0) === '.') return;
+    ents.set(n, (ents.get(n) || false) || dir);
+  };
+  for (const p of Object.keys(u.files || {})) child(p, false);
+  for (const p of u.dirs || []) child(p, true);
+  for (const p of bakedSeedPlants()) {
+    for (const f of p.files) child(f, false);
+    for (const d of p.dirs) child(d, true);
+  }
+  return [...ents.entries()]
+    .map(([name, dir]) => ({ name, dir }))
+    .sort((a, b) => (a.dir !== b.dir ? (a.dir ? -1 : 1)
+                                     : (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)));
+}
+
 module.exports = { ROOT, BOOT, freshImage, driveBoot, section,
                    deskEntries, deskSort, deskCell,
-                   menuGroups, menuLeaves };
+                   menuGroups, menuLeaves,
+                   pkgSeedPlants, bakedSeedPlants, userDirEntries };
