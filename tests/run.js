@@ -116,6 +116,9 @@ const RULES = [
   // purity + clangApp guardrails (host) also read them (CLANG-CPP-EPIC II §7).
   [/^packages\//, ['kernel', 'sweep', 'host'], 'package definitions restale the fat fixture + the mkpkg pool + the base-purity guardrail'],
   [/^tools\/mkpkg\.js$/, ['kernel', 'host'], 'builds the gucman package pool test_gucman_e2e installs from; host holds the mkpkg --clang guardrail'],
+  // The offline baker: every kernel e2e image and every browser boot comes
+  // out of it (directly, or through the prebaked fixture).
+  [/^tools\/mkimage\.js$/, ['kernel', 'sweep'], 'bakes the system blob every e2e image and browser boot is built from'],
 
   // Shared test engine → every suite-runner-backed suite. `host` is in the list
   // because tests/host/test_harness_leaks.js pins the startup reaper's

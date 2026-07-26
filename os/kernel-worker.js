@@ -479,6 +479,14 @@ async function boot() {
     post({ type: 'boot-log', msg: 'seeding user volume (manifest v' + manifest.version + ')…' });
     OS_COMMON.initRootVolume(kfs);
     await OS_COMMON.seedEntries(kfs, manifest.user, seedIo);
+    // Baked packages' `seed` content (gucman content-resource design §3.5):
+    // planted from the SEALED BLOB — deliberately NOT from `manifest`, which
+    // here is the RAW fetched image.json (no fold ever runs in the browser),
+    // so a manifest-side design would silently no-op exactly here.
+    var nseed = OS_COMMON.seedBakedSeeds(kfs, function (m) {
+      post({ type: 'boot-log', msg: m });
+    });
+    if (nseed) post({ type: 'boot-log', msg: 'seeded ' + nseed + ' file(s) from baked packages' });
     // Host keyboard-scheme auto-detect (META-ARROW-KEYBIND.md decision 4):
     // a Mac host defaults to the macos scheme (admin layer; user config wins).
     if (OS_COMMON.seedHostKeyScheme(kfs, HOST_PLATFORM))

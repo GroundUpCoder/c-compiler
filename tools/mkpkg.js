@@ -15,7 +15,10 @@
 //     menu:  [ { group, entry, cmd } ],     // /etc/menu/<group>/<entry>
 //     fonts: [ "<rel>" ],                   // /etc/fonts/fallback face lines
 //     srclib: { include: ["<dir>"],         // source-lib §3.1: header +
-//               src: { "<ns>": "<dir>" } }} //   require-source install tiers
+//               src: { "<ns>": "<dir>" } }, //   require-source install tiers
+//     seed:  { "<dest under /root>": "<rel>" } }  // the CONTENT resource
+//                                           //   kind: copied into user
+//                                           //   territory, never a symlink
 //
 // The package tree is assembled by the EXACT bake pipeline — os-common's
 // seedEntries/buildProject/createCcDriver over an in-memory BlockFS — so a
@@ -36,6 +39,8 @@
 //   node tools/mkpkg.js                # build every packages/<name>.json
 //   node tools/mkpkg.js punes          # build specific packages
 //   node tools/mkpkg.js --out=DIR --force --quiet
+//   node tools/mkpkg.js --packages-dir=DIR   # read definitions from DIR
+//                                            # instead of <repo>/packages
 //
 // A package whose pool payload is newer than all its inputs (compiler.js,
 // this tool, its definition, its files' project/bin/asset closure) is
@@ -69,9 +74,15 @@ let force = false;
 // LOUD hard failure (exit 1 with the fix command), never a silent skip.
 let withClang = false;
 let clangRoot = path.resolve(ROOT, '..', 'clang-simplified');
+// Where package DEFINITIONS are read from. The repo's packages/ dir is both
+// a bake input and a shared mkpkg input, so a test that needs a throwaway
+// definition points this at a tmpdir instead of writing into it (the same
+// seam foldPackages/boot.js/mkimage.js expose as --packages-dir).
+let pkgDir = path.join(ROOT, 'packages');
 const requested = [];
 for (const a of process.argv.slice(2)) {
   if (a.startsWith('--out=')) outDir = path.resolve(a.slice(6));
+  else if (a.startsWith('--packages-dir=')) pkgDir = path.resolve(a.slice(15));
   else if (a === '--quiet') quiet = true;
   else if (a === '--force') force = true;
   else if (a === '--clang') withClang = true;
@@ -121,7 +132,7 @@ if (withClang) {
   }
 }
 
-const avail = COMMON.listPackages(fs, path, ROOT, { withClang });
+const avail = COMMON.listPackages(fs, path, ROOT, { withClang, packagesDir: pkgDir });
 const names = requested.length ? requested : avail;
 for (const n of names) {
   if (!avail.includes(n)) {
@@ -179,7 +190,7 @@ function newestPkgInput(name, pkg) {
   };
   statFile(path.join(ROOT, 'compiler.js'));
   statFile(path.join(ROOT, 'tools', 'mkpkg.js'));
-  statFile(path.join(ROOT, 'packages', name + '.json'));
+  statFile(path.join(pkgDir, name + '.json'));
   for (const rel of Object.keys(pkg.files || {})) {
     const entry = pkg.files[rel];
     if (entry.project !== undefined) addProject(entry.project);
@@ -379,13 +390,14 @@ async function assembleTree(name, pkg) {
 
 /* ---- build / reuse one package; returns its index entry ---- */
 async function buildPackage(name, poolDir) {
-  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'packages', name + '.json'), 'utf-8'));
+  const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, name + '.json'), 'utf-8'));
   if (pkg.name !== name) throw new Error(`packages/${name}.json declares name ${JSON.stringify(pkg.name)}`);
   if (!/^[a-z0-9][a-z0-9_-]*$/.test(pkg.name)) throw new Error(`package '${name}': bad name`);
   if (typeof pkg.version !== 'string' || !/^[A-Za-z0-9._-]+$/.test(pkg.version)) {
     throw new Error(`package '${name}': bad version ${JSON.stringify(pkg.version)}`);
   }
   if (!pkg.files || !Object.keys(pkg.files).length) throw new Error(`package '${name}': no files`);
+  COMMON.checkReservedPackageFiles(pkg, `package '${name}'`);
   const bin = pkg.bin || {};
   for (const cmd of Object.keys(bin)) {
     if (!pkg.files[bin[cmd]]) throw new Error(`package '${name}': bin ${cmd} -> ${bin[cmd]} names no package file`);
@@ -415,11 +427,14 @@ async function buildPackage(name, poolDir) {
   for (const fp of pkg.fonts || []) {
     if (typeof fp !== 'string' || !pkg.files[fp]) throw new Error(`package '${name}': fonts ${fp} names no package file`);
   }
-  // srclib (source-lib design §3.1): shape-validate early; the mapped dirs
-  // are checked against the ASSEMBLED payload after the build, and the
-  // section rides into control.json for gucman's install plant.
+  // srclib (source-lib design §3.1) and seed (the content resource kind,
+  // `seed` design §1.3): shape-validate early; their payload references are
+  // checked against the ASSEMBLED payload after the build, and both sections
+  // ride into control.json for gucman's install plant.
   const srclib = pkg.srclib !== undefined
     ? COMMON.validateSrclibShape(pkg.srclib, `package '${name}'`) : null;
+  const seed = pkg.seed !== undefined
+    ? COMMON.validateSeedShape(pkg.seed, `package '${name}'`) : null;
   // The §4.4 require-block drift gate (Lane B2): the win32 payload ships
   // windows.h/menucore.h/gdi32.c whose hand-written __require_source
   // blocks must equal the lib.json truth — refuse to build a package that
@@ -460,16 +475,6 @@ async function buildPackage(name, poolDir) {
 
   log(`${name} ${pkg.version}: building…`);
   const t0 = Date.now();
-  const control = {
-    name: pkg.name,
-    version: pkg.version,
-    summary: pkg.summary || '',
-    bin,
-    openwith: pkg.openwith || {},
-    menu: pkg.menu || [],
-    fonts: pkg.fonts || [],
-  };
-  if (pkg.desktop !== undefined) control.desktop = pkg.desktop;  // §5: absent = ineligible
   const payload = await assembleTree(name, pkg);
   if (srclib) {
     const dirSet = new Set(payload.filter((m) => m.dir).map((m) => m.name));
@@ -478,10 +483,22 @@ async function buildPackage(name, poolDir) {
         throw new Error(`package '${name}': srclib dir ${d} is not in the assembled payload`);
       }
     }
-    control.srclib = { include: srclib.include, src: srclib.src };
   }
+  if (seed) {
+    const nameSet = new Set(payload.map((m) => m.name));
+    for (const dest of Object.keys(seed)) {
+      if (!nameSet.has(`opt/${name}/${seed[dest]}`)) {
+        throw new Error(`package '${name}': seed ${dest} -> ${seed[dest]} names no file or directory in the assembled payload`);
+      }
+    }
+  }
+  // The ONE control.json producer (os-common packageControl) — the same
+  // bytes foldPackages bakes at /usr/opt/<name>/control.json, so installed
+  // and built-in packages present an identical manifest.
   const members = [
-    { name: 'control.json', data: Buffer.from(JSON.stringify(control, null, 2) + '\n'), mode: 0o644 },
+    { name: 'control.json',
+      data: Buffer.from(COMMON.packageControlText(pkg, `package '${name}'`)),
+      mode: 0o644 },
     ...payload,
   ];
   const gz = zlib.gzipSync(tarball(members), { level: 9 });

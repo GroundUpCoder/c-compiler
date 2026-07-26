@@ -119,6 +119,43 @@ const script = [
   // the spawned tool re-plants asynchronously — poll the file marker
   'for i in $(seq 1 100); do test -L /root/Desktop/doom && break; sleep 0.1; done',
   'test -L /root/Desktop/doom && echo CTX-RESTORED',
+  // ---- leg E: phase 2 re-plants missing `seed` CONTENT (gucman content-
+  //      resource design §3.4) and records it back into the DB ----
+  'mkdir -p /opt/fakeseed/demos/sub',
+  'printf hello > /opt/fakeseed/demos/index.html',
+  'printf deep > /opt/fakeseed/demos/sub/deep.txt',
+  'printf note > /opt/fakeseed/note.txt',
+  'printf "{\\"name\\":\\"fakeseed\\",\\"version\\":\\"1.0\\",\\"seed\\":{\\"Demos\\":\\"demos\\",\\"note.txt\\":\\"note.txt\\"}}" > /opt/fakeseed/control.json',
+  'printf "{\\"name\\":\\"fakeseed\\",\\"version\\":\\"1.0\\"}" > /var/lib/gucman/fakeseed.json',
+  'echo ==dd5',
+  'desktop-defaults',
+  'echo "RC=$?"',
+  'echo ==dd5end',
+  'echo "==sidx $(cat /root/Demos/index.html)-END"',
+  'echo "==sdeep $(cat /root/Demos/sub/deep.txt)-END"',
+  'echo "==snote $(cat /root/note.txt)-END"',
+  'grep -q "/root/Demos/index.html" /var/lib/gucman/fakeseed.json && echo SEED-DB-OK',
+  'grep -q "/root/Demos/sub" /var/lib/gucman/fakeseed.json && echo SEEDDIR-DB-OK',
+  // ---- leg F: idempotent, then a deleted seed comes back while an edited
+  //      one is kept ----
+  'echo ==dd6',
+  'desktop-defaults',
+  'echo ==dd6end',
+  'printf MINE > /root/Demos/index.html',
+  'rm /root/note.txt',
+  'echo ==dd7',
+  'desktop-defaults',
+  'echo ==dd7end',
+  'echo "==sedit $(cat /root/Demos/index.html)-END"',
+  'echo "==sback $(cat /root/note.txt)-END"',
+  // ---- leg G: gucman remove unplants reconcile-planted seeds exactly like
+  //      install-planted ones — pristine go, the edited copy stays ----
+  'echo ==dd8',
+  'gucman remove fakeseed; echo "RC=$?"',
+  'test ! -e /root/note.txt && echo RECON-PRISTINE-GONE',
+  'test ! -e /root/Demos/sub && echo RECON-EMPTYDIR-GONE',
+  'echo "==skept $(cat /root/Demos/index.html)-END"',
+  'echo ==dd8end',
   '',
 ].join('\n');
 
@@ -173,6 +210,44 @@ check(`package re-run: added 0, kept ${TOTAL + 1} existing`,
 // ---- leg D: the ctx-menu row ----
 check('desktop menu "Add Default Icons" row restores the deleted icon',
   out.includes('CTX-RESTORED'));
+
+// ---- legs E-G: the `seed` content reconcile (design §3.4) ----
+// Baseline at this point: TOTAL phase-1 nodes + the fakepkg icon from leg C.
+const BASE = TOTAL + 1;
+const dd5 = out.split('==dd5\n')[1] ? out.split('==dd5\n')[1].split('==dd5end')[0] : '';
+check(`seed reconcile plants both missing dests (added 2, kept ${BASE})`,
+  dd5.includes(`desktop-defaults: added 2, kept ${BASE} existing`), dd5);
+check('seed reconcile exits 0', dd5.includes('RC=0'), dd5);
+check('a directory seed is re-planted, nested file and all',
+  out.includes('==sidx hello-END') && out.includes('==sdeep deep-END'),
+  section(out, 'sidx') + section(out, 'sdeep'));
+check('a single-file seed is re-planted', out.includes('==snote note-END'), section(out, 'snote'));
+check('the reconcile plant is recorded in the gucman DB (remove will unplant)',
+  out.includes('SEED-DB-OK'));
+check('the dirs the reconcile created are recorded too', out.includes('SEEDDIR-DB-OK'));
+
+// A re-run finds all 5 seeded nodes present: 1 dir + 1 file + 1 subdir +
+// 1 nested file + the single-file seed.
+const dd6 = out.split('==dd6\n')[1] ? out.split('==dd6\n')[1].split('==dd6end')[0] : '';
+check(`seed reconcile is idempotent (added 0, kept ${BASE + 5})`,
+  dd6.includes(`desktop-defaults: added 0, kept ${BASE + 5} existing`), dd6);
+
+const dd7 = out.split('==dd7\n')[1] ? out.split('==dd7\n')[1].split('==dd7end')[0] : '';
+check(`a deleted seed comes back, the other 4 nodes kept (added 1, kept ${BASE + 4})`,
+  dd7.includes(`desktop-defaults: added 1, kept ${BASE + 4} existing`), dd7);
+check('an EDITED seed is never overwritten by the reconcile',
+  out.includes('==sedit MINE-END'), section(out, 'sedit'));
+check('the deleted seed is back with the package\'s content',
+  out.includes('==sback note-END'), section(out, 'sback'));
+
+const dd8 = out.split('==dd8\n')[1] ? out.split('==dd8\n')[1].split('==dd8end')[0] : '';
+check('gucman remove succeeds over reconcile-planted seeds', dd8.includes('RC=0'), dd8);
+check('remove unplants the pristine reconcile-planted seed',
+  dd8.includes('RECON-PRISTINE-GONE'), dd8);
+check('remove rmdirs the empty dir the reconcile created',
+  dd8.includes('RECON-EMPTYDIR-GONE'), dd8);
+check('remove keeps the copy the user edited', out.includes('==skept MINE-END'),
+  section(out, 'skept'));
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures ? `\ndesktop-defaults e2e: ${failures} FAILED`

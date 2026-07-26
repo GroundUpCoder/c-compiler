@@ -49,6 +49,7 @@ let quiet = false;
 let requireCleanOverlays = false;
 let allOverlays = false;
 let packagesWant = [];   // [] = minimal bake; 'all' | names = fold back in
+let packagesDir = null;  // --packages-dir=DIR: read definitions from DIR
 const requestedOverlays = new Set();
 for (const a of process.argv.slice(2)) {
   if (a.startsWith('--out=')) outPath = path.resolve(a.slice(6));
@@ -59,6 +60,7 @@ for (const a of process.argv.slice(2)) {
   else if (a.startsWith('--overlays=')) a.slice(11).split(',').forEach((id) => id && requestedOverlays.add(id));
   else if (a === '--require-clean-overlays') requireCleanOverlays = true;
   else if (a === '--packages=all') packagesWant = 'all';
+  else if (a.startsWith('--packages-dir=')) packagesDir = path.resolve(a.slice(15));
   else if (a.startsWith('--packages='))
     packagesWant = a.slice(11) === 'none' ? [] : a.slice(11).split(',').filter(Boolean);
   else {
@@ -73,7 +75,8 @@ const rawManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
 // unknown name is a usage error, BEFORE any bake.
 let manifest, foldedPackages;
 try {
-  const folded = COMMON.foldPackages(fs, path, ROOT, rawManifest, packagesWant);
+  const folded = COMMON.foldPackages(fs, path, ROOT, rawManifest, packagesWant,
+    { packagesDir });
   manifest = folded.manifest;
   foldedPackages = folded.names;
 } catch (e) {
