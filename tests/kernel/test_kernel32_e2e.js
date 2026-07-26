@@ -13,6 +13,11 @@
 //     CreateProcess leg produces the same bytes + exit code.
 //   - persistence: a SECOND boot of the same image still sees the
 //     registry hive ($HOME/.win32reg) — `k32demo reg-persist`.
+//   - sharing (todos/0288): TWO live processes with overlapping
+//     lifetimes both keep their registry writes, in either exit order —
+//     `k32demo reg-race`. The hive is one file shared by every win32
+//     app, so a flush reload-merges instead of rewriting from the
+//     snapshot it loaded at startup.
 //
 // Run: node tests/kernel/test_kernel32_e2e.js
 'use strict';
@@ -96,8 +101,55 @@ function sessionB() {
     out.slice(-200));
 }
 
+/* ---- session C: two live processes share the hive (todos/0288) ----
+ *
+ * `k32demo reg-race FIRST SECOND` spawns two agents that BOTH take their
+ * hive snapshot and mutate it before EITHER flushes, then releases them in
+ * the named order. Before 0288 the second flush rewrote the whole file from
+ * its own start-of-process snapshot, so the first exiter's write vanished —
+ * exactly what happened when a user had winmine and notepad open at once.
+ *
+ * Legs: both orders of a write/write pair, and both orders of a
+ * delete/write pair (the delete must survive the peer's later flush, and
+ * the peer must not resurrect a value it only ever read). The hive is wiped
+ * between legs so a leftover value from the previous leg can't make the
+ * next one pass vacuously. Session C runs last for that reason. */
+function sessionC() {
+  const leg = (a, b) => [
+    'rm -f /root/.win32reg',
+    'k32demo reg-set Keeper',
+    `k32demo reg-race ${a} ${b}`,
+    `echo RACE-EXIT=$?`,
+  ];
+  const script = [
+    ...leg('A', 'B'),          // A flushes first, B last
+    ...leg('B', 'A'),          // B flushes first, A last
+    ...leg('-Keeper', 'W'),    // delete flushes first, write last
+    ...leg('W', '-Keeper'),    // write flushes first, delete last
+    '',
+  ].join('\n');
+
+  const c = driveBoot(script, { image });
+  const out = c.stdout;
+
+  const races = out.match(/reg-race\([^)]*\): [^\n]*/g) || [];
+  check('all four two-process legs ran', races.length === 4, races.join(' | '));
+  check('two live processes both keep their writes (A first)',
+    races[0] === 'reg-race(A,B): A=1 B=1 -> OK', races[0]);
+  check('two live processes both keep their writes (B first)',
+    races[1] === 'reg-race(B,A): B=1 A=1 -> OK', races[1]);
+  check('a delete survives a peer flush that follows it',
+    races[2] === 'reg-race(-Keeper,W): Keeper=0 W=1 -> OK', races[2]);
+  check('a peer never resurrects a value it only read',
+    races[3] === 'reg-race(W,-Keeper): W=1 Keeper=0 -> OK', races[3]);
+  check('every race exited 0',
+    (out.match(/RACE-EXIT=0/g) || []).length === 4,
+    (out.match(/RACE-EXIT=\d+/g) || []).join(','));
+}
+
 sessionA();
 sessionB();
+sessionC();
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures ? `\nkernel32 e2e: ${failures} FAILED` : '\nkernel32 e2e: PASS');

@@ -1,9 +1,16 @@
 # 0288 — advapi32 hive: reload-merge dirty values at flush (three live consumers today — 0162's deferral premise is false)
 
-- **Status**: open
-- **Design**: this file + `todos/WIN32.md:477-480` (the fix is named there).
+- **Status**: DONE 2026-07-27 — `hive_flush` reload-merges (dirty values + delete
+  tombstones) instead of rewriting from the start-of-process snapshot; conflicts on the
+  same value resolve **last-writer-wins per VALUE**, recorded in the header of
+  `os/win32/advapi32.c`. Two-process race test (both exit orders, write/write AND
+  delete/write) in `tests/kernel/test_kernel32_e2e.js` session C, driven by
+  `k32demo reg-race`; verified red on the pre-fix binary (`reg-race(A,B): A=0 B=1 -> LOST`).
+  Dev log: `logs/2026-07-27/registry-reload-merge.md`.
+- **Design**: this file + `todos/WIN32.md` (Known issues — the fix was named there).
   `todos/0162` is the *parked SQLite redesign* and stays parked — this is the cheap
-  correctness fix it was blocking.
+  correctness fix it was blocking; its false "no current consumer" premise was corrected
+  in `todos/0162-registry-sqlite-backend.md` on 2026-07-27.
 
 ## Goal
 
