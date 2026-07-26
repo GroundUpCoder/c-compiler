@@ -47,3 +47,61 @@ some may have gained coverage incidentally.
   elsewhere with the pointer.
 - `BLOCK_FS.md:286` no longer shows an unchecked "Immediate" item.
 - Planner-selected suites green (`node tests/run.js --diff`), reported with NUMBERS.
+
+## VERIFICATION (cont-78, 1e8a940)
+
+**Verdict: PARTIALLY CONFIRMED — the count is wrong. 6 of the 10 are still
+untested at C level; 4 have gained C-level tests since the doc was written.
+But only ONE of those 4 runs under `{"blockFs": true}`, so the block-fs import
+path specifically is still uncovered for 3 of them.**
+
+### The 10 imports
+
+They come from `todos/BLOCK_FS.md:246-259`, the table headed "### Test gaps — not
+yet covered", which `:286`'s "Immediate" item refers to as "listed above":
+`fchmod`, `utime`, `fcntl F_DUPFD`, `fsync`, `lstat`, `pipe`/`dup`/`dup2`,
+`isatty`, `access`, `fstat`, `getcwd`.
+
+### Per-import status (call-shaped grep over every `.c`/`.h` under `tests/`)
+
+| # | Import | C-level test today | Where | `blockFs: true`? |
+|---|---|---|---|---|
+| 1 | `fchmod` | **NO** | — (`tests/unit/blockfs_chmod/main.c:8` calls `chmod`, not `fchmod`) | — |
+| 2 | `utime` | **NO** | `utime()` is never called anywhere in `tests/`. `utimes()` is covered at `tests/unit/core/utimes/utimes.c` and `tests/unit/core/stat_fields/stat_fields.c` — different entry point, and **neither has a `config.json`**, so neither runs in block-fs mode | — |
+| 3 | `fcntl` F_DUPFD | **NO** | no `fcntl(` call in any C test file | — |
+| 4 | `fsync` | **NO** | — | — |
+| 5 | `lstat` | **NO** | — | — |
+| 6 | `pipe`/`dup`/`dup2` | **PARTIAL — YES for pipe/dup/dup2** | `pipe`: `tests/unit/stdlib/poll_pipe/poll_pipe.c`, `tests/unit/blockfs_select_pipe/main.c`, `tests/unit/stdlib/select_pipe/select_pipe.c`. `dup`+`dup2`: `tests/unit/stdlib/posix_dup_shared_offset/main.c:16,26` | `poll_pipe` **yes** (`{"blockFs": true}`), `blockfs_select_pipe` **yes**; `select_pipe` and `posix_dup_shared_offset` have **no** config.json |
+| 7 | `isatty` | **YES** | `tests/unit/stdlib/isatty_pipe/main.c:8,10` | **no** — `{ "subprocess": true }` |
+| 8 | `access` | **YES** | `tests/unit/stdlib/posix_dir/posix_dir.c:53-54` | **no** — no config.json |
+| 9 | `fstat` | **NO** | only `tests/manual/large_file.c` (manual corpus, not a suite test) | — |
+| 10 | `getcwd` | **YES** | `tests/unit/stdlib/posix_dir/posix_dir.c:11` | **no** — no config.json |
+
+### The precise count
+
+- **6 of 10 still have no C-level test at all**: `fchmod`, `utime`,
+  `fcntl F_DUPFD`, `fsync`, `lstat`, `fstat`.
+- **4 of 10 gained a C-level test**: `pipe`/`dup`/`dup2`, `isatty`, `access`,
+  `getcwd`.
+- Of those 4, **only `pipe` is exercised under `{"blockFs": true}`**
+  (`tests/unit/stdlib/poll_pipe`, `tests/unit/blockfs_select_pipe`). `dup`/`dup2`,
+  `isatty`, `access` and `getcwd` are tested only in the DEFAULT backend, so the
+  block-fs WASM import that this checklist item is about is still unexercised for
+  them.
+
+So the remaining work is **6 new tests + 4 cheap `{"blockFs": true}` variants**
+(or one `config.json` addition where the existing test can safely run in both
+modes) — not 10 tests, and not 4 items already done.
+
+### Doc drift found while checking
+
+`BLOCK_FS.md:248-259`'s wording is now wrong in two rows and should be corrected
+in the same commit as the fix:
+- `pipe`/`dup`/`dup2` and `isatty` and `access` say "Only JS-level tests, no
+  C-level unit test" — a C-level test now exists for each (see table).
+- `getcwd` says "Only tested via error path (chdir), not normal operation" —
+  `posix_dir.c:11` exercises the normal path.
+
+The `Totals` line at `BLOCK_FS.md:243-244` ("97 dedicated tests + 575 existing
+unit test regression suite = 672 passing tests") was **not** re-counted here and
+is very likely stale too.
