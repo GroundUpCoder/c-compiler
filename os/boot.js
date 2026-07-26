@@ -83,6 +83,7 @@ let ttyOut = false;   // force fd1/2 tty-kind under pipes (drive interactive she
 let requireCleanOverlays = false;
 let allOverlays = false;
 let packagesWant = 'all';   // the package set the blob must carry (see header)
+let packagesDir = null;     // --packages-dir=DIR: read definitions from DIR
 let hostPlatform = 'other'; // --host-platform: the keyboard-scheme auto-detect
                             // hint (META-ARROW-KEYBIND.md). Default 'other' =
                             // no seed = the baked windows scheme, so every
@@ -110,6 +111,7 @@ for (const a of process.argv.slice(2)) {
   else if (a === '--packages=all') packagesWant = 'all';
   else if (a.startsWith('--packages='))
     packagesWant = a.slice(11) === 'none' ? [] : a.slice(11).split(',').filter(Boolean);
+  else if (a.startsWith('--packages-dir=')) packagesDir = path.resolve(a.slice(15));
   else if (a.startsWith('--host-platform=')) hostPlatform = a.slice(16);
   else {
     process.stderr.write(`boot.js: unknown option ${a}\n`);
@@ -143,7 +145,8 @@ const rawManifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'image.json'
 // identity gates compare against the blob's PACKAGES= line.
 let manifest, wantPkgs;
 try {
-  const folded = COMMON.foldPackages(fs, path, ROOT, rawManifest, packagesWant);
+  const folded = COMMON.foldPackages(fs, path, ROOT, rawManifest, packagesWant,
+    { packagesDir });
   manifest = folded.manifest;
   wantPkgs = folded.names;
 } catch (e) {
@@ -276,6 +279,12 @@ async function mountAndBoot() {
     bootLog('seeding user volume (manifest v' + manifest.version + ')');
     COMMON.initRootVolume(kfs);
     await COMMON.seedEntries(kfs, manifest.user, seedIo);
+    // Baked packages' `seed` content (gucman content-resource design §3.5):
+    // planted from the SEALED BLOB, after the manifest's own user entries
+    // (which therefore win any collision). Identical here and in the browser
+    // worker by construction — neither reads the manifest for this.
+    const nseed = COMMON.seedBakedSeeds(kfs, bootLog);
+    if (nseed) bootLog('seeded ' + nseed + ' file(s) from baked packages');
     // Host keyboard-scheme auto-detect (META-ARROW-KEYBIND.md decision 4):
     // seed macos as the DEFAULT on a Mac host (admin layer; user config wins).
     if (COMMON.seedHostKeyScheme(kfs, hostPlatform))

@@ -13,7 +13,9 @@
  * copy+delete fallback, refusing an existing destination (no silent
  * overwrite — the 0103 EEXIST rule). fo_delete is recursive (what
  * SHFileOperation FO_DELETE does). All return 0 or -1 with errno set; the
- * caller surfaces strerror(errno) (fileman: MessageBox).
+ * caller surfaces strerror(errno) (fileman: MessageBox). fo_merge is the
+ * additive "plant what's missing, never overwrite" engine shared by
+ * desktop-defaults and gucman's `seed` resource kind (see its block below).
  *
  * The clipboard file list rides the ONE kernel slot (todos/0090) as format
  * FO_CLIP_FMT (fmt 1 is UTF-8 text — last write wins across formats, the
@@ -167,6 +169,176 @@ static int fo_copy(const char *src, const char *dst) {
             break;
         }
         rc = fo_copy(s, t);
+    }
+    int e = errno;
+    closedir(d);
+    errno = e;
+    return rc;
+}
+
+/* ---- fo_merge: the ONE additive merge engine (gucman `seed` design §3.1) ----
+ *
+ * "Copy these files to this destination, and copy them over again if
+ * missing" — never overwrite, never delete, directories merge. It existed
+ * privately as deskdefaults.c's dd_merge; it lives here now because gucman's
+ * `seed` resource kind plants with exactly these semantics, and the two must
+ * not drift.
+ *
+ *   dst ABSENT      -> plant src wholesale (fo_copy's rules: symlinks copy AS
+ *                      links, dirs mkdir+recurse, files byte-copy preserving
+ *                      mode), firing FILE/LINK/DIR per planted node and ONE
+ *                      NODE for the subtree root once it lands whole
+ *   both DIRS       -> KEPT for the pair, then recurse (the additive folder
+ *                      merge: a new default deck lands INSIDE the user's
+ *                      existing folder without touching their files)
+ *   any other clash -> KEPT, skip (the user's file always wins)
+ *
+ * The two granularities both exist because the two consumers need different
+ * ones: desktop-defaults counts `added` per wholesale NODE (its shipped
+ * output contract), gucman records per FILE (a sha256 each — the checksum
+ * gate its remove depends on) and per created DIR (rmdir-if-empty on
+ * remove). Events fire through `cb` (NULL for none); errno is live at the
+ * callback for FO_MERGE_ERR.
+ *
+ * Every file publishes ATOMICALLY (tmp + rename, fo_copy_file_atomic below),
+ * so a crash mid-plant leaves whole files plus at most one invisible
+ * `.fotmp.*` dotfile — never a torn destination. Re-running converges: the
+ * already-planted files are KEPT and the missing tail is planted.
+ *
+ * Returns 0, or -1 if ANY node failed (the merge still visits its siblings —
+ * one unreadable default must not stop the rest; a wholesale plant, like
+ * fo_copy, abandons its own subtree at the first error).
+ */
+/* One relative-path safety check: not absolute, no empty segment, no "."
+ * or ".." component, no trailing slash. gucman's gm_safe_rel is this (it
+ * moved here so desktop-defaults' reconcile validates payload paths through
+ * the SAME code — a second copy would be a place for the rules to drift). */
+static int fo_safe_rel(const char *rel) {
+    if (!rel || !*rel || rel[0] == '/') return 0;
+    const char *p = rel;
+    while (*p) {
+        const char *seg = p;
+        while (*p && *p != '/') p++;
+        size_t sl = (size_t)(p - seg);
+        if (sl == 0) return 0;                                   /* "//" */
+        if (sl == 1 && seg[0] == '.') return 0;
+        if (sl == 2 && seg[0] == '.' && seg[1] == '.') return 0;
+        if (*p) p++;
+        if (*p == 0 && p[-1] == '/') return 0;                   /* trailing slash */
+    }
+    return 1;
+}
+
+/* A `seed` DESTINATION under /root: fo_safe_rel PLUS "no component may
+ * start with '.'" — the design §2.1 rule that keeps a package out of hidden
+ * user config (~/.config/openwith is the HIGHEST cfgstore layer, ~/.win32reg
+ * the registry hive). MUST MATCH os-common.js validateSeedShape. */
+static int fo_safe_seed_rel(const char *rel) {
+    if (!fo_safe_rel(rel)) return 0;
+    if (rel[0] == '.') return 0;
+    for (const char *p = rel; *p; p++)
+        if (p[0] == '/' && p[1] == '.') return 0;
+    return 1;
+}
+
+#define FO_MERGE_NODE  0   /* a wholesale-absent subtree root was planted */
+#define FO_MERGE_FILE  1   /* one file was planted (incl. inside a NODE) */
+#define FO_MERGE_DIR   2   /* one directory was created */
+#define FO_MERGE_KEPT  3   /* same-name clash skipped (or dir+dir merged) */
+#define FO_MERGE_LINK  4   /* one symlink was planted (copied AS a link) */
+#define FO_MERGE_ERR   5   /* this path failed; errno is set */
+
+typedef void (*fo_merge_cb)(int ev, const char *path, void *ud);
+
+/* Copy `src` onto `dst` with an ATOMIC publish: the bytes land in
+ * "<dir>/.fotmp.<name>" and rename(2) into place. A stale tmp from an
+ * interrupted run is truncated by fo_copy_file's O_TRUNC. dst is re-checked
+ * absent immediately before the rename — this is crash protection, not
+ * concurrency protection (single-writer world). */
+static int fo_copy_file_atomic(const char *src, const char *dst, mode_t mode) {
+    const char *base = strrchr(dst, '/');
+    char tmp[FO_PATH_MAX];
+    int w = base ? snprintf(tmp, sizeof tmp, "%.*s/.fotmp.%s",
+                            (int)(base - dst), dst, base + 1)
+                 : snprintf(tmp, sizeof tmp, ".fotmp.%s", dst);
+    if (w < 0 || w >= (int)sizeof tmp) { errno = ENAMETOOLONG; return -1; }
+    if (fo_copy_file(src, tmp, mode) != 0) { int e = errno; unlink(tmp); errno = e; return -1; }
+    struct stat st;
+    if (lstat(dst, &st) == 0) { unlink(tmp); errno = EEXIST; return -1; }
+    if (rename(tmp, dst) != 0) { int e = errno; unlink(tmp); errno = e; return -1; }
+    return 0;
+}
+
+/* Plant an absent node wholesale, firing one event per planted node. */
+static int fo_plant(const char *src, const char *dst, fo_merge_cb cb, void *ud) {
+    struct stat st;
+    if (lstat(src, &st) != 0) { if (cb) cb(FO_MERGE_ERR, src, ud); return -1; }
+    if (S_ISLNK(st.st_mode)) {
+        char tgt[FO_PATH_MAX];
+        ssize_t n = readlink(src, tgt, sizeof tgt - 1);
+        if (n < 0) { if (cb) cb(FO_MERGE_ERR, src, ud); return -1; }
+        tgt[n] = 0;
+        if (symlink(tgt, dst) != 0) { if (cb) cb(FO_MERGE_ERR, dst, ud); return -1; }
+        if (cb) cb(FO_MERGE_LINK, dst, ud);
+        return 0;
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        if (fo_copy_file_atomic(src, dst, st.st_mode) != 0) {
+            if (cb) cb(FO_MERGE_ERR, dst, ud);
+            return -1;
+        }
+        if (cb) cb(FO_MERGE_FILE, dst, ud);
+        return 0;
+    }
+    if (mkdir(dst, st.st_mode & 0777) != 0) { if (cb) cb(FO_MERGE_ERR, dst, ud); return -1; }
+    if (cb) cb(FO_MERGE_DIR, dst, ud);
+    DIR *d = opendir(src);
+    if (!d) { if (cb) cb(FO_MERGE_ERR, src, ud); return -1; }
+    int rc = 0;
+    struct dirent *de;
+    while (rc == 0 && (de = readdir(d))) {       /* fo_copy's rule: first error ends the subtree */
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+        char s[FO_PATH_MAX], t[FO_PATH_MAX];
+        if (snprintf(s, sizeof s, "%s/%s", src, de->d_name) >= (int)sizeof s ||
+            snprintf(t, sizeof t, "%s/%s", dst, de->d_name) >= (int)sizeof t) {
+            errno = ENAMETOOLONG;
+            if (cb) cb(FO_MERGE_ERR, de->d_name, ud);
+            rc = -1;
+            break;
+        }
+        rc = fo_plant(s, t, cb, ud);
+    }
+    int e = errno;
+    closedir(d);
+    errno = e;
+    return rc;
+}
+
+static int fo_merge(const char *src, const char *dst, fo_merge_cb cb, void *ud) {
+    struct stat ss, ds;
+    if (lstat(src, &ss) != 0) { if (cb) cb(FO_MERGE_ERR, src, ud); return -1; }
+    if (lstat(dst, &ds) != 0) {
+        if (fo_plant(src, dst, cb, ud) != 0) return -1;
+        if (cb) cb(FO_MERGE_NODE, dst, ud);      /* only once it landed whole */
+        return 0;
+    }
+    if (cb) cb(FO_MERGE_KEPT, dst, ud);
+    if (!S_ISDIR(ss.st_mode) || !S_ISDIR(ds.st_mode)) return 0;   /* clash: skip */
+    DIR *d = opendir(src);
+    if (!d) { if (cb) cb(FO_MERGE_ERR, src, ud); return -1; }
+    int rc = 0;
+    struct dirent *de;
+    while ((de = readdir(d))) {                  /* dd_merge's rule: visit every sibling */
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+        char s[FO_PATH_MAX], t[FO_PATH_MAX];
+        if (snprintf(s, sizeof s, "%s/%s", src, de->d_name) >= (int)sizeof s ||
+            snprintf(t, sizeof t, "%s/%s", dst, de->d_name) >= (int)sizeof t) {
+            errno = ENAMETOOLONG;
+            if (cb) cb(FO_MERGE_ERR, de->d_name, ud);
+            rc = -1;
+            continue;
+        }
+        if (fo_merge(s, t, cb, ud) != 0) rc = -1;
     }
     int e = errno;
     closedir(d);

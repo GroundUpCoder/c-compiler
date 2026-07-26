@@ -16,6 +16,10 @@
 //   seedEntries(kfs, section, io)    — populate paths from a manifest
 //     section (dirs + files). Used by the bake (system section, full
 //     namespace) and by the virgin-boot user seed (user section).
+//   seedBakedSeeds(kfs, log)         — the virgin-root pass for the gucman
+//     `seed` content resource kind: plant every baked package's declared
+//     content into /root, skip-if-exists, driven entirely by the sealed blob
+//     (never by the manifest — see its block for why).
 //   initRootVolume(mfs)              — skeleton for a fresh writable root
 //     volume: /etc /var/local/bin /tmp /root /run + /bin -> /usr/bin.
 //   bakedVersion(BLOCK_FS, store)    — a blob's VERSION_ID (or -1): the
@@ -387,6 +391,99 @@ function seedEntries(kfs, section, io) {
   });
 }
 
+/* ---- the virgin-root baked-seed pass (gucman `seed` design §3.5) ----
+ *
+ * seedBakedSeeds(kfs, log) -> number of files planted. Runs ONCE, on a
+ * freshly created root volume, immediately after seedEntries(manifest.user):
+ * every package folded into the sealed blob (os-release PACKAGES=, the fat
+ * image's identity axis) whose /usr/opt/<name>/control.json declares `seed`
+ * gets its content copied into /root, skip-if-exists per node so the
+ * manifest's own user entries always win.
+ *
+ * It reads EVERYTHING from the mounted blob, which is why it is here and not
+ * a fold into manifest.user: boot.js seeds from the FOLDED manifest but
+ * kernel-worker.js seeds from the RAW FETCHED image.json (kernel-worker.js
+ * :379/:481), so a manifest-side design passes every headless test and
+ * silently no-ops in every browser (design §0.4/§8.2). Blob-driven, this is
+ * version-locked and identical in both embedders by construction.
+ *
+ * A virgin root means everything is absent, so skip-if-exists is the only
+ * policy this walk needs — the full additive merge engine (fo_merge) lives
+ * in C, where the reconcile that "copies them over again if missing" runs.
+ * The small duplication is deliberate: the alternative is spawning a process
+ * during kernel-side seeding, before the process machinery is up. */
+function seedBakedSeeds(kfs, log) {
+  log = log || function () {};
+  var rel = readFileText(kfs, '/usr/share/os-release');
+  if (rel === null) return 0;
+  var m = /(^|\n)PACKAGES=([^\n]*)/.exec(rel);
+  var names = m ? m[2].split(',').filter(Boolean) : [];
+  var planted = 0;
+  names.forEach(function (name) {
+    var root = '/usr/opt/' + name;
+    var text = readFileText(kfs, root + '/control.json');
+    if (text === null) return;                    // not a seed-bearing fold
+    var control;
+    try { control = JSON.parse(text); } catch (e) {
+      log('  ' + root + '/control.json is not valid JSON — skipped');
+      return;
+    }
+    if (!control || typeof control.seed !== 'object' || control.seed === null) return;
+    var seed = validateSeedShape(control.seed, 'baked package ' + JSON.stringify(name));
+    Object.keys(seed).forEach(function (dest) {
+      var parts = ('/root/' + dest).split('/');
+      var cur = '';
+      for (var i = 1; i < parts.length - 1; i++) {     // mkdir -p the parent chain
+        cur += '/' + parts[i];
+        if (kfs.lstat(cur) === null) kfs.mkdir(cur, 0o755);
+      }
+      var n = plantSeedNode(kfs, root + '/' + seed[dest], '/root/' + dest);
+      if (n) log('  /root/' + dest + ' (' + n + ' file(s) seeded from ' + name + ')');
+      planted += n;
+    });
+  });
+  return planted;
+}
+
+/* One skip-if-exists copy node (file / symlink / directory-merge). Returns
+ * the number of FILES planted. */
+function plantSeedNode(kfs, src, dst) {
+  var S_IFMT = 0o170000, S_IFDIR = 0o040000, S_IFLNK = 0o120000;
+  var ss = kfs.lstat(src);
+  if (ss === null) return 0;
+  var ds = kfs.lstat(dst);
+  var srcDir = (ss.mode & S_IFMT) === S_IFDIR;
+  if (ds !== null) {
+    // Present: the user's (or the manifest's) node always wins. Two dirs
+    // still merge additively, so a package can add into a seeded folder.
+    if (!srcDir || (ds.mode & S_IFMT) !== S_IFDIR) return 0;
+  } else if (srcDir) {
+    kfs.mkdir(dst, ss.mode & 0o777);
+  } else if ((ss.mode & S_IFMT) === S_IFLNK) {
+    var buf = new Uint8Array(1024);
+    var n = kfs.readlink(src, buf, buf.length);
+    if (n === null || n <= 0) return 0;
+    kfs.symlink(new TextDecoder('utf-8').decode(buf.subarray(0, n)), dst);
+    return 1;
+  } else {
+    var bytes = readFileBytes(kfs, src);
+    if (bytes === null) return 0;
+    writeFile(kfs, dst, bytes, ss.mode & 0o777);
+    return 1;
+  }
+  var planted = 0;
+  var dh = kfs.opendir(src);
+  if (dh === null) return 0;
+  var kids = [];
+  for (var e; (e = kfs.readdir(dh)) !== null;)
+    if (e.name !== '.' && e.name !== '..') kids.push(e.name);
+  kfs.closedir(dh);
+  kids.sort().forEach(function (nm) {
+    planted += plantSeedNode(kfs, src + '/' + nm, dst + '/' + nm);
+  });
+  return planted;
+}
+
 /* ---- optional opt-in image overlays (todos/0118) ----
  *
  * An overlay folds a SIBLING-published, prebuilt `overlay@1` manifest's files
@@ -731,6 +828,108 @@ function validateSrclibShape(srclib, label) {
   return { include: include, src: src };
 }
 
+/* ---- the `seed` package section (gucman content-resource design §1) ----
+ *
+ * `seed` is the CONTENT resource kind: `{ "<dest under /root>": "<payload-
+ * relative src>" }`, planted by COPY (never a symlink — the user owns the
+ * bytes afterwards and may edit them) with the additive desktop-defaults
+ * semantics. Shape validation is shared by mkpkg (build time), foldPackages
+ * (bake time — the fold is the pre-bake definition linter) and gucman
+ * (install time, in C: the engine never trusts a payload). All three enforce
+ * the SAME rules, restated in os/gucman/gucman.c's gm_safe_seed_rel:
+ *
+ *   1. dest is a relative path under /root — no absolute, no empty/"."/".."
+ *      components (validRelPath).
+ *   2. NO dest component may start with '.' (design §2.1, the load-bearing
+ *      line): hidden user config is where planting a merely-ABSENT file
+ *      changes system behavior — ~/.config/openwith is the highest cfgstore
+ *      layer, ~/.win32reg the registry hive, ~/.recycle the trash store.
+ *      One rule excises that whole channel, and it matches the convention
+ *      that dotfiles never ride a payload (listTreeFiles, mkpkg's tar).
+ *   3. src is payload-relative (same rules, dots allowed — it is package
+ *      territory) and must name something in the ASSEMBLED payload; the
+ *      caller cross-checks that against its own file set.
+ *   4. No dest may sit INSIDE another dest: dest is the identity, so two
+ *      entries writing one destination tree are malformed by construction.
+ *      (Literal duplicate keys can't survive JSON.parse — last one wins —
+ *      so the enforceable form of "one entry per dest" is this containment
+ *      check.)
+ *
+ * Returns the map with dests SORTED, so control.json bytes and plant order
+ * are deterministic. */
+function validateSeedShape(seed, label) {
+  if (typeof seed !== 'object' || seed === null || Array.isArray(seed))
+    throw new Error(label + ': seed must be an object mapping "<dest under /root>" -> "<payload-relative src>"');
+  var dests = Object.keys(seed).sort();
+  var out = {};
+  dests.forEach(function (dest) {
+    if (!validRelPath(dest))
+      throw new Error(label + ': seed dest ' + JSON.stringify(dest) +
+        ' must be a relative path under /root (no absolute, empty, "." or ".." components)');
+    dest.split('/').forEach(function (seg) {
+      if (seg.charAt(0) === '.')
+        throw new Error(label + ': seed dest ' + JSON.stringify(dest) +
+          ' has a dot-prefixed component — a package never seeds hidden user config' +
+          ' (~/.config/openwith, ~/.win32reg, ~/.recycle …; design §2.1)');
+    });
+    var src = seed[dest];
+    if (typeof src !== 'string' || !validRelPath(src))
+      throw new Error(label + ': seed ' + JSON.stringify(dest) + ' -> ' + JSON.stringify(src) +
+        ' must name a payload-relative file or directory');
+    out[dest] = src;
+  });
+  for (var i = 0; i < dests.length; i++) {
+    for (var j = 0; j < dests.length; j++) {
+      if (i !== j && dests[j].lastIndexOf(dests[i] + '/', 0) === 0)
+        throw new Error(label + ': seed dest ' + JSON.stringify(dests[j]) + ' is inside ' +
+          JSON.stringify(dests[i]) + ' — one seed entry per destination tree');
+    }
+  }
+  return out;
+}
+
+/* The ONE control.json producer, shared by tools/mkpkg.js (the payload's
+ * top-level member) and foldPackages (the baked twin planted at
+ * /usr/opt/<name>/control.json). Same object, same key order, same
+ * serialization — so the manifest a package INSTALLS and the manifest the
+ * sealed blob carries for the same definition can never drift.
+ *
+ * Shape-validating sections (srclib, seed) are validated here; the caller
+ * additionally cross-checks their payload references, which only it can see
+ * (mkpkg against the assembled tar members, foldPackages against the folded
+ * system section). */
+function packageControl(pkg, label) {
+  var control = {
+    name: pkg.name,
+    version: pkg.version,
+    summary: pkg.summary || '',
+    bin: pkg.bin || {},
+    openwith: pkg.openwith || {},
+    menu: pkg.menu || [],
+    fonts: pkg.fonts || [],
+  };
+  if (pkg.desktop !== undefined) control.desktop = pkg.desktop;   // §5: absent = ineligible
+  if (pkg.srclib !== undefined) {
+    var sl = validateSrclibShape(pkg.srclib, label);
+    control.srclib = { include: sl.include, src: sl.src };
+  }
+  if (pkg.seed !== undefined) control.seed = validateSeedShape(pkg.seed, label);
+  return control;
+}
+
+function packageControlText(pkg, label) {
+  return JSON.stringify(packageControl(pkg, label), null, 2) + '\n';
+}
+
+/* `control.json` at the payload root is RESERVED: it is the package's own
+ * manifest (gucman materializes the verified one there at install, the fold
+ * bakes its twin), so a definition claiming that path would let a payload
+ * forge the manifest desktop-defaults reads back. Refused by both builders. */
+function checkReservedPackageFiles(pkg, label) {
+  if ((pkg.files || {})['control.json'] !== undefined)
+    throw new Error(label + ': control.json is reserved at the payload root (it is the package manifest)');
+}
+
 /* ---- the require-block drift gate (source-lib design §4.4, Lane B2) ----
  *
  * The hand-written __require_source blocks in the win32 veneer WILL drift
@@ -793,9 +992,17 @@ function win32RequireDriftErrors(readText) {
  * records as the os-release PACKAGES= line); with an empty fold the input
  * manifest is returned untouched. Throws on unknown names and on any
  * malformed package definition (loud, before a ~minute-long bake — the
- * overlay discipline). */
-function foldPackages(fsMod, pathMod, rootDir, manifest, which) {
-  var avail = listPackages(fsMod, pathMod, rootDir);
+ * overlay discipline).
+ *
+ * opts.packagesDir overrides where definitions are read from (default
+ * <rootDir>/packages) — the listPackages seam, exposed so a test can bake
+ * and boot a throwaway definition without writing into the repo's packages/
+ * dir, which is a bake input AND a shared mkpkg input for every other
+ * concurrently running test. */
+function foldPackages(fsMod, pathMod, rootDir, manifest, which, opts) {
+  opts = opts || {};
+  var pkgDir = opts.packagesDir || pathMod.join(rootDir, 'packages');
+  var avail = listPackages(fsMod, pathMod, rootDir, { packagesDir: pkgDir });
   var names = which === 'all' ? avail : (which || []).slice().sort();
   names.forEach(function (n) {
     if (avail.indexOf(n) < 0)
@@ -818,9 +1025,10 @@ function foldPackages(fsMod, pathMod, rootDir, manifest, which) {
   }
   names.forEach(function (name) {
     var pkg = JSON.parse(fsMod.readFileSync(
-      pathMod.join(rootDir, 'packages', name + '.json'), 'utf-8'));
+      pathMod.join(pkgDir, name + '.json'), 'utf-8'));
     if (pkg.name !== name)
       throw new Error('packages/' + name + '.json declares name ' + JSON.stringify(pkg.name));
+    checkReservedPackageFiles(pkg, "package '" + name + "'");
     var bin = pkg.bin || {};
     var base = '/usr/opt/' + name;
     pushDir('/usr/opt');
@@ -912,6 +1120,31 @@ function foldPackages(fsMod, pathMod, rootDir, manifest, which) {
       if (!(pkg.files || {})[rel])
         throw new Error("package '" + name + "': fonts " + rel + ' names no package file');
     });
+    // `seed` (the content resource kind, design §1.3 layer 2): validate the
+    // shape and cross-check every src against the FOLDED payload. The seeds
+    // themselves are NOT folded into the manifest's `user` section — that
+    // route was checked and rejected (§0.4/§8.2: the browser seeds fresh
+    // roots from the RAW fetched image.json, so folded user entries work
+    // headless and silently no-op in every real browser). They are planted
+    // instead from the blob, by seedBakedSeeds at first boot and by
+    // desktop-defaults' phase 3 afterwards — both driven by the control.json
+    // claimed below, which is version-locked to the blob by construction.
+    if (pkg.seed !== undefined) {
+      var seed = validateSeedShape(pkg.seed, "package '" + name + "'");
+      Object.keys(seed).forEach(function (dest) {
+        var abs = base + '/' + seed[dest];
+        if (!m.system.files[abs] && !dirSeen[abs])
+          throw new Error("package '" + name + "': seed " + dest + ' -> ' + seed[dest] +
+            ' is not in the payload');
+      });
+    }
+    // The package's own manifest, baked beside its payload — the twin of the
+    // /opt/<name>/control.json a gucman install materializes. Byte-identical
+    // to the payload's copy (one packageControl producer), which is what
+    // lets desktop-defaults read installed and built-in packages through the
+    // SAME code path (design §5).
+    claim(name, base + '/control.json',
+      { content: packageControlText(pkg, "package '" + name + "'") });
   });
   m.packagesBaked = names;
   return { manifest: m, names: names };
@@ -1323,6 +1556,7 @@ var OS_COMMON = {
   createCcDriver: createCcDriver,
   buildProject: buildProject,
   seedEntries: seedEntries,
+  seedBakedSeeds: seedBakedSeeds,
   bakeSystemImage: bakeSystemImage,
   loadOverlays: loadOverlays,
   plantOverlays: plantOverlays,
@@ -1332,6 +1566,10 @@ var OS_COMMON = {
   foldDesktopDefaults: foldDesktopDefaults,
   listTreeFiles: listTreeFiles,
   validateSrclibShape: validateSrclibShape,
+  validateSeedShape: validateSeedShape,
+  packageControl: packageControl,
+  packageControlText: packageControlText,
+  checkReservedPackageFiles: checkReservedPackageFiles,
   win32RequireDriftErrors: win32RequireDriftErrors,
   bakedVersion: bakedVersion,
   bakedOverlays: bakedOverlays,

@@ -18,10 +18,12 @@
  * /opt/<name>/ with tracked symlinks into /usr/local/bin (already first on
  * PATH). The manifest is FULLY DECLARATIVE — a package's control.json lists
  * its bin commands, openwith keys, menu entries, font faces (fallback-
- * chain lines in /etc/fonts/fallback, Unicode Phase D) and srclib tiers
+ * chain lines in /etc/fonts/fallback, Unicode Phase D), srclib tiers
  * (win32 source-lib design §3.1: header + require-source symlink farms at
  * /usr/local/include + /usr/local/src/<ns>, the standard install locations
- * the in-OS cc searches); install records the
+ * the in-OS cc searches) and `seed` content (the CONTENT resource kind:
+ * files COPIED into /root as the user's own, never symlinked — see the
+ * seed section below); install records the
  * EXACT planted list in the install DB /var/lib/gucman/<name>.json and
  * remove replays that record in reverse. No custom scripts in Slice 1
  * (postinst/prerm are a reserved narrow escape hatch, not yet implemented —
@@ -64,7 +66,8 @@
 #include <curl/curl.h>
 #include <zlib.h>
 #include "cJSON.h"
-#include "fileops.h"            /* fo_delete: the ONE recursive delete */
+#include "fileops.h"            /* fo_delete + fo_merge: the ONE copy engine */
+#include "sha256.h"             /* the ONE sha256 (shared with deskdefaults) */
 
 #define GM_DB_DIR       "/var/lib/gucman"
 #define GM_OPT_DIR      "/opt"
@@ -78,109 +81,11 @@
 #define GM_INCLUDE_DIR  "/usr/local/include"     /* srclib header tier (§3.1) */
 #define GM_SRC_DIR      "/usr/local/src"         /* srclib require-source tier */
 #define GM_DESKTOP_DIR  "/root/Desktop"          /* where the wm scans icons */
+#define GM_HOME         "/root"                  /* seed dests root here (§2.1) */
 #define GM_DESKTOP_FLAG GM_DB_DIR "/desktop_shortcuts"  /* Q5/#90 persistent toggle */
 #define GM_OS_RELEASE   "/usr/share/os-release"
 #define GM_NAME_MAX     64
 #define GM_PATH_MAX     768
-
-/* ================= sha256 (FIPS 180-4, self-contained) ================= */
-
-typedef struct {
-    uint32_t h[8];
-    uint64_t len;
-    uint8_t buf[64];
-    int fill;
-} sha256_ctx;
-
-static const uint32_t sha256_k[64] = {
-    0x428a2f98u, 0x71374491u, 0xb5c0fbcfu, 0xe9b5dba5u, 0x3956c25bu, 0x59f111f1u, 0x923f82a4u, 0xab1c5ed5u,
-    0xd807aa98u, 0x12835b01u, 0x243185beu, 0x550c7dc3u, 0x72be5d74u, 0x80deb1feu, 0x9bdc06a7u, 0xc19bf174u,
-    0xe49b69c1u, 0xefbe4786u, 0x0fc19dc6u, 0x240ca1ccu, 0x2de92c6fu, 0x4a7484aau, 0x5cb0a9dcu, 0x76f988dau,
-    0x983e5152u, 0xa831c66du, 0xb00327c8u, 0xbf597fc7u, 0xc6e00bf3u, 0xd5a79147u, 0x06ca6351u, 0x14292967u,
-    0x27b70a85u, 0x2e1b2138u, 0x4d2c6dfcu, 0x53380d13u, 0x650a7354u, 0x766a0abbu, 0x81c2c92eu, 0x92722c85u,
-    0xa2bfe8a1u, 0xa81a664bu, 0xc24b8b70u, 0xc76c51a3u, 0xd192e819u, 0xd6990624u, 0xf40e3585u, 0x106aa070u,
-    0x19a4c116u, 0x1e376c08u, 0x2748774cu, 0x34b0bcb5u, 0x391c0cb3u, 0x4ed8aa4au, 0x5b9cca4fu, 0x682e6ff3u,
-    0x748f82eeu, 0x78a5636fu, 0x84c87814u, 0x8cc70208u, 0x90befffau, 0xa4506cebu, 0xbef9a3f7u, 0xc67178f2u,
-};
-
-#define ROR(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
-
-static void sha256_block(sha256_ctx *c, const uint8_t *p) {
-    uint32_t w[64], a, b, d, e, f, g, hh, t1, t2, hcur;
-    int i;
-    for (i = 0; i < 16; i++)
-        w[i] = ((uint32_t)p[i * 4] << 24) | ((uint32_t)p[i * 4 + 1] << 16) |
-               ((uint32_t)p[i * 4 + 2] << 8) | p[i * 4 + 3];
-    for (i = 16; i < 64; i++) {
-        uint32_t s0 = ROR(w[i - 15], 7) ^ ROR(w[i - 15], 18) ^ (w[i - 15] >> 3);
-        uint32_t s1 = ROR(w[i - 2], 17) ^ ROR(w[i - 2], 19) ^ (w[i - 2] >> 10);
-        w[i] = w[i - 16] + s0 + w[i - 7] + s1;
-    }
-    a = c->h[0]; b = c->h[1]; hcur = c->h[2]; d = c->h[3];
-    e = c->h[4]; f = c->h[5]; g = c->h[6]; hh = c->h[7];
-    for (i = 0; i < 64; i++) {
-        uint32_t s1 = ROR(e, 6) ^ ROR(e, 11) ^ ROR(e, 25);
-        uint32_t ch = (e & f) ^ (~e & g);
-        t1 = hh + s1 + ch + sha256_k[i] + w[i];
-        uint32_t s0 = ROR(a, 2) ^ ROR(a, 13) ^ ROR(a, 22);
-        uint32_t mj = (a & b) ^ (a & hcur) ^ (b & hcur);
-        t2 = s0 + mj;
-        hh = g; g = f; f = e; e = d + t1;
-        d = hcur; hcur = b; b = a; a = t1 + t2;
-    }
-    c->h[0] += a; c->h[1] += b; c->h[2] += hcur; c->h[3] += d;
-    c->h[4] += e; c->h[5] += f; c->h[6] += g; c->h[7] += hh;
-}
-
-static void sha256_init(sha256_ctx *c) {
-    static const uint32_t iv[8] = {
-        0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u, 0xa54ff53au,
-        0x510e527fu, 0x9b05688cu, 0x1f83d9abu, 0x5be0cd19u,
-    };
-    memcpy(c->h, iv, sizeof iv);
-    c->len = 0;
-    c->fill = 0;
-}
-
-static void sha256_update(sha256_ctx *c, const void *data, size_t n) {
-    const uint8_t *p = (const uint8_t *)data;
-    c->len += n;
-    while (n) {
-        size_t take = 64 - (size_t)c->fill;
-        if (take > n) take = n;
-        memcpy(c->buf + c->fill, p, take);
-        c->fill += (int)take;
-        p += take;
-        n -= take;
-        if (c->fill == 64) { sha256_block(c, c->buf); c->fill = 0; }
-    }
-}
-
-static void sha256_hex(sha256_ctx *c, char out[65]) {
-    uint64_t bits = c->len * 8;
-    uint8_t pad = 0x80;
-    sha256_update(c, &pad, 1);
-    uint8_t z = 0;
-    while (c->fill != 56) sha256_update(c, &z, 1);
-    uint8_t lb[8];
-    for (int i = 0; i < 8; i++) lb[i] = (uint8_t)(bits >> (56 - 8 * i));
-    sha256_update(c, lb, 8);
-    static const char hexd[] = "0123456789abcdef";
-    for (int i = 0; i < 8; i++)
-        for (int j = 0; j < 4; j++) {
-            uint8_t byte = (uint8_t)(c->h[i] >> (24 - 8 * j));
-            out[i * 8 + j * 2] = hexd[byte >> 4];
-            out[i * 8 + j * 2 + 1] = hexd[byte & 15];
-        }
-    out[64] = 0;
-}
-
-static void sha256_of(const void *data, size_t n, char out[65]) {
-    sha256_ctx c;
-    sha256_init(&c);
-    sha256_update(&c, data, n);
-    sha256_hex(&c, out);
-}
 
 /* ======================= small file/string helpers ===================== */
 
@@ -264,22 +169,21 @@ static int gm_valid_ns(const char *s) {
     return 1;
 }
 
-/* One path component check: no absolute, no "..", no empty segment. */
-static int gm_safe_rel(const char *rel) {
-    if (!rel || !*rel || rel[0] == '/') return 0;
-    const char *p = rel;
-    while (*p) {
-        const char *seg = p;
-        while (*p && *p != '/') p++;
-        size_t sl = (size_t)(p - seg);
-        if (sl == 0) return 0;                                   /* "//" or trailing "/" handled by caller */
-        if (sl == 1 && seg[0] == '.') return 0;
-        if (sl == 2 && seg[0] == '.' && seg[1] == '.') return 0;
-        if (*p) p++;
-        if (*p == 0 && p[-1] == '/') return 0;                   /* trailing slash */
-    }
-    return 1;
-}
+/* One path component check: no absolute, no "..", no empty segment. The
+ * implementation lives in fileops.h so desktop-defaults' seed reconcile
+ * validates payload paths through exactly the same code. */
+static int gm_safe_rel(const char *rel) { return fo_safe_rel(rel); }
+
+/* A `seed` DESTINATION component check (the content resource kind, design
+ * §1.3 / §2.1): gm_safe_rel PLUS "no component may start with '.'". Dests
+ * are relative to /root, and hidden user territory is exactly where planting
+ * a merely-ABSENT file changes system behavior — ~/.config/openwith is the
+ * HIGHEST cfgstore layer (an association hijack), ~/.win32reg is the
+ * registry hive, ~/.config/pinned feeds the Start menu. One rule excises the
+ * channel. MUST MATCH os-common.js validateSeedShape — mkpkg and the fold
+ * enforce it at build/bake time; this is the install-time layer, because the
+ * engine never trusts a payload. */
+static int gm_safe_seed_rel(const char *rel) { return fo_safe_seed_rel(rel); }
 
 /* ============================ repo + http ============================== */
 
@@ -476,6 +380,14 @@ static int tar_validate(const unsigned char *tar, size_t len, const char *pkgnam
         }
         if (strncmp(nm, want, wl) != 0 || nm[wl] != '/') {
             fprintf(stderr, "gucman: payload member '%s' escapes opt/%s/ — refusing\n", nm, pkgname);
+            return -1;
+        }
+        /* opt/<name>/control.json is RESERVED: install materializes the
+         * VERIFIED top-level manifest there (below), which desktop-defaults
+         * reads back to re-plant missing icons and seeds. A payload carrying
+         * its own copy could forge that manifest — refuse it. */
+        if (strcmp(nm + wl + 1, "control.json") == 0) {
+            fprintf(stderr, "gucman: payload member '%s' is reserved (the package manifest) — refusing\n", nm);
             return -1;
         }
     }
@@ -717,11 +629,24 @@ struct gm_undo {
     cJSON *srclib_inc;          /* array of planted include-tier symlink paths (§3.1) */
     cJSON *srclib_ns;           /* array of planted src-namespace symlink paths */
     cJSON *srclib_dirs;         /* array of srclib tier dirs WE created */
+    cJSON *seeds;               /* array of {path, sha256} planted seed files */
+    cJSON *seed_dirs;           /* array of seed dirs WE created under /root */
 };
 
 static void gm_unwind(const char *name, struct gm_undo *u) {
     cJSON *it;
     cJSON_ArrayForEach(it, u->desktop) unlink(it->valuestring);
+    /* Seeds unwind unconditionally — no checksum gate. These were planted
+     * seconds ago in THIS run and are unedited by construction; the gate
+     * exists to protect a user's later edits, which cannot exist yet. */
+    cJSON_ArrayForEach(it, u->seeds) {
+        cJSON *p = cJSON_GetObjectItemCaseSensitive(it, "path");
+        if (cJSON_IsString(p)) unlink(p->valuestring);
+    }
+    for (int i = cJSON_GetArraySize(u->seed_dirs) - 1; i >= 0; i--) {
+        cJSON *d = cJSON_GetArrayItem(u->seed_dirs, i);
+        if (cJSON_IsString(d)) rmdir(d->valuestring);
+    }
     cJSON_ArrayForEach(it, u->srclib_inc) unlink(it->valuestring);
     cJSON_ArrayForEach(it, u->srclib_ns) unlink(it->valuestring);
     cJSON_ArrayForEach(it, u->srclib_dirs) rmdir(it->valuestring);
@@ -746,6 +671,92 @@ static int gm_tier_mkdir(const char *dir, cJSON *db_dirs) {
     }
     cJSON_AddItemToArray(db_dirs, cJSON_CreateString(dir));
     return 0;
+}
+
+/* ===================== the `seed` content resource kind ================ *
+ *
+ * Design: ~git/meta gucos notes, "gucman `seed` — a first-class CONTENT
+ * resource kind". Programs stay symlinks (the package owns the bytes);
+ * CONTENT is COPIED, so the user owns their copy and may edit it. Every
+ * planted file is recorded with the sha256 of the bytes AS PLANTED, which is
+ * what lets remove unlink only PRISTINE copies and loudly keep edited ones
+ * (§2.3) — gucman can never unlink a file it did not plant, because only
+ * planted paths ever enter the record (a collision is kept and NOT recorded,
+ * §2.2). */
+
+/* mkdir-if-absent, RECORDING a dir WE created (the gm_tier_mkdir rule). */
+static int gm_seed_mkdir(const char *dir, cJSON *db_dirs) {
+    if (gm_exists(dir)) return 0;
+    if (mkdir(dir, 0755) != 0) {
+        fprintf(stderr, "gucman: mkdir %s: %s\n", dir, strerror(errno));
+        return -1;
+    }
+    cJSON_AddItemToArray(db_dirs, cJSON_CreateString(dir));
+    return 0;
+}
+
+/* mkdir -p the parent chain of /root/<dest>; the last component is the seed
+ * node itself and belongs to fo_merge. */
+static int gm_seed_parents(const char *dest, cJSON *db_dirs) {
+    char p[GM_PATH_MAX];
+    if (gm_seed_mkdir(GM_HOME, db_dirs) != 0) return -1;
+    if (snprintf(p, sizeof p, GM_HOME "/%s", dest) >= (int)sizeof p) {
+        errno = ENAMETOOLONG;
+        fprintf(stderr, "gucman: seed dest %s: path too long\n", dest);
+        return -1;
+    }
+    for (char *s = p + strlen(GM_HOME) + 1; *s; s++) {
+        if (*s != '/') continue;
+        *s = 0;
+        int rc = gm_seed_mkdir(p, db_dirs);
+        *s = '/';
+        if (rc != 0) return -1;
+    }
+    return 0;
+}
+
+struct gm_seed_ctx {
+    cJSON *files;               /* {path, sha256} per planted file */
+    cJSON *dirs;                /* dirs the plant created */
+    int err;
+};
+
+static void gm_seed_record(cJSON *arr, const char *path, const char *hex) {
+    cJSON *o = cJSON_CreateObject();
+    if (!o) return;
+    cJSON_AddStringToObject(o, "path", path);
+    cJSON_AddStringToObject(o, "sha256", hex);
+    cJSON_AddItemToArray(arr, o);
+}
+
+static void gm_seed_ev(int ev, const char *path, void *ud) {
+    struct gm_seed_ctx *c = (struct gm_seed_ctx *)ud;
+    char hex[65];
+    switch (ev) {
+    case FO_MERGE_FILE:
+    case FO_MERGE_LINK:
+        if (sha256_path(path, hex) != 0) {
+            fprintf(stderr, "gucman: hashing %s: %s\n", path, strerror(errno));
+            c->err = 1;
+            break;
+        }
+        gm_seed_record(c->files, path, hex);
+        break;
+    case FO_MERGE_DIR:
+        cJSON_AddItemToArray(c->dirs, cJSON_CreateString(path));
+        break;
+    case FO_MERGE_KEPT:
+        /* The user already has something here; their state is legitimate by
+         * definition. Keep it, say so, do NOT record it (§2.2). */
+        fprintf(stderr, "gucman: kept existing %s\n", path);
+        break;
+    case FO_MERGE_ERR:
+        fprintf(stderr, "gucman: seeding %s: %s\n", path, strerror(errno));
+        c->err = 1;
+        break;
+    default:
+        break;                  /* NODE: the per-file records are the truth here */
+    }
 }
 
 static cJSON *gm_fetch_index(const char *base) {
@@ -871,6 +882,8 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
     cJSON *db_inc = cJSON_AddArrayToObject(db, "include_entries");
     cJSON *db_srcns = cJSON_AddArrayToObject(db, "src_namespaces");
     cJSON *db_sldirs = cJSON_AddArrayToObject(db, "srclib_dirs");
+    cJSON *db_seeds = cJSON_AddArrayToObject(db, "seeds");
+    cJSON *db_seed_dirs = cJSON_AddArrayToObject(db, "seed_dirs");
 
     char *control_text = NULL;
     if (tar_extract(tar, tarlen, name, stage, &control_text, db_files, db_dirs) != 0) {
@@ -883,11 +896,11 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
     }
     free(tar);
     cJSON *control = control_text ? cJSON_Parse(control_text) : NULL;
-    free(control_text);
     cJSON *cname = control ? cJSON_GetObjectItemCaseSensitive(control, "name") : NULL;
     if (!control || !cJSON_IsString(cname) || strcmp(cname->valuestring, name) != 0) {
         fprintf(stderr, "gucman: '%s' control.json is missing or names a different package — refusing\n", name);
         fo_delete(stage);
+        free(control_text);
         cJSON_Delete(control);
         cJSON_Delete(db);
         return -1;
@@ -897,10 +910,34 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
         cJSON_GetObjectItemCaseSensitive(control, "prerm")) {
         fprintf(stderr, "gucman: '%s' carries postinst/prerm scripts, which this gucman does not run — refusing\n", name);
         fo_delete(stage);
+        free(control_text);
         cJSON_Delete(control);
         cJSON_Delete(db);
         return -1;
     }
+    /* Materialize the VERIFIED manifest at /opt/<name>/control.json (written
+     * into the staging dir, so it publishes atomically with the tree and is
+     * recorded in db_files like any other planted file). This is the twin of
+     * the fold's /usr/opt/<name>/control.json: it is what lets
+     * desktop-defaults reconcile installed AND built-in packages through one
+     * code path — and without it, its phase 2 could never see an install's
+     * declarations at all (the payload never carried this file). The tar
+     * validator reserves the member name, so nothing can forge it. */
+    {
+        char cpath[GM_PATH_MAX], cfin[GM_PATH_MAX];
+        snprintf(cpath, sizeof cpath, "%s/control.json", stage);
+        snprintf(cfin, sizeof cfin, GM_OPT_DIR "/%s/control.json", name);
+        if (gm_write_file_atomic(cpath, control_text, strlen(control_text), 0644) != 0) {
+            fprintf(stderr, "gucman: writing %s: %s\n", cfin, strerror(errno));
+            fo_delete(stage);
+            free(control_text);
+            cJSON_Delete(control);
+            cJSON_Delete(db);
+            return -1;
+        }
+        cJSON_AddItemToArray(db_files, cJSON_CreateString(cfin));
+    }
+    free(control_text);
 
     /* A recordless /opt/<name> is a crashed install (the DB write is LAST);
      * sweep it and take its place. */
@@ -918,7 +955,7 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
 
     /* plant the declarative surface; unwind everything on any failure */
     struct gm_undo undo = { db_links, db_ow, db_menu, db_menu_dirs, db_fonts, db_desktop,
-                            db_inc, db_srcns, db_sldirs };
+                            db_inc, db_srcns, db_sldirs, db_seeds, db_seed_dirs };
     int fail = 0;
     cJSON *cbin = cJSON_GetObjectItemCaseSensitive(control, "bin");
     cJSON *it;
@@ -1117,6 +1154,44 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
         cJSON_AddItemToArray(db_srcns, cJSON_CreateString(link));
     }
 
+    /* The `seed` content plant (design §3.2): planted after every system
+     * integration point and before the cosmetic Desktop shortcut. Unlike
+     * that shortcut, a failure here IS an install failure — for a content
+     * package the seeds ARE the product — and gm_unwind removes exactly what
+     * this recorded. Dests are always under /root: system integration points
+     * already have TYPED resources with delta-write remove semantics (bin,
+     * openwith, menu, fonts, srclib), and a raw copy into /etc would bypass
+     * every one of those conventions (§2.1). */
+    cJSON *cseed = fail ? NULL : cJSON_GetObjectItemCaseSensitive(control, "seed");
+    cJSON_ArrayForEach(it, cseed) {
+        char abssrc[GM_PATH_MAX], absdst[GM_PATH_MAX];
+        if (!cJSON_IsString(it) || !it->string ||
+            !gm_safe_seed_rel(it->string) || !gm_safe_rel(it->valuestring)) {
+            fprintf(stderr, "gucman: '%s' has a malformed seed entry — refusing\n", name);
+            fail = 1;
+            break;
+        }
+        if (snprintf(abssrc, sizeof abssrc, GM_OPT_DIR "/%s/%s", name, it->valuestring) >= (int)sizeof abssrc ||
+            snprintf(absdst, sizeof absdst, GM_HOME "/%s", it->string) >= (int)sizeof absdst) {
+            fprintf(stderr, "gucman: '%s' seed path too long — refusing\n", name);
+            fail = 1;
+            break;
+        }
+        if (!gm_exists(abssrc)) {
+            fprintf(stderr, "gucman: '%s' seed %s -> %s names no packaged file — refusing\n",
+                    name, it->string, it->valuestring);
+            fail = 1;
+            break;
+        }
+        if (gm_seed_parents(it->string, db_seed_dirs) != 0) { fail = 1; break; }
+        struct gm_seed_ctx sctx = { db_seeds, db_seed_dirs, 0 };
+        if (fo_merge(abssrc, absdst, gm_seed_ev, &sctx) != 0 || sctx.err) {
+            fprintf(stderr, "gucman: '%s' seeding %s failed — refusing\n", name, absdst);
+            fail = 1;
+            break;
+        }
+    }
+
     /* Desktop shortcut (Q5 / #90; explicit eligibility per the win32
      * source-lib design §5): planted LAST, only for the user-requested
      * package (depth 0 — transitive library deps never clutter the desktop),
@@ -1229,6 +1304,34 @@ static int cmd_remove(const char *name) {
     cJSON *it;
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "desktop"))
         if (cJSON_IsString(it)) unlink(it->valuestring);      /* Q5: remove the shortcut we planted */
+    /* Seeds (the content resource kind, design §2.3): the copy exists so the
+     * user can EDIT it, so remove is checksum-gated. Pristine == package
+     * residue (identical bytes still sit in /opt) and goes; anything else is
+     * the user's data and stays, loudly. A path that is simply gone is fine
+     * (they deleted it) — remove's ENOENT tolerance. */
+    cJSON *seeds = cJSON_GetObjectItemCaseSensitive(db, "seeds");
+    for (int i = cJSON_GetArraySize(seeds) - 1; i >= 0; i--) {
+        cJSON *s = cJSON_GetArrayItem(seeds, i);
+        cJSON *p = cJSON_GetObjectItemCaseSensitive(s, "path");
+        cJSON *h = cJSON_GetObjectItemCaseSensitive(s, "sha256");
+        if (!cJSON_IsString(p) || !cJSON_IsString(h)) continue;
+        struct stat sst;
+        if (lstat(p->valuestring, &sst) != 0) continue;       /* already gone */
+        char hex[65];
+        if (sha256_path(p->valuestring, hex) == 0 && strcmp(hex, h->valuestring) == 0) {
+            if (unlink(p->valuestring) != 0 && errno != ENOENT)
+                fprintf(stderr, "gucman: removing %s: %s\n", p->valuestring, strerror(errno));
+        } else {
+            fprintf(stderr, "gucman: kept %s (modified since install)\n", p->valuestring);
+        }
+    }
+    /* seed dirs we created, innermost first — one holding a kept-modified or
+     * user-added file survives on ENOTEMPTY, automatically. */
+    cJSON *sdirs = cJSON_GetObjectItemCaseSensitive(db, "seed_dirs");
+    for (int i = cJSON_GetArraySize(sdirs) - 1; i >= 0; i--) {
+        cJSON *d = cJSON_GetArrayItem(sdirs, i);
+        if (cJSON_IsString(d)) rmdir(d->valuestring);
+    }
     /* srclib plants (§3.1): the include-tier and namespace symlinks, then
      * the tier dirs WE created — innermost-first replay like menu_dirs;
      * rmdir on a now-shared (non-empty) tier just keeps it. */
@@ -1479,6 +1582,27 @@ static void gm_info_strings(cJSON *db, const char *key, const char *label) {
         if (cJSON_IsString(it)) printf("  %s\n", it->valuestring);
 }
 
+/* The `seeds` array is the one object-shaped record (path + sha256), so it
+ * needs its own printer — and re-hashing each entry is what makes the list
+ * honest about what remove will actually do. */
+static void gm_info_seeds(cJSON *db) {
+    cJSON *arr = db ? cJSON_GetObjectItemCaseSensitive(db, "seeds") : NULL;
+    if (!arr || cJSON_GetArraySize(arr) == 0) return;
+    printf("seeded files:\n");
+    cJSON *it;
+    cJSON_ArrayForEach(it, arr) {
+        cJSON *p = cJSON_GetObjectItemCaseSensitive(it, "path");
+        cJSON *h = cJSON_GetObjectItemCaseSensitive(it, "sha256");
+        if (!cJSON_IsString(p)) continue;
+        char hex[65];
+        const char *mark = "";
+        if (!gm_exists(p->valuestring)) mark = " (deleted)";
+        else if (!cJSON_IsString(h) || sha256_path(p->valuestring, hex) != 0 ||
+                 strcmp(hex, h->valuestring) != 0) mark = " (modified)";
+        printf("  %s%s\n", p->valuestring, mark);
+    }
+}
+
 static int cmd_info(const char *name) {
     if (!gm_valid_name(name)) {
         fprintf(stderr, "gucman: '%s' is not a valid package name\n", name);
@@ -1553,6 +1677,7 @@ static int cmd_info(const char *name) {
         gm_info_strings(db, "desktop", "desktop shortcuts:");
         gm_info_strings(db, "include_entries", "include entries:");
         gm_info_strings(db, "src_namespaces", "source namespaces:");
+        gm_info_seeds(db);
     }
     cJSON_Delete(db);
     cJSON_Delete(index);
