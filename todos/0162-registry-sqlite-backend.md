@@ -1,6 +1,15 @@
 # 0162 — registry backend: consider SQLite (shared, consistent hive)
 
-- **Status**: deferred (parked design option, no current consumer; defer until a live cross-process registry consumer exists)
+- **Status**: deferred (parked design option — the *SQLite redesign* specifically; defer until
+  we decide gucOS wants a genuinely shared/queryable registry)
+- ⚠️ **PREMISE CORRECTED 2026-07-27.** This line previously read *"no current consumer; defer
+  until a live cross-process registry consumer exists."* **That was false**: three seeded,
+  Desktop/Start-menu-reachable apps write this hive today — `vendor/winmine/main.c`,
+  `vendor/notepad/settings.c`, `vendor/calc/winmain.c`. The consumers arrived and nobody
+  reopened this. Note also that *"no current consumer"* is verbatim one of the reasons
+  `CLAUDE.md`'s CORE PRINCIPLE names as **not valid** for cutting scope. The **data-loss bug**
+  that premise was masking is now filed separately as **`0288`** (reload-merge dirty values at
+  flush). The SQLite question below remains genuinely parked, on its own merits.
 - **Design**: this file (spun out of the registry batched-flush fix,
   `logs/2026-07-12/registry-batched-flush.md`)
 
@@ -56,8 +65,14 @@ Non-trivial: a service process + IPC + a SQLite VFS over BlockFS + fixing
 `hive_load` to stop caching. **Do not do this for performance** — the batched
 flush already solved that. Only worth it if we decide gucOS wants a genuinely
 shared/queryable registry (e.g. a control panel that edits settings live for
-running apps, `reg`-style tooling, or many-keyed subsystems). Until then the
-text hive is "exactly enough." Parking here as a considered option.
+running apps, `reg`-style tooling, or many-keyed subsystems). Parking here as a
+considered option.
+
+⚠️ **2026-07-27:** the original text here concluded *"until then the text hive is 'exactly
+enough.'"* It is **not** enough — with three live consumers it silently loses user data
+(close winmine and notepad in either order and the second exiter reverts the first's writes).
+That is a **bug**, fixed cheaply by `0288`, and it is not an argument for SQLite. Read this
+file's "parked" verdict as being about *shared/queryable*, never about *correct*.
 
 ## Acceptance (only if adopted)
 

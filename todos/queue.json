@@ -38,6 +38,23 @@
     { "id": "0148", "priority": 2, "difficulty": "light" },
     { "id": "0152", "priority": 2, "after": ["0064"] },
     { "id": "0157" },
-    { "id": "0162", "priority": 3, "difficulty": "heavy" }
+    { "id": "0162", "priority": 3, "difficulty": "heavy" },
+    { "id": "0285", "difficulty": "medium", "after": ["0287"] },
+    { "id": "0286", "difficulty": "medium" },
+    { "id": "0287", "difficulty": "light" },
+    { "id": "0288", "difficulty": "medium" },
+    { "id": "0289", "priority": 2, "difficulty": "medium" },
+    { "id": "0290", "priority": 2, "difficulty": "medium" },
+    { "id": "0291", "priority": 2, "difficulty": "light" },
+    { "id": "0292", "priority": 2, "difficulty": "medium" },
+    { "id": "0293", "priority": 2, "difficulty": "light" },
+    { "id": "0294", "priority": 2, "difficulty": "medium" },
+    { "id": "0295", "priority": 2, "difficulty": "medium" },
+    { "id": "0296", "priority": 3, "difficulty": "medium" },
+    { "id": "0297", "priority": 3, "difficulty": "medium" },
+    { "id": "0298", "priority": 3, "difficulty": "light" },
+    { "id": "0299", "priority": 3, "difficulty": "light" },
+    { "id": "0300", "priority": 3, "difficulty": "light" },
+    { "id": "0301", "priority": 3, "difficulty": "light" }
   ]
 }
