@@ -40,6 +40,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const LIABILITIES = require('./liabilities.js');
 
 const TODOS_DIR = __dirname;
 const REPO_ROOT = path.resolve(TODOS_DIR, '..');
@@ -353,6 +354,19 @@ function cmdCheck(argv) {
   }
 
   const { errors, warnings } = validate(manifest, fsState);
+  // The liability register (todos/0286) cites ticket ids, so its staleness is
+  // ticket state — this CLI's subject. Validated here so closing or filing an
+  // item re-checks it. Whether the register EXISTS is not this command's
+  // business: `liabilities.js check` fails on a missing one, and both gates
+  // that run this command (the pre-commit hook, the `todos` suite in
+  // tests/run.js) run that command too. tests/run.js is also what catches a
+  // CODE edit that rewrites an anchored comment.
+  const liab = fs.existsSync(LIABILITIES.registerPath())
+    ? LIABILITIES.check({ tickets: fsState }) : { errors: [], pinned: [], entries: [] };
+  for (const p of liab.pinned) {
+    process.stdout.write(`  pinned  ${p.id}  deferral target ${p.expired} is closed — funded by todos/${p.ticket}\n`);
+  }
+  errors.push(...liab.errors);
   for (const w of warnings) process.stdout.write(`warning: ${w}\n`);
   if (errors.length) {
     process.stderr.write(`check FAILED (${errors.length} error(s)):\n`);
@@ -360,7 +374,8 @@ function cmdCheck(argv) {
     process.exit(1);
   }
   if (flags.fix) writeManifest(manifest);
-  process.stdout.write(`check OK — ${manifest.queue.length} item(s), ${fsState.done.size} done.\n`);
+  process.stdout.write(`check OK — ${manifest.queue.length} item(s), ${fsState.done.size} done, ` +
+    `${liab.entries.length} liability entr${liab.entries.length === 1 ? 'y' : 'ies'} (${liab.pinned.length} pinned).\n`);
 }
 
 function cmdList(argv) {
@@ -724,6 +739,15 @@ function cmdDone(argv) {
   validateOrDie(manifest, scanFs(), 'done');
   writeManifest(manifest);
   process.stdout.write(`done ${id} → todos/done/${file} (dropped from queue)\n`);
+
+  // Closing a ticket is the moment the liability register goes stale — that is
+  // how 0291/0293/0300 were each missed. Name the entries now; `queue.js check`
+  // (and the `todos` suite) then block until they are retired or re-pointed.
+  const stale = fs.existsSync(LIABILITIES.registerPath()) ? LIABILITIES.check().errors : [];
+  if (stale.length) {
+    process.stderr.write(`\n  todos/LIABILITIES.md now FAILS its check — fix it in this closing commit:\n`);
+    for (const e of stale) process.stderr.write(`    - ${e}\n`);
+  }
 }
 
 function cmdBlock(argv) {

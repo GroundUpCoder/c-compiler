@@ -26,6 +26,11 @@ function setup(queue) {
   execFileSync('git', ['config', 'user.email', 't@t'], { cwd: root });
   execFileSync('git', ['config', 'user.name', 't'], { cwd: root });
   fs.copyFileSync(REAL_QUEUE_JS, path.join(todos, 'queue.js'));
+  // queue.js validates the liability register alongside the manifest, so its
+  // module has to be here too. These temp trees carry no LIABILITIES.md, which
+  // is the not-applicable case — todos/liabilities.test.js is where the
+  // register's own behaviour (including a missing one) is tested.
+  fs.copyFileSync(path.join(__dirname, 'liabilities.js'), path.join(todos, 'liabilities.js'));
   return todos;
 }
 
