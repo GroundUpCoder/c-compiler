@@ -41,8 +41,16 @@ export const osUrl = (port, hostKeys = 'off') =>
 // `node serve.js .`. stdio is piped but left UNREAD by default — matching the
 // os-*.mjs majority (serve is near-silent); pass onLog to tap it (os-boots
 // prefixes `[serve]`).
+//
+// `--strict-port` is NOT optional here. Every os-*.mjs pins a fixed port and
+// then polls exactly that port; a bare serve.js walks to port+1 on EADDRINUSE,
+// so a leftover listener from a killed run silently keeps the port and the test
+// talks to the STALE server — reds that read as product regressions. With the
+// flag a squatted port fails immediately, naming the holder (see serve.js
+// tryListen). Ports are also REUSED across sweep files (3197 belongs to four),
+// so the flag carries a bounded same-port retry for the teardown race.
 export function startServer(port, { root = ROOT, onLog } = {}) {
-  const child = spawn('node', [path.join(ROOT, 'serve.js'), root, String(port)],
+  const child = spawn('node', [path.join(ROOT, 'serve.js'), root, String(port), '--strict-port'],
     { stdio: ['ignore', 'pipe', 'pipe'] });
   if (onLog) {
     child.stdout.on('data', (d) => onLog(d));

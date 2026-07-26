@@ -16,8 +16,18 @@ const requestedOverlays = new Set();
 // verbatim, as today); it's a guard so a clang-mandatory serve can't silently
 // serve a stale base index. Flagless serve.js is byte-identical to today.
 let assertClangPackages = false;
+// `--strict-port`: bind the REQUESTED port or fail loudly — never the silent
+// walk to port+1 that tryListen does for a developer's convenience. The browser
+// harness passes it (tests/browser/lib/os-harness.mjs startServer) because the
+// walk is a false-signal generator there: the sweep's ports are fixed per file,
+// so a squatting leftover pushes the real server aside while the test keeps
+// polling the fixed port and talks to the STALE one — a red with nothing to do
+// with the code under test. (Worse here than it looks: 3197 and 3198 are BOTH
+// assigned to sweep files, so the +1 walk lands on another file's port.)
+let strictPort = false;
 for (const a of process.argv.slice(2)) {
   if (a === '--clang') requestedOverlays.add('clang-apps');
+  else if (a === '--strict-port') strictPort = true;
   else if (a.startsWith('--overlay=')) requestedOverlays.add(a.slice(10));
   else if (a.startsWith('--overlays=')) a.slice(11).split(',').forEach((id) => id && requestedOverlays.add(id));
   else if (a === '--packages-index=clang') assertClangPackages = true;
@@ -206,16 +216,79 @@ const server = http.createServer((req, res) => {
   });
 });
 
+// Best-effort "who is holding this port?" for the --strict-port diagnostic.
+// Naming the squatter at the source is the whole point — the alternative is a
+// downstream ERR_CONNECTION_REFUSED or, worse, a silently stale server.
+function portHolders(port) {
+  try {
+    const out = require('child_process').execFileSync(
+      'lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return out.split('\n').map((s) => s.trim()).filter(Boolean).map((pid) => {
+      try {
+        const ps = require('child_process').execFileSync(
+          'ps', ['-o', 'ppid=,command=', '-p', pid],
+          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+        return `pid ${pid} (ppid ${ps.split(/\s+/)[0]}) ${ps.replace(/^\s*\d+\s+/, '').slice(0, 120)}`;
+      } catch { return `pid ${pid}`; }
+    });
+  } catch { return []; }
+}
+
+// --strict-port tolerates a BOUNDED retry on the same port before giving up:
+// sweep files reuse ports (3197 is assigned to four of them), so the previous
+// file's server may still be releasing its socket when the next one binds. A
+// graceful teardown clears in well under a second; a real squatter never does.
+// Started at the FIRST collision, not at module load: serve.js may re-bake a
+// stale image for minutes before it ever calls listen(), which would otherwise
+// have burned the whole window before the race it exists to absorb.
+const STRICT_RETRY_MS = 3000;
+let strictDeadline = null;
+
 function tryListen(port) {
+  // `once` removes itself before firing, so re-entering here re-registers
+  // exactly one handler — no listener accumulation across retries.
   server.once('error', (err) => {
-    if (err.code === 'EADDRINUSE' && port < preferredPort + 10) {
-      tryListen(port + 1);
-    } else {
-      console.error(err.message);
+    if (err.code !== 'EADDRINUSE') { console.error(err.message); process.exit(1); }
+    if (strictPort) {
+      if (strictDeadline === null) strictDeadline = Date.now() + STRICT_RETRY_MS;
+      if (Date.now() < strictDeadline) { setTimeout(() => tryListen(port), 100); return; }
+      const held = portHolders(port);
+      console.error(
+        `serve.js: port ${port} is still in use after ${STRICT_RETRY_MS}ms and --strict-port was requested.\n` +
+        (held.length ? held.map((h) => `  held by ${h}\n`).join('')
+                     : '  (could not identify the holder — lsof unavailable)\n') +
+        '  Refusing to fall through to another port: the caller polls THIS one, so falling\n' +
+        '  through would hand it a stale server and produce reds that look like product bugs.\n' +
+        '  A PPID-1 holder is an orphan from a killed run — `node tests/lib/harness-leaks.js`\n' +
+        '  reaps those (the heavy runners now do it at startup).');
       process.exit(1);
     }
+    if (port < preferredPort + 10) { tryListen(port + 1); return; }
+    console.error(err.message);
+    process.exit(1);
   });
   server.listen(port);
+}
+
+// Die with our parent. serve.js is always spawned by something that owns it (a
+// browser test file, os-drive, a developer's shell); when that owner is killed
+// we get reparented to init and would otherwise keep LISTENING forever on a
+// fixed harness port. 70 such orphans squatted the sweep's ports in one round.
+// A poll, not a handler, because a parent's death delivers no signal here — and
+// because it must survive the owner being SIGKILLed, which runs no handler
+// anywhere. Same idiom as the suite-runner load generators. An already-
+// parentless start (ppid 1, e.g. a deliberately daemonized serve) is left alone.
+const INITIAL_PPID = process.ppid;
+if (INITIAL_PPID > 1) {
+  const watch = setInterval(() => {
+    if (process.ppid === INITIAL_PPID) return;
+    clearInterval(watch);
+    console.error(`[serve] parent ${INITIAL_PPID} exited (reparented to ${process.ppid}) — ` +
+                  `exiting so port ${server.address() ? server.address().port : preferredPort} is not squatted`);
+    process.exit(0);
+  }, 1000);
+  watch.unref();
 }
 
 server.once('listening', () => {

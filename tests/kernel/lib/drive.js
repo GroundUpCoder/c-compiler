@@ -24,19 +24,30 @@
 // throwing only on spawn error — callers keep asserting on stdout exactly as
 // before. The chosen image path is attached as `r.image` for convenience.
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const cp = require('child_process');
+const { mkdtempOwned } = require('../../lib/harness-temp.js');
 
 // lib/ sits one level below tests/kernel/, which is two below the repo root.
 const ROOT = path.resolve(__dirname, '../../..');
 const BOOT = path.join(ROOT, 'os/boot.js');
 
-// A fresh throwaway image: an mkdtemp dir + its `os.img` path. The caller
-// owns cleanup (`fs.rmSync(dir, { recursive: true, force: true })`); most
-// e2es leak the tmpdir like they always did and let the OS sweep /tmp.
+// A fresh throwaway image: an mkdtemp dir + its `os.img` path.
+//
+// The dir is now OWNED, not leaked. The old contract here was "the caller owns
+// cleanup; most e2es leak the tmpdir like they always did and let the OS sweep
+// /tmp" — but macOS never sweeps /var/folders on any useful horizon and each of
+// these is 144-197 MB, so runs that died abruptly piled up 779 dirs / 49 GB and
+// filled the disk. ENOSPC then surfaced as test timeouts and spurious failures,
+// i.e. as a product regression that was not one.
+//
+// mkdtempOwned tags the dir with THIS process's pid and registers it for
+// process-lifetime cleanup (tests/lib/harness-temp.js). Callers that already
+// rmSync it explicitly are unaffected — rm is force:true and idempotent. The pid
+// tag is what lets the next run's startup reaper tell an abandoned dir from one
+// a live test is using right now, so a SIGKILLed run cleans up too.
 function freshImage(prefix = 'os-e2e-') {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const dir = mkdtempOwned(prefix);
   return { dir, image: path.join(dir, 'os.img') };
 }
 

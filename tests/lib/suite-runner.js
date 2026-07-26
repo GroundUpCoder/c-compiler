@@ -16,12 +16,30 @@
 //   - --resume (skip files that passed in the previous summary), --filter,
 //     --fail-fast, --timeout, -j, --list
 //
-// Interrupt semantics (audited 2026-07-10): SIGINT/SIGTERM kill every
-// in-flight process group and keep the checkpoint; a SIGKILL of the runner
-// (untrappable) still leaves a valid partial summary but ORPHANS in-flight
-// children — they self-exit when their test completes, so the only true
-// leak is a SIGKILLed runner whose test was itself hung. `pkill -f
-// tests/kernel` cleans up after that rare case.
+// Interrupt semantics (re-audited 2026-07-26). The three deaths and what
+// covers each — the old note here said a SIGKILLed runner's orphans "self-exit
+// when their test completes, so the only true leak is a hung test", and treated
+// `pkill -f tests/kernel` as the answer. That was wrong in practice: it leaked
+// 70 serve.js listeners onto the sweep's fixed ports in one round, and the next
+// run then talked to those stale servers and reported reds that had nothing to
+// do with the code under test.
+//
+//   clean exit ......... the test's own teardown; harness-temp.js rms fixtures.
+//   per-file TIMEOUT ... we kill the whole process GROUP (killGroup below:
+//                        SIGTERM, grace, SIGKILL). The child is detached, so it
+//                        IS a group leader and the kill reaches its
+//                        serve.js/Chromium grandchildren; the grace window lets
+//                        a responsive child rm its own fixture dir first.
+//   SIGINT/SIGTERM ..... onSignal killGroups every in-flight file, checkpoints,
+//                        and exits 130 — the partial summary stays valid.
+//   runner SIGKILLed ... no handler of ours can run, and the children are in a
+//                        DIFFERENT group so nobody else's kill reaches them.
+//                        Covered from INSIDE the child instead: every file is
+//                        spawned with `-r tests/lib/parent-watch.js`, which
+//                        polls its ppid and tears down its own group when we
+//                        vanish. Whatever still escapes (or predates the fix)
+//                        is reaped at the next run's startup by
+//                        tests/lib/harness-leaks.js preflight().
 //
 // Callers provide the file table and defaults; see tests/kernel/run.js and
 // tests/browser/os-sweep.mjs.
@@ -29,6 +47,35 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+
+const PARENT_WATCH = path.join(__dirname, 'parent-watch.js');
+
+// How long a doomed process group gets to clean up after itself before we take
+// it out for good. A test file killed outright runs no handler, so its ~150 MB
+// fixture dir survives to be collected by the next run's reaper; SIGTERM first
+// lets harness-temp.js rm it here and now instead. Deliberately short — a hung
+// test cannot service the signal anyway (its loop is stuck, which is why it
+// timed out), so this is a cheap upgrade for the responsive case and a 400ms
+// tax on nothing else.
+const KILL_GRACE_MS = 400;
+
+// SIGTERM the whole group, then SIGKILL what is left. `-pid` is the group (the
+// child is detached, so it leads one); the fallback covers a child that never
+// became a leader. When `sync`, block for the grace window — the callers that
+// pass it are exiting immediately after and have no later turn to run in.
+function killGroup(child, { sync = false } = {}) {
+  const send = (sig) => {
+    try { process.kill(-child.pid, sig); }
+    catch { try { child.kill(sig); } catch {} }
+  };
+  send('SIGTERM');
+  if (sync) {
+    try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, KILL_GRACE_MS); } catch {}
+    send('SIGKILL');
+  } else {
+    setTimeout(() => send('SIGKILL'), KILL_GRACE_MS).unref();
+  }
+}
 
 // A filter is a comma-separated OR of substrings — `--filter=wm,term` selects
 // any file whose name contains "wm" OR "term". The flake gate (todos/0147)
@@ -219,10 +266,18 @@ async function runSuite(entries, opts) {
       const logPath = path.join(opts.artifactDir, (entry.logName || entry.file).replace(/[\/\\]/g, '_') + '.log');
       const out = fs.createWriteStream(logPath);
       const t = Date.now();
-      const child = spawn(process.execPath, [path.join(opts.dir, entry.file), ...(entry.args || [])], {
+      // `-r parent-watch.js` makes the child die with US. `detached: true` gives
+      // it its own process group (so the timeout below can group-kill its
+      // serve.js/Chromium grandchildren) but by the same token puts it OUT of
+      // our group — so a SIGKILL of this runner from outside reaches nothing.
+      // The preload closes that: it polls its ppid and tears its own group down
+      // when we vanish. CC_HARNESS_GROUP_LEADER tells it the group kill is its
+      // to make (true exactly because we detached it). See parent-watch.js.
+      const child = spawn(process.execPath,
+        ['-r', PARENT_WATCH, path.join(opts.dir, entry.file), ...(entry.args || [])], {
         cwd: opts.dir, detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: Object.assign({}, process.env, opts.env || {}),
+        env: Object.assign({}, process.env, { CC_HARNESS_GROUP_LEADER: '1' }, opts.env || {}),
       });
       inflight.add(child);
       child.stdout.pipe(out, { end: false });
@@ -230,8 +285,10 @@ async function runSuite(entries, opts) {
       let timedOut = false;
       const deadline = entry.timeoutMs || opts.timeoutMs;
       const timer = setTimeout(() => {
+        // `timedOut` is latched BEFORE the kill, so the graceful window cannot
+        // relabel a timeout as an ordinary signalled failure.
         timedOut = true;
-        try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} }
+        killGroup(child);
       }, deadline);
       child.on('exit', (code, signal) => {
         clearTimeout(timer);
@@ -286,7 +343,9 @@ async function runSuite(entries, opts) {
   const onSignal = () => {
     if (interrupted) return;
     interrupted = true;
-    for (const c of inflight) { try { process.kill(-c.pid, 'SIGKILL'); } catch {} }
+    // sync: we call process.exit() a few lines down, so there is no later turn
+    // in which a deferred SIGKILL could fire.
+    for (const c of inflight) killGroup(c, { sync: true });
     stopLoad();
     checkpoint(false);
     process.stdout.write(`\ninterrupted — partial summary at ${summaryPath}\n`);

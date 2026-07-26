@@ -105,4 +105,7 @@ function acquireHeavyLock({ name = 'heavy suite' } = {}) {
   return release;
 }
 
-module.exports = { acquireHeavyLock, LOCK_PATH };
+// pidAlive is re-exported for tests/lib/harness-leaks.js: the startup reaper
+// makes exactly the same "is the owner still there?" call this lock's
+// stale-holder steal does, and one implementation of it is enough.
+module.exports = { acquireHeavyLock, LOCK_PATH, pidAlive };
