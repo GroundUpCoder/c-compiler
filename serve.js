@@ -25,8 +25,25 @@ let assertClangPackages = false;
 // with the code under test. (Worse here than it looks: 3197 and 3198 are BOTH
 // assigned to sweep files, so the +1 walk lands on another file's port.)
 let strictPort = false;
+// `--minimal`: serve the DEPLOY shape instead of the dev-convenience FAT one.
+// The deployed origin (comguc/scripts/build.mjs step 1) bakes a PLAIN
+// `mkimage.js --out=…` — no `--packages` fold — and then publishes the mkpkg
+// repo at /packages (step 2), so every optional app installs at RUNTIME over
+// HTTP. serve.js's default is the opposite: it folds every packages/<name>.json
+// back into the blob, which is why the whole browser sweep can be green on an
+// image that is not the one users boot. With this flag the served blob is
+// minimal (empty os-release PACKAGES=) and /packages is still served from
+// dist/packages — i.e. the two halves of the deploy, together.
+//
+// The minimal blob bakes to a SIDECAR (os-system.minimal.img) and is only
+// SERVED under the os-system.img URL, exactly like the overlay sidecar below.
+// os/os-system.img stays the fat shared fixture that tests/lib/image-fixture.js
+// and every other suite depend on — baking minimal over it would make all of
+// them detect a package-set mismatch and re-bake.
+let minimalImage = false;
 for (const a of process.argv.slice(2)) {
   if (a === '--clang') requestedOverlays.add('clang-apps');
+  else if (a === '--minimal') minimalImage = true;
   else if (a === '--strict-port') strictPort = true;
   else if (a.startsWith('--overlay=')) requestedOverlays.add(a.slice(10));
   else if (a.startsWith('--overlays=')) a.slice(11).split(',').forEach((id) => id && requestedOverlays.add(id));
@@ -36,6 +53,15 @@ for (const a of process.argv.slice(2)) {
 }
 const arg = positionals[0] || 'build';
 const preferredPort = parseInt(positionals[1] || '8080', 10);
+
+// An overlay is by definition an ADDITIVE fat augmentation of the dev image;
+// `--minimal` is the deploy's plain bake. Combining them has no meaning, and
+// silently letting one win would serve an artifact nobody asked for.
+if (minimalImage && requestedOverlays.size) {
+  console.error('serve.js: --minimal and --overlay/--clang are mutually exclusive ' +
+                '(an overlay augments the dev image; --minimal is the deploy\'s plain bake)');
+  process.exit(2);
+}
 
 const resolved = path.resolve(arg);
 const stat = fs.statSync(resolved, { throwIfNoEntry: false });
@@ -79,6 +105,16 @@ function resolveOverlayPlan(dir) {
 }
 const overlayPlan = resolveOverlayPlan(root);
 
+// The blob file this serve BAKES and SERVES. `os-system.img` is the shared fat
+// fixture (tests/lib/image-fixture.js, the kernel suite, every other browser
+// file); an overlay serve and a `--minimal` serve each bake their own SIDECAR
+// so the three shapes never thrash one another's artifact. Whatever the name,
+// the browser still fetches `os-system.img` beside the page (kernel-worker.js),
+// so the request is rewritten to the sidecar at serve time.
+const servedImageName = overlayPlan ? overlayPlan.imageName
+                      : minimalImage ? 'os-system.minimal.img'
+                      : 'os-system.img';
+
 // Prebaked system-image freshness (todos/0040 + 0082): when serving the OS
 // tree, make sure os/os-system.img is current BEFORE listening — a stale/
 // missing blob makes every fresh browser boot silently fall back to the
@@ -101,16 +137,18 @@ function ensureSystemImage(dir, plan) {
   if (!fs.existsSync(manifestPath) || !fs.existsSync(mkimagePath)) return;
   const { BLOCK_FS } = require(path.join(dir, 'host.js'));
   const COMMON = require(path.join(dir, 'os', 'os-common.js'));
-  // The dev serve always serves the FAT image: every packages/<name>.json
+  // The dev serve serves the FAT image by default: every packages/<name>.json
   // folded back into the blob (gucman pulls them out of a plain bake), so
-  // the in-browser estate matches the kernel-test fixture. A future deploy
-  // build serves the minimal blob + the packages pool instead.
+  // the in-browser estate matches the kernel-test fixture. `--minimal` is the
+  // DEPLOY shape (comguc/scripts/build.mjs step 1): a plain bake with nothing
+  // folded, paired with the /packages repo that is already served below —
+  // optional apps install at runtime instead of riding the blob.
   const folded = COMMON.foldPackages(fs, path, dir,
-    JSON.parse(fs.readFileSync(manifestPath, 'utf-8')), 'all');
+    JSON.parse(fs.readFileSync(manifestPath, 'utf-8')), minimalImage ? [] : 'all');
   const manifest = folded.manifest;
   const wantPkgs = folded.names;
   const wanted = manifest.version | 0;
-  const imageName = plan ? plan.imageName : 'os-system.img';
+  const imageName = servedImageName;
   const imgPath = path.join(dir, 'os', imageName);
   const wantOverlays = plan ? plan.ids : [];
   const overlayArgs = plan ? plan.enabled.map((e) => `--overlay=${e.id}`) : [];
@@ -151,6 +189,10 @@ function ensureSystemImage(dir, plan) {
 }
 if (!singleFile) {
   ensureSystemImage(root, overlayPlan);
+  if (minimalImage) {
+    console.log(`[serve] minimal image: serving os/${servedImageName} (no packages folded) ` +
+                '+ the /packages repo — the deploy shape');
+  }
   if (overlayPlan) {
     for (const e of overlayPlan.enabled) {
       console.log(`[serve] overlay ${e.id} folded in (${e.producer}@${e.commitShort})`);
@@ -177,11 +219,13 @@ if (assertClangPackages && !singleFile) {
   console.log(`[serve] clang package index: ${clangNames.length} *-clang card(s)`);
 }
 
-// When an overlay is active, the browser still fetches `os-system.img` beside
-// the page (kernel-worker.js) — serve the overlay sidecar bytes for that path
-// so the boot gets the augmented blob without any kernel-worker change.
+// The browser always fetches `os-system.img` beside the page
+// (kernel-worker.js) — serve the sidecar bytes for that path when this serve
+// bakes one (an overlay, or `--minimal`), so the boot gets the requested blob
+// without any kernel-worker change.
 const baseImgFile = path.join(root, 'os', 'os-system.img');
-const overlayImgFile = overlayPlan ? path.join(root, 'os', overlayPlan.imageName) : null;
+const sidecarImgFile = servedImageName === 'os-system.img'
+  ? null : path.join(root, 'os', servedImageName);
 
 const MIME = {
   '.html': 'text/html',
@@ -204,7 +248,7 @@ const server = http.createServer((req, res) => {
     file = path.join(root, 'dist', url.slice(1));
   }
   if (!file.startsWith(root)) { res.writeHead(403); res.end(); return; }
-  if (overlayImgFile && path.resolve(file) === baseImgFile) file = overlayImgFile;
+  if (sidecarImgFile && path.resolve(file) === baseImgFile) file = sidecarImgFile;
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404); res.end('Not found'); return; }
     res.writeHead(200, {
