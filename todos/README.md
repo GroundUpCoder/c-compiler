@@ -97,6 +97,47 @@ git config core.hooksPath todos/githooks
 Bypass a single unrelated commit with `git commit --no-verify`. The hook skips
 silently on repos without a `queue.json`.
 
+### The liability register: `LIABILITIES.md` + `liabilities.js` (todos/0286)
+
+`todos/LIABILITIES.md` is the third checked file in this directory (after the
+items and the manifest): **the index of gaps the tree describes but nothing
+schedules.** Each entry cites a code location (file + a literal anchor line),
+one line naming the gap, and the **live** ticket that funds it.
+
+It exists because a *true* gap comment is more dangerous than a false one. A
+false comment contradicts behaviour and something eventually breaks; a true one
+reads as known-and-handled, and **is itself the reason nobody looks again.**
+The 2026-07-27 sweep found 12 such gaps and all 12 had the same cause — they
+never entered `todos/`.
+
+```
+node todos/liabilities.js check     # validate the register (exit 1 on failure)
+node todos/liabilities.js list      # entries with anchors resolved to file:line
+```
+
+The check fails on a `ticket:` that is closed or missing, a `defers-to:` that
+is closed and unpinned (*the deferral outlived its premise* — a pointer at a
+`done/` item reads as handled), a pin whose target has reopened, an anchor that
+has moved or vanished, an unclassified ticket id inside an anchor, and on an
+empty or unparsable register. Full field reference: the register's own header.
+Its tests are `todos/liabilities.test.js`.
+
+**Two invokers, neither optional.** `queue.js check` runs it (so does the
+pre-commit hook, and `queue.js done <ID>` names the entries a close just made
+stale — that is the moment `0291`/`0293`/`0300` were each missed at). And the
+`todos` suite in `tests/run.js` runs it, with the diff planner routing **every
+file the register cites** to that suite, so a code edit that rewrites an
+anchored comment is caught too. `tests/run.js --diff` is the gate every lane
+already runs; the hook is per-clone opt-in, which is why the register does not
+rely on it alone.
+
+**Enrolment rule** — what obliges a gap to appear there: *if a comment's
+sentence is true, does it imply work?* Then it is a liability and needs a
+ticket plus an entry, in the same commit. Not a `TODO`-marker lint: the sweep's
+12 findings carried no markers, so a marker lint would have found none of them.
+The checker guarantees the register → tree direction; the tree → register
+direction is a recurring pass (`todos/0302`), funded rather than noted.
+
 ### Themes (orientation only — the queue is the order)
 
 There is deliberately **no ordered roadmap in this file**: a hand-maintained

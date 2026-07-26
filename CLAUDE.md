@@ -52,6 +52,19 @@ Planned work lives in `todos/` (system doc: `todos/README.md`):
   convention: `todos/README.md` §1 "Maintaining the queue".
 - **Design/topic docs**: `todos/NAME.md` (OS.md, KERNEL.md, SDL3.md, …) —
   long-lived designs and backlogs that queue items reference for detail.
+- **Liability register**: `todos/LIABILITIES.md` (todos/0286) — the index of
+  gaps the tree *describes* but nothing schedules. Each entry cites a file + a
+  literal anchor line, one line on the gap, and the **live** ticket funding it.
+  A *true* gap comment is more dangerous than a false one: it reads as
+  known-and-handled, so the documentation is the reason nobody looks again.
+  `node todos/liabilities.js check` fails on a closed/missing `ticket:`, a
+  `defers-to:` that has already shipped and is unpinned (the deferral outlived
+  its premise), a moved/vanished anchor, or an empty register — run by the
+  `todos` suite in `tests/run.js`, by `queue.js check`, and by the pre-commit
+  hook. **Enrolment rule**: if a comment's sentence is true and implies work,
+  it needs a ticket AND an entry in the same commit (not a `TODO`-marker lint —
+  the 12 findings that motivated this carried no markers). Discovery of
+  pre-existing ones is the recurring sweep `todos/0302`.
 
 **Priority policy (P0 bugs always come first).** `queue.js` orders by priority
 bucket then array position, so P0 items lead the queue by construction — keep it

@@ -49,6 +49,8 @@ const SUITES = {
              optional: true },
   host:    { desc: 'host.js Node output path + serve.js first-run (Node-only)',
              cmd: ['node', 'tests/host/run.js'], supports: [] },
+  todos:   { desc: 'queue manifest + liability register validators (todos/0286)',
+             cmd: ['node', 'tests/todos/run.js'], supports: ['filter'] },
 };
 
 // run.py categories exposed as suites. `unit`/`blockfs` are DELIBERATELY not
@@ -64,10 +66,10 @@ for (const cat of PY_CATEGORIES) {
 
 // Execution order: cheap-and-fast first, the image-baking kernel suite and
 // the heavy browser sweep last. Any suite not listed here falls after.
-const RUN_ORDER = ['unit', 'host', 'blockfs', ...PY_CATEGORIES, 'kernel', 'sweep'];
+const RUN_ORDER = ['todos', 'unit', 'host', 'blockfs', ...PY_CATEGORIES, 'kernel', 'sweep'];
 
 // `all` = the entire estate.
-const ALL_SUITES = ['unit', 'host', 'blockfs', ...PY_CATEGORIES, 'kernel', 'sweep'];
+const ALL_SUITES = ['todos', 'unit', 'host', 'blockfs', ...PY_CATEGORIES, 'kernel', 'sweep'];
 
 // ---------- Diff → suite rule table ----------
 //
@@ -77,14 +79,37 @@ const ALL_SUITES = ['unit', 'host', 'blockfs', ...PY_CATEGORIES, 'kernel', 'swee
 // UNMAPPED (warned, not silently skipped) so the table stays honest.
 
 const IGNORE = [
-  /^todos\//, /^logs\//, /^old\//, /\.md$/i, /^HANDOFF/,
+  /^logs\//, /^old\//, /\.md$/i, /^HANDOFF/,
   /^LICENSE$/, /^CONTRIBUTING/, /(^|\/)\.gitignore$/, /(^|\/)\.git\//,
   /^media\//, /(^|\/)README/i,
 ];
 
+// The liability register (todos/0286) pins a literal line in each file it
+// cites, so an edit to any of them can invalidate an entry. Derived from the
+// register itself: a new entry enrols its own file with no rule to remember.
+// A register that will not parse yields a match-everything pattern, so the
+// `todos` suite runs on any diff at all and reports the parse error — a
+// broken register widens the gate rather than quietly opening it.
+const LIABILITIES = require('../todos/liabilities.js');
+const CITED = LIABILITIES.citedFiles();
+const CITED_RE = CITED.ok && CITED.files.length
+  ? new RegExp('^(' + CITED.files.map(f => f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')$')
+  : /^/;
+
+// IGNORE drops docs-shaped paths, but todos/ and the register's cited files
+// are gated: checked BEFORE it, so `.md$` and friends can't swallow them.
+const FORCE = [/^todos\//, CITED_RE];
+
 // [regex, [suite, ...], why]. Order is irrelevant (union), but grouped by
 // concern for readability.
 const RULES = [
+  // The queue manifest, the liability register, and their validators. Their
+  // only other trigger is the per-clone-opt-in pre-commit hook, so without
+  // this rule they are validators nobody invokes.
+  [/^todos\//, ['todos'], 'the queue manifest + the liability register and their validators'],
+  [CITED_RE, ['todos'], 'cited by todos/LIABILITIES.md — an edit here can invalidate an entry',
+    CITED.ok ? `LIABILITIES.md cites ${CITED.files.length} file(s)` : `LIABILITIES.md UNPARSABLE: ${CITED.error}`],
+
   // Core compiler — the whole language surface + every consumer of it.
   // (host: the single-file .js/.html emitters live in compiler.js — CD15.)
   [/^compiler\.js$/, ['unit', 'kernel', 'blockfs', 'host'], 'the compiler drives every wasm binary + the single-file emit'],
@@ -146,6 +171,7 @@ const RULES = [
   [/^tests\/kernel\//, ['kernel'], null],
   [/^tests\/browser\//, ['sweep'], null],
   [/^tests\/host\//, ['host'], null],
+  [/^tests\/todos\//, ['todos'], null],
   [/^tests\/serve\//, ['host'], null],
   [/^tests\/run\.js$/, [], 'the dispatcher itself — no suite of its own'],
   [/^tests\/bench\//, [], 'informational perf bench (todos/0186) — opt-in, ROM-gated, never a gating suite'],
@@ -253,7 +279,7 @@ function planFromDiff(files) {
   const unmapped = [];
   const hits = [];
   for (const f of files) {
-    if (IGNORE.some(re => re.test(f))) { ignored.push(f); continue; }
+    if (!FORCE.some(re => re.test(f)) && IGNORE.some(re => re.test(f))) { ignored.push(f); continue; }
     let matched = false;
     const fileSuites = new Set();
     for (const [re, ss] of RULES) {
@@ -429,12 +455,14 @@ function printList() {
     process.stdout.write(`  ${name.padEnd(22)} ${SUITES[name].desc}\n`);
   }
   process.stdout.write('\nDiff → suite rule table (union of every matching rule):\n');
-  for (const [re, ss, why] of RULES) {
-    process.stdout.write(`  ${re.source.padEnd(40)} → ${ss.length ? ss.join(', ') : '(none)'}`
+  for (const [re, ss, why, label] of RULES) {
+    process.stdout.write(`  ${(label || re.source).padEnd(40)} → ${ss.length ? ss.join(', ') : '(none)'}`
       + (why ? `   # ${why}` : '') + '\n');
   }
   process.stdout.write('\nIgnored (never trigger tests):\n  '
     + IGNORE.map(re => re.source).join('  ') + '\n');
+  process.stdout.write('Never ignored (gated even though docs-shaped):\n  todos/  '
+    + (CITED.ok ? CITED.files.join('  ') : '(register unparsable — every path)') + '\n');
 }
 
 function printHelp() {
