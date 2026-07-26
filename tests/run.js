@@ -117,8 +117,12 @@ const RULES = [
   [/^packages\//, ['kernel', 'sweep', 'host'], 'package definitions restale the fat fixture + the mkpkg pool + the base-purity guardrail'],
   [/^tools\/mkpkg\.js$/, ['kernel', 'host'], 'builds the gucman package pool test_gucman_e2e installs from; host holds the mkpkg --clang guardrail'],
 
-  // Shared test engine → every suite-runner-backed suite.
-  [/^tests\/lib\//, ['unit', 'blockfs', 'kernel', 'sweep'], 'the shared suite-runner/image-fixture engine'],
+  // Shared test engine → every suite-runner-backed suite. `host` is in the list
+  // because tests/host/test_harness_leaks.js pins the startup reaper's
+  // never-delete-a-live-run predicates (tests/lib/harness-leaks.js) — and that
+  // is the cheap suite, so it catches a reaper mistake in seconds rather than
+  // after a heavy run.
+  [/^tests\/lib\//, ['unit', 'blockfs', 'kernel', 'sweep', 'host'], 'the shared suite-runner/image-fixture/leak-reaper engine'],
 
   // The OS-page driving tool (0171) rides the browser harness seam — the
   // sweep is what proves that seam still boots and types.

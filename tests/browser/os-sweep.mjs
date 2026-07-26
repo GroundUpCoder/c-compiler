@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { runSuite, parseSuiteArgs, usage } from '../lib/suite-runner.js';
 import { ensurePrebakedImage } from '../lib/image-fixture.js';
 import { acquireHeavyLock } from '../lib/heavy-lock.js';
+import { preflight } from '../lib/harness-leaks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -41,6 +42,15 @@ if (opts.jobs !== 1) { process.stderr.write('os-sweep is serial by design (0045 
 // sweep) already owns the host — their overlap is what crashed the machine on
 // 2026-07-25. Taken before the bake so two sweeps can't both bake either.
 if (!opts.list) acquireHeavyLock({ name: 'browser os sweep' });
+
+// Leak pre-flight — AFTER the lock, deliberately. Holding it proves no other
+// heavy suite is mid-flight, so the reaper cannot race one; a lane that lost the
+// lock exits 3 above and never gets here. What it reaps is only ever provably
+// abandoned (dead owner pid / PPID 1), so a hand-run single os-*.mjs, which
+// takes no lock at all, is safe too. It also names any stray serve.js BEFORE
+// the run — a squatted fixed port is the sweep's classic false red, and
+// diagnosing it after the fact costs a whole sweep.
+if (!opts.list) preflight({ name: 'browser os sweep' });
 
 // 0082 pre-step: a missing/version-stale/INPUT-stale prebaked
 // os/os-system.img re-bakes once, visibly, before Chromium ever launches.

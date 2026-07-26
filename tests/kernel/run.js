@@ -19,6 +19,7 @@ const os = require('os');
 const { runSuite, parseSuiteArgs, usage, matchesFilter, memoryCappedJobs } = require('../lib/suite-runner.js');
 const { ensurePrebakedImage } = require('../lib/image-fixture.js');
 const { acquireHeavyLock } = require('../lib/heavy-lock.js');
+const { preflight } = require('../lib/harness-leaks.js');
 
 // Rows tagged IMG spawn os/boot.js and materialize their per-test image by
 // copying the prebaked os/os-system.img fixture (todos/0082) — the runner
@@ -172,6 +173,13 @@ if (safeJobs < opts.jobs) {
 // second kernel run, or a browser sweep) already owns the host — their overlap
 // is what exhausted RAM and crashed the machine. Skipped for --list (no boots).
 if (!opts.list) acquireHeavyLock({ name: 'kernel suite' });
+
+// Leak pre-flight — AFTER the lock, deliberately (see the same call in
+// tests/browser/os-sweep.mjs). THIS suite is the one that mints the $TMPDIR
+// os-* fixture dirs, ~150 MB apiece, so it is also the one that most needs the
+// abandoned ones swept before it adds 60 more. Reaping is by dead-owner-pid, so
+// a hand-run single e2e (which takes no lock) is never touched.
+if (!opts.list) preflight({ name: 'kernel suite' });
 
 const entries = tests.map(([file, ...rest]) => Object.assign({ file }, ...rest.filter(x => typeof x === 'object')));
 
