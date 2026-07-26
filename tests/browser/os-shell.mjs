@@ -42,7 +42,18 @@ try {
   const { setVt, sample, near, waitPixel, waitScreen } = osHelpers(page);
 
   const TEAL = [0, 128, 128], ORANGE = [255, 140, 0], NAVY = [0, 0, 128],
-        FACE = [192, 192, 192];
+        FACE = [192, 192, 192], WHITE = [255, 255, 255];
+  // Poll until a pixel stops matching `notWant` (the absence twin of waitPixel).
+  const waitNotPixel = async (x, y, notWant, ms, what) => {
+    const t0 = Date.now();
+    for (;;) {
+      const got = await sample(x, y);
+      if (!near(got, notWant)) return got;
+      if (Date.now() - t0 > (ms || 30000))
+        throw new Error(`pixel (${x},${y}) stayed ${notWant}${what ? ` (${what})` : ''}`);
+      await new Promise(r => setTimeout(r, 200));
+    }
+  };
 
   await setVt(2);
   // Derive geometry from the LIVE screen (todos/0023 rule).
@@ -95,6 +106,13 @@ try {
   const AP_ROW = SM_ROWS - 1;                    // All Programs DISPLAY row: pinned to
                                                  // the bottom (XP/Win7), above search
   const SM_SEARCH_Y = SM_Y + SM_PAD + SM_ROWS * SM_ROW_H + 4;
+  // The Run... dialog (wm.c RUN_W/RUN_H, parked by handle_event at
+  // (6, scr_h - BAR_H - RUN_H - 6)): its sunken white input box spans
+  // (8,34)..(RUN_W-8,64) of the window and IS the observable "the dialog is
+  // up". Derived once here — the legs below used to carry two different
+  // hand-rolled offsets, one of them still on the pre-0132 28/70 geometry.
+  const RUN_DW = 340, RUN_DH = 78, RUN_DX = 6, RUN_DY = SH - 36 - RUN_DH - 6;
+  const RUN_FIELD = [RUN_DX + 194, RUN_DY + 50];   // inside the white field
   // Flyout columns are menucore chain levels since 0259: 18px rows, 1px
   // border, measured widths (edge-scanned below, never a constant).
   const MC_ROW = 30;
@@ -128,13 +146,82 @@ try {
   // places (Settings/Run...) sit right after All Programs at known rows (0132:
   // Run... moved from a fixed right-pane row into the column, so its row now
   // depends on the recents count).
+  //
+  // Two things this must NOT do, both of which it used to do:
+  //
+  //  - Needle its own ECHO. The kernel tty line discipline mirrors typed input
+  //    into __osOut at TYPE time (the trap this file's last leg documents), and
+  //    the tag was interpolated straight into the typed command — so
+  //    `includes('RCLR1')` was satisfied by the keystrokes, before hush had run
+  //    the `rm` at all. Under load wm then still read a recent at the next menu
+  //    open, Settings/Run... stacked one row lower, and the fixed-row click
+  //    below landed on Settings: the 67%-failure flake. Split the needle so the
+  //    marker can only come from the shell's OUTPUT.
+  //
+  //  - Treat "the shell printed something" as "the state changed". Assert the
+  //    POSTCONDITION instead: both files are gone. wm.c rebuilds the column
+  //    from exactly these two files at every menu open (sm_rebuild_left <-
+  //    menu_open_root), so "both absent" is precisely the state the row indices
+  //    below depend on. A failed `test` prints nothing and the wait fails loud.
   let clrN = 0;
   const clearRecents = async () => {
     const tag = `RCLR${++clrN}`;
     await setVt(1);
-    await page.keyboard.type(`rm -f /root/.config/recent /root/.config/pinned && echo ${tag}\r`, { delay: 40 });
-    await page.waitForFunction((t) => window.__osOut.includes(t), tag, { timeout: 20000, polling: 200 });
+    await page.keyboard.type(
+      'R=/root/.config; rm -f $R/recent $R/pinned; ' +
+      `test ! -e $R/recent && test ! -e $R/pinned && echo RCL""R${clrN}\r`, { delay: 40 });
+    try {
+      await page.waitForFunction((t) => window.__osOut.includes(t), tag, { timeout: 20000, polling: 200 });
+    } catch {
+      const tail = await page.evaluate(() => window.__osOut.slice(-300));
+      throw new Error(`clearRecents: ${tag} never printed — ~/.config/{recent,pinned} ` +
+        `were not both removed (VT1 tail: ${JSON.stringify(tail)})`);
+    }
     await setVt(2);
+  };
+  // Solid non-face ink inside column DISPLAY row `r`'s text band. An empty row
+  // slot is pure face gray; a row that lists something (a pin, a recent, or a
+  // fixed place) carries glyph ink. The 4px inset keeps the Win95 grooves —
+  // drawn on the pixel ABOVE a row — out of the band, and the >40 threshold
+  // keeps freetype's AA fringe out of the count.
+  const rowInk = (r) => page.evaluate(([x0, y0, w, h]) => {
+    const c = document.getElementById('screen');
+    const rc = c.getBoundingClientRect();
+    const t = document.createElement('canvas');
+    t.width = Math.round(rc.width); t.height = Math.round(rc.height);
+    const ctx = t.getContext('2d');
+    ctx.drawImage(c, 0, 0);
+    const d = ctx.getImageData(x0, y0, w, h).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4)
+      if (Math.abs(d[i] - 192) > 40 || Math.abs(d[i + 1] - 192) > 40 ||
+          Math.abs(d[i + 2] - 192) > 40) n++;
+    return n;
+  }, [SM_SIDE + 4, SM_Y + SM_PAD + r * SM_ROW_H + 4, SM_COL - 10, SM_ROW_H - 8]);
+  // Open the Start menu and block until the COLUMN ITSELF shows the cleared
+  // state — the todos/0171 rule: synchronise on the thing you depend on, not on
+  // a proxy for it. wm.c stacks pins, then recents, then Settings and Run...,
+  // with All Programs pinned to the bottom slot; so with the store cleared rows
+  // 0/1 are the two fixed places and row 2 — the first slot any survivor would
+  // occupy — is blank. This is a WAIT on the drawn panel (the face fill can
+  // composite a frame before the glyphs), never a re-click or a re-open: if the
+  // column still lists something the leg fails HERE, naming the cause, instead
+  // of clicking Settings and leaving a 30s dialog timeout to be diagnosed.
+  const openMenuOnFixedPlaces = async (what) => {
+    await clickAt(25, BARY);                     // Start
+    await waitPixel(120, SM_Y + 74, FACE, 30000, 'the Start panel parked above the taskbar');
+    const t0 = Date.now();
+    let ink = [];
+    for (;;) {
+      ink = [await rowInk(0), await rowInk(1), await rowInk(2)];
+      if (ink[0] > 20 && ink[1] > 20 && ink[2] <= 2) return;
+      if (Date.now() - t0 > 10000) break;
+      await new Promise(r => setTimeout(r, 200));
+    }
+    throw new Error(
+      `${what}: the Start column is not showing the fixed places at rows 0-1 — ` +
+      `row ink [${ink.join(', ')}], expected [>20, >20, ~0]. Ink at row 2 means a ` +
+      `pin/recent survived clearRecents(), which pushes Settings/Run... down a row.`);
   };
   await setVt(1);
   await page.keyboard.type('rm -f /root/.config/recent /root/.config/pinned && echo REC""-CLR\r', { delay: 40 });
@@ -264,15 +351,24 @@ try {
   check('Enter launches the search top hit (winbox +1)', wb3 === wb2 + 1, { wb2, wb3 });
 
   // The Run... place is column row 1 (after Settings): click it, the dialog
-  // opens (see the builtin leg below). Clear recents first so the row is
-  // deterministic, then confirm the click dismisses the menu into the dialog.
+  // opens (see the builtin leg below). clearRecents() + openMenuOnFixedPlaces()
+  // make that row a VERIFIED position rather than an assumed one.
+  //
+  // "the menu dismissed" alone used to be this leg's whole assertion, and it is
+  // satisfied by clicking ANY row — every one of them dismisses on its way to
+  // launching something. So a wrong click passed here and detonated further
+  // down. Assert the dialog's own input box: only Run... produces it.
   await clearRecents();
-  await clickAt(25, BARY);
-  await waitPixel(120, SM_Y + 74, FACE);
+  await openMenuOnFixedPlaces('Run... dismiss leg');
   await clickAt(60, SM_Y + SM_PAD + 1 * SM_ROW_H + 14);   // column row 1 = Run...
+  await waitPixel(RUN_FIELD[0], RUN_FIELD[1], WHITE, 30000, 'the run dialog input box');
+  check('Run... click opens the run dialog', true);
   await waitPixel(120, SM_Y + 74, TEAL);
-  check('Run... click dismisses the menu (opens the dialog)', true);
+  check('Run... click dismisses the menu behind the dialog', true);
   await page.keyboard.press('Escape');           // close the run dialog
+  // ...and wait for it to actually GO. The next leg re-opens the Start menu; a
+  // dialog still up owns the keyboard and the focus that dismisses the menu.
+  await waitNotPixel(RUN_FIELD[0], RUN_FIELD[1], WHITE, 30000, 'the run dialog after Esc');
 
   // Focus change dismisses: re-open, click the winbox window.
   await clickAt(25, BARY);
@@ -358,26 +454,27 @@ try {
 
   // The Start-menu legs above launched several winboxes (recents, search, the
   // override); close them all so the desktop section starts from a clean
-  // taskbar (the icon legs avoid the top-left cascade regardless, but the
-  // minimize leg below expects term to be the sole button).
+  // taskbar — the minimize leg below expects term to be the sole button, and a
+  // floating window over column 0 would intercept the marquee's mouse-down (the
+  // icons sit at the bottom of z, a window does not).
+  //
+  // `wmctl close` only POSTS the close; the shell echo says the requests went
+  // out, not that the windows are gone. Gate the marker on `wmctl wait nowin`
+  // — an absence condition that SUCCEEDS on absence rather than napping out a
+  // clock — so a window that refuses to die prints nothing and this fails loud.
+  // (This used to be two copies of the same close loop, the second of them
+  // "synchronised" by `!/\twinbox$/m.test(...) || true`, a predicate that is
+  // true on its first poll no matter what the OS is doing, plus two 800ms naps.)
   await setVt(1);
-  await page.keyboard.type('for s in $(wmctl list | grep "winbox$" | sed "s/[^0-9].*//"); do wmctl close $s; done; echo WB""-CLOSED\r', { delay: 30 });
-  await page.waitForFunction(() => window.__osOut.includes('WB-CLOSED'), { timeout: 20000, polling: 200 });
+  await page.keyboard.type('for s in $(wmctl list | grep "winbox$" | sed "s/[^0-9].*//"); do wmctl close $s; done; ' +
+    'wmctl wait nowin winbox 15000 && echo WB""-CLOSED\r', { delay: 30 });
+  await page.waitForFunction(() => window.__osOut.includes('WB-CLOSED'), { timeout: 30000, polling: 200 });
   await setVt(2);
   await waitPixel(400, BARY, FACE);
-  await page.waitForTimeout(500);                // timing subject: let the closed winboxes clear before the desktop-icon section (no marker)
 
   // ---- the desktop layer (todos/0029) ----
-  const WHITE = [255, 255, 255];
-  const waitNotPixel = async (x, y, notWant, ms) => {
-    const t0 = Date.now();
-    for (;;) {
-      const got = await sample(x, y);
-      if (!near(got, notWant)) return got;
-      if (Date.now() - t0 > (ms || 30000)) throw new Error(`pixel (${x},${y}) stayed ${notWant}`);
-      await new Promise(r => setTimeout(r, 200));
-    }
-  };
+  // (WHITE and waitNotPixel are declared with the other pixel helpers up top —
+  // the Start-menu legs need them too since the Run... dialog probes landed.)
 
   // Icons flow down the left edge, sorted. The grid model is the harness's
   // deskEntries/deskCell (the todos/0166 rule: derived from os/image.json,
@@ -385,18 +482,8 @@ try {
   // 1 and leads with the Presentations DIR, so cells are looked up at the
   // LIVE screen height). Probes below use doom (a 4-char label like the
   // old term probe: label starts at cell x+30) in column 0; term now sits
-  // in column 1 and keeps the double-click-launch role.
-  // Clear the winboxes the Start-menu legs launched — they cascade over
-  // column 0 and would intercept the marquee's mouse-down (the icons live
-  // at the bottom of z, but a floating window is not). Close them from VT1.
-  await setVt(1);
-  await page.keyboard.type('for s in $(wmctl list | grep winbox$ | sed "s/[^0-9].*//"); do wmctl close $s; done; echo WB""-CLEARED\r', { delay: 20 });
-  await page.waitForFunction(() => window.__osOut.includes('WB-CLEARED'), { timeout: 20000, polling: 200 });
-  await page.waitForFunction(() => !/\twinbox$/m.test(window.__osOut) || true, { timeout: 5000, polling: 200 }).catch(() => {});
-  await new Promise(r => setTimeout(r, 800));
-  await setVt(2);
-  await new Promise(r => setTimeout(r, 800));
-
+  // in column 1 and keeps the double-click-launch role. (The winboxes the
+  // Start-menu legs launched were closed just above, gated on their absence.)
   const DESK_ENTRIES = deskEntries();
   const cell = (name) => deskCell(DESK_ENTRIES, name, SH);
   // The selection strip is `lx-2 .. lx+lw+2` at cy+40..63; its 2px LEFT
@@ -515,23 +602,27 @@ try {
   check('minimize reveals the desktop', true);
 
   // ---- the Run... builtin (todos/0078; folded into the column by 0132) ----
-  // Start -> the Run... place (column row 1, recents cleared) opens the dialog
-  // (240x70 bottom-left, white input box); typed command + Enter spawns via
-  // /bin/sh -c.
-  const WHITE2 = [255, 255, 255];
+  // Start -> the Run... place opens the dialog (RUN_DW x RUN_DH bottom-left,
+  // white input box); typed command + Enter spawns via /bin/sh -c.
+  //
+  // The row-1 click is a VERIFIED position, not an assumed one: clearRecents()
+  // proves the store is empty (postcondition, not echo) and
+  // openMenuOnFixedPlaces() proves the drawn column reflects that before the
+  // click. This leg is the one the 67% flake surfaced on — it used to open the
+  // menu and click row 1 with only a shell echo behind it, so under load the
+  // click landed on Settings and the dialog wait timed out 30s later with a
+  // bare "pixel never became white".
   const rb0 = await winCount();
   await clearRecents();
-  await clickAt(25, BARY);
-  await waitPixel(120, SM_Y + 74, FACE);
+  await openMenuOnFixedPlaces('Run... builtin leg');
   await clickAt(60, SM_Y + SM_PAD + 1 * SM_ROW_H + 14);   // Run... (column row 1)
-  await new Promise(r => setTimeout(r, 500));            // RUN dialog composite settle
-  await waitPixel(200, SH - 36 - 78 + 44, WHITE2);   // the input box (RUN 340x78 above the 36px bar)
+  await waitPixel(RUN_FIELD[0], RUN_FIELD[1], WHITE, 30000, 'the run dialog input box');
   check('Run... place opens the run dialog', true);
   check('the menu closed behind it', near(await sample(120, SM_Y + 74), TEAL),
     await sample(120, SM_Y + 74));
   await page.keyboard.type('winbox');
   await page.keyboard.press('Enter');
-  await waitPixel(200, SH - 28 - 70 - 6 + 35, TEAL);     // dialog gone
+  await waitNotPixel(RUN_FIELD[0], RUN_FIELD[1], WHITE, 30000, 'the run dialog after Enter');
   check('Enter closes the dialog', true);
   const rb1 = await winCount();
   check('run-dialog command spawned (winbox +1)', rb1 === rb0 + 1, { rb0, rb1 });
