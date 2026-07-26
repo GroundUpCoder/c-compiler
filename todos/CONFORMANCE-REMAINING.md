@@ -89,10 +89,14 @@ get a spike + `*-check.mjs`/`*-renders.mjs` there, same as the unit corpus.
 - **Residual `longjmp` in non-statement position** (`x ? longjmp(b,1) : ...`,
   for-increment, return-expression) still crashes with a raw JS stack trace;
   the setjmp side has a proper diagnostic — add the longjmp counterpart.
-- **setjmp contexts required by C11 7.13.1.1p5 but rejected**:
+  Funded by **todos/0312** (P0: the input is valid C11 — the standard places no
+  context restriction on `longjmp` — so this is a crash on conforming code).
+- **setjmp contexts required by C11 7.13.1.1p4 but rejected**:
   `switch (setjmp(b))`, `while (setjmp(b) == 0)`, `else if (setjmp(b))`.
   (Plain `int r = setjmp(b);` is UB per the standard — rejecting it is fine,
   but the error message lists forms that are themselves rejected.)
+  Funded by **todos/0311**. Note that fixing it does NOT un-skip the `setjmp`
+  libc-test, whose line 23 is the UB form.
 - **GNU case ranges enumerate every value** (`case 0 ... 100000000:` builds a
   100M-entry table at compile time). Clamp/reject or emit range compares.
 - **Missing libm entry points** (hosted C requires them): `exp2`, `fma`/`fmaf`

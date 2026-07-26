@@ -231,4 +231,14 @@ thing this file exists to kill.
 - anchor: # (todos/0307). %s additionally diverges from musl's expectation by the
 - provenance: 0307
 
+### L31 — three setjmp contexts C11 7.13.1.1p4 REQUIRES are rejected; the diagnostic even advertises one
+- ticket: 0311
+- file: todos/CONFORMANCE-REMAINING.md
+- anchor: - **setjmp contexts required by C11 7.13.1.1p4 but rejected**:
+
+### L32 — longjmp outside statement position crashes the compiler on valid C11 with a raw JS stack trace
+- ticket: 0312
+- file: todos/CONFORMANCE-REMAINING.md
+- anchor: - **Residual `longjmp` in non-statement position** (`x ? longjmp(b,1) : ...`,
+
 <!-- END ENTRIES -->

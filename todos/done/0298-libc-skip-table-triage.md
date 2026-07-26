@@ -1,6 +1,10 @@
 # 0298 — tests/run.py skip table: triage the 13 TODO-candidate libc gaps into real items (check fnmatch first)
 
-- **Status**: open
+- **Status**: DONE 2026-07-27 — 3 stale skips deleted (`fnmatch`, `fdopen`, `utime`;
+  the libc suite went 25/0/51 → 28/0/48), 2 reason texts corrected, and the remaining
+  10 skips funded by todos/0305-0310. The `setjmp` entry's citation exposed two further
+  unfunded conformance gaps, filed as todos/0311 + todos/0312. See EXECUTION and
+  CLOSE-OUT ROUND below.
 - **Design**: this file. Source: unfunded-liability sweep 2026-07-27 (finding #11).
 
 ## Goal
@@ -200,4 +204,38 @@ as 0310 on that basis rather than as a bug.
 Also found, not in the verification account: the `strftime` failure list includes an
 **integer overflow** — `tp->tm_year + 1900` is computed in `int`, so a near-`INT_MAX`
 `tm_year` wraps (`%Y` → `-2147481749` where musl gives `+2147485547`). That IS a
-correctness bug in shipped code, recorded as defect class 3 in 0307.
+correctness bug in shipped code, recorded as defect class 1 in 0307.
+
+## CLOSE-OUT ROUND (independent review)
+
+Review re-ran the libc suite on both `origin/main` and the branch and reproduced
+25/0/51 → 28/0/48 exactly, re-read the `tests/run.py` diff, and independently probed
+the host libc's `%s`. Three accepts, one reject, two amendments — all actioned:
+
+**REJECTED: the first `setjmp` reason rewrite.** It was accurate about the
+bare-assignment form but pointed the reader at
+`todos/CONFORMANCE-REMAINING.md:92-94`, a bullet whose *primary* content is a
+different, **unfunded** conformance defect: `switch (setjmp(b))`,
+`while (setjmp(b) == 0)` and `else if (setjmp(b))` are all rejected, and C11
+7.13.1.1p4 **requires** all three. Probed here: all three produce the same
+"unsupported use of setjmp" error — and that error advertises `if (setjmp(buf) == 0)`
+as supported while refusing the `while` spelling of the identical comparison.
+Nothing in `todos/` funded it. So the fix for a table of true-comments-naming-
+unfunded-gaps had written a fourth one. Now **todos/0311**, cited by the skip entry,
+which also states plainly that 0311 will NOT un-skip this test (line 23 is UB).
+
+**Sibling gap, same bullet list, also unfunded → todos/0312** (P0): `longjmp` in
+non-statement position crashes the compiler with a raw JS stack trace
+(`emitExpr: function 'longjmp' not found`, `compiler.js:19509`) — and unlike
+`setjmp`, C11 places **no** context restriction on `longjmp`, so that input is
+conforming. Register entries **L31/L32** anchor both bullets.
+
+**0310 amended**: the "glibc does the same" clause was asserted, not measured — this
+box is BSD. The ticket now separates VERIFIED (this host's libc reads `TZ` and
+ignores `tm_gmtoff`, identical to ours; two probes) from BELIEVED (glibc), and names
+confirming glibc as a precondition of the (a)/(b) decision.
+
+**0307 amended**: the `int` wrap is now defect class **1**, first in the plan, and has
+its own acceptance bullet with the four `compiler.js` line refs and the three expected
+strings — plus a `tests/unit/conformance/` guard, since it un-skips nothing on its own
+and would otherwise be unverifiable until the rest of the item lands.

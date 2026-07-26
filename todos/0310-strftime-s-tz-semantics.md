@@ -1,4 +1,4 @@
-# 0310 — strftime %s: we match glibc/BSD (mktime, TZ-dependent), musl uses tm_gmtoff — pick and document the semantics
+# 0310 — strftime %s: we match this host's BSD libc (TZ-dependent), musl uses tm_gmtoff — pick and document the semantics
 
 - **Status**: open
 - **Design**: this file. Source: todos/0298 (libc skip-table triage).
@@ -30,16 +30,30 @@ For the test's `tm1` (2016-01-03 13:23:45, `tm_gmtoff` 0):
 Difference: exactly 32400 s = 9 h = this host's UTC offset.
 
 **Crucially — and this corrects the read in 0298's verification section — ours is not
-simply "wrong".** A clang-built probe against the *host* libc on this machine gives:
+simply "wrong".** Separate what was measured from what is merely believed:
+
+**VERIFIED by probe on this machine (BSD/Darwin libc, clang-built):**
 
 ```
 TZ=Asia/Tokyo → 1451795025      (identical to ours)
-TZ=UTC        → 1451827425
+TZ=UTC        → 1451827425      (identical to musl's expectation)
 ```
 
-glibc does the same thing (its `%s` calls `mktime`). So **we match glibc and BSD;
-musl is the outlier**, and the failing test is asserting musl's choice, not a
-universal one. This is a semantics decision, not a bug report.
+and, probed independently: a `struct tm` with `tm_gmtoff = 32400` and one with
+`tm_gmtoff = 0` produce the **identical** `%s` on this host, while flipping `TZ`
+moves the result by exactly 32400 s. So the host libc **reads `TZ` and ignores
+`tm_gmtoff`, exactly as we do**. That is measured fact.
+
+**BELIEVED, NOT VERIFIED HERE: that glibc behaves the same way** (i.e. that its
+`strftime` `%s` goes through `mktime`). This box is BSD; no glibc was available to
+probe, and the claim is repeated here only as a strong prior from reading glibc's
+`strftime_l.c`. **Confirm it on a Linux box before the decision below is made** — it
+is the difference between "we match the majority and musl is the outlier" and "we
+match BSD only". It is not load-bearing for *whether* a decision is needed, but it is
+load-bearing for *which way* (a) vs (b) should go, so do not quote it as established.
+
+Either way the failing test is asserting musl's choice, not a universal one. This is
+a semantics decision, not a bug report.
 
 Two of the `strftime` test's 40 diagnostics are this (the other 38 belong to
 todos/0307).
@@ -51,7 +65,7 @@ Pick one, and say why in a comment next to the implementation:
 - **(a) Match musl** — use `tm_gmtoff` when the field is meaningful. Un-skips the
   test cleanly and makes `%s` TZ-independent, but silently changes what
   `date +%s`-shaped shell code in the OS image reports.
-- **(b) Keep glibc/BSD semantics** — then the test's two `%s` assertions can never
+- **(b) Keep the current BSD-matching semantics** — then the test's two `%s` assertions can never
   pass as written, and 0307's acceptance ("un-skip `strftime`") is unreachable
   without a documented per-assertion exception. Say that out loud in `tests/run.py`
   rather than leaving the entry looking fundable.
