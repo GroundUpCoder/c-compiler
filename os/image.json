@@ -1,5 +1,5 @@
 {
-  "version": 169,
+  "version": 170,
   "overlays": [
     {
       "id": "clang-apps",
@@ -139,7 +139,7 @@
         "text": "welcome.html"
       },
       "/usr/share/netsurf/mime.types": {
-        "content": "# Extension -> MIME type map for file:// browsing, consulted by\n# /bin/netsurf (the monkey filetype resolver; /etc/mime.types, if\n# present, is preferred over this file). Standard mime.types lines:\n# TYPE<ws>EXT [EXT...].\ntext/html\thtml htm\ntext/css\tcss\ntext/plain\ttxt text conf log md\nimage/png\tpng\nimage/jpeg\tjpg jpeg\nimage/gif\tgif\nimage/bmp\tbmp\nimage/ico\tico\n"
+        "content": "# Extension -> MIME type map for file:// browsing, consulted by\n# /bin/netsurf (the monkey filetype resolver; /etc/mime.types, if\n# present, is preferred over this file). Standard mime.types lines:\n# TYPE<ws>EXT [EXT...].\ntext/html\thtml htm\ntext/css\tcss\ntext/javascript\tjs mjs\ntext/plain\ttxt text conf log md\nimage/png\tpng\nimage/jpeg\tjpg jpeg\nimage/gif\tgif\nimage/bmp\tbmp\nimage/ico\tico\n"
       },
       "/usr/bin/mgp": {
         "project": "vendor/magicpoint/bin.json"
