@@ -3,6 +3,38 @@
 `todos/0330`. Sibling branch `0330-libc-revendor` @ `85aa87b`
 (clang-simplified); this side carries the shim retirement + close-out.
 
+> ## 🔴 CORRECTION — added at merge time by master cont-112 (2026-07-28)
+>
+> **The "5 of 10 payloads changed" table below is an ARTIFACT. The true
+> libc-attributable delta is 1 of 10 — `ninja-clang`, +48 B.**
+>
+> The measurement compared this lane's **worktree** build against the
+> **main-tree** `out-image/`. The overlay payloads embed their absolute build
+> path, so that A/B measured the *directory*, not the libc. The size deltas are
+> exactly the path-length arithmetic (the two roots differ by 24 chars):
+> box2d `24×28 = +672`, etl `24×24 = +576`, imgui `24×10 = +240`, doom
+> `24×2 = +48` — all exact.
+>
+> Re-measured **within one directory** (main tree: 2026-07-21 pre-revendor
+> `out-image/` vs a post-merge rebuild), with the compiler ELF verified
+> byte-identical (`cba60f53…`) and the trees verified identical
+> (`git diff --stat 85aa87b9 35b080e` empty): **nine payloads are byte-identical
+> and only `ninja-clang` moved, by +48 B.**
+>
+> ⇒ The mechanism story below (`strerror`'s `EILSEQ` case + surviving `__SDL.c`
+> entry points explaining five payloads) is **not supported**. Whatever moved
+> `ninja-clang` is a single-payload effect.
+>
+> The reproducibility defect this exposed is filed as **`todos/0349`**.
+>
+> **Nothing else in this log is retracted.** The re-vendor itself is correct and
+> merged (sibling `35b080e`), the `pread`/`pwrite` two-sided control stands, the
+> `__clip_has` hazard check stands, and the ticket's own acceptance
+> `tests/kernel/test_clang_pkgs_e2e.js` **PASSES against the re-vendored
+> overlay — 0 SKIPs**, run for the first time by cont-112 with a pre-merge
+> positive control (it also passed on the old libc, so the test genuinely
+> exercises the path).
+
 ## What the pin actually was
 
 The ticket said 206 commits behind. By the time this ran it was **225**:
