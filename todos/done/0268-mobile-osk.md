@@ -1,6 +1,6 @@
 # 0268 — Mobile on-screen keyboard (OSK) for VT1+VT2
 
-- **Status**: open
+- **Status**: done
 - **Design**: logs/2026-07-19/gucos-mobile-osk.md
 
 ## Goal

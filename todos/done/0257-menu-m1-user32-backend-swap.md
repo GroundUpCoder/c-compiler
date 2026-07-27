@@ -1,6 +1,6 @@
 # 0257 — Menu build M1: user32 menu-engine backend swap onto anchored children
 
-- **Status**: open
+- **Status**: done
 - **Design**: the menu-uniform architecture note (external design thread,
   2026-07-16/17) §3.3 (the five couplings) + amendments A5 (coupling #6:
   bar width-follows-parent), A7 (structural menucore seam), A12 (popup

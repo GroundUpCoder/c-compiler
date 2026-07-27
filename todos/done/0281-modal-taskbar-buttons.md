@@ -1,6 +1,6 @@
 # 0281 — modal dialogs (MessageBox) get their own taskbar buttons
 
-- **Status**: open
+- **Status**: done
 - **Design**: WMP surface flags (wm_proto.h), user32 modal creation, wm.c draw_bar; found by bughunt-sc
 
 ## Goal

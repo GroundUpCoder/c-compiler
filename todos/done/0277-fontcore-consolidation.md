@@ -1,6 +1,6 @@
 # 0277 — fontcore: ONE header-only glyph-pipeline core for gdi32/term/ksvc
 
-- **Status**: open
+- **Status**: done
 - **Design**: filed from todos/done/0275-kernel-text-service-design.md §14.4
 
 ## Goal

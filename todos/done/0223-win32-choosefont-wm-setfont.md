@@ -1,6 +1,6 @@
 # 0223 — win32: real ChooseFontW dialog + WM_SETFONT honored by the controls
 
-- **Status**: open
+- **Status**: done
 - **Design**: `todos/WIN32.md` (comdlg32 section; EDIT umbrella 0133)
 
 ## Goal

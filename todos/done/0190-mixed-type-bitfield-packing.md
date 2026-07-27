@@ -1,6 +1,6 @@
 # 0190 — adjacent bitfields of different declared types get separate storage units (ABI layout)
 
-- **Status**: open (P1)
+- **Status**: done (P1)
 - **Design**: this file; found in the 2026-07-15 frontend bug hunt (/tmp/cchunt-frontend/FINDINGS.md F2)
 - **Regression test**: `tests/unit/conformance/bitfield_mixed_type_unit/` (pinned xfail, `config.json` `"knownBug":"0190"`)
 

@@ -1,6 +1,6 @@
 # 0280 — WineMine: menu bar overflows the beginner-width window ("Info" clips)
 
-- **Status**: open
+- **Status**: done
 - **Design**: os/win32/user32.c menu-bar layout; vendor/winmine metrics; found by bughunt-sc
 
 ## Goal

@@ -1,6 +1,6 @@
 # 0286 — Liability register: gap comments must cite a ticket, machine-checked so a closed-item citation FAILS the suite
 
-- **Status**: open
+- **Status**: done
 - **Design**: this file. Source: the unfunded-liability sweep of 2026-07-27, whose
   *own* recommendation this is — it is the structural fix for the class the sweep found,
   rather than another instance-by-instance cleanup.

@@ -1,6 +1,6 @@
 # 0177 — hush: $() subshells re-exec as login shells — .profile recursion hang + substitution pollution
 
-- **Status**: open
+- **Status**: done
 - **Design**: —
 
 ## Goal

@@ -1,6 +1,6 @@
 # 0213 — puNES NES emulator: arrow keys / D-pad ignored (SOCD filter clobbers treated[] from empty raw[])
 
-- **Status**: open
+- **Status**: done
 - **Design**: —
 
 ## Goal

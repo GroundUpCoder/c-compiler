@@ -1,6 +1,6 @@
 # 0165 — kernel: wmFocus z-raise without a _wmVersion bump (stale-scene hole)
 
-- **Status**: open
+- **Status**: done
 - **Design**: `todos/IDLE-POWER.md` (found by its adversarial review,
   2026-07-12) — but a standalone pre-existing kernel bug, P0 on its own.
 

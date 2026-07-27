@@ -1,6 +1,6 @@
 # 0193 — commutative subscript N[arr] rejected (valid C11 6.5.2.1p2)
 
-- **Status**: open (P2)
+- **Status**: done (P2)
 - **Design**: this file; found in the 2026-07-15 frontend bug hunt (/tmp/cchunt-frontend/FINDINGS.md F4)
 - **Regression test**: `tests/unit/conformance/subscript_commutative/` (pinned xfail, `config.json` `"knownBug":"0193"`)
 

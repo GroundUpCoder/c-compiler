@@ -1,6 +1,6 @@
 # 0249 — Deploy caching: content-hash + immutable headers, deterministic mkimage mtimes
 
-- **Status**: open (QUEUED improvement — user chose ship-as-is over blocking on this; do when convenient, NOT a deploy blocker)
+- **Status**: done (was QUEUED as a non-blocking improvement — the user chose ship-as-is over blocking on this; it was never a deploy blocker)
 - **Design**: full scope in the meta workspace: `~/git/meta/notes/deploy-caching-fix-scope.md`
 
 ## Goal

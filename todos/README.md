@@ -21,6 +21,17 @@ One numbered file per unit of work we have actually committed to doing.
   `queue.json` (a structured `Depends:` line in an open item fails
   `queue.js check`); sequencing **rationale** goes in the body prose
   ("best after the Win32 wave because…").
+- **The `Status:` line is checked, in both directions** (0353): a ticket in
+  `done/` whose line still leads with `open` fails `queue.js check`
+  (`check --fix` rewrites it, and `queue.js done` now rewrites it at close
+  time), and an OPEN ticket whose line claims a round its own body records as
+  `## R<n> — DONE/LANDED` fails too — that one is NOT auto-fixed, because
+  which side is stale is a judgement call. ⚠️ The classifier substring-tests
+  that line for `deferred`, so a negated phrasing ("un-deferred") would read as
+  *deferred*; `check` rejects the phrasing rather than guessing (footgun from
+  0126). The directory stays the source of truth for done-ness and
+  `queue.json` for priority — these checks only stop the prose contradicting
+  them.
 - **Done items move to `todos/done/`** (same filename), so
   `ls todos/*.md` is always the open queue. Dropped/superseded items
   whose text is worth keeping move there too, with the DROPPED status

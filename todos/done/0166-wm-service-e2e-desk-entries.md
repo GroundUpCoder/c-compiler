@@ -1,6 +1,6 @@
 # 0166 — test_wm_service_e2e: 3 legs fail on clean main (DESK_ENTRIES hardcode)
 
-- **Status**: open
+- **Status**: done
 - **Design**: the 0164 precedent (`todos/done/0164`, commit `33d836b` —
   derive desktop geometry from live state, don't hardcode). Diagnosed in
   `todos/IDLE-POWER.md`'s review; resolves the 0160 deferral note's open

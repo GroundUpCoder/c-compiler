@@ -1,6 +1,6 @@
 # 0282 — Start-menu flyouts render below parent — WM furniture uses ownerless top-levels not anchored children
 
-- **Status**: open
+- **Status**: done
 - **Design**: os/wm.c Start-menu/flyout creation; rides the existing 0256 anchored-child foundation (WMP_F_ANCHORED); found via jku report + root-cause investigation 2026-07-22
 
 ## Goal

@@ -1,6 +1,6 @@
 # 0189 — enum bitfield with all-non-negative enumerators is read signed (wrong value)
 
-- **Status**: open (P1)
+- **Status**: done (P1)
 - **Design**: this file; found in the 2026-07-15 frontend bug hunt (/tmp/cchunt-frontend/FINDINGS.md F1)
 - **Regression test**: `tests/unit/conformance/bitfield_enum_signedness/` (pinned xfail, `config.json` `"knownBug":"0189"`)
 

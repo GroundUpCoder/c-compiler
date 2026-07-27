@@ -1,6 +1,6 @@
 # 0192 — out-of-range decimal integer constant silently typed signed (wrong arithmetic)
 
-- **Status**: open (P1)
+- **Status**: done (P1)
 - **Design**: this file; found in the 2026-07-15 codegen bug hunt (/tmp/cchunt-codegen/FINDINGS.md Finding 1)
 - **Regression test**: `tests/unit/conformance/decimal_oor_const_unsigned/` (pinned xfail, `config.json` `"knownBug":"0192"`)
 

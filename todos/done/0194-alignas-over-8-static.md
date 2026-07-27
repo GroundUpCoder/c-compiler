@@ -1,6 +1,6 @@
 # 0194 — _Alignas(N>8) rejected for statics; statement-position __attribute__((aligned)) not parsed
 
-- **Status**: open (P2)
+- **Status**: done (P2)
 - **Design**: this file; found in the 2026-07-15 frontend bug hunt (/tmp/cchunt-frontend/FINDINGS.md F5)
 - **Regression test**: `tests/unit/conformance/alignas_over8_static/` (pinned xfail, `config.json` `"knownBug":"0194"`)
 
