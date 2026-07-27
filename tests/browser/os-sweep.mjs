@@ -24,8 +24,16 @@ import { runSuite, parseSuiteArgs, usage } from '../lib/suite-runner.js';
 import { ensurePrebakedImage } from '../lib/image-fixture.js';
 import { acquireHeavyLock } from '../lib/heavy-lock.js';
 import { preflight } from '../lib/harness-leaks.js';
+import { assertSameTree } from '../lib/tree-guard.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Cross-tree preflight (todos/0341) — ahead of acquireHeavyLock() so a launch
+// we are about to refuse never takes the machine-wide lock first. THIS runner
+// is the one the incident came from: os-hires.mjs resolves its PNG output dir
+// from its own location, so the main-tree copy of this sweep writes into main
+// no matter which worktree you launched it from.
+assertSameTree(__dirname, { label: 'tests/browser/os-sweep.mjs' });
 
 const files = fs.readdirSync(__dirname)
   .filter(f => /^os-.*\.mjs$/.test(f) && f !== 'os-sweep.mjs')

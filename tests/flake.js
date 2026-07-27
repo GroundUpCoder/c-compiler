@@ -30,6 +30,10 @@ const { spawnSync } = require('child_process');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
+// Cross-tree preflight (todos/0341) — this driver spawns its legs with
+// `cwd: ROOT`, normalizing the cwd away exactly like tests/run.js does, so the
+// check belongs here at the outermost launch.
+require('./lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/flake.js' });
 
 // [runner, comma-OR filter, optional?] — optional legs (browser) degrade to a
 // SKIP when the runner can't launch (Playwright absent), never a hard fail.

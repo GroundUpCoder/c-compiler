@@ -266,6 +266,12 @@ thing this file exists to kill.
 - file: tests/run.js
 - anchor: // also MISSED by newestBakeInput, which only recurses `deps`: an edit here
 
+### L45 — the cross-tree guard covers the test runners only; the tools/ writers and os/boot.js can still write into another tree
+- ticket: 0357
+- file: tests/lib/tree-guard.js
+- anchor: // NOT GUARDED YET: the tools/ writers and os/boot.js — funded by todos/0357.
+- provenance: 0341
+
 ### L46 — gucman's refusal to plant a package `bin` over a dispatched command name has no firing test
 - ticket: 0355
 - file: os/gucman/gucman.c
