@@ -31,7 +31,20 @@ function setup(queue) {
   // is the not-applicable case — todos/liabilities.test.js is where the
   // register's own behaviour (including a missing one) is tested.
   fs.copyFileSync(path.join(__dirname, 'liabilities.js'), path.join(todos, 'liabilities.js'));
+  // The cross-ref id allocator (todos/0358) — `add next` goes through it.
+  fs.copyFileSync(path.join(__dirname, 'idspace.js'), path.join(todos, 'idspace.js'));
   return todos;
+}
+
+// git inside a temp tree, for the two-lane allocation cases below.
+function git(todos, args) {
+  return execFileSync('git', args, { cwd: path.dirname(todos), encoding: 'utf8' }).trim();
+}
+
+function commit(todos, msg) {
+  git(todos, ['add', '-A']);
+  git(todos, ['commit', '-q', '-m', msg]);
+  return git(todos, ['rev-parse', 'HEAD']);
 }
 
 function writeItem(todos, id, slug, opts = {}) {
@@ -576,6 +589,166 @@ test('list reports ready / blocked / after state', () => {
   assert.strictEqual(r.code, 0, r.stderr);
   assert.match(r.stdout, /0001\s+ready\s+\(after ▸ 0002\)/);
   assert.match(r.stdout, /0002\s+blocked ⛓ 0001/);
+});
+
+// --- cross-ref id allocation (todos/0358) ---
+//
+// The bug these pin: `add next` derived the next id from the WORKING TREE, so
+// two lanes branching from a common base both saw the same maximum and both
+// took the same id. 0354 was handed out twice that way, and the register's L44
+// twice for the same reason. Against the pre-fix allocator the first case here
+// returns 0002 for both lanes — that is the red.
+
+test('RED: two lanes off a common base get DISTINCT ids', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  writeManifest(todos, [{ id: '0001' }]);
+  const base = commit(todos, 'base');
+
+  // Lane A branches, files 0002, commits — and does NOT push anywhere lane B
+  // can see except as an ordinary ref, which is exactly the real situation.
+  git(todos, ['checkout', '-q', '-b', 'lane-a']);
+  let r = run(todos, ['add', 'next', '--slug', 'lane-a-item']);
+  assert.strictEqual(r.code, 0, r.stderr);
+  const idA = /added (\d{4})/.exec(r.stdout)[1];
+  assert.strictEqual(idA, '0002', r.stdout);
+  commit(todos, 'lane a');
+
+  // Lane B branches from the SAME base. Its working tree knows only 0001.
+  git(todos, ['checkout', '-q', '-B', 'lane-b', base]);
+  assert.ok(!fs.existsSync(path.join(todos, `${idA}-lane-a-item.md`)),
+    'lane B must not see lane A\'s file in its working tree — otherwise this case proves nothing');
+  r = run(todos, ['add', 'next', '--slug', 'lane-b-item']);
+  assert.strictEqual(r.code, 0, r.stderr);
+  const idB = /added (\d{4})/.exec(r.stdout)[1];
+
+  assert.notStrictEqual(idB, idA,
+    `both lanes allocated ${idA} — this is the 0354 collision (stdout: ${r.stdout})`);
+  assert.strictEqual(idB, '0003', r.stdout);
+  // The derivation must be VISIBLE: a lane cannot tell a stale ref set from a
+  // fresh one unless the tool says what it surveyed.
+  assert.match(r.stdout, /derived across \d+ ref\(s\)/);
+});
+
+test('add next sees an id that exists ONLY on a remote-tracking ref', () => {
+  // The origin/* half of the same bug: an id pushed by a lane that has since
+  // been deleted locally still consumes its number.
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  writeManifest(todos, [{ id: '0001' }]);
+  const base = commit(todos, 'base');
+  git(todos, ['checkout', '-q', '-b', 'tmp']);
+  writeItem(todos, '0009', 'far-ahead');
+  commit(todos, 'far ahead');
+  // Re-file that commit as a remote-tracking ref, then drop the local branch.
+  git(todos, ['update-ref', 'refs/remotes/origin/lane-x', 'HEAD']);
+  git(todos, ['checkout', '-q', '-B', 'work', base]);
+  git(todos, ['branch', '-q', '-D', 'tmp']);
+
+  const r = run(todos, ['add', 'next', '--slug', 'mine']);
+  assert.strictEqual(r.code, 0, r.stderr);
+  assert.match(r.stdout, /added 0010/, `must clear the remote-only 0009 (stdout: ${r.stdout})`);
+  assert.match(r.stdout, /highest existing: 0009 on refs\/remotes\/origin\/lane-x/);
+});
+
+test('add next REFUSES when it cannot see any refs, and --local-ids opts out', () => {
+  // todos/0358 item 4. Silently returning the working-tree bound is precisely
+  // the pre-fix behaviour under a new name, so the allocator must say it is
+  // blind rather than guess. A non-repo is the detectable case.
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'queue-norepo-'));
+  const todos = path.join(root, 'todos');
+  fs.mkdirSync(path.join(todos, 'done'), { recursive: true });
+  for (const f of ['queue.js', 'liabilities.js', 'idspace.js']) {
+    fs.copyFileSync(path.join(__dirname, f), path.join(todos, f));
+  }
+  writeItem(todos, '0001', 'a');
+  writeManifest(todos, [{ id: '0001' }]);
+
+  let r = run(todos, ['add', 'next', '--slug', 'x']);
+  assert.strictEqual(r.code, 1, `must refuse, got ${r.code}: ${r.stdout}`);
+  assert.match(r.stderr, /Refusing to allocate a ticket id from the working tree alone/);
+  assert.match(r.stderr, /--local/, 'the refusal must name the opt-out');
+  assert.deepStrictEqual(fs.readdirSync(todos).filter(f => /^\d{4}-/.test(f)), ['0001-a.md'],
+    'nothing scaffolded on refusal');
+
+  // The deliberate opt-out proceeds — and labels the id as a lower bound.
+  r = run(todos, ['add', 'next', '--slug', 'x', '--local-ids']);
+  assert.strictEqual(r.code, 0, r.stderr);
+  assert.match(r.stdout, /WORKING TREE ONLY \(--local\)/);
+  assert.match(r.stdout, /added 0002/);
+});
+
+test('next-id reports both id spaces without writing anything', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  writeManifest(todos, [{ id: '0001' }]);
+  fs.writeFileSync(path.join(todos, 'LIABILITIES.md'),
+    '<!-- BEGIN ENTRIES -->\n\n### L03 — a gap\n- ticket: 0001\n\n<!-- END ENTRIES -->\n');
+  commit(todos, 'base');
+  const before = fs.readdirSync(todos).sort();
+
+  const r = run(todos, ['next-id']);
+  assert.strictEqual(r.code, 0, r.stderr);
+  assert.match(r.stdout, /^0002\s/m, r.stdout);
+  assert.match(r.stdout, /^L04\s/m, `the register's space must be allocated too: ${r.stdout}`);
+  assert.deepStrictEqual(fs.readdirSync(todos).sort(), before, 'next-id writes nothing');
+});
+
+// --- one id, one file (todos/0358) ---
+
+test('RED: two files sharing an id fail check instead of one vanishing', () => {
+  // What the collision looks like AFTER it lands: the merge brings both lanes'
+  // files in. Pre-fix, scanDir's Map kept one and the other simply stopped
+  // existing for every validator — `check` printed "check OK".
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  writeItem(todos, '0001', 'other-lanes-version');
+  writeManifest(todos, [{ id: '0001' }]);
+  const r = run(todos, ['check']);
+  assert.strictEqual(r.code, 1, `duplicate id must fail check (stdout: ${r.stdout})`);
+  assert.match(r.stderr, /id "0001" names 2 files in todos\/ \(0001-a\.md, 0001-other-lanes-version\.md\)/);
+  assert.match(r.stderr, /next-id/, 'the error must point at the allocator');
+});
+
+test('RED: two files sharing an id in done/ fail too', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  writeItem(todos, '0002', 'x', { done: true, status: 'done' });
+  writeItem(todos, '0002', 'y', { done: true, status: 'done' });
+  writeManifest(todos, [{ id: '0001' }]);
+  const r = run(todos, ['check']);
+  assert.strictEqual(r.code, 1, `stdout: ${r.stdout}`);
+  assert.match(r.stderr, /id "0002" names 2 files in todos\/done\//);
+});
+
+test('a -design.md companion beside its ticket is not a duplicate', () => {
+  // todos/done/0275 is this shape: the committed design doc sits beside the
+  // implementation ticket. It is ONE id with a companion, not two tickets.
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  writeItem(todos, '0002', 'thing', { done: true, status: 'done' });
+  writeItem(todos, '0002', 'thing-design', { done: true, status: 'done' });
+  writeManifest(todos, [{ id: '0001' }]);
+  const r = run(todos, ['check']);
+  assert.strictEqual(r.code, 0, r.stderr);
+  assert.match(r.stdout, /check OK/);
+});
+
+test('a lone -design.md IS the ticket, and still collides with a second file', () => {
+  // todos/done/0007-wm-compositor-design.md is the sole 0007 file — a suffix-
+  // only rule would have demoted it to a companion of a ticket that does not
+  // exist, and (worse) let `0354-x-design.md` shadow a real collision.
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  writeItem(todos, '0002', 'thing-design', { done: true, status: 'done' });
+  writeManifest(todos, [{ id: '0001' }]);
+  let r = run(todos, ['check']);
+  assert.strictEqual(r.code, 0, r.stderr);
+
+  writeItem(todos, '0002', 'other-design', { done: true, status: 'done' });
+  r = run(todos, ['check']);
+  assert.strictEqual(r.code, 1, `two lone design docs on one id must still fail (stdout: ${r.stdout})`);
+  assert.match(r.stderr, /id "0002" names 2 files in todos\/done\//);
 });
 
 process.stdout.write(`\nqueue.js: ${passed} passed\n`);

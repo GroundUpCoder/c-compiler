@@ -293,10 +293,39 @@ function cmdList() {
   }
 }
 
+// The next free `Lnn`, derived across every ref (todos/0358). The register had
+// no allocator at all: entries were numbered by eye off whatever ref the lane
+// happened to be on, which is how two different L44 entries were written on two
+// branches. parseRegister already rejects a duplicate id WITHIN one file (and
+// still does — see its `seen` map), but that check can only fire once both
+// entries are in the same file, i.e. after the merge that this allocator is
+// meant to stop needing.
+function cmdNextId(argv) {
+  const local = argv.includes('--local');
+  const IDSPACE = require('./idspace.js');
+  const ids = [];
+  try {
+    const text = fs.readFileSync(path.join(REPO_ROOT, REGISTER_REL), 'utf8');
+    for (const line of text.split('\n')) {
+      const hit = /^###\s+L(\d+)\s+—/.exec(line);
+      if (hit) ids.push(Number(hit[1]));
+    }
+  } catch { /* no register here — the refs still carry one */ }
+  try {
+    const a = IDSPACE.allocate('liability', ids, { root: REPO_ROOT, local });
+    process.stdout.write(`${a.id}  ${a.note}\n`);
+  } catch (e) {
+    if (!(e instanceof IDSPACE.IdSpaceError)) throw e;
+    process.stderr.write(`liabilities: ${e.message}\n`);
+    process.exit(1);
+  }
+}
+
 const USAGE = `liabilities.js — the liability register's validator (todos/0286)
 
-  check    validate todos/LIABILITIES.md; exit 1 on any failure
-  list     entries, with each anchor resolved to a live file:line
+  check            validate todos/LIABILITIES.md; exit 1 on any failure
+  list             entries, with each anchor resolved to a live file:line
+  next-id [--local]  the next free Lnn, derived across every ref (todos/0358)
 `;
 
 function main() {
@@ -305,6 +334,7 @@ function main() {
   switch (cmd) {
     case 'check': return cmdCheck();
     case 'list': return cmdList();
+    case 'next-id': return cmdNextId(process.argv.slice(3));
     default:
       process.stderr.write(`liabilities.js: unknown command "${cmd}"\n\n${USAGE}`);
       process.exit(2);
