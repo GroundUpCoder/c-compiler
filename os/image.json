@@ -1,5 +1,5 @@
 {
-  "version": 178,
+  "version": 179,
   "overlays": [
     {
       "id": "clang-apps",
@@ -80,8 +80,18 @@
       "/usr/share/gucman/repos": {
         "content": "# gucman package repository (gucman Slice 1). One base URL per line;\n# the first non-comment line wins. Overridable at /etc/gucman/repos.\n# The default is origin-relative: the browser fetches /packages/index.json\n# from the same deploy that served the OS (serve.js maps /packages/* to\n# dist/packages/*, tools/mkpkg.js output). Headless boots write an\n# absolute http://... URL into /etc/gucman/repos instead.\n/packages\n"
       },
+      "/usr/bin/cmdalt": {
+        "c": "cmdalt.c",
+        "hdrs": [
+          "cmdalt.h",
+          "cfgstore.h"
+        ]
+      },
       "/usr/bin/code": {
         "link": "/usr/bin/gcode"
+      },
+      "/usr/bin/python": {
+        "link": "/usr/bin/cmdalt"
       },
       "/usr/bin/wmctl": {
         "c": "wmctl.c",
@@ -356,6 +366,9 @@
       },
       "/usr/share/openwith": {
         "content": "# File associations (todos/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). Three layers overlaid per key, highest wins:\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\ngb\t/bin/sameboy\ngbc\t/bin/sameboy\nbmp\t/bin/paint\ndeck\t/bin/deck\nmgp\t/bin/mgp\nhtml\t/bin/netsurf\nhtm\t/bin/netsurf\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"
+      },
+      "/usr/share/cmdalt": {
+        "content": "# Command alternatives (todos/0338): which implementation a dispatched\n# command NAME runs. Consulted by /usr/bin/cmdalt — every /usr/bin/<name>\n# link resolves to that one binary, which takes the key from its own\n# argv[0] — and by the Control Panel's Default Programs applet.\n# Three layers overlaid per key, highest wins:\n#   ~/.config/cmdalt (the user's pick), /etc/cmdalt (package claims),\n#   /usr/share/cmdalt (this file, the baked suggestion).\n# Lines: KEY<ws>VALUE. KEY is a command name; VALUE is an argv prefix, and\n# the dispatched command's own arguments are appended to it verbatim. Bare\n# program words resolve through /usr/local/bin:/bin. A key may carry\n# SEVERAL lines — that is the candidate set the picker offers — and the\n# FIRST one wins, so the earliest package claim stays the default until\n# the user picks otherwise.\n# Nothing python is baked into the image: `python` is a ROLE name, and the\n# line below is only the SUGGESTION a fresh boot shows when no\n# implementation is installed —\n#   python: no python implementation is installed\n#          install one:  gucman install python-clang\npython\tpython-clang\n"
       },
       "/usr/bin/coreutils": {
         "project": "vendor/busybox/coreutils.json"

@@ -143,6 +143,52 @@ const out = boot([
   'cat /root/.config/sounds',
   'echo ==cut',
   'wmctl click Test',   // plays SystemDefault (mixer asserts live in test_sounds_e2e); nothing here asserts it
+  // the Default Programs applet (todos/0338 + todos/0130's picker leg): the
+  // COMMAND half — which implementation a dispatched name runs. This image
+  // is the FAT fixture, so micropython is folded and its `commands` claim
+  // sits ahead of the baked python-clang suggestion in /usr/share/cmdalt.
+  'wmctl click "Default Programs"',
+  'wmctl wait win "Default Programs" 6000',
+  'DSID=$(wmctl list | grep "Default Programs" | sed "s/[^0-9].*//")',
+  'echo ==dpg1',
+  'wmctl tree',
+  'echo ==cut',
+  'echo ==dpgkeys',
+  'wmctl gettext LISTBOX:0',
+  'echo ==cut',
+  'echo ==dpgcand',
+  'wmctl gettext LISTBOX:1',
+  'echo ==cut',
+  // pick the SECOND candidate (the baked python-clang suggestion) — click
+  // focuses the candidate list, HOME/DOWN move the caret (the fileman
+  // row-selection idiom; no row-height pixel math)
+  'wmctl click $DSID 374 60',
+  'wmctl key $DSID 74 1073741898',          // HOME -> row 0
+  'wmctl key $DSID 81 1073741905',          // DOWN -> row 1
+  'echo ==dpgcand2',
+  'wmctl gettext LISTBOX:1',
+  'echo ==cut',
+  'wmctl click "Set as default"',
+  waitFileHas('/root/.config/cmdalt', 'python.python-clang'),
+  'echo ==dpgset',
+  'cat /root/.config/cmdalt',
+  'echo ==cut',
+  // the GUI wrote the store the CLI reads — one store, two editors
+  'echo ==dpgwhich',
+  'cmdalt which python 2>&1; echo RC=$?',
+  'echo ==cut',
+  // the shadow warning row: plant an earlier-PATH python, then make the
+  // applet re-read the store (Use default triggers a full resync)
+  "printf '#!/bin/sh\\necho shadow\\n' > /usr/local/bin/python",
+  'chmod 755 /usr/local/bin/python',
+  'wmctl click "Use default"',
+  'echo ==dpgreset',
+  'cat /root/.config/cmdalt',
+  'echo ==cut',
+  'echo ==dpg2',
+  'wmctl tree',
+  'echo ==cut',
+  'rm -f /usr/local/bin/python',
   // hub close = the whole panel quits (all applet windows mid-flight)
   'wmctl close $HSID',
   'wmctl wait nowin "Control Panel" 6000',   // process exit tears down every applet surface too
@@ -241,6 +287,40 @@ check('Densest (0.5x) delta-writes zoom 0.5 to ~/.config/display',
 const dp2 = section(out, 'dp2');
 check('Automatic writes an explicit zoom auto (replacing, not appending)',
   /^zoom\tauto$/m.test(dp2) && !/0\.5/.test(dp2), dp2);
+
+// -- Default Programs (todos/0338 + the 0130 picker leg) --
+const dpg1 = section(out, 'dpg1');
+check('Default Programs applet opens with both lists and the buttons',
+  /class=CplDefProg [^\n]*text='Default Programs'/.test(dpg1) &&
+  /text='Commands'/.test(dpg1) && /text='Implementations'/.test(dpg1) &&
+  /text='Set as default'/.test(dpg1) && /text='Use default'/.test(dpg1),
+  dpg1.slice(0, 900));
+const dpgkeys = section(out, 'dpgkeys');
+check('the commands list shows the python key and its effective value',
+  /^> python -> \/bin\/micropython$/m.test(dpgkeys), JSON.stringify(dpgkeys));
+const dpgcand = section(out, 'dpgcand');
+check('the candidate list shows the folded claim first, installed',
+  /^> \/bin\/micropython - \/bin\/micropython$/m.test(dpgcand), JSON.stringify(dpgcand));
+check('...and the baked suggestion, marked not installed',
+  /^python-clang - not installed$/m.test(dpgcand), JSON.stringify(dpgcand));
+check('the effective line names the resolved program',
+  /text='python runs: \/bin\/micropython'/.test(dpg1), dpg1.slice(0, 900));
+check('HOME+DOWN moves the candidate selection to python-clang',
+  /^> python-clang - not installed$/m.test(section(out, 'dpgcand2')),
+  JSON.stringify(section(out, 'dpgcand2')));
+check('Set as default delta-writes just that key to ~/.config/cmdalt',
+  section(out, 'dpgset').trim() === 'python\tpython-clang',
+  JSON.stringify(section(out, 'dpgset')));
+const dpgwhich = section(out, 'dpgwhich');
+check('the CLI reads the GUI pick back (which reports it unresolved)',
+  /RC=1/.test(dpgwhich) && /available: \/bin\/micropython/.test(dpgwhich),
+  JSON.stringify(dpgwhich));
+check('Use default drops the user pick (cfg_unset, no tombstone)',
+  !/python/.test(section(out, 'dpgreset')), JSON.stringify(section(out, 'dpgreset')));
+const dpg2 = section(out, 'dpg2');
+check('a shadowing /usr/local/bin/python raises the warning row',
+  /text='Warning: \/usr\/local\/bin\/python shadows this setting[^']*'/.test(dpg2),
+  (dpg2.match(/text='Warning[^']*'/) || ['(no warning row)'])[0]);
 
 // -- hub close quits the whole panel --
 const list3 = section(out, 'list3');

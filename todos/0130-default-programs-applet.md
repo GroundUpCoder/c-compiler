@@ -51,6 +51,15 @@ CLI read path, nothing else.
   there whether that's wanted). An "Add…" affordance to associate a new
   extension. All writes land in `~/.config/openwith` exactly like the CLI
   and fileman picker — three editors, one store, one format.
+- ~~**The command-defaults half**~~ — **LANDED with `todos/0338`**
+  (2026-07-28): the Default Programs applet exists in `os/win32/ctlpanel.c`
+  with the commands list, the candidate list, Set as default / Use default
+  over `~/.config/cmdalt`, and the PATH-shadow warning row; legs in
+  `tests/kernel/test_ctlpanel_e2e.js`. `cfg_each`/`cfg_keys`/`cfg_unset` are
+  in `os/cfgstore.h` now, so **this item's own Remove button is unblocked**.
+  What remains here is the FILE-ASSOCIATION half: `open --list`, the
+  associations LISTBOX + command EDIT + Set/Remove/Add over `openwith`, and
+  the browser leg. Original text, for the record:
 - **The command-defaults half** (added 2026-07-27; owed by `todos/0338`,
   specified in `todos/COMMAND-ALTERNATIVES.md` §8): a second list over the
   `cmdalt` store — one row per command key, the candidate implementations

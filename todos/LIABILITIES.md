@@ -272,4 +272,9 @@ thing this file exists to kill.
 - file: vendor/micropython/README.md
 - anchor: - **Modules a Python programmer will reach for and not find**: `datetime`,
 
+### L44 — gucman's refusal to plant a package `bin` over a dispatched command name has no firing test
+- ticket: 0355
+- file: os/gucman/gucman.c
+- anchor: is the runtime backstop for a payload that arrived another way.
+
 <!-- END ENTRIES -->

@@ -35,7 +35,16 @@
  *               Starfield (radios apply on click), set the idle timeout
  *               (Apply), Preview raises it now (WMP SAVER — the wmctl-saver
  *               gesture; /bin/wm answers, so no WM = silent no-op).
- * Mouse/Keyboard applets: recorded in todos/0089, build opportunistically.
+ *   Default Programs — the command-alternatives picker (todos/0338 plus
+ *               todos/0130's picker leg, over os/cmdalt.h): WHICH
+ *               implementation a dispatched command NAME runs. Two lists
+ *               (the keys, then the selected key's candidates), Set as
+ *               default / Use default writing the SAME ~/.config/cmdalt
+ *               delta `cmdalt set`/`cmdalt reset` write, plus the
+ *               PATH-shadow warning — this is the screen a user whose
+ *               switch "did nothing" is standing on. File associations,
+ *               the other half of the Windows applet, stay todos/0130's.
+ * Mouse applet: recorded in todos/0089, build opportunistically.
  */
 
 #include <windows.h>
@@ -49,6 +58,7 @@
 #include "../saver.h"
 #include "../keys.h"
 #include "../display.h"
+#include "../cmdalt.h"
 #include "../wm_proto.h"
 
 /* A config-store write failed — read-only or full $HOME (todos/0234).
@@ -66,15 +76,16 @@ __import int __audio_gain(int gain);             /* host.js; -1 = no mixer */
 /* ---------------------------------------------------------- applet table */
 
 enum { APP_SOUND, APP_SOUNDS, APP_SYSTEM, APP_DISPLAY, APP_DATETIME,
-       APP_SAVER, APP_KEYBOARD, APP_N };
+       APP_SAVER, APP_KEYBOARD, APP_DEFPROG, APP_N };
 
 static const char *APP_NAME[APP_N] =             /* icon labels (unique!) */
     { "Sound", "Sounds", "System", "Display", "Date/Time", "Screen Saver",
-      "Keyboard" };
+      "Keyboard", "Default Programs" };
 static const char *APP_TITLE[APP_N] =            /* applet window titles */
     { "Sound Properties", "Sounds Properties", "System Properties",
       "Display Properties", "Date/Time Properties",
-      "Screen Saver Properties", "Keyboard Properties" };
+      "Screen Saver Properties", "Keyboard Properties",
+      "Default Programs" };
 
 static HWND g_hub;
 static HWND g_icon[APP_N];
@@ -515,6 +526,165 @@ static LRESULT CALLBACK keyboard_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProc(h, msg, wp, lp);
 }
 
+/* ------------------- Default Programs (todos/0130 picker leg, todos/0338)
+ *
+ * The COMMAND half of Windows' own Default Programs split ("set your
+ * default programs" vs "associate a file type"): one row per cmdalt key
+ * with its effective value, the candidate implementations for the selected
+ * key, and Set as default / Use default over the SAME store `cmdalt set`
+ * writes (os/cmdalt.h — this applet is UI over that policy, it forks
+ * nothing). The file-association half stays todos/0130's.
+ *
+ * The warning row is the third of the three PATH-shadow diagnostics: this
+ * is the exact screen a user whose switch "did nothing" is standing on. */
+
+#define ID_DPGKEYS 700
+#define ID_DPGCAND 701
+#define ID_DPGSET  702
+#define ID_DPGDEF  703
+#define ID_DPGEFF  704
+#define ID_DPGWARN 705
+
+#define DPG_MAX 32                               /* rows we keep addressable */
+
+static char dpg_key[DPG_MAX][CA_KEY_MAX];        /* keys, listbox row order */
+static char dpg_cand[DPG_MAX][CA_VAL_MAX];       /* candidates for the pick */
+static int dpg_nkeys, dpg_ncand;
+
+static int dpg_key_cb(const char *key, const char *value, void *u) {
+    HWND lb = (HWND)u;
+    char row[CA_KEY_MAX + CA_VAL_MAX + 8];
+    if (dpg_nkeys >= DPG_MAX) return 1;
+    snprintf(dpg_key[dpg_nkeys++], CA_KEY_MAX, "%s", key);
+    snprintf(row, sizeof row, "%s -> %s", key, value);
+    SendMessage(lb, LB_ADDSTRING, 0, (LPARAM)row);
+    return 0;
+}
+
+static int dpg_cand_cb(const char *key, const char *value, void *u) {
+    HWND lb = (HWND)u;
+    char prog[CA_PATH_MAX], row[CA_VAL_MAX + CA_PATH_MAX + 8];
+    (void)key;
+    if (dpg_ncand >= DPG_MAX) return 1;
+    snprintf(dpg_cand[dpg_ncand++], CA_VAL_MAX, "%s", value);
+    ca_prog(value, prog, sizeof prog);
+    if (prog[0] && access(prog, 0 /* F_OK */) == 0)
+        snprintf(row, sizeof row, "%s - %s", value, prog);
+    else
+        snprintf(row, sizeof row, "%s - not installed", value);
+    SendMessage(lb, LB_ADDSTRING, 0, (LPARAM)row);
+    return 0;
+}
+
+/* The selected key, or "" when the list is empty. */
+static void dpg_selected(HWND h, char *out, size_t sz) {
+    int sel = (int)SendMessage(GetDlgItem(h, ID_DPGKEYS), LB_GETCURSEL, 0, 0);
+    if (sel >= 0 && sel < dpg_nkeys) snprintf(out, sz, "%s", dpg_key[sel]);
+    else if (sz) out[0] = 0;
+}
+
+/* Refill the candidate list + the two status lines for the selected key. */
+static void dpg_fill_cands(HWND h) {
+    char text[CA_STORE_MAX], key[CA_KEY_MAX], line[CA_VAL_MAX + CA_PATH_MAX + 64];
+    HWND lb = GetDlgItem(h, ID_DPGCAND);
+    SendMessage(lb, LB_RESETCONTENT, 0, 0);
+    dpg_ncand = 0;
+    dpg_selected(h, key, sizeof key);
+    if (!key[0]) {
+        SetWindowText(GetDlgItem(h, ID_DPGEFF), "");
+        SetWindowText(GetDlgItem(h, ID_DPGWARN), "");
+        return;
+    }
+    ca_load(text, sizeof text);
+    ca_candidates(text, key, dpg_cand_cb, lb);
+    if (dpg_ncand) SendMessage(lb, LB_SETCURSEL, 0, 0);
+    ca_res r;
+    ca_resolve(text, key, &r);
+    if (r.status == CA_OK) snprintf(line, sizeof line, "%s runs: %s", key, r.prog);
+    else if (r.status == CA_MISSING)
+        snprintf(line, sizeof line, "%s runs: %s (not installed)", key, r.value);
+    else snprintf(line, sizeof line, "%s: nothing configured", key);
+    SetWindowText(GetDlgItem(h, ID_DPGEFF), line);
+    char shadow[CA_PATH_MAX];
+    if (ca_shadow(key, shadow, sizeof shadow)) {
+        char msg[CA_PATH_MAX * 2];
+        ca_shadow_text(key, shadow, " ", msg, sizeof msg);
+        snprintf(line, sizeof line, "Warning: %s", msg);
+        SetWindowText(GetDlgItem(h, ID_DPGWARN), line);
+    } else {
+        SetWindowText(GetDlgItem(h, ID_DPGWARN), "");
+    }
+}
+
+/* Rebuild both lists from the STORE, carrying the selection by NAME across
+ * the refill (the fileman rule — a row index is not an identity). */
+static void dpg_sync(HWND h) {
+    char text[CA_STORE_MAX], want[CA_KEY_MAX];
+    HWND lb = GetDlgItem(h, ID_DPGKEYS);
+    dpg_selected(h, want, sizeof want);
+    SendMessage(lb, LB_RESETCONTENT, 0, 0);
+    dpg_nkeys = 0;
+    ca_load(text, sizeof text);
+    cfg_keys(text, dpg_key_cb, lb);
+    int pick = 0;
+    for (int i = 0; i < dpg_nkeys; i++)
+        if (want[0] && strcmp(dpg_key[i], want) == 0) pick = i;
+    if (dpg_nkeys) SendMessage(lb, LB_SETCURSEL, pick, 0);
+    dpg_fill_cands(h);
+}
+
+static LRESULT CALLBACK defprog_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_CREATE:
+        CreateWindowEx(0, "STATIC", "Commands", WS_CHILD | WS_VISIBLE,
+                       12, 8, 240, 28, h, NULL, NULL, NULL);
+        CreateWindowEx(0, "LISTBOX", "", WS_CHILD | WS_VISIBLE | LBS_NOTIFY,
+                       12, 38, 250, 150, h, (HMENU)ID_DPGKEYS, NULL, NULL);
+        CreateWindowEx(0, "STATIC", "Implementations", WS_CHILD | WS_VISIBLE,
+                       274, 8, 260, 28, h, NULL, NULL, NULL);
+        CreateWindowEx(0, "LISTBOX", "", WS_CHILD | WS_VISIBLE | LBS_NOTIFY,
+                       274, 38, 274, 150, h, (HMENU)ID_DPGCAND, NULL, NULL);
+        CreateWindowEx(0, "STATIC", "", WS_CHILD | WS_VISIBLE,
+                       12, 194, 536, 28, h, (HMENU)ID_DPGEFF, NULL, NULL);
+        CreateWindowEx(0, "BUTTON", "Set as default", WS_CHILD | WS_VISIBLE,
+                       12, 226, 190, 30, h, (HMENU)ID_DPGSET, NULL, NULL);
+        CreateWindowEx(0, "BUTTON", "Use default", WS_CHILD | WS_VISIBLE,
+                       212, 226, 160, 30, h, (HMENU)ID_DPGDEF, NULL, NULL);
+        CreateWindowEx(0, "STATIC", "", WS_CHILD | WS_VISIBLE,
+                       12, 262, 536, 56, h, (HMENU)ID_DPGWARN, NULL, NULL);
+        dpg_sync(h);
+        return 0;
+    case WM_COMMAND:
+        switch (LOWORD(wp)) {
+        case ID_DPGKEYS:
+            if (HIWORD(wp) == LBN_SELCHANGE) dpg_fill_cands(h);
+            return 0;
+        case ID_DPGSET: {
+            char key[CA_KEY_MAX];
+            dpg_selected(h, key, sizeof key);
+            int sel = (int)SendMessage(GetDlgItem(h, ID_DPGCAND), LB_GETCURSEL, 0, 0);
+            if (!key[0] || sel < 0 || sel >= dpg_ncand) return 0;
+            if (ca_set(key, dpg_cand[sel]) != 0) store_fail(h, "the default program");
+            dpg_sync(h);
+            return 0;
+        }
+        case ID_DPGDEF: {                        /* drop the user pick */
+            char key[CA_KEY_MAX];
+            dpg_selected(h, key, sizeof key);
+            if (!key[0]) return 0;
+            if (ca_reset(key) != 0) store_fail(h, "the default program");
+            dpg_sync(h);
+            return 0;
+        }
+        }
+        return 0;
+    case WM_DESTROY:
+        g_applet[APP_DEFPROG] = NULL;
+        return 0;
+    }
+    return DefWindowProc(h, msg, wp, lp);
+}
+
 /* ------------------------------------------------------------- the hub */
 
 typedef LRESULT (CALLBACK *WndProcFn)(HWND, UINT, WPARAM, LPARAM);
@@ -532,6 +702,7 @@ APP_DEF[APP_N] = {
     { "CplDateTime", datetime_proc, 300, 76  },
     { "CplSaver",    saver_proc,    336, 212 },
     { "CplKeyboard", keyboard_proc, 496, 150 },
+    { "CplDefProg",  defprog_proc,  560, 326 },
 };
 
 static void open_applet(int i) {
@@ -682,6 +853,18 @@ static void draw_art(HDC dc, int i, int x, int y) {
         LineTo(dc, x + 16, y + 6);
         MoveToEx(dc, x + 16, y + 16, NULL);
         LineTo(dc, x + 24, y + 16);
+        break;
+    }
+    case APP_DEFPROG: {                          /* two programs, one ticked */
+        HBRUSH w = CreateSolidBrush(RGB(255, 255, 255));
+        HGDIOBJ ow = SelectObject(dc, w);
+        Rectangle(dc, x + 2, y + 4, x + 18, y + 16);
+        Rectangle(dc, x + 2, y + 18, x + 18, y + 30);
+        SelectObject(dc, ow);
+        DeleteObject(w);
+        MoveToEx(dc, x + 21, y + 9, NULL);       /* the tick on the first */
+        LineTo(dc, x + 24, y + 13);
+        LineTo(dc, x + 30, y + 3);
         break;
     }
     }

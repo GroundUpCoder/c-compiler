@@ -111,34 +111,24 @@ static int ow_set(const char *key, const char *cmd) {
 /* Build the argv for `cmd path`: split cmd into at most maxargs-2 words
  * (backing storage in buf), append path, NUL-terminate. argv[0] stays the
  * bare word; prog gets the spawnable program path (a bare word resolves
- * through /usr/local/bin:/bin, the canonical PATH). Returns argc, or 0. */
+ * through /usr/local/bin:/bin, the canonical PATH). Returns argc, or 0.
+ *
+ * The splitter itself lives in cfgstore.h since todos/0338 — a store value
+ * is an argv prefix in every store, and cmdalt appends N arguments where
+ * this appends one path. This is the reserve = 1 wrapper: the loop bound
+ * maxargs - reserve - 1 IS the old maxargs - 2, and cfg_resolve_prog is the
+ * old three lines. The ONE difference is unobservable: cfg_path_find probes
+ * /bin/<word> before falling back to it, where the old code fell back
+ * unconditionally — same prog either way, one extra access() when nothing
+ * is installed. test_openwith_e2e.js is the behavioral guard. */
 static int ow_build(const char *cmd, const char *path, char *argv[],
                     int maxargs, char *buf, size_t bufsz,
                     char *prog, size_t progsz) {
-    int n = 0;
-    size_t k = 0;
-    const char *p = cmd;
-    while (*p && n < maxargs - 2) {
-        while (*p == ' ' || *p == '\t') p++;
-        if (!*p) break;
-        const char *s = p;
-        while (*p && *p != ' ' && *p != '\t') p++;
-        size_t len = (size_t)(p - s);
-        if (k + len + 1 > bufsz) return 0;
-        memcpy(buf + k, s, len);
-        buf[k + len] = 0;
-        argv[n++] = buf + k;
-        k += len + 1;
-    }
+    int n = cfg_split_argv(cmd, argv, maxargs, 1, buf, bufsz);
     if (n == 0) return 0;
     argv[n++] = (char *)path;
     argv[n] = 0;
-    if (strchr(argv[0], '/')) {
-        snprintf(prog, progsz, "%s", argv[0]);
-    } else {
-        snprintf(prog, progsz, "/usr/local/bin/%s", argv[0]);
-        if (access(prog, 0) != 0) snprintf(prog, progsz, "/bin/%s", argv[0]);
-    }
+    cfg_resolve_prog(argv[0], prog, progsz);
     return n;
 }
 
