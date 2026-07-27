@@ -1,0 +1,59 @@
+# 0333 — `tools/bench2x2/` (and most of `tools/`) matches no rule in the diff planner
+
+- **Status**: open
+- **Found by**: router CHECK lane (cont-100), verified independently by @master cont-101
+
+## Goal
+
+Add a `RULES` entry in `tests/run.js` covering `tools/bench2x2/`, and decide
+deliberately what the rest of `tools/` owes, so that a diff touching only a tools
+directory cannot plan an empty gate.
+
+## What is established
+
+`RULES` in `tests/run.js:105` maps `tools/` only by two **exact-file** rules:
+
+```
+[/^tools\/mkpkg\.js$/,   ['kernel', 'host']]
+[/^tools\/mkimage\.js$/, ['kernel', 'sweep']]
+```
+
+There is no general `^tools/` rule. So `tools/bench2x2/` — 17 files, added at
+`c1b1f47c` — matches nothing, and a diff touching only that directory resolves to
+**zero suites**.
+
+**Precision, because it changes the severity:** this is **not silent**. `printDiffPlan`
+(`tests/run.js:441-445`) prints a yellow `⚠ unmapped (no rule — not covered by this
+plan)` block listing every unmapped path, followed by `→ add a rule to RULES in
+tests/run.js, or run a suite by name.` So the planner reports the hole accurately. The
+defect is that **nothing runs**, and a reader who takes "suites: (none)" as "no gate
+owed" gets no enforcement — only a warning they may skip.
+
+## Why it matters now
+
+`todos/0332` is actively editing `tools/bench2x2/` — it re-runs the harness to validate
+any dispatch fix. That is precisely the workload this hole exposes.
+
+## Scope note — do not over-fix
+
+`tools/` contains genuinely gate-irrelevant material (one-shot generators, demo
+scripts) alongside load-bearing build tooling. A blanket `^tools/` → full-gate rule
+would tax every unrelated tool edit. The right shape is probably a rule for the
+harness/measurement directories plus an explicit decision (recorded in a comment) that
+the remainder is intentionally unmapped — the same treatment `^os/ksvc` got, where a
+comment says why the rule exists so a later split cannot orphan it.
+
+## Acceptance
+
+- `tools/bench2x2/` maps to at least one suite; a diff touching only it plans a
+  non-empty gate.
+- The decision for the rest of `tools/` is recorded as a comment in `RULES`, not left
+  implicit.
+- `node todos/queue.js check` and the `todos` suite stay green (4/4).
+
+## No liability register entry
+
+The register scopes to gaps described by a **real comment in shipped code**. The
+planner's unmapped warning is runtime output, not a source comment naming this gap, and
+manufacturing a comment solely to create an anchor is explicitly declined here — the
+same call made for `0329`, `0330`, `0331` and `0332`.
