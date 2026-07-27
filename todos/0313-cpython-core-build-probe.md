@@ -1,6 +1,58 @@
 # 0313 — M0 probe: can our compiler build CPython core? (throwaway, decision-maker for the pygame arc AND for un-parking 0117 R2)
 
-- **Status**: open
+- **Status**: DONE — **verdict YES-BUT**. Full report:
+  `logs/2026-07-27/cpython-m0-probe.md`.
+
+## Answer (2026-07-27)
+
+**YES-BUT.** CPython 3.13.5 compiles with `compiler.js` (7 MB wasm, 173 TUs,
+23 s) and the result runs `python -c "print(1+1)"` → `2` and reports
+`sys.version` 3.13.5. Verified against a pristine, un-instrumented CPython tree.
+A clang+wasi-sdk-25 `python.wasm` was built first as a positive control, so
+every failure below is attributable to us.
+
+Front end: **200/205 core TUs** parse (the 5: `socketmodule.c` needs
+`netinet/*`, and 4 are legitimately-empty Tier-2 TUs). Link: 419 → 0.
+
+The three upstream premises (wasm32-wasi tier 2, pthread stubs, no-dlopen
+`Modules/Setup`) were **verified against the 3.13.5 source** before any build;
+all three hold. Citations in the report.
+
+**Punch-list, classified — nothing "genuinely infeasible":**
+
+- compiler defects (each with a minimal repro): `todos/0319` (P0, compound
+  literal in a declaration initializer clobbers the caller's stack frame — the
+  one real miscompile), `todos/0320` (P0, preprocessor stack overflow at ~70k
+  tokens), `todos/0321` (P0, `static` re-declared after its definition becomes
+  undefined — 168 of 173 link errors)
+- compiler strictness / compat: `todos/0323` (cross-TU declared-type mismatch
+  rejected — P1, confirmed by @master; becomes a HARD PREREQUISITE once an M1
+  CPython port is funded), `todos/0322` (empty TU)
+- missing libc surface: `todos/0324` (`<stdatomic.h>`), `todos/0325` (the
+  CPython + numpy libc gap list, grouped by whether a port can configure around
+  each)
+
+**numpy: answered at compile-stage confidence; not linked, not run.** The key
+finding is that implementing C99 `_Complex` is **not** a prerequisite — numpy
+2.x already has a struct-complex path gated on `__cplusplus`; extending 7 guard
+sites to `|| defined(__STDC_NO_COMPLEX__)` took the sweep from 5/164 to
+**83/164** TUs with zero compiler changes. Of the remaining 81, 33 are the
+probe harness's missing generated headers, not numpy findings.
+
+**Abandon trigger: did not fire**, and the shape was the opposite — the list
+shrank monotonically and converged in a day, not two weeks.
+
+**`todos/0117` R2: KEEP PARKED.** R2 was parked on exactly one question — is a
+real CPython `/bin/python` buildable. M0 says yes, so the condition resolved in
+the direction that keeps R2 parked. Caveats: M1 is unfunded, and the route is a
+decider call jku has not ratified — if he overturns it, R2 un-parks immediately.
+0117 **R1 is unaffected** and stays foregrounded.
+
+Nothing vendored, no `bin.json` entry, no `os/image.json` bump, no rebake.
+
+---
+
+- **Original status**: open
 - **Difficulty**: heavy (timeboxed 1–2 weeks — **abandon is a valid, cheap outcome**)
 - **Design**: this file + `~/git/meta/meta/notes/pygame-design-passes-synthesis.md`
   (the consolidated result of four Fable design passes, 2026-07-27). **Read the
