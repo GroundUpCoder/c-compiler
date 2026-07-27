@@ -52,11 +52,20 @@ origin.** Two things stood between that and the tree:
 ## Naming
 
 `stl4` and `sdldemo` are bare names with no `-clang` suffix, and that is
-CORRECT, not drift: the sibling's `enforceClangConvention` binds only projects
-built from a `$CC_ROOT/vendor/` tree (a build whose stock twin gucOS also
-compiles with `compiler.js`, which must not be shadowed). Both are in-repo
-demos of the sibling itself with no stock twin, so the convention exempts them
-by its own rule. No rename is owed.
+CORRECT, not drift — **do not "fix" them.** The sibling's
+`enforceClangConvention` (`clang-simplified/wasm/tools/mk-overlay.mjs:123`,
+called at `:166`) returns early for any project whose `base` is not under
+`$CC_ROOT/vendor/` — "purely in-repo demos (no vendor base) are exempt". The
+convention's INTENT is that a clang build must not shadow the stock twin gucOS
+also compiles with `compiler.js`; it forces a fresh `/usr/bin/<name>-clang`
+path so both toolchains' builds coexist and can be A/B'd. Both of these are
+`wasm/demos/*.cpp` in the sibling itself with **no stock twin**, so there is no
+name to collide with and the rule exempts them by its own terms. Renaming would
+also invalidate published sha256s for nothing.
+
+(The suffix is a floor, not a ceiling: `box2d-clang`, `imgui-clang` and the
+rest are also in-repo demos and take it voluntarily. Voluntary use by some
+in-repo projects is not evidence that the others are misnamed.)
 
 ## Scope note — assets
 
