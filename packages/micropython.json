@@ -1,9 +1,9 @@
 {
   "name": "micropython",
-  "version": "1.28",
-  "summary": "MicroPython 1.28 — minimal REPL-only port (argv ignored, no open()/import by design)",
+  "version": "1.28-2",
+  "summary": "MicroPython 1.28 — script runner + REPL (runs .py files, open()/io/sys.argv; a MicroPython dialect, not CPython)",
   "files": {
     "micropython": { "project": "vendor/micropython/bin.json" }
   },
-  "bin": { "micropython": "micropython" }
+  "bin": { "micropython": "micropython", "python": "micropython" }
 }

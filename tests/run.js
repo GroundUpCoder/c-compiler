@@ -164,6 +164,20 @@ const RULES = [
   // (test_win32_ports.js).
   [/^tools\/win32ports\.js$/, ['kernel'], 'the win32 port compile harness'],
 
+  // The MicroPython port (todos/0117). Its two run.py categories are the
+  // 639-file upstream corpus; the kernel suite builds it twice (the REPL pty
+  // e2e + the script-runner e2e); and it is a gucman package, so it also
+  // folds into the fat image fixture every browser boot comes out of —
+  // i.e. the same blast radius as a ^packages/ edit.
+  // (NB: vendor/ has no blanket rule — every OTHER vendored project reports
+  // UNMAPPED on a diff. That gap is todos/0318.)
+  [/^vendor\/micropython\//, ['micropython', 'micropython-upstream', 'kernel', 'sweep'],
+    'the MicroPython port: its upstream corpus, both kernel e2es, and the fat-image package'],
+  // The genhdr regenerator: its --check (the qstr-pool-vs-config sync guard)
+  // runs inside the `micropython` category.
+  [/^tools\/mkmpgenhdr\.js$/, ['micropython', 'micropython-upstream'],
+    'regenerates vendor/micropython/genhdr; its --check gates the micropython category'],
+
   // Test trees map to their own suite.
   [/^tests\/unit\//, ['unit'], null],
   [/^tests\/run-unit\.js$/, ['unit'], null],

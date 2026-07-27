@@ -877,10 +877,41 @@ def run_libpng_tests(results, filter_str=None):
 # script.py + expected.stdout pair: we feed the script through stdin and
 # compare stdout.
 
+def run_micropython_genhdr_check(results, filter_str=None):
+    """vendor/micropython/genhdr/* must match the sources + mpconfigport.h.
+
+    The qstr pool, the module table and the GC root-pointer list are GENERATED
+    (upstream generates them per build; this repo commits them, since vendored
+    projects have no Makefile). A config edit that adds a qstr and forgets the
+    regeneration is a link error at best and a stale pool at worst, so the
+    regenerator's --check is a test. Needs `cc` + python3 — the same two host
+    tools the tcc/fuzz categories already hard-require.
+    """
+    test_name = "micropython/genhdr-sync"
+    if filter_str and filter_str not in test_name:
+        return
+    tool = os.path.join(ROOT_DIR, "tools", "mkmpgenhdr.js")
+    if not os.path.exists(tool):
+        results.record(test_name, False, f"Not found: {tool}")
+        return
+    try:
+        r = subprocess.run(["node", tool, "--check"], capture_output=True,
+                           text=True, timeout=300, cwd=ROOT_DIR)
+    except subprocess.TimeoutExpired:
+        results.record(test_name, False, "mkmpgenhdr --check timed out (300s)")
+        return
+    if r.returncode == 0:
+        results.record(test_name, True)
+    else:
+        results.record(test_name, False, (r.stderr or r.stdout).strip())
+
+
 def run_micropython_tests(results, filter_str=None):
     if not os.path.isdir(MICROPYTHON_TEST_DIR):
         results.record("micropython/build", False, f"Test dir not found: {MICROPYTHON_TEST_DIR}")
         return
+
+    run_micropython_genhdr_check(results, filter_str)
 
     test_bin = os.path.join(MICROPYTHON_DIR, "test_bin.json")
     if not os.path.exists(test_bin):
@@ -909,7 +940,7 @@ def run_micropython_tests(results, filter_str=None):
             r = subprocess.run(
                 ["node", "--experimental-wasm-exnref", HOST_JS, wasm],
                 input=script_bytes,
-                capture_output=True, timeout=30
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30
             )
             actual = r.stdout.decode("utf-8", errors="replace") if isinstance(r.stdout, bytes) else r.stdout
             # MicroPython's print emits \r\n; normalize before comparing.
@@ -919,10 +950,7 @@ def run_micropython_tests(results, filter_str=None):
             if actual == expected:
                 results.record(test_name, True)
             else:
-                stderr = r.stderr.decode("utf-8", errors="replace") if isinstance(r.stderr, bytes) else r.stderr
                 msg = f"stdout mismatch:\n--- expected ---\n{expected}--- actual ---\n{actual}"
-                if stderr:
-                    msg += f"--- stderr ---\n{stderr.split(chr(10))[0]}"
                 results.record(test_name, False, msg.strip())
         except subprocess.TimeoutExpired:
             results.record(test_name, False, "Timed out (30s)")
@@ -933,7 +961,15 @@ def run_micropython_tests(results, filter_str=None):
 # Runs scripts from vendor/micropython/tests/{basics,float}/. For each .py:
 #   - If a .py.exp file exists, use it as the expected output.
 #   - Otherwise, run the .py through CPython3 and use that as expected.
-#   - Compare against our compiled MicroPython's stdout (\r\n normalized).
+#   - Compare against our compiled MicroPython's output (\r\n normalized).
+#
+# stderr is MERGED into stdout, matching upstream's own run-tests.py
+# (stderr=subprocess.STDOUT). Since todos/0117 R1 the port routes uncaught
+# tracebacks and mp_warning() to stderr like upstream's unix port does
+# (MICROPY_ERROR_PRINTER), and upstream's .exp goldens — e.g.
+# basics/bytes_compare3.py.exp's "Warning: Comparison between bytes and str"
+# — were recorded against a merged stream. Both are raw unbuffered write()s
+# to the same pipe, so the interleaving is faithful.
 # A skip list covers tests that exercise features the minimal port can't
 # handle (large ints, complex numbers, async, etc.) — they'd fail for
 # reasons unrelated to our compiler.
@@ -949,16 +985,20 @@ MICROPYTHON_UPSTREAM_SKIP = {
     "tstring",       # Python 3.13 t-strings, not enabled
     "/struct_",      # `struct` module not enabled in minimal port
     "float2int_",    # imports `struct` to probe float width (module not built)
-    "/sys_",         # most sys_* tests need MICROPY_PY_SYS_*
-    "/io_",          # MICROPY_PY_IO disabled
     "/uctypes",      # uctypes module not enabled
-    "/array",        # array module not enabled
-    "/gc",           # MICROPY_PY_GC details
+    "/array",        # array module not enabled (todos/0117 R2)
+    "/gc",           # gc module not enabled (todos/0117 R2)
     "math_domain_special",    # has minor float-precision differences
-    "import_star_nonmodule",  # needs MICROPY_PY_SYS_MODULES + BASIC_FEATURES
-    "builtin_compile",        # needs MICROPY_PY_FUNCTION_ATTRS (QSTR regeneration)
-    "memoryview_gc",          # needs MICROPY_PY_GC (QSTR regeneration, not caught by /gc)
-    "float_format_ints",      # needs MICROPY_PY_ARRAY (QSTR regeneration, not caught by /array)
+    "import_star_nonmodule",  # needs MICROPY_PY_SYS_MODULES (todos/0117 R2)
+    "memoryview_gc",          # needs the gc module (todos/0117 R2; not caught by /gc)
+    "float_format_ints",      # needs the array module (todos/0117 R2; not caught by /array)
+    # todos/0117 R1 enabled MICROPY_PY_IO / SYS_STDFILES / SYS_EXIT / FUNCTION_ATTRS
+    # and lifted the "can't regenerate the QSTR pool" ceiling (tools/mkmpgenhdr.js),
+    # so the whole "/io_" and "/sys_" families AND builtin_compile came OFF this
+    # table (+15 green). The stragglers inside those families — sys_getsizeof,
+    # sys_tracebacklimit, io_buffered_writer — need no entry here: they print
+    # "SKIP" themselves, which the runner below already honours. Don't re-add a
+    # blanket family skip; it hides the ones that do run.
 }
 
 
@@ -1032,7 +1072,8 @@ def run_micropython_upstream_tests(results, filter_str=None):
                 script_bytes = sf.read()
             r = subprocess.run(
                 ["node", "--experimental-wasm-exnref", HOST_JS, wasm],
-                input=script_bytes, capture_output=True, timeout=15
+                input=script_bytes,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15
             )
             actual = r.stdout.decode("utf-8", errors="replace") if isinstance(r.stdout, bytes) else r.stdout
             actual = actual.replace("\r\n", "\n")

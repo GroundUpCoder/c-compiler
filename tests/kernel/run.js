@@ -64,6 +64,7 @@ const tests = [
   ['test_overlays.js'],     // 0118: opt-in image overlays — overlay@1 verify/plant/provenance over a tiny synthetic bake, every fatal rule, base-bake inertness (no wasm)
   ['test_vi_e2e.js', IMG],       // 0011: busybox vi through the real tty — raw mode, edit sessions
   ['test_repl_pty_e2e.js'], // 0036: lua/micropython/sqlite3 interactive on a kernel pty — prompt, eval, LD erase, ^D exit
+  ['test_micropython_script_e2e.js'], // 0117 R1: the micropython CLI as an OS process — argv/sys.argv, open() on BlockFS, FS import, sys.exit status, traceback on fd 2 not fd 1, -c
   ['test_wm.js'],           // WM.md: surface registry, input routing, chrome, screenshots (no wasm)
   ['test_wm_anchored.js'],  // 0256 Spike 1: anchored child surfaces (A1 tree, A11 materialized dst, A5 owner child resize, clamp, cascade, thumbnail compositing) + the grab (A2) + the focus-funnel owner pair (A9) — kernel seam, no wasm
   ['test_wm_aero.js'],      // 0063: has-alpha src-over blend goldens, wmThumbnail box filter, glass headless invariance, minimize/restore anim records (no wasm)

@@ -445,12 +445,31 @@ pak0.pak + autoexec.cfg at `/root/id1`; requests relative mouse at
 VID_Init: SURFACE_SET_FLAGS bit1 → kernel wanted-state → os.html pointer
 lock, the lock gesture being a kernel-hit-tested client click; ESC
 unlocks, click re-locks; `wmctl relmove` injects rel deltas headless).
-The REPLs are seeded too (todos/0036): `/bin/lua`, `/bin/micropython`
-(the minimal port — REPL only: argv ignored, no `open()`/import),
+The REPLs are seeded too (todos/0036): `/bin/lua`, `micropython`,
 `/bin/sqlite3` — piped use exits cleanly on EOF, interactive use works
 at the hush prompt and over ptys (`tests/kernel/test_repl_pty_e2e.js`);
 sqlite3 file-backed DBs exposed the brokered-fsync crash fixed in 0036
 (FS_FSYNC RPC, fsync as a dispatched fs method).
+MicroPython is a real script runner since todos/0117 R1 (it ships as the
+`micropython` gucman PACKAGE, not an image.json entry — `micropython`
+AND `python` both land in `/usr/local/bin`): `python foo.py a b` runs
+the file with `sys.argv` set and its exit status propagated, `-c cmd`
+and stdin-as-script work, `open()`/`io`/`sys.std*` are real file objects
+over the kernel fd layer (`vendor/micropython/file.c`, upstream's POSIX
+file object lifted OUT of MicroPython's VFS — the kernel owns mounting),
+uncaught tracebacks go to **stderr**, and the heap is 32 MB (the GC
+pause tracks live data at ~1.7 ms/MB, not heap size — table in
+`vendor/micropython/README.md`). It is a MicroPython DIALECT, not
+CPython: the stdlib is still tiny (`os`/`json`/`time`/`re`/`struct`/
+`array`/`gc` are 0117 R2, parked on the todos/0313 CPython probe), and
+`-m` is refused. **`vendor/micropython/genhdr/*` is GENERATED** — the
+qstr pool, module table and GC root list are a function of
+`mpconfigport.h`, so any config/source change wants
+`node tools/mkmpgenhdr.js` (its `--check` is the
+`micropython/genhdr-sync` test; this replaced the hand-maintained
+headers that used to cap the config). Tests:
+`tests/kernel/test_micropython_script_e2e.js` + the 639-file upstream
+corpus in run.py's `micropython`/`micropython-upstream` categories.
 `/bin/term` (todos/0020, `os/term/`) is the wasm terminal: kernel pty +
 freetype (vendored lib, font at `/etc/fonts/mono.ttf` with the baked
 `/usr/share/fonts/mono.ttf` as fallback) + an escape

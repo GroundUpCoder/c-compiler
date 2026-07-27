@@ -18,8 +18,7 @@
     { "id": "0110", "after": ["0109"] },
     { "id": "0115", "priority": 3 },
     { "id": "0116", "priority": 2, "after": ["0102"] },
-    { "id": "0126", "priority": 0, "difficulty": "light" },
-    { "id": "0117", "priority": 0, "difficulty": "heavy" },
+    { "id": "0117", "priority": 0, "difficulty": "medium" },
     { "id": "0120", "priority": 2, "after": ["0118"] },
     { "id": "0121", "priority": 3, "after": ["0118"] },
     { "id": "0122", "difficulty": "medium" },
@@ -66,6 +65,7 @@
     { "id": "0314", "difficulty": "heavy" },
     { "id": "0315", "priority": 2, "difficulty": "light" },
     { "id": "0316", "priority": 0 },
-    { "id": "0317" }
+    { "id": "0317" },
+    { "id": "0318", "difficulty": "light" }
   ]
 }

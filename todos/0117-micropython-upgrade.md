@@ -1,7 +1,8 @@
 # 0117 — MicroPython: script runner + FS import (multi-round, unlocks /bin/python)
 
-- **Status**: open (META — expect multiple rounds; close each round as its own
-  commit). **Un-deferred + foregrounded 2026-07-27 on jku's direct instruction**
+- **Status**: open — **R1 LANDED 2026-07-27**, R2 is the remaining work (META:
+  each round is its own commit). **Foregrounded 2026-07-27 on jku's direct
+  instruction**
   ("Ok so we're foregrounding all the micropython work right? NetSurf is good but
   this is important too. ... And yea I do want the cli properly fixed as well so
   it actually runs the scripts."). The 2026-07-12 deferral was a mass sweep, not a
@@ -56,9 +57,48 @@ documented, not a bug). CPython is explicitly **not** the plan here
 MicroPython is the pragmatic Python story for this constrained,
 static-linked, single-threaded world).
 
+## R1 — LANDED 2026-07-27 (branch `micropython-0117`)
+
+What shipped, and the two things a later reader most needs to know:
+
+- **The real blocker was not any of the listed items — it was the QSTR pool.**
+  MicroPython's interned-string pool, module table and GC root-pointer list are
+  GENERATED from the preprocessed sources + `mpconfigport.h`. This repo commits
+  them (`vendor/micropython/genhdr/`) and, before R1, hand-maintained them —
+  hence `mpconfigport.h`'s "Enable features that don't need QSTR pool
+  regeneration" comment, a config ceiling nobody could raise.
+  `tools/mkmpgenhdr.js` now drives upstream's own generators over a `cc -E`
+  pass (mirroring `py/mkrules.mk`); its `--check` is a test
+  (`micropython/genhdr-sync`). **This is what unblocks R2 too** — the stdlib
+  breadth question is now purely "which modules", not "can we".
+- `main.c` is the CLI: `script args…`, `-c cmd`, `-`, `-h`, `-V`, `sys.argv`,
+  exit statuses, tracebacks on **stderr**. `test_main.c` is GONE — the upstream
+  corpus now runs the shipped binary's own code path.
+- `file.c` is upstream's `extmod/vfs_posix_file.c` lifted OUT of the VFS (the
+  kernel already owns mounting; a second mount table underneath it would be two
+  filesystems disagreeing about the same paths) + `mp_builtin_open`.
+- Heap 256 KB → 32 MB. **Measured**: the pause tracks LIVE data (~1.7 ms/MB),
+  not heap size — an empty 32 MB heap collects in ~5 µs. Table in
+  `vendor/micropython/README.md`.
+- `/usr/local/bin/python` → the same binary (`packages/micropython.json` `bin`
+  map). NB micropython is a gucman PACKAGE, not an `os/image.json` entry — the
+  R1-plan line below that says "seed `/bin/python` in image.json" is stale.
+- Upstream corpus: 521→**537 passed** (15 recovered skips + the new
+  `micropython/genhdr-sync` test), 3 failed (the same pre-existing float
+  three), 123→108 skipped. The `/io_` and `/sys_` families and
+  `builtin_compile` came off the skip table.
+- Also enabled because the ceiling lifted and each is language-completeness,
+  not stdlib breadth: `MICROPY_PY_FUNCTION_ATTRS`, `MICROPY_ENABLE_SOURCE_LINE`
+  (traceback line numbers), `MICROPY_ENABLE_FINALISER` (a dropped file object
+  closes its fd), `MICROPY_MODULE___FILE__`.
+- **A side effect worth knowing before scoping R2**: implementing
+  `mp_import_stat` properly (R1 item 3) means `import foo` ALREADY finds
+  `./foo.py`. What R2 owns is the `sys.path`/site-dir design and the curated
+  module set — not the import mechanism.
+
 ## Plan (rounds)
 
-**Round 1 — argv + run a script file + basic file I/O.**
+**Round 1 — argv + run a script file + basic file I/O.** — DONE, see above.
 - Move off the minimal-port config toward the upstream **unix-port**
   config for the file/stream object set (this is adopting an existing
   upstream config, not inventing objects — the unix port already does all

@@ -241,4 +241,25 @@ thing this file exists to kill.
 - file: vendor/netsurf/netsurf/content/handlers/html/form.c
 - anchor: 	 * (Per spec a PROGRAMMATIC submit — form.submit() — does not fire
 
+### L35 — /bin/python's stdlib is a handful of modules: os/json/time/re/struct/array/gc are all absent
+- ticket: 0117
+- file: vendor/micropython/mpconfigport.h
+- anchor: // Still off: no object set for it, and no consumer (todos/0117 R2 owns the
+- defers-to: 0313
+
+### L36 — `python -m mod` is rejected outright; there is no module-execution path
+- ticket: 0117
+- file: vendor/micropython/README.md
+- anchor: - **No `-m`.** Rejected with a usage error rather than silently treated as a
+
+### L37 — sys.path[0] is the cwd, not the script's directory, so a script's siblings only import by luck
+- ticket: 0117
+- file: vendor/micropython/README.md
+- anchor: - **`sys.path[0]` is `""` (cwd), not the script's directory** as CPython does.
+
+### L38 — tests/run.js's RULES table maps no vendor/ path except micropython; every other vendored project is UNMAPPED
+- ticket: 0318
+- file: tests/run.js
+- anchor: // UNMAPPED on a diff. That gap is todos/0318.)
+
 <!-- END ENTRIES -->

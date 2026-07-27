@@ -16,6 +16,8 @@
   `heavy` tag on these META items overstated per-round effort). What remains
   is the 0117 (MicroPython) half only.
 - **Difficulty**: light (timeboxed spike — bail is a valid outcome)
+- **VERDICT (2026-07-27): outcome (a) — R1 fell out, and 0117 is `medium`, not
+  `heavy`.** Recorded below.
 - **Design**: this file. Scoped to `todos/0117` (MicroPython upgrade) ONLY —
   deliberately NOT the `queue.js --difficulty-triage` all-untagged sweep.
 
@@ -64,3 +66,39 @@ outcome, not a failure):
 - This item closes once 0117 has been probed and re-tagged/split —
   regardless of whether any R1 code landed (a "confirmed heavy, here's why"
   outcome closes it).
+
+## Outcome (2026-07-27) — outcome (a): R1 landed, 0117 re-tagged `medium`
+
+**Was R1 light or heavy? Neither — it was ONE surprise plus a lot of small,
+already-written pieces.** Roughly half a day, landed complete under `0117`
+(not here — this spike carries no code, per its own acceptance).
+
+The spike's original thesis ("R1 is largely *adopting* an existing upstream
+config") was **half right and half wrong**, and the wrong half is the finding:
+
+- **Right**: every piece the item enumerated was cheap. `mp_import_stat` is
+  ten lines of `stat()`. `mp_lexer_new_from_file` needed no code at all —
+  `py/lexer.c` already provides it under `MICROPY_READER_POSIX`, over
+  `py/reader.c`'s POSIX reader, both already vendored. The file object is
+  upstream's `extmod/vfs_posix_file.c` with its VFS half removed. The argv
+  grammar follows `ports/unix/main.c`. The heap bump is one constant.
+- **Wrong**: you cannot "adopt a config" here at all. `mpconfigport.h` carried
+  the comment *"Enable features that don't need QSTR pool regeneration"* — the
+  generated headers under `genhdr/` were HAND-MAINTAINED, so every flag that
+  introduces an interned string (which is every flag that adds a module, a
+  method name, or a builtin) was unreachable. That was the whole item's real
+  cost, and it is infrastructure, not MicroPython work: `tools/mkmpgenhdr.js`
+  drives upstream's own generator scripts over a `cc -E` pass. It was validated
+  by regenerating at the UNCHANGED config first and re-running the 639-file
+  corpus to the byte-identical 521/3/123 — only then were flags flipped.
+
+**Lesson for the next vendored-project config change**: check whether the
+project GENERATES anything into its own build tree before estimating. A
+committed generated file with a hand-edit comment in it is a ceiling, and it
+does not look like one from the item description.
+
+**Re-tag**: `0117` heavy → **medium**. R2 (FS-import polish + curated stdlib)
+is now mostly "pick modules, flip flags, regenerate, run the corpus" — the
+mechanism it would otherwise have had to build is built. It is not `light`
+because the module-set choice is a real design decision with a
+compatibility surface, and because it is parked pending `todos/0313`.
