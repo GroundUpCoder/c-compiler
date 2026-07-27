@@ -250,6 +250,18 @@ libdom:
   class, so a binding layer that picks a JS prototype from the event's TYPE
   NAME cannot hand MouseEvent's getters a plain `dom_event` called "click"
   and read coordinates off memory past the end of the struct.
+- `src/core/{attr.c,element.c,element.h}` — an element's parsed class-name
+  cache (`dom_element.classes`, what `dom_element_has_class` and so every
+  class selector read) was built when a `class` attribute was ADDED and torn
+  down when one was REMOVED, and never refreshed when an EXISTING one's
+  VALUE changed.  So `el.className = 'slab on'` on an element that already
+  had a class went on matching the OLD list for the rest of the document's
+  life — `.slab.on` never applied, while the same selector on a
+  freshly-created element did (todos/0316, measured in the OS).
+  `dom_attr_set_value` is the one choke every value rewrite passes through
+  (`setAttribute`, `className`, `classList`, `attr.value`), so it now calls
+  the new `_dom_element_classes_changed`.  Upstreamable.  Regression guard:
+  `tests/kernel/test_netsurf_restyle_e2e.js`.
 
 libnsfb:
 - `src/surface.h` + `src/surface/surface.c` — `NSFB_SURFACE_DEF`'s

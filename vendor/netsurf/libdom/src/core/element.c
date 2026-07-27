@@ -1154,6 +1154,32 @@ dom_exception _dom_element_set_id_attribute_node(struct dom_element *element,
 }
 
 /**
+ * Rebuild an element's cached class list from a new class attribute value
+ *
+ * The cache is otherwise only built when a class attribute is ADDED to an
+ * element and torn down when one is REMOVED, so an attribute whose value is
+ * rewritten in place -- className =, setAttribute("class", ...),
+ * classList, attr.value = -- would leave every class-matching selector and
+ * dom_element_has_class() caller reading the OLD list for the rest of the
+ * document's life.  dom_attr_set_value() calls this for exactly that case.
+ *
+ * \param element  Element whose class attribute changed value
+ * \param value    The new class attribute value (may be NULL)
+ * \return DOM_NO_ERR on success,
+ *         DOM_NO_MEM_ERR on memory exhaustion
+ */
+dom_exception _dom_element_classes_changed(struct dom_element *element,
+		dom_string *value)
+{
+	if (value == NULL) {
+		_dom_element_destroy_classes(element);
+		return DOM_NO_ERR;
+	}
+
+	return _dom_element_create_classes(element, dom_string_data(value));
+}
+
+/**
  * Obtain a pre-parsed array of class names for an element
  *
  * \param element    Element containing classes

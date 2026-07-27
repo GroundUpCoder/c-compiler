@@ -107,6 +107,11 @@ dom_exception _dom_element_get_classes(struct dom_element *element,
 		lwc_string ***classes, uint32_t *n_classes);
 dom_exception _dom_element_has_class(struct dom_element *element,
 		lwc_string *name, bool *match);
+/* Not part of the element vtable: the class-name cache is rebuilt when a
+ * class attribute is added or removed, and dom_attr_set_value() calls this
+ * for the remaining case -- an existing one whose VALUE changed. */
+dom_exception _dom_element_classes_changed(struct dom_element *element,
+		dom_string *value);
 
 #define DOM_ELEMENT_VTABLE \
 	_dom_element_get_tag_name, \

@@ -233,3 +233,137 @@ diff -urN a/src/events/mouse_event.h b/src/events/mouse_event.h
  dom_exception _dom_mouse_event_create(struct dom_mouse_event **evt);
  
  /* Destructor */
+diff -urN a/src/core/attr.c b/src/core/attr.c
+--- a/src/core/attr.c	2026-07-27 00:00:00
++++ b/src/core/attr.c	2026-07-27 00:00:00
+@@ -575,20 +575,21 @@ dom_exception _dom_attr_set_value(struct dom_attr *attr,
+ 	err = dom_element_parse_attribute(a->parent, name, value, &parsed);
+ 	dom_string_unref(name);
+ 	if (err != DOM_NO_ERR) {
+ 		return err;
+ 	}
+ 
+ 	/* Create text node containing new value */
+ 	err = dom_document_create_text_node(a->owner, parsed, &text);
+-	dom_string_unref(parsed);
+-	if (err != DOM_NO_ERR)
++	if (err != DOM_NO_ERR) {
++		dom_string_unref(parsed);
+ 		return err;
+-	
++	}
++
+ 	/* Destroy children of this node */
+ 	for (c = a->first_child; c != NULL; c = d) {
+ 		d = c->next;
+ 
+ 		/* Detach child */
+ 		c->parent = NULL;
+ 
+ 		/* Detach from sibling list */
+@@ -602,17 +603,33 @@ dom_exception _dom_attr_set_value(struct dom_attr *attr,
+ 	((struct dom_node_internal *) text)->parent = a;
+ 	a->first_child = a->last_child = (struct dom_node_internal *) text;
+ 	dom_node_unref(text);
+ 	dom_node_remove_pending(text);
+ 
+ 	/* Now the attribute node is specified */
+ 	attr->specified = true;
+ 
+-	return DOM_NO_ERR;
++	/* Keep the owning element's parsed class-name cache in step.  It is
++	 * built when a class attribute is ADDED to an element and destroyed
++	 * when one is removed, so rewriting an existing one's value in place
++	 * -- className =, setAttribute("class", ...), classList, attr.value =
++	 * -- is the one way it can go stale, and a stale cache silently
++	 * breaks every class selector and dom_element_has_class() caller for
++	 * the rest of that element's life. */
++	if (a->parent != NULL && a->parent->type == DOM_ELEMENT_NODE &&
++			a->namespace == NULL && a->owner != NULL &&
++			dom_string_isequal(a->name, a->owner->class_string)) {
++		err = _dom_element_classes_changed(
++				(struct dom_element *) a->parent, parsed);
++	}
++
++	dom_string_unref(parsed);
++
++	return err;
+ }
+ 
+ /**
+  * Retrieve the owning element of an attribute
+  *
+  * \param attr    The attribute to extract owning element from
+  * \param result  Pointer to location to receive result
+  * \return DOM_NO_ERR.
+diff -urN a/src/core/element.c b/src/core/element.c
+--- a/src/core/element.c	2026-07-27 00:00:00
++++ b/src/core/element.c	2026-07-27 00:00:00
+@@ -1148,16 +1148,42 @@ dom_exception _dom_element_set_id_attribute_node(struct dom_element *element,
+ 
+ 	dom_string_unref(localname);
+ 	dom_string_unref(namespace);
+ 
+ 	return DOM_NO_ERR;
+ 
+ }
+ 
++/**
++ * Rebuild an element's cached class list from a new class attribute value
++ *
++ * The cache is otherwise only built when a class attribute is ADDED to an
++ * element and torn down when one is REMOVED, so an attribute whose value is
++ * rewritten in place -- className =, setAttribute("class", ...),
++ * classList, attr.value = -- would leave every class-matching selector and
++ * dom_element_has_class() caller reading the OLD list for the rest of the
++ * document's life.  dom_attr_set_value() calls this for exactly that case.
++ *
++ * \param element  Element whose class attribute changed value
++ * \param value    The new class attribute value (may be NULL)
++ * \return DOM_NO_ERR on success,
++ *         DOM_NO_MEM_ERR on memory exhaustion
++ */
++dom_exception _dom_element_classes_changed(struct dom_element *element,
++		dom_string *value)
++{
++	if (value == NULL) {
++		_dom_element_destroy_classes(element);
++		return DOM_NO_ERR;
++	}
++
++	return _dom_element_create_classes(element, dom_string_data(value));
++}
++
+ /**
+  * Obtain a pre-parsed array of class names for an element
+  *
+  * \param element    Element containing classes
+  * \param classes    Pointer to location to receive libdom-owned array
+  * \param n_classes  Pointer to location to receive number of classes
+  * \return DOM_NO_ERR on success,
+  *         DOM_NO_MEM_ERR on memory exhaustion
+diff -urN a/src/core/element.h b/src/core/element.h
+--- a/src/core/element.h	2026-07-27 00:00:00
++++ b/src/core/element.h	2026-07-27 00:00:00
+@@ -102,16 +102,21 @@ dom_exception _dom_element_set_id_attribute_ns(struct dom_element *element,
+ 		dom_string *namespace, dom_string *localname, 
+ 		bool is_id);
+ dom_exception _dom_element_set_id_attribute_node(struct dom_element *element,
+ 		struct dom_attr *id_attr, bool is_id);
+ dom_exception _dom_element_get_classes(struct dom_element *element,
+ 		lwc_string ***classes, uint32_t *n_classes);
+ dom_exception _dom_element_has_class(struct dom_element *element,
+ 		lwc_string *name, bool *match);
++/* Not part of the element vtable: the class-name cache is rebuilt when a
++ * class attribute is added or removed, and dom_attr_set_value() calls this
++ * for the remaining case -- an existing one whose VALUE changed. */
++dom_exception _dom_element_classes_changed(struct dom_element *element,
++		dom_string *value);
+ 
+ #define DOM_ELEMENT_VTABLE \
+ 	_dom_element_get_tag_name, \
+ 	_dom_element_get_attribute, \
+ 	_dom_element_set_attribute, \
+ 	_dom_element_remove_attribute, \
+ 	_dom_element_get_attribute_node, \
+ 	_dom_element_set_attribute_node, \
