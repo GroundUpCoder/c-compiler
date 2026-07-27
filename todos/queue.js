@@ -24,6 +24,14 @@
 //   node todos/queue.js check [--fix]                # validate; exit non-zero on failure
 //                                                    # --fix: list unlisted open items,
 //                                                    #   rewrite done/ Status lines saying "open"
+//   node todos/queue.js next-id                      # next free ticket + liability id
+//
+// IDS ARE ALLOCATED ACROSS ALL REFS, not from the working tree (todos/0358).
+// Lanes branch and push at the end, so any single ref — origin/main included —
+// is a LOWER BOUND on the id space: deriving "next" locally handed 0354 out
+// twice. `add next` and `next-id` survey every ref through todos/idspace.js and
+// print what they surveyed; they refuse rather than degrade silently when they
+// cannot reach git.
 //
 // `-h`/`--help` anywhere prints usage and exits 0 (checked before dispatch, so
 // `add --help` can never scaffold an item); an unknown `--flag` on any
@@ -43,6 +51,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const LIABILITIES = require('./liabilities.js');
+const IDSPACE = require('./idspace.js');
 
 const TODOS_DIR = __dirname;
 const REPO_ROOT = path.resolve(TODOS_DIR, '..');
@@ -105,20 +114,66 @@ function parseFlags(cmd, argv, allowed) {
 
 // ---------- filesystem scan ----------
 
-function scanDir(dir) {
+// A committed design doc filed beside its ticket: `NNNN-<slug>-design.md`.
+// It is a COMPANION of ticket NNNN, not a second ticket — but ONLY when a
+// non-design file with that id also exists. todos/done/0007-wm-compositor-
+// design.md is the sole 0007 file and therefore IS ticket 0007, while
+// todos/done/0275-kernel-text-service-design.md sits beside a real
+// 0275-kernel-text-service.md. Classifying on that test rather than on the
+// suffix keeps both real cases right and keeps the duplicate check below sharp
+// — a suffix-only rule would let `0354-x-design.md` shadow a colliding ticket.
+const DESIGN_FILE_RE = /^(\d{4})-.*-design\.md$/;
+
+function readDir(dir) {
   let names;
   try { names = fs.readdirSync(dir); }
-  catch { return new Map(); }
-  const m = new Map(); // id -> fileName
-  for (const name of names) {
+  catch { return []; }
+  const out = [];
+  for (const name of names.slice().sort()) {
     const mm = name.match(TODO_FILE_RE);
-    if (mm) m.set(mm[1], name);
+    if (mm) out.push({ id: mm[1], name });
   }
-  return m;
+  return out;
 }
 
+// { open, done: Map<id, fileName>, designs: Map<id, [relPath]>,
+//   duplicates: { open, done: Map<id, [fileName]> } }
+//
+// The duplicates half exists because the Map used to swallow them (todos/0358):
+// two files sharing an id — the shape a merge of two lanes that each allocated
+// it lands in — collapsed to one, so the SECOND file was invisible to every
+// check below, including "every open file must be listed exactly once". A
+// hand-built pair passed `check` green.
 function scanFs() {
-  return { open: scanDir(TODOS_DIR), done: scanDir(DONE_DIR) };
+  const raw = { open: readDir(TODOS_DIR), done: readDir(DONE_DIR) };
+  const ticketIds = new Set();
+  for (const k of ['open', 'done']) {
+    for (const f of raw[k]) if (!DESIGN_FILE_RE.test(f.name)) ticketIds.add(f.id);
+  }
+
+  const out = {
+    open: new Map(), done: new Map(), designs: new Map(),
+    duplicates: { open: new Map(), done: new Map() },
+  };
+  for (const k of ['open', 'done']) {
+    const prefix = k === 'done' ? 'todos/done' : 'todos';
+    for (const f of raw[k]) {
+      if (DESIGN_FILE_RE.test(f.name) && ticketIds.has(f.id)) {
+        if (!out.designs.has(f.id)) out.designs.set(f.id, []);
+        out.designs.get(f.id).push(`${prefix}/${f.name}`);
+        continue;
+      }
+      const m = out[k];
+      if (m.has(f.id)) {
+        const d = out.duplicates[k];
+        if (!d.has(f.id)) d.set(f.id, [m.get(f.id)]);
+        d.get(f.id).push(f.name);
+      } else {
+        m.set(f.id, f.name);
+      }
+    }
+  }
+  return out;
 }
 
 // ---------- the `- **Status**:` line (todos/0353) ----------
@@ -364,6 +419,28 @@ function validate(manifest, fsState) {
     if (done.has(id)) errors.push(`"${id}" exists in BOTH todos/ and todos/done/`);
   }
 
+  // (todos/0358) One id, two files. This is what a collision looks like AFTER
+  // it has landed — two lanes each allocated 0354 from their own branch, both
+  // correct at the time, and the merge brought both files in. Until this check
+  // the tree was silent about it: scanDir's Map kept one file and the other
+  // simply stopped existing as far as every validator was concerned. An
+  // allocator stops the NEXT collision; this is what says one already happened.
+  const dups = fsState.duplicates || { open: new Map(), done: new Map() };
+  for (const [dir, m] of [['todos', dups.open], ['todos/done', dups.done]]) {
+    for (const [id, names] of m) {
+      errors.push(`id "${id}" names ${names.length} files in ${dir}/ (${names.join(', ')}) — ` +
+        `ids are unique and never reused, so all but one must be renumbered ` +
+        `(node todos/queue.js next-id gives a free one, derived across ALL refs)`);
+    }
+  }
+  // One companion design doc per ticket, for the same reason.
+  for (const [id, paths] of (fsState.designs || new Map())) {
+    if (paths.length > 1) {
+      errors.push(`id "${id}" has ${paths.length} companion design docs (${paths.join(', ')}) — ` +
+        `one ticket, one design doc; fold them or renumber (node todos/queue.js next-id)`);
+    }
+  }
+
   // No structured `- **Depends**:` line in OPEN items — dependency ids live
   // only in this manifest (blockedBy/after); rationale belongs in body prose.
   // (done/ files are frozen history and exempt.)
@@ -526,13 +603,19 @@ function cmdList(argv) {
   });
 }
 
-function nextId(fsState) {
-  let max = 0;
-  for (const id of [...fsState.open.keys(), ...fsState.done.keys()]) {
-    const n = parseInt(id, 10);
-    if (Number.isFinite(n) && n > max) max = n;
+// The next free ticket id, derived across every ref plus the working tree
+// (todos/0358). It used to be the working tree's max alone, which is a LOWER
+// BOUND on the id space whenever another lane is live — that is how 0354 was
+// handed out twice. Refuses loudly rather than silently falling back to that
+// bound; `local: true` is the deliberate opt-out.
+function nextId(fsState, opts = {}) {
+  const local = [...fsState.open.keys(), ...fsState.done.keys()];
+  try {
+    return IDSPACE.allocate('ticket', local, { root: REPO_ROOT, local: !!opts.local });
+  } catch (e) {
+    if (e instanceof IDSPACE.IdSpaceError) die(e.message);
+    throw e;
   }
-  return String(max + 1).padStart(4, '0');
 }
 
 function slugify(s) {
@@ -714,10 +797,17 @@ advances.)
 
 function cmdAdd(argv) {
   const { flags, positional } = parseFlags('add', argv,
-    ['slug', 'title', 'after', 'blocked-by', 'pos', 'priority', 'difficulty', 'reflection', 'difficulty-triage', 'manual-ux']);
+    ['slug', 'title', 'after', 'blocked-by', 'pos', 'priority', 'difficulty', 'reflection', 'difficulty-triage', 'manual-ux', 'local-ids']);
   const fsState = scanFs();
   let id = positional[0];
-  if (!id || id === 'next') id = nextId(fsState);
+  if (!id || id === 'next') {
+    // Always print the derivation (todos/0358): the ref count is the one thing
+    // that tells a lane whether the survey actually saw the other lanes, and a
+    // stale `git fetch` is invisible any other way.
+    const alloc = nextId(fsState, { local: flags['local-ids'] !== undefined });
+    process.stdout.write(`add: ${alloc.note}\n`);
+    id = alloc.id;
+  }
   if (!ID_RE.test(id)) die(`add: id must be NNNN (4 digits) or "next", got "${id}"`);
   if (fsState.open.has(id) || fsState.done.has(id)) die(`add: id "${id}" already exists`);
 
@@ -769,6 +859,39 @@ function cmdAdd(argv) {
   }
   writeManifest(manifest);
   process.stdout.write(`added ${id} at position ${pos + 1} → todos/${fileName}\n`);
+}
+
+// Both id spaces at once, on purpose (todos/0358). Filing a ticket and adding
+// the liability entry that funds it is one act, and the register collided for
+// exactly the same reason the tickets did — so the tool that answers "what id
+// do I take?" must answer it for both, or the half nobody asks about keeps
+// being allocated by eye.
+function cmdNextId(argv) {
+  const { flags } = parseFlags('next-id', argv, ['local']);
+  const local = flags.local !== undefined;
+  const fsState = scanFs();
+  const registerIds = [];
+  try {
+    const text = fs.readFileSync(LIABILITIES.registerPath(), 'utf8');
+    for (const line of text.split('\n')) {
+      const hit = /^###\s+L(\d+)\s+—/.exec(line);
+      if (hit) registerIds.push(Number(hit[1]));
+    }
+  } catch { /* no register in this tree — the refs still carry one */ }
+
+  let failed = 0;
+  for (const [kind, ids] of [['ticket', [...fsState.open.keys(), ...fsState.done.keys()]],
+                             ['liability', registerIds]]) {
+    try {
+      const a = IDSPACE.allocate(kind, ids, { root: REPO_ROOT, local });
+      process.stdout.write(`${a.id.padEnd(6)}  ${a.note}\n`);
+    } catch (e) {
+      if (!(e instanceof IDSPACE.IdSpaceError)) throw e;
+      process.stderr.write(`next-id (${kind}): ${e.message}\n`);
+      failed++;
+    }
+  }
+  if (failed) process.exit(1);
 }
 
 function removeFromQueue(manifest, id) {
@@ -921,6 +1044,10 @@ const USAGE = `queue.js — the todos ordering-manifest CLI
           [--reflection]                        curation-only "queue reflection" scaffold
           [--difficulty-triage]                 curation-only "tag all untagged items" scaffold
           [--manual-ux]                         recurring, self-perpetuating "manual UX bug sweep" scaffold
+          [--local-ids]                         allocate "next" from the working tree ALONE
+                                                (opt out of the cross-ref survey — see next-id)
+  next-id [--local]                             the next free ticket AND liability id, derived
+                                                across every ref + the working tree (todos/0358)
   set-priority <ID> <0..3>                      set an entry's priority (1 = default,
                                                 removes the field)
   set-difficulty <ID> <light|medium|heavy|none> set an entry's difficulty tag
@@ -953,6 +1080,7 @@ function main() {
     case 'done': return cmdDone(rest);
     case 'block': return cmdBlock(rest);
     case 'check': return cmdCheck(rest);
+    case 'next-id': return cmdNextId(rest);
     default:
       process.stderr.write(`queue.js: unknown command "${cmd}"\n\n${USAGE}`);
       process.exit(2);

@@ -273,4 +273,78 @@ test('citedFiles exposes the register\'s files to the diff planner', () => {
   assert.ok(cited.files.includes('todos/WIN32.md'), 'todos/WIN32.md should be cited');
 });
 
+// ---------- cross-ref Lnn allocation (todos/0358) ----------
+//
+// The register had NO allocator: entries were numbered by eye off whatever ref
+// the lane happened to be on, which is how 0318 and 0338 wrote two different
+// L44 entries. `duplicate entry id` above is the check that catches it once
+// both are in ONE file — i.e. after the merge. This is what stops the merge
+// needing to renumber in the first place.
+
+const { execFileSync } = require('child_process');
+
+function REG(entries) {
+  return `prose\n\n<!-- BEGIN ENTRIES -->\n\n${entries.join('\n\n')}\n\n<!-- END ENTRIES -->\n`;
+}
+
+// A throwaway repo with liabilities.js + idspace.js retargeted into it, so the
+// CLI's REPO_ROOT is the temp tree. Returns { root, todos, git }.
+function repo() {
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'liab-refs-'));
+  const todos = path.join(root, 'todos');
+  fs.mkdirSync(todos, { recursive: true });
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  git('init', '-q');
+  git('config', 'user.email', 't@t');
+  git('config', 'user.name', 't');
+  for (const f of ['liabilities.js', 'idspace.js']) {
+    fs.copyFileSync(path.join(__dirname, f), path.join(todos, f));
+  }
+  return { root, todos, git };
+}
+
+function nextId(root, todos, args = []) {
+  return execFileSync('node', [path.join(todos, 'liabilities.js'), 'next-id', ...args],
+    { cwd: root, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+}
+
+test('RED: two lanes off a common base get DISTINCT liability ids', () => {
+  const { root: r, todos, git } = repo();
+  const reg = path.join(todos, 'LIABILITIES.md');
+  fs.writeFileSync(reg, REG(['### L01 — first\n- ticket: 0001']));
+  git('add', '-A'); git('commit', '-q', '-m', 'base');
+  const base = git('rev-parse', 'HEAD');
+
+  git('checkout', '-q', '-b', 'lane-a');
+  const a = nextId(r, todos);
+  assert.match(a, /^L02\s/, a);
+  fs.writeFileSync(reg, REG(['### L01 — first\n- ticket: 0001', '### L02 — lane a\n- ticket: 0001']));
+  git('add', '-A'); git('commit', '-q', '-m', 'lane a');
+
+  // Lane B branches from the same base: its register still ends at L01.
+  git('checkout', '-q', '-B', 'lane-b', base);
+  assert.ok(!/L02/.test(fs.readFileSync(reg, 'utf8')),
+    'lane B must not see lane A\'s entry on disk — otherwise this case proves nothing');
+  const b = nextId(r, todos);
+  assert.ok(!/^L02\s/.test(b), `both lanes allocated L02 — this is the L44 collision (${b})`);
+  assert.match(b, /^L03\s/, b);
+  assert.match(b, /derived across \d+ ref\(s\)/, 'the derivation must be visible');
+});
+
+test('the liability allocator REFUSES outside a repo, and --local opts out', () => {
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'liab-norepo-'));
+  const todos = path.join(root, 'todos');
+  fs.mkdirSync(todos, { recursive: true });
+  for (const f of ['liabilities.js', 'idspace.js']) {
+    fs.copyFileSync(path.join(__dirname, f), path.join(todos, f));
+  }
+  fs.writeFileSync(path.join(todos, 'LIABILITIES.md'), REG(['### L07 — g\n- ticket: 0001']));
+
+  let failed = null;
+  try { nextId(root, todos); } catch (e) { failed = e; }
+  assert.ok(failed, 'must refuse outside a repo instead of guessing from the file');
+  assert.match(failed.stderr.toString(), /Refusing to allocate a liability id from the working tree alone/);
+  assert.match(nextId(root, todos, ['--local']), /^L08\s+liability id L08 — WORKING TREE ONLY/);
+});
+
 process.stdout.write(`\nliabilities.js: ${passed} passed\n`);

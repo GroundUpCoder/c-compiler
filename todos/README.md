@@ -10,6 +10,24 @@ One numbered file per unit of work we have actually committed to doing.
 - **Numbers are stable IDs**, four digits, allocated sequentially, never
   reused. Reference items as `todos/0001` in commits, dev logs, and other
   docs.
+- **IDs are allocated across ALL REFS, never from your branch** (0358). Lanes
+  branch and push at the END, so the highest id on any single ref — including
+  `origin/main` — is a **lower bound** on the id space, not the id space.
+  Deriving "next" locally handed `0354` to two lanes at once (both were
+  correct when they allocated; master renumbered one to `0356` at merge, and
+  four references by hand with it). `queue.js add next` and
+  `queue.js next-id` survey every ref through `todos/idspace.js`, print what
+  they surveyed, and **refuse** rather than silently fall back to the local
+  bound when they cannot reach git (`--local-ids` / `--local` is the explicit
+  opt-out). Run `git fetch` first: remote-tracking refs are only as fresh as
+  your last one. The same rule and the same tool cover the liability
+  register's `Lnn` ids — it collided the same way, one field over.
+- **One id, one file.** Two files sharing an id fail `queue.js check` (0358) —
+  that is what a landed collision looks like, and before that check the second
+  file was simply invisible to every validator. The one exception is a
+  committed design doc filed beside its ticket (`NNNN-<slug>-design.md`, e.g.
+  `todos/done/0275-*`); a `-design.md` that is the ONLY file with its id is
+  itself the ticket (`todos/done/0007-wm-compositor-design.md`).
 - **Number ≠ priority.** The order of attack lives in the **`queue.json`
   ordering manifest** (see "Maintaining the queue" below), not in the number.
   The ordered roadmap is a *view*, not a document: `node todos/queue.js list`

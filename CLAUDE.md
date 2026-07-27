@@ -48,8 +48,13 @@ Planned work lives in `todos/` (system doc: `todos/README.md`):
   run `git config core.hooksPath todos/githooks` per clone. Dep ids live ONLY in
   `queue.json` (open items carry no `Depends:` line — `check` rejects one;
   rationale goes in the item body), and there is no prose "Next up" list — view
-  the order with `node todos/queue.js list` or the cc Todos tab. Full
-  convention: `todos/README.md` §1 "Maintaining the queue".
+  the order with `node todos/queue.js list` or the cc Todos tab. **Ids are
+  allocated across ALL REFS** (todos/0358): a lane's branch — `origin/main`
+  included — is a LOWER BOUND on the id space, not the id space, which is how
+  `0354` and the register's `L44` were each handed out twice. `add next` and
+  `next-id` (ticket + liability id, `git fetch` first) survey every ref and
+  refuse rather than degrade silently; two files sharing an id fail `check`.
+  Full convention: `todos/README.md` §1 "Maintaining the queue".
 - **Design/topic docs**: `todos/NAME.md` (OS.md, KERNEL.md, SDL3.md, …) —
   long-lived designs and backlogs that queue items reference for detail.
 - **Liability register**: `todos/LIABILITIES.md` (todos/0286) — the index of
