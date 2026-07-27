@@ -1,4 +1,4 @@
-# 0360 — tests/run.js's compiler.js diff rule under-selects: no run.py category is gated by a compiler change
+# 0362 — tests/run.js's compiler.js diff rule under-selects: no run.py category is gated by a compiler change
 
 - **Status**: open
 - **Priority**: P0 — a shipped gate (`tests/run.js --diff`, todos/0084) reports

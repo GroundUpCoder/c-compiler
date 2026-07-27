@@ -85,7 +85,7 @@ only thing in the estate that caught it was `micropython-upstream` — and
 but `unit`. So `--diff` on the commit that introduced this would have gone
 green while claiming "the compiler drives every wasm binary".
 
-Filed as **todos/0360** with register entry **L47**, and the rule now carries a
+Filed as **todos/0362** with register entry **L50**, and the rule now carries a
 `NOT SELECTED YET:` comment naming the exclusion. This is the 0318 lesson in a
 different costume: there a catch-all hid under-scheduling silently; here a
 rationale string overstates its own list, which is worse, because it reads as a

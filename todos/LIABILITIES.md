@@ -278,8 +278,8 @@ thing this file exists to kill.
 - anchor: is the runtime backstop for a payload that arrived another way.
 - provenance: 0338
 
-### L47 — a compiler.js edit selects no run.py category but `unit`, so the real-world-C corpus is ungated by a compiler change
-- ticket: 0360
+### L50 — a compiler.js edit selects no run.py category but `unit`, so the real-world-C corpus is ungated by a compiler change
+- ticket: 0362
 - file: tests/run.js
 - anchor: // NOT SELECTED YET: any run.py category but `unit` — so the real-world-C
 - provenance: 0356

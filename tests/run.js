@@ -131,7 +131,7 @@ const RULES = [
   // corpus (micropython, lua, sqlite, zlib, projects, …) is ungated by a
   // compiler change, and todos/0356 is the firing example: its miscompile was
   // caught ONLY by micropython-upstream, with `unit` green. Funded by
-  // todos/0360.
+  // todos/0362.
   [/^compiler\.js$/, ['unit', 'kernel', 'blockfs', 'host'], 'the compiler drives every wasm binary + the single-file emit'],
 
   // host.js carries BOTH BlockFS/MountFS AND the per-process SDL/fd runtime.
