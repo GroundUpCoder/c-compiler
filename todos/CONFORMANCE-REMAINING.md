@@ -86,11 +86,17 @@ get a spike + `*-check.mjs`/`*-renders.mjs` there, same as the unit corpus.
   volatile-linearity block in `tests/ast/test_ast.js` (the linearity +
   inliner home — the dup/drop is invisible to stdout goldens, so no
   conformance-corpus dir).
-- **Residual `longjmp` in non-statement position** (`x ? longjmp(b,1) : ...`,
-  for-increment, return-expression) still crashes with a raw JS stack trace;
-  the setjmp side has a proper diagnostic — add the longjmp counterpart.
-  Funded by **todos/0312** (P0: the input is valid C11 — the standard places no
-  context restriction on `longjmp` — so this is a crash on conforming code).
+- ~~**Residual `longjmp` in non-statement position** (`x ? longjmp(b,1) : ...`,
+  for-increment, return-expression) still crashes with a raw JS stack trace.~~ —
+  FIXED 2026-07-27 (todos/0312), and SUPPORTED rather than diagnosed: C11 places
+  no context restriction on `longjmp`, so it is an ordinary void call valid in
+  any expression. Statement position still lowers to an inline
+  `__throw __LongJump`; every other expression slot is rewritten to a call of
+  the new libc `__setjmp_throw(buf[0], val)` (`__setjmp.c`), whose body is the
+  same throw — it unwinds out of its own frame into the enclosing setjmp's
+  catch, and `longjmp` never returns so the extra frame is unobservable. Pinned
+  by `sj_longjmp_ternary`, `sj_longjmp_for_increment`, `sj_longjmp_return_expr`
+  and `sj_longjmp_declarator_init` in the conformance corpus (all clang-verified).
 - **setjmp contexts required by C11 7.13.1.1p4 but rejected**:
   `switch (setjmp(b))`, `while (setjmp(b) == 0)`, `else if (setjmp(b))`.
   (Plain `int r = setjmp(b);` is UB per the standard — rejecting it is fine,

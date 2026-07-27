@@ -14366,12 +14366,140 @@ function lowerSetjmpLongjmp(unit, exceptionTagRegistry) {
     return null;
   };
 
+  // C11 places no context restriction on `longjmp` (contrast setjmp's
+  // 7.13.1.1p4 list) — it is an ordinary void call and may appear in any
+  // expression. lowerLongjmpInStmt only handles the STATEMENT-position
+  // form, because that is the shape where a `__throw` statement can
+  // replace the statement it found. Everywhere else — a ternary arm, a
+  // for-increment, a comma operand of a return, a declarator initializer
+  // — there is no statement slot, so the call is rewritten to
+  // `__setjmp_throw(buf[0], val)`: a real libc function whose body is the
+  // same throw, which unwinds out of its frame into the enclosing
+  // setjmp's catch. longjmp never returns, so the extra frame is
+  // unobservable, and routing through it needs no structural analysis of
+  // the enclosing expression.
+  const throwFuncName = Lexer.intern("__setjmp_throw");
+  let throwFunc = null;
+  for (const list of [unit.declaredFunctions, unit.definedFunctions, unit.staticFunctions]) {
+    for (const f of list) if (f.name === throwFuncName) { throwFunc = f; break; }
+    if (throwFunc) break;
+  }
+  if (!throwFunc) throw new Error("__setjmp_throw not found (stale <setjmp.h>?)");
+  const throwParamTypes = throwFunc.type.getParamTypes();
+
+  const rewriteLongjmpExpr = (expr) => AST.walkExpr(expr, (node) => {
+    if (!(node instanceof AST.ECall)) return undefined;
+    let callee = node.callee;
+    if (callee instanceof AST.EDecay) callee = callee.operand;
+    if (!(callee instanceof AST.EIdent) || callee.name !== "longjmp") return undefined;
+    if (node.arguments.length !== 2) return undefined;
+    const loc = node.loc;
+    // Walk the arguments first: walkExpr does not descend into a
+    // replacement, and the original operands must still be lowered.
+    const bufArg = rewriteLongjmpExpr(node.arguments[0]);
+    const valArg = rewriteLongjmpExpr(node.arguments[1]);
+    const args = [makeBufIdExpr(bufArg), valArg];
+    for (let i = 0; i < args.length && i < throwParamTypes.length; i++) {
+      args[i] = maybeImplicitCast(args[i], throwParamTypes[i]);
+    }
+    const fnRef = maybeDecay(new AST.EIdent(loc, throwFunc.type, throwFunc));
+    return new AST.ECall(loc, fnRef, args);
+  });
+
+  // Apply rewriteLongjmpExpr to every expression slot of a statement
+  // tree. Statement shapes are enumerated rather than driven off the
+  // generic `children` array because SFor's is variadic (its
+  // _withChildren deliberately refuses) and SDecl's mirrors initializers
+  // that live on the DVars.
+  const rewriteLongjmpInStmt = (stmt) => {
+    if (!stmt) return stmt;
+    const E = rewriteLongjmpExpr;
+    switch (stmt.constructor) {
+      case AST.SExpr: {
+        const e = E(stmt.expr);
+        return e === stmt.expr ? stmt : new AST.SExpr(stmt.loc, e);
+      }
+      case AST.SReturn: {
+        if (!stmt.expr) return stmt;
+        const e = E(stmt.expr);
+        return e === stmt.expr ? stmt : new AST.SReturn(stmt.loc, e);
+      }
+      case AST.SDecl: {
+        // DVars are sealed, not frozen — initializers are rewritten in place.
+        for (const d of stmt.declarations) {
+          if (d instanceof AST.DVar && d.initExpr) d.initExpr = E(d.initExpr);
+        }
+        return stmt;
+      }
+      case AST.SCompound: {
+        for (let i = 0; i < stmt.statements.length; i++) {
+          stmt.statements[i] = rewriteLongjmpInStmt(stmt.statements[i]);
+        }
+        return stmt;
+      }
+      case AST.SIf: {
+        const c = E(stmt.condition);
+        const t = rewriteLongjmpInStmt(stmt.thenBranch);
+        const e = stmt.elseBranch ? rewriteLongjmpInStmt(stmt.elseBranch) : null;
+        return (c === stmt.condition && t === stmt.thenBranch && e === stmt.elseBranch)
+          ? stmt : new AST.SIf(stmt.loc, c, t, e);
+      }
+      case AST.SWhile: {
+        const c = E(stmt.condition);
+        const b = rewriteLongjmpInStmt(stmt.body);
+        return (c === stmt.condition && b === stmt.body) ? stmt
+          : new AST.SWhile(stmt.loc, c, b);
+      }
+      case AST.SDoWhile: {
+        const b = rewriteLongjmpInStmt(stmt.body);
+        const c = E(stmt.condition);
+        return (b === stmt.body && c === stmt.condition) ? stmt
+          : new AST.SDoWhile(stmt.loc, b, c);
+      }
+      case AST.SFor: {
+        const init = rewriteLongjmpInStmt(stmt.init);
+        const cond = stmt.condition ? E(stmt.condition) : null;
+        const inc = stmt.increment ? E(stmt.increment) : null;
+        const body = rewriteLongjmpInStmt(stmt.body);
+        return (init === stmt.init && cond === stmt.condition &&
+                inc === stmt.increment && body === stmt.body) ? stmt
+          : new AST.SFor(stmt.loc, init, cond, inc, body);
+      }
+      case AST.SSwitch: {
+        const e = E(stmt.expr);
+        const b = rewriteLongjmpInStmt(stmt.body);
+        return (e === stmt.expr && b === stmt.body) ? stmt
+          : new AST.SSwitch(stmt.loc, e, b);
+      }
+      case AST.SThrow: {
+        let changed = false;
+        const args = stmt.args.map(a => { const n = E(a); if (n !== a) changed = true; return n; });
+        return changed ? new AST.SThrow(stmt.loc, stmt.tag, args) : stmt;
+      }
+      case AST.STryCatch: {
+        const t = rewriteLongjmpInStmt(stmt.tryBody);
+        let catchesChanged = false;
+        const cs = stmt.catches.map(cc => {
+          const b = rewriteLongjmpInStmt(cc.body);
+          if (b === cc.body) return cc;
+          catchesChanged = true;
+          return { ...cc, body: b };
+        });
+        return (t === stmt.tryBody && !catchesChanged) ? stmt
+          : new AST.STryCatch(stmt.loc, t, cs);
+      }
+      default:
+        return stmt;
+    }
+  };
+
   const lowerFunc = (func) => {
     if (!func.body) return;
     if (func.body instanceof AST.SCompound) {
       lowerSetjmpInCompound(func.body, tag, counterVar);
     }
     func.body = lowerLongjmpInStmt(func.body, tag);
+    func.body = rewriteLongjmpInStmt(func.body);
     const residual = findResidualSetjmp(func.body);
     if (residual) {
       fatalError(residual.loc,
@@ -24113,6 +24241,14 @@ __exception __LongJump(int, int);
 extern int __setjmp_id_counter;
 __import int setjmp(jmp_buf env);
 __import void longjmp(jmp_buf env, int val);
+/* longjmp in statement position lowers to an inline "__throw __LongJump".
+ * C11 puts no context restriction on longjmp (unlike setjmp's 7.13.1.1p4
+ * list), so it may also appear in an arbitrary expression — a ternary arm,
+ * a for-increment, a comma operand — where there is no statement slot for
+ * a throw. The lowering rewrites those to a call of this function, which
+ * throws the same exception one frame down; longjmp never returns, so the
+ * extra frame is unobservable. Defined in __setjmp.c. */
+void __setjmp_throw(int __id, int __val);
 /* POSIX sigsetjmp/siglongjmp: signals are cooperative on this platform and
  * there is no blocked-signal mask to save, so these are exactly setjmp/
  * longjmp. Macros (not wrappers) so the compiler's setjmp lowering sees the
@@ -27362,7 +27498,16 @@ void *alloca(long size) {
 }
   `,
   "__setjmp.c": `
+/* Declared here rather than via <setjmp.h> so this TU carries no setjmp/
+   longjmp import of its own — the tag unifies with the header's by name. */
+__exception __LongJump(int, int);
+
 int __setjmp_id_counter;
+
+/* Expression-position longjmp target — see the comment in <setjmp.h>. */
+void __setjmp_throw(int id, int val) {
+  __throw __LongJump(id, val);
+}
   `,
   "__assert.c": `
 #include <stdio.h>

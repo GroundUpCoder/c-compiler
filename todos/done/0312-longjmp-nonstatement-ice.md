@@ -1,6 +1,7 @@
 # 0312 — longjmp in non-statement position crashes the compiler with a raw JS stack trace instead of diagnosing
 
-- **Status**: open
+- **Status**: DONE 2026-07-27 — took the **support** route, not diagnose-only. See
+  "Outcome" at the bottom.
 - **Priority**: P0 — a compiler crash on valid C11. See "Priority" below; demote if you
   disagree, but do it explicitly.
 - **Design**: this file. Source: todos/0298 close-out; the gap itself was recorded as
@@ -75,3 +76,47 @@ Two separable outcomes, and the cheap one is worth having on its own:
 ## See also
 
 todos/0311 — the three C11-required `setjmp` contexts we reject. Same code region.
+
+## Outcome (2026-07-27)
+
+**Supported, not diagnosed.** The residual is no longer a crash *or* an error — the
+input compiles and runs, matching native clang byte-for-byte on all four shapes.
+
+The mechanism, one paragraph: `lowerLongjmpInStmt` only ever handled `longjmp` in
+STATEMENT position, because that is the one shape where the lowering's product — a
+`__throw __LongJump(buf[0], val)` STATEMENT — can replace what it found. Every other
+expression slot has nowhere to put a statement, which is why the call survived to
+codegen and died on a `longjmp` that had already been stripped from
+`importedFunctions`. The fix gives the throw a statement home of its own: a new libc
+function `__setjmp_throw(int id, int val)` in `__setjmp.c` whose entire body is that
+throw. A residual `longjmp(buf, val)` anywhere in an expression is rewritten to
+`__setjmp_throw(buf[0], val)` and the exception unwinds out of that frame into the
+enclosing setjmp's catch. `longjmp` never returns, so the extra frame is
+unobservable, and the rewrite needs **no** structural analysis of the enclosing
+expression — it composes with arbitrary nesting for free.
+
+Two new pieces in `compiler.js`'s setjmp section: `rewriteLongjmpExpr` (an
+`AST.walkExpr` visitor) and `rewriteLongjmpInStmt` (a statement walker that feeds it
+every expression slot). The statement walker enumerates shapes rather than driving
+off the generic `children` array because `SFor`'s children array is variadic — its
+`_withChildren` deliberately throws — and `SDecl`'s children mirror initializers that
+actually live on the `DVar`s.
+
+Pinned by four clang-verified conformance dirs: `sj_longjmp_ternary`,
+`sj_longjmp_for_increment`, `sj_longjmp_return_expr`, `sj_longjmp_declarator_init`.
+The last one covers the declarator-initializer slot, which is not one of the three
+shapes the ticket named but is a distinct branch of the new walker.
+
+**Statement position is untouched** — it still lowers to the inline throw, and a
+`--gc-sections` build of a setjmp program is byte-identical to pre-fix output.
+Without `--gc-sections` a setjmp-using binary grows by 5 bytes (the now-unreferenced
+`__setjmp_throw`); that is the whole cost, and it is deliberate: one code path beats a
+conditional `__require_source` that a standalone `lowerSetjmpLongjmp` caller could
+skip.
+
+**todos/0311 is NOT affected.** `switch (setjmp(b))` still reports the same
+`unsupported use of setjmp` diagnostic — verified after the fix. The setjmp residual
+check is a separate code path and this change does not reach it.
+
+Retired in the same commit: the `CONFORMANCE-REMAINING.md` bullet and register entry
+**L32** (whose anchor was that bullet's first line).
