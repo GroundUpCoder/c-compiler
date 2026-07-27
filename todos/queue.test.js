@@ -101,6 +101,107 @@ test('check fails when an open file is unlisted, and --fix appends it', () => {
   assert.deepStrictEqual(readManifest(todos).queue.map(e => e.id), ['0001', '0002']);
 });
 
+// --- Status-line drift (todos/0353) ---
+// Nothing used to read the `- **Status**:` line except the `deferred` test
+// below, so it drifted both ways: 35 closed tickets still said "open", and one
+// open ticket at rank 1 advertised a round its own body recorded as landed.
+
+test('check fails on a done/ ticket whose Status line still says open', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  writeItem(todos, '0002', 'shipped', { done: true, status: 'open (P1)' });
+  writeManifest(todos, [{ id: '0001' }]);
+  const r = run(todos, ['check']);
+  assert.strictEqual(r.code, 1);
+  assert.match(r.stderr, /done\/0002-shipped\.md is closed but its Status line still reads "open \(P1\)"/);
+});
+
+test('check tolerates non-"open" Status lines in done/', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  // "reopened" and a line merely MENTIONING open must not trip the leading-
+  // token test — a checker that guesses is worse than no checker.
+  writeItem(todos, '0002', 'b', { done: true, status: 'done' });
+  writeItem(todos, '0003', 'c', { done: true, status: 'reopened 2026-01-01, then done' });
+  writeItem(todos, '0004', 'd', { done: true, status: 'closed — was open until 2026-01-01' });
+  writeManifest(todos, [{ id: '0001' }]);
+  assert.strictEqual(run(todos, ['check']).code, 0);
+});
+
+test('check --fix rewrites a closed ticket\'s open Status line, keeping the tail', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  writeItem(todos, '0002', 'shipped', { done: true, status: 'open (user-requested 2026-07-21)' });
+  writeManifest(todos, [{ id: '0001' }]);
+  const r = run(todos, ['check', '--fix']);
+  assert.strictEqual(r.code, 0, r.stderr);
+  assert.match(r.stdout, /rewrote "open" -> "done" on 1 closed ticket/);
+  assert.match(r.stdout, /todos\/done\/0002-shipped\.md/);
+  const body = fs.readFileSync(path.join(todos, 'done', '0002-shipped.md'), 'utf8');
+  // The parenthetical is the author's text, not the fixer's to edit.
+  assert.match(body, /^- \*\*Status\*\*: done \(user-requested 2026-07-21\)$/m);
+  assert.strictEqual(run(todos, ['check']).code, 0, 'green after --fix');
+});
+
+test('check fails when an open Status line claims a round the body records DONE', () => {
+  const todos = setup();
+  // The 0117 shape verbatim: line 3 said R2 was remaining while §R2 said DONE.
+  writeItem(todos, '0001', 'a', {
+    status: 'open — R1 landed; R2 is the remaining work',
+    extraHeader: '\n## R1 — LANDED 2026-07-27\n\n## R2 — DONE 2026-07-28\n',
+  });
+  writeManifest(todos, [{ id: '0001' }]);
+  const r = run(todos, ['check']);
+  assert.strictEqual(r.code, 1);
+  assert.match(r.stderr, /Status line says "R2 is the remaining work".*R2 — DONE\/LANDED.*not auto-fixable/s);
+  // Judgement call which side is stale, so --fix must NOT silently pick one.
+  const r2 = run(todos, ['check', '--fix']);
+  assert.strictEqual(r2.code, 1, 'the contradiction is deliberately not auto-fixed');
+});
+
+test('check does not read a remaining-clause as belonging to another round', () => {
+  const todos = setup();
+  // "R1 done, R2 remaining" must not read as "R1 remaining" — the remaining
+  // word has to sit in the SAME clause as the round it is claimed of.
+  writeItem(todos, '0001', 'a', {
+    status: 'open — R1 done, R2 remaining',
+    extraHeader: '\n## R1 — DONE 2026-07-27\n',
+  });
+  // A body heading with no matching claim on the line is likewise fine.
+  writeItem(todos, '0002', 'b', {
+    status: 'open — **R1 LANDED 2026-07-27; R2 LANDED 2026-07-28**',
+    extraHeader: '\n## R1 — LANDED 2026-07-27\n\n## R2 — DONE 2026-07-28\n',
+  });
+  writeManifest(todos, [{ id: '0001' }, { id: '0002' }]);
+  const r = run(todos, ['check']);
+  assert.strictEqual(r.code, 0, r.stderr);
+});
+
+test('the "un-deferred" footgun: still classified deferred, and now rejected', () => {
+  // statusOf() substring-tests the FIRST Status line for "deferred", so a
+  // NEGATED deferral silently re-defers the ticket (documented in 0126). That
+  // classification is load-bearing for every other line and is left exactly as
+  // it was — pinned here — while check rejects the ambiguous phrasing so the
+  // trap can no longer be sprung silently.
+  const todos = setup();
+  writeItem(todos, '0001', 'a', { status: 'un-deferred 2026-07-28 — ready to go' });
+  writeManifest(todos, [{ id: '0001' }]);
+  const list = run(todos, ['list']);
+  assert.strictEqual(list.code, 0, list.stderr);
+  assert.match(list.stdout, /0001\s+deferred/, 'unchanged: "un-deferred" still reads as deferred');
+  const r = run(todos, ['check']);
+  assert.strictEqual(r.code, 1);
+  assert.match(r.stderr, /still classifies the item as DEFERRED/);
+
+  // The plain word keeps working, both ways.
+  writeItem(todos, '0001', 'a', { status: 'deferred — waiting on 0099' });
+  assert.match(run(todos, ['list']).stdout, /0001\s+deferred/);
+  assert.strictEqual(run(todos, ['check']).code, 0);
+  writeItem(todos, '0001', 'a', { status: 'open' });
+  assert.match(run(todos, ['list']).stdout, /0001\s+ready/);
+  assert.strictEqual(run(todos, ['check']).code, 0);
+});
+
 test('check flags a queued id whose file is missing', () => {
   const todos = setup();
   writeItem(todos, '0001', 'a');
@@ -133,7 +234,7 @@ test('check detects a dependency cycle', () => {
 test('check rejects a structured Depends: line in an open item (done/ exempt)', () => {
   const todos = setup();
   writeItem(todos, '0001', 'a', { extraHeader: '- **Depends**: 0002 (rationale)' });
-  writeItem(todos, '0002', 'b', { done: true, extraHeader: '- **Depends**: —' });
+  writeItem(todos, '0002', 'b', { done: true, status: 'done', extraHeader: '- **Depends**: —' });
   writeManifest(todos, [{ id: '0001' }]);
   const r = run(todos, ['check']);
   assert.strictEqual(r.code, 1);
@@ -392,6 +493,23 @@ test('done git-mvs the file and drops it from the queue', () => {
   assert.ok(fs.existsSync(path.join(todos, 'done', '0001-a.md')), 'moved into done/');
   assert.deepStrictEqual(readManifest(todos).queue.map(e => e.id), ['0002']);
   assert.strictEqual(run(todos, ['check']).code, 0);
+});
+
+test('done rewrites the closed ticket\'s Status line and re-stages it', () => {
+  // Otherwise every close would manufacture the drift 0353 exists to stop —
+  // and `git mv` would have staged the pre-rewrite blob.
+  const todos = setup();
+  writeItem(todos, '0001', 'a', { status: 'open (P2) — one round left' });
+  writeManifest(todos, [{ id: '0001' }]);
+  execFileSync('git', ['add', '-A'], { cwd: path.dirname(todos) });
+  const r = run(todos, ['done', '0001']);
+  assert.strictEqual(r.code, 0, r.stderr);
+  assert.match(r.stdout, /Status line: open → done/);
+  assert.match(fs.readFileSync(path.join(todos, 'done', '0001-a.md'), 'utf8'),
+    /^- \*\*Status\*\*: done \(P2\) — one round left$/m);
+  const staged = execFileSync('git', ['show', ':todos/done/0001-a.md'],
+    { cwd: path.dirname(todos), encoding: 'utf8' });
+  assert.match(staged, /Status\*\*: done/, 'the rewrite is in the index, not just the worktree');
 });
 
 // --- usage: --help, unknown flags, EPIPE (todos/0099) ---

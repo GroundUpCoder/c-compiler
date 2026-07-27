@@ -22,6 +22,8 @@
 //   node todos/queue.js done <ID>                    # git-mv to done/, drop from queue
 //   node todos/queue.js block <ID> [--hard A,B] [--soft C,D]
 //   node todos/queue.js check [--fix]                # validate; exit non-zero on failure
+//                                                    # --fix: list unlisted open items,
+//                                                    #   rewrite done/ Status lines saying "open"
 //
 // `-h`/`--help` anywhere prints usage and exits 0 (checked before dispatch, so
 // `add --help` can never scaffold an item); an unknown `--flag` on any
@@ -119,14 +121,92 @@ function scanFs() {
   return { open: scanDir(TODOS_DIR), done: scanDir(DONE_DIR) };
 }
 
+// ---------- the `- **Status**:` line (todos/0353) ----------
+//
+// The Status line is documentation, and until 0353 nothing validated it, so it
+// drifted in BOTH directions: 35 tickets in todos/done/ still said "open", and
+// 0117 sat at rank 1 of 91 at P0 with a Status line advertising an R2 that its
+// own body recorded as landed. The cost is a lane spending a turn on finished
+// work, so the cheap, decidable half of the line is checked below. The
+// directory is still the source of truth for done-ness and queue.json for
+// priority — these checks only stop the documentation from contradicting them.
+
+// Matches the whole line; group 1 is the FIRST line after `Status:` — the unit
+// statusOf() has always classified on, so every check here reads the same text.
+const STATUS_RE = /^-\s*\*{0,2}Status\*{0,2}\s*:\s*(.*)$/mi;
+
+// Leads with the word "open" — `open`, `Open (P1)`, `**open** — …` all do;
+// `reopened`, `closed — was open until …` deliberately do not (the leading-
+// token test is what keeps this decidable instead of prose-guessing).
+const STATUS_OPEN_RE = /^([*_\s]*)open\b/i;
+
+// A round heading the body records as finished: `## R2 — DONE 2026-07-28`,
+// `## R1 — LANDED …`. Narrowly pattern-matched on purpose (0353 scope note):
+// a checker that guesses at prose is worse than no checker.
+const ROUND_DONE_RE = /^#{1,6}[ \t]*R(\d+)\b[^\n]*\b(?:DONE|LANDED)\b/gim;
+
+// Words that claim a round is still ahead of us. Only meaningful when they sit
+// in the SAME clause as the round they refer to (see statusContradictions).
+const REMAINING_RE = /\b(?:remaining|remains?|pending|outstanding|unstarted|not started|to ?do|left)\b/i;
+
+// Negated deferral. `statusOf` substring-tests the line for "deferred", so
+// writing "un-deferred" here silently RE-DEFERS the ticket (the footgun
+// documented in 0126). The classification is deliberately left alone — it is
+// load-bearing for every other line — and the ambiguous phrasing is rejected
+// instead, so the trap can no longer be sprung silently.
+const NEGATED_DEFER_RE = /\b(?:un-?deferred|not deferred|no longer deferred|de-?deferred)\b/i;
+
+// The first line after `Status:`, or null when the ticket carries no such line.
+function statusLineOf(body) {
+  const m = body.match(STATUS_RE);
+  return m ? m[1] : null;
+}
+
+// Split a Status line into clauses so "R1 done, R2 remaining" doesn't read as
+// "R1 remaining". Separators are the ones these lines actually use.
+function statusClauses(line) {
+  return line.split(/[;,]|—|--|·|\bwhile\b/i);
+}
+
+// (2) An OPEN ticket whose Status line claims a round is still to come while
+// its own body carries a `## R<n> — DONE/LANDED` heading for that round.
+// Returns a list of {round, clause} — empty when the line and body agree.
+function statusContradictions(line, body) {
+  const out = [];
+  const clauses = statusClauses(line);
+  ROUND_DONE_RE.lastIndex = 0;
+  for (let m; (m = ROUND_DONE_RE.exec(body)); ) {
+    const round = m[1];
+    const named = new RegExp(`\\bR${round}\\b`, 'i');
+    // Both signals must sit in ONE clause: naming the round and calling it
+    // remaining in the same breath is the contradiction; naming it anywhere on
+    // a line that also says something else is remaining is not.
+    const clause = clauses.find(c => named.test(c) && REMAINING_RE.test(c));
+    if (clause) out.push({ round, clause: clause.trim() });
+  }
+  return out;
+}
+
+// Rewrite a done/ ticket's leading "open" to "done", preserving the rest of the
+// line verbatim (a trailing "(P1)" or a dated parenthetical is the author's
+// text, not this script's to edit). Returns the new body, or null if no change.
+function fixDoneStatusLine(body) {
+  const m = body.match(STATUS_RE);
+  if (!m || !STATUS_OPEN_RE.test(m[1])) return null;
+  const fixed = m[0].replace(m[1], m[1].replace(STATUS_OPEN_RE, '$1done'));
+  return body.slice(0, m.index) + fixed + body.slice(m.index + m[0].length);
+}
+
 function statusOf(id, openFiles) {
   const file = openFiles.get(id);
   if (!file) return 'unknown';
   let body;
   try { body = fs.readFileSync(path.join(TODOS_DIR, file), 'utf8'); }
   catch { return 'unknown'; }
-  const m = body.match(/^-\s*\*{0,2}Status\*{0,2}\s*:\s*(.*)$/mi);
-  if (m && /deferred/i.test(m[1])) return 'deferred';
+  const line = statusLineOf(body);
+  // Substring test, first line only — see NEGATED_DEFER_RE for the footgun this
+  // shape carries and how check() defuses it. Behaviour intentionally unchanged.
+  if (line !== null && /deferred/i.test(line)) return 'deferred';
   return 'open';
 }
 
@@ -294,6 +374,33 @@ function validate(manifest, fsState) {
     if (/^-\s*\*{0,2}Depends\*{0,2}\s*:/mi.test(body)) {
       errors.push(`todos/${file} carries a structured Depends: line — deps belong in queue.json (queue.js block ${id} --hard/--soft); move any rationale into the body prose`);
     }
+
+    // (todos/0353 §2) The Status line must not advertise a round the body
+    // records as landed — that is how 0117 kept a shipped R2 at rank 1. NOT
+    // auto-fixable: which side is right is a judgement call, so this only ever
+    // reports, naming the clause so the author can see what tripped it.
+    const line = statusLineOf(body);
+    if (line === null) continue;
+    for (const c of statusContradictions(line, body)) {
+      errors.push(`todos/${file} Status line says "${c.clause}" but the body has a "R${c.round} — DONE/LANDED" heading — one of the two is stale; fix whichever is wrong (not auto-fixable)`);
+    }
+    if (NEGATED_DEFER_RE.test(line)) {
+      errors.push(`todos/${file} Status line reads "${line.trim()}" — a negated "deferred" on this line still classifies the item as DEFERRED (the 0126 footgun: the classifier substring-tests for "deferred"); say "open" or "ready" instead`);
+    }
+  }
+
+  // (todos/0353 §1) A ticket in todos/done/ is closed by definition — the
+  // directory IS the source of truth — so its Status line must not still lead
+  // with "open". 35 of 260 did; 0330 was one, and it is cited as a dependency
+  // by 0340 and 0347, so it is precisely the file a lane WILL read.
+  for (const [, file] of done) {
+    let body;
+    try { body = fs.readFileSync(path.join(DONE_DIR, file), 'utf8'); }
+    catch { continue; }
+    const line = statusLineOf(body);
+    if (line !== null && STATUS_OPEN_RE.test(line)) {
+      errors.push(`todos/done/${file} is closed but its Status line still reads "${line.trim()}" — it belongs in done/, so the line must not say open (run: queue.js check --fix)`);
+    }
   }
 
   // Cycle detection over the hard-dependency graph (open ids only — done deps
@@ -350,6 +457,23 @@ function cmdCheck(argv) {
     if (missing.length) {
       for (const id of missing) manifest.queue.push({ id });
       process.stdout.write(`--fix: appended ${missing.length} unlisted item(s): ${missing.join(', ')}\n`);
+    }
+    // Rewrite done/ Status lines that still say "open" (todos/0353 §3). Only
+    // this one — the R<n> contradiction is deliberately NOT auto-fixed.
+    // Written to disk here rather than staged like the manifest above, because
+    // validate() re-reads the ticket files: the fix has to land before the
+    // check that would otherwise fail on it.
+    const fixed = [];
+    for (const [, file] of fsState.done) {
+      const p = path.join(DONE_DIR, file);
+      let body;
+      try { body = fs.readFileSync(p, 'utf8'); } catch { continue; }
+      const next = fixDoneStatusLine(body);
+      if (next !== null) { fs.writeFileSync(p, next); fixed.push(file); }
+    }
+    if (fixed.length) {
+      process.stdout.write(`--fix: rewrote "open" -> "done" on ${fixed.length} closed ticket(s):\n`);
+      for (const f of fixed) process.stdout.write(`  todos/done/${f}\n`);
     }
   }
 
@@ -734,6 +858,17 @@ function cmdDone(argv) {
     process.stderr.write(`  note: git mv failed; used a plain rename (stage it yourself)\n`);
   }
 
+  // The directory is the source of truth for done-ness, so the Status line has
+  // to follow it here — otherwise every close would manufacture exactly the
+  // drift 0353 exists to stop, and the validate() below would reject the move
+  // it just made. Re-stage after the rewrite: `git mv` staged the pre-edit blob.
+  const moved = fixDoneStatusLine(fs.readFileSync(dst, 'utf8'));
+  if (moved !== null) {
+    fs.writeFileSync(dst, moved);
+    try { execFileSync('git', ['add', path.relative(REPO_ROOT, dst)], { cwd: REPO_ROOT, stdio: 'pipe' }); } catch { /* untracked / not a git tree */ }
+    process.stdout.write(`  Status line: open → done\n`);
+  }
+
   const manifest = requireManifest();
   if (!removeFromQueue(manifest, id)) process.stderr.write(`  note: "${id}" was not in queue.json\n`);
   validateOrDie(manifest, scanFs(), 'done');
@@ -794,6 +929,8 @@ const USAGE = `queue.js — the todos ordering-manifest CLI
   done <ID>                                     git-mv to done/, drop from queue
   block <ID> [--hard A,B] [--soft C,D]          set hard/soft deps ("" clears)
   check [--fix]                                 validate; exit non-zero on failure
+                                                --fix: list unlisted open items +
+                                                rewrite done/ Status lines saying "open"
 
 -h/--help anywhere prints this and exits 0. An unknown command or --flag is a
 usage error (exit 2; nothing written) — validation failures exit 1.
