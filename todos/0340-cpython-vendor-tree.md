@@ -9,6 +9,21 @@
   (meta note `fable-decider-python-primary-2026-07-27.md` §jku LEAN).
   Sequencing note: `todos/0330` (sibling libc re-vendor) should land first or
   with this — the ELOOP/termios libc fixes only reach cc2wasm through it
+
+  🔴 **HARDENED 2026-07-28: this is now `blockedBy` 0330, not `after`.** `after`
+  is advisory and does **not** gate readiness, so this item was showing **ready
+  at rank 3** while 0330 sat unmerged — a lane spawned here would have built
+  against the **stale** libc extraction. That is a silent wrong baseline, not a
+  build failure, which is exactly the kind of gap `after` is too weak to hold.
+  The "or with this" path is retired: 0330 is **delivered and pushed in BOTH
+  repos** (c-compiler `ad68a6d4`, clang-simplified `85aa87b9`) and needs only a
+  merge, so carrying it inside this ticket buys nothing. **Merge 0330 in both
+  repos and move `todos/0330` to `done/` before starting.**
+
+  ⚠️ Same reason applies to `mkpkg --clang`: it verifies payloads against
+  `../clang-simplified/out-image/overlay.json`, generated from the sibling's
+  **checked-out** tree. While that sibling's `main` is still `1beacf2`, any
+  clang package rebuild also uses the stale libc.
   (queue carries the soft dep).
 
 ## Work list (detail and rationale live in CPYTHON.md — do not re-decide here)
