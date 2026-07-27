@@ -1,6 +1,6 @@
 # 0319 — Compound literal in a local declaration initializer clobbers the caller's stack frame
 
-- **Status**: open
+- **Status**: done (2026-07-27)
 - **Priority**: P0 (silent wrong-code in a shipped feature)
 - **Difficulty**: medium
 - **Design**: —
@@ -103,3 +103,51 @@ slot becomes silent memory corruption rather than a crash.**
 - `emitFrameAddr` fails loud on a missing offset: a deliberately-broken layout
   produces a compiler error, not a bad address.
 - A regression guard for each of the five positions in the table above.
+
+## Resolution
+
+The root cause is one notch upstream of "the bag doesn't reach DVar
+initializers" — it *did* reach them, through a **stale snapshot**. `SDecl`
+built its `children` array once at construction from the DVars' `initExpr`
+fields, but DVars are sealed-not-frozen and later passes rewrite `d.initExpr`
+**in place** rather than rebuilding the SDecl (constant folding at the
+`case AST.SDecl` arm of `foldStmt`, the longjmp lowering's `rewriteLongjmpInStmt`).
+The moment such a rewrite produced a new node, `children` pointed at the
+pre-rewrite subtree: the frame-layout walk allocated a slot for the OLD
+`ECompoundLiteral` while codegen emitted the NEW one, and the identity-keyed
+`compoundLiteralOffsets.get()` missed.
+
+That is why the literal in the repro had to contain a foldable subexpression:
+`(loc_t){ n, n, -1, -1 }` clobbers, `(loc_t){ n, n, n, n }` does not — the
+latter's node identity survives folding. It is also why only the
+declaration-initializer position was affected: every other position hangs off
+an `SExpr`/`SReturn`/… whose `_withChildren` rebuild keeps node identity and
+child list in lockstep.
+
+Fix, all three plan steps:
+
+1. `Stmt.children` is now a prototype **accessor** over `_children`, and
+   `SDecl` overrides it to recompute the list live from `this.declarations`.
+   Every consumer of `children` — the three bubble-up bags, the generic tree
+   walkers, the tree-shaker's reference visit — now sees the initializer
+   codegen will actually emit. SDecl was the only node whose child list
+   mirrored state living outside the node; the rest either share the array
+   reference (SCompound/statements) or rebuild.
+2. `emitFrameAddr` throws on a non-finite offset. All four
+   `compoundLiteralOffsets.get()` consumers converge on it (directly, or via
+   `emitInitToFrameSlot`/`emitStringToFrameSlot`, or via `lvaluePush`'s
+   `LV_ADDR_FRAME` arm), so the single check covers the whole class — verified
+   by deliberately dropping the layout entry: the compiler errors with
+   `internal: frame address with non-finite offset (undefined)` instead of
+   emitting a caller-frame address.
+3. Audit: none of the four sites (`emitCompoundLiteralInit`, `emitLValue`,
+   `emitAddressOf`, `emitExpr`) guarded the lookup — all had the same
+   silent-degrade shape, and all are now loud. The sibling maps
+   (`localArrayOffsets`, `paramMemoryOffsets`) already use explicit
+   `!== undefined` fallthrough chains ending in a `throw`; the hardening gives
+   the compound-literal sites the same backstop.
+
+Tests: `tests/unit/conformance/compound_literal_frame_clobber` (`knownBug` pin
+removed — a hard pass now) and the new
+`tests/unit/conformance/compound_literal_frame_positions`, one clang-verified
+guard per row of the table above.

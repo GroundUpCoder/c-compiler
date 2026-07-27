@@ -8,9 +8,13 @@
 // EXPECT: callee() cannot touch main()'s locals; guard stays all-zero.
 //      Only the declaration-initializer position is affected — the same
 //      literal in an assignment, behind &, or as a member-access base is fine.
-// KNOWN-BUG: todos/0319 (pinned xfail via config.json "knownBug"). Found by
-//      the todos/0313 CPython probe: it is what made CPython's own bytecode
-//      compiler double-free on any generator expression.
+// FIXED: todos/0319. Found by the todos/0313 CPython probe: it is what made
+//      CPython's own bytecode compiler double-free on any generator
+//      expression. Root cause: SDecl's child list was a construction-time
+//      snapshot of the DVar initializers, so a later in-place initializer
+//      rewrite (constant folding `-1`) left the frame-layout walk looking at
+//      a stale ECompoundLiteral while codegen emitted the new one.
+//      See compound_literal_frame_positions for the per-position guards.
 #include <stdio.h>
 
 typedef struct { int a, b, c, d; } loc_t;
