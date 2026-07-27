@@ -262,4 +262,9 @@ thing this file exists to kill.
 - file: tests/run.js
 - anchor: // UNMAPPED on a diff. That gap is todos/0318.)
 
+### L39 — SDecl's child-rewrite hook is a no-op, so a generic walker's rewrite of a declaration initializer is silently discarded
+- ticket: 0326
+- file: compiler.js
+- anchor: // children-based rewriter's new subtree is silently discarded here.
+
 <!-- END ENTRIES -->

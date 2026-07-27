@@ -4467,7 +4467,10 @@ class Expr {
       }
       return kids;
     }
-    _withChildren(_) { return this; /* DVars are mutated in place; children mirror initExprs */ }
+    // ASYMMETRY, and it is a live gap — see todos/0326. The getter above makes
+    // the READ side a fresh view, but this WRITE side is a no-op: a generic
+    // children-based rewriter's new subtree is silently discarded here.
+    _withChildren(_) { return this; }
   }
   class SCompound extends Stmt {
     constructor(loc, statements, labels, isLabelGroup) {
