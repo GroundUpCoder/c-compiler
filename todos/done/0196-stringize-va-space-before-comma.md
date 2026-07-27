@@ -1,6 +1,6 @@
 # 0196 — #__VA_ARGS__ drops the space before a comma when stringizing
 
-- **Status**: open (P3)
+- **Status**: done (P3)
 - **Design**: this file; found in the 2026-07-15 passes/preprocessor bug hunt (/tmp/cchunt-passes/FINDINGS.md BUG 1)
 - **Regression test**: `tests/unit/conformance/pp_stringize_va_comma_space/` (pinned xfail, `config.json` `"knownBug":"0196"`)
 

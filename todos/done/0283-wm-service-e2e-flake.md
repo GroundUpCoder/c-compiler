@@ -1,6 +1,6 @@
 # 0283 — test_wm_service_e2e ~33% flake under load (taskbar borderless-at-bottom probe)
 
-- **Status**: open
+- **Status**: done
 - **Design**: this file. Found 2026-07-22 during the 0280/0281 bughunt gates.
 
 ## Goal

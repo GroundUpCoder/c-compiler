@@ -1,6 +1,6 @@
 # 0284 — /bin/deck — gucOS slide presenter (Option A: C SDL presenter over WYSIWYG-first .deck JSON)
 
-- **Status**: open
+- **Status**: done
 - **Design**: —
 
 ## Goal

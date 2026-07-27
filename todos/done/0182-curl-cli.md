@@ -1,6 +1,6 @@
 # 0182 — /bin/curl CLI over the os/curl easy veneer
 
-- **Status**: open
+- **Status**: done
 - **Design**: `todos/NETWORK.md` (tier 2), `todos/done/0172-kernel-http.md`
   (the 0x06xx transport), `todos/done/0173-libcurl-veneer.md` (the easy
   veneer this links). Residue of `todos/done/0053` (closed 2026-07-15 as

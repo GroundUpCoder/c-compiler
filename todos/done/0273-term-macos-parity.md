@@ -1,6 +1,8 @@
 # 0273 — term: scrollback + scrollbar + menu bar + settings window (macOS Terminal parity)
 
-- **Status**: open — children (a) scrollback + (b) scrollbar DONE; c/d remain (user-requested 2026-07-21)
+- **Status**: done — all four children shipped: (a) scrollback v145 + (b) scrollbar,
+  (c) menu bar v148 (`6caa385b`), (d) settings window v149 (`36d46bf0`, closed by
+  `9ec36195`). The "c/d remain" this line carried until 0353 was stale from 2026-07-21.
 - **Design**: — (source `os/term/term.c`, ~1118 lines; VT100/ANSI emulator)
 - **Difficulty**: heavy (umbrella — split into children when scoped)
 - **Progress**: child **(a) scrollback history ring SHIPPED in v145** (2026-07-23,

@@ -1,6 +1,6 @@
 # 0240 — CD2 (big half): unify activate() launch policy (wm MRU vs fileman in-place)
 
-- **Status**: open
+- **Status**: done
 - **Design**: —
 
 ## Goal

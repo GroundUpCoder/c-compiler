@@ -1,6 +1,6 @@
 # 0279 — small-ppem text is unhinted mush — add light autohinting to the font pipelines
 
-- **Status**: open
+- **Status**: done
 - **Design**: vendor/freetype/demo/myftmodule.h + myftoption.h; gdi32/term/ksvc load sites; relates to 0277 (fontcore) — consider landing as its successor (fontcore now consolidates the load path)
 
 ## Goal

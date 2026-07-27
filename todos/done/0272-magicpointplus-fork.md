@@ -1,6 +1,6 @@
 # 0272 — MagicPointPlus: a fork of /bin/mgp with click-to-go-back + arrow-key nav
 
-- **Status**: open (user-requested 2026-07-21)
+- **Status**: done (user-requested 2026-07-21)
 - **Design**: — (MagicPoint port shipped as 0119, `todos/done/0119-magicpoint-presentations.md`; source `vendor/magicpoint/mgp.c`, whitelist/render polish 0202)
 - **Difficulty**: light
 

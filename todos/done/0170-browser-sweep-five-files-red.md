@@ -1,6 +1,6 @@
 # 0170 — browser sweep: 5 files red on clean main (os-drop/paint/shell/user32/wm)
 
-- **Status**: open
+- **Status**: done
 - **Design**: this file. Found 2026-07-12 running the full sweep as the 0165/
   0166 gate; NOT caused by those changes — every failing leg reproduces
   verbatim-identically (same legs, same last-pixel values) on clean HEAD with

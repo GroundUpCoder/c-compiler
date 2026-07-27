@@ -1,6 +1,6 @@
 # 0191 — #pragma pack(N)/push/pop silently ignored (wrong struct layout, no diagnostic)
 
-- **Status**: open (P1)
+- **Status**: done (P1)
 - **Design**: this file; found in the 2026-07-15 frontend bug hunt (/tmp/cchunt-frontend/FINDINGS.md F3)
 - **Regression test**: `tests/unit/conformance/pragma_pack_layout/` (pinned xfail, `config.json` `"knownBug":"0191"`)
 

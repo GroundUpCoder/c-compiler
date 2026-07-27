@@ -1,6 +1,6 @@
 # 0256 — Menu build Spike 1: kernel anchored-child primitive + grab + focus funnel + SDL popup veneer + menubox
 
-- **Status**: open
+- **Status**: done
 - **Design**: the menu-uniform architecture note (external design thread,
   2026-07-16/17) — kernel owns the MECHANISM (anchored child surfaces), never
   "menu"; amendments A1 (arbitrary-depth tree), A2 (grab in v1), A5

@@ -1,6 +1,6 @@
 # 0195 — defined produced via macro expansion in #if evaluates wrong
 
-- **Status**: open (P2)
+- **Status**: done (P2)
 - **Design**: this file; found in the 2026-07-15 passes/preprocessor bug hunt (/tmp/cchunt-passes/FINDINGS.md BUG 2)
 - **Regression test**: `tests/unit/conformance/pp_defined_via_macro/` (pinned xfail, `config.json` `"knownBug":"0195"`)
 

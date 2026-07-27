@@ -1,6 +1,6 @@
 # 0271 — os-touch.mjs taskbar-menu leg red after osk-bigger (pre-existing on main @e188893)
 
-- **Status**: open
+- **Status**: done
 - **Design**: —
 
 ## Goal

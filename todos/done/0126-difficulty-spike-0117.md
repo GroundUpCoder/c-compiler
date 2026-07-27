@@ -1,6 +1,6 @@
 # 0126 — Difficulty spike: right-size (or split) 0117 by attempting Round 1
 
-- **Status**: open (reopened + foregrounded 2026-07-27)
+- **Status**: done (reopened + foregrounded 2026-07-27)
   — on jku's direct instruction to foreground the MicroPython work (see 0117).
   The 2026-07-12 mass deferral was a sweep, not a judgement about this item.
   Note the spike is now scoped to **0117 R1 only** — R2 is parked pending the M0

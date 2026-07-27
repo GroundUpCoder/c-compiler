@@ -1,6 +1,6 @@
 # 0278 — user32 check/radio label uses the retired 14px text height — descenders clip
 
-- **Status**: open
+- **Status**: done
 - **Design**: os/win32/user32.c btn_paint; found by the bughunt-sc sweep (branch bughunt-sc, media/bughunt-sc)
 
 ## Goal

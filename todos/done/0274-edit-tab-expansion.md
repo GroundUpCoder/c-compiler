@@ -1,6 +1,6 @@
 # 0274 — EDIT control: expand '\t' to tab stops (tabs render as '?' in notepad)
 
-- **Status**: open (surfaced 2026-07-21 while opening a .mgp deck in notepad)
+- **Status**: done (surfaced 2026-07-21 while opening a .mgp deck in notepad)
 - **Design**: `todos/WIN32.md` (EDIT status). Umbrella **0133**
   (edit-control-completeness) — a 5th plain-EDIT gap alongside 0134–0137.
 - **Difficulty**: medium

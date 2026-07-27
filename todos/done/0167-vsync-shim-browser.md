@@ -1,6 +1,6 @@
 # 0167 — wire 0100's vsyncWait pacing into the browser SDL flavor (IDLE-POWER Stage 1)
 
-- **Status**: open
+- **Status**: done
 - **Design**: `todos/IDLE-POWER.md` (Stage 1) + `todos/KERNEL.md` "The vsync
   broadcast" (whose description this item makes true).
 
