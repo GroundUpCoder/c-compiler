@@ -127,6 +127,11 @@ const RULES = [
 
   // Core compiler — the whole language surface + every consumer of it.
   // (host: the single-file .js/.html emitters live in compiler.js — CD15.)
+  // NOT SELECTED YET: any run.py category but `unit` — so the real-world-C
+  // corpus (micropython, lua, sqlite, zlib, projects, …) is ungated by a
+  // compiler change, and todos/0356 is the firing example: its miscompile was
+  // caught ONLY by micropython-upstream, with `unit` green. Funded by
+  // todos/0360.
   [/^compiler\.js$/, ['unit', 'kernel', 'blockfs', 'host'], 'the compiler drives every wasm binary + the single-file emit'],
 
   // host.js carries BOTH BlockFS/MountFS AND the per-process SDL/fd runtime.
