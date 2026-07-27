@@ -278,4 +278,10 @@ thing this file exists to kill.
 - anchor: is the runtime backstop for a payload that arrived another way.
 - provenance: 0338
 
+### L47 — the cross-ref id survey never checks how stale the remote-tracking refs it trusts are
+- ticket: 0360
+- file: todos/idspace.js
+- anchor: // allocates from a stale bound (todos/0360, register L47). Every caller
+- provenance: 0358
+
 <!-- END ENTRIES -->

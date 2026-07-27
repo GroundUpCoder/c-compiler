@@ -56,8 +56,12 @@ function git(root, args, opts) {
 
 // Every ref that could carry another lane's allocation, plus HEAD (which
 // for-each-ref does not list, and which is the only ref a detached checkout
-// has). Remote-tracking refs are only as fresh as the last fetch — that is
-// unfixable here and is why every caller prints the ref count it surveyed.
+// has).
+//
+// GAP: a remote-tracking ref is only as fresh as the last `git fetch`, and
+// nothing here checks when that was — a lane that has not fetched still
+// allocates from a stale bound (todos/0360, register L47). Every caller
+// therefore prints what it surveyed, which is a reminder, not a guard.
 function refNames(root) {
   let out;
   try {
