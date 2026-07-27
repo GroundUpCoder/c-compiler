@@ -239,7 +239,7 @@ static void gucos_run(void)
 	int schedtm;
 
 	while (!gucos_done) {
-		schedtm = gucos_schedule_run();
+		gucos_schedule_run();
 
 		gucos_process_events();
 		if (gucos_done) {
@@ -253,9 +253,22 @@ static void gucos_run(void)
 			continue;
 		}
 
-		/* park on the input ring; schedtm bounds the wait
-		 * (-1 = nothing scheduled, sleep until input) */
-		SDL_WaitEventTimeout(NULL, schedtm);
+		/* Park on the input ring, bounded by the next scheduled
+		 * callback — READ HERE, not from the gucos_schedule_run()
+		 * above.  Everything between the two can schedule work:
+		 * a click's JS listener that mutates the DOM schedules the
+		 * live re-conversion at 0, and a deadline sampled before
+		 * gucos_process_events() would still say -1 ("nothing
+		 * scheduled, sleep until input") and park on it — losing
+		 * the re-box until some unrelated later event happened to
+		 * wake the loop.  todos/0316. */
+		schedtm = gucos_schedule_next();
+
+		/* already due: a 1 ms park rather than a spin — the next
+		 * gucos_schedule_run() fires it (its comparison is strictly
+		 * greater, so a callback due this very microsecond needs
+		 * the clock to move on) */
+		SDL_WaitEventTimeout(NULL, schedtm == 0 ? 1 : schedtm);
 	}
 }
 

@@ -5,7 +5,8 @@ LANDED (2026-07-27, todos/0289)**; lanes D–E open (E's scaffold shipped).
 Everything below is evidence from a live probe, with each lane's findings
 folded in (§8 = where the probe's expectations turned out wrong, §9 = the
 same for Lane B, **§10 = the same for Lane C, and it retires several of the
-"only click/keydown/load" statements in the body**).
+"only click/keydown/load" statements in the body**, **§11 = the same for
+todos/0316, and it retires §10.9's own diagnosis**).
 
 **§5's "THE KILLER GAP — DOM mutation is invisible" is no longer true**:
 Lane B's re-conversion bridge landed.  The paragraphs describing it are kept
@@ -655,6 +656,57 @@ coordinates" are **no longer true**; read the body past this section.
    `submit` (there is no binding for it yet; noted at the call site and in
    the register).  And a **class-selector restyle on an existing element
    does not repaint** — a Lane B residual this lane tripped over and
-   measured; it is **todos/0316**, P0, and it is why
+   measured; it was **todos/0316**, P0, and it is why
    `test_netsurf_events_e2e.js` probes through canvases rather than
-   through styled `<div>`s.
+   through styled `<div>`s.  **Fixed; see §11**, which also retires that
+   last sentence's premise: the canvas was not the safe channel it looks
+   like — it was the second bug's trigger.
+
+## 11. What todos/0316 found that §9 and §10 had wrong
+
+0316's probe table (a canvas repainting at once, `#idsel.on` repainting
+late, `.slab.on` never repainting) reads like one bug seen three ways and
+points at libcss.  It is **two independent bugs and neither is in libcss**:
+the re-selection runs, `nscss_node_data_clear` does its job, and the whole
+diagnosis "the class+class case failing while the id+class case eventually
+succeeds points at the selection side (libcss bucketing / the cached
+`libcss_node_data`)" is wrong.
+
+1. **libdom's class-name cache is never refreshed in place.**
+   `dom_element.classes` — what `dom_element_has_class`, and so every class
+   selector, actually reads — is built when a `class` attribute is ADDED to
+   an element and destroyed when one is REMOVED.  Nothing rebuilt it when an
+   existing attribute's VALUE changed, so `el.className = 'slab on'` on an
+   element that already carried a class went on matching the OLD list
+   forever.  The `#idsel` vs `.slab` asymmetry is not about the selector at
+   all: `#idsel` had no class attribute until the click created one.  Fixed
+   at the single choke every value rewrite passes through
+   (`dom_attr_set_value`), so `setAttribute`, `className`, `classList` and
+   `attr.value` are all covered; patch table entry in
+   `vendor/netsurf/README.md`.
+2. **The gucOS event loop parked on a deadline sampled before the handlers
+   ran.**  `gucos_run` took `schedtm = gucos_schedule_run()` at the top of
+   the loop and then processed input — but the live re-conversion is
+   scheduled at delay 0 *from* a JS listener, i.e. from inside
+   `gucos_process_events()`.  The loop therefore parked on the stale `-1`
+   ("nothing scheduled, sleep until input") and the re-box waited for some
+   unrelated later event.  This is the estate's lost-wakeup shape, and it
+   is what §10's "repainted, but only in a LATER frame" was: whether the
+   re-box landed at all depended on whether the press and the release were
+   drained in one pass.  **A `<canvas>` in the handler is what makes it
+   deterministic** — filling one is enough JS for both events to arrive
+   before the handler returns — so §10.9's "which is why
+   `test_netsurf_events_e2e.js` probes through canvases" had it backwards:
+   the canvas was masking a frontend bug, not routing around a CSS one.
+   The deadline is read after events and redraw now, from a pure
+   `gucos_schedule_next()` which also reports an already-due callback as 0
+   instead of a negative (SDL's "wait forever").
+3. **The Lane B gate could not have caught either one**, and that is the
+   reusable lesson: `test_netsurf_mutation_e2e.js` only ever INSERTS
+   elements and writes `textContent`, and its driver polls with
+   `pollChange` — repeated screenshots either side of the click — which
+   happens to keep the loop turning.  A mutation class nobody wrote a probe
+   for, sampled by a driver that accidentally papers over a park bug, is
+   two silent symptoms stacked.  `tests/kernel/test_netsurf_restyle_e2e.js`
+   is the guard: five probes, one click, all required to light in the SAME
+   frame.

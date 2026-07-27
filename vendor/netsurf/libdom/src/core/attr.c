@@ -580,10 +580,11 @@ dom_exception _dom_attr_set_value(struct dom_attr *attr,
 
 	/* Create text node containing new value */
 	err = dom_document_create_text_node(a->owner, parsed, &text);
-	dom_string_unref(parsed);
-	if (err != DOM_NO_ERR)
+	if (err != DOM_NO_ERR) {
+		dom_string_unref(parsed);
 		return err;
-	
+	}
+
 	/* Destroy children of this node */
 	for (c = a->first_child; c != NULL; c = d) {
 		d = c->next;
@@ -607,7 +608,23 @@ dom_exception _dom_attr_set_value(struct dom_attr *attr,
 	/* Now the attribute node is specified */
 	attr->specified = true;
 
-	return DOM_NO_ERR;
+	/* Keep the owning element's parsed class-name cache in step.  It is
+	 * built when a class attribute is ADDED to an element and destroyed
+	 * when one is removed, so rewriting an existing one's value in place
+	 * -- className =, setAttribute("class", ...), classList, attr.value =
+	 * -- is the one way it can go stale, and a stale cache silently
+	 * breaks every class selector and dom_element_has_class() caller for
+	 * the rest of that element's life. */
+	if (a->parent != NULL && a->parent->type == DOM_ELEMENT_NODE &&
+			a->namespace == NULL && a->owner != NULL &&
+			dom_string_isequal(a->name, a->owner->class_string)) {
+		err = _dom_element_classes_changed(
+				(struct dom_element *) a->parent, parsed);
+	}
+
+	dom_string_unref(parsed);
+
+	return err;
 }
 
 /**

@@ -129,6 +129,37 @@ nserror gucos_schedule(int tival, void (*callback)(void *p), void *p)
 }
 
 /* exported function documented in gucos/schedule.h */
+int gucos_schedule_next(void)
+{
+	struct timeval tv;
+	struct timeval nexttime;
+	struct timeval rettime;
+	struct nscallback *cur_nscb;
+	int ms;
+
+	if (schedule_list == NULL) {
+		return -1;
+	}
+
+	nexttime = schedule_list->tv;
+	for (cur_nscb = schedule_list->next; cur_nscb != NULL;
+			cur_nscb = cur_nscb->next) {
+		if (timercmp(&nexttime, &cur_nscb->tv, >)) {
+			nexttime = cur_nscb->tv;
+		}
+	}
+
+	gettimeofday(&tv, NULL);
+	timersub(&nexttime, &tv, &rettime);
+	ms = (rettime.tv_sec * 1000) + (rettime.tv_usec / 1000);
+
+	/* A callback that is already due must report 0.  Handing a negative
+	 * timeout to SDL_WaitEventTimeout means "wait forever", which is the
+	 * wedge this function exists to avoid. */
+	return (ms < 0) ? 0 : ms;
+}
+
+/* exported function documented in gucos/schedule.h */
 int gucos_schedule_run(void)
 {
 	struct timeval tv;
