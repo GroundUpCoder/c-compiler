@@ -1,6 +1,6 @@
 # 0358 — queue.js add next derives ids from the current branch, so concurrent lanes collide (caused the 0354 and L44 double-assignments)
 
-- **Status**: open
+- **Status**: done
 - **Design**: —
 
 ## Goal
