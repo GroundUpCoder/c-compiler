@@ -1,0 +1,8 @@
+## ours
+arith  2000000 iters  6484250 ns  (3.2 ns/iter)
+switch 2000000 iters  4047833 ns  (2.0 ns/iter)
+icall  2000000 iters  20926500 ns  (10.5 ns/iter)
+## clang
+arith  2000000 iters  6907083 ns  (3.5 ns/iter)
+switch 2000000 iters  860500 ns  (0.4 ns/iter)
+icall  2000000 iters  3011666 ns  (1.5 ns/iter)

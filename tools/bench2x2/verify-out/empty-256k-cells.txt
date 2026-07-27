@@ -1,0 +1,9 @@
+## 256K frames-nogc
+MemoryError: 
+## 256K control
+Traceback (most recent call last):
+  File "/Users/jku/build/bench2x2/bench_frames.py", line 58, in <module>
+MemoryError: memory allocation failed, allocating 32768 bytes
+## POSITIVE CONTROL — 32m, same workloads, must print numbers
+678833
+646917
