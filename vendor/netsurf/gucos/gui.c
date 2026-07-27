@@ -696,6 +696,63 @@ gucos_mouse_wheel(struct gui_window *gw, const SDL_MouseWheelEvent *w)
 	}
 }
 
+/**
+ * Map an SDL keycode to the core's NS_KEY_* / UCS4 value.
+ *
+ * Shared by the press and release paths so `keyup` reports exactly the
+ * same `event.key` as `keydown` did — a keyup whose name disagreed with
+ * its keydown would be worse than no keyup at all.
+ *
+ * \return 0 if the key has no core representation
+ */
+static uint32_t gucos_nskey(uint32_t key, uint16_t mod)
+{
+	switch (key) {
+	case SDLK_BACKSPACE: return NS_KEY_DELETE_LEFT;
+	case SDLK_TAB:
+		return (mod & SDL_KMOD_SHIFT) ? NS_KEY_SHIFT_TAB : NS_KEY_TAB;
+	case SDLK_RETURN: return NS_KEY_NL;
+	case SDLK_ESCAPE: return NS_KEY_ESCAPE;
+	case SDLK_DELETE: return NS_KEY_DELETE_RIGHT;
+	case SDLK_LEFT: return NS_KEY_LEFT;
+	case SDLK_RIGHT: return NS_KEY_RIGHT;
+	case SDLK_UP: return NS_KEY_UP;
+	case SDLK_DOWN: return NS_KEY_DOWN;
+	case SDLK_HOME: return NS_KEY_LINE_START;
+	case SDLK_END: return NS_KEY_LINE_END;
+	case SDLK_PAGEUP: return NS_KEY_PAGE_UP;
+	case SDLK_PAGEDOWN: return NS_KEY_PAGE_DOWN;
+	default:
+		/* the veneer delivers modifier-applied unicode keycodes;
+		 * non-character keys live above 0x40000000 */
+		if ((key >= 0x20) && (key < 0x40000000)) {
+			return key;
+		}
+		return 0;
+	}
+}
+
+/**
+ * A key came up.  The core has nothing to DO with a release; it is
+ * forwarded purely so the DOM can fire `keyup` (todos/0289).
+ */
+static void
+gucos_key_up(struct gui_window *gw, const SDL_KeyboardEvent *k)
+{
+	uint32_t nskey;
+
+	/* The chord paths below swallow their keys on the way down, so a
+	 * release of one is not a keyup the page should see either. */
+	if (k->mod & (SDL_KMOD_ALT | SDL_KMOD_CTRL)) {
+		return;
+	}
+
+	nskey = gucos_nskey(k->key, k->mod);
+	if (nskey != 0) {
+		browser_window_key_release(gw->bw, nskey);
+	}
+}
+
 static void
 gucos_key(struct gui_window *gw, const SDL_KeyboardEvent *k)
 {
@@ -736,32 +793,9 @@ gucos_key(struct gui_window *gw, const SDL_KeyboardEvent *k)
 		return;
 	}
 
-	switch (key) {
-	case SDLK_BACKSPACE: nskey = NS_KEY_DELETE_LEFT; break;
-	case SDLK_TAB:
-		nskey = (k->mod & SDL_KMOD_SHIFT) ?
-			NS_KEY_SHIFT_TAB : NS_KEY_TAB;
-		break;
-	case SDLK_RETURN: nskey = NS_KEY_NL; break;
-	case SDLK_ESCAPE: nskey = NS_KEY_ESCAPE; break;
-	case SDLK_DELETE: nskey = NS_KEY_DELETE_RIGHT; break;
-	case SDLK_LEFT: nskey = NS_KEY_LEFT; break;
-	case SDLK_RIGHT: nskey = NS_KEY_RIGHT; break;
-	case SDLK_UP: nskey = NS_KEY_UP; break;
-	case SDLK_DOWN: nskey = NS_KEY_DOWN; break;
-	case SDLK_HOME: nskey = NS_KEY_LINE_START; break;
-	case SDLK_END: nskey = NS_KEY_LINE_END; break;
-	case SDLK_PAGEUP: nskey = NS_KEY_PAGE_UP; break;
-	case SDLK_PAGEDOWN: nskey = NS_KEY_PAGE_DOWN; break;
-	default:
-		/* the veneer delivers modifier-applied unicode
-		 * keycodes; non-character keys live above 0x40000000 */
-		if ((key >= 0x20) && (key < 0x40000000)) {
-			nskey = key;
-		} else {
-			return;
-		}
-		break;
+	nskey = gucos_nskey(key, k->mod);
+	if (nskey == 0) {
+		return;
 	}
 
 	if (browser_window_key_press(gw->bw, nskey)) {
@@ -886,6 +920,13 @@ void gucos_process_events(void)
 			gw = gucos_window_from_id(e.key.windowID);
 			if (gw != NULL) {
 				gucos_key(gw, &e.key);
+			}
+			break;
+
+		case SDL_EVENT_KEY_UP:
+			gw = gucos_window_from_id(e.key.windowID);
+			if (gw != NULL) {
+				gucos_key_up(gw, &e.key);
 			}
 			break;
 

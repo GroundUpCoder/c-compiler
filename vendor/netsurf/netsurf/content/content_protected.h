@@ -77,6 +77,11 @@ struct content_handler {
 	nserror (*mouse_action)(struct content *c, struct browser_window *bw,
 			browser_mouse_state mouse, int x, int y);
 	bool (*keypress)(struct content *c, uint32_t key);
+	/** Key RELEASE.  Upstream's own TODO in html/interaction.c asks for
+	 * this ("Update the front end interface so that both press and
+	 * release events reach the core"): without it a DOM `keyup` cannot
+	 * exist at all, because nothing tells the core a key came up. */
+	bool (*keyrelease)(struct content *c, uint32_t key);
 	bool (*redraw)(struct content *c, struct content_redraw_data *data,
 			const struct rect *clip,
 			const struct redraw_context *ctx);

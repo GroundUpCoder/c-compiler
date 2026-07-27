@@ -119,3 +119,19 @@ bool browser_window_key_press(struct browser_window *bw, uint32_t key)
 	return content_keypress(focus->current_content, key);
 }
 
+/* exported interface documented in netsurf/keypress.h */
+bool browser_window_key_release(struct browser_window *bw, uint32_t key)
+{
+	struct browser_window *focus = bw->focus;
+
+	assert(bw->window != NULL);
+
+	if (focus == NULL)
+		focus = bw;
+
+	if (focus->current_content == NULL)
+		return false;
+
+	return content_key_release(focus->current_content, key);
+}
+

@@ -447,6 +447,19 @@ bool content_keypress(struct hlcache_handle *h, uint32_t key)
 
 
 /* exported interface documented in content/content.h */
+bool content_key_release(struct hlcache_handle *h, uint32_t key)
+{
+	struct content *c = hlcache_handle_get_content(h);
+	assert(c != NULL);
+
+	if (c->handler->keyrelease != NULL)
+		return c->handler->keyrelease(c, key);
+
+	return false;
+}
+
+
+/* exported interface documented in content/content.h */
 void content_request_redraw(struct hlcache_handle *h,
 			    int x, int y, int width, int height)
 {

@@ -43,7 +43,7 @@ struct dom_html_br_element;
 static void dukky_html_progress_element___init(duk_context *ctx, html_progress_element_private_t *priv, struct dom_html_element *html_progress_element)
 {
 	dukky_html_element___init(ctx, &priv->parent, html_progress_element);
-#line 162 "../netsurf/content/handlers/javascript/duktape/netsurf.bnd"
+#line 165 "../netsurf/content/handlers/javascript/duktape/netsurf.bnd"
 #line 48 "html_progress_element.c"
 }
 

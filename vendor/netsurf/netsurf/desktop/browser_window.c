@@ -4469,6 +4469,36 @@ browser_window_mouse_track(struct browser_window *bw,
 }
 
 /* exported interface documented in netsurf/browser_window.h */
+nserror
+browser_window_get_scroll(struct browser_window *bw, int *sx, int *sy)
+{
+	assert(bw != NULL);
+
+	*sx = 0;
+	*sy = 0;
+
+	/* Core scrollbars, when this window has them */
+	if (bw->scroll_x != NULL) {
+		*sx = scrollbar_get_offset(bw->scroll_x);
+	}
+	if (bw->scroll_y != NULL) {
+		*sy = scrollbar_get_offset(bw->scroll_y);
+	}
+
+	/* A front end that owns the viewport overrides both */
+	if ((bw->window != NULL) && (guit->window->get_scroll != NULL)) {
+		int wx, wy;
+		if (guit->window->get_scroll(bw->window, &wx, &wy) == true) {
+			*sx = wx;
+			*sy = wy;
+		}
+	}
+
+	return NSERROR_OK;
+}
+
+
+/* exported interface documented in netsurf/browser_window.h */
 void
 browser_window_mouse_click(struct browser_window *bw,
 			   browser_mouse_state mouse,

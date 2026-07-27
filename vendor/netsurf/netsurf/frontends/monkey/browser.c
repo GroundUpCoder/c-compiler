@@ -31,6 +31,7 @@
 #include "netsurf/window.h"
 #include "netsurf/browser_window.h"
 #include "netsurf/plotters.h"
+#include "netsurf/keypress.h"
 
 #include "monkey/output.h"
 #include "monkey/browser.h"
@@ -705,6 +706,158 @@ monkey_window_handle_click(int argc, char **argv)
 	}
 }
 
+
+
+/**
+ * Named browser_mouse_state bits, so the driver can compose any state the
+ * core understands.
+ *
+ * WINDOW CLICK only ever produces a synthesised CLICK_n, which is enough
+ * to drive a link or a button but cannot express a press, a hold, a move
+ * or a release — i.e. it cannot drive mousedown/mousemove/mouseup at all.
+ * The DOM event coverage those make possible (todos/0289) has to be
+ * testable in this harness, not only in the full OS e2e, so the state is
+ * spelled out here instead.
+ */
+static const struct {
+	const char *name;
+	browser_mouse_state bit;
+} monkey_mouse_states[] = {
+	{ "PRESS_1", BROWSER_MOUSE_PRESS_1 },
+	{ "PRESS_2", BROWSER_MOUSE_PRESS_2 },
+	{ "CLICK_1", BROWSER_MOUSE_CLICK_1 },
+	{ "CLICK_2", BROWSER_MOUSE_CLICK_2 },
+	{ "DOUBLE", BROWSER_MOUSE_DOUBLE_CLICK },
+	{ "TRIPLE", BROWSER_MOUSE_TRIPLE_CLICK },
+	{ "DRAG_1", BROWSER_MOUSE_DRAG_1 },
+	{ "DRAG_2", BROWSER_MOUSE_DRAG_2 },
+	{ "DRAG_ON", BROWSER_MOUSE_DRAG_ON },
+	{ "HOLDING_1", BROWSER_MOUSE_HOLDING_1 },
+	{ "HOLDING_2", BROWSER_MOUSE_HOLDING_2 },
+	{ "MOD_1", BROWSER_MOUSE_MOD_1 },
+	{ "MOD_2", BROWSER_MOUSE_MOD_2 },
+	{ "MOD_3", BROWSER_MOUSE_MOD_3 },
+	{ "MOD_4", BROWSER_MOUSE_MOD_4 },
+	{ "HOVER", BROWSER_MOUSE_HOVER },
+	{ NULL, 0 }
+};
+
+static void
+monkey_window_handle_mouse(int argc, char **argv)
+{
+	/* `WINDOW MOUSE WIN` _%id%_ `X` _%num%_ `Y` _%num%_ `KIND`
+	 * _%str%_ [`STATE` _%str%_ ...]
+	 *  0      1     2    3       4  5        6  7        8      9
+	 * KIND is TRACK (a move / drag / drag-end) or CLICK (a press,
+	 * click or drag start).  Each STATE is one of the names above and
+	 * they OR together; no STATE at all is BROWSER_MOUSE_HOVER. */
+	struct gui_window *gw;
+	browser_mouse_state mouse = 0;
+	bool track;
+	int x, y, i, j;
+
+	if (argc < 10) {
+		moutf(MOUT_ERROR, "WINDOW MOUSE ARGS BAD");
+		return;
+	}
+
+	gw = monkey_find_window_by_num(atoi(argv[2]));
+	if (gw == NULL) {
+		moutf(MOUT_ERROR, "WINDOW NUM BAD");
+		return;
+	}
+
+	x = atoi(argv[5]);
+	y = atoi(argv[7]);
+
+	if (strcmp(argv[9], "TRACK") == 0) {
+		track = true;
+	} else if (strcmp(argv[9], "CLICK") == 0) {
+		track = false;
+	} else {
+		moutf(MOUT_ERROR, "WINDOW KIND BAD");
+		return;
+	}
+
+	for (i = 10; i < argc; ++i) {
+		if (strcmp(argv[i], "STATE") == 0) {
+			continue;
+		}
+		for (j = 0; monkey_mouse_states[j].name != NULL; ++j) {
+			if (strcmp(argv[i], monkey_mouse_states[j].name) == 0) {
+				mouse |= monkey_mouse_states[j].bit;
+				break;
+			}
+		}
+		if (monkey_mouse_states[j].name == NULL) {
+			moutf(MOUT_ERROR, "WINDOW STATE BAD %s", argv[i]);
+			return;
+		}
+	}
+
+	if (track) {
+		browser_window_mouse_track(gw->bw, mouse, x, y);
+	} else {
+		browser_window_mouse_click(gw->bw, mouse, x, y);
+	}
+}
+
+static void
+monkey_window_handle_key(int argc, char **argv)
+{
+	/* `WINDOW KEY WIN` _%id%_ `CODE` _%num%_ [`KIND` _%str%_]
+	 *  0      1   2    3       4      5       6      7
+	 * CODE is a UCS4 codepoint or an NS_KEY_* value; KIND is DOWN
+	 * (default) or UP. */
+	struct gui_window *gw;
+	uint32_t key;
+
+	if (argc != 6 && argc != 8) {
+		moutf(MOUT_ERROR, "WINDOW KEY ARGS BAD");
+		return;
+	}
+
+	gw = monkey_find_window_by_num(atoi(argv[2]));
+	if (gw == NULL) {
+		moutf(MOUT_ERROR, "WINDOW NUM BAD");
+		return;
+	}
+
+	key = (uint32_t)strtoul(argv[5], NULL, 0);
+
+	if (argc == 8 && strcmp(argv[7], "UP") == 0) {
+		browser_window_key_release(gw->bw, key);
+	} else {
+		browser_window_key_press(gw->bw, key);
+	}
+}
+
+static void
+monkey_window_handle_wheel(int argc, char **argv)
+{
+	/* `WINDOW WHEEL WIN` _%id%_ `X` _%num%_ `Y` _%num%_ `DX` _%num%_
+	 *  `DY` _%num%_
+	 *  0      1     2    3       4  5        6  7        8    9
+	 * 10   11 */
+	struct gui_window *gw;
+
+	if (argc != 12) {
+		moutf(MOUT_ERROR, "WINDOW WHEEL ARGS BAD");
+		return;
+	}
+
+	gw = monkey_find_window_by_num(atoi(argv[2]));
+	if (gw == NULL) {
+		moutf(MOUT_ERROR, "WINDOW NUM BAD");
+		return;
+	}
+
+	moutf(MOUT_WINDOW, "WHEEL WIN %u HANDLED %s", gw->win_num,
+	      browser_window_scroll_at_point(gw->bw, atoi(argv[5]),
+			atoi(argv[7]), atoi(argv[9]), atoi(argv[11])) ?
+			"TRUE" : "FALSE");
+}
+
 void
 monkey_window_handle_command(int argc, char **argv)
 {
@@ -727,6 +880,12 @@ monkey_window_handle_command(int argc, char **argv)
 		monkey_window_handle_exec(argc, argv);
 	} else if (strcmp(argv[1], "CLICK") == 0) {
 		monkey_window_handle_click(argc, argv);
+	} else if (strcmp(argv[1], "MOUSE") == 0) {
+		monkey_window_handle_mouse(argc, argv);
+	} else if (strcmp(argv[1], "KEY") == 0) {
+		monkey_window_handle_key(argc, argv);
+	} else if (strcmp(argv[1], "WHEEL") == 0) {
+		monkey_window_handle_wheel(argc, argv);
 	} else {
 		moutf(MOUT_ERROR, "WINDOW COMMAND UNKNOWN %s\n", argv[1]);
 	}

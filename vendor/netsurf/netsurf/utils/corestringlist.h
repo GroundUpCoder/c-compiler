@@ -363,6 +363,14 @@ CORESTRING_DOM_STRING(mouseleave);
 CORESTRING_DOM_STRING(wheel);
 CORESTRING_DOM_STRING(sort);
 CORESTRING_DOM_STRING(toggle);
+/* DOM UI Events `key` names for the non-printable keys the core is told
+ * about.  Escape/arrows/Home/End/PageUp/PageDown already have theirs
+ * above; without these three, Enter, Tab and Backspace reached script
+ * with `event.key === null`. */
+CORESTRING_DOM_STRING(Enter);
+CORESTRING_DOM_STRING(Tab);
+CORESTRING_DOM_STRING(Backspace);
+CORESTRING_DOM_STRING(Delete);
 /* DOM userdata keys, not really CSS */
 CORESTRING_DOM_STRING(__ns_key_box_node_data);
 CORESTRING_DOM_STRING(__ns_key_libcss_node_data);

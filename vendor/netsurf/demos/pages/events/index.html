@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<!-- The UI event surface, as a page that states what it received.
+     todos/0289 (Lane C).  Everything here was silently missing before that
+     lane: capture-phase listeners never ran in ANY phase, and registering
+     one poisoned every later bubble listener for the same type on the same
+     element; the only UI events dispatched at all were click, keydown and
+     window load; Enter arrived with `event.key === null`; and keydown was
+     fired at the document ROOT rather than at the focused element.
+
+     Markup only: the look is in events.css and the behaviour in events.js. -->
+<html>
+<head>
+<title>Events</title>
+<link rel="stylesheet" href="events.css">
+</head>
+<body>
+<h1>Events</h1>
+
+<p class="loadcheck"><span id="nocss">stylesheet did not load &mdash; </span><span id="jswatch">script did not run</span></p>
+
+<div id="outer">outer
+  <div id="middle">middle
+    <div id="inner">inner &mdash; click me</div>
+  </div>
+</div>
+
+<p><input id="order" type="text" size="46" value="no clicks yet" readonly></p>
+
+<form id="form" action="events.html">
+<p>
+<input id="text" type="text" size="14" value="edit me">
+<input id="check" type="checkbox">
+<button id="go" type="submit">Submit</button>
+</p>
+</form>
+
+<p><input id="keys" type="text" size="46" value="no keys yet" readonly></p>
+
+<script src="events.js"></script>
+
+<p class="note">The first box records the order the three nested boxes were
+visited in, with the phase each listener ran in.  The second records the
+keyboard, focus, input/change and submit events the page saw.</p>
+</body>
+</html>

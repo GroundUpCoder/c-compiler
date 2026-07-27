@@ -130,6 +130,95 @@ bool fire_generic_dom_event(dom_string *type, dom_node *target,
 	return result;
 }
 
+/* Exported interface, see private.h */
+bool fire_dom_mouse_event(dom_string *type, dom_node *target,
+		bool bubbles, bool cancelable,
+		const struct dom_mouse_event_pos *pos,
+		unsigned short button, unsigned short buttons,
+		unsigned int mods, int detail)
+{
+	dom_mouse_event *evt;
+	dom_exception exc;
+	bool result;
+
+	exc = dom_mouse_event_create(&evt);
+	if (exc != DOM_NO_ERR) return false;
+
+	/* Coordinate contract (mirrored in duktape/MouseEvent.bnd, which is
+	 * what script reads these back through):
+	 *   libdom "client" slot  <- viewport-relative, i.e. clientX/clientY
+	 *                            AND, for want of a screen origin the
+	 *                            core is never told, screenX/screenY
+	 *   libdom "screen" slot  <- document-relative, i.e. pageX/pageY
+	 * A MouseEvent whose coordinates were simply absent is what made
+	 * demo 6 (paint) impossible, so getting this pair right is the
+	 * point of the lane, not a detail. */
+	exc = dom_mouse_event_init(evt, type, bubbles, cancelable, NULL,
+			detail, pos->page_x, pos->page_y,
+			pos->client_x, pos->client_y,
+			!!(mods & HTML_MOD_CTRL), !!(mods & HTML_MOD_ALT),
+			!!(mods & HTML_MOD_SHIFT), !!(mods & HTML_MOD_META),
+			button, NULL);
+	if (exc != DOM_NO_ERR) {
+		dom_event_unref(evt);
+		return false;
+	}
+	/* `buttons` post-dates the DOM L3 init above */
+	dom_mouse_event_set_buttons(evt, buttons);
+
+	NSLOG(netsurf, DEEPDEBUG, "Dispatching '%*s' at %d,%d against %p",
+			(int)dom_string_length(type), dom_string_data(type),
+			pos->page_x, pos->page_y, target);
+
+	result = fire_dom_event((dom_event *) evt, target);
+	dom_event_unref(evt);
+	return result;
+}
+
+/* Exported interface, see private.h */
+bool fire_dom_wheel_event(dom_string *type, dom_node *target,
+		bool bubbles, bool cancelable,
+		const struct dom_mouse_event_pos *pos,
+		unsigned int mods, int delta_x, int delta_y)
+{
+	dom_mouse_multi_wheel_event *evt;
+	dom_string *modifiers = NULL;
+	dom_exception exc;
+	bool result;
+
+	exc = dom_mouse_multi_wheel_event_create(&evt);
+	if (exc != DOM_NO_ERR) return false;
+
+	/* This class carries its modifiers as a space-separated name list
+	 * rather than as booleans (libdom's own init signature), so build
+	 * one when there is anything to say. */
+	if (mods != 0) {
+		char buf[64];
+		buf[0] = '\0';
+		if (mods & HTML_MOD_CTRL) strcat(buf, "Control ");
+		if (mods & HTML_MOD_ALT) strcat(buf, "Alt ");
+		if (mods & HTML_MOD_SHIFT) strcat(buf, "Shift ");
+		if (mods & HTML_MOD_META) strcat(buf, "Meta ");
+		exc = dom_string_create((const uint8_t *)buf, strlen(buf),
+				&modifiers);
+		if (exc != DOM_NO_ERR) modifiers = NULL;
+	}
+
+	exc = dom_mouse_multi_wheel_event_init_ns(evt, NULL, type, bubbles,
+			cancelable, NULL, 0, pos->page_x, pos->page_y,
+			pos->client_x, pos->client_y, 0, NULL, modifiers,
+			delta_x, delta_y, 0);
+	if (modifiers != NULL) dom_string_unref(modifiers);
+	if (exc != DOM_NO_ERR) {
+		dom_event_unref(evt);
+		return false;
+	}
+
+	result = fire_dom_event((dom_event *) evt, target);
+	dom_event_unref(evt);
+	return result;
+}
+
 /* Exported interface, see html_internal.h */
 bool fire_dom_keyboard_event(dom_string *type, dom_node *target,
 		bool bubbles, bool cancelable, uint32_t key)
@@ -169,7 +258,33 @@ bool fire_dom_keyboard_event(dom_string *type, dom_node *target,
 		case NS_KEY_TEXT_END:
 			dom_key = dom_string_ref(corestring_dom_End);
 			break;
+		/* Enter, Tab and Backspace had no case here at all, so they
+		 * fell through to a NULL key string: `event.key` read null
+		 * in script and a "submit on Enter" handler was impossible
+		 * to write.  NS_KEY_NL and NS_KEY_CR are both Enter — the
+		 * front ends disagree about which one Return produces. */
+		case NS_KEY_NL:
+		case NS_KEY_CR:
+			dom_key = NETSURF_UI_EVENTS ?
+				dom_string_ref(corestring_dom_Enter) : NULL;
+			break;
+		case NS_KEY_TAB:
+			dom_key = NETSURF_UI_EVENTS ?
+				dom_string_ref(corestring_dom_Tab) : NULL;
+			break;
+		case NS_KEY_DELETE_LEFT:
+			dom_key = NETSURF_UI_EVENTS ?
+				dom_string_ref(corestring_dom_Backspace) : NULL;
+			break;
+		case NS_KEY_DELETE_RIGHT:
+			dom_key = NETSURF_UI_EVENTS ?
+				dom_string_ref(corestring_dom_Delete) : NULL;
+			break;
 		default:
+			/* The remaining special values are the front ends'
+			 * editing commands (NS_KEY_COPY_SELECTION and
+			 * friends).  DOM has no `key` name for those, so
+			 * report none rather than invent one. */
 			dom_key = NULL;
 			break;
 		}
@@ -1853,6 +1968,36 @@ html_scroll_at_point(struct content *c, int x, int y, int scrx, int scry)
 	int box_x = 0, box_y = 0;
 	bool handled_scroll = false;
 
+	/* A cancelable DOM `wheel` first: this is the html content's only
+	 * wheel entry point, so it is where the event belongs, and a
+	 * handler calling preventDefault() reports the wheel as HANDLED so
+	 * nothing scrolls — which is what a canvas game or a zoom widget
+	 * needs.  Gated on a listener existing, so a plain page pays one
+	 * string lookup per wheel notch. */
+	if (NETSURF_UI_EVENTS && (html->jsthread != NULL) &&
+	    (html->layout != NULL) &&
+	    js_event_type_registered(html->jsthread, "wheel")) {
+		struct dom_mouse_event_pos pos;
+		dom_node *node;
+		int sx = 0, sy = 0;
+
+		node = html_dom_node_at_point(html, x, y);
+		if (html->bw != NULL) {
+			browser_window_get_scroll(html->bw, &sx, &sy);
+		}
+		pos.page_x = x;
+		pos.page_y = y;
+		pos.client_x = x - sx;
+		pos.client_y = y - sy;
+
+		if ((node != NULL) &&
+		    (fire_dom_wheel_event(corestring_dom_wheel, node,
+				true, true, &pos, 0, scrx, scry) == false)) {
+			/* preventDefault() — the page owns this wheel */
+			return true;
+		}
+	}
+
 	/* TODO: invert order; visit deepest box first */
 
 	while ((next = box_at_point(&html->unit_len_ctx, box, x, y,
@@ -2667,6 +2812,9 @@ static const content_handler html_content_handler = {
 	.mouse_track = html_mouse_track,
 	.mouse_action = html_mouse_action,
 	.keypress = html_keypress,
+#if NETSURF_UI_EVENTS
+	.keyrelease = html_key_release,
+#endif
 	.redraw = html_redraw,
 	.open = html_open,
 	.close = html_close,

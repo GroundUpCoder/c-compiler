@@ -1,0 +1,33 @@
+/* paint.css — this page's stylesheet, pulled in by
+   <link rel="stylesheet" href="paint.css">. */
+
+/* The canvas is pinned to the DOCUMENT ORIGIN, and that is load-bearing,
+   not decoration: this engine has no getBoundingClientRect and no
+   offsetLeft, so a page has no way to ask where an element ended up.
+   Pinning it at 0,0 makes "page coordinate" and "canvas pixel" the same
+   number, with no magic offset duplicated between here and paint.js. */
+body { font-family: sans-serif; margin: 0; }
+#pad {
+	position: absolute;
+	left: 0;
+	top: 0;
+	border: 0;
+	background: #ffffff;
+}
+/* …and the rest of the page sits clear of it. */
+#below { margin: 170px 1.5em 1.5em 1.5em; }
+
+h1 { font-size: 1.4em; }
+button { font-size: 1em; padding: 0.2em 0.8em; }
+.note { color: #555; font-size: 0.9em; margin-top: 1.2em; }
+
+/* The load check.  #nocss is in the markup and hidden HERE, so seeing it
+   means this file never arrived; #jswatch starts red and paint.js turns it
+   green, so the pill reports both halves of "external resources work"
+   without lying about either. */
+.loadcheck { font-size: 0.9em; margin: 0.8em 0 1.2em 0; }
+#nocss { display: none; }
+#jswatch { background: #c00000; color: #ffffff; padding: 1px 6px; }
+/* id + class, not a bare .ran: #jswatch (1,0,0) out-specifies .ran (0,1,0),
+   so the plain class rule would never win. */
+#jswatch.ran { background: #008000; }

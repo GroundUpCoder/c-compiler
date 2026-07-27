@@ -31,6 +31,14 @@ dom_exception _dom_event_create(dom_event **evt);
 #define dom_event_create(n) _dom_event_create((dom_event **) (n))
 
 dom_exception _dom_event_get_type(dom_event *evt, dom_string **type);
+
+/* Is this event a dom_mouse_event (or a subclass)?  A binding layer that
+ * picks a JS prototype from the event's TYPE NAME needs this: a plain
+ * dom_event dispatched as "click" would otherwise be handed MouseEvent's
+ * getters, which read past the end of the struct. */
+dom_exception _dom_event_is_mouse_event(dom_event *evt, bool *is);
+#define dom_event_is_mouse_event(e, i) _dom_event_is_mouse_event( \
+		(dom_event *) (e), (bool *) (i))
 #define dom_event_get_type(e, t) _dom_event_get_type((dom_event *) (e), \
 		(dom_string **) (t))
 

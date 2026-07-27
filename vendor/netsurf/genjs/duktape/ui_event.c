@@ -43,7 +43,7 @@ struct dom_html_br_element;
 void dukky_ui_event___init(duk_context *ctx, ui_event_private_t *priv, struct dom_ui_event *evt)
 {
 	dukky_event___init(ctx, &priv->parent, (struct dom_event *)evt);
-#line 79 "../netsurf/content/handlers/javascript/duktape/netsurf.bnd"
+#line 82 "../netsurf/content/handlers/javascript/duktape/netsurf.bnd"
 #line 48 "ui_event.c"
 }
 
@@ -147,7 +147,13 @@ static duk_ret_t dukky_ui_event_view_getter(duk_context *ctx)
 		return 0; /* can do? No can do. */
 	}
 
-	return 0;
+#line 15 "UIEvent.bnd"
+
+	/* The only view there is: this thread's Window IS its global
+	 * object (js_newthread's duk_set_global_object). */
+	duk_push_global_object(ctx);
+	return 1;
+#line 157 "ui_event.c"
 }
 
 static duk_ret_t dukky_ui_event_detail_getter(duk_context *ctx)
@@ -162,7 +168,17 @@ static duk_ret_t dukky_ui_event_detail_getter(duk_context *ctx)
 		return 0; /* can do? No can do. */
 	}
 
-	return 0;
+#line 23 "UIEvent.bnd"
+
+	dom_exception exc;
+	int32_t detail;
+
+	exc = dom_ui_event_get_detail(priv->parent.evt, &detail);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_int(ctx, (duk_int_t) detail);
+	return 1;
+#line 182 "ui_event.c"
 }
 
 duk_ret_t dukky_ui_event___proto(duk_context *ctx, void *udata)

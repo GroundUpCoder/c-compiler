@@ -69,6 +69,15 @@ nserror html_mouse_action(struct content *c, struct browser_window *bw,
 
 bool html_keypress(struct content *c, uint32_t key);
 
+/**
+ * Handle a key release in an html content.
+ *
+ * \param c   content of type html
+ * \param key The UCS4 character codepoint
+ * \return true iff the key was handled
+ */
+bool html_key_release(struct content *c, uint32_t key);
+
 
 void html_overflow_scroll_callback(void *client_data,
 		struct scrollbar_msg_data *scrollbar_data);

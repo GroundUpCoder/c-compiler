@@ -51,6 +51,7 @@
 #include "desktop/knockout.h"
 #include "desktop/scrollbar.h"
 #include "desktop/textarea.h"
+#include "javascript/js.h"
 
 #include "html/html.h"
 #include "html/private.h"
@@ -1386,6 +1387,10 @@ form__select_process_selection(html_content *html,
 
 	html__redraw_a_box(html, control->box);
 
+	/* A <select> commits on the click itself, so input and change go
+	 * together here rather than waiting for a blur. */
+	form_gadget_fire_change(control);
+
 	return ret;
 }
 
@@ -1494,6 +1499,7 @@ void form_free_control(struct form_control *control)
 	if (control->last_synced_value != NULL) {
 		free(control->last_synced_value);
 	}
+	free(control->value_at_focus);
 
 	if (control->type == GADGET_SELECT) {
 		form_select_clear_options(control);
@@ -2084,6 +2090,21 @@ form_submit(nsurl *page_url,
 
 	assert(form != NULL);
 
+	/* The cancelable DOM `submit`, at the ONE choke point every trigger
+	 * goes through — the submit button in html/interaction.c AND Enter
+	 * in a text field in html/box_textarea.c.  This is the one place in
+	 * the browser where preventDefault() really does stop it, which is
+	 * what a validate-before-submit handler is written against.
+	 *
+	 * (Per spec a PROGRAMMATIC submit — form.submit() — does not fire
+	 * this.  There is no binding for that yet; when Lane D adds one it
+	 * must bypass this, so keep the distinction in mind.) */
+	if (NETSURF_UI_EVENTS && (form->node != NULL) &&
+	    (fire_generic_dom_event(corestring_dom_submit,
+			(dom_node *)form->node, true, true) == false)) {
+		return NSERROR_OK;
+	}
+
 	/* obtain list of controls from DOM */
 	res = form_dom_to_data(form, submit_button, &success);
 	if (res != NSERROR_OK) {
@@ -2189,6 +2210,86 @@ void form_gadget_update_value(struct form_control *control, char *value)
 
 	/* Finally, sync this with the DOM */
 	form_gadget_sync_with_dom(control);
+
+	/* …and tell script.  `input` fires on every edit; `change` waits
+	 * for the commit (blur), which form_gadget_commit_change does. */
+	form_gadget_fire_input(control);
+}
+
+
+/* Exported API, see html/form_internal.h */
+void form_gadget_fire_input(struct form_control *control)
+{
+	if ((NETSURF_UI_EVENTS == 0) || (control == NULL) ||
+	    (control->node == NULL) || (control->html == NULL) ||
+	    control->building) {
+		return;
+	}
+	if (js_event_type_registered(control->html->jsthread, "input") == false) {
+		return;
+	}
+
+	fire_generic_dom_event(corestring_dom_input,
+			(dom_node *)control->node, true, false);
+}
+
+
+/* Exported API, see html/form_internal.h */
+void form_gadget_commit_change(struct form_control *control)
+{
+	const char *now;
+
+	if ((NETSURF_UI_EVENTS == 0) || (control == NULL) ||
+	    (control->node == NULL) || (control->html == NULL)) {
+		return;
+	}
+
+	now = (control->value != NULL) ? control->value : "";
+
+	/* Only a real edit is a change.  value_at_focus is NULL until the
+	 * control has been focused once, which is also "never edited". */
+	if (control->value_at_focus == NULL) {
+		return;
+	}
+	if (strcmp(control->value_at_focus, now) == 0) {
+		return;
+	}
+
+	free(control->value_at_focus);
+	control->value_at_focus = strdup(now);
+
+	fire_generic_dom_event(corestring_dom_change,
+			(dom_node *)control->node, true, false);
+}
+
+
+/* Exported API, see html/form_internal.h */
+void form_gadget_note_focus(struct form_control *control)
+{
+	if (control == NULL) {
+		return;
+	}
+
+	free(control->value_at_focus);
+	control->value_at_focus =
+		strdup((control->value != NULL) ? control->value : "");
+}
+
+
+/* Exported API, see html/form_internal.h */
+void form_gadget_fire_change(struct form_control *control)
+{
+	if ((control == NULL) || (control->node == NULL) ||
+	    (control->html == NULL)) {
+		return;
+	}
+
+	/* A control whose value changes by a single click (checkbox,
+	 * radio, select) fires input AND change at once — there is no
+	 * "still typing" state to wait out. */
+	form_gadget_fire_input(control);
+	fire_generic_dom_event(corestring_dom_change,
+			(dom_node *)control->node, true, false);
 }
 
 

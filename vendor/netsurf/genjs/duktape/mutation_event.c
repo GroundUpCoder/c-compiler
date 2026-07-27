@@ -43,7 +43,7 @@ struct dom_html_br_element;
 static void dukky_mutation_event___init(duk_context *ctx, mutation_event_private_t *priv, struct dom_mutation_event *evt)
 {
 	dukky_event___init(ctx, &priv->parent, (struct dom_event *)evt);
-#line 78 "../netsurf/content/handlers/javascript/duktape/netsurf.bnd"
+#line 81 "../netsurf/content/handlers/javascript/duktape/netsurf.bnd"
 #line 48 "mutation_event.c"
 }
 

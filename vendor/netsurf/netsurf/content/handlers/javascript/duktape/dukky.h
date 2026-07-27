@@ -29,6 +29,8 @@ duk_ret_t dukky_create_object(duk_context *ctx, const char *name, int args);
 duk_bool_t dukky_push_node_stacked(duk_context *ctx);
 duk_bool_t dukky_push_node(duk_context *ctx, struct dom_node *node);
 void dukky_inject_not_ctr(duk_context *ctx, int idx, const char *name);
+/* Registers BOTH phases; `capture` is IGNORED and survives only because
+ * nsgenbind emits this call with a hardcoded `false`. */
 void dukky_register_event_listener_for(duk_context *ctx,
 				       struct dom_element *ele,
 				       dom_string *name,

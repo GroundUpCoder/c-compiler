@@ -62,6 +62,24 @@ static event_listener_flags event_listener_pop_options(duk_context *ctx)
 	return ret;
 }
 
+/* The sub-listener array for one (target, type) is a list of
+ * [callback, flags] tuples, and these two walk it.
+ *
+ * UPSTREAM BUG, fixed here: both loops indexed the CALLBACK (stack -1)
+ * instead of the listener ARRAY (stack -2), so the walk found nothing on
+ * the first iteration and fell straight out with idx == 0.  Consequences,
+ * both verified live: every addEventListener() for a type already listened
+ * to on that element OVERWROTE the previous one — two handlers on one
+ * button ran as one, and a capture/bubble pair collapsed to whichever was
+ * registered second — and removeEventListener() never found anything to
+ * remove.  The comparison inside the loop was off by the same shift
+ * (candidateflags was compared against the candidate array), so the
+ * "already registered" check never held either.
+ *
+ * The gucOS demo page `events/` is the regression guard: it registers a
+ * capture AND a bubble listener on each of three nested elements and
+ * asserts the exact visiting order.
+ */
 static void event_target_register_listener(duk_context *ctx,
 					   event_listener_flags flags)
 {
@@ -71,12 +89,12 @@ static void event_target_register_listener(duk_context *ctx,
 	 * a tuple of the callback and flags
 	 */
 	duk_uarridx_t idx = 0;
-	while (duk_get_prop_index(ctx, -1, idx)) {
+	while (duk_get_prop_index(ctx, -2, idx)) {
 		/* ... listeners callback candidate */
 		duk_get_prop_index(ctx, -1, 0);
 		duk_get_prop_index(ctx, -2, 1);
 		/* ... listeners callback candidate candidatecallback candidateflags */
-		if (duk_strict_equals(ctx, -1, -3) &&
+		if (duk_strict_equals(ctx, -2, -4) &&
 		    duk_get_int(ctx, -1) == (duk_int_t)flags) {
 			/* already present, nothing to do */
 			duk_pop_n(ctx, 5);
@@ -115,16 +133,20 @@ static void event_target_unregister_listener(duk_context *ctx,
 	 * we remove it and shuffle the rest up.
 	 */
 	duk_uarridx_t idx = 0;
-	while (duk_get_prop_index(ctx, -1, idx)) {
+	while (duk_get_prop_index(ctx, -2, idx)) {
 		/* ... listeners callback candidate */
 		duk_get_prop_index(ctx, -1, 0);
 		duk_get_prop_index(ctx, -2, 1);
 		/* ... listeners callback candidate candidatecallback candidateflags */
-		if (duk_strict_equals(ctx, -1, -3) &&
+		if (duk_strict_equals(ctx, -2, -4) &&
 		    duk_get_int(ctx, -1) == (duk_int_t)flags) {
 			/* present */
-			duk_pop(ctx);
-			/* ... listeners callback candidate candidatecallback */
+			duk_pop_2(ctx);
+			/* ... listeners callback candidate */
+			/* Slot 2 is the tombstone the dispatcher checks, so a
+			 * removal during a dispatch already in flight takes
+			 * effect for that dispatch too. */
+			duk_push_boolean(ctx, true);
 			duk_put_prop_index(ctx, -2, 2);
 			/* ... listeners callback candidate */
 			duk_pop(ctx);
@@ -154,16 +176,16 @@ static void event_target_unregister_listener(duk_context *ctx,
 }
 
 
-#line 158 "event_target.c"
+#line 180 "event_target.c"
 
 void dukky_event_target___init(duk_context *ctx, event_target_private_t *priv)
 {
-#line 135 "EventTarget.bnd"
+#line 157 "EventTarget.bnd"
 
 	priv->is_node = false;
 	priv->capture_registered = false;
 	priv->bubbling_registered = false;
-#line 167 "event_target.c"
+#line 189 "event_target.c"
 }
 
 void dukky_event_target___fini(duk_context *ctx, event_target_private_t *priv)
@@ -239,7 +261,7 @@ static duk_ret_t dukky_event_target_addEventListener(duk_context *ctx)
 		return 0; /* can do? No can do. */
 	}
 
-#line 142 "EventTarget.bnd"
+#line 164 "EventTarget.bnd"
 
 	dom_exception exc;
 	event_listener_flags flags = ELF_NONE;
@@ -266,8 +288,13 @@ static duk_ret_t dukky_event_target_addEventListener(duk_context *ctx)
 	/* type callback type */
 	duk_push_this(ctx);
 	/* type callback type this(=EventTarget) */
-	if (dukky_event_target_push_listeners(ctx, false) && priv->is_node) {
-		/* Take a moment to register a JS callback */
+	if (dukky_event_target_push_listeners(ctx, false)) {
+		/* Take a moment to register a JS callback.  A NON-node
+		 * target is the Window: it registers no libdom listener
+		 * (it is not in the propagation chain) but it must still
+		 * enter the per-type registry, both so js_fire_event can
+		 * find its listeners and so the html content knows the
+		 * type is live. */
 		duk_size_t ev_ty_l;
 		const char *ev_ty = duk_to_lstring(ctx, -3, &ev_ty_l);
 		dom_string *ev_ty_s;
@@ -279,9 +306,11 @@ static duk_ret_t dukky_event_target_addEventListener(duk_context *ctx)
 			return 0;
 		}
 		dukky_register_event_listener_for(
-			ctx, (dom_element *)((node_private_t *)priv)->node,
-			ev_ty_s,
-			!!(flags & ELF_CAPTURE));
+			ctx,
+			priv->is_node ?
+				(dom_element *)((node_private_t *)priv)->node :
+				NULL,
+			ev_ty_s, false);
 		dom_string_unref(ev_ty_s);
 	}
 	/* type callback typelisteners */
@@ -290,7 +319,7 @@ static duk_ret_t dukky_event_target_addEventListener(duk_context *ctx)
 	event_target_register_listener(ctx, flags);
 	/* type */
 	return 0;
-#line 294 "event_target.c"
+#line 323 "event_target.c"
 }
 
 static duk_ret_t dukky_event_target_removeEventListener(duk_context *ctx)
@@ -336,7 +365,7 @@ static duk_ret_t dukky_event_target_removeEventListener(duk_context *ctx)
 		return 0; /* can do? No can do. */
 	}
 
-#line 195 "EventTarget.bnd"
+#line 224 "EventTarget.bnd"
 
 	event_listener_flags flags = ELF_NONE;
 	/* Incoming stack is: type callback [options] */
@@ -373,7 +402,7 @@ static duk_ret_t dukky_event_target_removeEventListener(duk_context *ctx)
 	event_target_unregister_listener(ctx, flags);
 	/* type */
 	return 0;
-#line 377 "event_target.c"
+#line 406 "event_target.c"
 }
 
 static duk_ret_t dukky_event_target_dispatchEvent(duk_context *ctx)
@@ -402,7 +431,7 @@ static duk_ret_t dukky_event_target_dispatchEvent(duk_context *ctx)
 		return 0; /* can do? No can do. */
 	}
 
-#line 236 "EventTarget.bnd"
+#line 265 "EventTarget.bnd"
 
 	dom_exception exc;
 	if (!dukky_instanceof(ctx, 0, PROTO_NAME(EVENT))) return 0;
@@ -445,7 +474,7 @@ static duk_ret_t dukky_event_target_dispatchEvent(duk_context *ctx)
 
 	duk_push_boolean(ctx, success);
 	return 1;
-#line 449 "event_target.c"
+#line 478 "event_target.c"
 }
 
 duk_ret_t dukky_event_target___proto(duk_context *ctx, void *udata)

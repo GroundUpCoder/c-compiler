@@ -46,6 +46,7 @@ void _dom_event_destroy(dom_event *evt)
 /* Initialise function */
 dom_exception _dom_event_initialise(dom_event *evt)
 {
+	evt->is_mouse = false;
 	/* Extract what should be retained. */
 	const struct dom_event_private_vtable *vtable = evt->vtable;
 

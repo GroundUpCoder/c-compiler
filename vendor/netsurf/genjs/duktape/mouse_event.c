@@ -43,7 +43,7 @@ struct dom_html_br_element;
 void dukky_mouse_event___init(duk_context *ctx, mouse_event_private_t *priv, struct dom_mouse_event *evt)
 {
 	dukky_ui_event___init(ctx, &priv->parent, (struct dom_ui_event *)evt);
-#line 84 "../netsurf/content/handlers/javascript/duktape/netsurf.bnd"
+#line 87 "../netsurf/content/handlers/javascript/duktape/netsurf.bnd"
 #line 48 "mouse_event.c"
 }
 
@@ -106,7 +106,27 @@ static duk_ret_t dukky_mouse_event_getModifierState(duk_context *ctx)
 		return 0; /* can do? No can do. */
 	}
 
-	return 0;
+#line 195 "MouseEvent.bnd"
+
+	dom_string *modifier;
+	dom_exception exc;
+	duk_size_t slen;
+	const char *s;
+	bool state;
+
+	s = duk_safe_to_lstring(ctx, 0, &slen);
+	exc = dom_string_create((const uint8_t *)s, slen, &modifier);
+	duk_pop(ctx);
+	if (exc != DOM_NO_ERR) return 0;
+
+	exc = dom_mouse_event_get_modifier_state(priv->parent.parent.evt,
+			modifier, &state);
+	dom_string_unref(modifier);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_boolean(ctx, (duk_bool_t) state);
+	return 1;
+#line 130 "mouse_event.c"
 }
 
 static duk_ret_t dukky_mouse_event_initMouseEvent(duk_context *ctx)
@@ -257,7 +277,18 @@ static duk_ret_t dukky_mouse_event_screenX_getter(duk_context *ctx)
 		return 0; /* can do? No can do. */
 	}
 
-	return 0;
+#line 31 "MouseEvent.bnd"
+
+	dom_exception exc;
+	int32_t x;
+
+	/* client, not screen — see the coordinate contract above */
+	exc = dom_mouse_event_get_client_x(priv->parent.parent.evt, &x);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_int(ctx, (duk_int_t) x);
+	return 1;
+#line 292 "mouse_event.c"
 }
 
 static duk_ret_t dukky_mouse_event_screenY_getter(duk_context *ctx)
@@ -272,7 +303,17 @@ static duk_ret_t dukky_mouse_event_screenY_getter(duk_context *ctx)
 		return 0; /* can do? No can do. */
 	}
 
-	return 0;
+#line 44 "MouseEvent.bnd"
+
+	dom_exception exc;
+	int32_t y;
+
+	exc = dom_mouse_event_get_client_y(priv->parent.parent.evt, &y);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_int(ctx, (duk_int_t) y);
+	return 1;
+#line 317 "mouse_event.c"
 }
 
 static duk_ret_t dukky_mouse_event_clientX_getter(duk_context *ctx)
@@ -287,7 +328,17 @@ static duk_ret_t dukky_mouse_event_clientX_getter(duk_context *ctx)
 		return 0; /* can do? No can do. */
 	}
 
-	return 0;
+#line 56 "MouseEvent.bnd"
+
+	dom_exception exc;
+	int32_t x;
+
+	exc = dom_mouse_event_get_client_x(priv->parent.parent.evt, &x);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_int(ctx, (duk_int_t) x);
+	return 1;
+#line 342 "mouse_event.c"
 }
 
 static duk_ret_t dukky_mouse_event_clientY_getter(duk_context *ctx)
@@ -302,7 +353,17 @@ static duk_ret_t dukky_mouse_event_clientY_getter(duk_context *ctx)
 		return 0; /* can do? No can do. */
 	}
 
-	return 0;
+#line 68 "MouseEvent.bnd"
+
+	dom_exception exc;
+	int32_t y;
+
+	exc = dom_mouse_event_get_client_y(priv->parent.parent.evt, &y);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_int(ctx, (duk_int_t) y);
+	return 1;
+#line 367 "mouse_event.c"
 }
 
 static duk_ret_t dukky_mouse_event_ctrlKey_getter(duk_context *ctx)
@@ -317,7 +378,17 @@ static duk_ret_t dukky_mouse_event_ctrlKey_getter(duk_context *ctx)
 		return 0; /* can do? No can do. */
 	}
 
-	return 0;
+#line 105 "MouseEvent.bnd"
+
+	dom_exception exc;
+	bool key;
+
+	exc = dom_mouse_event_get_ctrl_key(priv->parent.parent.evt, &key);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_boolean(ctx, (duk_bool_t) key);
+	return 1;
+#line 392 "mouse_event.c"
 }
 
 static duk_ret_t dukky_mouse_event_shiftKey_getter(duk_context *ctx)
@@ -332,7 +403,17 @@ static duk_ret_t dukky_mouse_event_shiftKey_getter(duk_context *ctx)
 		return 0; /* can do? No can do. */
 	}
 
-	return 0;
+#line 117 "MouseEvent.bnd"
+
+	dom_exception exc;
+	bool key;
+
+	exc = dom_mouse_event_get_shift_key(priv->parent.parent.evt, &key);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_boolean(ctx, (duk_bool_t) key);
+	return 1;
+#line 417 "mouse_event.c"
 }
 
 static duk_ret_t dukky_mouse_event_altKey_getter(duk_context *ctx)
@@ -347,7 +428,17 @@ static duk_ret_t dukky_mouse_event_altKey_getter(duk_context *ctx)
 		return 0; /* can do? No can do. */
 	}
 
-	return 0;
+#line 129 "MouseEvent.bnd"
+
+	dom_exception exc;
+	bool key;
+
+	exc = dom_mouse_event_get_alt_key(priv->parent.parent.evt, &key);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_boolean(ctx, (duk_bool_t) key);
+	return 1;
+#line 442 "mouse_event.c"
 }
 
 static duk_ret_t dukky_mouse_event_metaKey_getter(duk_context *ctx)
@@ -362,7 +453,17 @@ static duk_ret_t dukky_mouse_event_metaKey_getter(duk_context *ctx)
 		return 0; /* can do? No can do. */
 	}
 
-	return 0;
+#line 141 "MouseEvent.bnd"
+
+	dom_exception exc;
+	bool key;
+
+	exc = dom_mouse_event_get_meta_key(priv->parent.parent.evt, &key);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_boolean(ctx, (duk_bool_t) key);
+	return 1;
+#line 467 "mouse_event.c"
 }
 
 static duk_ret_t dukky_mouse_event_button_getter(duk_context *ctx)
@@ -377,7 +478,17 @@ static duk_ret_t dukky_mouse_event_button_getter(duk_context *ctx)
 		return 0; /* can do? No can do. */
 	}
 
-	return 0;
+#line 153 "MouseEvent.bnd"
+
+	dom_exception exc;
+	unsigned short button;
+
+	exc = dom_mouse_event_get_button(priv->parent.parent.evt, &button);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_uint(ctx, (duk_uint_t) button);
+	return 1;
+#line 492 "mouse_event.c"
 }
 
 static duk_ret_t dukky_mouse_event_relatedTarget_getter(duk_context *ctx)
@@ -392,7 +503,23 @@ static duk_ret_t dukky_mouse_event_relatedTarget_getter(duk_context *ctx)
 		return 0; /* can do? No can do. */
 	}
 
-	return 0;
+#line 177 "MouseEvent.bnd"
+
+	dom_exception exc;
+	dom_event_target *et;
+
+	exc = dom_mouse_event_get_related_target(priv->parent.parent.evt, &et);
+	if (exc != DOM_NO_ERR) return 0;
+
+	if (et == NULL) {
+		duk_push_null(ctx);
+		return 1;
+	}
+
+	dukky_push_node(ctx, (dom_node *)et);
+	dom_node_unref((dom_node *)et);
+	return 1;
+#line 523 "mouse_event.c"
 }
 
 static duk_ret_t dukky_mouse_event_buttons_getter(duk_context *ctx)
@@ -407,7 +534,68 @@ static duk_ret_t dukky_mouse_event_buttons_getter(duk_context *ctx)
 		return 0; /* can do? No can do. */
 	}
 
-	return 0;
+#line 165 "MouseEvent.bnd"
+
+	dom_exception exc;
+	unsigned short buttons;
+
+	exc = dom_mouse_event_get_buttons(priv->parent.parent.evt, &buttons);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_uint(ctx, (duk_uint_t) buttons);
+	return 1;
+#line 548 "mouse_event.c"
+}
+
+static duk_ret_t dukky_mouse_event_pageX_getter(duk_context *ctx)
+{
+	/* Get private data for method */
+	mouse_event_private_t *priv = NULL;
+	duk_push_this(ctx);
+	duk_get_prop_string(ctx, -1, dukky_magic_string_private);
+	priv = duk_get_pointer(ctx, -1);
+	duk_pop_2(ctx);
+	if (priv == NULL) {
+		return 0; /* can do? No can do. */
+	}
+
+#line 80 "MouseEvent.bnd"
+
+	dom_exception exc;
+	int32_t x;
+
+	/* the document-relative coordinate lives in libdom's screen slot */
+	exc = dom_mouse_event_get_screen_x(priv->parent.parent.evt, &x);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_int(ctx, (duk_int_t) x);
+	return 1;
+#line 574 "mouse_event.c"
+}
+
+static duk_ret_t dukky_mouse_event_pageY_getter(duk_context *ctx)
+{
+	/* Get private data for method */
+	mouse_event_private_t *priv = NULL;
+	duk_push_this(ctx);
+	duk_get_prop_string(ctx, -1, dukky_magic_string_private);
+	priv = duk_get_pointer(ctx, -1);
+	duk_pop_2(ctx);
+	if (priv == NULL) {
+		return 0; /* can do? No can do. */
+	}
+
+#line 93 "MouseEvent.bnd"
+
+	dom_exception exc;
+	int32_t y;
+
+	exc = dom_mouse_event_get_screen_y(priv->parent.parent.evt, &y);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_int(ctx, (duk_int_t) y);
+	return 1;
+#line 599 "mouse_event.c"
 }
 
 duk_ret_t dukky_mouse_event___proto(duk_context *ctx, void *udata)
@@ -546,6 +734,24 @@ duk_ret_t dukky_mouse_event___proto(duk_context *ctx, void *udata)
 	duk_dup(ctx, 0);
 	duk_push_string(ctx, "buttons");
 	duk_push_c_function(ctx, dukky_mouse_event_buttons_getter, 0);
+	duk_def_prop(ctx, -3, DUK_DEFPROP_HAVE_GETTER |
+		DUK_DEFPROP_HAVE_ENUMERABLE | DUK_DEFPROP_ENUMERABLE |
+		DUK_DEFPROP_HAVE_CONFIGURABLE);
+	duk_pop(ctx);
+
+	/* Add readonly property */
+	duk_dup(ctx, 0);
+	duk_push_string(ctx, "pageX");
+	duk_push_c_function(ctx, dukky_mouse_event_pageX_getter, 0);
+	duk_def_prop(ctx, -3, DUK_DEFPROP_HAVE_GETTER |
+		DUK_DEFPROP_HAVE_ENUMERABLE | DUK_DEFPROP_ENUMERABLE |
+		DUK_DEFPROP_HAVE_CONFIGURABLE);
+	duk_pop(ctx);
+
+	/* Add readonly property */
+	duk_dup(ctx, 0);
+	duk_push_string(ctx, "pageY");
+	duk_push_c_function(ctx, dukky_mouse_event_pageY_getter, 0);
 	duk_def_prop(ctx, -3, DUK_DEFPROP_HAVE_GETTER |
 		DUK_DEFPROP_HAVE_ENUMERABLE | DUK_DEFPROP_ENUMERABLE |
 		DUK_DEFPROP_HAVE_CONFIGURABLE);

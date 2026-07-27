@@ -1,9 +1,11 @@
 # NetSurf v2 — JavaScript support (duktape) — design & scoping
 
-Status: **LANE A LANDED (2026-07-25); LANE B LANDED (2026-07-26)**; lanes
-C–E open.  Everything below is evidence from a live probe, with each lane's
-findings folded in (§8 = where the probe's expectations turned out wrong,
-§9 = the same for Lane B).
+Status: **LANE A LANDED (2026-07-25); LANE B LANDED (2026-07-26); LANE C
+LANDED (2026-07-27, todos/0289)**; lanes D–E open (E's scaffold shipped).
+Everything below is evidence from a live probe, with each lane's findings
+folded in (§8 = where the probe's expectations turned out wrong, §9 = the
+same for Lane B, **§10 = the same for Lane C, and it retires several of the
+"only click/keydown/load" statements in the body**).
 
 **§5's "THE KILLER GAP — DOM mutation is invisible" is no longer true**:
 Lane B's re-conversion bridge landed.  The paragraphs describing it are kept
@@ -363,6 +365,11 @@ free list).  Also fires the newly-inserted-subtree `on*` registration
 asserting a timer-driven textContent change repaints (pixel probe).
 
 **Lane C — UI event coverage (M).**
+**DONE 2026-07-27** (`todos/0289`) — the design below landed as written;
+§10 records what this lane found the plan had wrong and what it left open.
+Demos 6 (`paint/`) and a new `events/` page, `smoke-js.mjs` legs 9–11 (leg
+11 is the A/B baseline, built with `-DNETSURF_NO_UI_EVENTS`) and
+`tests/kernel/test_netsurf_events_e2e.js` are the gate.
 `interaction.c` fires the missing DOM events through the existing
 `fire_generic_dom_event`/`fire_dom_keyboard_event` plumbing (`html.c:111`,
 `:133`): mousedown/mouseup/mousemove (with coords — needs a
@@ -567,3 +574,87 @@ building the real lane on top of it.
    would slot in.  Caret position is preserved across a re-box but the
    textarea widget itself is still rebuilt, so an in-progress *selection*
    inside a field is not.
+
+## 10. What Lane C found that this document had wrong
+
+Recorded so D and E plan against reality.  §5's "only `click`/`keydown`/
+window `load` are ever fired at JS" and §8.5's "click events carry no
+coordinates" are **no longer true**; read the body past this section.
+
+1. **The capture bug was not the capture bug.**  §8.3 diagnosed it as "the
+   per-node registration is keyed by event NAME only", which is real but is
+   the SMALLER half.  The actual defect is in `EventTarget.bnd`'s two
+   listener-list walks: both indexed the **callback** (duktape stack `-1`)
+   instead of the listener **array** (`-2`), so the walk fell out on its
+   first iteration with `idx == 0` and **every `addEventListener` for a
+   type already listened to on that element overwrote the previous one** —
+   capture or not.  Two plain handlers on one button ran as ONE.  The
+   comparison inside the loop was off by the same shift, so the
+   "already registered" check never held and `removeEventListener` never
+   found anything to remove either.  Verified live in both directions
+   (register capture-then-bubble and bubble-then-capture: whichever was
+   registered SECOND was the only one that fired).  Upstreamable.
+2. **`window.addEventListener` registered callbacks nothing could reach.**
+   The Window is not a node, so it never appears in libdom's propagation
+   chain, and `js_fire_event` — the only other path — was hard-coded to
+   the window's `on*` attribute handler for `load`.  A JS `load` listener
+   was silently dead.  It is a leg of the gate now.
+3. **A drawing canvas needed a browser contract, not just coordinates.**
+   `paint.html` was blocked on more than `fire_dom_mouse_event`: netsurf
+   turns press-and-move over a non-text box into a **page-scroll drag**
+   handled entirely at the `browser_window` level, so the content never
+   sees the motion.  `preventDefault()` on the `mousedown` now suppresses
+   that (and the text-selection drag), which is exactly what every real
+   browser does and what makes the demo possible.  Without it the demo
+   would have "passed" by scrolling.
+4. **netsurf has no button-release event, and the obvious inference is
+   wrong.**  A release that was not a drag arrives as
+   `BROWSER_MOUSE_CLICK_n`; one that ENDED a drag arrives as a plain track
+   with nothing held.  Keying `mouseup` off "this content has a live drag"
+   fails for exactly the case that matters — a page that took the gesture
+   with `preventDefault()` never started one.  The content remembers that
+   a press happened instead.
+5. **A JS prototype must not be picked from an event's type NAME.**
+   `dukky_event_proto` maps `"click"` to the MouseEvent prototype, whose
+   getters read a `dom_mouse_event`.  Dispatch a plain `dom_event` with
+   that type — which `fire_generic_dom_event` does, and which the
+   `-DNETSURF_NO_UI_EVENTS` build does deliberately — and the getters read
+   past the end of the struct: `event.pageX` returned `2386872` where
+   `undefined` was the truth.  libdom gained a class tag
+   (`_dom_event_is_mouse_event`) and the mapping is gated on it.
+6. **The monkey harness lost every command after the first of a burst.**
+   Its poll loop `select()`s on fd 0 but read with `fgets`, so one call
+   pulled the whole burst into the stdio buffer and left the fd empty;
+   `select()` then never reported readable again.  Invisible for eight
+   lanes because every driver sent ONE command and waited for a marker —
+   and unavoidable for a driver expressing a gesture, whose intermediate
+   moves have no marker of their own.  Root-caused rather than paced
+   around (the estate's test-sync rule); `WINDOW MOUSE`/`KEY`/`WHEEL` are
+   new commands on top.
+7. **`clientX` is not a free rename of the coordinate the core has.**  The
+   core is handed DOCUMENT-relative coordinates and the viewport scroll
+   offset belongs to the FRONT END, so `browser_window_get_scroll` had to
+   exist before `clientX`/`clientY` could be spec-correct.  `screenX`/
+   `screenY` report the viewport-relative value and say so in
+   `MouseEvent.bnd`: the core is never told where its window sits on the
+   desktop, and the alternative was `undefined`.  `pageX`/`pageY` are
+   added to the vendored 2015 `uievents.idl` because with no
+   `getBoundingClientRect` and no `offsetLeft`, a page that wants to map a
+   pointer onto an element has nothing else to work with.
+8. **A form control fired `input` at LOAD.**  Seeding the widget with the
+   markup's own value goes through the same `TEXTAREA_MSG_TEXT_MODIFIED`
+   path as a keystroke.  Visible on a page that renders its own input.
+   Guarded (`control->building`).
+9. **Still open, deliberately.**  `mouseover`/`mouseout`/`mouseenter`/
+   `mouseleave` and `focusin`/`focusout` are **todos/0317**: unlike
+   everything this lane shipped they need the node the pointer was over
+   LAST time, held across calls — and §9.2 is the record of what happens
+   to a box-tree pointer that is not re-bound across a live re-conversion,
+   so they want that treatment rather than a bare `dom_node *last_over`.
+   A PROGRAMMATIC `form.submit()` would wrongly fire the cancelable
+   `submit` (there is no binding for it yet; noted at the call site and in
+   the register).  And a **class-selector restyle on an existing element
+   does not repaint** — a Lane B residual this lane tripped over and
+   measured; it is **todos/0316**, P0, and it is why
+   `test_netsurf_events_e2e.js` probes through canvases rather than
+   through styled `<div>`s.

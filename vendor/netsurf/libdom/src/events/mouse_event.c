@@ -42,9 +42,20 @@ void _dom_mouse_event_destroy(struct dom_mouse_event *evt)
 /* Initialise function */
 dom_exception _dom_mouse_event_initialise(struct dom_mouse_event *evt)
 {
-	evt->modifier_state = 0;
+	dom_exception err;
 
-	return _dom_ui_event_initialise((dom_ui_event *) evt);
+	evt->modifier_state = 0;
+	evt->buttons = 0;
+
+	err = _dom_ui_event_initialise((dom_ui_event *) evt);
+
+	/* Claim the class for _dom_event_is_mouse_event, AFTER the base
+	 * class initialiser — which clears the flag — has run.  Every
+	 * mouse-derived class (wheel, multi-wheel, drag) comes through
+	 * here. */
+	((struct dom_event *) evt)->is_mouse = true;
+
+	return err;
 }
 
 /* The virtual destroy function */
@@ -187,6 +198,54 @@ dom_exception _dom_mouse_event_get_button(dom_mouse_event *evt,
 		unsigned short *button)
 {
 	*button = evt->button;
+
+	return DOM_NO_ERR;
+}
+
+/**
+ * Is this event really a mouse event?
+ *
+ * \param evt  The Event object
+ * \param is   Set to whether evt is a dom_mouse_event or a subclass
+ * \return DOM_NO_ERR.
+ */
+dom_exception _dom_event_is_mouse_event(dom_event *evt, bool *is)
+{
+	*is = evt->is_mouse;
+
+	return DOM_NO_ERR;
+}
+
+/**
+ * Get the bitmask of buttons currently held
+ *
+ * \param evt      The Event object
+ * \param buttons  The bitmask (1 = primary, 2 = secondary, 4 = auxiliary)
+ * \return DOM_NO_ERR.
+ */
+dom_exception _dom_mouse_event_get_buttons(dom_mouse_event *evt,
+		unsigned short *buttons)
+{
+	*buttons = evt->buttons;
+
+	return DOM_NO_ERR;
+}
+
+/**
+ * Set the bitmask of buttons currently held
+ *
+ * `buttons` post-dates the DOM L3 init this class was written against, so
+ * it has no slot in _dom_mouse_event_init; the dispatcher sets it after
+ * initialising the event.
+ *
+ * \param evt      The Event object
+ * \param buttons  The bitmask
+ * \return DOM_NO_ERR.
+ */
+dom_exception _dom_mouse_event_set_buttons(dom_mouse_event *evt,
+		unsigned short buttons)
+{
+	evt->buttons = buttons;
 
 	return DOM_NO_ERR;
 }

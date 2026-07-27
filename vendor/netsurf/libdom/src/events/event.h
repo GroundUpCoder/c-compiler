@@ -43,6 +43,14 @@ struct dom_event {
 
 	bool custom;	/**< Whether this is a custom event */
 
+	bool is_mouse;	/**< Whether this really is a dom_mouse_event (or a
+			 * subclass of one).  An embedder that dispatches a
+			 * PLAIN dom_event whose type happens to be "click"
+			 * would otherwise be indistinguishable from a real
+			 * MouseEvent to a binding layer, which then reads
+			 * coordinates off memory past the end of the
+			 * struct.  Set by _dom_mouse_event_initialise. */
+
 	uint32_t refcnt;	/**< The reference count of this object */
 
 	const struct dom_event_private_vtable *vtable;

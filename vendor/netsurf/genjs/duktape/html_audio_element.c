@@ -43,7 +43,7 @@ struct dom_html_br_element;
 static void dukky_html_audio_element___init(duk_context *ctx, html_audio_element_private_t *priv, struct dom_html_element *html_audio_element)
 {
 	dukky_html_media_element___init(ctx, &priv->parent, html_audio_element);
-#line 185 "../netsurf/content/handlers/javascript/duktape/netsurf.bnd"
+#line 188 "../netsurf/content/handlers/javascript/duktape/netsurf.bnd"
 #line 48 "html_audio_element.c"
 }
 

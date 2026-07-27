@@ -1,5 +1,108 @@
---- a/src/events/event_target.c
-+++ b/src/events/event_target.c
+diff -urN a/include/dom/events/event.h b/include/dom/events/event.h
+--- a/include/dom/events/event.h	2026-07-27 11:21:07
++++ b/include/dom/events/event.h	2026-07-27 12:22:28
+@@ -31,6 +31,14 @@
+ #define dom_event_create(n) _dom_event_create((dom_event **) (n))
+ 
+ dom_exception _dom_event_get_type(dom_event *evt, dom_string **type);
++
++/* Is this event a dom_mouse_event (or a subclass)?  A binding layer that
++ * picks a JS prototype from the event's TYPE NAME needs this: a plain
++ * dom_event dispatched as "click" would otherwise be handed MouseEvent's
++ * getters, which read past the end of the struct. */
++dom_exception _dom_event_is_mouse_event(dom_event *evt, bool *is);
++#define dom_event_is_mouse_event(e, i) _dom_event_is_mouse_event( \
++		(dom_event *) (e), (bool *) (i))
+ #define dom_event_get_type(e, t) _dom_event_get_type((dom_event *) (e), \
+ 		(dom_string **) (t))
+ 
+diff -urN a/include/dom/events/mouse_event.h b/include/dom/events/mouse_event.h
+--- a/include/dom/events/mouse_event.h	2026-07-27 11:21:07
++++ b/include/dom/events/mouse_event.h	2026-07-27 11:33:37
+@@ -17,6 +17,13 @@
+ 
+ typedef struct dom_mouse_event dom_mouse_event;
+ 
++/* Constructor.  Public for the same reason _dom_keyboard_event_create is:
++ * an embedder that synthesises UI events (NetSurf's html/interaction.c)
++ * needs to make one without reaching into libdom's private headers. */
++dom_exception _dom_mouse_event_create(dom_mouse_event **evt);
++#define dom_mouse_event_create(n) \
++		_dom_mouse_event_create((dom_mouse_event **) (n))
++
+ dom_exception _dom_mouse_event_get_screen_x(dom_mouse_event *evt,
+ 		int32_t *x);
+ #define dom_mouse_event_get_screen_x(e, x) _dom_mouse_event_get_screen_x(\
+@@ -61,6 +68,18 @@
+ 		unsigned short *button);
+ #define dom_mouse_event_get_button(e, b) _dom_mouse_event_get_button(\
+ 		(dom_mouse_event *) (e), (unsigned short *) (b))
++
++/* `buttons` (the bitmask of buttons currently held) post-dates the DOM L3
++ * init this class implements, so it is set separately after init. */
++dom_exception _dom_mouse_event_get_buttons(dom_mouse_event *evt,
++		unsigned short *buttons);
++#define dom_mouse_event_get_buttons(e, b) _dom_mouse_event_get_buttons(\
++		(dom_mouse_event *) (e), (unsigned short *) (b))
++
++dom_exception _dom_mouse_event_set_buttons(dom_mouse_event *evt,
++		unsigned short buttons);
++#define dom_mouse_event_set_buttons(e, b) _dom_mouse_event_set_buttons(\
++		(dom_mouse_event *) (e), (unsigned short) (b))
+ 
+ dom_exception _dom_mouse_event_get_related_target(dom_mouse_event *evt,
+ 		dom_event_target **et);
+diff -urN a/include/dom/events/mouse_multi_wheel_event.h b/include/dom/events/mouse_multi_wheel_event.h
+--- a/include/dom/events/mouse_multi_wheel_event.h	2026-07-27 11:21:07
++++ b/include/dom/events/mouse_multi_wheel_event.h	2026-07-27 11:33:37
+@@ -17,6 +17,15 @@
+ 
+ typedef struct dom_mouse_multi_wheel_event dom_mouse_multi_wheel_event;
+ 
++/* Constructor.  Public for the same reason _dom_keyboard_event_create is:
++ * an embedder that synthesises UI events (NetSurf's html/interaction.c)
++ * needs to make one without reaching into libdom's private headers. */
++dom_exception _dom_mouse_multi_wheel_event_create(
++		dom_mouse_multi_wheel_event **evt);
++#define dom_mouse_multi_wheel_event_create(n) \
++		_dom_mouse_multi_wheel_event_create( \
++		(dom_mouse_multi_wheel_event **) (n))
++
+ dom_exception _dom_mouse_multi_wheel_event_get_wheel_delta_x(
+ 		dom_mouse_multi_wheel_event *evt, int32_t *x);
+ #define dom_mouse_multi_wheel_event_get_wheel_delta_x(e, x) \
+diff -urN a/src/events/event.c b/src/events/event.c
+--- a/src/events/event.c	2026-07-27 11:21:07
++++ b/src/events/event.c	2026-07-27 12:22:28
+@@ -46,6 +46,7 @@
+ /* Initialise function */
+ dom_exception _dom_event_initialise(dom_event *evt)
+ {
++	evt->is_mouse = false;
+ 	/* Extract what should be retained. */
+ 	const struct dom_event_private_vtable *vtable = evt->vtable;
+ 
+diff -urN a/src/events/event.h b/src/events/event.h
+--- a/src/events/event.h	2026-07-27 11:21:07
++++ b/src/events/event.h	2026-07-27 12:22:28
+@@ -43,6 +43,14 @@
+ 
+ 	bool custom;	/**< Whether this is a custom event */
+ 
++	bool is_mouse;	/**< Whether this really is a dom_mouse_event (or a
++			 * subclass of one).  An embedder that dispatches a
++			 * PLAIN dom_event whose type happens to be "click"
++			 * would otherwise be indistinguishable from a real
++			 * MouseEvent to a binding layer, which then reads
++			 * coordinates off memory past the end of the
++			 * struct.  Set by _dom_mouse_event_initialise. */
++
+ 	uint32_t refcnt;	/**< The reference count of this object */
+ 
+ 	const struct dom_event_private_vtable *vtable;
+diff -urN a/src/events/event_target.c b/src/events/event_target.c
+--- a/src/events/event_target.c	2026-07-27 11:21:07
++++ b/src/events/event_target.c	2026-07-27 11:12:32
 @@ -220,18 +220,30 @@
  {
  	if (eti->listeners != NULL) {
@@ -7,7 +110,7 @@
 +		bool at_target;
  
  		evt->current = et;
-+
+ 
 +		/* _dom_node_dispatch_event walks the target ITSELF as part of
 +		 * both the capture chain and the bubble chain, so the target's
 +		 * own listeners must fire in the AT_TARGET phase only.  Without
@@ -18,7 +121,7 @@
 +		 * invoked in the target phase, once each, whatever their
 +		 * capture flag. */
 +		at_target = (evt->target == evt->current);
- 
++
  		do {
  			if (dom_string_isequal(le->type, evt->type)) {
  				assert(le->listener->handler != NULL);
@@ -34,3 +137,99 @@
  						phase == DOM_AT_TARGET)) {
  					le->listener->handler(evt, 
  							le->listener->pw);
+diff -urN a/src/events/mouse_event.c b/src/events/mouse_event.c
+--- a/src/events/mouse_event.c	2026-07-27 11:21:07
++++ b/src/events/mouse_event.c	2026-07-27 12:26:57
+@@ -42,9 +42,20 @@
+ /* Initialise function */
+ dom_exception _dom_mouse_event_initialise(struct dom_mouse_event *evt)
+ {
++	dom_exception err;
++
+ 	evt->modifier_state = 0;
++	evt->buttons = 0;
+ 
+-	return _dom_ui_event_initialise((dom_ui_event *) evt);
++	err = _dom_ui_event_initialise((dom_ui_event *) evt);
++
++	/* Claim the class for _dom_event_is_mouse_event, AFTER the base
++	 * class initialiser — which clears the flag — has run.  Every
++	 * mouse-derived class (wheel, multi-wheel, drag) comes through
++	 * here. */
++	((struct dom_event *) evt)->is_mouse = true;
++
++	return err;
+ }
+ 
+ /* The virtual destroy function */
+@@ -187,6 +198,54 @@
+ 		unsigned short *button)
+ {
+ 	*button = evt->button;
++
++	return DOM_NO_ERR;
++}
++
++/**
++ * Is this event really a mouse event?
++ *
++ * \param evt  The Event object
++ * \param is   Set to whether evt is a dom_mouse_event or a subclass
++ * \return DOM_NO_ERR.
++ */
++dom_exception _dom_event_is_mouse_event(dom_event *evt, bool *is)
++{
++	*is = evt->is_mouse;
++
++	return DOM_NO_ERR;
++}
++
++/**
++ * Get the bitmask of buttons currently held
++ *
++ * \param evt      The Event object
++ * \param buttons  The bitmask (1 = primary, 2 = secondary, 4 = auxiliary)
++ * \return DOM_NO_ERR.
++ */
++dom_exception _dom_mouse_event_get_buttons(dom_mouse_event *evt,
++		unsigned short *buttons)
++{
++	*buttons = evt->buttons;
++
++	return DOM_NO_ERR;
++}
++
++/**
++ * Set the bitmask of buttons currently held
++ *
++ * `buttons` post-dates the DOM L3 init this class was written against, so
++ * it has no slot in _dom_mouse_event_init; the dispatcher sets it after
++ * initialising the event.
++ *
++ * \param evt      The Event object
++ * \param buttons  The bitmask
++ * \return DOM_NO_ERR.
++ */
++dom_exception _dom_mouse_event_set_buttons(dom_mouse_event *evt,
++		unsigned short buttons)
++{
++	evt->buttons = buttons;
+ 
+ 	return DOM_NO_ERR;
+ }
+diff -urN a/src/events/mouse_event.h b/src/events/mouse_event.h
+--- a/src/events/mouse_event.h	2026-07-27 11:21:07
++++ b/src/events/mouse_event.h	2026-07-27 11:33:37
+@@ -26,10 +26,11 @@
+ 	uint32_t modifier_state;	/**< The modifier keys state */
+ 
+ 	unsigned short button;	/**< Which button is clicked */
++	unsigned short buttons;	/**< Bitmask of buttons currently held */
+ 	dom_event_target *related_target;	/**< The related target */
+ };
+ 
+-/* Constructor */
++/* Constructor: declared in the public header too, see mouse_event.h */
+ dom_exception _dom_mouse_event_create(struct dom_mouse_event **evt);
+ 
+ /* Destructor */

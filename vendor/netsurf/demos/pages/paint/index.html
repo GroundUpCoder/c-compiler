@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<!-- Demo 6 of the gucOS NetSurf JavaScript ladder (todos/NETSURF-JS.md §6).
+     WITHHELD until Lane C (todos/0289): it needs mousedown/mousemove/mouseup
+     to exist at all, and it needs them to carry COORDINATES.  Before Lane C
+     a click was dispatched as a plain Event, so `e.pageX` read `undefined`
+     and "draw where the pointer went" was not merely awkward, it was
+     impossible.
+
+     The canvas is pinned to the document origin (see paint.css), so a page
+     coordinate IS a canvas pixel — this engine has no
+     getBoundingClientRect and no offsetLeft to ask with instead.
+
+     Markup only: the look is in paint.css and the behaviour in paint.js. -->
+<html>
+<head>
+<title>Paint</title>
+<link rel="stylesheet" href="paint.css">
+</head>
+<body>
+<canvas id="pad" width="240" height="160"></canvas>
+
+<div id="below">
+<h1>Paint</h1>
+
+<p class="loadcheck"><span id="nocss">stylesheet did not load &mdash; </span><span id="jswatch">script did not run</span></p>
+
+<p>
+<button id="swatch0">Ink</button>
+<button id="swatch1">Sky</button>
+<button id="swatch2">Moss</button>
+<button id="erase">Clear</button>
+<input id="readout" type="text" size="24" value="ready" readonly>
+</p>
+
+<script src="paint.js"></script>
+
+<p class="note">Press inside the pad and drag: every
+<code>mousedown</code>/<code>mousemove</code>/<code>mouseup</code> carries
+<code>pageX</code>/<code>pageY</code>, and the brush is rasterised into an
+<code>ImageData</code> buffer and handed to <code>putImageData</code>
+(canvas 2D still has no drawing primitives here &mdash; that is Lane D).
+The readout shows the last coordinate the DOM actually delivered.</p>
+</div>
+</body>
+</html>

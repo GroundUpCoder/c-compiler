@@ -27,6 +27,7 @@
 #include <dom/bindings/hubbub/parser.h>
 
 #include "netsurf/types.h"
+#include "netsurf/uievents.h"
 #include "content/content_protected.h"
 #include "content/handlers/css/utils.h"
 
@@ -207,6 +208,25 @@ typedef struct html_content {
 	/** Content of type CONTENT_HTML containing this, or NULL if not an
 	 * object within a page. */
 	struct html_content *page;
+
+	/** The last DOM `mousedown` had preventDefault() called on it, so
+	 * the native drag it would otherwise have started (page scroll,
+	 * text selection) must not happen.  This is the standard browser
+	 * contract, and it is what makes a drag-to-draw canvas possible:
+	 * without it netsurf turns any press-and-move over a non-text box
+	 * into a page-scroll drag, which swallows every later motion
+	 * before the content ever sees it. */
+	bool mouse_default_prevented;
+
+	/** A button is down as far as the DOM is concerned.
+	 *
+	 * netsurf's model has no button-release event: a release that was
+	 * not a drag arrives as BROWSER_MOUSE_CLICK_n, and one that ENDED a
+	 * drag arrives as a plain track with nothing held.  Remembering that
+	 * a press happened is what lets both be recognised as the `mouseup`
+	 * they are — without it, the release that ends a drag is
+	 * indistinguishable from an ordinary hover. */
+	bool mouse_pressed;
 
 	/** Current drag type */
 	html_drag_type drag_type;
@@ -393,6 +413,76 @@ nserror html_css_fetcher_add_item(dom_string *data, struct nsurl *base_url,
  */
 bool fire_generic_dom_event(dom_string *type, dom_node *target,
 		    bool bubbles, bool cancelable);
+
+/**
+ * Modifier keys held when a UI event was generated.
+ *
+ * The core's browser_mouse_state has MOD_1..MOD_4 with a per-front-end
+ * meaning; these are the DOM names those map onto.
+ */
+enum html_event_mod {
+	HTML_MOD_SHIFT = (1 << 0),
+	HTML_MOD_CTRL  = (1 << 1),
+	HTML_MOD_ALT   = (1 << 2),
+	HTML_MOD_META  = (1 << 3)
+};
+
+/**
+ * Where a mouse event happened, in both coordinate spaces script can ask for.
+ *
+ * The core is handed DOCUMENT-relative coordinates; the viewport scroll
+ * offset belongs to the front end (guit->window->get_scroll), so both are
+ * carried explicitly rather than one being guessed from the other.
+ */
+struct dom_mouse_event_pos {
+	int page_x;	/**< document-relative x (DOM pageX) */
+	int page_y;	/**< document-relative y (DOM pageY) */
+	int client_x;	/**< viewport-relative x (DOM clientX) */
+	int client_y;	/**< viewport-relative y (DOM clientY) */
+};
+
+/**
+ * Find the deepest DOM node under a document coordinate.
+ *
+ * Never NULL for a converted document: the root element is the floor.
+ *
+ * \param html the content
+ * \param x    document-relative x
+ * \param y    document-relative y
+ */
+dom_node *html_dom_node_at_point(html_content *html, int x, int y);
+
+/**
+ * Construct a MouseEvent and fire it at the DOM
+ *
+ * \param type       the event type, e.g. corestring_dom_mousedown
+ * \param target     the node to dispatch at
+ * \param bubbles    whether the event bubbles
+ * \param cancelable whether preventDefault() means anything
+ * \param pos        where it happened
+ * \param button     DOM button number of the button that changed state
+ * \param buttons    DOM bitmask of the buttons currently held
+ * \param mods       \ref html_event_mod bitmask
+ * \param detail     the UIEvent detail; the click count for click events
+ * \return false if a listener called preventDefault(), true otherwise
+ */
+bool fire_dom_mouse_event(dom_string *type, dom_node *target,
+		bool bubbles, bool cancelable,
+		const struct dom_mouse_event_pos *pos,
+		unsigned short button, unsigned short buttons,
+		unsigned int mods, int detail);
+
+/**
+ * Construct a WheelEvent and fire it at the DOM
+ *
+ * \param delta_x  horizontal scroll step in pixels, positive = rightwards
+ * \param delta_y  vertical scroll step in pixels, positive = downwards
+ * \return false if a listener called preventDefault(), true otherwise
+ */
+bool fire_dom_wheel_event(dom_string *type, dom_node *target,
+		bool bubbles, bool cancelable,
+		const struct dom_mouse_event_pos *pos,
+		unsigned int mods, int delta_x, int delta_y);
 
 /**
  * Construct a keyboard event and fire it at the DOM

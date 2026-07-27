@@ -129,9 +129,27 @@ void js_destroythread(jsthread *thread);
 bool js_exec(jsthread *thread, const uint8_t *txt, size_t txtlen, const char *name);
 
 /**
- * fire an event at a dom node
+ * fire an event at a dom node, or at the Window when target is NULL
+ *
+ * \return false if a listener called preventDefault() on a cancelable
+ *         event, true otherwise
  */
 bool js_fire_event(jsthread *thread, const char *type, struct dom_document *doc, struct dom_node *target);
+
+/**
+ * Has anything in this thread ever registered a listener for this event type?
+ *
+ * The answer is deliberately conservative (never un-set when a listener is
+ * removed, and not scoped to a particular node) — it exists so the html
+ * content can decline to do the WORK of synthesising a UI event, with its
+ * hit test and its libdom allocation, on a page that is not listening.  A
+ * false positive costs one wasted dispatch; a false negative would be a
+ * dropped event, so it must never under-report.
+ *
+ * \param thread the thread, may be NULL (a page with no JS answers false)
+ * \param type   the event type, e.g. "mousemove"
+ */
+bool js_event_type_registered(jsthread *thread, const char *type);
 
 bool
 js_dom_event_add_listener(jsthread *thread,
