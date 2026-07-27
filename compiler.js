@@ -3934,8 +3934,13 @@ class Expr {
         throw new Error(`Stmt: loc is required (use Lexer.Loc.fromTok / Loc.generated for synthesized nodes)`);
       }
       this.loc = loc;
-      this.children = children;
+      this._children = children;
     }
+    // `children` is an accessor, not a data field, so a subclass whose
+    // child list MIRRORS state living outside the node (SDecl's DVar
+    // initializers) can recompute it live instead of handing out a
+    // construction-time snapshot. See SDecl.children (todos/0319).
+    get children() { return this._children; }
     // Bubble-up bag, computed on demand. See Expr.referencedFunctions
     // for rationale (handles parser-mutated children arrays cleanly).
     get referencedFunctions() {
@@ -4441,13 +4446,26 @@ class Expr {
   // Expr/Stmt) but their initializers can reference functions.
   class SDecl extends Stmt {
     constructor(loc, declarations) {
-      const initExprs = [];
-      for (const d of declarations) {
-        if (d instanceof DVar && d.initExpr) initExprs.push(d.initExpr);
-      }
-      super(loc, initExprs);
+      super(loc, null);
       this.declarations = declarations;
       Object.freeze(this);
+    }
+    // LIVE view, deliberately not a construction-time snapshot: DVars are
+    // SEALED, not frozen, and later passes rewrite `d.initExpr` IN PLACE
+    // (constant folding, the longjmp lowering) rather than rebuilding the
+    // SDecl. A snapshot goes stale the instant such a rewrite produces a
+    // new node, and every consumer of `children` — the bubble-up bags, the
+    // generic tree walkers — then reads a subtree that codegen will never
+    // emit. That is exactly how a compound literal in a declaration
+    // initializer lost its frame slot: the layout walk saw the pre-fold
+    // ECompoundLiteral, codegen emitted the post-fold one, and the
+    // identity-keyed offset lookup missed (todos/0319).
+    get children() {
+      const kids = [];
+      for (const d of this.declarations) {
+        if (d instanceof DVar && d.initExpr) kids.push(d.initExpr);
+      }
+      return kids;
     }
     _withChildren(_) { return this; /* DVars are mutated in place; children mirror initExprs */ }
   }
@@ -17371,6 +17389,17 @@ class CodeGenerator {
 
   // --- Frame address ---
   emitFrameAddr(offset) {
+    // A frame object with no layout entry arrives here as `undefined`
+    // (Map.get miss) — and `undefined - frameSize` is NaN, which the
+    // `!== 0` guards below happily accept before degrading to an i32
+    // constant of 0, i.e. the CALLER's frame base. That is silent stack
+    // corruption. Every caller must have allocated a slot first, so a
+    // non-finite offset is a compiler bug: fail loud (todos/0319).
+    if (!Number.isFinite(offset)) {
+      throw new Error(
+        `internal: frame address with non-finite offset (${offset}) — ` +
+        `a frame object was missed by the frame-layout walk`);
+    }
     if (this.frameBaseLocalIdx >= 0) {
       // Over-aligned frame: base was masked in the prologue and lives in
       // its own local; offsets are relative to that base directly.

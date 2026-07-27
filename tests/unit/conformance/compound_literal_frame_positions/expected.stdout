@@ -1,0 +1,5 @@
+decl_init   guard=0,0,0,0 val=90,90,-1,-1
+assign      guard=0,0,0,0 val=90,90,-1,-1
+addr_deref  guard=0,0,0,0 val=90,90,-1,-1
+static_dest guard=0,0,0,0 val=90,90,-1,-1
+member_base guard=0,0,0,0 val=90,90,-1,-1
