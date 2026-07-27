@@ -261,11 +261,6 @@ thing this file exists to kill.
 - file: vendor/micropython/README.md
 - anchor: - **Modules a Python programmer will reach for and not find**: `datetime`,
 
-### L44 — newestBakeInput recurses a project's `deps` but not its `sources`, so vendor/cjson edits never restale the blob
-- ticket: 0354
-- file: tests/run.js
-- anchor: // also MISSED by newestBakeInput, which only recurses `deps`: an edit here
-
 ### L45 — the cross-tree guard covers the test runners only; the tools/ writers and os/boot.js can still write into another tree
 - ticket: 0357
 - file: tests/lib/tree-guard.js

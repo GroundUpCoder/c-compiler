@@ -257,14 +257,7 @@ function newestPkgInput(name, pkg) {
       else if (!/\.(img|md)$/.test(e.name)) statFile(path.join(dir, e.name));
     }
   };
-  const normalize = (p) => {   // "a/b/../c" -> "a/c" (buildProject's rule)
-    const out = [];
-    p.split('/').forEach((seg) => {
-      if (seg === '..' && out.length && out[out.length - 1] !== '..') out.pop();
-      else if (seg !== '.') out.push(seg);
-    });
-    return out.join('/');
-  };
+  const normalize = COMMON.normalizeRelPath;   // "a/b/../c" -> "a/c" (buildProject's rule)
   const addProject = (rel) => {
     const n = normalize(rel);
     if (seenProjects[n]) return;
@@ -274,6 +267,12 @@ function newestPkgInput(name, pkg) {
     let proj;
     try { proj = JSON.parse(fs.readFileSync(path.join(ROOT, n), 'utf-8')); } catch (e) { return; }
     (proj.deps || []).forEach((d) => addProject(dir + '/' + d));
+    // Same hole as newestBakeInput's (todos/0354): a source/include reaching
+    // outside the project dir is an input `deps` recursion never sees. This
+    // does NOT widen the narrow scope above — no packaged project's external
+    // dirs reach the os/ tree at large (they are freetype/libpng/os/win32,
+    // all already walked as deps today).
+    COMMON.projectExternalDirs(proj, dir).forEach((d) => walk(path.join(ROOT, d)));
   };
   statFile(path.join(ROOT, 'compiler.js'));
   statFile(path.join(ROOT, 'tools', 'mkpkg.js'));

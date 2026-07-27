@@ -342,9 +342,10 @@ const RULES = [
     'baked faces + two font packages — a face edit moves every rendered glyph'],
   // cJSON is compiled INTO five seeded projects (gucman, software, deck,
   // gcode, deskdefaults) via their `sources`, not their `deps` — so it has no
-  // bin.json of its own and `projects` cannot build it. NB it is therefore
-  // also MISSED by newestBakeInput, which only recurses `deps`: an edit here
-  // changes baked binaries without restaling the blob (todos/0354).
+  // bin.json of its own and `projects` cannot build it. Since todos/0354 the
+  // closure follows `sources` too, so axis 1 now derives this row on its own
+  // (an edit here restales the fat fixture like any other seeded source);
+  // `kernel` + `sweep` is that radius, not a hand-made exception.
   [/^vendor\/cjson\//, ['kernel', 'sweep'],
     'compiled into five seeded projects; it has no bin.json, so the floor `projects` builds nothing for it'],
   // The browser terminal widget, loaded by os/os.html — VT1 in every browser

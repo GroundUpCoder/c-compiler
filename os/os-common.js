@@ -24,6 +24,9 @@
 //     volume: /etc /var/local/bin /tmp /root /run + /bin -> /usr/bin.
 //   bakedVersion(BLOCK_FS, store)    — a blob's VERSION_ID (or -1): the
 //     staleness gate for "upgrade = swap the blob".
+//   projectExternalDirs(proj, dir)   — the directories a project's sources/
+//     includes/srcRoots reach OUTSIDE its own dir (todos/0354): the half of
+//     a project's input closure that `deps` recursion does not reach.
 //   newestBakeInput(...)             — the 0082 input-freshness scan: newest
 //     mtime across everything that can change the blob's bytes (toolchain,
 //     os/ tree, the manifest's vendor project/bin closure). Node-only.
@@ -1378,6 +1381,59 @@ function bakedPackages(BLOCK_FS, store) {
   }
 }
 
+/* normalizeRelPath("a/b/../c") -> "a/c" — buildProject's rule, hoisted so
+ * the freshness scans resolve a project's dep/source/include paths exactly
+ * the way the builder does. */
+function normalizeRelPath(p) {
+  var out = [];
+  p.split('/').forEach(function (seg) {
+    if (seg === '..' && out.length && out[out.length - 1] !== '..') out.pop();
+    else if (seg !== '.') out.push(seg);
+  });
+  return out.join('/');
+}
+
+/* ---- a project's out-of-directory inputs (todos/0354) ----
+ *
+ * projectExternalDirs(proj, dir) -> [repo-relative dir, ...]
+ * The directories a bin.json/lib.json at `dir` pulls bake inputs from that
+ * lie OUTSIDE `dir` itself. buildProject expands a project through five
+ * path-bearing keys — `deps` (recursed as projects) plus `sources`,
+ * `includes`, `srcRoots` and `-I` compilerArgs — but the freshness scans
+ * only ever enrolled `deps` and the project's own directory. A source
+ * reached from a foreign tree was therefore in NEITHER set: the five
+ * seeded consumers of `vendor/cjson/cJSON.c` list it under `sources`, so
+ * editing it changed five baked binaries while every gate read the blob
+ * fresh — a silent no-op edit, the exact failure 0082 exists to prevent.
+ *
+ * DIRECTORIES, not files, even for a `sources` entry: that is the
+ * granularity the rest of the scan already uses, and for the same reason —
+ * a quoted include resolves beside its source (cJSON.c's cJSON.h), so file
+ * granularity would leave the identical false green one header away.
+ * Paths at or under `dir` are dropped: the caller walks that tree already.
+ * Over-invalidation stays the cheap direction. */
+function projectExternalDirs(proj, dir) {
+  if (!dir) return [];   // a project at the repo root: the caller walks everything
+  var out = [], seen = {};
+  function addDir(d) {
+    if (d === dir || d.indexOf(dir + '/') === 0) return;
+    if (seen[d]) return;
+    seen[d] = true;
+    out.push(d);
+  }
+  function resolve(p) { return normalizeRelPath(dir + '/' + p); }
+  (proj.sources || []).forEach(function (s) {
+    var n = resolve(s), i = n.lastIndexOf('/');
+    addDir(i < 0 ? '' : n.slice(0, i));
+  });
+  (proj.includes || []).forEach(function (inc) { addDir(resolve(inc)); });
+  Object.keys(proj.srcRoots || {}).forEach(function (ns) { addDir(resolve(proj.srcRoots[ns])); });
+  (proj.compilerArgs || []).forEach(function (a) {
+    if (a.lastIndexOf('-I', 0) === 0) addDir(resolve(a.substring(2)));
+  });
+  return out;
+}
+
 /* ---- bake-input freshness (todos/0082) ----
  *
  * newestBakeInput(fsMod, pathMod, rootDir, manifest) -> { mtimeMs, path }
@@ -1386,7 +1442,9 @@ function bakedPackages(BLOCK_FS, store) {
  * bake logic, every seeded source/header), and the manifest system
  * section's closure — each `project` bin.json expanded through its deps
  * with the whole project directory walked (dir-granular on purpose:
- * quoted includes resolve beside their sources), plus each `bin` blob.
+ * quoted includes resolve beside their sources) and every directory its
+ * sources/includes/srcRoots reach OUTSIDE that dir walked too
+ * (projectExternalDirs, todos/0354) — plus each `bin` blob.
  * Node-only (statSync), like NodeFileStore.
  *
  * A blob or fixture whose mtime is older than this is STALE no matter
@@ -1431,14 +1489,7 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest) {
       else if (!/\.(img|md)$/.test(e.name) && !/\.img\.tmp-\d+$/.test(e.name)) statFile(pathMod.join(dir, e.name));
     });
   }
-  function normalize(p) {   // "a/b/../c" -> "a/c" (buildProject's rule)
-    var out = [];
-    p.split('/').forEach(function (seg) {
-      if (seg === '..' && out.length && out[out.length - 1] !== '..') out.pop();
-      else if (seg !== '.') out.push(seg);
-    });
-    return out.join('/');
-  }
+  var normalize = normalizeRelPath;   // "a/b/../c" -> "a/c" (buildProject's rule)
   function addProject(rel) {   // repo-relative bin.json/lib.json path
     var n = normalize(rel);
     if (seenProjects[n]) return;
@@ -1448,6 +1499,13 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest) {
     var proj;
     try { proj = JSON.parse(fsMod.readFileSync(pathMod.join(rootDir, n), 'utf-8')); } catch (e) { return; }
     (proj.deps || []).forEach(function (d) { addProject(dir + '/' + d); });
+    // `deps` was never the only way in (todos/0354): sources/includes/
+    // srcRoots reaching outside the project dir are bake inputs too. The
+    // os root keeps its runtime-only skip list wherever it is reached from
+    // (gucman's `includes: [".."]`), so this can't enrol os.html.
+    projectExternalDirs(proj, dir).forEach(function (d) {
+      walk(pathMod.join(rootDir, d), d === 'os' ? BAKE_INPUT_SKIP : null);
+    });
   }
   statFile(pathMod.join(rootDir, 'compiler.js'));
   statFile(pathMod.join(rootDir, 'host.js'));
@@ -1599,6 +1657,8 @@ var OS_COMMON = {
   bakedVersion: bakedVersion,
   bakedOverlays: bakedOverlays,
   bakedPackages: bakedPackages,
+  normalizeRelPath: normalizeRelPath,
+  projectExternalDirs: projectExternalDirs,
   newestBakeInput: newestBakeInput,
   initRootVolume: initRootVolume,
   seedHostKeyScheme: seedHostKeyScheme,
