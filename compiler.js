@@ -3,6 +3,34 @@
 "use strict";
 
 // ====================
+// Array append (spread-safe)
+// ====================
+
+// `dst.push(...src)` passes every element of `src` as a SEPARATE argument, so
+// it dies with `RangeError: Maximum call stack size exceeded` once `src`
+// exceeds V8's argument limit (~65k on a main-thread stack, more on a worker's
+// — the limit is the available stack, not a fixed constant, so it also shrinks
+// with recursion depth). Any array whose length is a function of the INPUT
+// (token streams, statement lists, expanded macro bodies) can cross it:
+// CPython's `_PyRuntimeState_INIT` expands to ~70k tokens and crashed the
+// preprocessor with no diagnostic and no source location (todos/0320).
+//
+// pushAll keeps the fast spread for the overwhelmingly common small case
+// (measured 3-4x faster than a per-element loop at n<=256, and this sits in
+// the preprocessor's hot path) and chunks anything larger, so the argument
+// count per call is bounded by SPREAD_CHUNK regardless of input size.
+const SPREAD_CHUNK = 4096;
+function pushAll(dst, src) {
+  const n = src.length;
+  if (n <= SPREAD_CHUNK) {
+    if (n > 0) dst.push(...src);
+    return dst;
+  }
+  for (let o = 0; o < n; o += SPREAD_CHUNK) dst.push(...src.slice(o, o + SPREAD_CHUNK));
+  return dst;
+}
+
+// ====================
 // Lexer
 // ====================
 
@@ -1588,7 +1616,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
           // appears in another macro's replacement list): pull its argument list
           // from the following tokens. See applyTrailingCall.
           i = applyTrailingCall(replacement, hideset, i);
-          expanded.push(...replacement);
+          pushAll(expanded, replacement);
         } else {
           // Function-style macro: need to check for '(' and collect arguments
           let argStart = i + 1;
@@ -1654,8 +1682,8 @@ function preprocess(filename, initialTokens, ppRegistry) {
                   vaRaw.push(comma);
                   vaArgs.push(comma);
                 }
-                vaRaw.push(...args[p]);
-                vaArgs.push(...expand(args[p], new Set(hideset)));
+                pushAll(vaRaw, args[p]);
+                pushAll(vaArgs, expand(args[p], new Set(hideset)));
               }
               rawParamMap.set("__VA_ARGS__", [...vaRaw]);
               paramMap.set("__VA_ARGS__", [...vaArgs]);
@@ -1692,7 +1720,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
                 }
                 const content = repl.slice(ri + 2, j);
                 if (paramMap.get("__VA_ARGS__").length > 0) {
-                  out.push(...substituteTokens(content));
+                  pushAll(out, substituteTokens(content));
                 }
                 ri = j; // skip past ')'
                 continue;
@@ -1713,7 +1741,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
                 const vaTokens = paramMap.get(repl[ri + 2].text);
                 if (vaTokens.length > 0) {
                   out.push(repTok);
-                  out.push(...vaTokens);
+                  pushAll(out, vaTokens);
                 }
                 ri += 2; // consume `,` ## param
                 continue;
@@ -1751,7 +1779,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
                   pm.text = "";
                   out.push(pm);
                 } else {
-                  out.push(...argTokens);
+                  pushAll(out, argTokens);
                 }
               } else {
                 out.push(repTok);
@@ -1833,7 +1861,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
             // selector: `IDX(__VA_ARGS__, …)(__VA_ARGS__)` — jq's JV_ARRAY/BLOCK).
             // Pull them from the following tokens, same as the object-like branch.
             i = applyTrailingCall(expandedResult, hideset, i);
-            expanded.push(...expandedResult);
+            pushAll(expanded, expandedResult);
           } else {
             // Function-like macro not followed by '(' - don't expand
             expanded.push(t);
@@ -2110,7 +2138,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
         combined.push(state.consume());
       }
       expanded.length = 0;
-      expanded.push(...expand(combined, new Set()));
+      pushAll(expanded, expand(combined, new Set()));
     }
   }
 
@@ -8134,8 +8162,8 @@ function synthesizeWrapper(funcDef, hoistedDecls, segments, tryCtx) {
       const stamp = tryCtx.segmentHandlerIds.get(seg.id);
       switchBodyStmts.push(setHandler(stamp == null ? -1 : stamp));
     }
-    switchBodyStmts.push(...seg.stmts);
-    switchBodyStmts.push(...termToStmts(seg.term));
+    pushAll(switchBodyStmts, seg.stmts);
+    pushAll(switchBodyStmts, termToStmts(seg.term));
   }
   // Default: break out (unexpected state).
   switchBodyStmts.push(new AST.SCase(loc, 0n, 0n, true));
@@ -32492,7 +32520,7 @@ function main() {
     const result = [];
     if (proj.deps) {
       for (const dep of proj.deps) {
-        result.push(...expandProjectJson(path.resolve(projDir, dep), true, seen));
+        pushAll(result, expandProjectJson(path.resolve(projDir, dep), true, seen));
       }
     }
     if (proj.includes) {
@@ -32538,7 +32566,7 @@ function main() {
   for (const arg of rawArgs) {
     if (!arg.startsWith("-") && arg.endsWith(".json")) {
       try {
-        args.push(...expandProjectJson(arg, false, seenProjects));
+        pushAll(args, expandProjectJson(arg, false, seenProjects));
       } catch (e) {
         process.stderr.write(`Error reading project file ${arg}: ${e.message}\n`);
         process.exit(1);
@@ -32968,6 +32996,10 @@ var _exports = {
   AST,
   // Diag pool primitives — used by make-helpers and tested directly.
   withDiag, reportError, reportWarning, fatalError, FatalDiag,
+  // Spread-safe array append — exposed so the todos/0320 guard can assert
+  // the per-call argument count stays bounded by SPREAD_CHUNK no matter how
+  // long the source array is.
+  pushAll, SPREAD_CHUNK,
   // Optimizer — exposed so unit tests can fold a constructed AST and
   // assert specific transformations.
   INLINER,

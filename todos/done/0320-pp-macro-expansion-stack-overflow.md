@@ -1,6 +1,22 @@
 # 0320 — Preprocessor blows the JS stack on a macro expanding to ~70k+ tokens
 
-- **Status**: open
+- **Status**: done (2026-07-27) — one bounded helper (`pushAll`, file scope, a
+  single spread capped at `SPREAD_CHUNK = 4096`) replaces the spread at **all
+  12** call-argument-spread sites in `compiler.js`, not just the 8 in the
+  preprocessor: the switch-lowering pair (irreducible-CFG segment bodies) and
+  the two project-json expansions were the same shape. Full audit and the
+  "left alone, with its bound" list are in the dev log. NB three of the twelve
+  sit OUTSIDE the `Lexer` IIFE, so the helper had to go to file scope — an
+  earlier placement inside it left them as latent `ReferenceError`s (caught by
+  the guard, then exercised: `--filter=irreducible`/`goto`, a `vendor/snake`
+  and a `vendor/libpng` project build). `Python/pylifecycle.c` and
+  `Python/pystate.c` both go from `RangeError` to a clean `-a parse`.
+  Guard: `tests/host/test_pp_spread_bounds.js` — NOT threshold-tuned (see
+  below; measured here, a 400k spread dies on a default main-thread stack and
+  SURVIVES under `node --stack-size=200000`, so any token-count fixture is a
+  latent flake). It is a source lint (no call-argument spread outside the
+  helper — verified red on a reverted site) plus the helper's per-call
+  argument-count contract.
 - **Priority**: P0 (compiler crash — valid input, no diagnostic)
 - **Difficulty**: light
 - **Design**: —
