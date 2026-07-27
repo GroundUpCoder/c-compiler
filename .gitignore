@@ -16,3 +16,8 @@ os/os-user.img
 media/
 os/os-root.img
 dist/
+
+# CPython writes bytecode caches next to the source it imports; the shipped
+# package sends them to /var/cache instead (todos/0340), but a host-side probe
+# run against vendor/cpython/Lib will still leave them here.
+vendor/cpython/**/__pycache__/

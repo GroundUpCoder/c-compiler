@@ -4249,10 +4249,22 @@ var BLOCK_FS = (function () {
       __opendir: wrap(function (path_ptr) {
         return this.opendir(readString(path_ptr));
       }),
-      __readdir: wrap(function (handle, dirent_ptr) {
-        var ent = this.readdir(handle);
-        if (ent === null || ent < 0) {
-          if (ent === null) return -1; // EOF, not an error
+      // NOT wrap()'d, deliberately. POSIX: readdir() returns NULL at
+      // end-of-directory WITHOUT changing errno, and that is the only way a
+      // caller can tell "the directory ended" from "the read failed" — the
+      // documented idiom is `errno = 0; while ((e = readdir(d))) …; if (errno)
+      // error;`. wrap() sets `self._lastError || 'EIO'` on every negative
+      // return, so under a kernel every directory walk ended with errno = EIO
+      // and any caller using that idiom saw a phantom I/O error. CPython's
+      // os.listdir is exactly such a caller (Modules/posixmodule.c
+      // _posix_listdir), which is how this surfaced: the whole stdlib was
+      // unimportable in-OS while working under bare host.js, whose standalone
+      // __readdir already got this right. Set errno ONLY on a real failure.
+      __readdir: function (handle, dirent_ptr) {
+        var ent = self.readdir(handle);
+        if (ent === null) return -1;              // EOF — errno untouched
+        if (typeof ent === 'number' && ent < 0) { // real failure
+          setErrnoName(self._lastError || 'EIO');
           return -1;
         }
         var memory = getMemory();
@@ -4266,7 +4278,7 @@ var BLOCK_FS = (function () {
           bytes[dirent_ptr + 8 + bi] = nameBytes[bi];
         bytes[dirent_ptr + 8 + nameLen] = 0;
         return 0;
-      }),
+      },
       __closedir: wrap(function (handle) {
         return this.closedir(handle);
       }),

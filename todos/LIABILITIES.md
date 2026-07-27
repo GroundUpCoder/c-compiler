@@ -278,4 +278,16 @@ thing this file exists to kill.
 - anchor: is the runtime backstop for a payload that arrived another way.
 - provenance: 0338
 
+### L47 — `tcflush` validates and reports success without discarding anything, though the line discipline really holds an input queue
+- ticket: 0325
+- file: compiler.js
+- anchor: RPC. No shipping consumer asks for it (nothing in the CPython stdlib
+- provenance: 0340
+
+### L48 — python-clang has no sockets, so `asyncio` ships and imports nowhere
+- ticket: 0052
+- file: vendor/cpython/README.md
+- anchor: (`_socket` is not built), so **`asyncio` does not import and is not
+- provenance: 0340
+
 <!-- END ENTRIES -->
