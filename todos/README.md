@@ -199,6 +199,10 @@ don't duplicate them. Current map:
   (0040, LANDED 2026-07-08): mkimage-baked sealed RO volume at /usr,
   merged-usr, /usr/local, systemd-style /etc, swap-the-blob upgrades.
   Design decisions + the in-item decisions record.
+- `EMULATORS.md` — the Game Boy emulator pair (2026-07-28): `vendor/gameboy`
+  = Peanut-GB **and the shared ROM store**, `vendor/sameboy` = SameBoy and the
+  **default** `.gb`/`.gbc` handler; why the `gameboy`→`peanutgb` rename was
+  proposed and **rejected**; what blocks `sameboy-clang` (→ 0347).
 - `BLOCK_FS.md`, `MISC.md` — filesystem notes; grab-bag.
 
 ## Conventions

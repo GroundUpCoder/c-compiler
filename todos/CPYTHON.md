@@ -42,10 +42,12 @@ host-side, measured, node boot included).
 ## 2. Module selection — the rule, then the list it produces
 
 **Rule: ship every file under `Lib/` except entries on the fixed exclusion
-list below. Each exclusion must cite one of exactly two reasons: (a) it
-depends on a C substrate that can never exist on gucOS, or (b) it is a
+list below. Each exclusion must cite one of exactly three reasons: (a) it
+depends on a C substrate that can **never** exist on gucOS, (b) it is a
 development corpus / installer machinery that cannot function here and
-carries large dead weight.** Anything not excluded ships even if it cannot
+carries large dead weight, or (c) it depends on a substrate that is **absent
+today but not impossible** — a scheduling statement, which must name the
+ticket that revisits it.** Anything not excluded ships even if it cannot
 import today: a module whose C extension is missing fails with an honest
 `ModuleNotFoundError`, costs only its file size, and starts working the day
 its extension lands — with **no package-definition change and no re-curation**.
@@ -57,12 +59,24 @@ The exclusion list (against 3.13.5):
 | excluded | reason | size |
 |---|---|---|
 | `test/` | (b) dev corpus | 32.4 MB |
-| `idlelib/` | (a) needs `_tkinter` (Tcl/Tk — no port exists or is planned) | — |
-| `tkinter/` | (a) same | — |
-| `turtledemo/` | (a) same | — |
-| `turtle.py` | (a) same | 145,215 B |
+| `idlelib/` | **(c)** needs `_tkinter` (Tcl/Tk). **Not scheduled; priced separately by `todos/0346`.** NOT impossible — see the note below. | — |
+| `tkinter/` | **(c)** same — `todos/0346` | — |
+| `turtledemo/` | **(c)** same — `todos/0346` | — |
+| `turtle.py` | **(c)** same — `todos/0346` | 145,215 B |
 | `ensurepip/` | (b) 1.8 MB, mostly a bundled pip wheel; pip needs `_ssl` + networking that gucOS does not have (§3.3) — revisit with the network stack (`todos/0052`/`0054`) | 1.8 MB |
 | `__pycache__/` dirs | (b) build-host artifacts | — |
+
+⚠️ **Why the Tk family moved from (a) to (c) (corrected 2026-07-28).** It was
+previously labelled **(a)** — *"depends on a C substrate that can never exist"* —
+with the reason written in the cell as *"no port exists or is planned"*. Those
+are two different claims: the label is a **platform** claim, the reason is a
+**roadmap** claim. `ctypes` is genuinely rule (a) — gucOS has no `dlopen`, so no
+amount of work makes it possible. Tcl/Tk is merely **unbuilt**: large, unfunded,
+and a second GUI road to where `pygame` already goes, but not impossible.
+
+**A rule-(a) label is what stops anyone ever re-examining an exclusion** — and
+jku re-examining exactly this is what produced `todos/0346`. Rule (c) exists so
+that a "not now" cannot masquerade as a "not ever".
 
 **Result (measured): 548 files, 9,914,191 bytes installed; `tar.gz`
 2,353,854 bytes.** (538 of the files are `.py`; the 13 non-`.py` are venv
