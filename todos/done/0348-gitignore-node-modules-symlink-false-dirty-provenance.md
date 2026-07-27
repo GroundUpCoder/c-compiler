@@ -1,6 +1,6 @@
 # 0348 — `.gitignore` misses `node_modules` SYMLINKS, so the deploy recipe stamps every bundle `-dirty`
 
-- **Status**: open
+- **Status**: done
 - **Provenance**: found live by master cont-111 during the **v178 deploy**
   (2026-07-28). Lesson **(BL)** in `~/git/meta/meta/notes/MASTER-LESSONS.md`.
 - **Priority**: **P3 — small, self-contained, high clarity-per-byte.** Not a
