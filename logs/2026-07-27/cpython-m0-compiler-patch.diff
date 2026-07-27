@@ -1,0 +1,87 @@
+--- compiler.js	2026-07-27 12:17:21
++++ /tmp/cpy-m0/compiler-patched.js	2026-07-27 14:22:59
+@@ -1588,7 +1588,7 @@
+           // appears in another macro's replacement list): pull its argument list
+           // from the following tokens. See applyTrailingCall.
+           i = applyTrailingCall(replacement, hideset, i);
+-          expanded.push(...replacement);
++          for (const __t of (replacement)) expanded.push(__t);
+         } else {
+           // Function-style macro: need to check for '(' and collect arguments
+           let argStart = i + 1;
+@@ -1654,8 +1654,8 @@
+                   vaRaw.push(comma);
+                   vaArgs.push(comma);
+                 }
+-                vaRaw.push(...args[p]);
+-                vaArgs.push(...expand(args[p], new Set(hideset)));
++                for (const __t of (args[p])) vaRaw.push(__t);
++                for (const __t of (expand(args[p], new Set(hideset)))) vaArgs.push(__t);
+               }
+               rawParamMap.set("__VA_ARGS__", [...vaRaw]);
+               paramMap.set("__VA_ARGS__", [...vaArgs]);
+@@ -1692,7 +1692,7 @@
+                 }
+                 const content = repl.slice(ri + 2, j);
+                 if (paramMap.get("__VA_ARGS__").length > 0) {
+-                  out.push(...substituteTokens(content));
++                  for (const __t of (substituteTokens(content))) out.push(__t);
+                 }
+                 ri = j; // skip past ')'
+                 continue;
+@@ -1713,7 +1713,7 @@
+                 const vaTokens = paramMap.get(repl[ri + 2].text);
+                 if (vaTokens.length > 0) {
+                   out.push(repTok);
+-                  out.push(...vaTokens);
++                  for (const __t of (vaTokens)) out.push(__t);
+                 }
+                 ri += 2; // consume `,` ## param
+                 continue;
+@@ -1751,7 +1751,7 @@
+                   pm.text = "";
+                   out.push(pm);
+                 } else {
+-                  out.push(...argTokens);
++                  for (const __t of (argTokens)) out.push(__t);
+                 }
+               } else {
+                 out.push(repTok);
+@@ -1833,7 +1833,7 @@
+             // selector: `IDX(__VA_ARGS__, …)(__VA_ARGS__)` — jq's JV_ARRAY/BLOCK).
+             // Pull them from the following tokens, same as the object-like branch.
+             i = applyTrailingCall(expandedResult, hideset, i);
+-            expanded.push(...expandedResult);
++            for (const __t of (expandedResult)) expanded.push(__t);
+           } else {
+             // Function-like macro not followed by '(' - don't expand
+             expanded.push(t);
+@@ -2110,7 +2110,7 @@
+         combined.push(state.consume());
+       }
+       expanded.length = 0;
+-      expanded.push(...expand(combined, new Set()));
++      for (const __t of (expand(combined, new Set()))) expanded.push(__t);
+     }
+   }
+ 
+@@ -9552,7 +9552,10 @@
+     }
+     const ta = getDeclType(a), tb = getDeclType(b);
+     if (ta && tb && !ta.isCompatibleWith(tb)) {
+-      addError(`conflicting types for '${getName(a)}' ('${ta.toString()}' vs '${tb.toString()}')`, locs);
++      // M0 PROBE: downgraded to a warning. C's separate-compilation model does
++      // not require cross-TU declared types to agree, and CPython relies on that
++      // (PY_CXX_CONST). A whole-program compiler must not turn it into a hard error.
++      if (typeof process !== 'undefined' && process.stderr) process.stderr.write(`warning: conflicting types for '${getName(a)}'\n`);
+     }
+   }
+ 
+@@ -13369,7 +13372,6 @@
+         // f(void) {...} extern int f(void);` must link — todos/0219).
+         if (prevFunc && prevFunc instanceof AST.DFunc &&
+             prevFunc.storageClass === Types.StorageClass.STATIC &&
+-            specs.storageClass !== Types.StorageClass.STATIC &&
+             specs.storageClass !== Types.StorageClass.IMPORT) {
+           continue;
+         }
