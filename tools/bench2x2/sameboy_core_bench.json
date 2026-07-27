@@ -1,0 +1,33 @@
+{
+  "bin": "sameboy_core_bench",
+  "name": "sameboy-core-bench",
+  "description": "Headless SameBoy CORE benchmark (todos/0332): the shipped binary's 14 core/*.c TUs with the win32/SDL frontend replaced by a timing main. Same compilerArgs as vendor/sameboy/bin.json so the core is built identically.",
+  "compilerArgs": [
+    "--allow-zero-length-arrays",
+    "-DGB_INTERNAL",
+    "-DGB_DISABLE_DEBUGGER",
+    "-DGB_DISABLE_CHEATS",
+    "-DGB_DISABLE_CHEAT_SEARCH",
+    "-DGB_DISABLE_REWIND",
+    "-DGB_DISABLE_TIMEKEEPING"
+  ],
+  "includes": ["../../vendor/sameboy/core", "../../vendor/sameboy/src"],
+  "sources": [
+    "../../vendor/sameboy/core/apu.c",
+    "../../vendor/sameboy/core/camera.c",
+    "../../vendor/sameboy/core/display.c",
+    "../../vendor/sameboy/core/gb.c",
+    "../../vendor/sameboy/core/joypad.c",
+    "../../vendor/sameboy/core/mbc.c",
+    "../../vendor/sameboy/core/memory.c",
+    "../../vendor/sameboy/core/printer.c",
+    "../../vendor/sameboy/core/random.c",
+    "../../vendor/sameboy/core/rumble.c",
+    "../../vendor/sameboy/core/sgb.c",
+    "../../vendor/sameboy/core/sm83_cpu.c",
+    "../../vendor/sameboy/core/timing.c",
+    "../../vendor/sameboy/core/workboy.c",
+    "../../vendor/sameboy/src/bootroms.c",
+    "sameboy_core_bench.c"
+  ]
+}
