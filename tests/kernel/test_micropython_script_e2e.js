@@ -97,6 +97,18 @@ int main(void) {
     char *a5[] = { "micropython", "/root/nope.py", NULL };
     printf("missing_status=%d\\n", run(a5));
 
+    // sys.std* are the port's own file objects on fds 0/1/2, so .flush() is a
+    // real fsync(2) on a kernel-owned fd that is not a regular file. file.c
+    // swallows EINVAL for the three std fds precisely so this cannot raise.
+    char *a6[] = { "micropython", "/root/std.py", NULL };
+    put("/root/std.py",
+        "import sys\\n"
+        "sys.stdout.write('via-stdout-write\\\\n')\\n"
+        "sys.stdout.flush()\\n"
+        "sys.stderr.write('via-stderr-write\\\\n')\\n"
+        "print('after-flush')\\n");
+    printf("std_status=%d\\n", run(a6));
+
     printf("done\\n");
     return 0;
 }
@@ -169,6 +181,9 @@ const watchdog = setTimeout(() => {
   check('traceback NOT on fd 1', !/ValueError: boom/.test(out));
 
   check('-c ran the command', has('from-c') && has('dashc_status=0'));
+  check('sys.stdout.write + flush() on a kernel tty', has('via-stdout-write') && has('std_status=0'));
+  check('after the flush, print() still lands', has('after-flush'));
+  check('sys.stderr.write goes to fd 2', /via-stderr-write/.test(err) && !/via-stderr-write/.test(out));
   check('missing script -> status 1', has('missing_status=1'));
   check('missing script reported on fd 2', /nope\.py/.test(err), JSON.stringify(err.slice(0, 300)));
   check('init reached the end', has('done'));
