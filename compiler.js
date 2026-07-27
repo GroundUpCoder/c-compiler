@@ -4984,7 +4984,20 @@ function promoteExprType(e) {
   if (bf) {
     const bw = bf.bitWidth;
     const uq = t.removeQualifiers();
-    const isSigned = uq === Types.TINT || uq === Types.TLONG || uq === Types.TSHORT || uq === Types.TSCHAR || uq === Types.TCHAR;
+    // C11 6.3.1.1p2 restricts the promotion to a bit-field whose values
+    // `int`/`unsigned int` can represent *as restricted by the width*;
+    // everything else is one of the "all other types [that] are unchanged".
+    // A field WIDER than int keeps its declared type, so 64-bit arithmetic
+    // on it stays 64-bit (todos/0356: collapsing `uint64_t frc : 52` to
+    // unsigned int truncated the operand, which made `u.p.frc == 0` true
+    // for every NaN — MicroPython's IEEE-754 classifier then reported
+    // OverflowError where the standard library owes ValueError).
+    if (bw > 32) return t;
+    // int represents every value of a signed field up to its own width, and
+    // of an unsigned field one bit narrower; a 32-bit unsigned field needs
+    // unsigned int. Signedness is the DECLARED type's — `long long` counts,
+    // which the old TINT/TLONG/TSHORT/TSCHAR/TCHAR identity list missed.
+    const isSigned = !uq.isUnsigned();
     if (isSigned || bw < 32) return Types.TINT;
     return Types.TUINT;
   }
