@@ -1,6 +1,6 @@
 # 0328 — `inline` on a prototype or a re-declaration never reaches the definition
 
-- **Status**: open
+- **Status**: done
 - **Priority**: P1 (optimization hint lost — no wrong code, no rejected program)
 - **Difficulty**: light
 - **Design**: —

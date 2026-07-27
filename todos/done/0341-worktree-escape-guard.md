@@ -1,6 +1,6 @@
 # 0341 — a worktree lane can silently write into the main tree; nothing guards it
 
-- **Status**: open
+- **Status**: done
 - **Reported by**: the router CHECK lane (cont-106/107), filed by @master cont-108
 - **Evidence**: first-hand, reproduced by construction with a positive control;
   the dated artifact is the stray `logs/2026-07-25/*.png` writes into
