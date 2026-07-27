@@ -4,7 +4,13 @@
 - **Upstream**: https://github.com/micropython/micropython
 - **License**: MIT (see `LICENSE`)
 - **Shipped as**: the `micropython` gucman package (`packages/micropython.json`)
-  → `/usr/local/bin/micropython` and `/usr/local/bin/python`
+  → `/usr/local/bin/micropython`, plus a `commands` CLAIM on the dispatched
+  name `python` (todos/0338): installing appends `python<TAB>/usr/local/bin/
+  micropython` to `/etc/cmdalt`, and the base image's `/usr/bin/python`
+  dispatch link forwards to it. It is deliberately NOT a `bin` alias any
+  more — `/usr/local/bin` precedes `/bin` on PATH, so a package-planted
+  `python` symlink would silently shadow the dispatcher and freeze the
+  default.
 
 Built by `bin.json` (the hand-listed-sources convention this repo uses for
 every vendored project — there is no configure/Makefile runner here). A second

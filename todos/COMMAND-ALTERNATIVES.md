@@ -1,7 +1,16 @@
 # Command alternatives — one name, a switchable implementation
 
-**Status**: design, ratified by the jku ruling below; implementation ticket
-`todos/0338`. Control-panel surface: `todos/0130` (un-deferred by this design).
+**Status**: SHIPPED (todos/0338, image v179). Control-panel surface:
+`todos/0130` — its *command* half (the picker leg) landed with 0338; the
+file-association half is still `0130`'s.
+
+Three things the implementation added on top of this design, each recorded in
+place below: the `cmdalt set` shadow warning (§7, from the independent CHECK
+pass of 2026-07-28), the **build-time and install-time refusal** of a package
+`bin` that shadows a dispatched name (§7 — the "optional hardening" is now
+funded, because a `requires`-gated definition is never folded and so the fat
+bake's `claim()` throw cannot see it), and candidate DEDUP BY VALUE (§2, which
+the design already asked for).
 
 ## The ruling
 
@@ -105,7 +114,10 @@ Two reads, deliberately different:
   suggestion. Unchanged mechanism.
 - **Candidate set** (control panel + error messages) = *every* matching line
   across the concat, in order, deduped by value. This needs one new iterator,
-  `cfg_each` (§5); it is a read-only addition.
+  `cfg_each` (§5); it is a read-only addition. Shipped as `cfg_each` plus
+  `ca_candidates` (cmdalt.h), which layers the dedup on top — picking a
+  candidate WRITES it to the user layer, where it then shadows the same value
+  in a lower one, so an undeduped list offers the chosen entry twice.
 
 `cfg_find`'s existing "within one layer the first line for a key wins" is what
 makes multi-line-per-key work, so first-claim-wins falls out for free: the
@@ -210,8 +222,8 @@ its first hop. Refuse loudly, exit 127.
 
 ### 3.4 The admin CLI (`cmdalt` under its own name)
 
-- `cmdalt list` — every key: effective value, resolved program, candidate list,
-  and a **shadow** marker (§7).
+- `cmdalt list` — every key: effective value, candidate list, and a **shadow**
+  marker (§7).
 - `cmdalt which <name>` — the absolute program `<name>` would run; exit 1 if
   unresolved. Walks PATH itself, so it reports *"`/usr/local/bin/python`
   shadows this setting"* when an earlier PATH entry wins over the dispatch link.
@@ -219,6 +231,13 @@ its first hop. Refuse loudly, exit 127.
 - `cmdalt set <name> <cmd...>` — user-layer delta write (`cfg_set`).
 - `cmdalt reset <name>` — drop the user key, revert to package claims / baked
   suggestion (`cfg_unset`, §5).
+
+**`set` and `reset` also print the shadow warning** — the ticket's three
+diagnostics are all PULL (`which` and `list` only help someone who already
+suspects the bug), but the user's entry point into it is a switch that appears
+to do nothing. The warning belongs at the exact moment of the ineffective
+action; it is the same stat/readlink `which` already needs, and it removes the
+dependency on `0130` landing for the diagnostic to exist at all.
 
 ## 4. Packages claim command names
 
@@ -334,9 +353,25 @@ mysterious, and the ticket funds all three:
    what PATH resolves — the exact screen where a user whose switch "did nothing"
    is standing.
 
-An optional gucman hardening (**not** funded here): refuse to plant a
-`/usr/local/bin/<name>` link when `/usr/bin/<name>` is a dispatch link. It
-converts a future author's mistake from a silent shadow into a refused install.
+**The gucman hardening IS funded, in both tiers** (0338 promoted it out of
+"optional" — see below): `tools/mkpkg.js` REFUSES to build a definition whose
+`bin` names a command the base image dispatches, and gucman's bin-plant loop
+refuses the same thing at install. The promotion is not tidiness: §7's
+"self-enforcing fat bake" argument only covers packages that are actually
+FOLDED, and a `requires`-gated definition — every `*-clang` variant, including
+the `python-clang` this design names as the suggestion — is never folded. Such
+a definition would have built clean and planted the shadow at install, i.e.
+re-created the exact bug this whole item exists to close, with no build-time
+signal anywhere.
+
+**INTERLOCK (recorded because it outlives this ticket).** The migration
+prescribed above — `gucman remove X && gucman install X` — is only correct once
+packages CLAIM command names (§4: the `commands` control key, appended to
+`/etc/cmdalt` by gucman install). Without that, removing the shadow leaves the
+key resolving to a baked suggestion the box has not installed, so it converts a
+stuck default into a `python` that exits 127 — strictly worse than the shadow.
+Both landed in the same commit as the manifest entry; the same warning is
+carried in `os/cmdalt.h` beside the code that prints the advice.
 
 ## 8. The control panel — `todos/0130`
 

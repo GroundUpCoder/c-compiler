@@ -17,7 +17,9 @@
  * that served the OS, described by /packages/index.json. Install target is
  * /opt/<name>/ with tracked symlinks into /usr/local/bin (already first on
  * PATH). The manifest is FULLY DECLARATIVE — a package's control.json lists
- * its bin commands, openwith keys, menu entries, font faces (fallback-
+ * its bin commands, openwith keys, command claims (todos/0338 —
+ * dispatched command NAMES this package provides), menu entries, font
+ * faces (fallback-
  * chain lines in /etc/fonts/fallback, Unicode Phase D), srclib tiers
  * (win32 source-lib design §3.1: header + require-source symlink farms at
  * /usr/local/include + /usr/local/src/<ns>, the standard install locations
@@ -74,6 +76,8 @@
 #define GM_REPOS_ETC    "/etc/gucman/repos"
 #define GM_REPOS_USR    "/usr/share/gucman/repos"
 #define GM_OPENWITH     "/etc/openwith"
+#define GM_CMDALT       "/etc/cmdalt"           /* the cmdalt.h /etc layer */
+#define GM_DISPATCH     "/usr/bin/cmdalt"       /* every dispatch link's inode */
 #define GM_MENU_DIR     "/etc/menu"
 #define GM_FONTS_DIR    "/etc/fonts"
 #define GM_FONT_LIST    "/etc/fonts/fallback"   /* the fontchain.h /etc layer */
@@ -148,6 +152,14 @@ static int gm_write_file_atomic(const char *path, const void *data, size_t n, mo
 static int gm_exists(const char *path) {
     struct stat st;
     return lstat(path, &st) == 0;
+}
+
+/* Same file THROUGH symlinks (todos/0338 — the dispatch-link test: every
+ * /usr/bin/<name> dispatch link stats as the one /usr/bin/cmdalt inode). */
+static int gm_same_file(const char *a, const char *b) {
+    struct stat sa, sb;
+    return stat(a, &sa) == 0 && stat(b, &sb) == 0 &&
+           sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
 }
 
 static int gm_valid_name(const char *n) {
@@ -485,6 +497,59 @@ static int gm_openwith_set(const char *key, const char *value) {
     return rc;
 }
 
+/* ==================== cmdalt claim line add/remove ===================== *
+ *
+ * A package CLAIMS a dispatched command name (todos/0338 `commands`): one
+ * "<name>\t<value>" LINE in /etc/cmdalt. Deliberately APPEND-not-replace —
+ * unlike an openwith association, a command key may carry several lines
+ * (that is the candidate set the picker offers, and the first line wins, so
+ * the earliest-installed implementation stays the default and a later
+ * install never silently steals the name). Remove deletes exactly THIS
+ * key+value line, so two implementations installed and one removed leaves
+ * the other's claim standing. Duplicates are idempotent: an identical line
+ * is not appended twice. Removing the last line unlinks the file, so a
+ * package-less system carries no empty config (the gm_fontline_set rule). */
+static int gm_cmdalt_set(const char *key, const char *value, int add) {
+    size_t len = 0;
+    char *old = gm_read_file(GM_CMDALT, &len);
+    size_t kl = strlen(key), vl = strlen(value);
+    size_t cap = (old ? len : 0) + kl + vl + 16;
+    char *out = malloc(cap);
+    if (!out) { free(old); return -1; }
+    size_t o = 0;
+    if (old) {
+        for (char *line = old; line && *line; ) {
+            char *nl = strchr(line, '\n');
+            size_t ll = nl ? (size_t)(nl - line) + 1 : strlen(line);
+            size_t body = ll - (nl ? 1 : 0);
+            /* the exact key+value line, whitespace between them free-form */
+            int is_ours = 0;
+            if (body > kl && strncmp(line, key, kl) == 0 &&
+                (line[kl] == ' ' || line[kl] == '\t')) {
+                const char *v = line + kl;
+                while (v < line + body && (*v == ' ' || *v == '\t')) v++;
+                size_t rest = (size_t)(line + body - v);
+                while (rest && (v[rest - 1] == ' ' || v[rest - 1] == '\t' ||
+                                v[rest - 1] == '\r')) rest--;
+                is_ours = rest == vl && strncmp(v, value, vl) == 0;
+            }
+            if (!is_ours) { memcpy(out + o, line, ll); o += ll; }
+            line = nl ? nl + 1 : NULL;
+        }
+    }
+    if (o && out[o - 1] != '\n') out[o++] = '\n';
+    if (add) o += (size_t)snprintf(out + o, cap - o, "%s\t%s\n", key, value);
+    free(old);
+    if (o == 0) {                        /* nothing left: drop the file */
+        free(out);
+        if (unlink(GM_CMDALT) != 0 && errno != ENOENT) return -1;
+        return 0;
+    }
+    int rc = gm_write_file_atomic(GM_CMDALT, out, o, 0644);
+    free(out);
+    return rc;
+}
+
 /* ==================== font fallback-line add/remove ==================== */
 
 /* Add (add=1) or remove (add=0) one face-path LINE in /etc/fonts/fallback
@@ -622,6 +687,7 @@ static int gm_desktop_flag(void) {
 struct gm_undo {
     cJSON *symlinks;            /* array of planted symlink paths */
     cJSON *openwith;            /* array of planted keys */
+    cJSON *commands;            /* array of {name,value} cmdalt claim lines */
     cJSON *menu;                /* array of planted menu entry paths */
     cJSON *menu_dirs;           /* array of menu dirs WE created */
     cJSON *fonts;               /* array of planted fallback face lines */
@@ -654,6 +720,12 @@ static void gm_unwind(const char *name, struct gm_undo *u) {
     cJSON_ArrayForEach(it, u->menu) unlink(it->valuestring);
     cJSON_ArrayForEach(it, u->menu_dirs) rmdir(it->valuestring);
     cJSON_ArrayForEach(it, u->openwith) gm_openwith_set(it->valuestring, NULL);
+    cJSON_ArrayForEach(it, u->commands) {
+        cJSON *k = cJSON_GetObjectItemCaseSensitive(it, "name");
+        cJSON *v = cJSON_GetObjectItemCaseSensitive(it, "value");
+        if (cJSON_IsString(k) && cJSON_IsString(v))
+            gm_cmdalt_set(k->valuestring, v->valuestring, 0);
+    }
     cJSON_ArrayForEach(it, u->symlinks) unlink(it->valuestring);
     char opt[GM_PATH_MAX];
     snprintf(opt, sizeof opt, GM_OPT_DIR "/%s", name);
@@ -875,6 +947,7 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
     cJSON *db_dirs = cJSON_AddArrayToObject(db, "dirs");
     cJSON *db_links = cJSON_AddArrayToObject(db, "symlinks");
     cJSON *db_ow = cJSON_AddArrayToObject(db, "openwith_keys");
+    cJSON *db_cmd = cJSON_AddArrayToObject(db, "commands");
     cJSON *db_menu = cJSON_AddArrayToObject(db, "menu_entries");
     cJSON *db_menu_dirs = cJSON_AddArrayToObject(db, "menu_dirs");
     cJSON *db_fonts = cJSON_AddArrayToObject(db, "font_faces");
@@ -954,7 +1027,7 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
     }
 
     /* plant the declarative surface; unwind everything on any failure */
-    struct gm_undo undo = { db_links, db_ow, db_menu, db_menu_dirs, db_fonts, db_desktop,
+    struct gm_undo undo = { db_links, db_ow, db_cmd, db_menu, db_menu_dirs, db_fonts, db_desktop,
                             db_inc, db_srcns, db_sldirs, db_seeds, db_seed_dirs };
     int fail = 0;
     cJSON *cbin = cJSON_GetObjectItemCaseSensitive(control, "bin");
@@ -979,6 +1052,25 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
             fail = 1;
             break;
         }
+        /* todos/0338: never plant over a name the base image DISPATCHES.
+         * /usr/local/bin precedes /bin on PATH and /var/local is user
+         * territory an image upgrade never rewrites, so this link would
+         * shadow /usr/bin/<cmd> -> /usr/bin/cmdalt forever, and the only
+         * symptom is "switching the default does nothing". mkpkg refuses to
+         * BUILD such a definition (the folded twin is claim()'s throw); this
+         * is the runtime backstop for a payload that arrived another way.
+         * The right declaration is `commands`, which appends to /etc/cmdalt. */
+        {
+            char disp[GM_PATH_MAX];
+            snprintf(disp, sizeof disp, "/usr/bin/%s", it->string);
+            if (gm_same_file(disp, GM_DISPATCH)) {
+                fprintf(stderr, "gucman: '%s' bin %s would shadow the command "
+                        "dispatcher at %s — refusing (declare a `commands` "
+                        "claim instead)\n", name, it->string, disp);
+                fail = 1;
+                break;
+            }
+        }
         if (symlink(target, link) != 0) {
             fprintf(stderr, "gucman: planting %s: %s\n", link, strerror(errno));
             fail = 1;
@@ -1002,6 +1094,31 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
             break;
         }
         cJSON_AddItemToArray(db_ow, cJSON_CreateString(it->string));
+    }
+    /* `commands` (todos/0338): claim a dispatched command NAME. The value
+     * names one of this package's own bin commands, and the claim line
+     * points at the /usr/local/bin symlink we just planted — so the claim
+     * dies with the package even if someone edits /etc/cmdalt by hand.
+     * APPEND, never replace: the key's candidate list is the point. */
+    cJSON *ccmd = fail ? NULL : cJSON_GetObjectItemCaseSensitive(control, "commands");
+    cJSON_ArrayForEach(it, ccmd) {
+        char cmdpath[GM_PATH_MAX];
+        if (!cJSON_IsString(it) || !gm_valid_name(it->string) ||
+            !cbin || !cJSON_GetObjectItemCaseSensitive(cbin, it->valuestring)) {
+            fprintf(stderr, "gucman: '%s' has a malformed commands entry — refusing\n", name);
+            fail = 1;
+            break;
+        }
+        snprintf(cmdpath, sizeof cmdpath, GM_BIN_DIR "/%s", it->valuestring);
+        if (gm_cmdalt_set(it->string, cmdpath, 1) != 0) {
+            fprintf(stderr, "gucman: writing %s: %s\n", GM_CMDALT, strerror(errno));
+            fail = 1;
+            break;
+        }
+        cJSON *rec = cJSON_CreateObject();
+        cJSON_AddStringToObject(rec, "name", it->string);
+        cJSON_AddStringToObject(rec, "value", cmdpath);
+        cJSON_AddItemToArray(db_cmd, rec);
     }
     cJSON *cmenu = fail ? NULL : cJSON_GetObjectItemCaseSensitive(control, "menu");
     cJSON_ArrayForEach(it, cmenu) {
@@ -1356,6 +1473,14 @@ static int cmd_remove(const char *name) {
     }
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "openwith_keys"))
         if (cJSON_IsString(it)) gm_openwith_set(it->valuestring, NULL);
+    /* cmdalt claims: delete exactly the recorded key+value LINE, never the
+     * key — another implementation's claim on the same name must survive. */
+    cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "commands")) {
+        cJSON *k = cJSON_GetObjectItemCaseSensitive(it, "name");
+        cJSON *v = cJSON_GetObjectItemCaseSensitive(it, "value");
+        if (cJSON_IsString(k) && cJSON_IsString(v))
+            gm_cmdalt_set(k->valuestring, v->valuestring, 0);
+    }
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "symlinks"))
         if (cJSON_IsString(it)) unlink(it->valuestring);
     /* files, then dirs innermost-first, exactly the recorded list */
@@ -1582,6 +1707,21 @@ static void gm_info_strings(cJSON *db, const char *key, const char *label) {
         if (cJSON_IsString(it)) printf("  %s\n", it->valuestring);
 }
 
+/* The `commands` array is object-shaped too ({name, value} — remove deletes
+ * that exact claim LINE, not the key), so it gets its own printer. */
+static void gm_info_commands(cJSON *db) {
+    cJSON *arr = db ? cJSON_GetObjectItemCaseSensitive(db, "commands") : NULL;
+    if (!arr || cJSON_GetArraySize(arr) == 0) return;
+    printf("command claims:\n");
+    cJSON *it;
+    cJSON_ArrayForEach(it, arr) {
+        cJSON *k = cJSON_GetObjectItemCaseSensitive(it, "name");
+        cJSON *v = cJSON_GetObjectItemCaseSensitive(it, "value");
+        if (cJSON_IsString(k) && cJSON_IsString(v))
+            printf("  %s -> %s\n", k->valuestring, v->valuestring);
+    }
+}
+
 /* The `seeds` array is the one object-shaped record (path + sha256), so it
  * needs its own printer — and re-hashing each entry is what makes the list
  * honest about what remove will actually do. */
@@ -1672,6 +1812,7 @@ static int cmd_info(const char *name) {
         gm_info_strings(db, "files", "planted files:");
         gm_info_strings(db, "symlinks", "planted symlinks:");
         gm_info_strings(db, "openwith_keys", "openwith keys:");
+        gm_info_commands(db);
         gm_info_strings(db, "menu_entries", "menu entries:");
         gm_info_strings(db, "font_faces", "font faces:");
         gm_info_strings(db, "desktop", "desktop shortcuts:");

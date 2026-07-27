@@ -12,6 +12,9 @@
 //     files: { "<rel>": <image.json entry> },
 //     bin:   { "<cmd>": "<rel>" },          // /usr/local/bin/<cmd> symlinks
 //     openwith: { "<ext>": "<cmd>" },       // /etc/openwith delta keys
+//     commands: { "<name>": "<cmd>" },      // /etc/cmdalt claim lines: this
+//                                           //   package provides dispatched
+//                                           //   command <name> (todos/0338)
 //     menu:  [ { group, entry, cmd } ],     // /etc/menu/<group>/<entry>
 //     fonts: [ "<rel>" ],                   // /etc/fonts/fallback face lines
 //     srclib: { include: ["<dir>"],         // source-lib §3.1: header +
@@ -486,8 +489,37 @@ async function buildPackage(name, poolDir) {
   for (const cmd of Object.keys(bin)) {
     if (!pkg.files[bin[cmd]]) throw new Error(`package '${name}': bin ${cmd} -> ${bin[cmd]} names no package file`);
   }
+  // todos/0338: a `bin` command must not be a name the BASE IMAGE dispatches.
+  // The fat bake's claim() throw catches this for FOLDED packages only — a
+  // `requires`-gated definition (every *-clang variant) is never folded, so
+  // without this check it would build clean and then plant
+  // /usr/local/bin/<name> at install, silently shadowing the dispatcher
+  // FOREVER (/usr/local/bin precedes /bin on PATH, and /var/local is user
+  // territory an image upgrade never rewrites). `commands` is the way to
+  // provide a dispatched name.
+  const dispatched = Object.keys(imageManifest.system.files || {})
+    .filter((p) => p.startsWith('/usr/bin/') &&
+                   (imageManifest.system.files[p] || {}).link === '/usr/bin/cmdalt')
+    .map((p) => p.slice('/usr/bin/'.length));
+  for (const cmd of Object.keys(bin)) {
+    if (dispatched.includes(cmd)) {
+      throw new Error(`package '${name}': bin ${cmd} would shadow the base image's ` +
+        `command dispatcher at /usr/bin/${cmd} — declare ` +
+        `"commands": { ${JSON.stringify(cmd)}: "<your bin command>" } instead (todos/0338)`);
+    }
+  }
   for (const ext of Object.keys(pkg.openwith || {})) {
     if (!bin[pkg.openwith[ext]]) throw new Error(`package '${name}': openwith ${ext} -> ${pkg.openwith[ext]} names no bin command`);
+  }
+  // `commands` (todos/0338): dispatched command names this package claims —
+  // gucman appends `<name>\t/usr/local/bin/<cmd>` to /etc/cmdalt at install
+  // and deletes exactly that line at remove. A ROLE name (`python`) is a
+  // claim; an IMPLEMENTATION name (`micropython`) is a `bin` entry.
+  for (const cmd of Object.keys(pkg.commands || {})) {
+    if (!/^[a-z0-9][a-z0-9_-]*$/.test(cmd)) {   // gm_valid_name's alphabet
+      throw new Error(`package '${name}': commands key ${JSON.stringify(cmd)} is not a command name`);
+    }
+    if (!bin[pkg.commands[cmd]]) throw new Error(`package '${name}': commands ${cmd} -> ${pkg.commands[cmd]} names no bin command`);
   }
   for (const me of pkg.menu || []) {
     if (!me.group || !me.entry || !bin[me.cmd]) throw new Error(`package '${name}': bad menu entry ${JSON.stringify(me)}`);

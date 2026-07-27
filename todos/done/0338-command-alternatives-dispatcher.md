@@ -1,6 +1,6 @@
 # 0338 — command alternatives — a base-image dispatcher for switchable command defaults (python first)
 
-- **Status**: open
+- **Status**: DONE (2026-07-28, image v179) — see the closeout at the end
 - **Design**: `todos/COMMAND-ALTERNATIVES.md` (the full design pass — store,
   resolution, signal policy, the release-atomicity analysis; read it first),
   `os/cfgstore.h` (the three-layer overlay this reuses), `os/openwith.h` (the
@@ -112,6 +112,64 @@ sequences step 5, but it cannot be dropped or deferred out of the commit.
 - `cmdalt which python` names a shadowing `/usr/local/bin/python` when present.
 - `node tests/run.js --diff` green (kernel + sweep + host + todos); the fat bake
   builds, which by construction proves step 5 landed with step 4.
+
+## Closeout (2026-07-28)
+
+Landed on `0338-dispatcher`, one commit — steps 4 and 5 together, as the
+release-atomicity section requires. `os/image.json` is at `"version": 179`.
+
+Shipped: `os/cmdalt.c` + `os/cmdalt.h` -> `/usr/bin/cmdalt`; `cfg_unset` /
+`cfg_each` / `cfg_keys` / `cfg_walk` / `cfg_path_find` / `cfg_split_argv` /
+`cfg_resolve_prog` in `os/cfgstore.h` with `ow_build` as the `reserve = 1`
+wrapper; the `commands` package-control key end to end (`packageControl`,
+`foldPackages` splicing folded claims AHEAD of the baked body, `tools/mkpkg.js`
+validation, gucman plant/record/remove/unwind/info); the manifest entries +
+baked `/usr/share/cmdalt`; `packages/micropython.json` trading its `python`
+`bin` alias for a `commands` claim; the Default Programs applet in
+`os/win32/ctlpanel.c`; `tests/kernel/test_cmdalt_e2e.js` (46 checks) and the
+`test_ctlpanel_e2e.js` picker legs.
+
+Three additions beyond the work list, each with its reason:
+
+1. **`cmdalt set`/`reset` warn on a shadow** — asked for by the independent
+   CHECK pass (`CHECK-0338-dispatcher-shadow-CONFIRMED-2026-07-28`). The
+   ticket's three diagnostics are all PULL; the user's entry point into this
+   bug is a switch that appears to do nothing, so the warning has to be at the
+   moment of the ineffective action. It also drops the diagnostic's dependency
+   on `0130`.
+2. **A package `bin` that shadows a dispatched name is REFUSED**, at build time
+   (`tools/mkpkg.js`) and at install time (gucman's bin-plant loop). The
+   design filed this as "optional hardening", but its own §7 argument —
+   "the fat bake is self-enforcing" — only covers packages that are FOLDED, and
+   a `requires`-gated definition (every `*-clang` variant, including the
+   `python-clang` this ticket names as the suggestion) is never folded. Without
+   the gate such a definition builds clean and plants the shadow at install:
+   the exact bug this item exists to close, with no build-time signal. Only the
+   mkpkg half has a firing test; the gucman half is unreachable through the
+   shipped pipeline (mkpkg refuses to build the payload, gucman sha-verifies
+   against the mkpkg index), so only its non-firing path is covered — by every
+   install leg in the estate. That coverage gap is filed as `todos/0355` and
+   registered as `L46` — a backstop with no firing test is exactly the shape
+   the liability register exists for.
+3. **Candidates are deduped by value** (`ca_candidates`) — the design already
+   asked for it (§2); without it, picking a candidate writes it to the user
+   layer where it shadows the same value lower down, and the picker then offers
+   the chosen entry twice.
+
+**INTERLOCK, stated where it outlives this ticket** (CHECK item b): the
+migration `gucman remove X && gucman install X` is only correct once packages
+claim command names (step 3). Without that, removing the shadow leaves the key
+resolving to an uninstalled baked suggestion — a stuck default becomes a broken
+`python`. Step 3 shipped in this commit; the constraint is written into
+`os/cmdalt.h` next to the code that prints the advice, and into
+`todos/COMMAND-ALTERNATIVES.md` §7.
+
+Not settled here, and not blocking: the design's §6.2 reservation of `cpython`
+as a hard claim vs the earlier note giving CPython `python3`+`cpython`. Owed to
+`0331`/`0340`. Per master's ruling `python3` is an approved KEY and `cpython`
+is not; no `python3` link is baked (master assigned the manifest edit
+explicitly, and it names only `/usr/bin/python`), so nothing here forecloses
+either answer.
 
 ## Non-goals (recorded, not cut — rationale in the design doc §9)
 

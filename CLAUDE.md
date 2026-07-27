@@ -466,7 +466,8 @@ sqlite3 file-backed DBs exposed the brokered-fsync crash fixed in 0036
 (FS_FSYNC RPC, fsync as a dispatched fs method).
 MicroPython is a real script runner since todos/0117 R1 (it ships as the
 `micropython` gucman PACKAGE, not an image.json entry — `micropython`
-AND `python` both land in `/usr/local/bin`): `python foo.py a b` runs
+lands in `/usr/local/bin`, and since todos/0338 the name `python` is a
+cmdalt CLAIM rather than a second symlink): `python foo.py a b` runs
 the file with `sys.argv` set and its exit status propagated, `-c cmd`
 and stdin-as-script work, `open()`/`io`/`sys.std*` are real file objects
 over the kernel fd layer (`vendor/micropython/file.c`, upstream's POSIX
@@ -932,7 +933,32 @@ default to the FAT image so the estate needs no test changes;
 Repo URL: /etc/gucman/repos > baked /usr/share/gucman/repos
 (origin-relative `/packages`). punes is the first package (Slice 1);
 deploy leg + pulling the other apps are follow-ons.
-Image version is **v140**.
+Command alternatives (todos/0338, design `todos/COMMAND-ALTERNATIVES.md`) make
+a command NAME switchable: `/usr/bin/cmdalt` is a MULTICALL binary whose mode
+is `basename(argv[0])` — under its own name the admin CLI (`list`/`which`/
+`set`/`reset`), under any other name a DISPATCHER that forwards every argument
+verbatim to whatever a fourth cfgstore store names (`~/.config/cmdalt` >
+`/etc/cmdalt` package claims > baked `/usr/share/cmdalt`; KEY = a command
+name, VALUE = an argv prefix; a key may carry SEVERAL lines — that is the
+candidate set, and the first wins, so the earliest claim stays the default).
+Adding a dispatched name is ONE `link` line in image.json plus one store line,
+no C. There is no exec here, so it spawns + waits + exits with the child's
+status (`pv_execve`'s contract), IGNORES SIGINT/SIGQUIT (the pgroup already
+delivered them; the default disposition would orphan a REPL that survives ^C),
+forwards SIGTERM/SIGHUP, and refuses to dispatch to its own inode (the
+fork-bomb guard). An unresolvable pick is 127 with a named fix — NEVER a silent
+fallback to another candidate. `python` is the first user: `/usr/bin/python`
+is a dispatch link, the baked suggestion is `python-clang`, and NOTHING python
+is baked, so a fresh boot's `python` exits 127 with `gucman install
+python-clang` (specified, not a bug — "default python" means once INSTALLED).
+Packages provide a name through the `commands` control key (gucman APPENDS to
+/etc/cmdalt, remove deletes that exact LINE; the fold splices claims ahead of
+the baked body) — never through a `bin` alias, which `/usr/local/bin`-precedes-
+`/bin` would make a permanent silent SHADOW; mkpkg and gucman both refuse one.
+That shadow is diagnosed in four places (`which`, `list`, `set`/`reset`, and
+ctlpanel's new Default Programs applet — todos/0130's picker leg) and
+deliberately not auto-repaired. Tests: `test_cmdalt_e2e.js` + ctlpanel legs.
+Image version is **v179**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

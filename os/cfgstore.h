@@ -27,7 +27,22 @@
  * new baked defaults reach existing users per-key — the pre-CS3 rule (first
  * existing file wins whole-file; set snapshots the effective table forward)
  * froze a user at the defaults of whatever release they first customized
- * under. */
+ * under. cfg_unset is the same stream with the substitution dropped: it
+ * removes the user override so the lower layers serve the key again (there
+ * is deliberately NO tombstone — hiding a baked key is a store-wide
+ * semantic change, todos/0338 §9).
+ *
+ * Iteration (todos/0338): cfg_find answers "the effective value"; a store
+ * whose key may carry SEVERAL lines (cmdalt's candidate implementations)
+ * also needs "every line for this key, in layer order" (cfg_each) and
+ * "every distinct key" (cfg_keys). Both are read-only walks over the same
+ * cfg_load3 concat, so first-match-wins still IS the precedence rule.
+ *
+ * Argv (todos/0338): cfg_split_argv + cfg_resolve_prog are the command
+ * splitter openwith.h's ow_build used to own privately — a store VALUE is
+ * an argv prefix whose bare first word resolves through the canonical
+ * PATH. cmdalt appends N arguments where openwith appends one path, so the
+ * splitter is here and ow_build is the n = 1 wrapper. */
 #ifndef CFGSTORE_H
 #define CFGSTORE_H
 
@@ -129,6 +144,166 @@ static int cfg_find(const char *text, const char *key, char *val, size_t sz) {
     return 0;
 }
 
+/* ------------------------- iteration (todos/0338) ------------------------
+ *
+ * cfg_find deliberately keeps its own in-place key compare (no key buffer
+ * on the hot resolve path, and it is the one function every shipped store
+ * resolves through — it stays byte-identical). The iterators below parse a
+ * line into caller-visible key/value COPIES, and skip exactly what cfg_find
+ * skips: comments, blank/valueless lines, and an entry too long for the
+ * buffer. */
+
+#define CFG_KEY_MAX 64
+#define CFG_VAL_MAX 256
+
+/* Visit one store line. Return nonzero to stop the walk. */
+typedef int (*cfg_line_cb)(const char *key, const char *value, void *user);
+
+/* Split ONE line [p, p+len) into NUL-terminated key/value copies. Returns 1
+ * on a usable KEY<ws>VALUE line, 0 on anything cfg_find would skip. */
+static int cfg_parse_line(const char *p, size_t len, char *key, size_t ksz,
+                          char *val, size_t vsz) {
+    if (!len || *p == '#') return 0;
+    size_t k = 0;
+    while (k < len && p[k] != ' ' && p[k] != '\t') k++;
+    if (!k || k >= len || k + 1 > ksz) return 0;
+    const char *v = p + k;
+    while (v < p + len && (*v == ' ' || *v == '\t')) v++;
+    size_t vlen = (size_t)(p + len - v);
+    while (vlen && (v[vlen - 1] == ' ' || v[vlen - 1] == '\t' || v[vlen - 1] == '\r')) vlen--;
+    if (!vlen || vlen + 1 > vsz) return 0;
+    memcpy(key, p, k); key[k] = 0;
+    memcpy(val, v, vlen); val[vlen] = 0;
+    return 1;
+}
+
+/* Walk every usable line of the concat in order. Returns the number of
+ * lines visited (a nonzero cb return stops the walk and still counts). */
+static int cfg_walk(const char *text, cfg_line_cb cb, void *user) {
+    char key[CFG_KEY_MAX], val[CFG_VAL_MAX];
+    const char *p = text;
+    int n = 0;
+    while (*p) {
+        const char *eol = strchr(p, '\n');
+        size_t len = eol ? (size_t)(eol - p) : strlen(p);
+        if (cfg_parse_line(p, len, key, sizeof key, val, sizeof val)) {
+            n++;
+            if (cb && cb(key, val, user)) return n;
+        }
+        if (!eol) break;
+        p = eol + 1;
+    }
+    return n;
+}
+
+struct cfg_sel { const char *key; cfg_line_cb cb; void *user; int n; int stop; };
+
+static int cfg_sel_cb(const char *key, const char *value, void *u) {
+    struct cfg_sel *s = (struct cfg_sel *)u;
+    if (strcasecmp(key, s->key) != 0) return 0;
+    s->n++;
+    if (s->cb && s->cb(key, value, s->user)) { s->stop = 1; return 1; }
+    return 0;
+}
+
+/* Every line for `key`, in layer order — the CANDIDATE set (cfg_find's
+ * answer is just the first of these). Returns how many matched. */
+static int cfg_each(const char *text, const char *key, cfg_line_cb cb, void *user) {
+    struct cfg_sel s = { key, cb, user, 0, 0 };
+    cfg_walk(text, cfg_sel_cb, &s);
+    return s.n;
+}
+
+struct cfg_keys_st { cfg_line_cb cb; void *user; const char *text; int n; };
+
+/* Is this the FIRST line for `key` in the concat? (dedup without a set:
+ * the texts are a few hundred bytes) */
+static int cfg_first_for(const char *text, const char *key, const char *at) {
+    char k[CFG_KEY_MAX], v[CFG_VAL_MAX];
+    const char *p = text;
+    while (*p && p < at) {
+        const char *eol = strchr(p, '\n');
+        size_t len = eol ? (size_t)(eol - p) : strlen(p);
+        if (cfg_parse_line(p, len, k, sizeof k, v, sizeof v) &&
+            strcasecmp(k, key) == 0) return 0;
+        if (!eol) break;
+        p = eol + 1;
+    }
+    return 1;
+}
+
+/* Every DISTINCT key, in first-appearance order, with its EFFECTIVE value
+ * (the first line — the cfg_find answer). Returns how many keys. */
+static int cfg_keys(const char *text, cfg_line_cb cb, void *user) {
+    char key[CFG_KEY_MAX], val[CFG_VAL_MAX];
+    const char *p = text;
+    int n = 0;
+    while (*p) {
+        const char *eol = strchr(p, '\n');
+        size_t len = eol ? (size_t)(eol - p) : strlen(p);
+        if (cfg_parse_line(p, len, key, sizeof key, val, sizeof val) &&
+            cfg_first_for(text, key, p)) {
+            n++;
+            if (cb && cb(key, val, user)) return n;
+        }
+        if (!eol) break;
+        p = eol + 1;
+    }
+    return n;
+}
+
+/* ---------------------- argv from a store VALUE (todos/0338) -------------
+ *
+ * The canonical PATH, in ONE place: user-installed binaries win over baked
+ * ones (todos/0040 — os/launch.h ships the same string as $PATH). */
+
+/* First existing /usr/local/bin|/bin entry for a bare command name; 1 and
+ * the absolute path, or 0 with out[0] == 0. */
+static int cfg_path_find(const char *name, char *out, size_t sz) {
+    static const char *dirs[2] = { "/usr/local/bin", "/bin" };
+    for (int i = 0; i < 2; i++) {
+        snprintf(out, sz, "%s/%s", dirs[i], name);
+        if (access(out, 0 /* F_OK */) == 0) return 1;
+    }
+    out[0] = 0;
+    return 0;
+}
+
+/* The spawnable program path for a store value's argv[0]: a word with a
+ * slash is used as-is, a bare word resolves through the canonical PATH
+ * (unfound falls back to /bin/<word>, so the caller reports the spawn's
+ * own ENOENT rather than inventing one). */
+static void cfg_resolve_prog(const char *arg0, char *prog, size_t progsz) {
+    if (strchr(arg0, '/')) { snprintf(prog, progsz, "%s", arg0); return; }
+    if (!cfg_path_find(arg0, prog, progsz))
+        snprintf(prog, progsz, "/bin/%s", arg0);
+}
+
+/* Split a store value (an argv prefix) into words, backing storage in buf.
+ * `reserve` slots are left free for the caller's own trailing arguments,
+ * plus one for the NULL terminator. Returns the word count, or 0 (empty
+ * value, or buf too small). The caller NUL-terminates argv after appending
+ * its own args. */
+static int cfg_split_argv(const char *cmd, char *argv[], int maxargs,
+                          int reserve, char *buf, size_t bufsz) {
+    int n = 0;
+    size_t k = 0;
+    const char *p = cmd;
+    while (*p && n < maxargs - reserve - 1) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        const char *s = p;
+        while (*p && *p != ' ' && *p != '\t') p++;
+        size_t len = (size_t)(p - s);
+        if (k + len + 1 > bufsz) return 0;
+        memcpy(buf + k, s, len);
+        buf[k + len] = 0;
+        argv[n++] = buf + k;
+        k += len + 1;
+    }
+    return n;
+}
+
 /* Set one key in the USER layer only: STREAM $HOME/.config/<name> chunk by
  * chunk into a tmp file, substituting the key's line (or appending it at
  * the end), then rename over the original. No size cap on this path — an
@@ -140,14 +315,21 @@ static int cfg_find(const char *text, const char *key, char *val, size_t sz) {
  * user file stays a pure override delta. A read error — or an existing
  * user file that won't open — fails LOUD and leaves the file untouched: a
  * bad snapshot must never be renamed over the original.
+ *
+ * value == NULL is the UNSET half (cfg_unset): the same stream with the
+ * substitution dropped, so the key's user override disappears and the
+ * admin/baked layers serve it again. Nothing is created when there is no
+ * user file to edit — "revert my pick" on a virgin store is a no-op, not a
+ * new empty file.
  * Returns 0, or -1 with errno set. */
-static int cfg_set(const char *name, const char *key, const char *value) {
+static int cfg_write(const char *name, const char *key, const char *value) {
     char buf[CFG_STORE_MAX], user[300], dir[300], tmp[300];
     size_t klen = strlen(key);
     if (klen + 2 > sizeof buf) { errno = ENAMETOOLONG; return -1; }
     cfg_user_path(user, sizeof user, name);
     FILE *uf = fopen(user, "r");
     if (!uf && errno != ENOENT && errno != ENOTDIR) return -1;
+    if (!uf && !value) return 0;              /* nothing to unset */
     snprintf(dir, sizeof dir, "%s/.config", cfg_home());
     mkdir(dir, 0755);   /* EEXIST is fine */
     snprintf(tmp, sizeof tmp, "%s/.%s.tmp", dir, name);
@@ -162,7 +344,7 @@ static int cfg_set(const char *name, const char *key, const char *value) {
             skip = buf[0] != '#' && body > klen &&
                 strncasecmp(buf, key, klen) == 0 &&
                 (buf[klen] == ' ' || buf[klen] == '\t');
-            if (skip && !replaced) {
+            if (skip && !replaced && value) {
                 replaced = 1;
                 if (fprintf(f, "%s\t%s\n", key, value) < 0)
                     err = errno ? errno : EIO;
@@ -178,7 +360,7 @@ static int cfg_set(const char *name, const char *key, const char *value) {
         if (!err && ferror(uf)) err = errno ? errno : EIO;
         fclose(uf);
     }
-    if (!err && !replaced) {
+    if (!err && !replaced && value) {
         if (last != '\n' && fputc('\n', f) == EOF) err = errno ? errno : EIO;
         if (!err && fprintf(f, "%s\t%s\n", key, value) < 0)
             err = errno ? errno : EIO;
@@ -187,6 +369,16 @@ static int cfg_set(const char *name, const char *key, const char *value) {
     if (!err && rename(tmp, user) != 0) err = errno ? errno : EIO;
     if (err) { remove(tmp); errno = err; return -1; }
     return 0;
+}
+
+static int cfg_set(const char *name, const char *key, const char *value) {
+    return cfg_write(name, key, value);
+}
+
+/* Drop `key`'s USER override (todos/0338): the admin/baked layers serve it
+ * again. Returns 0 (including "there was nothing to drop"), or -1. */
+static int cfg_unset(const char *name, const char *key) {
+    return cfg_write(name, key, NULL);
 }
 
 #endif /* CFGSTORE_H */

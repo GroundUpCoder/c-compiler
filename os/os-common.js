@@ -661,11 +661,13 @@ function plantOverlays(mfs, loaded, log) {
  * per-package special cases): the package tree plants under
  * /usr/opt/<name>/, each bin command becomes /usr/bin/<cmd> ->
  * /usr/opt/<name>/<rel>, each menu entry becomes
- * /usr/share/menu/<group>/<entry> -> /usr/bin/<cmd>, and each openwith key
- * appends "<ext>\t/bin/<cmd>" to the baked /usr/share/openwith seed — the
- * exact shapes these entries had when they lived in image.json. The
- * installed-mode twin (gucman install) is /opt/<name> +
- * /usr/local/bin/<cmd> + /etc/menu + /etc/openwith.
+ * /usr/share/menu/<group>/<entry> -> /usr/bin/<cmd>, each openwith key
+ * appends "<ext>\t/bin/<cmd>" to the baked /usr/share/openwith seed, and
+ * each `commands` claim (todos/0338) is spliced AHEAD of the baked
+ * /usr/share/cmdalt body as "<name>\t/bin/<cmd>" — the exact shapes these
+ * entries had when they lived in image.json. The installed-mode twin
+ * (gucman install) is /opt/<name> + /usr/local/bin/<cmd> + /etc/menu +
+ * /etc/openwith + /etc/cmdalt.
  *
  * The folded set is recorded in os-release as PACKAGES=<a,b,...> — the
  * second identity axis (bakedPackages, mirroring bakedOverlays): a minimal
@@ -905,6 +907,7 @@ function packageControl(pkg, label) {
     summary: pkg.summary || '',
     bin: pkg.bin || {},
     openwith: pkg.openwith || {},
+    commands: pkg.commands || {},
     menu: pkg.menu || [],
     fonts: pkg.fonts || [],
   };
@@ -1023,6 +1026,7 @@ function foldPackages(fsMod, pathMod, rootDir, manifest, which, opts) {
       throw new Error("package '" + pkgName + "': " + p + ' conflicts with an existing image entry');
     m.system.files[p] = entry;
   }
+  var cmdaltClaims = '';   // todos/0338: folded `commands` claims, spliced below
   names.forEach(function (name) {
     var pkg = JSON.parse(fsMod.readFileSync(
       pathMod.join(pkgDir, name + '.json'), 'utf-8'));
@@ -1107,6 +1111,21 @@ function foldPackages(fsMod, pathMod, rootDir, manifest, which, opts) {
         throw new Error('folding package openwith keys needs an inline-content /usr/share/openwith seed');
       ow.content += ext + '\t/bin/' + cmd + '\n';
     });
+    // `commands` (todos/0338): the package CLAIMS a dispatched command name.
+    // The runtime twin is gucman APPENDING the same key+value line to
+    // /etc/cmdalt, which outranks the baked suggestion — so the folded
+    // claims are collected here and spliced in AHEAD of the baked
+    // /usr/share/cmdalt body below, keeping the fat bake and a real install
+    // resolving identically (first line for a key wins; append-not-replace
+    // is what gives the picker its candidate set).
+    Object.keys(pkg.commands || {}).sort().forEach(function (name2) {
+      var cmd = pkg.commands[name2];
+      if (!/^[a-z0-9][a-z0-9_-]*$/.test(name2))   // gm_valid_name's alphabet
+        throw new Error("package '" + name + "': commands key " + JSON.stringify(name2) + ' is not a command name');
+      if (!bin[cmd])
+        throw new Error("package '" + name + "': commands " + name2 + ' -> ' + cmd + ' names no bin command');
+      cmdaltClaims += name2 + '\t/bin/' + cmd + '\n';
+    });
     // `fonts` (fallback-chain faces, Unicode Phase D) deliberately do NOT
     // fold: they never lived in the baked /usr (nothing for the fat image
     // to restore), they'd add tens of MB to every dev/test image fetch,
@@ -1146,6 +1165,12 @@ function foldPackages(fsMod, pathMod, rootDir, manifest, which, opts) {
     claim(name, base + '/control.json',
       { content: packageControlText(pkg, "package '" + name + "'") });
   });
+  if (cmdaltClaims) {
+    var ca = m.system.files['/usr/share/cmdalt'];
+    if (!ca || ca.content === undefined)
+      throw new Error('folding package commands claims needs an inline-content /usr/share/cmdalt seed');
+    ca.content = cmdaltClaims + ca.content;
+  }
   m.packagesBaked = names;
   return { manifest: m, names: names };
 }

@@ -73,8 +73,11 @@ const PKG_MAIN_PY = 'print("PKGMAIN=" + __name__)\n';
 // A #! script (todos/0065 _spawnShebang). Proves the shebang story needs no
 // new mechanism: the kernel re-dispatches to the interpreter with the script
 // path as argv[1], which is exactly the CLI R1 built. It also pins the thing
-// that matters for todos/0338 — the shebang names /usr/local/bin/python, the
-// same path the dispatcher will own, so these scripts follow it for free.
+// that matters for todos/0338 — the interpreter path in a shebang is resolved
+// like any other spawn, so a script naming the dispatch link /bin/python
+// reaches whatever cmdalt resolves, with no shebang mechanism change. (This
+// fixture plants its own /usr/local/bin/python; the shipped package claims the
+// NAME through /etc/cmdalt instead of planting that symlink.)
 const SHEBANG_PY = [
   '#!/usr/local/bin/python',
   'import sys, sibling2',
