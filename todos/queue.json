@@ -76,6 +76,7 @@
     { "id": "0328", "difficulty": "light" },
     { "id": "0329", "priority": 3, "difficulty": "light" },
     { "id": "0330", "difficulty": "light" },
-    { "id": "0331" }
+    { "id": "0331" },
+    { "id": "0332", "priority": 0, "difficulty": "heavy" }
   ]
 }

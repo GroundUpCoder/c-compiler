@@ -1,0 +1,3 @@
+cpython-ours    bytes= 7006275  V8 compile p50=3.8 ms
+cpython-clang   bytes= 4523831  V8 compile p50=2.2 ms
+micropython-32m bytes=  555748  V8 compile p50=0.4 ms

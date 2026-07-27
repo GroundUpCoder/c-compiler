@@ -1,0 +1,8 @@
+# real seconds, whole process. slope vs SCALE = true per-iteration cost
+mp32m  startup     real 0.03
+mp32m  arith S=20k real 0.30
+mp32m  arith S=40k real 0.57
+clang  startup     real 0.09
+clang  arith S=200kreal 0.22
+ours   startup     real 2.54
+ours   arith S=20k real 15.93
