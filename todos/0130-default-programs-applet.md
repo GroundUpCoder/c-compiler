@@ -1,7 +1,12 @@
 # 0130 — Default Programs applet — GUI file-association editor in ctlpanel
 
-- **Status**: deferred (mass-deferred 2026-07-12; was: open)
-- **Design**: `todos/done/0072-openwith-associations.md` (the resolver +
+- **Status**: open — re-opened 2026-07-27 (it had been mass-parked
+  2026-07-12) by jku's command-alternatives ruling, which asks for exactly
+  this applet as the place a user switches a command's default; the picker
+  leg is owed by `todos/0338`, the file-association half stays here
+- **Design**: `todos/COMMAND-ALTERNATIVES.md` §8 (the command-key half of
+  this applet — what the picker must show, and the shadow warning it owes),
+  `todos/done/0072-openwith-associations.md` (the resolver +
   store this applet edits; its closeout descoped "a full GUI
   association-list editor (ctlpanel)" — no follow-up was owed until now),
   `os/openwith.h` (the ONE policy core — this applet is UI over it,
@@ -46,13 +51,24 @@ CLI read path, nothing else.
   there whether that's wanted). An "Add…" affordance to associate a new
   extension. All writes land in `~/.config/openwith` exactly like the CLI
   and fileman picker — three editors, one store, one format.
+- **The command-defaults half** (added 2026-07-27; owed by `todos/0338`,
+  specified in `todos/COMMAND-ALTERNATIVES.md` §8): a second list over the
+  `cmdalt` store — one row per command key, the candidate implementations
+  for the selected key, Set as default / Use default, and the PATH-shadow
+  warning. Windows' own Default Programs has the same split ("set your
+  default programs" vs "associate a file type"), so this is one applet with
+  two lists, not two applets. It needs `cfg_each` + `cfg_unset` in
+  `os/cfgstore.h`, which `0338` adds — `cfg_unset` is also what unblocks
+  this item's own Remove button.
 - Keep it agent-drivable per the OS.md pillar: label-addressable buttons,
   `wmctl click`/`settext`/`gettext` round-trip like the other applets.
 
 ## Non-goals (record, don't build)
 
-- Per-key merge across the three stores — the model is whole-file
-  first-existing (`os/openwith.h` header comment); don't fork it.
+- ~~Per-key merge across the three stores~~ — **stale as written**: todos/0244
+  made the overlay per-key (see the Goal section above). The live non-goal is
+  a *tombstone* layer (hiding a baked/`/etc` key from the user file); Remove
+  means "drop the user override", nothing more.
 - A MIME database / content-type sniffing — keys are lowercase
   extensions, full stop (0072 decision).
 - Registry-backed persistence — associations are plain-text store files,
@@ -69,5 +85,9 @@ CLI read path, nothing else.
   `~/.config/openwith`, and a subsequent `open <file>` resolves to the
   new command; Remove drops the key and resolution falls back to
   `default.*`.
+- Command defaults: the applet lists the `cmdalt` keys and, for a selected
+  key, its candidates; `wmctl click "Set as default"` writes
+  `~/.config/cmdalt` and the dispatched name then runs the picked
+  implementation; a shadowing `/usr/local/bin/<name>` raises the warning row.
 - Browser (`os-shell.mjs` leg): the applet opens in its own window,
   composites, and an edit round-trips through the store.
