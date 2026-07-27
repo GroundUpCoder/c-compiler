@@ -241,11 +241,6 @@ thing this file exists to kill.
 - file: vendor/netsurf/netsurf/content/handlers/html/form.c
 - anchor: 	 * (Per spec a PROGRAMMATIC submit — form.submit() — does not fire
 
-### L38 — tests/run.js's RULES table maps no vendor/ path except micropython; every other vendored project is UNMAPPED
-- ticket: 0318
-- file: tests/run.js
-- anchor: // UNMAPPED on a diff. That gap is todos/0318.)
-
 ### L39 — SDecl's child-rewrite hook is a no-op, so a generic walker's rewrite of a declaration initializer is silently discarded
 - ticket: 0326
 - file: compiler.js
@@ -271,5 +266,10 @@ thing this file exists to kill.
 - ticket: 0117
 - file: vendor/micropython/README.md
 - anchor: - **Modules a Python programmer will reach for and not find**: `datetime`,
+
+### L44 — newestBakeInput recurses a project's `deps` but not its `sources`, so vendor/cjson edits never restale the blob
+- ticket: 0354
+- file: tests/run.js
+- anchor: // also MISSED by newestBakeInput, which only recurses `deps`: an edit here
 
 <!-- END ENTRIES -->

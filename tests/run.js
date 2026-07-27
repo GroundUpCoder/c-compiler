@@ -225,8 +225,10 @@ const RULES = [
   // e2e + the script-runner e2e); and it is a gucman package, so it also
   // folds into the fat image fixture every browser boot comes out of —
   // i.e. the same blast radius as a ^packages/ edit.
-  // (NB: vendor/ has no blanket rule — every OTHER vendored project reports
-  // UNMAPPED on a diff. That gap is todos/0318.)
+  // (The vendor/ block near the end of this table states every vendored
+  // project's gate, and ends in a catch-all — so no vendor path can report
+  // UNMAPPED. This rule is the precedent that block generalizes: package-borne
+  // ⇒ the fat-fixture radius.)
   [/^vendor\/micropython\//, ['micropython', 'micropython-upstream', 'kernel', 'sweep'],
     'the MicroPython port: its upstream corpus, both kernel e2es, and the fat-image package'],
   // The genhdr regenerator: its --check (the qstr-pool-vs-config sync guard)
@@ -258,32 +260,131 @@ const RULES = [
   [/^tests\/projects\//, ['projects'], null],
   [/^tests\/micropython\//, ['micropython', 'micropython-upstream'], null],
 
-  // Vendored projects → their run.py category + the projects build check.
-  [/^vendor\/lua\//, ['lua', 'projects'], null],
-  [/^vendor\/sqlite\//, ['sqlite', 'projects'], null],
-  [/^vendor\/zlib\//, ['zlib', 'projects'], null],
-  [/^vendor\/freetype\//, ['freetype', 'projects'], null],
-  [/^vendor\/libpng\//, ['libpng', 'projects'], null],
-  [/^vendor\/cairo\//, ['cairo', 'projects'], null],
+  // ---- vendored projects (todos/0318) ----
+  //
+  // Three axes decide a vendor dir's gate. Every dir below states which of
+  // them it answers to; a dir answering none falls to the catch-all at the
+  // end of this block.
+  //
+  //   1. THE BAKE-INPUT CLOSURE. os-common.js's `newestBakeInput` is the
+  //      estate's own oracle for "does an edit here restale the system
+  //      blob": image.json's project/bin closure (each bin.json expanded
+  //      through its `deps`, whole project dir walked) plus EVERY
+  //      packages/*.json's, scanned unconditionally. 25 of the 37 vendor
+  //      dirs are inside it. The shared fixture is the FAT image
+  //      (tests/lib/image-fixture.js bakes `mkimage --packages=all`), so a
+  //      packaged app's tree restales the blob every kernel e2e AND every
+  //      browser boot comes out of — the same blast radius as a ^packages/
+  //      edit, which is why those dirs carry `kernel` + `sweep`.
+  //      `sweep` is not redundant with `kernel` here: the headless suite
+  //      never constructs a compositor, so a blob change that breaks
+  //      RENDERING is invisible to it and visible only in a real browser.
+  //   2. a tests/run.py category that builds it → that category.
+  //   3. a `vendor/<d>/bin.json` → the `projects` compile check (run.py's
+  //      `projects` globs exactly that, so a lib.json-only tree gets no
+  //      direct build — it is covered through the consumers that dep on it).
+  //
+  // Rules UNION, so the catch-all at the end of this block is a FLOOR: every
+  // vendor path draws at least `projects`, and no entry here can subtract it.
+  // An entry that lists fewer suites is therefore documenting a reason, not
+  // narrowing the gate below that floor.
+  //
+  // Category + closure: each of these is a gucman package or a seeded
+  // binary, so it owes the fat-fixture radius on top of its own category.
+  [/^vendor\/lua\//, ['lua', 'projects', 'kernel', 'sweep'],
+    'the lua package (packages/lua.json) — its category, its build check, and the fat fixture'],
+  [/^vendor\/sqlite\//, ['sqlite', 'projects', 'kernel', 'sweep'],
+    'the sqlite3 package — no browser leg of its own; `sweep` is the fat-fixture radius'],
+  [/^vendor\/zlib\//, ['zlib', 'projects', 'kernel', 'sweep'],
+    'linked by libpng/gucman/netsurf, all seeded — a zlib edit changes baked binaries'],
+  [/^vendor\/freetype\//, ['freetype', 'projects', 'kernel', 'sweep'],
+    'the glyph engine behind ksvc/term/win32/menucore — it moves text in BOTH composites'],
+  [/^vendor\/libpng\//, ['libpng', 'projects', 'kernel', 'sweep'],
+    'the libpng package + the netsurf/deck image path'],
+  [/^vendor\/cairo\//, ['cairo', 'projects', 'kernel', 'sweep'],
+    'the cairodemo package; os-cairo.mjs asserts its pixels'],
   [/^vendor\/micropython\//, ['micropython', 'projects'], null],
   [/^vendor\/tcc\//, ['tcc', 'projects'], null],
   [/^vendor\/libc-test\//, ['libc'], null],
   [/^vendor\/disw\//, ['disw', 'projects'], null],
+  // libgit2 is a large-codebase compile stress test and the fakegit backend.
+  // It is NOT in the bake closure (nothing seeds or packages it), so it
+  // deliberately stops at its category + the build check — no OS suites.
   [/^vendor\/libgit2\//, ['fakegit', 'projects'], null],
+  // The deterministic fakegit fixture: run.py's `fakegit` category builds it.
+  [/^vendor\/fakegit\//, ['fakegit', 'projects'], 'the fakegit category builds this tree'],
+  // The Csmith programs the `fuzz` category compiles (run.py CSMITH_CORPUS_DIR).
+  // No bin.json, so `projects` would be a no-op — the category IS the gate.
+  [/^vendor\/csmith-corpus\//, ['fuzz'], 'the vendored Csmith corpus the fuzz category compiles'],
+
+  // Closure-only: no run.py category of its own, but seeded or packaged, so
+  // an edit here changes the blob every e2e and every browser boot uses.
+  [/^vendor\/(calc|notepad)\//, ['projects', 'kernel', 'sweep'],
+    'seeded win32 apps (os/image.json) — their .res packs ride the blob too'],
+  [/^vendor\/winmine\//, ['projects', 'kernel', 'sweep'],
+    'the winmine package; test_winmine_e2e.js + os-winmine.mjs assert it'],
+  [/^vendor\/(jq|mgba|punes)\//, ['projects', 'kernel', 'sweep'],
+    'gucman packages folded into the fat fixture (test_gucman_e2e.js installs them)'],
+  [/^vendor\/(giflib|pixman)\//, ['projects', 'kernel', 'sweep'],
+    'lib deps of seeded apps (giflib→magicpoint, pixman→cairo) — no direct e2e, real blob bytes'],
+  // The baked font faces: two packages plus 8 image.json entries, and run.py's
+  // freetype category renders with NotoSansMono. Glyph bytes move every
+  // rendered label in both composites, so the browser leg is load-bearing.
+  [/^vendor\/fonts\//, ['freetype', 'kernel', 'sweep'],
+    'baked faces + two font packages — a face edit moves every rendered glyph'],
+  // cJSON is compiled INTO five seeded projects (gucman, software, deck,
+  // gcode, deskdefaults) via their `sources`, not their `deps` — so it has no
+  // bin.json of its own and `projects` cannot build it. NB it is therefore
+  // also MISSED by newestBakeInput, which only recurses `deps`: an edit here
+  // changes baked binaries without restaling the blob (todos/0354).
+  [/^vendor\/cjson\//, ['kernel', 'sweep'],
+    'compiled into five seeded projects; it has no bin.json, so the floor `projects` builds nothing for it'],
+  // The browser terminal widget, loaded by os/os.html — VT1 in every browser
+  // boot. Headless boot.js never loads os.html, so `kernel` would be a
+  // fiction here; the sweep is the whole gate. No bin.json (it is JS).
+  [/^vendor\/xterm\//, ['sweep'],
+    'the os.html terminal widget — browser-only; it is JS, so the floor `projects` builds nothing for it'],
+
+  // Outside the gated estate. NB an `[]` here would be INERT: rules union and
+  // the catch-all below is a floor no entry can subtract from, so these still
+  // draw `projects` — which builds nothing for them (neither has a bin.json).
+  // They are listed anyway because the point is to record that someone looked.
+  [/^vendor\/hello\//, ['projects'],
+    'a README + one main.c, zero consumers — the floor is all it gets, and it builds nothing'],
+  [/^vendor\/codemirror\//, ['projects'],
+    'its only consumer is tools/disasm, itself an explicitly ungated side tool'],
+  // Have a bin.json (so the `projects` compile check builds them) but are
+  // neither seeded, packaged, nor named by any e2e — verified against
+  // os/image.json, packages/*.json and the kernel/browser suites. Stated
+  // explicitly so the narrow gate reads as a decision, not an oversight.
+  // (tinyemu used to ride the OS-seeded rule below and drew kernel+sweep it
+  // could not justify — nothing has seeded it since the 0262 package split.)
+  [/^vendor\/(quickjs|tinyemu)\//, ['projects'],
+    'compile-only vendored projects: a bin.json build check, nothing seeds them'],
   // NetSurf constellation: bin.json (monkey smoke) is a projects build; the
   // gucOS frontend (gucos/) is seeded as /usr/bin/netsurf and exercised
-  // in-window by the test_netsurf_*_e2e family (no browser leg, so no sweep —
-  // the OS-side coverage is the kernel e2es).  The two monkey harnesses,
+  // in-window by the test_netsurf_*_e2e family. `sweep` was originally
+  // declined here on the grounds that no browser leg names netsurf — true,
+  // but it weighs the wrong thing (todos/0318): gucos/ is in the bake
+  // closure and packages/netsurf-demos.json folds in too, so an edit here
+  // changes the BLOB every browser boot comes out of, exactly like the
+  // seeded apps below. The headless suite has no compositor, so it cannot
+  // stand in for that.  The two monkey harnesses,
   // vendor/netsurf/smoke.mjs (JS off) and smoke-js.mjs (the JS gate), stay
   // manual recipes documented in vendor/netsurf/README.md: they each rebuild
   // the whole ~850-TU constellation, which the projects suite already covers.
-  [/^vendor\/netsurf\//, ['projects', 'kernel'], 'the browser constellation + its in-window e2es'],
+  [/^vendor\/netsurf\//, ['projects', 'kernel', 'sweep'],
+    'the browser constellation, its in-window e2es, and the fat fixture it is seeded into'],
   // OS-seeded vendor apps (doom/quake/gameboy/sameboy/busybox/…) restale the
   // image and are exercised by the OS e2es + the browser sweep.
-  [/^vendor\/(doom|quake|gameboy|sameboy|snake|busybox|tinyemu|micropython|magicpoint|sent)\//,
+  [/^vendor\/(doom|quake|gameboy|sameboy|snake|busybox|micropython|magicpoint|sent)\//,
     ['projects', 'kernel', 'sweep'], 'seeded into the OS image'],
-  // Any other vendor dir: at least a project build check.
-  [/^vendor\//, ['projects'], 'a vendored project build'],
+
+  // The catch-all. Its job is that a NEWLY vendored tree can never report
+  // UNMAPPED — it is a floor, not an answer, so it must stay LAST and must
+  // stay. When a new dir lands, give it its own rule above and let this keep
+  // covering the next one.
+  [/^vendor\//, ['projects'], 'a vendored project build (floor — state the real gate above)'],
 ];
 
 // ---------- Arg parsing ----------
