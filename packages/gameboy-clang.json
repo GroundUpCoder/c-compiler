@@ -1,0 +1,14 @@
+{
+  "name": "gameboy-clang",
+  "version": "1.0.0",
+  "summary": "Game Boy emulator (clang-built — Peanut-GB @8e65698, the clang twin of the baked /bin/gameboy; no ROM: runs the built-in test ROM)",
+  "requires": "clang-sibling",
+  "files": {
+    "gameboy-clang": { "clangApp": "gameboy-clang" }
+  },
+  "bin": { "gameboy-clang": "gameboy-clang" },
+  "desktop": { "cmd": "gameboy-clang" },
+  "menu": [
+    { "group": "Games", "entry": "gameboy-clang", "cmd": "gameboy-clang" }
+  ]
+}
