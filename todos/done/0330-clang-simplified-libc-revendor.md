@@ -1,6 +1,6 @@
 # 0330 — Re-vendor clang-simplified's wasm/libc (206 commits stale; blocks CPython)
 
-- **Status**: open
+- **Status**: **done (2026-07-28)** — merged in BOTH repos (`c-compiler` `9a56e359`, `clang-simplified` `35b080e`) and acceptance `test_clang_pkgs_e2e.js` run and PASSING. ⚠️ Its close-out measurement was WRONG in the reassuring direction: see `todos/0349` — the lane's "5 of 10 overlay payloads changed" was the BUILD PATH, not the libc (true delta: `ninja-clang` +48 B). The re-vendor itself is correct and is NOT reopened.
 - **Design**: `logs/2026-07-27/python-clang.md` §"The libc is 206 commits stale"
 
 ## Goal

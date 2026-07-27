@@ -19,7 +19,7 @@
     { "id": "0110", "after": ["0109"] },
     { "id": "0115", "priority": 3 },
     { "id": "0116", "priority": 2, "after": ["0102"] },
-    { "id": "0117", "priority": 0, "difficulty": "medium" },
+    { "id": "0117", "priority": 3, "difficulty": "medium" },
     { "id": "0120", "priority": 2, "after": ["0118"] },
     { "id": "0121", "priority": 3, "after": ["0118"] },
     { "id": "0122", "difficulty": "medium" },
@@ -78,7 +78,7 @@
     { "id": "0331", "blockedBy": ["0340"] },
     { "id": "0334", "priority": 3, "difficulty": "light" },
     { "id": "0335", "priority": 2, "difficulty": "medium" },
-    { "id": "0336", "priority": 0, "difficulty": "heavy" },
+    { "id": "0336", "priority": 2, "difficulty": "heavy" },
     { "id": "0338", "difficulty": "medium" },
     { "id": "0341", "priority": 2, "difficulty": "light" },
     { "id": "0342", "difficulty": "light" },
@@ -91,6 +91,7 @@
     { "id": "0349", "priority": 2, "difficulty": "medium" },
     { "id": "0350", "priority": 2, "difficulty": "heavy" },
     { "id": "0351", "priority": 2, "difficulty": "medium", "blockedBy": ["0350"] },
-    { "id": "0352", "priority": 2, "difficulty": "medium", "blockedBy": ["0350"] }
+    { "id": "0352", "priority": 2, "difficulty": "medium", "blockedBy": ["0350"] },
+    { "id": "0353", "priority": 3, "difficulty": "light" }
   ]
 }

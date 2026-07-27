@@ -1,6 +1,15 @@
 # 0117 — MicroPython: script runner + FS import (multi-round, unlocks /bin/python)
 
-- **Status**: open — **R1 LANDED 2026-07-27**, R2 is the remaining work (META:
+- **Status**: open — **R1 LANDED 2026-07-27; R2 LANDED 2026-07-28** (merged
+  `a57673ca`, shipped as micropython package **1.28-3**, edge-verified 16/16).
+  **EVERY FUNDED ROUND HAS SHIPPED.** What remains is Round 3+, which is
+  explicitly demand-driven ("driven by demand, not speculation") and has no
+  named demand — so master cont-113 **demoted this P0 → P3 on 2026-07-28**.
+  It had been sitting at **rank 1 of 91, `ready`**, where its own line 3 still
+  read "R2 is the remaining work" while §R2 below read "DONE": a lane taking
+  the top ready item would have re-done shipped work. jku's foregrounding
+  instruction (quoted below) is **discharged**, not withdrawn — it bought R1
+  and R2 and both landed (META:
   each round is its own commit). **Foregrounded 2026-07-27 on jku's direct
   instruction**
   ("Ok so we're foregrounding all the micropython work right? NetSurf is good but

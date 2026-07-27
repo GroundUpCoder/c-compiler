@@ -1,6 +1,15 @@
 # 0336 — CPython startup is 26x clang because V8 spends 2.3 s optimizing ONE of our functions
 
-- **Status**: open
+- **Status**: open — **DEMOTED P0 → P2 by master cont-113, 2026-07-28.** This is
+  the explicit call the Goal section below demands. Implements decider verdict
+  **D2** (`~/git/meta/meta/notes/fable-decider-python-primary-2026-07-27.md`);
+  ⚠️ **D2 is a DECIDER call, not jku's** — do not let it launder into "jku
+  decided" (`notes/correction-decision-provenance-2026-07-27.md`). The demotion
+  had been decided but never reached this line or the queue row, so the item sat
+  at **rank 1 of 92, P0, `ready`** — the (BF) failure: a decision lands as a new
+  file while the thing everyone reads is the index row.
+  **Funded sliver = step 1 only** (the `--wasm-tier-up-filter` discriminator).
+  Anything past step 1 is unfunded and wants a fresh call.
 - **Context**: `logs/2026-07-27/0332-dispatch-1000x-rootcause.md` §5
 - **Raw**: `tools/bench2x2/results/0332-turbofan-census.txt`,
   `tools/bench2x2/results/0332-cpython-ab-throughput-startup.txt`
