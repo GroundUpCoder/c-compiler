@@ -1,6 +1,13 @@
 # CPYTHON.md — CPython on gucOS: the vendor tree, the stdlib, and the `python-clang` package (M1-clang design)
 
-Status: **DESIGN, ratified route** — designed 2026-07-28 by the M1-clang design
+Status: **DESIGN, ratified route — EXECUTED by `todos/0340` on 2026-07-28.**
+Where execution measured something different from what this document projected,
+the correction is folded in below and marked **[0340]**; the design's structure
+and every decision in §1 survived unchanged. Landing log:
+`logs/2026-07-28/0340-cpython-vendor-tree.md`; the as-built record (patch table,
+pyconfig deltas, Tier-2 measurements) is `vendor/cpython/README.md`.
+
+Original status: **DESIGN, ratified route** — designed 2026-07-28 by the M1-clang design
 lane. Funding provenance: jku's lean ("python-clang as the preferred python …
 a python that has the highest chance of being able to support pygame in the
 future", email 2026-07-27 ~23:30), executed by a decider call under the
@@ -185,6 +192,17 @@ Projection once 0340 lands its in-scope items (ELOOP + termios/fcntl + zlib
 + sysconfigdata + subprocess patch): **~166/183** top-level modules import;
 the residue is the socket/ssl/compression/ctypes families above.
 
+**[0340] Measured: 166 of 180** — the projection held. (The denominator is 180,
+not 183, because this sweep enumerates the SHIPPED tree, which no longer
+contains `turtle`/`ensurepip`; `antigravity` and `this` are excluded as
+non-modules.) The 14 failures are `_socket` ×8, `_bz2`, `_lzma`, `_ctypes`,
+`_curses`, `_ssl` — every one a cause already in the table above, and the
+acceptance test now FAILS on any failure outside that set, so the table cannot
+quietly go stale. Both Tier-2 candidates were measured and both are **IN**:
+`_decimal` +258,947 B (+4.2 %) and 8.8× faster than `_pydecimal`; `_sqlite3`
++1,173,422 B (+19.0 %) against the already-ported `vendor/sqlite`. Numbers and
+reasoning: `vendor/cpython/README.md` §2.
+
 ### 3.4 Interpreter performance note
 
 The v177 switch-lowering fix (0332) is live in production **including inside
@@ -211,6 +229,20 @@ deliberately absent), and our libc ships `posix_spawn` + the full
    `_USE_POSIX_SPAWN` on this platform; the vfork branch is unreachable.
 3. `_posixsubprocess` is **never built**. No stub module — an honest absence
    plus the patch is smaller than a lying stub.
+
+**[0340] The patch is bigger than three lines, and two of the four pieces were
+not visible from a host-side read.** As built: the guarded import and the forced
+`_USE_POSIX_SPAWN` are as designed, but `subprocess.run(["ls"])` ALSO needed
+(a) a bare program name to go through `os.posix_spawnp` — upstream routes that
+case to `fork_exec` purely because `os.posix_spawn` does not search `PATH` — and
+(b) `close_fds=True`, CPython's DEFAULT, which requires `POSIX_SPAWN_CLOSEFROM`.
+0340 implemented the latter properly rather than working around it:
+`posix_spawn_file_actions_addclosefrom_np` in the libc travels as fd-action op 3
+and the kernel — the only side that knows which descriptors are open —
+enumerates and drops them at spawn. That is a general gucOS capability, not a
+Python accommodation. `HAVE_SIGSET_T` also had to be turned on (it was never
+emitted by the configure at all), or `restore_signals=True` — again the default
+— raised `NotImplementedError`.
 
 This makes `subprocess.run(["ls"])` a real gucOS spawn. **Runtime behavior
 under the kernel fd/pipe layer is unmeasured until 0340's e2e** — the design
@@ -312,6 +344,11 @@ clears the cache by existing policy. First-import compile cost on BlockFS is
 lever — a measurement, not a redesign.
 
 ### 5.4 Platform identity
+
+**[0340]** The knob is `-DPLATFORM`, which `Python/getplatform.c` reads;
+`MACHDEP` is not referenced by any TU in the built set, so the design's
+"`MACHDEP "gucos"`" is satisfied by the define (the name is still recorded in
+`_sysconfigdata__gucos_.py` for `sysconfig.get_config_var('MACHDEP')`).
 
 `sys.platform` is currently `"unknown"` (nothing passes `-DPLATFORM`).
 Decision: **`gucos`** — honest, greppable, and it names the sysconfigdata
@@ -454,10 +491,18 @@ What M1 must get right NOW so M2/M3 stay possible — and does:
 
 ## 9. Unmeasured / open
 
-- **Everything in-OS.** All §3/§5 verification is host-side (node host.js).
-  In-OS spawn, RemoteFS import latency over 548 files, pyc-cache write
-  behavior, subprocess-over-kernel — all 0340 acceptance work, none expected
-  novel, all unmeasured.
+- ~~**Everything in-OS.**~~ **[0340] Now measured** —
+  `tests/kernel/test_python_clang_e2e.js`, 42 legs green: install/remove,
+  zero-env landmark discovery over RemoteFS, the symlinked-argv0 walk, argv +
+  exit status, `subprocess.run` across the spawn broker, the 166/180 sweep,
+  and the pyc cache landing in `/var` with `/opt` left pristine.
+  **It was NOT "none expected novel".** The in-OS run found a P0-class defect
+  the host-side probe structurally could not: the brokered `__readdir` set
+  `errno = EIO` at end-of-directory, so the POSIX EOF idiom reported a phantom
+  I/O error on every directory walk under a kernel — which made the whole
+  stdlib unimportable in-OS while working perfectly under bare host.js. That is
+  the argument for the in-OS acceptance leg existing at all, and it applies to
+  every gucOS program that walks a directory, not just this one.
 - Cold-start import cost of a real script (`import pygame`-scale graphs) on
   BlockFS — unmeasured; the zip/pyc lever exists if it hurts.
 - `_sqlite3`/`_decimal` binary deltas — unmeasured (Tier 2 gates on

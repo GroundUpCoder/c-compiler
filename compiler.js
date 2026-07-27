@@ -23672,6 +23672,12 @@ extern int errno;
 #define ENAMETOOLONG 36
 #define ENOSYS  38
 #define ENOTEMPTY 39
+/* The BlockFS path walk really raises this: SYMLOOP_MAX is 40 hops and the
+   walker sets errno 40 on overrun (host.js _walkHops). It was the one live
+   kernel errno with no <errno.h> name, which broke every consumer that spells
+   it — CPython's errno.py does "from errno import ELOOP", taking pathlib,
+   zipfile, zipapp and compileall down with it (todos/0340). */
+#define ELOOP   40
 #define EWOULDBLOCK EAGAIN
 #define ENOLCK    37
 #define ETIMEDOUT 110
@@ -25321,6 +25327,7 @@ static inline int getpwuid_r(uid_t uid, struct passwd *pwd, char *buf, size_t bu
   "termios.h": `
 #pragma once
 #include <sys/types.h>
+#include <errno.h>
 
 typedef unsigned int tcflag_t;
 typedef unsigned char cc_t;
@@ -25395,11 +25402,53 @@ struct termios {
 #define TCSADRAIN 1
 #define TCSAFLUSH 2
 
+/* tcflush() queue selectors and tcflow() actions — Linux's numbering. */
+#define TCIFLUSH  0
+#define TCOFLUSH  1
+#define TCIOFLUSH 2
+
+#define TCOOFF 0
+#define TCOON  1
+#define TCIOFF 2
+#define TCION  3
+
+/* Terminal rates. This libc encodes a speed as the LITERAL baud number (the
+   BSD convention) rather than Linux's small enum — that is what the original
+   B9600/B115200 pair chose, and cfsetispeed/cfgetispeed round-trip the value
+   itself, so the whole ladder follows suit. Linux's CBAUD/CBAUDEX/EXTA/EXTB
+   name bitfields of the *enum* encoding and have no meaning under this one,
+   so they are deliberately absent rather than given invented values. */
 #define B0      0
+#define B50     50
+#define B75     75
+#define B110    110
+#define B134    134
+#define B150    150
+#define B200    200
+#define B300    300
+#define B600    600
+#define B1200   1200
+#define B1800   1800
+#define B2400   2400
+#define B4800   4800
 #define B9600   9600
 #define B19200  19200
 #define B38400  38400
+#define B57600  57600
 #define B115200 115200
+#define B230400 230400
+#define B460800 460800
+#define B500000 500000
+#define B576000 576000
+#define B921600 921600
+#define B1000000 1000000
+#define B1152000 1152000
+#define B1500000 1500000
+#define B2000000 2000000
+#define B2500000 2500000
+#define B3000000 3000000
+#define B3500000 3500000
+#define B4000000 4000000
 
 /* Full-struct transfer (control chars included) — the host reads/writes the
    struct termios layout directly: 4 x u32 flags, c_cc[NCCS]@16, speeds@36/40.
@@ -25437,9 +25486,50 @@ static inline speed_t cfgetispeed(const struct termios *t) { return t->c_ispeed;
 static inline speed_t cfgetospeed(const struct termios *t) { return t->c_ospeed; }
 static inline int cfsetispeed(struct termios *t, speed_t s) { t->c_ispeed = s; return 0; }
 static inline int cfsetospeed(struct termios *t, speed_t s) { t->c_ospeed = s; return 0; }
+
+/* The line-control quartet (todos/0325 Group D, landed by todos/0340 for
+   CPython's termios module). A gucOS terminal is a kernel object, not a
+   serial line: a write reaches the line discipline synchronously so there is
+   no output queue to drain, there is no carrier to break, and nothing
+   transmits under XON/XOFF — tcdrain, tcsendbreak and tcflow are therefore
+   COMPLETE on a valid terminal fd, not stubs standing in for missing work.
+   Each still resolves the fd first, so a non-terminal or closed fd reports
+   ENOTTY/EBADF exactly as POSIX requires instead of succeeding vacuously.
+
+   tcflush is the one that leaves real semantics on the table: the kernel's
+   line discipline DOES hold an input queue, and discarding it needs a kernel
+   RPC. No shipping consumer asks for it (nothing in the CPython stdlib
+   outside its own test suite calls tcflush), so it validates and reports
+   success WITHOUT discarding — recorded in todos/LIABILITIES.md against
+   todos/0325 rather than left to be rediscovered. */
+static inline int __tty_probe_fd(int fd) {
+  struct termios __t;
+  return __tty_getattr(fd, &__t);
+}
+static inline int tcdrain(int fd) { return __tty_probe_fd(fd); }
+static inline int tcsendbreak(int fd, int duration) {
+  (void)duration;
+  return __tty_probe_fd(fd);
+}
+static inline int tcflow(int fd, int action) {
+  if (action != TCOOFF && action != TCOON && action != TCIOFF && action != TCION) {
+    errno = EINVAL;
+    return -1;
+  }
+  return __tty_probe_fd(fd);
+}
+static inline int tcflush(int fd, int queue_selector) {
+  if (queue_selector != TCIFLUSH && queue_selector != TCOFLUSH &&
+      queue_selector != TCIOFLUSH) {
+    errno = EINVAL;
+    return -1;
+  }
+  return __tty_probe_fd(fd);
+}
   `,
   "sys/ioctl.h": `
 #pragma once
+#include <errno.h>
 
 #define TIOCGWINSZ 0x5413
 #define TIOCSWINSZ 0x5414
@@ -25473,6 +25563,12 @@ static inline int ioctl(int fd, unsigned long request, void *arg) {
     const struct winsize *ws = (const struct winsize *)arg;
     return __ioctl_tiocswinsz(fd, (int)ws->ws_row, (int)ws->ws_col);
   }
+  /* Two requests are modelled; anything else is genuinely not implemented for
+     this device. Say so through errno — a bare -1 left errno holding whatever
+     the previous call put there, which surfaces in a caller that formats it
+     (CPython's fcntl.ioctl raises OSError straight off errno) as a random
+     unrelated failure rather than "unsupported request". */
+  errno = ENOTTY;
   return -1;
 }
   `,
@@ -25527,14 +25623,16 @@ static inline pid_t wait(int *status) { return waitpid(-1, status, 0); }
 #include <sys/types.h>
 #include <unistd.h>   // struct __spawn_spec / __fd_action / __spawn
 #include <errno.h>
+#include <signal.h>   // sigset_t (spawnattr sigdefault/sigmask)
 #include <stdlib.h>   // getenv (posix_spawnp PATH search)
 #include <string.h>   // strchr/strlen/memcpy/strcpy
 
 // posix_spawn over the owner-brokered process model. file_actions/attr marshal
 // 1:1 into __spawn_spec (file_actions ARE the spec's actions); posix_spawn
-// returns an errno value (0 = success), not -1. NOTE: file_actions (fd redirects)
-// require the owner to apply them at spawn time — landing with fd portability;
-// until then a child gets default fds.
+// returns an errno value (0 = success), not -1. The owner applies the actions
+// against the child's inherited fd table before it runs (kernel.js's spawn
+// action loop) — DUP2/OPEN/CLOSE/CLOSEFROM, ops 0..3 below, which must stay in
+// step with that loop.
 typedef struct {
   struct __fd_action __acts[32];  // 32 redirections is plenty for a shell line
   int __n;
@@ -25543,9 +25641,29 @@ typedef struct {
 typedef struct {
   unsigned __flags;
   int __pgrp;
+  sigset_t __sigdef;
+  sigset_t __sigmask;
 } posix_spawnattr_t;
 
+/* glibc's numbering, so a value read out of a core dump or a strace of another
+   system still means the same thing. Only the three that gucOS can actually
+   honour are declared:
+
+     SETPGROUP  real — marshals to __SPAWN_SETPGID.
+     RESETIDS   vacuous — gucOS has no uid/gid, so "drop privileges in the
+                child" is satisfied by there being none to drop.
+     SETSIGDEF  vacuous — a child is a FRESH wasm instance, not a fork, so it
+                always begins with default dispositions.
+
+   SETSIGMASK is honoured only for an empty mask (see the setter). SETSID and
+   the two SETSCHED* flags are deliberately NOT defined: CPython's posixmodule
+   #ifdefs on exactly these names and turns an absent one into an honest
+   "unsupported on this system" error, which beats accepting the argument and
+   ignoring it. */
+#define POSIX_SPAWN_RESETIDS  0x01
 #define POSIX_SPAWN_SETPGROUP 0x02
+#define POSIX_SPAWN_SETSIGDEF 0x04
+#define POSIX_SPAWN_SETSIGMASK 0x08
 
 static inline int posix_spawn_file_actions_init(posix_spawn_file_actions_t *fa) { fa->__n = 0; return 0; }
 static inline int posix_spawn_file_actions_destroy(posix_spawn_file_actions_t *fa) { (void)fa; return 0; }
@@ -25567,12 +25685,51 @@ static inline int posix_spawn_file_actions_addclose(posix_spawn_file_actions_t *
   a->op = 2; a->fd = fd; a->arg = 0; a->path = 0; a->mode = 0;  // CLOSE fd
   return 0;
 }
-static inline int posix_spawnattr_init(posix_spawnattr_t *a) { a->__flags = 0; a->__pgrp = 0; return 0; }
+/* Close every child descriptor at or above 'from' (the glibc/FreeBSD
+   _np extension). It cannot be expressed as a list of addclose() calls:
+   the caller does not know which fds are open, only the fd-table owner
+   does — so it travels as its own action (op 3) and the kernel enumerates
+   at spawn time. This is what makes CPython's close_fds=True (its DEFAULT,
+   and the one that keeps a child from inheriting unrelated descriptors)
+   reachable without fork; todos/0340. */
+static inline int posix_spawn_file_actions_addclosefrom_np(posix_spawn_file_actions_t *fa, int from) {
+  if (fa->__n >= 32) return EINVAL;
+  if (from < 0) return EBADF;
+  struct __fd_action *a = &fa->__acts[fa->__n++];
+  a->op = 3; a->fd = from; a->arg = 0; a->path = 0; a->mode = 0;  // CLOSEFROM
+  return 0;
+}
+static inline int posix_spawnattr_init(posix_spawnattr_t *a) {
+  a->__flags = 0; a->__pgrp = 0; a->__sigdef = 0; a->__sigmask = 0; return 0;
+}
 static inline int posix_spawnattr_destroy(posix_spawnattr_t *a) { (void)a; return 0; }
 static inline int posix_spawnattr_setflags(posix_spawnattr_t *a, short f) { a->__flags = (unsigned)(unsigned short)f; return 0; }
 static inline int posix_spawnattr_getflags(const posix_spawnattr_t *a, short *f) { if (f) *f = (short)a->__flags; return 0; }
 static inline int posix_spawnattr_setpgroup(posix_spawnattr_t *a, int pg) { a->__pgrp = pg; return 0; }
 static inline int posix_spawnattr_getpgroup(const posix_spawnattr_t *a, int *pg) { if (pg) *pg = a->__pgrp; return 0; }
+/* "Reset these signals to their default disposition in the child." Always
+   already true here: the child is a new wasm instance with a fresh signal
+   table, not a fork that inherited the parent's handlers — so recording the
+   set is the whole implementation. */
+static inline int posix_spawnattr_setsigdefault(posix_spawnattr_t *a, const sigset_t *s) {
+  a->__sigdef = s ? *s : 0; return 0;
+}
+static inline int posix_spawnattr_getsigdefault(const posix_spawnattr_t *a, sigset_t *s) {
+  if (s) *s = a->__sigdef; return 0;
+}
+/* "Start the child with this signal mask." A fresh instance starts with an
+   EMPTY mask and there is no fork-time inheritance to carry one across, so an
+   empty request is honoured exactly and a non-empty one cannot be honoured at
+   all. Refuse it rather than accept-and-ignore: silently unblocking a signal
+   the caller asked to have blocked is the kind of difference that shows up as
+   a race, not as an error. */
+static inline int posix_spawnattr_setsigmask(posix_spawnattr_t *a, const sigset_t *s) {
+  if (s && *s) return ENOTSUP;
+  a->__sigmask = 0; return 0;
+}
+static inline int posix_spawnattr_getsigmask(const posix_spawnattr_t *a, sigset_t *s) {
+  if (s) *s = a->__sigmask; return 0;
+}
 
 static inline int posix_spawn(pid_t *pid, const char *path,
     const posix_spawn_file_actions_t *fa, const posix_spawnattr_t *attr,
@@ -30950,6 +31107,7 @@ char *strerror(int errnum) {
   case ENAMETOOLONG: return "File name too long";
   case ENOSYS:     return "Function not implemented";
   case ENOTEMPTY:  return "Directory not empty";
+  case ELOOP:      return "Too many levels of symbolic links";
   case ENOLCK:     return "No locks available";
   case EOVERFLOW:  return "Value too large for defined data type";
   case EILSEQ:     return "Invalid or incomplete multibyte or wide character";

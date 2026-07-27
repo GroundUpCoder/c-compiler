@@ -2378,7 +2378,10 @@ Kernel.prototype._spawnBytes = function (parent, spec, mkey, depth) {
  * the caller's argv[0], per execve(2)); everything else in the spec — envp,
  * cwd, fd actions, pgroup flags — carries over unchanged, so the
  * interpreter lands exactly where the script would have. Depth caps a
- * script→script→… chain (ENOEXEC — ELOOP isn't in the libc's errno set);
+ * script→script→… chain. The errno stays ENOEXEC where Linux reports ELOOP:
+ * that started as a libc gap (no ELOOP in <errno.h>) but is now a deliberate,
+ * asserted divergence — todos/0340 added `#define ELOOP 40`, and the contract
+ * is pinned by test_kernel.js's 'shebang cycle -> ENOEXEC';
  * non-`#!` bytes never reach here, so WASM binaries are untouched. */
 var SHEBANG_MAX = 256;        // interpreter-line budget (Linux BINPRM_BUF_SIZE)
 var SHEBANG_MAX_DEPTH = 4;    // interpreter-is-itself-a-script hops
@@ -2615,6 +2618,17 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
       } else if (a.op === 2) {    // CLOSE
         var cId = pcb.fds.get(a.fd);
         if (cId !== undefined) { self._ofdUnref(cId, pid); pcb.fds.delete(a.fd); }
+      } else if (a.op === 3) {    // CLOSEFROM: drop every child fd >= a.fd
+        // posix_spawn_file_actions_addclosefrom_np. The whole point is that
+        // the caller does NOT know which fds are open — only the fd-table
+        // owner does, which is exactly this side. Enumerate first, then
+        // mutate: pcb.fds is being edited underneath the walk.
+        var cfDrop = [];
+        pcb.fds.forEach(function (id, fd) { if (fd >= a.fd) cfDrop.push(fd); });
+        for (var cfi = 0; cfi < cfDrop.length; cfi++) {
+          self._ofdUnref(pcb.fds.get(cfDrop[cfi]), pid);
+          pcb.fds.delete(cfDrop[cfi]);
+        }
       }
       if (fail) {
         pcb.fds.forEach(function (id) { self._ofdUnref(id, pid); });

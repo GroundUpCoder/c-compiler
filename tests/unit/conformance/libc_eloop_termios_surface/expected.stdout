@@ -1,0 +1,9 @@
+40 Too many levels of symbolic links
+0 1 2
+0 1 2 3
+0 50 9600 115200 4000000
+tcgetattr(-1)=-1
+tcdrain(-1)=-1
+tcsendbreak(-1,0)=-1
+tcflow(-1,999)=-1 errno=1
+tcflush(-1,999)=-1 errno=1

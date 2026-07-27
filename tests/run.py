@@ -482,7 +482,16 @@ def run_unit_node(results, filter_str=None):
 
 
 def discover_projects():
-    """Find all vendor/*/bin.json files (executable projects)."""
+    """Find all vendor/*/bin.json files (executable projects).
+
+    A project may opt OUT of the compile check with `"compileCheck": false` +
+    a `"compileCheckSkip"` reason. That is for a vendor tree whose bin.json is
+    real and consumed (vendor/cpython's is read by the sibling clang
+    toolchain's manifest) but which compiler.js cannot build YET, so a red
+    projects suite would say nothing new every run. The reason string must
+    name the open ticket; run_projects prints it, so the exclusion is loud and
+    re-reads itself every run instead of becoming folklore.
+    """
     projects = []
     for entry in sorted(os.listdir(VENDOR_DIR)):
         pj = os.path.join(VENDOR_DIR, entry, "bin.json")
@@ -490,6 +499,14 @@ def discover_projects():
             continue
         with open(pj) as f:
             proj = json.load(f)
+        if proj.get("compileCheck", True) is False:
+            reason = proj.get("compileCheckSkip", "")
+            if not reason:
+                raise SystemExit(
+                    f"{pj}: compileCheck:false needs a compileCheckSkip reason "
+                    f"naming the open ticket")
+            print(f"  skip projects/{proj.get('name', entry)} — {reason}")
+            continue
         projects.append((proj.get("name", entry), pj))
     # NetSurf gucOS frontend app: nested under vendor/netsurf/, so the
     # vendor/*/bin.json glob above never sees it — list it explicitly

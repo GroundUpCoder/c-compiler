@@ -1,6 +1,15 @@
 # 0331 — Ship python-clang as a gucman package (needs a CPython vendor tree)
 
-- **Status**: open — **blocked on `todos/0340`** (the vendor tree — M1-clang,
+- **Status**: open — the blocker is GONE (`todos/0340` landed 2026-07-28 with
+  the vendor tree, the sibling manifest project, `packages/python-clang.json`
+  and `tests/kernel/test_python_clang_e2e.js`). **Every acceptance bullet below
+  is already measured green in-OS** by that test; what remains for this ticket
+  is whatever shipping work master judges outstanding (the deploy leg, and the
+  `commands` claim once `todos/0338` carries it). Historical framing follows.
+  Superseded detail: the plan's step 4 says "extend test_clang_pkgs_e2e.js" —
+  0340 wrote a dedicated file instead, because a 4.6 MB package with a
+  42-leg acceptance surface does not belong bolted onto the C++ ladder test.
+  Original status: **blocked on `todos/0340`** (the vendor tree — M1-clang,
   now FUNDED and designed: `todos/CPYTHON.md` is normative for the stdlib
   rule, extension set, layout and package shape; the "M1 unfunded" framing
   below is historical). 2026-07-28: the naming line "python3/cpython …
@@ -92,13 +101,22 @@ would collide head-on with M1's.
 4. Extend `tests/kernel/test_clang_pkgs_e2e.js` with an install → `python-clang
    -c "print(1+1)"` → remove leg.
 
-## Acceptance
+## Acceptance — all measured 2026-07-28 (todos/0340)
 
-- `gucman install python-clang` plants `/usr/local/bin/python-clang`; running it
-  in-OS prints `2` for `print(1+1)` and the `sys.version` banner reports Clang.
-- `gucman remove python-clang` leaves no symlink or menu entry.
-- Bare `python` still resolves to micropython; `python3`/`cpython` unclaimed.
-- The published payload is byte-reproducible (two builds, same hash).
+- **PASS** `gucman install python-clang` plants `/usr/local/bin/python-clang`;
+  in-OS `print(1+1)` prints `2` and the banner reports
+  `3.13.5 (main, xx/xx/xx, xx:xx:xx) [Clang 21.1.8 …]`.
+- **PASS** `gucman remove python-clang` leaves no symlink and no `/opt` tree
+  (no menu entry is claimed — an interpreter's surfaces are the shell and, once
+  `todos/0338` lands, the dispatcher).
+- **PASS** bare `python` is not claimed by this package. NB the premise moved:
+  a fresh gucOS ships **no python verb at all** (asserted in the e2e's purity
+  leg) — micropython is itself an opt-in package. `python3` is now an approved
+  cmdalt KEY (master, 2026-07-28), not a hard symlink; `cpython` is rejected as
+  a key and stays reserved.
+- **PASS** the published payload is byte-reproducible: two full publishes into
+  the same output path produced sha256 `7daa8881…`. Payloads embed their build
+  path (`todos/0349`), so the comparison is only valid in one directory.
 
 ## Reproducibility note carried forward
 
