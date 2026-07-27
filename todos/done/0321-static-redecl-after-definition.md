@@ -1,6 +1,24 @@
 # 0321 — A static function re-declared AFTER its definition becomes an undefined symbol
 
-- **Status**: open
+- **Status**: done (2026-07-27) — the `specs.storageClass !== STATIC` condition
+  was REMOVED, not narrowed. It guarded nothing: the repro fails identically on
+  the `compiler.js` immediately BEFORE todos/0219 introduced the block
+  (`git show 2a24fe55^:compiler.js` → the same "Undefined symbol 'helper'"), so
+  the condition was that fix's stated scope boundary — extern/no-storage-class
+  linkage inheritance — and never a protection. Removing it also fixes a SECOND
+  shape nobody had filed: `decl → use → decl → def`, where the call bound the
+  first declaration while the definition's back-pointer landed on the second
+  (both are in the conformance test). Whole-program CPython A/B, same 233
+  sources, only this condition differing: **273 link errors / 211 `*_impl`
+  undefined → 61 / 0** (the 61 remaining are `todos/0323` — `conflicting types
+  for 'PyArg_ParseTupleAndKeywords'`, `char **` vs `const char **`; the two
+  files excluded to reach the linker are `link.sh` flag artifacts, diagnosed in
+  the dev log, not compiler defects).
+  Conformance: the pre-existing pinned xfail `static_redecl_after_def` XPASSed
+  and its `knownBug` tag is removed (now a permanent guard), plus
+  `link_static_redecl_after_def` (eight orderings) +
+  `link_static_redecl_import_override` (pins the surviving `!== IMPORT`
+  condition, which IS load-bearing, so the guard is not re-widened).
 - **Priority**: P0 (valid program rejected)
 - **Difficulty**: light
 - **Design**: —

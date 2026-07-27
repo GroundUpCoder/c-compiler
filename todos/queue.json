@@ -68,12 +68,12 @@
     { "id": "0317" },
     { "id": "0318", "difficulty": "light" },
     { "id": "0320", "priority": 0, "difficulty": "light" },
-    { "id": "0321", "priority": 0, "difficulty": "light" },
     { "id": "0322", "difficulty": "light" },
     { "id": "0323", "difficulty": "medium" },
     { "id": "0324", "difficulty": "medium" },
     { "id": "0325", "difficulty": "medium" },
     { "id": "0326", "priority": 2, "difficulty": "medium" },
-    { "id": "0327", "priority": 2, "difficulty": "light" }
+    { "id": "0327", "priority": 2, "difficulty": "light" },
+    { "id": "0328", "difficulty": "light" }
   ]
 }

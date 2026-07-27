@@ -13364,6 +13364,10 @@ class Parser {
         if (prevFunc && prevFunc instanceof AST.DFunc) {
           // Redeclarations accumulate attributes (gcc semantics); a decl
           // AFTER the definition also back-propagates onto it.
+          // `inline` does NOT accumulate the same way: the definition's
+          // isInline comes from its own specs, so an `inline` that appears
+          // only on a prototype or a re-declaration is dropped and the
+          // WAST inliner never sees hintCalleeCap — todos/0328.
           funcDecl.fnAttrs = this._mergeFnAttrs(funcDecl.fnAttrs, prevFunc.fnAttrs);
           const def = prevFunc.definition ||
             (prevFunc.body ? prevFunc : null);
@@ -13388,9 +13392,19 @@ class Parser {
         // static decl in scope and drop the redundant re-declaration so
         // callers keep binding the internal definition (`static int
         // f(void) {...} extern int f(void);` must link — todos/0219).
+        //
+        // A re-declaration that REPEATS `static` is in the same set
+        // (todos/0321). Rebinding the scope entry to a body-less node
+        // strands the definition: the per-TU tree-shake marks reachability
+        // by NODE (`liveFuncs.has(f)` over unit.staticFunctions), so calls
+        // that bind the re-declaration never mark the definition live and
+        // it is filtered out — "Undefined symbol". This is exactly what
+        // CPython's Argument Clinic emits (`clinic/<f>.c.h` is #included
+        // at the BOTTOM of the .c, re-declaring every `_impl` it already
+        // defined). Only an explicit IMPORT re-declaration is meaningful
+        // enough to take the binding.
         if (prevFunc && prevFunc instanceof AST.DFunc &&
             prevFunc.storageClass === Types.StorageClass.STATIC &&
-            specs.storageClass !== Types.StorageClass.STATIC &&
             specs.storageClass !== Types.StorageClass.IMPORT) {
           continue;
         }

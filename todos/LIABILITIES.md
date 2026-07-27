@@ -267,4 +267,10 @@ thing this file exists to kill.
 - file: compiler.js
 - anchor: // children-based rewriter's new subtree is silently discarded here.
 
+### L40 — `inline` spelled only on a prototype or a re-declaration is dropped, so the inliner never raises its callee cap
+- ticket: 0328
+- file: compiler.js
+- anchor: // only on a prototype or a re-declaration is dropped and the
+- provenance: 0321
+
 <!-- END ENTRIES -->
