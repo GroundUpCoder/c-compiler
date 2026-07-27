@@ -35,6 +35,7 @@
 // TODO: Add more architectures, compilers and libraries.
 // See: https://sourceforge.net/p/predef/wiki/Home/
 
+#ifndef MICROPY_PLATFORM_ARCH
 #if defined(__ARM_ARCH)
 #if defined(__ARM_ARCH_ISA_A64)
 #define MICROPY_PLATFORM_ARCH   "aarch64"
@@ -56,6 +57,8 @@
 #else
 #define MICROPY_PLATFORM_ARCH   ""
 #endif
+#endif // MICROPY_PLATFORM_ARCH
+
 
 #if defined(__clang__)
 #define MICROPY_PLATFORM_COMPILER \
@@ -89,6 +92,7 @@
 #define MICROPY_PLATFORM_COMPILER       ""
 #endif
 
+#ifndef MICROPY_PLATFORM_LIBC_LIB
 #if defined(__GLIBC__)
 #define MICROPY_PLATFORM_LIBC_LIB       "glibc"
 #define MICROPY_PLATFORM_LIBC_VER \
@@ -107,7 +111,9 @@
 #define MICROPY_PLATFORM_LIBC_LIB       ""
 #define MICROPY_PLATFORM_LIBC_VER       ""
 #endif
+#endif // MICROPY_PLATFORM_LIBC_LIB
 
+#ifndef MICROPY_PLATFORM_SYSTEM
 #if defined(__ANDROID__)
 #define MICROPY_PLATFORM_SYSTEM         "Android"
 #elif defined(__linux)
@@ -121,6 +127,8 @@
 #else
 #define MICROPY_PLATFORM_SYSTEM         "MicroPython"
 #endif
+#endif // MICROPY_PLATFORM_SYSTEM
+
 
 #ifndef MICROPY_PLATFORM_VERSION
 #define MICROPY_PLATFORM_VERSION ""

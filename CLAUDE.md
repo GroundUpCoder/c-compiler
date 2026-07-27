@@ -459,17 +459,46 @@ over the kernel fd layer (`vendor/micropython/file.c`, upstream's POSIX
 file object lifted OUT of MicroPython's VFS — the kernel owns mounting),
 uncaught tracebacks go to **stderr**, and the heap is 32 MB (the GC
 pause tracks live data at ~1.7 ms/MB, not heap size — table in
-`vendor/micropython/README.md`). It is a MicroPython DIALECT, not
-CPython: the stdlib is still tiny (`os`/`json`/`time`/`re`/`struct`/
-`array`/`gc` are 0117 R2, parked on the todos/0313 CPython probe), and
-`-m` is refused. **`vendor/micropython/genhdr/*` is GENERATED** — the
+`vendor/micropython/README.md`). todos/0117 **R2** (un-parked as a decider
+call — the todos/0313 M0 park condition never fired; reasoning in the
+ticket) gave it a real SEARCH PATH and a curated stdlib. `sys.path` is
+`[<script's dir> | "", ".frozen", /usr/local/lib/micropython,
+<dir of the real binary>/lib]`: entry 0 is the SCRIPT's directory as in
+CPython (so a two-file program imports its sibling from any cwd), the
+writable site dir is under `/usr/local` because `/usr` is sealed
+read-only, it precedes the package's own lib the way `/usr/local/bin`
+precedes `/bin`, and that package lib is DERIVED by chasing argv[0]'s
+trailing symlinks (micropython is a package: `/opt/micropython`
+installed, `/usr/opt/micropython` on a fat bake, reached through a
+`bin` symlink either way — the user32 `res_chase` trick). Built-in
+modules are `math`/`cmath`/`sys`/`io`/`gc`/`micropython`/`builtins` +
+`array`/`collections`/`struct`/`errno` (all four were MISSING before R2
+despite being in bin.json — ROM_LEVEL_MINIMUM gated them) +
+`os` (with a real `os.path` SUBMODULE — upstream's modos.c is
+VFS-shaped, so `portmodos.c` supplies the POSIX bodies, the file.c
+precedent) + `json`/`time`/`re`/`random`/`binascii`/`heapq`/`platform`
+vendored from upstream `extmod/`, plus `sys.modules` (without the import
+cache two modules importing a third get two copies of its state).
+`python -m mod` runs a module as `__main__` and falls back to a
+package's `__main__.py`. The epoch is 1970 and `mp_hal_ticks_*` are real
+clocks (`mphal.c`) — before R2 `ticks_ms` was `return 0`. It is still a
+MicroPython DIALECT, not CPython: no `datetime`/`argparse`/`subprocess`/
+`hashlib`/`select`/`socket`, `localtime` IS `gmtime` (no timezone db) —
+gaps + reasoning in `vendor/micropython/README.md`, register entries
+L42/L43. **`vendor/micropython/genhdr/*` is GENERATED** — the
 qstr pool, module table and GC root list are a function of
 `mpconfigport.h`, so any config/source change wants
 `node tools/mkmpgenhdr.js` (its `--check` is the
 `micropython/genhdr-sync` test; this replaced the hand-maintained
-headers that used to cap the config). Tests:
-`tests/kernel/test_micropython_script_e2e.js` + the 639-file upstream
-corpus in run.py's `micropython`/`micropython-upstream` categories.
+headers that used to cap the config). NB a `MICROPY_PY_*_INCLUDEFILE`
+port source reached through `-I.` used to have its qstrs SILENTLY
+dropped by upstream's generator (the split bucket lands as a dotfile,
+which the collecting glob skips); mkmpgenhdr un-dots them. Tests:
+`tests/kernel/test_micropython_script_e2e.js` (R1 CLI) +
+`test_micropython_stdlib_e2e.js` (R2 sys.path/stdlib, spawned through
+the real `/usr/local/bin/python` symlink) + the 639-file upstream
+corpus in run.py's `micropython`/`micropython-upstream` categories
+(537→580 passing, 108→65 skipped at R2).
 `/bin/term` (todos/0020, `os/term/`) is the wasm terminal: kernel pty +
 freetype (vendored lib, font at `/etc/fonts/mono.ttf` with the baked
 `/usr/share/fonts/mono.ttf` as fallback) + an escape

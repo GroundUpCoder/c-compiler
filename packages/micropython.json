@@ -1,9 +1,14 @@
 {
   "name": "micropython",
-  "version": "1.28-2",
-  "summary": "MicroPython 1.28 — script runner + REPL (runs .py files, open()/io/sys.argv; a MicroPython dialect, not CPython)",
+  "version": "1.28-3",
+  "summary": "MicroPython 1.28 — script runner + REPL (runs .py files, -m, open()/io/sys.argv, sys.path with a site dir, and a curated stdlib: os/os.path, json, time, re, random, struct, collections, binascii, heapq; a MicroPython dialect, not CPython)",
   "files": {
-    "micropython": { "project": "vendor/micropython/bin.json" }
+    "micropython": {
+      "project": "vendor/micropython/bin.json"
+    }
   },
-  "bin": { "micropython": "micropython", "python": "micropython" }
+  "bin": {
+    "micropython": "micropython",
+    "python": "micropython"
+  }
 }

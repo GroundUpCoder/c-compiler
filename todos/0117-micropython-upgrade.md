@@ -7,21 +7,66 @@
   this is important too. ... And yea I do want the cli properly fixed as well so
   it actually runs the scripts."). The 2026-07-12 deferral was a mass sweep, not a
   judgement about this item.
-- **ROUND SEQUENCING (master, 2026-07-27) — R1 GOES NOW, R2 IS PARKED:**
+- **ROUND SEQUENCING — R1 LANDED; R2 IS UN-PARKED (2026-07-28, decider call):**
   - **R1 (argv/script-runner + `open()`/IO/stdfiles + the two POSIX hooks + the
-    heap bump + seeding `/bin/python`) is foreground and funded.** It is the leg
-    jku named, it is cheap, MicroPython is the OS's scripting language today, it
-    pays off regardless of the CPython route, and it is the fallback if the M0
-    probe fails.
-  - **R2's stdlib breadth is PARKED pending M0** (the "can our compiler build
-    CPython core?" probe). *Parked, NOT cancelled* — R2 is the expensive leg and
-    is exactly the work a real CPython `/bin/python` would make redundant. **If M0
-    reports CPython is not buildable with our compiler, R2 un-parks immediately as
-    the real plan, and jku's already-given approval of the module-selection
-    approach carries over without a re-ask.** Reason recorded so a later reader can
-    tell a fired condition from an open one: the park is conditional on M0 only.
-  - Provenance: R1 foreground = **(jku decision)**. R2 park = **(decider call)**,
-    routed to jku, not objected to — he may still overturn it.
+    heap bump + the `python` alias) is foreground and funded.** It is the leg jku
+    named, it is cheap, it pays off regardless of the CPython route.
+    Provenance: **(jku decision)**.
+  - **⚠️ THE M0 PARK CONDITION NEVER FIRED — do not cite it as R2's reason.**
+    The 2026-07-27 park (recorded here, and echoed in `todos/0313`'s "R2: KEEP
+    PARKED") was conditional on exactly one question: *is a real CPython
+    `/bin/python` buildable with our compiler?* M0 answered **yes** — and M1-clang
+    then went further and built one (a 4,529,136 B CPython 3.13.5 wasm at
+    functional parity; recipe `logs/2026-07-27/python-clang-build.sh`, vendor-tree
+    design `todos/CPYTHON.md` + `todos/0340`). So the condition resolved in the
+    direction that KEEPS the park. **R2 un-parks anyway, for different reasons.**
+    This paragraph exists so the next reader cannot mistake an un-fired condition
+    for a fired one and cancel R2 on a sound-looking argument.
+  - **Why R2 un-parks, in strength order:**
+    1. **The one-implementation premise is gone.** The park's whole logic was
+       "a real CPython `/bin/python` makes MicroPython breadth redundant" —
+       redundancy that only exists if exactly one implementation may own the
+       name. jku replaced that model with a **dispatcher**: bare `python` is a
+       base-image command that forwards to whichever implementation the user
+       picked (`todos/COMMAND-ALTERNATIVES.md`, `todos/0338`). Implementations
+       now coexist by design, so breadth in one does not subtract from another.
+       His words (email, 2026-07-27): the goal is "a python that has the highest
+       chance of being able to support pygame in the future", and he "wants all
+       implementations eventually caught up" — *caught up*, not *replaced*.
+    2. **MicroPython is the only python implementation that actually ships
+       today.** python-clang's binary half is done, but its vendor tree + stdlib
+       layout is a separate in-flight lane (`todos/0340`). Whatever a user can
+       install first is MicroPython.
+    3. **A python that cannot `import json` is a footgun no matter which
+       implementation is default.** R1 made it a real script runner; R2 is what
+       makes it a real *python*.
+  - **Audience, stated accurately** (an earlier framing of this said "the
+    base-image `python` is MicroPython, so R2's breadth is the DEFAULT
+    experience" — that is **false** and must not be repeated): gucOS ships **no
+    `python` verb at all** in the base image, and MicroPython is **not** baked
+    into it. Measured, not assumed — a BlockFS walk over the live deployed image
+    enumerated 240 entries with **0 hits for `python` and 0 for `micro`** (`lua`
+    and `sqlite` also 0, the cross-check: both are likewise packages), and
+    `grep -in python os/image.json` at the deployed v177 commit is empty.
+    MicroPython is a **gucman package**; a fresh gucOS has no python until
+    `gucman install micropython`. jku is additionally leaning toward
+    python-clang as the *suggested* python when none is installed. ⇒ the correct
+    form is **"MicroPython is gucOS's python for users who have installed it."**
+  - Provenance: R2 un-park = **(decider call)**, 2026-07-28. Not a jku ruling —
+    he may still overturn it.
+- **The `python` alias is INTERIM, not a ratified end state.** R1 shipped
+  `/usr/local/bin/python` → the MicroPython binary (`packages/micropython.json`
+  `bin` map). Decider verdict D6 previously recorded that alias as
+  *ratified-deliberate*; that is **SUPERSEDED**. jku ruled (email, 2026-07-27;
+  provenance **(jku decision)**; authority
+  `~/git/meta/meta/notes/fable-decider-python-primary-2026-07-27.md` §*jku
+  OVERRIDE of D4/D6* — later sections of that note supersede earlier ones) that
+  bare `python` must be a **base-image dispatcher** forwarding all args to the
+  user's chosen implementation, erroring *"no python implementation installed"*
+  when none is present and switchable in the control panel. The alias is
+  retired by `todos/0338`, and dropping it from `packages/micropython.json` is
+  **release-atomic with that landing** — it belongs to 0338's commit, not to
+  R2's. Design: `todos/COMMAND-ALTERNATIVES.md`.
 - **Heap bump target is 32 MB** (`mpconfigport.h:107` is `262144` today, verified
   2026-07-27). Not "several MB" — a 640x480 `array3d` copy is 921 KB, i.e. 3.5x
   the entire current heap, and one float64 temporary is 7.4 MB. **Measure the
@@ -113,15 +158,75 @@ What shipped, and the two things a later reader most needs to know:
 - **Then** seed `/bin/python` → `/bin/micropython` in image.json (or a
   thin argv0 alias) and bump the image version.
 
-**Round 2 — FS `import` of real .py modules + a usable stdlib slice.**
-- Filesystem module import (`import foo` finds `/…/foo.py`); `sys.path`
-  seeded sensibly (cwd + a site dir under `/usr/lib/micropython` or
-  similar).
-- Curate which built-in modules to compile in (the minimal port ships
-  `math`/`sys`/`gc`/`array`/`collections`/`struct`/`errno`/…; decide the
-  target set — `os`, `json`, `time`, `re` are the obvious next ones).
-- Consider a shebang story: `#!/bin/python` scripts run via the 0065
-  `_spawnShebang` path.
+**Round 2 — search path + a usable stdlib slice.** — DONE 2026-07-28, see below.
+
+## R2 — DONE 2026-07-28
+
+- **The plan's premise was wrong in a way worth recording.** It said "the
+  minimal port ships `math`/`sys`/`gc`/`array`/`collections`/`struct`/
+  `errno`/…". Measured: the built-in module set was **`math`, `io`, `sys`,
+  `builtins`** and nothing else. `py/modstruct.c`, `modarray.c`,
+  `modcollections.c`, `modgc.c`, `moderrno.c` were all in `bin.json` and all
+  compiling to EMPTY translation units, because `MICROPY_CONFIG_ROM_LEVEL_MINIMUM`
+  gates them at CORE/EXTRA. So four of the "already shipped" modules were part
+  of R2's work, and they cost one `#define` each.
+- **Module set** (rationale table in `vendor/micropython/README.md`): the four
+  above + `micropython`/`cmath`, then `os` (+ a real `os.path` submodule),
+  `json`, `time`, `re`, `random`, `binascii`, `heapq`, `platform` vendored from
+  upstream `extmod/`, plus `sys.modules`. Deliberately NOT taken: `hashlib`,
+  `deflate`, `select`, `socket`, `datetime`, `argparse`, `subprocess` — each
+  needs a new vendored third-party library, a kernel seam, or the
+  micropython-lib question answered; register entry **L43**, R3 owns them.
+- **`os` is upstream's `extmod/modos.c` + a port `portmodos.c` includefile**,
+  not a rewrite. Upstream reaches the filesystem only through the VFS, which
+  this port deliberately does not have (the kernel owns mounting), so every FS
+  name in its globals table sits behind `#if MICROPY_VFS`. The patch is ONE
+  hunk binding the same names to POSIX bodies — the R1 `file.c` decision
+  applied to directories. `os.path` is new: a real submodule
+  (`MICROPY_MODULE_BUILTIN_SUBPACKAGES`), so `import os.path` and
+  `from os.path import join` work.
+- **`sys.path` policy**: `[<script's dir> | "", ".frozen",
+  /usr/local/lib/micropython, <dir of the real binary>/lib]`. The site dir is
+  under `/usr/local` because `/usr` is a sealed read-only volume (0040) — a
+  site dir there could never be written to. It precedes the package's own lib,
+  which diverges from CPython (stdlib before site-packages) and agrees with
+  every other layered lookup in gucOS. The package lib is DERIVED from
+  argv[0]'s symlink-chased directory, because micropython is a gucman package
+  and lives at `/opt/micropython` or `/usr/opt/micropython` depending on how it
+  got there.
+- **`-m` landed too** (register entry L36 retired), over upstream's own
+  `MICROPY_MODULE_OVERRIDE_MAIN_IMPORT`. R1 refused it because there was no
+  module-execution path; there is one now, so refusing it was just a missing
+  feature.
+- **`mp_hal_ticks_ms` was `return 0`.** A stub nobody called, because `time`
+  was not compiled in. Enabling `time` made it load-bearing, and a stubbed tick
+  is worse than a missing module: `ticks_diff` returns 0 forever and a script
+  waiting on the clock hangs SILENTLY. Real clocks now live in `mphal.c`
+  (MONOTONIC for ticks, REALTIME for `time()`), and the epoch is 1970 rather
+  than MicroPython's embedded-flavoured 2000, so `time.time()` agrees with
+  CPython and with the rest of the OS.
+- **A silent generator bug found on the way**: `tools/mkmpgenhdr.js` dropped
+  every qstr in a `MICROPY_PY_*_INCLUDEFILE` port source. `makeqstrdefs.py`
+  names its per-file buckets after the preprocessor's line markers, so a file
+  reached through `-I.` becomes `.__portmodos.c.qstr` — a DOTFILE — and the
+  collecting step's `glob("*.qstr")` does not match leading dots. No error;
+  just an undeclared `MP_QSTR_x` at link time. mkmpgenhdr un-dots the buckets
+  before the collect.
+- **The shebang story needs nothing built.** `#!/usr/local/bin/python foo.py`
+  already works through 0065's `_spawnShebang` — it re-dispatches to the
+  interpreter with the script path as argv[1], which is exactly the CLI R1
+  built. Worth saying explicitly because it interacts with `todos/0338`: a
+  script whose shebang names the DISPATCHER gets implementation-switching for
+  free, and one that names `/usr/local/bin/python` today will follow the
+  dispatcher once 0338 lands, since that is the same path.
+- Numbers: upstream corpus 537→**580 passing** (3 failed — the same three
+  pre-existing float tests, by name — and 108→65 skipped). New tests:
+  `tests/kernel/test_micropython_stdlib_e2e.js` (49 checks, spawned through the
+  real `/usr/local/bin/python` → `/opt/micropython/micropython` symlink so the
+  argv[0] chase is under test) and `tests/micropython/09_stdlib.py`, whose
+  golden is generated by real CPython 3 and matched byte for byte.
+- Register: L35/L36/L37 retired, **L42** (localtime is gmtime — no timezone
+  database) and **L43** (the absent modules) filed.
 
 **Round 3+ (reassess after R2) — dialect breadth as demand appears.**
 - More stdlib, `subprocess`-ish spawn shim over `__spawn`, whatever the
@@ -134,10 +239,14 @@ What shipped, and the two things a later reader most needs to know:
   `python` with no args is still the REPL; `open('/root/t.py').read()`
   works from the REPL.
 - R2: a two-file `import`-ing script runs; a curated `import os, json`
-  succeeds.
+  succeeds. — MET.
 - New kernel e2e test alongside `tests/kernel/test_repl_pty_e2e.js`
   (script-file + import legs), plus a note in CLAUDE.md's REPL paragraph
   updating the "argv ignored, no open()/import" description once it's
-  false.
-- Image version bumped; `vendor/micropython/README.md` created (it's
-  currently missing) pinning the config choice + patch list.
+  false. — MET (`test_micropython_stdlib_e2e.js`; CLAUDE.md rewritten).
+- `vendor/micropython/README.md` pinning the config choice + patch list. —
+  MET (R1 created it; R2 extended the config/module/patch sections). NB no
+  `os/image.json` version bump: micropython is a gucman PACKAGE, so the
+  base image is untouched — `packages/micropython.json` carries the version
+  (`1.28-3`), and a `dist/packages` rebuild + a fat-image rebake are what a
+  vendor change forces.

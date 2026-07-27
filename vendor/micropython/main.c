@@ -53,6 +53,29 @@ extern struct _mp_dummy_t mp_sys_stderr_obj;
 const mp_print_t mp_stderr_print = {&mp_sys_stderr_obj, mp_stream_write_adaptor};
 #endif
 
+// Turn an uncaught exception into a process exit status, printing it unless it
+// is a SystemExit carrying one. Shared by the script, -c, stdin and -m paths
+// (R2 split it out of execute_lexer so `-m` reports failures identically).
+static int report_uncaught(mp_obj_t exc) {
+    if (mp_obj_is_subclass_fast(MP_OBJ_FROM_PTR(mp_obj_get_type(exc)),
+                                MP_OBJ_FROM_PTR(&mp_type_SystemExit))) {
+        // SystemExit carries the status: None -> 0, int -> its value,
+        // anything else -> print it and exit 1 (CPython's rule).
+        mp_obj_t val = mp_obj_exception_get_value(exc);
+        if (val == mp_const_none) {
+            return EXIT_OK;
+        }
+        if (mp_obj_is_int(val)) {
+            return (int)mp_obj_int_get_truncated(val);
+        }
+        mp_obj_print_helper(MICROPY_ERROR_PRINTER, val, PRINT_STR);
+        mp_print_str(MICROPY_ERROR_PRINTER, "\n");
+        return EXIT_EXCEPTION;
+    }
+    mp_obj_print_exception(MICROPY_ERROR_PRINTER, exc);
+    return EXIT_EXCEPTION;
+}
+
 #if MICROPY_ENABLE_COMPILER
 
 // Compile and run one chunk of source. Returns a process exit status.
@@ -76,24 +99,7 @@ static int execute_lexer(mp_lexer_t *lex, mp_parse_input_kind_t input_kind, bool
 
     // Uncaught exception.
     mp_handle_pending(MP_HANDLE_PENDING_CALLBACKS_AND_CLEAR_EXCEPTIONS);
-    mp_obj_t exc = MP_OBJ_FROM_PTR(nlr.ret_val);
-    if (mp_obj_is_subclass_fast(MP_OBJ_FROM_PTR(mp_obj_get_type(exc)),
-                                MP_OBJ_FROM_PTR(&mp_type_SystemExit))) {
-        // SystemExit carries the status: None -> 0, int -> its value,
-        // anything else -> print it and exit 1 (CPython's rule).
-        mp_obj_t val = mp_obj_exception_get_value(exc);
-        if (val == mp_const_none) {
-            return EXIT_OK;
-        }
-        if (mp_obj_is_int(val)) {
-            return (int)mp_obj_int_get_truncated(val);
-        }
-        mp_obj_print_helper(MICROPY_ERROR_PRINTER, val, PRINT_STR);
-        mp_print_str(MICROPY_ERROR_PRINTER, "\n");
-        return EXIT_EXCEPTION;
-    }
-    mp_obj_print_exception(MICROPY_ERROR_PRINTER, exc);
-    return EXIT_EXCEPTION;
+    return report_uncaught(MP_OBJ_FROM_PTR(nlr.ret_val));
 }
 
 static int do_str(const char *src, size_t len, qstr source_name,
@@ -149,6 +155,208 @@ static int do_stdin(void) {
 
 #endif // MICROPY_ENABLE_COMPILER
 
+// --- sys.path (todos/0117 R2) ---------------------------------------------
+//
+// R1 left sys.path at MicroPython's default `["", ".frozen"]`, which meant a
+// script could only import its siblings when it happened to be run from its
+// own directory, and there was nowhere at all to install a module.
+//
+// The policy is four entries, in this order:
+//
+//   [0] the SCRIPT'S DIRECTORY, or "" (cwd) for -c / -m / stdin / the REPL.
+//       CPython's rule. It is entry 0 and it is REPLACED, not appended, so a
+//       script's siblings always win — that is what makes a two-file program
+//       work no matter where it is run from.
+//   [1] ".frozen"                  — frozen modules (upstream's own entry).
+//   [2] SITE_DIR_LOCAL             — the writable site dir. Where a user or an
+//                                    admin drops a .py module for every script
+//                                    on the system to see.
+//   [3] <dir of the real binary>/lib — the package's own bundled modules.
+//
+// Two choices worth defending:
+//
+// * /usr/local/lib/micropython, not /usr/lib/micropython. /usr is a SEALED,
+//   read-only volume on this OS (todos/0040) — nothing can ever be installed
+//   there at runtime, so a site dir under it would be permanently empty. The
+//   OS's writable admin territory is /usr/local (a baked symlink to
+//   /var/local), which is also why PATH is /usr/local/bin:/bin. This entry is
+//   the exact analogue of /usr/local/bin.
+//
+// * The writable site dir comes BEFORE the package's own lib. CPython orders
+//   stdlib before site-packages, so this deliberately diverges — but it agrees
+//   with every other layered lookup in gucOS (PATH, /etc/menu over
+//   /usr/share/menu, the cfgstore overlay in os/cfgstore.h): the writable
+//   layer wins. A user reasoning about "where does my module go" reaches for
+//   the PATH analogy long before the CPython one.
+//
+// * The package lib dir is derived from the BINARY's location, not hardcoded.
+//   micropython is a gucman package, so it lives at /opt/micropython when
+//   installed and /usr/opt/micropython on a --packages=all bake, reached
+//   through a /usr/local/bin or /usr/bin symlink either way. Chasing argv[0]'s
+//   trailing symlinks is the same trick user32.c's res_chase uses to find an
+//   app's .res sidecar, and for the same reason.
+//
+// Entries are added unconditionally, even when the directory does not exist: a
+// missed stat per top-level import is nothing, and `python -c 'import sys;
+// print(sys.path)'` is how a user finds out where to put a module. A path that
+// silently omits the answer is worse than one with a dead entry in it.
+
+#define SITE_DIR_LOCAL "/usr/local/lib/micropython"
+#define PKG_LIB_SUBDIR "/lib"
+
+// Follow the trailing-component symlink chain, in place. Directory symlinks
+// (/bin -> /usr/bin) resolve during the kernel's path walk; only the final
+// component needs chasing. The hop cap breaks cycles.
+static void chase_links(char *p, size_t cap) {
+    for (int hop = 0; hop < 8; hop++) {
+        char tgt[256];
+        ssize_t n = readlink(p, tgt, sizeof tgt - 1);
+        if (n <= 0) {
+            return;                     // not a symlink: done
+        }
+        tgt[n] = '\0';
+        if (tgt[0] == '/') {
+            snprintf(p, cap, "%s", tgt);
+        } else {
+            char joined[512];
+            const char *slash = strrchr(p, '/');
+            snprintf(joined, sizeof joined, "%.*s/%s",
+                     slash ? (int)(slash - p) : 1, slash ? p : ".", tgt);
+            snprintf(p, cap, "%s", joined);
+        }
+    }
+}
+
+// Write the directory holding the real executable into `out`. Returns false if
+// argv[0] gives us nothing to work with (spawned with an empty argv[0], say).
+static bool exe_dir(const char *argv0, char *out, size_t cap) {
+    if (argv0 == NULL || argv0[0] == '\0') {
+        return false;
+    }
+    char real[256];
+    if (strchr(argv0, '/') != NULL) {
+        snprintf(real, sizeof real, "%s", argv0);
+    } else {
+        // A bare name means PATH resolution happened in the spawner and was
+        // not written back into argv[0]; redo it.
+        const char *pathenv = getenv("PATH");
+        if (pathenv == NULL) {
+            pathenv = "/usr/local/bin:/bin";
+        }
+        bool found = false;
+        while (*pathenv != '\0' && !found) {
+            const char *end = strchr(pathenv, ':');
+            size_t seglen = end ? (size_t)(end - pathenv) : strlen(pathenv);
+            if (seglen > 0) {
+                snprintf(real, sizeof real, "%.*s/%s", (int)seglen, pathenv, argv0);
+                struct stat st;
+                found = stat(real, &st) == 0 && S_ISREG(st.st_mode);
+            }
+            pathenv = end ? end + 1 : pathenv + seglen;
+        }
+        if (!found) {
+            return false;
+        }
+    }
+    chase_links(real, sizeof real);
+    char *slash = strrchr(real, '/');
+    if (slash == NULL) {
+        return false;
+    }
+    // Keep the root's slash: dirname("/x") is "/", not "".
+    size_t dlen = slash == real ? 1 : (size_t)(slash - real);
+    if (dlen + 1 > cap) {
+        return false;
+    }
+    memcpy(out, real, dlen);
+    out[dlen] = '\0';
+    return true;
+}
+
+#if MICROPY_PY_SYS_PATH
+static void setup_sys_path(const char *argv0) {
+    // mp_init already built ["", ".frozen"]; append the site dirs to it rather
+    // than rebuilding, so the frozen entry keeps upstream's position.
+    mp_obj_list_append(mp_sys_path, mp_obj_new_str_from_cstr(SITE_DIR_LOCAL));
+    char dir[256];
+    if (exe_dir(argv0, dir, sizeof dir)) {
+        size_t dlen = strlen(dir);
+        if (dlen + sizeof(PKG_LIB_SUBDIR) <= sizeof dir) {
+            memcpy(dir + dlen, PKG_LIB_SUBDIR, sizeof(PKG_LIB_SUBDIR));
+            mp_obj_list_append(mp_sys_path, mp_obj_new_str_from_cstr(dir));
+        }
+    }
+}
+
+// CPython puts the script's own directory at sys.path[0]. Replace, don't
+// insert: entry 0 is the "" that mp_init put there for exactly this slot.
+static void sys_path_set_script_dir(const char *script) {
+    char real[256];
+    if (realpath(script, real) == NULL) {
+        return;     // do_file will report the open failure properly
+    }
+    char *slash = strrchr(real, '/');
+    if (slash == NULL) {
+        return;
+    }
+    size_t dlen = slash == real ? 1 : (size_t)(slash - real);
+    mp_obj_list_store(mp_sys_path, MP_OBJ_NEW_SMALL_INT(0),
+                      mp_obj_new_str(real, dlen));
+}
+#else
+#define setup_sys_path(argv0) ((void)0)
+#define sys_path_set_script_dir(script) ((void)0)
+#endif
+
+// --- -m MODULE ------------------------------------------------------------
+//
+// Runs a module found on sys.path as __main__, and falls back to a package's
+// __main__.py — CPython's semantics, over MicroPython's own mechanism: the
+// sentinel `fromtuple == mp_const_false` makes __import__ set the imported
+// module's __name__ to "__main__" and return the LEAF rather than the
+// top-level package. That is what MICROPY_MODULE_OVERRIDE_MAIN_IMPORT is for;
+// the shape below follows upstream's ports/unix/main.c.
+#if MICROPY_MODULE_OVERRIDE_MAIN_IMPORT
+static int do_module(const char *mod_name) {
+    mp_obj_t import_args[4];
+    import_args[0] = mp_obj_new_str_from_cstr(mod_name);
+    import_args[1] = import_args[2] = mp_const_none;
+    import_args[3] = mp_const_false;
+
+    // Must survive the setjmp/longjmp NLR frame, hence static (upstream carries
+    // the same note — a plain local can be clobbered).
+    static bool subpkg_tried;
+    subpkg_tried = false;
+
+reimport:;
+    nlr_buf_t nlr;
+    mp_obj_t mod;
+    if (nlr_push(&nlr) == 0) {
+        mod = mp_builtin___import__(MP_ARRAY_SIZE(import_args), import_args);
+        mp_handle_pending(MP_HANDLE_PENDING_CALLBACKS_AND_EXCEPTIONS);
+        nlr_pop();
+    } else {
+        mp_handle_pending(MP_HANDLE_PENDING_CALLBACKS_AND_CLEAR_EXCEPTIONS);
+        return report_uncaught(MP_OBJ_FROM_PTR(nlr.ret_val));
+    }
+
+    // A package rather than a module: retry as "<pkg>.__main__".
+    mp_obj_t dest[2];
+    mp_load_method_protected(mod, MP_QSTR___path__, dest, true);
+    if (dest[0] != MP_OBJ_NULL && !subpkg_tried) {
+        subpkg_tried = true;
+        vstr_t vstr;
+        size_t len = strlen(mod_name);
+        vstr_init(&vstr, len + sizeof(".__main__"));
+        vstr_add_strn(&vstr, mod_name, len);
+        vstr_add_strn(&vstr, ".__main__", sizeof(".__main__") - 1);
+        import_args[0] = mp_obj_new_str_from_vstr(&vstr);
+        goto reimport;
+    }
+    return EXIT_OK;
+}
+#endif
+
 // argv[start..argc) become sys.argv, omitting index `skip` (-1 for none —
 // only `-c` uses it, to keep the command body out of the list).
 #if MICROPY_PY_SYS_ARGV
@@ -166,9 +374,10 @@ static void set_sys_argv(char **argv, int argc, int start, int skip) {
 
 static void print_usage(void) {
     printf(
-        "usage: micropython [option] [-c cmd | file | -] [arg]...\n"
+        "usage: micropython [option] [-c cmd | -m mod | file | -] [arg]...\n"
         "options:\n"
         "  -c cmd  : program passed in as a string\n"
+        "  -m mod  : run a module on sys.path as __main__\n"
         "  -h      : print this help message and exit\n"
         "  -V      : print the MicroPython version and exit\n"
         "  -       : read the program from stdin\n"
@@ -183,6 +392,7 @@ int main(int argc, char **argv) {
     gc_init(heap, heap + sizeof(heap));
     #endif
     mp_init();
+    setup_sys_path(argc > 0 ? argv[0] : NULL);
 
     #if !MICROPY_ENABLE_COMPILER
     pyexec_frozen_module("frozentest.py", false);
@@ -195,6 +405,7 @@ int main(int argc, char **argv) {
     // program, not to us — same as CPython/upstream-unix.
     const char *run_file = NULL;   // script path, or "-" for stdin
     const char *run_cmd = NULL;    // -c body
+    const char *run_mod = NULL;    // -m module name
     int arg0 = argc;               // index in argv of sys.argv[0]
     int a = 1;
     for (; a < argc; a++) {
@@ -226,9 +437,21 @@ int main(int argc, char **argv) {
             a += 1;
             break;
         }
-        // Unknown option. Refuse loudly rather than silently treating it as
-        // a filename — `-m` in particular is a real feature this port does
-        // not have yet (module import lands in todos/0117 R2).
+        #if MICROPY_MODULE_OVERRIDE_MAIN_IMPORT
+        if (!strcmp(s, "-m")) {
+            if (a + 1 >= argc) {
+                fprintf(stderr, "micropython: -m needs an argument\n");
+                mp_deinit();
+                return EXIT_USAGE;
+            }
+            run_mod = argv[a + 1];
+            arg0 = a + 1;   // CPython: sys.argv[0] is the module, then its args
+            a += 1;
+            break;
+        }
+        #endif
+        // Unknown option. Refuse loudly rather than silently treating it as a
+        // filename.
         fprintf(stderr, "micropython: unknown option %s\n", s);
         print_usage();
         mp_deinit();
@@ -236,13 +459,22 @@ int main(int argc, char **argv) {
     }
 
     int ret;
-    if (run_cmd != NULL) {
+    if (run_mod != NULL) {
+        #if MICROPY_MODULE_OVERRIDE_MAIN_IMPORT
+        // sys.path[0] stays "" (cwd) for -m, as CPython does.
+        set_sys_argv(argv, argc, arg0, -1);
+        ret = do_module(run_mod);
+        #else
+        ret = EXIT_USAGE;
+        #endif
+    } else if (run_cmd != NULL) {
         // CPython: sys.argv == ["-c", <program args>...] — the command BODY is
         // argv[arg0 + 1] and is deliberately not in the list.
         set_sys_argv(argv, argc, arg0, arg0 + 1);
         ret = do_str(run_cmd, strlen(run_cmd), MP_QSTR__lt_string_gt_, MP_PARSE_FILE_INPUT);
     } else if (run_file != NULL && strcmp(run_file, "-") != 0) {
         set_sys_argv(argv, argc, arg0, -1);  // [<script>, <program args>...]
+        sys_path_set_script_dir(run_file);
         ret = do_file(run_file);
     } else if (run_file != NULL) {
         set_sys_argv(argv, argc, arg0, -1);  // ["-", <program args>...]
