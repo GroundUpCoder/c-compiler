@@ -1,6 +1,6 @@
 # 0353 — `queue.js check` does not validate Status lines, so tickets advertise the wrong state
 
-- **Status**: open
+- **Status**: done
 - **Priority**: P3, light.
 - **Provenance**: found 2026-07-28 by the router CHECK lane (one instance) and
   widened by master cont-113, which found the instance was a class and that the
