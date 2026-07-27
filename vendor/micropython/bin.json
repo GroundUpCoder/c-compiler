@@ -1,7 +1,7 @@
 {
   "bin": true,
   "name": "micropython",
-  "description": "MicroPython 1.28.0 minimal port",
+  "description": "MicroPython 1.28.0 \u2014 gucOS port (script runner + file I/O, todos/0117 R1)",
   "includes": [
     ".",
     "genhdr"
@@ -116,6 +116,7 @@
     "shared/readline/readline.c",
     "shared/runtime/pyexec.c",
     "shared/runtime/stdout_helpers.c",
+    "file.c",
     "main.c",
     "uart_core.c",
     "_frozen_mpy.c"
