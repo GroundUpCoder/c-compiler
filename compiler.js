@@ -4029,6 +4029,11 @@ class Expr {
       this.parameters = params || [];
       this.storageClass = storageClass || Types.StorageClass.NONE;
       this.isInline = isInline || false;
+      // `inline` as a property of the FUNCTION (C11 6.7.4p1), accumulated
+      // across every declaration of it by Parser._noteInlineHint (which
+      // documents why this is NOT the same field as isInline) and read by
+      // codegen as fnMeta.inlineHint — todos/0328.
+      this.inlineHint = this.isInline;
       // Inline-policy attributes ({noinline, alwaysInline} or null),
       // threaded parser → codegen fnMeta → WAST inliner (todos/0214).
       this.fnAttrs = null;
@@ -10213,6 +10218,13 @@ class Parser {
     this.parsedExceptionTags = [];
     this.parsedLabels = new Map();
     this.pendingGotos = new Map();
+    // Names declared `inline` anywhere in this translation unit (todos/0328).
+    // C11 6.7.4p1 makes the specifier a property of the FUNCTION, so it must
+    // survive a declaration that is dropped or goes out of scope before the
+    // definition is parsed — a block-scope `inline int f(int);` in one
+    // function, defined at file scope afterwards, has no surviving node to
+    // chase. Per-TU, like the fnAttrs accumulation it sits beside.
+    this.fnInlineHints = new Set();
     this.warningFlags = { pointerDecay: false, circularDependency: false };
   }
 
@@ -10456,6 +10468,37 @@ class Parser {
                alwaysInline: a.alwaysInline || b.alwaysInline };
     }
     return a;
+  }
+
+  // `inline` accumulates across the declarations of a function the way
+  // fnAttrs above does (C11 6.7.4p1 — the specifier is a property of the
+  // FUNCTION, not of one declaration of it), so the WAST inliner sees
+  // hintCalleeCap for a function whose only `inline` is on a prototype, on
+  // a re-declaration after the definition, or on a block-scope declaration
+  // — todos/0328. Three directions, hence three moves:
+  //   forward  — record the name, so a definition parsed later can ask
+  //              (the node may be dropped or out of scope by then);
+  //   sideways — stamp THIS node, since either it or `prev` may be the one
+  //              that keeps the scope binding;
+  //   backward — stamp a definition already parsed.
+  // Callers must invoke this ABOVE the redundant-re-declaration `continue`s,
+  // which skip everything after them.
+  //
+  // Deliberately a separate field from `isInline`: that one stays the
+  // declaration's OWN keyword, because the linker's C11 6.7.4p7
+  // external-definition rule reads it off the definition node and p7 needs
+  // ALL file-scope declarations to say `inline`. Accumulating there would
+  // make `inline int f(void); int f(void){...}` look like an inline
+  // definition and silently accept a second external definition from
+  // another TU.
+  _noteInlineHint(name, funcDecl, prev) {
+    if (funcDecl.isInline) this.fnInlineHints.add(name);
+    if (!this.fnInlineHints.has(name)) return;
+    funcDecl.inlineHint = true;
+    if (!(prev instanceof AST.DFunc)) return;
+    prev.inlineHint = true;
+    const def = prev.definition || (prev.body ? prev : null);
+    if (def) def.inlineHint = true;
   }
 
   // --- parseDeclSpecifiers ---
@@ -12985,7 +13028,7 @@ class Parser {
           this.error(this.peek(-1), "_Alignas cannot be applied to a function declaration");
         }
         const funcDecl = new AST.DFunc({ filename: this.peek().filename, line: this.peek().line },
-          name, type, [], specs.storageClass, false, null);
+          name, type, [], specs.storageClass, specs.isInline, null);
         funcDecl.importModule = specs.importModule;
         funcDecl.importName = specs.importName;
         // C11 6.2.2p4 (via p5 for no-storage-class): a block-scope
@@ -12993,6 +13036,11 @@ class Parser {
         // internal linkage — keep the existing binding, drop the
         // redundant decl (todos/0219).
         const prevFn = this.varScope.get(name);
+        // A block-scope declaration can carry `inline` too (todos/0328).
+        // Record it BEFORE the drop below, which skips everything after it,
+        // and back-propagate onto a definition already parsed; a definition
+        // parsed LATER picks it up from fnInlineHints.
+        this._noteInlineHint(name, funcDecl, prevFn);
         if (prevFn instanceof AST.DFunc &&
             prevFn.storageClass === Types.StorageClass.STATIC &&
             specs.storageClass !== Types.StorageClass.STATIC &&
@@ -13273,6 +13321,7 @@ class Parser {
 
         // Update previous declaration's definition pointer
         const prev = this.varScope.get(name);
+        this._noteInlineHint(name, funcDecl, prev);
         if (prev && prev instanceof AST.DFunc) {
           if (!prev.type.isCompatibleWith(funcDecl.type)) {
             this.error(this.peek(), `conflicting types for '${name}' (previously declared as '${prev.type.toString()}', now defined as '${funcDecl.type.toString()}')`);
@@ -13281,6 +13330,7 @@ class Parser {
           // Attributes on an earlier prototype apply to the definition
           // (gcc semantics, per-TU) — todos/0214.
           funcDecl.fnAttrs = this._mergeFnAttrs(funcDecl.fnAttrs, prev.fnAttrs);
+          // …and so does `inline` — _noteInlineHint above, todos/0328.
           // C11 6.2.2p4 (via p5 for no-storage-class): a DEFINITION without
           // the `static` keyword after a visible internal-linkage declaration
           // inherits internal linkage — `static int f(void); int f(void)
@@ -13389,13 +13439,14 @@ class Parser {
         if (prevFunc && prevFunc instanceof AST.DFunc && !prevFunc.type.isCompatibleWith(funcDecl.type)) {
           this.error(this.peek(), `conflicting types for '${name}' (previously declared as '${prevFunc.type.toString()}', now declared as '${funcDecl.type.toString()}')`);
         }
+        // `inline` accumulates across declarations the way attributes do
+        // (todos/0328) — above the re-declaration `continue`s below, and
+        // outside the prevFunc guard so a FIRST declaration records its
+        // hint for a definition parsed later.
+        this._noteInlineHint(name, funcDecl, prevFunc);
         if (prevFunc && prevFunc instanceof AST.DFunc) {
           // Redeclarations accumulate attributes (gcc semantics); a decl
           // AFTER the definition also back-propagates onto it.
-          // `inline` does NOT accumulate the same way: the definition's
-          // isInline comes from its own specs, so an `inline` that appears
-          // only on a prototype or a re-declaration is dropped and the
-          // WAST inliner never sees hintCalleeCap — todos/0328.
           funcDecl.fnAttrs = this._mergeFnAttrs(funcDecl.fnAttrs, prevFunc.fnAttrs);
           const def = prevFunc.definition ||
             (prevFunc.body ? prevFunc : null);
@@ -18210,7 +18261,7 @@ class CodeGenerator {
         // `inline` keyword (raised effective calleeCap).
         noinline: !!(funcDef.fnAttrs && funcDef.fnAttrs.noinline),
         alwaysInline: !!(funcDef.fnAttrs && funcDef.fnAttrs.alwaysInline),
-        inlineHint: !!funcDef.isInline,
+        inlineHint: !!funcDef.inlineHint,
       };
     }
 
