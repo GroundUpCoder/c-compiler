@@ -273,4 +273,10 @@ thing this file exists to kill.
 - anchor: is the runtime backstop for a payload that arrived another way.
 - provenance: 0338
 
+### L51 — mkpkg's package-payload freshness scan has no red control, so it can under-invalidate silently
+- ticket: 0363
+- file: tools/mkpkg.js
+- anchor:  * under-invalidation here is invisible exactly the way 0354's was. Funded by
+- provenance: 0354
+
 <!-- END ENTRIES -->

@@ -234,7 +234,12 @@ if (withClang) clangDriftCheck();
  * this tool (tar/control encoding), the definition, and each file entry's
  * closure (project dirs through deps, `bin` blobs, os/-relative `c`/`text`
  * assets). Deliberately NARROW — the os/ tree at large is not an input, so
- * unrelated OS work doesn't force a punes recompile in the dev loop. */
+ * unrelated OS work doesn't force a punes recompile in the dev loop.
+ *
+ * UNTESTED: no red control exercises this scan (ROOT is module-level, so it
+ * cannot be pointed at a synthetic tree the way newestBakeInput can) — an
+ * under-invalidation here is invisible exactly the way 0354's was. Funded by
+ * todos/0363. */
 function newestPkgInput(name, pkg) {
   const newest = { mtimeMs: 0, path: null };
   const seenDirs = {};
