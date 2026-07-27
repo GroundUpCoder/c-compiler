@@ -160,10 +160,6 @@ thing this file exists to kill.
 - file: todos/BLOCK_FS.md
 - anchor: - [ ] **C-level unit tests for the 10 untested WASM imports** listed above.
 
-### L17 — 13 libc skip entries say only "TODO", so the suite is green over documented holes
-- ticket: 0298
-- file: tests/run.py
-- anchor: # Library features not implemented (TODO candidates)
 
 ### L18 — the dispatcher documents a Playwright-missing skip that only fires on a spawn failure
 - ticket: 0299
@@ -203,5 +199,46 @@ thing this file exists to kill.
 - ticket: 0162
 - file: os/win32/advapi32.c
 - anchor: tmp+rename, and there is no advisory lock, so two flushes landing in
+
+### L25 — search.h is absent, so four libc-tests are permanently skipped
+- ticket: 0305
+- file: tests/run.py
+- anchor: "search_hsearch": "not implemented: search.h (todos/0305)",
+
+### L26 — the BSD random()/srandom()/initstate() family is absent
+- ticket: 0306
+- file: tests/run.py
+- anchor: "random": "not implemented: random()/srandom()/initstate()/setstate() (todos/0306)",
+
+### L27 — strptime() is absent and strftime is missing six conversions plus width modifiers
+- ticket: 0307
+- file: tests/run.py
+- anchor: "strptime": "not implemented: strptime() (todos/0307)",
+
+### L28 — open_memstream()/fmemopen() are absent; there are no memory-backed FILE streams
+- ticket: 0308
+- file: tests/run.py
+- anchor: "memstream": "not implemented: open_memstream()/fmemopen() (todos/0308)",
+
+### L29 — the wcstol family and wide scanf are absent
+- ticket: 0309
+- file: tests/run.py
+- anchor: "wcstol": "not implemented: wcstol() family (todos/0309)",
+
+### L30 — strftime %s follows glibc/BSD (TZ-dependent) where musl is TZ-independent; nobody chose
+- ticket: 0310
+- file: tests/run.py
+- anchor: # (todos/0307). %s additionally diverges from musl's expectation by the
+- provenance: 0307
+
+### L31 — three setjmp contexts C11 7.13.1.1p4 REQUIRES are rejected; the diagnostic even advertises one
+- ticket: 0311
+- file: todos/CONFORMANCE-REMAINING.md
+- anchor: - **setjmp contexts required by C11 7.13.1.1p4 but rejected**:
+
+### L32 — longjmp outside statement position crashes the compiler on valid C11 with a raw JS stack trace
+- ticket: 0312
+- file: todos/CONFORMANCE-REMAINING.md
+- anchor: - **Residual `longjmp` in non-statement position** (`x ? longjmp(b,1) : ...`,
 
 <!-- END ENTRIES -->

@@ -1,6 +1,10 @@
 # 0298 — tests/run.py skip table: triage the 13 TODO-candidate libc gaps into real items (check fnmatch first)
 
-- **Status**: open
+- **Status**: DONE 2026-07-27 — 3 stale skips deleted (`fnmatch`, `fdopen`, `utime`;
+  the libc suite went 25/0/51 → 28/0/48), 2 reason texts corrected, and the remaining
+  10 skips funded by todos/0305-0310. The `setjmp` entry's citation exposed two further
+  unfunded conformance gaps, filed as todos/0311 + todos/0312. See EXECUTION and
+  CLOSE-OUT ROUND below.
 - **Design**: this file. Source: unfunded-liability sweep 2026-07-27 (finding #11).
 
 ## Goal
@@ -161,8 +165,77 @@ need real items. The ticket's premise — "a green libc suite with 13 documented
 holes" — holds, but **two of the holes are not holes**, which is worse than the
 ticket assumed: the table was actively misreporting working functionality.
 
-Not done here (this lane was read-mostly): the skip table itself is untouched, and
-the un-skipped tests were verified by direct invocation rather than through
-`tests/run.py`. Confirming via the runner needs
-`python3 tests/run.py --types=libc` (a real, but not heavy, run) after the two
-lines are deleted.
+Not done in cont-78 (that lane was read-mostly): the skip table itself was untouched,
+and the un-skipped tests were verified by direct invocation rather than through
+`tests/run.py`. Confirming via the runner needs `python3 tests/run.py --types=libc`
+(a real, but not heavy, run) after the two lines are deleted. — **done below.**
+
+## EXECUTION (branch `libc-skip-triage`)
+
+Acted on the verification above. `python3 tests/run.py --types=libc`:
+**before 25 passed / 0 failed / 51 skipped → after 28 passed / 0 failed / 48 skipped.**
+
+**Three stale skips deleted, not two.** `fnmatch` and `fdopen` as predicted, plus the
+14th entry the sweep's count missed: **`utime` ("TODO: utimensat()") also PASSES** —
+`utimensat`/`futimens` are implemented at `compiler.js:24693-24730`, and a direct
+compile+run of `vendor/libc-test/src/functional/utime.c` gives exit 0, empty stdout.
+(That test also asserts a 64-bit `time_t`; it would fail loudly on a 32-bit one, so
+the pass is real, not vacuous.) All three confirmed again through the real runner.
+
+**Two reason texts corrected.** `setjmp` now names the C11-UB bare-assignment form and
+points at `todos/CONFORMANCE-REMAINING.md:92-94` instead of the aliases, which exist.
+`strftime` now names the six genuinely-absent conversions and drops `%s` from the
+absent list.
+
+**Six items filed** for the remaining ten skips, grouped by facility rather than
+one-per-entry: **0305** search.h (4 entries), **0306** random family, **0307**
+strptime + strftime conversions (2 entries — they share the `%` conversion table),
+**0308** memstream, **0309** wcstol + wide scanf (2 entries — wide scanf is specified
+in terms of `wcsto*`), **0310** the `%s` TZ divergence. Every remaining skip line cites
+its item; `LIABILITIES.md` L17 retired and replaced by L25–L30.
+
+**Correction to the verification above.** The `%s` finding is stated as "musl is
+TZ-independent and we are not", implying we are wrong. Measured against the *host*
+libc with a clang-built probe: `TZ=Asia/Tokyo` → `1451795025` (identical to ours),
+`TZ=UTC` → `1451827425`. glibc does the same (its `%s` calls `mktime`). So **we match
+glibc/BSD and musl is the outlier** — it is a semantics decision, not a defect. Filed
+as 0310 on that basis rather than as a bug.
+
+Also found, not in the verification account: the `strftime` failure list includes an
+**integer overflow** — `tp->tm_year + 1900` is computed in `int`, so a near-`INT_MAX`
+`tm_year` wraps (`%Y` → `-2147481749` where musl gives `+2147485547`). That IS a
+correctness bug in shipped code, recorded as defect class 1 in 0307.
+
+## CLOSE-OUT ROUND (independent review)
+
+Review re-ran the libc suite on both `origin/main` and the branch and reproduced
+25/0/51 → 28/0/48 exactly, re-read the `tests/run.py` diff, and independently probed
+the host libc's `%s`. Three accepts, one reject, two amendments — all actioned:
+
+**REJECTED: the first `setjmp` reason rewrite.** It was accurate about the
+bare-assignment form but pointed the reader at
+`todos/CONFORMANCE-REMAINING.md:92-94`, a bullet whose *primary* content is a
+different, **unfunded** conformance defect: `switch (setjmp(b))`,
+`while (setjmp(b) == 0)` and `else if (setjmp(b))` are all rejected, and C11
+7.13.1.1p4 **requires** all three. Probed here: all three produce the same
+"unsupported use of setjmp" error — and that error advertises `if (setjmp(buf) == 0)`
+as supported while refusing the `while` spelling of the identical comparison.
+Nothing in `todos/` funded it. So the fix for a table of true-comments-naming-
+unfunded-gaps had written a fourth one. Now **todos/0311**, cited by the skip entry,
+which also states plainly that 0311 will NOT un-skip this test (line 23 is UB).
+
+**Sibling gap, same bullet list, also unfunded → todos/0312** (P0): `longjmp` in
+non-statement position crashes the compiler with a raw JS stack trace
+(`emitExpr: function 'longjmp' not found`, `compiler.js:19509`) — and unlike
+`setjmp`, C11 places **no** context restriction on `longjmp`, so that input is
+conforming. Register entries **L31/L32** anchor both bullets.
+
+**0310 amended**: the "glibc does the same" clause was asserted, not measured — this
+box is BSD. The ticket now separates VERIFIED (this host's libc reads `TZ` and
+ignores `tm_gmtoff`, identical to ours; two probes) from BELIEVED (glibc), and names
+confirming glibc as a precondition of the (a)/(b) decision.
+
+**0307 amended**: the `int` wrap is now defect class **1**, first in the plan, and has
+its own acceptance bullet with the four `compiler.js` line refs and the three expected
+strings — plus a `tests/unit/conformance/` guard, since it un-skips nothing on its own
+and would otherwise be unverifiable until the rest of the item lands.
