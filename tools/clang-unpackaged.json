@@ -1,0 +1,4 @@
+{
+  "_why": "Explicit exemptions for the mkpkg --clang overlay-drift gate (todos/0337). Every /usr/bin/* payload the clang-simplified sibling publishes must be installable through gucman via a packages/<name>.json `clangApp` entry. A payload that deliberately is NOT a package belongs here, keyed by its /usr/bin basename, with a one-line reason — a silent omission is what the gate exists to catch. Entries are themselves checked: an exemption for a payload the sibling no longer publishes (or that has since been packaged) fails the build as stale.",
+  "unpackaged": {}
+}

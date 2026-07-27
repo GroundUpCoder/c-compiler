@@ -1,0 +1,14 @@
+{
+  "name": "sdldemo",
+  "version": "1.0.0",
+  "summary": "SDL3 bouncing-box demo (clang-built C++ — clang-simplified's own wasm/demos/sdl_demo.cpp over the header-only libcxx-mini)",
+  "requires": "clang-sibling",
+  "files": {
+    "sdldemo": { "clangApp": "sdldemo" }
+  },
+  "bin": { "sdldemo": "sdldemo" },
+  "desktop": { "cmd": "sdldemo" },
+  "menu": [
+    { "group": "Demos", "entry": "sdldemo", "cmd": "sdldemo" }
+  ]
+}

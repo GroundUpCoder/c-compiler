@@ -41,6 +41,9 @@
 //   node tools/mkpkg.js --out=DIR --force --quiet
 //   node tools/mkpkg.js --packages-dir=DIR   # read definitions from DIR
 //                                            # instead of <repo>/packages
+//   node tools/mkpkg.js --clang [--clang-root=DIR] [--clang-unpackaged=FILE]
+//                                            # SUPERSET index; the drift gate
+//                                            # (below) reads the exemption list
 //
 // A package whose pool payload is newer than all its inputs (compiler.js,
 // this tool, its definition, its files' project/bin/asset closure) is
@@ -79,6 +82,10 @@ let clangRoot = path.resolve(ROOT, '..', 'clang-simplified');
 // definition points this at a tmpdir instead of writing into it (the same
 // seam foldPackages/boot.js/mkimage.js expose as --packages-dir).
 let pkgDir = path.join(ROOT, 'packages');
+// The drift gate's exemption list (see clangDriftCheck). Overridable for the
+// same reason --packages-dir is: a test needs to exercise the allow-list
+// branch without editing the shipped file every other run depends on.
+let unpackagedPath = path.join(__dirname, 'clang-unpackaged.json');
 const requested = [];
 for (const a of process.argv.slice(2)) {
   if (a.startsWith('--out=')) outDir = path.resolve(a.slice(6));
@@ -87,6 +94,7 @@ for (const a of process.argv.slice(2)) {
   else if (a === '--force') force = true;
   else if (a === '--clang') withClang = true;
   else if (a.startsWith('--clang-root=')) clangRoot = path.resolve(a.slice(13));
+  else if (a.startsWith('--clang-unpackaged=')) unpackagedPath = path.resolve(a.slice(19));
   else if (a.startsWith('-')) {
     process.stderr.write(`mkpkg: unknown option ${a}\n`);
     process.exit(2);
@@ -140,6 +148,82 @@ for (const n of names) {
     process.exit(2);
   }
 }
+
+/* ---- overlay ⟷ packages/ drift gate (todos/0337) --------------------------
+ * Standing rule: EVERY clang app we build must be reachable through gucman.
+ * The sibling overlay is the producer of record, so its executable payloads —
+ * the `/usr/bin/*` entries — are the authoritative demand list, and each one
+ * must be CLAIMED by some packages/*.json `clangApp` entry. A payload the
+ * sibling publishes with no definition here is invisible to every deploy: it
+ * was built, it just silently never ships. That is exactly how gameboy-clang/
+ * stl4/sdldemo sat unpackaged while the other seven shipped.
+ *
+ * The gate is on the OVERLAY side of the relation, not a hand-list of names,
+ * so a new sibling project fails the build the first time it is published
+ * rather than the first time somebody notices it missing. It runs under
+ * --clang only (a base build has no overlay to compare against) and BEFORE any
+ * payload is built — and since a clang build is now the deploy default
+ * (comguc scripts/build.mjs), no deploy can route around it.
+ *
+ * A payload that genuinely should not be a package needs an EXPLICIT entry in
+ * tools/clang-unpackaged.json giving the reason. Silence is never an allowed
+ * answer; an unexplained gap is the failure mode this gate exists to kill.
+ *
+ * Scoped to /usr/bin/*: non-executable overlay payloads (assets like
+ * /usr/share/tinyrenderer/*.obj, menu links) belong to whichever package
+ * carries their binary, and a package is free to leave an asset behind —
+ * gameboy-clang deliberately drops the copyrighted PokemonBlue.gb the overlay
+ * publishes for the local bake, because comguc never hosts ROMs publicly. */
+const UNPACKAGED_PATH = unpackagedPath;
+function clangDriftCheck() {
+  const published = [];
+  for (const p of clangOverlay().keys()) {
+    if (p.startsWith('/usr/bin/')) published.push(p.slice('/usr/bin/'.length));
+  }
+  published.sort();
+  // Claimed = every clangApp named by ANY definition in pkgDir, not just the
+  // ones this invocation builds — `mkpkg box2d-clang` must still gate the
+  // whole relation, or a single-package rebuild would launder the drift away.
+  const claimedBy = new Map();
+  for (const n of COMMON.listPackages(fs, path, ROOT, { withClang: true, packagesDir: pkgDir })) {
+    let def;
+    try { def = JSON.parse(fs.readFileSync(path.join(pkgDir, n + '.json'), 'utf-8')); }
+    catch (e) { continue; }   // malformed → fails loud in the build below
+    for (const entry of Object.values(def.files || {})) {
+      if (entry && typeof entry.clangApp === 'string') claimedBy.set(entry.clangApp, n);
+    }
+  }
+  let allowed = {};
+  if (fs.existsSync(UNPACKAGED_PATH)) {
+    allowed = JSON.parse(fs.readFileSync(UNPACKAGED_PATH, 'utf-8')).unpackaged || {};
+  }
+  const orphans = published.filter((a) => !claimedBy.has(a) && !allowed[a]);
+  if (orphans.length) {
+    process.stderr.write(
+      `mkpkg --clang: ${orphans.length} overlay app(s) published by the sibling have NO packages/*.json:\n` +
+      orphans.map((a) => `    /usr/bin/${a}\n`).join('') +
+      `  every clang app we build must be installable through gucman.\n` +
+      `  fix: add packages/<name>.json with {"requires":"clang-sibling",\n` +
+      `       "files":{"<name>":{"clangApp":"${orphans[0]}"}}, "bin":{...}} —\n` +
+      `       see packages/box2d-clang.json (windowed) or packages/stl4.json (tty)\n` +
+      `  or, if a payload is deliberately not a package, record it WITH A REASON in\n` +
+      `  ${path.relative(ROOT, UNPACKAGED_PATH)}\n`);
+    process.exit(1);
+  }
+  // A stale allow-list entry is drift too: it claims an exemption for a
+  // payload that no longer exists (or has since been packaged), so the next
+  // reader trusts a rule that isn't doing anything.
+  const stale = Object.keys(allowed).filter((a) => !published.includes(a) || claimedBy.has(a));
+  if (stale.length) {
+    process.stderr.write(
+      `mkpkg --clang: stale ${path.relative(ROOT, UNPACKAGED_PATH)} entries — ${stale.join(', ')}\n` +
+      `  (no longer published by the sibling, or now packaged); remove them\n`);
+    process.exit(1);
+  }
+  log(`clang drift: ${published.length} overlay app(s), all packaged`
+    + (Object.keys(allowed).length ? ` (${Object.keys(allowed).length} explicitly unpackaged)` : '') + ' ✓');
+}
+if (withClang) clangDriftCheck();
 
 /* ---- package-input freshness (the 0082 idea, scoped to one package) ----
  * Newest mtime across everything that can change this package's payload
