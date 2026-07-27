@@ -23,8 +23,10 @@ Preserved here:
 | File | What it is |
 |---|---|
 | `cpython-m0-compiler-patch.diff` | the **entire** delta between shipped `compiler.js` and the probe's `compiler-patched.js` — **22 changed lines**, three patches |
-| `cpython-m0-link.sh` | the compile/link driver (the `CCJS` env seam is the whole point — see below) |
-| `cpython-m0-link-srcs.txt` | the exact 173-TU source list the link was driven from |
+| `cpython-m0-link.sh` | ⚠️ **the driver that FAILED** — kept only as the record of the 2 remaining parse errors. **Do not re-probe with it.** |
+| `cpython-m0-link-srcs.txt` | the **full** 235-TU source list — the *aspiration*, not what was built |
+| `cpython-m0-minlink.sh` | ✅ **added by cont-95 — THE REAL DRIVER.** This is what produced `python.wasm`. |
+| `cpython-m0-min-srcs.txt` | ✅ **added by cont-95** — the **174-TU** list actually built (the "173 TUs" of the probe log). Drops 61 extension-module TUs: math, struct, datetime, decimal, the hash family, array, pickle, unicodedata, the CJK codecs, expat. **The M0 artifact is a MINIMAL CPython — do not read it as batteries-included.** |
 | `cpython-m0-shim/` | **added 2026-07-27 by @master cont-94** — `ccprobe_libc.{h,c}` + `stdatomic.h`, copied verbatim from `/tmp/cpy-m0/ccbuild/shim/`. **282 lines.** The entire `0325` Group A + `0324` prototype, validated against 173 real CPython TUs |
 
 > ⚠️ **This file originally said "the three small pieces that are not re-derivable" and was
@@ -41,8 +43,30 @@ Preserved here:
 `link.sh:3` reads `node ${CCJS:-/tmp/cpy-m0/compiler-patched.js}`. **The compiler is an
 env override.** So pointing the identical build at a different compiler is:
 
+> 🔴 **CORRECTED AGAIN 2026-07-27 by @master cont-95, after running this block
+> from the note alone and having it fail twice.** The block below named the WRONG
+> SCRIPT and the WRONG ACTION. Both are fixed in place; the originals were
+> `link.sh` and `ACT=link`. See `logs/2026-07-27/0319-cpython-reprobe.md`.
+>
+> 1. **`link.sh` is the driver that FAILED.** It is stamped 14:14 and its
+>    `link.err` (14:17) contains exactly two parse errors — `xmlparse.c:284`
+>    (CPython's `-DPREFIX='"/usr/local"'` rewrites expat's own `} PREFIX;`
+>    typedef) and `dynload_shlib.c:41` (`SOABI` undefined). **`minlink.sh` +
+>    `min-srcs.txt`, 14:22, is what actually produced `python.wasm`.** It defines
+>    `SOABI`/`ABIFLAGS`/`PY_CORE_*` and drops the 61 TUs that do not build.
+>    Preserved as `cpython-m0-minlink.sh` + `cpython-m0-min-srcs.txt`.
+> 2. **`ACT=link` does not emit a wasm.** Actions are
+>    `lex|parse|link|cfg|print|compile`; `link` is the link *check* — it dumps ~2M
+>    lines of linked AST to stdout and exits 0 **with no output file**. The emit
+>    action is **`ACT=compile`**. Following the old block gave a silent success
+>    and no artifact, which is worse than a loud failure.
+>
+> ⇒ This is the THIRD error found in this one file by re-running it (after the
+> `host.js` path and the missing `PYTHONPATH`/`PYTHONHOME`). **A preserved harness
+> is not preserved until someone has re-run it from the note alone.**
+
 ```sh
-CCJS=/path/to/compiler.js ACT=link /tmp/cpy-m0/link.sh -o /tmp/cpy-m0/python-new.wasm
+CCJS=/path/to/compiler.js ACT=compile /tmp/cpy-m0/minlink.sh -o /tmp/cpy-m0/python-new.wasm
 cd /tmp/cpy-m0 && PYTHONPATH=/tmp/cpy-m0/cpython/Lib PYTHONHOME=/tmp/cpy-m0/cpython \
   node ~/git/c-compiler/host.js python-new.wasm -c "import json; print(json.dumps({'a':1}))"
 cd /tmp/cpy-m0 && PYTHONPATH=/tmp/cpy-m0/cpython/Lib PYTHONHOME=/tmp/cpy-m0/cpython \
