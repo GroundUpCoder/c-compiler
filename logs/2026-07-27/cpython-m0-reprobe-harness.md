@@ -25,6 +25,16 @@ Preserved here:
 | `cpython-m0-compiler-patch.diff` | the **entire** delta between shipped `compiler.js` and the probe's `compiler-patched.js` — **22 changed lines**, three patches |
 | `cpython-m0-link.sh` | the compile/link driver (the `CCJS` env seam is the whole point — see below) |
 | `cpython-m0-link-srcs.txt` | the exact 173-TU source list the link was driven from |
+| `cpython-m0-shim/` | **added 2026-07-27 by @master cont-94** — `ccprobe_libc.{h,c}` + `stdatomic.h`, copied verbatim from `/tmp/cpy-m0/ccbuild/shim/`. **282 lines.** The entire `0325` Group A + `0324` prototype, validated against 173 real CPython TUs |
+
+> ⚠️ **This file originally said "the three small pieces that are not re-derivable" and was
+> read downstream as *purge risk retired*. It was exhaustive over a set of three that had a
+> fourth member.** The M1 scoping lane found `ccbuild/shim/` still sitting only in `/tmp`
+> and ranked preserving it as its #1 proposed ticket — "P0-adjacent, 5 minutes." It is the
+> most expensive-to-recreate artifact of the whole probe (it is hand-written C, not build
+> output), and it was the one piece not saved. Preserved now, in `cpython-m0-shim/`.
+> ⇒ **A preservation pass is exhaustive over the set someone enumerated. Before writing
+> "purge risk retired," walk the source directory, do not re-read your own list.**
 
 ## 🔑 The seam that makes the re-probe a one-liner
 
@@ -33,12 +43,24 @@ env override.** So pointing the identical build at a different compiler is:
 
 ```sh
 CCJS=/path/to/compiler.js ACT=link /tmp/cpy-m0/link.sh -o /tmp/cpy-m0/python-new.wasm
-node /tmp/cpy-m0/host.js /tmp/cpy-m0/python-new.wasm -c "import json; print(json.dumps({'a':1}))"
-node /tmp/cpy-m0/host.js /tmp/cpy-m0/python-new.wasm -c "print(sum(x*x for x in range(10)))"
+cd /tmp/cpy-m0 && PYTHONPATH=/tmp/cpy-m0/cpython/Lib PYTHONHOME=/tmp/cpy-m0/cpython \
+  node ~/git/c-compiler/host.js python-new.wasm -c "import json; print(json.dumps({'a':1}))"
+cd /tmp/cpy-m0 && PYTHONPATH=/tmp/cpy-m0/cpython/Lib PYTHONHOME=/tmp/cpy-m0/cpython \
+  node ~/git/c-compiler/host.js python-new.wasm -c "print(sum(x*x for x in range(10)))"
 ```
 
 Those two commands are the `0319` acceptance test: a `import json` and a generator
 expression are precisely what double-freed on the un-fixed compound-literal bug.
+
+> ⚠️ **CORRECTED 2026-07-27 by @master cont-94**, after the M1 scoping lane ran the block
+> as written and it failed. The original said `node /tmp/cpy-m0/host.js …` and omitted the
+> two env vars. **There is no `host.js` in `/tmp/cpy-m0`** — independently re-verified
+> (`ls: /tmp/cpy-m0/host.js: No such file or directory`, against a positive control listing
+> of that directory). Use the **repo's** `host.js`. Without `PYTHONPATH`+`PYTHONHOME` you
+> get `ModuleNotFoundError: No module named 'encodings'`, **which reads like a port failure
+> and is not one** — precisely the false-negative class this file's TRAP section exists to
+> prevent, so it is fixed rather than annotated. Evidence: `notes/m1-scoping-pass.md` §1
+> (in the `meta` repo).
 
 ## ⚠️ THE TRAP — do NOT re-probe with plain `compiler.js`, and do NOT report the result if you do
 
