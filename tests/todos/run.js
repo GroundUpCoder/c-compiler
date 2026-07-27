@@ -18,6 +18,10 @@ const { spawnSync } = require('child_process');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..', '..');
+// Cross-tree preflight (todos/0341) — every case below runs with `cwd: ROOT`,
+// so without this a main-tree copy launched from a worktree would validate
+// MAIN's queue and register and report it as yours.
+require('../lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/todos/run.js' });
 
 const CASES = [
   { name: 'queue-check',       argv: ['todos/queue.js', 'check'] },

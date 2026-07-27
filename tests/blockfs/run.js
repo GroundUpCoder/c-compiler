@@ -10,6 +10,11 @@ const path = require('path');
 const os = require('os');
 const { runSuite, parseSuiteArgs, usage } = require('../lib/suite-runner.js');
 
+// Cross-tree preflight (todos/0341) — artifactDir below is resolved from this
+// file's location, so a cross-tree launch overwrites another tree's
+// build/test-blockfs/summary.json with a run it never made.
+require('../lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/blockfs/run.js' });
+
 const argv = process.argv.slice(2);
 const long = argv.includes('--long');
 const rest = argv.filter(a => a !== '--long');

@@ -19,6 +19,9 @@ const path = require('path');
 const os = require('os');
 
 const ROOT = path.resolve(__dirname, '..');
+// Cross-tree preflight (todos/0341) — every path below hangs off ROOT, which is
+// this file's own location, not the cwd. Guard the launch, not the 127 sites.
+if (isMainThread) require('./lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/run-unit.js' });
 const UNIT_DIR = path.join(__dirname, 'unit');
 const BUILD_DIR = path.join(ROOT, 'build');
 const TEST_TMPDIR = path.join(BUILD_DIR, 'tmp');

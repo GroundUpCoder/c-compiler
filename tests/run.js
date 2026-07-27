@@ -35,6 +35,14 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 
+// Cross-tree preflight (todos/0341) — FIRST, before --diff reads git or any
+// suite is spawned. This dispatcher hands every sub-runner `cwd: ROOT`
+// (runProcess below), i.e. it NORMALIZES the cwd away: launch the main-tree
+// copy of this file from a worktree and each child then looks perfectly
+// well-behaved from the inside. The check has to happen HERE, at the outermost
+// launch, or the evidence is gone by the time a suite sees it.
+require('./lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/run.js' });
+
 // ---------- Suite registry ----------
 //
 // Each suite is one runner invocation. `supports` lists the passthrough

@@ -21,6 +21,13 @@ const { ensurePrebakedImage } = require('../lib/image-fixture.js');
 const { acquireHeavyLock } = require('../lib/heavy-lock.js');
 const { preflight } = require('../lib/harness-leaks.js');
 
+// Cross-tree preflight (todos/0341) — FIRST, ahead of acquireHeavyLock(): a
+// launch we are about to refuse must not first take a machine-wide lock, and
+// its exit code must not be confusable with that lock's (hence 4, not 3 — see
+// the header of tree-guard.js). Ahead of ensurePrebakedImage() for the same
+// reason the host runner is: the bake WRITES into the script's own tree.
+require('../lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/kernel/run.js' });
+
 // Rows tagged IMG spawn os/boot.js and materialize their per-test image by
 // copying the prebaked os/os-system.img fixture (todos/0082) — the runner
 // bakes that fixture ONCE up front (below) when it's missing/stale, instead

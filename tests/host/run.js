@@ -7,6 +7,11 @@ var { spawnSync } = require('child_process');
 var path = require('path');
 var { ensurePrebakedImage } = require('../lib/image-fixture.js');
 
+// Cross-tree preflight (todos/0341) — BEFORE ensurePrebakedImage(), which bakes
+// a 111 MB blob into the SCRIPT's os/ directory. A cross-tree launch would
+// rewrite another tree's image fixture, which is a write, not just a read.
+require('../lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/host/run.js' });
+
 // serve.js re-bakes a stale os-system.img BEFORE listening (todos/0082), so
 // test_first_run's 5s URL deadline needs the fixture fresh up front — the
 // same prebake the kernel/browser runners do. Without this, the first host
@@ -27,6 +32,7 @@ var tests = [
   ['test_singlefile_emit.js', []],       // .js/.html emit cuts host.js at @cc-strip-below; missing sentinel fails loud (CD15)
   ['test_gpu_present_binding.js', []],   // per-window GPU present tail: canvasBySid + bind-at-GetWGPUSurface (A4)
   ['test_harness_leaks.js', []],         // the startup reaper's "never delete a LIVE run's fixture/server" contract
+  ['test_tree_guard.js', []],            // the cross-tree preflight REFUSES a foreign-cwd launch (0341) — the positive control, run every time
   ['test_pp_spread_bounds.js', []],      // no unbounded call-argument spread survives in compiler.js (0320)
   ['test_suite_record.js', []],          // a split suite's summary records its scope + merges, never clobbers (0339)
   ['../serve/test_first_run.js', []],    // `node serve.js .` prints a URL that 200s (COOP/COEP)
