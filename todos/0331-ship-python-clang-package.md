@@ -1,7 +1,13 @@
 # 0331 — Ship python-clang as a gucman package (needs a CPython vendor tree)
 
-- **Status**: open — **blocked on a CPython vendor tree (M1, unfunded)**
-- **Design**: `logs/2026-07-27/python-clang.md`
+- **Status**: open — **blocked on `todos/0340`** (the vendor tree — M1-clang,
+  now FUNDED and designed: `todos/CPYTHON.md` is normative for the stdlib
+  rule, extension set, layout and package shape; the "M1 unfunded" framing
+  below is historical). 2026-07-28: the naming line "python3/cpython …
+  must not be claimed here" is superseded by CPYTHON.md §6.2's pending
+  cmdalt-keys recommendation (a 0338-lane coordination item) — bare `python`
+  stays off-limits either way.
+- **Design**: `logs/2026-07-27/python-clang.md`, `todos/CPYTHON.md`
 
 ## Goal
 

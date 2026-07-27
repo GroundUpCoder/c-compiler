@@ -83,12 +83,29 @@ Found by the same probe's folded-in numpy leg (numpy 2.2.6).
   5/164 to 83/164 TUs with no compiler change at all. So implementing
   `_Complex` is **not** a prerequisite for numpy — it is one of two routes.
 
+## Group E — found by the M1-clang stdlib probe (2026-07-28, `todos/CPYTHON.md` §3)
+
+The M0 probe could not see these: they only surface when the stdlib's C
+extension modules are actually built (the M1-clang design pass probe-built
+26 of them; log: `logs/2026-07-28/m1-clang-stdlib-design.md`).
+
+| gap | consumer | note |
+|---|---|---|
+| `ELOOP` missing from `errno.h` | `Modules/errnomodule.c` → `errno.py` → **`pathlib`, `zipfile`, `zipapp`, `compileall` fail to import** | the kernel already RAISES it as **40** (`host.js:10687`, the SYMLOOP_MAX walk; `kernel.js:2381` remarks on the libc absence) — one `#define ELOOP 40` + a strerror line, numbering must match host.js |
+| termios surface: `tcsendbreak`/`tcdrain`/`tcflush`/`tcflow`, `B0`–`B38400` baud constants, `TCIFLUSH`/`TCOFLUSH`/`TCIOFLUSH` | `Modules/termios.c` → `tty`, `pty`, `_pyrepl` interactive | the four functions are near-no-ops on a gucOS pty; constants are the bulk |
+| `ioctl` prototype is `(int, unsigned long, void *)`, not variadic | `Modules/fcntlmodule.c` passes an `int` arg | either make it variadic like POSIX or carry the one-cast vendor patch (CPYTHON.md §4.2 chose the patch; a variadic libc `ioctl` would retire it) |
+
+Sequencing note: these land in compiler.js's libc but reach the **clang**
+toolchain only through the `todos/0330` re-vendor (the 206-commit staleness)
+— which is why `todos/0340` carries a soft dep on 0330.
+
 ## Plan
 
 Land Group A first — it is small, and it is the part no port can work around.
 Group B next, since each entry is a `HAVE_*` that silently costs a Python
 feature. Group C and D are gated on whether the pygame arc proceeds
-(`todos/0313`'s verdict).
+(`todos/0313`'s verdict). Group E is funded via `todos/0340` (M1-clang) and
+can land there with a cross-off here.
 
 ## Acceptance
 
