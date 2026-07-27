@@ -71,6 +71,12 @@ bool js_fire_event(jsthread *thread, const char *type, struct dom_document *doc,
 	return true;
 }
 
+bool js_event_type_registered(jsthread *thread, const char *type)
+{
+	/* No engine, so nothing can be listening. */
+	return false;
+}
+
 void js_handle_new_element(jsthread *thread, struct dom_element *node)
 {
 }

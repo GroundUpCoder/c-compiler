@@ -82,4 +82,18 @@ enum input_key {
 bool browser_window_key_press(struct browser_window *bw, uint32_t key);
 
 
+/**
+ * Handle key releases in a browser window.
+ *
+ * A front end that can tell presses from releases should call this for
+ * every release; one that cannot simply never calls it and the DOM sees
+ * keydown without keyup, exactly as before.
+ *
+ * \param bw The root browser window
+ * \param key The UCS4 character codepoint
+ * \return true if key handled, false otherwise
+ */
+bool browser_window_key_release(struct browser_window *bw, uint32_t key);
+
+
 #endif

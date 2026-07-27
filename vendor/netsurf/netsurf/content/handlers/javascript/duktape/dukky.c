@@ -28,6 +28,7 @@
 #include <nsutils/time.h>
 
 #include "netsurf/inttypes.h"
+#include "netsurf/uievents.h"
 #include "utils/utils.h"
 #include "utils/nsoption.h"
 #include "utils/log.h"
@@ -50,6 +51,10 @@
 #define HANDLER_LISTENER_MAGIC MAGIC(HANDLER_LISTENER_MAP)
 #define HANDLER_MAGIC MAGIC(HANDLER_MAP)
 #define EVENT_LISTENER_JS_MAGIC MAGIC(EVENT_LISTENER_JS_MAP)
+/* Per-thread set of event TYPES anything has ever registered a listener
+ * for.  Read by js_event_type_registered() so the html content can skip
+ * synthesising events nobody is listening to. */
+#define EVENT_TYPE_MAGIC MAGIC(EVENT_TYPE_MAP)
 #define GENERICS_MAGIC MAGIC(GENERICS_TABLE)
 #define THREAD_MAP MAGIC(THREAD_MAP)
 
@@ -695,6 +700,10 @@ nserror js_newthread(jsheap *heap, void *win_priv, void *doc_priv, jsthread **th
 	duk_push_object(CTX);
 	duk_put_global_string(CTX, EVENT_MAGIC);
 
+	/* And the set of event types anything is listening for */
+	duk_push_object(CTX);
+	duk_put_global_string(CTX, EVENT_TYPE_MAGIC);
+
 	/* Now load the polyfills */
 	/* ... */
 	duk_push_string(CTX, "polyfill.js");
@@ -976,20 +985,51 @@ static const char* dukky_event_proto(dom_event *evt)
 	const char *ret = PROTO_NAME(EVENT);
 	dom_string *type = NULL;
 	dom_exception err;
+	bool is_mouse = false;
 
 	err = dom_event_get_type(evt, &type);
 	if (err != DOM_NO_ERR) {
 		goto out;
 	}
 
-	if (dom_string_isequal(type, corestring_dom_keydown)) {
+	if (dom_string_isequal(type, corestring_dom_keydown) ||
+	    dom_string_isequal(type, corestring_dom_keyup) ||
+	    dom_string_isequal(type, corestring_dom_keypress)) {
 		ret = PROTO_NAME(KEYBOARDEVENT);
 		goto out;
-	} else if (dom_string_isequal(type, corestring_dom_keyup)) {
-		ret = PROTO_NAME(KEYBOARDEVENT);
+	}
+
+	/* The mouse family: html/interaction.c dispatches these as real
+	 * dom_mouse_events, so give them the prototype whose getters can
+	 * read the coordinates out (before Lane C they were plain Events
+	 * and clientX read `undefined`).
+	 *
+	 * The class is checked, not assumed from the type NAME: anything
+	 * that dispatches a plain dom_event called "click" — the -DNETSURF_
+	 * NO_UI_EVENTS build does exactly that, and so does any caller of
+	 * fire_generic_dom_event — would otherwise get MouseEvent's
+	 * getters, which read past the end of the struct and return
+	 * garbage where `undefined` is the truth. */
+	err = dom_event_is_mouse_event(evt, &is_mouse);
+	if (err != DOM_NO_ERR) {
+		is_mouse = false;
+	}
+
+	if (is_mouse && (dom_string_isequal(type, corestring_dom_click) ||
+	    dom_string_isequal(type, corestring_dom_dblclick) ||
+	    dom_string_isequal(type, corestring_dom_mousedown) ||
+	    dom_string_isequal(type, corestring_dom_mouseup) ||
+	    dom_string_isequal(type, corestring_dom_mousemove) ||
+	    dom_string_isequal(type, corestring_dom_mouseover) ||
+	    dom_string_isequal(type, corestring_dom_mouseout) ||
+	    dom_string_isequal(type, corestring_dom_contextmenu))) {
+		ret = PROTO_NAME(MOUSEEVENT);
 		goto out;
-	} else if (dom_string_isequal(type, corestring_dom_keypress)) {
-		ret = PROTO_NAME(KEYBOARDEVENT);
+	}
+
+	if (is_mouse && (dom_string_isequal(type, corestring_dom_wheel) ||
+	    dom_string_isequal(type, corestring_dom_mousewheel))) {
+		ret = PROTO_NAME(WHEELEVENT);
 		goto out;
 	}
 
@@ -1140,9 +1180,170 @@ bool dukky_get_current_value_of_event_handler(duk_context *ctx,
 	return true;
 }
 
-static void dukky_generic_event_handler(dom_event *evt, void *pw)
+/**
+ * Run the JS listeners (addEventListener) registered on one event target.
+ *
+ * Factored out of dukky_generic_event_handler_ so the Window can use it
+ * too: the Window is not a node, so it never appears in libdom's
+ * propagation chain and its listeners are reachable ONLY from here.
+ * Before this, window.addEventListener(...) registered a callback that
+ * could never be invoked.
+ *
+ * Stack in:  ... type this   (both consumed)
+ * Stack out: ...
+ *
+ * \param ctx    duktape context
+ * \param evt    the event being dispatched
+ * \param phase  which propagation phase to select listeners for; pass
+ *               DOM_AT_TARGET to run every listener regardless of its
+ *               capture flag (what the target phase, and the Window, want)
+ */
+static void dukky_run_js_listeners(duk_context *ctx, dom_event *evt,
+				   dom_event_flow_phase phase)
 {
-	duk_context *ctx = (duk_context *)pw;
+	duk_uarridx_t idx;
+	event_listener_flags flags;
+	dom_exception exc;
+	duk_idx_t self;
+
+	/* ... type this */
+	duk_dup(ctx, -1);
+	/* ... type this this */
+	duk_insert(ctx, -3);
+	/* ... this type this */
+	self = duk_get_top(ctx) - 3;
+	if (dukky_event_target_push_listeners(ctx, true)) {
+		/* Nothing to do */
+		/* ... this undefined */
+		duk_pop_2(ctx);
+		return;
+	}
+	/* ... this sublisteners */
+	duk_push_array(ctx);
+	/* ... sublisteners copy */
+	idx = 0;
+	while (duk_get_prop_index(ctx, -2, idx)) {
+		/* ... sublisteners copy handler */
+		duk_get_prop_index(ctx, -1, 1);
+		/* ... sublisteners copy handler flags */
+		if ((event_listener_flags)duk_to_int(ctx, -1) & ELF_ONCE) {
+			duk_dup(ctx, -4);
+			/* ... subl copy handler flags subl */
+			dukky_shuffle_array(ctx, idx);
+			duk_pop(ctx);
+			/* ... subl copy handler flags */
+		}
+		duk_pop(ctx);
+		/* ... sublisteners copy handler */
+		duk_put_prop_index(ctx, -2, idx);
+		/* ... sublisteners copy */
+		idx++;
+	}
+	/* ... sublisteners copy undefined */
+	duk_pop(ctx);
+	/* ... sublisteners copy */
+	duk_insert(ctx, -2);
+	/* ... copy sublisteners */
+	duk_pop(ctx);
+	/* ... copy */
+	idx = 0;
+	while (duk_get_prop_index(ctx, -1, idx++)) {
+		/* ... copy handler */
+		if (duk_get_prop_index(ctx, -1, 2)) {
+			/* ... copy handler meh */
+			duk_pop_2(ctx);
+			continue;
+		}
+		duk_pop(ctx);
+		duk_get_prop_index(ctx, -1, 0);
+		duk_get_prop_index(ctx, -2, 1);
+		/* ... copy handler callback flags */
+		flags = (event_listener_flags)duk_get_int(ctx, -1);
+		duk_pop(ctx);
+		/* ... copy handler callback */
+		/* Phase selection.  DOM L3: the CAPTURING walk runs only
+		 * capture-flagged listeners, the BUBBLING walk only the
+		 * others — but the AT_TARGET phase runs EVERY listener on
+		 * the target, whatever its capture flag, in registration
+		 * order.  (The old code tested `phase != CAPTURING` for the
+		 * bubble side, which silently dropped a capture listener
+		 * registered on the target itself.) */
+		if (((phase == DOM_CAPTURING_PHASE) && !(flags & ELF_CAPTURE)) ||
+		    (((NETSURF_UI_EVENTS == 0) ?
+			(phase != DOM_CAPTURING_PHASE) :
+			(phase == DOM_BUBBLING_PHASE)) && (flags & ELF_CAPTURE))) {
+			duk_pop_2(ctx);
+			/* ... copy */
+			continue;
+		}
+		/* ... copy handler callback */
+		duk_dup(ctx, self);
+		/* ... copy handler callback this */
+		dukky_push_event(ctx, evt);
+		/* ... copy handler callback node event */
+		dukky_reset_start_time(ctx);
+		if (duk_pcall_method(ctx, 1) != 0) {
+			/* Failed to run the method */
+			/* ... copy handler err */
+			NSLOG(dukky, DEBUG,
+			      "OH NOES! An error running a callback.  Meh.");
+			exc = dom_event_stop_immediate_propagation(evt);
+			if (exc != DOM_NO_ERR)
+				NSLOG(dukky, DEBUG,
+				      "WORSE! could not stop propagation");
+			duk_get_prop_string(ctx, -1, "name");
+			duk_get_prop_string(ctx, -2, "message");
+			duk_get_prop_string(ctx, -3, "fileName");
+			duk_get_prop_string(ctx, -4, "lineNumber");
+			duk_get_prop_string(ctx, -5, "stack");
+			/* ... err name message fileName lineNumber stack */
+			NSLOG(dukky, DEBUG, "Uncaught error in JS: %s: %s",
+			      duk_safe_to_string(ctx, -5),
+			      duk_safe_to_string(ctx, -4));
+			NSLOG(dukky, DEBUG,
+			      "              was at: %s line %s",
+			      duk_safe_to_string(ctx, -3),
+			      duk_safe_to_string(ctx, -2));
+			NSLOG(dukky, DEBUG, "         Stack trace: %s",
+			      duk_safe_to_string(ctx, -1));
+
+			duk_pop_n(ctx, 7);
+			/* ... copy */
+			continue;
+		}
+		/* ... copy handler result */
+		if (duk_is_boolean(ctx, -1) &&
+		    duk_to_boolean(ctx, -1) == 0) {
+			dom_event_prevent_default(evt);
+		}
+		duk_pop_2(ctx);
+		/* ... copy */
+	}
+	/* ... this copy undefined */
+	duk_pop_3(ctx);
+	/* ... */
+}
+
+/**
+ * The body of both libdom listener trampolines below.
+ *
+ * A node that JS listens to gets TWO libdom listeners registered for the
+ * type (see dukky_register_event_listener_for): one with capture=true and
+ * one with capture=false, because libdom filters by the registration's
+ * capture flag and there is otherwise no way for one listener to be
+ * invoked in both the capturing and the bubbling walk.  In the AT_TARGET
+ * phase libdom invokes BOTH of them, so the capture-registered trampoline
+ * bails out there and the bubble-registered one runs the at-target pass
+ * exactly once — for every listener, capture-flagged or not, in
+ * registration order, which is what DOM L3 says the target phase does.
+ *
+ * \param evt                 the event being dispatched
+ * \param ctx                 the duktape context
+ * \param registered_capture  which of the two libdom listeners we are
+ */
+static void dukky_generic_event_handler_(dom_event *evt, duk_context *ctx,
+					 bool registered_capture)
+{
 	dom_string *name;
 	dom_exception exc;
 	dom_event_target *targ;
@@ -1161,11 +1362,18 @@ static void dukky_generic_event_handler(dom_event *evt, void *pw)
 	exc = dom_event_get_event_phase(evt, &phase);
 	if (exc != DOM_NO_ERR) {
 		NSLOG(dukky, WARNING, "Unable to get event phase");
+		dom_string_unref(name);
 		return;
 	}
 	NSLOG(dukky, DEBUG, "Event phase is: %s (%d)",
 	      phase == DOM_CAPTURING_PHASE ? "capturing" : phase == DOM_AT_TARGET ? "at-target" : phase == DOM_BUBBLING_PHASE ? "bubbling" : "unknown",
 	      (int)phase);
+
+	/* The at-target pass belongs to the bubble-registered twin only */
+	if (phase == DOM_AT_TARGET && registered_capture) {
+		dom_string_unref(name);
+		return;
+	}
 
 	exc = dom_event_get_current_target(evt, &targ);
 	if (exc != DOM_NO_ERR) {
@@ -1237,118 +1445,79 @@ handle_extras:
 	duk_push_lstring(ctx, dom_string_data(name), dom_string_length(name));
 	dukky_push_node(ctx, (dom_node *)targ);
 	/* ... type node */
-	if (dukky_event_target_push_listeners(ctx, true)) {
-		/* Nothing to do */
-		duk_pop(ctx);
-		goto out;
-	}
-	/* ... sublisteners */
-	duk_push_array(ctx);
-	/* ... sublisteners copy */
-	idx = 0;
-	while (duk_get_prop_index(ctx, -2, idx)) {
-		/* ... sublisteners copy handler */
-		duk_get_prop_index(ctx, -1, 1);
-		/* ... sublisteners copy handler flags */
-		if ((event_listener_flags)duk_to_int(ctx, -1) & ELF_ONCE) {
-			duk_dup(ctx, -4);
-			/* ... subl copy handler flags subl */
-			dukky_shuffle_array(ctx, idx);
-			duk_pop(ctx);
-			/* ... subl copy handler flags */
-		}
-		duk_pop(ctx);
-		/* ... sublisteners copy handler */
-		duk_put_prop_index(ctx, -2, idx);
-		/* ... sublisteners copy */
-		idx++;
-	}
-	/* ... sublisteners copy undefined */
-	duk_pop(ctx);
-	/* ... sublisteners copy */
-	duk_insert(ctx, -2);
-	/* ... copy sublisteners */
-	duk_pop(ctx);
-	/* ... copy */
-	idx = 0;
-	while (duk_get_prop_index(ctx, -1, idx++)) {
-		/* ... copy handler */
-		if (duk_get_prop_index(ctx, -1, 2)) {
-			/* ... copy handler meh */
-			duk_pop_2(ctx);
-			continue;
-		}
-		duk_pop(ctx);
-		duk_get_prop_index(ctx, -1, 0);
-		duk_get_prop_index(ctx, -2, 1);
-		/* ... copy handler callback flags */
-		flags = (event_listener_flags)duk_get_int(ctx, -1);
-		duk_pop(ctx);
-		/* ... copy handler callback */
-		if (((phase == DOM_CAPTURING_PHASE) && !(flags & ELF_CAPTURE)) ||
-		    ((phase != DOM_CAPTURING_PHASE) && (flags & ELF_CAPTURE))) {
-			duk_pop_2(ctx);
-			/* ... copy */
-			continue;
-		}
-		/* ... copy handler callback */
-		dukky_push_node(ctx, (dom_node *)targ);
-		/* ... copy handler callback node */
-		dukky_push_event(ctx, evt);
-		/* ... copy handler callback node event */
-		dukky_reset_start_time(ctx);
-		if (duk_pcall_method(ctx, 1) != 0) {
-			/* Failed to run the method */
-			/* ... copy handler err */
-			NSLOG(dukky, DEBUG,
-			      "OH NOES! An error running a callback.  Meh.");
-			exc = dom_event_stop_immediate_propagation(evt);
-			if (exc != DOM_NO_ERR)
-				NSLOG(dukky, DEBUG,
-				      "WORSE! could not stop propagation");
-			duk_get_prop_string(ctx, -1, "name");
-			duk_get_prop_string(ctx, -2, "message");
-			duk_get_prop_string(ctx, -3, "fileName");
-			duk_get_prop_string(ctx, -4, "lineNumber");
-			duk_get_prop_string(ctx, -5, "stack");
-			/* ... err name message fileName lineNumber stack */
-			NSLOG(dukky, DEBUG, "Uncaught error in JS: %s: %s",
-			      duk_safe_to_string(ctx, -5),
-			      duk_safe_to_string(ctx, -4));
-			NSLOG(dukky, DEBUG,
-			      "              was at: %s line %s",
-			      duk_safe_to_string(ctx, -3),
-			      duk_safe_to_string(ctx, -2));
-			NSLOG(dukky, DEBUG, "         Stack trace: %s",
-			      duk_safe_to_string(ctx, -1));
-
-			duk_pop_n(ctx, 7);
-			/* ... copy */
-			continue;
-		}
-		/* ... copy handler result */
-		if (duk_is_boolean(ctx, -1) &&
-		    duk_to_boolean(ctx, -1) == 0) {
-			dom_event_prevent_default(evt);
-		}
-		duk_pop_2(ctx);
-		/* ... copy */
-	}
-	duk_pop_2(ctx);
+	dukky_run_js_listeners(ctx, evt, phase);
+	/* ... */
 out:
 	/* ... */
 	dom_node_unref(targ);
 	dom_string_unref(name);
 }
 
+static void dukky_generic_event_handler_bubble(dom_event *evt, void *pw)
+{
+	dukky_generic_event_handler_(evt, (duk_context *)pw, false);
+}
+
+static void dukky_generic_event_handler_capture(dom_event *evt, void *pw)
+{
+	dukky_generic_event_handler_(evt, (duk_context *)pw, true);
+}
+
+/**
+ * Add one libdom listener for a phase, logging failure.
+ */
+static void dukky_add_libdom_listener(duk_context *ctx,
+				      struct dom_element *ele,
+				      dom_string *name,
+				      bool capture)
+{
+	dom_event_listener *listen = NULL;
+	dom_exception exc;
+
+	exc = dom_event_listener_create(capture ?
+					dukky_generic_event_handler_capture :
+					dukky_generic_event_handler_bubble,
+					ctx, &listen);
+	if (exc != DOM_NO_ERR) return;
+	exc = dom_event_target_add_event_listener(ele, name, listen, capture);
+	if (exc != DOM_NO_ERR) {
+		NSLOG(dukky, DEBUG,
+		      "Unable to register %s listener for %p.%*s",
+		      capture ? "capturing" : "bubbling", ele,
+		      (int)dom_string_length(name), dom_string_data(name));
+	} else {
+		NSLOG(dukky, DEBUG,
+		      "have registered %s listener for %p.%*s",
+		      capture ? "capturing" : "bubbling", ele,
+		      (int)dom_string_length(name), dom_string_data(name));
+	}
+	dom_event_listener_unref(listen);
+}
+
+/**
+ * Ensure this node's events of this type reach the duktape dispatcher.
+ *
+ * Registration is per (node, event NAME) — deliberately NOT per phase.
+ * Registering only the phase the FIRST JS listener asked for was two bugs
+ * at once: a `{capture: true}` listener never fired (libdom only invokes
+ * capture registrations in the capturing walk, which does not include the
+ * target), and, because this map is keyed by name, every LATER non-capture
+ * listener for that type on that element was silently dead too.  So both
+ * phases are registered up front and the phase filtering happens where it
+ * belongs — over the JS listener list, in dukky_generic_event_handler_.
+ *
+ * \param ctx     duktape context
+ * \param ele     the element, or NULL for the Window
+ * \param name    the event type
+ * \param capture IGNORED — kept only because nsgenbind emits this call
+ *                with a hardcoded `false` from every generated on*
+ *                setter, so the arity is the generator's to choose
+ */
 void dukky_register_event_listener_for(duk_context *ctx,
 				       struct dom_element *ele,
 				       dom_string *name,
 				       bool capture)
 {
-	dom_event_listener *listen = NULL;
-	dom_exception exc;
-
 	/* ... */
 	if (ele == NULL) {
 		/* A null element is the Window object */
@@ -1378,6 +1547,21 @@ void dukky_register_event_listener_for(duk_context *ctx,
 	/* ... node handlers */
 	duk_pop_2(ctx);
 	/* ... */
+
+	/* Remember the TYPE document-wide, whatever the target: the html
+	 * content asks js_event_type_registered() before it does the work of
+	 * synthesising a UI event, so a page with no mousemove listener
+	 * costs nothing per motion event. */
+	duk_get_global_string(ctx, EVENT_TYPE_MAGIC);
+	/* ... types */
+	duk_push_lstring(ctx, dom_string_data(name), dom_string_length(name));
+	duk_push_boolean(ctx, true);
+	/* ... types name true */
+	duk_put_prop(ctx, -3);
+	/* ... types */
+	duk_pop(ctx);
+	/* ... */
+
 	if (ele == NULL) {
 		/* Nothing more to do, Window doesn't register in the
 		 * normal event listener flow
@@ -1385,21 +1569,13 @@ void dukky_register_event_listener_for(duk_context *ctx,
 		return;
 	}
 
-	/* Otherwise add an event listener to the element */
-	exc = dom_event_listener_create(dukky_generic_event_handler, ctx,
-					&listen);
-	if (exc != DOM_NO_ERR) return;
-	exc = dom_event_target_add_event_listener(
-		ele, name, listen, capture);
-	if (exc != DOM_NO_ERR) {
-		NSLOG(dukky, DEBUG,
-		      "Unable to register listener for %p.%*s", ele,
-		      (int)dom_string_length(name), dom_string_data(name));
-	} else {
-		NSLOG(dukky, DEBUG, "have registered listener for %p.%*s",
-		      ele, (int)dom_string_length(name), dom_string_data(name));
-	}
-	dom_event_listener_unref(listen);
+	/* Otherwise add BOTH phases' listeners to the element.  Under the
+	 * Lane C kill switch only the bubble phase is registered, which is
+	 * the upstream behaviour a capture listener could never escape. */
+	dukky_add_libdom_listener(ctx, ele, name, false);
+#if NETSURF_UI_EVENTS
+	dukky_add_libdom_listener(ctx, ele, name, true);
+#endif
 }
 
 /* The sub-listeners are a list of {callback,flags} tuples */
@@ -1564,74 +1740,82 @@ void js_event_cleanup(jsthread *thread, struct dom_event *evt)
 	dukky_leave_thread(thread);
 }
 
-bool js_fire_event(jsthread *thread, const char *type, struct dom_document *doc, struct dom_node *target)
+/* exported interface documented in javascript/js.h */
+bool js_event_type_registered(jsthread *thread, const char *type)
 {
-	dom_exception exc;
-	dom_event *evt;
-	dom_event_target *body;
+	bool ret;
 
-	NSLOG(dukky, DEBUG, "Event: %s (doc=%p, target=%p)", type, doc,
-	      target);
-
-	/** @todo Make this more generic, this only handles load and only
-	 * targetting the window, so that we actually stand a chance of
-	 * getting 3.4 out.
-	 */
-
-	if (target != NULL)
-		/* Swallow non-Window-targetted events quietly */
-		return true;
-
-	if (strcmp(type, "load") != 0)
-		/* Swallow non-load events quietly */
-		return true;
-
-	/* Okay, we're processing load, targetted at Window, do the single
-	 * thing which gets us there, which is to find the appropriate event
-	 * handler and call it.  If we have no event handler on Window then
-	 * we divert to the body, and if there's no event handler there
-	 * we swallow the event silently
-	 */
-
-	exc = dom_event_create(&evt);
-	if (exc != DOM_NO_ERR) return true;
-	exc = dom_event_init(evt, corestring_dom_load, false, false);
-	if (exc != DOM_NO_ERR) {
-		dom_event_unref(evt);
-		return true;
+	if (thread == NULL) {
+		return false;
 	}
+
 	dukky_enter_thread(thread);
+	/* ... */
+	duk_get_global_string(CTX, EVENT_TYPE_MAGIC);
+	/* ... types */
+	ret = duk_has_prop_string(CTX, -1, type) ? true : false;
+	duk_pop(CTX);
+	/* ... */
+	dukky_leave_thread(thread);
+
+	return ret;
+}
+
+/**
+ * Run the Window's `on<type>` handler, if it has one.
+ *
+ * The six events the HTML spec forwards from <body> to the Window fall
+ * back to the body's attribute handler when the Window has none of its
+ * own; everything else stops at the Window.
+ *
+ * \return true if a handler ran
+ */
+static bool dukky_fire_window_handler(jsthread *thread, dom_string *type,
+				      struct dom_document *doc,
+				      dom_event *evt)
+{
+	dom_event_target *body;
+	dom_exception exc;
+	bool forwarded;
+
 	/* ... */
 	duk_get_global_string(CTX, HANDLER_MAGIC);
 	/* ... handlers */
-	duk_push_lstring(CTX, "load", 4);
-	/* ... handlers "load" */
+	duk_push_lstring(CTX, dom_string_data(type), dom_string_length(type));
+	/* ... handlers type */
 	duk_get_prop(CTX, -2);
 	/* ... handlers handler? */
 	if (duk_is_undefined(CTX, -1)) {
-		/* No handler here, *try* and retrieve a handler from
-		 * the body
-		 */
 		duk_pop(CTX);
 		/* ... handlers */
+		forwarded = (type == corestring_dom_load ||
+			     type == corestring_dom_blur ||
+			     type == corestring_dom_error ||
+			     type == corestring_dom_focus ||
+			     type == corestring_dom_resize ||
+			     type == corestring_dom_scroll);
+		if (forwarded == false || doc == NULL) {
+			duk_pop(CTX);
+			/* ... */
+			return false;
+		}
+		/* Try the body's attribute handler instead */
 		exc = dom_html_document_get_body(doc, &body);
-		if (exc != DOM_NO_ERR) {
-			dom_event_unref(evt);
-			dukky_leave_thread(thread);
-			return true;
+		if (exc != DOM_NO_ERR || body == NULL) {
+			duk_pop(CTX);
+			/* ... */
+			return false;
 		}
 		dukky_push_node(CTX, (struct dom_node *)body);
 		/* ... handlers bodynode */
 		if (dukky_get_current_value_of_event_handler(
-			    CTX, corestring_dom_load, body) == false) {
-			/* Unref the body, we don't need it any more */
+			    CTX, type, body) == false) {
 			dom_node_unref(body);
 			/* ... handlers */
 			duk_pop(CTX);
-			dukky_leave_thread(thread);
-			return true;
+			/* ... */
+			return false;
 		}
-		/* Unref the body, we don't need it any more */
 		dom_node_unref(body);
 		/* ... handlers handler bodynode */
 		duk_pop(CTX);
@@ -1668,16 +1852,101 @@ bool js_fire_event(jsthread *thread, const char *type, struct dom_document *doc,
 
 		duk_pop_n(CTX, 6);
 		/* ... */
-		js_event_cleanup(thread, evt);
-		dom_event_unref(evt);
-		dukky_leave_thread(thread);
 		return true;
 	}
 	/* ... result */
+	if (duk_is_boolean(CTX, -1) && duk_to_boolean(CTX, -1) == 0) {
+		dom_event_prevent_default(evt);
+	}
 	duk_pop(CTX);
 	/* ... */
+	return true;
+}
+
+/* exported interface documented in javascript/js.h */
+bool js_fire_event(jsthread *thread, const char *type, struct dom_document *doc, struct dom_node *target)
+{
+	dom_exception exc;
+	dom_event *evt;
+	dom_string *type_s;
+	bool result = true;
+
+	NSLOG(dukky, DEBUG, "Event: %s (doc=%p, target=%p)", type, doc,
+	      target);
+
+	/* This used to swallow everything except a Window-targeted `load`,
+	 * with a comment admitting it was a "so that we actually stand a
+	 * chance of getting 3.4 out" stopgap.  Two things fell out of that:
+	 * nothing could fire a DOM event at a NODE through this entry point,
+	 * and window.addEventListener() registered callbacks that were never
+	 * reachable at all (the Window is not a node, so it never appears in
+	 * libdom's propagation chain — only the code below can reach its
+	 * listeners). */
+
+	if (thread == NULL) {
+		return true;
+	}
+
+	exc = dom_string_create((const uint8_t *)type, strlen(type), &type_s);
+	if (exc != DOM_NO_ERR) {
+		return true;
+	}
+
+	if (target != NULL) {
+		/* A node target: an ordinary libdom dispatch, which reaches
+		 * every registered listener with real capture/target/bubble
+		 * propagation. */
+		dom_event *nevt;
+
+		exc = dom_event_create(&nevt);
+		if (exc != DOM_NO_ERR) {
+			dom_string_unref(type_s);
+			return true;
+		}
+		exc = dom_event_init(nevt, type_s, true, true);
+		if (exc == DOM_NO_ERR) {
+			exc = dom_event_target_dispatch_event(target, nevt,
+							      &result);
+			if (exc != DOM_NO_ERR) {
+				result = true;
+			}
+		}
+		dukky_enter_thread(thread);
+		js_event_cleanup(thread, nevt);
+		dukky_leave_thread(thread);
+		dom_event_unref(nevt);
+		dom_string_unref(type_s);
+		return result;
+	}
+
+	/* Window-targeted. */
+	exc = dom_event_create(&evt);
+	if (exc != DOM_NO_ERR) {
+		dom_string_unref(type_s);
+		return true;
+	}
+	exc = dom_event_init(evt, type_s, false, false);
+	if (exc != DOM_NO_ERR) {
+		dom_event_unref(evt);
+		dom_string_unref(type_s);
+		return true;
+	}
+
+	dukky_enter_thread(thread);
+
+	dukky_fire_window_handler(thread, type_s, doc, evt);
+
+	/* …and the listeners registered with window.addEventListener(). */
+	duk_push_lstring(CTX, dom_string_data(type_s),
+			 dom_string_length(type_s));
+	duk_push_global_object(CTX);
+	/* ... type Window */
+	dukky_run_js_listeners(CTX, evt, DOM_AT_TARGET);
+	/* ... */
+
 	js_event_cleanup(thread, evt);
-	dom_event_unref(evt);
 	dukky_leave_thread(thread);
+	dom_event_unref(evt);
+	dom_string_unref(type_s);
 	return true;
 }

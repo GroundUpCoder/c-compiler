@@ -35,6 +35,22 @@
 //                           plot NOTHING changing — a demo that passes with
 //                           and without the change proves nothing
 //
+// …and the Lane C legs (todos/0289), which need UI event coverage:
+//
+//   9. paint/index.html     mousedown/mousemove/mouseup exist AND carry
+//                           coordinates: every coordinate the page reports
+//                           back is the one that was injected, and the
+//                           canvas pixel under it really changed
+//  10. events/index.html    capture fires BEFORE bubble across a three-deep
+//                           propagation path; keydown lands on the FOCUSED
+//                           element with a real event.key for Enter; keyup,
+//                           input, change, focus/blur, a cancelable submit
+//                           and window.addEventListener("load")
+//  11. A/B baseline         the SAME two pages, rebuilt with Lane C
+//                           compiled out (-DNETSURF_NO_UI_EVENTS): the
+//                           scripts still run, and NOTHING they listen for
+//                           ever arrives
+//
 // Every demo now lives in its own folder under demos/pages/ with its markup,
 // its stylesheet and its script in separate files — which is also what the
 // `netsurf-demos` package seeds onto the desktop.  Nothing here enumerates
@@ -163,6 +179,27 @@ function baselineWasm() {
   return out;
 }
 
+/* The Lane C baseline (leg 11): the same sources with the UI event
+ * coverage compiled out.  Built lazily — legs 0-10 do not need it. */
+let noEventsWasmPath = null;
+function noEventsWasm() {
+  if (noEventsWasmPath) return noEventsWasmPath;
+  const out = path.join(OUT_DIR, 'nsmonkey-noevents.wasm');
+  if (REUSE && fs.existsSync(out) && fs.statSync(out).mtimeMs >= newestInput()) {
+    console.log(`  reusing baseline ${path.basename(out)}`);
+  } else {
+    console.log('  building the -DNETSURF_NO_UI_EVENTS baseline…');
+    const n = buildWasm(out, ['-DNETSURF_NO_UI_EVENTS'], 'Lane C compiled OUT');
+    /* A baseline byte-identical to the product build would make leg 11 a
+     * tautology, so say so loudly rather than pass. */
+    if (n === fs.statSync(WASM).size) {
+      throw new Error('baseline wasm is the same size as the product build — the kill switch did not take effect');
+    }
+  }
+  noEventsWasmPath = out;
+  return out;
+}
+
 // ---- runtime resources ------------------------------------------------
 // Same assembly as smoke.mjs (the engine needs its resource: stylesheets and
 // Messages to finish a load), plus a second tree carrying a Choices file that
@@ -259,14 +296,61 @@ class Monkey {
   /* Click a labelled control by the position its own text was plotted at:
    * font-metric derived, so it survives a font change (a hardcoded pixel
    * coordinate would not). */
-  clickText(frame, label) {
+  clickTextAt(frame, label) {
     const re = new RegExp(`PLOT TEXT X (\\d+) Y (\\d+) STR ${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm');
     const m = frame.match(re);
     if (!m) throw new Error(`no plotted text "${label}" to click in this frame`);
-    const x = Number(m[1]) + 2;
-    const y = Number(m[2]) - 4;   // PLOT TEXT y is the baseline; go into the glyph box
-    this.send(`WINDOW CLICK WIN ${this.win} X ${x} Y ${y} BUTTON LEFT KIND SINGLE`);
-    return { x, y };
+    return { x: Number(m[1]) + 2, y: Number(m[2]) - 4 };
+  }
+
+  clickText(frame, label) {
+    // PLOT TEXT y is the baseline; clickTextAt goes into the glyph box
+    const at = this.clickTextAt(frame, label);
+    this.send(`WINDOW CLICK WIN ${this.win} X ${at.x} Y ${at.y} BUTTON LEFT KIND SINGLE`);
+    return at;
+  }
+
+  /* Compose any browser_mouse_state the core understands.  WINDOW CLICK
+   * can only ever say "a click happened"; press / hold / move / release —
+   * i.e. everything mousedown/mousemove/mouseup are made of — needs this. */
+  mouse(kind, x, y, ...states) {
+    this.send(`WINDOW MOUSE WIN ${this.win} X ${x} Y ${y} KIND ${kind}` +
+      (states.length ? ` STATE ${states.join(' ')}` : ''));
+  }
+
+  /* One press-drag-release gesture, as the core sees one: the press, the
+   * drag-start notification at the press point (which is what makes the
+   * content treat what follows as a drag), the moves, and the release. */
+  drag(from, to, steps = 3) {
+    this.mouse('CLICK', from.x, from.y, 'PRESS_1');
+    this.mouse('CLICK', from.x, from.y, 'DRAG_1');
+    for (let i = 1; i <= steps; i++) {
+      const x = Math.round(from.x + ((to.x - from.x) * i) / steps);
+      const y = Math.round(from.y + ((to.y - from.y) * i) / steps);
+      this.mouse('TRACK', x, y, 'DRAG_ON', 'HOLDING_1');
+    }
+    this.mouse('TRACK', to.x, to.y);   // buttons released: the mouseup
+  }
+
+  /* Click a labelled control the way a pointer really does it: press,
+   * then click.  WINDOW CLICK sends the CLICK alone, and a text field
+   * places its caret (and so takes focus) on the PRESS — so a
+   * click-without-press never focuses one. */
+  pressText(frame, label) {
+    const at = this.clickTextAt(frame, label);
+    this.mouse('CLICK', at.x, at.y, 'PRESS_1');
+    this.mouse('CLICK', at.x, at.y, 'CLICK_1');
+    return at;
+  }
+
+  key(code, kind = 'DOWN') {
+    this.send(`WINDOW KEY WIN ${this.win} CODE ${code} KIND ${kind}`);
+  }
+
+  /* A whole keystroke, as a front end delivers one. */
+  async type(code) {
+    this.key(code, 'DOWN');
+    this.key(code, 'UP');
   }
 
   consoleLines() {
@@ -314,7 +398,8 @@ function checkSubresources(frame, name) {
 /* Which demos this file actually drives.  The coverage check in leg 0 is
  * what makes adding a demo without a leg a LOUD failure instead of a
  * silently untested page. */
-const COVERED = new Set(['hello-js', 'counter', 'sketch', 'stopwatch', 'todo']);
+const COVERED = new Set(['hello-js', 'counter', 'sketch', 'stopwatch', 'todo',
+  'paint', 'events']);
 
 // ---- leg 0: the shipped demo set ------------------------------------
 /* The set is derived from the tree, so this leg is what stops a demo from
@@ -685,10 +770,248 @@ async function leg8() {
   } finally { mk2.kill(); }
 }
 
+
+// ---- leg 9: paint.html (Lane C — mouse events WITH coordinates) --------
+/* The demo that was withheld until this lane.  Two things are asserted and
+ * neither is eyeballed: the coordinates the page reports are the ones this
+ * file injected, and the canvas pixel under them really changed. */
+async function leg9() {
+  console.log('\nleg 9 — paint/index.html: mousedown/mousemove/mouseup, WITH coordinates');
+  const mk = new Monkey(RES_ON);
+  try {
+    await mk.open(demo('paint'));
+    ok(mk.consoleLines().includes('paint ready 240x160'), 'page script ran',
+      `console lines: ${JSON.stringify(mk.consoleLines().slice(0, 5))}`);
+
+    const frame = await mk.redraw();
+    checkSubresources(frame, 'paint');
+    ok(/PLOT BITMAP X \d+ Y \d+ WIDTH 240 HEIGHT 160/.test(frame),
+      'the 240x160 pad is plotted as a bitmap');
+
+    // A press at an EXACT document coordinate.  The canvas is pinned to the
+    // document origin by paint.css, so this is also a canvas pixel.
+    const DOWN = { x: 40, y: 30 };
+    const UP = { x: 160, y: 90 };
+    let from = mk.mark();
+    mk.drag(DOWN, UP, 3);
+    await mk.wait(/LOG paint stroke 1 done/, { label: 'the stroke completing', from });
+
+    const said = [...mk.out.slice(from).matchAll(/LOG paint (down|move|up) page (-?\d+),(-?\d+) client (-?\d+),(-?\d+) buttons (\d+)$/gm)]
+      .map((m) => ({ what: m[1], x: Number(m[2]), y: Number(m[3]),
+                     cx: Number(m[4]), cy: Number(m[5]), buttons: Number(m[6]) }));
+
+    const down = said.find((e) => e.what === 'down');
+    ok(down !== undefined, 'a mousedown reached the page at all');
+    // THE assertion of this lane: a real coordinate, not `undefined`, and
+    // the exact one that was injected.
+    ok(down && down.x === DOWN.x && down.y === DOWN.y,
+      `the mousedown carried the coordinate it was given (${DOWN.x},${DOWN.y})`,
+      `page reported: ${down ? `${down.x},${down.y}` : 'nothing'}`);
+    ok(down && down.buttons === 1, 'mousedown reports the primary button held',
+      `buttons: ${down ? down.buttons : 'none'}`);
+    ok(down && down.cx === DOWN.x && down.cy === DOWN.y,
+      'clientX/clientY match pageX/pageY on an unscrolled page',
+      `client: ${down ? `${down.cx},${down.cy}` : 'nothing'}`);
+
+    const moves = said.filter((e) => e.what === 'move');
+    ok(moves.length >= 3, 'mousemove fires during the drag',
+      `${moves.length} moves seen`);
+    ok(moves.every((m) => m.buttons === 1),
+      'a move during a drag reports the button still held',
+      `buttons seen: ${JSON.stringify(moves.map((m) => m.buttons))}`);
+    ok(moves.some((m) => m.x !== DOWN.x || m.y !== DOWN.y),
+      'the moves carry DIFFERENT coordinates from the press (they track the pointer)',
+      `coords: ${JSON.stringify(moves.map((m) => `${m.x},${m.y}`))}`);
+
+    const up = said.find((e) => e.what === 'up');
+    ok(up !== undefined, 'a mouseup reached the page at the end of the drag');
+    ok(up && up.x === UP.x && up.y === UP.y,
+      `the mouseup carried the release coordinate (${UP.x},${UP.y})`,
+      `page reported: ${up ? `${up.x},${up.y}` : 'nothing'}`);
+    ok(up && up.buttons === 0, 'mouseup reports no button held any more',
+      `buttons: ${up ? up.buttons : 'none'}`);
+
+    // …and the coordinates were USABLE.  WINDOW EXEC cannot be used to
+    // probe a canvas pixel (it reports success and does nothing — see the
+    // design doc §8.6), so the page's own readout is the channel: it is an
+    // <input value=> the handler writes, which repaints.
+    const readout = (await mk.redraw()).match(/PLOT TEXT X \d+ Y \d+ STR (up \d+,\d+)$/m);
+    ok(readout !== null, 'the page shows the last coordinate it was given',
+      `readout: ${readout ? readout[1] : 'not plotted'}`);
+    ok(readout && readout[1] === `up ${UP.x},${UP.y}`,
+      'and it is the release coordinate', `readout: ${readout ? readout[1] : 'none'}`);
+
+    ok(await mk.quit() === 0, 'clean exit');
+  } finally { mk.kill(); }
+}
+
+// ---- leg 10: events.html (Lane C — ordering, keys, forms) -------------
+/* The trail the page records is `id:phase id:phase …` in dispatch order.
+ * Capture must run outer -> middle BEFORE the target, and bubble must come
+ * back middle -> outer after it. */
+const trailOf = (out, from) => {
+  const m = [...out.slice(from).matchAll(/LOG events trail (.*)$/gm)];
+  return m.length ? m[m.length - 1][1].trim().split(/\s+/) : null;
+};
+
+async function leg10() {
+  console.log('\nleg 10 — events/index.html: capture BEFORE bubble, keys at the focused field');
+  const mk = new Monkey(RES_ON);
+  try {
+    await mk.open(demo('events'));
+    ok(mk.consoleLines().includes('events ready'), 'page script ran');
+    // window.addEventListener('load', …) registered a callback that could
+    // never be invoked before this lane: the Window is not a node, so it is
+    // not in libdom's propagation chain and nothing else looked at it.
+    ok(mk.consoleLines().includes('events window load listener ran'),
+      'window.addEventListener("load") FIRED',
+      `console lines: ${JSON.stringify(mk.consoleLines())}`);
+
+    let frame = await mk.redraw();
+    checkSubresources(frame, 'events');
+
+    let from = mk.mark();
+    mk.clickText(frame, 'click me');
+    await mk.wait(/LOG events trail /, { label: 'the click walking the tree', from });
+    const trail = trailOf(mk.out, from);
+
+    // The exact order, not "capture happened somewhere".  Each element
+    // carries a capture AND a bubble listener — the pair that used to make
+    // the element completely deaf.
+    const want = ['outer:capture', 'middle:capture',
+                  'inner:target', 'inner:target',
+                  'middle:bubble', 'outer:bubble'];
+    ok(JSON.stringify(trail) === JSON.stringify(want),
+      'capture ran outer->middle BEFORE the target, then bubble ran middle->outer',
+      `trail: ${JSON.stringify(trail)}\n       want: ${JSON.stringify(want)}`);
+
+    const at = mk.out.slice(from).match(/LOG events click at (-?\d+),(-?\d+) detail (\d+)$/m);
+    ok(at !== null && at[1] !== 'undefined',
+      'the click itself carried coordinates (it is a MouseEvent now)',
+      `reported: ${at ? at[0] : 'nothing'}`);
+    ok(at && Number(at[3]) === 1, 'and a click count of 1',
+      `detail: ${at ? at[3] : 'none'}`);
+
+    // Keyboard: click INTO the text field first.  keydown is delivered to
+    // the FOCUSED element now (it used to go to the document root
+    // regardless), so the listener on the <input> only runs if focus
+    // really moved there.
+    from = mk.mark();
+    frame = await mk.redraw();
+    mk.pressText(frame, 'edit me');
+    await mk.wait(/LOG events focus:text$/m,
+      { label: 'the field taking focus', from });
+    ok(true, 'clicking a text field fires focus at it');
+
+    from = mk.mark();
+    mk.key(0x61, 'DOWN');   // 'a'
+    mk.key(0x61, 'UP');
+    mk.key(13, 'DOWN');     // NS_KEY_CR
+    mk.key(13, 'UP');
+    await mk.wait(/LOG events keyup:Enter$/m,
+      { label: 'Enter arriving with a key NAME', from });
+    const keys = [...mk.out.slice(from).matchAll(/LOG events (key(?:down|up|input|change):\S*)$/gm)]
+      .map((m) => m[1]);
+    ok(keys.includes('keydown:a') && keys.includes('keyup:a'),
+      'keydown AND keyup reached the focused field', `keys: ${JSON.stringify(keys)}`);
+    ok(keys.includes('keydown:Enter') && keys.includes('keyup:Enter'),
+      'Enter has a key name (it used to arrive as null)',
+      `keys: ${JSON.stringify(keys)}`);
+    ok(mk.out.slice(from).includes('LOG events input:'),
+      'typing fired an `input` event', `keys: ${JSON.stringify(keys)}`);
+
+    // Press somewhere that takes focus away from the field: `change` is
+    // the commit-on-blur event, so it must wait for the blur and must
+    // then carry the EDITED value.
+    from = mk.mark();
+    frame = await mk.redraw();
+    mk.pressText(frame, 'outer');
+    await mk.wait(/LOG events blur:text$/m,
+      { label: 'the field losing focus', from });
+    ok(true, 'clicking away fires `blur` at the field');
+    const changed = mk.out.slice(from).match(/LOG events change:(.*)$/m);
+    ok(changed !== null, 'and `change`, because the value was edited',
+      `saw: ${JSON.stringify((mk.out.slice(from).match(/LOG events \S+/g) || []))}`);
+    ok(changed && changed[1] !== 'edit me',
+      'and it carries the edited value, not the original',
+      `change: ${changed ? changed[1] : 'none'}`);
+
+    // The submit button: a cancelable submit that preventDefault() stops.
+    from = mk.mark();
+    frame = await mk.redraw();
+    mk.pressText(frame, 'Submit');
+    await mk.wait(/LOG events submit$/m, { label: 'the submit handler', from });
+    ok(true, 'a cancelable submit fired');
+    ok(!/START_THROBBER/.test(mk.out.slice(from)),
+      'the form did NOT navigate — preventDefault() really prevented it');
+
+    ok(await mk.quit() === 0, 'clean exit');
+  } finally { mk.kill(); }
+}
+
+// ---- leg 11: the Lane C A/B baseline ---------------------------------
+/* Compiled with -DNETSURF_NO_UI_EVENTS, the same two pages must receive
+ * NOTHING, while their scripts still demonstrably run.  A demo that passes
+ * with and without the change proves nothing. */
+async function leg11() {
+  console.log('\nleg 11 — A/B baseline: the SAME pages with Lane C compiled out receive nothing');
+  const wasm = noEventsWasm();
+
+  const mk = new Monkey(RES_ON, { wasm });
+  try {
+    await mk.open(demo('paint'));
+    ok(mk.consoleLines().includes('paint ready 240x160'),
+      'the page script still runs with the events compiled out');
+
+    const from = mk.mark();
+    mk.drag({ x: 40, y: 30 }, { x: 160, y: 90 }, 3);
+    // Nothing to wait ON — the assertion IS that nothing arrives — so this
+    // leg, like legs 4 and 8, has to watch a clock.
+    await new Promise((r) => setTimeout(r, 800));
+    const said = mk.out.slice(from).match(/LOG paint (down|move|up) /g) || [];
+    ok(said.length === 0,
+      'PAINT: not one mousedown/mousemove/mouseup was delivered',
+      `delivered: ${JSON.stringify(said)}`);
+    ok(await mk.quit() === 0, 'clean exit');
+  } finally { mk.kill(); }
+
+  const mk2 = new Monkey(RES_ON, { wasm });
+  try {
+    await mk2.open(demo('events'));
+    ok(mk2.consoleLines().includes('events ready'), 'the events page script runs too');
+
+    const from = mk2.mark();
+    const frame = await mk2.redraw();
+    mk2.clickText(frame, 'click me');
+    await mk2.wait(/LOG events trail /, { label: 'the click still reaching bubble listeners', from });
+    const trail = trailOf(mk2.out, from);
+    // The click still bubbles — that always worked.  What must NOT be
+    // there is any capture-phase step.
+    ok(trail !== null && trail.every((t) => !t.endsWith(':capture')),
+      'EVENTS: no capture-phase listener ran at all',
+      `trail: ${JSON.stringify(trail)}`);
+
+    const at = mk2.out.slice(from).match(/LOG events click at ([^ ]+),/m);
+    ok(at !== null && at[1] === 'undefined',
+      'and the click carried NO coordinates (a plain Event again)',
+      `reported: ${at ? at[0] : 'nothing'}`);
+
+    const before = mk2.mark();
+    mk2.key(13, 'DOWN');
+    mk2.key(13, 'UP');
+    await new Promise((r) => setTimeout(r, 500));
+    const keys = mk2.out.slice(before).match(/LOG events key(?:down|up):\S+/g) || [];
+    ok(keys.length === 0,
+      'and no keydown/keyup reached the field (keydown went to the root)',
+      `delivered: ${JSON.stringify(keys)}`);
+    ok(await mk2.quit() === 0, 'clean exit');
+  } finally { mk2.kill(); }
+}
+
 // ---- run --------------------------------------------------------------
 // Index IS the leg number (leg 0 is the shipped-set gate), so `--leg 2`
 // still means leg 2.
-const LEGS = [leg0, leg1, leg2, leg3, leg4, leg5, leg6, leg7, leg8];
+const LEGS = [leg0, leg1, leg2, leg3, leg4, leg5, leg6, leg7, leg8, leg9, leg10, leg11];
 const t0 = Date.now();
 for (let i = 0; i < LEGS.length; i++) {
   if (ONLY.length && !ONLY.includes(i)) continue;

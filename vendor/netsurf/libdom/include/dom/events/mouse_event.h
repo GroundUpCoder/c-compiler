@@ -17,6 +17,13 @@ struct dom_abstract_view;
 
 typedef struct dom_mouse_event dom_mouse_event;
 
+/* Constructor.  Public for the same reason _dom_keyboard_event_create is:
+ * an embedder that synthesises UI events (NetSurf's html/interaction.c)
+ * needs to make one without reaching into libdom's private headers. */
+dom_exception _dom_mouse_event_create(dom_mouse_event **evt);
+#define dom_mouse_event_create(n) \
+		_dom_mouse_event_create((dom_mouse_event **) (n))
+
 dom_exception _dom_mouse_event_get_screen_x(dom_mouse_event *evt,
 		int32_t *x);
 #define dom_mouse_event_get_screen_x(e, x) _dom_mouse_event_get_screen_x(\
@@ -61,6 +68,18 @@ dom_exception _dom_mouse_event_get_button(dom_mouse_event *evt,
 		unsigned short *button);
 #define dom_mouse_event_get_button(e, b) _dom_mouse_event_get_button(\
 		(dom_mouse_event *) (e), (unsigned short *) (b))
+
+/* `buttons` (the bitmask of buttons currently held) post-dates the DOM L3
+ * init this class implements, so it is set separately after init. */
+dom_exception _dom_mouse_event_get_buttons(dom_mouse_event *evt,
+		unsigned short *buttons);
+#define dom_mouse_event_get_buttons(e, b) _dom_mouse_event_get_buttons(\
+		(dom_mouse_event *) (e), (unsigned short *) (b))
+
+dom_exception _dom_mouse_event_set_buttons(dom_mouse_event *evt,
+		unsigned short buttons);
+#define dom_mouse_event_set_buttons(e, b) _dom_mouse_event_set_buttons(\
+		(dom_mouse_event *) (e), (unsigned short) (b))
 
 dom_exception _dom_mouse_event_get_related_target(dom_mouse_event *evt,
 		dom_event_target **et);

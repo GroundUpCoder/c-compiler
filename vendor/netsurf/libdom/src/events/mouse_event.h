@@ -26,10 +26,11 @@ struct dom_mouse_event {
 	uint32_t modifier_state;	/**< The modifier keys state */
 
 	unsigned short button;	/**< Which button is clicked */
+	unsigned short buttons;	/**< Bitmask of buttons currently held */
 	dom_event_target *related_target;	/**< The related target */
 };
 
-/* Constructor */
+/* Constructor: declared in the public header too, see mouse_event.h */
 dom_exception _dom_mouse_event_create(struct dom_mouse_event **evt);
 
 /* Destructor */

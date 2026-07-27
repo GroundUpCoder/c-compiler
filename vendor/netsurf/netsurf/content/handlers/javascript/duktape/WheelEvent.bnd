@@ -1,0 +1,62 @@
+/* Binding for browser using duktape and libdom
+ *
+ * This file is part of NetSurf, http://www.netsurf-browser.org/
+ *
+ * Released under the terms of the MIT License,
+ *         http://www.opensource.org/licenses/mit-license
+ *
+ * A `wheel` event is dispatched as a libdom dom_mouse_multi_wheel_event,
+ * whose base class IS dom_mouse_event — so every MouseEvent.bnd getter works
+ * on it unchanged and only the three deltas need bodies here.
+ *
+ * libdom's field is the LEGACY `wheelDelta` (opposite sign to `deltaY`, in
+ * 120ths).  We are both the producer (html_fire_wheel_event) and the
+ * consumer, so the field carries the DOM-spec `delta*` value directly: a
+ * positive deltaY means "content scrolls down", as the spec says.
+ */
+
+getter WheelEvent::deltaX ()
+%{
+	dom_exception exc;
+	int32_t d;
+
+	exc = dom_mouse_multi_wheel_event_get_wheel_delta_x(
+			priv->parent.parent.parent.evt, &d);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_number(ctx, (duk_double_t) d);
+	return 1;
+%}
+
+getter WheelEvent::deltaY ()
+%{
+	dom_exception exc;
+	int32_t d;
+
+	exc = dom_mouse_multi_wheel_event_get_wheel_delta_y(
+			priv->parent.parent.parent.evt, &d);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_number(ctx, (duk_double_t) d);
+	return 1;
+%}
+
+getter WheelEvent::deltaZ ()
+%{
+	dom_exception exc;
+	int32_t d;
+
+	exc = dom_mouse_multi_wheel_event_get_wheel_delta_z(
+			priv->parent.parent.parent.evt, &d);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_number(ctx, (duk_double_t) d);
+	return 1;
+%}
+
+getter WheelEvent::deltaMode ()
+%{
+	/* DOM_DELTA_PIXEL: the frontends hand the core a pixel step. */
+	duk_push_uint(ctx, 0);
+	return 1;
+%}

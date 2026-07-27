@@ -379,8 +379,16 @@ bool box_textarea_create_textarea(html_content *html,
 		return false;
 	}
 
-	if (!textarea_set_text(gadget->data.text.ta, text))
+	/* Seeding the widget with the markup's own value is not an edit:
+	 * without this guard every text control fired a DOM `input` event
+	 * at load (and again after every live re-conversion), which is both
+	 * wrong and, for a page that renders its input, visible. */
+	gadget->building = true;
+	if (!textarea_set_text(gadget->data.text.ta, text)) {
+		gadget->building = false;
 		return false;
+	}
+	gadget->building = false;
 
 	return true;
 }

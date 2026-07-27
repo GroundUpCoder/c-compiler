@@ -72,7 +72,10 @@ struct dom_html_br_element;
 /* events */
 
 #include "Event.bnd"
+#include "UIEvent.bnd"
 #include "KeyboardEvent.bnd"
+#include "MouseEvent.bnd"
+#include "WheelEvent.bnd"
 
 init MutationEvent(struct dom_mutation_event *evt::evt);
 init UIEvent(struct dom_ui_event *evt::evt);

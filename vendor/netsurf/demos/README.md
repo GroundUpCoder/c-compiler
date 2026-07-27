@@ -94,10 +94,20 @@ Rungs 4–5 need **Lane B**, the mutation → re-box → reflow → repaint brid
 | `stopwatch/` | a `setInterval` writing a plain `<div>`'s `textContent` moves the number **on screen**, and `createElement`+`appendChild` adds a visible lap row.  Neither is a form control nor a canvas — nothing about them repainted before Lane B |
 | `todo/` | `removeChild` unpaints a row, and the counter re-renders both its **text** and its **class** (an attribute change that has to re-select styles, not just re-lay-out) |
 
-Rungs 6–7 (`paint`, `breakout`) are still deliberately absent: they need
-Lane C's mouse coordinates and Lane D's canvas drawing primitives / rAF.
-**Do not add a page here that its lane cannot honestly satisfy** — and do
-not ship a stubbed version of one that cannot work.
+Rung 6 needs **Lane C**, the UI event coverage (todos/0289), plus the
+`events/` page that lane added to state what the browser now delivers
+(legs 9–11, with leg 11 as the A/B baseline built with the events compiled
+out):
+
+| page | proves |
+|---|---|
+| `paint/` | `mousedown`/`mousemove`/`mouseup` are dispatched at all AND carry `pageX`/`pageY` — a drag paints where the pointer went.  `preventDefault()` on the mousedown takes the gesture, which is what stops the browser turning press-and-move into a page-scroll drag |
+| `events/` | capture runs outer→middle BEFORE the target and bubble comes back after it (a capture AND a bubble listener on each of three nested boxes — the pair that used to leave an element completely deaf); `keydown`/`keyup` reach the FOCUSED field with a real `event.key` for Enter; `input`, `change` on blur, a cancelable `submit`, and `window.addEventListener("load")` |
+
+Rung 7 (`breakout`) is still deliberately absent: it needs Lane D's canvas
+drawing primitives and rAF.  **Do not add a page here that its lane cannot
+honestly satisfy** — and do not ship a stubbed version of one that cannot
+work.
 
 ## Writing pages for this engine — the sharp edges
 
@@ -123,17 +133,17 @@ binding works.  The full audit is in `todos/NETSURF-JS.md` §5.
   to be.  What is still true: mutations made *during* the parse land
   through the normal load-time conversion instead, so a page that only
   mutates at script-execution time proves nothing about the bridge.
-- **Only `click`, `keydown` and window `load` are ever dispatched.**  No
-  `mousedown`/`mousemove`/`mouseup`, no `keyup`, no `change`/`input`/
-  `submit`, no `focus`/`blur`.
-- **`keydown` is fired at the document ROOT, not at the focused element**,
-  so a listener has to sit on `document` (or the root element) — one on the
-  `<input>` never runs.  And **Enter arrives with `event.key === null`**:
-  the special-key table in `html.c`'s `fire_dom_keyboard_event` has cases
-  for Escape/arrows/Home/End/PageUp/PageDown but none for `NS_KEY_CR`, so
-  Enter (and Tab, and Backspace) fall through to a NULL key string.  That
-  is why `todo/` adds with a button, not with Enter.  Printable keys are
-  fine (`event.key === 'a'`).
+- ~~Only `click`, `keydown` and window `load` are ever dispatched.~~
+  **Fixed by Lane C**: mousedown/mousemove/mouseup (with coordinates),
+  dblclick, keyup, input/change, a cancelable submit, focus/blur and wheel
+  all fire.  What is still absent: `mouseover`/`mouseout`/`mouseenter`/
+  `mouseleave` and `focusin`/`focusout` (todos/0314).
+- ~~`keydown` is fired at the document ROOT, not at the focused element.~~
+  ~~And Enter arrives with `event.key === null`.~~  **Both fixed by Lane
+  C**: keys go to the focused element and bubble from there (so a
+  `document` listener still sees them), and Enter/Tab/Backspace/Delete have
+  their DOM `key` names.  `todo/` still adds with a button because it was
+  written for Lane B, not because it has to.
 - **`Date.now()` has ONE-SECOND resolution.**  duktape's platform probe
   does not recognise this target, falls through to its "unknown OS" branch
   (`duk_config.h` → `DUK_USE_DATE_NOW_TIME`) and ends up on plain `time()`.
@@ -141,14 +151,17 @@ binding works.  The full audit is in `todos/NETSURF-JS.md` §5.
   a one-line `duk_custom.h` fix (`#define DUK_USE_DATE_NOW_GETTIMEOFDAY`)
   for whoever owns the bindings.  Until then, anything wanting sub-second
   timing must count `setInterval` ticks — which is what `stopwatch/` does.
-- **Click events carry no coordinates.**  They are dispatched as plain
-  `Event`s, not `MouseEvent`s, so `clientX`/`pageX` are `undefined` — a
-  draw-where-you-clicked canvas is not possible yet.
-- **Capture-phase listeners never fire**, and worse: registering a
-  `{capture: true}` listener on an element silently disables every later
-  non-capture listener for that same event type on that element (the
-  per-node registration is keyed by event name only).  Use bubble-phase
-  listeners exclusively.
+- ~~Click events carry no coordinates.~~  **Fixed by Lane C**: mouse events
+  are real `MouseEvent`s with `pageX`/`pageY`, `clientX`/`clientY`,
+  `button`, `buttons` and the modifier flags.  Note there is no
+  `getBoundingClientRect` and no `offsetLeft`, so a page still has no way
+  to ask where an element ENDED UP — `paint/` pins its canvas to the
+  document origin with CSS so that a page coordinate IS a canvas pixel.
+- ~~Capture-phase listeners never fire, and registering one disables every
+  later listener for that type on that element.~~  **Fixed by Lane C**, and
+  the second half was worse than described: ANY second `addEventListener`
+  for a type already listened to on that element replaced the first,
+  capture or not (two handlers on one button ran as one).
 - **canvas 2D has no drawing primitives** — no `fillRect`, no paths, no
   `fillText`, no `drawImage`, no `fillStyle`.  Rasterise into an
   `ImageData` and `putImageData` it.

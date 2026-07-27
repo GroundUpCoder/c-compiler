@@ -43,7 +43,7 @@ struct dom_html_br_element;
 static void dukky_focus_event___init(duk_context *ctx, focus_event_private_t *priv, struct dom_ui_event *evt)
 {
 	dukky_ui_event___init(ctx, &priv->parent, evt);
-#line 89 "../netsurf/content/handlers/javascript/duktape/netsurf.bnd"
+#line 92 "../netsurf/content/handlers/javascript/duktape/netsurf.bnd"
 #line 48 "focus_event.c"
 }
 

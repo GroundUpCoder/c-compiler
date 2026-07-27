@@ -43,7 +43,7 @@ struct dom_html_br_element;
 void dukky_character_data___init(duk_context *ctx, character_data_private_t *priv, struct dom_node_character_data *character_data)
 {
 	dukky_node___init(ctx, &priv->parent, (struct dom_node *)character_data);
-#line 194 "../netsurf/content/handlers/javascript/duktape/netsurf.bnd"
+#line 197 "../netsurf/content/handlers/javascript/duktape/netsurf.bnd"
 #line 48 "character_data.c"
 }
 

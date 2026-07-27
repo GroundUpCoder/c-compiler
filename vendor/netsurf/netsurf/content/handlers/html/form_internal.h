@@ -74,6 +74,9 @@ struct form_control {
 	void *node;			/**< Corresponding DOM node */
 	struct dom_string *node_value;  /**< The last value sync'd with the DOM */
 	bool syncing;                   /**< Set if a DOM sync is in-progress */
+	bool building;			/**< Set while the widget is being
+					 * seeded with its markup value, so
+					 * that is not reported as an edit */
 	struct html_content *html;	/**< HTML content containing control */
 
 	form_control_type type;		/**< Type of control */
@@ -84,6 +87,9 @@ struct form_control {
 	char *value;			/**< Current value of control */
 	char *initial_value;		/**< Initial value of control */
 	char *last_synced_value;        /**< The last value sync'd to the DOM */
+	char *value_at_focus;		/**< Value when focus was gained, for
+					 * the DOM `change` event; NULL means
+					 * "never focused, so never edited" */
 	bool disabled;			/**< Whether control is disabled */
 
 	struct box *box;		/**< Box for control */
@@ -354,6 +360,33 @@ nserror form_submit(struct nsurl *page_url, struct browser_window *target,
  * Update gadget value.
  */
 void form_gadget_update_value(struct form_control *control, char *value);
+
+/**
+ * Fire a DOM `input` event at a gadget: its value just changed.
+ *
+ * Cheap for a page with no listener (one registry lookup), so it can sit
+ * on the per-keystroke path.
+ */
+void form_gadget_fire_input(struct form_control *control);
+
+/**
+ * Remember a text gadget's value as focus is gained.
+ *
+ * The DOM `change` contract is "differs from the value it had when it was
+ * focused", so the comparison needs that snapshot.
+ */
+void form_gadget_note_focus(struct form_control *control);
+
+/**
+ * Fire `change` at a text gadget losing focus, IF it was really edited.
+ */
+void form_gadget_commit_change(struct form_control *control);
+
+/**
+ * Fire `input` then `change` at a gadget whose value changed in one go
+ * (checkbox, radio, select) — there is no "still typing" state to await.
+ */
+void form_gadget_fire_change(struct form_control *control);
 
 
 /**

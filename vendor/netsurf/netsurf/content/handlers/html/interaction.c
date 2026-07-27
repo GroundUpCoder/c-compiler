@@ -60,6 +60,12 @@
 #include "html/imagemap.h"
 #include "html/interaction.h"
 
+/* DOM event helpers, defined with the rest of the mouse-event layer
+ * further down but needed by the click/submit sites above it */
+static void html_mouse_pos(struct browser_window *bw, int x, int y,
+			   struct dom_mouse_event_pos *pos);
+static unsigned int html_mouse_mods(browser_mouse_state mouse);
+
 /**
  * Get pointer shape for given box
  *
@@ -871,6 +877,9 @@ gadget_mouse_action(html_content *html,
 				(dom_html_input_element *)(mas->gadget.control->node),
 				mas->gadget.control->selected);
 			html__redraw_a_box(html, mas->gadget.box);
+			if (NETSURF_UI_EVENTS) {
+				form_gadget_fire_change(mas->gadget.control);
+			}
 		}
 		break;
 
@@ -878,6 +887,9 @@ gadget_mouse_action(html_content *html,
 		mas->result.status = messages_get("FormRadio");
 		if (mouse & BROWSER_MOUSE_CLICK_1) {
 			form_radio_set(mas->gadget.control);
+			if (NETSURF_UI_EVENTS) {
+				form_gadget_fire_change(mas->gadget.control);
+			}
 		}
 		break;
 
@@ -1232,7 +1244,8 @@ default_mouse_action(html_content *html,
 				       &idx,
 				       &pixel_offset);
 
-		if (selection_click(html->sel,
+		if ((html->mouse_default_prevented == false) &&
+		    selection_click(html->sel,
 				    html->bw,
 				    mouse,
 				    mas->text.box->byte_offset + idx)) {
@@ -1282,7 +1295,10 @@ default_mouse_action(html_content *html,
 		mas->result.status = mas->title;
 	}
 
-	if (mouse & BROWSER_MOUSE_DRAG_1) {
+	if (html->mouse_default_prevented) {
+		/* preventDefault() on the mousedown: no page-scroll drag, no
+		 * box drag.  The page is handling this gesture itself. */
+	} else if (mouse & BROWSER_MOUSE_DRAG_1) {
 		if (mouse & BROWSER_MOUSE_MOD_2) {
 			union content_msg_data msg_data;
 			msg_data.dragsave.type = CONTENT_SAVE_COMPLETE;
@@ -1399,9 +1415,30 @@ mouse_action_drag_none(html_content *html,
 		content_broadcast(c, CONTENT_MSG_POINTER, &msg_data);
 	}
 
-	/* fire dom click event */
+	/* fire dom click event.  This used to be a plain Event, so it
+	 * carried no coordinates at all (clientX read `undefined`); it is a
+	 * real MouseEvent now, and a double click also gets its dblclick. */
 	if (mouse & BROWSER_MOUSE_CLICK_1) {
-		fire_generic_dom_event(corestring_dom_click, mas.node, true, true);
+		struct dom_mouse_event_pos pos;
+		int detail = (mouse & BROWSER_MOUSE_TRIPLE_CLICK) ? 3 :
+			     (mouse & BROWSER_MOUSE_DOUBLE_CLICK) ? 2 : 1;
+
+		html_mouse_pos(bw, x, y, &pos);
+		if (NETSURF_UI_EVENTS == 0) {
+			/* upstream: a plain Event, so no coordinates */
+			fire_generic_dom_event(corestring_dom_click,
+					mas.node, true, true);
+		} else {
+			fire_dom_mouse_event(corestring_dom_click, mas.node,
+					true, true, &pos, 0, 0,
+					html_mouse_mods(mouse), detail);
+		}
+
+		if (NETSURF_UI_EVENTS && (mouse & BROWSER_MOUSE_DOUBLE_CLICK)) {
+			fire_dom_mouse_event(corestring_dom_dblclick,
+					mas.node, true, true, &pos, 0, 0,
+					html_mouse_mods(mouse), 2);
+		}
 	}
 
 	/* deferred actions that can cause this browser_window to be destroyed
@@ -1409,6 +1446,8 @@ mouse_action_drag_none(html_content *html,
 	 */
 	switch (mas.result.action) {
 	case ACTION_SUBMIT:
+		/* The cancelable DOM `submit` fires inside form_submit(),
+		 * the one choke every trigger shares. */
 		res = form_submit(content_get_url(c),
 				  browser_window_find_target(bw,
 							     mas.gadget.target,
@@ -1458,6 +1497,243 @@ mouse_action_drag_none(html_content *html,
 }
 
 
+/**
+ * Find the deepest DOM node under a document coordinate.
+ *
+ * Exported (see private.h) because html_scroll_at_point needs it too.
+ *
+ * A cut-down get_mouse_action_node: the DOM only needs the node, not the
+ * link/gadget/scrollbar state that costs the rest of that function.  Never
+ * returns NULL — the root element is the floor, which is what the DOM
+ * wants anyway (an event over blank margin still targets the document).
+ */
+dom_node *html_dom_node_at_point(html_content *html, int x, int y)
+{
+	struct box *box = html->layout;
+	dom_node *node = html->layout->node;
+	int box_x = box->margin[LEFT];
+	int box_y = box->margin[TOP];
+
+	do {
+		if ((box->style != NULL) &&
+		    (css_computed_visibility(box->style) ==
+		     CSS_VISIBILITY_HIDDEN)) {
+			goto next_box;
+		}
+		if (box->node != NULL) {
+			node = box->node;
+		}
+	next_box:
+		box = box_at_point(&html->unit_len_ctx, box, x, y,
+				   &box_x, &box_y);
+	} while (box != NULL);
+
+	return node;
+}
+
+
+/**
+ * Translate a browser_mouse_state's modifier bits to DOM modifier names.
+ */
+static unsigned int html_mouse_mods(browser_mouse_state mouse)
+{
+	unsigned int mods = 0;
+
+	if (mouse & BROWSER_MOUSE_MOD_1) mods |= HTML_MOD_SHIFT;
+	if (mouse & BROWSER_MOUSE_MOD_2) mods |= HTML_MOD_CTRL;
+	if (mouse & BROWSER_MOUSE_MOD_3) mods |= HTML_MOD_ALT;
+	if (mouse & BROWSER_MOUSE_MOD_4) mods |= HTML_MOD_META;
+
+	return mods;
+}
+
+
+/**
+ * The DOM `buttons` bitmask implied by a browser_mouse_state.
+ *
+ * netsurf numbers buttons 1 = primary, 2 = auxiliary — but every front end
+ * here maps the RIGHT button onto 2, and DOM's `buttons` is
+ * 1 = primary, 2 = secondary, 4 = auxiliary.  So 1 -> 1 and 2 -> 2, and
+ * nothing claims to be the middle button (no front end delivers one).
+ */
+static unsigned short html_mouse_buttons(browser_mouse_state mouse)
+{
+	unsigned short buttons = 0;
+
+	if (mouse & (BROWSER_MOUSE_PRESS_1 | BROWSER_MOUSE_HOLDING_1 |
+		     BROWSER_MOUSE_DRAG_1)) {
+		buttons |= 1;
+	}
+	if (mouse & (BROWSER_MOUSE_PRESS_2 | BROWSER_MOUSE_HOLDING_2 |
+		     BROWSER_MOUSE_DRAG_2)) {
+		buttons |= 2;
+	}
+
+	return buttons;
+}
+
+
+/**
+ * Fill in a mouse position from the document coordinate plus the front
+ * end's viewport scroll offset.
+ */
+static void html_mouse_pos(struct browser_window *bw, int x, int y,
+			   struct dom_mouse_event_pos *pos)
+{
+	int sx = 0;
+	int sy = 0;
+
+	if (bw != NULL) {
+		browser_window_get_scroll(bw, &sx, &sy);
+	}
+
+	pos->page_x = x;
+	pos->page_y = y;
+	pos->client_x = x - sx;
+	pos->client_y = y - sy;
+}
+
+
+/**
+ * Is anything on this page listening for this event type?
+ *
+ * Everything below this point costs a box-tree walk and a libdom event
+ * allocation per mouse motion, so a page with no listener — which is every
+ * page in the corpus that is not a JS demo — must not pay for it.
+ */
+static inline bool html_wants_event(html_content *html, const char *type)
+{
+	return js_event_type_registered(html->jsthread, type);
+}
+
+
+/**
+ * Dispatch the DOM mouse events implied by one core mouse action.
+ *
+ * Called at the TOP of html_mouse_action, before the native handling, so
+ * that `mousedown`/`mouseup` precede the focus, selection and gadget work
+ * they would precede in a real browser.  `click` deliberately stays where
+ * upstream put it — AFTER the action — because a click listener must see
+ * the checkbox it just toggled as already toggled.
+ *
+ * netsurf's model has no explicit button-release event: a release that was
+ * not a drag arrives as BROWSER_MOUSE_CLICK_n, and a release that ENDED a
+ * drag arrives as a plain track with no buttons held.  Both are a
+ * `mouseup`, and the second is recognisable because this content still has
+ * a live drag while the incoming state holds nothing.
+ */
+static void html_fire_mouse_events(html_content *html,
+				   struct browser_window *bw,
+				   browser_mouse_state mouse,
+				   int x, int y)
+{
+	struct dom_mouse_event_pos pos;
+	unsigned short button;
+	unsigned short buttons;
+	unsigned int mods;
+	dom_node *node;
+	bool down;
+	bool up;
+	int detail;
+
+	if (NETSURF_UI_EVENTS == 0) {
+		return;
+	}
+
+	/* Cleared unconditionally at every press: a stale "prevented" would
+	 * silently disable page scrolling for the rest of the document's
+	 * life. */
+	if (mouse & (BROWSER_MOUSE_PRESS_1 | BROWSER_MOUSE_PRESS_2)) {
+		html->mouse_default_prevented = false;
+	}
+
+	if (html->layout == NULL || html->jsthread == NULL) {
+		return;
+	}
+
+	down = !!(mouse & (BROWSER_MOUSE_PRESS_1 | BROWSER_MOUSE_PRESS_2));
+	/* A release is either a CLICK_n (a press that was not a drag) or a
+	 * track with nothing held after a press we saw (a drag ending).
+	 * Both are the same `mouseup`. */
+	up = !down &&
+	     (!!(mouse & (BROWSER_MOUSE_CLICK_1 | BROWSER_MOUSE_CLICK_2)) ||
+	      (html->mouse_pressed &&
+	       ((mouse & (BROWSER_MOUSE_HOLDING_1 | BROWSER_MOUSE_HOLDING_2 |
+			  BROWSER_MOUSE_DRAG_ON | BROWSER_MOUSE_DRAG_1 |
+			  BROWSER_MOUSE_DRAG_2)) == 0)));
+
+	/* The cheap gate: a string lookup beats the box walk below, so a
+	 * page listening for none of these pays almost nothing per motion
+	 * event.  The press/release bookkeeping still has to happen, so it
+	 * is folded into the branches rather than gated out here. */
+	if (down == false && up == false &&
+	    html_wants_event(html, "mousemove") == false) {
+		return;
+	}
+	if (down && html_wants_event(html, "mousedown") == false) {
+		html->mouse_pressed = true;
+		return;
+	}
+	if (up && html_wants_event(html, "mouseup") == false &&
+	    html_wants_event(html, "mousedown") == false) {
+		html->mouse_pressed = false;
+		return;
+	}
+
+	node = html_dom_node_at_point(html, x, y);
+	if (node == NULL) {
+		return;
+	}
+
+	html_mouse_pos(bw, x, y, &pos);
+	mods = html_mouse_mods(mouse);
+	buttons = html_mouse_buttons(mouse);
+	button = (mouse & (BROWSER_MOUSE_PRESS_2 | BROWSER_MOUSE_CLICK_2 |
+			   BROWSER_MOUSE_HOLDING_2 | BROWSER_MOUSE_DRAG_2)) ?
+			2 : 0;
+	detail = (mouse & BROWSER_MOUSE_TRIPLE_CLICK) ? 3 :
+		 (mouse & BROWSER_MOUSE_DOUBLE_CLICK) ? 2 : 1;
+
+	if (down) {
+		html->mouse_pressed = true;
+		if (html_wants_event(html, "mousedown")) {
+			html->mouse_default_prevented =
+				(fire_dom_mouse_event(corestring_dom_mousedown,
+					node, true, true, &pos, button,
+					buttons, mods, detail) == false);
+		}
+		return;
+	}
+
+	if (up) {
+		/* A front end that reports a click without ever reporting
+		 * the press still owes the DOM a mousedown: the sequence is
+		 * mousedown, mouseup, click, and a page that tracks its own
+		 * button state from those would otherwise never start. */
+		if ((html->mouse_pressed == false) &&
+		    html_wants_event(html, "mousedown")) {
+			fire_dom_mouse_event(corestring_dom_mousedown, node,
+					true, true, &pos, button, buttons,
+					mods, detail);
+		}
+		html->mouse_pressed = false;
+		if (html_wants_event(html, "mouseup")) {
+			/* the button is no longer held at a release */
+			fire_dom_mouse_event(corestring_dom_mouseup, node,
+					true, true, &pos, button, 0,
+					mods, detail);
+		}
+		return;
+	}
+
+	if (html_wants_event(html, "mousemove")) {
+		/* A move has no button that changed state, and detail 0 */
+		fire_dom_mouse_event(corestring_dom_mousemove, node,
+				true, true, &pos, 0, buttons, mods, 0);
+	}
+}
+
+
 /* exported interface documented in html/interaction.h */
 nserror html_mouse_track(struct content *c,
 			 struct browser_window *bw,
@@ -1477,6 +1753,10 @@ html_mouse_action(struct content *c,
 {
 	html_content *html = (html_content *)c;
 	nserror res = NSERROR_OK;
+
+	/* DOM mouse events first, while html->drag_type still describes the
+	 * state this action is about to change */
+	html_fire_mouse_events(html, bw, mouse, x, y);
 
 	/* handle open select menu */
 	if (html->visible_select_menu != NULL) {
@@ -1517,6 +1797,75 @@ html_mouse_action(struct content *c,
 	}
 
 	return res;
+}
+
+
+/**
+ * Fire one DOM keyboard event at the right target.
+ *
+ * Upstream dispatched keydown at `html->layout->node` — the document root
+ * — whatever had focus, so a listener on the `<input>` the user was typing
+ * into never ran and every page had to listen on `document`.  The DOM says
+ * the FOCUSED element is the target and the event bubbles to the root from
+ * there, which is both correct and a superset: a document-level listener
+ * still sees it.
+ */
+static void fire_dom_key_event(html_content *html, dom_string *type,
+			       uint32_t key)
+{
+	dom_node *target = NULL;
+
+	if (html->layout == NULL) {
+		return;
+	}
+
+	if (NETSURF_UI_EVENTS) {
+		switch (html->focus_type) {
+		case HTML_FOCUS_TEXTAREA:
+			if (html->focus_owner.textarea != NULL) {
+				target = html->focus_owner.textarea->node;
+			}
+			break;
+
+		case HTML_FOCUS_CONTENT:
+			if (html->focus_owner.content != NULL) {
+				target = html->focus_owner.content->node;
+			}
+			break;
+
+		default:
+			break;
+		}
+	}
+
+	if (target == NULL) {
+		target = html->layout->node;
+	}
+	if (target == NULL) {
+		return;
+	}
+
+	fire_dom_keyboard_event(type, target, true, true, key);
+}
+
+
+/**
+ * Handle key releases.
+ *
+ * \param  c	content of type HTML
+ * \param  key	The UCS4 character codepoint
+ * \return true if key handled, false otherwise
+ */
+bool html_key_release(struct content *c, uint32_t key)
+{
+	html_content *html = (html_content *) c;
+
+	fire_dom_key_event(html, corestring_dom_keyup, key);
+
+	/* Nothing in the core acts on a release; it exists so the DOM can
+	 * see one.  Reporting "not handled" keeps every front-end fallback
+	 * (scroll on an unclaimed arrow key) behaving exactly as before. */
+	return false;
 }
 
 
@@ -1563,10 +1912,7 @@ bool html_keypress(struct content *c, uint32_t key)
 	 * `event.preventDefault()` then we won't handle the event when
 	 * we're not supposed to.
 	 */
-	if (html->layout != NULL && html->layout->node != NULL) {
-		fire_dom_keyboard_event(corestring_dom_keydown,
-				html->layout->node, true, true, key);
-	}
+	fire_dom_key_event(html, corestring_dom_keydown, key);
 
 	switch (html->focus_type) {
 	case HTML_FOCUS_CONTENT:
@@ -1692,6 +2038,27 @@ void html_set_drag_type(html_content *html, html_drag_type drag_type,
 	content_broadcast((struct content *)html, CONTENT_MSG_DRAG, &msg_data);
 }
 
+/**
+ * The DOM node that owns a focus state, if any.
+ *
+ * HTML_FOCUS_SELF is the document itself, which has no element to fire at.
+ */
+static dom_node *html_focus_node(html_content *html,
+				 html_focus_type type,
+				 const union html_focus_owner *owner)
+{
+	switch (type) {
+	case HTML_FOCUS_CONTENT:
+		return (owner->content != NULL) ? owner->content->node : NULL;
+
+	case HTML_FOCUS_TEXTAREA:
+		return (owner->textarea != NULL) ? owner->textarea->node : NULL;
+
+	default:
+		return NULL;
+	}
+}
+
 /* Documented in html_internal.h */
 void html_set_focus(html_content *html, html_focus_type focus_type,
 		union html_focus_owner focus_owner, bool hide_caret,
@@ -1701,10 +2068,30 @@ void html_set_focus(html_content *html, html_focus_type focus_type,
 	int x_off = 0;
 	int y_off = 0;
 	struct rect cr;
+	dom_node *old_node = NULL;
+	dom_node *new_node = NULL;
+	struct form_control *lost_control = NULL;
 	bool textarea_lost_focus = html->focus_type == HTML_FOCUS_TEXTAREA &&
 			focus_type != HTML_FOCUS_TEXTAREA;
 
 	assert(html != NULL);
+
+	/* Note who is losing and gaining focus BEFORE the switch below
+	 * overwrites it, so blur/focus can be dispatched afterwards. */
+	if (html->jsthread != NULL) {
+		old_node = html_focus_node(html, html->focus_type,
+					   &html->focus_owner);
+		new_node = html_focus_node(html, focus_type, &focus_owner);
+	}
+	if ((html->focus_type == HTML_FOCUS_TEXTAREA) &&
+	    (html->focus_owner.textarea != NULL)) {
+		lost_control = html->focus_owner.textarea->gadget;
+	}
+	if ((focus_type == HTML_FOCUS_TEXTAREA) &&
+	    (focus_owner.textarea != NULL) &&
+	    (focus_owner.textarea->gadget != lost_control)) {
+		form_gadget_note_focus(focus_owner.textarea->gadget);
+	}
 
 	switch (focus_type) {
 	case HTML_FOCUS_SELF:
@@ -1748,7 +2135,31 @@ void html_set_focus(html_content *html, html_focus_type focus_type,
 
 	/* Inform of the content's drag status change */
 	content_broadcast((struct content *)html, CONTENT_MSG_CARET, &msg_data);
+
+	if ((NETSURF_UI_EVENTS == 0) || (old_node == new_node)) {
+		return;
+	}
+
+	/* A text control that has been edited and is now losing focus fires
+	 * `change` — the classic "commit on blur" contract every form
+	 * validator is written against.  It goes BEFORE blur. */
+	if ((lost_control != NULL) && (new_node != old_node)) {
+		form_gadget_commit_change(lost_control);
+	}
+
+	/* focus/blur do NOT bubble (focusin/focusout would; nothing in the
+	 * core generates those yet — todos/0314). */
+	if (old_node != NULL) {
+		fire_generic_dom_event(corestring_dom_blur, old_node,
+				       false, false);
+	}
+	if (new_node != NULL) {
+		fire_generic_dom_event(corestring_dom_focus, new_node,
+				       false, false);
+	}
 }
+
+
 
 /* Documented in html_internal.h */
 void html_set_selection(html_content *html, html_selection_type selection_type,

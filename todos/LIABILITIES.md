@@ -111,11 +111,6 @@ thing this file exists to kill.
 - anchor: // Loud-symptom gate (todos/0171): a `wmctl wait` that can't be satisfied
 - provenance: 0171
 
-### L08 — NetSurf Lane C (UI events) was left open in a topic doc, which is not the queue
-- ticket: 0289
-- file: todos/NETSURF-JS.md
-- anchor: **Lane C — UI event coverage (M).**
-
 ### L09 — NetSurf Lane D (binding fills) was left open in a topic doc, which is not the queue
 - ticket: 0290
 - file: todos/NETSURF-JS.md
@@ -240,5 +235,15 @@ thing this file exists to kill.
 - ticket: 0312
 - file: todos/CONFORMANCE-REMAINING.md
 - anchor: - **Residual `longjmp` in non-statement position** (`x ? longjmp(b,1) : ...`,
+
+### L33 — mouseover/mouseout/mouseenter/mouseleave and focusin/focusout are not generated
+- ticket: 0314
+- file: vendor/netsurf/netsurf/content/handlers/html/interaction.c
+- anchor: 	 * core generates those yet — todos/0314). */
+
+### L34 — a PROGRAMMATIC form.submit() would wrongly fire the cancelable `submit` event
+- ticket: 0314
+- file: vendor/netsurf/netsurf/content/handlers/html/form.c
+- anchor: 	 * (Per spec a PROGRAMMATIC submit — form.submit() — does not fire
 
 <!-- END ENTRIES -->

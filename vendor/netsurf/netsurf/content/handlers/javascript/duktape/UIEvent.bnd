@@ -1,0 +1,32 @@
+/* Binding for browser using duktape and libdom
+ *
+ * This file is part of NetSurf, http://www.netsurf-browser.org/
+ *
+ * Released under the terms of the MIT License,
+ *         http://www.opensource.org/licenses/mit-license
+ *
+ * UIEvent is the base of MouseEvent/KeyboardEvent/WheelEvent/FocusEvent.
+ * Without these bodies its two attributes generate silent no-op stubs, so
+ * `event.detail` reads `undefined` on every UI event — which is how a
+ * dblclick used to be indistinguishable from a click in script.
+ */
+
+getter UIEvent::view ()
+%{
+	/* The only view there is: this thread's Window IS its global
+	 * object (js_newthread's duk_set_global_object). */
+	duk_push_global_object(ctx);
+	return 1;
+%}
+
+getter UIEvent::detail ()
+%{
+	dom_exception exc;
+	int32_t detail;
+
+	exc = dom_ui_event_get_detail(priv->parent.evt, &detail);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_int(ctx, (duk_int_t) detail);
+	return 1;
+%}

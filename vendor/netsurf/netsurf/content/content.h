@@ -355,6 +355,15 @@ void content_mouse_action(struct hlcache_handle *h, struct browser_window *bw,
  */
 bool content_keypress(struct hlcache_handle *h, uint32_t key);
 
+/**
+ * Handle a key release in a content.
+ *
+ * \param h    handle to content
+ * \param key  the UCS4 character codepoint, or an NS_KEY_* value
+ * \return true if the release was handled
+ */
+bool content_key_release(struct hlcache_handle *h, uint32_t key);
+
 
 /**
  * A window containing the content has been opened.

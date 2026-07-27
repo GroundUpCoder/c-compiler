@@ -11,7 +11,10 @@ fetch → hubbub parse → libdom → libcss style → layout → plot, assertin
 the plotted geometry and a clean exit.
 
 **JavaScript is in, and on** (duktape 2.7.0 + the nsgenbind WebIDL
-bindings; `todos/NETSURF-JS.md` Lane A).  `node vendor/netsurf/smoke-js.mjs`
+bindings; `todos/NETSURF-JS.md` Lane A).  DOM mutation repaints (Lane B)
+and the UI event surface is real (Lane C, `todos/0289`): mouse events carry
+coordinates, capture-phase listeners fire, keys reach the focused element,
+and forms report input/change/submit.  `node vendor/netsurf/smoke-js.mjs`
 is its gate: script execution, console, parse-time `document.write`, click
 dispatch to real DOM listeners, canvas `getImageData`/`putImageData`,
 `setInterval`, the 10 s execution watchdog and the `Choices` off-switch, all
@@ -151,6 +154,78 @@ on a live content":
   of the existing `textarea_set_caret`, so a caret can be carried from a
   destroyed widget to its replacement.  Purely additive; upstreamable.
 
+netsurf core — **the Lane C UI event coverage** (todos/0289; rationale in
+`logs/2026-07-27/netsurf-lane-c.md`).  Upstream fired exactly three UI
+events at script — `click`, `keydown` and window `load` — and the first
+two carried nothing useful:
+
+- `include/netsurf/uievents.h` (new) — the build-time kill switch
+  `-DNETSURF_NO_UI_EVENTS`, which restores that upstream behaviour exactly.
+  `smoke-js.mjs` leg 11 builds that variant as its A/B baseline.
+- `content/handlers/html/interaction.c` + `private.h` — the mouse-event
+  layer: `html_dom_node_at_point` (a hit test without
+  `get_mouse_action_node`'s link/gadget/scroll work),
+  mousedown/mousemove/mouseup with coordinates and a `buttons` mask,
+  dblclick, `click` upgraded from a plain Event to a real MouseEvent,
+  keydown/keyup dispatched at the FOCUSED element instead of the document
+  root, focus/blur at the one focus choke, and — the browser contract that
+  makes a drawing canvas possible at all — `preventDefault()` on a
+  mousedown suppressing the native page-scroll / selection drag that would
+  otherwise swallow every later motion.
+- `content/handlers/html/html.c` + `private.h` — `fire_dom_mouse_event` and
+  `fire_dom_wheel_event` (the `fire_dom_keyboard_event` shape), the
+  coordinate contract (page vs client), a cancelable `wheel` at
+  `html_scroll_at_point`, and `Enter`/`Tab`/`Backspace`/`Delete` added to
+  the keyboard event's special-key table — without them `event.key` was
+  **null** for Enter, so "submit on Enter" could not be written.
+- `content/handlers/html/form.c` + `form_internal.h` + `box_textarea.c` —
+  `input` on every edit, `change` on the commit (blur, value differs from
+  the value at focus), both at once for checkbox/radio/select, and the
+  cancelable `submit` at the ONE choke `form_submit` shares between the
+  submit button and Enter-in-a-field.  `building` guards the widget being
+  seeded with its markup value, which was otherwise reported as an edit.
+- `desktop/browser_window.c` + `include/netsurf/browser_window.h` —
+  `browser_window_get_scroll`, so the core can turn its document-relative
+  coordinates into the viewport-relative `clientX`/`clientY` the spec
+  wants.  The offset is the front end's; nothing else could answer.
+- `content/content_protected.h` + `content.{c,h}` + `desktop/textinput.c` +
+  `include/netsurf/keypress.h` — a key RELEASE path (`keyrelease` handler,
+  `content_key_release`, `browser_window_key_release`).  Upstream's own
+  TODO in `interaction.c` asks for exactly this; without it `keyup` cannot
+  exist, because nothing tells the core a key came up.
+- `content/handlers/javascript/duktape/dukky.{c,h}` — registers BOTH phases'
+  libdom listeners per (element, type) instead of only the phase the first
+  JS listener asked for, so a capture listener can be invoked at all; the
+  at-target phase now runs every listener whatever its capture flag (DOM
+  L3); `js_fire_event` is generic instead of window-`load`-only, and runs
+  the Window's OWN listeners — `window.addEventListener` used to register a
+  callback nothing could ever reach; `js_event_type_registered` is the
+  cheap "is anyone listening" gate that keeps a non-JS page from paying for
+  a hit test per mouse motion.
+- `content/handlers/javascript/duktape/EventTarget.bnd` — **upstream bug**:
+  both listener-list walks indexed the CALLBACK instead of the listener
+  ARRAY, so the walk fell out immediately with `idx == 0` and every
+  `addEventListener` for a type already listened to on that element
+  OVERWROTE the previous one (two handlers on one button ran as one; a
+  capture/bubble pair collapsed to whichever was registered second), while
+  `removeEventListener` never found anything to remove.  Upstreamable.
+- `content/handlers/javascript/duktape/{UIEvent,MouseEvent,WheelEvent}.bnd`
+  (new) + `WebIDL/uievents.idl` — MouseEvent had NO `.bnd` at all, so every
+  one of its attributes was a silent no-op stub and `event.clientX` read
+  `undefined`.  `pageX`/`pageY` are added to the 2015 IDL snapshot
+  (standard, from CSSOM View) because this engine has neither
+  `getBoundingClientRect` nor `offsetLeft` to locate an element with.
+- `frontends/monkey/{dispatch.c,dispatch.h,main.c}` — **upstream bug**: the
+  poll loop `select()`s on fd 0 but read with `fgets`, so one call pulled a
+  whole BURST of commands into the stdio buffer, left the fd empty, and
+  every command after the first was silently lost.  Invisible while each
+  driver sent one command and waited for a marker; fatal for a driver
+  expressing a GESTURE, whose intermediate moves have no marker.  Reads the
+  fd directly now and drains buffered lines.
+- `frontends/monkey/browser.c` — `WINDOW MOUSE` (any browser_mouse_state,
+  by name), `WINDOW KEY … KIND DOWN|UP` and `WINDOW WHEEL`, so the cheap
+  gate can drive a press-drag-release and a key release at all.
+
 libdom:
 - `src/events/event_target.c` — a non-capture listener registered on the
   event TARGET fired twice per event.  `_dom_node_dispatch_event`
@@ -164,6 +239,17 @@ libdom:
   tokenlist (`classList`) and the canvas2d `DOMSubtreeModified` handlers,
   which are non-capture listeners on their own target too.  Regression
   guard: `smoke-js.mjs` leg 2 ("one click = exactly ONE increment").
+- `src/events/{event.h,event.c,mouse_event.c,mouse_event.h}` +
+  `include/dom/events/{event.h,mouse_event.h,mouse_multi_wheel_event.h}` —
+  Lane C, all additive and upstreamable: the mouse-event CONSTRUCTORS are
+  declared in the public headers (the `_dom_keyboard_event_create`
+  precedent) so an embedder can synthesise one without reaching into
+  libdom's private headers; `buttons` (the mask of buttons currently held)
+  gains a field, a getter and a setter, because it post-dates the DOM L3
+  init this class implements; and `_dom_event_is_mouse_event` tags the
+  class, so a binding layer that picks a JS prototype from the event's TYPE
+  NAME cannot hand MouseEvent's getters a plain `dom_event` called "click"
+  and read coordinates off memory past the end of the struct.
 
 libnsfb:
 - `src/surface.h` + `src/surface/surface.c` — `NSFB_SURFACE_DEF`'s

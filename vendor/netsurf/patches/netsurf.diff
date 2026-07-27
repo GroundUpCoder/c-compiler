@@ -1,7 +1,63 @@
-diff --git a/content/fetch.c b/content/fetch.c
-index f090039..bf218f4 100644
---- a/content/fetch.c
-+++ b/content/fetch.c
+diff -urN a/content/content.c b/content/content.c
+--- a/content/content.c	2026-07-27 11:21:07
++++ b/content/content.c	2026-07-27 11:42:15
+@@ -447,6 +447,19 @@
+ 
+ 
+ /* exported interface documented in content/content.h */
++bool content_key_release(struct hlcache_handle *h, uint32_t key)
++{
++	struct content *c = hlcache_handle_get_content(h);
++	assert(c != NULL);
++
++	if (c->handler->keyrelease != NULL)
++		return c->handler->keyrelease(c, key);
++
++	return false;
++}
++
++
++/* exported interface documented in content/content.h */
+ void content_request_redraw(struct hlcache_handle *h,
+ 			    int x, int y, int width, int height)
+ {
+diff -urN a/content/content.h b/content/content.h
+--- a/content/content.h	2026-07-27 11:21:07
++++ b/content/content.h	2026-07-27 11:42:15
+@@ -355,6 +355,15 @@
+  */
+ bool content_keypress(struct hlcache_handle *h, uint32_t key);
+ 
++/**
++ * Handle a key release in a content.
++ *
++ * \param h    handle to content
++ * \param key  the UCS4 character codepoint, or an NS_KEY_* value
++ * \return true if the release was handled
++ */
++bool content_key_release(struct hlcache_handle *h, uint32_t key);
++
+ 
+ /**
+  * A window containing the content has been opened.
+diff -urN a/content/content_protected.h b/content/content_protected.h
+--- a/content/content_protected.h	2026-07-27 11:21:07
++++ b/content/content_protected.h	2026-07-27 11:42:15
+@@ -77,6 +77,11 @@
+ 	nserror (*mouse_action)(struct content *c, struct browser_window *bw,
+ 			browser_mouse_state mouse, int x, int y);
+ 	bool (*keypress)(struct content *c, uint32_t key);
++	/** Key RELEASE.  Upstream's own TODO in html/interaction.c asks for
++	 * this ("Update the front end interface so that both press and
++	 * release events reach the core"): without it a DOM `keyup` cannot
++	 * exist at all, because nothing tells the core a key came up. */
++	bool (*keyrelease)(struct content *c, uint32_t key);
+ 	bool (*redraw)(struct content *c, struct content_redraw_data *data,
+ 			const struct rect *clip,
+ 			const struct redraw_context *ctx);
+diff -urN a/content/fetch.c b/content/fetch.c
+--- a/content/fetch.c	2026-07-27 11:21:07
++++ b/content/fetch.c	2026-07-27 11:12:32
 @@ -54,7 +54,9 @@
  #include "content/fetchers.h"
  #include "content/fetchers/resource.h"
@@ -12,307 +68,10 @@ index f090039..bf218f4 100644
  #include "content/fetchers/data.h"
  #include "content/fetchers/file/file.h"
  #include "javascript/fetcher.h"
-diff --git a/content/handlers/image/png.c b/content/handlers/image/png.c
-index 97a5795..e1d0dd0 100644
---- a/content/handlers/image/png.c
-+++ b/content/handlers/image/png.c
-@@ -354,7 +354,11 @@ static bool nspng_process_data(struct content *c, const char *data,
- 		return ret;
- 	}
- 
--	switch (setjmp(png_jmpbuf(png_c->png))) {
-+	/* gucOS: compiler.js recognises setjmp only in if-condition form
-+	 * (`if ((v = setjmp(buf)))`), not as a switch controlling expression */
-+	int sjval = 0;
-+	if ((sjval = setjmp(png_jmpbuf(png_c->png)))) {}
-+	switch (sjval) {
- 	case CBERR_NONE: /* direct return */	
- 		png_process_data(png_c->png, png_c->info, (uint8_t *)data, size);
- 		break;
-diff --git a/desktop/frames.c b/desktop/frames.c
-index 85f1879..25a12ac 100644
---- a/desktop/frames.c
-+++ b/desktop/frames.c
-@@ -331,8 +331,11 @@ nserror browser_window_destroy_iframes(struct browser_window *bw)
-  */
- static void browser_window_recalculate_frameset_internal(struct browser_window *bw)
- {
--	int widths[bw->cols][bw->rows];
--	int heights[bw->cols][bw->rows];
-+	/* compiler.js has no VLAs: the [cols][rows] grids live on the heap,
-+	 * indexed through GRID() below. */
-+	int *widths;
-+	int *heights;
-+#define GRID(g, c, r) ((g)[(c) * bw->rows + (r)])
- 	int bw_width, bw_height;
- 	int avail_width, avail_height;
- 	int row, row2, col, index;
-@@ -344,6 +347,14 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
- 
- 	assert(bw);
- 
-+	widths = malloc(sizeof(*widths) * bw->cols * bw->rows);
-+	heights = malloc(sizeof(*heights) * bw->cols * bw->rows);
-+	if (widths == NULL || heights == NULL) {
-+		free(widths);
-+		free(heights);
-+		return;
-+	}
-+
- 	/* window dimensions */
- 	if (!bw->parent) {
- 		browser_window_get_dimensions(bw, &bw_width, &bw_height);
-@@ -370,21 +381,21 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
- 
- 			switch (window->frame_width.unit) {
- 			case FRAME_DIMENSION_PIXELS:
--				widths[col][row] = window->frame_width.value *
-+				GRID(widths, col, row) = window->frame_width.value *
- 						window->scale;
- 				if (window->border) {
- 					if (col != 0)
--						widths[col][row] += 1;
-+						GRID(widths, col, row) += 1;
- 					if (col != bw->cols - 1)
--						widths[col][row] += 1;
-+						GRID(widths, col, row) += 1;
- 				}
- 				break;
- 			case FRAME_DIMENSION_PERCENT:
--				widths[col][row] = bw_width *
-+				GRID(widths, col, row) = bw_width *
- 						window->frame_width.value / 100;
- 				break;
- 			case FRAME_DIMENSION_RELATIVE:
--				widths[col][row] = 0;
-+				GRID(widths, col, row) = 0;
- 				relative += window->frame_width.value;
- 				break;
- 			default:
-@@ -397,7 +408,7 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
- 						FRAME_DIMENSION_RELATIVE);
- 				break;
- 			}
--			avail_width -= widths[col][row];
-+			avail_width -= GRID(widths, col, row);
- 		}
- 
- 		/* Redistribute to fit window */
-@@ -414,7 +425,7 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
- 							relative;
- 					avail_width -= size;
- 					relative -= window->frame_width.value;
--					widths[col][row] += size;
-+					GRID(widths, col, row) += size;
- 				}
- 			}
- 		} else if (bw_width != avail_width) {
-@@ -424,16 +435,16 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
- 			for (col = 0; col < bw->cols; col++) {
- 				if (col == bw->cols - 1) {
- 					/* Last cell, use up remainder */
--					widths[col][row] += extent - applied;
--					widths[col][row] =
--							widths[col][row] < 0 ?
--							0 : widths[col][row];
-+					GRID(widths, col, row) += extent - applied;
-+					GRID(widths, col, row) =
-+							GRID(widths, col, row) < 0 ?
-+							0 : GRID(widths, col, row);
- 				} else {
- 					/* Find size of cell adjustment */
--					size = (widths[col][row] * extent) /
-+					size = (GRID(widths, col, row) * extent) /
- 							(bw_width - extent);
- 					/* Modify cell */
--					widths[col][row] += size;
-+					GRID(widths, col, row) += size;
- 					applied += size;
- 				}
- 			}
-@@ -450,21 +461,21 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
- 
- 			switch (window->frame_height.unit) {
- 			case FRAME_DIMENSION_PIXELS:
--				heights[col][row] = window->frame_height.value *
-+				GRID(heights, col, row) = window->frame_height.value *
- 						window->scale;
- 				if (window->border) {
- 					if (row != 0)
--						heights[col][row] += 1;
-+						GRID(heights, col, row) += 1;
- 					if (row != bw->rows - 1)
--						heights[col][row] += 1;
-+						GRID(heights, col, row) += 1;
- 				}
- 				break;
- 			case FRAME_DIMENSION_PERCENT:
--				heights[col][row] = bw_height *
-+				GRID(heights, col, row) = bw_height *
- 						window->frame_height.value / 100;
- 				break;
- 			case FRAME_DIMENSION_RELATIVE:
--				heights[col][row] = 0;
-+				GRID(heights, col, row) = 0;
- 				relative += window->frame_height.value;
- 				break;
- 			default:
-@@ -477,7 +488,7 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
- 						FRAME_DIMENSION_RELATIVE);
- 				break;
- 			}
--			avail_height -= heights[col][row];
-+			avail_height -= GRID(heights, col, row);
- 		}
- 
- 		if (avail_height == 0)
-@@ -497,7 +508,7 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
- 							relative;
- 					avail_height -= size;
- 					relative -= window->frame_height.value;
--					heights[col][row] += size;
-+					GRID(heights, col, row) += size;
- 				}
- 			}
- 		} else if (bw_height != avail_height) {
-@@ -507,16 +518,16 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
- 			for (row = 0; row < bw->rows; row++) {
- 				if (row == bw->rows - 1) {
- 					/* Last cell, use up remainder */
--					heights[col][row] += extent - applied;
--					heights[col][row] =
--							heights[col][row] < 0 ?
--							0 : heights[col][row];
-+					GRID(heights, col, row) += extent - applied;
-+					GRID(heights, col, row) =
-+							GRID(heights, col, row) < 0 ?
-+							0 : GRID(heights, col, row);
- 				} else {
- 					/* Find size of cell adjustment */
--					size = (heights[col][row] * extent) /
-+					size = (GRID(heights, col, row) * extent) /
- 							(bw_height - extent);
- 					/* Modify cell */
--					heights[col][row] += size;
-+					GRID(heights, col, row) += size;
- 					applied += size;
- 				}
- 			}
-@@ -532,13 +543,13 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
- 
- 			y = 0;
- 			for (row2 = 0; row2 < row; row2++)
--				y+= heights[col][row2];
-+				y+= GRID(heights, col, row2);
- 
- 			window->x = x;
- 			window->y = y;
- 
--			new_width = widths[col][row] - 1;
--			new_height = heights[col][row] - 1;
-+			new_width = GRID(widths, col, row) - 1;
-+			new_height = GRID(heights, col, row) - 1;
- 
- 			if (window->width != new_width ||
- 					window->height != new_height) {
-@@ -552,12 +563,16 @@ static void browser_window_recalculate_frameset_internal(struct browser_window *
- 				browser_window_handle_scrollbars(window);
- 			}
- 
--			x += widths[col][row];
-+			x += GRID(widths, col, row);
- 
- 			if (window->children)
- 				browser_window_recalculate_frameset_internal(window);
- 		}
- 	}
-+
-+	free(widths);
-+	free(heights);
-+#undef GRID
- }
- 
- 
-diff --git a/utils/config.h b/utils/config.h
-index 3914771..de398fd 100644
---- a/utils/config.h
-+++ b/utils/config.h
-@@ -208,4 +208,26 @@ char *realpath(const char *path, char *resolved_path);
- 	#define NO_IPV6
- #endif
- 
-+
-+/* gucOS / wasm32 platform section (the _WIN32 lines above are the
-+ * precedent).  Flip to the gucOS libc where it provides the extension
-+ * (strcasestr, strchrnul) and to upstream's own portable fallbacks for
-+ * the rest (scandir, dirfd/unlinkat/fstatat, regex, utsname, mmap).
-+ * See vendor/netsurf/README.md for the full patch table. */
-+#if defined(__wasm__)
-+#include <strings.h>
-+#define HAVE_STRCASESTR
-+#define HAVE_STRCHRNUL
-+#undef HAVE_SCANDIR
-+#undef HAVE_DIRFD
-+#undef HAVE_UNLINKAT
-+#undef HAVE_FSTATAT
-+#undef HAVE_REGEX
-+#undef HAVE_UTSNAME
-+#undef HAVE_MMAP
-+#ifndef isascii
-+#define isascii(c) (((c) & ~0x7f) == 0)
-+#endif
-+#endif /* __wasm__ */
-+
- #endif
-diff --git a/utils/talloc.c b/utils/talloc.c
-index 408e94b..389648c 100644
---- a/utils/talloc.c
-+++ b/utils/talloc.c
-@@ -55,7 +55,7 @@
- #include "replace.h"
- #else
- #include <stdarg.h>
--#if !defined(__BEOS__) && __GNUC__ > 2
-+#if (!defined(__BEOS__) && __GNUC__ > 2) || defined(__wasm__)
- /* Assume we've got va_copy */
- #define HAVE_VA_COPY
- #include <string.h>
---- a/utils/nsoption.c
-+++ b/utils/nsoption.c
-@@ -82,6 +82,8 @@ static struct nsoption_s defaults[] = {
- #include "windows/options.h"
- #elif defined(nsqt)
- #include "qt/options.h"
-+#elif defined(nsgucos)
-+#include "gucos/options.h"
- #endif
- 	{ NULL, 0, OPTION_INTEGER, { 0 } }
- };
---- a/utils/nsoption.h
-+++ b/utils/nsoption.h
-@@ -75,6 +75,8 @@
- #include "windows/options.h"
- #elif defined(nsqt)
- #include "qt/options.h"
-+#elif defined(nsgucos)
-+#include "gucos/options.h"
- #endif
- 
- #undef NSOPTION_BOOL
-@@ -150,6 +152,8 @@ enum nsoption_e {
- #include "windows/options.h"
- #elif defined(nsqt)
- #include "qt/options.h"
-+#elif defined(nsgucos)
-+#include "gucos/options.h"
- #endif
- 	NSOPTION_LISTEND /* end of list */
- };
-diff --git a/content/handlers/css/select.c b/content/handlers/css/select.c
-index c77644b4..eb1f417e 100644
---- a/content/handlers/css/select.c
-+++ b/content/handlers/css/select.c
-@@ -1729,6 +1729,27 @@ css_error ua_default_for_property(void *pw, uint32_t property, css_hint *hint)
+diff -urN a/content/handlers/css/select.c b/content/handlers/css/select.c
+--- a/content/handlers/css/select.c	2026-07-27 11:21:07
++++ b/content/handlers/css/select.c	2026-07-27 11:12:32
+@@ -1729,6 +1729,27 @@
  	return CSS_OK;
  }
  
@@ -340,11 +99,10 @@ index c77644b4..eb1f417e 100644
  css_error set_libcss_node_data(void *pw, void *node, void *libcss_node_data)
  {
  	dom_node *n = node;
-diff --git a/content/handlers/css/select.h b/content/handlers/css/select.h
-index c17caadc..3582c287 100644
---- a/content/handlers/css/select.h
-+++ b/content/handlers/css/select.h
-@@ -59,4 +59,15 @@ css_error named_ancestor_node(void *pw, void *node,
+diff -urN a/content/handlers/css/select.h b/content/handlers/css/select.h
+--- a/content/handlers/css/select.h	2026-07-27 11:21:07
++++ b/content/handlers/css/select.h	2026-07-27 11:12:32
+@@ -59,4 +59,15 @@
  
  css_error node_is_visited(void *pw, void *node, bool *match);
  
@@ -360,11 +118,10 @@ index c17caadc..3582c287 100644
 +void nscss_node_data_clear(struct dom_node *node);
 +
  #endif
-diff --git a/content/handlers/html/box_special.c b/content/handlers/html/box_special.c
-index bf32ea2b..d324ec74 100644
---- a/content/handlers/html/box_special.c
-+++ b/content/handlers/html/box_special.c
-@@ -801,7 +801,7 @@ box_button(dom_node *n,
+diff -urN a/content/handlers/html/box_special.c b/content/handlers/html/box_special.c
+--- a/content/handlers/html/box_special.c	2026-07-27 11:21:07
++++ b/content/handlers/html/box_special.c	2026-07-27 11:12:32
+@@ -801,7 +801,7 @@
  {
  	struct form_control *gadget;
  
@@ -373,7 +130,7 @@ index bf32ea2b..d324ec74 100644
  	if (!gadget)
  		return false;
  
-@@ -1241,7 +1241,7 @@ box_input(dom_node *n,
+@@ -1241,7 +1241,7 @@
  	nsurl *url;
  	nserror error;
  
@@ -382,7 +139,7 @@ index bf32ea2b..d324ec74 100644
  	if (gadget == NULL) {
  		return false;
  	}
-@@ -1670,10 +1670,15 @@ box_select(dom_node *n,
+@@ -1670,10 +1670,15 @@
  	dom_node *next, *next2;
  	dom_exception err;
  
@@ -399,7 +156,7 @@ index bf32ea2b..d324ec74 100644
  	gadget->html = content;
  	err = dom_node_get_first_child(n, &c);
  	if (err != DOM_NO_ERR) {
-@@ -1827,7 +1832,7 @@ static bool box_textarea(dom_node *n,
+@@ -1827,7 +1832,7 @@
  			bool *convert_children)
  {
  	/* Get the form_control for the DOM node */
@@ -408,11 +165,10 @@ index bf32ea2b..d324ec74 100644
  	if (box->gadget == NULL)
  		return false;
  
-diff --git a/content/handlers/html/box_textarea.c b/content/handlers/html/box_textarea.c
-index d0866003..f4042bd6 100644
---- a/content/handlers/html/box_textarea.c
-+++ b/content/handlers/html/box_textarea.c
-@@ -354,6 +354,21 @@ bool box_textarea_create_textarea(html_content *html,
+diff -urN a/content/handlers/html/box_textarea.c b/content/handlers/html/box_textarea.c
+--- a/content/handlers/html/box_textarea.c	2026-07-27 11:21:07
++++ b/content/handlers/html/box_textarea.c	2026-07-27 12:08:00
+@@ -354,6 +354,21 @@
  	ta_setup.selected_bg = fstyle.foreground;
  	ta_setup.selected_text = colour_to_bw_furthest(ta_setup.selected_bg);
  
@@ -434,11 +190,28 @@ index d0866003..f4042bd6 100644
  	/* Hand reference to dom text over to gadget */
  	gadget->data.text.initial = dom_text;
  
-diff --git a/content/handlers/html/dom_event.c b/content/handlers/html/dom_event.c
-index 83a84ac7..8fd61ec1 100644
---- a/content/handlers/html/dom_event.c
-+++ b/content/handlers/html/dom_event.c
-@@ -596,6 +596,9 @@ dom_default_action_DOMNodeInserted_cb(struct dom_event *evt, void *pw)
+@@ -364,8 +379,16 @@
+ 		return false;
+ 	}
+ 
+-	if (!textarea_set_text(gadget->data.text.ta, text))
++	/* Seeding the widget with the markup's own value is not an edit:
++	 * without this guard every text control fired a DOM `input` event
++	 * at load (and again after every live re-conversion), which is both
++	 * wrong and, for a page that renders its input, visible. */
++	gadget->building = true;
++	if (!textarea_set_text(gadget->data.text.ta, text)) {
++		gadget->building = false;
+ 		return false;
++	}
++	gadget->building = false;
+ 
+ 	return true;
+ }
+diff -urN a/content/handlers/html/dom_event.c b/content/handlers/html/dom_event.c
+--- a/content/handlers/html/dom_event.c	2026-07-27 11:21:07
++++ b/content/handlers/html/dom_event.c	2026-07-27 11:12:32
+@@ -596,6 +596,9 @@
  		/* an element node has been inserted */
  		dom_html_element_type tag_type;
  
@@ -448,7 +221,7 @@ index 83a84ac7..8fd61ec1 100644
  		exc = dom_html_element_get_tag_type(node, &tag_type);
  		if (exc != DOM_NO_ERR) {
  			tag_type = DOM_HTML_ELEMENT_TYPE__UNKNOWN;
-@@ -711,6 +714,13 @@ dom_default_action_DOMSubtreeModified_cb(struct dom_event *evt, void *pw)
+@@ -711,6 +714,13 @@
  
  	exc = dom_event_get_target(evt, &node);
  	if ((exc == DOM_NO_ERR) && (node != NULL)) {
@@ -462,7 +235,7 @@ index 83a84ac7..8fd61ec1 100644
  		if (htmlc->title == (dom_node *)node) {
  			/* Node is our title node */
  			html_process_title(htmlc, (dom_node *)node);
-@@ -730,6 +740,8 @@ dom_default_action_DOMSubtreeModified_cb(struct dom_event *evt, void *pw)
+@@ -730,6 +740,8 @@
  
  			switch (tag_type) {
  			case DOM_HTML_ELEMENT_TYPE_STYLE:
@@ -471,7 +244,7 @@ index 83a84ac7..8fd61ec1 100644
  				if (nsoption_bool(author_level_css)) {
  					html_css_update_style(htmlc,
  							(dom_node *)node);
-@@ -737,12 +749,22 @@ dom_default_action_DOMSubtreeModified_cb(struct dom_event *evt, void *pw)
+@@ -737,12 +749,22 @@
  				break;
  			case DOM_HTML_ELEMENT_TYPE_TEXTAREA:
  			case DOM_HTML_ELEMENT_TYPE_INPUT:
@@ -494,15 +267,32 @@ index 83a84ac7..8fd61ec1 100644
  		dom_node_unref(node);
  	}
  }
-diff --git a/content/handlers/html/form.c b/content/handlers/html/form.c
-index 9b6768a5..3a6970a4 100644
---- a/content/handlers/html/form.c
-+++ b/content/handlers/html/form.c
-@@ -1451,6 +1451,35 @@ void form_add_control(struct form *form, struct form_control *control)
+diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
+--- a/content/handlers/html/form.c	2026-07-27 11:21:07
++++ b/content/handlers/html/form.c	2026-07-27 12:19:13
+@@ -51,6 +51,7 @@
+ #include "desktop/knockout.h"
+ #include "desktop/scrollbar.h"
+ #include "desktop/textarea.h"
++#include "javascript/js.h"
+ 
+ #include "html/html.h"
+ #include "html/private.h"
+@@ -1386,6 +1387,10 @@
+ 
+ 	html__redraw_a_box(html, control->box);
+ 
++	/* A <select> commits on the click itself, so input and change go
++	 * together here rather than waiting for a blur. */
++	form_gadget_fire_change(control);
++
+ 	return ret;
  }
  
+@@ -1452,6 +1457,35 @@
  
-+/* exported interface documented in html/form_internal.h */
+ 
+ /* exported interface documented in html/form_internal.h */
 +void form_select_clear_options(struct form_control *control)
 +{
 +	struct form_option *option, *next;
@@ -531,11 +321,15 @@ index 9b6768a5..3a6970a4 100644
 +}
 +
 +
- /* exported interface documented in html/form_internal.h */
++/* exported interface documented in html/form_internal.h */
  void form_free_control(struct form_control *control)
  {
-@@ -1467,21 +1496,7 @@ void form_free_control(struct form_control *control)
+ 	struct form_control *c;
+@@ -1465,23 +1499,10 @@
+ 	if (control->last_synced_value != NULL) {
+ 		free(control->last_synced_value);
  	}
++	free(control->value_at_focus);
  
  	if (control->type == GADGET_SELECT) {
 -		struct form_option *option, *next;
@@ -557,7 +351,7 @@ index 9b6768a5..3a6970a4 100644
  	}
  
  	if (control->type == GADGET_TEXTAREA ||
-@@ -1497,6 +1512,18 @@ void form_free_control(struct form_control *control)
+@@ -1497,6 +1518,18 @@
  		}
  	}
  
@@ -576,15 +370,142 @@ index 9b6768a5..3a6970a4 100644
  	/* unlink the control from the form */
  	if (control->form != NULL) {
  		for (c = control->form->controls; c != NULL; c = c->next) {
-diff --git a/content/handlers/html/form_internal.h b/content/handlers/html/form_internal.h
-index 292a5df4..30f14639 100644
---- a/content/handlers/html/form_internal.h
-+++ b/content/handlers/html/form_internal.h
-@@ -208,6 +208,19 @@ void form_add_control(struct form *form, struct form_control *control);
- void form_free_control(struct form_control *control);
+@@ -2057,6 +2090,21 @@
+ 
+ 	assert(form != NULL);
+ 
++	/* The cancelable DOM `submit`, at the ONE choke point every trigger
++	 * goes through — the submit button in html/interaction.c AND Enter
++	 * in a text field in html/box_textarea.c.  This is the one place in
++	 * the browser where preventDefault() really does stop it, which is
++	 * what a validate-before-submit handler is written against.
++	 *
++	 * (Per spec a PROGRAMMATIC submit — form.submit() — does not fire
++	 * this.  There is no binding for that yet; when Lane D adds one it
++	 * must bypass this, so keep the distinction in mind.) */
++	if (NETSURF_UI_EVENTS && (form->node != NULL) &&
++	    (fire_generic_dom_event(corestring_dom_submit,
++			(dom_node *)form->node, true, true) == false)) {
++		return NSERROR_OK;
++	}
++
+ 	/* obtain list of controls from DOM */
+ 	res = form_dom_to_data(form, submit_button, &success);
+ 	if (res != NSERROR_OK) {
+@@ -2162,6 +2210,86 @@
+ 
+ 	/* Finally, sync this with the DOM */
+ 	form_gadget_sync_with_dom(control);
++
++	/* …and tell script.  `input` fires on every edit; `change` waits
++	 * for the commit (blur), which form_gadget_commit_change does. */
++	form_gadget_fire_input(control);
++}
++
++
++/* Exported API, see html/form_internal.h */
++void form_gadget_fire_input(struct form_control *control)
++{
++	if ((NETSURF_UI_EVENTS == 0) || (control == NULL) ||
++	    (control->node == NULL) || (control->html == NULL) ||
++	    control->building) {
++		return;
++	}
++	if (js_event_type_registered(control->html->jsthread, "input") == false) {
++		return;
++	}
++
++	fire_generic_dom_event(corestring_dom_input,
++			(dom_node *)control->node, true, false);
++}
++
++
++/* Exported API, see html/form_internal.h */
++void form_gadget_commit_change(struct form_control *control)
++{
++	const char *now;
++
++	if ((NETSURF_UI_EVENTS == 0) || (control == NULL) ||
++	    (control->node == NULL) || (control->html == NULL)) {
++		return;
++	}
++
++	now = (control->value != NULL) ? control->value : "";
++
++	/* Only a real edit is a change.  value_at_focus is NULL until the
++	 * control has been focused once, which is also "never edited". */
++	if (control->value_at_focus == NULL) {
++		return;
++	}
++	if (strcmp(control->value_at_focus, now) == 0) {
++		return;
++	}
++
++	free(control->value_at_focus);
++	control->value_at_focus = strdup(now);
++
++	fire_generic_dom_event(corestring_dom_change,
++			(dom_node *)control->node, true, false);
++}
++
++
++/* Exported API, see html/form_internal.h */
++void form_gadget_note_focus(struct form_control *control)
++{
++	if (control == NULL) {
++		return;
++	}
++
++	free(control->value_at_focus);
++	control->value_at_focus =
++		strdup((control->value != NULL) ? control->value : "");
++}
++
++
++/* Exported API, see html/form_internal.h */
++void form_gadget_fire_change(struct form_control *control)
++{
++	if ((control == NULL) || (control->node == NULL) ||
++	    (control->html == NULL)) {
++		return;
++	}
++
++	/* A control whose value changes by a single click (checkbox,
++	 * radio, select) fires input AND change at once — there is no
++	 * "still typing" state to wait out. */
++	form_gadget_fire_input(control);
++	fire_generic_dom_event(corestring_dom_change,
++			(dom_node *)control->node, true, false);
+ }
  
  
-+/**
+diff -urN a/content/handlers/html/form_internal.h b/content/handlers/html/form_internal.h
+--- a/content/handlers/html/form_internal.h	2026-07-27 11:21:07
++++ b/content/handlers/html/form_internal.h	2026-07-27 12:08:00
+@@ -74,6 +74,9 @@
+ 	void *node;			/**< Corresponding DOM node */
+ 	struct dom_string *node_value;  /**< The last value sync'd with the DOM */
+ 	bool syncing;                   /**< Set if a DOM sync is in-progress */
++	bool building;			/**< Set while the widget is being
++					 * seeded with its markup value, so
++					 * that is not reported as an edit */
+ 	struct html_content *html;	/**< HTML content containing control */
+ 
+ 	form_control_type type;		/**< Type of control */
+@@ -84,6 +87,9 @@
+ 	char *value;			/**< Current value of control */
+ 	char *initial_value;		/**< Initial value of control */
+ 	char *last_synced_value;        /**< The last value sync'd to the DOM */
++	char *value_at_focus;		/**< Value when focus was gained, for
++					 * the DOM `change` event; NULL means
++					 * "never focused, so never edited" */
+ 	bool disabled;			/**< Whether control is disabled */
+ 
+ 	struct box *box;		/**< Box for control */
+@@ -209,6 +215,19 @@
+ 
+ 
+ /**
 + * Drop every option of a select control, leaving an empty gadget.
 + *
 + * Box construction fills a select's option list from the DOM, and a
@@ -597,14 +518,48 @@ index 292a5df4..30f14639 100644
 +void form_select_clear_options(struct form_control *control);
 +
 +
- /**
++/**
   * Add an option to a form select control.
   *
-diff --git a/content/handlers/html/forms.c b/content/handlers/html/forms.c
-index 4669154e..4fe0786d 100644
---- a/content/handlers/html/forms.c
-+++ b/content/handlers/html/forms.c
-@@ -540,10 +540,11 @@ invent_fake_gadget(dom_node *node)
+  * \param  control   form control of type GADGET_SELECT
+@@ -341,6 +360,33 @@
+  * Update gadget value.
+  */
+ void form_gadget_update_value(struct form_control *control, char *value);
++
++/**
++ * Fire a DOM `input` event at a gadget: its value just changed.
++ *
++ * Cheap for a page with no listener (one registry lookup), so it can sit
++ * on the per-keystroke path.
++ */
++void form_gadget_fire_input(struct form_control *control);
++
++/**
++ * Remember a text gadget's value as focus is gained.
++ *
++ * The DOM `change` contract is "differs from the value it had when it was
++ * focused", so the comparison needs that snapshot.
++ */
++void form_gadget_note_focus(struct form_control *control);
++
++/**
++ * Fire `change` at a text gadget losing focus, IF it was really edited.
++ */
++void form_gadget_commit_change(struct form_control *control);
++
++/**
++ * Fire `input` then `change` at a gadget whose value changed in one go
++ * (checkbox, radio, select) — there is no "still typing" state to await.
++ */
++void form_gadget_fire_change(struct form_control *control);
+ 
+ 
+ /**
+diff -urN a/content/handlers/html/forms.c b/content/handlers/html/forms.c
+--- a/content/handlers/html/forms.c	2026-07-27 11:21:07
++++ b/content/handlers/html/forms.c	2026-07-27 11:12:32
+@@ -540,10 +540,11 @@
  	return ctl;
  }
  
@@ -618,7 +573,7 @@ index 4669154e..4fe0786d 100644
  	struct form *f;
  	struct form_control *ctl = NULL;
  	dom_exception err;
-@@ -556,6 +557,10 @@ html_forms_get_control_for_node(struct form *forms, dom_node *node)
+@@ -556,6 +557,10 @@
  				return ctl;
  		}
  	}
@@ -629,7 +584,7 @@ index 4669154e..4fe0786d 100644
  
  	/* Step two, extract the node's name so we can construct a gadget. */
  	err = dom_element_get_tag_name(node, &ds_name);
-@@ -588,5 +593,28 @@ html_forms_get_control_for_node(struct form *forms, dom_node *node)
+@@ -588,5 +593,28 @@
  	if (ds_name != NULL)
  		dom_string_unref(ds_name);
  
@@ -647,7 +602,7 @@ index 4669154e..4fe0786d 100644
 +	}
 +
  	return ctl;
- }
++}
 +
 +
 +/* documented in html/private.h */
@@ -657,11 +612,10 @@ index 4669154e..4fe0786d 100644
 +		/* form_free_control unlinks it from this very list */
 +		form_free_control(c->formless_controls);
 +	}
-+}
-diff --git a/content/handlers/html/html.c b/content/handlers/html/html.c
-index f92985b0..1c98c8fd 100644
---- a/content/handlers/html/html.c
-+++ b/content/handlers/html/html.c
+ }
+diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
+--- a/content/handlers/html/html.c	2026-07-27 11:21:07
++++ b/content/handlers/html/html.c	2026-07-27 11:50:59
 @@ -61,6 +61,7 @@
  #include "html/private.h"
  #include "html/dom_event.h"
@@ -670,7 +624,137 @@ index f92985b0..1c98c8fd 100644
  #include "html/object.h"
  #include "html/html_save.h"
  #include "html/interaction.h"
-@@ -415,6 +416,287 @@ void html_finish_conversion(html_content *htmlc)
+@@ -129,6 +130,95 @@
+ 	return result;
+ }
+ 
++/* Exported interface, see private.h */
++bool fire_dom_mouse_event(dom_string *type, dom_node *target,
++		bool bubbles, bool cancelable,
++		const struct dom_mouse_event_pos *pos,
++		unsigned short button, unsigned short buttons,
++		unsigned int mods, int detail)
++{
++	dom_mouse_event *evt;
++	dom_exception exc;
++	bool result;
++
++	exc = dom_mouse_event_create(&evt);
++	if (exc != DOM_NO_ERR) return false;
++
++	/* Coordinate contract (mirrored in duktape/MouseEvent.bnd, which is
++	 * what script reads these back through):
++	 *   libdom "client" slot  <- viewport-relative, i.e. clientX/clientY
++	 *                            AND, for want of a screen origin the
++	 *                            core is never told, screenX/screenY
++	 *   libdom "screen" slot  <- document-relative, i.e. pageX/pageY
++	 * A MouseEvent whose coordinates were simply absent is what made
++	 * demo 6 (paint) impossible, so getting this pair right is the
++	 * point of the lane, not a detail. */
++	exc = dom_mouse_event_init(evt, type, bubbles, cancelable, NULL,
++			detail, pos->page_x, pos->page_y,
++			pos->client_x, pos->client_y,
++			!!(mods & HTML_MOD_CTRL), !!(mods & HTML_MOD_ALT),
++			!!(mods & HTML_MOD_SHIFT), !!(mods & HTML_MOD_META),
++			button, NULL);
++	if (exc != DOM_NO_ERR) {
++		dom_event_unref(evt);
++		return false;
++	}
++	/* `buttons` post-dates the DOM L3 init above */
++	dom_mouse_event_set_buttons(evt, buttons);
++
++	NSLOG(netsurf, DEEPDEBUG, "Dispatching '%*s' at %d,%d against %p",
++			(int)dom_string_length(type), dom_string_data(type),
++			pos->page_x, pos->page_y, target);
++
++	result = fire_dom_event((dom_event *) evt, target);
++	dom_event_unref(evt);
++	return result;
++}
++
++/* Exported interface, see private.h */
++bool fire_dom_wheel_event(dom_string *type, dom_node *target,
++		bool bubbles, bool cancelable,
++		const struct dom_mouse_event_pos *pos,
++		unsigned int mods, int delta_x, int delta_y)
++{
++	dom_mouse_multi_wheel_event *evt;
++	dom_string *modifiers = NULL;
++	dom_exception exc;
++	bool result;
++
++	exc = dom_mouse_multi_wheel_event_create(&evt);
++	if (exc != DOM_NO_ERR) return false;
++
++	/* This class carries its modifiers as a space-separated name list
++	 * rather than as booleans (libdom's own init signature), so build
++	 * one when there is anything to say. */
++	if (mods != 0) {
++		char buf[64];
++		buf[0] = '\0';
++		if (mods & HTML_MOD_CTRL) strcat(buf, "Control ");
++		if (mods & HTML_MOD_ALT) strcat(buf, "Alt ");
++		if (mods & HTML_MOD_SHIFT) strcat(buf, "Shift ");
++		if (mods & HTML_MOD_META) strcat(buf, "Meta ");
++		exc = dom_string_create((const uint8_t *)buf, strlen(buf),
++				&modifiers);
++		if (exc != DOM_NO_ERR) modifiers = NULL;
++	}
++
++	exc = dom_mouse_multi_wheel_event_init_ns(evt, NULL, type, bubbles,
++			cancelable, NULL, 0, pos->page_x, pos->page_y,
++			pos->client_x, pos->client_y, 0, NULL, modifiers,
++			delta_x, delta_y, 0);
++	if (modifiers != NULL) dom_string_unref(modifiers);
++	if (exc != DOM_NO_ERR) {
++		dom_event_unref(evt);
++		return false;
++	}
++
++	result = fire_dom_event((dom_event *) evt, target);
++	dom_event_unref(evt);
++	return result;
++}
++
+ /* Exported interface, see html_internal.h */
+ bool fire_dom_keyboard_event(dom_string *type, dom_node *target,
+ 		bool bubbles, bool cancelable, uint32_t key)
+@@ -168,7 +258,33 @@
+ 		case NS_KEY_TEXT_END:
+ 			dom_key = dom_string_ref(corestring_dom_End);
+ 			break;
++		/* Enter, Tab and Backspace had no case here at all, so they
++		 * fell through to a NULL key string: `event.key` read null
++		 * in script and a "submit on Enter" handler was impossible
++		 * to write.  NS_KEY_NL and NS_KEY_CR are both Enter — the
++		 * front ends disagree about which one Return produces. */
++		case NS_KEY_NL:
++		case NS_KEY_CR:
++			dom_key = NETSURF_UI_EVENTS ?
++				dom_string_ref(corestring_dom_Enter) : NULL;
++			break;
++		case NS_KEY_TAB:
++			dom_key = NETSURF_UI_EVENTS ?
++				dom_string_ref(corestring_dom_Tab) : NULL;
++			break;
++		case NS_KEY_DELETE_LEFT:
++			dom_key = NETSURF_UI_EVENTS ?
++				dom_string_ref(corestring_dom_Backspace) : NULL;
++			break;
++		case NS_KEY_DELETE_RIGHT:
++			dom_key = NETSURF_UI_EVENTS ?
++				dom_string_ref(corestring_dom_Delete) : NULL;
++			break;
+ 		default:
++			/* The remaining special values are the front ends'
++			 * editing commands (NS_KEY_COPY_SELECTION and
++			 * friends).  DOM has no `key` name for those, so
++			 * report none rather than invent one. */
+ 			dom_key = NULL;
+ 			break;
+ 		}
+@@ -415,6 +531,287 @@
  }
  
  
@@ -958,7 +1042,7 @@ index f92985b0..1c98c8fd 100644
  static void
  html_document_user_data_handler(dom_node_operation operation,
  				dom_string *key, void *data,
-@@ -475,6 +757,11 @@ html_create_html_data(html_content *c, const http_parameter *params)
+@@ -475,6 +872,11 @@
  	c->title = NULL;
  	c->bctx = NULL;
  	c->layout = NULL;
@@ -970,7 +1054,7 @@ index f92985b0..1c98c8fd 100644
  	c->background_colour = NS_TRANSPARENT;
  	c->stylesheet_count = 0;
  	c->stylesheets = NULL;
-@@ -484,6 +771,7 @@ html_create_html_data(html_content *c, const http_parameter *params)
+@@ -484,6 +886,7 @@
  	c->num_objects = 0;
  	c->object_list = NULL;
  	c->forms = NULL;
@@ -978,7 +1062,7 @@ index f92985b0..1c98c8fd 100644
  	c->imagemaps = NULL;
  	c->bw = NULL;
  	c->frameset = NULL;
-@@ -1123,14 +1411,25 @@ void html_redraw_a_box(hlcache_handle *h, struct box *box)
+@@ -1123,14 +1526,25 @@
  /**
   * Redraw a box.
   *
@@ -1005,7 +1089,7 @@ index f92985b0..1c98c8fd 100644
  	box_coords(box, &x, &y);
  
  	content__request_redraw((struct content *)html, x, y,
-@@ -1193,6 +1492,13 @@ static void html_free_layout(html_content *htmlc)
+@@ -1193,6 +1607,13 @@
  		 */
  		talloc_free(htmlc->bctx);
  	}
@@ -1019,7 +1103,7 @@ index f92985b0..1c98c8fd 100644
  }
  
  /**
-@@ -1206,6 +1512,13 @@ static void html_destroy(struct content *c)
+@@ -1206,6 +1627,13 @@
  
  	NSLOG(netsurf, INFO, "content %p", c);
  
@@ -1033,7 +1117,7 @@ index f92985b0..1c98c8fd 100644
  	/* If we're still converting a layout, cancel it */
  	if (html->box_conversion_context != NULL) {
  		if (cancel_dom_to_box(html->box_conversion_context) != NSERROR_OK) {
-@@ -1221,6 +1534,7 @@ static void html_destroy(struct content *c)
+@@ -1221,6 +1649,7 @@
  
  		form_free(f);
  	}
@@ -1041,11 +1125,57 @@ index f92985b0..1c98c8fd 100644
  
  	imagemap_destroy(html);
  
-diff --git a/content/handlers/html/imagemap.c b/content/handlers/html/imagemap.c
-index f23be235..f4231371 100644
---- a/content/handlers/html/imagemap.c
-+++ b/content/handlers/html/imagemap.c
-@@ -309,6 +309,7 @@ imagemap_addtolist(const struct html_content *c,
+@@ -1539,6 +1968,36 @@
+ 	int box_x = 0, box_y = 0;
+ 	bool handled_scroll = false;
+ 
++	/* A cancelable DOM `wheel` first: this is the html content's only
++	 * wheel entry point, so it is where the event belongs, and a
++	 * handler calling preventDefault() reports the wheel as HANDLED so
++	 * nothing scrolls — which is what a canvas game or a zoom widget
++	 * needs.  Gated on a listener existing, so a plain page pays one
++	 * string lookup per wheel notch. */
++	if (NETSURF_UI_EVENTS && (html->jsthread != NULL) &&
++	    (html->layout != NULL) &&
++	    js_event_type_registered(html->jsthread, "wheel")) {
++		struct dom_mouse_event_pos pos;
++		dom_node *node;
++		int sx = 0, sy = 0;
++
++		node = html_dom_node_at_point(html, x, y);
++		if (html->bw != NULL) {
++			browser_window_get_scroll(html->bw, &sx, &sy);
++		}
++		pos.page_x = x;
++		pos.page_y = y;
++		pos.client_x = x - sx;
++		pos.client_y = y - sy;
++
++		if ((node != NULL) &&
++		    (fire_dom_wheel_event(corestring_dom_wheel, node,
++				true, true, &pos, 0, scrx, scry) == false)) {
++			/* preventDefault() — the page owns this wheel */
++			return true;
++		}
++	}
++
+ 	/* TODO: invert order; visit deepest box first */
+ 
+ 	while ((next = box_at_point(&html->unit_len_ctx, box, x, y,
+@@ -2353,6 +2812,9 @@
+ 	.mouse_track = html_mouse_track,
+ 	.mouse_action = html_mouse_action,
+ 	.keypress = html_keypress,
++#if NETSURF_UI_EVENTS
++	.keyrelease = html_key_release,
++#endif
+ 	.redraw = html_redraw,
+ 	.open = html_open,
+ 	.close = html_close,
+diff -urN a/content/handlers/html/imagemap.c b/content/handlers/html/imagemap.c
+--- a/content/handlers/html/imagemap.c	2026-07-27 11:21:07
++++ b/content/handlers/html/imagemap.c	2026-07-27 11:12:32
+@@ -309,6 +309,7 @@
  	dom_exception exc;
  	dom_string *href = NULL, *target = NULL, *shape = NULL;
  	dom_string *coords = NULL;
@@ -1053,7 +1183,7 @@ index f23be235..f4231371 100644
  	struct mapentry *new_map, *temp;
  	bool ret = true;
  
-@@ -392,10 +393,20 @@ imagemap_addtolist(const struct html_content *c,
+@@ -392,10 +393,20 @@
  	if (new_map->type != IMAGEMAP_DEFAULT) {
  		int x, y;
  		float *xcoords, *ycoords;
@@ -1076,7 +1206,7 @@ index f23be235..f4231371 100644
  		switch (new_map->type) {
  		case IMAGEMAP_RECT:
  			/* (left, top, right, bottom) */
-@@ -512,6 +523,7 @@ ok_free_map_out:
+@@ -512,6 +523,7 @@
  		free(new_map);
  	}
  ok_out:
@@ -1084,11 +1214,572 @@ index f23be235..f4231371 100644
  	if (href != NULL)
  		dom_string_unref(href);
  	if (target != NULL)
-diff --git a/content/handlers/html/private.h b/content/handlers/html/private.h
-index 56cd957d..af92a515 100644
---- a/content/handlers/html/private.h
-+++ b/content/handlers/html/private.h
-@@ -138,6 +138,23 @@ typedef struct html_content {
+diff -urN a/content/handlers/html/interaction.c b/content/handlers/html/interaction.c
+--- a/content/handlers/html/interaction.c	2026-07-27 11:21:07
++++ b/content/handlers/html/interaction.c	2026-07-27 12:19:13
+@@ -60,6 +60,12 @@
+ #include "html/imagemap.h"
+ #include "html/interaction.h"
+ 
++/* DOM event helpers, defined with the rest of the mouse-event layer
++ * further down but needed by the click/submit sites above it */
++static void html_mouse_pos(struct browser_window *bw, int x, int y,
++			   struct dom_mouse_event_pos *pos);
++static unsigned int html_mouse_mods(browser_mouse_state mouse);
++
+ /**
+  * Get pointer shape for given box
+  *
+@@ -871,6 +877,9 @@
+ 				(dom_html_input_element *)(mas->gadget.control->node),
+ 				mas->gadget.control->selected);
+ 			html__redraw_a_box(html, mas->gadget.box);
++			if (NETSURF_UI_EVENTS) {
++				form_gadget_fire_change(mas->gadget.control);
++			}
+ 		}
+ 		break;
+ 
+@@ -878,6 +887,9 @@
+ 		mas->result.status = messages_get("FormRadio");
+ 		if (mouse & BROWSER_MOUSE_CLICK_1) {
+ 			form_radio_set(mas->gadget.control);
++			if (NETSURF_UI_EVENTS) {
++				form_gadget_fire_change(mas->gadget.control);
++			}
+ 		}
+ 		break;
+ 
+@@ -1232,7 +1244,8 @@
+ 				       &idx,
+ 				       &pixel_offset);
+ 
+-		if (selection_click(html->sel,
++		if ((html->mouse_default_prevented == false) &&
++		    selection_click(html->sel,
+ 				    html->bw,
+ 				    mouse,
+ 				    mas->text.box->byte_offset + idx)) {
+@@ -1282,7 +1295,10 @@
+ 		mas->result.status = mas->title;
+ 	}
+ 
+-	if (mouse & BROWSER_MOUSE_DRAG_1) {
++	if (html->mouse_default_prevented) {
++		/* preventDefault() on the mousedown: no page-scroll drag, no
++		 * box drag.  The page is handling this gesture itself. */
++	} else if (mouse & BROWSER_MOUSE_DRAG_1) {
+ 		if (mouse & BROWSER_MOUSE_MOD_2) {
+ 			union content_msg_data msg_data;
+ 			msg_data.dragsave.type = CONTENT_SAVE_COMPLETE;
+@@ -1399,9 +1415,30 @@
+ 		content_broadcast(c, CONTENT_MSG_POINTER, &msg_data);
+ 	}
+ 
+-	/* fire dom click event */
++	/* fire dom click event.  This used to be a plain Event, so it
++	 * carried no coordinates at all (clientX read `undefined`); it is a
++	 * real MouseEvent now, and a double click also gets its dblclick. */
+ 	if (mouse & BROWSER_MOUSE_CLICK_1) {
+-		fire_generic_dom_event(corestring_dom_click, mas.node, true, true);
++		struct dom_mouse_event_pos pos;
++		int detail = (mouse & BROWSER_MOUSE_TRIPLE_CLICK) ? 3 :
++			     (mouse & BROWSER_MOUSE_DOUBLE_CLICK) ? 2 : 1;
++
++		html_mouse_pos(bw, x, y, &pos);
++		if (NETSURF_UI_EVENTS == 0) {
++			/* upstream: a plain Event, so no coordinates */
++			fire_generic_dom_event(corestring_dom_click,
++					mas.node, true, true);
++		} else {
++			fire_dom_mouse_event(corestring_dom_click, mas.node,
++					true, true, &pos, 0, 0,
++					html_mouse_mods(mouse), detail);
++		}
++
++		if (NETSURF_UI_EVENTS && (mouse & BROWSER_MOUSE_DOUBLE_CLICK)) {
++			fire_dom_mouse_event(corestring_dom_dblclick,
++					mas.node, true, true, &pos, 0, 0,
++					html_mouse_mods(mouse), 2);
++		}
+ 	}
+ 
+ 	/* deferred actions that can cause this browser_window to be destroyed
+@@ -1409,6 +1446,8 @@
+ 	 */
+ 	switch (mas.result.action) {
+ 	case ACTION_SUBMIT:
++		/* The cancelable DOM `submit` fires inside form_submit(),
++		 * the one choke every trigger shares. */
+ 		res = form_submit(content_get_url(c),
+ 				  browser_window_find_target(bw,
+ 							     mas.gadget.target,
+@@ -1458,6 +1497,243 @@
+ }
+ 
+ 
++/**
++ * Find the deepest DOM node under a document coordinate.
++ *
++ * Exported (see private.h) because html_scroll_at_point needs it too.
++ *
++ * A cut-down get_mouse_action_node: the DOM only needs the node, not the
++ * link/gadget/scrollbar state that costs the rest of that function.  Never
++ * returns NULL — the root element is the floor, which is what the DOM
++ * wants anyway (an event over blank margin still targets the document).
++ */
++dom_node *html_dom_node_at_point(html_content *html, int x, int y)
++{
++	struct box *box = html->layout;
++	dom_node *node = html->layout->node;
++	int box_x = box->margin[LEFT];
++	int box_y = box->margin[TOP];
++
++	do {
++		if ((box->style != NULL) &&
++		    (css_computed_visibility(box->style) ==
++		     CSS_VISIBILITY_HIDDEN)) {
++			goto next_box;
++		}
++		if (box->node != NULL) {
++			node = box->node;
++		}
++	next_box:
++		box = box_at_point(&html->unit_len_ctx, box, x, y,
++				   &box_x, &box_y);
++	} while (box != NULL);
++
++	return node;
++}
++
++
++/**
++ * Translate a browser_mouse_state's modifier bits to DOM modifier names.
++ */
++static unsigned int html_mouse_mods(browser_mouse_state mouse)
++{
++	unsigned int mods = 0;
++
++	if (mouse & BROWSER_MOUSE_MOD_1) mods |= HTML_MOD_SHIFT;
++	if (mouse & BROWSER_MOUSE_MOD_2) mods |= HTML_MOD_CTRL;
++	if (mouse & BROWSER_MOUSE_MOD_3) mods |= HTML_MOD_ALT;
++	if (mouse & BROWSER_MOUSE_MOD_4) mods |= HTML_MOD_META;
++
++	return mods;
++}
++
++
++/**
++ * The DOM `buttons` bitmask implied by a browser_mouse_state.
++ *
++ * netsurf numbers buttons 1 = primary, 2 = auxiliary — but every front end
++ * here maps the RIGHT button onto 2, and DOM's `buttons` is
++ * 1 = primary, 2 = secondary, 4 = auxiliary.  So 1 -> 1 and 2 -> 2, and
++ * nothing claims to be the middle button (no front end delivers one).
++ */
++static unsigned short html_mouse_buttons(browser_mouse_state mouse)
++{
++	unsigned short buttons = 0;
++
++	if (mouse & (BROWSER_MOUSE_PRESS_1 | BROWSER_MOUSE_HOLDING_1 |
++		     BROWSER_MOUSE_DRAG_1)) {
++		buttons |= 1;
++	}
++	if (mouse & (BROWSER_MOUSE_PRESS_2 | BROWSER_MOUSE_HOLDING_2 |
++		     BROWSER_MOUSE_DRAG_2)) {
++		buttons |= 2;
++	}
++
++	return buttons;
++}
++
++
++/**
++ * Fill in a mouse position from the document coordinate plus the front
++ * end's viewport scroll offset.
++ */
++static void html_mouse_pos(struct browser_window *bw, int x, int y,
++			   struct dom_mouse_event_pos *pos)
++{
++	int sx = 0;
++	int sy = 0;
++
++	if (bw != NULL) {
++		browser_window_get_scroll(bw, &sx, &sy);
++	}
++
++	pos->page_x = x;
++	pos->page_y = y;
++	pos->client_x = x - sx;
++	pos->client_y = y - sy;
++}
++
++
++/**
++ * Is anything on this page listening for this event type?
++ *
++ * Everything below this point costs a box-tree walk and a libdom event
++ * allocation per mouse motion, so a page with no listener — which is every
++ * page in the corpus that is not a JS demo — must not pay for it.
++ */
++static inline bool html_wants_event(html_content *html, const char *type)
++{
++	return js_event_type_registered(html->jsthread, type);
++}
++
++
++/**
++ * Dispatch the DOM mouse events implied by one core mouse action.
++ *
++ * Called at the TOP of html_mouse_action, before the native handling, so
++ * that `mousedown`/`mouseup` precede the focus, selection and gadget work
++ * they would precede in a real browser.  `click` deliberately stays where
++ * upstream put it — AFTER the action — because a click listener must see
++ * the checkbox it just toggled as already toggled.
++ *
++ * netsurf's model has no explicit button-release event: a release that was
++ * not a drag arrives as BROWSER_MOUSE_CLICK_n, and a release that ENDED a
++ * drag arrives as a plain track with no buttons held.  Both are a
++ * `mouseup`, and the second is recognisable because this content still has
++ * a live drag while the incoming state holds nothing.
++ */
++static void html_fire_mouse_events(html_content *html,
++				   struct browser_window *bw,
++				   browser_mouse_state mouse,
++				   int x, int y)
++{
++	struct dom_mouse_event_pos pos;
++	unsigned short button;
++	unsigned short buttons;
++	unsigned int mods;
++	dom_node *node;
++	bool down;
++	bool up;
++	int detail;
++
++	if (NETSURF_UI_EVENTS == 0) {
++		return;
++	}
++
++	/* Cleared unconditionally at every press: a stale "prevented" would
++	 * silently disable page scrolling for the rest of the document's
++	 * life. */
++	if (mouse & (BROWSER_MOUSE_PRESS_1 | BROWSER_MOUSE_PRESS_2)) {
++		html->mouse_default_prevented = false;
++	}
++
++	if (html->layout == NULL || html->jsthread == NULL) {
++		return;
++	}
++
++	down = !!(mouse & (BROWSER_MOUSE_PRESS_1 | BROWSER_MOUSE_PRESS_2));
++	/* A release is either a CLICK_n (a press that was not a drag) or a
++	 * track with nothing held after a press we saw (a drag ending).
++	 * Both are the same `mouseup`. */
++	up = !down &&
++	     (!!(mouse & (BROWSER_MOUSE_CLICK_1 | BROWSER_MOUSE_CLICK_2)) ||
++	      (html->mouse_pressed &&
++	       ((mouse & (BROWSER_MOUSE_HOLDING_1 | BROWSER_MOUSE_HOLDING_2 |
++			  BROWSER_MOUSE_DRAG_ON | BROWSER_MOUSE_DRAG_1 |
++			  BROWSER_MOUSE_DRAG_2)) == 0)));
++
++	/* The cheap gate: a string lookup beats the box walk below, so a
++	 * page listening for none of these pays almost nothing per motion
++	 * event.  The press/release bookkeeping still has to happen, so it
++	 * is folded into the branches rather than gated out here. */
++	if (down == false && up == false &&
++	    html_wants_event(html, "mousemove") == false) {
++		return;
++	}
++	if (down && html_wants_event(html, "mousedown") == false) {
++		html->mouse_pressed = true;
++		return;
++	}
++	if (up && html_wants_event(html, "mouseup") == false &&
++	    html_wants_event(html, "mousedown") == false) {
++		html->mouse_pressed = false;
++		return;
++	}
++
++	node = html_dom_node_at_point(html, x, y);
++	if (node == NULL) {
++		return;
++	}
++
++	html_mouse_pos(bw, x, y, &pos);
++	mods = html_mouse_mods(mouse);
++	buttons = html_mouse_buttons(mouse);
++	button = (mouse & (BROWSER_MOUSE_PRESS_2 | BROWSER_MOUSE_CLICK_2 |
++			   BROWSER_MOUSE_HOLDING_2 | BROWSER_MOUSE_DRAG_2)) ?
++			2 : 0;
++	detail = (mouse & BROWSER_MOUSE_TRIPLE_CLICK) ? 3 :
++		 (mouse & BROWSER_MOUSE_DOUBLE_CLICK) ? 2 : 1;
++
++	if (down) {
++		html->mouse_pressed = true;
++		if (html_wants_event(html, "mousedown")) {
++			html->mouse_default_prevented =
++				(fire_dom_mouse_event(corestring_dom_mousedown,
++					node, true, true, &pos, button,
++					buttons, mods, detail) == false);
++		}
++		return;
++	}
++
++	if (up) {
++		/* A front end that reports a click without ever reporting
++		 * the press still owes the DOM a mousedown: the sequence is
++		 * mousedown, mouseup, click, and a page that tracks its own
++		 * button state from those would otherwise never start. */
++		if ((html->mouse_pressed == false) &&
++		    html_wants_event(html, "mousedown")) {
++			fire_dom_mouse_event(corestring_dom_mousedown, node,
++					true, true, &pos, button, buttons,
++					mods, detail);
++		}
++		html->mouse_pressed = false;
++		if (html_wants_event(html, "mouseup")) {
++			/* the button is no longer held at a release */
++			fire_dom_mouse_event(corestring_dom_mouseup, node,
++					true, true, &pos, button, 0,
++					mods, detail);
++		}
++		return;
++	}
++
++	if (html_wants_event(html, "mousemove")) {
++		/* A move has no button that changed state, and detail 0 */
++		fire_dom_mouse_event(corestring_dom_mousemove, node,
++				true, true, &pos, 0, buttons, mods, 0);
++	}
++}
++
++
+ /* exported interface documented in html/interaction.h */
+ nserror html_mouse_track(struct content *c,
+ 			 struct browser_window *bw,
+@@ -1478,6 +1754,10 @@
+ 	html_content *html = (html_content *)c;
+ 	nserror res = NSERROR_OK;
+ 
++	/* DOM mouse events first, while html->drag_type still describes the
++	 * state this action is about to change */
++	html_fire_mouse_events(html, bw, mouse, x, y);
++
+ 	/* handle open select menu */
+ 	if (html->visible_select_menu != NULL) {
+ 		return mouse_action_select_menu(html, bw, mouse, x, y);
+@@ -1521,6 +1801,75 @@
+ 
+ 
+ /**
++ * Fire one DOM keyboard event at the right target.
++ *
++ * Upstream dispatched keydown at `html->layout->node` — the document root
++ * — whatever had focus, so a listener on the `<input>` the user was typing
++ * into never ran and every page had to listen on `document`.  The DOM says
++ * the FOCUSED element is the target and the event bubbles to the root from
++ * there, which is both correct and a superset: a document-level listener
++ * still sees it.
++ */
++static void fire_dom_key_event(html_content *html, dom_string *type,
++			       uint32_t key)
++{
++	dom_node *target = NULL;
++
++	if (html->layout == NULL) {
++		return;
++	}
++
++	if (NETSURF_UI_EVENTS) {
++		switch (html->focus_type) {
++		case HTML_FOCUS_TEXTAREA:
++			if (html->focus_owner.textarea != NULL) {
++				target = html->focus_owner.textarea->node;
++			}
++			break;
++
++		case HTML_FOCUS_CONTENT:
++			if (html->focus_owner.content != NULL) {
++				target = html->focus_owner.content->node;
++			}
++			break;
++
++		default:
++			break;
++		}
++	}
++
++	if (target == NULL) {
++		target = html->layout->node;
++	}
++	if (target == NULL) {
++		return;
++	}
++
++	fire_dom_keyboard_event(type, target, true, true, key);
++}
++
++
++/**
++ * Handle key releases.
++ *
++ * \param  c	content of type HTML
++ * \param  key	The UCS4 character codepoint
++ * \return true if key handled, false otherwise
++ */
++bool html_key_release(struct content *c, uint32_t key)
++{
++	html_content *html = (html_content *) c;
++
++	fire_dom_key_event(html, corestring_dom_keyup, key);
++
++	/* Nothing in the core acts on a release; it exists so the DOM can
++	 * see one.  Reporting "not handled" keeps every front-end fallback
++	 * (scroll on an unclaimed arrow key) behaving exactly as before. */
++	return false;
++}
++
++
++/**
+  * Handle keypresses.
+  *
+  * \param  c	content of type HTML
+@@ -1563,10 +1912,7 @@
+ 	 * `event.preventDefault()` then we won't handle the event when
+ 	 * we're not supposed to.
+ 	 */
+-	if (html->layout != NULL && html->layout->node != NULL) {
+-		fire_dom_keyboard_event(corestring_dom_keydown,
+-				html->layout->node, true, true, key);
+-	}
++	fire_dom_key_event(html, corestring_dom_keydown, key);
+ 
+ 	switch (html->focus_type) {
+ 	case HTML_FOCUS_CONTENT:
+@@ -1692,6 +2038,27 @@
+ 	content_broadcast((struct content *)html, CONTENT_MSG_DRAG, &msg_data);
+ }
+ 
++/**
++ * The DOM node that owns a focus state, if any.
++ *
++ * HTML_FOCUS_SELF is the document itself, which has no element to fire at.
++ */
++static dom_node *html_focus_node(html_content *html,
++				 html_focus_type type,
++				 const union html_focus_owner *owner)
++{
++	switch (type) {
++	case HTML_FOCUS_CONTENT:
++		return (owner->content != NULL) ? owner->content->node : NULL;
++
++	case HTML_FOCUS_TEXTAREA:
++		return (owner->textarea != NULL) ? owner->textarea->node : NULL;
++
++	default:
++		return NULL;
++	}
++}
++
+ /* Documented in html_internal.h */
+ void html_set_focus(html_content *html, html_focus_type focus_type,
+ 		union html_focus_owner focus_owner, bool hide_caret,
+@@ -1701,11 +2068,31 @@
+ 	int x_off = 0;
+ 	int y_off = 0;
+ 	struct rect cr;
++	dom_node *old_node = NULL;
++	dom_node *new_node = NULL;
++	struct form_control *lost_control = NULL;
+ 	bool textarea_lost_focus = html->focus_type == HTML_FOCUS_TEXTAREA &&
+ 			focus_type != HTML_FOCUS_TEXTAREA;
+ 
+ 	assert(html != NULL);
+ 
++	/* Note who is losing and gaining focus BEFORE the switch below
++	 * overwrites it, so blur/focus can be dispatched afterwards. */
++	if (html->jsthread != NULL) {
++		old_node = html_focus_node(html, html->focus_type,
++					   &html->focus_owner);
++		new_node = html_focus_node(html, focus_type, &focus_owner);
++	}
++	if ((html->focus_type == HTML_FOCUS_TEXTAREA) &&
++	    (html->focus_owner.textarea != NULL)) {
++		lost_control = html->focus_owner.textarea->gadget;
++	}
++	if ((focus_type == HTML_FOCUS_TEXTAREA) &&
++	    (focus_owner.textarea != NULL) &&
++	    (focus_owner.textarea->gadget != lost_control)) {
++		form_gadget_note_focus(focus_owner.textarea->gadget);
++	}
++
+ 	switch (focus_type) {
+ 	case HTML_FOCUS_SELF:
+ 		assert(focus_owner.self == true);
+@@ -1748,7 +2135,31 @@
+ 
+ 	/* Inform of the content's drag status change */
+ 	content_broadcast((struct content *)html, CONTENT_MSG_CARET, &msg_data);
++
++	if ((NETSURF_UI_EVENTS == 0) || (old_node == new_node)) {
++		return;
++	}
++
++	/* A text control that has been edited and is now losing focus fires
++	 * `change` — the classic "commit on blur" contract every form
++	 * validator is written against.  It goes BEFORE blur. */
++	if ((lost_control != NULL) && (new_node != old_node)) {
++		form_gadget_commit_change(lost_control);
++	}
++
++	/* focus/blur do NOT bubble (focusin/focusout would; nothing in the
++	 * core generates those yet — todos/0313). */
++	if (old_node != NULL) {
++		fire_generic_dom_event(corestring_dom_blur, old_node,
++				       false, false);
++	}
++	if (new_node != NULL) {
++		fire_generic_dom_event(corestring_dom_focus, new_node,
++				       false, false);
++	}
+ }
++
++
+ 
+ /* Documented in html_internal.h */
+ void html_set_selection(html_content *html, html_selection_type selection_type,
+diff -urN a/content/handlers/html/interaction.h b/content/handlers/html/interaction.h
+--- a/content/handlers/html/interaction.h	2026-07-27 11:21:07
++++ b/content/handlers/html/interaction.h	2026-07-27 11:42:48
+@@ -69,6 +69,15 @@
+ 
+ bool html_keypress(struct content *c, uint32_t key);
+ 
++/**
++ * Handle a key release in an html content.
++ *
++ * \param c   content of type html
++ * \param key The UCS4 character codepoint
++ * \return true iff the key was handled
++ */
++bool html_key_release(struct content *c, uint32_t key);
++
+ 
+ void html_overflow_scroll_callback(void *client_data,
+ 		struct scrollbar_msg_data *scrollbar_data);
+diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
+--- a/content/handlers/html/private.h	2026-07-27 11:21:07
++++ b/content/handlers/html/private.h	2026-07-27 12:05:58
+@@ -27,6 +27,7 @@
+ #include <dom/bindings/hubbub/parser.h>
+ 
+ #include "netsurf/types.h"
++#include "netsurf/uievents.h"
+ #include "content/content_protected.h"
+ #include "content/handlers/css/utils.h"
+ 
+@@ -138,6 +139,23 @@
  	void *box_conversion_context;
  	/** Box tree, or NULL. */
  	struct box *layout;
@@ -1112,7 +1803,7 @@ index 56cd957d..af92a515 100644
  	/** Document background colour. */
  	colour background_colour;
  
-@@ -170,6 +187,11 @@ typedef struct html_content {
+@@ -170,6 +188,11 @@
  	struct content_html_object *object_list;
  	/** Forms, in reverse order to document. */
  	struct form *forms;
@@ -1124,11 +1815,36 @@ index 56cd957d..af92a515 100644
  	/** Hash table of imagemaps. */
  	struct imagemap **imagemaps;
  
-@@ -237,6 +259,17 @@ void html__redraw_a_box(html_content *htmlc, struct box *box);
- void html_finish_conversion(html_content *htmlc);
+@@ -186,6 +209,25 @@
+ 	 * object within a page. */
+ 	struct html_content *page;
+ 
++	/** The last DOM `mousedown` had preventDefault() called on it, so
++	 * the native drag it would otherwise have started (page scroll,
++	 * text selection) must not happen.  This is the standard browser
++	 * contract, and it is what makes a drag-to-draw canvas possible:
++	 * without it netsurf turns any press-and-move over a non-text box
++	 * into a page-scroll drag, which swallows every later motion
++	 * before the content ever sees it. */
++	bool mouse_default_prevented;
++
++	/** A button is down as far as the DOM is concerned.
++	 *
++	 * netsurf's model has no button-release event: a release that was
++	 * not a drag arrives as BROWSER_MOUSE_CLICK_n, and one that ENDED a
++	 * drag arrives as a plain track with nothing held.  Remembering that
++	 * a press happened is what lets both be recognised as the `mouseup`
++	 * they are — without it, the release that ends a drag is
++	 * indistinguishable from an ordinary hover. */
++	bool mouse_pressed;
++
+ 	/** Current drag type */
+ 	html_drag_type drag_type;
+ 	/** Widget capturing all mouse events */
+@@ -238,6 +280,17 @@
  
  
-+/**
+ /**
 + * Schedule a live re-conversion (re-box + reflow + repaint) of a
 + * converted document whose DOM has been mutated (e.g. by script).
 + *
@@ -1139,10 +1855,11 @@ index 56cd957d..af92a515 100644
 +void html_schedule_reconvert(html_content *htmlc);
 +
 +
- /**
++/**
   * Test if an HTML content conversion can begin
   *
-@@ -316,9 +349,31 @@ dom_hubbub_error html_process_script(void *ctx, dom_node *node);
+  * \param htmlc		html content to test
+@@ -316,10 +369,32 @@
  
  /* in html/forms.c */
  struct form *html_forms_get_forms(const char *docenc, dom_html_document *doc);
@@ -1171,15 +1888,1615 @@ index 56cd957d..af92a515 100644
 + * \param c  content whose formless controls are to be freed
 + */
 +void html_forms_free_formless_controls(html_content *c);
-+
  
++
  /* in html/css_fetcher.c */
  /**
-diff --git a/desktop/textarea.c b/desktop/textarea.c
-index e2dd7176..a8177988 100644
---- a/desktop/textarea.c
-+++ b/desktop/textarea.c
-@@ -2109,6 +2109,26 @@ const char * textarea_data(struct textarea *ta, unsigned int *len)
+  * Register the fetcher for the pseudo x-ns-css scheme.
+@@ -338,6 +413,76 @@
+  */
+ bool fire_generic_dom_event(dom_string *type, dom_node *target,
+ 		    bool bubbles, bool cancelable);
++
++/**
++ * Modifier keys held when a UI event was generated.
++ *
++ * The core's browser_mouse_state has MOD_1..MOD_4 with a per-front-end
++ * meaning; these are the DOM names those map onto.
++ */
++enum html_event_mod {
++	HTML_MOD_SHIFT = (1 << 0),
++	HTML_MOD_CTRL  = (1 << 1),
++	HTML_MOD_ALT   = (1 << 2),
++	HTML_MOD_META  = (1 << 3)
++};
++
++/**
++ * Where a mouse event happened, in both coordinate spaces script can ask for.
++ *
++ * The core is handed DOCUMENT-relative coordinates; the viewport scroll
++ * offset belongs to the front end (guit->window->get_scroll), so both are
++ * carried explicitly rather than one being guessed from the other.
++ */
++struct dom_mouse_event_pos {
++	int page_x;	/**< document-relative x (DOM pageX) */
++	int page_y;	/**< document-relative y (DOM pageY) */
++	int client_x;	/**< viewport-relative x (DOM clientX) */
++	int client_y;	/**< viewport-relative y (DOM clientY) */
++};
++
++/**
++ * Find the deepest DOM node under a document coordinate.
++ *
++ * Never NULL for a converted document: the root element is the floor.
++ *
++ * \param html the content
++ * \param x    document-relative x
++ * \param y    document-relative y
++ */
++dom_node *html_dom_node_at_point(html_content *html, int x, int y);
++
++/**
++ * Construct a MouseEvent and fire it at the DOM
++ *
++ * \param type       the event type, e.g. corestring_dom_mousedown
++ * \param target     the node to dispatch at
++ * \param bubbles    whether the event bubbles
++ * \param cancelable whether preventDefault() means anything
++ * \param pos        where it happened
++ * \param button     DOM button number of the button that changed state
++ * \param buttons    DOM bitmask of the buttons currently held
++ * \param mods       \ref html_event_mod bitmask
++ * \param detail     the UIEvent detail; the click count for click events
++ * \return false if a listener called preventDefault(), true otherwise
++ */
++bool fire_dom_mouse_event(dom_string *type, dom_node *target,
++		bool bubbles, bool cancelable,
++		const struct dom_mouse_event_pos *pos,
++		unsigned short button, unsigned short buttons,
++		unsigned int mods, int detail);
++
++/**
++ * Construct a WheelEvent and fire it at the DOM
++ *
++ * \param delta_x  horizontal scroll step in pixels, positive = rightwards
++ * \param delta_y  vertical scroll step in pixels, positive = downwards
++ * \return false if a listener called preventDefault(), true otherwise
++ */
++bool fire_dom_wheel_event(dom_string *type, dom_node *target,
++		bool bubbles, bool cancelable,
++		const struct dom_mouse_event_pos *pos,
++		unsigned int mods, int delta_x, int delta_y);
+ 
+ /**
+  * Construct a keyboard event and fire it at the DOM
+diff -urN a/content/handlers/image/png.c b/content/handlers/image/png.c
+--- a/content/handlers/image/png.c	2026-07-27 11:21:07
++++ b/content/handlers/image/png.c	2026-07-27 11:12:32
+@@ -354,7 +354,11 @@
+ 		return ret;
+ 	}
+ 
+-	switch (setjmp(png_jmpbuf(png_c->png))) {
++	/* gucOS: compiler.js recognises setjmp only in if-condition form
++	 * (`if ((v = setjmp(buf)))`), not as a switch controlling expression */
++	int sjval = 0;
++	if ((sjval = setjmp(png_jmpbuf(png_c->png)))) {}
++	switch (sjval) {
+ 	case CBERR_NONE: /* direct return */	
+ 		png_process_data(png_c->png, png_c->info, (uint8_t *)data, size);
+ 		break;
+diff -urN a/content/handlers/javascript/WebIDL/uievents.idl b/content/handlers/javascript/WebIDL/uievents.idl
+--- a/content/handlers/javascript/WebIDL/uievents.idl	2026-07-27 11:21:07
++++ b/content/handlers/javascript/WebIDL/uievents.idl	2026-07-27 11:33:37
+@@ -37,6 +37,12 @@
+     // Introduced in this specification
+     readonly    attribute unsigned short buttons;
+     boolean getModifierState (DOMString keyArg);
++    // CSSOM View Module; standard, but merged into UI Events after the
++    // 2015 snapshot this file was retrieved from.  gucOS Lane C
++    // (todos/0289) needs document-relative coordinates because neither
++    // getBoundingClientRect nor offsetLeft exists yet.
++    readonly    attribute long           pageX;
++    readonly    attribute long           pageY;
+ };
+ 
+ dictionary MouseEventInit : EventModifierInit {
+diff -urN a/content/handlers/javascript/duktape/EventTarget.bnd b/content/handlers/javascript/duktape/EventTarget.bnd
+--- a/content/handlers/javascript/duktape/EventTarget.bnd	2026-07-27 11:21:07
++++ b/content/handlers/javascript/duktape/EventTarget.bnd	2026-07-27 12:13:31
+@@ -37,6 +37,24 @@
+ 	return ret;
+ }
+ 
++/* The sub-listener array for one (target, type) is a list of
++ * [callback, flags] tuples, and these two walk it.
++ *
++ * UPSTREAM BUG, fixed here: both loops indexed the CALLBACK (stack -1)
++ * instead of the listener ARRAY (stack -2), so the walk found nothing on
++ * the first iteration and fell straight out with idx == 0.  Consequences,
++ * both verified live: every addEventListener() for a type already listened
++ * to on that element OVERWROTE the previous one — two handlers on one
++ * button ran as one, and a capture/bubble pair collapsed to whichever was
++ * registered second — and removeEventListener() never found anything to
++ * remove.  The comparison inside the loop was off by the same shift
++ * (candidateflags was compared against the candidate array), so the
++ * "already registered" check never held either.
++ *
++ * The gucOS demo page `events/` is the regression guard: it registers a
++ * capture AND a bubble listener on each of three nested elements and
++ * asserts the exact visiting order.
++ */
+ static void event_target_register_listener(duk_context *ctx,
+ 					   event_listener_flags flags)
+ {
+@@ -46,12 +64,12 @@
+ 	 * a tuple of the callback and flags
+ 	 */
+ 	duk_uarridx_t idx = 0;
+-	while (duk_get_prop_index(ctx, -1, idx)) {
++	while (duk_get_prop_index(ctx, -2, idx)) {
+ 		/* ... listeners callback candidate */
+ 		duk_get_prop_index(ctx, -1, 0);
+ 		duk_get_prop_index(ctx, -2, 1);
+ 		/* ... listeners callback candidate candidatecallback candidateflags */
+-		if (duk_strict_equals(ctx, -1, -3) &&
++		if (duk_strict_equals(ctx, -2, -4) &&
+ 		    duk_get_int(ctx, -1) == (duk_int_t)flags) {
+ 			/* already present, nothing to do */
+ 			duk_pop_n(ctx, 5);
+@@ -90,16 +108,20 @@
+ 	 * we remove it and shuffle the rest up.
+ 	 */
+ 	duk_uarridx_t idx = 0;
+-	while (duk_get_prop_index(ctx, -1, idx)) {
++	while (duk_get_prop_index(ctx, -2, idx)) {
+ 		/* ... listeners callback candidate */
+ 		duk_get_prop_index(ctx, -1, 0);
+ 		duk_get_prop_index(ctx, -2, 1);
+ 		/* ... listeners callback candidate candidatecallback candidateflags */
+-		if (duk_strict_equals(ctx, -1, -3) &&
++		if (duk_strict_equals(ctx, -2, -4) &&
+ 		    duk_get_int(ctx, -1) == (duk_int_t)flags) {
+ 			/* present */
+-			duk_pop(ctx);
+-			/* ... listeners callback candidate candidatecallback */
++			duk_pop_2(ctx);
++			/* ... listeners callback candidate */
++			/* Slot 2 is the tombstone the dispatcher checks, so a
++			 * removal during a dispatch already in flight takes
++			 * effect for that dispatch too. */
++			duk_push_boolean(ctx, true);
+ 			duk_put_prop_index(ctx, -2, 2);
+ 			/* ... listeners callback candidate */
+ 			duk_pop(ctx);
+@@ -165,8 +187,13 @@
+ 	/* type callback type */
+ 	duk_push_this(ctx);
+ 	/* type callback type this(=EventTarget) */
+-	if (dukky_event_target_push_listeners(ctx, false) && priv->is_node) {
+-		/* Take a moment to register a JS callback */
++	if (dukky_event_target_push_listeners(ctx, false)) {
++		/* Take a moment to register a JS callback.  A NON-node
++		 * target is the Window: it registers no libdom listener
++		 * (it is not in the propagation chain) but it must still
++		 * enter the per-type registry, both so js_fire_event can
++		 * find its listeners and so the html content knows the
++		 * type is live. */
+ 		duk_size_t ev_ty_l;
+ 		const char *ev_ty = duk_to_lstring(ctx, -3, &ev_ty_l);
+ 		dom_string *ev_ty_s;
+@@ -178,9 +205,11 @@
+ 			return 0;
+ 		}
+ 		dukky_register_event_listener_for(
+-			ctx, (dom_element *)((node_private_t *)priv)->node,
+-			ev_ty_s,
+-			!!(flags & ELF_CAPTURE));
++			ctx,
++			priv->is_node ?
++				(dom_element *)((node_private_t *)priv)->node :
++				NULL,
++			ev_ty_s, false);
+ 		dom_string_unref(ev_ty_s);
+ 	}
+ 	/* type callback typelisteners */
+diff -urN a/content/handlers/javascript/duktape/MouseEvent.bnd b/content/handlers/javascript/duktape/MouseEvent.bnd
+--- a/content/handlers/javascript/duktape/MouseEvent.bnd	1970-01-01 09:00:00
++++ b/content/handlers/javascript/duktape/MouseEvent.bnd	2026-07-27 11:26:53
+@@ -0,0 +1,214 @@
++/* Binding for browser using duktape and libdom
++ *
++ * This file is part of NetSurf, http://www.netsurf-browser.org/
++ *
++ * Released under the terms of the MIT License,
++ *         http://www.opensource.org/licenses/mit-license
++ *
++ * MouseEvent had NO .bnd at all, so every one of its attributes generated a
++ * silent no-op stub: `event.clientX` read `undefined` on every mouse event
++ * the browser fired.  That is why a draw-where-you-clicked canvas was not
++ * possible before this lane.
++ *
++ * Coordinate contract (see also html/interaction.c's
++ * html_fire_mouse_event):
++ *
++ *   pageX/pageY    document-relative — the coordinate the core is given.
++ *   clientX/clientY  viewport-relative: page minus the frontend's scroll
++ *                  offset (browser_window_get_scroll).  Spec-correct.
++ *   screenX/screenY  the core has NO screen origin — a gui_window's position
++ *                  on the desktop is never told to it — so these report the
++ *                  viewport-relative coordinate, i.e. screen == client for a
++ *                  window at the screen origin.  Deliberate and documented:
++ *                  the alternative is `undefined`, and unlike page coords
++ *                  this at least stays correct as the document scrolls.
++ *
++ * pageX/pageY are standard (CSSOM View) but absent from the 2015 uievents.idl
++ * snapshot vendored here; they are added to it alongside this file.
++ */
++
++getter MouseEvent::screenX ()
++%{
++	dom_exception exc;
++	int32_t x;
++
++	/* client, not screen — see the coordinate contract above */
++	exc = dom_mouse_event_get_client_x(priv->parent.parent.evt, &x);
++	if (exc != DOM_NO_ERR) return 0;
++
++	duk_push_int(ctx, (duk_int_t) x);
++	return 1;
++%}
++
++getter MouseEvent::screenY ()
++%{
++	dom_exception exc;
++	int32_t y;
++
++	exc = dom_mouse_event_get_client_y(priv->parent.parent.evt, &y);
++	if (exc != DOM_NO_ERR) return 0;
++
++	duk_push_int(ctx, (duk_int_t) y);
++	return 1;
++%}
++
++getter MouseEvent::clientX ()
++%{
++	dom_exception exc;
++	int32_t x;
++
++	exc = dom_mouse_event_get_client_x(priv->parent.parent.evt, &x);
++	if (exc != DOM_NO_ERR) return 0;
++
++	duk_push_int(ctx, (duk_int_t) x);
++	return 1;
++%}
++
++getter MouseEvent::clientY ()
++%{
++	dom_exception exc;
++	int32_t y;
++
++	exc = dom_mouse_event_get_client_y(priv->parent.parent.evt, &y);
++	if (exc != DOM_NO_ERR) return 0;
++
++	duk_push_int(ctx, (duk_int_t) y);
++	return 1;
++%}
++
++getter MouseEvent::pageX ()
++%{
++	dom_exception exc;
++	int32_t x;
++
++	/* the document-relative coordinate lives in libdom's screen slot */
++	exc = dom_mouse_event_get_screen_x(priv->parent.parent.evt, &x);
++	if (exc != DOM_NO_ERR) return 0;
++
++	duk_push_int(ctx, (duk_int_t) x);
++	return 1;
++%}
++
++getter MouseEvent::pageY ()
++%{
++	dom_exception exc;
++	int32_t y;
++
++	exc = dom_mouse_event_get_screen_y(priv->parent.parent.evt, &y);
++	if (exc != DOM_NO_ERR) return 0;
++
++	duk_push_int(ctx, (duk_int_t) y);
++	return 1;
++%}
++
++getter MouseEvent::ctrlKey ()
++%{
++	dom_exception exc;
++	bool key;
++
++	exc = dom_mouse_event_get_ctrl_key(priv->parent.parent.evt, &key);
++	if (exc != DOM_NO_ERR) return 0;
++
++	duk_push_boolean(ctx, (duk_bool_t) key);
++	return 1;
++%}
++
++getter MouseEvent::shiftKey ()
++%{
++	dom_exception exc;
++	bool key;
++
++	exc = dom_mouse_event_get_shift_key(priv->parent.parent.evt, &key);
++	if (exc != DOM_NO_ERR) return 0;
++
++	duk_push_boolean(ctx, (duk_bool_t) key);
++	return 1;
++%}
++
++getter MouseEvent::altKey ()
++%{
++	dom_exception exc;
++	bool key;
++
++	exc = dom_mouse_event_get_alt_key(priv->parent.parent.evt, &key);
++	if (exc != DOM_NO_ERR) return 0;
++
++	duk_push_boolean(ctx, (duk_bool_t) key);
++	return 1;
++%}
++
++getter MouseEvent::metaKey ()
++%{
++	dom_exception exc;
++	bool key;
++
++	exc = dom_mouse_event_get_meta_key(priv->parent.parent.evt, &key);
++	if (exc != DOM_NO_ERR) return 0;
++
++	duk_push_boolean(ctx, (duk_bool_t) key);
++	return 1;
++%}
++
++getter MouseEvent::button ()
++%{
++	dom_exception exc;
++	unsigned short button;
++
++	exc = dom_mouse_event_get_button(priv->parent.parent.evt, &button);
++	if (exc != DOM_NO_ERR) return 0;
++
++	duk_push_uint(ctx, (duk_uint_t) button);
++	return 1;
++%}
++
++getter MouseEvent::buttons ()
++%{
++	dom_exception exc;
++	unsigned short buttons;
++
++	exc = dom_mouse_event_get_buttons(priv->parent.parent.evt, &buttons);
++	if (exc != DOM_NO_ERR) return 0;
++
++	duk_push_uint(ctx, (duk_uint_t) buttons);
++	return 1;
++%}
++
++getter MouseEvent::relatedTarget ()
++%{
++	dom_exception exc;
++	dom_event_target *et;
++
++	exc = dom_mouse_event_get_related_target(priv->parent.parent.evt, &et);
++	if (exc != DOM_NO_ERR) return 0;
++
++	if (et == NULL) {
++		duk_push_null(ctx);
++		return 1;
++	}
++
++	dukky_push_node(ctx, (dom_node *)et);
++	dom_node_unref((dom_node *)et);
++	return 1;
++%}
++
++method MouseEvent::getModifierState ()
++%{
++	dom_string *modifier;
++	dom_exception exc;
++	duk_size_t slen;
++	const char *s;
++	bool state;
++
++	s = duk_safe_to_lstring(ctx, 0, &slen);
++	exc = dom_string_create((const uint8_t *)s, slen, &modifier);
++	duk_pop(ctx);
++	if (exc != DOM_NO_ERR) return 0;
++
++	exc = dom_mouse_event_get_modifier_state(priv->parent.parent.evt,
++			modifier, &state);
++	dom_string_unref(modifier);
++	if (exc != DOM_NO_ERR) return 0;
++
++	duk_push_boolean(ctx, (duk_bool_t) state);
++	return 1;
++%}
+diff -urN a/content/handlers/javascript/duktape/UIEvent.bnd b/content/handlers/javascript/duktape/UIEvent.bnd
+--- a/content/handlers/javascript/duktape/UIEvent.bnd	1970-01-01 09:00:00
++++ b/content/handlers/javascript/duktape/UIEvent.bnd	2026-07-27 11:25:09
+@@ -0,0 +1,32 @@
++/* Binding for browser using duktape and libdom
++ *
++ * This file is part of NetSurf, http://www.netsurf-browser.org/
++ *
++ * Released under the terms of the MIT License,
++ *         http://www.opensource.org/licenses/mit-license
++ *
++ * UIEvent is the base of MouseEvent/KeyboardEvent/WheelEvent/FocusEvent.
++ * Without these bodies its two attributes generate silent no-op stubs, so
++ * `event.detail` reads `undefined` on every UI event — which is how a
++ * dblclick used to be indistinguishable from a click in script.
++ */
++
++getter UIEvent::view ()
++%{
++	/* The only view there is: this thread's Window IS its global
++	 * object (js_newthread's duk_set_global_object). */
++	duk_push_global_object(ctx);
++	return 1;
++%}
++
++getter UIEvent::detail ()
++%{
++	dom_exception exc;
++	int32_t detail;
++
++	exc = dom_ui_event_get_detail(priv->parent.evt, &detail);
++	if (exc != DOM_NO_ERR) return 0;
++
++	duk_push_int(ctx, (duk_int_t) detail);
++	return 1;
++%}
+diff -urN a/content/handlers/javascript/duktape/WheelEvent.bnd b/content/handlers/javascript/duktape/WheelEvent.bnd
+--- a/content/handlers/javascript/duktape/WheelEvent.bnd	1970-01-01 09:00:00
++++ b/content/handlers/javascript/duktape/WheelEvent.bnd	2026-07-27 11:27:10
+@@ -0,0 +1,62 @@
++/* Binding for browser using duktape and libdom
++ *
++ * This file is part of NetSurf, http://www.netsurf-browser.org/
++ *
++ * Released under the terms of the MIT License,
++ *         http://www.opensource.org/licenses/mit-license
++ *
++ * A `wheel` event is dispatched as a libdom dom_mouse_multi_wheel_event,
++ * whose base class IS dom_mouse_event — so every MouseEvent.bnd getter works
++ * on it unchanged and only the three deltas need bodies here.
++ *
++ * libdom's field is the LEGACY `wheelDelta` (opposite sign to `deltaY`, in
++ * 120ths).  We are both the producer (html_fire_wheel_event) and the
++ * consumer, so the field carries the DOM-spec `delta*` value directly: a
++ * positive deltaY means "content scrolls down", as the spec says.
++ */
++
++getter WheelEvent::deltaX ()
++%{
++	dom_exception exc;
++	int32_t d;
++
++	exc = dom_mouse_multi_wheel_event_get_wheel_delta_x(
++			priv->parent.parent.parent.evt, &d);
++	if (exc != DOM_NO_ERR) return 0;
++
++	duk_push_number(ctx, (duk_double_t) d);
++	return 1;
++%}
++
++getter WheelEvent::deltaY ()
++%{
++	dom_exception exc;
++	int32_t d;
++
++	exc = dom_mouse_multi_wheel_event_get_wheel_delta_y(
++			priv->parent.parent.parent.evt, &d);
++	if (exc != DOM_NO_ERR) return 0;
++
++	duk_push_number(ctx, (duk_double_t) d);
++	return 1;
++%}
++
++getter WheelEvent::deltaZ ()
++%{
++	dom_exception exc;
++	int32_t d;
++
++	exc = dom_mouse_multi_wheel_event_get_wheel_delta_z(
++			priv->parent.parent.parent.evt, &d);
++	if (exc != DOM_NO_ERR) return 0;
++
++	duk_push_number(ctx, (duk_double_t) d);
++	return 1;
++%}
++
++getter WheelEvent::deltaMode ()
++%{
++	/* DOM_DELTA_PIXEL: the frontends hand the core a pixel step. */
++	duk_push_uint(ctx, 0);
++	return 1;
++%}
+diff -urN a/content/handlers/javascript/duktape/dukky.c b/content/handlers/javascript/duktape/dukky.c
+--- a/content/handlers/javascript/duktape/dukky.c	2026-07-27 11:21:07
++++ b/content/handlers/javascript/duktape/dukky.c	2026-07-27 12:22:46
+@@ -28,6 +28,7 @@
+ #include <nsutils/time.h>
+ 
+ #include "netsurf/inttypes.h"
++#include "netsurf/uievents.h"
+ #include "utils/utils.h"
+ #include "utils/nsoption.h"
+ #include "utils/log.h"
+@@ -50,6 +51,10 @@
+ #define HANDLER_LISTENER_MAGIC MAGIC(HANDLER_LISTENER_MAP)
+ #define HANDLER_MAGIC MAGIC(HANDLER_MAP)
+ #define EVENT_LISTENER_JS_MAGIC MAGIC(EVENT_LISTENER_JS_MAP)
++/* Per-thread set of event TYPES anything has ever registered a listener
++ * for.  Read by js_event_type_registered() so the html content can skip
++ * synthesising events nobody is listening to. */
++#define EVENT_TYPE_MAGIC MAGIC(EVENT_TYPE_MAP)
+ #define GENERICS_MAGIC MAGIC(GENERICS_TABLE)
+ #define THREAD_MAP MAGIC(THREAD_MAP)
+ 
+@@ -695,6 +700,10 @@
+ 	duk_push_object(CTX);
+ 	duk_put_global_string(CTX, EVENT_MAGIC);
+ 
++	/* And the set of event types anything is listening for */
++	duk_push_object(CTX);
++	duk_put_global_string(CTX, EVENT_TYPE_MAGIC);
++
+ 	/* Now load the polyfills */
+ 	/* ... */
+ 	duk_push_string(CTX, "polyfill.js");
+@@ -976,20 +985,51 @@
+ 	const char *ret = PROTO_NAME(EVENT);
+ 	dom_string *type = NULL;
+ 	dom_exception err;
++	bool is_mouse = false;
+ 
+ 	err = dom_event_get_type(evt, &type);
+ 	if (err != DOM_NO_ERR) {
+ 		goto out;
+ 	}
+ 
+-	if (dom_string_isequal(type, corestring_dom_keydown)) {
++	if (dom_string_isequal(type, corestring_dom_keydown) ||
++	    dom_string_isequal(type, corestring_dom_keyup) ||
++	    dom_string_isequal(type, corestring_dom_keypress)) {
+ 		ret = PROTO_NAME(KEYBOARDEVENT);
+ 		goto out;
+-	} else if (dom_string_isequal(type, corestring_dom_keyup)) {
+-		ret = PROTO_NAME(KEYBOARDEVENT);
++	}
++
++	/* The mouse family: html/interaction.c dispatches these as real
++	 * dom_mouse_events, so give them the prototype whose getters can
++	 * read the coordinates out (before Lane C they were plain Events
++	 * and clientX read `undefined`).
++	 *
++	 * The class is checked, not assumed from the type NAME: anything
++	 * that dispatches a plain dom_event called "click" — the -DNETSURF_
++	 * NO_UI_EVENTS build does exactly that, and so does any caller of
++	 * fire_generic_dom_event — would otherwise get MouseEvent's
++	 * getters, which read past the end of the struct and return
++	 * garbage where `undefined` is the truth. */
++	err = dom_event_is_mouse_event(evt, &is_mouse);
++	if (err != DOM_NO_ERR) {
++		is_mouse = false;
++	}
++
++	if (is_mouse && (dom_string_isequal(type, corestring_dom_click) ||
++	    dom_string_isequal(type, corestring_dom_dblclick) ||
++	    dom_string_isequal(type, corestring_dom_mousedown) ||
++	    dom_string_isequal(type, corestring_dom_mouseup) ||
++	    dom_string_isequal(type, corestring_dom_mousemove) ||
++	    dom_string_isequal(type, corestring_dom_mouseover) ||
++	    dom_string_isequal(type, corestring_dom_mouseout) ||
++	    dom_string_isequal(type, corestring_dom_contextmenu))) {
++		ret = PROTO_NAME(MOUSEEVENT);
+ 		goto out;
+-	} else if (dom_string_isequal(type, corestring_dom_keypress)) {
+-		ret = PROTO_NAME(KEYBOARDEVENT);
++	}
++
++	if (is_mouse && (dom_string_isequal(type, corestring_dom_wheel) ||
++	    dom_string_isequal(type, corestring_dom_mousewheel))) {
++		ret = PROTO_NAME(WHEELEVENT);
+ 		goto out;
+ 	}
+ 
+@@ -1140,109 +1180,45 @@
+ 	return true;
+ }
+ 
+-static void dukky_generic_event_handler(dom_event *evt, void *pw)
++/**
++ * Run the JS listeners (addEventListener) registered on one event target.
++ *
++ * Factored out of dukky_generic_event_handler_ so the Window can use it
++ * too: the Window is not a node, so it never appears in libdom's
++ * propagation chain and its listeners are reachable ONLY from here.
++ * Before this, window.addEventListener(...) registered a callback that
++ * could never be invoked.
++ *
++ * Stack in:  ... type this   (both consumed)
++ * Stack out: ...
++ *
++ * \param ctx    duktape context
++ * \param evt    the event being dispatched
++ * \param phase  which propagation phase to select listeners for; pass
++ *               DOM_AT_TARGET to run every listener regardless of its
++ *               capture flag (what the target phase, and the Window, want)
++ */
++static void dukky_run_js_listeners(duk_context *ctx, dom_event *evt,
++				   dom_event_flow_phase phase)
+ {
+-	duk_context *ctx = (duk_context *)pw;
+-	dom_string *name;
+-	dom_exception exc;
+-	dom_event_target *targ;
+-	dom_event_flow_phase phase;
+ 	duk_uarridx_t idx;
+ 	event_listener_flags flags;
++	dom_exception exc;
++	duk_idx_t self;
+ 
+-	NSLOG(dukky, DEBUG, "Handling an event in duktape interface...");
+-	exc = dom_event_get_type(evt, &name);
+-	if (exc != DOM_NO_ERR) {
+-		NSLOG(dukky, DEBUG, "Unable to find the event name");
+-		return;
+-	}
+-	NSLOG(dukky, DEBUG, "Event's name is %*s", (int)dom_string_length(name),
+-	      dom_string_data(name));
+-	exc = dom_event_get_event_phase(evt, &phase);
+-	if (exc != DOM_NO_ERR) {
+-		NSLOG(dukky, WARNING, "Unable to get event phase");
+-		return;
+-	}
+-	NSLOG(dukky, DEBUG, "Event phase is: %s (%d)",
+-	      phase == DOM_CAPTURING_PHASE ? "capturing" : phase == DOM_AT_TARGET ? "at-target" : phase == DOM_BUBBLING_PHASE ? "bubbling" : "unknown",
+-	      (int)phase);
+-
+-	exc = dom_event_get_current_target(evt, &targ);
+-	if (exc != DOM_NO_ERR) {
+-		dom_string_unref(name);
+-		NSLOG(dukky, DEBUG, "Unable to find the event target");
+-		return;
+-	}
+-
+-	/* If we're capturing right now, we skip the 'event handler'
+-	 * and go straight to the extras
+-	 */
+-	if (phase == DOM_CAPTURING_PHASE)
+-		goto handle_extras;
+-
+-	/* ... */
+-	if (dukky_push_node(ctx, (dom_node *)targ) == false) {
+-		dom_string_unref(name);
+-		dom_node_unref(targ);
+-		NSLOG(dukky, DEBUG,
+-		      "Unable to push JS node representation?!");
+-		return;
+-	}
+-	/* ... node */
+-	if (dukky_get_current_value_of_event_handler(
+-		    ctx, name, (dom_event_target *)targ) == false) {
+-		/* ... */
+-		goto handle_extras;
+-	}
+-	/* ... handler node */
+-	dukky_push_event(ctx, evt);
+-	/* ... handler node event */
+-	dukky_reset_start_time(ctx);
+-	if (duk_pcall_method(ctx, 1) != 0) {
+-		/* Failed to run the method */
+-		/* ... err */
+-		NSLOG(dukky, DEBUG,
+-		      "OH NOES! An error running a callback.  Meh.");
+-		exc = dom_event_stop_immediate_propagation(evt);
+-		if (exc != DOM_NO_ERR)
+-			NSLOG(dukky, DEBUG,
+-			      "WORSE! could not stop propagation");
+-		duk_get_prop_string(ctx, -1, "name");
+-		duk_get_prop_string(ctx, -2, "message");
+-		duk_get_prop_string(ctx, -3, "fileName");
+-		duk_get_prop_string(ctx, -4, "lineNumber");
+-		duk_get_prop_string(ctx, -5, "stack");
+-		/* ... err name message fileName lineNumber stack */
+-		NSLOG(dukky, DEBUG, "Uncaught error in JS: %s: %s",
+-		      duk_safe_to_string(ctx, -5),
+-		      duk_safe_to_string(ctx, -4));
+-		NSLOG(dukky, INFO, "              was at: %s line %s",
+-		      duk_safe_to_string(ctx, -3),
+-		      duk_safe_to_string(ctx, -2));
+-		NSLOG(dukky, INFO, "         Stack trace: %s",
+-		      duk_safe_to_string(ctx, -1));
+-
+-		duk_pop_n(ctx, 6);
+-		/* ... */
+-		goto handle_extras;
+-	}
+-	/* ... result */
+-	if (duk_is_boolean(ctx, -1) &&
+-	    duk_to_boolean(ctx, -1) == 0) {
+-		dom_event_prevent_default(evt);
+-	}
+-	duk_pop(ctx);
+-handle_extras:
+-	/* ... */
+-	duk_push_lstring(ctx, dom_string_data(name), dom_string_length(name));
+-	dukky_push_node(ctx, (dom_node *)targ);
+-	/* ... type node */
++	/* ... type this */
++	duk_dup(ctx, -1);
++	/* ... type this this */
++	duk_insert(ctx, -3);
++	/* ... this type this */
++	self = duk_get_top(ctx) - 3;
+ 	if (dukky_event_target_push_listeners(ctx, true)) {
+ 		/* Nothing to do */
+-		duk_pop(ctx);
+-		goto out;
++		/* ... this undefined */
++		duk_pop_2(ctx);
++		return;
+ 	}
+-	/* ... sublisteners */
++	/* ... this sublisteners */
+ 	duk_push_array(ctx);
+ 	/* ... sublisteners copy */
+ 	idx = 0;
+@@ -1285,15 +1261,24 @@
+ 		flags = (event_listener_flags)duk_get_int(ctx, -1);
+ 		duk_pop(ctx);
+ 		/* ... copy handler callback */
++		/* Phase selection.  DOM L3: the CAPTURING walk runs only
++		 * capture-flagged listeners, the BUBBLING walk only the
++		 * others — but the AT_TARGET phase runs EVERY listener on
++		 * the target, whatever its capture flag, in registration
++		 * order.  (The old code tested `phase != CAPTURING` for the
++		 * bubble side, which silently dropped a capture listener
++		 * registered on the target itself.) */
+ 		if (((phase == DOM_CAPTURING_PHASE) && !(flags & ELF_CAPTURE)) ||
+-		    ((phase != DOM_CAPTURING_PHASE) && (flags & ELF_CAPTURE))) {
++		    (((NETSURF_UI_EVENTS == 0) ?
++			(phase != DOM_CAPTURING_PHASE) :
++			(phase == DOM_BUBBLING_PHASE)) && (flags & ELF_CAPTURE))) {
+ 			duk_pop_2(ctx);
+ 			/* ... copy */
+ 			continue;
+ 		}
+ 		/* ... copy handler callback */
+-		dukky_push_node(ctx, (dom_node *)targ);
+-		/* ... copy handler callback node */
++		duk_dup(ctx, self);
++		/* ... copy handler callback this */
+ 		dukky_push_event(ctx, evt);
+ 		/* ... copy handler callback node event */
+ 		dukky_reset_start_time(ctx);
+@@ -1334,21 +1319,205 @@
+ 		duk_pop_2(ctx);
+ 		/* ... copy */
+ 	}
+-	duk_pop_2(ctx);
++	/* ... this copy undefined */
++	duk_pop_3(ctx);
++	/* ... */
++}
++
++/**
++ * The body of both libdom listener trampolines below.
++ *
++ * A node that JS listens to gets TWO libdom listeners registered for the
++ * type (see dukky_register_event_listener_for): one with capture=true and
++ * one with capture=false, because libdom filters by the registration's
++ * capture flag and there is otherwise no way for one listener to be
++ * invoked in both the capturing and the bubbling walk.  In the AT_TARGET
++ * phase libdom invokes BOTH of them, so the capture-registered trampoline
++ * bails out there and the bubble-registered one runs the at-target pass
++ * exactly once — for every listener, capture-flagged or not, in
++ * registration order, which is what DOM L3 says the target phase does.
++ *
++ * \param evt                 the event being dispatched
++ * \param ctx                 the duktape context
++ * \param registered_capture  which of the two libdom listeners we are
++ */
++static void dukky_generic_event_handler_(dom_event *evt, duk_context *ctx,
++					 bool registered_capture)
++{
++	dom_string *name;
++	dom_exception exc;
++	dom_event_target *targ;
++	dom_event_flow_phase phase;
++	duk_uarridx_t idx;
++	event_listener_flags flags;
++
++	NSLOG(dukky, DEBUG, "Handling an event in duktape interface...");
++	exc = dom_event_get_type(evt, &name);
++	if (exc != DOM_NO_ERR) {
++		NSLOG(dukky, DEBUG, "Unable to find the event name");
++		return;
++	}
++	NSLOG(dukky, DEBUG, "Event's name is %*s", (int)dom_string_length(name),
++	      dom_string_data(name));
++	exc = dom_event_get_event_phase(evt, &phase);
++	if (exc != DOM_NO_ERR) {
++		NSLOG(dukky, WARNING, "Unable to get event phase");
++		dom_string_unref(name);
++		return;
++	}
++	NSLOG(dukky, DEBUG, "Event phase is: %s (%d)",
++	      phase == DOM_CAPTURING_PHASE ? "capturing" : phase == DOM_AT_TARGET ? "at-target" : phase == DOM_BUBBLING_PHASE ? "bubbling" : "unknown",
++	      (int)phase);
++
++	/* The at-target pass belongs to the bubble-registered twin only */
++	if (phase == DOM_AT_TARGET && registered_capture) {
++		dom_string_unref(name);
++		return;
++	}
++
++	exc = dom_event_get_current_target(evt, &targ);
++	if (exc != DOM_NO_ERR) {
++		dom_string_unref(name);
++		NSLOG(dukky, DEBUG, "Unable to find the event target");
++		return;
++	}
++
++	/* If we're capturing right now, we skip the 'event handler'
++	 * and go straight to the extras
++	 */
++	if (phase == DOM_CAPTURING_PHASE)
++		goto handle_extras;
++
++	/* ... */
++	if (dukky_push_node(ctx, (dom_node *)targ) == false) {
++		dom_string_unref(name);
++		dom_node_unref(targ);
++		NSLOG(dukky, DEBUG,
++		      "Unable to push JS node representation?!");
++		return;
++	}
++	/* ... node */
++	if (dukky_get_current_value_of_event_handler(
++		    ctx, name, (dom_event_target *)targ) == false) {
++		/* ... */
++		goto handle_extras;
++	}
++	/* ... handler node */
++	dukky_push_event(ctx, evt);
++	/* ... handler node event */
++	dukky_reset_start_time(ctx);
++	if (duk_pcall_method(ctx, 1) != 0) {
++		/* Failed to run the method */
++		/* ... err */
++		NSLOG(dukky, DEBUG,
++		      "OH NOES! An error running a callback.  Meh.");
++		exc = dom_event_stop_immediate_propagation(evt);
++		if (exc != DOM_NO_ERR)
++			NSLOG(dukky, DEBUG,
++			      "WORSE! could not stop propagation");
++		duk_get_prop_string(ctx, -1, "name");
++		duk_get_prop_string(ctx, -2, "message");
++		duk_get_prop_string(ctx, -3, "fileName");
++		duk_get_prop_string(ctx, -4, "lineNumber");
++		duk_get_prop_string(ctx, -5, "stack");
++		/* ... err name message fileName lineNumber stack */
++		NSLOG(dukky, DEBUG, "Uncaught error in JS: %s: %s",
++		      duk_safe_to_string(ctx, -5),
++		      duk_safe_to_string(ctx, -4));
++		NSLOG(dukky, INFO, "              was at: %s line %s",
++		      duk_safe_to_string(ctx, -3),
++		      duk_safe_to_string(ctx, -2));
++		NSLOG(dukky, INFO, "         Stack trace: %s",
++		      duk_safe_to_string(ctx, -1));
++
++		duk_pop_n(ctx, 6);
++		/* ... */
++		goto handle_extras;
++	}
++	/* ... result */
++	if (duk_is_boolean(ctx, -1) &&
++	    duk_to_boolean(ctx, -1) == 0) {
++		dom_event_prevent_default(evt);
++	}
++	duk_pop(ctx);
++handle_extras:
++	/* ... */
++	duk_push_lstring(ctx, dom_string_data(name), dom_string_length(name));
++	dukky_push_node(ctx, (dom_node *)targ);
++	/* ... type node */
++	dukky_run_js_listeners(ctx, evt, phase);
++	/* ... */
+ out:
+ 	/* ... */
+ 	dom_node_unref(targ);
+ 	dom_string_unref(name);
+ }
+ 
++static void dukky_generic_event_handler_bubble(dom_event *evt, void *pw)
++{
++	dukky_generic_event_handler_(evt, (duk_context *)pw, false);
++}
++
++static void dukky_generic_event_handler_capture(dom_event *evt, void *pw)
++{
++	dukky_generic_event_handler_(evt, (duk_context *)pw, true);
++}
++
++/**
++ * Add one libdom listener for a phase, logging failure.
++ */
++static void dukky_add_libdom_listener(duk_context *ctx,
++				      struct dom_element *ele,
++				      dom_string *name,
++				      bool capture)
++{
++	dom_event_listener *listen = NULL;
++	dom_exception exc;
++
++	exc = dom_event_listener_create(capture ?
++					dukky_generic_event_handler_capture :
++					dukky_generic_event_handler_bubble,
++					ctx, &listen);
++	if (exc != DOM_NO_ERR) return;
++	exc = dom_event_target_add_event_listener(ele, name, listen, capture);
++	if (exc != DOM_NO_ERR) {
++		NSLOG(dukky, DEBUG,
++		      "Unable to register %s listener for %p.%*s",
++		      capture ? "capturing" : "bubbling", ele,
++		      (int)dom_string_length(name), dom_string_data(name));
++	} else {
++		NSLOG(dukky, DEBUG,
++		      "have registered %s listener for %p.%*s",
++		      capture ? "capturing" : "bubbling", ele,
++		      (int)dom_string_length(name), dom_string_data(name));
++	}
++	dom_event_listener_unref(listen);
++}
++
++/**
++ * Ensure this node's events of this type reach the duktape dispatcher.
++ *
++ * Registration is per (node, event NAME) — deliberately NOT per phase.
++ * Registering only the phase the FIRST JS listener asked for was two bugs
++ * at once: a `{capture: true}` listener never fired (libdom only invokes
++ * capture registrations in the capturing walk, which does not include the
++ * target), and, because this map is keyed by name, every LATER non-capture
++ * listener for that type on that element was silently dead too.  So both
++ * phases are registered up front and the phase filtering happens where it
++ * belongs — over the JS listener list, in dukky_generic_event_handler_.
++ *
++ * \param ctx     duktape context
++ * \param ele     the element, or NULL for the Window
++ * \param name    the event type
++ * \param capture IGNORED — kept only because nsgenbind emits this call
++ *                with a hardcoded `false` from every generated on*
++ *                setter, so the arity is the generator's to choose
++ */
+ void dukky_register_event_listener_for(duk_context *ctx,
+ 				       struct dom_element *ele,
+ 				       dom_string *name,
+ 				       bool capture)
+ {
+-	dom_event_listener *listen = NULL;
+-	dom_exception exc;
+-
+ 	/* ... */
+ 	if (ele == NULL) {
+ 		/* A null element is the Window object */
+@@ -1378,6 +1547,21 @@
+ 	/* ... node handlers */
+ 	duk_pop_2(ctx);
+ 	/* ... */
++
++	/* Remember the TYPE document-wide, whatever the target: the html
++	 * content asks js_event_type_registered() before it does the work of
++	 * synthesising a UI event, so a page with no mousemove listener
++	 * costs nothing per motion event. */
++	duk_get_global_string(ctx, EVENT_TYPE_MAGIC);
++	/* ... types */
++	duk_push_lstring(ctx, dom_string_data(name), dom_string_length(name));
++	duk_push_boolean(ctx, true);
++	/* ... types name true */
++	duk_put_prop(ctx, -3);
++	/* ... types */
++	duk_pop(ctx);
++	/* ... */
++
+ 	if (ele == NULL) {
+ 		/* Nothing more to do, Window doesn't register in the
+ 		 * normal event listener flow
+@@ -1385,21 +1569,13 @@
+ 		return;
+ 	}
+ 
+-	/* Otherwise add an event listener to the element */
+-	exc = dom_event_listener_create(dukky_generic_event_handler, ctx,
+-					&listen);
+-	if (exc != DOM_NO_ERR) return;
+-	exc = dom_event_target_add_event_listener(
+-		ele, name, listen, capture);
+-	if (exc != DOM_NO_ERR) {
+-		NSLOG(dukky, DEBUG,
+-		      "Unable to register listener for %p.%*s", ele,
+-		      (int)dom_string_length(name), dom_string_data(name));
+-	} else {
+-		NSLOG(dukky, DEBUG, "have registered listener for %p.%*s",
+-		      ele, (int)dom_string_length(name), dom_string_data(name));
+-	}
+-	dom_event_listener_unref(listen);
++	/* Otherwise add BOTH phases' listeners to the element.  Under the
++	 * Lane C kill switch only the bubble phase is registered, which is
++	 * the upstream behaviour a capture listener could never escape. */
++	dukky_add_libdom_listener(ctx, ele, name, false);
++#if NETSURF_UI_EVENTS
++	dukky_add_libdom_listener(ctx, ele, name, true);
++#endif
+ }
+ 
+ /* The sub-listeners are a list of {callback,flags} tuples */
+@@ -1564,74 +1740,82 @@
+ 	dukky_leave_thread(thread);
+ }
+ 
+-bool js_fire_event(jsthread *thread, const char *type, struct dom_document *doc, struct dom_node *target)
++/* exported interface documented in javascript/js.h */
++bool js_event_type_registered(jsthread *thread, const char *type)
+ {
+-	dom_exception exc;
+-	dom_event *evt;
+-	dom_event_target *body;
++	bool ret;
+ 
+-	NSLOG(dukky, DEBUG, "Event: %s (doc=%p, target=%p)", type, doc,
+-	      target);
++	if (thread == NULL) {
++		return false;
++	}
+ 
+-	/** @todo Make this more generic, this only handles load and only
+-	 * targetting the window, so that we actually stand a chance of
+-	 * getting 3.4 out.
+-	 */
++	dukky_enter_thread(thread);
++	/* ... */
++	duk_get_global_string(CTX, EVENT_TYPE_MAGIC);
++	/* ... types */
++	ret = duk_has_prop_string(CTX, -1, type) ? true : false;
++	duk_pop(CTX);
++	/* ... */
++	dukky_leave_thread(thread);
+ 
+-	if (target != NULL)
+-		/* Swallow non-Window-targetted events quietly */
+-		return true;
++	return ret;
++}
+ 
+-	if (strcmp(type, "load") != 0)
+-		/* Swallow non-load events quietly */
+-		return true;
++/**
++ * Run the Window's `on<type>` handler, if it has one.
++ *
++ * The six events the HTML spec forwards from <body> to the Window fall
++ * back to the body's attribute handler when the Window has none of its
++ * own; everything else stops at the Window.
++ *
++ * \return true if a handler ran
++ */
++static bool dukky_fire_window_handler(jsthread *thread, dom_string *type,
++				      struct dom_document *doc,
++				      dom_event *evt)
++{
++	dom_event_target *body;
++	dom_exception exc;
++	bool forwarded;
+ 
+-	/* Okay, we're processing load, targetted at Window, do the single
+-	 * thing which gets us there, which is to find the appropriate event
+-	 * handler and call it.  If we have no event handler on Window then
+-	 * we divert to the body, and if there's no event handler there
+-	 * we swallow the event silently
+-	 */
+-
+-	exc = dom_event_create(&evt);
+-	if (exc != DOM_NO_ERR) return true;
+-	exc = dom_event_init(evt, corestring_dom_load, false, false);
+-	if (exc != DOM_NO_ERR) {
+-		dom_event_unref(evt);
+-		return true;
+-	}
+-	dukky_enter_thread(thread);
+ 	/* ... */
+ 	duk_get_global_string(CTX, HANDLER_MAGIC);
+ 	/* ... handlers */
+-	duk_push_lstring(CTX, "load", 4);
+-	/* ... handlers "load" */
++	duk_push_lstring(CTX, dom_string_data(type), dom_string_length(type));
++	/* ... handlers type */
+ 	duk_get_prop(CTX, -2);
+ 	/* ... handlers handler? */
+ 	if (duk_is_undefined(CTX, -1)) {
+-		/* No handler here, *try* and retrieve a handler from
+-		 * the body
+-		 */
+ 		duk_pop(CTX);
+ 		/* ... handlers */
++		forwarded = (type == corestring_dom_load ||
++			     type == corestring_dom_blur ||
++			     type == corestring_dom_error ||
++			     type == corestring_dom_focus ||
++			     type == corestring_dom_resize ||
++			     type == corestring_dom_scroll);
++		if (forwarded == false || doc == NULL) {
++			duk_pop(CTX);
++			/* ... */
++			return false;
++		}
++		/* Try the body's attribute handler instead */
+ 		exc = dom_html_document_get_body(doc, &body);
+-		if (exc != DOM_NO_ERR) {
+-			dom_event_unref(evt);
+-			dukky_leave_thread(thread);
+-			return true;
++		if (exc != DOM_NO_ERR || body == NULL) {
++			duk_pop(CTX);
++			/* ... */
++			return false;
+ 		}
+ 		dukky_push_node(CTX, (struct dom_node *)body);
+ 		/* ... handlers bodynode */
+ 		if (dukky_get_current_value_of_event_handler(
+-			    CTX, corestring_dom_load, body) == false) {
+-			/* Unref the body, we don't need it any more */
++			    CTX, type, body) == false) {
+ 			dom_node_unref(body);
+ 			/* ... handlers */
+ 			duk_pop(CTX);
+-			dukky_leave_thread(thread);
+-			return true;
++			/* ... */
++			return false;
+ 		}
+-		/* Unref the body, we don't need it any more */
+ 		dom_node_unref(body);
+ 		/* ... handlers handler bodynode */
+ 		duk_pop(CTX);
+@@ -1668,16 +1852,101 @@
+ 
+ 		duk_pop_n(CTX, 6);
+ 		/* ... */
+-		js_event_cleanup(thread, evt);
+-		dom_event_unref(evt);
+-		dukky_leave_thread(thread);
+ 		return true;
+ 	}
+ 	/* ... result */
++	if (duk_is_boolean(CTX, -1) && duk_to_boolean(CTX, -1) == 0) {
++		dom_event_prevent_default(evt);
++	}
+ 	duk_pop(CTX);
+ 	/* ... */
++	return true;
++}
++
++/* exported interface documented in javascript/js.h */
++bool js_fire_event(jsthread *thread, const char *type, struct dom_document *doc, struct dom_node *target)
++{
++	dom_exception exc;
++	dom_event *evt;
++	dom_string *type_s;
++	bool result = true;
++
++	NSLOG(dukky, DEBUG, "Event: %s (doc=%p, target=%p)", type, doc,
++	      target);
++
++	/* This used to swallow everything except a Window-targeted `load`,
++	 * with a comment admitting it was a "so that we actually stand a
++	 * chance of getting 3.4 out" stopgap.  Two things fell out of that:
++	 * nothing could fire a DOM event at a NODE through this entry point,
++	 * and window.addEventListener() registered callbacks that were never
++	 * reachable at all (the Window is not a node, so it never appears in
++	 * libdom's propagation chain — only the code below can reach its
++	 * listeners). */
++
++	if (thread == NULL) {
++		return true;
++	}
++
++	exc = dom_string_create((const uint8_t *)type, strlen(type), &type_s);
++	if (exc != DOM_NO_ERR) {
++		return true;
++	}
++
++	if (target != NULL) {
++		/* A node target: an ordinary libdom dispatch, which reaches
++		 * every registered listener with real capture/target/bubble
++		 * propagation. */
++		dom_event *nevt;
++
++		exc = dom_event_create(&nevt);
++		if (exc != DOM_NO_ERR) {
++			dom_string_unref(type_s);
++			return true;
++		}
++		exc = dom_event_init(nevt, type_s, true, true);
++		if (exc == DOM_NO_ERR) {
++			exc = dom_event_target_dispatch_event(target, nevt,
++							      &result);
++			if (exc != DOM_NO_ERR) {
++				result = true;
++			}
++		}
++		dukky_enter_thread(thread);
++		js_event_cleanup(thread, nevt);
++		dukky_leave_thread(thread);
++		dom_event_unref(nevt);
++		dom_string_unref(type_s);
++		return result;
++	}
++
++	/* Window-targeted. */
++	exc = dom_event_create(&evt);
++	if (exc != DOM_NO_ERR) {
++		dom_string_unref(type_s);
++		return true;
++	}
++	exc = dom_event_init(evt, type_s, false, false);
++	if (exc != DOM_NO_ERR) {
++		dom_event_unref(evt);
++		dom_string_unref(type_s);
++		return true;
++	}
++
++	dukky_enter_thread(thread);
++
++	dukky_fire_window_handler(thread, type_s, doc, evt);
++
++	/* …and the listeners registered with window.addEventListener(). */
++	duk_push_lstring(CTX, dom_string_data(type_s),
++			 dom_string_length(type_s));
++	duk_push_global_object(CTX);
++	/* ... type Window */
++	dukky_run_js_listeners(CTX, evt, DOM_AT_TARGET);
++	/* ... */
++
+ 	js_event_cleanup(thread, evt);
+-	dom_event_unref(evt);
+ 	dukky_leave_thread(thread);
++	dom_event_unref(evt);
++	dom_string_unref(type_s);
+ 	return true;
+ }
+diff -urN a/content/handlers/javascript/duktape/dukky.h b/content/handlers/javascript/duktape/dukky.h
+--- a/content/handlers/javascript/duktape/dukky.h	2026-07-27 11:21:07
++++ b/content/handlers/javascript/duktape/dukky.h	2026-07-27 11:45:31
+@@ -29,6 +29,8 @@
+ duk_bool_t dukky_push_node_stacked(duk_context *ctx);
+ duk_bool_t dukky_push_node(duk_context *ctx, struct dom_node *node);
+ void dukky_inject_not_ctr(duk_context *ctx, int idx, const char *name);
++/* Registers BOTH phases; `capture` is IGNORED and survives only because
++ * nsgenbind emits this call with a hardcoded `false`. */
+ void dukky_register_event_listener_for(duk_context *ctx,
+ 				       struct dom_element *ele,
+ 				       dom_string *name,
+diff -urN a/content/handlers/javascript/duktape/netsurf.bnd b/content/handlers/javascript/duktape/netsurf.bnd
+--- a/content/handlers/javascript/duktape/netsurf.bnd	2026-07-27 11:21:07
++++ b/content/handlers/javascript/duktape/netsurf.bnd	2026-07-27 11:33:37
+@@ -72,7 +72,10 @@
+ /* events */
+ 
+ #include "Event.bnd"
++#include "UIEvent.bnd"
+ #include "KeyboardEvent.bnd"
++#include "MouseEvent.bnd"
++#include "WheelEvent.bnd"
+ 
+ init MutationEvent(struct dom_mutation_event *evt::evt);
+ init UIEvent(struct dom_ui_event *evt::evt);
+diff -urN a/content/handlers/javascript/js.h b/content/handlers/javascript/js.h
+--- a/content/handlers/javascript/js.h	2026-07-27 11:21:07
++++ b/content/handlers/javascript/js.h	2026-07-27 11:34:55
+@@ -129,9 +129,27 @@
+ bool js_exec(jsthread *thread, const uint8_t *txt, size_t txtlen, const char *name);
+ 
+ /**
+- * fire an event at a dom node
++ * fire an event at a dom node, or at the Window when target is NULL
++ *
++ * \return false if a listener called preventDefault() on a cancelable
++ *         event, true otherwise
+  */
+ bool js_fire_event(jsthread *thread, const char *type, struct dom_document *doc, struct dom_node *target);
++
++/**
++ * Has anything in this thread ever registered a listener for this event type?
++ *
++ * The answer is deliberately conservative (never un-set when a listener is
++ * removed, and not scoped to a particular node) — it exists so the html
++ * content can decline to do the WORK of synthesising a UI event, with its
++ * hit test and its libdom allocation, on a page that is not listening.  A
++ * false positive costs one wasted dispatch; a false negative would be a
++ * dropped event, so it must never under-report.
++ *
++ * \param thread the thread, may be NULL (a page with no JS answers false)
++ * \param type   the event type, e.g. "mousemove"
++ */
++bool js_event_type_registered(jsthread *thread, const char *type);
+ 
+ bool
+ js_dom_event_add_listener(jsthread *thread,
+diff -urN a/content/handlers/javascript/none/none.c b/content/handlers/javascript/none/none.c
+--- a/content/handlers/javascript/none/none.c	2026-07-27 11:21:07
++++ b/content/handlers/javascript/none/none.c	2026-07-27 11:35:08
+@@ -71,6 +71,12 @@
+ 	return true;
+ }
+ 
++bool js_event_type_registered(jsthread *thread, const char *type)
++{
++	/* No engine, so nothing can be listening. */
++	return false;
++}
++
+ void js_handle_new_element(jsthread *thread, struct dom_element *node)
+ {
+ }
+diff -urN a/desktop/browser_window.c b/desktop/browser_window.c
+--- a/desktop/browser_window.c	2026-07-27 11:21:07
++++ b/desktop/browser_window.c	2026-07-27 11:38:02
+@@ -4469,6 +4469,36 @@
+ }
+ 
+ /* exported interface documented in netsurf/browser_window.h */
++nserror
++browser_window_get_scroll(struct browser_window *bw, int *sx, int *sy)
++{
++	assert(bw != NULL);
++
++	*sx = 0;
++	*sy = 0;
++
++	/* Core scrollbars, when this window has them */
++	if (bw->scroll_x != NULL) {
++		*sx = scrollbar_get_offset(bw->scroll_x);
++	}
++	if (bw->scroll_y != NULL) {
++		*sy = scrollbar_get_offset(bw->scroll_y);
++	}
++
++	/* A front end that owns the viewport overrides both */
++	if ((bw->window != NULL) && (guit->window->get_scroll != NULL)) {
++		int wx, wy;
++		if (guit->window->get_scroll(bw->window, &wx, &wy) == true) {
++			*sx = wx;
++			*sy = wy;
++		}
++	}
++
++	return NSERROR_OK;
++}
++
++
++/* exported interface documented in netsurf/browser_window.h */
+ void
+ browser_window_mouse_click(struct browser_window *bw,
+ 			   browser_mouse_state mouse,
+diff -urN a/desktop/frames.c b/desktop/frames.c
+--- a/desktop/frames.c	2026-07-27 11:21:07
++++ b/desktop/frames.c	2026-07-27 11:12:32
+@@ -331,8 +331,11 @@
+  */
+ static void browser_window_recalculate_frameset_internal(struct browser_window *bw)
+ {
+-	int widths[bw->cols][bw->rows];
+-	int heights[bw->cols][bw->rows];
++	/* compiler.js has no VLAs: the [cols][rows] grids live on the heap,
++	 * indexed through GRID() below. */
++	int *widths;
++	int *heights;
++#define GRID(g, c, r) ((g)[(c) * bw->rows + (r)])
+ 	int bw_width, bw_height;
+ 	int avail_width, avail_height;
+ 	int row, row2, col, index;
+@@ -344,6 +347,14 @@
+ 
+ 	assert(bw);
+ 
++	widths = malloc(sizeof(*widths) * bw->cols * bw->rows);
++	heights = malloc(sizeof(*heights) * bw->cols * bw->rows);
++	if (widths == NULL || heights == NULL) {
++		free(widths);
++		free(heights);
++		return;
++	}
++
+ 	/* window dimensions */
+ 	if (!bw->parent) {
+ 		browser_window_get_dimensions(bw, &bw_width, &bw_height);
+@@ -370,21 +381,21 @@
+ 
+ 			switch (window->frame_width.unit) {
+ 			case FRAME_DIMENSION_PIXELS:
+-				widths[col][row] = window->frame_width.value *
++				GRID(widths, col, row) = window->frame_width.value *
+ 						window->scale;
+ 				if (window->border) {
+ 					if (col != 0)
+-						widths[col][row] += 1;
++						GRID(widths, col, row) += 1;
+ 					if (col != bw->cols - 1)
+-						widths[col][row] += 1;
++						GRID(widths, col, row) += 1;
+ 				}
+ 				break;
+ 			case FRAME_DIMENSION_PERCENT:
+-				widths[col][row] = bw_width *
++				GRID(widths, col, row) = bw_width *
+ 						window->frame_width.value / 100;
+ 				break;
+ 			case FRAME_DIMENSION_RELATIVE:
+-				widths[col][row] = 0;
++				GRID(widths, col, row) = 0;
+ 				relative += window->frame_width.value;
+ 				break;
+ 			default:
+@@ -397,7 +408,7 @@
+ 						FRAME_DIMENSION_RELATIVE);
+ 				break;
+ 			}
+-			avail_width -= widths[col][row];
++			avail_width -= GRID(widths, col, row);
+ 		}
+ 
+ 		/* Redistribute to fit window */
+@@ -414,7 +425,7 @@
+ 							relative;
+ 					avail_width -= size;
+ 					relative -= window->frame_width.value;
+-					widths[col][row] += size;
++					GRID(widths, col, row) += size;
+ 				}
+ 			}
+ 		} else if (bw_width != avail_width) {
+@@ -424,16 +435,16 @@
+ 			for (col = 0; col < bw->cols; col++) {
+ 				if (col == bw->cols - 1) {
+ 					/* Last cell, use up remainder */
+-					widths[col][row] += extent - applied;
+-					widths[col][row] =
+-							widths[col][row] < 0 ?
+-							0 : widths[col][row];
++					GRID(widths, col, row) += extent - applied;
++					GRID(widths, col, row) =
++							GRID(widths, col, row) < 0 ?
++							0 : GRID(widths, col, row);
+ 				} else {
+ 					/* Find size of cell adjustment */
+-					size = (widths[col][row] * extent) /
++					size = (GRID(widths, col, row) * extent) /
+ 							(bw_width - extent);
+ 					/* Modify cell */
+-					widths[col][row] += size;
++					GRID(widths, col, row) += size;
+ 					applied += size;
+ 				}
+ 			}
+@@ -450,21 +461,21 @@
+ 
+ 			switch (window->frame_height.unit) {
+ 			case FRAME_DIMENSION_PIXELS:
+-				heights[col][row] = window->frame_height.value *
++				GRID(heights, col, row) = window->frame_height.value *
+ 						window->scale;
+ 				if (window->border) {
+ 					if (row != 0)
+-						heights[col][row] += 1;
++						GRID(heights, col, row) += 1;
+ 					if (row != bw->rows - 1)
+-						heights[col][row] += 1;
++						GRID(heights, col, row) += 1;
+ 				}
+ 				break;
+ 			case FRAME_DIMENSION_PERCENT:
+-				heights[col][row] = bw_height *
++				GRID(heights, col, row) = bw_height *
+ 						window->frame_height.value / 100;
+ 				break;
+ 			case FRAME_DIMENSION_RELATIVE:
+-				heights[col][row] = 0;
++				GRID(heights, col, row) = 0;
+ 				relative += window->frame_height.value;
+ 				break;
+ 			default:
+@@ -477,7 +488,7 @@
+ 						FRAME_DIMENSION_RELATIVE);
+ 				break;
+ 			}
+-			avail_height -= heights[col][row];
++			avail_height -= GRID(heights, col, row);
+ 		}
+ 
+ 		if (avail_height == 0)
+@@ -497,7 +508,7 @@
+ 							relative;
+ 					avail_height -= size;
+ 					relative -= window->frame_height.value;
+-					heights[col][row] += size;
++					GRID(heights, col, row) += size;
+ 				}
+ 			}
+ 		} else if (bw_height != avail_height) {
+@@ -507,16 +518,16 @@
+ 			for (row = 0; row < bw->rows; row++) {
+ 				if (row == bw->rows - 1) {
+ 					/* Last cell, use up remainder */
+-					heights[col][row] += extent - applied;
+-					heights[col][row] =
+-							heights[col][row] < 0 ?
+-							0 : heights[col][row];
++					GRID(heights, col, row) += extent - applied;
++					GRID(heights, col, row) =
++							GRID(heights, col, row) < 0 ?
++							0 : GRID(heights, col, row);
+ 				} else {
+ 					/* Find size of cell adjustment */
+-					size = (heights[col][row] * extent) /
++					size = (GRID(heights, col, row) * extent) /
+ 							(bw_height - extent);
+ 					/* Modify cell */
+-					heights[col][row] += size;
++					GRID(heights, col, row) += size;
+ 					applied += size;
+ 				}
+ 			}
+@@ -532,13 +543,13 @@
+ 
+ 			y = 0;
+ 			for (row2 = 0; row2 < row; row2++)
+-				y+= heights[col][row2];
++				y+= GRID(heights, col, row2);
+ 
+ 			window->x = x;
+ 			window->y = y;
+ 
+-			new_width = widths[col][row] - 1;
+-			new_height = heights[col][row] - 1;
++			new_width = GRID(widths, col, row) - 1;
++			new_height = GRID(heights, col, row) - 1;
+ 
+ 			if (window->width != new_width ||
+ 					window->height != new_height) {
+@@ -552,12 +563,16 @@
+ 				browser_window_handle_scrollbars(window);
+ 			}
+ 
+-			x += widths[col][row];
++			x += GRID(widths, col, row);
+ 
+ 			if (window->children)
+ 				browser_window_recalculate_frameset_internal(window);
+ 		}
+ 	}
++
++	free(widths);
++	free(heights);
++#undef GRID
+ }
+ 
+ 
+diff -urN a/desktop/textarea.c b/desktop/textarea.c
+--- a/desktop/textarea.c	2026-07-27 11:21:07
++++ b/desktop/textarea.c	2026-07-27 11:12:32
+@@ -2109,6 +2109,26 @@
  
  
  /* exported interface, documented in textarea.h */
@@ -1206,15 +3523,13 @@ index e2dd7176..a8177988 100644
  bool textarea_set_caret(struct textarea *ta, int caret)
  {
  	int b_off;
-diff --git a/desktop/textarea.h b/desktop/textarea.h
-index 82e0de95..7537dbc8 100644
---- a/desktop/textarea.h
-+++ b/desktop/textarea.h
-@@ -233,6 +233,19 @@ const char * textarea_data(struct textarea *ta, unsigned int *len);
- bool textarea_set_caret(struct textarea *ta, int caret);
+diff -urN a/desktop/textarea.h b/desktop/textarea.h
+--- a/desktop/textarea.h	2026-07-27 11:21:07
++++ b/desktop/textarea.h	2026-07-27 11:12:32
+@@ -234,6 +234,19 @@
  
  
-+/**
+ /**
 + * Get the caret's position
 + *
 + * The inverse of \ref textarea_set_caret, in the same units, so a caret
@@ -1227,14 +3542,352 @@ index 82e0de95..7537dbc8 100644
 +int textarea_get_caret_char(struct textarea *ta);
 +
 +
- /**
++/**
   * Handle redraw requests for text areas
   *
-diff --git a/frontends/monkey/filetype.c b/frontends/monkey/filetype.c
-index 37853a63..1dbbcc00 100644
---- a/frontends/monkey/filetype.c
-+++ b/frontends/monkey/filetype.c
-@@ -67,6 +67,17 @@ void monkey_fetch_filetype_init(const char *mimefile)
+  * \param ta	textarea to render
+diff -urN a/desktop/textinput.c b/desktop/textinput.c
+--- a/desktop/textinput.c	2026-07-27 11:21:07
++++ b/desktop/textinput.c	2026-07-27 11:42:15
+@@ -119,3 +119,19 @@
+ 	return content_keypress(focus->current_content, key);
+ }
+ 
++/* exported interface documented in netsurf/keypress.h */
++bool browser_window_key_release(struct browser_window *bw, uint32_t key)
++{
++	struct browser_window *focus = bw->focus;
++
++	assert(bw->window != NULL);
++
++	if (focus == NULL)
++		focus = bw;
++
++	if (focus->current_content == NULL)
++		return false;
++
++	return content_key_release(focus->current_content, key);
++}
++
+diff -urN a/frontends/monkey/browser.c b/frontends/monkey/browser.c
+--- a/frontends/monkey/browser.c	2026-07-27 11:21:07
++++ b/frontends/monkey/browser.c	2026-07-27 11:43:51
+@@ -31,6 +31,7 @@
+ #include "netsurf/window.h"
+ #include "netsurf/browser_window.h"
+ #include "netsurf/plotters.h"
++#include "netsurf/keypress.h"
+ 
+ #include "monkey/output.h"
+ #include "monkey/browser.h"
+@@ -705,6 +706,158 @@
+ 	}
+ }
+ 
++
++
++/**
++ * Named browser_mouse_state bits, so the driver can compose any state the
++ * core understands.
++ *
++ * WINDOW CLICK only ever produces a synthesised CLICK_n, which is enough
++ * to drive a link or a button but cannot express a press, a hold, a move
++ * or a release — i.e. it cannot drive mousedown/mousemove/mouseup at all.
++ * The DOM event coverage those make possible (todos/0289) has to be
++ * testable in this harness, not only in the full OS e2e, so the state is
++ * spelled out here instead.
++ */
++static const struct {
++	const char *name;
++	browser_mouse_state bit;
++} monkey_mouse_states[] = {
++	{ "PRESS_1", BROWSER_MOUSE_PRESS_1 },
++	{ "PRESS_2", BROWSER_MOUSE_PRESS_2 },
++	{ "CLICK_1", BROWSER_MOUSE_CLICK_1 },
++	{ "CLICK_2", BROWSER_MOUSE_CLICK_2 },
++	{ "DOUBLE", BROWSER_MOUSE_DOUBLE_CLICK },
++	{ "TRIPLE", BROWSER_MOUSE_TRIPLE_CLICK },
++	{ "DRAG_1", BROWSER_MOUSE_DRAG_1 },
++	{ "DRAG_2", BROWSER_MOUSE_DRAG_2 },
++	{ "DRAG_ON", BROWSER_MOUSE_DRAG_ON },
++	{ "HOLDING_1", BROWSER_MOUSE_HOLDING_1 },
++	{ "HOLDING_2", BROWSER_MOUSE_HOLDING_2 },
++	{ "MOD_1", BROWSER_MOUSE_MOD_1 },
++	{ "MOD_2", BROWSER_MOUSE_MOD_2 },
++	{ "MOD_3", BROWSER_MOUSE_MOD_3 },
++	{ "MOD_4", BROWSER_MOUSE_MOD_4 },
++	{ "HOVER", BROWSER_MOUSE_HOVER },
++	{ NULL, 0 }
++};
++
++static void
++monkey_window_handle_mouse(int argc, char **argv)
++{
++	/* `WINDOW MOUSE WIN` _%id%_ `X` _%num%_ `Y` _%num%_ `KIND`
++	 * _%str%_ [`STATE` _%str%_ ...]
++	 *  0      1     2    3       4  5        6  7        8      9
++	 * KIND is TRACK (a move / drag / drag-end) or CLICK (a press,
++	 * click or drag start).  Each STATE is one of the names above and
++	 * they OR together; no STATE at all is BROWSER_MOUSE_HOVER. */
++	struct gui_window *gw;
++	browser_mouse_state mouse = 0;
++	bool track;
++	int x, y, i, j;
++
++	if (argc < 10) {
++		moutf(MOUT_ERROR, "WINDOW MOUSE ARGS BAD");
++		return;
++	}
++
++	gw = monkey_find_window_by_num(atoi(argv[2]));
++	if (gw == NULL) {
++		moutf(MOUT_ERROR, "WINDOW NUM BAD");
++		return;
++	}
++
++	x = atoi(argv[5]);
++	y = atoi(argv[7]);
++
++	if (strcmp(argv[9], "TRACK") == 0) {
++		track = true;
++	} else if (strcmp(argv[9], "CLICK") == 0) {
++		track = false;
++	} else {
++		moutf(MOUT_ERROR, "WINDOW KIND BAD");
++		return;
++	}
++
++	for (i = 10; i < argc; ++i) {
++		if (strcmp(argv[i], "STATE") == 0) {
++			continue;
++		}
++		for (j = 0; monkey_mouse_states[j].name != NULL; ++j) {
++			if (strcmp(argv[i], monkey_mouse_states[j].name) == 0) {
++				mouse |= monkey_mouse_states[j].bit;
++				break;
++			}
++		}
++		if (monkey_mouse_states[j].name == NULL) {
++			moutf(MOUT_ERROR, "WINDOW STATE BAD %s", argv[i]);
++			return;
++		}
++	}
++
++	if (track) {
++		browser_window_mouse_track(gw->bw, mouse, x, y);
++	} else {
++		browser_window_mouse_click(gw->bw, mouse, x, y);
++	}
++}
++
++static void
++monkey_window_handle_key(int argc, char **argv)
++{
++	/* `WINDOW KEY WIN` _%id%_ `CODE` _%num%_ [`KIND` _%str%_]
++	 *  0      1   2    3       4      5       6      7
++	 * CODE is a UCS4 codepoint or an NS_KEY_* value; KIND is DOWN
++	 * (default) or UP. */
++	struct gui_window *gw;
++	uint32_t key;
++
++	if (argc != 6 && argc != 8) {
++		moutf(MOUT_ERROR, "WINDOW KEY ARGS BAD");
++		return;
++	}
++
++	gw = monkey_find_window_by_num(atoi(argv[2]));
++	if (gw == NULL) {
++		moutf(MOUT_ERROR, "WINDOW NUM BAD");
++		return;
++	}
++
++	key = (uint32_t)strtoul(argv[5], NULL, 0);
++
++	if (argc == 8 && strcmp(argv[7], "UP") == 0) {
++		browser_window_key_release(gw->bw, key);
++	} else {
++		browser_window_key_press(gw->bw, key);
++	}
++}
++
++static void
++monkey_window_handle_wheel(int argc, char **argv)
++{
++	/* `WINDOW WHEEL WIN` _%id%_ `X` _%num%_ `Y` _%num%_ `DX` _%num%_
++	 *  `DY` _%num%_
++	 *  0      1     2    3       4  5        6  7        8    9
++	 * 10   11 */
++	struct gui_window *gw;
++
++	if (argc != 12) {
++		moutf(MOUT_ERROR, "WINDOW WHEEL ARGS BAD");
++		return;
++	}
++
++	gw = monkey_find_window_by_num(atoi(argv[2]));
++	if (gw == NULL) {
++		moutf(MOUT_ERROR, "WINDOW NUM BAD");
++		return;
++	}
++
++	moutf(MOUT_WINDOW, "WHEEL WIN %u HANDLED %s", gw->win_num,
++	      browser_window_scroll_at_point(gw->bw, atoi(argv[5]),
++			atoi(argv[7]), atoi(argv[9]), atoi(argv[11])) ?
++			"TRUE" : "FALSE");
++}
++
+ void
+ monkey_window_handle_command(int argc, char **argv)
+ {
+@@ -727,6 +880,12 @@
+ 		monkey_window_handle_exec(argc, argv);
+ 	} else if (strcmp(argv[1], "CLICK") == 0) {
+ 		monkey_window_handle_click(argc, argv);
++	} else if (strcmp(argv[1], "MOUSE") == 0) {
++		monkey_window_handle_mouse(argc, argv);
++	} else if (strcmp(argv[1], "KEY") == 0) {
++		monkey_window_handle_key(argc, argv);
++	} else if (strcmp(argv[1], "WHEEL") == 0) {
++		monkey_window_handle_wheel(argc, argv);
+ 	} else {
+ 		moutf(MOUT_ERROR, "WINDOW COMMAND UNKNOWN %s\n", argv[1]);
+ 	}
+diff -urN a/frontends/monkey/dispatch.c b/frontends/monkey/dispatch.c
+--- a/frontends/monkey/dispatch.c	2026-07-27 11:21:07
++++ b/frontends/monkey/dispatch.c	2026-07-27 12:03:09
+@@ -20,6 +20,7 @@
+ #include <stdio.h>
+ #include <string.h>
+ #include <stdlib.h>
++#include <unistd.h>
+ 
+ #include "utils/log.h"
+ #include "utils/utils.h"
+@@ -60,6 +61,71 @@
+ 	}
+ }
+ 
++/* Input is read with read(2) into this buffer rather than with fgets(3),
++ * and that is not a style choice.  The poll loop select()s on fd 0 and
++ * calls in here when it reports readable — but stdio buffers, so one
++ * fgets() of a burst of commands pulled ALL of them out of the pipe into
++ * the FILE buffer, leaving the fd with nothing.  select() then never
++ * reported readable again and every command after the first was silently
++ * lost.  (setbuf(stdin, NULL) in main.c does not save this on every libc.)
++ *
++ * Nothing hit it while every driver sent one command and waited for a
++ * marker; a driver that has to express a GESTURE — press, move, move,
++ * release — cannot do that, because the intermediate moves have no marker
++ * of their own.  So: read the fd directly, keep the remainder here, and
++ * let the caller drain complete lines with monkey_input_pending(). */
++#define MONKEY_INBUF (PATH_MAX * 4)
++static char monkey_inbuf[MONKEY_INBUF];
++static size_t monkey_inbuf_used = 0;
++static bool monkey_input_eof = false;
++
++/* Exported interface documented in monkey/dispatch.h */
++bool monkey_input_pending(void)
++{
++	return memchr(monkey_inbuf, '\n', monkey_inbuf_used) != NULL;
++}
++
++/**
++ * Pull the next complete line out of the buffer, refilling it first if
++ * there is not one yet.
++ *
++ * \param line  buffer of at least PATH_MAX bytes for the line
++ * \return true if a line was produced, false at end of input
++ */
++static bool monkey_next_line(char *line)
++{
++	char *nl;
++	size_t len;
++
++	while ((nl = memchr(monkey_inbuf, '\n', monkey_inbuf_used)) == NULL) {
++		ssize_t got;
++
++		if (monkey_input_eof ||
++		    monkey_inbuf_used == sizeof(monkey_inbuf)) {
++			return false;
++		}
++		got = read(0, monkey_inbuf + monkey_inbuf_used,
++			   sizeof(monkey_inbuf) - monkey_inbuf_used);
++		if (got <= 0) {
++			monkey_input_eof = true;
++			return false;
++		}
++		monkey_inbuf_used += (size_t)got;
++	}
++
++	len = (size_t)(nl - monkey_inbuf);
++	if (len >= PATH_MAX) {
++		len = PATH_MAX - 1;
++	}
++	memcpy(line, monkey_inbuf, len);
++	line[len] = '\0';
++
++	monkey_inbuf_used -= (size_t)(nl - monkey_inbuf) + 1;
++	memmove(monkey_inbuf, nl + 1, monkey_inbuf_used);
++
++	return true;
++}
++
+ void
+ monkey_process_command(void)
+ {
+@@ -69,15 +135,12 @@
+ 	char *p, *r = NULL;
+ 	handle_command_fn fn = NULL;
+ 	char **nargv;
+-  
+-	if (fgets(buffer, PATH_MAX, stdin) == NULL) {
++
++	if (monkey_next_line(buffer) == false) {
+ 		/* end of input or read error so issue QUIT */
+-		snprintf(buffer, PATH_MAX, "QUIT\n");
++		snprintf(buffer, PATH_MAX, "QUIT");
+ 	}
+ 
+-	/* remove newline */
+-	buffer[strlen(buffer) - 1] = '\0';
+-  
+ 	argv = malloc(sizeof *argv);
+ 	if (argv == NULL) {
+ 		return;
+diff -urN a/frontends/monkey/dispatch.h b/frontends/monkey/dispatch.h
+--- a/frontends/monkey/dispatch.h	2026-07-27 11:21:07
++++ b/frontends/monkey/dispatch.h	2026-07-27 12:03:24
+@@ -16,6 +16,8 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++#include <stdbool.h>
++
+ #ifndef NETSURF_MONKEY_DISPATCH_H
+ #define NETSURF_MONKEY_DISPATCH_H 1
+ 
+@@ -24,6 +26,17 @@
+ nserror monkey_register_handler(const char *cmd, handle_command_fn fn);
+ 
+ void monkey_process_command(void);
++
++/**
++ * Is a complete command line already buffered?
++ *
++ * The poll loop select()s on fd 0, but a burst of commands arrives in ONE
++ * read, so after servicing the first the rest sit in this module's buffer
++ * with nothing left on the fd for select() to report.  Drain with this.
++ *
++ * \return true if monkey_process_command() has a line to act on
++ */
++bool monkey_input_pending(void);
+ 
+ void monkey_free_handlers(void);
+ 
+diff -urN a/frontends/monkey/filetype.c b/frontends/monkey/filetype.c
+--- a/frontends/monkey/filetype.c	2026-07-27 11:21:07
++++ b/frontends/monkey/filetype.c	2026-07-27 11:12:32
+@@ -67,6 +67,17 @@
  	hash_add(mime_hash, "css", "text/css");
  	hash_add(mime_hash, "htm", "text/html");
  	hash_add(mime_hash, "html", "text/html");
@@ -1252,3 +3905,215 @@ index 37853a63..1dbbcc00 100644
  	hash_add(mime_hash, "jpg", "image/jpeg");
  	hash_add(mime_hash, "jpeg", "image/jpeg");
  	hash_add(mime_hash, "bmp", "image/bmp");
+diff -urN a/frontends/monkey/main.c b/frontends/monkey/main.c
+--- a/frontends/monkey/main.c	2026-07-27 11:21:07
++++ b/frontends/monkey/main.c	2026-07-27 12:03:24
+@@ -332,7 +332,14 @@
+ 			monkey_done = true;
+ 		} else if (rdy_fd > 0) {
+ 			if (FD_ISSET(0, &read_fd_set)) {
++				/* A burst of commands arrives in one read, so
++				 * draining is not optional: select() will not
++				 * report the fd readable again for lines that
++				 * are already buffered. */
+ 				monkey_process_command();
++				while (monkey_input_pending()) {
++					monkey_process_command();
++				}
+ 			}
+ 		}
+ 	}
+diff -urN a/include/netsurf/browser_window.h b/include/netsurf/browser_window.h
+--- a/include/netsurf/browser_window.h	2026-07-27 11:21:07
++++ b/include/netsurf/browser_window.h	2026-07-27 11:37:52
+@@ -464,6 +464,23 @@
+ 
+ 
+ /**
++ * Get the viewport scroll offset of a browser window.
++ *
++ * The core is handed DOCUMENT-relative mouse coordinates, but a front end
++ * that scrolls the viewport itself (rather than through core scrollbars)
++ * is the only thing that knows the offset between the two.  This asks it,
++ * falling back to the core's own scrollbars when there is no window.
++ *
++ * \param bw  browser window
++ * \param sx  updated to the horizontal scroll offset
++ * \param sy  updated to the vertical scroll offset
++ * \return NSERROR_OK
++ */
++nserror browser_window_get_scroll(struct browser_window *bw,
++		int *sx, int *sy);
++
++
++/**
+  * Locate a browser window in the specified stack according.
+  *
+  * \param bw  the browser_window to search all relatives of
+diff -urN a/include/netsurf/keypress.h b/include/netsurf/keypress.h
+--- a/include/netsurf/keypress.h	2026-07-27 11:21:07
++++ b/include/netsurf/keypress.h	2026-07-27 11:42:15
+@@ -82,4 +82,18 @@
+ bool browser_window_key_press(struct browser_window *bw, uint32_t key);
+ 
+ 
++/**
++ * Handle key releases in a browser window.
++ *
++ * A front end that can tell presses from releases should call this for
++ * every release; one that cannot simply never calls it and the DOM sees
++ * keydown without keyup, exactly as before.
++ *
++ * \param bw The root browser window
++ * \param key The UCS4 character codepoint
++ * \return true if key handled, false otherwise
++ */
++bool browser_window_key_release(struct browser_window *bw, uint32_t key);
++
++
+ #endif
+diff -urN a/include/netsurf/uievents.h b/include/netsurf/uievents.h
+--- a/include/netsurf/uievents.h	1970-01-01 09:00:00
++++ b/include/netsurf/uievents.h	2026-07-27 11:51:39
+@@ -0,0 +1,48 @@
++/*
++ * This file is part of NetSurf, http://www.netsurf-browser.org/
++ *
++ * NetSurf is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; version 2 of the License.
++ *
++ * NetSurf is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++/**
++ * \file
++ * Build-time kill switch for the DOM UI event coverage (gucOS todos/0289,
++ * "NetSurf Lane C").
++ *
++ * `-DNETSURF_NO_UI_EVENTS` restores the pre-Lane-C behaviour exactly: the
++ * only UI events the browser dispatches are `click` — as a plain Event, so
++ * with no coordinates — and `keydown`, at the document root rather than at
++ * the focused element, with no `key` name for Enter/Tab/Backspace; and a
++ * capture-phase listener registers in no phase it can ever be invoked in.
++ *
++ * It exists so the gate can show the RED: `vendor/netsurf/smoke-js.mjs`
++ * leg 11 builds this variant from the same tree and requires the paint and
++ * events demo pages to receive nothing at all, while their scripts still
++ * demonstrably run.  A demo that passes with and without the change proves
++ * nothing; this is what stops that.  (The Lane B bridge carries the same
++ * kind of switch, `-DNETSURF_NO_LIVE_RECONVERT`, for the same reason.)
++ *
++ * The two are independent: a build may compile out either, both or
++ * neither.
++ */
++
++#ifndef NETSURF_UIEVENTS_H
++#define NETSURF_UIEVENTS_H
++
++#ifdef NETSURF_NO_UI_EVENTS
++#define NETSURF_UI_EVENTS 0
++#else
++#define NETSURF_UI_EVENTS 1
++#endif
++
++#endif
+diff -urN a/utils/config.h b/utils/config.h
+--- a/utils/config.h	2026-07-27 11:21:07
++++ b/utils/config.h	2026-07-27 11:12:32
+@@ -208,4 +208,26 @@
+ 	#define NO_IPV6
+ #endif
+ 
++
++/* gucOS / wasm32 platform section (the _WIN32 lines above are the
++ * precedent).  Flip to the gucOS libc where it provides the extension
++ * (strcasestr, strchrnul) and to upstream's own portable fallbacks for
++ * the rest (scandir, dirfd/unlinkat/fstatat, regex, utsname, mmap).
++ * See vendor/netsurf/README.md for the full patch table. */
++#if defined(__wasm__)
++#include <strings.h>
++#define HAVE_STRCASESTR
++#define HAVE_STRCHRNUL
++#undef HAVE_SCANDIR
++#undef HAVE_DIRFD
++#undef HAVE_UNLINKAT
++#undef HAVE_FSTATAT
++#undef HAVE_REGEX
++#undef HAVE_UTSNAME
++#undef HAVE_MMAP
++#ifndef isascii
++#define isascii(c) (((c) & ~0x7f) == 0)
++#endif
++#endif /* __wasm__ */
++
+ #endif
+diff -urN a/utils/corestringlist.h b/utils/corestringlist.h
+--- a/utils/corestringlist.h	2026-07-27 11:21:07
++++ b/utils/corestringlist.h	2026-07-27 11:34:05
+@@ -363,6 +363,14 @@
+ CORESTRING_DOM_STRING(wheel);
+ CORESTRING_DOM_STRING(sort);
+ CORESTRING_DOM_STRING(toggle);
++/* DOM UI Events `key` names for the non-printable keys the core is told
++ * about.  Escape/arrows/Home/End/PageUp/PageDown already have theirs
++ * above; without these three, Enter, Tab and Backspace reached script
++ * with `event.key === null`. */
++CORESTRING_DOM_STRING(Enter);
++CORESTRING_DOM_STRING(Tab);
++CORESTRING_DOM_STRING(Backspace);
++CORESTRING_DOM_STRING(Delete);
+ /* DOM userdata keys, not really CSS */
+ CORESTRING_DOM_STRING(__ns_key_box_node_data);
+ CORESTRING_DOM_STRING(__ns_key_libcss_node_data);
+diff -urN a/utils/nsoption.c b/utils/nsoption.c
+--- a/utils/nsoption.c	2026-07-27 11:21:07
++++ b/utils/nsoption.c	2026-07-27 11:12:32
+@@ -82,6 +82,8 @@
+ #include "windows/options.h"
+ #elif defined(nsqt)
+ #include "qt/options.h"
++#elif defined(nsgucos)
++#include "gucos/options.h"
+ #endif
+ 	{ NULL, 0, OPTION_INTEGER, { 0 } }
+ };
+diff -urN a/utils/nsoption.h b/utils/nsoption.h
+--- a/utils/nsoption.h	2026-07-27 11:21:07
++++ b/utils/nsoption.h	2026-07-27 11:12:32
+@@ -75,6 +75,8 @@
+ #include "windows/options.h"
+ #elif defined(nsqt)
+ #include "qt/options.h"
++#elif defined(nsgucos)
++#include "gucos/options.h"
+ #endif
+ 
+ #undef NSOPTION_BOOL
+@@ -150,6 +152,8 @@
+ #include "windows/options.h"
+ #elif defined(nsqt)
+ #include "qt/options.h"
++#elif defined(nsgucos)
++#include "gucos/options.h"
+ #endif
+ 	NSOPTION_LISTEND /* end of list */
+ };
+diff -urN a/utils/talloc.c b/utils/talloc.c
+--- a/utils/talloc.c	2026-07-27 11:21:07
++++ b/utils/talloc.c	2026-07-27 11:12:32
+@@ -55,7 +55,7 @@
+ #include "replace.h"
+ #else
+ #include <stdarg.h>
+-#if !defined(__BEOS__) && __GNUC__ > 2
++#if (!defined(__BEOS__) && __GNUC__ > 2) || defined(__wasm__)
+ /* Assume we've got va_copy */
+ #define HAVE_VA_COPY
+ #include <string.h>

@@ -43,7 +43,7 @@ struct dom_html_br_element;
 static void dukky_wheel_event___init(duk_context *ctx, wheel_event_private_t *priv, struct dom_mouse_event *evt)
 {
 	dukky_mouse_event___init(ctx, &priv->parent, evt);
-#line 88 "../netsurf/content/handlers/javascript/duktape/netsurf.bnd"
+#line 91 "../netsurf/content/handlers/javascript/duktape/netsurf.bnd"
 #line 48 "wheel_event.c"
 }
 
@@ -200,7 +200,18 @@ static duk_ret_t dukky_wheel_event_deltaX_getter(duk_context *ctx)
 		return 0; /* can do? No can do. */
 	}
 
-	return 0;
+#line 19 "WheelEvent.bnd"
+
+	dom_exception exc;
+	int32_t d;
+
+	exc = dom_mouse_multi_wheel_event_get_wheel_delta_x(
+			priv->parent.parent.parent.evt, &d);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_number(ctx, (duk_double_t) d);
+	return 1;
+#line 215 "wheel_event.c"
 }
 
 static duk_ret_t dukky_wheel_event_deltaY_getter(duk_context *ctx)
@@ -215,7 +226,18 @@ static duk_ret_t dukky_wheel_event_deltaY_getter(duk_context *ctx)
 		return 0; /* can do? No can do. */
 	}
 
-	return 0;
+#line 32 "WheelEvent.bnd"
+
+	dom_exception exc;
+	int32_t d;
+
+	exc = dom_mouse_multi_wheel_event_get_wheel_delta_y(
+			priv->parent.parent.parent.evt, &d);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_number(ctx, (duk_double_t) d);
+	return 1;
+#line 241 "wheel_event.c"
 }
 
 static duk_ret_t dukky_wheel_event_deltaZ_getter(duk_context *ctx)
@@ -230,7 +252,18 @@ static duk_ret_t dukky_wheel_event_deltaZ_getter(duk_context *ctx)
 		return 0; /* can do? No can do. */
 	}
 
-	return 0;
+#line 45 "WheelEvent.bnd"
+
+	dom_exception exc;
+	int32_t d;
+
+	exc = dom_mouse_multi_wheel_event_get_wheel_delta_z(
+			priv->parent.parent.parent.evt, &d);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_number(ctx, (duk_double_t) d);
+	return 1;
+#line 267 "wheel_event.c"
 }
 
 static duk_ret_t dukky_wheel_event_deltaMode_getter(duk_context *ctx)
@@ -245,7 +278,12 @@ static duk_ret_t dukky_wheel_event_deltaMode_getter(duk_context *ctx)
 		return 0; /* can do? No can do. */
 	}
 
-	return 0;
+#line 58 "WheelEvent.bnd"
+
+	/* DOM_DELTA_PIXEL: the frontends hand the core a pixel step. */
+	duk_push_uint(ctx, 0);
+	return 1;
+#line 287 "wheel_event.c"
 }
 
 duk_ret_t dukky_wheel_event___proto(duk_context *ctx, void *udata)

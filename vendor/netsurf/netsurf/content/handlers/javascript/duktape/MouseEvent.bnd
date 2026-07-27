@@ -1,0 +1,214 @@
+/* Binding for browser using duktape and libdom
+ *
+ * This file is part of NetSurf, http://www.netsurf-browser.org/
+ *
+ * Released under the terms of the MIT License,
+ *         http://www.opensource.org/licenses/mit-license
+ *
+ * MouseEvent had NO .bnd at all, so every one of its attributes generated a
+ * silent no-op stub: `event.clientX` read `undefined` on every mouse event
+ * the browser fired.  That is why a draw-where-you-clicked canvas was not
+ * possible before this lane.
+ *
+ * Coordinate contract (see also html/interaction.c's
+ * html_fire_mouse_event):
+ *
+ *   pageX/pageY    document-relative — the coordinate the core is given.
+ *   clientX/clientY  viewport-relative: page minus the frontend's scroll
+ *                  offset (browser_window_get_scroll).  Spec-correct.
+ *   screenX/screenY  the core has NO screen origin — a gui_window's position
+ *                  on the desktop is never told to it — so these report the
+ *                  viewport-relative coordinate, i.e. screen == client for a
+ *                  window at the screen origin.  Deliberate and documented:
+ *                  the alternative is `undefined`, and unlike page coords
+ *                  this at least stays correct as the document scrolls.
+ *
+ * pageX/pageY are standard (CSSOM View) but absent from the 2015 uievents.idl
+ * snapshot vendored here; they are added to it alongside this file.
+ */
+
+getter MouseEvent::screenX ()
+%{
+	dom_exception exc;
+	int32_t x;
+
+	/* client, not screen — see the coordinate contract above */
+	exc = dom_mouse_event_get_client_x(priv->parent.parent.evt, &x);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_int(ctx, (duk_int_t) x);
+	return 1;
+%}
+
+getter MouseEvent::screenY ()
+%{
+	dom_exception exc;
+	int32_t y;
+
+	exc = dom_mouse_event_get_client_y(priv->parent.parent.evt, &y);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_int(ctx, (duk_int_t) y);
+	return 1;
+%}
+
+getter MouseEvent::clientX ()
+%{
+	dom_exception exc;
+	int32_t x;
+
+	exc = dom_mouse_event_get_client_x(priv->parent.parent.evt, &x);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_int(ctx, (duk_int_t) x);
+	return 1;
+%}
+
+getter MouseEvent::clientY ()
+%{
+	dom_exception exc;
+	int32_t y;
+
+	exc = dom_mouse_event_get_client_y(priv->parent.parent.evt, &y);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_int(ctx, (duk_int_t) y);
+	return 1;
+%}
+
+getter MouseEvent::pageX ()
+%{
+	dom_exception exc;
+	int32_t x;
+
+	/* the document-relative coordinate lives in libdom's screen slot */
+	exc = dom_mouse_event_get_screen_x(priv->parent.parent.evt, &x);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_int(ctx, (duk_int_t) x);
+	return 1;
+%}
+
+getter MouseEvent::pageY ()
+%{
+	dom_exception exc;
+	int32_t y;
+
+	exc = dom_mouse_event_get_screen_y(priv->parent.parent.evt, &y);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_int(ctx, (duk_int_t) y);
+	return 1;
+%}
+
+getter MouseEvent::ctrlKey ()
+%{
+	dom_exception exc;
+	bool key;
+
+	exc = dom_mouse_event_get_ctrl_key(priv->parent.parent.evt, &key);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_boolean(ctx, (duk_bool_t) key);
+	return 1;
+%}
+
+getter MouseEvent::shiftKey ()
+%{
+	dom_exception exc;
+	bool key;
+
+	exc = dom_mouse_event_get_shift_key(priv->parent.parent.evt, &key);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_boolean(ctx, (duk_bool_t) key);
+	return 1;
+%}
+
+getter MouseEvent::altKey ()
+%{
+	dom_exception exc;
+	bool key;
+
+	exc = dom_mouse_event_get_alt_key(priv->parent.parent.evt, &key);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_boolean(ctx, (duk_bool_t) key);
+	return 1;
+%}
+
+getter MouseEvent::metaKey ()
+%{
+	dom_exception exc;
+	bool key;
+
+	exc = dom_mouse_event_get_meta_key(priv->parent.parent.evt, &key);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_boolean(ctx, (duk_bool_t) key);
+	return 1;
+%}
+
+getter MouseEvent::button ()
+%{
+	dom_exception exc;
+	unsigned short button;
+
+	exc = dom_mouse_event_get_button(priv->parent.parent.evt, &button);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_uint(ctx, (duk_uint_t) button);
+	return 1;
+%}
+
+getter MouseEvent::buttons ()
+%{
+	dom_exception exc;
+	unsigned short buttons;
+
+	exc = dom_mouse_event_get_buttons(priv->parent.parent.evt, &buttons);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_uint(ctx, (duk_uint_t) buttons);
+	return 1;
+%}
+
+getter MouseEvent::relatedTarget ()
+%{
+	dom_exception exc;
+	dom_event_target *et;
+
+	exc = dom_mouse_event_get_related_target(priv->parent.parent.evt, &et);
+	if (exc != DOM_NO_ERR) return 0;
+
+	if (et == NULL) {
+		duk_push_null(ctx);
+		return 1;
+	}
+
+	dukky_push_node(ctx, (dom_node *)et);
+	dom_node_unref((dom_node *)et);
+	return 1;
+%}
+
+method MouseEvent::getModifierState ()
+%{
+	dom_string *modifier;
+	dom_exception exc;
+	duk_size_t slen;
+	const char *s;
+	bool state;
+
+	s = duk_safe_to_lstring(ctx, 0, &slen);
+	exc = dom_string_create((const uint8_t *)s, slen, &modifier);
+	duk_pop(ctx);
+	if (exc != DOM_NO_ERR) return 0;
+
+	exc = dom_mouse_event_get_modifier_state(priv->parent.parent.evt,
+			modifier, &state);
+	dom_string_unref(modifier);
+	if (exc != DOM_NO_ERR) return 0;
+
+	duk_push_boolean(ctx, (duk_bool_t) state);
+	return 1;
+%}

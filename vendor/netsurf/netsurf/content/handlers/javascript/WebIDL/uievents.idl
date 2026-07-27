@@ -37,6 +37,12 @@ interface MouseEvent : UIEvent {
     // Introduced in this specification
     readonly    attribute unsigned short buttons;
     boolean getModifierState (DOMString keyArg);
+    // CSSOM View Module; standard, but merged into UI Events after the
+    // 2015 snapshot this file was retrieved from.  gucOS Lane C
+    // (todos/0289) needs document-relative coordinates because neither
+    // getBoundingClientRect nor offsetLeft exists yet.
+    readonly    attribute long           pageX;
+    readonly    attribute long           pageY;
 };
 
 dictionary MouseEventInit : EventModifierInit {

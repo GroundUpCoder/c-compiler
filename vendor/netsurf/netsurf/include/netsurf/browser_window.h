@@ -464,6 +464,23 @@ void browser_window_mouse_track(struct browser_window *bw,
 
 
 /**
+ * Get the viewport scroll offset of a browser window.
+ *
+ * The core is handed DOCUMENT-relative mouse coordinates, but a front end
+ * that scrolls the viewport itself (rather than through core scrollbars)
+ * is the only thing that knows the offset between the two.  This asks it,
+ * falling back to the core's own scrollbars when there is no window.
+ *
+ * \param bw  browser window
+ * \param sx  updated to the horizontal scroll offset
+ * \param sy  updated to the vertical scroll offset
+ * \return NSERROR_OK
+ */
+nserror browser_window_get_scroll(struct browser_window *bw,
+		int *sx, int *sy);
+
+
+/**
  * Locate a browser window in the specified stack according.
  *
  * \param bw  the browser_window to search all relatives of

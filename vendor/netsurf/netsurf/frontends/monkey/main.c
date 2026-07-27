@@ -332,7 +332,14 @@ static void monkey_run(void)
 			monkey_done = true;
 		} else if (rdy_fd > 0) {
 			if (FD_ISSET(0, &read_fd_set)) {
+				/* A burst of commands arrives in one read, so
+				 * draining is not optional: select() will not
+				 * report the fd readable again for lines that
+				 * are already buffered. */
 				monkey_process_command();
+				while (monkey_input_pending()) {
+					monkey_process_command();
+				}
 			}
 		}
 	}

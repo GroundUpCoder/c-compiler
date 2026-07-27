@@ -17,6 +17,15 @@ struct dom_abstract_view;
 
 typedef struct dom_mouse_multi_wheel_event dom_mouse_multi_wheel_event;
 
+/* Constructor.  Public for the same reason _dom_keyboard_event_create is:
+ * an embedder that synthesises UI events (NetSurf's html/interaction.c)
+ * needs to make one without reaching into libdom's private headers. */
+dom_exception _dom_mouse_multi_wheel_event_create(
+		dom_mouse_multi_wheel_event **evt);
+#define dom_mouse_multi_wheel_event_create(n) \
+		_dom_mouse_multi_wheel_event_create( \
+		(dom_mouse_multi_wheel_event **) (n))
+
 dom_exception _dom_mouse_multi_wheel_event_get_wheel_delta_x(
 		dom_mouse_multi_wheel_event *evt, int32_t *x);
 #define dom_mouse_multi_wheel_event_get_wheel_delta_x(e, x) \
