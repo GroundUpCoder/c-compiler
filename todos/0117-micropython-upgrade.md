@@ -158,15 +158,75 @@ What shipped, and the two things a later reader most needs to know:
 - **Then** seed `/bin/python` → `/bin/micropython` in image.json (or a
   thin argv0 alias) and bump the image version.
 
-**Round 2 — FS `import` of real .py modules + a usable stdlib slice.**
-- Filesystem module import (`import foo` finds `/…/foo.py`); `sys.path`
-  seeded sensibly (cwd + a site dir under `/usr/lib/micropython` or
-  similar).
-- Curate which built-in modules to compile in (the minimal port ships
-  `math`/`sys`/`gc`/`array`/`collections`/`struct`/`errno`/…; decide the
-  target set — `os`, `json`, `time`, `re` are the obvious next ones).
-- Consider a shebang story: `#!/bin/python` scripts run via the 0065
-  `_spawnShebang` path.
+**Round 2 — search path + a usable stdlib slice.** — DONE 2026-07-28, see below.
+
+## R2 — DONE 2026-07-28
+
+- **The plan's premise was wrong in a way worth recording.** It said "the
+  minimal port ships `math`/`sys`/`gc`/`array`/`collections`/`struct`/
+  `errno`/…". Measured: the built-in module set was **`math`, `io`, `sys`,
+  `builtins`** and nothing else. `py/modstruct.c`, `modarray.c`,
+  `modcollections.c`, `modgc.c`, `moderrno.c` were all in `bin.json` and all
+  compiling to EMPTY translation units, because `MICROPY_CONFIG_ROM_LEVEL_MINIMUM`
+  gates them at CORE/EXTRA. So four of the "already shipped" modules were part
+  of R2's work, and they cost one `#define` each.
+- **Module set** (rationale table in `vendor/micropython/README.md`): the four
+  above + `micropython`/`cmath`, then `os` (+ a real `os.path` submodule),
+  `json`, `time`, `re`, `random`, `binascii`, `heapq`, `platform` vendored from
+  upstream `extmod/`, plus `sys.modules`. Deliberately NOT taken: `hashlib`,
+  `deflate`, `select`, `socket`, `datetime`, `argparse`, `subprocess` — each
+  needs a new vendored third-party library, a kernel seam, or the
+  micropython-lib question answered; register entry **L43**, R3 owns them.
+- **`os` is upstream's `extmod/modos.c` + a port `portmodos.c` includefile**,
+  not a rewrite. Upstream reaches the filesystem only through the VFS, which
+  this port deliberately does not have (the kernel owns mounting), so every FS
+  name in its globals table sits behind `#if MICROPY_VFS`. The patch is ONE
+  hunk binding the same names to POSIX bodies — the R1 `file.c` decision
+  applied to directories. `os.path` is new: a real submodule
+  (`MICROPY_MODULE_BUILTIN_SUBPACKAGES`), so `import os.path` and
+  `from os.path import join` work.
+- **`sys.path` policy**: `[<script's dir> | "", ".frozen",
+  /usr/local/lib/micropython, <dir of the real binary>/lib]`. The site dir is
+  under `/usr/local` because `/usr` is a sealed read-only volume (0040) — a
+  site dir there could never be written to. It precedes the package's own lib,
+  which diverges from CPython (stdlib before site-packages) and agrees with
+  every other layered lookup in gucOS. The package lib is DERIVED from
+  argv[0]'s symlink-chased directory, because micropython is a gucman package
+  and lives at `/opt/micropython` or `/usr/opt/micropython` depending on how it
+  got there.
+- **`-m` landed too** (register entry L36 retired), over upstream's own
+  `MICROPY_MODULE_OVERRIDE_MAIN_IMPORT`. R1 refused it because there was no
+  module-execution path; there is one now, so refusing it was just a missing
+  feature.
+- **`mp_hal_ticks_ms` was `return 0`.** A stub nobody called, because `time`
+  was not compiled in. Enabling `time` made it load-bearing, and a stubbed tick
+  is worse than a missing module: `ticks_diff` returns 0 forever and a script
+  waiting on the clock hangs SILENTLY. Real clocks now live in `mphal.c`
+  (MONOTONIC for ticks, REALTIME for `time()`), and the epoch is 1970 rather
+  than MicroPython's embedded-flavoured 2000, so `time.time()` agrees with
+  CPython and with the rest of the OS.
+- **A silent generator bug found on the way**: `tools/mkmpgenhdr.js` dropped
+  every qstr in a `MICROPY_PY_*_INCLUDEFILE` port source. `makeqstrdefs.py`
+  names its per-file buckets after the preprocessor's line markers, so a file
+  reached through `-I.` becomes `.__portmodos.c.qstr` — a DOTFILE — and the
+  collecting step's `glob("*.qstr")` does not match leading dots. No error;
+  just an undeclared `MP_QSTR_x` at link time. mkmpgenhdr un-dots the buckets
+  before the collect.
+- **The shebang story needs nothing built.** `#!/usr/local/bin/python foo.py`
+  already works through 0065's `_spawnShebang` — it re-dispatches to the
+  interpreter with the script path as argv[1], which is exactly the CLI R1
+  built. Worth saying explicitly because it interacts with `todos/0338`: a
+  script whose shebang names the DISPATCHER gets implementation-switching for
+  free, and one that names `/usr/local/bin/python` today will follow the
+  dispatcher once 0338 lands, since that is the same path.
+- Numbers: upstream corpus 537→**580 passing** (3 failed — the same three
+  pre-existing float tests, by name — and 108→65 skipped). New tests:
+  `tests/kernel/test_micropython_stdlib_e2e.js` (49 checks, spawned through the
+  real `/usr/local/bin/python` → `/opt/micropython/micropython` symlink so the
+  argv[0] chase is under test) and `tests/micropython/09_stdlib.py`, whose
+  golden is generated by real CPython 3 and matched byte for byte.
+- Register: L35/L36/L37 retired, **L42** (localtime is gmtime — no timezone
+  database) and **L43** (the absent modules) filed.
 
 **Round 3+ (reassess after R2) — dialect breadth as demand appears.**
 - More stdlib, `subprocess`-ish spawn shim over `__spawn`, whatever the
@@ -179,10 +239,14 @@ What shipped, and the two things a later reader most needs to know:
   `python` with no args is still the REPL; `open('/root/t.py').read()`
   works from the REPL.
 - R2: a two-file `import`-ing script runs; a curated `import os, json`
-  succeeds.
+  succeeds. — MET.
 - New kernel e2e test alongside `tests/kernel/test_repl_pty_e2e.js`
   (script-file + import legs), plus a note in CLAUDE.md's REPL paragraph
   updating the "argv ignored, no open()/import" description once it's
-  false.
-- Image version bumped; `vendor/micropython/README.md` created (it's
-  currently missing) pinning the config choice + patch list.
+  false. — MET (`test_micropython_stdlib_e2e.js`; CLAUDE.md rewritten).
+- `vendor/micropython/README.md` pinning the config choice + patch list. —
+  MET (R1 created it; R2 extended the config/module/patch sections). NB no
+  `os/image.json` version bump: micropython is a gucman PACKAGE, so the
+  base image is untouched — `packages/micropython.json` carries the version
+  (`1.28-3`), and a `dist/packages` rebuild + a fat-image rebake are what a
+  vendor change forces.

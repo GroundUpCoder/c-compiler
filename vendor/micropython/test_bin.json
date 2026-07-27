@@ -7,6 +7,14 @@
     "genhdr"
   ],
   "sources": [
+    "extmod/modbinascii.c",
+    "extmod/modheapq.c",
+    "extmod/modjson.c",
+    "extmod/modos.c",
+    "extmod/modplatform.c",
+    "extmod/modrandom.c",
+    "extmod/modre.c",
+    "extmod/modtime.c",
     "py/argcheck.c",
     "py/asmbase.c",
     "py/bc.c",
@@ -116,10 +124,12 @@
     "shared/readline/readline.c",
     "shared/runtime/pyexec.c",
     "shared/runtime/stdout_helpers.c",
+    "shared/timeutils/timeutils.c",
+    "_frozen_mpy.c",
     "file.c",
     "main.c",
-    "uart_core.c",
-    "_frozen_mpy.c"
+    "mphal.c",
+    "uart_core.c"
   ],
   "compilerArgs": [
     "--gc-spill-locals"

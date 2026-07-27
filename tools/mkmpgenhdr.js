@@ -64,6 +64,28 @@ const GEN_FILES = [
   'compressed.data.h',
 ];
 
+// makeqstrdefs.py's `split` names each per-file bucket after the source path in
+// the preprocessor's line markers, with '/' -> '__'. A file reached through
+// `-I.` is marked "./portmodos.c", so its bucket lands as ".__portmodos.c.qstr"
+// — a DOTFILE. The following `cat` step collects buckets with
+// `glob.glob(dir + "/*." + mode)`, and glob does not match leading dots, so
+// every qstr/module/root-pointer registration in such a file is silently
+// dropped: no error, just a link failure later with an undeclared MP_QSTR_x.
+//
+// This bites exactly the MICROPY_PY_*_INCLUDEFILE files (portmodos.c,
+// portmodtime.c) — port sources that are #included INTO an upstream module
+// rather than compiled on their own, which is upstream's own extension
+// mechanism. Rename the buckets before `cat` runs.
+function undotSplitOutput(dir, mode) {
+  if (!fs.existsSync(dir)) return;
+  for (const name of fs.readdirSync(dir)) {
+    if (!name.startsWith('.') || !name.endsWith('.' + mode)) continue;
+    const fixed = name.replace(/^\.+_*/, '');
+    if (!fixed || fixed === name) continue;
+    fs.renameSync(path.join(dir, name), path.join(dir, fixed));
+  }
+}
+
 function usage(code) {
   process.stdout.write(
     'usage: node tools/mkmpgenhdr.js [--check] [--dir DIR] [--project P]...\n' +
@@ -139,6 +161,7 @@ function main() {
     const collected = path.join(tmp, mode + '.collected');
     py('makeqstrdefs.py', ['split', mode, path.join(tmp, 'qstr.i.last'),
                            path.join(tmp, mode), collected]);
+    undotSplitOutput(path.join(tmp, mode), mode);
     py('makeqstrdefs.py', ['cat', mode, '_', path.join(tmp, mode), collected]);
   }
 
