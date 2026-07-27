@@ -1,5 +1,35 @@
 # Does v177 (todos/0332) help any binary in the SHIPPED gucOS image?
 
+> ## ⚠️ SUPERSEDED CLAIMS — read before quoting anything below
+>
+> This file is the primary evidence for v177's benefit and its core result
+> stands. But it was written 2026-07-27 and **two of its statements have since
+> been retired by the coordination board.** They are left in place below because
+> this is a historical measurement record, not a live spec — do not quote them.
+>
+> **1. "7 qualifying br_tables across 5 binaries" (Result 2) — do not quote as
+> the package win.** The figure is not arithmetically wrong; it is a census of
+> the *all-packages bake*, which contains `/bin/sameboy` — already counted as
+> the shipped-image result in Result 1. Counting it again inflates the package
+> win. **The package-only figure is SIX tables across FOUR packages:** sqlite3
+> 1720; jq 1667 / 591 / 551; micropython 529; punes 513. The board's standing
+> wording is "SIX (never 7)". ⚠️ jq and punes are **code shape only — no
+> benchmark** was run for them.
+>
+> **2. "MicroPython ... is `/usr/local/bin/python` in gucOS, so the `python`
+> users actually run is ~16x faster" (Result 2, after the runtime A/B) — FALSE
+> as written.** Measured later by a real BlockFS walk over the live image (240
+> entries): **gucOS ships NO `python` verb at all.** MicroPython is an opt-in
+> **gucman package**, never baked — the v178 image hash `e208b42703f9…` is
+> byte-identical before and after adding it. The correct phrasing is
+> **"MicroPython is gucOS's python FOR USERS WHO HAVE INSTALLED IT."** Never
+> "gucOS's python got 15.9x faster". The same scoping applies to SQLite's 26x.
+>
+> Also note the standing scope on the headline: the 6.0x is **one measured
+> lowering improvement in one app, on a headless upper-bound harness** — there
+> is **no in-OS or browser measurement**. The 15.9x / 26x figures are standalone
+> `node host.js` numbers.
+
 **Answer: YES — exactly one binary, `/bin/sameboy`, one function, `GB_display_run`
 (the PPU). Measured 6.0x faster on the emulator's core loop (4.50s -> 0.75s for
 600 frames).**
@@ -130,6 +160,11 @@ before any compositing, audio or rendering; at v177 it eats ~7.5%.
 
 Same census on the all-packages bake: **7 qualifying br_tables across 5 binaries.**
 
+> ⚠️ **SUPERSEDED — do not quote "7" as the package win.** This census includes
+> `/bin/sameboy`, which is the *shipped-image* result from Result 1; counting it
+> here double-counts it. **Package-only: SIX tables across FOUR packages.** See
+> the header block at the top of this file.
+
 | binary | function | entries | non-default | what it is |
 |---|---|---|---|---|
 | `/opt/sqlite3/sqlite3` | `sqlite3VdbeExec` | 1720 | 1720 | VDBE bytecode interpreter |
@@ -158,6 +193,12 @@ separate defect (todos/0334).
 MicroPython is the notable one: it is `/usr/local/bin/python` in gucOS, so **the
 `python` users actually run is ~16x faster on CPU-bound work** once v177 deploys
 and packages are rebuilt.
+
+> ⚠️ **SUPERSEDED — the premise is FALSE.** A later BlockFS walk over the live
+> image (240 entries) established that **gucOS ships no `python` verb at all**;
+> MicroPython is an opt-in gucman package, never baked. Read this paragraph as
+> **"~16x faster for users who have INSTALLED MicroPython"**. See the header
+> block at the top of this file.
 
 ## Limits — what this does NOT establish
 
