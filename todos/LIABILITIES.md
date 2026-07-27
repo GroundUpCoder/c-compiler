@@ -273,4 +273,9 @@ thing this file exists to kill.
 - anchor: // only on a prototype or a re-declaration is dropped and the
 - provenance: 0321
 
+### L41 — a function with more than 65520 basic blocks still dispatches through an O(n) linear compare chain
+- ticket: 0333
+- file: compiler.js
+- anchor: // more than 65520 blocks still degrade to the linear chain — see todos/0333.
+
 <!-- END ENTRIES -->

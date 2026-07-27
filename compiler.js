@@ -17234,6 +17234,29 @@ function getWasmFunctionTypeIdForCFunctionType(wmod, funcType) {
   return wmod.addFunctionTypeId(params, results);
 }
 
+// Largest case-value RANGE we will lower to a `br_table`. Above it, a switch
+// falls back to a linear `br_if` compare chain, which costs O(cases) per
+// dispatch — see the SSwitch arm's `dense` test.
+//
+// This used to be 512, which was the todos/0332 pathology. The bound is NOT a
+// code-size trade-off: the accompanying density test (>= 40%) already
+// guarantees the table holds at most 2.5 entries per case, and a table entry
+// is 1-3 LEB bytes against ~8 bytes for a compare-and-branch, so whenever the
+// density test passes, `br_table` is smaller than the chain *as well as* O(1)
+// instead of O(n). The cap exists only to bound the absolute table size for a
+// pathologically wide-but-dense GNU `case lo ... hi` range.
+//
+// 512 silently excluded the loop-switch ("irreducible") lowering, whose
+// synthetic `switch (__state)` has one perfectly-dense case per basic block:
+// CPython's `_PyEval_EvalFrameDefault` has 5752 blocks, so EVERY block
+// transition ran a 5752-entry linear scan (~2876 compares), which is where its
+// ~1000x-vs-clang bytecode-dispatch gap came from.
+//
+// 65520 is V8's `kV8MaxWasmFunctionBrTableSize`; a larger table is rejected at
+// validation, so this is an engine ceiling, not a tuning knob. Functions with
+// more than 65520 blocks still degrade to the linear chain — see todos/0333.
+const MAX_BR_TABLE_RANGE = 65520;
+
 class CodeGenerator {
   constructor(wmod, options) {
     this.wmod = wmod;
@@ -18571,7 +18594,7 @@ class CodeGenerator {
             // (case values spanning INT_MIN..INT_MAX), which a `>>> 0`
             // would wrap to 0 and wrongly classify as dense.
             range = nonDefaultCount > 0 ? maxVal - minVal + 1 : 0;
-            dense = nonDefaultCount >= 4 && range <= 512 &&
+            dense = nonDefaultCount >= 4 && range <= MAX_BR_TABLE_RANGE &&
                 (nonDefaultCount * 10 / range) >= 4; // density >= 40%
           }
 

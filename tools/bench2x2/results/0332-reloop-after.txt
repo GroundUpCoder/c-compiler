@@ -1,0 +1,12 @@
+ops256-irred0  reloop OPS=256 IRRED=0  500000 steps  1892458 ns  (3.8 ns/step)  acc=38780
+    # #35: 2364 instrs, 0 chains (len>=3), 0 compares in chains
+      length buckets: 
+ops256-irred1  reloop OPS=256 IRRED=1  500000 steps  6355583 ns  (12.7 ns/step)  acc=38780
+    # #35: 5513 instrs, 0 chains (len>=3), 0 compares in chains
+      length buckets: 
+ops1024-irred0  reloop OPS=1024 IRRED=0  500000 steps  2695416 ns  (5.4 ns/step)  acc=5151
+    # #35: 9276 instrs, 0 chains (len>=3), 0 compares in chains
+      length buckets: 
+ops1024-irred1  reloop OPS=1024 IRRED=1  500000 steps  8415792 ns  (16.8 ns/step)  acc=5151
+    # #35: 21641 instrs, 0 chains (len>=3), 0 compares in chains
+      length buckets: 

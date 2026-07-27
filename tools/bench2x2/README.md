@@ -59,6 +59,31 @@ It is absent by measurement, not by omission — see `run-2x2.sh`'s note.
 - `inos-startup.js` — in-OS (gucOS kernel) startup measurement.
 - `results/*.txt` — raw samples, **nanoseconds**, one per line, no header.
 
+### The todos/0332 diagnostics
+
+Added by the lane that root-caused and fixed the ~1000x dispatch gap
+(`logs/2026-07-27/0332-dispatch-1000x-rootcause.md`). These files read and time
+the *emitted wasm*, so they answer "how was this lowered", not just "how fast is it".
+
+- `wasmscan.js` — a dependency-free wasm reader. There is no wabt on this box
+  (`wasm2wat`/`wasm-objdump`/`wasm-dis` are all absent, and package managers are
+  forbidden), so this is the disassembly substrate.
+  `--sections` / `--list [substr]` / `--hist F` / `--dump F [from] [n]` /
+  `--brtables F`. A function is addressed by name (needs a name section — clang
+  has one, we emit none), by `#index`, or by `@big` = the largest defined
+  function, which in both CPython builds IS `_PyEval_EvalFrameDefault`.
+- `cmpchain.js` — finds linear `local.get L; i32.const K; i32.eq; br_if` compare
+  chains, the shape a switch takes when it is lowered as an O(n) scan instead of
+  a `br_table`. This is the probe that found the 5752-entry chain; validate any
+  "no chain" result against a pre-fix artifact before believing it.
+- `diag_reloop.c` + `mk-reloop.sh` — the minimal repro, no Python. Four builds of
+  one source (`-DOPS=256|1024` x `-DIRRED=0|1`) differing only in codegen;
+  `sh mk-reloop.sh <outdir> [compiler.js]` builds, runs and reports each cell's
+  chain length. 135x before the fix, 4.4x after, against its own structured cell.
+- `results/0332-*.txt` — the raw before/after output, including the
+  `--trace-wasm-compilation-times` census that localized the *separate* startup
+  defect now filed as `todos/0334`.
+
 An empty `results/*.txt` means the cell produced no samples. `run-2x2.sh` discards stderr,
 so an empty file records only *that* it failed, never *why* — a zero-byte file is
 **NOT RUN / FAILED**, never "about the same as its neighbour".
