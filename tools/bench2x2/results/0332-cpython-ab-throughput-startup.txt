@@ -1,0 +1,21 @@
+## bench_throughput.py arith — total ns for SCALE iterations, 3 reps
+### baseline SCALE=20000
+3024650042
+2873437958
+2846907250
+### fixed SCALE=200000
+180789625
+187985167
+175138083
+### clang SCALE=200000
+28972917
+28357917
+28215583
+## startup, whole-process wall seconds, 7 samples, default V8 flags
+baseline  2.50 2.53 2.52 2.55 2.54 2.53 2.49
+fixed     2.45 2.50 2.54 2.45 2.50 2.51 2.50
+clang     0.09 0.09 0.09 0.09 0.09 0.09 0.09
+## startup with --liftoff-only (V8 optimizing tier disabled)
+baseline  0.93 0.95 0.95 0.95 0.94
+fixed     0.25 0.26 0.25 0.25 0.25
+clang     0.07 0.07 0.07 0.07 0.07

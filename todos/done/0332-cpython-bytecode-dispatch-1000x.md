@@ -1,7 +1,38 @@
 # 0332 — CPython bytecode dispatch is ~1000x slower than the clang build of identical sources
 
-- **Status**: open
+- **Status**: done — root cause found and fixed on `diag-0332`
 - **Design**: `logs/2026-07-27/bench2x2-python-profile.md` (measurement + localization)
+- **Root cause + fix**: `logs/2026-07-27/0332-dispatch-1000x-rootcause.md`
+
+## Outcome
+
+The leading hypothesis below was **CONFIRMED**: irreducible control flow lowers to
+a loop+switch state machine, and that state machine's switch was emitted as a
+**linear compare chain** — 5752 entries for `_PyEval_EvalFrameDefault`, ~2876
+compares per bytecode. One constant in `compiler.js` (`MAX_BR_TABLE_RANGE`, was a
+bare `512`) excluded it from the `br_table` path, because the *range* of a
+perfectly-dense `switch (__irreducible_state)` is the function's block count.
+
+One correction: ceval's own 256-case opcode switch was never the problem — it
+already got a `br_table`. The chain was the synthetic state switch.
+
+Measured after the fix (controlled A/B, same build script, compiler the only
+variable):
+
+| probe | before | after | clang | after-vs-clang |
+|---|---|---|---|---|
+| `range(0,200)` loop, no allocation | 45,035 ns/iter | **155.0 ns** | 12.1 ns | **12.8x** |
+| `range(1e6,…)` loop, one alloc/iter | 61,710 ns/iter | **219.4 ns** | 31.9 ns | **6.9x** |
+| `bench_throughput.py arith` | 142,345 ns/iter | **875.7 ns** | 141.1 ns | **6.2x** |
+
+162x faster; **the stated multiple of clang is 6.2x on arith throughput**, which
+is the ~5.5x general-codegen figure the acceptance criterion named.
+
+One of this ticket's own claims is **REFUTED**: "*both* disqualifying numbers are
+this one defect" is wrong. Startup did **not** move (2.53 s → 2.50 s). It is a
+second, independent defect — V8 spends 2.28 s in TurboFan on our one lowered
+function — now filed as `todos/0336`. The >65520-block residue of the fix is
+`todos/0335`.
 
 ## Goal
 
@@ -53,6 +84,14 @@ measured externally vs 143 us self-reported.
   `pyconfig.h`; both builds dispatch through the plain `switch`.
 - **A debug build.** `Py_DEBUG` is `#undef`, shared by both.
 - **Module load.** V8 compiles the 7 MB module in 3.8 ms — 0.15% of startup.
+  🔴 **RETRACTED at merge (cont-103). This ruling was wrong, and it cost us the
+  startup defect.** The 3.8 ms measured the **baseline (Liftoff) tier only**. The
+  *optimizing* tier costs **~2381 ms ≈ 95% of startup** — see
+  `tools/bench2x2/results/0332-turbofan-census.txt` and `todos/0336`. The number
+  was locally true and wrong in frame, and because it sat in the *Ruled OUT* list
+  it suppressed exactly the probe that would have found the startup defect during
+  profiling instead of after the fix. **"Module load is cheap" was never measured;
+  only "Liftoff is cheap" was.**
 - **Small dense switches.** The 64-case `switch` in `diag_switch.c` costs only
   5.2x, so whatever this is, that diagnostic does not reproduce it.
 

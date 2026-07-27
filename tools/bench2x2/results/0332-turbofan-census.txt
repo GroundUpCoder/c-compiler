@@ -1,0 +1,20 @@
+# 0332 — V8 per-function compile-time census (node --trace-wasm-compilation-times, -c pass)
+# func#4513 IS _PyEval_EvalFrameDefault (largest function; identified against the clang build's name section, where it is #4594).
+### baseline
+2341 ms  func#4513  bodysize 295002
+7 ms  func#3332  bodysize 20614
+6 ms  func#4515  bodysize 10236
+4 ms  func#4972  bodysize 9994
+  TOTAL 2381 ms over 43 TurboFan compiles
+### fixed
+2277 ms  func#4513  bodysize 249058
+7 ms  func#3332  bodysize 20614
+6 ms  func#4515  bodysize 10236
+4 ms  func#4972  bodysize 9994
+  TOTAL 2274 ms over 43 TurboFan compiles
+### clang
+55 ms  func#4594  bodysize 90192
+3 ms  func#4593  bodysize 5714
+3 ms  func#3109  bodysize 10516
+2 ms  func#3446  bodysize 4640
+  TOTAL 63 ms over 33 TurboFan compiles

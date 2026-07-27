@@ -1,0 +1,15 @@
+# 0332 A/B — baseline(today) vs fixed(today) vs clang. Same ccjs-build.sh, compiler is the only variable.
+## liveness (each line must be exactly 2)
+2
+2
+2
+## probe_dispatch REPS=5 OUTER=50 (ns total / ns per iter)
+### baseline
+small 450350542 45035.1
+big 617103583 61710.4
+### fixed
+small 1550166 155.0
+big 2193958 219.4
+### clang
+small 120500 12.1
+big 319375 31.9
