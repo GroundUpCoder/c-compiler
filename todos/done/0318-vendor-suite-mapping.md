@@ -1,6 +1,6 @@
 # 0318 — tests/run.js: map vendor/ paths to suites (the RULES table has no vendor rule)
 
-- **Status**: open (filed 2026-07-27 by todos/0117 R1)
+- **Status**: done (filed 2026-07-27 by todos/0117 R1)
 - **Difficulty**: light
 - **Design**: this file.
 
