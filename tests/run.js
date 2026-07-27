@@ -149,6 +149,51 @@ const RULES = [
   // out of it (directly, or through the prebaked fixture).
   [/^tools\/mkimage\.js$/, ['kernel', 'sweep'], 'bakes the system blob every e2e image and browser boot is built from'],
 
+  // ---- the rest of tools/ (todos/0333) ----
+  //
+  // There is deliberately NO blanket `^tools/` rule. tools/ mixes load-bearing
+  // build tooling with one-shot asset generators and self-contained side
+  // projects, so a blanket rule would tax every unrelated tool edit with the
+  // full gate. Every tools/ path states its own answer instead — INCLUDING the
+  // ones whose answer is "nothing": an explicit `[]` records a decision, where
+  // silence only records that nobody looked. Consequence, and it is the
+  // intended one: a NEW tools/ path still reports UNMAPPED, which is the prompt
+  // to decide. (The tools rules above and below sit with the concern they
+  // serve rather than in this block — mkpkg/mkimage/win32rc/win32ports/
+  // mkmpgenhdr/os-drive are all already mapped.)
+
+  // Generators of COMMITTED assets. The outputs are checked in, so an edit here
+  // only reaches the tree via a re-run — which makes the gate that matters the
+  // suite that CONSUMES the asset, exactly as for mkimage/win32rc above.
+  [/^tools\/mksounds\.js$/, ['kernel', 'sweep'],
+    'synthesizes os/sounds/*.wav — baked into the image, asserted by test_sounds_e2e.js + os-sounds.mjs'],
+  [/^tools\/mkgif\.js$/, ['kernel', 'sweep'],
+    'synthesizes vendor/magicpoint/demo.gif — test_present_e2e.js + os-present.mjs assert its pixels'],
+  [/^tools\/mkwebfixtures\.js$/, ['kernel'],
+    'synthesizes vendor/netsurf/test/img/* — test_netsurf_content_e2e.js decodes them'],
+  [/^tools\/build-libc-ext\.js$/, ['ext', 'unit'],
+    'generates libc-ext.js — the ext category pins its optional-library contract, the unit ext_* tests consume it'],
+
+  // OS-driving harnesses. They gate nothing themselves; they RIDE a test seam,
+  // and the suite that proves the seam is what tells their editor the ground
+  // under them still holds — the ^tools/os-drive precedent above.
+  [/^tools\/(idlemeter|peek-repro)\.mjs$/, ['sweep'],
+    'drive os.html via tests/browser/lib/os-harness.mjs, like tools/os-drive'],
+  // The (ours|clang) x (CPython|MicroPython) measurement harness — todos/0332
+  // is its live customer. Every cell runs `node host.js <wasm>` standalone, so
+  // the cheap host suite is the seam under it. Its in-OS leg (inos-startup.js)
+  // additionally drives os/boot.js: pulling the HEAVY kernel suite for a
+  // measurement harness is deliberately declined, not overlooked — a bench edit
+  // that needs it can name the suite.
+  [/^tools\/bench2x2\//, ['host'],
+    'the python-runtime bench harness — its cells run host.js standalone'],
+
+  // Self-contained side projects: own trees, own runners, no product artifact,
+  // and no suite in this dispatcher consumes them. Gating them would be a
+  // fiction, so `[]` is the recorded decision (the tests/bench/ shape below).
+  [/^tools\/(asm86|cfg|disasm|sample-wasm-filegen)\//, [],
+    'self-contained side tools with their own runners — outside the gated estate'],
+
   // Shared test engine → every suite-runner-backed suite. `host` is in the list
   // because tests/host/test_harness_leaks.js pins the startup reaper's
   // never-delete-a-live-run predicates (tests/lib/harness-leaks.js) — and that

@@ -1,6 +1,6 @@
 # 0333 — `tools/bench2x2/` (and most of `tools/`) matches no rule in the diff planner
 
-- **Status**: open
+- **Status**: DONE (2026-07-28)
 - **Found by**: router CHECK lane (cont-100), verified independently by @master cont-101
 
 ## Goal
@@ -50,6 +50,37 @@ comment says why the rule exists so a later split cannot orphan it.
 - The decision for the rest of `tools/` is recorded as a comment in `RULES`, not left
   implicit.
 - `node todos/queue.js check` and the `todos` suite stay green (4/4).
+
+## Resolution
+
+A `tools/` block in `RULES` (`tests/run.js`), with **no blanket `^tools/` rule** —
+each remaining path states its own answer, including the ones whose answer is
+`[]`:
+
+| path | suites | why |
+|---|---|---|
+| `tools/bench2x2/` | `host` | every cell runs `node host.js <wasm>` standalone; that is the seam under the harness |
+| `tools/mksounds.js` | `kernel, sweep` | generates the committed `os/sounds/*.wav` the sounds e2es assert |
+| `tools/mkgif.js` | `kernel, sweep` | generates the committed `vendor/magicpoint/demo.gif` the present e2es assert |
+| `tools/mkwebfixtures.js` | `kernel` | generates the committed NetSurf image fixtures `test_netsurf_content_e2e.js` decodes |
+| `tools/build-libc-ext.js` | `ext, unit` | generates `libc-ext.js`; `ext` pins its contract, the unit `ext_*` tests consume it |
+| `tools/{idlemeter,peek-repro}.mjs` | `sweep` | ride `tests/browser/lib/os-harness.mjs`, the `^tools/os-drive` precedent |
+| `tools/{asm86,cfg,disasm,sample-wasm-filegen}/` | `[]` | self-contained side projects, own runners, no product artifact |
+
+Two decisions worth naming, both recorded in the comment rather than left implicit:
+
+- **bench2x2 does not pull `kernel`.** Its in-OS leg (`inos-startup.js`) drives
+  `os/boot.js`, so `kernel` is arguably in the seam — but taxing a measurement
+  harness with the heavy suite is exactly the over-fix this ticket warned about.
+  Declined deliberately; a bench edit that wants it can name the suite.
+- **The `[]` entries are rules, not silence.** An explicit `[]` suppresses the
+  UNMAPPED warning *because a decision was made*; a NEW `tools/` path still
+  reports UNMAPPED, which is the intended prompt to decide. That is why no
+  catch-all was added.
+
+Verified: a diff touching only `tools/bench2x2/analyze.js` planned `(nothing)`
+before and `host` after; a probe touching one file per unmapped area listed 11
+UNMAPPED paths before and 0 after.
 
 ## No liability register entry
 
