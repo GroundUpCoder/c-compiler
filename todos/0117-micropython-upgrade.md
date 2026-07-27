@@ -7,21 +7,66 @@
   this is important too. ... And yea I do want the cli properly fixed as well so
   it actually runs the scripts."). The 2026-07-12 deferral was a mass sweep, not a
   judgement about this item.
-- **ROUND SEQUENCING (master, 2026-07-27) — R1 GOES NOW, R2 IS PARKED:**
+- **ROUND SEQUENCING — R1 LANDED; R2 IS UN-PARKED (2026-07-28, decider call):**
   - **R1 (argv/script-runner + `open()`/IO/stdfiles + the two POSIX hooks + the
-    heap bump + seeding `/bin/python`) is foreground and funded.** It is the leg
-    jku named, it is cheap, MicroPython is the OS's scripting language today, it
-    pays off regardless of the CPython route, and it is the fallback if the M0
-    probe fails.
-  - **R2's stdlib breadth is PARKED pending M0** (the "can our compiler build
-    CPython core?" probe). *Parked, NOT cancelled* — R2 is the expensive leg and
-    is exactly the work a real CPython `/bin/python` would make redundant. **If M0
-    reports CPython is not buildable with our compiler, R2 un-parks immediately as
-    the real plan, and jku's already-given approval of the module-selection
-    approach carries over without a re-ask.** Reason recorded so a later reader can
-    tell a fired condition from an open one: the park is conditional on M0 only.
-  - Provenance: R1 foreground = **(jku decision)**. R2 park = **(decider call)**,
-    routed to jku, not objected to — he may still overturn it.
+    heap bump + the `python` alias) is foreground and funded.** It is the leg jku
+    named, it is cheap, it pays off regardless of the CPython route.
+    Provenance: **(jku decision)**.
+  - **⚠️ THE M0 PARK CONDITION NEVER FIRED — do not cite it as R2's reason.**
+    The 2026-07-27 park (recorded here, and echoed in `todos/0313`'s "R2: KEEP
+    PARKED") was conditional on exactly one question: *is a real CPython
+    `/bin/python` buildable with our compiler?* M0 answered **yes** — and M1-clang
+    then went further and built one (a 4,529,136 B CPython 3.13.5 wasm at
+    functional parity; recipe `logs/2026-07-27/python-clang-build.sh`, vendor-tree
+    design `todos/CPYTHON.md` + `todos/0340`). So the condition resolved in the
+    direction that KEEPS the park. **R2 un-parks anyway, for different reasons.**
+    This paragraph exists so the next reader cannot mistake an un-fired condition
+    for a fired one and cancel R2 on a sound-looking argument.
+  - **Why R2 un-parks, in strength order:**
+    1. **The one-implementation premise is gone.** The park's whole logic was
+       "a real CPython `/bin/python` makes MicroPython breadth redundant" —
+       redundancy that only exists if exactly one implementation may own the
+       name. jku replaced that model with a **dispatcher**: bare `python` is a
+       base-image command that forwards to whichever implementation the user
+       picked (`todos/COMMAND-ALTERNATIVES.md`, `todos/0338`). Implementations
+       now coexist by design, so breadth in one does not subtract from another.
+       His words (email, 2026-07-27): the goal is "a python that has the highest
+       chance of being able to support pygame in the future", and he "wants all
+       implementations eventually caught up" — *caught up*, not *replaced*.
+    2. **MicroPython is the only python implementation that actually ships
+       today.** python-clang's binary half is done, but its vendor tree + stdlib
+       layout is a separate in-flight lane (`todos/0340`). Whatever a user can
+       install first is MicroPython.
+    3. **A python that cannot `import json` is a footgun no matter which
+       implementation is default.** R1 made it a real script runner; R2 is what
+       makes it a real *python*.
+  - **Audience, stated accurately** (an earlier framing of this said "the
+    base-image `python` is MicroPython, so R2's breadth is the DEFAULT
+    experience" — that is **false** and must not be repeated): gucOS ships **no
+    `python` verb at all** in the base image, and MicroPython is **not** baked
+    into it. Measured, not assumed — a BlockFS walk over the live deployed image
+    enumerated 240 entries with **0 hits for `python` and 0 for `micro`** (`lua`
+    and `sqlite` also 0, the cross-check: both are likewise packages), and
+    `grep -in python os/image.json` at the deployed v177 commit is empty.
+    MicroPython is a **gucman package**; a fresh gucOS has no python until
+    `gucman install micropython`. jku is additionally leaning toward
+    python-clang as the *suggested* python when none is installed. ⇒ the correct
+    form is **"MicroPython is gucOS's python for users who have installed it."**
+  - Provenance: R2 un-park = **(decider call)**, 2026-07-28. Not a jku ruling —
+    he may still overturn it.
+- **The `python` alias is INTERIM, not a ratified end state.** R1 shipped
+  `/usr/local/bin/python` → the MicroPython binary (`packages/micropython.json`
+  `bin` map). Decider verdict D6 previously recorded that alias as
+  *ratified-deliberate*; that is **SUPERSEDED**. jku ruled (email, 2026-07-27;
+  provenance **(jku decision)**; authority
+  `~/git/meta/meta/notes/fable-decider-python-primary-2026-07-27.md` §*jku
+  OVERRIDE of D4/D6* — later sections of that note supersede earlier ones) that
+  bare `python` must be a **base-image dispatcher** forwarding all args to the
+  user's chosen implementation, erroring *"no python implementation installed"*
+  when none is present and switchable in the control panel. The alias is
+  retired by `todos/0338`, and dropping it from `packages/micropython.json` is
+  **release-atomic with that landing** — it belongs to 0338's commit, not to
+  R2's. Design: `todos/COMMAND-ALTERNATIVES.md`.
 - **Heap bump target is 32 MB** (`mpconfigport.h:107` is `262144` today, verified
   2026-07-27). Not "several MB" — a 640x480 `array3d` copy is 921 KB, i.e. 3.5x
   the entire current heap, and one float64 temporary is 7.4 MB. **Measure the

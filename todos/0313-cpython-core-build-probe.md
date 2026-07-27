@@ -55,6 +55,15 @@ the direction that keeps R2 parked. Caveats: M1 is unfunded, and the route is a
 decider call jku has not ratified — if he overturns it, R2 un-parks immediately.
 0117 **R1 is unaffected** and stays foregrounded.
 
+> **SUPERSEDED 2026-07-28 (decider call).** R2 un-parked — but **not** because
+> this verdict flipped. The condition above still reads exactly as written: M0
+> said yes and M1-clang then built the binary. R2 un-parks on a *different*
+> premise: jku replaced the one-implementation model with a dispatcher
+> (`todos/COMMAND-ALTERNATIVES.md`, `todos/0338`), so a shipped CPython no
+> longer makes MicroPython breadth redundant. Full reasoning, and the explicit
+> warning not to re-derive R2's status from this paragraph, live in
+> `todos/0117-micropython-upgrade.md`'s ROUND SEQUENCING block.
+
 Nothing vendored, no `bin.json` entry, no `os/image.json` bump, no rebake.
 
 ---
