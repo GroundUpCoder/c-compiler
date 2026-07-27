@@ -1,6 +1,14 @@
 # 0126 — Difficulty spike: right-size (or split) 0117 by attempting Round 1
 
-- **Status**: deferred (mass-deferred 2026-07-12; was: open). Rewritten
+- **Status**: open (reopened + foregrounded 2026-07-27)
+  — on jku's direct instruction to foreground the MicroPython work (see 0117).
+  The 2026-07-12 mass deferral was a sweep, not a judgement about this item.
+  Note the spike is now scoped to **0117 R1 only** — R2 is parked pending the M0
+  CPython probe, so do not right-size R2 here.
+  ⚠️ Parser footgun, do not undo this wording: `statusOf` (`todos/queue.js:128`)
+  captures only the FIRST line after `Status:` and substring-tests it for
+  "deferred", so writing "un-deferred" on that line silently re-defers the
+  ticket. Keep the word off line 1. Rewritten
   2026-07-15 by the queue reconciliation: the original scope was "spike 0117
   AND 0119", but 0119 (sent + MagicPoint on SDL) has since SHIPPED outright
   (`todos/done/0119-magicpoint-presentations.md`, /bin/mgp at image v80) —

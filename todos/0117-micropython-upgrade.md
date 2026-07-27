@@ -1,7 +1,34 @@
 # 0117 — MicroPython: script runner + FS import (multi-round, unlocks /bin/python)
 
-- **Status**: deferred (mass-deferred 2026-07-12; was: open (META — expect multiple rounds; close each round as its)
-  own commit, keep this item open until Round 2 lands then reassess)
+- **Status**: open (META — expect multiple rounds; close each round as its own
+  commit). **Un-deferred + foregrounded 2026-07-27 on jku's direct instruction**
+  ("Ok so we're foregrounding all the micropython work right? NetSurf is good but
+  this is important too. ... And yea I do want the cli properly fixed as well so
+  it actually runs the scripts."). The 2026-07-12 deferral was a mass sweep, not a
+  judgement about this item.
+- **ROUND SEQUENCING (master, 2026-07-27) — R1 GOES NOW, R2 IS PARKED:**
+  - **R1 (argv/script-runner + `open()`/IO/stdfiles + the two POSIX hooks + the
+    heap bump + seeding `/bin/python`) is foreground and funded.** It is the leg
+    jku named, it is cheap, MicroPython is the OS's scripting language today, it
+    pays off regardless of the CPython route, and it is the fallback if the M0
+    probe fails.
+  - **R2's stdlib breadth is PARKED pending M0** (the "can our compiler build
+    CPython core?" probe). *Parked, NOT cancelled* — R2 is the expensive leg and
+    is exactly the work a real CPython `/bin/python` would make redundant. **If M0
+    reports CPython is not buildable with our compiler, R2 un-parks immediately as
+    the real plan, and jku's already-given approval of the module-selection
+    approach carries over without a re-ask.** Reason recorded so a later reader can
+    tell a fired condition from an open one: the park is conditional on M0 only.
+  - Provenance: R1 foreground = **(jku decision)**. R2 park = **(decider call)**,
+    routed to jku, not objected to — he may still overturn it.
+- **Heap bump target is 32 MB** (`mpconfigport.h:107` is `262144` today, verified
+  2026-07-27). Not "several MB" — a 640x480 `array3d` copy is 921 KB, i.e. 3.5x
+  the entire current heap, and one float64 temporary is 7.4 MB. **Measure the
+  GC-pause consequence** rather than just raising it (a stop-the-world mark-sweep
+  is sub-ms noise at 256 KB and plausibly a several-ms hitch at 8 MB+).
+- Underneath R1: MicroPython's NLR uses the **setjmp** path on wasm
+  (`py/nlrsetjmp.c` in bin.json), so every Python exception is a longjmp — todo
+  0312's longjmp hardening (shipped, image v172) is load-bearing here.
 - **Design**: this file. Precedent: `todos/done/0036` seeded the REPLs
   (`/bin/micropython`, `/bin/lua`, `/bin/sqlite3`) — deliberately the
   *minimal* MicroPython port.

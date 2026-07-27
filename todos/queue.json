@@ -18,8 +18,8 @@
     { "id": "0110", "after": ["0109"] },
     { "id": "0115", "priority": 3 },
     { "id": "0116", "priority": 2, "after": ["0102"] },
-    { "id": "0126", "difficulty": "light" },
-    { "id": "0117", "difficulty": "heavy" },
+    { "id": "0126", "priority": 0, "difficulty": "light" },
+    { "id": "0117", "priority": 0, "difficulty": "heavy" },
     { "id": "0120", "priority": 2, "after": ["0118"] },
     { "id": "0121", "priority": 3, "after": ["0118"] },
     { "id": "0122", "difficulty": "medium" },
@@ -62,6 +62,9 @@
     { "id": "0308", "priority": 3, "difficulty": "light" },
     { "id": "0309", "priority": 3, "difficulty": "light" },
     { "id": "0310", "difficulty": "light" },
-    { "id": "0311", "difficulty": "light" }
+    { "id": "0311", "difficulty": "light" },
+    { "id": "0313", "difficulty": "heavy" },
+    { "id": "0314", "difficulty": "heavy" },
+    { "id": "0315", "priority": 2, "difficulty": "light" }
   ]
 }
