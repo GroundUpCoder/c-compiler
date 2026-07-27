@@ -15,6 +15,18 @@
 //     session still leaves a usable partial verdict
 //   - --resume (skip files that passed in the previous summary), --filter,
 //     --fail-fast, --timeout, -j, --list
+//   - a summary that records its own SCOPE (todos/0339): `filter`, a `files`
+//     block (total / selected / executed / carried / recorded) and a `runs`
+//     list, and results MERGED across runs so a two-`--filter`-half sweep
+//     accounts for the whole suite instead of the second half deleting the
+//     first. See the selection + merge blocks in runSuite.
+//
+// Stale per-file logs are deliberately NOT cleared at suite start. Under the
+// merge above, a carried result's `log` points at a log written by an earlier
+// run; wiping the directory would leave the manifest citing files that no
+// longer exist. The manifest is what makes the log dir interpretable — counting
+// *.log OVERSTATES (repeat variants, prior runs), which is why the count that
+// matters lives in summary.json's `files` block and not on the filesystem.
 //
 // Interrupt semantics (re-audited 2026-07-26). The three deaths and what
 // covers each — the old note here said a SIGKILLed runner's orphans "self-exit
@@ -155,6 +167,13 @@ function usage(name, defaults) {
 
 Artifacts: <artifactDir>/summary.json (checkpointed after every file) and
 <artifactDir>/<file>.log (combined stdout+stderr per file).
+
+summary.json records the run's SCOPE (todos/0339): \`filter\`, a \`files\` block
+(total / selected / executed / resumed / carried / recorded) and a \`runs\` list.
+Results are MERGED across runs — a suite split into two --filter halves ends up
+with one record accounting for the whole suite, with each half's results tagged
+by the run that measured them. \`recorded\` == \`total\` is what "the whole suite
+was covered" looks like on disk.
 `;
 }
 
@@ -196,6 +215,19 @@ async function runSuite(entries, opts) {
     return { passed: 0, failed: 0, skipped: 0, ranNothing: true };
   }
 
+  // ---- selection, as a recorded fact (todos/0339) ----
+  //
+  // A summary that does not say WHAT was selected cannot distinguish a full run
+  // from a filtered one — and the full browser sweep exceeds a single tool call,
+  // so in practice it is always run as two `--filter` halves. Both halves say
+  // `pass`; before this, half 2 also overwrote half 1's results, so the artifact
+  // of a complete 40-file sweep was byte-identical to the artifact of a lane
+  // that ran only twenty files by mistake. Captured here, BEFORE --repeat fans
+  // files out and BEFORE --resume filters them: these two numbers describe the
+  // run's scope, not its schedule.
+  const totalFiles = entries.length;
+  const selectedSet = new Set(files.map(e => e.file));
+
   // --repeat: fan each selected file into N runs, each with its own log, and
   // aggregate a per-file flake rate at the end. Repeat and --resume conflict
   // (resume would skip a file the flake gate wants to hammer) — repeat wins.
@@ -210,7 +242,42 @@ async function runSuite(entries, opts) {
   fs.mkdirSync(opts.artifactDir, { recursive: true });
   const summaryPath = path.join(opts.artifactDir, 'summary.json');
   const prev = readJsonSafe(summaryPath);
-  const prevByFile = new Map(((prev && prev.results) || []).map(r => [r.file, r]));
+  const prevResults = (prev && prev.results) || [];
+  // --resume reads only the previous run's OWN results, never merged-in ones
+  // (`carried`, below). Resuming off a carried result would let a file that
+  // passed on Monday be skipped by Friday's "full" sweep and still be reported
+  // green — the stale-scope failure this ticket exists to close, reintroduced
+  // through the back door. Its own `resumed` chain stays eligible, so --resume
+  // behaves exactly as it did before the merge landed.
+  const prevByFile = new Map(prevResults.filter(r => !r.carried).map(r => [r.file, r]));
+
+  // ---- merge, so half 2 cannot delete half 1 (todos/0339) ----
+  //
+  // Results for files this run did not select are carried forward, tagged, and
+  // stamped with the run that actually measured them. Merging must never make a
+  // stale result look fresh: `carried` says it was not measured now, and
+  // `carriedFrom` (plus the `runs` list) says exactly when it was. A file this
+  // run DID select is never carried — its fresh result replaces the old one,
+  // and if fail-fast stopped before it ran, the record simply lacks it.
+  const carried = prevResults
+    .filter(r => !selectedSet.has(r.file))
+    .map(r => Object.assign({}, r, {
+      carried: true,
+      carriedFrom: r.carriedFrom || (prev && prev.startedAt) || null,
+    }));
+  // Prior run records, pruned to those still owning a carried result — so the
+  // list self-limits: one unfiltered run selects everything, carries nothing,
+  // and the record collapses back to a single run entry.
+  const carriedRuns = new Set(carried.map(r => r.carriedFrom).filter(Boolean));
+  const priorRuns = ((prev && Array.isArray(prev.runs) ? prev.runs
+      : prev && prev.startedAt ? [{                       // pre-0339 summary
+          startedAt: prev.startedAt, filter: prev.filter || null,
+          total: null, selected: null, executed: null,
+          jobs: prev.jobs, repeat: prev.repeat, underLoad: prev.underLoad,
+          elapsedMs: prev.elapsedMs, done: prev.done,
+        }]
+      : []))
+    .filter(r => carriedRuns.has(r.startedAt));
 
   const results = [];
   const resumed = [];
@@ -236,10 +303,33 @@ async function runSuite(entries, opts) {
 
   let flake = null;
   function checkpoint(done) {
+    const own = resumed.map(r => Object.assign({}, r, { resumed: true })).concat(results);
+    const all = carried.concat(own);
+    // `files` is the audit line. `selected`/`total` are this run's scope;
+    // `recorded` is how many of the suite's files the ARTIFACT accounts for at
+    // all, which is the number that answers "was the whole suite covered?".
+    const thisRun = {
+      startedAt, filter: opts.filter || null,
+      total: totalFiles, selected: selectedSet.size,
+      executed: new Set(results.map(r => r.file)).size,
+      resumed: resumed.length,
+      jobs: opts.jobs, repeat, underLoad,
+      done: !!done, elapsedMs: Date.now() - t0,
+    };
     writeJsonAtomic(summaryPath, {
       suite: opts.name, startedAt, node: process.version, jobs: opts.jobs,
       repeat, underLoad, done: !!done, elapsedMs: Date.now() - t0,
-      results: resumed.map(r => Object.assign({}, r, { resumed: true })).concat(results),
+      filter: opts.filter || null,
+      files: {
+        total: totalFiles,
+        selected: selectedSet.size,
+        executed: thisRun.executed,
+        resumed: resumed.length,
+        carried: new Set(carried.map(r => r.file)).size,
+        recorded: new Set(all.map(r => r.file)).size,
+      },
+      runs: priorRuns.concat([thisRun]),
+      results: all,
       ...(flake ? { flake } : {}),
     });
   }
@@ -354,6 +444,14 @@ async function runSuite(entries, opts) {
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
 
+  // Splitting a suite with --filter is legitimate and will continue — the full
+  // browser sweep does not fit one tool call. It should just never be silent
+  // (todos/0339), so say how much of the suite this run covers, up front.
+  if (opts.filter) {
+    process.stdout.write(`\x1b[33m⚠ ${opts.name}: --filter=${opts.filter} selected `
+      + `${selectedSet.size} of ${totalFiles} files — this run covers PART of the suite.\x1b[0m\n`);
+  }
+
   const banner = `--- ${opts.name} (${files.length} ${repeat > 1 ? 'runs' : 'files'}` +
     (repeat > 1 ? ` = ${files.length / repeat}×${repeat} repeat` : '') +
     (resumed.length ? `, ${resumed.length} resumed-pass skipped` : '') +
@@ -403,11 +501,18 @@ async function runSuite(entries, opts) {
 
   checkpoint(true);
   const elapsed = fmtSecs(Date.now() - t0);
+  const recorded = new Set(carried.concat(resumed, results).map(r => r.file)).size;
   const parts = [`${passed} passed`, `${failed} failed`];
   if (resumed.length) parts.push(`${resumed.length} resumed`);
+  if (carried.length) parts.push(`${carried.length} carried from earlier run(s)`);
   if (bailed) parts.push('(fail-fast: remaining files not run)');
-  process.stdout.write(`\n${opts.name}: ${parts.join(', ')}  (${elapsed})  summary: ${path.relative(process.cwd(), summaryPath)}\n`);
-  return { passed, failed, resumed: resumed.length, bailed, flake };
+  const coverage = `[${selectedSet.size}/${totalFiles} selected, ${recorded}/${totalFiles} recorded]`;
+  process.stdout.write(`\n${opts.name}: ${parts.join(', ')}  (${elapsed})  ${coverage}  `
+    + `summary: ${path.relative(process.cwd(), summaryPath)}\n`);
+  return {
+    passed, failed, resumed: resumed.length, bailed, flake,
+    files: { total: totalFiles, selected: selectedSet.size, carried: carried.length, recorded },
+  };
 }
 
 module.exports = { runSuite, parseSuiteArgs, usage, matchesFilter, memoryCappedJobs };

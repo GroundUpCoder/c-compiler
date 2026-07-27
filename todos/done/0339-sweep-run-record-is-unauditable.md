@@ -1,6 +1,6 @@
 # 0339 — a split sweep leaves a record that cannot distinguish a full run from a half run
 
-- **Status**: open
+- **Status**: DONE (2026-07-28)
 - **Reported by**: the router CHECK lane (cont-104), filed by @master cont-106
 - **Evidence**: first-hand, from the v177 + clang-always deploy gate (c-compiler
   `428c98bb`) — a sweep that really did run all 40 files
@@ -75,6 +75,65 @@ signal whose scope is unrecorded is not evidence of scope.**
 - A single-half sweep leaves a record that is **visibly** a partial run.
 - The `todos` suite stays green and no existing consumer of
   `build/test-run/summary.json` breaks.
+
+## Resolution
+
+**Design chosen: merge in place** (the Plan's second option, which it also named
+as preferable), implemented in `tests/lib/suite-runner.js` — the shared engine —
+rather than in the sweep. Reasons, in order:
+
+- The canonical path `build/test-browser/summary.json` stays *the* answer. A
+  `summary-<hash>.json` fan-out would have moved the merge into `tests/run.js`,
+  leaving the file a reviewer actually opens still holding one half. The two
+  existing consumers (`--resume`'s `prevByFile`, run.js's `suiteArtifact`) needed
+  no change.
+- The defect is in the shared engine, not the sweep, so kernel and blockfs get
+  the same record for free. `--resume` already carried results forward across
+  runs, so merging is the generalisation of a mechanism that was half there.
+
+What the record now carries, per run:
+
+- `filter` (verbatim, `null` when absent) and a `files` block —
+  `total` / `selected` / `executed` / `resumed` / `carried` / `recorded`.
+  **`recorded == total` is what "the whole suite ran" looks like on disk.**
+- `runs[]`: every contributing run's `startedAt`, `filter`, counts and elapsed
+  time. Self-pruning — a run's entry survives only while it still owns a result,
+  so one unfiltered run collapses the list back to a single entry.
+- Results merged, with carried-in ones tagged `carried: true` +
+  `carriedFrom: <the startedAt that measured them>`. Merging must never make a
+  stale result look fresh, so the stamp is not optional.
+- `build/test-run/summary.json` mirrors the `--filter`, the resolved suite list,
+  and each artifact-backed suite's `files` block; the console prints
+  `⚠ N of M files selected` up front and `[4/40 files, 2 carried — PARTIAL]`
+  at the end.
+
+**`--resume` deliberately ignores carried results.** Resuming off one would let a
+file that passed on Monday be skipped by Friday's "full" run and still report
+green — this ticket's failure mode, reintroduced through the back door. A run's
+own `resumed` chain stays eligible, so `--resume` behaves exactly as before.
+
+**Stale `*.log` are kept, deliberately** (the Plan's "consider" item). Under the
+merge, a carried result's `log` field points at a log written by an earlier run;
+clearing the directory would leave the manifest citing files that no longer
+exist. The ticket's own finding — that counting `*.log` OVERSTATES — is the
+argument for making the manifest load-bearing, not the filesystem.
+
+## Verification
+
+`tests/host/test_suite_record.js` (new, in the `host` suite) pins the contract on
+a 4-file synthetic suite with real child processes: scope recorded, half 2 merges
+instead of clobbering, a lone half is visibly partial, carried results tagged and
+stamped, `--resume` re-runs carried files, an unfiltered run collapses `runs` to
+one. **12/12 green; 11 of the 12 fail on the pre-fix engine** (the 12th is
+vacuously true there — no carried tags exist to find).
+
+Verified on a **reduced split of 2 + 2 files out of 40**, deliberately NOT a full
+sweep: this is a record-keeping ticket, and a full sweep costs ~16 minutes and
+the exclusive heavy lock that another lane needed. `--filter=os-boots,os-minimal`
+then `--filter=os-clipboard,os-drop` left ONE artifact holding all four results,
+both runs named with their filters and start times, `carried: 2`, and
+`recorded: 4` of `total: 40` — correctly reported as PARTIAL, because 4 of 40 is
+what actually ran.
 
 ## Notes
 

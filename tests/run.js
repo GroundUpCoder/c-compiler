@@ -21,6 +21,13 @@
 //
 // The rule table below is the SINGLE documented source of "what does this
 // diff need" — CLAUDE.md points here instead of carrying the lore as prose.
+//
+// build/test-run/summary.json records what this invocation SELECTED as well as
+// what it produced (todos/0339): the `--filter` as given (null when absent),
+// the resolved suite list, and — for the suite-runner-backed suites, which keep
+// their own manifest — a per-suite `files` block. Without those, `sweep: pass`
+// is indistinguishable from a run of one test file, which is exactly what a
+// sweep split into two `--filter` halves used to leave behind.
 
 const { spawnSync } = require('child_process');
 const fs = require('fs');
@@ -148,6 +155,51 @@ const RULES = [
   // The offline baker: every kernel e2e image and every browser boot comes
   // out of it (directly, or through the prebaked fixture).
   [/^tools\/mkimage\.js$/, ['kernel', 'sweep'], 'bakes the system blob every e2e image and browser boot is built from'],
+
+  // ---- the rest of tools/ (todos/0333) ----
+  //
+  // There is deliberately NO blanket `^tools/` rule. tools/ mixes load-bearing
+  // build tooling with one-shot asset generators and self-contained side
+  // projects, so a blanket rule would tax every unrelated tool edit with the
+  // full gate. Every tools/ path states its own answer instead — INCLUDING the
+  // ones whose answer is "nothing": an explicit `[]` records a decision, where
+  // silence only records that nobody looked. Consequence, and it is the
+  // intended one: a NEW tools/ path still reports UNMAPPED, which is the prompt
+  // to decide. (The tools rules above and below sit with the concern they
+  // serve rather than in this block — mkpkg/mkimage/win32rc/win32ports/
+  // mkmpgenhdr/os-drive are all already mapped.)
+
+  // Generators of COMMITTED assets. The outputs are checked in, so an edit here
+  // only reaches the tree via a re-run — which makes the gate that matters the
+  // suite that CONSUMES the asset, exactly as for mkimage/win32rc above.
+  [/^tools\/mksounds\.js$/, ['kernel', 'sweep'],
+    'synthesizes os/sounds/*.wav — baked into the image, asserted by test_sounds_e2e.js + os-sounds.mjs'],
+  [/^tools\/mkgif\.js$/, ['kernel', 'sweep'],
+    'synthesizes vendor/magicpoint/demo.gif — test_present_e2e.js + os-present.mjs assert its pixels'],
+  [/^tools\/mkwebfixtures\.js$/, ['kernel'],
+    'synthesizes vendor/netsurf/test/img/* — test_netsurf_content_e2e.js decodes them'],
+  [/^tools\/build-libc-ext\.js$/, ['ext', 'unit'],
+    'generates libc-ext.js — the ext category pins its optional-library contract, the unit ext_* tests consume it'],
+
+  // OS-driving harnesses. They gate nothing themselves; they RIDE a test seam,
+  // and the suite that proves the seam is what tells their editor the ground
+  // under them still holds — the ^tools/os-drive precedent above.
+  [/^tools\/(idlemeter|peek-repro)\.mjs$/, ['sweep'],
+    'drive os.html via tests/browser/lib/os-harness.mjs, like tools/os-drive'],
+  // The (ours|clang) x (CPython|MicroPython) measurement harness — todos/0332
+  // is its live customer. Every cell runs `node host.js <wasm>` standalone, so
+  // the cheap host suite is the seam under it. Its in-OS leg (inos-startup.js)
+  // additionally drives os/boot.js: pulling the HEAVY kernel suite for a
+  // measurement harness is deliberately declined, not overlooked — a bench edit
+  // that needs it can name the suite.
+  [/^tools\/bench2x2\//, ['host'],
+    'the python-runtime bench harness — its cells run host.js standalone'],
+
+  // Self-contained side projects: own trees, own runners, no product artifact,
+  // and no suite in this dispatcher consumes them. Gating them would be a
+  // fiction, so `[]` is the recorded decision (the tests/bench/ shape below).
+  [/^tools\/(asm86|cfg|disasm|sample-wasm-filegen)\//, [],
+    'self-contained side tools with their own runners — outside the gated estate'],
 
   // Shared test engine → every suite-runner-backed suite. `host` is in the list
   // because tests/host/test_harness_leaks.js pins the startup reaper's
@@ -343,6 +395,18 @@ function suiteArtifact(suite) {
   return dir ? path.join('build', dir, 'summary.json') : null;
 }
 
+// The suite's own record of what it selected (todos/0339). Only the three
+// suite-runner-backed suites keep one; for the rest the absence of a count is
+// deliberate — a missing number is honest, an invented one is not. The
+// top-level `filter` below always records what THIS dispatcher forwarded.
+function readSuiteSelection(artifactAbs) {
+  try {
+    const j = JSON.parse(fs.readFileSync(artifactAbs, 'utf-8'));
+    if (!j || !j.files) return null;
+    return { filter: j.filter == null ? null : j.filter, ...j.files };
+  } catch { return null; }
+}
+
 function main() {
   const opts = parseArgs(process.argv.slice(2));
 
@@ -399,11 +463,15 @@ function main() {
     const r = runProcess(SUITES[suite].cmd[0], args, `${suite} suite`);
     const c = classify(r, SUITES[suite].optional);
     const art = suiteArtifact(suite);
-    if (art && fs.existsSync(path.join(ROOT, art))) c.artifact = art;
+    if (art && fs.existsSync(path.join(ROOT, art))) {
+      c.artifact = art;
+      const sel = readSuiteSelection(path.join(ROOT, art));
+      if (sel) c.files = sel;
+    }
     results.push({ suite, ...c });
   }
 
-  writeMergedSummary(results, Date.now() - t0);
+  writeMergedSummary(results, Date.now() - t0, opts, ordered);
   printFinal(results, Date.now() - t0);
 
   const anyFail = results.some(r => r.status === 'fail');
@@ -421,13 +489,21 @@ function classify(r, optional) {
            exit: r.status, signal: r.signal || undefined };
 }
 
-function writeMergedSummary(results, ms) {
+// The run record. `filter` and `suites` are what this invocation SELECTED;
+// each artifact-backed result carries the suite's own `files` block (todos/
+// 0339). Without them a `sweep: pass` line is indistinguishable from a run of
+// a single test file — which is exactly what a split sweep used to leave
+// behind. A reader must be able to see `filter: null` + `files.recorded: 40`
+// and know the whole suite was covered.
+function writeMergedSummary(results, ms, opts, ordered) {
   const dir = path.join(ROOT, 'build', 'test-run');
   try {
     fs.mkdirSync(dir, { recursive: true });
     const tmp = path.join(dir, 'summary.json.tmp');
     fs.writeFileSync(tmp, JSON.stringify({
       tool: 'tests/run.js', node: process.version, elapsedMs: ms,
+      filter: opts.filter == null ? null : opts.filter,
+      suites: ordered,
       results,
     }, null, 2));
     fs.renameSync(tmp, path.join(dir, 'summary.json'));
@@ -450,6 +526,18 @@ function printDiffPlan(ref, files, info, suites) {
   process.stdout.write(`\n  \x1b[1msuites:\x1b[0m ${suites.length ? suites.join(', ') : '(none)'}\n`);
 }
 
+// `[N/M files]` when a suite reports its selection, marked PARTIAL when the
+// record does not account for the whole suite (todos/0339) — the one line that
+// stops "sweep: pass" from meaning "some of the sweep passed".
+function fmtCoverage(files) {
+  if (!files || files.total == null) return '';
+  const rec = files.recorded != null ? files.recorded : files.selected;
+  const partial = rec < files.total;
+  return `  ${partial ? '\x1b[33m' : ''}[${rec}/${files.total} files`
+    + (files.carried ? `, ${files.carried} carried` : '')
+    + (partial ? ' — PARTIAL' : '') + `]${partial ? '\x1b[0m' : ''}`;
+}
+
 function printFinal(results, ms) {
   process.stdout.write(`\n\x1b[1m━━━ tests/run.js summary ━━━\x1b[0m\n`);
   for (const r of results) {
@@ -457,6 +545,7 @@ function printFinal(results, ms) {
               : r.status === 'skip' ? '\x1b[33mskip\x1b[0m'
               : '\x1b[31mFAIL\x1b[0m';
     process.stdout.write(`  ${tag} ${r.suite.padEnd(28)} ${fmtSecs(r.ms)}` +
+      fmtCoverage(r.files) +
       (r.note ? `  (${r.note})` : '') + (r.artifact ? `  → ${r.artifact}` : '') + '\n');
   }
   const pass = results.filter(r => r.status === 'pass').length;

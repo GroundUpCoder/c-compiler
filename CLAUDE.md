@@ -109,6 +109,20 @@ invocable; this just knows how to invoke them uniformly and, the point,
   (the suite-runner-backed suites), plus `--repeat N`/`--under-load[=N]`
   (kernel/blockfs/sweep — the flake gate, below).
 
+**The record states its own scope (todos/0339).** A full browser sweep does not
+fit one tool call, so it is habitually split into two `--filter` halves — and a
+`pass` whose scope is unrecorded is not evidence of scope. Every suite-runner
+suite's `summary.json` therefore carries `filter`, a `files` block (`total` /
+`selected` / `executed` / `resumed` / `carried` / `recorded`) and a `runs` list,
+and MERGES across runs, so half 2 no longer deletes half 1 — **`recorded ==
+total` is what "the whole suite ran" looks like on disk**, and a filtered run
+prints `⚠ N of M files selected` up front. `build/test-run/summary.json` mirrors
+the `--filter`, the resolved suite list, and each artifact-backed suite's `files`
+block. Carried-in results are tagged `carried` + `carriedFrom`, and `--resume`
+deliberately ignores them (a stale pass must never be resumed into a "full" run).
+Stale `build/test-browser/*.log` are kept on purpose: carried results cite them,
+and counting logs OVERSTATES — the manifest is the count that means anything.
+
 ### Heavy-suite RAM policy — never run two at once (`tests/lib/heavy-lock.js`)
 
 The **kernel suite** (concurrent full-OS boots, each a nested `os/boot.js`
