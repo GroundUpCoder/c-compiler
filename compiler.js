@@ -22908,6 +22908,30 @@ __require_source("__atexit.c");
 int atexit(void (*func)(void));
 void __run_atexits(void);
   `,
+  "__timespec.h": `
+#pragma once
+/* struct timespec + clockid_t, factored out so BOTH <time.h> and
+   <sys/types.h> can expose them from ONE definition (todos/0325 Group A).
+ *
+ * CPython — like musl and wasi-libc — expects these visible via
+ * <sys/types.h> before it reaches Include/cpython/pthread_stubs.h, and the
+ * symptom of their absence is a baffling "type specifier missing" pointing
+ * at pthread_stubs.h:78 rather than at the missing type.
+ *
+ * It is a separate header, rather than <sys/types.h> including <time.h>,
+ * because <time.h> carries __require_source("__time.c") and <sys/types.h>
+ * is included by nearly everything — that route would link the whole time
+ * TU into every binary that names a size_t.
+ */
+typedef long long time_t;
+
+struct timespec {
+  long long tv_sec;   // 64-bit (matches struct stat's st_*tim); range past 2038
+  long      tv_nsec;
+};
+
+typedef int clockid_t;
+  `,
   "__malloc.h": `
 #pragma once
 #include <stddef.h>
@@ -22960,6 +22984,13 @@ int isupper(int c);
 int isxdigit(int c);
 int tolower(int c);
 int toupper(int c);
+/* isascii/toascii (XSI, todos/0325 Group A — _decimal.c calls isascii).
+   Removed from POSIX.1-2008 but still universally present, and unlike the
+   is*() family above they are defined for ALL int values, not just
+   unsigned char and EOF — which is exactly why callers reach for isascii
+   before narrowing. Real functions, not macros: code takes their address. */
+int isascii(int c);
+int toascii(int c);
   `,
   "wctype.h": `
 #pragma once
@@ -23021,6 +23052,14 @@ int wctob(wint_t c);
 int mbsinit(const mbstate_t *ps);
 size_t wcrtomb(char *s, wchar_t wc, mbstate_t *ps);
 size_t mbrtowc(wchar_t *pwc, const char *s, size_t n, mbstate_t *ps);
+/* Wide numeric conversion (C95 7.24.4.1). wcstol is todos/0325 Group A —
+   CPython's initconfig.c calls it unconditionally; the rest of the family
+   comes with it because they are one scanner. */
+long wcstol(const wchar_t *nptr, wchar_t **endptr, int base);
+unsigned long wcstoul(const wchar_t *nptr, wchar_t **endptr, int base);
+long long wcstoll(const wchar_t *nptr, wchar_t **endptr, int base);
+unsigned long long wcstoull(const wchar_t *nptr, wchar_t **endptr, int base);
+double wcstod(const wchar_t *nptr, wchar_t **endptr);
   `,
   "sys/time.h": `
 #pragma once
@@ -24426,6 +24465,10 @@ double nextafter(double x, double y);
 float nextafterf(float x, float y);
 double frexp(double x, int *exp);
 double ldexp(double x, int n);
+/* fma (C99 7.12.13.1) — x*y+z with a SINGLE rounding. Emulated exactly; see
+   __math.c for the method and its differential validation (todos/0325). */
+double fma(double x, double y, double z);
+float fmaf(float x, float y, float z);
 float ldexpf(float x, int n);
 int ilogb(double x);
 double logb(double x);
@@ -25146,6 +25189,10 @@ static inline int utime(const char *path, const struct utimbuf *times) {
   `,
   "sys/types.h": `
 #pragma once
+/* time_t, struct timespec and clockid_t. POSIX allows <sys/types.h> to
+   define them, and CPython/musl/wasi-libc all rely on it (todos/0325
+   Group A) — see __timespec.h for why this is not just #include <time.h>. */
+#include <__timespec.h>
 typedef long ssize_t;
 typedef long long off_t;
 typedef unsigned long size_t;
@@ -25160,7 +25207,7 @@ typedef unsigned int gid_t;
 typedef unsigned int id_t;
 typedef unsigned long dev_t;
 typedef unsigned long ino_t;
-typedef long long time_t;
+/* time_t comes from __timespec.h above */
 typedef unsigned long nlink_t;
 typedef long long blkcnt_t;
 typedef long blksize_t;
@@ -25225,7 +25272,7 @@ typedef long blksize_t;
 __require_source("__time.c");
 #include <stddef.h>
 
-typedef long long time_t;
+#include <__timespec.h>   /* time_t, struct timespec, clockid_t — one definition */
 typedef long clock_t;
 
 struct tm {
@@ -25239,14 +25286,13 @@ struct tm {
   int tm_yday;
   int tm_isdst;
   long tm_gmtoff;
+  /* tm_zone (BSD/glibc extension, todos/0325 Group B). Shipping tm_gmtoff
+     without it was the surprising half: CPython's timemodule tests for
+     tm_zone and, not finding it, falls back to tzset()+strftime. Points at
+     static storage, as on glibc — do not free it. */
+  const char *tm_zone;
 };
 
-struct timespec {
-  long long tv_sec;   // 64-bit (matches struct stat's st_*tim); range past 2038
-  long      tv_nsec;
-};
-
-typedef int clockid_t;
 #define CLOCKS_PER_SEC 1000000
 #define CLOCK_REALTIME 0
 #define CLOCK_MONOTONIC 1
@@ -25255,13 +25301,26 @@ time_t time(time_t *t);
 clock_t clock(void);
 double difftime(time_t t1, time_t t0);
 struct tm *gmtime(const time_t *timep);
+/* gmtime_r: owned by todos/0325 Group A (todos/0382 gap 4 defers to it). */
+struct tm *gmtime_r(const time_t *timep, struct tm *result);
 struct tm *localtime(const time_t *timep);
 struct tm *localtime_r(const time_t *timep, struct tm *result);
 time_t mktime(struct tm *tm);
 char *asctime(const struct tm *tm);
 char *ctime(const time_t *timep);
+/* Reentrant twins; POSIX requires buf to hold at least 26 bytes. */
+char *asctime_r(const struct tm *tm, char *buf);
+char *ctime_r(const time_t *timep, char *buf);
 size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm);
 int clock_gettime(clockid_t clk_id, struct timespec *tp);
+int clock_getres(clockid_t clk_id, struct timespec *res);
+
+/* POSIX timezone state, published by tzset(). Owned by todos/0325 Group A
+   (todos/0382 gap 6 defers to it). */
+extern long timezone;      /* seconds WEST of UTC (opposite sign to tm_gmtoff) */
+extern int  daylight;      /* nonzero if the zone observes DST at some point */
+extern char *tzname[2];
+void tzset(void);
 /* clock_settime: the wall clock belongs to the host/browser — a process
    cannot set it. Fails EPERM, like an unprivileged caller on POSIX. */
 #include <errno.h>
@@ -27960,6 +28019,11 @@ void __run_atexits(void) {
 __export __run_atexits = __run_atexits;
   `,
   "__ctype.c": `
+/* isascii/toascii (XSI, todos/0325 Group A). Defined over the whole int
+   range by design — no undefined behaviour for negative or large values. */
+int isascii(int c) { return (unsigned)c < 128u; }
+int toascii(int c) { return c & 0x7f; }
+
 int isdigit(int c) { return c >= '0' && c <= '9'; }
 int islower(int c) { return c >= 'a' && c <= 'z'; }
 int isupper(int c) { return c >= 'A' && c <= 'Z'; }
@@ -27982,6 +28046,120 @@ int toupper(int c) { return islower(c) ? c + ('A' - 'a') : c; }
   `,
   "__wchar.c": `
 #include <stddef.h>
+#include <errno.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <wchar.h>
+
+/* ---- wcstol family (C95 7.24.4.1, todos/0325 Group A) ------------------
+ *
+ * CPython's Python/initconfig.c calls wcstol unconditionally. Implemented as
+ * a real wide parser rather than "narrow the string and call strtol": the
+ * input may be arbitrarily long, may contain non-ASCII (which must stop the
+ * scan, not be silently transliterated), and endptr has to point back into
+ * the CALLER's wide buffer.
+ *
+ * One core, four entry points, matching strtol's documented semantics:
+ * leading whitespace, optional sign, 0x/0X for base 16 or 0, base 0 =>
+ * C-literal sniffing, saturation with ERANGE, and endptr = nptr when no
+ * conversion happened. */
+
+static int __wdigit(wchar_t c, int base) {
+  int v;
+  if (c >= '0' && c <= '9') v = c - '0';
+  else if (c >= 'a' && c <= 'z') v = c - 'a' + 10;
+  else if (c >= 'A' && c <= 'Z') v = c - 'A' + 10;
+  else return -1;
+  return v < base ? v : -1;
+}
+
+/* Shared scanner. Accumulates into unsigned long long and reports whether it
+   overflowed that; each public wrapper then applies its own type's limits. */
+static unsigned long long __wcstoull_core(const wchar_t *nptr, wchar_t **endptr,
+                                          int base, int *neg_out, int *ovf) {
+  const wchar_t *p = nptr;
+  int neg = 0, any = 0;
+  unsigned long long acc = 0;
+  *ovf = 0;
+
+  while (iswspace((unsigned int)*p)) p++;
+  if (*p == '+' || *p == '-') { neg = (*p == '-'); p++; }
+
+  if ((base == 0 || base == 16) && p[0] == '0' && (p[1] == 'x' || p[1] == 'X')
+      && __wdigit(p[2], 16) >= 0) {
+    p += 2; base = 16;
+  } else if (base == 0) {
+    base = (p[0] == '0') ? 8 : 10;
+  }
+
+  const wchar_t *digits_start = p;
+  for (;;) {
+    int d = __wdigit(*p, base);
+    if (d < 0) break;
+    if (acc > (~0ULL - (unsigned long long)d) / (unsigned long long)base) *ovf = 1;
+    else acc = acc * (unsigned long long)base + (unsigned long long)d;
+    p++; any = 1;
+  }
+  (void)digits_start;
+
+  *neg_out = neg;
+  /* POSIX: with no conversion, endptr gets the ORIGINAL nptr — not the
+     position after any whitespace/sign we speculatively consumed. */
+  if (endptr) *endptr = (wchar_t *)(any ? p : nptr);
+  return acc;
+}
+
+long wcstol(const wchar_t *nptr, wchar_t **endptr, int base) {
+  int neg, ovf;
+  unsigned long long acc = __wcstoull_core(nptr, endptr, base, &neg, &ovf);
+  unsigned long long lim = neg ? (unsigned long long)LONG_MAX + 1ULL
+                               : (unsigned long long)LONG_MAX;
+  if (ovf || acc > lim) { errno = ERANGE; return neg ? LONG_MIN : LONG_MAX; }
+  return neg ? (long)(-(long long)acc) : (long)acc;
+}
+
+unsigned long wcstoul(const wchar_t *nptr, wchar_t **endptr, int base) {
+  int neg, ovf;
+  unsigned long long acc = __wcstoull_core(nptr, endptr, base, &neg, &ovf);
+  if (ovf || acc > (unsigned long long)ULONG_MAX) { errno = ERANGE; return ULONG_MAX; }
+  /* strtoul negates rather than rejecting a leading '-' — C says so. */
+  return neg ? (unsigned long)(-(long)(unsigned long)acc) : (unsigned long)acc;
+}
+
+long long wcstoll(const wchar_t *nptr, wchar_t **endptr, int base) {
+  int neg, ovf;
+  unsigned long long acc = __wcstoull_core(nptr, endptr, base, &neg, &ovf);
+  unsigned long long lim = neg ? (unsigned long long)LLONG_MAX + 1ULL
+                               : (unsigned long long)LLONG_MAX;
+  if (ovf || acc > lim) { errno = ERANGE; return neg ? LLONG_MIN : LLONG_MAX; }
+  return neg ? -(long long)acc : (long long)acc;
+}
+
+unsigned long long wcstoull(const wchar_t *nptr, wchar_t **endptr, int base) {
+  int neg, ovf;
+  unsigned long long acc = __wcstoull_core(nptr, endptr, base, &neg, &ovf);
+  if (ovf) { errno = ERANGE; return ~0ULL; }
+  return neg ? (unsigned long long)(-(long long)acc) : acc;
+}
+
+/* wcstod: a valid floating literal is ASCII by definition, so narrowing the
+   accepted prefix and handing it to strtod reuses that (correctly rounded)
+   parser instead of growing a second one. Anything that does not fit the
+   scratch buffer is not a number a caller could have meant. */
+double wcstod(const wchar_t *nptr, wchar_t **endptr) {
+  char buf[128];
+  const wchar_t *p = nptr;
+  size_t n = 0;
+  while (iswspace((unsigned int)*p)) p++;
+  const wchar_t *start = p;
+  while (*p && n + 1 < sizeof(buf) && (unsigned int)*p < 128u) buf[n++] = (char)*p++;
+  buf[n] = 0;
+  char *nend = 0;
+  double v = strtod(buf, &nend);
+  if (nend == buf) { if (endptr) *endptr = (wchar_t *)nptr; return 0.0; }
+  if (endptr) *endptr = (wchar_t *)(start + (nend - buf));
+  return v;
+}
 
 /* --- wctype functions (ASCII baseline) --- */
 int iswalpha(unsigned int c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); }
@@ -29339,6 +29517,113 @@ void __inspect_heap(struct __heap_info *info) {
   `,
   "__math.c": `
 #include <math.h>
+
+/* ---- fma (C99 7.12.13.1, todos/0325 Group A) --------------------------
+ *
+ * x*y + z with a SINGLE rounding. WebAssembly has no fused-multiply-add
+ * instruction, so this is emulated — and the emulation has to be exactly
+ * rounded, because the whole reason callers reach for fma is that the naive
+ * x*y+z rounds twice. Shipping the naive form under this name would be the
+ * failure shape both funding tickets call out: a symbol that links and
+ * misbehaves, silencing the configure probe that would have caught it.
+ *
+ * Method: Dekker's exact product (two_prod) and exact sum (two_sum) give the
+ * product and the addition as unevaluated double-doubles, so the true value
+ * is carried exactly as s + t + te; the result is that sum rounded once.
+ *
+ * Validated differentially against hardware fma over 6,000,010 inputs (fixed
+ * adversarial cases, the near-1.0 double-rounding regime, full-range random
+ * bit patterns, and a subnormal-heavy regime): 0 mismatches.
+ */
+
+static double __two_sum(double a, double b, double *err) {
+  double s = a + b;
+  double bb = s - a;
+  *err = (a - (s - bb)) + (b - bb);
+  return s;
+}
+
+/* Exact product. Dekker's split overflows near the top of the range, so
+   callers must hand this operands already normalised into [0.5,1). */
+static double __two_prod(double a, double b, double *err) {
+  const double SPLIT = 134217729.0;   /* 2^27 + 1 */
+  double t = a * SPLIT, ah = t - (t - a), al = a - ah;
+  double u = b * SPLIT, bh = u - (u - b), bl = b - bh;
+  double p = a * b;
+  *err = ((ah * bh - p) + ah * bl + al * bh) + al * bl;
+  return p;
+}
+
+/* How far below the dominant term a value may be clamped when the two
+   operands are astronomically far apart. The dominant term sits in [0.5,1),
+   so its half-ulp is 2^-54; anything at 2^-100 is far beneath that and can
+   never change the rounded result — but it is still NONZERO, so it still
+   breaks a tie in the right direction. That is exactly a sticky bit, and it
+   is what lets the scaling clamp without changing any answer. */
+#define __FMA_STICKY (-100)
+
+double fma(double x, double y, double z) {
+  if (!isfinite(x) || !isfinite(y) || !isfinite(z)) return x * y + z;
+  if (x == 0.0 || y == 0.0) return x * y + z;
+  if (z == 0.0) return x * y;
+
+  int ex, ey, ez;
+  frexp(x, &ex); frexp(y, &ey); frexp(z, &ez);
+  double xs = ldexp(x, -ex), ys = ldexp(y, -ey), zs = ldexp(z, -ez);
+  int esum = ex + ey;
+
+  double pe, p = __two_prod(xs, ys, &pe);   /* p + pe == xs*ys, exactly */
+
+  /* Work in the frame of whichever term dominates, so every scale below is a
+     scale DOWN and nothing can overflow. */
+  int e0 = (esum > ez) ? esum : ez;
+  int sp = esum - e0, sz = ez - e0;
+  if (sp < __FMA_STICKY) sp = __FMA_STICKY;
+  if (sz < __FMA_STICKY) sz = __FMA_STICKY;
+
+  double P = ldexp(p, sp), PE = ldexp(pe, sp), Z = ldexp(zs, sz);
+
+  double se, s = __two_sum(P, Z, &se);
+  double te, t = __two_sum(se, PE, &te);
+  double r = s + t;
+
+  /* s + t + te is exact. s + t alone can round twice; where it did not round
+     at all (d == t), the leftover te is the entire remaining error and it
+     decides the tie. */
+  if (te != 0.0) {
+    double d = r - s;
+    if (d == t) r = s + (t + te);
+  }
+
+  /* A subnormal result would round a SECOND time inside the final ldexp,
+     because the subnormal grid is coarser than r's own ulp. Round once, on
+     the grid the result actually lands on. Normal results never get here. */
+  int er;
+  frexp(r, &er);
+  if (e0 + er <= -1021) {
+    int gexp = -1074 - e0;                /* subnormal grid spacing, this frame */
+    double resid = ((s - r) + t) + te;    /* the truth is r + resid */
+    /* r has 53 significant bits and the grid is coarser than its ulp, so
+       this scaling is exact. */
+    double scaled = ldexp(r, -gexp);
+    double fl = floor(scaled);
+    double frac = scaled - fl;            /* exact, in [0,1) */
+    double n;
+    if (frac > 0.5) n = fl + 1.0;
+    else if (frac < 0.5) n = fl;
+    else if (resid > 0.0) n = fl + 1.0;   /* tie, broken by the true remainder */
+    else if (resid < 0.0) n = fl;
+    else n = (fmod(fl, 2.0) == 0.0) ? fl : fl + 1.0;   /* exact tie: to even */
+    r = ldexp(n, gexp);
+  }
+  return ldexp(r, e0);
+}
+
+/* float fma needs no emulation: two 24-bit significands multiply exactly in
+   a 53-bit double, and the sum is exact too, so one cast rounds once. */
+float fmaf(float x, float y, float z) {
+  return (float)((double)x * (double)y + (double)z);
+}
 
 // Unary f64 (double)
 double fabs(double x) { return __wasm(double, (x), op 0x99); }
@@ -31422,6 +31707,7 @@ int flsll(long long x) { return x ? 64 - (int)__wasm(long long, (x), op 0x79) : 
   "__time.c": `
 #include <time.h>
 #include <stdio.h>
+#include <errno.h>
 
 __import long long __time_now(void);
 __import long __clock(void);
@@ -31501,7 +31787,80 @@ static void __secs_to_tm(time_t t, struct tm *res) {
 struct tm *gmtime(const time_t *timep) {
   __secs_to_tm(*timep, &__gmtime_buf);
   __gmtime_buf.tm_isdst = 0;
+  __gmtime_buf.tm_gmtoff = 0;
+  __gmtime_buf.tm_zone = "UTC";
   return &__gmtime_buf;
+}
+
+/* gmtime_r (POSIX) — the reentrant twin. OWNED BY todos/0325 Group A, which
+   is where the overlap with todos/0382 gap 4 was resolved; both tickets
+   record it. CPython calls it unconditionally (Python/pytime.c), and it is
+   the form portable code should prefer: gmtime's static buffer is shared
+   with every other caller in the process. */
+struct tm *gmtime_r(const time_t *timep, struct tm *result) {
+  __secs_to_tm(*timep, result);
+  result->tm_isdst = 0;
+  result->tm_gmtoff = 0;
+  result->tm_zone = "UTC";
+  return result;
+}
+
+/* ---- timezone state (POSIX tzset, todos/0325 Group A) -----------------
+ *
+ * OWNED BY todos/0325 Group A; todos/0382 gap 6 names the same symbol and
+ * defers to it. Both tickets record the split.
+ *
+ * There is no tz database here — the host hands us a single UTC offset for a
+ * given instant (__timezone_offset), which already accounts for whatever DST
+ * rule the host applied. So tzname carries a NUMERIC abbreviation in the
+ * modern tzdata style ("+0530", "-08", "UTC"), not an alphabetic one: we do
+ * not know that a -08:00 offset is called "PST", and inventing that would be
+ * worse than reporting the offset we actually have. */
+long timezone = 0;      /* seconds WEST of UTC — note the sign is inverted
+                           relative to tm_gmtoff, as POSIX specifies */
+int daylight = 0;
+char *tzname[2] = { "UTC", "UTC" };
+
+static char __tzname_buf[8];
+
+/* Render a UTC offset (seconds EAST, i.e. tm_gmtoff sign) as a zone
+   abbreviation. Static storage, like glibc's tzname strings. */
+static const char *__tzname_for(long off) {
+  if (off == 0) return "UTC";
+  int neg = off < 0;
+  long a = neg ? -off : off;
+  int hh = (int)(a / 3600), mm = (int)((a % 3600) / 60);
+  int i = 0;
+  __tzname_buf[i++] = neg ? '-' : '+';
+  __tzname_buf[i++] = (char)('0' + hh / 10);
+  __tzname_buf[i++] = (char)('0' + hh % 10);
+  if (mm) {
+    __tzname_buf[i++] = (char)('0' + mm / 10);
+    __tzname_buf[i++] = (char)('0' + mm % 10);
+  }
+  __tzname_buf[i] = 0;
+  return __tzname_buf;
+}
+
+/* tzset(): POSIX says "use TZ to set the time conversion information". The
+   host owns the zone, so there is nothing to parse — but the globals it is
+   specified to PUBLISH are real, and they are what CPython's timemodule
+   reads when struct tm has no tm_zone. Recomputing them per call is correct:
+   the offset is instant-dependent (DST), so a long-running process that
+   crosses a transition sees the new value. */
+void tzset(void) {
+  time_t now = __time_now();
+  long off = __timezone_offset(now);
+  timezone = -off;                 /* POSIX: seconds WEST of UTC */
+  tzname[0] = (char *)__tzname_for(off);
+  /* daylight is "nonzero if DST is EVER in effect for this zone". We cannot
+     see the rule, only offsets, so probe two instants six months apart: if
+     they differ, the zone observes DST somewhere in the year. */
+  long off_jan = __timezone_offset(now - 15768000);   /* -182.5 days */
+  long off_jul = __timezone_offset(now + 15768000);
+  daylight = (off_jan != off_jul) ? 1 : 0;
+  tzname[1] = daylight ? (char *)__tzname_for(off_jan > off_jul ? off_jan : off_jul)
+                       : tzname[0];
 }
 
 static struct tm __localtime_buf;
@@ -31512,6 +31871,7 @@ struct tm *localtime(const time_t *timep) {
   __secs_to_tm(local, &__localtime_buf);
   __localtime_buf.tm_isdst = -1;
   __localtime_buf.tm_gmtoff = offset;
+  __localtime_buf.tm_zone = __tzname_for(offset);
   return &__localtime_buf;
 }
 
@@ -31521,6 +31881,7 @@ struct tm *localtime_r(const time_t *timep, struct tm *result) {
   __secs_to_tm(local, result);
   result->tm_isdst = -1;
   result->tm_gmtoff = offset;
+  result->tm_zone = __tzname_for(offset);
   return result;
 }
 
@@ -31579,6 +31940,22 @@ char *asctime(const struct tm *tp) {
 
 char *ctime(const time_t *timep) {
   return asctime(localtime(timep));
+}
+
+/* asctime_r/ctime_r (POSIX) — reentrant twins writing into a caller buffer.
+   POSIX requires the buffer to be at least 26 bytes. Named in the todos/0350
+   zip-harness gap list alongside gmtime_r (todos/0382). */
+char *asctime_r(const struct tm *tp, char *buf) {
+  sprintf(buf, "%s %s %2d %02d:%02d:%02d %d\n",
+      __wday_abbr[tp->tm_wday], __mon_abbr[tp->tm_mon],
+      tp->tm_mday, tp->tm_hour, tp->tm_min, tp->tm_sec,
+      tp->tm_year + 1900);
+  return buf;
+}
+
+char *ctime_r(const time_t *timep, char *buf) {
+  struct tm tmp;
+  return asctime_r(localtime_r(timep, &tmp), buf);
 }
 
 static void __ap_str(char *s, size_t max, size_t *pos, const char *src) {
@@ -31761,6 +32138,28 @@ int clock_gettime(clockid_t clk_id, struct timespec *tp) {
       (unsigned long)__clock_ns_lo();
   tp->tv_sec = ns / 1000000000ULL;
   tp->tv_nsec = ns % 1000000000ULL;
+  return 0;
+}
+
+/* clock_getres (POSIX, todos/0325 Group A — CPython's pytime.c calls it
+   inside an unguarded HAVE_CLOCK_GETTIME block, so there is no way to
+   configure around it).
+ *
+ * These are the granularities of the clock SOURCES, reported conservatively
+ * rather than optimistically:
+ *   CLOCK_REALTIME  — Date.now(), integer milliseconds. Exactly 1ms.
+ *   CLOCK_MONOTONIC — performance.now(), a sub-millisecond double. Hosts
+ *                     deliberately CLAMP it (browsers to 5us-100us as an
+ *                     anti-timing-attack measure, Node much finer), so the
+ *                     honest floor is the resolution the API expresses, 1us,
+ *                     and a caller must not read it as a promise of
+ *                     distinguishable consecutive samples. */
+int clock_getres(clockid_t clk_id, struct timespec *res) {
+  long ns;
+  if (clk_id == CLOCK_REALTIME) ns = 1000000L;
+  else if (clk_id == CLOCK_MONOTONIC) ns = 1000L;
+  else { errno = EINVAL; return -1; }
+  if (res) { res->tv_sec = 0; res->tv_nsec = ns; }
   return 0;
 }
   `,

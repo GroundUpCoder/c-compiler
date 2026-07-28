@@ -1,0 +1,13 @@
+epoch 0 -> 1970-01-01 00:00:00 wday=4 yday=0 isdst=0 gmtoff=0 zone=UTC same=1
+y2k 946684800 -> 2000-01-01 00:00:00 wday=6 yday=0 isdst=0 gmtoff=0 zone=UTC same=1
+leapday 951782400 -> 2000-02-29 00:00:00 wday=2 yday=59 isdst=0 gmtoff=0 zone=UTC same=1
+nonleap 1078012800 -> 2004-02-29 00:00:00 wday=0 yday=59 isdst=0 gmtoff=0 zone=UTC same=1
+pre -1 -> 1969-12-31 23:59:59 wday=3 yday=364 isdst=0 gmtoff=0 zone=UTC same=1
+preday -86400 -> 1969-12-31 00:00:00 wday=3 yday=364 isdst=0 gmtoff=0 zone=UTC same=1
+y2038 2147483648 -> 2038-01-19 03:14:08 wday=2 yday=18 isdst=0 gmtoff=0 zone=UTC same=1
+far 4102444800 -> 2100-01-01 00:00:00 wday=5 yday=0 isdst=0 gmtoff=0 zone=UTC same=1
+dec31 1735689599 -> 2024-12-31 23:59:59 wday=2 yday=365 isdst=0 gmtoff=0 zone=UTC same=1
+independent=1
+gmtime_aliases=1
+asctime_r=[Thu Jan  1 00:00:00 1970
+] ret=1

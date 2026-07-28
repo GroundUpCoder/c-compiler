@@ -1,0 +1,12 @@
+tzname0_set=1 tzname1_set=1
+tzname0_nonempty=1
+daylight_is_bool=1
+sign_convention=1
+gmt_offset_zero=1 gmt_zone=UTC
+local_zone_set=1
+idempotent=1
+realtime rc=0 sec=0 nsec=1000000
+monotonic rc=0 sec=0 nsec=1000
+bogus rc=-1 einval=1
+null_ok=1
+res_sane=1
