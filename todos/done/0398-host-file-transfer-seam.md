@@ -1,6 +1,6 @@
 # 0398 — host<->gucOS file transfer seam — egress/download + file-flavored clipboard interop (DESIGN)
 
-- **Status**: open
+- **Status**: done
 - **Design**: ✅ **LANDED** (Fable pass, 2026-07-28) →
   `todos/0398-host-file-transfer-seam-design.md`. Implement from the design doc, not from
   this ticket's problem statement. Decisions in one line each: (D1) process→kernel wire
