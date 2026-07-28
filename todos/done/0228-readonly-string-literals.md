@@ -1,6 +1,6 @@
 # 0228 — Hardening: read-only string literals (dedup + writable today — a UB write corrupts cross-literal silently)
 
-- **Status**: in progress (branch `readonly-literals-0228`)
+- **Status**: done (branch `readonly-literals-0228`)
 - **Design**: see `## Design` below
 
 ## Design

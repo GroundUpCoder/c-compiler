@@ -1,6 +1,7 @@
 # 0149 — system keyboard scheme (Windows ⁄ macOS keymaps)
 
-- **Status**: deferred (mass-deferred 2026-07-12; was: open)
+- **Status**: done (shipped with 0150 — system keyboard scheme, image v124;
+  was: mass-deferred 2026-07-12)
 - **Design**: `todos/KEYMAP.md` (the two keymaps, config format, resolver
   contract, the browser-⌘ passthrough spike). From the 2026-07-12 design
   discussion.

@@ -23,7 +23,7 @@
 //   node todos/queue.js block <ID> [--hard A,B] [--soft C,D]
 //   node todos/queue.js check [--fix]                # validate; exit non-zero on failure
 //                                                    # --fix: list unlisted open items,
-//                                                    #   rewrite done/ Status lines saying "open"
+//                                                    #   rewrite done/ Status lines claiming open/in-progress
 //   node todos/queue.js next-id                      # next free ticket + liability id
 //
 // IDS ARE ALLOCATED ACROSS ALL REFS, not from the working tree (todos/0358).
@@ -197,10 +197,29 @@ function scanFs() {
 // statusOf() has always classified on, so every check here reads the same text.
 const STATUS_RE = /^-\s*\*{0,2}Status\*{0,2}\s*:\s*(.*)$/mi;
 
-// Leads with the word "open" — `open`, `Open (P1)`, `**open** — …` all do;
-// `reopened`, `closed — was open until …` deliberately do not (the leading-
-// token test is what keeps this decidable instead of prose-guessing).
-const STATUS_OPEN_RE = /^([*_\s]*)open\b/i;
+// Leading-token CLASSES, one per drift direction (todos/0368 — generalized
+// from 0353's two observed instances; a live open-says-"DONE" ticket and a
+// done/-says-"in progress" one both passed the old checks). A full status
+// state machine is deliberately rejected: the Status line is prose by design
+// (every fixer preserves the author's text), the DIRECTORY is the source of
+// truth, and the contract here is only "the prose must not CONTRADICT the
+// directory" — contradiction is decidable by leading token, anything further
+// is prose-guessing. Lines that assert neither state (e.g. "was deferred …",
+// "fix built on branch X, awaiting …" led by "fix") pass unvalidated; that
+// residual is accepted and recorded in 0368, not a scheduled gap.
+//
+// OPEN-like: claims of not-done-ness. `open`, `Open (P1)`, `**wip** — …`,
+// `in progress (branch x)`, `awaiting review` all lead with one; `reopened`,
+// `closed — was open until …` deliberately do not (the leading-token test is
+// what keeps this decidable instead of prose-guessing).
+const STATUS_OPENLIKE_RE = /^([*_\s]*)(?:open|ready|wip|unstarted|blocked|awaiting|in[-\s]+progress|in[-\s]+review)\b/i;
+// DONE-like: claims of done-ness — contradictory on a file still in todos/.
+const STATUS_DONELIKE_RE = /^[*_\s]*(?:done|shipped|landed|merged|fixed|closed|completed?|dropped|retired|superseded|resolved|implemented|obsolete)\b/i;
+// Leading "deferred" on a CLOSED ticket — contradictory too (deferred means
+// parked-but-open; the two shipped keymap tickets sat in done/ saying it), but
+// what it became (done / dropped / superseded) is the author's call, so this
+// one is report-only, never auto-fixed.
+const STATUS_DEFERRED_LEAD_RE = /^[*_\s]*deferred\b/i;
 
 // A round heading the body records as finished: `## R2 — DONE 2026-07-28`,
 // `## R1 — LANDED …`. Narrowly pattern-matched on purpose (0353 scope note):
@@ -249,13 +268,16 @@ function statusContradictions(line, body) {
   return out;
 }
 
-// Rewrite a done/ ticket's leading "open" to "done", preserving the rest of the
-// line verbatim (a trailing "(P1)" or a dated parenthetical is the author's
-// text, not this script's to edit). Returns the new body, or null if no change.
+// Rewrite a done/ ticket's OPEN-like leading token ("open", "in progress",
+// "awaiting", …) to "done", preserving the rest of the line verbatim (a
+// trailing "(P1)", "(branch x)" or a dated parenthetical is the author's text,
+// not this script's to edit). Safe to automate for exactly this class: the
+// directory already says done, and the token claims otherwise — directory
+// wins. Returns the new body, or null if no change.
 function fixDoneStatusLine(body) {
   const m = body.match(STATUS_RE);
-  if (!m || !STATUS_OPEN_RE.test(m[1])) return null;
-  const fixed = m[0].replace(m[1], m[1].replace(STATUS_OPEN_RE, '$1done'));
+  if (!m || !STATUS_OPENLIKE_RE.test(m[1])) return null;
+  const fixed = m[0].replace(m[1], m[1].replace(STATUS_OPENLIKE_RE, '$1done'));
   return body.slice(0, m.index) + fixed + body.slice(m.index + m[0].length);
 }
 
@@ -471,19 +493,35 @@ function validate(manifest, fsState) {
     if (NEGATED_DEFER_RE.test(line)) {
       errors.push(`todos/${file} Status line reads "${line.trim()}" — a negated "deferred" on this line still classifies the item as DEFERRED (the 0126 footgun: the classifier substring-tests for "deferred"); say "open" or "ready" instead`);
     }
+
+    // (todos/0368) The inverse of the done/-says-open check: an OPEN ticket
+    // must not lead its Status line with a done-claim. 0313 sat in the queue
+    // at heavy difficulty with "DONE — verdict YES-BUT" as its Status — a lane
+    // picking it from the queue burns a turn discovering it is finished.
+    // Which side is right is a judgement call (finish closing it, or say what
+    // remains), so report-only, never auto-fixed.
+    if (STATUS_DONELIKE_RE.test(line)) {
+      errors.push(`todos/${file} is OPEN (in todos/, listed in the queue) but its Status line leads with a done-claim: "${line.trim()}" — if the work is finished, close it (node todos/queue.js done ${id}); otherwise say what remains (not auto-fixable)`);
+    }
   }
 
-  // (todos/0353 §1) A ticket in todos/done/ is closed by definition — the
-  // directory IS the source of truth — so its Status line must not still lead
-  // with "open". 35 of 260 did; 0330 was one, and it is cited as a dependency
-  // by 0340 and 0347, so it is precisely the file a lane WILL read.
+  // (todos/0353 §1, widened by 0368) A ticket in todos/done/ is closed by
+  // definition — the directory IS the source of truth — so its Status line
+  // must not still lead with an OPEN-like claim. 35 of 260 said "open"; the
+  // widened class caught "in progress (branch …)" on shipped 0228. Leading
+  // "deferred" contradicts done/ too (deferred = parked-but-OPEN; shipped
+  // 0149/0150 sat in done/ saying it) but what it became is the author's
+  // call — reported, never auto-fixed.
   for (const [, file] of done) {
     let body;
     try { body = fs.readFileSync(path.join(DONE_DIR, file), 'utf8'); }
     catch { continue; }
     const line = statusLineOf(body);
-    if (line !== null && STATUS_OPEN_RE.test(line)) {
-      errors.push(`todos/done/${file} is closed but its Status line still reads "${line.trim()}" — it belongs in done/, so the line must not say open (run: queue.js check --fix)`);
+    if (line === null) continue;
+    if (STATUS_OPENLIKE_RE.test(line)) {
+      errors.push(`todos/done/${file} is closed but its Status line still reads "${line.trim()}" — it belongs in done/, so the line must not claim open/in-progress (run: queue.js check --fix)`);
+    } else if (STATUS_DEFERRED_LEAD_RE.test(line)) {
+      errors.push(`todos/done/${file} is closed but its Status line still leads with "deferred" — deferred means parked-but-OPEN; say what the item became (done / dropped / superseded) (not auto-fixable)`);
     }
   }
 
@@ -542,8 +580,10 @@ function cmdCheck(argv) {
       for (const id of missing) manifest.queue.push({ id });
       process.stdout.write(`--fix: appended ${missing.length} unlisted item(s): ${missing.join(', ')}\n`);
     }
-    // Rewrite done/ Status lines that still say "open" (todos/0353 §3). Only
-    // this one — the R<n> contradiction is deliberately NOT auto-fixed.
+    // Rewrite done/ Status lines whose leading token is OPEN-like — "open"
+    // (todos/0353 §3), "in progress"/"awaiting"/… (todos/0368). Only this
+    // class — the R<n> contradiction, leading "deferred" in done/, and an
+    // open ticket's done-claim are all judgement calls and NOT auto-fixed.
     // Written to disk here rather than staged like the manifest above, because
     // validate() re-reads the ticket files: the fix has to land before the
     // check that would otherwise fail on it.
@@ -556,7 +596,7 @@ function cmdCheck(argv) {
       if (next !== null) { fs.writeFileSync(p, next); fixed.push(file); }
     }
     if (fixed.length) {
-      process.stdout.write(`--fix: rewrote "open" -> "done" on ${fixed.length} closed ticket(s):\n`);
+      process.stdout.write(`--fix: rewrote open-like Status -> "done" on ${fixed.length} closed ticket(s):\n`);
       for (const f of fixed) process.stdout.write(`  todos/done/${f}\n`);
     }
   }
@@ -1085,7 +1125,7 @@ const USAGE = `queue.js — the todos ordering-manifest CLI
   block <ID> [--hard A,B] [--soft C,D]          set hard/soft deps ("" clears)
   check [--fix]                                 validate; exit non-zero on failure
                                                 --fix: list unlisted open items +
-                                                rewrite done/ Status lines saying "open"
+                                                rewrite done/ Status lines claiming open/in-progress
 
 -h/--help anywhere prints this and exits 0. An unknown command or --flag is a
 usage error (exit 2; nothing written) — validation failures exit 1.

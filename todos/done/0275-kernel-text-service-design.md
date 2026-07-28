@@ -1,6 +1,7 @@
 # 0275 design — ksvc: the kernel-C service blob (text rendering first)
 
-- **Status**: design COMMITTED (this doc; branch ksvc-design, 2026-07-22).
+- **Status**: done — design COMMITTED (this doc; branch ksvc-design,
+  2026-07-22); ksvc landed v139.
   Direction settled by the user in `todos/0275-kernel-text-service.md` — this
   doc nails the ABI / caching / build / integration details against the real
   code and records the feasibility spike result. The implementation is a

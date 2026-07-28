@@ -51,7 +51,8 @@
   the in-OS `read()` fill up to `count` for regular files (fixes the WHOLE class
   — any in-OS program doing one large `read()` of a regular file is silently
   truncated today). Reclassify accordingly; the codegen framing below is retired.
-- **Status**: was deferred (mass-deferred 2026-07-12) as an open-ended compiler
+- **Status**: done (mGBA short-read fix merged 2eb7e4e + live) — was deferred
+  (mass-deferred 2026-07-12) as an open-ended compiler
   correctness hunt. That framing is RETIRED by the 2026-07-20 root cause above —
   it is an FS short-read / mgba VFS-fallback bug, not a compiler bug. Design +
   historical evidence: `todos/MGBA.md`. Historical narrative:

@@ -1,6 +1,7 @@
 # 0150 — emacs line-editing bindings in GUI text fields (macOS mode)
 
-- **Status**: deferred (mass-deferred 2026-07-12; was: open)
+- **Status**: done (shipped with 0149 — system keyboard scheme, image v124;
+  was: mass-deferred 2026-07-12)
 - **Design**: `todos/KEYMAP.md`. Depends on 0149 (the scheme + `os/keys.h`
   resolver). This is the *payoff* piece of the keyboard-scheme work.
 

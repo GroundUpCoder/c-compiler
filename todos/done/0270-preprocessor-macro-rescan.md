@@ -1,6 +1,7 @@
 # 0270 — compiler.js preprocessor: function-like macro name from inner expansion not re-scanned when its args come from the same replacement list
 
-- **Status**: fix built on `fix-0270-pp-rescan`, gates green, awaiting
+- **Status**: done (merged to main after coordinator review, closed 9f6b8959)
+  — fix built on `fix-0270-pp-rescan`, gates green, was awaiting
   coordinator review/merge (compiler.js is codegen-sensitive — master reviews
   the diff + sequences before the C++ ladder T2 ETL rung).
 - **Design**: dev log `logs/2026-07-20/pp-macro-rescan-0270.md`.

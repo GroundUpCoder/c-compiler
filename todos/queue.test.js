@@ -148,12 +148,77 @@ test('check --fix rewrites a closed ticket\'s open Status line, keeping the tail
   writeManifest(todos, [{ id: '0001' }]);
   const r = run(todos, ['check', '--fix']);
   assert.strictEqual(r.code, 0, r.stderr);
-  assert.match(r.stdout, /rewrote "open" -> "done" on 1 closed ticket/);
+  assert.match(r.stdout, /rewrote open-like Status -> "done" on 1 closed ticket/);
   assert.match(r.stdout, /todos\/done\/0002-shipped\.md/);
   const body = fs.readFileSync(path.join(todos, 'done', '0002-shipped.md'), 'utf8');
   // The parenthetical is the author's text, not the fixer's to edit.
   assert.match(body, /^- \*\*Status\*\*: done \(user-requested 2026-07-21\)$/m);
   assert.strictEqual(run(todos, ['check']).code, 0, 'green after --fix');
+});
+
+// --- Status-line drift, both directions (todos/0368) ---
+// 0353 pinned the two OBSERVED drift classes only; both inverses passed
+// silently and both had live instances at head: 0228 sat in done/ saying
+// "in progress (branch …)", and 0313 sat OPEN in the queue at heavy difficulty
+// with "DONE — verdict YES-BUT" as its Status. Generalized to leading-token
+// classes — still decidable, still no prose-guessing.
+
+test('check fails on a done/ ticket claiming in-progress, and --fix rewrites it', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  // The 0228 shape verbatim.
+  writeItem(todos, '0002', 'shipped', { done: true, status: 'in progress (branch `x-0002`)' });
+  writeManifest(todos, [{ id: '0001' }]);
+  let r = run(todos, ['check']);
+  assert.strictEqual(r.code, 1);
+  assert.match(r.stderr, /done\/0002-shipped\.md is closed but its Status line still reads "in progress \(branch `x-0002`\)"/);
+  r = run(todos, ['check', '--fix']);
+  assert.strictEqual(r.code, 0, r.stderr);
+  const body = fs.readFileSync(path.join(todos, 'done', '0002-shipped.md'), 'utf8');
+  assert.match(body, /^- \*\*Status\*\*: done \(branch `x-0002`\)$/m,
+    'the open-like phrase is replaced; the author\'s parenthetical survives');
+});
+
+test('check fails on a done/ ticket still leading with "deferred" — and does NOT auto-fix it', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  // The 0149/0150 shape: shipped tickets whose lines still said deferred.
+  writeItem(todos, '0002', 'shipped', { done: true, status: 'deferred (mass-deferred 2026-01-01; was: open)' });
+  writeManifest(todos, [{ id: '0001' }]);
+  const r = run(todos, ['check']);
+  assert.strictEqual(r.code, 1);
+  assert.match(r.stderr, /done\/0002-shipped\.md is closed but its Status line still leads with "deferred".*not auto-fixable/s);
+  // done / dropped / superseded is the author's call — --fix must not guess.
+  assert.strictEqual(run(todos, ['check', '--fix']).code, 1,
+    'deferred-in-done/ is a judgement call, deliberately not auto-fixed');
+});
+
+test('check fails on an OPEN ticket whose Status line leads with a done-claim', () => {
+  const todos = setup();
+  // The 0313 shape verbatim.
+  writeItem(todos, '0001', 'a', { status: 'DONE — **verdict YES-BUT**. Full report: logs/x.md' });
+  writeManifest(todos, [{ id: '0001' }]);
+  const r = run(todos, ['check']);
+  assert.strictEqual(r.code, 1);
+  assert.match(r.stderr, /0001-a\.md is OPEN .* leads with a done-claim: "DONE — .*close it \(node todos\/queue\.js done 0001\); otherwise say what remains \(not auto-fixable\)/s);
+  // Close-it-or-reword is a judgement call — --fix must not pick a side.
+  assert.strictEqual(run(todos, ['check', '--fix']).code, 1);
+  // A done-word later in the line is fine; only the LEADING token claims state.
+  writeItem(todos, '0001', 'a', { status: 'open — R1 done and merged, R2 unstarted' });
+  assert.strictEqual(run(todos, ['check']).code, 0, 'a non-leading "done" must not trip it');
+});
+
+test('the leading-token classes stay decidable: neutral prose passes both directions', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  // Accepted residual (recorded in 0368): lines that assert NEITHER state pass
+  // unvalidated — the checker refuses to guess prose. "was deferred …" and
+  // "fix built on …" led real drifted tickets (0140, 0270); they were fixed by
+  // hand, not by widening the classes into guesswork.
+  writeItem(todos, '0002', 'b', { done: true, status: 'was deferred; root cause landed elsewhere' });
+  writeItem(todos, '0003', 'c', { done: true, status: 'fix built on branch x, merged 2026-01-01' });
+  writeManifest(todos, [{ id: '0001' }]);
+  assert.strictEqual(run(todos, ['check']).code, 0);
 });
 
 test('check fails when an open Status line claims a round the body records DONE', () => {
