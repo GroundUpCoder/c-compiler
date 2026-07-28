@@ -338,6 +338,20 @@ function session2() {
     '/tmp/eg 1 /tmp/out.txt',
     '/tmp/eg 1 /tmp/out.txt',
     'echo ==done',
+    // -- the fileman UI entry point (0398 step 2): row menu Download --
+    'mkdir -p /root/fmtest',
+    'printf fileman-egress > /root/fmtest/fm.txt',
+    'fileman /root/fmtest &',
+    'wmctl wait label Go 10000',                 // fileman controls + loop up
+    'SID=$(wmctl list | grep "File Manager" | sed "s/[^0-9].*//")',
+    'wmctl click $SID 100 51 3',                 // right-click row 0 (fm.txt)
+    'wmctl wait label Download 8000',            // popup item = agent target
+    'wmctl click Download',
+    // Agent requests serve from the message loop's queue-dry idle, so this
+    // round-trip is the barrier proving the Download WM_COMMAND (and its
+    // synchronous eg_send) already ran before the boot exits.
+    'wmctl gettext EDIT:0 > /dev/null',
+    'echo ==fmdone',
     '',
   ], { image, args: ['--egress-dir=' + outDir], timeout: 420000 });
   const eg1 = section(r1.stdout, 'eg1');
@@ -348,6 +362,10 @@ function session2() {
     fs.existsSync(f1) && fs.readFileSync(f1, 'utf8') === 'hostbound-bytes');
   check('twin: second egress got the -N collision suffix',
     fs.existsSync(f2) && fs.readFileSync(f2, 'utf8') === 'hostbound-bytes');
+  const f3 = path.join(outDir, 'fm.txt');
+  check('twin: fileman row-menu Download landed the file',
+    fs.existsSync(f3) && fs.readFileSync(f3, 'utf8') === 'fileman-egress',
+    r1.stdout.slice(-400));
 
   const r2 = driveBoot([
     ...EG_TOOL,

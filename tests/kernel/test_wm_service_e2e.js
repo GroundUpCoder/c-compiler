@@ -822,7 +822,7 @@ const script = [
   'echo ==rn5',
   'wmctl list',                                    // ctxmenu (icon menu) up
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  'wmctl click $CXSID 30 176',                     // Rename row (row 6 on a document — Edit precedes, 0202; 1 + 2*30 + 10 + 3*30 + 15)
+  'wmctl click $CXSID 30 206',                     // Rename row (row 7 on a document — Edit precedes 0202, Download 0398; 1 + 2*30 + 10 + 4*30 + 15)
   'wmctl wait nowin ctxmenu',
   'wmctl key $DSID 42 8',                          // clear "aab"
   'wmctl key $DSID 42 8',

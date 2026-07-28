@@ -257,8 +257,9 @@ const script = [
   'wmctl list',
   'echo ==cut',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  'wmctl click $CXSID 30 146',                   // Delete (Edit shifted it, 0202;
-                                                 // engine rows 0259: 1+4*30+10+15)
+  'wmctl click $CXSID 30 176',                   // Delete (Edit shifted it, 0202;
+                                                 // Download too, 0398; engine
+                                                 // rows 0259: 1+5*30+10+15)
   'sleep 1.5',                                   // wm.c trashes + the coarse glyph tick must flip empty->full before F-SHOT (no event)
   'test ! -f /root/Desktop/junk.txt && test -f /root/.recycle/files/junk.txt && echo DESK-TRASH',
   'wmctl shot $DSID /root/f.ppm && echo F-SHOT',
@@ -371,8 +372,8 @@ check('a failed trash leaves NO stray store entry (the fo_trash sweep)',
 
 // ---- the wm.c desktop ----
 const im = section('iconmenu');
-check('icon menu grew Delete + Rename + Edit (h 194 on a document, 0103/0202)',
-  /x194\+/.test(row(im, 'ctxmenu')), JSON.stringify(im));
+check('icon menu grew Delete + Rename + Edit + Download (h 224 on a document, 0103/0202/0398)',
+  /x224\+/.test(row(im, 'ctxmenu')), JSON.stringify(im));
 check('icon DELETE trashes the desktop file', out.includes('DESK-TRASH'));
 const bm = section('binmenu');
 check('the bin icon gets its own Open/Empty menu (h 74)',

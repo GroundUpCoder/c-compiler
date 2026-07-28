@@ -167,6 +167,7 @@
 #include "launch.h"
 #include "openwith.h"
 #include "fileops.h"
+#include "egress.h"        /* icon-menu Download -> the host (todos/0398) */
 #include "sounds.h"
 #include "saver.h"
 #include "keys.h"
@@ -527,6 +528,7 @@ enum {                             /* command ids (ctx_command dispatch) */
     CM_EDIT,                       /* icon (0202: document → GUI text editor) */
     CM_RENAME,                     /* icon (0103: the inline rename editor) */
     CM_CUT, CM_COPY,               /* icon (0092: the selection set) */
+    CM_DOWNLOAD,                   /* icon (0398: egress the selection) */
     CM_DELETE,                     /* icon (0093: to the Recycle Bin) */
     CM_EMPTY,                      /* the Recycle Bin icon (0093) */
     CM_RESTORE, CM_MINIMIZE, CM_MAXIMIZE, CM_CLOSE, /* taskbar button */
@@ -3026,6 +3028,7 @@ static void ctx_open_icon(int idx, int x, int y) {
         mc_append(t, 2, 0, NULL, NULL);
         mc_append(t, 0, CM_CUT, "Cut", NULL);
         mc_append(t, 0, CM_COPY, "Copy", NULL);
+        mc_append(t, 0, CM_DOWNLOAD, "Download", NULL);   /* egress (0398) */
         mc_append(t, 0, CM_DELETE, "Delete", NULL);
         mc_append(t, 0, CM_RENAME, "Rename", NULL);   /* the inline editor (0103) */
     }
@@ -3049,6 +3052,27 @@ static void desk_clip(int cut) {
     }
     if (n && fo_clip_set(cut, paths, n) != 0)
         fprintf(stderr, "wm: clipboard set failed: %s\n", strerror(errno));
+}
+
+/* Download the selection to the host (todos/0398): the same selection walk
+ * as desk_clip, but the paths go to the egress seam — the kernel
+ * materializes ONE artifact (a lone file's bytes, or one zip for a
+ * directory / multi-selection) and the embedder performs the host-side
+ * act. The bin is skipped like cut/copy; errors go to the service log
+ * (this process has no dialog furniture). */
+static void desk_download(void) {
+    static char bufs[MAX_DESK][300];   /* off the 64KB wasm stack */
+    const char *paths[MAX_DESK];
+    int n = 0;
+    for (int i = 0; i < desk_n && i < MAX_DESK; i++) {
+        if (!(desk_selmask >> i & 1)) continue;
+        if (strcmp(desk[i].name, "Recycle Bin") == 0) continue;
+        snprintf(bufs[n], sizeof bufs[n], "/root/Desktop/%s", desk[i].name);
+        paths[n] = bufs[n];
+        n++;
+    }
+    if (n && eg_send(EG_DOWNLOAD, paths, n) != 0)
+        fprintf(stderr, "wm: download failed: %s\n", strerror(errno));
 }
 
 /* Delete the selection to the Recycle Bin (todos/0093 — recoverable, so
@@ -3300,6 +3324,7 @@ static void ctx_command(int id) {
     case CM_RENAME: desk_edit_start(icon); break;   /* 0103: inline editor */
     case CM_CUT: desk_clip(1); break;            /* 0092 */
     case CM_COPY: desk_clip(0); break;
+    case CM_DOWNLOAD: desk_download(); break;    /* 0398: egress to the host */
     case CM_PASTE: desk_paste(); break;
     case CM_DELETE: desk_delete(); break;        /* 0093: to the bin */
     case CM_EMPTY:                               /* 0093: the bin's menu */

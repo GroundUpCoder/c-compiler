@@ -77,7 +77,7 @@ try {
   await pause(800);
   await page.keyboard.type('CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")\r', { delay: 40 });
   await pause(800);
-  await page.keyboard.type('wmctl click $CXSID 30 146\r', { delay: 40 });  // Delete (Edit shifted it, 0202; engine rows 0259)
+  await page.keyboard.type('wmctl click $CXSID 30 176\r', { delay: 40 });  // Delete (Edit shifted it 0202, Download 0398; engine rows 0259)
   await pause(800);
   await page.keyboard.type('test ! -f /root/Desktop/junk.txt && test -f /root/.recycle/files/junk.txt && echo DESK-TRASH-O""K\r', { delay: 50 });
   await waitOut('DESK-TRASH-OK');

@@ -60,6 +60,7 @@
 #include "../launch.h"
 #include "../listdir.h"
 #include "../openwith.h"
+#include "../egress.h"               /* row-menu Download (todos/0398) */
 
 #define ID_PATH 100
 #define ID_GO   101
@@ -98,6 +99,7 @@
 #define IDM_REVERSE   323
 #define IDM_HIDDEN    324
 #define IDM_BACK      325            /* Alt+Left history back (0106) */
+#define IDM_DOWNLOAD  326            /* egress to the host (todos/0398) */
 
 #define WM_FSCHANGE (WM_APP + 1)     /* cwd changed on disk (FS_WATCH wake) */
 
@@ -486,6 +488,24 @@ static void clip_selected(int cut) {
     if (cnt && SHClipSetFiles(cut, pv, cnt) != 0) op_error("clip", pv[0]);
 }
 
+/* Download (todos/0398): egress every selected row's path through the ONE
+ * transfer seam — the kernel materializes one artifact (a lone file's
+ * bytes, or one store-only zip for a directory / multi-selection) and the
+ * embedder performs the host-side act. Failure surfaces as
+ * strerror(errno) like every other op here. */
+static void download_selected(void) {
+    int idx[512];
+    int n = sel_indices(idx, 512);
+    if (n <= 0) return;
+    static char paths[512][800];
+    const char *pv[512];
+    int cnt = 0, isdir;
+    for (int i = 0; i < n && cnt < 512; i++)
+        if (row_path(idx[i], paths[cnt], sizeof paths[0], &isdir))
+            pv[cnt] = paths[cnt], cnt++;
+    if (cnt && eg_send(EG_DOWNLOAD, pv, cnt) != 0) op_error("download", pv[0]);
+}
+
 /* Paste into the cwd: cut = move (slot cleared after a clean run — a cut
  * pastes once), copy = duplicate with the "Copy of" clash uniquifier. */
 static void paste_here(void) {
@@ -751,6 +771,7 @@ static void ctx_menu(int sx, int sy) {
             AppendMenuA(m, MF_SEPARATOR, 0, NULL);
             AppendMenuA(m, 0, IDM_CUT, "Cut");
             AppendMenuA(m, 0, IDM_COPY, "Copy");
+            AppendMenuA(m, 0, IDM_DOWNLOAD, "Download");   /* egress (0398) */
             AppendMenuA(m, MF_SEPARATOR, 0, NULL);
             AppendMenuA(m, 0, IDM_RENAME, "Rename");
             AppendMenuA(m, 0, IDM_DELETE, "Delete");
@@ -849,6 +870,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case IDM_EDIT:      edit_selected();     return 0;
         case IDM_CUT:       clip_selected(1);    return 0;
         case IDM_COPY:      clip_selected(0);    return 0;
+        case IDM_DOWNLOAD:  download_selected(); return 0;   /* 0398 */
         case IDM_PASTE:     paste_here();        return 0;
         case IDM_RENAME:    rename_selected();   return 0;
         case IDM_DELETE:    delete_selected(0);  return 0;

@@ -42,8 +42,9 @@ const { dir: tmp, image } = freshImage('os-ctx-');
 // Refresh / Add Default Icons (Lane D) / Paste / --- / Display -> h 194;
 // taskbar-button menu: Restore /
 // Minimize / Maximize / --- / Close -> h 134; icon menu on a RUNNABLE icon:
-// Open / --- / Cut / Copy / Delete / Rename -> h 164 (documents grow an
-// Edit row after Open -> h 194, todos/0202 — alauncher stays 164). A
+// Open / --- / Cut / Copy / Download / Delete / Rename -> h 194 (documents
+// grow an Edit row after Open -> h 224, todos/0202 — alauncher stays 194;
+// Download is todos/0398). A
 // cascade parks at parent-right - 3 with its first row aligned to the
 // anchor row's drawn top (New: Folder + Text File -> h 64; Sort by:
 // Name -> h 34). Row centers at 1 + sum(prev rows) + 15.
@@ -52,7 +53,7 @@ const DESK_MENU_H = 4 + 6 * 30 + 10;               // 194 (Lane D added a row)
 const NEW_FLY_H = 4 + 2 * 30;                      // 64
 const SORT_FLY_H = 4 + 1 * 30;                     // 34
 const BAR_MENU_H = 4 + 4 * 30 + 10;                // 134
-const ICON_MENU_H = 4 + 5 * 30 + 10;               // 164
+const ICON_MENU_H = 4 + 6 * 30 + 10;               // 194 (Download, 0398)
 const DISPLAY_ROW_Y = 1 + 5 * 30 + 10 + 15;        // below the groove: 176
 const CLOSE_ROW_Y = 1 + 3 * 30 + 10 + 15;          // bar menu groove: 115
 // Parse "WxH+X+Y" out of a wmctl list row.
@@ -388,7 +389,7 @@ check('Start toggle while the ctxmenu is open: startmenu up, ctxmenu gone',
 // ---- icon menu ----
 const i1 = section('icon1');
 const ig = g4(row(i1, 'ctxmenu'));
-check(`right-click an icon opens the Open/Cut/Copy/Delete/Rename menu (h ${ICON_MENU_H}, 0103)`,
+check(`right-click an icon opens the Open/Cut/Copy/Download/Delete/Rename menu (h ${ICON_MENU_H}, 0103/0398)`,
   ig && ig.h === ICON_MENU_H, JSON.stringify(i1));
 check('icon shot written', out.includes('d2-ok'));
 check('OPEN runs the launcher through the activate path (winbox +1)',

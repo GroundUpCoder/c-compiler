@@ -538,6 +538,19 @@ async function boot() {
       post({ type: 'clip-read' });
       clipReadTimer = setTimeout(clipReadSettle, CLIP_READ_TIMEOUT_MS);
     },
+    // Egress (todos/0398): the kernel materialized ONE artifact; hand it to
+    // the page, buffer TRANSFERRED (up to EGRESS_MAX — never structured-
+    // cloned). The page acts inside the still-live transient activation of
+    // the menu click that started the chain: anchor download, or the
+    // Save-As picker for the 'saveas' disposition.
+    onEgress: function (dispo, name, bytes) {
+      // The view is normally the whole buffer (the materializer allocates
+      // exactly); slice defensively if not, then TRANSFER — an artifact can
+      // be EGRESS_MAX-sized and must never be structured-cloned.
+      var buf = (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength)
+        ? bytes.buffer : bytes.slice().buffer;
+      self.postMessage({ type: 'egress', dispo: dispo, name: name, bytes: buf }, [buf]);
+    },
     log: function (m) { post({ type: 'boot-log', msg: '[kernel] ' + m }); },
   });
   tty = kernel.createTty({

@@ -1258,6 +1258,40 @@ kernel.onmessage = function (e) {
       else clipFromHost(clipDone);
       break;
     }
+    // Egress (todos/0398): the kernel materialized ONE artifact (a file's
+    // bytes, or one zip for a directory/multi-selection) for a Download /
+    // Save-As the user clicked moments ago — that click's transient
+    // activation is still live (the clip-read principle, no parking needed:
+    // the data dependency points kernel-ward). One artifact per gesture, so
+    // the "multiple automatic downloads" prompt is structurally avoided.
+    case 'egress': {
+      var egBlob = new Blob([new Uint8Array(m.bytes)],
+                            { type: 'application/octet-stream' });
+      window.__osEgress = (window.__osEgress || 0) + 1;        // agent probe
+      window.__osEgressLast = { dispo: m.dispo, name: m.name,
+                                size: egBlob.size };
+      if (m.dispo === 'saveas' && window.showSaveFilePicker) {
+        window.showSaveFilePicker({ suggestedName: m.name }).then(function (h) {
+          return h.createWritable().then(function (w) {
+            return w.write(egBlob).then(function () { return w.close(); });
+          });
+        }).catch(function (err) {
+          // AbortError = the user cancelled the picker — their call.
+          if (!err || err.name !== 'AbortError')
+            console.warn('egress saveas failed: ' + err);
+        });
+        break;
+      }
+      if (m.dispo === 'saveas')
+        console.warn('egress: showSaveFilePicker unavailable — anchor download instead');
+      var egUrl = URL.createObjectURL(egBlob);
+      var egA = document.createElement('a');
+      egA.href = egUrl;
+      egA.download = m.name;
+      egA.click();
+      setTimeout(function () { URL.revokeObjectURL(egUrl); }, 0);
+      break;
+    }
     case 'boot-log':
       status(m.msg);
       window.__osLogs.push(m.msg);
