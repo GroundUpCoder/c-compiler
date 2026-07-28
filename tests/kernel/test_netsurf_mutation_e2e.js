@@ -17,6 +17,15 @@
 //     and explicitly deferred the live check to this lane.  Here the scroll
 //     offset is DECODED FROM THE PIXELS either side of a reconvert and the
 //     two must be equal — and non-zero, or the check would be vacuous.
+//   - TYPING AND FOCUS SURVIVE RE-CONVERSION (todos/0386, todos/0402).
+//     The static/ticky A/B asserts EXACT settled-ink equality, and the
+//     forced-window arms (a 3000-element page whose re-conversion window
+//     spans the whole tick period) prove no keystroke and no click is
+//     lost even when the page is mid-re-box essentially always.  Every
+//     gating shot is a SETTLED one (the pages' ticks are finite): an
+//     un-settled sample can catch a mid-window render (the recreated
+//     widget draws pre-layout until the swap's reformat) and is printed
+//     as a diagnostic only.
 //
 // Pixel probes are colour counts and colour-coded block boundaries, never
 // fixed screen coordinates for assertions: the one clicked coordinate
@@ -133,7 +142,18 @@ const typingPage = (ticking) => `<html>
 <input id="i" type="text" size="20" value="">
 <div id="d">tick 0</div>
 <script>
-${ticking ? "var n = 0;\nvar box = document.getElementById('d');\nsetInterval(function () { n = n + 1; box.textContent = 'tick ' + n; }, 300);" : ''}
+${ticking ? `var n = 0;
+var box = document.getElementById('d');
+var tick = setInterval(function () {
+	n = n + 1;
+	box.textContent = 'tick ' + n;
+	/* FINITE (todos/0386): typing overlaps ticks 1..~15, then the page
+	 * really settles, so the leg can assert its exact final state — an
+	 * everlasting tick would leave every shot un-barrierable (a shot
+	 * can land inside a re-conversion window, where the field renders
+	 * the recreated widget's pre-layout state). */
+	if (n >= 25) clearInterval(tick);
+}, 300);` : ''}
 console.log('typing page ready');
 </script>
 </body></html>
@@ -390,9 +410,11 @@ const out = driveBoot([
     [`wmctl key $TK ${sc} ${ks}; sleep 0.25`,
      `wmctl shot $TK /root/k${i + 1}.ppm && echo shot-k${i + 1}-ok`]),
   'wmctl shot $TK /root/x2.ppm && echo shot-x2-ok',
-  /* D1: a second, SETTLED shot.  The field band is static once typing
-   * stops (only the tick div below it repaints), so 2 s is many ticks. */
-  'sleep 2',
+  /* the SETTLED shot: past the finite tick's end (25 x 300 ms), so the
+   * page has genuinely stopped re-boxing and the field shows its true
+   * final state.  x2 (immediate) stays diagnostic-only: an un-barriered
+   * sample can catch a mid-window render and must not gate. */
+  'sleep 6',
   'wmctl shot $TK /root/x3.ppm && echo shot-x3-ok',
   'wmctl close $TK && wmctl wait nowin NsTicky 8000 && echo ticky-closed',
 
@@ -405,7 +427,7 @@ const out = driveBoot([
   'wmctl click $TF 60 12',
   ...TYPED.map(([sc, ks]) => `wmctl key $TF ${sc} ${ks}; sleep 0.02`),
   'wmctl shot $TF /root/x4.ppm && echo shot-x4-ok',
-  'sleep 2',
+  'sleep 8',                      /* past the finite tick's end */
   'wmctl shot $TF /root/x5.ppm && echo shot-x5-ok',
   'wmctl close $TF && wmctl wait nowin NsTicky 8000 && echo tickyfast-closed',
 
@@ -422,7 +444,7 @@ const out = driveBoot([
     [`wmctl key $BT ${sc} ${ks}; sleep 0.25`,
      `wmctl shot $BT /root/tk${i + 1}.ppm && echo shot-tk${i + 1}-ok`]),
   'wmctl shot $BT /root/bt1.ppm && echo shot-bt1-ok',
-  'sleep 5.5',                    /* past the finite tick's end: TRUE settle */
+  'sleep 6',                      /* past the finite tick's end: TRUE settle */
   'wmctl shot $BT /root/bt2.ppm && echo shot-bt2-ok',
   'wmctl close $BT && wmctl wait nowin NsBigT 8000 && echo bigt-closed',
 
@@ -435,7 +457,7 @@ const out = driveBoot([
   'wmctl click $BU 60 12',
   ...TYPE_KEYS('$BU'),
   'wmctl shot $BU /root/bu1.ppm && echo shot-bu1-ok',
-  'sleep 5.5',                    /* past the finite tick's end: TRUE settle */
+  'sleep 6',                      /* past the finite tick's end: TRUE settle */
   'wmctl shot $BU /root/bu2.ppm && echo shot-bu2-ok',
   'wmctl close $BU && wmctl wait nowin NsBigT 8000 && echo bigt2-closed',
 
@@ -461,7 +483,10 @@ const out = driveBoot([
   'sleep 2',
   ...TYPE_KEYS('$BD'),
   'wmctl shot $BD /root/bc21.ppm && echo shot-bc21-ok',
-  'sleep 2',
+  /* the settled shot must land BETWEEN tick 1 (+8 s from load) and tick
+   * 2 (+13 s): after the one post-typing re-conversion completes, before
+   * the next opens a window */
+  'sleep 4.5',
   'wmctl shot $BD /root/bc22.ppm && echo shot-bc22-ok',
   'wmctl close $BD && wmctl wait nowin NsBigC2 8000 && echo bigc2-closed',
 ], { image, timeout: 420000, maxBuffer: 64 * 1024 * 1024 }).stdout;
@@ -561,7 +586,7 @@ const shots = parsePPMs(back.stdout, NAMES);
   check('typing: the static control page really accepted the keystrokes',
         staticInk > 150, `ink in the field: ${staticInk}`);
 
-  /* ---- 0386 diagnosis readout: every number printed unconditionally ---- */
+  /* ---- regression readout (todos/0386): every number printed unconditionally ---- */
   const inks = (tags) => tags.map((t) => fieldInk(shots[t]));
   const sSteps = inks(['s1', 's2', 's3', 's4', 's5', 's6']);
   const kSteps = inks(['k1', 'k2', 'k3', 'k4', 'k5', 'k6']);
@@ -586,11 +611,49 @@ const shots = parsePPMs(back.stdout, NAMES);
   console.log(`D2-C1  immediate=${fieldInk(shots.bc11)} settled=${fieldInk(shots.bc12)} value[${vprobe('bc12')}] (size control, no timer)`);
   console.log(`D2-C2  immediate=${fieldInk(shots.bc21)} settled=${fieldInk(shots.bc22)} value[${vprobe('bc22')}] (period control, 5 s)`);
 
-  /* The A/B: a mutating page must type EXACTLY as well as a still one.
-   * Before focus was re-bound across the swap this read ~52 vs ~285. */
+  /* The A/B: a mutating page must type EXACTLY as well as a still one —
+   * asserted on the SETTLED shot at EXACT equality (todos/0386).  The old
+   * `>= staticInk * 0.9` slack silently accepted a dropped x-height
+   * keystroke; the deterministic answer is byte-identical fields, so the
+   * tolerance is gone, not widened.  Before focus survived the swap this
+   * read 52-234 vs 285. */
   check('typing: a page re-boxing under the caret types just as well',
-        tickyInk >= staticInk * 0.9,
-        `static ${staticInk} vs ticking ${tickyInk} ink pixels`);
+        fieldInk(shots.x3) === staticInk,
+        `static ${staticInk} vs ticking settled ${fieldInk(shots.x3)} (immediate ${tickyInk}) ink pixels`);
+  check('typing: 20ms-cadence typing on the ticking page loses nothing',
+        fieldInk(shots.x5) === staticInk,
+        `static ${staticInk} vs fast-typed settled ${fieldInk(shots.x5)} ink pixels`);
+
+  /* The forced-window arms (todos/0386 D2): a 3000-element page whose
+   * re-conversion window spans ~the whole tick period.  Typing DURING
+   * continuous re-boxing (T), and clicking INTO the storm with nothing
+   * previously focused first (T2 — the todos/0402 regression: pre-fix
+   * both read 52 = every key swallowed).  C1/C2 are the size-only and
+   * period-only controls. */
+  check('typing: forced-wide window (T) types exactly as well as static',
+        fieldInk(shots.bt2) === staticInk,
+        `static ${staticInk} vs T settled ${fieldInk(shots.bt2)} ink pixels`);
+  check('typing: click mid-re-conversion keeps its focus (T2, todos/0402)',
+        fieldInk(shots.bu2) === staticInk,
+        `static ${staticInk} vs T2 settled ${fieldInk(shots.bu2)} ink pixels`);
+  check('typing: size control (C1) unaffected',
+        fieldInk(shots.bc12) === staticInk,
+        `static ${staticInk} vs C1 settled ${fieldInk(shots.bc12)} ink pixels`);
+  check('typing: period control (C2) unaffected',
+        fieldInk(shots.bc22) === staticInk,
+        `static ${staticInk} vs C2 settled ${fieldInk(shots.bc22)} ink pixels`);
+
+  /* Value-level closure: both mirrors on every big arm must equal the
+   * known-good C1's — same count = same mirrored string — and C1's must
+   * be non-empty or the whole comparison is vacuous. */
+  check('typing: C1 mirrors are non-vacuous',
+        mirEInk('bc12') > 100 && mirPInk('bc12') > 100,
+        `mirE=${mirEInk('bc12')} mirP=${mirPInk('bc12')}`);
+  for (const [tag, name] of [['bt2', 'T'], ['bu2', 'T2'], ['bc22', 'C2']]) {
+    check(`typing: ${name} mirrored VALUE equals the control's`,
+          mirEInk(tag) === mirEInk('bc12') && mirPInk(tag) === mirPInk('bc12'),
+          `mirE ${mirEInk(tag)} vs ${mirEInk('bc12')}, mirP ${mirPInk(tag)} vs ${mirPInk('bc12')}`);
+  }
 }
 
 /* ---- done ---- */
