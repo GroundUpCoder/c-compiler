@@ -1,0 +1,63 @@
+{
+  "bin": true,
+  "name": "ziptest-libarchive",
+  "description": "0350 measurement: libarchive 3.8.1 (zip r/w + tar r + ustar/pax w + gzip) + round-trip frontend",
+  "deps": [
+    "../../../vendor/zlib/lib.json"
+  ],
+  "includes": [
+    ".",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive"
+  ],
+  "compilerArgs": [
+    "-DHAVE_CONFIG_H"
+  ],
+  "sources": [
+    "ziptest.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_acl.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_check_magic.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_cryptor.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_digest.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_entry.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_entry_copy_stat.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_entry_link_resolver.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_entry_sparse.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_entry_stat.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_entry_strmode.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_entry_xattr.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_hmac.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_options.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_pathmatch.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_ppmd8.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_random.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_rb.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_read.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_read_add_passphrase.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_read_open_filename.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_read_set_options.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_read_support_filter_gzip.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_read_support_filter_none.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_read_support_format_empty.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_read_support_format_tar.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_read_support_format_zip.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_string.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_string_sprintf.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_time.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_util.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_version_details.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_virtual.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_write.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_write_add_filter_gzip.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_write_add_filter_none.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_write_open_filename.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_write_set_format_pax.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_write_set_format_ustar.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_write_set_format_zip.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_write_set_options.c",
+    "la_shim.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_write_set_passphrase.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_write_open_fd.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_write_disk_posix.c",
+    "../../../build/zipmeasure/libarchive-3.8.1/libarchive/archive_write_disk_set_standard_lookup.c"
+  ]
+}

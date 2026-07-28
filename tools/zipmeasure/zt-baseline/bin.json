@@ -1,0 +1,8 @@
+{
+  "bin": true,
+  "name": "basetest",
+  "description": "0350 measurement baseline: libc + zlib + stdio frontend, no archive lib",
+  "deps": ["../../../vendor/zlib/lib.json"],
+  "includes": ["."],
+  "sources": ["basetest.c"]
+}
