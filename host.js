@@ -2953,7 +2953,7 @@ var BLOCK_FS = (function () {
         this._inoRef(w.inoId);
         return this._allocFd({
           type: 'dev', dev: w.ino.rdev || 0,
-          inoId: w.inoId, position: 0, path: resolved
+          inoId: w.inoId, position: 0, accmode: flags & 3, path: resolved
         });
       }
       if (trunc) {
@@ -3013,8 +3013,12 @@ var BLOCK_FS = (function () {
 
     var position = append ? w.ino.dataSize : 0;
     this._inoRef(w.inoId);
+    // accmode (todos/0376): the fd carries flags & O_ACCMODE for read()/
+    // write() to enforce — dup/dup2/F_DUPFD share the entry object, so the
+    // mode rides every duplicate, like a POSIX open file description.
     var fd = this._allocFd({
-      inoId: w.inoId, position: position, append: append, path: resolved
+      inoId: w.inoId, position: position, append: append,
+      accmode: flags & 3, path: resolved
     });
     return fd;
   };
@@ -3037,7 +3041,14 @@ var BLOCK_FS = (function () {
       return this._setErr('EBADF');
     var entry = this._fdTable[fd];
 
+    // Access mode (todos/0376): an open()-born entry carries flags &
+    // O_ACCMODE — O_WRONLY (1) can't read. Entries not born from open()
+    // (console stdio, pipe ends — checked by direction below) carry none.
+    if (entry.accmode === 1) return this._setErr('EBADF');
+
     if (entry.type === 'pipe') {
+      // The write end can't read (todos/0376 — same class, fixed direction).
+      if (entry.pipeEnd !== 'read') return this._setErr('EBADF');
       if (entry.pipeId !== undefined && this._pipeBroker) {
         // Owner-brokered: may BLOCK (the broker parks this worker on Atomics.wait
         // until a writer in another instance delivers). 0-length = EOF.
@@ -3109,7 +3120,14 @@ var BLOCK_FS = (function () {
       return count;
     }
 
+    // Access mode (todos/0376): O_RDONLY (0) can't write — this is the
+    // corruption half: a defensive read-only open used to silently mutate
+    // the file it existed to protect.
+    if (entry.accmode === 0) return this._setErr('EBADF');
+
     if (entry.type === 'pipe') {
+      // The read end can't write (todos/0376 — same class, fixed direction).
+      if (entry.pipeEnd !== 'write') return this._setErr('EBADF');
       if (entry.pipeId !== undefined && this._pipeBroker) {
         var w = this._pipeBroker.pipeWrite(entry.pipeId, buf.subarray(0, count));
         if (w < 0) return this._setErr('EPIPE');
@@ -3121,8 +3139,10 @@ var BLOCK_FS = (function () {
     }
     if (entry.type === 'dev') return this._writeDev(entry, buf, count);
     if (entry.inoId === undefined) return this._setErr('EBADF');
-    // Belt-and-braces: open() can't hand out a writable fd on a readonly
-    // volume, but write() doesn't check the open mode, so guard here too.
+    // Belt-and-braces: open() refuses every write-intent open on a readonly
+    // volume (EROFS after the walk), and the accmode check above already
+    // refused read-only fds — this backstop only fires for an entry that
+    // reached a readonly volume without either, which no current path can.
     if (this._readonly) return this._setErr('EROFS');
 
     var ino = this._inodes.read(entry.inoId);
@@ -3729,6 +3749,9 @@ var BLOCK_FS = (function () {
       return this._setErr('EBADF');
     var entry = this._fdTable[fd];
     if (entry.inoId === undefined) return this._setErr('EBADF');
+    // POSIX: ftruncate requires a fd open for writing — EINVAL otherwise
+    // (todos/0376; the same corruption class as write-on-O_RDONLY).
+    if (entry.accmode === 0) return this._setErr('EINVAL');
 
     var ino = this._inodes.read(entry.inoId);
     if (!ino) return this._setErr('EBADF');
