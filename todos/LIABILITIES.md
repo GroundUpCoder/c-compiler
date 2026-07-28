@@ -261,11 +261,6 @@ thing this file exists to kill.
 - file: vendor/micropython/README.md
 - anchor: - **Modules a Python programmer will reach for and not find**: `datetime`,
 
-### L44 — newestBakeInput recurses a project's `deps` but not its `sources`, so vendor/cjson edits never restale the blob
-- ticket: 0354
-- file: tests/run.js
-- anchor: // also MISSED by newestBakeInput, which only recurses `deps`: an edit here
-
 ### L45 — the cross-tree guard covers the test runners only; the tools/ writers and os/boot.js can still write into another tree
 - ticket: 0357
 - file: tests/lib/tree-guard.js
@@ -295,5 +290,11 @@ thing this file exists to kill.
 - file: vendor/cpython/README.md
 - anchor: (`_socket` is not built), so **`asyncio` does not import and is not
 - provenance: 0340
+
+### L51 — mkpkg's package-payload freshness scan has no red control, so it can under-invalidate silently
+- ticket: 0363
+- file: tools/mkpkg.js
+- anchor:  * under-invalidation here is invisible exactly the way 0354's was. Funded by
+- provenance: 0354
 
 <!-- END ENTRIES -->
