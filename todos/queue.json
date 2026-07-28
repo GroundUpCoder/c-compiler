@@ -120,7 +120,6 @@
     { "id": "0399" },
     { "id": "0400" },
     { "id": "0401" },
-    { "id": "0403", "difficulty": "light" },
-    { "id": "0404", "priority": 0 }
+    { "id": "0403", "difficulty": "light" }
   ]
 }
