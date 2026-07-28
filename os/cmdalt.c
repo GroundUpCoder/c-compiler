@@ -92,7 +92,7 @@ static void ca_report_missing(const char *key, const char *text, const ca_res *r
         ca_word0(r->value, pkg, sizeof pkg);
         fprintf(stderr, "%s: no %s implementation is installed\n", key, key);
         /* A BARE first word names a package by convention (the baked
-         * suggestion `python<TAB>python-clang` is exactly that), so the hint
+         * suggestion `python<TAB>cpython-clang` is exactly that), so the hint
          * is actionable. A path is the user's own pick — say what is
          * missing rather than invent a package name for it. */
         if (strchr(pkg, '/'))

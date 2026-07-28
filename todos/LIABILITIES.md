@@ -279,7 +279,7 @@ thing this file exists to kill.
 - anchor: RPC. No shipping consumer asks for it (nothing in the CPython stdlib
 - provenance: 0340
 
-### L49 — python-clang has no sockets, so `asyncio` ships and imports nowhere
+### L49 — cpython-clang (né python-clang) has no sockets, so `asyncio` ships and imports nowhere
 - ticket: 0052
 - file: vendor/cpython/README.md
 - anchor: (`_socket` is not built), so **`asyncio` does not import and is not

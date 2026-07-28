@@ -1,4 +1,4 @@
-# CPYTHON.md — CPython on gucOS: the vendor tree, the stdlib, and the `python-clang` package (M1-clang design)
+# CPYTHON.md — CPython on gucOS: the vendor tree, the stdlib, and the `cpython-clang` package (M1-clang design)
 
 Status: **DESIGN, ratified route — EXECUTED by `todos/0340` on 2026-07-28.**
 Where execution measured something different from what this document projected,
@@ -39,9 +39,9 @@ host-side, measured, node boot included).
 | binary | expanded inittab: **+26 static extensions**, 6,075,539 B (probe-verified link + import sweep) | §3 |
 | C-extension casualties | named, with causes and unblock paths — nothing left to be "discovered later" | §3.3 |
 | vendor tree | `vendor/cpython/` in THIS repo, sources + generated `gen/` + `Lib/`, patch-table README | §4 |
-| layout / PYTHONHOME | prefix layout `/opt/python-clang/{bin,lib/python3.13}`; **zero env vars** — argv0-landmark discovery, symlink-safe (both verified) | §5 |
-| pyc cache | `PYTHONPYCACHEPREFIX=/var/cache/python-clang` via launcher wrapper (keeps `/opt` pristine for gucman's checksum-gated remove) | §5.3 |
-| package | `packages/python-clang.json`: `clangApp` binary + `tree` stdlib; bin verb `python-clang` only; `commands` claim for the 0338 dispatcher | §6 |
+| layout / PYTHONHOME | prefix layout `/opt/cpython-clang/{bin,lib/python3.13}`; **zero env vars** — argv0-landmark discovery, symlink-safe (both verified) | §5 |
+| pyc cache | `PYTHONPYCACHEPREFIX=/var/cache/cpython-clang` via launcher wrapper (keeps `/opt` pristine for gucman's checksum-gated remove) | §5.3 |
+| package | `packages/cpython-clang.json`: `clangApp` binary + `tree` stdlib; bin verb `cpython-clang` only; `commands` claim for the 0338 dispatcher | §6 |
 | delivery | automatic: the clang channel is the deploy DEFAULT since 0337 (live on production); the drift gate makes a missing package def a build FAILURE | §6.3 |
 | `python3`/`cpython` names | recommend **cmdalt keys** (0338 mechanism), not hard symlinks — avoids the future two-CPython collision; needs a master/jku call | §6.2 |
 | pygame trajectory | M2/M3 scoped, SDL2-vs-SDL3 mismatch flagged + priced, NOT built here | §8 |
@@ -93,12 +93,12 @@ exclusion category.) Largest members, for the record: `encodings/` 1.42 MB,
 `pydoc_data` stay: codec availability is exactly the "runs unmodified" axis
 the pygame goal cares about, and `help()` is part of a credible REPL.
 
-**Size budget (the honest totals).** Installed under `/opt/python-clang`:
+**Size budget (the honest totals).** Installed under `/opt/cpython-clang`:
 binary 6,075,539 + stdlib 9,914,191 ≈ **16.0 MB**. Download payload (two
 gzip streams): 1,708,897 + 2,353,854 ≈ **4.06 MB**. Because jku ruled CPython
 ships as a **gucman package, never baked**, this costs the base image
 **zero bytes** — the ~23 MB minimal image is untouched, and the 16 MB lands
-only on machines whose user ran `gucman install python-clang`. For scale:
+only on machines whose user ran `gucman install cpython-clang`. For scale:
 MicroPython's package is ~556 KB; that gap is the price of "highest chance of
 supporting pygame", and it is opt-in.
 
@@ -309,12 +309,12 @@ compiler; re-verify against post-0319 main per
 ### 5.1 Install layout (the package's file map)
 
 ```
-/opt/python-clang/
-  bin/python-clang           # launcher script (§5.3)
-  bin/python-clang.wasm      # the binary (clangApp payload)
+/opt/cpython-clang/
+  bin/cpython-clang           # launcher script (§5.3)
+  bin/cpython-clang.wasm      # the binary (clangApp payload)
   lib/python3.13/…           # the §2 stdlib tree (mkpkg `tree` entry)
-/usr/local/bin/python-clang  # gucman bin symlink → /opt/python-clang/bin/python-clang
-/var/cache/python-clang/     # pyc cache, created at runtime (not package-owned)
+/usr/local/bin/cpython-clang  # gucman bin symlink → /opt/cpython-clang/bin/cpython-clang
+/var/cache/cpython-clang/     # pyc cache, created at runtime (not package-owned)
 ```
 
 ### 5.2 Zero-env-var stdlib discovery (verified host-side)
@@ -330,14 +330,14 @@ no env vars in the wrapper, works relocated. Two cosmetic notes: the
 on the path (harmless; the §2 zip option's hook). **In-OS re-verification of
 the symlink walk is a 0340 acceptance item** (host-side node ≠ kernel
 RemoteFS, readlink surfaces differ). Fallback if it fails in-OS: bake
-`PREFIX="/opt/python-clang"` — works, at the cost of relocatability.
+`PREFIX="/opt/cpython-clang"` — works, at the cost of relocatability.
 
 ### 5.3 The pyc story
 
 gucman's remove is checksum-gated and unlinks only what it planted; runtime
 `__pycache__/` dirs under `/opt` would strand skeleton dirs at removal. So
-the launcher (`bin/python-clang`, a 2-line `#!/bin/sh` wrapper, the gucman
-`$0`-readlink pattern) sets `PYTHONPYCACHEPREFIX=/var/cache/python-clang`:
+the launcher (`bin/cpython-clang`, a 2-line `#!/bin/sh` wrapper, the gucman
+`$0`-readlink pattern) sets `PYTHONPYCACHEPREFIX=/var/cache/cpython-clang`:
 `/opt` stays pristine, removal is exact, and factory reset (wipe /etc+/var)
 clears the cache by existing policy. First-import compile cost on BlockFS is
 **unmeasured**; if it matters, the zip/pyc precompile option (§2) is the
@@ -362,21 +362,21 @@ platform gates get audited in M2, not papered over here.
 
 ## 6. The package, the names, the channel
 
-### 6.1 `packages/python-clang.json` (shape; exact syntax at 0340)
+### 6.1 `packages/cpython-clang.json` (shape; exact syntax at 0340)
 
 ```jsonc
 {
-  "name": "python-clang",
+  "name": "cpython-clang",
   "version": "3.13.5",
   "summary": "CPython 3.13.5 (clang-built) + stdlib — real Python; no sockets/ssl yet",
   "requires": "clang-sibling",
   "files": {
-    "bin/python-clang.wasm": { "clangApp": "python-clang" },
-    "bin/python-clang":      { "text": "…launcher…" },
+    "bin/cpython-clang.wasm": { "clangApp": "python-clang" },  // sibling overlay app name — still `python-clang` until the sibling manifest renames (todos/0374 merge-time step); flip in the same change window as that overlay republish
+    "bin/cpython-clang":      { "text": "…launcher…" },
     "lib/python3.13":        { "tree": "vendor/cpython/Lib" }
   },
-  "bin":      { "python-clang": "bin/python-clang" },
-  "commands": { "python": "python-clang" }        // 0338 dispatcher claim
+  "bin":      { "cpython-clang": "bin/cpython-clang" },
+  "commands": { "python": "cpython-clang" }        // 0338 dispatcher claim
 }
 ```
 
@@ -386,21 +386,21 @@ straight from this repo's `vendor/cpython/Lib` — toolchain-independent, and
 the eventual our-compiler `cpython` package reuses the identical entry.
 No menu/desktop entries — an interpreter's surfaces are the shell and (later)
 the 0338 dispatcher; a Start-menu "Python" that opens a bare REPL in term is
-a nice-to-have 0340 may add via `term python-clang`, not a design point.
+a nice-to-have 0340 may add via `term cpython-clang`, not a design point.
 
 ### 6.2 Names — one claim, and a recommendation needing a call
 
-The package's only hard bin claim is **`python-clang`** (gucman has no
+The package's only hard bin claim is **`cpython-clang`** (gucman has no
 conflicts mechanism; `gucman.c` refuses installs over an existing symlink —
 re-verified in 0331). **Never a bare `python` symlink** — that name belongs
 to the 0338 base-image dispatcher, where this package participates via the
 `commands` claim, and per the decider's amendment the dispatcher's
-no-implementation-installed hint names **python-clang first**.
+no-implementation-installed hint names **cpython-clang first**.
 
 `python3` / `cpython`: the kickoff instruction says claim them here; 0331's
 older text reserved them "for the real CPython package". Both predate 0338.
 **Recommendation: make `python3` (and optionally `cpython`) cmdalt keys too —
-one image `link` line + one baked store line each, resolving to python-clang
+one image `link` line + one baked store line each, resolving to cpython-clang
 by default** — because a hard symlink claim collides the day the
 our-compiler `cpython` package "catches up" (two packages, one name, no
 conflicts mechanism = the second install hard-fails), while cmdalt keys make
@@ -416,11 +416,15 @@ end.
 Since 0337 (deployed; production serves the 8 `-clang` packages + stl4 +
 sdldemo where it previously served **zero**), the clang superset index is the
 deploy **default**, and the mkpkg drift gate **fails the build** if the
-sibling overlay publishes `/usr/bin/python-clang` without a package claiming
+sibling overlay publishes an app without a package claiming
 it. So delivery is: (1) sibling manifest project (`base:
 "$CC_ROOT/vendor/cpython"`, `binJson`, the §3.2 flag set, `install:
-"/usr/bin/python-clang"` — satisfies `enforceClangConvention`), (2)
-`packages/python-clang.json` in the same change window as the overlay
+"/usr/bin/python-clang"` — satisfies `enforceClangConvention`; ⚠️ the
+sibling's project/app name predates the todos/0374 rename and is still
+`python-clang` — renaming it there + republishing the overlay is 0374's
+merge-time step, and `packages/cpython-clang.json`'s `clangApp` flips in
+that same change window), (2)
+`packages/cpython-clang.json` in the same change window as the overlay
 publish (the gate turns "forgot the package" into a red build, in our
 favor), (3) ordinary deploy. The overlay@1 byte-reproducibility contract
 holds: the `-DDATE/-DTIME` pin is already in the recipe and two independent
@@ -448,24 +452,24 @@ present.
   the live deployed image): gucOS's base image ships NO python IMPLEMENTATION
   — MicroPython is gucOS's python only for users who installed its package; a
   fresh gucOS has no python until `gucman install micropython` (or, once this
-  ships, `… python-clang`).** Every "python experience" claim carries that
+  ships, `… cpython-clang`).** Every "python experience" claim carries that
   opt-in qualifier.
   ⚠️ **Superseded wording, corrected by master at the 0340 merge (image 181):**
   this bullet used to read "ships NO python **verb** at all — 240 image
   entries, zero `python*` hits". That was measured before `todos/0338`, and
   0338's `cmdalt` dispatcher bakes `python` as a KEY (value: the suggestion
-  `python-clang`) per jku's 2026-07-28 name-split ruling. **A fresh gucOS DOES
+  `cpython-clang`) per jku's 2026-07-28 name-split ruling. **A fresh gucOS DOES
   now ship a `python` verb**; it is the dispatcher, it cannot run code, and it
   exits 127 naming the package to install. The claim that survives is about
-  the IMPLEMENTATION, not the verb — `tests/kernel/test_python_clang_e2e.js`
+  the IMPLEMENTATION, not the verb — `tests/kernel/test_cpython_clang_e2e.js`
   pins all three properties (`PYIMPL=0`, `PYVERBS=1`, `PYRC=127`).
 
 ## 8. The pygame trajectory (scoped, deliberately not built)
 
 ⚠️ **No dlopen** on this platform, ever (settled). Therefore pygame-ce's C
 half, its SDL dependency, and any other C extension **statically link INTO
-the python-clang binary** — "installing pygame" means shipping a BIGGER
-python binary (or a second `python-clang-game` flavor), not adding files.
+the cpython-clang binary** — "installing pygame" means shipping a BIGGER
+python binary (or a second `cpython-clang-game` flavor), not adding files.
 What M1 must get right NOW so M2/M3 stay possible — and does:
 
 1. **The binary must stay cheaply re-linkable.** That is §4's whole shape:
@@ -500,7 +504,7 @@ What M1 must get right NOW so M2/M3 stay possible — and does:
 ## 9. Unmeasured / open
 
 - ~~**Everything in-OS.**~~ **[0340] Now measured** —
-  `tests/kernel/test_python_clang_e2e.js`, 42 legs green: install/remove,
+  `tests/kernel/test_cpython_clang_e2e.js`, 42 legs green: install/remove,
   zero-env landmark discovery over RemoteFS, the symlinked-argv0 walk, argv +
   exit status, `subprocess.run` across the spawn broker, the 166/180 sweep,
   and the pyc cache landing in `/var` with `/opt` left pristine.

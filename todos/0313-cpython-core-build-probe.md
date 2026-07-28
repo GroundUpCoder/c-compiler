@@ -3,7 +3,7 @@
 - **Status**: DONE — **verdict YES-BUT**. Full report:
   `logs/2026-07-27/cpython-m0-probe.md`.
 - **M1 update (2026-07-28)**: the ladder's M1 is now **M1-clang** — funded by
-  decider call executing jku's python-clang lean (meta note
+  decider call executing jku's python-clang lean (package since renamed cpython-clang, todos/0374; meta note
   `fable-decider-python-primary-2026-07-27.md` §jku LEAN), designed in
   `todos/CPYTHON.md`, executed by `todos/0340` → `todos/0331`. The clang
   toolchain sidesteps the 0336 startup wall; the our-compiler `/bin/python`

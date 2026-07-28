@@ -12,7 +12,7 @@
 //   2. exit status: a nonzero exit propagates, a signalled child is 128+sig
 //   3. no implementation: 127 + a message naming the suggestion (this is
 //      also acceptance bullet 1 — a fresh image resolves `python` to the
-//      baked suggestion python-clang, which is NOT installed, on purpose)
+//      baked suggestion cpython-clang, which is NOT installed, on purpose)
 //   4. shebang: `#!` on a dispatch link runs the implementation with the
 //      script as argv[1] and the caller's args after it
 //   5. self-dispatch: `cmdalt set foo foo` is refused, no fork bomb
@@ -98,7 +98,7 @@ async function main() {
 
   const outA = boot([
     // ---- acceptance bullet 1: a fresh image has no python implementation.
-    // The baked suggestion names python-clang, which is not installed, so
+    // The baked suggestion names cpython-clang, which is not installed, so
     // the dispatch link exits 127 with the install hint. That is the
     // SPECIFIED behaviour of "default python means once installed, never
     // baked" — not a bug to design around.
@@ -210,9 +210,9 @@ async function main() {
         /python: no python implementation is installed/.test(outA),
         JSON.stringify(A('nopython')));
   check('...naming the baked suggestion in a gucman install hint',
-        /install one:\s+gucman install python-clang/.test(outA), JSON.stringify(A('nopython')));
+        /install one:\s+gucman install cpython-clang/.test(outA), JSON.stringify(A('nopython')));
   check('the baked store carries exactly the python suggestion',
-        A('baked').trim() === 'python\tpython-clang', JSON.stringify(A('baked')));
+        A('baked').trim() === 'python\tcpython-clang', JSON.stringify(A('baked')));
 
   check('dispatch forwards plain args', /^a b$/m.test(A('argv')), JSON.stringify(A('argv')));
   check('dispatch forwards flag-shaped args verbatim',
@@ -252,7 +252,7 @@ async function main() {
         /is the command dispatcher itself/.test(outA), JSON.stringify(A('selfdispatch')));
 
   check('cmdalt list shows every key and its effective value',
-        /^foo\s+-> \/bin\/echo/m.test(A('list')) && /^python\s+-> python-clang/m.test(A('list')),
+        /^foo\s+-> \/bin\/echo/m.test(A('list')) && /^python\s+-> cpython-clang/m.test(A('list')),
         JSON.stringify(A('list')));
   check('cmdalt which prints the resolved program',
         A('which').trim() === '/bin/echo', JSON.stringify(A('which')));
