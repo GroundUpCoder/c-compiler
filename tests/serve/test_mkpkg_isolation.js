@@ -134,6 +134,42 @@ function serves(dir, name) {
     commonA === commonB, `${commonA.slice(0, 16)} vs ${commonB.slice(0, 16)}`);
 }
 
+/* ---- an append-only store keeps several shas per version, and still reuses ----
+ * The superseded-drop is off for a shared store, so one (name, version) legally
+ * accumulates payloads as its inputs change. Reuse must pick the newest rather
+ * than give up — a naive "exactly one candidate" rule would silently rebuild
+ * the world on every run once a second sha appeared. */
+{
+  const pool = path.join(tmp, 'pool-multi');
+  const out = path.join(tmp, 'repo-multi');
+  const defs = defsDir('multi', ['iso-common']);
+  const defFile = path.join(defs, 'iso-common.json');
+  const args = [`--out=${out}`, `--pool=${pool}`, `--packages-dir=${defs}`];
+
+  mkpkg(args);
+  const first = readIndex(out).packages['iso-common'].payload.url;
+
+  // Same VERSION, different content -> a different sha, a second pool payload.
+  const def = JSON.parse(fs.readFileSync(defFile, 'utf-8'));
+  def.files.tool.content = '#!/bin/sh\necho iso-common v2\n';
+  fs.writeFileSync(defFile, JSON.stringify(def, null, 2) + '\n');
+  mkpkg(args);
+  const second = readIndex(out).packages['iso-common'].payload.url;
+  const pooled = fs.readdirSync(pool).filter((f) => f.startsWith('iso-common_1.0_'));
+  check('a shared store keeps BOTH shas of one version (append-only)',
+    pooled.length === 2, pooled.join(' '));
+  check('the index advertises the NEW payload after the content change',
+    second !== first, `${first} -> ${second}`);
+  check('...and the new payload is readable', serves(out, 'iso-common'));
+
+  // Inputs unchanged -> must REUSE the newest, not add a third payload.
+  mkpkg(args);
+  check('an unchanged rebuild REUSES the newest payload (no third sha)',
+    fs.readdirSync(pool).filter((f) => f.startsWith('iso-common_1.0_')).length === 2 &&
+    readIndex(out).packages['iso-common'].payload.url === second,
+    fs.readdirSync(pool).join(' '));
+}
+
 /* ---- LOCK: concurrent builds of one out dir refuse, stale locks self-heal ---- */
 {
   const out = path.join(tmp, 'locked');

@@ -668,15 +668,23 @@ async function buildPackage(name, poolDir, sharedPool) {
   // Reuse a fresh payload (same version, newer than every input).
   const poolRe = new RegExp('^' + name + '_' + pkg.version.replace(/[.]/g, '\\.') + '_[0-9a-f]{16}\\.pkg\\.tar\\.gz$');
   const existing = fs.existsSync(poolDir) ? fs.readdirSync(poolDir).filter((f) => poolRe.test(f)) : [];
-  if (!force && existing.length === 1) {
-    const p = path.join(poolDir, existing[0]);
+  // NEWEST candidate wins. An owned pool holds at most one payload per
+  // (name, version) because the superseded-drop below prunes the rest — but a
+  // SHARED store (--pool) is append-only, so one version legitimately keeps
+  // several shas as its inputs change. Demanding exactly one there would
+  // silently stop reusing anything and rebuild the world every run.
+  if (!force && existing.length) {
+    const newest = existing
+      .map((f) => ({ f, mtimeMs: fs.statSync(path.join(poolDir, f)).mtimeMs }))
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
     const inp = newestPkgInput(name, pkg);
-    if (fs.statSync(p).mtimeMs >= inp.mtimeMs) {
+    if (newest.mtimeMs >= inp.mtimeMs) {
+      const p = path.join(poolDir, newest.f);
       const bytes = fs.readFileSync(p);
       const sha = crypto.createHash('sha256').update(bytes).digest('hex');
-      if (existing[0].includes('_' + sha.slice(0, 16) + '.')) {
-        log(`${name} ${pkg.version}: pool payload fresh — reusing ${existing[0]}`);
-        return entryFor(existing[0], sha, bytes.length);
+      if (newest.f.includes('_' + sha.slice(0, 16) + '.')) {
+        log(`${name} ${pkg.version}: pool payload fresh — reusing ${newest.f}`);
+        return entryFor(newest.f, sha, bytes.length);
       }
     }
   }

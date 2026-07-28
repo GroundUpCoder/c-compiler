@@ -53,10 +53,24 @@ function ensureMinimalImage(log) {
 const PKG_ROOT = path.join(ROOT, 'build', 'test-packages');
 const POOL = path.join(PKG_ROOT, 'pool');
 
+/* One repo per RUNNING INSTANCE, not per test file. `--repeat N` runs the same
+ * file concurrently, so a name derived from the file alone collides with
+ * itself — mkpkg's one-writer lock catches that loudly (which is how this was
+ * found), but the right answer is for each instance to own a repo. mkdtemp
+ * gives that unconditionally; the shared POOL is what carries the speed, so a
+ * fresh dir costs only the hardlink view. Removed at exit — the dir is a view,
+ * never the cache. */
+const repoDirs = [];
 function testRepoDir(tag) {
   const self = path.basename(process.argv[1] || 'unknown').replace(/\.js$/, '');
-  return path.join(PKG_ROOT, tag ? `${self}.${tag}` : self);
+  fs.mkdirSync(PKG_ROOT, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(PKG_ROOT, `${self}${tag ? '.' + tag : ''}-`));
+  repoDirs.push(dir);
+  return dir;
 }
+process.on('exit', () => {
+  for (const d of repoDirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (e) {} }
+});
 
 function runMkpkg(dir, extraArgs, timeout) {
   fs.mkdirSync(dir, { recursive: true });
