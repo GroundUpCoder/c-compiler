@@ -17,6 +17,10 @@
 //   - fsync/fdatasync work on brokered fds (todos/0036: the env's inline
 //     fsync used the BlockFS-private store handle, crashing the worker —
 //     sqlite3's journal fsync was the first caller)
+//   - fds carry their access mode (todos/0376): write() on an O_RDONLY fd
+//     used to SILENTLY MUTATE the file, read() on an O_WRONLY fd disclosed
+//     it — EBADF both, in the FS_OPEN arm and the spawn fd-action OPEN arm
+//     (the two kernel _makeOfd('file') sites)
 //
 // Run: node tests/kernel/test_fs_e2e.js
 'use strict';
@@ -51,6 +55,7 @@ const INIT_C = `
 #include <signal.h>
 #include <dirent.h>
 #include <sys/ioctl.h>
+#include <errno.h>
 
 static pid_t run(const char *what, posix_spawn_file_actions_t *fa) {
     char *argv[] = { "child", (char *)what, 0 };
@@ -150,6 +155,41 @@ int main(void) {
            fsync(fd), fdatasync(fd), fsync(1), fsync(77) == 0 ? 1 : 0);
     close(fd);
 
+    /* 10: access-mode enforcement (todos/0376): the fd carries flags &
+       O_ACCMODE from open(). write() on O_RDONLY is EBADF and must leave
+       the bytes untouched (the corruption half); read() on O_WRONLY is
+       EBADF (the disclosure half); the right directions still flow. */
+    fd = open("/mode.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    write(fd, "SAFE", 4);
+    close(fd);
+    int rofd = open("/mode.txt", O_RDONLY);
+    errno = 0;
+    int mw = write(rofd, "EVIL", 4);
+    int mwe = errno == EBADF;
+    char mb[8]; memset(mb, 0, sizeof mb);
+    int mr = read(rofd, mb, 4);        /* read on the O_RDONLY fd still works */
+    close(rofd);
+    printf("romode w=%d e=%d r=%d body=[%s]\\n", mw, mwe, mr, mb);
+    int wofd = open("/mode.txt", O_WRONLY);
+    errno = 0;
+    int mr2 = read(wofd, mb, 4);
+    int mre = errno == EBADF;
+    int mw2 = write(wofd, "GOOD", 4);  /* write on the O_WRONLY fd still works */
+    close(wofd);
+    printf("womode r=%d e=%d w=%d\\n", mr2, mre, mw2);
+
+    /* the spawn fd-action OPEN records the mode too (the kernel's second
+       _makeOfd('file') site): child fd 4 is O_RDONLY, its write refused */
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addopen(&fa, 4, "/mode.txt", O_RDONLY, 0);
+    pid = run("modewrite", &fa);
+    posix_spawn_file_actions_destroy(&fa);
+    waitpid(pid, &st, 0);
+    f = fopen("/mode.txt", "r");
+    if (!f || !fgets(line, sizeof line, f)) line[0] = 0;
+    if (f) fclose(f);
+    printf("modechild=%d body=[%s]\\n", WEXITSTATUS(st), line);
+
     printf("done\\n");
     return 42;
 }
@@ -160,6 +200,7 @@ const CHILD_C = `
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <errno.h>
 int main(int argc, char **argv) {
     const char *what = argc > 1 ? argv[1] : "";
     if (!strcmp(what, "appender")) {
@@ -185,6 +226,15 @@ int main(int argc, char **argv) {
         fputs("rel", f);
         fclose(f);
         return strcmp(cwd, "/sub") == 0 ? 5 : 3;
+    }
+    if (!strcmp(what, "modewrite")) {
+        /* fd 4 arrived via a spawn fd-action OPEN with O_RDONLY (todos/0376):
+           writing it must be EBADF; reading it must still work. */
+        errno = 0;
+        int wn = write(4, "EVIL", 4);
+        if (!(wn == -1 && errno == EBADF)) return 13;
+        char b[4];
+        return read(4, b, 4) == 4 ? 11 : 12;
     }
     if (!strcmp(what, "hog")) {
         int fd = open("/hogfile", O_RDWR | O_CREAT, 0644);
@@ -269,6 +319,9 @@ const watchdog = setTimeout(() => {
     'R8',
     'ws=132x43',
     'fsync=0 fdatasync=0 ttyfsync=0 badfsync=0',   // badfsync: kernel says EBADF
+    'romode w=-1 e=1 r=4 body=[SAFE]',   // 0376: refused write left the bytes alone
+    'womode r=-1 e=1 w=4',
+    'modechild=11 body=[GOOD]',          // fd-action O_RDONLY: child write refused
     'done',
   ];
   for (let i = 0; i < expect.length; i++) {
