@@ -1,6 +1,6 @@
 # 0374 — Rename the package `python-clang` → `cpython-clang` (jku ruling, twice; republish + image bump)
 
-- **Status**: open
+- **Status**: done
 - **Difficulty**: medium
 - **Design**: this file, from
   `~/git/meta/meta/notes/QUEUE-rename-python-clang-to-cpython-clang.md`
