@@ -140,6 +140,24 @@
       __clock_ns_lo: function () { return 0; },
       __timezone_offset: function () { return 0; },
       // Everything else is OUTSIDE the kernel service surface (§5.2).
+      // The __posix.c block below arrived with todos/0325 Group B: <unistd.h>,
+      // <fcntl.h> and <sys/stat.h> all pull that TU in, and the linker does
+      // not drop unreferenced TU functions, so the *at family's imports
+      // appear here whether ksvc calls them or not (it calls none of them).
+      // They are trap()s, NOT no-op stubs, deliberately: a text service must
+      // not acquire the ability to write, and if one of these were ever
+      // reached the right outcome is a loud throw naming the call.
+      // (NB no `access` here — it is served for real above, and a trap at
+      // this point would SHADOW it: last key wins in an object literal.)
+      rmdir: trap('rmdir'), unlink: trap('unlink'), rename: trap('rename'),
+      link: trap('link'), symlink: trap('symlink'),
+      readlink: trap('readlink'), chmod: trap('chmod'),
+      realpath: trap('realpath'), ftruncate: trap('ftruncate'),
+      stat: trap('stat'), lstat: trap('lstat'), fstat: trap('fstat'),
+      __utime: trap('__utime'), __gettimeofday: trap('__gettimeofday'),
+      __mkdir_impl: trap('__mkdir_impl'), __getentropy: trap('__getentropy'),
+      // __time.c's clock_nanosleep arrived with the same change.
+      __nanosleep: trap('__nanosleep'),
       remove: trap('remove'), mkdir: trap('mkdir'), pipe: trap('pipe'),
       __spawn: trap('__spawn'), __spawn_wait: trap('__spawn_wait'),
       __spawn_kill: trap('__spawn_kill'), __exit: trap('__exit'),
