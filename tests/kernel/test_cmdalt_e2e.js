@@ -85,7 +85,8 @@ function checkShadowingBinRefused(check) {
 
 async function main() {
   checkShadowingBinRefused(check);
-  const idx = ensurePackages(['micropython']);
+  const repo = ensurePackages(['micropython']);
+  const idx = repo.index;
   const MIN = ensureMinimalImage();
   const { dir: tmp, image } = freshImage('os-cmdalt-');
   fs.copyFileSync(MIN, image);   // copy mtime = now -> input-fresh at boot
@@ -273,8 +274,7 @@ async function main() {
 
   /* ============ session B: the package claim + real python ============== */
 
-  const port = await startServer(require('path').join(
-    require('path').resolve(__dirname, '../..'), 'dist', 'packages'));
+  const port = await startServer(repo.dir);
   console.log(`[cmdalt] repo :${port} (micropython ${idx.packages.micropython.version})`);
 
   const outB = boot([

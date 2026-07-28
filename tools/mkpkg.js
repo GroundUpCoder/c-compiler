@@ -44,6 +44,7 @@
 //   node tools/mkpkg.js --out=DIR --force --quiet
 //   node tools/mkpkg.js --packages-dir=DIR   # read definitions from DIR
 //                                            # instead of <repo>/packages
+//   node tools/mkpkg.js --pool=DIR           # SHARED payload store (below)
 //   node tools/mkpkg.js --clang [--clang-root=DIR] [--clang-unpackaged=FILE]
 //                                            # SUPERSET index; the drift gate
 //                                            # (below) reads the exemption list
@@ -52,6 +53,36 @@
 // this tool, its definition, its files' project/bin/asset closure) is
 // REUSED, not rebuilt (--force overrides); index.json is rewritten every
 // run (baseVersion/minBase track os/image.json).
+//
+// ---- one repo per writer: --pool and the concurrency guard (todos/0388) ----
+//
+// `index.json` + `pool/` are ONE repo, and a build REPLACES it: a base run's
+// `avail` excludes every `requires:"clang-sibling"` definition, so it rewrites
+// the index without those names AND its orphan prune DELETES their payload
+// bytes. Sequentially that is just the accepted clang/base thrash. Concurrently
+// it is a race that silently retargets another builder's repo mid-read — and
+// the dangerous direction is base-vs-base, where the result still LOOKS
+// correct. So two builds must never share one output dir:
+//
+//   --pool=DIR  puts the expensive content-addressed payload store at DIR
+//               instead of <out>/pool, so N isolated repos share ONE warm
+//               cache (a cold build of the full set is ~90s; a reuse is ~0.1s).
+//               <out>/pool is then materialized as a HARDLINKED VIEW of exactly
+//               the payloads this index references — no byte copy, and each
+//               repo's view is independently prunable.
+//               🔴 A shared store is NEVER deleted from: both prunes (orphan
+//               and superseded-version) are scoped to the private view, so a
+//               concurrent builder can neither lose a payload it has already
+//               indexed nor hit ENOENT materializing one. It is therefore
+//               append-only and accumulates superseded payloads; that is what
+//               makes it safe to share, and reclaiming it is `rm -rf` on the
+//               store dir (the tests put theirs under the disposable build/).
+//               Refcounted GC is deliberately NOT attempted — it would put the
+//               deletes back, which is the whole bug.
+//
+// Independently, a lockfile refuses two concurrent builds of the SAME out dir
+// (loud exit 1, self-healing across a killed holder) — isolation is the fix,
+// but a future caller that forgets it gets a named failure, not an interleave.
 'use strict';
 
 const fs = require('fs');
@@ -89,9 +120,13 @@ let pkgDir = path.join(ROOT, 'packages');
 // same reason --packages-dir is: a test needs to exercise the allow-list
 // branch without editing the shipped file every other run depends on.
 let unpackagedPath = path.join(__dirname, 'clang-unpackaged.json');
+// The shared payload store (todos/0388). null = the classic layout, where the
+// store IS <out>/pool and this tool owns it outright.
+let poolStore = null;
 const requested = [];
 for (const a of process.argv.slice(2)) {
   if (a.startsWith('--out=')) outDir = path.resolve(a.slice(6));
+  else if (a.startsWith('--pool=')) poolStore = path.resolve(a.slice(7));
   else if (a.startsWith('--packages-dir=')) pkgDir = path.resolve(a.slice(15));
   else if (a === '--quiet') quiet = true;
   else if (a === '--force') force = true;
@@ -104,6 +139,57 @@ for (const a of process.argv.slice(2)) {
   } else requested.push(a);
 }
 const log = quiet ? () => {} : (m) => process.stderr.write('[mkpkg] ' + m + '\n');
+
+/* ---- one writer per out dir (todos/0388) --------------------------------
+ * `index.json` + `pool/` are one replaceable unit, so two concurrent builds of
+ * the same dir interleave into a repo that belongs to neither. Refuse LOUDLY
+ * rather than produce one — a base-vs-base interleave yields a plausible index
+ * and would otherwise mask, not cause, a failure. Self-healing: a lock whose
+ * holder is gone (killed build, crashed CI step) is stolen, not obeyed. */
+const LOCK = () => path.join(outDir, '.mkpkg-lock');
+let lockHeld = false;
+function holderAlive(pid) {
+  try { process.kill(pid, 0); return true; }          // signal 0 = liveness probe
+  catch (e) { return e.code === 'EPERM'; }            // EPERM = alive, not ours
+}
+function acquireLock() {
+  fs.mkdirSync(outDir, { recursive: true });
+  const mine = JSON.stringify({ pid: process.pid, host: require('os').hostname(),
+                                argv: process.argv.slice(2), at: new Date().toISOString() });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try { fs.writeFileSync(LOCK(), mine, { flag: 'wx' }); lockHeld = true; return; }
+    catch (e) { if (e.code !== 'EEXIST') throw e; }
+    let held = null;
+    try { held = JSON.parse(fs.readFileSync(LOCK(), 'utf-8')); } catch (e) { /* torn/garbage -> steal */ }
+    const sameHost = held && held.host === require('os').hostname();
+    if (held && sameHost && holderAlive(held.pid)) {
+      process.stderr.write(
+        `mkpkg: another build already owns ${outDir}\n` +
+        `  held by pid ${held.pid} since ${held.at} (${(held.argv || []).join(' ') || 'no args'})\n` +
+        `  two builds of one repo interleave index.json and prune each other's pool\n` +
+        `  payloads; give this build its own repo instead:\n` +
+        `    node tools/mkpkg.js --out=<dir> --pool=<shared cache dir>\n`);
+      process.exit(1);
+    }
+    log(`stale lock from pid ${held ? held.pid : '?'} — stealing`);
+    try { fs.unlinkSync(LOCK()); } catch (e) { /* raced with the holder's release */ }
+  }
+  process.stderr.write(`mkpkg: could not acquire ${LOCK()}\n`);
+  process.exit(1);
+}
+function releaseLock() {
+  if (!lockHeld) return;
+  lockHeld = false;
+  try {
+    // Only drop it if it is still OURS — never unlink a lock we already lost.
+    const held = JSON.parse(fs.readFileSync(LOCK(), 'utf-8'));
+    if (held.pid === process.pid) fs.unlinkSync(LOCK());
+  } catch (e) { /* already gone */ }
+}
+process.on('exit', releaseLock);
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(sig, () => { releaseLock(); process.exit(128 + (sig === 'SIGINT' ? 2 : sig === 'SIGTERM' ? 15 : 1)); });
+}
 
 const imageManifest = JSON.parse(fs.readFileSync(path.join(OS_DIR, 'image.json'), 'utf-8'));
 
@@ -479,8 +565,10 @@ async function assembleTree(name, pkg) {
   return members;
 }
 
-/* ---- build / reuse one package; returns its index entry ---- */
-async function buildPackage(name, poolDir) {
+/* ---- build / reuse one package; returns its index entry ----
+ * `poolDir` is the payload STORE. When it is shared (--pool), this build is one
+ * of several readers, so it may only ADD to it — see the superseded-drop below. */
+async function buildPackage(name, poolDir, sharedPool) {
   const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, name + '.json'), 'utf-8'));
   if (pkg.name !== name) throw new Error(`packages/${name}.json declares name ${JSON.stringify(pkg.name)}`);
   if (!/^[a-z0-9][a-z0-9_-]*$/.test(pkg.name)) throw new Error(`package '${name}': bad name`);
@@ -580,15 +668,23 @@ async function buildPackage(name, poolDir) {
   // Reuse a fresh payload (same version, newer than every input).
   const poolRe = new RegExp('^' + name + '_' + pkg.version.replace(/[.]/g, '\\.') + '_[0-9a-f]{16}\\.pkg\\.tar\\.gz$');
   const existing = fs.existsSync(poolDir) ? fs.readdirSync(poolDir).filter((f) => poolRe.test(f)) : [];
-  if (!force && existing.length === 1) {
-    const p = path.join(poolDir, existing[0]);
+  // NEWEST candidate wins. An owned pool holds at most one payload per
+  // (name, version) because the superseded-drop below prunes the rest — but a
+  // SHARED store (--pool) is append-only, so one version legitimately keeps
+  // several shas as its inputs change. Demanding exactly one there would
+  // silently stop reusing anything and rebuild the world every run.
+  if (!force && existing.length) {
+    const newest = existing
+      .map((f) => ({ f, mtimeMs: fs.statSync(path.join(poolDir, f)).mtimeMs }))
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
     const inp = newestPkgInput(name, pkg);
-    if (fs.statSync(p).mtimeMs >= inp.mtimeMs) {
+    if (newest.mtimeMs >= inp.mtimeMs) {
+      const p = path.join(poolDir, newest.f);
       const bytes = fs.readFileSync(p);
       const sha = crypto.createHash('sha256').update(bytes).digest('hex');
-      if (existing[0].includes('_' + sha.slice(0, 16) + '.')) {
-        log(`${name} ${pkg.version}: pool payload fresh — reusing ${existing[0]}`);
-        return entryFor(existing[0], sha, bytes.length);
+      if (newest.f.includes('_' + sha.slice(0, 16) + '.')) {
+        log(`${name} ${pkg.version}: pool payload fresh — reusing ${newest.f}`);
+        return entryFor(newest.f, sha, bytes.length);
       }
     }
   }
@@ -628,17 +724,48 @@ async function buildPackage(name, poolDir) {
   const tmp = path.join(poolDir, file + '.tmp-' + process.pid);
   fs.writeFileSync(tmp, gz);
   fs.renameSync(tmp, path.join(poolDir, file));
-  for (const old of fs.readdirSync(poolDir)) {   // drop superseded payloads
-    if (old !== file && old.startsWith(name + '_') && old.endsWith('.pkg.tar.gz')) {
-      fs.unlinkSync(path.join(poolDir, old));
+  // Drop superseded payloads — but ONLY when this build owns the store. Under
+  // --pool another repo's already-published index may still reference the older
+  // sha, and its hardlinked view would be the only thing keeping the bytes
+  // alive; a shared store is append-only (todos/0388).
+  if (!sharedPool) {
+    for (const old of fs.readdirSync(poolDir)) {
+      if (old !== file && old.startsWith(name + '_') && old.endsWith('.pkg.tar.gz')) {
+        fs.unlinkSync(path.join(poolDir, old));
+      }
     }
   }
   log(`${name} ${pkg.version}: ${file} (${(gz.length / (1 << 20)).toFixed(1)} MiB) in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
   return entryFor(file, sha, gz.length);
 }
 
+/* Materialize <out>/pool as a hardlinked view of exactly `live` (todos/0388).
+ * Hardlinks, so N repos sharing a store cost one inode each and no bytes; the
+ * payload name is content-addressed, so an identical name is identical bytes
+ * and copyFileSync is an equally correct fallback where linking is refused. */
+function materializeView(store, view, live) {
+  fs.mkdirSync(view, { recursive: true });
+  for (const f of live) {
+    const src = path.join(store, f);
+    const dst = path.join(view, f);
+    const s = fs.statSync(src, { throwIfNoEntry: false });
+    if (!s) throw new Error(`mkpkg: shared pool ${store} is missing ${f}`);
+    const d = fs.statSync(dst, { throwIfNoEntry: false });
+    if (d && d.ino === s.ino && d.dev === s.dev) continue;   // already this payload
+    if (d) fs.unlinkSync(dst);
+    try { fs.linkSync(src, dst); }
+    catch (e) { fs.copyFileSync(src, dst); }                 // EXDEV / EPERM
+  }
+}
+
 async function main() {
-  const poolDir = path.join(outDir, 'pool');
+  acquireLock();
+  // The STORE is where payloads are built and reused; the VIEW is the pool/
+  // the index's relative urls address. They are the same dir unless --pool
+  // decouples them.
+  const store = poolStore || path.join(outDir, 'pool');
+  const view = path.join(outDir, 'pool');
+  const sharedPool = store !== view;
   const index = {
     schemaVersion: 1,
     baseVersion: imageManifest.version | 0,
@@ -648,29 +775,34 @@ async function main() {
   // forward so a single-package invocation still writes a complete index.
   for (const n of avail) {
     if (names.includes(n)) {
-      index.packages[n] = await buildPackage(n, poolDir);
+      index.packages[n] = await buildPackage(n, store, sharedPool);
     } else {
       const prev = readIndex();
       if (prev && prev.packages && prev.packages[n]) index.packages[n] = prev.packages[n];
     }
   }
+  const live = new Set(Object.values(index.packages).map((p) => path.basename(p.payload.url)));
   fs.mkdirSync(outDir, { recursive: true });
+  // Populate the view BEFORE publishing the index, so the repo is never
+  // momentarily advertising a payload that isn't there yet.
+  if (sharedPool) materializeView(store, view, live);
   const tmp = path.join(outDir, 'index.json.tmp-' + process.pid);
   fs.writeFileSync(tmp, JSON.stringify(index, null, 2) + '\n');
   fs.renameSync(tmp, path.join(outDir, 'index.json'));
   // Prune orphans: a package REMOVED from packages/ drops out of the index
   // above, but its old payload would sit in pool/ forever (and deploys copy
   // the whole pool dir). Anything the fresh index doesn't reference goes.
-  const live = new Set(Object.values(index.packages).map((p) => path.basename(p.payload.url)));
-  if (fs.existsSync(poolDir)) {
-    for (const f of fs.readdirSync(poolDir)) {
+  // Scoped to the VIEW — never a shared store, which this build does not own.
+  if (fs.existsSync(view)) {
+    for (const f of fs.readdirSync(view)) {
       if (!live.has(f)) {
-        fs.unlinkSync(path.join(poolDir, f));
+        fs.unlinkSync(path.join(view, f));
         log(`pruned orphan pool payload ${f}`);
       }
     }
   }
-  log(`index.json: ${Object.keys(index.packages).length} package(s), baseVersion ${index.baseVersion}`);
+  log(`index.json: ${Object.keys(index.packages).length} package(s), baseVersion ${index.baseVersion}`
+    + (sharedPool ? ` (pool store ${store})` : ''));
 }
 let cachedIndex = null, cachedIndexRead = false;
 function readIndex() {

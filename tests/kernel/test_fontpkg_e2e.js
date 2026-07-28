@@ -49,11 +49,12 @@ function termShot(ppm) {
 }
 
 async function main() {
-  const idx = ensurePackages(['font-unifont', 'font-noto-cjk-mono']);
+  const repo = ensurePackages(['font-unifont', 'font-noto-cjk-mono']);
+  const idx = repo.index;
   const MIN = ensureMinimalImage();
   const { dir: tmp, image } = freshImage('os-fontpkg-');
   fs.copyFileSync(MIN, image);
-  const port = await startServer(path.join(ROOT, 'dist', 'packages'));
+  const port = await startServer(repo.dir);
   console.log(`[fontpkg] repo :${port}`);
   const BOOT_ARGS = { image, args: ['--packages=none'], timeout: 600000 };
 

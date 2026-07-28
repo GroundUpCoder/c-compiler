@@ -43,6 +43,7 @@ var tests = [
   ['../serve/test_clang_base_purity.js', []], // CLANG-CPP-EPIC II guardrail (a): NO -clang name in the base set
   ['../serve/test_serve_with_clang.js', []],  // guardrail (b): serve-with-clang preflight → loud exit 1, never base fallback
   ['../serve/test_mkpkg_clang.js', []],       // guardrail (c): mkpkg --clang clangApp sha256 round-trip
+  ['../serve/test_mkpkg_isolation.js', []],   // guardrail (d): repo isolation (0388) — a differing build must not prune another repo's payloads; --pool shares the warm cache; one writer per out dir
   ['../serve/test_image_determinism.js', []], // two bakes of one tree are byte-identical (0249 content-hash stability)
 ];
 

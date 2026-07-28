@@ -36,9 +36,8 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const cp = require('child_process');
 const { driveBoot, freshImage, section } = require('./lib/drive.js');
-const { ROOT, ensureMinimalImage, startServer } = require('./lib/gucman.js');
+const { ensureMinimalImage, ensureClangPackages, startServer } = require('./lib/gucman.js');
 
 const CLANG_ROOT = process.env.CLANG_ROOT ||
   path.join(require('os').homedir(), 'git', 'clang-simplified');
@@ -49,18 +48,6 @@ let failures = 0;
 function check(name, cond, extra) {
   if (cond) { console.log('  ok   ' + name); }
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
-}
-
-function ensureClangPackages(need) {
-  const r = cp.spawnSync(process.execPath,
-    [path.join(ROOT, 'tools', 'mkpkg.js'), '--quiet', '--clang', `--clang-root=${CLANG_ROOT}`],
-    { stdio: ['ignore', 'inherit', 'inherit'], timeout: 900000 });
-  if (r.status !== 0) throw new Error('mkpkg --clang failed');
-  const idx = JSON.parse(fs.readFileSync(path.join(ROOT, 'dist', 'packages', 'index.json'), 'utf-8'));
-  for (const n of need) {
-    if (!idx.packages[n]) throw new Error(`mkpkg --clang produced no ${n} entry`);
-  }
-  return idx;
 }
 
 // The in-OS import sweep. Deliberately the SAME enumeration rule as the
@@ -136,12 +123,12 @@ async function main() {
     return;
   }
 
-  ensureClangPackages(['cpython-clang']);
+  const repo = ensureClangPackages(['cpython-clang'], CLANG_ROOT);
   const MIN = ensureMinimalImage();
   const { image } = freshImage('os-pyclang-');
   fs.copyFileSync(MIN, image);
 
-  const port = await startServer(path.join(ROOT, 'dist', 'packages'));
+  const port = await startServer(repo.dir);
   console.log(`[cpython-clang] repo :${port}`);
 
   const heredoc = (name, body) => [`cat > ${name} <<'PYEOF'`, body, 'PYEOF'];

@@ -38,9 +38,8 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const cp = require('child_process');
 const { driveBoot, freshImage, section } = require('./lib/drive.js');
-const { ROOT, ensureMinimalImage, startServer } = require('./lib/gucman.js');
+const { ensureMinimalImage, ensureClangPackages, startServer } = require('./lib/gucman.js');
 
 const CLANG_ROOT = process.env.CLANG_ROOT ||
   path.join(require('os').homedir(), 'git', 'clang-simplified');
@@ -52,34 +51,20 @@ function check(name, cond, extra) {
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
 }
 
-/* The --clang superset repo (mkpkg --clang), rebuilt in place; the base
- * pipeline's next plain mkpkg re-prunes the clang payloads — the accepted
- * thrash (CLANG-CPP-EPIC Part II §7). */
-function ensureClangPackages(need) {
-  const r = cp.spawnSync(process.execPath,
-    [path.join(ROOT, 'tools', 'mkpkg.js'), '--quiet', '--clang', `--clang-root=${CLANG_ROOT}`],
-    { stdio: ['ignore', 'inherit', 'inherit'], timeout: 600000 });
-  if (r.status !== 0) throw new Error('mkpkg --clang failed');
-  const idx = JSON.parse(fs.readFileSync(path.join(ROOT, 'dist', 'packages', 'index.json'), 'utf-8'));
-  for (const n of need) {
-    if (!idx.packages[n]) throw new Error(`mkpkg --clang produced no ${n} entry`);
-  }
-  return idx;
-}
-
 async function main() {
   if (!fs.existsSync(OVERLAY)) {
     console.log(`SKIP: no sibling overlay at ${OVERLAY} (clang-simplified not present/published)`);
     return;
   }
 
-  ensureClangPackages(['box2d-clang', 'imgui-clang', 'etl-clang', 'glm-clang',
-                       'tinyrenderer-clang', 'ninja-clang']);
+  const repo = ensureClangPackages(['box2d-clang', 'imgui-clang', 'etl-clang',
+                                    'glm-clang', 'tinyrenderer-clang', 'ninja-clang'],
+                                   CLANG_ROOT);
   const MIN = ensureMinimalImage();
   const { image } = freshImage('os-clangpkgs-');
   fs.copyFileSync(MIN, image);
 
-  const port = await startServer(path.join(ROOT, 'dist', 'packages'));
+  const port = await startServer(repo.dir);
   console.log(`[clang-pkgs] repo :${port}`);
 
   const script = [

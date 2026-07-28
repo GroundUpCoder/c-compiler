@@ -34,6 +34,22 @@ netsurf failure is the only one of the three with a contention-shaped profile.
 ⚠️ **Both sightings were on a LOADED box** (`jobs 2`, other lanes live). That is a correlation,
 not a cause — nobody has yet reproduced it under controlled load.
 
+**Sighting 3** — the `0388` lane's kernel gate, 2026-07-28 ~08:27Z. Full 125-file run
+(`runs` 1 entry, filter null, `selected`/`executed`/`recorded` all 125, `carried` 0, `jobs` 2,
+`elapsedMs` 911100): **124 pass / 1 fail**, the single failure being this file at **10756 ms**.
+Green solo on immediate re-run, same tree. That lane's diff is `tools/mkpkg.js` + package-test
+isolation; `test_netsurf_mutation_e2e.js` contains **zero** references to `mkpkg`/
+`dist/packages` (grep -c = 0), so it is causally untouched by that work.
+
+🔴 **The failing assertion and its NUMBERS were byte-identical to sighting 1**:
+`typing: a page re-boxing under the caret types just as well  static 285 vs ticking 234 ink
+pixels`. Two independent lanes, two byte-sets, the **same two integers** — that is not the
+signature of timing noise, which would scatter the counts. It points at a **bimodal
+deterministic state** (one of two stable layouts/paint outcomes gets selected early), and
+means the bug is likely reproducible under a controlled trigger rather than only under load.
+⭐ Worth trying before any load-tolerance work: if the counts are always exactly 285/234, the
+"ticking" path is probably losing one specific mutation, not rendering late.
+
 **Third observation, 2026-07-28 ~05:20Z (master cont-128, off `ps`)** — the `0376` lane ran
 this file **bare** (`node tests/kernel/test_netsurf_mutation_e2e.js`, no runner) to check
 whether the failure reproduced. The process sat at **elapsed 3m21s, %CPU 0.0, STAT S** — ~18×

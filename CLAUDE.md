@@ -931,7 +931,23 @@ OUT of the baked blob as `packages/<name>.json` definitions →
 `tools/mkpkg.js` builds deterministic tar+gzip payloads + `index.json`
 into `dist/packages/` (gitignored; served at `/packages/*` by serve.js,
 built by the SAME seedEntries/buildProject pipeline as the bake — bytes
-identical). `/bin/gucman` (os/gucman/, curl veneer + zlib + cJSON)
+identical). **`index.json` + `pool/` are ONE repo and a build REPLACES
+it** — the orphan prune deletes every payload the fresh index doesn't
+name, so a base build strips the `-clang` entries AND their payload
+bytes. Sequentially that's the accepted clang/base thrash; concurrently
+it was a race that silently retargeted another builder's repo mid-read
+(todos/0388 — it cost a 185 gate a false red). So **two builds must
+never share an out dir**: `--pool=DIR` decouples the expensive
+content-addressed payload STORE from the index, `<out>/pool` becomes a
+HARDLINKED VIEW of just that index's payloads, and a shared store is
+**append-only** (both prunes scoped to the private view; reclaim = `rm
+-rf`). A `.mkpkg-lock` refuses a second concurrent build of one out dir
+(loud exit 1, self-healing). The package e2es build into a per-INSTANCE
+`build/test-packages/<test>-XXX/` over the one shared pool —
+per-instance, NOT per-file, because `--repeat` runs a file concurrently
+with itself. Guardrail: `tests/serve/test_mkpkg_isolation.js` (host
+suite), which keeps a RED CONTROL that still reproduces the prune.
+`/bin/gucman` (os/gucman/, curl veneer + zlib + cJSON)
 install/remove/list: sha256 verified BEFORE extraction, tar members
 validated (no `..`/absolute/outside-`opt/<name>/`), staged extract →
 atomic rename to `/opt/<name>` → plant declarative bin (/usr/local/bin

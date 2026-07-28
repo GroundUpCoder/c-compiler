@@ -61,7 +61,8 @@ function check(name, cond, extra) {
 }
 
 async function main() {
-  const idx = ensurePackages(['punes']);
+  const repo = ensurePackages(['punes']);
+  const idx = repo.index;
   const MIN = ensureMinimalImage();
   const { dir: tmp, image } = freshImage('os-software-');
   fs.copyFileSync(MIN, image);   // copy mtime = now -> input-fresh at boot
@@ -72,8 +73,7 @@ async function main() {
   // "Install to Desktop" toggle (Q5/#90), then one Install/Remove per card.
   const punesBtn = 2 + names.indexOf('punes');
 
-  const goodPort = await startServer(require('path').join(
-    require('path').resolve(__dirname, '../..'), 'dist', 'packages'));
+  const goodPort = await startServer(repo.dir);
   console.log(`[software] repo :${goodPort}, ${names.length} packages, punes=BUTTON:${punesBtn}`);
 
   // ---- the minBase boundary repo ----

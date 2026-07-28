@@ -38,17 +38,70 @@ function ensureMinimalImage(log) {
   return MIN;
 }
 
-/* The package repo (mkpkg output), built once + reused when fresh; returns
- * the parsed index. `need` = package names the caller requires. */
-function ensurePackages(need) {
-  const r = cp.spawnSync(process.execPath, [path.join(ROOT, 'tools', 'mkpkg.js'), '--quiet'],
-    { stdio: ['ignore', 'inherit', 'inherit'], timeout: 600000 });
-  if (r.status !== 0) throw new Error('mkpkg failed');
-  const idx = JSON.parse(fs.readFileSync(path.join(ROOT, 'dist', 'packages', 'index.json'), 'utf-8'));
+/* The package repo (mkpkg output). Returns { dir, index }: `dir` is what the
+ * caller hands to startServer, `index` the parsed index.json. `need` = package
+ * names the caller requires.
+ *
+ * PER-TEST repo, SHARED payload store (todos/0388). These e2es used to build
+ * into the one <repo>/dist/packages, which made the repo shared mutable state:
+ * a base build's orphan prune deletes every payload its index doesn't name, so
+ * at -j2 a sibling test would rewrite the index and delete the -clang payloads
+ * out from under a clang test that had already served them — measured landing
+ * 1.1s after that test's OS started booting. Each test now owns
+ * build/test-packages/<test>/ outright, while --pool keeps the ONE warm
+ * content-addressed cache that makes a rebuild ~0.1s instead of ~90s. */
+const PKG_ROOT = path.join(ROOT, 'build', 'test-packages');
+const POOL = path.join(PKG_ROOT, 'pool');
+
+/* One repo per RUNNING INSTANCE, not per test file. `--repeat N` runs the same
+ * file concurrently, so a name derived from the file alone collides with
+ * itself — mkpkg's one-writer lock catches that loudly (which is how this was
+ * found), but the right answer is for each instance to own a repo. mkdtemp
+ * gives that unconditionally; the shared POOL is what carries the speed, so a
+ * fresh dir costs only the hardlink view. Removed at exit — the dir is a view,
+ * never the cache. */
+const repoDirs = [];
+function testRepoDir(tag) {
+  const self = path.basename(process.argv[1] || 'unknown').replace(/\.js$/, '');
+  fs.mkdirSync(PKG_ROOT, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(PKG_ROOT, `${self}${tag ? '.' + tag : ''}-`));
+  repoDirs.push(dir);
+  return dir;
+}
+process.on('exit', () => {
+  for (const d of repoDirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (e) {} }
+});
+
+function runMkpkg(dir, extraArgs, timeout) {
+  fs.mkdirSync(dir, { recursive: true });
+  const r = cp.spawnSync(process.execPath,
+    [path.join(ROOT, 'tools', 'mkpkg.js'), '--quiet', `--out=${dir}`, `--pool=${POOL}`,
+     ...extraArgs],
+    { stdio: ['ignore', 'inherit', 'inherit'], timeout });
+  if (r.status !== 0) throw new Error(`mkpkg ${extraArgs.join(' ')} failed (exit ${r.status})`);
+  return JSON.parse(fs.readFileSync(path.join(dir, 'index.json'), 'utf-8'));
+}
+
+function requireEntries(index, need, what) {
   for (const n of need || []) {
-    if (!idx.packages[n]) throw new Error(`mkpkg produced no ${n} entry`);
+    if (!index.packages[n]) throw new Error(`${what} produced no ${n} entry`);
   }
-  return idx;
+}
+
+function ensurePackages(need, opts) {
+  const dir = testRepoDir((opts || {}).tag);
+  const index = runMkpkg(dir, [], 600000);
+  requireEntries(index, need, 'mkpkg');
+  return { dir, index };
+}
+
+/* The --clang SUPERSET repo. Same isolation; the only difference is the
+ * definition set, which is exactly what used to collide with the base one. */
+function ensureClangPackages(need, clangRoot, opts) {
+  const dir = testRepoDir((opts || {}).tag || 'clang');
+  const index = runMkpkg(dir, ['--clang', `--clang-root=${clangRoot}`], 900000);
+  requireEntries(index, need, 'mkpkg --clang');
+  return { dir, index };
 }
 
 /* Spawn serve.js over a static dir, resolve its port. The tree has no
@@ -75,4 +128,5 @@ function startServer(dir) {
 }
 process.on('exit', () => { for (const s of servers) { try { s.kill(); } catch (e) {} } });
 
-module.exports = { ROOT, ensureMinimalImage, ensurePackages, startServer };
+module.exports = { ROOT, ensureMinimalImage, ensurePackages, ensureClangPackages,
+                   startServer, PKG_ROOT, POOL };

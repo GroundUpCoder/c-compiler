@@ -45,7 +45,8 @@ function check(name, cond, extra) {
 }
 
 async function main() {
-  const idx = ensurePackages(['punes', 'win32', 'jq']);
+  const repo = ensurePackages(['punes', 'win32', 'jq']);
+  const idx = repo.index;
   const MIN = ensureMinimalImage();
 
   /* ---- mkpkg validation (source-lib §5): desktop.cmd must name a bin ---- *
@@ -82,7 +83,7 @@ async function main() {
   fs.copyFileSync(MIN, image);   // copy mtime = now -> input-fresh at boot
 
   // The corrupted repo: same index, payload with ONE byte flipped mid-file.
-  const goodDir = path.join(ROOT, 'dist', 'packages');
+  const goodDir = repo.dir;
   const badDir = path.join(tmp, 'bad-repo');
   fs.mkdirSync(path.join(badDir, 'pool'), { recursive: true });
   fs.copyFileSync(path.join(goodDir, 'index.json'), path.join(badDir, 'index.json'));
