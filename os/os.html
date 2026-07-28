@@ -955,18 +955,86 @@ function touchEnd(e) {
 screen.addEventListener('touchend', touchEnd, { passive: false });
 screen.addEventListener('touchcancel', touchEnd, { passive: false });
 
+// Host paste-chord carve-out (todos/0398 D6): preventDefault on the paste
+// chord cancels the browser paste COMMAND, so a `paste` event could never
+// fire on VT2 — carve exactly that chord (⌘V on the mac scheme, ^V
+// otherwise) out of the swallow: let it default, HOLD its key events, and
+// arm a one-shot. The paste event follows in the same input sequence:
+// files present -> stage them + publish the slot, THEN forward the held
+// chord (page->worker messages are FIFO, so stage-before-consume is
+// structural); text-only -> forward at once (the deferred CLIP_GET
+// refresh serves it exactly as today). Belt: an in-OS-only paste can fire
+// NO paste event at all — the ~50ms timer forwards the chord anyway.
+var pasteArm = null;               // {down, up, timer} while carved
+function pasteArmFlush() {
+  if (!pasteArm) return;
+  var a = pasteArm;
+  pasteArm = null;
+  clearTimeout(a.timer);
+  wmSend(a.down);
+  if (a.up) wmSend(a.up);
+}
+function isPasteChord(e) {
+  if ((e.key !== 'v' && e.key !== 'V') || e.altKey) return false;
+  return hostKeys === 'mac' ? (e.metaKey && !e.ctrlKey) : (e.ctrlKey && !e.metaKey);
+}
 screen.addEventListener('keydown', function (e) {
   // No paste-chord clipboard pre-read here: the old aim-at-the-NEXT-paste
   // refresh is superseded by the clipboard seam — a paste consumer parks
   // in the kernel on CLIP_GET and the clip-read handler below refreshes
   // the slot inside this keystroke's still-live activation, so the FIRST
   // paste is fresh by construction.
+  if (isPasteChord(e) && !e.repeat) {
+    pasteArmFlush();               // a second chord while armed flushes the first
+    pasteArm = {
+      down: { kind: 'key', down: true, code: e.code, key: e.key, repeat: e.repeat, mods: mods(e) },
+      up: null,
+      timer: setTimeout(pasteArmFlush, 50),
+    };
+    return;                        // NO preventDefault: the paste command must fire
+  }
   wmSend({ kind: 'key', down: true, code: e.code, key: e.key, repeat: e.repeat, mods: mods(e) });
   e.preventDefault();
 });
 screen.addEventListener('keyup', function (e) {
+  if (pasteArm && e.code === pasteArm.down.code) {
+    // Hold the chord's keyup behind its held keydown — order preserved.
+    pasteArm.up = { kind: 'key', down: false, code: e.code, key: e.key, repeat: e.repeat, mods: mods(e) };
+    e.preventDefault();
+    return;
+  }
   wmSend({ kind: 'key', down: false, code: e.code, key: e.key, repeat: e.repeat, mods: mods(e) });
   e.preventDefault();
+});
+
+// The paste event itself (todos/0398 D6) — the ONLY web carrier of host
+// file BYTES into a page (readText only ever sees the text flavor). A
+// folder can NOT arrive here (the platform exposes no entries to
+// clipboardData.files for a Finder folder copy — stated, not silent):
+// a files-empty paste falls back to the text path as today.
+document.addEventListener('paste', function (e) {
+  if (vt !== 2 || !pasteArm) return;   // VT1: xterm's native paste owns it
+  var files = e.clipboardData && e.clipboardData.files;
+  if (!files || !files.length) {
+    pasteArmFlush();                   // text-only: the CLIP_GET seam serves it
+    return;
+  }
+  e.preventDefault();
+  clearTimeout(pasteArm.timer);        // the staging chain owns the forward now
+  // The shadow-text memo (D6, load-bearing): Finder also places the file
+  // NAME as the text flavor — the focused app's paste parks on onClipRead,
+  // the page readTexts, and that filename text would clobber the staged
+  // fmt-2 list. Suppress a host read equal to it (the clipSynced rule,
+  // one more memo).
+  clipShadow = e.clipboardData.getData('text/plain') || null;
+  window.__osPasteFiles = (window.__osPasteFiles || 0) + 1;   // agent probe
+  Promise.all(Array.prototype.map.call(files, function (f) {
+    return f.arrayBuffer().then(function (ab) { return { name: f.name, bytes: ab }; });
+  })).then(function (list) {
+    kernel.postMessage({ type: 'host-paste-files', files: list },
+                       list.map(function (x) { return x.bytes; }));
+    pasteArmFlush();                   // FIFO: the staged slot landed first
+  }, function () { pasteArmFlush(); });
 });
 
 // Host-file ingest (todos/0067): files from the host land in /root/Desktop,
@@ -976,12 +1044,56 @@ screen.addEventListener('keyup', function (e) {
 // read the bytes, post {type:'drop-file'} per file with the ArrayBuffer
 // TRANSFERRED (zero-copy); ALL policy (name sanitizing, collisions, size
 // cap, the actual fs write) lives in the kernel worker.
+var dropEpisode = 0;   // groups one drop's files for the worker's root map
 function postHostFiles(files) {
+  var ep = ++dropEpisode;
   Array.prototype.forEach.call(files || [], function (f) {
     f.arrayBuffer().then(function (ab) {
-      kernel.postMessage({ type: 'drop-file', name: f.name, bytes: ab }, [ab]);
+      kernel.postMessage({ type: 'drop-file', name: f.name, episode: ep, bytes: ab }, [ab]);
     });
   });
+}
+
+// Directory drops (todos/0398): the drop path is the ONE place the web
+// platform exposes a directory TREE (webkitGetAsEntry) — walk it and post
+// each file through the same drop-file loop with its tree-relative path;
+// the worker uniquifies the dropped ROOT once per episode so a folder
+// never merges into an existing one. Drops with no directory keep the
+// plain 0067 loop (empty dirs inside a tree are not recreated — only
+// files ride the wire). readEntries batches (100 in Chromium): drain
+// until an empty batch.
+function postDropItems(dt) {
+  var entries = [];
+  var items = dt && dt.items;
+  for (var i = 0; items && i < items.length; i++) {
+    var en = items[i].webkitGetAsEntry && items[i].webkitGetAsEntry();
+    if (en) entries.push(en);
+  }
+  if (!entries.some(function (en) { return en.isDirectory; })) {
+    postHostFiles(dt && dt.files);
+    return;
+  }
+  var ep = ++dropEpisode;
+  function walk(entry, rel) {
+    if (entry.isFile) {
+      entry.file(function (f) {
+        f.arrayBuffer().then(function (ab) {
+          kernel.postMessage({ type: 'drop-file', name: f.name, rel: rel,
+                               episode: ep, bytes: ab }, [ab]);
+        });
+      });
+    } else if (entry.isDirectory) {
+      var reader = entry.createReader();
+      (function drain() {
+        reader.readEntries(function (ents) {
+          if (!ents.length) return;
+          ents.forEach(function (child) { walk(child, rel + '/' + child.name); });
+          drain();
+        });
+      })();
+    }
+  }
+  entries.forEach(function (en) { walk(en, en.name); });
 }
 
 // Drag-drop flavor: listeners sit on the #desktop pane so the whole VT2
@@ -999,7 +1111,7 @@ desktopPane.addEventListener('dragleave', function () {
 desktopPane.addEventListener('drop', function (e) {
   e.preventDefault();
   desktopPane.classList.remove('droptarget');
-  postHostFiles(e.dataTransfer && e.dataTransfer.files);
+  postDropItems(e.dataTransfer);
 });
 
 // Upload-button flavor (mobile): iOS has no host drag-drop, so a hidden
@@ -1045,6 +1157,11 @@ uploadInput.addEventListener('change', function () {
 // clipboard — the "last copy wins" model, with the host copy presumed the
 // fresher intent on arrival).
 var clipSynced = null;
+// clipShadow (todos/0398 D6): the text flavor recorded at a host FILE
+// paste — Finder places the pasted file's NAME there, and the focused
+// app's immediately-following CLIP_GET refresh would read it and clobber
+// the staged fmt-2 file list. One more dedup memo beside clipSynced.
+var clipShadow = null;
 function clipToHost(text) {
   if (typeof text !== 'string' || text === clipSynced) return;
   clipSynced = text;
@@ -1064,7 +1181,8 @@ function clipFromHost(done) {
     return;
   }
   navigator.clipboard.readText().then(function (text) {
-    if (typeof text === 'string' && text && text !== clipSynced) {
+    if (typeof text === 'string' && text && text !== clipSynced &&
+        text !== clipShadow) {   // the file-paste name shadow (0398 D6)
       clipSynced = text;
       window.__osClipFromHost = (window.__osClipFromHost || 0) + 1;   // agent probe
       kernel.postMessage({ type: 'clipboard', text: text });

@@ -103,8 +103,9 @@ static void test_registry_shape(void) {
     /* index self-consistency (the enum id IS the array index) */
     CHECK("KSA_OVERVIEW is a system action w/ its token",
         KS_ACTIONS[KSA_OVERVIEW].kind == KAK_SYS && KS_ACTIONS[KSA_OVERVIEW].token == KTOK_OVERVIEW);
-    CHECK("KSA_COPY is an EDIT app action mapping KA_COPY",
-        KS_ACTIONS[KSA_COPY].kind == KAK_APP && KS_ACTIONS[KSA_COPY].ctx == KCTX_EDIT &&
+    CHECK("KSA_COPY is an EDIT+LIST app action mapping KA_COPY",
+        KS_ACTIONS[KSA_COPY].kind == KAK_APP &&
+        KS_ACTIONS[KSA_COPY].ctx == (KCTX_EDIT | KCTX_LIST) &&   /* 0398 */
         KS_ACTIONS[KSA_COPY].token == KA_COPY);
     CHECK("KSA_TERM_COPY is a TERM app action mapping KA_COPY",
         KS_ACTIONS[KSA_TERM_COPY].kind == KAK_APP && KS_ACTIONS[KSA_TERM_COPY].ctx == KCTX_TERM &&

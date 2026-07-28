@@ -128,10 +128,12 @@ typedef struct {
  * copies while the windows-term row genuinely requires the Shift. */
 static const KeyBinding KS_TABLE[] = {
     /* ---- windows: Ctrl is the verb modifier (the native Win95 idiom) ---- */
+    /* copy/cut/paste carry KCTX_LIST too (todos/0398): the desktop grid
+     * dispatches them in desk_key like the existing select-all case. */
     { KS_WINDOWS, KCTX_EDIT | KCTX_LIST, KM_CTRL, 0, 'a',      KA_SELECT_ALL },
-    { KS_WINDOWS, KCTX_EDIT,             KM_CTRL, 0, 'c',      KA_COPY },
-    { KS_WINDOWS, KCTX_EDIT,             KM_CTRL, 0, 'x',      KA_CUT },
-    { KS_WINDOWS, KCTX_EDIT,             KM_CTRL, 0, 'v',      KA_PASTE },
+    { KS_WINDOWS, KCTX_EDIT | KCTX_LIST, KM_CTRL, 0, 'c',      KA_COPY },
+    { KS_WINDOWS, KCTX_EDIT | KCTX_LIST, KM_CTRL, 0, 'x',      KA_CUT },
+    { KS_WINDOWS, KCTX_EDIT | KCTX_LIST, KM_CTRL, 0, 'v',      KA_PASTE },
     { KS_WINDOWS, KCTX_EDIT,             KM_CTRL, 0, 'z',      KA_UNDO },
     { KS_WINDOWS, KCTX_EDIT,             KM_CTRL, 0, KK_LEFT,  KA_WORD_LEFT },
     { KS_WINDOWS, KCTX_EDIT,             KM_CTRL, 0, KK_RIGHT, KA_WORD_RIGHT },
@@ -144,9 +146,9 @@ static const KeyBinding KS_TABLE[] = {
      * ⌘+arrow rows below are LIVE — tiling moved to Ctrl+Alt+arrow, so
      * GUI+arrow reaches the app (META-ARROW-KEYBIND.md). ---- */
     { KS_MACOS, KCTX_EDIT | KCTX_LIST, KM_GUI, 0, 'a',     KA_SELECT_ALL },
-    { KS_MACOS, KCTX_EDIT | KCTX_TERM, KM_GUI, 0, 'c',     KA_COPY },
-    { KS_MACOS, KCTX_EDIT,             KM_GUI, 0, 'x',     KA_CUT },
-    { KS_MACOS, KCTX_EDIT | KCTX_TERM, KM_GUI, 0, 'v',     KA_PASTE },
+    { KS_MACOS, KCTX_EDIT | KCTX_TERM | KCTX_LIST, KM_GUI, 0, 'c', KA_COPY },
+    { KS_MACOS, KCTX_EDIT | KCTX_LIST, KM_GUI, 0, 'x',     KA_CUT },
+    { KS_MACOS, KCTX_EDIT | KCTX_TERM | KCTX_LIST, KM_GUI, 0, 'v', KA_PASTE },
     { KS_MACOS, KCTX_EDIT,             KM_GUI, 0, 'z',     KA_UNDO },
     { KS_MACOS, KCTX_EDIT,             KM_ALT, 0, KK_LEFT,  KA_WORD_LEFT },
     { KS_MACOS, KCTX_EDIT,             KM_ALT, 0, KK_RIGHT, KA_WORD_RIGHT },
@@ -265,9 +267,9 @@ static const KsAction KS_ACTIONS[] = {
       free, and scheme-independent (unlike snap's win/mac split) */
   /* --- app (defaults derived from KS_TABLE by KA_*+ctx) --- */
   { "edit.select-all", KAK_APP, KCTX_EDIT | KCTX_LIST, KA_SELECT_ALL },
-  { "edit.copy",       KAK_APP, KCTX_EDIT,             KA_COPY },
-  { "edit.cut",        KAK_APP, KCTX_EDIT,             KA_CUT },
-  { "edit.paste",      KAK_APP, KCTX_EDIT,             KA_PASTE },
+  { "edit.copy",       KAK_APP, KCTX_EDIT | KCTX_LIST, KA_COPY },
+  { "edit.cut",        KAK_APP, KCTX_EDIT | KCTX_LIST, KA_CUT },
+  { "edit.paste",      KAK_APP, KCTX_EDIT | KCTX_LIST, KA_PASTE },
   { "edit.undo",       KAK_APP, KCTX_EDIT,             KA_UNDO },
   { "edit.word-left",  KAK_APP, KCTX_EDIT,             KA_WORD_LEFT },
   { "edit.word-right", KAK_APP, KCTX_EDIT,             KA_WORD_RIGHT },

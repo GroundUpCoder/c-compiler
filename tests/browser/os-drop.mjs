@@ -129,6 +129,35 @@ try {
   await waitPixel(12 + 120, 36 + 80, ORANGE, 60000);   // first client window
   check('double-click ran the dropped launcher (winbox composited)', true);
 
+  // ---- directory-drop tree machinery (todos/0398) ----
+  // webkitGetAsEntry yields entries only on a REAL OS drag (synthetic
+  // DataTransfer items return null), so the page-side walk itself cannot
+  // be automated here — this leg posts exactly the messages the walk
+  // produces and proves the worker's rel/episode path: nested parents
+  // materialize, and a re-drop of the same root name uniquifies the ROOT
+  // once (proj -> proj-1) instead of merging into the existing tree.
+  await page.evaluate(() => {
+    const post = (rel, text, ep) => {
+      const ab = new TextEncoder().encode(text).buffer;
+      kernel.postMessage({ type: 'drop-file', name: rel.split('/').pop(),
+                           rel, episode: ep, bytes: ab }, [ab]);
+    };
+    post('proj/a.txt', 'tree-A', 9001);
+    post('proj/sub/b.txt', 'tree-B', 9001);
+    post('proj/c.txt', 'tree-C', 9002);   // a SECOND drop of the same root
+  });
+  await waitDropLog(page, 'c.txt');
+  await setVt(1);
+  await page.evaluate(() => { window.__osOut = ''; });
+  await page.keyboard.type('cat /root/Desktop/proj/a.txt /root/Desktop/proj/sub/b.txt /root/Desktop/proj-1/c.txt; echo TREE-DO""NE\r');
+  await page.waitForFunction(() => window.__osOut.includes('TREE-DONE'), { timeout: 20000, polling: 200 });
+  const treeOut = await page.evaluate(() => window.__osOut);
+  check('tree drop materialized nested paths (rel components)',
+    treeOut.includes('tree-A') && treeOut.includes('tree-B'), treeOut.slice(-300));
+  check('re-dropping the same root uniquified it (proj-1, no merge)',
+    treeOut.includes('tree-C'), treeOut.slice(-300));
+  await setVt(2);
+
   // ---- persistence: the files survive a page reload (OPFS flush) ----
   await page.close();                    // frees the 0045 boot lock
   page = await context.newPage();        // same context = same OPFS

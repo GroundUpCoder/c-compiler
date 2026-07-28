@@ -21,7 +21,7 @@
 //                                                (todos/0023): resize the
 //                                                OffscreenCanvas + wmSetScreen
 //                                                (-> EV_SCREEN to the wm)
-//                   {type:'drop-file', name, bytes}
+//                   {type:'drop-file', name, [rel], [episode], bytes}
 //                                                host file dropped on the
 //                                                desktop (todos/0067): write
 //                                                bytes to /root/Desktop/<name>
@@ -30,6 +30,18 @@
 //                                                re-read grows the icon ~1s
 //                                                later. bytes is a transferred
 //                                                ArrayBuffer (zero-copy).
+//                                                rel/episode (todos/0398): a
+//                                                directory drop's tree path —
+//                                                the root uniquifies once per
+//                                                episode, parents mkdir -p.
+//                   {type:'host-paste-files', files:[{name, bytes}]}
+//                                                host paste chord carried
+//                                                files (todos/0398 D6): wipe +
+//                                                repopulate /root/.hoststage,
+//                                                publish an fmt-2 "copy" list
+//                                                on the kernel slot, stamp
+//                                                clip freshness; the forwarded
+//                                                chord follows on this FIFO.
 //                   {type:'clipboard', text}     host -> gucOS clipboard
 //                                                (ticket #79): the page read
 //                                                the host clipboard (focus
@@ -59,6 +71,14 @@
 //                                                (ALWAYS — the worker's
 //                                                timeout is the backstop,
 //                                                not the plan)
+//                   {type:'egress', dispo, name, bytes}
+//                                                egress (todos/0398): ONE
+//                                                kernel-materialized artifact;
+//                                                the page downloads it (or
+//                                                raises the saveas picker)
+//                                                inside the initiating click's
+//                                                still-live activation. bytes
+//                                                is transferred.
 //                   {type:'boot-log', msg}       boot progress / kernel log
 //                   {type:'boot-error', msg}
 //                   {type:'boot-locked'}         two-tab guard (todos/0045):
@@ -169,6 +189,10 @@ self.onmessage = function (e) {
   } else if (m.type === 'drop-file') {
     dropFile(m);
     if (compositor) compositor.scheduleFrame();     // wake table (todos/0169)
+  } else if (m.type === 'host-paste-files') {
+    // Host file paste (todos/0398): stage + publish the fmt-2 list. The
+    // forwarded chord follows on this same FIFO channel and wakes the app.
+    hostPasteFiles(m);
   } else if (m.type === 'display-set') {
     displaySet(m.zoom);
   } else if (m.type === 'clipboard') {
@@ -213,38 +237,122 @@ self.onmessage = function (e) {
 // tty byte stream stays program-output-clean).
 var DROP_DIR = '/root/Desktop';
 var DROP_MAX = 128 * 1024 * 1024;   // sanity cap, not a quota
+// One path component, sanitized: basename + control-char strip; empty or
+// degenerate ('.', '..') collapses to '' — the caller supplies a stand-in.
+function sanComp(s) {
+  var n = String(s || '').split('/').pop().split('\\').pop()
+    .replace(/[\x00-\x1f\x7f]/g, '').trim();
+  return (!n || n === '.' || n === '..') ? '' : n;
+}
+// Collision policy (0067): foo.gb -> foo-1.gb, foo-2.gb, … (lstat, not
+// stat — a dangling symlink still owns its name); null after 99.
+function uniqName(dir, name) {
+  var dot = name.lastIndexOf('.');
+  var stem = dot > 0 ? name.slice(0, dot) : name;
+  var ext = dot > 0 ? name.slice(dot) : '';
+  var final = name;
+  for (var i = 1; kfs.lstat(dir + '/' + final) !== null; i++) {
+    if (i > 99) return null;
+    final = stem + '-' + i + ext;
+  }
+  return final;
+}
+// Tree drops (todos/0398): a directory drop's files arrive with a
+// tree-relative `rel` — the dropped ROOT is uniquified ONCE per drop
+// episode (so a folder never merges into an existing one) and remembered
+// here for the episode's remaining files.
+var dropEp = { id: -1, roots: null };
 function dropFile(m) {
   var note = function (msg) { post({ type: 'boot-log', msg: '[drop] ' + msg }); };
   var bytes = new Uint8Array(m.bytes);
-  // Basename + control-char strip; empty/degenerate names get a stand-in.
-  var name = String(m.name || '').split('/').pop().split('\\').pop()
-    .replace(/[\x00-\x1f\x7f]/g, '').trim();
-  if (!name || name === '.' || name === '..') name = 'dropped';
+  var comps = String(m.rel || m.name || '').split('/')
+    .map(sanComp).filter(function (c) { return c !== ''; });
+  if (!comps.length) comps = ['dropped'];
+  var name = comps[comps.length - 1];
   if (bytes.length > DROP_MAX) {
     note(name + ': refused (' + bytes.length + ' bytes > ' + DROP_MAX + ' cap)');
     return;
   }
   try {
     kfs.mkdir(DROP_DIR, 0o755);   // self-heal a deleted Desktop (EEXIST is fine)
-    // Collision policy: foo.gb -> foo-1.gb, foo-2.gb, … (lstat, not stat —
-    // a dangling symlink still owns its name).
-    var dot = name.lastIndexOf('.');
-    var stem = dot > 0 ? name.slice(0, dot) : name;
-    var ext = dot > 0 ? name.slice(dot) : '';
-    var final = name;
-    for (var i = 1; kfs.lstat(DROP_DIR + '/' + final) !== null; i++) {
-      if (i > 99) { note(name + ': refused (99 name collisions)'); return; }
-      final = stem + '-' + i + ext;
+    var destDir = DROP_DIR;
+    if (comps.length > 1) {
+      var ep = m.episode | 0;
+      if (dropEp.id !== ep) dropEp = { id: ep, roots: {} };
+      var root = dropEp.roots[comps[0]];
+      if (!root) {
+        root = uniqName(DROP_DIR, comps[0]);
+        if (!root) { note(comps[0] + ': refused (99 name collisions)'); return; }
+        dropEp.roots[comps[0]] = root;
+      }
+      var dirs = [root].concat(comps.slice(1, -1));
+      for (var d = 0; d < dirs.length; d++) {
+        destDir += '/' + dirs[d];
+        kfs.mkdir(destDir, 0o755);           // EEXIST is fine
+      }
+      // Inside a freshly-uniquified root the tree's own names can't
+      // collide — the leaf writes as-is.
+    } else {
+      name = uniqName(DROP_DIR, name);
+      if (!name) { note(comps[0] + ': refused (99 name collisions)'); return; }
     }
-    var path = DROP_DIR + '/' + final;
+    var path = destDir + '/' + name;
     OS_COMMON.writeFile(kfs, path, bytes, 0o644);
     // Durability (the acceptance's reload-survival): fsync flushes the
     // owning volume's store to OPFS.
     var fd = kfs.open(path, 0, 0);
     if (fd !== null) { kfs.fsync(fd); kfs.close(fd); }
-    note(final + ' -> ' + path + ' (' + bytes.length + ' bytes)');
+    note(name + ' -> ' + path + ' (' + bytes.length + ' bytes)');
   } catch (e) {
     note(name + ': write failed — ' + String((e && e.message) || e));
+  }
+}
+
+// Host paste staging (todos/0398 D6): pasted files land in a hidden
+// staging dir — WIPED and repopulated per host paste (no collision
+// suffixes needed; paste-twice re-pastes the same staged list, copy
+// semantics) — and the list is published on the kernel slot as an
+// ordinary fmt-2 "copy" file list, so every existing in-OS paste consumer
+// (desk_paste, fileman IDM_PASTE, fo_copy's uniquifier) works unchanged.
+// Embedder-side clipSet fires no onClipboard (no host echo loop); the
+// freshness stamp short-circuits the forwarded chord's clip-read refresh
+// (the belt — the page's shadow-text memo is the load-bearing guard).
+// Page->worker FIFO lands this BEFORE the forwarded paste chord.
+var STAGE_DIR = '/root/.hoststage';
+function hostPasteFiles(m) {
+  var note = function (msg) { post({ type: 'boot-log', msg: '[paste] ' + msg }); };
+  try {
+    kfs.mkdir(STAGE_DIR, 0o700);   // EEXIST is fine
+    // Wipe: flat by construction — a paste event cannot carry a folder.
+    var dh = kfs.opendir(STAGE_DIR);
+    if (dh !== null) {
+      var old = [];
+      for (var ent = kfs.readdir(dh); ent !== null; ent = kfs.readdir(dh))
+        if (ent.name !== '.' && ent.name !== '..') old.push(ent.name);
+      kfs.closedir(dh);
+      for (var i = 0; i < old.length; i++) kfs.unlink(STAGE_DIR + '/' + old[i]);
+    }
+    var paths = [];
+    var files = m.files || [];
+    for (var j = 0; j < files.length; j++) {
+      var bytes = new Uint8Array(files[j].bytes);
+      var name = sanComp(files[j].name) || 'pasted';
+      if (bytes.length > DROP_MAX) {
+        note(name + ': refused (' + bytes.length + ' bytes > ' + DROP_MAX + ' cap)');
+        continue;
+      }
+      var fin = uniqName(STAGE_DIR, name);   // same-paste dupes only (dir was wiped)
+      if (!fin) continue;
+      OS_COMMON.writeFile(kfs, STAGE_DIR + '/' + fin, bytes, 0o644);
+      paths.push(STAGE_DIR + '/' + fin);
+    }
+    if (paths.length) {
+      kernel.clipSet(2, new TextEncoder().encode('copy\n' + paths.join('\n') + '\n'));
+      clipFreshAt = Date.now();
+      note(paths.length + ' file(s) staged');
+    }
+  } catch (e) {
+    note('staging failed — ' + String((e && e.message) || e));
   }
 }
 

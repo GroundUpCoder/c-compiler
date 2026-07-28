@@ -133,6 +133,79 @@ try {
   const got2 = await page.evaluate(() => window.__osOut);
   check('OSK Ctrl+V tap pasted the fresh host text through the seam',
     got2.includes('OSK-PASTE-FRESH-79'), got2.slice(0, 300));
+
+  // ---- Host FILE paste (todos/0398 D6): the chord carve-out + staging ----
+  // Playwright cannot place a real FILE on the host clipboard, so the leg
+  // synthesizes what the browser would deliver: a keydown on #screen (the
+  // carve-out arms and — synthetic, so no native paste command — waits) and
+  // a ClipboardEvent whose DataTransfer carries a File + the Finder-style
+  // NAME text flavor. Everything downstream is the real product path:
+  // staging into /root/.hoststage, the fmt-2 slot publish, the FIFO-ordered
+  // forwarded chord, wm.c's desk_key KA_PASTE -> desk_paste -> fo_copy.
+  await page.evaluate(() => window.__osVtSwitch(2));
+  await page.mouse.click(rect.x + 700, rect.y + 600);   // focus the desktop
+  await page.waitForTimeout(300);   // timing subject: desktop focus settle (no marker)
+  await page.evaluate(() => {
+    const scr = document.getElementById('screen');
+    // The real chord forwards the Ctrl keydown normally (only the V is
+    // carved) — wm.c tracks modifiers from KEY EVENTS, so the Ctrl down
+    // must precede the forwarded V.
+    scr.dispatchEvent(new KeyboardEvent('keydown',
+      { code: 'ControlLeft', key: 'Control', ctrlKey: true, bubbles: true }));
+    scr.dispatchEvent(new KeyboardEvent('keydown',
+      { code: 'KeyV', key: 'v', ctrlKey: true, bubbles: true }));
+    const dt = new DataTransfer();
+    dt.items.add(new File(['host-paste-payload'], 'hostpaste.txt',
+                          { type: 'text/plain' }));
+    dt.setData('text/plain', 'hostpaste.txt');   // the Finder name shadow
+    document.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt }));
+  });
+  await page.waitForFunction(() => (window.__osPasteFiles || 0) >= 1,
+    { timeout: 10000, polling: 100 });
+  check('paste event with files took the staging path (__osPasteFiles)', true);
+  await page.evaluate(() => window.__osVtSwitch(1));
+  await page.keyboard.type('i=0; while [ $i -lt 20 ]; do [ -f "/root/Desktop/hostpaste.txt" ] && break; sleep 0.5; i=$((i+1)); done; cat "/root/Desktop/hostpaste.txt"; echo FP1""-DONE\r');
+  await waitOut('FP1-DONE', 30000);
+  check('the desktop pasted the staged host file (bytes intact)',
+    (await page.evaluate(() => window.__osOut)).includes('host-paste-payload'));
+  await page.evaluate(() => { window.__osOut = ''; });   // no stale-payload match
+  await page.keyboard.type('cat /root/.hoststage/hostpaste.txt; echo ST""-DONE\r');
+  await waitOut('ST-DONE', 15000);
+  check('the staging dir holds the pasted file',
+    (await page.evaluate(() => window.__osOut)).includes('host-paste-payload'));
+
+  // Paste-twice re-pastes (copy semantics; staging persists) — driven with
+  // NO paste event this time, so the ~50ms belt timer forwards the chord:
+  // one leg proves both the re-paste and the belt.
+  await page.evaluate(() => window.__osVtSwitch(2));
+  await page.mouse.click(rect.x + 700, rect.y + 600);
+  await page.waitForTimeout(300);   // timing subject: desktop focus settle
+  await page.evaluate(() => {
+    const scr = document.getElementById('screen');
+    scr.dispatchEvent(new KeyboardEvent('keydown',
+      { code: 'ControlLeft', key: 'Control', ctrlKey: true, bubbles: true }));
+    scr.dispatchEvent(new KeyboardEvent('keydown',
+      { code: 'KeyV', key: 'v', ctrlKey: true, bubbles: true }));
+  });
+  await page.waitForTimeout(300);   // timing subject: the ~50ms belt fires (no page marker)
+  await page.evaluate(() => {
+    document.getElementById('screen').dispatchEvent(new KeyboardEvent('keyup',
+      { code: 'ControlLeft', key: 'Control', bubbles: true }));
+  });
+  await page.evaluate(() => window.__osVtSwitch(1));
+  await page.keyboard.type('i=0; while [ $i -lt 20 ]; do [ -f "/root/Desktop/Copy of hostpaste.txt" ] && break; sleep 0.5; i=$((i+1)); done; ls "/root/Desktop/Copy of hostpaste.txt"; echo FP2""-DONE\r');
+  await waitOut('FP2-DONE', 30000);
+  check('paste-twice re-pastes via the belt timer ("Copy of" uniquifier)',
+    !(await page.evaluate(() => window.__osOut)).includes('No such file'));
+
+  // The shadow-text memo: Finder put the file NAME on the text flavor; a
+  // host read returning exactly that must NOT clobber the staged list.
+  await page.evaluate(() => navigator.clipboard.writeText('hostpaste.txt'));
+  const shadowPushes = await page.evaluate(() => window.__osClipFromHost || 0);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await new Promise((r) => setTimeout(r, 800));   // give a wrong push time to land
+  check('the shadow memo suppresses the file-name text read',
+    await page.evaluate((n) => (window.__osClipFromHost || 0) === n, shadowPushes));
 } catch (e) {
   S.fail(e);
 } finally {

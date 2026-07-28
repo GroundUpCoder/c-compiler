@@ -552,6 +552,8 @@ static int32_t sys_x0, sys_y0, sys_w0, sys_h0;  /* pre-mode rect (Esc revert) */
 #define SYS_MIN_W 96               /* size-mode floor (matches the tile grid) */
 #define SYS_MIN_H 96
 static void desk_delete(void);     /* likewise (0093 — desk_key's Del) */
+static void desk_clip(int cut);    /* likewise (0398 — desk_key's copy/cut) */
+static void desk_paste(void);      /* likewise (0398 — desk_key's paste) */
 static void menu_dismiss(void);    /* these three likewise (0096 —
                                       saver_show clears every popup
                                       before covering the screen) */
@@ -2734,17 +2736,25 @@ static void desk_key(int sym) {
         }
         return;
     }
-    /* select-all — Explorer's chord, resolved through the scheme table
-     * (^A / ⌘A, todos/0149; keys.h case-folds the shifted keysym) */
-    if (sym >= 32 && sym < 127 &&
-        key_action(KCTX_LIST,
-                   (mod_ctrl ? KM_CTRL : 0) | (mod_shift ? KM_SHIFT : 0) |
-                       (mod_gui ? KM_GUI : 0),
-                   sym) == KA_SELECT_ALL) {
-        desk_selmask = desk_n >= 64 ? ~0ULL : (1ULL << desk_n) - 1;
-        if (desk_n > 0 && desk_anchor < 0) desk_anchor = 0;
-        desk_dirty = 1;
-        return;
+    /* the LIST verbs, resolved through the scheme table (todos/0149;
+     * keys.h case-folds the shifted keysym): select-all (Explorer's ^A/⌘A)
+     * plus copy/cut/paste (todos/0398 — the same fileops clipboard the
+     * icon menu drives, which is also how a HOST file paste lands: the
+     * page stages the pasted files and forwards this very chord). */
+    if (sym >= 32 && sym < 127) {
+        int act = key_action(KCTX_LIST,
+                             (mod_ctrl ? KM_CTRL : 0) | (mod_shift ? KM_SHIFT : 0) |
+                                 (mod_gui ? KM_GUI : 0),
+                             sym);
+        if (act == KA_SELECT_ALL) {
+            desk_selmask = desk_n >= 64 ? ~0ULL : (1ULL << desk_n) - 1;
+            if (desk_n > 0 && desk_anchor < 0) desk_anchor = 0;
+            desk_dirty = 1;
+            return;
+        }
+        if (act == KA_COPY) { desk_clip(0); return; }
+        if (act == KA_CUT) { desk_clip(1); return; }
+        if (act == KA_PASTE) { desk_paste(); return; }
     }
     if (sym == SDLK_DELETE) { desk_delete(); return; }   /* to the bin (0093) */
     if (sym == SDLK_LEFT) desk_arrow(-1, 0);
