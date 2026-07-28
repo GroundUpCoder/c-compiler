@@ -166,12 +166,70 @@ diff -urN a/content/handlers/html/box_special.c b/content/handlers/html/box_spec
  		return false;
  
 diff -urN a/content/handlers/html/box_textarea.c b/content/handlers/html/box_textarea.c
---- a/content/handlers/html/box_textarea.c	2026-07-27 11:21:07
-+++ b/content/handlers/html/box_textarea.c	2026-07-27 12:08:00
-@@ -354,6 +354,21 @@
+--- a/content/handlers/html/box_textarea.c	2026-07-29 08:40:11
++++ b/content/handlers/html/box_textarea.c	2026-07-29 08:40:16
+@@ -153,6 +153,13 @@
+ 				.y1 = INT_MAX
+ 			};
+ 			union html_drag_owner drag_owner;
++
++			if (box == NULL) {
++				/* mid-re-conversion, before construction
++				 * re-bound this gadget to its new box: no
++				 * box to own the drag */
++				break;
++			}
+ 			drag_owner.textarea = box;
+ 
+ 			switch (msg->data.drag) {
+@@ -194,6 +201,13 @@
+ 			break;
+ 		}
+ 
++		if (box == NULL) {
++			/* Mid-re-conversion, before construction re-bound
++			 * this gadget to its new box: no coordinates to
++			 * offset by, and the swap repaints everything. */
++			break;
++		}
++
+ 		box_coords(box, &x, &y);
+ 
+ 		content__request_redraw((struct content *)html,
+@@ -227,6 +241,20 @@
+ 		if (html->bw == NULL)
+ 			break;
+ 
++		if (box == NULL) {
++			/* A caret claim DURING a live re-conversion, before
++			 * this gadget's new box exists (a click landing
++			 * mid-window, todos/0402): there is no box to focus
++			 * yet, so remember the claimant — widget recreation
++			 * consumes the claim and hands the focus over once
++			 * the new box is bound. */
++			if (html->reconverting &&
++			    msg->data.caret.type != TEXTAREA_CARET_HIDE) {
++				html->reconvert_focus_claim = gadget;
++			}
++			break;
++		}
++
+ 		if (msg->data.caret.type == TEXTAREA_CARET_HIDE) {
+ 			union html_focus_owner focus_owner;
+ 			focus_owner.textarea = box;
+@@ -273,6 +301,7 @@
+ 	bool disabled = false;
+ 	struct form_control *gadget = box->gadget;
+ 	const char *text;
++	int caret = -1;
+ 
+ 	assert(gadget != NULL);
+ 	assert(gadget->type == GADGET_TEXTAREA ||
+@@ -353,6 +382,34 @@
+ 	 * with background colour. */
  	ta_setup.selected_bg = fstyle.foreground;
  	ta_setup.selected_text = colour_to_bw_furthest(ta_setup.selected_bg);
- 
++
 +	/* A gadget SURVIVES re-boxing (it is re-found by DOM node) but its
 +	 * widget does not: the old textarea belonged to the box tree being
 +	 * replaced.  Drop it here rather than overwriting the pointers, or
@@ -183,14 +241,26 @@ diff -urN a/content/handlers/html/box_textarea.c b/content/handlers/html/box_tex
 +		gadget->data.text.initial = NULL;
 +	}
 +	if (gadget->data.text.ta != NULL) {
++		/* Carry the caret across the recreation: keys routed to
++		 * the recreated widget would otherwise insert at position
++		 * 0 (textarea_get_caret defaults an unset caret).  Only
++		 * the gadget that HOLDS the focus — or that claimed it
++		 * mid-window before this box existed — carries; a
++		 * lingering caret on an unfocused gadget must not steal
++		 * the focus when the restore below re-raises it. */
++		if ((html->focus_type == HTML_FOCUS_TEXTAREA &&
++		     html->focus_owner.textarea != NULL &&
++		     html->focus_owner.textarea->gadget == gadget) ||
++		    html->reconvert_focus_claim == gadget) {
++			caret = textarea_get_caret_char(gadget->data.text.ta);
++		}
 +		textarea_destroy(gadget->data.text.ta);
 +		gadget->data.text.ta = NULL;
 +	}
-+
+ 
  	/* Hand reference to dom text over to gadget */
  	gadget->data.text.initial = dom_text;
- 
-@@ -364,8 +379,16 @@
+@@ -364,8 +421,29 @@
  		return false;
  	}
  
@@ -206,6 +276,19 @@ diff -urN a/content/handlers/html/box_textarea.c b/content/handlers/html/box_tex
 +	}
 +	gadget->building = false;
  
++	if (caret >= 0) {
++		/* Restore the carried caret.  gadget->box is already the
++		 * NEW box (bound before this call), so the CARET_UPDATE
++		 * this raises re-takes the focus for this gadget — a
++		 * mid-window claim materialises here.  The position it
++		 * reports is pre-layout; html_reconvert_box_done re-fires
++		 * it after the reformat. */
++		if (html->reconvert_focus_claim == gadget) {
++			html->reconvert_focus_claim = NULL;
++		}
++		textarea_set_caret(gadget->data.text.ta, caret);
++	}
++
  	return true;
  }
 diff -urN a/content/handlers/html/dom_event.c b/content/handlers/html/dom_event.c
@@ -614,8 +697,8 @@ diff -urN a/content/handlers/html/forms.c b/content/handlers/html/forms.c
 +	}
  }
 diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
---- a/content/handlers/html/html.c	2026-07-27 11:21:07
-+++ b/content/handlers/html/html.c	2026-07-27 11:50:59
+--- a/content/handlers/html/html.c	2026-07-29 08:40:11
++++ b/content/handlers/html/html.c	2026-07-29 08:40:16
 @@ -61,6 +61,7 @@
  #include "html/private.h"
  #include "html/dom_event.h"
@@ -624,10 +707,14 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  #include "html/object.h"
  #include "html/html_save.h"
  #include "html/interaction.h"
-@@ -129,6 +130,95 @@
- 	return result;
- }
- 
+@@ -125,6 +126,95 @@
+ 	NSLOG(netsurf, INFO, "Dispatching '%*s' against %p",
+ 	      (int)dom_string_length(type), dom_string_data(type), target);
+ 	result = fire_dom_event(evt, target);
++	dom_event_unref(evt);
++	return result;
++}
++
 +/* Exported interface, see private.h */
 +bool fire_dom_mouse_event(dom_string *type, dom_node *target,
 +		bool bubbles, bool cancelable,
@@ -713,17 +800,14 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +	}
 +
 +	result = fire_dom_event((dom_event *) evt, target);
-+	dom_event_unref(evt);
-+	return result;
-+}
-+
- /* Exported interface, see html_internal.h */
- bool fire_dom_keyboard_event(dom_string *type, dom_node *target,
- 		bool bubbles, bool cancelable, uint32_t key)
-@@ -168,7 +258,33 @@
+ 	dom_event_unref(evt);
+ 	return result;
+ }
+@@ -167,8 +257,34 @@
+ 			break;
  		case NS_KEY_TEXT_END:
  			dom_key = dom_string_ref(corestring_dom_End);
- 			break;
++			break;
 +		/* Enter, Tab and Backspace had no case here at all, so they
 +		 * fell through to a NULL key string: `event.key` read null
 +		 * in script and a "submit on Enter" handler was impossible
@@ -741,7 +825,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +		case NS_KEY_DELETE_LEFT:
 +			dom_key = NETSURF_UI_EVENTS ?
 +				dom_string_ref(corestring_dom_Backspace) : NULL;
-+			break;
+ 			break;
 +		case NS_KEY_DELETE_RIGHT:
 +			dom_key = NETSURF_UI_EVENTS ?
 +				dom_string_ref(corestring_dom_Delete) : NULL;
@@ -754,10 +838,13 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  			dom_key = NULL;
  			break;
  		}
-@@ -415,6 +531,287 @@
- }
+@@ -412,9 +528,303 @@
+ 	}
  
- 
+ 	dom_node_unref(html);
++}
++
++
 +/**
 + * Clear the box-tree user data pointer on a DOM subtree.
 + *
@@ -797,9 +884,9 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +		}
 +		child = next;
 +	}
-+}
-+
-+
+ }
+ 
+ 
 +/**
 + * Completion callback for a live re-conversion's dom_to_box run.
 + *
@@ -809,6 +896,8 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 + */
 +static void html_reconvert_box_done(html_content *c, bool success)
 +{
++	dom_node *focus_node = NULL;
++
 +	c->box_conversion_context = NULL;
 +
 +	if ((success == false) || (c->aborted)) {
@@ -825,16 +914,37 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +		}
 +		c->bctx = c->reconvert_old_bctx;
 +		c->reconvert_old_bctx = NULL;
-+		if (c->reconvert_focus_node != NULL) {
-+			/* the boxes it would have been re-bound to never
-+			 * existed; the old tree is back but its focus was
-+			 * already surrendered */
-+			dom_node_unref(c->reconvert_focus_node);
-+			c->reconvert_focus_node = NULL;
++		if (c->focus_type == HTML_FOCUS_TEXTAREA) {
++			/* The owner may be a partial-new-tree box that died
++			 * with c->bctx just now, and the old tree's node
++			 * userdata was already cleared, so there is nothing
++			 * valid to re-bind to.  Drop to document focus (this
++			 * is the loud-logged failure path). */
++			c->focus_type = HTML_FOCUS_SELF;
++			c->focus_owner.self = true;
 +		}
++		c->reconvert_focus_claim = NULL;
 +		c->reconverting = false;
 +		return;
 +	}
++
++	/* Snapshot the focused text gadget's DOM node BEFORE the old tree
++	 * dies.  The owner box may be old-tree (kept alive and routing
++	 * input for the whole window) or already new-tree (a caret update
++	 * fired after construction re-bound the gadget); the gadget's node
++	 * names it either way.  Taking the snapshot HERE — not at the
++	 * window start — is what carries a focus change made DURING the
++	 * window (a click) across the swap instead of throwing it away. */
++	if ((c->focus_type == HTML_FOCUS_TEXTAREA) &&
++	    (c->focus_owner.textarea != NULL) &&
++	    (c->focus_owner.textarea->gadget != NULL) &&
++	    (c->focus_owner.textarea->gadget->node != NULL)) {
++		focus_node = dom_node_ref(c->focus_owner.textarea->gadget->node);
++		/* scrub the possibly-dying owner while reformat runs */
++		c->focus_type = HTML_FOCUS_SELF;
++		c->focus_owner.self = true;
++	}
++	c->reconvert_focus_claim = NULL;
 +
 +	/* the new tree took over c->layout inside convert_xml_to_box;
 +	 * everything reachable from the old tree dies here (box
@@ -854,34 +964,35 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +	content__request_redraw(&c->base, 0, 0,
 +				c->base.width, c->base.height);
 +
-+	/* Hand the caret back to whatever now boxes the focused node.  This
-+	 * runs AFTER the reformat because html_set_focus reports the caret's
-+	 * screen position, which is only known once layout has run.  A node
-+	 * that lost its box (removed, display:none) simply keeps the focus
-+	 * on the document, which is what a browser does anyway. */
-+	if (c->reconvert_focus_node != NULL) {
-+		struct box *fb = box_for_node(c->reconvert_focus_node);
++	/* Re-bind the focus to whatever now boxes the focused node.  This
++	 * runs AFTER the reformat because the CARET_UPDATE that the caret
++	 * restore raises reports the caret's screen position, which is only
++	 * known once layout has run.  A node that lost its box (removed,
++	 * display:none) simply keeps the focus on the document, which is
++	 * what a browser does anyway.  The re-bind is a DIRECT assignment,
++	 * not html_set_focus: the gadget never conceptually lost the focus,
++	 * so the blur/focus bookkeeping must not run. */
++	if (focus_node != NULL) {
++		struct box *fb = box_for_node(focus_node);
 +
 +		if ((fb != NULL) && (fb->gadget != NULL) &&
 +		    (fb->gadget->data.text.ta != NULL)) {
-+			union html_focus_owner fo;
++			int caret = textarea_get_caret_char(
++					fb->gadget->data.text.ta);
 +
-+			/* Claim the focus with the caret HIDDEN first: only
-+			 * the textarea knows where the caret actually is, and
-+			 * it reports that through its own CARET_UPDATE
-+			 * callback — which lands on html_set_focus again with
-+			 * real coordinates.  Setting a position here would
-+			 * just be a zero-height guess for it to correct. */
-+			fo.textarea = fb;
-+			html_set_focus(c, HTML_FOCUS_TEXTAREA, fo,
-+				       true, 0, 0, 0, NULL);
-+			if (c->reconvert_focus_caret >= 0) {
++			c->focus_type = HTML_FOCUS_TEXTAREA;
++			c->focus_owner.textarea = fb;
++			/* The widget carried its caret across recreation
++			 * (box_textarea_create_textarea), and keys routed
++			 * mid-window may have advanced it, so the LIVE value
++			 * is authoritative.  Re-firing it here reports the
++			 * post-layout position through CARET_UPDATE. */
++			if (caret >= 0) {
 +				textarea_set_caret(fb->gadget->data.text.ta,
-+						   c->reconvert_focus_caret);
++						   caret);
 +			}
 +		}
-+		dom_node_unref(c->reconvert_focus_node);
-+		c->reconvert_focus_node = NULL;
++		dom_node_unref(focus_node);
 +	}
 +
 +	c->reconverting = false;
@@ -924,35 +1035,24 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +		c->visible_select_menu = NULL;
 +	}
 +
-+	/* Remember which text gadget holds the caret, so the new tree can be
-+	 * handed the focus back: the focus owner is a box pointer, and a
-+	 * page that mutates the DOM while the user types would otherwise
-+	 * swallow every keystroke after the first mutation. */
-+	if (c->reconvert_focus_node != NULL) {
-+		dom_node_unref(c->reconvert_focus_node);
-+		c->reconvert_focus_node = NULL;
-+	}
-+	c->reconvert_focus_caret = -1;
-+	if ((c->focus_type == HTML_FOCUS_TEXTAREA) &&
-+	    (c->focus_owner.textarea != NULL) &&
-+	    (c->focus_owner.textarea->gadget != NULL) &&
-+	    (c->focus_owner.textarea->gadget->node != NULL)) {
-+		struct form_control *fc = c->focus_owner.textarea->gadget;
-+
-+		c->reconvert_focus_node = dom_node_ref(fc->node);
-+		if (fc->data.text.ta != NULL) {
-+			c->reconvert_focus_caret =
-+				textarea_get_caret_char(fc->data.text.ta);
-+		}
-+	}
-+
-+	/* drop interaction state that can point into the box tree */
++	/* Drop interaction state that can point into the box tree — EXCEPT
++	 * a text gadget's focus.  The focus is the input routing table:
++	 * surrendering it here silently discarded every printable key typed
++	 * during the window (todos/0386), while the old box it names stays
++	 * alive serving input until the swap BY DESIGN.  It stays valid for
++	 * the whole build-then-swap interval and html_reconvert_box_done
++	 * re-binds it to the new tree at the swap.  Content focus (an
++	 * embedded object) cannot be kept: the objects themselves are freed
++	 * below and refetched by construction. */
 +	c->drag_type = HTML_DRAG_NONE;
 +	c->drag_owner.no_owner = true;
 +	c->selection_type = HTML_SELECTION_NONE;
 +	c->selection_owner.none = true;
-+	c->focus_type = HTML_FOCUS_SELF;
-+	c->focus_owner.self = true;
++	if (c->focus_type != HTML_FOCUS_TEXTAREA) {
++		c->focus_type = HTML_FOCUS_SELF;
++		c->focus_owner.self = true;
++	}
++	c->reconvert_focus_claim = NULL;
 +
 +	/* fully reset the selection object: selection_reinit (run later by
 +	 * reformat) clamps indices but leaves a live drag_state, which
@@ -1042,19 +1142,18 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  static void
  html_document_user_data_handler(dom_node_operation operation,
  				dom_string *key, void *data,
-@@ -475,6 +872,11 @@
+@@ -475,6 +885,10 @@
  	c->title = NULL;
  	c->bctx = NULL;
  	c->layout = NULL;
 +	c->reconvert_old_bctx = NULL;
 +	c->reconverting = false;
 +	c->reconvert_pending = false;
-+	c->reconvert_focus_node = NULL;
-+	c->reconvert_focus_caret = -1;
++	c->reconvert_focus_claim = NULL;
  	c->background_colour = NS_TRANSPARENT;
  	c->stylesheet_count = 0;
  	c->stylesheets = NULL;
-@@ -484,6 +886,7 @@
+@@ -484,6 +898,7 @@
  	c->num_objects = 0;
  	c->object_list = NULL;
  	c->forms = NULL;
@@ -1062,7 +1161,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  	c->imagemaps = NULL;
  	c->bw = NULL;
  	c->frameset = NULL;
-@@ -1123,14 +1526,25 @@
+@@ -1123,14 +1538,25 @@
  /**
   * Redraw a box.
   *
@@ -1089,7 +1188,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  	box_coords(box, &x, &y);
  
  	content__request_redraw((struct content *)html, x, y,
-@@ -1193,6 +1607,13 @@
+@@ -1193,6 +1619,13 @@
  		 */
  		talloc_free(htmlc->bctx);
  	}
@@ -1103,21 +1202,18 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  }
  
  /**
-@@ -1206,6 +1627,13 @@
+@@ -1205,6 +1638,10 @@
+ 	struct form *f, *g;
  
  	NSLOG(netsurf, INFO, "content %p", c);
- 
++
 +	/* Cancel any coalesced live re-conversion pass */
 +	guit->misc->schedule(-1, html__reconvert, html);
-+	if (html->reconvert_focus_node != NULL) {
-+		dom_node_unref(html->reconvert_focus_node);
-+		html->reconvert_focus_node = NULL;
-+	}
-+
++	html->reconvert_focus_claim = NULL;
+ 
  	/* If we're still converting a layout, cancel it */
  	if (html->box_conversion_context != NULL) {
- 		if (cancel_dom_to_box(html->box_conversion_context) != NSERROR_OK) {
-@@ -1221,6 +1649,7 @@
+@@ -1221,6 +1658,7 @@
  
  		form_free(f);
  	}
@@ -1125,10 +1221,11 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  
  	imagemap_destroy(html);
  
-@@ -1539,6 +1968,36 @@
+@@ -1538,7 +1976,37 @@
+ 	struct box *next;
  	int box_x = 0, box_y = 0;
  	bool handled_scroll = false;
- 
++
 +	/* A cancelable DOM `wheel` first: this is the html content's only
 +	 * wheel entry point, so it is where the event belongs, and a
 +	 * handler calling preventDefault() reports the wheel as HANDLED so
@@ -1150,7 +1247,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +		pos.page_y = y;
 +		pos.client_x = x - sx;
 +		pos.client_y = y - sy;
-+
+ 
 +		if ((node != NULL) &&
 +		    (fire_dom_wheel_event(corestring_dom_wheel, node,
 +				true, true, &pos, 0, scrx, scry) == false)) {
@@ -1162,7 +1259,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  	/* TODO: invert order; visit deepest box first */
  
  	while ((next = box_at_point(&html->unit_len_ctx, box, x, y,
-@@ -2353,6 +2812,9 @@
+@@ -2353,6 +2821,9 @@
  	.mouse_track = html_mouse_track,
  	.mouse_action = html_mouse_action,
  	.keypress = html_keypress,
@@ -1769,8 +1866,8 @@ diff -urN a/content/handlers/html/interaction.h b/content/handlers/html/interact
  void html_overflow_scroll_callback(void *client_data,
  		struct scrollbar_msg_data *scrollbar_data);
 diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
---- a/content/handlers/html/private.h	2026-07-27 11:21:07
-+++ b/content/handlers/html/private.h	2026-07-27 12:05:58
+--- a/content/handlers/html/private.h	2026-07-29 08:40:11
++++ b/content/handlers/html/private.h	2026-07-29 08:40:16
 @@ -27,6 +27,7 @@
  #include <dom/bindings/hubbub/parser.h>
  
@@ -1779,7 +1876,7 @@ diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
  #include "content/content_protected.h"
  #include "content/handlers/css/utils.h"
  
-@@ -138,6 +139,23 @@
+@@ -138,6 +139,25 @@
  	void *box_conversion_context;
  	/** Box tree, or NULL. */
  	struct box *layout;
@@ -1791,19 +1888,21 @@ diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
 +	bool reconverting;
 +	/** Mutations arrived while a re-conversion was in progress */
 +	bool reconvert_pending;
-+	/** DOM node of the text gadget that held the caret when a live
-+	 * re-conversion began, so focus can be handed back to its NEW box
-+	 * once the swap lands (own reference, NULL if nothing was focused).
-+	 * Focus points INTO the box tree exactly like the selection and the
-+	 * gadget back-pointers do, so it has to be re-bound the same way —
-+	 * otherwise typing dies at the first mutation the page makes. */
-+	struct dom_node *reconvert_focus_node;
-+	/** Caret character index to restore alongside it */
-+	int reconvert_focus_caret;
++	/** Text gadget that claimed the caret DURING a live re-conversion,
++	 * before its new box existed (a click landing mid-window):
++	 * recorded by box_textarea_callback, honoured when construction
++	 * recreates that gadget's widget.  Gadgets outlive the window (the
++	 * forms own them), so the pointer cannot dangle inside it.  NULL
++	 * outside a re-conversion.  Unlike drag and selection, the FOCUS
++	 * itself is NOT surrendered for the window: it is the input
++	 * routing table, the old box it names stays alive serving input
++	 * until the swap by design, and html_reconvert_box_done re-binds
++	 * it to the new tree at the swap. */
++	struct form_control *reconvert_focus_claim;
  	/** Document background colour. */
  	colour background_colour;
  
-@@ -170,6 +188,11 @@
+@@ -170,6 +190,11 @@
  	struct content_html_object *object_list;
  	/** Forms, in reverse order to document. */
  	struct form *forms;
@@ -1815,10 +1914,11 @@ diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
  	/** Hash table of imagemaps. */
  	struct imagemap **imagemaps;
  
-@@ -186,6 +209,25 @@
+@@ -185,6 +210,25 @@
+ 	/** Content of type CONTENT_HTML containing this, or NULL if not an
  	 * object within a page. */
  	struct html_content *page;
- 
++
 +	/** The last DOM `mousedown` had preventDefault() called on it, so
 +	 * the native drag it would otherwise have started (page scroll,
 +	 * text selection) must not happen.  This is the standard browser
@@ -1837,11 +1937,10 @@ diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
 +	 * they are — without it, the release that ends a drag is
 +	 * indistinguishable from an ordinary hover. */
 +	bool mouse_pressed;
-+
+ 
  	/** Current drag type */
  	html_drag_type drag_type;
- 	/** Widget capturing all mouse events */
-@@ -238,6 +280,17 @@
+@@ -238,6 +282,17 @@
  
  
  /**
@@ -1859,7 +1958,7 @@ diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
   * Test if an HTML content conversion can begin
   *
   * \param htmlc		html content to test
-@@ -316,10 +369,32 @@
+@@ -316,10 +371,32 @@
  
  /* in html/forms.c */
  struct form *html_forms_get_forms(const char *docenc, dom_html_document *doc);
@@ -1893,12 +1992,10 @@ diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
  /* in html/css_fetcher.c */
  /**
   * Register the fetcher for the pseudo x-ns-css scheme.
-@@ -338,6 +413,76 @@
-  */
- bool fire_generic_dom_event(dom_string *type, dom_node *target,
+@@ -340,6 +417,76 @@
  		    bool bubbles, bool cancelable);
-+
-+/**
+ 
+ /**
 + * Modifier keys held when a UI event was generated.
 + *
 + * The core's browser_mouse_state has MOD_1..MOD_4 with a per-front-end
@@ -1967,9 +2064,11 @@ diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
 +		bool bubbles, bool cancelable,
 +		const struct dom_mouse_event_pos *pos,
 +		unsigned int mods, int delta_x, int delta_y);
- 
- /**
++
++/**
   * Construct a keyboard event and fire it at the DOM
+  */
+ bool fire_dom_keyboard_event(dom_string *type, dom_node *target,
 diff -urN a/content/handlers/image/png.c b/content/handlers/image/png.c
 --- a/content/handlers/image/png.c	2026-07-27 11:21:07
 +++ b/content/handlers/image/png.c	2026-07-27 11:12:32
