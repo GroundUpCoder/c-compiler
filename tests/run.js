@@ -126,16 +126,35 @@ const RULES = [
     CITED.ok ? `LIABILITIES.md cites ${CITED.files.length} file(s)` : `LIABILITIES.md UNPARSABLE: ${CITED.error}`],
 
   // Core compiler — the whole language surface + every consumer of it.
-  // (host: the single-file .js/.html emitters live in compiler.js — CD15.)
-  // NOT SELECTED YET: any run.py category but `unit` — so the real-world-C
-  // corpus (micropython, lua, sqlite, zlib, projects, …) is ungated by a
-  // compiler change, and todos/0356 is the firing example: its miscompile was
-  // caught ONLY by micropython-upstream, with `unit` green. Funded by
-  // todos/0362.
-  [/^compiler\.js$/, ['unit', 'kernel', 'blockfs', 'host'], 'the compiler drives every wasm binary + the single-file emit'],
+  // (host: the single-file .js/.html emitters live in compiler.js — CD15;
+  // blockfs: test_e2e.js compiles C.) EVERY run.py category is in the closure
+  // (todos/0362): each one either compiles with compiler.js or runs its
+  // output — verified per category, including disw (tests/disw/compiler/
+  // build.py feeds it compiler output) and ast (two files execute under
+  // host.js what compiler.js emitted). The firing example is todos/0356: a
+  // promoteExprType miscompile caught ONLY by micropython-upstream, with
+  // `unit` green — the old four-suite list would have reported that change
+  // as covered. `sweep` is the bake-input radius: compiler.js recompiles
+  // every seeded binary (newestBakeInput lists it first), and a rendering
+  // break in the re-baked blob is invisible to the compositor-less headless
+  // suites (the vendor-block axis-1 rule). Nothing is deliberately excluded
+  // — `todos` joins via CITED_RE when the register cites compiler.js, and
+  // gates nothing compiled. Guard: tests/host/test_diff_rules.js.
+  [/^compiler\.js$/, ['unit', 'kernel', 'blockfs', 'host', 'sweep', ...PY_CATEGORIES],
+    'the compiler drives every wasm binary — every run.py category, the OS suites, and the re-baked blob the sweep boots'],
 
-  // host.js carries BOTH BlockFS/MountFS AND the per-process SDL/fd runtime.
-  [/^host\.js$/, ['blockfs', 'kernel', 'sweep', 'host'], 'BlockFS + the process runtime live here'],
+  // host.js carries BOTH BlockFS/MountFS AND the per-process SDL/fd runtime —
+  // and it is what run.py and run-unit.js execute every compiled wasm under
+  // (run.py's HOST_JS, run-unit.js's runModule; todos/0362). Deliberately
+  // excluded, the only two categories that never execute wasm: `disw` (a
+  // clang-built native disassembler; its build.py inputs don't run) and
+  // `sourcemap` (compiles, then verifies the map with its own verify.js).
+  // Guard: tests/host/test_diff_rules.js pins both the inclusions and these
+  // two exclusions.
+  [/^host\.js$/,
+    ['unit', 'blockfs', 'kernel', 'sweep', 'host',
+     ...PY_CATEGORIES.filter(c => c !== 'disw' && c !== 'sourcemap')],
+    'BlockFS + the process runtime live here; every run.py category but disw/sourcemap (neither executes wasm) runs under it'],
 
   // The owner-side kernel (process table, fds, WM/audio server).
   [/^kernel\.js$/, ['kernel', 'sweep'], 'the process control plane'],
@@ -258,7 +277,7 @@ const RULES = [
   [/^tests\/host\//, ['host'], null],
   [/^tests\/todos\//, ['todos'], null],
   [/^tests\/serve\//, ['host'], null],
-  [/^tests\/run\.js$/, [], 'the dispatcher itself — no suite of its own'],
+  [/^tests\/run\.js$/, ['host'], 'the dispatcher itself — its RULES-closure guard (test_diff_rules.js) is a host test'],
   [/^tests\/bench\//, [], 'informational perf bench (todos/0186) — opt-in, ROM-gated, never a gating suite'],
   [/^tests\/flake\.js$/, [], 'the flake-gate orchestrator (todos/0147) — wraps other suites, no suite of its own'],
   [/^tests\/run\.py$/, PY_CATEGORIES.concat(['unit', 'blockfs']), 'the python runner backs every py category'],
@@ -710,4 +729,10 @@ Suites: ${ALL_SUITES.join(', ')}, all
 `);
 }
 
-main();
+if (require.main === module) {
+  main();
+} else {
+  // Required as a module (tests/host/test_diff_rules.js): expose the rule
+  // table + the planner so the RULES closure is testable without a git diff.
+  module.exports = { SUITES, PY_CATEGORIES, RULES, IGNORE, FORCE, planFromDiff };
+}

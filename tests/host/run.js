@@ -37,6 +37,7 @@ var tests = [
   ['test_suite_record.js', []],          // a split suite's summary records its scope + merges, never clobbers (0339)
   ['test_sleep_clamp.js', []],           // sleep primitives request EXACTLY the asked duration — no clock in the assertion (0361)
   ['test_bakeinput_sources.js', []],     // the 0082 closure covers out-of-dir sources/includes, not just `deps` (0354)
+  ['test_diff_rules.js', []],            // compiler.js/host.js diff rules select the run.py corpus; exclusions pinned (0362)
   ['../serve/test_first_run.js', []],    // `node serve.js .` prints a URL that 200s (COOP/COEP)
   ['../serve/test_clang_overlay.js', []],// `serve.js --clang` overlay on-ramp: fold-in vs sibling-absent (0141)
   ['../serve/test_clang_base_purity.js', []], // CLANG-CPP-EPIC II guardrail (a): NO -clang name in the base set

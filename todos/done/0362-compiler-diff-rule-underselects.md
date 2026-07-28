@@ -1,6 +1,6 @@
 # 0362 — tests/run.js's compiler.js diff rule under-selects: no run.py category is gated by a compiler change
 
-- **Status**: open
+- **Status**: done
 - **Priority**: P0 — a shipped gate (`tests/run.js --diff`, todos/0084) reports
   a green that does not mean what it says. Filed per the "any bug found from
   anywhere is P0" rule; demote if the queue disagrees.
