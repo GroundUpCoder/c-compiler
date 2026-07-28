@@ -199,11 +199,11 @@ async function main() {
     /Undefined symbol/.test(engine) && /e2rc=[^0]/.test(engine), engine);
 
   /* ---- session B: the minimal image + gucman install win32 ---- */
-  ensurePackages(['win32']);
+  const repo = ensurePackages(['win32']);
   const MIN = ensureMinimalImage();
   const { dir: tmpB, image: minImage } = freshImage('os-ccwin32-min-');
   fs.copyFileSync(MIN, minImage);   // copy mtime = now -> input-fresh at boot
-  const goodPort = await startServer(path.join(ROOT, 'dist', 'packages'));
+  const goodPort = await startServer(repo.dir);
 
   const scriptB = [
     ...writeApp('/root/hellowin.c', HELLOWIN_C),

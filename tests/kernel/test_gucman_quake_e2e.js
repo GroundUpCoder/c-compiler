@@ -44,7 +44,8 @@ function check(name, cond, extra) {
 }
 
 async function main() {
-  const idx = ensurePackages(['quake']);
+  const repo = ensurePackages(['quake']);
+  const idx = repo.index;
   const MIN = ensureMinimalImage();
   const { dir: tmp, image } = freshImage('os-gucman-quake-');
   fs.copyFileSync(MIN, image);   // copy mtime = now -> input-fresh at boot
@@ -52,7 +53,7 @@ async function main() {
   const pak = fs.readFileSync(path.join(ROOT, 'vendor', 'quake', 'data', 'id1', 'pak0.pak'));
   const pakSha = crypto.createHash('sha256').update(pak).digest('hex');
 
-  const port = await startServer(path.join(ROOT, 'dist', 'packages'));
+  const port = await startServer(repo.dir);
   console.log(`[gucman-quake] repo :${port} (payload ${(idx.packages.quake.payload.size / (1 << 20)).toFixed(1)} MiB)`);
 
   const script = [
