@@ -92,15 +92,42 @@ is a snapshot too.**
 If a closed ticket or log is genuinely misleading without a pointer, add a
 **one-line dated note** rather than editing the original claim.
 
-⚠️ `~/git/netguc/cc/…`-style absolute paths: **`python-clang` is NOT prunable
-from the worktree set** — `ccjs-build.sh` hardcodes a path into it. Check that
-script before assuming a rename is source-only.
+❌ **A carried warning said *"`python-clang` is NOT prunable — `ccjs-build.sh`
+hardcodes a path into it."* It is FALSE and I verified it** (master cont-122):
+`tools/ccjs-build.sh` does not exist in either repo; the real script is
+`logs/2026-07-27/python-clang-ccjs-build.sh` and what it hardcodes is
+**`$HOME/build/python-clang`**, a **build root** (still on disk), not the
+worktree. `todos/done/0341` itself records that this instance *"was NOT
+verified."* **Do not let it constrain this rename.** (The worktree that IS
+genuinely hardcoded is `bench-2x2`, via `tools/bench2x2/`.)
+
+## 🔴 jku RULING — **CLEAN BREAK. NO ALIAS.** (2026-07-28, email `0mjzuSp5Xyuq`)
+
+Asked to choose, and told the rename is *"cheap now, a migration once
+installed"*, jku replied in full: **"I want clean break."**
+
+That is a THIRD instruction on this package name, and it answers the one
+question this ticket had deliberately left open. **Rename outright:**
+
+- **No compatibility alias.** Not a temporary one, not a "just until clients
+  catch up" one, not a silent one. The escape hatch this ticket previously
+  offered — *"if analysis forces a transition alias…"* — is **CLOSED by jku.
+  Do not reopen it, and do not propose it back.**
+- **No dual-publish.** The index carries `cpython-clang` and not
+  `python-clang`.
+- ⚠️ **If analysis at pickup discovers the clean break is genuinely NOT free**
+  (i.e. the zero-installs assumption has expired — someone has installed
+  `python-clang` since image 182 went live), that is **new information jku has
+  not seen**, and it is the ONE case where you go back to him rather than
+  quietly reintroducing an alias. **Surface it; do not decide it.**
+
+⭐ **This is why the timing section above is load-bearing rather than
+housekeeping:** a clean break is only cheap while the installed set is empty.
 
 ## Acceptance
 
-- `gucman install cpython-clang` works end to end on a fresh image; the old name
-  is gone from the index — or, if analysis genuinely forces a transition alias,
-  the alias is **explicit, dated, and ticketed for removal**, never silent.
+- `gucman install cpython-clang` works end to end on a fresh image, and **the
+  old name is GONE from the index.** 🔴 **NO ALIAS. jku RULED IT — see below.**
 - A fresh boot still satisfies **`PYIMPL=0 / PYVERBS=1 / PYRC=127`**, and the
   failure message now names **`cpython-clang`**.
 - `grep -rn "python-clang" --exclude-dir=logs --exclude-dir=done` returns only
