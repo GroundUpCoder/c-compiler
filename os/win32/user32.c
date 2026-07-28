@@ -2119,6 +2119,15 @@ static void tree_dump(HWND h, int depth, StrBuf *sb) {
              hwnd_shown(h), hwnd_able(h),
              (h->top->focus == h) ? " focus" : "", shown);
     sb_add(sb, line);
+    /* AQM seam (todos/0370): an item-bearing control splices its items as
+     * pre-indented lines under its win line — the menu_dump shape, cut at
+     * the user32<->any-control boundary (win32_internal.h). The 160-byte
+     * text field above cannot carry a whole catalog; these lines can. */
+    AqmDump ad = { depth + 1, NULL };
+    if (SendMessage(h, AQM_DUMPCHILDREN, 0, (LPARAM)&ad) && ad.out) {
+        sb_add(sb, ad.out);
+        free(ad.out);
+    }
     if (is_top(h) && h->menu) menu_dump(MENU_T(h->menu), depth + 1, sb);
     for (HWND c = h->child; c; c = c->next) tree_dump(c, depth + 1, sb);
 }
@@ -2189,6 +2198,37 @@ static HWND agent_find_ex(const char *label, int wantEnabled) {
 
 static HWND agent_find(const char *label) { return agent_find_ex(label, 0); }
 
+/* AQM row resolution (todos/0370): offered AFTER window text and menu
+ * items both miss — an item-bearing control (LISTBOX, SysListView32,
+ * SysHeader32, a future treeview) matches the label against its own items
+ * (win32_internal.h AqmFind contract). act=1 performs click semantics and
+ * requires an enabled control; act=0 (the wait-label/text poll path) is
+ * side-effect-free. Returns the owning control; *text (malloc'd, caller
+ * frees) is the item's agent text. */
+typedef struct { const char *label; int act; char *text; HWND hit; } RowFind;
+
+static void rowfind_walk(HWND h, RowFind *rf) {
+    if (rf->hit) return;
+    if (hwnd_shown(h) && (!rf->act || hwnd_able(h))) {
+        AqmFind f = { rf->label, rf->act, NULL };
+        if (SendMessage(h, AQM_FINDLABEL, 0, (LPARAM)&f)) {
+            rf->hit = h;
+            rf->text = f.text;
+            return;
+        }
+    }
+    for (HWND c = h->child; c; c = c->next) rowfind_walk(c, rf);
+}
+
+static HWND agent_find_row(const char *label, int act, char **text) {
+    RowFind rf = { label, act, NULL, NULL };
+    for (int i = 0; i < g_nTops; i++)
+        if (g_tops[i]) rowfind_walk(g_tops[i], &rf);
+    if (text) *text = rf.text;
+    else free(rf.text);
+    return rf.hit;
+}
+
 static void agent_serve(int cfd) {
     uint32_t type, plen;
     if (aq_next(cfd, &type, &plen) != 0 || plen > 65536) return;
@@ -2233,6 +2273,10 @@ static void agent_serve(int cfd) {
                 }
             }
         }
+        if (!h && agent_find_row(payload, 1, NULL)) {   /* control items (0370) */
+            aq_send(cfd, AQ_R_OK, NULL, 0);
+            goto click_done;
+        }
         if (!h || !hwnd_shown(h) || !hwnd_able(h)) { aq_send(cfd, AQ_R_ERR, NULL, 0); break; }
         if (h->cls && ci_eq(h->cls->name, "BUTTON")) {
             PostMessage(h, BM_CLICK, 0, 0);
@@ -2266,6 +2310,15 @@ static void agent_serve(int cfd) {
                 aq_send(cfd, AQ_R_TEXT, stripped, (uint32_t)strlen(stripped));
                 break;
             }
+            /* Control items resolve last (0370): side-effect-free — this
+             * backs `wmctl wait label/text` polls on a row label. */
+            char *rowText = NULL;
+            if (agent_find_row(payload, 0, &rowText) && rowText) {
+                aq_send(cfd, AQ_R_TEXT, rowText, (uint32_t)strlen(rowText));
+                free(rowText);
+                break;
+            }
+            free(rowText);
             aq_send(cfd, AQ_R_ERR, NULL, 0);
             break;
         }
@@ -4810,6 +4863,62 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         out[n] = 0;
         return n;
+    }
+    case AQM_DUMPCHILDREN: {
+        /* AQM seam (todos/0370): rows as their own `wmctl tree` lines —
+         * the WM_GETTEXT join above is truncated to 160 bytes by
+         * tree_dump's text field, so a long listing was invisible there. */
+        AqmDump *d = (AqmDump *)lp;
+        if (!d || !st->n) return 0;
+        size_t cap = 0, n = 0;
+        char *out = NULL;
+        for (int i = 0; i < st->n; i++) {
+            int selected = st->multi ? (st->marks && st->marks[i]) : (i == st->sel);
+            char one[512];
+            int ln = snprintf(one, sizeof one, "%*slbrow i=%d%s text='%s'\n",
+                              d->depth * 2, "", i, selected ? " sel" : "",
+                              st->items[i]);
+            if (n + (size_t)ln + 1 > cap) {
+                size_t nc = cap ? cap * 2 : 4096;
+                while (nc < n + (size_t)ln + 1) nc *= 2;
+                char *nb = (char *)realloc(out, nc);
+                if (!nb) { free(out); return 0; }
+                out = nb;
+                cap = nc;
+            }
+            memcpy(out + n, one, (size_t)ln + 1);
+            n += (size_t)ln;
+        }
+        d->out = out;
+        return out != NULL;
+    }
+    case AQM_FINDLABEL: {
+        /* AQM seam (todos/0370): a row is a click/label target by its item
+         * text — before this, `wmctl click <row>` had no path to a LISTBOX
+         * row and e2es drove selection by HOME + N*VK_DOWN ordinals. */
+        AqmFind *f = (AqmFind *)lp;
+        if (!f) return 0;
+        for (int i = 0; i < st->n; i++) {
+            char stripped[256];
+            strip_amp(st->items[i], stripped, sizeof stripped);
+            if (strcmp(stripped, f->label) != 0) continue;
+            f->text = (char *)malloc(strlen(st->items[i]) + 1);
+            if (f->text) strcpy(f->text, st->items[i]);
+            if (f->act) {                        /* click semantics: select */
+                SetFocus(h);
+                if (st->multi) {
+                    lb_clear_marks(st);
+                    if (st->marks) st->marks[i] = 1;
+                    st->anchor = i;
+                }
+                st->sel = i;
+                lb_show_sel(h, st);
+                InvalidateRect(h, NULL, TRUE);
+                lb_notify(h, LBN_SELCHANGE);
+            }
+            return 1;
+        }
+        return 0;
     }
     case WM_SETFOCUS:
     case WM_KILLFOCUS:

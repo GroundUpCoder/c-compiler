@@ -420,6 +420,35 @@ name, Enter saves (`test_notepad_e2e.js` keyboard leg). IsDialogMessageW is
 top-level-generic, not `#32770`-coupled — it walks `dlg->child` and scans
 for the BS_DEFPUSHBUTTON style.
 
+0370 (SysListView32 + SysHeader32 + the AQM agent seam, 2026-07-28;
+design `todos/SOFTWARE-NATIVE.md` §3) gave comctl32 its first REAL
+classes: `os/win32/listview.c` (one facility per TU, the menucore
+precedent; public user32/gdi32 APIs only, state on GWLP_USERDATA)
+implements the report-view listview — columns owned by a real,
+separately-registered SysHeader32 child (BTNFACE bevel segments,
+divider drag-resize with live HDN_ITEMCHANGED, HDN_ITEMCLICK),
+single+extended selection (the LISTBOX 0106 marks/anchor semantics),
+LVM_SORTITEMS with state travel, keyboard/wheel, an embedded SCROLLBAR
+child, WM_NOTIFY (LVN_ITEMCHANGED/COLUMNCLICK, NM_CLICK/DBLCLK/RCLICK),
+A/W entries, fail-loud on unimplemented LVM_*/HDM_* and non-report view
+styles. `InitCommonControls[Ex(ICC_LISTVIEW_CLASSES)]` registers them
+(comctl32.c stopped being a no-op). **The AQM seam is the load-bearing
+part** (win32_internal.h): real controls hold items internally, which
+would break the agent-tree pillar, so two veneer-internal messages cut
+at the user32↔any-control boundary — `AQM_DUMPCHILDREN` (tree_dump
+splices a control's items as pre-indented `lvrow`/`hdcol`/`lbrow`
+lines, the menu_dump shape / MSAA-children idea) and `AQM_FINDLABEL`
+(agent_find offers the label to each shown control after HWNDs and
+menus miss; act=0 is side-effect-free for `wait label/text` polls,
+act=1 is click semantics). LISTBOX answers both, closing a confirmed
+pre-0370 gap (rows were gettext-visible but not click/label targets —
+fileman's e2e drove rows by HOME+N×DOWN ordinals for exactly that
+reason); a future SysTreeView32 (`0372`) slots in with zero user32
+change; `wmctl` needed no change. Horizontal scroll is the one noted
+narrowing → `todos/0384`. Acceptance: `ctldemo listview` +
+`ctldemo lvtest` (57 synchronous checks) +
+`tests/kernel/test_listview_e2e.js`.
+
 ## Corpus status (0060 landed 2026-07-10)
 
 `tools/win32ports.js` compile-tests every target in `os/win32/ports.json`
