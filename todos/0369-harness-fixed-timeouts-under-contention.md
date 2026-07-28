@@ -57,11 +57,61 @@ That re-run is step 1 below.
    whole suites (`0342`), so nothing today stops a `kernel` run from racing three
    lanes.**
 
+## ✅ STEP 1 IS DONE — master cont-122, 2026-07-28. The number changes the ticket.
+
+Re-run on a quiet box (heavy lock held by me so nothing could race it; no other
+suite process on the machine; 74% memory free, 38.7 GB disk):
+
+```
+node tests/kernel/run.js --filter=test_os_boot     # 2026-07-28T02:46:41Z
+ok   test_os_boot.js  719.1s
+kernel suite: 1 passed, 0 failed, 123 carried  (719.1s)  [1/124 selected, 124/124 recorded]
+```
+
+**`test_os_boot.js` PASSES, in 719.1 s, against a 900 s cap.** So occurrence 2
+was load — **but the interesting part is the margin, not the verdict.**
+
+| fact | value |
+|---|---|
+| `test_os_boot.js`, idle box | **719.1 s** |
+| harness cap for that file | **900 s** |
+| headroom | **181 s — 20%** |
+| next-heaviest file (`test_seed_e2e.js`) | 304.3 s — **this test is 2.4×** it |
+| full suite, quiet (00:56Z) | 993 s |
+| full suite, 3 lanes running (01:50Z) | **1,179 s — 19% slower** |
+
+🔴 **A 19% suite-wide slowdown against a 20% headroom is a coin flip.** The
+harness does not have a timeout that occasionally loses to load; it has a test
+sitting one bad minute away from red *at all times*.
+
+🔴 **CORRECTION to cont-121's reasoning in this ticket, from measurement.** The
+paragraph above argued: *"the whole suite [ran] 993 s for 124 files — so this
+test was nowhere near 900 s."* **That inference is FALSE.** With `-j 2`, the
+719 s file runs alongside the other 123; the suite total says nothing about the
+individual file. The test was always near the cap. The conclusion ("it was
+load") survives; the mechanism offered for it did not. *Do not inherit an
+inference when a measurement is one command away.*
+
+**Consequence for the fix (step 3):** raising the constant is now doubly wrong.
+It is the `0361` anti-pattern *and* it would be papering over the real finding,
+which is that one test costs 72% of a two-job suite's wall clock. `test_os_boot`
+re-seeds and compiles busybox hush + the coreutils multicall **with the kernel's
+own compiler, in-OS, with no build step** — the cost is real work, so the honest
+options are: calibrate the timeout to a measured machine speed, charge CPU time
+rather than wall time, quarantine the heaviest tests to a serialized lane, or
+make the test itself cheaper. **Weigh all four; do not default to the constant.**
+
+**Gate status resolved:** the kernel gate is **not** RED. ⚠️ Stated precisely so
+it cannot be over-read: **1 file re-run by me just now, 123 `carried` from the
+01:50:24Z run on `cd2302ff`.** `recorded` ≠ `ran just now`. Nothing in the
+kernel path changed between `cd2302ff` and `d1d6e286` (`todos/`, `logs/`,
+`tests/unit`, `tests/host` only), so carrying is defensible here — but a future
+merge that touches `os/` owes a full fresh run, not this artifact.
+
 ## Acceptance
 
-- Step 1's re-run recorded with its **elapsed time** and the box's state, settling
-  whether occurrence 2 was load. If it turns out NOT to be load, this ticket is
-  the wrong home and a real regression ticket is owed — say so loudly.
+- ✅ **Step 1's re-run recorded with its elapsed time and the box's state** —
+  done above: 719.1 s, PASS, quiet box. It WAS load, and the margin is 20%.
 - The survey's command + count + positive control.
 - Whatever fix lands carries a control showing it distinguishes *slow box* from
   *slow code* — a change that merely stops the red without preserving that
