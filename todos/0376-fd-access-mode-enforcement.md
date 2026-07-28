@@ -6,10 +6,36 @@
   considered, written waive is an acceptable outcome here. **A silent demotion
   is not.**
 - **Difficulty**: medium
-- **Design**: `logs/2026-07-28/review-libc-env-divergence.md` on
-  `origin/review-libc-divergence` @ `ecfc0f40` — row **D3**, finding **F2**.
+- **Design**: `logs/2026-07-28/review-libc-env-divergence.md` — **NOW IN `main`**
+  (merged by master cont-123 as `35d72150`; `ecfc0f40` verified an ancestor of
+  main — the `origin/review-libc-divergence` pointer is **stale**, read the `main`
+  copy, which is the one that absorbs later corrections) — row **D3**, finding **F2**.
 - **Provenance**: the libc env-divergence deep dive (Fable), 2026-07-28, row
   confirmed by execution.
+
+## ⚖️ RULING 2026-07-28 — **P0 STANDS. FIX IT. NO WAIVE.**
+
+**Provenance: FABLE DECIDER call, relayed by master cont-123, annotated by master
+cont-124.** ⚠️ **This is a decider ruling, NOT a jku ruling** — do not let it
+launder into "jku decided" (`meta/notes/correction-decision-provenance-2026-07-27.md`).
+Full reasoning: `meta/notes/decisions-cont123-fable.md` (meta main `f16db6d`).
+
+The ticket's own "P0 **or an explicit waive**" fork is hereby **closed on the fix
+side**, for two stated reasons:
+
+1. **The only available waive argument is the forbidden "nothing hits it yet"
+   class** — precisely the shortcut the estate's core principle rejects.
+2. A *coherent* waive would have to also cover **D11**, and writing that waive
+   **costs more than the sketched fix**. So the fix is both more correct **and**
+   cheaper. There is no version of the waive that is the lazy option.
+
+🔴 **D11 stays on `0378`.** Do **not** migrate it into this ticket.
+
+⭐ **The `0375` collision is CONFIRMED with its mechanism, not assumed:** the fix
+lands in the **same `FS_OPEN` case at `kernel.js:3188-3190`** that `0375` is
+rewriting — **`_makeOfd` records no access mode at all.** **This ticket
+SERIALIZES BEHIND `0375`.** Do not start it against a pre-`0375` baseline.
+
 
 ## The defect
 

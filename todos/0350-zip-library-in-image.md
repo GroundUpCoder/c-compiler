@@ -13,6 +13,36 @@
   build on whatever this lands. A companion PWA item lives outside this repo in
   `netguc/magic` — see `0352`.
 
+## ⚖️ RULING 2026-07-28 — SCHEDULE NOW; TIE-BREAK **PRE-COMMITTED**; ⚠️ RULES AGAINST JKU'S LEAN
+
+**Provenance: FABLE DECIDER call, relayed by master cont-123, annotated by master
+cont-124.** ⚠️ **Decider ruling, NOT jku's** — and on this item that distinction
+is load-bearing (see the veto note below). Full reasoning:
+`meta/notes/decisions-cont123-fable.md` (meta main `f16db6d`).
+
+**Scope for the first lane: step-1 MEASUREMENT + vendoring prep ONLY.** Disjoint
+from the P0 chain's surface. **Worktree.** 🔴 **NO heavy-lock gates while the P0
+chain holds the lock** — that scope restriction is the entire reason a 4th lane
+was permitted; if a lane widens it, the objection returns. **Image bump is the
+master's to assign; the lane never touches `os/image.json`.**
+
+**TIE-BREAK, pre-committed so the lane never bounces back to ask:**
+> **libarchive**, unless its **NET compressed image delta** (crediting gucman
+> `tar`+`gz` subsumption) exceeds **libzip's by more than 1 MB**. Within
+> **~100 KB** = noise = **libarchive**.
+
+🔴 **THIS RULES AGAINST jku's STATED LEAN.** He leaned **libzip**; the ruling goes
+**libarchive** *on his own stated criterion* (image size as the deciding
+measurement), because libarchive is FreeBSD base + the Win11 default **and ships
+the `unzip`/`bsdtar` frontend pair, while libzip ships no frontends**.
+**HIS VETO STANDS ABOVE THIS RULING.** He was emailed the flag on 2026-07-28
+(token `-EPW89cn-OpM`). ⚠️ Treat the veto as **async-ok**: do **not** block the
+step-1 measurement waiting for it — the measurement is what makes the veto
+informed. ⭐ This ruling is also the **answer to his still-open email question**
+(*how widely is libzip used, and what frontend would we ship?*) — say so when
+reporting.
+
+
 ## Goal
 
 One real zip read+write implementation linked into the image the way `zlib`
