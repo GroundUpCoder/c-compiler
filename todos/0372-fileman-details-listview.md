@@ -4,8 +4,10 @@
 - **Priority**: P2
 - **Difficulty**: medium
 - **Blocked by**: `0370` (hard)
-- **Design**: `todos/SOFTWARE-NATIVE.md` on `origin/design-software-win32`
-  @ `487f8b70`, "Follow-on, soft".
+- **Design**: `todos/SOFTWARE-NATIVE.md` — **NOW IN `main`** (merged by master cont-123 as
+  `cf939313`; `487f8b70` verified an ancestor of main), section "Follow-on, soft".
+  ⚠️ The old pointer to `origin/design-software-win32 @ 487f8b70` is **stale** — read the
+  `main` copy, which is the one that absorbs later corrections.
 
 ## Goal
 

@@ -4,6 +4,14 @@
 - **Design**: this file. Source: unfunded-liability sweep 2026-07-27 (its
   highest-blast-radius finding), merged with the long-standing "boot-robustness /
   zombie bake fallback" item that had ridden coordinator notes without ever being filed.
+- **Ruling absorbed (triage decider D4, 2026-07-28; master cont-125 annotated)**: an archived
+  thread claimed two boot-resilience items were **unfiled**. That premise is **stale** — both
+  are already here (the fixed-name fallback is Plan bullet 2 verbatim; the loud-fail
+  bake-fallback kill is the title, Plan bullet 1, and Acceptance criterion 3), and both are
+  anchored in the liability register as **L01/L02 pointing at 0285**. 🔴 **File nothing new for
+  them.** Only two framing nuances were genuinely missing, and they are folded into the Plan
+  below: the **HTTP status** in the loud log, and the fixed-name rung's real purpose (closing
+  the **deploy-propagation window**, prior art `done/0141`).
 
 ## Goal
 
@@ -41,13 +49,22 @@ Nothing covers **consuming** it.
 
 ## Plan
 
-- **Make the catch loud.** Emit a `boot-log` line naming the failed URL and the reason before
-  any fallback. A silent fallback on the production boot path's first fetch is the "quiet
-  symptom" anti-pattern `CLAUDE.md`'s test-sync discipline section forbids.
+- **Make the catch loud.** Emit a `boot-log` line naming the failed URL, **the HTTP status**,
+  and the reason before any fallback. A silent fallback on the production boot path's first
+  fetch is the "quiet symptom" anti-pattern `CLAUDE.md`'s test-sync discipline section forbids.
+  ⭐ The status is the half that makes the log *actionable*: a 404 (not yet propagated) and a
+  200-with-wrong-hash (stale edge) are different failures with different responses, and a URL
+  alone cannot tell them apart.
 - **Retire the zombie fallback.** On a `manifest.image` miss, fetch the fixed name
   `os-system.img`; if that is also absent, fail loudly rather than falling through to an
   in-worker bake that can never be the right answer on a static deploy. Keep the bake path only
   where it is genuinely reachable (dev), and say so in the code.
+  ⭐ **Why the fixed-name rung is not merely "one more try before failing":** it is what closes
+  the **deploy-propagation window**. During propagation an edge can still be serving the
+  previous hashed name; falling back to the fixed name lets the boot reach a *correct* image
+  rather than a *baked* one, and the existing version gate is what keeps that from silently
+  booting something stale. Nearest prior art: `done/0141`. Scope the rung as a propagation
+  bridge, not as a politeness step before the hard fail.
 - **Cover the branch:** a test that boots with a manifest carrying `image`, plus a test
   asserting the failure path *logs* and does not silently bake.
 
