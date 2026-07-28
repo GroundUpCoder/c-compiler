@@ -303,4 +303,16 @@ thing this file exists to kill.
 - anchor: // coordination point (a pushed reservation ref), which is todos/0364, register
 - provenance: 0360
 
+### L53 — the two host.js sleep backends disagree about a zero-length nanosleep, and the test declines to pin either
+- ticket: 0365
+- file: tests/host/test_sleep_clamp.js
+- anchor: // KNOWN GAP, funded by todos/0365 (register L53): the two backends disagree
+- provenance: 0361
+
+### L54 — the wall-clock survey is a hand-run audit, so a NEW elapsed-time budget can enter tests/unit unnoticed
+- ticket: 0366
+- file: tests/scan-wallclock.sh
+- anchor: # classification of the current 22 lives in logs/2026-07-28/0361-wallclock.md).
+- provenance: 0361
+
 <!-- END ENTRIES -->

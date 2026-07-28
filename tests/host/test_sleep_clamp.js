@@ -27,12 +27,13 @@
 // identity` trick from test_pipe_read_block.js, so the async bodies are
 // callable directly.
 //
-// KNOWN GAP (todos/0363): the two backends disagree about a ZERO-length
-// nanosleep. The block-FS path treats it as a no-op; the native-fs path floors
-// it at 1 ms (`Math.max(1, ms)`), so nanosleep(0,0) really does sleep a
-// millisecond there. POSIX says a zero request returns immediately. This test
-// deliberately asserts NEITHER answer for that input — pinning the floor would
-// bless it as correct — and covers the non-zero durations on both.
+// KNOWN GAP, funded by todos/0365 (register L53): the two backends disagree
+// about a ZERO-length nanosleep. The block-FS path treats it as a no-op; the
+// native-fs path floors it at 1 ms (`Math.max(1, ms)`), so nanosleep(0,0)
+// really does sleep a millisecond there, and POSIX says a zero request returns
+// immediately. This test deliberately asserts NEITHER answer for that input —
+// pinning the floor would bless it as correct — and covers the non-zero
+// durations on both. usleep(0) has no such divergence and IS asserted below.
 //
 // Run: node tests/host/test_sleep_clamp.js
 
