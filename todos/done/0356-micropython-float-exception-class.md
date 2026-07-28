@@ -1,6 +1,6 @@
 # 0356 — MicroPython float builtins raise OverflowError where upstream expects ValueError (3 red micropython-upstream tests)
 
-- **Status**: open
+- **Status**: done
 - **Priority**: P0 — a shipped feature (`vendor/micropython`, the `micropython`
   package) is wrong, and it keeps a MAPPED suite RED
 - **Design**: `vendor/micropython/README.md` (the dialect's recorded gaps),

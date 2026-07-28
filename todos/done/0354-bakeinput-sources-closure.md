@@ -1,6 +1,6 @@
 # 0354 — newestBakeInput misses non-dep sources (vendor/cjson) so the freshness gate under-invalidates
 
-- **Status**: open
+- **Status**: done
 - **Priority**: P0 (correctness bug in the shipped 0082 freshness gate)
 - **Difficulty**: light
 - **Design**: this file. Found by todos/0318 while deriving the vendor→suite map.
