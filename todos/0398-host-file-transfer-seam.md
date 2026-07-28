@@ -1,8 +1,19 @@
 # 0398 — host<->gucOS file transfer seam — egress/download + file-flavored clipboard interop (DESIGN)
 
 - **Status**: open
-- **Design**: 🔴 **DESIGN PASS REQUIRED FIRST** (Fable). Do not start implementing from this
-  ticket — it states the problem and the verified ground truth, not the solution.
+- **Design**: ✅ **LANDED** (Fable pass, 2026-07-28) →
+  `todos/0398-host-file-transfer-seam-design.md`. Implement from the design doc, not from
+  this ticket's problem statement. Decisions in one line each: (D1) process→kernel wire
+  carries PATHS (fmt-2 shape), kernel materializes bytes once; (D2) one new RPC
+  `EGRESS 0x0304`, textual `"download\n"|"saveas\n"` + path list, one artifact per call,
+  embedder hook `onEgress` with a `boot.js --egress-dir` headless twin; (D3) the
+  deferred-CLIP_GET activation pattern GENERALIZES (gesture keeps activation across the
+  round trip — egress acts on arrival, no parking needed); (D4) download/Save-As/export
+  are ONE mechanism; clipboard-file-copy TO host is platform-impossible (no web API puts
+  a file flavor on the OS clipboard) — stated escape hatch, reserved `"clipboard\n"`
+  disposition; (D5) directories/multi-select → ONE store-only zip, symlinks as symlink
+  entries; lone symlink follows. Host→gucOS file paste: paste-chord carve-out + staging
+  dir + shadow-text memo (design §D6).
 
 ## Goal
 
