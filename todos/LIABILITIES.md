@@ -291,6 +291,12 @@ thing this file exists to kill.
 - anchor: (`_socket` is not built), so **`asyncio` does not import and is not
 - provenance: 0340
 
+### L50 — a compiler.js edit selects no run.py category but `unit`, so the real-world-C corpus is ungated by a compiler change
+- ticket: 0362
+- file: tests/run.js
+- anchor: // NOT SELECTED YET: any run.py category but `unit` — so the real-world-C
+- provenance: 0356
+
 ### L51 — mkpkg's package-payload freshness scan has no red control, so it can under-invalidate silently
 - ticket: 0363
 - file: tools/mkpkg.js
