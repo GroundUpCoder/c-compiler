@@ -275,6 +275,18 @@ function createFileSystem({ fs, ctx }) {
     view.setBigInt64(buf_ptr + 104, BigInt(ct), true); view.setInt32(buf_ptr + 112, ((st.ctimeMs || 0) % 1000) * 1e6, true); /* st_ctim */
   }
 
+  // Bound once, exported under two names (see the alias note below).
+  const mkdirEnv = function (path_ptr, mode) {
+    const path = readString(path_ptr);
+    try {
+      fs.mkdirSync(path, { mode: mode, recursive: false });
+    } catch (e) {
+      setErrno(e);
+      return -1;
+    }
+    return 0;
+  };
+
   const result = {
     [ENV_KEY]: {
       __open_impl: function (path_ptr, flags, mode) {
@@ -412,16 +424,10 @@ function createFileSystem({ fs, ctx }) {
         entry.positionUnknown = false; /* a completed seek IS a known position */
         return newPos;
       }),
-      mkdir: function (path_ptr, mode) {
-        const path = readString(path_ptr);
-        try {
-          fs.mkdirSync(path, { mode: mode, recursive: false });
-        } catch (e) {
-          setErrno(e);
-          return -1;
-        }
-        return 0;
-      },
+      mkdir: mkdirEnv,
+      // See the BlockFS table's note: additive alias so libc can own the
+      // umask-applying mkdir() wrapper (todos/0382).
+      __mkdir_impl: mkdirEnv,
       ftruncate: function (fd, length) {
         if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
         try {
@@ -2978,11 +2984,18 @@ var BLOCK_FS = (function () {
 
       var fileName = resolved.substring(resolved.lastIndexOf('/') + 1);
       // Honor the caller's create mode — seeded /bin binaries want their
-      // 0755 to survive into ls -l. The single-user system has a fixed 022
-      // umask, applied here (there is no per-process umask in the fs), so
-      // fopen's 0666 lands as the traditional 0644. A falsy mode means
-      // "default": the fs RPC turns an absent mode into 0.
-      var createMode = mode ? (S_IFREG | (mode & ~0o022 & 0o7777)) : DEFAULT_FILE_MODE;
+      // 0755 to survive into ls -l. A falsy mode means "default": the fs RPC
+      // turns an absent mode into 0.
+      //
+      // This used to also apply a hardcoded `& ~0o022`, described as "the
+      // single-user system has a fixed 022 umask ... there is no per-process
+      // umask in the fs". There is one now (todos/0382): the mask is PROCESS
+      // state and belongs in libc, which applies it before the mode ever
+      // reaches this layer. Masking again here would compose the two, so
+      // umask(0) could never produce the 0666 POSIX promises. The libc's
+      // initial mask is 022, so every caller that never touches umask()
+      // observes exactly the modes it did before.
+      var createMode = mode ? (S_IFREG | (mode & 0o7777)) : DEFAULT_FILE_MODE;
       var inoId = this._allocInode(createMode);
       if (inoId === null) return -1; // errno already set
 
@@ -3217,7 +3230,14 @@ var BLOCK_FS = (function () {
     // EROFS only after the walks: an escaping path retries on its owner.
     if (this._readonly) return this._setErr('EROFS');
 
-    var inoId = this._allocInode(DEFAULT_DIR_MODE);
+    // Honor the caller's mode, like open()'s create path directly above.
+    // Until todos/0382 this argument was accepted and then DISCARDED — every
+    // directory came out DEFAULT_DIR_MODE, so mkdir("/x", 0700) silently
+    // produced a world-readable 0755. A falsy mode still means "default"
+    // (same convention as the file path: the fs RPC turns an absent mode
+    // into 0). The process umask is applied libc-side before we see it.
+    var dirMode = mode ? (S_IFDIR | (mode & 0o7777)) : DEFAULT_DIR_MODE;
+    var inoId = this._allocInode(dirMode);
     if (inoId === null) return -1;
 
     // Allocate initial directory extent
@@ -4329,6 +4349,14 @@ var BLOCK_FS = (function () {
         return BigInt(r);
       },
       mkdir: wrap(function (path_ptr, mode) {
+        return this.mkdir(readString(path_ptr), mode);
+      }),
+      // __mkdir_impl: the same call under the name compiler.js's libc imports
+      // it as, so that libc can own a real mkdir() wrapper applying the
+      // process umask (todos/0382). ADDITIVE — plain `mkdir` above stays,
+      // because that name is the wasm-ld ABI the clang toolchain links
+      // against and renaming it would break that sysroot.
+      __mkdir_impl: wrap(function (path_ptr, mode) {
         return this.mkdir(readString(path_ptr), mode);
       }),
       remove: wrap(function (path_ptr) {
@@ -11017,6 +11045,27 @@ async function runModule({
       },
       __clock_ns_lo: function () {
         return clockNsLatchLo;
+      },
+      /* getentropy(2) backing (todos/0325 Group B). A HOST import rather
+         than a read of /dev/urandom: entropy is a host capability, and
+         routing it through a device node makes a security-relevant
+         primitive depend on filesystem layout. That is not hypothetical —
+         the /dev nodes are materialised only on a v4 mount, so the
+         /dev/urandom spelling failed outright under a v3 volume (and under
+         any fs that has no /dev at all). crypto.getRandomValues is a real
+         CSPRNG and fills at most 65536 bytes per call. Returns 0, or -1 if
+         no crypto implementation is available — in which case the caller
+         gets a FAILURE, never weak bytes. */
+      __getentropy: function (buf_ptr, len) {
+        const g = globalThis.crypto;
+        if (!g || typeof g.getRandomValues !== 'function') return -1;
+        try {
+          const mem = new Uint8Array(instance.exports.memory.buffer, buf_ptr, len);
+          for (let off = 0; off < len; off += 65536) {
+            g.getRandomValues(mem.subarray(off, Math.min(off + 65536, len)));
+          }
+          return 0;
+        } catch (e) { return -1; }
       },
       /* Emscripten compatibility stubs */
       __emscripten_async_call: function (funcPtr, argPtr, millis) {

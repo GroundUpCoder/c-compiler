@@ -231,6 +231,13 @@ const RULES = [
   // (fetch.sh pulls the candidate sources into gitignored build/zipmeasure).
   [/^tools\/zipmeasure\//, ['host'],
     'the 0350 zip-library measurement harness — its binaries run host.js standalone'],
+  // The 0382/0325 libc presence probe. Unlike the harnesses above it never
+  // RUNS anything — it compiles a TU per symbol against compiler.js's builtin
+  // headers and reports absent/decl-only/present — so the seam under it is the
+  // front end, which the unit suite pins with real goldens. It gates nothing
+  // itself: its output is a report, not a committed artifact.
+  [/^tools\/libcprobe\//, ['unit'],
+    'the 0382/0325 libc presence probe — compiles against the builtin headers; unit is the seam'],
 
   // Self-contained side projects: own trees, own runners, no product artifact,
   // and no suite in this dispatcher consumes them. Gating them would be a

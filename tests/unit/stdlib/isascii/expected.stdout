@@ -1,0 +1,6 @@
+0=1 65=1 127=1 128=0 255=0 256=0
+neg1=0 neg128=0 big=0
+EOF=0
+count=128 outside=0
+toascii: 65=65 321=65 neg1=127
+addressable=1

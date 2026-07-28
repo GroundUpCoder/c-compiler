@@ -1,0 +1,27 @@
+wcstol(123,10)=123 consumed=3 erange=0
+wcstol(-123,10)=-123 consumed=4 erange=0
+wcstol(+42,10)=42 consumed=3 erange=0
+wcstol(   	 7,10)=7 consumed=6 erange=0
+wcstol(0x1f,16)=31 consumed=4 erange=0
+wcstol(0x1f,0)=31 consumed=4 erange=0
+wcstol(017,0)=15 consumed=3 erange=0
+wcstol(17,0)=17 consumed=2 erange=0
+wcstol(1010,2)=10 consumed=4 erange=0
+wcstol(zz,36)=1295 consumed=2 erange=0
+wcstol(123abc,10)=123 consumed=3 erange=0
+wcstol(abc,10)=0 consumed=0 erange=0
+wcstol(,10)=0 consumed=0 erange=0
+wcstol(  -,10)=0 consumed=0 erange=0
+wcstol(0x,16)=0 consumed=1 erange=0
+wcstol(2147483647,10)=2147483647 consumed=10 erange=0
+wcstol(-2147483648,10)=-2147483648 consumed=11 erange=0
+wcstol(999999999999,10)=2147483647 consumed=12 erange=1
+wcstol(-999999999999,10)=-2147483648 consumed=13 erange=1
+wcstoul(4294967295,10)=4294967295 consumed=10 erange=0
+wcstoul(-1,10)=4294967295 consumed=2 erange=0
+wcstoul(99999999999999,10)=4294967295 consumed=14 erange=1
+wcstoll_min=-9223372036854775808 erange=0
+wcstoull_max=18446744073709551615 erange=0
+wcstod=3.14159265358979
+wcstod_consumed=16
+stops_at_nonascii v=12 consumed=2

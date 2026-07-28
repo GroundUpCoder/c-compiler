@@ -61,16 +61,11 @@ static ALWAYS_INLINE int sigisemptyset(const sigset_t *s)
     return *s == 0;   /* our sigset_t is a plain bitmask word */
 }
 #define setpgrp() setpgid(0, 0)
-/* umask: the fs layer has no notion of a process umask; keep the value
- * libc-side so the shell's `umask` builtin round-trips. Modes passed to
- * open/mkdir are used as-given (single-user system). */
-static ALWAYS_INLINE mode_t umask(mode_t m)
-{
-    static mode_t pv_umask = 022;
-    mode_t old = pv_umask;
-    pv_umask = m & 0777;
-    return old;
-}
+/* umask: was shimmed here as a value that round-tripped but did nothing —
+ * "the fs layer has no notion of a process umask". The libc has a REAL one
+ * now (todos/0382 gap 1) which open/mkdir actually apply, so the shim is
+ * both a duplicate definition and a lie. hush's `umask` builtin now takes
+ * effect on files its children create. */
 
 /* ---- the vfork-on-__spawn shim (port/vfork_spawn.c) ---- */
 #define PV_MAX_ACTIONS 32

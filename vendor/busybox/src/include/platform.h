@@ -462,11 +462,19 @@ typedef unsigned smalluint;
 # undef HAVE_STPCPY
 # undef HAVE_STPNCPY
 # undef HAVE_STRSEP
+/* HAVE_STRSIGNAL stays undef'd even though the libc grew a real strsignal
+ * (todos/0325 Group B). This one is NOT a gap: busybox's fallback is a MACRO
+ * to get_signame(), which deliberately prints the short names ("STOP" rather
+ * than "Stopped"), and that is user-visible output the applets are written
+ * against. Being a macro it also cannot collide at link. Left as a vendor
+ * preference, not an absence. */
 # undef HAVE_STRSIGNAL
 # undef HAVE_STRVERSCMP
 # undef HAVE_VASPRINTF
 # undef HAVE_GETLINE
-# undef HAVE_MEMRCHR
+/* HAVE_MEMRCHR was undef'd here until the libc grew memrchr (todos/0325
+ * Group B). Unlike strsignal above, libbb/platform.c's fallback is a real
+ * DEFINITION, so leaving it undef'd is now a duplicate-symbol link error. */
 /* (MKDTEMP/STRCASESTR stay "available": nothing in the hush build calls
  * them, and their platform.c fallbacks would drag in mktemp/strncasecmp.) */
 # undef HAVE_TTYNAME_R

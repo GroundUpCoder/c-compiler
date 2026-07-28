@@ -1,47 +1,21 @@
 /*
  * jq_gucos_shims.c — libc gap-fillers for the gucOS wasm build of jq.
  *
- * The repo's ISO C libc (compiler.js) provides gmtime/localtime/localtime_r/
- * mktime/strftime, but not timegm(), gmtime_r() or strptime(). jq's date
- * builtins (strptime, mktime, gmtime, date arithmetic) need all three, so we
- * supply portable, self-contained implementations here and advertise them to
- * jq via -DHAVE_TIMEGM/-DHAVE_GMTIME_R/-DHAVE_STRPTIME in bin.json.
+ * jq's date builtins (strptime, mktime, gmtime, date arithmetic) need
+ * timegm(), gmtime_r() and strptime(). The libc now supplies the first two
+ * (todos/0382 gap 5 / todos/0325 Group B), so only strptime() remains here —
+ * keeping the local copies would be a duplicate-symbol link error, which is
+ * what this file's own note anticipated:
  *
- * These are provided ONLY when the corresponding libc symbol is absent; if a
- * future compiler.js grows them, drop the define(s) and this TU can shrink.
+ *     "if a future compiler.js grows them, drop the define(s) and this TU
+ *      can shrink."
+ *
+ * bin.json still passes -DHAVE_TIMEGM/-DHAVE_GMTIME_R — those are now true
+ * because the LIBC provides them, which is the point.
  */
 #include <time.h>
 #include <string.h>
 #include <ctype.h>
-
-/* days_from_civil: days since 1970-01-01 for a proleptic-Gregorian y/m/d.
-   (Howard Hinnant's algorithm; valid for the full time_t range.) */
-static long __days_from_civil(long y, unsigned m, unsigned d) {
-  y -= m <= 2;
-  long era = (y >= 0 ? y : y - 399) / 400;
-  unsigned yoe = (unsigned)(y - era * 400);
-  unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-  unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-  return era * 146097L + (long)doe - 719468L;
-}
-
-time_t timegm(struct tm *tm) {
-  long days = __days_from_civil(tm->tm_year + 1900L,
-                                (unsigned)(tm->tm_mon + 1),
-                                (unsigned)tm->tm_mday);
-  long long secs = (long long)days * 86400LL
-                 + (long long)tm->tm_hour * 3600LL
-                 + (long long)tm->tm_min * 60LL
-                 + (long long)tm->tm_sec;
-  return (time_t)secs;
-}
-
-struct tm *gmtime_r(const time_t *timep, struct tm *result) {
-  struct tm *g = gmtime(timep);   /* libc gmtime is pure UTC, no TZ state */
-  if (!g) return 0;
-  *result = *g;
-  return result;
-}
 
 /* --- strptime ------------------------------------------------------------
  * Supports the specifiers jq and typical users need: %Y %y %C %m %d %e %H %I

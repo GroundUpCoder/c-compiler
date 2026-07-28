@@ -92,6 +92,9 @@ tree is self-contained and portable.
 - `attr_patched.c`, `iterator.h` — patched copies of the upstream files (carry
   the libgit2 copyright header; edited to compile under the c-compiler).
 - `wasm-compat.h` — POSIX shims for functions absent in the WASM runtime.
+  Its `gmtime_r` shim was removed by **todos/0325 Group A**, which added the
+  real one to the libc: a local `static inline` then conflicts with the
+  header declaration.
 - `test_main.c` — the smoke test (`git_index_open`), which triggers the bug.
 
 ### Upstream source (copied from libgit2 @ 44c05e5)

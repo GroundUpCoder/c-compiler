@@ -1,0 +1,13 @@
+initial=022
+after022=022
+after077=077
+masked_bits=0777
+open_0666_umask077=600
+open_0666_umask022=644
+open_0666_umask000=666
+mkdir_0777_umask022=755
+mkdir_0777_umask027=750
+creat_0666_umask077=600
+fopen_umask027=640
+existing_unchanged=666
+chmod_unmasked=666

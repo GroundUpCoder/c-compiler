@@ -22908,6 +22908,30 @@ __require_source("__atexit.c");
 int atexit(void (*func)(void));
 void __run_atexits(void);
   `,
+  "__timespec.h": `
+#pragma once
+/* struct timespec + clockid_t, factored out so BOTH <time.h> and
+   <sys/types.h> can expose them from ONE definition (todos/0325 Group A).
+ *
+ * CPython — like musl and wasi-libc — expects these visible via
+ * <sys/types.h> before it reaches Include/cpython/pthread_stubs.h, and the
+ * symptom of their absence is a baffling "type specifier missing" pointing
+ * at pthread_stubs.h:78 rather than at the missing type.
+ *
+ * It is a separate header, rather than <sys/types.h> including <time.h>,
+ * because <time.h> carries __require_source("__time.c") and <sys/types.h>
+ * is included by nearly everything — that route would link the whole time
+ * TU into every binary that names a size_t.
+ */
+typedef long long time_t;
+
+struct timespec {
+  long long tv_sec;   // 64-bit (matches struct stat's st_*tim); range past 2038
+  long      tv_nsec;
+};
+
+typedef int clockid_t;
+  `,
   "__malloc.h": `
 #pragma once
 #include <stddef.h>
@@ -22960,6 +22984,30 @@ int isupper(int c);
 int isxdigit(int c);
 int tolower(int c);
 int toupper(int c);
+/* isascii/toascii (XSI, todos/0325 Group A — _decimal.c calls isascii).
+   Removed from POSIX.1-2008 but still universally present, and unlike the
+   is*() family above they are defined for ALL int values, not just
+   unsigned char and EOF — which is exactly why callers reach for isascii
+   before narrowing. Real functions, not macros: code takes their address. */
+/* A consumer may already have supplied its own isascii/toascii macro behind
+   an #ifndef (netsurf's utils/config.h does), and if that header was reached
+   first the macro would rewrite the declarations below into a parse error
+   INSIDE <ctype.h> — a thoroughly confusing place to land. A standard header
+   is entitled to win: drop any prior definition, declare the real functions,
+   then re-supply the macro form ourselves. */
+#undef isascii
+#undef toascii
+int isascii(int c);
+int toascii(int c);
+/* glibc and musl expose these as function-like MACROS as well as functions,
+   and portable code tests an #ifndef on isascii to decide whether to supply
+   its own. Defining the macro here matches the platforms such code is
+   written against, so that test correctly finds the platform already has it.
+   Taking the address still reaches the FUNCTION: a bare isascii not
+   followed by an open paren does not expand, which is what keeps it usable
+   in a dispatch table. */
+#define isascii(c) (((c) & ~0x7f) == 0)
+#define toascii(c) ((c) & 0x7f)
   `,
   "wctype.h": `
 #pragma once
@@ -23021,9 +23069,21 @@ int wctob(wint_t c);
 int mbsinit(const mbstate_t *ps);
 size_t wcrtomb(char *s, wchar_t wc, mbstate_t *ps);
 size_t mbrtowc(wchar_t *pwc, const char *s, size_t n, mbstate_t *ps);
+/* Wide numeric conversion (C95 7.24.4.1). wcstol is todos/0325 Group A —
+   CPython's initconfig.c calls it unconditionally; the rest of the family
+   comes with it because they are one scanner. */
+long wcstol(const wchar_t *nptr, wchar_t **endptr, int base);
+unsigned long wcstoul(const wchar_t *nptr, wchar_t **endptr, int base);
+long long wcstoll(const wchar_t *nptr, wchar_t **endptr, int base);
+unsigned long long wcstoull(const wchar_t *nptr, wchar_t **endptr, int base);
+double wcstod(const wchar_t *nptr, wchar_t **endptr);
+/* wcsftime (todos/0325 Group B): strftime's wide twin, for timemodule.c. */
+struct tm;
+size_t wcsftime(wchar_t *dst, size_t maxsize, const wchar_t *fmt, const struct tm *tm);
   `,
   "sys/time.h": `
 #pragma once
+__require_source("__posix.c");   /* futimesat */
 #include <time.h>
 struct timeval {
   time_t tv_sec;   /* 64-bit (matches struct stat's st_*tim); range past 2038 */
@@ -23035,6 +23095,9 @@ __import int __gettimeofday(long long *sec, long *usec);
    backend has no timestamp API and treats them as existence-checked no-ops. */
 __import int __utime(const char *path, long long atime, long long mtime);
 __import int __futime(int fd, long long atime, long long mtime);
+/* futimesat (legacy, todos/0325 Group B — posixmodule.c). Superseded by
+   utimensat, but still referenced. A NULL times means "now". */
+int futimesat(int dirfd, const char *path, const struct timeval times[2]);
 static inline int gettimeofday(struct timeval *tv, void *tz) {
   (void)tz;
   if (tv) {
@@ -23737,6 +23800,11 @@ void rewinddir(DIR *dirp);
 #define RTLD_NOW    0x0002
 #define RTLD_GLOBAL 0x0100
 #define RTLD_LOCAL  0x0000
+/* RTLD_NODELETE/RTLD_NOLOAD (todos/0325 Group B): CPython's dynload_shlib
+   references them unconditionally. Defined so that code compiles; dlopen
+   above still reports failure, so their runtime meaning never arises. */
+#define RTLD_NODELETE 0x1000
+#define RTLD_NOLOAD   0x0004
 static inline void *dlopen(const char *file, int mode) { (void)file; (void)mode; return 0; }
 static inline int   dlclose(void *handle)              { (void)handle; return 0; }
 static inline void *dlsym(void *handle, const char *name) { (void)handle; (void)name; return 0; }
@@ -23829,9 +23897,13 @@ extern int errno;
 #define EINPROGRESS 115
   `,
   "fcntl.h": `
-#pragma once\n#include <stdarg.h>
+#pragma once
+__require_source("__posix.c");   /* open() — <fcntl.h> declares it, so <fcntl.h> must link it */
+#include <stdarg.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <sys/stat.h>   /* posix_fadvise validates its fd with fstat */
+#include <errno.h>
 #define O_RDONLY  0
 #define O_WRONLY  1
 #define O_RDWR    2
@@ -23857,10 +23929,14 @@ extern int errno;
 #define F_WRLCK  1
 #define F_UNLCK  2
 
-/* *at() anchors: dirfd is always treated as the cwd in this libc (see
-   utimensat), so AT_FDCWD is the only meaningful value. */
+/* *at() anchors and flags (Linux values, like the rest of this runtime).
+   Resolution rules and the reason a real dirfd cannot occur here are
+   documented at __at_ok() in __posix.c (todos/0325 Group B, todos/0400). */
 #define AT_FDCWD            (-100)
 #define AT_SYMLINK_NOFOLLOW 0x100
+#define AT_REMOVEDIR        0x200
+#define AT_SYMLINK_FOLLOW   0x400
+#define AT_EACCESS          0x200
 
 struct flock {
   short l_type;
@@ -23872,12 +23948,38 @@ struct flock {
 
 __import int __open_impl(const char *path, int flags, int mode);
 int open(const char *path, int flags, ...);
+/* creat(path, mode) == open(path, O_WRONLY|O_CREAT|O_TRUNC, mode); it is a
+   creation call, so it is umask-masked like the rest (todos/0382). */
+int creat(const char *path, mode_t mode);
 #define F_DUPFD_CLOEXEC 1030  /* Linux value; CLOEXEC is untracked (v1) */
 /* Real fcntl for the int-argument commands (F_DUPFD and friends reach the
  * host — the shell's fd-save dance needs them, todos/0005). Lock commands
  * (F_SETLK etc.) pass arg 0 and the host returns success: SQLite's
  * advisory locking stays a no-op in this single-user runtime. */
 __import int __fcntl3(int fd, int cmd, int arg);
+
+/* openat + the fd-based allocation calls (todos/0325 Group B). */
+int openat(int dirfd, const char *path, int flags, ...);
+
+/* posix_fadvise: the access-pattern hint. A no-op IS the correct
+   implementation — POSIX defines it as advisory and explicitly permits an
+   implementation to ignore it — but it still validates its arguments, so a
+   bad fd or a bogus advice value is reported rather than silently accepted.
+   Like posix_fallocate it RETURNS an error number and does not set errno. */
+#define POSIX_FADV_NORMAL     0
+#define POSIX_FADV_RANDOM     1
+#define POSIX_FADV_SEQUENTIAL 2
+#define POSIX_FADV_WILLNEED   3
+#define POSIX_FADV_DONTNEED   4
+#define POSIX_FADV_NOREUSE    5
+int posix_fallocate(int fd, off_t offset, off_t len);
+static inline int posix_fadvise(int fd, off_t offset, off_t len, int advice) {
+  struct stat __st;
+  (void)offset; (void)len;
+  if (advice < POSIX_FADV_NORMAL || advice > POSIX_FADV_NOREUSE) return EINVAL;
+  if (fstat(fd, &__st) != 0) return EBADF;
+  return 0;
+}
 static inline int fcntl(int fd, int cmd, ...) {
   int arg = 0;
   if (cmd == F_DUPFD || cmd == F_DUPFD_CLOEXEC || cmd == F_SETFD || cmd == F_SETFL) {
@@ -24421,6 +24523,10 @@ double nextafter(double x, double y);
 float nextafterf(float x, float y);
 double frexp(double x, int *exp);
 double ldexp(double x, int n);
+/* fma (C99 7.12.13.1) — x*y+z with a SINGLE rounding. Emulated exactly; see
+   __math.c for the method and its differential validation (todos/0325). */
+double fma(double x, double y, double z);
+float fmaf(float x, float y, float z);
 float ldexpf(float x, int n);
 int ilogb(double x);
 double logb(double x);
@@ -24742,6 +24848,8 @@ typedef uint64_t uintmax_t;
   "stdio.h": `
 #pragma once
 __require_source("__stdio.c");
+__require_source("__posix.c");   /* fopen/freopen call open(); renameat lives there too */
+int renameat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath);
 #include <stddef.h>
 #include <stdarg.h>
 #define NULL ((void *)0)
@@ -24932,6 +25040,13 @@ size_t wcstombs(char *dest, const wchar_t *src, size_t n);
 #pragma once
 __require_source("__string.c");
 #include <stddef.h>
+/* glibc (__USE_MISC) and musl (_BSD_SOURCE/_GNU_SOURCE/_XOPEN_SOURCE, i.e.
+   every default configuration) make <string.h> pull in <strings.h>, so
+   portable code reaches strcasecmp/strncasecmp/ffs without naming the second
+   header. libzip is one such consumer and had to be shimmed for it during the
+   todos/0350 zip measurement (todos/0382 gap 3). Match the platforms code is
+   actually written against. */
+#include <strings.h>
 #define NULL ((void *)0)
 void *memcpy(void *dest, const void *src, size_t n);
 void *memmove(void *dest, const void *src, size_t n);
@@ -24962,6 +25077,14 @@ int strcoll(const char *s1, const char *s2);
 size_t strxfrm(char *dest, const char *src, size_t n);
 char *strerror(int errnum);
 char *strdup(const char *s);
+/* todos/0325 Group B. */
+void *memrchr(const void *s, int c, size_t n);
+/* explicit_bzero: a memset(0) the compiler is not allowed to elide as a
+   dead store. _blake2's only alternative is a GCC inline-asm memory
+   barrier, which this compiler also lacks. */
+void explicit_bzero(void *s, size_t n);
+/* strsignal: the signal's description, for signalmodule.c. */
+char *strsignal(int sig);
   `,
   "strings.h": `
 #pragma once
@@ -24979,6 +25102,7 @@ int flsll(long long x);
   `,
   "sys/stat.h": `
 #pragma once
+__require_source("__posix.c");   /* umask + the mkdir wrapper that applies it */
 #include <sys/types.h>
 
 #define S_IRWXU 0700
@@ -25041,16 +25165,47 @@ struct stat {
   struct timespec st_ctim;
 };
 
-__import int mkdir(const char *path, int mode);
+/* mkdir()/mkdirat() apply the process umask, so they are real libc functions
+   over the raw host import rather than the import itself (todos/0382). The
+   host still exports the un-masked mkdir env entry under its own name —
+   that name is part of the wasm-ld ABI the clang toolchain links against, so
+   the alias is additive and nothing was renamed out from under it. */
+__import int __mkdir_impl(const char *path, int mode);
+int mkdir(const char *path, mode_t mode);
 __import int stat(const char *path, struct stat *buf);
 __import int lstat(const char *path, struct stat *buf);
 __import int fstat(int fd, struct stat *buf);
 
 /* mknod: no device/special nodes on this fs — always fails. (Regular-file
-   creation goes through open(); callers wanting FIFOs get pipes via pipe().) */
+   creation goes through open(); callers wanting FIFOs get pipes via pipe().)
+   mkfifo(3) is deliberately ABSENT rather than stubbed here — a link-testable
+   mkfifo that cannot rendezvous is worse than none, because it flips a
+   consumer's HAVE_MKFIFO on and moves the failure from configure time to run
+   time. Funded by todos/0401, which is also what keeps todos/0382 open. */
 static inline int mknod(const char *path, mode_t mode, dev_t dev) {
   (void)path; (void)mode; (void)dev; return -1;
 }
+
+/* umask(2) — the process file-mode creation mask (todos/0382 gap 1). Real
+   state, really applied: open(O_CREAT), creat(), mkdir() and mkdirat() all
+   clear the masked bits before the mode reaches the host, so a program that
+   sets a mask observes the modes POSIX says it should.
+
+   The initial mask is the conventional 022. POSIX defines the starting mask
+   as INHERITED, and this process model has no fork() to inherit across
+   (todos/OS.md's owner-brokered spawn), so the shell default stands in — and
+   it is also what keeps every pre-0382 creation mode identical, because the
+   filesystem layer used to apply exactly this mask itself. Cross-process
+   inheritance through __spawn is a separate, ticketed gap (todos/0399). */
+int fstatat(int dirfd, const char *path, struct stat *buf, int flags);
+int mkdirat(int dirfd, const char *path, mode_t mode);
+int fchmodat(int dirfd, const char *path, mode_t mode, int flags);
+
+mode_t umask(mode_t mask);
+/* Read the mask without disturbing it — POSIX has no such call (you must
+   set-and-restore), which is a data race under threads but merely clumsy
+   here. The libc's own creation paths use this. */
+mode_t __umask_get(void);
 
 #include <sys/time.h>   /* __utime / __futime / gettimeofday */
 
@@ -25109,6 +25264,10 @@ static inline int utime(const char *path, const struct utimbuf *times) {
   `,
   "sys/types.h": `
 #pragma once
+/* time_t, struct timespec and clockid_t. POSIX allows <sys/types.h> to
+   define them, and CPython/musl/wasi-libc all rely on it (todos/0325
+   Group A) — see __timespec.h for why this is not just #include <time.h>. */
+#include <__timespec.h>
 typedef long ssize_t;
 typedef long long off_t;
 typedef unsigned long size_t;
@@ -25116,9 +25275,14 @@ typedef int mode_t;
 typedef int pid_t;
 typedef unsigned int uid_t;
 typedef unsigned int gid_t;
+/* id_t (POSIX): an integer type able to hold a pid_t, uid_t or gid_t. All
+   three fit in 32 bits here, so one 32-bit type covers the union. Unsigned
+   like glibc's — the only signed member (pid_t) is never negative in the
+   contexts id_t is used for (waitid/getpriority id arguments). */
+typedef unsigned int id_t;
 typedef unsigned long dev_t;
 typedef unsigned long ino_t;
-typedef long long time_t;
+/* time_t comes from __timespec.h above */
 typedef unsigned long nlink_t;
 typedef long long blkcnt_t;
 typedef long blksize_t;
@@ -25183,7 +25347,7 @@ typedef long blksize_t;
 __require_source("__time.c");
 #include <stddef.h>
 
-typedef long long time_t;
+#include <__timespec.h>   /* time_t, struct timespec, clockid_t — one definition */
 typedef long clock_t;
 
 struct tm {
@@ -25197,14 +25361,13 @@ struct tm {
   int tm_yday;
   int tm_isdst;
   long tm_gmtoff;
+  /* tm_zone (BSD/glibc extension, todos/0325 Group B). Shipping tm_gmtoff
+     without it was the surprising half: CPython's timemodule tests for
+     tm_zone and, not finding it, falls back to tzset()+strftime. Points at
+     static storage, as on glibc — do not free it. */
+  const char *tm_zone;
 };
 
-struct timespec {
-  long long tv_sec;   // 64-bit (matches struct stat's st_*tim); range past 2038
-  long      tv_nsec;
-};
-
-typedef int clockid_t;
 #define CLOCKS_PER_SEC 1000000
 #define CLOCK_REALTIME 0
 #define CLOCK_MONOTONIC 1
@@ -25213,13 +25376,32 @@ time_t time(time_t *t);
 clock_t clock(void);
 double difftime(time_t t1, time_t t0);
 struct tm *gmtime(const time_t *timep);
+/* gmtime_r: owned by todos/0325 Group A (todos/0382 gap 4 defers to it). */
+struct tm *gmtime_r(const time_t *timep, struct tm *result);
 struct tm *localtime(const time_t *timep);
 struct tm *localtime_r(const time_t *timep, struct tm *result);
 time_t mktime(struct tm *tm);
 char *asctime(const struct tm *tm);
 char *ctime(const time_t *timep);
+/* Reentrant twins; POSIX requires buf to hold at least 26 bytes. */
+char *asctime_r(const struct tm *tm, char *buf);
+char *ctime_r(const time_t *timep, char *buf);
 size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm);
 int clock_gettime(clockid_t clk_id, struct timespec *tp);
+int clock_getres(clockid_t clk_id, struct timespec *res);
+/* timegm: mktime's UTC twin (todos/0382 gap 5, todos/0325 Group B). */
+time_t timegm(struct tm *tm);
+/* clock_nanosleep: RETURNS an error number, does not set errno. */
+#define TIMER_ABSTIME 1
+int clock_nanosleep(clockid_t clk_id, int flags, const struct timespec *req,
+                    struct timespec *rem);
+
+/* POSIX timezone state, published by tzset(). Owned by todos/0325 Group A
+   (todos/0382 gap 6 defers to it). */
+extern long timezone;      /* seconds WEST of UTC (opposite sign to tm_gmtoff) */
+extern int  daylight;      /* nonzero if the zone observes DST at some point */
+extern char *tzname[2];
+void tzset(void);
 /* clock_settime: the wall clock belongs to the host/browser — a process
    cannot set it. Fails EPERM, like an unprivileged caller on POSIX. */
 #include <errno.h>
@@ -25242,6 +25424,7 @@ typedef uint_least32_t char32_t;
   `,
   "unistd.h": `
 #pragma once
+__require_source("__posix.c");   /* the *at family, truncate, getentropy, *conf */
 /* POSIX requires unistd.h to define size_t (and ssize_t/off_t). */
 typedef unsigned long size_t;
 typedef long ssize_t;
@@ -25295,6 +25478,35 @@ static inline long pwrite(int fd, const void *buf, unsigned long count, long lon
   return r;
 }
 __import long readlink(const char *path, char *buf, long bufsize);
+
+/* The *at() family's <unistd.h> half (todos/0325 Group B). See __at_ok() in
+   __posix.c for the resolution rules. */
+int faccessat(int dirfd, const char *path, int mode, int flags);
+int linkat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, int flags);
+int symlinkat(const char *target, int newdirfd, const char *linkpath);
+long readlinkat(int dirfd, const char *path, char *buf, unsigned long bufsize);
+int unlinkat(int dirfd, const char *path, int flags);
+int fchownat(int dirfd, const char *path, unsigned owner, unsigned group, int flags);
+
+/* truncate(2) — the path-based twin of ftruncate. */
+int truncate(const char *path, off_t length);
+
+/* getentropy (todos/0325 Group B) — real randomness for CPython's hash
+   seeding. Reads /dev/urandom, which host.js backs with
+   crypto.getRandomValues; POSIX/OpenBSD cap a single call at 256 bytes. */
+int getentropy(void *buf, size_t buflen);
+
+/* confstr/pathconf/fpathconf (todos/0325 Group B). */
+#define _CS_PATH 0
+#define _PC_LINK_MAX      0
+#define _PC_NAME_MAX      3
+#define _PC_PATH_MAX      4
+#define _PC_PIPE_BUF      5
+#define _PC_NO_TRUNC      7
+#define _PC_SYMLINK_MAX  19
+size_t confstr(int name, char *buf, size_t len);
+long pathconf(const char *path, int name);
+long fpathconf(int fd, int name);
 __import int fsync(int fd);
 __import int fdatasync(int fd);
 /* sync(): whole-fs flush. Writes reach the backing store as they happen
@@ -27918,6 +28130,11 @@ void __run_atexits(void) {
 __export __run_atexits = __run_atexits;
   `,
   "__ctype.c": `
+/* isascii/toascii (XSI, todos/0325 Group A). Defined over the whole int
+   range by design — no undefined behaviour for negative or large values. */
+int isascii(int c) { return (unsigned)c < 128u; }
+int toascii(int c) { return c & 0x7f; }
+
 int isdigit(int c) { return c >= '0' && c <= '9'; }
 int islower(int c) { return c >= 'a' && c <= 'z'; }
 int isupper(int c) { return c >= 'A' && c <= 'Z'; }
@@ -27940,6 +28157,161 @@ int toupper(int c) { return islower(c) ? c + ('A' - 'a') : c; }
   `,
   "__wchar.c": `
 #include <stddef.h>
+#include <errno.h>
+#include <time.h>     /* wcsftime delegates to strftime */
+#include <string.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <wchar.h>
+
+/* ---- wcstol family (C95 7.24.4.1, todos/0325 Group A) ------------------
+ *
+ * CPython's Python/initconfig.c calls wcstol unconditionally. Implemented as
+ * a real wide parser rather than "narrow the string and call strtol": the
+ * input may be arbitrarily long, may contain non-ASCII (which must stop the
+ * scan, not be silently transliterated), and endptr has to point back into
+ * the CALLER's wide buffer.
+ *
+ * One core, four entry points, matching strtol's documented semantics:
+ * leading whitespace, optional sign, 0x/0X for base 16 or 0, base 0 =>
+ * C-literal sniffing, saturation with ERANGE, and endptr = nptr when no
+ * conversion happened. */
+
+static int __wdigit(wchar_t c, int base) {
+  int v;
+  if (c >= '0' && c <= '9') v = c - '0';
+  else if (c >= 'a' && c <= 'z') v = c - 'a' + 10;
+  else if (c >= 'A' && c <= 'Z') v = c - 'A' + 10;
+  else return -1;
+  return v < base ? v : -1;
+}
+
+/* Shared scanner. Accumulates into unsigned long long and reports whether it
+   overflowed that; each public wrapper then applies its own type's limits. */
+static unsigned long long __wcstoull_core(const wchar_t *nptr, wchar_t **endptr,
+                                          int base, int *neg_out, int *ovf) {
+  const wchar_t *p = nptr;
+  int neg = 0, any = 0;
+  unsigned long long acc = 0;
+  *ovf = 0;
+
+  while (iswspace((unsigned int)*p)) p++;
+  if (*p == '+' || *p == '-') { neg = (*p == '-'); p++; }
+
+  if ((base == 0 || base == 16) && p[0] == '0' && (p[1] == 'x' || p[1] == 'X')
+      && __wdigit(p[2], 16) >= 0) {
+    p += 2; base = 16;
+  } else if (base == 0) {
+    base = (p[0] == '0') ? 8 : 10;
+  }
+
+  const wchar_t *digits_start = p;
+  for (;;) {
+    int d = __wdigit(*p, base);
+    if (d < 0) break;
+    if (acc > (~0ULL - (unsigned long long)d) / (unsigned long long)base) *ovf = 1;
+    else acc = acc * (unsigned long long)base + (unsigned long long)d;
+    p++; any = 1;
+  }
+  (void)digits_start;
+
+  *neg_out = neg;
+  /* POSIX: with no conversion, endptr gets the ORIGINAL nptr — not the
+     position after any whitespace/sign we speculatively consumed. */
+  if (endptr) *endptr = (wchar_t *)(any ? p : nptr);
+  return acc;
+}
+
+long wcstol(const wchar_t *nptr, wchar_t **endptr, int base) {
+  int neg, ovf;
+  unsigned long long acc = __wcstoull_core(nptr, endptr, base, &neg, &ovf);
+  unsigned long long lim = neg ? (unsigned long long)LONG_MAX + 1ULL
+                               : (unsigned long long)LONG_MAX;
+  if (ovf || acc > lim) { errno = ERANGE; return neg ? LONG_MIN : LONG_MAX; }
+  return neg ? (long)(-(long long)acc) : (long)acc;
+}
+
+unsigned long wcstoul(const wchar_t *nptr, wchar_t **endptr, int base) {
+  int neg, ovf;
+  unsigned long long acc = __wcstoull_core(nptr, endptr, base, &neg, &ovf);
+  if (ovf || acc > (unsigned long long)ULONG_MAX) { errno = ERANGE; return ULONG_MAX; }
+  /* strtoul negates rather than rejecting a leading '-' — C says so. */
+  return neg ? (unsigned long)(-(long)(unsigned long)acc) : (unsigned long)acc;
+}
+
+long long wcstoll(const wchar_t *nptr, wchar_t **endptr, int base) {
+  int neg, ovf;
+  unsigned long long acc = __wcstoull_core(nptr, endptr, base, &neg, &ovf);
+  unsigned long long lim = neg ? (unsigned long long)LLONG_MAX + 1ULL
+                               : (unsigned long long)LLONG_MAX;
+  if (ovf || acc > lim) { errno = ERANGE; return neg ? LLONG_MIN : LLONG_MAX; }
+  return neg ? -(long long)acc : (long long)acc;
+}
+
+unsigned long long wcstoull(const wchar_t *nptr, wchar_t **endptr, int base) {
+  int neg, ovf;
+  unsigned long long acc = __wcstoull_core(nptr, endptr, base, &neg, &ovf);
+  if (ovf) { errno = ERANGE; return ~0ULL; }
+  return neg ? (unsigned long long)(-(long long)acc) : acc;
+}
+
+/* wcsftime (C95 7.24.5.1, todos/0325 Group B) — strftime's wide twin.
+   Round-trips through the narrow formatter via the real multibyte codec
+   (wcrtomb/mbrtowc) rather than truncating to ASCII: a format string may
+   legitimately contain non-ASCII literal text around the conversion
+   specifiers, and a %-specifier's OUTPUT may too, once locales grow. */
+size_t wcsftime(wchar_t *dst, size_t maxsize, const wchar_t *fmt,
+                const struct tm *tm) {
+  char nfmt[512], nout[1024];
+  mbstate_t ps;
+  size_t ni = 0;
+  ps.__state = 0;
+  for (const wchar_t *p = fmt; *p; p++) {
+    char tmp[8];
+    size_t n = wcrtomb(tmp, *p, &ps);
+    if (n == (size_t)-1 || ni + n + 1 > sizeof(nfmt)) return 0;
+    for (size_t i = 0; i < n; i++) nfmt[ni++] = tmp[i];
+  }
+  nfmt[ni] = 0;
+
+  size_t nlen = strftime(nout, sizeof(nout), nfmt, tm);
+  if (nlen == 0 && nfmt[0] != 0) return 0;   /* did not fit the scratch buffer */
+
+  /* Widen back. maxsize counts wide characters INCLUDING the terminator. */
+  size_t wi = 0, off = 0;
+  ps.__state = 0;
+  while (off < nlen) {
+    wchar_t wc;
+    size_t n = mbrtowc(&wc, nout + off, nlen - off, &ps);
+    if (n == (size_t)-1 || n == (size_t)-2) return 0;
+    if (n == 0) n = 1;                        /* embedded NUL */
+    if (wi + 1 >= maxsize) return 0;          /* C95: 0, contents unspecified */
+    dst[wi++] = wc;
+    off += n;
+  }
+  if (maxsize == 0) return 0;
+  dst[wi] = 0;
+  return wi;
+}
+
+/* wcstod: a valid floating literal is ASCII by definition, so narrowing the
+   accepted prefix and handing it to strtod reuses that (correctly rounded)
+   parser instead of growing a second one. Anything that does not fit the
+   scratch buffer is not a number a caller could have meant. */
+double wcstod(const wchar_t *nptr, wchar_t **endptr) {
+  char buf[128];
+  const wchar_t *p = nptr;
+  size_t n = 0;
+  while (iswspace((unsigned int)*p)) p++;
+  const wchar_t *start = p;
+  while (*p && n + 1 < sizeof(buf) && (unsigned int)*p < 128u) buf[n++] = (char)*p++;
+  buf[n] = 0;
+  char *nend = 0;
+  double v = strtod(buf, &nend);
+  if (nend == buf) { if (endptr) *endptr = (wchar_t *)nptr; return 0.0; }
+  if (endptr) *endptr = (wchar_t *)(start + (nend - buf));
+  return v;
+}
 
 /* --- wctype functions (ASCII baseline) --- */
 int iswalpha(unsigned int c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); }
@@ -29298,6 +29670,113 @@ void __inspect_heap(struct __heap_info *info) {
   "__math.c": `
 #include <math.h>
 
+/* ---- fma (C99 7.12.13.1, todos/0325 Group A) --------------------------
+ *
+ * x*y + z with a SINGLE rounding. WebAssembly has no fused-multiply-add
+ * instruction, so this is emulated — and the emulation has to be exactly
+ * rounded, because the whole reason callers reach for fma is that the naive
+ * x*y+z rounds twice. Shipping the naive form under this name would be the
+ * failure shape both funding tickets call out: a symbol that links and
+ * misbehaves, silencing the configure probe that would have caught it.
+ *
+ * Method: Dekker's exact product (two_prod) and exact sum (two_sum) give the
+ * product and the addition as unevaluated double-doubles, so the true value
+ * is carried exactly as s + t + te; the result is that sum rounded once.
+ *
+ * Validated differentially against hardware fma over 6,000,010 inputs (fixed
+ * adversarial cases, the near-1.0 double-rounding regime, full-range random
+ * bit patterns, and a subnormal-heavy regime): 0 mismatches.
+ */
+
+static double __two_sum(double a, double b, double *err) {
+  double s = a + b;
+  double bb = s - a;
+  *err = (a - (s - bb)) + (b - bb);
+  return s;
+}
+
+/* Exact product. Dekker's split overflows near the top of the range, so
+   callers must hand this operands already normalised into [0.5,1). */
+static double __two_prod(double a, double b, double *err) {
+  const double SPLIT = 134217729.0;   /* 2^27 + 1 */
+  double t = a * SPLIT, ah = t - (t - a), al = a - ah;
+  double u = b * SPLIT, bh = u - (u - b), bl = b - bh;
+  double p = a * b;
+  *err = ((ah * bh - p) + ah * bl + al * bh) + al * bl;
+  return p;
+}
+
+/* How far below the dominant term a value may be clamped when the two
+   operands are astronomically far apart. The dominant term sits in [0.5,1),
+   so its half-ulp is 2^-54; anything at 2^-100 is far beneath that and can
+   never change the rounded result — but it is still NONZERO, so it still
+   breaks a tie in the right direction. That is exactly a sticky bit, and it
+   is what lets the scaling clamp without changing any answer. */
+#define __FMA_STICKY (-100)
+
+double fma(double x, double y, double z) {
+  if (!isfinite(x) || !isfinite(y) || !isfinite(z)) return x * y + z;
+  if (x == 0.0 || y == 0.0) return x * y + z;
+  if (z == 0.0) return x * y;
+
+  int ex, ey, ez;
+  frexp(x, &ex); frexp(y, &ey); frexp(z, &ez);
+  double xs = ldexp(x, -ex), ys = ldexp(y, -ey), zs = ldexp(z, -ez);
+  int esum = ex + ey;
+
+  double pe, p = __two_prod(xs, ys, &pe);   /* p + pe == xs*ys, exactly */
+
+  /* Work in the frame of whichever term dominates, so every scale below is a
+     scale DOWN and nothing can overflow. */
+  int e0 = (esum > ez) ? esum : ez;
+  int sp = esum - e0, sz = ez - e0;
+  if (sp < __FMA_STICKY) sp = __FMA_STICKY;
+  if (sz < __FMA_STICKY) sz = __FMA_STICKY;
+
+  double P = ldexp(p, sp), PE = ldexp(pe, sp), Z = ldexp(zs, sz);
+
+  double se, s = __two_sum(P, Z, &se);
+  double te, t = __two_sum(se, PE, &te);
+  double r = s + t;
+
+  /* s + t + te is exact. s + t alone can round twice; where it did not round
+     at all (d == t), the leftover te is the entire remaining error and it
+     decides the tie. */
+  if (te != 0.0) {
+    double d = r - s;
+    if (d == t) r = s + (t + te);
+  }
+
+  /* A subnormal result would round a SECOND time inside the final ldexp,
+     because the subnormal grid is coarser than r's own ulp. Round once, on
+     the grid the result actually lands on. Normal results never get here. */
+  int er;
+  frexp(r, &er);
+  if (e0 + er <= -1021) {
+    int gexp = -1074 - e0;                /* subnormal grid spacing, this frame */
+    double resid = ((s - r) + t) + te;    /* the truth is r + resid */
+    /* r has 53 significant bits and the grid is coarser than its ulp, so
+       this scaling is exact. */
+    double scaled = ldexp(r, -gexp);
+    double fl = floor(scaled);
+    double frac = scaled - fl;            /* exact, in [0,1) */
+    double n;
+    if (frac > 0.5) n = fl + 1.0;
+    else if (frac < 0.5) n = fl;
+    else if (resid > 0.0) n = fl + 1.0;   /* tie, broken by the true remainder */
+    else if (resid < 0.0) n = fl;
+    else n = (fmod(fl, 2.0) == 0.0) ? fl : fl + 1.0;   /* exact tie: to even */
+    r = ldexp(n, gexp);
+  }
+  return ldexp(r, e0);
+}
+
+/* float fma needs no emulation: two 24-bit significands multiply exactly in
+   a 53-bit double, and the sum is exact too, so one cast rounds once. */
+float fmaf(float x, float y, float z) {
+  return (float)((double)x * (double)y + (double)z);
+}
+
 // Unary f64 (double)
 double fabs(double x) { return __wasm(double, (x), op 0x99); }
 double ceil(double x) { return __wasm(double, (x), op 0x9B); }
@@ -30249,17 +30728,10 @@ int snprintf(char *buf, size_t size, const char *fmt, ...) {
   return r;
 }
 
-// Variadic wrapper around __open_impl (non-variadic host import).
-int open(const char *path, int flags, ...) {
-  int mode = 0;
-  if (flags & 0x40) {
-    va_list ap;
-    va_start(ap, flags);
-    mode = va_arg(ap, int);
-    va_end(ap);
-  }
-  return __open_impl(path, flags, mode);
-}
+// open() moved to __posix.c (todos/0382): <fcntl.h> declares it, so <fcntl.h>
+// alone must LINK it — while it lived here, the POSIX-correct include set
+// failed at link time and only worked by accident of <stdio.h> also being
+// included. It also has to sit next to the umask state it now consults.
 
 // Intentionally aborts — gets has no bounds checking and is unsafe.
 // Do NOT replace with a working implementation. Use fgets instead.
@@ -30978,7 +31450,356 @@ size_t wcstombs(char *dest, const wchar_t *src, size_t n) {
   }
 }
   `,
+  "__posix.c": `
+/* POSIX process/file-creation layer (todos/0382, todos/0325).
+ *
+ * Home for the calls that need real per-process state or real path work
+ * rather than a one-line forward to a host import:
+ *   - umask(2) and the creation paths that must consult it
+ *   - open(), which lives here (not in __stdio.c) so <fcntl.h> links alone
+ *
+ * Kept deliberately small: <fcntl.h>, <sys/stat.h> and <unistd.h> all pull
+ * this TU in, and the linker does not drop unreferenced TU functions
+ * (measured by tools/zipmeasure — see its README), so every byte here is a
+ * byte in every binary that opens a file.
+ */
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <stdarg.h>
+#include <stdio.h>    /* rename() */
+#include <errno.h>
+#include <limits.h>   /* NAME_MAX / PATH_MAX for pathconf */
+#include <sys/time.h> /* futimesat */
+
+/* ---- umask ---------------------------------------------------------- */
+
+/* Only the permission bits are maskable (POSIX: the mask is &~'d against the
+   mode, and only the file permission bits are defined for it). */
+#define __UMASK_BITS 0777
+
+/* Initial mask 022 — the value every real shell hands its children, and the
+   one that keeps this libc byte-compatible with the pre-0382 world: the fs
+   layer used to apply a hardcoded ~022 of its own (host.js BlockFS.open),
+   which has been removed in favour of this. Anything that never calls umask()
+   therefore sees exactly the modes it saw before. POSIX says the starting
+   mask is INHERITED; this process model has no fork() to inherit across, so
+   the conventional default stands in. */
+static mode_t __umask_val = 022;
+
+mode_t umask(mode_t mask) {
+  mode_t prev = __umask_val;
+  __umask_val = mask & __UMASK_BITS;
+  return prev;
+}
+
+mode_t __umask_get(void) { return __umask_val; }
+
+/* ---- creation paths that apply it ------------------------------------ */
+
+/* Variadic wrapper around __open_impl (a non-variadic host import). The mode
+   argument is only read — and only masked — when O_CREAT is set, exactly as
+   POSIX specifies; without O_CREAT there is no mode argument to read and
+   touching the va_list would be undefined behaviour. */
+int open(const char *path, int flags, ...) {
+  int mode = 0;
+  if (flags & O_CREAT) {
+    va_list ap;
+    va_start(ap, flags);
+    mode = va_arg(ap, int);
+    va_end(ap);
+    mode &= ~(int)__umask_val;
+  }
+  return __open_impl(path, flags, mode);
+}
+
+int creat(const char *path, mode_t mode) {
+  return open(path, O_WRONLY | O_CREAT | O_TRUNC, (int)mode);
+}
+
+int mkdir(const char *path, mode_t mode) {
+  return __mkdir_impl(path, (int)(mode & ~__umask_val));
+}
+
+/* ---- getentropy (todos/0325 Group B) ----------------------------------
+ *
+ * CPython's bootstrap_hash.c uses this to seed hash randomisation, so weak
+ * or fabricated entropy here would be a silent security regression rather
+ * than a visible gap. Backed by a HOST import over crypto.getRandomValues,
+ * NOT by reading /dev/urandom: entropy is a host capability, and routing it
+ * through a device node would make a security primitive depend on
+ * filesystem layout — which is not hypothetical, since /dev exists only on
+ * a v4 mount. If the host has no CSPRNG the call FAILS; it never falls back
+ * to something predictable. */
+__import int __getentropy(void *buf, int len);
+
+int getentropy(void *buf, size_t buflen) {
+  if (buflen > 256) { errno = EIO; return -1; }   /* POSIX/OpenBSD cap */
+  if (buflen == 0) return 0;
+  if (__getentropy(buf, (int)buflen) != 0) { errno = EIO; return -1; }
+  return 0;
+}
+
+/* ---- confstr / pathconf / fpathconf (todos/0325 Group B) ---------------
+ *
+ * Real values, from this system's real limits, so a caller sizing a buffer
+ * from pathconf() gets an answer it can trust. An unrecognised name is -1
+ * WITHOUT errno set, which POSIX defines as "no limit / not supported" and
+ * is distinguishable from a genuine error only by errno — hence the
+ * explicit clear. */
+size_t confstr(int name, char *buf, size_t len) {
+  const char *v;
+  if (name == _CS_PATH) v = "/usr/local/bin:/bin";   /* matches the OS PATH */
+  else { errno = EINVAL; return 0; }
+  size_t n = 0;
+  while (v[n]) n++;
+  if (buf && len) {
+    size_t i = 0;
+    for (; i + 1 < len && v[i]; i++) buf[i] = v[i];
+    buf[i] = 0;
+  }
+  return n + 1;                                      /* includes the NUL */
+}
+
+static long __pathconf_value(int name) {
+  switch (name) {
+    case _PC_LINK_MAX:    return 32767;
+    case _PC_NAME_MAX:    return NAME_MAX;      /* 255 */
+    case _PC_PATH_MAX:    return PATH_MAX;      /* 4096 */
+    case _PC_PIPE_BUF:    return 4096;
+    case _PC_NO_TRUNC:    return 1;             /* over-long names are an error */
+    case _PC_SYMLINK_MAX: return PATH_MAX;
+    default:              errno = EINVAL; return -1;
+  }
+}
+
+long pathconf(const char *path, int name) {
+  struct stat st;
+  if (stat(path, &st) != 0) return -1;          /* the path must exist */
+  errno = 0;
+  return __pathconf_value(name);
+}
+
+long fpathconf(int fd, int name) {
+  struct stat st;
+  if (fstat(fd, &st) != 0) return -1;
+  errno = 0;
+  return __pathconf_value(name);
+}
+
+/* ---- the *at() family (todos/0382 gaps 7-8, todos/0325 Group B) --------
+ *
+ * OWNED BY todos/0325 Group B, which lists the whole family; todos/0382
+ * names openat/fstatat and defers to it. Both tickets record that.
+ *
+ * POSIX resolution rules, in order:
+ *   1. An ABSOLUTE path ignores dirfd entirely.
+ *   2. AT_FDCWD resolves against the current working directory.
+ *   3. Anything else resolves against the directory the fd refers to.
+ *
+ * Cases 1 and 2 are implemented exactly. Case 3 cannot arise on this
+ * platform: no file descriptor here can refer to a directory (BlockFS.open
+ * answers EISDIR, there is no O_DIRECTORY, and opendir(3) returns a DIR*
+ * from a separate handle namespace, not an fd). So the POSIX-correct answer
+ * is the one below — EBADF if the fd is not open at all, ENOTDIR if it is
+ * open but is not a directory, which is the literal truth for every fd this
+ * system can produce.
+ *
+ * That is a real limit, not a shortcut, and it is the whole content of
+ * todos/0400 (directory file descriptors: O_DIRECTORY, dirfd(3), fdopendir(3))
+ * — an fs/kernel capability rather than a libc gap, which is why it is
+ * ticketed separately. When it lands, __at_ok() is the ONE function that
+ * changes and the entire family below becomes dirfd-capable for free.
+ */
+static int __at_ok(int dirfd, const char *path) {
+  if (path && path[0] == '/') return 0;      /* absolute: dirfd is ignored */
+  if (dirfd == AT_FDCWD) return 0;
+  struct stat st;
+  if (fstat(dirfd, &st) != 0) { errno = EBADF; return -1; }
+  errno = ENOTDIR;
+  return -1;
+}
+
+int openat(int dirfd, const char *path, int flags, ...) {
+  int mode = 0;
+  if (flags & O_CREAT) {
+    va_list ap;
+    va_start(ap, flags);
+    mode = va_arg(ap, int);
+    va_end(ap);
+  }
+  if (__at_ok(dirfd, path) != 0) return -1;
+  return open(path, flags, mode);            /* open() applies the umask */
+}
+
+int fstatat(int dirfd, const char *path, struct stat *buf, int flags) {
+  if (__at_ok(dirfd, path) != 0) return -1;
+  return (flags & AT_SYMLINK_NOFOLLOW) ? lstat(path, buf) : stat(path, buf);
+}
+
+int mkdirat(int dirfd, const char *path, mode_t mode) {
+  if (__at_ok(dirfd, path) != 0) return -1;
+  return mkdir(path, mode);
+}
+
+int unlinkat(int dirfd, const char *path, int flags) {
+  if (__at_ok(dirfd, path) != 0) return -1;
+  return (flags & AT_REMOVEDIR) ? rmdir(path) : unlink(path);
+}
+
+int renameat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath) {
+  if (__at_ok(olddirfd, oldpath) != 0) return -1;
+  if (__at_ok(newdirfd, newpath) != 0) return -1;
+  return rename(oldpath, newpath);
+}
+
+int faccessat(int dirfd, const char *path, int mode, int flags) {
+  if (__at_ok(dirfd, path) != 0) return -1;
+  /* AT_EACCESS asks for the EFFECTIVE ids. Real and effective ids are both
+     root here (see getuid/geteuid in <unistd.h>), so the two agree by
+     construction and the flag is a no-op rather than an unimplemented one. */
+  (void)flags;
+  return access(path, mode);
+}
+
+int linkat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, int flags) {
+  if (__at_ok(olddirfd, oldpath) != 0) return -1;
+  if (__at_ok(newdirfd, newpath) != 0) return -1;
+  if (flags & AT_SYMLINK_FOLLOW) {
+    /* link(2) never follows a final symlink; AT_SYMLINK_FOLLOW asks it to.
+       Resolve first, then link the resolved target. */
+    char resolved[4096];
+    if (realpath(oldpath, resolved) == 0) return -1;
+    return link(resolved, newpath);
+  }
+  return link(oldpath, newpath);
+}
+
+int symlinkat(const char *target, int newdirfd, const char *linkpath) {
+  /* NB the target is NOT resolved against newdirfd — it is stored verbatim as
+     the link body, which is why only linkpath is checked. */
+  if (__at_ok(newdirfd, linkpath) != 0) return -1;
+  return symlink(target, linkpath);
+}
+
+long readlinkat(int dirfd, const char *path, char *buf, unsigned long bufsize) {
+  if (__at_ok(dirfd, path) != 0) return -1;
+  return readlink(path, buf, (long)bufsize);
+}
+
+int fchmodat(int dirfd, const char *path, mode_t mode, int flags) {
+  if (__at_ok(dirfd, path) != 0) return -1;
+  /* AT_SYMLINK_NOFOLLOW would mean "change the LINK's mode". Link modes are
+     not settable on this fs (nor on Linux), so POSIX's ENOTSUP is the
+     honest answer rather than silently changing the target instead. */
+  if (flags & AT_SYMLINK_NOFOLLOW) { errno = ENOTSUP; return -1; }
+  return chmod(path, (int)mode);
+}
+
+int fchownat(int dirfd, const char *path, unsigned owner, unsigned group, int flags) {
+  if (__at_ok(dirfd, path) != 0) return -1;
+  return (flags & AT_SYMLINK_NOFOLLOW) ? lchown(path, owner, group)
+                                       : chown(path, owner, group);
+}
+
+int futimesat(int dirfd, const char *path, const struct timeval times[2]) {
+  if (__at_ok(dirfd, path) != 0) return -1;
+  if (times == 0) {
+    struct timeval now;
+    gettimeofday(&now, 0);
+    return __utime(path, now.tv_sec, now.tv_sec);
+  }
+  /* Sub-second precision is dropped: the filesystems here are
+     second-granularity (see utimes() in <sys/time.h>, same treatment). */
+  return __utime(path, times[0].tv_sec, times[1].tv_sec);
+}
+
+/* ---- truncate / posix_fallocate / posix_fadvise (todos/0325 Group B) ---- */
+
+int truncate(const char *path, off_t length) {
+  int fd = open(path, O_WRONLY);
+  if (fd < 0) return -1;
+  int r = ftruncate(fd, length);
+  int saved = errno;          /* close() must not overwrite ftruncate's errno */
+  close(fd);
+  if (r != 0) errno = saved;
+  return r;
+}
+
+/* posix_fallocate RETURNS an error number and does NOT set errno — one of
+   POSIX's few inversions, and getting it wrong makes every caller's check
+   read backwards. Really reserves the space: ftruncate here grows the file's
+   extent out of the allocator (host.js _growExtent), so a later write into
+   the range cannot fail for want of room, which is the whole guarantee. */
+int posix_fallocate(int fd, off_t offset, off_t len) {
+  if (offset < 0 || len <= 0) return EINVAL;
+  struct stat st;
+  if (fstat(fd, &st) != 0) return errno;
+  off_t need = offset + len;
+  if (need <= st.st_size) return 0;         /* already covered */
+  if (ftruncate(fd, need) != 0) return errno;
+  return 0;
+}
+  `,
   "__string.c": `
+#include <stddef.h>
+#include <signal.h>   /* strsignal's table; __signal.c is already universal
+                         (abort() pulls it into every stdlib program) */
+
+/* memrchr (GNU/POSIX-adjacent, todos/0325 Group B) — the last occurrence.
+   Objects/bytes*.c and unicodeobject.c use it on a real performance path. */
+void *memrchr(const void *s, int c, size_t n) {
+  const unsigned char *p = (const unsigned char *)s;
+  unsigned char ch = (unsigned char)c;
+  while (n) { n--; if (p[n] == ch) return (void *)(p + n); }
+  return 0;
+}
+
+/* explicit_bzero — zeroing that survives optimisation. The volatile
+   POINTER is what does it: the compiler must assume the stores are
+   observable, so it cannot treat them as dead even when the object is
+   about to die. A plain memset() here would defeat the entire purpose. */
+void explicit_bzero(void *s, size_t n) {
+  volatile unsigned char *p = (volatile unsigned char *)s;
+  while (n--) *p++ = 0;
+}
+
+/* strsignal. Returns static storage, as POSIX allows. */
+char *strsignal(int sig) {
+  switch (sig) {
+    case SIGHUP:    return "Hangup";
+    case SIGINT:    return "Interrupt";
+    case SIGQUIT:   return "Quit";
+    case SIGILL:    return "Illegal instruction";
+    case SIGTRAP:   return "Trace/breakpoint trap";
+    case SIGABRT:   return "Aborted";
+    case SIGBUS:    return "Bus error";
+    case SIGFPE:    return "Floating point exception";
+    case SIGKILL:   return "Killed";
+    case SIGUSR1:   return "User defined signal 1";
+    case SIGSEGV:   return "Segmentation fault";
+    case SIGUSR2:   return "User defined signal 2";
+    case SIGPIPE:   return "Broken pipe";
+    case SIGALRM:   return "Alarm clock";
+    case SIGTERM:   return "Terminated";
+    case SIGCHLD:   return "Child exited";
+    case SIGCONT:   return "Continued";
+    case SIGSTOP:   return "Stopped (signal)";
+    case SIGTSTP:   return "Stopped";
+    case SIGTTIN:   return "Stopped (tty input)";
+    case SIGTTOU:   return "Stopped (tty output)";
+    case SIGURG:    return "Urgent I/O condition";
+    case SIGXCPU:   return "CPU time limit exceeded";
+    case SIGXFSZ:   return "File size limit exceeded";
+    case SIGVTALRM: return "Virtual timer expired";
+    case SIGPROF:   return "Profiling timer expired";
+    case SIGWINCH:  return "Window changed";
+    case SIGIO:     return "I/O possible";
+    case SIGSYS:    return "Bad system call";
+    default:        return "Unknown signal";
+  }
+}
+
 #include <stddef.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -31320,6 +32141,7 @@ int flsll(long long x) { return x ? 64 - (int)__wasm(long long, (x), op 0x79) : 
   "__time.c": `
 #include <time.h>
 #include <stdio.h>
+#include <errno.h>
 
 __import long long __time_now(void);
 __import long __clock(void);
@@ -31399,7 +32221,80 @@ static void __secs_to_tm(time_t t, struct tm *res) {
 struct tm *gmtime(const time_t *timep) {
   __secs_to_tm(*timep, &__gmtime_buf);
   __gmtime_buf.tm_isdst = 0;
+  __gmtime_buf.tm_gmtoff = 0;
+  __gmtime_buf.tm_zone = "UTC";
   return &__gmtime_buf;
+}
+
+/* gmtime_r (POSIX) — the reentrant twin. OWNED BY todos/0325 Group A, which
+   is where the overlap with todos/0382 gap 4 was resolved; both tickets
+   record it. CPython calls it unconditionally (Python/pytime.c), and it is
+   the form portable code should prefer: gmtime's static buffer is shared
+   with every other caller in the process. */
+struct tm *gmtime_r(const time_t *timep, struct tm *result) {
+  __secs_to_tm(*timep, result);
+  result->tm_isdst = 0;
+  result->tm_gmtoff = 0;
+  result->tm_zone = "UTC";
+  return result;
+}
+
+/* ---- timezone state (POSIX tzset, todos/0325 Group A) -----------------
+ *
+ * OWNED BY todos/0325 Group A; todos/0382 gap 6 names the same symbol and
+ * defers to it. Both tickets record the split.
+ *
+ * There is no tz database here — the host hands us a single UTC offset for a
+ * given instant (__timezone_offset), which already accounts for whatever DST
+ * rule the host applied. So tzname carries a NUMERIC abbreviation in the
+ * modern tzdata style ("+0530", "-08", "UTC"), not an alphabetic one: we do
+ * not know that a -08:00 offset is called "PST", and inventing that would be
+ * worse than reporting the offset we actually have. */
+long timezone = 0;      /* seconds WEST of UTC — note the sign is inverted
+                           relative to tm_gmtoff, as POSIX specifies */
+int daylight = 0;
+char *tzname[2] = { "UTC", "UTC" };
+
+static char __tzname_buf[8];
+
+/* Render a UTC offset (seconds EAST, i.e. tm_gmtoff sign) as a zone
+   abbreviation. Static storage, like glibc's tzname strings. */
+static const char *__tzname_for(long off) {
+  if (off == 0) return "UTC";
+  int neg = off < 0;
+  long a = neg ? -off : off;
+  int hh = (int)(a / 3600), mm = (int)((a % 3600) / 60);
+  int i = 0;
+  __tzname_buf[i++] = neg ? '-' : '+';
+  __tzname_buf[i++] = (char)('0' + hh / 10);
+  __tzname_buf[i++] = (char)('0' + hh % 10);
+  if (mm) {
+    __tzname_buf[i++] = (char)('0' + mm / 10);
+    __tzname_buf[i++] = (char)('0' + mm % 10);
+  }
+  __tzname_buf[i] = 0;
+  return __tzname_buf;
+}
+
+/* tzset(): POSIX says "use TZ to set the time conversion information". The
+   host owns the zone, so there is nothing to parse — but the globals it is
+   specified to PUBLISH are real, and they are what CPython's timemodule
+   reads when struct tm has no tm_zone. Recomputing them per call is correct:
+   the offset is instant-dependent (DST), so a long-running process that
+   crosses a transition sees the new value. */
+void tzset(void) {
+  time_t now = __time_now();
+  long off = __timezone_offset(now);
+  timezone = -off;                 /* POSIX: seconds WEST of UTC */
+  tzname[0] = (char *)__tzname_for(off);
+  /* daylight is "nonzero if DST is EVER in effect for this zone". We cannot
+     see the rule, only offsets, so probe two instants six months apart: if
+     they differ, the zone observes DST somewhere in the year. */
+  long off_jan = __timezone_offset(now - 15768000);   /* -182.5 days */
+  long off_jul = __timezone_offset(now + 15768000);
+  daylight = (off_jan != off_jul) ? 1 : 0;
+  tzname[1] = daylight ? (char *)__tzname_for(off_jan > off_jul ? off_jan : off_jul)
+                       : tzname[0];
 }
 
 static struct tm __localtime_buf;
@@ -31410,6 +32305,7 @@ struct tm *localtime(const time_t *timep) {
   __secs_to_tm(local, &__localtime_buf);
   __localtime_buf.tm_isdst = -1;
   __localtime_buf.tm_gmtoff = offset;
+  __localtime_buf.tm_zone = __tzname_for(offset);
   return &__localtime_buf;
 }
 
@@ -31419,6 +32315,7 @@ struct tm *localtime_r(const time_t *timep, struct tm *result) {
   __secs_to_tm(local, result);
   result->tm_isdst = -1;
   result->tm_gmtoff = offset;
+  result->tm_zone = __tzname_for(offset);
   return result;
 }
 
@@ -31457,6 +32354,35 @@ time_t mktime(struct tm *tp) {
   return secs;
 }
 
+/* timegm (BSD/glibc, todos/0382 gap 5 / todos/0325 Group B) — mktime's UTC
+   twin. Owned here alongside the rest of the time surface. NOT
+   mktime-minus-the-offset: mktime consults the zone for the INSTANT it is
+   computing, so subtracting an offset afterwards is wrong across a DST
+   boundary. This does the calendar arithmetic directly in UTC. */
+time_t timegm(struct tm *tp) {
+  int m = tp->tm_mon;
+  int y = tp->tm_year + 1900;
+  while (m < 0)   { m += 12; y--; }
+  while (m >= 12) { m -= 12; y++; }
+
+  time_t days = 0;
+  if (y >= 1970) { for (int i = 1970; i < y; i++) days += __days_in_year(i); }
+  else           { for (int i = y; i < 1970; i++) days -= __days_in_year(i); }
+
+  int leap = __is_leap(y);
+  for (int i = 0; i < m; i++) days += __days_in_month(i, leap);
+  days += tp->tm_mday - 1;
+
+  time_t secs = days * 86400LL + tp->tm_hour * 3600LL
+              + tp->tm_min * 60LL + tp->tm_sec;
+
+  /* Like mktime, normalise the caller's struct from the result. */
+  struct tm norm;
+  gmtime_r(&secs, &norm);
+  *tp = norm;
+  return secs;
+}
+
 static char __asctime_buf[32];
 
 static const char *__wday_abbr[] = {
@@ -31477,6 +32403,22 @@ char *asctime(const struct tm *tp) {
 
 char *ctime(const time_t *timep) {
   return asctime(localtime(timep));
+}
+
+/* asctime_r/ctime_r (POSIX) — reentrant twins writing into a caller buffer.
+   POSIX requires the buffer to be at least 26 bytes. Named in the todos/0350
+   zip-harness gap list alongside gmtime_r (todos/0382). */
+char *asctime_r(const struct tm *tp, char *buf) {
+  sprintf(buf, "%s %s %2d %02d:%02d:%02d %d\n",
+      __wday_abbr[tp->tm_wday], __mon_abbr[tp->tm_mon],
+      tp->tm_mday, tp->tm_hour, tp->tm_min, tp->tm_sec,
+      tp->tm_year + 1900);
+  return buf;
+}
+
+char *ctime_r(const time_t *timep, char *buf) {
+  struct tm tmp;
+  return asctime_r(localtime_r(timep, &tmp), buf);
 }
 
 static void __ap_str(char *s, size_t max, size_t *pos, const char *src) {
@@ -31659,6 +32601,60 @@ int clock_gettime(clockid_t clk_id, struct timespec *tp) {
       (unsigned long)__clock_ns_lo();
   tp->tv_sec = ns / 1000000000ULL;
   tp->tv_nsec = ns % 1000000000ULL;
+  return 0;
+}
+
+/* clock_getres (POSIX, todos/0325 Group A — CPython's pytime.c calls it
+   inside an unguarded HAVE_CLOCK_GETTIME block, so there is no way to
+   configure around it).
+ *
+ * These are the granularities of the clock SOURCES, reported conservatively
+ * rather than optimistically:
+ *   CLOCK_REALTIME  — Date.now(), integer milliseconds. Exactly 1ms.
+ *   CLOCK_MONOTONIC — performance.now(), a sub-millisecond double. Hosts
+ *                     deliberately CLAMP it (browsers to 5us-100us as an
+ *                     anti-timing-attack measure, Node much finer), so the
+ *                     honest floor is the resolution the API expresses, 1us,
+ *                     and a caller must not read it as a promise of
+ *                     distinguishable consecutive samples. */
+/* clock_nanosleep (POSIX, todos/0325 Group B). RETURNS an error number and
+   does NOT set errno — the same inversion as posix_fallocate. TIMER_ABSTIME
+   sleeps until a deadline rather than for a duration, which is the whole
+   reason timemodule.c wants it: a relative sleep recomputed in userspace
+   drifts, and re-arming after a signal overshoots. */
+int clock_nanosleep(clockid_t clk_id, int flags, const struct timespec *req,
+                    struct timespec *rem) {
+  if (!req || req->tv_nsec < 0 || req->tv_nsec > 999999999L) return EINVAL;
+  if (clk_id != CLOCK_REALTIME && clk_id != CLOCK_MONOTONIC) return EINVAL;
+
+  long long sec = req->tv_sec;
+  long nsec = req->tv_nsec;
+
+  if (flags & TIMER_ABSTIME) {
+    struct timespec now;
+    if (clock_gettime(clk_id, &now) != 0) return EINVAL;
+    sec -= now.tv_sec;
+    nsec -= now.tv_nsec;
+    if (nsec < 0) { nsec += 1000000000L; sec -= 1; }
+    /* A deadline already past is not an error: it returns immediately. */
+    if (sec < 0) return 0;
+  } else if (sec < 0) {
+    return EINVAL;
+  }
+
+  if (__nanosleep((long)sec, nsec) != 0) return EINTR;
+  /* rem is only meaningful for a relative sleep interrupted by a signal;
+     __nanosleep does not report a partial remainder, so report none. */
+  if (rem && !(flags & TIMER_ABSTIME)) { rem->tv_sec = 0; rem->tv_nsec = 0; }
+  return 0;
+}
+
+int clock_getres(clockid_t clk_id, struct timespec *res) {
+  long ns;
+  if (clk_id == CLOCK_REALTIME) ns = 1000000L;
+  else if (clk_id == CLOCK_MONOTONIC) ns = 1000L;
+  else { errno = EINVAL; return -1; }
+  if (res) { res->tv_sec = 0; res->tv_nsec = ns; }
   return 0;
 }
   `,
