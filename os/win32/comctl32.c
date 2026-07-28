@@ -1,9 +1,12 @@
 /* comctl32.c — the common-controls veneer slice (todos/0048, design
- * todos/WIN32.md). The "common controls" here ARE user32's controls —
- * this OS has one control implementation, so Init* has nothing to load
- * (calc calls InitCommonControls for theming/manifest reasons only).
+ * todos/WIN32.md). Since todos/0370 comctl32 owns REAL classes:
+ * InitCommonControls / InitCommonControlsEx(ICC_LISTVIEW_CLASSES) register
+ * SysListView32 + SysHeader32 (listview.c, its own TU — the menucore.c
+ * one-facility-per-TU precedent). The standard controls (BUTTON/EDIT/...)
+ * stay user32's; calc's InitCommonControls call now registers the
+ * listview classes too, which is exactly the real comctl32 contract.
  *
- * The STATUS BAR is the one real control this slice owns (notepad's
+ * The STATUS BAR is the other control this slice owns (notepad's
  * Ln/Col + encoding + EOLN readout): a self-bottom-parking child strip
  * (WM_SIZE with any params re-parks it against the parent's client
  * bottom — notepad sends WM_SIZE 0,0 and then reads GetWindowRect for
@@ -15,16 +18,22 @@
 
 #undef UNICODE
 #undef _UNICODE
-#include <windows.h>
+#include "win32_internal.h"     /* __comctl_register_listview */
 #include <commctrl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-void InitCommonControls(void) { /* one toolkit, nothing to register */ }
+void InitCommonControls(void) {                  /* the register-everything
+                                                  * legacy entry */
+    __comctl_register_listview();
+}
 
 BOOL InitCommonControlsEx(const INITCOMMONCONTROLSEX *icc) {
-    return icc != NULL && icc->dwSize == sizeof *icc;
+    if (!icc || icc->dwSize != sizeof *icc) return FALSE;
+    if (icc->dwICC & (ICC_LISTVIEW_CLASSES | ICC_WIN95_CLASSES))
+        __comctl_register_listview();
+    return TRUE;
 }
 
 /* ---- status bar ---- */

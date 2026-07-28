@@ -1,6 +1,8 @@
 # 0387 — 0370's listview branch is RED — win32 require-block drift + MessageBox link error; it must gate before it can merge
 
-- **Status**: open
+- **Status**: done — branch `0387-listview-fix`, gated (kernel 126/126, sweep 40/40,
+  host 24/24, todos 5/5). See "Resolution" at the foot. `0370` stays OPEN; its bytes
+  ride this branch and **an image bump is owed** (master assigns it).
 - **Difficulty**: medium
 - **Design**: this file. Evidence branch: **`185-bundle-RED-0370`** (pushed, `4bffa4cd`).
 - **Provenance**: master cont-129, 2026-07-28. Found by the **merged 185 gate**, which is
@@ -92,3 +94,63 @@ no timeout story** — it failed at an assertion/throw instantly. Do not reach f
   anchored line in the same commit.
 - 🔴 **This ticket closes only on gate evidence, never on a push.** That is the whole point
   of its existence.
+
+## Resolution (2026-07-28, branch `0387-listview-fix`)
+
+### There were THREE lists, and `0370` filled in one
+
+A new win32 veneer TU must appear in `os/win32/lib.json` `sources` (host builds),
+`os/win32/include/windows.h`'s require block (what an in-OS `#include <windows.h>`
+pulls), and `packages/win32.json` `files` (what the package — and via
+`foldPackages`, the fat image — actually PLANTS). `0370` did only the first.
+
+**Defect 1** was as filed: one line in `windows.h`, placed to mirror lib.json's order.
+
+**Defect 2 was mis-identified in this ticket.** `Undefined symbol 'MessageBox'` is
+not a symptom — it is an ASSERTED negative at `test_cc_win32_e2e.js:198`, which
+requires the `menucore.h` engine-only subset to produce a loud undefined-veneer-symbol
+link error, proving `WIN32_NO_REQUIRE_SOURCES` suppressed the full block. It is
+printed by a *passing* check. It surfaced in the failure text because `drive.js`
+searches **stdout** for the timeout line, which `wmctl` writes to **stderr** — the
+search returns -1, so "stdout tail before the first timeout" degrades to the tail of
+the whole session, and the expected link error happened to sit in that window.
+
+The real second defect: `packages/win32.json` never shipped `listview.c`. Confirmed
+statically, no boot needed —
+`foldPackages(fs, path, cwd, manifest, 'all', {})` yields
+`/usr/opt/win32/src/win32/{advapi32,comctl32,comdlg32,crt16,gdi32,…}.c` with
+**listview.c absent**. So once defect 1 was fixed the require block named a file that
+was not on disk in either flavor, and EVERY in-OS `cc` of a `windows.h` app failed —
+`wccrc=1`, and two `wmctl wait` timeouts (`wait win`, `wait label`). `TITLE-CHANGED`
+and `WAPP-UP` still appeared in the log because they are unconditional `echo`s after
+the failed waits, which is what made the log read as though the app had come up.
+
+The two defects are siblings, not cause and effect: one omission landing in two lists,
+failing loudly in one place and silently in the other.
+
+### The gate that closes the class
+
+`win32RequireDriftErrors` (os-common.js — the ONE checker, run by `tools/mkpkg.js`
+and `tools/win32ports.js --check`) cross-checked lists 1↔2 and was blind to list 3.
+It now also asserts `packages/win32.json` ships every `lib.json ∪ menucore.json`
+source under `src/win32/`. One direction only — the payload legitimately ships files
+no source backs (`wwinmain.c`, the internal headers). Positive control, both halves
+re-broken in memory against the fixed tree: one error each, fixed tree returns `[]`.
+
+### Gate artifacts
+
+- kernel `build/test-kernel/summary.json`: `filter: null`,
+  `files {total 126, selected 126, executed 126, resumed 0, carried 0, recorded 126}`,
+  1 run, **126 passed / 0 failed** (1034.5s). `test_cc_win32_e2e` 256.3s-FAIL → **11.4s-ok**.
+- sweep `build/test-browser/summary.json`: `filter: null`,
+  `files {total 40, …, carried 0, recorded 40}`, **40 passed / 0 failed** (921.8s).
+- host suite: 24 files, exit 0, "All host tests passed", no FAIL/SKIP. (There is no
+  `pnpm verify` script in this repo — `package.json` has no `scripts` block at all.)
+- todos suite: **5/5**.
+
+### Filed on the way
+
+`todos/0396` — `tests/kernel/test_punes_e2e.js` is on disk but not in the kernel
+registry (127 files, 126 rows), while `tests/run.js:363` maps `vendor/punes/` →
+kernel. Pre-existing on `main`; found by counting the suite instead of trusting its
+summary line.

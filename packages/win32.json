@@ -26,6 +26,7 @@
     "src/win32/shell32.c":  { "text": "win32/shell32.c" },
     "src/win32/winmm.c":    { "text": "win32/winmm.c" },
     "src/win32/comctl32.c": { "text": "win32/comctl32.c" },
+    "src/win32/listview.c": { "text": "win32/listview.c" },
     "src/win32/comdlg32.c": { "text": "win32/comdlg32.c" },
     "src/win32/menucore.c": { "text": "win32/menucore.c" },
     "src/win32/menucore.h": { "text": "win32/menucore.h" },

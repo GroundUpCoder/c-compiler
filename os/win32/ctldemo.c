@@ -14,6 +14,7 @@
  * browser test probes control pixels. Change them together.
  */
 #include <windows.h>
+#include <commctrl.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -510,9 +511,486 @@ static int menudemo(void) {
     return 0;
 }
 
+/* ---- `ctldemo listview` (0370): the SysListView32 acceptance pane — a
+ * report-view listview filling a resizable-content window, columns with a
+ * right-aligned Size, sort-by-column on LVN_COLUMNCLICK (toggling
+ * direction), and every notification echoed as a `ctldemo:` marker for
+ * the headless e2e (tests/kernel/test_listview_e2e.js). 24 rows so the
+ * embedded scrollbar engages. ---- */
+
+#define IDC_LV 300
+
+typedef struct { const char *name, *ver, *size, *status; } LvRow;
+static const LvRow LV_DATA[] = {
+    { "alpha",    "1.0",  "12 KB",  "available" },
+    { "bravo",    "2.1",  "340 KB", "installed" },
+    { "charlie",  "0.9",  "7 KB",   "available" },
+    { "delta",    "3.2",  "1.2 MB", "installed" },
+    { "echo",     "1.1",  "88 KB",  "available" },
+    { "foxtrot",  "4.0",  "220 KB", "built-in" },
+    { "golf",     "2.7",  "19 KB",  "available" },
+    { "hotel",    "1.5",  "3.1 MB", "installed" },
+    { "india",    "0.3",  "5 KB",   "available" },
+    { "juliett",  "6.2",  "450 KB", "available" },
+    { "kilo",     "1.0",  "1 KB",   "built-in" },
+    { "lima",     "2.0",  "77 KB",  "installed" },
+    { "mike",     "5.1",  "910 KB", "available" },
+    { "november", "1.9",  "33 KB",  "available" },
+    { "oscar",    "0.8",  "2.4 MB", "installed" },
+    { "papa",     "3.3",  "150 KB", "available" },
+    { "quebec",   "2.2",  "60 KB",  "available" },
+    { "romeo",    "1.4",  "8 KB",   "installed" },
+    { "sierra",   "7.0",  "5.5 MB", "available" },
+    { "tango",    "1.2",  "42 KB",  "available" },
+    { "uniform",  "0.5",  "17 KB",  "built-in" },
+    { "victor",   "2.8",  "230 KB", "available" },
+    { "whiskey",  "1.6",  "95 KB",  "installed" },
+    { "xray",     "4.4",  "700 KB", "available" },
+};
+#define LV_NDATA ((int)(sizeof LV_DATA / sizeof LV_DATA[0]))
+
+static int lv_sort_col = -1, lv_sort_desc;
+
+static const char *lv_field(const LvRow *r, int col) {
+    switch (col) {
+    case 1: return r->ver;
+    case 2: return r->size;
+    case 3: return r->status;
+    default: return r->name;
+    }
+}
+
+static int CALLBACK lv_demo_cmp(LPARAM a, LPARAM b, LPARAM ctx) {
+    int col = (int)(ctx & 0xFF), desc = (int)(ctx >> 8);
+    int r = strcmp(lv_field(&LV_DATA[a], col), lv_field(&LV_DATA[b], col));
+    return desc ? -r : r;
+}
+
+static void lv_fill(HWND lv) {
+    ListView_DeleteAllItems(lv);
+    for (int i = 0; i < LV_NDATA; i++) {
+        LVITEM li;
+        memset(&li, 0, sizeof li);
+        li.mask = LVIF_TEXT | LVIF_PARAM;
+        li.iItem = i;
+        li.pszText = (char *)LV_DATA[i].name;
+        li.lParam = i;
+        ListView_InsertItem(lv, &li);
+        for (int c = 1; c <= 3; c++) {
+            LVITEM ls;
+            memset(&ls, 0, sizeof ls);
+            ls.iSubItem = c;
+            ls.pszText = (char *)lv_field(&LV_DATA[i], c);
+            SendMessage(lv, LVM_SETITEMTEXT, (WPARAM)i, (LPARAM)&ls);
+        }
+    }
+}
+
+static LRESULT CALLBACK LvDemoProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_CREATE: {
+        HWND lv = CreateWindowEx(0, WC_LISTVIEW, "",
+                                 WS_CHILD | WS_VISIBLE | LVS_REPORT,
+                                 12, 12, 456, 336, hwnd, (HMENU)IDC_LV,
+                                 NULL, NULL);
+        LVCOLUMN lc;
+        memset(&lc, 0, sizeof lc);
+        lc.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+        lc.fmt = LVCFMT_LEFT;
+        lc.cx = 140; lc.pszText = "Name";
+        SendMessage(lv, LVM_INSERTCOLUMN, 0, (LPARAM)&lc);
+        lc.cx = 80;  lc.pszText = "Version";
+        SendMessage(lv, LVM_INSERTCOLUMN, 1, (LPARAM)&lc);
+        lc.fmt = LVCFMT_RIGHT;
+        lc.cx = 90;  lc.pszText = "Size";
+        SendMessage(lv, LVM_INSERTCOLUMN, 2, (LPARAM)&lc);
+        lc.fmt = LVCFMT_LEFT;
+        lc.cx = 120; lc.pszText = "Status";
+        SendMessage(lv, LVM_INSERTCOLUMN, 3, (LPARAM)&lc);
+        ListView_SetExtendedListViewStyle(lv, LVS_EX_FULLROWSELECT);
+        lv_fill(lv);
+        return 0;
+    }
+    case WM_SIZE: {
+        RECT r;
+        GetClientRect(hwnd, &r);
+        MoveWindow(GetDlgItem(hwnd, IDC_LV), 12, 12,
+                   r.right - 24, r.bottom - 24, TRUE);
+        return 0;
+    }
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(hwnd, &ps);
+        if (dc) EndPaint(hwnd, &ps);
+        if (!g_painted) { g_painted = 1; mark("ready"); }
+        return 0;
+    }
+    case WM_NOTIFY: {
+        const NMLISTVIEW *nm = (const NMLISTVIEW *)lp;
+        if (!nm || nm->hdr.idFrom != IDC_LV) return 0;
+        HWND lv = GetDlgItem(hwnd, IDC_LV);
+        if (nm->hdr.code == LVN_ITEMCHANGED) {
+            if ((nm->uNewState & LVIS_SELECTED)
+                && !(nm->uOldState & LVIS_SELECTED)) {
+                char name[64] = "";
+                LVITEM li;
+                memset(&li, 0, sizeof li);
+                li.iSubItem = 0;
+                li.pszText = name;
+                li.cchTextMax = sizeof name;
+                SendMessage(lv, LVM_GETITEMTEXT, (WPARAM)nm->iItem, (LPARAM)&li);
+                printf("ctldemo: lv sel=%d name=%s\n", nm->iItem, name);
+                fflush(stdout);
+            }
+        } else if (nm->hdr.code == NM_CLICK) {
+            printf("ctldemo: lv click=%d\n", nm->iItem);
+            fflush(stdout);
+        } else if (nm->hdr.code == NM_DBLCLK) {
+            printf("ctldemo: lv dblclk=%d\n", nm->iItem);
+            fflush(stdout);
+        } else if (nm->hdr.code == NM_RCLICK) {
+            printf("ctldemo: lv rclick=%d\n", nm->iItem);
+            fflush(stdout);
+        } else if (nm->hdr.code == LVN_COLUMNCLICK) {
+            int col = nm->iSubItem;
+            lv_sort_desc = col == lv_sort_col ? !lv_sort_desc : 0;
+            lv_sort_col = col;
+            ListView_SortItems(lv, lv_demo_cmp,
+                               (LPARAM)(col | (lv_sort_desc << 8)));
+            char first[64] = "";
+            LVITEM li;
+            memset(&li, 0, sizeof li);
+            li.iSubItem = 0;
+            li.pszText = first;
+            li.cchTextMax = sizeof first;
+            SendMessage(lv, LVM_GETITEMTEXT, 0, (LPARAM)&li);
+            printf("ctldemo: lv colclick=%d dir=%d first=%s\n",
+                   col, lv_sort_desc, first);
+            fflush(stdout);
+        }
+        return 0;
+    }
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProc(hwnd, msg, wp, lp);
+}
+
+static int lvdemo(void) {
+    INITCOMMONCONTROLSEX icc = { sizeof icc, ICC_LISTVIEW_CLASSES };
+    InitCommonControlsEx(&icc);
+    WNDCLASS wc;
+    memset(&wc, 0, sizeof wc);
+    wc.lpfnWndProc = LvDemoProc;
+    wc.lpszClassName = "lvdemo";
+    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    if (!RegisterClass(&wc)) return 3;
+    HWND hwnd = CreateWindowEx(0, "lvdemo", "ListView Demo",
+                               WS_OVERLAPPED | WS_VISIBLE,
+                               CW_USEDEFAULT, CW_USEDEFAULT, WIN_W, WIN_H,
+                               NULL, NULL, NULL, NULL);
+    if (!hwnd) return 3;
+    MSG msg;
+    while (GetMessage(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+    mark("bye");
+    return (int)msg.wParam;
+}
+
+/* ---- `ctldemo lvtest` (0370): synchronous message-surface asserts for
+ * SysListView32 + SysHeader32 — the `selftest` shape (st_check), no pump
+ * needed. The e2e runs it headless and checks "0 failed". ---- */
+
+static int lv_nchanged;                          /* LVN_ITEMCHANGED count */
+
+static int CALLBACK lvtest_cmp(LPARAM a, LPARAM b, LPARAM ctx) {
+    (void)ctx;
+    return (int)a - (int)b;                      /* lParam rank, ascending */
+}
+
+static LRESULT CALLBACK LvTestProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_NOTIFY) {
+        const NMLISTVIEW *nm = (const NMLISTVIEW *)lp;
+        if (nm && nm->hdr.code == LVN_ITEMCHANGED) lv_nchanged++;
+    }
+    return DefWindowProc(hwnd, msg, wp, lp);
+}
+
+static int lvtest(void) {
+    INITCOMMONCONTROLSEX icc = { sizeof icc, ICC_LISTVIEW_CLASSES };
+    st_check("InitCommonControlsEx", InitCommonControlsEx(&icc));
+    WNDCLASS wc;
+    memset(&wc, 0, sizeof wc);
+    wc.lpfnWndProc = LvTestProc;
+    wc.lpszClassName = "lvtest";
+    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    if (!RegisterClass(&wc)) return 3;
+    HWND top = CreateWindowEx(0, "lvtest", "lvtest",
+                              WS_OVERLAPPED | WS_VISIBLE,
+                              0, 0, 400, 300, NULL, NULL, NULL, NULL);
+    if (!top) return 3;
+    /* Short on purpose: ~5 visible rows so scroll paths engage. */
+    HWND lv = CreateWindowEx(0, WC_LISTVIEWA, "",
+                             WS_CHILD | WS_VISIBLE | LVS_REPORT,
+                             10, 10, 300, 140, top, (HMENU)900, NULL, NULL);
+    st_check("listview created", lv != NULL);
+    HWND hdr = (HWND)SendMessage(lv, LVM_GETHEADER, 0, 0);
+    st_check("LVM_GETHEADER", hdr != NULL);
+
+    /* columns */
+    LVCOLUMNA lc;
+    memset(&lc, 0, sizeof lc);
+    lc.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+    lc.fmt = LVCFMT_LEFT;
+    lc.cx = 120; lc.pszText = (char *)"Name";
+    st_check("insert col 0", SendMessage(lv, LVM_INSERTCOLUMNA, 0, (LPARAM)&lc) == 0);
+    lc.fmt = LVCFMT_RIGHT;
+    lc.cx = 70; lc.pszText = (char *)"Size";
+    st_check("insert col 1", SendMessage(lv, LVM_INSERTCOLUMNA, 1, (LPARAM)&lc) == 1);
+    lc.fmt = LVCFMT_LEFT;
+    lc.cx = 90; lc.pszText = (char *)"Status";
+    st_check("insert col 2", SendMessage(lv, LVM_INSERTCOLUMNA, 2, (LPARAM)&lc) == 2);
+    st_check("header count", (int)SendMessage(hdr, HDM_GETITEMCOUNT, 0, 0) == 3);
+    char cbuf[64];
+    memset(&lc, 0, sizeof lc);
+    lc.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+    lc.pszText = cbuf;
+    lc.cchTextMax = sizeof cbuf;
+    st_check("get col 1", SendMessage(lv, LVM_GETCOLUMNA, 1, (LPARAM)&lc));
+    st_check("col text roundtrip", strcmp(cbuf, "Size") == 0);
+    st_check("col width roundtrip", lc.cx == 70);
+    st_check("col fmt roundtrip", (lc.fmt & 3) == LVCFMT_RIGHT);
+    memset(&lc, 0, sizeof lc);
+    lc.mask = LVCF_WIDTH;
+    lc.cx = 80;
+    st_check("set col 1 width", SendMessage(lv, LVM_SETCOLUMNA, 1, (LPARAM)&lc));
+    memset(&lc, 0, sizeof lc);
+    lc.mask = LVCF_WIDTH;
+    st_check("get col 1 again", SendMessage(lv, LVM_GETCOLUMNA, 1, (LPARAM)&lc));
+    st_check("set col width took", lc.cx == 80);
+
+    /* items: 10 rows, one inserted out of order */
+    static const char *NAMES[] = { "ant", "bee", "cat", "dog", "eel",
+                                   "fox", "gnu", "hen", "ibx", "jay" };
+    for (int i = 0; i < 10; i++) {
+        LVITEMA li;
+        memset(&li, 0, sizeof li);
+        li.mask = LVIF_TEXT | LVIF_PARAM;
+        li.iItem = i;
+        li.pszText = (char *)NAMES[i];
+        li.lParam = 9 - i;                       /* reverse rank for the sort leg */
+        SendMessage(lv, LVM_INSERTITEMA, 0, (LPARAM)&li);
+        LVITEMA ls;
+        memset(&ls, 0, sizeof ls);
+        ls.iSubItem = 2;
+        ls.pszText = (char *)(i % 2 ? "ok" : "new");
+        SendMessage(lv, LVM_SETITEMTEXTA, (WPARAM)i, (LPARAM)&ls);
+    }
+    st_check("item count", (int)SendMessage(lv, LVM_GETITEMCOUNT, 0, 0) == 10);
+    {
+        LVITEMA li;
+        memset(&li, 0, sizeof li);
+        li.mask = LVIF_TEXT;
+        li.iItem = 5;                            /* out-of-order insert */
+        li.pszText = (char *)"mid";
+        st_check("insert mid", (int)SendMessage(lv, LVM_INSERTITEMA, 0, (LPARAM)&li) == 5);
+        st_check("count after mid", (int)SendMessage(lv, LVM_GETITEMCOUNT, 0, 0) == 11);
+        char b[32] = "";
+        LVITEMA lg;
+        memset(&lg, 0, sizeof lg);
+        lg.iSubItem = 0;
+        lg.pszText = b;
+        lg.cchTextMax = sizeof b;
+        SendMessage(lv, LVM_GETITEMTEXTA, 5, (LPARAM)&lg);
+        st_check("mid text", strcmp(b, "mid") == 0);
+        SendMessage(lv, LVM_GETITEMTEXTA, 6, (LPARAM)&lg);
+        st_check("shifted row follows", strcmp(b, "fox") == 0);
+        st_check("delete mid", SendMessage(lv, LVM_DELETEITEM, 5, 0));
+        st_check("count restored", (int)SendMessage(lv, LVM_GETITEMCOUNT, 0, 0) == 10);
+    }
+
+    /* subitem + W roundtrips */
+    {
+        char b[32] = "";
+        LVITEMA lg;
+        memset(&lg, 0, sizeof lg);
+        lg.iSubItem = 2;
+        lg.pszText = b;
+        lg.cchTextMax = sizeof b;
+        SendMessage(lv, LVM_GETITEMTEXTA, 3, (LPARAM)&lg);
+        st_check("subitem text", strcmp(b, "ok") == 0);
+        WCHAR wb[32];
+        LVITEMW lw;
+        memset(&lw, 0, sizeof lw);
+        lw.iSubItem = 0;
+        lw.pszText = wb;
+        lw.cchTextMax = 32;
+        SendMessage(lv, LVM_GETITEMTEXTW, 0, (LPARAM)&lw);
+        st_check("W gettext", wb[0] == 'a' && wb[1] == 'n' && wb[2] == 't' && wb[3] == 0);
+        LVITEMW li;
+        memset(&li, 0, sizeof li);
+        li.mask = LVIF_TEXT;
+        li.iItem = 10;
+        li.pszText = (WCHAR *)u"w\x00E9ide";     /* é: UTF-16 -> UTF-8 -> back */
+        st_check("W insert", (int)SendMessage(lv, LVM_INSERTITEMW, 0, (LPARAM)&li) == 10);
+        memset(&lw, 0, sizeof lw);
+        lw.iSubItem = 0;
+        lw.pszText = wb;
+        lw.cchTextMax = 32;
+        SendMessage(lv, LVM_GETITEMTEXTW, 10, (LPARAM)&lw);
+        st_check("W roundtrip", wb[0] == 'w' && wb[1] == 0x00E9 && wb[2] == 'i');
+        st_check("W delete", SendMessage(lv, LVM_DELETEITEM, 10, 0));
+    }
+
+    /* state + selection + notify */
+    lv_nchanged = 0;
+    ListView_SetItemState(lv, 2, LVIS_SELECTED | LVIS_FOCUSED,
+                          LVIS_SELECTED | LVIS_FOCUSED);
+    st_check("state set", (ListView_GetItemState(lv, 2, LVIS_SELECTED | LVIS_FOCUSED)
+                           == (LVIS_SELECTED | LVIS_FOCUSED)));
+    st_check("ITEMCHANGED notified", lv_nchanged == 1);
+    st_check("selected count", (int)SendMessage(lv, LVM_GETSELECTEDCOUNT, 0, 0) == 1);
+    st_check("next selected", ListView_GetNextItem(lv, -1, LVNI_SELECTED) == 2);
+    st_check("next focused", ListView_GetNextItem(lv, -1, LVNI_FOCUSED) == 2);
+    {
+        LVITEMA li;
+        memset(&li, 0, sizeof li);
+        li.mask = LVIF_PARAM;
+        li.iItem = 2;
+        SendMessage(lv, LVM_GETITEMA, 0, (LPARAM)&li);
+        st_check("lparam roundtrip", li.lParam == 7);
+    }
+    ListView_SetItemState(lv, -1, 0, LVIS_SELECTED);
+    st_check("clear all sel", (int)SendMessage(lv, LVM_GETSELECTEDCOUNT, 0, 0) == 0);
+
+    /* keyboard: focus row moves + selects (single gesture from focus row) */
+    SendMessage(lv, WM_KEYDOWN, VK_DOWN, 0);
+    st_check("VK_DOWN moves focus", ListView_GetNextItem(lv, -1, LVNI_FOCUSED) == 3);
+    st_check("VK_DOWN selects", ListView_GetItemState(lv, 3, LVIS_SELECTED) == LVIS_SELECTED);
+    st_check("WM_GETDLGCODE arrows",
+             SendMessage(lv, WM_GETDLGCODE, 0, 0) == DLGC_WANTARROWS);
+
+    /* hit test + scroll */
+    {
+        RECT lr;
+        GetClientRect(lv, &lr);
+        HDC ldc = GetDC(lv);
+        TEXTMETRIC ltm;
+        ltm.tmHeight = -1;
+        if (ldc) { GetTextMetrics(ldc, &ltm); ReleaseDC(lv, ldc); }
+        printf("ctldemo lvmetrics: client=%dx%d tmHeight=%d\n",
+               (int)lr.right, (int)lr.bottom, (int)ltm.tmHeight);
+        fflush(stdout);
+        LVHITTESTINFO ht;
+        memset(&ht, 0, sizeof ht);
+        ht.pt.x = 20;
+        ht.pt.y = 60;                            /* inside the rows area */
+        int r0 = ListView_HitTest(lv, &ht);
+        st_check("hittest hits a row", r0 >= 0 && (ht.flags & LVHT_ONITEM));
+        memset(&ht, 0, sizeof ht);
+        ht.pt.x = 20;
+        ht.pt.y = 4;                             /* header band */
+        st_check("hittest header = none", ListView_HitTest(lv, &ht) == -1
+                 && ht.flags == LVHT_NOWHERE);
+        memset(&ht, 0, sizeof ht);
+        ht.pt.x = 20;
+        ht.pt.y = 60;
+        /* pin the scroll to the top first — the keyboard leg above may
+         * already have scrolled (vis rows are font-dependent) */
+        ListView_EnsureVisible(lv, 0, FALSE);
+        int before = ListView_HitTest(lv, &ht);
+        st_check("ensure visible", ListView_EnsureVisible(lv, 9, FALSE));
+        int after = ListView_HitTest(lv, &ht);
+        st_check("ensure visible scrolled", after > before);
+        SendMessage(lv, WM_VSCROLL, MAKEWPARAM(SB_LINEUP, 0), 0);
+        int lineup = ListView_HitTest(lv, &ht);
+        st_check("SB_LINEUP scrolls back", lineup == after - 1);
+        ListView_EnsureVisible(lv, 0, FALSE);
+        int final = ListView_HitTest(lv, &ht);
+        printf("ctldemo lvscroll: before=%d after=%d lineup=%d final=%d\n",
+               before, after, lineup, final);
+        fflush(stdout);
+        st_check("ensure visible top", final == before);
+    }
+
+    /* sort by lParam ascending (items carry reverse rank, so the name
+     * order flips) — texts, states and the focus row travel with items */
+    {
+        ListView_SetItemState(lv, -1, 0, LVIS_SELECTED);
+        ListView_SetItemState(lv, 2, LVIS_SELECTED | LVIS_FOCUSED,
+                              LVIS_SELECTED | LVIS_FOCUSED);   /* "cat", rank 7 */
+        st_check("sort", ListView_SortItems(lv, lvtest_cmp, 0));
+        char b[32] = "";
+        LVITEMA lg;
+        memset(&lg, 0, sizeof lg);
+        lg.iSubItem = 0;
+        lg.pszText = b;
+        lg.cchTextMax = sizeof b;
+        SendMessage(lv, LVM_GETITEMTEXTA, 0, (LPARAM)&lg);
+        st_check("sort reordered (rank 0 first)", strcmp(b, "jay") == 0);
+        SendMessage(lv, LVM_GETITEMTEXTA, 9, (LPARAM)&lg);
+        st_check("sort last (rank 9)", strcmp(b, "ant") == 0);
+        st_check("selection travels with the row",
+                 ListView_GetNextItem(lv, -1, LVNI_SELECTED) == 7);
+        st_check("focus travels with the row",
+                 ListView_GetNextItem(lv, -1, LVNI_FOCUSED) == 7);
+    }
+
+    /* WM_GETTEXT agent format: header line + "> " on the selected row */
+    {
+        ListView_SetItemState(lv, -1, 0, LVIS_SELECTED);
+        ListView_SetItemState(lv, 0, LVIS_SELECTED, LVIS_SELECTED);
+        char big[2048];
+        int n = (int)SendMessage(lv, WM_GETTEXT, sizeof big, (LPARAM)big);
+        st_check("gettext nonempty", n > 0);
+        st_check("gettext header line",
+                 strncmp(big, "Name | Size | Status\n", 21) == 0);
+        st_check("gettext sel marker", strstr(big, "\n> ") != NULL);
+    }
+
+    /* extended style */
+    {
+        DWORD old = (DWORD)SendMessage(lv, LVM_SETEXTENDEDLISTVIEWSTYLE, 0,
+                                       LVS_EX_FULLROWSELECT);
+        st_check("ex style old", old == 0);
+        st_check("ex style get",
+                 (DWORD)SendMessage(lv, LVM_GETEXTENDEDLISTVIEWSTYLE, 0, 0)
+                 == LVS_EX_FULLROWSELECT);
+    }
+
+    /* column delete shifts subitems (row 0 is "jay" post-sort: old rank 9,
+     * odd index -> Status "ok") */
+    st_check("delete col 1", SendMessage(lv, LVM_DELETECOLUMN, 1, 0));
+    {
+        char b[32] = "";
+        LVITEMA lg;
+        memset(&lg, 0, sizeof lg);
+        lg.iSubItem = 1;                         /* was col 2 (Status) */
+        lg.pszText = b;
+        lg.cchTextMax = sizeof b;
+        SendMessage(lv, LVM_GETITEMTEXTA, 0, (LPARAM)&lg);
+        st_check("col delete shifts subitems", strcmp(b, "ok") == 0);
+        st_check("header count after delete",
+                 (int)SendMessage(hdr, HDM_GETITEMCOUNT, 0, 0) == 2);
+    }
+
+    st_check("delete all", SendMessage(lv, LVM_DELETEALLITEMS, 0, 0));
+    st_check("count after clear", (int)SendMessage(lv, LVM_GETITEMCOUNT, 0, 0) == 0);
+
+    printf("ctldemo lvtest: %d checks, %d failed\n", st_checks, st_fails);
+    fflush(stdout);
+    DestroyWindow(top);
+    return st_fails ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "selftest") == 0) return selftest();
     if (argc > 1 && strcmp(argv[1], "menudemo") == 0) return menudemo();
+    if (argc > 1 && strcmp(argv[1], "listview") == 0) return lvdemo();
+    if (argc > 1 && strcmp(argv[1], "lvtest") == 0) return lvtest();
     WNDCLASS wc;
     memset(&wc, 0, sizeof wc);
     wc.lpfnWndProc = MainProc;

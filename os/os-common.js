@@ -948,6 +948,15 @@ function checkReservedPackageFiles(pkg, label) {
  *   - os/win32/gdi32.c's require set == vendor/freetype/lib.json sources,
  *     as freetype/<shim basename> (§4.2 — vendor knowledge stays with its
  *     consumer)
+ *   - packages/win32.json SHIPS every veneer source under src/win32/ (the
+ *     payload half — todos/0387). A require block can only name what the
+ *     package actually plants: `0370` added listview.c to lib.json but to
+ *     neither list, and the two halves fail in different places — the
+ *     missing require is a loud mkpkg refusal, the missing PAYLOAD file
+ *     builds fine host-side and dies IN-OS at the first `#include
+ *     <windows.h>` (unresolvable required source -> every win32 app stops
+ *     compiling). One direction only: files the payload ships that no
+ *     lib.json source backs are deliberate (wwinmain.c, the headers).
  * Returns an array of human-readable mismatch strings (empty = in sync).
  * Callers fail LOUD: tools/mkpkg.js refuses to build the win32 package,
  * tools/win32ports.js fails its run and its --check (the kernel-suite
@@ -982,10 +991,28 @@ function win32RequireDriftErrors(readText) {
     });
     return errs;
   }
+  // packages/win32.json's `files` map keys the payload by its own layout;
+  // the veneer TUs live under src/win32/ (srclib's {win32: src/win32} tier).
+  function shippedOf(relPath) {
+    var files = JSON.parse(mustRead(relPath)).files || {}, pre = 'src/win32/';
+    return Object.keys(files)
+      .filter(function (k) { return k.slice(0, pre.length) === pre; })
+      .map(function (k) { return 'win32/' + k.slice(pre.length); });
+  }
+  function unshipped(label, shipped, expected) {
+    var s = {};
+    shipped.forEach(function (n) { s[n] = true; });
+    return expected.filter(function (n) { return !s[n]; }).map(function (n) {
+      return label + ' does not ship "src/' + n + '", which the veneer requires'
+        + ' (require-block drift, design §4.4)';
+    });
+  }
   var veneer = sourcesOf('os/win32/lib.json', 'win32')
     .concat(sourcesOf('os/win32/menucore.json', 'win32'));
   return diff('os/win32/include/windows.h',
       requiresOf('os/win32/include/windows.h'), veneer)
+    .concat(unshipped('packages/win32.json',
+      shippedOf('packages/win32.json'), veneer))
     .concat(diff('os/win32/menucore.h',
       requiresOf('os/win32/menucore.h'), sourcesOf('os/win32/menucore.json', 'win32')))
     .concat(diff('os/win32/gdi32.c',
