@@ -2047,5 +2047,6 @@ __require_source("win32/crt16.c");
 __require_source("win32/shell32.c");
 __require_source("win32/winmm.c");
 __require_source("win32/comctl32.c");
+__require_source("win32/listview.c");
 __require_source("win32/comdlg32.c");
 #endif /* !WIN32_NO_REQUIRE_SOURCES */
