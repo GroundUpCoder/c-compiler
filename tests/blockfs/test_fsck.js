@@ -121,6 +121,34 @@ test('two inodes sharing one extent (double-allocation) is caught', function () 
   caught(r.store, 'double-allocation');
 });
 
+test('duplicate dirent names are caught (todos/0375)', function () {
+  // Positive control for the name-uniqueness invariant: open(O_CREAT)
+  // through a dangling symlink used to append a second same-named dirent
+  // and fsck passed the image clean. Build the corruption by raw surgery
+  // (rename 'ab' -> 'aa' between two same-length siblings — independent
+  // of any host.js code path) and prove fsck goes red.
+  var r = makeFS();
+  createFile(r.fs, '/aa', 'one');
+  createFile(r.fs, '/ab', 'two');
+  clean(r.store, 'pre-surgery');
+  var base = r.store.getUint32(SB_INODE_TBL_EXTENT);
+  var rootOff = base + 1 * INODE_SIZE; // ROOT_INO = 1
+  var extOff = r.store.getUint32(rootOff + INO_EXTENT_OFFSET);
+  var dataSize = r.store.getUint32(rootOff + 8); // INO_DATA_SIZE
+  var DIR_ENT_HEADER = 6, pos = 0, renamed = false;
+  while (pos < dataSize) {
+    var nameLen = r.store.getUint32(extOff + pos + 4) & 0xFFFF;
+    var name = Buffer.from(r.store.getBytes(extOff + pos + DIR_ENT_HEADER, nameLen)).toString();
+    if (name === 'ab') {
+      r.store.setBytes(extOff + pos + DIR_ENT_HEADER, encode('aa'));
+      renamed = true; break;
+    }
+    pos += DIR_ENT_HEADER + nameLen;
+  }
+  assert(renamed, 'surgery found the ab entry');
+  caught(r.store, 'duplicate');
+});
+
 console.log('\n--- fsck Tests ---');
 console.log('Passed: ' + passed);
 console.log('Failed: ' + failed);

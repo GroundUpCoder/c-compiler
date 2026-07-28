@@ -105,5 +105,36 @@ function inodeOff(store, ino) {
   ok(fsck(s).some(p => /root inode is not a directory/.test(p)), 'catches non-directory root');
 }
 
+// ---- 4. Duplicate dirent names (todos/0375) ----
+// open(O_CREAT) through a dangling symlink used to append a SECOND dirent
+// under the link's own name — and fsck_v4 passed the image CLEAN (no
+// name-uniqueness invariant), so the corruption was invisible to the checker.
+// This is the POSITIVE CONTROL for that invariant: build a known-corrupt
+// image by raw surgery (rename one of two same-length sibling entries to the
+// other's name — independent of any host.js code path) and prove fsck goes
+// red on it.
+{
+  const store = new MemoryByteStore(1 << 18);
+  const b = createV4(store);
+  wfile(b, '/aa', 'one'); wfile(b, '/ab', 'two');
+  ok(fsck(store).length === 0, 'dup-dirent control: image clean before surgery');
+  // Root dir extent: scan entries, rewrite the name bytes of 'ab' -> 'aa'.
+  const rootOff = inodeOff(store, 1);
+  const I_EXTENT_OFF = 8;
+  const extOff = store.getUint32(rootOff + I_EXTENT_OFF) + store.getUint32(rootOff + I_EXTENT_OFF + 4) * 0x100000000;
+  const dataSize = store.getUint32(rootOff + I_DATA_SIZE) + store.getUint32(rootOff + I_DATA_SIZE + 4) * 0x100000000;
+  const DIR_ENT_HEADER = 6;
+  let pos = 0, renamed = false;
+  while (pos < dataSize) {
+    const nameLen = store.getUint32(extOff + pos + 4) & 0xFFFF;
+    const name = Buffer.from(store.getBytes(extOff + pos + DIR_ENT_HEADER, nameLen)).toString();
+    if (name === 'ab') { store.setBytes(extOff + pos + DIR_ENT_HEADER, Buffer.from('aa')); renamed = true; break; }
+    pos += DIR_ENT_HEADER + nameLen;
+  }
+  ok(renamed, 'dup-dirent control: surgery found and renamed the ab entry');
+  ok(fsck(store).some(p => /duplicate/.test(p)),
+    'catches duplicate dirent names (todos/0375 — the invariant that made the O_CREAT-through-dangling-symlink corruption invisible)');
+}
+
 console.log(`\nfsck_v4: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
