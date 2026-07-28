@@ -1,6 +1,6 @@
 # 0375 — open(O_CREAT) through a dangling symlink appends a DUPLICATE dirent — on-disk directory corruption, and fsck_v4 passes it clean
 
-- **Status**: open
+- **Status**: done
 - **Priority**: **P0** — on-disk corruption, reachable from ordinary user
   actions, present in **both** gucOS environments, and invisible to the
   filesystem checker.
