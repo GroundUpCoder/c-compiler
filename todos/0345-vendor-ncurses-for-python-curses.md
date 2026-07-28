@@ -49,7 +49,7 @@ story.
 
 ## Acceptance
 
-- `python-clang -c "import curses"` succeeds **in-OS**.
+- `cpython-clang -c "import curses"` succeeds **in-OS**.
 - ⭐ **A real curses program runs and renders correctly in `term`, proven by a
   browser-sweep screenshot, not by an exit code.** Import success alone does
   NOT close this ticket.

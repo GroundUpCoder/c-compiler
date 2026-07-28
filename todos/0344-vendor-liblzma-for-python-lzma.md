@@ -8,7 +8,7 @@
 ## Goal
 
 Add a `vendor/xz/` (liblzma) port and build CPython's `_lzma` static extension
-against it, so `import lzma` succeeds on `python-clang`.
+against it, so `import lzma` succeeds on `cpython-clang`.
 
 ## What is established (measured, not assumed)
 
@@ -43,7 +43,7 @@ should not be the place a wrong number gets laundered into a plan.
 
 ## Acceptance
 
-- `python-clang -c "import lzma; print(lzma.decompress(lzma.compress(b'x'*1000)))"`
+- `cpython-clang -c "import lzma; print(lzma.decompress(lzma.compress(b'x'*1000)))"`
   runs **in-OS**, not only host-side.
 - With `0343` landed: a real `.tar.xz` **and** a real `.tar.bz2` both extract
   through `tarfile` in-OS. That is the joint acceptance the pair exists for —

@@ -146,7 +146,7 @@ const out = boot([
   // the Default Programs applet (todos/0338 + todos/0130's picker leg): the
   // COMMAND half — which implementation a dispatched name runs. This image
   // is the FAT fixture, so micropython is folded and its `commands` claim
-  // sits ahead of the baked python-clang suggestion in /usr/share/cmdalt.
+  // sits ahead of the baked cpython-clang suggestion in /usr/share/cmdalt.
   'wmctl click "Default Programs"',
   'wmctl wait win "Default Programs" 6000',
   'DSID=$(wmctl list | grep "Default Programs" | sed "s/[^0-9].*//")',
@@ -159,7 +159,7 @@ const out = boot([
   'echo ==dpgcand',
   'wmctl gettext LISTBOX:1',
   'echo ==cut',
-  // pick the SECOND candidate (the baked python-clang suggestion) — click
+  // pick the SECOND candidate (the baked cpython-clang suggestion) — click
   // focuses the candidate list, HOME/DOWN move the caret (the fileman
   // row-selection idiom; no row-height pixel math)
   'wmctl click $DSID 374 60',
@@ -169,7 +169,7 @@ const out = boot([
   'wmctl gettext LISTBOX:1',
   'echo ==cut',
   'wmctl click "Set as default"',
-  waitFileHas('/root/.config/cmdalt', 'python.python-clang'),
+  waitFileHas('/root/.config/cmdalt', 'python.cpython-clang'),
   'echo ==dpgset',
   'cat /root/.config/cmdalt',
   'echo ==cut',
@@ -302,14 +302,14 @@ const dpgcand = section(out, 'dpgcand');
 check('the candidate list shows the folded claim first, installed',
   /^> \/bin\/micropython - \/bin\/micropython$/m.test(dpgcand), JSON.stringify(dpgcand));
 check('...and the baked suggestion, marked not installed',
-  /^python-clang - not installed$/m.test(dpgcand), JSON.stringify(dpgcand));
+  /^cpython-clang - not installed$/m.test(dpgcand), JSON.stringify(dpgcand));
 check('the effective line names the resolved program',
   /text='python runs: \/bin\/micropython'/.test(dpg1), dpg1.slice(0, 900));
-check('HOME+DOWN moves the candidate selection to python-clang',
-  /^> python-clang - not installed$/m.test(section(out, 'dpgcand2')),
+check('HOME+DOWN moves the candidate selection to cpython-clang',
+  /^> cpython-clang - not installed$/m.test(section(out, 'dpgcand2')),
   JSON.stringify(section(out, 'dpgcand2')));
 check('Set as default delta-writes just that key to ~/.config/cmdalt',
-  section(out, 'dpgset').trim() === 'python\tpython-clang',
+  section(out, 'dpgset').trim() === 'python\tcpython-clang',
   JSON.stringify(section(out, 'dpgset')));
 const dpgwhich = section(out, 'dpgwhich');
 check('the CLI reads the GUI pick back (which reports it unresolved)',

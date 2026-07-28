@@ -960,9 +960,9 @@ delivered them; the default disposition would orphan a REPL that survives ^C),
 forwards SIGTERM/SIGHUP, and refuses to dispatch to its own inode (the
 fork-bomb guard). An unresolvable pick is 127 with a named fix — NEVER a silent
 fallback to another candidate. `python` is the first user: `/usr/bin/python`
-is a dispatch link, the baked suggestion is `python-clang`, and NOTHING python
+is a dispatch link, the baked suggestion is `cpython-clang`, and NOTHING python
 is baked, so a fresh boot's `python` exits 127 with `gucman install
-python-clang` (specified, not a bug — "default python" means once INSTALLED).
+cpython-clang` (specified, not a bug — "default python" means once INSTALLED).
 Packages provide a name through the `commands` control key (gucman APPENDS to
 /etc/cmdalt, remove deletes that exact LINE; the fold splices claims ahead of
 the baked body) — never through a `bin` alias, which `/usr/local/bin`-precedes-

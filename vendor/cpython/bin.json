@@ -1,9 +1,9 @@
 {
   "bin": true,
-  "name": "python-clang",
+  "name": "cpython-clang",
   "description": "CPython 3.13.5 \u2014 gucOS port (M1-clang, todos/0340; see todos/CPYTHON.md)",
   "compileCheck": false,
-  "compileCheckSkip": "compiler.js cannot build CPython yet: todos/0327 (the GNU __extension__ keyword, which Modules/_hacl's krml headers use and which blocks the whole hashlib family) and todos/0336 (startup cost) both gate it. This bin.json is NOT dead \u2014 the sibling clang-simplified manifest reads its `sources` to build the shipped python-clang payload. Drop these two keys when 0327/0336 land; todos/CPYTHON.md \u00a74.3 is the two-consumers contract.",
+  "compileCheckSkip": "compiler.js cannot build CPython yet: todos/0327 (the GNU __extension__ keyword, which Modules/_hacl's krml headers use and which blocks the whole hashlib family) and todos/0336 (startup cost) both gate it. This bin.json is NOT dead \u2014 the sibling clang-simplified manifest reads its `sources` to build the shipped cpython-clang payload (the sibling's own project/app name is still `python-clang` until its manifest renames \u2014 todos/0374 merge-time step). Drop these two keys when 0327/0336 land; todos/CPYTHON.md \u00a74.3 is the two-consumers contract.",
   "includes": [
     "gen",
     "gen/shim",

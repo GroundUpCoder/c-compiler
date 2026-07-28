@@ -27,7 +27,7 @@
  *
  * A name that describes a ROLE ("what runs when you type this") is a cmdalt
  * key; a name that identifies an IMPLEMENTATION is a hard package claim
- * (jku, 2026-07-28). `python`/`python3` are keys; `python-clang` is a
+ * (jku, 2026-07-28). `python`/`python3` are keys; `cpython-clang` is a
  * package.
  */
 #ifndef CMDALT_H
@@ -81,7 +81,7 @@ static void ca_prog(const char *value, char *prog, size_t sz) {
 
 /* The first word of a VALUE — the thing to name in an install hint (a
  * baked suggestion's first word IS its package name by convention:
- * `python<TAB>python-clang` -> `gucman install python-clang`). */
+ * `python<TAB>cpython-clang` -> `gucman install cpython-clang`). */
 static void ca_word0(const char *value, char *out, size_t sz) {
     size_t i = 0;
     while (value[i] && value[i] != ' ' && value[i] != '\t' && i + 1 < sz) {

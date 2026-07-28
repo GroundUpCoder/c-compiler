@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// python-clang acceptance, headless IN-OS (todos/0340 item 6 + todos/0331).
+// cpython-clang acceptance, headless IN-OS (todos/0340 item 6 + todos/0331).
 //
 // Everything CPYTHON.md verified host-side it verified against bare host.js —
 // node's filesystem, node's argv, no kernel. The claims that actually matter to
@@ -10,14 +10,14 @@
 //   - base purity IN-OS: the minimal image ships NO python IMPLEMENTATION (it
 //     does ship a `python` VERB since todos/0338 — the cmdalt dispatcher, which
 //     exits 127 naming the package to install)
-//   - `gucman install python-clang`: /opt tree + /usr/local/bin symlink
+//   - `gucman install cpython-clang`: /opt tree + /usr/local/bin symlink
 //   - the banner reports Clang and `print(1+1)` prints 2 (0331)
 //   - ZERO-ENV stdlib discovery over the kernel's fs: no PYTHONHOME/PYTHONPATH,
 //     sys.prefix is the package prefix
 //   - SYMLINKED-ARGV0 landmark discovery in-OS: reached through a symlink in an
 //     unrelated directory, sys.prefix is still the REAL prefix. host.js's
 //     readlink and RemoteFS's are different code, which is why this leg exists
-//   - `python-clang foo.py a b`: sys.argv is the script + its args, and the
+//   - `cpython-clang foo.py a b`: sys.argv is the script + its args, and the
 //     script's exit status propagates (both a 0 and a non-0)
 //   - `subprocess.run(["ls"])` really spawns through posix_spawn: no fork
 //     anywhere, PATH searched by posix_spawnp, close_fds=True honoured by the
@@ -27,12 +27,12 @@
 //     REAL BlockFS file, C _decimal, ELOOP present in errno
 //   - the pyc cache lands under /var/cache and /opt stays pristine (which is
 //     what makes gucman's checksum-gated remove exact)
-//   - `gucman remove python-clang` leaves no symlink and no /opt tree
+//   - `gucman remove cpython-clang` leaves no symlink and no /opt tree
 //
 // Requires the clang-simplified sibling's published overlay. Absent → SKIP
 // (exit 0); the base estate must never hard-require the clang toolchain repo.
 //
-// Run: node tests/kernel/test_python_clang_e2e.js
+// Run: node tests/kernel/test_cpython_clang_e2e.js
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -43,7 +43,7 @@ const { ROOT, ensureMinimalImage, startServer } = require('./lib/gucman.js');
 const CLANG_ROOT = process.env.CLANG_ROOT ||
   path.join(require('os').homedir(), 'git', 'clang-simplified');
 const OVERLAY = path.join(CLANG_ROOT, 'out-image', 'overlay.json');
-const PREFIX = '/opt/python-clang';
+const PREFIX = '/opt/cpython-clang';
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -136,13 +136,13 @@ async function main() {
     return;
   }
 
-  ensureClangPackages(['python-clang']);
+  ensureClangPackages(['cpython-clang']);
   const MIN = ensureMinimalImage();
   const { image } = freshImage('os-pyclang-');
   fs.copyFileSync(MIN, image);
 
   const port = await startServer(path.join(ROOT, 'dist', 'packages'));
-  console.log(`[python-clang] repo :${port}`);
+  console.log(`[cpython-clang] repo :${port}`);
 
   const heredoc = (name, body) => [`cat > ${name} <<'PYEOF'`, body, 'PYEOF'];
 
@@ -155,22 +155,22 @@ async function main() {
     // This leg used to assert "NO python verb AT ALL" (`grep -c python` == 0).
     // That was true on this ticket's base and is false by design on main:
     // todos/0338 bakes `python` as a cmdalt KEY whose value is the suggestion
-    // `python-clang` (jku's 2026-07-28 name-split ruling — os/cmdalt.h). So a
+    // `cpython-clang` (jku's 2026-07-28 name-split ruling — os/cmdalt.h). So a
     // fresh image DOES carry a `python` verb; what must stay true is that
     // nothing on the image can RUN python. Pin the dispatcher's behaviour too,
     // so replacing the stale claim makes this leg stronger, not weaker.
     'echo PYVERBS=$(ls /usr/bin /usr/local/bin 2>/dev/null | grep -c python)',
     'ls /usr/bin /usr/local/bin 2>/dev/null | grep python | sort | tr "\\n" " "; echo',
-    'echo PYIMPL=$(ls /usr/bin/python-clang /usr/local/bin/python-clang 2>/dev/null | wc -l)',
+    'echo PYIMPL=$(ls /usr/bin/cpython-clang /usr/local/bin/cpython-clang 2>/dev/null | wc -l)',
     'python -c "print(1+1)" >/dev/null 2>&1; echo PYRC=$?',
-    'python -c "print(1+1)" 2>&1 | grep -c "gucman install python-clang" | sed "s/^/PYHINT=/"',
+    'python -c "print(1+1)" 2>&1 | grep -c "gucman install cpython-clang" | sed "s/^/PYHINT=/"',
     'echo ==catalog',
     'mkdir -p /etc/gucman',
     `echo http://127.0.0.1:${port} > /etc/gucman/repos`,
-    'gucman list --all | grep python-clang',
+    'gucman list --all | grep cpython-clang',
     'echo ==install',
-    'gucman install python-clang; echo RC=$?',
-    'readlink /usr/local/bin/python-clang',
+    'gucman install cpython-clang; echo RC=$?',
+    'readlink /usr/local/bin/cpython-clang',
     `ls ${PREFIX}/bin`,
     `ls ${PREFIX}/lib`,
     'echo ==readdir',
@@ -198,42 +198,42 @@ async function main() {
     'cc /tmp/rd.c -o /tmp/rd; echo CCRC=$?',
     `/tmp/rd ${PREFIX}/lib/python3.13`,
     'echo ==banner',
-    'python-clang -c "print(1+1)"',
-    'python-clang -c "import sys; print(sys.version)"',
+    'cpython-clang -c "print(1+1)"',
+    'cpython-clang -c "import sys; print(sys.version)"',
     'echo ==syspath',
     // ZERO env vars: nothing below sets PYTHONHOME or PYTHONPATH.
     'echo "HOME_ENV=[$PYTHONHOME] PATH_ENV=[$PYTHONPATH]"',
-    'python-clang -c "import sys,os; print(\'PREFIX=\'+sys.prefix); print(\'OSFILE=\'+os.__file__)"',
+    'cpython-clang -c "import sys,os; print(\'PREFIX=\'+sys.prefix); print(\'OSFILE=\'+os.__file__)"',
     'echo ==symlinkargv0',
     // The landmark walk THROUGH a symlink, from an unrelated directory: the
     // real prefix must still be found. Both the launcher-script path (what a
     // user types) and a bare symlink straight at the .wasm.
     'mkdir -p /tmp/elsewhere',
-    `ln -s ${PREFIX}/bin/python-clang.wasm /tmp/elsewhere/py`,
-    'cd /tmp && PYTHONPYCACHEPREFIX=/var/cache/python-clang ./elsewhere/py -c "import sys; print(\'SYMPREFIX=\'+sys.prefix)"',
+    `ln -s ${PREFIX}/bin/cpython-clang.wasm /tmp/elsewhere/py`,
+    'cd /tmp && PYTHONPYCACHEPREFIX=/var/cache/cpython-clang ./elsewhere/py -c "import sys; print(\'SYMPREFIX=\'+sys.prefix)"',
     'cd /root',
     'echo ==argv',
     ...heredoc('/root/a.py', ARGV_PY),
-    'python-clang /root/a.py 0 beta gamma; echo ARC=$?',
-    'python-clang /root/a.py 3; echo ARC2=$?',
+    'cpython-clang /root/a.py 0 beta gamma; echo ARC=$?',
+    'cpython-clang /root/a.py 3; echo ARC2=$?',
     'echo ==subprocess',
     ...heredoc('/root/s.py', SUBP_PY),
-    'python-clang /root/s.py 2>&1; echo SRC=$?',
+    'cpython-clang /root/s.py 2>&1; echo SRC=$?',
     'echo ==features',
     ...heredoc('/root/f.py', FEAT_PY),
-    'python-clang /root/f.py; echo FRC=$?',
+    'cpython-clang /root/f.py; echo FRC=$?',
     'echo ==sweep',
     ...heredoc('/root/w.py', SWEEP_PY),
-    'python-clang /root/w.py; echo WRC=$?',
+    'cpython-clang /root/w.py; echo WRC=$?',
     'echo ==pyc',
     // The launcher's PYTHONPYCACHEPREFIX contract: caches under /var, /opt
     // pristine, which is what keeps gucman's checksum-gated remove exact.
-    'find /var/cache/python-clang -name "*.pyc" | head -1',
+    'find /var/cache/cpython-clang -name "*.pyc" | head -1',
     `find ${PREFIX} -name "__pycache__" | head -1; echo OPTCLEAN=$?`,
     `find ${PREFIX} -name "*.pyc" | wc -l`,
     'echo ==remove',
-    'gucman remove python-clang; echo RRC=$?',
-    'test ! -e /usr/local/bin/python-clang && echo BIN-GONE',
+    'gucman remove cpython-clang; echo RRC=$?',
+    'test ! -e /usr/local/bin/cpython-clang && echo BIN-GONE',
     `test ! -e ${PREFIX} && echo OPT-GONE`,
     'echo ==done',
   ];
@@ -253,14 +253,14 @@ async function main() {
     /^PYHINT=[1-9]/m.test(purity), purity);
 
   const cat = section(out, 'catalog');
-  check('catalog lists python-clang', cat.includes('python-clang'), cat);
+  check('catalog lists cpython-clang', cat.includes('cpython-clang'), cat);
 
   const inst = section(out, 'install');
-  check('python-clang installs (exit 0)', inst.includes('RC=0'), inst);
-  check(`/usr/local/bin/python-clang -> ${PREFIX}/bin/python-clang`,
-    inst.includes(`${PREFIX}/bin/python-clang`), inst);
+  check('cpython-clang installs (exit 0)', inst.includes('RC=0'), inst);
+  check(`/usr/local/bin/cpython-clang -> ${PREFIX}/bin/cpython-clang`,
+    inst.includes(`${PREFIX}/bin/cpython-clang`), inst);
   check('the package tree carries both the launcher and the wasm',
-    inst.includes('python-clang.wasm'), inst);
+    inst.includes('cpython-clang.wasm'), inst);
   check('the stdlib tree landed at lib/python3.13', inst.includes('python3.13'), inst);
 
   const rd = section(out, 'readdir');
@@ -299,7 +299,7 @@ async function main() {
   check('subprocess is forced onto the posix_spawn path',
     sub.includes('USE_SPAWN=True SEARCHES_PATH=True'), sub);
   check('subprocess.run([bare name]) really spawns and captures output',
-    /SUBP rc=0 out=.*python-clang/.test(sub), sub);
+    /SUBP rc=0 out=.*cpython-clang/.test(sub), sub);
   check('a child exit status comes back through waitpid', sub.includes('SUBP2 rc=7'), sub);
   check('the subprocess script exits clean', sub.includes('SRC=0'), sub);
 
@@ -334,8 +334,8 @@ async function main() {
   }
 
   const pyc = section(out, 'pyc');
-  check('the pyc cache lands under /var/cache/python-clang',
-    /\/var\/cache\/python-clang\/.*\.pyc/.test(pyc), pyc);
+  check('the pyc cache lands under /var/cache/cpython-clang',
+    /\/var\/cache\/cpython-clang\/.*\.pyc/.test(pyc), pyc);
   check('/opt stays pristine — no __pycache__, no .pyc',
     !new RegExp(PREFIX + '/.*__pycache__').test(pyc) && /^0$/m.test(pyc), pyc);
 

@@ -8,7 +8,7 @@
 ## Goal
 
 Add a `vendor/bzip2/` port and build CPython's `_bz2` static extension against
-it, so `import bz2` succeeds on `python-clang` instead of raising
+it, so `import bz2` succeeds on `cpython-clang` instead of raising
 `ModuleNotFoundError`.
 
 ## What is established (measured, not assumed)
@@ -43,11 +43,11 @@ cheapest of the three ports jku queued, which is why it is first.
 
 ## Acceptance
 
-- `python-clang -c "import bz2; print(bz2.compress(b'x'*1000)[:4])"` runs in-OS
+- `cpython-clang -c "import bz2; print(bz2.compress(b'x'*1000)[:4])"` runs in-OS
   (not only host-side) and round-trips through `bz2.decompress`.
 - The stdlib import sweep count rises from `0340`'s landed figure by the
   `bz2`-dependent set; state the **before and after numbers**, not "improved".
-- `python-clang -c "import tarfile"` still imports (regression check).
+- `cpython-clang -c "import tarfile"` still imports (regression check).
 - Binary-size delta reported in bytes. CPython ships as a **gucman package,
   never baked**, so this costs the base image **zero bytes** — say so
   explicitly rather than leaving a size number to look alarming.
