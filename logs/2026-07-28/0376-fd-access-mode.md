@@ -22,8 +22,10 @@ and Env R (brokered kernel OFDs) did not.
   open-file-description semantics, for free, by the existing sharing.
 - **`ftruncate()`** on a read-only fd is EINVAL (POSIX; the same corruption
   class — it mutates through a fd that was never opened for writing). The
-  readonly-volume EROFS check stays first in ftruncate, so RO-volume behavior
-  there is unchanged.
+  fd-mode check precedes the readonly-volume flag, like read()/write(): a
+  readonly volume only hands out O_RDONLY fds, so its ftruncate is EINVAL
+  (Linux agrees; EROFS is truncate(2)'s path-op errno), and the kernel's
+  FS_FTRUNCATE arm answers the same — local/brokered identity.
 - **Pipe ends** now refuse the wrong direction in Env B (write on the read
   end / read on the write end → EBADF). Env R always enforced this
   (`o.end !== 'read'`); Env B shared one buffer both ways. Same defect class
@@ -40,13 +42,15 @@ and Env R (brokered kernel OFDs) did not.
 
 ## Errno ordering worth recording
 
-`write()` on a read fd of a **readonly volume** is now **EBADF, not EROFS**
-(test_readonly.js updated): the only fd a readonly volume can hand out is
-O_RDONLY, and POSIX/Linux put the fd-mode check ahead of the mount flag.
-EROFS remains the answer for write-intent *opens* and path mutations. The old
-EROFS-on-write belt-and-braces in `BlockFS.write` stays as a pure backstop
-with its comment rewritten — its "write() doesn't check the open mode"
-premise is dead.
+`write()` on a read fd of a **readonly volume** is now **EBADF, not EROFS**,
+and `ftruncate()` there is **EINVAL** (test_readonly.js, kernel
+test_mounts.js and test_rofs.js updated — the last one both locally and
+brokered, keeping the RO-fd zero-RPC identity): the only fd a readonly
+volume can hand out is O_RDONLY, and POSIX/Linux put the fd-mode check ahead
+of the mount flag on fd-based ops. EROFS remains the answer for write-intent
+*opens* and path mutations. The old EROFS-on-write belt-and-braces in
+`BlockFS.write` stays as a pure backstop with its comment rewritten — its
+"write() doesn't check the open mode" premise is dead.
 
 ## Tests (red first, then green)
 

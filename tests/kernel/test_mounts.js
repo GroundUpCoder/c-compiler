@@ -279,8 +279,12 @@ test('readonly /usr: every mutator on the RPC surface is EROFS', function () {
   assert(f.m.utime('/usr/bin/sh', 1, 2) === null && f.m._lastError === 'EROFS', 'utime');
   var fd = f.m.open('/usr/bin/sh', 0, 0);
   assert(fd !== null, 'O_RDONLY still opens');
-  assert(f.m.write(fd, encode('X'), 1) === null && f.m._lastError === 'EROFS', 'write on a read fd');
-  assert(f.m.ftruncate(fd, 0) === null && f.m._lastError === 'EROFS', 'ftruncate');
+  // EBADF/EINVAL, not EROFS (todos/0376): the fd carries its access mode,
+  // and a readonly volume only hands out O_RDONLY fds — the fd-mode check
+  // precedes the volume flag on fd-based ops (POSIX; Linux agrees). EROFS
+  // stays the answer for the write-intent opens and path mutations above.
+  assert(f.m.write(fd, encode('X'), 1) === null && f.m._lastError === 'EBADF', 'write on a read fd');
+  assert(f.m.ftruncate(fd, 0) === null && f.m._lastError === 'EINVAL', 'ftruncate');
   f.m.close(fd);
 });
 

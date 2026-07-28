@@ -3743,15 +3743,19 @@ var BLOCK_FS = (function () {
 
   // ftruncate(fd, size) — truncate or extend an open file.
   BlockFS.prototype.ftruncate = function (fd, size) {
-    if (this._readonly) return this._setErr('EROFS');
-    if (size < 0) return this._setErr('EINVAL');
     if (fd < 0 || fd >= this._fdTable.length || !this._fdTable[fd])
       return this._setErr('EBADF');
     var entry = this._fdTable[fd];
     if (entry.inoId === undefined) return this._setErr('EBADF');
     // POSIX: ftruncate requires a fd open for writing — EINVAL otherwise
-    // (todos/0376; the same corruption class as write-on-O_RDONLY).
+    // (todos/0376; the same corruption class as write-on-O_RDONLY). BEFORE
+    // the volume flag, like read()/write(): a readonly volume only hands
+    // out O_RDONLY fds, so its ftruncate is EINVAL (Linux agrees — EROFS
+    // is the path-op/truncate(2) errno), and the kernel's FS_FTRUNCATE arm
+    // answers the same, keeping local/brokered identity.
     if (entry.accmode === 0) return this._setErr('EINVAL');
+    if (this._readonly) return this._setErr('EROFS');
+    if (size < 0) return this._setErr('EINVAL');
 
     var ino = this._inodes.read(entry.inoId);
     if (!ino) return this._setErr('EBADF');

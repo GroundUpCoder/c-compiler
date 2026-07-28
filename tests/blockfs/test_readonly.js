@@ -126,7 +126,10 @@ test('every mutating op returns EROFS', function () {
   // write-INTENT opens and path mutations above.
   assert(ro.write(fd, encode('X'), 1) === null, 'write on a read fd must fail');
   assertEq(ro._lastError, 'EBADF', 'write on a read fd errno');
-  erofs(ro, 'ftruncate', ro.ftruncate(fd, 0));
+  // ftruncate likewise: EINVAL (fd not open for writing) before the volume
+  // flag — Linux agrees; EROFS is truncate(2)'s path-op errno.
+  assert(ro.ftruncate(fd, 0) === null, 'ftruncate must fail');
+  assertEq(ro._lastError, 'EINVAL', 'ftruncate errno');
   erofs(ro, 'fchmod', ro.fchmod(fd, 0o600));
   erofs(ro, 'futime', ro.futime(fd, 1, 2));
   assertEq(ro.close(fd), 0, 'close is fine');
