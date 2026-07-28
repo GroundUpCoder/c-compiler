@@ -5396,6 +5396,12 @@ function makeUnary(loc, op, operand) {
       }
       break;
   }
+  // UNPROMOTED: operand.type is the DECLARED type, so a bit-field operand never
+  // takes the C11 6.3.1.1p2 integer promotion here. `-bf`/`~bf` on an
+  // `unsigned int u20:20` therefore stay unsigned and miscompile vs clang:
+  // (-s.u20) < 0 is 0 for us, 1 for clang. 0356 fixed only the BINARY path
+  // (promoteExprType) and its message wrongly claimed this one was already
+  // correct. Pre-existing, not a 0356 regression. todos/0367, register L53.
   return new EUnary(loc, Types.computeUnaryType(op, operand.type), op, operand);
 }
 

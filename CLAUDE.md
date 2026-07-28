@@ -970,7 +970,10 @@ the baked body) — never through a `bin` alias, which `/usr/local/bin`-precedes
 That shadow is diagnosed in four places (`which`, `list`, `set`/`reset`, and
 ctlpanel's new Default Programs applet — todos/0130's picker leg) and
 deliberately not auto-repaired. Tests: `test_cmdalt_e2e.js` + ctlpanel legs.
-Image version is **v179**.
+Image version: read `os/image.json` (`version`) — do not restate it here. This
+line said **v140** for ~39 bumps, was refreshed to v179, and drifted again within
+hours; a hand-maintained mirror of machine-readable state only ever tells you how
+long since someone last looked.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

@@ -64,10 +64,22 @@ types [that] are unchanged". A 52-bit field is wider than `int`, so it keeps
 i64 to i32, and the fraction's high 20 bits went out the window. Every NaN's low
 32 fraction bits are zero in the common quiet-NaN encoding, so `frc == 0`.
 
-Only the **binary** operand path routes through `promoteExprType`. Unary,
-ternary and vararg operands were already correct — which is why `!c.p.frc` gave
-the right answer while `c.p.frc == 0` did not, and why the printf in the repro
-above disagreed with the comparison two lines below it.
+Only the **binary** operand path routes through `promoteExprType`. That is why
+`!c.p.frc` gave the right answer while `c.p.frc == 0` did not, and why the printf
+in the repro above disagreed with the comparison two lines below it.
+
+> 🔴 **ERRATUM (master cont-121, 2026-07-28).** This paragraph originally read
+> *"Unary, ternary and vararg operands were already correct."* **That is FALSE for
+> unary, and the commit message of `970aedf1` carries the same false sentence
+> (immutable — this note is its erratum).** `buildUnary` computes its result type
+> from the **unpromoted declared type**, so a bit-field narrower than `int` never
+> takes the C11 §6.3.1.1p2 integer promotion. Reproduced against clang: for
+> `unsigned int u20:20` holding 1, `-s.u20` prints `-1` in both, but
+> `(-s.u20) < 0` is **0** for us and **1** for clang. Filed as **`todos/0367`**
+> (P0) with register entry **`L53`**; ternary and vararg are unaudited and are in
+> that ticket's scope. **Not a 0356 regression — pre-existing on the parent.**
+> The lesson: this sentence did not merely record a gap, it asserted the gap was
+> *closed*, which is what stopped anyone looking for four merges.
 
 The signedness test moved to `!uq.isUnsigned()` in the same edit. The old
 identity list (`TINT || TLONG || TSHORT || TSCHAR || TCHAR`) omitted
