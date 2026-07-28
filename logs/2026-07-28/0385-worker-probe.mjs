@@ -1,10 +1,10 @@
-// 0379: per-spawn cost attribution in Safari vs Chromium.
+// 0385: per-spawn cost attribution in Safari vs Chromium.
 //  bare        trivial blob worker → first message
 //  hostjs      worker importScripts('/host.js') → first message
 //  compileMain WebAssembly.compile of py.wasm on the main thread
 //  cloneInst   postMessage(precompiled Module) to worker → instantiate there
 //  bytesInst   postMessage(bytes) to worker → compile+instantiate there
-// Usage: node tmp-0379/worker-probe.mjs safari|chromium
+// Usage: node logs/2026-07-28/0385-worker-probe.mjs safari|chromium
 import { Builder } from 'selenium-webdriver';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -68,7 +68,7 @@ const PROBE_FN = `async (cb) => {
     out.hostjs = [];
     for (let i = 0; i < 5; i++) out.hostjs.push(await runHost());
 
-    const bytes = await (await fetch('/tmp-0379/py.wasm')).arrayBuffer();
+    const bytes = await (await fetch('/tmp-0385/py.wasm')).arrayBuffer();
     out.compileMain = [];
     let mod;
     for (let i = 0; i < 3; i++) {

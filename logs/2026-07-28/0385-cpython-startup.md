@@ -1,10 +1,12 @@
-# 0379 — where cpython-clang's iPhone startup seconds actually go
+# 0385 — where cpython-clang's iPhone startup seconds actually go
 
-Lane 0379, 2026-07-28. Ticket: `todos/0379-cpython-startup-latency.md`.
+Lane 0385, 2026-07-28 (branch `0379-cpython-startup` — the kickoff hand-wrote
+an already-taken id; renumbered to 0385 by master's ruling, branch name kept).
+Ticket: `todos/0385-cpython-startup-latency.md`.
 Provenance: jku, first-hand — `python --version` on his iPhone takes ~2 s,
 while `tools/bench2x2/results/startup-cpython-clang.txt` says ~96 ms. This log
 is the method and the surprises; the ticket carries the conclusions and
-options. Drivers preserved next to this file as `0379-*.js` / `0379-*.mjs`
+options. Drivers preserved next to this file as `0385-*.js` / `0385-*.mjs`
 (run from repo root; the browser ones need the tests/browser deps, the Safari
 ones `safaridriver` + selenium — the `safari-renders.mjs` toolchain).
 
@@ -31,16 +33,16 @@ number. Chromium was never the problem; the phone runs WebKit.
 ## Method notes (worth keeping)
 
 - **Headless per-command timing**: pipe a script into `os/boot.js` and stamp
-  `@@MARK` echo lines host-side as they stream (`0379-measure.js`). driveBoot
+  `@@MARK` echo lines host-side as they stream (`0385-measure.js`). driveBoot
   is spawnSync and can't do this.
 - **Safari timing**: an occluded/unfocused Safari window throttles rAF AND
   timers, so an in-page polling loop reads garbage (first attempt: every
   command "0 ms"). The fix that works: `Object.defineProperty(window,
   '__osOut', {set…})` — stamp `performance.now()` synchronously at tty-mirror
   assignment, plus `osascript … activate` to foreground the window
-  (`0379-measure-safari.mjs`). Typed needles split (`GO0""Z`) per the 0171
+  (`0385-measure-safari.mjs`). Typed needles split (`GO0""Z`) per the 0171
   rule so input echo can't satisfy the watch.
-- `wc`-style truth: `strace -f` in-OS is the spawn census (`0379-chain-probe.js`);
+- `wc`-style truth: `strace -f` in-OS is the spawn census (`0385-chain-probe.js`);
   `-X importtime` prices the import bootstrap from inside.
 
 ## What fell to measurement, in order
@@ -53,14 +55,14 @@ number. Chromium was never the problem; the phone runs WebKit.
    codecs, io…) is FROZEN into the binary; only `encodings/*` come from disk —
    4 .pyc files exist to write, cold ≈ warm (60.7 vs 64.0 ms cumulative
    importtime headless). The launcher's `/var/cache` wiring works as designed
-   (`0379-pyc-probe.js`). The CPYTHON.md §5.3 "unmeasured" box is now measured.
-3. **The chain is 7 processes** (`0379-chain-probe.js`): hush → cmdalt →
+   (`0385-pyc-probe.js`). The CPYTHON.md §5.3 "unmeasured" box is now measured.
+3. **The chain is 7 processes** (`0385-chain-probe.js`): hush → cmdalt →
    launcher sh → `$(dirname …)` sh → `$(realpath …)` sh → realpath → dirname →
    wasm. Four spawns exist to compute `dirname $(realpath $0)`. hush runs each
    command substitution as a real subshell process (NOMMU), so the innocent
    one-liner is 4 processes, ~370 ms of the 645 on desktop Safari.
 4. **Every browser primitive is FAST in Safari** — this was the real surprise
-   (`0379-worker-probe.mjs`, `0379-nested-probe.mjs`): bare Worker 2 ms,
+   (`0385-worker-probe.mjs`, `0385-nested-probe.mjs`): bare Worker 2 ms,
    Worker+importScripts(host.js) 10 ms, nested worker 2 ms,
    `WebAssembly.compile` of the 7.6 MB python binary 10–30 ms, clone+
    instantiate 2 ms, bytes+compile+instantiate ~20 ms. So none of "worker
@@ -69,7 +71,7 @@ number. Chromium was never the problem; the phone runs WebKit.
    In-OS Safari: `/bin/true` (a real spawn of the busybox multicall) cost
    ~200 ms for the first ~3 spawns then dropped to **22 ms** — and realpath +
    `sh -c :` (the SAME module) were warm from the start
-   (`0379-measure-safari2.mjs`). JSC attaches its wasm JIT code to the
+   (`0385-measure-safari2.mjs`). JSC attaches its wasm JIT code to the
    `WebAssembly.Module`; the kernel module cache (todos/0037) shares that
    object across spawns — but only for RO-volume binaries. `/opt` (gucman
    installs) takes the bytes path: fresh Module per spawn, all run-once init

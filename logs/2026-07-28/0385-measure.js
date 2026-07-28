@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 0379 measurement driver: per-command wall times inside a gucOS headless boot.
+// 0385 measurement driver: per-command wall times inside a gucOS headless boot.
 // Streams boot.js stdout and timestamps @@MARK lines as they arrive.
 'use strict';
 const fs = require('fs');
@@ -73,7 +73,7 @@ function report(marks) {
 
 async function main() {
   const MIN = ensureMinimalImage();
-  const { image } = freshImage('os-0379-');
+  const { image } = freshImage('os-0385-');
   fs.copyFileSync(MIN, image);
   const port = await startServer(path.join(ROOT, 'dist', 'packages'));
   console.log(`repo :${port}, image ${image}`);

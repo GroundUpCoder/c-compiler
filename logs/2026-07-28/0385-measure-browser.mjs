@@ -1,6 +1,6 @@
-// 0379: in-browser (Chromium) end-to-end command latency on the DEPLOY-shaped
+// 0385: in-browser (Chromium) end-to-end command latency on the DEPLOY-shaped
 // (minimal) image + runtime gucman install — the iPhone scenario.
-// Usage: node tmp-0379/measure-browser.mjs
+// Usage: node logs/2026-07-28/0385-measure-browser.mjs
 import { openOsSession } from '../../tests/browser/lib/os-harness.mjs';
 
 const PORT = 3313;

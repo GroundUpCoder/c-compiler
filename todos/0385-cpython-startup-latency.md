@@ -1,15 +1,20 @@
-# 0379 — cpython-clang startup latency (~2 s for `python --version` on iPhone)
+# 0385 — cpython-clang startup latency (~2s for python --version on iPhone)
 
 - **Status**: investigated 2026-07-28 — root cause measured, fix path measured
   (~10× on desktop Safari), options reported to jku by email. Nothing landed in
   the product; the fixes below need a decider/coordinator call (option A is a
-  kernel cache-invalidation design, option B collides with the todos/0374
-  rename in flight).
-- **Log**: `logs/2026-07-28/0379-cpython-startup.md` (method, drivers, raw numbers)
+  kernel cache-invalidation design, option B changes the standing gucman
+  launcher convention).
+- **Design**: `logs/2026-07-28/0385-cpython-startup.md` (method, drivers, raw numbers)
+- NB: this lane's branch is named `0379-cpython-startup` — the kickoff
+  hand-wrote a ticket id that was already taken (0379 is the dup-dirent repair
+  ticket). The branch name keeps the stale id by master's ruling; the ticket
+  and log carry the real id, 0385. Measurements predate the todos/0374 rename,
+  so raw driver output says `python-clang`; the package is `cpython-clang` now.
 
 ## The observation
 
-On jku's iPhone, `python --version` (the python-clang package via the cmdalt
+On jku's iPhone, `python --version` (the cpython-clang package via the cmdalt
 dispatcher) takes ~2 s. The existing bench
 (`tools/bench2x2/results/startup-cpython-clang.txt`, ~96 ms) is whole-process
 wall under **Node/V8 on bare host.js** — no OS, no spawn chain, no browser —
@@ -23,7 +28,7 @@ Safari number, not a mystery.
 
 1. **`python --version` is SEVEN process spawns.** strace -f in-OS:
    hush → cmdalt dispatcher → `/bin/sh` launcher → `$(dirname …)` subshell →
-   `$(realpath …)` subshell → realpath → dirname → python-clang.wasm. Four of
+   `$(realpath …)` subshell → realpath → dirname → the python wasm. Four of
    the seven exist only so the launcher can locate its own directory
    (the gucman `$0`-readlink launcher pattern).
 2. **On JSC (Safari), a spawn of a NON-shared wasm module costs ~150–230 ms;
@@ -33,8 +38,9 @@ Safari number, not a mystery.
    read-only volume** (`immutableKey`). A gucman-installed binary lives under
    `/opt` on the rw root volume → bytes path → a fresh Module per spawn →
    every run-once init instruction executes in JSC's interpreter tier, every
-   invocation. python-clang.wasm is 7.6 MB with a large C init, and `-c`/script
-   runs add the Python runtime init + imports at the same cold tier.
+   invocation. The python binary is 7.6 MB with a large C init, and
+   `-c`/script runs add the Python runtime init + imports at the same cold
+   tier.
 
 Ruled out by measurement (each priced): wasm compile itself (7.6 MB = 10–30 ms
 in JSC, ~7 ms V8), Worker creation (2 ms; nested workers 2 ms), fs-RPC storm
@@ -65,8 +71,8 @@ first-run-in-session stays cold-compile+init. All raw runs in the log.)
 - **B — spawn-free launcher** (removes 4 of 7 spawns): known-prefix probe
   (`/opt/<name>` else `/usr/opt/<name>`) or install-time prefix substitution,
   replacing the `$(dirname "$(realpath "$0")")` convention. Applies to every
-  gucman launcher (micropython too). Collides with todos/0374's rename —
-  sequence after it.
+  gucman launcher (micropython too). Sequence with awareness that 0374's
+  rename has landed (the package is `cpython-clang`).
 - **C — smaller/later**: prewarm the module at install/boot (kills the
   first-run cold spike), in-process cmdalt dispatch, freezing more stdlib.
 

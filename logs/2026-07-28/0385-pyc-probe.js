@@ -6,7 +6,7 @@ const { ensureMinimalImage, startServer } = require(path.join(ROOT, 'tests/kerne
 const { driveBoot, freshImage } = require(path.join(ROOT, 'tests/kernel/lib/drive.js'));
 (async () => {
   const MIN = ensureMinimalImage();
-  const { image } = freshImage('os-0379p-');
+  const { image } = freshImage('os-0385p-');
   fs.copyFileSync(MIN, image);
   const port = await startServer(path.join(ROOT, 'dist', 'packages'));
   const r = driveBoot([

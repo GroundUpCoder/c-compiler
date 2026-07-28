@@ -1,8 +1,8 @@
-// 0379: REAL Safari (safaridriver) end-to-end command latency on the minimal
+// 0385: REAL Safari (safaridriver) end-to-end command latency on the minimal
 // image + gucman install — closest desktop proxy for the iPhone path.
 // Timing is IN-PAGE (rAF poller stamps performance.now() when tty markers
 // appear), so selenium round-trips don't pollute the numbers.
-// Usage: node tmp-0379/measure-safari.mjs
+// Usage: node logs/2026-07-28/0385-measure-safari.mjs
 import { Builder } from 'selenium-webdriver';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
