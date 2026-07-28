@@ -1,6 +1,6 @@
 # 0388 — test_cpython_clang_e2e is intermittent under -j2: mkpkg base-index and --clang-superset invocations race on the shared dist/packages/index.json
 
-- **Status**: open
+- **Status**: done
 - **Priority**: 2
 - **Difficulty**: medium
 - **Design**: this file.
@@ -159,6 +159,61 @@ real reason to fix this.**
 4. Consider whether `tools/mkpkg.js` should refuse to write an index into a directory another
    mkpkg is concurrently writing (fail loud rather than interleave).
 
+## The fix (shipped)
+
+Isolation, not locking — `mkpkg` is the expensive step and a lock would serialise
+the suite.
+
+1. **`tools/mkpkg.js --pool=DIR`** decouples the content-addressed payload STORE
+   from the per-consumer index. `<out>/pool` becomes a **hardlinked view** of
+   exactly the payloads that index references (no byte copy), so N isolated
+   repos share ONE warm cache — a cold build of the full set is ~90 s, a reuse
+   ~0.1 s.
+2. **A shared store is append-only.** BOTH prunes — orphan and
+   superseded-version — are scoped to the private view. A concurrent builder can
+   neither lose a payload it has already indexed nor hit ENOENT materializing
+   one. Reclaim is `rm -rf` on the store; refcounted GC is deliberately not
+   attempted, since it would put the deletes back.
+3. The view is populated **before** the index is published, so a repo never
+   advertises a payload that is not there yet.
+4. **One writer per out dir**: a `.mkpkg-lock` refuses a concurrent build with a
+   loud exit 1 naming the holder and the `--out`/`--pool` fix, and self-heals
+   across a dead holder. Isolation is the fix; the lock is so a future caller
+   that forgets it gets a named failure instead of a silent interleave. (It
+   earned its keep immediately — see below.)
+5. **Tests**: `ensurePackages`/`ensureClangPackages` return `{ dir, index }` and
+   build into a per-INSTANCE `mkdtemp` under `build/test-packages/` over the one
+   shared pool, removed at exit. The two duplicated local `ensureClangPackages`
+   helpers collapse into the shared one.
+
+⚠️ **The unit of isolation is a running instance, not a test file.** Keying the
+dir on the file name looked right and was wrong: `--repeat N` runs the same file
+concurrently, so `test_cpython_clang_e2e` collided with ITSELF (2 of 3 repeats
+died). The lock is what surfaced that — as a named refusal, not a bad index.
+
+⚠️ Reuse used to require EXACTLY ONE candidate payload per (name, version).
+True for an owned pool, false for an append-only shared store, where one version
+legitimately accumulates shas. Left alone it would have silently stopped reusing
+anything and rebuilt the world every run. Newest candidate wins now.
+
+## Evidence that it holds
+
+- **`tests/serve/test_mkpkg_isolation.js`** (new, host suite guardrail (d)) —
+  **25/25**. Carries a **RED CONTROL** that still reproduces the prune on demand:
+  without it the green legs would pass equally against a tool that never pruned
+  at all. Also pins the hardlink (same inode, not a copy), the append-only
+  store, the multi-sha reuse, and both lock behaviours.
+- **No test writes the shared repo at all — demonstrated, not asserted.**
+  `dist/packages/index.json` was byte- and mtime-identical
+  (`md5 f6a52f5b4c6e772439ce51fb541cf25c`, `mtime 1785223164`) before and after
+  9 package-test runs. `build/test-packages/` held only `pool/` afterwards —
+  every per-instance repo dir cleaned itself up.
+- **Flake gate**: `-j2 --repeat 3 --filter=cpython_clang,gucman_quake,fontpkg`
+  → **9 passed, 0 failed**; all three files **3/3, flake 0%**. Before the fix the
+  same command reported `test_cpython_clang_e2e` **FLAKY 1/3 (67%)**. Each repeat
+  was verified to have really run (43 `ok` lines and the in-OS import sweep
+  `166/180` in all three logs), not skipped.
+
 ## Acceptance
 
 - The mechanism is **confirmed or refuted in writing** before any fix lands.
@@ -175,3 +230,18 @@ real reason to fix this.**
   (pixel comparison), do not merge the two. This one is a shared-file race; that one is not.
 - **`0369`** — harness fixed timeouts under contention. Also **not** this: `0369` is about
   caps and slowness, and this test failed in 1.9 s.
+
+## Gate record (lane `0388-mkpkg-index-race`)
+
+- `node tests/kernel/run.js` (default `-j2`) — **124 passed, 1 failed** (911.1 s),
+  `files {total 125, selected 125, executed 125, resumed 0, carried 0, recorded 125}`,
+  `runs` 1 entry, filter null. **All eight package tests green.**
+- The one failure is **`test_netsurf_mutation_e2e.js` = `0386`**, not this ticket:
+  it holds ZERO references to `mkpkg`/`dist/packages`, its failure is the
+  ink-pixel comparison, and it passes solo on re-run. Logged there as sighting 3
+  — with the finding that its counts (**285 vs 234**) are byte-identical to
+  sighting 1, which argues for a bimodal deterministic state rather than noise.
+- `node tests/host/run.js` — all host tests passed (includes the new guardrail).
+- `node tests/todos/run.js` — **5/5**. `queue.js check` OK (107 items, 276 done,
+  42 liability entries); `liabilities.js check` OK.
+- `tests/run.js --diff` plan for this diff was `todos, host, kernel` — all three run.
