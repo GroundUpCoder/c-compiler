@@ -43,6 +43,56 @@ informed. ⭐ This ruling is also the **answer to his still-open email question*
 reporting.
 
 
+## ✅ STEP-1 MEASUREMENT DONE (2026-07-28, lane `0350-zip`) — THE CALL IS **libarchive**
+
+**Method** (harness committed at `tools/zipmeasure/` — `fetch.sh` pins
+libarchive 3.8.1 + libzip 1.11.4 by sha256, `run.sh` rebuilds and re-verifies):
+both candidates built by OUR compiler against the existing `vendor/zlib`, each
+into a frontend that creates a 3-member zip, reopens it and verifies every
+member byte-identical (system `unzip` cross-reads both outputs). A baseline
+binary (libc + zlib + stdio frontend, no archive lib) isolates the
+lib-attributable cost. libzip is its COMPLETE upstream source list (deflate
+only, no crypto); libarchive is cut to the shippable set (zip r/w, tar r,
+ustar+pax w, gzip r/w, archive_write_disk) with the pull-the-world dispatch
+tables excluded. Control: the linker does NOT drop unreferenced TU functions
+(two unreferenced TUs grew the binary 24 KB), so these numbers price the
+vendored TU set — and the comparison thereby leans in libzip's favor, since
+libzip's number is its whole library.
+
+| binary | raw | gzip -9 |
+|---|---|---|
+| baseline | 78,973 | 32,435 |
+| libzip 1.11.4 | 181,111 | 70,461 |
+| libarchive 3.8.1 (no write_disk) | 357,259 | 128,619 |
+| libarchive 3.8.1 (+ write_disk) | 381,425 | 136,494 |
+
+Lib-attributable: **libzip 38 KB compressed / 102 KB raw**; **libarchive
+96 KB compressed / 278 KB raw** (104/302 with write_disk). Per-binary delta
+libarchive−libzip ≈ **58 KB compressed** (66 with write_disk) — INSIDE the
+ruling's ~100 KB noise band. Even shipping two separate frontend binaries
+instead of one multicall (doubling the lib) puts the gap at ~132 KB, nowhere
+near the 1 MB that would flip the call. **Tie-break applied as pre-committed:
+libarchive.**
+
+**Correction to the ruling's framing — subsumption is a COST here, not a
+credit.** Every binary in the image is statically linked; "subsuming" gucman's
+tar+gz extractor means gucman LINKS libarchive and grows by ~100 KB raw, while
+the bespoke code it sheds (`gm_gunzip` + the ustar walker, ~150 lines) is
+~2–3 KB, and its zlib stays regardless. Measured recommendation for the
+implementing lane: do NOT fold gucman onto libarchive while linking is static
+— it is a pure size regression with no functional gain; the three-paths-to-one
+consolidation only pays off if a shared-library story lands (dlopen lane).
+This does not move the call: at zero credit the gap is still inside the noise
+band. The **frontends** (`unzip`/`zip` as one multicall binary, bsdunzip +
+bsdtar-derived) are where libarchive's value shows up, per the ruling.
+
+**libc gaps found for the real vendoring** (details in
+`tools/zipmeasure/README.md`): `umask(2)` and `id_t` are absent from the
+embedded libc (archive_write_disk needs umask — measurement shims it);
+`strcasecmp` needs `<strings.h>` pulled in for libzip-style code;
+absent-but-config'd-around: gmtime_r/ctime_r/timegm/tzset, fchdir/fstatat/
+openat/linkat, mkfifo, arc4random.
+
 ## Goal
 
 One real zip read+write implementation linked into the image the way `zlib`

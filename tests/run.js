@@ -226,6 +226,11 @@ const RULES = [
   // that needs it can name the suite.
   [/^tools\/bench2x2\//, ['host'],
     'the python-runtime bench harness — its cells run host.js standalone'],
+  // The 0350 zip-library size-measurement harness — the bench2x2 shape: its
+  // binaries compile with compiler.js and run under `node host.js` standalone
+  // (fetch.sh pulls the candidate sources into gitignored build/zipmeasure).
+  [/^tools\/zipmeasure\//, ['host'],
+    'the 0350 zip-library measurement harness — its binaries run host.js standalone'],
 
   // Self-contained side projects: own trees, own runners, no product artifact,
   // and no suite in this dispatcher consumes them. Gating them would be a
