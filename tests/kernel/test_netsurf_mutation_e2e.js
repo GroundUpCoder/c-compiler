@@ -154,23 +154,38 @@ const typingPageBig = (title, n, periodMs) => `<html>
 <body>
 <input id="i" type="text" size="20" value="">
 <div id="d">tick 0</div>
-<div id="vbar" style="height: 12px; width: 0px; background: #ff8800;"></div>
-<div id="vok" style="height: 12px; width: 120px; background: #ffff00;"></div>
+<div id="me" style="color: #007700;"></div>
+<div id="mp" style="color: #0000cc;"></div>
 ${'<div class="p"></div>\n'.repeat(n)}<script>
 var fld = document.getElementById('i');
-var vbar = document.getElementById('vbar');
-var vok = document.getElementById('vok');
-/* value-level probe, decodable by pure colour count (no geometry): the
- * orange bar's area encodes value LENGTH (30px per char x 12px tall),
- * the second band goes green only on the exact expected value */
+var mirE = document.getElementById('me');
+var mirP = document.getElementById('mp');
+/* Two VALUE mirrors, both over the proven textContent bridge and told
+ * apart by text colour (decoded by full-frame colour count, so no
+ * geometry assumptions):  mirE echoes the field on every 'input' event;
+ * mirP is an event-independent poller (guarded, so an unchanged value
+ * causes no mutation).  The poller stops with the tick so the page has
+ * a true settled state. */
 fld.addEventListener('input', function () {
-	vbar.style.width = (fld.value.length * 30) + 'px';
-	vok.style.background = (fld.value === 'abcdef') ? '#00ff00' : '#ff00ff';
+	mirE.textContent = 'V:' + fld.value;
 });
+var polls = 0;
+var poller = setInterval(function () {
+	var v = 'V:' + fld.value;
+	if (mirP.textContent !== v) mirP.textContent = v;
+	polls = polls + 1;
+	if (polls >= 60) clearInterval(poller);
+}, 200);
 ${periodMs ? `var n = 0;
 var box = document.getElementById('d');
 setTimeout(function () {
-	setInterval(function () { n = n + 1; box.textContent = 'tick ' + n; }, ${periodMs});
+	var tick = setInterval(function () {
+		n = n + 1;
+		box.textContent = 'tick ' + n;
+		/* finite: the page must eventually settle so the leg can
+		 * assert its true final state */
+		if (n >= 25) clearInterval(tick);
+	}, ${periodMs});
 }, 3000);` : ''}
 console.log('big page ready');
 </script>
@@ -407,7 +422,7 @@ const out = driveBoot([
     [`wmctl key $BT ${sc} ${ks}; sleep 0.25`,
      `wmctl shot $BT /root/tk${i + 1}.ppm && echo shot-tk${i + 1}-ok`]),
   'wmctl shot $BT /root/bt1.ppm && echo shot-bt1-ok',
-  'sleep 2.5',
+  'sleep 5.5',                    /* past the finite tick's end: TRUE settle */
   'wmctl shot $BT /root/bt2.ppm && echo shot-bt2-ok',
   'wmctl close $BT && wmctl wait nowin NsBigT 8000 && echo bigt-closed',
 
@@ -420,7 +435,7 @@ const out = driveBoot([
   'wmctl click $BU 60 12',
   ...TYPE_KEYS('$BU'),
   'wmctl shot $BU /root/bu1.ppm && echo shot-bu1-ok',
-  'sleep 2.5',
+  'sleep 5.5',                    /* past the finite tick's end: TRUE settle */
   'wmctl shot $BU /root/bu2.ppm && echo shot-bu2-ok',
   'wmctl close $BU && wmctl wait nowin NsBigT 8000 && echo bigt2-closed',
 
@@ -556,19 +571,15 @@ const shots = parsePPMs(back.stdout, NAMES);
               '  (deltas: ' + kSteps.map((v, i) => v - (i ? kSteps[i - 1] : 52)).join(' ') + ')');
   console.log(`D1-TICKY x2(immediate)=${tickyInk} x3(settled)=${fieldInk(shots.x3)} static=${staticInk}`);
   console.log(`D4-FAST20MS x4(immediate)=${fieldInk(shots.x4)} x5(settled)=${fieldInk(shots.x5)}`);
-  /* value-level decode for the big pages: orange bar area / (12*30) is
-   * the value LENGTH the page's own input listener saw; the green vs
-   * magenta band is exact-match against 'abcdef' */
-  const colCount = (s, pr) => countContent(s, pr);
-  const isOrange = (p) => p[0] > 200 && p[1] > 100 && p[1] < 180 && p[2] < 60;
-  const isGreen = (p) => p[0] < 80 && p[1] > 180 && p[2] < 80;
-  const isMagenta = (p) => p[0] > 180 && p[1] < 80 && p[2] > 180;
-  const vprobe = (tag) => {
-    const s = shots[tag];
-    const len = colCount(s, isOrange) / (12 * 30);
-    const g = colCount(s, isGreen), m = colCount(s, isMagenta);
-    return `len~${len.toFixed(2)} ${g > 500 ? 'EXACT-MATCH' : (m > 500 ? 'MISMATCH' : 'no-input-event')}`;
-  };
+  /* Value-level decode for the big pages: the two textContent mirrors,
+   * told apart by text colour and counted over the whole frame.  Equal
+   * counts across arms mean equal mirrored VALUES (same string, same
+   * font, same renderer). */
+  const mirEInk = (tag) => countContent(shots[tag],
+    (p) => p[0] < 60 && p[1] > 90 && p[1] < 180 && p[2] < 60);
+  const mirPInk = (tag) => countContent(shots[tag],
+    (p) => p[0] < 80 && p[1] < 80 && p[2] > 150);
+  const vprobe = (tag) => `mirE=${mirEInk(tag)} mirP=${mirPInk(tag)}`;
   console.log('D3-BIGT per-key ink: ' + inks(['tk1', 'tk2', 'tk3', 'tk4', 'tk5', 'tk6']).join(' '));
   console.log(`D2-T   immediate=${fieldInk(shots.bt1)} settled=${fieldInk(shots.bt2)} value[${vprobe('bt2')}]`);
   console.log(`D2-T2  immediate=${fieldInk(shots.bu1)} settled=${fieldInk(shots.bu2)} value[${vprobe('bu2')}] (click landed mid-ticking, todos/0402 shape)`);
