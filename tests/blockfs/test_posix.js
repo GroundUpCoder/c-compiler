@@ -376,6 +376,151 @@ test('socket-node', function () {
 });
 
 // ---------------------------------------------------------------
+// 11. create-through-symlink (todos/0375) — open(O_CREAT) whose final
+//     component is a dangling symlink must create the TARGET (POSIX; the
+//     final symlink is followed even when creating). The pre-fix create
+//     branch inserted a SECOND dirent under the link's own lexical name —
+//     a duplicate directory entry, i.e. on-disk corruption. The same
+//     lexical-insert class lived in mkdir/mknod/link's EEXIST checks
+//     (full-follow walk: a dangling link answered "doesn't exist").
+// ---------------------------------------------------------------
+
+function listNames(fs, path) {
+  var h = fs.opendir(path);
+  if (h === null) throw new Error('opendir ' + path + ': ' + fs._lastError);
+  var names = [], e;
+  while ((e = fs.readdir(h)) !== null) {
+    if (e.name !== '.' && e.name !== '..') names.push(e.name);
+  }
+  fs.closedir(h);
+  return names;
+}
+function countName(fs, dir, name) {
+  return listNames(fs, dir).filter(function (n) { return n === name; }).length;
+}
+
+test('open(O_CREAT) through a dangling symlink creates the target, not a dup dirent', function () {
+  var r = makeFS();
+  assertEq(r.fs.symlink('/t', '/l'), 0, 'symlink /l -> /t');
+  var fd = r.fs.open('/l', O_CREAT | O_RDWR, 0o644);
+  assert(fd !== null && fd >= 0, 'open(/l, O_CREAT) succeeds (err=' + r.fs._lastError + ')');
+  var b = encode('via-link');
+  assertEq(r.fs.write(fd, b, b.length), b.length, 'write through the fd');
+  r.fs.close(fd);
+
+  assertEq(countName(r.fs, '/', 'l'), 1, 'exactly ONE dirent named l (the symlink)');
+  assertEq(countName(r.fs, '/', 't'), 1, 'exactly ONE dirent named t (the created target)');
+  var st = r.fs.stat('/t');
+  assert(st !== null, 'stat(/t): the TARGET was created');
+  assertEq(st.size, b.length, 'target holds the written bytes');
+  var lst = r.fs.lstat('/l');
+  assert(lst !== null && (lst.mode & 0o170000) === 0o120000, '/l is still a symlink');
+
+  // unlink of the link removes the LINK, and only it — pre-fix this removed
+  // the first duplicate (the new file) and resurrected the symlink.
+  assertEq(r.fs.unlink('/l'), 0, 'unlink /l');
+  assertEq(r.fs.lstat('/l'), null, '/l is gone');
+  assert(r.fs.stat('/t') !== null, '/t survives');
+  var p = fsck(r.store);
+  assert(p.length === 0, 'fsck clean, got:\n  ' + p.join('\n  '));
+});
+
+test('open(O_CREAT) through a CHAIN of dangling symlinks creates the final target', function () {
+  var r = makeFS();
+  assertEq(r.fs.symlink('/b', '/a'), 0, 'a -> b');
+  assertEq(r.fs.symlink('/c', '/b'), 0, 'b -> c');
+  var fd = r.fs.open('/a', O_CREAT | O_RDWR, 0o644);
+  assert(fd !== null && fd >= 0, 'open(/a, O_CREAT) follows the chain (err=' + r.fs._lastError + ')');
+  r.fs.close(fd);
+  assert(r.fs.stat('/c') !== null, '/c (the chain end) was created');
+  assertEq(countName(r.fs, '/', 'a'), 1, 'one dirent a');
+  assertEq(countName(r.fs, '/', 'b'), 1, 'one dirent b');
+  assertEq(countName(r.fs, '/', 'c'), 1, 'one dirent c');
+  var p = fsck(r.store);
+  assert(p.length === 0, 'fsck clean, got:\n  ' + p.join('\n  '));
+});
+
+test('open(O_CREAT) through a dangling symlink with a RELATIVE target', function () {
+  var r = makeFS();
+  assertEq(r.fs.mkdir('/d', 0o755), 0, 'mkdir /d');
+  assertEq(r.fs.symlink('t2', '/d/l2'), 0, 'symlink /d/l2 -> t2 (relative)');
+  var fd = r.fs.open('/d/l2', O_CREAT | O_RDWR, 0o644);
+  assert(fd !== null && fd >= 0, 'open(/d/l2, O_CREAT) (err=' + r.fs._lastError + ')');
+  r.fs.close(fd);
+  assert(r.fs.stat('/d/t2') !== null, 'relative target resolved against the LINK\'s directory');
+  assertEq(countName(r.fs, '/d', 'l2'), 1, 'one dirent l2');
+  assertEq(countName(r.fs, '/d', 't2'), 1, 'one dirent t2');
+  var p = fsck(r.store);
+  assert(p.length === 0, 'fsck clean, got:\n  ' + p.join('\n  '));
+});
+
+test('open(O_CREAT|O_EXCL) on a dangling symlink is EEXIST (POSIX), never a dup', function () {
+  var r = makeFS();
+  var O_EXCL = 0x80;
+  assertEq(r.fs.symlink('/t', '/l'), 0, 'symlink /l -> /t');
+  assertEq(r.fs.open('/l', O_CREAT | O_EXCL | O_RDWR, 0o644), null, 'O_EXCL refuses');
+  assertEq(r.fs._lastError, 'EEXIST', 'errno EEXIST');
+  assertEq(r.fs.stat('/t'), null, 'target NOT created');
+  assertEq(countName(r.fs, '/', 'l'), 1, 'still exactly one dirent l');
+  var p = fsck(r.store);
+  assert(p.length === 0, 'fsck clean, got:\n  ' + p.join('\n  '));
+});
+
+test('open(O_CREAT) on a symlink loop is ELOOP; directory unchanged', function () {
+  var r = makeFS();
+  assertEq(r.fs.symlink('/self', '/self'), 0, 'self -> self');
+  assertEq(r.fs.open('/self', O_CREAT | O_RDWR, 0o644), null, 'open fails');
+  assertEq(r.fs._lastError, 'ELOOP', 'errno ELOOP');
+  assertEq(countName(r.fs, '/', 'self'), 1, 'exactly one dirent self');
+  var p = fsck(r.store);
+  assert(p.length === 0, 'fsck clean, got:\n  ' + p.join('\n  '));
+});
+
+test('open(O_CREAT) through a symlink whose target parent is missing is ENOENT', function () {
+  var r = makeFS();
+  assertEq(r.fs.symlink('/nodir/t', '/l'), 0, 'symlink /l -> /nodir/t');
+  assertEq(r.fs.open('/l', O_CREAT | O_RDWR, 0o644), null, 'open fails');
+  assertEq(r.fs._lastError, 'ENOENT', 'errno ENOENT');
+  assertEq(countName(r.fs, '/', 'l'), 1, 'exactly one dirent l — nothing inserted');
+  var p = fsck(r.store);
+  assert(p.length === 0, 'fsck clean, got:\n  ' + p.join('\n  '));
+});
+
+test('mkdir over a dangling symlink is EEXIST, never a dup dirent', function () {
+  var r = makeFS();
+  assertEq(r.fs.symlink('/t', '/l'), 0, 'symlink /l -> /t');
+  assertEq(r.fs.mkdir('/l', 0o755), null, 'mkdir(/l) refuses');
+  assertEq(r.fs._lastError, 'EEXIST', 'errno EEXIST (POSIX: mkdir never follows the final symlink)');
+  assertEq(countName(r.fs, '/', 'l'), 1, 'exactly one dirent l');
+  assertEq(r.fs.stat('/t'), null, 'no target dir created');
+  var p = fsck(r.store);
+  assert(p.length === 0, 'fsck clean, got:\n  ' + p.join('\n  '));
+});
+
+test('link() with newpath a dangling symlink is EEXIST, never a dup dirent', function () {
+  var r = makeFS();
+  mkfile(r.fs, '/src', 'data');
+  assertEq(r.fs.symlink('/t', '/l'), 0, 'symlink /l -> /t');
+  assertEq(r.fs.link('/src', '/l'), null, 'link(/src, /l) refuses');
+  assertEq(r.fs._lastError, 'EEXIST', 'errno EEXIST');
+  assertEq(countName(r.fs, '/', 'l'), 1, 'exactly one dirent l');
+  var p = fsck(r.store);
+  assert(p.length === 0, 'fsck clean, got:\n  ' + p.join('\n  '));
+});
+
+test('mknod over a dangling symlink is EEXIST, never a dup dirent (v4)', function () {
+  // v4 store: mknod needs the rdev inode field; no v3-fsck pass (VERSION guard).
+  var store = new MemoryByteStore(1024 * 1024);
+  var fs = BLOCK_FS.createV4(store);
+  assertEq(fs.symlink('/t', '/l'), 0, 'symlink /l -> /t');
+  assertEq(fs.mknod('/l', 0o020666, 0x0103), null, 'mknod(/l) refuses');
+  assertEq(fs._lastError, 'EEXIST', 'errno EEXIST');
+  assertEq(countName(fs, '/', 'l'), 1, 'exactly one dirent l');
+  var p4 = require('./fsck_v4.js').fsck(store);
+  assert(p4.length === 0, 'fsck_v4 clean, got:\n  ' + p4.join('\n  '));
+});
+
+// ---------------------------------------------------------------
 
 console.log('--- POSIX-semantics Tests ---');
 console.log('Passed: ' + passed);

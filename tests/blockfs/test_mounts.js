@@ -170,5 +170,46 @@ test('mixed workload across both volumes; both stores pass fsck independently', 
   assert(usrProblems.length === 0, 'user volume fsck: ' + usrProblems.join('; '));
 });
 
+// ---- O_CREAT through a dangling symlink in the mount namespace (todos/0375) ----
+
+function listNames(fs, path) {
+  var h = fs.opendir(path);
+  if (h === null) throw new Error('opendir ' + path + ': ' + fs._lastError);
+  var names = [], e;
+  while ((e = fs.readdir(h)) !== null) {
+    if (e.name !== '.' && e.name !== '..') names.push(e.name);
+  }
+  fs.closedir(h);
+  return names;
+}
+function countName(fs, dir, name) {
+  return listNames(fs, dir).filter(function (n) { return n === name; }).length;
+}
+
+test('O_CREAT through an in-volume dangling symlink on a mounted volume creates the target', function () {
+  var p = freshPair();
+  p.m.symlink('t', '/root/l');                    // relative, dangling, stays in the user volume
+  writeFile(p.m, '/root/l', 'via link');
+  assertEq(readFile(p.m, '/root/t'), 'via link', 'target created on the user volume');
+  assertEq(countName(p.usr, '/', 'l'), 1, 'exactly one dirent l on the user volume');
+  assertEq(countName(p.usr, '/', 't'), 1, 'exactly one dirent t on the user volume');
+  var probs = fsck(p.usrStore);
+  assert(probs.length === 0, 'user volume fsck: ' + probs.join('; '));
+});
+
+test('O_CREAT through a cross-volume dangling symlink escapes and creates on the owner', function () {
+  var p = freshPair();
+  p.m.symlink('/root/t', '/l');                   // system-volume link -> (missing) user path
+  writeFile(p.m, '/l', 'crossed');
+  assertEq(readFile(p.m, '/root/t'), 'crossed', 'target created through the escape');
+  assertEq(countName(p.sys, '/', 'l'), 1, 'system volume has only the symlink');
+  assertEq(countName(p.sys, '/', 't'), 0, 'no stray t on the system volume');
+  assertEq(countName(p.usr, '/', 't'), 1, 'exactly one t on the user volume');
+  var sysProblems = fsck(p.sysStore);
+  var usrProblems = fsck(p.usrStore);
+  assert(sysProblems.length === 0, 'system volume fsck: ' + sysProblems.join('; '));
+  assert(usrProblems.length === 0, 'user volume fsck: ' + usrProblems.join('; '));
+});
+
 console.log('\ntest_mounts (blockfs): ' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed ? 1 : 0);
