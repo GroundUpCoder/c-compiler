@@ -88,6 +88,10 @@ let hostPlatform = 'other'; // --host-platform: the keyboard-scheme auto-detect
                             // hint (META-ARROW-KEYBIND.md). Default 'other' =
                             // no seed = the baked windows scheme, so every
                             // headless boot stays byte-identical unless asked.
+let egressDir = null;       // --egress-dir=DIR: the headless onEgress twin
+                            // (todos/0398) — artifacts land as host files.
+                            // Flag absent -> no hook -> the RPC answers
+                            // ENOSYS (deliberately no silent fallback).
 const requestedOverlays = new Set();
 for (const a of process.argv.slice(2)) {
   if (a.startsWith('--image=')) imagePath = path.resolve(a.slice(8));
@@ -113,6 +117,7 @@ for (const a of process.argv.slice(2)) {
     packagesWant = a.slice(11) === 'none' ? [] : a.slice(11).split(',').filter(Boolean);
   else if (a.startsWith('--packages-dir=')) packagesDir = path.resolve(a.slice(15));
   else if (a.startsWith('--host-platform=')) hostPlatform = a.slice(16);
+  else if (a.startsWith('--egress-dir=')) egressDir = path.resolve(a.slice(13));
   else {
     process.stderr.write(`boot.js: unknown option ${a}\n`);
     process.exit(2);
@@ -321,6 +326,25 @@ async function mountAndBoot() {
       const sig = status & 0x7f;
       process.exit(sig ? 128 + sig : (status >> 8) & 0xff);
     },
+    // Egress (todos/0398): the headless twin of the browser download/save
+    // actor — the finished artifact lands as a host file under --egress-dir
+    // (both dispositions; there is no picker to raise here). Collisions get
+    // the dropFile '-N' suffix: an egress never overwrites an earlier one.
+    // A write failure throws back into the kernel dispatch -> the caller
+    // sees EIO, loud.
+    onEgress: egressDir ? (dispo, name, bytes) => {
+      fs.mkdirSync(egressDir, { recursive: true });
+      const dot = name.lastIndexOf('.');
+      const stem = dot > 0 ? name.slice(0, dot) : name;
+      const ext = dot > 0 ? name.slice(dot) : '';
+      let final = name;
+      for (let i = 1; fs.existsSync(path.join(egressDir, final)); i++) {
+        if (i > 99) throw new Error('egress: 99 name collisions on ' + name);
+        final = stem + '-' + i + ext;
+      }
+      fs.writeFileSync(path.join(egressDir, final), bytes);
+      bootLog('egress (' + dispo + ') ' + final + ' <- ' + bytes.length + ' bytes');
+    } : undefined,
     log: quiet ? () => {} : (m) => process.stderr.write('[kernel] ' + m + '\n'),
   });
 

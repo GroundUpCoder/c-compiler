@@ -5968,6 +5968,39 @@ function createClipboard(ctx, hooks) {
   } };
 }
 
+/* ---- Egress (todos/0398): gucOS -> host file transfer ----
+   __egress(dispo, paths, len): the C-visible primitive under os/egress.h's
+   eg_send. `paths` is the path-list text (one absolute path per
+   '\n'-terminated line — the FO_CLIP_FMT=2 list shape, built C-side with
+   fo_clip_set's discipline); dispo selects the disposition word this side
+   prepends (1 = "download", 2 = "saveas"), so the header vocabulary lives in
+   ONE place per language. The kernel materializes the bytes (lone file, or a
+   store-only zip for a directory/multi-selection) and hands one artifact to
+   its embedder hook — see kernel.js OP.EGRESS. Returns 0, or -1 with errno:
+   EINVAL (unknown dispo / bad list), E2BIG, ENOENT/EACCES/EFBIG (the walk),
+   ENOSYS. No kernel (standalone pages) or an embedder without the hook is
+   ENOSYS — deliberately NO process-local fallback: egress without a host is
+   meaningless, and a silent success would be a zombie path. */
+function createEgress(ctx, hooks) {
+  const have = !!(hooks && typeof hooks.egress === 'function');
+  const WORDS = { 1: 'download', 2: 'saveas' };
+  return { [ENV_KEY]: {
+    __egress: function (dispo, ptr, len) {
+      if (!have) { ctx.setErrnoName('ENOSYS'); return -1; }
+      const word = WORDS[dispo >>> 0];
+      if (!word) { ctx.setErrnoName('EINVAL'); return -1; }
+      len >>>= 0;
+      const head = new TextEncoder().encode(word + '\n');
+      const payload = new Uint8Array(head.length + len);
+      payload.set(head, 0);
+      payload.set(new Uint8Array(ctx.getMemory().buffer).slice(ptr, ptr + len), head.length);
+      const r = hooks.egress(payload);
+      if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
+      return 0;
+    },
+  } };
+}
+
 /* ---- HTTP transport (todos/0172) ----
    The C-visible primitive under the libcurl veneer (0173) and /bin/code
    (0174). Kernel-backed via spawnHooks (fetch runs kernel-side; the process
@@ -11200,6 +11233,10 @@ async function runModule({
   /* ---- System clipboard (todos/0090): kernel slot via spawnHooks, or a
      process-local slot with the same semantics when there's no kernel. */
   Object.assign(imports[ENV_KEY], createClipboard(ctx, spawnHooks || null)[ENV_KEY]);
+
+  /* ---- Egress (todos/0398): gucOS -> host file transfer via the kernel's
+     EGRESS RPC; ENOSYS (fail-loud, no local fallback) with no kernel. */
+  Object.assign(imports[ENV_KEY], createEgress(ctx, spawnHooks || null)[ENV_KEY]);
 
   /* ---- HTTP transport (todos/0172): kernel fetch via spawnHooks; ENOSYS
      (fail-loud) with no kernel. Under the libcurl veneer (0173) + /bin/code. */

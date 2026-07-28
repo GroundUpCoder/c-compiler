@@ -205,6 +205,20 @@ var OP = {
   // (opts.onClipRead — the clipboard seam, see the OP.CLIP_GET dispatch).
   CLIP_SET: 0x0302,
   CLIP_GET: 0x0303,
+  // Egress (todos/0398): gucOS -> host file transfer. RAW request, textual —
+  // a "download\n" | "saveas\n" disposition header line ("clipboard\n" is
+  // RESERVED for a future file-flavored host clipboard write), then one
+  // absolute path per '\n'-terminated line (the FO_CLIP_FMT=2 list shape).
+  // The wire carries PATHS; the kernel — the fs owner — materializes bytes
+  // exactly once, synchronously in this dispatch (lone file -> its bytes;
+  // directory or multi-selection -> ONE store-only zip, symlinks preserved
+  // as symlink entries; a LONE symlink follows to its target), and hands
+  // exactly one artifact {name, bytes} to opts.onEgress. Reply {} or a
+  // pre-acceptance errno: EINVAL (bad header / relative path / empty list),
+  // E2BIG (list over EG_REQ_MAX), ENOENT/EACCES (walk), EFBIG (lstat-summed
+  // size over EGRESS_MAX, decided BEFORE any byte is read), ENOSYS (no
+  // embedder hook — egress without a host is meaningless, fail loud).
+  EGRESS: 0x0304,
   // 0x04xx — the brokered filesystem (KERNEL.md "fd/data-plane amendment").
   FS_OPEN: 0x0401, FS_CLOSE: 0x0402, FS_READ: 0x0403, FS_WRITE: 0x0404,
   FS_LSEEK: 0x0405, FS_STAT: 0x0406, FS_LSTAT: 0x0407, FS_FSTAT: 0x0408,
@@ -1430,6 +1444,10 @@ KernelClient.prototype.spawnHooks = function () {
     clipGet: function (fmt, off, peek) {
       return self.call(OP.CLIP_GET, { fmt: fmt, off: off, peek: peek ? 1 : 0 });
     },
+    // Egress (todos/0398): the pre-framed textual disposition+path list
+    // (host.js createEgress composes it; layout in the OP table). One RPC,
+    // one artifact; the kernel materializes and hands it to the embedder.
+    egress: function (bytes) { return self.callRaw(OP.EGRESS, bytes); },
     // HTTP transport (todos/0172): host.js's createHttp drives these; the
     // libcurl veneer (0173) and /bin/code (0174) sit on top. httpBody stages
     // request-body chunks (RAW [u32 off][bytes]); httpRead deferred-drains
@@ -1921,6 +1939,17 @@ function Kernel(opts) {
   // worker.js backstops with a timeout). No hook (boot.js, unit tests,
   // standalone embedders) = the synchronous pre-seam path, byte-identical.
   this._onClipRead = opts.onClipRead || null;
+  // Egress (todos/0398): the OUTBOUND file hop. Fired from the OP.EGRESS
+  // dispatch with the finished artifact — (dispo, name, bytes): dispo the
+  // disposition word ('download' | 'saveas'), name the sanitized artifact
+  // name, bytes ONE Uint8Array (a file's bytes, or a store-only zip for a
+  // directory/multi-selection). Exactly one artifact per call, always. The
+  // browser embedder posts it to the page (transferred) where the still-live
+  // activation of the initiating gesture performs the download / save-picker
+  // act; boot.js --egress-dir writes it to a host directory (the headless
+  // twin). No hook = ENOSYS to the caller — deliberately NO process-local
+  // fallback (egress without a host is meaningless; the no-zombie rule).
+  this._onEgress = opts.onEgress || null;
   this._log = opts.log || function () {};
   this._procs = new Map();   // pid -> PCB
   this._nextPid = 1;
@@ -3073,6 +3102,10 @@ Kernel.prototype._dispatchRpc = function (pcb) {
       this._clipServe(pcb, gfmt, goff);
       break;
     }
+    case OP.EGRESS: {
+      this._egress(pcb, req.raw || null);
+      break;
+    }
     case OP.COMPILE:
       if (!this._compile) { this._respond(pcb, { errno: 'ENOSYS' }); break; }
       Promise.resolve(this._compile(req.argv || [], req.cwd || '/')).then(
@@ -3104,6 +3137,286 @@ Kernel.prototype._clipServe = function (pcb, gfmt, goff) {
   new DataView(gresp.buffer).setInt32(0, total, true);
   gresp.set(chunk, 4);
   this._respondRaw(pcb, gresp);
+};
+
+/* ---- Egress (todos/0398): the OP.EGRESS materializer + store-only zip ----
+ * The wire carries paths; bytes exist only on the kernel->embedder leg. The
+ * whole flow is synchronous inside one dispatch turn (OPFS SyncAccessHandle
+ * reads are sync in the kernel worker; EGRESS_MAX bounds the blocked time),
+ * so the pre-read lstat walk and the read phase cannot race a mutation. */
+
+var EGRESS_MAX = 256 * 1024 * 1024;   // lstat-summed refusal cap, decided
+                                      // BEFORE any byte is read (EFBIG). 2x
+                                      // the DROP_MAX ingress precedent: a zip
+                                      // of a seeded game dir plausibly tops
+                                      // 128 MB. If mobile memory pressure
+                                      // ever bites, this constant moves — no
+                                      // wire change (todos/0398 design).
+var EG_REQ_MAX = 8192 + 16;           // os/egress.h EG_MAX path-list cap plus
+                                      // the disposition header word (E2BIG)
+var EG_ZIP_MAX_ENTRIES = 65535;       // the pre-zip64 EOCD u16 entry count —
+                                      // more entries can't be represented, so
+                                      // refuse as EFBIG rather than truncate
+
+/* Abort the walk with an errno (caught at the _egress dispatch). */
+function egErr(errno) {
+  var e = new Error('egress: ' + errno);
+  e.egErrno = errno;
+  throw e;
+}
+
+/* Artifact naming: dropFile's basename/control-strip sanitize (see
+ * kernel-worker.js), inverted for the host direction. */
+function egName(p) {
+  var name = String(p || '').split('/').pop()
+    .replace(/[\x00-\x1f\x7f]/g, '').trim();
+  return (!name || name === '.' || name === '..') ? 'egress' : name;
+}
+
+/* CRC-32 (the zip polynomial), table built on first use. */
+var CRC32_TAB = null;
+function crc32(bytes) {
+  if (!CRC32_TAB) {
+    CRC32_TAB = new Int32Array(256);
+    for (var n = 0; n < 256; n++) {
+      var c = n;
+      for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      CRC32_TAB[n] = c;
+    }
+  }
+  var crc = -1;
+  for (var i = 0; i < bytes.length; i++)
+    crc = CRC32_TAB[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
+  return (crc ^ -1) >>> 0;
+}
+
+/* MS-DOS date/time pair from epoch seconds (UTC — deterministic across
+ * hosts); the format starts at 1980, earlier stamps clamp to 1980-01-01. */
+function egDosStamp(sec) {
+  var d = new Date((sec || 0) * 1000);
+  if (d.getUTCFullYear() < 1980) return { date: (1 << 5) | 1, time: 0 };
+  return {
+    date: ((d.getUTCFullYear() - 1980) << 9) | ((d.getUTCMonth() + 1) << 5) | d.getUTCDate(),
+    time: (d.getUTCHours() << 11) | (d.getUTCMinutes() << 5) | (d.getUTCSeconds() >> 1),
+  };
+}
+
+/* Store-only zip writer. entries: [{name, mode, mtime, data}] — a name
+ * ending '/' is a directory entry (empty data), a symlink entry's data is
+ * its target (the Info-ZIP convention: Unix mode in the central directory's
+ * external attributes, S_IFLNK marks the entry — macOS and Linux unzip both
+ * restore it as a link). Deflate would be an INTERNAL upgrade here — the
+ * wire and the onEgress hook shape would not change (todos/0398 design). */
+function zipStore(entries) {
+  var locParts = [], cenParts = [], offset = 0;
+  for (var i = 0; i < entries.length; i++) {
+    var e = entries[i];
+    var nameBytes = textEncoder.encode(e.name);
+    var data = e.data || new Uint8Array(0);
+    var crc = crc32(data);
+    var stamp = egDosStamp(e.mtime);
+    var isDir = e.name.charCodeAt(e.name.length - 1) === 0x2f;
+    var loc = new Uint8Array(30 + nameBytes.length);
+    var lv = new DataView(loc.buffer);
+    lv.setUint32(0, 0x04034b50, true);        // local file header
+    lv.setUint16(4, 20, true);                // version needed
+    lv.setUint16(6, 0x0800, true);            // flags: UTF-8 names
+    lv.setUint16(8, 0, true);                 // method: store
+    lv.setUint16(10, stamp.time, true);
+    lv.setUint16(12, stamp.date, true);
+    lv.setUint32(14, crc, true);
+    lv.setUint32(18, data.length, true);      // csize == usize (store)
+    lv.setUint32(22, data.length, true);
+    lv.setUint16(26, nameBytes.length, true);
+    lv.setUint16(28, 0, true);                // extra len
+    loc.set(nameBytes, 30);
+    var cen = new Uint8Array(46 + nameBytes.length);
+    var cv = new DataView(cen.buffer);
+    cv.setUint32(0, 0x02014b50, true);        // central directory header
+    cv.setUint16(4, 0x031E, true);            // made by: Unix, spec 3.0
+    cv.setUint16(6, 20, true);
+    cv.setUint16(8, 0x0800, true);
+    cv.setUint16(10, 0, true);
+    cv.setUint16(12, stamp.time, true);
+    cv.setUint16(14, stamp.date, true);
+    cv.setUint32(16, crc, true);
+    cv.setUint32(20, data.length, true);
+    cv.setUint32(24, data.length, true);
+    cv.setUint16(28, nameBytes.length, true);
+    // extra/comment/disk/internal-attr words stay 0
+    // External attrs: the Unix mode word high, the DOS dir bit low.
+    cv.setUint32(38, ((e.mode >>> 0) << 16 | (isDir ? 0x10 : 0)) >>> 0, true);
+    cv.setUint32(42, offset, true);           // local header offset
+    cen.set(nameBytes, 46);
+    locParts.push(loc, data);
+    cenParts.push(cen);
+    offset += loc.length + data.length;
+  }
+  var cenSize = 0;
+  for (var c2 = 0; c2 < cenParts.length; c2++) cenSize += cenParts[c2].length;
+  var eocd = new Uint8Array(22);
+  var ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(8, entries.length, true);      // entries this disk
+  ev.setUint16(10, entries.length, true);     // entries total
+  ev.setUint32(12, cenSize, true);
+  ev.setUint32(16, offset, true);             // central dir offset
+  var out = new Uint8Array(offset + cenSize + 22);
+  var pos = 0;
+  for (var p1 = 0; p1 < locParts.length; p1++) { out.set(locParts[p1], pos); pos += locParts[p1].length; }
+  for (var p2 = 0; p2 < cenParts.length; p2++) { out.set(cenParts[p2], pos); pos += cenParts[p2].length; }
+  out.set(eocd, pos);
+  return out;
+}
+
+Kernel.prototype._egress = function (pcb, raw) {
+  // ENOSYS is decided FIRST: no embedder hook (or no kernel fs) means
+  // egress has no host side at all — fail loud, never half-accept.
+  if (!this._onEgress || !this._fs) { this._respond(pcb, { errno: 'ENOSYS' }); return; }
+  if (!raw || !raw.length) { this._respond(pcb, { errno: 'EINVAL' }); return; }
+  if (raw.length > EG_REQ_MAX) { this._respond(pcb, { errno: 'E2BIG' }); return; }
+  var lines = textDecoder.decode(raw).split('\n');
+  var dispo = lines[0];
+  // 'clipboard' stays RESERVED (see the OP table) — EINVAL until the web
+  // platform grows a file-flavored clipboard write.
+  if (dispo !== 'download' && dispo !== 'saveas') { this._respond(pcb, { errno: 'EINVAL' }); return; }
+  var paths = [];
+  for (var i = 1; i < lines.length; i++) {
+    if (lines[i] === '') continue;                 // trailing newline
+    if (lines[i].charCodeAt(0) !== 0x2f) { this._respond(pcb, { errno: 'EINVAL' }); return; }
+    paths.push(lines[i]);
+  }
+  if (paths.length === 0) { this._respond(pcb, { errno: 'EINVAL' }); return; }
+  var art;
+  try { art = this._egressMaterialize(paths); }
+  catch (e) {
+    if (!e || !e.egErrno) this._log('egress materialize threw: ' + (e && e.message));
+    this._respond(pcb, { errno: (e && e.egErrno) || 'EIO' });
+    return;
+  }
+  // The artifact is handed over BEFORE the reply: errno 0 means "accepted,
+  // materialized, AND delivered to the embedder". Only the page-side act
+  // itself can fail later (a blocked download), and the page logs that.
+  try { this._onEgress(dispo, art.name, art.bytes); }
+  catch (e2) {
+    this._log('onEgress threw: ' + (e2 && e2.message));
+    this._respond(pcb, { errno: 'EIO' });
+    return;
+  }
+  this._respond(pcb, {});
+};
+
+/* Whole-file read on the kernel-side fs (size known from the pre-read walk;
+ * same dispatch turn, so the size cannot have moved). */
+Kernel.prototype._egressReadFile = function (abs, size) {
+  var fs = this._fs;
+  var fd = fs.open(abs, 0, 0);
+  if (fd === null) egErr(fs._lastError || 'EIO');
+  var buf = new Uint8Array(size), off = 0;
+  while (off < buf.length) {
+    var n = fs.read(fd, buf.subarray(off), buf.length - off);
+    if (n === null) { fs.close(fd); egErr(fs._lastError || 'EIO'); }
+    if (n === 0) break;
+    off += n;
+  }
+  fs.close(fd);
+  return off === buf.length ? buf : buf.subarray(0, off);
+};
+
+/* Walk one root into zip-entry METADATA — lstat-driven, no file bytes yet
+ * (EFBIG comes from summed lstat sizes before any read). Symlinks inside a
+ * tree are preserved as symlink ENTRIES (fo_copy's copy-as-link, os/
+ * fileops.h, carried across the boundary); directories get explicit
+ * entries so empty ones survive; entry order is sorted for deterministic
+ * zip bytes. */
+Kernel.prototype._egressWalk = function (abs, zipPath, list, state) {
+  var fs = this._fs;
+  var st = fs.lstat(abs);
+  if (st === null) egErr(fs._lastError || 'ENOENT');
+  var fmt = st.mode & 0o170000;
+  if (list.length >= EG_ZIP_MAX_ENTRIES) egErr('EFBIG');
+  if (fmt === 0o120000) {                        // symlink -> symlink entry
+    var lbuf = new Uint8Array(4096);
+    var n = fs.readlink(abs, lbuf, lbuf.length);
+    if (n === null) egErr(fs._lastError || 'EIO');
+    state.total += n;
+    if (state.total > EGRESS_MAX) egErr('EFBIG');
+    list.push({ zipPath: zipPath, kind: 'link', mode: st.mode, mtime: st.mtime,
+                target: lbuf.slice(0, n) });
+    return;
+  }
+  if (fmt === 0o040000) {                        // directory
+    list.push({ zipPath: zipPath + '/', kind: 'dir', mode: st.mode, mtime: st.mtime });
+    var dh = fs.opendir(abs);
+    if (dh === null) egErr(fs._lastError || 'EIO');
+    var names = [];
+    for (var ent = fs.readdir(dh); ent !== null; ent = fs.readdir(dh)) {
+      if (ent.name === '.' || ent.name === '..') continue;
+      names.push(ent.name);
+    }
+    fs.closedir(dh);
+    names.sort();
+    for (var i = 0; i < names.length; i++)
+      this._egressWalk(abs + '/' + names[i], zipPath + '/' + names[i], list, state);
+    return;
+  }
+  if (fmt !== 0o100000) egErr('EINVAL');         // nothing else crosses
+  state.total += st.size;
+  if (state.total > EGRESS_MAX) egErr('EFBIG');
+  list.push({ zipPath: zipPath, kind: 'file', mode: st.mode, mtime: st.mtime,
+              abs: abs, size: st.size });
+};
+
+/* paths -> ONE artifact {name, bytes}. A single regular file crosses as
+ * itself; a single directory as <basename>.zip; N>1 paths as
+ * gucOS-selection.zip. A LONE symlink follows to its target (downloading a
+ * Desktop launcher means "give me the thing"; dangling -> ENOENT) — inside
+ * a zip, symlinks stay symlinks. */
+Kernel.prototype._egressMaterialize = function (paths) {
+  var fs = this._fs;
+  var roots = [];                                // [{abs, root}] zip roots
+  if (paths.length === 1) {
+    var abs = paths[0];
+    var st = fs.stat(abs);                       // FOLLOWS the lone symlink
+    if (st === null) egErr(fs._lastError || 'ENOENT');
+    var fmt1 = st.mode & 0o170000;
+    if (fmt1 === 0o100000) {
+      if (st.size > EGRESS_MAX) egErr('EFBIG');
+      return { name: egName(abs), bytes: this._egressReadFile(abs, st.size) };
+    }
+    if (fmt1 !== 0o040000) egErr('EINVAL');
+    // One dir -> <basename>.zip. Resolve through a lone symlink so the walk
+    // archives the TARGET tree, but keep the artifact's name from the link.
+    var real;
+    try { real = fs.realpathPhysical(abs); } catch (e) { real = null; }
+    if (real === null) egErr(fs._lastError || 'ENOENT');
+    roots.push({ abs: real, root: egName(abs) });
+  } else {
+    // Selected roots keep their own basenames; a clash between two roots
+    // gets the dropFile '-N' suffix (zip member names must not collide).
+    var used = Object.create(null);
+    for (var i = 0; i < paths.length; i++) {
+      var base = egName(paths[i]);
+      var root = base;
+      for (var s = 1; used[root]; s++) root = base + '-' + s;
+      used[root] = true;
+      roots.push({ abs: paths[i], root: root });
+    }
+  }
+  var list = [], state = { total: 0 };
+  for (var r = 0; r < roots.length; r++)
+    this._egressWalk(roots[r].abs, roots[r].root, list, state);
+  var entries = [];
+  for (var j = 0; j < list.length; j++) {
+    var it = list[j];
+    entries.push({
+      name: it.zipPath, mode: it.mode, mtime: it.mtime,
+      data: it.kind === 'file' ? this._egressReadFile(it.abs, it.size)
+        : it.kind === 'link' ? it.target : null,
+    });
+  }
+  var name = paths.length === 1 ? egName(paths[0]) + '.zip' : 'gucOS-selection.zip';
+  return { name: name, bytes: zipStore(entries) };
 };
 
 Kernel.prototype._respondRaw = function (pcb, bytes) {
