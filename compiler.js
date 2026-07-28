@@ -23829,7 +23829,9 @@ extern int errno;
 #define EINPROGRESS 115
   `,
   "fcntl.h": `
-#pragma once\n#include <stdarg.h>
+#pragma once
+__require_source("__posix.c");   /* open() — <fcntl.h> declares it, so <fcntl.h> must link it */
+#include <stdarg.h>
 #include <unistd.h>
 #include <sys/types.h>
 #define O_RDONLY  0
@@ -23872,6 +23874,9 @@ struct flock {
 
 __import int __open_impl(const char *path, int flags, int mode);
 int open(const char *path, int flags, ...);
+/* creat(path, mode) == open(path, O_WRONLY|O_CREAT|O_TRUNC, mode); it is a
+   creation call, so it is umask-masked like the rest (todos/0382). */
+int creat(const char *path, mode_t mode);
 #define F_DUPFD_CLOEXEC 1030  /* Linux value; CLOEXEC is untracked (v1) */
 /* Real fcntl for the int-argument commands (F_DUPFD and friends reach the
  * host — the shell's fd-save dance needs them, todos/0005). Lock commands
@@ -24742,6 +24747,7 @@ typedef uint64_t uintmax_t;
   "stdio.h": `
 #pragma once
 __require_source("__stdio.c");
+__require_source("__posix.c");   /* fopen/freopen call open(), which lives there */
 #include <stddef.h>
 #include <stdarg.h>
 #define NULL ((void *)0)
@@ -24932,6 +24938,13 @@ size_t wcstombs(char *dest, const wchar_t *src, size_t n);
 #pragma once
 __require_source("__string.c");
 #include <stddef.h>
+/* glibc (__USE_MISC) and musl (_BSD_SOURCE/_GNU_SOURCE/_XOPEN_SOURCE, i.e.
+   every default configuration) make <string.h> pull in <strings.h>, so
+   portable code reaches strcasecmp/strncasecmp/ffs without naming the second
+   header. libzip is one such consumer and had to be shimmed for it during the
+   todos/0350 zip measurement (todos/0382 gap 3). Match the platforms code is
+   actually written against. */
+#include <strings.h>
 #define NULL ((void *)0)
 void *memcpy(void *dest, const void *src, size_t n);
 void *memmove(void *dest, const void *src, size_t n);
@@ -24979,6 +24992,7 @@ int flsll(long long x);
   `,
   "sys/stat.h": `
 #pragma once
+__require_source("__posix.c");   /* umask + the mkdir wrapper that applies it */
 #include <sys/types.h>
 
 #define S_IRWXU 0700
@@ -25041,7 +25055,13 @@ struct stat {
   struct timespec st_ctim;
 };
 
-__import int mkdir(const char *path, int mode);
+/* mkdir()/mkdirat() apply the process umask, so they are real libc functions
+   over the raw host import rather than the import itself (todos/0382). The
+   host still exports the un-masked mkdir env entry under its own name —
+   that name is part of the wasm-ld ABI the clang toolchain links against, so
+   the alias is additive and nothing was renamed out from under it. */
+__import int __mkdir_impl(const char *path, int mode);
+int mkdir(const char *path, mode_t mode);
 __import int stat(const char *path, struct stat *buf);
 __import int lstat(const char *path, struct stat *buf);
 __import int fstat(int fd, struct stat *buf);
@@ -25051,6 +25071,23 @@ __import int fstat(int fd, struct stat *buf);
 static inline int mknod(const char *path, mode_t mode, dev_t dev) {
   (void)path; (void)mode; (void)dev; return -1;
 }
+
+/* umask(2) — the process file-mode creation mask (todos/0382 gap 1). Real
+   state, really applied: open(O_CREAT), creat(), mkdir() and mkdirat() all
+   clear the masked bits before the mode reaches the host, so a program that
+   sets a mask observes the modes POSIX says it should.
+
+   The initial mask is the conventional 022. POSIX defines the starting mask
+   as INHERITED, and this process model has no fork() to inherit across
+   (todos/OS.md's owner-brokered spawn), so the shell default stands in — and
+   it is also what keeps every pre-0382 creation mode identical, because the
+   filesystem layer used to apply exactly this mask itself. Cross-process
+   inheritance through __spawn is a separate, ticketed gap (todos/0399). */
+mode_t umask(mode_t mask);
+/* Read the mask without disturbing it — POSIX has no such call (you must
+   set-and-restore), which is a data race under threads but merely clumsy
+   here. The libc's own creation paths use this. */
+mode_t __umask_get(void);
 
 #include <sys/time.h>   /* __utime / __futime / gettimeofday */
 
@@ -25116,6 +25153,11 @@ typedef int mode_t;
 typedef int pid_t;
 typedef unsigned int uid_t;
 typedef unsigned int gid_t;
+/* id_t (POSIX): an integer type able to hold a pid_t, uid_t or gid_t. All
+   three fit in 32 bits here, so one 32-bit type covers the union. Unsigned
+   like glibc's — the only signed member (pid_t) is never negative in the
+   contexts id_t is used for (waitid/getpriority id arguments). */
+typedef unsigned int id_t;
 typedef unsigned long dev_t;
 typedef unsigned long ino_t;
 typedef long long time_t;
@@ -30249,17 +30291,10 @@ int snprintf(char *buf, size_t size, const char *fmt, ...) {
   return r;
 }
 
-// Variadic wrapper around __open_impl (non-variadic host import).
-int open(const char *path, int flags, ...) {
-  int mode = 0;
-  if (flags & 0x40) {
-    va_list ap;
-    va_start(ap, flags);
-    mode = va_arg(ap, int);
-    va_end(ap);
-  }
-  return __open_impl(path, flags, mode);
-}
+// open() moved to __posix.c (todos/0382): <fcntl.h> declares it, so <fcntl.h>
+// alone must LINK it — while it lived here, the POSIX-correct include set
+// failed at link time and only worked by accident of <stdio.h> also being
+// included. It also has to sit next to the umask state it now consults.
 
 // Intentionally aborts — gets has no bounds checking and is unsafe.
 // Do NOT replace with a working implementation. Use fgets instead.
@@ -30976,6 +31011,73 @@ size_t wcstombs(char *dest, const wchar_t *src, size_t n) {
     if (dest) for (int j = 0; j < k; j++) dest[out + j] = tmp[j];
     out += k;
   }
+}
+  `,
+  "__posix.c": `
+/* POSIX process/file-creation layer (todos/0382, todos/0325).
+ *
+ * Home for the calls that need real per-process state or real path work
+ * rather than a one-line forward to a host import:
+ *   - umask(2) and the creation paths that must consult it
+ *   - open(), which lives here (not in __stdio.c) so <fcntl.h> links alone
+ *
+ * Kept deliberately small: <fcntl.h>, <sys/stat.h> and <unistd.h> all pull
+ * this TU in, and the linker does not drop unreferenced TU functions
+ * (measured by tools/zipmeasure — see its README), so every byte here is a
+ * byte in every binary that opens a file.
+ */
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <stdarg.h>
+
+/* ---- umask ---------------------------------------------------------- */
+
+/* Only the permission bits are maskable (POSIX: the mask is &~'d against the
+   mode, and only the file permission bits are defined for it). */
+#define __UMASK_BITS 0777
+
+/* Initial mask 022 — the value every real shell hands its children, and the
+   one that keeps this libc byte-compatible with the pre-0382 world: the fs
+   layer used to apply a hardcoded ~022 of its own (host.js BlockFS.open),
+   which has been removed in favour of this. Anything that never calls umask()
+   therefore sees exactly the modes it saw before. POSIX says the starting
+   mask is INHERITED; this process model has no fork() to inherit across, so
+   the conventional default stands in. */
+static mode_t __umask_val = 022;
+
+mode_t umask(mode_t mask) {
+  mode_t prev = __umask_val;
+  __umask_val = mask & __UMASK_BITS;
+  return prev;
+}
+
+mode_t __umask_get(void) { return __umask_val; }
+
+/* ---- creation paths that apply it ------------------------------------ */
+
+/* Variadic wrapper around __open_impl (a non-variadic host import). The mode
+   argument is only read — and only masked — when O_CREAT is set, exactly as
+   POSIX specifies; without O_CREAT there is no mode argument to read and
+   touching the va_list would be undefined behaviour. */
+int open(const char *path, int flags, ...) {
+  int mode = 0;
+  if (flags & O_CREAT) {
+    va_list ap;
+    va_start(ap, flags);
+    mode = va_arg(ap, int);
+    va_end(ap);
+    mode &= ~(int)__umask_val;
+  }
+  return __open_impl(path, flags, mode);
+}
+
+int creat(const char *path, mode_t mode) {
+  return open(path, O_WRONLY | O_CREAT | O_TRUNC, (int)mode);
+}
+
+int mkdir(const char *path, mode_t mode) {
+  return __mkdir_impl(path, (int)(mode & ~__umask_val));
 }
   `,
   "__string.c": `

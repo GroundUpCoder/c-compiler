@@ -309,4 +309,10 @@ thing this file exists to kill.
 - anchor: # classification of the current 22 lives in logs/2026-07-28/0361-wallclock.md).
 - provenance: 0361
 
+### L57 — umask is real per-process state but does not cross __spawn, so a shell's `umask 077` silently stops at the process boundary
+- ticket: 0399
+- file: compiler.js
+- anchor: inheritance through __spawn is a separate, ticketed gap (todos/0399). */
+- provenance: 0382
+
 <!-- END ENTRIES -->

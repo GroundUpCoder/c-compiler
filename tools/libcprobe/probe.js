@@ -61,9 +61,9 @@ const PROBES = [
   // (and therefore portable code like libzip) rely on.
   { name: '0382/3 strcasecmp via string.h', t: '0382', hdr: ['string.h'], use: 'int r = strcasecmp("a", "A"); use(&r);' },
   { name: '0382/3 strncasecmp via string.h', t: '0382', hdr: ['string.h'], use: 'int r = strncasecmp("a", "A", 1); use(&r);' },
-  // Found BY this probe's own positive control (todos/0389): <fcntl.h> declares
-  // open() but does not pull the TU that defines it, so the POSIX-correct
-  // include set links only by accident of some other header being included too.
+  // Found BY this probe's own positive control, and fixed in the same lane:
+  // <fcntl.h> declared open() without pulling the TU that defined it, so the
+  // POSIX-correct include set linked only by accident of <stdio.h> also being there.
   { name: '0382/3b open via fcntl.h', t: '0382', hdr: ['fcntl.h'], use: 'void *p = (void *)&open; use(p);' },
 
   // ---- todos/0382 group 4-9 / todos/0325 Group B overlap ----
