@@ -1,7 +1,34 @@
 # 0386 — test_netsurf_mutation_e2e.js is intermittently RED (pixel comparison) and hangs uncapped when run bare
 
 - **Status**: open
-- **Design**: —
+- **Design**: `todos/0386-netsurf-mutation-e2e-intermittent-design.md` (read-only diagnosis
+  pass, 2026-07-28; no test was run). Decisions, one line each:
+  - **The numbers are fully accounted for**: `285 = 52 chrome + 233 six-glyph ink`,
+    `234 = 52 + 182 five-glyph ink` — one glyph worth **51 px** is missing; the `52` is
+    `2 border columns × 26 scanned rows` and matches lane B's measured zero-keystroke reading.
+  - **Mechanism (bet): keystroke loss during live re-conversion** — `html__reconvert` surrenders
+    `focus_type` at teardown-start and only `html_reconvert_box_done` restores it, and
+    `html_keypress` drops printable keys at `HTML_FOCUS_SELF`; the window is one gucOS event-loop
+    iteration wide and a typed key wakes its 1 ms park *early*, into the unsafe drain.
+  - **Competing mechanism kept alive**: the ticky leg's single un-settled `wmctl shot` may sample
+    before the last repaint — the test as written cannot tell the two apart, which is itself a
+    defect.
+  - **Repeated integers explained** by the key cadence (`250 ms + a wmctl spawn`) approaching
+    resonance with the 300 ms tick under load, so the same key sits at the same phase every run.
+  - 🔴 **Controlled trigger**: D1 = one extra settled shot (separates the two mechanisms in one
+    run); D2 = a ~3000-element ticking page widens the reconvert window to ≈ the whole tick
+    period, with a no-timer and a 5000 ms-period control — forces the failure on a **quiet** box.
+  - **Verdict: deterministic-able, NOT load-tolerant** — and the existing `* 0.9` slack already
+    swallows a dropped small glyph silently, so the tolerance should **tighten**, not widen.
+  - **Fix shape**: keep input-routing state valid across the whole build-then-swap interval and
+    re-bind at the swap (general rule, not a keypress queue); plus a `wmctl shot` crop rect so a
+    never-settling page can still be settled on **per region** — the reusable determinism seam.
+  - **Image bump**: test-only outcome owes **none**; the netsurf fix or the `wmctl` crop each owe
+    one (`/usr/bin/netsurf` and `wmctl` are baked; `os/image.json` is at 186).
+  - **Item 4 correction**: this file's `driveBoot` calls *are* capped (420 s / 300 s); what is
+    missing is the **per-file** cap — design it inside `0369`, per this ticket's own cross-ref.
+  - **Second defect filed, not folded**: `todos/0402` (P0) — a click landing mid-re-conversion
+    can leave `focus_owner.textarea` pointing into the `talloc_free`d old box tree.
 
 ## Goal
 
