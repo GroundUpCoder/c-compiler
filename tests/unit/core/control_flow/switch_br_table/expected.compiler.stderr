@@ -4,5 +4,7 @@ tests/unit/core/control_flow/switch_br_table/switch_br_table.c:28: switch: br_ta
 tests/unit/core/control_flow/switch_br_table/switch_br_table.c:39: switch: br_table
 tests/unit/core/control_flow/switch_br_table/switch_br_table.c:49: switch: br_table
 tests/unit/core/control_flow/switch_br_table/switch_br_table.c:59: switch: br_if
-__string.c:222: switch: br_table
-__time.c:318: switch: br_if
+__posix.c:113: switch: br_if
+__string.c:26: switch: br_table
+__string.c:280: switch: br_table
+__time.c:347: switch: br_if

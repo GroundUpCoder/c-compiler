@@ -11046,6 +11046,27 @@ async function runModule({
       __clock_ns_lo: function () {
         return clockNsLatchLo;
       },
+      /* getentropy(2) backing (todos/0325 Group B). A HOST import rather
+         than a read of /dev/urandom: entropy is a host capability, and
+         routing it through a device node makes a security-relevant
+         primitive depend on filesystem layout. That is not hypothetical —
+         the /dev nodes are materialised only on a v4 mount, so the
+         /dev/urandom spelling failed outright under a v3 volume (and under
+         any fs that has no /dev at all). crypto.getRandomValues is a real
+         CSPRNG and fills at most 65536 bytes per call. Returns 0, or -1 if
+         no crypto implementation is available — in which case the caller
+         gets a FAILURE, never weak bytes. */
+      __getentropy: function (buf_ptr, len) {
+        const g = globalThis.crypto;
+        if (!g || typeof g.getRandomValues !== 'function') return -1;
+        try {
+          const mem = new Uint8Array(instance.exports.memory.buffer, buf_ptr, len);
+          for (let off = 0; off < len; off += 65536) {
+            g.getRandomValues(mem.subarray(off, Math.min(off + 65536, len)));
+          }
+          return 0;
+        } catch (e) { return -1; }
+      },
       /* Emscripten compatibility stubs */
       __emscripten_async_call: function (funcPtr, argPtr, millis) {
         const table = instance.exports.__indirect_function_table;

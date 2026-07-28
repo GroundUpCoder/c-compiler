@@ -1,0 +1,28 @@
+fstatat_cwd=0 size=5
+openat_cwd fd_ok=1 read=[hello]
+mkdirat=0 exists=1
+mkdirat_mode=700
+faccessat=0
+renameat=0 moved=1 gone=1
+unlinkat=0 gone=1
+unlinkat_dir_without_flag=-1 still=1
+unlinkat_removedir=0 gone=1
+symlinkat=0
+readlinkat len=11 body=[/atd/target]
+follow_is_reg=1 nofollow_is_lnk=1
+linkat=0
+linkat_same_inode=1 nlink=2
+linkat_follow=0
+follow_made_hardlink_not_symlink=1
+fchmodat=640
+fchmodat_nofollow=-1 enotsup=1
+abs_ignores_dirfd=0
+relative_on_filefd=-1 enotdir=1
+openat_on_filefd=-1 enotdir=1
+relative_on_closed_fd=-1 ebadf=1
+truncate=0 size=4
+fallocate=0 size=100
+fallocate_noshrink=0 size=100
+fallocate_einval=1
+fadvise_ok=0 fadvise_badadvice=1
+fadvise_badfd=1 fallocate_badfd=1

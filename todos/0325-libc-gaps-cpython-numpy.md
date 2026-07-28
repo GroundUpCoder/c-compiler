@@ -19,6 +19,75 @@ discharging the queue) is anchored to `0325`.** Closing it would orphan L48.
 **Do not close.**
 
 
+## Status (2026-07-28, combined 0382+0325 lane, branch `libc-0382-0325`)
+
+**Groups A and B are SHIPPED.** This ticket **stays open**: it still anchors pinned
+liability `L48` (`tcflush` reports success without discharging the queue), and Groups C,
+D and E remain gated elsewhere (C/D on the `todos/0313` pygame verdict, E on `todos/0340`
+M1-clang).
+
+- **Group A** — `fma` (exactly rounded, differentially validated against hardware fma over
+  6,000,010 inputs), `gmtime_r`, `clock_getres`, `wcstol` (+ the `wcstoul`/`wcstoll`/
+  `wcstoull`/`wcstod` family), `isascii`/`toascii`, `tzset` (+ `timezone`/`daylight`/
+  `tzname`). The ordering problem is fixed too: `clockid_t` and `struct timespec` are now
+  reachable from `<sys/types.h>` via a new `__timespec.h`, rather than by having
+  `<sys/types.h>` include `<time.h>` (which would link the whole time TU into every binary
+  that merely names a `size_t`).
+- **Group B** — `tm_zone`, `explicit_bzero`, `memrchr`, `strsignal`, `getentropy`,
+  `truncate`, `confstr`/`pathconf`/`fpathconf`, `posix_fadvise`/`posix_fallocate`,
+  `clock_nanosleep`/`TIMER_ABSTIME`, `wcsftime`, `timegm`, `RTLD_NODELETE`/`RTLD_NOLOAD`,
+  and the whole `*at()` family with `AT_EACCESS`/`AT_REMOVEDIR`/`AT_SYMLINK_FOLLOW`.
+
+Tests (behaviour, not linkage — goldens are clang's own output wherever the answer is
+host-independent): `tests/unit/stdlib/{fma,gmtime_r,wcstol,isascii,tzset_clockres,at_family,groupb_misc,umask}`
+and `tests/unit/blockfs_mkdir_mode`. `tools/libcprobe/probe.js` is the re-runnable
+presence probe, with positive **and** negative controls.
+
+### Group B caveat worth knowing — the `*at` family's dirfd mode
+
+`AT_FDCWD` and absolute paths are exact. A **real dirfd** cannot occur: no file descriptor
+on this system can refer to a directory (`BlockFS.open` answers `EISDIR`, there is no
+`O_DIRECTORY`, and `opendir` uses a separate handle namespace). The family therefore
+answers `ENOTDIR` (or `EBADF` for a closed fd), which is literally true for every fd this
+system can produce. Directory fds are **`todos/0400`** (register `L58`); when they land,
+`__at_ok()` is the single function that changes and all ten calls become dirfd-capable.
+
+### Per-Group-B entry: which Python feature its absence disabled
+
+This is the ticket's second acceptance criterion, so that a port's `pyconfig.h` is a set of
+deliberate choices rather than a pile of `#undef`s. All are now PRESENT, so each `HAVE_*`
+can be turned **on**:
+
+| symbol | what its absence cost |
+|---|---|
+| `struct tm::tm_zone` | `timemodule` fell back to `tzset()`+`strftime` for zone names |
+| `explicit_bzero` | `_blake2` could not scrub key material (its only alternative is a GCC inline-asm barrier we also lack) |
+| `memrchr` | `bytes`/`unicodeobject` reverse searches fell to a byte loop |
+| `strsignal` | `signalmodule` reported signals by number only |
+| `getentropy` | `bootstrap_hash` lost hash randomisation — a security property, not a feature |
+| `truncate` | `os.truncate(path, …)` |
+| `confstr`/`pathconf`/`fpathconf` | `os.confstr`/`os.pathconf`/`os.fpathconf` |
+| `posix_fadvise`/`posix_fallocate` | `os.posix_fadvise`/`os.posix_fallocate` |
+| `clock_nanosleep`/`TIMER_ABSTIME` | `time.clock_nanosleep`; absolute deadlines drift when re-armed in userspace |
+| `wcsftime` | wide `time.strftime` paths |
+| the `*at()` family | all `os.*` `dir_fd=` support |
+| `RTLD_NODELETE`/`RTLD_NOLOAD` | `dynload_shlib` would not compile (dlopen itself still reports failure) |
+| `timegm` | `calendar.timegm` used CPython's slower pure-Python fallback |
+
+## Overlap ownership with `todos/0382` (both tickets' acceptance criterion)
+
+Resolved deliberately, and recorded in **both** tickets:
+
+| symbol | owner | note |
+|---|---|---|
+| `gmtime_r` | **`0325` Group A (here)** | `0382` gap 4 defers |
+| `tzset` | **`0325` Group A (here)** | `0382` gap 6 defers |
+| `timegm` | **`0325` Group B (here)** | `0382` gap 5 defers |
+| the `*at` family (incl. `fstatat`, `openat`) | **`0325` Group B (here)** | `0382` gaps 7-8 defer; `0325` enumerates all ten |
+
+`0382` implements none of these separately. Its own gaps 1-3 (`umask`, `id_t`,
+`strcasecmp` from `<string.h>`) are owned by `0382` and are not duplicated here.
+
 ## Group A — NO configure escape (a port MUST have these)
 
 CPython calls these unconditionally; there is no `HAVE_*` to turn off.

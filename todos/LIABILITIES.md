@@ -315,4 +315,16 @@ thing this file exists to kill.
 - anchor: inheritance through __spawn is a separate, ticketed gap (todos/0399). */
 - provenance: 0382
 
+### L58 — no fd can refer to a directory, so the *at family's dirfd resolution mode is unreachable
+- ticket: 0400
+- file: compiler.js
+- anchor:  * todos/0400 (directory file descriptors: O_DIRECTORY, dirfd(3), fdopendir(3))
+- provenance: 0325
+
+### L59 — mkfifo is absent on purpose; a link-testable stub would move a consumer's failure from configure time to run time
+- ticket: 0401
+- file: compiler.js
+- anchor:    time. Funded by todos/0401, which is also what keeps todos/0382 open. */
+- provenance: 0382
+
 <!-- END ENTRIES -->

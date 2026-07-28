@@ -1,0 +1,35 @@
+memrchr=7 memchr=1
+memrchr_missing=1
+memrchr_len0=1
+memrchr_bounded=1
+memrchr_nul=1
+explicit_bzero_nonzero=0
+bzero_len0_keeps=1
+sigint=[Interrupt]
+sigsegv=[Segmentation fault]
+sigkill=[Killed]
+unknown=[Unknown signal]
+strsignal_never_null=1
+getentropy rc=0,0 differ=1
+getentropy_not_allzero=1
+getentropy_over256=-1 eio=1
+getentropy_zero_len=0
+confstr len=20 path=[/usr/local/bin:/bin]
+confstr_size_query=1
+confstr_bad=0 einval=1
+pathconf_name=255 path=4096
+pathconf_missing=-1
+fpathconf_name=255
+fpathconf_badfd=-1
+timegm_y2k=946684800
+timegm_normalised wday=6 yday=0
+timegm_epoch=0
+timegm_normalise_month=978307200
+timegm_roundtrip=1
+cns_rel=0
+cns_badclock=1
+cns_badnsec=1
+cns_abs_past=0
+cns_abs_waited rc=0 atleast4ms=1
+wcsftime n=19 out=[1970-01-01 00:00:00]
+wcsftime_small=0
