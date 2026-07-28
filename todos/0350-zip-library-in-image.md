@@ -196,3 +196,15 @@ mode); **libzip** (BSD-3, complete, PHP's `ZipArchive` is libzip).
   asserted.
 - `node tests/run.js --diff` green. `os/image.json` version bump is **master's
   to assign** — ask, do not pick one.
+
+## Priority — raised from P2 to P1 (master, 2026-07-29)
+
+Ticket 0352 has a real consumer now. The 013 deck pipeline made the file
+`videos/013-ground-up-bulldozer/013.mgpp` in the repository `~/git/story`. Git
+tracks that file. Master verified this off the repository, not off a report.
+
+Ticket 0352 is blocked by this ticket. Therefore this ticket is on the critical
+path, and its priority goes up with it.
+
+Ticket 0351 stays at P2. The consumer needs the reader. The consumer does not
+need the `zip` and `unzip` programs.

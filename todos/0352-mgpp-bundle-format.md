@@ -70,3 +70,16 @@ carries it. Two facts recorded so they are not re-derived:
   carries a sha256-keyed asset manifest (bodies only for hashes the server
   lacks; 422 `{missing}`). So the PWA half is serialization over a settled
   model.
+
+## Priority — raised from P2 to P1 (master, 2026-07-29)
+
+This ticket has a real consumer now. The 013 deck pipeline made the file
+`videos/013-ground-up-bulldozer/013.mgpp` in the repository `~/git/story`. Git
+tracks that file. Master verified this off the repository, not off a report.
+
+A bundle exists before `/bin/mgpp` can read it. That is the re-prioritisation
+input.
+
+Ticket 0350 goes to P1 with this ticket, because it blocks this ticket. Ticket
+0351 stays at P2. The consumer needs the reader. The consumer does not need the
+`zip` and `unzip` programs.
