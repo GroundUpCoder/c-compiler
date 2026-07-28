@@ -15,11 +15,13 @@ grep -rlE '\b(clock_gettime|gettimeofday|time[[:space:]]*\(|clock[[:space:]]*\(|
   tests/unit --include='*.c' --include='*.h' | sort
 ```
 
-Population: **789** leaf tests under `tests/unit/**` (the same discovery
-`run-unit.js` does — 785 passed + 1 xfail + 3 skipped). Of those, **24 files
-read a clock at all**, which is the *necessary* condition for pass/fail to
-depend on elapsed time. Reading a clock is not sufficient, so all 24 were
-classified by hand:
+Population: **790** leaf tests under `tests/unit/**` — the same discovery
+`run-unit.js` does, and it reconciles with the run (786 passed + 1 xfail + 3
+skipped). The survey itself was taken at 789, one commit before the rebase onto
+`origin/main` @ `c620e889` added one; the clock-reading set is unchanged by it.
+Of those, **24 files read a clock at all**, which is the *necessary* condition
+for pass/fail to depend on elapsed time. Reading a clock is not sufficient, so
+all 24 were classified by hand:
 
 **(a) UPPER-BOUND elapsed budget — the load-fragile class. 8 of 24.** These are
 statements about the machine and are the only ones that can go red because
@@ -127,6 +129,33 @@ now assert `usleep(0)` returns 0 with `errno` untouched. The six
 `elapsed_us < 500000` upper bounds were deleted and their `>= 40000` lower bounds
 kept: a 1000× oversleep is 50 s, already past `run-unit.js`'s 30 s per-test
 timeout, so the upper bound bought nothing the runner did not already give.
+
+## Green under contention
+
+Load generated with 10 busy `node` processes (= core count) — deliberately NOT
+the kernel suite or the browser sweep, which other lanes need, and with neither
+`CC_NO_HEAVY_LOCK` nor `CC_NO_MEM_CAP` set.
+
+```
+$ node tests/run.js unit          # solo
+786 passed, 0 failed, 1 xfailed, 3 skipped  (12.9s)
+
+$ for i in $(seq 1 10); do node /tmp/burn.js 150 & done ; node tests/run.js unit
+786 passed, 0 failed, 1 xfailed, 3 skipped  (25.6s)      # load avg 16.4
+```
+
+25.6 s vs 12.9 s is a **2.0× slowdown** — the same factor the ticket recorded
+(33.2 s vs 16.7 s) when the old budget fired. The suite stays green through it.
+
+**What did NOT reproduce:** with 16 busy `node` processes (> core count) the old
+`ms < 100` assertion did not actually trip. Instrumenting it to print the
+measurement rather than the boolean, five runs under that load read
+`elapsed_ms=` 58 / 63 / 47 / 26 / 64, against a solo baseline of 26 / 31 / 26.
+So CPU-only contention consumed up to ~64% of the budget but did not cross it;
+the original red came from a 4 GB-per-boot kernel suite in another worktree,
+which is memory and I/O pressure this synthetic load does not imitate. The
+budget's margin is thin and load-dependent either way — that is the finding, and
+it does not depend on reproducing the trip on demand.
 
 ## Residuals filed
 
