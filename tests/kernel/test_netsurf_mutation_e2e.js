@@ -139,6 +139,32 @@ console.log('typing page ready');
 </body></html>
 `;
 
+/* 0386 D2: the same typing page with n 1-px filler divs appended AFTER
+ * <div id="d"> (the input's geometry — and so the §1 ink budget — is
+ * untouched).  convert_xml_to_box yields to the scheduler every 10
+ * elements and each yield costs a loop iteration, so n=3000 widens the
+ * live re-conversion window to ~the whole tick period: the page is
+ * continuously mid-re-conversion while ticking.  The tick starts DELAYED
+ * (3 s) so a leg can focus the field on a quiet page first.  periodMs=0
+ * means no timer at all (the size control). */
+const typingPageBig = (title, n, periodMs) => `<html>
+<head><title>${title}</title>
+<style>body { margin: 0; background: #ffffff; } #i { font-size: 20px; } .p { height: 1px; }</style>
+</head>
+<body>
+<input id="i" type="text" size="20" value="">
+<div id="d">tick 0</div>
+${'<div class="p"></div>\n'.repeat(n)}<script>
+${periodMs ? `var n = 0;
+var box = document.getElementById('d');
+setTimeout(function () {
+	setInterval(function () { n = n + 1; box.textContent = 'tick ' + n; }, ${periodMs});
+}, 3000);` : ''}
+console.log('big page ready');
+</script>
+</body></html>
+`;
+
 /* ---- seed boot, then plant the pages ---- */
 const { dir: tmp, image } = freshImage('os-nsmut-');
 driveBoot('true', { image });
@@ -169,6 +195,9 @@ driveBoot('true', { image });
   put('/root/toggle.html', Buffer.from(TOGGLE_PAGE, 'utf-8'));
   put('/root/static.html', Buffer.from(typingPage(false), 'utf-8'));
   put('/root/ticky.html', Buffer.from(typingPage(true), 'utf-8'));
+  put('/root/big-t.html', Buffer.from(typingPageBig('NsBigT', 3000, 300), 'utf-8'));
+  put('/root/big-c1.html', Buffer.from(typingPageBig('NsBigC1', 3000, 0), 'utf-8'));
+  put('/root/big-c2.html', Buffer.from(typingPageBig('NsBigC2', 3000, 5000), 'utf-8'));
   rootStore.flush();
   rootStore.close();
 }
@@ -316,7 +345,11 @@ const out = driveBoot([
   sidOf('ST', 'NsStatic'),
   ...pollStable('$ST', '/root/x0.ppm'),
   'wmctl click $ST 60 12',        /* focus the field (its own pinned geometry) */
-  ...TYPE_KEYS('$ST'),
+  /* 0386 D3: shot after each key — the six deltas are the per-glyph ink
+   * table that retro-explains any missing-glyph count */
+  ...TYPED.flatMap(([sc, ks], i) =>
+    [`wmctl key $ST ${sc} ${ks}; sleep 0.25`,
+     `wmctl shot $ST /root/s${i + 1}.ppm && echo shot-s${i + 1}-ok`]),
   ...pollStable('$ST', '/root/x1.ppm'),
   'echo shot-x1-ok',
   'wmctl close $ST && wmctl wait nowin NsStatic 8000 && echo static-closed',
@@ -325,16 +358,95 @@ const out = driveBoot([
   'wmctl wait win NsTicky 30000',
   sidOf('TK', 'NsTicky'),
   'wmctl click $TK 60 12',
-  ...TYPE_KEYS('$TK'),
+  /* D3 on the ticky leg: the step that fails to grow names the lost key */
+  ...TYPED.flatMap(([sc, ks], i) =>
+    [`wmctl key $TK ${sc} ${ks}; sleep 0.25`,
+     `wmctl shot $TK /root/k${i + 1}.ppm && echo shot-k${i + 1}-ok`]),
   'wmctl shot $TK /root/x2.ppm && echo shot-x2-ok',
+  /* D1: a second, SETTLED shot.  The field band is static once typing
+   * stops (only the tick div below it repaints), so 2 s is many ticks. */
+  'sleep 2',
+  'wmctl shot $TK /root/x3.ppm && echo shot-x3-ok',
   'wmctl close $TK && wmctl wait nowin NsTicky 8000 && echo ticky-closed',
+
+  /* --- 0386 D4: the direct M2 probe — same small ticky page, 20 ms key
+   * cadence.  If ink drops here, the leg genuinely samples before the
+   * paint lands; if not, M2 needs a 250 ms paint lag to be true. --- */
+  'netsurf /root/ticky.html &',
+  'wmctl wait win NsTicky 30000',
+  sidOf('TF', 'NsTicky'),
+  'wmctl click $TF 60 12',
+  ...TYPED.map(([sc, ks]) => `wmctl key $TF ${sc} ${ks}; sleep 0.02`),
+  'wmctl shot $TF /root/x4.ppm && echo shot-x4-ok',
+  'sleep 2',
+  'wmctl shot $TF /root/x5.ppm && echo shot-x5-ok',
+  'wmctl close $TF && wmctl wait nowin NsTicky 8000 && echo tickyfast-closed',
+
+  /* --- 0386 D2 arm T: focus FIRST (page still quiet — the tick starts at
+   * +3 s), then type WHILE the wide re-conversion window is open ~100% of
+   * the time.  M1 real ⇒ ink collapses toward 52; M1 wrong ⇒ 285. --- */
+  'netsurf /root/big-t.html &',
+  'wmctl wait win NsBigT 30000',
+  'sleep 1.5',
+  sidOf('BT', 'NsBigT'),
+  'wmctl click $BT 60 12',
+  'sleep 2',                      /* ticking is now underway */
+  ...TYPE_KEYS('$BT'),
+  'wmctl shot $BT /root/bt1.ppm && echo shot-bt1-ok',
+  'sleep 2.5',
+  'wmctl shot $BT /root/bt2.ppm && echo shot-bt2-ok',
+  'wmctl close $BT && wmctl wait nowin NsBigT 8000 && echo bigt-closed',
+
+  /* --- D2 arm T2 (the todos/0402 shape): the CLICK itself lands mid
+   * re-conversion, with nothing previously focused, then typing. --- */
+  'netsurf /root/big-t.html &',
+  'wmctl wait win NsBigT 30000',
+  'sleep 4',                      /* ticking underway before the click */
+  sidOf('BU', 'NsBigT'),
+  'wmctl click $BU 60 12',
+  ...TYPE_KEYS('$BU'),
+  'wmctl shot $BU /root/bu1.ppm && echo shot-bu1-ok',
+  'sleep 2.5',
+  'wmctl shot $BU /root/bu2.ppm && echo shot-bu2-ok',
+  'wmctl close $BU && wmctl wait nowin NsBigT 8000 && echo bigt2-closed',
+
+  /* --- D2 arm C1 (size control): same 3000-element page, NO timer. --- */
+  'netsurf /root/big-c1.html &',
+  'wmctl wait win NsBigC1 30000',
+  'sleep 1.5',
+  sidOf('BC', 'NsBigC1'),
+  'wmctl click $BC 60 12',
+  ...TYPE_KEYS('$BC'),
+  'wmctl shot $BC /root/bc11.ppm && echo shot-bc11-ok',
+  'sleep 2',
+  'wmctl shot $BC /root/bc12.ppm && echo shot-bc12-ok',
+  'wmctl close $BC && wmctl wait nowin NsBigC1 8000 && echo bigc1-closed',
+
+  /* --- D2 arm C2 (period control): first tick at +8 s, typing done by
+   * ~+5.5 s, so the timer exists but never fires during typing. --- */
+  'netsurf /root/big-c2.html &',
+  'wmctl wait win NsBigC2 30000',
+  'sleep 1.5',
+  sidOf('BD', 'NsBigC2'),
+  'wmctl click $BD 60 12',
+  'sleep 2',
+  ...TYPE_KEYS('$BD'),
+  'wmctl shot $BD /root/bc21.ppm && echo shot-bc21-ok',
+  'sleep 2',
+  'wmctl shot $BD /root/bc22.ppm && echo shot-bc22-ok',
+  'wmctl close $BD && wmctl wait nowin NsBigC2 8000 && echo bigc2-closed',
 ], { image, timeout: 420000, maxBuffer: 64 * 1024 * 1024 }).stdout;
 
-const NAMES = ['m1', 'm2', 'r1', 'r2', 'r3', 'r4', 't1', 't2', 't3', 'x1', 'x2'];
+const NAMES = ['m1', 'm2', 'r1', 'r2', 'r3', 'r4', 't1', 't2', 't3',
+               's1', 's2', 's3', 's4', 's5', 's6', 'x1',
+               'k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'x2', 'x3',
+               'x4', 'x5',
+               'bt1', 'bt2', 'bu1', 'bu2', 'bc11', 'bc12', 'bc21', 'bc22'];
 for (const tag of NAMES) {
   check(`shot ${tag} taken`, out.includes(`shot-${tag}-ok`));
 }
-for (const tag of ['stopwatch', 'ruler', 'toggle', 'static', 'ticky']) {
+for (const tag of ['stopwatch', 'ruler', 'toggle', 'static', 'ticky',
+                   'tickyfast', 'bigt', 'bigt2', 'bigc1', 'bigc2']) {
   check(`${tag} window closed`, out.includes(`${tag}-closed`));
 }
 
@@ -418,6 +530,22 @@ const shots = parsePPMs(back.stdout, NAMES);
   const tickyInk = fieldInk(shots.x2);
   check('typing: the static control page really accepted the keystrokes',
         staticInk > 150, `ink in the field: ${staticInk}`);
+
+  /* ---- 0386 diagnosis readout: every number printed unconditionally ---- */
+  const inks = (tags) => tags.map((t) => fieldInk(shots[t]));
+  const sSteps = inks(['s1', 's2', 's3', 's4', 's5', 's6']);
+  const kSteps = inks(['k1', 'k2', 'k3', 'k4', 'k5', 'k6']);
+  console.log('D3-STATIC per-key ink: ' + sSteps.join(' ') +
+              '  (deltas: ' + sSteps.map((v, i) => v - (i ? sSteps[i - 1] : 52)).join(' ') + ')');
+  console.log('D3-TICKY  per-key ink: ' + kSteps.join(' ') +
+              '  (deltas: ' + kSteps.map((v, i) => v - (i ? kSteps[i - 1] : 52)).join(' ') + ')');
+  console.log(`D1-TICKY x2(immediate)=${tickyInk} x3(settled)=${fieldInk(shots.x3)} static=${staticInk}`);
+  console.log(`D4-FAST20MS x4(immediate)=${fieldInk(shots.x4)} x5(settled)=${fieldInk(shots.x5)}`);
+  console.log(`D2-T   immediate=${fieldInk(shots.bt1)} settled=${fieldInk(shots.bt2)}`);
+  console.log(`D2-T2  immediate=${fieldInk(shots.bu1)} settled=${fieldInk(shots.bu2)} (click landed mid-ticking, todos/0402 shape)`);
+  console.log(`D2-C1  immediate=${fieldInk(shots.bc11)} settled=${fieldInk(shots.bc12)} (size control, no timer)`);
+  console.log(`D2-C2  immediate=${fieldInk(shots.bc21)} settled=${fieldInk(shots.bc22)} (period control, 5 s)`);
+
   /* The A/B: a mutating page must type EXACTLY as well as a still one.
    * Before focus was re-bound across the swap this read ~52 vs ~285. */
   check('typing: a page re-boxing under the caret types just as well',
