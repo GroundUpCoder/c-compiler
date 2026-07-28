@@ -84,9 +84,11 @@ test('write and read back', function () {
 
 test('write past end extends file', function () {
   var r = makeFS();
-  var O_CREAT = 0x40, O_TRUNC = 0x200;
+  // O_RDWR: a bare-O_CREAT fd is O_RDONLY and can't write (todos/0376) —
+  // this test used to write through one, encoding the exact defect.
+  var O_CREAT = 0x40, O_TRUNC = 0x200, O_RDWR = 0x2;
 
-  var fd = r.fs.open('/grow.bin', O_CREAT | O_TRUNC, 0o644);
+  var fd = r.fs.open('/grow.bin', O_CREAT | O_TRUNC | O_RDWR, 0o644);
 
   // Write 100 bytes at position 0
   var data = new Uint8Array(100);
@@ -527,8 +529,9 @@ test('setStdin legacy array-of-bytes shape still works', function () {
 
 test('dup creates new fd', function () {
   var r = makeFS();
-  var O_CREAT = 0x40;
-  var fd = r.fs.open('/dupfile.txt', O_CREAT, 0o644);
+  // O_RDWR: same todos/0376 correction as 'write past end extends file'.
+  var O_CREAT = 0x40, O_RDWR = 0x2;
+  var fd = r.fs.open('/dupfile.txt', O_CREAT | O_RDWR, 0o644);
 
   var fd2 = r.fs.dup(fd);
   assert(fd2 >= 3 && fd2 !== fd, 'dup should return new fd');
