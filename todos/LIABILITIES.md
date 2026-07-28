@@ -303,10 +303,4 @@ thing this file exists to kill.
 - anchor: // coordination point (a pushed reservation ref), which is todos/0364, register
 - provenance: 0360
 
-### L53 — a unary operator on a bit-field skips the integer promotions, so -bf/~bf disagree with clang
-- ticket: 0367
-- file: compiler.js
-- anchor: // UNPROMOTED: operand.type is the DECLARED type, so a bit-field operand never
-- provenance: 0356
-
 <!-- END ENTRIES -->

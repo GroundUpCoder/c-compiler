@@ -86,3 +86,55 @@ prints values will pass over this bug forever.
   category but `unit`**. Until `0362` lands, **run `micropython`,
   `micropython-upstream` and the vendor corpora by hand** — the diff-scoped gate
   structurally cannot see the corpora where this class of bug lives.
+
+## Enumeration + fix (branch `0356-unary-residual`, review deep-dive 1)
+
+Every site that consumes a bit-field's declared type was enumerated and
+clang-pinned (probe method: one C program per family, clang `-std=c11` native
+vs `compiler.js` + `host.js`, byte-diffed stdout). Six divergence classes,
+**all pre-existing** (each reproduced on `970aedf1^` too):
+
+| # | site | shape | clang | ours (pre-fix) |
+|---|------|-------|-------|----------------|
+| 1 | `makeUnary`/`computeUnaryType` | `-u20 < 0` | 1 | 0 |
+| 2 | ternary branch types | `(c ? u20 : u20) - 0x200000 < 0` | 1 | 0 |
+| 3 | compound-assign compute type (both sides) | `u20 /= -3`; `int x /= u20` | signed div | unsigned div |
+| 4 | assignment result type | `(ull20 = 5) - 100` | int -95 | **ICE — invalid wasm** |
+| 5 | bit-field-ness carriers | `-(u20 = X)`, `-(0, u20)`, `-(++u20)` | promoted | unpromoted |
+| 6 | `sizeof(bf)` | constraint 6.5.3.4p1 | error | silently 4 |
+
+Carrier pins (clang): assignment/compound results, comma's last operand and
+**pre**-inc/dec carry the source bit-field; **post**-inc/dec do NOT.
+
+Verified NOT divergent (and why): explicit casts + plain assignment/init/arg
+conversions (the loaded register value already equals the C value, so
+conversion-from-declared ≡ conversion-from-promoted), **vararg passing** (every
+va slot is 8-byte — `vaSlotSize` — so int-vs-declared slot layout is
+identical; the 0356 claim was TRUE for vararg), post-inc/dec, `switch`
+scrutinee (case constants in the field's value range compare equally at either
+width — unobservable), shift/binary/comparison operands (0356's fix),
+`_Alignof(expr)` (GNU extension, no constraint), `&bf` (already diagnosed).
+
+Fix (one commit with this note): `sourceBitField` walker + `promoteExprType`
+over it; assignment result type excluded from promotion (6.5.16p3) — kills the
+ICE; unary +/-/~ promote the operand via materialized implicit cast;
+ternary promotes branch types; `emitAssignment` computes compound ops in
+`UAC(promoted lhs, promoted rhs)`; `checkSizeofExprOperand` diagnoses
+`sizeof(bf)`. Tests: five conformance dirs committed RED first
+(`parse_bitfield_{unary,ternary,compound_assign}_promote`,
+`parse_bitfield_promote_carriers`, `diag_sizeof_bitfield`), green after.
+
+Blast radius, measured over the 28-project vendor corpus (0328 method,
+base = main head vs fixed): **micropython is the only mover** — +1 byte,
+one function (`mp_obj_bytes_fromhex`: an i64 add of a sign-extended int
+became an int add then extend, i.e. the promotion applying); quake differs
+run-to-run regardless (`__TIME__`, known) and is proven unmoved at the code
+level (0 of 563 function bodies differ); busybox/lua/sqlite/doom/sameboy/
+winmine/notepad/calc/sent/magicpoint/gameboy/snake/hello + the rest:
+byte-identical. cpython/tcc/tinyemu/libgit2/fakegit are harness-limited in
+the ad-hoc probe (clang channel / `--allow-undefined`), unchanged from 0328's
+run. micropython moving means the fat bake changes: **master owes the
+version bump at merge** (image.json untouched here per the acceptance).
+
+L53 retired in the same commit (anchor comment replaced by the fix).
+Master: close this ticket when merging the branch.

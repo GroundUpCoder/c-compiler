@@ -80,6 +80,16 @@ in the repro above disagreed with the comparison two lines below it.
 > that ticket's scope. **Not a 0356 regression — pre-existing on the parent.**
 > The lesson: this sentence did not merely record a gap, it asserted the gap was
 > *closed*, which is what stopped anyone looking for four merges.
+>
+> **Audit completed (0367 lane, same day).** The deferred halves of the sentence
+> resolve: **ternary was ALSO false** — `computeTernaryType` received the
+> branches' declared types, so `(c ? u20 : u20) - 0x200000 < 0` was 0 for us,
+> 1 for clang. **Vararg was TRUE** — every va slot is 8 bytes (`vaSlotSize`),
+> so the promoted-vs-declared slot layout is indistinguishable by construction.
+> The full enumeration (six divergence classes, including a pre-existing ICE on
+> `(s.ull20 = x) - y` and the compound-assign signedness miscompile
+> `u20 /= -3`) and the fix live in `todos/0367` and
+> `logs/2026-07-28/0367-bitfield-promotion-residual.md`.
 
 The signedness test moved to `!uq.isUnsigned()` in the same edit. The old
 identity list (`TINT || TLONG || TSHORT || TSCHAR || TCHAR`) omitted
