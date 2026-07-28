@@ -41,6 +41,14 @@ CLI read path, nothing else.
   shell share one enumeration of the store. NB since todos/0244 the store
   is a per-key three-layer overlay: the iterator must dedup keys over the
   merged text (first occurrence wins — the cfg_find rule).
+- ⭐ **0370 annotation (2026-07-28, per the SOFTWARE-NATIVE.md follow-on
+  note): build the association list on the real `SysListView32`** (report
+  view, `os/win32/listview.c` — registered by `InitCommonControls`), NOT
+  the "a LISTBOX of" plan written below. Extension → command is two-column
+  data; the listview gives real columns, sortable headers, and rows that
+  are `wmctl`-addressable BY NAME via the AQM seam (no `LISTBOX:n` +
+  keyboard-ordinal driving in the e2e). The plan text below predates the
+  control's existence.
 - **A Default Programs applet** in `ctlpanel.c` (new `APP_*` enum entry,
   `APP_DEF[]` row, `draw_art()` pictogram, own `*_proc`): a LISTBOX of
   current associations (extension → command, plus the two `default.*`

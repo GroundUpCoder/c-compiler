@@ -1,6 +1,6 @@
 # 0370 — SysListView32 + SysHeader32 + the AQM agent seam in user32 (jku: fuller user32 toolkit, real controls)
 
-- **Status**: open
+- **Status**: done
 - **Difficulty**: heavy (≈3–4 lane-days)
 - **Design**: `todos/SOFTWARE-NATIVE.md` — **NOW IN `main`** (merged by master
   cont-123 as `cf939313`; `487f8b70` verified an ancestor of main). A full design

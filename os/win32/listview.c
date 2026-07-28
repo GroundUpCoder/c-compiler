@@ -360,6 +360,9 @@ static LRESULT hd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     }
+    /* fail-loud (0211): unimplemented HDM_* say so */
+    if (msg >= HDM_FIRST && msg < HDM_FIRST + 0x200)
+        WIN32_UNSUPPORTED("header message 0x%x", msg);
     return DefWindowProc(h, msg, wp, lp);
 }
 
@@ -625,7 +628,10 @@ static LRESULT lv_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         lv_layout(h, st);
         return 0;
     case WM_SETFONT:
-        /* metrics move together: header shares the font; rows re-measure */
+        /* metrics move together: DefWindowProc stores the per-HWND font
+         * (the 0223 GetDC choke reads it), the header shares it, rows and
+         * layout re-measure */
+        DefWindowProc(h, msg, wp, lp);
         SendMessage(st->hdr, WM_SETFONT, wp, lp);
         lv_layout(h, st);
         InvalidateRect(h, NULL, TRUE);
@@ -1139,6 +1145,10 @@ static LRESULT lv_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     }
+    /* fail-loud (0211): an unimplemented LVM_* must read as a missing
+     * feature, not a silent no-op returning 0 — this is the demand log. */
+    if (msg >= LVM_FIRST && msg < LVM_FIRST + 0x200)
+        WIN32_UNSUPPORTED("listview message 0x%x", msg);
     return DefWindowProc(h, msg, wp, lp);
 }
 
