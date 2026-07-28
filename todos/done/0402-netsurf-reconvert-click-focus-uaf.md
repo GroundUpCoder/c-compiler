@@ -1,7 +1,43 @@
 # 0402 — click during a live re-conversion can leave focus_owner.textarea pointing into freed memory
 
-- **Status**: open
-- **Design**: —
+- **Status**: done (2026-07-29, branch `0386-netsurf-fix` — fixed by `todos/0386`'s
+  general rule, exactly as this ticket's plan step 3 anticipated)
+
+## Resolution
+
+**Repro first, as demanded.** The committed repro is the T2 arm of
+`tests/kernel/test_netsurf_mutation_e2e.js`: a 3000-element page whose re-conversion
+window spans the whole 300 ms tick period, a `wmctl click` into the text field DURING
+the ticking with nothing previously focused, then six typed keys. The state is reached
+observably, not silently: **pre-fix the arm read 52 ink pixels** (chrome only — the
+click's focus claim and every subsequent key were swallowed by the window), measured
+2026-07-29 on a quiet box. The UAF itself stayed silent, as predicted (wasm/talloc
+memory reads back intact), which is why the observable is the swallowed input.
+
+**The mechanism refined by the fix work:** the click's caret update arrives through
+`box_textarea_callback` while `gadget->box == NULL` (construction has not re-bound the
+gadget yet), so the exact pointer the callback would have handed `html_set_focus` was
+the mid-window state itself. The fix removes the whole class:
+
+- the swap-time snapshot in `html_reconvert_box_done` reads whatever gadget holds the
+  focus AT the swap, so a focus change made during the window is re-bound to the NEW
+  tree instead of left dangling into the `talloc_free`d old one;
+- a click that lands before the gadget's new box exists records a CLAIM
+  (`reconvert_focus_claim`), which `box_textarea_create_textarea` honours at widget
+  recreation — the click is not lost either;
+- the failure path scrubs a textarea focus to `HTML_FOCUS_SELF` before the partial new
+  tree dies, so no path leaves a freed owner.
+
+**Acceptance met:** the T2 regression leg asserts settled ink AND a value-level mirror
+equal to the never-windowed control (both exact), post-fix keys after the mid-window
+click land in the field (285/285, `V:abcdef` mirrored), and the leg rides the same
+flake gate as the rest of the file. The `vendor/netsurf` change ships in the same
+commit as the 0386 fix with the `os/image.json` 190→191 bump.
+
+Residual, honestly scoped: a key typed in the sub-millisecond gap between a phase-1
+click and the widget recreation that materialises its claim still falls to
+`HTML_FOCUS_SELF` and is dropped. The window is one construction slice of ~10 elements;
+a human click-then-type cannot hit it, and the claim mechanism bounds it structurally.
 
 ## Goal
 

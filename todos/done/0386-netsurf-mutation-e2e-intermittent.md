@@ -1,6 +1,54 @@
 # 0386 — test_netsurf_mutation_e2e.js is intermittently RED (pixel comparison) and hangs uncapped when run bare
 
-- **Status**: open
+- **Status**: done (2026-07-29, branch `0386-netsurf-fix`)
+
+## Resolution
+
+**Verdict: M1 — a product defect.** NetSurf discarded keystrokes during a live
+re-conversion. The design pass's discriminators ran on a quiet box and settled it off
+FAILING runs, not green ones:
+
+- **D2 forced trigger (the reproducing conditions, written down):** a 3000-element page
+  with a 300 ms tick makes the re-conversion window span the whole tick period. Type
+  `abcdef` at 250 ms cadence during the ticking. Pre-fix result: **52** ink pixels
+  (chrome only — every key lost), immediate AND settled. The size control (no timer) and
+  the period control (5 s) both read **285**. Only `size × ticking` moves the number.
+  The trigger is committed in the test (arms T/T2/C1/C2) and reproduces on demand.
+- **D1 on the forced arm:** settled == immediate == 52 — the keys never reached the
+  model. Not paint lag.
+- **D3 per-glyph ink table** (`a=39 b=51 c=23 d=51 e=36 f=33`): the historical
+  `285−234=51` is `b` or `d` — an ascender, never the trailing `f` (33). This kills the
+  competing sample-too-early mechanism (M2) outright: a late sample can only lose the
+  LAST glyph.
+- **D4 (20 ms cadence):** 285/285 — no paint-lag component at any cadence.
+- **Value-level closure:** post-fix, two `textContent` mirrors of `input.value` are
+  count-identical across all arms including the known-good control — the field holds
+  exactly `abcdef`.
+
+**The fix** is §4.2's general rule (one commit with the test reshape, `975582cd`+):
+interaction state that routes input stays valid for the whole build-then-swap interval
+and is re-bound at the swap. `html__reconvert` keeps a text gadget's focus;
+`html_reconvert_box_done` snapshots the focused gadget's node AT the swap;
+`box_textarea_create_textarea` carries the caret across widget recreation (else keys
+insert at position 0 — `textarea_get_caret` defaults an unset caret);
+`box_textarea_callback` tolerates the mid-window `gadget->box == NULL` state and records
+a mid-window caret CLAIM so a click before the new box exists still lands (`todos/0402`,
+fixed by the same change). Pre-fix the T2 arm (click mid-storm) read 52; post-fix 285.
+
+**The tolerance went the narrow direction:** the `* 0.9` slack is deleted. Every gating
+shot is SETTLED (the test pages' ticks are finite now) and asserts EXACT ink equality.
+Un-settled shots print as diagnostics only.
+
+**Filed, not folded:** `todos/0406` (the §4.3 `wmctl shot` crop / region-settle seam —
+the other fix §4.4 wants), `todos/0407` (mid-window renders of a recreated widget use
+the default 10pt fstyle until the swap reformat — the deterministic `204` the trigger
+arms print, pre-existing, made visible by this fix), `todos/0408` (`HTMLElement.style`
+is a disconnected stub, found by this ticket's probe work).
+
+**Item 4 (the bare-invocation cap) is DEFERRED to `todos/0369`, explicitly.** The design
+pass's §6 correction stands: this file's `driveBoot` calls ARE capped (420 s / 300 s);
+what is missing is the PER-FILE cap when the runner is bypassed, and that is the same
+class as 0369's bare-`spawnSync` survey findings. 0369 is open and owns it.
 - **Design**: `todos/0386-netsurf-mutation-e2e-intermittent-design.md` (read-only diagnosis
   pass, 2026-07-28; no test was run). Decisions, one line each:
   - **The numbers are fully accounted for**: `285 = 52 chrome + 233 six-glyph ink`,
