@@ -27,7 +27,7 @@
    barrier-shaped fix. Widening the pixel tolerance would be wrong — and note the existing
    `* 0.9` slack is *already* wide enough to swallow the loss of a small glyph silently.
 5. A **second, distinct defect** was found in the same window and filed separately as
-   **`todos/0400`** (P0): a click that lands mid-re-conversion leaves `focus_owner.textarea`
+   **`todos/0402`** (P0): a click that lands mid-re-conversion leaves `focus_owner.textarea`
    pointing into the `talloc_free`d old box tree.
 
 ---
@@ -392,7 +392,7 @@ Concretely:
 > **Interaction state that routes input must stay valid for the whole build-then-swap interval
 > and be re-bound at the swap — not surrendered at teardown-start.**
 
-That single rule covers focus, covers the click case in `todos/0400`, and is the correct level
+That single rule covers focus, covers the click case in `todos/0402`, and is the correct level
 for the next thing that hangs off the box tree (an IME composition, a drag in progress, a
 scroll-anchored element). A per-symptom patch ("queue keypresses while `reconverting`") would fix
 typing and leave the class open; it is the fallback only if keeping the old focus box live turns
@@ -444,7 +444,7 @@ owe no bump; baked binaries do.
 
 | change | owes a bump? |
 |---|---|
-| this document, the ticket edit, `todos/0400` | **no** — `todos/` only |
+| this document, the ticket edit, `todos/0402` | **no** — `todos/` only |
 | **D1–D4 triggers** and any fix confined to `tests/kernel/test_netsurf_mutation_e2e.js` | **no** — `tests/` only |
 | **§4.2 product fix** in `vendor/netsurf/patches/netsurf.diff` (or `vendor/netsurf/gucos/`) | 🔴 **YES** — `/usr/bin/netsurf` is a baked `system` entry (`os/image.json:124-126`, `project: vendor/netsurf/gucos/bin.json`), so the blob changes and a persistent browser OPFS image only re-fetches on a version bump |
 | **§4.3 `wmctl shot` crop** in `os/wmctl.c` | 🔴 **YES** — `wmctl` is baked |
@@ -477,7 +477,7 @@ only the correction above.
 
 ## 7. Second defect found, filed not folded
 
-**`todos/0400` (P0, filed by this pass)** — a click that lands inside the re-conversion window
+**`todos/0402` (P0, filed by this pass)** — a click that lands inside the re-conversion window
 can leave `focus_owner.textarea` pointing into freed memory.
 
 `html_reconvert_box_done` frees the old tree **unconditionally and first**:

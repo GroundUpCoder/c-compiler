@@ -1,4 +1,4 @@
-# 0400 — click during a live re-conversion can leave focus_owner.textarea pointing into freed memory
+# 0402 — click during a live re-conversion can leave focus_owner.textarea pointing into freed memory
 
 - **Status**: open
 - **Design**: —

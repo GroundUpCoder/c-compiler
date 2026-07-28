@@ -27,7 +27,7 @@
     one (`/usr/bin/netsurf` and `wmctl` are baked; `os/image.json` is at 186).
   - **Item 4 correction**: this file's `driveBoot` calls *are* capped (420 s / 300 s); what is
     missing is the **per-file** cap — design it inside `0369`, per this ticket's own cross-ref.
-  - **Second defect filed, not folded**: `todos/0400` (P0) — a click landing mid-re-conversion
+  - **Second defect filed, not folded**: `todos/0402` (P0) — a click landing mid-re-conversion
     can leave `focus_owner.textarea` pointing into the `talloc_free`d old box tree.
 
 ## Goal
