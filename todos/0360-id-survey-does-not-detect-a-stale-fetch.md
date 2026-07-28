@@ -44,3 +44,32 @@ wrong.
   failing is indistinguishable from a no-op).
 - `node tests/run.js todos` green; `todos/LIABILITIES.md` L47 retired or
   re-anchored in the same commit.
+
+## Landed (branch `0360-stale-fetch`)
+
+Both plans, plus the third axis the plan did not name. `todos/idspace.js` grew a
+`freshness()` verdict printed by `add next`, `queue.js next-id` and
+`liabilities.js next-id`:
+
+- **(2) fetch → probe.** `git ls-remote` per remote, compared against the
+  remote-tracking refs, is default-ON with a 5s timeout and a non-interactive
+  git env. It never fetches (no write), it only PROVES whether one would move
+  anything. Failure/timeout degrades to (1) LOUDLY (`PROBE FAILED … CANNOT be
+  shown current`), never silently. `--offline` skips it.
+- **(1) age.** The offline fallback: `max(FETCH_HEAD mtimes across ALL
+  worktrees, newest remote-tracking reflog mtime)` — FETCH_HEAD is per-worktree
+  while the refs it updates are shared, so reading one worktree's copy reports
+  "never fetched" in every fresh worktree. Warns past 1h, when never fetched, or
+  when the lane has COMMITTED since it last looked. Only consulted when no probe
+  ran: nagging about a state just proven current is how a warning gets ignored.
+- **the third axis** — every sibling **worktree**'s uncommitted `todos/` and
+  register are surveyed from disk. That is the incident that filed this ticket,
+  and it is now a test.
+
+Policy: `add next` REFUSES (exit 1, nothing written) when the probe proves the
+survey stale; `next-id` reports and exits 0. Refuse on proof, warn on doubt.
+
+`L47` retired. Residual (an unpushed id in a DIFFERENT clone — undetectable
+without a coordination point) filed as `todos/0364` + register `L52`. Tests:
+`todos/idspace.test.js` (14, new suite case `idspace-tests`) + two CLI cases in
+`todos/queue.test.js`. Dev log: `logs/2026-07-28/0360-idspace-freshness.md`.

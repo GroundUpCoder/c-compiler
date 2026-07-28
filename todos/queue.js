@@ -33,6 +33,13 @@
 // print what they surveyed; they refuse rather than degrade silently when they
 // cannot reach git.
 //
+// A surveyed ref is only as fresh as the last fetch, so the survey MEASURES
+// that too (todos/0360): both commands print a freshness line, and `add next`
+// REFUSES to write an id when `git ls-remote` proves the remote carries refs
+// this clone has not seen. Refuse on proof, warn on doubt — a failed or
+// `--offline` probe warns loudly and still allocates, because an allocator that
+// hangs on a flaky network is worse than one that is honestly stale.
+//
 // `-h`/`--help` anywhere prints usage and exits 0 (checked before dispatch, so
 // `add --help` can never scaffold an item); an unknown `--flag` on any
 // subcommand is a usage error (exit 2, nothing written).
@@ -611,7 +618,8 @@ function cmdList(argv) {
 function nextId(fsState, opts = {}) {
   const local = [...fsState.open.keys(), ...fsState.done.keys()];
   try {
-    return IDSPACE.allocate('ticket', local, { root: REPO_ROOT, local: !!opts.local });
+    return IDSPACE.allocate('ticket', local,
+      { root: REPO_ROOT, local: !!opts.local, offline: !!opts.offline });
   } catch (e) {
     if (e instanceof IDSPACE.IdSpaceError) die(e.message);
     throw e;
@@ -797,15 +805,26 @@ advances.)
 
 function cmdAdd(argv) {
   const { flags, positional } = parseFlags('add', argv,
-    ['slug', 'title', 'after', 'blocked-by', 'pos', 'priority', 'difficulty', 'reflection', 'difficulty-triage', 'manual-ux', 'local-ids']);
+    ['slug', 'title', 'after', 'blocked-by', 'pos', 'priority', 'difficulty', 'reflection', 'difficulty-triage', 'manual-ux', 'local-ids', 'offline']);
   const fsState = scanFs();
   let id = positional[0];
   if (!id || id === 'next') {
-    // Always print the derivation (todos/0358): the ref count is the one thing
-    // that tells a lane whether the survey actually saw the other lanes, and a
-    // stale `git fetch` is invisible any other way.
-    const alloc = nextId(fsState, { local: flags['local-ids'] !== undefined });
+    // Always print the derivation (todos/0358) AND its freshness (todos/0360):
+    // the ref count says whether the survey saw the other lanes at all, and the
+    // freshness line says whether what it saw is current.
+    const alloc = nextId(fsState, {
+      local: flags['local-ids'] !== undefined, offline: flags.offline !== undefined,
+    });
     process.stdout.write(`add: ${alloc.note}\n`);
+    process.stdout.write(`add: ${alloc.freshness.line}\n`);
+    // Refuse on PROOF, not on doubt (todos/0360). `add` WRITES a file and a
+    // manifest entry, so a survey the remote has just been shown to contradict
+    // must not become an id — that is the 0354 collision with a receipt.
+    if (alloc.stale) {
+      die(`add: refusing to allocate ${alloc.id} from a survey the remote contradicts.\n` +
+          `  Run \`git fetch\` and re-run. To allocate anyway from what this clone can see,\n` +
+          `  pass --offline (skips the probe and says so) or name the id explicitly.`);
+    }
     id = alloc.id;
   }
   if (!ID_RE.test(id)) die(`add: id must be NNNN (4 digits) or "next", got "${id}"`);
@@ -867,8 +886,9 @@ function cmdAdd(argv) {
 // do I take?" must answer it for both, or the half nobody asks about keeps
 // being allocated by eye.
 function cmdNextId(argv) {
-  const { flags } = parseFlags('next-id', argv, ['local']);
+  const { flags } = parseFlags('next-id', argv, ['local', 'offline']);
   const local = flags.local !== undefined;
+  const offline = flags.offline !== undefined;
   const fsState = scanFs();
   const registerIds = [];
   try {
@@ -880,17 +900,22 @@ function cmdNextId(argv) {
   } catch { /* no register in this tree — the refs still carry one */ }
 
   let failed = 0;
+  let fresh = null;
   for (const [kind, ids] of [['ticket', [...fsState.open.keys(), ...fsState.done.keys()]],
                              ['liability', registerIds]]) {
     try {
-      const a = IDSPACE.allocate(kind, ids, { root: REPO_ROOT, local });
+      const a = IDSPACE.allocate(kind, ids, { root: REPO_ROOT, local, offline });
       process.stdout.write(`${a.id.padEnd(6)}  ${a.note}\n`);
+      fresh = a.freshness;   // one verdict for both spaces (cached, one probe)
     } catch (e) {
       if (!(e instanceof IDSPACE.IdSpaceError)) throw e;
       process.stderr.write(`next-id (${kind}): ${e.message}\n`);
       failed++;
     }
   }
+  // Printed once, after both ids: next-id REPORTS, it writes nothing, so a
+  // stale survey here is loud rather than fatal — `add` is where it refuses.
+  if (fresh) process.stdout.write(`        ${fresh.line}\n`);
   if (failed) process.exit(1);
 }
 
@@ -1046,8 +1071,11 @@ const USAGE = `queue.js — the todos ordering-manifest CLI
           [--manual-ux]                         recurring, self-perpetuating "manual UX bug sweep" scaffold
           [--local-ids]                         allocate "next" from the working tree ALONE
                                                 (opt out of the cross-ref survey — see next-id)
-  next-id [--local]                             the next free ticket AND liability id, derived
-                                                across every ref + the working tree (todos/0358)
+          [--offline]                           skip the git ls-remote freshness probe; warn from
+                                                the local clock instead of refusing (todos/0360)
+  next-id [--local] [--offline]                 the next free ticket AND liability id, derived
+                                                across every ref + every sibling worktree + the
+                                                working tree, with a freshness verdict (0358/0360)
   set-priority <ID> <0..3>                      set an entry's priority (1 = default,
                                                 removes the field)
   set-difficulty <ID> <light|medium|heavy|none> set an entry's difficulty tag

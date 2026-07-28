@@ -52,9 +52,16 @@ Planned work lives in `todos/` (system doc: `todos/README.md`):
   allocated across ALL REFS** (todos/0358): a lane's branch — `origin/main`
   included — is a LOWER BOUND on the id space, not the id space, which is how
   `0354` and the register's `L44` were each handed out twice. `add next` and
-  `next-id` (ticket + liability id, `git fetch` first) survey every ref and
-  refuse rather than degrade silently; two files sharing an id fail `check`.
-  Full convention: `todos/README.md` §1 "Maintaining the queue".
+  `next-id` (ticket + liability id) survey every ref and refuse rather than
+  degrade silently; two files sharing an id fail `check`. Since todos/0360 the
+  survey also MEASURES its own staleness instead of disclaiming it (that
+  disclaimer collided the day it shipped): both commands print a `freshness:`
+  line, `git ls-remote` proves whether a fetch would move anything (5s timeout,
+  loud degrade, `--offline` skips it), every sibling **worktree**'s uncommitted
+  `todos/` is surveyed too, and `add next` REFUSES to write an id the remote
+  contradicts — refuse on proof, warn on doubt. An unpushed id in a different
+  CLONE stays invisible (todos/0364). Full convention: `todos/README.md` §1
+  "Maintaining the queue".
 - **Design/topic docs**: `todos/NAME.md` (OS.md, KERNEL.md, SDL3.md, …) —
   long-lived designs and backlogs that queue items reference for detail.
 - **Liability register**: `todos/LIABILITIES.md` (todos/0286) — the index of
