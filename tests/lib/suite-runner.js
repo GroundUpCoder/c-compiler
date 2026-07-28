@@ -16,10 +16,12 @@
 //   - --resume (skip files that passed in the previous summary), --filter,
 //     --fail-fast, --timeout, -j, --list
 //   - a summary that records its own SCOPE (todos/0339): `filter`, a `files`
-//     block (total / selected / executed / carried / recorded) and a `runs`
-//     list, and results MERGED across runs so a two-`--filter`-half sweep
-//     accounts for the whole suite instead of the second half deleting the
-//     first. See the selection + merge blocks in runSuite.
+//     block (total / selected / executed / carried / carriedFailed / recorded /
+//     staleDropped) and a `runs` list, and results MERGED across runs so a
+//     two-`--filter`-half sweep accounts for the whole suite instead of the
+//     second half deleting the first. What `recorded == total` certifies — and
+//     deliberately does not — is stated at the merge block in runSuite
+//     (todos/0368); the carried-FAIL exit contract at the closing summary.
 //
 // Stale per-file logs are deliberately NOT cleared at suite start. Under the
 // merge above, a carried result's `log` points at a log written by an earlier
@@ -169,11 +171,15 @@ Artifacts: <artifactDir>/summary.json (checkpointed after every file) and
 <artifactDir>/<file>.log (combined stdout+stderr per file).
 
 summary.json records the run's SCOPE (todos/0339): \`filter\`, a \`files\` block
-(total / selected / executed / resumed / carried / recorded) and a \`runs\` list.
-Results are MERGED across runs — a suite split into two --filter halves ends up
-with one record accounting for the whole suite, with each half's results tagged
-by the run that measured them. \`recorded\` == \`total\` is what "the whole suite
-was covered" looks like on disk.
+(total / selected / executed / resumed / carried / carriedFailed / recorded /
+staleDropped) and a \`runs\` list. Results are MERGED across runs — a suite
+split into two --filter halves ends up with one record accounting for the whole
+suite, with each half's results tagged by the run that measured them.
+\`recorded\` == \`total\` is what "the whole suite was covered" looks like on
+disk: every CURRENT suite file has a record (todos/0368 — a stale record for a
+deleted/renamed file is dropped at merge, loudly, and cannot stand in). It does
+not mean measured-now (see \`runs\`) or green (see \`carriedFailed\` — a carried
+FAIL is red in the record but never fails a later run's exit).
 `;
 }
 
@@ -253,14 +259,40 @@ async function runSuite(entries, opts) {
 
   // ---- merge, so half 2 cannot delete half 1 (todos/0339) ----
   //
-  // Results for files this run did not select are carried forward, tagged, and
-  // stamped with the run that actually measured them. Merging must never make a
-  // stale result look fresh: `carried` says it was not measured now, and
-  // `carriedFrom` (plus the `runs` list) says exactly when it was. A file this
-  // run DID select is never carried — its fresh result replaces the old one,
-  // and if fail-fast stopped before it ran, the record simply lacks it.
+  // THE `recorded == total` CONTRACT (todos/0368 — canonical statement).
+  // `files.recorded == files.total` in summary.json certifies exactly this:
+  //
+  //   every file in the suite's CURRENT entry table has at least one result
+  //   record in this summary — measured either by this run (fresh, or this
+  //   run's own --resume chain) or by a prior merged run (tagged `carried`,
+  //   stamped `carriedFrom`).
+  //
+  // It does NOT certify freshness (a carried record may be arbitrarily old —
+  // the `runs` list says when each contributor ran; a consumer that needs
+  // "measured now" must require executed + resumed == total) and it does NOT
+  // certify greenness (`recorded` counts records, not passes — statuses live
+  // on the records; see the carried-FAIL contract at the closing summary).
+  //
+  // Two rules keep the certificate honest:
+  //   (a) a record counts only if its file is in the CURRENT entry table. A
+  //       summary from before a delete/rename can hold a record for a file
+  //       that no longer exists; carrying it would let that ghost offset a
+  //       missing record for a current file (rename D→E, filter around E: the
+  //       stale D record kept recorded == total while E was never measured).
+  //       Stale records are dropped here — loudly (`staleDropped` + a warning
+  //       line), never silently.
+  //   (b) a file this run DID select is never carried — its fresh result
+  //       replaces the old one, and if fail-fast stopped before it ran, the
+  //       record simply lacks it.
+  //
+  // Results for current-but-unselected files are carried forward, tagged, and
+  // stamped with the run that actually measured them. Merging must never make
+  // a stale result look fresh: `carried` says it was not measured now, and
+  // `carriedFrom` (plus the `runs` list) says exactly when it was.
+  const currentSet = new Set(entries.map(e => e.file));
+  const staleDropped = [...new Set(prevResults.filter(r => !currentSet.has(r.file)).map(r => r.file))];
   const carried = prevResults
-    .filter(r => !selectedSet.has(r.file))
+    .filter(r => currentSet.has(r.file) && !selectedSet.has(r.file))
     .map(r => Object.assign({}, r, {
       carried: true,
       carriedFrom: r.carriedFrom || (prev && prev.startedAt) || null,
@@ -326,7 +358,13 @@ async function runSuite(entries, opts) {
         executed: thisRun.executed,
         resumed: resumed.length,
         carried: new Set(carried.map(r => r.file)).size,
+        // Distinct carried files whose result is red. Deliberately NOT part of
+        // this run's exit code (the carried-FAIL contract, closing summary) —
+        // but a whole-suite-green consumer must see it here.
+        carriedFailed: new Set(carried.filter(r => r.status !== 'pass').map(r => r.file)).size,
         recorded: new Set(all.map(r => r.file)).size,
+        // Records dropped because their file left the suite (rule (a) above).
+        staleDropped: staleDropped.length,
       },
       runs: priorRuns.concat([thisRun]),
       results: all,
@@ -451,6 +489,13 @@ async function runSuite(entries, opts) {
     process.stdout.write(`\x1b[33m⚠ ${opts.name}: --filter=${opts.filter} selected `
       + `${selectedSet.size} of ${totalFiles} files — this run covers PART of the suite.\x1b[0m\n`);
   }
+  // Rule (a) of the recorded==total contract, loud half: a dropped record must
+  // be announced, never silently pruned (the no-silent-caps rule) — the reader
+  // of a suddenly-partial record needs to know WHY it went partial.
+  if (staleDropped.length) {
+    process.stdout.write(`\x1b[33m⚠ ${opts.name}: dropped ${staleDropped.length} stale record(s) for `
+      + `file(s) no longer in the suite: ${staleDropped.join(', ')}\x1b[0m\n`);
+  }
 
   const banner = `--- ${opts.name} (${files.length} ${repeat > 1 ? 'runs' : 'files'}` +
     (repeat > 1 ? ` = ${files.length / repeat}×${repeat} repeat` : '') +
@@ -502,16 +547,30 @@ async function runSuite(entries, opts) {
   checkpoint(true);
   const elapsed = fmtSecs(Date.now() - t0);
   const recorded = new Set(carried.concat(resumed, results).map(r => r.file)).size;
+  // The carried-FAIL contract (todos/0368). `failed` — and with it this run's
+  // exit code — covers ONLY what this run measured (executed files + its own
+  // resume chain). A carried FAIL does not fail this exit: the run that
+  // measured it already exited red, and this run was explicitly asked not to
+  // re-measure that file (it was filtered out). Failing here would push a lane
+  // that just fixed file A under --filter=A to delete summary.json for a green
+  // exit — destroying the whole-suite record the merge exists to keep. The red
+  // stays VISIBLE instead: status 'fail' + carried tags on the record,
+  // `files.carriedFailed` in the manifest and return value, and the count on
+  // this closing line. A consumer that wants "whole suite green" must read the
+  // RECORD (every result green AND recorded == total), never one exit code.
+  const carriedFailed = new Set(carried.filter(r => r.status !== 'pass').map(r => r.file)).size;
   const parts = [`${passed} passed`, `${failed} failed`];
   if (resumed.length) parts.push(`${resumed.length} resumed`);
   if (carried.length) parts.push(`${carried.length} carried from earlier run(s)`);
+  if (carriedFailed) parts.push(`\x1b[31m${carriedFailed} carried FAIL(s) — red in the record, not in this exit\x1b[0m`);
   if (bailed) parts.push('(fail-fast: remaining files not run)');
   const coverage = `[${selectedSet.size}/${totalFiles} selected, ${recorded}/${totalFiles} recorded]`;
   process.stdout.write(`\n${opts.name}: ${parts.join(', ')}  (${elapsed})  ${coverage}  `
     + `summary: ${path.relative(process.cwd(), summaryPath)}\n`);
   return {
     passed, failed, resumed: resumed.length, bailed, flake,
-    files: { total: totalFiles, selected: selectedSet.size, carried: carried.length, recorded },
+    files: { total: totalFiles, selected: selectedSet.size, carried: carried.length,
+             carriedFailed, recorded, staleDropped: staleDropped.length },
   };
 }
 

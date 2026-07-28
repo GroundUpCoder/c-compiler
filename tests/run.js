@@ -643,14 +643,17 @@ function printDiffPlan(ref, files, info, suites) {
 
 // `[N/M files]` when a suite reports its selection, marked PARTIAL when the
 // record does not account for the whole suite (todos/0339) — the one line that
-// stops "sweep: pass" from meaning "some of the sweep passed".
+// stops "sweep: pass" from meaning "some of the sweep passed". A carried FAIL
+// is red in the RECORD but never in a later run's exit code (the carried-FAIL
+// contract, todos/0368) — so this line is where it must show.
 function fmtCoverage(files) {
   if (!files || files.total == null) return '';
   const rec = files.recorded != null ? files.recorded : files.selected;
   const partial = rec < files.total;
   return `  ${partial ? '\x1b[33m' : ''}[${rec}/${files.total} files`
     + (files.carried ? `, ${files.carried} carried` : '')
-    + (partial ? ' — PARTIAL' : '') + `]${partial ? '\x1b[0m' : ''}`;
+    + (partial ? ' — PARTIAL' : '') + `]${partial ? '\x1b[0m' : ''}`
+    + (files.carriedFailed ? `  \x1b[31m[${files.carriedFailed} carried FAIL]\x1b[0m` : '');
 }
 
 function printFinal(results, ms) {
