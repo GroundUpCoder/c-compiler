@@ -28,6 +28,7 @@ Categories:
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -1527,12 +1528,50 @@ def run_libc_tests(results, filter_str=None):
 # so any mismatch is a guaranteed miscompile.
 # Tier 2 (optional): if a csmith generator binary is found, also
 # generate a few fresh seeds and differential-test them against clang.
+#
+# ORACLE SOUNDNESS (todos/0404): the native oracle is host clang, LP64
+# (long = 64-bit); compiler.js targets wasm32, ILP32 (long = 32-bit).
+# An L-suffixed literal in (INT32_MAX, UINT32_MAX] is a SIGNED 64-bit
+# long natively but an UNSIGNED 32-bit long under ILP32 (C11 6.4.4.1p5),
+# and UL literals differ in width — so a raw csmith program can be a
+# DIFFERENT program on each side (seed 450020699's is: correct ILP32
+# execution never terminates). Both sides therefore compile a
+# width-normalized copy: every L/UL integer-literal suffix is rewritten
+# to LL/ULL, which is a semantic no-op for LP64 clang (long == long
+# long there) and gives the wasm side the oracle's literal types. The
+# recorded tier-1 checksums came from LP64 clang on the raw sources, so
+# they remain valid for the normalized ones. ILP32-specific literal
+# typing itself is guarded by tests/unit/conformance/
+# ilp32_long_literal_typing (a differential against an LP64 oracle
+# cannot test it).
 
 CSMITH_GEN_FLAGS = ["--max-funcs", "4", "--max-block-depth", "3",
                     "--max-array-dim", "2", "--max-array-len-per-dim", "4",
                     "--max-struct-fields", "6", "--max-expr-complexity", "8",
                     "--no-packed-struct"]
 CSMITH_LIVE_SEEDS = 5  # fresh seeds per run when the generator is available
+
+# L or UL (any case/order) on a decimal or hex integer literal, not
+# already LL/ULL, not a float suffix (the lookbehind rejects "1.5L").
+CSMITH_LONG_SUFFIX_RE = re.compile(
+    r'(?<!\.)\b(0[xX][0-9a-fA-F]+|\d+)([uU][lL]|[lL][uU]|[lL])(?!\w)')
+
+
+def normalize_long_literals(src_path, dst_path):
+    """Copy a csmith program, rewriting L/UL literal suffixes to LL/ULL.
+
+    See the ORACLE SOUNDNESS note above: this pins every long-typed
+    literal to 64 bits so the LP64 native oracle and the ILP32 wasm
+    build agree on the program's types.
+    """
+    with open(src_path) as f:
+        src = f.read()
+    out = CSMITH_LONG_SUFFIX_RE.sub(
+        lambda m: m.group(1) + ("ULL" if "u" in m.group(2).lower() else "LL"),
+        src)
+    with open(dst_path, "w") as f:
+        f.write(out)
+    return dst_path
 
 
 def find_csmith():
@@ -1575,7 +1614,10 @@ def run_fuzz_tests(results, filter_str=None):
         test_name = f"fuzz/{fname[:-2]}"
         if filter_str and filter_str not in test_name:
             continue
-        got, err = compile_and_run(os.path.join(corpus_dir, fname), fname[:-2])
+        src = normalize_long_literals(
+            os.path.join(corpus_dir, fname),
+            os.path.join(TEST_TMPDIR, f"fuzz_{fname[:-2]}_n64.c"))
+        got, err = compile_and_run(src, fname[:-2])
         if err:
             results.record(test_name, False, err)
         elif got == expected:
@@ -1598,6 +1640,12 @@ def run_fuzz_tests(results, filter_str=None):
         try:
             subprocess.run([gen, "--seed", str(seed), *CSMITH_GEN_FLAGS, "-o", src],
                            check=True, timeout=60)
+            # both sides compile the SAME normalized program (ORACLE
+            # SOUNDNESS note above) — a raw csmith file can mean two
+            # different programs to an LP64 native build and an ILP32
+            # wasm build.
+            src = normalize_long_literals(
+                src, os.path.join(TEST_TMPDIR, f"fuzz_live_{seed}_n64.c"))
             nat = os.path.join(TEST_TMPDIR, f"fuzz_live_{seed}_n")
             r = subprocess.run(["clang", "-w", f"-I{runtime_dir}", src, "-o", nat],
                                capture_output=True, text=True, timeout=120)
@@ -1620,7 +1668,9 @@ def run_fuzz_tests(results, filter_str=None):
             results.record(test_name, False,
                            f"seed {seed}: checksum mismatch (MISCOMPILE): "
                            f"native {n.stdout.strip()!r}, wasm {got!r} — "
-                           f"reproduce: csmith --seed {seed} {' '.join(CSMITH_GEN_FLAGS)}")
+                           f"reproduce: csmith --seed {seed} {' '.join(CSMITH_GEN_FLAGS)}"
+                           f", then rewrite L/UL literal suffixes to LL/ULL"
+                           f" (normalize_long_literals) before comparing")
 
 
 # --- sourcemap tests ---
