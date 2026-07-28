@@ -2784,6 +2784,40 @@ var BLOCK_FS = (function () {
     return ino ? { inoId: inoId, ino: ino } : null;
   };
 
+  // Splice a final-component symlink's target into its path — the same rules
+  // as _walkHops (absolute target restarts from root; relative joins the
+  // link's directory; on a mounted volume the target resolves in the FULL
+  // namespace and a foreign one throws __mountEscape). Returns the next
+  // volume-relative resolved path, or null for an empty target. Used by the
+  // open(O_CREAT) final-symlink chase (todos/0375). NB the escape throw is a
+  // can't-happen guard there: open's initial FULL walk follows the same
+  // chain, so a foreign hop escapes (and MountFS reroutes) before the create
+  // branch ever runs — if it fires anyway, MountFS surfaces it loudly.
+  BlockFS.prototype._spliceFinalLink = function (resolved, ino) {
+    var tlen = ino.dataSize;
+    var target = (ino.extentOffset && tlen > 0)
+      ? decodeStr(this._s.getBytes(ino.extentOffset, tlen)) : '';
+    if (!target) return null;
+    var dirPath = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
+    if (this._mountOwns) {
+      var pfx = this._mountPrefix === '/' ? '' : this._mountPrefix;
+      var full = target.charAt(0) === '/'
+        ? target
+        : pfx + (dirPath === '/' ? '' : dirPath) + '/' + target;
+      full = this._resolvePath(full);
+      var rel = this._mountOwns(full);
+      if (rel === null) {
+        var esc = new Error('mount escape to ' + full);
+        esc.__mountEscape = full;
+        throw esc;
+      }
+      return this._resolvePath(rel);
+    }
+    return this._resolvePath(target.charAt(0) === '/'
+      ? target
+      : (dirPath === '/' ? '' : dirPath) + '/' + target);
+  };
+
   // Allocate or grow a data extent for an inode.
   BlockFS.prototype._growExtent = function (ino, neededSize) {
     if (!ino.extentOffset) {
@@ -2873,6 +2907,30 @@ var BLOCK_FS = (function () {
 
     var resolved = this._resolvePath(path);
     var w = this._walkPath(resolved);
+
+    if (!w && create) {
+      // O_CREAT whose final component is a symlink must act on the link's
+      // TARGET — POSIX open() follows the final symlink even when creating.
+      // The full walk above only says the chain ends nowhere; without this
+      // chase the create branch below would insert a SECOND dirent under
+      // the link's own lexical name — a duplicate directory entry, on-disk
+      // corruption (todos/0375). Chase the final-component chain by lstat
+      // hops, ELOOP-bounded; O_CREAT|O_EXCL refuses on the symlink itself
+      // (POSIX: EEXIST regardless of where it points).
+      var hops = 0;
+      var lw = this._walkPath(resolved, true);
+      while (lw && (lw.ino.mode & S_IFMT) === S_IFLNK) {
+        if (excl) return this._setErr('EEXIST');
+        if (++hops > SYMLOOP_MAX) return this._setErr('ELOOP');
+        var next = this._spliceFinalLink(resolved, lw.ino);
+        if (next === null) return this._setErr('ENOENT'); // empty link target
+        resolved = next;
+        lw = this._walkPath(resolved, true);
+      }
+      // Normally still null (create at `resolved` below); non-null would
+      // mean the chase landed on a real file — open that.
+      w = lw;
+    }
 
     // Read-only volume (todos/0040): any write-intent open is EROFS. AFTER
     // the walk: a path that resolves out of this volume via a symlink
@@ -3126,7 +3184,10 @@ var BLOCK_FS = (function () {
 
   BlockFS.prototype.mkdir = function (path, mode) {
     var resolved = this._resolvePath(path);
-    if (this._walkPath(resolved)) return this._setErr('EEXIST');
+    // noFollowFinal: a dangling symlink at the target name still EEXISTs
+    // (POSIX — mkdir never follows the final symlink); a full-follow walk
+    // answered "doesn't exist" and inserted a DUPLICATE dirent (todos/0375).
+    if (this._walkPath(resolved, true)) return this._setErr('EEXIST');
 
     var parentPath = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
     var dirName = resolved.substring(resolved.lastIndexOf('/') + 1);
@@ -3174,7 +3235,8 @@ var BLOCK_FS = (function () {
   // lives in the inode's rdev field. v4 only (v3 inodes have no rdev field).
   BlockFS.prototype.mknod = function (path, mode, dev) {
     var resolved = this._resolvePath(path);
-    if (this._walkPath(resolved)) return this._setErr('EEXIST');
+    // noFollowFinal: same duplicate-dirent guard as mkdir (todos/0375).
+    if (this._walkPath(resolved, true)) return this._setErr('EEXIST');
     var parentPath = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
     var pw = this._walkPath(parentPath);
     if (!pw) return this._setErr('ENOENT');
@@ -3763,7 +3825,9 @@ var BLOCK_FS = (function () {
     if ((oldW.ino.mode & S_IFMT) === S_IFDIR) return this._setErr('EPERM');
 
     var newResolved = this._resolvePath(newPath);
-    if (this._walkPath(newResolved)) return this._setErr('EEXIST');
+    // noFollowFinal: same duplicate-dirent guard as mkdir (todos/0375);
+    // POSIX link() never follows newpath's final component.
+    if (this._walkPath(newResolved, true)) return this._setErr('EEXIST');
 
     var parentPath = newResolved.substring(0, newResolved.lastIndexOf('/')) || '/';
     var fileName = newResolved.substring(newResolved.lastIndexOf('/') + 1);
