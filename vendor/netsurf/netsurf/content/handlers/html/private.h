@@ -147,15 +147,17 @@ typedef struct html_content {
 	bool reconverting;
 	/** Mutations arrived while a re-conversion was in progress */
 	bool reconvert_pending;
-	/** DOM node of the text gadget that held the caret when a live
-	 * re-conversion began, so focus can be handed back to its NEW box
-	 * once the swap lands (own reference, NULL if nothing was focused).
-	 * Focus points INTO the box tree exactly like the selection and the
-	 * gadget back-pointers do, so it has to be re-bound the same way —
-	 * otherwise typing dies at the first mutation the page makes. */
-	struct dom_node *reconvert_focus_node;
-	/** Caret character index to restore alongside it */
-	int reconvert_focus_caret;
+	/** Text gadget that claimed the caret DURING a live re-conversion,
+	 * before its new box existed (a click landing mid-window):
+	 * recorded by box_textarea_callback, honoured when construction
+	 * recreates that gadget's widget.  Gadgets outlive the window (the
+	 * forms own them), so the pointer cannot dangle inside it.  NULL
+	 * outside a re-conversion.  Unlike drag and selection, the FOCUS
+	 * itself is NOT surrendered for the window: it is the input
+	 * routing table, the old box it names stays alive serving input
+	 * until the swap by design, and html_reconvert_box_done re-binds
+	 * it to the new tree at the swap. */
+	struct form_control *reconvert_focus_claim;
 	/** Document background colour. */
 	colour background_colour;
 

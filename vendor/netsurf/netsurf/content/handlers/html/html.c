@@ -582,6 +582,8 @@ static void html__clear_box_userdata(dom_node *node)
  */
 static void html_reconvert_box_done(html_content *c, bool success)
 {
+	dom_node *focus_node = NULL;
+
 	c->box_conversion_context = NULL;
 
 	if ((success == false) || (c->aborted)) {
@@ -598,16 +600,37 @@ static void html_reconvert_box_done(html_content *c, bool success)
 		}
 		c->bctx = c->reconvert_old_bctx;
 		c->reconvert_old_bctx = NULL;
-		if (c->reconvert_focus_node != NULL) {
-			/* the boxes it would have been re-bound to never
-			 * existed; the old tree is back but its focus was
-			 * already surrendered */
-			dom_node_unref(c->reconvert_focus_node);
-			c->reconvert_focus_node = NULL;
+		if (c->focus_type == HTML_FOCUS_TEXTAREA) {
+			/* The owner may be a partial-new-tree box that died
+			 * with c->bctx just now, and the old tree's node
+			 * userdata was already cleared, so there is nothing
+			 * valid to re-bind to.  Drop to document focus (this
+			 * is the loud-logged failure path). */
+			c->focus_type = HTML_FOCUS_SELF;
+			c->focus_owner.self = true;
 		}
+		c->reconvert_focus_claim = NULL;
 		c->reconverting = false;
 		return;
 	}
+
+	/* Snapshot the focused text gadget's DOM node BEFORE the old tree
+	 * dies.  The owner box may be old-tree (kept alive and routing
+	 * input for the whole window) or already new-tree (a caret update
+	 * fired after construction re-bound the gadget); the gadget's node
+	 * names it either way.  Taking the snapshot HERE — not at the
+	 * window start — is what carries a focus change made DURING the
+	 * window (a click) across the swap instead of throwing it away. */
+	if ((c->focus_type == HTML_FOCUS_TEXTAREA) &&
+	    (c->focus_owner.textarea != NULL) &&
+	    (c->focus_owner.textarea->gadget != NULL) &&
+	    (c->focus_owner.textarea->gadget->node != NULL)) {
+		focus_node = dom_node_ref(c->focus_owner.textarea->gadget->node);
+		/* scrub the possibly-dying owner while reformat runs */
+		c->focus_type = HTML_FOCUS_SELF;
+		c->focus_owner.self = true;
+	}
+	c->reconvert_focus_claim = NULL;
 
 	/* the new tree took over c->layout inside convert_xml_to_box;
 	 * everything reachable from the old tree dies here (box
@@ -627,34 +650,35 @@ static void html_reconvert_box_done(html_content *c, bool success)
 	content__request_redraw(&c->base, 0, 0,
 				c->base.width, c->base.height);
 
-	/* Hand the caret back to whatever now boxes the focused node.  This
-	 * runs AFTER the reformat because html_set_focus reports the caret's
-	 * screen position, which is only known once layout has run.  A node
-	 * that lost its box (removed, display:none) simply keeps the focus
-	 * on the document, which is what a browser does anyway. */
-	if (c->reconvert_focus_node != NULL) {
-		struct box *fb = box_for_node(c->reconvert_focus_node);
+	/* Re-bind the focus to whatever now boxes the focused node.  This
+	 * runs AFTER the reformat because the CARET_UPDATE that the caret
+	 * restore raises reports the caret's screen position, which is only
+	 * known once layout has run.  A node that lost its box (removed,
+	 * display:none) simply keeps the focus on the document, which is
+	 * what a browser does anyway.  The re-bind is a DIRECT assignment,
+	 * not html_set_focus: the gadget never conceptually lost the focus,
+	 * so the blur/focus bookkeeping must not run. */
+	if (focus_node != NULL) {
+		struct box *fb = box_for_node(focus_node);
 
 		if ((fb != NULL) && (fb->gadget != NULL) &&
 		    (fb->gadget->data.text.ta != NULL)) {
-			union html_focus_owner fo;
+			int caret = textarea_get_caret_char(
+					fb->gadget->data.text.ta);
 
-			/* Claim the focus with the caret HIDDEN first: only
-			 * the textarea knows where the caret actually is, and
-			 * it reports that through its own CARET_UPDATE
-			 * callback — which lands on html_set_focus again with
-			 * real coordinates.  Setting a position here would
-			 * just be a zero-height guess for it to correct. */
-			fo.textarea = fb;
-			html_set_focus(c, HTML_FOCUS_TEXTAREA, fo,
-				       true, 0, 0, 0, NULL);
-			if (c->reconvert_focus_caret >= 0) {
+			c->focus_type = HTML_FOCUS_TEXTAREA;
+			c->focus_owner.textarea = fb;
+			/* The widget carried its caret across recreation
+			 * (box_textarea_create_textarea), and keys routed
+			 * mid-window may have advanced it, so the LIVE value
+			 * is authoritative.  Re-firing it here reports the
+			 * post-layout position through CARET_UPDATE. */
+			if (caret >= 0) {
 				textarea_set_caret(fb->gadget->data.text.ta,
-						   c->reconvert_focus_caret);
+						   caret);
 			}
 		}
-		dom_node_unref(c->reconvert_focus_node);
-		c->reconvert_focus_node = NULL;
+		dom_node_unref(focus_node);
 	}
 
 	c->reconverting = false;
@@ -697,35 +721,24 @@ static void html__reconvert(void *p)
 		c->visible_select_menu = NULL;
 	}
 
-	/* Remember which text gadget holds the caret, so the new tree can be
-	 * handed the focus back: the focus owner is a box pointer, and a
-	 * page that mutates the DOM while the user types would otherwise
-	 * swallow every keystroke after the first mutation. */
-	if (c->reconvert_focus_node != NULL) {
-		dom_node_unref(c->reconvert_focus_node);
-		c->reconvert_focus_node = NULL;
-	}
-	c->reconvert_focus_caret = -1;
-	if ((c->focus_type == HTML_FOCUS_TEXTAREA) &&
-	    (c->focus_owner.textarea != NULL) &&
-	    (c->focus_owner.textarea->gadget != NULL) &&
-	    (c->focus_owner.textarea->gadget->node != NULL)) {
-		struct form_control *fc = c->focus_owner.textarea->gadget;
-
-		c->reconvert_focus_node = dom_node_ref(fc->node);
-		if (fc->data.text.ta != NULL) {
-			c->reconvert_focus_caret =
-				textarea_get_caret_char(fc->data.text.ta);
-		}
-	}
-
-	/* drop interaction state that can point into the box tree */
+	/* Drop interaction state that can point into the box tree — EXCEPT
+	 * a text gadget's focus.  The focus is the input routing table:
+	 * surrendering it here silently discarded every printable key typed
+	 * during the window (todos/0386), while the old box it names stays
+	 * alive serving input until the swap BY DESIGN.  It stays valid for
+	 * the whole build-then-swap interval and html_reconvert_box_done
+	 * re-binds it to the new tree at the swap.  Content focus (an
+	 * embedded object) cannot be kept: the objects themselves are freed
+	 * below and refetched by construction. */
 	c->drag_type = HTML_DRAG_NONE;
 	c->drag_owner.no_owner = true;
 	c->selection_type = HTML_SELECTION_NONE;
 	c->selection_owner.none = true;
-	c->focus_type = HTML_FOCUS_SELF;
-	c->focus_owner.self = true;
+	if (c->focus_type != HTML_FOCUS_TEXTAREA) {
+		c->focus_type = HTML_FOCUS_SELF;
+		c->focus_owner.self = true;
+	}
+	c->reconvert_focus_claim = NULL;
 
 	/* fully reset the selection object: selection_reinit (run later by
 	 * reformat) clamps indices but leaves a live drag_state, which
@@ -875,8 +888,7 @@ html_create_html_data(html_content *c, const http_parameter *params)
 	c->reconvert_old_bctx = NULL;
 	c->reconverting = false;
 	c->reconvert_pending = false;
-	c->reconvert_focus_node = NULL;
-	c->reconvert_focus_caret = -1;
+	c->reconvert_focus_claim = NULL;
 	c->background_colour = NS_TRANSPARENT;
 	c->stylesheet_count = 0;
 	c->stylesheets = NULL;
@@ -1629,10 +1641,7 @@ static void html_destroy(struct content *c)
 
 	/* Cancel any coalesced live re-conversion pass */
 	guit->misc->schedule(-1, html__reconvert, html);
-	if (html->reconvert_focus_node != NULL) {
-		dom_node_unref(html->reconvert_focus_node);
-		html->reconvert_focus_node = NULL;
-	}
+	html->reconvert_focus_claim = NULL;
 
 	/* If we're still converting a layout, cancel it */
 	if (html->box_conversion_context != NULL) {

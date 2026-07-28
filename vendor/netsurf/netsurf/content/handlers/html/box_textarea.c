@@ -153,6 +153,13 @@ static void box_textarea_callback(void *data, struct textarea_msg *msg)
 				.y1 = INT_MAX
 			};
 			union html_drag_owner drag_owner;
+
+			if (box == NULL) {
+				/* mid-re-conversion, before construction
+				 * re-bound this gadget to its new box: no
+				 * box to own the drag */
+				break;
+			}
 			drag_owner.textarea = box;
 
 			switch (msg->data.drag) {
@@ -194,6 +201,13 @@ static void box_textarea_callback(void *data, struct textarea_msg *msg)
 			break;
 		}
 
+		if (box == NULL) {
+			/* Mid-re-conversion, before construction re-bound
+			 * this gadget to its new box: no coordinates to
+			 * offset by, and the swap repaints everything. */
+			break;
+		}
+
 		box_coords(box, &x, &y);
 
 		content__request_redraw((struct content *)html,
@@ -226,6 +240,20 @@ static void box_textarea_callback(void *data, struct textarea_msg *msg)
 	case TEXTAREA_MSG_CARET_UPDATE:
 		if (html->bw == NULL)
 			break;
+
+		if (box == NULL) {
+			/* A caret claim DURING a live re-conversion, before
+			 * this gadget's new box exists (a click landing
+			 * mid-window, todos/0402): there is no box to focus
+			 * yet, so remember the claimant — widget recreation
+			 * consumes the claim and hands the focus over once
+			 * the new box is bound. */
+			if (html->reconverting &&
+			    msg->data.caret.type != TEXTAREA_CARET_HIDE) {
+				html->reconvert_focus_claim = gadget;
+			}
+			break;
+		}
 
 		if (msg->data.caret.type == TEXTAREA_CARET_HIDE) {
 			union html_focus_owner focus_owner;
@@ -273,6 +301,7 @@ bool box_textarea_create_textarea(html_content *html,
 	bool disabled = false;
 	struct form_control *gadget = box->gadget;
 	const char *text;
+	int caret = -1;
 
 	assert(gadget != NULL);
 	assert(gadget->type == GADGET_TEXTAREA ||
@@ -365,6 +394,19 @@ bool box_textarea_create_textarea(html_content *html,
 		gadget->data.text.initial = NULL;
 	}
 	if (gadget->data.text.ta != NULL) {
+		/* Carry the caret across the recreation: keys routed to
+		 * the recreated widget would otherwise insert at position
+		 * 0 (textarea_get_caret defaults an unset caret).  Only
+		 * the gadget that HOLDS the focus — or that claimed it
+		 * mid-window before this box existed — carries; a
+		 * lingering caret on an unfocused gadget must not steal
+		 * the focus when the restore below re-raises it. */
+		if ((html->focus_type == HTML_FOCUS_TEXTAREA &&
+		     html->focus_owner.textarea != NULL &&
+		     html->focus_owner.textarea->gadget == gadget) ||
+		    html->reconvert_focus_claim == gadget) {
+			caret = textarea_get_caret_char(gadget->data.text.ta);
+		}
 		textarea_destroy(gadget->data.text.ta);
 		gadget->data.text.ta = NULL;
 	}
@@ -389,6 +431,19 @@ bool box_textarea_create_textarea(html_content *html,
 		return false;
 	}
 	gadget->building = false;
+
+	if (caret >= 0) {
+		/* Restore the carried caret.  gadget->box is already the
+		 * NEW box (bound before this call), so the CARET_UPDATE
+		 * this raises re-takes the focus for this gadget — a
+		 * mid-window claim materialises here.  The position it
+		 * reports is pre-layout; html_reconvert_box_done re-fires
+		 * it after the reformat. */
+		if (html->reconvert_focus_claim == gadget) {
+			html->reconvert_focus_claim = NULL;
+		}
+		textarea_set_caret(gadget->data.text.ta, caret);
+	}
 
 	return true;
 }

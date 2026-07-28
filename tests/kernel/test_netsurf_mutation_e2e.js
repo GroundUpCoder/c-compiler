@@ -154,7 +154,19 @@ const typingPageBig = (title, n, periodMs) => `<html>
 <body>
 <input id="i" type="text" size="20" value="">
 <div id="d">tick 0</div>
+<div id="vbar" style="height: 12px; width: 0px; background: #ff8800;"></div>
+<div id="vok" style="height: 12px; width: 120px; background: #ffff00;"></div>
 ${'<div class="p"></div>\n'.repeat(n)}<script>
+var fld = document.getElementById('i');
+var vbar = document.getElementById('vbar');
+var vok = document.getElementById('vok');
+/* value-level probe, decodable by pure colour count (no geometry): the
+ * orange bar's area encodes value LENGTH (30px per char x 12px tall),
+ * the second band goes green only on the exact expected value */
+fld.addEventListener('input', function () {
+	vbar.style.width = (fld.value.length * 30) + 'px';
+	vok.style.background = (fld.value === 'abcdef') ? '#00ff00' : '#ff00ff';
+});
 ${periodMs ? `var n = 0;
 var box = document.getElementById('d');
 setTimeout(function () {
@@ -391,7 +403,9 @@ const out = driveBoot([
   sidOf('BT', 'NsBigT'),
   'wmctl click $BT 60 12',
   'sleep 2',                      /* ticking is now underway */
-  ...TYPE_KEYS('$BT'),
+  ...TYPED.flatMap(([sc, ks], i) =>
+    [`wmctl key $BT ${sc} ${ks}; sleep 0.25`,
+     `wmctl shot $BT /root/tk${i + 1}.ppm && echo shot-tk${i + 1}-ok`]),
   'wmctl shot $BT /root/bt1.ppm && echo shot-bt1-ok',
   'sleep 2.5',
   'wmctl shot $BT /root/bt2.ppm && echo shot-bt2-ok',
@@ -441,6 +455,7 @@ const NAMES = ['m1', 'm2', 'r1', 'r2', 'r3', 'r4', 't1', 't2', 't3',
                's1', 's2', 's3', 's4', 's5', 's6', 'x1',
                'k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'x2', 'x3',
                'x4', 'x5',
+               'tk1', 'tk2', 'tk3', 'tk4', 'tk5', 'tk6',
                'bt1', 'bt2', 'bu1', 'bu2', 'bc11', 'bc12', 'bc21', 'bc22'];
 for (const tag of NAMES) {
   check(`shot ${tag} taken`, out.includes(`shot-${tag}-ok`));
@@ -541,10 +556,24 @@ const shots = parsePPMs(back.stdout, NAMES);
               '  (deltas: ' + kSteps.map((v, i) => v - (i ? kSteps[i - 1] : 52)).join(' ') + ')');
   console.log(`D1-TICKY x2(immediate)=${tickyInk} x3(settled)=${fieldInk(shots.x3)} static=${staticInk}`);
   console.log(`D4-FAST20MS x4(immediate)=${fieldInk(shots.x4)} x5(settled)=${fieldInk(shots.x5)}`);
-  console.log(`D2-T   immediate=${fieldInk(shots.bt1)} settled=${fieldInk(shots.bt2)}`);
-  console.log(`D2-T2  immediate=${fieldInk(shots.bu1)} settled=${fieldInk(shots.bu2)} (click landed mid-ticking, todos/0402 shape)`);
-  console.log(`D2-C1  immediate=${fieldInk(shots.bc11)} settled=${fieldInk(shots.bc12)} (size control, no timer)`);
-  console.log(`D2-C2  immediate=${fieldInk(shots.bc21)} settled=${fieldInk(shots.bc22)} (period control, 5 s)`);
+  /* value-level decode for the big pages: orange bar area / (12*30) is
+   * the value LENGTH the page's own input listener saw; the green vs
+   * magenta band is exact-match against 'abcdef' */
+  const colCount = (s, pr) => countContent(s, pr);
+  const isOrange = (p) => p[0] > 200 && p[1] > 100 && p[1] < 180 && p[2] < 60;
+  const isGreen = (p) => p[0] < 80 && p[1] > 180 && p[2] < 80;
+  const isMagenta = (p) => p[0] > 180 && p[1] < 80 && p[2] > 180;
+  const vprobe = (tag) => {
+    const s = shots[tag];
+    const len = colCount(s, isOrange) / (12 * 30);
+    const g = colCount(s, isGreen), m = colCount(s, isMagenta);
+    return `len~${len.toFixed(2)} ${g > 500 ? 'EXACT-MATCH' : (m > 500 ? 'MISMATCH' : 'no-input-event')}`;
+  };
+  console.log('D3-BIGT per-key ink: ' + inks(['tk1', 'tk2', 'tk3', 'tk4', 'tk5', 'tk6']).join(' '));
+  console.log(`D2-T   immediate=${fieldInk(shots.bt1)} settled=${fieldInk(shots.bt2)} value[${vprobe('bt2')}]`);
+  console.log(`D2-T2  immediate=${fieldInk(shots.bu1)} settled=${fieldInk(shots.bu2)} value[${vprobe('bu2')}] (click landed mid-ticking, todos/0402 shape)`);
+  console.log(`D2-C1  immediate=${fieldInk(shots.bc11)} settled=${fieldInk(shots.bc12)} value[${vprobe('bc12')}] (size control, no timer)`);
+  console.log(`D2-C2  immediate=${fieldInk(shots.bc21)} settled=${fieldInk(shots.bc22)} value[${vprobe('bc22')}] (period control, 5 s)`);
 
   /* The A/B: a mutating page must type EXACTLY as well as a still one.
    * Before focus was re-bound across the swap this read ~52 vs ~285. */
