@@ -29,6 +29,49 @@ HDC __gdi_dc_wrap(void *bits, int w, int h, int stridePx);
 /* Free a wrapped DC (no present — that is user32's job). */
 void __gdi_dc_unwrap(HDC dc);
 
+/* ---- AQM: the agent seam at the user32 <-> any-control boundary
+ * (todos/0370). Real common controls hold ITEMS internally, not as child
+ * HWNDs — which would break the platform pillar that every widget is
+ * addressable through the queryable tree (`wmctl click "OK"`, TOOLKIT.md).
+ * These two veneer-internal messages let ANY item-bearing control expose
+ * its items to the agent machinery without user32 knowing the control's
+ * internals — the menu_dump precedent (0171) generalized, and what
+ * Windows itself does (MSAA exposes listview rows as accessibility
+ * children). Consumers today: LISTBOX (user32.c), SysListView32 +
+ * SysHeader32 (listview.c); a future SysTreeView32 slots in with ZERO
+ * user32 change. A control that does not answer returns 0 via
+ * DefWindowProc — non-item controls need no code at all.
+ *
+ * Message numbers sit in the unassigned system range (below WM_USER, so
+ * no class-private message can collide; the WM_GETOBJECT spirit). */
+#define AQM_DUMPCHILDREN 0x03DE
+#define AQM_FINDLABEL    0x03DF
+
+/* AQM_DUMPCHILDREN — wp: unused; lp: AqmDump*. tree_dump sends it to every
+ * window after that window's own `win` line; a control that answers fills
+ * `out` with a malloc'd block of '\n'-terminated lines, each pre-indented
+ * `depth * 2` spaces (the caller frees). Return nonzero when answered. */
+typedef struct {
+    int depth;                  /* in: indent depth for the emitted lines */
+    char *out;                  /* out: malloc'd lines, caller frees */
+} AqmDump;
+
+/* AQM_FINDLABEL — wp: unused; lp: AqmFind*. Offered by the agent resolver
+ * AFTER window text and menu items both miss. A control that owns an item
+ * whose label matches `label` exactly ('&'-stripped) answers nonzero and
+ * fills `text` with the item's agent text (malloc'd, caller frees). With
+ * `act` set it also performs the item's click semantics (select + notify);
+ * act=0 MUST be side-effect-free — `wmctl wait label/text` polls it. */
+typedef struct {
+    const char *label;          /* in: the target label, verbatim */
+    int act;                    /* in: 1 = perform click semantics */
+    char *text;                 /* out: malloc'd item text, caller frees */
+} AqmFind;
+
+/* comctl32 class registration (listview.c): idempotent, called by
+ * InitCommonControls / InitCommonControlsEx(ICC_LISTVIEW_CLASSES). */
+void __comctl_register_listview(void);
+
 /* ---- fail-loud (todos/0211) ----------------------------------------
  * The veneer never silently no-ops: an unimplemented API, window message,
  * or style flag reports ONCE per call site to stderr as

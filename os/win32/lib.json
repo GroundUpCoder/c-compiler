@@ -21,6 +21,7 @@
     "shell32.c",
     "winmm.c",
     "comctl32.c",
+    "listview.c",
     "comdlg32.c"
   ]
 }
