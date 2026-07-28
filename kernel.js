@@ -2607,7 +2607,8 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
           // FS_WATCH: a shell redirect (`cmd > file`) is a write like any
           // other — record the path and the truncate/create dirty bit so
           // the close settles (same rules as the FS_OPEN arm).
-          var no = self._makeOfd('file', { bfsFd: bfsFd, path: aAbs });
+          var no = self._makeOfd('file', { bfsFd: bfsFd, path: aAbs,
+                                           accmode: a.arg & 3 });   // todos/0376
           if ((a.arg & 0x200) || !aExisted) no.dirty = true;
           if (!aExisted) self._watchEmit(aAbs, FSW_CREATE, FSW_CREATE, false);
           no.refs++;
@@ -3187,7 +3188,11 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       if (this._watches.size && (req.flags & 0x40)) oExisted = fs.stat(oAbs) !== null;
       var bfsFd = fs.open(oAbs, req.flags | 0, req.mode | 0);
       if (bfsFd === null) { this._respond(pcb, eFs()); return; }
-      var o = this._makeOfd('file', { bfsFd: bfsFd, path: oAbs });
+      // accmode (todos/0376): the OFD carries flags & O_ACCMODE; FS_READ/
+      // FS_WRITE enforce it. FS_DUP/FS_DUP2/spawn DUP2 share the OFD, so
+      // the mode rides every duplicate (POSIX open-file-description rule).
+      var o = this._makeOfd('file', { bfsFd: bfsFd, path: oAbs,
+                                      accmode: req.flags & 3 });
       if ((req.flags & 0x200) || !oExisted) o.dirty = true;
       o.refs++;
       var fd = allocFd(0);
@@ -3209,6 +3214,10 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       if (!o1) { this._respond(pcb, { errno: 'EBADF' }); return; }
       var count = Math.min(req.count | 0, KP_PAYLOAD_CAP);
       if (o1.kind === 'file') {
+        // Access mode (todos/0376): O_WRONLY can't read. Belt-and-braces
+        // with the same check in BlockFS — the kernel OFD is the layer a
+        // non-BlockFS embedder fs would rely on.
+        if (o1.accmode === 1) { this._respond(pcb, { errno: 'EBADF' }); return; }
         var buf = new Uint8Array(count);
         var n = fs.read(o1.bfsFd, buf, count);
         if (n === null) { this._respond(pcb, eFs()); return; }
@@ -3280,6 +3289,9 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       var o2 = ofdOf(wfd);
       if (!o2) { this._respond(pcb, { errno: 'EBADF' }); return; }
       if (o2.kind === 'file') {
+        // Access mode (todos/0376): O_RDONLY can't write — the corruption
+        // half; a read-only fd used to silently mutate the file.
+        if (o2.accmode === 0) { this._respond(pcb, { errno: 'EBADF' }); return; }
         var wn = fs.write(o2.bfsFd, data, data.length);
         if (wn === null) { this._respond(pcb, eFs()); return; }
         if (wn > 0) {
@@ -3403,6 +3415,8 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
     case OP.FS_FTRUNCATE: {
       var o5 = ofdOf(req.fd);
       if (!o5 || o5.kind !== 'file') { this._respond(pcb, { errno: 'EBADF' }); return; }
+      // POSIX: ftruncate needs a fd open for writing (todos/0376).
+      if (o5.accmode === 0) { this._respond(pcb, { errno: 'EINVAL' }); return; }
       r = fs.ftruncate(o5.bfsFd, req.size | 0);
       if (r !== null) {
         o5.dirty = true;                 // FS_WATCH: settles at last close

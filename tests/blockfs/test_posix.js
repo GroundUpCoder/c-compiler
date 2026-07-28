@@ -521,6 +521,92 @@ test('mknod over a dangling symlink is EEXIST, never a dup dirent (v4)', functio
 });
 
 // ---------------------------------------------------------------
+// todos/0376 — fds carry their access mode (open()'s flags & O_ACCMODE).
+// The defect: no mode was stored on the fd entry at all, so write() on an
+// O_RDONLY fd silently mutated the file (the corruption half — defensive
+// read-only opens protected nothing) and read() on an O_WRONLY fd disclosed
+// it (the lesser half). POSIX: both are EBADF.
+// ---------------------------------------------------------------
+
+test('write() on an O_RDONLY fd is EBADF and the file is untouched', function () {
+  var r = makeFS();
+  mkfile(r.fs, '/f', 'SAFE');
+  var fd = r.fs.open('/f', 0, 0);              // O_RDONLY
+  assert(fd !== null && fd >= 0, 'open O_RDONLY');
+  assertEq(r.fs.write(fd, encode('EVIL'), 4), null, 'write refused');
+  assertEq(r.fs._lastError, 'EBADF', 'errno EBADF');
+  var buf = new Uint8Array(4);
+  assertEq(r.fs.read(fd, buf, 4), 4, 'read on the same fd still works');
+  assertEq(decode(buf), 'SAFE', 'file untouched by the refused write');
+  r.fs.close(fd);
+  var p = fsck(r.store);
+  assert(p.length === 0, 'fsck clean, got:\n  ' + p.join('\n  '));
+});
+
+test('read() on an O_WRONLY fd is EBADF; write on it still works', function () {
+  var r = makeFS();
+  mkfile(r.fs, '/f', 'SAFE');
+  var fd = r.fs.open('/f', O_WRONLY, 0);
+  assert(fd !== null && fd >= 0, 'open O_WRONLY');
+  var buf = new Uint8Array(4);
+  assertEq(r.fs.read(fd, buf, 4), null, 'read refused');
+  assertEq(r.fs._lastError, 'EBADF', 'errno EBADF');
+  assertEq(r.fs.write(fd, encode('GOOD'), 4), 4, 'write on the same fd works');
+  r.fs.close(fd);
+});
+
+test('O_RDWR reads and writes (positive control)', function () {
+  var r = makeFS();
+  mkfile(r.fs, '/f', 'SAFE');
+  var fd = r.fs.open('/f', O_RDWR, 0);
+  var buf = new Uint8Array(4);
+  assertEq(r.fs.read(fd, buf, 4), 4, 'read works');
+  assertEq(r.fs.write(fd, encode('MORE'), 4), 4, 'write works');
+  r.fs.close(fd);
+});
+
+test('the access mode rides dup()/dup2()/F_DUPFD (shared description)', function () {
+  var r = makeFS();
+  mkfile(r.fs, '/f', 'SAFE');
+  var fd = r.fs.open('/f', 0, 0);              // O_RDONLY
+  var d1 = r.fs.dup(fd);
+  assertEq(r.fs.write(d1, encode('EVIL'), 4), null, 'write on dup() refused');
+  assertEq(r.fs._lastError, 'EBADF', 'errno EBADF');
+  assertEq(r.fs.dup2(fd, 20), 20, 'dup2 to 20');
+  assertEq(r.fs.write(20, encode('EVIL'), 4), null, 'write on dup2() refused');
+  var d2 = r.fs.fcntl_dupfd(fd, 10);
+  assertEq(r.fs.write(d2, encode('EVIL'), 4), null, 'write on F_DUPFD refused');
+  r.fs.close(fd); r.fs.close(d1); r.fs.close(20); r.fs.close(d2);
+});
+
+test('ftruncate() on an O_RDONLY fd is EINVAL (POSIX); file intact', function () {
+  var r = makeFS();
+  mkfile(r.fs, '/f', 'SAFE');
+  var fd = r.fs.open('/f', 0, 0);              // O_RDONLY
+  assertEq(r.fs.ftruncate(fd, 0), null, 'ftruncate refused');
+  assertEq(r.fs._lastError, 'EINVAL', 'errno EINVAL');
+  var buf = new Uint8Array(4);
+  assertEq(r.fs.read(fd, buf, 4), 4, 'still 4 bytes');
+  assertEq(decode(buf), 'SAFE', 'file untouched');
+  r.fs.close(fd);
+});
+
+test('pipe ends refuse the wrong direction (same class, fixed ends)', function () {
+  var r = makeFS();
+  var fds = r.fs.pipe();
+  var rfd = fds[0], wfd = fds[1];
+  assertEq(r.fs.write(rfd, encode('x'), 1), null, 'write on the read end refused');
+  assertEq(r.fs._lastError, 'EBADF', 'errno EBADF');
+  var buf = new Uint8Array(1);
+  assertEq(r.fs.read(wfd, buf, 1), null, 'read on the write end refused');
+  assertEq(r.fs._lastError, 'EBADF', 'errno EBADF');
+  assertEq(r.fs.write(wfd, encode('p'), 1), 1, 'right-direction write flows');
+  assertEq(r.fs.read(rfd, buf, 1), 1, 'right-direction read flows');
+  assertEq(decode(buf), 'p', 'payload');
+  r.fs.close(rfd); r.fs.close(wfd);
+});
+
+// ---------------------------------------------------------------
 
 console.log('--- POSIX-semantics Tests ---');
 console.log('Passed: ' + passed);

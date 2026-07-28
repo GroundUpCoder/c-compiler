@@ -122,14 +122,16 @@ const BASE = K.RO_FD_BASE;
     JSON.stringify(calls.slice(before)));
 }
 
-/* ---- write intent on a local fd: the same EROFS the kernel would give ---- */
+/* ---- write intent on a local fd: the same refusal the kernel would give
+   (todos/0376: EBADF/EINVAL — the O_RDONLY fd's access mode, checked before
+   the readonly volume flag; brokered fds answer identically) ---- */
 {
   const fd = rfs.open('/usr/share/f.txt', 0, 0);
   const before = rpcCount();
-  check('write on a local fd is EROFS',
-    rfs.write(fd, new Uint8Array([65]), 1) === null && rfs._lastError === 'EROFS');
-  check('ftruncate on a local fd is EROFS',
-    rfs.ftruncate(fd, 0) === null && rfs._lastError === 'EROFS');
+  check('write on a local fd is EBADF (O_RDONLY fd)',
+    rfs.write(fd, new Uint8Array([65]), 1) === null && rfs._lastError === 'EBADF');
+  check('ftruncate on a local fd is EINVAL (fd not open for writing)',
+    rfs.ftruncate(fd, 0) === null && rfs._lastError === 'EINVAL');
   check('fsync on a local fd is a no-op success', rfs.fsync(fd) === 0);
   check('EROFS legs made zero RPCs', rpcCount() === before);
   rfs.close(fd);
