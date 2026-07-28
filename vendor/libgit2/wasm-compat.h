@@ -12,12 +12,8 @@
 #define NO_STRNLEN
 #endif
 
-/* gmtime_r — wrap non-thread-safe gmtime */
-static inline struct tm *gmtime_r(const time_t *timep, struct tm *result) {
-    struct tm *t = gmtime(timep);
-    if (t) *result = *t;
-    return t ? result : NULL;
-}
+/* gmtime_r — the libc supplies it since todos/0325 Group A; the local
+   static-inline copy now conflicts with that declaration. */
 
 /* Process identity — stub to safe defaults for WASM */
 static inline uid_t geteuid(void) { return 0; }

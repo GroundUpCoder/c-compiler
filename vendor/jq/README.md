@@ -76,9 +76,15 @@ build, reproduced here so no flex/bison/autoconf step is needed):
   single-threaded, so jv.c's decNumber context and jv_dtoa_tsd.c's dtoa context
   collapse to per-process globals. jq's real threading is `HAVE_PTHREAD`-gated
   and left off.
-- `src/jq_gucos_shims.{c,h}` — `timegm()`, `gmtime_r()` and `strptime()`, which
-  this repo's libc doesn't provide but jq's date builtins need. Advertised via
-  `-DHAVE_TIMEGM/-DHAVE_GMTIME_R/-DHAVE_STRPTIME`.
+- `src/jq_gucos_shims.{c,h}` — **`strptime()` only**, which this repo's libc
+  doesn't provide but jq's date builtins need. Still advertised via
+  `-DHAVE_TIMEGM/-DHAVE_GMTIME_R/-DHAVE_STRPTIME`: all three are true, but the
+  first two are now satisfied by the LIBC rather than by this TU.
+  `timegm()` and `gmtime_r()` were dropped from here by **todos/0325 Group B /
+  todos/0382 gap 5**, which added both to the libc — keeping the local copies
+  became a duplicate-symbol link error. This is the outcome the file's own
+  header note anticipated ("if a future compiler.js grows them, drop the
+  define(s) and this TU can shrink").
 - `oniguruma/config.h` — hand-written autoconf substitute (wasm32 ILP32 facts).
 
 ## Patch table (edits to upstream sources)

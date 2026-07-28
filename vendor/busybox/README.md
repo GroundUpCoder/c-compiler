@@ -86,6 +86,16 @@ This port builds hush in its NOMMU configuration (`CONFIG_NOMMU=y` →
 `BB_MMU 0`) and maps that machinery onto the OS's native
 CreateProcess-class primitive, `__spawn` (decision: `todos/OS.md`).
 
+### umask (removed 2026-07-28)
+
+`port/include/wasm_port.h` used to carry a `static ALWAYS_INLINE umask()` that
+stored a value and did nothing — "the fs layer has no notion of a process
+umask". **todos/0382 gap 1** made `umask(2)` real in the libc, applied by
+`open(O_CREAT)`/`creat`/`mkdir`/`mkdirat`, so the shim was both a duplicate
+definition and a false statement. It is gone, and hush's `umask` builtin now
+actually affects the modes of files created in that process. (It does not yet
+cross a spawn boundary — that is `todos/0399`.)
+
 ## The vfork-on-__spawn shim (`port/vfork_spawn.c`, `port/include/wasm_port.h`)
 
 There is no vfork either — but hush's NOMMU discipline makes every vfork
@@ -113,7 +123,7 @@ journaling mode:
 | File | Patch |
 |---|---|
 | `src/shell/hush.c` | 3 vfork sites → setjmp shim form (run_pipe, command substitution, heredoc); heredoc rewritten to bash-style unlinked temp file (a spawned pipe-feeder would deadlock: the consumer execs only after setup returns); `<fnmatch.h>` include made unconditional (its `ENABLE_HUSH_CASE` guard evaluates before autoconf.h is seen); backgrounded-stdin `/dev/null` journal-safe; NOMMU builtin dispatch uses the full builtin table (no multicall applet binary to re-exec, so builtins-in-pipes re-exec `/bin/sh` itself); `G.argv0_for_re_execing` strips a leading login-shell dash (todos/0177 — shells spawn as `-sh` per todos/0174, and without this every `$()`/pipe/builtin NOMMU re-exec inherits the dash, re-triggers login profile sourcing in the subshell, and a `$()` in a profile recurses forever / leaks profile stdout into substitutions) |
-| `src/include/platform.h` | includes `autoconf.h` (kbuild passes it via `-include`; this compiler has no such flag and platform.h is every TU's first header); `__wasm__` HAVE_* block (what this libc lacks — libbb/platform.c supplies fallbacks). (A former "ALIGN* emptied under `__wasm__`" patch was reverted 2026-07-07: the `aligned(N)` parser crash is fixed — `tests/unit/conformance/parse_attr_aligned_arg` — so upstream ALIGN* compiles as-is) |
+| `src/include/platform.h` | includes `autoconf.h` (kbuild passes it via `-include`; this compiler has no such flag and platform.h is every TU's first header); `__wasm__` HAVE_* block (what this libc lacks — libbb/platform.c supplies fallbacks). `HAVE_MEMRCHR` was REMOVED from that block by todos/0325 Group B: the libc grew a real `memrchr`, and libbb's fallback is a real definition, so keeping the undef became a duplicate-symbol link error. `HAVE_STRSIGNAL` stays undef'd on purpose even though the libc grew `strsignal` too — libbb's is a MACRO to `get_signame()` printing the short names ("STOP", not "Stopped") that applet output is written against, and a macro cannot collide at link. (A former "ALIGN* emptied under `__wasm__`" patch was reverted 2026-07-07: the `aligned(N)` parser crash is fixed — `tests/unit/conformance/parse_attr_aligned_arg` — so upstream ALIGN* compiles as-is) |
 | `src/include/libbb.h` | includes `wasm_port.h` at the end; `barrier()` empty under `__wasm__` (no inline asm; single thread); the three statement-expression ctype macros (isspace/isblank/iscntrl) → ALWAYS_INLINE helpers (no GNU statement exprs in this compiler); `__wasm__` branch in the !LFS `uoff_t` block — this libc's `off_t` is 64-bit even without LFS, so `uoff_t`/`XATOOFF`/`OFF_FMT` use the long-long family (upstream's `sizeof(off_t)==sizeof(long)` assumption misdetects; its `BUG_off_t_size_is_misdetected` compile-assert fired once the compiler diagnosed negative array sizes — todos/0231) |
 | `src/include/autoconf.h` | generated from `busybox.config` (allnoconfig + hush/editing/NOMMU); `CONFIG_BUSYBOX_EXEC_PATH` → `/bin/sh` (the re-exec-self image) |
 | `src/libbb/xfuncs_printf.c` | unused syscall wrappers (xsocket/xbind/…/xmkstemp/xchroot/xsettimeofday, the NOEXEC vfork helper) guarded out under `__wasm__` |
