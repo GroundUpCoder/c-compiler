@@ -692,6 +692,86 @@ test('next-id reports both id spaces without writing anything', () => {
   assert.match(r.stdout, /^0002\s/m, r.stdout);
   assert.match(r.stdout, /^L04\s/m, `the register's space must be allocated too: ${r.stdout}`);
   assert.deepStrictEqual(fs.readdirSync(todos).sort(), before, 'next-id writes nothing');
+  assert.match(r.stdout, /freshness: /, 'the survey must report how stale it is (todos/0360)');
+});
+
+// --- freshness of the survey (todos/0360) ---
+//
+// The mechanism (probe, local clock, worktree scan) is todos/idspace.test.js.
+// These two cases pin the CLI POLICY: refuse to WRITE an id from a survey the
+// remote contradicts, warn but proceed when staleness is merely unknown.
+
+// A temp repo that is a real clone of a real (local, bare) origin, plus a
+// second clone that pushes behind its back — the state 0360 exists for.
+function setupStaleClone() {
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'queue-stale-'));
+  // stderr piped, not inherited: cloning an empty bare repo warns, and a test
+  // run should read as its own output only.
+  const q = (cwd, args) => execFileSync('git', args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+  const origin = path.join(root, 'origin.git');
+  q(root, ['init', '-q', '--bare', origin]);
+  const lane = path.join(root, 'lane');
+  q(root, ['clone', '-q', origin, lane]);
+  for (const [k, v] of [['user.email', 't@t'], ['user.name', 't']]) q(lane, ['config', k, v]);
+  const todos = path.join(lane, 'todos');
+  fs.mkdirSync(path.join(todos, 'done'), { recursive: true });
+  for (const f of ['queue.js', 'liabilities.js', 'idspace.js']) {
+    fs.copyFileSync(path.join(__dirname, f), path.join(todos, f));
+  }
+  writeItem(todos, '0001', 'a');
+  writeManifest(todos, [{ id: '0001' }]);
+  git(todos, ['add', '-A']);
+  git(todos, ['commit', '-q', '-m', 'base']);
+  git(todos, ['push', '-q', '-u', 'origin', 'HEAD:refs/heads/main']);
+
+  // Another clone files 0009 and pushes. The lane's remote-tracking refs now
+  // lag the remote, and nothing local says so.
+  const other = path.join(root, 'other');
+  q(root, ['clone', '-q', origin, other]);
+  for (const [k, v] of [['user.email', 'o@o'], ['user.name', 'o']]) q(other, ['config', k, v]);
+  writeItem(path.join(other, 'todos'), '0009', 'their-item');
+  q(other, ['add', '-A']);
+  q(other, ['commit', '-q', '-m', 'their lane']);
+  q(other, ['push', '-q', 'origin', 'HEAD:refs/heads/lane-b']);
+  return todos;
+}
+
+test('RED: add next REFUSES to write an id the remote has already contradicted', () => {
+  const todos = setupStaleClone();
+
+  let r = run(todos, ['add', 'next', '--slug', 'mine']);
+  assert.strictEqual(r.code, 1, `must refuse while stale (stdout: ${r.stdout})`);
+  assert.match(r.stdout, /freshness: STALE/, r.stdout);
+  assert.match(r.stderr, /refusing to allocate 0002/, r.stderr);
+  assert.match(r.stderr, /git fetch/, 'the refusal must name the fix');
+  assert.match(r.stderr, /--offline/, 'the refusal must name the deliberate opt-out');
+  assert.deepStrictEqual(fs.readdirSync(todos).filter(f => /^\d{4}-/.test(f)), ['0001-a.md'],
+    'nothing scaffolded on refusal');
+  assert.deepStrictEqual(readManifest(todos).queue, [{ id: '0001' }], 'manifest untouched');
+
+  // The deliberate opt-out proceeds — and is not allowed to sound clean.
+  r = run(todos, ['add', 'next', '--slug', 'mine', '--offline']);
+  assert.strictEqual(r.code, 0, r.stderr);
+  assert.match(r.stdout, /added 0002/, r.stdout);
+  assert.match(r.stdout, /SKIPPED \(--offline\)/, r.stdout);
+  fs.unlinkSync(path.join(todos, '0002-mine.md'));
+  writeManifest(todos, [{ id: '0001' }]);
+
+  // GREEN: after the fetch the survey is current, and 0009 is respected.
+  git(todos, ['fetch', '-q', 'origin']);
+  r = run(todos, ['add', 'next', '--slug', 'mine']);
+  assert.strictEqual(r.code, 0, r.stderr);
+  assert.match(r.stdout, /added 0010/, `the fetched lane-b holds 0009: ${r.stdout}`);
+  assert.match(r.stdout, /a fetch would move nothing/, r.stdout);
+});
+
+test('next-id REPORTS a stale survey instead of failing — it writes nothing', () => {
+  const todos = setupStaleClone();
+  const r = run(todos, ['next-id']);
+  assert.strictEqual(r.code, 0, `next-id must stay usable while stale: ${r.stderr}`);
+  assert.match(r.stdout, /^0002\s/m, r.stdout);
+  assert.match(r.stdout, /freshness: STALE/, r.stdout);
+  assert.match(r.stdout, /LOWER BOUND/, r.stdout);
 });
 
 // --- one id, one file (todos/0358) ---

@@ -302,6 +302,7 @@ function cmdList() {
 // meant to stop needing.
 function cmdNextId(argv) {
   const local = argv.includes('--local');
+  const offline = argv.includes('--offline');   // skip the freshness probe (todos/0360)
   const IDSPACE = require('./idspace.js');
   const ids = [];
   try {
@@ -312,8 +313,9 @@ function cmdNextId(argv) {
     }
   } catch { /* no register here — the refs still carry one */ }
   try {
-    const a = IDSPACE.allocate('liability', ids, { root: REPO_ROOT, local });
+    const a = IDSPACE.allocate('liability', ids, { root: REPO_ROOT, local, offline });
     process.stdout.write(`${a.id}  ${a.note}\n`);
+    process.stdout.write(`     ${a.freshness.line}\n`);   // todos/0360
   } catch (e) {
     if (!(e instanceof IDSPACE.IdSpaceError)) throw e;
     process.stderr.write(`liabilities: ${e.message}\n`);
@@ -325,7 +327,9 @@ const USAGE = `liabilities.js — the liability register's validator (todos/0286
 
   check            validate todos/LIABILITIES.md; exit 1 on any failure
   list             entries, with each anchor resolved to a live file:line
-  next-id [--local]  the next free Lnn, derived across every ref (todos/0358)
+  next-id [--local] [--offline]
+                   the next free Lnn, derived across every ref + every sibling worktree
+                   (todos/0358), with a freshness verdict on what it surveyed (todos/0360)
 `;
 
 function main() {

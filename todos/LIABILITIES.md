@@ -273,12 +273,6 @@ thing this file exists to kill.
 - anchor: is the runtime backstop for a payload that arrived another way.
 - provenance: 0338
 
-### L47 — the cross-ref id survey never checks how stale the remote-tracking refs it trusts are
-- ticket: 0360
-- file: todos/idspace.js
-- anchor: // allocates from a stale bound (todos/0360, register L47). Every caller
-- provenance: 0358
-
 ### L48 — `tcflush` validates and reports success without discarding anything, though the line discipline really holds an input queue
 - ticket: 0325
 - file: compiler.js
@@ -302,5 +296,11 @@ thing this file exists to kill.
 - file: tools/mkpkg.js
 - anchor:  * under-invalidation here is invisible exactly the way 0354's was. Funded by
 - provenance: 0354
+
+### L52 — id allocation is blind to an unpushed id in a different clone, and no probe can see it
+- ticket: 0364
+- file: todos/idspace.js
+- anchor: // coordination point (a pushed reservation ref), which is todos/0364, register
+- provenance: 0360
 
 <!-- END ENTRIES -->

@@ -28,6 +28,9 @@ const CASES = [
   { name: 'queue-tests',       argv: ['todos/queue.test.js'] },
   { name: 'liabilities-check', argv: ['todos/liabilities.js', 'check'] },
   { name: 'liabilities-tests', argv: ['todos/liabilities.test.js'] },
+  // The id allocator's freshness half (todos/0360). Real clones over local
+  // paths, so it stays offline and cheap like the rest of this suite.
+  { name: 'idspace-tests',     argv: ['todos/idspace.test.js'] },
 ];
 
 function main() {

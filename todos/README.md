@@ -19,9 +19,21 @@ One numbered file per unit of work we have actually committed to doing.
   `queue.js next-id` survey every ref through `todos/idspace.js`, print what
   they surveyed, and **refuse** rather than silently fall back to the local
   bound when they cannot reach git (`--local-ids` / `--local` is the explicit
-  opt-out). Run `git fetch` first: remote-tracking refs are only as fresh as
-  your last one. The same rule and the same tool cover the liability
-  register's `Lnn` ids — it collided the same way, one field over.
+  opt-out). The same rule and the same tool cover the liability register's
+  `Lnn` ids — it collided the same way, one field over.
+- **You no longer have to remember to `git fetch` first** (0360). "Remote refs
+  are as fresh as your last fetch" used to be printed as a reminder, and the
+  gap it described fired the day it shipped: a mid-merge main tree assigned
+  `L47` in an **uncommitted** file while a worktree allocated `L47` off the
+  refs. So the survey now measures itself and prints a `freshness:` line —
+  `git ls-remote` proves whether a fetch would move anything (5s timeout,
+  degrading LOUDLY on failure, `--offline` to skip it), every **sibling
+  worktree**'s uncommitted `todos/` is read from disk, and the local
+  fetch clock is the offline fallback. `add next` **refuses to write an id**
+  when the remote is shown to contradict the survey; `next-id` only reports,
+  since it writes nothing. Refuse on proof, warn on doubt. The one thing no
+  probe can see is an id in a **different clone** that was never pushed —
+  `todos/0364`, register `L52`.
 - **One id, one file.** Two files sharing an id fail `queue.js check` (0358) —
   that is what a landed collision looks like, and before that check the second
   file was simply invisible to every validator. The one exception is a
