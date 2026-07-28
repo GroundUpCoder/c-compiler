@@ -41,8 +41,12 @@ its 11 s in-gate time, asleep rather than spinning.
 🔴 **A bare invocation carries NO cap at any layer** — the kernel runner's timeout table is
 what bounds this test, and invoking the file directly bypasses it entirely. So a hang here is
 *silent and unbounded*, and it stalled a live lane's turn.
-⚠️ **Observed, not concluded:** it was asleep at 3m21s; it was not confirmed to never
-terminate. Re-measure before asserting a true hang.
+⚠️ **Followed up — IT WAS NOT A HANG.** The process **exited on its own** a few minutes later
+(observed gone; the lane then pushed its next commit and re-took the heavy lock). So the
+correct reading is **very slow, not stuck**: roughly 20–30× its 11 s in-gate time when run
+bare on a box that had just been under load. 🔴 **Do not open this ticket by hunting a
+deadlock** — chase the slowness and the pixel nondeterminism. The uncapped-bare-invocation
+point in item 4 stands on its own merits regardless.
 
 ## Plan
 
