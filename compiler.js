@@ -4972,15 +4972,36 @@ function pointerArithElemType(leftType, rightType) {
   return null;
 }
 
+// The bit-field a value-producing expression reads from, or null. Besides
+// the direct member access, bit-field-ness carries through the
+// value-FORWARDING forms — an assignment (simple or compound) yields its
+// left operand's value, a comma its last operand's, and pre-inc/dec is
+// sugar for `+= 1` — so `-(s.u20 = x)` promotes exactly like `-s.u20`.
+// POST-inc/dec results do NOT carry it. Both directions are clang-pinned
+// (todos/0367, tests/unit/conformance/parse_bitfield_promote_carriers).
+// An explicit cast severs the chain (the value is no longer "from" the
+// field); implicit casts never wrap a bit-field access whose promotion is
+// still pending, so there is nothing to walk through there.
+function sourceBitField(e) {
+  for (;;) {
+    if (e instanceof EMember || e instanceof EArrow) {
+      return e.memberDecl.bitWidth >= 0 ? e.memberDecl : null;
+    }
+    if (e instanceof EBinary && BinOp[e.op].isAssign) { e = e.left; continue; }
+    if (e instanceof EComma) { e = e.expressions[e.expressions.length - 1]; continue; }
+    if (e instanceof EUnary && (e.op === "OP_PRE_INC" || e.op === "OP_PRE_DEC")) {
+      e = e.operand; continue;
+    }
+    return null;
+  }
+}
+
 // C99 6.3.1.1: integer promotions for bitfield expressions. A bitfield
 // member smaller than int promotes to int (or unsigned int if it can't
 // be represented as int). Non-bitfield expressions promote to themselves.
 function promoteExprType(e) {
   const t = e.type;
-  let bf = null;
-  if ((e instanceof EMember || e instanceof EArrow) && e.memberDecl.bitWidth >= 0) {
-    bf = e.memberDecl;
-  }
+  const bf = sourceBitField(e);
   if (bf) {
     const bw = bf.bitWidth;
     const uq = t.removeQualifiers();
@@ -5135,8 +5156,15 @@ function makeBinary(loc, op, left, right) {
         `incompatible types in assignment: cannot convert '${right.type.toString()}' to '${left.type.toString()}'`);
     }
   }
-  // Apply C99 6.3.1.1 integer promotions for bitfield operands.
-  const resType = computeBinaryType(op, promoteExprType(left), promoteExprType(right));
+  // Apply C99 6.3.1.1 integer promotions for bitfield operands — except to
+  // an assignment's LEFT operand: the assignment expression has the type the
+  // lvalue would have after lvalue conversion (C11 6.5.16p3), NOT the
+  // promoted type. Promoting it typed `(s.ull20 = x)` as int while codegen
+  // reloaded the stored field at its declared 64-bit width — consuming that
+  // in arithmetic emitted invalid wasm (todos/0367; the promotion the
+  // CONSUMER owes is applied there via sourceBitField's forwarding walk).
+  const resType = computeBinaryType(op,
+    meta.isAssign ? left.type : promoteExprType(left), promoteExprType(right));
   // Insert implicit casts on operands to the common op type. Skipped for:
   //   - assignment ops (handled by lvalue context, not arithmetic)
   //   - logical && / || (boolean coercion is per-operand, not common)
@@ -5396,12 +5424,17 @@ function makeUnary(loc, op, operand) {
       }
       break;
   }
-  // UNPROMOTED: operand.type is the DECLARED type, so a bit-field operand never
-  // takes the C11 6.3.1.1p2 integer promotion here. `-bf`/`~bf` on an
-  // `unsigned int u20:20` therefore stay unsigned and miscompile vs clang:
-  // (-s.u20) < 0 is 0 for us, 1 for clang. 0356 fixed only the BINARY path
-  // (promoteExprType) and its message wrongly claimed this one was already
-  // correct. Pre-existing, not a 0356 regression. todos/0367, register L53.
+  // C11 6.5.3.3: the integer promotions are performed ON THE OPERAND of
+  // unary +/-/~, so a bit-field operand promotes per 6.3.1.1p2 BEFORE the
+  // result type is computed (todos/0367: computing from the declared type
+  // made `-s.u20 < 0` false). The promotion is materialized as an implicit
+  // cast so codegen's operand-driven wasm typing stays consistent (a narrow
+  // field of a 64-bit declared type promotes to int: i64 load → i32 wrap).
+  // Non-bit-field operands promote inside computeUnaryType unchanged.
+  if (op === "OP_POS" || op === "OP_NEG" || op === "OP_BNOT") {
+    const pt = promoteExprType(operand);
+    if (pt !== operand.type) operand = maybeImplicitCast(operand, pt);
+  }
   return new EUnary(loc, Types.computeUnaryType(op, operand.type), op, operand);
 }
 
@@ -10293,6 +10326,19 @@ class Parser {
     this.recoverableError(tok, `invalid application of 'sizeof' to an incomplete type '${uq.toString()}'`);
   }
 
+  // C11 6.5.3.4p1 (constraint): sizeof shall not be applied to an expression
+  // that designates a bit-field member (todos/0367). Only the DIRECT member
+  // access designates one — a value forwarded through assignment/comma is an
+  // ordinary rvalue there.
+  checkSizeofExprOperand(tok, expr) {
+    if ((expr instanceof AST.EMember || expr instanceof AST.EArrow) &&
+        expr.memberDecl.bitWidth >= 0) {
+      this.recoverableError(tok,
+        `invalid application of 'sizeof' to bit-field member '${expr.memberDecl.name}'`);
+    }
+    this.checkSizeofOperand(tok, expr.type);
+  }
+
   // --- isTypeName ---
   isTypeName() {
     const t = this.peek();
@@ -11494,11 +11540,11 @@ class Parser {
         // operators keep binding to the parenthesized expression:
         // sizeof(a)[0] is sizeof((a)[0]), not (sizeof(a))[0].
         expr = this.parsePostfixTail(expr);
-        this.checkSizeofOperand(t, expr.type);
+        this.checkSizeofExprOperand(t, expr);
         return new AST.ESizeofExpr(sizeofLoc, Types.TULONG, expr);
       }
       const expr = this.parseUnaryExpression();
-      this.checkSizeofOperand(t, expr.type);
+      this.checkSizeofExprOperand(t, expr);
       return new AST.ESizeofExpr(sizeofLoc, Types.TULONG, expr);
     }
 
@@ -12496,7 +12542,12 @@ class Parser {
         // always pointer-typed (or scalar/aggregate).
         thenExpr = maybeDecay(thenExpr);
         elseExpr = maybeDecay(elseExpr);
-        const resType = this.computeTernaryType(thenExpr.type, elseExpr.type);
+        // Branch operands take the integer promotions first (C11 6.5.15p5's
+        // usual arithmetic conversions start at 6.3.1.8) — bit-field
+        // promotion included: `c ? u20 : u20` is (signed) int arithmetic
+        // (todos/0367; the maybeImplicitCast below materializes it).
+        const resType = this.computeTernaryType(
+          AST.promoteExprType(thenExpr), AST.promoteExprType(elseExpr));
         // Both branches must produce the same type — wrap each in an
         // implicit cast to resType when needed.
         thenExpr = maybeImplicitCast(thenExpr, resType);
@@ -19535,13 +19586,20 @@ class CodeGenerator {
       const rhsType = rhs.type;
       let opType = lhsType;
       if (!lhsType.isPointer()) {
+        // The computation type starts from the PROMOTED operands (C11
+        // 6.5.16.2p3's usual arithmetic conversions begin at 6.3.1.8) —
+        // bit-field promotion included on BOTH sides: `u20 /= -3` is a
+        // SIGNED division whose quotient converts back into the field,
+        // and `x /= s.u20` divides by a (signed) int (todos/0367; the
+        // declared types made both unsigned).
+        const plhsType = AST.promoteExprType(lhs);
         // Shifts compute in the PROMOTED LEFT type (C11 6.5.7p3 via
         // 6.5.16.2p3) — usual arithmetic conversions would let an
         // unsigned right operand turn `int >>= n` into a logical shift.
-        // UAC(lhs, lhs) is exactly "promoted lhs".
+        // UAC(plhs, plhs) is exactly "promoted lhs".
         opType = (op === "SHL_ASSIGN" || op === "SHR_ASSIGN")
-          ? Types.usualArithmeticConversions(lhsType, lhsType)
-          : Types.usualArithmeticConversions(lhsType, rhsType);
+          ? Types.usualArithmeticConversions(plhsType, plhsType)
+          : Types.usualArithmeticConversions(plhsType, AST.promoteExprType(rhs));
       }
       const opWt = this.getBinaryWasmType(opType);
       const isUnsigned = this.isUnsignedType(opType);
