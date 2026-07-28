@@ -118,3 +118,34 @@ merge that touches `os/` owes a full fresh run, not this artifact.
   distinction has made the estate worse, not better.
 - ⚠️ Coordinate with `0361` — same family, and its survey may subsume part of
   step 2. **Do not file a third ticket for the same class;** fold instead.
+
+## 🔴 SECOND DATA POINT (master cont-123, 2026-07-28) — the aggregate UNDERSTATES per-test risk
+
+While gating the `0367` merge with three lanes live, `micropython-upstream/basics/int_big_lshift.py`
+**failed on a 15 s timeout**. It is not broken and `0367` did not regress it —
+the same command was run three times on the same tree:
+
+| run | result | wall |
+|---|---|---|
+| full corpus, 3 lanes live | 🔴 **583 passed, 1 failed, 65 skipped** — `int_big_lshift` timed out (15 s) | 69.3 s |
+| that test ALONE | ✅ 1 passed | **7.1 s** |
+| full corpus, re-run | ✅ **584 passed, 0 failed, 65 skipped** | 57.4 s |
+
+⭐ **The number that matters: 7.1 s quiet, against a 15 s cap — and it still blew
+past 15 s under load. That is >2.1× inflation on a single test, while the suite
+aggregate moved only 21% (69.3 s vs 57.4 s).**
+
+🔴 **This corrects the headroom model in `0369` step 1.** cont-122 measured
+`test_os_boot` at 719.1 s against a 900 s cap (20% headroom) and weighed it
+against a **19% suite-wide** slowdown, calling it "a coin flip." This data point
+says the suite-wide figure is **not** the right comparator: per-test inflation
+under contention was **ten times** the aggregate slowdown here. A test with 53%
+apparent headroom still went red.
+
+**So `test_os_boot`'s 20% margin is WORSE than a coin flip, not better** — and any
+survey in step 2 that ranks tests by `quiet_time / cap` will systematically
+under-rate the risk. **The survey must measure headroom UNDER CONTENTION, not
+quiet, or it will clear tests that fail in practice.**
+
+⚠️ This also sharpens lesson (CB): an aggregate cannot answer a headroom question
+**in either direction** — it under-reports as readily as it over-reports.

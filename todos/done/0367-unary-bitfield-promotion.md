@@ -1,6 +1,6 @@
 # 0367 — a unary operator on a bit-field keeps the unpromoted declared type, so -bf/~bf miscompile against clang
 
-- **Status**: open
+- **Status**: done
 - **Design**: —
 
 ## Goal
