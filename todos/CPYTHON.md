@@ -445,12 +445,20 @@ present.
   gated on 0336 + 0319-reverify and inherits this tree when it lands.
 - MicroPython: unaffected. It remains the lightweight scripting Python and
   the funded 0117 R2 work. **Correction folded in from master (measured on
-  the live deployed image): gucOS's base image ships NO python verb at all —
-  240 image entries, zero `python*`/`micro*` hits. MicroPython is gucOS's
-  python only for users who installed its package; a fresh gucOS has no
-  python until `gucman install micropython` (or, once this ships,
-  `… python-clang`).** Every "python experience" claim carries that opt-in
-  qualifier.
+  the live deployed image): gucOS's base image ships NO python IMPLEMENTATION
+  — MicroPython is gucOS's python only for users who installed its package; a
+  fresh gucOS has no python until `gucman install micropython` (or, once this
+  ships, `… python-clang`).** Every "python experience" claim carries that
+  opt-in qualifier.
+  ⚠️ **Superseded wording, corrected by master at the 0340 merge (image 181):**
+  this bullet used to read "ships NO python **verb** at all — 240 image
+  entries, zero `python*` hits". That was measured before `todos/0338`, and
+  0338's `cmdalt` dispatcher bakes `python` as a KEY (value: the suggestion
+  `python-clang`) per jku's 2026-07-28 name-split ruling. **A fresh gucOS DOES
+  now ship a `python` verb**; it is the dispatcher, it cannot run code, and it
+  exits 127 naming the package to install. The claim that survives is about
+  the IMPLEMENTATION, not the verb — `tests/kernel/test_python_clang_e2e.js`
+  pins all three properties (`PYIMPL=0`, `PYVERBS=1`, `PYRC=127`).
 
 ## 8. The pygame trajectory (scoped, deliberately not built)
 

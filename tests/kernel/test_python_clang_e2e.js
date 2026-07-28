@@ -7,7 +7,9 @@
 // spawn broker creates the child, readlink walks a gucman symlink. This file is
 // where those are measured rather than assumed. Legs:
 //
-//   - base purity IN-OS: the minimal image ships NO python verb at all
+//   - base purity IN-OS: the minimal image ships NO python IMPLEMENTATION (it
+//     does ship a `python` VERB since todos/0338 — the cmdalt dispatcher, which
+//     exits 127 naming the package to install)
 //   - `gucman install python-clang`: /opt tree + /usr/local/bin symlink
 //   - the banner reports Clang and `print(1+1)` prints 2 (0331)
 //   - ZERO-ENV stdlib discovery over the kernel's fs: no PYTHONHOME/PYTHONPATH,
@@ -146,10 +148,22 @@ async function main() {
 
   const script = [
     'echo ==purity',
-    // A fresh gucOS has NO python verb at all (CPYTHON.md §7) — assert that
-    // rather than assuming it, because it is the claim every "gucOS python"
-    // sentence has to carry.
-    'ls /usr/bin /usr/local/bin 2>/dev/null | grep -c python',
+    // A fresh gucOS ships no python IMPLEMENTATION — assert that rather than
+    // assuming it, because it is the claim every "gucOS python" sentence has
+    // to carry.
+    //
+    // This leg used to assert "NO python verb AT ALL" (`grep -c python` == 0).
+    // That was true on this ticket's base and is false by design on main:
+    // todos/0338 bakes `python` as a cmdalt KEY whose value is the suggestion
+    // `python-clang` (jku's 2026-07-28 name-split ruling — os/cmdalt.h). So a
+    // fresh image DOES carry a `python` verb; what must stay true is that
+    // nothing on the image can RUN python. Pin the dispatcher's behaviour too,
+    // so replacing the stale claim makes this leg stronger, not weaker.
+    'echo PYVERBS=$(ls /usr/bin /usr/local/bin 2>/dev/null | grep -c python)',
+    'ls /usr/bin /usr/local/bin 2>/dev/null | grep python | sort | tr "\\n" " "; echo',
+    'echo PYIMPL=$(ls /usr/bin/python-clang /usr/local/bin/python-clang 2>/dev/null | wc -l)',
+    'python -c "print(1+1)" >/dev/null 2>&1; echo PYRC=$?',
+    'python -c "print(1+1)" 2>&1 | grep -c "gucman install python-clang" | sed "s/^/PYHINT=/"',
     'echo ==catalog',
     'mkdir -p /etc/gucman',
     `echo http://127.0.0.1:${port} > /etc/gucman/repos`,
@@ -227,7 +241,16 @@ async function main() {
   const out = String(r.stdout || '');
 
   const purity = section(out, 'purity');
-  check('a fresh gucOS ships NO python verb', /^0$/m.test(purity), purity);
+  // The claim that has to hold: no python IMPLEMENTATION. The `python` verb
+  // itself is the 0338 cmdalt dispatcher and is expected — see the probe above.
+  check('a fresh gucOS ships NO python implementation',
+    /^PYIMPL=0$/m.test(purity), purity);
+  check('the only python verb on a fresh image is the cmdalt dispatcher',
+    /^PYVERBS=1$/m.test(purity), purity);
+  check('that verb cannot run code — it exits 127',
+    /^PYRC=127$/m.test(purity), purity);
+  check('...and it names the package to install',
+    /^PYHINT=[1-9]/m.test(purity), purity);
 
   const cat = section(out, 'catalog');
   check('catalog lists python-clang', cat.includes('python-clang'), cat);
