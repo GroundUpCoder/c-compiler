@@ -180,3 +180,57 @@ quiet, or it will clear tests that fail in practice.**
 
 ⚠️ This also sharpens lesson (CB): an aggregate cannot answer a headroom question
 **in either direction** — it under-reports as readily as it over-reports.
+
+## ✅ STEP 2, STATIC HALF DONE — 0369 lane, 2026-07-28. The timing half remains OPEN.
+
+**Command**: `sh tests/scan-harness-timeouts.sh` (committed; the
+`tests/scan-wallclock.sh` precedent). Two greps: an over-inclusive line scan
+over the harness set (`run.js`/`run.py`/`run-unit.js`/`flake.js`/the five suite
+runners/`os-sweep.mjs`/`tests/lib/*.js` as a glob), plus the
+`tests/unit/**/config.json` `"timeoutMs"` override channel.
+
+**Count**: **105 matched lines**, all classified by hand
+(full per-line table: `logs/2026-07-28/0369-timeout-survey.md`):
+
+| class | lines |
+|---|---|
+| (a) verdict-deciding caps — **60 fixed constants** (42 run.py, 10–600 s; 18 JS, 30 s–3600 s) + 6 enforcement sites | 66 |
+| (b) `except TimeoutExpired` handlers | 14 |
+| (c) teardown/kill-grace/poll timers (never decide a verdict) | 13 |
+| (d) plumbing/usage text/false positives | 12 |
+
+Both of this ticket's occurrences are in the table: `kernel/run.js:70`
+(`test_os_boot`, 900 s) and `run.py:1093` (micropython-upstream per-test, 15 s).
+
+**Positive control (lesson AZ)**: three decoys — a NEW file under the
+`tests/lib/*.js` glob, a line smuggled into a listed file with previously ZERO
+hits (`tests/todos/run.js`), and a decoy `config.json` in the override channel.
+Scan: 105 → **108**, diff = exactly the three plants; decoys removed, baseline
+105 restored exactly. Transcript in the dev log.
+
+**Two findings beyond the enumeration, both fold into step 3's fix design
+(same family — no new ticket):**
+
+1. **Three runners have NO cap at any layer**: `tests/run.js` (the
+   dispatcher), `tests/host/run.js`, `tests/todos/run.js` — bare
+   `spawnSync`, no `timeout`, no outer wrapper. A hung test there hangs the
+   run forever: the opposite failure mode from this ticket's headline, and
+   the cap policy step 3 designs should cover it. (`tests/ext/run.js` is
+   also bare but reached through run.py's 120 s ext wrapper.)
+2. **The failure MODE of a cap firing is inconsistent in run.py** (verified,
+   not assumed: the category loop in `main` is unwrapped): a `TimeoutExpired`
+   in the handler-less categories — zlib, projects, freetype, cairo-run,
+   libc, disw, tcc-run, sourcemap, ast, ext, blockfs-py — **crashes run.py
+   with a traceback** (no summary, no per-test record); the handled ones
+   (unit, lua, libpng, genhdr, micropython ×2, sqlite, fuzz, fakegit,
+   `build_project`) record an honest failure.
+
+**What this half does NOT establish** (stated so it cannot be over-read): it
+is static — it measures no execution time and NO headroom, quiet or loaded.
+Per the ruling above, no `quiet_wall / cap` ranking is emitted and none may be
+derived from the table. The scan proves the channels it scans (three, each
+under the control), not the absence of channels it doesn't — a deadline named
+neither `timeout*` nor `*_MS`/`*_SECS`, applied without
+`setTimeout`/`Atomics.wait`/`Date.now()+N`, would evade it. **The
+under-contention per-test timing half of step 2 remains open** (needs the
+heavy lock / a quiet box), and step 3 after it.
