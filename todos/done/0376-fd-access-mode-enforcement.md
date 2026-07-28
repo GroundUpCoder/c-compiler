@@ -1,6 +1,6 @@
 # 0376 — gucOS fds ignore the access mode: write() on an O_RDONLY fd silently mutates the file (P0 or an explicit waive)
 
-- **Status**: open
+- **Status**: done
 - **Priority**: **P0**, filed per the unqualified bug rule. ⚠️ The review
   itself framed this as *"file as P0 **or explicitly waive**"* — so a
   considered, written waive is an acceptable outcome here. **A silent demotion
@@ -75,3 +75,19 @@ them together. (D11 otherwise rides `0378`.)
 - `blockfs` + `kernel` green with NUMBERS.
 - `todos/LIABILITIES.md` is machine-checked by the `todos` suite — re-anchor or
   retire any anchored line this change rewrites, in the same commit.
+
+## RESOLUTION 2026-07-28 — the ENFORCEMENT LANDED (no waive, per the ruling)
+
+Branch `0376-fd-access-mode`. Red-first: `948a0ebc` recorded both halves RED
+in both gucOS environments (test_posix 5 new FAILs; test_fs_e2e 3 new FAILs —
+the fd-action O_RDONLY child left the file as `[EVILGOOD]`). Fix `7b699124`:
+`flags & O_ACCMODE` stored on the fd entry (BlockFS open, both kernel
+`_makeOfd('file')` sites incl. the spawn fd-action OPEN), checked in
+read/write both layers; ftruncate-on-read-fd EINVAL; Env B pipe wrong-end
+EBADF (same class). `087d07e2`: fd-mode checks precede the readonly-volume
+flag (EBADF/EINVAL, not EROFS — POSIX fd-op ordering, local/brokered
+identity), three tests un-pinned from the old ordering, two test_blockfs
+tests corrected that themselves wrote through bare-O_CREAT fds. Gates:
+blockfs 15/0 [15/15 recorded], kernel 125/0 [125/125 recorded], todos 5/5,
+host pass, unit 791/0 (+1 xfail, 3 skip). D11 untouched — rides `0378`.
+Details: `logs/2026-07-28/0376-fd-access-mode.md`.
