@@ -1,6 +1,6 @@
 # 0360 — the cross-ref id survey trusts remote-tracking refs without checking how stale they are
 
-- **Status**: open
+- **Status**: done
 - **Design**: —
 
 ## Goal
