@@ -64,6 +64,80 @@ log the index mtime/sha immediately before the catalog read, or run the suite at
 timeout story** — it failed at an assertion instantly. This is not contention-induced slowness;
 it is a wrong *file* being read.
 
+## VERDICT: CONFIRMED (2026-07-28, lane `0388-mkpkg-index-race`)
+
+The hypothesis is confirmed, and the mechanism is **worse than described above**:
+a base run does not merely overwrite `index.json`, it **deletes the clang payload
+bytes from `pool/`**. Three independent pieces of evidence.
+
+### E1 — the causal step, deterministic
+
+`mkpkg --clang` then plain `mkpkg` over the same dir. Positive control first: the
+superset index really did carry the name and the payload really was on disk.
+
+```
+superset:  26 pkgs, 9 -clang names, cpython-clang PRESENT
+           pool/cpython-clang_3.13.5_3af38bf4bbb2721d.pkg.tar.gz  on disk
+after `node tools/mkpkg.js --quiet`:
+           15 pkgs, clang names (NONE), cpython-clang ABSENT
+           11 pool payloads DELETED
+```
+
+The deleter is the **orphan prune** at `tools/mkpkg.js` `main()` ("Anything the
+fresh index doesn't reference goes"). A base build's `avail` excludes every
+`requires:"clang-sibling"` definition, so all nine `-clang` payloads (plus
+`sdldemo`, `stl4`) are orphans by construction. This is the behaviour
+`test_clang_pkgs_e2e.js`'s header calls "the accepted thrash (CLANG-CPP-EPIC
+Part II §7)" — accepted when the suite was serial, a race once it is not.
+
+### E2 — end-to-end, through the real server
+
+A probe running the clang test's exact sequence (`mkpkg --clang` → `serve.js` →
+fetch) with a base `mkpkg` fired mid-window reproduces **both reported
+assertion failures verbatim**:
+
+```
+served index (before base run):  26 pkgs, cpython-clang=PRESENT
+  [mkpkg (base)] exit=0 (0.1s)
+served index (after, same URL):  15 pkgs, cpython-clang=ABSENT
+  payload on disk now: DELETED (pruned)
+  "catalog lists cpython-clang"      -> FAIL (empty)
+  "cpython-clang installs (exit 0)"  -> FAIL (RC=1)
+```
+
+⭐ Note the destructive run takes **0.1 s** (everything content-fresh and
+reused). It is effectively instantaneous, so it fits anywhere in the window.
+
+### E3 — the interleaving caught in the act, in the real suite at `-j2`
+
+`node tests/kernel/run.js -j2 --filter=cpython_clang,gucman_quake,fontpkg`, with
+an index-write trace. Times relative to the first event:
+
+```
+   0.0s  CLANG_ENSURE_START  test_cpython_clang_e2e.js
+   1.6s  mkpkg INDEX_WRITE  clang=1 n=26 cpython=1
+   1.6s  CLANG_BUILT        <-- window opens
+ 113.0s  BOOT_START
+ 114.1s  mkpkg INDEX_WRITE  clang=0 n=15 cpython=0   <-- test_fontpkg_e2e.js
+ 114.1s  (+ 11 PRUNE lines: every -clang payload deleted)
+ 118.3s  BOOT_END           <-- window closes
+```
+
+🔴 **The invariant is violated on every such run** — a sibling test rewrote the
+index and deleted the payloads 1.1 s after the clang test's OS began booting.
+That run still reported `ok` only because the in-OS `gucman list`/`install` step
+happened to fetch ~1 s before the overwrite. **Whether the suite goes red is
+decided by about one second of boot timing**, which is exactly the intermittent
+profile the 185 gate saw. Registry order makes the pairing routine:
+`test_cpython_clang_e2e` (159) is adjacent to `test_gucman_quake_e2e` (161),
+`test_fontpkg_e2e` (162) and `test_software_e2e` (163), so at `-j2` it is
+scheduled alongside a base-index writer essentially every run.
+
+**Eight kernel tests write the one `dist/packages`**: base — `test_gucman_e2e`,
+`test_gucman_quake_e2e`, `test_fontpkg_e2e`, `test_software_e2e`,
+`test_cc_win32_e2e`, `test_cmdalt_e2e`; superset — `test_clang_pkgs_e2e`,
+`test_cpython_clang_e2e`.
+
 ## Why this matters beyond one flaky test
 
 `dist/packages/` is **shared mutable state in the repo root** that every package e2e writes
