@@ -1,6 +1,6 @@
 # 0361 — unit tests that assert a wall-clock threshold go red under lane contention
 
-- **Status**: open
+- **Status**: done
 - **Priority**: P2
 - **Found by**: the 0340 merge gate (master cont-120), while three lanes were
   running concurrently
