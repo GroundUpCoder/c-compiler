@@ -9,6 +9,16 @@
   compiler.js's builtin header set does not. Grouped by whether the consumer can
   configure around the absence.
 
+🟢 **RE-MEASURED ON MAIN `c0995358` (master cont-124, 2026-07-28) — STILL OPEN,
+NOT discharged by the landed `0340`.** All five **Group A** symbols (`fma`,
+`gmtime_r`, `clock_getres`, `wcstol`, `isascii`) have **zero occurrences** in
+`compiler.js`. ⚠️ `0340` moved CPython onto **clang**, which changes this
+ticket's priority, not its truth. 🔴 **This ticket also has funding independent
+of CPython: `todos/LIABILITIES.md` L48 (`tcflush` reports success without
+discharging the queue) is anchored to `0325`.** Closing it would orphan L48.
+**Do not close.**
+
+
 ## Group A — NO configure escape (a port MUST have these)
 
 CPython calls these unconditionally; there is no `HAVE_*` to turn off.

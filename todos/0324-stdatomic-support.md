@@ -8,6 +8,14 @@
   first wall: **every** CPython TU fails at header-parse time until it is worked
   around.
 
+🟢 **RE-MEASURED ON MAIN `c0995358` (master cont-124, 2026-07-28) — STILL OPEN,
+NOT discharged by the landed `0340`.** `__STDC_NO_ATOMICS__` is still predefined
+(now `compiler.js:31751` — the ticket body's `:31368` is a **stale line number**,
+the predefine itself is unchanged). ⚠️ Same reasoning as `0322`: `0340` moved
+CPython onto **clang**, so this is off the CPython critical path — a **priority**
+change, not a discharge. **Do not close.**
+
+
 ## The gap
 
 compiler.js predefines `__STDC_NO_ATOMICS__` (`compiler.js:31368`) and provides

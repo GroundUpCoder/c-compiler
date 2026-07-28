@@ -2,9 +2,12 @@
 
 - **Status**: open
 - **Difficulty**: heavy (≈3–4 lane-days)
-- **Design**: `todos/SOFTWARE-NATIVE.md` on `origin/design-software-win32`
-  @ `487f8b70` — a full design pass (control inventory, agent-drivability
-  plan, costed split). **Read it before scoping; do not re-derive it.**
+- **Design**: `todos/SOFTWARE-NATIVE.md` — **NOW IN `main`** (merged by master
+  cont-123 as `cf939313`; `487f8b70` verified an ancestor of main). A full design
+  pass (control inventory, agent-drivability plan, costed split). **Read it
+  before scoping; do not re-derive it.** ⚠️ The old pointer to
+  `origin/design-software-win32 @ 487f8b70` is **stale** — read the copy in
+  `main`, which is the one that absorbs later corrections.
 - **Provenance**: **jku, 2026-07-28, verbatim** — *"for the software manager I
   do want fuller user32 toolkit so we have real controls. I want that work
   queued."* This settles the Path 1 vs Path 2 fork in the design pass in favour
@@ -77,8 +80,8 @@ generality test.
 
 ## Plan
 
-1. Read `todos/SOFTWARE-NATIVE.md` (`origin/design-software-win32` @
-   `487f8b70`) in full. Confirm the LISTBOX/COMBOBOX drivability question above.
+1. Read `todos/SOFTWARE-NATIVE.md` (**in `main`** — see the Design line) in full.
+   Confirm the LISTBOX/COMBOBOX drivability question above.
 2. `commctrl.h` + `SysHeader32` + `SysListView32` **report view**: columns,
    selection, sort-by-column.
 3. The AQM agent seam in user32 at the user32↔control boundary

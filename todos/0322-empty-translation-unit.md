@@ -6,6 +6,18 @@
 - **Design**: —
 - **Provenance**: found by the `todos/0313` CPython M0 probe.
 
+🟢 **RE-MEASURED ON MAIN `c0995358` (master cont-124, 2026-07-28) — STILL OPEN,
+NOT discharged by the landed `0340`.** Direct probe with a **positive control**:
+a non-empty TU compiles clean (exit 0, no diagnostics), while
+`#ifdef NOPE / int x; / #endif` still errors `null:0: error: No tokens to parse`.
+⚠️ **`0340` cannot have discharged this**: `0340` vendored CPython + the
+**clang** binary, so CPython no longer compiles through `compiler.js` at all.
+That removes this ticket's *original motivation* (the CPython critical path); it
+does **not** remove the defect. Accepting an empty translation unit is required
+by C and is an ordinary shape in any `#ifdef`-configurable codebase. **Re-rank if
+you like, but do not close.**
+
+
 ## The bug
 
 A `.c` file whose entire contents are preprocessed away errors out:
