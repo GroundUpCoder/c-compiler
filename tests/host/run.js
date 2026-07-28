@@ -35,6 +35,7 @@ var tests = [
   ['test_tree_guard.js', []],            // the cross-tree preflight REFUSES a foreign-cwd launch (0341) — the positive control, run every time
   ['test_pp_spread_bounds.js', []],      // no unbounded call-argument spread survives in compiler.js (0320)
   ['test_suite_record.js', []],          // a split suite's summary records its scope + merges, never clobbers (0339)
+  ['test_sleep_clamp.js', []],           // sleep primitives request EXACTLY the asked duration — no clock in the assertion (0361)
   ['test_bakeinput_sources.js', []],     // the 0082 closure covers out-of-dir sources/includes, not just `deps` (0354)
   ['../serve/test_first_run.js', []],    // `node serve.js .` prints a URL that 200s (COOP/COEP)
   ['../serve/test_clang_overlay.js', []],// `serve.js --clang` overlay on-ramp: fold-in vs sibling-absent (0141)

@@ -1,5 +1,10 @@
 /* Regression: sleep() was a silent no-op (returned immediately);
- * usleep/nanosleep suspended correctly. */
+ * usleep/nanosleep suspended correctly. *
+ * The bound is ONE-SIDED on purpose (todos/0361): a lower bound is
+ * contention-monotone — load can only make elapsed larger — so it cannot go
+ * red because another lane is busy. Do not add an upper bound; that would be
+ * a statement about the machine. The exact requested duration is pinned with
+ * no clock at all in tests/host/test_sleep_clamp.js. */
 #include <stdio.h>
 #include <unistd.h>
 #include <time.h>

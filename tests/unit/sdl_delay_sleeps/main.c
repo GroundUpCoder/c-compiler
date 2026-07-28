@@ -5,7 +5,12 @@
    main-thread-browser flavor, which is pinned by
    tests/kernel/test_sdl_delay_e2e.js. This test pins the sleep-succeeds
    contract: both lines print, the elapsed ticks cover the requested duration,
-   and main returns 0. */
+   and main returns 0.
+
+   The `dt < 40` guard is a ONE-SIDED lower bound on purpose (todos/0361):
+   contention can only make dt larger, so it cannot go red because the box is
+   busy. Do not pair it with an upper bound — that would assert a property of
+   the machine rather than of SDL_Delay. */
 #include <SDL.h>
 #include <stdio.h>
 

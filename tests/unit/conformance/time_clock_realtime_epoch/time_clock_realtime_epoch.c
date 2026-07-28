@@ -1,6 +1,9 @@
 // BUG: clock_gettime(CLOCK_REALTIME) returns time since process start (tv_sec near 0) instead of seconds since the Epoch, so it disagrees with time().
 // C11: 7.27.2.4 time() returns the current calendar time; POSIX clock_gettime(CLOCK_REALTIME) is defined as "seconds since the Epoch" — the two must agree to within moments.
 // EXPECT: "1\n" — |time(0) - CLOCK_REALTIME.tv_sec| < 60 (verified against native clang).
+// NB (todos/0361): the 60 s window is NOT a wall-clock budget on any work — it
+//      is a coherence check between two clocks read at adjacent statements, so
+//      lane contention does not move it. It stays as-is.
 #include <stdio.h>
 #include <time.h>
 
