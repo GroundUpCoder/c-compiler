@@ -1,6 +1,6 @@
 # 0397 — pbcopy/pbpaste — macOS-named front-ends over the kernel clipboard slot
 
-- **Status**: open
+- **Status**: done
 - **Design**: none needed — the capability already exists; this is a naming + factoring job.
 
 ## Goal
@@ -80,6 +80,41 @@ content changes. Bump `os/image.json`'s `version` in the same commit.
 - Kernel suite + browser sweep green, with **numbers** (a suite without a number is not run).
 - `node todos/queue.js check` passes.
 - `os/image.json` version bumped.
+
+## Outcome (2026-07-29, branch `0397-pbcopy`)
+
+Shipped as planned. `os/clipio.h` holds the two operations. `os/clip.c`, `os/pbcopy.c` and
+`os/pbpaste.c` include it through the manifest's `hdrs` field. `os/image.json` is at
+version 190.
+
+The decision above was kept. There are two programs and one header, not a multi-call
+binary.
+
+`clip`'s contract is unchanged, and the test asserts each part of it after the refactor:
+`clip`, `clip -o`, `clip -o` on an empty slot exits 1, and any other argument gives usage
+with exit 2.
+
+Interop is proved in both directions, verbatim:
+
+```
+--- echo hi | pbcopy ; clip -o ---
+hi
+--- echo hi | clip ; pbpaste ---
+hi
+--- empty slot ---
+pbpaste rc=1
+```
+
+`tests/kernel/test_pbcopy_e2e.js` is the acceptance test, registered in
+`tests/kernel/run.js`. It has 20 checks. Session A covers the command line. Session B
+proves the win32 veneer is on the same slot: `pbcopy` feeds notepad's paste, and notepad's
+Copy feeds `pbpaste`.
+
+The NUL limit has a negative control. The test counts the input bytes (3) before it counts
+the output bytes (1). Without that control, a lost shell escape looks the same as
+truncation.
+
+Dev log: `logs/2026-07-29/0397-pbcopy-pbpaste.md`.
 
 ## Notes
 

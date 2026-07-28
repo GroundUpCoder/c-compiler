@@ -91,6 +91,23 @@ bare on a box that had just been under load. 🔴 **Do not open this ticket by h
 deadlock** — chase the slowness and the pixel nondeterminism. The uncapped-bare-invocation
 point in item 4 stands on its own merits regardless.
 
+**Sighting 4** — the `0397` lane's kernel gate, 2026-07-28 21:50Z. Full 128-file run
+(`runs` 1 entry, filter null, `total`/`selected`/`executed`/`recorded` all 128, `resumed` 0,
+`carried` 0, `jobs` 2, `elapsedMs` 997301): **127 pass / 1 fail**, the single failure being
+this file at **10.9 s**. Green solo on immediate re-run, same tree. That lane's diff is
+`os/clip.c` + `os/clipio.h` + `os/pbcopy.c` + `os/pbpaste.c` + `os/image.json` +
+`tests/kernel/`, so it is causally untouched by that work.
+
+🔴 **The numbers were byte-identical AGAIN**: `static 285 vs ticking 234 ink pixels`. Three
+independent lanes now, three diffs, the **same two integers**. This is the third confirmation
+of the bimodal reading above, and it retires the "timing noise" hypothesis: noise scatters
+counts, and these do not scatter.
+
+⚠️ This sighting adds a data point the earlier ones lack. The same lane ran
+`tests/flake.js` immediately after, and the whole tripwire set — plus its own new file —
+came back **0% flake over 3 runs each under load ×10**. So the box was capable of stable
+repeats at the time. The trigger is therefore narrower than "a loaded box".
+
 ## Plan
 
 1. **Reproduce deliberately** — run it under synthetic load (the box has a heavy-lock story;
