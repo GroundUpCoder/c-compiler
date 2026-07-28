@@ -29,8 +29,9 @@ mechanism**.
 This supersedes decider verdicts D4 ("no config dispatch — the name split is the
 dispatch answer") and D6 ("the `python` alias is ratified-deliberate"; the alias
 is now INTERIM, retired by this work). A later lean (same note, *jku LEAN:
-python-clang as the suggested/preferred python*) fixes the **suggestion** shown
-when nothing is installed: it names `python-clang`.
+python-clang as the suggested/preferred python* — the package that ruling named
+was since renamed `cpython-clang` by todos/0374) fixes the **suggestion** shown
+when nothing is installed: it names `cpython-clang`.
 
 `python` is this mechanism's FIRST USER, not the mechanism. What follows is a
 generic command-alternatives dispatcher; nothing in it is python-shaped.
@@ -134,7 +135,7 @@ under the other). The error names what to do instead, using the candidate set:
 
 ```
 $ python foo.py
-python: 'python-clang' is not installed
+python: 'cpython-clang' is not installed
        available: micropython
        switch with:  cmdalt set python micropython
                      (or Control Panel ▸ Default Programs)
@@ -146,7 +147,7 @@ carries the hint:
 ```
 $ python foo.py
 python: no python implementation is installed
-       install one:  gucman install python-clang
+       install one:  gucman install cpython-clang
 ```
 
 Exit status for both: **127** (POSIX "command not found").
@@ -359,7 +360,7 @@ mysterious, and the ticket funds all three:
 refuses the same thing at install. The promotion is not tidiness: §7's
 "self-enforcing fat bake" argument only covers packages that are actually
 FOLDED, and a `requires`-gated definition — every `*-clang` variant, including
-the `python-clang` this design names as the suggestion — is never folded. Such
+the `cpython-clang` this design names as the suggestion — is never folded. Such
 a definition would have built clean and planted the shadow at install, i.e.
 re-created the exact bug this whole item exists to close, with no build-time
 signal anywhere.
@@ -383,7 +384,7 @@ default programs" vs "associate a file type"):
 
 - **Commands list**: one row per `cmdalt` key, showing the effective value.
 - **Candidates** for the selected key (from `cfg_each`), each row annotated:
-  `micropython — /usr/local/bin/micropython` / `python-clang — not installed`.
+  `micropython — /usr/local/bin/micropython` / `cpython-clang — not installed`.
 - **Set as default** → `cfg_set("cmdalt", key, value)`; **Use default** →
   `cfg_unset` (reverts to package claims, then the baked suggestion).
 - **Shadow warning** when PATH does not reach the dispatch link (§7), with the

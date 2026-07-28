@@ -1,8 +1,18 @@
 # 0331 — Ship python-clang as a gucman package (needs a CPython vendor tree)
 
+> **2026-07-28 (todos/0374):** the package this ticket shipped was RENAMED
+> `python-clang` → **`cpython-clang`** (jku ruling, clean break — no alias).
+> Occurrences of the old name below are the dated record of what shipped and
+> are left as written. Current files: `packages/cpython-clang.json`,
+> `tests/kernel/test_cpython_clang_e2e.js`. NB this rename settles the
+> PACKAGE name only — the §6.2-vs-uid-657 key-reservation question this
+> ticket still owes remains open and is NOT settled by 0374.
+
 - **Status**: open — the blocker is GONE (`todos/0340` landed 2026-07-28 with
   the vendor tree, the sibling manifest project, `packages/python-clang.json`
-  and `tests/kernel/test_python_clang_e2e.js`). **Every acceptance bullet below
+  (renamed `cpython-clang.json` by 0374)
+  and `tests/kernel/test_python_clang_e2e.js` (now `test_cpython_clang_e2e.js`).
+  **Every acceptance bullet below
   is already measured green in-OS** by that test; what remains for this ticket
   is whatever shipping work master judges outstanding (the deploy leg, and the
   `commands` claim once `todos/0338` carries it). Historical framing follows.

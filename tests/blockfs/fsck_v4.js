@@ -169,6 +169,7 @@ function fsck(store) {
     seenDirs.add(ino);
     const d = live.get(ino);
     if (!d || !d.isDir || d.extentOffset === 0) return;
+    const names = new Set(); // name uniqueness (todos/0375)
     let pos = 0, g = 0;
     while (pos < d.dataSize) {
       if (++g > 1e6) { err(`dir ${ino}: entry walk exceeded guard`); break; }
@@ -181,6 +182,12 @@ function fsck(store) {
         const name = new TextDecoder().decode(bytes(d.extentOffset + pos + 6, nameLen));
         if (name !== '.' && name !== '..') {
           if (nameLen === 0) err(`dir ${ino}: empty entry name`);
+          // Duplicate names (todos/0375): every path op resolves by first
+          // match, so a second same-named dirent is unreachable-but-live
+          // corruption — unlink removes the wrong one and "resurrects" the
+          // other. The O_CREAT-through-dangling-symlink bug minted these.
+          if (names.has(name)) err(`dir ${ino}: duplicate dirent name '${name}' (${path + '/' + name})`);
+          else names.add(name);
           const target = live.get(entIno);
           if (!target) err(`dir ${ino}: entry '${name}' -> inode ${entIno} which is not live`);
           else { bump(entIno); if (target.isDir) walkDir(entIno, path + '/' + name); }

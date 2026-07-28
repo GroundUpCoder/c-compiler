@@ -2784,6 +2784,40 @@ var BLOCK_FS = (function () {
     return ino ? { inoId: inoId, ino: ino } : null;
   };
 
+  // Splice a final-component symlink's target into its path — the same rules
+  // as _walkHops (absolute target restarts from root; relative joins the
+  // link's directory; on a mounted volume the target resolves in the FULL
+  // namespace and a foreign one throws __mountEscape). Returns the next
+  // volume-relative resolved path, or null for an empty target. Used by the
+  // open(O_CREAT) final-symlink chase (todos/0375). NB the escape throw is a
+  // can't-happen guard there: open's initial FULL walk follows the same
+  // chain, so a foreign hop escapes (and MountFS reroutes) before the create
+  // branch ever runs — if it fires anyway, MountFS surfaces it loudly.
+  BlockFS.prototype._spliceFinalLink = function (resolved, ino) {
+    var tlen = ino.dataSize;
+    var target = (ino.extentOffset && tlen > 0)
+      ? decodeStr(this._s.getBytes(ino.extentOffset, tlen)) : '';
+    if (!target) return null;
+    var dirPath = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
+    if (this._mountOwns) {
+      var pfx = this._mountPrefix === '/' ? '' : this._mountPrefix;
+      var full = target.charAt(0) === '/'
+        ? target
+        : pfx + (dirPath === '/' ? '' : dirPath) + '/' + target;
+      full = this._resolvePath(full);
+      var rel = this._mountOwns(full);
+      if (rel === null) {
+        var esc = new Error('mount escape to ' + full);
+        esc.__mountEscape = full;
+        throw esc;
+      }
+      return this._resolvePath(rel);
+    }
+    return this._resolvePath(target.charAt(0) === '/'
+      ? target
+      : (dirPath === '/' ? '' : dirPath) + '/' + target);
+  };
+
   // Allocate or grow a data extent for an inode.
   BlockFS.prototype._growExtent = function (ino, neededSize) {
     if (!ino.extentOffset) {
@@ -2874,6 +2908,30 @@ var BLOCK_FS = (function () {
     var resolved = this._resolvePath(path);
     var w = this._walkPath(resolved);
 
+    if (!w && create) {
+      // O_CREAT whose final component is a symlink must act on the link's
+      // TARGET — POSIX open() follows the final symlink even when creating.
+      // The full walk above only says the chain ends nowhere; without this
+      // chase the create branch below would insert a SECOND dirent under
+      // the link's own lexical name — a duplicate directory entry, on-disk
+      // corruption (todos/0375). Chase the final-component chain by lstat
+      // hops, ELOOP-bounded; O_CREAT|O_EXCL refuses on the symlink itself
+      // (POSIX: EEXIST regardless of where it points).
+      var hops = 0;
+      var lw = this._walkPath(resolved, true);
+      while (lw && (lw.ino.mode & S_IFMT) === S_IFLNK) {
+        if (excl) return this._setErr('EEXIST');
+        if (++hops > SYMLOOP_MAX) return this._setErr('ELOOP');
+        var next = this._spliceFinalLink(resolved, lw.ino);
+        if (next === null) return this._setErr('ENOENT'); // empty link target
+        resolved = next;
+        lw = this._walkPath(resolved, true);
+      }
+      // Normally still null (create at `resolved` below); non-null would
+      // mean the chase landed on a real file — open that.
+      w = lw;
+    }
+
     // Read-only volume (todos/0040): any write-intent open is EROFS. AFTER
     // the walk: a path that resolves out of this volume via a symlink
     // (/usr/local -> /var/local) must escape to the owning volume, not fail
@@ -2895,7 +2953,7 @@ var BLOCK_FS = (function () {
         this._inoRef(w.inoId);
         return this._allocFd({
           type: 'dev', dev: w.ino.rdev || 0,
-          inoId: w.inoId, position: 0, path: resolved
+          inoId: w.inoId, position: 0, accmode: flags & 3, path: resolved
         });
       }
       if (trunc) {
@@ -2955,8 +3013,12 @@ var BLOCK_FS = (function () {
 
     var position = append ? w.ino.dataSize : 0;
     this._inoRef(w.inoId);
+    // accmode (todos/0376): the fd carries flags & O_ACCMODE for read()/
+    // write() to enforce — dup/dup2/F_DUPFD share the entry object, so the
+    // mode rides every duplicate, like a POSIX open file description.
     var fd = this._allocFd({
-      inoId: w.inoId, position: position, append: append, path: resolved
+      inoId: w.inoId, position: position, append: append,
+      accmode: flags & 3, path: resolved
     });
     return fd;
   };
@@ -2979,7 +3041,14 @@ var BLOCK_FS = (function () {
       return this._setErr('EBADF');
     var entry = this._fdTable[fd];
 
+    // Access mode (todos/0376): an open()-born entry carries flags &
+    // O_ACCMODE — O_WRONLY (1) can't read. Entries not born from open()
+    // (console stdio, pipe ends — checked by direction below) carry none.
+    if (entry.accmode === 1) return this._setErr('EBADF');
+
     if (entry.type === 'pipe') {
+      // The write end can't read (todos/0376 — same class, fixed direction).
+      if (entry.pipeEnd !== 'read') return this._setErr('EBADF');
       if (entry.pipeId !== undefined && this._pipeBroker) {
         // Owner-brokered: may BLOCK (the broker parks this worker on Atomics.wait
         // until a writer in another instance delivers). 0-length = EOF.
@@ -3051,7 +3120,14 @@ var BLOCK_FS = (function () {
       return count;
     }
 
+    // Access mode (todos/0376): O_RDONLY (0) can't write — this is the
+    // corruption half: a defensive read-only open used to silently mutate
+    // the file it existed to protect.
+    if (entry.accmode === 0) return this._setErr('EBADF');
+
     if (entry.type === 'pipe') {
+      // The read end can't write (todos/0376 — same class, fixed direction).
+      if (entry.pipeEnd !== 'write') return this._setErr('EBADF');
       if (entry.pipeId !== undefined && this._pipeBroker) {
         var w = this._pipeBroker.pipeWrite(entry.pipeId, buf.subarray(0, count));
         if (w < 0) return this._setErr('EPIPE');
@@ -3063,8 +3139,10 @@ var BLOCK_FS = (function () {
     }
     if (entry.type === 'dev') return this._writeDev(entry, buf, count);
     if (entry.inoId === undefined) return this._setErr('EBADF');
-    // Belt-and-braces: open() can't hand out a writable fd on a readonly
-    // volume, but write() doesn't check the open mode, so guard here too.
+    // Belt-and-braces: open() refuses every write-intent open on a readonly
+    // volume (EROFS after the walk), and the accmode check above already
+    // refused read-only fds — this backstop only fires for an entry that
+    // reached a readonly volume without either, which no current path can.
     if (this._readonly) return this._setErr('EROFS');
 
     var ino = this._inodes.read(entry.inoId);
@@ -3126,7 +3204,10 @@ var BLOCK_FS = (function () {
 
   BlockFS.prototype.mkdir = function (path, mode) {
     var resolved = this._resolvePath(path);
-    if (this._walkPath(resolved)) return this._setErr('EEXIST');
+    // noFollowFinal: a dangling symlink at the target name still EEXISTs
+    // (POSIX — mkdir never follows the final symlink); a full-follow walk
+    // answered "doesn't exist" and inserted a DUPLICATE dirent (todos/0375).
+    if (this._walkPath(resolved, true)) return this._setErr('EEXIST');
 
     var parentPath = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
     var dirName = resolved.substring(resolved.lastIndexOf('/') + 1);
@@ -3174,7 +3255,8 @@ var BLOCK_FS = (function () {
   // lives in the inode's rdev field. v4 only (v3 inodes have no rdev field).
   BlockFS.prototype.mknod = function (path, mode, dev) {
     var resolved = this._resolvePath(path);
-    if (this._walkPath(resolved)) return this._setErr('EEXIST');
+    // noFollowFinal: same duplicate-dirent guard as mkdir (todos/0375).
+    if (this._walkPath(resolved, true)) return this._setErr('EEXIST');
     var parentPath = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
     var pw = this._walkPath(parentPath);
     if (!pw) return this._setErr('ENOENT');
@@ -3661,12 +3743,19 @@ var BLOCK_FS = (function () {
 
   // ftruncate(fd, size) — truncate or extend an open file.
   BlockFS.prototype.ftruncate = function (fd, size) {
-    if (this._readonly) return this._setErr('EROFS');
-    if (size < 0) return this._setErr('EINVAL');
     if (fd < 0 || fd >= this._fdTable.length || !this._fdTable[fd])
       return this._setErr('EBADF');
     var entry = this._fdTable[fd];
     if (entry.inoId === undefined) return this._setErr('EBADF');
+    // POSIX: ftruncate requires a fd open for writing — EINVAL otherwise
+    // (todos/0376; the same corruption class as write-on-O_RDONLY). BEFORE
+    // the volume flag, like read()/write(): a readonly volume only hands
+    // out O_RDONLY fds, so its ftruncate is EINVAL (Linux agrees — EROFS
+    // is the path-op/truncate(2) errno), and the kernel's FS_FTRUNCATE arm
+    // answers the same, keeping local/brokered identity.
+    if (entry.accmode === 0) return this._setErr('EINVAL');
+    if (this._readonly) return this._setErr('EROFS');
+    if (size < 0) return this._setErr('EINVAL');
 
     var ino = this._inodes.read(entry.inoId);
     if (!ino) return this._setErr('EBADF');
@@ -3763,7 +3852,9 @@ var BLOCK_FS = (function () {
     if ((oldW.ino.mode & S_IFMT) === S_IFDIR) return this._setErr('EPERM');
 
     var newResolved = this._resolvePath(newPath);
-    if (this._walkPath(newResolved)) return this._setErr('EEXIST');
+    // noFollowFinal: same duplicate-dirent guard as mkdir (todos/0375);
+    // POSIX link() never follows newpath's final component.
+    if (this._walkPath(newResolved, true)) return this._setErr('EEXIST');
 
     var parentPath = newResolved.substring(0, newResolved.lastIndexOf('/')) || '/';
     var fileName = newResolved.substring(newResolved.lastIndexOf('/') + 1);

@@ -1,4 +1,4 @@
-/* ccprobe_clang.h — the clang-side-ONLY compat header for the python-clang
+/* ccprobe_clang.h — the clang-side-ONLY compat header for the cpython-clang
  * build.  -include'd by cc-build.sh; NEVER seen by the compiler.js build, so
  * logs/2026-07-27/cpython-m0-shim/ stays byte-identical between the two.
  *

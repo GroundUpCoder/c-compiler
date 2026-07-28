@@ -169,6 +169,7 @@ function fsck(store) {
     seenDirs.add(ino);
     const d = live.get(ino);
     if (!d || !d.isDir || d.extentOffset === 0) return;
+    const names = new Set(); // name uniqueness (todos/0375)
     let pos = 0, g = 0;
     while (pos < d.dataSize) {
       if (++g > 1e6) { err(`dir ${ino}: entry walk exceeded guard`); break; }
@@ -181,6 +182,11 @@ function fsck(store) {
         const name = new TextDecoder().decode(store.getBytes(d.extentOffset + pos + 6, nameLen));
         if (name !== '.' && name !== '..') {
           if (nameLen === 0) err(`dir ${ino}: empty entry name`);
+          // Duplicate names (todos/0375): resolution is first-match, so a
+          // second same-named dirent is corruption — unlink removes the
+          // wrong one and "resurrects" the other.
+          if (names.has(name)) err(`dir ${ino}: duplicate dirent name '${name}' (${path + '/' + name})`);
+          else names.add(name);
           const target = live.get(entIno);
           if (!target) err(`dir ${ino}: entry '${name}' -> inode ${entIno} which is not live`);
           else {

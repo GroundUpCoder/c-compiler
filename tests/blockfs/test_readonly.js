@@ -119,8 +119,17 @@ test('every mutating op returns EROFS', function () {
   erofs(ro, 'utime', ro.utime('/bin/tool', 1, 2));
   var fd = ro.open('/bin/tool', O_RDONLY, 0);
   assert(fd !== null, 'O_RDONLY open still works');
-  erofs(ro, 'write on a read fd', ro.write(fd, encode('X'), 1));
-  erofs(ro, 'ftruncate', ro.ftruncate(fd, 0));
+  // EBADF, not EROFS (todos/0376): the fd carries its access mode now, and
+  // the only fd a readonly volume can hand out is O_RDONLY — POSIX puts the
+  // fd-mode check before the mount flag (Linux agrees: write(2) on an
+  // O_RDONLY fd is EBADF on any mount). EROFS stays the answer for
+  // write-INTENT opens and path mutations above.
+  assert(ro.write(fd, encode('X'), 1) === null, 'write on a read fd must fail');
+  assertEq(ro._lastError, 'EBADF', 'write on a read fd errno');
+  // ftruncate likewise: EINVAL (fd not open for writing) before the volume
+  // flag — Linux agrees; EROFS is truncate(2)'s path-op errno.
+  assert(ro.ftruncate(fd, 0) === null, 'ftruncate must fail');
+  assertEq(ro._lastError, 'EINVAL', 'ftruncate errno');
   erofs(ro, 'fchmod', ro.fchmod(fd, 0o600));
   erofs(ro, 'futime', ro.futime(fd, 1, 2));
   assertEq(ro.close(fd), 0, 'close is fine');

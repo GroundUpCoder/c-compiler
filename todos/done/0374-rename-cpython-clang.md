@@ -1,6 +1,6 @@
 # 0374 — Rename the package `python-clang` → `cpython-clang` (jku ruling, twice; republish + image bump)
 
-- **Status**: open
+- **Status**: done
 - **Difficulty**: medium
 - **Design**: this file, from
   `~/git/meta/meta/notes/QUEUE-rename-python-clang-to-cpython-clang.md`
@@ -138,6 +138,41 @@ housekeeping:** a clean break is only cheap while the installed set is empty.
 - `todos/LIABILITIES.md` is machine-checked by the `todos` suite — if this
   change rewrites an anchored line the gate goes RED; re-anchor or retire it in
   the same commit.
+
+## Lane record (2026-07-28, branch `0374-cpython-clang`) — decisions + merge-time steps
+
+Decisions taken by the lane, per the survey above:
+
+- **Pool artifact: REGENERATED, not renamed.** The payload's *content* changes
+  (tar members extract under `opt/cpython-clang/`, the launcher script and its
+  `PYTHONPYCACHEPREFIX` rename, `_sysconfigdata__gucos_.py`'s `/opt` prefix),
+  so the sha-suffix changes and a filename rename of the old pool file would
+  publish a payload whose bytes contradict its name. `node tools/mkpkg.js
+  --clang` re-cuts `pool/cpython-clang_3.13.5_<sha16>.pkg.tar.gz` and the
+  index from the renamed definition; the old `python-clang_*` pool file is
+  dropped from the index by construction.
+- **`clangApp` stays `"python-clang"` FOR NOW** in
+  `packages/cpython-clang.json`: it names the sibling clang-simplified
+  overlay's payload key (`/usr/bin/python-clang`), which is not user-visible —
+  and renaming the sibling's project mid-flight would turn every concurrent
+  lane's `mkpkg --clang` (test_clang_pkgs_e2e) red via the orphan check
+  against main-tree definitions.
+
+**Merge-time steps (master):**
+
+1. `os/image.json` `version` → **184** (assigned; the baked
+   `/usr/share/cmdalt` line changed → image bytes changed; the lane left
+   `version` at 182 as required).
+2. Republish `dist/packages` (`mkpkg --clang`) + deploy — the index must carry
+   `cpython-clang` and NOT `python-clang` (clean break, no alias).
+3. **Sibling rename (coordinated, after all lanes with old-name definitions
+   have merged):** clang-simplified `wasm/image/manifest.json` project
+   `python-clang` → `cpython-clang` (`out`/`install` too), rebuild
+   `out-image/overlay.json`, and flip `packages/cpython-clang.json`'s
+   `clangApp` to `"cpython-clang"` in the same change window (the CPYTHON.md
+   §6.3 two-sided interlock). Until then the overlay app keeps its old name;
+   the opt-in `--overlay=clang-apps` bake channel (default false) is the only
+   surface that shows it.
 
 ## Residual this does NOT settle
 

@@ -3,8 +3,11 @@
 - **Status**: open
 - **Difficulty**: medium (≈1–1.5 lane-days for the rebuild + ≈1 for tests/e2e)
 - **Blocked by**: `0370` (hard — the control and its agent seam must exist)
-- **Design**: `todos/SOFTWARE-NATIVE.md` on `origin/design-software-win32`
-  @ `487f8b70`. **Read it in full before scoping.**
+- **Design**: `todos/SOFTWARE-NATIVE.md` — **NOW IN `main`** (merged by master cont-123 as
+  `cf939313`; `487f8b70` verified an ancestor of main, and the two copies of the doc are
+  byte-identical today). **Read it in full before scoping.** ⚠️ The old pointer to
+  `origin/design-software-win32 @ 487f8b70` is **stale** — read the `main` copy, which is the
+  one that absorbs later corrections; a frozen branch snapshot cannot.
 - **Provenance**: jku, 2026-07-28 — redesign the software manager to look
   native win32; the Fable design pass confirmed Reading A (**idiom, not
   substrate**) *by verification, not assumption*: `os/image.json` seeds exactly

@@ -43,7 +43,7 @@
        chance of being able to support pygame in the future", and he "wants all
        implementations eventually caught up" — *caught up*, not *replaced*.
     2. **MicroPython is the only python implementation that actually ships
-       today.** python-clang's binary half is done, but its vendor tree + stdlib
+       today.** cpython-clang's (né python-clang, todos/0374) binary half is done, but its vendor tree + stdlib
        layout is a separate in-flight lane (`todos/0340`). Whatever a user can
        install first is MicroPython.
     3. **A python that cannot `import json` is a footgun no matter which
@@ -59,7 +59,7 @@
     `grep -in python os/image.json` at the deployed v177 commit is empty.
     MicroPython is a **gucman package**; a fresh gucOS has no python until
     `gucman install micropython`. jku is additionally leaning toward
-    python-clang as the *suggested* python when none is installed. ⇒ the correct
+    cpython-clang (then named python-clang) as the *suggested* python when none is installed. ⇒ the correct
     form is **"MicroPython is gucOS's python for users who have installed it."**
   - Provenance: R2 un-park = **(decider call)**, 2026-07-28. Not a jku ruling —
     he may still overturn it.

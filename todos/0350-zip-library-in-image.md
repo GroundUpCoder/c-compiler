@@ -13,6 +13,101 @@
   build on whatever this lands. A companion PWA item lives outside this repo in
   `netguc/magic` — see `0352`.
 
+## ⚖️ RULING 2026-07-28 — SCHEDULE NOW; TIE-BREAK **PRE-COMMITTED**; ⚠️ RULES AGAINST JKU'S LEAN
+
+**Provenance: FABLE DECIDER call, relayed by master cont-123, annotated by master
+cont-124.** ⚠️ **Decider ruling, NOT jku's** — and on this item that distinction
+is load-bearing (see the veto note below). Full reasoning:
+`meta/notes/decisions-cont123-fable.md` (meta main `f16db6d`).
+
+**Scope for the first lane: step-1 MEASUREMENT + vendoring prep ONLY.** Disjoint
+from the P0 chain's surface. **Worktree.** 🔴 **NO heavy-lock gates while the P0
+chain holds the lock** — that scope restriction is the entire reason a 4th lane
+was permitted; if a lane widens it, the objection returns. **Image bump is the
+master's to assign; the lane never touches `os/image.json`.**
+
+**TIE-BREAK, pre-committed so the lane never bounces back to ask:**
+> **libarchive**, unless its **NET compressed image delta** (crediting gucman
+> `tar`+`gz` subsumption) exceeds **libzip's by more than 1 MB**. Within
+> **~100 KB** = noise = **libarchive**.
+
+🔴 **THIS RULES AGAINST jku's STATED LEAN.** He leaned **libzip**; the ruling goes
+**libarchive** *on his own stated criterion* (image size as the deciding
+measurement), because libarchive is FreeBSD base + the Win11 default **and ships
+the `unzip`/`bsdtar` frontend pair, while libzip ships no frontends**.
+~~**HIS VETO STANDS ABOVE THIS RULING.**~~ He was emailed the flag on 2026-07-28
+(token `-EPW89cn-OpM`), then emailed the measured numbers (token `D7xHYg02YvOt`).
+⭐ This ruling is also the **answer to his still-open email question** (*how
+widely is libzip used, and what frontend would we ship?*).
+
+## ✅ VETO RESOLVED 2026-07-28 — jku CONFIRMED **libarchive**. THIS IS NOW A jku CALL, NOT A DECIDER CALL.
+
+Once he had the numbers he replied, verbatim (relayed to master cont-126):
+
+> *"Wait libzip vs lib archive - I thought I said libarchive is fine? It's ok it
+> sounded like that path gave a more streamlined cli path so I'm ok just using
+> that instead"*
+
+⇒ **The veto is WITHDRAWN and libarchive is jku-confirmed.** His stated reason is
+the **frontend/CLI** story (`bsdtar`/`unzip`), which is exactly the axis the
+ruling turned on — not image size. 🔴 **`0351`/`0352` are UNBLOCKED and scope
+against libarchive.** Do **not** re-open the library choice, and do **not** cite
+"his veto" — it no longer exists. ⚠️ Note for the record that his lean (libzip)
+was **right on the merits of size** — libzip is smaller by 58–66 KB compressed —
+so if a future item re-prices this, the size argument favours libzip and only the
+frontend argument favours libarchive.
+
+
+## ✅ STEP-1 MEASUREMENT DONE (2026-07-28, lane `0350-zip`) — THE CALL IS **libarchive**
+
+**Method** (harness committed at `tools/zipmeasure/` — `fetch.sh` pins
+libarchive 3.8.1 + libzip 1.11.4 by sha256, `run.sh` rebuilds and re-verifies):
+both candidates built by OUR compiler against the existing `vendor/zlib`, each
+into a frontend that creates a 3-member zip, reopens it and verifies every
+member byte-identical (system `unzip` cross-reads both outputs). A baseline
+binary (libc + zlib + stdio frontend, no archive lib) isolates the
+lib-attributable cost. libzip is its COMPLETE upstream source list (deflate
+only, no crypto); libarchive is cut to the shippable set (zip r/w, tar r,
+ustar+pax w, gzip r/w, archive_write_disk) with the pull-the-world dispatch
+tables excluded. Control: the linker does NOT drop unreferenced TU functions
+(two unreferenced TUs grew the binary 24 KB), so these numbers price the
+vendored TU set — and the comparison thereby leans in libzip's favor, since
+libzip's number is its whole library.
+
+| binary | raw | gzip -9 |
+|---|---|---|
+| baseline | 78,973 | 32,435 |
+| libzip 1.11.4 | 181,111 | 70,461 |
+| libarchive 3.8.1 (no write_disk) | 357,259 | 128,619 |
+| libarchive 3.8.1 (+ write_disk) | 381,425 | 136,494 |
+
+Lib-attributable: **libzip 38 KB compressed / 102 KB raw**; **libarchive
+96 KB compressed / 278 KB raw** (104/302 with write_disk). Per-binary delta
+libarchive−libzip ≈ **58 KB compressed** (66 with write_disk) — INSIDE the
+ruling's ~100 KB noise band. Even shipping two separate frontend binaries
+instead of one multicall (doubling the lib) puts the gap at ~132 KB, nowhere
+near the 1 MB that would flip the call. **Tie-break applied as pre-committed:
+libarchive.**
+
+**Correction to the ruling's framing — subsumption is a COST here, not a
+credit.** Every binary in the image is statically linked; "subsuming" gucman's
+tar+gz extractor means gucman LINKS libarchive and grows by ~100 KB raw, while
+the bespoke code it sheds (`gm_gunzip` + the ustar walker, ~150 lines) is
+~2–3 KB, and its zlib stays regardless. Measured recommendation for the
+implementing lane: do NOT fold gucman onto libarchive while linking is static
+— it is a pure size regression with no functional gain; the three-paths-to-one
+consolidation only pays off if a shared-library story lands (dlopen lane).
+This does not move the call: at zero credit the gap is still inside the noise
+band. The **frontends** (`unzip`/`zip` as one multicall binary, bsdunzip +
+bsdtar-derived) are where libarchive's value shows up, per the ruling.
+
+**libc gaps found for the real vendoring** (details in
+`tools/zipmeasure/README.md`): `umask(2)` and `id_t` are absent from the
+embedded libc (archive_write_disk needs umask — measurement shims it);
+`strcasecmp` needs `<strings.h>` pulled in for libzip-style code;
+absent-but-config'd-around: gmtime_r/ctime_r/timegm/tzset, fchdir/fstatat/
+openat/linkat, mkfifo, arc4random.
+
 ## Goal
 
 One real zip read+write implementation linked into the image the way `zlib`

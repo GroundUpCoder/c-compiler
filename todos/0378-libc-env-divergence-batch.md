@@ -4,12 +4,37 @@
 - **Priority**: P2 (the batch); ⚠️ **the design question in §2 below is not P2 —
   it is the reason the batch exists.**
 - **Difficulty**: heavy
-- **Design**: `logs/2026-07-28/review-libc-env-divergence.md` on
-  `origin/review-libc-divergence` @ `ecfc0f40` — the full 22-row table (§2),
+- **Design**: `logs/2026-07-28/review-libc-env-divergence.md` — **NOW IN `main`**
+  (merged by master cont-123 as `35d72150`; `ecfc0f40` verified an ancestor of
+  main — the `origin/review-libc-divergence` pointer is **stale**, read the `main`
+  copy, which is the one that absorbs later corrections) — the full 22-row table (§2),
   findings F4–F13 (§3), and **§4, the design question**. **Read §4 first.**
 - **Provenance**: the libc env-divergence deep dive (Fable), 2026-07-28. The
   P0s from that review are filed separately as `0375`, `0376`, `0377` — **do
   not fold them back in here.**
+
+## ⚖️ RULING 2026-07-28 — §4 ANSWERED: **YES, libc contracts get their own conformance seats**
+
+**Provenance: FABLE DECIDER call, relayed by master cont-123, annotated by master
+cont-124.** ⚠️ **Decider ruling, NOT jku's.** Full reasoning:
+`meta/notes/decisions-cont123-fable.md` (meta main `f16db6d`).
+
+- Build a **dedicated contract suite at `tests/contracts/`**, **first-class in
+  the runner, the heavy lock, and the gate** — explicitly **NOT** an opt-in
+  checker. (Lesson **(BZ)**: a checker you must CHOOSE to run does not close a
+  class, and **the master is the likeliest bypass**.)
+- **One contract file per libc behavior, executed in ALL THREE environments
+  (N / B / R).** That is the structural fix for *"we test the env nothing ships
+  on and ship the env nothing tests."*
+- 🔴 **D15/D16-style exemptions are VISIBLE, ANNOTATED OBJECTS — never dropped
+  rows.** An exemption that disappears is indistinguishable from a gap.
+- **Stays ONE ticket, internally staged:** seat design → errno sweep
+  (D5/D9/D10/D11/D13) → D6+D17 → D7+D12 → the rest.
+- **SEQUENCE AFTER `0377`.**
+- ✅ The `kernel.js:3416` false-comment claim was **independently verified real**.
+
+🔴 **22 tests is the SYMPTOM; §4 is the ticket's real content.**
+
 
 ## 1. The batch
 

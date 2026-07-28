@@ -3,6 +3,37 @@
 - **Status**: open
 - **Design**: —
 
+## ⚖️ RULING 2026-07-28 — STEPS 2 AND 3 SHAPES, BOTH SETTLED
+
+**Provenance: FABLE DECIDER call, relayed by master cont-123, annotated by master
+cont-124.** ⚠️ **Decider ruling, NOT jku's.** Full reasoning:
+`meta/notes/decisions-cont123-fable.md` (meta main `f16db6d`).
+
+**STEP 2 — the survey** = static timeout enumeration (**command + count + a
+PLANTED DECOY**, i.e. the positive control required by lesson **(AZ)**) **PLUS
+per-test quiet CPU-time for the heavy tail.**
+
+🔴 **Quiet WALL-CLOCK ratios are REJECTED**, and the stated reason is this
+ticket's own second data point: `micropython-upstream/basics/int_big_lshift.py`
+runs **7.1 s quiet against a 15 s cap** (53% apparent headroom) and **still went
+red under load** — so a `quiet_wall / cap` ranking **demonstrably clears tests
+that fail in practice.** ⚠️ **A headroom number measured on a quiet box is not
+headroom — it is the best case of a distribution whose tail is where the reds
+live.**
+
+**STEP 3 — the fix** = **CPU-time primary cap (over the process tree) + a
+generous wall-clock hang-guard for deadlocks**, proven by **three controls**:
+1. a busy-loop trips the **CPU cap**;
+2. a deadlock trips the **hang-guard**;
+3. a **loaded-box run trips NEITHER**.
+
+❌ **EXPLICITLY REJECTED — do not let a lane propose any of these back:**
+**raising the constant** · **start-time calibration** · **quarantine-alone.**
+
+⭐ **Step 2's static survey needs NO heavy lock**, so it is parallelizable at the
+master's discretion even while the P0 chain holds the lock.
+
+
 ## Goal
 
 `0361` is about a **fixed wall-clock assertion inside a `unit` test**. This is the
