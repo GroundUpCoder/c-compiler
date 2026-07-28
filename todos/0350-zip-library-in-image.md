@@ -35,12 +35,27 @@ master's to assign; the lane never touches `os/image.json`.**
 **libarchive** *on his own stated criterion* (image size as the deciding
 measurement), because libarchive is FreeBSD base + the Win11 default **and ships
 the `unzip`/`bsdtar` frontend pair, while libzip ships no frontends**.
-**HIS VETO STANDS ABOVE THIS RULING.** He was emailed the flag on 2026-07-28
-(token `-EPW89cn-OpM`). ⚠️ Treat the veto as **async-ok**: do **not** block the
-step-1 measurement waiting for it — the measurement is what makes the veto
-informed. ⭐ This ruling is also the **answer to his still-open email question**
-(*how widely is libzip used, and what frontend would we ship?*) — say so when
-reporting.
+~~**HIS VETO STANDS ABOVE THIS RULING.**~~ He was emailed the flag on 2026-07-28
+(token `-EPW89cn-OpM`), then emailed the measured numbers (token `D7xHYg02YvOt`).
+⭐ This ruling is also the **answer to his still-open email question** (*how
+widely is libzip used, and what frontend would we ship?*).
+
+## ✅ VETO RESOLVED 2026-07-28 — jku CONFIRMED **libarchive**. THIS IS NOW A jku CALL, NOT A DECIDER CALL.
+
+Once he had the numbers he replied, verbatim (relayed to master cont-126):
+
+> *"Wait libzip vs lib archive - I thought I said libarchive is fine? It's ok it
+> sounded like that path gave a more streamlined cli path so I'm ok just using
+> that instead"*
+
+⇒ **The veto is WITHDRAWN and libarchive is jku-confirmed.** His stated reason is
+the **frontend/CLI** story (`bsdtar`/`unzip`), which is exactly the axis the
+ruling turned on — not image size. 🔴 **`0351`/`0352` are UNBLOCKED and scope
+against libarchive.** Do **not** re-open the library choice, and do **not** cite
+"his veto" — it no longer exists. ⚠️ Note for the record that his lean (libzip)
+was **right on the merits of size** — libzip is smaller by 58–66 KB compressed —
+so if a future item re-prices this, the size argument favours libzip and only the
+frontend argument favours libarchive.
 
 
 ## ✅ STEP-1 MEASUREMENT DONE (2026-07-28, lane `0350-zip`) — THE CALL IS **libarchive**
