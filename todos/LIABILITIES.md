@@ -338,4 +338,10 @@ thing this file exists to kill.
 - file: kernel.js
 - anchor:  * bounded-buffer discipline as pipes. At most ONE HTTP op is parked per
 
+### L64 — the dynamic-restyle chain walk misses a sibling combinator and cannot reach a `display: none` element
+- ticket: 0426
+- file: vendor/netsurf/netsurf/content/handlers/html/interaction.c
+- anchor:  * Both are recorded in todos/LIABILITIES.md against todos/0426.
+- provenance: 0420
+
 <!-- END ENTRIES -->

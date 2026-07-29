@@ -226,6 +226,36 @@ two carried nothing useful:
   by name), `WINDOW KEY … KIND DOWN|UP` and `WINDOW WHEEL`, so the cheap
   gate can drive a press-drag-release and a key release at all.
 
+netsurf core — **the pointer path** (todos/0419 + todos/0420; rationale in
+`logs/2026-07-29/netsurf-pointer-path.md`).  Both defects sit in the tail of
+`html_mouse_action`:
+
+- `content/handlers/html/interaction.c` — a cancelled `click` now cancels
+  the clicked element's ACTIVATION BEHAVIOUR (`ACTION_SUBMIT`,
+  `ACTION_NAVIGATE`, `ACTION_JS`).  The dispatch already reported the
+  cancellation; upstream discarded the answer, so `preventDefault()` on a
+  link did nothing and the listener's own restyle was lost with the
+  document.  Same file: the `:hover` / `:active` chain subjects are tracked
+  per mouse action, and a transition re-selects the box subtree of the
+  topmost element whose state changed, reflows in the BACKGROUND and
+  requests a redraw bounded to the boxes that really changed.
+- `content/handlers/css/select.{c,h}` — `node_is_hover` and `node_is_active`
+  were `\todo` stubs that always answered "no match".  They answer from the
+  chain now, walking up from the subject, because a dynamic pseudo-class
+  matches a chain rather than one element.  Upstreamable.
+- `content/handlers/html/box_construct.{c,h}` — `box_restyle_element`, the
+  bounded re-selection.  It drops libcss's per-node cache first (that cache
+  holds the pseudo-class flags), re-points the boxes that alias an
+  element's selection results without owning them (text boxes, a
+  `BOX_INLINE_END`, a marker, a `::before` box — and an inline element's
+  text boxes are its SIBLINGS, not its children), and RETIRES the replaced
+  results onto the box tree's talloc context rather than destroying them,
+  so the one alias shape the walk cannot reach renders stale instead of
+  dangling.  "Did anything change" is pointer equality: libcss interns
+  computed styles, so an unchanged selection returns the same pointer.
+- `content/handlers/html/private.h` + `html.c` — the two chain subjects and
+  their teardown.
+
 libdom:
 - `src/events/event_target.c` — a non-capture listener registered on the
   event TARGET fired twice per event.  `_dom_node_dispatch_event`

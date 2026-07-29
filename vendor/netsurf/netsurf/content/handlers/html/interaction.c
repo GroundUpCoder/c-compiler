@@ -1797,7 +1797,7 @@ static void html_fire_mouse_events(html_content *html,
  *   - a rule that takes an element from `display: none` to displayed,
  *     which has no box to re-select from.
  *
- * Both are recorded in todos/LIABILITIES.md against todos/0424.
+ * Both are recorded in todos/LIABILITIES.md against todos/0426.
  */
 #define HTML_CHAIN_MAX 128
 

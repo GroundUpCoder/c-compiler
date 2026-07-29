@@ -1,7 +1,26 @@
 # 0419 — netsurf: preventDefault() on a link click does not stop the navigation
 
-- **Status**: open
+- **Status**: done (2026-07-29)
 - **Design**: —
+
+## Outcome
+
+`html_mouse_action` now keeps the dispatch result. Both helpers already
+reported it — libdom's `dom_event_target_dispatch_event` answers false when a
+listener cancelled the event, and `fire_dom_event` passes that answer up — so
+the fix is to stop discarding it. A cancelled click clears
+`mas.result.action` for the three ELEMENT-ACTIVATION actions: `ACTION_SUBMIT`,
+`ACTION_NAVIGATE` and `ACTION_JS`. `ACTION_BACK` and `ACTION_FORWARD` stay,
+because they are the mouse's own history buttons and need CLICK_4/CLICK_5,
+which the click block cannot see.
+
+`ACTION_SUBMIT` is in the set on purpose. A submit button's activation
+behaviour IS the submission, and the cancelable `submit` that `form_submit()`
+honours is a different event.
+
+Coverage: `tests/kernel/test_netsurf_pointer_e2e.js`, legs "0419 cancelled"
+(the listener's restyle paints AND page B does not) and "0419 control" (a
+link whose listener does not cancel still navigates).
 
 ## Goal
 
