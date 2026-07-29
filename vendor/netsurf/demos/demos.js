@@ -30,8 +30,11 @@ const INDEX_HTML = path.join(PAGES_DIR, 'index.html');
  * #jswatch #c00000 and its script flips it to #008000 (`#jswatch.ran`), so
  * these two predicates ARE "the stylesheet loaded" and "the script ran" for
  * any in-OS screenshot.  The bands are tight on purpose: they must not be
- * satisfiable by any pixel the sketch demo's canvas can draw (its patterns
- * always carry b>=64 or g>=48).  Change these together with the CSS. */
+ * satisfiable by any pixel a demo canvas can draw — sketch's patterns
+ * always carry b>=64 or g>=48, paint's scene palette and inks keep g>=48
+ * where r>150 and r>=40 where g>100 (the rule is stated in paint.js), and
+ * plasma clamps every palette entry away from both bands (buildPalette in
+ * plasma.js).  Change these together with the CSS and those three files. */
 const PILL = {
   isGreen: (r, g, b) => g > 100 && r < 40 && b < 30,
   isRed: (r, g, b) => r > 150 && g < 40 && b < 40,
@@ -110,37 +113,65 @@ const INTERACTIONS = {
                { region: [26, 267, 438, 25], changedFrom: 'load' }] },
   ] },
   paint: { phases: [
-    { name: 'load', do: [] },
-    /* A real multi-point stroke: down inside the pad, held motion, up. */
+    /* The pad opens with the generated sunset scene — assert three of its
+     * landmarks, so "there is a picture at load" is pixels, not prose. */
+    { name: 'load', do: [],
+      expect: [{ region: [332, 212, 40, 40], color: [255, 236, 176], tol: 12 },
+               { region: [0, 0, 512, 8], color: [22, 26, 74], tol: 10 },
+               { region: [0, 468, 40, 40], allColor: [10, 12, 26], tol: 6 }] },
+    /* A click stamps a splat, and a real multi-point drag paints a
+     * continuous stroke: down inside the pad, held motion, up. */
     { name: 'stroke', do: [
-        { down: [30, 30] }, { move: [70, 50] }, { move: [110, 70] },
-        { move: [150, 90] }, { move: [190, 110] }, { up: [210, 120] }],
-      expect: [{ region: [0, 0, 240, 160], ink: true },
-               { region: [277, 250, 228, 27], changedFrom: 'load' }] },
-    /* Switch ink to Sky and stroke again: blue dabs appear. */
+        { down: [120, 390] }, { move: [180, 400] }, { move: [240, 408] },
+        { move: [300, 404] }, { up: [340, 398] }],
+      expect: [{ region: [80, 355, 290, 70], changedFrom: 'load' },
+               { region: [527, 166, 200, 20], changedFrom: 'load' }] },
+    /* Switch ink to Sky and stroke across the sky: blue paint appears. */
     { name: 'sky', do: [
-        { click: [107, 263] },
-        { down: [40, 130] }, { move: [90, 135] }, { up: [140, 140] }],
-      expect: [{ region: [0, 100, 240, 60], color: [32, 96, 200], tol: 40 }] },
-    /* Clear: the pad is pure white again and the readout says so. */
-    { name: 'clear', do: [{ click: [239, 263] }],
-      expect: [{ region: [0, 0, 240, 160], allColor: [255, 255, 255], tol: 8 },
-               { region: [277, 250, 228, 27], changedFrom: 'sky' }] },
+        { click: [604, 95] },
+        { down: [60, 60] }, { move: [110, 70] }, { move: [160, 80] },
+        { up: [200, 86] }],
+      expect: [{ region: [40, 40, 180, 60], color: [32, 96, 200], tol: 40 }] },
+    /* Clear: the pad is pure white and the readout says so. */
+    { name: 'clear', do: [{ click: [733, 95] }],
+      expect: [{ region: [0, 0, 512, 512], allColor: [255, 255, 255], tol: 8 },
+               { region: [527, 166, 200, 20], changedFrom: 'sky' }] },
+    /* Scene repaints the SAME deterministic picture (drawScene reseeds its
+     * LCG), so the pad must match the load shot byte for byte. */
+    { name: 'scene', do: [{ click: [560, 127] }],
+      expect: [{ region: [0, 0, 512, 512], sameAs: 'load' }] },
+  ] },
+  plasma: { phases: [
+    /* The ember palette's troughs are near-black, so "the plasma painted"
+     * is a dark pixel inside the canvas. */
+    { name: 'load', do: [],
+      expect: [{ region: [24, 102, 322, 202], ink: true }] },
+    /* Animating from setInterval alone — the settle IS the subject. */
+    { name: 'tick', do: [{ settle: 600, why: 'the setInterval plasma repaint is the subject' }],
+      expect: [{ region: [24, 102, 322, 202], changedFrom: 'load' },
+               { region: [208, 324, 105, 22], changedFrom: 'load' }] },
+    { name: 'freeze', do: [{ click: [156, 336] }] },
+    /* Stopped: the canvas holds byte-identical across another interval. */
+    { name: 'frozen', do: [{ settle: 600, why: 'proving the STOPPED timer paints nothing' }],
+      expect: [{ region: [24, 102, 322, 202], sameAs: 'freeze' }] },
+    /* Palette switch repaints once even while stopped. */
+    { name: 'palette', do: [{ click: [65, 336] }],
+      expect: [{ region: [24, 102, 322, 202], changedFrom: 'frozen' }] },
   ] },
   sketch: { phases: [
     { name: 'load', do: [] },
     /* The canvas animates from setInterval alone — timer-driven repaint is
      * the subject, so the settle IS the thing under test. */
     { name: 'tick', do: [{ settle: 600, why: 'the 200ms setInterval repaint is the subject' }],
-      expect: [{ region: [24, 102, 130, 98], changedFrom: 'load' },
-               { region: [250, 219, 92, 25], changedFrom: 'load' }] },
-    { name: 'freeze', do: [{ click: [198, 232] }] },
+      expect: [{ region: [24, 102, 258, 194], changedFrom: 'load' },
+               { region: [252, 316, 86, 22], changedFrom: 'load' }] },
+    { name: 'freeze', do: [{ click: [198, 328] }] },
     /* Stopped: the canvas holds byte-identical across another interval. */
     { name: 'frozen', do: [{ settle: 600, why: 'proving the STOPPED timer paints nothing' }],
-      expect: [{ region: [24, 102, 130, 98], sameAs: 'freeze' }] },
+      expect: [{ region: [24, 102, 258, 194], sameAs: 'freeze' }] },
     /* Next pattern repaints once even while stopped. */
-    { name: 'next', do: [{ click: [87, 232] }],
-      expect: [{ region: [24, 102, 130, 98], changedFrom: 'frozen' }] },
+    { name: 'next', do: [{ click: [87, 328] }],
+      expect: [{ region: [24, 102, 258, 194], changedFrom: 'frozen' }] },
   ] },
   stopwatch: { phases: [
     { name: 'load', do: [] },

@@ -57,13 +57,16 @@ for (y = 0; y < H; y++) {
 function wave(i, lo, hi, phase) {
 	return Math.round(lo + (hi - lo) * (0.5 + 0.5 * Math.sin((i / 256 + phase) * Math.PI * 2)));
 }
+/* Three flat channel arrays, not an array of [r,g,b] triples: the inner
+ * loop reads the palette per pixel, and one extra dereference there is a
+ * measurable slice of the frame in duktape. */
 function buildPalette(mk) {
-	var p = [];
+	var p = { r: [], g: [], b: [] };
 	for (var j = 0; j < 256; j++) {
 		var c = mk(j);
 		if (c[0] > 150 && c[1] < 48) c[1] = 48;
 		if (c[1] > 100 && c[0] < 48) c[0] = 48;
-		p[j] = c;
+		p.r[j] = c[0]; p.g[j] = c[1]; p.b[j] = c[2];
 	}
 	return p;
 }
@@ -86,7 +89,9 @@ var nframes = 0;
 var timer = null;
 
 function paint() {
-	var d = px, P = PALETTES[pal], o = 0, v, c, ry;
+	var d = px, P = PALETTES[pal];
+	var PR = P.r, PG = P.g, PB = P.b;
+	var o = 0, pi = 0, v, ry;
 	for (x = 0; x < W; x++) FX[x] = SIN[(x * 6 + t * 5) & 1023];
 	for (y = 0; y < H; y++) FY[y] = SIN[(y * 9 + t * 3) & 1023];
 	for (i = 0; i < W + H; i++) FD[i] = SIN[(i * 4 + t * 7) & 1023];
@@ -94,10 +99,10 @@ function paint() {
 	for (y = 0; y < H; y++) {
 		ry = FY[y];
 		for (x = 0; x < W; x++) {
-			v = (FX[x] + ry + FD[x + y] + SIN[(RAD[o >> 2] + tr) & 1023]) & 255;
-			c = P[v];
-			d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255;
+			v = (FX[x] + ry + FD[x + y] + SIN[(RAD[pi] + tr) & 1023]) & 255;
+			d[o] = PR[v]; d[o + 1] = PG[v]; d[o + 2] = PB[v]; d[o + 3] = 255;
 			o += 4;
+			pi++;
 		}
 	}
 	ctx.putImageData(img, 0, 0);
@@ -112,7 +117,10 @@ function tick() {
 
 function start() {
 	if (timer === null) {
-		timer = setInterval(tick, 150);
+		/* 60 ms, not "16 for 60fps": the frame itself costs ~150 ms in
+		 * duktape, so the interval only sets the idle gap between frames.
+		 * Measured rate lands near 4-5 fps (smoke-js leg 12 prints it). */
+		timer = setInterval(tick, 60);
 	}
 }
 
