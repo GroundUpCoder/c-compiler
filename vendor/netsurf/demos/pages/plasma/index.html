@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<!-- The headline visual demo (paint-demo-upgrade lane): a classic demoscene
+     plasma, animated from setInterval alone.  Its whole purpose is to make
+     the point at a glance that this browser really renders — a full-colour
+     field in motion the moment the page loads, with NO interaction needed.
+
+     It exists inside the same constraint as sketch/ and paint/: canvas 2D
+     has no drawing primitives here (Lane D), so every frame is rasterised
+     in JavaScript into an ImageData buffer and handed to putImageData.
+     That constraint is the demonstration: a raw pixel buffer plus a timer
+     is enough for real-time effects.
+
+     Markup only: the look is in plasma.css and the behaviour in plasma.js. -->
+<html>
+<head>
+<title>Plasma</title>
+<link rel="stylesheet" href="plasma.css">
+</head>
+<body>
+<h1>Plasma</h1>
+
+<p class="loadcheck"><span id="nocss">stylesheet did not load &mdash; </span><span id="jswatch">script did not run</span></p>
+
+<p><canvas id="c" width="320" height="200"></canvas></p>
+
+<p>
+<button id="pal">Palette</button>
+<button id="stop">Stop / go</button>
+<input id="fps" type="text" size="12" value="0" readonly>
+</p>
+
+<script src="plasma.js"></script>
+
+<p class="note">Three sine fields and a radial term, summed per pixel into
+a palette index &mdash; the classic demoscene plasma.  Every frame is
+computed by JavaScript into an <code>ImageData</code> buffer and blitted
+with <code>putImageData</code>; the animation is <code>setInterval</code>
+alone.  Click the picture (or the <b>Palette</b> button) to switch the
+colour palette.</p>
+</body>
+</html>

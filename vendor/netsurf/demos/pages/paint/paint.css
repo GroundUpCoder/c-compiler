@@ -5,7 +5,10 @@
    not decoration: this engine has no getBoundingClientRect and no
    offsetLeft, so a page has no way to ask where an element ended up.
    Pinning it at 0,0 makes "page coordinate" and "canvas pixel" the same
-   number, with no magic offset duplicated between here and paint.js. */
+   number, with no magic offset duplicated between here and paint.js.
+   Everything else lives in a rail to its RIGHT (#below), sized so the
+   whole page fits an 800x600 netsurf window with no dead field of white:
+   512 pad + 12 gutter + ~270 text column. */
 body { font-family: sans-serif; margin: 0; }
 #pad {
 	position: absolute;
@@ -14,17 +17,19 @@ body { font-family: sans-serif; margin: 0; }
 	border: 0;
 	background: #ffffff;
 }
-/* …and the rest of the page sits clear of it. */
-#below { margin: 170px 1.5em 1.5em 1.5em; }
+/* …and the rest of the page sits clear of it, as a right-hand rail. */
+#below { margin: 4px 10px 10px 524px; }
 
-h1 { font-size: 1.4em; }
-button { font-size: 1em; padding: 0.2em 0.8em; }
-.note { color: #555; font-size: 0.9em; margin-top: 1.2em; }
+h1 { font-size: 1.4em; margin: 0.2em 0 0.4em 0; }
+button { font-size: 1em; padding: 0.2em 0.7em; }
+.note { color: #555; font-size: 0.9em; margin-top: 1.0em; }
 
 /* The load check.  #nocss is in the markup and hidden HERE, so seeing it
    means this file never arrived; #jswatch starts red and paint.js turns it
    green, so the pill reports both halves of "external resources work"
-   without lying about either. */
+   without lying about either.  The two pill colours are counted over the
+   WHOLE window by the demos e2e, so nothing paint.js ever rasterises may
+   match them — see the palette note at the top of paint.js. */
 .loadcheck { font-size: 0.9em; margin: 0.8em 0 1.2em 0; }
 #nocss { display: none; }
 #jswatch { background: #c00000; color: #ffffff; padding: 1px 6px; }
