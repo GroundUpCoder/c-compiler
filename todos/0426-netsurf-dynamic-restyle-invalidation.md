@@ -41,3 +41,10 @@ The bounded walk keeps a steady-state hover transition at ~300x112 px of
 invalidation (measured through the monkey frontend, 2026-07-29, on a 3000 px
 page). A whole-document restyle per transition was the alternative and is
 what the bound exists to avoid, so any fix here must keep that property.
+
+The REPAINT is tight. The RE-SELECTION is not, and it cannot be without the
+same missing capability. A descendant combinator lets `#pad:hover .x` match
+anything inside `#pad`, so entering `#pad` obliges the engine to re-select
+the whole of `#pad`. Pruning that needs libcss to report which selectors an
+element takes part in — the same report the two shapes above need. Fix them
+together.
