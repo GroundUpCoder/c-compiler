@@ -39,6 +39,23 @@ typedef struct nscss_select_ctx
 	lwc_string *universal;
 	const css_computed_style *root_style;
 	const css_computed_style *parent_style;
+	/**
+	 * Deepest element under the pointer, or NULL.  `:hover` matches
+	 * this node and every ancestor of it (todos/0420).  The pointer is
+	 * BORROWED for the call: the html_content owns the reference.
+	 *
+	 * Read only by the pseudo-class callbacks, which need a node.  The
+	 * blank-style path (nscss_get_blank_style, used for the anonymous
+	 * table boxes) has no node and never reaches them, so its callers
+	 * leave this unset — exactly as they already leave parent_style.
+	 */
+	struct dom_node *hover_node;
+	/**
+	 * Deepest element the primary button went down on, or NULL.
+	 * `:active` matches this node and every ancestor of it.  Same
+	 * borrowing and same read scope as hover_node.
+	 */
+	struct dom_node *active_node;
 } nscss_select_ctx;
 
 css_stylesheet *nscss_create_inline_style(const uint8_t *data, size_t len,

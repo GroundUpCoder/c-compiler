@@ -285,6 +285,9 @@ box_get_style(html_content *c,
 	ctx.universal = c->universal;
 	ctx.root_style = root_style;
 	ctx.parent_style = parent_style;
+	/* the dynamic pseudo-class chains (todos/0420); both are borrowed */
+	ctx.hover_node = c->hover_node;
+	ctx.active_node = c->active_node;
 
 	/* Select style for element */
 	styles = nscss_get_style(&ctx, n, &c->media, &c->unit_len_ctx,
@@ -295,6 +298,230 @@ box_get_style(html_content *c,
 		css_stylesheet_destroy(inline_style);
 
 	return styles;
+}
+
+
+/**
+ * A selection result that a live restyle replaced (todos/0420).
+ *
+ * A box does not always own the style it points at.  Text boxes, a
+ * BOX_INLINE_END, a list marker and a ::before/::after box all point INTO
+ * the selection results of the element they belong to, and an inline
+ * element's text boxes are not even its children — they are its siblings
+ * inside the same BOX_INLINE_CONTAINER.  box_restyle_repoint() below
+ * re-points every alias it can reach, and it reaches all of them for the
+ * box shapes this engine builds.
+ *
+ * Retiring rather than destroying is the backstop for the shapes it does
+ * not reach — an inline element split across two containers by a block
+ * child.  A missed alias then renders with a STALE style, which is a
+ * cosmetic bug for one frame; destroying the results instead would leave
+ * it DANGLING, which is a crash.  The retired results live on the box
+ * tree's talloc context, so they die with the tree they belong to.
+ */
+struct box_retired_styles {
+	css_select_results *styles;
+};
+
+static int box_retired_styles_destructor(struct box_retired_styles *r)
+{
+	if (r->styles != NULL) {
+		css_select_results_destroy(r->styles);
+		r->styles = NULL;
+	}
+
+	return 0;
+}
+
+static bool box_retire_styles(html_content *c, css_select_results *styles)
+{
+	struct box_retired_styles *r;
+
+	r = talloc(c->bctx, struct box_retired_styles);
+	if (r == NULL) {
+		return false;
+	}
+
+	r->styles = styles;
+	talloc_set_destructor(r, box_retired_styles_destructor);
+
+	return true;
+}
+
+
+/**
+ * Re-point one box and its descendants away from a replaced selection.
+ *
+ * Stops descending at any box that owns its own selection results: that
+ * box re-anchors, so everything below it aliases IT, not \a from.
+ */
+static void
+box_restyle_repoint_walk(struct box *b,
+			 const css_select_results *from,
+			 css_select_results *to)
+{
+	struct box *child;
+
+	if (b->styles != NULL) {
+		return;
+	}
+
+	if (((b->flags & STYLE_OWNED) == 0) && (b->style != NULL)) {
+		unsigned int i;
+
+		for (i = 0; i < CSS_PSEUDO_ELEMENT_COUNT; i++) {
+			if (b->style == from->styles[i]) {
+				b->style = to->styles[i];
+				break;
+			}
+		}
+	}
+
+	for (child = b->children; child != NULL; child = child->next) {
+		box_restyle_repoint_walk(child, from, to);
+	}
+}
+
+static void
+box_restyle_repoint(struct box *box,
+		    const css_select_results *from,
+		    css_select_results *to)
+{
+	struct box *child;
+
+	/* the element's own subtree: a block element's content */
+	for (child = box->children; child != NULL; child = child->next) {
+		box_restyle_repoint_walk(child, from, to);
+	}
+
+	/* and its siblings' subtrees: an INLINE element's text boxes and its
+	 * BOX_INLINE_END follow it inside the same inline container rather
+	 * than hanging below it */
+	if (box->parent != NULL) {
+		for (child = box->parent->children;
+		     child != NULL;
+		     child = child->next) {
+			if (child != box) {
+				box_restyle_repoint_walk(child, from, to);
+			}
+		}
+	}
+}
+
+
+/**
+ * Re-select the style of every element box in a subtree.
+ *
+ * This is the bounded restyle the dynamic pseudo-classes need
+ * (todos/0420): a `:hover` transition changes the answer to
+ * node_is_hover() for the elements on the entry and exit chains, so the
+ * boxes below the topmost changed element — and only those — have to be
+ * selected again.
+ *
+ * The libcss per-node style cache is dropped first for each element,
+ * because it caches the pseudo-class flags themselves; without that the
+ * re-selection would hand back the answer it is trying to replace.
+ *
+ * \param c            The content the subtree belongs to
+ * \param box          Root of the box subtree to re-select
+ * \param parent_style Computed style the subtree inherits from
+ * \param root_style   Computed style of the root element's box, or NULL
+ *                     when \a box IS the root element's box
+ * \param changed      Set to true if any computed style really changed
+ * \return true on success, false on memory exhaustion
+ */
+static bool
+box_restyle_subtree(html_content *c,
+		    struct box *box,
+		    const css_computed_style *parent_style,
+		    const css_computed_style *root_style,
+		    bool *changed)
+{
+	const css_computed_style *inherit = parent_style;
+	struct box *child;
+
+	if ((box->styles != NULL) &&
+	    (box->node != NULL) &&
+	    ((box->flags & CLONE) == 0)) {
+		css_select_results *styles;
+		dom_node_type type;
+
+		if ((dom_node_get_node_type(box->node, &type) == DOM_NO_ERR) &&
+		    (type == DOM_ELEMENT_NODE)) {
+			nscss_node_data_clear(box->node);
+
+			styles = box_get_style(c, parent_style, root_style,
+					       box->node);
+			if (styles == NULL) {
+				return false;
+			}
+
+			/* Computed styles are interned by libcss, so an
+			 * unchanged selection hands back the SAME pointer.
+			 * That is the exact test for "did anything change",
+			 * and it is what keeps a pointer crossing a link
+			 * with no :hover rule from costing a reflow. */
+			if (styles->styles[CSS_PSEUDO_ELEMENT_NONE] !=
+			    box->style) {
+				*changed = true;
+			}
+
+			box_restyle_repoint(box, box->styles, styles);
+			if (box_retire_styles(c, box->styles) == false) {
+				css_select_results_destroy(styles);
+				return false;
+			}
+
+			box->styles = styles;
+			box->style = styles->styles[CSS_PSEUDO_ELEMENT_NONE];
+		}
+	}
+
+	if (box->style != NULL) {
+		inherit = box->style;
+	}
+
+	for (child = box->children; child != NULL; child = child->next) {
+		if (box_restyle_subtree(c, child, inherit, root_style,
+					changed) == false) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/* exported function documented in html/box_construct.h */
+bool box_restyle_element(html_content *c, struct box *box, bool *changed)
+{
+	const css_computed_style *parent_style = NULL;
+	const css_computed_style *root_style = NULL;
+	struct box *up;
+
+	assert(c != NULL);
+	assert(box != NULL);
+	assert(changed != NULL);
+
+	if ((c->layout == NULL) || (c->bctx == NULL)) {
+		return false;
+	}
+
+	/* The root element's box is selected against a NULL root style, the
+	 * way box_construct_element does it, so that `rem` and the root's
+	 * own inheritance keep meaning what they meant at construction. */
+	if (box != c->layout) {
+		root_style = c->layout->style;
+	}
+
+	for (up = box->parent; up != NULL; up = up->parent) {
+		if (up->style != NULL) {
+			parent_style = up->style;
+			break;
+		}
+	}
+
+	return box_restyle_subtree(c, box, parent_style, root_style, changed);
 }
 
 

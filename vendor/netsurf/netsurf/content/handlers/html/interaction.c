@@ -42,6 +42,7 @@
 #include "netsurf/layout.h"
 #include "netsurf/keypress.h"
 #include "content/hlcache.h"
+#include "content/content_protected.h"
 #include "content/textsearch.h"
 #include "desktop/browser_history.h"
 #include "desktop/frames.h"
@@ -52,6 +53,7 @@
 #include "desktop/gui_internal.h"
 
 #include "html/box.h"
+#include "html/box_construct.h"
 #include "html/box_textarea.h"
 #include "html/box_inspect.h"
 #include "html/font.h"
@@ -1346,6 +1348,7 @@ mouse_action_drag_none(html_content *html,
 	struct content *c = (struct content *)html;
 	union content_msg_data msg_data;
 	lwc_string *path;
+	bool click_prevented = false;
 
 	/**
 	 * computed state
@@ -1426,18 +1429,49 @@ mouse_action_drag_none(html_content *html,
 		html_mouse_pos(bw, x, y, &pos);
 		if (NETSURF_UI_EVENTS == 0) {
 			/* upstream: a plain Event, so no coordinates */
-			fire_generic_dom_event(corestring_dom_click,
-					mas.node, true, true);
+			click_prevented = (fire_generic_dom_event(
+					corestring_dom_click,
+					mas.node, true, true) == false);
 		} else {
-			fire_dom_mouse_event(corestring_dom_click, mas.node,
+			click_prevented = (fire_dom_mouse_event(
+					corestring_dom_click, mas.node,
 					true, true, &pos, 0, 0,
-					html_mouse_mods(mouse), detail);
+					html_mouse_mods(mouse), detail) == false);
 		}
 
 		if (NETSURF_UI_EVENTS && (mouse & BROWSER_MOUSE_DOUBLE_CLICK)) {
 			fire_dom_mouse_event(corestring_dom_dblclick,
 					mas.node, true, true, &pos, 0, 0,
 					html_mouse_mods(mouse), 2);
+		}
+	}
+
+	/* preventDefault() on the click cancels the clicked element's
+	 * ACTIVATION BEHAVIOUR (DOM, "run post-click activation steps").
+	 * Both dispatch helpers already report it: libdom's
+	 * dom_event_target_dispatch_event answers false when a listener
+	 * cancelled the event, and fire_dom_event passes that answer up.
+	 * Upstream simply threw the answer away here, so a handler could
+	 * never stop a link (todos/0419).
+	 *
+	 * The three cancelled actions are exactly the element-activation
+	 * ones.  ACTION_BACK and ACTION_FORWARD are the mouse's own history
+	 * buttons, not an element behaviour, and this block cannot even see
+	 * them: they need CLICK_4/CLICK_5, while the click above needs
+	 * CLICK_1.  ACTION_SUBMIT is included because a submit button's
+	 * activation behaviour IS the submission — form_submit() honours the
+	 * cancelable `submit`, which is a DIFFERENT event and does not cover
+	 * a cancelled click. */
+	if (click_prevented) {
+		switch (mas.result.action) {
+		case ACTION_SUBMIT:
+		case ACTION_NAVIGATE:
+		case ACTION_JS:
+			mas.result.action = ACTION_NONE;
+			break;
+
+		default:
+			break;
 		}
 	}
 
@@ -1734,6 +1768,383 @@ static void html_fire_mouse_events(html_content *html,
 }
 
 
+/**
+ * The dynamic pseudo-class chains: `:hover` and `:active` (todos/0420).
+ *
+ * node_is_hover() in css/select.c was a `\todo Support hovering` stub that
+ * always answered "no match", so a `:hover` rule could never apply however
+ * long the pointer rested on the element.  The input half already worked —
+ * the status bar names the link under the pointer — so what was missing is
+ * the answer and the repaint.
+ *
+ * The chains are ELEMENTS, deepest first.  Only the deepest element is
+ * stored, because libcss asks per node and select.c walks up from the
+ * subject; the array form below exists purely to work out what CHANGED
+ * between two pointer positions.
+ *
+ * The restyle is bounded to that change.  Moving the pointer from one
+ * element to another leaves every common ancestor hovered, so the elements
+ * whose answer moved are the two chains below their deepest common
+ * ancestor.  Re-selecting the box subtree of the TOPMOST element of each
+ * covers them, plus everything they can restyle by inheritance or by a
+ * descendant combinator.
+ *
+ * Two shapes are deliberately NOT covered, because both need a full
+ * style-invalidation engine rather than a chain walk:
+ *
+ *   - a SIBLING combinator (`a:hover ~ span`), whose subject sits outside
+ *     both subtrees;
+ *   - a rule that takes an element from `display: none` to displayed,
+ *     which has no box to re-select from.
+ *
+ * Both are recorded in todos/LIABILITIES.md against todos/0424.
+ */
+#define HTML_CHAIN_MAX 128
+
+/**
+ * The deepest ELEMENT under the pointer.
+ *
+ * \return a NEW reference, or NULL
+ */
+static dom_node *html_dynamic_element_at(html_content *html, int x, int y)
+{
+	dom_node *node;
+
+	if (html->layout == NULL) {
+		return NULL;
+	}
+
+	node = html_dom_node_at_point(html, x, y);
+	if (node == NULL) {
+		return NULL;
+	}
+	dom_node_ref(node);
+
+	/* html_dom_node_at_point answers with the deepest box's node, and
+	 * for text that is a TEXT node.  A pseudo-class matches elements,
+	 * so climb to the first element at or above it. */
+	while (node != NULL) {
+		dom_node_type type;
+		dom_node *parent;
+
+		if ((dom_node_get_node_type(node, &type) == DOM_NO_ERR) &&
+		    (type == DOM_ELEMENT_NODE)) {
+			break;
+		}
+
+		if (dom_node_get_parent_node(node, &parent) != DOM_NO_ERR) {
+			parent = NULL;
+		}
+		dom_node_unref(node);
+		node = parent;
+	}
+
+	return node;
+}
+
+
+/**
+ * Collect \a node and its ancestors, deepest first.
+ *
+ * Each slot owns a reference; html_chain_free() drops them.
+ *
+ * \return the number of entries, or -1 if the document is deeper than
+ *         HTML_CHAIN_MAX (the caller then restyles from the root instead)
+ */
+static int html_chain_build(dom_node *node, dom_node **chain)
+{
+	dom_node *cur = node;
+	int n = 0;
+
+	if (cur != NULL) {
+		dom_node_ref(cur);
+	}
+
+	while (cur != NULL) {
+		dom_node *parent;
+
+		if (n == HTML_CHAIN_MAX) {
+			dom_node_unref(cur);
+			while (n > 0) {
+				dom_node_unref(chain[--n]);
+			}
+			return -1;
+		}
+		chain[n++] = cur;
+
+		if (dom_node_get_parent_node(cur, &parent) != DOM_NO_ERR) {
+			parent = NULL;
+		}
+		cur = parent;
+	}
+
+	return n;
+}
+
+static void html_chain_free(dom_node **chain, int n)
+{
+	while (n > 0) {
+		dom_node_unref(chain[--n]);
+	}
+}
+
+
+/**
+ * Append the topmost element of each chain whose state really changed.
+ *
+ * Both chains are deepest first, so they are compared from the TAIL: the
+ * shared tail is the common ancestry, and the entry just below it is the
+ * highest element the transition moved.
+ */
+static void
+html_dynamic_changed(dom_node *from,
+		     dom_node *to,
+		     dom_node **out,
+		     int *n_out)
+{
+	dom_node *a[HTML_CHAIN_MAX], *b[HTML_CHAIN_MAX];
+	int na, nb, i, j;
+
+	if (from == to) {
+		return;
+	}
+
+	na = html_chain_build(from, a);
+	nb = html_chain_build(to, b);
+	if ((na < 0) || (nb < 0)) {
+		/* pathologically deep: fall back to the whole document,
+		 * which is correct, just not bounded */
+		if (na >= 0) {
+			html_chain_free(a, na);
+		}
+		if (nb >= 0) {
+			html_chain_free(b, nb);
+		}
+		out[(*n_out)++] = NULL;
+		return;
+	}
+
+	i = na - 1;
+	j = nb - 1;
+	while ((i >= 0) && (j >= 0) && (a[i] == b[j])) {
+		i--;
+		j--;
+	}
+
+	if (i >= 0) {
+		out[(*n_out)++] = a[i];
+	}
+	if (j >= 0) {
+		out[(*n_out)++] = b[j];
+	}
+
+	/* The collected nodes stay alive without these references: each is
+	 * an ancestor-or-self of a node the html_content itself holds. */
+	html_chain_free(a, na);
+	html_chain_free(b, nb);
+}
+
+
+/**
+ * The screen area a box paints into, in document coordinates.
+ */
+static void html_box_paint_rect(struct box *box, struct rect *r)
+{
+	int x, y;
+
+	box_coords(box, &x, &y);
+
+	r->x0 = x - box->border[LEFT].width;
+	r->y0 = y - box->border[TOP].width;
+	r->x1 = x + box->padding[LEFT] + box->width + box->padding[RIGHT] +
+		box->border[RIGHT].width;
+	r->y1 = y + box->padding[TOP] + box->height + box->padding[BOTTOM] +
+		box->border[BOTTOM].width;
+
+	/* an overflowing descendant paints outside the box's own edges */
+	if (x + box->descendant_x0 < r->x0) r->x0 = x + box->descendant_x0;
+	if (y + box->descendant_y0 < r->y0) r->y0 = y + box->descendant_y0;
+	if (x + box->descendant_x1 > r->x1) r->x1 = x + box->descendant_x1;
+	if (y + box->descendant_y1 > r->y1) r->y1 = y + box->descendant_y1;
+}
+
+static void html_rect_union(struct rect *acc, const struct rect *r, bool *any)
+{
+	if (*any == false) {
+		*acc = *r;
+		*any = true;
+		return;
+	}
+	if (r->x0 < acc->x0) acc->x0 = r->x0;
+	if (r->y0 < acc->y0) acc->y0 = r->y0;
+	if (r->x1 > acc->x1) acc->x1 = r->x1;
+	if (r->y1 > acc->y1) acc->y1 = r->y1;
+}
+
+
+/**
+ * Re-select the subtrees a `:hover` / `:active` transition changed, then
+ * reflow and repaint just as much as that needs.
+ */
+static void html_restyle_dynamic(html_content *html, dom_node **nodes, int n)
+{
+	struct box *boxes[4];
+	struct rect area;
+	bool any = false;
+	bool changed = false;
+	int nboxes = 0;
+	int i, j;
+
+	for (i = 0; i < n; i++) {
+		struct box *box;
+
+		/* a NULL entry is the "restyle everything" fallback */
+		box = (nodes[i] == NULL) ? html->layout :
+					   box_for_node(nodes[i]);
+		if (box == NULL) {
+			/* no box: `display: none`, or not built yet */
+			continue;
+		}
+
+		/* drop a box already covered by an earlier one */
+		for (j = 0; j < nboxes; j++) {
+			struct box *up;
+
+			for (up = box; up != NULL; up = up->parent) {
+				if (up == boxes[j]) {
+					break;
+				}
+			}
+			if (up != NULL) {
+				break;
+			}
+		}
+		if (j < nboxes) {
+			continue;
+		}
+
+		boxes[nboxes++] = box;
+	}
+
+	if (nboxes == 0) {
+		return;
+	}
+
+	/* The pre-reflow rectangles: a restyle that MOVES a box has to
+	 * repaint where it was as well as where it went. */
+	for (i = 0; i < nboxes; i++) {
+		struct rect r;
+
+		html_box_paint_rect(boxes[i], &r);
+		html_rect_union(&area, &r, &any);
+	}
+
+	for (i = 0; i < nboxes; i++) {
+		if (box_restyle_element(html, boxes[i], &changed) == false) {
+			NSLOG(netsurf, ERROR,
+			      "dynamic restyle failed (content %p)", html);
+			return;
+		}
+	}
+
+	if (changed == false) {
+		/* No rule keyed on the transition, so nothing to paint.
+		 * This is the path every page without a dynamic rule takes,
+		 * and it costs one re-selection per chain element. */
+		return;
+	}
+
+	/* A dynamic rule may change geometry (`a:hover { padding: 4px }`),
+	 * and this engine has no partial relayout, so reflow the document.
+	 * `background` is true so the reflow does NOT drag a full-window
+	 * repaint behind it — the bounded request below is the repaint. */
+	if ((html->base.locked == false) &&
+	    (html->reflowing == false) &&
+	    (html->had_initial_layout) &&
+	    ((html->base.status == CONTENT_STATUS_READY) ||
+	     (html->base.status == CONTENT_STATUS_DONE))) {
+		content__reformat(&html->base, true,
+				  html->base.available_width,
+				  html->base.available_height);
+
+		for (i = 0; i < nboxes; i++) {
+			struct rect r;
+
+			html_box_paint_rect(boxes[i], &r);
+			html_rect_union(&area, &r, &any);
+		}
+	}
+
+	content__request_redraw(&html->base, area.x0, area.y0,
+				area.x1 - area.x0, area.y1 - area.y0);
+}
+
+
+/**
+ * Track the `:hover` and `:active` chains for one mouse action.
+ *
+ * Runs at the TOP of html_mouse_action, before the box walk, so that the
+ * walk sees the boxes the restyle produced rather than the ones it
+ * replaced.
+ */
+static void html_update_dynamic_chains(html_content *html,
+				       browser_mouse_state mouse,
+				       int x, int y)
+{
+	dom_node *changed[4];
+	dom_node *hover, *active;
+	int n = 0;
+
+	/* Do not touch a box tree that is being built or swapped: the
+	 * next mouse action re-derives everything from the pointer
+	 * position anyway. */
+	if ((html->layout == NULL) ||
+	    (html->reconverting) ||
+	    (html->box_conversion_context != NULL)) {
+		return;
+	}
+
+	hover = html_dynamic_element_at(html, x, y);
+
+	/* `:active` names the element the button went down on, and keeps
+	 * naming it for as long as the button is held. */
+	if (mouse & BROWSER_MOUSE_PRESS_1) {
+		active = (hover == NULL) ? NULL : dom_node_ref(hover);
+	} else if (mouse & (BROWSER_MOUSE_HOLDING_1 |
+			    BROWSER_MOUSE_DRAG_1 |
+			    BROWSER_MOUSE_DRAG_ON)) {
+		active = (html->active_node == NULL) ? NULL :
+			 dom_node_ref(html->active_node);
+	} else {
+		active = NULL;
+	}
+
+	if ((hover == html->hover_node) && (active == html->active_node)) {
+		if (hover != NULL) dom_node_unref(hover);
+		if (active != NULL) dom_node_unref(active);
+		return;
+	}
+
+	html_dynamic_changed(html->hover_node, hover, changed, &n);
+	html_dynamic_changed(html->active_node, active, changed, &n);
+
+	/* Publish the new chains BEFORE re-selecting: node_is_hover() and
+	 * node_is_active() read them straight off the html_content. */
+	if (html->hover_node != NULL) {
+		dom_node_unref(html->hover_node);
+	}
+	html->hover_node = hover;
+	if (html->active_node != NULL) {
+		dom_node_unref(html->active_node);
+	}
+	html->active_node = active;
+
+	if (n > 0) {
+		html_restyle_dynamic(html, changed, n);
+	}
+}
+
+
 /* exported interface documented in html/interaction.h */
 nserror html_mouse_track(struct content *c,
 			 struct browser_window *bw,
@@ -1757,6 +2168,10 @@ html_mouse_action(struct content *c,
 	/* DOM mouse events first, while html->drag_type still describes the
 	 * state this action is about to change */
 	html_fire_mouse_events(html, bw, mouse, x, y);
+
+	/* then the dynamic pseudo-classes, so the box walk below runs
+	 * against the boxes a :hover restyle produced (todos/0420) */
+	html_update_dynamic_chains(html, mouse, x, y);
 
 	/* handle open select menu */
 	if (html->visible_select_menu != NULL) {
