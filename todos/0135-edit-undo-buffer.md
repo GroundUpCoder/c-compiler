@@ -1,6 +1,8 @@
 # 0135 — EDIT control undo buffer (EM_UNDO / EM_CANUNDO)
 
-- **Status**: deferred (mass-deferred 2026-07-12; was: open)
+- **Status**: open (scheduled 2026-07-29 — jku reported Edit → Undo dead in
+  notepad and asked for it fixed end to end; un-deferred and assigned a lane.
+  Was: deferred, mass-deferred 2026-07-12)
 - **Design**: `todos/WIN32.md` (EDIT status — the "no-undo honesty" note at
   the 0048/0091 threads is what this item retires). Umbrella 0133.
 
@@ -43,6 +45,15 @@ redo (it's a RichEdit `EM_REDO` feature) and no corpus app uses RichEdit.
   `EM_UNDO` restores the prior text+selection; a second `EM_UNDO` re-applies
   (undo/undo toggle); `EM_EMPTYUNDOBUFFER` and a programmatic set clear the
   record. `EM_REPLACESEL` with can-undo=false leaves nothing to undo.
-- Manual: in notepad, edit → Ctrl+Z reverts and the Edit menu / right-click
-  Undo item is enabled after an edit, grayed after undo-to-clean.
+- Manual: in notepad, edit → the undo chord reverts, and the Edit menu /
+  right-click Undo item is enabled after an edit, grayed after undo-to-clean.
+  ⚠️ **Drive the chord the ACTIVE scheme binds, not a hardcoded Ctrl+Z.**
+  `os/os-common.js` `seedHostKeyScheme` auto-seeds `/etc/keys` with
+  `scheme=macos` on a Mac host, and `os/keys.h:137,152` binds undo to Ctrl+Z in
+  the windows scheme but **Cmd+Z in the macos scheme** — both resolve to
+  `KA_UNDO`, and `user32.c:3992` already routes `KA_UNDO` to `EM_UNDO`, so the
+  whole chord path is live and lands on the stub this ticket removes. On a Mac
+  host a hardcoded Ctrl+Z leg will read as a failure for the wrong reason:
+  either pin `hostkeys` explicitly in the harness or derive the chord from the
+  active scheme.
 - No regression in existing notepad / context-menu legs.
