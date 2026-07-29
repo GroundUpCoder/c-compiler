@@ -1,6 +1,6 @@
 # 0425 — netsurf demo visual upgrade
 
-- **Status**: open
+- **Status**: done
 - **Design**: —
 
 ## Goal
