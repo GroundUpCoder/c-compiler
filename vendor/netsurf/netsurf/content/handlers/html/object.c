@@ -24,7 +24,6 @@
 #include <assert.h>
 #include <ctype.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <string.h>
 #include <strings.h>
 #include <stdlib.h>
@@ -96,9 +95,6 @@ html_object_done(struct box *box,
 {
 	struct box *b;
 
-	fprintf(stderr, "NS0410 obj_done box=%p handle=%p bg=%d\n",
-		(void *)box, (void *)object, (int)background);
-
 	if (background) {
 		box->background = object;
 		return;
@@ -169,10 +165,6 @@ html_object_callback(hlcache_handle *object,
 	struct box *box;
 
 	box = o->box;
-
-	fprintf(stderr, "NS0410 obj_cb ev=%d box=%p handle=%p base.status=%d active=%u\n",
-		event->type, (void *)box, (void *)object,
-		c->base.status, c->base.active);
 
 	switch (event->type) {
 	case CONTENT_MSG_LOADING:
@@ -490,6 +482,31 @@ html_object_callback(hlcache_handle *object,
 		content__reformat(&c->base, false, c->base.available_width,
 				c->base.available_height);
 		content_set_done(&c->base);
+	} else if (c->base.status == CONTENT_STATUS_DONE &&
+		   c->base.active == 0 &&
+		   c->reconverting == false &&
+		   (event->type == CONTENT_MSG_DONE ||
+		    event->type == CONTENT_MSG_ERROR)) {
+		/* The last outstanding object completed against a document
+		 * that already finished loading — a live re-conversion's
+		 * refetch, or a script-inserted object (upstream never gets
+		 * here: without the mutation bridge nothing fetches
+		 * post-DONE).  This is the DONE-status twin of the branch
+		 * above: without it the object is bound to its box by
+		 * html_object_done but never LAID OUT — a box whose
+		 * dimensions need the object's intrinsic size (no
+		 * REPLACE_DIM) keeps zero height, so the content never gets
+		 * ink (todos/0410).  The incremental_reflow branch below
+		 * cannot be that reformat: it is throttled by reformat_time,
+		 * which the swap's own reformat pushed >= 250 ms out, and a
+		 * skipped check is never retried.  Completions landing
+		 * DURING a re-conversion window are skipped on purpose: the
+		 * swap's reformat runs after them and lays out the already
+		 * bound object. */
+		content__reformat(&c->base, false, c->base.available_width,
+				  c->base.available_height);
+		content__request_redraw(&c->base, 0, 0,
+					c->base.width, c->base.height);
 	} else if (nsoption_bool(incremental_reflow) &&
 		   event->type == CONTENT_MSG_DONE &&
 		   box != NULL &&
@@ -760,9 +777,6 @@ html_fetch_object(html_content *c,
 					&child,
 					object->permitted_types,
 					&object->content);
-	fprintf(stderr, "NS0410 fetch_object url=%s box=%p err=%d handle=%p\n",
-		nsurl_access(url), (void *)box, (int)error,
-		(void *)object->content);
 	if (error != NSERROR_OK) {
 		free(object);
 		return error != NSERROR_NOMEM;

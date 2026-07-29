@@ -1865,6 +1865,41 @@ diff -urN a/content/handlers/html/interaction.h b/content/handlers/html/interact
  
  void html_overflow_scroll_callback(void *client_data,
  		struct scrollbar_msg_data *scrollbar_data);
+diff -urN a/content/handlers/html/object.c b/content/handlers/html/object.c
+--- a/content/handlers/html/object.c	2026-07-29 10:22:36
++++ b/content/handlers/html/object.c	2026-07-29 10:22:36
+@@ -482,6 +482,31 @@
+ 		content__reformat(&c->base, false, c->base.available_width,
+ 				c->base.available_height);
+ 		content_set_done(&c->base);
++	} else if (c->base.status == CONTENT_STATUS_DONE &&
++		   c->base.active == 0 &&
++		   c->reconverting == false &&
++		   (event->type == CONTENT_MSG_DONE ||
++		    event->type == CONTENT_MSG_ERROR)) {
++		/* The last outstanding object completed against a document
++		 * that already finished loading — a live re-conversion's
++		 * refetch, or a script-inserted object (upstream never gets
++		 * here: without the mutation bridge nothing fetches
++		 * post-DONE).  This is the DONE-status twin of the branch
++		 * above: without it the object is bound to its box by
++		 * html_object_done but never LAID OUT — a box whose
++		 * dimensions need the object's intrinsic size (no
++		 * REPLACE_DIM) keeps zero height, so the content never gets
++		 * ink (todos/0410).  The incremental_reflow branch below
++		 * cannot be that reformat: it is throttled by reformat_time,
++		 * which the swap's own reformat pushed >= 250 ms out, and a
++		 * skipped check is never retried.  Completions landing
++		 * DURING a re-conversion window are skipped on purpose: the
++		 * swap's reformat runs after them and lays out the already
++		 * bound object. */
++		content__reformat(&c->base, false, c->base.available_width,
++				  c->base.available_height);
++		content__request_redraw(&c->base, 0, 0,
++					c->base.width, c->base.height);
+ 	} else if (nsoption_bool(incremental_reflow) &&
+ 		   event->type == CONTENT_MSG_DONE &&
+ 		   box != NULL &&
 diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
 --- a/content/handlers/html/private.h	2026-07-29 08:40:11
 +++ b/content/handlers/html/private.h	2026-07-29 08:40:16
