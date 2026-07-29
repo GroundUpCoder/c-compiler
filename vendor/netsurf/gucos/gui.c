@@ -44,6 +44,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <errno.h>
+#include <signal.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include <SDL.h>
 #include <libnsfb.h>
@@ -304,6 +309,200 @@ void gucos_redraw_all(void)
 }
 
 /* ---------------------------------------------------------------- */
+/* the file gadget's out-of-process picker (todos/0433)             */
+/* ---------------------------------------------------------------- */
+
+/** the picker binary (baked by os/image.json; absence is an image bug) */
+#define FILEPICK_BIN "/bin/filepick"
+
+/** directory of the last ACCEPTED pick — later dialogues open there
+ * (the Windows rule); empty = first open, which starts at $HOME */
+static char picker_last_dir[1024];
+
+/**
+ * Tear down a window's live picker without applying anything.
+ *
+ * Used when the answer can no longer apply: the window is going away,
+ * or it navigated (the dialogue must not outlive its question — the
+ * Windows behaviour, and it makes the liveness check below airtight:
+ * no picker survives its content being replaced under it).
+ */
+static void gucos_picker_cancel(struct gui_window *gw)
+{
+	int status;
+
+	if (gw->picker_pid <= 0) {
+		return;
+	}
+	kill(gw->picker_pid, SIGTERM);
+	waitpid(gw->picker_pid, &status, 0);
+	close(gw->picker_fd);
+	gw->picker_pid = 0;
+	gw->picker_fd = -1;
+	gw->picker_hl = NULL;
+	gw->picker_gadget = NULL;
+}
+
+/**
+ * One picker exited: read its verdict and apply or drop it.
+ *
+ * Accept is exit 0 plus one absolute path on the pipe; anything else —
+ * cancel's exit 1, a crash, a signal death, an empty pipe — is cancel,
+ * which touches nothing (no engine call, no event).
+ */
+static void gucos_picker_finish(struct gui_window *gw, int status)
+{
+	char buf[1040];
+	size_t used = 0;
+	ssize_t n;
+	char *nl;
+	bool accepted;
+
+	/* drain to EOF: the child is gone and the parent's write end
+	 * closed at spawn, so EOF is immediate after the payload */
+	for (;;) {
+		n = read(gw->picker_fd, buf + used, sizeof(buf) - 1 - used);
+		if (n <= 0 || used >= sizeof(buf) - 1) {
+			break;
+		}
+		used += (size_t)n;
+	}
+	buf[used] = '\0';
+	close(gw->picker_fd);
+
+	nl = strchr(buf, '\n');
+	if (nl != NULL) {
+		*nl = '\0';	/* version 1 consumes the first path */
+	}
+	accepted = WIFEXITED(status) && (WEXITSTATUS(status) == 0) &&
+		(buf[0] == '/');
+
+	if (accepted) {
+		/* the user accepted: later dialogues start here even if
+		 * the result below turns out to be undeliverable */
+		char *slash = strrchr(buf, '/');
+		size_t dlen = (slash == buf) ? 1 : (size_t)(slash - buf);
+		if (dlen < sizeof(picker_last_dir)) {
+			memcpy(picker_last_dir, buf, dlen);
+			picker_last_dir[dlen] = '\0';
+		}
+
+		/* liveness: the result applies only to the content that
+		 * asked.  The window is still on window_list (destroy
+		 * reaps its picker first), so the one question is whether
+		 * navigation replaced the content while the dialogue was
+		 * up.  gucos_picker_cancel runs at GW_EVENT_NEW_CONTENT,
+		 * so a root navigation cannot even reach here; the
+		 * pointer identity check keeps the rule exact for any
+		 * replacement path that fires no NEW_CONTENT on this
+		 * window.  Re-conversion cannot dangle the gadget: form
+		 * controls are cached per (content, node) — forms.c "Step
+		 * one" returns the existing control. */
+		if (browser_window_get_content(gw->bw) == gw->picker_hl) {
+			browser_window_set_gadget_filename(gw->bw,
+							   gw->picker_gadget,
+							   buf);
+		} else {
+			NSLOG(netsurf, INFO,
+			      "file gadget: content changed, pick dropped");
+		}
+	}
+
+	gw->picker_pid = 0;
+	gw->picker_fd = -1;
+	gw->picker_hl = NULL;
+	gw->picker_gadget = NULL;
+}
+
+/* exported interface documented in gucos/gui.h */
+void gucos_pickers_poll(void)
+{
+	struct gui_window *gw;
+	int status;
+
+	for (gw = window_list; gw != NULL; gw = gw->next) {
+		if (gw->picker_pid <= 0) {
+			continue;
+		}
+		if (waitpid(gw->picker_pid, &status, WNOHANG) ==
+		    gw->picker_pid) {
+			gucos_picker_finish(gw, status);
+		}
+	}
+}
+
+/**
+ * A click on an <input type=file> gadget (CONTENT_MSG_GADGETCLICK).
+ *
+ * The dialogue is /bin/filepick, a separate win32 process wrapping
+ * comdlg32's GetOpenFileNameW: netsurf is SDL-native, so the win32
+ * modal pump cannot run in this process (it would eat the browser's
+ * SDL queue), and the engine must keep firing its scheduled callbacks
+ * while the dialogue is up.  Protocol: accepted absolute path + '\n'
+ * on stdout, exit 0; cancel = no output, exit 1.  The kernel does not
+ * enforce modality — this frontend does: one picker per window, and a
+ * gadget click while it lives is ignored (the Windows behaviour for a
+ * click under an open dialogue).
+ */
+static void
+gui_window_file_gadget_open(struct gui_window *gw,
+			    struct hlcache_handle *hl,
+			    struct form_control *gadget)
+{
+	posix_spawn_file_actions_t fa;
+	int fds[2];
+	pid_t pid;
+	int rc;
+	const char *dir;
+	char *argv[6];
+
+	if (gw->picker_pid > 0) {
+		return;
+	}
+
+	dir = picker_last_dir;
+	if (dir[0] == '\0') {
+		dir = getenv("HOME");
+		if ((dir == NULL) || (dir[0] != '/')) {
+			dir = "/root";
+		}
+	}
+
+	if (pipe(fds) != 0) {
+		NSLOG(netsurf, ERROR, "file gadget: pipe failed: %s",
+		      strerror(errno));
+		return;
+	}
+
+	posix_spawn_file_actions_init(&fa);
+	posix_spawn_file_actions_adddup2(&fa, fds[1], 1);
+	posix_spawn_file_actions_addclose(&fa, fds[0]);
+	posix_spawn_file_actions_addclose(&fa, fds[1]);
+	argv[0] = (char *)"filepick";
+	argv[1] = (char *)"--title";
+	argv[2] = (char *)"File Upload";
+	argv[3] = (char *)"--dir";
+	argv[4] = (char *)dir;
+	argv[5] = NULL;
+	rc = posix_spawn(&pid, FILEPICK_BIN, &fa, NULL, argv, NULL);
+	posix_spawn_file_actions_destroy(&fa);
+	close(fds[1]);
+	if (rc != 0) {
+		/* the binary is baked, so absence is an image bug —
+		 * loud in the log, treated as cancel, no fallback UI */
+		NSLOG(netsurf, ERROR, "file gadget: cannot spawn %s: %s",
+		      FILEPICK_BIN, strerror(rc));
+		close(fds[0]);
+		return;
+	}
+
+	gw->picker_pid = pid;
+	gw->picker_fd = fds[0];
+	gw->picker_hl = hl;
+	gw->picker_gadget = gadget;
+}
+
+/* ---------------------------------------------------------------- */
 /* the gui_window table                                             */
 /* ---------------------------------------------------------------- */
 
@@ -356,6 +555,9 @@ gui_window_create(struct browser_window *bw,
 static void gui_window_destroy(struct gui_window *gw)
 {
 	struct gui_window **link;
+
+	/* the picker first: a pick must never apply to a dead window */
+	gucos_picker_cancel(gw);
 
 	for (link = &window_list; *link != NULL; link = &(*link)->next) {
 		if (*link == gw) {
@@ -435,6 +637,9 @@ gui_window_event(struct gui_window *gw, enum gui_window_event event)
 		break;
 
 	case GW_EVENT_NEW_CONTENT:
+		/* the window navigated: an open file dialogue belonged
+		 * to the outgoing page, so it goes with it (todos/0433) */
+		gucos_picker_cancel(gw);
 		gw->scrollx = 0;
 		gw->scrolly = 0;
 		gucos_damage_all(gw);
@@ -683,6 +888,7 @@ static struct gui_window_table window_table = {
 	.set_status = gui_window_set_status,
 	.set_pointer = gui_window_set_pointer,
 	.place_caret = gui_window_place_caret,
+	.file_gadget_open = gui_window_file_gadget_open,
 
 	/* Only BW_CS_SCRIPT_CONSOLE ever arrives here today.  Nothing in
 	 * the tree emits BW_CS_SCRIPT_ERROR, so an uncaught exception

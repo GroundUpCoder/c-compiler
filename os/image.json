@@ -1,5 +1,5 @@
 {
-  "version": 197,
+  "version": 198,
   "overlays": [
     {
       "id": "clang-apps",
@@ -270,6 +270,9 @@
       },
       "/usr/bin/ctlpanel": {
         "project": "os/win32/ctlpanel.json"
+      },
+      "/usr/bin/filepick": {
+        "project": "os/win32/filepick.json"
       },
       "/usr/share/menu/Games/doom": {
         "link": "/usr/bin/doom"

@@ -31,6 +31,8 @@
 
 struct browser_window;
 struct rect;
+struct hlcache_handle;
+struct form_control;
 
 struct gui_window {
 	struct gui_window *next;
@@ -62,6 +64,15 @@ struct gui_window {
 	/* status line text (loading progress / hovered link URL),
 	 * drawn in the bar below the content viewport */
 	char *status;
+
+	/* the out-of-process file chooser (todos/0433): /bin/filepick
+	 * wrapping comdlg32, at most one per window — the pending state
+	 * lives here so a result can only ever apply to the window that
+	 * asked for it */
+	int picker_pid;		/* 0 = no live picker */
+	int picker_fd;		/* read end of the picker's stdout pipe */
+	struct hlcache_handle *picker_hl;	/* content the gadget lives in */
+	struct form_control *picker_gadget;
 };
 
 /** resource search path vector (fetch.c get_resource_url, fonts) */
@@ -83,5 +94,8 @@ void gucos_process_events(void);
 
 /** redraw + present every window with pending damage */
 void gucos_redraw_all(void);
+
+/** reap exited file pickers and apply/drop their results */
+void gucos_pickers_poll(void);
 
 #endif

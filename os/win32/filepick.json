@@ -1,0 +1,11 @@
+{
+  "bin": true,
+  "name": "filepick",
+  "description": "todos/0433 out-of-process file chooser: one comdlg32 GetOpenFileNameW behind argv (--title/--dir), the accepted absolute path on stdout (exit 0) or a silent cancel (exit 1); spawned by SDL-native apps that cannot host the win32 modal pump — first consumer is netsurf's <input type=file>",
+  "deps": [
+    "lib.json"
+  ],
+  "sources": [
+    "filepick.c"
+  ]
+}

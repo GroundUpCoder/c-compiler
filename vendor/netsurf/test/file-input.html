@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<!-- todos/0433: the <input type=file> gadget.  The gadget and the submit
+     button carry probe background colours so a test can locate them in a
+     screenshot instead of assuming layout; the input listener logs the
+     gadget value to the page console (netsurf's stderr). -->
+<html>
+<head>
+<title>NsFile</title>
+<style>
+body { margin: 0; background: #ffffff; }
+form { margin: 0; }
+#f { background: rgb(200, 30, 90); }
+#go { background: rgb(40, 90, 160); color: #ffffff; }
+</style>
+</head>
+<body>
+<form method="get" action="file-input-result.html">
+<input id="f" name="f" type="file">
+<input id="go" type="submit" value="Send">
+</form>
+<script>
+var f = document.getElementById('f');
+f.addEventListener('input', function () {
+	console.log('INPUT:' + f.value);
+});
+</script>
+</body>
+</html>

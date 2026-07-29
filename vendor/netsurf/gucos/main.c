@@ -31,6 +31,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <limits.h>
+#include <signal.h>
 #include <unistd.h>
 
 #include <SDL.h>
@@ -239,6 +240,24 @@ static struct gui_misc_table gucos_misc_table = {
 };
 
 /**
+ * Set by the SIGCHLD handler, cleared by the loop's poll.
+ *
+ * term's flag-then-park pattern (todos/0433): a SIGCHLD claimed at an
+ * import return between the poll and the park clears the kernel's
+ * pending bit, so without the flag the park would sleep out its whole
+ * timeout — or forever, on a -1 deadline — with the picker already
+ * dead.  A signal still PENDING at the park makes the kernel WAIT
+ * return at once, so both claim orders re-enter the poll promptly.
+ */
+static volatile sig_atomic_t gucos_sigchld;
+
+static void gucos_on_sigchld(int sig)
+{
+	(void) sig;
+	gucos_sigchld = 1;
+}
+
+/**
  * The event loop: fire due scheduled callbacks (fetch/layout progress
  * all rides on them), translate input, repaint damage, then park in
  * the kernel WAIT until input arrives or the next callback is due.
@@ -249,6 +268,13 @@ static void gucos_run(void)
 
 	while (!gucos_done) {
 		gucos_schedule_run();
+
+		if (gucos_sigchld) {
+			/* clear BEFORE reaping: a child dying mid-poll
+			 * re-raises the flag and the next pass re-polls */
+			gucos_sigchld = 0;
+			gucos_pickers_poll();
+		}
 
 		gucos_process_events();
 		if (gucos_done) {
@@ -272,6 +298,12 @@ static void gucos_run(void)
 		 * the re-box until some unrelated later event happened to
 		 * wake the loop.  todos/0316. */
 		schedtm = gucos_schedule_next();
+
+		if (gucos_sigchld) {
+			/* a picker died after this pass's poll: go
+			 * straight back around instead of parking on it */
+			continue;
+		}
 
 		/* already due: a 1 ms park rather than a spin — the next
 		 * gucos_schedule_run() fires it (its comparison is strictly
@@ -425,6 +457,10 @@ int main(int argc, char **argv)
 	if (ret != NSERROR_OK) {
 		die("Failed to create browser window");
 	}
+
+	/* file-picker children (todos/0433): SIGCHLD is the wake, the
+	 * loop's poll is the reap */
+	signal(SIGCHLD, gucos_on_sigchld);
 
 	gucos_run();
 
