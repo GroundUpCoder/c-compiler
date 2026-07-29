@@ -213,7 +213,7 @@ const shots = parsePPMs(back.stdout, NAMES);
 const j1c = countContent(shots.j1, isColour);
 const j2c = countContent(shots.j2, isColour);
 check('JS runs by DEFAULT: the sketch demo painted its canvas', j1c > 4000,
-      `coloured pixels in the first frame: ${j1c} (canvas is 128x96 = 12288)`);
+      `coloured pixels in the first frame: ${j1c} (canvas is 256x192 = 49152)`);
 /* the animation advanced on its own — no input was sent between j1 and j2 */
 const moved = contentDiffers(shots.j1, shots.j2);
 check('content-driven repaint with ZERO input: the frame changed on a timer',
