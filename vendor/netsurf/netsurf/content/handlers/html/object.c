@@ -24,6 +24,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <strings.h>
 #include <stdlib.h>
@@ -95,6 +96,9 @@ html_object_done(struct box *box,
 {
 	struct box *b;
 
+	fprintf(stderr, "NS0410 obj_done box=%p handle=%p bg=%d\n",
+		(void *)box, (void *)object, (int)background);
+
 	if (background) {
 		box->background = object;
 		return;
@@ -165,6 +169,10 @@ html_object_callback(hlcache_handle *object,
 	struct box *box;
 
 	box = o->box;
+
+	fprintf(stderr, "NS0410 obj_cb ev=%d box=%p handle=%p base.status=%d active=%u\n",
+		event->type, (void *)box, (void *)object,
+		c->base.status, c->base.active);
 
 	switch (event->type) {
 	case CONTENT_MSG_LOADING:
@@ -752,6 +760,9 @@ html_fetch_object(html_content *c,
 					&child,
 					object->permitted_types,
 					&object->content);
+	fprintf(stderr, "NS0410 fetch_object url=%s box=%p err=%d handle=%p\n",
+		nsurl_access(url), (void *)box, (int)error,
+		(void *)object->content);
 	if (error != NSERROR_OK) {
 		free(object);
 		return error != NSERROR_NOMEM;

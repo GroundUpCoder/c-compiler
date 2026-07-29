@@ -22,6 +22,7 @@
  */
 
 #include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -299,6 +300,11 @@ static nserror hlcache_find_content(hlcache_retrieval_ctx *ctx,
 	/* Associate cache entry with handle */
 	ctx->handle->entry = entry;
 
+	fprintf(stderr, "NS0410 find_content handle=%p entry=%s status=%d\n",
+		(void *)ctx->handle,
+		(error == NSERROR_NEED_DATA) ? "created" : "reused",
+		(int)content_get_status(ctx->handle));
+
 	/* Catch handle up with state of content */
 	if (ctx->handle->cb != NULL) {
 		content_status status = content_get_status(ctx->handle);
@@ -435,6 +441,9 @@ hlcache_llcache_callback(llcache_handle *handle,
 	nserror error;
 
 	assert(ctx->llcache == handle);
+
+	fprintf(stderr, "NS0410 llcache_cb handle=%p ev=%d\n",
+		(void *)ctx->handle, (int)event->type);
 
 	switch (event->type) {
 	case LLCACHE_EVENT_GOT_CERTS:

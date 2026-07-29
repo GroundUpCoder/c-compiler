@@ -24,6 +24,7 @@
 
 #include <assert.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <strings.h>
 #include <stdlib.h>
@@ -584,6 +585,9 @@ static void html_reconvert_box_done(html_content *c, bool success)
 {
 	dom_node *focus_node = NULL;
 
+	fprintf(stderr, "NS0410 reconvert_done success=%d active=%u\n",
+		(int)success, c->base.active);
+
 	c->box_conversion_context = NULL;
 
 	if ((success == false) || (c->aborted)) {
@@ -755,6 +759,9 @@ static void html__reconvert(void *p)
 	for (ctl = c->formless_controls; ctl != NULL; ctl = ctl->next) {
 		ctl->box = NULL;
 	}
+
+	fprintf(stderr, "NS0410 reconvert_start num_objects=%u active=%u\n",
+		c->num_objects, c->base.active);
 
 	/* objects (images etc.) hold box pointers and fetch callbacks;
 	 * drop them all — construction refetches through the hlcache */
