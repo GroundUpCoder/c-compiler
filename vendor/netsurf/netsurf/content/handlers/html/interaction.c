@@ -1931,6 +1931,20 @@ html_dynamic_changed(dom_node *from,
 		j--;
 	}
 
+	/* The topmost changed entry can be above the box tree — the chain
+	 * runs to the DOCUMENT node, and an empty old chain therefore makes
+	 * the whole of the new one "changed".  Descend to the first entry
+	 * that really has a box: that is the highest box the transition can
+	 * restyle.  An entry inside a `display: none` subtree has no box and
+	 * neither has anything below it, so the walk correctly finds
+	 * nothing. */
+	while ((i >= 0) && (box_for_node(a[i]) == NULL)) {
+		i--;
+	}
+	while ((j >= 0) && (box_for_node(b[j]) == NULL)) {
+		j--;
+	}
+
 	if (i >= 0) {
 		out[(*n_out)++] = a[i];
 	}
