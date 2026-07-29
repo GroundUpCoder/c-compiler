@@ -42,6 +42,11 @@ commit — see `todos/0423`.
 
 - A click on `<input type="file">` opens a file dialogue.
 - Choosing a file sets the gadget's displayed value, and submitting the form carries it.
+  🔴 **The design pass split this bullet. Read `## Design` before you scope it.** The
+  submitted form data carries the gadget VALUE — that half is reachable now, and a GET
+  form tests it. A multipart POST that carries the file BYTES is **not** reachable: the
+  gucOS build registers no http fetcher. That half moved to `todos/0437`. Do not try to
+  close it here, and do not report this bullet as fully green.
 - Cancelling the dialogue leaves the gadget unchanged.
 
 ## Design

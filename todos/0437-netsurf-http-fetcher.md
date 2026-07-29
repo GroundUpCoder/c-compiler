@@ -25,6 +25,15 @@ libcurl.
 In practice this item is blocked until the substrate ships; the dependency
 wiring in `queue.json` is the coordinator's call.
 
+**Coordinator's call, 2026-07-30:** hard-blocked on `todos/0417` in `queue.json`.
+Both candidate transports are open today (`0417` open; `0054` open and itself
+blocked on `0052`), so no lane can start this item now, and the real hazard is a
+lane picking it up with no transport at all. ⚠️ The block names the PREFERRED
+transport only — it is not a claim that `0417` is the sole path. The dependency
+is a disjunction that `queue.json` cannot express. **If the `0054` AF_INET relay
+lands first, release this block by hand** (`node todos/queue.js block 0437
+--hard` with no list) rather than waiting for `0417`.
+
 ## Plan
 
 1. Pick the transport: the `todos/0417` HTTP-transfer OFDs if they have landed,
