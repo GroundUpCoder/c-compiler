@@ -67,9 +67,13 @@ reads as open for re-litigation. That is what this section closes.
    the authoritative binding. Host auto-detect (META-ARROW decision 4) defaults
    the scheme to macos on a Mac host (`os-common.js seedHostKeyScheme`, seeded
    into the admin `/etc/keys`); the per-user ~/.config/keys override always wins.
-2. **Redo (⌘⇧Z / Ctrl+Y) is not implemented** — `os/keys.h` binds KA_UNDO only,
-   consistent with EDIT having no undo buffer yet (`todos/0135`); the
-   original table's Redo cell is aspirational, not shipped.
+2. **Redo (⌘⇧Z / Ctrl+Y) is not implemented** — `os/keys.h` binds KA_UNDO
+   only. EDIT has a single-level undo buffer since `todos/0135` (the Win95
+   plain-EDIT model: one record, and a second EM_UNDO re-applies the edit —
+   the undo/undo toggle). Redo stays out on purpose: the plain Win32 EDIT
+   control has no EM_REDO (that is a RichEdit feature), no corpus app uses
+   RichEdit, and the toggle already gives "undo the undo". The original
+   table's Redo cell is aspirational, not shipped.
 3. The accelerator swap (`TranslateAcceleratorW`, `os/win32/user32.c`) is
    **global at the one choke point** — FCONTROL means GUI under the macos
    scheme, Ctrl under windows, no per-app exceptions.
