@@ -333,4 +333,9 @@ thing this file exists to kill.
 - anchor:  * mid-window coordinates from an un-laid-out box (todos/0412, register
 - provenance: 0407
 
+### L61 — an HTTP transfer id is not an fd, so at most one transfer parks per process, none can join FS_SELECT/FS_WAIT, and the kernel sets no deadline
+- ticket: 0417
+- file: kernel.js
+- anchor:  * bounded-buffer discipline as pipes. At most ONE HTTP op is parked per
+
 <!-- END ENTRIES -->
