@@ -1,6 +1,6 @@
 # 0135 — EDIT control undo buffer (EM_UNDO / EM_CANUNDO)
 
-- **Status**: open (scheduled 2026-07-29 — jku reported Edit → Undo dead in
+- **Status**: done (scheduled 2026-07-29 — jku reported Edit → Undo dead in
   notepad and asked for it fixed end to end; un-deferred and assigned a lane.
   Was: deferred, mass-deferred 2026-07-12)
 - **Design**: `todos/WIN32.md` (EDIT status — the "no-undo honesty" note at
