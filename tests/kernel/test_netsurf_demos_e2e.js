@@ -14,13 +14,21 @@
 //      tree enumeration; a hardcoded list here would be a second source of
 //      truth and would drift the first time a demo is added.
 //
-//   2. EVERY SHIPPED DEMO ACTUALLY RUNS.  Each one is opened from its
-//      SEEDED copy in a real /bin/netsurf window and its own load-check
-//      pill is read off the pixels: the pill is coloured by the demo's
-//      EXTERNAL stylesheet and turned from red to green by the demo's
-//      EXTERNAL script, so a green pill means both subresources were
-//      fetched next to the page and both took effect.  "The file is
-//      present" is not the assertion; "the page works" is.
+//   2. EVERY SHIPPED DEMO ACTUALLY RUNS — in two grades.  Each one is
+//      opened from its SEEDED copy in a real /bin/netsurf window and
+//      (a) its load-check pill is read off the pixels: the pill is
+//      coloured by the demo's EXTERNAL stylesheet and turned from red to
+//      green by the demo's EXTERNAL script, so a green pill means both
+//      subresources were fetched next to the page and took effect; and
+//      (b) the demo's DECLARED INTERACTION is driven through wmctl
+//      client-coordinate injection (clicks, held-pointer strokes, typed
+//      keys, timer settles) and each phase's screenshot is held to the
+//      pixel expectations in vendor/netsurf/demos/demos.js INTERACTIONS.
+//      A green pill proves the page LOADED; only (b) proves the page
+//      DOES anything — the netsurf-bughunt lane found this file claiming
+//      "the page works" while asserting only (a), which is exactly the
+//      gap a passing pill can hide.  A failed interaction expect writes
+//      the phase shots as viewable PNGs under build/test-kernel/.
 //
 // Two negative controls keep leg 2 honest — a copy with its script removed
 // must go RED, and a copy with its stylesheet removed must lose both
@@ -75,14 +83,28 @@ const BROKEN_CSS = '/root/nocss';
 const probe = DEMOS[0];   // any demo; the set is derived, so index 0 is fine
 
 const sidOf = (v, title) => `${v}=$(wmctl list | grep "\t${title}$" | sed "s/[^0-9].*//")`;
+
+/* One INTERACTIONS step -> the wmctl client-coordinate injection lines that
+ * perform it on $S.  `hover` is the held-motion carrier: the surface's own
+ * down/up edges track the button state, so a mask-less motion between them
+ * is a drag to the page. */
+function stepLines(st) {
+  if (st.click) return [`wmctl click $S ${st.click[0]} ${st.click[1]}`];
+  if (st.down) return [`wmctl down $S ${st.down[0]} ${st.down[1]}`];
+  if (st.move) return [`wmctl hover $S ${st.move[0]} ${st.move[1]}`];
+  if (st.up) return [`wmctl up $S ${st.up[0]} ${st.up[1]}`];
+  if (st.type) return [...st.type].map((ch) => `wmctl key $S 0 ${ch.charCodeAt(0)}`);
+  if (st.settle) return [`sleep ${Math.max(1, Math.ceil(st.settle / 1000))}`];
+  throw new Error('unknown interaction step ' + JSON.stringify(st));
+}
 /* No settle poll: /bin/netsurf sets the window title from the page's own
  * <title>, which it only knows once the document is parsed and its scripts
  * have run — so the title barrier IS the "this page is up" marker, and the
  * frame behind it is already painted.  (Verified: shots taken immediately
  * after the barrier and a second later are identical.)  A page that never
  * comes up fails the wait LOUDLY instead of being napped past. */
-function openShoot(demoDir, title, tag) {
-  return [
+function openShoot(demoDir, title, tag, interaction) {
+  const lines = [
     `netsurf "${demoDir}/index.html" &`,
     /* titles are quoted: "Hello JavaScript" has a space in it, and an
      * unquoted one makes wmctl wait on the empty string — which times out
@@ -91,8 +113,17 @@ function openShoot(demoDir, title, tag) {
     `wmctl wait win "${title}" 60000`,
     sidOf('S', title),
     `wmctl shot $S /root/${tag}.ppm && echo shot-${tag}-ok`,
-    `wmctl close $S && wmctl wait nowin "${title}" 8000 && echo closed-${tag}`,
   ];
+  for (const ph of (interaction ? interaction.phases : [])) {
+    for (const st of ph.do) lines.push(...stepLines(st));
+    /* No completion marker exists for "the handler's repaint composited"
+     * (netsurf schedules redraws on 0-delay callbacks), so each phase
+     * settles on a genuine no-marker sleep before its shot. */
+    lines.push('sleep 1');
+    lines.push(`wmctl shot $S /root/${tag}-${ph.name}.ppm && echo shot-${tag}-${ph.name}-ok`);
+  }
+  lines.push(`wmctl close $S && wmctl wait nowin "${title}" 8000 && echo closed-${tag}`);
+  return lines;
 }
 
 const script = [
@@ -108,7 +139,9 @@ const script = [
   `cp -r "${BASE}/${probe.name}" ${BROKEN_CSS}`,
   `rm ${BROKEN_CSS}/${probe.styles[0]}`,
 ];
-for (const d of DEMOS) script.push(...openShoot(`${BASE}/${d.name}`, d.title, 'd-' + d.name));
+for (const d of DEMOS)
+  script.push(...openShoot(`${BASE}/${d.name}`, d.title, 'd-' + d.name,
+                           NSDEMOS.INTERACTIONS[d.name]));
 script.push(...openShoot(BROKEN_JS, probe.title, 'nojs'));
 script.push(...openShoot(BROKEN_CSS, probe.title, 'nocss'));
 
@@ -185,25 +218,31 @@ console.log('\nleg 1 — the seed landed on a fresh boot');
 
 /* ---- leg 2: every demo runs, from its seeded copy ---- */
 console.log('\nleg 2 — every seeded demo runs in a real netsurf window');
-const TAGS = DEMOS.map((d) => 'd-' + d.name).concat(['nojs', 'nocss']);
-for (const t of TAGS) {
-  check(`${t}: the window came up and was shot`, out.includes(`shot-${t}-ok`));
-  check(`${t}: the window closed cleanly`, out.includes(`closed-${t}`));
+/* Window tags get a close marker; every tag (windows + per-phase interaction
+ * shots) gets a shot marker and a PPM to read back — in exactly the order
+ * openShoot emitted them. */
+const WIN_TAGS = DEMOS.map((d) => 'd-' + d.name).concat(['nojs', 'nocss']);
+const TAGS = [];
+for (const d of DEMOS) {
+  TAGS.push('d-' + d.name);
+  for (const ph of NSDEMOS.INTERACTIONS[d.name].phases) TAGS.push(`d-${d.name}-${ph.name}`);
 }
+TAGS.push('nojs', 'nocss');
+for (const t of TAGS) check(`${t}: the window came up and was shot`, out.includes(`shot-${t}-ok`));
+for (const t of WIN_TAGS) check(`${t}: the window closed cleanly`, out.includes(`closed-${t}`));
 
 const back = driveBoot('cat ' + TAGS.map((t) => `/root/${t}.ppm`).join(' ') + '\n',
                        { image, encoding: null, maxBuffer: 256 * 1024 * 1024 });
 const shots = {};
 {
+  const { parsePpm } = require('../lib/png.js');
   let off = 0;
   for (const t of TAGS) {
-    const head = back.stdout.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) throw new Error('bad ppm stream at ' + t + ': ' + JSON.stringify(head));
-    const w = +m[1], h = +m[2];
-    const data = off + m[0].length;
-    shots[t] = { w, h, data: back.stdout.slice(data, data + w * h * 3) };
-    off = data + w * h * 3;
+    try {
+      const s = parsePpm(back.stdout, off);
+      shots[t] = { w: s.w, h: s.h, rgb: s.rgb };
+      off = s.next;
+    } catch (e) { throw new Error('bad ppm stream at ' + t + ': ' + e.message); }
   }
 }
 /* The pill's two states — the predicates live next to the CSS they read
@@ -214,7 +253,7 @@ function pill(s) {
   for (let y = 0; y < s.h - STATUS_H; y++) {
     for (let x = 0; x < s.w; x++) {
       const i = (y * s.w + x) * 3;
-      const r = s.data[i], g = s.data[i + 1], b = s.data[i + 2];
+      const r = s.rgb[i], g = s.rgb[i + 1], b = s.rgb[i + 2];
       if (isPillGreen(r, g, b)) green++;
       if (isPillRed(r, g, b)) red++;
     }
@@ -235,6 +274,38 @@ for (const d of DEMOS) {
   check(`${d.name}: its EXTERNAL stylesheet and EXTERNAL script both loaded and took effect`,
         p.green > 300 && p.red === 0,
         `green=${p.green} red=${p.red} (red control had red=${nojs.red})`);
+}
+
+/* ---- leg 3: every demo DOES what it declares (interaction truth) ---- */
+console.log('\nleg 3 — driven interactions change the pixels they declare');
+{
+  const { encodePng } = require('../lib/png.js');
+  const ART = path.join(ROOT, 'build', 'test-kernel');
+  for (const d of DEMOS) {
+    const ia = NSDEMOS.INTERACTIONS[d.name];   // presence enforced by leg 0's contract
+    const byPhase = {};
+    for (const ph of ia.phases) byPhase[ph.name] = shots[`d-${d.name}-${ph.name}`];
+    for (const ph of ia.phases) {
+      for (const e of (ph.expect || [])) {
+        const fail = NSDEMOS.evalExpect(e, byPhase[ph.name], byPhase);
+        if (fail !== null) {
+          /* Persist the evidence viewably: this phase's shot, and the phase
+           * the expect compared against. */
+          fs.mkdirSync(ART, { recursive: true });
+          const dump = (name) => {
+            const s = byPhase[name];
+            if (s) fs.writeFileSync(path.join(ART, `nsdemos-${d.name}-${name}.png`),
+                                    encodePng(s.w, s.h, s.rgb));
+          };
+          dump(ph.name);
+          if (e.changedFrom !== undefined) dump(e.changedFrom);
+          if (e.sameAs !== undefined) dump(e.sameAs);
+        }
+        check(`${d.name}/${ph.name}: ${JSON.stringify(e)}`,
+              fail === null, fail === null ? undefined : fail + ` (PNGs under build/test-kernel/)`);
+      }
+    }
+  }
 }
 
 /* ---- done ---- */

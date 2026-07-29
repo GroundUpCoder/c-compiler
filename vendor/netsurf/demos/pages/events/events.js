@@ -73,7 +73,11 @@ document.getElementById('outer').addEventListener('click', function (e) {
 var keyTrail = [];
 function keyNote(what) {
 	keyTrail.push(what);
-	keysBox.value = keyTrail.join(' ');
+	/* Show the TAIL of the trail: the box renders its value from the
+	 * start and clips at its width, so a full join hides every event
+	 * after the first handful — the latest events are the ones a viewer
+	 * (or a pixel assert) needs to see. */
+	keysBox.value = keyTrail.slice(-4).join(' ');
 	console.log('events ' + what);
 }
 

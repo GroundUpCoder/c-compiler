@@ -37,6 +37,197 @@ const PILL = {
   isRed: (r, g, b) => r > 150 && g < 40 && b < 40,
 };
 
+/* ---- interaction truth ------------------------------------------------
+ *
+ * Each shipped demo declares how to DRIVE it and which pixels must change:
+ * "the pill is green" proves the subresources loaded, and only this proves
+ * the demo DOES anything.  Coordinates are PAGE pixels calibrated against
+ * the 800x600 default netsurf window (deterministic engine + baked fonts,
+ * so the layout is stable); the content area starts at the surface origin,
+ * so page == surface-client coordinates while the page is unscrolled.
+ *
+ * A demo's interaction is a list of PHASES.  Each phase runs its `do` steps
+ * and then gets exactly one screenshot; `expect` entries compare regions of
+ * this phase's shot against earlier phases' shots by name (or state a
+ * predicate about this shot alone).  Steps:
+ *
+ *   {click:[x,y]}  {down:[x,y]}  {move:[x,y]}  {up:[x,y]}   pointer, page px
+ *   {type:"text"}                     keystrokes to the focused element
+ *   {settle:ms, why:"..."}            fixed wait — ONLY for timer-driven
+ *                                     content (the annotation is mandatory:
+ *                                     the no-fixed-sleep rule allows a
+ *                                     genuine no-marker settle only)
+ *
+ * Expect predicates (region = [x,y,w,h] page px):
+ *
+ *   {region, changedFrom:'phase'}     >= minDiff pixels differ (default 20)
+ *   {region, sameAs:'phase'}          <= sameTol pixels differ (default 0)
+ *   {region, ink:true}                some pixel is dark (text/ink present)
+ *   {region, color:[r,g,b], tol}      some pixel within tol of color
+ *   {region, allColor:[r,g,b], tol}   every pixel within tol of color
+ *
+ * The kernel e2e drives these as wmctl client-coordinate injections; the
+ * browser rig drives them as real Chromium input.  One table, two drivers.
+ */
+const INTERACTIONS = {
+  'hello-js': { phases: [
+    /* No input surface at all — the interaction truth is that the script's
+     * parse-time document.write PAINTED: the #out box holds real text. */
+    { name: 'load', do: [], expect: [{ region: [26, 160, 748, 95], ink: true }] },
+  ] },
+  counter: { phases: [
+    { name: 'load', do: [] },
+    /* Two Add-one clicks: 0 -> 2 in the readonly value box. */
+    { name: 'inc', do: [{ click: [170, 118] }, { click: [170, 118] }],
+      expect: [{ region: [26, 104, 90, 30], changedFrom: 'load' }] },
+    /* Reset: back to 0 — and the box renders EXACTLY as it did at load. */
+    { name: 'reset', do: [{ click: [380, 118] }],
+      expect: [{ region: [26, 104, 90, 30], changedFrom: 'inc' },
+               { region: [26, 104, 90, 30], sameAs: 'load' }] },
+  ] },
+  events: { phases: [
+    { name: 'load', do: [] },
+    /* Click the inner box: capture+target+bubble trail lands in the order
+     * readout. */
+    { name: 'clicks', do: [{ click: [167, 195] }],
+      expect: [{ region: [26, 267, 438, 25], changedFrom: 'load' }] },
+    /* Focus the text input and type: keydown/keyup/input land in the keys
+     * readout, and the typed glyphs land in the input itself. */
+    { name: 'typing', do: [{ click: [92, 325] }, { type: 'hi' }],
+      expect: [{ region: [26, 363, 438, 25], changedFrom: 'clicks' },
+               { region: [26, 313, 133, 25], changedFrom: 'clicks' }] },
+    /* Toggle the checkbox: the mark is drawn (a small glyph — lower the
+     * pixel floor), change:check is recorded. */
+    { name: 'check', do: [{ click: [171, 319] }],
+      expect: [{ region: [161, 309, 20, 20], changedFrom: 'typing', minDiff: 6 },
+               { region: [26, 363, 438, 25], changedFrom: 'typing' }] },
+    /* Submit: the cancelable handler appends "submit" and preventDefault()
+     * stops the navigation — a reload would have RESET both readouts to
+     * their load state, so "still changed from load" is the no-reload
+     * proof. */
+    { name: 'submit', do: [{ click: [220, 326] }],
+      expect: [{ region: [26, 363, 438, 25], changedFrom: 'check' },
+               { region: [26, 267, 438, 25], changedFrom: 'load' }] },
+  ] },
+  paint: { phases: [
+    { name: 'load', do: [] },
+    /* A real multi-point stroke: down inside the pad, held motion, up. */
+    { name: 'stroke', do: [
+        { down: [30, 30] }, { move: [70, 50] }, { move: [110, 70] },
+        { move: [150, 90] }, { move: [190, 110] }, { up: [210, 120] }],
+      expect: [{ region: [0, 0, 240, 160], ink: true },
+               { region: [277, 250, 228, 27], changedFrom: 'load' }] },
+    /* Switch ink to Sky and stroke again: blue dabs appear. */
+    { name: 'sky', do: [
+        { click: [107, 263] },
+        { down: [40, 130] }, { move: [90, 135] }, { up: [140, 140] }],
+      expect: [{ region: [0, 100, 240, 60], color: [32, 96, 200], tol: 40 }] },
+    /* Clear: the pad is pure white again and the readout says so. */
+    { name: 'clear', do: [{ click: [239, 263] }],
+      expect: [{ region: [0, 0, 240, 160], allColor: [255, 255, 255], tol: 8 },
+               { region: [277, 250, 228, 27], changedFrom: 'sky' }] },
+  ] },
+  sketch: { phases: [
+    { name: 'load', do: [] },
+    /* The canvas animates from setInterval alone — timer-driven repaint is
+     * the subject, so the settle IS the thing under test. */
+    { name: 'tick', do: [{ settle: 600, why: 'the 200ms setInterval repaint is the subject' }],
+      expect: [{ region: [24, 102, 130, 98], changedFrom: 'load' },
+               { region: [250, 219, 92, 25], changedFrom: 'load' }] },
+    { name: 'freeze', do: [{ click: [198, 232] }] },
+    /* Stopped: the canvas holds byte-identical across another interval. */
+    { name: 'frozen', do: [{ settle: 600, why: 'proving the STOPPED timer paints nothing' }],
+      expect: [{ region: [24, 102, 130, 98], sameAs: 'freeze' }] },
+    /* Next pattern repaints once even while stopped. */
+    { name: 'next', do: [{ click: [87, 232] }],
+      expect: [{ region: [24, 102, 130, 98], changedFrom: 'frozen' }] },
+  ] },
+  stopwatch: { phases: [
+    { name: 'load', do: [] },
+    /* Running since load: the plain-div readout advances — the Lane B
+     * mutation bridge under a timer. */
+    { name: 'tick', do: [{ settle: 700, why: 'the 100ms setInterval textContent rewrite is the subject' }],
+      expect: [{ region: [24, 100, 140, 55], changedFrom: 'load' }] },
+    { name: 'stop', do: [{ click: [62, 222] }],
+      expect: [{ region: [24, 165, 120, 25], changedFrom: 'tick' }] },
+    /* Lap inserts a real <li>; Reset removes it and the list renders as it
+     * did before the lap. */
+    { name: 'lap', do: [{ click: [136, 222] }],
+      expect: [{ region: [24, 248, 400, 45], changedFrom: 'stop' }] },
+    { name: 'zero', do: [{ click: [213, 222] }],
+      expect: [{ region: [24, 248, 400, 45], sameAs: 'stop' }] },
+  ] },
+  todo: { phases: [
+    { name: 'load', do: [] },
+    /* Type a task and Add it: insertion + the class-flipping counter.  The
+     * band covers list + counter — the counter MOVES as the list grows, so
+     * precise per-element regions would chase layout; the band asserts the
+     * mutation painted. */
+    { name: 'add', do: [{ click: [150, 116] }, { type: 'wash' }, { click: [311, 115] }],
+      expect: [{ region: [24, 140, 600, 140], changedFrom: 'load' }] },
+    /* Remove the first seeded row via its own Done button. */
+    { name: 'remove', do: [{ click: [303, 163] }],
+      expect: [{ region: [24, 140, 600, 140], changedFrom: 'add' }] },
+  ] },
+};
+
+/* Evaluate one expect entry against this phase's shot (and the earlier
+ * shots it names).  A shot is { w, h, rgb } — packed RGB over the SURFACE
+ * (page pixel (x,y) at rgb[(y*w+x)*3]).  Returns null on pass, else a
+ * human-readable failure string.  Pure, so both drivers and any unit test
+ * share the one implementation. */
+function evalExpect(e, shot, shotsByPhase) {
+  const [rx, ry, rw, rh] = e.region;
+  const px = (s, x, y) => [(s.rgb[(y * s.w + x) * 3]), (s.rgb[(y * s.w + x) * 3 + 1]), (s.rgb[(y * s.w + x) * 3 + 2])];
+  const clampW = Math.min(rx + rw, shot.w), clampH = Math.min(ry + rh, shot.h);
+  if (e.changedFrom !== undefined || e.sameAs !== undefined) {
+    const other = shotsByPhase[e.changedFrom !== undefined ? e.changedFrom : e.sameAs];
+    if (!other) return `no shot for phase "${e.changedFrom || e.sameAs}"`;
+    let diff = 0;
+    for (let y = ry; y < clampH; y++)
+      for (let x = rx; x < clampW; x++) {
+        const a = px(shot, x, y), b = px(other, x, y);
+        if (a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2]) diff++;
+      }
+    if (e.changedFrom !== undefined) {
+      const min = e.minDiff !== undefined ? e.minDiff : 20;
+      return diff >= min ? null :
+        `region ${JSON.stringify(e.region)} changed only ${diff} px vs "${e.changedFrom}" (need >= ${min})`;
+    }
+    const tol = e.sameTol !== undefined ? e.sameTol : 0;
+    return diff <= tol ? null :
+      `region ${JSON.stringify(e.region)} differs by ${diff} px from "${e.sameAs}" (allowed ${tol})`;
+  }
+  if (e.ink) {
+    for (let y = ry; y < clampH; y++)
+      for (let x = rx; x < clampW; x++) {
+        const [r, g, b] = px(shot, x, y);
+        if (r < 100 && g < 100 && b < 100) return null;
+      }
+    return `region ${JSON.stringify(e.region)} has no ink (no dark pixel)`;
+  }
+  if (e.color) {
+    const tol = e.tol !== undefined ? e.tol : 12;
+    for (let y = ry; y < clampH; y++)
+      for (let x = rx; x < clampW; x++) {
+        const p = px(shot, x, y);
+        if (p.every((v, i) => Math.abs(v - e.color[i]) <= tol)) return null;
+      }
+    return `region ${JSON.stringify(e.region)} has no pixel near ${JSON.stringify(e.color)}`;
+  }
+  if (e.allColor) {
+    const tol = e.tol !== undefined ? e.tol : 8;
+    for (let y = ry; y < clampH; y++)
+      for (let x = rx; x < clampW; x++) {
+        const p = px(shot, x, y);
+        if (!p.every((v, i) => Math.abs(v - e.allColor[i]) <= tol))
+          return `region ${JSON.stringify(e.region)} pixel (${x},${y}) is ${JSON.stringify(p)}, want ~${JSON.stringify(e.allColor)}`;
+      }
+    return null;
+  }
+  return 'expect entry with no predicate: ' + JSON.stringify(e);
+}
+
 /* The shipped demo folders, sorted — the single source of truth. */
 function demoNames() {
   return fs.readdirSync(PAGES_DIR, { withFileTypes: true })
@@ -116,6 +307,21 @@ function contractProblems() {
     }
   }
 
+  /* Interaction truth is part of the contract: a demo shipped without a
+   * declared interaction would regress the suite back to "the pill is
+   * green" — exactly the gap the netsurf-bughunt lane closed. */
+  for (const n of names) {
+    const ia = INTERACTIONS[n];
+    if (!ia || !Array.isArray(ia.phases) || ia.phases.length === 0) {
+      problems.push(`${n}/: no INTERACTIONS entry — every demo must declare how it is driven and what pixels change`);
+    } else if (!ia.phases.some((p) => (p.expect || []).length > 0)) {
+      problems.push(`${n}/: INTERACTIONS has no expect at all — it asserts nothing`);
+    }
+  }
+  for (const n of Object.keys(INTERACTIONS)) {
+    if (!names.includes(n)) problems.push(`INTERACTIONS names "${n}", which is not a shipped demo`);
+  }
+
   /* The landing page is a hand-written list; hold it to the derived set. */
   const linked = indexLinks().filter((h) => h.endsWith('/index.html')).sort();
   const want = names.map((n) => n + '/index.html');
@@ -137,5 +343,6 @@ function checkContract() {
 }
 
 module.exports = { DEMOS_DIR, PAGES_DIR, INDEX_HTML, PILL,
+                   INTERACTIONS, evalExpect,
                    demoNames, demo, demos, demoFiles, indexLinks,
                    contractProblems, checkContract };
