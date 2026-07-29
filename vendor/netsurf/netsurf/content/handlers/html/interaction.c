@@ -2148,12 +2148,21 @@ static void html_update_dynamic_chains(html_content *html,
 	dom_node *hover, *active;
 	int n = 0;
 
-	/* Do not touch a box tree that is being built or swapped: the
-	 * next mouse action re-derives everything from the pointer
-	 * position anyway. */
+	/* Do not touch a box tree that is being built or swapped: the next
+	 * mouse action re-derives everything from the pointer position
+	 * anyway.
+	 *
+	 * The same goes for a tree something else is holding a box of.  An
+	 * open select menu holds its gadget's box, and a drag holds the box
+	 * it started on; a restyle here reflows the document under both.
+	 * The press that arms `:active` arrives before any drag starts, and
+	 * the release that clears it arrives after the drag has ended, so
+	 * neither is lost. */
 	if ((html->layout == NULL) ||
 	    (html->reconverting) ||
-	    (html->box_conversion_context != NULL)) {
+	    (html->box_conversion_context != NULL) ||
+	    (html->visible_select_menu != NULL) ||
+	    (html->drag_type != HTML_DRAG_NONE)) {
 		return;
 	}
 
