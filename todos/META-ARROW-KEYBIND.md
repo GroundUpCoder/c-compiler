@@ -23,6 +23,12 @@ todos/KEYBINDING-OVERRIDE-SYSTEM.md). The BAKED decisions:
 5. **Exposé** reserved F3 (`wm.overview`, both schemes) — a visible stub for the
    sibling pass; it does NOT take Ctrl+Alt+arrow.
 
+🔴 **Decision 4 sets the macOS scheme as the default on a Mac host — so read
+`todos/KEYMAP.md`'s "CLOSED DECISION" section before you propose anything that
+binds a Ctrl chord in that scheme.** In the macos scheme Ctrl carries NO edit
+verbs and stays reserved for the readline rows. jku rejected dual-binding
+Ctrl+V/C/X there three times (2026-07-29). Do not re-open it.
+
 Where the mechanism actually lives: keys.h (CHUNK 2) already carried the macos
 ⌘+arrow rows + the relocated snap defaults; wm.c's `grab_table_push` (CHUNK 3)
 resolves them per-scheme and pushes the grab table, so GUI+arrow passes through

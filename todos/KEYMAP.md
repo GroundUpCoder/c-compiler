@@ -10,6 +10,47 @@ branch `shortcuts-0149` (log `logs/2026-07-18/keymap-scheme-0149.md`) — the
 real-macOS-Chrome run; nothing was bound on its say-so — the table already
 excludes every chord the spike is expected to find eaten.
 
+## 🔴 CLOSED DECISION — Ctrl carries NO edit verbs in the macOS scheme. Do not re-open.
+
+**Status: decided by jku, three times, by email, 2026-07-29. This is a decision
+record, not a discussion. Do not re-litigate it in a design pass.**
+
+The macOS scheme is a **swap, not an alias**. ⌘ takes the edit verbs. **Ctrl is
+RESERVED** for the readline rows and for future emacs-style bindings, the same
+as real macOS. That reservation is the *point* of macOS mode, not an incidental
+consequence of it — see "The idea" below, which explains why a freed Ctrl row is
+the capability the mode exists to deliver.
+
+**Rejected, on the record:** dual-binding Ctrl+V / Ctrl+C / Ctrl+X in the macos
+table of `os/keys.h` so that the Win95 chords keep working alongside ⌘. jku
+rejected this proposal three times. In his words: *"the whole point of Mac mode
+is to free the ctrl combos for readline and other niceties like real Mac does.
+Dual binding kills that."*
+
+**Do not propose it again.** The argument *for* dual-binding is always the same
+one — Win95 muscle memory, a low apparent cost, "it only adds, it does not
+remove." That argument is **known and rejected**, not a new insight. It is wrong
+because the cost is not visible in the macos table: adding Ctrl+V there silently
+spends a chord that the readline rows and 0150's emacs bindings need. Anyone who
+re-derives it has found the rejected argument, not a gap.
+
+**The tests are policy, not description.** These assertions in
+`tests/kernel/test_keymap_e2e.js` encode this decision:
+
+- `macos: ^C is freed (paste delivers the sentinel, not the selection)`
+- `macos: Ctrl chords do NOT fire the accels (exactly the two ⌘ copies)`
+
+**If either goes red, the policy has been broken. The test is not stale.** Fix
+the code. Do not flip the assertion.
+
+**Why this is written here.** Until 2026-07-29 this decision existed only in the
+coordination repo, and nowhere in this one. A design pass that read `KEYMAP.md`,
+`META-ARROW-KEYBIND.md` and `KEYBINDING-OVERRIDE-SYSTEM.md` correctly found the
+"swap not alias" *design* and found nothing recording that reversing it had
+already been refused — so it re-weighed the trade-off and recommended the
+reversal, confidently. A design that is documented without its settled decisions
+reads as open for re-litigation. That is what this section closes.
+
 ## As built — deviations from the original table (5 decisions, all shipped)
 
 1. **Cmd+arrows are line/doc nav in the macOS scheme** (⌘←/→ =

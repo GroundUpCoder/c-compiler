@@ -221,6 +221,13 @@ function sessionMac() {
 
   check('macos: ⌘A+⌘C fill the kernel slot', section(out, 'copy') === 'mac verbs',
     JSON.stringify(section(out, 'copy')));
+  // POLICY ASSERTION — NOT a description of current behavior. jku decided,
+  // three times by email on 2026-07-29, that the macos scheme is a SWAP and
+  // never an alias: ⌘ carries the edit verbs and Ctrl stays RESERVED for the
+  // readline rows and future emacs bindings. If this goes red, someone has
+  // dual-bound Ctrl+C/V/X in the macos table and BROKEN the policy. Fix the
+  // code; do NOT flip the assertion. See the CLOSED DECISION section at the
+  // top of todos/KEYMAP.md before touching this line.
   check('macos: ^C is freed (paste delivers the sentinel, not the selection)',
     section(out, 'ctrlfree').trim() === 'SENTINEL-1',
     JSON.stringify(section(out, 'ctrlfree')));
@@ -279,6 +286,10 @@ function sessionAccel() {
     section(out, 'pasted').includes('Copy of f.txt'),
     JSON.stringify(section(out, 'pasted')));
   const after = section(out, 'after').split('\n').filter(Boolean).sort();
+  // POLICY ASSERTION — see the note at the '^C is freed' check above and the
+  // CLOSED DECISION section at the top of todos/KEYMAP.md. The accelerator
+  // layer is a SWAP: under macos, Ctrl+C/Ctrl+V must fire NOTHING. A red here
+  // means the swap became an alias. Fix the code; do NOT flip the assertion.
   check('macos: Ctrl chords do NOT fire the accels (exactly the two ⌘ copies)',
     after.length === 3 && after.includes('Copy (2) of f.txt'),
     JSON.stringify(after));
