@@ -1,6 +1,6 @@
 # 0423 — the netsurf patch record is authoritative at rebuild, but nothing checks it
 
-- **Status**: open
+- **Status**: done
 - **Design**: —
 
 ## Goal
