@@ -1,6 +1,6 @@
 # 0427 — a held button reports as released until motion clears DRAG_SLOP (spurious mouseup)
 
-- **Status**: open
+- **Status**: done
 - **Design**: —
 - **Reported by**: jku, 2026-07-29, direct user report by email.
 

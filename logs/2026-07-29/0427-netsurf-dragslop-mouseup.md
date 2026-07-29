@@ -84,10 +84,35 @@ genuine drag attempt also produces one dot. The defect was present the
 whole time, and the demo-visual work (todos/0425) was never the whole
 story.
 
+## Two test-harness facts found on the way
+
+The dukky `document.title` setter is a stub (`genjs/duktape/document.c`).
+A dynamic retitle from a page never reaches the window. Do not use a
+title change as a wait marker for a JS action. The test uses a sentinel
+div class flip instead, and polls the pixels; the 0316 restyle path
+proves that channel. A body-class background restyle does not repaint
+either; flip a normal element.
+
+A page that wants drag events must call `preventDefault()` on the
+`mousedown`. Without it, the DRAG_SLOP promotion starts a core
+page-scroll drag, and the core consumes those tracks before the DOM.
+The paint demo has the same call for the same reason.
+
 ## Verification
 
-Phase 1 (this branch, lock-free): the netsurf projects compile passed
-(1 passed, 73.7 s). The todos suite passed (5/5, 14.8 s). Phase 2 (after
-the coordinator GO): show the new test red on the unfixed `gui.c`, show it
-green on the fix, then run the full kernel suite and the full browser
-sweep, and tally `results[].status` in both artifacts.
+The red proof and the green proof ran on one test text. On the unfixed
+`gui.c`, the test fails 10 named checks. The log shows the spurious
+`mouseup` at (103,102), 3 px after the press at (100,100), before any
+move. It shows 4 mouseups and 4 mousedowns for 3 gestures; the extra
+mousedown is the synthetic one the core owes when it thinks a click had
+no press. On the fixed `gui.c`, the test passes 16 of 16 checks.
+
+The full gates ran on the tree rebased onto main `18c1e286`. The kernel
+suite: 132 passed, 0 failed (1114.2 s); the artifact shows one run, no
+filter, no resume, no carry, 132 selected = executed = recorded. The
+browser sweep: 42 passed, 0 failed (808.1 s); the artifact shows one
+run, no filter, no resume, no carry, 42 = 42 = 42. A first sweep run
+failed one file, `os-boots.mjs`, at the "vi edits a file through xterm"
+leg; that leg does not execute netsurf code, and the clean full re-run
+confirms a flake. The todos suite: 5/5 (12.0 s). The netsurf projects
+compile: 1 passed (73.7 s).
