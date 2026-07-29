@@ -40,8 +40,9 @@ Dev).  Licences: MIT (libs), GPLv2 (netsurf core) — each tree keeps its
 | `gucos/` | **The gucOS frontend** (Lane 2): renders into a real gucOS window — libnsfb XBGR8888 RAM surface blitted to the SDL3-veneer window surface (same byte layout, alpha forced opaque), freetype text via a frontend-owned glyph cache (the upstream fb frontend's `font_freetype.c` minus FTC, which the vendored freetype doesn't carry), the fb frontend's scheduler, SDL input map (mouse click/drag/wheel, keys), drag-resize → synchronous reformat, SDL clipboard, per-`<title>` window titles.  `gucos/bin.json` is the app build graph (dep order rule applies; also compile-checked as `projects/netsurf-gucos`) |
 | `shim/` | gucOS glue: productized `iconv` over libparserutils' charset codecs, `inet_aton/inet_pton` (address parsing only), `testament.h`, install-tree alias headers (`dom/bindings/hubbub/*`), `arpa/ netinet/` headers |
 | `*/lib.json`, `netsurf-core.json`, `bin.json` | The build graph (below) |
-| `patches/` | Curated content patches (table below) |
+| `patches/` | Curated content patches (table below) + `pristine.json`, the recorded sha256 of each patched file's pristine residual (what `patchcheck.mjs` checks against) |
 | `update.sh`, `relativize.mjs`, `UPSTREAM.json` | Re-runnable vendor pipeline |
+| `patchcheck.mjs` | Offline patch-record verifier (todos/0423): strict reverse-apply of every `patches/` section + residual manifest + per-change differential.  Runs in the `netsurf-patch` suite and the pre-commit hook; see "Updating" |
 | `regen-js-bindings.sh`, `genjs-sources.mjs` | Re-runnable **binding** pipeline (maintainer-only; no build runs it) |
 | `smoke.mjs`, `test/hello.html` | Build + end-to-end smoke recipe (`test/squares.html` + `test/two.html` drive the in-window e2e, `tests/kernel/test_netsurf_e2e.js`) |
 | `smoke-js.mjs`, `demos/` | The JavaScript gate (5 legs; `--reuse` to skip a fresh link, `--leg N` for one) |
@@ -390,9 +391,39 @@ vendor/netsurf/update.sh --src DIR      # use existing clones
 fetch pristine → generate → apply `patches/` → prune → `relativize.mjs`
 → install (component `lib.json`s preserved) → `relativize.mjs --check`
 drift gate.  At unchanged pins the result is byte-identical to the
-committed trees (verified).  To take a new drop: bump `UPSTREAM.json`,
-re-run, resolve patch fuzz, update `shim/testament.h`'s `WT_REVID`, then
-`node vendor/netsurf/smoke.mjs` must pass.
+committed trees.  To take a new drop: bump `UPSTREAM.json`, re-run,
+resolve patch fuzz, update `shim/testament.h`'s `WT_REVID`, run
+`./update.sh --check` (below), then `node vendor/netsurf/smoke.mjs` must
+pass.
+
+**How the byte-identical claim is enforced (todos/0423).** Two checks, two
+cadences:
+
+- **`./update.sh --check`** is the full proof: it rebuilds the constellation
+  from upstream at the pins (steps 1-5 into the stage) and diffs the stage
+  against the committed trees, installing nothing — the check path never
+  writes into the component trees.  It needs the network plus git, perl,
+  gperf, cc and node, so it CANNOT run in the ordinary gate, which is
+  offline.  It is a named manual step: **owner — the repo maintainer;
+  cadence — at every `UPSTREAM.json` change and after any wholesale
+  `patches/` rebuild** (both listed in the drop procedure above).  Between
+  those events the claim is guarded by the offline check only.  Last full
+  run: 2026-07-30, at the current pins, clean.
+- **`node vendor/netsurf/patchcheck.mjs`** is the offline half, run
+  continuously: by the `netsurf-patch` suite (`tests/netsurf/run.js`,
+  selected by any diff under `vendor/netsurf/`) and by the pre-commit hook
+  on any staged `vendor/netsurf/` change.  It reverse-applies every
+  `patches/` section against the committed tree (exact context at exact
+  line numbers — a fuzzy or offset apply is a failure), compares each
+  pristine residual's sha256 to `patches/pristine.json`, and for any change
+  to a component proves the old and new (tree, diff) pairs reduce to the
+  same pristine — so a hand-edit that is not mirrored into its `.diff` in
+  the same change cannot land silently (the todos/0407 incident shape).
+
+A patch edit therefore travels as ONE change: the component tree edit, the
+regenerated `patches/<c>.diff` section, and — only if the pristine base
+itself moved — a `patchcheck.mjs --write-manifest` refresh of
+`pristine.json`.
 
 ## Deliberate exclusions
 
