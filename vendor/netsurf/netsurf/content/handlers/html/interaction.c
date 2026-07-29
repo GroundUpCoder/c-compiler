@@ -1472,7 +1472,7 @@ mouse_action_drag_none(html_content *html,
 	 * activation behaviour IS the submission — form_submit() honours the
 	 * cancelable `submit`, which is a DIFFERENT event and does not cover
 	 * a cancelled click. */
-	if (click_prevented) {
+	if (NETSURF_CLICK_CANCEL && click_prevented) {
 		switch (mas.result.action) {
 		case ACTION_SUBMIT:
 		case ACTION_NAVIGATE:
@@ -2157,6 +2157,12 @@ static void html_update_dynamic_chains(html_content *html,
 	dom_node *changed[4];
 	dom_node *hover, *active;
 	int n = 0;
+
+	if (NETSURF_DYNAMIC_PSEUDO == 0) {
+		/* upstream: no mouse action ever tracked the chains, so a
+		 * dynamic pseudo-class never matched and never restyled */
+		return;
+	}
 
 	/* Do not touch a box tree that is being built or swapped: the next
 	 * mouse action re-derives everything from the pointer position

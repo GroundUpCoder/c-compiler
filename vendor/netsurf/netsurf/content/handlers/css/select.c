@@ -25,6 +25,7 @@
 #include "utils/log.h"
 #include "utils/nsurl.h"
 #include "netsurf/plot_style.h"
+#include "netsurf/pointerpath.h"
 #include "netsurf/url_db.h"
 #include "desktop/system_colour.h"
 
@@ -1592,6 +1593,12 @@ css_error node_is_hover(void *pw, void *node, bool *match)
 {
 	nscss_select_ctx *ctx = pw;
 
+	if (NETSURF_DYNAMIC_PSEUDO == 0) {
+		/* upstream: the `\todo Support hovering` stub — no match */
+		*match = false;
+		return CSS_OK;
+	}
+
 	*match = nscss_node_on_chain(ctx->hover_node, node);
 
 	return CSS_OK;
@@ -1610,6 +1617,12 @@ css_error node_is_hover(void *pw, void *node, bool *match)
 css_error node_is_active(void *pw, void *node, bool *match)
 {
 	nscss_select_ctx *ctx = pw;
+
+	if (NETSURF_DYNAMIC_PSEUDO == 0) {
+		/* upstream: the `\todo Support hovering` stub — no match */
+		*match = false;
+		return CSS_OK;
+	}
 
 	*match = nscss_node_on_chain(ctx->active_node, node);
 

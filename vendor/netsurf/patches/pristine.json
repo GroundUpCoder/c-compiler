@@ -46,6 +46,7 @@
    "include/netsurf/browser_window.h": "b265ad337caba850a2900803ddecd91ea7aff9fa1bde6fbae4cf06a016485ce9",
    "include/netsurf/form.h": "1f67c9492223f47ac76d927bacf4523d1721fd14d5b116aac034248ce76b9d39",
    "include/netsurf/keypress.h": "3315f6d1869191e34e0693f14fa1d4dc7eef43dc6ee25460b4f2505299e150a7",
+   "include/netsurf/pointerpath.h": "absent",
    "include/netsurf/uievents.h": "absent",
    "utils/config.h": "7f26a0ccc09362096324c23ec0191be6bb50eda8731b9e8683e69866e5760de4",
    "utils/corestringlist.h": "7bc9961b2006b6383c1eac91873e7496137b6569a50285f2929204ee1b1dd3b3",

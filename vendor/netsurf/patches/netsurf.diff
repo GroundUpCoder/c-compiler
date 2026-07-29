@@ -69,9 +69,17 @@ diff -urN a/content/fetch.c b/content/fetch.c
  #include "content/fetchers/file/file.h"
  #include "javascript/fetcher.h"
 diff -urN a/content/handlers/css/select.c b/content/handlers/css/select.c
---- a/content/handlers/css/select.c	2026-07-29 16:06:01
-+++ b/content/handlers/css/select.c	2026-07-29 16:16:02
-@@ -1528,6 +1528,57 @@
+--- a/content/handlers/css/select.c	2026-07-30 03:48:37
++++ b/content/handlers/css/select.c	2026-07-30 03:44:01
+@@ -25,6 +25,7 @@
+ #include "utils/log.h"
+ #include "utils/nsurl.h"
+ #include "netsurf/plot_style.h"
++#include "netsurf/pointerpath.h"
+ #include "netsurf/url_db.h"
+ #include "desktop/system_colour.h"
+ 
+@@ -1528,6 +1529,57 @@
  }
  
  /**
@@ -129,7 +137,7 @@ diff -urN a/content/handlers/css/select.c b/content/handlers/css/select.c
   * Callback to determine if a node is currently being hovered over.
   *
   * \param pw     HTML document
-@@ -1539,9 +1590,9 @@
+@@ -1539,10 +1591,16 @@
   */
  css_error node_is_hover(void *pw, void *node, bool *match)
  {
@@ -137,11 +145,18 @@ diff -urN a/content/handlers/css/select.c b/content/handlers/css/select.c
 +	nscss_select_ctx *ctx = pw;
  
 -	*match = false;
-+	*match = nscss_node_on_chain(ctx->hover_node, node);
++	if (NETSURF_DYNAMIC_PSEUDO == 0) {
++		/* upstream: the `\todo Support hovering` stub — no match */
++		*match = false;
++		return CSS_OK;
++	}
  
++	*match = nscss_node_on_chain(ctx->hover_node, node);
++
  	return CSS_OK;
  }
-@@ -1558,9 +1609,9 @@
+ 
+@@ -1558,10 +1616,16 @@
   */
  css_error node_is_active(void *pw, void *node, bool *match)
  {
@@ -149,15 +164,21 @@ diff -urN a/content/handlers/css/select.c b/content/handlers/css/select.c
 +	nscss_select_ctx *ctx = pw;
  
 -	*match = false;
++	if (NETSURF_DYNAMIC_PSEUDO == 0) {
++		/* upstream: the `\todo Support hovering` stub — no match */
++		*match = false;
++		return CSS_OK;
++	}
+ 
 +	*match = nscss_node_on_chain(ctx->active_node, node);
- 
- 	return CSS_OK;
- }
-@@ -1728,6 +1779,27 @@
- 
- 	return CSS_OK;
- }
 +
+ 	return CSS_OK;
+ }
+ 
+@@ -1729,6 +1793,27 @@
+ 	return CSS_OK;
+ }
+ 
 +/* exported interface documented in select.h */
 +void nscss_node_data_clear(struct dom_node *node)
 +{
@@ -178,9 +199,10 @@ diff -urN a/content/handlers/css/select.c b/content/handlers/css/select.c
 +	}
 +}
 +
- 
++
  css_error set_libcss_node_data(void *pw, void *node, void *libcss_node_data)
  {
+ 	dom_node *n = node;
 diff -urN a/content/handlers/css/select.h b/content/handlers/css/select.h
 --- a/content/handlers/css/select.h	2026-07-29 16:06:01
 +++ b/content/handlers/css/select.h	2026-07-29 16:16:02
@@ -2297,8 +2319,8 @@ diff -urN a/content/handlers/html/imagemap.c b/content/handlers/html/imagemap.c
  		dom_string_unref(href);
  	if (target != NULL)
 diff -urN a/content/handlers/html/interaction.c b/content/handlers/html/interaction.c
---- a/content/handlers/html/interaction.c	2026-07-29 17:56:31
-+++ b/content/handlers/html/interaction.c	2026-07-29 17:56:31
+--- a/content/handlers/html/interaction.c	2026-07-30 03:48:37
++++ b/content/handlers/html/interaction.c	2026-07-30 03:44:22
 @@ -42,6 +42,7 @@
  #include "netsurf/layout.h"
  #include "netsurf/keypress.h"
@@ -2447,7 +2469,7 @@ diff -urN a/content/handlers/html/interaction.c b/content/handlers/html/interact
 +	 * activation behaviour IS the submission — form_submit() honours the
 +	 * cancelable `submit`, which is a DIFFERENT event and does not cover
 +	 * a cancelled click. */
-+	if (click_prevented) {
++	if (NETSURF_CLICK_CANCEL && click_prevented) {
 +		switch (mas.result.action) {
 +		case ACTION_SUBMIT:
 +		case ACTION_NAVIGATE:
@@ -2470,7 +2492,7 @@ diff -urN a/content/handlers/html/interaction.c b/content/handlers/html/interact
  		res = form_submit(content_get_url(c),
  				  browser_window_find_target(bw,
  							     mas.gadget.target,
-@@ -1455,9 +1538,685 @@
+@@ -1455,9 +1538,691 @@
  	}
  
  	return res;
@@ -2902,9 +2924,9 @@ diff -urN a/content/handlers/html/interaction.c b/content/handlers/html/interact
 +	 * an ancestor-or-self of a node the html_content itself holds. */
 +	html_chain_free(a, na);
 +	html_chain_free(b, nb);
- }
- 
- 
++}
++
++
 +/**
 + * The screen area a box paints into, in document coordinates.
 + */
@@ -3076,9 +3098,9 @@ diff -urN a/content/handlers/html/interaction.c b/content/handlers/html/interact
 +	content__request_redraw(&html->base, st.area.x0, st.area.y0,
 +				st.area.x1 - st.area.x0,
 +				st.area.y1 - st.area.y0);
-+}
-+
-+
+ }
+ 
+ 
 +/**
 + * Track the `:hover` and `:active` chains for one mouse action.
 + *
@@ -3093,6 +3115,12 @@ diff -urN a/content/handlers/html/interaction.c b/content/handlers/html/interact
 +	dom_node *changed[4];
 +	dom_node *hover, *active;
 +	int n = 0;
++
++	if (NETSURF_DYNAMIC_PSEUDO == 0) {
++		/* upstream: no mouse action ever tracked the chains, so a
++		 * dynamic pseudo-class never matched and never restyled */
++		return;
++	}
 +
 +	/* Do not touch a box tree that is being built or swapped: the next
 +	 * mouse action re-derives everything from the pointer position
@@ -3156,7 +3184,7 @@ diff -urN a/content/handlers/html/interaction.c b/content/handlers/html/interact
  /* exported interface documented in html/interaction.h */
  nserror html_mouse_track(struct content *c,
  			 struct browser_window *bw,
-@@ -1478,6 +2237,14 @@
+@@ -1478,6 +2243,14 @@
  	html_content *html = (html_content *)c;
  	nserror res = NSERROR_OK;
  
@@ -3171,14 +3199,10 @@ diff -urN a/content/handlers/html/interaction.c b/content/handlers/html/interact
  	/* handle open select menu */
  	if (html->visible_select_menu != NULL) {
  		return mouse_action_select_menu(html, bw, mouse, x, y);
-@@ -1517,10 +2284,79 @@
- 	}
+@@ -1521,6 +2294,75 @@
  
- 	return res;
-+}
-+
-+
-+/**
+ 
+ /**
 + * Fire one DOM keyboard event at the right target.
 + *
 + * Upstream dispatched keydown at `html->layout->node` — the document root
@@ -3224,10 +3248,10 @@ diff -urN a/content/handlers/html/interaction.c b/content/handlers/html/interact
 +	}
 +
 +	fire_dom_keyboard_event(type, target, true, true, key);
- }
- 
- 
- /**
++}
++
++
++/**
 + * Handle key releases.
 + *
 + * \param  c	content of type HTML
@@ -3251,7 +3275,7 @@ diff -urN a/content/handlers/html/interaction.c b/content/handlers/html/interact
   * Handle keypresses.
   *
   * \param  c	content of type HTML
-@@ -1563,10 +2399,7 @@
+@@ -1563,10 +2405,7 @@
  	 * `event.preventDefault()` then we won't handle the event when
  	 * we're not supposed to.
  	 */
@@ -3263,10 +3287,12 @@ diff -urN a/content/handlers/html/interaction.c b/content/handlers/html/interact
  
  	switch (html->focus_type) {
  	case HTML_FOCUS_CONTENT:
-@@ -1692,6 +2525,27 @@
- 	content_broadcast((struct content *)html, CONTENT_MSG_DRAG, &msg_data);
- }
+@@ -1690,6 +2529,27 @@
  
+ 	/* Inform of the content's drag status change */
+ 	content_broadcast((struct content *)html, CONTENT_MSG_DRAG, &msg_data);
++}
++
 +/**
 + * The DOM node that owns a focus state, if any.
 + *
@@ -3286,12 +3312,10 @@ diff -urN a/content/handlers/html/interaction.c b/content/handlers/html/interact
 +	default:
 +		return NULL;
 +	}
-+}
-+
+ }
+ 
  /* Documented in html_internal.h */
- void html_set_focus(html_content *html, html_focus_type focus_type,
- 		union html_focus_owner focus_owner, bool hide_caret,
-@@ -1701,11 +2555,31 @@
+@@ -1701,11 +2561,31 @@
  	int x_off = 0;
  	int y_off = 0;
  	struct rect cr;
@@ -3323,7 +3347,7 @@ diff -urN a/content/handlers/html/interaction.c b/content/handlers/html/interact
  	switch (focus_type) {
  	case HTML_FOCUS_SELF:
  		assert(focus_owner.self == true);
-@@ -1748,8 +2622,32 @@
+@@ -1748,8 +2628,32 @@
  
  	/* Inform of the content's drag status change */
  	content_broadcast((struct content *)html, CONTENT_MSG_CARET, &msg_data);
@@ -3411,17 +3435,18 @@ diff -urN a/content/handlers/html/object.c b/content/handlers/html/object.c
  		   event->type == CONTENT_MSG_DONE &&
  		   box != NULL &&
 diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
---- a/content/handlers/html/private.h	2026-07-30 01:11:30
-+++ b/content/handlers/html/private.h	2026-07-30 01:10:23
-@@ -27,6 +27,7 @@
+--- a/content/handlers/html/private.h	2026-07-30 03:48:37
++++ b/content/handlers/html/private.h	2026-07-30 03:44:12
+@@ -27,6 +27,8 @@
  #include <dom/bindings/hubbub/parser.h>
  
  #include "netsurf/types.h"
 +#include "netsurf/uievents.h"
++#include "netsurf/pointerpath.h"
  #include "content/content_protected.h"
  #include "content/handlers/css/utils.h"
  
-@@ -138,6 +139,25 @@
+@@ -138,6 +140,25 @@
  	void *box_conversion_context;
  	/** Box tree, or NULL. */
  	struct box *layout;
@@ -3447,7 +3472,7 @@ diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
  	/** Document background colour. */
  	colour background_colour;
  
-@@ -170,6 +190,11 @@
+@@ -170,6 +191,11 @@
  	struct content_html_object *object_list;
  	/** Forms, in reverse order to document. */
  	struct form *forms;
@@ -3459,10 +3484,11 @@ diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
  	/** Hash table of imagemaps. */
  	struct imagemap **imagemaps;
  
-@@ -186,6 +211,38 @@
+@@ -185,7 +211,39 @@
+ 	/** Content of type CONTENT_HTML containing this, or NULL if not an
  	 * object within a page. */
  	struct html_content *page;
- 
++
 +	/** The last DOM `mousedown` had preventDefault() called on it, so
 +	 * the native drag it would otherwise have started (page scroll,
 +	 * text selection) must not happen.  This is the standard browser
@@ -3481,7 +3507,7 @@ diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
 +	 * they are — without it, the release that ends a drag is
 +	 * indistinguishable from an ordinary hover. */
 +	bool mouse_pressed;
-+
+ 
 +	/** The deepest ELEMENT under the pointer, or NULL — the subject of
 +	 * the `:hover` chain (todos/0420).  A reference is held, because a
 +	 * script can remove the node from the document while the pointer
@@ -3498,7 +3524,7 @@ diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
  	/** Current drag type */
  	html_drag_type drag_type;
  	/** Widget capturing all mouse events */
-@@ -210,6 +267,15 @@
+@@ -210,6 +268,15 @@
  	 */
  	struct form_control *visible_select_menu;
  
@@ -3514,7 +3540,7 @@ diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
  } html_content;
  
  /**
-@@ -238,6 +304,17 @@
+@@ -238,6 +305,17 @@
  
  
  /**
@@ -3532,7 +3558,7 @@ diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
   * Test if an HTML content conversion can begin
   *
   * \param htmlc		html content to test
-@@ -316,10 +393,32 @@
+@@ -316,10 +394,32 @@
  
  /* in html/forms.c */
  struct form *html_forms_get_forms(const char *docenc, dom_html_document *doc);
@@ -3566,7 +3592,7 @@ diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
  /* in html/css_fetcher.c */
  /**
   * Register the fetcher for the pseudo x-ns-css scheme.
-@@ -340,6 +439,76 @@
+@@ -340,6 +440,76 @@
  		    bool bubbles, bool cancelable);
  
  /**
@@ -5776,6 +5802,73 @@ diff -urN a/include/netsurf/keypress.h b/include/netsurf/keypress.h
 +
 +
  #endif
+diff -urN a/include/netsurf/pointerpath.h b/include/netsurf/pointerpath.h
+--- a/include/netsurf/pointerpath.h	1970-01-01 09:00:00
++++ b/include/netsurf/pointerpath.h	2026-07-30 03:43:47
+@@ -0,0 +1,63 @@
++/*
++ * This file is part of NetSurf, http://www.netsurf-browser.org/
++ *
++ * NetSurf is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; version 2 of the License.
++ *
++ * NetSurf is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++/**
++ * \file
++ * Build-time kill switches for the pointer-path patches (gucOS todos/0419 +
++ * todos/0420, "the pointer path"; convention restored by todos/0431).
++ *
++ * Two switches, because the merge carried two independent behaviours:
++ *
++ * `-DNETSURF_NO_CLICK_CANCEL` restores the pre-0419 behaviour exactly: the
++ * result of dispatching the DOM `click` is thrown away, so a listener's
++ * `preventDefault()` cannot stop the clicked element's activation behaviour
++ * — a cancelled click on a link still navigates, and on a submit button
++ * still submits.
++ *
++ * `-DNETSURF_NO_DYNAMIC_PSEUDO` restores the pre-0420 behaviour exactly:
++ * node_is_hover() and node_is_active() answer "no match" the way the
++ * upstream `\todo Support hovering` stubs did, and no mouse action tracks
++ * the chains or restyles anything — a `:hover` or `:active` rule can never
++ * apply.
++ *
++ * They exist so the gate can show the RED: `vendor/netsurf/smoke-js.mjs`
++ * legs 14 and 15 build these variants from the same tree and require the
++ * pristine behaviour back — the cancelled link navigates anyway, and a
++ * pointer parked on a `:hover` subject repaints nothing.  A page that
++ * passes with and without the change proves nothing; this is what stops
++ * that.  (The Lane B bridge and the Lane C event coverage carry the same
++ * kind of switch — `-DNETSURF_NO_LIVE_RECONVERT`, `-DNETSURF_NO_UI_EVENTS`
++ * — for the same reason.)
++ *
++ * All four switches are independent: a build may compile out any subset.
++ */
++
++#ifndef NETSURF_POINTERPATH_H
++#define NETSURF_POINTERPATH_H
++
++#ifdef NETSURF_NO_CLICK_CANCEL
++#define NETSURF_CLICK_CANCEL 0
++#else
++#define NETSURF_CLICK_CANCEL 1
++#endif
++
++#ifdef NETSURF_NO_DYNAMIC_PSEUDO
++#define NETSURF_DYNAMIC_PSEUDO 0
++#else
++#define NETSURF_DYNAMIC_PSEUDO 1
++#endif
++
++#endif
 diff -urN a/include/netsurf/uievents.h b/include/netsurf/uievents.h
 --- a/include/netsurf/uievents.h	1970-01-01 09:00:00
 +++ b/include/netsurf/uievents.h	2026-07-27 11:51:39
@@ -5921,4 +6014,3 @@ diff -urN a/utils/talloc.c b/utils/talloc.c
  /* Assume we've got va_copy */
  #define HAVE_VA_COPY
  #include <string.h>
-

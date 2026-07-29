@@ -28,6 +28,7 @@
 
 #include "netsurf/types.h"
 #include "netsurf/uievents.h"
+#include "netsurf/pointerpath.h"
 #include "content/content_protected.h"
 #include "content/handlers/css/utils.h"
 
