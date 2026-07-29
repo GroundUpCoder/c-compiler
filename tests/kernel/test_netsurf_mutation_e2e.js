@@ -21,11 +21,17 @@
 //     The static/ticky A/B asserts EXACT settled-ink equality, and the
 //     forced-window arms (a 3000-element page whose re-conversion window
 //     spans the whole tick period) prove no keystroke and no click is
-//     lost even when the page is mid-re-box essentially always.  Every
-//     gating shot is a SETTLED one (the pages' ticks are finite): an
-//     un-settled sample can catch a mid-window render (the recreated
-//     widget draws pre-layout until the swap's reformat) and is printed
-//     as a diagnostic only.
+//     lost even when the page is mid-re-box essentially always.  The
+//     value gates are SETTLED shots (the pages' ticks are finite).
+//   - A MID-WINDOW RENDER EQUALS THE SETTLED RENDER (todos/0407).  The T
+//     arm's immediate shot lands inside a re-conversion window, where the
+//     still-live OLD box tree draws the RECREATED widget.  That widget is
+//     born with the box's computed text style and the outgoing widget's
+//     geometry, so the two shots must agree — by ink count and pixel for
+//     pixel across the field band.  Before the fix the widget was born at
+//     a hardcoded 10pt and the mid-window field read 204 against 285.
+//     The other arms' immediate shots stay diagnostics: their timing does
+//     not guarantee a mid-window sample.
 //
 // Pixel probes are colour counts and colour-coded block boundaries, never
 // fixed screen coordinates for assertions: the one clicked coordinate
@@ -581,6 +587,19 @@ const shots = parsePPMs(back.stdout, NAMES);
     }
     return n;
   };
+  /* The same band, compared pixel for pixel between two shots.  Ink
+   * counts alone cannot see a render that moved without changing size. */
+  const fieldBandDiff = (a, b) => {
+    let n = 0;
+    for (let y = 2; y < 28; y++) {
+      for (let x = 0; x < Math.min(a.w, b.w, 260); x++) {
+        const i = (y * a.w + x) * 3, j = (y * b.w + x) * 3;
+        if (a.data[i] !== b.data[j] || a.data[i + 1] !== b.data[j + 1] ||
+            a.data[i + 2] !== b.data[j + 2]) n++;
+      }
+    }
+    return n;
+  };
   const staticInk = fieldInk(shots.x1);
   const tickyInk = fieldInk(shots.x2);
   check('typing: the static control page really accepted the keystrokes',
@@ -606,10 +625,14 @@ const shots = parsePPMs(back.stdout, NAMES);
     (p) => p[0] < 80 && p[1] < 80 && p[2] > 150);
   const vprobe = (tag) => `mirE=${mirEInk(tag)} mirP=${mirPInk(tag)}`;
   console.log('D3-BIGT per-key ink: ' + inks(['tk1', 'tk2', 'tk3', 'tk4', 'tk5', 'tk6']).join(' '));
-  console.log(`D2-T   immediate=${fieldInk(shots.bt1)} settled=${fieldInk(shots.bt2)} value[${vprobe('bt2')}]`);
-  console.log(`D2-T2  immediate=${fieldInk(shots.bu1)} settled=${fieldInk(shots.bu2)} value[${vprobe('bu2')}] (click landed mid-ticking, todos/0402 shape)`);
-  console.log(`D2-C1  immediate=${fieldInk(shots.bc11)} settled=${fieldInk(shots.bc12)} value[${vprobe('bc12')}] (size control, no timer)`);
-  console.log(`D2-C2  immediate=${fieldInk(shots.bc21)} settled=${fieldInk(shots.bc22)} value[${vprobe('bc22')}] (period control, 5 s)`);
+  /* band= differing pixels between the immediate and the settled shot
+   * inside the field band (todos/0407: a mid-window render that moved
+   * shows up here even when the ink count matches) */
+  const band = (a, b) => fieldBandDiff(shots[a], shots[b]);
+  console.log(`D2-T   immediate=${fieldInk(shots.bt1)} settled=${fieldInk(shots.bt2)} band=${band('bt1', 'bt2')} value[${vprobe('bt2')}]`);
+  console.log(`D2-T2  immediate=${fieldInk(shots.bu1)} settled=${fieldInk(shots.bu2)} band=${band('bu1', 'bu2')} value[${vprobe('bu2')}] (click landed mid-ticking, todos/0402 shape)`);
+  console.log(`D2-C1  immediate=${fieldInk(shots.bc11)} settled=${fieldInk(shots.bc12)} band=${band('bc11', 'bc12')} value[${vprobe('bc12')}] (size control, no timer)`);
+  console.log(`D2-C2  immediate=${fieldInk(shots.bc21)} settled=${fieldInk(shots.bc22)} band=${band('bc21', 'bc22')} value[${vprobe('bc22')}] (period control, 5 s)`);
 
   /* The A/B: a mutating page must type EXACTLY as well as a still one —
    * asserted on the SETTLED shot at EXACT equality (todos/0386).  The old
@@ -633,6 +656,21 @@ const shots = parsePPMs(back.stdout, NAMES);
   check('typing: forced-wide window (T) types exactly as well as static',
         fieldInk(shots.bt2) === staticInk,
         `static ${staticInk} vs T settled ${fieldInk(shots.bt2)} ink pixels`);
+
+  /* todos/0407: a MID-WINDOW shot of the T arm must read the settled
+   * field.  The T page is mid-re-conversion essentially always, so bt1 is
+   * a redraw of the still-live OLD tree drawing the RECREATED widget.
+   * That widget is now born with the box's own computed text style and
+   * the outgoing widget's geometry, so the two renders are the same
+   * render.  Before the fix the widget was born at a hardcoded 10pt and
+   * this read 204 against 285.  This is the one arm whose immediate shot
+   * is guaranteed mid-window; the other arms print theirs above. */
+  check('typing: a mid-window render equals the settled one (T, todos/0407)',
+        fieldInk(shots.bt1) === fieldInk(shots.bt2),
+        `T immediate ${fieldInk(shots.bt1)} vs settled ${fieldInk(shots.bt2)} ink pixels`);
+  check('typing: and is pixel-identical inside the field band (T, todos/0407)',
+        fieldBandDiff(shots.bt1, shots.bt2) === 0,
+        `differing pixels in the field band: ${fieldBandDiff(shots.bt1, shots.bt2)}`);
   check('typing: click mid-re-conversion keeps its focus (T2, todos/0402)',
         fieldInk(shots.bu2) === staticInk,
         `static ${staticInk} vs T2 settled ${fieldInk(shots.bu2)} ink pixels`);

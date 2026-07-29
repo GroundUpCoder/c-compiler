@@ -289,14 +289,10 @@ bool box_textarea_create_textarea(html_content *html,
 	dom_exception err;
 	textarea_setup ta_setup;
 	textarea_flags ta_flags;
-	plot_font_style_t fstyle = {
-		.family = PLOT_FONT_FAMILY_SANS_SERIF,
-		.size = 10 * PLOT_STYLE_SCALE,
-		.weight = 400,
-		.flags = FONTF_NONE,
-		.background = 0,
-		.foreground = 0,
-	};
+	plot_font_style_t fstyle;
+	int old_w = 0, old_h = 0;
+	int old_top = 0, old_right = 0, old_bottom = 0, old_left = 0;
+	bool carry_layout = false;
 	bool read_only = false;
 	bool disabled = false;
 	struct form_control *gadget = box->gadget;
@@ -307,6 +303,16 @@ bool box_textarea_create_textarea(html_content *html,
 	assert(gadget->type == GADGET_TEXTAREA ||
 			gadget->type == GADGET_TEXTBOX ||
 			gadget->type == GADGET_PASSWORD);
+	assert(box->style != NULL);
+
+	/* The widget has to be RENDERABLE from birth.  A live re-conversion
+	 * recreates it while the old box tree is still on screen and still
+	 * serving redraws, and every one of those redraws draws THIS widget
+	 * (todos/0407): a hardcoded 10pt default made the field jump to 10pt
+	 * for the whole window, which a page that re-boxes continuously shows
+	 * permanently.  Derive the text style the way the layout pass itself
+	 * does; the layout pass still owns the final values. */
+	font_plot_style_from_css(&html->unit_len_ctx, box->style, &fstyle);
 
 	if (gadget->type == GADGET_TEXTAREA) {
 		dom_html_text_area_element *textarea =
@@ -365,7 +371,10 @@ bool box_textarea_create_textarea(html_content *html,
 
 	gadget->data.text.data.gadget = gadget;
 
-	/* Reset to correct values by layout */
+	/* Reset to correct values by layout.  These are the birth geometry of
+	 * a FIRST conversion only, where nothing is on screen to be wrong: a
+	 * recreated widget replaces them with the outgoing widget's geometry
+	 * below (todos/0407). */
 	ta_setup.width = 200;
 	ta_setup.height = 20;
 	ta_setup.pad_top = 4;
@@ -394,6 +403,26 @@ bool box_textarea_create_textarea(html_content *html,
 		gadget->data.text.initial = NULL;
 	}
 	if (gadget->data.text.ta != NULL) {
+		/* Carry the outgoing widget's GEOMETRY too.  Until the swap the
+		 * new widget stands in for the old one in the old tree's
+		 * redraws, so it must present the size and padding that are on
+		 * screen.  The computed style above gives the right font, but
+		 * only the layout pass knows the box's size and padding, and it
+		 * does not run again until the swap (todos/0407).  A widget
+		 * that never was laid out carries the defaults set above, which
+		 * is what a first conversion gets anyway.
+		 *
+		 * The outgoing fstyle is deliberately NOT carried: its
+		 * `families` array belongs to the dying tree's computed style,
+		 * so the widget would hold a dangling pointer from the swap
+		 * until the reformat.  The freshly derived style points into
+		 * the live tree instead, and it is the same font unless the
+		 * mutation changed the font itself. */
+		textarea_get_layout(gadget->data.text.ta, NULL,
+				&old_w, &old_h,
+				&old_top, &old_right, &old_bottom, &old_left);
+		carry_layout = true;
+
 		/* Carry the caret across the recreation: keys routed to
 		 * the recreated widget would otherwise insert at position
 		 * 0 (textarea_get_caret defaults an unset caret).  Only
@@ -431,6 +460,15 @@ bool box_textarea_create_textarea(html_content *html,
 		return false;
 	}
 	gadget->building = false;
+
+	if (carry_layout) {
+		/* after the text, so the reflow it runs sees the real content,
+		 * and before the caret restore, which needs the final metrics
+		 * to report a caret position at all */
+		textarea_set_layout(gadget->data.text.ta, &ta_setup.text,
+				old_w, old_h,
+				old_top, old_right, old_bottom, old_left);
+	}
 
 	if (caret >= 0) {
 		/* Restore the carried caret.  gadget->box is already the

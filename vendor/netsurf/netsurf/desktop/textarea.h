@@ -351,6 +351,32 @@ void textarea_set_layout(
 
 
 /**
+ * Get the dimensions, padding and text style of a textarea.
+ *
+ * The exact inverse of textarea_set_layout: the values it returns, fed
+ * back to textarea_set_layout, reproduce this widget's layout.  A client
+ * that REPLACES a widget uses this to carry the layout over, because only
+ * the client's own layout pass knows those values and it may not run
+ * again at once (see box_textarea_create_textarea, todos/0407).
+ *
+ * \param ta		textarea widget
+ * \param fstyle	receives the text style, or NULL for the geometry only
+ * \param width		receives the width of the textarea
+ * \param height	receives the height of the textarea
+ * \param top		receives the top padding of the textarea
+ * \param right		receives the right padding of the textarea
+ * \param bottom	receives the bottom padding of the textarea
+ * \param left		receives the left padding of the textarea
+ */
+void textarea_get_layout(
+		const struct textarea *ta,
+		plot_font_style_t *fstyle,
+		int *width, int *height,
+		int *top, int *right,
+		int *bottom, int *left);
+
+
+/**
  * Scroll a textarea by an amount.
  *
  * Only does anything if multi-line textarea has scrollbars.  If it

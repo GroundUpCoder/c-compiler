@@ -3384,6 +3384,29 @@ void textarea_set_layout(
 
 
 /* exported interface, documented in textarea.h */
+void textarea_get_layout(
+		const struct textarea *ta,
+		plot_font_style_t *fstyle,
+		int *width, int *height,
+		int *top, int *right,
+		int *bottom, int *left)
+{
+	if (fstyle != NULL) {
+		*fstyle = ta->fstyle;
+	}
+	*width = ta->vis_width;
+	*height = ta->vis_height;
+	*top = ta->pad_top;
+	/* textarea_set_layout ADDS the scrollbar width to these two, so
+	 * take it back off: the caller must get what it passed in, or a
+	 * set/get/set round trip would grow the padding every time. */
+	*right = ta->pad_right - ((ta->bar_y == NULL) ? 0 : SCROLLBAR_WIDTH);
+	*bottom = ta->pad_bottom - ((ta->bar_x == NULL) ? 0 : SCROLLBAR_WIDTH);
+	*left = ta->pad_left;
+}
+
+
+/* exported interface, documented in textarea.h */
 bool textarea_scroll(struct textarea *ta, int scrx, int scry)
 {
 	bool handled_scroll = false;
