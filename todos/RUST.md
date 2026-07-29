@@ -27,12 +27,17 @@ Split the program in two, and move the gate.
   OpenAI's Codex CLI in its headless `codex exec` form. The design pass found that
   half materially under-costed. `todos/0418` is the decider that rules on the Rust
   standard library, and no application work starts before that ruling.
-- **A ChatGPT sign-in is structurally impossible on gucOS.** The sign-in needs a
-  local TCP listener for the OAuth redirect. gucOS has no TCP layer, and it has no
-  listener of any kind. The design is therefore **API-key-only**. Do not schedule a
-  sign-in flow. A second application fact of the same kind — WebSockets are the
-  hardcoded default transport, and no configuration key turns them off — is recorded
-  in `todos/0418`.
+- **The plan of record is API-key-only, because `codex login` is out of scope.**
+  This program targets the headless `codex exec` form, and a sign-in flow is not part
+  of it. Do not schedule one.
+  ⚠️ **Do not carry the old reasoning for this line.** An earlier draft said a
+  ChatGPT sign-in was "structurally impossible" because the sign-in needs a local TCP
+  listener for an OAuth redirect. **That mechanism is false.** A listener-free
+  device-code flow exists in the tree at `login/src/device_code_auth.rs`: it polls
+  over HTTP, so it needs no redirect and no listener. `TcpListener` appears in no
+  file under `login/src/`. Read that file first if the scope ever changes.
+  A second application fact — WebSockets are the hardcoded default transport, and no
+  configuration key turns them off — is recorded in `todos/0418`.
 - **`todos/0417` (HTTP transfers become OFDs) is a hard, unconditional
   prerequisite.** It is not contingent on any ruling, and it blocks a port and a
   native client equally. Two independent design passes reached it separately.

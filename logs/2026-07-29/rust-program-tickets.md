@@ -234,3 +234,75 @@ the sizing of a document that is now refuted.
 
 `todos/0418` records both, and marks which is which. **A lean is not a
 measurement**, and D1 inherits the refusal rather than the lean.
+
+---
+
+# Amendment 2 — the reconciliation of the two passes
+
+A reconciliation of the two design passes arrived with seven corrections, A to G.
+**Five of them were already in the branch**, and the master verified that before
+sending. This note records which five, so that no later reader re-litigates them.
+
+- **B** — the 9 asm-FFI failures are the instrument, not the crates, and no probe
+  fires. Already at `0418`.
+- **C** — `tokio` has a wasm arm, and the fork work sits at the codex layer. Already
+  at `0418`, with the two `block_in_place` sites.
+- **D** — 838 measured crates, not the 1334 lockfile count, and the understatement
+  caveat. Already at `0418`.
+- **E** — the base and `alloc` rung is stable-only; nightly, `-Zbuild-std` and a
+  custom target belong to the standard-library rung. Already at `0413` and `0414`.
+- **F** — `wasm-ld --allow-undefined` attributes to module `env`, so link without it.
+  Already at `0413` and `RUST.md`.
+
+Two items were live. One of them ruled that the existing text was right.
+
+## `ring` — the request to mark it refuted was declined, and the reason is the record
+
+Correction A asked for `ring` to be recorded as **refuted** as a blocker. The master
+ruled the other way, and the ticket keeps its open-dispute framing.
+
+The reason is that correction A is in tension with correction B, which the same
+message also makes. B rules that a crate which failed the census for want of a wasm
+C toolchain is **unmeasured** — neither buildable nor unbuildable, with no probe
+fired. `ring` failed for exactly that reason, so `ring` is a **member** of the B
+class, and B's own discipline forbids promoting it to "cleared" on a source read.
+
+The distinction the ticket now states: **a source read can refute a claim that a
+crate is a blocker; a source read cannot establish that a crate builds.** Those are
+different claims, and only the first one is answerable by reading.
+
+Two edits landed. The section now says `ring` belongs to the unmeasured class, and
+the standing no-probe call covers it — so nobody reads it as a loose end that a cheap
+check could close. And it records the asymmetry of the evidence plainly: pass one
+cites two locations, pass two cites an impression with none. That asymmetry is a fact
+about the evidence, and it is not a licence to settle the dispute.
+
+The operative half of A needed nothing: the true-blocker list already reads
+`socket2`, `tokio`, `aws-lc-sys`, `v8`, with `ring` correctly absent.
+
+## The auth line — a real defect, and the class of defect matters more than its size
+
+`RUST.md` asserted that a ChatGPT sign-in is "structurally impossible" on gucOS,
+because the sign-in needs a local TCP listener for an OAuth redirect.
+
+**The conclusion survives. The mechanism was false.** Three checks refute it, and
+this lane ran them rather than take them on trust.
+`~/git/codex/codex-rs/login/src/device_code_auth.rs` exists — a device-code flow, in
+the very login crate the claim was about. `grep -cE 'TcpListener|bind\('` on that file
+returns **0**; it polls over HTTP, so it needs no redirect and no listener. And
+`TcpListener` appears in **no** file under `login/src/`.
+
+The line now rests on the true ground: **API-key-only, because `codex login` is out
+of scope for the headless `codex exec` form this program targets.** The
+impossibility claim and the listener reasoning are deleted, and both `RUST.md` and
+`todos/0418` carry a short retraction naming the file to read if the scope ever
+changes. Leaving the false mechanism in place would have cost a later reader an auth
+design built on a property that does not hold.
+
+⭐ **Why the class matters.** This was a line that **asserted a property holds**, not
+one that truthfully named a gap. Nothing machine-checks it, and it reads as settled
+research, so the next reader prices work off it and never derives it again. That is
+the inverse of a liability comment: a gap comment invites the check, and an assertion
+suppresses it. So **no `LIABILITIES.md` entry was added** — the register is for lines
+that accurately say something is absent, partial or untested, and this line did the
+opposite. Correcting the text is the whole remedy.

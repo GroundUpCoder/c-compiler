@@ -142,10 +142,26 @@ Do **not** inherit either verdict as a fact.
 - **Pass two says blocked.** It read `ring` **and** `aws-lc-rs` in the tree and
   found "no wasm story" for either.
 
+**Record the asymmetry of the evidence.** Pass one cites two specific locations:
+`build.rs:594-599`, which tests `target.arch == WASM32`, and `Cargo.toml:180`, which
+declares the feature. Pass two cites a general impression and gives no location. That
+asymmetry is a fact about the evidence, and it belongs on the record. ⚠️ **It is not
+a licence to settle the dispute.**
+
+🔴 **`ring` is a MEMBER of the unmeasured class below, not an independent open
+question.** It failed the census for the one reason every crate in that class failed:
+this machine has no C compiler that can target wasm. The same standing call therefore
+covers it — **no probe fires**. A later reader must not treat `ring` as a loose end
+that some cheap check could close.
+
 **Settle it by measurement, not by reading.** One build of `ring` for the wasm
-triple, with a C compiler that can target wasm, answers it. Until that build runs,
-`ring` is neither a blocker nor cleared. See the null result below: the same missing
-instrument is why the question is open.
+triple, with a C compiler that can target wasm, answers it. A source read can refute
+a claim that a crate is a **blocker**. A source read cannot establish that a crate
+**builds**. So until that build runs, ⭐ **`ring` is neither a blocker nor cleared.**
+
+The operative half is already settled and needs no dispute: the true-blocker list
+above holds `socket2`, `tokio`, `aws-lc-sys` and `v8`, and `ring` is correctly
+absent from it.
 
 ### `tokio` — a wasm arm exists, but it does not mean what it sounds like
 
@@ -300,6 +316,11 @@ ruling, and mark which is which.
 settled**, and do not let a lean stand in for the census when D1 is written. The
 refusal to pre-judge is itself the ruling on this question, and D1 inherits it.
 
-`todos/RUST.md` §1 records one application fact that no ruling changes: a ChatGPT
-sign-in needs a local TCP listener for its redirect, gucOS has no listener of any
-kind, and so the design is **API-key-only**.
+`todos/RUST.md` §1 records one application decision that no ruling changes: the plan
+is **API-key-only**, because `codex login` is out of scope for the headless
+`codex exec` form.
+
+⚠️ **Do not restate that as "a sign-in is structurally impossible".** An earlier
+draft did, and its mechanism was false. A listener-free device-code flow exists in
+the tree at `login/src/device_code_auth.rs`, and `TcpListener` appears in no file
+under `login/src/`. The scope decision stands. The impossibility claim does not.
