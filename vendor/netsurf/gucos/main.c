@@ -209,6 +209,15 @@ static nserror set_defaults(struct nsoption_s *defaults)
 	 * `--enable_javascript=0` still wins for one run. */
 	nsoption_set_bool(enable_javascript, true);
 
+	/* The CORE select menu, drawn in the content — the frontend supplies
+	 * no create_form_select_menu, so without this a <select> click
+	 * reached neither menu (todos/0422).  Same default-override
+	 * semantics as enable_javascript above: Choices and the command
+	 * line are read over it.  NB the option also SIZES the closed
+	 * widget — layout.c adds SCROLLBAR_WIDTH to the box when it is
+	 * on — so flipping it changes page layout, not just the popup. */
+	nsoption_set_bool(core_select_menu, true);
+
 	return NSERROR_OK;
 }
 

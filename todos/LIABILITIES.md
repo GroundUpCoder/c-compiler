@@ -327,12 +327,6 @@ thing this file exists to kill.
 - anchor:    time. Funded by todos/0401, which is also what keeps todos/0382 open. */
 - provenance: 0382
 
-### L62 — a `<select>` click reaches neither menu in gucOS, so a drop-down list cannot be opened
-- ticket: 0422
-- file: vendor/netsurf/gucos/options.h
-- anchor:  * a <select> reaches neither menu and a drop-down list cannot be opened at
-- provenance: 0412
-
 ### L61 — an HTTP transfer id is not an fd, so at most one transfer parks per process, none can join FS_SELECT/FS_WAIT, and the kernel sets no deadline
 - ticket: 0417
 - file: kernel.js

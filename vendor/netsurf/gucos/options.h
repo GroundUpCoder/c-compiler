@@ -28,10 +28,12 @@
 
 /* This frontend declares no options of its own.
  *
- * It also leaves the core's `core_select_menu` at its default of false and
- * supplies no `create_form_select_menu` in its window table, so a click on
- * a <select> reaches neither menu and a drop-down list cannot be opened at
- * all (todos/0422, register L62). */
+ * The core's `core_select_menu` is turned ON as a gucOS DEFAULT in
+ * main.c's set_defaults (todos/0422), not redeclared here: this file is
+ * the option TABLE (declarations only), and a second NSOPTION_BOOL for a
+ * core option would collide with desktop/options.h.  The window table
+ * still supplies no `create_form_select_menu` — with the core menu on,
+ * that frontend path is never asked for. */
 
 #endif
 
