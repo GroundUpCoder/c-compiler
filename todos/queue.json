@@ -135,7 +135,8 @@
     { "id": "0428", "difficulty": "heavy" },
     { "id": "0429", "difficulty": "medium", "blockedBy": ["0428"] },
     { "id": "0430", "priority": 2, "difficulty": "medium", "blockedBy": ["0429"] },
-    { "id": "0431", "priority": 2, "difficulty": "light" },
-    { "id": "0432", "priority": 3, "difficulty": "light" }
+    { "id": "0431", "difficulty": "light", "blockedBy": ["0423"] },
+    { "id": "0432", "priority": 3, "difficulty": "light" },
+    { "id": "0433", "priority": 2, "difficulty": "medium" }
   ]
 }
