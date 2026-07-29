@@ -142,7 +142,13 @@ const script = [
 for (const d of DEMOS)
   script.push(...openShoot(`${BASE}/${d.name}`, d.title, 'd-' + d.name,
                            NSDEMOS.INTERACTIONS[d.name]));
-script.push(...openShoot(BROKEN_JS, probe.title, 'nojs'));
+/* The script-stripped copy is ALSO driven through its demo's interaction:
+ * leg 3's control asserts the same clicks change NOTHING on a dead page —
+ * without that, a rig whose injection silently stopped landing would still
+ * pass every sameAs.  (The style-stripped copy is pill-only: without its
+ * stylesheet the layout shifts and the calibrated coordinates mean
+ * nothing.) */
+script.push(...openShoot(BROKEN_JS, probe.title, 'nojs', NSDEMOS.INTERACTIONS[probe.name]));
 script.push(...openShoot(BROKEN_CSS, probe.title, 'nocss'));
 
 const r = driveBoot(script, { image, timeout: 900000, maxBuffer: 64 * 1024 * 1024 });
@@ -227,7 +233,9 @@ for (const d of DEMOS) {
   TAGS.push('d-' + d.name);
   for (const ph of NSDEMOS.INTERACTIONS[d.name].phases) TAGS.push(`d-${d.name}-${ph.name}`);
 }
-TAGS.push('nojs', 'nocss');
+TAGS.push('nojs');
+for (const ph of NSDEMOS.INTERACTIONS[probe.name].phases) TAGS.push(`nojs-${ph.name}`);
+TAGS.push('nocss');
 for (const t of TAGS) check(`${t}: the window came up and was shot`, out.includes(`shot-${t}-ok`));
 for (const t of WIN_TAGS) check(`${t}: the window closed cleanly`, out.includes(`closed-${t}`));
 
@@ -306,6 +314,21 @@ console.log('\nleg 3 — driven interactions change the pixels they declare');
       }
     }
   }
+
+  /* CONTROL: the rig must read DEAD on the script-stripped copy — every
+   * changedFrom expectation of the probe demo's interaction must FAIL
+   * there, or a green interaction leg could be measuring anything. */
+  const ia = NSDEMOS.INTERACTIONS[probe.name];
+  const byPhase = {};
+  for (const ph of ia.phases) byPhase[ph.name] = shots[`nojs-${ph.name}`];
+  const cf = [];
+  for (const ph of ia.phases)
+    for (const e of (ph.expect || []))
+      if (e.changedFrom !== undefined) cf.push([ph.name, e]);
+  const dead = cf.filter(([phn, e]) => NSDEMOS.evalExpect(e, byPhase[phn], byPhase) !== null);
+  check('CONTROL: the driven interaction reads dead on the script-stripped copy',
+        cf.length > 0 && dead.length === cf.length,
+        `${dead.length}/${cf.length} changedFrom expects failed on the dead page`);
 }
 
 /* ---- done ---- */
