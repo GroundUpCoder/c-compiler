@@ -1,7 +1,16 @@
 # 0431 — 0419/0420 engine patches ship no -DNETSURF_NO_* kill switch or A/B baseline leg
 
 - **Status**: open
-- **Design**: —
+- **Design**: two switches, one per behaviour — the merge was one commit but the
+  behaviours are independent, and the convention is per-behaviour.
+  `-DNETSURF_NO_CLICK_CANCEL` covers 0419 (the click-dispatch result is thrown
+  away again). `-DNETSURF_NO_DYNAMIC_PSEUDO` covers 0420 (the
+  `node_is_hover`/`node_is_active` answers revert to the upstream never-match
+  stubs, and no mouse action tracks the chains). Both live in
+  `include/netsurf/pointerpath.h` (the `uievents.h` shape). `smoke-js.mjs`
+  legs 13/14 are the positive halves over `test/ptr-*.html`; legs 15/16 build
+  each variant ALONE as its A/B baseline, so each switch is proven to build and
+  to change behaviour by itself.
 
 ## Goal
 
@@ -82,3 +91,41 @@ Both came out of the same review, and they are different failures:
   not enough — tally `results[].status`; if `carried > 0` / `runs > 1` / a `filter` is set, report
   the **first full run's** numbers). `node tests/todos/run.js` 5/5.
 - ⚠️ A full browser sweep rewrites 3 tracked `logs/` PNGs and drops 1 untracked one. **Restore them.**
+
+## Survey (Plan step 5) — 2026-07-30
+
+The patch record holds **68 sections** across the six `patches/*.diff` files
+(52 netsurf, 11 libdom, 2 libnsfb, 1 each libcss / libhubbub /
+libparserutils). I classified each section. The result:
+
+- **4 engine-behaviour layers exist. All 4 now carry a switch and a baseline
+  leg.** Lane B: `-DNETSURF_NO_LIVE_RECONVERT`, leg 8. Lane C:
+  `-DNETSURF_NO_UI_EVENTS`, leg 11. 0419: `-DNETSURF_NO_CLICK_CANCEL`,
+  legs 13/15 (this ticket). 0420: `-DNETSURF_NO_DYNAMIC_PSEUDO`, legs 14/16
+  (this ticket).
+- **2 features switch at run time, not build time.** JavaScript switches with
+  the `enable_javascript` Choice; leg 5 is its off-leg. The core select menu
+  (todos/0422) switches with upstream's own `core_select_menu` option, set in
+  `gucos/main.c`. A build-time switch would duplicate a runtime A/B that
+  already exists.
+- **7 sections are upstream bug fixes. They carry no switch, by design.**
+  The set: imagemap `strtok`, `EventTarget.bnd` listener walk, libdom
+  at-target double fire, libdom class-cache refresh, monkey `filetype.c` js
+  mime, monkey `dispatch.c` read burst, `redraw.c` select-menu anchor
+  (todos/0412). Each fix encodes correct-versus-wrong and an absolute
+  regression test guards it. An A/B leg against known-wrong behaviour proves
+  nothing new.
+- **Later bridge amendments inherit the lane B switch through the choke.**
+  Every re-conversion path runs through `html_schedule_reconvert`, which is
+  the `#ifdef` site. The todos/0410 object-completion reformat is unreachable
+  without the bridge (its own comment states this). So
+  `-DNETSURF_NO_LIVE_RECONVERT` still restores pristine behaviour.
+- **The remaining sections are porting patches or additive plumbing.**
+  Porting patches change no behaviour (`config.h`, `fetch.c`, `png.c`,
+  `frames.c`, `talloc.c`, the nsoption chain, the libnsfb constructor
+  registration, the three small lib patches). The plumbing (key-release path,
+  `browser_window_get_scroll`, `textarea_get_caret_char`, the libdom
+  mouse-event constructors, the monkey `WINDOW MOUSE`/`KEY`/`WHEEL` verbs) is
+  inert without its switched consumer.
+
+**Unswitched engine-behaviour patches remaining: 0.**

@@ -45,7 +45,7 @@ Dev).  Licences: MIT (libs), GPLv2 (netsurf core) — each tree keeps its
 | `patchcheck.mjs` | Offline patch-record verifier (todos/0423): strict reverse-apply of every `patches/` section + residual manifest + per-change differential.  Runs in the `netsurf-patch` suite and the pre-commit hook; see "Updating" |
 | `regen-js-bindings.sh`, `genjs-sources.mjs` | Re-runnable **binding** pipeline (maintainer-only; no build runs it) |
 | `smoke.mjs`, `test/hello.html` | Build + end-to-end smoke recipe (`test/squares.html` + `test/two.html` drive the in-window e2e, `tests/kernel/test_netsurf_e2e.js`) |
-| `smoke-js.mjs`, `demos/` | The JavaScript gate (5 legs; `--reuse` to skip a fresh link, `--leg N` for one) |
+| `smoke-js.mjs`, `demos/` | The JavaScript gate (17 legs incl. the A/B baselines; `--reuse` to skip a fresh link, `--leg N` for one; `test/ptr-*.html` drive the pointer-path legs) |
 
 ## Build graph & the include-order rule
 
@@ -231,6 +231,13 @@ netsurf core — **the pointer path** (todos/0419 + todos/0420; rationale in
 `logs/2026-07-29/netsurf-pointer-path.md`).  Both defects sit in the tail of
 `html_mouse_action`:
 
+- `include/netsurf/pointerpath.h` (new; todos/0431) — the build-time kill
+  switches, one per behaviour because the merge carried two:
+  `-DNETSURF_NO_CLICK_CANCEL` restores the thrown-away click-dispatch
+  result (0419), `-DNETSURF_NO_DYNAMIC_PSEUDO` restores the never-match
+  `:hover`/`:active` stubs (0420).  `smoke-js.mjs` legs 15 and 16 build
+  those variants as their A/B baselines (legs 13 and 14 are the positive
+  halves, over `test/ptr-*.html`).
 - `content/handlers/html/interaction.c` — a cancelled `click` now cancels
   the clicked element's ACTIVATION BEHAVIOUR (`ACTION_SUBMIT`,
   `ACTION_NAVIGATE`, `ACTION_JS`).  The dispatch already reported the

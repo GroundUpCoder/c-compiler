@@ -58,6 +58,27 @@
 //                           printed (not guessed), palette switching and
 //                           a clean stop
 //
+// …and the pointer-path legs (todos/0419 + todos/0420; the kill-switch
+// convention restored by todos/0431).  These drive test/ pages, not demos —
+// the full pointer semantics are the in-OS test_netsurf_pointer_e2e.js;
+// these legs exist to anchor the A/B:
+//
+//  13. test/ptr-click.html  preventDefault() on a link click stops the
+//                           navigation, and an uncancelled click on the
+//                           SAME page still navigates (the honest control)
+//  14. test/ptr-hover.html  a `:hover` / `:active` rule really applies:
+//                           each transition repaints, and the rule's
+//                           geometry change moves a marker text below it
+//                           (the plot stream carries no colours)
+//  15. A/B baseline         ptr-click, rebuilt with the cancelled-click
+//                           patch compiled out (-DNETSURF_NO_CLICK_CANCEL):
+//                           the listener still runs and still cancels, and
+//                           the navigation happens ANYWAY
+//  16. A/B baseline         ptr-hover, rebuilt with the dynamic
+//                           pseudo-classes compiled out
+//                           (-DNETSURF_NO_DYNAMIC_PSEUDO): the same moves
+//                           and press repaint NOTHING and move NOTHING
+//
 // Every demo now lives in its own folder under demos/pages/ with its markup,
 // its stylesheet and its script in separate files — which is also what the
 // `netsurf-demos` package seeds onto the desktop.  Nothing here enumerates
@@ -206,6 +227,32 @@ function noEventsWasm() {
   noEventsWasmPath = out;
   return out;
 }
+
+/* The pointer-path baselines (legs 15 and 16): one wasm per switch, so
+ * each switch is proven to build — and to change behaviour — ALONE. */
+function pointerBaselineWasm(cache, file, define, label) {
+  if (cache.path) return cache.path;
+  const out = path.join(OUT_DIR, file);
+  if (REUSE && fs.existsSync(out) && fs.statSync(out).mtimeMs >= newestInput()) {
+    console.log(`  reusing baseline ${path.basename(out)}`);
+  } else {
+    console.log(`  building the -D${define} baseline…`);
+    const n = buildWasm(out, [`-D${define}`], label);
+    /* A baseline byte-identical to the product build would make the leg a
+     * tautology, so say so loudly rather than pass. */
+    if (n === fs.statSync(WASM).size) {
+      throw new Error('baseline wasm is the same size as the product build — the kill switch did not take effect');
+    }
+  }
+  cache.path = out;
+  return out;
+}
+const noClickCancel = {};
+const noClickCancelWasm = () => pointerBaselineWasm(noClickCancel,
+  'nsmonkey-noclickcancel.wasm', 'NETSURF_NO_CLICK_CANCEL', '0419 compiled OUT');
+const noDynPseudo = {};
+const noDynPseudoWasm = () => pointerBaselineWasm(noDynPseudo,
+  'nsmonkey-nodynpseudo.wasm', 'NETSURF_NO_DYNAMIC_PSEUDO', '0420 compiled OUT');
 
 // ---- runtime resources ------------------------------------------------
 // Same assembly as smoke.mjs (the engine needs its resource: stylesheets and
@@ -387,6 +434,9 @@ function ok(cond, what, detail = '') {
 /* A demo's entry page, by folder name — the only spelling of a demo path in
  * this file.  demos.js is the set; nothing here re-lists it. */
 const demo = (n) => path.join(DEMOS.PAGES_DIR, n, 'index.html');
+/* A harness page under test/ — NOT a demo: nothing ships it, so it owes the
+ * demo contract nothing (the smoke.mjs squares.html precedent). */
+const testPage = (n) => path.join(HERE, 'test', n);
 
 /* Every demo declares, on the page, whether its two subresources arrived:
  * the external stylesheet hides a "stylesheet did not load" notice that IS
@@ -1070,10 +1120,171 @@ async function leg12() {
   } finally { mk.kill(); }
 }
 
+// ---- legs 13-16: the pointer path and its A/B baselines ---------------
+/* The Y a labelled text was plotted at — the geometry probe the hover legs
+ * are built on, since the plot stream carries no colours. */
+function textYOf(frame, label) {
+  const m = frame.match(new RegExp(`PLOT TEXT X \\d+ Y (\\d+) STR ${label}$`, 'm'));
+  if (!m) throw new Error(`no plotted text "${label}" in this frame`);
+  return Number(m[1]);
+}
+
+// ---- leg 13: ptr-click.html (0419 — a cancelled click stops the action)
+async function leg13() {
+  console.log('\nleg 13 — test/ptr-click.html: preventDefault() on a link click stops the navigation');
+  const mk = new Monkey(RES_ON);
+  try {
+    await mk.open(testPage('ptr-click.html'));
+    ok(mk.consoleLines().includes('ptr ready'), 'page script ran');
+
+    let frame = await mk.redraw();
+    let from = mk.mark();
+    mk.pressText(frame, 'cancelled link');
+    await mk.wait(/LOG ptr click cancelled$/m, { label: 'the cancelling listener', from });
+    /* Nothing to wait ON — the assertion IS that no navigation starts —
+     * so this half, like legs 4/8/11, has to watch a clock. */
+    await new Promise((r) => setTimeout(r, 800));
+    ok(!/START_THROBBER/.test(mk.out.slice(from)),
+      '0419: the cancelled click did NOT navigate');
+    frame = await mk.redraw();
+    ok(/STR cancelled link$/m.test(frame), 'page A is still on screen');
+
+    /* The control that keeps the fix honest: a listener that runs and does
+     * not cancel must still navigate — a "fix" that dropped every
+     * navigation would pass the half above. */
+    from = mk.mark();
+    mk.pressText(frame, 'plain link');
+    await mk.wait(/LOG ptr click plain$/m, { label: 'the plain listener', from });
+    await mk.wait(new RegExp(`START_THROBBER WIN ${mk.win}[\\s\\S]*?STOP_THROBBER WIN ${mk.win}`),
+      { label: 'the uncancelled navigation', from });
+    frame = await mk.redraw();
+    ok(/STR page B landed$/m.test(frame), 'the uncancelled click reached page B');
+    ok(await mk.quit() === 0, 'clean exit');
+  } finally { mk.kill(); }
+}
+
+// ---- leg 14: ptr-hover.html (0420 — :hover / :active really apply) ----
+/* Both dynamic rules change geometry (`:hover { height: 180px }`), so the
+ * proof is the "below marker" text moving by the rule's exact delta — and
+ * every transition's INVALIDATE_AREA is the wait marker. */
+async function leg14() {
+  console.log('\nleg 14 — test/ptr-hover.html: :hover and :active apply, transitions repaint');
+  const mk = new Monkey(RES_ON);
+  try {
+    await mk.open(testPage('ptr-hover.html'));
+    let frame = await mk.redraw();
+    const y0 = textYOf(frame, 'below marker');
+
+    /* Park the pointer on a subject with no dynamic rule first, so the
+     * next move is a pure enter transition.  Entering #far changes no
+     * computed style, so it plots nothing to wait for — the following
+     * commands are ordered behind it on stdin. */
+    let at = mk.clickTextAt(frame, 'far corner');
+    mk.mouse('TRACK', at.x, at.y);
+
+    /* enter: the link grows by 80px and everything below it moves */
+    let from = mk.mark();
+    at = mk.clickTextAt(frame, 'hover me');
+    mk.mouse('TRACK', at.x, at.y);
+    await mk.wait(/INVALIDATE_AREA WIN \d+/, { label: 'the hover-enter repaint', from });
+    frame = await mk.redraw();
+    ok(textYOf(frame, 'below marker') === y0 + 80,
+      '0420 hover: a:hover applied (the marker moved by the rule\'s 80px)',
+      `y ${y0} -> ${textYOf(frame, 'below marker')}`);
+
+    /* leave: the base geometry comes BACK — the exit half of the delta */
+    from = mk.mark();
+    at = mk.clickTextAt(frame, 'far corner');
+    mk.mouse('TRACK', at.x, at.y);
+    await mk.wait(/INVALIDATE_AREA WIN \d+/, { label: 'the hover-exit repaint', from });
+    frame = await mk.redraw();
+    ok(textYOf(frame, 'below marker') === y0,
+      '0420 unhover: the base geometry came back when the pointer left');
+
+    /* :active — armed by the press, held while the button is down */
+    from = mk.mark();
+    at = mk.clickTextAt(frame, 'press me');
+    mk.mouse('CLICK', at.x, at.y, 'PRESS_1');
+    await mk.wait(/INVALIDATE_AREA WIN \d+/, { label: 'the :active repaint', from });
+    frame = await mk.redraw();
+    ok(textYOf(frame, 'below marker') === y0 + 60,
+      '0420 active: #press:active applied while the button was held',
+      `y ${y0} -> ${textYOf(frame, 'below marker')}`);
+
+    /* release: cleared again */
+    from = mk.mark();
+    mk.mouse('TRACK', at.x, at.y);
+    await mk.wait(/INVALIDATE_AREA WIN \d+/, { label: 'the release repaint', from });
+    frame = await mk.redraw();
+    ok(textYOf(frame, 'below marker') === y0,
+      '0420 active: and cleared at the release');
+    ok(await mk.quit() === 0, 'clean exit');
+  } finally { mk.kill(); }
+}
+
+// ---- leg 15: the 0419 A/B baseline ------------------------------------
+/* Compiled with -DNETSURF_NO_CLICK_CANCEL, the SAME page's cancelling
+ * listener still runs — and the navigation happens anyway, because the
+ * dispatch result is thrown away again.  That is pristine upstream. */
+async function leg15() {
+  console.log('\nleg 15 — A/B baseline: with 0419 compiled out, the cancelled click navigates anyway');
+  const wasm = noClickCancelWasm();
+  const mk = new Monkey(RES_ON, { wasm });
+  try {
+    await mk.open(testPage('ptr-click.html'));
+    ok(mk.consoleLines().includes('ptr ready'),
+      'the page script still runs with the switch on');
+
+    const frame = await mk.redraw();
+    const from = mk.mark();
+    mk.pressText(frame, 'cancelled link');
+    await mk.wait(/LOG ptr click cancelled$/m,
+      { label: 'the cancelling listener still running', from });
+    await mk.wait(new RegExp(`START_THROBBER WIN ${mk.win}[\\s\\S]*?STOP_THROBBER WIN ${mk.win}`),
+      { label: 'the navigation the cancel could not stop', from });
+    const after = await mk.redraw();
+    ok(/STR page B landed$/m.test(after),
+      'BASELINE: preventDefault() was ignored — the link navigated to page B');
+    ok(await mk.quit() === 0, 'clean exit');
+  } finally { mk.kill(); }
+}
+
+// ---- leg 16: the 0420 A/B baseline ------------------------------------
+/* Compiled with -DNETSURF_NO_DYNAMIC_PSEUDO, the SAME moves and press must
+ * repaint NOTHING and move NOTHING: node_is_hover answers "no match" the
+ * way the upstream `\todo` stub did. */
+async function leg16() {
+  console.log('\nleg 16 — A/B baseline: with 0420 compiled out, :hover and :active never apply');
+  const wasm = noDynPseudoWasm();
+  const mk = new Monkey(RES_ON, { wasm });
+  try {
+    await mk.open(testPage('ptr-hover.html'));
+    let frame = await mk.redraw();
+    const y0 = textYOf(frame, 'below marker');
+
+    const from = mk.mark();
+    let at = mk.clickTextAt(frame, 'hover me');
+    mk.mouse('TRACK', at.x, at.y);
+    at = mk.clickTextAt(frame, 'press me');
+    mk.mouse('CLICK', at.x, at.y, 'PRESS_1');
+    /* Nothing to wait ON — the assertion IS that nothing repaints — so
+     * this leg, like legs 4/8/11, has to watch a clock. */
+    await new Promise((r) => setTimeout(r, 800));
+    ok(!/INVALIDATE_AREA/.test(mk.out.slice(from)),
+      'BASELINE: neither the hover move nor the press repainted anything');
+    frame = await mk.redraw();
+    ok(textYOf(frame, 'below marker') === y0,
+      'BASELINE: and the geometry never moved (no rule ever applied)',
+      `y ${y0} -> ${textYOf(frame, 'below marker')}`);
+    mk.mouse('TRACK', at.x, at.y);   /* release before quitting */
+    ok(await mk.quit() === 0, 'clean exit');
+  } finally { mk.kill(); }
+}
+
 // ---- run --------------------------------------------------------------
 // Index IS the leg number (leg 0 is the shipped-set gate), so `--leg 2`
 // still means leg 2.
-const LEGS = [leg0, leg1, leg2, leg3, leg4, leg5, leg6, leg7, leg8, leg9, leg10, leg11, leg12];
+const LEGS = [leg0, leg1, leg2, leg3, leg4, leg5, leg6, leg7, leg8, leg9, leg10, leg11, leg12, leg13, leg14, leg15, leg16];
 const t0 = Date.now();
 for (let i = 0; i < LEGS.length; i++) {
   if (ONLY.length && !ONLY.includes(i)) continue;

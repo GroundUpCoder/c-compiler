@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<!-- The A/B page for the cancelled-click patch (todos/0419, switch
+     -DNETSURF_NO_CLICK_CANCEL).  Two links to the same target: the first
+     listener cancels the click, the second runs and does not.  Both log,
+     so "the listener ran" and "the navigation happened" stay separable.
+     Driven by vendor/netsurf/smoke-js.mjs legs 13 and 15. -->
+<html>
+<head><title>NsPtrClickAB</title><style>
+body { margin: 0; background: #ffffff; }
+a { display: block; width: 300px; height: 80px; background: #cccccc; }
+</style></head>
+<body>
+<a id="keep" href="ptr-b.html">cancelled link</a>
+<a id="go" href="ptr-b.html">plain link</a>
+<script>
+console.log('ptr ready');
+document.getElementById('keep').addEventListener('click', function (e) {
+	e.preventDefault();
+	console.log('ptr click cancelled');
+});
+/* the control: a listener that runs and does NOT cancel — what tells a
+ * failed navigation apart from a lost click */
+document.getElementById('go').addEventListener('click', function (e) {
+	console.log('ptr click plain');
+});
+</script>
+</body>
+</html>

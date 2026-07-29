@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<!-- The A/B page for the dynamic pseudo-classes (todos/0420, switch
+     -DNETSURF_NO_DYNAMIC_PSEUDO).  The monkey plot stream carries no
+     colours, so both dynamic rules change GEOMETRY: the applied rule grows
+     its subject and the "below marker" text moves down by a known amount.
+     Driven by vendor/netsurf/smoke-js.mjs legs 14 and 16; the full
+     semantics (ancestor chains, colour flips) are the in-OS
+     tests/kernel/test_netsurf_pointer_e2e.js. -->
+<html>
+<head><title>NsPtrHoverAB</title><style>
+body { margin: 0; background: #ffffff; }
+a#h { display: block; width: 300px; height: 100px; background: #808080; }
+a#h:hover { height: 180px; background: #0a5510; }
+#press { width: 300px; height: 100px; background: #eeeeee; }
+#press:active { height: 160px; background: #0000c8; }
+#below { width: 300px; height: 40px; background: #dddddd; }
+#far { width: 300px; height: 200px; background: #ffffff; }
+</style></head>
+<body>
+<a id="h" href="#">hover me</a>
+<div id="press">press me</div>
+<div id="below">below marker</div>
+<div id="far">far corner</div>
+</body>
+</html>
