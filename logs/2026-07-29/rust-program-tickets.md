@@ -117,3 +117,120 @@ And the blocker the design pass missed, which now has a home: **2 of 132 codex
 workspace manifests declare a `[features]` section**, and neither `exec` nor `core`
 is one of them. "Cut the subsystem" is not a cargo flag. It is manifest surgery plus
 call-site deletion, and it had no estimate anywhere. `todos/0418` owes one.
+
+---
+
+# Amendment — a second design pass
+
+A second design pass ran on the same investigation document, independently and
+adversarially. **It never saw these tickets**, so it neither blessed nor faulted the
+filing. It read the same source and reached its own answers. Where those answers
+meet the first pass, the meeting is evidence. Where they disagree, the disagreement
+is now recorded as a disagreement.
+
+## What two passes agreeing bought
+
+`todos/0417` was reached twice, separately. That is the strongest signal this
+program produced, and the ticket now states its standing accordingly: a **hard
+unconditional prerequisite**, not a Rust-contingent one. It blocks a port of
+`codex exec` and a native client **equally**, because both must multiplex one
+long-lived stream against timers and child waits.
+
+The second pass added two facts. `_selectScan` (`kernel.js:6766`) knows five OFD
+kinds — `tty`, `ptm`, `pipe`, `socket`, `watch` — and an HTTP handle is none of
+them, so a transfer never enters the fd table at all. And at most one HTTP operation
+is in flight per process. Together they give the consequence the ticket now states
+plainly: **an async runtime cannot multiplex a server-sent-event stream against
+timers, a child-process wait, or a second request.**
+
+## Two readings, reconciled rather than overwritten
+
+The second pass wrote that `__http_read` parks "the entire process, with no
+non-blocking variant". The first hand-off wrote that a hung request wedges a process
+forever and cannot be killed. This lane's own reading found the park interruptible.
+
+The ticket now says the thing all three were circling: **interruptible is not
+pollable, and it is not multiplexable.** A signal releases the park
+(`kernel.js:1457-1458`, `_cancelWaiter`, and the `ITIMER_REAL` alarm in
+`os/curl/libcurl.c`), so a process can be killed. It still cannot ask "is it ready?",
+and it still cannot wait on a transfer beside anything else. The correction changes
+the wording and leaves both defects standing.
+
+## Where the two passes disagree — recorded as open, not resolved
+
+**`ring`.** Pass one refuted it as a blocker on `build.rs:594-599`, which
+cross-compiles for wasm. Pass two read `ring` and `aws-lc-rs` and found "no wasm
+story" for either. `todos/0418` now carries the dispute as a dispute, to be settled
+by one build and not by more reading. Neither verdict is inherited as fact.
+
+**`tokio`.** "It has a wasm arm, so this is a feature reduction, not a fork" is true
+in general and misleading here. codex hand-builds a multi-thread runtime,
+`rt-multi-thread` is explicit in five crates, and two `block_in_place` sites
+hard-panic on a `current_thread` runtime — which is the only runtime gucOS can
+offer. The general claim stays; the qualification now sits beside it.
+
+## The contradiction the tickets had to resolve
+
+"Stable `rustc 1.96.1` is sufficient" was measured on `wasm32-unknown-unknown` with
+`#![no_std]` and a `cdylib`. The custom-target path is a **different** path: it needs
+`-Zbuild-std`, which is unstable, and no nightly toolchain is installed here. Left
+unqualified, the stable claim would have quietly licensed a nightly dependency.
+
+`todos/0418` now names the resolution as a required output of the ruling: say which
+path, and therefore whether nightly is required. If it is, the estate also buys a
+pinned nightly and a documented bump procedure, which the investigation never
+mentions. `todos/0414` and `todos/RUST.md` §5 carry the narrow true version — Lanes
+A1 to A4 stay stable, because `core` and `alloc` ship precompiled for that target.
+
+## Two traps that would each have cost a debugging session
+
+**`alloca` is effectively mandatory, not one export of three.** `host.js:11523` reads
+`instance.exports.alloca` and calls it with no test, inside a branch that always
+runs. A Rust module without the export traps before `main`. The tickets now spell out
+the consequence, and `todos/0413` asks for a test that proves it — a contract nothing
+exercises is a contract nobody keeps.
+
+**`--allow-undefined` routes a missing import to module `env`, and `host.js` serves
+only `"c"`.** So a Rust `extern` block without
+`#[link(wasm_import_module = "c")]` produces a module that fails when it loads, far
+from the block that caused it. The Rust build therefore links **without**
+`--allow-undefined`, so a miss fails at link time with the name of the symbol. This
+is the loud-failure rule, not a style preference. The clang sibling does use the flag
+in one test harness (`run-libc-test.sh:94`); the Rust build must not copy it.
+
+## Two scope corrections that make the census a floor, not a ceiling
+
+**WebSockets cannot be configured away.** `supports_websockets = true` is hardcoded
+for the built-in provider, and `disable_websockets` is a private atomic latch rather
+than a configuration key. The original plan assumed a setting would select the HTTP
+and server-sent-event path. It will not.
+
+**The 838-crate census may understate the port.** An in-process application server of
+roughly 64,000 lines now rides the exec path, and the crate map predates it. The
+figure is flagged wherever it appears.
+
+The sandbox note lands the other way, in the estate's favour:
+`should_run_in_sandbox()` is platform-blind and re-executes a helper subprocess per
+file operation. **The browser tab is already the sandbox**, so the fix is to default
+to full access and delete a process per file.
+
+## One instruction that reads backwards until you see why
+
+The census left 9 crates unmeasured, because this machine has no C compiler that can
+target wasm. The obvious next step is to install one and re-run. **The standing call
+is not to.**
+
+It is correct. All 9 are C or C++ build scripts, so they price the **application**
+half. `todos/0418` rules on the standard library, and that ruling does not depend on
+them. So the null result stays open, it is carried to D1 as an open input, and the
+ruling must say which answer it assumed. A decider that fires probes for inputs it
+does not need is a decider that never rules.
+
+## Port versus native stays open, on purpose
+
+A coordinator leans toward a native client. The second pass explicitly refuses to
+pre-judge: it recommends the decision be made on the numbers of the census, not on
+the sizing of a document that is now refuted.
+
+`todos/0418` records both, and marks which is which. **A lean is not a
+measurement**, and D1 inherits the refusal rather than the lean.

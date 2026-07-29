@@ -30,10 +30,13 @@ Split the program in two, and move the gate.
 - **A ChatGPT sign-in is structurally impossible on gucOS.** The sign-in needs a
   local TCP listener for the OAuth redirect. gucOS has no TCP layer, and it has no
   listener of any kind. The design is therefore **API-key-only**. Do not schedule a
-  sign-in flow.
-- **`todos/0417` (HTTP transfers become OFDs) is independent.** File it, and land
-  it, whatever a Rust decision says. `/bin/curl` and every future networked C
-  application want it today.
+  sign-in flow. A second application fact of the same kind — WebSockets are the
+  hardcoded default transport, and no configuration key turns them off — is recorded
+  in `todos/0418`.
+- **`todos/0417` (HTTP transfers become OFDs) is a hard, unconditional
+  prerequisite.** It is not contingent on any ruling, and it blocks a port and a
+  native client equally. Two independent design passes reached it separately.
+  `/bin/curl` and every future networked C application want it today.
 
 ---
 
@@ -56,10 +59,20 @@ attribute needs no nightly compiler and no custom target specification.
 | `memory` | The host reads and writes the linear memory of the module. |
 | `alloca` | `host.js` plays crt0 itself. It lays out `argv` and `envp` in the memory of the module, and it calls this export to get the space (`host.js:11496`, `host.js:11525-11545`). |
 
-**`alloca` is not optional.** `host.js:11725` makes `args[0]` the path of the
-module, so the argv path always runs. A module without an `alloca` export fails at
-run time with `alloca is not a function`. A C module from this compiler exports
-`alloca` for free. A Rust module does not.
+**`alloca` is not optional, and the lookup is UNGUARDED.** `host.js:11523` reads
+`instance.exports.alloca` and calls it without a test. `host.js:11725` makes
+`args[0]` the path of the module, and the OS always passes an argv, so that path
+always runs. **A Rust module without an `alloca` export traps at start-up, before
+`main`.** A C module from this compiler exports `alloca` for free. A Rust module
+does not. `todos/0413` Trap 1 holds the detail.
+
+**Every Rust `extern` block names the import module explicitly.** Rust attributes an
+unmarked block to the module `env`, and `wasm-ld` with `--allow-undefined` sends a
+missing symbol there too. `host.js` supplies `"c"` and nothing else, so anything in
+`env` is unsatisfiable and the module fails when it loads. Mark every block
+`#[link(wasm_import_module = "c")]`, and link **without** `--allow-undefined` so a
+miss fails at link time with the name of the symbol. `todos/0413` Trap 2 holds the
+detail.
 
 **Two exports are optional.** `host.js` calls `__set_environ` only when the caller
 supplies an environment, and it calls `__wasm_call_ctors` only when the module
@@ -134,6 +147,12 @@ question, and the answer is yes.
 - `rustc 1.96.1`, **stable**. Target `wasm32-unknown-unknown`. Crate type
   `cdylib`. The crate is `#![no_std]`.
 - No nightly compiler. No custom target specification. No `wasm-bindgen`. No WASI.
+
+⚠️ **That result covers ONE path, and it does not generalize.** A custom target
+specification needs `-Zbuild-std`, which is unstable, so that path is nightly-only.
+`todos/0418` states which path the program takes, and it prices nightly if it picks
+that one. Lanes A1 to A4 stay on a stable compiler, because `core` and `alloc` ship
+precompiled for `wasm32-unknown-unknown`.
 - The module imported `write` from module `"c"`, exported `main`, and declared a
   growable memory. All three were correct on the first build.
 - `node host.js <module>` printed the message and exited 0.

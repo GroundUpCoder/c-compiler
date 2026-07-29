@@ -33,6 +33,19 @@ with a `malloc`-backed export.** The clang port already does exactly this
 (`~/git/clang-simplified/wasm/compat/alloca_stub.c:16`). Delete the arena in the
 same change. An arena that stays becomes a second heap by accident.
 
+## Lane A stays on a stable compiler
+
+Say this in the crate, because it is easy to lose. `core` and `alloc` ship
+**precompiled** for `wasm32-unknown-unknown`, so this ticket needs **no
+`-Zbuild-std`** and therefore **no nightly compiler**. Lanes A1 to A4 are all
+stable.
+
+⚠️ **Do not generalize that to the whole program.** "Stable is sufficient" was
+measured on one path: `wasm32-unknown-unknown`, `#![no_std]`, crate type `cdylib`.
+A custom target specification with `-Zbuild-std` is a **different** path, and it is
+nightly-only. `todos/0418` resolves which path the program takes, and it prices the
+nightly cost if it picks that one.
+
 ## Loud failure, never a silent stub
 
 A missing host import must fail loudly. Do not declare an import and give it an
@@ -50,7 +63,10 @@ when it loads, which is loud and early, and that is the behaviour to keep.
 1. Declare the import set in one module of the crate, grouped by family: process
    exit, stdio, the filesystem, time, entropy, `posix_spawn`, sockets, the
    clipboard, and HTTP. Give each family its own file, and keep one
-   `#[link(wasm_import_module = "c")]` block per file.
+   `#[link(wasm_import_module = "c")]` block per file. 🔴 **Every block carries that
+   attribute.** Rust attributes an unmarked block to the module `env`, `host.js`
+   supplies only `"c"`, and the result is an unsatisfiable import. `todos/0413`
+   Trap 2 holds the rule and the link setting that makes a miss fail loudly.
 2. Write safe Rust wrappers over the raw imports. The raw block stays private.
 3. Add the `#[global_allocator]`. It calls `malloc`, `free` and `realloc`.
 4. Move the `alloca` export here, and back it with `malloc`.

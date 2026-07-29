@@ -24,12 +24,43 @@ nightly compiler, no custom target specification, no `wasm-bindgen` and no WASI*
 `host.js` plays crt0 itself. It enters at `main(argc, argv, envp)` and not at
 `_start`, so it lays out `argv` and `envp` in the memory of the module, and it calls
 the module's own exported `alloca` to get that space (`host.js:11496`,
-`host.js:11525-11545`). `host.js:11725` makes `args[0]` the path of the module, so
-this path always runs. A module without `alloca` fails with `alloca is not a
-function`. A C module gets the export for free from the compiler. A Rust module does
-not.
+`host.js:11525-11545`). A C module gets the export for free from the compiler. A
+Rust module does not.
+
+### Trap 1 — `alloca` is effectively mandatory, not one option of three
+
+🔴 The lookup is **unguarded**. `host.js:11523` reads
+`const alloca = instance.exports.alloca` inside the `args.length > 0` branch, and it
+tests nothing before it calls the value. `host.js:11725` makes `args[0]` the path of
+the module, and the OS always passes an argv, so that branch always runs.
+
+**A Rust module without an `alloca` export therefore traps at start-up**, before
+`main`, with `alloca is not a function`. This is not a degraded mode and it is not a
+missing feature. It is an immediate failure of every Rust binary. Record it in the
+crate as a fixed part of the contract, with this consequence spelled out.
 
 `__set_environ` and `__wasm_call_ctors` are optional. `host.js` guards both calls.
+
+### Trap 2 — link WITHOUT `--allow-undefined`
+
+🔴 `wasm-ld` with `--allow-undefined` turns an undefined symbol into an import from
+the module **`env`**. `host.js` supplies the module **`"c"`** and nothing else
+(`host.js:3`, `const ENV_KEY = "c"`). So an import that lands in `env` is
+unsatisfiable, and the module fails when it loads — far from the `extern` block that
+caused it.
+
+Two rules follow, and both are loud-failure requirements, not style notes.
+
+1. **Every Rust `extern` block carries an explicit
+   `#[link(wasm_import_module = "c")]`.** Rust attributes the block to `env` by
+   default, so a missing attribute is silent.
+2. **The Rust build links without `--allow-undefined`.** A symbol nobody defined
+   then fails at **link** time, where the message names the symbol, instead of at
+   run time, where it names only the module.
+
+The clang sibling uses `--allow-undefined` in one test harness
+(`~/git/clang-simplified/wasm/tools/run-libc-test.sh:94`). Do not copy that setting
+into the Rust build.
 
 ## Where the code lives
 
@@ -87,6 +118,11 @@ fact, and it is named here so that nobody has to derive it again.
 - A `#![no_std]` Rust module built by **stable** `rustc` imports from the module
   `"c"`, exports `main`, `memory` and `alloca`, and declares a growable memory.
 - `node host.js <module>` prints the message and exits 0.
+- The build links without `--allow-undefined`. A test drops the
+  `#[link(wasm_import_module = "c")]` attribute from one block and asserts that the
+  **link** fails, and that the message names the symbol.
+- A test builds a module with no `alloca` export and asserts the start-up trap. The
+  contract is only fixed once something proves it.
 - A kernel-suite test spawns the committed fixture from the shell in a booted
   gucOS, and asserts the output.
 - The freshness leg rebuilds the fixture from the sibling, and proves the bytes are

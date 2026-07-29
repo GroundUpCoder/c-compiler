@@ -122,53 +122,139 @@ instrument, not from the crate. Three of those crates carry direct evidence that
 they expect a wasm build: `libsqlite3-sys` ships `sqlite3/wasm32-wasi-vfs.c`,
 `zstd-sys` ships a `wasm-shim/`, and `tree-sitter` reads `CARGO_FEATURE_WASM`.
 
-**`ring` is REFUTED.** The earlier claim was that `ring` does not build for wasm.
-`ring-0.17.14/build.rs:594-599` says "Allow cross-compiling without a target sysroot
-for these targets" and tests `target.arch == WASM32`, and `Cargo.toml:180` declares
-the feature `wasm32_unknown_unknown_js`. `ring` expects a wasm build. It failed here
-because of the missing C compiler.
+🔴 **The null result stays OPEN, and no probe fires to close it.** That is a
+standing call, and it is deliberate. The 9 crates are all C or C++ build scripts, so
+they price the **application** half and not the standard-library choice. A ruling on
+the standard library therefore does not need them. **Make the ruling robust to
+either answer, and say which answer it assumed.** Carry the null result forward to
+D1 as an open input.
 
-**`tokio` has a wasm arm.** The error is a feature check, not an absent port: the
-graph resolves `tokio` with `full`, and the wasm arm permits `sync`, `macros`,
-`io-util`, `rt` and `time`. The work is a reduction of the feature set, not a fork
-of `tokio`. The open question is a different one — whether codex's own code runs on
-the reduced set.
+### 🔴 `ring` — an OPEN DISPUTE, settled by neither side
+
+Two design passes read `ring` and reached **opposite** answers. Record the dispute.
+Do **not** inherit either verdict as a fact.
+
+- **Pass one says refuted.** `ring-0.17.14/build.rs:594-599` says "Allow
+  cross-compiling without a target sysroot for these targets" and tests
+  `target.arch == WASM32`, and `Cargo.toml:180` declares the feature
+  `wasm32_unknown_unknown_js`. On that reading `ring` expects a wasm build, and it
+  failed here only because of the missing C compiler.
+- **Pass two says blocked.** It read `ring` **and** `aws-lc-rs` in the tree and
+  found "no wasm story" for either.
+
+**Settle it by measurement, not by reading.** One build of `ring` for the wasm
+triple, with a C compiler that can target wasm, answers it. Until that build runs,
+`ring` is neither a blocker nor cleared. See the null result below: the same missing
+instrument is why the question is open.
+
+### `tokio` — a wasm arm exists, but it does not mean what it sounds like
+
+The error is a feature check, not an absent port. The graph resolves `tokio` with
+`full`, and the wasm arm permits `sync`, `macros`, `io-util`, `rt` and `time`.
+
+⚠️ **"A feature reduction, not a fork" is TRUE in general and materially misleading
+for THIS tree.** A second pass found three facts that weaken it:
+
+- codex **hand-builds** a multi-thread runtime. It does not take a default.
+- `rt-multi-thread` is an **explicit** feature in **five** crates.
+- **Two `block_in_place` call sites hard-panic** on a `current_thread` runtime.
+
+gucOS is single-threaded per process, so `current_thread` is the only runtime
+available. Each of those three facts is hand work in codex's own crates, and the
+last one is a run-time panic, not a compile error. Keep the general statement, and
+keep this qualification beside it.
 
 **Claim 6 is NOT MEASURED.** The census used the two standard triples only. It never
 built a custom target specification, so it is not a test of "a novel
 `target_os = "gucos"` matches nothing". Treat that claim as open. It is an input to
 option (a) above.
 
-## 🔴 The blocker the design pass missed
+## 🔴 The blocker the design pass missed — corroborated twice, priced never
 
 **codex has almost no feature-flag surface. A subsystem cannot be cut with a flag.**
+
+Two passes reached this independently, and the second stated it more strongly.
 
 - 132 workspace manifests exist.
 - **2** of them declare a `[features]` section: `code-mode/Cargo.toml` and
   `v8-poc/Cargo.toml`.
 - `exec/Cargo.toml` and `core/Cargo.toml` declare none.
+- The workspace declares **ZERO optional dependencies**.
 
-Every optional-looking subsystem is therefore an **unconditional** dependency. The
-whole estimate leaned on "cut the subsystem" to shed the JavaScript sandbox (`v8`),
-the state store (`libsqlite3-sys`), the terminal emulation (`serial2`), the git
-integration (`gix-fs`) and the crash telemetry (`sentry-contexts`, `uname`,
-`openssl-sys`). None of those leaves with a cargo flag. Removing one means editing
-manifests and deleting call sites.
+🔴 **So the premise that "a cargo feature keeps `reqwest` out of the wasm build" is
+REFUTED. There is no feature to flip.** The original design leaned on that premise,
+and it does not hold. Every "keep X out" is hand-authored Cargo surgery inside a
+**maintained fork**, and a maintained fork is a recurring cost, not a one-time edit.
 
-**That work has no estimate anywhere. Produce one in this ticket.** It is a cost of
-the application half, and the ruling must hold it.
+Every optional-looking subsystem is an **unconditional** dependency. The estimate
+leaned on "cut the subsystem" to shed the JavaScript sandbox (`v8`), the state store
+(`libsqlite3-sys`), the terminal emulation (`serial2`), the git integration
+(`gix-fs`) and the crash telemetry (`sentry-contexts`, `uname`, `openssl-sys`). None
+of those leaves with a flag. Removing one means editing manifests and deleting call
+sites.
+
+**This work is UNPRICED, and the ticket says so on purpose.** No estimate for it
+exists anywhere. Produce one here, and mark it clearly as the first estimate rather
+than a carried one.
+
+## 🔴 The nightly contradiction, which this ticket must resolve
+
+Two carried claims disagree, and the ruling has to pick.
+
+- **"Stable `rustc 1.96.1` is sufficient."** True, and measured — on
+  `wasm32-unknown-unknown`, with `#![no_std]` and crate type `cdylib`. That is
+  `todos/0413`'s path, and `core` and `alloc` ship precompiled for that target.
+- **The custom target specification path is nightly-only.** It needs
+  `-Zbuild-std=core,alloc`, which is unstable. **No nightly toolchain is installed
+  on this machine.** That is option (a) above, and it is a **different path** from
+  the one the probe measured.
+
+🔴 **Do not let "stable is sufficient" stand unqualified. State WHICH path the
+program takes, and therefore whether nightly is required.** If the ruling picks a
+path that needs nightly, it also buys a **pinned nightly toolchain plus a documented
+procedure for bumping it** — a permanent maintenance discipline that the original
+investigation never mentions. Price that discipline in the ruling, beside the fork
+and the rebase.
+
+## Scope facts the census does not yet carry
+
+The crate map of the original investigation is out of date. Three facts change the
+size of the application half, and the ruling must record them even though they
+belong to D1.
+
+**(a) WebSockets are the default, and they cannot be configured away.**
+`supports_websockets = true` is hardcoded for the built-in OpenAI provider, and
+`disable_websockets` is a private atomic latch, **not** a configuration key. The
+original plan assumed a configuration flag would select the HTTP and
+server-sent-event path. It will not. gucOS has no WebSocket transport, so this is a
+code change in codex, not a setting.
+
+**(b) The 838-crate census may UNDERSTATE the port.** An in-process application
+server of roughly 64,000 lines now rides the exec path, and the crate map predates
+it. Flag this explicitly whenever the 838 figure is quoted.
+
+**(c) The sandbox model is platform-blind.** `should_run_in_sandbox()` does not test
+the platform, and it self-re-executes a filesystem-helper subprocess for each file
+operation on an unknown operating system. The fix is to default to
+`danger-full-access`: **the browser tab IS the sandbox**, and a second sandbox
+inside it buys nothing and costs a process per file.
 
 ## Plan
 
-1. **Close the null result first.** Install a C toolchain that targets wasm, and
-   repeat the census run. This is the cheapest step, and it settles 9 of the 22
-   failures, `ring` among them. A ruling made on an instrument fault is a guess.
-2. Measure the 83 codex-owned crates that the census never reached. They are the
-   real port.
-3. Cost the manifest surgery of the section above.
-4. Price the recurring cost of each of the three options: the nightly dependency,
-   the rebase cadence, the size of the shim, and the ABI change at the deploy edge.
+1. **Answer the nightly question first.** It is the cheapest input, it is decided by
+   reading, and it separates option (a) from the other two on a cost the estate
+   carries forever.
+2. Price the recurring cost of each of the three options: the nightly dependency and
+   its bump procedure, the rebase cadence of a forked standard library, the size of
+   the shim, and the ABI change at the deploy edge.
+3. Cost the manifest surgery, which is unpriced today.
+4. Record the `ring` dispute and the D1 scope facts as open inputs, and state which
+   answer the ruling assumed for each.
 5. Write the ruling.
+
+⚠️ **Do not fire a probe.** Neither the census re-run nor a measurement of the 83
+codex-owned crates happens under this ticket. Both are D1 inputs. This ticket rules
+on the standard library, and it rules with the open items named.
 
 ## Acceptance
 
@@ -178,6 +264,14 @@ the application half, and the ruling must hold it.
 - The ruling states the recurring cost of the chosen option in words a future
   reader can hold the estate to: nightly or stable, rebase or no rebase, one import
   namespace or two.
+- The ruling states **whether the chosen path needs a nightly compiler**. If it
+  does, it also names the pinned version and the procedure for bumping it.
+- The ruling names every open input it did not settle — the `ring` dispute, the 9
+  unmeasured crates, and the three D1 scope facts — and states the answer it assumed
+  for each.
+- The ruling gives the first estimate for the manifest surgery, and marks it as a
+  first estimate.
+- The ruling records both positions on port versus native, and settles neither.
 - The ruling scopes C2, and C2 is filed as its own ticket.
 - If the ruling is (b), it states what changes at the deploy edge, because a second
   import namespace is a base-image ABI change.
@@ -188,6 +282,23 @@ the application half, and the ruling must hold it.
 It does not decide the application. **D1 — port `codex exec`, or write a native
 gucOS client on the same wire protocol — is not filed**, and it waits on this ruling
 **and** on `todos/0417`. A decision taken without both inputs is a guess.
+
+### 🔴 Port versus native is OPEN. Record both positions, and settle neither here.
+
+Two positions exist, and they are not the same kind of thing. Write both into the
+ruling, and mark which is which.
+
+- **A coordinator leans toward the native client.** That is a lean. It is a
+  judgement about scope, and it is worth recording because it shows where the
+  estate's attention sits.
+- **A second design pass explicitly REFUSES to pre-judge.** Its words: it is not
+  recommending native — it is recommending that the decision be made on the numbers
+  of the census, and not on the sizing of the investigation document, which is now
+  refuted.
+
+🔴 **A coordinator lean is not a measurement. Do not record "native is the lean" as
+settled**, and do not let a lean stand in for the census when D1 is written. The
+refusal to pre-judge is itself the ruling on this question, and D1 inherits it.
 
 `todos/RUST.md` §1 records one application fact that no ruling changes: a ChatGPT
 sign-in needs a local TCP listener for its redirect, gucOS has no listener of any

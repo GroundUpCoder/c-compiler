@@ -4,9 +4,19 @@
 - **Design**: this file; `todos/KERNEL.md` (the 0x04xx and 0x06xx opcode tables).
   The precedent is `todos/done/0264` (FS_WATCH, ticket #75) — the last time a new
   kernel object became an OFD.
-- **Provenance**: found by the Rust program on 2026-07-29. **This ticket stands on
-  its own merits. File it and land it whatever any Rust decision says.** `/bin/curl`
+- **Provenance**: found by the Rust program on 2026-07-29, and reached
+  independently by a second design pass on the same day. **This ticket stands on its
+  own merits. File it and land it whatever any Rust decision says.** `/bin/curl`
   wants it today, and so does every networked C program the estate ever adds.
+
+## Standing
+
+🔴 **This is a hard, unconditional prerequisite, and it is not contingent on
+`todos/0418`.** It blocks a port of `codex exec` and a native gucOS client
+**equally**, because both must multiplex one long server-sent-event stream against
+other work. Neither shape can be built on the transport of today. Do not sequence
+this behind a ruling. Two independent design passes reached it separately, which is
+the strongest evidence this program produced.
 
 ## The gap
 
@@ -16,23 +26,47 @@ returns a **transfer id** from a private counter, held in `_httpXfers` and in
 `pcb.https`. That id is not a file descriptor. Three consequences follow, and each
 one is a real limit today.
 
-**1. A transfer cannot be waited on with anything else.** `_selectScan` walks the fd
-table. A transfer is not in the fd table, so `FS_SELECT` and the unified `FS_WAIT`
-of `todos/0178` cannot see it. A process that wants to wait for a response **or** a
-pipe **or** its input ring cannot express that wait.
+**1. A transfer never enters the fd table, so nothing can wait on it.** The
+readiness scan `_selectScan` (`kernel.js:6766`) walks the fd table, and it knows
+five OFD kinds: `tty`, `ptm`, `pipe`, `socket` and `watch`. There is no HTTP kind,
+and an HTTP handle is not an fd at all. So `FS_SELECT` and the unified `FS_WAIT` of
+`todos/0178` cannot see a transfer. A process that wants to wait for a response
+**or** a pipe **or** its input ring cannot express that wait.
 
-**2. A process can only park on one transfer.** `HTTP_STATUS` and `HTTP_READ` both
-write `pcb.waiter` (`kernel.js:7170`, `kernel.js:7182`), and a process control block
-has exactly one waiter slot. Several transfers may run at once, because the kernel
-owns the fetches. The process still cannot ask "wake me when **any** of them is
-ready". It must poll them in turn, and each poll parks on one.
+**2. At most ONE HTTP operation is in flight per process.** `HTTP_STATUS` and
+`HTTP_READ` both write `pcb.waiter` (`kernel.js:7170`, `kernel.js:7182`), and a
+process control block has exactly one waiter slot. Several transfers may run at
+once, because the kernel owns the fetches. The process still cannot ask "wake me
+when **any** of them is ready". It must poll them in turn, and each poll parks on
+one.
+
+🔴 **State the consequence plainly, because it is the whole reason this ticket
+exists: an async runtime CANNOT multiplex a server-sent-event stream against
+timers, against a child-process wait, or against a second request.** That is not a
+performance limit. It is the shape of every agent loop, and no such loop can be
+written on the transport of today.
 
 **3. The kernel applies no deadline.** `_httpStart` arms no timer. The transfer holds
-an `AbortController`, and only `HTTP_CLOSE` and process teardown fire it. The park
-itself is interruptible, so a signal does release it — the libcurl veneer builds its
-`CURLOPT_TIMEOUT` out of exactly that (`os/curl/libcurl.c:178`, `310-316`, an
-`ITIMER_REAL` alarm). But that puts the deadline in every caller, and a caller that
-arms no alarm waits with no limit at all.
+an `AbortController`, and only `HTTP_CLOSE` and process teardown fire it. But that
+puts the deadline in every caller, and a caller that arms no alarm waits with no
+limit at all.
+
+### One correction to carry, because two readings of it exist
+
+A second design pass described `__http_read` as parking "the entire process, with no
+non-blocking variant". A first reading of the same code said a hung request wedges a
+process forever and cannot be killed.
+
+**Both readings are half right, and the accurate statement is this: the park is
+interruptible, but it is neither pollable nor multiplexable.** `kernel.js:1457-1458`
+passes the interruptible flag for both HTTP ops, `_cancelWaiter` handles both waiter
+kinds (`kernel.js:7436-7438`), and the libcurl veneer builds `CURLOPT_TIMEOUT` on
+exactly that with an `ITIMER_REAL` alarm (`os/curl/libcurl.c:178`, `310-316`). So a
+signal **does** release the park, and a process **can** be killed.
+
+Interruptible is not the same as pollable. A caller can be woken; a caller cannot ask
+"is it ready?" and cannot wait on it beside anything else. Defects 1 and 2 above are
+untouched by the correction, and they are the defects this ticket repairs.
 
 ## The design
 
