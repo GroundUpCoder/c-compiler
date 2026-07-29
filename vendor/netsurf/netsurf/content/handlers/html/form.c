@@ -2173,6 +2173,16 @@ form_submit(nsurl *page_url,
 
 
 /* exported interface documented in html/form_internal.h */
+struct box *form_gadget_screen_box(struct form_control *control)
+{
+	if ((control->html != NULL) && (control->html->reconverting)) {
+		return control->reconvert_box;
+	}
+	return control->box;
+}
+
+
+/* exported interface documented in html/form_internal.h */
 void form_gadget_update_value(struct form_control *control, char *value)
 {
 	switch (control->type) {

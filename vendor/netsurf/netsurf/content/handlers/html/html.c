@@ -574,6 +574,41 @@ static void html__clear_box_userdata(dom_node *node)
 
 
 /**
+ * Release the gadgets' hold on the tree that WAS on screen.
+ *
+ * Called once per re-conversion, at the point where that tree stops being
+ * the displayed one — either because the new tree replaced it, or because
+ * the conversion failed and the new tree is the one being discarded.
+ *
+ * \param c        content whose controls to walk
+ * \param restore  true to put the pointer back in ctl->box: the
+ *                 re-conversion failed, so the old tree is the displayed
+ *                 tree again, and the partial new boxes that construction
+ *                 bound are about to be freed under it
+ */
+static void html__reconvert_release_screen_boxes(html_content *c, bool restore)
+{
+	struct form *f;
+	struct form_control *ctl;
+
+	for (f = c->forms; f != NULL; f = f->prev) {
+		for (ctl = f->controls; ctl != NULL; ctl = ctl->next) {
+			if (restore) {
+				ctl->box = ctl->reconvert_box;
+			}
+			ctl->reconvert_box = NULL;
+		}
+	}
+	for (ctl = c->formless_controls; ctl != NULL; ctl = ctl->next) {
+		if (restore) {
+			ctl->box = ctl->reconvert_box;
+		}
+		ctl->reconvert_box = NULL;
+	}
+}
+
+
+/**
  * Completion callback for a live re-conversion's dom_to_box run.
  *
  * On success convert_xml_to_box has already swapped htmlc->layout to
@@ -595,6 +630,11 @@ static void html_reconvert_box_done(html_content *c, bool success)
 		NSLOG(netsurf, ERROR,
 		      "live re-conversion failed (content %p); keeping old layout",
 		      c);
+		/* BEFORE the partial new tree is freed: construction bound
+		 * some gadgets to boxes in it, and those pointers are about to
+		 * dangle.  The old tree is the displayed tree again, so put
+		 * its boxes back. */
+		html__reconvert_release_screen_boxes(c, true);
 		if (c->bctx != NULL) {
 			talloc_free(c->bctx);
 		}
@@ -635,10 +675,17 @@ static void html_reconvert_box_done(html_content *c, bool success)
 	/* the new tree took over c->layout inside convert_xml_to_box;
 	 * everything reachable from the old tree dies here (box
 	 * destructors unref nodes, destroy styles and scrollbars) */
+	html__reconvert_release_screen_boxes(c, false);
 	if (c->reconvert_old_bctx != NULL) {
 		talloc_free(c->reconvert_old_bctx);
 		c->reconvert_old_bctx = NULL;
 	}
+
+	/* The window closes at exactly this point, and the flag says so: the
+	 * old tree is gone, so the new tree is the only tree and gadget->box
+	 * is the box to talk about again.  Everything below depends on that —
+	 * the caret re-fire reports against the box it names (todos/0407). */
+	c->reconverting = false;
 
 	/* rebuild imagemaps from the current DOM */
 	imagemap_extract(c);
@@ -680,8 +727,6 @@ static void html_reconvert_box_done(html_content *c, bool success)
 		}
 		dom_node_unref(focus_node);
 	}
-
-	c->reconverting = false;
 
 	/* mutations that arrived mid-conversion need another pass */
 	if (c->reconvert_pending) {
@@ -745,14 +790,22 @@ static void html__reconvert(void *p)
 	 * would swallow every later click */
 	selection_init(c->sel);
 
-	/* form gadgets survive re-conversion (box construction re-finds
-	 * them by DOM node) but their box back-pointers must not dangle */
+	/* Form gadgets survive re-conversion (box construction re-finds them
+	 * by DOM node) but their box back-pointers must not dangle: clear
+	 * them, and let construction re-bind each one as it reaches it.
+	 *
+	 * The box being cleared is still ON SCREEN, though — the old tree
+	 * serves redraw and input for the whole window — so hand it to
+	 * reconvert_box first.  A gadget's screen coordinates come from there
+	 * until the swap; the NEW box has never been laid out (todos/0407). */
 	for (f = c->forms; f != NULL; f = f->prev) {
 		for (ctl = f->controls; ctl != NULL; ctl = ctl->next) {
+			ctl->reconvert_box = ctl->box;
 			ctl->box = NULL;
 		}
 	}
 	for (ctl = c->formless_controls; ctl != NULL; ctl = ctl->next) {
+		ctl->reconvert_box = ctl->box;
 		ctl->box = NULL;
 	}
 
@@ -773,6 +826,9 @@ static void html__reconvert(void *p)
 	exc = dom_document_get_document_element(c->document, (void *)&html);
 	if ((exc != DOM_NO_ERR) || (html == NULL)) {
 		NSLOG(netsurf, ERROR, "re-conversion: no document element");
+		/* nothing was built, so the tree that is still displayed is
+		 * the one whose boxes were just taken off the gadgets */
+		html__reconvert_release_screen_boxes(c, true);
 		return;
 	}
 
@@ -791,6 +847,7 @@ static void html__reconvert(void *p)
 	if (error != NSERROR_OK) {
 		NSLOG(netsurf, ERROR, "re-conversion: dom_to_box failed: %d",
 		      error);
+		html__reconvert_release_screen_boxes(c, true);
 		c->bctx = c->reconvert_old_bctx;
 		c->reconvert_old_bctx = NULL;
 		c->reconverting = false;

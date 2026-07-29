@@ -93,6 +93,12 @@ struct form_control {
 	bool disabled;			/**< Whether control is disabled */
 
 	struct box *box;		/**< Box for control */
+	struct box *reconvert_box;	/**< Box for control in the tree that
+					 * is ON SCREEN, while a live
+					 * re-conversion builds the next one;
+					 * NULL at any other time.  Read it
+					 * through form_gadget_screen_box(),
+					 * never directly. */
 
 	unsigned int length;		/**< Number of characters in control */
 	unsigned int maxlength;		/**< Maximum characters permitted */
@@ -355,6 +361,24 @@ void form_radio_set(struct form_control *radio);
 nserror form_submit(struct nsurl *page_url, struct browser_window *target,
 		struct form *form, struct form_control *submit_button);
 
+
+/**
+ * Get the gadget's box in the box tree that is ON SCREEN.
+ *
+ * A live re-conversion builds the next box tree while the old one is
+ * still displayed and still serving redraw and input.  Box construction
+ * binds control->box to the NEW box as it goes, and that box has never
+ * been laid out: every coordinate taken from it is zero until the swap
+ * reformats.  Anything that wants SCREEN coordinates — a damage
+ * rectangle, a caret position, a popup's placement — must therefore ask
+ * for the displayed box, not control->box (todos/0407).
+ *
+ * Outside a re-conversion the two are the same box.
+ *
+ * \param control  the gadget
+ * \return the gadget's displayed box, or NULL if it has none
+ */
+struct box *form_gadget_screen_box(struct form_control *control);
 
 /**
  * Update gadget value.

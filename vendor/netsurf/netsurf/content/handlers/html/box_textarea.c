@@ -132,7 +132,13 @@ static void box_textarea_callback(void *data, struct textarea_msg *msg)
 	struct form_textarea_data *d = data;
 	struct form_control *gadget = d->gadget;
 	struct html_content *html = d->gadget->html;
-	struct box *box = gadget->box;
+	/* The box ON SCREEN, which mid-re-conversion is NOT gadget->box: that
+	 * one is the new tree's box, and it has no coordinates until the swap
+	 * lays it out (todos/0407).  Everything below wants screen
+	 * coordinates — a damage rectangle, a drag owner, a caret position —
+	 * so all of it reads this one, and a NULL here means the same thing
+	 * everywhere: this gadget has nothing on screen to talk about. */
+	struct box *box = form_gadget_screen_box(gadget);
 
 	switch (msg->type) {
 	case TEXTAREA_MSG_DRAG_REPORT:
@@ -155,9 +161,8 @@ static void box_textarea_callback(void *data, struct textarea_msg *msg)
 			union html_drag_owner drag_owner;
 
 			if (box == NULL) {
-				/* mid-re-conversion, before construction
-				 * re-bound this gadget to its new box: no
-				 * box to own the drag */
+				/* nothing of this gadget is on screen, so
+				 * there is no box to own the drag */
 				break;
 			}
 			drag_owner.textarea = box;
@@ -202,9 +207,10 @@ static void box_textarea_callback(void *data, struct textarea_msg *msg)
 		}
 
 		if (box == NULL) {
-			/* Mid-re-conversion, before construction re-bound
-			 * this gadget to its new box: no coordinates to
-			 * offset by, and the swap repaints everything. */
+			/* Nothing of this gadget is on screen: no coordinates
+			 * to offset by, and nothing to repaint.  A gadget the
+			 * mutation added is painted by the swap anyway, which
+			 * repaints everything. */
 			break;
 		}
 
@@ -242,12 +248,11 @@ static void box_textarea_callback(void *data, struct textarea_msg *msg)
 			break;
 
 		if (box == NULL) {
-			/* A caret claim DURING a live re-conversion, before
-			 * this gadget's new box exists (a click landing
-			 * mid-window, todos/0402): there is no box to focus
-			 * yet, so remember the claimant — widget recreation
-			 * consumes the claim and hands the focus over once
-			 * the new box is bound. */
+			/* A caret claim DURING a live re-conversion by a
+			 * gadget with nothing on screen (todos/0402): there is
+			 * no box to focus yet, so remember the claimant —
+			 * widget recreation consumes the claim and hands the
+			 * focus over once the new box is bound. */
 			if (html->reconverting &&
 			    msg->data.caret.type != TEXTAREA_CARET_HIDE) {
 				html->reconvert_focus_claim = gadget;
@@ -471,12 +476,12 @@ bool box_textarea_create_textarea(html_content *html,
 	}
 
 	if (caret >= 0) {
-		/* Restore the carried caret.  gadget->box is already the
-		 * NEW box (bound before this call), so the CARET_UPDATE
-		 * this raises re-takes the focus for this gadget — a
-		 * mid-window claim materialises here.  The position it
-		 * reports is pre-layout; html_reconvert_box_done re-fires
-		 * it after the reformat. */
+		/* Restore the carried caret.  The CARET_UPDATE this raises
+		 * re-takes the focus for this gadget — a mid-window claim
+		 * materialises here — and reports the caret against the box
+		 * that is ON SCREEN, so the caret does not move while the
+		 * window is open.  html_reconvert_box_done re-fires it against
+		 * the new box after the reformat. */
 		if (html->reconvert_focus_claim == gadget) {
 			html->reconvert_focus_claim = NULL;
 		}

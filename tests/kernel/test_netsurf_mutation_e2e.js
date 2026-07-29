@@ -629,6 +629,29 @@ const shots = parsePPMs(back.stdout, NAMES);
    * inside the field band (todos/0407: a mid-window render that moved
    * shows up here even when the ink count matches) */
   const band = (a, b) => fieldBandDiff(shots[a], shots[b]);
+  /* WHERE the band differs, and what the two shots put there: an ink
+   * count that nearly matches can still hide a render that moved. */
+  const bandWhere = (an, bn) => {
+    const a = shots[an], b = shots[bn];
+    const xs = [], ys = [], sample = [];
+    for (let y = 2; y < 28; y++) {
+      for (let x = 0; x < Math.min(a.w, b.w, 260); x++) {
+        const i = (y * a.w + x) * 3, j = (y * b.w + x) * 3;
+        if (a.data[i] !== b.data[j] || a.data[i + 1] !== b.data[j + 1] ||
+            a.data[i + 2] !== b.data[j + 2]) {
+          xs.push(x); ys.push(y);
+          if (sample.length < 4) {
+            sample.push(`(${x},${y}) ${a.data[i]},${a.data[i + 1]},${a.data[i + 2]}` +
+                        ` vs ${b.data[j]},${b.data[j + 1]},${b.data[j + 2]}`);
+          }
+        }
+      }
+    }
+    if (xs.length === 0) return 'identical';
+    return `x ${Math.min(...xs)}..${Math.max(...xs)} y ${Math.min(...ys)}..${Math.max(...ys)}` +
+           ` [${sample.join('; ')}]`;
+  };
+  console.log(`D5-T   band-where ${bandWhere('bt1', 'bt2')}`);
   console.log(`D2-T   immediate=${fieldInk(shots.bt1)} settled=${fieldInk(shots.bt2)} band=${band('bt1', 'bt2')} value[${vprobe('bt2')}]`);
   console.log(`D2-T2  immediate=${fieldInk(shots.bu1)} settled=${fieldInk(shots.bu2)} band=${band('bu1', 'bu2')} value[${vprobe('bu2')}] (click landed mid-ticking, todos/0402 shape)`);
   console.log(`D2-C1  immediate=${fieldInk(shots.bc11)} settled=${fieldInk(shots.bc12)} band=${band('bc11', 'bc12')} value[${vprobe('bc12')}] (size control, no timer)`);
