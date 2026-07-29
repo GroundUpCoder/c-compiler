@@ -1,6 +1,6 @@
 # 0434 — an open select menu does not survive a live re-conversion
 
-- **Status**: open
+- **Status**: done
 - **Design**: —
 
 ## Goal
@@ -151,8 +151,17 @@ Acceptance evidence, bullet by bullet:
   because the old behaviour also dismissed. Every leg's `#mark` strip
   proves its re-conversion really ran.
 
-Gate (filled at close-out, after the rebase): see the closing commit
-message for the suite numbers.
+Gate (branch tip `1bce5924`, base `c66d261e`): kernel 134/134, sweep
+42/42, projects 29/29, netsurf-patch 2/2, todos 5/5. The kernel suite ran
+in FULL twice: run 1 (134/134, 1344 s) was followed by the flake gate for
+the new test (3/3 stable at 0 % under load ×10), which wrote into the same
+summary; run 2 (134/134, 1040 s) rebuilt a single-run artifact with
+`filter: null`, `executed == total == 134`, `carried 0`. The sweep
+artifact reads `executed == total == 42`, `carried 0`, one run. The two
+rebases each pulled todos-only commits; the estate's diff plan for the
+second rebase delta names only the todos suite, which passed 5/5 on the
+rebased tree. patchcheck: 68 file checks, 0 failures on the committed
+tree (73 with the 5 uncommitted worktree deltas during development).
 
 ## Notes
 
