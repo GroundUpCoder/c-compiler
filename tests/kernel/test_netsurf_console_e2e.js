@@ -14,6 +14,12 @@
 // test waits on comes AFTER them, so `wmctl wait win ConsoleDone` cannot
 // be satisfied until every call has run and flushed.
 //
+// The console entries are read off the boot's STDERR, not its stdout.
+// The headless twin splits the tty by descriptor — os/boot.js `onOutput`
+// sends fd 2 to the host's stderr and everything else to its stdout — so
+// stderr IS the tty here, and a console entry landing on stdout would be
+// a bug.  The section markers are therefore echoed to both streams.
+//
 // What is asserted:
 //   - each of the five console levels reaches the tty under its own name;
 //   - a multi-line entry puts the prefix on BOTH lines, so one grep finds
@@ -84,34 +90,40 @@ driveBoot('true', { image });
 
 const sidOf = (v, title) => `${v}=$(wmctl list | grep "\t${title}$" | sed "s/[^0-9].*//")`;
 
-const out = driveBoot([
+/* the same marker on both streams, so each can be cut into sections */
+const mark = (name) => `echo ==${name}; echo ==${name} >&2`;
+
+const run = driveBoot([
   /* --- the off-switch first, so its window is gone before the tty leg
    *     opens one: `2>FILE` must leave the tty completely clean --- */
-  'echo ==redir',
+  mark('redir'),
   'netsurf /root/console.html 2>/root/js.log &',
   'wmctl wait win ConsoleDone 30000',
   sidOf('R', 'ConsoleDone'),
   'wmctl close $R && wmctl wait nowin ConsoleDone 8000 && echo redir-closed',
-  'echo ==redirfile',
+  mark('redirfile'),
   'cat /root/js.log',
 
   /* --- the tty route: no redirection, the lines land on the shell's tty --- */
-  'echo ==tty',
+  mark('tty'),
   'netsurf /root/console.html &',
   'wmctl wait win ConsoleDone 30000',
   sidOf('T', 'ConsoleDone'),
   'wmctl close $T && wmctl wait nowin ConsoleDone 8000 && echo tty-closed',
-  'echo ==end',
-], { image, timeout: 420000, maxBuffer: 64 * 1024 * 1024 }).stdout;
+  mark('end'),
+], { image, timeout: 420000, maxBuffer: 64 * 1024 * 1024 });
+const out = run.stdout;
+const err = String(run.stderr);
 
 fs.rmSync(tmp, { recursive: true, force: true });
 
-const redir = section(out, 'redir');
 const redirFile = section(out, 'redirfile');
-const tty = section(out, 'tty');
+const tty = section(err, 'tty');
 
-check('the redirected run finished', redir.includes('redir-closed'), JSON.stringify(redir));
-check('the tty run finished', tty.includes('tty-closed'), JSON.stringify(tty));
+check('the redirected run finished', section(out, 'redir').includes('redir-closed'),
+      JSON.stringify(section(out, 'redir')));
+check('the tty run finished', section(out, 'tty').includes('tty-closed'),
+      JSON.stringify(section(out, 'tty')));
 
 /* --- the tty route, one level at a time --- */
 const LEVELS = [
@@ -148,9 +160,15 @@ check('a trailing newline adds no empty line, and an empty entry keeps its line'
 check('the entry ending in a newline is one line',
       tty.split('js: console: log: CMARK-trailing').length - 1 === 1);
 
+/* --- no console entry may leak onto stdout: it is a diagnostic stream,
+ *     and a page must not be able to corrupt a piped `netsurf` --- */
+check('no console entry reaches stdout',
+      !section(out, 'tty').includes('js: console: '),
+      JSON.stringify(section(out, 'tty')));
+
 /* --- 2>FILE is the off-switch --- */
 check('with stderr redirected the tty carries NO console line',
-      !redir.includes('js: '), JSON.stringify(redir));
+      !section(err, 'redir').includes('js: '), JSON.stringify(section(err, 'redir')));
 for (const [level, marker] of LEVELS) {
   const line = `js: console: ${level}: ${marker}`;
   check(`the redirected file carries console.${level}`, redirFile.includes(line), line);
