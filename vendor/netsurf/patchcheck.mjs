@@ -190,7 +190,8 @@ export function reverseApply(section, content) {
       if (b.tag === ' ' || b.tag === '+') {
         if (cursor >= input.lines.length) return fail(`${where}: runs past the end of the file`);
         if (input.lines[cursor] !== b.text) {
-          return fail(`${where}: context mismatch at line ${cursor + 1}: the tree has ${JSON.stringify(clip(input.lines[cursor]))}, the record expects ${JSON.stringify(clip(b.text))}`);
+          const pair = clipPair(input.lines[cursor], b.text);
+          return fail(`${where}: context mismatch at line ${cursor + 1} column ${pair.col}: the tree has ${JSON.stringify(pair.a)}, the record expects ${JSON.stringify(pair.b)}`);
         }
         cursor++;
       }
@@ -225,7 +226,24 @@ function joinLines(lines, eol) {
   if (!lines.length) return '';
   return lines.join('\n') + (eol ? '\n' : '');
 }
-function clip(s) { return s.length > 60 ? s.slice(0, 57) + '…' : s; }
+// Clip a PAIR of differing lines around the first column where they differ
+// (todos/0436). A head-anchored clip of each side showed two identical
+// prefixes whenever the difference sat past the cut — exactly the deep-in-a-
+// long-C-line case the check exists for. The 60-char window opens ~20 chars
+// before the difference, pulled left so it never extends past both ends;
+// '…' marks a cut at either end. `col` is the 1-based first differing
+// column; when one line is a prefix of the other it is one past the shorter
+// line's end. Equal inputs (the caller never passes them) anchor the window
+// at their common end and report col = length + 1.
+export function clipPair(a, b) {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  const WIN = 60;
+  const start = Math.max(0, Math.min(i - 20, Math.max(a.length, b.length) - WIN));
+  const cut = s => (start > 0 ? '…' : '') + s.slice(start, start + WIN)
+                 + (s.length > start + WIN ? '…' : '');
+  return { a: cut(a), b: cut(b), col: i + 1 };
+}
 
 export function sha256(s) {
   return s === null ? 'absent' : crypto.createHash('sha256').update(s, 'utf8').digest('hex');

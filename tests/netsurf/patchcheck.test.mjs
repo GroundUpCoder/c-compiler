@@ -22,7 +22,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { parseDiff, reverseApply } from '../../vendor/netsurf/patchcheck.mjs';
+import { parseDiff, reverseApply, clipPair } from '../../vendor/netsurf/patchcheck.mjs';
 
 const TESTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(TESTS_DIR, '..', '..');
@@ -129,6 +129,67 @@ const LINES = (n, tag) => Array.from({ length: n }, (_, i) => `${tag} line ${i +
   check('unit: patched-side missing EOL round-trips', r2.ok && r2.pristine === pris2, r2.err);
   const r2wrong = reverseApply(sec2, patched2 + '\n');
   check('unit: EOL drift at a covered EOF is a frame failure', !r2wrong.ok, r2wrong && r2wrong.err);
+}
+
+// ---------- unit: clipPair (todos/0436) ----------
+
+{
+  // Near-start difference in short lines: shown whole, no ellipsis, col named.
+  const p1 = clipPair('int a = 1;', 'int a = 2;');
+  check('unit: clipPair shows short near-start pairs whole',
+        p1.a === 'int a = 1;' && p1.b === 'int a = 2;' && p1.col === 9, JSON.stringify(p1));
+
+  // Difference at column 0.
+  const p2 = clipPair('Xbc', 'abc');
+  check('unit: clipPair handles a column-0 difference',
+        p2.col === 1 && p2.a === 'Xbc' && p2.b === 'abc', JSON.stringify(p2));
+
+  const base = 'x'.repeat(150);
+
+  // Deep difference mid-line: window opens before it, both cuts marked, and
+  // the two clipped strings DIFFER (the whole point of the ticket).
+  const p3 = clipPair(base.slice(0, 70) + 'A' + base.slice(71), base);
+  check('unit: clipPair keeps a mid-line difference visible',
+        p3.col === 71 && p3.a !== p3.b && p3.a.startsWith('…') && p3.a.endsWith('…') && p3.a.includes('A'),
+        JSON.stringify(p3));
+
+  // Difference at the very end: the window is pulled left to stay full and
+  // reaches the end (no trailing ellipsis).
+  const p4 = clipPair(base.slice(0, 149) + 'Z', base);
+  check('unit: clipPair reaches an end-of-line difference',
+        p4.col === 150 && p4.a !== p4.b && p4.a.startsWith('…') && p4.a.endsWith('Z'), JSON.stringify(p4));
+
+  // One line a prefix of the other: col is one past the shorter line's end.
+  const p5 = clipPair('abc', 'abcdef');
+  check('unit: clipPair anchors a prefix pair past the shorter end',
+        p5.col === 4 && p5.a === 'abc' && p5.b === 'abcdef', JSON.stringify(p5));
+
+  // Length drift at the end of a LONG line stays visible too.
+  const p6 = clipPair(base, base + 'tail');
+  check('unit: clipPair shows length drift at the end of a long line',
+        p6.col === 151 && p6.a !== p6.b && p6.b.endsWith('tail'), JSON.stringify(p6));
+
+  // Equal inputs (the caller never passes them): whole-window clip of the
+  // common end, col = length + 1.
+  const p7 = clipPair('same', 'same');
+  check('unit: clipPair reports col past the end for equal inputs',
+        p7.col === 5 && p7.a === p7.b, JSON.stringify(p7));
+}
+
+{
+  // ⭐ todos/0436 acceptance as a regression guard: a tamper DEEP in a long
+  // line must render two DIFFERENT quoted strings and name the column. The
+  // old head-anchored clip printed two identical 57-char prefixes here.
+  const long = 'bool content_key_release(struct hlcache_handle *h, uint32_t key)';
+  const pristine = ['top', long, 'middle', 'bottom'].join('\n') + '\n';
+  const patched = pristine.replace('middle', 'middle EDITED');
+  const sec = parseDiff(makeDiff({ 'f.c': pristine }, { 'f.c': patched }), 't0436').get('f.c');
+  const tampered = patched.replace('uint32_t key', 'uint32_tX key');
+  const r = reverseApply(sec, tampered);
+  const m = r.ok ? null :
+    /context mismatch at line 2 column 60: the tree has "(.*)", the record expects "(.*)"$/.exec(r.err);
+  check('unit: deep-line mismatch names the column and shows the drift',
+        !!m && m[1] !== m[2] && m[1].includes('uint32_tX') && m[2].includes('uint32_t k'), r.err);
 }
 
 // ---------- end-to-end: scratch repo through the CLI ----------

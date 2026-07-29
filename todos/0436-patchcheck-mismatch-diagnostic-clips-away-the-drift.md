@@ -69,6 +69,37 @@ function clipPair(a, b) {
 5. The tests in `tests/netsurf/patchcheck.test.mjs` that assert on message text still pass, or
    the test updates travel in the same commit.
 
+## Result (2026-07-30)
+
+The fix replaces the two `clip()` calls with one exported `clipPair(a, b)` and
+deletes `clip()`. The message now names the 1-based column of the first
+difference. Dev log: `logs/2026-07-30/patchcheck-clip.md`.
+
+I reproduced the bad output on the unmodified checker first. One character went
+in at column 60 of `content/content.c:450`. The message printed two identical
+strings:
+
+```
+context mismatch at line 450: the tree has "bool content_key_release(struct hlcache_handle *h, uint32…", the record expects "bool content_key_release(struct hlcache_handle *h, uint32…"
+```
+
+After the fix, the same target line took five injections. Each injection printed
+its edit and asserted the file changed before the run. Each message shows the
+drift, and each restore returned the tree to `68 file check(s), 0 failure(s)`:
+
+```
+column 1 (replace):    context mismatch at line 450 column 1: the tree has "Xool content_key_release(struct hlcache_handle *h, uint32_t …", the record expects "bool content_key_release(struct hlcache_handle *h, uint32_t …"
+column 31 (insert):    context mismatch at line 450 column 31: the tree has "…content_key_release(strucXt hlcache_handle *h, uint32_t key)", the record expects "…content_key_release(struct hlcache_handle *h, uint32_t key)"
+column 60 (insert):    context mismatch at line 450 column 60: the tree has "…content_key_release(struct hlcache_handle *h, uint32_tX key)", the record expects "…content_key_release(struct hlcache_handle *h, uint32_t key)"
+column 64 (last char): context mismatch at line 450 column 64: the tree has "… content_key_release(struct hlcache_handle *h, uint32_t key!", the record expects "… content_key_release(struct hlcache_handle *h, uint32_t key)"
+length change (+2):    context mismatch at line 450 column 65: the tree has "…ontent_key_release(struct hlcache_handle *h, uint32_t key)XX", the record expects "…ontent_key_release(struct hlcache_handle *h, uint32_t key)"
+```
+
+Acceptance: all five items hold. The exit code stays 1. The strings differ and
+the drift is visible. The column is named. The column-1 case keeps the head of
+the line with no leading ellipsis. The test updates travel in the same commit
+(8 new checks, 37 → 45; `tests/netsurf/run.js` stays 2/2).
+
 ## Provenance
 
 todos/0423's coordinator gate found this. The gate ran an injection battery against branch
