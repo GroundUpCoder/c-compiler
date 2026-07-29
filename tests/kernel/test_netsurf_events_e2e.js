@@ -221,8 +221,10 @@ const pollStable = (sid, out) => [
 const sidOf = (v, title) => `${v}=$(wmctl list | grep "\t${title}$" | sed "s/[^0-9].*//")`;
 
 /* The stroke: a diagonal well inside the pad, and far enough from the pad's
- * own edges that the brush cannot spill outside it. */
-const STROKE = { x0: 40, y0: 30, x1: PAINT_W - 60, y1: PAINT_H - 40 };
+ * own edges that the brush cannot spill outside it.  The mousedown stamps
+ * the demo's splat (core r21 + satellite droplets, reach <= 46px), so the
+ * start sits >= 60px from the corner region the scroll check reads. */
+const STROKE = { x0: 110, y0: 100, x1: PAINT_W - 60, y1: PAINT_H - 40 };
 
 /* The pad opens with the demo's generated scene, so the ink accounting
  * below needs the Clear button first.  Its coordinate comes from the
@@ -311,7 +313,9 @@ const shots = parsePPMs(back.stdout, NAMES);
    * non-text box into a page-scroll drag), the heading below the pad would
    * ride up into this region and read as "ink".  The pad's own top-left,
    * BEFORE the stroke starts, is where that would land. */
-  const preStroke = inkIn(shots.p2, 0, 0, STROKE.x0 - 12, STROKE.y0 - 12);
+  /* -60 keeps this region clear of the splat's <=46px reach around the
+   * stroke start; a scroll artifact still lands here (top-left of pad). */
+  const preStroke = inkIn(shots.p2, 0, 0, STROKE.x0 - 60, STROKE.y0 - 60);
   check('the page did NOT scroll under the drag (the pad is still the pad)',
     preStroke === 0, `ink before the stroke start: ${preStroke}`);
   check('and the stroke is a stroke, not a flood',
