@@ -1,7 +1,80 @@
 # 0410 — netsurf: an `img` never renders again after a Lane B re-conversion
 
-- **Status**: open
+- **Status**: done (2026-07-29, branch `0410-netsurf-img`) — **verdict: FIXABLE**,
+  port-local, one branch in `content/handlers/html/object.c`
 - **Design**: —
+
+## Verdict — fixable, and the discriminator that proves it
+
+The Stage 1 instrument answered the ticket's question first, before any change.
+Temporary `NS0410` stderr lines were put on `html_fetch_object`, `html_object_callback`,
+`html_object_done`, `hlcache_find_content` and `html__reconvert`. The instrument was
+removed again before the fix commit.
+
+The result of one click-triggered re-conversion, in order:
+
+| # | Instrument line | Answer |
+|---|---|---|
+| 1 | `reconvert_start num_objects=2 active=0` | the teardown runs |
+| 2 | `fetch_object url=…spectrum.png box=0x2177e0 err=0` | **the refetch IS issued** |
+| 3 | `find_content handle=… entry=reused status=2` | the hlcache reuses the `DONE` content |
+| 4 | `obj_cb ev=2` / `ev=3` / `ev=4` | **the callback DOES fire — LOADING, READY, DONE** |
+| 5 | `obj_done box=0x2177e0 handle=…` | **the box IS re-bound to the content** |
+
+So every link the ticket suspected is intact. The refetch completes and the object
+reaches its new box. The failing link is the NEXT one: **nothing lays the document
+out again**, so the box never gets ink.
+
+`html_object_callback`'s completion tail has two branches, and a post-load completion
+falls between them:
+
+- The all-objects-arrived branch reformats and calls `content_set_done`, but it is
+  gated on `base.status == CONTENT_STATUS_READY`. A re-conversion's refetch lands on
+  a document that is already `DONE`, so this branch is skipped.
+- The `incremental_reflow` branch is throttled by `base.reformat_time`. The swap's own
+  `content__reformat` had just set that clock at least 250 ms ahead
+  (`min_reflow_period` is 25, times 10). The check is a single test with no retry, so
+  the one chance is silently dropped.
+
+A box that already knows its size is unharmed: `html_object_done` binds the content and
+the `REPLACE_DIM` path broadcasts its own redraw. A box that needs the object's
+**intrinsic** size is not. It keeps zero height for ever. That is why an `img` with
+both `width` and `height` survived and the deck's width-only `img` did not — the
+attribute pair is what sets `REPLACE_DIM` (`box_image` in `box_special.c`).
+
+**Why this is port-local, not a NetSurf invariant**: upstream never reaches this state.
+Without the Lane B mutation bridge no fetch is ever issued against a `DONE` document,
+so upstream needs no `DONE`-status completion branch. The window is ours.
+
+**This mechanism is NOT `todos/0386`'s.** `0386` was the input routing table staying
+live across the swap. This is a layout pass that never runs. The two share a window and
+nothing else.
+
+## Fix
+
+`content/handlers/html/object.c` gets the `DONE`-status twin of the READY completion
+branch: when the last outstanding object completes against a document that already
+finished loading, reformat and request a full redraw. Completions that land **during**
+a re-conversion window are skipped on purpose, because the swap's own reformat runs
+after them and lays out the already-bound object.
+
+The branch is written at the general content-object altitude. It serves any object
+fetched post-load, which includes a script-inserted element, not only an `img`.
+
+## Acceptance record
+
+- **Kernel e2e leg**: `tests/kernel/test_netsurf_img_reconvert_e2e.js`. A deck-shaped
+  page, a width-only `img` on a never-moving base layer, and three cover toggles.
+  Ink after the 1st and the 3rd re-conversion: `a=0 b=40000 c=0 d=40000` against a
+  full-image budget of 40000. The assertion is ink, not the absence of an error.
+- **The story-repo one-file deck** renders its image slide after navigation. Ink on
+  slide 3 reached forward = **26058**; reached backward from slide 4 = **26058**; the
+  verified-working static form `s3.html` = **26058**; the negative control with the
+  `<img>` removed = **4233**. The image contributes 21825 ink pixels and the navigated
+  one-file deck matches the static page exactly. The deck stayed private — its files
+  rode a throwaway test image only, and nothing deck-related is in the diff.
+- **`todos/0411` is untouched and unclaimed.** The image cache ceiling was not raised.
+  The deck asset fits the current ceiling, which is what keeps the two independent.
 
 ## Goal
 
