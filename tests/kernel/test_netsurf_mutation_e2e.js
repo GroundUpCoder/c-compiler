@@ -575,6 +575,9 @@ const out = driveBoot([
   'netsurf /root/gad-c.html &',
   'wmctl wait win NsGadC 30000',
   sidOf('GC', 'NsGadC'),
+  /* 6000 elements: the window appears well before the first layout lands,
+   * and two identical BLANK frames would satisfy pollStable */
+  'sleep 3',
   ...pollStable('$GC', '/root/gc0.ppm'),
   'echo shot-gc0-ok',
   `wmctl click $GC 9 ${GADG_SEL_Y1 + 2 * GADG_ROW_H + 12}`,   /* radio r2 */
@@ -591,7 +594,7 @@ const out = driveBoot([
   'netsurf /root/gad-t.html &',
   'wmctl wait win NsGadT 30000',
   sidOf('GR', 'NsGadT'),
-  'sleep 4',                      /* past the tick's 3 s delay: ticking */
+  'sleep 6',                      /* past the load AND the tick's 3 s delay */
   `wmctl click $GR 9 ${GADG_SEL_Y1 + 2 * GADG_ROW_H + 12}`,   /* radio r2 */
   /* No marker exists for "netsurf presented the frame that this click
    * damaged": the settle is one frame at 60 Hz, and the window this leg
@@ -599,7 +602,9 @@ const out = driveBoot([
    * a wide margin.  D6 below prints both so the margin is auditable. */
   'sleep 0.3',
   'wmctl shot $GR /root/gr1.ppm && echo shot-gr1-ok',
-  'sleep 8',                      /* past the finite tick's end */
+  /* 25 ticks at 300 ms, each collapsing into a ~600 ms pass, plus the
+   * trailing pass: past the finite tick's end with margin */
+  'sleep 12',
   ...pollStable('$GR', '/root/gr2.ppm'),
   'echo shot-gr2-ok',
   'wmctl close $GR && wmctl wait nowin NsGadT 8000 && echo gadt-closed',
