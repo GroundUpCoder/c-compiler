@@ -36,9 +36,16 @@
 //          ever crossing the slop.  Exactly one mouseup, after the move.
 //          Unfixed: TWO mouseups (the spurious one, then the CLICK_1 one).
 //
-// A final sentinel move at (500,350) retitles the window; waiting on that
-// title is the flush barrier — every earlier event has been processed and
-// its console line written before the sentinel is.
+// A final sentinel move at (500,350) flips the sentinel div class, and the class
+// restyle repaints (the todos/0316-proven path — NB document.title is NOT
+// usable here: dukky's title setter is a stub, so a dynamic retitle never
+// reaches the window).  Polling the pixels for that flip is the flush
+// barrier: the page is deliberately TEXTLESS and style-free below the
+// sentinel rule, so no earlier gesture paints anything, and the first
+// frame that differs from the settled shot IS the sentinel.  Every earlier
+// event was processed — and its console line written — before it.  The
+// barrier is also asserted from the parsed log (the sentinel move must be
+// present), so an early poll break cannot pass silently.
 //
 // Run: node tests/kernel/test_netsurf_dragslop_e2e.js
 'use strict';
@@ -54,10 +61,16 @@ function check(name, cond, extra) {
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
 }
 
-/* Every event in one prefixed line; the sentinel move is the flush marker.
+/* Every event in one prefixed line; the sentinel move flips the body
+ * class, whose restyle repaint is the only pixel change the page can
+ * produce (no text — so no selection highlight — and no other styles).
  * The <title> sits BELOW the script so the window-title wait cannot be
  * satisfied before the listeners are attached. */
 const SLOP_PAGE = `<!DOCTYPE html><html><head>
+<style>
+#mark { width: 50px; height: 50px; background: #ffffff; }
+#mark.done { background: rgb(0, 200, 50); }
+</style>
 <script>
 var n = 0;
 function log(t, e) {
@@ -65,17 +78,21 @@ function log(t, e) {
 	console.log('PEV ' + n + ' ' + t + ' x' + e.clientX + ' y' + e.clientY +
 		' b' + e.buttons);
 }
-document.addEventListener('mousedown', function (e) { log('down', e); });
+/* preventDefault() exactly as a real drawing pad does (paint.js): without
+ * it the DRAG_SLOP promotion starts a core page-scroll drag, and those
+ * drag tracks are consumed at the browser-window level — they never reach
+ * the DOM, so the post-promotion mousemove could not be asserted. */
+document.addEventListener('mousedown', function (e) { log('down', e); e.preventDefault(); });
 document.addEventListener('mouseup', function (e) { log('up', e); });
 document.addEventListener('mousemove', function (e) {
 	log('move', e);
 	if (e.clientX === 500 && e.clientY === 350) {
-		document.title = 'NsSlopDone';
+		document.getElementById('mark').className = 'done';
 	}
 });
 </script>
 <title>NsSlop</title>
-</head><body style="margin: 0; background: #ffffff"><p>slop probe</p></body></html>
+</head><body style="margin: 0; background: #ffffff"><div id="mark"></div></body></html>
 `;
 
 /* ---- seed boot, then plant the page --------------------------------- */
@@ -128,10 +145,14 @@ const run = driveBoot([
   'wmctl hover $S 303 300',
   'wmctl up $S 303 300',
 
-  /* the flush barrier: the sentinel move retitles the window, and it can
-   * only be processed after every event injected above it */
+  /* the flush barrier: the sentinel move flips the sentinel div class, whose
+   * restyle is the first frame that can differ from the settled shot —
+   * and it can only be processed after every event injected above it */
   'wmctl hover $S 500 350',
-  'wmctl wait win NsSlopDone 30000 && echo events-flushed',
+  `for i in $(seq 1 100); do wmctl shot $S /root/poll.ppm; ` +
+  `cmp -s /root/poll.ppm /root/s0.ppm || break; sleep 0.1; done`,
+  /* the loop exits on the flip OR on its budget: say which, loudly */
+  'cmp -s /root/poll.ppm /root/s0.ppm || echo sentinel-painted',
   'wmctl close $S && wmctl wait gone $S 8000 && echo win-closed',
 ], { image, timeout: 300000, maxBuffer: 64 * 1024 * 1024 });
 
@@ -140,7 +161,8 @@ const err = String(run.stderr);
 fs.rmSync(tmp, { recursive: true, force: true });
 
 check('the page settled before injection', out.includes('page-settled'));
-check('the sentinel move flushed the event stream', out.includes('events-flushed'));
+check('the sentinel restyle PAINTED (the flush barrier really fired)',
+      out.includes('sentinel-painted'));
 check('the window closed', out.includes('win-closed'));
 
 /* ---- parse the event log off stderr --------------------------------- */
@@ -151,6 +173,8 @@ while ((m = evRe.exec(err)) !== null) {
   evs.push({ n: +m[1], t: m[2], x: +m[3], y: +m[4], b: +m[5] });
 }
 check('the page logged events at all', evs.length > 0, `stderr bytes: ${err.length}`);
+check('the sentinel move itself is in the log (nothing was lost at teardown)',
+      evs.some((e) => e.t === 'move' && e.x === 500 && e.y === 350));
 check('the event counter is strictly increasing (no reorder, no loss inside a line)',
       evs.every((e, i) => i === 0 || e.n > evs[i - 1].n));
 
