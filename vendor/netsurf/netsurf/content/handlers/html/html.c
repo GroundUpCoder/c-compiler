@@ -609,6 +609,62 @@ static void html__reconvert_release_screen_boxes(html_content *c, bool restore)
 
 
 /**
+ * Settle the open select menu at a live re-conversion window's end.
+ *
+ * Runs on EVERY exit path of the window — the swap, and each failure
+ * path that restores the old tree — and consumes the anchor snapshot
+ * that html__reconvert took (design + dismiss rule: todos/0434).
+ *
+ * The menu is dismissed when the gadget has no box on screen, when the
+ * option list is empty, or when a current option existed and the
+ * rebuilt list no longer carries its DOM node.  Otherwise it
+ * re-attaches: geometry re-measured, scrollbar extents updated, scroll
+ * offset kept in pixels and clamped.  The dismissal never touches the
+ * selection, so it fires no change event.
+ */
+static void html__reconvert_settle_select_menu(html_content *c)
+{
+	struct form_control *ctl = c->visible_select_menu;
+	dom_node *anchor = c->reconvert_menu_current;
+	bool had_anchor = c->reconvert_menu_had_current;
+	bool keep;
+
+	c->reconvert_menu_current = NULL;
+	c->reconvert_menu_had_current = false;
+
+	if (ctl == NULL) {
+		/* the menu was closed (or never open) during the window */
+		if (anchor != NULL) {
+			dom_node_unref(anchor);
+		}
+		return;
+	}
+
+	keep = (form_gadget_screen_box(ctl) != NULL) &&
+	       (ctl->data.select.num_items > 0) &&
+	       (!had_anchor ||
+		(anchor != NULL &&
+		 form_select_options_contain(ctl, anchor)));
+
+	if (keep) {
+		keep = (form_select_menu_reattach(ctl) == NSERROR_OK);
+	}
+
+	if (!keep) {
+		/* The menu object is freed, not merely hidden: its
+		 * geometry and scrollbar describe a list that no longer
+		 * supports it, and the next open builds fresh. */
+		form_free_select_menu(ctl);
+		c->visible_select_menu = NULL;
+	}
+
+	if (anchor != NULL) {
+		dom_node_unref(anchor);
+	}
+}
+
+
+/**
  * Completion callback for a live re-conversion's dom_to_box run.
  *
  * On success convert_xml_to_box has already swapped htmlc->layout to
@@ -651,6 +707,12 @@ static void html_reconvert_box_done(html_content *c, bool success)
 		}
 		c->reconvert_focus_claim = NULL;
 		c->reconverting = false;
+		/* The old tree is the displayed tree again, so the open
+		 * menu usually re-attaches unchanged — but if construction
+		 * reached box_select before failing, the option list is
+		 * already the rebuilt one, and the rule must judge THAT
+		 * list (todos/0434). */
+		html__reconvert_settle_select_menu(c);
 		return;
 	}
 
@@ -687,19 +749,6 @@ static void html_reconvert_box_done(html_content *c, bool success)
 	 * the caret re-fire reports against the box it names (todos/0407). */
 	c->reconverting = false;
 
-	/* A select menu opened DURING the window anchors on the old tree's
-	 * box.  That box is gone now: if construction re-found the <select>
-	 * the menu simply re-anchors on the new one, but if the mutation
-	 * removed the element the gadget has no box at all, and an open menu
-	 * with nowhere to draw is a state nothing can render or hit-test.
-	 * Close it here rather than leave it to swallow the next click
-	 * (todos/0412). */
-	if ((c->visible_select_menu != NULL) &&
-	    (form_gadget_screen_box(c->visible_select_menu) == NULL)) {
-		form_free_select_menu(c->visible_select_menu);
-		c->visible_select_menu = NULL;
-	}
-
 	/* rebuild imagemaps from the current DOM */
 	imagemap_extract(c);
 
@@ -709,6 +758,15 @@ static void html_reconvert_box_done(html_content *c, bool success)
 			  c->base.available_height);
 	content__request_redraw(&c->base, 0, 0,
 				c->base.width, c->base.height);
+
+	/* Settle the open select menu against the new tree.  AFTER the
+	 * reformat: a kept menu re-measures its geometry from the box on
+	 * screen, and that box has coordinates only once layout has run
+	 * (todos/0434; the rule subsumes todos/0412's element-removed
+	 * dismissal — a gadget whose element left the document has no
+	 * screen box).  The full-page redraw above already covers the
+	 * area of a dismissed menu. */
+	html__reconvert_settle_select_menu(c);
 
 	/* Re-bind the focus to whatever now boxes the focused node.  This
 	 * runs AFTER the reformat because the CARET_UPDATE that the caret
@@ -773,15 +831,23 @@ static void html__reconvert(void *p)
 	}
 	c->reconvert_pending = false;
 
-	/* Dismiss any open core select menu.  Its gadget's box now survives
-	 * the window (it is the box on screen, todos/0407), so the reason is
-	 * no longer the box: box_select empties and refills the option list
-	 * on every pass, and form_select_clear_options destroys the menu
-	 * OBJECT with it.  An open menu therefore cannot outlive a
-	 * re-conversion (todos/0412). */
+	/* An open core select menu SURVIVES the window (todos/0434): its
+	 * gadget's box is the box on screen (todos/0407), and since 0434
+	 * the menu object outlives box_select's option-list refill too.
+	 * Snapshot the menu's anchor — the current option's DOM node —
+	 * before the refill frees the option structs; the settle rule at
+	 * the window's end asks the rebuilt list for this node and
+	 * re-attaches or dismisses accordingly.  A menu that opens
+	 * mid-window has no snapshot, and re-attaches freely: it opened
+	 * over the list it will settle against. */
 	if (c->visible_select_menu != NULL) {
-		form_free_select_menu(c->visible_select_menu);
-		c->visible_select_menu = NULL;
+		struct form_option *cur =
+			c->visible_select_menu->data.select.current;
+
+		if (cur != NULL && cur->node != NULL) {
+			c->reconvert_menu_current = dom_node_ref(cur->node);
+		}
+		c->reconvert_menu_had_current = (cur != NULL);
 	}
 
 	/* Drop interaction state that can point into the box tree — EXCEPT
@@ -847,6 +913,9 @@ static void html__reconvert(void *p)
 		/* nothing was built, so the tree that is still displayed is
 		 * the one whose boxes were just taken off the gadgets */
 		html__reconvert_release_screen_boxes(c, true);
+		/* nothing changed, so the settle keeps the menu; this
+		 * consumes the snapshot the block above just took */
+		html__reconvert_settle_select_menu(c);
 		return;
 	}
 
@@ -869,6 +938,9 @@ static void html__reconvert(void *p)
 		c->bctx = c->reconvert_old_bctx;
 		c->reconvert_old_bctx = NULL;
 		c->reconverting = false;
+		/* consumes the snapshot; construction may have reached
+		 * box_select before failing, so the rule must run */
+		html__reconvert_settle_select_menu(c);
 	}
 }
 
@@ -1723,6 +1795,14 @@ static void html_destroy(struct content *c)
 	/* Cancel any coalesced live re-conversion pass */
 	guit->misc->schedule(-1, html__reconvert, html);
 	html->reconvert_focus_claim = NULL;
+
+	/* a window that dies with the content leaves its select-menu
+	 * anchor snapshot behind (todos/0434) */
+	if (html->reconvert_menu_current != NULL) {
+		dom_node_unref(html->reconvert_menu_current);
+		html->reconvert_menu_current = NULL;
+	}
+	html->reconvert_menu_had_current = false;
 
 	/* If we're still converting a layout, cancel it */
 	if (html->box_conversion_context != NULL) {

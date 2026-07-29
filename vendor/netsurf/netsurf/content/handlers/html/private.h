@@ -277,6 +277,23 @@ typedef struct html_content {
 	 * JS-originated option mutations keep the reconvert path. */
 	int form_selfmutation;
 
+	/** The open select menu's anchor across a live re-conversion
+	 * (todos/0434): the current option's DOM node, snapshot at the
+	 * window start.  box_select frees the option structs MID-window
+	 * (the refill), so the settle rule at the window's end cannot
+	 * ask the old list which option the menu anchored on.  A
+	 * reference is held — the mutation may remove the node from the
+	 * document — and a mid-window click that moves the selection
+	 * refreshes the snapshot (form__select_process_selection).
+	 * html__reconvert_settle_select_menu consumes and clears both
+	 * fields on every window exit path; html_destroy drops a ref a
+	 * dying window leaves behind. */
+	dom_node *reconvert_menu_current;
+	/** A current option existed at the snapshot.  Distinguishes "no
+	 * anchor to lose" (the menu re-attaches freely) from "anchor
+	 * gone" (the menu must dismiss). */
+	bool reconvert_menu_had_current;
+
 } html_content;
 
 /**

@@ -272,6 +272,36 @@ void form_free_select_menu(struct form_control *control);
 
 
 /**
+ * Re-attach an existing select menu to its control after a live
+ * re-conversion rebuilt the option list (todos/0434).
+ *
+ * Re-measures the geometry from the box on screen, updates the
+ * scrollbar extents to the new list, keeps the scroll offset in pixels
+ * clamped to the new range, and requests a redraw of the menu area.
+ *
+ * \param control  the select form control whose open menu to re-attach
+ * \return NSERROR_OK on success,
+ *         NSERROR_BAD_PARAMETER if the control has no menu,
+ *         NSERROR_NOT_FOUND if nothing of the gadget is on screen
+ */
+nserror form_select_menu_reattach(struct form_control *control);
+
+
+/**
+ * Test whether any option of a select control names the given DOM node.
+ *
+ * Option identity across a live re-conversion IS the DOM node
+ * (todos/0434): the settle rule uses this to ask whether the rebuilt
+ * list still carries the option the open menu anchored on.
+ *
+ * \param control  the select form control whose options to search
+ * \param node     the DOM node to look for
+ * \return true if an option's node is exactly this node
+ */
+bool form_select_options_contain(struct form_control *control, void *node);
+
+
+/**
  * Redraw an opened select menu.
  *
  * \param control  the select menu being redrawn

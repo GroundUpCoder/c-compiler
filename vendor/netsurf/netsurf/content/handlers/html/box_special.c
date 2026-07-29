@@ -1678,14 +1678,14 @@ box_select(dom_node *n,
 	 * it is about to be refilled from the DOM must be emptied first —
 	 * otherwise every live re-conversion appends a duplicate set.
 	 *
-	 * form_select_clear_options destroys the MENU object too, so the
-	 * content must stop naming it first: a visible_select_menu whose
-	 * data.select.menu is NULL is a popup that the next redraw
-	 * dereferences (todos/0412).  This is why an open menu cannot be
-	 * carried across a live re-conversion. */
-	if (content->visible_select_menu == gadget) {
-		content->visible_select_menu = NULL;
-	}
+	 * The MENU object survives the refill (todos/0434): it holds no
+	 * pointer into the list, so an OPEN menu rides the rebuild and
+	 * keeps its scroll, and html.c's settle rule decides at the
+	 * window's end whether the new list still supports it.  Until
+	 * then the open menu draws the refilled list — transient by
+	 * design, the same mid-window honesty as todos/0407.  (The error
+	 * paths below stay safe: form_free_control clears the content's
+	 * visible_select_menu before it frees the menu.) */
 	form_select_clear_options(gadget);
 
 	gadget->html = content;

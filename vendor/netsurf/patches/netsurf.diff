@@ -540,8 +540,8 @@ diff -urN a/content/handlers/html/box_construct.h b/content/handlers/html/box_co
   * attempting to read a real URL from "javascript:" links.
   *
 diff -urN a/content/handlers/html/box_special.c b/content/handlers/html/box_special.c
---- a/content/handlers/html/box_special.c	2026-07-29 17:56:31
-+++ b/content/handlers/html/box_special.c	2026-07-29 17:56:31
+--- a/content/handlers/html/box_special.c	2026-07-30 06:30:00
++++ b/content/handlers/html/box_special.c	2026-07-30 06:30:00
 @@ -801,7 +801,7 @@
  {
  	struct form_control *gadget;
@@ -573,14 +573,14 @@ diff -urN a/content/handlers/html/box_special.c b/content/handlers/html/box_spec
 +	 * it is about to be refilled from the DOM must be emptied first —
 +	 * otherwise every live re-conversion appends a duplicate set.
 +	 *
-+	 * form_select_clear_options destroys the MENU object too, so the
-+	 * content must stop naming it first: a visible_select_menu whose
-+	 * data.select.menu is NULL is a popup that the next redraw
-+	 * dereferences (todos/0412).  This is why an open menu cannot be
-+	 * carried across a live re-conversion. */
-+	if (content->visible_select_menu == gadget) {
-+		content->visible_select_menu = NULL;
-+	}
++	 * The MENU object survives the refill (todos/0434): it holds no
++	 * pointer into the list, so an OPEN menu rides the rebuild and
++	 * keeps its scroll, and html.c's settle rule decides at the
++	 * window's end whether the new list still supports it.  Until
++	 * then the open menu draws the refilled list — transient by
++	 * design, the same mid-window honesty as todos/0407.  (The error
++	 * paths below stay safe: form_free_control clears the content's
++	 * visible_select_menu before it frees the menu.) */
 +	form_select_clear_options(gadget);
  
  	gadget->html = content;
@@ -914,8 +914,8 @@ diff -urN a/content/handlers/html/dom_event.c b/content/handlers/html/dom_event.
  	}
  }
 diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
---- a/content/handlers/html/form.c	2026-07-30 01:11:30
-+++ b/content/handlers/html/form.c	2026-07-30 01:10:34
+--- a/content/handlers/html/form.c	2026-07-30 06:30:00
++++ b/content/handlers/html/form.c	2026-07-30 06:30:00
 @@ -51,6 +51,7 @@
  #include "desktop/knockout.h"
  #include "desktop/scrollbar.h"
@@ -993,7 +993,7 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
  }
  
  
-@@ -1314,21 +1376,22 @@
+@@ -1314,20 +1376,21 @@
  			       struct form_control *control,
  			       int item)
  {
@@ -1011,6 +1011,8 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
 -	 * \todo Even though the form code is effectively part of the html
 -	 *        content handler, poking around inside contents is not good
 -	 */
+-
+-	inline_box = control->box->children->children;
 +	/* The set_selected calls below fire synchronous DOM mutation
 +	 * events; everything they change is rendered right here (box
 +	 * text + redraw + menu repaint), so the mutation bridge must
@@ -1018,12 +1020,9 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
 +	 * under this very click (todos/0422). */
 +	html->form_selfmutation++;
  
--	inline_box = control->box->children->children;
--
  	for (count = 0, o = control->data.select.items;
  			o != NULL;
- 			count++, o = o->next) {
-@@ -1362,29 +1425,28 @@
+@@ -1362,30 +1425,47 @@
  		}
  	}
  
@@ -1040,6 +1039,29 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
 -	} else {
 -		inline_box->text = talloc_strdup(html->bctx,
 -				messages_get("Form_Many"));
++	/* A click that moves the selection DURING a live re-conversion
++	 * window must move the settle rule's anchor with it — a snapshot
++	 * that ignores the window throws the user's change away, the
++	 * todos/0407 lesson (design: todos/0434). */
++	if (html->reconverting && (html->visible_select_menu == control)) {
++		if (html->reconvert_menu_current != NULL) {
++			dom_node_unref(html->reconvert_menu_current);
++			html->reconvert_menu_current = NULL;
++		}
++		if (control->data.select.current != NULL &&
++		    control->data.select.current->node != NULL) {
++			html->reconvert_menu_current = dom_node_ref(
++					control->data.select.current->node);
++		}
++		html->reconvert_menu_had_current =
++				(control->data.select.current != NULL);
+ 	}
+ 
+-	if (!inline_box->text) {
+-		ret = NSERROR_NOMEM;
+-		inline_box->length = 0;
+-	} else {
+-		inline_box->length = strlen(inline_box->text);
 +	/* The box the user is looking at, and — while a live re-conversion
 +	 * builds the next tree — the box that will REPLACE it.  Both need the
 +	 * new text: the screen box so the click shows at once, the new box
@@ -1054,24 +1076,19 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
 +			ret = ret2;
 +		}
  	}
- 
--	if (!inline_box->text) {
--		ret = NSERROR_NOMEM;
--		inline_box->length = 0;
--	} else {
--		inline_box->length = strlen(inline_box->text);
--	}
 -	inline_box->width = control->box->width;
-+	html__redraw_a_box(html, screen_box);
  
 -	html__redraw_a_box(html, control->box);
++	html__redraw_a_box(html, screen_box);
+ 
 +	/* A <select> commits on the click itself, so input and change go
 +	 * together here rather than waiting for a blur. */
 +	form_gadget_fire_change(control);
- 
++
  	return ret;
  }
-@@ -1452,6 +1514,35 @@
+ 
+@@ -1452,6 +1532,38 @@
  
  
  /* exported interface documented in html/form_internal.h */
@@ -1090,14 +1107,17 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
 +		free(option->value);
 +		free(option);
 +	}
-+	if (control->data.select.menu != NULL) {
-+		form_free_select_menu(control);
-+	}
 +
++	/* The MENU object deliberately survives here (todos/0434).  It holds
++	 * no pointer into the list — redraw and hit test read the live list
++	 * on each use — so an open menu can ride out box_select's
++	 * empty-and-refill during a live re-conversion, keeping its scroll
++	 * offset and scrollbar.  The menu dies with its CONTROL
++	 * (form_free_control), or by the settle rule at the window's end
++	 * (html.c), or when its gadget loses its screen box. */
 +	control->data.select.items = NULL;
 +	control->data.select.last_item = NULL;
 +	control->data.select.current = NULL;
-+	control->data.select.menu = NULL;
 +	control->data.select.num_items = 0;
 +	control->data.select.num_selected = 0;
 +}
@@ -1107,7 +1127,7 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
  void form_free_control(struct form_control *control)
  {
  	struct form_control *c;
-@@ -1465,23 +1556,10 @@
+@@ -1465,23 +1577,20 @@
  	if (control->last_synced_value != NULL) {
  		free(control->last_synced_value);
  	}
@@ -1125,15 +1145,21 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
 -			free(option->text);
 -			free(option->value);
 -			free(option);
--		}
--		if (control->data.select.menu != NULL) {
--			form_free_select_menu(control);
--		}
++		/* the menu's lifetime is the control's, not the option
++		 * list's (todos/0434) — and the content must stop naming
++		 * the menu before it dies */
++		if ((control->html != NULL) &&
++		    (control->html->visible_select_menu == control)) {
++			control->html->visible_select_menu = NULL;
+ 		}
+ 		if (control->data.select.menu != NULL) {
+ 			form_free_select_menu(control);
+ 		}
 +		form_select_clear_options(control);
  	}
  
  	if (control->type == GADGET_TEXTAREA ||
-@@ -1497,6 +1575,18 @@
+@@ -1497,6 +1606,18 @@
  		}
  	}
  
@@ -1152,36 +1178,224 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
  	/* unlink the control from the form */
  	if (control->form != NULL) {
  		for (c = control->form->controls; c != NULL; c = c->next) {
-@@ -1589,14 +1679,26 @@
+@@ -1561,6 +1682,105 @@
+ 	option->node = node;
+ 
+ 	return true;
++}
++
++
++/**
++ * Measure a select menu against its gadget's on-screen box and its
++ * current option list.
++ *
++ * Sets menu->width, menu->f_size, menu->line_height and menu->height.
++ * The ONE sizing implementation: the first open, every re-open and the
++ * re-attach after a live re-conversion all go through here, so a menu
++ * can never show geometry derived from a list it no longer has
++ * (todos/0434).
++ *
++ * \param html          content owning the control
++ * \param control       select control the menu belongs to
++ * \param menu          the menu to size
++ * \param total_height  updated to the full (unclamped) option-list height
++ * \return NSERROR_OK, or NSERROR_NOT_FOUND if nothing of the gadget is
++ *         on screen to size against
++ */
++static nserror
++form__select_menu_measure(html_content *html,
++			  struct form_control *control,
++			  struct form_select_menu *menu,
++			  int *total_height)
++{
++	int line_height_with_spacing;
++	struct box *box;
++	plot_font_style_t fstyle;
++
++	/* The menu hangs off the box the user is looking at, so its
++	 * width and its font come from THAT box.  Mid-re-conversion
++	 * control->box is the new tree's box: no layout has run over
++	 * it, so its width is 0 and the menu would open one border
++	 * wide (todos/0412). */
++	box = form_gadget_screen_box(control);
++	if (box == NULL) {
++		/* nothing of this gadget is on screen, so there is no
++		 * geometry to size a menu against */
++		return NSERROR_NOT_FOUND;
++	}
++
++	menu->width = box->width +
++		box->border[RIGHT].width + box->padding[RIGHT] +
++		box->border[LEFT].width + box->padding[LEFT];
++
++	font_plot_style_from_css(&html->unit_len_ctx,
++			box->style, &fstyle);
++	menu->f_size = fstyle.size;
++
++	menu->line_height = FIXTOINT(FDIV((FMUL(FLTTOFIX(1.2),
++			FMUL(html->unit_len_ctx.device_dpi,
++			INTTOFIX(fstyle.size / PLOT_STYLE_SCALE)))),
++			F_72));
++
++	line_height_with_spacing = menu->line_height +
++			menu->line_height *
++			SELECT_LINE_SPACING;
++
++	*total_height = control->data.select.num_items *
++			line_height_with_spacing;
++	menu->height = *total_height;
++
++	if (menu->height > MAX_SELECT_HEIGHT) {
++		menu->height = MAX_SELECT_HEIGHT;
++	}
++
++	return NSERROR_OK;
++}
++
++
++/**
++ * Re-measure an existing menu and carry its scroll across the change.
++ *
++ * The scroll rule preserves the OFFSET in pixels and clamps it to the
++ * new range (design: todos/0434) — scrollbar_set_extents would rescale
++ * it proportionally, so the pixel value is taken first and put back
++ * through scrollbar_set's clamp.
++ */
++static nserror
++form__select_menu_refresh(html_content *html,
++			  struct form_control *control,
++			  struct form_select_menu *menu)
++{
++	int total_height;
++	int offset;
++	nserror res;
++
++	res = form__select_menu_measure(html, control, menu, &total_height);
++	if (res != NSERROR_OK) {
++		return res;
++	}
++
++	offset = scrollbar_get_offset(menu->scrollbar);
++	scrollbar_set_extents(menu->scrollbar,
++			      menu->height, menu->height, total_height);
++	scrollbar_set(menu->scrollbar, offset, false);
++
++	return NSERROR_OK;
+ }
+ 
+ 
+@@ -1571,9 +1791,6 @@
+ 		      select_menu_redraw_callback callback,
+ 		      struct content *c)
+ {
+-	int line_height_with_spacing;
+-	struct box *box;
+-	plot_font_style_t fstyle;
+ 	int total_height;
+ 	struct form_select_menu *menu;
+ 	html_content *html = (html_content *)c;
+@@ -1589,31 +1806,12 @@
  
  		control->data.select.menu = menu;
  
 -		box = control->box;
-+		/* The menu hangs off the box the user is looking at, so its
-+		 * width and its font come from THAT box.  Mid-re-conversion
-+		 * control->box is the new tree's box: no layout has run over
-+		 * it, so its width is 0 and the menu would open one border
-+		 * wide (todos/0412). */
-+		box = form_gadget_screen_box(control);
-+		if (box == NULL) {
-+			/* nothing of this gadget is on screen, so there is no
-+			 * geometry to size a menu against */
+-
+-		menu->width = box->width +
+-			box->border[RIGHT].width + box->padding[RIGHT] +
+-			box->border[LEFT].width + box->padding[LEFT];
+-
+-		font_plot_style_from_css(&html->unit_len_ctx,
+-				control->box->style, &fstyle);
+-		menu->f_size = fstyle.size;
+-
+-		menu->line_height = FIXTOINT(FDIV((FMUL(FLTTOFIX(1.2),
+-				FMUL(html->unit_len_ctx.device_dpi,
+-				INTTOFIX(fstyle.size / PLOT_STYLE_SCALE)))),
+-				F_72));
+-
+-		line_height_with_spacing = menu->line_height +
+-				menu->line_height *
+-				SELECT_LINE_SPACING;
+-
+-		total_height = control->data.select.num_items *
+-				line_height_with_spacing;
+-		menu->height = total_height;
+-
+-		if (menu->height > MAX_SELECT_HEIGHT) {
+-			menu->height = MAX_SELECT_HEIGHT;
++		res = form__select_menu_measure(html, control, menu,
++						&total_height);
++		if (res != NSERROR_OK) {
 +			control->data.select.menu = NULL;
 +			free(menu);
-+			return NSERROR_NOT_FOUND;
++			return res;
+ 		}
+ 
+ 		menu->client_data = client_data;
+@@ -1632,7 +1830,16 @@
+ 		}
+ 		menu->c = c;
+ 	} else {
++		/* A kept menu's geometry can be stale: since todos/0434 the
++		 * menu object survives option-list rebuilds (a mutation while
++		 * the menu is closed used to destroy it), so every open
++		 * re-measures.  The scroll offset deliberately survives a
++		 * plain close-and-reopen. */
+ 		menu = control->data.select.menu;
++		res = form__select_menu_refresh(html, control, menu);
++		if (res != NSERROR_OK) {
++			return res;
 +		}
+ 	}
  
- 		menu->width = box->width +
- 			box->border[RIGHT].width + box->padding[RIGHT] +
- 			box->border[LEFT].width + box->padding[LEFT];
+ 	menu->callback(client_data, 0, 0, menu->width, menu->height);
+@@ -1642,6 +1849,45 @@
  
- 		font_plot_style_from_css(&html->unit_len_ctx,
--				control->box->style, &fstyle);
-+				box->style, &fstyle);
- 		menu->f_size = fstyle.size;
  
- 		menu->line_height = FIXTOINT(FDIV((FMUL(FLTTOFIX(1.2),
-@@ -1675,7 +1777,12 @@
+ /* exported interface documented in html/form_internal.h */
++nserror form_select_menu_reattach(struct form_control *control)
++{
++	struct form_select_menu *menu = control->data.select.menu;
++	nserror res;
++
++	if (menu == NULL) {
++		return NSERROR_BAD_PARAMETER;
++	}
++
++	res = form__select_menu_refresh((html_content *)menu->c,
++					control, menu);
++	if (res != NSERROR_OK) {
++		return res;
++	}
++
++	menu->callback(menu->client_data, 0, 0, menu->width, menu->height);
++
++	return NSERROR_OK;
++}
++
++
++/* exported interface documented in html/form_internal.h */
++bool form_select_options_contain(struct form_control *control, void *node)
++{
++	struct form_option *option;
++
++	for (option = control->data.select.items;
++	     option != NULL;
++	     option = option->next) {
++		if (option->node == node) {
++			return true;
++		}
++	}
++
++	return false;
++}
++
++
++/* exported interface documented in html/form_internal.h */
+ void form_free_select_menu(struct form_control *control)
+ {
+ 	if (control->data.select.menu->scrollbar != NULL)
+@@ -1675,7 +1921,12 @@
  	struct rect rect;
  	nserror res;
  
@@ -1195,7 +1409,19 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
  
  	x_cp = x;
  	y_cp = y;
-@@ -1864,7 +1971,15 @@
+@@ -1750,7 +2001,10 @@
+ 	option = control->data.select.items;
+ 	item_y = line_height_with_spacing;
+ 
+-	while (item_y < scroll) {
++	/* the null check is reachable since todos/0434: a kept scroll
++	 * offset can exceed a list that shrank mid-re-conversion, until
++	 * the settle rule clamps it at the window's end */
++	while (option != NULL && item_y < scroll) {
+ 		option = option->next;
+ 		item_y += line_height_with_spacing;
+ 	}
+@@ -1864,7 +2118,15 @@
  /* exported interface documented in netsurf/form.h */
  nserror form_control_bounding_rect(struct form_control *control, struct rect *r)
  {
@@ -1212,7 +1438,7 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
  	return NSERROR_OK;
  }
  
-@@ -1930,7 +2045,14 @@
+@@ -1930,7 +2192,14 @@
  	struct box *box;
  	struct form_select_menu *menu = control->data.select.menu;
  
@@ -1228,7 +1454,7 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
  
  	/* Get global coords of scrollbar */
  	box_coords(box, &box_x, &box_y);
-@@ -1978,7 +2100,13 @@
+@@ -1978,7 +2247,13 @@
  	int menu_x, menu_y;
  	struct box *box;
  
@@ -1243,7 +1469,7 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
  	box_coords(box, &menu_x, &menu_y);
  
  	menu_x -= box->border[LEFT].width;
-@@ -2032,13 +2160,17 @@
+@@ -2032,13 +2307,17 @@
  		if (control->selected) {
  			control->selected = false;
  			dom_html_input_element_set_checked(control->node, false);
@@ -1263,7 +1489,7 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
  }
  
  
-@@ -2057,6 +2189,21 @@
+@@ -2057,6 +2336,21 @@
  
  	assert(form != NULL);
  
@@ -1285,7 +1511,7 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
  	/* obtain list of controls from DOM */
  	res = form_dom_to_data(form, submit_button, &success);
  	if (res != NSERROR_OK) {
-@@ -2125,6 +2272,16 @@
+@@ -2125,6 +2419,16 @@
  
  
  /* exported interface documented in html/form_internal.h */
@@ -1302,7 +1528,7 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
  void form_gadget_update_value(struct form_control *control, char *value)
  {
  	switch (control->type) {
-@@ -2162,10 +2319,90 @@
+@@ -2162,10 +2466,90 @@
  
  	/* Finally, sync this with the DOM */
  	form_gadget_sync_with_dom(control);
@@ -1310,10 +1536,10 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
 +	/* …and tell script.  `input` fires on every edit; `change` waits
 +	 * for the commit (blur), which form_gadget_commit_change does. */
 +	form_gadget_fire_input(control);
- }
- 
- 
- /* Exported API, see html/form_internal.h */
++}
++
++
++/* Exported API, see html/form_internal.h */
 +void form_gadget_fire_input(struct form_control *control)
 +{
 +	if ((NETSURF_UI_EVENTS == 0) || (control == NULL) ||
@@ -1327,10 +1553,10 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
 +
 +	fire_generic_dom_event(corestring_dom_input,
 +			(dom_node *)control->node, true, false);
-+}
-+
-+
-+/* Exported API, see html/form_internal.h */
+ }
+ 
+ 
+ /* Exported API, see html/form_internal.h */
 +void form_gadget_commit_change(struct form_control *control)
 +{
 +	const char *now;
@@ -1394,8 +1620,8 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
  form_gadget_sync_with_dom(struct form_control *control)
  {
 diff -urN a/content/handlers/html/form_internal.h b/content/handlers/html/form_internal.h
---- a/content/handlers/html/form_internal.h	2026-07-29 17:56:31
-+++ b/content/handlers/html/form_internal.h	2026-07-29 17:56:31
+--- a/content/handlers/html/form_internal.h	2026-07-30 06:30:00
++++ b/content/handlers/html/form_internal.h	2026-07-30 06:30:00
 @@ -74,6 +74,9 @@
  	void *node;			/**< Corresponding DOM node */
  	struct dom_string *node_value;  /**< The last value sync'd with the DOM */
@@ -1425,10 +1651,13 @@ diff -urN a/content/handlers/html/form_internal.h b/content/handlers/html/form_i
  
  	unsigned int length;		/**< Number of characters in control */
  	unsigned int maxlength;		/**< Maximum characters permitted */
-@@ -209,6 +221,19 @@
- 
- 
- /**
+@@ -206,6 +218,19 @@
+  * \param  control  structure to free
+  */
+ void form_free_control(struct form_control *control);
++
++
++/**
 + * Drop every option of a select control, leaving an empty gadget.
 + *
 + * Box construction fills a select's option list from the DOM, and a
@@ -1439,13 +1668,50 @@ diff -urN a/content/handlers/html/form_internal.h b/content/handlers/html/form_i
 + * \param  control  form control of type GADGET_SELECT
 + */
 +void form_select_clear_options(struct form_control *control);
+ 
+ 
+ /**
+@@ -244,9 +269,39 @@
+  *                  destroyed.
+  */
+ void form_free_select_menu(struct form_control *control);
 +
 +
 +/**
-  * Add an option to a form select control.
++ * Re-attach an existing select menu to its control after a live
++ * re-conversion rebuilt the option list (todos/0434).
++ *
++ * Re-measures the geometry from the box on screen, updates the
++ * scrollbar extents to the new list, keeps the scroll offset in pixels
++ * clamped to the new range, and requests a redraw of the menu area.
++ *
++ * \param control  the select form control whose open menu to re-attach
++ * \return NSERROR_OK on success,
++ *         NSERROR_BAD_PARAMETER if the control has no menu,
++ *         NSERROR_NOT_FOUND if nothing of the gadget is on screen
++ */
++nserror form_select_menu_reattach(struct form_control *control);
+ 
+ 
+ /**
++ * Test whether any option of a select control names the given DOM node.
++ *
++ * Option identity across a live re-conversion IS the DOM node
++ * (todos/0434): the settle rule uses this to ask whether the rebuilt
++ * list still carries the option the open menu anchored on.
++ *
++ * \param control  the select form control whose options to search
++ * \param node     the DOM node to look for
++ * \return true if an option's node is exactly this node
++ */
++bool form_select_options_contain(struct form_control *control, void *node);
++
++
++/**
+  * Redraw an opened select menu.
   *
-  * \param  control   form control of type GADGET_SELECT
-@@ -338,12 +363,70 @@
+  * \param control  the select menu being redrawn
+@@ -338,12 +393,70 @@
  
  
  /**
@@ -1574,8 +1840,8 @@ diff -urN a/content/handlers/html/forms.c b/content/handlers/html/forms.c
 +	}
  }
 diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
---- a/content/handlers/html/html.c	2026-07-29 17:56:31
-+++ b/content/handlers/html/html.c	2026-07-29 17:56:31
+--- a/content/handlers/html/html.c	2026-07-30 06:30:00
++++ b/content/handlers/html/html.c	2026-07-30 06:30:00
 @@ -61,6 +61,7 @@
  #include "html/private.h"
  #include "html/dom_event.h"
@@ -1680,10 +1946,11 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  	dom_event_unref(evt);
  	return result;
  }
-@@ -168,7 +258,33 @@
+@@ -167,8 +257,34 @@
+ 			break;
  		case NS_KEY_TEXT_END:
  			dom_key = dom_string_ref(corestring_dom_End);
- 			break;
++			break;
 +		/* Enter, Tab and Backspace had no case here at all, so they
 +		 * fell through to a NULL key string: `event.key` read null
 +		 * in script and a "submit on Enter" handler was impossible
@@ -1697,7 +1964,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +		case NS_KEY_TAB:
 +			dom_key = NETSURF_UI_EVENTS ?
 +				dom_string_ref(corestring_dom_Tab) : NULL;
-+			break;
+ 			break;
 +		case NS_KEY_DELETE_LEFT:
 +			dom_key = NETSURF_UI_EVENTS ?
 +				dom_string_ref(corestring_dom_Backspace) : NULL;
@@ -1714,7 +1981,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  			dom_key = NULL;
  			break;
  		}
-@@ -412,9 +528,384 @@
+@@ -412,9 +528,456 @@
  	}
  
  	dom_node_unref(html);
@@ -1760,9 +2027,9 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +		}
 +		child = next;
 +	}
- }
- 
- 
++}
++
++
 +/**
 + * Release the gadgets' hold on the tree that WAS on screen.
 + *
@@ -1794,6 +2061,62 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +			ctl->box = ctl->reconvert_box;
 +		}
 +		ctl->reconvert_box = NULL;
++	}
+ }
+ 
+ 
++/**
++ * Settle the open select menu at a live re-conversion window's end.
++ *
++ * Runs on EVERY exit path of the window — the swap, and each failure
++ * path that restores the old tree — and consumes the anchor snapshot
++ * that html__reconvert took (design + dismiss rule: todos/0434).
++ *
++ * The menu is dismissed when the gadget has no box on screen, when the
++ * option list is empty, or when a current option existed and the
++ * rebuilt list no longer carries its DOM node.  Otherwise it
++ * re-attaches: geometry re-measured, scrollbar extents updated, scroll
++ * offset kept in pixels and clamped.  The dismissal never touches the
++ * selection, so it fires no change event.
++ */
++static void html__reconvert_settle_select_menu(html_content *c)
++{
++	struct form_control *ctl = c->visible_select_menu;
++	dom_node *anchor = c->reconvert_menu_current;
++	bool had_anchor = c->reconvert_menu_had_current;
++	bool keep;
++
++	c->reconvert_menu_current = NULL;
++	c->reconvert_menu_had_current = false;
++
++	if (ctl == NULL) {
++		/* the menu was closed (or never open) during the window */
++		if (anchor != NULL) {
++			dom_node_unref(anchor);
++		}
++		return;
++	}
++
++	keep = (form_gadget_screen_box(ctl) != NULL) &&
++	       (ctl->data.select.num_items > 0) &&
++	       (!had_anchor ||
++		(anchor != NULL &&
++		 form_select_options_contain(ctl, anchor)));
++
++	if (keep) {
++		keep = (form_select_menu_reattach(ctl) == NSERROR_OK);
++	}
++
++	if (!keep) {
++		/* The menu object is freed, not merely hidden: its
++		 * geometry and scrollbar describe a list that no longer
++		 * supports it, and the next open builds fresh. */
++		form_free_select_menu(ctl);
++		c->visible_select_menu = NULL;
++	}
++
++	if (anchor != NULL) {
++		dom_node_unref(anchor);
 +	}
 +}
 +
@@ -1841,6 +2164,12 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +		}
 +		c->reconvert_focus_claim = NULL;
 +		c->reconverting = false;
++		/* The old tree is the displayed tree again, so the open
++		 * menu usually re-attaches unchanged — but if construction
++		 * reached box_select before failing, the option list is
++		 * already the rebuilt one, and the rule must judge THAT
++		 * list (todos/0434). */
++		html__reconvert_settle_select_menu(c);
 +		return;
 +	}
 +
@@ -1877,19 +2206,6 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +	 * the caret re-fire reports against the box it names (todos/0407). */
 +	c->reconverting = false;
 +
-+	/* A select menu opened DURING the window anchors on the old tree's
-+	 * box.  That box is gone now: if construction re-found the <select>
-+	 * the menu simply re-anchors on the new one, but if the mutation
-+	 * removed the element the gadget has no box at all, and an open menu
-+	 * with nowhere to draw is a state nothing can render or hit-test.
-+	 * Close it here rather than leave it to swallow the next click
-+	 * (todos/0412). */
-+	if ((c->visible_select_menu != NULL) &&
-+	    (form_gadget_screen_box(c->visible_select_menu) == NULL)) {
-+		form_free_select_menu(c->visible_select_menu);
-+		c->visible_select_menu = NULL;
-+	}
-+
 +	/* rebuild imagemaps from the current DOM */
 +	imagemap_extract(c);
 +
@@ -1899,6 +2215,15 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +			  c->base.available_height);
 +	content__request_redraw(&c->base, 0, 0,
 +				c->base.width, c->base.height);
++
++	/* Settle the open select menu against the new tree.  AFTER the
++	 * reformat: a kept menu re-measures its geometry from the box on
++	 * screen, and that box has coordinates only once layout has run
++	 * (todos/0434; the rule subsumes todos/0412's element-removed
++	 * dismissal — a gadget whose element left the document has no
++	 * screen box).  The full-page redraw above already covers the
++	 * area of a dismissed menu. */
++	html__reconvert_settle_select_menu(c);
 +
 +	/* Re-bind the focus to whatever now boxes the focused node.  This
 +	 * runs AFTER the reformat because the CARET_UPDATE that the caret
@@ -1963,15 +2288,23 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +	}
 +	c->reconvert_pending = false;
 +
-+	/* Dismiss any open core select menu.  Its gadget's box now survives
-+	 * the window (it is the box on screen, todos/0407), so the reason is
-+	 * no longer the box: box_select empties and refills the option list
-+	 * on every pass, and form_select_clear_options destroys the menu
-+	 * OBJECT with it.  An open menu therefore cannot outlive a
-+	 * re-conversion (todos/0412). */
++	/* An open core select menu SURVIVES the window (todos/0434): its
++	 * gadget's box is the box on screen (todos/0407), and since 0434
++	 * the menu object outlives box_select's option-list refill too.
++	 * Snapshot the menu's anchor — the current option's DOM node —
++	 * before the refill frees the option structs; the settle rule at
++	 * the window's end asks the rebuilt list for this node and
++	 * re-attaches or dismisses accordingly.  A menu that opens
++	 * mid-window has no snapshot, and re-attaches freely: it opened
++	 * over the list it will settle against. */
 +	if (c->visible_select_menu != NULL) {
-+		form_free_select_menu(c->visible_select_menu);
-+		c->visible_select_menu = NULL;
++		struct form_option *cur =
++			c->visible_select_menu->data.select.current;
++
++		if (cur != NULL && cur->node != NULL) {
++			c->reconvert_menu_current = dom_node_ref(cur->node);
++		}
++		c->reconvert_menu_had_current = (cur != NULL);
 +	}
 +
 +	/* Drop interaction state that can point into the box tree — EXCEPT
@@ -2037,6 +2370,9 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +		/* nothing was built, so the tree that is still displayed is
 +		 * the one whose boxes were just taken off the gadgets */
 +		html__reconvert_release_screen_boxes(c, true);
++		/* nothing changed, so the settle keeps the menu; this
++		 * consumes the snapshot the block above just took */
++		html__reconvert_settle_select_menu(c);
 +		return;
 +	}
 +
@@ -2059,6 +2395,9 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +		c->bctx = c->reconvert_old_bctx;
 +		c->reconvert_old_bctx = NULL;
 +		c->reconverting = false;
++		/* consumes the snapshot; construction may have reached
++		 * box_select before failing, so the rule must run */
++		html__reconvert_settle_select_menu(c);
 +	}
 +}
 +
@@ -2099,7 +2438,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  static void
  html_document_user_data_handler(dom_node_operation operation,
  				dom_string *key, void *data,
-@@ -475,6 +966,10 @@
+@@ -475,6 +1038,10 @@
  	c->title = NULL;
  	c->bctx = NULL;
  	c->layout = NULL;
@@ -2110,7 +2449,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  	c->background_colour = NS_TRANSPARENT;
  	c->stylesheet_count = 0;
  	c->stylesheets = NULL;
-@@ -484,6 +979,7 @@
+@@ -484,6 +1051,7 @@
  	c->num_objects = 0;
  	c->object_list = NULL;
  	c->forms = NULL;
@@ -2118,7 +2457,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  	c->imagemaps = NULL;
  	c->bw = NULL;
  	c->frameset = NULL;
-@@ -1123,14 +1619,25 @@
+@@ -1123,14 +1691,25 @@
  /**
   * Redraw a box.
   *
@@ -2145,7 +2484,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  	box_coords(box, &x, &y);
  
  	content__request_redraw((struct content *)html, x, y,
-@@ -1193,6 +1700,13 @@
+@@ -1193,6 +1772,13 @@
  		 */
  		talloc_free(htmlc->bctx);
  	}
@@ -2159,18 +2498,26 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  }
  
  /**
-@@ -1206,6 +1720,10 @@
+@@ -1205,6 +1791,18 @@
+ 	struct form *f, *g;
  
  	NSLOG(netsurf, INFO, "content %p", c);
- 
++
 +	/* Cancel any coalesced live re-conversion pass */
 +	guit->misc->schedule(-1, html__reconvert, html);
 +	html->reconvert_focus_claim = NULL;
 +
++	/* a window that dies with the content leaves its select-menu
++	 * anchor snapshot behind (todos/0434) */
++	if (html->reconvert_menu_current != NULL) {
++		dom_node_unref(html->reconvert_menu_current);
++		html->reconvert_menu_current = NULL;
++	}
++	html->reconvert_menu_had_current = false;
+ 
  	/* If we're still converting a layout, cancel it */
  	if (html->box_conversion_context != NULL) {
- 		if (cancel_dom_to_box(html->box_conversion_context) != NSERROR_OK) {
-@@ -1221,6 +1739,7 @@
+@@ -1221,6 +1819,7 @@
  
  		form_free(f);
  	}
@@ -2178,7 +2525,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  
  	imagemap_destroy(html);
  
-@@ -1253,6 +1772,17 @@
+@@ -1253,6 +1852,17 @@
  		html->title = NULL;
  	}
  
@@ -2196,7 +2543,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  	/* Free encoding */
  	if (html->encoding != NULL) {
  		free(html->encoding);
-@@ -1539,6 +2069,36 @@
+@@ -1539,6 +2149,36 @@
  	int box_x = 0, box_y = 0;
  	bool handled_scroll = false;
  
@@ -2233,7 +2580,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  	/* TODO: invert order; visit deepest box first */
  
  	while ((next = box_at_point(&html->unit_len_ctx, box, x, y,
-@@ -1636,7 +2196,6 @@
+@@ -1636,7 +2276,6 @@
  	nserror ret;
  	char *utf8_fn, *oldfile = NULL;
  	html_content *html = (html_content *)c;
@@ -2241,7 +2588,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  
  	ret = guit->utf8->local_to_utf8(fn, 0, &utf8_fn);
  	if (ret != NSERROR_OK) {
-@@ -1649,8 +2208,10 @@
+@@ -1649,8 +2288,10 @@
  
  	form_gadget_update_value(gadget, utf8_fn);
  
@@ -2254,7 +2601,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  				   corestring_dom___ns_key_file_name_node_data,
  				   strdup(fn), html__dom_user_data_handler,
  				   &oldfile) == DOM_NO_ERR) {
-@@ -1658,8 +2219,9 @@
+@@ -1658,8 +2299,9 @@
  			free(oldfile);
  	}
  
@@ -2266,7 +2613,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  }
  
  void html_set_file_gadget_filename(struct hlcache_handle *hl,
-@@ -2353,6 +2915,9 @@
+@@ -2353,6 +2995,9 @@
  	.mouse_track = html_mouse_track,
  	.mouse_action = html_mouse_action,
  	.keypress = html_keypress,
@@ -3435,8 +3782,8 @@ diff -urN a/content/handlers/html/object.c b/content/handlers/html/object.c
  		   event->type == CONTENT_MSG_DONE &&
  		   box != NULL &&
 diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
---- a/content/handlers/html/private.h	2026-07-30 03:48:37
-+++ b/content/handlers/html/private.h	2026-07-30 03:44:12
+--- a/content/handlers/html/private.h	2026-07-30 06:30:00
++++ b/content/handlers/html/private.h	2026-07-30 06:30:00
 @@ -27,6 +27,8 @@
  #include <dom/bindings/hubbub/parser.h>
  
@@ -3484,11 +3831,10 @@ diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
  	/** Hash table of imagemaps. */
  	struct imagemap **imagemaps;
  
-@@ -185,7 +211,39 @@
- 	/** Content of type CONTENT_HTML containing this, or NULL if not an
+@@ -186,6 +212,38 @@
  	 * object within a page. */
  	struct html_content *page;
-+
+ 
 +	/** The last DOM `mousedown` had preventDefault() called on it, so
 +	 * the native drag it would otherwise have started (page scroll,
 +	 * text selection) must not happen.  This is the standard browser
@@ -3507,7 +3853,7 @@ diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
 +	 * they are — without it, the release that ends a drag is
 +	 * indistinguishable from an ordinary hover. */
 +	bool mouse_pressed;
- 
++
 +	/** The deepest ELEMENT under the pointer, or NULL — the subject of
 +	 * the `:hover` chain (todos/0420).  A reference is held, because a
 +	 * script can remove the node from the document while the pointer
@@ -3524,7 +3870,7 @@ diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
  	/** Current drag type */
  	html_drag_type drag_type;
  	/** Widget capturing all mouse events */
-@@ -210,6 +268,15 @@
+@@ -210,6 +268,32 @@
  	 */
  	struct form_control *visible_select_menu;
  
@@ -3537,10 +3883,27 @@ diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
 +	 * JS-originated option mutations keep the reconvert path. */
 +	int form_selfmutation;
 +
++	/** The open select menu's anchor across a live re-conversion
++	 * (todos/0434): the current option's DOM node, snapshot at the
++	 * window start.  box_select frees the option structs MID-window
++	 * (the refill), so the settle rule at the window's end cannot
++	 * ask the old list which option the menu anchored on.  A
++	 * reference is held — the mutation may remove the node from the
++	 * document — and a mid-window click that moves the selection
++	 * refreshes the snapshot (form__select_process_selection).
++	 * html__reconvert_settle_select_menu consumes and clears both
++	 * fields on every window exit path; html_destroy drops a ref a
++	 * dying window leaves behind. */
++	dom_node *reconvert_menu_current;
++	/** A current option existed at the snapshot.  Distinguishes "no
++	 * anchor to lose" (the menu re-attaches freely) from "anchor
++	 * gone" (the menu must dismiss). */
++	bool reconvert_menu_had_current;
++
  } html_content;
  
  /**
-@@ -238,6 +305,17 @@
+@@ -238,6 +322,17 @@
  
  
  /**
@@ -3558,7 +3921,7 @@ diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
   * Test if an HTML content conversion can begin
   *
   * \param htmlc		html content to test
-@@ -316,10 +394,32 @@
+@@ -316,10 +411,32 @@
  
  /* in html/forms.c */
  struct form *html_forms_get_forms(const char *docenc, dom_html_document *doc);
@@ -3592,7 +3955,7 @@ diff -urN a/content/handlers/html/private.h b/content/handlers/html/private.h
  /* in html/css_fetcher.c */
  /**
   * Register the fetcher for the pseudo x-ns-css scheme.
-@@ -340,6 +440,76 @@
+@@ -340,6 +457,76 @@
  		    bool bubbles, bool cancelable);
  
  /**

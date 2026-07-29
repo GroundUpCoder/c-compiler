@@ -1427,6 +1427,24 @@ form__select_process_selection(html_content *html,
 
 	html->form_selfmutation--;
 
+	/* A click that moves the selection DURING a live re-conversion
+	 * window must move the settle rule's anchor with it — a snapshot
+	 * that ignores the window throws the user's change away, the
+	 * todos/0407 lesson (design: todos/0434). */
+	if (html->reconverting && (html->visible_select_menu == control)) {
+		if (html->reconvert_menu_current != NULL) {
+			dom_node_unref(html->reconvert_menu_current);
+			html->reconvert_menu_current = NULL;
+		}
+		if (control->data.select.current != NULL &&
+		    control->data.select.current->node != NULL) {
+			html->reconvert_menu_current = dom_node_ref(
+					control->data.select.current->node);
+		}
+		html->reconvert_menu_had_current =
+				(control->data.select.current != NULL);
+	}
+
 	/* The box the user is looking at, and — while a live re-conversion
 	 * builds the next tree — the box that will REPLACE it.  Both need the
 	 * new text: the screen box so the click shows at once, the new box
@@ -1529,14 +1547,17 @@ void form_select_clear_options(struct form_control *control)
 		free(option->value);
 		free(option);
 	}
-	if (control->data.select.menu != NULL) {
-		form_free_select_menu(control);
-	}
 
+	/* The MENU object deliberately survives here (todos/0434).  It holds
+	 * no pointer into the list — redraw and hit test read the live list
+	 * on each use — so an open menu can ride out box_select's
+	 * empty-and-refill during a live re-conversion, keeping its scroll
+	 * offset and scrollbar.  The menu dies with its CONTROL
+	 * (form_free_control), or by the settle rule at the window's end
+	 * (html.c), or when its gadget loses its screen box. */
 	control->data.select.items = NULL;
 	control->data.select.last_item = NULL;
 	control->data.select.current = NULL;
-	control->data.select.menu = NULL;
 	control->data.select.num_items = 0;
 	control->data.select.num_selected = 0;
 }
@@ -1559,6 +1580,16 @@ void form_free_control(struct form_control *control)
 	free(control->value_at_focus);
 
 	if (control->type == GADGET_SELECT) {
+		/* the menu's lifetime is the control's, not the option
+		 * list's (todos/0434) — and the content must stop naming
+		 * the menu before it dies */
+		if ((control->html != NULL) &&
+		    (control->html->visible_select_menu == control)) {
+			control->html->visible_select_menu = NULL;
+		}
+		if (control->data.select.menu != NULL) {
+			form_free_select_menu(control);
+		}
 		form_select_clear_options(control);
 	}
 
@@ -1654,6 +1685,105 @@ bool form_add_option(struct form_control *control, char *value, char *text,
 }
 
 
+/**
+ * Measure a select menu against its gadget's on-screen box and its
+ * current option list.
+ *
+ * Sets menu->width, menu->f_size, menu->line_height and menu->height.
+ * The ONE sizing implementation: the first open, every re-open and the
+ * re-attach after a live re-conversion all go through here, so a menu
+ * can never show geometry derived from a list it no longer has
+ * (todos/0434).
+ *
+ * \param html          content owning the control
+ * \param control       select control the menu belongs to
+ * \param menu          the menu to size
+ * \param total_height  updated to the full (unclamped) option-list height
+ * \return NSERROR_OK, or NSERROR_NOT_FOUND if nothing of the gadget is
+ *         on screen to size against
+ */
+static nserror
+form__select_menu_measure(html_content *html,
+			  struct form_control *control,
+			  struct form_select_menu *menu,
+			  int *total_height)
+{
+	int line_height_with_spacing;
+	struct box *box;
+	plot_font_style_t fstyle;
+
+	/* The menu hangs off the box the user is looking at, so its
+	 * width and its font come from THAT box.  Mid-re-conversion
+	 * control->box is the new tree's box: no layout has run over
+	 * it, so its width is 0 and the menu would open one border
+	 * wide (todos/0412). */
+	box = form_gadget_screen_box(control);
+	if (box == NULL) {
+		/* nothing of this gadget is on screen, so there is no
+		 * geometry to size a menu against */
+		return NSERROR_NOT_FOUND;
+	}
+
+	menu->width = box->width +
+		box->border[RIGHT].width + box->padding[RIGHT] +
+		box->border[LEFT].width + box->padding[LEFT];
+
+	font_plot_style_from_css(&html->unit_len_ctx,
+			box->style, &fstyle);
+	menu->f_size = fstyle.size;
+
+	menu->line_height = FIXTOINT(FDIV((FMUL(FLTTOFIX(1.2),
+			FMUL(html->unit_len_ctx.device_dpi,
+			INTTOFIX(fstyle.size / PLOT_STYLE_SCALE)))),
+			F_72));
+
+	line_height_with_spacing = menu->line_height +
+			menu->line_height *
+			SELECT_LINE_SPACING;
+
+	*total_height = control->data.select.num_items *
+			line_height_with_spacing;
+	menu->height = *total_height;
+
+	if (menu->height > MAX_SELECT_HEIGHT) {
+		menu->height = MAX_SELECT_HEIGHT;
+	}
+
+	return NSERROR_OK;
+}
+
+
+/**
+ * Re-measure an existing menu and carry its scroll across the change.
+ *
+ * The scroll rule preserves the OFFSET in pixels and clamps it to the
+ * new range (design: todos/0434) — scrollbar_set_extents would rescale
+ * it proportionally, so the pixel value is taken first and put back
+ * through scrollbar_set's clamp.
+ */
+static nserror
+form__select_menu_refresh(html_content *html,
+			  struct form_control *control,
+			  struct form_select_menu *menu)
+{
+	int total_height;
+	int offset;
+	nserror res;
+
+	res = form__select_menu_measure(html, control, menu, &total_height);
+	if (res != NSERROR_OK) {
+		return res;
+	}
+
+	offset = scrollbar_get_offset(menu->scrollbar);
+	scrollbar_set_extents(menu->scrollbar,
+			      menu->height, menu->height, total_height);
+	scrollbar_set(menu->scrollbar, offset, false);
+
+	return NSERROR_OK;
+}
+
+
 /* exported interface documented in html/form_internal.h */
 nserror
 form_open_select_menu(void *client_data,
@@ -1661,9 +1791,6 @@ form_open_select_menu(void *client_data,
 		      select_menu_redraw_callback callback,
 		      struct content *c)
 {
-	int line_height_with_spacing;
-	struct box *box;
-	plot_font_style_t fstyle;
 	int total_height;
 	struct form_select_menu *menu;
 	html_content *html = (html_content *)c;
@@ -1679,43 +1806,12 @@ form_open_select_menu(void *client_data,
 
 		control->data.select.menu = menu;
 
-		/* The menu hangs off the box the user is looking at, so its
-		 * width and its font come from THAT box.  Mid-re-conversion
-		 * control->box is the new tree's box: no layout has run over
-		 * it, so its width is 0 and the menu would open one border
-		 * wide (todos/0412). */
-		box = form_gadget_screen_box(control);
-		if (box == NULL) {
-			/* nothing of this gadget is on screen, so there is no
-			 * geometry to size a menu against */
+		res = form__select_menu_measure(html, control, menu,
+						&total_height);
+		if (res != NSERROR_OK) {
 			control->data.select.menu = NULL;
 			free(menu);
-			return NSERROR_NOT_FOUND;
-		}
-
-		menu->width = box->width +
-			box->border[RIGHT].width + box->padding[RIGHT] +
-			box->border[LEFT].width + box->padding[LEFT];
-
-		font_plot_style_from_css(&html->unit_len_ctx,
-				box->style, &fstyle);
-		menu->f_size = fstyle.size;
-
-		menu->line_height = FIXTOINT(FDIV((FMUL(FLTTOFIX(1.2),
-				FMUL(html->unit_len_ctx.device_dpi,
-				INTTOFIX(fstyle.size / PLOT_STYLE_SCALE)))),
-				F_72));
-
-		line_height_with_spacing = menu->line_height +
-				menu->line_height *
-				SELECT_LINE_SPACING;
-
-		total_height = control->data.select.num_items *
-				line_height_with_spacing;
-		menu->height = total_height;
-
-		if (menu->height > MAX_SELECT_HEIGHT) {
-			menu->height = MAX_SELECT_HEIGHT;
+			return res;
 		}
 
 		menu->client_data = client_data;
@@ -1734,12 +1830,60 @@ form_open_select_menu(void *client_data,
 		}
 		menu->c = c;
 	} else {
+		/* A kept menu's geometry can be stale: since todos/0434 the
+		 * menu object survives option-list rebuilds (a mutation while
+		 * the menu is closed used to destroy it), so every open
+		 * re-measures.  The scroll offset deliberately survives a
+		 * plain close-and-reopen. */
 		menu = control->data.select.menu;
+		res = form__select_menu_refresh(html, control, menu);
+		if (res != NSERROR_OK) {
+			return res;
+		}
 	}
 
 	menu->callback(client_data, 0, 0, menu->width, menu->height);
 
 	return NSERROR_OK;
+}
+
+
+/* exported interface documented in html/form_internal.h */
+nserror form_select_menu_reattach(struct form_control *control)
+{
+	struct form_select_menu *menu = control->data.select.menu;
+	nserror res;
+
+	if (menu == NULL) {
+		return NSERROR_BAD_PARAMETER;
+	}
+
+	res = form__select_menu_refresh((html_content *)menu->c,
+					control, menu);
+	if (res != NSERROR_OK) {
+		return res;
+	}
+
+	menu->callback(menu->client_data, 0, 0, menu->width, menu->height);
+
+	return NSERROR_OK;
+}
+
+
+/* exported interface documented in html/form_internal.h */
+bool form_select_options_contain(struct form_control *control, void *node)
+{
+	struct form_option *option;
+
+	for (option = control->data.select.items;
+	     option != NULL;
+	     option = option->next) {
+		if (option->node == node) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 
@@ -1857,7 +2001,10 @@ form_redraw_select_menu(struct form_control *control,
 	option = control->data.select.items;
 	item_y = line_height_with_spacing;
 
-	while (item_y < scroll) {
+	/* the null check is reachable since todos/0434: a kept scroll
+	 * offset can exceed a list that shrank mid-re-conversion, until
+	 * the settle rule clamps it at the window's end */
+	while (option != NULL && item_y < scroll) {
 		option = option->next;
 		item_y += line_height_with_spacing;
 	}
