@@ -5,8 +5,10 @@
 //   File: New, New Window, Open..., Save (untitled -> Save As; named ->
 //         writes), Save As..., Page Setup... / Print... (no printing
 //         subsystem -> `win32: unsupported` report, no dead click), Exit
-//   Edit: Undo (grayed via EM_CANUNDO once the popup opened; ^Z lands the
-//         loud EM_UNDO report — todos/0135 is the real fix), Cut, Copy,
+//   Edit: Undo (todos/0135: EM_CANUNDO un-grays the item after an edit,
+//         the menu click restores it, and the ^Z chord — KA_UNDO on the
+//         pinned windows scheme — re-applies via the undo/undo toggle;
+//         WM_SETTEXT clears the record and re-grays), Cut, Copy,
 //         Paste, Delete, Find..., Find Next, Replace..., Go To... (+ the
 //         out-of-range error box), Select All, Time/Date
 //   Format: Word Wrap (checkmark + Go To grays + buffer survives the EDIT
@@ -55,6 +57,11 @@ const OPENPOPUP =
 
 const r = driveBoot([
   OPENPOPUP,
+  // Pin the keyboard scheme: the ^Z leg below drives the KA_UNDO chord, and
+  // the chord is scheme-dependent (Cmd+Z under an auto-seeded macos scheme —
+  // the 0135 keymap trap). Headless boots default to windows, but pin it so
+  // the leg can never fail for the wrong reason.
+  'printf "scheme\\twindows\\n" > /etc/keys',
   'printf "alpha beta\\ngamma beta delta\\n" > /root/menu.txt',
   'notepad &',
   'wmctl wait label EDIT:0 12000',
@@ -145,16 +152,30 @@ const r = driveBoot([
   'echo .end',
   'echo ==cut',
 
-  // ---- Edit > Undo: grayed once the popup computes state (EM_CANUNDO) ----
+  // ---- Edit > Undo (0135): the Delete above armed the record ----
   'openpopup "Time/Date"',                       // the Edit popup
   'echo ==editmenu',
   'wmctl tree | grep "Undo"',
   'echo ==cut',
   'wmctl key $SID 41 27',                        // ESC closes the popup
-  'wmctl click "Undo" 2>/dev/null && echo undo-clicked || echo undo-refused',
-  // ^Z accelerator: CMD_UNDO -> EM_UNDO -> the loud 0135 report
+  // the menu item restores the Select All + Delete above
+  'wmctl click "Undo" && echo undo-clicked || echo undo-refused',
+  'wmctl wait text EDIT:0 "copy payload" 6000',
+  // ^Z accelerator (KA_UNDO on the pinned windows scheme): the undo/undo
+  // toggle re-applies the Delete
   'wmctl key $SID 29 122 64',                    // Ctrl+Z (KMOD_LCTRL)
-  'sleep 0.3',
+  waitEditEmpty,
+  'echo ==undotoggle',
+  'wmctl gettext EDIT:0',
+  'echo .end',
+  'echo ==cut',
+  // a programmatic set clears the record -> the item re-grays
+  'wmctl settext EDIT:0 "clean slate"',
+  'openpopup "Time/Date"',
+  'echo ==editmenu2',
+  'wmctl tree | grep "Undo"',
+  'echo ==cut',
+  'wmctl key $SID 41 27',                        // ESC closes the popup
 
   // ---- Edit > Find... / Find Next ----
   'wmctl settext EDIT:0 "$(printf \'alpha beta\\ngamma beta delta\')"',
@@ -403,12 +424,19 @@ check('Select All + Copy fills the clipboard',
 check('Select All + Delete empties the buffer',
   section(out, 'deleted').trim() === '.end', JSON.stringify(section(out, 'deleted')));
 
-/* ---- Undo (todos/0135: no undo buffer — grayed + loud, never a dead click) */
-check('Undo grayed once the Edit popup computes state (EM_CANUNDO)',
-  /text='Undo' grayed/.test(section(out, 'editmenu')), section(out, 'editmenu'));
-check('agent click on grayed Undo is refused', /undo-refused/.test(out), out.slice(-400));
-check('^Z lands the loud EM_UNDO report (0211 fail-loud)',
-  /win32: unsupported EDIT EM_UNDO/.test(all), 'no EM_UNDO report in output');
+/* ---- Undo (todos/0135: the single-level EDIT undo record) */
+check('Undo enabled once the Edit popup computes state (EM_CANUNDO armed)',
+  section(out, 'editmenu').includes("text='Undo'") &&
+  !/text='Undo' grayed/.test(section(out, 'editmenu')),
+  section(out, 'editmenu'));
+check('menu Undo click fires (no longer grayed)', /undo-clicked/.test(out),
+  out.slice(-400));
+check('^Z (KA_UNDO chord) re-applies the Delete — the undo/undo toggle',
+  section(out, 'undotoggle').trim() === '.end',
+  JSON.stringify(section(out, 'undotoggle')));
+check('a programmatic WM_SETTEXT clears the record and re-grays Undo',
+  /text='Undo' grayed/.test(section(out, 'editmenu2')),
+  section(out, 'editmenu2'));
 
 /* ---- Find / Find Next */
 check('Find Next (dialog) selects the first match (typed x replaces it)',

@@ -258,8 +258,12 @@ stays UTF-8, the external view materializes on demand with the app
 owning replaced handles), EM_REPLACESEL (translated at the send_msg
 choke like WM_SETTEXT), EM_LINEFROMCHAR/EM_LINEINDEX/EM_SCROLLCARET,
 EM_GETMODIFY/EM_SETMODIFY, WM_CUT/COPY/PASTE/WM_CLEAR over the system
-clipboard (0090) (+ the ^C/^X/^V/^A chords in the control), and no-undo
-honesty (EM_CANUNDO FALSE keeps the menu item grayed). New veneer
+clipboard (0090) (+ the ^C/^X/^V/^A chords in the control), and — since
+todos/0135 — a real single-level undo record (the Win95 plain-EDIT
+model: EM_CANUNDO/EM_UNDO with the undo/undo toggle, armed by every
+user edit path incl. undoable EM_REPLACESEL, cleared by
+EM_EMPTYUNDOBUFFER/EM_SETHANDLE/WM_SETTEXT; this retired the 0048
+"no-undo honesty" note). New veneer
 slices: `comdlg32.c` — GetOpen/GetSaveFileNameW as a REAL modal
 file-browser dialog (readdir LISTBOX, dirs-first, OK-on-directory
 navigates, MUSTEXIST/OVERWRITEPROMPT/DefExt honored; OFN hooks and
@@ -293,8 +297,8 @@ answer, and the res_ensure sidecar probe gets the real path.
 
 0091 (context menus, 2026-07-11) rode the same primitive: the EDIT
 control grew the standard WM_CONTEXTMENU menu (Undo/Cut/Copy/Paste/
-Delete/Select All, built fresh per popup with state gating — Undo stays
-grayed per the no-undo honesty above), and TrackPopupMenu grew modal
+Delete/Select All, built fresh per popup with state gating — Undo gates
+on EM_CANUNDO, live since the 0135 undo record), and TrackPopupMenu grew modal
 keyboard nav (Up/Down walk enabled rows, Enter fires, Esc closes,
 everything else swallowed) plus right-button-down-outside close. The
 wm.c desktop/taskbar menus are separate machinery (todos/WM.md — the

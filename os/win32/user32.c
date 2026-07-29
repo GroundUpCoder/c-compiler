@@ -3424,6 +3424,20 @@ typedef struct {
     int *tabs;                  /* EM_SETTABSTOPS stops in dialog units, or
                                    NULL for the default 8-char grid (0274) */
     int ntabs;                  /* count of tabs[] */
+    /* Single-level undo record (todos/0135) — the Win95 plain-EDIT model:
+     * ONE record holding the inverse of the last user edit, deliberately
+     * not a stack. Applying it replaces [undoPos, undoPos+undoDel) with
+     * undoText[0..undoIns) and restores the recorded selection; EM_UNDO
+     * captures the inverse-of-inverse first, so a second EM_UNDO re-applies
+     * the edit (the Windows undo/undo toggle). Any buffer rewrite that is
+     * NOT captured must clear it (WM_SETTEXT, EM_SETHANDLE, non-undoable
+     * EM_REPLACESEL, EM_EMPTYUNDOBUFFER) — a stale record's offsets no
+     * longer name the text they were recorded against. */
+    int undoValid;              /* a record exists (EM_CANUNDO) */
+    int undoPos, undoDel;       /* undo deletes [undoPos, undoPos+undoDel) */
+    char *undoText;             /* ...then re-inserts these bytes at undoPos */
+    int undoIns;                /* count of undoText bytes */
+    int undoAnchor, undoCaret;  /* selection the undo restores */
 } EditState;
 
 #define EDIT_PAD 3
@@ -3729,6 +3743,55 @@ static void edit_insert(HWND h, EditState *st, const char *s, int n) {
     (void)h;
 }
 
+/* ---- single-level undo (todos/0135) ---- */
+
+static void edit_undo_clear(EditState *st) {
+    free(st->undoText);
+    st->undoText = NULL;
+    st->undoValid = 0;
+}
+
+/* Arm the record just before a user edit replaces [s, e): the undo will
+ * put back the current bytes of that span and restore the pre-edit
+ * selection (a, c). How many bytes the undo must DELETE isn't known until
+ * after the edit (edit_normalize can shrink an insert), so undoDel stays 0
+ * here and edit_undo_commit reads it off the landed caret. */
+static void edit_undo_capture(EditState *st, int s, int e, int a, int c) {
+    char *t = NULL;
+    if (e > s) {
+        t = (char *)malloc((size_t)(e - s));
+        if (!t) { edit_undo_clear(st); return; } /* OOM: no half record */
+        memcpy(t, st->buf + s, (size_t)(e - s));
+    }
+    free(st->undoText);
+    st->undoText = t;
+    st->undoIns = e - s;
+    st->undoPos = s;
+    st->undoDel = 0;
+    st->undoAnchor = a;
+    st->undoCaret = c;
+    st->undoValid = 1;
+}
+
+/* After the edit: both primitives land the caret at span-start + inserted
+ * length (edit_insert) or span-start (edit_del_sel), so the caret names
+ * the span the undo deletes. */
+static void edit_undo_commit(EditState *st) {
+    if (st->undoValid) st->undoDel = st->caret - st->undoPos;
+}
+
+/* Every user-path insert/replace routes here (WM_CHAR, WM_PASTE, undoable
+ * EM_REPLACESEL): record the inverse, insert, fix up the record's delete
+ * span. Programmatic writes (WM_SETTEXT, EM_SETHANDLE, non-undoable
+ * EM_REPLACESEL) bypass it and clear the record instead. */
+static void edit_insert_undoable(HWND h, EditState *st, const char *s, int n) {
+    int a, b;
+    edit_sel(st, &a, &b);
+    edit_undo_capture(st, a, b, st->anchor, st->caret);
+    edit_insert(h, st, s, n);
+    edit_undo_commit(st);
+}
+
 /* Keep the caret in view: topLine vertically (multiline), scrollX
  * horizontally (single-line always; multiline under ES_AUTOHSCROLL /
  * WS_HSCROLL — the notepad no-wrap styles, 0211). Silent scrolls: the
@@ -3897,6 +3960,7 @@ static void edit_adopt_handle(HWND h, EditState *st, HLOCAL hl) {
     st->caret = st->anchor = 0;
     st->topLine = st->scrollX = 0;
     st->modified = 0;                            /* EM_SETHANDLE resets it */
+    edit_undo_clear(st);                         /* handle swap: no undo (0135) */
     edit_show_caret(h, st);
     InvalidateRect(h, NULL, TRUE);
 }
@@ -3913,7 +3977,7 @@ static void edit_paste(HWND h, EditState *st) {
     if (!t) return;
     if (!edit_ml(h))                             /* single line: first line only */
         t[strcspn(t, "\r\n")] = 0;
-    edit_insert(h, st, t, (int)strlen(t));
+    edit_insert_undoable(h, st, t, (int)strlen(t));
     free(t);
     st->modified = 1;
     edit_show_caret(h, st);
@@ -3984,6 +4048,10 @@ static int edit_word_right(EditState *st, int pos) {
  * selection collapses — the readline rows have no selection concept). */
 static LRESULT edit_do_action(HWND h, EditState *st, int act, int extend) {
     int del = 0;                                 /* target anchor for a kill */
+    int pa = st->anchor, pc = st->caret;         /* pre-edit selection: the
+                                                    kill cases overwrite the
+                                                    anchor before the record
+                                                    is taken (0135) */
     switch (act) {
     case KA_COPY:       return SendMessage(h, WM_COPY, 0, 0);
     case KA_PASTE:      return SendMessage(h, WM_PASTE, 0, 0);
@@ -4052,7 +4120,11 @@ static LRESULT edit_do_action(HWND h, EditState *st, int act, int extend) {
     }
     if (del) {
         if (st->anchor == st->caret) return 0;   /* nothing to kill */
+        int s, e;                                /* record the kill (0135) */
+        edit_sel(st, &s, &e);
+        edit_undo_capture(st, s, e, pa, pc);
         edit_del_sel(st);
+        edit_undo_commit(st);
         st->modified = 1;
         edit_show_caret(h, st);
         InvalidateRect(h, NULL, TRUE);
@@ -4244,13 +4316,19 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             int s, e;
             edit_sel(st, &s, &e);
             if (s == e && st->caret > 0)
-                st->anchor = __u8_prev(st->buf, st->caret);
-            edit_del_sel(st);
+                s = __u8_prev(st->buf, st->caret);
+            if (e > s) {                         /* record + delete (0135) */
+                edit_undo_capture(st, s, e, st->anchor, st->caret);
+                st->anchor = s;
+                st->caret = e;
+                edit_del_sel(st);
+                edit_undo_commit(st);
+            }
         } else if (ch == '\r' || ch == '\n') {
             if (!edit_ml(h)) return 0;
-            edit_insert(h, st, "\n", 1);
+            edit_insert_undoable(h, st, "\n", 1);
         } else if (ch == 9 && edit_ml(h)) {
-            edit_insert(h, st, "\t", 1);
+            edit_insert_undoable(h, st, "\t", 1);
         } else if (ch >= 32 && ch != 127 && ch < 0x110000 &&
                    !(ch >= 0xD800 && ch <= 0xDFFF)) {
             /* Any code point, UTF-8-encoded (0211). WM_CHAR carries UTF-16
@@ -4275,7 +4353,7 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 u[3] = (char)(0x80 | (cp & 0x3F));
                 n = 4;
             }
-            edit_insert(h, st, u, n);
+            edit_insert_undoable(h, st, u, n);
         } else {
             return 0;
         }
@@ -4332,8 +4410,14 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             int s, e;
             edit_sel(st, &s, &e);
             if (s == e && st->caret < st->len)
-                st->anchor = __u8_fwd(st->buf, st->len, st->caret);
-            edit_del_sel(st);
+                e = __u8_fwd(st->buf, st->len, st->caret);
+            if (e > s) {                         /* record + delete (0135) */
+                edit_undo_capture(st, s, e, st->anchor, st->caret);
+                st->anchor = s;
+                st->caret = e;
+                edit_del_sel(st);
+                edit_undo_commit(st);
+            }
             st->modified = 1;
             edit_show_caret(h, st);
             InvalidateRect(h, NULL, TRUE);
@@ -4394,10 +4478,17 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         edit_show_caret(h, st);
         InvalidateRect(h, NULL, TRUE);
         return 0;
-    case EM_REPLACESEL: {                        /* (0048) lp = text; wp = undoable
-                                                    (no undo here — ignored) */
+    case EM_REPLACESEL: {                        /* (0048) lp = text; wp =
+                                                    can-undo (0135) */
         const char *t = lp ? (const char *)lp : "";
-        edit_insert(h, st, t, (int)strlen(t));
+        if (wp) {
+            edit_insert_undoable(h, st, t, (int)strlen(t));
+        } else {
+            /* not undoable — and it moved text under any existing record's
+             * offsets, so the record dies with it */
+            edit_insert(h, st, t, (int)strlen(t));
+            edit_undo_clear(st);
+        }
         st->modified = 1;
         edit_show_caret(h, st);
         InvalidateRect(h, NULL, TRUE);
@@ -4411,14 +4502,52 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case EM_LIMITTEXT:                           /* unlimited already */
         return 0;
-    case EM_CANUNDO:                             /* no undo buffer (0048 scope) */
-        return FALSE;
-    case EM_UNDO:
-        /* apps normally gate on EM_CANUNDO (menu grayed); an accelerator
-         * (^Z) still lands here — say so instead of a dead keypress */
-        WIN32_UNSUPPORTED("EDIT EM_UNDO: no undo buffer (todos/0135)");
-        return FALSE;
+    case EM_CANUNDO:                             /* a record exists (0135) */
+        return st->undoValid ? TRUE : FALSE;
+    case EM_UNDO: {
+        /* Apply the single-level record, then keep its inverse: a second
+         * EM_UNDO re-applies the edit (the Windows undo/undo toggle, 0135). */
+        if (!st->undoValid) return FALSE;
+        int pos = st->undoPos, nDel = st->undoDel, nIns = st->undoIns;
+        char *ins = st->undoText;                /* bytes to put back */
+        if (pos < 0 || nDel < 0 || pos + nDel > st->len ||
+            !edit_ensure(st, st->len - nDel + nIns + 1)) {
+            edit_undo_clear(st);                 /* never apply a bad record */
+            return FALSE;
+        }
+        st->undoText = NULL;                     /* taken (freed below) */
+        char *redo = NULL;                       /* inverse-of-inverse text */
+        if (nDel > 0) {
+            redo = (char *)malloc((size_t)nDel);
+            if (redo) memcpy(redo, st->buf + pos, (size_t)nDel);
+        }
+        int ra = st->anchor, rc = st->caret;     /* the toggle restores these */
+        memmove(st->buf + pos + nIns, st->buf + pos + nDel,
+                (size_t)(st->len - pos - nDel));
+        if (nIns) memcpy(st->buf + pos, ins, (size_t)nIns);
+        st->len += nIns - nDel;
+        free(ins);
+        st->anchor = st->undoAnchor > st->len ? st->len : st->undoAnchor;
+        st->caret = st->undoCaret > st->len ? st->len : st->undoCaret;
+        if (nDel > 0 && !redo) {
+            edit_undo_clear(st);                 /* OOM: honest empty buffer */
+        } else {
+            st->undoText = redo;
+            st->undoIns = nDel;
+            st->undoPos = pos;
+            st->undoDel = nIns;
+            st->undoAnchor = ra;
+            st->undoCaret = rc;
+            st->undoValid = 1;
+        }
+        st->modified = 1;
+        edit_show_caret(h, st);
+        InvalidateRect(h, NULL, TRUE);
+        edit_notify(h, EN_CHANGE);
+        return TRUE;
+    }
     case EM_EMPTYUNDOBUFFER:
+        edit_undo_clear(st);
         return 0;
     case EM_SETTABSTOPS: {                        /* (0274) stops in dialog units */
         int n = (int)wp;
@@ -4453,7 +4582,9 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         int s, e;
         edit_sel(st, &s, &e);
         if (e <= s) return 0;
+        edit_undo_capture(st, s, e, st->anchor, st->caret);
         edit_del_sel(st);
+        edit_undo_commit(st);
         st->modified = 1;
         edit_show_caret(h, st);
         InvalidateRect(h, NULL, TRUE);
@@ -4467,9 +4598,9 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         /* The standard EDIT right-click menu (todos/0091), built fresh per
          * popup over the 0068 primitive (TPM_RETURNCMD keeps it
          * self-contained; the items are agent targets for free — wmctl
-         * tree/click). Undo tracks EM_CANUNDO (no undo buffer yet, 0048
-         * scope: always grayed); the rest gate on selection/readonly/
-         * clipboard state. lParam is top-level SURFACE coords (the
+         * tree/click). Undo gates on EM_CANUNDO (live since 0135: grayed
+         * only until an edit arms the record); the rest gate on selection/
+         * readonly/clipboard state. lParam is top-level SURFACE coords (the
          * DefWindowProc synthesis), which is what TrackPopupMenu takes. */
         SetFocus(h);
         int s, e;
@@ -4520,6 +4651,7 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         st->caret = st->anchor = 0;              /* real EDIT: caret to start */
         st->topLine = st->scrollX = 0;
         st->modified = 0;                        /* programmatic set (0048) */
+        edit_undo_clear(st);                     /* ...clears the record (0135) */
         edit_show_caret(h, st);
         InvalidateRect(h, NULL, TRUE);
         edit_notify(h, EN_CHANGE);
@@ -4547,6 +4679,7 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             free(st->tabs);
             st->tabs = NULL;
             st->ntabs = 0;
+            edit_undo_clear(st);
             if (st->hlocal) { LocalFree(st->hlocal); st->hlocal = NULL; }
         }
         return 0;

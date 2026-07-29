@@ -412,7 +412,7 @@ const popOf = (dump) => dump.split('popupmenu\n')[1] || '';
 const e1 = popOf(e1full);
 const item = (dump, label) =>
   dump.split('\n').find(l => l.includes(`text='${label}'`)) || '';
-check('Undo is grayed (no undo buffer, the recorded 0048 scope)',
+check('Undo is grayed (fresh EDIT: no undo record yet, 0135)',
   item(e1, 'Undo').includes('grayed'), item(e1, 'Undo'));
 check('Cut/Copy grayed with no selection',
   item(e1, 'Cut').includes('grayed') && item(e1, 'Copy').includes('grayed'),
@@ -429,6 +429,9 @@ const e3 = popOf(out.split('==edit3\n')[1] ? out.split('==edit3\n')[1].split('==
 check('reopened menu re-gates: Select All now enabled (field has text)',
   item(e3, 'Select All') !== '' && !item(e3, 'Select All').includes('grayed'),
   item(e3, 'Select All'));
+check('reopened menu re-gates: Undo now enabled (the paste armed the record, 0135)',
+  item(e3, 'Undo') !== '' && !item(e3, 'Undo').includes('grayed'),
+  item(e3, 'Undo'));
 
 // ---- taskbar-button menu ----
 check('right-click the Start strip raises nothing (reserved)',

@@ -436,6 +436,94 @@ static int selftest(void) {
              ftm1.tmHeight == ftm0.tmHeight);
     st_check("DeleteObject on the deselected font", DeleteObject((HGDIOBJ)big));
 
+    /* ---- single-level undo (0135): the Win95 one-record model. EM_CANUNDO
+     * arms on every user edit path, EM_UNDO restores the pre-edit text AND
+     * selection, a second EM_UNDO re-applies (the undo/undo toggle), and
+     * programmatic writes (WM_SETTEXT, EM_SETHANDLE, non-undoable
+     * EM_REPLACESEL, EM_EMPTYUNDOBUFFER) clear the record. */
+    SetWindowText(ed, "abc");
+    st_check("undo: WM_SETTEXT leaves nothing to undo",
+             SendMessage(ed, EM_CANUNDO, 0, 0) == FALSE);
+    st_check("undo: EM_UNDO with no record refuses",
+             SendMessage(ed, EM_UNDO, 0, 0) == FALSE);
+    SendMessage(ed, EM_SETSEL, 3, 3);
+    SendMessage(ed, WM_CHAR, 'x', 0);            /* "abcx" */
+    st_check("undo: typing arms EM_CANUNDO",
+             SendMessage(ed, EM_CANUNDO, 0, 0) == TRUE);
+    st_check("undo: EM_UNDO returns TRUE",
+             SendMessage(ed, EM_UNDO, 0, 0) == TRUE);
+    GetWindowText(ed, buf, sizeof buf);
+    st_check("undo: EM_UNDO removes the typed char", strcmp(buf, "abc") == 0);
+    st_check("undo: EM_UNDO restores the pre-edit caret",
+             SendMessage(ed, EM_GETSEL, 0, 0) == MAKELONG(3, 3));
+    st_check("undo: still undoable after undo (the toggle is armed)",
+             SendMessage(ed, EM_CANUNDO, 0, 0) == TRUE);
+    SendMessage(ed, EM_UNDO, 0, 0);              /* undo the undo */
+    GetWindowText(ed, buf, sizeof buf);
+    st_check("undo: second EM_UNDO re-applies (undo/undo toggle)",
+             strcmp(buf, "abcx") == 0);
+    st_check("undo: the toggle restores the post-edit caret",
+             SendMessage(ed, EM_GETSEL, 0, 0) == MAKELONG(4, 4));
+    /* backspace + selection-replace record too */
+    SetWindowText(ed, "hello");
+    SendMessage(ed, EM_SETSEL, 5, 5);
+    SendMessage(ed, WM_CHAR, 8, 0);              /* "hell" */
+    SendMessage(ed, EM_UNDO, 0, 0);
+    GetWindowText(ed, buf, sizeof buf);
+    st_check("undo: backspace undoes", strcmp(buf, "hello") == 0);
+    SetWindowText(ed, "hello");
+    SendMessage(ed, EM_SETSEL, 1, 4);            /* "ell" selected */
+    SendMessage(ed, WM_CHAR, 'X', 0);            /* "hXo" */
+    SendMessage(ed, EM_UNDO, 0, 0);
+    GetWindowText(ed, buf, sizeof buf);
+    st_check("undo: replace-selection restores the text",
+             strcmp(buf, "hello") == 0);
+    st_check("undo: replace-selection restores the selection",
+             SendMessage(ed, EM_GETSEL, 0, 0) == MAKELONG(1, 4));
+    /* WM_CUT / WM_PASTE / WM_CLEAR ride the same record */
+    SetWindowText(ed, "cutme");
+    SendMessage(ed, EM_SETSEL, 0, 3);
+    SendMessage(ed, WM_CUT, 0, 0);               /* "me", clip = "cut" */
+    SendMessage(ed, EM_UNDO, 0, 0);
+    GetWindowText(ed, buf, sizeof buf);
+    st_check("undo: WM_CUT undoes", strcmp(buf, "cutme") == 0);
+    SendMessage(ed, EM_SETSEL, 5, 5);
+    SendMessage(ed, WM_PASTE, 0, 0);             /* "cutmecut" */
+    GetWindowText(ed, buf, sizeof buf);
+    st_check("undo: WM_PASTE pasted the cut text",
+             strcmp(buf, "cutmecut") == 0);
+    SendMessage(ed, EM_UNDO, 0, 0);
+    GetWindowText(ed, buf, sizeof buf);
+    st_check("undo: WM_PASTE undoes", strcmp(buf, "cutme") == 0);
+    SendMessage(ed, EM_SETSEL, 0, 2);
+    SendMessage(ed, WM_CLEAR, 0, 0);             /* "tme" */
+    SendMessage(ed, EM_UNDO, 0, 0);
+    GetWindowText(ed, buf, sizeof buf);
+    st_check("undo: WM_CLEAR undoes", strcmp(buf, "cutme") == 0);
+    /* EM_REPLACESEL honours its can-undo wParam */
+    SetWindowText(ed, "base");
+    SendMessage(ed, EM_SETSEL, 4, 4);
+    SendMessage(ed, EM_REPLACESEL, TRUE, (LPARAM)"+tail");
+    st_check("undo: undoable EM_REPLACESEL arms",
+             SendMessage(ed, EM_CANUNDO, 0, 0) == TRUE);
+    SendMessage(ed, EM_UNDO, 0, 0);
+    GetWindowText(ed, buf, sizeof buf);
+    st_check("undo: EM_REPLACESEL(TRUE) undoes", strcmp(buf, "base") == 0);
+    SendMessage(ed, EM_REPLACESEL, FALSE, (LPARAM)"+quiet");
+    st_check("undo: EM_REPLACESEL(FALSE) leaves nothing to undo",
+             SendMessage(ed, EM_CANUNDO, 0, 0) == FALSE);
+    /* the explicit clears */
+    SendMessage(ed, WM_CHAR, 'q', 0);
+    st_check("undo: typing re-arms", SendMessage(ed, EM_CANUNDO, 0, 0) == TRUE);
+    SendMessage(ed, EM_EMPTYUNDOBUFFER, 0, 0);
+    st_check("undo: EM_EMPTYUNDOBUFFER clears",
+             SendMessage(ed, EM_CANUNDO, 0, 0) == FALSE);
+    SendMessage(ed, WM_CHAR, 'q', 0);
+    SendMessage(ed, EM_SETHANDLE,
+                SendMessage(ed, EM_GETHANDLE, 0, 0), 0);
+    st_check("undo: EM_SETHANDLE clears",
+             SendMessage(ed, EM_CANUNDO, 0, 0) == FALSE);
+
     /* fail-loud probe: a LISTBOX has no SB_VERT plumbing — the call must
      * fail AND say so on stderr (the e2e asserts the stderr line) */
     HWND lb = CreateWindowEx(0, "LISTBOX", "", WS_CHILD | WS_VISIBLE,
