@@ -1,6 +1,6 @@
 # 0431 — 0419/0420 engine patches ship no -DNETSURF_NO_* kill switch or A/B baseline leg
 
-- **Status**: open
+- **Status**: done
 - **Design**: two switches, one per behaviour — the merge was one commit but the
   behaviours are independent, and the convention is per-behaviour.
   `-DNETSURF_NO_CLICK_CANCEL` covers 0419 (the click-dispatch result is thrown
@@ -129,3 +129,26 @@ libparserutils). I classified each section. The result:
   inert without its switched consumer.
 
 **Unswitched engine-behaviour patches remaining: 0.**
+
+## Close-out — 2026-07-30
+
+Branch `0431-kill-switch`, base `432a8152` (= `origin/main` at close, unmoved,
+so no rebase was necessary). Last code commit `ea02f686`; every gate below
+ran after it.
+
+- kernel **133/133** — artifact: filter null, executed 133/133, carried 0,
+  runs 1, tally 133 pass.
+- browser sweep **42/42** — artifact: filter null, executed 42/42, carried 0,
+  runs 1, tally 42 pass. **The sweep ran twice.** The first invocation failed
+  0/42 in 85 s on a worktree setup error: the `tests/browser/node_modules`
+  symlink pointed at the root `node_modules`, so playwright resolved 1.61.1
+  against the 1.61.0 pin and every file refused at launch. That summary is
+  kept as `build/test-browser/summary.prev-1.json`. The second run is full
+  and is the record.
+- projects **29/29**, todos **5/5**, netsurf-patch **2/2** (patchcheck: 72
+  file checks, 0 failures on the working tree).
+- `smoke-js.mjs` (a manual recipe, not a suite): **17 legs, 150 ok, 0
+  fail** — legs 13-16 are new. Baseline sizes: product 5256701 B,
+  no-click-cancel 5256608 B, no-dynamic-pseudo 5256736 B.
+- The 3 tracked `logs/` PNGs are restored and the 1 untracked sweep PNG is
+  removed; the tree is clean.
