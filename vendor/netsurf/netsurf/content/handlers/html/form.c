@@ -1385,6 +1385,13 @@ form__select_process_selection(html_content *html,
 	assert(control != NULL);
 	assert(html != NULL);
 
+	/* The set_selected calls below fire synchronous DOM mutation
+	 * events; everything they change is rendered right here (box
+	 * text + redraw + menu repaint), so the mutation bridge must
+	 * not re-box the document — that would destroy the open menu
+	 * under this very click (todos/0422). */
+	html->form_selfmutation++;
+
 	for (count = 0, o = control->data.select.items;
 			o != NULL;
 			count++, o = o->next) {
@@ -1417,6 +1424,8 @@ form__select_process_selection(html_content *html,
 			control->data.select.current = o;
 		}
 	}
+
+	html->form_selfmutation--;
 
 	/* The box the user is looking at, and — while a live re-conversion
 	 * builds the next tree — the box that will REPLACE it.  Both need the

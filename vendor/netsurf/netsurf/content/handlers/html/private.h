@@ -267,6 +267,15 @@ typedef struct html_content {
 	 */
 	struct form_control *visible_select_menu;
 
+	/** Non-zero while the form code writes its OWN state back into
+	 * the DOM (option `selected` flips).  Those writes are already
+	 * fully rendered by the form code itself, so the mutation
+	 * bridge must not schedule a re-conversion for them — a re-box
+	 * would destroy the open select menu on every multi-select
+	 * toggle (the TEXTAREA/INPUT value-edit precedent, todos/0422).
+	 * JS-originated option mutations keep the reconvert path. */
+	int form_selfmutation;
+
 } html_content;
 
 /**

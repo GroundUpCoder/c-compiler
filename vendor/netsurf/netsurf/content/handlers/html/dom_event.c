@@ -721,6 +721,16 @@ dom_default_action_DOMSubtreeModified_cb(struct dom_event *evt, void *pw)
 		 * hook covers all structural mutation classes */
 		bool reconvert = true;
 
+		if (htmlc->form_selfmutation) {
+			/* the form code's own DOM write-back (option
+			 * `selected` flips): rendered at the source, and
+			 * a re-box here would destroy the open select
+			 * menu under the click that toggled the option
+			 * (todos/0422; the TEXTAREA/INPUT precedent
+			 * below) */
+			reconvert = false;
+		}
+
 		if (htmlc->title == (dom_node *)node) {
 			/* Node is our title node */
 			html_process_title(htmlc, (dom_node *)node);
