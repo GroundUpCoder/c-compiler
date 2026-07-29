@@ -34,9 +34,13 @@
  * loading progress / the hovered link URL) — the only chrome; the
  * content viewport is the window minus that strip.  Alt+Left /
  * Alt+Right (and unclaimed Backspace) walk the local history.
+ *
+ * The page console (gui_window_console_log) writes to stderr, which is
+ * the shell's tty when the browser runs as `netsurf page.html &`.
  */
 
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
@@ -551,6 +555,121 @@ gui_window_place_caret(struct gui_window *gw, int x, int y, int height,
 		     x - gw->scrollx + 1, y + height - gw->scrolly);
 }
 
+/* ---------------------------------------------------------------- */
+/* the page console                                                 */
+/* ---------------------------------------------------------------- */
+
+/**
+ * Report one console entry on stderr — the shell's tty when the browser
+ * runs as `netsurf page.html &`.
+ *
+ * This is the ONLY channel a page author inside gucOS has.  NSLOG is not
+ * one: it compiles at INFO, it says nothing at all without the `-v` first
+ * argument, and under `-v` it is every category at once.  So the console
+ * is deliberately always on.  `2>/dev/null` is the off-switch and it
+ * costs no option surface.
+ *
+ * The line is `js: SOURCE: LEVEL: TEXT`.  Both classifications are on the
+ * line because both change what the reader does: the LEVEL is the page's
+ * own severity (console.warn against console.log), and the SOURCE says
+ * who spoke — the page's console, an uncaught exception, or the client.
+ *
+ * The text is counted, not NUL terminated, and it may hold newlines (the
+ * core sets BW_CS_FLAG_FOLDABLE when it does; a stack trace is the usual
+ * case).  Every line therefore carries the full prefix.  One grep finds
+ * all of a multi-line entry, and no continuation line can pass for the
+ * page's own output on the same tty.
+ *
+ * The entry is not tagged with its window.  gucOS makes one window per
+ * browsing context, and this seam has no window name the reader can
+ * correlate: the SDL window id is not the kernel surface id that `wmctl
+ * list` prints, and the title is unbounded and changes under the page.
+ * A tag that cannot be matched to a window is noise, so there is none.
+ */
+static void
+gui_window_console_log(struct gui_window *gw,
+		       browser_window_console_source src,
+		       const char *msg,
+		       size_t msglen,
+		       browser_window_console_flags flags)
+{
+	const char *src_text;
+	const char *level_text;
+	size_t pos = 0;
+
+	(void) gw;
+
+	switch (src) {
+	case BW_CS_INPUT:
+		src_text = "input";
+		break;
+	case BW_CS_SCRIPT_ERROR:
+		src_text = "exception";
+		break;
+	case BW_CS_SCRIPT_CONSOLE:
+		src_text = "console";
+		break;
+	default:
+		src_text = "unknown";
+		break;
+	}
+
+	switch (flags & BW_CS_FLAG_LEVEL_MASK) {
+	case BW_CS_FLAG_LEVEL_DEBUG:
+		level_text = "debug";
+		break;
+	case BW_CS_FLAG_LEVEL_LOG:
+		level_text = "log";
+		break;
+	case BW_CS_FLAG_LEVEL_INFO:
+		level_text = "info";
+		break;
+	case BW_CS_FLAG_LEVEL_WARN:
+		level_text = "warn";
+		break;
+	case BW_CS_FLAG_LEVEL_ERROR:
+		level_text = "error";
+		break;
+	default:
+		level_text = "unknown";
+		break;
+	}
+
+	/* one trailing newline ends the writer's last line; it does not
+	 * add an empty one */
+	if ((msglen > 0) && (msg[msglen - 1] == '\n')) {
+		msglen--;
+	}
+
+	do {
+		size_t end = pos;
+		size_t stop;
+
+		while ((end < msglen) && (msg[end] != '\n')) {
+			end++;
+		}
+
+		/* a CRLF text must not drive the terminal's carriage back
+		 * over the line it just wrote */
+		stop = end;
+		if ((stop > pos) && (msg[stop - 1] == '\r')) {
+			stop--;
+		}
+
+		fprintf(stderr, "js: %s: %s: ", src_text, level_text);
+		if (stop > pos) {
+			fwrite(msg + pos, 1, stop - pos, stderr);
+		}
+		fputc('\n', stderr);
+
+		pos = end + 1;
+	} while (pos <= msglen);
+
+	/* the reader is watching a live tty: do not hold the entry in a
+	 * buffer until the browser exits */
+	fflush(stderr);
+}
+
 static struct gui_window_table window_table = {
 	.create = gui_window_create,
 	.destroy = gui_window_destroy,
@@ -564,6 +683,15 @@ static struct gui_window_table window_table = {
 	.set_status = gui_window_set_status,
 	.set_pointer = gui_window_set_pointer,
 	.place_caret = gui_window_place_caret,
+
+	/* Only BW_CS_SCRIPT_CONSOLE ever arrives here today.  Nothing in
+	 * the tree emits BW_CS_SCRIPT_ERROR, so an uncaught exception
+	 * reaches no tty and no log: dukky reports its four error sites
+	 * itself, three at NSLOG DEBUG (compiled out at the INFO build
+	 * level) and one at WARNING (silent without `-v`).  Routing them
+	 * through this table is todos/0424 — it belongs at dukky's error
+	 * sites, in the vendored upstream tree. */
+	.console_log = gui_window_console_log,
 };
 
 struct gui_window_table *gucos_window_table = &window_table;

@@ -338,4 +338,9 @@ thing this file exists to kill.
 - file: kernel.js
 - anchor:  * bounded-buffer discipline as pipes. At most ONE HTTP op is parked per
 
+### L63 — nothing emits BW_CS_SCRIPT_ERROR, so an uncaught JS exception reaches no console, no log and no tty
+- ticket: 0424
+- file: vendor/netsurf/gucos/gui.c
+- anchor: through this table is todos/0424 — it belongs at dukky's error
+
 <!-- END ENTRIES -->
