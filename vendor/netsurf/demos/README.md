@@ -104,6 +104,14 @@ out):
 | `paint/` | `mousedown`/`mousemove`/`mouseup` are dispatched at all AND carry `pageX`/`pageY` — a drag paints where the pointer went.  `preventDefault()` on the mousedown takes the gesture, which is what stops the browser turning press-and-move into a page-scroll drag |
 | `events/` | capture runs outer→middle BEFORE the target and bubble comes back after it (a capture AND a bubble listener on each of three nested boxes — the pair that used to leave an element completely deaf); `keydown`/`keyup` reach the FOCUSED field with a real `event.key` for Enter; `input`, `change` on blur, a cancelable `submit`, and `window.addEventListener("load")` |
 
+`plasma/` (leg 12) is the headline canvas demo: a 320x200 demoscene plasma
+animating from `setInterval` alone, palette-switched by click.  It proves
+nothing new about the engine — it exists so a user who opens ONE page sees
+real-time graphics with no interaction at all (todos/0425: the paint demo
+used to open blank, and a user who only clicked reported it broken).  The
+`paint/` page opens with a generated 512x512 scene for the same reason,
+and both carry the pill-palette rule (see demos.js `PILL`).
+
 Rung 7 (`breakout`) is still deliberately absent: it needs Lane D's canvas
 drawing primitives and rAF.  **Do not add a page here that its lane cannot
 honestly satisfy** — and do not ship a stubbed version of one that cannot

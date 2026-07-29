@@ -8,7 +8,13 @@
 
      The canvas is pinned to the document origin (see paint.css), so a page
      coordinate IS a canvas pixel — this engine has no
-     getBoundingClientRect and no offsetLeft to ask with instead.
+     getBoundingClientRect and no offsetLeft to ask with instead.  That pin
+     is also why the canvas comes FIRST and the text sits in a rail beside
+     it: the pad cannot move, so the page is laid out around it.
+
+     The pad opens with a full generated scene (see paint.js drawScene):
+     a page that needed a drag before it showed anything looked broken to a
+     user who only clicked, and that is exactly how it was reported.
 
      Markup only: the look is in paint.css and the behaviour in paint.js. -->
 <html>
@@ -17,7 +23,7 @@
 <link rel="stylesheet" href="paint.css">
 </head>
 <body>
-<canvas id="pad" width="240" height="160"></canvas>
+<canvas id="pad" width="512" height="512"></canvas>
 
 <div id="below">
 <h1>Paint</h1>
@@ -29,17 +35,20 @@
 <button id="swatch1">Sky</button>
 <button id="swatch2">Moss</button>
 <button id="erase">Clear</button>
-<input id="readout" type="text" size="24" value="ready" readonly>
+<button id="scene">Scene</button>
 </p>
+<p><input id="readout" type="text" size="22" value="ready" readonly></p>
 
 <script src="paint.js"></script>
 
-<p class="note">Press inside the pad and drag: every
-<code>mousedown</code>/<code>mousemove</code>/<code>mouseup</code> carries
-<code>pageX</code>/<code>pageY</code>, and the brush is rasterised into an
-<code>ImageData</code> buffer and handed to <code>putImageData</code>
-(canvas 2D still has no drawing primitives here &mdash; that is Lane D).
-The readout shows the last coordinate the DOM actually delivered.</p>
+<p class="note"><b>Click</b> the picture to stamp a splat; <b>drag</b> to
+paint a stroke.  <b>Scene</b> repaints the picture, <b>Clear</b> gives a
+white pad.  The readout shows the last coordinate the DOM delivered.</p>
+
+<p class="note">Canvas 2D has no drawing primitives here (Lane D), so
+<code>paint.js</code> rasterises everything &mdash; scene, splats,
+strokes &mdash; into one <code>ImageData</code> buffer; every mouse event
+carries <code>pageX</code>/<code>pageY</code>.</p>
 </div>
 </body>
 </html>

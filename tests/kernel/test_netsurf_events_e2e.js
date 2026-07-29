@@ -8,12 +8,15 @@
 // run through its SDL input map rather than through a test-only command:
 //
 //   - A REAL press-drag-release paints where the pointer went.  The `paint`
-//     demo is loaded unmodified and dragged with `wmctl drag`; the ink has
+//     demo is loaded unmodified: its opening scene proves the script
+//     painted at load, its Clear button (coordinate derived from the
+//     demo's own INTERACTIONS table) empties the pad, and the drag is then
+//     accounted on the white pad with `wmctl drag`; the ink has
 //     to survive SDL -> gucos_mouse_button/motion -> browser_window ->
 //     html_mouse_action -> a MouseEvent carrying pageX/pageY -> the page's
 //     own rasteriser -> putImageData -> invalidate -> blit.  If the
-//     coordinates were absent or wrong the pad would stay blank or the ink
-//     would land somewhere else, and both are checked.
+//     coordinates were absent or wrong the pad would stay scene-only or
+//     the ink would land somewhere else, and both are checked.
 //   - A REAL key RELEASE reaches the page.  keyup exists only because the
 //     frontend now forwards SDL_EVENT_KEY_UP into a new core path
 //     (browser_window_key_release); nothing else in the estate exercises
@@ -218,14 +221,31 @@ const pollStable = (sid, out) => [
 const sidOf = (v, title) => `${v}=$(wmctl list | grep "\t${title}$" | sed "s/[^0-9].*//")`;
 
 /* The stroke: a diagonal well inside the pad, and far enough from the pad's
- * own edges that the brush cannot spill outside it. */
-const STROKE = { x0: 40, y0: 30, x1: PAINT_W - 60, y1: PAINT_H - 40 };
+ * own edges that the brush cannot spill outside it.  The mousedown stamps
+ * the demo's splat (core r21 + satellite droplets, reach <= 46px), so the
+ * start sits >= 60px from the corner region the scroll check reads. */
+const STROKE = { x0: 110, y0: 100, x1: PAINT_W - 60, y1: PAINT_H - 40 };
+
+/* The pad opens with the demo's generated scene, so the ink accounting
+ * below needs the Clear button first.  Its coordinate comes from the
+ * demo's own interaction table — the ONE place that layout is spelled. */
+const CLEAR_AT = (() => {
+  const NSDEMOS = require(path.join(ROOT, 'vendor', 'netsurf', 'demos', 'demos.js'));
+  const ph = NSDEMOS.INTERACTIONS.paint.phases.find((p) => p.name === 'clear');
+  return ph.do[0].click;
+})();
 
 const out = driveBoot([
   /* --- leg 1: a real drag paints where the pointer went --- */
   'netsurf /root/paint/index.html &',
   'wmctl wait win Paint 30000',
   sidOf('PA', 'Paint'),
+  ...pollStable('$PA', '/root/p0.ppm'),
+  'echo shot-p0-ok',
+  /* Clear: scene -> white pad, so ink counting starts from zero.  The
+   * click doubles as a liveness step — a dead script clears nothing. */
+  `wmctl click $PA ${CLEAR_AT[0]} ${CLEAR_AT[1]}`,
+  ...pollChange('$PA', '/root/p0.ppm'),
   ...pollStable('$PA', '/root/p1.ppm'),
   'echo shot-p1-ok',
   `wmctl drag $PA ${STROKE.x0} ${STROKE.y0} ${STROKE.x1} ${STROKE.y1}`,
@@ -255,7 +275,7 @@ const out = driveBoot([
   'wmctl close $EV && wmctl wait nowin NsEvents 8000 && echo probe-closed',
 ], { image, timeout: 420000, maxBuffer: 64 * 1024 * 1024 }).stdout;
 
-const NAMES = ['p1', 'p2', 'e1', 'e2', 'e3'];
+const NAMES = ['p0', 'p1', 'p2', 'e1', 'e2', 'e3'];
 for (const tag of NAMES) {
   check(`shot ${tag} taken`, out.includes(`shot-${tag}-ok`));
 }
@@ -273,9 +293,13 @@ const shots = parsePPMs(back.stdout, NAMES);
 
 /* ---- leg 1: the ink -------------------------------------------------- */
 {
+  const scene = inkIn(shots.p0, 0, 0, PAINT_W, PAINT_H);
   const before = inkIn(shots.p1, 0, 0, PAINT_W, PAINT_H);
   const after = inkIn(shots.p2, 0, 0, PAINT_W, PAINT_H);
-  check('the pad starts blank', before === 0, `ink before: ${before}`);
+  check('the pad opens with the scene (the script painted at load)',
+    scene > (PAINT_W * PAINT_H) / 2, `scene ink: ${scene}`);
+  check('Clear leaves the pad blank (ink accounting starts from zero)',
+    before === 0, `ink before: ${before}`);
   check('a real press-drag-release PAINTED the pad',
     after > 200, `ink after: ${after}`);
 
@@ -289,7 +313,9 @@ const shots = parsePPMs(back.stdout, NAMES);
    * non-text box into a page-scroll drag), the heading below the pad would
    * ride up into this region and read as "ink".  The pad's own top-left,
    * BEFORE the stroke starts, is where that would land. */
-  const preStroke = inkIn(shots.p2, 0, 0, STROKE.x0 - 12, STROKE.y0 - 12);
+  /* -60 keeps this region clear of the splat's <=46px reach around the
+   * stroke start; a scroll artifact still lands here (top-left of pad). */
+  const preStroke = inkIn(shots.p2, 0, 0, STROKE.x0 - 60, STROKE.y0 - 60);
   check('the page did NOT scroll under the drag (the pad is still the pad)',
     preStroke === 0, `ink before the stroke start: ${preStroke}`);
   check('and the stroke is a stroke, not a flood',

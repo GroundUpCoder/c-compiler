@@ -51,6 +51,13 @@
 //                           scripts still run, and NOTHING they listen for
 //                           ever arrives
 //
+// …and the headline canvas demo:
+//
+//  12. plasma/index.html    a 320x200 ImageData plasma animating from
+//                           setInterval alone, with a MEASURED frame rate
+//                           printed (not guessed), palette switching and
+//                           a clean stop
+//
 // Every demo now lives in its own folder under demos/pages/ with its markup,
 // its stylesheet and its script in separate files — which is also what the
 // `netsurf-demos` package seeds onto the desktop.  Nothing here enumerates
@@ -399,7 +406,7 @@ function checkSubresources(frame, name) {
  * what makes adding a demo without a leg a LOUD failure instead of a
  * silently untested page. */
 const COVERED = new Set(['hello-js', 'counter', 'sketch', 'stopwatch', 'todo',
-  'paint', 'events']);
+  'paint', 'events', 'plasma']);
 
 // ---- leg 0: the shipped demo set ------------------------------------
 /* The set is derived from the tree, so this leg is what stops a demo from
@@ -521,8 +528,8 @@ async function leg3() {
 
     let frame = await mk.redraw();
     checkSubresources(frame, 'sketch');
-    ok(/PLOT BITMAP X \d+ Y \d+ WIDTH 128 HEIGHT 96/.test(frame),
-      'the 128x96 canvas is plotted as a bitmap');
+    ok(/PLOT BITMAP X \d+ Y \d+ WIDTH 256 HEIGHT 192/.test(frame),
+      'the 256x192 canvas is plotted as a bitmap');
     const nframes = frame.match(/PLOT TEXT X \d+ Y \d+ STR (\d+) frames$/m);
     ok(nframes && Number(nframes[1]) >= 2,
       'the frame counter advanced on its own', `counter read: ${nframes ? nframes[1] : 'not plotted'}`);
@@ -780,13 +787,15 @@ async function leg9() {
   const mk = new Monkey(RES_ON);
   try {
     await mk.open(demo('paint'));
-    ok(mk.consoleLines().includes('paint ready 240x160'), 'page script ran',
+    ok(mk.consoleLines().includes('paint ready 512x512'), 'page script ran',
       `console lines: ${JSON.stringify(mk.consoleLines().slice(0, 5))}`);
+    ok(mk.consoleLines().includes('paint scene drawn'),
+      'the opening scene rasterised at load');
 
     const frame = await mk.redraw();
     checkSubresources(frame, 'paint');
-    ok(/PLOT BITMAP X \d+ Y \d+ WIDTH 240 HEIGHT 160/.test(frame),
-      'the 240x160 pad is plotted as a bitmap');
+    ok(/PLOT BITMAP X \d+ Y \d+ WIDTH 512 HEIGHT 512/.test(frame),
+      'the 512x512 pad is plotted as a bitmap');
 
     // A press at an EXACT document coordinate.  The canvas is pinned to the
     // document origin by paint.css, so this is also a canvas pixel.
@@ -960,7 +969,7 @@ async function leg11() {
   const mk = new Monkey(RES_ON, { wasm });
   try {
     await mk.open(demo('paint'));
-    ok(mk.consoleLines().includes('paint ready 240x160'),
+    ok(mk.consoleLines().includes('paint ready 512x512'),
       'the page script still runs with the events compiled out');
 
     const from = mk.mark();
@@ -1008,10 +1017,63 @@ async function leg11() {
   } finally { mk2.kill(); }
 }
 
+// ---- leg 12: plasma (the headline canvas demo) -------------------------
+/* Same machinery as sketch's leg 3 — a timer-driven ImageData animation —
+ * plus an honest frame-rate measurement: the frames counter the page
+ * plots is read twice across a measured wall-clock window, so the rate
+ * this demo really achieves is a printed number, not a guess. */
+async function leg12() {
+  console.log('\nleg 12 — plasma/index.html: the animated plasma field');
+  const mk = new Monkey(RES_ON);
+  try {
+    await mk.open(demo('plasma'));
+    ok(mk.consoleLines().includes('plasma ready 320x200'), 'page script ran',
+      `console lines: ${JSON.stringify(mk.consoleLines().slice(0, 5))}`);
+
+    const from = mk.mark();
+    await mk.wait(/INVALIDATE_AREA WIN \d+[\s\S]*?INVALIDATE_AREA WIN \d+/,
+      { label: 'two timer-driven plasma repaints (no input at all)', from });
+    ok(true, 'the plasma animates with ZERO user input');
+
+    let frame = await mk.redraw();
+    checkSubresources(frame, 'plasma');
+    ok(/PLOT BITMAP X \d+ Y \d+ WIDTH 320 HEIGHT 200/.test(frame),
+      'the 320x200 plasma canvas is plotted as a bitmap');
+
+    /* The frame-rate measurement: counter at t0, counter at t0+3s. */
+    const framesOf = (f) => {
+      const m = f.match(/PLOT TEXT X \d+ Y \d+ STR (\d+) frames$/m);
+      return m ? Number(m[1]) : null;
+    };
+    const n0 = framesOf(frame);
+    const t0 = Date.now();
+    await new Promise((r) => setTimeout(r, 3000));   // measurement window, not a sync sleep
+    frame = await mk.redraw();
+    const n1 = framesOf(frame);
+    const secs = (Date.now() - t0) / 1000;
+    const fps = n0 !== null && n1 !== null ? (n1 - n0) / secs : null;
+    ok(fps !== null && fps > 1,
+      `the plasma really animates (measured ${fps === null ? '?' : fps.toFixed(1)} fps over ${secs.toFixed(1)}s)`,
+      `frame counter: ${n0} -> ${n1}`);
+
+    const palFrom = mk.mark();
+    mk.clickText(frame, 'Palette');
+    await mk.wait(/LOG plasma palette 1$/m, { label: 'palette-switch click', from: palFrom });
+    ok(true, 'clicking through to the palette handler works');
+
+    const stopFrom = mk.mark();
+    frame = await mk.redraw();
+    mk.clickText(frame, 'Stop / go');
+    await mk.wait(/LOG plasma stopped$/m, { label: 'clearInterval click', from: stopFrom });
+    ok(true, 'clearInterval stops the animation');
+    ok(await mk.quit() === 0, 'clean exit');
+  } finally { mk.kill(); }
+}
+
 // ---- run --------------------------------------------------------------
 // Index IS the leg number (leg 0 is the shipped-set gate), so `--leg 2`
 // still means leg 2.
-const LEGS = [leg0, leg1, leg2, leg3, leg4, leg5, leg6, leg7, leg8, leg9, leg10, leg11];
+const LEGS = [leg0, leg1, leg2, leg3, leg4, leg5, leg6, leg7, leg8, leg9, leg10, leg11, leg12];
 const t0 = Date.now();
 for (let i = 0; i < LEGS.length; i++) {
   if (ONLY.length && !ONLY.includes(i)) continue;

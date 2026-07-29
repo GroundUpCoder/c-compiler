@@ -39,7 +39,9 @@ function paint() {
 		for (x = 0; x < W; x++) {
 			if (pattern === 0) {			/* travelling bars */
 				r = (x + t * 3) & 0xff;
-				g = (y * 2) & 0xff;
+				/* spans the full height without a byte wrap
+				 * (y*2 seamed at row 128 on the 192-tall canvas) */
+				g = (y * 5 >> 2) & 0xff;
 				b = 0x60;
 			} else if (pattern === 1) {		/* moving checks */
 				var on = (((x + t) >> 4) + ((y + t) >> 4)) & 1;
