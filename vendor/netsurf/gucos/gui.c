@@ -705,14 +705,18 @@ static browser_mouse_state gucos_mouse_state(struct gui_window *gw)
 {
 	browser_mouse_state st = 0;
 
+	/* HOLDING_* states a button fact, DRAG_ON a drag fact: a held
+	 * button must be reported from the press on, not from the
+	 * DRAG_SLOP promotion on — a track with no HOLDING bits after a
+	 * press is how the core synthesises a mouseup (todos/0427). */
 	if (gw->dragging) {
 		st |= BROWSER_MOUSE_DRAG_ON;
-		if (gw->mouse_pressed & BROWSER_MOUSE_PRESS_1) {
-			st |= BROWSER_MOUSE_HOLDING_1;
-		}
-		if (gw->mouse_pressed & BROWSER_MOUSE_PRESS_2) {
-			st |= BROWSER_MOUSE_HOLDING_2;
-		}
+	}
+	if (gw->mouse_pressed & BROWSER_MOUSE_PRESS_1) {
+		st |= BROWSER_MOUSE_HOLDING_1;
+	}
+	if (gw->mouse_pressed & BROWSER_MOUSE_PRESS_2) {
+		st |= BROWSER_MOUSE_HOLDING_2;
 	}
 	return st;
 }
