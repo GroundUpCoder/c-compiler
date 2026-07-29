@@ -1,7 +1,8 @@
-# 0432 — Ctrl+V paste legibility + robustness in the macOS scheme (UNSCHEDULED — jku declined to prioritize 2026-07-29)
+# 0432 — Ctrl+V paste legibility + robustness in the macOS scheme
 
 - **Status**: open
 - **Design**: read-only design pass, 2026-07-29 (full report in its thread); decision record in `todos/KEYMAP.md` ("CLOSED DECISION")
+- **Scheduled**: P1, 2026-07-30, by the jku-delegated Fable decider (ruling D1). See `## Scheduling ruling`.
 
 ## 🔴 READ FIRST — SCOPE FENCE
 
@@ -17,10 +18,29 @@ What survives here is **legibility and robustness only**: the OS currently
 *lies* to the user about which chord to press, and the paste path is fragile in
 cells the tests never run. Both are defects under *any* keymap policy.
 
-**This ticket is explicitly NOT SCHEDULED.** jku declined to prioritize it on
-2026-07-29 and re-affirmed the swap policy in the same reply. Do not promote it
-into a lane without asking him. It is filed so the findings are not lost, not
-because anyone is waiting on it.
+## Scheduling ruling — 2026-07-30 (supersedes the 07-29 hold)
+
+⚠️ **The 2026-07-29 line "explicitly NOT SCHEDULED — do not promote without
+asking him" is SUPERSEDED and must not be re-applied.** jku delegated the call
+to a Fable decider on 2026-07-30. The decider ruled **D1: promote AS-IS at
+priority P1, at the head of the P1 ready band.** No split and no re-file: the
+ticket as filed already holds the legibility and robustness half only.
+
+🔴 **Sequencing: this item does NOT preempt the chain
+`0433 → 0342 → 0435 → 0396`.** It is the first pick after it. The queue records
+this as a SOFT dependency (`after ▸ 0396`), so the item stays *ready* while the
+ordering survives in the manifest instead of in prose.
+
+### The lane kickoff MUST carry all four of these
+
+1. **The `## 🔴 READ FIRST — SCOPE FENCE` section above, verbatim.** Any touch of
+   the macos table in `os/keys.h` is an **automatic fail**. The dual-bind
+   rejection is a CLOSED decision, not an open trade-off.
+2. **`tests/kernel/test_keymap_e2e.js` stays green WITHOUT edits.** If that file
+   needs a change to pass, the change is out of scope — stop and report.
+3. **Check what `todos/0135` landed for the hostKeys mac ⌘Z e2e leg BEFORE
+   building a new rig.** Reuse the existing harness; do not duplicate it.
+4. **Do not extend `seedHostKeyScheme` beyond the fresh-root gate.**
 
 ## Goal
 
