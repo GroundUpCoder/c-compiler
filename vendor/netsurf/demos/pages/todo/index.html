@@ -13,9 +13,11 @@
 
      The task text is typed into a real <input> and read back with .value:
      the gadget syncs what you type into the DOM, so the script sees it.
-     Adding is a button rather than Enter because a keydown for Enter
-     reaches JS with event.key == null (the special-key table in html.c has
-     no NS_KEY_CR case) -- a Lane C gap, noted in the README.
+     Adding is a button.  (This page predates Lane C's key-name fix and its
+     comment used to claim Enter arrives as event.key == null -- that is no
+     longer true: Enter reaches a focused field as event.key === "Enter",
+     verified in-OS by the netsurf-bughunt subset probe.  The button stays
+     because a visible control beats a hidden key chord.)
 
      Markup only: the look is in todo.css and the behaviour in todo.js,
      both fetched as subresources of this file. -->
