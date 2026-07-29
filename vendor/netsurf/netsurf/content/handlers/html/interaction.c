@@ -355,7 +355,17 @@ mouse_action_select_menu(html_content *html,
 		form_select_mouse_drag_end(html->visible_select_menu, mouse, x, y);
 	}
 
-	box = html->visible_select_menu->box;
+	/* the click arrived in SCREEN coordinates, so it maps against the box
+	 * on screen (todos/0412) */
+	box = form_gadget_screen_box(html->visible_select_menu);
+	if (box == NULL) {
+		/* The gadget lost its box — its element left the document.
+		 * The menu can no longer be drawn or hit-tested, so close it
+		 * rather than swallow this click and every later one. */
+		form_free_select_menu(html->visible_select_menu);
+		html->visible_select_menu = NULL;
+		return NSERROR_OK;
+	}
 	box_coords(box, &box_x, &box_y);
 
 	box_x -= box->border[LEFT].width;

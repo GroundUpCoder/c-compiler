@@ -1676,7 +1676,16 @@ box_select(dom_node *n,
 
 	/* A re-boxed select reuses its existing gadget, so the option list
 	 * it is about to be refilled from the DOM must be emptied first —
-	 * otherwise every live re-conversion appends a duplicate set. */
+	 * otherwise every live re-conversion appends a duplicate set.
+	 *
+	 * form_select_clear_options destroys the MENU object too, so the
+	 * content must stop naming it first: a visible_select_menu whose
+	 * data.select.menu is NULL is a popup that the next redraw
+	 * dereferences (todos/0412).  This is why an open menu cannot be
+	 * carried across a live re-conversion. */
+	if (content->visible_select_menu == gadget) {
+		content->visible_select_menu = NULL;
+	}
 	form_select_clear_options(gadget);
 
 	gadget->html = content;

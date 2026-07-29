@@ -1303,6 +1303,67 @@ form_select_menu_scroll_callback(void *client_data,
 
 
 /**
+ * Write a select gadget's displayed text into one of its boxes.
+ *
+ * The text a <select> shows is a CACHE of control->data.select: which
+ * options are selected, and how many.  That state is the truth, the box
+ * text is a rendering of it, so the rendering is derived once and written
+ * to each box that needs it.
+ *
+ * The string is allocated from html->bctx, which mid-re-conversion is the
+ * NEW tree's context — the longer-lived of the two, so it outlives an old
+ * box that borrows it (todos/0412).
+ *
+ * \param html     content owning the gadget
+ * \param control  the select gadget
+ * \param box      one of the gadget's boxes, or NULL for "no such box"
+ * \return NSERROR_OK, or NSERROR_NOMEM
+ */
+static nserror
+form__select_set_box_text(html_content *html,
+			  struct form_control *control,
+			  struct box *box)
+{
+	struct box *inline_box;
+
+	if ((box == NULL) ||
+	    (box->children == NULL) ||
+	    (box->children->children == NULL)) {
+		return NSERROR_OK;
+	}
+
+	/**
+	 * \todo Even though the form code is effectively part of the html
+	 *        content handler, poking around inside contents is not good
+	 */
+	inline_box = box->children->children;
+
+	talloc_free(inline_box->text);
+	inline_box->text = 0;
+
+	if (control->data.select.num_selected == 0) {
+		inline_box->text = talloc_strdup(html->bctx,
+				messages_get("Form_None"));
+	} else if (control->data.select.num_selected == 1) {
+		inline_box->text = talloc_strdup(html->bctx,
+				control->data.select.current->text);
+	} else {
+		inline_box->text = talloc_strdup(html->bctx,
+				messages_get("Form_Many"));
+	}
+
+	inline_box->width = box->width;
+
+	if (inline_box->text == NULL) {
+		inline_box->length = 0;
+		return NSERROR_NOMEM;
+	}
+	inline_box->length = strlen(inline_box->text);
+	return NSERROR_OK;
+}
+
+
+/**
  * Process a selection from a form select menu.
  *
  * \param  html The html content handle for the form
@@ -1315,20 +1376,14 @@ form__select_process_selection(html_content *html,
 			       struct form_control *control,
 			       int item)
 {
-	struct box *inline_box;
+	struct box *screen_box;
 	struct form_option *o;
 	int count;
 	nserror ret = NSERROR_OK;
+	nserror ret2;
 
 	assert(control != NULL);
 	assert(html != NULL);
-
-	/**
-	 * \todo Even though the form code is effectively part of the html
-	 *        content handler, poking around inside contents is not good
-	 */
-
-	inline_box = control->box->children->children;
 
 	for (count = 0, o = control->data.select.items;
 			o != NULL;
@@ -1363,29 +1418,22 @@ form__select_process_selection(html_content *html,
 		}
 	}
 
-	talloc_free(inline_box->text);
-	inline_box->text = 0;
-
-	if (control->data.select.num_selected == 0) {
-		inline_box->text = talloc_strdup(html->bctx,
-				messages_get("Form_None"));
-	} else if (control->data.select.num_selected == 1) {
-		inline_box->text = talloc_strdup(html->bctx,
-				control->data.select.current->text);
-	} else {
-		inline_box->text = talloc_strdup(html->bctx,
-				messages_get("Form_Many"));
+	/* The box the user is looking at, and — while a live re-conversion
+	 * builds the next tree — the box that will REPLACE it.  Both need the
+	 * new text: the screen box so the click shows at once, the new box
+	 * because construction derives its text from the DOM at the moment it
+	 * walks the <select>, and that moment can fall either side of this
+	 * click.  Outside a re-conversion the two are one box (todos/0412). */
+	screen_box = form_gadget_screen_box(control);
+	ret = form__select_set_box_text(html, control, screen_box);
+	if (control->box != screen_box) {
+		ret2 = form__select_set_box_text(html, control, control->box);
+		if (ret == NSERROR_OK) {
+			ret = ret2;
+		}
 	}
 
-	if (!inline_box->text) {
-		ret = NSERROR_NOMEM;
-		inline_box->length = 0;
-	} else {
-		inline_box->length = strlen(inline_box->text);
-	}
-	inline_box->width = control->box->width;
-
-	html__redraw_a_box(html, control->box);
+	html__redraw_a_box(html, screen_box);
 
 	/* A <select> commits on the click itself, so input and change go
 	 * together here rather than waiting for a blur. */
@@ -1622,14 +1670,26 @@ form_open_select_menu(void *client_data,
 
 		control->data.select.menu = menu;
 
-		box = control->box;
+		/* The menu hangs off the box the user is looking at, so its
+		 * width and its font come from THAT box.  Mid-re-conversion
+		 * control->box is the new tree's box: no layout has run over
+		 * it, so its width is 0 and the menu would open one border
+		 * wide (todos/0412). */
+		box = form_gadget_screen_box(control);
+		if (box == NULL) {
+			/* nothing of this gadget is on screen, so there is no
+			 * geometry to size a menu against */
+			control->data.select.menu = NULL;
+			free(menu);
+			return NSERROR_NOT_FOUND;
+		}
 
 		menu->width = box->width +
 			box->border[RIGHT].width + box->padding[RIGHT] +
 			box->border[LEFT].width + box->padding[LEFT];
 
 		font_plot_style_from_css(&html->unit_len_ctx,
-				control->box->style, &fstyle);
+				box->style, &fstyle);
 		menu->f_size = fstyle.size;
 
 		menu->line_height = FIXTOINT(FDIV((FMUL(FLTTOFIX(1.2),
@@ -1708,7 +1768,12 @@ form_redraw_select_menu(struct form_control *control,
 	struct rect rect;
 	nserror res;
 
-	box = control->box;
+	/* the box on screen: the menu draws against the widget the user
+	 * can see, never against a box layout has not reached (todos/0412) */
+	box = form_gadget_screen_box(control);
+	if (box == NULL) {
+		return false;
+	}
 
 	x_cp = x;
 	y_cp = y;
@@ -1897,7 +1962,15 @@ char *form_control_get_name(struct form_control *control)
 /* exported interface documented in netsurf/form.h */
 nserror form_control_bounding_rect(struct form_control *control, struct rect *r)
 {
-	box_bounds( control->box, r );
+	/* the bounds asked for are SCREEN bounds, so they come from the box
+	 * on screen (todos/0412) */
+	struct box *box = form_gadget_screen_box(control);
+
+	if (box == NULL) {
+		/* nothing of this gadget is on screen, so it has no bounds */
+		return NSERROR_NOT_FOUND;
+	}
+	box_bounds( box, r );
 	return NSERROR_OK;
 }
 
@@ -1963,7 +2036,14 @@ form_select_mouse_drag_end(struct form_control *control,
 	struct box *box;
 	struct form_select_menu *menu = control->data.select.menu;
 
-	box = control->box;
+	/* the drag happened over the screen, so it maps against the box on
+	 * screen (todos/0412) */
+	box = form_gadget_screen_box(control);
+	if (box == NULL) {
+		/* nothing of this gadget is on screen, so the drag has no
+		 * frame of reference */
+		return;
+	}
 
 	/* Get global coords of scrollbar */
 	box_coords(box, &box_x, &box_y);
@@ -2011,7 +2091,13 @@ void form_select_menu_callback(void *client_data,
 	int menu_x, menu_y;
 	struct box *box;
 
-	box = html->visible_select_menu->box;
+	/* the damage is a SCREEN rectangle (todos/0412) */
+	box = form_gadget_screen_box(html->visible_select_menu);
+	if (box == NULL) {
+		/* nothing of the gadget is on screen, so there is nowhere to
+		 * place the damage */
+		return;
+	}
 	box_coords(box, &menu_x, &menu_y);
 
 	menu_x -= box->border[LEFT].width;
@@ -2065,13 +2151,17 @@ void form_radio_set(struct form_control *radio)
 		if (control->selected) {
 			control->selected = false;
 			dom_html_input_element_set_checked(control->node, false);
-			html__redraw_a_box(radio->html, control->box);
+			/* the damage is a SCREEN rectangle: the new tree's box
+			 * has no coordinates and no size until the swap lays it
+			 * out, so it would repaint nothing (todos/0412) */
+			html__redraw_a_box(radio->html,
+					   form_gadget_screen_box(control));
 		}
 	}
 
 	radio->selected = true;
 	dom_html_input_element_set_checked(radio->node, true);
-	html__redraw_a_box(radio->html, radio->box);
+	html__redraw_a_box(radio->html, form_gadget_screen_box(radio));
 }
 
 

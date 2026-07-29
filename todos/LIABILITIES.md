@@ -327,11 +327,11 @@ thing this file exists to kill.
 - anchor:    time. Funded by todos/0401, which is also what keeps todos/0382 open. */
 - provenance: 0382
 
-### L60 — every gadget consumer except the text widget still names control->box, so each takes mid-window coordinates from an un-laid-out box
-- ticket: 0412
-- file: vendor/netsurf/netsurf/content/handlers/html/form_internal.h
-- anchor:  * mid-window coordinates from an un-laid-out box (todos/0412, register
-- provenance: 0407
+### L62 — a `<select>` click reaches neither menu in gucOS, so a drop-down list cannot be opened
+- ticket: 0422
+- file: vendor/netsurf/gucos/options.h
+- anchor:  * a <select> reaches neither menu and a drop-down list cannot be opened at
+- provenance: 0412
 
 ### L61 — an HTTP transfer id is not an fd, so at most one transfer parks per process, none can join FS_SELECT/FS_WAIT, and the kernel sets no deadline
 - ticket: 0417

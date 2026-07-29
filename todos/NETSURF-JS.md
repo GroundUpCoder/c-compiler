@@ -753,3 +753,47 @@ One consequence is worth a sentence.  The screen lags the DOM by up to one
 pass, and on such a page that lag never falls to zero.  An application that
 needs the screen to match the DOM must mutate less often than a re-box costs.
 The lag is honest: what the user sees was true one pass ago.
+
+## 13. Which box a select gadget's text belongs to (todos/0412)
+
+A `<select>` shows the text of the option that is selected.  That text is not
+state.  It is a rendering of `control->data.select`, which holds the option
+list and the count of selected options.  The DOM holds the same fact.  The
+box text is a cache of both.
+
+`form__select_process_selection` writes that cache.  It ran on
+`control->box`, and todos/0412 had to decide which box it must write now that
+a gadget has two of them during a live re-conversion.  The alternatives were
+the box on screen, the box in the tree under construction, or both.
+
+**The decision: write both.**
+
+The box on screen must get the text because the user clicked an option and
+must see the result at once.  A write to the new tree's box alone is
+invisible until the swap, which is up to one pass away.
+
+The new tree's box must get the text because box construction derives it from
+the DOM, and the click can fall on either side of the moment construction
+walks that `<select>`.  A pass that reaches the element after the click reads
+the new selection and needs no help.  A pass that reached it before the click
+holds the old text, and nothing else would ever correct it: the swap does not
+rebuild boxes, and the layout pass measures text, it does not choose it.
+Neither the function nor its caller can tell the two cases apart, so both
+boxes are written and the question does not arise.
+
+The text is derived once, by `form__select_set_box_text`, and written to each
+box in turn.  The string is allocated from `html->bctx`, which during a
+re-conversion is the NEW tree's context — the longer-lived of the two, so an
+old box that borrows it never outlives it.  Outside a re-conversion the two
+boxes are one box and the second write is skipped.
+
+The damage rectangle is a separate question with a single answer: it is a
+screen rectangle, so it always comes from the box on screen.
+
+**A related gap, found while deciding this, is filed as todos/0422.**  In
+gucOS a `<select>` click opens nothing at all: `core_select_menu` is false
+and the gucOS window table supplies no `create_form_select_menu`, so the
+select-menu paths this section describes are unreachable from the OS build.
+They are live in the monkey frontend and in any frontend that sets the
+option, and todos/0412 made all of them correct, but no gucOS test can reach
+them today.

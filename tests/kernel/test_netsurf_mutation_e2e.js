@@ -32,6 +32,13 @@
 //     a hardcoded 10pt and the mid-window field read 204 against 285.
 //     The other arms' immediate shots stay diagnostics: their timing does
 //     not guarantee a mid-window sample.
+//   - A GADGET'S REPAINT MID-WINDOW GOES TO THE BOX ON SCREEN
+//     (todos/0412).  The GC/GR pair clicks the same radio on a still page
+//     and on a page that is mid-re-conversion essentially always.  Both
+//     must end in the same render, and the mid-window one must get there
+//     at the click rather than at the next swap: pre-fix the damage
+//     rectangle came from the new tree's box, which has no coordinates
+//     and no size, so the click repainted nothing.
 //
 // Pixel probes are colour counts and colour-coded block boundaries, never
 // fixed screen coordinates for assertions: the one clicked coordinate
@@ -218,6 +225,67 @@ console.log('big page ready');
 </body></html>
 `;
 
+/* todos/0412: a select gadget and a radio group on the D2 forced-window
+ * page shape.  Two things differ from typingPageBig.  The fillers are
+ * ZERO height, so they widen the re-conversion window without pushing the
+ * gadgets off screen — the gadgets stay at pinned geometry AND a click
+ * lands mid-window.  And a `change` listener mirrors WHICH radio is set
+ * over the proven textContent bridge, so the leg reads the outcome by
+ * value as well as by pixels.
+ *
+ * Band geometry, pinned by this page's own CSS and by nothing else:
+ *   y   0..40   #sel   the <select>
+ *   y  40..160  .r x3  one radio per 40 px row (r0 checked at load)
+ *   y 160..     #d     the mutating element, then #mv, then the fillers
+ */
+const GADG_SEL_Y1 = 40;      /* must match #sel height */
+const GADG_ROW_H = 40;       /* must match .r height */
+const GADG_RAD_Y1 = GADG_SEL_Y1 + 3 * GADG_ROW_H;
+const gadgetPage = (title, n, periodMs) => `<html>
+<head><title>${title}</title>
+<style>
+body { margin: 0; background: #ffffff; font-size: 20px; }
+#sel { height: ${GADG_SEL_Y1}px; }
+.r { height: ${GADG_ROW_H}px; }
+.p { height: 0; }
+#mv { color: #007700; }
+</style>
+</head>
+<body>
+<div id="sel"><select id="s">
+<option>alpha</option><option>bravo</option><option>charlie</option>
+</select></div>
+<div class="r"><input type="radio" name="g" id="r0" checked></div>
+<div class="r"><input type="radio" name="g" id="r1"></div>
+<div class="r"><input type="radio" name="g" id="r2"></div>
+<div id="d">tick 0</div>
+<div id="mv"></div>
+${'<div class="p"></div>\n'.repeat(n)}<script>
+var mv = document.getElementById('mv');
+var ids = ['r0', 'r1', 'r2'];
+for (var i = 0; i < ids.length; i++) {
+	(function (id) {
+		document.getElementById(id).addEventListener('change', function () {
+			mv.textContent = 'R:' + id;
+		});
+	})(ids[i]);
+}
+${periodMs ? `var n = 0;
+var box = document.getElementById('d');
+setTimeout(function () {
+	var tick = setInterval(function () {
+		n = n + 1;
+		box.textContent = 'tick ' + n;
+		/* finite: the page must settle so the leg can shoot its true
+		 * final state */
+		if (n >= 25) clearInterval(tick);
+	}, ${periodMs});
+}, 3000);` : ''}
+console.log('gadget page ready');
+</script>
+</body></html>
+`;
+
 /* ---- seed boot, then plant the pages ---- */
 const { dir: tmp, image } = freshImage('os-nsmut-');
 driveBoot('true', { image });
@@ -251,6 +319,10 @@ driveBoot('true', { image });
   put('/root/big-t.html', Buffer.from(typingPageBig('NsBigT', 3000, 300), 'utf-8'));
   put('/root/big-c1.html', Buffer.from(typingPageBig('NsBigC1', 3000, 0), 'utf-8'));
   put('/root/big-c2.html', Buffer.from(typingPageBig('NsBigC2', 3000, 5000), 'utf-8'));
+  /* todos/0412: 6000 zero-height fillers roughly double the D2 window, so
+   * a click plus a shot both fit inside one of them with margin. */
+  put('/root/gad-t.html', Buffer.from(gadgetPage('NsGadT', 6000, 300), 'utf-8'));
+  put('/root/gad-c.html', Buffer.from(gadgetPage('NsGadC', 6000, 0), 'utf-8'));
   rootStore.flush();
   rootStore.close();
 }
@@ -495,19 +567,57 @@ const out = driveBoot([
   'sleep 4.5',
   'wmctl shot $BD /root/bc22.ppm && echo shot-bc22-ok',
   'wmctl close $BD && wmctl wait nowin NsBigC2 8000 && echo bigc2-closed',
-], { image, timeout: 420000, maxBuffer: 64 * 1024 * 1024 }).stdout;
+
+  /* --- todos/0412 arm GC (control): the same gadget page with NO timer,
+   * so the radio click lands on a page that is never mid-window.  This
+   * arm DEFINES the correct post-click render; the ticking arm is asked
+   * to match it. --- */
+  'netsurf /root/gad-c.html &',
+  'wmctl wait win NsGadC 30000',
+  sidOf('GC', 'NsGadC'),
+  ...pollStable('$GC', '/root/gc0.ppm'),
+  'echo shot-gc0-ok',
+  `wmctl click $GC 9 ${GADG_SEL_Y1 + 2 * GADG_ROW_H + 12}`,   /* radio r2 */
+  ...pollChange('$GC', '/root/gc0.ppm'),
+  ...pollStable('$GC', '/root/gc1.ppm'),
+  'echo shot-gc1-ok',
+  'wmctl close $GC && wmctl wait nowin NsGadC 8000 && echo gadc-closed',
+
+  /* --- todos/0412 arm GR: the same click, but on the forced-window page
+   * with ticking underway, so it lands mid-re-conversion.  Pre-fix
+   * form_radio_set damaged the NEW tree's box — no coordinates, no size —
+   * so the click repainted NOTHING and the screen kept the old dot until
+   * the next swap.  gr1 is the immediate shot, gr2 the settled one. --- */
+  'netsurf /root/gad-t.html &',
+  'wmctl wait win NsGadT 30000',
+  sidOf('GR', 'NsGadT'),
+  'sleep 4',                      /* past the tick's 3 s delay: ticking */
+  `wmctl click $GR 9 ${GADG_SEL_Y1 + 2 * GADG_ROW_H + 12}`,   /* radio r2 */
+  /* No marker exists for "netsurf presented the frame that this click
+   * damaged": the settle is one frame at 60 Hz, and the window this leg
+   * measures against is ~600 ms wide, so 300 ms sits between the two by
+   * a wide margin.  D6 below prints both so the margin is auditable. */
+  'sleep 0.3',
+  'wmctl shot $GR /root/gr1.ppm && echo shot-gr1-ok',
+  'sleep 8',                      /* past the finite tick's end */
+  ...pollStable('$GR', '/root/gr2.ppm'),
+  'echo shot-gr2-ok',
+  'wmctl close $GR && wmctl wait nowin NsGadT 8000 && echo gadt-closed',
+], { image, timeout: 540000, maxBuffer: 64 * 1024 * 1024 }).stdout;
 
 const NAMES = ['m1', 'm2', 'r1', 'r2', 'r3', 'r4', 't1', 't2', 't3',
                's1', 's2', 's3', 's4', 's5', 's6', 'x1',
                'k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'x2', 'x3',
                'x4', 'x5',
                'tk1', 'tk2', 'tk3', 'tk4', 'tk5', 'tk6',
-               'bt1', 'bt2', 'bu1', 'bu2', 'bc11', 'bc12', 'bc21', 'bc22'];
+               'bt1', 'bt2', 'bu1', 'bu2', 'bc11', 'bc12', 'bc21', 'bc22',
+               'gc0', 'gc1', 'gr1', 'gr2'];
 for (const tag of NAMES) {
   check(`shot ${tag} taken`, out.includes(`shot-${tag}-ok`));
 }
 for (const tag of ['stopwatch', 'ruler', 'toggle', 'static', 'ticky',
-                   'tickyfast', 'bigt', 'bigt2', 'bigc1', 'bigc2']) {
+                   'tickyfast', 'bigt', 'bigt2', 'bigc1', 'bigc2',
+                   'gadc', 'gadt']) {
   check(`${tag} window closed`, out.includes(`${tag}-closed`));
 }
 
@@ -715,6 +825,95 @@ const shots = parsePPMs(back.stdout, NAMES);
           mirEInk(tag) === mirEInk('bc12') && mirPInk(tag) === mirPInk('bc12'),
           `mirE ${mirEInk(tag)} vs ${mirEInk('bc12')}, mirP ${mirPInk(tag)} vs ${mirPInk('bc12')}`);
   }
+}
+
+/* --- leg 5 (todos/0412): a gadget's repaint mid-window goes to the box
+ * ON SCREEN.  form_radio_set damaged control->box, which mid-re-conversion
+ * is the NEW tree's box: no coordinates, zero size, so the damage
+ * rectangle was empty and the click repainted nothing at all.  The dot
+ * moved only at the next swap's full repaint.  The GC arm (no timer)
+ * defines the correct render; the GR arm makes the same click while the
+ * page is mid-window essentially always. --- */
+{
+  /* Dark ink in a horizontal band, and the same band compared pixel for
+   * pixel.  A radio dot is a small shape, so the count alone is weak —
+   * the pixel compare is what says "the same render". */
+  const bandInk = (s, y0, y1) => {
+    let n = 0;
+    for (let y = y0; y < Math.min(y1, s.h - STATUS_H); y++) {
+      for (let x = 0; x < s.w; x++) {
+        const p = px(s, x, y);
+        if (p[0] < 100 && p[1] < 100 && p[2] < 100) n++;
+      }
+    }
+    return n;
+  };
+  const bandDiff = (a, b, y0, y1) => {
+    let n = 0;
+    const hi = Math.min(y1, a.h - STATUS_H, b.h - STATUS_H);
+    for (let y = y0; y < hi; y++) {
+      for (let x = 0; x < Math.min(a.w, b.w); x++) {
+        const i = (y * a.w + x) * 3, j = (y * b.w + x) * 3;
+        if (a.data[i] !== b.data[j] || a.data[i + 1] !== b.data[j + 1] ||
+            a.data[i + 2] !== b.data[j + 2]) n++;
+      }
+    }
+    return n;
+  };
+  /* the `change` mirror, told apart by text colour over the whole frame:
+   * equal counts mean equal mirrored strings, so equal radio outcomes */
+  const mirRInk = (tag) => countContent(shots[tag],
+    (p) => p[0] < 60 && p[1] > 90 && p[1] < 180 && p[2] < 60);
+
+  const rad = (tag) => bandInk(shots[tag], GADG_SEL_Y1, GADG_RAD_Y1);
+  const sel = (tag) => bandInk(shots[tag], 0, GADG_SEL_Y1);
+
+  /* ---- regression readout: every number printed unconditionally ---- */
+  console.log(`D6-GADG-RAD  gc0(before)=${rad('gc0')} gc1(control)=${rad('gc1')}` +
+              ` gr1(immediate)=${rad('gr1')} gr2(settled)=${rad('gr2')}` +
+              `  band-diff gc1^gr2=${bandDiff(shots.gc1, shots.gr2, GADG_SEL_Y1, GADG_RAD_Y1)}` +
+              ` gr1^gr2=${bandDiff(shots.gr1, shots.gr2, GADG_SEL_Y1, GADG_RAD_Y1)}`);
+  console.log(`D6-GADG-SEL  gc0=${sel('gc0')} gc1=${sel('gc1')}` +
+              ` gr1=${sel('gr1')} gr2=${sel('gr2')}` +
+              `  band-diff gc1^gr2=${bandDiff(shots.gc1, shots.gr2, 0, GADG_SEL_Y1)}` +
+              ` gr1^gr2=${bandDiff(shots.gr1, shots.gr2, 0, GADG_SEL_Y1)}`);
+  console.log(`D6-GADG-MIR  gc0=${mirRInk('gc0')} gc1=${mirRInk('gc1')}` +
+              ` gr1=${mirRInk('gr1')} gr2=${mirRInk('gr2')}`);
+
+  /* The control arm must really have clicked a radio, or every comparison
+   * below is a comparison of two unchanged screens. */
+  check('gadgets: the control click really moved the radio (GC)',
+        bandDiff(shots.gc0, shots.gc1, GADG_SEL_Y1, GADG_RAD_Y1) > 0,
+        `radio-band pixels changed: ${bandDiff(shots.gc0, shots.gc1, GADG_SEL_Y1, GADG_RAD_Y1)}`);
+  check('gadgets: and the change event mirrored the new value (GC)',
+        mirRInk('gc0') === 0 && mirRInk('gc1') > 20,
+        `mirror ink before ${mirRInk('gc0')}, after ${mirRInk('gc1')}`);
+
+  /* THE 0412 checks.  Settled: a click made while the page re-boxes
+   * continuously ends in exactly the control's render.  Immediate: it got
+   * there at the click, not at the next swap — pre-fix the damage
+   * rectangle was empty and gr1 still showed the old dot. */
+  check('gadgets: a mid-window radio click ends in the control render (GR)',
+        bandDiff(shots.gc1, shots.gr2, GADG_SEL_Y1, GADG_RAD_Y1) === 0,
+        `differing pixels in the radio band: ${bandDiff(shots.gc1, shots.gr2, GADG_SEL_Y1, GADG_RAD_Y1)}`);
+  check('gadgets: and mirrors the same value as the control (GR)',
+        mirRInk('gr2') === mirRInk('gc1'),
+        `mirror ink ${mirRInk('gr2')} vs control ${mirRInk('gc1')}`);
+  check('gadgets: a mid-window radio repaint reaches the screen AT ONCE (GR)',
+        bandDiff(shots.gr1, shots.gr2, GADG_SEL_Y1, GADG_RAD_Y1) === 0,
+        `immediate vs settled radio band: ${bandDiff(shots.gr1, shots.gr2, GADG_SEL_Y1, GADG_RAD_Y1)} pixels`);
+
+  /* The select gadget's own render, mid-window against settled.  The
+   * select is drawn from the box tree the compositor is showing, so this
+   * is the 0407 assertion applied to a second gadget kind. */
+  check('gadgets: the select band has ink at all (non-vacuous)',
+        sel('gr2') > 20, `select-band ink: ${sel('gr2')}`);
+  check('gadgets: a mid-window select render equals the settled one (GR)',
+        bandDiff(shots.gr1, shots.gr2, 0, GADG_SEL_Y1) === 0,
+        `differing pixels in the select band: ${bandDiff(shots.gr1, shots.gr2, 0, GADG_SEL_Y1)}`);
+  check('gadgets: and equals the never-mid-window control render (GC)',
+        bandDiff(shots.gc1, shots.gr2, 0, GADG_SEL_Y1) === 0,
+        `differing pixels in the select band: ${bandDiff(shots.gc1, shots.gr2, 0, GADG_SEL_Y1)}`);
 }
 
 /* ---- done ---- */

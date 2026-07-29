@@ -74,13 +74,15 @@ nserror box_textarea_keypress(html_content *html, struct box *box, uint32_t key)
 		{
 			struct form_control *next_input;
 			/* Find next text entry field that is actually
-			 * displayed (i.e. has an associated box) */
+			 * displayed (i.e. has a box ON SCREEN — mid-re-
+			 * conversion ->box is the new tree's, so it says
+			 * only how far construction has got, todos/0412) */
 			for (next_input = gadget->next;
 			     next_input &&
 				     ((next_input->type != GADGET_TEXTBOX &&
 				       next_input->type != GADGET_TEXTAREA &&
 				       next_input->type != GADGET_PASSWORD) ||
-				      !next_input->box);
+				      !form_gadget_screen_box(next_input));
 			     next_input = next_input->next)
 				;
 
@@ -95,13 +97,14 @@ nserror box_textarea_keypress(html_content *html, struct box *box, uint32_t key)
 		{
 			struct form_control *prev_input;
 			/* Find previous text entry field that is actually
-			 * displayed (i.e. has an associated box) */
+			 * displayed (i.e. has a box ON SCREEN — see the
+			 * NS_KEY_TAB case above, todos/0412) */
 			for (prev_input = gadget->prev;
 			     prev_input &&
 				     ((prev_input->type != GADGET_TEXTBOX &&
 				       prev_input->type != GADGET_TEXTAREA &&
 				       prev_input->type != GADGET_PASSWORD) ||
-				      !prev_input->box);
+				      !form_gadget_screen_box(prev_input));
 			     prev_input = prev_input->prev)
 				;
 

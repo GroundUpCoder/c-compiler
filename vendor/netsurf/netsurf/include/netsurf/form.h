@@ -68,9 +68,15 @@ char *form_control_get_name(struct form_control *control);
 /**
  * Get a form control bounding rectangle
  *
+ * The rectangle is in document coordinates, and it describes the control as
+ * it is ON SCREEN.  A control that is not on screen — display:none, or an
+ * element that left the document — has no bounds and gives
+ * NSERROR_NOT_FOUND.
+ *
  * \param[in] control The form control
  * \param[out] r The rectangle to place the bounds in.
- * \return NSERROR_OK on success or error code.
+ * \return NSERROR_OK on success, NSERROR_NOT_FOUND if the control has no
+ *         box on screen, or another error code.
  */
 nserror form_control_bounding_rect(struct form_control *control, struct rect *r);
 

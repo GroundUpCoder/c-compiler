@@ -687,6 +687,19 @@ static void html_reconvert_box_done(html_content *c, bool success)
 	 * the caret re-fire reports against the box it names (todos/0407). */
 	c->reconverting = false;
 
+	/* A select menu opened DURING the window anchors on the old tree's
+	 * box.  That box is gone now: if construction re-found the <select>
+	 * the menu simply re-anchors on the new one, but if the mutation
+	 * removed the element the gadget has no box at all, and an open menu
+	 * with nowhere to draw is a state nothing can render or hit-test.
+	 * Close it here rather than leave it to swallow the next click
+	 * (todos/0412). */
+	if ((c->visible_select_menu != NULL) &&
+	    (form_gadget_screen_box(c->visible_select_menu) == NULL)) {
+		form_free_select_menu(c->visible_select_menu);
+		c->visible_select_menu = NULL;
+	}
+
 	/* rebuild imagemaps from the current DOM */
 	imagemap_extract(c);
 
@@ -760,7 +773,12 @@ static void html__reconvert(void *p)
 	}
 	c->reconvert_pending = false;
 
-	/* dismiss any open core select menu; its gadget's box is dying */
+	/* Dismiss any open core select menu.  Its gadget's box now survives
+	 * the window (it is the box on screen, todos/0407), so the reason is
+	 * no longer the box: box_select empties and refills the option list
+	 * on every pass, and form_select_clear_options destroys the menu
+	 * OBJECT with it.  An open menu therefore cannot outlive a
+	 * re-conversion (todos/0412). */
 	if (c->visible_select_menu != NULL) {
 		form_free_select_menu(c->visible_select_menu);
 		c->visible_select_menu = NULL;
@@ -2178,7 +2196,6 @@ static void html__set_file_gadget_filename(struct content *c,
 	nserror ret;
 	char *utf8_fn, *oldfile = NULL;
 	html_content *html = (html_content *)c;
-	struct box *file_box = gadget->box;
 
 	ret = guit->utf8->local_to_utf8(fn, 0, &utf8_fn);
 	if (ret != NSERROR_OK) {
@@ -2191,8 +2208,10 @@ static void html__set_file_gadget_filename(struct content *c,
 
 	form_gadget_update_value(gadget, utf8_fn);
 
-	/* corestring_dom___ns_key_file_name_node_data */
-	if (dom_node_set_user_data((dom_node *)file_box->gadget->node,
+	/* corestring_dom___ns_key_file_name_node_data.  The node comes from
+	 * the gadget, not from a box: it is the same node either way, and the
+	 * gadget always has one (todos/0412). */
+	if (dom_node_set_user_data((dom_node *)gadget->node,
 				   corestring_dom___ns_key_file_name_node_data,
 				   strdup(fn), html__dom_user_data_handler,
 				   &oldfile) == DOM_NO_ERR) {
@@ -2200,8 +2219,9 @@ static void html__set_file_gadget_filename(struct content *c,
 			free(oldfile);
 	}
 
-	/* Redraw box. */
-	html__redraw_a_box(html, file_box);
+	/* Redraw the box ON SCREEN: mid-re-conversion gadget->box is the new
+	 * tree's box, whose damage rectangle is empty (todos/0412). */
+	html__redraw_a_box(html, form_gadget_screen_box(gadget));
 }
 
 void html_set_file_gadget_filename(struct hlcache_handle *hl,

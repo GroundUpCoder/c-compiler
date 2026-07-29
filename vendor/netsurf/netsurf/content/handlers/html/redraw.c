@@ -1946,6 +1946,7 @@ bool html_redraw(struct content *c, struct content_redraw_data *data,
 {
 	html_content *html = (html_content *) c;
 	struct box *box;
+	struct box *select_box;
 	bool result = true;
 	bool select, select_only;
 	plot_style_t pstyle_fill_bg = {
@@ -1961,13 +1962,22 @@ bool html_redraw(struct content *c, struct content_redraw_data *data,
 	 */
 	select = false;
 	select_only = false;
+	select_box = NULL;
 	if (ctx->interactive && html->visible_select_menu != NULL) {
 		struct form_control *control = html->visible_select_menu;
-		select = true;
-		/* check if the redraw rectangle is completely inside of the
-		   select menu */
-		select_only = form_clip_inside_select_menu(control,
-				data->scale, clip);
+		/* The menu hangs off the box ON SCREEN.  No box means the
+		 * gadget's element left the document and the menu has no
+		 * anchor: draw the page without it, and never take the
+		 * select_only shortcut, which would leave the damage
+		 * unpainted (todos/0412). */
+		select_box = form_gadget_screen_box(control);
+		if (select_box != NULL) {
+			select = true;
+			/* check if the redraw rectangle is completely inside
+			   of the select menu */
+			select_only = form_clip_inside_select_menu(control,
+					data->scale, clip);
+		}
 	}
 
 	if (!select_only) {
@@ -1985,7 +1995,7 @@ bool html_redraw(struct content *c, struct content_redraw_data *data,
 
 	if (select) {
 		int menu_x, menu_y;
-		box = html->visible_select_menu->box;
+		box = select_box;
 		box_coords(box, &menu_x, &menu_y);
 
 		menu_x -= box->border[LEFT].width;

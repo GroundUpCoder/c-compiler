@@ -375,11 +375,18 @@ nserror form_submit(struct nsurl *page_url, struct browser_window *target,
  *
  * Outside a re-conversion the two are the same box.
  *
- * Only box_textarea.c reads this so far.  Every other gadget consumer —
- * the select menu's geometry, the select and radio repaints, the file
- * gadget — still names control->box directly, and so still takes
- * mid-window coordinates from an un-laid-out box (todos/0412, register
- * L60).
+ * EVERY screen-coordinate consumer reads this (todos/0412): the caret and
+ * the damage rectangle in box_textarea.c, the select menu's geometry,
+ * placement, hit test and repaint, the radio group's repaint, and the file
+ * gadget's repaint.  A direct control->box read is left only where the
+ * question is structural rather than positional — box construction binding
+ * and unbinding the pointer, and this accessor itself.
+ *
+ * NULL means one thing everywhere: this gadget has nothing on screen, so
+ * there is nothing to place, draw or hit-test.  It happens for an element
+ * that is display:none, for a gadget whose element left the document, and
+ * mid-re-conversion for a gadget construction has not re-bound yet — so a
+ * consumer must handle it, not assert on it.
  *
  * \param control  the gadget
  * \return the gadget's displayed box, or NULL if it has none

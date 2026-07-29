@@ -26,7 +26,12 @@
 #ifndef NETSURF_GUCOS_OPTIONS_H
 #define NETSURF_GUCOS_OPTIONS_H
 
-/* currently nothing here */
+/* This frontend declares no options of its own.
+ *
+ * It also leaves the core's `core_select_menu` at its default of false and
+ * supplies no `create_form_select_menu` in its window table, so a click on
+ * a <select> reaches neither menu and a drop-down list cannot be opened at
+ * all (todos/0422, register L62). */
 
 #endif
 
