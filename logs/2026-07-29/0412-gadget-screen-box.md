@@ -98,4 +98,42 @@ width against a 300 ms settle, which is why the page holds 6000 fillers and not 
 
 Suites derived with `node tests/run.js --diff origin/main`: todos, projects, kernel, sweep.
 
-<!-- GATE NUMBERS -->
+| suite | result |
+| --- | --- |
+| todos | 5/5 pass, 0 fail (13.9 s) |
+| projects | 29 pass, 0 fail (256.0 s) |
+| kernel | 129/129 pass (1075.5 s) — one run, `carried 0`, `recorded 129` |
+| browser sweep | 41/41 pass (1011.6 s) — one run, `carried 0`, `recorded 41` |
+| flake | `--repeat 3 --under-load` on the new arm: 3/3, 0 % |
+
+`node todos/queue.js check` exits 0. `os/image.json` stays at 193: this change
+rides the bump `todos/0407` already made, which production has not taken yet.
+
+## The first run failed, and the failure was the test
+
+The first kernel run reported 128/129. The one failure was the new arm, and both
+defects were in the TEST, not in the fix.
+
+The radios were not in a `<form>`. `form_radio_set` returns at once on a formless
+control, so no click ever moved a selection and the arm was vacuous. Its own
+non-vacuity check is what caught it.
+
+The metric was also blind. A selected radio draws ONE black disc, so moving the
+selection leaves the ink count unchanged — 52 before, 52 after. The arm now reads
+the mean row of the pure black in the radio band, which names the selected radio
+outright.
+
+Both facts came from a throwaway probe against the real page, not from reasoning:
+it dumped per-row pixel extents, found the radios at x 3..18 with blob centres at
+y 50, 90 and 130, then clicked and watched the blob move.
+
+## The red control
+
+A test that has never failed proves nothing. Reverting ONLY the two
+`form_radio_set` lines to `control->box` reproduces the defect exactly: the
+immediate shot reads `gr1=50` — the blob still on r0, 104 pixels away from the
+settled render — and exactly two checks fail, both of them the ones that target
+the bug. The other eight stay green, including the settled equality, which is the
+point: the swap heals the wrong render, so only the immediate shot can see it.
+
+Restored, the same arm reads `gr1=130`.
