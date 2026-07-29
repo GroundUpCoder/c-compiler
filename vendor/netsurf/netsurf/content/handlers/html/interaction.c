@@ -1997,17 +1997,53 @@ static void html_rect_union(struct rect *acc, const struct rect *r, bool *any)
 
 
 /**
+ * What a dynamic restyle really touched.
+ *
+ * The re-selected SUBTREES are much wider than the boxes that change: a
+ * pointer leaving a link and landing on a 3000px block re-selects both,
+ * and only the link restyles.  So the repaint is driven by the boxes the
+ * re-selection reported, not by the subtree roots — that is the
+ * difference between invalidating 300x212 and invalidating the document.
+ */
+#define HTML_RESTYLE_MAX 64
+
+struct html_restyle_state {
+	struct box *box[HTML_RESTYLE_MAX];
+	int n;
+	bool overflow;
+	struct rect area;
+	bool any;
+};
+
+static void html_restyle_changed_cb(void *pw, struct box *box)
+{
+	struct html_restyle_state *st = pw;
+	struct rect r;
+
+	/* the PRE-reflow rectangle: a restyle that moves a box has to
+	 * repaint where the box was as well as where it went */
+	html_box_paint_rect(box, &r);
+	html_rect_union(&st->area, &r, &st->any);
+
+	if (st->n == HTML_RESTYLE_MAX) {
+		st->overflow = true;
+		return;
+	}
+	st->box[st->n++] = box;
+}
+
+/**
  * Re-select the subtrees a `:hover` / `:active` transition changed, then
  * reflow and repaint just as much as that needs.
  */
 static void html_restyle_dynamic(html_content *html, dom_node **nodes, int n)
 {
-	struct box *boxes[4];
-	struct rect area;
-	bool any = false;
-	bool changed = false;
-	int nboxes = 0;
+	struct html_restyle_state st;
+	struct box *roots[4];
+	int nroots = 0;
 	int i, j;
+
+	memset(&st, 0, sizeof(st));
 
 	for (i = 0; i < n; i++) {
 		struct box *box;
@@ -2021,11 +2057,11 @@ static void html_restyle_dynamic(html_content *html, dom_node **nodes, int n)
 		}
 
 		/* drop a box already covered by an earlier one */
-		for (j = 0; j < nboxes; j++) {
+		for (j = 0; j < nroots; j++) {
 			struct box *up;
 
 			for (up = box; up != NULL; up = up->parent) {
-				if (up == boxes[j]) {
+				if (up == roots[j]) {
 					break;
 				}
 			}
@@ -2033,38 +2069,27 @@ static void html_restyle_dynamic(html_content *html, dom_node **nodes, int n)
 				break;
 			}
 		}
-		if (j < nboxes) {
+		if (j < nroots) {
 			continue;
 		}
 
-		boxes[nboxes++] = box;
+		roots[nroots++] = box;
 	}
 
-	if (nboxes == 0) {
-		return;
-	}
-
-	/* The pre-reflow rectangles: a restyle that MOVES a box has to
-	 * repaint where it was as well as where it went. */
-	for (i = 0; i < nboxes; i++) {
-		struct rect r;
-
-		html_box_paint_rect(boxes[i], &r);
-		html_rect_union(&area, &r, &any);
-	}
-
-	for (i = 0; i < nboxes; i++) {
-		if (box_restyle_element(html, boxes[i], &changed) == false) {
+	for (i = 0; i < nroots; i++) {
+		if (box_restyle_element(html, roots[i],
+					html_restyle_changed_cb,
+					&st) == false) {
 			NSLOG(netsurf, ERROR,
 			      "dynamic restyle failed (content %p)", html);
 			return;
 		}
 	}
 
-	if (changed == false) {
+	if (st.any == false) {
 		/* No rule keyed on the transition, so nothing to paint.
 		 * This is the path every page without a dynamic rule takes,
-		 * and it costs one re-selection per chain element. */
+		 * and it costs one re-selection per re-selected box. */
 		return;
 	}
 
@@ -2081,16 +2106,30 @@ static void html_restyle_dynamic(html_content *html, dom_node **nodes, int n)
 				  html->base.available_width,
 				  html->base.available_height);
 
-		for (i = 0; i < nboxes; i++) {
+		/* where the changed boxes ended up */
+		for (i = 0; i < st.n; i++) {
 			struct rect r;
 
-			html_box_paint_rect(boxes[i], &r);
-			html_rect_union(&area, &r, &any);
+			html_box_paint_rect(st.box[i], &r);
+			html_rect_union(&st.area, &r, &st.any);
+		}
+
+		/* More changed boxes than the list holds, so their new
+		 * positions are unknown: fall back to the subtrees they came
+		 * from, which contain all of them by construction. */
+		if (st.overflow) {
+			for (i = 0; i < nroots; i++) {
+				struct rect r;
+
+				html_box_paint_rect(roots[i], &r);
+				html_rect_union(&st.area, &r, &st.any);
+			}
 		}
 	}
 
-	content__request_redraw(&html->base, area.x0, area.y0,
-				area.x1 - area.x0, area.y1 - area.y0);
+	content__request_redraw(&html->base, st.area.x0, st.area.y0,
+				st.area.x1 - st.area.x0,
+				st.area.y1 - st.area.y0);
 }
 
 

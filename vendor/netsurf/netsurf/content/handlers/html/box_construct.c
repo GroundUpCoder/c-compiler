@@ -427,7 +427,8 @@ box_restyle_repoint(struct box *box,
  * \param parent_style Computed style the subtree inherits from
  * \param root_style   Computed style of the root element's box, or NULL
  *                     when \a box IS the root element's box
- * \param changed      Set to true if any computed style really changed
+ * \param cb           Called for each box whose computed style changed
+ * \param pw           Client data for \a cb
  * \return true on success, false on memory exhaustion
  */
 static bool
@@ -435,7 +436,8 @@ box_restyle_subtree(html_content *c,
 		    struct box *box,
 		    const css_computed_style *parent_style,
 		    const css_computed_style *root_style,
-		    bool *changed)
+		    box_restyle_cb cb,
+		    void *pw)
 {
 	const css_computed_style *inherit = parent_style;
 	struct box *child;
@@ -463,7 +465,7 @@ box_restyle_subtree(html_content *c,
 			 * with no :hover rule from costing a reflow. */
 			if (styles->styles[CSS_PSEUDO_ELEMENT_NONE] !=
 			    box->style) {
-				*changed = true;
+				cb(pw, box);
 			}
 
 			box_restyle_repoint(box, box->styles, styles);
@@ -483,7 +485,7 @@ box_restyle_subtree(html_content *c,
 
 	for (child = box->children; child != NULL; child = child->next) {
 		if (box_restyle_subtree(c, child, inherit, root_style,
-					changed) == false) {
+					cb, pw) == false) {
 			return false;
 		}
 	}
@@ -493,7 +495,8 @@ box_restyle_subtree(html_content *c,
 
 
 /* exported function documented in html/box_construct.h */
-bool box_restyle_element(html_content *c, struct box *box, bool *changed)
+bool box_restyle_element(html_content *c, struct box *box,
+			 box_restyle_cb cb, void *pw)
 {
 	const css_computed_style *parent_style = NULL;
 	const css_computed_style *root_style = NULL;
@@ -501,7 +504,7 @@ bool box_restyle_element(html_content *c, struct box *box, bool *changed)
 
 	assert(c != NULL);
 	assert(box != NULL);
-	assert(changed != NULL);
+	assert(cb != NULL);
 
 	if ((c->layout == NULL) || (c->bctx == NULL)) {
 		return false;
@@ -521,7 +524,7 @@ bool box_restyle_element(html_content *c, struct box *box, bool *changed)
 		}
 	}
 
-	return box_restyle_subtree(c, box, parent_style, root_style, changed);
+	return box_restyle_subtree(c, box, parent_style, root_style, cb, pw);
 }
 
 
