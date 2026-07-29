@@ -41,7 +41,12 @@ byte-identity property is a hard requirement here too — `0272` proved it with
    first), the temp-dir option is the natural one; say so rather than forcing
    the in-memory path.
 4. `openwith` association: `mgpp` → `/bin/mgpp`, plus the desktop/registry entry
-   as `0272` did.
+   as `0272` did. **Also add `{ "mgpp", DK_DECK }` to the extension-to-glyph table
+   at `os/wm.c:2317`.** That table is SEPARATE from the launcher association — it
+   lists `mgp`, `sent` and `deck` today, and `mgpp` is absent. A lane that reads
+   only the association wires the launcher correctly and ships a `.mgpp` that
+   double-clicks but wears the GENERIC file glyph — on a feature whose whole
+   premise is dragging the file to the desktop. Both rows are needed.
 
 ## Acceptance
 
