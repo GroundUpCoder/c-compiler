@@ -343,4 +343,9 @@ thing this file exists to kill.
 - anchor:  * Both are recorded in todos/LIABILITIES.md against todos/0426.
 - provenance: 0420
 
+### L65 — the heavy-suite RAM lock scopes its mutual exclusion to the two runners; every other full-OS boot path is unguarded
+- ticket: 0342
+- file: tests/lib/heavy-lock.js
+- anchor: // mutual exclusion ACROSS runner processes and ACROSS suite kinds — a running
+
 <!-- END ENTRIES -->
