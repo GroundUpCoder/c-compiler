@@ -233,14 +233,22 @@ console.log('big page ready');
  * over the proven textContent bridge, so the leg reads the outcome by
  * value as well as by pixels.
  *
+ * The radios MUST sit in a <form>: form_radio_set returns at once on a
+ * formless control (`if (!radio->form) return;`), so formless radios never
+ * change selection and the whole arm would be vacuous.
+ *
  * Band geometry, pinned by this page's own CSS and by nothing else:
  *   y   0..40   #sel   the <select>
  *   y  40..160  .r x3  one radio per 40 px row (r0 checked at load)
  *   y 160..     #d     the mutating element, then #mv, then the fillers
+ * Measured against that CSS: radio k's selection blob is a 9 px-tall disc
+ * of pure black centred at GADG_SEL_Y1 + k*GADG_ROW_H + 10, x 7..14.
  */
 const GADG_SEL_Y1 = 40;      /* must match #sel height */
 const GADG_ROW_H = 40;       /* must match .r height */
 const GADG_RAD_Y1 = GADG_SEL_Y1 + 3 * GADG_ROW_H;
+const GADG_BLOB_DY = 10;     /* blob centre within its row (measured) */
+const radioCentre = (k) => GADG_SEL_Y1 + k * GADG_ROW_H + GADG_BLOB_DY;
 const gadgetPage = (title, n, periodMs) => `<html>
 <head><title>${title}</title>
 <style>
@@ -252,12 +260,14 @@ body { margin: 0; background: #ffffff; font-size: 20px; }
 </style>
 </head>
 <body>
+<form id="f" action="#">
 <div id="sel"><select id="s">
 <option>alpha</option><option>bravo</option><option>charlie</option>
 </select></div>
 <div class="r"><input type="radio" name="g" id="r0" checked></div>
 <div class="r"><input type="radio" name="g" id="r1"></div>
 <div class="r"><input type="radio" name="g" id="r2"></div>
+</form>
 <div id="d">tick 0</div>
 <div id="mv"></div>
 ${'<div class="p"></div>\n'.repeat(n)}<script>
@@ -272,6 +282,8 @@ for (var i = 0; i < ids.length; i++) {
 }
 ${periodMs ? `var n = 0;
 var box = document.getElementById('d');
+/* 6 s, not 3: this page holds 6000 elements, and the leg settles it
+ * before the first tick so its click lands on a laid-out page */
 setTimeout(function () {
 	var tick = setInterval(function () {
 		n = n + 1;
@@ -280,7 +292,7 @@ setTimeout(function () {
 		 * final state */
 		if (n >= 25) clearInterval(tick);
 	}, ${periodMs});
-}, 3000);` : ''}
+}, 6000);` : ''}
 console.log('gadget page ready');
 </script>
 </body></html>
@@ -575,13 +587,20 @@ const out = driveBoot([
   'netsurf /root/gad-c.html &',
   'wmctl wait win NsGadC 30000',
   sidOf('GC', 'NsGadC'),
-  /* 6000 elements: the window appears well before the first layout lands,
-   * and two identical BLANK frames would satisfy pollStable */
-  'sleep 3',
+  /* CHANGE-then-SETTLE, not a clock.  This page holds 6000 elements, so
+   * the window appears long before the first layout lands and two
+   * identical BLANK frames would satisfy pollStable on their own. */
+  'wmctl shot $GC /root/gcr.ppm',
+  ...pollChange('$GC', '/root/gcr.ppm'),
   ...pollStable('$GC', '/root/gc0.ppm'),
   'echo shot-gc0-ok',
-  `wmctl click $GC 9 ${GADG_SEL_Y1 + 2 * GADG_ROW_H + 12}`,   /* radio r2 */
+  `wmctl click $GC 9 ${radioCentre(2)}`,   /* radio r2, centre of its blob */
   ...pollChange('$GC', '/root/gc0.ppm'),
+  /* The click repaints at once, then the `change` listener's textContent
+   * write starts a re-conversion whose swap repaints again ~600 ms later.
+   * pollStable can exit in the quiet gap between the two, so give the
+   * second repaint room before settling.  No marker exists for it. */
+  'sleep 2',
   ...pollStable('$GC', '/root/gc1.ppm'),
   'echo shot-gc1-ok',
   'wmctl close $GC && wmctl wait nowin NsGadC 8000 && echo gadc-closed',
@@ -594,17 +613,23 @@ const out = driveBoot([
   'netsurf /root/gad-t.html &',
   'wmctl wait win NsGadT 30000',
   sidOf('GR', 'NsGadT'),
-  'sleep 6',                      /* past the load AND the tick's 3 s delay */
-  `wmctl click $GR 9 ${GADG_SEL_Y1 + 2 * GADG_ROW_H + 12}`,   /* radio r2 */
-  /* No marker exists for "netsurf presented the frame that this click
-   * damaged": the settle is one frame at 60 Hz, and the window this leg
-   * measures against is ~600 ms wide, so 300 ms sits between the two by
-   * a wide margin.  D6 below prints both so the margin is auditable. */
+  /* settle the page BEFORE the tick starts (it is delayed 6 s for exactly
+   * this), so the click lands on a laid-out page at known geometry */
+  'wmctl shot $GR /root/grr.ppm',
+  ...pollChange('$GR', '/root/grr.ppm'),
+  ...pollStable('$GR', '/root/gr0.ppm'),
+  'echo shot-gr0-ok',
+  'sleep 6',                      /* ticking is now underway */
+  `wmctl click $GR 9 ${radioCentre(2)}`,   /* radio r2 */
+  /* No marker exists for "netsurf presented the frame this click
+   * damaged": that settle is one frame at 60 Hz.  The window this leg
+   * measures against is ~600 ms wide (6000 elements), so 300 ms sits
+   * between the two with margin at both ends.  D6 prints the numbers. */
   'sleep 0.3',
   'wmctl shot $GR /root/gr1.ppm && echo shot-gr1-ok',
   /* 25 ticks at 300 ms, each collapsing into a ~600 ms pass, plus the
    * trailing pass: past the finite tick's end with margin */
-  'sleep 12',
+  'sleep 14',
   ...pollStable('$GR', '/root/gr2.ppm'),
   'echo shot-gr2-ok',
   'wmctl close $GR && wmctl wait nowin NsGadT 8000 && echo gadt-closed',
@@ -616,7 +641,7 @@ const NAMES = ['m1', 'm2', 'r1', 'r2', 'r3', 'r4', 't1', 't2', 't3',
                'x4', 'x5',
                'tk1', 'tk2', 'tk3', 'tk4', 'tk5', 'tk6',
                'bt1', 'bt2', 'bu1', 'bu2', 'bc11', 'bc12', 'bc21', 'bc22',
-               'gc0', 'gc1', 'gr1', 'gr2'];
+               'gc0', 'gc1', 'gr0', 'gr1', 'gr2'];
 for (const tag of NAMES) {
   check(`shot ${tag} taken`, out.includes(`shot-${tag}-ok`));
 }
@@ -865,48 +890,73 @@ const shots = parsePPMs(back.stdout, NAMES);
     }
     return n;
   };
-  /* the `change` mirror, told apart by text colour over the whole frame:
-   * equal counts mean equal mirrored strings, so equal radio outcomes */
+  /* WHICH radio is selected, read straight off the screen: the selection
+   * blob is the only pure black in the radio band, so its mean row names
+   * the selected radio.  An ink COUNT cannot do this — one blob before,
+   * one blob after, so moving the selection leaves the count unchanged. */
+  const blobRow = (tag) => {
+    const s = shots[tag];
+    let n = 0, sum = 0;
+    for (let y = GADG_SEL_Y1; y < GADG_RAD_Y1; y++) {
+      for (let x = 0; x < 30; x++) {
+        const p = px(s, x, y);
+        if (p[0] === 0 && p[1] === 0 && p[2] === 0) { n++; sum += y; }
+      }
+    }
+    return n ? sum / n : null;
+  };
+  /* is the blob on radio k? */
+  const onRadio = (tag, k) => {
+    const r = blobRow(tag);
+    return (r !== null) && Math.abs(r - radioCentre(k)) <= 3;
+  };
+  /* the `change` mirror, told apart by text colour over the whole frame.
+   * DIAGNOSTIC ONLY: the listener's textContent write starts a
+   * re-conversion, so the mirror lands one settle behind the blob. */
   const mirRInk = (tag) => countContent(shots[tag],
     (p) => p[0] < 60 && p[1] > 90 && p[1] < 180 && p[2] < 60);
 
-  const rad = (tag) => bandInk(shots[tag], GADG_SEL_Y1, GADG_RAD_Y1);
   const sel = (tag) => bandInk(shots[tag], 0, GADG_SEL_Y1);
+  const TAGS = ['gc0', 'gc1', 'gr0', 'gr1', 'gr2'];
 
   /* ---- regression readout: every number printed unconditionally ---- */
-  console.log(`D6-GADG-RAD  gc0(before)=${rad('gc0')} gc1(control)=${rad('gc1')}` +
-              ` gr1(immediate)=${rad('gr1')} gr2(settled)=${rad('gr2')}` +
-              `  band-diff gc1^gr2=${bandDiff(shots.gc1, shots.gr2, GADG_SEL_Y1, GADG_RAD_Y1)}` +
-              ` gr1^gr2=${bandDiff(shots.gr1, shots.gr2, GADG_SEL_Y1, GADG_RAD_Y1)}`);
-  console.log(`D6-GADG-SEL  gc0=${sel('gc0')} gc1=${sel('gc1')}` +
-              ` gr1=${sel('gr1')} gr2=${sel('gr2')}` +
+  console.log('D6-GADG-BLOB ' + TAGS.map((t) => `${t}=${blobRow(t)}`).join(' ') +
+              `  (radio rows: r0=${radioCentre(0)} r1=${radioCentre(1)} r2=${radioCentre(2)})`);
+  console.log(`D6-GADG-RAD  band-diff gc1^gr2=${bandDiff(shots.gc1, shots.gr2, GADG_SEL_Y1, GADG_RAD_Y1)}` +
+              ` gr1^gr2=${bandDiff(shots.gr1, shots.gr2, GADG_SEL_Y1, GADG_RAD_Y1)}` +
+              ` gc0^gc1=${bandDiff(shots.gc0, shots.gc1, GADG_SEL_Y1, GADG_RAD_Y1)}`);
+  console.log('D6-GADG-SEL  ' + TAGS.map((t) => `${t}=${sel(t)}`).join(' ') +
               `  band-diff gc1^gr2=${bandDiff(shots.gc1, shots.gr2, 0, GADG_SEL_Y1)}` +
               ` gr1^gr2=${bandDiff(shots.gr1, shots.gr2, 0, GADG_SEL_Y1)}`);
-  console.log(`D6-GADG-MIR  gc0=${mirRInk('gc0')} gc1=${mirRInk('gc1')}` +
-              ` gr1=${mirRInk('gr1')} gr2=${mirRInk('gr2')}`);
+  console.log('D6-GADG-MIR  ' + TAGS.map((t) => `${t}=${mirRInk(t)}`).join(' ') +
+              '  (diagnostic: one settle behind the blob)');
 
-  /* The control arm must really have clicked a radio, or every comparison
-   * below is a comparison of two unchanged screens. */
-  check('gadgets: the control click really moved the radio (GC)',
-        bandDiff(shots.gc0, shots.gc1, GADG_SEL_Y1, GADG_RAD_Y1) > 0,
-        `radio-band pixels changed: ${bandDiff(shots.gc0, shots.gc1, GADG_SEL_Y1, GADG_RAD_Y1)}`);
-  check('gadgets: and the change event mirrored the new value (GC)',
-        mirRInk('gc0') === 0 && mirRInk('gc1') > 20,
-        `mirror ink before ${mirRInk('gc0')}, after ${mirRInk('gc1')}`);
+  /* Non-vacuity, both ends.  The page must start with r0 selected and the
+   * control click must really move it, or every comparison below compares
+   * two unchanged screens. */
+  check('gadgets: the page starts with r0 selected (GC)',
+        onRadio('gc0', 0), `blob row ${blobRow('gc0')}, wanted ~${radioCentre(0)}`);
+  check('gadgets: the control click really moved the selection to r2 (GC)',
+        onRadio('gc1', 2), `blob row ${blobRow('gc1')}, wanted ~${radioCentre(2)}`);
+  check('gadgets: the ticking page also starts with r0 selected (GR)',
+        onRadio('gr0', 0), `blob row ${blobRow('gr0')}, wanted ~${radioCentre(0)}`);
 
-  /* THE 0412 checks.  Settled: a click made while the page re-boxes
-   * continuously ends in exactly the control's render.  Immediate: it got
-   * there at the click, not at the next swap — pre-fix the damage
-   * rectangle was empty and gr1 still showed the old dot. */
+  /* THE 0412 checks.  Immediate: the mid-window click's repaint reached
+   * the screen AT the click.  Pre-fix form_radio_set damaged the new
+   * tree's box — no coordinates, zero size — so the damage rectangle was
+   * empty, nothing repainted, and gr1 still showed the blob on r0; only
+   * the next swap's full repaint moved it.  Settled: it ends in exactly
+   * the render the never-mid-window control produced. */
+  check('gadgets: a mid-window radio repaint reaches the screen AT ONCE (GR)',
+        onRadio('gr1', 2), `immediate blob row ${blobRow('gr1')}, wanted ~${radioCentre(2)}`);
   check('gadgets: a mid-window radio click ends in the control render (GR)',
         bandDiff(shots.gc1, shots.gr2, GADG_SEL_Y1, GADG_RAD_Y1) === 0,
         `differing pixels in the radio band: ${bandDiff(shots.gc1, shots.gr2, GADG_SEL_Y1, GADG_RAD_Y1)}`);
-  check('gadgets: and mirrors the same value as the control (GR)',
-        mirRInk('gr2') === mirRInk('gc1'),
-        `mirror ink ${mirRInk('gr2')} vs control ${mirRInk('gc1')}`);
-  check('gadgets: a mid-window radio repaint reaches the screen AT ONCE (GR)',
+  check('gadgets: and the immediate render already equals the settled one (GR)',
         bandDiff(shots.gr1, shots.gr2, GADG_SEL_Y1, GADG_RAD_Y1) === 0,
         `immediate vs settled radio band: ${bandDiff(shots.gr1, shots.gr2, GADG_SEL_Y1, GADG_RAD_Y1)} pixels`);
+  check('gadgets: the change event did fire on the ticking page (GR)',
+        mirRInk('gr2') > 20, `mirror ink at settle: ${mirRInk('gr2')}`);
 
   /* The select gadget's own render, mid-window against settled.  The
    * select is drawn from the box tree the compositor is showing, so this
