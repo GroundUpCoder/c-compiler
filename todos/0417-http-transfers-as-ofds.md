@@ -4,6 +4,12 @@
 - **Design**: this file; `todos/KERNEL.md` (the 0x04xx and 0x06xx opcode tables).
   The precedent is `todos/done/0264` (FS_WATCH, ticket #75) — the last time a new
   kernel object became an OFD.
+  🔴 **A dedicated design pass has since checked this ticket against source and
+  CORRECTED it in four places.** Its memo is `http-multiplex-design-memo.md` in the
+  `meta` repo (`meta/gucos/notes/`, commit `fda48d26`, 77 file:line anchors). Every
+  correction is folded into the text below, marked **[memo]** — this file remains the
+  single source of truth and the lane does not need the memo to build. Read the memo
+  only for the derivations behind the four calls.
 - **Provenance**: found by the Rust program on 2026-07-29, and reached
   independently by a second design pass on the same day. **This ticket stands on its
   own merits. File it and land it whatever any Rust decision says.** `/bin/curl`
@@ -68,6 +74,13 @@ Interruptible is not the same as pollable. A caller can be woken; a caller canno
 "is it ready?" and cannot wait on it beside anything else. Defects 1 and 2 above are
 untouched by the correction, and they are the defects this ticket repairs.
 
+🟢 **[memo] This correction has since been re-verified against source, independently,
+and it holds.** The interruptible flag rides both hooks (`kernel.js:1457-1458`),
+`krpc-intr` answers `EINTR` (`kernel.js:2743-2749`), and `_cancelWaiter` clears both
+waiter kinds (`kernel.js:7436-7439`). ⇒ **The claim "a hung request is an unkillable
+process" — as written at `rust-codex-queueing-handoff.md:24` — is REFUTED.** Do not
+re-derive it from the same wrong intuition, and do not let it back into a ticket.
+
 ## The design
 
 Make a transfer an **OFD kind**, the way `todos/0264` made a watch an OFD kind.
@@ -78,19 +91,67 @@ last release aborts the fetch through the existing `AbortController`. The existi
 `_ofdUnref` path already models a last-release action, so reuse it and delete
 `HTTP_CLOSE`.
 
-**Readability has an explicit rule.** An `http` fd is readable when the response
-headers have arrived, when body bytes are queued, when the stream reached its end,
-or when the transfer failed.
+**Readability has an explicit rule.** An `http` fd is readable when at least one
+**consumable** is pending:
+
+- the response status arrived **and no `HTTP_STATUS` call has consumed it yet**;
+- body bytes are queued (`xfer.bytes > 0`);
+- the stream ended cleanly (`xfer.done`);
+- the transfer failed (`xfer.error !== null`).
+
+🔴 **[memo] The consumption clause on the status leg is load-bearing, and an earlier
+version of this ticket omitted it.** That version said "readable when the response
+headers have arrived", with no consumption clause. **Headers-arrived is a permanent
+condition.** Under that rule a caller that consumed the status and is now waiting for
+the first body byte finds the fd readable forever and spins: wait → read → `EAGAIN` →
+wait. The fix is one bit — `HTTP_STATUS` sets `statusConsumed` on the transfer, and
+the readiness leg tests `status !== null && !statusConsumed`.
+
+The `done` and `error` legs stay permanent **on purpose**: a pipe at EOF is also
+readable forever, and the reader's answer there (0 bytes, or the error) is the honest
+one. Only the status leg needs the bit.
+
+**Document the consumer contract the fswatch way** (`os/fswatch.h:16-17`): on a wake,
+consume the status if you have not, then drain reads until `EAGAIN`, then re-wait. A
+consumer that refuses to consume its pending status will spin, and the contract names
+that as the caller's bug rather than the kernel's.
 
 🔴 **Add an explicit `_selectScan` branch. The default arm of `_selectScan` reports
 always-readable.** `todos/0264` calls this out as mandatory, and it is mandatory for
 the same reason here: without the branch, every `http` fd reports ready the moment it
 opens, and a caller then spins.
 
-**The body drains through `FS_READ`.** An `http` fd reads like any other stream fd.
-It gives bytes, it gives 0 at the end of the stream, and it gives `EAGAIN` when it
-is dry and non-blocking. The kernel keeps the backpressure it already has: the async
-reader pauses past `HTTP_BUF_CAP`, and a read that drains below the cap resumes it.
+**The body drains through `FS_READ`,** on an `http` branch beside the watch branch
+(`kernel.js:3541-3549`). It gives bytes when queued (via `_httpDrain`,
+`kernel.js:7267-7279`, already clamped to the RPC payload cap), 0 at clean EOF, the
+error when failed, and `EAGAIN` when dry. The kernel keeps the backpressure it
+already has: the async reader pauses past `HTTP_BUF_CAP`, and a read that drains
+below the cap resumes it.
+
+🔴 **[memo] The branch NEVER PARKS. `http` fds are inherently non-blocking** — exactly
+like watch fds (*"watch fds are inherently non-blocking; the contract is WAIT/select
+first, then drain until EAGAIN"*, `kernel.js:3542-3544`). An earlier version of this
+ticket said an http fd "reads like any other stream fd" and gives `EAGAIN` when it is
+"dry **and non-blocking**", which left the question ambiguous. **It is decided here,
+and there is no mode to opt into:** the kernel has no `O_NONBLOCK` machinery at all —
+no `F_SETFL`, no per-OFD status flags; only `FS_FCNTL_DUPFD` exists
+(`kernel.js:3804`, verified by search).
+
+Two designs were possible — park-when-dry like a pipe (`_streamRead`,
+`kernel.js:3551-3554`), or `EAGAIN`-when-dry like a watch. **The watch model wins for
+a load-bearing reason: the `__wait` C surface does not name the ready fd.**
+`waitMulti` returns only `why` and drops the kernel's ready lists at the import
+boundary (`host.js:6756`). A woken caller therefore has to find the ready transfer by
+trying, and try-read-until-`EAGAIN` is exactly that discipline. Do not implement a
+parking read.
+
+**[memo] Teardown becomes FREE, and a whole mechanism gets deleted.** `_exitProcess`
+already releases every fd (`kernel.js:7460-7465`). Once a transfer IS an fd, that
+loop does the work of the dedicated `pcb.https` sweep (`kernel.js:7490-7499`).
+🔴 **Delete `pcb.https` and delete the sweep.** This is a net simplification the
+ticket originally missed — it was described only as "`HTTP_OPEN` returns a transfer
+id held in `_httpXfers` and in `pcb.https`", with no note that the second store
+becomes dead. Do not leave `pcb.https` behind as an unused field.
 
 **`HTTP_STATUS` stays, and it stops parking.** The status and the header blob are a
 separate answer from the body, so they keep their own op. After the fd reports
@@ -113,6 +174,11 @@ an error and a program that watches the fd sees it become readable. **A deadline
 that expires must produce a distinguishable error**, not a generic `EIO` — a caller
 has to be able to tell a timeout from a refused connection.
 
+**[memo] The code is `ETIMEDOUT`, and the plumbing already exists end to end:** errno
+110 in the host table (`host.js:10856`) and in libc (`compiler.js:23879`), with
+strerror text (`compiler.js:32077`). Nothing new is needed to carry it. An expired
+transfer becomes readable on the error leg, so a parked waiter wakes and reads it.
+
 ## The one C consumer
 
 `os/curl/libcurl.c` is the only caller of `__http_open`, `__http_status`,
@@ -121,19 +187,49 @@ reach the transport through that veneer.
 
 🔴 **Convert the veneer in the same change, and delete the id path.** Do not keep the
 old ops beside the new ones. A second path that nothing exercises is the zombie
-fallback this estate rejects. `CURLOPT_TIMEOUT` and `CURLOPT_CONNECTTIMEOUT` then map
-onto the two kernel deadlines, and the `ITIMER_REAL` alarm in the veneer goes away.
+fallback this estate rejects.
+
+🔴 **[memo] The timeout mapping is NOT "both options onto the two kernel deadlines" —
+that was wrong in an earlier version of this ticket, and building it would silently
+change what `CURLOPT_TIMEOUT` means.** `CURLOPT_TIMEOUT` is a **whole-operation** cap
+(`os/curl/libcurl.c:158-159`), and **neither kernel deadline expresses that**: the
+headers deadline bounds only the head of the transfer, and the idle deadline bounds
+only the gap between bytes. A download that streams steadily for an hour violates
+`CURLOPT_TIMEOUT` and violates neither deadline.
+
+The exact mapping is:
+
+- `CURLOPT_CONNECTTIMEOUT` → **the kernel headers deadline**.
+- `CURLOPT_TIMEOUT` → **the veneer's own wall clock**, enforced through `__wait`'s
+  `timeoutMs`: the veneer waits with `remaining_ms` and treats `why = 0` as
+  `CURLE_OPERATION_TIMEDOUT`.
+
+This still deletes the entire `ITIMER_REAL`/`SIGALRM` apparatus
+(`os/curl/libcurl.c:178-203`, armed at `319-347`) — and it is **more** faithful to
+curl than the alarm was. The two kernel deadlines remain underneath as defaults, so a
+caller that sets no curl option is still bounded.
 
 ## Plan
 
 1. Add the `http` OFD kind. `HTTP_OPEN` allocates an fd. Delete `HTTP_CLOSE`.
-2. Add the explicit `_selectScan` branch.
-3. Serve `FS_READ` on an `http` fd, and keep the backpressure behaviour.
-4. Make `HTTP_STATUS` non-blocking.
-5. Add the two deadlines, the kernel defaults and the distinguishable error.
-6. Convert `os/curl/libcurl.c`, and delete the alarm.
+   **Delete `pcb.https` and its `_exitProcess` sweep** (`kernel.js:7490-7499`); the
+   fd-release loop at `kernel.js:7460-7465` already covers it.
+2. Add the explicit `_selectScan` branch, **including the `statusConsumed` test on
+   the status leg**. The branch is mandatory, not an optimization: the default arm
+   reports unknown kinds always-readable and would wake every parked waiter forever
+   (the watch branch says why, `kernel.js:6792-6795`).
+3. Serve `FS_READ` on an `http` fd — **`EAGAIN` when dry, never parking** — and keep
+   the backpressure behaviour.
+4. Make `HTTP_STATUS` non-blocking, **and have it set `statusConsumed`**.
+5. Add the two deadlines, the kernel defaults, and `ETIMEDOUT` as the distinguishable
+   error.
+6. Convert `os/curl/libcurl.c`: `CONNECTTIMEOUT` → the headers deadline,
+   `CURLOPT_TIMEOUT` → the veneer's own wall clock via `__wait timeoutMs`, and delete
+   the `ITIMER_REAL`/`SIGALRM` apparatus.
 7. Update the `todos/KERNEL.md` opcode table and the header comment at
    `kernel.js:7108`.
+8. Document the consumer contract (consume status → drain to `EAGAIN` → re-wait)
+   where a C caller will find it, the way `os/fswatch.h:16-17` does for watches.
 
 ## Acceptance
 
@@ -146,7 +242,15 @@ onto the two kernel deadlines, and the `ITIMER_REAL` alarm in the veneer goes aw
 - A transfer whose body stalls hits the idle deadline. A slow but live stream, which
   delivers a byte inside the idle window, does **not** hit it.
 - A timeout error is distinguishable from a connection error and from a clean end of
-  stream.
+  stream, and it arrives as `ETIMEDOUT` rather than a generic `EIO`.
+- **[memo] A caller that consumes the status and then waits for the first body byte
+  BLOCKS — it does not spin.** This is the `statusConsumed` check, and it is the one
+  acceptance item that fails under the ticket's original readiness rule. A test that
+  only opens and reads will not catch it; the test must consume the status first,
+  then re-wait, and assert the wait actually parked.
+- **[memo] A red control that must fail LOUDLY today, not hang.** On the pre-change
+  kernel the same multi-transfer wait spins, because the id is not an fd and the scan
+  never sees it. Write the control so that failure is visible as a failure.
 - `close(2)` on the fd aborts the fetch. A test proves the abort.
 - Backpressure still holds: a response larger than `HTTP_BUF_CAP` transfers in full,
   and the kernel never queues more than the cap.
