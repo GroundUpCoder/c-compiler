@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Re-runnable vendor pipeline for the NetSurf constellation.
 #
-#   ./update.sh [--src DIR]
+#   ./update.sh [--check] [--src DIR]
 #
 # Rebuilds the committed vendor trees from upstream at the revisions pinned
 # in UPSTREAM.json:  fetch pristine → generate (gperf/perl/gen_parser) →
@@ -11,6 +11,20 @@
 # new upstream drop, bump UPSTREAM.json and re-run (then fix patch fuzz /
 # new relativizations and re-verify with smoke.mjs).
 #
+# That byte-identical claim is ENFORCED, on two cadences (todos/0423):
+#   - `./update.sh --check` runs the same steps 1-5 into the stage, then
+#     DIFFS the stage against the committed trees and exits non-zero on any
+#     difference, installing nothing (the check path never writes into the
+#     committed component trees). Needs the network + host tools; run it at
+#     every UPSTREAM.json change and after any wholesale patches/ rebuild —
+#     see README.md "Updating" for the cadence statement.
+#   - `node patchcheck.mjs` (the `netsurf-patch` suite + the pre-commit
+#     hook) is the offline half the ordinary gate runs: it proves the
+#     committed (tree, patches/) pair self-consistent by strict reverse-apply
+#     against patches/pristine.json, and diffs pristine residuals across any
+#     commit that touches a component. No network, ~2 s.
+#
+#   --check     verify instead of install (see above)
 #   --src DIR   use existing clones in DIR/<component> instead of cloning
 #               (each must contain the pinned revision as a commit)
 #
@@ -19,7 +33,14 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SRC_DIR=""
-if [ "${1:-}" = "--src" ]; then SRC_DIR="$2"; shift 2; fi
+CHECK=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --check) CHECK=1; shift ;;
+    --src)   SRC_DIR="$2"; shift 2 ;;
+    *) echo "update.sh: unknown argument '$1'" >&2; exit 2 ;;
+  esac
+done
 
 COMPONENTS=(netsurf libwapcaplet libparserutils libhubbub libdom libcss libnsgif libnsbmp libnsutils libnsfb)
 
@@ -71,8 +92,10 @@ echo "generating…"
     > resources/Messages.en )
 
 # ---- 3. curated patches (content changes only; see README.md table) ----
+# Every component is eligible: a new patches/<c>.diff is picked up by name,
+# and patchcheck.mjs fails loud on a .diff whose name matches no component.
 echo "patching…"
-for c in netsurf libparserutils libhubbub libcss libdom libnsfb; do
+for c in "${COMPONENTS[@]}"; do
   [ -f "$HERE/patches/$c.diff" ] || continue
   ( cd "$STAGE/$c" && patch -p1 --no-backup-if-mismatch -s < "$HERE/patches/$c.diff" )
 done
@@ -100,6 +123,33 @@ find "$STAGE" \( -name Makefile -o -name 'Makefile.*' -o -name '*.pc.in' -o -nam
 
 # ---- 5. include relativization (mechanical; see relativize.mjs) ----
 node "$HERE/relativize.mjs" "$STAGE"
+
+if [ -n "$CHECK" ]; then
+  # ---- 6c. verify (todos/0423): diff the stage against the committed ----
+  # trees and INSTALL NOTHING. This branch only ever reads from $HERE; the
+  # rm -rf/cp -R install below is unreachable from here (the exits close it).
+  echo "checking (no install)…"
+  FAIL=0
+  for c in "${COMPONENTS[@]}"; do
+    # lib.json is ours, not upstream's; the install preserves it, so the
+    # comparison carries it over the same way.
+    if [ -f "$HERE/$c/lib.json" ]; then cp "$HERE/$c/lib.json" "$STAGE/$c/lib.json"; fi
+    if ! diff -r "$STAGE/$c" "$HERE/$c" > "$STAGE/.drift-$c" 2>&1; then
+      echo "DRIFT: $c is not what the record rebuilds:"
+      sed 's/^/    /' "$STAGE/.drift-$c"
+      FAIL=1
+    fi
+  done
+  # The offline record checks must agree too (patches/pristine.json et al).
+  if ! node "$HERE/patchcheck.mjs"; then FAIL=1; fi
+  rm -rf "$STAGE"
+  if [ "$FAIL" != 0 ]; then
+    echo "update.sh --check: FAIL — the committed trees are NOT byte-identical to the rebuild at the current pins"
+    exit 1
+  fi
+  echo "update.sh --check: OK — committed trees reproduced byte-identically at the current pins"
+  exit 0
+fi
 
 # ---- 6. install (preserving the in-component lib.jsons) ----
 echo "installing…"

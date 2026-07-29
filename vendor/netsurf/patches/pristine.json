@@ -1,0 +1,84 @@
+{
+ "components": {
+  "netsurf": {
+   "content/content.c": "16e1ea0e7fad24517ac8be2143322ba60f6ab9571c2151e9b405d3109666e915",
+   "content/content.h": "f1f4c34b2a9c8c3490534ea0745c9eb51afad2ee521bef7835c90fb09e242b2d",
+   "content/content_protected.h": "df123a12a55e1416abb43f1a66b323bc8f73eca15f3d354165d0cd11702b3d03",
+   "content/fetch.c": "0096610ccdb541679e1c75cf1949b5273b5de8528786703fc4d076788f8784d5",
+   "content/handlers/css/select.c": "51d8e981b395c377fc83874f49da329afd58f0912f064bd8ad49f69f87ab52a0",
+   "content/handlers/css/select.h": "4c2fcaf8a0eb1ec14431ce24c925f03108df06b883d6e1a258a261267f19f9a6",
+   "content/handlers/html/box_construct.c": "6c78b236f4b556bda83d232c455a0d1851b42cb9332eb4b916adecc5c3362ca6",
+   "content/handlers/html/box_construct.h": "c6f781df54e646dbc0d8025f0c26cb6c22291700caa345a942f9d1618e1881d8",
+   "content/handlers/html/box_special.c": "514ec741040682f7a67fa768d81472a89250493b87f8a9e18e89e9b836d87c43",
+   "content/handlers/html/box_textarea.c": "950b4da9e8b8b4867b62c7b1562aeccb9e407e6c5135554b0f6e1e2ba4de326a",
+   "content/handlers/html/dom_event.c": "9c868ac3e35ef7c3a2aa96dace17114ff55ebf4734bd7d6d7267eee13d380909",
+   "content/handlers/html/form.c": "244e9d744b9f9401bd50cfece6dfaad88ef644daee76f4ba308aa77a61b7ed2b",
+   "content/handlers/html/form_internal.h": "429e95b69904350fbc097d9f78efb1918453da7c162b1a90106e6c377c5533ec",
+   "content/handlers/html/forms.c": "515ed799a5e9a91442261b28c9acc785d6eebc6dd139da75433de4e99d8c1d8b",
+   "content/handlers/html/html.c": "83fafb1e828935b245745add3e3ea71708383cd9fecb21af6a7e262f567e356f",
+   "content/handlers/html/imagemap.c": "827bc2b71ba155a9b7eedcde1604f83afc8fb86fad0493fd3f0b912ecc093152",
+   "content/handlers/html/interaction.c": "dce908461f44a6ba390ce7a261381b078f670b1b49c6061cd90a167eda43bc30",
+   "content/handlers/html/interaction.h": "dc9b5c14bc928de3ac77f2b840d73efef6f14947aa7bc9da2a8ddea4362f6e35",
+   "content/handlers/html/object.c": "addcfba45f3ecd1d1e780bd1e0a3ccbfebe806ab7258acebff617802bf10301e",
+   "content/handlers/html/private.h": "20da6609d85fdf2675411de076e38b5c1c832cb91e0dd360a2466f085b093fd0",
+   "content/handlers/html/redraw.c": "777b865f2ebc8f9ca78f773679bbc3f40a36fc8ca80aee7459ce9f8fd15d20fe",
+   "content/handlers/image/png.c": "c3ec9860ed578e97662b4af42cc479e16d825a5b9c790f9507e11d7e4b7aa345",
+   "content/handlers/javascript/WebIDL/uievents.idl": "beb501742504909266652e6004b73b8b9f9e9f033594cafac70ee138a480d59d",
+   "content/handlers/javascript/duktape/EventTarget.bnd": "a4d9670036e4bf1f54dfc13dcbefcf6eeac8def5a1127141c1a416f9b258f473",
+   "content/handlers/javascript/duktape/MouseEvent.bnd": "absent",
+   "content/handlers/javascript/duktape/UIEvent.bnd": "absent",
+   "content/handlers/javascript/duktape/WheelEvent.bnd": "absent",
+   "content/handlers/javascript/duktape/dukky.c": "ff382d23b665062a938adc66f2f7b11f57ce230c89366ac1eebbfdf25dbbac6a",
+   "content/handlers/javascript/duktape/dukky.h": "461b06ea4fd220b95995fb47474fabf706d9b3317bc7f6d6885b9ad6f9db0b3d",
+   "content/handlers/javascript/duktape/netsurf.bnd": "19489bad691bfa7e297633b81aebf4ddfd23f267827e48b8c09e3717a3d284c3",
+   "content/handlers/javascript/js.h": "3f5f4f5803cd6e67987409cf0c1d30b3b2036b2b1656ae8080d700a2dfc78d48",
+   "content/handlers/javascript/none/none.c": "765dd188805d84d52b3d5e1f946bb5b54c39f1c3a1cacf28d79f4026c3c3098b",
+   "desktop/browser_window.c": "9206881987a2e1b8816674412279227328bcc024de6ccd6f2f7113c1f2677712",
+   "desktop/frames.c": "6783ddb1fb3b25f393b38e7bd7d918603368a8b2f34b485666d160690cf59167",
+   "desktop/textarea.c": "b84483c209d725544216dc9b712e3d8db7f329e777f4f0cd06d2e856e718f1c0",
+   "desktop/textarea.h": "bb172967c4e7310a1cf739f04c9a7892138d2355b8d7ae1f0406b0cd69d05b4a",
+   "desktop/textinput.c": "bc232c615bb0416dd5fbb78f40f4cb96119e9e6940c5876dca3c6ca1da14a4ac",
+   "frontends/monkey/browser.c": "628d7ef5d0671cc2524898dff3ec4476c0b49b9cc9e7981f367403ab3cbb29e8",
+   "frontends/monkey/dispatch.c": "28cc6a835f4edbefc22b02ec0ad1dd17b32e47b3a9f408c5d7a082dad0414403",
+   "frontends/monkey/dispatch.h": "adec0555393c2d6e66137ba0c5b755f4bc85a2b2e02526f41ee34c0b57e446b7",
+   "frontends/monkey/filetype.c": "2c1c5e3cd8c06ba5b6753904761b86b9f61ef40a0c84db80a8de8106a2875368",
+   "frontends/monkey/main.c": "ad004da1f1ae418eceb7fbd9d45c29c3fd0afa7324c8e35dd117a3e676b32b95",
+   "include/netsurf/browser_window.h": "b265ad337caba850a2900803ddecd91ea7aff9fa1bde6fbae4cf06a016485ce9",
+   "include/netsurf/form.h": "1f67c9492223f47ac76d927bacf4523d1721fd14d5b116aac034248ce76b9d39",
+   "include/netsurf/keypress.h": "3315f6d1869191e34e0693f14fa1d4dc7eef43dc6ee25460b4f2505299e150a7",
+   "include/netsurf/uievents.h": "absent",
+   "utils/config.h": "7f26a0ccc09362096324c23ec0191be6bb50eda8731b9e8683e69866e5760de4",
+   "utils/corestringlist.h": "7bc9961b2006b6383c1eac91873e7496137b6569a50285f2929204ee1b1dd3b3",
+   "utils/nsoption.c": "b6e754a5405bccf38cb24878608ec1273a946c74368398e4f2c0f837a6215d12",
+   "utils/nsoption.h": "642c08a99e6c837f1bf0f7c04d89bb333f95907ba8014493921865d64c0e6267",
+   "utils/talloc.c": "373e44f09c62cbcb88420096490d2db53ec8047a4921199f21731170a29fc2a2"
+  },
+  "libparserutils": {
+   "src/charset/codec.c": "933a5754a10d02dbc158e6319967711f91e44dd2b1005716bd3a5fcffd5bd584"
+  },
+  "libhubbub": {
+   "src/treebuilder/treebuilder.c": "8d7a19d2f00a1826f528332fdf399809aea91a02d61da999d178a3e1751d5a4d"
+  },
+  "libdom": {
+   "include/dom/events/event.h": "1fcc42590084cd65d47a8bdb3b001d71935cc953fad577984352e5366783ac5f",
+   "include/dom/events/mouse_event.h": "be2efbeb80b7522e0159da6dc7a6cb05bdc5ecb42d6bbffecc53626568dd8b85",
+   "include/dom/events/mouse_multi_wheel_event.h": "c4ee440d1f731d41eb25f337cf7f98e1abc4b396d09931507c54f30291d086e6",
+   "src/core/attr.c": "8944be33c5fb5a72d6491cfb563d5f608c5a9e97707c80862ba5f2052308cf46",
+   "src/core/element.c": "f5fbade2e7f3f63b04a5ce6d2451e0a393cab509417cc4d014e4a67a4afa183c",
+   "src/core/element.h": "d6d766a7a00b96f97486e1d0d629f8f451659aff7a7621473024fb8a9eb98ffc",
+   "src/events/event.c": "ce2cbdc5f9f235869fad73660456d101bd2ee82b098b9116655b9775981ce172",
+   "src/events/event.h": "b0acc9ed5781e3a20c9e636e3676702febee1a8a092d2d5a1315fe28d2c6b411",
+   "src/events/event_target.c": "c507efa7d0cca762808b302d25689abb125b64fa1446bd4b78500f8eb05b8fb2",
+   "src/events/mouse_event.c": "5bb6327ac34ddf21412a3946bcf66652773fcac4469f05efdbc082dcde6992cc",
+   "src/events/mouse_event.h": "f1ed063c09ebe368190f3b595bf3e6c041441fe8b6440df23f1fc6a5bcff938d"
+  },
+  "libcss": {
+   "src/parse/mq.c": "6d21bb695a35d41b6cc902b60e91caebe9069928c8d14b26c1f45dd5854a92c8"
+  },
+  "libnsfb": {
+   "src/surface.h": "c3ecb1f62fe1126c51a7f518b4f3bd14b41afedfb34da39e6ed1ab95fdfe0ea7",
+   "src/surface/surface.c": "fba5e98edb14a3d7cdee6d406ed44344b51f2e0c59394d8d7b6ebc868eea1dca"
+  }
+ },
+ "comment": "sha256 of reverse_apply(patches/<c>.diff section, committed file) for every patched file — the pristine content each section claims to sit on (\"absent\" = the section creates the file). Checked offline by patchcheck.mjs on every gate run; validated against real upstream by update.sh --check on its cadence (README.md \"Updating\"). Regenerate with `node vendor/netsurf/patchcheck.mjs --write-manifest` ONLY for an intentional residual change: a pin bump, a generator/relativize change, or a file gaining/losing a section."
+}

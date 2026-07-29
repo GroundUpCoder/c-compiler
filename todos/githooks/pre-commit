@@ -33,4 +33,18 @@ if ! out=$(node todos/liabilities.js check 2>&1); then
   echo "Fix the register (see: node todos/liabilities.js check) or bypass with: git commit --no-verify" >&2
   exit 1
 fi
+
+# The NetSurf patch record (todos/0423): a staged edit under vendor/netsurf/
+# must keep patches/ consistent with the trees IN THE SAME COMMIT, or the next
+# update.sh run silently destroys it (the 0407 shape). patchcheck.mjs proves it
+# by inversion — reverse-applying the record on both sides of the change —
+# so hunk reframing passes and a missing or wrong hunk cannot hide.
+if git diff --cached --name-only | grep -q '^vendor/netsurf/'; then
+  if ! out=$(node vendor/netsurf/patchcheck.mjs --staged 2>&1); then
+    echo "pre-commit: vendor/netsurf/patchcheck.mjs --staged failed —" >&2
+    echo "$out" >&2
+    echo "Mirror the tree change into patches/<component>.diff (and patches/pristine.json if the residual moved) or bypass with: git commit --no-verify" >&2
+    exit 1
+  fi
+fi
 exit 0

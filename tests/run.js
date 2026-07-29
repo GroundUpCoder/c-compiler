@@ -66,6 +66,8 @@ const SUITES = {
              cmd: ['node', 'tests/host/run.js'], supports: [] },
   todos:   { desc: 'queue manifest + liability register validators (todos/0286)',
              cmd: ['node', 'tests/todos/run.js'], supports: ['filter'] },
+  'netsurf-patch': { desc: 'vendor/netsurf patch-record invariant, offline half (todos/0423)',
+             cmd: ['node', 'tests/netsurf/run.js'], supports: ['filter'] },
 };
 
 // run.py categories exposed as suites. `unit`/`blockfs` are DELIBERATELY not
@@ -81,10 +83,10 @@ for (const cat of PY_CATEGORIES) {
 
 // Execution order: cheap-and-fast first, the image-baking kernel suite and
 // the heavy browser sweep last. Any suite not listed here falls after.
-const RUN_ORDER = ['todos', 'unit', 'host', 'blockfs', ...PY_CATEGORIES, 'kernel', 'sweep'];
+const RUN_ORDER = ['todos', 'netsurf-patch', 'unit', 'host', 'blockfs', ...PY_CATEGORIES, 'kernel', 'sweep'];
 
 // `all` = the entire estate.
-const ALL_SUITES = ['todos', 'unit', 'host', 'blockfs', ...PY_CATEGORIES, 'kernel', 'sweep'];
+const ALL_SUITES = ['todos', 'netsurf-patch', 'unit', 'host', 'blockfs', ...PY_CATEGORIES, 'kernel', 'sweep'];
 
 // ---------- Diff → suite rule table ----------
 //
@@ -288,6 +290,7 @@ const RULES = [
   [/^tests\/browser\//, ['sweep'], null],
   [/^tests\/host\//, ['host'], null],
   [/^tests\/todos\//, ['todos'], null],
+  [/^tests\/netsurf\//, ['netsurf-patch'], null],
   [/^tests\/serve\//, ['host'], null],
   [/^tests\/run\.js$/, ['host'], 'the dispatcher itself — its RULES-closure guard (test_diff_rules.js) is a host test'],
   [/^tests\/bench\//, [], 'informational perf bench (todos/0186) — opt-in, ROM-gated, never a gating suite'],
@@ -418,7 +421,11 @@ const RULES = [
   // vendor/netsurf/smoke.mjs (JS off) and smoke-js.mjs (the JS gate), stay
   // manual recipes documented in vendor/netsurf/README.md: they each rebuild
   // the whole ~850-TU constellation, which the projects suite already covers.
-  [/^vendor\/netsurf\//, ['projects', 'kernel', 'sweep'],
+  // `netsurf-patch` rides along (todos/0423): any edit under vendor/netsurf/
+  // — a component tree, patches/, UPSTREAM.json — must keep the patch record
+  // self-consistent (patchcheck.mjs's frame + manifest + differential), or
+  // the next update.sh run silently destroys the unmirrored change.
+  [/^vendor\/netsurf\//, ['projects', 'kernel', 'sweep', 'netsurf-patch'],
     'the browser constellation, its in-window e2es, and the fat fixture it is seeded into'],
   // OS-seeded vendor apps (doom/quake/gameboy/sameboy/busybox/…) restale the
   // image and are exercised by the OS e2es + the browser sweep.
