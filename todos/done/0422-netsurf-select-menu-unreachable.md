@@ -1,6 +1,6 @@
 # 0422 — netsurf: a `<select>` click does nothing in gucOS (no select menu)
 
-- **Status**: open
+- **Status**: done
 - **Design**: —
 
 ## Goal
@@ -50,3 +50,30 @@ exists at all.
 
 - A click on a `<select>` in the gucOS browser opens a menu, and choosing an option
   changes the displayed value.
+
+## Resolution (2026-07-30)
+
+Took the core menu, per the plan: `nsoption_set_bool(core_select_menu, true)` in
+`gucos/main.c set_defaults` (the `enable_javascript` precedent — Choices and the
+command line read over it). Image v196. Register L62 retired.
+
+One real defect surfaced beyond the option flip: the gucOS mutation bridge
+(`DOMSubtreeModified` → reconvert) destroyed the open menu under every
+multi-select toggle, because `form__select_process_selection`'s own
+`set_selected` write-back fires synchronous attribute-mutation events. Fixed
+with the `html_content.form_selfmutation` guard (the TEXTAREA/INPUT value-edit
+precedent) — the form code renders its own writes, so the bridge skips the
+re-box exactly while they run. JS-originated `option.selected` writes keep the
+reconvert path, so the menu-dies-under-reconvert deferral in the Notes above is
+unchanged — and now that the menu exists, whether to fund the carry-across
+treatment (0407-style snapshot + diffed option list) is a decision for the
+coordinator.
+
+Coverage: `tests/kernel/test_netsurf_select_e2e.js` — open, scroll (exact 96px
+via six scrollbar-arrow presses + the re-mapped row pick), choose (`change`
+listener paints an index-encoding colour; widget text repaints), dismiss
+(outside click, no event), multi-select (toggle on/on/off with the menu held
+open, final DOM state read after dismissal), and the layout half: the widget is
+exactly `SCROLLBAR_WIDTH` wider than a `--core_select_menu=0` control window,
+whose click still paints nothing. Menu geometry is measured from the
+selected-row highlight band, then replayed with computed client coordinates.
