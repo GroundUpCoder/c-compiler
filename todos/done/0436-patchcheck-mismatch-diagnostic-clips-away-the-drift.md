@@ -1,6 +1,6 @@
 # 0436 — patchcheck.mjs's mismatch diagnostic clips both sides from column 0, hiding the drift it reports
 
-- **Status**: open
+- **Status**: done
 - **Design**: —
 
 ## Goal
