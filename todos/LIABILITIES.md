@@ -327,4 +327,10 @@ thing this file exists to kill.
 - anchor:    time. Funded by todos/0401, which is also what keeps todos/0382 open. */
 - provenance: 0382
 
+### L60 — every gadget consumer except the text widget still names control->box, so each takes mid-window coordinates from an un-laid-out box
+- ticket: 0412
+- file: vendor/netsurf/netsurf/content/handlers/html/form_internal.h
+- anchor:  * mid-window coordinates from an un-laid-out box (todos/0412, register
+- provenance: 0407
+
 <!-- END ENTRIES -->

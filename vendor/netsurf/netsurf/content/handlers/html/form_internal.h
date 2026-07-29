@@ -375,6 +375,12 @@ nserror form_submit(struct nsurl *page_url, struct browser_window *target,
  *
  * Outside a re-conversion the two are the same box.
  *
+ * Only box_textarea.c reads this so far.  Every other gadget consumer —
+ * the select menu's geometry, the select and radio repaints, the file
+ * gadget — still names control->box directly, and so still takes
+ * mid-window coordinates from an un-laid-out box (todos/0412, register
+ * L60).
+ *
  * \param control  the gadget
  * \return the gadget's displayed box, or NULL if it has none
  */

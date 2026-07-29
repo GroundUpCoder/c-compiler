@@ -710,3 +710,46 @@ succeeds points at the selection side (libcss bucketing / the cached
    two silent symptoms stacked.  `tests/kernel/test_netsurf_restyle_e2e.js`
    is the guard: five probes, one click, all required to light in the SAME
    frame.
+
+## 12. What a page that re-boxes continuously shows (todos/0407)
+
+A page can mutate its DOM faster than the browser can re-box it.  The
+`test_netsurf_mutation_e2e.js` trigger page does this on purpose: it holds
+3000 elements and writes text every 300 ms, so one re-conversion costs about
+one tick period.  What must such a page show?  This section records the
+answer, because todos/0407 named an alternative — a limit on the re-box rate
+— and that alternative is rejected.
+
+**The decision: keep the present behaviour.  Do not add a rate limit.**
+
+The browser already limits the rate, and the limit is the work itself.
+`html__reconvert` refuses to start a second pass while one pass runs.  It
+sets `reconvert_pending` and returns.  The completion callback swaps the two
+trees and then schedules the next pass.  One pass thus follows another, and
+the rate is one pass per pass.  No timer can make that rate smaller than the
+work costs.
+
+Every pass completes and swaps.  The page is not starved.  It shows a new
+and fully laid-out rendering once per pass.  Between two swaps the screen
+holds the previous COMPLETE rendering.  This is a double buffer, and it is
+correct: a browser must not show a half-built layout.
+
+The defect was a different one.  Until todos/0407 the half-built tree LEAKED
+into the displayed frame.  Box construction recreated each text widget at a
+hardcoded 10pt default, and the still-displayed old tree drew that new
+widget.  Box construction also re-bound each gadget to a box that the layout
+pass had not seen.  The caret and the damage rectangle then took their
+coordinates from that box, which holds zeros until the swap.  A page whose
+window spans its tick period showed all of this permanently.
+
+A rate limit does not repair a leak.  It makes the displayed frame OLDER,
+and the complaint against such a page is that its frame is old.  The repair
+is the one todos/0407 made.  The displayed frame must hold complete state
+only.  A recreated widget takes its style from the box's computed style and
+its geometry from the widget it replaces.  A gadget's screen coordinates come
+from the box that is on screen (`form_gadget_screen_box`).
+
+One consequence is worth a sentence.  The screen lags the DOM by up to one
+pass, and on such a page that lag never falls to zero.  An application that
+needs the screen to match the DOM must mutate less often than a re-box costs.
+The lag is honest: what the user sees was true one pass ago.

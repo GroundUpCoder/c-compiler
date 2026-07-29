@@ -166,47 +166,61 @@ diff -urN a/content/handlers/html/box_special.c b/content/handlers/html/box_spec
  		return false;
  
 diff -urN a/content/handlers/html/box_textarea.c b/content/handlers/html/box_textarea.c
---- a/content/handlers/html/box_textarea.c	2026-07-29 08:40:11
-+++ b/content/handlers/html/box_textarea.c	2026-07-29 08:40:16
-@@ -153,6 +153,13 @@
+--- a/content/handlers/html/box_textarea.c	2026-07-29 12:02:57
++++ b/content/handlers/html/box_textarea.c	2026-07-29 11:46:56
+@@ -132,7 +132,13 @@
+ 	struct form_textarea_data *d = data;
+ 	struct form_control *gadget = d->gadget;
+ 	struct html_content *html = d->gadget->html;
+-	struct box *box = gadget->box;
++	/* The box ON SCREEN, which mid-re-conversion is NOT gadget->box: that
++	 * one is the new tree's box, and it has no coordinates until the swap
++	 * lays it out (todos/0407).  Everything below wants screen
++	 * coordinates — a damage rectangle, a drag owner, a caret position —
++	 * so all of it reads this one, and a NULL here means the same thing
++	 * everywhere: this gadget has nothing on screen to talk about. */
++	struct box *box = form_gadget_screen_box(gadget);
+ 
+ 	switch (msg->type) {
+ 	case TEXTAREA_MSG_DRAG_REPORT:
+@@ -153,6 +159,12 @@
  				.y1 = INT_MAX
  			};
  			union html_drag_owner drag_owner;
 +
 +			if (box == NULL) {
-+				/* mid-re-conversion, before construction
-+				 * re-bound this gadget to its new box: no
-+				 * box to own the drag */
++				/* nothing of this gadget is on screen, so
++				 * there is no box to own the drag */
 +				break;
 +			}
  			drag_owner.textarea = box;
  
  			switch (msg->data.drag) {
-@@ -194,6 +201,13 @@
- 			break;
- 		}
- 
-+		if (box == NULL) {
-+			/* Mid-re-conversion, before construction re-bound
-+			 * this gadget to its new box: no coordinates to
-+			 * offset by, and the swap repaints everything. */
+@@ -191,6 +203,14 @@
+ 		if (html->reflowing == true) {
+ 			/* Can't redraw during layout, and it will
+ 			 * be redrawn after layout anyway. */
 +			break;
 +		}
 +
- 		box_coords(box, &x, &y);
++		if (box == NULL) {
++			/* Nothing of this gadget is on screen: no coordinates
++			 * to offset by, and nothing to repaint.  A gadget the
++			 * mutation added is painted by the swap anyway, which
++			 * repaints everything. */
+ 			break;
+ 		}
  
- 		content__request_redraw((struct content *)html,
-@@ -227,6 +241,20 @@
+@@ -227,6 +247,19 @@
  		if (html->bw == NULL)
  			break;
  
 +		if (box == NULL) {
-+			/* A caret claim DURING a live re-conversion, before
-+			 * this gadget's new box exists (a click landing
-+			 * mid-window, todos/0402): there is no box to focus
-+			 * yet, so remember the claimant — widget recreation
-+			 * consumes the claim and hands the focus over once
-+			 * the new box is bound. */
++			/* A caret claim DURING a live re-conversion by a
++			 * gadget with nothing on screen (todos/0402): there is
++			 * no box to focus yet, so remember the claimant —
++			 * widget recreation consumes the claim and hands the
++			 * focus over once the new box is bound. */
 +			if (html->reconverting &&
 +			    msg->data.caret.type != TEXTAREA_CARET_HIDE) {
 +				html->reconvert_focus_claim = gadget;
@@ -217,7 +231,23 @@ diff -urN a/content/handlers/html/box_textarea.c b/content/handlers/html/box_tex
  		if (msg->data.caret.type == TEXTAREA_CARET_HIDE) {
  			union html_focus_owner focus_owner;
  			focus_owner.textarea = box;
-@@ -273,6 +301,7 @@
+@@ -261,24 +294,31 @@
+ 	dom_exception err;
+ 	textarea_setup ta_setup;
+ 	textarea_flags ta_flags;
+-	plot_font_style_t fstyle = {
+-		.family = PLOT_FONT_FAMILY_SANS_SERIF,
+-		.size = 10 * PLOT_STYLE_SCALE,
+-		.weight = 400,
+-		.flags = FONTF_NONE,
+-		.background = 0,
+-		.foreground = 0,
+-	};
++	plot_font_style_t fstyle;
++	int old_w = 0, old_h = 0;
++	int old_top = 0, old_right = 0, old_bottom = 0, old_left = 0;
++	bool carry_layout = false;
+ 	bool read_only = false;
  	bool disabled = false;
  	struct form_control *gadget = box->gadget;
  	const char *text;
@@ -225,11 +255,38 @@ diff -urN a/content/handlers/html/box_textarea.c b/content/handlers/html/box_tex
  
  	assert(gadget != NULL);
  	assert(gadget->type == GADGET_TEXTAREA ||
-@@ -353,6 +382,34 @@
- 	 * with background colour. */
+ 			gadget->type == GADGET_TEXTBOX ||
+ 			gadget->type == GADGET_PASSWORD);
++	assert(box->style != NULL);
+ 
++	/* The widget has to be RENDERABLE from birth.  A live re-conversion
++	 * recreates it while the old box tree is still on screen and still
++	 * serving redraws, and every one of those redraws draws THIS widget
++	 * (todos/0407): a hardcoded 10pt default made the field jump to 10pt
++	 * for the whole window, which a page that re-boxes continuously shows
++	 * permanently.  Derive the text style the way the layout pass itself
++	 * does; the layout pass still owns the final values. */
++	font_plot_style_from_css(&html->unit_len_ctx, box->style, &fstyle);
++
+ 	if (gadget->type == GADGET_TEXTAREA) {
+ 		dom_html_text_area_element *textarea =
+ 				(dom_html_text_area_element *) node;
+@@ -336,7 +376,10 @@
+ 
+ 	gadget->data.text.data.gadget = gadget;
+ 
+-	/* Reset to correct values by layout */
++	/* Reset to correct values by layout.  These are the birth geometry of
++	 * a FIRST conversion only, where nothing is on screen to be wrong: a
++	 * recreated widget replaces them with the outgoing widget's geometry
++	 * below (todos/0407). */
+ 	ta_setup.width = 200;
+ 	ta_setup.height = 20;
+ 	ta_setup.pad_top = 4;
+@@ -354,6 +397,54 @@
  	ta_setup.selected_bg = fstyle.foreground;
  	ta_setup.selected_text = colour_to_bw_furthest(ta_setup.selected_bg);
-+
+ 
 +	/* A gadget SURVIVES re-boxing (it is re-found by DOM node) but its
 +	 * widget does not: the old textarea belonged to the box tree being
 +	 * replaced.  Drop it here rather than overwriting the pointers, or
@@ -241,6 +298,26 @@ diff -urN a/content/handlers/html/box_textarea.c b/content/handlers/html/box_tex
 +		gadget->data.text.initial = NULL;
 +	}
 +	if (gadget->data.text.ta != NULL) {
++		/* Carry the outgoing widget's GEOMETRY too.  Until the swap the
++		 * new widget stands in for the old one in the old tree's
++		 * redraws, so it must present the size and padding that are on
++		 * screen.  The computed style above gives the right font, but
++		 * only the layout pass knows the box's size and padding, and it
++		 * does not run again until the swap (todos/0407).  A widget
++		 * that never was laid out carries the defaults set above, which
++		 * is what a first conversion gets anyway.
++		 *
++		 * The outgoing fstyle is deliberately NOT carried: its
++		 * `families` array belongs to the dying tree's computed style,
++		 * so the widget would hold a dangling pointer from the swap
++		 * until the reformat.  The freshly derived style points into
++		 * the live tree instead, and it is the same font unless the
++		 * mutation changed the font itself. */
++		textarea_get_layout(gadget->data.text.ta, NULL,
++				&old_w, &old_h,
++				&old_top, &old_right, &old_bottom, &old_left);
++		carry_layout = true;
++
 +		/* Carry the caret across the recreation: keys routed to
 +		 * the recreated widget would otherwise insert at position
 +		 * 0 (textarea_get_caret defaults an unset caret).  Only
@@ -257,10 +334,11 @@ diff -urN a/content/handlers/html/box_textarea.c b/content/handlers/html/box_tex
 +		textarea_destroy(gadget->data.text.ta);
 +		gadget->data.text.ta = NULL;
 +	}
- 
++
  	/* Hand reference to dom text over to gadget */
  	gadget->data.text.initial = dom_text;
-@@ -364,8 +421,29 @@
+ 
+@@ -364,8 +455,38 @@
  		return false;
  	}
  
@@ -276,13 +354,22 @@ diff -urN a/content/handlers/html/box_textarea.c b/content/handlers/html/box_tex
 +	}
 +	gadget->building = false;
  
++	if (carry_layout) {
++		/* after the text, so the reflow it runs sees the real content,
++		 * and before the caret restore, which needs the final metrics
++		 * to report a caret position at all */
++		textarea_set_layout(gadget->data.text.ta, &ta_setup.text,
++				old_w, old_h,
++				old_top, old_right, old_bottom, old_left);
++	}
++
 +	if (caret >= 0) {
-+		/* Restore the carried caret.  gadget->box is already the
-+		 * NEW box (bound before this call), so the CARET_UPDATE
-+		 * this raises re-takes the focus for this gadget — a
-+		 * mid-window claim materialises here.  The position it
-+		 * reports is pre-layout; html_reconvert_box_done re-fires
-+		 * it after the reformat. */
++		/* Restore the carried caret.  The CARET_UPDATE this raises
++		 * re-takes the focus for this gadget — a mid-window claim
++		 * materialises here — and reports the caret against the box
++		 * that is ON SCREEN, so the caret does not move while the
++		 * window is open.  html_reconvert_box_done re-fires it against
++		 * the new box after the reformat. */
 +		if (html->reconvert_focus_claim == gadget) {
 +			html->reconvert_focus_claim = NULL;
 +		}
@@ -351,8 +438,8 @@ diff -urN a/content/handlers/html/dom_event.c b/content/handlers/html/dom_event.
  	}
  }
 diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
---- a/content/handlers/html/form.c	2026-07-27 11:21:07
-+++ b/content/handlers/html/form.c	2026-07-27 12:19:13
+--- a/content/handlers/html/form.c	2026-07-29 12:02:57
++++ b/content/handlers/html/form.c	2026-07-29 11:45:26
 @@ -51,6 +51,7 @@
  #include "desktop/knockout.h"
  #include "desktop/scrollbar.h"
@@ -361,21 +448,26 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
  
  #include "html/html.h"
  #include "html/private.h"
-@@ -1386,6 +1387,10 @@
+@@ -1385,6 +1386,10 @@
+ 	inline_box->width = control->box->width;
  
  	html__redraw_a_box(html, control->box);
- 
++
 +	/* A <select> commits on the click itself, so input and change go
 +	 * together here rather than waiting for a blur. */
 +	form_gadget_fire_change(control);
-+
+ 
  	return ret;
  }
- 
-@@ -1452,6 +1457,35 @@
- 
- 
- /* exported interface documented in html/form_internal.h */
+@@ -1447,7 +1452,36 @@
+ 		form->last_control = control;
+ 	} else {
+ 		form->controls = form->last_control = control;
++	}
++}
++
++
++/* exported interface documented in html/form_internal.h */
 +void form_select_clear_options(struct form_control *control)
 +{
 +	struct form_option *option, *next;
@@ -390,7 +482,7 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
 +		free(option->text);
 +		free(option->value);
 +		free(option);
-+	}
+ 	}
 +	if (control->data.select.menu != NULL) {
 +		form_free_select_menu(control);
 +	}
@@ -401,13 +493,9 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
 +	control->data.select.menu = NULL;
 +	control->data.select.num_items = 0;
 +	control->data.select.num_selected = 0;
-+}
-+
-+
-+/* exported interface documented in html/form_internal.h */
- void form_free_control(struct form_control *control)
- {
- 	struct form_control *c;
+ }
+ 
+ 
 @@ -1465,23 +1499,10 @@
  	if (control->last_synced_value != NULL) {
  		free(control->last_synced_value);
@@ -434,10 +522,13 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
  	}
  
  	if (control->type == GADGET_TEXTAREA ||
-@@ -1497,6 +1518,18 @@
- 		}
- 	}
+@@ -1494,6 +1515,18 @@
  
+ 		if (control->data.text.ta != NULL) {
+ 			textarea_destroy(control->data.text.ta);
++		}
++	}
++
 +	/* unlink the control from the content's formless list */
 +	if (control->form == NULL && control->html != NULL) {
 +		if (control->prev != NULL) {
@@ -447,12 +538,9 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
 +		}
 +		if (control->next != NULL) {
 +			control->next->prev = control->prev;
-+		}
-+	}
-+
- 	/* unlink the control from the form */
- 	if (control->form != NULL) {
- 		for (c = control->form->controls; c != NULL; c = c->next) {
+ 		}
+ 	}
+ 
 @@ -2057,6 +2090,21 @@
  
  	assert(form != NULL);
@@ -475,7 +563,24 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
  	/* obtain list of controls from DOM */
  	res = form_dom_to_data(form, submit_button, &success);
  	if (res != NSERROR_OK) {
-@@ -2162,6 +2210,86 @@
+@@ -2121,6 +2169,16 @@
+ 	fetch_multipart_data_destroy(success);
+ 
+ 	return res;
++}
++
++
++/* exported interface documented in html/form_internal.h */
++struct box *form_gadget_screen_box(struct form_control *control)
++{
++	if ((control->html != NULL) && (control->html->reconverting)) {
++		return control->reconvert_box;
++	}
++	return control->box;
+ }
+ 
+ 
+@@ -2162,10 +2220,90 @@
  
  	/* Finally, sync this with the DOM */
  	form_gadget_sync_with_dom(control);
@@ -483,10 +588,10 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
 +	/* …and tell script.  `input` fires on every edit; `change` waits
 +	 * for the commit (blur), which form_gadget_commit_change does. */
 +	form_gadget_fire_input(control);
-+}
-+
-+
-+/* Exported API, see html/form_internal.h */
+ }
+ 
+ 
+ /* Exported API, see html/form_internal.h */
 +void form_gadget_fire_input(struct form_control *control)
 +{
 +	if ((NETSURF_UI_EVENTS == 0) || (control == NULL) ||
@@ -559,12 +664,16 @@ diff -urN a/content/handlers/html/form.c b/content/handlers/html/form.c
 +	form_gadget_fire_input(control);
 +	fire_generic_dom_event(corestring_dom_change,
 +			(dom_node *)control->node, true, false);
- }
- 
- 
++}
++
++
++/* Exported API, see html/form_internal.h */
+ void
+ form_gadget_sync_with_dom(struct form_control *control)
+ {
 diff -urN a/content/handlers/html/form_internal.h b/content/handlers/html/form_internal.h
---- a/content/handlers/html/form_internal.h	2026-07-27 11:21:07
-+++ b/content/handlers/html/form_internal.h	2026-07-27 12:08:00
+--- a/content/handlers/html/form_internal.h	2026-07-29 12:02:57
++++ b/content/handlers/html/form_internal.h	2026-07-29 12:05:06
 @@ -74,6 +74,9 @@
  	void *node;			/**< Corresponding DOM node */
  	struct dom_string *node_value;  /**< The last value sync'd with the DOM */
@@ -575,7 +684,7 @@ diff -urN a/content/handlers/html/form_internal.h b/content/handlers/html/form_i
  	struct html_content *html;	/**< HTML content containing control */
  
  	form_control_type type;		/**< Type of control */
-@@ -84,6 +87,9 @@
+@@ -84,9 +87,18 @@
  	char *value;			/**< Current value of control */
  	char *initial_value;		/**< Initial value of control */
  	char *last_synced_value;        /**< The last value sync'd to the DOM */
@@ -585,10 +694,22 @@ diff -urN a/content/handlers/html/form_internal.h b/content/handlers/html/form_i
  	bool disabled;			/**< Whether control is disabled */
  
  	struct box *box;		/**< Box for control */
-@@ -209,6 +215,19 @@
++	struct box *reconvert_box;	/**< Box for control in the tree that
++					 * is ON SCREEN, while a live
++					 * re-conversion builds the next one;
++					 * NULL at any other time.  Read it
++					 * through form_gadget_screen_box(),
++					 * never directly. */
  
- 
- /**
+ 	unsigned int length;		/**< Number of characters in control */
+ 	unsigned int maxlength;		/**< Maximum characters permitted */
+@@ -206,6 +218,19 @@
+  * \param  control  structure to free
+  */
+ void form_free_control(struct form_control *control);
++
++
++/**
 + * Drop every option of a select control, leaving an empty gadget.
 + *
 + * Box construction fills a select's option list from the DOM, and a
@@ -599,17 +720,43 @@ diff -urN a/content/handlers/html/form_internal.h b/content/handlers/html/form_i
 + * \param  control  form control of type GADGET_SELECT
 + */
 +void form_select_clear_options(struct form_control *control);
-+
+ 
+ 
+ /**
+@@ -336,14 +361,65 @@
+ nserror form_submit(struct nsurl *page_url, struct browser_window *target,
+ 		struct form *form, struct form_control *submit_button);
+ 
 +
 +/**
-  * Add an option to a form select control.
-  *
-  * \param  control   form control of type GADGET_SELECT
-@@ -341,6 +360,33 @@
++ * Get the gadget's box in the box tree that is ON SCREEN.
++ *
++ * A live re-conversion builds the next box tree while the old one is
++ * still displayed and still serving redraw and input.  Box construction
++ * binds control->box to the NEW box as it goes, and that box has never
++ * been laid out: every coordinate taken from it is zero until the swap
++ * reformats.  Anything that wants SCREEN coordinates — a damage
++ * rectangle, a caret position, a popup's placement — must therefore ask
++ * for the displayed box, not control->box (todos/0407).
++ *
++ * Outside a re-conversion the two are the same box.
++ *
++ * Only box_textarea.c reads this so far.  Every other gadget consumer —
++ * the select menu's geometry, the select and radio repaints, the file
++ * gadget — still names control->box directly, and so still takes
++ * mid-window coordinates from an un-laid-out box (todos/0412, register
++ * L60).
++ *
++ * \param control  the gadget
++ * \return the gadget's displayed box, or NULL if it has none
++ */
++struct box *form_gadget_screen_box(struct form_control *control);
+ 
+ /**
   * Update gadget value.
   */
  void form_gadget_update_value(struct form_control *control, char *value);
-+
+ 
 +/**
 + * Fire a DOM `input` event at a gadget: its value just changed.
 + *
@@ -617,8 +764,8 @@ diff -urN a/content/handlers/html/form_internal.h b/content/handlers/html/form_i
 + * on the per-keystroke path.
 + */
 +void form_gadget_fire_input(struct form_control *control);
-+
-+/**
+ 
+ /**
 + * Remember a text gadget's value as focus is gained.
 + *
 + * The DOM `change` contract is "differs from the value it had when it was
@@ -636,9 +783,12 @@ diff -urN a/content/handlers/html/form_internal.h b/content/handlers/html/form_i
 + * (checkbox, radio, select) — there is no "still typing" state to await.
 + */
 +void form_gadget_fire_change(struct form_control *control);
- 
- 
- /**
++
++
++/**
+  * Synchronise this gadget with its associated DOM node.
+  *
+  * If the DOM has changed and the gadget has not, the DOM's new value is
 diff -urN a/content/handlers/html/forms.c b/content/handlers/html/forms.c
 --- a/content/handlers/html/forms.c	2026-07-27 11:21:07
 +++ b/content/handlers/html/forms.c	2026-07-27 11:12:32
@@ -697,8 +847,8 @@ diff -urN a/content/handlers/html/forms.c b/content/handlers/html/forms.c
 +	}
  }
 diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
---- a/content/handlers/html/html.c	2026-07-29 08:40:11
-+++ b/content/handlers/html/html.c	2026-07-29 08:40:16
+--- a/content/handlers/html/html.c	2026-07-29 12:02:57
++++ b/content/handlers/html/html.c	2026-07-29 12:04:25
 @@ -61,6 +61,7 @@
  #include "html/private.h"
  #include "html/dom_event.h"
@@ -821,11 +971,11 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +		case NS_KEY_TAB:
 +			dom_key = NETSURF_UI_EVENTS ?
 +				dom_string_ref(corestring_dom_Tab) : NULL;
-+			break;
+ 			break;
 +		case NS_KEY_DELETE_LEFT:
 +			dom_key = NETSURF_UI_EVENTS ?
 +				dom_string_ref(corestring_dom_Backspace) : NULL;
- 			break;
++			break;
 +		case NS_KEY_DELETE_RIGHT:
 +			dom_key = NETSURF_UI_EVENTS ?
 +				dom_string_ref(corestring_dom_Delete) : NULL;
@@ -838,10 +988,14 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  			dom_key = NULL;
  			break;
  		}
-@@ -412,9 +528,303 @@
- 	}
- 
- 	dom_node_unref(html);
+@@ -408,13 +524,370 @@
+ 		html_object_free_objects(htmlc);
+ 		content_broadcast_error(&htmlc->base, error, NULL);
+ 		content_set_error(&htmlc->base);
++		return;
++	}
++
++	dom_node_unref(html);
 +}
 +
 +
@@ -884,9 +1038,44 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +		}
 +		child = next;
 +	}
- }
- 
- 
++}
++
++
++/**
++ * Release the gadgets' hold on the tree that WAS on screen.
++ *
++ * Called once per re-conversion, at the point where that tree stops being
++ * the displayed one — either because the new tree replaced it, or because
++ * the conversion failed and the new tree is the one being discarded.
++ *
++ * \param c        content whose controls to walk
++ * \param restore  true to put the pointer back in ctl->box: the
++ *                 re-conversion failed, so the old tree is the displayed
++ *                 tree again, and the partial new boxes that construction
++ *                 bound are about to be freed under it
++ */
++static void html__reconvert_release_screen_boxes(html_content *c, bool restore)
++{
++	struct form *f;
++	struct form_control *ctl;
++
++	for (f = c->forms; f != NULL; f = f->prev) {
++		for (ctl = f->controls; ctl != NULL; ctl = ctl->next) {
++			if (restore) {
++				ctl->box = ctl->reconvert_box;
++			}
++			ctl->reconvert_box = NULL;
++		}
++	}
++	for (ctl = c->formless_controls; ctl != NULL; ctl = ctl->next) {
++		if (restore) {
++			ctl->box = ctl->reconvert_box;
++		}
++		ctl->reconvert_box = NULL;
++	}
++}
++
++
 +/**
 + * Completion callback for a live re-conversion's dom_to_box run.
 + *
@@ -909,6 +1098,11 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +		NSLOG(netsurf, ERROR,
 +		      "live re-conversion failed (content %p); keeping old layout",
 +		      c);
++		/* BEFORE the partial new tree is freed: construction bound
++		 * some gadgets to boxes in it, and those pointers are about to
++		 * dangle.  The old tree is the displayed tree again, so put
++		 * its boxes back. */
++		html__reconvert_release_screen_boxes(c, true);
 +		if (c->bctx != NULL) {
 +			talloc_free(c->bctx);
 +		}
@@ -949,10 +1143,17 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +	/* the new tree took over c->layout inside convert_xml_to_box;
 +	 * everything reachable from the old tree dies here (box
 +	 * destructors unref nodes, destroy styles and scrollbars) */
++	html__reconvert_release_screen_boxes(c, false);
 +	if (c->reconvert_old_bctx != NULL) {
 +		talloc_free(c->reconvert_old_bctx);
 +		c->reconvert_old_bctx = NULL;
 +	}
++
++	/* The window closes at exactly this point, and the flag says so: the
++	 * old tree is gone, so the new tree is the only tree and gadget->box
++	 * is the box to talk about again.  Everything below depends on that —
++	 * the caret re-fire reports against the box it names (todos/0407). */
++	c->reconverting = false;
 +
 +	/* rebuild imagemaps from the current DOM */
 +	imagemap_extract(c);
@@ -995,8 +1196,6 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +		dom_node_unref(focus_node);
 +	}
 +
-+	c->reconverting = false;
-+
 +	/* mutations that arrived mid-conversion need another pass */
 +	if (c->reconvert_pending) {
 +		html_schedule_reconvert(c);
@@ -1025,10 +1224,10 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +	 * once it completes */
 +	if (c->box_conversion_context != NULL || c->reconverting) {
 +		c->reconvert_pending = true;
-+		return;
-+	}
+ 		return;
+ 	}
 +	c->reconvert_pending = false;
-+
+ 
 +	/* dismiss any open core select menu; its gadget's box is dying */
 +	if (c->visible_select_menu != NULL) {
 +		form_free_select_menu(c->visible_select_menu);
@@ -1059,14 +1258,22 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +	 * would swallow every later click */
 +	selection_init(c->sel);
 +
-+	/* form gadgets survive re-conversion (box construction re-finds
-+	 * them by DOM node) but their box back-pointers must not dangle */
++	/* Form gadgets survive re-conversion (box construction re-finds them
++	 * by DOM node) but their box back-pointers must not dangle: clear
++	 * them, and let construction re-bind each one as it reaches it.
++	 *
++	 * The box being cleared is still ON SCREEN, though — the old tree
++	 * serves redraw and input for the whole window — so hand it to
++	 * reconvert_box first.  A gadget's screen coordinates come from there
++	 * until the swap; the NEW box has never been laid out (todos/0407). */
 +	for (f = c->forms; f != NULL; f = f->prev) {
 +		for (ctl = f->controls; ctl != NULL; ctl = ctl->next) {
++			ctl->reconvert_box = ctl->box;
 +			ctl->box = NULL;
 +		}
 +	}
 +	for (ctl = c->formless_controls; ctl != NULL; ctl = ctl->next) {
++		ctl->reconvert_box = ctl->box;
 +		ctl->box = NULL;
 +	}
 +
@@ -1087,6 +1294,9 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +	exc = dom_document_get_document_element(c->document, (void *)&html);
 +	if ((exc != DOM_NO_ERR) || (html == NULL)) {
 +		NSLOG(netsurf, ERROR, "re-conversion: no document element");
++		/* nothing was built, so the tree that is still displayed is
++		 * the one whose boxes were just taken off the gadgets */
++		html__reconvert_release_screen_boxes(c, true);
 +		return;
 +	}
 +
@@ -1101,17 +1311,18 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +
 +	error = dom_to_box(html, c, html_reconvert_box_done,
 +			   &c->box_conversion_context);
-+	dom_node_unref(html);
+ 	dom_node_unref(html);
 +	if (error != NSERROR_OK) {
 +		NSLOG(netsurf, ERROR, "re-conversion: dom_to_box failed: %d",
 +		      error);
++		html__reconvert_release_screen_boxes(c, true);
 +		c->bctx = c->reconvert_old_bctx;
 +		c->reconvert_old_bctx = NULL;
 +		c->reconverting = false;
 +	}
-+}
-+
-+
+ }
+ 
+ 
 +/* exported function documented in html/private.h */
 +void html_schedule_reconvert(html_content *htmlc)
 +{
@@ -1133,7 +1344,13 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +		return;
 +	}
 +
-+	/* coalesce: the scheduler dedups callback+context pairs */
++	/* Coalesce: the scheduler dedups callback+context pairs, and
++	 * html__reconvert defers to reconvert_pending while a pass runs.  So
++	 * the re-box rate is already capped at one pass per pass, and a page
++	 * that mutates faster than it re-boxes shows its last COMPLETE
++	 * rendering until the next swap.  There is deliberately no rate limit
++	 * on top of that — it would only make the displayed frame older.
++	 * Decision and reasoning: todos/NETSURF-JS.md §12 (todos/0407). */
 +	guit->misc->schedule(0, html__reconvert, htmlc);
 +#endif
 +}
@@ -1142,7 +1359,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  static void
  html_document_user_data_handler(dom_node_operation operation,
  				dom_string *key, void *data,
-@@ -475,6 +885,10 @@
+@@ -475,6 +948,10 @@
  	c->title = NULL;
  	c->bctx = NULL;
  	c->layout = NULL;
@@ -1153,7 +1370,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  	c->background_colour = NS_TRANSPARENT;
  	c->stylesheet_count = 0;
  	c->stylesheets = NULL;
-@@ -484,6 +898,7 @@
+@@ -484,6 +961,7 @@
  	c->num_objects = 0;
  	c->object_list = NULL;
  	c->forms = NULL;
@@ -1161,7 +1378,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  	c->imagemaps = NULL;
  	c->bw = NULL;
  	c->frameset = NULL;
-@@ -1123,14 +1538,25 @@
+@@ -1123,14 +1601,25 @@
  /**
   * Redraw a box.
   *
@@ -1188,7 +1405,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  	box_coords(box, &x, &y);
  
  	content__request_redraw((struct content *)html, x, y,
-@@ -1193,6 +1619,13 @@
+@@ -1193,6 +1682,13 @@
  		 */
  		talloc_free(htmlc->bctx);
  	}
@@ -1202,18 +1419,18 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  }
  
  /**
-@@ -1205,6 +1638,10 @@
- 	struct form *f, *g;
+@@ -1206,6 +1702,10 @@
  
  	NSLOG(netsurf, INFO, "content %p", c);
-+
+ 
 +	/* Cancel any coalesced live re-conversion pass */
 +	guit->misc->schedule(-1, html__reconvert, html);
 +	html->reconvert_focus_claim = NULL;
- 
++
  	/* If we're still converting a layout, cancel it */
  	if (html->box_conversion_context != NULL) {
-@@ -1221,6 +1658,7 @@
+ 		if (cancel_dom_to_box(html->box_conversion_context) != NSERROR_OK) {
+@@ -1221,6 +1721,7 @@
  
  		form_free(f);
  	}
@@ -1221,11 +1438,10 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  
  	imagemap_destroy(html);
  
-@@ -1538,7 +1976,37 @@
- 	struct box *next;
+@@ -1539,6 +2040,36 @@
  	int box_x = 0, box_y = 0;
  	bool handled_scroll = false;
-+
+ 
 +	/* A cancelable DOM `wheel` first: this is the html content's only
 +	 * wheel entry point, so it is where the event belongs, and a
 +	 * handler calling preventDefault() reports the wheel as HANDLED so
@@ -1247,7 +1463,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
 +		pos.page_y = y;
 +		pos.client_x = x - sx;
 +		pos.client_y = y - sy;
- 
++
 +		if ((node != NULL) &&
 +		    (fire_dom_wheel_event(corestring_dom_wheel, node,
 +				true, true, &pos, 0, scrx, scry) == false)) {
@@ -1259,7 +1475,7 @@ diff -urN a/content/handlers/html/html.c b/content/handlers/html/html.c
  	/* TODO: invert order; visit deepest box first */
  
  	while ((next = box_at_point(&html->unit_len_ctx, box, x, y,
-@@ -2353,6 +2821,9 @@
+@@ -2353,6 +2884,9 @@
  	.mouse_track = html_mouse_track,
  	.mouse_action = html_mouse_action,
  	.keypress = html_keypress,
@@ -3628,8 +3844,8 @@ diff -urN a/desktop/frames.c b/desktop/frames.c
  
  
 diff -urN a/desktop/textarea.c b/desktop/textarea.c
---- a/desktop/textarea.c	2026-07-27 11:21:07
-+++ b/desktop/textarea.c	2026-07-27 11:12:32
+--- a/desktop/textarea.c	2026-07-29 12:02:57
++++ b/desktop/textarea.c	2026-07-29 11:32:08
 @@ -2109,6 +2109,26 @@
  
  
@@ -3657,9 +3873,39 @@ diff -urN a/desktop/textarea.c b/desktop/textarea.c
  bool textarea_set_caret(struct textarea *ta, int caret)
  {
  	int b_off;
+@@ -3364,6 +3384,29 @@
+ 
+ 
+ /* exported interface, documented in textarea.h */
++void textarea_get_layout(
++		const struct textarea *ta,
++		plot_font_style_t *fstyle,
++		int *width, int *height,
++		int *top, int *right,
++		int *bottom, int *left)
++{
++	if (fstyle != NULL) {
++		*fstyle = ta->fstyle;
++	}
++	*width = ta->vis_width;
++	*height = ta->vis_height;
++	*top = ta->pad_top;
++	/* textarea_set_layout ADDS the scrollbar width to these two, so
++	 * take it back off: the caller must get what it passed in, or a
++	 * set/get/set round trip would grow the padding every time. */
++	*right = ta->pad_right - ((ta->bar_y == NULL) ? 0 : SCROLLBAR_WIDTH);
++	*bottom = ta->pad_bottom - ((ta->bar_x == NULL) ? 0 : SCROLLBAR_WIDTH);
++	*left = ta->pad_left;
++}
++
++
++/* exported interface, documented in textarea.h */
+ bool textarea_scroll(struct textarea *ta, int scrx, int scry)
+ {
+ 	bool handled_scroll = false;
 diff -urN a/desktop/textarea.h b/desktop/textarea.h
---- a/desktop/textarea.h	2026-07-27 11:21:07
-+++ b/desktop/textarea.h	2026-07-27 11:12:32
+--- a/desktop/textarea.h	2026-07-29 12:02:57
++++ b/desktop/textarea.h	2026-07-29 11:32:04
 @@ -234,6 +234,19 @@
  
  
@@ -3680,6 +3926,39 @@ diff -urN a/desktop/textarea.h b/desktop/textarea.h
   * Handle redraw requests for text areas
   *
   * \param ta	textarea to render
+@@ -338,6 +351,32 @@
+ 
+ 
+ /**
++ * Get the dimensions, padding and text style of a textarea.
++ *
++ * The exact inverse of textarea_set_layout: the values it returns, fed
++ * back to textarea_set_layout, reproduce this widget's layout.  A client
++ * that REPLACES a widget uses this to carry the layout over, because only
++ * the client's own layout pass knows those values and it may not run
++ * again at once (see box_textarea_create_textarea, todos/0407).
++ *
++ * \param ta		textarea widget
++ * \param fstyle	receives the text style, or NULL for the geometry only
++ * \param width		receives the width of the textarea
++ * \param height	receives the height of the textarea
++ * \param top		receives the top padding of the textarea
++ * \param right		receives the right padding of the textarea
++ * \param bottom	receives the bottom padding of the textarea
++ * \param left		receives the left padding of the textarea
++ */
++void textarea_get_layout(
++		const struct textarea *ta,
++		plot_font_style_t *fstyle,
++		int *width, int *height,
++		int *top, int *right,
++		int *bottom, int *left);
++
++
++/**
+  * Scroll a textarea by an amount.
+  *
+  * Only does anything if multi-line textarea has scrollbars.  If it
 diff -urN a/desktop/textinput.c b/desktop/textinput.c
 --- a/desktop/textinput.c	2026-07-27 11:21:07
 +++ b/desktop/textinput.c	2026-07-27 11:42:15

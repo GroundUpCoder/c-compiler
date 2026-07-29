@@ -876,7 +876,13 @@ void html_schedule_reconvert(html_content *htmlc)
 		return;
 	}
 
-	/* coalesce: the scheduler dedups callback+context pairs */
+	/* Coalesce: the scheduler dedups callback+context pairs, and
+	 * html__reconvert defers to reconvert_pending while a pass runs.  So
+	 * the re-box rate is already capped at one pass per pass, and a page
+	 * that mutates faster than it re-boxes shows its last COMPLETE
+	 * rendering until the next swap.  There is deliberately no rate limit
+	 * on top of that — it would only make the displayed frame older.
+	 * Decision and reasoning: todos/NETSURF-JS.md §12 (todos/0407). */
 	guit->misc->schedule(0, html__reconvert, htmlc);
 #endif
 }
