@@ -343,4 +343,10 @@ thing this file exists to kill.
 - file: vendor/netsurf/gucos/gui.c
 - anchor: through this table is todos/0424 — it belongs at dukky's error
 
+### L64 — the dynamic-restyle chain walk misses a sibling combinator and cannot reach a `display: none` element
+- ticket: 0426
+- file: vendor/netsurf/netsurf/content/handlers/html/interaction.c
+- anchor:  * Both are recorded in todos/LIABILITIES.md against todos/0426.
+- provenance: 0420
+
 <!-- END ENTRIES -->

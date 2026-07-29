@@ -99,6 +99,41 @@ nserror cancel_dom_to_box(void *box_conversion_context);
 struct box *box_for_node(struct dom_node *node);
 
 /**
+ * Reported for each box a re-selection really changed the style of.
+ */
+typedef void (*box_restyle_cb)(void *pw, struct box *box);
+
+/**
+ * Re-select the style of an element's box and everything below it.
+ *
+ * The bounded restyle the dynamic pseudo-classes need (todos/0420).  A
+ * `:hover` or `:active` transition changes the answer libcss gets from
+ * node_is_hover()/node_is_active() for the elements on the entry and exit
+ * chains.  Call this for the TOPMOST element of each changed chain: the
+ * elements below it can be restyled by inheritance or by a descendant
+ * combinator, so they are re-selected too, and nothing outside the two
+ * subtrees is touched.
+ *
+ * The subtree that is re-selected is much wider than the set that really
+ * changes — an element the pointer LEFT and a 3000px block it entered are
+ * both re-selected, but only the first usually restyles.  \a cb reports
+ * the set that changed, which is the set the caller has to repaint; it is
+ * not called at all for a transition no rule keys on, which is every page
+ * with no dynamic rule.
+ *
+ * A style change can move boxes, so a caller that saw \a cb fire must
+ * reflow before it trusts a box's geometry.
+ *
+ * \param c    html content the box belongs to
+ * \param box  Box to re-select from
+ * \param cb   Called for each box whose computed style changed
+ * \param pw   Client data for \a cb
+ * \return true on success, false on memory exhaustion
+ */
+bool box_restyle_element(struct html_content *c, struct box *box,
+			 box_restyle_cb cb, void *pw);
+
+/**
  * Extract a URL from a relative link, handling junk like whitespace and
  * attempting to read a real URL from "javascript:" links.
  *

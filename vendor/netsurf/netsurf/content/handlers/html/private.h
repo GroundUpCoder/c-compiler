@@ -230,6 +230,19 @@ typedef struct html_content {
 	 * indistinguishable from an ordinary hover. */
 	bool mouse_pressed;
 
+	/** The deepest ELEMENT under the pointer, or NULL — the subject of
+	 * the `:hover` chain (todos/0420).  A reference is held, because a
+	 * script can remove the node from the document while the pointer
+	 * still rests on it.  Kept as a DOM node rather than as a box so
+	 * that it survives a live re-conversion: the box tree is replaced,
+	 * the element is not. */
+	dom_node *hover_node;
+
+	/** The deepest ELEMENT the primary button went down on, or NULL —
+	 * the subject of the `:active` chain.  Same ownership as
+	 * hover_node. */
+	dom_node *active_node;
+
 	/** Current drag type */
 	html_drag_type drag_type;
 	/** Widget capturing all mouse events */

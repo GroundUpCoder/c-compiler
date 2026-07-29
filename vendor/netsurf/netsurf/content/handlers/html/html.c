@@ -1754,6 +1754,17 @@ static void html_destroy(struct content *c)
 		html->title = NULL;
 	}
 
+	/* the :hover / :active chain subjects (todos/0420) */
+	if (html->hover_node != NULL) {
+		dom_node_unref(html->hover_node);
+		html->hover_node = NULL;
+	}
+
+	if (html->active_node != NULL) {
+		dom_node_unref(html->active_node);
+		html->active_node = NULL;
+	}
+
 	/* Free encoding */
 	if (html->encoding != NULL) {
 		free(html->encoding);

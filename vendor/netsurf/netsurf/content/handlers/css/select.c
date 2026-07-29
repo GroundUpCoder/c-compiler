@@ -1528,6 +1528,57 @@ css_error node_is_visited(void *pw, void *node, bool *match)
 }
 
 /**
+ * Is \a node the subject itself or one of its ancestors?
+ *
+ * `:hover` and `:active` match a whole chain, not one element: the DOM
+ * says an element is hovered while the pointer is over it OR over any
+ * descendant of it, which is what makes `li:hover { ... }` light up from
+ * the link inside the item.  So walk up from the subject.
+ *
+ * The walk takes and drops a reference per hop, exactly like
+ * named_ancestor_node above.  Both nodes stay alive without help: the
+ * subject is referenced by the html_content and every node above it is
+ * referenced by its own child.
+ *
+ * \param subject  Deepest node of the chain, or NULL for an empty chain
+ * \param node     DOM node to test
+ * \return true if \a node is on the chain
+ */
+static bool nscss_node_on_chain(struct dom_node *subject, void *node)
+{
+	dom_node *n = subject;
+	bool found = false;
+
+	if (n != NULL) {
+		dom_node_ref(n);
+	}
+
+	while (n != NULL) {
+		dom_node *parent;
+		dom_exception err;
+
+		if (n == node) {
+			found = true;
+			break;
+		}
+
+		err = dom_node_get_parent_node(n, &parent);
+		if (err != DOM_NO_ERR) {
+			break;
+		}
+
+		dom_node_unref(n);
+		n = parent;
+	}
+
+	if (n != NULL) {
+		dom_node_unref(n);
+	}
+
+	return found;
+}
+
+/**
  * Callback to determine if a node is currently being hovered over.
  *
  * \param pw     HTML document
@@ -1539,9 +1590,9 @@ css_error node_is_visited(void *pw, void *node, bool *match)
  */
 css_error node_is_hover(void *pw, void *node, bool *match)
 {
-	/** \todo Support hovering */
+	nscss_select_ctx *ctx = pw;
 
-	*match = false;
+	*match = nscss_node_on_chain(ctx->hover_node, node);
 
 	return CSS_OK;
 }
@@ -1558,9 +1609,9 @@ css_error node_is_hover(void *pw, void *node, bool *match)
  */
 css_error node_is_active(void *pw, void *node, bool *match)
 {
-	/** \todo Support active nodes */
+	nscss_select_ctx *ctx = pw;
 
-	*match = false;
+	*match = nscss_node_on_chain(ctx->active_node, node);
 
 	return CSS_OK;
 }
