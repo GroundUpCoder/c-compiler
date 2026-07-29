@@ -49,7 +49,9 @@ count cannot see a selection MOVE. Red control: reverting only the two
 `form_radio_set` lines makes the immediate mid-window shot read the old radio
 (`gr1=50` against a settled 130) and fails exactly the two checks that target the bug.
 
-Gate: kernel 129/129, sweep 41/41, projects 29/29, todos 5/5, flake 3/3 at 0 %.
+Gate (on the rebased base `4b0766b6`): kernel 131/131, sweep 41/41, projects
+29/29, todos 5/5, flake 3/3 at 0 %. Each suite artifact is ONE full run with
+`carried 0`. The gate also ran green on the pre-rebase base.
 `os/image.json` stays at 193 — this rides the bump `todos/0407` already made.
 Retires register `L60`; files `todos/0422` with register `L62`.
 

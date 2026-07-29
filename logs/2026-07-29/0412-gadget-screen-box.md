@@ -98,13 +98,39 @@ width against a 300 ms settle, which is why the page holds 6000 fillers and not 
 
 Suites derived with `node tests/run.js --diff origin/main`: todos, projects, kernel, sweep.
 
+The gate ran twice. Main moved while this lane worked, so the branch was rebased
+onto it and the whole gate ran again. The second table is the one that counts.
+
+On the first base (`2abc8b4b`): todos 5/5, projects 29/29, kernel 129/129 (one
+run, `carried 0`), sweep 41/41 (one run, `carried 0`), flake 3/3 at 0 %.
+
+On the rebased base (`4b0766b6`):
+
 | suite | result |
 | --- | --- |
-| todos | 5/5 pass, 0 fail (13.9 s) |
-| projects | 29 pass, 0 fail (256.0 s) |
-| kernel | 129/129 pass (1075.5 s) — one run, `carried 0`, `recorded 129` |
-| browser sweep | 41/41 pass (1011.6 s) — one run, `carried 0`, `recorded 41` |
+| todos | 5/5 pass, 0 fail (11.7 s) |
+| projects | 29 pass, 0 fail |
+| kernel | 131/131 pass (1105.4 s) — one run, `carried 0`, `recorded 131` |
+| browser sweep | 41/41 pass (929.2 s) — one run, `carried 0`, `recorded 41` |
 | flake | `--repeat 3 --under-load` on the new arm: 3/3, 0 % |
+
+The kernel count rises 129 → 131 because the two lanes main took in the meantime
+each added a file.
+
+## The rebase, and why the patch record had to be regenerated
+
+`todos/0419`+`0420` and `todos/0421` merged into main while this lane ran. The C
+files auto-merged. Two files did not: `todos/queue.json`, which is the ordinary
+one-line conflict, and `vendor/netsurf/patches/netsurf.diff`.
+
+That second one matters. Both lanes REGENERATED the patch record, so the conflict
+is between two generated files. A hand-merge of a generated file can leave it
+silently out of step with the tree it claims to describe — which is the failure
+`todos/0423` already names. So it was regenerated instead: reverse-apply main's
+diff to main's tree to recover pristine, splice this branch's eight sections in,
+then re-apply and compare all 51 files byte for byte against the live tree. The
+merged frontend also compiles (5.4 MB in 70.9 s), and the branch now merges into
+main with no conflict at all.
 
 `node todos/queue.js check` exits 0. `os/image.json` stays at 193: this change
 rides the bump `todos/0407` already made, which production has not taken yet.
