@@ -1,6 +1,6 @@
 # 0418 — DECIDER: which Rust standard library does gucOS get?
 
-- **Status**: open
+- **Status**: done
 - **Design**: `todos/RUST.md` §1 and §3.
 - **Provenance**: the Rust program, filed 2026-07-29. The design pass ruled
   "proceed with modifications", and this ticket is the modification: **the gate moved
