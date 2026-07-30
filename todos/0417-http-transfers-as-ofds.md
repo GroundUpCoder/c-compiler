@@ -1,6 +1,57 @@
 # 0417 — HTTP transfers become OFDs: fd-shaped, waitable, and bounded by a deadline
 
-- **Status**: open
+- **Status**: done (2026-07-30, branch `0417-http-ofd`)
+
+## Result
+
+Landed as one commit on `0417-http-ofd`. The transfer is an ordinary fd now.
+
+- `HTTP_OPEN` returns `{fd}` (OFD kind `http`). The fd joins `FS_SELECT`
+  and `FS_WAIT` through an explicit `_selectScan` branch. The branch tests
+  the four consumables, and the status leg tests `statusConsumed`.
+- `HTTP_STATUS` does not park. It answers `EAGAIN` before the headers
+  arrive, and it sets `statusConsumed` when it answers.
+- `FS_READ` serves the body and never parks: bytes, then 0 at EOF, the
+  error when failed, `EAGAIN` when dry. A drain below `HTTP_BUF_CAP`
+  resumes the paused fetch reader — the backpressure behaviour is kept.
+- `HTTP_READ` (0x0604) and `HTTP_CLOSE` (0x0605) are deleted. The opcodes
+  are retired and not reused. `pcb.https` and its `_exitProcess` sweep are
+  deleted — the ordinary fd sweep aborts every live fetch. The `_httpXfers`
+  map and `statusWaiter`/`readWaiter` are gone with them.
+- Two kernel deadlines bound every transfer: headers (default 30 s,
+  `headersMs` overrides) and idle (default 120 s, `idleMs` overrides,
+  `idleMs < 0` disables). Expiry aborts the fetch and fails the transfer
+  with `ETIMEDOUT` on the error leg. The idle clock stops during a
+  backpressure pause, because that gap belongs to the consumer.
+- `os/curl/libcurl.c` converted in the same commit. `CONNECTTIMEOUT` maps
+  to the kernel headers deadline. `CURLOPT_TIMEOUT` runs on the veneer's
+  wall clock through `__wait` timeouts. The `ITIMER_REAL`/`SIGALRM`
+  apparatus is deleted.
+- One added decision: `HTTP_OPEN` on a kernel without `opts.fs` answers
+  `ENOSYS`. A transfer is an fd, and a no-fs kernel has no fd table. No
+  in-tree embedder runs that combination; `test_http.js` pins it.
+- The consumer contract (wait, consume the status once, read to `EAGAIN`,
+  wait again) is documented in host.js `createHttp`, in the compiler
+  prelude declarations, and in KERNEL.md.
+- Liability L61 is retired. KERNEL.md's 0x06xx section is rewritten.
+  `todos/W3M-INVESTIGATION.md`'s "ids are NOT fds" bullet now carries a
+  correction. Image v199 (the baked `/bin/curl` and `gucman` relink the
+  veneer).
+
+Red control: the rewritten `test_http.js` against the pre-change kernel
+fails with 43 explicit FAIL lines and exits 1 under a 60 s watchdog — a
+visible failure, not a hang.
+
+Gate (planner selection via `--diff`, every suite with a number, each heavy
+suite run once): todos 5/5 · unit 801 passed / 1 xfail / 3 skipped of 805 ·
+host green · blockfs 15/15 · run.py batch 279 passed / 0 failed / 55
+skipped · micropython batch 584 passed / 0 failed / 65 skipped · kernel
+137/137 (`recorded 137 of 137`, `filter: null`; includes the rewritten
+`test_http.js`/`test_http_e2e.js` and the untouched-but-affected
+`test_curl_e2e.js`, `test_gucman_e2e.js`, `test_gucman_quake_e2e.js`) ·
+browser sweep 42/42 (`recorded 42 of 42`, `filter: null`). The sweep
+dirtied three committed PNGs and one untracked screenshot (the known
+todos/0438 class); restored.
 - **Design**: this file; `todos/KERNEL.md` (the 0x04xx and 0x06xx opcode tables).
   The precedent is `todos/done/0264` (FS_WATCH, ticket #75) — the last time a new
   kernel object became an OFD.
