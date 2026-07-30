@@ -6,7 +6,7 @@
   "files": {
     "stl4": { "nativeApp": "stl4" },
     "stl4-demo": {
-      "content": "#!/bin/sh\n# Menu launcher: stl4 is a tty app (the STL conformance report on stdout), so\n# run it in a terminal window and hold the window open for the verdict — the\n# etl-tests pattern. $0 arrives through symlinks; realpath canonicalizes (0263).\nhere=\"$(dirname \"$(realpath \"$0\")\")\"\nexec term sh -c \"$here/stl4; echo; echo '[stl4 demo done — press Enter to close]'; read _\"\n",
+      "content": "#!/bin/sh\n# Menu launcher: stl4 is a tty app (the STL conformance report on stdout), so\n# run it in a terminal window and hold the window open for the verdict — the\n# etl-tests pattern. Self-location is a known-prefix probe (todos/0444):\n# /opt/<name> installed, /usr/opt/<name> baked; `[` is a hush builtin —\n# zero spawns (the old dirname-of-realpath command substitution cost four).\npkg=/opt/stl4\n[ -d \"$pkg\" ] || pkg=/usr/opt/stl4\nexec term sh -c \"$pkg/stl4; echo; echo '[stl4 demo done — press Enter to close]'; read _\"\n",
       "mode": 493
     }
   },

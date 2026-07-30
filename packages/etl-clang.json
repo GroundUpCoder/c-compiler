@@ -6,7 +6,7 @@
   "files": {
     "etl-clang": { "nativeApp": "etl-clang" },
     "etl-tests": {
-      "content": "#!/bin/sh\n# Menu launcher: etl-clang is a tty app (the ETL conformance battery on\n# stdout), so run it in a terminal window and hold the window open for the\n# verdict. $0 arrives through symlinks; realpath canonicalizes (0263).\nhere=\"$(dirname \"$(realpath \"$0\")\")\"\nexec term sh -c \"$here/etl-clang; echo; echo '[etl battery done — press Enter to close]'; read _\"\n",
+      "content": "#!/bin/sh\n# Menu launcher: etl-clang is a tty app (the ETL conformance battery on\n# stdout), so run it in a terminal window and hold the window open for the\n# verdict. Self-location is a known-prefix probe (todos/0444): /opt/<name>\n# installed, /usr/opt/<name> baked; `[` is a hush builtin — zero spawns\n# (the old dirname-of-realpath command substitution cost four processes).\npkg=/opt/etl-clang\n[ -d \"$pkg\" ] || pkg=/usr/opt/etl-clang\nexec term sh -c \"$pkg/etl-clang; echo; echo '[etl battery done — press Enter to close]'; read _\"\n",
       "mode": 493
     }
   },

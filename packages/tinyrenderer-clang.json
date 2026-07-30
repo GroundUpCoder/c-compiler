@@ -10,7 +10,7 @@
     "african_head_nm_tangent.tga": { "nativeFile": "/usr/share/tinyrenderer/african_head_nm_tangent.tga" },
     "african_head_spec.tga": { "nativeFile": "/usr/share/tinyrenderer/african_head_spec.tga" },
     "tinyrenderer-demo": {
-      "content": "#!/bin/sh\n# Menu launcher: pass the packaged head model to the renderer (the binary's\n# built-in default points at the overlay's /usr/share install, which a\n# gucman-installed package doesn't have). $0 arrives through symlinks;\n# realpath canonicalizes (0263).\nhere=\"$(dirname \"$(realpath \"$0\")\")\"\nexec \"$here/tinyrenderer-clang\" \"$here/african_head.obj\" \"$@\"\n",
+      "content": "#!/bin/sh\n# Menu launcher: pass the packaged head model to the renderer (the binary's\n# built-in default points at the overlay's /usr/share install, which a\n# gucman-installed package doesn't have). Self-location is a known-prefix\n# probe (todos/0444): /opt/<name> installed, /usr/opt/<name> baked; `[` is\n# a hush builtin — zero spawns (the old dirname-of-realpath command\n# substitution cost four processes per launch).\npkg=/opt/tinyrenderer-clang\n[ -d \"$pkg\" ] || pkg=/usr/opt/tinyrenderer-clang\nexec \"$pkg/tinyrenderer-clang\" \"$pkg/african_head.obj\" \"$@\"\n",
       "mode": 493
     }
   },
