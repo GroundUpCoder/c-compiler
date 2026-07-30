@@ -1,6 +1,6 @@
 # 0416 — The `native-sibling` packaging seam, and `mkpkg --rust` (Lane A4)
 
-- **Status**: open
+- **Status**: done
 - **Design**: `todos/RUST.md` §3 rules 4-6; `todos/CLANG-CPP-EPIC.md` §5 and §7 hold
   the mechanism this ticket generalizes.
 - **Provenance**: the Rust program, filed 2026-07-29.
