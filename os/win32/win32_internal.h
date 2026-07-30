@@ -29,6 +29,12 @@ HDC __gdi_dc_wrap(void *bits, int w, int h, int stridePx);
 /* Free a wrapped DC (no present — that is user32's job). */
 void __gdi_dc_unwrap(HDC dc);
 
+/* The baked font FAMILY list (C2, #282): *names gets gdi32's authoritative
+ * family-name table (index == the GF_* enum; "mono"/"sans"/"serif" today),
+ * returns the count. ChooseFontW's face LISTBOX enumerates THIS — never a
+ * parallel hardcoded list, so a new family reaches the dialog for free. */
+int __gdi_font_families(const char *const **names);
+
 /* ---- AQM: the agent seam at the user32 <-> any-control boundary
  * (todos/0370). Real common controls hold ITEMS internally, not as child
  * HWNDs — which would break the platform pillar that every widget is

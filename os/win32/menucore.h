@@ -134,6 +134,15 @@ void mc_strip_amp(const char *in, char *out, int cap);
 
 /* ---- geometry + raster ------------------------------------------- */
 
+/* The engine's font (C2, #282). Measure (mc_measure_dc) and draw
+ * (mc_level_paint) both honor it, so geometry and pixels stay coherent
+ * for a front-end whose draw font is NOT the DC default — wm.c points
+ * this at its chrome font (explicit mono), while user32 leaves it NULL
+ * and inherits the DC default (SYSTEM_FONT, sans since the C2 flag
+ * day). Pre-C2 the two paths agreed only by coincidence (both 20px
+ * mono); this seam makes the agreement structural. */
+void mc_set_font(HFONT f);
+
 HDC mc_measure_dc(void);            /* the cached measuring memory DC */
 int mc_text_w(const char *text);    /* label width up to the accel tab */
 int mc_row_h(const MenuItem *it);
@@ -156,6 +165,8 @@ typedef struct {
 
 typedef struct {
     const MenuCoreOps *ops;     /* registered at mc_track_begin */
+    HFONT font;                 /* mc_set_font: the engine's measure+draw
+                                   font; NULL = the DC default (C2, #282) */
     void *owner;                /* notify target (track_state / popup_opening
                                    / bar-tracking post_command) */
     void *cmd;                  /* standalone post_command target */

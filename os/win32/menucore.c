@@ -160,9 +160,16 @@ MenuItem *mc_item_of(MenuTbl *m, UINT id, UINT flags) {
 /* ============================================================ geometry
  * (bar and popup share the measuring DC) */
 
+void mc_set_font(HFONT f) { __mc.font = f; }
+
 HDC mc_measure_dc(void) {
     static HDC dc;
     if (!dc) dc = CreateCompatibleDC(NULL);
+    /* Keep the measure font in step with the registered engine font (C2,
+     * #282): a front-end may call mc_set_font at any time, so re-select
+     * per access — SelectObject on the same font is cheap. NULL = the DC
+     * default stands (user32). */
+    if (dc && __mc.font) SelectObject(dc, (HGDIOBJ)__mc.font);
     return dc;
 }
 
@@ -329,6 +336,10 @@ void mc_level_paint(int k) {
     int w, h;
     HDC dc = __mc.ops->win_begin(L->win, &w, &h);
     if (!dc) return;
+    /* Draw with the engine font when one is registered (C2, #282): the
+     * measure path used the same font, so row/width geometry and pixels
+     * agree by construction, not by front-end convention. */
+    if (__mc.font) SelectObject(dc, (HGDIOBJ)__mc.font);
     RECT pr;
     SetRect(&pr, 0, 0, w, h);
     mc_draw_tbl(dc, L->m, &pr, L->hot);

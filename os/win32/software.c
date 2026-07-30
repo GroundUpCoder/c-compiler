@@ -929,10 +929,13 @@ int main(void) {
     g_brSep = CreateSolidBrush(RGB(225, 225, 228));
     /* The 20px family (font-20 retune): body text IS the unified 20px
      * em; title one step up, annotations one step down — nothing at the
-     * fuzzy ppem-9..12 sizes that motivated the retune. */
-    g_fTitle = CreateFont(-26, 0, 0, 0, FW_NORMAL, 0, 0, 0, 0, 0, 0, 0, 0, NULL);
-    g_fName = CreateFont(-20, 0, 0, 0, FW_NORMAL, 0, 0, 0, 0, 0, 0, 0, 0, NULL);
-    g_fSmall = CreateFont(-16, 0, 0, 0, FW_NORMAL, 0, 0, 0, 0, 0, 0, 0, 0, NULL);
+     * fuzzy ppem-9..12 sizes that motivated the retune. "sans" since the
+     * C2 flag day (#282): these are UI headings and must match the sans
+     * stock controls around them (a NULL face means the platform default
+     * face, which stays mono). */
+    g_fTitle = CreateFont(-26, 0, 0, 0, FW_NORMAL, 0, 0, 0, 0, 0, 0, 0, 0, "sans");
+    g_fName = CreateFont(-20, 0, 0, 0, FW_NORMAL, 0, 0, 0, 0, 0, 0, 0, 0, "sans");
+    g_fSmall = CreateFont(-16, 0, 0, 0, FW_NORMAL, 0, 0, 0, 0, 0, 0, 0, 0, "sans");
 
     WNDCLASS wc;
     memset(&wc, 0, sizeof wc);

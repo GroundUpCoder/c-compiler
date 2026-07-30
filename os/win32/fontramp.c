@@ -32,8 +32,21 @@
 
 static const char *g_face = "mono";     /* NULL after "default" */
 static int g_bold, g_ital, g_ul, g_so;
+static int g_stockId = -1;              /* >= 0: probe GetStockObject(id) */
+
+/* The stock font ids by name (C2, #282) — `fontramp probe stock NAME`. */
+static const struct { const char *name; int id; } STOCKS[] = {
+    { "OEM_FIXED_FONT", OEM_FIXED_FONT },
+    { "ANSI_FIXED_FONT", ANSI_FIXED_FONT },
+    { "ANSI_VAR_FONT", ANSI_VAR_FONT },
+    { "SYSTEM_FONT", SYSTEM_FONT },
+    { "DEVICE_DEFAULT_FONT", DEVICE_DEFAULT_FONT },
+    { "SYSTEM_FIXED_FONT", SYSTEM_FIXED_FONT },
+    { "DEFAULT_GUI_FONT", DEFAULT_GUI_FONT },
+};
 
 static HFONT make_font(int px, int bold, int ital, int ul, int so) {
+    if (g_stockId >= 0) return (HFONT)GetStockObject(g_stockId);
     return CreateFont(-px, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL,
                       (DWORD)ital, (DWORD)ul, (DWORD)so,
                       DEFAULT_CHARSET, 0, 0, DEFAULT_QUALITY,
@@ -175,6 +188,16 @@ int main(int argc, char **argv) {
     int i = 1, doProbe = 0, px = 20;
     const char *text = "Hamburgefonstiv 0123456789";
     if (i < argc && !strcmp(argv[i], "probe")) { doProbe = 1; i++; }
+    if (doProbe && i + 1 < argc && !strcmp(argv[i], "stock")) {
+        for (int k = 0; k < (int)(sizeof STOCKS / sizeof STOCKS[0]); k++)
+            if (!strcmp(argv[i + 1], STOCKS[k].name)) g_stockId = STOCKS[k].id;
+        if (g_stockId < 0) {
+            fprintf(stderr, "fontramp: unknown stock font %s\n", argv[i + 1]);
+            return 2;
+        }
+        g_face = argv[i + 1];                    /* the probe: echo label */
+        i += 2;
+    }
     if (i < argc && strcmp(argv[i], "bold") && strcmp(argv[i], "italic") &&
         strcmp(argv[i], "ul") && strcmp(argv[i], "so") &&
         strcmp(argv[i], "px") && strcmp(argv[i], "text")) {

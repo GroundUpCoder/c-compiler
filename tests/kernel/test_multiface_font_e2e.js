@@ -61,6 +61,14 @@ const PROBES = [
   ['times', '"Times New Roman"'],
   ['comic', '"Comic Sans MS"'],
   ['unknown', '"Zapf Chancery"'],
+  // C2 (#282): the stock-font flag day — UI stocks sans, fixed stocks mono.
+  ['stock-system', 'stock SYSTEM_FONT'],
+  ['stock-gui', 'stock DEFAULT_GUI_FONT'],
+  ['stock-ansivar', 'stock ANSI_VAR_FONT'],
+  ['stock-devdef', 'stock DEVICE_DEFAULT_FONT'],
+  ['stock-oemfix', 'stock OEM_FIXED_FONT'],
+  ['stock-ansifix', 'stock ANSI_FIXED_FONT'],
+  ['stock-sysfix', 'stock SYSTEM_FIXED_FONT'],
 ];
 
 function parseProbes(out) {
@@ -175,6 +183,27 @@ function probeSession() {
   check('"Comic Sans MS" -> sans (keyword fallback)', P.comic.all === P.sans.all);
   check('unknown face + DEFAULT_PITCH -> mono (the C1 default)',
     P.unknown.all === P.mono.all);
+
+  /* C2 (#282): the stock-font flag day. The UI stocks are the 20px SANS
+   * (metric+render fingerprints identical to CreateFont "sans" at the
+   * stock px), and the FIXED stocks keep 20px mono — the documented
+   * Win32 mono escape hatch exists and works after the flip. */
+  check('SYSTEM_FONT is the 20px sans (metrics AND render)',
+    P['stock-system'].all === P.sans.all,
+    P['stock-system'].all + ' vs ' + P.sans.all);
+  check('DEFAULT_GUI_FONT === SYSTEM_FONT',
+    P['stock-gui'].all === P['stock-system'].all);
+  check('ANSI_VAR_FONT / DEVICE_DEFAULT_FONT are the sans stock',
+    P['stock-ansivar'].all === P.sans.all && P['stock-devdef'].all === P.sans.all);
+  check('stock sans is proportional (i < x < M)',
+    P['stock-system'].ai < P['stock-system'].ax &&
+    P['stock-system'].ax < P['stock-system'].aM,
+    JSON.stringify([P['stock-system'].ai, P['stock-system'].ax, P['stock-system'].aM]));
+  check('ANSI_FIXED_FONT is the 20px mono (metrics AND render)',
+    P['stock-ansifix'].all === P.mono.all,
+    P['stock-ansifix'].all + ' vs ' + P.mono.all);
+  check('OEM_FIXED_FONT / SYSTEM_FIXED_FONT are the mono stock',
+    P['stock-oemfix'].all === P.mono.all && P['stock-sysfix'].all === P.mono.all);
 
   /* /etc override + the-file-not-embolden proof */
   check('/etc/fonts/sans_bold.ttf override reaches sans bold (renders serif)',

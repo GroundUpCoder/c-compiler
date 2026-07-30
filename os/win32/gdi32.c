@@ -13,8 +13,11 @@
  * resolve against the image's baked families (mono / sans / serif, the 8
  * Noto faces in os/image.json) via a Win32-shaped mapper — known family
  * names map directly, unknown names fall back by lfPitchAndFamily bits,
- * NULL/empty keeps the mono default (unchanged in C1 — the no-flag-day
- * half; C2 moves the stock fonts). Every face resolves /etc/fonts/NAME.ttf
+ * NULL/empty keeps the mono default (deliberate ACROSS the C2 flag day,
+ * ticket #282: C2 moved the STOCK OBJECTS to sans; a NULL-face CreateFont
+ * is an explicit request for the platform default face, which stays mono
+ * — an app wanting the UI look takes DEFAULT_GUI_FONT or names sans).
+ * Every face resolves /etc/fonts/NAME.ttf
  * over the baked /usr/share/fonts/NAME.ttf (the mono pair's rule,
  * per face). Real bold/italic files are preferred where baked; a variant
  * with no real file synthesizes (fontcore bold_xdelta embolden / italic
@@ -116,6 +119,17 @@ static const char *const g_faceBase[3][2][2] = {  /* [family][bold][italic] */
     { { "serif", "serif"        }, { "serif_bold", "serif_bold"       } },
 };
 static const unsigned char g_faceRealItal[3] = { 0, 1, 0 };  /* only sans */
+
+/* THE family-name list, index == GF_* (C2, ticket #282). This is the one
+ * authoritative source: ChooseFontW enumerates it (__gdi_font_families)
+ * and GetObject reports lfFaceName from it (#291) — a fourth family added
+ * to the enum + g_faceBase lands here once and every consumer follows. */
+static const char *const g_familyName[3] = { "mono", "sans", "serif" };
+
+int __gdi_font_families(const char *const **names) {
+    if (names) *names = g_familyName;
+    return (int)(sizeof g_familyName / sizeof g_familyName[0]);
+}
 
 /* ============================================================ objects */
 
@@ -269,8 +283,9 @@ static void gdi_fc_fail(const char *p) {
  * faceName wins: known family names (Windows' and ours) map directly;
  * an unknown NON-EMPTY name falls back to family keywords in the name,
  * then to the lfPitchAndFamily bits; NULL/empty goes straight to the
- * bits. Nothing resolvable keeps the mono default (unchanged in C1 —
- * C2 is the flag day). Matching is case-insensitive. */
+ * bits. Nothing resolvable keeps the mono default — deliberately kept
+ * across the C2 flag day (#282 moved the stock OBJECTS, not this
+ * mapper's default; see the header note). Matching is case-insensitive. */
 static int face_family(LPCSTR name, DWORD pitchAndFamily) {
     if (name && name[0]) {
         char low[2 * LF_FACESIZE];
@@ -313,7 +328,7 @@ static int face_family(LPCSTR name, DWORD pitchAndFamily) {
     case FF_MODERN:     return GF_MONO;
     }
     if ((pitchAndFamily & 0x0Fu) == VARIABLE_PITCH) return GF_SANS;
-    return GF_MONO;                          /* the C1 default, unchanged */
+    return GF_MONO;                          /* the platform default face */
 }
 
 /* Open a face base name through the per-face /etc > /usr pair. */
@@ -525,8 +540,14 @@ static HGDIOBJ stock_pen(COLORREF c, int style) {
     return o;
 }
 
-static HGDIOBJ stock_font(void) {
+/* C2 (ticket #282): every stock font carries an EXPLICIT family — the
+ * Win95->XP shape: proportional sans for the UI stocks, mono for the
+ * fixed stocks. Pre-C2 all stock fonts rendered mono only because
+ * obj_new's calloc left fontFam == GF_MONO == 0; the family is now a
+ * decision the reader can see, not a zero. */
+static HGDIOBJ stock_font(int fam) {
     HGDIOBJ o = obj_new(OBJ_FONT);
+    o->fontFam = fam;
     o->fontPx = STOCK_FONT_PX;
     o->stock = 1;
     g_objCount--;
@@ -546,8 +567,16 @@ HGDIOBJ GetStockObject(int which) {
         case WHITE_PEN:    g_stock[which] = stock_pen(RGB(255, 255, 255), PS_SOLID); break;
         case BLACK_PEN:    g_stock[which] = stock_pen(RGB(0, 0, 0), PS_SOLID); break;
         case NULL_PEN:     g_stock[which] = stock_pen(0, PS_NULL); break;
-        case SYSTEM_FONT:
-        case DEFAULT_GUI_FONT: g_stock[which] = stock_font(); break;
+        case SYSTEM_FONT:                        /* the UI stocks: sans (C2) */
+        case DEFAULT_GUI_FONT:
+        case ANSI_VAR_FONT:
+        case DEVICE_DEFAULT_FONT: g_stock[which] = stock_font(GF_SANS); break;
+        case OEM_FIXED_FONT:                     /* the fixed stocks: mono —
+                                                  * the documented Win32 mono
+                                                  * escape hatch survives the
+                                                  * C2 flag day */
+        case ANSI_FIXED_FONT:
+        case SYSTEM_FIXED_FONT:   g_stock[which] = stock_font(GF_MONO); break;
         default: return NULL;
         }
     }

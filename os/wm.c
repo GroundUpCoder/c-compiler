@@ -4614,6 +4614,12 @@ int main(void) {
      * pre-existing windows get buttons AND get re-placed — (re)starting
      * the WM deliberately tidies the desktop. */
     SDL_Init(SDL_INIT_VIDEO);
+    /* The menu engine measures AND draws with the chrome font (C2, #282:
+     * mc_set_font) — before this seam the measure DC fell to the stock
+     * default, which matched the chrome font only while both were 20px
+     * mono; the stock default is sans now and wm chrome deliberately
+     * stays mono. */
+    mc_set_font(chrome_font());
     if (make_desk() != 0)              /* bottom of z; created first (0029) */
         fatal_sdl(2, "cannot create the desktop window");
     if (make_bar() != 0)
