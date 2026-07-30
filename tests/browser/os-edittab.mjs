@@ -67,13 +67,16 @@ try {
   await waitPixel(EDIT_X + 100, EDIT_Y + 40, WHITE, 60000);
   check('multiline EDIT well white', true);
 
-  // Focus the multiline EDIT's first line and type "X" TAB "Y" through the
-  // REAL input path (page keyboard -> kernel ring -> WM_CHAR). ctldemo's main
-  // window is a plain GetMessage loop (no IsDialogMessage), so Tab reaches the
-  // EDIT as WM_CHAR 9 and inserts a real '\t' rather than moving focus. (The
-  // seeded "line one" prefix is harmless — the tab still opens the one wide
-  // gap on the row, which is what the pixel scan below keys on.)
-  await clickScreen(EDIT_X + 100, EDIT_Y + 30);
+  // Focus the multiline EDIT's first line AT COLUMN 0 and type "X" TAB "Y"
+  // through the REAL input path (page keyboard -> kernel ring -> WM_CHAR).
+  // ctldemo's main window is a plain GetMessage loop (no IsDialogMessage), so
+  // Tab reaches the EDIT as WM_CHAR 9 and inserts a real '\t' rather than
+  // moving focus. Typed at the row START the next default stop is a full
+  // 8-char grid cell away, so the tab opens a wide gap in ANY face. (The old
+  // append-at-line-end flow was flag-day fragile: under C2's sans stock
+  // "line oneX" ended 3px short of a stop, and a real tab legally advances
+  // 3px — the wide-gap premise broke, not the tab.)
+  await clickScreen(EDIT_X + 4, EDIT_Y + 30);
   await new Promise(r => setTimeout(r, 300));
   await page.keyboard.type('X', { delay: 40 });
   await page.keyboard.press('Tab');
