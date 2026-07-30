@@ -1,6 +1,71 @@
 # 0414 — `gucos-sys`: the ONE Rust binding to the `"c"` ABI (Lane A2)
 
-- **Status**: open
+- **Status**: done (2026-07-30)
+
+## Result
+
+`gucos-sys` is live, and `alloc` works on gucOS through the one heap.
+
+- **The sibling repository is `~/git/gucos-rust`, branch `0414-gucos-sys`,
+  HEAD `e97a0a1a3959f5297d16dba21063c22a80425a15`** (pushed to
+  `https://github.com/josephkimgpt/gucos-rust.git`). This c-compiler branch
+  is `0414-gucos-sys`. Merge the two branches in lockstep.
+- `crates/gucos-sys` declares the whole `"c"` import set: **86 imports in
+  13 family files** (process, spawn, signal, stdio, fs, wait, tty, time,
+  entropy, sockets, clipboard, egress, http). Each file holds one private
+  extern block with `#[link(wasm_import_module = "c")]`, and safe wrappers
+  over it. The set comes from host.js. The lib.rs header lists the
+  families that stay behind their C bodies on purpose: the math
+  transcendentals, the printf/scanf/strtod glue, setjmp/longjmp, the
+  SDL/WebGPU veneers, the emscripten shims, the ss helpers, and the
+  legacy aliases (`mkdir`, `__tcgetattr`, `__tcsetattr`).
+- The `#[global_allocator]` delegates to libc `malloc`/`free`/`realloc`
+  (over-aligned requests over-allocate and stash the raw pointer). The
+  `alloca` export calls `malloc`. **The 0413 static arena is deleted.**
+  No Rust-side heap region exists. The panic handler reports the panic on
+  stderr from a fixed stack buffer, then calls `__exit(101)`.
+- **A measured premise correction (ES).** The plan said: link the vendored
+  C libc bodies. The mechanism needed one repair. The libc's `__import`
+  marker sets only `import_module("c")`, and wasm-ld does not let such a
+  symbol stay undefined — only an explicit `import_name` or an allow flag
+  does. rustc's `#[link]` attribute sets both, which is why 0413 linked
+  clean. This is the reason cc2wasm links with blanket
+  `--allow-undefined`. The resolution keeps the loud-failure rule:
+  `build.sh` passes `--allow-undefined-file` with the 187 names derived
+  from the libc's own `__import` declarations. A listed symbol becomes a
+  module `"c"` import. An unlisted undefined symbol still fails at link
+  time with its name. Both directions are test-verified.
+- `build.sh` compiles `__malloc __stdlib __string __stdio __errno` from
+  the clang-simplified sibling with cc2wasm's exact flags and links the
+  objects into every program (`CLANG_SIMPLIFIED` overrides the default
+  path). It builds `out/hello-rust.wasm` (9,113 bytes) and
+  `out/alloc-rust.wasm` (26,507 bytes), byte-deterministic (proven by a
+  clean rebuild). A bare `cargo build` fails with
+  `undefined symbol: malloc` — build.sh is the one build entry.
+- The fixtures moved, and both are recorded: `hello-rust.wasm` sha256
+  `5ec3a25673ae1074bb0ce464081ebbd2a3b4f83dce4b2705215404002e6c5cf2`
+  (was `03ede92f…d5`; the crate now goes through gucos-sys), and the new
+  `alloc-rust.wasm` sha256
+  `842dde724b8b98ae47be021370b23d58c53b86bbc165b80cfa87cd0922d5c9e7`.
+- `tests/kernel/test_rust_e2e.js` (39 checks with the sibling): the
+  alloc-demo program builds a Vec, a String, a Box and a BTreeMap, sorts,
+  formats, prints, and runs in a booted gucOS from the shell with `$?`
+  asserted. The interop leg interleaves Rust growth with C
+  `strdup`/`free` on the one heap and checks that nothing corrupts
+  (`interop strdups=32 len_ok=true vec_intact=true`). The absent-import
+  module fails at load, and the test asserts the message names
+  `__gucos_absent_import` and `"c"`. The single-declaration guard scans
+  the sibling: no `wasm_import_module` outside gucos-sys, and no import
+  is declared twice (0 duplicates over the 86). The negative fixtures
+  (`missing-link-attr`, `no-alloca`, `absent-import`) declare their own
+  defect imports by construction; the sibling README records that.
+- Gate: `node tests/run.js --diff` selected the kernel suite.
+  **kernel 137/137 passed, `filter: null`, `recorded == total`, one
+  run, exit 0.** The todos suite ran green at close
+  (queue + liabilities checks pass).
+
+Dev log: `logs/2026-07-30/0414-gucos-sys.md`.
+
 - **Design**: `todos/RUST.md` §2 (the ABI contract) and §3 (the architecture rules).
 - **Provenance**: the Rust program, filed 2026-07-29.
 
