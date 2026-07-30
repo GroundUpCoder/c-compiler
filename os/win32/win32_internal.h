@@ -35,6 +35,11 @@ void __gdi_dc_unwrap(HDC dc);
  * parallel hardcoded list, so a new family reaches the dialog for free. */
 int __gdi_font_families(const char *const **names);
 
+/* Is this GDI object a font? (#291) — gdi32w.c's GetObjectW needs the
+ * type to know when to translate LOGFONT -> LOGFONTW; the internal
+ * OBJ_* enum stays private to gdi32.c. */
+int __gdi_obj_is_font(HGDIOBJ obj);
+
 /* ---- AQM: the agent seam at the user32 <-> any-control boundary
  * (todos/0370). Real common controls hold ITEMS internally, not as child
  * HWNDs — which would break the platform pillar that every widget is

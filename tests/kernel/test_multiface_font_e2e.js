@@ -64,6 +64,8 @@ const PROBES = [
   ['times', '"Times New Roman"'],
   ['comic', '"Comic Sans MS"'],
   ['unknown', '"Zapf Chancery"'],
+  // #291: positive-lfHeight (cell) mode must read back the cell height.
+  ['cell', 'mono cell px 30'],
   // C2 (#282): the stock-font flag day — UI stocks sans, fixed stocks mono.
   ['stock-system', 'stock SYSTEM_FONT'],
   ['stock-gui', 'stock DEFAULT_GUI_FONT'],
@@ -93,8 +95,17 @@ function parseProbes(out) {
     if (ext) { p.cx = +ext[1]; p.cy = +ext[2]; }
     const ink = part.match(/^ink: n=(\d+) hash=([0-9a-f]{8})$/m);
     if (ink) { p.ink = +ink[1]; p.hash = ink[2]; }
+    // GetObject read-back (#291): the resolved LOGFONT + clamp semantics.
+    const lf = part.match(/^lf: n=(\d+) q=(\d+) clamp=(\d+) face=(\w+) h=(-?\d+) w=(\d+) ital=(\d) ul=(\d) so=(\d) qual=(\d+) pf=(\d+)$/m);
+    if (lf) {
+      p.lfN = +lf[1]; p.lfQ = +lf[2]; p.lfClamp = +lf[3]; p.lfFace = lf[4];
+      p.lfH = +lf[5]; p.lfW = +lf[6]; p.lfItal = +lf[7]; p.lfUl = +lf[8];
+      p.lfSo = +lf[9]; p.lfQual = +lf[10]; p.lfPf = +lf[11];
+    }
+    const lfw = part.match(/^lfw: n=(\d+) face=(\w+) h=(-?\d+)$/m);
+    if (lfw) { p.lfwN = +lfw[1]; p.lfwFace = lfw[2]; p.lfwH = +lfw[3]; }
     // The full metric+render fingerprint (everything but the probe: echo).
-    p.all = (part.match(/^(tm|adv|ext|ink):.*$/gm) || []).join('\n');
+    p.all = (part.match(/^(tm|adv|ext|ink|lf|lfw):.*$/gm) || []).join('\n');
     blocks[label.trim()] = p;
   }
   return blocks;
@@ -207,6 +218,35 @@ function probeSession() {
     P['stock-ansifix'].all + ' vs ' + P.mono.all);
   check('OEM_FIXED_FONT / SYSTEM_FIXED_FONT are the mono stock',
     P['stock-oemfix'].all === P.mono.all && P['stock-sysfix'].all === P.mono.all);
+
+  /* #291: GetObject on an HFONT returns the RESOLVED LOGFONT. */
+  check('GetObject: mono round-trip (face/h/weight/pitch as resolved)',
+    P.mono.lfFace === 'mono' && P.mono.lfH === -20 && P.mono.lfW === 400 &&
+    P.mono.lfItal === 0 && P.mono.lfPf === 49 /* FIXED_PITCH|FF_MODERN */,
+    JSON.stringify([P.mono.lfFace, P.mono.lfH, P.mono.lfW, P.mono.lfPf]));
+  check('GetObject: sans bold italic resolves (face=sans w=700 ital=1 pf=34)',
+    P['sans-bold-italic'].lfFace === 'sans' && P['sans-bold-italic'].lfW === 700 &&
+    P['sans-bold-italic'].lfItal === 1 && P['sans-bold-italic'].lfPf === 34,
+    JSON.stringify([P['sans-bold-italic'].lfFace, P['sans-bold-italic'].lfW,
+                    P['sans-bold-italic'].lfItal, P['sans-bold-italic'].lfPf]));
+  check('GetObject: underline/strikeout flags read back',
+    P['mono-ul'].lfUl === 1 && P['mono-so'].lfSo === 1);
+  check('GetObject reports the RESOLVED face, not the request ("Courier New" -> mono, "MS Shell Dlg" -> sans)',
+    P.courier.lfFace === 'mono' && P.shelldlg.lfFace === 'sans');
+  check('GetObject: cell mode reads back the positive cell height',
+    P.cell.lfH === 30, P.cell.lfH);
+  check('GetObject: NULL buffer returns the full size, short buffer clamps to bytes written',
+    P.mono.lfQ === P.mono.lfN && P.mono.lfClamp === 10,
+    JSON.stringify([P.mono.lfQ, P.mono.lfN, P.mono.lfClamp]));
+  check('GetObject: stock DEFAULT_GUI_FONT reports its real backing (sans 20)',
+    P['stock-gui'].lfFace === 'sans' && P['stock-gui'].lfH === -20,
+    JSON.stringify([P['stock-gui'].lfFace, P['stock-gui'].lfH]));
+  check('GetObject: stock ANSI_FIXED_FONT reports its real backing (mono 20)',
+    P['stock-ansifix'].lfFace === 'mono' && P['stock-ansifix'].lfH === -20);
+  check('GetObjectW translates (wider struct, same resolution)',
+    P.mono.lfwN > P.mono.lfN && P.mono.lfwFace === 'mono' &&
+    P['sans-bold-italic'].lfwFace === 'sans' && P.mono.lfwH === -20,
+    JSON.stringify([P.mono.lfwN, P.mono.lfN, P.mono.lfwFace]));
 
   /* /etc override + the-file-not-embolden proof */
   check('/etc/fonts/sans_bold.ttf override reaches sans bold (renders serif)',

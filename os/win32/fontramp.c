@@ -33,6 +33,7 @@
 
 static const char *g_face = "mono";     /* NULL after "default" */
 static int g_bold, g_ital, g_ul, g_so;
+static int g_cell;                      /* "cell": positive lfHeight mode */
 static int g_stockId = -1;              /* >= 0: probe GetStockObject(id) */
 
 /* The stock font ids by name (C2, #282) — `fontramp probe stock NAME`. */
@@ -48,7 +49,7 @@ static const struct { const char *name; int id; } STOCKS[] = {
 
 static HFONT make_font(int px, int bold, int ital, int ul, int so) {
     if (g_stockId >= 0) return (HFONT)GetStockObject(g_stockId);
-    return CreateFont(-px, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL,
+    return CreateFont(g_cell ? px : -px, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL,
                       (DWORD)ital, (DWORD)ul, (DWORD)so,
                       DEFAULT_CHARSET, 0, 0, DEFAULT_QUALITY,
                       DEFAULT_PITCH, g_face);
@@ -86,6 +87,27 @@ static int probe(int px, const char *text) {
            (int)tm.tmPitchAndFamily);
     printf("adv: i=%u M=%u x=%u W=%u\n",
            adv_of(dc, "i"), adv_of(dc, "M"), adv_of(dc, "x"), adv_of(dc, "W"));
+
+    /* GetObject read-back (#291): the RESOLVED LOGFONT, the NULL-buffer
+     * size query, the short-buffer clamp, and the W translation. */
+    LOGFONT lf;
+    memset(&lf, 0, sizeof lf);
+    int lfn = GetObject((HGDIOBJ)f, (int)sizeof lf, &lf);
+    int lfq = GetObject((HGDIOBJ)f, 0, NULL);
+    char clampBuf[10];
+    int lfc = GetObject((HGDIOBJ)f, (int)sizeof clampBuf, clampBuf);
+    printf("lf: n=%d q=%d clamp=%d face=%s h=%d w=%d ital=%d ul=%d so=%d "
+           "qual=%d pf=%d\n",
+           lfn, lfq, lfc, lf.lfFaceName, (int)lf.lfHeight, (int)lf.lfWeight,
+           (int)lf.lfItalic, (int)lf.lfUnderline, (int)lf.lfStrikeOut,
+           (int)lf.lfQuality, (int)lf.lfPitchAndFamily);
+    LOGFONTW lw;
+    memset(&lw, 0, sizeof lw);
+    int lwn = GetObjectW((HGDIOBJ)f, (int)sizeof lw, &lw);
+    char wface[64] = "";
+    WideCharToMultiByte(CP_UTF8, 0, lw.lfFaceName, -1, wface, sizeof wface,
+                        NULL, NULL);
+    printf("lfw: n=%d face=%s h=%d\n", lwn, wface, (int)lw.lfHeight);
     SIZE sz;
     GetTextExtentPoint32(dc, text, (int)strlen(text), &sz);
     printf("ext: cx=%d cy=%d\n", (int)sz.cx, (int)sz.cy);
@@ -230,7 +252,7 @@ int main(int argc, char **argv) {
         i += 2;
     }
     if (i < argc && strcmp(argv[i], "bold") && strcmp(argv[i], "italic") &&
-        strcmp(argv[i], "ul") && strcmp(argv[i], "so") &&
+        strcmp(argv[i], "ul") && strcmp(argv[i], "so") && strcmp(argv[i], "cell") &&
         strcmp(argv[i], "px") && strcmp(argv[i], "text")) {
         g_face = strcmp(argv[i], "default") ? argv[i] : NULL;
         i++;
@@ -240,6 +262,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "italic")) g_ital = 1;
         else if (!strcmp(argv[i], "ul")) g_ul = 1;
         else if (!strcmp(argv[i], "so")) g_so = 1;
+        else if (!strcmp(argv[i], "cell")) g_cell = 1;
         else if (!strcmp(argv[i], "px") && i + 1 < argc) px = atoi(argv[++i]);
         else if (!strcmp(argv[i], "text") && i + 1 < argc) text = argv[++i];
         else { fprintf(stderr, "fontramp: bad arg %s\n", argv[i]); return 2; }

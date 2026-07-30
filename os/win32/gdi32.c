@@ -635,6 +635,10 @@ BOOL DeleteObject(HGDIOBJ obj) {
     return TRUE;
 }
 
+int __gdi_obj_is_font(HGDIOBJ obj) {
+    return obj && obj->type == OBJ_FONT;
+}
+
 int GetObject(HGDIOBJ obj, int size, void *out) {
     if (!obj) return 0;
     if (obj->type == OBJ_BITMAP) {
@@ -650,6 +654,38 @@ int GetObject(HGDIOBJ obj, int size, void *out) {
         if (size < (int)sizeof(BITMAP)) return 0;
         memcpy(out, &bm, sizeof(BITMAP));
         return (int)sizeof(BITMAP);
+    }
+    if (obj->type == OBJ_FONT) {
+        /* #291: the RESOLVED LOGFONT — what C1's mapper made of the
+         * request (family/weight/italic as selected, the family NAME
+         * from g_familyName), so CreateFontIndirect on the result
+         * recreates this font exactly. Stock fonts report their real
+         * backing (post-C2: sans for the UI stocks, mono for the fixed
+         * ones). Windows clamp semantics: NULL out = bytes required;
+         * else copy min(size, sizeof) and return the bytes written. */
+        LOGFONT lf;
+        memset(&lf, 0, sizeof lf);
+        lf.lfHeight = obj->fontCellH > 0 ? obj->fontCellH : -obj->fontPx;
+        lf.lfWeight = obj->fontBold ? FW_BOLD : FW_NORMAL;
+        lf.lfItalic = (BYTE)(obj->fontItal ? 1 : 0);
+        lf.lfUnderline = (BYTE)(obj->fontUnder ? 1 : 0);
+        lf.lfStrikeOut = (BYTE)(obj->fontStrike ? 1 : 0);
+        lf.lfCharSet = ANSI_CHARSET;
+        lf.lfQuality = (BYTE)(obj->fontMono ? NONANTIALIASED_QUALITY
+                                            : DEFAULT_QUALITY);
+        /* LOGFONT-sense pitch (the request vocabulary — NOT TEXTMETRIC's
+         * inverted TMPF bit, see GetTextMetrics). */
+        lf.lfPitchAndFamily = (BYTE)(
+            obj->fontFam == GF_SANS  ? (VARIABLE_PITCH | FF_SWISS) :
+            obj->fontFam == GF_SERIF ? (VARIABLE_PITCH | FF_ROMAN)
+                                     : (FIXED_PITCH | FF_MODERN));
+        snprintf(lf.lfFaceName, sizeof lf.lfFaceName, "%s",
+                 g_familyName[obj->fontFam]);
+        if (!out) return (int)sizeof(LOGFONT);
+        int n = size < (int)sizeof(LOGFONT) ? size : (int)sizeof(LOGFONT);
+        if (n <= 0) return 0;
+        memcpy(out, &lf, (size_t)n);
+        return n;
     }
     return 0;
 }

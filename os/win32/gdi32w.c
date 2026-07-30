@@ -9,6 +9,7 @@
 #undef UNICODE
 #undef _UNICODE
 #include <windows.h>
+#include "win32_internal.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -129,6 +130,34 @@ HFONT CreateFontIndirectW(const LOGFONTW *lf) {
 }
 
 int GetObjectW(HGDIOBJ obj, int size, void *out) {
-    return GetObject(obj, size, out);            /* no string-bearing objects */
+    /* Fonts are the ONE string-bearing object (#291): LOGFONTW differs
+     * from LOGFONT in size AND face-name encoding, so a raw forward
+     * would hand a W caller ANSI bytes under a W struct layout.
+     * Everything else (BITMAP today) is charset-free and forwards. */
+    if (!__gdi_obj_is_font(obj)) return GetObject(obj, size, out);
+    LOGFONT a;
+    if (GetObject(obj, (int)sizeof a, &a) != (int)sizeof a) return 0;
+    LOGFONTW w;
+    memset(&w, 0, sizeof w);
+    w.lfHeight = a.lfHeight;
+    w.lfWidth = a.lfWidth;
+    w.lfEscapement = a.lfEscapement;
+    w.lfOrientation = a.lfOrientation;
+    w.lfWeight = a.lfWeight;
+    w.lfItalic = a.lfItalic;
+    w.lfUnderline = a.lfUnderline;
+    w.lfStrikeOut = a.lfStrikeOut;
+    w.lfCharSet = a.lfCharSet;
+    w.lfOutPrecision = a.lfOutPrecision;
+    w.lfClipPrecision = a.lfClipPrecision;
+    w.lfQuality = a.lfQuality;
+    w.lfPitchAndFamily = a.lfPitchAndFamily;
+    MultiByteToWideChar(CP_UTF8, 0, a.lfFaceName, -1, w.lfFaceName,
+                        LF_FACESIZE);
+    if (!out) return (int)sizeof(LOGFONTW);
+    int n = size < (int)sizeof(LOGFONTW) ? size : (int)sizeof(LOGFONTW);
+    if (n <= 0) return 0;
+    memcpy(out, &w, (size_t)n);
+    return n;
 }
 
