@@ -151,6 +151,20 @@ both invisible on a normal single run:
   another heavy runner owns it — they are mutually exclusive, kernel ⟷ sweep
   included. Self-heals from a stale lock left by a killed holder. Bypass on a
   genuinely isolated host (own container/VM) with `CC_NO_HEAVY_LOCK=1`.
+  **Since todos/0342 the lock guards the BOOT, not just the runners:**
+  `os/boot.js` itself joins at startup (so a single-file kernel e2e, a bench
+  tool, and a bare `node os/boot.js` all participate — exit 3 names the
+  holder; `--wait-lock[=SECS]` is boot.js's loud-wait opt-in for an
+  interactive reproduce), and `tests/browser/lib/os-harness.mjs` joins before
+  any serve.js/Chromium (so a hand-run `os-*.mjs` participates too).
+  Re-entrancy rides `CC_HEAVY_LOCK_PID`: a runner's own child boots join only
+  when that marker pid is ALIVE **and** equals the recorded holder — every
+  failure mode degrades to a refusal, never to silent stacking. **Exit 3 +
+  a `[heavy-lock]` stderr marker means LOCK HELD, not a test failure**
+  (`driveBoot` propagates it as its own exit 3). The one uncoverable path is
+  a human browser tab against a dev `serve.js` (no repo process can lock a
+  human's browser — recorded exclusion, todos/done/0342). Control test:
+  `tests/kernel/test_heavylock_e2e.js`.
 - **Memory-aware `jobs` (within the kernel pool):** the kernel `-j` (default
   AND explicit) is clamped to `floor(totalmem×0.6 / 4 GB)` so the pool can't
   over-commit RAM — e.g. `-j2` on a 16 GB box regardless of core count.

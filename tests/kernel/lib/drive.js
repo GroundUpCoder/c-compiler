@@ -82,6 +82,16 @@ function driveBoot(script, opts = {}) {
   const r = cp.spawnSync('node', args, spawnOpts);
   if (r.error) throw r.error;
   r.image = image;   // let a follow-up session reuse the same image
+  // Heavy-lock refusal propagation (todos/0342): boot.js exits 3 with a
+  // `[heavy-lock]` stderr marker when another heavy test job owns the host.
+  // That is NOT a test failure — surface the boot's refusal verbatim and exit
+  // 3 ourselves, so `node tests/kernel/<e2e>.js` names the holder instead of
+  // failing later on a missing marker. Exit 3 alone is not the signal (init
+  // can exit 3 legitimately, e.g. `sh -c 'exit 3'`); require the marker too.
+  if (r.status === 3 && String(r.stderr || '').includes('[heavy-lock]')) {
+    process.stderr.write(String(r.stderr));
+    process.exit(3);
+  }
   // Loud-symptom gate (todos/0171): a `wmctl wait` that can't be satisfied
   // prints `wmctl: wait X timed out after Nms` and exits 1 — but a script
   // with no `set -e` just burns the full timeout and sails on, so a wait on

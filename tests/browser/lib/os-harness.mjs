@@ -23,6 +23,7 @@ import fs from 'node:fs';
 import driveCjs from '../../kernel/lib/drive.js';
 export const menuGroups = driveCjs.menuGroups;
 export const menuLeaves = driveCjs.menuLeaves;
+import { joinHeavyLock } from '../../lib/heavy-lock.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.resolve(__dirname, '../../..');
@@ -53,7 +54,25 @@ export const osUrl = (port, hostKeys = 'off') =>
 // `serveArgs` appends extra serve.js flags — the seam os-minimal.mjs uses to
 // pass `--minimal` (the DEPLOY image shape: a plain bake + the /packages repo,
 // instead of serve.js's dev-convenience fat blob).
+// Heavy-test host lock (todos/0342): an os.html boot in a Chromium is the
+// browser-shape RAM spend the lock bounds, and this harness is the funnel
+// every os-*.mjs (plus tools/os-drive.mjs and friends) reaches it through.
+// Join ONCE, at the first of startServer/launchBrowser — before any serve.js
+// child or playwright import exists. Under the sweep runner the marker
+// (CC_HEAVY_LOCK_PID, alive AND matching the recorded holder) joins
+// re-entrantly; a hand-run single file under a foreign holder exits 3 naming
+// it. The uncoverable path — a human browser tab against a dev serve.js — is
+// recorded as an exclusion in todos/done/0342.
+let heavyLockLatched = false;
+function latchHeavyLock() {
+  if (heavyLockLatched) return;
+  heavyLockLatched = true;
+  const file = process.argv[1] ? path.basename(process.argv[1]) : 'os-harness';
+  joinHeavyLock({ name: `browser os test (${file})` });
+}
+
 export function startServer(port, { root = ROOT, onLog, serveArgs = [] } = {}) {
+  latchHeavyLock();
   const child = spawn('node',
     [path.join(ROOT, 'serve.js'), root, String(port), '--strict-port', ...serveArgs],
     { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -119,6 +138,7 @@ function resolvedPlaywright() {
 // costs one file read; diagnosing it downstream cost a whole sweep. Set
 // CC_NO_PLAYWRIGHT_PIN=1 to bypass when deliberately testing another version.
 export async function launchBrowser(args = ['--enable-unsafe-webgpu', '--enable-features=Vulkan'], opts = {}) {
+  latchHeavyLock();
   checkPlaywrightPin();
   const { chromium } = await import('playwright');
   return chromium.launch({ args, ...opts });

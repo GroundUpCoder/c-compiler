@@ -49,6 +49,13 @@
 //                  4; the browser twin auto-detects via navigator). Any other
 //                  value (default) leaves the baked windows scheme. A manual
 //                  ~/.config/keys always overrides — this only sets the default.
+//   --wait-lock[=SECS]  the heavy-test host lock (tests/lib/heavy-lock.js) is
+//                  fail-fast by default: when another heavy job owns the host
+//                  this boot exits 3 and names the holder. This flag opts in
+//                  to a LOUD wait instead (poll + a status line every 30s),
+//                  acquiring when the lock frees; with =SECS it exits 3 at
+//                  the deadline. For an interactive reproduce beside a
+//                  running suite.
 //   --quiet        suppress boot progress on stderr
 //   --screen=WxH   headless screen dims (default: the kernel's 1024x768) —
 //                  small-viewport runs (todos/0282)
@@ -88,6 +95,9 @@ let hostPlatform = 'other'; // --host-platform: the keyboard-scheme auto-detect
                             // hint (META-ARROW-KEYBIND.md). Default 'other' =
                             // no seed = the baked windows scheme, so every
                             // headless boot stays byte-identical unless asked.
+let waitLockMs = 0;         // --wait-lock[=SECS]: loud wait on the heavy-test
+                            // host lock instead of the fail-fast exit 3
+                            // (0 = fail fast, Infinity = no deadline)
 let egressDir = null;       // --egress-dir=DIR: the headless onEgress twin
                             // (todos/0398) — artifacts land as host files.
                             // Flag absent -> no hook -> the RPC answers
@@ -118,6 +128,15 @@ for (const a of process.argv.slice(2)) {
   else if (a.startsWith('--packages-dir=')) packagesDir = path.resolve(a.slice(15));
   else if (a.startsWith('--host-platform=')) hostPlatform = a.slice(16);
   else if (a.startsWith('--egress-dir=')) egressDir = path.resolve(a.slice(13));
+  else if (a === '--wait-lock') waitLockMs = Infinity;
+  else if (a.startsWith('--wait-lock=')) {
+    const secs = Number(a.slice(12));
+    if (!Number.isFinite(secs) || secs < 0) {
+      process.stderr.write('boot: bad --wait-lock (want seconds)\n');
+      process.exit(2);
+    }
+    waitLockMs = secs * 1000;
+  }
   else {
     process.stderr.write(`boot.js: unknown option ${a}\n`);
     process.exit(2);
@@ -185,6 +204,20 @@ if (resolvedOverlays.length) {
   seedIo.overlayIo = COMMON.nodeOverlayIo(fs, path, require('crypto'));
   seedIo.requireCleanOverlays = requireCleanOverlays;
 }
+
+/* ---- heavy-test host lock (todos/0342, closing todos/0303) ---- */
+// A full-OS boot is the unit of RAM the heavy lock bounds (~2-4 GB per boot
+// node), so the guard runs HERE — where the boot starts — not in whichever
+// runner or e2e spawned it. Under a suite runner the runner already owns the
+// lock and exported CC_HEAVY_LOCK_PID; joinHeavyLock verifies that marker
+// (pid alive AND equal to the recorded holder) and joins re-entrantly, which
+// is why the kernel suite's fan-out of concurrent boots cannot deadlock. A
+// bare boot, a single-file e2e, or a bench tool contends normally: own the
+// lock, or exit 3 naming the holder (--wait-lock[=SECS] opts in to a loud
+// wait instead). All argument validation stays ABOVE this call — refuse
+// before you take a machine-wide lock (the todos/0341 order).
+require(path.join(ROOT, 'tests/lib/heavy-lock.js'))
+  .joinHeavyLock({ name: 'os/boot.js', waitMs: waitLockMs });
 
 /* ---- boot ---- */
 mountAndBoot().catch((e) => {

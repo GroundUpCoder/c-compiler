@@ -270,6 +270,30 @@ Coordinator: at the merge of the design pass, close 0303 as
 subsumed-by-0342 (`node todos/queue.js done 0303` — its body is
 annotated); implement and close this item alone.
 
+## Implementation note (2026-07-30 lane)
+
+The implementation follows the design table. Two recorded deltas:
+
+- **Control leg 7 uses `os-boots.mjs`, not `os-minimal.mjs`.** The design
+  named os-minimal as the vehicle. But os-minimal runs a real
+  `tools/mkpkg.js` build BEFORE it reaches the harness. A refusal control
+  must not start a package build: the build mutates `dist/packages`, and
+  the `.mkpkg-lock` makes it racy under `--repeat`. The first action of
+  os-boots is `startServer`, so the leg asserts the refusal came before
+  serve.js through the silent `[serve]` tap. The seam and the assertion
+  are the ones the design specifies.
+- **Legs 8 and 9 were added for `--wait-lock`.** The design's acceptance
+  names the flag but its control table did not exercise it. Leg 8 proves
+  the deadline refusal (exit 3, loud status line, "deadline reached").
+  Leg 9 proves the acquire after the holder frees. A helper process frees
+  the lock, because the test blocks in `spawnSync`.
+
+The entry-path survey was re-derived at implementation time: 7 argv call
+sites + the shell = 8 paths, `drive.js` covers 1 (matches the table above).
+Kernel suite file count: 135 → 136 (`test_heavylock_e2e.js`, 24 checks).
+L65 is retired from `todos/LIABILITIES.md` in the landing commit — the gap
+it recorded is closed by this item.
+
 ## Priority rationale
 
 P1. Nothing is currently broken *by* it — it is a missing guard, not a
