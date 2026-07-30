@@ -389,7 +389,10 @@ single-threaded + fail loud on real thread creation**. Mutex/cond/SDL_atomic
 may be provided as trivially-correct single-threaded implementations (no-op
 lock, plain ops) *behind the SDL API* — that's SDL's contract, not C11's,
 so it isn't the rejected `_Atomic` shim. `SDL_CreateThread` returns an
-error. Revisit only if 0006 is ever re-triggered.
+error. Revisit only if 0006 is ever re-triggered — the re-trigger condition is
+recorded in `logs/2026-07-07/threads-atomics-deferral.md` (a port that
+hard-requires pthreads). Ticket 0006 itself was removed from the queue on
+2026-07-09; that log is its surviving record.
 
 ### Clipboard (SDL_clipboard) — ✓ landed (todos/0090, text)
 `SDL_SetClipboardText`/`GetClipboardText`/`HasClipboardText`/

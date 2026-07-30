@@ -66,8 +66,12 @@ One numbered file per unit of work we have actually committed to doing.
   `ls todos/*.md` is always the open queue. Dropped/superseded items
   whose text is worth keeping move there too, with the DROPPED status
   header intact (0047/0056); ones with nothing to keep are deleted
-  outright with the rationale in a dev log (0006). Land a dev-log entry
-  when completing anything substantial.
+  outright with the rationale in a dev log (0006, whose surviving record is
+  `logs/2026-07-07/threads-atomics-deferral.md`; the ticket was removed from
+  the queue on 2026-07-09). Land a dev-log entry when completing anything
+  substantial. ⚠️ **A citation of a deleted ticket does not resolve to a file.**
+  When you cite one, name the dev log beside the number, so a reader can follow
+  it.
 - New work: `node todos/queue.js add next --slug <slug>` scaffolds the file
   **and** slots it into the manifest in one checked step (don't hand-allocate
   numbers or hand-edit two files). Ideas that aren't committed work yet stay in
