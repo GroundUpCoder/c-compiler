@@ -223,8 +223,8 @@ the implementation must touch one, the matching `patches/netsurf.diff` section
 lands in the SAME commit (`todos/0423`; the pre-commit hook runs
 `patchcheck.mjs --staged` and it tells the truth).
 
-⚠ The new test file moves the kernel total from 133 to 134. Register it in
-`tests/kernel/run.js` and report the NEW total — a 133 pass means the new test
+⚠ The new test file moves the kernel total from 134 to 135. Register it in
+`tests/kernel/run.js` and report the NEW total — a 134 pass means the new test
 did not run.
 
 ### Test plan (the four coverage cases)
