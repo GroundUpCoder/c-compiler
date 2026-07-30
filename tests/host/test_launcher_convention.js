@@ -18,11 +18,12 @@
 //      must also handle /usr/opt/<name> (and vice versa) — a single-prefix
 //      launcher works installed but breaks silently on the fat (baked) image,
 //      or the other way round.
-//   3. No plain shell-variable assignment (`name=value`): the hush variable
-//      store corrupts on script files under the default boot env (#296), so
-//      an assignment-bearing launcher silently expands empty variables in
-//      Node-driven boots. `export NAME=value` is the working store path and
-//      stays allowed. Relax this rule when #296 closes.
+//
+// A third rule (no plain shell-variable assignment) existed while #296 was
+// open — the libc's copy+free putenv corrupted hush's variable store on
+// script files under the default boot env. #296 fixed putenv to POSIX
+// pointer semantics; assignments in launchers are safe again, so the rule
+// (and register entry L67) is retired.
 //
 // Run: node tests/host/test_launcher_convention.js
 const fs = require('fs');
@@ -59,8 +60,6 @@ for (const f of defs) {
     const usrOpt = code.includes(`/usr/opt/${name}`);
     check(`${label}: handles both plant sites (/opt + /usr/opt) or neither`,
       opt === usrOpt, code);
-    check(`${label}: no plain variable assignment (#296; export NAME=v is allowed)`,
-      !/(^|[;&|]\s*)[A-Za-z_][A-Za-z0-9_]*=/m.test(code), code);
   }
 }
 

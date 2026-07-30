@@ -31208,9 +31208,18 @@ lldiv_t lldiv(long long numer, long long denom) {
    setenv/unsetenv/putenv/clearenv mutate it. Empty by default; the host
    populates it via __set_environ() (see below). The initial block the host
    installs lives in wasm stack memory and is NOT heap-owned, so the first
-   mutation deep-copies it to the heap (tracked by __environ_owned). From then
-   on every entry is malloc'd, which makes free() uniformly safe across all the
-   mutators. (The public extern char **environ is declared in the headers.) */
+   mutation deep-copies it to the heap (tracked by __environ_owned).
+
+   Ownership is PER STRING, not per block (#296): putenv() follows POSIX and
+   installs the CALLER's pointer verbatim — later edits to that buffer are
+   visible through getenv(), and the libc must never free such an entry (the
+   caller still owns it; busybox hush re-exports its environ-imported PWD via
+   putenv(varstr) where varstr IS the environ entry, and frees a replaced
+   exported var's old string ITSELF after putenv(new)). So the libc keeps a
+   registry of exactly the strings it allocated into environ (setenv entries
+   and the take-ownership deep copies) and frees an entry only when the
+   registry says it may. (The public extern char **environ is declared in the
+   headers.) */
 static char *__environ_empty[] = { 0 };
 char **environ = __environ_empty;
 
@@ -31223,6 +31232,36 @@ char *strdup(const char *s);
 
 static int __environ_owned = 0;
 
+/* The ownership registry: strings this libc malloc'd into environ. Unsorted;
+   NULL slots are reusable. Environments are small, so linear scans suffice. */
+static char **__environ_mine = 0;
+static int __environ_mine_cap = 0;
+
+static void __environ_mine_add(char *p) {
+  for (int i = 0; i < __environ_mine_cap; i++) {
+    if (!__environ_mine[i]) { __environ_mine[i] = p; return; }
+  }
+  int cap = __environ_mine_cap ? __environ_mine_cap * 2 : 8;
+  char **m = realloc(__environ_mine, cap * sizeof(char *));
+  if (!m) return; /* untracked: the entry leaks later instead of double-freeing */
+  for (int i = __environ_mine_cap; i < cap; i++) m[i] = 0;
+  m[__environ_mine_cap] = p;
+  __environ_mine = m;
+  __environ_mine_cap = cap;
+}
+
+/* Free p iff this libc allocated it into environ; caller-owned putenv()
+   strings pass through untouched. */
+static void __environ_dispose(char *p) {
+  for (int i = 0; i < __environ_mine_cap; i++) {
+    if (__environ_mine[i] == p) {
+      __environ_mine[i] = 0;
+      free(p);
+      return;
+    }
+  }
+}
+
 static int __environ_count(void) {
   int n = 0;
   while (environ[n]) n++;
@@ -31233,7 +31272,10 @@ static void __environ_take_ownership(void) {
   if (__environ_owned) return;
   int n = __environ_count();
   char **heap = malloc((n + 1) * sizeof(char *));
-  for (int i = 0; i < n; i++) heap[i] = strdup(environ[i]);
+  for (int i = 0; i < n; i++) {
+    heap[i] = strdup(environ[i]);
+    __environ_mine_add(heap[i]);
+  }
   heap[n] = 0;
   environ = heap;
   __environ_owned = 1;
@@ -31275,8 +31317,9 @@ int setenv(const char *name, const char *value, int overwrite) {
     if (!overwrite) return 0;
     char *e = __environ_entry(name, value);
     if (!e) { errno = ENOMEM; return -1; }
-    free(environ[i]);
+    __environ_dispose(environ[i]);
     environ[i] = e;
+    __environ_mine_add(e);
     return 0;
   }
   int n = __environ_count();
@@ -31287,6 +31330,7 @@ int setenv(const char *name, const char *value, int overwrite) {
   if (!e) { errno = ENOMEM; return -1; }
   environ[n] = e;
   environ[n + 1] = 0;
+  __environ_mine_add(e);
   return 0;
 }
 
@@ -31296,43 +31340,45 @@ int unsetenv(const char *name) {
   size_t nlen = strlen(name);
   int i;
   while ((i = __environ_find(name, nlen)) >= 0) {
-    free(environ[i]);
+    __environ_dispose(environ[i]);
     int j = i;
     do { environ[j] = environ[j + 1]; j++; } while (environ[j - 1]);
   }
   return 0;
 }
 
-/* putenv: POSIX places the caller's string directly into environ. We strdup it
-   instead so every environ entry stays uniformly heap-owned (free()-safe in the
-   other mutators); the only visible deviation is that later edits to the
-   caller's buffer don't propagate — acceptable here. A string lacking '='
-   removes that variable. */
+/* putenv: POSIX — the caller's string ITSELF becomes part of the environment.
+   No copy, and the libc never frees it (the caller owns it), so later edits
+   to the buffer are visible through getenv(). putenv() of the exact pointer
+   environ already holds is a no-op: busybox hush's PWD re-export at startup
+   is precisely that call, and a copy+free here freed the buffer hush's
+   variable store still pointed at (#296). A string lacking '=' removes that
+   variable (glibc-compatible). */
 int putenv(char *string) {
   char *eq = strchr(string, '=');
   if (!eq) return unsetenv(string);
   __environ_take_ownership();
   size_t nlen = eq - string;
-  char *e = strdup(string);
-  if (!e) { errno = ENOMEM; return -1; }
   int i = __environ_find(string, nlen);
   if (i >= 0) {
-    free(environ[i]);
-    environ[i] = e;
+    if (environ[i] != string) {
+      __environ_dispose(environ[i]);
+      environ[i] = string;
+    }
     return 0;
   }
   int n = __environ_count();
   char **ne = realloc(environ, (n + 2) * sizeof(char *));
-  if (!ne) { free(e); errno = ENOMEM; return -1; }
+  if (!ne) { errno = ENOMEM; return -1; }
   environ = ne;
-  environ[n] = e;
+  environ[n] = string;
   environ[n + 1] = 0;
   return 0;
 }
 
 int clearenv(void) {
   if (__environ_owned) {
-    for (int i = 0; environ[i]; i++) free(environ[i]);
+    for (int i = 0; environ[i]; i++) __environ_dispose(environ[i]);
     free(environ);
   }
   char **e = malloc(sizeof(char *));
@@ -31350,6 +31396,9 @@ int clearenv(void) {
 void __set_environ(char **envp) {
   environ = envp ? envp : __environ_empty;
   __environ_owned = 0;
+  /* A stale registry entry could pointer-alias a future allocation; blank
+     the slots (pre-main this is a no-op — the registry is still empty). */
+  for (int i = 0; i < __environ_mine_cap; i++) __environ_mine[i] = 0;
 }
 char **__get_environ(void) { return environ; }
 __export __set_environ = __set_environ;
