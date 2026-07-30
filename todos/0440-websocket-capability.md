@@ -10,12 +10,16 @@
 
 ## 🔴 READ FIRST — why this ticket exists, and why it is NOT urgent
 
-**This capability is NOT a prerequisite for the codex work.** An earlier claim
-said codex forces WebSockets, and that only a code change avoids them. **That
-claim is refuted.** `supports_websockets` is a configuration key
-(`model-provider-info/src/lib.rs:138-140`), and codex also has an automatic,
-tested, sticky HTTP fallback (`core/src/client.rs:508-527`). See `todos/0418`
-scope fact (a), which carries the full correction.
+**This capability is NOT a prerequisite for the codex work.** An earlier
+conclusion said codex forces WebSockets, and that only a code change avoids them.
+**That conclusion is refuted.** `supports_websockets` is a configuration key on a
+model provider (`model-provider-info/src/lib.rs:138-140`), and codex also has an
+automatic, tested, sticky HTTP fallback (`core/src/client.rs:508-527`).
+⚠️ **The refutation is narrow. It kills a conclusion about transport selection,
+and nothing else.** `disable_websockets` really is a private atomic latch, and
+the built-in OpenAI provider really does hardcode `true`. See `todos/0418` scope
+fact (a), which carries the full correction and says which original observations
+survive.
 
 **So this ticket stands on the platform case alone**, and the platform case is
 good: `todos/NETWORK.md:15-19` names the four transports the browser gives —

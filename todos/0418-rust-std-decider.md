@@ -242,13 +242,26 @@ belong to D1.
 provider only, and they CAN be avoided with no code change. Do not carry the
 earlier version of this fact.**
 
-⚠️ **This paragraph said the opposite until 2026-07-30.** It said
-`supports_websockets = true` is hardcoded, `disable_websockets` is a private
-atomic latch and not a configuration key, and therefore the HTTP and
-server-sent-event path needs *a code change in codex, not a setting*. A design
-pass read the codex tree at `2e1607ee2f` and refuted the second half. The
-authority is `~/git/meta/gucos/notes/websockets-and-platform-limits.md` §1.1(a).
-**Read that memo before you rule on anything that depends on this fact.**
+⚠️ **This paragraph drew the wrong conclusion until 2026-07-30.** A design pass
+read the codex tree at `2e1607ee2f`. The authority is
+`~/git/meta/gucos/notes/websockets-and-platform-limits.md` §1.1(a). **Read that
+memo before you rule on anything that depends on this fact.**
+
+🔴 **The correction has a NARROW scope. Two of the three original observations
+are still good, and you must not discard them with the conclusion.**
+
+- ✅ **STILL TRUE, and it stays on the record:** `disable_websockets` **really is
+  a private atomic latch**, not a configuration key. That observation was never
+  wrong. **The error was to treat it as the ONLY lever**, and so to conclude that
+  the HTTP and server-sent-event path needs *a code change in codex, not a
+  setting*. **It is the conclusion that falls, not the observation.**
+- ✅ **STILL TRUE:** the built-in OpenAI provider constructor hardcodes
+  `supports_websockets = true` (`model-provider-info/src/lib.rs:362`).
+- ❌ **REFUTED:** "no configuration key turns them off", and therefore
+  "WebSockets are a hard prerequisite for this program".
+
+The paragraph missed a **second** lever at the provider level, and a **third** at
+run time. Either one avoids WebSockets with no code change.
 
 **Two independent paths onto plain HTTP/SSE exist, and neither one edits codex.**
 
@@ -264,8 +277,9 @@ authority is `~/git/meta/gucos/notes/websockets-and-platform-limits.md` §1.1(a)
    (`todos/RUST.md:30-32`), which is exactly the mode a custom provider entry
    serves. So "no configuration key turns them off" is true of the built-in
    entry and **false of the provider mechanism**.
-2. **The HTTP fallback is automatic, tested and sticky.** codex flips
-   `disable_websockets` itself. `force_http_fallback`
+2. **The HTTP fallback is automatic, tested and sticky.** The latch above is
+   real, and **codex flips it itself** — which is why the latch being private
+   does not block anything. `force_http_fallback`
    (`core/src/client.rs:508-527`) latches the atomic;
    `try_switch_fallback_transport` (`core/src/client.rs:1826-1843`) documents
    it. A dedicated suite pins the behaviour
@@ -284,10 +298,15 @@ the code shape (the `ENOSYS` pattern of `host.js:6009`), not measured on a port.
 If path 2 is the one you rely on, the cost is the startup latency of about four
 failed attempts, once per session. Path 1 costs zero.
 
-⚠️ **This correction does NOT touch the feature-flag finding below.**
-`supports_websockets` is a **serde configuration field**, not a cargo feature.
-The count of 2 feature sections in 132 manifests, and the zero optional
-dependencies, are unaffected and still stand.
+🔴 **This correction does NOT reach the feature-flag finding below, and it must
+not be read as endorsing it either.** `supports_websockets` is a **serde
+configuration field**, not a cargo feature, and the feature-flag finding is about
+**cutting subsystems** (`v8`, sqlite, terminal emulation), not about selecting a
+transport. The two questions are independent.
+⚠️ **So treat the count of 2 feature sections in 132 manifests, and the zero
+optional dependencies, as UNVERIFIED — neither confirmed nor refuted.** Neither
+the design pass nor this correction tested it. **Measure it if you rule on it.**
+Do not let this WebSocket correction propagate into it in either direction.
 
 **(b) The 838-crate census may UNDERSTATE the port.** An in-process application
 server of roughly 64,000 lines now rides the exec path, and the crate map predates

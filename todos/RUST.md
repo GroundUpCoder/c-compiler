@@ -37,17 +37,21 @@ Split the program in two, and move the gate.
   over HTTP, so it needs no redirect and no listener. `TcpListener` appears in no
   file under `login/src/`. Read that file first if the scope ever changes.
   ⚠️ **A second corrected fact, 2026-07-30. This line said "WebSockets are the
-  hardcoded default transport, and no configuration key turns them off."** That is
-  wrong. `supports_websockets` IS a configuration key on a model provider
-  (`model-provider-info/src/lib.rs:138-140`, `#[serde(default)]` false), and codex
-  also has an automatic, tested, sticky HTTP fallback
-  (`core/src/client.rs:508-527`). Only the **built-in** OpenAI provider hardcodes
-  `true`. A custom provider entry runs pure HTTP with **no code change**, which is
-  the API-key-only mode above. `todos/0418` scope fact (a) carries the full
-  correction; the authority is
-  `~/git/meta/gucos/notes/websockets-and-platform-limits.md` §1.1(a).
+  hardcoded default transport, and no configuration key turns them off."** The
+  first half is true and the second half is false, so read them separately.
+  **True**: the **built-in** OpenAI provider does hardcode
+  `supports_websockets = true` (`model-provider-info/src/lib.rs:362`).
+  **False**: `supports_websockets` IS a configuration key on a model provider
+  (`model-provider-info/src/lib.rs:138-140`, `#[serde(default)]` false), so a
+  custom provider entry runs pure HTTP with **no code change** — which is the
+  API-key-only mode above. codex also has an automatic, tested, sticky HTTP
+  fallback (`core/src/client.rs:508-527`).
   ⇒ **A WebSocket transport is NOT a prerequisite for this program. `todos/0417`
-  is.**
+  is.** `todos/0418` scope fact (a) carries the full correction, including which
+  original observations survive; the authority is
+  `~/git/meta/gucos/notes/websockets-and-platform-limits.md` §1.1(a).
+  ⚠️ **This correction is about transport selection ONLY.** Do not extend it to
+  codex's feature-flag surface, which is a separate and UNVERIFIED question.
 - **`todos/0417` (HTTP transfers become OFDs) is a hard, unconditional
   prerequisite.** It is not contingent on any ruling, and it blocks a port and a
   native client equally. Two independent design passes reached it separately.
