@@ -3565,10 +3565,16 @@ var BLOCK_FS = (function () {
   //    binary (a fresh `cc -o a.out`) derives a DIFFERENT key and a stale
   //    Module can never be hit; the kernel replaces the path's old entry.
   //    The validation floor is the store's timestamp resolution (ms on
-  //    v4): a same-inode, same-size rewrite landing within the same tick
-  //    as the cached spawn's mtime would collide — unreachable in-OS,
-  //    where every step of write→spawn→rewrite is its own process costing
-  //    well over a tick.
+  //    v4, despite the field spelling nsec): a same-inode, same-size
+  //    rewrite landing in the same tick as the cached generation's mtime
+  //    would collide — and the failure is SILENT stale code, not an
+  //    error. Tracked as L66 in todos/LIABILITIES.md: accepted because
+  //    the window is unreachable through the in-OS path today (every
+  //    write→spawn→rewrite step is its own process costing well over a
+  //    tick), and because the complete closure — a content-hash key term
+  //    — costs a full per-spawn file read on the exact path this cache
+  //    exists to make cheap. If it ever bites, that hash term (or a
+  //    store-side write-generation counter) is the fix.
   // The inode id dedupes path aliases either way: /bin/ls and /usr/bin/ls
   // (and every coreutils applet symlink) share one key.
   function moduleKeyOf(vol, st) {

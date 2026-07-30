@@ -41,15 +41,25 @@ per rebuild. The ss-flavor exclusion, engine-rejected-bytes path, no-fs
 dormant path, and the compile-options ABI (`MUST MATCH` host.js runModule)
 are all byte-identical.
 
-## The honest bound
+## The honest bound — ENROLLED as L66 (coordinator's ruling, 2026-07-31)
 
 The validation floor is the store's timestamp resolution (ms on v4): a
 same-inode, same-size rewrite whose final write lands in the same tick as the
 cached generation's would derive the same key. Unreachable in-OS — write,
 spawn, and rewrite are each their own process costing well over a tick — and
 the part-3 test pins the sharpest real case (same-size generations, mtime
-term alone). Recorded in the moduleKey comment; deliberately not funded as a
-liability — flagged to the coordinator to overrule.
+term alone). I initially recorded this only as a code comment; the
+coordinator accepted the reachability analysis but overruled the filing
+decision: the failure mode is SILENT stale code (nothing downstream ever
+surfaces it), reachability arguments are claims about today's callers, and a
+true-but-unenrolled gap comment reads as handled — the exact pattern the
+register exists to kill. Now **L66** in `todos/LIABILITIES.md`, funded by
+the recurring liability sweep #109 (the register requires a LIVE ticket and
+the ruling was explicitly *no fix ticket* — the sweep is the re-examination
+owner, which matches the accepted-not-scheduled intent). Complete closure, if
+it ever bites: a content-hash key term (or a store write-generation counter)
+— refused for now because it re-adds the per-spawn file read this cache
+exists to skip.
 
 ## Tests
 

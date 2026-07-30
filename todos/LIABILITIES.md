@@ -344,4 +344,9 @@ thing this file exists to kill.
 - anchor:  * Both are recorded in todos/LIABILITIES.md against todos/0426.
 - provenance: 0420
 
+### L66 — moduleKey's rw validation floor is one store timestamp tick: a same-ino, same-size, same-tick rewrite runs a stale Module silently (accepted — window unreachable in-OS; complete closure = a content-hash key term, refused because it re-adds the per-spawn read the cache exists to skip)
+- ticket: #109
+- file: host.js
+- anchor: //    would collide — and the failure is SILENT stale code, not an
+
 <!-- END ENTRIES -->
