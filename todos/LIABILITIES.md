@@ -327,11 +327,6 @@ thing this file exists to kill.
 - anchor:    time. Funded by todos/0401, which is also what keeps todos/0382 open. */
 - provenance: 0382
 
-### L61 — an HTTP transfer id is not an fd, so at most one transfer parks per process, none can join FS_SELECT/FS_WAIT, and the kernel sets no deadline
-- ticket: 0417
-- file: kernel.js
-- anchor:  * bounded-buffer discipline as pipes. At most ONE HTTP op is parked per
-
 ### L63 — nothing emits BW_CS_SCRIPT_ERROR, so an uncaught JS exception reaches no console, no log and no tty
 - ticket: 0424
 - file: vendor/netsurf/gucos/gui.c

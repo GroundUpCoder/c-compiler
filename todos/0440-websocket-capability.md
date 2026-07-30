@@ -91,8 +91,8 @@ already an import. On the host side a capability is more named functions merged
 into the ONE import object: `host.js:11243` is
 `Object.assign(imports[ENV_KEY], createHttp(ctx, …)[ENV_KEY])` over
 `ENV_KEY = "c"`. A `createWs(ctx)` factory adds its names in the same way that
-`createHttp` added `__http_open` … `__http_close`
-(`host.js:6014-6019, 6022`). On the Rust side,
+`createHttp` added `__http_open`/`__http_status` (fd-shaped since
+todos/0417 — body and teardown ride `read(2)`/`close(2)`). On the Rust side,
 `#[link(wasm_import_module = "c")]` in `gucos-sys` (`todos/0414`) declares them.
 That attribute is stable: no nightly, and no custom target.
 🔴 **`todos/RUST.md` §3 rule 1 (one ABI) is preserved, not tested.** The only

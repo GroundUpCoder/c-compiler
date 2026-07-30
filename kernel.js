@@ -258,19 +258,23 @@ var OP = {
   SOCK_SOCKET: 0x0501, SOCK_BIND: 0x0502, SOCK_LISTEN: 0x0503,
   SOCK_ACCEPT: 0x0504, SOCK_CONNECT: 0x0505, SOCK_PAIR: 0x0506,
   SOCK_SHUTDOWN: 0x0507,
-  // 0x06xx — HTTP transport (todos/0172). Fetch-shaped, one transfer per
-  // handle: HTTP_BODY stages an optional request body (RAW [u32 off][bytes],
-  // contiguous like CLIP_SET), HTTP_OPEN (JSON {method,url,headers[]})
-  // consumes it and kicks off the embedder's fetch, returning {id} at once.
-  // HTTP_STATUS parks until response headers (or a pre-body error) arrive.
-  // HTTP_READ is a pipe-shaped deferred drain of the streamed body (RAW
-  // bytes; 0 = clean EOF; {errno:EIO,error} = mid-stream failure) with
-  // kernel-side backpressure — the fetch reader pauses while the buffer is
-  // full. HTTP_CLOSE aborts + frees. Not a socket layer (the browser can't
-  // do raw TCP); TLS is the fetch stack's. Semantics: todos/0172 + the
-  // "HTTP transport" section in KERNEL.md.
+  // 0x06xx — HTTP transport (todos/0172; fd-shaped since todos/0417).
+  // Fetch-shaped, one transfer per OFD: HTTP_BODY stages an optional request
+  // body (RAW [u32 off][bytes], contiguous like CLIP_SET), HTTP_OPEN (JSON
+  // {method,url,headers[],headersMs,idleMs}) consumes it, kicks off the
+  // embedder's fetch, and returns {fd} at once — an ORDINARY fd whose OFD
+  // (kind 'http') owns the transfer, so it joins FS_SELECT/FS_WAIT, drains
+  // via FS_READ (EAGAIN when dry — never parks), and dies via FS_CLOSE
+  // (last release aborts the fetch). HTTP_STATUS is NON-blocking: EAGAIN
+  // before headers, {status,headers} after (and it consumes the status —
+  // the readability leg it satisfies re-arms only on body progress). Two
+  // kernel deadlines bound every transfer (headers + idle; expiry =
+  // ETIMEDOUT on the error leg). Not a socket layer (the browser can't
+  // do raw TCP); TLS is the fetch stack's. Semantics: todos/0172 +
+  // todos/0417 + the "HTTP transport" section in KERNEL.md.
+  // 0x0604 (HTTP_READ) and 0x0605 (HTTP_CLOSE) are RETIRED by 0417 —
+  // FS_READ/FS_CLOSE serve their roles; the opcodes are never reused.
   HTTP_BODY: 0x0601, HTTP_OPEN: 0x0602, HTTP_STATUS: 0x0603,
-  HTTP_READ: 0x0604, HTTP_CLOSE: 0x0605,
   // 0x1xxx — WM surfaces (todos/WM.md). Control plane only: present rides
   // the surface SAB (flip+seq, mailbox) and gpu-transport frames ride
   // {type:'wm-frame'} messages — never RPCs. 0x1004 stays reserved for a
@@ -441,9 +445,23 @@ function pipeRingTake(ring, n) {
 
 /* HTTP transport (todos/0172): per-transfer body backpressure threshold.
  * The async fetch reader pauses once this many bytes are queued and resumes
- * when a HTTP_READ drains below it — bounded kernel memory regardless of how
+ * when an FS_READ drains below it — bounded kernel memory regardless of how
  * fast the network delivers vs how slowly the C consumer reads. */
 var HTTP_BUF_CAP = 256 * 1024;
+
+/* HTTP deadlines (todos/0417): kernel DEFAULTS, so a caller that sets
+ * nothing is still bounded. HTTP_OPEN overrides per transfer: headersMs > 0
+ * replaces the headers deadline (the response headers must arrive within
+ * it); idleMs > 0 replaces the idle deadline (the body must deliver at
+ * least one byte within it, measured only while the kernel is actually
+ * waiting on the network — a backpressure pause stops the clock), and
+ * idleMs < 0 DISABLES it (a server-sent-event stream is legitimately
+ * silent for long stretches). The headers deadline is never disableable.
+ * Expiry aborts the fetch and fails the transfer with ETIMEDOUT — a
+ * distinguishable error, and a consumable: the fd reports readable and
+ * the reader collects it. */
+var HTTP_HEADERS_MS = 30 * 1000;
+var HTTP_IDLE_MS = 120 * 1000;
 
 /* ---- strace formatting (todos/0046) ----
  * Pure text: one strace-flavored line per RPC — NAME(k=v, ...) = result.
@@ -1448,15 +1466,16 @@ KernelClient.prototype.spawnHooks = function () {
     // (host.js createEgress composes it; layout in the OP table). One RPC,
     // one artifact; the kernel materializes and hands it to the embedder.
     egress: function (bytes) { return self.callRaw(OP.EGRESS, bytes); },
-    // HTTP transport (todos/0172): host.js's createHttp drives these; the
-    // libcurl veneer (0173) and /bin/code (0174) sit on top. httpBody stages
-    // request-body chunks (RAW [u32 off][bytes]); httpRead deferred-drains
-    // the streamed response; httpStatus parks for headers.
+    // HTTP transport (todos/0172; fd-shaped since todos/0417): host.js's
+    // createHttp drives these; the libcurl veneer (0173) sits on top.
+    // httpBody stages request-body chunks (RAW [u32 off][bytes]); httpOpen
+    // returns {fd} — body drain and close ride the ordinary fs hooks
+    // (FS_READ/FS_CLOSE); httpStatus is non-blocking (EAGAIN before
+    // headers), so neither op parks and neither needs the interruptible
+    // flag.
     httpBody: function (bytes) { return self.callRaw(OP.HTTP_BODY, bytes); },
     httpOpen: function (spec) { return self.call(OP.HTTP_OPEN, spec); },
-    httpStatus: function (id) { return self.call(OP.HTTP_STATUS, { id: id }, true); },
-    httpRead: function (id, count) { return self.call(OP.HTTP_READ, { id: id, count: count }, true); },
-    httpClose: function (id) { return self.call(OP.HTTP_CLOSE, { id: id }); },
+    httpStatus: function (fd) { return self.call(OP.HTTP_STATUS, { fd: fd }); },
     sigpoll: function () { return self.sigpoll(); },
     sigmask: function (mask) { self.sigmask(mask); },
     park: function (ms) { return self.park(ms); },
@@ -2125,8 +2144,6 @@ function Kernel(opts) {
   // catch this; the browser HTTP e2e does).
   this._fetch = ('fetch' in opts) ? opts.fetch
     : (typeof fetch !== 'undefined' ? fetch.bind(globalThis) : null);
-  this._httpXfers = new Map();    // id -> transfer (see _httpRpc)
-  this._nextHttp = 1;
 }
 
 Kernel.prototype._makeOfd = function (kind, extra) {
@@ -2216,6 +2233,12 @@ Kernel.prototype._ofdUnref = function (id, pid) {
     this._fs.close(o.bfsFd);
   }
   else if (o.kind === 'watch') this._watches.delete(o.id);
+  else if (o.kind === 'http') {
+    // Last release of an HTTP transfer fd (todos/0417): abort the fetch.
+    // close(2), a dup'd twin's death, and _exitProcess's fd sweep all
+    // funnel here — teardown needs no dedicated transfer sweep.
+    this._httpDestroy(o.xfer);
+  }
   else if (o.kind === 'ptm') {
     // The terminal is gone (0020): SIGHUP to the pty's fg pgroup (POSIX —
     // this is how closing the terminal window ends the session), parked
@@ -2551,7 +2574,6 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
     _wmPendingFb: null,            // SAB from 'wm-sabs' awaiting SURFACE_CREATE
     audios: new Set(),             // aids owned by this process (todos/0017)
     _audioPendingSab: null,        // SAB from 'audio-sab' awaiting AUDIO_OPEN
-    https: new Set(),              // HTTP transfer ids owned by this proc (0172)
     _httpStage: null,              // staged request body awaiting HTTP_OPEN
     trace: null,                   // strace (0046): { ofdId, pipe, follow, drops, cur }
   };
@@ -3548,6 +3570,24 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
         this._respondRaw(pcb, wrec);
         return;
       }
+      if (o1.kind === 'http') {
+        // HTTP body drain (todos/0417): bytes when queued, 0 at clean EOF,
+        // the error when failed, EAGAIN when dry — NEVER a park. http fds
+        // are inherently non-blocking like watch fds: __wait doesn't name
+        // the ready fd, so a woken caller finds the ready transfer by
+        // trying, and try-read-until-EAGAIN is that discipline. A drain
+        // below the cap resumes a backpressure-paused fetch reader.
+        var hx = o1.xfer;
+        if (hx.bytes > 0) {
+          this._respondRaw(pcb, this._httpDrain(hx, count));
+          if (hx.paused && hx.bytes < hx.cap) this._httpPump(hx);
+          return;
+        }
+        if (hx.error !== null) { this._respond(pcb, { errno: hx.errno || 'EIO', error: hx.error }); return; }
+        if (hx.done) { this._respondRaw(pcb, new Uint8Array(0)); return; }   // clean EOF
+        this._respond(pcb, { errno: 'EAGAIN' });
+        return;
+      }
       if (o1.kind === 'pipe') {
         if (o1.end !== 'read') { this._respond(pcb, { errno: 'EBADF' }); return; }
         this._streamRead(pcb, o1.pipe, count);
@@ -3614,7 +3654,7 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
         this._respond(pcb, { n: wn });
         return;
       }
-      if (o2.kind === 'watch') { this._respond(pcb, { errno: 'EBADF' }); return; }
+      if (o2.kind === 'watch' || o2.kind === 'http') { this._respond(pcb, { errno: 'EBADF' }); return; }
       if (o2.kind === 'pipe') {
         if (o2.end !== 'write') { this._respond(pcb, { errno: 'EBADF' }); return; }
         this._streamWrite(pcb, o2.pipe, data);
@@ -6795,6 +6835,21 @@ Kernel.prototype._selectScan = function (pcb, rfds, wfds) {
       // would spuriously wake every parked watcher forever.
       if (o.queue.length > 0 || o.overflowed) r.push(fd);
     }
+    else if (o.kind === 'http') {
+      // HTTP transfer (todos/0417): readable iff at least one CONSUMABLE
+      // is pending — an UNCONSUMED status, queued body bytes, clean EOF,
+      // or the error. Mandatory branch, the watch rule above. The status
+      // leg is gated on statusConsumed because headers-arrived is a
+      // PERMANENT condition: without the bit, a caller that consumed the
+      // status and now waits for the first body byte finds the fd
+      // readable forever and spins (wait -> read -> EAGAIN -> wait). The
+      // done/error legs stay permanent ON PURPOSE — a pipe at EOF is
+      // also readable forever, and 0 bytes (or the error) is the honest
+      // answer.
+      var hx = o.xfer;
+      if ((hx.status !== null && !hx.statusConsumed) ||
+          hx.bytes > 0 || hx.done || hx.error !== null) r.push(fd);
+    }
     else if (o.kind !== 'out') r.push(fd);
   });
   wfds.forEach(function (fd) {
@@ -7105,17 +7160,26 @@ Kernel.prototype._pipeNotify = function (pipe) {
   this._recheckSelects();
 };
 
-/* ---- HTTP transport (0x06xx; todos/0172) ----
+/* ---- HTTP transport (0x06xx; todos/0172, fd-shaped since todos/0417) ----
  * Fetch-backed HTTP for processes. The kernel owns the fetch; the process
- * drives it through five ops. A transfer is fetch-shaped: request (method,
- * url, headers, optional whole body) -> response headers -> streamed body ->
- * clean EOF or error. The body queue is a chunk list with kernel-side
- * backpressure (the async reader pauses past HTTP_BUF_CAP), the same
- * bounded-buffer discipline as pipes. At most ONE HTTP op is parked per
- * process (the worker is parked for every RPC), so statusWaiter/readWaiter
- * are single pids. NOT a socket layer; TLS is the fetch stack's. */
+ * drives it through three ops plus the ordinary fd layer. A transfer is
+ * fetch-shaped: request (method, url, headers, optional whole body) ->
+ * response headers -> streamed body -> clean EOF or error. HTTP_OPEN
+ * returns an ORDINARY FD whose OFD (kind 'http') owns the transfer, so any
+ * number of transfers multiplex against pipes, watches, the input ring and
+ * a timeout through one FS_SELECT/FS_WAIT: readable iff a CONSUMABLE is
+ * pending (_selectScan), body drains via FS_READ (EAGAIN when dry — http
+ * fds NEVER park; the contract is WAIT first, then consume until EAGAIN,
+ * the watch-fd discipline), close via FS_CLOSE (_ofdUnref's last release
+ * aborts the fetch — teardown is _exitProcess's ordinary fd sweep).
+ * HTTP_STATUS is non-blocking (EAGAIN before headers) and consumes the
+ * status. The body queue is a chunk list with kernel-side backpressure
+ * (the async reader pauses past HTTP_BUF_CAP), the same bounded-buffer
+ * discipline as pipes. Two kernel deadlines bound every transfer (headers
+ * + idle; see HTTP_HEADERS_MS above; expiry = ETIMEDOUT on the error leg).
+ * Needs the fd layer: no opts.fs -> HTTP_OPEN answers ENOSYS, like every
+ * 0x04xx op. NOT a socket layer; TLS is the fetch stack's. */
 Kernel.prototype._httpRpc = function (pcb, op, req) {
-  var self = this;
   switch (op) {
     case OP.HTTP_BODY: {
       // RAW [u32 off][bytes...] — stage the request body contiguously (off 0
@@ -7134,10 +7198,17 @@ Kernel.prototype._httpRpc = function (pcb, op, req) {
       break;
     }
     case OP.HTTP_OPEN: {
-      if (!this._fetch) { pcb._httpStage = null; this._respond(pcb, { errno: 'ENOSYS' }); break; }
+      // The transfer is an fd, so both halves are required: the embedder's
+      // fetch AND the fd layer (no opts.fs -> no fd table to live in).
+      if (!this._fetch || !this._fs) { pcb._httpStage = null; this._respond(pcb, { errno: 'ENOSYS' }); break; }
       var method = (req.method || 'GET') + '';
       var url = (req.url || '') + '';
       var hdrs = Array.isArray(req.headers) ? req.headers : [];
+      // Deadlines: > 0 overrides the kernel default; idleMs < 0 disables
+      // the idle deadline (headers stays bounded no matter what).
+      var headersMs = (req.headersMs | 0) > 0 ? (req.headersMs | 0) : HTTP_HEADERS_MS;
+      var idleMs = (req.idleMs | 0) > 0 ? (req.idleMs | 0)
+        : ((req.idleMs | 0) < 0 ? 0 : HTTP_IDLE_MS);
       // Consume any staged body (join the chunks).
       var body = null, st = pcb._httpStage; pcb._httpStage = null;
       if (st && st.len) {
@@ -7145,48 +7216,39 @@ Kernel.prototype._httpRpc = function (pcb, op, req) {
         for (var pi = 0, po = 0; pi < st.parts.length; pi++) { body.set(st.parts[pi], po); po += st.parts[pi].length; }
       }
       var xfer = {
-        id: this._nextHttp++, pcb: pcb,
         status: null, headers: null,          // set when response headers arrive
+        statusConsumed: false,                // HTTP_STATUS spends the status leg
         chunks: [], bytes: 0, cap: HTTP_BUF_CAP,
-        done: false, error: null, aborted: false, paused: false,
+        done: false, error: null, errno: null, aborted: false, paused: false,
         ac: (typeof AbortController !== 'undefined') ? new AbortController() : null,
-        reader: null, statusWaiter: null, readWaiter: null,
+        reader: null,
+        idleMs: idleMs, hdrTimer: null, idleTimer: null,
       };
-      this._httpXfers.set(xfer.id, xfer);
-      pcb.https.add(xfer.id);
-      this._httpStart(xfer, method, url, hdrs, body);
-      this._respond(pcb, { id: xfer.id });
+      var ho = this._makeOfd('http', { xfer: xfer });
+      ho.refs++;
+      var hfd = 0;
+      while (pcb.fds.has(hfd)) hfd++;
+      pcb.fds.set(hfd, ho.id);
+      this._httpStart(xfer, method, url, hdrs, body, headersMs);
+      this._respond(pcb, { fd: hfd });
       break;
     }
     case OP.HTTP_STATUS: {
-      var xs = this._httpXfers.get(req.id | 0);
-      if (!xs || xs.pcb !== pcb) { this._respond(pcb, { errno: 'EBADF' }); break; }
+      var sid = pcb.fds.get(req.fd | 0);
+      var so = sid === undefined ? null : this._ofds.get(sid);
+      if (!so || so.kind !== 'http') { this._respond(pcb, { errno: 'EBADF' }); break; }
+      var xs = so.xfer;
       if (xs.error !== null && xs.status === null) {
-        this._respond(pcb, { errno: 'EIO', error: xs.error }); break;
+        this._respond(pcb, { errno: xs.errno || 'EIO', error: xs.error }); break;
       }
       if (xs.status !== null) {
+        // Spend the status leg of readability. Without this bit,
+        // headers-arrived is permanent and a caller waiting for the first
+        // body byte would find the fd readable forever (todos/0417).
+        xs.statusConsumed = true;
         this._respond(pcb, { status: xs.status, headers: xs.headers || '' }); break;
       }
-      pcb.waiter = { op: 'httpstatus', xfer: xs };   // park until headers/error
-      xs.statusWaiter = pcb.pid;
-      break;
-    }
-    case OP.HTTP_READ: {
-      var xr = this._httpXfers.get(req.id | 0);
-      if (!xr || xr.pcb !== pcb) { this._respond(pcb, { errno: 'EBADF' }); break; }
-      var want = req.count | 0;
-      if (xr.bytes > 0) { this._respondRaw(pcb, this._httpDrain(xr, want));
-        if (xr.paused && xr.bytes < xr.cap) this._httpPump(xr); break; }
-      if (xr.error !== null) { this._respond(pcb, { errno: 'EIO', error: xr.error }); break; }
-      if (xr.done) { this._respondRaw(pcb, new Uint8Array(0)); break; }   // clean EOF
-      pcb.waiter = { op: 'httpread', xfer: xr, count: want };            // park for data
-      xr.readWaiter = pcb.pid;
-      break;
-    }
-    case OP.HTTP_CLOSE: {
-      var xc = this._httpXfers.get(req.id | 0);
-      if (xc && xc.pcb === pcb) this._httpDestroy(xc);
-      this._respond(pcb, {});
+      this._respond(pcb, { errno: 'EAGAIN' });   // not yet — WAIT on the fd
       break;
     }
     default:
@@ -7208,8 +7270,12 @@ Kernel.prototype._httpFlattenHeaders = function (headers) {
 
 /* Kick off the fetch. Resolves headers (or a pre-body error) then streams the
  * body through the reader under backpressure. Aborted transfers drop silently
- * (HTTP_CLOSE / process teardown already reclaimed them). */
-Kernel.prototype._httpStart = function (xfer, method, url, headerList, body) {
+ * (close / process teardown already reclaimed them); a deadline-expired
+ * transfer keeps its ETIMEDOUT (the error guard on both handlers — the
+ * AbortError rejection the expiry provokes must not overwrite it). Every
+ * state change that adds a consumable ends in _recheckSelects, which is the
+ * whole wake path now: nothing parks on a transfer, only on the fd. */
+Kernel.prototype._httpStart = function (xfer, method, url, headerList, body, headersMs) {
   var self = this;
   var pairs = [];
   for (var i = 0; i < headerList.length; i++) {
@@ -7220,45 +7286,101 @@ Kernel.prototype._httpStart = function (xfer, method, url, headerList, body) {
   var init = { method: method, headers: pairs, redirect: 'follow' };
   if (xfer.ac) init.signal = xfer.ac.signal;
   if (body && body.length) init.body = body;
+  if (headersMs > 0) {
+    xfer.hdrTimer = setTimeout(function () {
+      xfer.hdrTimer = null;
+      self._httpExpire(xfer, 'response headers deadline expired (' + headersMs + 'ms)');
+    }, headersMs);
+  }
   var p;
   try { p = Promise.resolve(this._fetch(url, init)); }
   catch (e) { p = Promise.reject(e); }        // synchronous throw (bad URL)
   p.then(function (resp) {
-    if (xfer.aborted) return;
+    if (xfer.aborted || xfer.error !== null) return;
+    if (xfer.hdrTimer) { clearTimeout(xfer.hdrTimer); xfer.hdrTimer = null; }
     xfer.status = resp.status;
     xfer.headers = self._httpFlattenHeaders(resp.headers);
-    self._httpServeStatus(xfer);
     xfer.reader = (resp.body && typeof resp.body.getReader === 'function') ? resp.body.getReader() : null;
     if (!xfer.reader) {                        // no streamable body (HEAD, empty)
-      xfer.done = true; self._httpServeRead(xfer); return;
+      xfer.done = true; self._recheckSelects(); return;
     }
+    self._httpIdleArm(xfer);
     self._httpPump(xfer);
+    self._recheckSelects();
   }, function (err) {
-    if (xfer.aborted) return;
+    if (xfer.aborted || xfer.error !== null) return;
+    if (xfer.hdrTimer) { clearTimeout(xfer.hdrTimer); xfer.hdrTimer = null; }
     xfer.error = (err && err.message) ? (err.message + '') : 'fetch failed';
-    self._httpServeStatus(xfer);               // surface to a parked HTTP_STATUS
-    self._httpServeRead(xfer);                 // ...or a parked HTTP_READ
+    xfer.errno = 'EIO';
+    self._recheckSelects();
   });
 };
 
-/* Read one chunk under backpressure: pause past cap (a HTTP_READ resumes us),
- * else pull, queue, wake a parked reader, and continue. */
+/* A deadline fired: fail the transfer with ETIMEDOUT — distinguishable from
+ * a connect error (EIO) and from clean EOF — and abort the fetch. The fd
+ * stays open: the expiry is a CONSUMABLE (the error leg of readability), so
+ * a parked FS_WAIT wakes and the reader collects it. */
+Kernel.prototype._httpExpire = function (xfer, msg) {
+  if (xfer.aborted || xfer.done || xfer.error !== null) return;
+  xfer.error = msg;
+  xfer.errno = 'ETIMEDOUT';
+  if (xfer.idleTimer) { clearTimeout(xfer.idleTimer); xfer.idleTimer = null; }
+  if (xfer.ac) { try { xfer.ac.abort(); } catch (e) {} }
+  if (xfer.reader) {
+    try { var cp = xfer.reader.cancel(); if (cp && cp.catch) cp.catch(function () {}); }
+    catch (e) {}
+  }
+  this._recheckSelects();
+};
+
+/* (Re-)arm the idle deadline: the body must deliver a byte within it. Runs
+ * only while the kernel is actually waiting on the network — a backpressure
+ * pause CLEARS it (that gap is the consumer's, not the server's) and the
+ * resume re-arms. idleMs 0 = disabled (HTTP_OPEN idleMs < 0). */
+Kernel.prototype._httpIdleArm = function (xfer) {
+  var self = this;
+  if (xfer.idleTimer) { clearTimeout(xfer.idleTimer); xfer.idleTimer = null; }
+  if (!xfer.idleMs || xfer.aborted || xfer.done || xfer.error !== null) return;
+  xfer.idleTimer = setTimeout(function () {
+    xfer.idleTimer = null;
+    self._httpExpire(xfer, 'body idle deadline expired (' + xfer.idleMs + 'ms)');
+  }, xfer.idleMs);
+};
+
+/* Read one chunk under backpressure: pause past cap (an FS_READ drain
+ * resumes us), else pull, queue, wake parked waiters, and continue. */
 Kernel.prototype._httpPump = function (xfer) {
   var self = this;
   if (xfer.aborted || xfer.done || xfer.error !== null) return;
-  if (xfer.bytes >= xfer.cap) { xfer.paused = true; return; }
-  xfer.paused = false;
+  if (xfer.bytes >= xfer.cap) {
+    // Backpressure pause: the coming gap is the consumer's, not the
+    // server's — the idle clock stops; the drain that resumes us re-arms.
+    xfer.paused = true;
+    if (xfer.idleTimer) { clearTimeout(xfer.idleTimer); xfer.idleTimer = null; }
+    return;
+  }
+  if (xfer.paused) { xfer.paused = false; this._httpIdleArm(xfer); }
   xfer.reader.read().then(function (r) {
-    if (xfer.aborted) return;
-    if (r.done) { xfer.done = true; self._httpServeRead(xfer); return; }
+    if (xfer.aborted || xfer.error !== null) return;
+    if (r.done) {
+      xfer.done = true;
+      if (xfer.idleTimer) { clearTimeout(xfer.idleTimer); xfer.idleTimer = null; }
+      self._recheckSelects();
+      return;
+    }
     var chunk = r.value;                       // Uint8Array
-    if (chunk && chunk.length) { xfer.chunks.push(chunk); xfer.bytes += chunk.length; }
-    self._httpServeRead(xfer);
+    if (chunk && chunk.length) {
+      xfer.chunks.push(chunk); xfer.bytes += chunk.length;
+      self._httpIdleArm(xfer);                 // a byte arrived: restart the clock
+    }
+    self._recheckSelects();
     self._httpPump(xfer);
   }, function (err) {
-    if (xfer.aborted) return;
+    if (xfer.aborted || xfer.error !== null) return;
     xfer.error = (err && err.message) ? (err.message + '') : 'stream read failed';
-    self._httpServeRead(xfer);
+    xfer.errno = 'EIO';
+    if (xfer.idleTimer) { clearTimeout(xfer.idleTimer); xfer.idleTimer = null; }
+    self._recheckSelects();
   });
 };
 
@@ -7278,44 +7400,14 @@ Kernel.prototype._httpDrain = function (xfer, count) {
   return out;
 };
 
-/* Wake a HTTP_STATUS parked before headers/error landed. */
-Kernel.prototype._httpServeStatus = function (xfer) {
-  var pid = xfer.statusWaiter;
-  if (pid == null) return;
-  var pcb = this._procs.get(pid);
-  if (!pcb || !pcb.waiter || pcb.waiter.op !== 'httpstatus' || pcb.waiter.xfer !== xfer) {
-    xfer.statusWaiter = null; return;
-  }
-  this._cancelWaiter(pcb);                     // clears statusWaiter (see _cancelWaiter)
-  if (xfer.error !== null && xfer.status === null) this._respond(pcb, { errno: 'EIO', error: xfer.error });
-  else this._respond(pcb, { status: xfer.status, headers: xfer.headers || '' });
-};
-
-/* Wake a HTTP_READ parked for data, once bytes / EOF / error is available. */
-Kernel.prototype._httpServeRead = function (xfer) {
-  var pid = xfer.readWaiter;
-  if (pid == null) return;
-  var pcb = this._procs.get(pid);
-  if (!pcb || !pcb.waiter || pcb.waiter.op !== 'httpread' || pcb.waiter.xfer !== xfer) {
-    xfer.readWaiter = null; return;
-  }
-  if (xfer.bytes > 0) {
-    var count = pcb.waiter.count;
-    this._cancelWaiter(pcb);
-    this._respondRaw(pcb, this._httpDrain(xfer, count));
-    if (xfer.paused && xfer.bytes < xfer.cap) this._httpPump(xfer);
-    return;
-  }
-  if (xfer.error !== null) { this._cancelWaiter(pcb); this._respond(pcb, { errno: 'EIO', error: xfer.error }); return; }
-  if (xfer.done) { this._cancelWaiter(pcb); this._respondRaw(pcb, new Uint8Array(0)); return; }
-  // else stay parked — the pump will wake us
-};
-
-/* Abort + free a transfer (HTTP_CLOSE, or process teardown in _exitProcess).
- * Never wedges: aborting is idempotent and the parked owner, if any, is the
- * dying/closing process itself. */
+/* Abort + free a transfer — the http OFD's last-release action (_ofdUnref:
+ * FS_CLOSE, a dup'd twin's death, or _exitProcess's fd sweep). Never
+ * wedges: aborting is idempotent, and nothing ever parks ON a transfer
+ * (http fds never park), so there is no waiter to strand. */
 Kernel.prototype._httpDestroy = function (xfer) {
   xfer.aborted = true;
+  if (xfer.hdrTimer) { clearTimeout(xfer.hdrTimer); xfer.hdrTimer = null; }
+  if (xfer.idleTimer) { clearTimeout(xfer.idleTimer); xfer.idleTimer = null; }
   if (xfer.ac) { try { xfer.ac.abort(); } catch (e) {} }
   // cancel() returns a promise that REJECTS when the stream already errored
   // (e.g. a mid-stream drop) — swallow it, or it surfaces as an unhandled
@@ -7325,8 +7417,6 @@ Kernel.prototype._httpDestroy = function (xfer) {
     try { var cp = xfer.reader.cancel(); if (cp && cp.catch) cp.catch(function () {}); }
     catch (e) {}
   }
-  if (xfer.pcb) xfer.pcb.https.delete(xfer.id);
-  this._httpXfers.delete(xfer.id);
 };
 
 /* ---- vDSO block (todos/0179) ----
@@ -7433,10 +7523,6 @@ Kernel.prototype._cancelWaiter = function (pcb) {
   } else if (w.op === 'accept') {
     var k = w.lofd.acceptWaiters.indexOf(pcb.pid);
     if (k >= 0) w.lofd.acceptWaiters.splice(k, 1);
-  } else if (w.op === 'httpstatus') {
-    if (w.xfer.statusWaiter === pcb.pid) w.xfer.statusWaiter = null;
-  } else if (w.op === 'httpread') {
-    if (w.xfer.readWaiter === pcb.pid) w.xfer.readWaiter = null;
   }
 };
 
@@ -7487,15 +7573,8 @@ Kernel.prototype._exitProcess = function (pcb, status) {
   }
   pcb.audios.clear();
   pcb._audioPendingSab = null;
-  // HTTP transfers (todos/0172): abort the fetch + free — no dangling
-  // network on exit/SIGKILL (same discipline as fds/surfaces/audio).
-  if (pcb.https.size) {
-    Array.from(pcb.https).forEach(function (hid) {
-      var x = self0._httpXfers.get(hid);
-      if (x) self0._httpDestroy(x);
-    });
-  }
-  pcb.https.clear();
+  // HTTP transfers are fds (todos/0417): the fd sweep above already
+  // aborted every live fetch — no dedicated transfer sweep exists.
   pcb._httpStage = null;
 
   var self = this;
@@ -8002,7 +8081,12 @@ RemoteFS.prototype.read = function (fd, buf, count) {
   // Interruptible: a tty read defers kernel-side; a posted signal turns it
   // into EINTR (regular files respond immediately, so it never fires).
   var r = this._c.call(OP.FS_READ, { fd: fd, count: Math.min(count, KP_FS_CHUNK) }, true);
-  if (r.errno) return this._setErr(r.errno);
+  if (r.errno) {
+    // The C surface only sees errno; keep the transport's real error text
+    // visible (the ticket-#78 rule — http transfer failures carry one).
+    if (r.error) console.error('read(fd ' + fd + '): ' + r.errno + ': ' + r.error);
+    return this._setErr(r.errno);
+  }
   if (!r.raw) return this._setErr('EIO');
   buf.set(r.raw);
   var got = r.raw.length;

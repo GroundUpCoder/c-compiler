@@ -26280,13 +26280,22 @@ __import void __sdl_set_animation_frame_func(void (*callback)(void));
 __import int __clip_set(int fmt, const void *bytes, int len);
 __import int __clip_get(int fmt, void *out, int cap);
 __import int __clip_has(int fmt);
-/* HTTP transport (todos/0172; host.js createHttp). The libcurl veneer
-   (0173) and /bin/code (0174) sit on these. headers is a NUL-terminated
-   blob of "Name: Value" lines joined by newlines (or empty). */
-__import int __http_open(const char *method, const char *url, const char *headers, const void *body, int blen);
-__import int __http_status(int id, int *status_out, char *hdr, int hdrcap);
-__import int __http_read(int id, void *buf, int cap);
-__import int __http_close(int id);
+/* HTTP transport (todos/0172; fd-shaped since todos/0417 — host.js
+   createHttp). The libcurl veneer (0173) sits on these. headers is a
+   NUL-terminated blob of "Name: Value" lines joined by newlines (or
+   empty). __http_open starts the transfer and returns an ORDINARY fd.
+   headers_ms bounds the response headers, idle_ms bounds the gap between
+   body bytes (0 = kernel default; idle_ms < 0 disables the idle
+   deadline); an expired deadline fails the transfer with ETIMEDOUT.
+   Consumer contract (WAIT-first, the os/fswatch.h discipline): park on
+   the fd (__wait / select). On a wake, call __http_status once if you
+   have not (-1/EAGAIN before the headers arrive; the call consumes the
+   status), then read() until EAGAIN, then park again. read() gives
+   n > 0 bytes, 0 at clean EOF, -1/errno on failure. close(fd) aborts
+   the transfer. A consumer that does not consume its pending status
+   spins — that is the caller's bug. */
+__import int __http_open(const char *method, const char *url, const char *headers, const void *body, int blen, int headers_ms, int idle_ms);
+__import int __http_status(int fd, int *status_out, char *hdr, int hdrcap);
 __import int __sdl_open_audio_device(int freq, int format, int channels);
 __import int __sdl_queue_audio(int dev, const void *data, int len);
 __import int __sdl_get_queued_audio_size(int dev);

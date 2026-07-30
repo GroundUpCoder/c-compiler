@@ -41,10 +41,13 @@ links against gucOS's actual constraints.
   the page is same-origin + CORS-permissive-hosts only
   (`todos/NETWORK.md:44`). Headless `boot.js` (Node fetch) is
   unrestricted. This is the crux of the value question (see Verdict).
-- **`__http_*` ids are NOT file descriptors.** They live in a separate
-  `_httpXfers` map in the kernel (`kernel.js:2024`), not the fd table, so
-  they can NOT be polled by `FS_SELECT`/`__wait`. This matters enormously
-  for an async, select-driven browser (links) — see below.
+- **`__http_*` transfers ARE file descriptors since todos/0417** (this
+  investigation predates it; its downstream reasoning about a
+  select-driven browser treats the old not-an-fd limit as current). An
+  `http` OFD now joins `FS_SELECT`/`__wait` beside pipes and the input
+  ring, `read(2)` drains the body (EAGAIN when dry), and the kernel
+  bounds every transfer with headers/idle deadlines. Re-derive any plan
+  step below that leaned on the old limit.
 
 **Terminal — a real xterm-256color VT, termios works, but NO termcap DB.**
 - `os/term/` is a genuine VT100/xterm emulator. Its escape parser already

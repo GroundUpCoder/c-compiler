@@ -6001,30 +6001,42 @@ function createEgress(ctx, hooks) {
   } };
 }
 
-/* ---- HTTP transport (todos/0172) ----
-   The C-visible primitive under the libcurl veneer (0173) and /bin/code
-   (0174). Kernel-backed via spawnHooks (fetch runs kernel-side; the process
-   streams the body through the doorbell under backpressure). No kernel (a
-   standalone page, or an embedder predating the 0x06xx ops — detected by
-   ENOSYS) means no network: __http_open returns -1/ENOSYS, fail-loud, the
-   two-transports-one-fs precedent. Blocking by construction — every call
-   parks the worker on the doorbell like any other RPC.
+/* ---- HTTP transport (todos/0172; fd-shaped since todos/0417) ----
+   The C-visible primitive under the libcurl veneer (0173). Kernel-backed via
+   spawnHooks (fetch runs kernel-side; the transfer is an ORDINARY FD whose
+   OFD, kind 'http', owns it — so it joins __wait/select beside pipes and
+   watches, and plain read()/close() serve the body and the teardown). No
+   kernel (a standalone page, or an embedder predating the 0x06xx ops —
+   detected by ENOSYS) means no network: __http_open returns -1/ENOSYS,
+   fail-loud, the two-transports-one-fs precedent.
 
    Surface (all pointers are into wasm memory; strings are NUL-terminated):
-     __http_open(method, url, headers, body, blen) -> id>0 | -1
+     __http_open(method, url, headers, body, blen, headers_ms, idle_ms)
+        -> fd>=0 | -1
         headers: "Name: Value\n"-joined lines (or ""); body/blen optional.
-     __http_status(id, status_out, hdr, hdr_cap) -> total header bytes | -1
-        writes the numeric status to *status_out; copies min(total,hdr_cap).
-     __http_read(id, buf, cap) -> n>0 | 0 (EOF) | -1 (error)
-     __http_close(id) -> 0
-   The veneer maps curl_easy_perform onto open -> status (feeds
-   HEADERFUNCTION) -> read loop (feeds WRITEFUNCTION) -> close. */
+        headers_ms: deadline for the response headers (0 = kernel default).
+        idle_ms: max gap between body bytes (0 = kernel default, < 0 = no
+        idle deadline — for a legitimately silent stream). An expired
+        deadline fails the transfer with ETIMEDOUT.
+     __http_status(fd, status_out, hdr, hdr_cap) -> total header bytes | -1
+        NON-BLOCKING: -1/EAGAIN before the headers arrive. Writes the
+        numeric status to *status_out; copies min(total, hdr_cap).
+     read(fd, buf, cap) -> n>0 | 0 (clean EOF) | -1 (EAGAIN dry; ETIMEDOUT
+        deadline; EIO failed)
+     close(fd) aborts the transfer.
+
+   Consumer contract (WAIT-first, the fswatch discipline — os/fswatch.h):
+   park on the fd with __wait or select. On a wake, consume the status if
+   you have not, then read until EAGAIN, then park again. The fd is
+   readable while a consumable is pending: an unconsumed status, queued
+   body bytes, EOF, or the error. A consumer that does not consume its
+   pending status spins — that is the caller's bug, not the kernel's. */
 function createHttp(ctx, hooks) {
   const have = !!(hooks && typeof hooks.httpOpen === 'function');
   const CHUNK = have ? hookPayloadChunk(hooks) : 0;   // unused on the ENOSYS side
   const enc = new TextEncoder();
   return { [ENV_KEY]: {
-    __http_open: function (methodPtr, urlPtr, headersPtr, bodyPtr, blen) {
+    __http_open: function (methodPtr, urlPtr, headersPtr, bodyPtr, blen, headersMs, idleMs) {
       if (!have) { ctx.setErrnoName('ENOSYS'); return -1; }
       const method = methodPtr ? ctx.readString(methodPtr) : 'GET';
       const url = urlPtr ? ctx.readString(urlPtr) : '';
@@ -6045,16 +6057,18 @@ function createHttp(ctx, hooks) {
           off += n;
         }
       }
-      const r = hooks.httpOpen({ method, url, headers });
+      const r = hooks.httpOpen({ method, url, headers,
+        headersMs: headersMs | 0, idleMs: idleMs | 0 });
       if (r && r.errno) { ctx.setErrnoName(r.errno === 'ENOSYS' ? 'ENOSYS' : r.errno); return -1; }
-      return r && r.id ? r.id : -1;
+      return r && r.fd !== undefined ? r.fd : -1;
     },
-    __http_status: function (id, statusOut, hdrPtr, hdrCap) {
+    __http_status: function (fd, statusOut, hdrPtr, hdrCap) {
       if (!have) { ctx.setErrnoName('ENOSYS'); return -1; }
-      const r = hooks.httpStatus(id | 0);
+      const r = hooks.httpStatus(fd | 0);
       if (!r || r.errno) {
         // The C surface only sees errno; keep the transport's real error text
         // visible (a bare CURLE_COULDNT_CONNECT hid the ticket-#78 TypeError).
+        // EAGAIN is the normal not-yet answer (WAIT first), never logged.
         if (r && r.error) console.error('__http_status: transfer failed:', r.error);
         ctx.setErrnoName((r && r.errno) || 'EIO'); return -1;
       }
@@ -6063,23 +6077,6 @@ function createHttp(ctx, hooks) {
       const n = Math.min(hdrCap >>> 0, hb.length);
       if (n > 0 && hdrPtr) new Uint8Array(ctx.getMemory().buffer).set(hb.subarray(0, n), hdrPtr);
       return hb.length;
-    },
-    __http_read: function (id, buf, cap) {
-      if (!have) { ctx.setErrnoName('ENOSYS'); return -1; }
-      const r = hooks.httpRead(id | 0, cap >>> 0);
-      if (r && r.errno) {
-        if (r.errno === 'EINTR') { ctx.setErrnoName('EINTR'); return -1; }
-        if (r.error) console.error('__http_read: transfer failed:', r.error);
-        ctx.setErrnoName(r.errno); return -1;
-      }
-      const raw = r && r.raw ? r.raw : new Uint8Array(0);
-      const n = Math.min(cap >>> 0, raw.length);
-      if (n > 0 && buf) new Uint8Array(ctx.getMemory().buffer).set(raw.subarray(0, n), buf);
-      return n;                        // 0 = clean EOF
-    },
-    __http_close: function (id) {
-      if (have) hooks.httpClose(id | 0);
-      return 0;
     },
   } };
 }

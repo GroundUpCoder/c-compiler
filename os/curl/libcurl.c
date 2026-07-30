@@ -1,17 +1,24 @@
 /*
  * libcurl.c — gucOS libcurl veneer (todos/0173): the easy interface over the
- * kernel HTTP transport (todos/0172).
+ * kernel HTTP transport (todos/0172; fd-shaped since todos/0417).
  *
  * curl_easy_perform maps 1:1 onto the primitive:
- *   __http_open -> __http_status (feeds HEADERFUNCTION from the flattened
- *   header blob) -> __http_read loop (feeds WRITEFUNCTION) -> __http_close.
+ *   __http_open -> an ordinary fd. Wait on it with __wait, consume the
+ *   status with __http_status (feeds HEADERFUNCTION from the flattened
+ *   header blob), then read() until EAGAIN / wait again (feeds
+ *   WRITEFUNCTION), then close(fd).
  *
- * Timeouts (TIMEOUT[_MS], CONNECTTIMEOUT[_MS]) ride setitimer(ITIMER_REAL)
- * + SIGALRM (todos/0044): the kernel EINTRs a parked HTTP RPC when a signal
- * lands, and the veneer converts that to CURLE_OPERATION_TIMEDOUT once the
- * armed deadline has passed (other signals' EINTRs retry the call). The
- * veneer installs its own SIGALRM handler and leaves it installed — the
- * same deal as real libcurl without CURLOPT_NOSIGNAL.
+ * Timeouts (todos/0417):
+ *   - CONNECTTIMEOUT[_MS] -> the kernel HEADERS deadline (__http_open's
+ *     headers_ms): the response headers must arrive within it. Expiry
+ *     surfaces as errno ETIMEDOUT on __http_status.
+ *   - TIMEOUT[_MS] is a WHOLE-OPERATION cap, which neither kernel deadline
+ *     expresses — the veneer enforces it on its own wall clock through
+ *     __wait's timeout: wait with the remaining ms and treat a timeout
+ *     wake (why = 0) as CURLE_OPERATION_TIMEDOUT.
+ *   The kernel's default deadlines stay underneath, so a caller that sets
+ *   no option is still bounded. The old SIGALRM/ITIMER_REAL apparatus is
+ *   gone — nothing here parks uninterruptibly anymore.
  *
  * Documented divergences (also in curl.h):
  *   - redirects: transport follows silently; FOLLOWLOCATION/MAXREDIRS are
@@ -36,17 +43,20 @@
 #include <stdarg.h>
 #include <strings.h>
 #include <errno.h>
-#include <signal.h>
+#include <unistd.h>
 #include <sys/time.h>
 
-/* The kernel HTTP primitive (todos/0172), surfaced by host.js as env
-   imports. Declared here like any other consumer (the compiler prelude's
-   copies live in the SDL block; identical redeclaration is fine). */
+/* The kernel HTTP primitive (todos/0172, fd-shaped todos/0417), surfaced by
+   host.js as env imports. Declared here like any other consumer (the
+   compiler prelude's copies live in the SDL block; identical redeclaration
+   is fine). Body drain is plain read(2), teardown is plain close(2). */
 __import int __http_open(const char *method, const char *url, const char *headers,
-                         const void *body, int blen);
-__import int __http_status(int id, int *status_out, char *hdr, int hdrcap);
-__import int __http_read(int id, void *buf, int cap);
-__import int __http_close(int id);
+                         const void *body, int blen, int headers_ms, int idle_ms);
+__import int __http_status(int fd, int *status_out, char *hdr, int hdrcap);
+/* The unified multi-source wait (todos/0178; wm.c precedent). why: 0 =
+   timeout, 1 = an fd is readable, 2 = input ring, -1 = EINTR (the handler
+   already ran), -2 = no kernel WAIT in this flavor. */
+__import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
 
 #define HDR_BLOB_CAP  (64 * 1024)   /* matches the kernel's flatten cap */
 #define READ_CHUNK    49152         /* under the kernel page payload cap */
@@ -175,32 +185,29 @@ CURLcode curl_easy_setopt(CURL *handle, CURLoption option, ...) {
   return rc;
 }
 
-/* ---- timeout plumbing: setitimer(ITIMER_REAL) -> SIGALRM ---------------- */
-static volatile int g_alarm_fired;
-static void on_alarm(int sig) { (void)sig; g_alarm_fired = 1; }
-
+/* ---- timeout plumbing: the veneer's wall clock ------------------------- */
 static long long now_ms(void) {
   struct timeval tv;
   gettimeofday(&tv, 0);
   return (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
-static void arm_ms(long ms) {
-  struct itimerval itv;
-  itv.it_interval.tv_sec = 0; itv.it_interval.tv_usec = 0;
-  itv.it_value.tv_sec = ms / 1000;
-  itv.it_value.tv_usec = (ms % 1000) * 1000;
-  setitimer(ITIMER_REAL, &itv, 0);
-}
-static void disarm(void) { arm_ms(0); }
-
-/* Did the armed deadline pass? gettimeofday is an env import, i.e. a signal
-   safe point — calling it forces a pending SIGALRM dispatch, so the flag is
-   settled by the time we read it. */
-static int timed_out(long long deadline) {
-  if (deadline <= 0) return 0;
-  long long t = now_ms();
-  return g_alarm_fired || t >= deadline;
+/* One WAIT-first step against the whole-operation deadline: park on the fd
+   until it is readable, the deadline passes, or a signal lands (EINTR —
+   the handler ran; re-check the clock and re-park). Returns 0 to retry the
+   consume, -1 when the total deadline has passed, -2 when no kernel WAIT
+   exists in this flavor (fail loud — never a poll loop). */
+static int wait_step(int fd, long long total_deadline) {
+  int timeout_ms = -1;
+  if (total_deadline > 0) {
+    long long remain = total_deadline - now_ms();
+    if (remain <= 0) return -1;
+    timeout_ms = (int)remain;
+  }
+  int why = __wait(&fd, 1, 0, timeout_ms);
+  if (why == 0) return -1;                    /* the total deadline passed */
+  if (why == -2) return -2;                   /* no unified WAIT here */
+  return 0;                                   /* readable or EINTR: retry */
 }
 
 /* ---- error helper ------------------------------------------------------- */
@@ -307,67 +314,48 @@ CURLcode curl_easy_perform(CURL *handle) {
   if (h->verbose)
     fprintf(stderr, "* gucOS libcurl: %s %s (%ld body bytes)\n", method, h->url, blen);
 
-  /* timeouts: arm the tighter of (connect, total) for the status phase */
+  /* timeouts (todos/0417): CONNECTTIMEOUT rides the kernel headers
+     deadline; TIMEOUT is the whole-operation cap on the veneer's own wall
+     clock, enforced through __wait's timeout at every park. */
   long long t0 = now_ms();
   long long total_deadline = h->timeout_ms > 0 ? t0 + h->timeout_ms : 0;
-  long status_arm = 0;
-  if (h->connecttimeout_ms > 0) status_arm = h->connecttimeout_ms;
-  if (h->timeout_ms > 0 && (status_arm == 0 || h->timeout_ms < status_arm))
-    status_arm = h->timeout_ms;
-  long long status_deadline = status_arm > 0 ? t0 + status_arm : 0;
-  if (status_arm > 0) {
-    g_alarm_fired = 0;
-    signal(SIGALRM, on_alarm);
-    arm_ms(status_arm);
-  }
+  int headers_ms = h->connecttimeout_ms > 0 ? (int)h->connecttimeout_ms : 0;
 
-  int id = __http_open(method, h->url, hdrs, body, (int)blen);
+  int fd = __http_open(method, h->url, hdrs, body, (int)blen, headers_ms, 0);
   free(hdrs); free(rbody);
-  if (id < 0) {
-    if (status_arm > 0) disarm();
+  if (fd < 0) {
     if (errno == ENOSYS) return fail(h, CURLE_UNSUPPORTED_PROTOCOL, "no network transport (fetch disabled)");
     return fail(h, CURLE_COULDNT_CONNECT, "could not open transfer");
   }
 
-  /* status + headers (parks until the response headers or an error land) */
+  /* status + headers: WAIT on the fd, consume the status when it lands */
   int status = 0, hl;
   for (;;) {
-    hl = __http_status(id, &status, g_hdrblob, HDR_BLOB_CAP);
+    hl = __http_status(fd, &status, g_hdrblob, HDR_BLOB_CAP);
     if (hl >= 0) break;
-    if (errno == EINTR) {
-      if (timed_out(status_deadline)) {
-        __http_close(id); disarm();
-        return fail(h, CURLE_OPERATION_TIMEDOUT, "timed out waiting for response");
-      }
-      continue;                       /* someone else's signal — re-park */
+    if (errno == EAGAIN || errno == EINTR) {
+      int ws = wait_step(fd, total_deadline);
+      if (ws == 0) continue;
+      close(fd);
+      if (ws == -1) return fail(h, CURLE_OPERATION_TIMEDOUT, "timed out waiting for response");
+      return fail(h, CURLE_COULDNT_CONNECT, "no kernel wait (__wait unsupported in this flavor)");
     }
-    __http_close(id);
-    if (status_arm > 0) disarm();
+    int serrno = errno;
+    close(fd);
+    if (serrno == ETIMEDOUT)
+      return fail(h, CURLE_OPERATION_TIMEDOUT, "timed out waiting for response");
     return fail(h, CURLE_COULDNT_CONNECT, "connection failed");
   }
   int copied = hl < HDR_BLOB_CAP ? hl : HDR_BLOB_CAP;
   g_hdrblob[copied] = 0;
   h->response_code = status;
 
-  /* re-arm for the body phase: total timeout only */
-  if (status_arm > 0) disarm();
-  if (total_deadline > 0) {
-    long long remain = total_deadline - now_ms();
-    if (remain <= 0) {
-      __http_close(id);
-      return fail(h, CURLE_OPERATION_TIMEDOUT, "timed out after headers");
-    }
-    g_alarm_fired = 0;
-    signal(SIGALRM, on_alarm);
-    arm_ms((long)remain);
-  }
-
   /* synthesize curl-shaped header lines: status line, then each blob line
      as "name: value\r\n", then the blank terminator */
   {
     char sline[64];
     int sn = snprintf(sline, sizeof sline, "HTTP/1.1 %d \r\n", status);
-    if (emit_header(h, sline, (size_t)sn)) { __http_close(id); disarm();
+    if (emit_header(h, sline, (size_t)sn)) { close(fd);
       return fail(h, CURLE_WRITE_ERROR, "header callback aborted"); }
     char *p = g_hdrblob;
     while (*p) {
@@ -388,34 +376,40 @@ CURLcode curl_easy_perform(CURL *handle) {
       char line[1024];
       size_t el = ll < sizeof line - 3 ? ll : sizeof line - 3;
       memcpy(line, p, el); line[el] = '\r'; line[el + 1] = '\n';
-      if (emit_header(h, line, el + 2)) { __http_close(id); disarm();
+      if (emit_header(h, line, el + 2)) { close(fd);
         return fail(h, CURLE_WRITE_ERROR, "header callback aborted"); }
       if (!nl) break;
       p = nl + 1;
     }
-    if (emit_header(h, "\r\n", 2)) { __http_close(id); disarm();
+    if (emit_header(h, "\r\n", 2)) { close(fd);
       return fail(h, CURLE_WRITE_ERROR, "header callback aborted"); }
   }
 
-  /* body: stream through WRITEFUNCTION until clean EOF */
+  /* body: WAIT-first drain through WRITEFUNCTION until clean EOF */
   CURLcode rc = CURLE_OK;
   for (;;) {
-    int n = __http_read(id, g_rdbuf, READ_CHUNK);
+    int n = (int)read(fd, g_rdbuf, READ_CHUNK);
     if (n > 0) {
       if (emit_body(h, g_rdbuf, (size_t)n)) { rc = fail(h, CURLE_WRITE_ERROR, "write callback aborted"); break; }
       h->size_download += n;
       continue;
     }
     if (n == 0) break;                             /* clean EOF */
-    if (errno == EINTR) {
-      if (timed_out(total_deadline)) { rc = fail(h, CURLE_OPERATION_TIMEDOUT, "timed out reading body"); break; }
-      continue;
+    if (errno == EAGAIN || errno == EINTR) {
+      int ws = wait_step(fd, total_deadline);
+      if (ws == 0) continue;
+      rc = ws == -1 ? fail(h, CURLE_OPERATION_TIMEDOUT, "timed out reading body")
+                    : fail(h, CURLE_RECV_ERROR, "no kernel wait (__wait unsupported in this flavor)");
+      break;
+    }
+    if (errno == ETIMEDOUT) {
+      rc = fail(h, CURLE_OPERATION_TIMEDOUT, "timed out reading body");
+      break;
     }
     rc = fail(h, CURLE_RECV_ERROR, "body read failed");
     break;
   }
-  __http_close(id);
-  if (total_deadline > 0) disarm();
+  close(fd);
   if (rc == CURLE_OK && h->verbose)
     fprintf(stderr, "* gucOS libcurl: %d, %ld body bytes\n", status, (long)h->size_download);
   return rc;

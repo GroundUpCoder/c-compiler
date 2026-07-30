@@ -141,7 +141,9 @@ function normalize(out) {
   const status = await haltPromise;
 
   check('gucOS smoke exited 0', status === 0, `status=${status} stderr=${errOut.slice(0, 400)}`);
-  check('no dangling HTTP transfers after halt', kernel._httpXfers.size === 0, String(kernel._httpXfers.size));
+  let danglingHttp = 0;
+  kernel._ofds.forEach((o) => { if (o.kind === 'http') danglingHttp++; });
+  check('no dangling HTTP transfers after halt', danglingHttp === 0, String(danglingHttp));
 
   // Standalone assertions on the gucOS output (hold even without clang).
   const lines = out.split('\n');

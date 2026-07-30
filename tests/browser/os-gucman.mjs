@@ -43,7 +43,8 @@ try {
   await setVt(1);
 
   // The whole __http_* path in one shot: repo index fetch + payload fetch
-  // (streamed HTTP_READ), sha256 verify, staged extract, symlink plant.
+  // (streamed FS_READ over the http fd), sha256 verify, staged extract,
+  // symlink plant.
   // Split needle (`""`) so the typed line's own tty echo can't satisfy the
   // wait (the 0171 rule); the rc lands as `GUC-RC=N` and we assert on N so
   // a failing install fails HERE, loudly, not by timeout.
