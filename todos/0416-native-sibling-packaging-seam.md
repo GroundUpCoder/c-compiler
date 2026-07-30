@@ -114,3 +114,45 @@ That is `todos/CLANG-CPP-EPIC.md` §4 rule 2, and it does not change here.
 
 The `todos` suite checks `todos/LIABILITIES.md`. If a change here rewrites an
 anchored line, re-anchor the entry or retire it in the same commit.
+
+## Result
+
+Landed on branch `0416-native-sibling` (two commits: the rename, then the
+second producer). Sibling side: `gucos-rust` branch `0416-native-sibling`
+adds `tools/mk-overlay.mjs`, the `rust-apps` overlay@1 producer.
+
+**Producer-naming decision (the `## The rename` question): the gate value
+carries the producer — `requires: "native-sibling:clang"` /
+`"native-sibling:rust"`.** Reason: one field, one fact. A separate `producer`
+field beside a bare `requires: "native-sibling"` puts the gate and the
+routing in two fields that can disagree, and every reader (listPackages,
+mkpkg, the drift gate, a human) would have to check both. The value is
+parsed in exactly one place, `os-common nativeSiblingProducer`;
+`listPackages` takes `producers: [...]` and scopes per producer, so "clang
+sibling present, Rust sibling absent" is an expressible, normal state. An
+unknown gate value fails every `mkpkg` run loudly (new check) instead of
+silently vanishing from all enumerations.
+
+- The rename was outright over the token-derived carrier set (25 files, 11
+  package definitions). One deliberate survivor:
+  `tests/serve/test_native_base_purity.js` asserts the OLD value parses to
+  null — the occurrence exists to pin the name dead. The unmerged, dormant
+  `todos/0368` lane (`suite-runner-invariant`) still carries the PRE-0383
+  `packages/python-clang.json` and now sits two renames behind; it was not
+  touched (its reviver rebases before any re-gate).
+- `mkpkg --rust` beside `--clang` as independent booleans over a SIBLINGS
+  registry; per-producer preflight/drift-gate/unpackaged list; the 0388
+  one-writer lock and --pool semantics unchanged.
+- `serve.js --packages-index=rust` (comma list, per-producer card guard).
+- `packages/wc-rust.json` — the first `-rust` package, consuming the
+  sibling's published overlay sha256-verified through the one loadOverlays
+  verifier (never the test fixture).
+- Base image proven BYTE-IDENTICAL vs origin/main on the plain (deploy)
+  shape, with a same-invocation positive control; the fat shape is
+  nondeterministic on main itself (quake `__TIME__`, proven main-vs-main)
+  — fold set and version compared identical instead. Details:
+  `logs/2026-07-30/0416-native-sibling.md`.
+- Tests: `test_mkpkg_rust.js` (host; purity + POSITIVE control same run,
+  sha256 refusal, absent-sibling exit 1 + fix, drift gate, gate
+  validation), `test_rust_pkgs_e2e.js` (kernel, real overlay, SKIP-absent),
+  `os-rust.mjs` (browser sweep; the todos/0413-deferred terminal leg).
