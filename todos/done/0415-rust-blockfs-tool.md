@@ -1,6 +1,6 @@
 # 0415 — A real `-rust` tool over BlockFS (Lane A3)
 
-- **Status**: open
+- **Status**: done (2026-07-30)
 - **Design**: `todos/RUST.md` §2 and §3.
 - **Provenance**: the Rust program, filed 2026-07-29.
 
@@ -70,3 +70,38 @@ proves it: read a file that is larger than one transfer, and assert the count.
 
 The `todos` suite checks `todos/LIABILITIES.md`. If a change here rewrites an
 anchored line, re-anchor the entry or retire it in the same commit.
+
+## Result
+
+Shipped 2026-07-30. The crate is `crates/wc-rust` in the gucos-rust
+sibling (branch `0415-rust-wc` @ c00ae8a). It depends on `gucos-sys`
+only. The committed fixture is `tests/kernel/fixtures/wc-rust/`
+(sha256 beside it; 20,511 bytes). The consumer branch is `0415-rust-wc`
+@ 71156ae5.
+
+The tool replicates the busybox applet as the estate builds it, with
+locale and unicode off. That configuration is not the GNU algorithm:
+the word separators are the space, `\t`, `\n`, `\v`, `\f`, `\r` and the
+end of the input; every other byte outside 0x21–0x7e is ignored; `-m`
+equals `-c`; `-L` totals as the maximum. The tool also implements `-m`
+and `-L`, the `-` operand, and the non-permuting option scan, because
+the estate's libc `getopt` does not permute. A hand-written expected
+string can encode a bug, so the test compares the two tools on the same
+inputs in the same booted OS, and the corpus carries each
+divergence-prone byte class.
+
+The two read loops have one test each, and the ticket's single big-file
+arm was not sufficient. `RemoteFS.read` reassembles a short transfer
+only for a regular file (`_isRegularFd`, `S_IFREG`). The LARGE REGULAR
+FILE leg therefore proves the kernel's loop. The LARGE PIPED STDIN leg
+proves the tool's own loop, because the kernel never reassembles a pipe
+read. The input is `5 * KP_FS_CHUNK + 12347` bytes, past the 256K pipe
+ring; `KP_FS_CHUNK` is read from `kernel.js`'s exports.
+
+Numbers: `test_rust_e2e.js` 49 checks green with the sibling present.
+Kernel suite 137/137 passed, 137/137 recorded (`runs[0]` executed=137,
+filter null). The registry stays at 137 files — the legs ride the
+existing registered file. The freshness legs rebuilt all three
+artifacts byte-identical. Gotcha for the next fixture: the root
+`.gitignore` bans `*.wasm` and allowlists each fixture by name; a new
+fixture needs its own `!` line.

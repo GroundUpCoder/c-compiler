@@ -120,7 +120,6 @@
     { "id": "0409" },
     { "id": "0411", "priority": 2 },
     { "id": "0424", "priority": 2, "difficulty": "light", "after": ["0421"] },
-    { "id": "0415", "priority": 0, "difficulty": "light", "blockedBy": ["0414"] },
     { "id": "0416", "priority": 0, "difficulty": "medium", "blockedBy": ["0415"], "after": ["0383"] },
     { "id": "0417", "priority": 0, "difficulty": "medium" },
     { "id": "0426", "difficulty": "heavy" },
