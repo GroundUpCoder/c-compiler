@@ -31606,19 +31606,24 @@ long fpathconf(int fd, int name) {
  *   2. AT_FDCWD resolves against the current working directory.
  *   3. Anything else resolves against the directory the fd refers to.
  *
- * Cases 1 and 2 are implemented exactly. Case 3 cannot arise on this
- * platform: no file descriptor here can refer to a directory (BlockFS.open
- * answers EISDIR, there is no O_DIRECTORY, and opendir(3) returns a DIR*
- * from a separate handle namespace, not an fd). So the POSIX-correct answer
- * is the one below — EBADF if the fd is not open at all, ENOTDIR if it is
- * open but is not a directory, which is the literal truth for every fd this
- * system can produce.
+ * Cases 1 and 2 are implemented exactly. Case 3 cannot arise FROM C CODE
+ * on this platform: the fs layer grew O_DIRECTORY directory fds in
+ * todos/0442 (the wasip1 "/" preopen must be a real fd), but this libc
+ * still exposes no O_DIRECTORY constant, no dirfd(3) and no fdopendir(3)
+ * (opendir(3) returns a DIR* from a separate handle namespace, not an
+ * fd) — so no fd a C program can mint refers to a directory, and the
+ * answer below stays the literal truth for those. One recorded corner: a
+ * two-namespace wasip1 module holds a real directory fd (its preopen)
+ * and could pass it to a "c" *at call, which then answers ENOTDIR
+ * falsely; recovering the directory's path there is 0400's remaining
+ * work.
  *
- * That is a real limit, not a shortcut, and it is the whole content of
+ * That is a real limit, not a shortcut, and it is the remaining content of
  * todos/0400 (directory file descriptors: O_DIRECTORY, dirfd(3), fdopendir(3))
- * — an fs/kernel capability rather than a libc gap, which is why it is
- * ticketed separately. When it lands, __at_ok() is the ONE function that
- * changes and the entire family below becomes dirfd-capable for free.
+ * — the fs/kernel substrate landed via todos/0442; the libc surface (the
+ * O_DIRECTORY constant, dirfd/fdopendir, fchdir, this recovery) is what
+ * is left. When it lands, __at_ok() is the ONE function that changes and
+ * the entire family below becomes dirfd-capable for free.
  */
 static int __at_ok(int dirfd, const char *path) {
   if (path && path[0] == '/') return 0;      /* absolute: dirfd is ignored */

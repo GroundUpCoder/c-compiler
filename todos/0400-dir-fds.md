@@ -29,6 +29,24 @@ libarchive's extraction, CPython's `os.*` dir_fd arguments) cannot use it.
 
 `fchdir(2)` is absent for exactly the same reason and lands with this.
 
+## Status update (2026-07-30, via `todos/0442`)
+
+The FS/KERNEL SUBSTRATE — plan steps 1 and 2 — landed with the wasip1 shim
+(`todos/0442` needed the `/` preopen to be a real fd). `BlockFS.open` takes
+`O_DIRECTORY` (Linux `0x10000`): a read-only directory open succeeds as a
+`dir: true` fd entry, `read(2)` on it answers `EISDIR`, `fstat`/`close`/`dup`
+work, write intent refuses, and the flag passes through MountFS and the
+kernel `FS_OPEN`/RemoteFS path unchanged (`tests/kernel/test_rust_std_e2e.js`
+carries the unit legs). Deliberately UNCHANGED: a plain `O_RDONLY` open of a
+directory still answers `EISDIR` — the libc exposes no `O_DIRECTORY`
+constant yet, so flipping that to the POSIX answer stays this ticket's call.
+
+What remains is the LIBC SURFACE: the `O_DIRECTORY` constant, `dirfd(3)` /
+`fdopendir(3)`, the `__at_ok()` recovery (a real directory fd passed to a
+`"c"` `*at` call still answers `ENOTDIR` falsely — the one cross-namespace
+corner a wasip1 module can reach today), `fchdir(2)`, and the `*at` tests'
+real-dirfd cases.
+
 ## Plan
 
 Sketch, not a decision:

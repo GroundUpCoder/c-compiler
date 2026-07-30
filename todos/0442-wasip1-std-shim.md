@@ -161,3 +161,93 @@ and it then certifies the wrong lane.** These corrections win over the arms as w
   is **ignored** in the `--list` form. The runnable invocation is
   **`node tests/run.js --diff --dry-run`** (`tests/run.js:452`, documented at `:13` and
   `:735`). `--list`/`--list-suites` is a different flag that lists suites.
+
+## Result (2026-07-30)
+
+Shipped. A normal Rust bin crate — `fn main()`, upstream std, stable
+`rustc`, `wasm32-wasip1` — runs in gucOS standalone and in-OS, with a
+`gucos-sys` `"c"` call in the same module.
+
+**The shim.** `BlockFS.prototype.toWasiPreview1(ctx, opts)` in `host.js` —
+a prototype method, NOT the planned `createWasiPreview1(ctx)` shape,
+because the fd/path family needs the fs instance (census gap 3; the
+`toWasmEnv` precedent). `toWasmEnv` registers its instance on `ctx.fs`, so
+every bootstrap (BlockFS standalone, RemoteFS in every OS process) gets
+the shim with zero bootstrap changes. `runModule` attaches the namespace
+only when the module imports it; the Node-fs flavor refuses loudly.
+
+**The served/absent split (the arm-6 contradiction, resolved).**
+- REAL (36): `args`/`environ` ×4, clocks ×2, `random_get`, `proc_exit`,
+  `fd_read`/`fd_write`/`fd_pread`/`fd_pwrite`/`fd_close`/`fd_seek`/
+  `fd_tell`/`fd_sync`/`fd_datasync`/`fd_fdstat_get`/`fd_filestat_get`/
+  `fd_filestat_set_size`/`fd_filestat_set_times`/`fd_readdir`/
+  `fd_renumber`/`fd_prestat_get`/`fd_prestat_dir_name`, all ten `path_*`,
+  `poll_oneoff`.
+- Honest no-op success (2): `fd_advise` (advisory by specification),
+  `sched_yield` (single-threaded cooperative).
+- SERVED, `ENOTSUP` (3): `fd_fdstat_set_flags`, `fd_fdstat_set_rights`,
+  `fd_allocate` — runtime fd-state mutations; the loud answer is an errno
+  at the call site, not a LinkError after the program already ran.
+- ABSENT, LinkError names module+symbol (5): `sock_accept`, `sock_recv`,
+  `sock_send`, `sock_shutdown`, `proc_raise` — capability families gucOS
+  serves through `"c"` (or not at all); a runtime stub would be a second
+  door to a `"c"` capability.
+
+**Entry contract (plan step 3), decided and recorded in `RUST.md` §2:**
+the module keeps wasip1's own convention — imports the namespace, exports
+`_start` and no `main` ⇒ the host calls `_start()` and skips the
+host-played crt0 entirely (no `alloca`/`main` export needed; argv/envp via
+`args_get`/`environ_get`; normal return = exit 0; both exit paths route
+through the `"c"` `__exit`, so the ordered exit handshake runs). The
+`cdylib`-exporting-`main` alternative was rejected: it would make every
+Rust std program carry a gucOS-specific harness, against the upstream-std
+terms.
+
+**Preopens (plan step 4):** exactly one, `/`, as a REAL fd (census gap 4).
+Substrate: `BlockFS.open` grew `O_DIRECTORY` (0x10000) directory fds —
+the fs/kernel half of `todos/0400`, recorded there; plain
+`O_RDONLY`-on-a-directory deliberately stays `EISDIR` (no C-observable
+change; the libc constant is 0400's remaining work).
+
+**poll_oneoff (plan step 2):** kernel path calls `hooks.waitMulti` with
+BOTH r and w lists in one FS_WAIT (census gap 2 — the read-only `__wait`
+wrapper was not copied; `test_rust_std_e2e.js` carries the regression
+guard), re-poll-on-any-return, EINTR surfaces as WASI `EINTR`. No-kernel
+fallback (census gap 1): readiness scan over the fd table, stdin-SAB futex
+park, `blockingSleepMs` for pure-clock sets — the standalone arm's
+`thread::sleep` runs through it.
+
+**The build rung (plan step 5):** `gucos-rust` branch `0442-wasip1-std` —
+`crates/std-demo` (the fixture source), the `build.sh` wasip1 rung (no C
+runtime objects: wasi-libc owns malloc and gucos-sys's
+`#[global_allocator]` delegates to it — still one heap), and gucos-sys's
+panic handler behind the default `no-std-runtime` feature (std owns it on
+the wasip1 rung; `default-features = false`).
+
+**Arms actually closed vs already green:** "no nightly installed" and
+"wasm32-wasip1 installed" were ALREADY TRUE at spawn and are not this
+lane's work. The real arm closed: `build.sh` now REFUSES `-Zbuild-std`
+(env + args, exit 1 naming the 0418 ruling, before any cargo runs) —
+tested with the plain build as positive control.
+
+**Tests:** `tests/kernel/test_rust_std_e2e.js` (registered in the kernel
+suite): fixture sha256, two-namespace module shape, shim unit legs
+(preopen-is-a-real-fd, O_DIRECTORY substrate, poll_oneoff × {pure-clock,
+pipe-fd, kernel-stub-both-lists, EINTR}, served/absent split incl. real
+LinkError instantiation), standalone arms (full output, `$?`, exit7,
+panic, Node-fs refusal), in-OS shell-spawned arms, sibling freshness +
+the `-Zbuild-std` refusal. Fixture:
+`tests/kernel/fixtures/std-rust/std-rust.wasm` (sha256-pinned;
+gitignore-allowlisted). The gucos-sys feature-gate changed the crate
+metadata hash, so the hello/alloc/wc fixtures were refreshed in the same
+commit (bytes differ, behavior identical — `test_rust_e2e.js` re-run
+green, 58 checks; overlay regenerated, `test_rust_pkgs_e2e.js` green).
+
+**Recorded limits (also in `RUST.md` §2):** wasi-libc's emulated cwd
+starts at `/` regardless of the spawn cwd (a preview-1 property, not
+ours); the `"c"` errno bridge (`__errno_set`) is absent on this rung
+unless a provider is linked; a panic under upstream `panic=abort` ends in
+a trap (host reports nonzero + the stderr message), not `__exit(101)`;
+`std::net` is unsupported by construction. A kernel predating FS_WAIT
+answers `poll_oneoff` with `ENOSYS` loudly (no chunked-poll fallback —
+every current kernel has 0178).

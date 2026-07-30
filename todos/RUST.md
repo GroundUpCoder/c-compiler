@@ -109,6 +109,44 @@ name. `time_t` crosses as i64.
 
 **There is no dynamic linking.** Everything links statically into one module.
 
+### The wasip1 entry — the `todos/0442` amendment
+
+A wasip1 std module does not follow the host-played crt0 contract above. The
+host detects the shape and uses the wasip1 convention instead.
+
+- **Detection.** The module imports `wasi_snapshot_preview1`, exports
+  `_start`, and does not export `main`. The host then calls `_start()` and
+  does not touch `alloca` or `__set_environ`. Such a module does not need
+  the `alloca` or `main` exports.
+- **Arguments and environment.** The program pulls argv and envp through
+  `args_get` and `environ_get`. The shim serves them from the same values
+  that the host lays out for a `"c"` module.
+- **Exit.** A normal return from `_start` is exit 0. A nonzero exit goes
+  through `proc_exit`. Both paths run the ordered exit handshake of the
+  kernel.
+- **Both namespaces in one module.** `gucos-sys` compiles unchanged for
+  `wasm32-wasip1` with `default-features = false` — the standard library
+  owns the panic handler on that rung. Every `"c"` rule above applies to
+  the `"c"` imports of the module.
+- **The runtime.** The shim is `BlockFS.prototype.toWasiPreview1` in
+  `host.js`. It delegates to the same fs method surface as `toWasmEnv`, so
+  BlockFS (standalone `--block-fs`) and RemoteFS (each OS process) share
+  one shim. The Node-fs flavor of `node host.js` does not serve the
+  namespace and refuses with an actionable message.
+- **Preopens.** The shim preopens exactly ONE directory: `/`. The preopen
+  is a REAL fd in the process fd table, opened before wasm runs, so it
+  takes the lowest free fd — 3 in the normal spawn shape. wasi-libc probes
+  the fds from 3 up and stops at the first `EBADF`. Do not seed extra fds
+  above 2 into a wasip1 process: an fd below the preopen stops the probe
+  early.
+- **Recorded limits.** WASI preview 1 has no process cwd. wasi-libc
+  emulates one, and it starts at `/` in every process, whatever cwd the
+  spawn set. The `"c"` errno bridge (`__errno_set`) is absent unless the
+  module links a provider, so a failed `"c"` call reports through its
+  return value only. `std::net` stays unsupported — the four `sock_*`
+  imports are absent from the shim on purpose, and a module that imports
+  one fails at instantiation with the name.
+
 ---
 
 ## 3. The architecture rules
@@ -154,7 +192,7 @@ These rules bind every ticket in the program.
 | `0416` | A4 | The `native-sibling` packaging seam. |
 | `0417` | B1 | HTTP transfers become OFDs. |
 | `0418` | C1 | The standard-library decider. Ruled 2026-07-30: option (b), wasip1. |
-| `0442` | C2 | std on wasip1: the `wasi_snapshot_preview1` shim. Filed by the 0418 ruling. |
+| `0442` | C2 | std on wasip1: the `wasi_snapshot_preview1` shim. Shipped 2026-07-30 (`toWasiPreview1` in host.js; the wasip1 entry in §2). |
 
 | `0445` | C3 | codex feasibility: close the census nulls (the numbers D1 rules on). |
 | `0446` | A5 | `gucos-sys::http` still binds the HTTP ABI that `0417` retired. |

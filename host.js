@@ -2910,6 +2910,17 @@ var BLOCK_FS = (function () {
     var trunc = !!(flags & 0x200);
     var append = !!(flags & 0x400);
     var excl = !!(flags & 0x80);
+    // O_DIRECTORY (Linux 0x10000) — the directory-fd substrate of
+    // todos/0400, landed via todos/0442 (the wasip1 preopen must be a REAL
+    // fd in this table). With the bit set, a read-only open of a directory
+    // succeeds as a `dir: true` entry (fstat/close/dup work; read() answers
+    // EISDIR; write intent refuses). WITHOUT the bit, a directory target
+    // keeps the historical EISDIR answer — the libc exposes no O_DIRECTORY
+    // constant yet, so no C-observable behavior changes here; flipping
+    // plain O_RDONLY-on-a-directory to the POSIX answer is 0400's call.
+    var wantDir = !!(flags & 0x10000);
+    if (wantDir && ((flags & 3) !== 0 || create || trunc || append || excl))
+      return this._setErr('EISDIR');
 
     var resolved = this._resolvePath(path);
     var w = this._walkPath(resolved);
@@ -2948,7 +2959,15 @@ var BLOCK_FS = (function () {
 
     if (w) {
       // Exists
-      if ((w.ino.mode & S_IFMT) === S_IFDIR) return this._setErr('EISDIR');
+      if ((w.ino.mode & S_IFMT) === S_IFDIR) {
+        if (!wantDir) return this._setErr('EISDIR');
+        // Directory fd (O_DIRECTORY, read-only — refused above otherwise).
+        this._inoRef(w.inoId);
+        return this._allocFd({
+          inoId: w.inoId, position: 0, accmode: 0, dir: true, path: resolved
+        });
+      }
+      if (wantDir) return this._setErr('ENOTDIR');
       if (excl && create) return this._setErr('EEXIST');
       // A socket node (todos/0008 rendezvous) is not open()able — POSIX ENXIO.
       if ((w.ino.mode & S_IFMT) === S_IFSOCK) return this._setErr('ENXIO');
@@ -3058,6 +3077,10 @@ var BLOCK_FS = (function () {
     // O_ACCMODE — O_WRONLY (1) can't read. Entries not born from open()
     // (console stdio, pipe ends — checked by direction below) carry none.
     if (entry.accmode === 1) return this._setErr('EBADF');
+
+    // A directory fd (O_DIRECTORY, todos/0442) has a real extent — raw
+    // dirent bytes — but read(2) on a directory is EISDIR, not a data leak.
+    if (entry.dir === true) return this._setErr('EISDIR');
 
     if (entry.type === 'pipe') {
       // The write end can't read (todos/0376 — same class, fixed direction).
@@ -4281,6 +4304,13 @@ var BLOCK_FS = (function () {
     var writeErr = ctx.writeErr;
     var self = this;
 
+    // Register the fs INSTANCE on the runtime context (todos/0442): sibling
+    // namespaces built later — toWasiPreview1's fd/path family — delegate to
+    // this same method surface, and the env object alone does not carry it.
+    // Every bootstrap that calls toWasmEnv (BlockFS directly, or REUSED over
+    // a RemoteFS via .call) registers its instance for free here.
+    ctx.fs = self;
+
     // Wire the optional live-stdin sab (interactive page). Absent → stdin
     // stays pre-buffered/EOF and select reports it always-ready (old path).
     if (ctx.stdinSab) self.setStdinSab(ctx.stdinSab);
@@ -4792,6 +4822,857 @@ var BLOCK_FS = (function () {
       fsync: wrap(function (fd) { return this.fsync(fd); }),
       fdatasync: wrap(function (fd) { return this.fsync(fd); }),
     };
+  };
+
+  /* ==========================================================================
+   * wasi_snapshot_preview1 — the ONE sanctioned second import namespace
+   * (todos/0442; authority: todos/RUST.md §3 rule 1 as amended by the
+   * todos/0418 ruling). Serves upstream-std wasip1 modules (Rust
+   * wasm32-wasip1) by DELEGATING to the same fs method surface toWasmEnv
+   * uses — `this.open`, `this.read`, … — so BlockFS (in-process) and
+   * RemoteFS (kernel RPCs) share one shim exactly as they share one env.
+   * Like toWasmEnv, this is a prototype method REUSED over RemoteFS
+   * (`BlockFS.prototype.toWasiPreview1.call(rfs, ctx, opts)`): the
+   * `createWasiPreview1(ctx)` factory shape the 0442 plan named cannot
+   * build the fd/path family, because it never sees the fs instance (the
+   * census's gap 3).
+   *
+   * THE SERVED / ABSENT SPLIT (the 0442 arm-6 contradiction, resolved):
+   *   - REAL (36): args/environ x4, clock x2, random_get, proc_exit,
+   *     the fd family less the three below, all ten path_*, poll_oneoff.
+   *   - HONEST NO-OP SUCCESS (2): fd_advise (advisory by specification),
+   *     sched_yield (single-threaded cooperative process).
+   *   - SERVED, ENOTSUP (3): fd_fdstat_set_flags, fd_fdstat_set_rights,
+   *     fd_allocate — fd-state mutations a running program may reach
+   *     through fcntl/posix_fallocate at RUNTIME; the loud POSIX-shaped
+   *     answer is an errno, not a LinkError after the program already ran.
+   *   - ABSENT, so instantiation LinkErrors naming module+symbol (5):
+   *     sock_accept, sock_recv, sock_send, sock_shutdown, proc_raise.
+   *     These are whole capability families gucOS serves through "c" (or
+   *     not at all): preview-1-shaped sockets and signal-raise here would
+   *     be a second door to a "c" capability — the zombie-fallback shape.
+   *
+   * Preopens: exactly ONE, the fd of "/", opened at shim build as a REAL
+   * fd in the process fd table (census gap 4 — the "c" namespace shares
+   * this fd space, so a shim-private numbering would collide). wasi-libc
+   * probes fds 3.. with fd_prestat_get until EBADF; the shim is built
+   * before wasm runs, so the preopen takes the lowest free fd (3 in the
+   * normal spawn shape). A spawner that seeds extra fds >= 3 would sit
+   * below the preopen and stop the probe early — recorded in RUST.md §2.
+   *
+   * poll_oneoff: kernel path is ONE hooks.waitMulti (FS_WAIT) call with
+   * BOTH the read and write fd lists (census gap 2 — the existing __wait
+   * wrapper narrows to read fds; do not copy it). No-kernel fallback is
+   * the __select_impl model (census gap 1): synchronous readiness scan,
+   * stdin-SAB futex park, blockingSleepMs for pure-clock sets.
+   * ========================================================================== */
+  BlockFS.prototype.toWasiPreview1 = function (ctx, opts) {
+    var self = this;
+    opts = opts || {};
+    var hooks = opts.hooks || null;         // kernel spawnHooks (waitMulti) or null
+    var procExit = opts.procExit;           // (code) -> reports + throws ExitStatus
+    var getMemory = ctx.getMemory;
+
+    var enc = new TextEncoder();
+    var dec = new TextDecoder('utf-8');
+    function view() { return new DataView(getMemory().buffer); }
+    function heap() { return new Uint8Array(getMemory().buffer); }
+    function readPath(ptr, len) {
+      return dec.decode(heap().subarray(ptr >>> 0, (ptr >>> 0) + (len >>> 0)));
+    }
+
+    // ---- errno: host.js names -> WASI preview 1 numbers ----
+    var W = {
+      ESUCCESS: 0, E2BIG: 1, EACCES: 2, EADDRINUSE: 3, EADDRNOTAVAIL: 4,
+      EAFNOSUPPORT: 5, EAGAIN: 6, EALREADY: 7, EBADF: 8, EBADMSG: 9,
+      EBUSY: 10, ECANCELED: 11, ECHILD: 12, ECONNABORTED: 13,
+      ECONNREFUSED: 14, ECONNRESET: 15, EDEADLK: 16, EDESTADDRREQ: 17,
+      EDOM: 18, EDQUOT: 19, EEXIST: 20, EFAULT: 21, EFBIG: 22,
+      EHOSTUNREACH: 23, EIDRM: 24, EILSEQ: 25, EINPROGRESS: 26, EINTR: 27,
+      EINVAL: 28, EIO: 29, EISCONN: 30, EISDIR: 31, ELOOP: 32, EMFILE: 33,
+      EMLINK: 34, EMSGSIZE: 35, EMULTIHOP: 36, ENAMETOOLONG: 37,
+      ENETDOWN: 38, ENETRESET: 39, ENETUNREACH: 40, ENFILE: 41,
+      ENOBUFS: 42, ENODEV: 43, ENOENT: 44, ENOEXEC: 45, ENOLCK: 46,
+      ENOLINK: 47, ENOMEM: 48, ENOMSG: 49, ENOPROTOOPT: 50, ENOSPC: 51,
+      ENOSYS: 52, ENOTCONN: 53, ENOTDIR: 54, ENOTEMPTY: 55,
+      ENOTRECOVERABLE: 56, ENOTSOCK: 57, ENOTSUP: 58, ENOTTY: 59,
+      ENXIO: 60, EOVERFLOW: 61, EOWNERDEAD: 62, EPERM: 63, EPIPE: 64,
+      EPROTO: 65, EPROTONOSUPPORT: 66, EPROTOTYPE: 67, ERANGE: 68,
+      EROFS: 69, ESPIPE: 70, ESRCH: 71, ESTALE: 72, ETIMEDOUT: 73,
+      ETXTBSY: 74, EXDEV: 75, ENOTCAPABLE: 76,
+    };
+    function werrno(name) {
+      if (name === 'EOPNOTSUPP') return W.ENOTSUP;
+      return (name in W) ? W[name] : W.EIO;
+    }
+    // The failure spelling of the "c" convention (-1/null + _lastError).
+    function wfail() { return werrno(self._lastError || 'EIO'); }
+    function isFail(r) { return r === null || (typeof r === 'number' && r < 0); }
+
+    // ---- filetypes: gucOS mode / DT_* -> WASI filetype ----
+    var FT_UNKNOWN = 0, FT_BLOCK = 1, FT_CHAR = 2, FT_DIR = 3, FT_REG = 4,
+        FT_SYMLINK = 7;
+    function filetypeOfMode(mode) {
+      switch (mode & S_IFMT) {
+        case S_IFDIR: return FT_DIR;
+        case S_IFREG: return FT_REG;
+        case S_IFLNK: return FT_SYMLINK;
+        case S_IFCHR: return FT_CHAR;
+        default: return FT_UNKNOWN;
+      }
+    }
+    function filetypeOfDt(dt) {  // Linux DT_* (readdir ents)
+      switch (dt) {
+        case 4: return FT_DIR;
+        case 8: return FT_REG;
+        case 10: return FT_SYMLINK;
+        case 2: return FT_CHAR;
+        case 6: return FT_BLOCK;
+        default: return FT_UNKNOWN;
+      }
+    }
+
+    // ---- clocks (ids: 0 realtime, 1 monotonic, 2/3 cputime) ----
+    // One nanosecond source shared by clock_time_get AND poll_oneoff's
+    // ABSTIME math, so a deadline computed against the clock can never
+    // race the clock's own readings. cputime maps to monotonic: the
+    // process is single-threaded and this host has no per-process CPU
+    // accounting (the /proc design records the same answer).
+    var monoLastMs = 0;
+    function clockNowNs(id) {
+      if (id === 0) return BigInt(Date.now()) * 1000000n;
+      if (id === 1 || id === 2 || id === 3) {
+        var ms = performance.now();
+        if (ms < monoLastMs) ms = monoLastMs; else monoLastMs = ms;
+        return BigInt(Math.round(ms * 1e6));
+      }
+      return null;
+    }
+
+    // ---- shim-side fd state ----
+    // dirState: fd -> { path, entries } for every DIRECTORY fd the shim
+    // minted (the preopen + path_open O_DIRECTORY results). The fds are
+    // REAL entries in the process fd table (BlockFS O_DIRECTORY, 0x10000);
+    // this map only carries what the fd table cannot: the resolved path
+    // (fd_readdir reopens by path; path_* joins against it) and the
+    // per-open dirent snapshot for fd_readdir's cookie replay.
+    var dirState = new Map();
+    var appendFds = new Set();   // fds opened with WASI fdflags APPEND
+    var O_DIRECTORY = 0x10000;
+
+    // ---- the "/" preopen — one REAL fd, opened before wasm runs ----
+    var preopenFd = self.open('/', O_DIRECTORY, 0);
+    if (isFail(preopenFd)) {
+      throw new Error('wasi_snapshot_preview1: cannot open the "/" preopen: ' +
+        (self._lastError || 'unknown error'));
+    }
+    dirState.set(preopenFd, { path: '/', entries: null });
+
+    function joinPath(base, rel) {
+      if (rel.length === 0) return base;
+      if (rel.charCodeAt(0) === 47) return rel;   // absolute: dirfd ignored
+      return (base === '/' ? '' : base) + '/' + rel;
+    }
+    // dirfd resolution shared by the whole path_* family. Returns the base
+    // path, or a WASI errno number.
+    function dirBase(fd) {
+      var st = dirState.get(fd);
+      if (st) return st.path;
+      var f = self.fstat(fd);
+      return (f && typeof f === 'object') ? W.ENOTDIR : W.EBADF;
+    }
+
+    function fdIsTty(fd) {
+      if (fd >= 0 && fd <= 2 && self._stdinSab) return true;
+      var t = self.isatty(fd);
+      return t === 1 || t === true;
+    }
+
+    // 64-byte WASI filestat from a gucOS stat object.
+    function writeFilestat(bufPtr, st) {
+      var v = view();
+      v.setBigUint64(bufPtr, 0n, true);                                // dev
+      v.setBigUint64(bufPtr + 8, BigInt(st.ino >>> 0), true);          // ino
+      v.setBigUint64(bufPtr + 16, 0n, true);                           // (filetype cell zeroed)
+      v.setUint8(bufPtr + 16, filetypeOfMode(st.mode));
+      v.setBigUint64(bufPtr + 24, BigInt(st.nlink || 1), true);
+      v.setBigUint64(bufPtr + 32, BigInt(st.size || 0), true);
+      function ns(sec, nsec) {
+        return BigInt(sec || 0) * 1000000000n + BigInt(Math.round(nsec || 0));
+      }
+      v.setBigUint64(bufPtr + 40, ns(st.atime, st.atimeNsec), true);
+      v.setBigUint64(bufPtr + 48, ns(st.mtime, st.mtimeNsec), true);
+      v.setBigUint64(bufPtr + 56, ns(st.ctime, st.ctimeNsec), true);
+    }
+
+    // Per-open dirent snapshot via the path-keyed stream API (the shim's
+    // dir fds carry their resolved path). POSIX already leaves concurrent
+    // mutation during iteration unspecified, so a snapshot per rewind
+    // (cookie 0) is sound — and it is what makes preview 1's cookie replay
+    // O(1) over gucOS's forward-only one-entry-per-call streams.
+    function dirSnapshot(path) {
+      var h = self.opendir(path);
+      if (isFail(h)) return null;
+      var out = [];
+      for (;;) {
+        var ent = self.readdir(h);
+        if (ent === null) break;                       // end of directory
+        if (typeof ent === 'number' && ent < 0) {      // real failure
+          self.closedir(h);
+          return null;
+        }
+        out.push(ent);
+      }
+      self.closedir(h);
+      return out;
+    }
+
+    // ---- iovec loops (shared by fd_read/fd_write/fd_pread/fd_pwrite) ----
+    function readv(fd, iovsPtr, iovsLen) {
+      var v = view();
+      var total = 0;
+      for (var i = 0; i < iovsLen; i++) {
+        var bufPtr = v.getUint32(iovsPtr + i * 8, true);
+        var bufLen = v.getUint32(iovsPtr + i * 8 + 4, true);
+        if (bufLen === 0) continue;
+        var n = self.read(fd, heap().subarray(bufPtr, bufPtr + bufLen), bufLen);
+        if (isFail(n)) return total > 0 ? total : -1;
+        total += n;
+        if (n < bufLen) break;                         // short read: done
+      }
+      return total;
+    }
+    function writev(fd, iovsPtr, iovsLen) {
+      // Keep toWasmEnv's console fast path (the census's fd_write rule):
+      // ONLY the default 0/1/2 entries carry the positive `console`
+      // capability; a dup2'd pipe/file entry — and every RemoteFS fd —
+      // falls through to this.write so redirection and the FS_WRITE RPC
+      // keep working.
+      var e = (fd === 1 || fd === 2) ? self._fdTable[fd] : null;
+      var consoleFast = !!(e && e.console === true);
+      var v = view();
+      var total = 0;
+      for (var i = 0; i < iovsLen; i++) {
+        var bufPtr = v.getUint32(iovsPtr + i * 8, true);
+        var bufLen = v.getUint32(iovsPtr + i * 8 + 4, true);
+        if (bufLen === 0) continue;
+        var chunk = heap().subarray(bufPtr, bufPtr + bufLen);
+        if (consoleFast) {
+          if (fd === 1) ctx.writeOut(chunk); else ctx.writeErr(chunk);
+          total += bufLen;
+          continue;
+        }
+        var n = self.write(fd, chunk, bufLen);
+        if (isFail(n)) return total > 0 ? total : -1;
+        total += n;
+        if (n < bufLen) break;
+      }
+      return total;
+    }
+
+    /* ---- poll_oneoff ------------------------------------------------- */
+    var SUB_SIZE = 48, EVT_SIZE = 32;
+    var EVT_CLOCK = 0, EVT_FD_READ = 1, EVT_FD_WRITE = 2;
+    function pollOneoff(inPtr, outPtr, nsubs, neventsPtr) {
+      if (nsubs === 0) return W.EINVAL;
+      var v = view();
+      var subs = [];
+      var i;
+      for (i = 0; i < nsubs; i++) {
+        var base = inPtr + i * SUB_SIZE;
+        var s = {
+          userdata: v.getBigUint64(base, true),
+          tag: v.getUint8(base + 8),
+        };
+        if (s.tag === EVT_CLOCK) {
+          s.clockId = v.getUint32(base + 16, true);
+          s.timeout = v.getBigUint64(base + 24, true);
+          s.abstime = (v.getUint16(base + 40, true) & 1) !== 0;
+        } else if (s.tag === EVT_FD_READ || s.tag === EVT_FD_WRITE) {
+          s.fd = v.getInt32(base + 16, true);
+        } else {
+          return W.EINVAL;
+        }
+        subs.push(s);
+      }
+
+      var events = [];
+      function pushEvent(sub, errno, extra) {
+        events.push({ userdata: sub.userdata, errno: errno, type: sub.tag,
+                      nbytes: (extra && extra.nbytes) || 0n,
+                      flags: (extra && extra.flags) || 0 });
+      }
+      function commit() {
+        var ov = view();
+        for (var e = 0; e < events.length; e++) {
+          var p = outPtr + e * EVT_SIZE;
+          var ev = events[e];
+          ov.setBigUint64(p, ev.userdata, true);
+          ov.setUint16(p + 8, ev.errno, true);
+          ov.setUint8(p + 10, ev.type);
+          ov.setUint32(p + 11, 0, true);                // padding
+          ov.setBigUint64(p + 16, ev.nbytes, true);
+          ov.setUint16(p + 24, ev.flags, true);
+          ov.setUint32(p + 26, 0, true);
+          ov.setUint16(p + 30, 0, true);
+        }
+        ov.setUint32(neventsPtr, events.length, true);
+        return 0;
+      }
+
+      // Split: fd interest lists + the minimum clock deadline (ms, host
+      // monotonic domain). ABSTIME converts against the SAME clock source
+      // clock_time_get serves.
+      var rfds = [], wfds = [], clockSubs = [];
+      for (i = 0; i < subs.length; i++) {
+        var su = subs[i];
+        if (su.tag === EVT_FD_READ) rfds.push(su.fd);
+        else if (su.tag === EVT_FD_WRITE) wfds.push(su.fd);
+        else clockSubs.push(su);
+      }
+      var deadline = null;   // absolute Date.now() ms
+      for (i = 0; i < clockSubs.length; i++) {
+        var cs = clockSubs[i];
+        var now = clockNowNs(cs.clockId);
+        if (now === null) { pushEvent(cs, W.EINVAL); continue; }
+        var deltaNs = cs.abstime ? (cs.timeout - now) : cs.timeout;
+        var deltaMs = deltaNs <= 0n ? 0 : Number(deltaNs / 1000000n);
+        var due = Date.now() + deltaMs;
+        cs._due = due;
+        if (deadline === null || due < deadline) deadline = due;
+      }
+      // A per-subscription error (an invalid clock id) is an immediate
+      // result — never park past an error event.
+      if (events.length > 0) return commit();
+      function expireClocks() {
+        var nowMs = Date.now();
+        for (var c = 0; c < clockSubs.length; c++) {
+          if (clockSubs[c]._due !== undefined && clockSubs[c]._due <= nowMs + 1) {
+            pushEvent(clockSubs[c], 0);
+          }
+        }
+        if (events.length === 0 && clockSubs.length > 0) {
+          // The wait ended on the clock but rounding hid the earliest sub:
+          // report the earliest one rather than spin.
+          var best = null;
+          for (var b = 0; b < clockSubs.length; b++) {
+            if (clockSubs[b]._due === undefined) continue;
+            if (best === null || clockSubs[b]._due < clockSubs[best]._due) best = b;
+          }
+          if (best !== null) pushEvent(clockSubs[best], 0);
+        }
+      }
+
+      if (hooks && typeof hooks.waitMulti === 'function') {
+        // Kernel path: ONE FS_WAIT per park, BOTH lists (gap 2 — never the
+        // read-only __wait wrapper), re-poll-on-any-return.
+        for (;;) {
+          var timeoutMs = deadline === null ? null
+            : Math.max(0, deadline - Date.now());
+          var resp = hooks.waitMulti({ r: rfds, w: wfds, ring: 0,
+                                       timeoutMs: timeoutMs });
+          if (resp.errno === 'EINTR') return W.EINTR;
+          if (resp.errno) return werrno(resp.errno);
+          if (resp.why === 1) {
+            var rReady = resp.r || [], wReady = resp.w || [];
+            for (i = 0; i < subs.length; i++) {
+              var fs1 = subs[i];
+              if (fs1.tag === EVT_FD_READ && rReady.indexOf(fs1.fd) >= 0) {
+                pushEvent(fs1, 0);
+              } else if (fs1.tag === EVT_FD_WRITE && wReady.indexOf(fs1.fd) >= 0) {
+                pushEvent(fs1, 0);
+              }
+            }
+            if (events.length > 0) return commit();
+            continue;                       // spurious-shaped wake: re-poll
+          }
+          if (resp.why === 0 && deadline !== null) {
+            expireClocks();
+            return commit();
+          }
+          // why 2 (ring — never requested) or a timeout answer with no
+          // deadline of ours: spurious; re-poll (never spin on 0-timeouts —
+          // with no deadline the next FS_WAIT parks again).
+        }
+      }
+
+      // ---- no-kernel fallback: the __select_impl model (gap 1) ----
+      function scanReady() {
+        var found = 0, stdinPending = false;
+        var tbl = self._fdTable;
+        for (var s2 = 0; s2 < subs.length; s2++) {
+          var su2 = subs[s2];
+          if (su2.tag === EVT_CLOCK) continue;
+          var entry = (su2.fd >= 0 && su2.fd < tbl.length) ? tbl[su2.fd] : null;
+          if (!entry) { pushEvent(su2, W.EBADF); found++; continue; }
+          if (su2.tag === EVT_FD_READ) {
+            if (entry.type === 'pipe') {
+              var avail = entry.pipe ? entry.pipe.buffer.length : 0;
+              var hung = entry.pipe ? entry.pipe.closed.write : false;
+              if (avail > 0 || hung) {
+                pushEvent(su2, 0, { nbytes: BigInt(avail), flags: hung ? 1 : 0 });
+                found++;
+              }
+            } else if (entry.console === true) {
+              var ready = self._stdinSab ? self._stdinSabReady() : true;
+              if (ready) { pushEvent(su2, 0); found++; }
+              else stdinPending = true;
+            } else {
+              pushEvent(su2, 0); found++;    // regular files never block
+            }
+          } else {                            // EVT_FD_WRITE
+            var wready = (entry.type === 'pipe') ? !entry.pipe.closed.read : true;
+            if (wready) { pushEvent(su2, 0); found++; }
+          }
+        }
+        return { found: found, stdinPending: stdinPending };
+      }
+      for (;;) {
+        events.length = 0;
+        var sc = scanReady();
+        if (sc.found > 0) return commit();
+        var left = deadline === null ? null : deadline - Date.now();
+        if (left !== null && left <= 0) { expireClocks(); return commit(); }
+        if (sc.stdinPending && _canBlock && self._stdinCtrl) {
+          // Park on the stdin SEQ futex (producer push/EOF bumps it — no
+          // lost wakeup), bounded by the clock deadline; a signal wake is
+          // EINTR, matching __select_impl.
+          var seq = Atomics.load(self._stdinCtrl, SI_SEQ);
+          if (!self._stdinSabReady()) {
+            if (left === null) Atomics.wait(self._stdinCtrl, SI_SEQ, seq);
+            else Atomics.wait(self._stdinCtrl, SI_SEQ, seq, left);
+          }
+          if (self._sigcheck && self._sigcheck() === false) return W.EINTR;
+          continue;                                    // re-scan on wake
+        }
+        if (left !== null) {
+          // Nothing asynchronous to wait on: sleep out the clock.
+          blockingSleepMs(left);
+          events.length = 0;
+          var sc2 = scanReady();
+          if (sc2.found > 0) return commit();
+          expireClocks();
+          return commit();
+        }
+        // No deadline, no ready fd, nothing that can change from another
+        // thread: an unsatisfiable wait. Park to honour the contract when
+        // blocking is legal (the __select_impl discipline); refuse loudly
+        // when it is not — never busy-spin.
+        if (_canBlock) { for (;;) Atomics.wait(_sleepCell, 0, 0); }
+        return W.ENOSYS;
+      }
+    }
+
+    /* ---- the import object -------------------------------------------- */
+    var ns = {
+      // -- args / environ: served from the values the host would otherwise
+      //    lay out via the module's alloca (the host-played crt0). WASI
+      //    inverts the direction; same data, program pulls.
+      args_sizes_get: null, args_get: null,
+      environ_sizes_get: null, environ_get: null,
+
+      clock_time_get: function (id, precision, outPtr) {
+        void precision;
+        var ns1 = clockNowNs(id);
+        if (ns1 === null) return W.EINVAL;
+        view().setBigUint64(outPtr, ns1, true);
+        return 0;
+      },
+      clock_res_get: function (id, outPtr) {
+        if (id < 0 || id > 3) return W.EINVAL;
+        // Millisecond resolution is the truth for Date.now/performance.now
+        // in this host (coarsened timers).
+        view().setBigUint64(outPtr, 1000000n, true);
+        return 0;
+      },
+
+      random_get: function (bufPtr, len) {
+        var g = globalThis.crypto;
+        if (!g || typeof g.getRandomValues !== 'function') return W.EIO;
+        try {
+          var mem = heap().subarray(bufPtr, bufPtr + len);
+          for (var off = 0; off < len; off += 65536) {
+            g.getRandomValues(mem.subarray(off, Math.min(off + 65536, len)));
+          }
+          return 0;
+        } catch (e) { return W.EIO; }   // a FAILURE, never weak bytes
+      },
+
+      proc_exit: function (code) {
+        procExit(code | 0);   // reports to the kernel, then throws ExitStatus
+        throw new Error('proc_exit returned');   // unreachable backstop
+      },
+      sched_yield: function () { return 0; },   // single-threaded cooperative
+
+      fd_read: function (fd, iovsPtr, iovsLen, nreadPtr) {
+        var n = readv(fd, iovsPtr, iovsLen);
+        if (n < 0) return wfail();
+        view().setUint32(nreadPtr, n, true);
+        return 0;
+      },
+      fd_write: function (fd, iovsPtr, iovsLen, nwrittenPtr) {
+        var n = writev(fd, iovsPtr, iovsLen);
+        if (n < 0) return wfail();
+        view().setUint32(nwrittenPtr, n, true);
+        return 0;
+      },
+      fd_pread: function (fd, iovsPtr, iovsLen, offset, nreadPtr) {
+        var saved = self.lseek(fd, 0, 1);
+        if (isFail(saved)) return wfail();
+        if (isFail(self.lseek(fd, Number(offset), 0))) return wfail();
+        var n = readv(fd, iovsPtr, iovsLen);
+        self.lseek(fd, saved, 0);    // single-threaded: no racer can observe
+        if (n < 0) return wfail();
+        view().setUint32(nreadPtr, n, true);
+        return 0;
+      },
+      fd_pwrite: function (fd, iovsPtr, iovsLen, offset, nwrittenPtr) {
+        var saved2 = self.lseek(fd, 0, 1);
+        if (isFail(saved2)) return wfail();
+        if (isFail(self.lseek(fd, Number(offset), 0))) return wfail();
+        var n = writev(fd, iovsPtr, iovsLen);
+        self.lseek(fd, saved2, 0);
+        if (n < 0) return wfail();
+        view().setUint32(nwrittenPtr, n, true);
+        return 0;
+      },
+      fd_close: function (fd) {
+        var r = self.close(fd);
+        if (isFail(r)) return wfail();
+        dirState.delete(fd);
+        appendFds.delete(fd);
+        return 0;
+      },
+      fd_seek: function (fd, offset, whence, newoffsetPtr) {
+        // Preview 1 whence matches gucOS: 0 set, 1 cur, 2 end.
+        var r = self.lseek(fd, Number(offset), whence);
+        if (isFail(r)) return wfail();
+        view().setBigUint64(newoffsetPtr, BigInt(r), true);
+        return 0;
+      },
+      fd_tell: function (fd, offsetPtr) {
+        var r = self.lseek(fd, 0, 1);
+        if (isFail(r)) return wfail();
+        view().setBigUint64(offsetPtr, BigInt(r), true);
+        return 0;
+      },
+      fd_sync: function (fd) {
+        var r = self.fsync(fd);
+        if (isFail(r)) return wfail();
+        return 0;
+      },
+      fd_datasync: function (fd) {
+        var r = self.fsync(fd);   // same durability body as the "c" env
+        if (isFail(r)) return wfail();
+        return 0;
+      },
+      fd_fdstat_get: function (fd, bufPtr) {
+        var st = self.fstat(fd);
+        if (!st || typeof st !== 'object') return wfail();
+        var ft = dirState.has(fd) ? FT_DIR : filetypeOfMode(st.mode);
+        if (ft !== FT_DIR && fd >= 0 && fd <= 2 && fdIsTty(fd)) ft = FT_CHAR;
+        var v = view();
+        v.setUint8(bufPtr, ft);
+        v.setUint8(bufPtr + 1, 0);
+        v.setUint16(bufPtr + 2, appendFds.has(fd) ? 1 : 0, true);  // fs_flags
+        v.setUint32(bufPtr + 4, 0, true);
+        // No rights model here (every fd can do what its kind allows), and
+        // wasi-libc treats an ABSENT right as an error — so all-bits-set is
+        // the correct spelling of "no rights model", not a zombie fallback.
+        v.setBigUint64(bufPtr + 8, 0xFFFFFFFFFFFFFFFFn, true);
+        v.setBigUint64(bufPtr + 16, 0xFFFFFFFFFFFFFFFFn, true);
+        return 0;
+      },
+      // fd-state mutations gucOS has no store for: SERVED so a running
+      // program gets the loud POSIX-shaped answer at the call site. (The
+      // __fcntl3 fake-success accommodation is deliberately NOT copied.)
+      fd_fdstat_set_flags: function () { return W.ENOTSUP; },
+      fd_fdstat_set_rights: function () { return W.ENOTSUP; },
+      fd_allocate: function () { return W.ENOTSUP; },
+      fd_filestat_get: function (fd, bufPtr) {
+        var st = self.fstat(fd);
+        if (!st || typeof st !== 'object') return wfail();
+        writeFilestat(bufPtr, st);
+        return 0;
+      },
+      fd_filestat_set_size: function (fd, size) {
+        var r = self.ftruncate(fd, Number(size));
+        if (isFail(r)) return wfail();
+        return 0;
+      },
+      fd_filestat_set_times: function (fd, atim, mtim, fstflags) {
+        if ((fstflags & 3) === 3 || (fstflags & 12) === 12) return W.EINVAL;
+        var st = self.fstat(fd);
+        if (!st || typeof st !== 'object') return wfail();
+        var nowSec = Math.floor(Date.now() / 1000);
+        var at = st.atime, mt = st.mtime;
+        if (fstflags & 1) at = Number(atim / 1000000000n);
+        if (fstflags & 2) at = nowSec;
+        if (fstflags & 4) mt = Number(mtim / 1000000000n);
+        if (fstflags & 8) mt = nowSec;
+        var r = self.futime(fd, at, mt);
+        if (isFail(r)) return wfail();
+        return 0;
+      },
+      fd_advise: function (fd, offset, len, advice) {
+        void offset; void len; void advice;
+        // Advisory by specification: validate the fd, then honest success.
+        var st = self.fstat(fd);
+        if (!st || typeof st !== 'object') return wfail();
+        return 0;
+      },
+      fd_renumber: function (from, to) {
+        if (from === to) {
+          var probe = self.fstat(from);
+          return (probe && typeof probe === 'object') ? 0 : wfail();
+        }
+        var r = self.dup2(from, to);
+        if (isFail(r)) return wfail();
+        self.close(from);
+        dirState.delete(to);
+        appendFds.delete(to);
+        if (dirState.has(from)) { dirState.set(to, dirState.get(from)); dirState.delete(from); }
+        if (appendFds.has(from)) { appendFds.add(to); appendFds.delete(from); }
+        return 0;
+      },
+      fd_readdir: function (fd, bufPtr, bufLen, cookie, bufusedPtr) {
+        var st = dirState.get(fd);
+        if (!st) {
+          var f2 = self.fstat(fd);
+          return (f2 && typeof f2 === 'object') ? W.ENOTDIR : W.EBADF;
+        }
+        var start = Number(cookie);
+        if (start === 0 || !st.entries) {
+          var snap = dirSnapshot(st.path);
+          if (snap === null) return wfail();
+          st.entries = snap;
+        }
+        var b = heap();
+        var used = 0;
+        for (var i = start; i < st.entries.length; i++) {
+          var ent = st.entries[i];
+          var nameBytes = enc.encode(ent.name);
+          // Serialize the record, then copy what fits — a truncated FINAL
+          // entry is legal and bufused == bufLen is the caller's
+          // continue signal; bufused < bufLen means end-of-directory.
+          var rec = new Uint8Array(24 + nameBytes.length);
+          var rv = new DataView(rec.buffer);
+          rv.setBigUint64(0, BigInt(i + 1), true);            // d_next
+          rv.setBigUint64(8, BigInt(ent.ino >>> 0), true);
+          rv.setUint32(16, nameBytes.length, true);
+          rv.setUint8(20, filetypeOfDt(ent.type));
+          rec.set(nameBytes, 24);
+          var take = Math.min(rec.length, bufLen - used);
+          b.set(rec.subarray(0, take), bufPtr + used);
+          used += take;
+          if (take < rec.length) break;                       // buffer full
+        }
+        view().setUint32(bufusedPtr, used, true);
+        return 0;
+      },
+      fd_prestat_get: function (fd, bufPtr) {
+        // EBADF for everything that is not THE preopen — including open
+        // ordinary fds: wasi-libc's probe walks 3.. and stops at the first
+        // EBADF (the wasmtime convention). The preopen is opened before
+        // wasm runs, so it holds the lowest free fd.
+        if (fd !== preopenFd) return W.EBADF;
+        var v = view();
+        v.setUint8(bufPtr, 0);                                // tag: dir
+        v.setUint32(bufPtr + 4, 1, true);                     // strlen("/")
+        return 0;
+      },
+      fd_prestat_dir_name: function (fd, pathPtr, pathLen) {
+        if (fd !== preopenFd) return W.EBADF;
+        if (pathLen < 1) return W.ENAMETOOLONG;
+        heap()[pathPtr] = 47;                                 // '/'
+        return 0;
+      },
+
+      path_open: function (dirfd, dirflags, pathPtr, pathLen, oflags,
+                           rightsBase, rightsInheriting, fdflags, openedPtr) {
+        void dirflags; void rightsInheriting;
+        var base = dirBase(dirfd);
+        if (typeof base === 'number') return base;
+        var full = joinPath(base, readPath(pathPtr, pathLen));
+        var wantDir = (oflags & 2) !== 0;
+        var gflags = 0;
+        if (oflags & 1) gflags |= 0x40;                       // CREAT
+        if (oflags & 4) gflags |= 0x80;                       // EXCL
+        if (oflags & 8) gflags |= 0x200;                      // TRUNC
+        if (fdflags & 1) gflags |= 0x400;                     // APPEND
+        // Access mode from the rights bits (the wasmtime convention);
+        // rights are otherwise accepted and discarded — no rights model.
+        var R_FD_READ = 2n, R_FD_WRITE = 64n, R_FD_READDIR = 16384n;
+        var rb = BigInt(rightsBase);
+        var wantsWrite = (rb & R_FD_WRITE) !== 0n;
+        var wantsRead = (rb & (R_FD_READ | R_FD_READDIR)) !== 0n;
+        var accmode = wantsWrite ? (wantsRead ? 2 : 1) : 0;
+
+        function openDir() {
+          var dfd = self.open(full, O_DIRECTORY, 0);
+          if (isFail(dfd)) return wfail();
+          dirState.set(dfd, { path: full, entries: null });
+          view().setUint32(openedPtr, dfd, true);
+          return 0;
+        }
+        if (wantDir) {
+          if (wantsWrite || (gflags & 0x6C0)) return W.EISDIR;
+          return openDir();
+        }
+        var nfd = self.open(full, gflags | accmode, 0o666);
+        if (isFail(nfd)) {
+          // gucOS open answers EISDIR even for O_RDONLY on a directory; a
+          // WASI read-only open of one is legal (fstat/readdir later), so
+          // retry as a directory fd when there is no write intent.
+          if (self._lastError === 'EISDIR' && accmode === 0 &&
+              (gflags & 0x6C0) === 0) {
+            return openDir();
+          }
+          return wfail();
+        }
+        if (fdflags & 1) appendFds.add(nfd);
+        view().setUint32(openedPtr, nfd, true);
+        return 0;
+      },
+      path_filestat_get: function (dirfd, lookupflags, pathPtr, pathLen, bufPtr) {
+        var base = dirBase(dirfd);
+        if (typeof base === 'number') return base;
+        var full = joinPath(base, readPath(pathPtr, pathLen));
+        var st = (lookupflags & 1) ? self.stat(full) : self.lstat(full);
+        if (!st || typeof st !== 'object') return wfail();
+        writeFilestat(bufPtr, st);
+        return 0;
+      },
+      path_filestat_set_times: function (dirfd, lookupflags, pathPtr, pathLen,
+                                         atim, mtim, fstflags) {
+        void lookupflags;   // utime follows symlinks (the one gucOS mode)
+        if ((fstflags & 3) === 3 || (fstflags & 12) === 12) return W.EINVAL;
+        var base = dirBase(dirfd);
+        if (typeof base === 'number') return base;
+        var full = joinPath(base, readPath(pathPtr, pathLen));
+        var st = self.stat(full);
+        if (!st || typeof st !== 'object') return wfail();
+        var nowSec = Math.floor(Date.now() / 1000);
+        var at = st.atime, mt = st.mtime;
+        if (fstflags & 1) at = Number(atim / 1000000000n);
+        if (fstflags & 2) at = nowSec;
+        if (fstflags & 4) mt = Number(mtim / 1000000000n);
+        if (fstflags & 8) mt = nowSec;
+        var r = self.utime(full, at, mt);
+        if (isFail(r)) return wfail();
+        return 0;
+      },
+      path_create_directory: function (dirfd, pathPtr, pathLen) {
+        var base = dirBase(dirfd);
+        if (typeof base === 'number') return base;
+        // WASI passes no mode. 0777: the shim sits BELOW libc, so no
+        // process umask applies here — recorded, deliberate.
+        var r = self.mkdir(joinPath(base, readPath(pathPtr, pathLen)), 0o777);
+        if (isFail(r)) return wfail();
+        return 0;
+      },
+      path_remove_directory: function (dirfd, pathPtr, pathLen) {
+        var base = dirBase(dirfd);
+        if (typeof base === 'number') return base;
+        var r = self.rmdir(joinPath(base, readPath(pathPtr, pathLen)));
+        if (isFail(r)) return wfail();
+        return 0;
+      },
+      path_unlink_file: function (dirfd, pathPtr, pathLen) {
+        var base = dirBase(dirfd);
+        if (typeof base === 'number') return base;
+        var r = self.unlink(joinPath(base, readPath(pathPtr, pathLen)));
+        if (isFail(r)) return wfail();
+        return 0;
+      },
+      path_rename: function (dirfd, oldPtr, oldLen, newDirfd, newPtr, newLen) {
+        var oldBase = dirBase(dirfd);
+        if (typeof oldBase === 'number') return oldBase;
+        var newBase = dirBase(newDirfd);
+        if (typeof newBase === 'number') return newBase;
+        var r = self.rename(joinPath(oldBase, readPath(oldPtr, oldLen)),
+                            joinPath(newBase, readPath(newPtr, newLen)));
+        if (isFail(r)) return wfail();
+        return 0;
+      },
+      path_link: function (oldDirfd, oldFlags, oldPtr, oldLen,
+                           newDirfd, newPtr, newLen) {
+        void oldFlags;
+        var oldBase2 = dirBase(oldDirfd);
+        if (typeof oldBase2 === 'number') return oldBase2;
+        var newBase2 = dirBase(newDirfd);
+        if (typeof newBase2 === 'number') return newBase2;
+        var r = self.link(joinPath(oldBase2, readPath(oldPtr, oldLen)),
+                          joinPath(newBase2, readPath(newPtr, newLen)));
+        if (isFail(r)) return wfail();
+        return 0;
+      },
+      path_symlink: function (oldPtr, oldLen, dirfd, newPtr, newLen) {
+        // WASI argument order: the TARGET string carries no dirfd — it is
+        // opaque text stored verbatim, like symlink(2).
+        var base = dirBase(dirfd);
+        if (typeof base === 'number') return base;
+        var r = self.symlink(readPath(oldPtr, oldLen),
+                             joinPath(base, readPath(newPtr, newLen)));
+        if (isFail(r)) return wfail();
+        return 0;
+      },
+      path_readlink: function (dirfd, pathPtr, pathLen, bufPtr, bufLen, usedPtr) {
+        var base = dirBase(dirfd);
+        if (typeof base === 'number') return base;
+        var buf = heap().subarray(bufPtr, bufPtr + bufLen);
+        var n = self.readlink(joinPath(base, readPath(pathPtr, pathLen)),
+                              buf, bufLen);
+        if (isFail(n)) return wfail();
+        view().setUint32(usedPtr, n, true);
+        return 0;
+      },
+
+      poll_oneoff: pollOneoff,
+
+      // ABSENT ON PURPOSE — do not add these as stubs:
+      //   sock_accept / sock_recv / sock_send / sock_shutdown: preview-1
+      //   sockets assume pre-opened network fds; gucOS networking is "c"
+      //   territory (AF_UNIX + the 0417 HTTP OFDs). proc_raise: signals
+      //   are "c" territory (__spawn_kill). A module importing any of
+      //   these fails AT INSTANTIATION with the module+symbol named —
+      //   the loud half of the 0442 served/absent split.
+    };
+
+    // args/environ close over the concrete values.
+    var argList = (opts.args || []).map(function (a) { return enc.encode(String(a)); });
+    var envList = Object.keys(opts.env || {}).map(function (k) {
+      return enc.encode(k + '=' + String((opts.env || {})[k]));
+    });
+    function sizesGet(list) {
+      return function (countPtr, buflenPtr) {
+        var total = 0;
+        for (var i = 0; i < list.length; i++) total += list[i].length + 1;
+        var v = view();
+        v.setUint32(countPtr, list.length, true);
+        v.setUint32(buflenPtr, total, true);
+        return 0;
+      };
+    }
+    function listGet(list) {
+      return function (ptrsPtr, bufPtr) {
+        var v = view(), b = heap();
+        var p = bufPtr;
+        for (var i = 0; i < list.length; i++) {
+          v.setUint32(ptrsPtr + i * 4, p, true);
+          b.set(list[i], p);
+          b[p + list[i].length] = 0;
+          p += list[i].length + 1;
+        }
+        return 0;
+      };
+    }
+    ns.args_sizes_get = sizesGet(argList);
+    ns.args_get = listGet(argList);
+    ns.environ_sizes_get = sizesGet(envList);
+    ns.environ_get = listGet(envList);
+
+    return ns;
   };
 
   // =================================================================
@@ -11454,6 +12335,37 @@ async function runModule({
     };
   }
 
+  /* ---- wasi_snapshot_preview1 (todos/0442) ----
+     The ONE sanctioned second import namespace (RUST.md §3 rule 1 as
+     amended by the 0418 ruling), served beside "c" for wasip1 std modules.
+     Built ONLY when the module imports it, and only over the BlockFS-model
+     runtime: toWasmEnv registered the fs instance on ctx.fs, and the shim's
+     fd/path family delegates to that method surface (BlockFS in-process,
+     RemoteFS over kernel RPCs — the same two transports the "c" env
+     shares). The Node-fs flavor (createFileSystem) is a different fd model
+     and deliberately does not serve it — loud refusal, never a
+     half-served namespace. On an embedder whose host.js predates this
+     shim, instantiation LinkErrors naming module and symbol. */
+  const wantsWasi = WebAssembly.Module.imports(module).some(function (im) {
+    return im.module === 'wasi_snapshot_preview1';
+  });
+  if (wantsWasi) {
+    if (!ctx.fs) {
+      throw new Error(
+        'this module imports wasi_snapshot_preview1, which this host serves ' +
+        'only over the BlockFS runtime — run it standalone with --block-fs, ' +
+        'or as a gucOS process (the Node-fs flavor does not serve it)');
+    }
+    imports['wasi_snapshot_preview1'] =
+      BLOCK_FS.BlockFS.prototype.toWasiPreview1.call(ctx.fs, ctx, {
+        args: args || [],
+        env: env || {},
+        hooks: spawnHooks || null,
+        // Late-bound so proc_exit picks up the kernel-handshake __exit wrap.
+        procExit: function (code) { return imports[ENV_KEY].__exit(code); },
+      });
+  }
+
   /* SDL 2D renderer device pre-acquisition (OS surface flavor only): WebGPU
      device acquisition is an event-loop promise chain, and an OS SDL app may
      legally BLOCK in its main loop (cooperative Atomics.wait sleeps) — so the
@@ -11474,8 +12386,30 @@ async function runModule({
   if (ctx.bindSigDispatch) ctx.bindSigDispatch(instance.exports);
   if (onReady) onReady({ sdl: sdl, instance: instance });
 
+  /* wasip1 entry (todos/0442; RUST.md §2 amendment): a command module that
+     imports wasi_snapshot_preview1 and exports `_start` (and no `main`)
+     plays crt0 ITSELF — wasm-ld's synthesized _start runs the ctors, calls
+     main, runs the dtors — and pulls argv/envp through args_get/
+     environ_get. The host-played crt0 below (alloca argv layout,
+     __set_environ, the host-side ctors call) is skipped entirely, so such
+     a module need not export `alloca` or `main`. A normal return is exit
+     0 (wasi-libc calls proc_exit only for a nonzero status); both paths
+     route through the "c" __exit so the kernel's ordered exit handshake
+     runs before teardown. */
+  const wasiEntry = wantsWasi &&
+    typeof instance.exports._start === 'function' &&
+    typeof instance.exports.main !== 'function';
+
   let exitCode;
   try {
+    if (wasiEntry) {
+      if (hasJSPI) {
+        await WebAssembly.promising(instance.exports._start)();
+      } else {
+        instance.exports._start();
+      }
+      imports[ENV_KEY].__exit(0);   // ordered exit handshake; throws ExitStatus
+    } else {
     // Seed the process environment: build a NULL-terminated char** block in
     // wasm memory (same shape as argv) and hand it to the libc via
     // __set_environ — the libc owns `environ` from here on. The same pointer is
@@ -11552,6 +12486,7 @@ async function runModule({
         exitCode = instance.exports.main();
       }
     }
+    }   // end of the non-wasip1 (host-played crt0) entry
     /* NO_EXIT_RUNTIME: if the program defined and exported
      * __no_exit_runtime, it has registered async work (timers,
      * indirect-call dispatch, etc.) that must keep running after main
