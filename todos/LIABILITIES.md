@@ -87,259 +87,259 @@ thing this file exists to kill.
 <!-- BEGIN ENTRIES -->
 
 ### L01 — a failed deploy image fetch is swallowed and falls through to an in-worker full bake
-- ticket: 0285
+- ticket: #92
 - file: os/kernel-worker.js
 - anchor: } catch (e) { /* no prebaked blob served — fall through to the bake */ }
 
 ### L02 — the manifest.image branch is the production boot path's first fetch and no test takes it
-- ticket: 0285
+- ticket: #92
 - file: os/kernel-worker.js
 - anchor: var r = await fetch(manifest.image || 'os-system.img');
 
 ### L03 — "MessageBox raise stays silent" passes equally if the dialog never opened
-- ticket: 0287
+- ticket: #97
 - file: tests/browser/os-sounds.mjs
 - anchor: check('muted: MessageBox raise stays silent', w3 === w2, { w2, w3 });
 
 ### L04 — the VT-during-boot leg abstains whenever ready wins the race
-- ticket: 0287
+- ticket: #97
 - file: tests/browser/os-boots.mjs
 - anchor: // ready switch and the check passes vacuously — no flake either way).
 
 ### L05 — "boot streams on VT1" is unconditionally true once state !== booting
-- ticket: 0287
+- ticket: #97
 - file: tests/browser/os-vt.mjs
 - anchor: // fresh-OPFS first boot takes seconds; vacuously true if ready won).
 
 ### L06 — the wmctl-wait-timed-out guard exists kernel-side only; no browser harness has it
-- ticket: 0287
+- ticket: #97
 - file: tests/kernel/lib/drive.js
 - anchor: // Loud-symptom gate (todos/0171): a `wmctl wait` that can't be satisfied
 - provenance: 0171
 
 ### L09 — NetSurf Lane D (binding fills) was left open in a topic doc, which is not the queue
-- ticket: 0290
+- ticket: #98
 - file: todos/NETSURF-JS.md
 - anchor: **Lane D — binding fills (M-L, item-parallel).**
 
 ### L10 — listdir.h defers wm.c's third copy to a menu redesign that has already shipped
-- ticket: 0291
+- ticket: #99
 - file: os/listdir.h
 - anchor: * todos/done/0250) — don't cite this header as covering it.
 - defers-to: 0250, 0259
 - expired: 0250, 0259
 
 ### L11 — `optional` bake assets make the blob machine-dependent; dependent launchers don't inherit it
-- ticket: 0292
+- ticket: #100
 - file: os/os-common.js
 - anchor: *   entry.optional — (with entry.bin) a missing asset logs a skip instead of
 
 ### L12 — headless boot.js takes no lock; the guard is a "noted-only follow-up" in a closed item
-- ticket: 0293
+- ticket: #101
 - file: CLAUDE.md
 - anchor: flock-style guard is a noted-only follow-up in the 0045 item). The
 - defers-to: 0045
 - expired: 0045
 
 ### L13 — only E/S/SE resize zones exist; "not in this version" has had no subsequent version
-- ticket: 0294
+- ticket: #102
 - file: kernel.js
 - anchor: * bottom-right corner -> SE (left/top edges just focus — moving-edge
 
 ### L14 — the 0211 divergence list is part-funded, so its unticketed entries read as tracked
-- ticket: 0295
+- ticket: #103
 - file: todos/WIN32.md
 - anchor: - **WM_MOUSELEAVE on surface exit**: the kernel routes input per-window
 
 ### L15 — statvfs reports a fixed 4 GiB volume, so df lies about a filesystem that can fill
-- ticket: 0296
+- ticket: #104
 - file: compiler.js
 - anchor: reports real free/used blocks is a TODO (needs a host import). */
 
 ### L16 — an unchecked "Immediate" box: 10 WASM imports with no C-level test
-- ticket: 0297
+- ticket: #105
 - file: todos/BLOCK_FS.md
 - anchor: - [ ] **C-level unit tests for the 10 untested WASM imports** listed above.
 
 
 ### L18 — the dispatcher documents a Playwright-missing skip that only fires on a spawn failure
-- ticket: 0299
+- ticket: #106
 - file: tests/run.js
 - anchor: // `optional` suites (browser sweep) report a launch failure as a skip, not a
 
 ### L19 — CLAUDE.md repeats the same skip-not-fail promise the sweep classifier does not keep
-- ticket: 0299
+- ticket: #106
 - file: CLAUDE.md
 - anchor: process; the browser `sweep` is optional (a missing-Playwright launch
 
 ### L20 — modals still draw min/max boxes; the descope points at a closed item
-- ticket: 0300
+- ticket: #107
 - file: os/wm.c
 - anchor: * title-bar boxes on modals — deliberately NOT done here, 0281.) */
 - defers-to: 0281
 - expired: 0281
 
 ### L21 — the WMP_F_TRANSIENT flag's own doc defers min/max suppression to the same closed item
-- ticket: 0300
+- ticket: #107
 - file: os/wm_proto.h
 - anchor: boxes — not implemented here (0281 scope note). */
 - defers-to: 0281
 - expired: 0281
 
 ### L22 — a 900x600 non-touch window gets phone defaults with none of the mobile controls
-- ticket: 0301
+- ticket: #108
 - file: os/os.html
 - anchor: // (900×600 — min() ≤ 700, innerWidth > 768) trips THIS predicate while
 
 ### L23 — registry writes since the last flush are lost on SIGKILL (the price of the batched flush)
-- ticket: 0162
+- ticket: #42
 - file: os/win32/advapi32.c
 - anchor: the last flush are lost on SIGKILL — flushing is batched to
 
 ### L24 — two registry flushes in the same instant still race on the rename; there is no advisory lock
-- ticket: 0162
+- ticket: #42
 - file: os/win32/advapi32.c
 - anchor: tmp+rename, and there is no advisory lock, so two flushes landing in
 
 ### L25 — search.h is absent, so four libc-tests are permanently skipped
-- ticket: 0305
+- ticket: #111
 - file: tests/run.py
 - anchor: "search_hsearch": "not implemented: search.h (todos/0305)",
 
 ### L26 — the BSD random()/srandom()/initstate() family is absent
-- ticket: 0306
+- ticket: #112
 - file: tests/run.py
 - anchor: "random": "not implemented: random()/srandom()/initstate()/setstate() (todos/0306)",
 
 ### L27 — strptime() is absent and strftime is missing six conversions plus width modifiers
-- ticket: 0307
+- ticket: #113
 - file: tests/run.py
 - anchor: "strptime": "not implemented: strptime() (todos/0307)",
 
 ### L28 — open_memstream()/fmemopen() are absent; there are no memory-backed FILE streams
-- ticket: 0308
+- ticket: #114
 - file: tests/run.py
 - anchor: "memstream": "not implemented: open_memstream()/fmemopen() (todos/0308)",
 
 ### L29 — the wcstol family and wide scanf are absent
-- ticket: 0309
+- ticket: #115
 - file: tests/run.py
 - anchor: "wcstol": "not implemented: wcstol() family (todos/0309)",
 
 ### L30 — strftime %s follows glibc/BSD (TZ-dependent) where musl is TZ-independent; nobody chose
-- ticket: 0310
+- ticket: #116
 - file: tests/run.py
 - anchor: # (todos/0307). %s additionally diverges from musl's expectation by the
 - provenance: 0307
 
 ### L31 — three setjmp contexts C11 7.13.1.1p4 REQUIRES are rejected; the diagnostic even advertises one
-- ticket: 0311
+- ticket: #117
 - file: todos/CONFORMANCE-REMAINING.md
 - anchor: - **setjmp contexts required by C11 7.13.1.1p4 but rejected**:
 
 ### L33 — mouseover/mouseout/mouseenter/mouseleave and focusin/focusout are not generated
-- ticket: 0317
+- ticket: #120
 - file: vendor/netsurf/netsurf/content/handlers/html/interaction.c
 - anchor: 	 * core generates those yet — todos/0317). */
 
 ### L34 — a PROGRAMMATIC form.submit() would wrongly fire the cancelable `submit` event
-- ticket: 0317
+- ticket: #120
 - file: vendor/netsurf/netsurf/content/handlers/html/form.c
 - anchor: 	 * (Per spec a PROGRAMMATIC submit — form.submit() — does not fire
 
 ### L39 — SDecl's child-rewrite hook is a no-op, so a generic walker's rewrite of a declaration initializer is silently discarded
-- ticket: 0326
+- ticket: #125
 - file: compiler.js
 - anchor: // children-based rewriter's new subtree is silently discarded here.
 
 ### L41 — a function with more than 65520 basic blocks still dispatches through an O(n) linear compare chain
-- ticket: 0335
+- ticket: #130
 - file: compiler.js
 - anchor: // more than 65520 blocks still degrade to the linear chain — see todos/0335.
 
 ### L42 — python's `time.localtime` is `gmtime`: there is no timezone database, so local timestamps are UTC
-- ticket: 0117
+- ticket: #19
 - file: vendor/micropython/README.md
 - anchor: - **`time.localtime` is `time.gmtime`.** There is no timezone database on this
 
 ### L43 — datetime/argparse/subprocess/hashlib/select/socket are absent from python's stdlib
-- ticket: 0117
+- ticket: #19
 - file: vendor/micropython/README.md
 - anchor: - **Modules a Python programmer will reach for and not find**: `datetime`,
 
 ### L45 — the cross-tree guard covers the test runners only; the tools/ writers and os/boot.js can still write into another tree
-- ticket: 0357
+- ticket: #142
 - file: tests/lib/tree-guard.js
 - anchor: // NOT GUARDED YET: the tools/ writers and os/boot.js — funded by todos/0357.
 - provenance: 0341
 
 ### L46 — gucman's refusal to plant a package `bin` over a dispatched command name has no firing test
-- ticket: 0355
+- ticket: #141
 - file: os/gucman/gucman.c
 - anchor: is the runtime backstop for a payload that arrived another way.
 - provenance: 0338
 
 ### L48 — `tcflush` validates and reports success without discarding anything, though the line discipline really holds an input queue
-- ticket: 0325
+- ticket: #124
 - file: compiler.js
 - anchor: RPC. No shipping consumer asks for it (nothing in the CPython stdlib
 - provenance: 0340
 
 ### L49 — cpython-clang (né python-clang) has no sockets, so `asyncio` ships and imports nowhere
-- ticket: 0052
+- ticket: #3
 - file: vendor/cpython/README.md
 - anchor: (`_socket` is not built), so **`asyncio` does not import and is not
 - provenance: 0340
 
 ### L51 — mkpkg's package-payload freshness scan has no red control, so it can under-invalidate silently
-- ticket: 0363
+- ticket: #144
 - file: tools/mkpkg.js
 - anchor:  * under-invalidation here is invisible exactly the way 0354's was. Funded by
 - provenance: 0354
 
 ### L52 — id allocation is blind to an unpushed id in a different clone, and no probe can see it
-- ticket: 0364
+- ticket: #145
 - file: todos/idspace.js
 - anchor: // coordination point (a pushed reservation ref), which is todos/0364, register
 - provenance: 0360
 
 ### L55 — the two host.js sleep backends disagree about a zero-length nanosleep, and the test declines to pin either
-- ticket: 0365
+- ticket: #146
 - file: tests/host/test_sleep_clamp.js
 - anchor: // KNOWN GAP, funded by todos/0365 (register L55): the two backends disagree
 - provenance: 0361
 
 ### L56 — the wall-clock survey is a hand-run audit, so a NEW elapsed-time budget can enter tests/unit unnoticed
-- ticket: 0366
+- ticket: #147
 - file: tests/scan-wallclock.sh
 - anchor: # classification of the current 22 lives in logs/2026-07-28/0361-wallclock.md).
 - provenance: 0361
 
 ### L57 — umask is real per-process state but does not cross __spawn, so a shell's `umask 077` silently stops at the process boundary
-- ticket: 0399
+- ticket: #168
 - file: compiler.js
 - anchor: inheritance through __spawn is a separate, ticketed gap (todos/0399). */
 - provenance: 0382
 
 ### L58 — no fd can refer to a directory, so the *at family's dirfd resolution mode is unreachable
-- ticket: 0400
+- ticket: #169
 - file: compiler.js
 - anchor:  * todos/0400 (directory file descriptors: O_DIRECTORY, dirfd(3), fdopendir(3))
 - provenance: 0325
 
 ### L59 — mkfifo is absent on purpose; a link-testable stub would move a consumer's failure from configure time to run time
-- ticket: 0401
+- ticket: #170
 - file: compiler.js
 - anchor:    time. Funded by todos/0401, which is also what keeps todos/0382 open. */
 - provenance: 0382
 
 ### L63 — nothing emits BW_CS_SCRIPT_ERROR, so an uncaught JS exception reaches no console, no log and no tty
-- ticket: 0424
+- ticket: #177
 - file: vendor/netsurf/gucos/gui.c
 - anchor: through this table is todos/0424 — it belongs at dukky's error
 
 ### L64 — the dynamic-restyle chain walk misses a sibling combinator and cannot reach a `display: none` element
-- ticket: 0426
+- ticket: #178
 - file: vendor/netsurf/netsurf/content/handlers/html/interaction.c
 - anchor:  * Both are recorded in todos/LIABILITIES.md against todos/0426.
 - provenance: 0420

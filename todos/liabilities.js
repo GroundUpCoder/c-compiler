@@ -88,12 +88,18 @@ function scanCcTickets(opts) {
   }
   let out;
   try {
+    // The list carries full ticket bodies (~MBs for this project), so the
+    // buffer cap must be generous — a default-1MB overflow kills the child
+    // with SIGTERM and reads exactly like a timeout.
     out = execFileSync('cc-meta',
       ['ticket', 'list', '--project', CC_PROJECT, '--status', 'all'],
-      { encoding: 'utf8', timeout: CC_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'pipe'] });
+      { encoding: 'utf8', timeout: CC_TIMEOUT_MS, maxBuffer: 256 * 1024 * 1024,
+        stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (e) {
     const why = e.code === 'ENOENT' ? 'cc-meta not on PATH'
-      : e.signal ? `cc-meta timed out (${e.signal})` : `cc-meta failed: ${String(e.message).split('\n')[0]}`;
+      : e.code === 'ENOBUFS' ? 'cc-meta output exceeded the buffer cap'
+      : e.signal ? `cc-meta timed out or was killed (${e.signal})`
+      : `cc-meta failed: ${String(e.message).split('\n')[0]}`;
     return { states: new Map(), verified: false, note: `#N liveness UNVERIFIED (${why})` };
   }
   let items;
