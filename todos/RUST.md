@@ -194,34 +194,25 @@ These rules bind every ticket in the program.
 | `0418` | C1 | The standard-library decider. Ruled 2026-07-30: option (b), wasip1. |
 | `0442` | C2 | std on wasip1: the `wasi_snapshot_preview1` shim. Shipped 2026-07-30 (`toWasiPreview1` in host.js; the wasip1 entry in §2). |
 
-| `0445` | C3 | codex feasibility: close the census nulls (the numbers D1 rules on). |
-| `0446` | A5 | `gucos-sys::http` still binds the HTTP ABI that `0417` retired. |
-| `0447` | **D1** | codex on gucOS: port `codex exec`, or write a native client. |
+| `0445` | C3 | codex feasibility: close the census nulls. Closed 2026-07-31 (ticket `#190`): all 102 codex crates measured; report `~/git/meta/gucos/notes/rust-codex-feasibility-2.md`. |
+| `0446` | A5 | `gucos-sys::http` still binds the HTTP ABI that `0417` retired. Ticket `#191`, open — the root of the D2 chain. |
+| `0447` | **D1** | codex on gucOS: port `codex exec`, or write a native client. **Ruled 2026-07-31** (ticket `#192`): `todos/RUST-D1-RULING.md`. |
+| `#292` | D2 | gucos-rust: a codex `HttpTransport` implementation over the fd HTTP ABI, with a streamed SSE proof. Blocked by `#191`. |
+| `#293` | D3 | M1 — the port runtime spike on the 0442 shim: size, startup, `current_thread` verdict. Blocked by `#292`. |
+| `#294` | D4 | M2 — the wasm C toolchain experiment: verdicts for the 9 asm-FFI crates. |
+| `#295` | D5 | Apply the D1 selection rule (`RUST-D1-RULING.md` §7) to the M1+M2 numbers. Blocked by `#293`, `#294`. |
 
-**D1 is now FILED, as `todos/0447`.** It was held as "named but not filed" until
-2026-07-30. Both inputs this section originally named are discharged: the
-`todos/0418` ruling landed (option (b), wasip1), and `todos/0417` merged
-(`1cc04833`) and shipped in gucOS image v199.
-
-🔴 **But the gate this section named was not the whole gate, and 0447 is filed
-BLOCKED for that reason.** `todos/0445` was filed after this section was written,
-and its own text states that it exists so that *"when D1 is filed the decision
-rests on numbers instead of an estimate."* It has not run. The 2026-07-29 census
-left **197 crates unmeasured**, and **83 of them are codex's own workspace
-crates** — the actual subject of a port. So the quantity that decides the
-question is still unmeasured, and *"a decision taken without those inputs is a
-guess"* still applies with 0445 substituted for 0417.
-
-⇒ **Do not unblock `0447` by observing that 0418 and 0417 landed.** That is the
-`(FA)` trap recorded in `~/git/meta/meta/notes/master-traps.md`: an input list
-ages, a different ticket becomes a real input, and the original list still reads
-as satisfied. `0447` clears when **`0445`** closes.
-
-D1 keeps the refusal to pre-judge port-versus-native
-(`todos/done/0418-rust-std-decider.md` §"Result" item 9). `todos/0446` is not a
-blocker on it, but it is a shaping input and a named reopen trigger: there is no
-working Rust HTTP caller in this program today, and HTTP is codex's core
-transport for **both** arms, because `wasm32-wasip1` has no sockets.
+**D1 is RULED, 2026-07-31** (ticket `#192`; the document is
+`todos/RUST-D1-RULING.md`). The ruling is staged, and it does not pre-judge —
+it keeps the `todos/done/0418` §Result item 9 refusal. What it settles now: a
+port is not blocked at the compile level (0445 closed class D — all 102 codex
+crates measured, 41 with zero intrinsic platform coupling); the wire protocol
+is the Responses API alone, unversioned, with a real two-method transport seam
+(`HttpTransport`); and both arms share the same HTTP prerequisites (`#191`,
+then `#292`). What still decides the arm is two missing measurements — M1
+(runtime, size, startup: `#293`) and M2 (the wasm C toolchain: `#294`) — and
+the selection rule over them is FIXED in the ruling's §7. `#295` applies that
+rule; it does not reopen the debate. The reopen triggers are the ruling's §9.
 
 ---
 

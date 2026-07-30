@@ -258,10 +258,14 @@ The two measurements that decide the arm (from 0445 §10, sharpened):
 
 | Ticket | Unit | What | Edges |
 |---|---|---|---|
-| `#193` | D2 | gucos-rust: a codex `HttpTransport` implementation over the fd HTTP ABI, with a streamed SSE proof | blocked-by `#191` |
-| `#194` | D3 | M1 — the port runtime spike: link and run a minimal codex slice on the 0442 shim; record size and startup | blocked-by `#193` |
-| `#195` | D4 | M2 — the wasm C toolchain experiment over the 9 asm-FFI crates | independent |
-| `#196` | D5 | Apply the §7 selection rule and select the arm | blocked-by `#194`, `#195` |
+| `#292` | D2 | gucos-rust: a codex `HttpTransport` implementation over the fd HTTP ABI, with a streamed SSE proof | blocked-by `#191` |
+| `#293` | D3 | M1 — the port runtime spike: link and run a minimal codex slice on the 0442 shim; record size and startup | blocked-by `#292` |
+| `#294` | D4 | M2 — the wasm C toolchain experiment over the 9 asm-FFI crates | independent |
+| `#295` | D5 | Apply the §7 selection rule and select the arm | blocked-by `#293`, `#294` |
+
+Each edge above was verified by a re-read of the created ticket, not from the
+create echo. All four are P1 (the D1 program is feature work; `#191` keeps its
+own priority).
 
 `#191` (0446) stays P1 and becomes the root of the D2 chain. The
 "no two heavy builds share the box" constraint travels in each ticket body —
