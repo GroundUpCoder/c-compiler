@@ -110,3 +110,54 @@ found these while checking its own brief): `createPosix` (`host.js:5502`) serves
   contract, preopens), in the same commit as the code.
 - Tests land in both embedders (kernel suite e2e + a browser leg if the in-OS
   run needs one), and `node tests/run.js --diff` maps the touched paths.
+
+## 🔴 (FA) pass on the Acceptance above — three arms are ALREADY GREEN, read before you build
+
+Measured 2026-07-30 by @master (cont-215) against `main` at `7447d1f4`, by running each
+arm against the tree rather than trusting the filed list. **An acceptance arm can be
+discharged by the machine's state or by a different ticket between filing and execution,
+and it then certifies the wrong lane.** These corrections win over the arms as written.
+
+1. **"No nightly toolchain is installed or invoked" is ALREADY TRUE, and not because of
+   this ticket.** `rustup toolchain list` shows only `stable-aarch64-apple-darwin`
+   (active, default) and `1.95.0-aarch64-apple-darwin` — both stable, no nightly.
+   ⇒ Satisfying that clause proves **nothing** about your work, and it is a fact about a
+   **global** toolchain that anything outside this ticket can change. **The only real
+   work in that arm is the last clause: `build.sh` must REFUSE `-Zbuild-std`.** It does
+   not today — `grep 'build-std' build.sh` in `~/git/gucos-rust` is empty; the string
+   appears only in `README.md:19` and `crates/gucos-sys/src/lib.rs:63-65` prose. Add the
+   refusal to the script, and report it as the arm you actually closed.
+2. **Plan step 5's `rustup target add wasm32-wasip1` is a NO-OP — the target is already
+   installed** (`rustup target list --installed` ⇒ `aarch64-apple-darwin`,
+   `wasm32-unknown-unknown`, `wasm32-wasip1`). Do not report it as a step you completed.
+   What IS new: `build.sh:81` hardcodes `--target wasm32-unknown-unknown` for every
+   crate, so the wasip1 rung is genuinely absent and is real work.
+3. 🔴 **"An unserved preview 1 import fails loud … no silent stub returns fake success"
+   is FREE FROM THE ENGINE, AND IT CONTRADICTS PLAN STEP 1.** `host.js:9749` instantiates
+   with a plain `new WebAssembly.Instance(module, importObject)`, so a **missing** import
+   throws a `LinkError` naming module and symbol with no code from you at all.
+   **But `host.js` contains BOTH disciplines and this arm names only one:**
+   - `createNullSpawn` (`host.js:5559`) deliberately makes imports "resolve to ENOSYS so
+     any module that links `__spawn` still instantiates (the `createNullSDL` discipline)"
+     — i.e. the house style **is** to install a stub so linking succeeds.
+   - `createSsCoreEnv` (`host.js:9612`) does the opposite on purpose: unported envs are
+     **omitted** so the program "will fail to instantiate with a clear missing-import
+     error naming exactly what to add next."
+   ⇒ Plan step 1 says preview 1 functions with no gucOS meaning "answer `ENOTSUP`-class
+   errnos loudly" — that is a **stub**, which is the `createNullSpawn` discipline and
+   **cannot** also LinkError. Both cannot hold for the same symbol. **Resolve it by
+   splitting the population explicitly, and record the split:**
+   **SERVED-but-meaningless ⇒ present in the import object, returns an `ENOTSUP`-class
+   errno. NOT-IN-THE-SHIM ⇒ absent from the import object, so it LinkErrors.**
+   Name which preview 1 functions land in which set. A lane that puts everything in the
+   first set satisfies Plan step 1 and silently voids this arm; a lane that puts
+   everything in the second set voids step 1. **Neither failure announces itself.**
+
+⚠️ **Two more arms need a re-derive at spawn, not a correction:**
+- **"The base image is byte-identical before and after"** — `todos/0417` bumps
+  `os/image.json` **198 → 199**. Take your "before" measurement on the main you actually
+  branch from; do not carry a baseline number from this ticket or from any note.
+- **"`node tests/run.js --diff` maps the touched paths"** is under-specified: `--diff`
+  is **ignored** in the `--list` form. The runnable invocation is
+  **`node tests/run.js --diff --dry-run`** (`tests/run.js:452`, documented at `:13` and
+  `:735`). `--list`/`--list-suites` is a different flag that lists suites.
