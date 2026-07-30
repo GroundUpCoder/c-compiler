@@ -3,8 +3,11 @@
   "queue": [
     { "id": "0113", "priority": 2, "after": ["0094"] },
     { "id": "0448", "difficulty": "medium" },
+    { "id": "0458", "difficulty": "medium" },
+    { "id": "0459", "difficulty": "medium" },
     { "id": "0453", "difficulty": "heavy", "blockedBy": ["0448"] },
     { "id": "0454", "difficulty": "heavy", "blockedBy": ["0453"] },
+    { "id": "0460", "difficulty": "medium" },
     { "id": "0080" },
     { "id": "0052" },
     { "id": "0064" },

@@ -65,6 +65,17 @@ tailing gucman's output stays until it does).
 - **Every existing `test_software_e2e.js` leg still passes, ideally with its
   ordinal arithmetic deleted in favour of by-name addressing.** Every package
   and every action remains `wmctl`-addressable.
+- 🔴 **The window STAYS RESIZABLE and its text stays crisp at every size** — added
+  2026-07-30 by master cont-221 when `0459` was filed. `0459` makes this app
+  resizable (`WS_THICKFRAME` + a `WM_SIZE` relayout + scroll-range re-derivation)
+  on jku's direct ask. **This redesign replaces the very layout `0459` makes
+  elastic, so it can silently regress the fix.** If `0459` has landed first, the
+  ListView rebuild must keep the `WS_THICKFRAME` style and the `WM_SIZE` handler
+  and re-proportion its columns against the live client rect — a ListView resize
+  is *simpler* than the card math it replaces, so this is not a burden. Verify the
+  window still takes the `WMP_RESIZE` path and not `SET_DST` (bitmap stretch is
+  what made the text fuzzy). If `0459` has **not** landed, do this ticket's work
+  resizable from the start and say so, so `0459` can close as already-satisfied.
 - Kernel + sweep green; image bumped (master assigns).
 - `todos/LIABILITIES.md` is machine-checked by the `todos` suite — re-anchor or
   retire any anchored line this change rewrites, in the same commit.
