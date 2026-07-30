@@ -33,8 +33,13 @@ const keys = (sid, ch) => 'wmctl key ' + sid + ' 0 ' + ch.charCodeAt(0);
 
 /* ---- session A: drive both apps, leave PPMs on the root volume ---- */
 const script = [
-  // sent
-  'cd /usr/opt/sent/share && sent demo.sent &',
+  // sent — driven through the `slides` launcher (todos/0444), not a manual
+  // cd + bare binary: the baked launcher at /usr/bin/slides probes
+  // /usr/opt/sent and cd's to share/ ITSELF (deck + image refs are
+  // CWD-relative), so this leg is the cd-form launcher's regression guard —
+  // if the launcher loses its cd, sent cannot open demo.sent and the
+  // `wmctl wait win sent` below fails loud.
+  'slides &',
   'wmctl wait win sent',
   'sleep 2',                     // first paint: freetype title render
   'SSID=$(wmctl list | grep "\tsent$" | sed "s/[^0-9].*//")',

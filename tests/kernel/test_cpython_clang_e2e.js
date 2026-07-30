@@ -218,6 +218,21 @@ async function main() {
     'find /var/cache/cpython-clang -name "*.pyc" | head -1',
     `find ${PREFIX} -name "__pycache__" | head -1; echo OPTCLEAN=$?`,
     `find ${PREFIX} -name "*.pyc" | wc -l`,
+    'echo ==census',
+    // The 0444 spawn census (ticket #189): `python --version` through the
+    // cmdalt dispatcher and the spawn-free launcher is THREE processes —
+    // cmdalt (the traced root), the launcher's hush, the wasm. The old
+    // dirname-of-realpath launcher made it seven (two subshells + realpath +
+    // dirname on top). strace's own spawn of the root is not traced, so
+    // 3 processes == exactly 2 SPAWN( lines in the -f trace.
+    // `python` is PINNED to cpython-clang here, not measured by verb name:
+    // this is the minimal image (the only python verb is the cmdalt
+    // dispatcher — asserted in ==purity) and the one installed package is
+    // cpython-clang; micropython — the OTHER package claiming `python`, and
+    // already 3-process by construction (no launcher at all) — is absent.
+    'strace -f -o /root/census.txt python --version >/dev/null 2>&1; echo CRC=$?',
+    'echo SPAWNS=$(grep -c "SPAWN(" /root/census.txt)',
+    'grep "SPAWN(" /root/census.txt',
     'echo ==remove',
     'gucman remove cpython-clang; echo RRC=$?',
     'test ! -e /usr/local/bin/cpython-clang && echo BIN-GONE',
@@ -325,6 +340,16 @@ async function main() {
     /\/var\/cache\/cpython-clang\/.*\.pyc/.test(pyc), pyc);
   check('/opt stays pristine — no __pycache__, no .pyc',
     !new RegExp(PREFIX + '/.*__pycache__').test(pyc) && /^0$/m.test(pyc), pyc);
+
+  const cen = section(out, 'census');
+  check('the census run exits 0 (strace propagates python\'s status)',
+    cen.includes('CRC=0'), cen);
+  check('census: exactly 2 traced SPAWNs = 3 processes (cmdalt -> launcher hush -> wasm)',
+    /^SPAWNS=2$/m.test(cen), cen);
+  check('census: the first spawn is the cpython-clang launcher (the pinned python provider)',
+    /SPAWN\([^\n]*cpython-clang/.test(cen), cen);
+  check('census: the second spawn is the wasm itself (no subshells between)',
+    /SPAWN\([^\n]*cpython-clang\.wasm/.test(cen), cen);
 
   const rm = section(out, 'remove');
   check('remove exits 0', rm.includes('RRC=0'), rm);
