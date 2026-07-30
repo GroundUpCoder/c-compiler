@@ -1,0 +1,11 @@
+{
+  "bin": true,
+  "name": "fontramp",
+  "description": "C1 (#281) multi-face CreateFont acceptance app: per-face size ramp window + headless metric/ink probe",
+  "deps": [
+    "lib.json"
+  ],
+  "sources": [
+    "fontramp.c"
+  ]
+}

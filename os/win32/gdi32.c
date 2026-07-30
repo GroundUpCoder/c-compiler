@@ -8,18 +8,29 @@
  * This is the DWM redirection model: CPU draw -> shm -> GPU composite
  * (todos/0055) — GDI *is* a CPU rasterizer, on Windows and here.
  *
- * Text goes through freetype (the vendored lib /bin/term uses), font at
- * /etc/fonts/mono.ttf with the baked /usr/share/fonts/mono.ttf fallback;
- * faceName is ignored (the baked face is the one family). Strings are
+ * Text goes through freetype (the vendored lib /bin/term uses). Since C1
+ * (ticket #281) CreateFont is MULTI-FACE: faceName/lfWeight/lfItalic
+ * resolve against the image's baked families (mono / sans / serif, the 8
+ * Noto faces in os/image.json) via a Win32-shaped mapper — known family
+ * names map directly, unknown names fall back by lfPitchAndFamily bits,
+ * NULL/empty keeps the mono default (unchanged in C1 — the no-flag-day
+ * half; C2 moves the stock fonts). Every face resolves /etc/fonts/NAME.ttf
+ * over the baked /usr/share/fonts/NAME.ttf (the mono pair's rule,
+ * per face). Real bold/italic files are preferred where baked; a variant
+ * with no real file synthesizes (fontcore bold_xdelta embolden / italic
+ * shear — mono and serif have no baked italic). lfUnderline/lfStrikeOut
+ * are drawn rules over the run (real GDI behavior). Strings are
  * UTF-8 (0211): draw/measure step by code point; a code point face 0
  * lacks probes the FALLBACK CHAIN (fontchain.h — /etc/fonts/fallback
  * face list, populated by gucman font packages; Unicode Phase D) and a
  * code point NO face covers renders the synthesized tofu box (a LOUD
  * gap, never a '?' that reads as data corruption) and reports once via
  * WIN32_UNSUPPORTED. Control chars draw '?' (term's rule). Glyphs cache
- * lazily per HFONT (ASCII flat array + a code-point side cache — the
- * cached bitmap remembers whichever face rendered it, so the chain is
- * probed once per cp, never per paint).
+ * lazily per HFONT — per (face,size,style) by construction (ASCII flat
+ * array + a code-point side cache; the cached bitmap remembers whichever
+ * face rendered it, so the chain is probed once per cp, never per
+ * paint). Synthetic styles apply to chain-face glyphs too (a bold font's
+ * fallback glyph renders bold).
  *
  * Deliberate 0057 simplifications (grow under 0060's missing-symbol log):
  *   - pens: PS_SOLID/PS_NULL honored, other styles draw solid; wide pens
@@ -80,12 +91,31 @@ void __win32_unsupported(const char *fmt, ...) {
     if (strict && strict[0] == '1') abort();
 }
 
-#define FONT_PATH     "/etc/fonts/mono.ttf"
-#define FONT_FALLBACK "/usr/share/fonts/mono.ttf"
 #define STOCK_FONT_PX 20  /* THE system size (font-20 retune): equals the
                              wm chrome_font, so chrome, menus, controls and
                              the software center all share one 20px-AA face */
 #define FT_MONO_THRESHOLD 96   /* NONANTIALIASED coverage cut (tuning knob) */
+#define GDI_BOLD_XDELTA 0x0555 /* synthetic-bold embolden strength — ksvc's
+                                  KSVC_BOLD_XDELTA, the one weight the estate
+                                  already renders (title bars) */
+
+/* ---- the face table (C1, ticket #281) ------------------------------
+ * Three families over the image's 8 baked Noto faces; every variant
+ * resolves /etc/fonts/BASE.ttf over /usr/share/fonts/BASE.ttf (the old
+ * FONT_PATH/FONT_FALLBACK rule, per face). A variant slot names the
+ * NEAREST real file: sans has real italic files; mono and serif don't,
+ * so their italic slots repeat the upright file and the style
+ * synthesizes (shear — see g_faceRealItal). Every family has a real
+ * bold file, so bold synthesizes only on the load-failure degrade
+ * ladder in font_ensure. */
+enum { GF_MONO, GF_SANS, GF_SERIF };
+
+static const char *const g_faceBase[3][2][2] = {  /* [family][bold][italic] */
+    { { "mono",  "mono"         }, { "mono_bold",  "mono_bold"        } },
+    { { "sans",  "sans_italic"  }, { "sans_bold",  "sans_italic_bold" } },
+    { { "serif", "serif"        }, { "serif_bold", "serif_bold"       } },
+};
+static const unsigned char g_faceRealItal[3] = { 0, 1, 0 };  /* only sans */
 
 /* ============================================================ objects */
 
@@ -106,6 +136,12 @@ struct __GDIOBJ {
     FcChain fbc;                /* fallback chain faces (Phase D; fontcore) */
     int fontPx, fontLoaded, fontFailed;
     int fontMono;               /* NONANTIALIASED_QUALITY: 1-bit rendering */
+    int fontFam;                /* GF_* family (C1; the LOGFONT resolution) */
+    int fontBold, fontItal;     /* requested style (lfWeight >= FW_BOLD, lfItalic) */
+    int fontUnder, fontStrike;  /* drawn rules over each run (C1) */
+    int fontSynBold, fontSynItal;  /* ensure-resolved: no real file, synthesize */
+    int fontCellH;              /* positive lfHeight (cell mode), refined at ensure */
+    int ulOff, ulThick, soOff;  /* underline/strikeout rule geometry, px */
     int ascent, descent, lineH, maxAdv, monoAdv;
     FcCache fontCache;          /* flat [95] ASCII + linear-scan side (0211) */
 };
@@ -229,14 +265,95 @@ static void gdi_fc_fail(const char *p) {
     WIN32_UNSUPPORTED("fallback face %s (cannot load; skipping)", p);
 }
 
+/* ---- the Win32-shaped face mapper (C1) -----------------------------
+ * faceName wins: known family names (Windows' and ours) map directly;
+ * an unknown NON-EMPTY name falls back to family keywords in the name,
+ * then to the lfPitchAndFamily bits; NULL/empty goes straight to the
+ * bits. Nothing resolvable keeps the mono default (unchanged in C1 —
+ * C2 is the flag day). Matching is case-insensitive. */
+static int face_family(LPCSTR name, DWORD pitchAndFamily) {
+    if (name && name[0]) {
+        char low[2 * LF_FACESIZE];
+        int n = 0;
+        for (; name[n] && n < (int)sizeof low - 1; n++) {
+            char c = name[n];
+            low[n] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+        }
+        low[n] = 0;
+        static const struct { const char *n; unsigned char fam; } MAP[] = {
+            { "mono", GF_MONO },            { "noto sans mono", GF_MONO },
+            { "courier", GF_MONO },         { "courier new", GF_MONO },
+            { "consolas", GF_MONO },        { "fixedsys", GF_MONO },
+            { "lucida console", GF_MONO },  { "terminal", GF_MONO },
+            { "sans", GF_SANS },            { "noto sans", GF_SANS },
+            { "ms shell dlg", GF_SANS },    { "ms shell dlg 2", GF_SANS },
+            { "ms sans serif", GF_SANS },   { "microsoft sans serif", GF_SANS },
+            { "arial", GF_SANS },           { "tahoma", GF_SANS },
+            { "segoe ui", GF_SANS },        { "verdana", GF_SANS },
+            { "helvetica", GF_SANS },       { "system", GF_SANS },
+            { "serif", GF_SERIF },          { "noto serif", GF_SERIF },
+            { "times new roman", GF_SERIF },{ "times", GF_SERIF },
+            { "ms serif", GF_SERIF },       { "georgia", GF_SERIF },
+            { "cambria", GF_SERIF },
+        };
+        for (int i = 0; i < (int)(sizeof MAP / sizeof MAP[0]); i++)
+            if (!strcmp(low, MAP[i].n)) return MAP[i].fam;
+        /* family keywords, most-specific first ("dejavu sans mono" is mono,
+         * "open sans" / "pt sans-serif" are sans before "serif" can hit) */
+        if (strstr(low, "mono") || strstr(low, "courier") || strstr(low, "fixed"))
+            return GF_MONO;
+        if (strstr(low, "sans")) return GF_SANS;
+        if (strstr(low, "serif")) return GF_SERIF;
+    }
+    switch (pitchAndFamily & 0xF0u) {
+    case FF_ROMAN:      return GF_SERIF;
+    case FF_SWISS:
+    case FF_SCRIPT:                          /* nearest baked family */
+    case FF_DECORATIVE: return GF_SANS;
+    case FF_MODERN:     return GF_MONO;
+    }
+    if ((pitchAndFamily & 0x0Fu) == VARIABLE_PITCH) return GF_SANS;
+    return GF_MONO;                          /* the C1 default, unchanged */
+}
+
+/* Open a face base name through the per-face /etc > /usr pair. */
+static int font_open_pair(HGDIOBJ f, const char *base) {
+    char p[64];
+    snprintf(p, sizeof p, "/etc/fonts/%s.ttf", base);
+    if (!FT_New_Face(g_ft, p, 0, &f->face)) return 0;
+    snprintf(p, sizeof p, "/usr/share/fonts/%s.ttf", base);
+    return FT_New_Face(g_ft, p, 0, &f->face) ? -1 : 0;
+}
+
 static int font_ensure(HGDIOBJ f) {
     if (!f || f->type != OBJ_FONT) return -1;
     if (f->fontLoaded) return 0;
     if (f->fontFailed || !ft_ready()) return -1;
-    if (FT_New_Face(g_ft, FONT_PATH, 0, &f->face) &&
-        FT_New_Face(g_ft, FONT_FALLBACK, 0, &f->face)) {
-        f->fontFailed = 1;
-        return -1;
+    int fam = f->fontFam, b = f->fontBold, it = f->fontItal;
+    /* Prefer the variant's REAL file; the slot itself may already imply
+     * synthesis (mono/serif italic slots repeat the upright file). */
+    f->fontSynBold = 0;
+    f->fontSynItal = it && !g_faceRealItal[fam];
+    if (font_open_pair(f, g_faceBase[fam][b][it])) {
+        /* Degrade ladder (the GDI mapper's nearest-face rule): family
+         * regular + full synthesis, then the mono pair (the pre-C1
+         * ultimate fallback). Never silent-fail while a face exists. */
+        f->fontSynBold = b;
+        f->fontSynItal = it;
+        if (font_open_pair(f, g_faceBase[fam][0][0]) &&
+            (fam == GF_MONO || font_open_pair(f, g_faceBase[GF_MONO][0][0]))) {
+            f->fontFailed = 1;
+            return -1;
+        }
+    }
+    /* Positive lfHeight = CELL height: shrink the pixel size so
+     * ascent+descent fits — the same units_per_EM/(asc-desc) formula the
+     * pre-C1 CreateFont probe ran, now against the RESOLVED face. */
+    if (f->fontCellH > 0) {
+        long span = (long)f->face->ascender - (long)f->face->descender;
+        if (span > 0)
+            f->fontPx = (int)(((long long)f->fontCellH * f->face->units_per_EM) / span);
+        if (f->fontPx < 4) f->fontPx = 4;
     }
     FT_Set_Pixel_Sizes(f->face, 0, font_px_clamped(f));
     f->ascent = (int)(f->face->size->metrics.ascender >> 6);
@@ -253,6 +370,23 @@ static int font_ensure(HGDIOBJ f) {
     if (f->monoAdv <= 0) f->monoAdv = f->maxAdv;
     if (f->descent < 0) f->descent = 0;
     if (f->lineH < f->ascent + f->descent) f->lineH = f->ascent + f->descent;
+    /* Underline/strikeout rule geometry (C1): underline from the face's
+     * own metrics (font units -> px), defaults where the face carries
+     * none; strikeout at 0.3 em above baseline (the classic GDI
+     * position — the vendored FT_Face doesn't surface OS/2
+     * yStrikeoutPosition). Offsets are baseline-relative. */
+    {
+        int px = (int)f->face->size->metrics.y_ppem;
+        long upem = (long)f->face->units_per_EM;
+        f->ulOff = upem > 0
+            ? (int)(-(long)f->face->underline_position * px / upem) : 0;
+        f->ulThick = upem > 0
+            ? (int)((long)f->face->underline_thickness * px / upem) : 0;
+        if (f->ulOff < 1) f->ulOff = f->descent > 1 ? f->descent / 2 : 1;
+        if (f->ulThick < 1) f->ulThick = px > 14 ? px / 14 : 1;
+        f->soOff = px * 3 / 10;
+        if (f->soOff < 1) f->soOff = 1;
+    }
     fc_chain_init(&f->fbc, g_ft, g_fcPaths, fc_count(), gdi_fc_fail);
     f->fontLoaded = 1;
     return 0;
@@ -278,7 +412,9 @@ static FcGlyph *gdi_render(void *ctx, FcGlyph *g, unsigned cp) {
         fc_tofu(g, cell, f->ascent, cp);
         return g;
     }
-    FcRenderOpts o = { f->fontMono ? FT_MONO_THRESHOLD : 0, 0 };
+    FcRenderOpts o = { f->fontMono ? FT_MONO_THRESHOLD : 0,
+                       f->fontSynBold ? GDI_BOLD_XDELTA : 0,
+                       f->fontSynItal ? FC_ITALIC_SHEAR : 0 };
     return fc_render_face(g, face, gi, o);
 }
 
@@ -303,33 +439,31 @@ HFONT CreateFont(int height, int width, int escapement, int orientation,
                  int weight, DWORD italic, DWORD underline, DWORD strikeout,
                  DWORD charset, DWORD outPrecision, DWORD clipPrecision,
                  DWORD quality, DWORD pitchAndFamily, LPCSTR faceName) {
-    (void)width; (void)escapement; (void)orientation;
     (void)charset; (void)outPrecision; (void)clipPrecision;
-    (void)pitchAndFamily; (void)faceName;
-    if (weight >= FW_BOLD || italic || underline || strikeout)
-        WIN32_UNSUPPORTED("font styles (bold/italic/underline — one face, "
-                          "drawn regular)");
+    if (escapement || orientation)
+        WIN32_UNSUPPORTED("font escapement/orientation (drawn horizontal)");
+    if (width)
+        WIN32_UNSUPPORTED("font lfWidth (condense/expand — drawn at the "
+                          "face's natural width)");
     HGDIOBJ o = obj_new(OBJ_FONT);
     if (!o) return NULL;
+    /* C1 (ticket #281): faceName/weight/italic resolve against the baked
+     * families; underline/strikeout are drawn rules. Escapement etc.
+     * above stay fail-loud. Resolution to a FILE happens lazily at
+     * font_ensure (the face table + degrade ladder there). */
+    o->fontFam = face_family(faceName, pitchAndFamily);
+    o->fontBold = weight >= FW_BOLD;
+    o->fontItal = italic != 0;
+    o->fontUnder = underline != 0;
+    o->fontStrike = strikeout != 0;
     o->fontPx = font_px_for_height(height);
+    /* Positive height means "cell height": recorded here, refined at
+     * ensure time against the resolved face (units_per_EM / span). */
+    o->fontCellH = height > 0 ? height : 0;
     /* NONANTIALIASED_QUALITY = real GDI semantics: 1-bit (aliased) glyph
      * rendering. The wm chrome's Win95-crisp knob (Phase C / D1); any app
      * may ask for it. Other quality values keep the AA default. */
     o->fontMono = quality == NONANTIALIASED_QUALITY;
-    /* Positive height means "cell height": load lazily, then shrink the
-     * pixel size so ascent+descent <= height. Approximated at ensure time
-     * by scaling with units_per_EM / (ascender - descender). */
-    if (height > 0 && ft_ready()) {
-        FT_Face probe;
-        if (!FT_New_Face(g_ft, FONT_PATH, 0, &probe) ||
-            !FT_New_Face(g_ft, FONT_FALLBACK, 0, &probe)) {
-            long span = (long)probe->ascender - (long)probe->descender;
-            if (span > 0)
-                o->fontPx = (int)(((long long)height * probe->units_per_EM) / span);
-            FT_Done_Face(probe);
-            if (o->fontPx < 4) o->fontPx = 4;
-        }
-    }
     return o;
 }
 
@@ -1040,6 +1174,23 @@ static BOOL text_run(HDC dc, int x, int y, LPCSTR s, int len, const INT *dx,
         }
         penX += dx ? dx[n] : g->advance;
     }
+    /* Underline/strikeout: drawn rules over the whole run (real GDI
+     * behavior, C1). Geometry from font_ensure; solid text color. */
+    if ((f->fontUnder || f->fontStrike) && penX > x) {
+        uint32_t ink = ((uint32_t)fr) | ((uint32_t)fg << 8) |
+                       ((uint32_t)fb << 16) | 0xFF000000u;
+        for (int pass = 0; pass < 2; pass++) {
+            if (!(pass == 0 ? f->fontUnder : f->fontStrike)) continue;
+            int y0 = pass == 0 ? baseline + f->ulOff : baseline - f->soOff;
+            for (int yy = y0; yy < y0 + f->ulThick; yy++)
+                for (int xx = x; xx < penX; xx++) {
+                    if (!in_clip(dc, xx, yy)) continue;
+                    if (extraClip && (xx < extraClip->left || xx >= extraClip->right ||
+                                      yy < extraClip->top || yy >= extraClip->bottom)) continue;
+                    dc->bits[yy * dc->stride + xx] = ink;
+                }
+        }
+    }
     return TRUE;
 }
 
@@ -1090,15 +1241,22 @@ BOOL GetTextMetrics(HDC dc, TEXTMETRIC *tm) {
     if (tm->tmExternalLeading < 0) tm->tmExternalLeading = 0;
     tm->tmAveCharWidth = font_glyph(f, 'x')->advance;
     tm->tmMaxCharWidth = f->maxAdv;
-    tm->tmWeight = FW_NORMAL;
+    tm->tmWeight = f->fontBold ? FW_BOLD : FW_NORMAL;
+    tm->tmItalic = (BYTE)(f->fontItal ? 1 : 0);
+    tm->tmUnderlined = (BYTE)(f->fontUnder ? 1 : 0);
+    tm->tmStruckOut = (BYTE)(f->fontStrike ? 1 : 0);
     tm->tmFirstChar = 32;
     tm->tmLastChar = 126;
     tm->tmDefaultChar = '?';
     tm->tmBreakChar = ' ';
     /* TEXTMETRIC's TMPF_FIXED_PITCH bit is famously INVERTED: a fixed
      * (mono) font reports the bit CLEAR (0211 audit D11). The old
-     * FIXED_PITCH here was the LOGFONT-sense constant — wrong side. */
-    tm->tmPitchAndFamily = 0;
+     * FIXED_PITCH here was the LOGFONT-sense constant — wrong side.
+     * Mono keeps the exact pre-C1 value (0 — the no-flag-day half);
+     * proportional families report the set bit + their FF_ nibble. */
+    tm->tmPitchAndFamily = (BYTE)(
+        f->fontFam == GF_SANS  ? (TMPF_FIXED_PITCH | FF_SWISS) :
+        f->fontFam == GF_SERIF ? (TMPF_FIXED_PITCH | FF_ROMAN) : 0);
     return TRUE;
 }
 

@@ -213,11 +213,18 @@ static FT_Face fc_probe(FT_Face face0, FcChain *ch, int px,
  * Per-render knobs. `mono_threshold` > 0 thresholds the smooth coverage
  * to 1-bit (gdi32 NONANTIALIASED); `bold_xdelta` > 0 outline-emboldens
  * (ksvc title weight, the ftsynth.c x_ppem * delta / 1024 formula) so
- * measure and render agree by construction. 0 disables each. */
+ * measure and render agree by construction; `italic_shear` > 0 obliques
+ * the outline (gdi32 synthetic italic for families with no baked italic
+ * file — the ftsynth.c shear, advance untouched like
+ * FT_GlyphSlot_Oblique). 0 disables each. */
 typedef struct {
     int mono_threshold;
     int bold_xdelta;
+    int italic_shear;            /* 16.16 xy shear; FC_ITALIC_SHEAR = ~12deg */
 } FcRenderOpts;
+
+/* ftsynth.c's FT_GlyphSlot_Oblique slant: ~12 degrees. */
+#define FC_ITALIC_SHEAR 0x0366A
 
 /* Load flags for the face's CURRENT ppem (todos/0279). Small sizes get
  * light autohinting (vertical-only stem snapping) — unhinted stems land
@@ -250,6 +257,10 @@ static FcGlyph *fc_render_face(FcGlyph *g, FT_Face face, FT_UInt gi, FcRenderOpt
             FT_Outline_EmboldenXY(&slot->outline, xstr, xstr);
             slot->advance.x += xstr;
         }
+    }
+    if (o.italic_shear && slot->format == FT_GLYPH_FORMAT_OUTLINE) {
+        FT_Matrix m = { 0x10000L, o.italic_shear, 0, 0x10000L };
+        FT_Outline_Transform(&slot->outline, &m);
     }
     g->advance = (int)(slot->advance.x >> 6);
     if (FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL)) return g;

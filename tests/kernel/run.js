@@ -109,6 +109,7 @@ const tests = [
   ['test_mgba_e2e.js', IMG],     // 0112: /bin/mgba (mGBA 0.10.5 GBA core — ARM7TDMI, HLE BIOS) — built-in MODE3 test ROM renders a red frame at 480x320, .gba defaults to mgba, .gb/.gbc stay sameboy
   ['test_cairo_e2e.js', IMG],    // 0061: cairo image backend -> shm — in-OS selftest (gradients/AA/cairo-ft anchors), windowed scene via wmctl shot, theme repaint, vector re-render on resize
   ['test_gdi32_e2e.js', IMG],    // 0057: win32 gdi32 — in-OS selftest (GDI semantics + leak check), windowed scene probed via wmctl shot, bit-exact repaints
+  ['test_multiface_font_e2e.js', IMG], // C1/#281: multi-face CreateFont — NULL-face default byte-identical to mono (no flag day), proportional sans/serif metrics, real bold/italic files preferred (sans italic advances shift) vs synthetic shear (mono/serif italic advances preserved), drawn underline/strikeout rules, the Win32 name mapper, /etc per-face override, per-face ramp shots
   ['test_user32_e2e.js', IMG],   // 0058: win32 user32 — blocking GetMessage loop, lifecycle order, controls, MessageBox modal, wmctl tree/click-by-label agent path
   ['test_listview_e2e.js', IMG], // 0370: SysListView32 + SysHeader32 + the AQM agent seam — lvtest message surface, rows/columns addressable by NAME (wmctl click/gettext/wait text, lvrow/hdcol tree lines), sort via header click, LISTBOX rows retrofitted as click targets
   ['test_kernel32_e2e.js', IMG], // 0059: win32 kernel32/advapi32/wide-CRT — in-OS selftest, POSIX-twin identity, registry persistence across boots

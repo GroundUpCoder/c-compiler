@@ -316,7 +316,18 @@ typedef const RECT *LPCRECT;
 #define FIXED_PITCH         1
 #define VARIABLE_PITCH      2
 #define FF_DONTCARE         0
+#define FF_ROMAN            16
+#define FF_SWISS            32
 #define FF_MODERN           48
+#define FF_SCRIPT           64
+#define FF_DECORATIVE       80
+
+/* TEXTMETRIC tmPitchAndFamily low bits (NB TMPF_FIXED_PITCH is famously
+ * INVERTED: set = variable pitch, clear = fixed — 0211 audit D11). */
+#define TMPF_FIXED_PITCH    0x01
+#define TMPF_VECTOR         0x02
+#define TMPF_TRUETYPE       0x04
+#define TMPF_DEVICE         0x08
 
 #define LF_FACESIZE 32
 typedef struct tagLOGFONT {

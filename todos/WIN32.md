@@ -38,6 +38,33 @@ Messages ↔ the per-process input ring; `WM_PAINT` damage ↔
 `TextOut` via freetype (shared with `/bin/term`); shapes/blits are
 arithmetic on the pixel buffer. See the drawing/compositing note below.
 
+**Fonts (C1, ticket #281 — multi-face CreateFont).** CreateFont resolves
+`lfFaceName`/`lfWeight`/`lfItalic` against the image's three baked
+families (mono / sans / serif — the 8 Noto faces in os/image.json), each
+face read through its own `/etc/fonts/NAME.ttf` > `/usr/share/fonts/
+NAME.ttf` pair. The mapper is Win32-shaped: known family names map
+directly ("Courier"/"Consolas"/"Fixedsys"/"Lucida Console" → mono,
+"MS Shell Dlg"/"MS Sans Serif"/"Arial"/"Tahoma"/"Segoe UI" → sans,
+"Times New Roman"/"Georgia"/"MS Serif" → serif), unknown names fall back
+to family keywords in the name and then the `lfPitchAndFamily` bits
+(FF_ROMAN → serif, FF_SWISS → sans, FF_MODERN → mono, VARIABLE_PITCH →
+sans); NULL/empty resolves mono — the C1 default is UNCHANGED (no flag
+day; C2/#282 moves the stock fonts). Real bold/italic files are
+preferred where baked; a variant with no real file synthesizes via
+fontcore (`bold_xdelta` embolden on the missing-file degrade ladder;
+`italic_shear` oblique for mono/serif italic — advance-preserving, the
+ftsynth shear). `lfUnderline`/`lfStrikeOut` draw as rules over each text
+run (underline geometry from the face's own metrics, strikeout at 0.3 em).
+GetTextMetrics reports per-face metrics + the requested style
+(tmWeight/tmItalic/tmUnderlined/tmStruckOut; proportional faces set
+TMPF_FIXED_PITCH + their FF_ nibble, mono keeps the pre-C1 value 0).
+Glyph caches are per-HFONT = per (face,size,style); the fallback chain
+(`/etc/fonts/fallback`) is probed for missing codepoints on every face,
+and synthetic styles apply to chain glyphs too. Still fail-loud:
+lfWidth (condense/expand), lfEscapement/lfOrientation. Acceptance app:
+`/bin/fontramp` (windowed per-face size ramp + headless `probe` metric
+dump); test `tests/kernel/test_multiface_font_e2e.js`.
+
 **kernel32 → POSIX.** `HANDLE`↔fd, `CreateFile/ReadFile`↔`open/read`,
 `FindFirstFile`↔`readdir`, `VirtualAlloc`↔`mmap`, `CreateProcess`↔
 `posix_spawn`, `QueryPerformanceCounter`↔`clock_gettime`. User-space
@@ -273,7 +300,8 @@ dialogs speaking the RegisterWindowMessageW("commdlg_FindReplace")
 protocol (FR_FINDNEXT/FR_REPLACE/FR_REPLACEALL/FR_DIALOGTERM; always
 FR_DOWN), and ChooseFont/PrintDlg/PageSetupDlg as honest cancels
 (ChooseFontW became REAL in todos/0223: the file-dialog modal shape —
-one honest "mono" face row, point-size EDIT + list, a live sample
+one "mono" face row (multi-face since C1/#281; the row list expansion
+rides the C2/#282 flag day), point-size EDIT + list, a live sample
 STATIC driven by WM_SETFONT; OK fills lfHeight = -px (em) at 96dpi and
 iPointSize tenths. user32 stores the WM_SETFONT/WM_GETFONT font on the
 HWND and selects it into every GetDC/BeginPaint DC — the one choke all
@@ -485,8 +513,10 @@ window classes + skipped dialog-template controls (CreateWindowEx /
 dlg_create), control-contract messages falling through to DefWindowProc
 (EM_/BM_/LB_/CB_/SBM_ ranges, deduped per message), PostMessage(NULL)
 thread messages, ShowWindow's minimize family, scroll APIs on windows
-without that bar, gdi32's refused blits/pen styles/font styles/missing
-glyphs (drawn as a synthesized tofu box, never '?'), comdlg32's
+without that bar, gdi32's refused blits/pen styles/missing
+glyphs (drawn as a synthesized tofu box, never '?') and font
+lfWidth/lfEscapement/lfOrientation (bold/italic/underline/strikeout are
+REAL since C1/#281), comdlg32's
 too-small lpstrFile, kernel32's named GetModuleHandle/named mappings/
 failed unmap write-backs, menu cascades deeper than one level. The
 booted app suite (winmine/notepad/fileman/ctlpanel/paint/ctldemo) emits

@@ -344,6 +344,12 @@ thing this file exists to kill.
 - anchor:  * Both are recorded in todos/LIABILITIES.md against todos/0426.
 - provenance: 0420
 
+### L65 — ChooseFontW still lists one "mono" face row although CreateFont resolves mono/sans/serif since C1
+- ticket: #282
+- file: os/win32/comdlg32.c
+- anchor:  * dialog-visible change in the ports, so it rides the C2 flag day
+- provenance: #281
+
 ### L66 — moduleKey's rw validation floor is one store timestamp tick: a same-ino, same-size, same-tick rewrite runs a stale Module silently (accepted — window unreachable in-OS; complete closure = a content-hash key term, refused because it re-adds the per-spawn read the cache exists to skip)
 - ticket: #109
 - file: host.js

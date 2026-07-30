@@ -18,8 +18,10 @@
  * radios are not worth their pixels here); Match case is honored.
  *
  * ChooseFontW is REAL (todos/0223): the file-dialog modal shape with a
- * face LISTBOX (the ONE image font family — CreateFont ignores faceName,
- * so listing more would be fake), a size EDIT + point-size LISTBOX, and a
+ * face LISTBOX — one "mono" row: CreateFont resolves faceName against
+ * mono/sans/serif since C1/#281, but expanding this list is a
+ * dialog-visible change in the ports, so it rides the C2 flag day
+ * (#282) — a size EDIT + point-size LISTBOX, and a
  * live sample STATIC driven through WM_SETFONT (dogfooding the 0223
  * user32 plumbing). OK fills the caller's LOGFONTW (negative lfHeight =
  * em px, the CreateFont convention) and returns TRUE.
@@ -496,9 +498,9 @@ HWND ReplaceTextW(FINDREPLACEW *fr) { return fr_dialog(fr, 1); }
 
 /* ---- the font dialog (todos/0223) ----
  * The file_dialog shape verbatim: own class + WS_POPUP top-level, child
- * controls, the MessageBox owner-disable + local pump. Content is honest
- * about the platform: ONE face row ("mono" — gdi32's CreateFont ignores
- * faceName; every font is the image family at some pixel size), a size
+ * controls, the MessageBox owner-disable + local pump. ONE face row
+ * ("mono" — CreateFont is multi-face since C1/#281; the list expansion
+ * is deferred to the C2 flag day (#282), see the header note), a size
  * EDIT + the classic point-size list, a live sample STATIC re-fonted via
  * WM_SETFONT on every size change (the 0223 user32 plumbing, dogfooded
  * here), OK/Cancel. Sizes are POINTS at the synthetic 96dpi

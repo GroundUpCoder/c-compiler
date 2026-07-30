@@ -1019,8 +1019,15 @@ The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,
 objects + stock + leak counters, all 16 ROP2s, shapes with GDI
-right/bottom-exclusive and LineTo-endpoint semantics, freetype text
-sharing term's font, BitBlt/StretchBlt/PatBlt, GetDIBits/SetDIBits
+right/bottom-exclusive and LineTo-endpoint semantics, freetype text —
+MULTI-FACE since C1/#281: CreateFont resolves faceName/lfWeight/lfItalic
+against the baked mono/sans/serif Noto families (Win32-shaped name
+mapper + pitchAndFamily fallback, per-face /etc > /usr file pairs, real
+bold/italic files preferred with fontcore embolden/shear synthesis where
+none is baked, underline/strikeout as drawn rules, per-face metrics;
+NULL face stays mono — no flag day until C2/#282; acceptance app
+/bin/fontramp + test_multiface_font_e2e.js) —
+BitBlt/StretchBlt/PatBlt, GetDIBits/SetDIBits
 B<->R swizzle, IntersectClipRect). 0058 landed user32 (`user32.c`):
 window classes + the HWND tree (top-level HWND ↔ SDL window/kernel
 surface; child controls drawn IN-PROCESS into the top-level's surface,

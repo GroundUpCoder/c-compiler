@@ -1,5 +1,5 @@
 {
-  "version": 199,
+  "version": 200,
   "overlays": [
     {
       "id": "clang-apps",
@@ -244,6 +244,9 @@
       "/usr/bin/ctldemo": {
         "project": "os/win32/ctldemo.json"
       },
+      "/usr/bin/fontramp": {
+        "project": "os/win32/fontramp.json"
+      },
       "/usr/bin/ctldemo.res": {
         "bin": "os/win32/ctldemo.res"
       },
@@ -330,6 +333,9 @@
       },
       "/usr/share/menu/Demos/ctldemo": {
         "link": "/usr/bin/ctldemo"
+      },
+      "/usr/share/menu/Demos/fontramp": {
+        "link": "/usr/bin/fontramp"
       },
       "/usr/share/fonts/mono.ttf": {
         "bin": "vendor/fonts/NotoSansMono-Regular.ttf"
