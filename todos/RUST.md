@@ -206,7 +206,9 @@ These rules bind every ticket in the program.
 `todos/RUST-D1-RULING.md`). The ruling is staged, and it does not pre-judge —
 it keeps the `todos/done/0418` §Result item 9 refusal. What it settles now: a
 port is not blocked at the compile level (0445 closed class D — all 102 codex
-crates measured, 41 with zero intrinsic platform coupling); the wire protocol
+crates measured; **41 of the 83 old-class-D crates** — 9 PASS + 32
+sibling-only — have zero intrinsic platform coupling, "half the old hole");
+the wire protocol
 is the Responses API alone, unversioned, with a real two-method transport seam
 (`HttpTransport`); and both arms share the same HTTP prerequisites (`#191`,
 then `#292`). What still decides the arm is two missing measurements — M1
