@@ -1,6 +1,6 @@
 # 0383 — Coordinated sibling rename: clang-simplified overlay `python-clang` → `cpython-clang` + flip `clangApp` (0374 merge-time step 3)
 
-- **Status**: open
+- **Status**: done
 - **Priority**: P0 — **raised from P2 on 2026-07-30 by jku's ruling that the Rust and
   codex work outranks the rest of the ready band.** This ticket is not in that program,
   and it was hoisted for a mechanical reason: `todos/0416` (Lane A4) carries
