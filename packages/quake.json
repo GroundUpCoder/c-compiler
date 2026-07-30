@@ -7,7 +7,7 @@
     "id1/pak0.pak": { "bin": "vendor/quake/data/id1/pak0.pak" },
     "id1/autoexec.cfg": { "bin": "vendor/quake/data/id1/autoexec.cfg" },
     "quake": {
-      "content": "#!/bin/sh\n# Quake resolves its data (./id1/pak0.pak) and writes config.cfg relative\n# to the CWD (sys_sdl.c basedir \".\"), so cd to wherever this package\n# actually lives — the cd is load-bearing, do not drop it. Self-location\n# is a known-prefix probe (todos/0444): /opt/quake installed, /usr/opt/quake\n# baked (fat image); `[` is a hush builtin — zero spawns (the old\n# dirname-of-realpath command substitution cost four processes per launch).\npkg=/opt/quake\n[ -d \"$pkg\" ] || pkg=/usr/opt/quake\ncd \"$pkg\" && ./quake-bin \"$@\"\n",
+      "content": "#!/bin/sh\n# Quake resolves its data (./id1/pak0.pak) and writes config.cfg relative\n# to the CWD (sys_sdl.c basedir \".\"), so cd to wherever this package\n# actually lives — the cd is load-bearing, do not drop it. Self-location\n# is a known-prefix probe (todos/0444): /opt/quake installed, /usr/opt/quake\n# baked (fat image); cd is a hush builtin — zero spawns (the old\n# dirname-of-realpath command substitution cost four processes per launch).\n# Variable-free by design (#296): builtins and literal paths only. The\n# launcher stays the game's waiting parent (no exec) — job control and the\n# e2e's pkill contract rely on that.\ncd /opt/quake 2>/dev/null || cd /usr/opt/quake || exit 127\n./quake-bin \"$@\"\n",
       "mode": 493
     }
   },
