@@ -2,9 +2,9 @@
   "name": "doom-clang",
   "version": "1.0.0",
   "summary": "DOOM (clang-built variant — real Clang/LLVM cross-compile, CLANG-CPP-EPIC)",
-  "requires": "clang-sibling",
+  "requires": "native-sibling:clang",
   "files": {
-    "doom-clang": { "clangApp": "doom-clang" }
+    "doom-clang": { "nativeApp": "doom-clang" }
   },
   "bin": { "doom-clang": "doom-clang" },
   "desktop": { "cmd": "doom-clang" },

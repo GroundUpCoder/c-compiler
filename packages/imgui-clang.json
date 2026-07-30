@@ -2,9 +2,9 @@
   "name": "imgui-clang",
   "version": "1.0.0",
   "summary": "Dear ImGui demo + Process Inspector (clang-built C++ — ocornut/imgui, T1 of the C++ port ladder)",
-  "requires": "clang-sibling",
+  "requires": "native-sibling:clang",
   "files": {
-    "imgui-clang": { "clangApp": "imgui-clang" }
+    "imgui-clang": { "nativeApp": "imgui-clang" }
   },
   "bin": { "imgui-clang": "imgui-clang" },
   "desktop": { "cmd": "imgui-clang" },

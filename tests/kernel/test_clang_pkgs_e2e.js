@@ -19,7 +19,7 @@
 //   - `gucman install glm-clang` (T2): the spinning-cube app launches
 //     (window "GLM (clang)", "glm_app: glm 1.0.1 ready" banner)
 //   - `gucman install tinyrenderer-clang` (T3): the software-rasterized
-//     spinning head launches against the PACKAGED model assets (clangFile
+//     spinning head launches against the PACKAGED model assets (nativeFile
 //     entries), self-quits at the 12-frame limit, and its checkpoint series
 //     is BYTE-EXACT against the sibling's committed golden — the render is
 //     deterministic across bare host.js AND the kernel's brokered fs

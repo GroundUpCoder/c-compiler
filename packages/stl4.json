@@ -2,9 +2,9 @@
   "name": "stl4",
   "version": "1.0.0",
   "summary": "STL node/tree conformance demo (clang-built C++ — clang-simplified's wasm/demos/stl_features4.cpp: node-based map/set iterator stability + std::function target recovery)",
-  "requires": "clang-sibling",
+  "requires": "native-sibling:clang",
   "files": {
-    "stl4": { "clangApp": "stl4" },
+    "stl4": { "nativeApp": "stl4" },
     "stl4-demo": {
       "content": "#!/bin/sh\n# Menu launcher: stl4 is a tty app (the STL conformance report on stdout), so\n# run it in a terminal window and hold the window open for the verdict — the\n# etl-tests pattern. $0 arrives through symlinks; realpath canonicalizes (0263).\nhere=\"$(dirname \"$(realpath \"$0\")\")\"\nexec term sh -c \"$here/stl4; echo; echo '[stl4 demo done — press Enter to close]'; read _\"\n",
       "mode": 493

@@ -350,13 +350,13 @@ and validated in `buildPackage` (`tools/mkpkg.js:249-269` today):
 
 ```jsonc
 { "name": "doom-clang", "version": "…", "summary": "DOOM (clang-built variant)",
-  "requires": "clang-sibling",                  // NEW: gate field
-  "files": { "doom-clang": { "clangApp": "doom-clang" } },   // NEW entry type
+  "requires": "native-sibling:clang",                  // NEW: gate field
+  "files": { "doom-clang": { "nativeApp": "doom-clang" } },   // NEW entry type
   "bin": { "doom-clang": "doom-clang" },
   "menu": [ { "group": "Demos", "entry": "doom-clang", "cmd": "doom-clang" } ] }
 ```
 
-- **`requires: "clang-sibling"`** — `listPackages` (`os/os-common.js:541`)
+- **`requires: "native-sibling:clang"`** — `listPackages` (`os/os-common.js:541`)
   grows a filter: defs carrying `requires` are **excluded** from every default
   enumeration (`mkpkg` no-flag, `foldPackages 'all'` — so `serve.js`'s fat
   image, `boot.js --packages=all`, and `tests/lib/image-fixture.js` never see
@@ -364,7 +364,7 @@ and validated in `buildPackage` (`tools/mkpkg.js:249-269` today):
   This single choke point is what keeps "base ships with NO clang" true by
   construction rather than by convention: naming a `-clang` package explicitly
   without the flag is `exit 2` (unknown-name path, already loud).
-- **`clangApp: "<app>"`** entry type (mkpkg-only; `seedEntries` refuses it
+- **`nativeApp: "<app>"`** entry type (mkpkg-only; `seedEntries` refuses it
   exactly like `link` is refused today, `tools/mkpkg.js:201` — clang payloads
   are never bake vocabulary): resolved against the sibling's
   `out-image/overlay.json` — copy that app's payload files (wasm + assets)
@@ -375,7 +375,7 @@ and validated in `buildPackage` (`tools/mkpkg.js:249-269` today):
   sysroot headers; `clang-src-clang`: the M8 source tree) ride the same entry
   type once mk-overlay.mjs publishes them — this repo needs no new mechanism
   per milestone.
-- **`mkpkg --clang`**: includes `requires:"clang-sibling"` defs; hard-fails
+- **`mkpkg --clang`**: includes `requires:"native-sibling:clang"` defs; hard-fails
   (exit 1, fix-command error — same text discipline as §6) when the sibling or
   `out-image/overlay.json` is missing. Output goes to the normal
   `dist/packages/{pool,index.json}`; `index.json` becomes a superset with the
@@ -414,7 +414,7 @@ sibling from this repo's tools beyond the opt-in `--build-overlay`.
 
 1. `serve-with-clang.js` + the `--packages-index=clang` serve.js flag +
    guardrail tests (Part II §6–7; small, self-contained).
-2. `mkpkg --clang` + `requires`/`clangApp` schema (Part II §7).
+2. `mkpkg --clang` + `requires`/`nativeApp` schema (Part II §7).
 3. Kernel: content-hash module cache for large rw binaries (§2.4 option b).
 4. Sibling-side (their queue): M0 measurement memo; M1 Support milestone —
    the sibling's 0030 epic owns Part I's ladder, with 0041/0042 as the
@@ -434,8 +434,8 @@ Dev log: `logs/2026-07-20/clang-infra-part-ii.md`.
   unmodified `serve.js` with `--clang --packages-index=clang`. Every preflight
   miss is a loud `exit(1)` + fix command; never falls back to base.
   `--clang-root=PATH`, `--build-overlay` opt-in.
-- **`mkpkg --clang`** (§7) — `requires:"clang-sibling"` gate field (filtered at
-  `listPackages`, the base-purity choke point) + `clangApp` entry type (copies
+- **`mkpkg --clang`** (§7) — `requires:"native-sibling:clang"` gate field (filtered at
+  `listPackages`, the base-purity choke point) + `nativeApp` entry type (copies
   `/usr/bin/<app>` from the sibling overlay, sha256-verified through the SAME
   `os-common.loadOverlays` the bake uses). Plain `mkpkg` writes the base index
   (no `-clang` name); `--clang` writes the superset; orphan-prune self-cleans.
@@ -448,4 +448,4 @@ Dev log: `logs/2026-07-20/clang-infra-part-ii.md`.
 
 Not yet built (as designed — no mechanism gap): the real per-app `-clang` defs
 and the toolchain packages (`clang-toolchain-clang`, `clang-src-clang`) — they
-ride the same `clangApp` type once the sibling publishes their overlay payloads.
+ride the same `nativeApp` type once the sibling publishes their overlay payloads.

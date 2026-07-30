@@ -41,7 +41,7 @@ host-side, measured, node boot included).
 | vendor tree | `vendor/cpython/` in THIS repo, sources + generated `gen/` + `Lib/`, patch-table README | §4 |
 | layout / PYTHONHOME | prefix layout `/opt/cpython-clang/{bin,lib/python3.13}`; **zero env vars** — argv0-landmark discovery, symlink-safe (both verified) | §5 |
 | pyc cache | `PYTHONPYCACHEPREFIX=/var/cache/cpython-clang` via launcher wrapper (keeps `/opt` pristine for gucman's checksum-gated remove) | §5.3 |
-| package | `packages/cpython-clang.json`: `clangApp` binary + `tree` stdlib; bin verb `cpython-clang` only; `commands` claim for the 0338 dispatcher | §6 |
+| package | `packages/cpython-clang.json`: `nativeApp` binary + `tree` stdlib; bin verb `cpython-clang` only; `commands` claim for the 0338 dispatcher | §6 |
 | delivery | automatic: the clang channel is the deploy DEFAULT since 0337 (live on production); the drift gate makes a missing package def a build FAILURE | §6.3 |
 | `python3`/`cpython` names | recommend **cmdalt keys** (0338 mechanism), not hard symlinks — avoids the future two-CPython collision; needs a master/jku call | §6.2 |
 | pygame trajectory | M2/M3 scoped, SDL2-vs-SDL3 mismatch flagged + priced, NOT built here | §8 |
@@ -311,7 +311,7 @@ compiler; re-verify against post-0319 main per
 ```
 /opt/cpython-clang/
   bin/cpython-clang           # launcher script (§5.3)
-  bin/cpython-clang.wasm      # the binary (clangApp payload)
+  bin/cpython-clang.wasm      # the binary (nativeApp payload)
   lib/python3.13/…           # the §2 stdlib tree (mkpkg `tree` entry)
 /usr/local/bin/cpython-clang  # gucman bin symlink → /opt/cpython-clang/bin/cpython-clang
 /var/cache/cpython-clang/     # pyc cache, created at runtime (not package-owned)
@@ -369,9 +369,9 @@ platform gates get audited in M2, not papered over here.
   "name": "cpython-clang",
   "version": "3.13.5",
   "summary": "CPython 3.13.5 (clang-built) + stdlib — real Python; no sockets/ssl yet",
-  "requires": "clang-sibling",
+  "requires": "native-sibling:clang",
   "files": {
-    "bin/cpython-clang.wasm": { "clangApp": "python-clang" },  // sibling overlay app name — still `python-clang` until the sibling manifest renames (todos/0374 merge-time step); flip in the same change window as that overlay republish
+    "bin/cpython-clang.wasm": { "nativeApp": "python-clang" },  // sibling overlay app name — still `python-clang` until the sibling manifest renames (todos/0374 merge-time step); flip in the same change window as that overlay republish
     "bin/cpython-clang":      { "text": "…launcher…" },
     "lib/python3.13":        { "tree": "vendor/cpython/Lib" }
   },
@@ -381,7 +381,7 @@ platform gates get audited in M2, not papered over here.
 ```
 
 Key structural point (verified in `tools/mkpkg.js`): only the **binary**
-rides the sibling overlay (`clangApp`); the **stdlib** is a `tree` entry read
+rides the sibling overlay (`nativeApp`); the **stdlib** is a `tree` entry read
 straight from this repo's `vendor/cpython/Lib` — toolchain-independent, and
 the eventual our-compiler `cpython` package reuses the identical entry.
 No menu/desktop entries — an interpreter's surfaces are the shell and (later)
@@ -422,7 +422,7 @@ it. So delivery is: (1) sibling manifest project (`base:
 "/usr/bin/cpython-clang"` — satisfies `enforceClangConvention`; the
 sibling's project/app name was renamed `python-clang` → `cpython-clang` by
 todos/0383, the deferred 0374 merge-time step, in the same change window as
-the `packages/cpython-clang.json` `clangApp` flip — the two-sided interlock
+the `packages/cpython-clang.json` `nativeApp` flip — the two-sided interlock
 this section specifies), (2)
 `packages/cpython-clang.json` in the same change window as the overlay
 publish (the gate turns "forgot the package" into a red build, in our
@@ -431,7 +431,7 @@ holds: the `-DDATE/-DTIME` pin is already in the recipe and two independent
 probe-lineage builds differed only in the wasm-ld `-o` basename field
 (mk-overlay already builds to the final name).
 
-One channel caveat to carry: `requires: "clang-sibling"` means the package
+One channel caveat to carry: `requires: "native-sibling:clang"` means the package
 only builds on a machine with the sibling checkout — same as every `-clang`
 package, fine — but the **stdlib tree does not gate on it**, so a future
 `cpython` (our-compiler) package shares `vendor/cpython` with no sibling

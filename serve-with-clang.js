@@ -71,7 +71,7 @@ if (!fs.existsSync(clangBin)) {
 }
 
 // 3. Overlay artifact present + parseable (the published overlay@1 manifest —
-//    the single source of every clangApp payload). --build-overlay may produce
+//    the single source of every nativeApp payload). --build-overlay may produce
 //    it foreground; otherwise absence is fatal (the producer owns its build).
 const overlayPath = path.join(clangRoot, 'out-image', 'overlay.json');
 const overlayProducer = path.join(clangRoot, 'wasm', 'tools', 'mk-overlay.mjs');

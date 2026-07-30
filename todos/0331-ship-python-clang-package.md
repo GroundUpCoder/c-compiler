@@ -54,10 +54,10 @@ What is NOT done is shipping it, and the blocker is **not** on the clang side.
   `wasm/image/manifest.json` → `mk-overlay.mjs` → `out-image/overlay.json`, which
   is then consumed by (a) the opt-in bake overlay (`os/image.json:3-10`,
   `enableFlag: "clang-apps"`, `default: false`) **and** (b) `mkpkg --clang` via
-  the `clangApp` resource kind (`tools/mkpkg.js:316-323`).
+  the `nativeApp` resource kind (`tools/mkpkg.js:316-323`).
 - The user-facing half — what "a gucman entry that installs …" means — is (b):
   `packages/box2d-clang.json` is the exact template (`"requires":
-  "clang-sibling"`, `"files": {"box2d-clang": {"clangApp": "box2d-clang"}}`,
+  "native-sibling:clang"`, `"files": {"box2d-clang": {"nativeApp": "box2d-clang"}}`,
   `"bin": {"box2d-clang": "box2d-clang"}`). Seven such packages already ship.
 - **Verb**: `python-clang` only. gucman has **no** alternatives/provides/conflicts
   mechanism (`grep -E 'conflict|provides|replaces|alternativ'` over `gucman.c` +
@@ -71,7 +71,7 @@ What is NOT done is shipping it, and the blocker is **not** on the clang side.
 Two hard dependencies, both on a **committed CPython source tree** that neither
 repo has:
 
-1. **Payload channel.** `clangApp` can only name a payload that already exists in
+1. **Payload channel.** `nativeApp` can only name a payload that already exists in
    the sibling's `out-image/overlay.json`. Publishing one means adding a project
    to the sibling's manifest, and every project needs a committed `base` + source
    list. The build currently runs out of a machine-local `~/build/python-clang`;
@@ -106,7 +106,7 @@ would collide head-on with M1's.
    the stdlib carried as a `tree` entry (`mkpkg.js:304-311`) or shared with the
    `cpython` package if M1 provides one to depend on.
    **Not before step 2**: `mkpkg --clang` builds *every* `requires`-gated
-   definition, so a `clangApp` naming an absent overlay path turns the whole
+   definition, so a `nativeApp` naming an absent overlay path turns the whole
    clang-package channel red.
 4. Extend `tests/kernel/test_clang_pkgs_e2e.js` with an install → `python-clang
    -c "print(1+1)"` → remove leg.

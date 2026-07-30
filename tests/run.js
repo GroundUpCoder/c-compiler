@@ -179,7 +179,7 @@ const RULES = [
 
   // gucman packages: definitions fold into the fat fixture (--packages=all)
   // AND feed tools/mkpkg.js payloads; test_gucman_e2e consumes both; the base-
-  // purity + clangApp guardrails (host) also read them (CLANG-CPP-EPIC II §7).
+  // purity + nativeApp guardrails (host) also read them (CLANG-CPP-EPIC II §7).
   [/^packages\//, ['kernel', 'sweep', 'host'], 'package definitions restale the fat fixture + the mkpkg pool + the base-purity guardrail'],
   [/^tools\/mkpkg\.js$/, ['kernel', 'host'], 'builds the gucman package pool test_gucman_e2e installs from; host holds the mkpkg --clang guardrail'],
   // The overlay-drift gate's exemption list (todos/0337): an edit here changes

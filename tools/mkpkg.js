@@ -57,7 +57,7 @@
 // ---- one repo per writer: --pool and the concurrency guard (todos/0388) ----
 //
 // `index.json` + `pool/` are ONE repo, and a build REPLACES it: a base run's
-// `avail` excludes every `requires:"clang-sibling"` definition, so it rewrites
+// `avail` excludes every `requires:"native-sibling:clang"` definition, so it rewrites
 // the index without those names AND its orphan prune DELETES their payload
 // bytes. Sequentially that is just the accepted clang/base thrash. Concurrently
 // it is a race that silently retargets another builder's repo mid-read — and
@@ -100,8 +100,8 @@ let outDir = path.join(ROOT, 'dist', 'packages');
 let quiet = false;
 let force = false;
 // `--clang` builds the SUPERSET index: it additionally includes the gated
-// `requires:"clang-sibling"` package definitions (the *-clang variants), whose
-// `clangApp` payloads are copied — sha256-verified — from the sibling
+// `requires:"native-sibling:clang"` package definitions (the *-clang variants), whose
+// `nativeApp` payloads are copied — sha256-verified — from the sibling
 // clang-simplified repo's published `out-image/overlay.json` (the overlay@1
 // producer this repo already consumes for the bake overlay, CLANG-CPP-EPIC
 // Part II §7). Plain mkpkg builds the BASE index — no -clang name anywhere,
@@ -193,7 +193,7 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 
 const imageManifest = JSON.parse(fs.readFileSync(path.join(OS_DIR, 'image.json'), 'utf-8'));
 
-// The sibling overlay artifact — the single source of every `clangApp` payload.
+// The sibling overlay artifact — the single source of every `nativeApp` payload.
 // Resolved + hard-preflighted only under --clang (the base pipeline never
 // touches it). The bytes are verified through os-common's loadOverlays (the
 // EXACT same sha256/size enforcement mkimage's bake uses — one verifier, no
@@ -229,7 +229,7 @@ if (withClang) {
   }
 }
 
-const avail = COMMON.listPackages(fs, path, ROOT, { withClang, packagesDir: pkgDir });
+const avail = COMMON.listPackages(fs, path, ROOT, { producers: withClang ? ['clang'] : [], packagesDir: pkgDir });
 const names = requested.length ? requested : avail;
 for (const n of names) {
   if (!avail.includes(n)) {
@@ -242,7 +242,7 @@ for (const n of names) {
  * Standing rule: EVERY clang app we build must be reachable through gucman.
  * The sibling overlay is the producer of record, so its executable payloads —
  * the `/usr/bin/*` entries — are the authoritative demand list, and each one
- * must be CLAIMED by some packages/*.json `clangApp` entry. A payload the
+ * must be CLAIMED by some packages/*.json `nativeApp` entry. A payload the
  * sibling publishes with no definition here is invisible to every deploy: it
  * was built, it just silently never ships. That is exactly how gameboy-clang/
  * stl4/sdldemo sat unpackaged while the other seven shipped.
@@ -270,16 +270,16 @@ function clangDriftCheck() {
     if (p.startsWith('/usr/bin/')) published.push(p.slice('/usr/bin/'.length));
   }
   published.sort();
-  // Claimed = every clangApp named by ANY definition in pkgDir, not just the
+  // Claimed = every nativeApp named by ANY definition in pkgDir, not just the
   // ones this invocation builds — `mkpkg box2d-clang` must still gate the
   // whole relation, or a single-package rebuild would launder the drift away.
   const claimedBy = new Map();
-  for (const n of COMMON.listPackages(fs, path, ROOT, { withClang: true, packagesDir: pkgDir })) {
+  for (const n of COMMON.listPackages(fs, path, ROOT, { producers: ['clang'], packagesDir: pkgDir })) {
     let def;
     try { def = JSON.parse(fs.readFileSync(path.join(pkgDir, n + '.json'), 'utf-8')); }
     catch (e) { continue; }   // malformed → fails loud in the build below
     for (const entry of Object.values(def.files || {})) {
-      if (entry && typeof entry.clangApp === 'string') claimedBy.set(entry.clangApp, n);
+      if (entry && typeof entry.nativeApp === 'string') claimedBy.set(entry.nativeApp, n);
     }
   }
   let allowed = {};
@@ -292,8 +292,8 @@ function clangDriftCheck() {
       `mkpkg --clang: ${orphans.length} overlay app(s) published by the sibling have NO packages/*.json:\n` +
       orphans.map((a) => `    /usr/bin/${a}\n`).join('') +
       `  every clang app we build must be installable through gucman.\n` +
-      `  fix: add packages/<name>.json with {"requires":"clang-sibling",\n` +
-      `       "files":{"<name>":{"clangApp":"${orphans[0]}"}}, "bin":{...}} —\n` +
+      `  fix: add packages/<name>.json with {"requires":"native-sibling:clang",\n` +
+      `       "files":{"<name>":{"nativeApp":"${orphans[0]}"}}, "bin":{...}} —\n` +
       `       see packages/box2d-clang.json (windowed) or packages/stl4.json (tty)\n` +
       `  or, if a payload is deliberately not a package, record it WITH A REASON in\n` +
       `  ${path.relative(ROOT, UNPACKAGED_PATH)}\n`);
@@ -386,10 +386,10 @@ function newestPkgInput(name, pkg) {
       catch (e) { continue; }   // malformed → fails loud in the build, not here
       tfs.forEach((tf) => statFile(path.join(ROOT, entry.tree, tf)));
     }
-    // A clangApp/clangFile payload's freshness is the sibling overlay
+    // A nativeApp/nativeFile payload's freshness is the sibling overlay
     // manifest's mtime — re-publishing overlay.json (new sha256s)
     // re-materializes the package.
-    if (entry.clangApp !== undefined || entry.clangFile !== undefined) statFile(clangOverlayPath);
+    if (entry.nativeApp !== undefined || entry.nativeFile !== undefined) statFile(clangOverlayPath);
   }
   return newest;
 }
@@ -487,27 +487,27 @@ async function assembleTree(name, pkg) {
       continue;
     }
     pushDirs(rel);
-    // A `clangApp` entry is NOT bake vocabulary (seedEntries refuses it, like
+    // A `nativeApp` entry is NOT bake vocabulary (seedEntries refuses it, like
     // `link`): its bytes come pre-built from the sibling overlay, not from
     // compiler.js. It's resolved + planted after seedEntries builds the dirs.
-    if (entry.clangApp !== undefined) {
-      if (typeof entry.clangApp !== 'string' || !entry.clangApp.length) {
-        throw new Error(`package '${name}': ${rel} — clangApp must name an app`);
+    if (entry.nativeApp !== undefined) {
+      if (typeof entry.nativeApp !== 'string' || !entry.nativeApp.length) {
+        throw new Error(`package '${name}': ${rel} — nativeApp must name an app`);
       }
       if (!withClang) {
-        throw new Error(`package '${name}': ${rel} — clangApp entries require mkpkg --clang`);
+        throw new Error(`package '${name}': ${rel} — nativeApp entries require mkpkg --clang`);
       }
-      clangPlants.push({ abs: base + '/' + rel, ovPath: '/usr/bin/' + entry.clangApp, mode: 0o755 });
-    } else if (entry.clangFile !== undefined) {
-      // clangFile: any non-binary overlay payload by absolute /usr path (T3:
+      clangPlants.push({ abs: base + '/' + rel, ovPath: '/usr/bin/' + entry.nativeApp, mode: 0o755 });
+    } else if (entry.nativeFile !== undefined) {
+      // nativeFile: any non-binary overlay payload by absolute /usr path (T3:
       // tinyrenderer's model assets). Same verifier, same --clang gating.
-      if (typeof entry.clangFile !== 'string' || !entry.clangFile.startsWith('/usr/')) {
-        throw new Error(`package '${name}': ${rel} — clangFile must be an absolute /usr overlay path`);
+      if (typeof entry.nativeFile !== 'string' || !entry.nativeFile.startsWith('/usr/')) {
+        throw new Error(`package '${name}': ${rel} — nativeFile must be an absolute /usr overlay path`);
       }
       if (!withClang) {
-        throw new Error(`package '${name}': ${rel} — clangFile entries require mkpkg --clang`);
+        throw new Error(`package '${name}': ${rel} — nativeFile entries require mkpkg --clang`);
       }
-      clangPlants.push({ abs: base + '/' + rel, ovPath: entry.clangFile, mode: 0o644 });
+      clangPlants.push({ abs: base + '/' + rel, ovPath: entry.nativeFile, mode: 0o644 });
     } else {
       claim(base + '/' + rel, entry);
     }
@@ -520,7 +520,7 @@ async function assembleTree(name, pkg) {
     compile: COMMON.createCcDriver(CompilerJS, mfs),
     log: () => {},
   });
-  // Plant each clangApp/clangFile: pull the named payload out of the sibling
+  // Plant each nativeApp/nativeFile: pull the named payload out of the sibling
   // overlay (bytes ALREADY sha256+size verified by loadOverlays) and write it
   // into the tree.
   if (clangPlants.length) {

@@ -2,9 +2,9 @@
   "name": "glm-clang",
   "version": "1.0.0",
   "summary": "GLM spinning-cube demo (clang-built C++ — g-truc/glm 1.0.1, T2 of the C++ port ladder)",
-  "requires": "clang-sibling",
+  "requires": "native-sibling:clang",
   "files": {
-    "glm-clang": { "clangApp": "glm-clang" }
+    "glm-clang": { "nativeApp": "glm-clang" }
   },
   "bin": { "glm-clang": "glm-clang" },
   "desktop": { "cmd": "glm-clang" },

@@ -2,9 +2,9 @@
   "name": "ninja-clang",
   "version": "1.0.0",
   "summary": "Ninja build tool (clang-built C++ — ninja-build/ninja v1.12.1 over gucOS posix_spawn, T3 of the C++ port ladder; drives the in-OS cc)",
-  "requires": "clang-sibling",
+  "requires": "native-sibling:clang",
   "files": {
-    "ninja-clang": { "clangApp": "ninja-clang" }
+    "ninja-clang": { "nativeApp": "ninja-clang" }
   },
   "bin": { "ninja-clang": "ninja-clang" }
 }

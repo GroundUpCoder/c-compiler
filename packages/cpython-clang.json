@@ -2,9 +2,9 @@
   "name": "cpython-clang",
   "version": "3.13.5",
   "summary": "CPython 3.13.5 (clang-built) + stdlib — real Python. No sockets/asyncio, no ssl/https/pip, no ctypes.",
-  "requires": "clang-sibling",
+  "requires": "native-sibling:clang",
   "files": {
-    "bin/cpython-clang.wasm": { "clangApp": "cpython-clang" },
+    "bin/cpython-clang.wasm": { "nativeApp": "cpython-clang" },
     "bin/cpython-clang": {
       "content": "#!/bin/sh\n# cpython-clang launcher (todos/0340, CPYTHON.md §5.3).\n#\n# CPython finds its stdlib by walking up from the resolved executable to\n# lib/python3.13/os.py — no PYTHONHOME, no PYTHONPATH, relocatable. The one\n# variable set here is the pyc cache location: gucman's remove is checksum\n# gated and unlinks only what it planted, so runtime __pycache__/ dirs written\n# under /opt would strand skeleton directories at removal. Sending them to\n# /var/cache keeps /opt pristine and puts the cache where a factory reset\n# (wipe /etc + /var) already clears it.\n#\n# $0 arrives through the /usr/local/bin symlink; realpath canonicalizes (0263).\nhere=\"$(dirname \"$(realpath \"$0\")\")\"\nPYTHONPYCACHEPREFIX=/var/cache/cpython-clang\nexport PYTHONPYCACHEPREFIX\nexec \"$here/cpython-clang.wasm\" \"$@\"\n",
       "mode": 493

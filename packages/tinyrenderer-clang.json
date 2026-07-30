@@ -2,13 +2,13 @@
   "name": "tinyrenderer-clang",
   "version": "1.0.0",
   "summary": "tinyrenderer spinning-head demo (clang-built C++ — ssloy's software rasterizer @9517998, T3 of the C++ port ladder)",
-  "requires": "clang-sibling",
+  "requires": "native-sibling:clang",
   "files": {
-    "tinyrenderer-clang": { "clangApp": "tinyrenderer-clang" },
-    "african_head.obj": { "clangFile": "/usr/share/tinyrenderer/african_head.obj" },
-    "african_head_diffuse.tga": { "clangFile": "/usr/share/tinyrenderer/african_head_diffuse.tga" },
-    "african_head_nm_tangent.tga": { "clangFile": "/usr/share/tinyrenderer/african_head_nm_tangent.tga" },
-    "african_head_spec.tga": { "clangFile": "/usr/share/tinyrenderer/african_head_spec.tga" },
+    "tinyrenderer-clang": { "nativeApp": "tinyrenderer-clang" },
+    "african_head.obj": { "nativeFile": "/usr/share/tinyrenderer/african_head.obj" },
+    "african_head_diffuse.tga": { "nativeFile": "/usr/share/tinyrenderer/african_head_diffuse.tga" },
+    "african_head_nm_tangent.tga": { "nativeFile": "/usr/share/tinyrenderer/african_head_nm_tangent.tga" },
+    "african_head_spec.tga": { "nativeFile": "/usr/share/tinyrenderer/african_head_spec.tga" },
     "tinyrenderer-demo": {
       "content": "#!/bin/sh\n# Menu launcher: pass the packaged head model to the renderer (the binary's\n# built-in default points at the overlay's /usr/share install, which a\n# gucman-installed package doesn't have). $0 arrives through symlinks;\n# realpath canonicalizes (0263).\nhere=\"$(dirname \"$(realpath \"$0\")\")\"\nexec \"$here/tinyrenderer-clang\" \"$here/african_head.obj\" \"$@\"\n",
       "mode": 493

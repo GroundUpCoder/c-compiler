@@ -1,5 +1,5 @@
 // Guardrail (c) — mkpkg --clang sha256 ROUND-TRIP (CLANG-CPP-EPIC Part II §7).
-// A `clangApp` package entry copies its payload out of the sibling's published
+// A `nativeApp` package entry copies its payload out of the sibling's published
 // overlay artifact, byte-verified through os-common's loadOverlays (the SAME
 // sha256/size enforcement the bake overlay uses — one verifier, no drift). This
 // proves: (1) a fresh fake sibling → the payload lands in the pool tarball and
@@ -14,7 +14,7 @@
 //
 // Uses the REAL packages/doom-clang.json definition against a synthetic sibling
 // overlay, so it exercises the shipped schema end to end (build is instant — a
-// clangApp entry does no compilation).
+// nativeApp entry does no compilation).
 //
 // Run: node tests/serve/test_mkpkg_clang.js
 'use strict';

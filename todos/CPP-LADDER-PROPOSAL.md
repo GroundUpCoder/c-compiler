@@ -47,7 +47,7 @@ become queue items.
 > on the brokered fs). Headless harness `run-ninja-test.sh` 13/13 (dry-run +
 > `-t` tool suite vs a native ninja from the SAME sources). `tinyrenderer-
 > clang` is ssloy's 2025 renderer PRISTINE (zero patches) as a `--sdl`
-> spinning head + packaged model assets (the new mkpkg `clangFile` entries);
+> spinning head + packaged model assets (the new mkpkg `nativeFile` entries);
 > `run-tinyrenderer-test.sh` 7/7 with the 800x800 render **BIT-IDENTICAL
 > wasm-vs-native** — the native leg needs `-ffp-contract=off` (default fma
 > contraction, not a wasm bug, caused a 40%-of-pixels divergence), and the
