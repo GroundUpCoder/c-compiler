@@ -9,13 +9,17 @@ const path = require('path');
 // `--overlay=<id>` is the generic form, mirroring tools/mkimage.js.
 const positionals = [];
 const requestedOverlays = new Set();
-// `--packages-index=clang` (set by serve-with-clang.js) asserts the served
-// /packages repo is the SUPERSET index — dist/packages/index.json must exist
-// and list at least one *-clang package (built by the wrapper's `mkpkg --clang`
-// preflight). It never MUTATES anything (serve.js serves dist/packages
-// verbatim, as today); it's a guard so a clang-mandatory serve can't silently
-// serve a stale base index. Flagless serve.js is byte-identical to today.
-let assertClangPackages = false;
+// `--packages-index=<producer>[,<producer>]` (clang is set by
+// serve-with-clang.js; rust is the todos/0416 twin) asserts the served
+// /packages repo is the SUPERSET index over the named native-sibling
+// producers — dist/packages/index.json must exist and list at least one
+// package of each producer's suffix (*-clang / *-rust, built by an
+// `mkpkg --<producer>` prebake). It never MUTATES anything (serve.js serves
+// dist/packages verbatim, as today); it's a guard so a producer-mandatory
+// serve can't silently serve a stale base index. Flagless serve.js is
+// byte-identical to today.
+const KNOWN_PRODUCERS = ['clang', 'rust'];
+const assertProducers = [];
 // `--strict-port`: bind the REQUESTED port or fail loudly — never the silent
 // walk to port+1 that tryListen does for a developer's convenience. The browser
 // harness passes it (tests/browser/lib/os-harness.mjs startServer) because the
@@ -47,7 +51,15 @@ for (const a of process.argv.slice(2)) {
   else if (a === '--strict-port') strictPort = true;
   else if (a.startsWith('--overlay=')) requestedOverlays.add(a.slice(10));
   else if (a.startsWith('--overlays=')) a.slice(11).split(',').forEach((id) => id && requestedOverlays.add(id));
-  else if (a === '--packages-index=clang') assertClangPackages = true;
+  else if (a.startsWith('--packages-index=')) {
+    for (const p of a.slice(17).split(',').filter(Boolean)) {
+      if (!KNOWN_PRODUCERS.includes(p)) {
+        console.error(`serve.js: --packages-index names an unknown producer '${p}' (known: ${KNOWN_PRODUCERS.join(', ')})`);
+        process.exit(2);
+      }
+      if (!assertProducers.includes(p)) assertProducers.push(p);
+    }
+  }
   else if (a.startsWith('-')) { console.error(`serve.js: unknown option ${a}`); process.exit(2); }
   else positionals.push(a);
 }
@@ -200,23 +212,28 @@ if (!singleFile) {
   }
 }
 
-// --packages-index=clang guard: the served /packages repo must be the clang
-// superset (serve-with-clang.js builds it via `mkpkg --clang` before spawning
-// us). A base index here means the wrapper's preflight was bypassed — fail loud
-// rather than serve a clang-mandatory origin without its *-clang cards.
-if (assertClangPackages && !singleFile) {
+// --packages-index guard: the served /packages repo must be the superset over
+// every asserted producer (serve-with-clang.js prebakes the clang one via
+// `mkpkg --clang`; a rust origin prebakes via `mkpkg --rust`). A base index
+// here means the prebake was bypassed — fail loud rather than serve a
+// producer-mandatory origin without its gated cards.
+if (assertProducers.length && !singleFile) {
   const idxPath = path.join(root, 'dist', 'packages', 'index.json');
-  let clangNames = [];
+  let idxNames = [];
   try {
     const idx = JSON.parse(fs.readFileSync(idxPath, 'utf-8'));
-    clangNames = Object.keys(idx.packages || {}).filter((n) => /-clang$/.test(n));
+    idxNames = Object.keys(idx.packages || {});
   } catch (e) { /* handled below */ }
-  if (!clangNames.length) {
-    console.error(`serve.js --packages-index=clang: ${path.relative(root, idxPath)} is not the clang superset`);
-    console.error('  expected at least one *-clang package (run tools/mkpkg.js --clang, or use serve-with-clang.js)');
-    process.exit(1);
+  for (const p of assertProducers) {
+    const cards = idxNames.filter((n) => n.endsWith('-' + p));
+    if (!cards.length) {
+      console.error(`serve.js --packages-index=${p}: ${path.relative(root, idxPath)} is not the ${p} superset`);
+      console.error(`  expected at least one *-${p} package (run tools/mkpkg.js --${p}` +
+        (p === 'clang' ? ', or use serve-with-clang.js)' : ')'));
+      process.exit(1);
+    }
+    console.log(`[serve] ${p} package index: ${cards.length} *-${p} card(s)`);
   }
-  console.log(`[serve] clang package index: ${clangNames.length} *-clang card(s)`);
 }
 
 // The browser always fetches `os-system.img` beside the page

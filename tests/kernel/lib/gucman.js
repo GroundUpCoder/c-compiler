@@ -95,13 +95,18 @@ function ensurePackages(need, opts) {
   return { dir, index };
 }
 
-/* The --clang SUPERSET repo. Same isolation; the only difference is the
- * definition set, which is exactly what used to collide with the base one. */
-function ensureClangPackages(need, clangRoot, opts) {
-  const dir = testRepoDir((opts || {}).tag || 'clang');
-  const index = runMkpkg(dir, ['--clang', `--clang-root=${clangRoot}`], 900000);
-  requireEntries(index, need, 'mkpkg --clang');
+/* A producer SUPERSET repo (`mkpkg --<producer>` over a sibling root —
+ * todos/0416: 'clang' and 'rust' are peers under one rule). Same isolation;
+ * the only difference is the definition set, which is exactly what used to
+ * collide with the base one. */
+function ensureProducerPackages(producer, need, siblingRoot, opts) {
+  const dir = testRepoDir((opts || {}).tag || producer);
+  const index = runMkpkg(dir, [`--${producer}`, `--${producer}-root=${siblingRoot}`], 900000);
+  requireEntries(index, need, `mkpkg --${producer}`);
   return { dir, index };
+}
+function ensureClangPackages(need, clangRoot, opts) {
+  return ensureProducerPackages('clang', need, clangRoot, opts);
 }
 
 /* Spawn serve.js over a static dir, resolve its port. The tree has no
@@ -129,4 +134,4 @@ function startServer(dir) {
 process.on('exit', () => { for (const s of servers) { try { s.kill(); } catch (e) {} } });
 
 module.exports = { ROOT, ensureMinimalImage, ensurePackages, ensureClangPackages,
-                   startServer, PKG_ROOT, POOL };
+                   ensureProducerPackages, startServer, PKG_ROOT, POOL };

@@ -46,8 +46,12 @@
 //                                            # instead of <repo>/packages
 //   node tools/mkpkg.js --pool=DIR           # SHARED payload store (below)
 //   node tools/mkpkg.js --clang [--clang-root=DIR] [--clang-unpackaged=FILE]
-//                                            # SUPERSET index; the drift gate
-//                                            # (below) reads the exemption list
+//   node tools/mkpkg.js --rust  [--rust-root=DIR]  [--rust-unpackaged=FILE]
+//                                            # SUPERSET index over the enabled
+//                                            # producers (independent booleans:
+//                                            # neither, one, or both); the
+//                                            # drift gate (below) reads each
+//                                            # producer's exemption list
 //
 // A package whose pool payload is newer than all its inputs (compiler.js,
 // this tool, its definition, its files' project/bin/asset closure) is
@@ -57,7 +61,7 @@
 // ---- one repo per writer: --pool and the concurrency guard (todos/0388) ----
 //
 // `index.json` + `pool/` are ONE repo, and a build REPLACES it: a base run's
-// `avail` excludes every `requires:"native-sibling:clang"` definition, so it rewrites
+// `avail` excludes every gated (`requires:"native-sibling:*"`) definition, so it rewrites
 // the index without those names AND its orphan prune DELETES their payload
 // bytes. Sequentially that is just the accepted clang/base thrash. Concurrently
 // it is a race that silently retargets another builder's repo mid-read — and
@@ -99,44 +103,75 @@ const COMMON = require(path.join(OS_DIR, 'os-common.js'));
 let outDir = path.join(ROOT, 'dist', 'packages');
 let quiet = false;
 let force = false;
-// `--clang` builds the SUPERSET index: it additionally includes the gated
-// `requires:"native-sibling:clang"` package definitions (the *-clang variants), whose
-// `nativeApp` payloads are copied — sha256-verified — from the sibling
-// clang-simplified repo's published `out-image/overlay.json` (the overlay@1
-// producer this repo already consumes for the bake overlay, CLANG-CPP-EPIC
-// Part II §7). Plain mkpkg builds the BASE index — no -clang name anywhere,
-// by construction of listPackages' default filter. `--clang-root=PATH` points
-// at the sibling (default ../clang-simplified, the same relative convention as
-// os/image.json's overlay manifest); missing sibling/overlay under --clang is a
-// LOUD hard failure (exit 1 with the fix command), never a silent skip.
-let withClang = false;
-let clangRoot = path.resolve(ROOT, '..', 'clang-simplified');
+// ---- native siblings (todos/0416; RUST.md §3 rule 4) ----------------------
+// A NATIVE SIBLING is an out-of-repo producer of prebuilt payloads: one
+// repository builds the binaries and publishes an `out-image/overlay.json`
+// (overlay@1) manifest with a per-file sha256; this repository CONSUMES it
+// and never invokes the producer's toolchain. `--<producer>` builds the
+// SUPERSET index: it additionally includes the gated
+// `requires:"native-sibling:<producer>"` package definitions (the *-clang /
+// *-rust variants), whose `nativeApp`/`nativeFile` payloads are copied —
+// sha256-verified — from that sibling's published overlay (for clang the
+// same artifact the bake overlay consumes, CLANG-CPP-EPIC Part II §7).
+// Plain mkpkg builds the BASE index — no gated name anywhere, by
+// construction of listPackages' default filter. The producer flags are
+// INDEPENDENT booleans: neither, one, or both, and the index is a superset
+// over whatever was asked. `--<producer>-root=PATH` points at the sibling
+// (default ../<repo>, the same relative convention as os/image.json's
+// overlay manifest); a missing sibling/overlay under an EXPLICIT flag is a
+// LOUD hard failure (exit 1 with the fix command), never a silent skip —
+// an UNrequested absent sibling is a normal state and prints nothing
+// (CLANG-CPP-EPIC §4 rule 2, RUST.md §3 rule 6).
+// `--<producer>-unpackaged=FILE` overrides the drift gate's exemption list
+// (see driftCheck) for the same reason --packages-dir exists: a test needs
+// the allow-list branch without editing the shipped file.
+const SIBLINGS = {
+  clang: {
+    repo: 'clang-simplified',
+    root: path.resolve(ROOT, '..', 'clang-simplified'),
+    overlayId: 'clang-apps',
+    overlayProducer: (root) => path.join(root, 'wasm', 'tools', 'mk-overlay.mjs'),
+    unpackaged: path.join(__dirname, 'clang-unpackaged.json'),
+    what: 'the *-clang packages need the clang toolchain repo',
+  },
+  rust: {
+    repo: 'gucos-rust',
+    root: path.resolve(ROOT, '..', 'gucos-rust'),
+    overlayId: 'rust-apps',
+    overlayProducer: (root) => path.join(root, 'tools', 'mk-overlay.mjs'),
+    unpackaged: path.join(__dirname, 'rust-unpackaged.json'),
+    what: 'the *-rust packages need the Rust producer repo',
+  },
+};
+const enabled = new Set();   // producers opted in on this run
 // Where package DEFINITIONS are read from. The repo's packages/ dir is both
 // a bake input and a shared mkpkg input, so a test that needs a throwaway
 // definition points this at a tmpdir instead of writing into it (the same
 // seam foldPackages/boot.js/mkimage.js expose as --packages-dir).
 let pkgDir = path.join(ROOT, 'packages');
-// The drift gate's exemption list (see clangDriftCheck). Overridable for the
-// same reason --packages-dir is: a test needs to exercise the allow-list
-// branch without editing the shipped file every other run depends on.
-let unpackagedPath = path.join(__dirname, 'clang-unpackaged.json');
 // The shared payload store (todos/0388). null = the classic layout, where the
 // store IS <out>/pool and this tool owns it outright.
 let poolStore = null;
 const requested = [];
 for (const a of process.argv.slice(2)) {
-  if (a.startsWith('--out=')) outDir = path.resolve(a.slice(6));
-  else if (a.startsWith('--pool=')) poolStore = path.resolve(a.slice(7));
-  else if (a.startsWith('--packages-dir=')) pkgDir = path.resolve(a.slice(15));
-  else if (a === '--quiet') quiet = true;
-  else if (a === '--force') force = true;
-  else if (a === '--clang') withClang = true;
-  else if (a.startsWith('--clang-root=')) clangRoot = path.resolve(a.slice(13));
-  else if (a.startsWith('--clang-unpackaged=')) unpackagedPath = path.resolve(a.slice(19));
-  else if (a.startsWith('-')) {
+  if (a.startsWith('--out=')) { outDir = path.resolve(a.slice(6)); continue; }
+  if (a.startsWith('--pool=')) { poolStore = path.resolve(a.slice(7)); continue; }
+  if (a.startsWith('--packages-dir=')) { pkgDir = path.resolve(a.slice(15)); continue; }
+  if (a === '--quiet') { quiet = true; continue; }
+  if (a === '--force') { force = true; continue; }
+  let handled = false;
+  for (const p of Object.keys(SIBLINGS)) {
+    if (a === '--' + p) { enabled.add(p); handled = true; }
+    else if (a.startsWith(`--${p}-root=`)) { SIBLINGS[p].root = path.resolve(a.slice(p.length + 8)); handled = true; }
+    else if (a.startsWith(`--${p}-unpackaged=`)) { SIBLINGS[p].unpackaged = path.resolve(a.slice(p.length + 14)); handled = true; }
+    if (handled) break;
+  }
+  if (handled) continue;
+  if (a.startsWith('-')) {
     process.stderr.write(`mkpkg: unknown option ${a}\n`);
     process.exit(2);
-  } else requested.push(a);
+  }
+  requested.push(a);
 }
 const log = quiet ? () => {} : (m) => process.stderr.write('[mkpkg] ' + m + '\n');
 
@@ -193,110 +228,150 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 
 const imageManifest = JSON.parse(fs.readFileSync(path.join(OS_DIR, 'image.json'), 'utf-8'));
 
-// The sibling overlay artifact — the single source of every `nativeApp` payload.
-// Resolved + hard-preflighted only under --clang (the base pipeline never
-// touches it). The bytes are verified through os-common's loadOverlays (the
-// EXACT same sha256/size enforcement mkimage's bake uses — one verifier, no
-// drift). Memoized: read + verify once, index by absolute /usr path.
-const clangOverlayPath = path.join(clangRoot, 'out-image', 'overlay.json');
-let _clangOverlayMap = null;
-function clangOverlay() {
-  if (_clangOverlayMap) return _clangOverlayMap;
+// A sibling's overlay artifact — the single source of every `nativeApp` /
+// `nativeFile` payload of its producer. Resolved + hard-preflighted only
+// under that producer's flag (the base pipeline never touches it). The
+// bytes are verified through os-common's loadOverlays (the EXACT same
+// sha256/size enforcement mkimage's bake uses — one verifier, no drift).
+// Memoized per producer: read + verify once, index by absolute /usr path.
+const overlayPathOf = (p) => path.join(SIBLINGS[p].root, 'out-image', 'overlay.json');
+const _overlayMaps = {};
+function siblingOverlay(p) {
+  if (_overlayMaps[p]) return _overlayMaps[p];
   const loaded = COMMON.loadOverlays(
-    [{ id: 'clang-apps', manifestPath: clangOverlayPath }],
+    [{ id: SIBLINGS[p].overlayId, manifestPath: overlayPathOf(p) }],
     COMMON.nodeOverlayIo(fs, path, crypto), false, log);
   const map = new Map();
   for (const f of loaded[0].files) map.set(f.path, f);
-  _clangOverlayMap = map;
+  _overlayMaps[p] = map;
   return map;
 }
-if (withClang) {
-  // Preflight the sibling BEFORE any build (same loud-failure discipline as
-  // serve-with-clang.js §6): absence is a fatal, actionable error — an
-  // explicit clang request never degrades to the base set.
-  if (!fs.existsSync(clangRoot)) {
+for (const p of enabled) {
+  // Preflight each requested sibling BEFORE any build (same loud-failure
+  // discipline as serve-with-clang.js §6): absence is a fatal, actionable
+  // error — an explicit producer request never degrades to the base set.
+  const S = SIBLINGS[p];
+  if (!fs.existsSync(S.root)) {
     process.stderr.write(
-      `mkpkg --clang: clang-simplified sibling not found at ${clangRoot}\n` +
-      `  the *-clang packages need the clang toolchain repo (plain mkpkg needs nothing)\n` +
-      `  fix: clone it next to this repo, or pass --clang-root=PATH\n`);
+      `mkpkg --${p}: ${S.repo} sibling not found at ${S.root}\n` +
+      `  ${S.what} (plain mkpkg needs nothing)\n` +
+      `  fix: clone it next to this repo, or pass --${p}-root=PATH\n`);
     process.exit(1);
   }
-  if (!fs.existsSync(clangOverlayPath)) {
+  if (!fs.existsSync(overlayPathOf(p))) {
     process.stderr.write(
-      `mkpkg --clang: sibling overlay artifact not found at ${clangOverlayPath}\n` +
-      `  fix: node ${path.join(clangRoot, 'wasm', 'tools', 'mk-overlay.mjs')}\n`);
+      `mkpkg --${p}: sibling overlay artifact not found at ${overlayPathOf(p)}\n` +
+      `  fix: node ${S.overlayProducer(S.root)}\n`);
     process.exit(1);
   }
 }
 
-const avail = COMMON.listPackages(fs, path, ROOT, { producers: withClang ? ['clang'] : [], packagesDir: pkgDir });
+/* ---- gate validation: an unknown `requires` value fails LOUD --------------
+ * listPackages EXCLUDES any gated def whose value it cannot parse (that is
+ * what keeps the base pure by construction) — but without this check a
+ * typo'd gate would silently drop its package from EVERY enumeration
+ * forever. Runs on every build, flags or none. */
+for (const f of (fs.existsSync(pkgDir) ? fs.readdirSync(pkgDir) : [])) {
+  if (!/\.json$/.test(f)) continue;
+  let req;
+  try { req = JSON.parse(fs.readFileSync(path.join(pkgDir, f), 'utf-8')).requires; }
+  catch (e) { continue; }   // malformed json fails loud in buildPackage, not here
+  if (req === undefined || req === null || req === '') continue;
+  const p = COMMON.nativeSiblingProducer(req);
+  if (p === null || !SIBLINGS[p]) {
+    process.stderr.write(
+      `mkpkg: ${f} declares requires: ${JSON.stringify(req)}, which is not a known gate\n` +
+      `  a gated definition names its producer: requires: "native-sibling:<producer>"\n` +
+      `  known producers: ${Object.keys(SIBLINGS).join(', ')}\n`);
+    process.exit(1);
+  }
+}
+
+const avail = COMMON.listPackages(fs, path, ROOT, { producers: [...enabled], packagesDir: pkgDir });
 const names = requested.length ? requested : avail;
 for (const n of names) {
   if (!avail.includes(n)) {
-    process.stderr.write(`mkpkg: unknown package '${n}' (declared in packages/: ${avail.join(', ') || 'none'})\n`);
+    // Naming a gated package without its producer flag gets the actionable
+    // message, not the generic unknown-name one.
+    let req = null;
+    try { req = JSON.parse(fs.readFileSync(path.join(pkgDir, n + '.json'), 'utf-8')).requires; }
+    catch (e) { /* fall through to unknown */ }
+    const p = COMMON.nativeSiblingProducer(req);
+    if (p !== null && SIBLINGS[p]) {
+      process.stderr.write(`mkpkg: package '${n}' is gated on the ${p} sibling ` +
+        `(requires: ${JSON.stringify(req)}) — build it with --${p}\n`);
+    } else {
+      process.stderr.write(`mkpkg: unknown package '${n}' (declared in packages/: ${avail.join(', ') || 'none'})\n`);
+    }
     process.exit(2);
   }
 }
 
 /* ---- overlay ⟷ packages/ drift gate (todos/0337) --------------------------
- * Standing rule: EVERY clang app we build must be reachable through gucman.
+ * Standing rule: EVERY app a sibling builds must be reachable through gucman.
  * The sibling overlay is the producer of record, so its executable payloads —
  * the `/usr/bin/*` entries — are the authoritative demand list, and each one
- * must be CLAIMED by some packages/*.json `nativeApp` entry. A payload the
- * sibling publishes with no definition here is invisible to every deploy: it
- * was built, it just silently never ships. That is exactly how gameboy-clang/
- * stl4/sdldemo sat unpackaged while the other seven shipped.
+ * must be CLAIMED by some packages/*.json `nativeApp` entry gated on that
+ * producer. A payload the sibling publishes with no definition here is
+ * invisible to every deploy: it was built, it just silently never ships.
+ * That is exactly how gameboy-clang/stl4/sdldemo sat unpackaged while the
+ * other seven shipped.
  *
  * The gate is on the OVERLAY side of the relation, not a hand-list of names,
  * so a new sibling project fails the build the first time it is published
- * rather than the first time somebody notices it missing. It runs under
- * --clang only (a base build has no overlay to compare against) and BEFORE any
- * payload is built — and since a clang build is now the deploy default
- * (comguc scripts/build.mjs), no deploy can route around it.
+ * rather than the first time somebody notices it missing. It runs per
+ * ENABLED producer only (a base build has no overlay to compare against)
+ * and BEFORE any payload is built — and since a clang build is the deploy
+ * default (comguc scripts/build.mjs), no deploy can route around it.
  *
- * A payload that genuinely should not be a package needs an EXPLICIT entry in
- * tools/clang-unpackaged.json giving the reason. Silence is never an allowed
- * answer; an unexplained gap is the failure mode this gate exists to kill.
+ * A payload that genuinely should not be a package needs an EXPLICIT entry
+ * in the producer's tools/<producer>-unpackaged.json giving the reason.
+ * Silence is never an allowed answer; an unexplained gap is the failure
+ * mode this gate exists to kill. An ABSENT exemption file means "no
+ * exemptions" (tools/rust-unpackaged.json does not exist today because the
+ * rust overlay has none).
  *
  * Scoped to /usr/bin/*: non-executable overlay payloads (assets like
  * /usr/share/tinyrenderer/*.obj, menu links) belong to whichever package
  * carries their binary, and a package is free to leave an asset behind —
  * gameboy-clang deliberately drops the copyrighted PokemonBlue.gb the overlay
  * publishes for the local bake, because comguc never hosts ROMs publicly. */
-const UNPACKAGED_PATH = unpackagedPath;
-function clangDriftCheck() {
+function driftCheck(producer) {
+  const S = SIBLINGS[producer];
   const published = [];
-  for (const p of clangOverlay().keys()) {
+  for (const p of siblingOverlay(producer).keys()) {
     if (p.startsWith('/usr/bin/')) published.push(p.slice('/usr/bin/'.length));
   }
   published.sort();
-  // Claimed = every nativeApp named by ANY definition in pkgDir, not just the
-  // ones this invocation builds — `mkpkg box2d-clang` must still gate the
-  // whole relation, or a single-package rebuild would launder the drift away.
+  // Claimed = every nativeApp named by ANY definition in pkgDir gated on
+  // this producer, not just the ones this invocation builds — `mkpkg
+  // box2d-clang` must still gate the whole relation, or a single-package
+  // rebuild would launder the drift away.
   const claimedBy = new Map();
-  for (const n of COMMON.listPackages(fs, path, ROOT, { producers: ['clang'], packagesDir: pkgDir })) {
+  for (const n of COMMON.listPackages(fs, path, ROOT, { producers: [producer], packagesDir: pkgDir })) {
     let def;
     try { def = JSON.parse(fs.readFileSync(path.join(pkgDir, n + '.json'), 'utf-8')); }
     catch (e) { continue; }   // malformed → fails loud in the build below
+    if (COMMON.nativeSiblingProducer(def.requires) !== producer) continue;   // ungated base defs claim nothing
     for (const entry of Object.values(def.files || {})) {
       if (entry && typeof entry.nativeApp === 'string') claimedBy.set(entry.nativeApp, n);
     }
   }
   let allowed = {};
-  if (fs.existsSync(UNPACKAGED_PATH)) {
-    allowed = JSON.parse(fs.readFileSync(UNPACKAGED_PATH, 'utf-8')).unpackaged || {};
+  if (fs.existsSync(S.unpackaged)) {
+    allowed = JSON.parse(fs.readFileSync(S.unpackaged, 'utf-8')).unpackaged || {};
   }
   const orphans = published.filter((a) => !claimedBy.has(a) && !allowed[a]);
   if (orphans.length) {
     process.stderr.write(
-      `mkpkg --clang: ${orphans.length} overlay app(s) published by the sibling have NO packages/*.json:\n` +
+      `mkpkg --${producer}: ${orphans.length} overlay app(s) published by the sibling have NO packages/*.json:\n` +
       orphans.map((a) => `    /usr/bin/${a}\n`).join('') +
-      `  every clang app we build must be installable through gucman.\n` +
-      `  fix: add packages/<name>.json with {"requires":"native-sibling:clang",\n` +
+      `  every ${producer} app we build must be installable through gucman.\n` +
+      `  fix: add packages/<name>.json with {"requires":"native-sibling:${producer}",\n` +
       `       "files":{"<name>":{"nativeApp":"${orphans[0]}"}}, "bin":{...}} —\n` +
-      `       see packages/box2d-clang.json (windowed) or packages/stl4.json (tty)\n` +
+      `       see packages/box2d-clang.json (clang, windowed) or packages/wc-rust.json (rust, tty)\n` +
       `  or, if a payload is deliberately not a package, record it WITH A REASON in\n` +
-      `  ${path.relative(ROOT, UNPACKAGED_PATH)}\n`);
+      `  ${path.relative(ROOT, S.unpackaged)}\n`);
     process.exit(1);
   }
   // A stale allow-list entry is drift too: it claims an exemption for a
@@ -305,14 +380,14 @@ function clangDriftCheck() {
   const stale = Object.keys(allowed).filter((a) => !published.includes(a) || claimedBy.has(a));
   if (stale.length) {
     process.stderr.write(
-      `mkpkg --clang: stale ${path.relative(ROOT, UNPACKAGED_PATH)} entries — ${stale.join(', ')}\n` +
+      `mkpkg --${producer}: stale ${path.relative(ROOT, S.unpackaged)} entries — ${stale.join(', ')}\n` +
       `  (no longer published by the sibling, or now packaged); remove them\n`);
     process.exit(1);
   }
-  log(`clang drift: ${published.length} overlay app(s), all packaged`
+  log(`${producer} drift: ${published.length} overlay app(s), all packaged`
     + (Object.keys(allowed).length ? ` (${Object.keys(allowed).length} explicitly unpackaged)` : '') + ' ✓');
 }
-if (withClang) clangDriftCheck();
+for (const p of enabled) driftCheck(p);
 
 /* ---- package-input freshness (the 0082 idea, scoped to one package) ----
  * Newest mtime across everything that can change this package's payload
@@ -386,10 +461,13 @@ function newestPkgInput(name, pkg) {
       catch (e) { continue; }   // malformed → fails loud in the build, not here
       tfs.forEach((tf) => statFile(path.join(ROOT, entry.tree, tf)));
     }
-    // A nativeApp/nativeFile payload's freshness is the sibling overlay
+    // A nativeApp/nativeFile payload's freshness is its producer's overlay
     // manifest's mtime — re-publishing overlay.json (new sha256s)
     // re-materializes the package.
-    if (entry.nativeApp !== undefined || entry.nativeFile !== undefined) statFile(clangOverlayPath);
+    if (entry.nativeApp !== undefined || entry.nativeFile !== undefined) {
+      const producer = COMMON.nativeSiblingProducer(pkg.requires);
+      if (producer !== null && SIBLINGS[producer]) statFile(overlayPathOf(producer));
+    }
   }
   return newest;
 }
@@ -452,7 +530,10 @@ async function assembleTree(name, pkg) {
   mfs.mkdir('/etc', 0o755);   // seedEntries' c-compile staging area
   const base = '/opt/' + name;
   const section = { dirs: ['/opt', base], files: {} };
-  const clangPlants = [];   // { abs, app, mode } — planted AFTER seedEntries
+  // The package's producer, from its gate value — which sibling overlay its
+  // nativeApp/nativeFile entries resolve against. null = an ungated base def.
+  const producer = COMMON.nativeSiblingProducer(pkg.requires);
+  const nativePlants = [];   // { abs, ovPath, mode } — planted AFTER seedEntries
   // One payload path, one producer: tree expansion introduces the class of
   // two entries writing the same path (a tree file shadowed by an explicit
   // entry), which Object assignment would resolve silently — refuse instead.
@@ -494,22 +575,27 @@ async function assembleTree(name, pkg) {
       if (typeof entry.nativeApp !== 'string' || !entry.nativeApp.length) {
         throw new Error(`package '${name}': ${rel} — nativeApp must name an app`);
       }
-      if (!withClang) {
-        throw new Error(`package '${name}': ${rel} — nativeApp entries require mkpkg --clang`);
-      }
-      clangPlants.push({ abs: base + '/' + rel, ovPath: '/usr/bin/' + entry.nativeApp, mode: 0o755 });
+      requireProducer(name, rel, 'nativeApp');
+      nativePlants.push({ abs: base + '/' + rel, ovPath: '/usr/bin/' + entry.nativeApp, mode: 0o755 });
     } else if (entry.nativeFile !== undefined) {
       // nativeFile: any non-binary overlay payload by absolute /usr path (T3:
-      // tinyrenderer's model assets). Same verifier, same --clang gating.
+      // tinyrenderer's model assets). Same verifier, same producer gating.
       if (typeof entry.nativeFile !== 'string' || !entry.nativeFile.startsWith('/usr/')) {
         throw new Error(`package '${name}': ${rel} — nativeFile must be an absolute /usr overlay path`);
       }
-      if (!withClang) {
-        throw new Error(`package '${name}': ${rel} — nativeFile entries require mkpkg --clang`);
-      }
-      clangPlants.push({ abs: base + '/' + rel, ovPath: entry.nativeFile, mode: 0o644 });
+      requireProducer(name, rel, 'nativeFile');
+      nativePlants.push({ abs: base + '/' + rel, ovPath: entry.nativeFile, mode: 0o644 });
     } else {
       claim(base + '/' + rel, entry);
+    }
+  }
+  function requireProducer(pkgName, rel, kind) {
+    if (producer === null || !SIBLINGS[producer]) {
+      throw new Error(`package '${pkgName}': ${rel} — a ${kind} entry needs ` +
+        `requires: "native-sibling:<producer>" naming its sibling`);
+    }
+    if (!enabled.has(producer)) {
+      throw new Error(`package '${pkgName}': ${rel} — ${kind} entries require mkpkg --${producer}`);
     }
   }
   await COMMON.seedEntries(mfs, section, {
@@ -520,15 +606,15 @@ async function assembleTree(name, pkg) {
     compile: COMMON.createCcDriver(CompilerJS, mfs),
     log: () => {},
   });
-  // Plant each nativeApp/nativeFile: pull the named payload out of the sibling
-  // overlay (bytes ALREADY sha256+size verified by loadOverlays) and write it
-  // into the tree.
-  if (clangPlants.length) {
-    const ov = clangOverlay();
-    for (const p of clangPlants) {
+  // Plant each nativeApp/nativeFile: pull the named payload out of the
+  // package's producer overlay (bytes ALREADY sha256+size verified by
+  // loadOverlays) and write it into the tree.
+  if (nativePlants.length) {
+    const ov = siblingOverlay(producer);
+    for (const p of nativePlants) {
       const f = ov.get(p.ovPath);
       if (!f) {
-        throw new Error(`package '${name}': no ${p.ovPath} in the sibling overlay (${clangOverlayPath})`);
+        throw new Error(`package '${name}': no ${p.ovPath} in the sibling overlay (${overlayPathOf(producer)})`);
       }
       if (f.bytes === undefined) {
         throw new Error(`package '${name}': ${p.ovPath} is a symlink in the overlay, not a payload`);

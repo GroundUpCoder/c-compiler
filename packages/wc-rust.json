@@ -1,0 +1,10 @@
+{
+  "name": "wc-rust",
+  "version": "1.0.0",
+  "summary": "wc in Rust (gucos-rust sibling — the first -rust package; busybox-compatible word count over the kernel fd layer)",
+  "requires": "native-sibling:rust",
+  "files": {
+    "wc-rust": { "nativeApp": "wc-rust" }
+  },
+  "bin": { "wc-rust": "wc-rust" }
+}
