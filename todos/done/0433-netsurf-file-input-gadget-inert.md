@@ -1,6 +1,6 @@
 # 0433 — netsurf: <input type=file> is inert (file_gadget_open unset)
 
-- **Status**: open
+- **Status**: done
 - **Design**: design pass, 2026-07-30
 
 ## Goal
@@ -256,3 +256,34 @@ decision, not a miss.
 `P2 / medium` confirmed — a ~100-line app that reuses comdlg32 wholesale,
 ~150 lines of frontend plumbing, one kernel e2e, no engine patch. No
 `set-difficulty` change.
+
+## Result
+
+Implemented as designed, 2026-07-30, on branch `0433-filepick`. The dev
+log is `logs/2026-07-30/0433-file-input-gadget.md`.
+
+- `/bin/filepick` is a new win32 app (`os/win32/filepick.c`) around one
+  `GetOpenFileNameW` call. Accept prints the absolute path and exits 0.
+  Cancel prints nothing and exits 1. Image v197 → v198.
+- The gucOS window table supplies `file_gadget_open`. The handler
+  spawns the picker with its stdout on a pipe. SIGCHLD sets a flag
+  (term's flag-then-park pattern). The loop's poll reaps the child and
+  applies the pick through `browser_window_set_gadget_filename`.
+- One picker per window. A gadget click under an open dialogue does
+  nothing. `gui_window_destroy` and `GW_EVENT_NEW_CONTENT` kill a live
+  picker, so a navigation closes the dialogue.
+- **Design erratum, compensated**: the design named
+  `hlcache_handle_retain`, which does not exist (`hlcache_handle_clone`
+  is a stub that always fails). The liveness rule is the NEW_CONTENT
+  cancel plus the content pointer-identity check at apply time. The
+  intent — a result applies only to the content that asked — holds.
+- Coverage: `tests/kernel/test_netsurf_filegadget_e2e.js` (kernel
+  134 → 135) — open (+ the one-picker rule), cancel (no event), choose
+  (one `input` event with the typed path, gadget repaint as pixels),
+  last-accepted-directory re-open, and a GET submit that carries the
+  VALUE in the query while the still-open picker dies at the
+  navigation. The red control on the pristine frontend fails loudly
+  (the picker wait times out).
+- Acceptance line 2 is HALF green by design: the submitted form data
+  carries the gadget VALUE. The file BYTES need a multipart POST and an
+  http fetcher — that half stays with `todos/0437`.
