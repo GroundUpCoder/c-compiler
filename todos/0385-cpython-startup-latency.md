@@ -82,3 +82,33 @@ After A+B a session's **first** python run still pays one cold compile+init
 (~1–2 s iPhone-scale, once); warm runs ≈ 0.3–0.6 s estimated on-device.
 Direct iPhone verification is pending — needs a deployable test build
 (coordinator owns image sequencing).
+
+## Acceptance
+
+Ruled 2026-07-30. Options **A** and **B** are filed as their own tickets and do the work; this parent
+closes on the on-device record.
+
+- `todos/0443` (**A** — module cache for rw-volume binaries) is merged.
+- `todos/0444` (**B** — spawn-free gucman launcher) is merged.
+- A **deployable test build** is measured **on jku's iPhone**.
+- Warm `python --version` and `python -c pass` are **recorded in the log**, expected **0.3–0.6 s**.
+- Close this ticket on that record.
+
+⚠️ **The iPhone measurement is a jku-only action.** No lane can claim it, and this ticket must **not**
+be closed on a desktop-Safari number. Ask the user; a coordinator owns the image sequencing.
+
+⚠️ After A+B, a session's **first** python run still pays one cold compile+init (~1–2 s at iPhone
+scale, once). That is the known floor recorded above, **not** a regression.
+
+## Option C — PARKED, NOT CUT
+
+Prewarm the module at install/boot, in-process cmdalt dispatch, freeze more stdlib. This is a genuine
+cost trade — boot time and memory against a once-per-session spike — whose value is **unmeasured
+on-device**, so it is parked rather than dropped.
+
+**Reopen trigger:** on-device warm runs exceed ~0.6 s, **or** the once-per-session cold spike proves a
+real annoyance to jku.
+
+⚠️ Note the stale line under "Options (as emailed)": B's *"applies to every gucman launcher
+(micropython too)"* is **vacuous** — `packages/micropython.json` ships **no launcher** and already
+exhibits the 3-process shape B is chasing. `todos/0444` records the correction and replaces that arm.
