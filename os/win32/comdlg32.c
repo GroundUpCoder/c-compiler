@@ -18,13 +18,12 @@
  * radios are not worth their pixels here); Match case is honored.
  *
  * ChooseFontW is REAL (todos/0223): the file-dialog modal shape with a
- * face LISTBOX — one "mono" row: CreateFont resolves faceName against
- * mono/sans/serif since C1/#281, but expanding this list is a
- * dialog-visible change in the ports, so it rides the C2 flag day
- * (#282) — a size EDIT + point-size LISTBOX, and a
- * live sample STATIC driven through WM_SETFONT (dogfooding the 0223
- * user32 plumbing). OK fills the caller's LOGFONTW (negative lfHeight =
- * em px, the CreateFont convention) and returns TRUE.
+ * face LISTBOX enumerating gdi32's baked family table (C2/#282 —
+ * __gdi_font_families, never a parallel list), a size EDIT + point-size
+ * LISTBOX, and a live sample STATIC driven through WM_SETFONT in the
+ * SELECTED face (dogfooding the 0223 user32 plumbing). OK fills the
+ * caller's LOGFONTW (negative lfHeight = em px, the CreateFont
+ * convention) and returns TRUE.
  *
  * PrintDlgW / PageSetupDlgW return FALSE (the user "cancelled"): there is
  * no printer — a cancel is the honest answer, and the apps' cancel paths
@@ -496,14 +495,13 @@ static HWND fr_dialog(FINDREPLACEW *fr, int replace) {
 HWND FindTextW(FINDREPLACEW *fr) { return fr_dialog(fr, 0); }
 HWND ReplaceTextW(FINDREPLACEW *fr) { return fr_dialog(fr, 1); }
 
-/* ---- the font dialog (todos/0223) ----
+/* ---- the font dialog (todos/0223; multi-face since C2/#282) ----
  * The file_dialog shape verbatim: own class + WS_POPUP top-level, child
- * controls, the MessageBox owner-disable + local pump. ONE face row
- * ("mono" — CreateFont is multi-face since C1/#281; the list expansion
- * is deferred to the C2 flag day (#282), see the header note), a size
- * EDIT + the classic point-size list, a live sample STATIC re-fonted via
- * WM_SETFONT on every size change (the 0223 user32 plumbing, dogfooded
- * here), OK/Cancel. Sizes are POINTS at the synthetic 96dpi
+ * controls, the MessageBox owner-disable + local pump. The face list is
+ * gdi32's family table (__gdi_font_families), a size EDIT + the classic
+ * point-size list, a live sample STATIC re-fonted via WM_SETFONT on
+ * every size OR face change (the 0223 user32 plumbing, dogfooded here),
+ * OK/Cancel. Sizes are POINTS at the synthetic 96dpi
  * (GetDeviceCaps LOGPIXELSY): px = pt * 96 / 72. */
 
 #define IDC_FACE   110
@@ -535,13 +533,26 @@ static int cf_cur_pt(void) {
     return pt >= 1 && pt <= 999 ? pt : 0;
 }
 
+/* The selected face row's text; "mono" when nothing is selected. */
+static void cf_cur_face(char *out, int cap) {
+    snprintf(out, (size_t)cap, "mono");
+    int sel = (int)SendMessage(g_cf.face, LB_GETCURSEL, 0, 0);
+    if (sel >= 0)
+        SendMessage(g_cf.face, LB_GETTEXT, (WPARAM)sel, (LPARAM)out);
+}
+
 /* Re-font the sample through WM_SETFONT — the exact consumer contract
- * (ChooseFont -> CreateFontIndirect -> WM_SETFONT) the caller will run. */
+ * (ChooseFont -> CreateFontIndirect -> WM_SETFONT) the caller will run.
+ * The SELECTED face drives it (C2, #282): the sample must show what OK
+ * will return — the old "mono" literal here let the accept path go
+ * face-generic while the sample kept rendering mono. */
 static void cf_preview(void) {
     int pt = cf_cur_pt();
     if (!pt) return;
+    char face[64];
+    cf_cur_face(face, sizeof face);
     HFONT nf = CreateFont(-MulDiv(pt, 96, 72), 0, 0, 0, FW_NORMAL,
-                          0, 0, 0, 0, 0, 0, 0, 0, "mono");
+                          0, 0, 0, 0, 0, 0, 0, 0, face);
     if (!nf) return;
     SendMessage(g_cf.sample, WM_SETFONT, (WPARAM)nf, TRUE);
     if (g_cf.sampleFont) DeleteObject((HGDIOBJ)g_cf.sampleFont);
@@ -555,10 +566,8 @@ static void cf_accept(void) {
     lf->lfHeight = -MulDiv(pt, 96, 72);          /* negative = em px, the
                                                     CreateFont convention */
     lf->lfWidth = 0;
-    char face[64] = "mono";
-    int sel = (int)SendMessage(g_cf.face, LB_GETCURSEL, 0, 0);
-    if (sel >= 0)
-        SendMessage(g_cf.face, LB_GETTEXT, (WPARAM)sel, (LPARAM)face);
+    char face[64];
+    cf_cur_face(face, sizeof face);
     cd_a2w(face, lf->lfFaceName, LF_FACESIZE);
     g_cf.cf->iPointSize = pt * 10;               /* tenths, per the contract */
     g_cf.done = 1;
@@ -590,6 +599,12 @@ static LRESULT CALLBACK cf_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case IDC_SIZEED:
             if (HIWORD(wp) == EN_CHANGE) cf_preview();
+            return 0;
+        case IDC_FACE:
+            /* face selection re-renders the sample (C2, #282); dbl-click
+             * accepts, the size-list convention */
+            if (HIWORD(wp) == LBN_SELCHANGE) cf_preview();
+            else if (HIWORD(wp) == LBN_DBLCLK) { cf_preview(); cf_accept(); }
             return 0;
         }
         return 0;
@@ -665,9 +680,26 @@ BOOL ChooseFontW(CHOOSEFONTW *cf) {
     CreateWindowEx(0, "BUTTON", "Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                    CFD_W - 112, CFD_H - 38, 104, 30, g_cf.win, (HMENU)IDCANCEL, NULL, NULL);
 
-    /* ONE face today (single-family platform; see the header comment) */
-    SendMessage(g_cf.face, LB_ADDSTRING, 0, (LPARAM)"mono");
-    SendMessage(g_cf.face, LB_SETCURSEL, 0, 0);
+    /* The face list IS gdi32's family table (C2, #282: __gdi_font_families
+     * — never a parallel hardcoded list, so a new baked family reaches
+     * this dialog with zero comdlg32 change). Preselect the row matching
+     * the incoming LOGFONT's face via the same strcmp the rows came from;
+     * an unknown/empty name keeps row 0. */
+    {
+        const char *const *fams;
+        int nfam = __gdi_font_families(&fams);
+        int sel0 = 0;
+        char inface[64] = "";
+        if (cf->Flags & CF_INITTOLOGFONTSTRUCT) {
+            char *a = cd_w2a(cf->lpLogFont->lfFaceName);
+            if (a) { snprintf(inface, sizeof inface, "%s", a); free(a); }
+        }
+        for (int i = 0; i < nfam; i++) {
+            SendMessage(g_cf.face, LB_ADDSTRING, 0, (LPARAM)fams[i]);
+            if (inface[0] && !strcmp(inface, fams[i])) sel0 = i;
+        }
+        SendMessage(g_cf.face, LB_SETCURSEL, (WPARAM)sel0, 0);
+    }
     for (int i = 0; i < CF_NSIZES; i++) {
         char row[16];
         snprintf(row, sizeof row, "%d", cf_ptsizes[i]);

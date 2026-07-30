@@ -23,6 +23,7 @@
  * visible difference (weight, slant, face) moves it.
  */
 #include <windows.h>
+#include <commdlg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -108,6 +109,34 @@ static int probe(int px, const char *text) {
     return 0;
 }
 
+/* ============================================================ choose
+ * (C2, #282) `fontramp choose [FACE]` — the ChooseFontW acceptance leg:
+ * runs the REAL dialog (agent-driven by the e2e: click a face row, OK)
+ * and prints the LOGFONT the caller got back. With FACE the incoming
+ * LOGFONT preseeds via CF_INITTOLOGFONTSTRUCT (the preselect leg). */
+static int choose_mode(const char *initFace) {
+    LOGFONTW lf;
+    memset(&lf, 0, sizeof lf);
+    CHOOSEFONTW cf;
+    memset(&cf, 0, sizeof cf);
+    cf.lStructSize = sizeof cf;
+    cf.lpLogFont = &lf;
+    if (initFace) {
+        lf.lfHeight = -20;
+        MultiByteToWideChar(CP_UTF8, 0, initFace, -1, lf.lfFaceName,
+                            LF_FACESIZE);
+        cf.Flags |= CF_INITTOLOGFONTSTRUCT;
+    }
+    BOOL ok = ChooseFontW(&cf);
+    char face[64] = "";
+    WideCharToMultiByte(CP_UTF8, 0, lf.lfFaceName, -1, face, sizeof face,
+                        NULL, NULL);
+    printf("choose: ok=%d face=%s h=%d pt=%d\n", ok ? 1 : 0, face,
+           (int)lf.lfHeight, (int)cf.iPointSize);
+    fflush(stdout);
+    return 0;
+}
+
 /* ============================================================ window */
 
 static void draw_ramp(HDC dc) {
@@ -187,6 +216,8 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 int main(int argc, char **argv) {
     int i = 1, doProbe = 0, px = 20;
     const char *text = "Hamburgefonstiv 0123456789";
+    if (i < argc && !strcmp(argv[i], "choose"))
+        return choose_mode(i + 1 < argc ? argv[i + 1] : NULL);
     if (i < argc && !strcmp(argv[i], "probe")) { doProbe = 1; i++; }
     if (doProbe && i + 1 < argc && !strcmp(argv[i], "stock")) {
         for (int k = 0; k < (int)(sizeof STOCKS / sizeof STOCKS[0]); k++)

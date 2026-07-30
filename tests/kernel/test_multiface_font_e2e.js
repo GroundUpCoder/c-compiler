@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 // C1 (ticket #281) acceptance: multi-face proportional CreateFont in gdi32.
+// C2 (ticket #282) rides here too: the stock-font flag day (UI stocks sans,
+// fixed stocks mono) and the multi-face ChooseFontW dialog (enumeration,
+// sample re-render in the selected face, LOGFONT round-trip, preselect).
 // Drives /bin/fontramp (os/win32/fontramp.c) through os/boot.js:
 //
 //   - probe legs: metric/render relationships between faces — mono stays
@@ -318,8 +321,53 @@ function windowSession() {
       i === 0 ? r.stdout.slice(-800) : undefined);
 }
 
+/* ---- ChooseFontW session (C2, #282) --------------------------------
+ * The dialog enumerates gdi32's family table (never a parallel list), a
+ * face-row click re-renders the SAMPLE (the cf_preview defect arm: the
+ * sample must show what OK will return, not a hardcoded mono), and the
+ * selection round-trips into the caller's LOGFONT. Preselect leg: a
+ * CF_INITTOLOGFONTSTRUCT face selects its own row, so an immediate OK
+ * returns it unchanged. */
+function chooseSession() {
+  const lines = [
+    'fontramp choose &',
+    'wmctl wait win Font 15000',
+    'FSID=$(wmctl list | grep "Font$" | sed "s/[^0-9].*//")',
+    'wmctl wait seq $FSID 1 8000',
+    'echo ==cftree',
+    'wmctl tree',
+    'echo ==cut',
+    'wmctl shot $FSID /root/cf-mono.ppm && echo cfshot0-ok',
+    'wmctl click sans',                    // face LISTBOX row (AQM, 0370)
+    'wmctl tree > /dev/null',              // paint barrier for the re-font
+    'wmctl shot $FSID /root/cf-sans.ppm && echo cfshot1-ok',
+    'wmctl click OK',
+    'wmctl wait nowin Font 8000',
+    'wait',                                // reap: the choose line prints
+    'fontramp choose serif &',             // preselect leg
+    'wmctl wait win Font 15000',
+    'wmctl click OK',
+    'wmctl wait nowin Font 8000',
+    'wait',
+    ''];
+  const r = driveBoot(lines.join('\n'), { image, timeout: 240000 });
+  const tree = (r.stdout.split('==cftree')[1] || '').split('==cut')[0];
+  check('face LISTBOX enumerates the family table (mono/sans/serif rows)',
+    /\bmono\b/.test(tree) && /\bsans\b/.test(tree) && /\bserif\b/.test(tree),
+    tree.slice(0, 500));
+  check('sample shots written', r.stdout.includes('cfshot0-ok') &&
+    r.stdout.includes('cfshot1-ok'), r.stdout.slice(-600));
+  check('sans selection round-trips into the caller LOGFONT',
+    r.stdout.includes('choose: ok=1 face=sans h=-20 pt=150'),
+    r.stdout.match(/^choose:.*$/m));
+  check('CF_INITTOLOGFONTSTRUCT preselects the incoming face (serif)',
+    r.stdout.includes('choose: ok=1 face=serif h=-20 pt=150'),
+    (r.stdout.match(/^choose:.*$/mg) || []).join(' | '));
+}
+
 function extractSession() {
-  const names = SHOTS.map((_, i) => `/root/ramp${i}.ppm`);
+  const names = SHOTS.map((_, i) => `/root/ramp${i}.ppm`)
+    .concat(['/root/cf-mono.ppm', '/root/cf-sans.ppm']);
   const r = driveBoot('cat ' + names.join(' ') + '\n',
     { image, encoding: null, timeout: 240000, maxBuffer: 64 * 1024 * 1024 });
   const outDir = path.join(ROOT, 'build/test-kernel/fontramp');
@@ -341,6 +389,41 @@ function extractSession() {
       encodePng(p.w, p.h, rgb));
     off = p.next;
   }
+  /* The ChooseFontW sample crops (C2, #282): same dialog, same size,
+   * mono-selected vs sans-selected — the SAMPLE box region must differ
+   * (the arm cf_accept alone cannot prove: the returned LOGFONT can be
+   * right while the sample the user stared at stayed mono). Crop to the
+   * sample STATIC (x 8..372, y 272..336 of the 380x380 dialog) so the
+   * face-list highlight, which also moved, cannot be what differs. */
+  const cfBufs = [];
+  for (const label of ['cf-mono', 'cf-sans']) {
+    let p = null;
+    try { p = parsePpm(r.stdout, off); } catch (e) { /* short output */ }
+    check(`shot ${label} parses at 380x380`,
+      p !== null && p.w === 380 && p.h === 380, p && `${p.w}x${p.h}`);
+    if (!p) return;
+    fs.writeFileSync(path.join(outDir, `${label}.png`),
+      encodePng(p.w, p.h, p.rgb));
+    const crop = Buffer.alloc((372 - 8) * (336 - 272) * 3);
+    let ci = 0;
+    for (let y = 272; y < 336; y++)
+      for (let x = 8; x < 372; x++) {
+        const s = (y * p.w + x) * 3;
+        crop[ci++] = p.rgb[s];
+        crop[ci++] = p.rgb[s + 1];
+        crop[ci++] = p.rgb[s + 2];
+      }
+    let ink = 0;
+    for (let j = 0; j < crop.length; j += 3)
+      if (crop[j] < 128) ink++;                    /* dark = glyph pixels */
+    check(`${label} sample box is inked`, ink > 50, 'ink=' + ink);
+    cfBufs.push(crop);
+    off = p.next;
+  }
+  if (cfBufs.length === 2)
+    check('ChooseFontW sample re-renders in the selected face (crops differ)',
+      !cfBufs[0].equals(cfBufs[1]));
+
   let allDistinct = true;
   for (let a = 0; a < bufs.length && allDistinct; a++)
     for (let b = a + 1; b < bufs.length; b++)
@@ -361,6 +444,8 @@ function extractSession() {
   await synthBoldSession();
   console.log('-- windowed session --');
   windowSession();
+  console.log('-- ChooseFontW session (C2 #282) --');
+  chooseSession();
   console.log('-- extract session --');
   extractSession();
 
