@@ -61,3 +61,45 @@ package definition pointing at an overlay key that no longer exists.
 our-compiler package, while jku's uid-657 had CPython claiming `python3` + `cpython`. `0374`
 settled the **package** name only; this ticket settles the **sibling overlay** name only.
 🔴 Do not let either be read as settling the **key reservation**.
+
+## Result (2026-07-30, branch `0383-sibling-rename`)
+
+- Sibling: `clang-simplified` branch `0383-sibling-rename` @ **a1a2a6b** (pushed).
+  The commit renames the three manifest fields. The `name`, the `out`, and the
+  `install` fields now read `cpython-clang`. The sibling tree has zero other
+  `python-clang` occurrences.
+- `out-image/overlay.json` is a gitignored build artifact. I rebuilt it in the
+  branch worktree with `mk-overlay.mjs --reuse`. Only the `cpython-clang`
+  payload compiled (249 TUs, 7,632,598 bytes). The overlay publishes
+  `/usr/bin/cpython-clang` and no old-name key. The sibling MAIN checkout keeps
+  the old overlay on disk. Rebuild it there at the lockstep merge.
+- This repo: `packages/cpython-clang.json` now has `clangApp: "cpython-clang"`.
+  `todos/CPYTHON.md` §6.3 now records the rename in place of the stale
+  pre-rename note.
+- Precondition, re-derived 2026-07-30: **zero** in-flight lanes carry an
+  old-name package definition. The lanes the ticket named (`0370`, `0376`, the
+  iPhone lane `0379/0385`) have all merged. One unmerged branch,
+  `suite-runner-invariant` (0368), holds `packages/python-clang.json` from its
+  pre-rename base. Its diff against main does not touch `packages/`, so a
+  rebase gives it the renamed file. Re-gate that lane only after a rebase. The
+  sibling's one unmerged branch (`mgba-parity`) does not touch the manifest.
+- Gate, on the rebased tree (planner selected todos, host, kernel, sweep; each
+  suite ran once): todos green; host green; **kernel 137/137** (filter null,
+  recorded == total; **`test_clang_pkgs_e2e` PASS**, `test_cpython_clang_e2e`
+  PASS). The two clang tests read the sibling branch worktree through
+  `CLANG_ROOT`. The pass proves the new overlay key: the old overlay has no
+  `/usr/bin/cpython-clang` payload, so `mkpkg --clang` would fail loudly
+  against it. **Sweep 42/42** (filter null, recorded == total). The sweep
+  dirtied three committed PNGs and one untracked PNG (todos/0438); I restored
+  them.
+- Survivors of `grep -rn "python-clang"`, bare-name lines: c-compiler **119**,
+  sibling **0**. Breakdown: 64 in `logs/` (dated records), 25 in `todos/done/`
+  (state at closure), 16 in `todos/0331-*` (the dated record of the ask; 0331
+  stays open for the §6.2 key question), 5 in `todos/CPYTHON.md` (a quoted
+  lean, the `~/build/python-clang` build root, `logs/2026-07-27` file names),
+  1 in `todos/COMMAND-ALTERNATIVES.md` (a quote with a dated rename note),
+  1 in `todos/0117-*` (a recipe file name), 7 in `tools/bench2x2/` (on-disk
+  build roots and artifact names). All are intentional records or machine
+  paths. None is a live surface.
+- This ticket does not settle the §6.2 key reservation. `todos/0331` still owes
+  that question.
