@@ -387,3 +387,201 @@ is **API-key-only**, because `codex login` is out of scope for the headless
 draft did, and its mechanism was false. A listener-free device-code flow exists in
 the tree at `login/src/device_code_auth.rs`, and `TcpListener` appears in no file
 under `login/src/`. The scope decision stands. The impossibility claim does not.
+
+---
+
+## Result — the ruling (2026-07-30)
+
+🔴 **The program takes option (b): `wasm32-wasip1`, with a host shim that serves
+`wasi_snapshot_preview1` onto the kernel RPCs that already exist.**
+
+The reason, in one paragraph. The standard library for `wasip1` is upstream,
+maintained, and stable. Option (b) buys the ecosystem — 543 of 838 crates, with
+the population warning attached below — for a bounded shim over existing RPCs.
+Option (a) buys the same ecosystem only after a nightly compiler, a forked
+standard library, a rebase on every rustc release, and the unmeasured claim 6.
+Option (c) is a successor to (a), so it falls with (a). The one recurring cost of
+(b) is the second import namespace, and that cost is bounded because WASI
+preview 1 is a frozen snapshot.
+
+### 1. The nightly question — answered first, by reading
+
+**The chosen path needs NO nightly compiler.** `wasm32-wasip1` is a tier-2 target
+of stable rustc. Its standard library ships precompiled through `rustup target
+add wasm32-wasip1`. Lanes A1–A4 stay on stable `wasm32-unknown-unknown` with
+`core` and `alloc`, as `todos/RUST.md` §5 records. Measured on this machine on
+2026-07-30: `rustup toolchain list` shows `stable` (1.96.1, active) and the
+pinned `1.95.0`. No nightly is installed, and this ruling requires none.
+
+The contradiction resolves like this. "Stable `rustc 1.96.1` is sufficient" is
+true for BOTH paths the program now takes: the `no_std` `"c"` path (measured,
+`todos/0413`) and the `wasip1` std path (a stable target; C2 measures it end to
+end). The statement is FALSE for option (a): a custom target specification needs
+`-Zbuild-std`, which is unstable. Option (a) would buy a pinned nightly plus a
+documented bump procedure, forever. The estate does not buy it. Because the
+ruling is (b), no pinned nightly version and no bump procedure exist to name.
+
+### 2. The recurring cost of (b) — words a future reader can hold the estate to
+
+- **Stable, not nightly.** No pinned nightly. No bump procedure.
+- **No fork, no rebase.** The standard library is upstream's. The estate carries
+  zero std patches, on every rustc release, forever.
+- **TWO import namespaces, not one.** This ruling exercises the one re-opening
+  that `RUST.md` §3 rule 1 permits. `host.js` serves `wasi_snapshot_preview1`
+  beside `"c"`, permanently. The mitigation is structural: WASI preview 1 is
+  frozen upstream, so the second namespace has no upstream churn, no version
+  chase, and a fixed surface of about 45 functions. A first C2 pass needs
+  roughly the fd/path/clock/random/args/environ/proc_exit/poll_oneoff subset.
+  For scale: the `"c"` binding is 86 imports across 13 families (`todos/0414`,
+  measured). **No third namespace, ever** — every gucOS-specific capability
+  (spawn, signals, tty, http, clipboard) still reaches the host through `"c"`.
+- **The structural match is real.** The unified `FS_WAIT` (`kernel.js:3864`,
+  re-verified at HEAD `5749c6f7`: fds ⊕ input ring ⊕ timeout ⊕ signal-EINTR)
+  **is** `poll_oneoff` in a different spelling. The fd and path families
+  delegate to the same 0x04xx RPCs that RemoteFS already serves.
+
+### 3. Weighed against the right baseline
+
+Stock `wasm32-unknown-unknown` on stable is the free rung, and it stays. The
+standard library is present and inert there: 511 of 833 crates compile
+(census, same warning). Lanes A1–A4 ship on that rung today. What the free rung
+can never grow into is real std I/O — backing `std::sys` for that target IS
+option (a), the fork. Option (b) is the only path where `std::fs`, `std::io`,
+`std::env`, `std::time` and the seeded `HashMap` hasher become real through
+upstream code. The census's best number (543 against 511) is measured on
+exactly the (b) target.
+
+The two rungs coexist, in one module when needed. `gucos-sys` extern blocks
+name `"c"` explicitly, the std sys layer names `wasi_snapshot_preview1`, and
+stable rustc compiles `gucos-sys` unchanged for the wasip1 target. A std
+program therefore still reaches spawn, signals, tty and http through `"c"`.
+The entry contract (host-played crt0: `main`/`memory`/`alloca`, no `_start`)
+must be reconciled with wasip1's `_start` convention — that is C2 design work,
+named in C2's plan, not settled here.
+
+### 4. The deploy edge (stated because the ruling is (b))
+
+- `host.js` adds a `wasi_snapshot_preview1` key to the ONE import object beside
+  `ENV_KEY = "c"` — a `createWasiPreview1(ctx)` factory, the `createHttp`
+  shape. This is an ADDITION. Existing binaries and the `"c"` contract stay
+  byte-unchanged. The base image ships no Rust (`RUST.md` §3 rule 5), so no
+  bake changes and the byte-identity guardrail must stay green.
+- The lock-step: a `-rust` package built for wasip1 runs only under a `host.js`
+  that serves the namespace. On an older host, instantiation fails LOUD with
+  the missing import's module and name — rule 6 is satisfied by construction.
+  Deploys ship the new `host.js` before or with the first wasip1 package. The
+  JS cache lag (CF `max-age=14400`, up to 4 hours) makes "before" the safe
+  order.
+- `kernel.js` does not change ABI. The shim is host.js-side delegation onto
+  existing RPCs. If C2 finds a missing kernel op, it goes through the normal
+  ticket discipline.
+
+### 5. The evidence, with the null result attached
+
+The census (2026-07-29, `~/git/meta/gucos/notes/rust-p0-codex-wasm-census.md`)
+partitioned the 838-crate `codex-exec` graph for `wasm32-wasip1`: **543
+compiled (65 percent)**, 76 host-side, **22 failed**, 197 unreached. ⚠️ The
+838 figure carries a population warning that travels WITH the number: an
+in-process application server of roughly 64,000 lines now rides the exec path,
+the crate map predates it, and the census **may understate** the port. Only 4
+of the 22 failures are true structural blockers: `socket2`, `tokio`,
+`aws-lc-sys`, `v8`. **9 of the 22 are UNMEASURED** — the census machine had no
+C compiler that targets wasm — and no probe fired under this ticket to close
+them. They stay open, carried to D1.
+
+### 6. Open inputs this ruling did NOT settle, with the answer assumed for each
+
+1. **The `ring` dispute.** Recorded as the ticket records it: pass one cites
+   `build.rs:594-599` and `Cargo.toml:180` and says the blocker claim is
+   refuted; pass two cites a general impression and says blocked. The evidence
+   is asymmetric, and the asymmetry is not a licence to settle. **Assumed:
+   neither blocker nor cleared.** The ruling holds under both answers — `ring`
+   prices the application half (TLS via rustls), not the standard-library
+   layer.
+2. **The 9 unmeasured crates.** **Assumed: open, no answer.** The ruling holds
+   under both answers: none of the 9 sits in the standard library's own path.
+   All are C or C++ build scripts, so they price the application half. Carried
+   to D1 unmeasured.
+3. **Claim 6** (a novel `target_os = "gucos"` matches nothing). NOT MEASURED,
+   and this ruling did not measure it. **Assumed: open.** It prices option (a)
+   only. Even at the answer most favorable to (a) — zero crates need new arms —
+   (a) still carries nightly, the fork and the rebase, so the ruling is robust
+   to either answer.
+4. **D1 scope fact (a), WebSockets.** Carried as corrected on 2026-07-30
+   (authority: `~/git/meta/gucos/notes/websockets-and-platform-limits.md`
+   §1.1(a)): the latch observation and the hardcoded built-in-provider `true`
+   stay TRUE; "no configuration key turns them off" is REFUTED; `todos/0417`
+   is the real prerequisite and a WebSocket transport is not. Its two
+   UNMEASURED sub-items (config override of the built-in `openai` entry in
+   place; fail-fast of the dial on a transportless gucOS) **stay unmeasured**.
+5. **D1 scope fact (b).** The 838-may-understate warning — attached in §5
+   above, and attached wherever this ruling quotes the number.
+6. **D1 scope fact (c).** The sandbox model is platform-blind
+   (`should_run_in_sandbox()` does not test the platform). The recorded D1
+   default is `danger-full-access`: the browser tab IS the sandbox. Recorded,
+   not settled — D1 input.
+7. **`tokio`.** Both halves carried together: the wasm arm is a feature
+   reduction, not an absent port (TRUE in general), AND it is materially
+   misleading for this tree — codex hand-builds a multi-thread runtime,
+   `rt-multi-thread` is explicit in five crates, and two `block_in_place`
+   call sites hard-panic on `current_thread`. The two call sites were
+   re-counted at codex `2e1607ee2f` on 2026-07-30: exactly 2. The last item is
+   a run-time panic, not a compile error.
+
+### 7. The feature-flag finding — measured by this ruling, and CONFIRMED
+
+The surgery estimate below leans on this finding, so the ruling measured it
+(manifest reads at codex `2e1607ee2f`, the census checkout; no build ran):
+
+- 132 workspace manifests (`find . -name Cargo.toml -not -path './target/*'`).
+- Exactly **2** declare `[features]`: `code-mode/Cargo.toml`, `v8-poc/Cargo.toml`.
+- **Zero** `optional = true` in any workspace manifest.
+- Zero optional `reqwest` among the 20 manifests that name it.
+
+**CONFIRMED: no cargo feature cuts a subsystem.** The finding moves from
+UNVERIFIED to MEASURED. The WebSocket correction did not propagate into this in
+either direction — it was measured independently.
+
+### 8. The manifest surgery — the FIRST estimate
+
+Measured inputs (codex `2e1607ee2f`, greps; file counts are files that NAME the
+subsystem, an upper bound on edit sites):
+
+| Subsystem to cut | Manifests | Files |
+|---|---|---|
+| State store (`sqlx`, `libsqlite3-sys`) | 4 | 21 |
+| Git integration (`gix`) | 2 | 40 |
+| Crash telemetry (`sentry`, `uname`, `openssl-sys`) | 2 | 6 |
+| Terminal emulation (`portable-pty`, `serial2`) | 2 | 29 |
+| JavaScript sandbox (`code-mode`, `v8`) | 6 | 47 |
+| Total | ~16 | ≤143 |
+
+**FIRST ESTIMATE — mine, not carried; no lane has scoped this; D1 must
+re-derive it.** The initial cut is **10–20 lane-days**: five subsystems at 2–4
+days each, covering manifest edits, call-site deletion or stubbing, and keeping
+the workspace compiling. The recurring cost is **1–3 lane-days per upstream
+sync**, proportional to upstream churn inside the cut subsystems, for as long
+as the fork tracks upstream. This estimate prices the APPLICATION half. It does
+not move the standard-library ruling.
+
+### 9. Port versus native — both positions recorded, neither settled
+
+- **A coordinator leans toward the native client.** That is a LEAN — a scope
+  judgement, recorded because it shows where the estate's attention sits. A
+  lean is not a measurement.
+- **A second design pass explicitly REFUSES to pre-judge**: decide on the
+  census numbers, not on the sizing of the refuted investigation document.
+  **That refusal is itself the ruling on this question, and D1 inherits it.**
+
+`RUST.md` §1's API-key-only decision stands. It is a scope decision, not an
+impossibility claim — a listener-free device-code flow exists at
+`login/src/device_code_auth.rs`.
+
+### 10. C2 — scoped by this ruling, filed as `todos/0442`
+
+C2 is the wasip1 standard-library work this ruling authorizes:
+`wasi_snapshot_preview1` served in `host.js` by delegation to existing kernel
+RPCs, the wasip1 build rung in the sibling `gucos-rust` repository on stable
+rustc, the entry-contract reconciliation (`_start` versus host-played crt0),
+`poll_oneoff` onto `FS_WAIT`, the loud-failure leg, and the base-image
+byte-identity guardrail. See the ticket for the full contract.

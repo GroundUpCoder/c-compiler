@@ -27,6 +27,10 @@ Split the program in two, and move the gate.
   OpenAI's Codex CLI in its headless `codex exec` form. The design pass found that
   half materially under-costed. `todos/0418` is the decider that rules on the Rust
   standard library, and no application work starts before that ruling.
+  **RULED 2026-07-30**: the standard library is upstream's, on `wasm32-wasip1`
+  (option b) — stable rustc, no fork, no rebase, a `wasi_snapshot_preview1` host
+  shim beside `"c"`. The full ruling with its numbers and open inputs is
+  `todos/done/0418-rust-std-decider.md` §"Result". C2 is filed as `todos/0442`.
 - **The plan of record is API-key-only, because `codex login` is out of scope.**
   This program targets the headless `codex exec` form, and a sign-in flow is not part
   of it. Do not schedule one.
@@ -111,10 +115,13 @@ name. `time_t` crosses as i64.
 
 These rules bind every ticket in the program.
 
-1. **One ABI.** Rust reaches the host through the `"c"` import set and nothing
-   else. A second import namespace is a second host ABI, and the kernel would have
-   to serve both. `todos/0418` is the one place that may re-open this, because
-   option (b) there costs exactly that.
+1. **One ABI — amended by the `todos/0418` ruling (2026-07-30).** Rust reaches
+   the host through the `"c"` import set, plus exactly ONE sanctioned second
+   namespace: `wasi_snapshot_preview1`, served by `host.js` for wasip1 std
+   programs (`todos/0442`). That namespace is frozen upstream, so it has no
+   churn and no version chase. Every gucOS-specific capability (spawn, signals,
+   tty, http, clipboard, …) still reaches the host through `"c"` and nothing
+   else. **No third namespace, ever.**
 2. **One libc.** `todos/0414` (`gucos-sys`) is the single Rust-side declaration of
    the import set. Link the vendored C libc only where a C body exists and Rust has
    none. Do not stand up a second libc for Rust.
@@ -146,15 +153,16 @@ These rules bind every ticket in the program.
 | `0415` | A3 | A real `-rust` tool over BlockFS. |
 | `0416` | A4 | The `native-sibling` packaging seam. |
 | `0417` | B1 | HTTP transfers become OFDs. |
-| `0418` | C1 | The standard-library decider. |
+| `0418` | C1 | The standard-library decider. Ruled 2026-07-30: option (b), wasip1. |
+| `0442` | C2 | std on wasip1: the `wasi_snapshot_preview1` shim. Filed by the 0418 ruling. |
 
-Two units are named but **not filed**, because each one waits on a ruling.
+One unit is named but **not filed**, because it waits on an input.
 
-- **C2 — the chosen standard-library work.** `todos/0418` writes its scope. File it
-  after the ruling.
 - **D1 — port `codex exec`, or write a native gucOS client on the same wire
-  protocol.** This one waits on the ruling of `todos/0418` **and** on `todos/0417`.
-  Do not file it earlier. A decision taken without those two inputs is a guess.
+  protocol.** This one waits on the ruling of `todos/0418` (landed) **and** on
+  `todos/0417` (open). Do not file it earlier. A decision taken without those two
+  inputs is a guess. D1 inherits the refusal to pre-judge port-versus-native
+  (`todos/done/0418-rust-std-decider.md` §"Result" item 9).
 
 ---
 
@@ -169,9 +177,10 @@ question, and the answer is yes.
 
 ⚠️ **That result covers ONE path, and it does not generalize.** A custom target
 specification needs `-Zbuild-std`, which is unstable, so that path is nightly-only.
-`todos/0418` states which path the program takes, and it prices nightly if it picks
-that one. Lanes A1 to A4 stay on a stable compiler, because `core` and `alloc` ship
-precompiled for `wasm32-unknown-unknown`.
+`todos/0418` ruled (2026-07-30): the program takes the `wasm32-wasip1` path for
+std programs, which is a stable tier-2 target — **no path in this program needs a
+nightly compiler**. Lanes A1 to A4 stay on a stable compiler, because `core` and
+`alloc` ship precompiled for `wasm32-unknown-unknown`.
 - The module imported `write` from module `"c"`, exported `main`, and declared a
   growable memory. All three were correct on the first build.
 - `node host.js <module>` printed the message and exited 0.
