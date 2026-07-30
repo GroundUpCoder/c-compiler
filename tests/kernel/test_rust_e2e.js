@@ -1,12 +1,14 @@
 #!/usr/bin/env node
-// todos/0413 + todos/0414 acceptance: Rust binaries run in gucOS, and
-// gucos-sys is the ONE Rust binding to the "c" ABI.
+// todos/0413 + todos/0414 + todos/0415 acceptance: Rust binaries run in
+// gucOS, gucos-sys is the ONE Rust binding to the "c" ABI, and a real
+// -rust tool works over BlockFS.
 //
 // The binaries are built OUT of this repository, in the gucos-rust sibling
 // (RUST.md §3 rule 4: one producer — this repo consumes artifacts and never
 // invokes rustc as part of any build). The committed artifacts of record:
 //   tests/kernel/fixtures/hello-rust/hello-rust.wasm  (0413; sha256 beside it)
 //   tests/kernel/fixtures/alloc-rust/alloc-rust.wasm  (0414; sha256 beside it)
+//   tests/kernel/fixtures/wc-rust/wc-rust.wasm        (0415; sha256 beside it)
 //
 // THE ONE SIBLING RESOLUTION POINT: the RUST_ROOT env var below, default
 // ~/git/gucos-rust. Nothing else in this repository names the sibling path
@@ -27,9 +29,22 @@
 //        over the libc-backed #[global_allocator], plus the interop leg
 //        (Rust and C allocate INTERLEAVED on the one heap; nothing
 //        corrupts)
-//     4. in-OS: both fixtures are written into the root volume of a booted
+//     4. in-OS: the fixtures are written into the root volume of a booted
 //        gucOS and spawned FROM THE SHELL; stdout + $? asserted for the
 //        hello, panic and alloc paths
+//     4b. in-OS wc-rust (todos/0415): the tool's output is compared against
+//        the busybox wc applet ON THE SAME INPUTS in the same booted OS
+//        (default, -l/-w/-c, combined flags, -L/-m, multi-file total,
+//        piped stdin, the "-" operand, and the missing-path stdout +
+//        exit-status behaviour). Two large-input legs, one per read loop:
+//        - LARGE REGULAR FILE proves the KERNEL's reassembly loop
+//          (RemoteFS.read re-issues the RPC for S_IFREG — todos/0140); it
+//          could pass even if the tool never handled a short read.
+//        - LARGE PIPED STDIN proves the TOOL's own read loop: fd 0 on a
+//          pipe is not S_IFREG, so the kernel does NOT reassemble; the
+//          input is sized past the 256K pipe ring AND past KP_FS_CHUNK
+//          (both derived, never hardcoded), so short reads really occur
+//          and only the tool's loop-until-EOF makes the count correct.
 //   B (sibling-gated — CLANG-CPP-EPIC §4 rule 2):
 //     5. freshness: rebuild via <sibling>/build.sh and prove the bytes of
 //        BOTH artifacts EQUAL the committed fixtures (a fixture with no
@@ -59,11 +74,14 @@ const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
 const crypto = require('crypto');
-const { driveBoot, freshImage } = require('./lib/drive.js');
+const { driveBoot, freshImage, section } = require('./lib/drive.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 const { BLOCK_FS } = require(path.join(ROOT, 'host.js'));
 const COMMON = require(path.join(ROOT, 'os/os-common.js'));
+// The fs bulk-transfer chunk, DERIVED from the kernel page layout — the
+// 0415 large-input legs size their inputs from it, never from a literal.
+const { KP_FS_CHUNK } = require(path.join(ROOT, 'kernel.js'));
 
 const RUST_ROOT = process.env.RUST_ROOT ||
   path.join(require('os').homedir(), 'git', 'gucos-rust');
@@ -74,8 +92,32 @@ const RUST_REQUIRED = process.env.RUST_REQUIRE === '1';
 const FIXTURES = {
   'hello-rust': { dir: path.join(__dirname, 'fixtures', 'hello-rust') },
   'alloc-rust': { dir: path.join(__dirname, 'fixtures', 'alloc-rust') },
+  'wc-rust': { dir: path.join(__dirname, 'fixtures', 'wc-rust') },
 };
 const MSG = 'hello from rust on gucOS';
+
+// ---- the 0415 wc corpus, built once and shared by the in-OS legs ----
+// wc-a deliberately carries every divergence-prone byte class of the
+// busybox algorithm (locale/unicode off): tab, double space, \r\n, a
+// control byte, high (non-ASCII) bytes, \f, \v, and no trailing newline.
+// latin1 keeps each JS char one byte.
+const WC_A = Buffer.from(
+  'hello world\n' +
+  '\tleading tab and  double space\n' +
+  'CR line\r\n' +
+  'ctrl\x01byte and caf\xc3\xa9 accent\n' +
+  'form\x0cfeed and vert\x0btab\n' +
+  'end without newline', 'latin1');
+const WC_B = Buffer.from('one two three\nfour five\n');
+// The big input: past the 256K pipe ring AND well past one KP_FS_CHUNK
+// transfer, with a non-multiple tail so the last read is genuinely short.
+const WC_LINE = 'lorem ipsum dolor sit amet consectetur adipiscing elit sed do\n';
+const WC_BIG_BYTES = 5 * KP_FS_CHUNK + 12347;
+const WC_BIG_LINES = Math.floor(WC_BIG_BYTES / WC_LINE.length);
+const WC_BIG_TAIL = WC_BIG_BYTES - WC_BIG_LINES * WC_LINE.length;
+const WC_BIG = Buffer.from(WC_LINE.repeat(WC_BIG_LINES) + 'y'.repeat(WC_BIG_TAIL));
+const WC_BIG_WORDS = WC_BIG_LINES * WC_LINE.trim().split(/\s+/).length +
+                     (WC_BIG_TAIL > 0 ? 1 : 0);
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -166,6 +208,30 @@ async function main() {
           JSON.stringify({ status: r.status, stdout: out, stderr: String(r.stderr).slice(0, 400) }));
   }
 
+  {
+    // wc-rust standalone (0415): stdin fallback + the bare single-count
+    // format + the missing-path error. The standalone fs is the private
+    // in-process one, so any real path is absent — exactly what the
+    // error leg needs. Format equality against busybox is the in-OS
+    // leg's job; these pin the standalone entry contract.
+    const r = cp.spawnSync('node', [path.join(ROOT, 'host.js'), fixPath('wc-rust')],
+                           { input: 'alpha beta\ngamma\n', encoding: 'utf-8', timeout: 60000 });
+    check('wc-rust: stdin fallback counts, no name column (busybox 9-wide format)',
+          String(r.stdout) === '        2         3        17\n' && r.status === 0,
+          JSON.stringify({ status: r.status, stdout: r.stdout, stderr: String(r.stderr).slice(0, 400) }));
+    const r2 = cp.spawnSync('node', [path.join(ROOT, 'host.js'), fixPath('wc-rust'), '-l'],
+                            { input: 'a\nb\nc\n', encoding: 'utf-8', timeout: 60000 });
+    check('wc-rust: single flag + stdin prints the bare count',
+          String(r2.stdout) === '3\n' && r2.status === 0,
+          JSON.stringify({ status: r2.status, stdout: r2.stdout }));
+    const r3 = cp.spawnSync('node', [path.join(ROOT, 'host.js'), fixPath('wc-rust'), '/nope'],
+                            { input: '', encoding: 'utf-8', timeout: 60000 });
+    check('wc-rust: a missing path reports on stderr and exits non-zero',
+          r3.status !== 0 && String(r3.stderr).includes("can't open '/nope'"),
+          JSON.stringify({ status: r3.status, stdout: r3.stdout,
+                           stderr: String(r3.stderr).slice(0, 400) }));
+  }
+
   // ---- leg 4: in-OS — spawn both fixtures from the shell in a booted gucOS ----
   {
     const { dir, image } = freshImage('rust-e2e-');
@@ -181,6 +247,14 @@ async function main() {
         const fd = rfs.open(`/root/${name}.wasm`, O_WRONLY | O_CREAT | O_TRUNC, 0o755);
         if (fd === null) throw new Error('inject open failed: ' + rfs._lastError);
         rfs.write(fd, wasm[name], wasm[name].length);
+        rfs.close(fd);
+      }
+      // The 0415 wc corpus rides the same injection.
+      for (const [p, buf] of [['/root/wc-a.txt', WC_A], ['/root/wc-b.txt', WC_B],
+                              ['/root/wc-big.txt', WC_BIG]]) {
+        const fd = rfs.open(p, O_WRONLY | O_CREAT | O_TRUNC, 0o644);
+        if (fd === null) throw new Error('inject open failed: ' + rfs._lastError);
+        rfs.write(fd, buf, buf.length);
         rfs.close(fd);
       }
       store.close();
@@ -205,6 +279,99 @@ async function main() {
           out.includes('alloc-demo: interop strdups=32 len_ok=true vec_intact=true') &&
           out.includes('alloc-demo: OK'), out);
     check('in-OS: ...and exits 0', out.includes('arc=0'), out);
+
+    // ---- leg 4b (0415): wc-rust vs the busybox wc applet, same booted OS,
+    //      same inputs. Paired ==bbN/==rsN sections must be byte-equal; a
+    //      hand-written expected string could encode the very bug the
+    //      comparison exists to catch, so busybox is the format oracle and
+    //      JS-derived numbers pin the big-input counts independently.
+    const WCR = '/root/wc-rust.wasm';
+    const w = driveBoot([
+      'echo ==bb1',
+      'wc /root/wc-a.txt',
+      'echo ==rs1',
+      `${WCR} /root/wc-a.txt`,
+      'echo ==bb2',
+      'wc /root/wc-a.txt /root/wc-b.txt /root/wc-big.txt',
+      'echo ==rs2',
+      `${WCR} /root/wc-a.txt /root/wc-b.txt /root/wc-big.txt`,
+      'echo ==bb3',
+      'wc -l /root/wc-a.txt',
+      'wc -w /root/wc-a.txt',
+      'wc -c /root/wc-a.txt',
+      'wc -m /root/wc-a.txt',
+      'wc -L /root/wc-a.txt',
+      'wc -lw /root/wc-a.txt /root/wc-b.txt',
+      'echo ==rs3',
+      `${WCR} -l /root/wc-a.txt`,
+      `${WCR} -w /root/wc-a.txt`,
+      `${WCR} -c /root/wc-a.txt`,
+      `${WCR} -m /root/wc-a.txt`,
+      `${WCR} -L /root/wc-a.txt`,
+      `${WCR} -lw /root/wc-a.txt /root/wc-b.txt`,
+      'echo ==bb4',
+      'cat /root/wc-a.txt | wc',
+      'cat /root/wc-a.txt | wc -l',
+      'cat /root/wc-a.txt | wc -c -',
+      'echo ==rs4',
+      `cat /root/wc-a.txt | ${WCR}`,
+      `cat /root/wc-a.txt | ${WCR} -l`,
+      `cat /root/wc-a.txt | ${WCR} -c -`,
+      // Missing path: stdout (survivor line + total) must match busybox,
+      // and both exit 1. Stderr goes to the boot's fd 2, so the stdout
+      // sections stay clean; wc-rust's message is re-captured below.
+      'echo ==bb5',
+      'wc /root/wc-nope.txt /root/wc-a.txt',
+      'bbrc=$?',
+      'echo ==rs5',
+      `${WCR} /root/wc-nope.txt /root/wc-a.txt`,
+      'rsrc=$?',
+      'echo ==rc5',
+      'echo "bbrc=$bbrc rsrc=$rsrc"',
+      // The big-input legs. bigfile proves the KERNEL loop (S_IFREG
+      // reassembly); bigstdin proves the TOOL's loop (fd 0 is a pipe —
+      // the kernel never reassembles it, and the input outsizes the ring).
+      'echo ==bigfile',
+      `${WCR} /root/wc-big.txt`,
+      'echo ==bigstdin',
+      `cat /root/wc-big.txt | ${WCR}`,
+      'echo ==errmsg',
+      `${WCR} /root/wc-nope.txt 2>/root/wc-rs.err`,
+      'lonerc=$?',
+      'cat /root/wc-rs.err',
+      'echo "lonerc=$lonerc"',
+      'echo ==end',
+    ], { image });
+    const wout = String(w.stdout);
+    for (const n of ['1', '2', '3', '4', '5']) {
+      const bb = section(wout, 'bb' + n), rs = section(wout, 'rs' + n);
+      check(`wc-rust: output equals busybox wc (pair ${n})`,
+            bb.length > 0 && /\d/.test(bb) && bb === rs,
+            JSON.stringify({ bb, rs }));
+    }
+    check('wc-rust: missing path exits 1, exactly like busybox',
+          section(wout, 'rc5').includes('bbrc=1 rsrc=1'), section(wout, 'rc5'));
+    {
+      const line = section(wout, 'bigfile').trim().split(/\s+/);
+      check('wc-rust: LARGE REGULAR FILE count is exact (proves the KERNEL loop)',
+            line[0] === String(WC_BIG_LINES) && line[1] === String(WC_BIG_WORDS) &&
+            line[2] === String(WC_BIG_BYTES) && line[3] === '/root/wc-big.txt',
+            JSON.stringify({ got: line,
+                             want: [WC_BIG_LINES, WC_BIG_WORDS, WC_BIG_BYTES] }));
+    }
+    {
+      const line = section(wout, 'bigstdin').trim().split(/\s+/);
+      check('wc-rust: LARGE PIPED STDIN count is exact (proves the TOOL\'s own loop)',
+            line[0] === String(WC_BIG_LINES) && line[1] === String(WC_BIG_WORDS) &&
+            line[2] === String(WC_BIG_BYTES) && line.length === 3,
+            JSON.stringify({ got: line,
+                             want: [WC_BIG_LINES, WC_BIG_WORDS, WC_BIG_BYTES] }));
+    }
+    check('wc-rust: the lone missing path reports on stderr and exits 1',
+          section(wout, 'errmsg').includes("wc-rust: can't open '/root/wc-nope.txt'") &&
+          section(wout, 'errmsg').includes('lonerc=1'),
+          section(wout, 'errmsg'));
+
     fs.rmSync(dir, { recursive: true, force: true });
   }
 
