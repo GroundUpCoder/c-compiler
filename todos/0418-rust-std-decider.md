@@ -238,12 +238,56 @@ The crate map of the original investigation is out of date. Three facts change t
 size of the application half, and the ruling must record them even though they
 belong to D1.
 
-**(a) WebSockets are the default, and they cannot be configured away.**
-`supports_websockets = true` is hardcoded for the built-in OpenAI provider, and
-`disable_websockets` is a private atomic latch, **not** a configuration key. The
-original plan assumed a configuration flag would select the HTTP and
-server-sent-event path. It will not. gucOS has no WebSocket transport, so this is a
-code change in codex, not a setting.
+**(a) 🔴 CORRECTED 2026-07-30 — WebSockets are the default for the BUILT-IN
+provider only, and they CAN be avoided with no code change. Do not carry the
+earlier version of this fact.**
+
+⚠️ **This paragraph said the opposite until 2026-07-30.** It said
+`supports_websockets = true` is hardcoded, `disable_websockets` is a private
+atomic latch and not a configuration key, and therefore the HTTP and
+server-sent-event path needs *a code change in codex, not a setting*. A design
+pass read the codex tree at `2e1607ee2f` and refuted the second half. The
+authority is `~/git/meta/gucos/notes/websockets-and-platform-limits.md` §1.1(a).
+**Read that memo before you rule on anything that depends on this fact.**
+
+**Two independent paths onto plain HTTP/SSE exist, and neither one edits codex.**
+
+1. **`supports_websockets` IS a configuration key.** It is a deserializable
+   field on a model provider — `model-provider-info/src/lib.rs:138-140` declares
+   it `#[serde(default)]`, so it defaults to **false**. A `config.toml`
+   `[model_providers.<id>]` entry sets it, and a config test deserializes that
+   exact TOML shape (`core/src/config/config_tests.rs:935-949`). The **built-in**
+   OpenAI provider constructor does hardcode `true`
+   (`model-provider-info/src/lib.rs:362`) — that half of the old claim is
+   accurate — but a **custom provider entry** that points at the same API, with
+   the field absent, runs pure HTTP. The plan of record is API-key-only
+   (`todos/RUST.md:30-32`), which is exactly the mode a custom provider entry
+   serves. So "no configuration key turns them off" is true of the built-in
+   entry and **false of the provider mechanism**.
+2. **The HTTP fallback is automatic, tested and sticky.** codex flips
+   `disable_websockets` itself. `force_http_fallback`
+   (`core/src/client.rs:508-527`) latches the atomic;
+   `try_switch_fallback_transport` (`core/src/client.rs:1826-1843`) documents
+   it. A dedicated suite pins the behaviour
+   (`core/tests/suite/websocket_fallback.rs`): fallback activates on an
+   upgrade-refused connect (line 30) and on retry exhaustion (line 82), and it
+   is **sticky across turns** (line 209). The budget is 1 prewarm plus 3 stream
+   attempts, then every later turn uses HTTP (lines 246-252).
+
+⇒ **`todos/0417` stays the real prerequisite. A WebSocket transport is NOT one.**
+
+⚠️ **Two items in this correction are UNMEASURED. Do not record them as
+settled.** (i) Whether a configuration file can override the built-in `openai`
+entry in place — the custom-entry path stands without it. (ii) The fail-fast
+behaviour of the dial on a gucOS with no WebSocket transport is reasoned from
+the code shape (the `ENOSYS` pattern of `host.js:6009`), not measured on a port.
+If path 2 is the one you rely on, the cost is the startup latency of about four
+failed attempts, once per session. Path 1 costs zero.
+
+⚠️ **This correction does NOT touch the feature-flag finding below.**
+`supports_websockets` is a **serde configuration field**, not a cargo feature.
+The count of 2 feature sections in 132 manifests, and the zero optional
+dependencies, are unaffected and still stand.
 
 **(b) The 838-crate census may UNDERSTATE the port.** An in-process application
 server of roughly 64,000 lines now rides the exec path, and the crate map predates

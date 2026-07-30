@@ -134,6 +134,7 @@
     { "id": "0430", "priority": 2, "difficulty": "medium", "blockedBy": ["0429"] },
     { "id": "0437", "priority": 2, "difficulty": "medium", "blockedBy": ["0417"] },
     { "id": "0438", "priority": 2, "difficulty": "light" },
-    { "id": "0439", "priority": 2, "difficulty": "light" }
+    { "id": "0439", "priority": 2, "difficulty": "light" },
+    { "id": "0440", "priority": 2, "difficulty": "medium", "blockedBy": ["0417"] }
   ]
 }
