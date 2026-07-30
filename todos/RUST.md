@@ -156,13 +156,34 @@ These rules bind every ticket in the program.
 | `0418` | C1 | The standard-library decider. Ruled 2026-07-30: option (b), wasip1. |
 | `0442` | C2 | std on wasip1: the `wasi_snapshot_preview1` shim. Filed by the 0418 ruling. |
 
-One unit is named but **not filed**, because it waits on an input.
+| `0445` | C3 | codex feasibility: close the census nulls (the numbers D1 rules on). |
+| `0446` | A5 | `gucos-sys::http` still binds the HTTP ABI that `0417` retired. |
+| `0447` | **D1** | codex on gucOS: port `codex exec`, or write a native client. |
 
-- **D1 — port `codex exec`, or write a native gucOS client on the same wire
-  protocol.** This one waits on the ruling of `todos/0418` (landed) **and** on
-  `todos/0417` (open). Do not file it earlier. A decision taken without those two
-  inputs is a guess. D1 inherits the refusal to pre-judge port-versus-native
-  (`todos/done/0418-rust-std-decider.md` §"Result" item 9).
+**D1 is now FILED, as `todos/0447`.** It was held as "named but not filed" until
+2026-07-30. Both inputs this section originally named are discharged: the
+`todos/0418` ruling landed (option (b), wasip1), and `todos/0417` merged
+(`1cc04833`) and shipped in gucOS image v199.
+
+🔴 **But the gate this section named was not the whole gate, and 0447 is filed
+BLOCKED for that reason.** `todos/0445` was filed after this section was written,
+and its own text states that it exists so that *"when D1 is filed the decision
+rests on numbers instead of an estimate."* It has not run. The 2026-07-29 census
+left **197 crates unmeasured**, and **83 of them are codex's own workspace
+crates** — the actual subject of a port. So the quantity that decides the
+question is still unmeasured, and *"a decision taken without those inputs is a
+guess"* still applies with 0445 substituted for 0417.
+
+⇒ **Do not unblock `0447` by observing that 0418 and 0417 landed.** That is the
+`(FA)` trap recorded in `~/git/meta/meta/notes/master-traps.md`: an input list
+ages, a different ticket becomes a real input, and the original list still reads
+as satisfied. `0447` clears when **`0445`** closes.
+
+D1 keeps the refusal to pre-judge port-versus-native
+(`todos/done/0418-rust-std-decider.md` §"Result" item 9). `todos/0446` is not a
+blocker on it, but it is a shaping input and a named reopen trigger: there is no
+working Rust HTTP caller in this program today, and HTTP is codex's core
+transport for **both** arms, because `wasm32-wasip1` has no sockets.
 
 ---
 
