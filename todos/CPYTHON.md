@@ -419,11 +419,11 @@ deploy **default**, and the mkpkg drift gate **fails the build** if the
 sibling overlay publishes an app without a package claiming
 it. So delivery is: (1) sibling manifest project (`base:
 "$CC_ROOT/vendor/cpython"`, `binJson`, the §3.2 flag set, `install:
-"/usr/bin/python-clang"` — satisfies `enforceClangConvention`; ⚠️ the
-sibling's project/app name predates the todos/0374 rename and is still
-`python-clang` — renaming it there + republishing the overlay is 0374's
-merge-time step, and `packages/cpython-clang.json`'s `clangApp` flips in
-that same change window), (2)
+"/usr/bin/cpython-clang"` — satisfies `enforceClangConvention`; the
+sibling's project/app name was renamed `python-clang` → `cpython-clang` by
+todos/0383, the deferred 0374 merge-time step, in the same change window as
+the `packages/cpython-clang.json` `clangApp` flip — the two-sided interlock
+this section specifies), (2)
 `packages/cpython-clang.json` in the same change window as the overlay
 publish (the gate turns "forgot the package" into a red build, in our
 favor), (3) ordinary deploy. The overlay@1 byte-reproducibility contract
