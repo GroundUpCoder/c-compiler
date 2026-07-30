@@ -3,6 +3,15 @@
 - **Status**: open
 - **Design**: `todos/RUST.md` §2–§3; the ruling in
   `todos/done/0418-rust-std-decider.md` §"Result" (this ticket's authority).
+  🔴 **Read `~/git/meta/gucos/notes/wasi-p1-census.md` before you plan.** It maps all
+  **46** `wasi_snapshot_preview1` functions against the `"c"` ABI, measured at
+  c-compiler `57ad36fa` (2026-07-30, read-only, no code touched). It sizes the work at
+  **~1,250 lines in `host.js`** — **27** trivial rewraps, **8** needing struct/flag
+  translation, **5** substantial (`path_open` + preopens, `fd_readdir`, `poll_oneoff`)
+  — and confirms **no kernel change is needed**, so the 0418 "bounded shim over
+  existing RPCs" premise holds. It also verified the 0418 claim that `FS_WAIT` is
+  `poll_oneoff` in a different spelling: opcode `0x0420` at `kernel.js:255`, handler at
+  `kernel.js:3864`, and the re-poll-on-any-return contracts match.
 - **Provenance**: filed by the `todos/0418` ruling, 2026-07-30. P0 per jku's
   2026-07-30 priority call on the Rust program.
 
@@ -19,6 +28,38 @@ ticket must not drift from them.
 The `no_std` + `"c"` rung (lanes A1–A4) stays as it is. The two rungs coexist:
 a wasip1 std program still reaches spawn, signals, tty, http and the clipboard
 through `gucos-sys` and `"c"` — both namespaces in ONE module.
+
+## 🔴 Four gaps the census found in the Plan below — read before you build
+
+Recorded 2026-07-30 by the WASI P1 census (above), measured at `57ad36fa`. The Plan
+was written before the census ran; these correct it. **None of them were fixed in the
+Plan text — they are corrections to it, and they win.**
+
+1. **`poll_oneoff` has no standalone path, and the Acceptance requires one.** Both
+   no-kernel env flavors answer **`-2`** for `__wait` (`host.js:6217`, `host.js:8044`),
+   yet this ticket's Acceptance requires standalone `node host.js` runs — and Rust's
+   `thread::sleep` goes through `poll_oneoff`. **The shim needs a no-kernel fallback**,
+   on the `__select_impl` model. Without it the standalone arm cannot pass.
+2. 🔴 **Do NOT copy the existing `__wait` wrapper.** It **silently drops write-fd
+   interest** — `host.js:6738` forwards only read fds, while the kernel handler reads
+   `req.w` correctly. Copying it yields a `poll_oneoff` that never reports writability
+   and never fails loudly. **Call `hooks.waitMulti` directly with BOTH lists.**
+3. **"The `createHttp` shape" underspecifies the factory.** `createHttp` is called
+   `(ctx, hooks)` and **never sees the filesystem object**, but the whole `fd_*` /
+   `path_*` family must delegate to the BlockFS/RemoteFS method surface. So
+   `createWasiPreview1` needs the **fs instance** too — its signature is not
+   `createHttp`'s.
+4. **The `/` preopen fd must be a REAL fd in the gucOS fd table, not a shim-side
+   fiction.** The `"c"` namespace shares the process fd space, and two-namespace
+   coexistence is an acceptance criterion of this ticket. A private numbering scheme
+   inside the shim will collide with `"c"` fds.
+
+⚠️ **Three corrections to the surface map, so they are not re-inherited** (the census
+found these while checking its own brief): `createPosix` (`host.js:5502`) serves
+**only** `getpid`/`getppid` — `exit`, time and entropy live in `runModule`'s base env
+(`__exit` 10911, `__gettimeofday` 11044, the clock latch pair 11063/11079, `__getentropy`
+11092) — and **no `times` import exists**; `createHttp` has **four** imports, not five
+(there is no `http_body`); and `kernel.js` is at the **repo ROOT**, not under `os/`.
 
 ## Plan
 
