@@ -410,7 +410,7 @@ verifying sha256 enforcement and index superset/prune behavior.
 changes), no kernel change, no gucman/software change, no auto-building the
 sibling from this repo's tools beyond the opt-in `--build-overlay`.
 
-## 8. Follow-on queue candidates (file via `node todos/queue.js`, not here)
+## 8. Follow-on queue candidates (file as cc tickets via `cc-meta ticket create`, not here)
 
 1. `serve-with-clang.js` + the `--packages-index=clang` serve.js flag +
    guardrail tests (Part II §6–7; small, self-contained).

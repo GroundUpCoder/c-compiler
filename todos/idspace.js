@@ -1,8 +1,14 @@
 #!/usr/bin/env node
 // todos/idspace.js — the cross-ref id allocator for todos/ (todos/0358).
 //
-// Both id spaces in todos/ are allocated by LANES: a lane branches, files a
-// ticket (`todos/NNNN-*.md`) and/or a liability entry (`### Lnn` in
+// Since the 2026-07-30 queue cutover the live consumer is the LIABILITY space
+// (`liabilities.js next-id` — register entries are still filed by parallel
+// lanes); the `ticket` space is historical — NNNN allocation ended with the
+// file queue, but the archive (todos/done/) still occupies that namespace and
+// the survey tests exercise the machinery through it.
+//
+// Both id spaces in todos/ are (were) allocated by LANES: a lane branches,
+// files a ticket (`todos/NNNN-*.md`) and/or a liability entry (`### Lnn` in
 // todos/LIABILITIES.md), and pushes at the END. So the highest id visible on
 // any ONE ref — including origin/main — is a LOWER BOUND on the id space, not
 // the id space. Deriving "next" from the working tree is therefore wrong by
@@ -30,7 +36,7 @@
 // caller needs and never asked — "how stale is what I just surveyed?". See the
 // freshness section below.
 //
-// Zero dependencies (Node built-ins only), matching todos/queue.js.
+// Zero dependencies (Node built-ins only), matching todos/liabilities.js.
 'use strict';
 
 const fs = require('fs');
@@ -274,8 +280,9 @@ const _freshCache = new Map();
 // { level: 'ok'|'warn'|'stale', line, probe, refreshedAt, ageMs, workedSince }
 //
 // `level` is POLICY-FREE on purpose: this module measures, the caller decides.
-// queue.js refuses to WRITE an id on 'stale' (proof) and only warns on 'warn'
-// (ignorance) — refuse on proof, warn on doubt.
+// The convention (set by the retired queue.js, kept by liabilities.js): refuse
+// to WRITE an id on 'stale' (proof), only warn on 'warn' (ignorance) —
+// refuse on proof, warn on doubt.
 function freshness(root, opts = {}) {
   if (opts.noCache) return computeFreshness(root, opts);   // the tests move the clock
   const key = `${root} ${opts.offline ? 'offline' : 'probe'}`;

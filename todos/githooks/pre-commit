@@ -1,13 +1,11 @@
 #!/bin/sh
-# pre-commit — keep todos/queue.json and todos/LIABILITIES.md consistent with
-# the filesystem.
+# pre-commit — keep todos/LIABILITIES.md and the NetSurf patch record
+# consistent with the working tree.
 #
-# The hard net behind the queue convention: no commit lands with a drifted
-# manifest (an open file unlisted, a queued id whose file moved to done/, a
-# dangling dep, a cycle) or a rotted liability register (an entry citing a
-# CLOSED ticket, a deferral whose milestone already shipped, an anchor that has
-# moved or vanished). Runs both checks against the working tree; blocks the
-# commit on failure.
+# (Until 2026-07-30 this hook also ran `todos/queue.js check`; the file-based
+# queue was retired for the cc ticket tracker — see CLAUDE.md "Tickets & the
+# work queue" — so the liability register and the patch record are what's left
+# to guard.)
 #
 # Install (per clone — core.hooksPath is local, not committed):
 #   git config core.hooksPath todos/githooks
@@ -15,17 +13,10 @@
 #
 # This hook is opt-in per clone, which is why neither check relies on it alone:
 # `node tests/run.js --diff` routes todos/ AND every file the register cites to
-# the `todos` suite, which runs both of these.
-#
-# Skips silently on repos that haven't adopted the manifest.
-[ -f todos/queue.json ] || exit 0
+# the `todos` suite, which runs the register check too.
 
-if ! out=$(node todos/queue.js check 2>&1); then
-  echo "pre-commit: todos/queue.js check failed —" >&2
-  echo "$out" >&2
-  echo "Fix the queue (see: node todos/queue.js check) or bypass with: git commit --no-verify" >&2
-  exit 1
-fi
+# Skips silently on repos that haven't adopted the register.
+[ -f todos/LIABILITIES.md ] || exit 0
 
 if ! out=$(node todos/liabilities.js check 2>&1); then
   echo "pre-commit: todos/liabilities.js check failed —" >&2

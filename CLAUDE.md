@@ -32,54 +32,60 @@ customer" — that is the exact anti-pattern being rejected here.
 
 `compiler.js` MUST work in both browser and Node.js environments. Never use `process.env`, `process.stderr`, `process.exit`, `process.hrtime`, or any other Node.js-specific API without a `typeof process !== 'undefined'` guard and a browser-compatible fallback. No environment variables — use compiler options and CLI flags instead.
 
-## TODOs & the work queue
+## Tickets & the work queue (`cc-meta ticket`)
 
-Planned work lives in `todos/` (system doc: `todos/README.md`):
+**The authoritative work queue is the cc ticket tracker** — per-project,
+DB-backed work items driven with the `cc-meta ticket` CLI. This repo's
+project is **c-compiler** (project id `019d77d8-f894-7d09-9099-4e747aa20bfb`).
+The old file-based queue (`todos/NNNN-<slug>.md` + `todos/queue.json` +
+`todos/queue.js`) was **retired 2026-07-30**; its open items were migrated
+1:1 into cc tickets, and `todos/done/` remains as the read-only archive of
+everything that shipped under the old system (see `todos/README.md`).
 
-- **Work queue**: `todos/NNNN-<slug>.md` — one numbered item per committed
-  unit of work (stable IDs, never reused; status header inside; done items
-  move to `todos/done/`, so `ls todos/*.md` is the open queue).
-- **Ordering manifest**: `todos/queue.json` is the authoritative order of
-  attack + the hard/soft dependency split. Mutate it **only** through the CLI
-  `node todos/queue.js` (single writer + validator): `add next --slug …` to
-  start work, `done <ID>` to close it, `reorder`/`block` to adjust. **`node
-  todos/queue.js check` must pass before committing a queue change** — a
-  committed pre-commit hook (`todos/githooks/pre-commit`) enforces this once you
-  run `git config core.hooksPath todos/githooks` per clone. Dep ids live ONLY in
-  `queue.json` (open items carry no `Depends:` line — `check` rejects one;
-  rationale goes in the item body), and there is no prose "Next up" list — view
-  the order with `node todos/queue.js list` or the cc Todos tab. **Ids are
-  allocated across ALL REFS** (todos/0358): a lane's branch — `origin/main`
-  included — is a LOWER BOUND on the id space, not the id space, which is how
-  `0354` and the register's `L44` were each handed out twice. `add next` and
-  `next-id` (ticket + liability id) survey every ref and refuse rather than
-  degrade silently; two files sharing an id fail `check`. Since todos/0360 the
-  survey also MEASURES its own staleness instead of disclaiming it (that
-  disclaimer collided the day it shipped): both commands print a `freshness:`
-  line, `git ls-remote` proves whether a fetch would move anything (5s timeout,
-  loud degrade, `--offline` skips it), every sibling **worktree**'s uncommitted
-  `todos/` is surveyed too, and `add next` REFUSES to write an id the remote
-  contradicts — refuse on proof, warn on doubt. An unpushed id in a different
-  CLONE stays invisible (todos/0364). Full convention: `todos/README.md` §1
-  "Maintaining the queue".
+- **Ticket numbers are per-project `#N`.** Reference tickets as `#N` in
+  commits and dev logs. A bare number is ambiguous across projects — pass
+  `--project 019d77d8-f894-7d09-9099-4e747aa20bfb` when addressing a ticket
+  by number; the full ticket id is unambiguous everywhere. Historical
+  `todos/NNNN` citations resolve into `todos/done/` or git history, not into
+  the ticket tracker — the two id spaces are unrelated.
+- **Canonical flow** (there is no engine — the coordinator is the engine):
+  `cc-meta ticket next --project <id>` peeks the top READY ticket → spawn the
+  working thread → `cc-meta ticket claim <ref> --thread <chatId>` (atomic;
+  refuses an already-claimed ticket so two lanes can't double-drive one) →
+  do the work → `cc-meta ticket done <ref> --outcome "…" --commit <sha>`.
+  Abandon/reassign with `ticket release`; park with `ticket defer`; won't-do
+  with `ticket drop`.
+- **Filing work**: `cc-meta ticket create <projectId> --title … --body @file`
+  (markdown Goal/Plan/Acceptance body — the same shape the old item files
+  had). Ideas that aren't committed work yet stay in the design docs until
+  promoted.
+- **Order + deps**: effective order is **priority bucket, then queue
+  position** (`ticket reorder` moves within a bucket). `--blocked-by` is the
+  HARD dependency (not ready until every listed ticket is done);
+  `--after` is the SOFT "best sequenced after" hint (never blocks).
+  `--difficulty light|medium|heavy` tags effort; it never affects order.
+  View the queue with `cc-meta ticket list --project <id>` (blocked tickets
+  are marked, never hidden) or the cc Tickets tab.
 - **Design/topic docs**: `todos/NAME.md` (OS.md, KERNEL.md, SDL3.md, …) —
-  long-lived designs and backlogs that queue items reference for detail.
-- **Liability register**: `todos/LIABILITIES.md` (todos/0286) — the index of
-  gaps the tree *describes* but nothing schedules. Each entry cites a file + a
-  literal anchor line, one line on the gap, and the **live** ticket funding it.
-  A *true* gap comment is more dangerous than a false one: it reads as
-  known-and-handled, so the documentation is the reason nobody looks again.
-  `node todos/liabilities.js check` fails on a closed/missing `ticket:`, a
-  `defers-to:` that has already shipped and is unpinned (the deferral outlived
-  its premise), a moved/vanished anchor, or an empty register — run by the
-  `todos` suite in `tests/run.js`, by `queue.js check`, and by the pre-commit
-  hook. **Enrolment rule**: if a comment's sentence is true and implies work,
-  it needs a ticket AND an entry in the same commit (not a `TODO`-marker lint —
-  the 12 findings that motivated this carried no markers). Discovery of
-  pre-existing ones is the recurring sweep `todos/0302`.
+  long-lived designs and backlogs that tickets reference for detail. These
+  stay in the repo; only the queue moved.
+- **Liability register**: `todos/LIABILITIES.md` (todos/done/0286) — the
+  index of gaps the tree *describes* but nothing schedules. Each entry cites
+  a file + a literal anchor line, one line on the gap, and the **live**
+  ticket funding it. A *true* gap comment is more dangerous than a false
+  one: it reads as known-and-handled, so the documentation is the reason
+  nobody looks again. `node todos/liabilities.js check` fails on a
+  closed/missing `ticket:`, a `defers-to:` that has already shipped and is
+  unpinned (the deferral outlived its premise), a moved/vanished anchor, or
+  an empty register — run by the `todos` suite in `tests/run.js` and by the
+  pre-commit hook (`git config core.hooksPath todos/githooks` per clone).
+  **Enrolment rule**: if a comment's sentence is true and implies work, it
+  needs a ticket AND an entry in the same commit (not a `TODO`-marker lint —
+  the 12 findings that motivated this carried no markers).
 
-**Priority policy (P0 bugs always come first).** `queue.js` orders by priority
-bucket then array position, so P0 items lead the queue by construction — keep it
+**Priority policy (P0 bugs always come first).** Priorities are 0–3
+(P0 urgent … P3 background, default P1); the tracker orders by priority
+bucket then position, so P0 items lead the queue by construction — keep it
 that way:
 
 - **P0 — correctness bugs in existing/shipped features.** Anything that already
@@ -88,19 +94,21 @@ that way:
   incidental discovery — is filed P0 unless the user explicitly says otherwise.**
 - **P1 (default) — feature work, new capabilities, ports, enhancements.** New
   things and "make it better" work sit behind the bug backlog.
-- Set with `node todos/queue.js add … --priority 0` (or `set-priority <ID> 0`).
-  Don't silently demote an existing user-set priority; when in doubt, ask.
+- Set with `--priority 0` at `ticket create`, or `cc-meta ticket update <ref>
+  --priority 0` later. Don't silently demote an existing user-set priority;
+  when in doubt, ask.
 
-Check all three before starting new work; reference items as `todos/NNNN` in
-commits and dev logs.
+Check the ticket queue, the design docs, and the liability register before
+starting new work; reference tickets as `#N` in commits and dev logs.
 
 ## Dev logs
 
 `logs/YYYY-MM-DD/<topic>.md` is a **committed** engineering journal (folder per
 local day, file per topic) capturing the *why* behind non-trivial work —
 decisions, trade-offs, gotchas. Add an entry when landing anything
-substantial, cross-linking `todos/NNNN` items. In-repo convention doc:
-`logs/README.md`.
+substantial, cross-linking tickets as `#N` (historical entries cite
+`todos/NNNN`, which resolves into `todos/done/` or git history). In-repo
+convention doc: `logs/README.md`.
 
 ## Running tests — `tests/run.js` (unified entry + diff-aware)
 

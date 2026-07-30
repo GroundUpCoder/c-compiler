@@ -1,5 +1,11 @@
 # Handoff — start of thread (updated 2026-07-12; 0119 sent+mgp presentation tools landed)
 
+> **HISTORICAL SNAPSHOT (2026-07-12).** Everything below reflects that date —
+> the items it names shipped long ago, and the `todos/queue.js` file queue it
+> references was **retired on 2026-07-30** for the cc ticket tracker. For the
+> live workflow read `CLAUDE.md` ("Tickets & the work queue"); for the live
+> queue run `cc-meta ticket list --project 019d77d8-f894-7d09-9099-4e747aa20bfb`.
+
 ## Latest: 0119 — sent + MagicPoint on SDL (both rounds, one pass)
 
 **todos/0119 is DONE and committed.** The presentation-tool item shipped

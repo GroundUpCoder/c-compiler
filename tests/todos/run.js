@@ -1,18 +1,19 @@
 #!/usr/bin/env node
 'use strict';
-// tests/todos/run.js — the `todos` suite: the queue manifest + liability
-// register validators, and their own tests (todos/0286).
+// tests/todos/run.js — the `todos` suite: the liability register validator
+// and its tests (todos/done/0286), plus the Lnn id-allocator tests.
 //
-// These validators existed (queue.js) or are new (liabilities.js), but neither
-// was reachable from any suite: tests/run.js IGNOREd all of todos/, and the
-// pre-commit hook that runs `queue.js check` is per-clone opt-in
-// (`git config core.hooksPath todos/githooks`). A validator whose only trigger
-// is opt-in config is prose. This suite is what makes them gate.
+// The register validator has to gate from a suite because the pre-commit hook
+// is per-clone opt-in (`git config core.hooksPath todos/githooks`) — a
+// validator whose only trigger is opt-in config is prose. This suite is what
+// makes it gate. (Until the 2026-07-30 queue cutover it also ran the
+// queue-manifest validator; the file-based queue is retired — see CLAUDE.md
+// "Tickets & the work queue".)
 //
 //   node tests/todos/run.js [--filter=STR]
 //
-// Cheap by construction (four short node processes, no image, no browser), so
-// it can sit at the front of RUN_ORDER and fail in a second.
+// Cheap by construction (a few short node processes, no image, no browser),
+// so it can sit at the front of RUN_ORDER and fail in a second.
 
 const { spawnSync } = require('child_process');
 const path = require('path');
@@ -24,8 +25,6 @@ const ROOT = path.resolve(__dirname, '..', '..');
 require('../lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/todos/run.js' });
 
 const CASES = [
-  { name: 'queue-check',       argv: ['todos/queue.js', 'check'] },
-  { name: 'queue-tests',       argv: ['todos/queue.test.js'] },
   { name: 'liabilities-check', argv: ['todos/liabilities.js', 'check'] },
   { name: 'liabilities-tests', argv: ['todos/liabilities.test.js'] },
   // The id allocator's freshness half (todos/0360). Real clones over local

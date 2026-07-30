@@ -49,7 +49,13 @@ function run(entries, opts = {}) {
     open: new Map(Object.entries(opts.open || { '0300': '0300-x.md' })),
     done: new Map(Object.entries(opts.done || { '0281': '0281-y.md' })),
   };
-  return LIB.check({ registerPath, repoRoot: root, tickets });
+  // cc ticket liveness is injected the same way the legacy file state is —
+  // `cc: { states: {'#12': 'open'}, verified: true }` — so no test touches
+  // cc-meta. Omitted → an UNVERIFIED scan (the offline shape).
+  const cc = opts.cc
+    ? { states: new Map(Object.entries(opts.cc.states || {})), verified: opts.cc.verified !== false, note: opts.cc.note || null }
+    : { states: new Map(), verified: false, note: '#N liveness UNVERIFIED (test default)' };
+  return LIB.check({ registerPath, repoRoot: root, tickets, cc });
 }
 
 const OK_ENTRY = [
@@ -92,6 +98,79 @@ test('RED: an entry whose ticket does not exist fails', () => {
 test('RED: an entry citing two tickets fails (one entry, one funding item)', () => {
   const res = run(['### L01 — a gap\n- ticket: 0300, 0281\n- file: src/thing.c\n- anchor: int x;']);
   assert.match(messages(res), /cites 2 tickets/);
+});
+
+// ---------- cc ticket refs (#N — the live dialect since the 2026-07-30 cutover) ----------
+
+test('a #N funding ticket that is open in cc passes', () => {
+  const res = run(['### L01 — a gap\n- ticket: #12\n- file: src/thing.c\n- anchor: int x;'],
+    { cc: { states: { '#12': 'open' } } });
+  assert.deepStrictEqual(res.errors, [], messages(res));
+  assert.strictEqual(res.ccNote, null);
+});
+
+test('a #N funding ticket that is in_progress in cc is live too', () => {
+  const res = run(['### L01 — a gap\n- ticket: #12\n- file: src/thing.c\n- anchor: int x;'],
+    { cc: { states: { '#12': 'in_progress' } } });
+  assert.deepStrictEqual(res.errors, [], messages(res));
+});
+
+test('RED: a #N funding ticket that is done in cc fails as CLOSED', () => {
+  const res = run(['### L01 — a gap\n- ticket: #12\n- file: src/thing.c\n- anchor: int x;'],
+    { cc: { states: { '#12': 'done' } } });
+  assert.match(messages(res), /cc ticket #12 is CLOSED/);
+});
+
+test('RED: a #N funding ticket that is dropped in cc fails as CLOSED', () => {
+  const res = run(['### L01 — a gap\n- ticket: #12\n- file: src/thing.c\n- anchor: int x;'],
+    { cc: { states: { '#12': 'dropped' } } });
+  assert.match(messages(res), /cc ticket #12 is CLOSED/);
+});
+
+test('RED: a #N funding ticket unknown to cc fails as missing', () => {
+  const res = run(['### L01 — a gap\n- ticket: #999\n- file: src/thing.c\n- anchor: int x;'],
+    { cc: { states: {} } });
+  assert.match(messages(res), /cc ticket #999 does not exist/);
+});
+
+test('an unverified cc scan never fails a #N entry, and says so via ccNote', () => {
+  const res = run(['### L01 — a gap\n- ticket: #12\n- file: src/thing.c\n- anchor: int x;'],
+    { cc: { verified: false, note: '#N liveness UNVERIFIED (cc-meta not on PATH)' } });
+  assert.deepStrictEqual(res.errors, [], messages(res));
+  assert.match(res.ccNote, /UNVERIFIED/);
+});
+
+test('an all-legacy register never consults cc (no ccNote even when unverified)', () => {
+  const res = run([OK_ENTRY]);   // run()'s default cc is an unverified scan
+  assert.deepStrictEqual(res.errors, [], messages(res));
+  assert.strictEqual(res.ccNote, null);
+});
+
+test('RED: an unpinned deferral to a CLOSED #N fails; pinning it passes', () => {
+  const entry = (extra) => [
+    '### L01 — a gap',
+    '- ticket: #12',
+    '- file: src/thing.c',
+    '- anchor: int x;',
+    '- defers-to: #7',
+    ...extra,
+  ].join('\n');
+  const cc = { cc: { states: { '#12': 'open', '#7': 'done' } } };
+  assert.match(messages(run([entry([])], cc)), /DEFERRAL OUTLIVED ITS PREMISE/);
+  const pinnedRes = run([entry(['- expired: #7'])], cc);
+  assert.deepStrictEqual(pinnedRes.errors, [], messages(pinnedRes));
+  assert.strictEqual(pinnedRes.pinned[0].expired, '#7');
+});
+
+test('RED: a #N in the anchor that the entry does not classify fails', () => {
+  const res = run(['### L01 — a gap\n- ticket: #12\n- file: src/cc.c\n- anchor: /* deferred to #7 */'],
+    { files: { 'src/cc.c': '/* deferred to #7 */\n' }, cc: { states: { '#12': 'open', '#7': 'open' } } });
+  assert.match(messages(res), /anchor mentions ticket #7 but the entry does not classify it/);
+});
+
+test('RED: a ref that is neither #N nor a 4-digit id fails the field check', () => {
+  const res = run(['### L01 — a gap\n- ticket: banana\n- file: src/thing.c\n- anchor: int x;']);
+  assert.match(messages(res), /not a ticket ref/);
 });
 
 // ---------- RED: the deferral that outlived its premise ----------
@@ -155,7 +234,7 @@ test('RED: a cited file that does not exist fails', () => {
 
 test('RED: a ticket id in the anchor that the entry does not classify fails', () => {
   const res = run(['### L01 — a gap\n- ticket: 0300\n- file: src/thing.c\n- anchor: /* gap: not done here, 0281 */']);
-  assert.match(messages(res), /anchor mentions todo 0281 but the entry does not classify it/);
+  assert.match(messages(res), /anchor mentions ticket 0281 but the entry does not classify it/);
 });
 
 test('provenance classifies a historical id in the anchor', () => {

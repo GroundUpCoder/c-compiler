@@ -10,10 +10,14 @@ comment contradicts behaviour and something eventually breaks; a true one reads 
 handled*, confers legitimacy, and **is itself the reason nobody looks again**. The 2026-07-27
 sweep found 12 such gaps. All 12 survived by one mechanism: **they never entered `todos/`.**
 
-`node todos/liabilities.js check` validates this file (also run by `todos/queue.js check`, the
-`todos` suite in `tests/run.js`, and the pre-commit hook). It fails on:
+`node todos/liabilities.js check` validates this file (also run by the `todos` suite in
+`tests/run.js` and the pre-commit hook). Ticket refs come in two dialects since the 2026-07-30
+queue cutover: `#N` is a cc ticket (the live tracker — the required dialect for `ticket:`,
+liveness asked of `cc-meta`; absent/failing cc-meta degrades LOUDLY to structure+anchor checks),
+and a legacy 4-digit `NNNN` resolves against `todos/done/` (the archive). The check fails on:
 
-- a `ticket:` that is **closed** (`todos/done/`) or does not exist — the funding evaporated;
+- a `ticket:` that is **closed** (cc done/dropped, or a legacy id — those can only be archived
+  or missing now) or does not exist — the funding evaporated;
 - a `defers-to:` that is **closed** and not pinned — *the deferral outlived its premise*
   (`0291`, `0300`, `0293` are exactly this shape today: a comment pointing at a `done/` item,
   which reads as handled to anyone who does not check);
@@ -27,10 +31,11 @@ sweep found 12 such gaps. All 12 survived by one mechanism: **they never entered
 
 ```
 ### L07 — one line naming the gap
-- ticket: 0300          REQUIRED. The live item that funds closing this gap.
+- ticket: #12           REQUIRED. The live cc ticket that funds closing this gap.
 - file: os/wm.c         REQUIRED. Repo-relative path of the code location.
 - anchor: <literal>     REQUIRED. One line that must appear EXACTLY ONCE in that file.
-- defers-to: 0281       OPTIONAL. Milestone(s) this gap is deferred until. Must be OPEN.
+- defers-to: 0281       OPTIONAL. Milestone(s) this gap is deferred until. Must be OPEN
+                        (`#N` for a cc ticket; legacy `NNNN` only for archived targets).
 - expired: 0281         OPTIONAL. Acknowledged: this defers-to is already CLOSED, and
                         `ticket:` is the item that will fix it. Reported as a pinned
                         xfail (green). If the id reopens, or the comment stops citing
@@ -64,9 +69,10 @@ The rule binds at three moments:
 1. **Writing one.** The commit that adds a gap sentence adds its entry (and files or cites its
    ticket) in the same diff. A diff that adds one without the other is incomplete — reviewers
    should treat it the way they treat an untested behaviour change.
-2. **Closing a ticket.** `queue.js done <ID>` reports every entry that just went stale, and the
-   check then blocks until they are retired or re-pointed. This is the moment 0291/0293/0300
-   were all missed at.
+2. **Closing a ticket.** Before `cc-meta ticket done`, grep this register for the ticket's
+   `#N` — the check then blocks until stale entries are retired or re-pointed. This is the
+   moment 0291/0293/0300 were all missed at (the retired `queue.js done` used to print the
+   stale set automatically; the checker still catches a missed one on the next gate).
 3. **Finding a pre-existing one.** The recurring liability sweep (`todos/0302`) is the
    discovery pass; this register is its output.
 

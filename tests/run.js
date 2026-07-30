@@ -64,7 +64,7 @@ const SUITES = {
              optional: true },
   host:    { desc: 'host.js Node output path + serve.js first-run (Node-only)',
              cmd: ['node', 'tests/host/run.js'], supports: [] },
-  todos:   { desc: 'queue manifest + liability register validators (todos/0286)',
+  todos:   { desc: 'liability register validator + Lnn id-allocator tests (todos/done/0286)',
              cmd: ['node', 'tests/todos/run.js'], supports: ['filter'] },
   'netsurf-patch': { desc: 'vendor/netsurf patch-record invariant, offline half (todos/0423)',
              cmd: ['node', 'tests/netsurf/run.js'], supports: ['filter'] },
@@ -120,10 +120,11 @@ const FORCE = [/^todos\//, CITED_RE];
 // [regex, [suite, ...], why]. Order is irrelevant (union), but grouped by
 // concern for readability.
 const RULES = [
-  // The queue manifest, the liability register, and their validators. Their
-  // only other trigger is the per-clone-opt-in pre-commit hook, so without
-  // this rule they are validators nobody invokes.
-  [/^todos\//, ['todos'], 'the queue manifest + the liability register and their validators'],
+  // The liability register and its validator (the work queue itself moved to
+  // the cc ticket tracker, 2026-07-30). Their only other trigger is the
+  // per-clone-opt-in pre-commit hook, so without this rule they are
+  // validators nobody invokes.
+  [/^todos\//, ['todos'], 'the liability register and its validator'],
   [CITED_RE, ['todos'], 'cited by todos/LIABILITIES.md — an edit here can invalidate an entry',
     CITED.ok ? `LIABILITIES.md cites ${CITED.files.length} file(s)` : `LIABILITIES.md UNPARSABLE: ${CITED.error}`],
 
@@ -669,7 +670,7 @@ function fmtSecs(ms) { return `${(ms / 1000).toFixed(1)}s`; }
 
 function printDiffPlan(ref, files, info, suites) {
   process.stdout.write(`\n\x1b[1mdiff-aware plan\x1b[0m (${ref ? `vs ${ref}` : 'working set vs HEAD'})\n`);
-  process.stdout.write(`  ${files.length} changed path(s), ${info.ignored.length} ignored (docs/todos/logs)\n`);
+  process.stdout.write(`  ${files.length} changed path(s), ${info.ignored.length} ignored (docs/logs)\n`);
   for (const h of info.hits) process.stdout.write(`    ${h.file}  →  ${h.suites.join(', ')}\n`);
   if (info.unmapped.length) {
     process.stdout.write('\n  \x1b[33m⚠ unmapped (no rule — not covered by this plan):\x1b[0m\n');

@@ -2,9 +2,11 @@
 // todos/idspace.test.js — the freshness half of the cross-ref id allocator
 // (todos/0360). Zero-dependency; run with:  node todos/idspace.test.js
 //
-// todos/queue.test.js covers the SURVEY (which ids exist, across which refs)
-// through the CLI. This file covers the question 0358 only disclaimed and 0360
-// measures: HOW STALE is what the survey just read?
+// The allocate() cases below cover the SURVEY (which ids exist, across which
+// refs — the `ticket` space is the convenient generic fixture for it since the
+// 2026-07-30 queue cutover retired queue.test.js). This file's own question is
+// the one 0358 only disclaimed and 0360 measures: HOW STALE is what the survey
+// just read?
 //
 // Every case builds real git repos in a temp dir — a bare `origin`, one or two
 // clones, sometimes a linked worktree — so the probe runs against a real remote

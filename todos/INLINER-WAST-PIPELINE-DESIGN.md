@@ -504,7 +504,7 @@ is what keeps `callerPredicted` honest between rounds.
 2. **B lands second**: fnMeta hot/cold plumbing, the simulate/specialize
    cost model, hist recursion, round driver, the calibration sweep +
    committed default, full gate + bench. Its own queue item, hard-dep on
-   A in `queue.json`.
+   A (`--blocked-by`).
 
 Why strictly A-then-B (not one landing): B's cost model is meaningless
 without A (specSize predicts a cleanup that must exist, or every splice

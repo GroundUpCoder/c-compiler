@@ -416,8 +416,7 @@ term story: `logs/2026-07-14/unified-wait.md`.
 
 ## When approved
 
-Queue via `node todos/queue.js` only (never hand-edit queue.json), `check`
-before committing:
+File as cc tickets (`cc-meta ticket create` — the queue since 2026-07-30):
 - Stage 0 items at `--priority 0` (bugs-first policy).
 - New items: `vsync-shim-browser` (Stage 1), `wm-event-driven` (W),
   `compositor-on-demand-raf` (A+B+E).
