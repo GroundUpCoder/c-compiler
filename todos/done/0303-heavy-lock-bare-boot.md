@@ -1,6 +1,6 @@
 # 0303 — heavy-lock guards only RUNNERS: a bare `os/boot.js` takes no lock and stacks on a lock-holder
 
-- **Status**: open
+- **Status**: done
 - **Priority**: P1
 - **Difficulty**: light
 - **Provenance**: observed LIVE by the cont-77 coordinator on 2026-07-27 while two gucOS lanes

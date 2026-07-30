@@ -1,6 +1,6 @@
 # 0342 — the heavy-suite RAM lock is bypassed by the invocation every test file documents
 
-- **Status**: open
+- **Status**: done
 - **Reported by**: the 0330 lane (clang-simplified libc re-vendor), 2026-07-28
 - **Evidence**: first-hand — hit while trying to run `todos/0330`'s own named
   acceptance leg against a live kernel suite
