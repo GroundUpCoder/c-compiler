@@ -353,14 +353,22 @@ check('status-strip shot is a P6 frame', ssP.magic === 'P6', ssP.magic);
 /* 0230 red->green pin: the old STATUS_H 18 vs the 19px stock cell. */
 check('status-strip height derives from the stock font cell (0230)',
   ssH >= 21, 'H=' + ssH + ' row=' + JSON.stringify(ssRow.slice(0, 120)));
-// "3 object(s)" in the 12px-advance mono stock font (font-20 retune), drawn
-// DT_LEFT with the STATUSBAR's 6px well inset: "3 obj" puts 'j' at cell
-// cols x+54..66, 'ect' (no descenders) at x+66..102 — the descender must
-// reach >=3 rows below the x-height.
-const jMax = maxInkRow(ssP, ssX + 54, ssX + 66, ssY, ssY + ssH);
-const ectMax = maxInkRow(ssP, ssX + 66, ssX + 102, ssY, ssY + ssH);
-check("descenders render: 'j' reaches >=3 rows below the x-height glyphs",
-  jMax - ectMax >= 3, 'j=' + jMax + ' ect=' + ectMax);
+// "3 object(s)" is drawn in the proportional sans stock since C2 (#282),
+// so fixed mono-cell columns cannot isolate the 'j' any more. Per-column
+// bottom-ink histogram instead: the MODAL bottom row is the baseline/
+// x-height mass (digits + letters dominate), the DEEPEST bottom is the
+// 'j' descender ('('/')' dip less) — it must reach >=3 rows below.
+const bots = [];
+for (let x = ssX + 6; x < ssX + 120; x++) {
+  const b = maxInkRow(ssP, x, x + 1, ssY, ssY + ssH);
+  if (b >= ssY) bots.push(b);
+}
+const freq = {};
+for (const b of bots) freq[b] = (freq[b] || 0) + 1;
+const modal = +Object.keys(freq).sort((a, b) => freq[b] - freq[a])[0];
+const jMax = bots.length ? Math.max.apply(null, bots) : ssY - 1;
+check("descenders render: deepest ink >=3 rows below the modal glyph bottom",
+  bots.length > 0 && jMax - modal >= 3, 'deep=' + jMax + ' modal=' + modal);
 /* Unclipped means CLEARANCE: ink ON the strip's bottom row is exactly what
  * a clipped render looks like, so "reaches the edge" proves nothing — the
  * descender bottom must sit >=2 clear rows above the clip edge. Under the

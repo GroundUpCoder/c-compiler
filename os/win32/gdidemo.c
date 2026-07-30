@@ -331,7 +331,12 @@ static void selftest(void) {
 
     /* --- UTF-8 text (0211): measure/draw step by CODE POINT, not byte.
      * Mono font: "é" (2 bytes) is ONE glyph advance, "λ…" (5 bytes) two.
-     * A code point the face lacks renders .notdef (still one advance). */
+     * A code point the face lacks renders .notdef (still one advance).
+     * The equal-cell assertions need a MONOSPACE font, so select the
+     * fixed stock explicitly — since C2 (#282) the DC default is
+     * proportional sans (this section's subject is UTF-8 stepping, not
+     * the stock model). */
+    HGDIOBJ u8prev = SelectObject(dc, GetStockObject(ANSI_FIXED_FONT));
     SIZE szA, szU, szL;
     int u8Ok = GetTextExtentPoint32(dc, "e", 1, &szA) &&
                GetTextExtentPoint32(dc, "\xC3\xA9", 2, &szU) &&        /* é */
@@ -361,6 +366,7 @@ static void selftest(void) {
             if (GetPixel(dc, x, y) != GetPixel(dc, x + szX.cx, y)) diffN = 1;
         }
     check("utf8_notdef_ink", inkN > 0 && diffN);
+    SelectObject(dc, u8prev);                    /* back to the DC default */
 
     /* --- 0211 compliance: refused blits leave pixels alone --- */
     PatBlt(dc, 0, 0, 40, 30, WHITENESS);

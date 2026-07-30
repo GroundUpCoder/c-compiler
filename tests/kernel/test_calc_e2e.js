@@ -152,8 +152,12 @@ const out = boot([
 const list1 = section(out, 'list1');
 const row1 = list1.split('\n').find(l => l.endsWith('\tCalculator')) || '';
 check('window titled "Calculator"', row1 !== '', JSON.stringify(list1.slice(0, 300)));
-check('standard surface is 507x478 (template client + 30px menu bar; 20px stock cell)',
-  row1.includes('507x478'), row1);
+/* C2 (#282): dialog DLU width scales by the stock font's tmAveCharWidth/4
+ * — sans avgw 11 vs mono's 12, so the 169-DLU standard template lands at
+ * 464 (169*11/4+ceil), not 507. Height keys on tmHeight, identical for
+ * both 20px faces, so it did not move. */
+check('standard surface is 464x478 (template client + 30px menu bar; 20px sans stock)',
+  row1.includes('464x478'), row1);
 check('window is fixed-size (no R flag)', !(row1.split('\t')[5] || '').includes('R'), row1);
 
 const tree1 = section(out, 'tree1');
@@ -189,8 +193,8 @@ check('popup item fires by label and the popup closes',
 /* view switch */
 const list2 = section(out, 'list2');
 const row2 = list2.split('\n').find(l => l.endsWith('\tCalculator')) || '';
-check('View->Scientific recreates the dialog (948x570 surface; 20px stock cell)',
-  row2.includes('948x570'), row2);
+check('View->Scientific recreates the dialog (869x570 surface; the 316-DLU template at sans avgw 11)',
+  row2.includes('869x570'), row2);
 check('scientific template has the base radios',
   /class=BUTTON [^\n]*text='Hex'/.test(section(out, 'scitree')), section(out, 'scitree').slice(0, 400));
 

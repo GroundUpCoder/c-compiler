@@ -129,6 +129,24 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         CreateWindowEx(0, "BUTTON", "No gyp", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
                        288, 160, 130, 28, hwnd, (HMENU)IDC_DESC_CHK, NULL, NULL);
         SetScrollRange(GetDlgItem(hwnd, IDC_SCROLL), SB_CTL, 0, 20, FALSE);
+        /* Advance geometry of the "No gyp" descender labels, in the
+         * STATIC's own font (C2, #282): the pixel test derives its
+         * measuring columns from these instead of mono-cell constants —
+         * the stock font is proportional now, so per-glyph column
+         * positions are a property of the live face. */
+        {
+            HWND ds = GetDlgItem(hwnd, IDC_DESC_PLAIN);
+            HDC gdc = GetDC(ds);
+            SIZE sN, sNo, sNoSp, sFull;
+            if (gdc &&
+                GetTextExtentPoint32(gdc, "N", 1, &sN) &&
+                GetTextExtentPoint32(gdc, "No", 2, &sNo) &&
+                GetTextExtentPoint32(gdc, "No ", 3, &sNoSp) &&
+                GetTextExtentPoint32(gdc, "No gyp", 6, &sFull))
+                printf("ctldemo: descgeom N=%d No=%d NoSp=%d full=%d\n",
+                       (int)sN.cx, (int)sNo.cx, (int)sNoSp.cx, (int)sFull.cx);
+            if (gdc) ReleaseDC(ds, gdc);
+        }
         return 0;
 
     case WM_SIZE:

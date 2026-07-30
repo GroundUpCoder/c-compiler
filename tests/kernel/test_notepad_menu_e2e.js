@@ -485,8 +485,11 @@ check('Font... loud-cancel report is GONE (real ChooseFontW)',
 const ftree = section(out, 'fonttree');
 check('Font dialog opens (WCFontDlg, the file_dialog shape)',
   /class=WCFontDlg[^\n]*text='Font'/.test(ftree), ftree.slice(0, 400));
-check('one honest face row, selected ("mono" — single-family platform)',
-  /class=LISTBOX[^\n]*text='> mono\\n'/.test(ftree), ftree.slice(-600));
+/* C2 (#282): the face list enumerates gdi32's family table. Notepad's
+ * incoming face ("Lucida Console") is not a FAMILY name, so no row
+ * matches and row 0 (mono) keeps the selection. */
+check('family rows enumerated, row 0 selected (incoming face is not a family name)',
+  /class=LISTBOX[^\n]*text='> mono\\nsans\\nserif\\n'/.test(ftree), ftree.slice(-600));
 check('CF_INITTOLOGFONTSTRUCT preselects the stock size (15pt = 20px)',
   /class=EDIT[^\n]*text='15'/.test(ftree) &&
   /class=LISTBOX[^\n]*> 15\\n/.test(ftree), ftree.slice(-600));

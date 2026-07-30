@@ -217,12 +217,21 @@ function maxInkRow(P, x0, x1, y0, y1) {          // last row with any dark px
 }
 const dP = parsePpm(section('dshot'));
 check('ctldemo shot is a P6 frame', dP.magic === 'P6', dP.magic);
-const dj = (sy, sh) => {
-  const o = maxInkRow(dP, 288 + 12, 288 + 26, sy, sy + sh);
-  const g = maxInkRow(dP, 288 + 36, 288 + 74, sy, sy + sh);
+/* Measuring columns derive from the LIVE font's advances (C2, #282:
+ * the stock font is proportional, so "cols 12..26 = the 'o' glyph" is
+ * no longer a constant) — ctldemo prints the "No gyp" prefix extents.
+ * o-window starts past the 'N' advance so the mnemonic underline under
+ * 'N' cannot alias into the x-height measurement. */
+const dg = out.match(/ctldemo: descgeom N=(\d+) No=(\d+) NoSp=(\d+) full=(\d+)/);
+check('descgeom line printed (advance-derived measuring columns)', !!dg);
+const G = dg ? { N: +dg[1], No: +dg[2], NoSp: +dg[3], full: +dg[4] }
+             : { N: 12, No: 24, NoSp: 36, full: 72 };
+const dj = (sy, sh, x0) => {
+  const o = maxInkRow(dP, x0 + G.N + 2, x0 + G.No, sy, sy + sh);
+  const g = maxInkRow(dP, x0 + G.NoSp, x0 + G.full, sy, sy + sh);
   return { o, g, dj: g - o };
 };
-const ref = dj(112, 40), plain = dj(44, 28), mn = dj(78, 28);
+const ref = dj(112, 40, 288), plain = dj(44, 28, 288), mn = dj(78, 28, 288);
 check('reference STATIC shows real descenders (dj >= 3)',
   ref.dj >= 3, JSON.stringify(ref));
 /* 0236 red->green pins. Pre-fix, top-aligned text sat the stock cell
@@ -244,7 +253,7 @@ check("mnemonic-branch 28px STATIC: full descender extent, within the control",
  * fell outside short controls under Noto's 20px cell): strictly below
  * the 'N'/'o' glyph bottoms ('N' sits on the baseline), inside the
  * control. dj above already guards the descenders. */
-const mnUl = maxInkRow(dP, 288, 288 + 12, 78, 78 + 28);
+const mnUl = maxInkRow(dP, 288, 288 + G.N, 78, 78 + 28);
 check("mnemonic underline renders below the baseline, unclipped",
   mnUl > mn.o && mnUl <= 78 + 28 - 1, JSON.stringify({ mnUl, mn }));
 /* 0278 red->green pin: btn_paint's check/radio branch drew the label at
@@ -255,8 +264,8 @@ check("mnemonic underline renders below the baseline, unclipped",
  * measured columns). Full descender extent inside the control is the
  * no-clip invariant. */
 const cdj = {
-  o: maxInkRow(dP, 288 + 18 + 12, 288 + 18 + 26, 160, 160 + 28),
-  g: maxInkRow(dP, 288 + 18 + 36, 288 + 18 + 74, 160, 160 + 28),
+  o: maxInkRow(dP, 288 + 18 + G.N + 2, 288 + 18 + G.No, 160, 160 + 28),
+  g: maxInkRow(dP, 288 + 18 + G.NoSp, 288 + 18 + G.full, 160, 160 + 28),
 };
 cdj.dj = cdj.g - cdj.o;
 check("28px checkbox label (0278): full descender extent, within the control",
