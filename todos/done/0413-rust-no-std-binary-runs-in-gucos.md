@@ -7,9 +7,23 @@
 The first Rust binary runs in gucOS, and the ABI contract is fixed by tests.
 
 - **The sibling repository is `~/git/gucos-rust`, branch `main`, HEAD
-  `1bcf3e3771500eb3b7aa54de28739170b8908975`.** The repository is LOCAL-ONLY —
-  it has no remote, so this ledger line is the record that it exists. The name
-  is provisional. The one point that resolves the sibling path is the
+  `1bcf3e3771500eb3b7aa54de28739170b8908975`.** This ledger line follows the
+  two-repo precedent of `todos/done/0249` and `todos/done/0262`: it records the
+  exact sibling SHA that the committed fixture was built from.
+  ⚠️ **CORRECTED 2026-07-30 (follow-up to the merge). The lane wrote "the
+  repository is LOCAL-ONLY — it has no remote, so this ledger line is the record
+  that it exists." That was TRUE when the lane measured it and it is FALSE now.**
+  jku authorized the repository mid-lane, and the lane could not be told because
+  it was in the middle of its turn. The remote is
+  `github.com/josephkimgpt/gucos-rust` (private); `1bcf3e3771` is pushed, and
+  `main` is level with `origin/main`. **So the remote — not this line — is the
+  record that the repository exists.** The SHA ledger stays for the reason above.
+  🔴 **The repository is under the personal account `josephkimgpt` and NOT under
+  `GroundUpCoder`, and jku ruled that home FINAL for now** ("gucos-rust in jkgpt
+  is fine for now, can always move it to guc acct later if needed"). The
+  divergence from the `clang-simplified` precedent is a **DECISION, not a
+  defect. Do not "fix" it** — anyone who does undoes a ruling.
+  The name is provisional. The one point that resolves the sibling path is the
   `RUST_ROOT` env var in `tests/kernel/test_rust_e2e.js` (default
   `~/git/gucos-rust`); nothing else in this repository names it.
 - The crate is `crates/hello-gucos`: stable `rustc 1.96.1`,
