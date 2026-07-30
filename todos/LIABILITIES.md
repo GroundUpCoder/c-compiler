@@ -355,4 +355,10 @@ thing this file exists to kill.
 - file: host.js
 - anchor: //    would collide — and the failure is SILENT stale code, not an
 
+### L67 — package launchers must stay variable-free: the hush store corrupts plain script-file assignments under the default boot env, so the convention lint forbids them until the shell is fixed
+- ticket: #296
+- file: tests/host/test_launcher_convention.js
+- anchor: //      stays allowed. Relax this rule when #296 closes.
+- provenance: #189
+
 <!-- END ENTRIES -->
