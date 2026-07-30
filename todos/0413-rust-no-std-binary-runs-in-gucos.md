@@ -1,6 +1,47 @@
 # 0413 — A `no_std` Rust binary runs in gucOS (Lane A1)
 
-- **Status**: open
+- **Status**: done (2026-07-30)
+
+## Result
+
+The first Rust binary runs in gucOS, and the ABI contract is fixed by tests.
+
+- **The sibling repository is `~/git/gucos-rust`, branch `main`, HEAD
+  `1bcf3e3771500eb3b7aa54de28739170b8908975`.** The repository is LOCAL-ONLY —
+  it has no remote, so this ledger line is the record that it exists. The name
+  is provisional. The one point that resolves the sibling path is the
+  `RUST_ROOT` env var in `tests/kernel/test_rust_e2e.js` (default
+  `~/git/gucos-rust`); nothing else in this repository names it.
+- The crate is `crates/hello-gucos`: stable `rustc 1.96.1`,
+  `wasm32-unknown-unknown`, `#![no_std]` cdylib, 887 bytes. It imports only
+  `write` and `__exit` from module `"c"`, exports `main`/`memory`/`alloca`,
+  and declares a growable memory. The panic handler calls `__exit(101)` — the
+  probe's `loop {}` hang is not shipped. `alloca` is a bump allocator over a
+  static arena, with the hand-off note to `todos/0414` in the source. The
+  build is byte-deterministic (`codegen-units = 1`, proven by a clean
+  rebuild), which is what makes the freshness leg meaningful.
+- The committed fixture is `tests/kernel/fixtures/hello-rust/hello-rust.wasm`
+  (sha256 recorded beside it:
+  `03ede92f9343ea7cef1a6513c946604f8092ac40c033dfef5e0f0296a4efd6d5`). The
+  repo-wide `*.wasm` gitignore gained an explicit unignore for exactly this
+  file — the one committed wasm binary in the tree.
+- `tests/kernel/test_rust_e2e.js` (registered in the kernel suite, IMG):
+  legs 1–4 are UNCONDITIONAL (fixture sha, module shape, `node host.js`
+  hello + panic paths, and the in-OS shell spawn on a booted gucOS with
+  `$?` asserted for both paths). Legs 5–7 are sibling-gated: the freshness
+  rebuild must be byte-equal; the `missing-link-attr` crate must FAIL AT LINK
+  with a message that names `write` (this proves rustc's default link has no
+  `--allow-undefined`); the `no-alloca` crate must trap at start-up with
+  `alloca is not a function`. An absent sibling SKIPs legs 5–7 (normal
+  state); `RUST_REQUIRE=1` turns that absence into a loud failure that
+  prints the fix. All three branches were exercised: 18/18 checks with the
+  sibling, SKIP without it, exit 1 under `RUST_REQUIRE=1`.
+- Measured confirmations of the ticket's premises: rustc's default `wasm-ld`
+  invocation carries no `--allow-undefined` (the negative crate fails with
+  `undefined symbol: write`), and the no-alloca module exits 1 with the
+  documented trap before `main`.
+
+Dev log: `logs/2026-07-30/0413-rust-a1.md`.
 - **Design**: `todos/RUST.md` §2 (the ABI contract) and §3 (the architecture rules).
 - **Provenance**: the Rust program, filed 2026-07-29. The design pass ruled
   "proceed with modifications" and funds Lane A unconditionally.

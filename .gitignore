@@ -1,5 +1,8 @@
 build/
 *.wasm
+# The ONE committed wasm binary: the Rust fixture (todos/0413). The gucos-rust
+# sibling builds it; test_rust_e2e.js freshness-checks it against a rebuild.
+!tests/kernel/fixtures/hello-rust/hello-rust.wasm
 *.o
 a.out
 .DS_Store
