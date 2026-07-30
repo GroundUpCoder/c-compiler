@@ -356,6 +356,28 @@ check('shebang session exits clean', r.status === 0, String(r.status) + ' ' + (r
   }
 }
 
+// ---- #296: script-file variable store under the DEFAULT boot env ----
+// hush re-exports the inherited PWD at startup via putenv(varstr) where
+// varstr IS the libc's environ entry (the environ-import loop runs after
+// unsetenv("HUSH_VERSION") took ownership of the block). The libc's old
+// copy+free putenv freed that live buffer; the next script-file `a=1`
+// landed in the freed block, false-matched as "assignment does not change
+// anything", and `$a` expanded EMPTY. Env-layout dependent: it needs the
+// exact 5-var env a spawned `sh file` gets from pid 1 (PATH, HOME, TERM,
+// PWD, HUSH_VERSION) — which is why this leg must run under the DEFAULT
+// boot env, spawning `sh` on a script FILE, not `sh -c` and not `.`.
+r = session([
+  "printf 'a=/optA\\nb=B2\\necho A=$a B=$b\\n' > /root/p296.sh",
+  'sh /root/p296.sh',
+  'rm -f /root/p296.sh',
+  'exit',
+  '',
+].join('\n'));
+check('varstore session exits clean', r.status === 0, String(r.status) + ' ' + (r.stderr || '').slice(-200));
+check('script-file assignments expand (hush store intact, #296)',
+  r.stdout.split('\n').includes('A=/optA B=B2'),
+  JSON.stringify(r.stdout.split('\n').filter((l) => l.startsWith('A='))));
+
 // ---- login-shell $() re-exec must not re-source profiles (todos/0177) ----
 // pid 1 is a login shell (argv[0] "-sh", todos/0174). Every $() runs via the
 // NOMMU re-exec-self machinery, which carries argv[0] into the subshell; the
