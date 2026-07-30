@@ -128,8 +128,9 @@ the v197 set and the v198 set in size. An older note in the deploy chain named
 16 artifacts. That number is wrong and it must not return.
 
 The check fetched each artifact from `https://groundupcoder.com` and compared
-the MD5 sum against the local file in `dist/`. The path `/os/os.html` returns a
-308 redirect, so the check used `curl -sL` for every path. All 19 local files
+the MD5 sum against the local file in `dist/`. Each artifact keeps its `dist/`
+path, so the OS files sit under `/os/`, not at the root. The path `/os/os.html`
+returns a 308 redirect, so the check used `curl -sL` for every path. All 19 local files
 resolved and none was empty, so no check was silently absent.
 
 The check ran 4 poll rounds at 20 s spacing. Every round gave **19 of 19**. No
@@ -138,7 +139,11 @@ artifact was stale in any round. The v197 deploy and the v196 deploy each found
 round 1 is a result, not a reason to stop early. One round samples one point of
 presence only.
 
-The edge serves `image.json` with `"version": 199`. The edge serves
+The edge serves `image.json` at the path **`/os/image.json`** with
+`"version": 199`. Use the full path. The root path `/image.json` returns 404,
+and `/os.html` returns 404, because `os.html` is at **`/os/os.html`**. A reader
+who probes the short path sees 404 on a live site and reads it as an outage.
+The edge serves
 `build-info.json` with `c-compiler 784d9f3cf405c59a75842db0d68513785fb3aa4b`,
 `dirty false` for both repositories, and `imgSha256
 0b70f0eb36815376228b17ca6267e78073ffa23696b416d4e6c294c558219041`. The root path
