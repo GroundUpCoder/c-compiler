@@ -1,6 +1,6 @@
 # 0442 — C2: std on wasip1 — the `wasi_snapshot_preview1` shim
 
-- **Status**: open
+- **Status**: done
 - **Design**: `todos/RUST.md` §2–§3; the ruling in
   `todos/done/0418-rust-std-decider.md` §"Result" (this ticket's authority).
   🔴 **Read `~/git/meta/gucos/notes/wasi-p1-census.md` before you plan.** It maps all
