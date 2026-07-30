@@ -1,7 +1,13 @@
 # 0383 — Coordinated sibling rename: clang-simplified overlay `python-clang` → `cpython-clang` + flip `clangApp` (0374 merge-time step 3)
 
 - **Status**: open
-- **Priority**: P2
+- **Priority**: P0 — **raised from P2 on 2026-07-30 by jku's ruling that the Rust and
+  codex work outranks the rest of the ready band.** This ticket is not in that program,
+  and it was hoisted for a mechanical reason: `todos/0416` (Lane A4) carries
+  `after ▸ 0383`, so leaving this at P2 would have stalled Lane A at A4 while the board
+  looked correctly ordered. The half-applied two-repo rename justifies the hoist on its
+  own merits as well. `todos/queue.json` is the authority for the rank; read it with
+  `node todos/queue.js list`, never as a raw array index (lesson (EU)).
 - **Difficulty**: medium
 - **Design**: `todos/CPYTHON.md` §6.3 (the two-sided interlock) and the
   **Merge-time steps** section of `todos/0374-rename-cpython-clang.md`, now on `main`.
