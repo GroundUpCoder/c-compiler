@@ -2026,17 +2026,25 @@ function Kernel(opts) {
       if (mfs instanceof ProcFS) mfs._kernel = this;
     }
   }
-  // The compiled-Module cache (todos/0037): spawn compiles each READ-ONLY-
-  // volume binary once and ships the WebAssembly.Module in the spawn message
-  // (Modules structured-clone across workers; Instances don't). Keyed by the
-  // fs's immutableKey — non-null only for regular files on a read-only
-  // volume, whose contents can't change for the mount's lifetime, so there
-  // is no invalidation to get wrong: mutable binaries (a fresh `cc -o
-  // a.out`) key null and keep the bytes+compile-per-spawn path. Values are
-  // Promises (racing spawns of the same binary share one compile); a
-  // Promise resolving null marks "uncacheable after all" (ss-flavored,
-  // compile error, Modules don't clone on this tier).
-  this._moduleCache = new Map();   // immutableKey -> Promise<Module|null>
+  // The compiled-Module cache (todos/0037; generalized to writable volumes
+  // by #188): spawn compiles each binary once and ships the
+  // WebAssembly.Module in the spawn message (Modules structured-clone
+  // across workers; Instances don't — and the engine's JIT state follows
+  // the Module object, so one shared Module is also what makes warm spawns
+  // warm). Keyed by the fs's moduleKey: an immutable `prefix:ino` on a
+  // read-only volume (contents can't change for the mount's lifetime — no
+  // invalidation to get wrong), a VALIDATED `prefix:ino:size:mtime` on a
+  // writable one (every term read through the store per spawn, so a
+  // rewritten binary derives a DIFFERENT key and a stale Module can never
+  // be hit). One entry per spawned path: _modulePathKey remembers the key
+  // a path last spawned under, and when the derivation moves the old entry
+  // is deleted — recompiles REPLACE their entry instead of leaking a dead
+  // Module per `cc -o`. Values are Promises (racing spawns of the same
+  // binary share one compile); a Promise resolving null marks "uncacheable
+  // after all" (ss-flavored, compile error, Modules don't clone on this
+  // tier).
+  this._moduleCache = new Map();   // moduleKey -> Promise<Module|null>
+  this._modulePathKey = new Map(); // spawn path -> its last moduleKey
   this._moduleCacheHits = 0;
   this._moduleCacheMisses = 0;
   this._moduleCloneOk = undefined; // one-shot structuredClone(Module) probe
@@ -2383,14 +2391,25 @@ Kernel.prototype._spawn = function (parent, spec, depth) {
   var self = this;
   if (this._halted) return Promise.resolve({ errno: 'ESRCH' });
   if (!spec || typeof spec.path !== 'string') return Promise.resolve({ errno: 'EFAULT' });
-  // Module cache (todos/0037): compute the key BEFORE the image read, in the
-  // same synchronous turn (both embedders' loadImage is sync), so the
-  // identity the cache stores is the identity the bytes were read under —
-  // no window for a concurrent rename to slip between them. A cache hit
-  // skips loadImage entirely (zero fs work per spawn): immutableKey just
-  // stat'ed the path, which IS the existence check, and RO-volume contents
-  // can't have drifted from the cached compile.
+  // Module cache (todos/0037, #188): compute the key BEFORE the image read,
+  // in the same synchronous turn (both embedders' loadImage is sync, and fs
+  // mutations arrive as whole RPC turns), so the identity the cache stores
+  // is the identity the bytes were read under — no window for a concurrent
+  // write or rename to slip between them. A cache hit skips loadImage
+  // entirely (zero fs work per spawn): moduleKey just stat'ed the path,
+  // which IS the existence check, and the key's own terms (RO-volume
+  // immutability, or ino+size+mtime on a writable volume) prove the cached
+  // compile still matches the file.
   var mkey = this._imageCacheKey(spec.path);
+  if (mkey) {
+    // One entry per path (#188): a changed file derives a NEW key — that
+    // alone is what correctness rests on — and the path's previous entry
+    // is dropped so recompiles replace instead of accumulate. A hardlink
+    // alias still reaching the old contents just re-misses and recompiles.
+    var prevKey = this._modulePathKey.get(spec.path);
+    if (prevKey !== undefined && prevKey !== mkey) this._moduleCache.delete(prevKey);
+    this._modulePathKey.set(spec.path, mkey);
+  }
   var cached = mkey ? this._moduleCache.get(mkey) : null;
   if (cached) {
     this._moduleCacheHits++;
@@ -2467,15 +2486,16 @@ Kernel.prototype._spawnShebang = function (parent, spec, u8, depth) {
   return this._spawn(parent, nspec, (depth | 0) + 1);
 };
 
-/* immutableKey through the kernel fs, or null (no fs / fs without the hook /
- * mutable path). Never throws — an fs error just means "don't cache". */
+/* moduleKey through the kernel fs, or null (no fs / fs without the hook /
+ * an uncacheable path). Never throws — an fs error just means "don't
+ * cache". */
 Kernel.prototype._imageCacheKey = function (path) {
-  if (!this._fs || typeof this._fs.immutableKey !== 'function') return null;
-  try { return this._fs.immutableKey(path); } catch (e) { return null; }
+  if (!this._fs || typeof this._fs.moduleKey !== 'function') return null;
+  try { return this._fs.moduleKey(path); } catch (e) { return null; }
 };
 
 /* Resolve a spawn image to a shippable pre-compiled Module, or null (keep
- * the bytes path). Cache-hit or compile-once per immutableKey; the cached
+ * the bytes path). Cache-hit or compile-once per moduleKey; the cached
  * Promise dedupes racing spawns of the same binary. ss-flavored modules are
  * excluded (runModule recompiles them from bytes with importedStringConstants
  * — see runSsModule), as are tiers where Modules don't structured-clone. */

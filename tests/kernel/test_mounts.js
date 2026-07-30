@@ -301,26 +301,36 @@ test('readonly /usr: reads, the /bin symlink, and the /usr/local escape work', f
   assert(names.indexOf('sh') >= 0, 'readdir of the RO volume: ' + names.join(','));
 });
 
-test('immutableKey (todos/0037): non-null only for RO-volume regular files', function () {
+test('moduleKey (todos/0037, #188): immutable on RO volumes, VALIDATED on rw', function () {
   var f = fresh0040();
-  var k = f.m.immutableKey('/usr/bin/sh');
+  var k = f.m.moduleKey('/usr/bin/sh');
   assert(typeof k === 'string' && k.length > 0, 'RO regular file keys');
-  assertEq(f.m.immutableKey('/bin/sh'), k, 'alias via the /bin symlink shares the key');
-  assertEq(f.m.immutableKey('/usr/bin/sh'), k, 'key is stable across calls');
+  assertEq(f.m.moduleKey('/bin/sh'), k, 'alias via the /bin symlink shares the key');
+  assertEq(f.m.moduleKey('/usr/bin/sh'), k, 'key is stable across calls');
+  // rw-volume regular file (#188): a VALIDATED key — non-null, stable while
+  // the file is unchanged, and MOVED by a rewrite (here the size term; the
+  // mtime term is pinned by test_module_cache part 3).
   f.m.mkdir('/root', 0o755);
   writeFile(f.m, '/root/a.out', 'AOUT', 0o755);
-  assert(f.m.immutableKey('/root/a.out') === null, 'rw-volume binary keys null');
-  assert(f.m.immutableKey('/usr/bin') === null, 'directories key null');
-  assert(f.m.immutableKey('/usr/bin/nope') === null, 'ENOENT keys null');
-  // /usr/local escapes to the WRITABLE /var/local — must key null even
-  // though the path spells /usr.
+  var vk = f.m.moduleKey('/root/a.out');
+  assert(typeof vk === 'string' && vk.length > 0, 'rw-volume binary keys VALIDATED (#188)');
+  assertEq(f.m.moduleKey('/root/a.out'), vk, 'unchanged rw file keys stable');
+  writeFile(f.m, '/root/a.out', 'AOUT2', 0o755);
+  assert(f.m.moduleKey('/root/a.out') !== vk, 'a rewrite MOVES the validated key');
+  assert(f.m.moduleKey('/usr/bin') === null, 'directories key null');
+  assert(f.m.moduleKey('/usr/bin/nope') === null, 'ENOENT keys null');
+  // /usr/local escapes to the WRITABLE /var/local — the key must be the rw
+  // volume's validated kind (owned by the escape target), never the RO
+  // volume's immutable kind, even though the path spells /usr.
   writeFile(f.m, '/usr/local/bin/mytool', 'MINE', 0o755);
-  assert(f.m.immutableKey('/usr/local/bin/mytool') === null,
-    'the /usr/local -> /var/local escape keys null');
-  // Single-volume BlockFS: rw keys null; readonly keys the same shape.
+  var ek = f.m.moduleKey('/usr/local/bin/mytool');
+  assert(typeof ek === 'string' && ek.length > 0, 'the /usr/local -> /var/local escape keys on the rw volume');
+  assertEq(ek, f.m.moduleKey('/var/local/bin/mytool'),
+    'escaped and direct spellings share the key');
+  // Single-volume BlockFS: rw keys validated too.
   var rwSolo = BLOCK_FS.createV4(new MemoryByteStore(1 << 20));
   writeFile(rwSolo, '/x', 'X', 0o755);
-  assert(rwSolo.immutableKey('/x') === null, 'standalone rw BlockFS keys null');
+  assert(typeof rwSolo.moduleKey('/x') === 'string', 'standalone rw BlockFS keys validated');
 });
 
 // ---- error propagation + resolve ----

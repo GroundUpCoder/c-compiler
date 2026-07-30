@@ -203,27 +203,42 @@ on their own OS threads — top's %CPU is boring), VmSize/VmRSS nominal
 constants, meminfo a fixed plausible table (MemTotal must stay nonzero —
 top divides by it). No `/proc/self`: fs ops carry a path, not a caller
 pid. Writes: EROFS (mutators) / EACCES (write-mode opens);
-`immutableKey` stays null so spawn never Module-caches from /proc.
+`moduleKey` stays null so spawn never Module-caches from /proc.
 Tests: `tests/kernel/test_procfs.js` (formats, snapshot, zombies, RPC
 transport, GETSID), `test_os_boot.js` (busybox procps acceptance).
 
-## The spawn path: compiled-Module cache (todos/0037, landed 2026-07-09)
+## The spawn path: compiled-Module cache (todos/0037, landed 2026-07-09; generalized to rw volumes by #188, 2026-07-30)
 
 Every spawn used to re-parse + re-compile the binary in the process worker
 (`new WebAssembly.Module(bytes)`) — each `ls` in a pipeline paid a full
-compile of the multicall coreutils. Now the kernel compiles each
-**read-only-volume** binary once and ships the `WebAssembly.Module` in the
-spawn message: Modules structured-clone across workers (browser and
-`worker_threads`), sharing the engine's compiled code; *Instances* don't
-clone — each process still instantiates its own memory/imports.
+compile of the multicall coreutils. Now the kernel compiles each binary
+once and ships the `WebAssembly.Module` in the spawn message: Modules
+structured-clone across workers (browser and `worker_threads`), sharing
+the engine's compiled code; *Instances* don't clone — each process still
+instantiates its own memory/imports. The shared Module is also what makes
+warm spawns warm on JSC: the engine's JIT state follows the Module object,
+so a bytes-path binary re-runs its init interpreted-cold on EVERY spawn
+(the ~200 ms/spawn Safari cliff 0385 measured — the reason #188 exists).
 
-- **Key**: the fs's `immutableKey(path)` (host.js) — `mountPrefix:ino`,
-  non-null only for a regular file whose owning volume (after full symlink
-  resolution, so `/bin/ls` → `/usr/bin/ls`) is mounted read-only. RO
-  contents can't change for the mount's lifetime, so there is no
-  invalidation to get wrong; the inode dedupes the 75 coreutils applet
-  symlinks into ONE entry. Mutable binaries (`cc -o a.out` on the rw
-  volume) key null and keep the bytes+compile-per-spawn path forever.
+- **Key**: the fs's `moduleKey(path)` (host.js; the 0037 `immutableKey`
+  generalized). The owning volume after full symlink resolution (so
+  `/bin/ls` → `/usr/bin/ls`) decides the kind:
+  - **read-only volume**: `mountPrefix:ino` — contents can't change for
+    the mount's lifetime, so immutability subsumes validation and there is
+    no invalidation to get wrong (the 0037 policy, key-for-key); the inode
+    dedupes the 75 coreutils applet symlinks into ONE entry.
+  - **writable volume** (#188): `mountPrefix:ino:size:mtime` — a
+    **validated** key, every term read through the store at each spawn. A
+    rewritten binary (`cc -o a.out`, a gucman upgrade) derives a DIFFERENT
+    key, so a stale Module can never be hit. The validation floor is the
+    store's timestamp resolution (ms on v4) — unreachable in-OS, where
+    every write→spawn→rewrite step is its own process costing well over a
+    tick. One entry per spawned path: the kernel remembers the key a path
+    last spawned under (`_modulePathKey`) and deletes the old entry when
+    the derivation moves, so recompiles replace instead of leaking a dead
+    Module per `cc -o`.
+  - **synthetic volume** (ProcFS): no `moduleKey` hook → null → never
+    cached.
 - **Exclusions**: ss-flavored modules (they recompile from bytes with
   `importedStringConstants` in `runSsModule`), engine-rejected bytes (the
   worker owns the error report), tiers where Modules don't structured-clone
@@ -234,7 +249,8 @@ clone — each process still instantiates its own memory/imports.
   racing spawns of one binary share a single compile.
 - **Stats**: `kernel.moduleCacheStats()` → `{entries, hits, misses}`.
 - Tests: `tests/kernel/test_module_cache.js` (policy over fake workers +
-  a real worker_threads clone e2e), `test_mounts.js` (immutableKey).
+  a real worker_threads clone e2e + the in-OS recompile loop),
+  `test_mounts.js` (moduleKey).
 
 ## The spawn path: shebang exec (todos/0065, landed 2026-07-10)
 

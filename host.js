@@ -3552,19 +3552,34 @@ var BLOCK_FS = (function () {
     return this._statOf(w);
   };
 
-  // immutableKey (todos/0037) — a stable content-identity token for `path`,
-  // or null. Non-null ONLY for a regular file on a READ-ONLY volume: its
-  // contents cannot change for this mount's lifetime, so the token needs no
-  // generation counter. The kernel keys its compiled-wasm-Module cache on
-  // this (mutable binaries — e.g. a fresh `cc -o a.out` — return null and
-  // keep the compile-per-spawn path, so the cache can never serve stale
-  // code). The inode id dedupes path aliases: /bin/ls and /usr/bin/ls (and
-  // every coreutils applet symlink) share one key.
-  BlockFS.prototype.immutableKey = function (path) {
-    if (!this._readonly) return null;
-    var st = this.stat(path);
+  // moduleKey (todos/0037; generalized to writable volumes by #188) — the
+  // content-identity token the kernel keys its compiled-wasm-Module spawn
+  // cache on, or null for anything that can't carry one (non-regular
+  // files, a failed walk). Two kinds, told apart by how they validate,
+  // not by a tag:
+  //  - READ-ONLY volume: `prefix:ino` — contents cannot change for the
+  //    mount's lifetime, so immutability subsumes validation and one
+  //    compile serves forever (the original 0037 policy, key-for-key).
+  //  - WRITABLE volume: `prefix:ino:size:mtime` — a VALIDATED key. Every
+  //    term is read through the store at derivation time, so a rewritten
+  //    binary (a fresh `cc -o a.out`) derives a DIFFERENT key and a stale
+  //    Module can never be hit; the kernel replaces the path's old entry.
+  //    The validation floor is the store's timestamp resolution (ms on
+  //    v4): a same-inode, same-size rewrite landing within the same tick
+  //    as the cached spawn's mtime would collide — unreachable in-OS,
+  //    where every step of write→spawn→rewrite is its own process costing
+  //    well over a tick.
+  // The inode id dedupes path aliases either way: /bin/ls and /usr/bin/ls
+  // (and every coreutils applet symlink) share one key.
+  function moduleKeyOf(vol, st) {
     if (!st || (st.mode & S_IFMT) !== S_IFREG) return null;
-    return this._mountPrefix + ':' + st.ino;
+    var key = (vol._mountPrefix || '') + ':' + st.ino;
+    if (vol._readonly) return key;
+    return key + ':' + st.size + ':' + st.mtime + '.' + (st.mtimeNsec | 0);
+  }
+
+  BlockFS.prototype.moduleKey = function (path) {
+    return moduleKeyOf(this, this.stat(path));
   };
 
   BlockFS.prototype.lstat = function (path) {
@@ -6170,20 +6185,21 @@ var BLOCK_FS = (function () {
     return this._dispatch([path], {}, function (vol, rel) { return vol.stat(rel); });
   };
 
-  // immutableKey (todos/0037): the full-namespace twin of BlockFS's — the
-  // walk (with symlink escapes, so /bin/ls resolves through the /bin ->
-  // /usr/bin link) decides the OWNING volume, and the key is non-null only
-  // when that volume is read-only. Prefix + inode id is unique across the
-  // mount table and stable for the mount's lifetime.
-  MountFS.prototype.immutableKey = function (path) {
+  // moduleKey (todos/0037, #188): the full-namespace twin of BlockFS's —
+  // the walk (with symlink escapes, so /bin/ls resolves through the /bin
+  // -> /usr/bin link) decides the OWNING volume, and the key kind is that
+  // volume's: immutable on read-only, validated on writable (see
+  // moduleKeyOf). A synthetic volume (ProcFS) has no moduleKey hook and
+  // keys null, so spawn never Module-caches from /proc. Prefix + inode id
+  // is unique across the mount table.
+  MountFS.prototype.moduleKey = function (path) {
     var owner = null;
     var st = this._dispatch([path], {}, function (vol, rel) {
       owner = vol;
       return vol.stat(rel);
     });
-    if (!st || !owner || !owner._readonly) return null;
-    if ((st.mode & S_IFMT) !== S_IFREG) return null;
-    return owner._mountPrefix + ':' + st.ino;
+    if (!owner || typeof owner.moduleKey !== 'function') return null;
+    return moduleKeyOf(owner, st);
   };
 
   MountFS.prototype.lstat = function (path) {

@@ -171,7 +171,7 @@ function lsDir(fs, p) {
   check('rename within /proc EROFS', mfs.rename('/proc/uptime', '/proc/downtime') === null && mfs._lastError === 'EROFS');
   check('write-open EACCES', mfs.open('/proc/uptime', 1, 0) === null && mfs._lastError === 'EACCES');
   check('access W_OK EROFS', mfs.access('/proc/uptime', 2) === null && mfs._lastError === 'EROFS');
-  check('immutableKey stays null (never Module-cached)', mfs.immutableKey('/proc/uptime') === null);
+  check('moduleKey stays null (never Module-cached)', mfs.moduleKey('/proc/uptime') === null);
 
   // ---- over the real RPC transport (what libc actually does) ----
   r = await rpc(1, K.OP.FS_CHDIR, { path: '/proc' });

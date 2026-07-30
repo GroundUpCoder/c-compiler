@@ -46,7 +46,7 @@ const tests = [
   ['test_read_fill_e2e.js'], // 0140: a single read() of a >KP_FS_CHUNK REGULAR FILE fills the whole count (not one capped chunk) like native — the mGBA-ROM short-read class; scoped to regular files (pipes keep POSIX short-read)
   ['test_cfgstore_e2e.js'], // 0254: cfgstore.h never silently truncates — >8K user file survives cfg_set (the R3 data-loss regression), streaming replace/append/dedupe, cfg_load3 -1/EFBIG loud cap, errno on every failure path
   ['test_mounts.js'],       // 0026: MountFS — prefix routing, EXDEV/EBUSY, symlink escapes (no wasm)
-  ['test_module_cache.js'], // 0037: compiled-Module cache on spawn — RO-volume policy, ss/rw exclusions, real clone e2e
+  ['test_module_cache.js'], // 0037+#188: compiled-Module cache on spawn — RO immutable + rw VALIDATED keys, replace-on-rewrite, ss/no-fs exclusions, real clone e2e, in-OS recompile loop
   ['test_procfs.js'],       // 0043: synthetic /proc — Linux formats, snapshot-at-open, zombies, EROFS, GETSID (no wasm)
   ['test_readdir_page.js'], // 0241: paginated FS_OPENDIR/FS_READDIR — 3000-entry dir lists fully in order (raw RPC + RemoteFS drain), small dirs single-page, stale cursor EBADF, handle release on exhaustion AND death mid-drain (no wasm)
   ['test_pipes.js'],        // Phase 4: pipe OFD semantics over the SAB protocol (no wasm)

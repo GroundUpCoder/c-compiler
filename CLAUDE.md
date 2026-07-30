@@ -348,10 +348,13 @@ symlink escapes (`/usr/local`) retry brokered, write-intent/mutators/
 relative paths stay brokered, local fds live at RO_FD_BASE and promote to
 brokered twins at dup2/spawn-action crossings (rules + limits: the
 RemoteFS header and KERNEL.md's single-writer section). Spawn caches compiled
-Modules (todos/0037): read-only-volume binaries (fs `immutableKey` —
-prefix:ino after symlink resolution) compile once kernel-side and the
-`WebAssembly.Module` structured-clones in the spawn message (`procSpec.
-module`, bytes dropped); rw binaries (`cc -o a.out`), ss modules, and
+Modules (todos/0037; generalized by #188): every binary compiles once
+kernel-side and the `WebAssembly.Module` structured-clones in the spawn
+message (`procSpec.module`, bytes dropped), keyed by the fs `moduleKey`
+after symlink resolution — immutable prefix:ino on a read-only volume,
+VALIDATED prefix:ino:size:mtime on a writable one (a rewrite, e.g.
+`cc -o a.out` or a gucman upgrade, moves the key and REPLACES that
+path's entry — a stale Module can never be hit); ss modules, /proc, and
 no-fs kernels keep the bytes path — `kernel.moduleCacheStats()` counts.
 Spawn honours `#!` (todos/0065, `_spawnShebang`): a text image starting
 `#!` re-dispatches to its interpreter line (execve(2) semantics — one

@@ -302,8 +302,9 @@ Consequences worth stating:
   a `#!`-scripted implementation still has depth to spare.
 - `/bin/python` is a symlink to a symlink (`/bin` → `/usr/bin`, then
   `/usr/bin/python` → `cmdalt`). MountFS resolves symlinks in the full
-  namespace and the module cache's `immutableKey` is *"prefix:ino after symlink
-  resolution"*, so the dispatch links share one cached module.
+  namespace and the module cache's `moduleKey` (the 0037 `immutableKey`,
+  generalized by #188) keys on *prefix:ino after symlink resolution*, so the
+  dispatch links share one cached module.
 - **A shebang whose implementation is missing** does not fail at spawn the way a
   real missing interpreter would (`ENOEXEC`/`ENOENT`). The dispatcher starts,
   prints the §2 error, and exits **127** — the script's exit status. The

@@ -1,15 +1,18 @@
 #!/usr/bin/env node
-// 0037: the compiled-Module cache on the spawn path. The kernel compiles
-// each READ-ONLY-volume binary once (immutableKey — prefix:ino on the RO
-// volume) and ships the WebAssembly.Module in the spawn message; process
-// workers instantiate it instead of re-parsing multi-MB bytes per spawn.
-// Mutable binaries (a fresh `cc -o a.out`), ss-flavored modules, engine-
-// rejected bytes, and no-fs kernels all keep the bytes path.
+// 0037 + #188: the compiled-Module cache on the spawn path. The kernel
+// compiles each binary once (moduleKey — immutable prefix:ino on a RO
+// volume, VALIDATED prefix:ino:size:mtime on a writable one) and ships the
+// WebAssembly.Module in the spawn message; process workers instantiate it
+// instead of re-parsing multi-MB bytes per spawn. A rewritten rw binary
+// derives a new key and REPLACES its path's entry, so a stale Module can
+// never be hit. ss-flavored modules, engine-rejected bytes, and no-fs
+// kernels keep the bytes path.
 //
 // Part 1 drives the kernel with fake workers (no threads — procSpec is
 // inspectable) over a MountFS with a readonly /usr; part 2 runs real C in
 // worker_threads to prove the Module structured-clones through workerData
-// and executes correctly on both the miss and the hit.
+// and executes correctly on both the miss and the hit; part 3 is the #188
+// acceptance loop in the real OS — cc -o, run, edit, recompile, rerun.
 //
 // Run: node tests/kernel/test_module_cache.js
 'use strict';
@@ -119,19 +122,34 @@ async function part1() {
   check('alias spawn is a hit', st.hits === 1 && st.misses === 1 && st.entries === 1,
     JSON.stringify(st));
 
-  // Mutable (rw-volume) binary: bytes path, and a rewrite is seen at once.
+  // Mutable (rw-volume) binary (#188): a VALIDATED key — it rides the cache
+  // like an RO binary; a rewrite derives a new key, REPLACES the path's
+  // entry, and ships a Module compiled from the NEW bytes, never the stale
+  // one.
   const pid3 = await kernel.service({ path: '/root/a.out', argv: ['a.out'] });
   const s3 = workers.get(pid3).procSpec;
-  check('rw binary ships bytes, no Module', s3.module === null && s3.image !== null);
+  check('rw binary ships a Module, no bytes (#188)',
+    s3.module instanceof WebAssembly.Module && s3.image === null);
   st = kernel.moduleCacheStats();
-  check('rw binary never touches the cache', st.misses === 1 && st.entries === 1,
-    JSON.stringify(st));
+  check('rw binary enters the cache (own entry, one miss)',
+    st.misses === 2 && st.entries === 2, JSON.stringify(st));
+  const pid3b = await kernel.service({ path: '/root/a.out', argv: ['a.out'] });
+  const s3b = workers.get(pid3b).procSpec;
+  check('unchanged rw binary is a warm hit (same Module)', s3b.module === s3.module);
+  st = kernel.moduleCacheStats();
+  check('warm rw spawn counts a hit, adds no entry',
+    st.hits === 2 && st.misses === 2 && st.entries === 2, JSON.stringify(st));
   const V2 = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 0, 4, 1, 0x61, 0, 0]); // custom section "a"
   writeBytes(kfs, '/root/a.out', V2);
   const pid4 = await kernel.service({ path: '/root/a.out', argv: ['a.out'] });
   const s4 = workers.get(pid4).procSpec;
-  check('rebuilt rw binary ships the NEW bytes',
-    s4.image !== null && s4.image.length === V2.length, s4.image && s4.image.length);
+  check('rebuilt rw binary ships a NEW Module, never the stale one',
+    s4.module instanceof WebAssembly.Module && s4.module !== s3.module);
+  check('the new Module is compiled from the NEW bytes',
+    s4.module !== null && WebAssembly.Module.customSections(s4.module, 'a').length === 1);
+  st = kernel.moduleCacheStats();
+  check('rewrite REPLACES the entry (no leak per recompile)',
+    st.entries === 2 && st.misses === 3, JSON.stringify(st));
 
   // ss flavor: compiles kernel-side but is excluded (bytes path), and the
   // exclusion is itself cached (no re-probe per spawn).
@@ -142,8 +160,8 @@ async function part1() {
   const s6 = workers.get(pid6).procSpec;
   check('ss exclusion is cached (hit resolving null)', s6.module === null && s6.image !== null);
   st = kernel.moduleCacheStats();
-  check('ss stats: one miss, one hit', st.misses === 2 && st.hits === 2 && st.entries === 2,
-    JSON.stringify(st));
+  check('ss pair adds one miss then one cached-null hit',
+    st.misses === 4 && st.hits === 3 && st.entries === 3, JSON.stringify(st));
 
   // Engine-rejected bytes: spawn still ships them (the worker owns the error).
   const pid7 = await kernel.service({ path: '/bin/bad', argv: ['bad'] });
@@ -235,14 +253,53 @@ async function part2() {
     st.entries === 2 && st.misses === 2 && st.hits === 1, JSON.stringify(st));
 }
 
+// ---- part 3: the #188 acceptance loop in the real OS — cc -o a.out &&
+// ./a.out, edit, recompile, rerun. The rebuilt binary MUST show the new
+// behaviour: now that rw binaries ride the cache, a validation bug here
+// would surface as the stale first-generation output after the rebuild. The
+// first binary also runs twice, so the warm-hit path is exercised on the
+// real spawn chain before the rewrite.
+//
+// "gen-one" and "gen-two" are the same length ON PURPOSE: the two builds'
+// wasm images can come out byte-count-identical, so the validated key's
+// size term is degenerate here and the rewrite is caught by the mtime term
+// alone — the sharpest form of the guard (compiles take well over the
+// store's ms timestamp resolution).
+const { driveBoot } = require('./lib/drive.js');
+function part3() {
+  console.log('-- part 3: in-OS recompile (cc -o; run; edit; recompile; rerun) --');
+  const r = driveBoot([
+    'cd /root',
+    "cat > t.c <<'EOF'",
+    '#include <stdio.h>',
+    'int main(void) { printf("gen-one\\n"); return 0; }',
+    'EOF',
+    'cc -o t t.c && ./t',
+    './t',
+    "cat > t.c <<'EOF'",
+    '#include <stdio.h>',
+    'int main(void) { printf("gen-two\\n"); return 0; }',
+    'EOF',
+    'cc -o t t.c && ./t',
+  ]);
+  const out = String(r.stdout || '');
+  const i1 = out.indexOf('gen-one');
+  const i2 = i1 < 0 ? -1 : out.indexOf('gen-one', i1 + 1);
+  const i3 = out.indexOf('gen-two');
+  check('first build runs, cold then warm', i1 >= 0 && i2 > i1, JSON.stringify(out));
+  check('rebuilt binary shows the NEW behaviour', i3 > i2, JSON.stringify(out));
+  check('no stale gen-one after the rebuild', i3 >= 0 && out.indexOf('gen-one', i3) === -1);
+}
+
 const watchdog = setTimeout(() => {
-  console.error('TIMEOUT — module-cache test did not finish in 120s');
+  console.error('TIMEOUT — module-cache test did not finish in 240s');
   process.exit(1);
-}, 120000);
+}, 240000);
 
 (async () => {
   await part1();
   await part2();
+  part3();
   clearTimeout(watchdog);
   console.log(failures ? '\nmodule cache: FAIL (' + failures + ')' : '\nmodule cache: PASS');
   process.exit(failures ? 1 : 0);

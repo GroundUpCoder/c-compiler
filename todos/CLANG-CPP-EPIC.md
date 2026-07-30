@@ -179,18 +179,16 @@ Unix `.inc`s against the libc that actually exists: `realpath`, `getcwd`,
 - **Command lines**: the final link names 2278 objects. LLVM tools support
   `@response-file` natively — use it everywhere; do not test gucOS's argv
   limits for sport.
-- **The spawn/module-cache trap (gucOS venue)**: kernel spawn caches compiled
-  `WebAssembly.Module`s **only for read-only-volume binaries** (fs
-  `immutableKey`, todos/0037 in this repo). A gucman-installed toolchain lands
-  under `/opt/<name>` on the **rw** root volume → no cache → a ~100 MB module
-  would be re-compiled by the engine **per spawn** — catastrophic for a
-  2278-invocation build. Resolutions (design decision for M5, pick one):
-  (a) batch mode — one clang invocation compiles many TUs (`clang -c a.cpp
-  b.cpp …` already works; amortizes spawn to ~dozens), (b) extend the kernel
-  module cache with a content-hash key for large rw binaries, (c) ship the
-  toolchain via the **overlay** channel (baked `/usr` = RO = cached) for the
-  self-host build specifically. (a) is free and lands first; (b) is the clean
-  general fix and should be filed as its own kernel item.
+- **The spawn/module-cache trap (gucOS venue) — RESOLVED by #188
+  (2026-07-30)**: kernel spawn used to cache compiled `WebAssembly.Module`s
+  only for read-only-volume binaries, so a gucman-installed toolchain under
+  `/opt/<name>` on the **rw** root volume re-compiled its ~100 MB module
+  **per spawn** — catastrophic for a 2278-invocation build. #188 landed the
+  clean general fix (resolution (b) of the old menu): the fs `moduleKey`
+  gives rw-volume binaries a **validated** cache key (ino+size+mtime read
+  through the store), so `/opt` toolchains ride the same one-compile cache
+  as baked binaries. Batch mode (`clang -c a.cpp b.cpp …`, resolution (a))
+  remains worth having for spawn-count reasons alone.
 
 ### 2.5 The toolchain-asset story (sources on the OS fs)
 
