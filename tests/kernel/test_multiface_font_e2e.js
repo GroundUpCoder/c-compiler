@@ -12,6 +12,10 @@
 //     name mapper routes known faces, and /etc/fonts/NAME.ttf overrides
 //     the baked file per face (which also proves the bold FILE is
 //     consulted, not an embolden of the upright).
+//   - synthetic-bold leg (arm 1 of the @master ruling): this test's OWN
+//     blob copy is doctored host-side (bold file unlinked, re-sealed) and
+//     a second boot proves the selection logic SYNTHESIZES — bold ink,
+//     fingerprint distinct from both upright and the real file.
 //   - windowed legs: a ramp window per face spec, `wmctl shot` each —
 //     shots land as PNGs in build/test-kernel/fontramp/ (the committed
 //     evidence set is copied from there), asserted inked and pairwise
@@ -182,6 +186,73 @@ function probeSession() {
   return P;
 }
 
+/* ---- synthetic-bold session (arm 1 of the @master ruling) -----------
+ * The inverse of the /etc-override leg: prove gdi32's SELECTION LOGIC
+ * takes the SYNTHESIZE branch when the bold file is absent. "Every baked
+ * family carries a real bold" is a property of the FIXTURE, not the
+ * system — so invert the fixture. /usr is EROFS in-OS by design, so the
+ * inversion happens at the layer that owns the blob: this test's own
+ * per-image copy of the sealed system image is doctored HOST-side
+ * (unlink the bold file, re-seal — runtime mounts don't verify the seal,
+ * but the register must stay honest offline), then a second boot probes.
+ * Baselines come from boot 1 of the SAME image, so every comparison is
+ * within-fixture. */
+async function synthBoldSession() {
+  const { image: img2 } = freshImage('os-font-synb-');
+  const r1 = driveBoot([
+    'echo ==p:upright', 'fontramp probe sans',
+    'echo ==p:realbold', 'fontramp probe sans bold', ''],
+    { image: img2, timeout: 240000 });
+  const P1 = parseProbes(r1.stdout);
+  if (!P1.upright || !P1.realbold || !P1.upright.hash) {
+    check('synth-bold baselines probed', false, r1.stdout.slice(-400));
+    return;
+  }
+
+  const HOST = require(path.join(ROOT, 'host.js'));
+  const COMMON = require(path.join(ROOT, 'os/os-common.js'));
+  const BLOCK_FS = HOST.BLOCK_FS;
+  const store = new COMMON.NodeFileStore(fs, img2, false);
+  const vol = BLOCK_FS.createV4(store, { noDevNodes: true });
+  const un = vol.unlink('/share/fonts/sans_bold.ttf');   // blob paths are /usr-stripped
+  check('doctor: bold file unlinked from the blob copy', un === 0, 'unlink=' + un);
+  await BLOCK_FS.sealVolume(store);
+  const sealOk = await BLOCK_FS.verifySeal(store);
+  store.flush();
+  check('doctor: blob re-sealed intact', sealOk === true, String(sealOk));
+
+  const r2 = driveBoot([
+    'test -e /usr/share/fonts/sans_bold.ttf || echo BOLD-FILE-ABSENT',
+    'echo ==p:synbold', 'fontramp probe sans bold', ''],
+    { image: img2, timeout: 240000 });
+  check('inverted fixture took (bold file absent in-OS)',
+    r2.stdout.includes('BOLD-FILE-ABSENT'), r2.stdout.slice(-300));
+  const P2 = parseProbes(r2.stdout);
+  if (!P2.synbold || !P2.synbold.hash) {
+    check('synth-bold probe produced output', false, r2.stdout.slice(-400));
+    return;
+  }
+  /* The ruling's wording: with the bold file unavailable, a sans-bold
+   * probe still renders BOLD (more ink than upright) AND its fingerprint
+   * differs from the real-file baseline — the branch that ran was
+   * synthesize, not fail and not silently-return-upright. */
+  check('synth bold reports weight 700', P2.synbold.weight === 700,
+    P2.synbold.weight);
+  check('synth bold renders BOLD (more ink than upright)',
+    P2.synbold.ink > P1.upright.ink,
+    `ink ${P2.synbold.ink} vs upright ${P1.upright.ink}`);
+  check('synth bold is not silently-upright (render differs)',
+    P2.synbold.hash !== P1.upright.hash, P2.synbold.hash);
+  check('synth bold is not the real file (fingerprint differs from baked bold)',
+    P2.synbold.hash !== P1.realbold.hash, P2.synbold.hash);
+  /* Embolden preserves the upright file's metrics (it IS the upright
+   * outline, thickened) — the real bold file's metrics need not match. */
+  check('synth bold keeps the upright face metrics (asc/desc/maxw)',
+    P2.synbold.asc === P1.upright.asc && P2.synbold.desc === P1.upright.desc &&
+    P2.synbold.maxw === P1.upright.maxw,
+    JSON.stringify([P2.synbold.asc, P2.synbold.desc, P2.synbold.maxw]));
+}
+
 /* ---- windowed session (the fontramp evidence shots) ---------------- */
 
 const SHOTS = [
@@ -253,13 +324,17 @@ function extractSession() {
   console.log('  (evidence PNGs in build/test-kernel/fontramp/)');
 }
 
-console.log('C1 multi-face CreateFont e2e (#281)');
-console.log('-- probe session --');
-probeSession();
-console.log('-- windowed session --');
-windowSession();
-console.log('-- extract session --');
-extractSession();
+(async () => {
+  console.log('C1 multi-face CreateFont e2e (#281)');
+  console.log('-- probe session --');
+  probeSession();
+  console.log('-- synthetic-bold session (inverted fixture) --');
+  await synthBoldSession();
+  console.log('-- windowed session --');
+  windowSession();
+  console.log('-- extract session --');
+  extractSession();
 
-console.log(failures ? `FAILED (${failures})` : 'PASS');
-process.exit(failures ? 1 : 0);
+  console.log(failures ? `FAILED (${failures})` : 'PASS');
+  process.exit(failures ? 1 : 0);
+})();

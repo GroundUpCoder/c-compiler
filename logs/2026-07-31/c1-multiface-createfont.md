@@ -57,7 +57,7 @@ faces (os/image.json) are now reachable through the veneer, retiring the
 
 ## Test (tests/kernel/test_multiface_font_e2e.js, registered in the kernel suite)
 
-57 checks, all relationship-based (no absolute pixel constants):
+65 checks, all relationship-based (no absolute pixel constants):
 
 - **No-flag-day**: the NULL-face probe output is BYTE-IDENTICAL to the
   mono probe (metrics AND render hash) — plus the existing gdi32 e2e's
@@ -69,6 +69,11 @@ faces (os/image.json) are now reachable through the veneer, retiring the
 - **The-file-not-embolden proof**: `cp serif.ttf /etc/fonts/sans_bold.ttf`
   makes a sans-bold probe render serif's exact hash (the per-face /etc
   override reaches the variant), `rm` restores the baked hash.
+- **Synthetic-bold, arm 1 (inverted fixture)**: the test's own blob copy
+  gets `sans_bold.ttf` unlinked + re-sealed host-side; the next boot's
+  sans-bold probe reports weight 700, inks heavier than upright, and
+  fingerprints differently from BOTH upright and the real-file baseline —
+  the selection logic's synthesize branch, executed and discriminated.
 - Name-mapper legs (Courier New/Lucida Console → mono, MS Shell Dlg →
   sans, Times New Roman → serif, Comic Sans MS → sans by keyword, unknown
   → mono), bold ink-weight legs, drawn-rule legs, 10 windowed ramp shots
@@ -82,12 +87,21 @@ baked faces + the two synthetic italics).
 - ChooseFontW keeps its single "mono" row: expanding the list is a
   dialog-visible change in the ports → rides C2 (#282). Register entry
   L65.
-- Synthetic-BOLD's degrade ladder has no e2e trigger on a stock image
-  (every baked family carries a real bold) — the italic branch is fully
-  e2e'd; embolden mechanics stay pinned by ksvc's daily use of the same
-  `fc_render_face` seam. Coverage boundary, not a cut.
+- Synthetic-BOLD coverage: the initial position ("no e2e trigger on a
+  stock image — coverage boundary") was OVERTURNED by @master's ruling:
+  "every baked family carries a real bold" is a property of the FIXTURE,
+  not the system, so the fixture gets inverted instead. Arm 1 landed in
+  `test_multiface_font_e2e.js` (`synthBoldSession`): the test's own blob
+  copy is doctored host-side (`sans_bold.ttf` unlinked, re-sealed — /usr
+  is EROFS in-OS by design, so the inversion happens at the layer that
+  owns the blob) and a second boot proves gdi32's selection logic takes
+  the SYNTHESIZE branch: weight 700 reported, measurably more ink than
+  upright, render fingerprint distinct from BOTH the upright and the
+  real-file baseline, upright face metrics preserved (the embolden
+  signature). Arm 2 (real-file-preferred + /etc override) was already the
+  existing `/etc/fonts/sans_bold.ttf` override leg.
 - GetObject on an HFONT still returns 0 (no LOGFONT read-back; nothing in
-  the port corpus demands it).
+  the port corpus demands it) — filed as **#291** (P2, light).
 - Strikeout position is arithmetic (0.3 em), not OS/2-table-derived — the
   vendored freetype build doesn't expose FT_Get_Sfnt_Table through our
   include set, and the classic GDI position is what apps expect visually.
