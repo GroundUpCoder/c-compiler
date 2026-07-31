@@ -802,6 +802,17 @@ static int selftest(void) {
              cr.right == 80 - 4 && cr.bottom == 24 - 4);
     st_check("GWL_EXSTYLE reads the bit back",
              (GetWindowLongPtr(ce, GWL_EXSTYLE) & WS_EX_CLIENTEDGE) != 0);
+    /* the ring really DRAWS (BeginPaint's NC pass): sample the child's
+     * window-rect corner from the PARENT's DC — the child's own DC cannot
+     * reach its ring by construction, the parent's sees it. Outer
+     * top-left px = BTNSHADOW, inner = 3DDKSHADOW (EDGE_SUNKEN). */
+    SendMessage(ce, WM_PAINT, 0, 0);
+    HDC pdc = GetDC(top);
+    st_check("sunken ring outer px drawn (BTNSHADOW at the corner)",
+             GetPixel(pdc, 120, 180) == GetSysColor(COLOR_BTNSHADOW));
+    st_check("sunken ring inner px drawn (3DDKSHADOW inside it)",
+             GetPixel(pdc, 121, 181) == GetSysColor(COLOR_3DDKSHADOW));
+    ReleaseDC(top, pdc);
     HWND pe = CreateWindowEx(0, "EDIT", "", WS_CHILD | WS_VISIBLE,
                              210, 180, 80, 24, top, (HMENU)914, NULL, NULL);
     GetClientRect(pe, &cr);
