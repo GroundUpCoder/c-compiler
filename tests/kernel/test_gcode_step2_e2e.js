@@ -43,6 +43,9 @@ fs.writeFileSync(scriptPath, JSON.stringify([
     usage: { input_tokens: 21, output_tokens: 5, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } },
   { kind: 'text', text: 'Resumed reply.',
     usage: { input_tokens: 31, output_tokens: 4, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } },
+  // #306: a stream that starts (one delta) and never ends — the SIGINT leg
+  // must abort it mid-flight; without the xferinfo path this run HANGS.
+  { kind: 'stall', text: 'Thinking...' },
 ]));
 
 (async () => {
@@ -83,6 +86,16 @@ fs.writeFileSync(scriptPath, JSON.stringify([
       'echo ==t3',
       `${G} --resume ${SESS}/*.jsonl -p "once more" 2>&1`,
       'echo rc3=$?',
+      // ---- #306: Ctrl+C (SIGINT) aborts an in-flight response ----
+      'echo ==t4',
+      `${G} -p "interrupt me" >/tmp/g4.out 2>/tmp/g4.err &`,
+      'G4=$!',
+      'for i in $(seq 1 200); do grep -q Thinking /tmp/g4.out 2>/dev/null && break; sleep 0.05; done',  // stream mid-flight: the delta reached stdout (bounded poll, 0155)
+      'kill -INT $G4',
+      'wait $G4',
+      'echo irc=$?',
+      'cat /tmp/g4.out',
+      'cat /tmp/g4.err',
       'echo ==end',
     ], { image, timeout: 300000 });
     const out = s.stdout;
@@ -127,11 +140,22 @@ fs.writeFileSync(scriptPath, JSON.stringify([
     check('t3: session usage keeps accumulating',
       t3.includes('session usage: input=63 output=16 cache-create=2 cache-read=3'), JSON.stringify(t3));
     check('t3: exit 0', t3.includes('rc3=0'), JSON.stringify(t3));
+
+    // ---- run 4 (#306): SIGINT aborts the in-flight stalled stream ----
+    // The stream never ends server-side, so this leg COMPLETING at all is
+    // the early-close proof — without the xferinfo abort it hangs into the
+    // driveBoot timeout.
+    const t4 = section(out, 't4');
+    check('t4: stream was mid-flight when killed (delta reached stdout)',
+      t4.includes('Thinking...'), JSON.stringify(t4));
+    check('t4: SIGINT surfaced as "gcode: interrupted", not a transport error',
+      t4.includes('gcode: interrupted') && !t4.includes('transport error'), JSON.stringify(t4));
+    check('t4: interrupted run exits 0', t4.includes('irc=0'), JSON.stringify(t4));
     check('session completed', out.includes('==end'), out.slice(-300));
 
     // ---- server side: the replayed history really reached the API ----
     const bodies = fs.readFileSync(bodiesPath, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-    check('3 requests reached the server', bodies.length === 3, String(bodies.length));
+    check('4 requests reached the server', bodies.length === 4, String(bodies.length));
     const flat = (b) => JSON.stringify(b.messages);
     check('request 2 replays turn 1 (user + assistant)',
       bodies[1].messages.length === 3 && flat(bodies[1]).includes('say hi') && flat(bodies[1]).includes('First reply.'),

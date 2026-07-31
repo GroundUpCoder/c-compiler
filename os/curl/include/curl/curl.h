@@ -16,9 +16,9 @@
  *   - Header callback lines are synthesized from the transport's flattened
  *     header blob: casing and order are whatever fetch yields, and a
  *     synthetic "HTTP/1.1 NNN \r\n" status line is prepended.
- *   - TIMEOUT(_MS)/CONNECTTIMEOUT(_MS) ride setitimer(ITIMER_REAL)+SIGALRM
- *     (todos/0044); the veneer installs its own SIGALRM handler (real
- *     libcurl without NOSIGNAL does the same).
+ *   - CONNECTTIMEOUT(_MS) rides the kernel HEADERS deadline; TIMEOUT(_MS)
+ *     is enforced on the veneer's wall clock through __wait's timeout at
+ *     every park (todos/0417 — the old SIGALRM apparatus is gone).
  *   - TLS is the platform's: SSL_VERIFYPEER/VERIFYHOST accepted, ignored.
  *   - ACCEPT_ENCODING accepted, ignored (fetch decompresses transparently).
  */
@@ -72,6 +72,7 @@ typedef enum {
 
   CURLOPT_WRITEDATA = 10001,
   CURLOPT_URL = 10002,
+  CURLOPT_PROGRESSDATA = 10057,   /* upstream: XFERINFODATA aliases this */
   CURLOPT_READDATA = 10009,
   CURLOPT_ERRORBUFFER = 10010,
   CURLOPT_POSTFIELDS = 10015,
@@ -84,8 +85,10 @@ typedef enum {
   CURLOPT_WRITEFUNCTION = 20011,
   CURLOPT_READFUNCTION = 20012,
   CURLOPT_HEADERFUNCTION = 20079,
-  CURLOPT_XFERINFOFUNCTION = 20219,  /* accepted for setopt classification;
-                                        unsupported -> CURLE_UNKNOWN_OPTION */
+  CURLOPT_XFERINFOFUNCTION = 20219,  /* called at every transfer wait
+                                        boundary when NOPROGRESS is 0;
+                                        non-zero return aborts the transfer
+                                        (CURLE_ABORTED_BY_CALLBACK) */
   CURLOPT_LASTENTRY
 } CURLoption;
 
@@ -94,6 +97,7 @@ typedef enum {
 #define CURLOPT_INFILE      CURLOPT_READDATA
 #define CURLOPT_WRITEHEADER CURLOPT_HEADERDATA
 #define CURLOPT_ENCODING    CURLOPT_ACCEPT_ENCODING
+#define CURLOPT_XFERINFODATA CURLOPT_PROGRESSDATA
 
 /* Upstream type nibbles: 0x100000 string, 0x200000 long, 0x300000 double,
    0x600000 curl_off_t. */
@@ -119,6 +123,8 @@ struct curl_slist {
 
 typedef size_t (*curl_write_callback)(char *ptr, size_t size, size_t nmemb, void *userdata);
 typedef size_t (*curl_read_callback)(char *buffer, size_t size, size_t nitems, void *userdata);
+typedef int (*curl_xferinfo_callback)(void *clientp, curl_off_t dltotal, curl_off_t dlnow,
+                                      curl_off_t ultotal, curl_off_t ulnow);
 
 CURLcode curl_global_init(long flags);
 void curl_global_cleanup(void);

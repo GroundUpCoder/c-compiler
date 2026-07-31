@@ -78,6 +78,16 @@ static size_t on_read(char *buf, size_t sz, size_t nm, void *ud) {
     return n;
 }
 
+/* xferinfo abort (#306): returns continue until body bytes have arrived,
+   then aborts — the mid-response interrupt path (gcode's Ctrl+C shape) */
+static curl_off_t g_xfer_seen;
+static int on_xfer(void *ud, curl_off_t dltotal, curl_off_t dlnow,
+                   curl_off_t ultotal, curl_off_t ulnow) {
+    (void)ud; (void)dltotal; (void)ultotal; (void)ulnow;
+    if (dlnow > g_xfer_seen) g_xfer_seen = dlnow;
+    return g_xfer_seen > 0 ? 1 : 0;
+}
+
 static void report(const char *name, CURL *h, CURLcode rc) {
     printf("== %s ==\n", name);
     printf("rc=%d\n", (int)rc);
@@ -188,7 +198,23 @@ int main(int argc, char **argv) {
     printf("rc=%d\n", (int)rc);
     curl_easy_cleanup(h);
 
-    /* 7: escape/unescape (pure — identical both sides) */
+    /* 7: xferinfo abort on an in-flight response (#306) — the callback
+       lets the transfer start, then aborts once body bytes have arrived.
+       Both sides must abort the stalled stream with rc 42; TIMEOUT_MS is
+       a backstop so a regression fails fast as rc=28 instead of hanging. */
+    snprintf(url, sizeof url, "%s/stall", base);
+    h = fresh(url);
+    g_xfer_seen = 0;
+    curl_easy_setopt(h, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(h, CURLOPT_XFERINFOFUNCTION, on_xfer);
+    curl_easy_setopt(h, CURLOPT_XFERINFODATA, (void *)0);
+    curl_easy_setopt(h, CURLOPT_TIMEOUT_MS, 15000L);
+    rc = curl_easy_perform(h);
+    printf("== abortcb ==\n");
+    printf("rc=%d midstream=%d\n", (int)rc, g_xfer_seen > 0 ? 1 : 0);
+    curl_easy_cleanup(h);
+
+    /* 8: escape/unescape (pure — identical both sides) */
     {
         h = curl_easy_init();
         char *esc = curl_easy_escape(h, "a b&c/d~e_f", 0);

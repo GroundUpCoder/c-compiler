@@ -12,6 +12,8 @@
 //   { "kind": "text", "text": "..." }
 //   { "kind": "tool", "preface": "...", "id": "toolu_x", "name": "bash",
 //     "input": {...} }   (input json split in two partials on the wire)
+//   { "kind": "stall", "text": "..." }  (message_start + one text delta,
+//     then the stream NEVER ends — the #306 interrupt e2e aborts it)
 // Either kind takes an optional "usage": {input_tokens, output_tokens,
 // cache_creation_input_tokens, cache_read_input_tokens} — input+cache ride
 // message_start, the final output_tokens rides message_delta (the real API
@@ -62,6 +64,12 @@ const server = http.createServer((req, res) => {
     const s = scripts[n++];
     if (!s) { res.writeHead(500); res.end('script exhausted'); return; }
     res.writeHead(200, { 'content-type': 'text/event-stream' });
+    if (s.kind === 'stall') {
+      res.write(sse('message_start', { message: { id: 'msg', role: 'assistant', content: [] } })
+        + sse('content_block_start', { index: 0, content_block: { type: 'text', text: '' } })
+        + sse('content_block_delta', { index: 0, delta: { type: 'text_delta', text: s.text } }));
+      return;                        // never ends — the client must abort
+    }
     res.end(render(s));
   });
 });

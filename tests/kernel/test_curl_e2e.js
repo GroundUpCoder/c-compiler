@@ -13,7 +13,8 @@
 // Cases: streamed 200 GET, POST (POSTFIELDS + buffered READFUNCTION), 404
 // (perform OK + RESPONSE_CODE 404), connection refused (CURLE_COULDNT_
 // CONNECT), total-timeout abort on a stalled body (CURLE_OPERATION_TIMEDOUT),
-// escape/unescape.
+// xferinfo-callback abort of an in-flight response (#306,
+// CURLE_ABORTED_BY_CALLBACK), escape/unescape.
 //
 // CLI leg (todos/0182): /bin/curl (os/curl/curl-cli.c, seeded via
 // os/curl/cli.json) driven through a real OS boot — os/boot.js + hush —
@@ -173,6 +174,7 @@ function normalize(out) {
   has('refused', 'rc=7');            // CURLE_COULDNT_CONNECT
   has('refused', 'errbuf_set=1');
   has('timeout', 'rc=28');           // CURLE_OPERATION_TIMEDOUT
+  has('abortcb', 'rc=42 midstream=1'); // CURLE_ABORTED_BY_CALLBACK mid-response (#306)
   has('escape', 'esc=a%20b%26c%2Fd~e_f');
   has('escape', 'unesc=a b&c/d len=7');
   check('reached done', lines.includes('done'), JSON.stringify(lines.slice(-3)));

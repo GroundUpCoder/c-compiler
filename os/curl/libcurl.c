@@ -29,9 +29,14 @@
  *   - READFUNCTION is buffered: the whole request body is pulled from the
  *     callback up front, then staged (no upload streaming — descoped).
  *   - SSL_VERIFYPEER/VERIFYHOST/ACCEPT_ENCODING accepted, ignored (platform
- *     TLS, fetch decompression). NOSIGNAL/NOPROGRESS accepted no-ops.
+ *     TLS, fetch decompression). NOSIGNAL accepted no-op.
+ *   - XFERINFOFUNCTION/XFERINFODATA supported, gated on NOPROGRESS 0 (the
+ *     curl contract): the callback runs at every transfer wait boundary —
+ *     including an EINTR wake, which is how a signal handler's flag becomes
+ *     visible mid-transfer — and a non-zero return aborts the transfer with
+ *     CURLE_ABORTED_BY_CALLBACK (Ctrl+C on an in-flight response, #306).
  *   - descoped: multi interface, cookies, proxies, non-HTTP protocols,
- *     PROGRESSFUNCTION.
+ *     PROGRESSFUNCTION (the old double-based form; use XFERINFOFUNCTION).
  * Unknown options fail loud: CURLE_UNKNOWN_OPTION (+ a stderr line under
  * VERBOSE) — the kernel32 stub precedent.
  */
@@ -78,6 +83,9 @@ typedef struct easy {
   void *write_data, *header_data;
   curl_read_callback read_cb;
   void *read_data;
+  curl_xferinfo_callback xferinfo_cb;
+  void *xferinfo_data;
+  int noprogress;                             /* curl default 1: callback off */
   char *errorbuffer;                          /* caller-owned, CURL_ERROR_SIZE */
   /* results of the last perform */
   long response_code;
@@ -90,6 +98,7 @@ static void easy_defaults(easy *h) {
   memset(h, 0, sizeof *h);
   h->postfieldsize = -1;
   h->content_length = -1;
+  h->noprogress = 1;
 }
 
 static void easy_free_owned(easy *h) {
@@ -140,6 +149,7 @@ CURLcode curl_easy_setopt(CURL *handle, CURLoption option, ...) {
       case CURLOPT_WRITEFUNCTION:  h->write_cb = (curl_write_callback)fp; break;
       case CURLOPT_READFUNCTION:   h->read_cb = (curl_read_callback)fp; break;
       case CURLOPT_HEADERFUNCTION: h->header_cb = (curl_write_callback)fp; break;
+      case CURLOPT_XFERINFOFUNCTION: h->xferinfo_cb = (curl_xferinfo_callback)fp; break;
       default: rc = CURLE_UNKNOWN_OPTION; break;
     }
   } else if (option >= 10000) {                     /* object pointers */
@@ -153,6 +163,7 @@ CURLcode curl_easy_setopt(CURL *handle, CURLoption option, ...) {
       case CURLOPT_WRITEDATA:     h->write_data = p; break;
       case CURLOPT_HEADERDATA:    h->header_data = p; break;
       case CURLOPT_READDATA:      h->read_data = p; break;
+      case CURLOPT_PROGRESSDATA:  h->xferinfo_data = p; break;  /* = XFERINFODATA */
       case CURLOPT_ERRORBUFFER:   h->errorbuffer = p; break;
       case CURLOPT_ACCEPT_ENCODING: break;          /* fetch decompresses */
       default: rc = CURLE_UNKNOWN_OPTION; break;
@@ -169,10 +180,10 @@ CURLcode curl_easy_setopt(CURL *handle, CURLoption option, ...) {
       case CURLOPT_TIMEOUT_MS:    h->timeout_ms = v; break;
       case CURLOPT_CONNECTTIMEOUT:    h->connecttimeout_ms = v * 1000; break;
       case CURLOPT_CONNECTTIMEOUT_MS: h->connecttimeout_ms = v; break;
+      case CURLOPT_NOPROGRESS:    h->noprogress = (v != 0); break;
       case CURLOPT_FOLLOWLOCATION:    /* transport follows silently */
       case CURLOPT_MAXREDIRS:
       case CURLOPT_NOSIGNAL:
-      case CURLOPT_NOPROGRESS:
       case CURLOPT_SSL_VERIFYPEER:    /* platform TLS — not configurable */
       case CURLOPT_SSL_VERIFYHOST:
         break;
@@ -208,6 +219,18 @@ static int wait_step(int fd, long long total_deadline) {
   if (why == 0) return -1;                    /* the total deadline passed */
   if (why == -2) return -2;                   /* no unified WAIT here */
   return 0;                                   /* readable or EINTR: retry */
+}
+
+/* Progress gate (NOPROGRESS 0 + a registered XFERINFOFUNCTION): real curl
+   drives the callback from its transfer loop; this veneer's loop parks in
+   wait_step, so every wait boundary — including an EINTR wake, which is how
+   a signal handler's flag (gcode's g_interrupted) becomes visible mid-
+   transfer — asks the callback whether to continue. Non-zero return means
+   abort (#306). */
+static int check_progress(easy *h) {
+  if (h->noprogress || !h->xferinfo_cb) return 0;
+  curl_off_t dltotal = h->content_length > 0 ? h->content_length : 0;
+  return h->xferinfo_cb(h->xferinfo_data, dltotal, h->size_download, 0, 0) != 0;
 }
 
 /* ---- error helper ------------------------------------------------------- */
@@ -334,6 +357,8 @@ CURLcode curl_easy_perform(CURL *handle) {
     hl = __http_status(fd, &status, g_hdrblob, HDR_BLOB_CAP);
     if (hl >= 0) break;
     if (errno == EAGAIN || errno == EINTR) {
+      if (check_progress(h)) { close(fd);
+        return fail(h, CURLE_ABORTED_BY_CALLBACK, "aborted by progress callback"); }
       int ws = wait_step(fd, total_deadline);
       if (ws == 0) continue;
       close(fd);
@@ -396,6 +421,7 @@ CURLcode curl_easy_perform(CURL *handle) {
     }
     if (n == 0) break;                             /* clean EOF */
     if (errno == EAGAIN || errno == EINTR) {
+      if (check_progress(h)) { rc = fail(h, CURLE_ABORTED_BY_CALLBACK, "aborted by progress callback"); break; }
       int ws = wait_step(fd, total_deadline);
       if (ws == 0) continue;
       rc = ws == -1 ? fail(h, CURLE_OPERATION_TIMEDOUT, "timed out reading body")
@@ -450,6 +476,7 @@ const char *curl_easy_strerror(CURLcode code) {
     case CURLE_COULDNT_RESOLVE_HOST: return "Couldn't resolve host name";
     case CURLE_COULDNT_CONNECT:      return "Couldn't connect to server";
     case CURLE_HTTP_RETURNED_ERROR:  return "HTTP response code said error";
+    case CURLE_ABORTED_BY_CALLBACK:  return "Operation was aborted by an application callback";
     case CURLE_WRITE_ERROR:          return "Failed writing received data to disk/application";
     case CURLE_READ_ERROR:           return "Failed to open/read local data from file/application";
     case CURLE_OUT_OF_MEMORY:        return "Out of memory";
