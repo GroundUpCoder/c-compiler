@@ -195,6 +195,11 @@ const RULES = [
   // The offline baker: every kernel e2e image and every browser boot comes
   // out of it (directly, or through the prebaked fixture).
   [/^tools\/mkimage\.js$/, ['kernel', 'sweep'], 'bakes the system blob every e2e image and browser boot is built from'],
+  // The Tier 2.5 HTTP bridge (ticket #349): the localhost proxy the `net`
+  // cfgstore setting reroutes kernel HTTP through. Its wire contract with
+  // os-common's createNetFetch is private and version-locked, and
+  // test_netbridge_e2e.js drives both halves end to end.
+  [/^tools\/net-bridge\.js$/, ['kernel'], 'the Tier 2.5 HTTP bridge — test_netbridge_e2e.js drives the full reroute against it'],
 
   // ---- the rest of tools/ (todos/0333) ----
   //

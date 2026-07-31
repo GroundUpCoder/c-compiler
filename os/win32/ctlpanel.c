@@ -731,10 +731,12 @@ static void net_test(HWND h) {
     size_t n = strlen(c.url);
     while (n && c.url[n - 1] == '/') c.url[--n] = 0;
     snprintf(url, sizeof url, "%s/health", c.url);
-    SetWindowText(stat, "Testing...");
+    /* "Result:" is a STABLE PREFIX: agent needles prefix-match, so the
+     * e2e can wait on this STATIC across every outcome text. */
+    SetWindowText(stat, "Result: testing...");
     int fd = __http_open("GET", url, "", 0, 0, 3000, 3000);
     if (fd < 0) {
-        snprintf(msg, sizeof msg, "Open failed: %s", strerror(errno));
+        snprintf(msg, sizeof msg, "Result: open failed: %s", strerror(errno));
         SetWindowText(stat, msg);
         return;
     }
@@ -742,7 +744,7 @@ static void net_test(HWND h) {
     char hdr[512];
     for (int i = 0; i < 80; i++) {               /* ~4s cap at 50ms steps */
         if (__http_status(fd, &status, hdr, sizeof hdr) >= 0) {
-            snprintf(msg, sizeof msg, "Bridge answered: HTTP %d", status);
+            snprintf(msg, sizeof msg, "Result: bridge answered: HTTP %d", status);
             SetWindowText(stat, msg);
             close(fd);
             return;
@@ -750,7 +752,7 @@ static void net_test(HWND h) {
         if (errno != EAGAIN && errno != EINTR) break;
         usleep(50 * 1000);
     }
-    snprintf(msg, sizeof msg, "No answer: %s", strerror(errno));
+    snprintf(msg, sizeof msg, "Result: no answer: %s", strerror(errno));
     SetWindowText(stat, msg);
     close(fd);
 }
@@ -772,7 +774,7 @@ static LRESULT CALLBACK net_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                        20, 112, 124, 30, h, (HMENU)ID_NETAPP, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "Test Bridge", WS_CHILD | WS_VISIBLE,
                        152, 112, 132, 30, h, (HMENU)ID_NETTEST, NULL, NULL);
-        CreateWindowEx(0, "STATIC", "", WS_CHILD | WS_VISIBLE,
+        CreateWindowEx(0, "STATIC", "Result: (not tested)", WS_CHILD | WS_VISIBLE,
                        16, 164, 352, 28, h, (HMENU)ID_NETSTAT, NULL, NULL);
         /* The seam, stated honestly: the bridge is NOT part of this OS.
          * It is a program on the host machine, and in the browser deploy

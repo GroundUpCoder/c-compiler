@@ -143,6 +143,31 @@ const out = boot([
   'cat /root/.config/sounds',
   'echo ==cut',
   'wmctl click Test',   // plays SystemDefault (mixer asserts live in test_sounds_e2e); nothing here asserts it
+  // the Network applet (ticket #349, os/netcfg.h): the HTTP-bridge switch —
+  // checkbox and Apply URL delta-write the `net` store (the Sounds mute-key
+  // pattern). The kernel side of the live toggle AND the Test Bridge
+  // round-trip live in test_netbridge_e2e (Test needs a running bridge,
+  // which that test owns; no bridge runs in this boot).
+  'wmctl click Network',
+  'wmctl wait win "Network Properties" 6000',
+  'echo ==nettree',
+  'wmctl tree',
+  'echo ==cut',
+  'wmctl click "Enable HTTP bridge"',    // check -> bridge on
+  waitFileHas('/root/.config/net', 'bridge.on'),
+  'echo ==net1',
+  'cat /root/.config/net',
+  'echo ==cut',
+  'wmctl click "Apply URL"',             // default URL text is valid -> url key
+  waitFileHas('/root/.config/net', 'url.http'),
+  'wmctl click "Enable HTTP bridge"',    // uncheck -> bridge off
+  waitFileHas('/root/.config/net', 'bridge.off'),
+  'echo ==net2',
+  'cat /root/.config/net',
+  'echo ==cut',
+  'NSID=$(wmctl list | grep "Network Properties$" | sed "s/[^0-9].*//")',
+  'wmctl close $NSID',
+  'wmctl wait nowin "Network Properties" 6000',
   // the Default Programs applet (todos/0338 + todos/0130's picker leg): the
   // COMMAND half — which implementation a dispatched name runs. This image
   // is the FAT fixture, so micropython is folded and its `commands` claim
@@ -321,6 +346,21 @@ const dpg2 = section(out, 'dpg2');
 check('a shadowing /usr/local/bin/python raises the warning row',
   /text='Warning: \/usr\/local\/bin\/python shadows this setting[^']*'/.test(dpg2),
   (dpg2.match(/text='Warning[^']*'/) || ['(no warning row)'])[0]);
+
+// -- Network applet (ticket #349): the HTTP-bridge switch --
+const nettree = section(out, 'nettree');
+check('Network applet opens: checkbox, URL edit + buttons, honest run-it-yourself copy',
+  /class=CplNetwork [^\n]*text='Network Properties'/.test(nettree) &&
+  /text='Enable HTTP bridge'/.test(nettree) &&
+  /text='Apply URL'/.test(nettree) && /text='Test Bridge'/.test(nettree) &&
+  /text='http:\/\/127\.0\.0\.1:8199'/.test(nettree) &&
+  /node tools\/net-bridge\.js/.test(nettree), nettree.slice(0, 1200));
+check('checkbox check delta-writes bridge on to ~/.config/net',
+  /bridge[ \t]+on/.test(section(out, 'net1')), JSON.stringify(section(out, 'net1')));
+const net2 = section(out, 'net2');
+check('Apply URL writes the url key; uncheck flips bridge off (per-key deltas)',
+  /bridge[ \t]+off/.test(net2) && /url[ \t]+http:\/\/127\.0\.0\.1:8199/.test(net2),
+  JSON.stringify(net2));
 
 // -- hub close quits the whole panel --
 const list3 = section(out, 'list3');
