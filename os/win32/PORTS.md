@@ -22,6 +22,11 @@ host-only (tools/win32rc.js — an in-OS rc compiler is a follow-on).
 | winmine | links | 0 |
 | notepad | links | 0 |
 | calc | links | 0 |
+| fileman | links | 0 |
+| ctlpanel | links | 0 |
+| software | links | 0 |
+| fontramp | links | 0 |
+| filepick | links | 0 |
 
 ## gdidemo — links
 
@@ -51,9 +56,29 @@ Project: `vendor/notepad/bin.json` — ReactOS notepad — usable since 0048 (se
 
 Project: `vendor/calc/bin.json` — ReactOS calc — playable since 0048 (seeded as /bin/calc; owner-draw keypad, clipboard, popup menus)
 
+## fileman — links
+
+Project: `os/win32/fileman.json` — the file manager (0092 ops, 0123 watch, #317 scrollbar) — shipped app, added by #318 W0 (the report omitted 5 shipped apps)
+
+## ctlpanel — links
+
+Project: `os/win32/ctlpanel.json` — the control panel (Display/Sounds/Screen Saver/Default Programs applets) — shipped app, added by #318 W0
+
+## software — links
+
+Project: `os/win32/software.json` — the software center (#81 storefront over gucman) — shipped app, added by #318 W0
+
+## fontramp — links
+
+Project: `os/win32/fontramp.json` — the C1/#281 multi-face font acceptance app — shipped app, added by #318 W0
+
+## filepick — links
+
+Project: `os/win32/filepick.json` — the 0433 file-dialogue picker — shipped app, added by #318 W0
+
 ## Aggregate demand (the order of attack)
 
-0 distinct symbols across 7 targets.
+0 distinct symbols across 12 targets.
 
 | symbol | apps |
 |--------|------|

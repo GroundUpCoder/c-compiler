@@ -42,6 +42,36 @@
       "project": "vendor/calc/bin.json",
       "expect": "links",
       "notes": "ReactOS calc \u2014 playable since 0048 (seeded as /bin/calc; owner-draw keypad, clipboard, popup menus)"
+    },
+    {
+      "name": "fileman",
+      "project": "os/win32/fileman.json",
+      "expect": "links",
+      "notes": "the file manager (0092 ops, 0123 watch, #317 scrollbar) \u2014 shipped app, added by #318 W0 (the report omitted 5 shipped apps)"
+    },
+    {
+      "name": "ctlpanel",
+      "project": "os/win32/ctlpanel.json",
+      "expect": "links",
+      "notes": "the control panel (Display/Sounds/Screen Saver/Default Programs applets) \u2014 shipped app, added by #318 W0"
+    },
+    {
+      "name": "software",
+      "project": "os/win32/software.json",
+      "expect": "links",
+      "notes": "the software center (#81 storefront over gucman) \u2014 shipped app, added by #318 W0"
+    },
+    {
+      "name": "fontramp",
+      "project": "os/win32/fontramp.json",
+      "expect": "links",
+      "notes": "the C1/#281 multi-face font acceptance app \u2014 shipped app, added by #318 W0"
+    },
+    {
+      "name": "filepick",
+      "project": "os/win32/filepick.json",
+      "expect": "links",
+      "notes": "the 0433 file-dialogue picker \u2014 shipped app, added by #318 W0"
     }
   ]
 }
