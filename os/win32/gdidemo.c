@@ -61,11 +61,12 @@ static void draw_scene(HDC hdc) {
     FillRect(hdc, &hr, hatch);   /* OPAQUE default: gaps fill white */
 
     HPEN pen5 = CreatePen(PS_SOLID, 5, RGB(180, 30, 30));
-    SelectObject(hdc, (HGDIOBJ)pen5);
+    HGDIOBJ oldPen5 = SelectObject(hdc, (HGDIOBJ)pen5);
     MoveToEx(hdc, 300, 130, NULL);
     LineTo(hdc, 440, 230);
     MoveToEx(hdc, 440, 130, NULL);
     LineTo(hdc, 300, 230);
+    SelectObject(hdc, oldPen5);
 
     /* Row 3: text. */
     SetBkMode(hdc, TRANSPARENT);

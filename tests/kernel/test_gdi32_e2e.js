@@ -39,7 +39,9 @@ function sessionA() {
     'gdidemo selftest 2>/tmp/st.err',
     'echo SELFTEST-EXIT=$?',
     'cat /tmp/st.err',
-    'gdidemo &',
+    // windowed stderr to its OWN file (never /tmp/st.err — the selftest leg
+    // deliberately emits a win32: report and the #318 pin asserts it)
+    'gdidemo 2>/tmp/win.err &',
     // Boot barrier (todos/0154): wait for the window to be listed, then for a
     // presented frame (seq>=1) so the shot captures a painted scene, not a blank
     // surface — replaces the `sleep 4` guess at wasm boot + freetype + first paint.
@@ -49,6 +51,9 @@ function sessionA() {
     'SID=$(wmctl list | grep "GDI Demo$" | sed "s/[^0-9].*//")',
     'wmctl wait seq $SID 1 6000',
     'wmctl shot $SID /root/gdi1.ppm && echo shot1-ok',
+    'echo ==winerr-begin',
+    'cat /tmp/win.err',
+    'echo ==winerr-end',
     '',
   ].join('\n');
 
@@ -72,6 +77,13 @@ function sessionA() {
     !(row.split('\t')[5] || '').includes('R'), row);
   check('painted marker reached stdout', out.includes('gdidemo: painted'));
   check('first shot written', out.includes('shot1-ok'));
+
+  // #342: the windowed scene keeps 0211 leak discipline — its stderr is
+  // EMPTY (pen5 was deleted while selected: refused + leaked). Scoped to
+  // /tmp/win.err only; the selftest leg's win32: report is pinned above.
+  const winErr = ((out.split('==winerr-begin\n')[1] || '').split('==winerr-end')[0]).trim();
+  check('windowed gdidemo stderr is clean — zero win32 reports (#342)',
+    winErr === '', JSON.stringify(winErr));
 }
 
 /* ---- session A2: a SECOND boot paints the scene again for the determinism
