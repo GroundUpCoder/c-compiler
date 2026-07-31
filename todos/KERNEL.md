@@ -848,6 +848,15 @@ leak, so those are what's pinned:
 - **Needs both halves.** `fetch: null` at construction disables network
   entirely, and a no-fs kernel has no fd table for a transfer to live in —
   either way `HTTP_OPEN` → ENOSYS (standalone pages stay offline).
+- **The embedder's fetch may be a wrapper** (ticket #349, NETWORK.md
+  Tier 2.5: the OS embedders pass os-common's `createNetFetch`, which
+  reroutes through the localhost bridge when the `net` cfgstore setting
+  is on — OFF tail-calls the bound global fetch untouched). A rejecting
+  wrapper may pin a POSIX errno NAME on the rejection as a string
+  `err.errno` — `_httpStart` honours it (the bridge wrapper's
+  configured-but-unreachable ENETUNREACH; ruling in NETWORK.md Tier 2.5).
+  ENOSYS above stays the NO-CAPABILITY answer; Node system errors carry
+  numeric `.errno` and keep the documented EIO mapping.
 - **No policy in v1.** Any process may fetch any URL (the browser flavor is
   already CORS-constrained by the platform). The kernel choke point is
   where per-process policy would land later — a reason FOR brokering, not

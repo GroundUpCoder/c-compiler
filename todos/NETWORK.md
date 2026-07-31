@@ -2,11 +2,14 @@
 
 Status: designed 2026-07-09 (discussion log
 `logs/2026-07-09/roadmap-network-desktop.md`); queue items `0052`
-(loopback AF_INET), `0054` (relay transport), `0182` (/bin/curl CLI).
+(loopback AF_INET — live ticket **#3**), `0054` (relay transport — live
+ticket **#7**), `0182` (/bin/curl CLI).
 **Tier 2 is LANDED** (2026-07-13): the kernel HTTP transport is
 `todos/done/0172`, the curl easy veneer is `todos/done/0173` (which
 superseded the original `0053` item — closed 2026-07-15); only the
 `/bin/curl` tool remains (`0182`).
+**Tier 2.5 is LANDED** (2026-08-01, ticket #349 Stage 1): the
+off-by-default localhost HTTP bridge, below.
 
 ## Platform truth (don't re-litigate the constraint)
 
@@ -46,6 +49,62 @@ CLI did not fall out for free — it is `todos/0182`, done 2026-07-23:
 Asymmetry: in the browser this is **CORS-gated** (same-origin +
 CORS-permissive hosts only); headless Node fetch is unrestricted.
 Documented, not hidden.
+
+## Tier 2.5 — the localhost HTTP bridge (LANDED — ticket #349 Stage 1)
+
+Tier 2's browser asymmetry (CORS-gated fetch) lifted by an OPT-IN
+localhost proxy: `tools/net-bridge.js`, a single-file dependency-free
+Node process THE USER RUNS THEMSELVES. With the cfgstore `net` setting
+ON (`bridge on`, `url http://127.0.0.1:8199`; layers
+`~/.config/net` > `/etc/net` > `/usr/share/net`, nothing baked —
+**no store at all = off, byte-identical to a build without the
+feature**), the kernel embedder's fetch wrapper (os-common.js
+`createNetFetch`, wired identically in kernel-worker.js and boot.js so
+the two embedders never diverge) re-posts every transfer to the bridge,
+which performs the real request with the user's native network identity
+and streams the encapsulated response back. The Control Panel Network
+applet is the switch; the toggle is LIVE via `kernel.watchPath` on the
+store layers (the display-zoom pattern) — no reboot.
+
+**This is NOT Tier 4's relay.** `tools/net-relay.js` stays the RESERVED
+name for the unbuilt raw-TCP websockify relay below; the bridge speaks
+HTTP only — request in, response out, one hop, no socket OFDs, no
+shared wire format. The bridge rides the EXISTING Tier 2 transport
+(KERNEL.md "HTTP transport") entirely above the kernel: the kernel sees
+an ordinary fetch.
+
+Security posture (Stage 1, deliberate): strict `127.0.0.1` bind with no
+widen flag (a LAN-reachable bridge is an open proxy — that conversation
+is Tier 4's); Origin allowlist (no-Origin local clients allowed;
+browser origins must match localhost:any-port, the shipped deploy, or
+`--allow-origin`); CORS + Private Network Access preflight answers
+(the platform facts in Tier 4's list apply to the bridge too).
+
+**Errno ruling (settled here, 2026-08-01 — the two documents used to
+disagree and ticket #349's acceptance imported the wrong one).**
+KERNEL.md's `fetch: null` → **ENOSYS** is about CAPABILITY: this
+embedder has no HTTP at all (standalone pages stay offline) — that path
+is untouched and still answers ENOSYS. A bridge that is configured ON
+but not answering is a different condition: the capability exists, the
+TRANSPORT is unreachable — so the wrapper pins **ENETUNREACH** on the
+rejection (kernel.js honours a string `err.errno`; the C name/number
+101 landed with #349), consistent with this file's existing uses of
+ENETUNREACH for exactly that meaning (Tier 1's non-loopback refusal,
+Tier 4's absent-relay refusal). The failure is prompt (localhost
+connect refusal, bounded by the e2e at 3s), never a hang. Bridge-level
+policy refusal (403) = EACCES; a bridge-reported upstream failure
+(502) = EIO with the upstream's error text, matching direct-fetch
+connect-failure semantics.
+
+Stages NOT built (approved scope was Stage 1 only): Stage 1.5
+(redirect/upstream-header observation — the bridge follows redirects
+bridge-side like the kernel's `redirect:'follow'`), Stage 2 (raw TCP
+socket broker — that is ticket #7's relay), Stage 3 (UDP).
+
+Tests: `tests/kernel/test_netbridge_e2e.js` (the paired
+positive-control run: OFF/ON/OFF/ON-dead flipped live by one process,
+the bridge's request counter as the discriminator) + the ctlpanel e2e's
+Network-applet leg.
 
 ## Tier 3 — DNS via DoH (folds into the HTTP stack `done/0172`/`0173`, on demand)
 
