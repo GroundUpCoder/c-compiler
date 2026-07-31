@@ -168,6 +168,11 @@ const RULES = [
   // loader feed BOTH composites' label text — explicit so a future ^os/
   // rule split can't orphan it (same suites as ^os/ today).
   [/^os\/ksvc(\/|\.js$)/, ['kernel', 'sweep'], 'the kernel text service — chrome text in both composites'],
+  // The gcode CLI + its NATIVE oracle (#314): test_gcode_native.js in the
+  // kernel suite runs os/gcode/test/smoke.mjs (clang + real libcurl) with a
+  // check-count assertion. Same suites as ^os/ today — explicit so a future
+  // ^os/ rule split can't orphan the oracle (the ksvc precedent above).
+  [/^os\/gcode\//, ['kernel', 'sweep'], 'the gcode CLI — its native oracle rides the kernel suite (test_gcode_native.js)'],
   // os-common's listPackages filter is the base-purity choke point (CLANG-CPP-
   // EPIC II §7) — host holds that guardrail (rules accumulate, so this ADDS host
   // to the ^os/ kernel+sweep above).

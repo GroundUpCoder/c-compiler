@@ -349,4 +349,9 @@ thing this file exists to kill.
 - file: host.js
 - anchor: //    would collide — and the failure is SILENT stale code, not an
 
+### L68 — test_punes_e2e.js is the kernel suite's ONE allowlisted orphan: it still executes nowhere until #167 registers it (and root-causes the expected first red); the #314 registry guard makes the exclusion explicit rather than silent, but the coverage gap itself is unchanged
+- ticket: #167
+- file: tests/kernel/run.js
+- anchor: const EXCLUDED = [
+
 <!-- END ENTRIES -->

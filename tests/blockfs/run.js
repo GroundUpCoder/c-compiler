@@ -8,7 +8,7 @@
 // logs + checkpointed summary.json in build/test-blockfs/.
 const path = require('path');
 const os = require('os');
-const { runSuite, parseSuiteArgs, usage } = require('../lib/suite-runner.js');
+const { runSuite, parseSuiteArgs, usage, assertMemberRegistry } = require('../lib/suite-runner.js');
 
 // Cross-tree preflight (todos/0341) — artifactDir below is resolved from this
 // file's location, so a cross-tree launch overwrites another tree's
@@ -41,6 +41,16 @@ const defaults = { jobs: Math.max(1, os.cpus().length - 2), timeoutMs: 600000 };
 const opts = parseSuiteArgs(rest, defaults);
 if (opts.help) { process.stdout.write(usage('tests/blockfs/run.js [--long]', defaults)); process.exit(0); }
 
+// #314: this list is hardcoded like the kernel suite's, so it gets the same
+// guard — a test_*.js on disk that no row names refuses the run instead of
+// silently never executing (no exclusions today; a deliberate one must carry
+// its owning ticket).
+const MEMBER_RE = /^test_.*\.js$/;
+assertMemberRegistry({
+  dir: __dirname, pattern: MEMBER_RE, entries: tests,
+  exclude: [], label: 'tests/blockfs/run.js',
+});
+
 runSuite(tests, {
   name: 'blockfs suite',
   dir: __dirname,
@@ -48,5 +58,6 @@ runSuite(tests, {
   jobs: opts.jobs, timeoutMs: opts.timeoutMs, filter: opts.filter,
   failFast: opts.failFast, resume: opts.resume, list: opts.list,
   repeat: opts.repeat, underLoad: opts.underLoad,
+  evidence: { pattern: MEMBER_RE, exclude: [] },
 }).then(r => process.exit(r.failed ? 1 : 0))
   .catch(e => { process.stderr.write(`Fatal: ${e.stack || e.message}\n`); process.exit(2); });

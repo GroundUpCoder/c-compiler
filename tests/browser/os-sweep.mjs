@@ -73,5 +73,10 @@ runSuite(files, {
   jobs: 1, timeoutMs: opts.timeoutMs, filter: opts.filter,
   failFast: opts.failFast, resume: opts.resume, list: opts.list,
   repeat: opts.repeat, underLoad: opts.underLoad,
+  // #314: the member list here is DISCOVERED (the glob above), so set equality
+  // holds by construction — but the execution-evidence half still applies: a
+  // discovered member the engine silently never scheduled must fail the run,
+  // proven by its missing/stale per-file log, not by the engine's counters.
+  evidence: { pattern: /^os-.*\.mjs$/, exclude: [{ file: 'os-sweep.mjs', owner: 'the runner itself' }] },
 }).then(r => process.exit(r.failed ? 1 : 0))
   .catch(e => { process.stderr.write(`Fatal: ${e.stack || e.message}\n`); process.exit(2); });

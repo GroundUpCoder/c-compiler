@@ -147,6 +147,66 @@ function memoryCappedJobs(requested, perJobGb = 4, memFraction = 0.6) {
   return Math.max(1, Math.min(requested, ramCap));
 }
 
+// ---- member-registry completeness (ticket #314) ----
+//
+// A suite whose member list is HARDCODED can hold a file that is named and
+// located exactly like every other member and still executes NOWHERE: the
+// diff→suite planner maps the new path to the suite (unmapped: []), the runner
+// executes its normal list, totals agree, and the gate goes green with the new
+// test never having run. `recorded == total` cannot catch it — the member list
+// defines `total`, so the transform is being verified with its own key. This
+// bit three times (test_punes_e2e.js, 2026-07-18; os/gcode/test/smoke.mjs;
+// tests/kernel/test_win32rc.js, live on the #311 lane).
+//
+// This asserts SET EQUALITY between the directory and the declared list before
+// anything runs: every on-disk file matching `pattern` must be a declared
+// member (or a NAMED allowlist entry carrying its owner), and every declared
+// member must exist on disk. Diverge → refuse to run, naming the file — the
+// same fail-loud design the diff table applies to a new tools/ path
+// (todos/0333), applied to suite membership. Callers with hardcoded lists
+// (tests/kernel/run.js, tests/blockfs/run.js) invoke this BEFORE taking the
+// heavy lock; glob-discovered suites (the browser sweep) need no call — their
+// list IS the directory.
+//
+// exclude: [{ file, owner }] — a deliberate exclusion must name the live
+// ticket that owns registering it, and the entry must come out in the same
+// change that registers the file (a stale entry — file gone, or file now
+// declared — fails here, so the allowlist cannot outlive its reason).
+function assertMemberRegistry({ dir, pattern, entries, exclude = [], label }) {
+  const onDisk = fs.readdirSync(dir).filter(f => pattern.test(f)).sort();
+  const onDiskSet = new Set(onDisk);
+  const declared = entries.map(e => e.file);
+  const declaredSet = new Set(declared);
+  const errs = [];
+  if (declaredSet.size !== declared.length) {
+    const seen = new Set();
+    for (const f of declared) {
+      if (seen.has(f)) errs.push(`${f}: declared MORE THAN ONCE`);
+      seen.add(f);
+    }
+  }
+  const exclByFile = new Map(exclude.map(e => [e.file, e]));
+  for (const [f, e] of exclByFile) {
+    if (declaredSet.has(f)) errs.push(`${f}: both declared AND excluded (owner ${e.owner}) — the allowlist entry outlived its reason; remove it`);
+    else if (!onDiskSet.has(f)) errs.push(`${f}: excluded (owner ${e.owner}) but no longer on disk — the allowlist entry outlived its file; remove it`);
+  }
+  for (const f of onDisk) {
+    if (!declaredSet.has(f) && !exclByFile.has(f)) {
+      errs.push(`${f}: exists on disk but is NOT a declared member — it would execute NOWHERE. `
+        + `Register it in ${label}'s member list, or add a named allowlist entry with its owning ticket.`);
+    }
+  }
+  for (const f of declaredSet) {
+    if (!onDiskSet.has(f)) errs.push(`${f}: declared but MISSING on disk`);
+  }
+  if (errs.length) {
+    process.stderr.write(`\x1b[31m[suite-registry] ${label}: the member list does not match ${dir}:\x1b[0m\n`);
+    for (const e of errs) process.stderr.write(`  ${e}\n`);
+    process.exit(2);
+  }
+  process.stdout.write(`registry: ${declaredSet.size} declared + ${exclude.length} excluded == ${onDisk.length} on disk (${label})\n`);
+}
+
 function usage(name, defaults) {
   return `Usage: node ${name} [-j N] [--filter=SUBSTR] [--timeout=MS] [--fail-fast] [--resume] [--list] [--repeat N] [--under-load[=N]]
 
@@ -207,6 +267,9 @@ function logTail(logPath, maxBytes) {
 // opts: { name, dir, artifactDir, jobs, timeoutMs, filter, failFast, resume,
 //         env? } — `dir` is both the file root and the spawn cwd.
 async function runSuite(entries, opts) {
+  // Stamped before anything is scheduled: the execution-evidence check at the
+  // end (ticket #314) compares per-file log mtimes against this instant.
+  const evidenceT0 = Date.now();
   const repeat = Math.max(1, opts.repeat || 1);
   const underLoad = Math.max(0, opts.underLoad || 0);
   let files = entries.filter(e => matchesFilter(e.file, opts.filter));
@@ -302,6 +365,7 @@ async function runSuite(entries, opts) {
   const inflight = new Set();
 
   let flake = null;
+  let evidence = null;
   function checkpoint(done) {
     const own = resumed.map(r => Object.assign({}, r, { resumed: true })).concat(results);
     const all = carried.concat(own);
@@ -331,6 +395,7 @@ async function runSuite(entries, opts) {
       runs: priorRuns.concat([thisRun]),
       results: all,
       ...(flake ? { flake } : {}),
+      ...(evidence ? { evidence } : {}),
     });
   }
 
@@ -499,6 +564,62 @@ async function runSuite(entries, opts) {
       : `\n  \x1b[32mall ${flake.length} file(s) stable across ${repeat} runs.\x1b[0m\n`);
   }
 
+  // ---- execution evidence (ticket #314) ----
+  //
+  // The POSITIVE half of the coverage guard: every member the run selected must
+  // have a per-file log whose mtime post-dates the run's start. The keys —
+  // the directory glob and the log files' mtimes — are independent of this
+  // runner's own bookkeeping (results/summary counters), which is the point:
+  // a member that is registered but silently never scheduled has no fresh log,
+  // no matter what the counters say. This is exactly the discriminator that
+  // caught test_win32rc.js at gate time (its missing log was the tell; exit
+  // code 0 was not).
+  //
+  //   fresh run ... every selected member's log mtime >= run start, or FAIL.
+  //   --resume .... resumed files deliberately keep their old logs, so they are
+  //                 asserted for EXISTENCE only, and the summary line says so —
+  //                 a resumed run never silently claims fresh full coverage.
+  //   fail-fast ... a bailed run already failed and printed which files were
+  //                 not run; evidence is skipped with a note instead of
+  //                 re-flagging every unrun member.
+  if (opts.evidence && !opts.list) {
+    if (bailed) {
+      process.stdout.write('evidence: not asserted (fail-fast bailed before the suite completed)\n');
+    } else {
+      const excl = new Set((opts.evidence.exclude || []).map(e => e.file || e));
+      const expected = fs.readdirSync(opts.dir)
+        .filter(f => opts.evidence.pattern.test(f) && !excl.has(f) && matchesFilter(f, opts.filter))
+        .sort();
+      const resumedSet = new Set(resumed.map(r => r.file));
+      const problems = [];
+      let freshN = 0, resumedN = 0;
+      for (const f of expected) {
+        const base = f.replace(/[\/\\]/g, '_');
+        const cands = repeat > 1
+          ? Array.from({ length: repeat }, (_, k) => path.join(opts.artifactDir, `${base}.rep${k + 1}.log`))
+          : [path.join(opts.artifactDir, base + '.log')];
+        const mtimes = cands.map(p => { try { return fs.statSync(p).mtimeMs; } catch { return null; } })
+          .filter(m => m != null);
+        if (!mtimes.length) { problems.push(`${f}: NO per-file log — the runner never executed it`); continue; }
+        if (resumedSet.has(f)) { resumedN++; continue; }
+        if (Math.max(...mtimes) < evidenceT0) {
+          problems.push(`${f}: log predates this run (${new Date(Math.max(...mtimes)).toISOString()} < ${new Date(evidenceT0).toISOString()}) — not executed by it`);
+          continue;
+        }
+        freshN++;
+      }
+      evidence = { expected: expected.length, fresh: freshN, resumedExistenceOnly: resumedN,
+                   problems: problems.length ? problems : undefined };
+      if (problems.length) {
+        failed += problems.length;
+        for (const p of problems) process.stdout.write(`\x1b[31mEVIDENCE ${p}\x1b[0m\n`);
+      } else {
+        process.stdout.write(`evidence: ${freshN}/${expected.length} selected members have logs post-dating the run start`
+          + (resumedN ? ` (+${resumedN} resumed: existence only — freshness NOT asserted)` : '') + '\n');
+      }
+    }
+  }
+
   checkpoint(true);
   const elapsed = fmtSecs(Date.now() - t0);
   const recorded = new Set(carried.concat(resumed, results).map(r => r.file)).size;
@@ -515,4 +636,4 @@ async function runSuite(entries, opts) {
   };
 }
 
-module.exports = { runSuite, parseSuiteArgs, usage, matchesFilter, memoryCappedJobs };
+module.exports = { runSuite, parseSuiteArgs, usage, matchesFilter, memoryCappedJobs, assertMemberRegistry };

@@ -143,6 +143,21 @@ deliberately ignores them (a stale pass must never be resumed into a "full" run)
 Stale `build/test-browser/*.log` are kept on purpose: carried results cite them,
 and counting logs OVERSTATES — the manifest is the count that means anything.
 
+**Suite membership is guarded (ticket #314).** The kernel/blockfs member lists
+are hardcoded, which three times produced a test that existed on disk, mapped
+to the suite by `planFromDiff`, and executed NOWHERE behind a green gate
+(`recorded == total` can't catch it — the list defines `total`). Two guards in
+`tests/lib/suite-runner.js` close the class with keys independent of the
+runner's own bookkeeping: `assertMemberRegistry` (set equality — an on-disk
+`test_*.js` not in the member list, or vice versa, REFUSES the run naming the
+file; deliberate exclusions live in a named allowlist carrying their owning
+ticket, and a stale entry fails too) and the `evidence` opt (after a run,
+every selected member — keyed by the DIRECTORY GLOB — must have an
+`<artifactDir>/<name>.log` post-dating the run's start; `--resume` relaxes
+resumed files to existence-only, loudly). So: registering a new kernel test in
+`tests/kernel/run.js` is not optional bookkeeping — the suite will not run
+without it.
+
 ### Heavy-suite RAM policy — never run two at once (`tests/lib/heavy-lock.js`)
 
 The **kernel suite** (concurrent full-OS boots, each a nested `os/boot.js`

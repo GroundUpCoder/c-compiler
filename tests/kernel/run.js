@@ -16,7 +16,7 @@
 // picks up from it).
 const path = require('path');
 const os = require('os');
-const { runSuite, parseSuiteArgs, usage, matchesFilter, memoryCappedJobs } = require('../lib/suite-runner.js');
+const { runSuite, parseSuiteArgs, usage, matchesFilter, memoryCappedJobs, assertMemberRegistry } = require('../lib/suite-runner.js');
 const { ensurePrebakedImage } = require('../lib/image-fixture.js');
 const { acquireHeavyLock } = require('../lib/heavy-lock.js');
 const { preflight } = require('../lib/harness-leaks.js');
@@ -65,6 +65,7 @@ const tests = [
   ['test_curl_e2e.js'],     // 0173: the libcurl veneer differential smoke — ONE C program built gucOS (veneer) AND native (clang -lcurl, the oracle), outputs diffed after documented normalization; callbacks, getinfo, refused=7, timeout=28
   ['test_code_e2e.js', IMG],     // 0174: /bin/code in-OS vs a scripted fake SSE server — login-shell /etc/profile+~/.profile env plumbing, streamed text, write_file-on-BlockFS + posix_spawn bash tool round-trips
   ['test_gcode_step2_e2e.js', IMG], // 0174 step 2: usage accounting to stderr + durable 0600 JSONL sessions on BlockFS + -c/--resume replay across processes (fake SSE server with usage counters), in-image --self-test
+  ['test_gcode_native.js'],  // #314: the NATIVE gcode oracle — runs os/gcode/test/smoke.mjs (clang + real libcurl/cJSON vs the scripted SSE server) and asserts the CHECK COUNT against the source's check( call sites, not just exit 0 (the oracle prints no total)
   ['test_jobctl_e2e.js'],   // Phase 4: real C stop/cont — WUNTRACED/WCONTINUED, output halts
   ['test_jobctl_tty_e2e.js', IMG], // interactive Ctrl-Z/fg/bg/kill %1 through hush + the kernel tty
   ['test_os_boot.js', { timeoutMs: 900000 }], // 0004: headless OS boot — seed, protoshell, cc, persistence; deliberately --no-fixture (the bake path IS under test), so 3+ full ~100s bakes put it right at the 600s default under -j4 load (333s solo)
@@ -180,6 +181,32 @@ const tests = [
   ['test_software_e2e.js', { timeoutMs: 900000 }], // #81 storefront GUI over gucman: dead-repo honest error, catalog cards from the live index (`gucman index`), one-click install/remove with REAL fs asserts (install DB + /opt binary + symlink), FS_WATCH liveness for CLI installs beside the open window; shares the cached minimal blob + mkpkg pool with the gucman e2es; + the win32 Lane 0 FAT-fixture leg: baked (PACKAGES=) cards render [built-in] with Install disabled, install-over-the-top round-trips
 ];
 
+// ---- suite-membership guard (ticket #314) ----
+//
+// The `tests` list above is HARDCODED, and that produced three tests that
+// existed on disk, were mapped to this suite by the diff planner, and executed
+// NOWHERE while every gate reported full coverage (test_punes_e2e.js since
+// 2026-07-18; os/gcode/test/smoke.mjs; test_win32rc.js live on the #311 lane).
+// assertMemberRegistry (below, before the heavy lock) refuses to run the suite
+// unless the on-disk test_*.js set EQUALS the declared set — so an
+// unregistered file now fails the very first kernel run instead of silently
+// never running. runSuite's `evidence` opt is the other half: after a run,
+// every selected member must have a build/test-kernel/<name>.log post-dating
+// the run's start (a registered-but-silently-skipped member has no fresh log,
+// whatever the counters say).
+const MEMBER_RE = /^test_.*\.js$/;
+// Deliberate exclusions ONLY. Every entry names the live ticket that owns
+// registering the file, and the entry MUST come out in the same change that
+// registers it — assertMemberRegistry fails on an entry whose file is gone or
+// has become a declared member, so an entry cannot outlive its reason.
+const EXCLUDED = [
+  // Never registered since d8701a1e (found by todos/0387 counting the suite);
+  // cc ticket #167 (legacy id todos/0396) owns registering it and
+  // root-causing the EXPECTED first red — never delete the file, never let
+  // this entry survive #167's registration.
+  { file: 'test_punes_e2e.js', owner: '#167 (legacy todos/0396)' },
+];
+
 const defaults = {
   // Boot-heavy files are compile-dominated; a few concurrent full-OS boots keep
   // this box responsive without starving the in-OS `sleep N` waits (the
@@ -193,6 +220,15 @@ const defaults = {
 };
 const opts = parseSuiteArgs(process.argv.slice(2), defaults);
 if (opts.help) { process.stdout.write(usage('tests/kernel/run.js', defaults)); process.exit(0); }
+
+// #314: set equality between disk and the declared list — BEFORE the heavy
+// lock (a launch we are about to refuse must not take the machine-wide lock;
+// the tree-guard precedent), and unconditionally (--list and --filter runs
+// must be just as loud about an orphaned member). Exit 2 on divergence.
+assertMemberRegistry({
+  dir: __dirname, pattern: MEMBER_RE, entries: tests.map(([file]) => ({ file })),
+  exclude: EXCLUDED, label: 'tests/kernel/run.js',
+});
 
 // Crash safety: clamp EVEN an explicit -j to what RAM allows — an over-eager
 // -j8 on a 16 GB box is exactly the OOM that killed the GUI (2026-07-25).
@@ -229,5 +265,6 @@ runSuite(entries, {
   jobs: opts.jobs, timeoutMs: opts.timeoutMs, filter: opts.filter,
   failFast: opts.failFast, resume: opts.resume, list: opts.list,
   repeat: opts.repeat, underLoad: opts.underLoad,
+  evidence: { pattern: MEMBER_RE, exclude: EXCLUDED },
 }).then(r => process.exit(r.failed ? 1 : 0))
   .catch(e => { process.stderr.write(`Fatal: ${e.stack || e.message}\n`); process.exit(2); });
