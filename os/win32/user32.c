@@ -330,6 +330,19 @@ struct __HWND {
  * in-surface era. */
 static int bar_h(HWND top) { return top->menu ? MENU_BAR_H : 0; }
 
+/* WS_EX_CLIENTEDGE (#322): the one READ ex-style bit — a 2px sunken 3D
+ * ring in the window's NON-client border (the Windows EDGE_SUNKEN look,
+ * mc_draw_raised's sunken palette exactly). The client area sits INSIDE
+ * the ring: GetDC wraps the inset span, GetClientRect/WM_SIZE report the
+ * inset size, input arrives in inset client coords, and the ring itself
+ * is drawn at BeginPaint (the WM_NCPAINT analog — a control's own DC
+ * physically cannot reach it, so incremental control draws never clobber
+ * it, and any full repaint after a parent erase restores it). Control
+ * procs must size against cli_w/cli_h, never h->w/h->h directly. */
+static int nc_edge(HWND h) { return (h->exStyle & WS_EX_CLIENTEDGE) ? 2 : 0; }
+static int cli_w(HWND h) { return h->w - 2 * nc_edge(h); }
+static int cli_h(HWND h) { return h->h - 2 * nc_edge(h); }
+
 /* CS_OWNCLIENT (todos/0258, menu-arch §3.7/A6): the app presents its own
  * client plane — user32 must never synthesize WM_PAINT for the window and
  * never touch its window surface (a GetWindowSurface/UpdateWindowSurface
@@ -359,10 +372,17 @@ static int is_top(HWND h) { return h && h->parent == NULL; }
 
 BOOL IsWindow(HWND h) { return h != NULL && !h->inDestroy; }
 
-/* Client origin of h in its top-level's client space. */
+/* WINDOW origin of h in its top-level's client space. A child's x,y are
+ * its parent's CLIENT coords (Windows semantics), and a CLIENTEDGE
+ * parent's client plane starts nc_edge() inside its window rect — so
+ * each hop adds the parent's edge. h's own edge is NOT included (this is
+ * the window origin; add nc_edge(h) for h's client origin — GetDC does). */
 static void hwnd_origin(HWND h, int *ox, int *oy) {
     int x = 0, y = 0;
-    for (HWND p = h; p && p->parent; p = p->parent) { x += p->x; y += p->y; }
+    for (HWND p = h; p && p->parent; p = p->parent) {
+        x += p->x + nc_edge(p->parent);
+        y += p->y + nc_edge(p->parent);
+    }
     *ox = x;
     *oy = y;
 }
@@ -406,9 +426,31 @@ static HDC dc_with_font(HWND h, HDC dc) {
     return dc;
 }
 
+/* Wrap h's surface span inset by `e` px per side: e = nc_edge(h) is the
+ * client plane (GetDC), e = 0 the full window span (the NC-ring draw in
+ * BeginPaint — the only consumer that may touch the edge pixels). */
+static HDC hwnd_span_dc(HWND h, int e) {
+    HWND top = h->top;
+    SDL_Surface *s = SDL_GetWindowSurface(top->win);
+    if (!s) return NULL;
+    int ox, oy;
+    hwnd_origin(h, &ox, &oy);
+    oy += bar_h(top);                    /* client space starts under the bar */
+    ox += e;
+    oy += e;
+    int cw = (is_top(h) ? s->w : h->w) - 2 * e;
+    int ch = (is_top(h) ? s->h - bar_h(top) : h->h) - 2 * e;
+    if (ox + cw > s->w) cw = s->w - ox;
+    if (oy + ch > s->h) ch = s->h - oy;
+    if (ox < 0 || oy < 0 || cw < 1 || ch < 1)
+        return __gdi_dc_wrap(g_scratchPx, 1, 1, 1);
+    int stride = s->pitch / 4;
+    return __gdi_dc_wrap((uint32_t *)s->pixels + oy * stride + ox,
+                         cw, ch, stride);
+}
+
 HDC GetDC(HWND h) {
     if (!h) return NULL;                 /* no whole-screen DC in this OS */
-    HWND top = h->top;
     if (own_client(h)) {
         /* No CPU plane to wrap: GDI on an app-presented client is out of
          * scope by definition (§3.7c) — pixels belong to exactly one
@@ -416,20 +458,8 @@ HDC GetDC(HWND h) {
         WIN32_UNSUPPORTED("GetDC on a CS_OWNCLIENT window (no CPU client plane)");
         return NULL;
     }
-    SDL_Surface *s = SDL_GetWindowSurface(top->win);
-    if (!s) return NULL;
-    int ox, oy;
-    hwnd_origin(h, &ox, &oy);
-    oy += bar_h(top);                    /* client space starts under the bar */
-    int cw = is_top(h) ? s->w : h->w;
-    int ch = is_top(h) ? s->h - bar_h(top) : h->h;
-    if (ox + cw > s->w) cw = s->w - ox;
-    if (oy + ch > s->h) ch = s->h - oy;
-    if (ox < 0 || oy < 0 || cw < 1 || ch < 1)
-        return dc_with_font(h, __gdi_dc_wrap(g_scratchPx, 1, 1, 1));
-    int stride = s->pitch / 4;
-    return dc_with_font(h, __gdi_dc_wrap((uint32_t *)s->pixels + oy * stride + ox,
-                                         cw, ch, stride));
+    HDC dc = hwnd_span_dc(h, nc_edge(h));
+    return dc ? dc_with_font(h, dc) : NULL;
 }
 
 int ReleaseDC(HWND h, HDC dc) {
@@ -448,6 +478,19 @@ int ReleaseDC(HWND h, HDC dc) {
 HDC BeginPaint(HWND h, PAINTSTRUCT *ps) {
     if (!h) return NULL;
     h->needPaint = 0;
+    if (nc_edge(h) && !own_client(h)) {
+        /* The WM_NCPAINT analog (#322): the sunken ring rides every full
+         * repaint, so a parent erase that swept the child's window rect is
+         * always followed by the ring coming back. No present here —
+         * EndPaint's present flushes ring and client together. */
+        HDC ndc = hwnd_span_dc(h, 0);
+        if (ndc) {
+            RECT wr;
+            GetClipBox(ndc, &wr);
+            mc_draw_raised(ndc, wr, 1);
+            __gdi_dc_unwrap(ndc);
+        }
+    }
     HDC dc = GetDC(h);
     if (!dc) return NULL;
     if (ps) {
@@ -471,16 +514,17 @@ BOOL EndPaint(HWND h, const PAINTSTRUCT *ps) {
 
 BOOL GetClientRect(HWND h, RECT *r) {
     if (!h || !r) return FALSE;
+    int e2 = 2 * nc_edge(h);             /* CLIENTEDGE ring is non-client */
     if (is_top(h)) {                     /* live window size: resizes seen
                                           * (size query, not a surface touch
                                           * — CS_OWNCLIENT-safe, 0258) */
         int sw, sh;
         if (!SDL_GetWindowSize(h->win, &sw, &sh)) return FALSE;
-        int ch = sh - bar_h(h);
-        SetRect(r, 0, 0, sw, ch < 0 ? 0 : ch);
+        int cw = sw - e2, ch = sh - bar_h(h) - e2;
+        SetRect(r, 0, 0, cw < 0 ? 0 : cw, ch < 0 ? 0 : ch);
         return TRUE;
     }
-    SetRect(r, 0, 0, h->w, h->h);
+    SetRect(r, 0, 0, cli_w(h) < 0 ? 0 : cli_w(h), cli_h(h) < 0 ? 0 : cli_h(h));
     return TRUE;
 }
 
@@ -1721,7 +1765,11 @@ static HWND hit_child_list(HWND first, int x, int y) {
     if (x < first->x || x >= first->x + first->w ||
         y < first->y || y >= first->y + first->h) return NULL;
     if (class_transparent(first)) return NULL;
-    return hit_test(first, x - first->x, y - first->y);
+    /* descend in the child's CLIENT space: past its window origin AND its
+     * CLIENTEDGE ring (#322) — a press ON the ring stays the child's, at a
+     * slightly negative client coord (the no-NC-message analog) */
+    return hit_test(first, x - first->x - nc_edge(first),
+                    y - first->y - nc_edge(first));
 }
 
 /* ============================================================ SDL pump */
@@ -1790,6 +1838,9 @@ static void route_mouse(HWND top, UINT downMsg, int btnIdx, float fx, float fy,
         y -= MENU_BAR_H;                         /* below: client space */
         if (y < 0) return;
     }
+    x -= nc_edge(top);                           /* a CLIENTEDGE top's client
+                                                    plane sits inside its ring */
+    y -= nc_edge(top);
     g_lastPt.x = x;
     g_lastPt.y = y;
     g_activeTop = top;
@@ -1812,6 +1863,8 @@ static void route_mouse(HWND top, UINT downMsg, int btnIdx, float fx, float fy,
     (void)btnIdx;
     int ox, oy;
     hwnd_origin(target, &ox, &oy);
+    ox += nc_edge(target);                       /* into the target's CLIENT */
+    oy += nc_edge(target);
     q_push(target, msg, mk_of_state(state), MAKELPARAM(x - ox, y - oy), 0);
 }
 
@@ -1906,10 +1959,14 @@ static void pump_sdl(void) {
                 y -= MENU_BAR_H;
                 if (y < 0) break;
             }
+            x -= nc_edge(top);
+            y -= nc_edge(top);
             HWND target = hit_test(top, x, y);
             if (!hwnd_able(target)) break;
             int ox, oy;
             hwnd_origin(target, &ox, &oy);
+            ox += nc_edge(target);               /* into the target's CLIENT */
+            oy += nc_edge(target);
             q_push(target, WM_MOUSEWHEEL,
                    MAKEWPARAM(mk_of_state(0), (int)(e.wheel.y * WHEEL_DELTA)),
                    MAKELPARAM(x - ox, y - oy), 0);
@@ -1929,8 +1986,9 @@ static void pump_sdl(void) {
             if (__mc.open && __mc.owner == (void *)top) mc_close();
             menu_bar_sync(top);                  /* coupling #6 (A5): the strip
                                                     width-follows the parent */
-            q_push(top, WM_SIZE, SIZE_RESTORED,   /* client size: bar excluded */
-                   MAKELPARAM(e.window.data1, e.window.data2 - bar_h(top)), 0);
+            q_push(top, WM_SIZE, SIZE_RESTORED,   /* client size: bar + edge excluded */
+                   MAKELPARAM(e.window.data1 - 2 * nc_edge(top),
+                              e.window.data2 - bar_h(top) - 2 * nc_edge(top)), 0);
             InvalidateRect(top, NULL, TRUE);
             break;
         }
@@ -2642,9 +2700,11 @@ static void style_net(Class *cls, DWORD style, DWORD exStyle) {
         __win32_unsupported("style bits 0x%08X on class %s (unread — nothing "
                             "implements them)", (unsigned)unk, cls->name);
     }
-    /* exStyle: no bit is read anywhere yet. WS_EX_CLIENTEDGE is the one
-     * recognized-and-ticketed bit (end-to-end fix = W2-TE #322). */
-    DWORD exUnk = exStyle & ~0x200u & ~cls->exSeen;
+    /* exStyle: WS_EX_CLIENTEDGE is READ (#322 — nc_edge drives the DC
+     * inset, GetClientRect/WM_SIZE, input mapping and the BeginPaint
+     * ring), so it is rightly quiet here. Every other bit is unread and
+     * reports. */
+    DWORD exUnk = exStyle & ~(DWORD)WS_EX_CLIENTEDGE & ~cls->exSeen;
     if (exUnk) {
         cls->exSeen |= exUnk;
         __win32_unsupported("exStyle bits 0x%08X on class %s (unread — nothing "
@@ -2743,7 +2803,8 @@ static HWND create_window_impl(DWORD exStyle, LPCSTR className, LPCSTR windowNam
         return NULL;
     }
     SendMessage(hw, WM_SIZE, SIZE_RESTORED,
-                MAKELPARAM(w, is_top(hw) ? h - bar_h(hw) : h));
+                MAKELPARAM(w - 2 * nc_edge(hw),
+                           (is_top(hw) ? h - bar_h(hw) : h) - 2 * nc_edge(hw)));
     SendMessage(hw, WM_MOVE, 0, MAKELPARAM(x, y));
     if (hw->visible) InvalidateRect(hw, NULL, TRUE);
     return hw;
@@ -2999,7 +3060,8 @@ BOOL MoveWindow(HWND h, int x, int y, int w, int h2, BOOL repaint) {
     int resized = (w != h->w || h2 != h->h);
     h->w = w;
     h->h = h2;
-    if (resized) SendMessage(h, WM_SIZE, SIZE_RESTORED, MAKELPARAM(w, h2));
+    if (resized) SendMessage(h, WM_SIZE, SIZE_RESTORED,
+                             MAKELPARAM(cli_w(h), cli_h(h)));
     SendMessage(h, WM_MOVE, 0, MAKELPARAM(x, y));
     if (repaint && h->parent) InvalidateRect(h->parent, NULL, TRUE);
     return TRUE;
@@ -3261,7 +3323,7 @@ static void btn_paint(HWND h) {
     HDC dc = BeginPaint(h, &ps);
     if (!dc) return;
     RECT r;
-    SetRect(&r, 0, 0, h->w, h->h);
+    SetRect(&r, 0, 0, cli_w(h), cli_h(h));
     char label[256];
     strip_amp(text_get(h), label, sizeof label);
     int kind = btn_kind(h);
@@ -3276,7 +3338,7 @@ static void btn_paint(HWND h) {
     } else if (btn_is_check(kind)) {
         FillRect(dc, &r, GetSysColorBrush(COLOR_BTNFACE));
         int radio = kind == BS_RADIOBUTTON || kind == BS_AUTORADIOBUTTON;
-        int by = (h->h - 13) / 2;
+        int by = (cli_h(h) - 13) / 2;
         RECT box;
         SetRect(&box, 0, by, 13, by + 13);
         if (radio) {
@@ -3306,7 +3368,7 @@ static void btn_paint(HWND h) {
         }
         SIZE sz;
         GetTextExtentPoint32(dc, label, (int)strlen(label), &sz);
-        int ty = (h->h - sz.cy) / 2;
+        int ty = (cli_h(h) - sz.cy) / 2;
         if (ty < 0) ty = 0;
         draw_label_mn(dc, 18, ty, text_get(h), label);
     } else {                                     /* push button */
@@ -3319,8 +3381,8 @@ static void btn_paint(HWND h) {
         draw_raised(dc, face, st->pressed);
         SIZE sz;
         GetTextExtentPoint32(dc, label, (int)strlen(label), &sz);
-        int tx = (h->w - sz.cx) / 2 + (st->pressed ? 1 : 0);
-        int ty = (h->h - sz.cy) / 2 + (st->pressed ? 1 : 0);
+        int tx = (cli_w(h) - sz.cx) / 2 + (st->pressed ? 1 : 0);
+        int ty = (cli_h(h) - sz.cy) / 2 + (st->pressed ? 1 : 0);
         draw_label_mn(dc, tx, ty, text_get(h), label);
         if (h->top->focus == h) {                /* focus rect (solid, no dots) */
             RECT fr = r;
@@ -3387,11 +3449,11 @@ static void btn_paint_ownerdraw(HWND h) {
                       | (h->top->focus == h ? ODS_FOCUS : 0);
         dis.hwndItem = h;
         dis.hDC = dc;
-        SetRect(&dis.rcItem, 0, 0, h->w, h->h);
+        SetRect(&dis.rcItem, 0, 0, cli_w(h), cli_h(h));
         SendMessage(h->parent, WM_DRAWITEM, (WPARAM)h->id, (LPARAM)&dis);
     } else {
         RECT r;
-        SetRect(&r, 0, 0, h->w, h->h);
+        SetRect(&r, 0, 0, cli_w(h), cli_h(h));
         FillRect(dc, &r, GetSysColorBrush(COLOR_BTNFACE));
     }
     EndPaint(h, &ps);
@@ -3429,7 +3491,7 @@ static LRESULT btn_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (GetCapture() == h) {
             POINT p = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
             RECT r;
-            SetRect(&r, 0, 0, h->w, h->h);
+            SetRect(&r, 0, 0, cli_w(h), cli_h(h));
             int in = PtInRect(&r, p);
             if (in != st->pressed) {
                 st->pressed = in;
@@ -3460,8 +3522,8 @@ static LRESULT btn_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     case BM_CLICK:
-        SendMessage(h, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(h->w / 2, h->h / 2));
-        SendMessage(h, WM_LBUTTONUP, 0, MAKELPARAM(h->w / 2, h->h / 2));
+        SendMessage(h, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(cli_w(h) / 2, cli_h(h) / 2));
+        SendMessage(h, WM_LBUTTONUP, 0, MAKELPARAM(cli_w(h) / 2, cli_h(h) / 2));
         return 0;
     case BM_GETCHECK:
         return st->check ? BST_CHECKED : BST_UNCHECKED;
@@ -3514,7 +3576,7 @@ static LRESULT static_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         HDC dc = BeginPaint(h, &ps);
         if (!dc) return 0;
         RECT r;
-        SetRect(&r, 0, 0, h->w, h->h);
+        SetRect(&r, 0, 0, cli_w(h), cli_h(h));
         /* the parent picks the background, Windows-style (calc paints its
          * display white this way); no answer -> BTNFACE */
         HBRUSH bg = h->parent
@@ -3546,7 +3608,7 @@ static LRESULT static_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                  * the descender row (the child DC clips both edges). */
                 TEXTMETRIC tm;
                 if (GetTextMetrics(dc, &tm))
-                    ty = r.top + ((h->h - tm.tmHeight) >> 1);
+                    ty = r.top + ((cli_h(h) - tm.tmHeight) >> 1);
             }
             draw_label_mn(dc, r.left, ty, txt, label);
         } else {
@@ -3688,7 +3750,7 @@ static int edit_line_h(HWND h) {
 }
 
 static int edit_rows(HWND h, int lh) {          /* visible whole rows */
-    int avail = h->h - 2 * EDIT_PAD - 4 - (edit_hsb(h) ? EDIT_SB_W : 0);
+    int avail = cli_h(h) - 2 * EDIT_PAD - 4 - (edit_hsb(h) ? EDIT_SB_W : 0);
     int rows = avail / (lh > 0 ? lh : 1);
     return rows < 1 ? 1 : rows;
 }
@@ -3697,7 +3759,7 @@ static void edit_notify(HWND h, int code);
 static int edit_x_of(HWND h, EditState *st, HDC dc, int lineStart, int pos);
 
 static int edit_view_w(HWND h) {                /* text viewport width */
-    int w = h->w - 2 * EDIT_PAD - 4 - (edit_sb(h) ? EDIT_SB_W : 0);
+    int w = cli_w(h) - 2 * EDIT_PAD - 4 - (edit_sb(h) ? EDIT_SB_W : 0);
     return w > 1 ? w : 1;
 }
 
@@ -3757,8 +3819,8 @@ static void edit_vscroll(HWND h, EditState *st, int top) {
  * thumb][down arrow], inside the 2px well on the right edge. */
 static void edit_sb_geom(HWND h, EditState *st, RECT *bar,
                          int *btn, int *thumbY, int *thumbH) {
-    SetRect(bar, h->w - 2 - EDIT_SB_W, 2, h->w - 2,
-            h->h - 2 - (edit_hsb(h) ? EDIT_SB_W : 0));
+    SetRect(bar, cli_w(h) - 2 - EDIT_SB_W, 2, cli_w(h) - 2,
+            cli_h(h) - 2 - (edit_hsb(h) ? EDIT_SB_W : 0));
     int len = bar->bottom - bar->top;
     int b = EDIT_SB_W;
     if (b * 2 > len) b = len / 2;
@@ -3779,8 +3841,8 @@ static void edit_sb_geom(HWND h, EditState *st, RECT *bar,
  * along the bottom edge, stopping short of the vbar when both exist. */
 static void edit_hsb_geom(HWND h, EditState *st, RECT *bar,
                           int *btn, int *thumbX, int *thumbW) {
-    SetRect(bar, 2, h->h - 2 - EDIT_SB_W,
-            h->w - 2 - (edit_sb(h) ? EDIT_SB_W : 0), h->h - 2);
+    SetRect(bar, 2, cli_h(h) - 2 - EDIT_SB_W,
+            cli_w(h) - 2 - (edit_sb(h) ? EDIT_SB_W : 0), cli_h(h) - 2);
     int len = bar->right - bar->left;
     int b = EDIT_SB_W;
     if (b * 2 > len) b = len / 2;
@@ -3986,7 +4048,7 @@ static void edit_paint(HWND h) {
     HDC dc = BeginPaint(h, &ps);
     if (!dc) return;
     RECT r;
-    SetRect(&r, 0, 0, h->w, h->h);
+    SetRect(&r, 0, 0, cli_w(h), cli_h(h));
     draw_well(dc, r);
     if (edit_ro(h) || !hwnd_able(h)) {
         RECT inner = r;
@@ -4028,13 +4090,13 @@ static void edit_paint(HWND h) {
         draw_raised(dc, th, 0);
         if (edit_sb(h)) {                        /* dead corner square */
             RECT cnr;
-            SetRect(&cnr, h->w - 2 - EDIT_SB_W, h->h - 2 - EDIT_SB_W,
-                    h->w - 2, h->h - 2);
+            SetRect(&cnr, cli_w(h) - 2 - EDIT_SB_W, cli_h(h) - 2 - EDIT_SB_W,
+                    cli_w(h) - 2, cli_h(h) - 2);
             FillRect(dc, &cnr, GetSysColorBrush(COLOR_BTNFACE));
         }
     }
-    IntersectClipRect(dc, 2, 2, h->w - 2 - (edit_sb(h) ? EDIT_SB_W : 0),
-                      h->h - 2 - (edit_hsb(h) ? EDIT_SB_W : 0));
+    IntersectClipRect(dc, 2, 2, cli_w(h) - 2 - (edit_sb(h) ? EDIT_SB_W : 0),
+                      cli_h(h) - 2 - (edit_hsb(h) ? EDIT_SB_W : 0));
     SetBkMode(dc, TRANSPARENT);
     TEXTMETRIC tm;
     GetTextMetrics(dc, &tm);
@@ -4045,7 +4107,7 @@ static void edit_paint(HWND h) {
     int line = 0, i = 0, y = EDIT_PAD - (edit_ml(h) ? st->topLine * lh : 0);
     while (i <= st->len) {
         int end = edit_line_end(st, i);
-        if (y + lh > 2 && y < h->h - 2) {
+        if (y + lh > 2 && y < cli_h(h) - 2) {
             int x = EDIT_PAD - st->scrollX;      /* hscroll: all flavors (0211) */
             /* selection band on this line */
             if (focused && e > s && s < end + 1 && e > i) {
@@ -4888,7 +4950,7 @@ static int lb_row_h(HWND h) { return edit_line_h(h) + 2; }
 
 static int lb_rows(HWND h) {
     int rh = lb_row_h(h);
-    int rows = (h->h - 4) / (rh > 0 ? rh : 1);
+    int rows = (cli_h(h) - 4) / (rh > 0 ? rh : 1);
     return rows < 1 ? 1 : rows;
 }
 
@@ -4912,7 +4974,7 @@ static int lb_sb(HWND h, LbState *st) {
  * well on the right edge; EDIT_SB_W is the one built-in bar thickness. */
 static void lb_sb_geom(HWND h, LbState *st, RECT *bar,
                        int *btn, int *thumbY, int *thumbH) {
-    SetRect(bar, h->w - 2 - EDIT_SB_W, 2, h->w - 2, h->h - 2);
+    SetRect(bar, cli_w(h) - 2 - EDIT_SB_W, 2, cli_w(h) - 2, cli_h(h) - 2);
     int len = bar->bottom - bar->top;
     int b = EDIT_SB_W;
     if (b * 2 > len) b = len / 2;
@@ -4966,7 +5028,7 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         HDC dc = BeginPaint(h, &ps);
         if (!dc) return 0;
         RECT r;
-        SetRect(&r, 0, 0, h->w, h->h);
+        SetRect(&r, 0, 0, cli_w(h), cli_h(h));
         draw_well(dc, r);
         int gut = lb_sb(h, st) ? EDIT_SB_W : 0;
         if (gut) {                               /* built-in vscroll (0275) */
@@ -4986,14 +5048,14 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             FillRect(dc, &th, GetSysColorBrush(COLOR_BTNFACE));
             draw_raised(dc, th, 0);
         }
-        IntersectClipRect(dc, 2, 2, h->w - 2 - gut, h->h - 2);
+        IntersectClipRect(dc, 2, 2, cli_w(h) - 2 - gut, cli_h(h) - 2);
         SetBkMode(dc, TRANSPARENT);
         int rh = lb_row_h(h);
         for (int i = st->top; i < st->n; i++) {
             int y = 2 + (i - st->top) * rh;
-            if (y >= h->h - 2) break;
+            if (y >= cli_h(h) - 2) break;
             RECT row;
-            SetRect(&row, 2, y, h->w - 2 - gut, y + rh);
+            SetRect(&row, 2, y, cli_w(h) - 2 - gut, y + rh);
             int selected = st->multi ? (st->marks && st->marks[i]) : (i == st->sel);
             if (selected) {
                 FillRect(dc, &row, GetSysColorBrush(COLOR_HIGHLIGHT));
@@ -5241,7 +5303,7 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         int cy = GET_Y_LPARAM(lp), cx = GET_X_LPARAM(lp);
         int rh = lb_row_h(h);
         int idx = st->top + (cy - 2) / (rh > 0 ? rh : 1);
-        int outside = cx < 0 || cx >= h->w - (lb_sb(h, st) ? EDIT_SB_W : 0) ||
+        int outside = cx < 0 || cx >= cli_w(h) - (lb_sb(h, st) ? EDIT_SB_W : 0) ||
                       cy < 2 || idx < 0 || idx >= st->n;
         if (idx < 0) idx = 0;
         if (st->n && idx >= st->n) idx = st->n - 1;
@@ -5385,8 +5447,8 @@ static int sb_max_pos(SbState *st) {
  * classically, proportional once SIF_PAGE set a page size (0211). */
 static void sb_geom(HWND h, SbState *st, int *btn, int *track, int *thumbPos,
                     int *thumbLen) {
-    int len = sb_vert(h) ? h->h : h->w;
-    int b = sb_vert(h) ? h->w : h->h;
+    int len = sb_vert(h) ? cli_h(h) : cli_w(h);
+    int b = sb_vert(h) ? cli_w(h) : cli_h(h);
     if (b * 2 > len) b = len / 2;
     *btn = b;
     int chan = len - 2 * b;
@@ -5457,17 +5519,17 @@ static LRESULT sb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         sb_geom(h, st, &btn, &track, &tp, &tl);
         RECT r;
         /* channel */
-        SetRect(&r, 0, 0, h->w, h->h);
+        SetRect(&r, 0, 0, cli_w(h), cli_h(h));
         FillRect(dc, &r, GetSysColorBrush(COLOR_SCROLLBAR));
         int v = sb_vert(h);
         /* arrows */
         RECT a1, a2;
         if (v) {
-            SetRect(&a1, 0, 0, h->w, btn);
-            SetRect(&a2, 0, h->h - btn, h->w, h->h);
+            SetRect(&a1, 0, 0, cli_w(h), btn);
+            SetRect(&a2, 0, cli_h(h) - btn, cli_w(h), cli_h(h));
         } else {
-            SetRect(&a1, 0, 0, btn, h->h);
-            SetRect(&a2, h->w - btn, 0, h->w, h->h);
+            SetRect(&a1, 0, 0, btn, cli_h(h));
+            SetRect(&a2, cli_w(h) - btn, 0, cli_w(h), cli_h(h));
         }
         FillRect(dc, &a1, GetSysColorBrush(COLOR_BTNFACE));
         draw_raised(dc, a1, 0);
@@ -5477,8 +5539,8 @@ static LRESULT sb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         sb_tri(dc, (a2.left + a2.right) / 2, (a2.top + a2.bottom) / 2, v ? 1 : 3);
         /* thumb */
         RECT th;
-        if (v) SetRect(&th, 0, tp, h->w, tp + tl);
-        else SetRect(&th, tp, 0, tp + tl, h->h);
+        if (v) SetRect(&th, 0, tp, cli_w(h), tp + tl);
+        else SetRect(&th, tp, 0, tp + tl, cli_h(h));
         FillRect(dc, &th, GetSysColorBrush(COLOR_BTNFACE));
         draw_raised(dc, th, 0);
         EndPaint(h, &ps);
@@ -5487,7 +5549,7 @@ static LRESULT sb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_LBUTTONDOWN: {
         int v = sb_vert(h);
         int p = v ? GET_Y_LPARAM(lp) : GET_X_LPARAM(lp);
-        int len = v ? h->h : h->w;
+        int len = v ? cli_h(h) : cli_w(h);
         int btn, track, tp, tl;
         sb_geom(h, st, &btn, &track, &tp, &tl);
         /* Windows semantics: the control only NOTIFIES — the app moves
@@ -6106,10 +6168,14 @@ static HWND dlg_create(HINSTANCE inst, LPCWSTR tmpl, HWND owner,
     /* A template menu rides the surface's top MENU_BAR_H pixels — grow the
      * window so the CLIENT area still matches the template (calc). */
     HMENU tmplMenu = menuId ? LoadMenuW(NULL, MAKEINTRESOURCEW(menuId)) : NULL;
+    /* template w/h are CLIENT dialog units — the window grows by the menu
+     * strip and (v3) by a template-level WS_EX_CLIENTEDGE ring, exactly
+     * AdjustWindowRectEx's arithmetic */
+    int dE = (texstyle & WS_EX_CLIENTEDGE) ? 2 : 0;
     HWND dlg = CreateWindowEx(texstyle, "#32770", caption ? caption : "",
                               WS_POPUP | WS_VISIBLE,
-                              0, 0, dw * bx / 4,
-                              dh * by / 8 + (tmplMenu ? MENU_BAR_H : 0),
+                              0, 0, dw * bx / 4 + 2 * dE,
+                              dh * by / 8 + (tmplMenu ? MENU_BAR_H : 0) + 2 * dE,
                               NULL, tmplMenu, NULL, NULL);
     free(caption);
     if (!dlg && tmplMenu) DestroyMenu(tmplMenu);
@@ -6344,8 +6410,15 @@ BOOL AdjustWindowRect(RECT *r, DWORD style, BOOL menu) {
 }
 
 BOOL AdjustWindowRectEx(RECT *r, DWORD style, BOOL menu, DWORD exStyle) {
-    (void)exStyle;
-    return AdjustWindowRect(r, style, menu);
+    if (!AdjustWindowRect(r, style, menu)) return FALSE;
+    if (exStyle & WS_EX_CLIENTEDGE) {            /* the sunken ring is
+                                                    non-client (#322) */
+        r->left -= 2;
+        r->top -= 2;
+        r->right += 2;
+        r->bottom += 2;
+    }
+    return TRUE;
 }
 
 BOOL RedrawWindow(HWND h, const RECT *r, HRGN rgn, UINT flags) {

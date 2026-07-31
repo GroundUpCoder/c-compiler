@@ -722,6 +722,30 @@ static int selftest(void) {
     GetWindowText(ed, buf, sizeof buf);
     st_check("plain EDIT still accepts letters", strcmp(buf, "a") == 0);
 
+    /* ---- WS_EX_CLIENTEDGE (#322): the 2px sunken ring is NON-client —
+     * client rect/WM_SIZE inset by 2 per side, GWL_EXSTYLE round-trips,
+     * AdjustWindowRectEx grows a client rect by the ring. */
+    HWND ce = CreateWindowEx(WS_EX_CLIENTEDGE, "EDIT", "",
+                             WS_CHILD | WS_VISIBLE,
+                             120, 180, 80, 24, top, (HMENU)913, NULL, NULL);
+    st_check("CLIENTEDGE edit created", ce != NULL);
+    RECT cr;
+    GetClientRect(ce, &cr);
+    st_check("CLIENTEDGE client rect insets 2px per side",
+             cr.right == 80 - 4 && cr.bottom == 24 - 4);
+    st_check("GWL_EXSTYLE reads the bit back",
+             (GetWindowLongPtr(ce, GWL_EXSTYLE) & WS_EX_CLIENTEDGE) != 0);
+    HWND pe = CreateWindowEx(0, "EDIT", "", WS_CHILD | WS_VISIBLE,
+                             210, 180, 80, 24, top, (HMENU)914, NULL, NULL);
+    GetClientRect(pe, &cr);
+    st_check("edge-less edit keeps the full client rect",
+             cr.right == 80 && cr.bottom == 24);
+    RECT ar;
+    SetRect(&ar, 0, 0, 100, 50);
+    AdjustWindowRectEx(&ar, WS_CHILD, FALSE, WS_EX_CLIENTEDGE);
+    st_check("AdjustWindowRectEx grows by the sunken ring",
+             ar.left == -2 && ar.top == -2 && ar.right == 102 && ar.bottom == 52);
+
     printf("ctldemo selftest: %d checks, %d failed\n", st_checks, st_fails);
     fflush(stdout);
     DestroyWindow(top);

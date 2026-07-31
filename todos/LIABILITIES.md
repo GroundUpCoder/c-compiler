@@ -354,11 +354,6 @@ thing this file exists to kill.
 - file: tests/kernel/run.js
 - anchor: const EXCLUDED = [
 
-### L70 — the #318 style net suppresses the exStyle report for WS_EX_CLIENTEDGE (notepad's EDIT passes it every boot): no bit of exStyle is read anywhere, and the one recognized bit renders no edge until W2-TE lands
-- ticket: #322
-- file: os/win32/user32.c
-- anchor:      * recognized-and-ticketed bit (end-to-end fix = W2-TE #322). */
-
 ### L71 — the #318 style net allowlists SBARS_SIZEGRIP on the status bar (notepad passes it): no size grip is drawn and none is planned before the W5 residue pass
 - ticket: #334
 - file: os/win32/user32.c
