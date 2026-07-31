@@ -314,11 +314,14 @@ int _sntprintf(WCHAR *buf, size_t n, const WCHAR *fmt, ...) {
     return r >= (int)n ? -1 : r;                  /* msvcrt: -1 on truncation */
 }
 
-/* wsprintf (user32's string-only formatter; 1024-char cap, like Windows) */
+/* wsprintf (user32's string-only formatter). The MSDN contract is a
+ * 1024-unit buffer TOTAL — so at most 1023 characters plus the
+ * terminator, nothing ever written at index 1024 (#319 gap #33: the old
+ * cap of 1025 put the NUL one unit past the caller's buffer). */
 
 int wvsprintfW(LPWSTR buf, LPCWSTR fmt, va_list args) {
-    int r = w16_vformat(buf, 1025, fmt, args);
-    return r > 1024 ? 1024 : r;
+    int r = w16_vformat(buf, 1024, fmt, args);
+    return r > 1023 ? 1023 : r;
 }
 
 int wsprintfW(LPWSTR buf, LPCWSTR fmt, ...) {
@@ -332,9 +335,9 @@ int wsprintfW(LPWSTR buf, LPCWSTR fmt, ...) {
 int wsprintfA(LPSTR buf, LPCSTR fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    int r = vsnprintf(buf, 1025, fmt, ap);
+    int r = vsnprintf(buf, 1024, fmt, ap);
     va_end(ap);
-    return r > 1024 ? 1024 : r;
+    return r > 1023 ? 1023 : r;
 }
 
 /* ============================================================ _stscanf */

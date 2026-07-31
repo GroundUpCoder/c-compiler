@@ -406,6 +406,35 @@ static void selftest(void) {
         for (int xx = 0; xx < 12; xx++)
             if (GetPixel(dc, xx, yy) == RGB(0, 0, 0)) ulInk++;
     check("drawtext_prefix_underline", ulInk >= 3);
+    /* #319 gap #34: DrawText line COUNT is unbounded — 200 lines must
+     * CALCRECT to 200 line heights (the old fixed 128-line array cut
+     * DT_CALCRECT's answer, so callers mis-sized controls). */
+    {
+        static char many[400];                   /* "x\n" x 199 + "x" */
+        for (int i = 0; i < 200; i++) { many[i * 2] = 'x'; many[i * 2 + 1] = '\n'; }
+        many[399] = 0;
+        SetRect(&ar, 0, 0, 100, 10000);
+        int mh = DrawText(dc, many, -1, &ar, DT_CALCRECT);
+        check("drawtext_200_lines", mh == 200 * tm.tmHeight &&
+                                    ar.bottom == 200 * tm.tmHeight);
+    }
+    /* #319 gap #34: a long '&'-bearing line is no longer cut at the old
+     * 256-byte strip buffer — it must measure exactly as wide as the
+     * same 300 chars under DT_NOPREFIX. */
+    {
+        static char amp[302], plain[301];
+        amp[0] = '&';
+        memset(amp + 1, 'a', 300);
+        amp[301] = 0;
+        memset(plain, 'a', 300);
+        plain[300] = 0;
+        SetRect(&ar, 0, 0, 10000, 100);
+        DrawText(dc, amp, -1, &ar, DT_CALCRECT | DT_SINGLELINE);
+        int wAmp = ar.right;
+        SetRect(&ar, 0, 0, 10000, 100);
+        DrawText(dc, plain, -1, &ar, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+        check("drawtext_long_amp_line_not_cut", wAmp == ar.right && wAmp > 0);
+    }
     /* deleting a SELECTED pen refuses (real DeleteObject contract) */
     HPEN selPen = CreatePen(PS_SOLID, 1, RGB(9, 9, 9));
     HGDIOBJ prevPen = SelectObject(dc, (HGDIOBJ)selPen);

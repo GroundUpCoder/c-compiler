@@ -1328,8 +1328,34 @@ BOOL GetTextMetrics(HDC dc, TEXTMETRIC *tm) {
 /* DrawText: '\n' splits lines; DT_WORDBREAK wraps at spaces; alignment
  * per DT_* flags; DT_CALCRECT measures without drawing. Line pitch is
  * tmHeight (ascent+descent), like Windows. '&' prefixes strip and
- * underline the next code point unless DT_NOPREFIX (0211 audit D12). */
-#define DT_MAX_LINES 128
+ * underline the next code point unless DT_NOPREFIX (0211 audit D12).
+ * Line count and line length are UNBOUNDED (#319 gap #34: the old fixed
+ * 128-line array made DT_CALCRECT under-report tall texts, and the fixed
+ * 256-byte strip buffer truncated only the '&'-bearing long lines — a
+ * data-dependent cut). Both spill from a stack batch to the heap; the
+ * only remaining cut is malloc failure, and that one is LOUD. */
+#define DT_LINES0 128                 /* stack line batch; heap past it */
+
+typedef struct { const char *s; int len; } DtSpan;
+
+/* Append one line span, doubling into the heap when the batch fills.
+ * Returns 0 on OOM — the caller stops splitting and says so. */
+static int dt_push(DtSpan **arr, DtSpan *stack, int *nl, int *cap,
+                   const char *s, int len) {
+    if (*nl == *cap) {
+        int ncap = *cap * 2;
+        DtSpan *na = (DtSpan *)malloc((size_t)ncap * sizeof *na);
+        if (!na) return 0;
+        memcpy(na, *arr, (size_t)*nl * sizeof *na);
+        if (*arr != stack) free(*arr);
+        *arr = na;
+        *cap = ncap;
+    }
+    (*arr)[*nl].s = s;
+    (*arr)[*nl].len = len;
+    (*nl)++;
+    return 1;
+}
 
 /* Strip '&' prefixes ("&&" = literal '&'); *ulPos/*ulLen mark the
  * underlined code point in the OUTPUT (byte pos/len; -1 = none). */
@@ -1377,22 +1403,23 @@ int DrawText(HDC dc, LPCSTR str, int len, RECT *r, UINT format) {
     int lineH = f->ascent + f->descent;
     int rectW = r->right - r->left;
 
-    const char *ls[DT_MAX_LINES];
-    int ll[DT_MAX_LINES], nl = 0;
+    DtSpan lines0[DT_LINES0];
+    DtSpan *lines = lines0;
+    int nl = 0, lcap = DT_LINES0, oom = 0;
     if (format & DT_SINGLELINE) {
-        ls[0] = str;
-        ll[0] = len;
+        lines[0].s = str;
+        lines[0].len = len;
         nl = 1;
     } else {
         int i = 0;
-        while (i <= len && nl < DT_MAX_LINES) {
+        while (i <= len && !oom) {
             int start = i;
             while (i < len && str[i] != '\n') i++;
             int end = i;                              /* [start, end) */
             if (end > start && str[end - 1] == '\r') end--;
             if (format & DT_WORDBREAK) {
                 int s = start;
-                while (s < end && nl < DT_MAX_LINES) {
+                while (s < end && !oom) {
                     int w = 0, lastSp = -1, e = s;
                     while (e < end) {
                         int ne = e;
@@ -1404,30 +1431,48 @@ int DrawText(HDC dc, LPCSTR str, int len, RECT *r, UINT format) {
                         e = ne;
                     }
                     int cut = (e < end && lastSp > s) ? lastSp : e;
-                    ls[nl] = &str[s];
-                    ll[nl] = cut - s;
-                    nl++;
+                    if (!dt_push(&lines, lines0, &nl, &lcap, &str[s], cut - s))
+                        oom = 1;
                     s = cut;
                     while (s < end && str[s] == ' ') s++;
                 }
             } else {
-                ls[nl] = &str[start];
-                ll[nl] = end - start;
-                nl++;
+                if (!dt_push(&lines, lines0, &nl, &lcap, &str[start], end - start))
+                    oom = 1;
             }
             i++;                                       /* skip the '\n' */
             if (i > len) break;
         }
-        if (nl == 0) { ls[0] = str; ll[0] = 0; nl = 1; }
+        if (oom)
+            WIN32_UNSUPPORTED("DrawText: out of memory splitting lines "
+                              "(text cut at %d lines)", nl);
+        if (nl == 0) { lines[0].s = str; lines[0].len = 0; nl = 1; }
     }
 
-    char sbuf[256];                              /* one shared strip buffer */
+    /* One shared strip buffer for '&'-bearing lines: the stack batch
+     * covers the common case, a longer line sizes it exactly. */
+    char sbuf[256];
+    char *strip = sbuf;
+    int scap = (int)sizeof sbuf;
+    if (!(format & DT_NOPREFIX)) {
+        int need = 0;
+        for (int i = 0; i < nl; i++)
+            if (lines[i].len + 1 > need &&
+                memchr(lines[i].s, '&', (size_t)lines[i].len))
+                need = lines[i].len + 1;
+        if (need > scap) {
+            char *hb = (char *)malloc((size_t)need);
+            if (hb) { strip = hb; scap = need; }
+            else WIN32_UNSUPPORTED("DrawText: out of memory for a %d-byte "
+                                   "mnemonic line (stripped text cut)", need);
+        }
+    }
     const char *txt;
     int ulPos, ulLen;
 
     int maxW = 0;
     for (int i = 0; i < nl; i++) {
-        int tl = dt_line(ls[i], ll[i], format, sbuf, sizeof sbuf,
+        int tl = dt_line(lines[i].s, lines[i].len, format, strip, scap,
                          &txt, &ulPos, &ulLen);
         int w = 0;
         for (int j = 0; j < tl; )
@@ -1439,6 +1484,8 @@ int DrawText(HDC dc, LPCSTR str, int len, RECT *r, UINT format) {
     if (format & DT_CALCRECT) {
         if (!(format & DT_WORDBREAK)) r->right = r->left + maxW;
         r->bottom = r->top + totalH;
+        if (strip != sbuf) free(strip);
+        if (lines != lines0) free(lines);
         return totalH;
     }
 
@@ -1456,7 +1503,7 @@ int DrawText(HDC dc, LPCSTR str, int len, RECT *r, UINT format) {
     else y = r->top;
 
     for (int i = 0; i < nl; i++) {
-        int tl = dt_line(ls[i], ll[i], format, sbuf, sizeof sbuf,
+        int tl = dt_line(lines[i].s, lines[i].len, format, strip, scap,
                          &txt, &ulPos, &ulLen);
         int w = 0;
         for (int j = 0; j < tl; )
@@ -1487,6 +1534,8 @@ int DrawText(HDC dc, LPCSTR str, int len, RECT *r, UINT format) {
         }
         y += lineH;
     }
+    if (strip != sbuf) free(strip);
+    if (lines != lines0) free(lines);
     return totalH;
 }
 

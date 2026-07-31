@@ -185,6 +185,49 @@ static void test_dirs_find(void) {
           lstrcmpW(filePart, u"k32-out.txt") == 0);
 }
 
+/* #319 gap #35: a path whose POSIX form exceeds 1023 bytes must refuse
+ * with ERROR_FILENAME_EXCED_RANGE. The old path_from_w silently
+ * truncated to a 1023-byte prefix and the API then operated on that
+ * WRONG file while reporting success. */
+static void test_longpath(void) {
+    static WCHAR lp[1200];
+    int i = 0;
+    const WCHAR *pre = u"/root/k32-long-";
+    while (pre[i]) { lp[i] = pre[i]; i++; }
+    while (i < 1100) lp[i++] = 'a';
+    lp[i] = 0;
+
+    SetLastError(0);
+    HANDLE h = CreateFileW(lp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+    check("long path CreateFileW -> ERROR_FILENAME_EXCED_RANGE",
+          h == INVALID_HANDLE_VALUE &&
+          GetLastError() == ERROR_FILENAME_EXCED_RANGE);
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+
+    /* the old code CREATED the truncated prefix — prove nothing did */
+    WIN32_FIND_DATAW fd;
+    check("no truncated file appeared",
+          FindFirstFileW(u"/root/k32-long-*", &fd) == INVALID_HANDLE_VALUE);
+
+    SetLastError(0);
+    check("long path DeleteFileW -> ERROR_FILENAME_EXCED_RANGE",
+          !DeleteFileW(lp) && GetLastError() == ERROR_FILENAME_EXCED_RANGE);
+    SetLastError(0);
+    check("long path GetFileAttributesW -> ERROR_FILENAME_EXCED_RANGE",
+          GetFileAttributesW(lp) == INVALID_FILE_ATTRIBUTES &&
+          GetLastError() == ERROR_FILENAME_EXCED_RANGE);
+    /* an in-contract 1000-byte path still works end to end */
+    static WCHAR okp[1200];
+    i = 0;
+    while (pre[i]) { okp[i] = pre[i]; i++; }
+    while (i < 1000) okp[i++] = 'b';
+    okp[i] = 0;
+    h = CreateFileW(okp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+    check("1000-byte path still creates", h != INVALID_HANDLE_VALUE);
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+    check("1000-byte path still deletes", DeleteFileW(okp));
+}
+
 static void test_mapping(void) {
     HANDLE h = CreateFile(TEXT("/root/k32-out.txt"), GENERIC_READ, 0, NULL,
                           OPEN_EXISTING, 0, NULL);
@@ -270,6 +313,30 @@ static void test_strings(void) {
     static const WCHAR expsp[] = { 0xD83D, 0xDE00, '!', 0 };
     len = wsprintfW(out, u"%hs!", "\xf0\x9f\x98\x80");
     check("wsprintfW %hs astral -> surrogate pair", len == 3 && lstrcmpW(out, expsp) == 0);
+
+    /* #319 gap #33: wsprintf's contract is a 1024-UNIT buffer TOTAL —
+     * at most 1023 characters plus the NUL at [1023]. Index 1024 is the
+     * caller's memory: the old cap put the terminator there. The canary
+     * words after the contract boundary must survive untouched. */
+    {
+        static char longa[1500];
+        memset(longa, 'a', sizeof longa - 1);
+        longa[sizeof longa - 1] = 0;
+        static WCHAR wb[1100];
+        for (int i = 0; i < 1100; i++) wb[i] = 0x2222;
+        int r = wsprintfW(wb, u"%hs", longa);
+        check("wsprintfW stores 1023 chars + NUL at [1023]",
+              r == 1023 && wb[1022] == 'a' && wb[1023] == 0);
+        check("wsprintfW writes nothing at [1024]",
+              wb[1024] == 0x2222 && wb[1025] == 0x2222);
+        static char ab[1100];
+        memset(ab, 0x11, sizeof ab);
+        r = wsprintfA(ab, "%s", longa);
+        check("wsprintfA stores 1023 chars + NUL at [1023]",
+              r == 1023 && ab[1022] == 'a' && ab[1023] == 0);
+        check("wsprintfA writes nothing at [1024]",
+              ab[1024] == 0x11 && ab[1025] == 0x11);
+    }
 
     /* the wide CRT */
     check("_tcslen/_tcscmp", _tcslen(u"abc") == 3 && _tcscmp(u"a", u"b") < 0);
@@ -376,6 +443,74 @@ static void test_registry(void) {
     check("GetProfileInt reads it back",
           GetProfileIntW(u"K32Demo", u"layout", 0) == 2);
     check("GetProfileInt default", GetProfileIntW(u"K32Demo", u"nope", 7) == 7);
+
+    /* #319 gap #36: hostile value names. '|' and newline used to pass
+     * unescaped into the '|'-delimited hive line format (misparsed on
+     * the next load), and the u%04x escape collided with literal names
+     * spelled that way. This block pins the in-process semantics; the
+     * reg-persist mode re-reads the same names on a SECOND boot, which
+     * is what proves the file-format round-trip. */
+    check("hostile: reopen K32Demo",
+          RegCreateKeyExW(HKEY_CURRENT_USER, u"Software\\K32Demo", 0, NULL, 0,
+                          KEY_ALL_ACCESS, NULL, &h, &disp) == ERROR_SUCCESS);
+    static const WCHAR eacute[] = { 0x00E9, 0 };       /* the char U+00E9 */
+    DWORD hv, q, qcb;
+    hv = 111;
+    check("hostile: set name containing '|'",
+          RegSetValueExW(h, u"pipe|name", 0, REG_DWORD, (const BYTE *)&hv,
+                         4) == ERROR_SUCCESS);
+    hv = 222;
+    check("hostile: set name containing newline",
+          RegSetValueExW(h, u"line\nname", 0, REG_DWORD, (const BYTE *)&hv,
+                         4) == ERROR_SUCCESS);
+    hv = 333;
+    check("hostile: set literal name u0041",
+          RegSetValueExW(h, u"u0041", 0, REG_DWORD, (const BYTE *)&hv,
+                         4) == ERROR_SUCCESS);
+    hv = 444;
+    check("hostile: set literal name u00e9",
+          RegSetValueExW(h, u"u00e9", 0, REG_DWORD, (const BYTE *)&hv,
+                         4) == ERROR_SUCCESS);
+    hv = 555;
+    check("hostile: set name U+00E9",
+          RegSetValueExW(h, eacute, 0, REG_DWORD, (const BYTE *)&hv,
+                         4) == ERROR_SUCCESS);
+#define QRY(nm) (qcb = 4, RegQueryValueExW(h, nm, NULL, NULL, (LPBYTE)&q, &qcb))
+    check("hostile: '|' name reads back", QRY(u"pipe|name") == ERROR_SUCCESS &&
+                                          q == 111);
+    check("hostile: newline name reads back",
+          QRY(u"line\nname") == ERROR_SUCCESS && q == 222);
+    check("hostile: literal u0041 reads back",
+          QRY(u"u0041") == ERROR_SUCCESS && q == 333);
+    check("hostile: literal u0041 is not the name A",
+          QRY(u"A") == ERROR_FILE_NOT_FOUND);
+    check("hostile: literal u00e9 and U+00E9 stay distinct",
+          QRY(u"u00e9") == ERROR_SUCCESS && q == 444 &&
+          QRY(eacute) == ERROR_SUCCESS && q == 555);
+#undef QRY
+    RegCloseKey(h);
+
+    /* #319 gap #36, length caps: two DISTINCT over-cap key paths used
+     * to snprintf-truncate onto the same 511-byte prefix — one key,
+     * silent collision. Now both refuse, loudly. */
+    static WCHAR lk[600];
+    int li = 0;
+    const WCHAR *lkpre = u"Software\\K32DemoLong";
+    while (lkpre[li]) { lk[li] = lkpre[li]; li++; }
+    while (li < 560) lk[li++] = 'x';
+    lk[li] = 0;
+    HKEY h1 = NULL, h2 = NULL;
+    lk[559] = '1';
+    LONG r1 = RegCreateKeyExW(HKEY_CURRENT_USER, lk, 0, NULL, 0,
+                              KEY_ALL_ACCESS, NULL, &h1, NULL);
+    lk[559] = '2';
+    LONG r2 = RegCreateKeyExW(HKEY_CURRENT_USER, lk, 0, NULL, 0,
+                              KEY_ALL_ACCESS, NULL, &h2, NULL);
+    check("hostile: over-cap keys refuse instead of colliding",
+          r1 == ERROR_INVALID_PARAMETER && r2 == ERROR_INVALID_PARAMETER &&
+          h1 == NULL && h2 == NULL);
+    if (h1) RegCloseKey(h1);
+    if (h2) RegCloseKey(h2);
 }
 
 static void test_process(void) {
@@ -624,11 +759,32 @@ int main(int argc, char **argv) {
         /* second-session probe: the hive persisted to $HOME/.win32reg */
         UINT v = GetProfileIntW(u"K32Demo", u"layout", 0);
         printf("reg-persist: layout=%u\n", v);
-        return v == 2 ? 0 : 1;
+        /* #319 gap #36: the hostile names the selftest wrote must have
+         * survived the hive FILE round-trip — this is a fresh process,
+         * so these reads come from parsing the escaped line format. */
+        HKEY h;
+        DWORD q, qcb;
+        static const WCHAR eacute[] = { 0x00E9, 0 };
+        int hostile = 0;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, u"Software\\K32Demo", 0,
+                          KEY_READ, &h) == ERROR_SUCCESS) {
+#define QRY(nm) (qcb = 4, RegQueryValueExW(h, nm, NULL, NULL, (LPBYTE)&q, \
+                                           &qcb) == ERROR_SUCCESS)
+            hostile = QRY(u"pipe|name") && q == 111 &&
+                      QRY(u"line\nname") && q == 222 &&
+                      QRY(u"u0041") && q == 333 &&
+                      QRY(u"u00e9") && q == 444 &&
+                      QRY(eacute) && q == 555;
+#undef QRY
+            RegCloseKey(h);
+        }
+        printf("reg-persist: hostile=%s\n", hostile ? "ok" : "LOST");
+        return (v == 2 && hostile) ? 0 : 1;
     }
 
     test_files();
     test_dirs_find();
+    test_longpath();
     test_mapping();
     test_memory();
     test_strings();

@@ -233,10 +233,15 @@ void OutputDebugStringW(LPCWSTR s) {
 /* ============================================================== paths */
 
 /* Windows path -> POSIX path: flip backslashes, strip a drive letter to
- * the fs root. Forward-slash POSIX paths pass through untouched. */
-static void path_from_w(LPCWSTR w, char *out, int cap) {
+ * the fs root. Forward-slash POSIX paths pass through untouched.
+ * Returns 1, or 0 when the path does not fit — the old void version
+ * silently prefix-truncated an over-long path and every path API then
+ * operated on the WRONG file while reporting success (#319 gap #35). */
+static int path_from_w(LPCWSTR w, char *out, int cap) {
     char raw[1024];
-    w2u8(w, raw, sizeof raw);
+    if (!w) { if (cap > 0) out[0] = 0; return 1; }
+    if (WideCharToMultiByte(CP_UTF8, 0, w, -1, raw, sizeof raw, NULL, NULL) <= 0)
+        return 0;                                 /* over the 1023-byte cap */
     const char *p = raw;
     if (((raw[0] >= 'A' && raw[0] <= 'Z') || (raw[0] >= 'a' && raw[0] <= 'z')) &&
         raw[1] == ':')
@@ -244,8 +249,17 @@ static void path_from_w(LPCWSTR w, char *out, int cap) {
     int o = 0;
     if (p != raw && *p != '\\' && *p != '/') { if (o < cap - 1) out[o++] = '/'; }
     for (; *p && o < cap - 1; p++) out[o++] = (*p == '\\') ? '/' : *p;
-    if (o == 0 && p != raw) out[o++] = '/';       /* bare "C:" */
+    if (o == 0 && p != raw && o < cap - 1) out[o++] = '/';  /* bare "C:" */
     out[o] = 0;
+    return *p == 0;                               /* 0: out cap ran out */
+}
+
+/* path_from_w for an API argument: failure sets the Windows error the
+ * caller reports (ERROR_FILENAME_EXCED_RANGE, like a >MAX_PATH name). */
+static int path_arg(LPCWSTR w, char *out, int cap) {
+    if (path_from_w(w, out, cap)) return 1;
+    g_lastError = ERROR_FILENAME_EXCED_RANGE;
+    return 0;
 }
 
 /* ======================================================== handle table */
@@ -336,7 +350,7 @@ HANDLE CreateFileW(LPCWSTR name, DWORD acc, DWORD share, void *sa,
                    DWORD creation, DWORD flagsAttrs, HANDLE template_) {
     (void)share; (void)sa; (void)flagsAttrs; (void)template_;
     char p[1024];
-    path_from_w(name, p, sizeof p);
+    if (!path_arg(name, p, sizeof p)) return INVALID_HANDLE_VALUE;
 
     int fl;
     if ((acc & GENERIC_READ) && (acc & GENERIC_WRITE)) fl = O_RDWR;
@@ -440,15 +454,15 @@ BOOL FlushFileBuffers(HANDLE h) {
 
 BOOL DeleteFileW(LPCWSTR name) {
     char p[1024];
-    path_from_w(name, p, sizeof p);
+    if (!path_arg(name, p, sizeof p)) return FALSE;
     if (unlink(p) != 0) { set_err_errno(); return FALSE; }
     return TRUE;
 }
 
 BOOL MoveFileW(LPCWSTR from, LPCWSTR to) {
     char a[1024], b[1024];
-    path_from_w(from, a, sizeof a);
-    path_from_w(to, b, sizeof b);
+    if (!path_arg(from, a, sizeof a)) return FALSE;
+    if (!path_arg(to, b, sizeof b)) return FALSE;
     if (access(b, 0) == 0) { g_lastError = ERROR_ALREADY_EXISTS; return FALSE; }
     if (rename(a, b) != 0) { set_err_errno(); return FALSE; }
     return TRUE;
@@ -457,14 +471,14 @@ BOOL MoveFileW(LPCWSTR from, LPCWSTR to) {
 BOOL CreateDirectoryW(LPCWSTR path, void *sa) {
     (void)sa;
     char p[1024];
-    path_from_w(path, p, sizeof p);
+    if (!path_arg(path, p, sizeof p)) return FALSE;
     if (mkdir(p, 0777) != 0) { set_err_errno(); return FALSE; }
     return TRUE;
 }
 
 BOOL RemoveDirectoryW(LPCWSTR path) {
     char p[1024];
-    path_from_w(path, p, sizeof p);
+    if (!path_arg(path, p, sizeof p)) return FALSE;
     if (rmdir(p) != 0) { set_err_errno(); return FALSE; }
     return TRUE;
 }
@@ -479,7 +493,7 @@ static DWORD attrs_from_stat(const struct stat *st) {
 
 DWORD GetFileAttributesW(LPCWSTR name) {
     char p[1024];
-    path_from_w(name, p, sizeof p);
+    if (!path_arg(name, p, sizeof p)) return INVALID_FILE_ATTRIBUTES;
     struct stat st;
     if (stat(p, &st) != 0) { set_err_errno(); return INVALID_FILE_ATTRIBUTES; }
     return attrs_from_stat(&st);
@@ -487,7 +501,7 @@ DWORD GetFileAttributesW(LPCWSTR name) {
 
 BOOL SetFileAttributesW(LPCWSTR name, DWORD attrs) {
     char p[1024];
-    path_from_w(name, p, sizeof p);
+    if (!path_arg(name, p, sizeof p)) return FALSE;
     struct stat st;
     if (stat(p, &st) != 0) { set_err_errno(); return FALSE; }
     int mode = (int)(st.st_mode & 07777);
@@ -509,14 +523,14 @@ DWORD GetCurrentDirectoryW(DWORD n, LPWSTR buf) {
 
 BOOL SetCurrentDirectoryW(LPCWSTR path) {
     char p[1024];
-    path_from_w(path, p, sizeof p);
+    if (!path_arg(path, p, sizeof p)) return FALSE;
     if (chdir(p) != 0) { set_err_errno(); return FALSE; }
     return TRUE;
 }
 
 DWORD GetFullPathNameW(LPCWSTR name, DWORD n, LPWSTR buf, LPWSTR *filePart) {
     char p[1024], full[1024];
-    path_from_w(name, p, sizeof p);
+    if (!path_arg(name, p, sizeof p)) return 0;
     if (p[0] == '/') {
         strcpy(full, p);
     } else {
@@ -613,7 +627,7 @@ static int find_next_match(K32Obj *o, char *nameOut, int cap) {
 
 HANDLE FindFirstFileW(LPCWSTR pattern, WIN32_FIND_DATAW *fd) {
     char p[1024];
-    path_from_w(pattern, p, sizeof p);
+    if (!path_arg(pattern, p, sizeof p)) return INVALID_HANDLE_VALUE;
     const char *slash = strrchr(p, '/');
     char dir[1024], pat[256];
     if (slash) {
@@ -993,7 +1007,7 @@ BOOL CreateProcessW(LPCWSTR app, LPWSTR cmdLine, void *psa, void *tsa,
     (void)psa; (void)tsa; (void)inheritHandles; (void)flags; (void)env;
     char line[1024];
     if (cmdLine) w2u8(cmdLine, line, sizeof line);
-    else if (app) path_from_w(app, line, sizeof line);
+    else if (app) { if (!path_arg(app, line, sizeof line)) return FALSE; }
     else { g_lastError = ERROR_INVALID_PARAMETER; return FALSE; }
 
     char *argv[64];
@@ -1001,12 +1015,12 @@ BOOL CreateProcessW(LPCWSTR app, LPWSTR cmdLine, void *psa, void *tsa,
     if (argc == 0) { g_lastError = ERROR_INVALID_PARAMETER; return FALSE; }
 
     char prog[1024];
-    if (app) path_from_w(app, prog, sizeof prog);
+    if (app) { if (!path_arg(app, prog, sizeof prog)) return FALSE; }
     else {
         char conv[1024];                          /* argv[0] may be windowsy */
         WCHAR wtmp[512];
         u82w(argv[0], wtmp, 512);
-        path_from_w(wtmp, conv, sizeof conv);
+        if (!path_arg(wtmp, conv, sizeof conv)) return FALSE;
         path_resolve(conv, prog, sizeof prog);
     }
 
@@ -1030,7 +1044,7 @@ BOOL CreateProcessW(LPCWSTR app, LPWSTR cmdLine, void *psa, void *tsa,
 
     char cwd[1024];
     const char *cwdp = NULL;
-    if (cwdW) { path_from_w(cwdW, cwd, sizeof cwd); cwdp = cwd; }
+    if (cwdW) { if (!path_arg(cwdW, cwd, sizeof cwd)) return FALSE; cwdp = cwd; }
 
     struct __spawn_spec spec = { prog, argv, NULL, cwdp, acts, na, 0, 0, -1 };
     int pid = __spawn(&spec);

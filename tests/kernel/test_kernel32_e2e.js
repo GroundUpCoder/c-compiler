@@ -106,6 +106,11 @@ function sessionB() {
   check('registry persists across boots (profile shim reads 2)',
     out.includes('reg-persist: layout=2') && out.includes('PERSIST-EXIT=0'),
     out.slice(0, 300));
+  /* #319 gap #36: hostile value names ('|', newline, literal u0041/
+   * u00e9 vs U+00E9) written by session A survive the hive-file
+   * round-trip — this boot PARSES the escaped line format fresh */
+  check('hostile registry names survive the hive round-trip',
+    out.includes('reg-persist: hostile=ok'), out.slice(0, 300));
   check('the hive file is the real store ($HOME/.win32reg)',
     /\n[1-9]\d*\n/.test('\n' + (out.split('PERSIST-EXIT=0\n')[1] || '')),
     out.slice(-200));

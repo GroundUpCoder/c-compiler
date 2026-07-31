@@ -273,7 +273,9 @@ static void hive_load(void) {
 
 /* Write the whole hive out (tmp + rename). Returns 0 only when every
  * byte reached the store AND the rename landed — a short write on a full
- * disk or an EROFS home must not report success (todos/0234). */
+ * disk or an EROFS home must not report success (todos/0234).
+ * The '|'-delimited line format is safe because every key/name in the
+ * lists came through hive_enc, which escapes '|' and newlines (#319). */
 static int hive_save(RegVal *vals, RegKey *keys) {
     char hp[512], tmp[520];
     hive_path(hp, sizeof hp);
@@ -386,29 +388,75 @@ static const char *root_name(HKEY key) {
     return NULL;
 }
 
-/* Canonical path of parent+sub into out; 0 on bad handle. */
+static int hexw(WCHAR c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+           (c >= 'A' && c <= 'F');
+}
+
+/* Encode a key/value name into the hive's canonical ASCII form (#319
+ * gap #36). The old form passed '|' and newlines straight into the
+ * '|'-delimited line format (silent misparse on the next load), and its
+ * u%04x escape collided with literal names spelled that way (the name
+ * "u00e9" vs the char U+00E9). This one is line-safe and INJECTIVE up
+ * to the registry's case-insensitivity:
+ *   - c >= 0x80, '|', '\n', '\r' escape as u%04x (lowercase hex);
+ *   - a literal 'u'/'U' followed by four hex chars (either case, to
+ *     keep case-insensitive lookups honest) escapes too, so in encoded
+ *     text every u+4-hex run IS an escape.
+ * Nothing decodes yet (no RegEnum) — injectivity is what keeps distinct
+ * names distinct. Returns the length, or -1 when the name does not fit
+ * `cap`: the caller REFUSES it (the old snprintf truncation silently
+ * made distinct long keys collide on their common prefix). */
+static int hive_enc(LPCWSTR s, char *out, int cap) {
+    int o = 0;
+    if (s)
+        for (int i = 0; s[i]; i++) {
+            WCHAR c = s[i];
+            int esc = c >= 0x80 || c == '|' || c == '\n' || c == '\r' ||
+                      ((c == 'u' || c == 'U') &&
+                       hexw(s[i + 1]) && hexw(s[i + 2]) &&
+                       hexw(s[i + 3]) && hexw(s[i + 4]));
+            if (esc) {
+                if (o + 5 >= cap) return -1;
+                snprintf(out + o, (size_t)(cap - o), "u%04x", (unsigned)c);
+                o += 5;
+            } else {
+                if (o + 1 >= cap) return -1;
+                out[o++] = (char)c;
+            }
+        }
+    if (cap > 0) out[o] = 0;
+    return o;
+}
+
+/* Over-cap key/name: refused loudly, once (#319 gap #36). */
+static void cap_warn(const char *what) {
+    static int warned;
+    if (warned) return;
+    warned = 1;
+    fprintf(stderr, "advapi32: %s exceeds the hive length cap (refused)\n",
+            what);
+}
+
+/* Canonical path of parent+sub into out; 1 ok, 0 bad handle, -1 too
+ * long (callers report ERROR_INVALID_PARAMETER — never a truncated,
+ * colliding path). */
 static int key_path(HKEY parent, LPCWSTR sub, char *out, int cap) {
     char sb[400] = "";
-    if (sub) {
-        /* value/key names are stored utf8; backslashes stay backslashes */
-        int o = 0;
-        for (int i = 0; sub[i] && o < (int)sizeof sb - 4; i++) {
-            WCHAR c = sub[i];
-            if (c < 0x80) sb[o++] = (char)c;
-            else o += snprintf(sb + o, sizeof sb - (size_t)o, "u%04x", c);
-        }
-        sb[o] = 0;
+    /* names are stored escaped ascii; backslashes stay backslashes */
+    if (sub && hive_enc(sub, sb, sizeof sb) < 0) {
+        cap_warn("registry key path");
+        return -1;
     }
-    const char *root = root_name(parent);
-    if (root) {
-        if (sb[0]) snprintf(out, (size_t)cap, "%s\\%s", root, sb);
-        else snprintf(out, (size_t)cap, "%s", root);
-        return 1;
+    const char *base = root_name(parent);
+    if (!base) {
+        RegHandle *h = (RegHandle *)parent;
+        if (!h || h->magic != REG_HMAGIC) return 0;
+        base = h->path;
     }
-    RegHandle *h = (RegHandle *)parent;
-    if (!h || h->magic != REG_HMAGIC) return 0;
-    if (sb[0]) snprintf(out, (size_t)cap, "%s\\%s", h->path, sb);
-    else snprintf(out, (size_t)cap, "%s", h->path);
+    int n = sb[0] ? snprintf(out, (size_t)cap, "%s\\%s", base, sb)
+                  : snprintf(out, (size_t)cap, "%s", base);
+    if (n >= cap) { cap_warn("registry key path"); return -1; }
     return 1;
 }
 
@@ -429,15 +477,11 @@ static HKEY handle_new(const char *path) {
     return (HKEY)h;
 }
 
-static void name_u8(LPCWSTR name, char *out, int cap) {
-    int o = 0;
-    if (name)
-        for (int i = 0; name[i] && o < cap - 4; i++) {
-            WCHAR c = name[i];
-            if (c < 0x80) out[o++] = (char)c;
-            else o += snprintf(out + o, (size_t)(cap - o), "u%04x", c);
-        }
-    out[o] = 0;
+/* Value name -> canonical escaped form; -1 = too long (refused). */
+static int name_u8(LPCWSTR name, char *out, int cap) {
+    int n = hive_enc(name, out, cap);
+    if (n < 0) cap_warn("registry value name");
+    return n;
 }
 
 static RegVal *val_find(const char *key, const char *name) {
@@ -481,7 +525,9 @@ LONG RegOpenKeyExW(HKEY key, LPCWSTR sub, DWORD options, REGSAM sam, PHKEY out) 
     if (!out) return ERROR_INVALID_PARAMETER;
     *out = NULL;
     char path[512];
-    if (!key_path(key, sub, path, sizeof path)) return ERROR_INVALID_HANDLE;
+    int kp = key_path(key, sub, path, sizeof path);
+    if (kp == 0) return ERROR_INVALID_HANDLE;
+    if (kp < 0) return ERROR_INVALID_PARAMETER;
     /* opening a real subkey requires existence; re-opening a root or a
      * live handle with an empty sub always succeeds */
     if (sub && sub[0] && !key_exists(path)) return ERROR_FILE_NOT_FOUND;
@@ -503,7 +549,9 @@ LONG RegCreateKeyExW(HKEY key, LPCWSTR sub, DWORD reserved, LPWSTR cls,
     if (!out) return ERROR_INVALID_PARAMETER;
     *out = NULL;
     char path[512];
-    if (!key_path(key, sub, path, sizeof path)) return ERROR_INVALID_HANDLE;
+    int kp = key_path(key, sub, path, sizeof path);
+    if (kp == 0) return ERROR_INVALID_HANDLE;
+    if (kp < 0) return ERROR_INVALID_PARAMETER;
     int existed = key_exists(path);
     if (!existed) {
         if (key_add(path) != 0) return ERROR_NOT_ENOUGH_MEMORY;
@@ -522,8 +570,8 @@ LONG RegQueryValueExW(HKEY key, LPCWSTR name, LPDWORD reserved, LPDWORD type,
     (void)reserved;
     hive_load();
     char path[512], nm[256];
-    if (!key_path(key, NULL, path, sizeof path)) return ERROR_INVALID_HANDLE;
-    name_u8(name, nm, sizeof nm);
+    if (key_path(key, NULL, path, sizeof path) != 1) return ERROR_INVALID_HANDLE;
+    if (name_u8(name, nm, sizeof nm) < 0) return ERROR_INVALID_PARAMETER;
     RegVal *v = val_find(path, nm);
     if (!v) return ERROR_FILE_NOT_FOUND;
     if (type) *type = v->type;
@@ -543,9 +591,9 @@ LONG RegSetValueExW(HKEY key, LPCWSTR name, DWORD reserved, DWORD type,
     (void)reserved;
     hive_load();
     char path[512], nm[256];
-    if (!key_path(key, NULL, path, sizeof path)) return ERROR_INVALID_HANDLE;
+    if (key_path(key, NULL, path, sizeof path) != 1) return ERROR_INVALID_HANDLE;
     if (!data && count) return ERROR_INVALID_PARAMETER;
-    name_u8(name, nm, sizeof nm);
+    if (name_u8(name, nm, sizeof nm) < 0) return ERROR_INVALID_PARAMETER;
     RegVal *v = val_set_in(&g_vals, path, nm, type, data, count);
     if (!v) return ERROR_NOT_ENOUGH_MEMORY;
     v->dirty = 1;                   /* ours: the reload-merge writes it back */
@@ -558,8 +606,8 @@ LONG RegSetValueExW(HKEY key, LPCWSTR name, DWORD reserved, DWORD type,
 LONG RegDeleteValueW(HKEY key, LPCWSTR name) {
     hive_load();
     char path[512], nm[256];
-    if (!key_path(key, NULL, path, sizeof path)) return ERROR_INVALID_HANDLE;
-    name_u8(name, nm, sizeof nm);
+    if (key_path(key, NULL, path, sizeof path) != 1) return ERROR_INVALID_HANDLE;
+    if (name_u8(name, nm, sizeof nm) < 0) return ERROR_INVALID_PARAMETER;
     for (RegVal **pp = &g_vals; *pp; pp = &(*pp)->next) {
         RegVal *v = *pp;
         if (strcasecmp(v->key, path) == 0 && strcasecmp(v->name, nm) == 0) {
