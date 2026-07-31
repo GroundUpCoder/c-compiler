@@ -31232,8 +31232,14 @@ char *strdup(const char *s);
 
 static int __environ_owned = 0;
 
-/* The ownership registry: strings this libc malloc'd into environ. Unsorted;
-   NULL slots are reusable. Environments are small, so linear scans suffice. */
+/* The ownership registry: strings this libc malloc'd into environ and may
+   free later — setenv-allocated entries ONLY. The take-ownership deep copies
+   of the inherited environment are deliberately NOT registered: environ
+   importers (busybox hush's startup loop) alias inherited strings for the
+   process lifetime on the musl/glibc guarantee that an execve'd environment
+   is never freed, so freeing one on unsetenv/replacement is a use-after-free
+   under the importer (#312). Unsorted; NULL slots are reusable. Environments
+   are small, so linear scans suffice. */
 static char **__environ_mine = 0;
 static int __environ_mine_cap = 0;
 
@@ -31272,10 +31278,12 @@ static void __environ_take_ownership(void) {
   if (__environ_owned) return;
   int n = __environ_count();
   char **heap = malloc((n + 1) * sizeof(char *));
-  for (int i = 0; i < n; i++) {
+  /* Immortal copies: NOT registered, so unsetenv/replacement never frees
+     them (see the registry comment). Unsetting or replacing an inherited
+     entry leaks its copy — bounded by one initial environment per process;
+     glibc leaks the same way by design. */
+  for (int i = 0; i < n; i++)
     heap[i] = strdup(environ[i]);
-    __environ_mine_add(heap[i]);
-  }
   heap[n] = 0;
   environ = heap;
   __environ_owned = 1;
