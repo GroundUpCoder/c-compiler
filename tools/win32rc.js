@@ -272,13 +272,26 @@ function tokenize(lines) {
 function evalName(name, where) {
   let seen = 0;
   let v = name;
-  while (typeof v === 'string' && !/^-?\d/.test(v)) {
+  while (typeof v === 'string' && /^[A-Za-z_]\w*$/.test(v)) {
     if (!symbols.has(v)) throw new Error(`undefined identifier '${v}' at ${where}`);
     v = symbols.get(v);
     if (++seen > 32) throw new Error(`define cycle at '${name}'`);
   }
   if (typeof v === 'number') return v;
   return evalExprString(String(v), where);
+}
+
+// A value is a number, or — when the expression carries rc's NOT — an
+// {or, not} mask pair. rc semantics are "default | given, then clear the
+// NOT-listed bits from the RESULT" (#311), so the not-mask must survive to
+// the control/dialog assembly; only style expressions may consume it
+// (numToScalar rejects it everywhere else).
+function numToScalar(v, where) {
+  if (typeof v === 'object') throw new Error(`NOT is only valid in a style expression at ${where}`);
+  return v;
+}
+function toMasks(v) {
+  return typeof v === 'object' ? v : { or: v >>> 0, not: 0 };
 }
 
 function evalExprString(s, where) {
@@ -288,14 +301,17 @@ function evalExprString(s, where) {
   function primary() {
     ws();
     if (s[i] === '(') { i++; const v = expr(); ws(); if (s[i] === ')') i++; return v; }
-    if (s[i] === '~') { i++; return ~primary(); }
-    if (s[i] === '-') { i++; return -primary(); }
+    if (s[i] === '~') { i++; return ~numToScalar(primary(), where); }
+    if (s[i] === '-') { i++; return -numToScalar(primary(), where); }
     const m = s.slice(i).match(/^(0[xX][0-9a-fA-F]+|\d+)/);
     if (m) { i += m[0].length; return parseInt(m[0]); }
     const idm = s.slice(i).match(/^\w+/);
     if (idm) {
       i += idm[0].length;
-      if (idm[0] === 'NOT') { ws(); return { not: primary() }; }   // rc NOT
+      if (idm[0] === 'NOT') {                                      // rc NOT
+        ws();
+        return { or: 0, not: numToScalar(primary(), where) >>> 0 };
+      }
       return evalName(idm[0], where);
     }
     throw new Error(`bad expression '${s}' at ${where}`);
@@ -313,18 +329,20 @@ function evalExprString(s, where) {
     return v;
   }
   function combine(a, b, op) {
-    // rc's NOT clears bits from the accumulated style
-    const av = typeof a === 'object' ? 0 : a, bn = typeof b === 'object';
-    if (bn) return (av & ~b.not) >>> 0;
-    if (typeof a === 'object') return (bv(b) & ~a.not) >>> 0;
-    if (op === '|') return (av | b) >>> 0;
-    if (op === '&') return (av & b) >>> 0;
-    if (op === '+') return av + b;
-    return av - b;
-    function bv(x) { return typeof x === 'object' ? 0 : x; }
+    // NOT masks merge across |/+ and survive to the caller; arithmetic
+    // stays numeric-only.
+    if (typeof a === 'object' || typeof b === 'object') {
+      if (op !== '|' && op !== '+') throw new Error(`NOT beside '${op}' in '${s}' at ${where}`);
+      const A = toMasks(a), B = toMasks(b);
+      return { or: (A.or | B.or) >>> 0, not: (A.not | B.not) >>> 0 };
+    }
+    if (op === '|') return (a | b) >>> 0;
+    if (op === '&') return (a & b) >>> 0;
+    if (op === '+') return a + b;
+    return a - b;
   }
   const v = expr();
-  return typeof v === 'object' ? 0 : v >>> 0;
+  return typeof v === 'object' ? v : v >>> 0;
 }
 
 /* ---------------- parser over the token stream ---------------- */
@@ -349,29 +367,39 @@ function fail(msg) {
 function where() { const c = cur(); return c ? c.file + ':' + c.line : 'EOF'; }
 function value() {                              // id-or-number scalar
   if (at('num')) return next().v;
-  if (at('id')) { const t = next(); return evalName(t.v, t.file + ':' + t.line); }
+  if (at('id')) {
+    const t = next();
+    return numToScalar(evalName(t.v, t.file + ':' + t.line), t.file + ':' + t.line);
+  }
   fail('expected a value');
 }
-// a style expression: ids/numbers joined by | + - and NOT, until , or nl
+// a style expression: ids/numbers joined by | + - and NOT, until , or nl.
+// Returns {or, not} — the caller assembles `(default | or) & ~not` so a
+// NOT term (bare or combined) clears bits from the RESULT, keyword
+// defaults included (#311; pre-fix a bare `NOT WS_VISIBLE` evaluated to 0
+// and the NOT was silently dropped).
 function styleExpr() {
-  let acc = 0;
+  let or = 0, not = 0;
   let pending = null;                            // 'not' marker
   for (;;) {
     skipNothing();
-    if (at('num')) { acc = apply(acc, next().v, pending); pending = null; }
+    let v;
+    if (at('num')) v = next().v;
     else if (at('id')) {
       const t = next();
       if (t.v.toUpperCase() === 'NOT') { pending = 'not'; continue; }
-      acc = apply(acc, evalName(t.v, t.file + ':' + t.line), pending);
-      pending = null;
+      v = evalName(t.v, t.file + ':' + t.line);
     } else fail('expected style term');
+    if (pending === 'not') not = (not | numToScalar(v, where())) >>> 0;
+    else { const m = toMasks(v); or = (or | m.or) >>> 0; not = (not | m.not) >>> 0; }
+    pending = null;
     if (at('|') || at('+')) { next(); continue; }
     break;
   }
-  return acc >>> 0;
-  function apply(a, v, mode) { return mode === 'not' ? (a & ~v) >>> 0 : (a | v) >>> 0; }
+  return { or, not };
   function skipNothing() { while (at('nl')) fail('style expression ran off the line'); }
 }
+function applyStyle(dflt, e) { return ((dflt | e.or) & ~e.not) >>> 0; }
 
 /* resource accumulators */
 const entries = [];                              // { type, id, data: Buffer }
@@ -478,7 +506,7 @@ function parseDialog(id, isEx) {
   let caption = '', fontSize = 8, fontFace = 'MS Shell Dlg', menuId = 0;
   for (;;) {
     skipNl();
-    if (atId('STYLE')) { next(); style = styleExpr(); }
+    if (atId('STYLE')) { next(); style = applyStyle(0, styleExpr()); }
     else if (atId('EXSTYLE')) { next(); styleExpr(); }
     else if (atId('CAPTION')) { next(); caption = expect('str', 'caption').v; }
     else if (atId('FONT')) {
@@ -511,7 +539,7 @@ function parseDialog(id, isEx) {
       while (at(',')) { next(); styleExpr(); }   // exstyle tail
       const cls = CTL[clsName];
       if (!cls) fail(`unsupported CONTROL class '${clsName}'`);
-      controls.push({ cls, id: cid, x, y, w, h, style: (st | 0x40000000) >>> 0, text });
+      controls.push({ cls, id: cid, x, y, w, h, style: applyStyle(0x40000000, st), text });
     } else {
       const spec = CTRL_KEYWORDS[kw];
       if (!spec) fail(`unsupported dialog control '${kw}'`);
@@ -523,7 +551,7 @@ function parseDialog(id, isEx) {
       let style = spec.style >>> 0;
       if (at(',')) {                             // optional style tail
         next();
-        if (!at('nl')) style = (style | styleExpr()) >>> 0;
+        if (!at('nl')) style = applyStyle(style, styleExpr());
         while (at(',')) { next(); if (!at('nl')) styleExpr(); }  // exstyle
       }
       controls.push({ cls: spec.cls, id: cid, x, y, w, h, style, text });

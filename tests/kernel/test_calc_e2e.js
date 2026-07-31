@@ -228,6 +228,15 @@ check('View->Scientific recreates the dialog (869x570 surface; the 316-DLU templ
   row2.includes('869x570'), row2);
 check('scientific template has the base radios',
   /class=BUTTON [^\n]*text='Hex'/.test(section(out, 'scitree')), section(out, 'scitree').slice(0, 400));
+/* #311: the template's `NOT WS_VISIBLE` controls must ARRIVE hidden — the
+ * Dword/Word/Byte width radios share coordinates with the visible
+ * Degrees/Radians/Gradians set and painted through them pre-fix. */
+check('#311: NOT WS_VISIBLE width radios arrive hidden (Dword vis=0)',
+  /class=BUTTON [^\n]*vis=0 [^\n]*text='Dword'/.test(section(out, 'scitree')),
+  (section(out, 'scitree').match(/[^\n]*text='Dword'[^\n]*/) || [])[0]);
+check('#311: the angle radios stay visible (Degrees vis=1)',
+  /class=BUTTON [^\n]*vis=1 [^\n]*text='Degrees'/.test(section(out, 'scitree')),
+  (section(out, 'scitree').match(/[^\n]*text='Degrees'[^\n]*/) || [])[0]);
 
 /* ---- #275: the Statistics box ---- */
 const statlist = section(out, 'statlist');
