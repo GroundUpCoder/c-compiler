@@ -64,6 +64,12 @@ const rowOf = (rows, name, where) => {
 };
 const SAMPLES_ROW = rowOf(PRES_ROWS, 'samples', 'Presentations/');
 const SH_ROW = rowOf(SAMPLE_ROWS, SH, 'samples/');
+// Display rows are pixel-fitted (#317): the 33-char name elides to its
+// measured share of the row ("minesweeper-programming..."), so LISTBOX
+// waits key on a prefix comfortably inside any plausible metric drift.
+// Ops still resolve by index (g_ents), and the seed check above asserts
+// the FULL name via ls.
+const SH_NEEDLE = SH.slice(0, 16);
 const CLICK_TOP = 'wmctl click $SID 100 40';   // inside the listbox, row 0
 const HOME = 'wmctl key $SID 74 1073741898';
 const DOWN = 'wmctl key $SID 81 1073741905';
@@ -92,9 +98,9 @@ const r = driveBoot([
   // row 0. (A second click at the same spot would land inside the 400ms
   // double-click window when wmctl runs back-to-back and open the row
   // EARLY as LBN_DBLCLK — the ENTER then opens it again: two terms.)
-  `wmctl wait text LISTBOX:0 "${SH}" 8000`,
+  `wmctl wait text LISTBOX:0 "${SH_NEEDLE}" 8000`,
   HOME, ...Array(SH_ROW).fill(DOWN),
-  `wmctl wait text LISTBOX:0 "> ${SH}" 8000`,
+  `wmctl wait text LISTBOX:0 "> ${SH_NEEDLE}" 8000`,
   ENTER,
 
   // The tap spawned the script HEADLESS (no TERM in spawn_path's env); a
