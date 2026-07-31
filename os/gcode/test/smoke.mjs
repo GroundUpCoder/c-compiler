@@ -7,7 +7,7 @@
 // Run: node os/gcode/test/smoke.mjs   (exit 0 = pass)
 
 import http from 'node:http';
-import { execFileSync, execFile } from 'node:child_process';
+import { execFileSync, execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -53,6 +53,8 @@ function toolUseResponse(preface, id, name, inputObj) {
 }
 
 // A server that shifts one scripted response per POST, recording bodies.
+// An entry is an SSE string (200) or { status, body } for an error reply
+// (#305: the REPL-survives-a-failed-turn leg).
 function startServer(scripts) {
   const bodies = [];
   const server = http.createServer((req, res) => {
@@ -62,6 +64,11 @@ function startServer(scripts) {
       bodies.push(JSON.parse(buf));
       const body = scripts.shift();
       if (body === undefined) { res.writeHead(500); res.end('no script'); return; }
+      if (typeof body === 'object') {
+        res.writeHead(body.status, { 'content-type': 'application/json' });
+        res.end(body.body);
+        return;
+      }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       res.end(body);
     });
@@ -139,6 +146,41 @@ async function main() {
     const tr = second.messages[second.messages.length - 1].content[0];
     check(tr.content.length < 30000, `bash output capped (${tr.content.length} bytes < 30k)`);
     check(tr.content.includes('truncated'), 'bash output carries a truncation marker');
+  }
+
+  // ---- test 4 (#305): interactive REPL survives a failed turn -------
+  // First send hits an HTTP 500 (recoverable), second must succeed in the
+  // SAME process; /quit ends it cleanly. The failed user message stays in
+  // history, so request 2 carries BOTH user messages.
+  {
+    const srv = await startServer([
+      { status: 500, body: '{"type":"error","error":{"type":"api_error","message":"boom"}}' },
+      textResponse('Recovered reply.'),
+    ]);
+    const child = spawn(bin, ['--no-color', '--no-persist'], {
+      env: { ...process.env, ANTHROPIC_BASE_URL: srv.url, ANTHROPIC_API_KEY: 'test',
+             ASAN_OPTIONS: 'detect_leaks=0' },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let out = '', err = '';
+    child.stdout.on('data', (c) => (out += c));
+    child.stderr.on('data', (c) => (err += c));
+    child.stdin.write('first ask\nsecond ask\n/quit\n');
+    child.stdin.end();
+    const code = await new Promise((resolve, reject) => {
+      const t = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('REPL leg timed out')); }, 15000);
+      child.on('exit', (c) => { clearTimeout(t); resolve(c); });
+    });
+    srv.close();
+    check(err.includes('HTTP 500'), 'failed turn printed its HTTP error');
+    check(out.includes('Recovered reply.'), 'REPL survived the error: second send succeeded in the same process');
+    check(srv.bodies.length === 2, `both sends reached the server (${srv.bodies.length})`);
+    const users = (srv.bodies[1] ? srv.bodies[1].messages : [])
+      .filter((m) => m.role === 'user')
+      .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)));
+    check(users.length === 2 && users[0].includes('first ask') && users[1].includes('second ask'),
+      'failed user message stays in history (request 2 carries both sends)');
+    check(code === 0, `/quit after recovery exits 0 (got ${code})`);
   }
 
   console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILURE(S)`);

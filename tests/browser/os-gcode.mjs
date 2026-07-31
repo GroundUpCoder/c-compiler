@@ -339,7 +339,8 @@ try {
   await sleep(400);   // no-marker settle (snap repaint)
   await page.keyboard.press('Backspace');
 
-  // ---- leg 4: Ctrl+C against a stalled stream (recorded, not judged) --
+  // ---- leg 4: Ctrl+C aborts a stalled stream (#306 — judged since the
+  // xferinfo path landed; was recorded-only while interrupt was dead) ----
   await page.keyboard.type('stall please\r', { delay: 30 });
   await waitBodies(5);
   await sleep(1500);   // partial delta rendered; server now holds for 8s
@@ -350,7 +351,8 @@ try {
   await sleep(10000);  // covers the 8s stall either way (abort or completion)
   await quiesce(G2.x, G2.y, G2.w, G2.h);
   await shot('9-after-ctrlc');
-  console.log(`  info Ctrl+C mid-stream: transfer ${srv.stall.closedEarly ? 'ABORTED EARLY (interrupt works in-OS)' : 'ran to completion (interrupt is dead in-OS — the wait_step EINTR-retry finding)'}`);
+  check('Ctrl+C mid-stream aborts the in-flight transfer (#306)', srv.stall.closedEarly,
+    srv.stall.restWritten ? 'stream ran to completion' : 'no early close observed');
 
   // ---- leg 5: /clear, the CRED error path, /quit ----------------------
   const clearBefore = await bright(G2.x, G2.y, G2.w, G2.h);
@@ -372,6 +374,13 @@ try {
     `${redBefore} -> ${redAfter}`);
   check('gcode alive after Ctrl+C + /clear (kept serving turns)', true);
   await shot('10-clear-and-red-error');
+  // #305: the failed turn must NOT exit the REPL — a follow-up send from
+  // the SAME gcode must reach the API (a dead gcode drops the line into
+  // hush and never POSTs; pre-#305 this was the crash-to-shell).
+  await page.keyboard.type('again please\r', { delay: 30 });
+  await waitBodies(7);   // exhausted queue answers 500 again; the POST is the proof
+  await quiesce(G2.x, G2.y, G2.w, G2.h);
+  check('REPL survived the HTTP 500: follow-up send reached the API (#305)', true);
   await page.keyboard.type('/quit\r', { delay: 30 });
   await sleep(800);   // no-marker settle: gcode exits back to the hush prompt
   await page.keyboard.type('exit\r', { delay: 30 });

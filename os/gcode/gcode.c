@@ -701,7 +701,10 @@ static size_t write_cb(char *ptr, size_t size, size_t nmemb, void *ud) {
 }
 
 /* ---- one API round-trip ----------------------------------------------- */
-/* Returns 0 to stop, 1 to continue (tool_use). On error returns -1. */
+/* Returns 0 to stop, 1 to continue (tool_use). Errors: -1 recoverable
+   (transport, HTTP != 200, API error event), -2 interrupted (^C via the
+   xferinfo abort, #306), -3 auth (HTTP 401/403 — retrying cannot succeed,
+   #305). */
 static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, usage *turn_usage) {
     cJSON *body = cJSON_CreateObject();
     cJSON_AddStringToObject(body, "model", cfg->model);
@@ -752,7 +755,7 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
     if (code != 200) {
         fprintf(stderr, "\n%scode: HTTP %ld%s\n%.*s\n", CRED, code, CRST,
                 (int)ctx.raw.len, ctx.raw.p ? ctx.raw.p : "");
-        ret = -1; goto done;
+        ret = (code == 401 || code == 403) ? -3 : -1; goto done;
     }
     if (ctx.api_error) {
         fprintf(stderr, "\n%scode: API error: %s%s\n", CRED, ctx.errmsg.p ? ctx.errmsg.p : "?", CRST);
@@ -854,7 +857,10 @@ static int agent_loop(config *cfg, session *sess, cJSON *messages, cJSON *tools)
     cJSON_AddStringToObject(end, "stop_reason", last > 0 ? "max_turns" : (sess->last_stop ? sess->last_stop : "")); cJSON_AddNumberToObject(end, "api_rounds", rounds);
     cJSON_AddItemToObject(end, "usage", usage_json(&turn)); cJSON_AddItemToObject(end, "session_usage", usage_json(&sess->total));
     if (record_write(sess, end)) return -1;
-    report_usage("turn", &turn); report_usage("session", &sess->total); return last == -2 ? 0 : (last < 0 ? -1 : 0);
+    report_usage("turn", &turn); report_usage("session", &sess->total);
+    /* 0 = done or interrupted (^C lands back at the prompt), -1 =
+       recoverable turn error, -3 = auth (fatal — #305) */
+    return last == -2 ? 0 : (last == -3 ? -3 : (last < 0 ? -1 : 0));
 }
 
 static cJSON *make_user_text(const char *text) {
@@ -1021,7 +1027,12 @@ int main(int argc, char **argv) {
         char line[8192];
         for (;;) {
             fputs("\n> ", stderr); fflush(stderr);
-            if (!fgets(line, sizeof line, stdin)) { session_end(&sess, "eof"); break; }
+            if (!fgets(line, sizeof line, stdin)) {
+                /* ^C at the prompt (EINTR'd read): fresh prompt, not exit —
+                   only a real EOF ends the session */
+                if (g_interrupted) { g_interrupted = 0; clearerr(stdin); continue; }
+                session_end(&sess, "eof"); break;
+            }
             size_t n = strlen(line);
             while (n && (line[n-1] == '\n' || line[n-1] == '\r')) line[--n] = 0;
             if (!n) continue;
@@ -1033,7 +1044,15 @@ int main(int argc, char **argv) {
                 if (!persist) { memset(&sess, 0, sizeof sess); sess.fd = -1; make_session_id(sess.id); }
                 fprintf(stderr, "%s[history cleared]%s\n", CDIM, CRST); continue;
             }
-            if (append_user_text(&sess, messages, line) || agent_loop(&cfg, &sess, messages, tools)) break;
+            if (append_user_text(&sess, messages, line)) break;
+            int r = agent_loop(&cfg, &sess, messages, tools);
+            g_interrupted = 0;   /* consumed: a stale mid-turn ^C must not eat the next EOF */
+            if (r == -3) { session_end(&sess, "error"); break; }   /* auth: retrying cannot succeed */
+            /* r == -1 (recoverable turn error — transport, 5xx/429, timeout)
+               returns to the prompt like r == 0: the error line already
+               printed red, and the failed user message STAYS in history —
+               in-memory and in the persisted JSONL alike, so a resume
+               replays exactly what the live session carries (#305). */
         }
     }
     if (sess.fd >= 0) close(sess.fd); free(sess.path); free(sess.last_stop);
