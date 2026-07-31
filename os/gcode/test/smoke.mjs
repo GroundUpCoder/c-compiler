@@ -96,6 +96,21 @@ async function runCode(url, args, env = {}) {
   return stdout;
 }
 
+// Like runCode but returns BOTH streams (presentation lives on stderr: the
+// prompt, tool blocks, Cost line, and the diff renderer).
+async function runCodeBoth(url, args, env = {}) {
+  try {
+    const { stdout, stderr } = await execFileAsync(bin, args, {
+      env: { ...process.env, ANTHROPIC_BASE_URL: url, ANTHROPIC_API_KEY: 'test',
+             ASAN_OPTIONS: 'detect_leaks=0', ...env },
+      encoding: 'utf8', timeout: 15000,
+    });
+    return { stdout, stderr };
+  } catch (e) {
+    return { stdout: e.stdout || '', stderr: e.stderr || '' };
+  }
+}
+
 async function main() {
   // Build the native binary.
   execFileSync('sh', [path.join(codeDir, 'build-native.sh'), bin], { stdio: 'inherit' });
@@ -181,6 +196,46 @@ async function main() {
     check(users.length === 2 && users[0].includes('first ask') && users[1].includes('second ask'),
       'failed user message stays in history (request 2 carries both sends)');
     check(code === 0, `/quit after recovery exits 0 (got ${code})`);
+  }
+
+  // ---- test 5 (#302): chat-style layout + per-turn Cost -------------
+  // Default (no --no-color): stdout is a pipe here, so the isatty gate
+  // (#303) turns colour off — the layout must still be a speaker header +
+  // an indented body, and the Cost line must be priced from the counters.
+  {
+    const srv = await startServer([textResponse('Line one.\nLine two.')]);
+    const { stdout, stderr } = await runCodeBoth(srv.url, ['-p', 'hi']);
+    srv.close();
+    check(stdout.includes('gcode:'), '#302: assistant speaker header on stdout');
+    check(stdout.includes('  Line one.') && stdout.includes('  Line two.'),
+      '#302: assistant body indented 2 spaces');
+    check(!stdout.includes('\x1b['), '#303: piped stdout carries no ANSI escapes (isatty gate)');
+    check(/cost: \$\d/.test(stderr), '#302: per-turn Cost line, priced from the token counters');
+  }
+
+  // ---- test 6 (#302): coloured diff renderer for edit_file ----------
+  {
+    const target = path.join(os.tmpdir(), `code-diff-${process.pid}.txt`);
+    fs.writeFileSync(target, 'alpha\nOLDLINE\ngamma\n');
+    const srv = await startServer([
+      toolUseResponse('editing', 'toolu_e', 'edit_file',
+        { path: target, old_string: 'OLDLINE', new_string: 'NEWLINE' }),
+      textResponse('edited ok'),
+    ]);
+    const { stderr } = await runCodeBoth(srv.url, ['-p', `edit ${target}`, '--no-color']);
+    srv.close();
+    check(fs.readFileSync(target, 'utf8').includes('NEWLINE'), 'edit_file applied the change');
+    check(stderr.includes('Diff') && stderr.includes('- OLDLINE') && stderr.includes('+ NEWLINE'),
+      '#302: diff renderer shows removed (-) and added (+) lines');
+    fs.rmSync(target, { force: true });
+  }
+
+  // ---- test 7 (#303): --color forces ANSI even down a pipe ----------
+  {
+    const srv = await startServer([textResponse('forced colour')]);
+    const { stdout } = await runCodeBoth(srv.url, ['-p', 'hi', '--color']);
+    srv.close();
+    check(stdout.includes('\x1b['), '#303: --color forces ANSI on a non-tty stdout');
   }
 
   console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILURE(S)`);

@@ -113,14 +113,148 @@ static usage usage_from_json(cJSON *o) {
     return u;
 }
 
-/* ---- ANSI (SGR only; guarded by cfg->color) --------------------------- */
-static int  g_color = 1;
-static const char *C(const char *code) { return g_color ? code : ""; }
-#define CDIM  C("\033[2m")
-#define CCYAN C("\033[36m")
-#define CGRN  C("\033[32m")
-#define CRED  C("\033[31m")
-#define CRST  C("\033[0m")
+/* ---- ANSI (SGR only; no cursor motion or clears — the stream stays
+ * append-only so terminal scrollback is preserved, #301/#302) -----------
+ * Colour is gated PER STREAM (#303): assistant content on stdout uses
+ * g_color; chrome/prompt/tool lines on stderr use g_color_err. The two
+ * differ under redirection — `gcode -p x > f` leaves f byte-clean while a
+ * tty stderr still shows colour. Both default from isatty() and honour
+ * NO_COLOR; --no-color forces off, --color forces on. */
+static int g_color = 1;       /* stdout (assistant content) */
+static int g_color_err = 1;   /* stderr (chrome, prompt, tool lines) */
+static const char *Co(const char *code) { return g_color ? code : ""; }
+static const char *Ce(const char *code) { return g_color_err ? code : ""; }
+/* chrome (stderr) — dim faint needs term.c SGR 2 (#304, now landed) */
+#define CDIM  Ce("\033[2m")
+#define CCYAN Ce("\033[36m")
+#define CGRN  Ce("\033[32m")
+#define CRED  Ce("\033[31m")
+#define CRST  Ce("\033[0m")
+/* the 8 bold semantic roles from ~/git/chat's ui.py:15-24 (#302).
+ * term.c renders bold as the bright-8 palette, so these read strongly
+ * in-OS as well as in a host terminal. */
+#define R_USER Ce("\033[1;32m")   /* user prompt      — bold green   */
+#define R_INFO Ce("\033[1;33m")   /* info / rules     — bold yellow  */
+#define R_ERRB Ce("\033[1;31m")   /* errors           — bold red     */
+#define R_TIME Ce("\033[1;35m")   /* timestamps       — bold magenta */
+#define R_TOOL Ce("\033[1;35m")   /* tool_use         — bold magenta */
+#define R_RES  Ce("\033[1;33m")   /* tool_result      — bold yellow  */
+#define R_COST Ce("\033[1;36m")   /* per-turn cost    — bold cyan    */
+/* assistant speaker header + body live on stdout (the transcript) */
+#define O_ASST Co("\033[1;36m")   /* assistant        — bold cyan    */
+#define O_RST  Co("\033[0m")
+/* coloured diff renderer palette (diffvis.py:18-25) — printed on stderr */
+#define D_ADD  Ce("\033[32m")
+#define D_DEL  Ce("\033[31m")
+#define D_HDR  Ce("\033[1m")
+#define D_META Ce("\033[90m")
+
+/* ---- pricing (#302: per-turn Cost line, ui.py:349/372) ----------------
+ * USD per 1M tokens, matched by substring against the model id. Cache
+ * writes bill at 1.25x input, cache reads at 0.1x (the API's ephemeral
+ * cache economics). Longest/most-specific keys first so "claude-opus-5"
+ * wins over "claude-opus-4". Rates: Anthropic first-party, 2026-07. */
+static double price_usage(const char *model, const usage *u) {
+    static const struct { const char *key; double in, out; } P[] = {
+        { "claude-fable-5",  10.0, 50.0 },
+        { "claude-mythos-5", 10.0, 50.0 },
+        { "claude-opus-5",    5.0, 25.0 },
+        { "claude-opus-4",    5.0, 25.0 },  /* 4.8/4.7/4.6/4.5/4.1/4.0 */
+        { "claude-sonnet-5",  3.0, 15.0 },
+        { "claude-sonnet-4",  3.0, 15.0 },
+        { "claude-haiku-4",   1.0,  5.0 },
+    };
+    if (!model) return -1.0;
+    for (size_t i = 0; i < sizeof P / sizeof P[0]; i++) {
+        if (strstr(model, P[i].key)) {
+            double in = P[i].in, out = P[i].out;
+            return ((double)u->input_tokens * in
+                  + (double)u->cache_creation_input_tokens * in * 1.25
+                  + (double)u->cache_read_input_tokens * in * 0.10
+                  + (double)u->output_tokens * out) / 1e6;
+        }
+    }
+    return -1.0;   /* unknown model — caller omits the $ line */
+}
+
+/* ---- append-only presentation (#302) ----------------------------------
+ * Chat's layout (~/git/chat/src/chat/ui.py) is speaker headers on their
+ * own line + a 2-space-indented body, rule separators, labelled tool
+ * blocks and a coloured diff — all as a forward-only byte stream (NO
+ * cursor motion, NO clears: ui.py's \033[H\033[J redraw erases
+ * scrollback, the one thing #301 proved gcode gets right). */
+
+/* Emit `s` to stderr, indenting every line by `depth` two-space units.
+ * A trailing newline is preserved; blank lines are not indented. */
+static void indent_err(const char *s, int depth) {
+    int bol = 1;
+    for (const char *p = s; *p; p++) {
+        if (bol && *p != '\n') { for (int i = 0; i < depth; i++) fputs("  ", stderr); }
+        fputc(*p, stderr);
+        bol = (*p == '\n');
+    }
+}
+
+/* A coloured line-diff of old_string -> new_string (diffvis.py:18-25):
+ * a bold summary, removed lines red with '-', added lines green with '+'.
+ * edit_file replaces one unique span, so old/new ARE the change — no LCS
+ * needed. Printed on stderr; append-only. */
+static void render_diff(const char *old_s, const char *new_s) {
+    int add = 0, del = 0;
+    for (const char *p = old_s; *p; p++) if (*p == '\n') del++;
+    if (*old_s && old_s[strlen(old_s) - 1] != '\n') del++;
+    for (const char *p = new_s; *p; p++) if (*p == '\n') add++;
+    if (*new_s && new_s[strlen(new_s) - 1] != '\n') add++;
+    fprintf(stderr, "    %sDiff%s %s+%d -%d%s\n", R_RES, CRST, D_HDR, add, del, CRST);
+    /* one coloured line per '\n'-terminated (or trailing) segment */
+    for (int pass = 0; pass < 2; pass++) {
+        const char *s = pass ? new_s : old_s;
+        const char *col = pass ? D_ADD : D_DEL;
+        char sign = pass ? '+' : '-';
+        const char *line = s;
+        while (*line) {
+            const char *nl = strchr(line, '\n');
+            size_t ll = nl ? (size_t)(nl - line) : strlen(line);
+            fprintf(stderr, "      %s%c %.*s%s\n", col, sign, (int)ll, line, CRST);
+            if (!nl) break;
+            line = nl + 1;
+        }
+    }
+}
+
+/* The primary argument of a tool call, shown indented under the tool line
+ * (ui.py:420-432 shows path/command). Multiline/long values are clipped. */
+static void render_tool_args(const char *name, cJSON *in) {
+    const char *key = NULL;
+    if (!strcmp(name, "bash"))            key = "command";
+    else                                  key = "path";   /* read/write/edit/list */
+    cJSON *v = cJSON_GetObjectItem(in, key);
+    if (!cJSON_IsString(v)) return;
+    const char *val = v->valuestring;
+    size_t n = strlen(val); const char *nl = strchr(val, '\n');
+    if (nl) n = (size_t)(nl - val);
+    if (n > 72) n = 72;
+    fprintf(stderr, "    %s%s:%s %.*s%s\n", CDIM, key, CRST, (int)n, val,
+            (n < strlen(val)) ? " ..." : "");
+}
+
+/* The tool result: a bold-yellow "Result" label + an indented preview,
+ * capped so a chatty command can't flood the transcript (ui.py:216-242). */
+static void render_tool_result(const char *result) {
+    fprintf(stderr, "    %sResult%s\n", R_RES, CRST);
+    if (!result || !*result) { fprintf(stderr, "      %s(empty)%s\n", CDIM, CRST); return; }
+    const char *line = result; int shown = 0;
+    while (*line && shown < 8) {
+        const char *nl = strchr(line, '\n');
+        size_t ll = nl ? (size_t)(nl - line) : strlen(line);
+        if (ll > 120) ll = 120;
+        fprintf(stderr, "      %.*s\n", (int)ll, line);
+        shown++;
+        if (!nl) break;
+        line = nl + 1;
+    }
+    if (*line) fprintf(stderr, "      %s...%s\n", CDIM, CRST);
+}
 
 static volatile sig_atomic_t g_interrupted;
 static void on_interrupt(int sig) { (void)sig; g_interrupted = 1; }
@@ -295,6 +429,44 @@ static char *run_command(const char *cmd, int *exit_code) {
 }
 #endif /* platform */
 /* ===================== end platform seam ============================== */
+
+/* ---- interactive line input (readline) --------------------------------
+ * In gucOS, reuse busybox's command-line editor — arrow-key history and
+ * line editing, the SAME src/libbb/lineedit.c hush runs — linked via
+ * os/gcode/bin.json's dep on vendor/busybox/lineedit.json (the lib.json <-
+ * bin.json convention gcode already uses for curl). No third editor is
+ * written. We declare only the tiny surface we call; libbb.h itself must
+ * NOT be included (it redefines FAST_FUNC and the whole libbb macro
+ * world). Native keeps fgets: it is the reference oracle, driven
+ * non-interactively, where lineedit would fall back to fgets anyway. */
+#ifdef __MTOTS__
+typedef struct line_input_t line_input_t;   /* opaque here; full def in libbb.h */
+line_input_t *new_line_input_t(int flags);
+int read_line_input(line_input_t *st, const char *prompt, char *command, int maxsize);
+#define LI_DO_HISTORY 1                      /* == libbb enum DO_HISTORY */
+static line_input_t *g_editor;
+#endif
+
+/* Read one input line. Returns 1 = got a line (trailing newline kept, as
+ * fgets), 0 = interrupted at the prompt (^C — caller re-prompts, #305),
+ * -1 = EOF/error (caller ends the session). The visible speaker header is
+ * printed by the caller; `prompt` is the editor's caret string. */
+static int read_input_line(const char *prompt, char *buf, int cap) {
+#ifdef __MTOTS__
+    if (!g_editor) g_editor = new_line_input_t(LI_DO_HISTORY);
+    int r = read_line_input(g_editor, prompt, buf, cap);
+    if (r > 0) return 1;
+    if (r == 0) return 0;            /* ^C in raw mode: command discarded */
+    /* r < 0 is EOF/Ctrl-D — unless a ^C EINTR'd the non-tty fallback fgets
+     * inside lineedit, which sets g_interrupted (the #305 distinction). */
+    return g_interrupted ? 0 : -1;
+#else
+    fputs(prompt, stderr); fflush(stderr);
+    if (fgets(buf, cap, stdin)) return 1;
+    if (g_interrupted) { clearerr(stdin); return 0; }
+    return -1;
+#endif
+}
 
 /* ---- file tools ------------------------------------------------------- */
 static char *tool_read_file(cJSON *in) {
@@ -580,7 +752,31 @@ typedef struct {
     usage round_usage;
     cJSON *raw_usage;
     int  api_error; sb errmsg;
+    int  hdr_shown, at_bol;         /* #302 append-only speaker/indent state */
 } stream_ctx;
+
+/* Print the assistant speaker header once per message (ui.py:357 — the
+ * "Assistant" line). On stdout so it stays part of the transcript with the
+ * streamed body; subsequent body lines indent 2 spaces (at_bol tracks it). */
+static void assistant_header(stream_ctx *ctx) {
+    if (ctx->hdr_shown) return;
+    ctx->hdr_shown = 1;
+    fprintf(stdout, "\n%sgcode:%s\n", O_ASST, O_RST);
+    fflush(stdout);
+    ctx->at_bol = 1;
+}
+
+/* Stream a text delta to stdout, indenting each line 2 spaces (ui.py's
+ * indent_text at depth 1). Append-only; flushes so tokens appear live. */
+static void emit_body(stream_ctx *ctx, const char *s) {
+    for (const char *p = s; *p; p++) {
+        if (ctx->at_bol && *p != '\n') fputs("  ", stdout);
+        ctx->at_bol = 0;
+        fputc(*p, stdout);
+        if (*p == '\n') ctx->at_bol = 1;
+    }
+    fflush(stdout);
+}
 
 static void merge_usage(stream_ctx *ctx, cJSON *src) {
     if (!cJSON_IsObject(src)) return;
@@ -619,7 +815,12 @@ static void dispatch_json(stream_ctx *ctx, const char *json) {
                 cJSON *nm = cJSON_GetObjectItem(cb, "name");
                 if (cJSON_IsString(id)) b->id = strdup(id->valuestring);
                 if (cJSON_IsString(nm)) b->name = strdup(nm->valuestring);
-                fprintf(stderr, "%s· %s%s\n", CCYAN, b->name ? b->name : "?", CRST);
+                /* #302: label the tool as a block. Ensure the assistant
+                 * text block above it ended its line (the "Let me run it.·
+                 * bash" run-on #301 screenshot 2 called out). */
+                assistant_header(ctx);
+                if (!ctx->at_bol) { fputc('\n', stdout); fflush(stdout); ctx->at_bol = 1; }
+                fprintf(stderr, "  %s\xe2\x97\x8f %s%s\n", R_TOOL, b->name ? b->name : "?", CRST);
             } else {
                 b->type = 't';
             }
@@ -635,7 +836,8 @@ static void dispatch_json(stream_ctx *ctx, const char *json) {
             if (!strcmp(dtype, "text_delta")) {
                 cJSON *tx = cJSON_GetObjectItem(d, "text");
                 if (cJSON_IsString(tx)) {
-                    fputs(tx->valuestring, stdout); fflush(stdout);
+                    assistant_header(ctx);
+                    emit_body(ctx, tx->valuestring);
                     sb_puts(&b->text, tx->valuestring);
                 }
             } else if (!strcmp(dtype, "input_json_delta")) {
@@ -749,16 +951,16 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
     int ret = 0;
     if (rc != CURLE_OK) {
         if (g_interrupted && rc == CURLE_ABORTED_BY_CALLBACK) { fprintf(stderr, "\n%sgcode: interrupted%s\n", CDIM, CRST); ret = -2; }
-        else { fprintf(stderr, "\n%sgcode: transport error: %s%s\n", CRED, curl_easy_strerror(rc), CRST); ret = -1; }
+        else { fprintf(stderr, "\n%sgcode: transport error: %s%s\n", R_ERRB, curl_easy_strerror(rc), CRST); ret = -1; }
         goto done;
     }
     if (code != 200) {
-        fprintf(stderr, "\n%scode: HTTP %ld%s\n%.*s\n", CRED, code, CRST,
+        fprintf(stderr, "\n%sgcode: HTTP %ld%s\n%.*s\n", R_ERRB, code, CRST,
                 (int)ctx.raw.len, ctx.raw.p ? ctx.raw.p : "");
         ret = (code == 401 || code == 403) ? -3 : -1; goto done;
     }
     if (ctx.api_error) {
-        fprintf(stderr, "\n%scode: API error: %s%s\n", CRED, ctx.errmsg.p ? ctx.errmsg.p : "?", CRST);
+        fprintf(stderr, "\n%sgcode: API error: %s%s\n", R_ERRB, ctx.errmsg.p ? ctx.errmsg.p : "?", CRST);
         ret = -1; goto done;
     }
     free(sess->last_stop); sess->last_stop = strdup(ctx.stop_reason ? ctx.stop_reason : "");
@@ -784,14 +986,23 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
             cJSON_AddStringToObject(ub, "name", b->name ? b->name : "");
             cJSON_AddItemToObject(ub, "input", input);   /* ub owns input now */
             cJSON_AddItemToArray(acontent, ub);
-            /* execute and collect a tool_result */
+            /* #302: show the primary argument, then a labelled result block;
+             * for edit_file, render the coloured old->new diff (diffvis.py). */
+            render_tool_args(b->name ? b->name : "", input);
             char *result = execute_tool(b->name ? b->name : "", input);
             cJSON *tr = cJSON_CreateObject();
             cJSON_AddStringToObject(tr, "type", "tool_result");
             cJSON_AddStringToObject(tr, "tool_use_id", b->id ? b->id : "");
             cJSON_AddStringToObject(tr, "content", result ? result : "");
             cJSON_AddItemToArray(tool_results, tr);
-            fprintf(stderr, "%s  → %.200s%s\n", CDIM, result ? result : "", CRST);
+            render_tool_result(result);
+            if (b->name && !strcmp(b->name, "edit_file") && result &&
+                !strncmp(result, "edited ", 7)) {
+                cJSON *jo = cJSON_GetObjectItem(input, "old_string");
+                cJSON *jn = cJSON_GetObjectItem(input, "new_string");
+                if (cJSON_IsString(jo) && cJSON_IsString(jn))
+                    render_diff(jo->valuestring, jn->valuestring);
+            }
             free(result);
         }
     }
@@ -821,7 +1032,7 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
     } else {
         cJSON_Delete(tool_results);
         if (ctx.stop_reason && !strcmp(ctx.stop_reason, "refusal"))
-            fprintf(stderr, "%scode: model refused the request%s\n", CRED, CRST);
+            fprintf(stderr, "%sgcode: model refused the request%s\n", R_ERRB, CRST);
         ret = 0;
     }
 
@@ -836,9 +1047,12 @@ done:
 }
 
 /* run the agent loop for one user message already appended to `messages` */
-static void report_usage(const char *label, const usage *u) {
+static void report_usage(const char *label, const usage *u, const char *model) {
     fprintf(stderr, "%s%s usage: input=%lld output=%lld cache-create=%lld cache-read=%lld%s\n", CDIM, label,
             u->input_tokens, u->output_tokens, u->cache_creation_input_tokens, u->cache_read_input_tokens, CRST);
+    double cost = price_usage(model, u);   /* #302: price the counters gcode already holds */
+    if (cost >= 0.0)
+        fprintf(stderr, "%s%s cost: $%.6f%s\n", R_COST, label, cost, CRST);
 }
 
 static int agent_loop(config *cfg, session *sess, cJSON *messages, cJSON *tools) {
@@ -857,7 +1071,7 @@ static int agent_loop(config *cfg, session *sess, cJSON *messages, cJSON *tools)
     cJSON_AddStringToObject(end, "stop_reason", last > 0 ? "max_turns" : (sess->last_stop ? sess->last_stop : "")); cJSON_AddNumberToObject(end, "api_rounds", rounds);
     cJSON_AddItemToObject(end, "usage", usage_json(&turn)); cJSON_AddItemToObject(end, "session_usage", usage_json(&sess->total));
     if (record_write(sess, end)) return -1;
-    report_usage("turn", &turn); report_usage("session", &sess->total);
+    report_usage("turn", &turn, cfg->model); report_usage("session", &sess->total, cfg->model);
     /* 0 = done or interrupted (^C lands back at the prompt), -1 =
        recoverable turn error, -3 = auth (fatal — #305) */
     return last == -2 ? 0 : (last == -3 ? -3 : (last < 0 ? -1 : 0));
@@ -978,7 +1192,7 @@ int main(int argc, char **argv) {
     cfg.max_tokens = 4096;
     cfg.max_turns  = 24;
     cfg.verbose = 0;
-    cfg.color = 1;
+    cfg.color = -1;   /* #303: -1 auto (isatty), 0 forced off, 1 forced on */
 
     const char *prompt = NULL, *resume = NULL; int persist = 1, do_continue = 0, do_self_test = 0;
     for (int i = 1; i < argc; i++) {
@@ -989,6 +1203,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--max-tokens") && i + 1 < argc)  cfg.max_tokens = atol(argv[++i]);
         else if (!strcmp(argv[i], "--verbose"))                     cfg.verbose = 1;
         else if (!strcmp(argv[i], "--no-color"))                    cfg.color = 0;
+        else if (!strcmp(argv[i], "--color"))                       cfg.color = 1;
         else if (!strcmp(argv[i], "--no-persist"))                  persist = 0;
         else if (!strcmp(argv[i], "--resume") && i + 1 < argc)      resume = argv[++i];
         else if (!strcmp(argv[i], "-c") || !strcmp(argv[i], "--continue")) do_continue = 1;
@@ -996,13 +1211,23 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             printf("usage: gcode [-p PROMPT] [--model M] [--system-prompt S]\n"
                    "            [--max-turns N] [--max-tokens N] [--resume ID|PATH] [-c|--continue]\n"
-                   "            [--no-persist] [--verbose] [--no-color]\n"
+                   "            [--no-persist] [--verbose] [--no-color] [--color]\n"
                    "env: ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL,\n"
-                   "     GCODE_STATE_DIR, XDG_STATE_HOME\n");
+                   "     GCODE_STATE_DIR, XDG_STATE_HOME, NO_COLOR\n");
             return 0;
         }
     }
-    g_color = cfg.color;
+    /* #303: resolve colour per stream. --color forces on; --no-color or a
+     * non-empty NO_COLOR (no-color.org) forces off; otherwise auto from
+     * isatty — stdout (content) and stderr (chrome) decided independently,
+     * so `gcode -p x > f` leaves f byte-clean while a tty stderr keeps
+     * colour. */
+    {
+        const char *nc = getenv("NO_COLOR");
+        if (cfg.color == 1)                       { g_color = g_color_err = 1; }
+        else if (cfg.color == 0 || (nc && *nc))   { g_color = g_color_err = 0; }
+        else { g_color = isatty(fileno(stdout)); g_color_err = isatty(fileno(stderr)); }
+    }
     signal(SIGINT, on_interrupt);
     if (do_self_test) return self_test();
     if (!persist && (resume || do_continue)) { fprintf(stderr, "gcode: --no-persist cannot be used with resume\n"); return 2; }
@@ -1023,16 +1248,18 @@ int main(int argc, char **argv) {
         if (append_user_text(&sess, messages, prompt) || agent_loop(&cfg, &sess, messages, tools)) { session_end(&sess, "eof"); return 1; }
         session_end(&sess, "eof");
     } else {
-        fprintf(stderr, "%scode — type a request, /quit to exit%s\n", CDIM, CRST);
+        /* #302: framed info banner (ui.py's ==== rule separators) */
+        const char *rule = "==================================================";
+        fprintf(stderr, "%s%s%s\n", R_INFO, rule, CRST);
+        fprintf(stderr, "%s gcode%s \xe2\x80\x94 type a request, /quit to exit\n", R_INFO, CRST);
+        fprintf(stderr, "%s%s%s\n", R_INFO, rule, CRST);
         char line[8192];
         for (;;) {
-            fputs("\n> ", stderr); fflush(stderr);
-            if (!fgets(line, sizeof line, stdin)) {
-                /* ^C at the prompt (EINTR'd read): fresh prompt, not exit —
-                   only a real EOF ends the session */
-                if (g_interrupted) { g_interrupted = 0; clearerr(stdin); continue; }
-                session_end(&sess, "eof"); break;
-            }
+            /* #302: named speaker header on its own line, indented input */
+            fprintf(stderr, "\n%sYou:%s\n", R_USER, CRST);
+            int r = read_input_line("  ", line, sizeof line);
+            if (r == 0) { g_interrupted = 0; continue; }   /* ^C: fresh prompt (#305) */
+            if (r < 0) { session_end(&sess, "eof"); break; } /* real EOF ends the session */
             size_t n = strlen(line);
             while (n && (line[n-1] == '\n' || line[n-1] == '\r')) line[--n] = 0;
             if (!n) continue;
@@ -1045,9 +1272,9 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "%s[history cleared]%s\n", CDIM, CRST); continue;
             }
             if (append_user_text(&sess, messages, line)) break;
-            int r = agent_loop(&cfg, &sess, messages, tools);
+            int turn_rc = agent_loop(&cfg, &sess, messages, tools);
             g_interrupted = 0;   /* consumed: a stale mid-turn ^C must not eat the next EOF */
-            if (r == -3) { session_end(&sess, "error"); break; }   /* auth: retrying cannot succeed */
+            if (turn_rc == -3) { session_end(&sess, "error"); break; }   /* auth: retrying cannot succeed */
             /* r == -1 (recoverable turn error — transport, 5xx/429, timeout)
                returns to the prompt like r == 0: the error line already
                printed red, and the failed user message STAYS in history —

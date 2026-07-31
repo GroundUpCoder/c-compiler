@@ -1,0 +1,28 @@
+{
+  "type": "lib",
+  "name": "busybox-lineedit",
+  "description": "busybox libbb command-line editor (src/libbb/lineedit.c) packaged as a reusable library slice so non-shell binaries can get the SAME arrow-key history/editing hush uses (todos gcode band): deps on libbb-core, adds the editor + its read_key/signal/poll support. lib.json <- bin.json deps convention (os/curl precedent).",
+  "deps": [
+    "libbb-core.json"
+  ],
+  "includes": [
+    "src/include",
+    "port/include"
+  ],
+  "compilerArgs": [
+    "-DBB_VER=\"1.37.0-wasm\"",
+    "-DBB_GLOBAL_CONST="
+  ],
+  "sources": [
+    "src/libbb/lineedit.c",
+    "src/libbb/lineedit_ptr_hack.c",
+    "src/libbb/read_key.c",
+    "src/libbb/signals.c",
+    "src/libbb/u_signal_names.c",
+    "src/libbb/safe_poll.c",
+    "src/libbb/safe_gethostname.c",
+    "src/libbb/endofname.c",
+    "src/libbb/executable.c",
+    "port/vfork_spawn.c"
+  ]
+}

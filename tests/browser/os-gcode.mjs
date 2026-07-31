@@ -134,6 +134,7 @@ const srv = await startSse([
   textResponse('VT1 hello — colours over the tty. END-VT1'),
   toolUseResponse('Let me run it.', 'toolu_b1', 'bash', { command: 'echo hello-gcode' }),
   textResponse('The command printed hello-gcode. TOOL-TURN-DONE'),
+  textResponse('History recall reply. RECALL-DONE'),   // readline leg (Up-arrow)
   textResponse(longText()),
   STALL,
 ]);
@@ -177,6 +178,8 @@ try {
   // glyph cores of PAL cyan (17,168,205) / PAL red (205,49,49) on black
   const cyan = (x, y, w, h) => scan(x, y, w, h, 'r < 90 && g > 110 && b > 140 && b > r + 80');
   const red = (x, y, w, h) => scan(x, y, w, h, 'r > 150 && g < 100 && b < 100 && r > g + 80');
+  // #302: the tool line is bold magenta (SGR 1;35) — high r AND b, low g.
+  const magenta = (x, y, w, h) => scan(x, y, w, h, 'r > 130 && b > 130 && g < 110 && r > g + 60 && b > g + 60');
   const quiesce = async (x, y, w, h, ms = 20000) => {
     let prev = -1; const t0 = Date.now();
     for (;;) {
@@ -273,14 +276,21 @@ try {
   check('gcode banner rendered in the term grid', true);
   await shot('1-gcode-banner');
 
-  // ---- leg 1: tool-use turn — cyan tool name, streamed text -----------
+  // ---- leg 1: tool-use turn — #302 roles: bold-cyan assistant header,
+  // bold-magenta tool line, streamed indented body -----------------------
   const cyanBefore = await cyan(G.x, G.y, G.w, G.h);
+  const magentaBefore = await magenta(G.x, G.y, G.w, G.h);
   await page.keyboard.type('run echo for me\r', { delay: 30 });
   await waitBodies(3);   // initial POST + tool_result POST
   await quiesce(G.x, G.y, G.w, G.h);
   const cyanAfter = await cyan(G.x, G.y, G.w, G.h);
-  check('cyan glyphs appeared (the "· bash" tool line, SGR 36)',
+  const magentaAfter = await magenta(G.x, G.y, G.w, G.h);
+  // cyan is now the "gcode:" speaker header (SGR 1;36) — NOT the tool line,
+  // which moved to bold magenta (this claim was stale after #302; fixed).
+  check('#302: assistant speaker header rendered (bold-cyan glyphs, SGR 1;36)',
     cyanAfter > cyanBefore + 8, `${cyanBefore} -> ${cyanAfter}`);
+  check('#302: tool line rendered in bold magenta (SGR 1;35)',
+    magentaAfter > magentaBefore + 8, `${magentaBefore} -> ${magentaAfter}`);
   const tr = srv.bodies[2].messages[srv.bodies[2].messages.length - 1].content[0];
   check('bash tool really ran in-OS (tool_result carries its output)',
     tr && tr.type === 'tool_result' && tr.content.includes('hello-gcode')
@@ -289,9 +299,29 @@ try {
     JSON.stringify(srv.bodies[1].messages).includes('run echo for me'));
   await shot('2-gcode-tool-colours');
 
+  // ---- leg 1b (readline): Up-arrow recalls the previous input ----------
+  // gcode now drives busybox lineedit (the same editor hush runs), linked
+  // via os/gcode/bin.json's dep on vendor/busybox/lineedit.json. At the
+  // fresh "You:" prompt, ArrowUp must recall "run echo for me" and Enter
+  // must resubmit it — judged by the fake server seeing that exact text in
+  // a NEW POST. A term is a real pty, so lineedit engages raw mode here
+  // (a piped stdin would fall back to fgets — the Lane A probe caveat).
+  await page.keyboard.press('ArrowUp');
+  await sleep(500);   // no-marker settle: the recalled line renders on the prompt
+  await page.keyboard.press('Enter');
+  await waitBodies(4);
+  await quiesce(G.x, G.y, G.w, G.h);
+  const recall = srv.bodies[3];
+  const recallUsers = recall.messages.filter((m) => m.role === 'user')
+    .map((m) => JSON.stringify(m.content));
+  check('readline: Up-arrow recalled the prior input and resubmitted it',
+    recallUsers.some((c) => c.includes('run echo for me')),
+    JSON.stringify(recallUsers).slice(0, 200));
+  await shot('2b-readline-recall');
+
   // ---- leg 2: long streamed reply, then scrollback --------------------
   await page.keyboard.type('tell me a long story\r', { delay: 30 });
-  await waitBodies(4);
+  await waitBodies(5);
   await quiesce(G.x, G.y, G.w, G.h);
   await shot('3-long-reply-live-bottom');
   const liveSig = await bright(G.x, G.y, G.w, 100);   // top rows fingerprint
@@ -342,7 +372,7 @@ try {
   // ---- leg 4: Ctrl+C aborts a stalled stream (#306 — judged since the
   // xferinfo path landed; was recorded-only while interrupt was dead) ----
   await page.keyboard.type('stall please\r', { delay: 30 });
-  await waitBodies(5);
+  await waitBodies(6);
   await sleep(1500);   // partial delta rendered; server now holds for 8s
   await shot('8-mid-stream-stall');
   await page.keyboard.down('Control');
@@ -367,7 +397,7 @@ try {
   await quiesce(G2.x, G2.y, G2.w, G2.h);   // new session line + prompt before typing
   const redBefore = await red(G2.x, G2.y, G2.w, G2.h);
   await page.keyboard.type('error demo\r', { delay: 30 });
-  await waitBodies(6);   // exhausted queue -> HTTP 500
+  await waitBodies(7);   // exhausted queue -> HTTP 500
   await quiesce(G2.x, G2.y, G2.w, G2.h);
   const redAfter = await red(G2.x, G2.y, G2.w, G2.h);
   check('HTTP error rendered in red (SGR 31)', redAfter > redBefore + 8,
@@ -378,7 +408,7 @@ try {
   // the SAME gcode must reach the API (a dead gcode drops the line into
   // hush and never POSTs; pre-#305 this was the crash-to-shell).
   await page.keyboard.type('again please\r', { delay: 30 });
-  await waitBodies(7);   // exhausted queue answers 500 again; the POST is the proof
+  await waitBodies(8);   // exhausted queue answers 500 again; the POST is the proof
   await quiesce(G2.x, G2.y, G2.w, G2.h);
   check('REPL survived the HTTP 500: follow-up send reached the API (#305)', true);
   await page.keyboard.type('/quit\r', { delay: 30 });

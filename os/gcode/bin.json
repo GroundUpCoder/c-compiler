@@ -3,7 +3,8 @@
   "name": "gcode",
   "description": "/bin/gcode (todos/0174): line-oriented agentic coding assistant — Anthropic Messages API over the 0173 libcurl veneer, cJSON, posix_spawn bash tool; dual-target with the native clang -lcurl build (os/gcode/build-native.sh). /bin/code is a back-compat symlink -> gcode.",
   "deps": [
-    "../curl/lib.json"
+    "../curl/lib.json",
+    "../../vendor/busybox/lineedit.json"
   ],
   "includes": [
     "../../vendor/cjson"
