@@ -297,7 +297,8 @@ static LRESULT CALLBACK StProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_COMMAND) {
         if (HIWORD(wp) == EN_VSCROLL) st_envscroll++;
         if (HIWORD(wp) == EN_HSCROLL) st_enhscroll++;
-        if (LOWORD(wp) == 910 || LOWORD(wp) == 911) {
+        if (LOWORD(wp) == 910 || LOWORD(wp) == 911 ||
+            LOWORD(wp) == 915 || LOWORD(wp) == 916) {
             switch (HIWORD(wp)) {
             case BN_CLICKED:   st_bnclick++; break;
             case BN_SETFOCUS:  st_bnset++;   break;
@@ -737,6 +738,30 @@ static int selftest(void) {
     SendMessage(bp, WM_LBUTTONUP, 0, MAKELPARAM(5, 5));
     st_check("plain dblclk stays a press (BN_CLICKED, no BN_DBLCLK)",
              st_bnclick == 1 && st_bndbl == 0);
+
+    /* ---- #345 (the #343 divergence, closed): BS_RADIOBUTTON and
+     * BS_OWNERDRAW auto-send BN_DBLCLK on a double-click even WITHOUT
+     * BS_NOTIFY — real Windows' button proc; a plain pushbutton (the
+     * check above) still presses. */
+    HWND br = CreateWindowEx(0, "BUTTON", "radio",
+                             WS_CHILD | WS_VISIBLE | BS_RADIOBUTTON,
+                             260, 120, 60, 24, top, (HMENU)915, NULL, NULL);
+    HWND bo = CreateWindowEx(0, "BUTTON", "odraw",
+                             WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                             330, 120, 60, 24, top, (HMENU)916, NULL, NULL);
+    st_check("radio/ownerdraw probe buttons created", br != NULL && bo != NULL);
+    st_bn_reset();
+    SendMessage(br, WM_LBUTTONDBLCLK, MK_LBUTTON, MAKELPARAM(5, 5));
+    SendMessage(br, WM_LBUTTONUP, 0, MAKELPARAM(5, 5));
+    st_check("plain radio dblclk sends BN_DBLCLK without BS_NOTIFY (#345)",
+             st_bndbl == 1);
+    st_check("the radio dblclk is not also a press", st_bnclick == 0);
+    st_bn_reset();
+    SendMessage(bo, WM_LBUTTONDBLCLK, MK_LBUTTON, MAKELPARAM(5, 5));
+    SendMessage(bo, WM_LBUTTONUP, 0, MAKELPARAM(5, 5));
+    st_check("plain ownerdraw dblclk sends BN_DBLCLK without BS_NOTIFY (#345)",
+             st_bndbl == 1);
+    st_check("the ownerdraw dblclk is not also a press", st_bnclick == 0);
 
     /* ---- ES_NUMBER (#343): WM_CHAR is digits-only — rejects insert
      * nothing (and beep); backspace still edits; a plain EDIT keeps

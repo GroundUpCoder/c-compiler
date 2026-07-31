@@ -2665,7 +2665,10 @@ static const struct { const char *cls; DWORD low; } CLS_LOW_KNOWN[] = {
                                   left/right/top/bottom variants would
                                   silently center, recorded divergence);
                                   BS_NOTIFY: read (#343 — btn_proc's
-                                  BN_SETFOCUS/KILLFOCUS/DBLCLK gate) */
+                                  BN_SETFOCUS/KILLFOCUS/DBLCLK gate; #345
+                                  widened the DBLCLK arm: BS_RADIOBUTTON/
+                                  BS_OWNERDRAW kinds auto-notify without
+                                  the bit, the real Windows shape) */
     { "STATIC",    0x1203u },  /* type & 0x3 + SS_SUNKEN read; SS_CENTERIMAGE
                                   holds by construction (0236 single-line
                                   vcenter — calc's display) */
@@ -3469,17 +3472,20 @@ static LRESULT btn_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (btn_kind(h) == BS_OWNERDRAW) btn_paint_ownerdraw(h);
         else btn_paint(h);
         return 0;
-    case WM_LBUTTONDBLCLK:
+    case WM_LBUTTONDBLCLK: {
         /* BS_NOTIFY (#343): the second click of a pair notifies the parent
          * instead of pressing (the Windows/Wine button proc shape — no
          * focus/capture, no BN_CLICKED from the following button-up).
-         * Without the bit it falls through to a plain press. Windows also
-         * auto-notifies BS_RADIOBUTTON/BS_OWNERDRAW without the bit; #343
-         * scopes the gate to BS_NOTIFY alone. */
-        if (h->style & BS_NOTIFY) {
+         * Without the bit it falls through to a plain press — EXCEPT the
+         * BS_RADIOBUTTON and BS_OWNERDRAW kinds, which Windows
+         * auto-notifies even without the bit (#345 widened #343's gate). */
+        int dk = btn_kind(h);
+        if ((h->style & BS_NOTIFY) ||
+            dk == BS_RADIOBUTTON || dk == BS_OWNERDRAW) {
             btn_notify(h, BN_DBLCLK);
             return 0;
         }
+    }
         /* fall through */
     case WM_LBUTTONDOWN:
         SetFocus(h);
