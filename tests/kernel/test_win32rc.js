@@ -58,32 +58,44 @@ check('win32rc exits 0', r.status === 0, r.stderr);
 var controls = {};
 if (r.status === 0) {
   var b = fs.readFileSync(out);
-  check('WRES v2 header', b.toString('ascii', 0, 4) === 'WRES' && b.readUInt32LE(4) === 2);
+  check('WRES v3 header', b.toString('ascii', 0, 4) === 'WRES' && b.readUInt32LE(4) === 3);
+  var d = readDialog(b);
+  check('RT_DIALOG entry present', d !== null);
+  if (d) {
+    for (var id0 in d.controls) controls[id0] = d.controls[id0].style;
+    check('all 5 controls serialized', d.n === 5, String(d.n));
+  }
+}
+
+// Walk the WRES v3 RT_DIALOG record (layout: tools/win32rc.js header
+// comment — the MUST-MATCH spec) and return dialog + per-control words.
+function readDialog(b) {
   var count = b.readUInt32LE(8);
-  var dlg = null;
+  var off = -1;
   for (var i = 0; i < count; i++) {
     var base = 12 + i * 12;
-    if (b.readUInt16LE(base) === 5) dlg = { off: b.readUInt32LE(base + 4) };
+    if (b.readUInt16LE(base) === 5) off = b.readUInt32LE(base + 4);
   }
-  check('RT_DIALOG entry present', dlg !== null);
-  if (dlg) {
-    var o = dlg.off + 8;                         // skip i16 x,y,w,h
-    o += 4;                                      // u32 style
-    o += 2;                                      // u16 menuId
-    o += 2 + b.readUInt16LE(o);                  // caption
-    o += 2;                                      // fontSize
-    o += 2 + b.readUInt16LE(o);                  // face
-    var n = b.readUInt16LE(o); o += 2;
-    for (var c = 0; c < n; c++) {
-      o += 1;                                    // u8 class
-      var id = b.readInt16LE(o); o += 2;
-      o += 8;                                    // x,y,w,h
-      var style = b.readUInt32LE(o); o += 4;
-      o += 2 + b.readUInt16LE(o);                // text
-      controls[id] = style >>> 0;
-    }
-    check('all 5 controls serialized', n === 5, String(n));
+  if (off < 0) return null;
+  var o = off + 8;                               // skip i16 x,y,w,h
+  var style = b.readUInt32LE(o); o += 4;
+  var exStyle = b.readUInt32LE(o); o += 4;       // v3 (#322)
+  o += 2;                                        // u16 menuId
+  o += 2 + b.readUInt16LE(o);                    // caption
+  o += 2;                                        // fontSize
+  o += 2 + b.readUInt16LE(o);                    // face
+  var n = b.readUInt16LE(o); o += 2;
+  var controls = {};
+  for (var c = 0; c < n; c++) {
+    o += 1;                                      // u8 class
+    var id = b.readInt16LE(o); o += 2;
+    o += 8;                                      // x,y,w,h
+    var cstyle = b.readUInt32LE(o); o += 4;
+    var cex = b.readUInt32LE(o); o += 4;         // v3 (#322)
+    o += 2 + b.readUInt16LE(o);                  // text
+    controls[id] = { style: cstyle >>> 0, exStyle: cex >>> 0 };
   }
+  return { style: style >>> 0, exStyle: exStyle >>> 0, n: n, controls: controls };
 }
 
 check('bare NOT WS_VISIBLE clears the keyword default (style has no 0x10000000)',
@@ -99,11 +111,14 @@ check('NOT clears from the RESULT (later OR does not resurrect the bit)',
 check('#define-carried NOT behaves like the inline spelling',
   controls[105] === controls[101], hex(controls[105]) + ' vs ' + hex(controls[101]));
 
-/* ---- #318 (v): recognized-then-discarded constructs WARN now ----
- * EXSTYLE (dialog-level, CONTROL tail, keyword-control tail) never
- * reaches the WRES format (gap #2 — the WS_EX_CLIENTEDGE class), and a
- * non-VIRTKEY accelerator entry compiles fine but TranslateAcceleratorW
- * skips it forever (gap #25). Spawned WITHOUT -q so warn() shows. */
+/* ---- #322: EXSTYLE reaches the WRES format (v3) ----
+ * The dialog-level EXSTYLE statement and both control exstyle-tail
+ * spellings (CONTROL tail, keyword-control tail) EMIT into the v3
+ * record — u32 exstyle after each u32 style — where #318 (v) used to
+ * warn-and-discard them (gap #2, the WS_EX_CLIENTEDGE class). user32's
+ * dlg_create passes them to CreateWindowEx, so a template's
+ * WS_EX_CLIENTEDGE really draws. The accelerator warn (gap #25) is
+ * UNCHANGED — spawned WITHOUT -q so warn() shows for it. */
 var rc2 = path.join(tmp2(), 'w.rc');
 var out2 = path.join(path.dirname(rc2), 'w.res');
 function tmp2() { return fs.mkdtempSync(path.join(os.tmpdir(), 'win32rc-')); }
@@ -116,6 +131,7 @@ fs.writeFileSync(rc2, [
   'BEGIN',
   '    CONTROL "gen", 201, "EDIT", WS_TABSTOP, 0, 0, 50, 12, 0x200',
   '    EDITTEXT 202, 0, 20, 50, 12, WS_TABSTOP, 0x200',
+  '    LTEXT "plain", 203, 0, 40, 50, 12',
   'END',
   '10 ACCELERATORS',
   'BEGIN',
@@ -127,12 +143,22 @@ var r2 = spawnSync(process.execPath,
   [path.join(ROOT, 'tools/win32rc.js'), rc2, '-o', out2],
   { encoding: 'utf8' });
 check('warn run exits 0 (warnings are not errors)', r2.status === 0, r2.stderr);
-check('dialog-level EXSTYLE discard warns',
-  /dialog 9: EXSTYLE 0x200 discarded/.test(r2.stderr), r2.stderr);
-check('CONTROL exstyle-tail discard warns',
-  /dialog 9 control 201: EXSTYLE 0x200 discarded/.test(r2.stderr), r2.stderr);
-check('keyword-control exstyle-tail discard warns',
-  /dialog 9 control 202: EXSTYLE 0x200 discarded/.test(r2.stderr), r2.stderr);
+check('EXSTYLE no longer warns as discarded (#322: it is carried)',
+  !/EXSTYLE .* discarded/.test(r2.stderr), r2.stderr);
+var d2 = r2.status === 0 ? readDialog(fs.readFileSync(out2)) : null;
+check('dialog-level EXSTYLE arrives in the v3 record',
+  d2 !== null && d2.exStyle === 0x200, d2 && hex(d2.exStyle));
+check('CONTROL exstyle-tail arrives on the control',
+  d2 !== null && d2.controls[201] && d2.controls[201].exStyle === 0x200,
+  d2 && d2.controls[201] && hex(d2.controls[201].exStyle));
+check('keyword-control exstyle-tail arrives on the control',
+  d2 !== null && d2.controls[202] && d2.controls[202].exStyle === 0x200,
+  d2 && d2.controls[202] && hex(d2.controls[202].exStyle));
+check('a control without a tail carries exstyle 0',
+  d2 !== null && d2.controls[201] && d2.controls[202] &&
+  Object.keys(d2.controls).every(function (k) {
+    return k === '201' || k === '202' || d2.controls[k].exStyle === 0;
+  }));
 check('non-VIRTKEY accelerator entry warns as never-fires',
   /accelerator \(key 81, cmd 300\): not VIRTKEY/.test(r2.stderr), r2.stderr);
 check('VIRTKEY accelerator entry does not warn',

@@ -847,7 +847,18 @@ static void res_try(const char *path) {
     uint8_t *buf = (uint8_t *)malloc((size_t)n);
     if (!buf || fread(buf, 1, (size_t)n, f) != (size_t)n) { free(buf); fclose(f); return; }
     fclose(f);
-    if (memcmp(buf, "WRES", 4) != 0 || rd32(buf + 4) != 2) { free(buf); return; }
+    if (memcmp(buf, "WRES", 4) != 0) { free(buf); return; }
+    if (rd32(buf + 4) != 3) {
+        /* A version mismatch is a STALE SIDECAR, and silence here reads as
+         * "app has no resources" — strings, menus, dialogs all just gone
+         * blank (#322). Report and refuse; never guess at a foreign layout. */
+        WIN32_UNSUPPORTED("resource pack %s: WRES v%u, loader wants v3 — "
+                          "stale sidecar, regenerate with tools/win32rc.js "
+                          "(ALL resources unavailable)",
+                          path, (unsigned)rd32(buf + 4));
+        free(buf);
+        return;
+    }
     g_res = buf;
     g_resSize = (uint32_t)n;
     g_resState = 1;
@@ -6072,6 +6083,7 @@ static HWND dlg_create(HINSTANCE inst, LPCWSTR tmpl, HWND owner,
     rr16(&r); rr16(&r);                          /* x, y: the WM places us */
     int dw = (int)(short)rr16(&r), dh = (int)(short)rr16(&r);
     uint32_t tstyle = rr32(&r);                  /* dialog style: reported below */
+    uint32_t texstyle = rr32(&r);                /* WRES v3 (#322): WS_EX_* */
     int menuId = (int)rr16(&r);                  /* WRES v2: template MENU */
     char *caption = rrstr(&r);
     int fsize = (int)rr16(&r);                   /* font record: reported below */
@@ -6094,7 +6106,7 @@ static HWND dlg_create(HINSTANCE inst, LPCWSTR tmpl, HWND owner,
     /* A template menu rides the surface's top MENU_BAR_H pixels — grow the
      * window so the CLIENT area still matches the template (calc). */
     HMENU tmplMenu = menuId ? LoadMenuW(NULL, MAKEINTRESOURCEW(menuId)) : NULL;
-    HWND dlg = CreateWindowEx(0, "#32770", caption ? caption : "",
+    HWND dlg = CreateWindowEx(texstyle, "#32770", caption ? caption : "",
                               WS_POPUP | WS_VISIBLE,
                               0, 0, dw * bx / 4,
                               dh * by / 8 + (tmplMenu ? MENU_BAR_H : 0),
@@ -6118,6 +6130,7 @@ static HWND dlg_create(HINSTANCE inst, LPCWSTR tmpl, HWND owner,
         int cx = (int)(short)rr16(&r), cy = (int)(short)rr16(&r);
         int cw = (int)(short)rr16(&r), ch = (int)(short)rr16(&r);
         uint32_t style = rr32(&r);
+        uint32_t cex = rr32(&r);                 /* WRES v3 (#322): WS_EX_* */
         char *text = rrstr(&r);
         if (r.bad) { free(text); break; }
         if (!DLG_CLASSES[cls] || !class_find(DLG_CLASSES[cls])) {
@@ -6128,7 +6141,7 @@ static HWND dlg_create(HINSTANCE inst, LPCWSTR tmpl, HWND owner,
             free(text);
             continue;
         }
-        HWND c = CreateWindowEx(0, DLG_CLASSES[cls], text ? text : "",
+        HWND c = CreateWindowEx(cex, DLG_CLASSES[cls], text ? text : "",
                                 style, cx * bx / 4, cy * by / 8,
                                 cw * bx / 4, ch * by / 8,
                                 dlg, (HMENU)(UINT_PTR)(id & 0xFFFF), NULL, NULL);

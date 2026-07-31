@@ -13,7 +13,7 @@
 // **the WRES format below MUST MATCH os/win32/user32.c `res_*`** (the
 // loader re-declares it; change both together):
 //
-//   header:  "WRES" u32-version(2) u32-count
+//   header:  "WRES" u32-version(3) u32-count
 //   entries: count x { u16 type, u16 id, u32 off, u32 size }   (file offsets)
 //   data:    blobs (layouts below; all little-endian, strings UTF-8)
 //
@@ -22,13 +22,16 @@
 //                     item := u8 kind (0 item | 1 popup | 2 separator)
 //                       kind 0: u16 id, u16 textLen, text
 //                       kind 1: u16 textLen, text, menu (recursive)
-//   type 5 RT_DIALOG: i16 x,y,w,h (dialog units), u32 style, u16 menuId
-//                     (0 = none; v2 — calc's templates carry MENU),
-//                     u16 capLen, caption, u16 fontSize, u16 faceLen, face,
-//                     u16 n, n x control
+//   type 5 RT_DIALOG: i16 x,y,w,h (dialog units), u32 style,
+//                     u32 exstyle (v3 — the dialog-level WS_EX_* dword;
+//                     #322 ended the recognize-then-discard era),
+//                     u16 menuId (0 = none; v2 — calc's templates carry
+//                     MENU), u16 capLen, caption, u16 fontSize,
+//                     u16 faceLen, face, u16 n, n x control
 //                     control := u8 class (1 BUTTON 2 EDIT 3 STATIC
 //                       4 LISTBOX 5 SCROLLBAR 6 COMBOBOX), i16 id,
-//                       i16 x,y,w,h, u32 style, u16 textLen, text
+//                       i16 x,y,w,h, u32 style, u32 exstyle (v3),
+//                       u16 textLen, text
 //   type 6 RT_STRING: one entry PER STRING id (not Windows' 16-bundles);
 //                     data = the UTF-8 bytes
 //   type 9 RT_ACCELERATOR: u16 n, n x { u8 fFlags, u16 key, u16 cmd }
@@ -503,17 +506,14 @@ function parseDialog(id, isEx) {
   const dw = value(); expect(',', ','); const dh = value();
   skipNl();
   let style = 0x80C80080 >>> 0;                  // WS_POPUP|WS_CAPTION|DS_MODALFRAME (default-ish)
+  let exStyle = 0;                               // WRES v3 (#322): carried, not discarded
   let caption = '', fontSize = 8, fontFace = 'MS Shell Dlg', menuId = 0;
   for (;;) {
     skipNl();
     if (atId('STYLE')) { next(); style = applyStyle(0, styleExpr()); }
     else if (atId('EXSTYLE')) {
-      // #318 (v): the WRES format carries no exstyle — a nonzero EXSTYLE is
-      // recognized-then-DISCARDED (gap #2; the end-to-end fix is #322).
-      // Silent discard is how WS_EX_CLIENTEDGE class bugs hide for months.
       next();
-      const ex = applyStyle(0, styleExpr());     // {or,not} -> effective bits
-      if (ex) warn(`dialog ${id}: EXSTYLE 0x${ex.toString(16)} discarded (not in WRES; #322)`);
+      exStyle = applyStyle(exStyle, styleExpr()); // {or,not} -> effective bits
     }
     else if (atId('CAPTION')) { next(); caption = expect('str', 'caption').v; }
     else if (atId('FONT')) {
@@ -543,14 +543,14 @@ function parseDialog(id, isEx) {
       const st = styleExpr(); expect(',', ',');
       const x = value(); expect(',', ','); const y = value(); expect(',', ',');
       const w = value(); expect(',', ','); const h = value();
-      while (at(',')) {                          // exstyle tail: discarded, loudly (#318)
+      let cex = 0;                               // exstyle tail: WRES v3 (#322)
+      while (at(',')) {
         next();
-        const ex = applyStyle(0, styleExpr());
-        if (ex) warn(`dialog ${id} control ${cid}: EXSTYLE 0x${ex.toString(16)} discarded (not in WRES; #322)`);
+        cex = applyStyle(cex, styleExpr());
       }
       const cls = CTL[clsName];
       if (!cls) fail(`unsupported CONTROL class '${clsName}'`);
-      controls.push({ cls, id: cid, x, y, w, h, style: applyStyle(0x40000000, st), text });
+      controls.push({ cls, id: cid, x, y, w, h, style: applyStyle(0x40000000, st), exStyle: cex, text });
     } else {
       const spec = CTRL_KEYWORDS[kw];
       if (!spec) fail(`unsupported dialog control '${kw}'`);
@@ -560,18 +560,16 @@ function parseDialog(id, isEx) {
       const x = value(); expect(',', ','); const y = value(); expect(',', ',');
       const w = value(); expect(',', ','); const h = value();
       let style = spec.style >>> 0;
+      let cex = 0;                               // exstyle tail: WRES v3 (#322)
       if (at(',')) {                             // optional style tail
         next();
         if (!at('nl')) style = applyStyle(style, styleExpr());
-        while (at(',')) {                        // exstyle: discarded, loudly (#318)
+        while (at(',')) {
           next();
-          if (!at('nl')) {
-            const ex = applyStyle(0, styleExpr());
-            if (ex) warn(`dialog ${id} control ${cid}: EXSTYLE 0x${ex.toString(16)} discarded (not in WRES; #322)`);
-          }
+          if (!at('nl')) cex = applyStyle(cex, styleExpr());
         }
       }
-      controls.push({ cls: spec.cls, id: cid, x, y, w, h, style, text });
+      controls.push({ cls: spec.cls, id: cid, x, y, w, h, style, exStyle: cex, text });
     }
     skipNl();
   }
@@ -579,6 +577,7 @@ function parseDialog(id, isEx) {
   const b = bb();
   b.i16(dx); b.i16(dy); b.i16(dw); b.i16(dh);
   b.u32(style);
+  b.u32(exStyle >>> 0);                          // v3 (#322)
   b.u16(menuId);
   b.str(caption);
   b.u16(fontSize); b.str(fontFace);
@@ -586,7 +585,7 @@ function parseDialog(id, isEx) {
   for (const c of controls) {
     b.u8(c.cls); b.i16(c.id);
     b.i16(c.x); b.i16(c.y); b.i16(c.w); b.i16(c.h);
-    b.u32(c.style); b.str(c.text);
+    b.u32(c.style); b.u32((c.exStyle || 0) >>> 0); b.str(c.text);
   }
   addEntry(RT.DIALOG, id, b.done());
   void isEx;
@@ -682,7 +681,7 @@ const HDR = 12, ENT = 12;
 let off = HDR + entries.length * ENT;
 const head = Buffer.alloc(HDR + entries.length * ENT);
 head.write('WRES', 0, 'ascii');
-head.writeUInt32LE(2, 4);
+head.writeUInt32LE(3, 4);
 head.writeUInt32LE(entries.length, 8);
 entries.forEach((e, i) => {
   const base = HDR + i * ENT;
