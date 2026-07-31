@@ -518,9 +518,21 @@ glyphs (drawn as a synthesized tofu box, never '?') and font
 lfWidth/lfEscapement/lfOrientation (bold/italic/underline/strikeout are
 REAL since C1/#281), comdlg32's
 too-small lpstrFile, kernel32's named GetModuleHandle/named mappings/
-failed unmap write-backs, menu cascades deeper than one level. The
+failed unmap write-backs, menu cascades deeper than one level. **The
+#318 W0 nets close the structural blind spots** (#317's post-mortem):
+the created-style net (every style/exStyle bit outside a class's
+audited READ / by-construction / ticketed set reports once per
+class+bit — `style_net` in user32.c), control messages to a NULL HWND
+(loud + CB_ERR/LB_ERR contract returns, not fake-success 0), the
+statusbar SB_* range guard (comctl32's first loud site), dlg_create's
+discarded template STYLE/FONT reports (honoring = #322), win32rc
+warnings on discarded EXSTYLE and never-fires non-VIRTKEY accelerator
+entries, and the quiet failures normalized onto the macro (SetTimer
+TIMERPROC, CreateThread/LoadLibraryW/GetProcAddress, SetMapMode). The
 booted app suite (winmine/notepad/fileman/ctlpanel/paint/ctldemo) emits
-ZERO reports — a report firing is a real gap, not noise.
+ZERO reports — a report firing is a real gap, not noise. (calc sits
+outside that suite: its two WinMain LoadLibrary probes — uxtheme,
+htmlhelp — each cost one deliberate report line since #318.)
 
 **Verified-but-unfixed divergences (the 0211 audit's remainder, in
 rough priority order — full details in logs/2026-07-16/win32-compliance.md):**
@@ -529,8 +541,10 @@ rough priority order — full details in logs/2026-07-16/win32-compliance.md):**
   lines (real notepad's "Wrap long lines" mode); ours clips them. The
   0210/0211 EDIT is LF-native by design (POSIX) — wrap needs a
   logical-line -> visual-row layout layer.
-- **LISTBOX WS_VSCROLL**: no scrollbar is drawn (wheel/keys still
-  scroll). calc's stats box declares it.
+- ~~**LISTBOX WS_VSCROLL**: no scrollbar is drawn~~ — FIXED by #275
+  (the 0210 built-in bar) + #317 (fileman adoption); kept struck-through
+  because this entry is the motivating example of #318's W0 nets (a
+  style bit nobody read, invisible to all three fail-loud tiers).
 - **WM_MOUSELEAVE on surface exit**: the kernel routes input per-window
   and goes quiet when the pointer leaves — no SDL leave event exists, so
   TME_LEAVE only fires via intra-surface movement (calc's hot button
@@ -570,8 +584,17 @@ rough priority order — full details in logs/2026-07-16/win32-compliance.md):**
   EEXIST maps to ERROR_ALREADY_EXISTS even for CREATE_NEW
   (ERROR_FILE_EXISTS undeclared); GetModuleFileNameW truncation returns
   n-1 not nSize; w2u8's >1KB truncation leaves a garbage tail.
-- **crt16**: wsprintfA's %S/%ls read 4-byte wchar_t (the W side is
-  correct); wide ctype is ASCII-only.
+- **crt16** (corrected by the #318 W0 pass — the gap inventory's #44
+  called this entry fixed, but that verified the WRONG formatter): the
+  W side IS correct — wsprintfW/_stprintf's %S/%hs decode UTF-8 per
+  code point with surrogate pairs (crt16.c `narrow` branch, covered by
+  k32demo). **wsprintfA still delegates to libc vsnprintf**, whose
+  %S/%ls read 4-byte wchar_t while the corpus WCHAR is 2-byte UTF-16 —
+  the divergence stands (no corpus caller today, so it is latent).
+  Minor honest divergences in the W formatter: %c ignores the size
+  modifier (the `h` prefix parses but the c branch treats %c/%C/%hc
+  identically), and %hd never truncates to short (rendered as plain
+  %d). Wide ctype is ASCII-only.
 
 ## The toolkit is the porting unit — re-shell foreign apps, don't port the toolkit
 
