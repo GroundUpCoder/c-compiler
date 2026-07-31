@@ -633,12 +633,54 @@ static int selftest(void) {
     st_check("style-net window still creates", sn != NULL);
     if (sn) DestroyWindow(sn);
 
-    /* dlg_create template reports (#318 (iii)): IDD_ODD (ctldemo.rc, id
-     * 51) asks for DS_CENTER|WS_THICKFRAME and "Courier New" 12 — both
-     * discarded, both must report (honoring is #322) */
+    /* dlg_create HONORS the template (#322, was the #318 (iii) report):
+     * IDD_ODD (ctldemo.rc, id 51) asks for DS_CENTER|WS_THICKFRAME and
+     * "Courier New" 12. WS_THICKFRAME rides into the window style
+     * (resizable), DS_CENTER is WM placement policy (quiet by taxonomy),
+     * and the FONT record is a REAL font now: the dialog owns an HFONT,
+     * every control borrows it, and the DLU base units come from ITS
+     * metrics — 12pt = 12 * WIN32_STOCK_FONT_PX/8 = 30px mono. */
     HWND odd = CreateDialogParamW(NULL, MAKEINTRESOURCEW(51), top, NULL, 0);
     st_check("oddball template dialog created", odd != NULL);
-    if (odd) DestroyWindow(odd);
+    if (odd) {
+        st_check("template WS_THICKFRAME honored into the window style",
+                 (GetWindowLongPtr(odd, GWL_STYLE) & WS_THICKFRAME) != 0);
+        HFONT df = (HFONT)SendMessage(odd, WM_GETFONT, 0, 0);
+        st_check("template FONT record creates the dialog font", df != NULL);
+        HWND ob = GetDlgItem(odd, 1 /* IDOK */);
+        st_check("controls borrow the dialog font (WM_GETFONT agrees)",
+                 ob != NULL && (HFONT)SendMessage(ob, WM_GETFONT, 0, 0) == df);
+        HFONT ref = CreateFont(-30, 0, 0, 0, FW_NORMAL, 0, 0, 0, 0, 0, 0, 0,
+                               DEFAULT_PITCH, "Courier New");
+        HDC rdc = GetDC(top);
+        HGDIOBJ oldf = SelectObject(rdc, (HGDIOBJ)ref);
+        TEXTMETRIC rtm;
+        GetTextMetrics(rdc, &rtm);
+        SelectObject(rdc, oldf);
+        ReleaseDC(top, rdc);
+        DeleteObject((HGDIOBJ)ref);
+        RECT ocr;
+        GetClientRect(odd, &ocr);
+        st_check("DLU base units come from the TEMPLATE font",
+                 ocr.right == 120 * rtm.tmAveCharWidth / 4 &&
+                 ocr.bottom == 60 * rtm.tmHeight / 8);
+        DestroyWindow(odd);
+    }
+
+    /* DS_CONTROL|WS_CHILD embedding (#322): IDD_EMBED (ctldemo.rc, id 52)
+     * materializes as a CHILD of its owner — never the pre-#322
+     * free-floating top-level. */
+    HWND emb = CreateDialogParamW(NULL, MAKEINTRESOURCEW(52), top, NULL, 0);
+    st_check("embedded template dialog created", emb != NULL);
+    if (emb) {
+        st_check("WS_CHILD template embeds into the owner",
+                 GetParent(emb) == top);
+        st_check("embedded dialog carries WS_CHILD",
+                 (GetWindowLongPtr(emb, GWL_STYLE) & WS_CHILD) != 0);
+        st_check("embedded dialog hosts its template controls",
+                 GetDlgItem(emb, 130) != NULL);
+        DestroyWindow(emb);
+    }
 
     /* statusbar contract-message net (#318, gap #10): an unhandled SB_*
      * (SB_GETRECT here) reports instead of silently DefWindowProc-ing */

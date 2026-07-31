@@ -12,17 +12,30 @@
 #define IDCANCEL 2
 
 #define IDD_ODD       51
+#define IDD_EMBED     52
 
-/* IDD_ODD — the #318 (iii) negative-test template: DS_CENTER and
- * WS_THICKFRAME are discarded-consequential style bits, Courier New 12 a
- * real font request the stock font substitutes — dlg_create must REPORT
- * both (the selftest opens it; the user32 e2e greps the stderr). */
+/* IDD_ODD — the #322 honoring acceptance template (was #318 (iii)'s
+ * negative test): WS_THICKFRAME rides into the window style, DS_CENTER
+ * is WM placement policy (quiet), and Courier New 12 is a REAL font —
+ * the dialog owns the HFONT, controls borrow it, DLU base units come
+ * from its metrics (the selftest asserts all of it; the user32 e2e
+ * asserts the old discard reports are GONE from stderr). */
 IDD_ODD DIALOGEX 0, 0, 120, 60
 STYLE DS_SHELLFONT | WS_POPUP | WS_CAPTION | DS_CENTER | WS_THICKFRAME
 CAPTION "Oddball"
 FONT 12, "Courier New"
 BEGIN
     DEFPUSHBUTTON "&Done", IDOK, 35, 40, 50, 14
+END
+
+/* IDD_EMBED — the DS_CONTROL|WS_CHILD embedding acceptance (#322): the
+ * dialog must materialize as a CHILD of its owner at the template x,y,
+ * never as a free-floating top-level. */
+IDD_EMBED DIALOGEX 10, 5, 80, 40
+STYLE DS_CONTROL | WS_CHILD | WS_VISIBLE
+FONT 8, "MS Shell Dlg"
+BEGIN
+    EDITTEXT 130, 4, 4, 70, 12
 END
 
 IDD_OPTIONS DIALOGEX 0, 0, 160, 80

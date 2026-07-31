@@ -22,6 +22,13 @@
 #include <windows.h>
 #include <stdint.h>
 
+/* THE system font size in px (gdi32's font-20 retune; #322 moved the
+ * constant here). gdi32's stock fonts render at it, and user32's dialog
+ * template FONT scale anchors on it: 8pt — the "MS Shell Dlg 8"
+ * boilerplate — IS the system size, so a template's point size maps as
+ * px = pt * WIN32_STOCK_FONT_PX / 8 in every family. */
+#define WIN32_STOCK_FONT_PX 20
+
 /* Wrap a raw RGBA pixel span as a screen-kind DC. `bits` points at the
  * DC's (0,0); stride is in PIXELS. Counted in __gdi_dc_count. */
 HDC __gdi_dc_wrap(void *bits, int w, int h, int stridePx);

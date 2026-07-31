@@ -507,12 +507,18 @@ check('fail-loud: unread style bit reports per class+bit (#318)',
 check('fail-loud: unread exStyle bit reports per class+bit (#318)',
   /win32: unsupported exStyle bits 0x00000100 on class BUTTON/.test(outE),
   (outE.match(/win32: unsupported [^\n]*/g) || []).join(' | '));
-check('fail-loud: discarded dialog-template STYLE bits say so (#318)',
-  /win32: unsupported dialog template style bits 0x00040800/.test(outE),
-  (outE.match(/win32: unsupported [^\n]*/g) || []).join(' | '));
-check('fail-loud: substituted dialog-template FONT says so (#318)',
-  /win32: unsupported dialog template FONT 12 "Courier New"/.test(outE),
-  (outE.match(/win32: unsupported [^\n]*/g) || []).join(' | '));
+/* #322 inverted the #318 (iii) pins: IDD_ODD's DS_CENTER|WS_THICKFRAME
+ * and FONT 12 "Courier New" are HONORED/policy now (the ctldemo selftest
+ * asserts the positive side — style carries THICKFRAME, DLU base units
+ * come from the template font) — so the discard reports must be GONE.
+ * A regression that drops a bit from the honored/policy taxonomy
+ * resurfaces here as an unexpected report. */
+check('honored: template STYLE bits no longer report (#322)',
+  !/win32: unsupported dialog template style bits/.test(outE),
+  (outE.match(/win32: unsupported dialog template [^\n]*/g) || []).join(' | '));
+check('honored: template FONT no longer reports as substituted (#322)',
+  !/win32: unsupported dialog template FONT/.test(outE),
+  (outE.match(/win32: unsupported dialog template [^\n]*/g) || []).join(' | '));
 fs.rmSync(etmp, { recursive: true, force: true });
 
 /* ---- session F: `ctldemo menudemo` (0211, rebuilt on the 0257 anchored-

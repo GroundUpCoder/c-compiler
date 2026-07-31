@@ -5850,6 +5850,11 @@ typedef struct {
     int ended;                  /* EndDialog called */
     INT_PTR result;
     int modal;
+    HFONT hfont;                /* the template FONT record's HFONT (#322),
+                                   dialog-owned — controls only borrow it
+                                   (WM_SETFONT stores, never owns); freed at
+                                   the dialog's WM_DESTROY, NULL for the
+                                   FONT 8 "MS Shell Dlg" stock fast path */
 } DlgState;
 
 /* The default pushbutton's id (BS_DEFPUSHBUTTON style, one source of
@@ -5910,9 +5915,25 @@ static void dlg_do_mnemonic(HWND dlg, HWND c) {
     }
 }
 
+/* Clear every borrowed reference to the dying template font (#322):
+ * DestroyWindow runs the dialog's WM_DESTROY parent-FIRST, then destroys
+ * the children — a stale h->hfont there would ride the next dc_with_font
+ * into a freed object. */
+static void hfont_clear_tree(HWND h, HFONT f) {
+    if (h->hfont == f) h->hfont = NULL;
+    for (HWND c = h->child; c; c = c->next) hfont_clear_tree(c, f);
+}
+
 static LRESULT dlg_proc_32770(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     DlgState *st = (DlgState *)h->ctl;
     if (st) {                                    /* template dialog */
+        if (msg == WM_DESTROY && st->hfont) {    /* before the app proc: the
+                                                    font dies with the dialog
+                                                    no matter what it returns */
+            hfont_clear_tree(h, st->hfont);
+            DeleteObject((HGDIOBJ)st->hfont);
+            st->hfont = NULL;
+        }
         if (st->proc) {
             LRESULT r = st->proc(h, msg, wp, lp);
             if (r) {
@@ -6109,20 +6130,44 @@ static char *rrstr(ResRd *r) {                   /* malloc'd UTF-8 */
 static const char *DLG_CLASSES[] = { NULL, "BUTTON", "EDIT", "STATIC",
                                      "LISTBOX", "SCROLLBAR", "COMBOBOX" };
 
-/* Template STYLE bits dlg_create either builds anyway (WS_POPUP |
- * WS_VISIBLE), or that are CHROME POLICY here (the kernel title bar owns
- * all caption furniture: CAPTION/SYSMENU/MIN/MAXBOX/CONTEXTHELP), or that
- * painter's-order child drawing makes moot (WS_CLIP*), or that the FONT
- * record owns (DS_SHELLFONT) / pure cosmetics (DS_MODALFRAME/DS_3DLOOK).
+/* Template STYLE bits dlg_create accounts for (#322 honored what #318
+ * reported). Three honest categories, one mask:
+ *
+ * HONORED — WS_CHILD + DS_CONTROL: the dialog materializes as a real
+ * child of the owner at the template's x,y (an embedded page, never a
+ * free-floating top-level); WS_THICKFRAME: resizable surface;
+ * WS_DISABLED: created disabled; WS_VISIBLE: child visibility (a
+ * top-level IS its kernel surface and surfaces are visible by
+ * construction — ShowWindow records the same divergence);
+ * DS_SETFONT/DS_SHELLFONT/DS_FIXEDSYS: the FONT record drives base
+ * units + WM_SETFONT (dlg_create's font block).
+ *
+ * CHROME/WM POLICY — caption furniture (WS_CAPTION/WS_SYSMENU/
+ * WS_MIN/MAXBOX/DS_CONTEXTHELP) is the kernel title bar's: it always
+ * draws a caption + close box, min/max only where they fit — a process
+ * cannot add or remove chrome. PLACEMENT (DS_CENTER/DS_CENTERMOUSE/
+ * DS_ABSALIGN, and the template x,y for top-levels) is the WM's: a
+ * process cannot position its own top-level (MoveWindow echoes position
+ * back), and the WM's own policy already places new windows. Honoring
+ * these bits is not possible from this side of the surface — saying so
+ * here beats pretending.
+ *
+ * MOOT — WS_POPUP is what a top-level is; WS_CLIP* hold by
+ * painter's-order child drawing; DS_MODALFRAME/DS_3DLOOK are pure
+ * cosmetics of a frame the kernel draws.
+ *
  * Anything OUTSIDE this mask is a template asking for behavior it will
- * not get — a WS_CHILD page dialog, a WS_THICKFRAME resizable dialog,
- * DS_CENTER, DS_ABSALIGN — and reports (#318 (iii)); HONORING the
- * consequential ones is W2-TE (#322). */
+ * not get — DS_SYSMODAL, DS_NOIDLEMSG, WS_H/VSCROLL on the frame — and
+ * reports (#318 (iii)). */
 #define DLG_STYLE_MOOT (0x80000000u /* WS_POPUP */ | 0x10000000u /* WS_VISIBLE */ \
+    | 0x40000000u /* WS_CHILD */ | 0x00000400u /* DS_CONTROL */               \
+    | 0x00040000u /* WS_THICKFRAME */ | 0x08000000u /* WS_DISABLED */         \
     | 0x00C00000u /* WS_CAPTION */ | 0x00080000u /* WS_SYSMENU */             \
     | 0x00030000u /* WS_MIN/MAXBOX */ | 0x06000000u /* WS_CLIP* */            \
     | 0x2000u /* DS_CONTEXTHELP */ | 0x80u /* DS_MODALFRAME */                \
-    | 0x48u /* DS_SHELLFONT */ | 0x04u /* DS_3DLOOK */)
+    | 0x48u /* DS_SHELLFONT */ | 0x04u /* DS_3DLOOK */                        \
+    | 0x800u /* DS_CENTER */ | 0x1000u /* DS_CENTERMOUSE */                   \
+    | 0x01u /* DS_ABSALIGN */)
 
 static HWND dlg_create(HINSTANCE inst, LPCWSTR tmpl, HWND owner,
                        DLGPROC proc, LPARAM param, int modal) {
@@ -6134,58 +6179,107 @@ static HWND dlg_create(HINSTANCE inst, LPCWSTR tmpl, HWND owner,
     if (!d) return NULL;
     ResRd r = { d, d + sz, 0 };
 
-    /* base units from the stock font */
-    TEXTMETRIC tm;
-    tm.tmAveCharWidth = 8;
-    tm.tmHeight = 16;
-    GetTextMetrics(mc_measure_dc(), &tm);
-    int bx = tm.tmAveCharWidth > 0 ? tm.tmAveCharWidth : 8;
-    int by = tm.tmHeight > 0 ? tm.tmHeight : 16;
-
-    rr16(&r); rr16(&r);                          /* x, y: the WM places us */
+    int dxu = (int)(short)rr16(&r), dyu = (int)(short)rr16(&r);
     int dw = (int)(short)rr16(&r), dh = (int)(short)rr16(&r);
-    uint32_t tstyle = rr32(&r);                  /* dialog style: reported below */
+    uint32_t tstyle = rr32(&r);                  /* dialog style: honored below */
     uint32_t texstyle = rr32(&r);                /* WRES v3 (#322): WS_EX_* */
     int menuId = (int)rr16(&r);                  /* WRES v2: template MENU */
     char *caption = rrstr(&r);
-    int fsize = (int)rr16(&r);                   /* font record: reported below */
+    int fsize = (int)rr16(&r);
     char *face = rrstr(&r);
     int nCtl = (int)rr16(&r);
     if (r.bad || nCtl < 0 || nCtl > 256) { free(caption); free(face); return NULL; }
 
-    /* #318 (iii): the discarded template words are REPORTED now — a
-     * template asking for what it will not get must not be silent.
-     * "MS Shell Dlg 8" is the universal boilerplate the stock font
-     * legitimately substitutes; anything else is a real request. */
-    if (tstyle & ~DLG_STYLE_MOOT)
-        WIN32_UNSUPPORTED("dialog template style bits 0x%08X (discarded; #322)",
-                          (unsigned)(tstyle & ~DLG_STYLE_MOOT));
-    if (face && face[0] && (fsize != 8 || !ci_eq(face, "MS Shell Dlg")))
-        WIN32_UNSUPPORTED("dialog template FONT %d \"%s\" "
-                          "(stock font substituted; #322)", fsize, face);
+    /* Template FONT honored (#322): the record names the DIALOG font —
+     * base units AND control text both come from it, so layout and
+     * rendering agree by construction (Windows' MapDialogRect rule).
+     * "MS Shell Dlg" is not a file, it is THE logical dialog-font alias:
+     * gucOS's system dialog font is the stock font, and 8pt is the shell
+     * reference size, so FONT 8 "MS Shell Dlg" IS the stock font (zero
+     * churn — no HFONT created). Any other face/size is a real request:
+     * CreateFont resolves it through the C1 (#281) face mapper at
+     * fsize * WIN32_STOCK_FONT_PX / 8 px — the same 8pt==system-size
+     * scale, so FONT 12 is 1.5x the system size in every family. */
+    HFONT tf = NULL;
+    if (face && face[0] && (fsize != 8 || !ci_eq(face, "MS Shell Dlg"))) {
+        int px = (fsize > 0 ? fsize : 8) * WIN32_STOCK_FONT_PX / 8;
+        tf = CreateFont(-px, 0, 0, 0, FW_NORMAL, 0, 0, 0, 0, 0, 0, 0,
+                        DEFAULT_PITCH, face);
+    }
     free(face);
 
-    /* A template menu rides the surface's top MENU_BAR_H pixels — grow the
-     * window so the CLIENT area still matches the template (calc). */
-    HMENU tmplMenu = menuId ? LoadMenuW(NULL, MAKEINTRESOURCEW(menuId)) : NULL;
+    /* base units from the DIALOG font (stock when no HFONT was needed) */
+    TEXTMETRIC tm;
+    tm.tmAveCharWidth = 8;
+    tm.tmHeight = 16;
+    HDC mdc = mc_measure_dc();
+    if (tf) {
+        HGDIOBJ oldf = SelectObject(mdc, (HGDIOBJ)tf);
+        GetTextMetrics(mdc, &tm);
+        SelectObject(mdc, oldf);
+    } else {
+        GetTextMetrics(mdc, &tm);
+    }
+    int bx = tm.tmAveCharWidth > 0 ? tm.tmAveCharWidth : 8;
+    int by = tm.tmHeight > 0 ? tm.tmHeight : 16;
+
+    /* #318 (iii) net, #322 honored the consequential bits: whatever is
+     * left outside the honored/policy/moot mask is a template asking for
+     * behavior it will not get — never silent. */
+    if (tstyle & ~DLG_STYLE_MOOT)
+        WIN32_UNSUPPORTED("dialog template style bits 0x%08X (not honored; "
+                          "DLG_STYLE_MOOT taxonomy)",
+                          (unsigned)(tstyle & ~DLG_STYLE_MOOT));
+
+    /* WS_CHILD (+DS_CONTROL) honored (#322): the dialog is an embedded
+     * CHILD of its owner at the template x,y — the "free-floating
+     * top-level page dialog" failure mode is gone. Child dialogs carry
+     * no menu bar (Windows: menus are top-level furniture) and honor
+     * template WS_VISIBLE; top-levels are kernel surfaces (always
+     * visible, WM-placed — x,y ignored). */
+    int child = (tstyle & WS_CHILD) != 0;
+    if (child && !owner) {
+        WIN32_UNSUPPORTED("WS_CHILD dialog template without an owner "
+                          "(refused — an embedded dialog needs a host)");
+        free(caption);
+        if (tf) DeleteObject((HGDIOBJ)tf);
+        return NULL;
+    }
+    HMENU tmplMenu = NULL;
+    if (menuId) {
+        if (child)
+            WIN32_UNSUPPORTED("template MENU %d on a WS_CHILD dialog "
+                              "(skipped — menus are top-level furniture)",
+                              menuId);
+        else
+            tmplMenu = LoadMenuW(NULL, MAKEINTRESOURCEW(menuId));
+    }
+    DWORD wstyle = child
+        ? (WS_CHILD | (tstyle & (WS_VISIBLE | WS_DISABLED)))
+        : (WS_POPUP | WS_VISIBLE | (tstyle & (WS_THICKFRAME | WS_DISABLED)));
     /* template w/h are CLIENT dialog units — the window grows by the menu
      * strip and (v3) by a template-level WS_EX_CLIENTEDGE ring, exactly
      * AdjustWindowRectEx's arithmetic */
     int dE = (texstyle & WS_EX_CLIENTEDGE) ? 2 : 0;
     HWND dlg = CreateWindowEx(texstyle, "#32770", caption ? caption : "",
-                              WS_POPUP | WS_VISIBLE,
-                              0, 0, dw * bx / 4 + 2 * dE,
+                              wstyle,
+                              child ? dxu * bx / 4 : 0,
+                              child ? dyu * by / 8 : 0,
+                              dw * bx / 4 + 2 * dE,
                               dh * by / 8 + (tmplMenu ? MENU_BAR_H : 0) + 2 * dE,
-                              NULL, tmplMenu, NULL, NULL);
+                              child ? owner : NULL, tmplMenu, NULL, NULL);
     free(caption);
     if (!dlg && tmplMenu) DestroyMenu(tmplMenu);
-    if (!dlg) return NULL;
+    if (!dlg) { if (tf) DeleteObject((HGDIOBJ)tf); return NULL; }
     DlgState *st = (DlgState *)calloc(1, sizeof(DlgState));
-    if (!st) { DestroyWindow(dlg); return NULL; }
+    if (!st) { if (tf) DeleteObject((HGDIOBJ)tf); DestroyWindow(dlg); return NULL; }
     st->proc = proc;
     st->param = param;
     st->modal = modal;
+    st->hfont = tf;                              /* dialog-owned; freed at
+                                                    WM_DESTROY (dlg_proc) */
     dlg->ctl = st;                               /* freed by DestroyWindow */
+    if (tf) SendMessage(dlg, WM_SETFONT, (WPARAM)tf, 0);
 
     HWND firstTab = NULL;
     for (int i = 0; i < nCtl && !r.bad; i++) {
@@ -6211,6 +6305,7 @@ static HWND dlg_create(HINSTANCE inst, LPCWSTR tmpl, HWND owner,
                                 style, cx * bx / 4, cy * by / 8,
                                 cw * bx / 4, ch * by / 8,
                                 dlg, (HMENU)(UINT_PTR)(id & 0xFFFF), NULL, NULL);
+        if (c && tf) SendMessage(c, WM_SETFONT, (WPARAM)tf, 0);
         if (c && !firstTab && (style & WS_TABSTOP)) firstTab = c;
         free(text);
     }
@@ -6238,7 +6333,10 @@ INT_PTR DialogBoxParamW(HINSTANCE inst, LPCWSTR tmpl, HWND owner,
     DlgState *st = (DlgState *)dlg->ctl;
     HWND ownerTop = owner ? owner->top : NULL;
     int reenable = 0;
-    if (ownerTop && ownerTop->enabled) {
+    /* A WS_CHILD template dialog LIVES in the owner's tree (#322) —
+     * disabling the owner would disable the dialog itself and deadlock
+     * the modal loop; an embedded dialog is modal by embedding only. */
+    if (ownerTop && ownerTop->enabled && !(dlg->style & WS_CHILD)) {
         EnableWindow(ownerTop, FALSE);
         reenable = 1;
     }

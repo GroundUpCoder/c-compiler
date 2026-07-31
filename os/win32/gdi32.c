@@ -94,9 +94,12 @@ void __win32_unsupported(const char *fmt, ...) {
     if (strict && strict[0] == '1') abort();
 }
 
-#define STOCK_FONT_PX 20  /* THE system size (font-20 retune): equals the
-                             wm chrome_font, so chrome, menus, controls and
-                             the software center all share one 20px-AA face */
+#define STOCK_FONT_PX WIN32_STOCK_FONT_PX  /* THE system size (font-20
+                             retune; the value lives in win32_internal.h —
+                             user32's dialog-font point scale shares it):
+                             equals the wm chrome_font, so chrome, menus,
+                             controls and the software center all share one
+                             20px-AA face */
 #define FT_MONO_THRESHOLD 96   /* NONANTIALIASED coverage cut (tuning knob) */
 #define GDI_BOLD_XDELTA 0x0555 /* synthetic-bold embolden strength — ksvc's
                                   KSVC_BOLD_XDELTA, the one weight the estate
