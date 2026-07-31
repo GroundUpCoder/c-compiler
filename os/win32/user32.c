@@ -5918,6 +5918,21 @@ static char *rrstr(ResRd *r) {                   /* malloc'd UTF-8 */
 static const char *DLG_CLASSES[] = { NULL, "BUTTON", "EDIT", "STATIC",
                                      "LISTBOX", "SCROLLBAR", "COMBOBOX" };
 
+/* Template STYLE bits dlg_create either builds anyway (WS_POPUP |
+ * WS_VISIBLE), or that are CHROME POLICY here (the kernel title bar owns
+ * all caption furniture: CAPTION/SYSMENU/MIN/MAXBOX/CONTEXTHELP), or that
+ * painter's-order child drawing makes moot (WS_CLIP*), or that the FONT
+ * record owns (DS_SHELLFONT) / pure cosmetics (DS_MODALFRAME/DS_3DLOOK).
+ * Anything OUTSIDE this mask is a template asking for behavior it will
+ * not get — a WS_CHILD page dialog, a WS_THICKFRAME resizable dialog,
+ * DS_CENTER, DS_ABSALIGN — and reports (#318 (iii)); HONORING the
+ * consequential ones is W2-TE (#322). */
+#define DLG_STYLE_MOOT (0x80000000u /* WS_POPUP */ | 0x10000000u /* WS_VISIBLE */ \
+    | 0x00C00000u /* WS_CAPTION */ | 0x00080000u /* WS_SYSMENU */             \
+    | 0x00030000u /* WS_MIN/MAXBOX */ | 0x06000000u /* WS_CLIP* */            \
+    | 0x2000u /* DS_CONTEXTHELP */ | 0x80u /* DS_MODALFRAME */                \
+    | 0x48u /* DS_SHELLFONT */ | 0x04u /* DS_3DLOOK */)
+
 static HWND dlg_create(HINSTANCE inst, LPCWSTR tmpl, HWND owner,
                        DLGPROC proc, LPARAM param, int modal) {
     (void)inst;
@@ -5938,14 +5953,25 @@ static HWND dlg_create(HINSTANCE inst, LPCWSTR tmpl, HWND owner,
 
     rr16(&r); rr16(&r);                          /* x, y: the WM places us */
     int dw = (int)(short)rr16(&r), dh = (int)(short)rr16(&r);
-    rr32(&r);                                    /* dialog style: geometry is ours */
+    uint32_t tstyle = rr32(&r);                  /* dialog style: reported below */
     int menuId = (int)rr16(&r);                  /* WRES v2: template MENU */
     char *caption = rrstr(&r);
-    rr16(&r);                                    /* font size */
+    int fsize = (int)rr16(&r);                   /* font record: reported below */
     char *face = rrstr(&r);
-    free(face);
     int nCtl = (int)rr16(&r);
-    if (r.bad || nCtl < 0 || nCtl > 256) { free(caption); return NULL; }
+    if (r.bad || nCtl < 0 || nCtl > 256) { free(caption); free(face); return NULL; }
+
+    /* #318 (iii): the discarded template words are REPORTED now — a
+     * template asking for what it will not get must not be silent.
+     * "MS Shell Dlg 8" is the universal boilerplate the stock font
+     * legitimately substitutes; anything else is a real request. */
+    if (tstyle & ~DLG_STYLE_MOOT)
+        WIN32_UNSUPPORTED("dialog template style bits 0x%08X (discarded; #322)",
+                          (unsigned)(tstyle & ~DLG_STYLE_MOOT));
+    if (face && face[0] && (fsize != 8 || !ci_eq(face, "MS Shell Dlg")))
+        WIN32_UNSUPPORTED("dialog template FONT %d \"%s\" "
+                          "(stock font substituted; #322)", fsize, face);
+    free(face);
 
     /* A template menu rides the surface's top MENU_BAR_H pixels — grow the
      * window so the CLIENT area still matches the template (calc). */

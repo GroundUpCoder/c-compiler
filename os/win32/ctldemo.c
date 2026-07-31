@@ -604,6 +604,13 @@ static int selftest(void) {
     st_check("SetTimer TIMERPROC refused",
              SetTimer(top, 901, 50, (void *)StProc) == 0);
 
+    /* dlg_create template reports (#318 (iii)): IDD_ODD (ctldemo.rc, id
+     * 51) asks for DS_CENTER|WS_THICKFRAME and "Courier New" 12 — both
+     * discarded, both must report (honoring is #322) */
+    HWND odd = CreateDialogParamW(NULL, MAKEINTRESOURCEW(51), top, NULL, 0);
+    st_check("oddball template dialog created", odd != NULL);
+    if (odd) DestroyWindow(odd);
+
     /* statusbar contract-message net (#318, gap #10): an unhandled SB_*
      * (SB_GETRECT here) reports instead of silently DefWindowProc-ing */
     HWND sbar = CreateStatusWindowA(WS_CHILD | WS_VISIBLE, "sb", top, 902);

@@ -11,6 +11,20 @@
 #define IDOK    1
 #define IDCANCEL 2
 
+#define IDD_ODD       51
+
+/* IDD_ODD — the #318 (iii) negative-test template: DS_CENTER and
+ * WS_THICKFRAME are discarded-consequential style bits, Courier New 12 a
+ * real font request the stock font substitutes — dlg_create must REPORT
+ * both (the selftest opens it; the user32 e2e greps the stderr). */
+IDD_ODD DIALOGEX 0, 0, 120, 60
+STYLE DS_SHELLFONT | WS_POPUP | WS_CAPTION | DS_CENTER | WS_THICKFRAME
+CAPTION "Oddball"
+FONT 12, "Courier New"
+BEGIN
+    DEFPUSHBUTTON "&Done", IDOK, 35, 40, 50, 14
+END
+
 IDD_OPTIONS DIALOGEX 0, 0, 160, 80
 CAPTION "Options"
 FONT 8, "MS Shell Dlg"
