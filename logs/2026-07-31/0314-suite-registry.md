@@ -84,3 +84,24 @@ fails "ran ALL 23 checks (counted 22 ok lines)", reverted → green.
 - `os/**/test/*.mjs`: exactly one file exists — `os/gcode/test/smoke.mjs`,
   now gated. Zero others (a zero is a finding: the audit ran, not "nothing to
   say").
+
+## Gate record (post-45fa2c21, re-run after the first attempt died at turn end)
+
+Plan from `planFromDiff` on the 9 committed PATHS (echoed, `unmapped: []`,
+`ignored: [the dev log]`): `todos, unit, host, blockfs, kernel, sweep`.
+
+- Dispatcher (`node tests/run.js todos unit host blockfs`): 4 pass, filter
+  null; blockfs 15/15 recorded, its evidence line `15/15 fresh`.
+- Kernel (`node tests/kernel/run.js`, the same bare invocation the dispatcher
+  spawns — a single dispatcher run cannot fit one 600s tool window): **143
+  passed, 0 failed**, filter null, runs length 1, done true,
+  total == selected == executed == len(top-level results) == 143, resumed 0,
+  `test_gcode_native.js` AND `test_win32rc.js` pass rows present, evidence
+  block 143 fresh / 0 problems. Independent mtime key: 143 logs, ZERO predate
+  commit 45fa2c21 (18:26:37; oldest log 18:39:26); `test_punes_e2e.js.log`
+  absent exactly as allowlisted.
+- Sweep (`node tests/browser/os-sweep.mjs`, bare): **44 passed, 0 failed**,
+  filter null, runs length 1, done true, 44/44 recorded (non-PARTIAL),
+  resumed 0, evidence 44 fresh / 0 problems; zero logs predate the sweep
+  start. The sweep rewrote evidence PNGs under logs/2026-07-18 and
+  logs/2026-07-25 — known, not ours, left uncommitted.
