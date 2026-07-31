@@ -111,6 +111,32 @@ Closure notes worth keeping:
   lineedit engages raw mode; a piped stdin would fall back to fgets — the
   Lane A caveat).
 
+## Screenshots — in-OS, before/after (this folder)
+
+Taken by the SAME `os-gcode.mjs` leg run against origin/main (a detached
+worktree at 34fefc84) and against this branch — same fixture, same term
+window, so the only variable is gcode itself. In-OS, not native: #304 is the
+standing proof the two surfaces differ.
+
+- `gcode-302-before-banner.png` / `gcode-302-after-banner.png` — the flat
+  `code — type a request` line + bare `>` vs the ==== framed banner + `You:`.
+- `gcode-302-before-tool-turn.png` / `gcode-302-after-tool-turn.png` — the
+  run-on "Let me run it.· bash" + dim `→ [exit 0]` vs speaker headers,
+  indented body, magenta `● bash` block, `command:` arg and `Result` preview.
+- `gcode-readline-recall-after.png` — the Up-arrow recall leg (no before:
+  the leg cannot exist against fgets).
+
+## Gate record (read from the artifacts, not the console)
+
+- kernel: `done:true`, filter null, **141/141** recorded = 109 resumed + 32
+  executed + 0 carried, 0 non-pass.
+- browser: `done:true`, filter null, **44/44** recorded = 44 executed + 0
+  resumed + 0 carried, 0 non-pass; os-gcode.mjs pass (56.8s), its log carries
+  the new `#302` header/magenta checks and the readline-recall check.
+- projects (diff-mapped via vendor/busybox/): 29/29.
+- native oracle `os/gcode/test/smoke.mjs` (in NO suite — run by hand,
+  documented convention): **22/22 PASS**.
+
 ## Findings surfaced, not silently fixed
 
 - `os-gcode.mjs` header comment (lines ~21-27) still says Ctrl+C is "NOT
