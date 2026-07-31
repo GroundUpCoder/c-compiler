@@ -99,6 +99,12 @@ const out = boot([
   // double-click detection is timestamp-based — a genuine timing subject).
   'sleep 0.3',
   'wmctl dblclick $SID 100 54',
+  // BS_NOTIFY BN_DBLCLK (#343): a REAL injected double-click on Greet (rect
+  // 336,10 60x24, BS_NOTIFY in ctldemo.c) rides the CS_DBLCLKS synthesis ->
+  // btn_proc -> parent WM_COMMAND. Settle first so the listbox dblclick above
+  // can't fuse into this pair (the 0.3s idiom from that leg).
+  'sleep 0.3',
+  'wmctl dblclick $SID 366 22',
   // Scrollbar arrows (rect 264,44 16x120; the down arrow bottom square). Ring
   // injections are FIFO-dispatched, so pos=1,2 then back to 1 stays ordered
   // without pacing sleeps.
@@ -294,6 +300,11 @@ check('Greet reports the checked state and set text',
 /* listbox click + dblclick (local-coord routing to a child control) */
 check('listbox row click -> LBN_SELCHANGE', out.includes('ctldemo: sel=0'));
 check('listbox double click -> LBN_DBLCLK', out.includes('ctldemo: list-dblclk'));
+/* BS_NOTIFY (#343): a real double-click on the BS_NOTIFY Greet button lands
+ * as BN_DBLCLK on the parent (the selftest pins the SendMessage-level gate;
+ * this is the CS_DBLCLKS real-input route). */
+check('BS_NOTIFY button real double click -> BN_DBLCLK',
+  out.includes('ctldemo: greet-dblclk'));
 
 /* scrollbar notify -> app SetScrollPos */
 check('scrollbar SB_LINEDOWN x2 walks the pos', out.includes('ctldemo: vscroll pos=1') &&

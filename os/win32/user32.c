@@ -2595,8 +2595,8 @@ static const struct { const char *cls; DWORD low; } CLS_LOW_KNOWN[] = {
                                   calc's keypad — exactly honored; the
                                   left/right/top/bottom variants would
                                   silently center, recorded divergence);
-                                  BS_NOTIFY: BN_SETFOCUS/KILLFOCUS/DBLCLK
-                                  never sent — tracked, #343 */
+                                  BS_NOTIFY: read (#343 — btn_proc's
+                                  BN_SETFOCUS/KILLFOCUS/DBLCLK gate) */
     { "STATIC",    0x1203u },  /* type & 0x3 + SS_SUNKEN read; SS_CENTERIMAGE
                                   holds by construction (0236 single-line
                                   vcenter — calc's display) */
@@ -2604,8 +2604,8 @@ static const struct { const char *cls; DWORD low; } CLS_LOW_KNOWN[] = {
                                   ES_AUTOVSCROLL (caret always scrolled into
                                   view) + ES_NOHIDESEL (selection never hidden
                                   on focus loss) hold by construction;
-                                  ES_NUMBER: unenforced — tracked, #343
-                                  (notepad's GoTo declares it) */
+                                  ES_NUMBER: read (#343 — the WM_CHAR digit
+                                  filter; notepad's GoTo declares it) */
     { "LISTBOX",   0x0849u },  /* LBS_MULTIPLESEL|LBS_EXTENDEDSEL read;
                                   LBS_NOTIFY (always notifies) + LBS_HASSTRINGS
                                   (items are strings) hold by construction */
@@ -3320,6 +3320,14 @@ static void btn_paint(HWND h) {
     EndPaint(h, &ps);
 }
 
+/* The one WM_COMMAND packing for every BN_* code (#343): notification in
+ * the high word, control id in the low, the control handle as lParam —
+ * the shape btn_fire has always sent BN_CLICKED in. */
+static void btn_notify(HWND h, int code) {
+    if (h->parent)
+        SendMessage(h->parent, WM_COMMAND, MAKEWPARAM(h->id, code), (LPARAM)h);
+}
+
 static void btn_fire(HWND h) {
     BtnState *st = (BtnState *)h->ctl;
     int kind = btn_kind(h);
@@ -3347,8 +3355,7 @@ static void btn_fire(HWND h) {
         st->check = 1;
         InvalidateRect(h, NULL, TRUE);
     }
-    if (h->parent)
-        SendMessage(h->parent, WM_COMMAND, MAKEWPARAM(h->id, BN_CLICKED), (LPARAM)h);
+    btn_notify(h, BN_CLICKED);                   /* never gated on BS_NOTIFY */
 }
 
 /* BS_OWNERDRAW (0048, calc's keypad): the parent paints via WM_DRAWITEM —
@@ -3389,8 +3396,19 @@ static LRESULT btn_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (btn_kind(h) == BS_OWNERDRAW) btn_paint_ownerdraw(h);
         else btn_paint(h);
         return 0;
-    case WM_LBUTTONDOWN:
     case WM_LBUTTONDBLCLK:
+        /* BS_NOTIFY (#343): the second click of a pair notifies the parent
+         * instead of pressing (the Windows/Wine button proc shape — no
+         * focus/capture, no BN_CLICKED from the following button-up).
+         * Without the bit it falls through to a plain press. Windows also
+         * auto-notifies BS_RADIOBUTTON/BS_OWNERDRAW without the bit; #343
+         * scopes the gate to BS_NOTIFY alone. */
+        if (h->style & BS_NOTIFY) {
+            btn_notify(h, BN_DBLCLK);
+            return 0;
+        }
+        /* fall through */
+    case WM_LBUTTONDOWN:
         SetFocus(h);
         SetCapture(h);
         st->pressed = 1;
@@ -3460,6 +3478,8 @@ static LRESULT btn_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_SETFOCUS:
     case WM_KILLFOCUS:
         InvalidateRect(h, NULL, TRUE);
+        if (h->style & BS_NOTIFY)                /* #343: the gated pair */
+            btn_notify(h, msg == WM_SETFOCUS ? BN_SETFOCUS : BN_KILLFOCUS);
         return 0;
     case WM_GETDLGCODE: {                         /* dialog nav (0104) */
         int k = btn_kind(h);
@@ -4443,6 +4463,15 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
          * the TranslateMessage Ctrl fold is an UNBOUND chord and drops in
          * the else arm below */
         if (edit_ro(h)) return 0;
+        /* ES_NUMBER (#343): typed characters are digits-only — a rejected
+         * key beeps (the real-EDIT reject sound is the default beep) and
+         * inserts nothing. Control chars (backspace) pass, and WM_PASTE is
+         * deliberately unfiltered: classic Windows lets paste through. */
+        if ((h->style & ES_NUMBER) && ch >= 32 && ch != 127 &&
+            !(ch >= '0' && ch <= '9')) {
+            MessageBeep(MB_OK);
+            return 0;
+        }
         if (ch == 8) {                           /* backspace: whole cp (0211) */
             int s, e;
             edit_sel(st, &s, &e);
@@ -5723,7 +5752,11 @@ static void ensure_builtin_classes(void) {
     static int done;
     if (done) return;
     done = 1;
-    class_add("BUTTON", btn_proc, 0, NULL);
+    /* CS_DBLCLKS matches the real BUTTON class (#343): without it the
+     * router never synthesizes WM_LBUTTONDBLCLK for buttons and BN_DBLCLK
+     * is unreachable from real input. btn_proc treats the dblclk as a
+     * plain press unless BS_NOTIFY asks for the notification. */
+    class_add("BUTTON", btn_proc, CS_DBLCLKS, NULL);
     class_add("STATIC", static_proc, 0, NULL);
     class_add("EDIT", edit_proc, 0, NULL);
     class_add("LISTBOX", lb_proc, CS_DBLCLKS, NULL);

@@ -89,7 +89,9 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                        76, 10, 180, 24, hwnd, (HMENU)IDC_NAME_EDIT, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "Add", WS_CHILD | WS_VISIBLE,
                        268, 10, 60, 24, hwnd, (HMENU)IDB_ADD, NULL, NULL);
-        CreateWindowEx(0, "BUTTON", "Greet", WS_CHILD | WS_VISIBLE,
+        /* BS_NOTIFY (#343): Greet is the real-input BN_DBLCLK probe — the
+         * e2e injects a genuine double-click and asserts greet-dblclk. */
+        CreateWindowEx(0, "BUTTON", "Greet", WS_CHILD | WS_VISIBLE | BS_NOTIFY,
                        336, 10, 60, 24, hwnd, (HMENU)IDB_GREET, NULL, NULL);
         CreateWindowEx(0, "LISTBOX", "", WS_CHILD | WS_VISIBLE | WS_VSCROLL,
                        12, 44, 244, 120, hwnd, (HMENU)IDC_LIST, NULL, NULL);
@@ -215,6 +217,9 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 fflush(stdout);
                 return 0;
             }
+        } else if (code == BN_DBLCLK && id == IDB_GREET) {
+            mark("greet-dblclk");                /* BS_NOTIFY (#343) */
+            return 0;
         } else if (code == LBN_SELCHANGE && id == IDC_LIST) {
             HWND lb = GetDlgItem(hwnd, IDC_LIST);
             int sel = (int)SendMessage(lb, LB_GETCURSEL, 0, 0);
@@ -274,6 +279,9 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 static int st_fails, st_checks;
 static int st_envscroll, st_enhscroll;
+/* BN_* notification counters (#343), per the two probe buttons: ids 910
+ * (BS_NOTIFY) and 911 (plain). */
+static int st_bnclick, st_bnset, st_bnkill, st_bndbl;
 
 static void st_check(const char *name, int cond) {
     st_checks++;
@@ -281,10 +289,22 @@ static void st_check(const char *name, int cond) {
     else { printf("FAIL %s\n", name); st_fails++; }
 }
 
+static void st_bn_reset(void) {
+    st_bnclick = st_bnset = st_bnkill = st_bndbl = 0;
+}
+
 static LRESULT CALLBACK StProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_COMMAND) {
         if (HIWORD(wp) == EN_VSCROLL) st_envscroll++;
         if (HIWORD(wp) == EN_HSCROLL) st_enhscroll++;
+        if (LOWORD(wp) == 910 || LOWORD(wp) == 911) {
+            switch (HIWORD(wp)) {
+            case BN_CLICKED:   st_bnclick++; break;
+            case BN_SETFOCUS:  st_bnset++;   break;
+            case BN_KILLFOCUS: st_bnkill++;  break;
+            case BN_DBLCLK:    st_bndbl++;   break;
+            }
+        }
     }
     return DefWindowProc(hwnd, msg, wp, lp);
 }
@@ -640,6 +660,67 @@ static int selftest(void) {
     st_check("SendDlgItemMessage to a missing id -> CB_ERR",   /* W name: no
                               ANSI generic exists (windows.h UNICODE block) */
              SendDlgItemMessageW(top, 9999, CB_GETCOUNT, 0, 0) == CB_ERR);
+
+    /* ---- BS_NOTIFY (#343): BN_SETFOCUS/BN_KILLFOCUS on focus moves and
+     * BN_DBLCLK on the second click of a pair — only with the bit set.
+     * BN_CLICKED never requires it. All SendMessage-synchronous (SetFocus
+     * delivers WM_SET/KILLFOCUS inline; btn_proc notifies inline). */
+    HWND bn = CreateWindowEx(0, "BUTTON", "notify",
+                             WS_CHILD | WS_VISIBLE | BS_NOTIFY,
+                             120, 120, 60, 24, top, (HMENU)910, NULL, NULL);
+    HWND bp = CreateWindowEx(0, "BUTTON", "plain", WS_CHILD | WS_VISIBLE,
+                             190, 120, 60, 24, top, (HMENU)911, NULL, NULL);
+    st_check("notify/plain probe buttons created", bn != NULL && bp != NULL);
+    st_bn_reset();
+    SetFocus(bn);
+    st_check("BS_NOTIFY: BN_SETFOCUS on focus gain",
+             st_bnset == 1 && st_bnkill == 0);
+    SetFocus(bp);                                /* bn kills; plain bp is mute */
+    st_check("BS_NOTIFY: BN_KILLFOCUS on focus loss", st_bnkill == 1);
+    st_check("plain button sends no focus notifications", st_bnset == 1);
+    st_bn_reset();
+    SendMessage(bp, BM_CLICK, 0, 0);
+    st_check("BN_CLICKED without BS_NOTIFY", st_bnclick == 1);
+    st_bn_reset();
+    SendMessage(bn, BM_CLICK, 0, 0);
+    st_check("BN_CLICKED with BS_NOTIFY", st_bnclick == 1);
+    st_bn_reset();
+    SendMessage(bn, WM_LBUTTONDBLCLK, MK_LBUTTON, MAKELPARAM(5, 5));
+    SendMessage(bn, WM_LBUTTONUP, 0, MAKELPARAM(5, 5));
+    st_check("BS_NOTIFY: BN_DBLCLK on the pair's second click", st_bndbl == 1);
+    st_check("BS_NOTIFY: the notified dblclk is not also a press",
+             st_bnclick == 0);
+    st_bn_reset();
+    SendMessage(bp, WM_LBUTTONDBLCLK, MK_LBUTTON, MAKELPARAM(5, 5));
+    SendMessage(bp, WM_LBUTTONUP, 0, MAKELPARAM(5, 5));
+    st_check("plain dblclk stays a press (BN_CLICKED, no BN_DBLCLK)",
+             st_bnclick == 1 && st_bndbl == 0);
+
+    /* ---- ES_NUMBER (#343): WM_CHAR is digits-only — rejects insert
+     * nothing (and beep); backspace still edits; a plain EDIT keeps
+     * accepting letters. WM_PASTE is deliberately unfiltered (classic
+     * Windows behaviour), pinned here so a future "fix" is a decision. */
+    HWND ne = CreateWindowEx(0, "EDIT", "", WS_CHILD | WS_VISIBLE | ES_NUMBER,
+                             120, 150, 80, 24, top, (HMENU)912, NULL, NULL);
+    st_check("ES_NUMBER edit created", ne != NULL);
+    SendMessage(ne, WM_CHAR, '5', 0);
+    SendMessage(ne, WM_CHAR, 'a', 0);            /* rejected */
+    SendMessage(ne, WM_CHAR, '7', 0);
+    GetWindowText(ne, buf, sizeof buf);
+    st_check("ES_NUMBER filters WM_CHAR to digits", strcmp(buf, "57") == 0);
+    SendMessage(ne, WM_CHAR, 8, 0);              /* backspace passes */
+    GetWindowText(ne, buf, sizeof buf);
+    st_check("ES_NUMBER lets backspace through", strcmp(buf, "5") == 0);
+    SendMessage(ne, EM_SETSEL, 0, 1);
+    SendMessage(ne, WM_PASTE, 0, 0);             /* clip = "cut" (undo leg) */
+    GetWindowText(ne, buf, sizeof buf);
+    st_check("ES_NUMBER paste is unfiltered (classic Windows)",
+             strcmp(buf, "cut") == 0);
+    SetWindowText(ed, "");
+    SendMessage(ed, EM_SETSEL, 0, 0);
+    SendMessage(ed, WM_CHAR, 'a', 0);
+    GetWindowText(ed, buf, sizeof buf);
+    st_check("plain EDIT still accepts letters", strcmp(buf, "a") == 0);
 
     printf("ctldemo selftest: %d checks, %d failed\n", st_checks, st_fails);
     fflush(stdout);

@@ -827,6 +827,7 @@ typedef struct tagCREATESTRUCT {
 #define BS_AUTORADIOBUTTON 0x9
 #define BS_GROUPBOX        0x7
 #define BS_OWNERDRAW       0xB
+#define BS_NOTIFY          0x4000
 /* Button messages / notifications */
 #define BM_GETCHECK  0x00F0
 #define BM_SETCHECK  0x00F1
@@ -840,6 +841,8 @@ typedef struct tagCREATESTRUCT {
 #define BN_CLICKED    0
 #define BN_DOUBLECLICKED 5
 #define BN_DBLCLK     BN_DOUBLECLICKED
+#define BN_SETFOCUS   6
+#define BN_KILLFOCUS  7
 
 /* Static styles */
 #define SS_LEFT   0x0
@@ -864,6 +867,7 @@ typedef struct tagCREATESTRUCT {
 #define ES_OEMCONVERT  0x0400
 #define ES_WANTRETURN  0x1000
 #define ES_READONLY    0x0800
+#define ES_NUMBER      0x2000
 /* Edit messages / notifications */
 #define EM_GETSEL       0x00B0
 #define EM_SETSEL       0x00B1

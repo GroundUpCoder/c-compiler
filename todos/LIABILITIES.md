@@ -354,11 +354,6 @@ thing this file exists to kill.
 - file: tests/kernel/run.js
 - anchor: const EXCLUDED = [
 
-### L69 — the #318 style net allowlists BUTTON BS_NOTIFY and EDIT ES_NUMBER as tracked-not-implemented: BN_SETFOCUS/KILLFOCUS/DBLCLK are never sent and the digit filter does not exist, and the net stays quiet about both until #343 lands (delete the allowlist entries with it)
-- ticket: #343
-- file: os/win32/user32.c
-- anchor:                                   BS_NOTIFY: BN_SETFOCUS/KILLFOCUS/DBLCLK
-
 ### L70 — the #318 style net suppresses the exStyle report for WS_EX_CLIENTEDGE (notepad's EDIT passes it every boot): no bit of exStyle is read anywhere, and the one recognized bit renders no edge until W2-TE lands
 - ticket: #322
 - file: os/win32/user32.c
