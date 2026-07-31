@@ -599,6 +599,11 @@ static int selftest(void) {
     st_check("lb vscroll: the wheel rides the same clamp",
              SendMessage(slb, LB_GETTOPINDEX, 0, 0) == wexp);
 
+    /* SetTimer with a TIMERPROC: refused, and loudly since #318 — the
+     * callback would never fire, which must read as a missing feature */
+    st_check("SetTimer TIMERPROC refused",
+             SetTimer(top, 901, 50, (void *)StProc) == 0);
+
     printf("ctldemo selftest: %d checks, %d failed\n", st_checks, st_fails);
     fflush(stdout);
     DestroyWindow(top);

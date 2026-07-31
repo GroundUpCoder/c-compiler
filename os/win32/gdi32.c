@@ -1783,7 +1783,8 @@ int MulDiv(int a, int b, int c) {
 int SetMapMode(HDC hdc, int mode) {
     (void)hdc;
     if (mode != MM_TEXT) {
-        fprintf(stderr, "gdi32: SetMapMode(%d) unsupported (MM_TEXT only)\n", mode);
+        /* the loud macro, not a bare fprintf: once-guard + WIN32_STRICT (#318) */
+        WIN32_UNSUPPORTED("SetMapMode(%d) (MM_TEXT only)", mode);
         return 0;
     }
     return MM_TEXT;

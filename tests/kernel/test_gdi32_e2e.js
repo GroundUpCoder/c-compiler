@@ -34,8 +34,11 @@ const { dir: tmp, image } = freshImage('os-gdi32-');
 /* ---- session A: selftest, then the windowed scene + a shot ---- */
 function sessionA() {
   const script = [
-    'gdidemo selftest',
+    // stderr via file + cat, the user32-e2e pattern: app stderr does not
+    // reliably interleave into the piped tty stream (#318 pin needs it)
+    'gdidemo selftest 2>/tmp/st.err',
     'echo SELFTEST-EXIT=$?',
+    'cat /tmp/st.err',
     'gdidemo &',
     // Boot barrier (todos/0154): wait for the window to be listed, then for a
     // presented frame (seq>=1) so the shot captures a painted scene, not a blank
@@ -56,6 +59,9 @@ function sessionA() {
     (out.match(/FAIL [^\n]*/g) || []).join('; ') || out.slice(0, 300));
   check('selftest exits 0', out.includes('SELFTEST-EXIT=0'));
   check('selftest has no failing checks', !/\nFAIL /.test(out));
+  check('fail-loud: refused SetMapMode says so on stderr (#318)',
+    /win32: unsupported SetMapMode\(2\) \(MM_TEXT only\)/.test(out),
+    (out.match(/win32: unsupported [^\n]*/g) || []).join(' | '));
 
   const list1 = (out.split('==list1\n')[1] || '');
   const row = list1.split('\n').find(l => l.endsWith('\tGDI Demo')) || '';

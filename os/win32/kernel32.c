@@ -937,8 +937,10 @@ void ExitProcess(UINT code) { exit((int)code); }
 HANDLE CreateThread(void *sa, SIZE_T stack, LPTHREAD_START_ROUTINE fn,
                     LPVOID param, DWORD flags, LPDWORD tid) {
     /* WIN32.md friction #1: single-threaded apps only — a clear failure,
-     * never a silent success. */
+     * never a silent success, and LOUD like the rest of the policy (#318;
+     * a thread that never runs is a feature the app thinks it has). */
     (void)sa; (void)stack; (void)fn; (void)param; (void)flags; (void)tid;
+    WIN32_UNSUPPORTED("CreateThread (single-threaded world; returning NULL)");
     g_lastError = ERROR_CALL_NOT_IMPLEMENTED;
     return NULL;
 }
@@ -1201,14 +1203,27 @@ DWORD GetModuleFileNameW(HMODULE mod, LPWSTR buf, DWORD n) {
 
 HMODULE LoadLibraryW(LPCWSTR name) {
     /* Static-link world: a clear failure; callers (calc's uxtheme/
-     * htmlhelp binding) degrade gracefully on NULL. */
+     * htmlhelp binding) degrade gracefully on NULL. Loud since #318 —
+     * GetModuleHandleW(name) already was, and an app that NEEDS its DLL
+     * must read as missing a DLL, not mystery-degrade. calc's two boot
+     * probes each cost one line, by design. */
     (void)name;
+    WIN32_UNSUPPORTED("LoadLibraryW (no DLLs; returning NULL)");
     g_lastError = ERROR_CALL_NOT_IMPLEMENTED;
     return NULL;
 }
 
 FARPROC GetProcAddress(HMODULE mod, LPCSTR name) {
-    (void)mod; (void)name;
+    (void)mod;
+    /* name may be a MAKEINTRESOURCE ordinal — %s on it would fault; the
+     * conservative low-64K test misreads a stack string as an ordinal at
+     * worst (harmless), never the reverse (a crash). */
+    if ((UINT_PTR)name < 0x10000)
+        WIN32_UNSUPPORTED("GetProcAddress(#%u) (no DLLs; returning NULL)",
+                          (unsigned)(UINT_PTR)name);
+    else
+        WIN32_UNSUPPORTED("GetProcAddress(\"%s\") (no DLLs; returning NULL)",
+                          name);
     g_lastError = ERROR_PROC_NOT_FOUND;
     return NULL;
 }

@@ -1586,7 +1586,13 @@ static struct {
 } g_timers[MAX_TIMERS];
 
 UINT_PTR SetTimer(HWND hwnd, UINT_PTR id, UINT elapse, void *proc) {
-    if (proc) return 0;                          /* fail loud: no TIMERPROC */
+    if (proc) {                                  /* no TIMERPROC: the timer the
+                                                    caller asked for will never
+                                                    fire — say so (#318) */
+        WIN32_UNSUPPORTED("SetTimer TIMERPROC callback (post WM_TIMER instead; "
+                          "returning 0)");
+        return 0;
+    }
     if (!hwnd && !id) return 0;
     if (elapse < 10) elapse = 10;
     int slot = -1;

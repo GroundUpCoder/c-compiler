@@ -481,6 +481,9 @@ check('tab caret mapping is tab-stop wide (0274)',
 check('fail-loud: unsupported scrollbar target says so on stderr',
   /win32: unsupported GetScrollPos: no SB_VERT scrollbar[^\n]*LISTBOX/.test(outE),
   (outE.split('selftest-rc=')[1] || '').slice(0, 200));
+check('fail-loud: refused TIMERPROC SetTimer says so on stderr (#318)',
+  /win32: unsupported SetTimer TIMERPROC/.test(outE),
+  (outE.split('selftest-rc=')[1] || '').slice(0, 200));
 fs.rmSync(etmp, { recursive: true, force: true });
 
 /* ---- session F: `ctldemo menudemo` (0211, rebuilt on the 0257 anchored-

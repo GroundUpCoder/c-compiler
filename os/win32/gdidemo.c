@@ -373,6 +373,10 @@ static void selftest(void) {
     check("unknown_rop_refused",                 /* MERGECOPY: not implemented */
           BitBlt(dc, 0, 0, 10, 10, dc2, 0, 0, 0x00C000CA) == FALSE &&
           GetPixel(dc, 5, 5) == RGB(255, 255, 255));
+    /* SetMapMode: MM_TEXT only — refused, and loudly since #318 (2 =
+     * MM_LOMETRIC, undeclared here on purpose: only MM_TEXT is real) */
+    check("mapmode_refused",
+          SetMapMode(dc, 2) == 0 && SetMapMode(dc, MM_TEXT) == MM_TEXT);
     /* out-of-source pixels stay untouched (no fabricated black) */
     SetPixel(dc, 0, 0, RGB(1, 2, 3));
     BitBlt(dc, 0, 0, 10, 10, dc2, 60, 60, SRCCOPY);   /* src is 16x16 */

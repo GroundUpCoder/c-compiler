@@ -41,8 +41,10 @@ const { dir: tmp, image } = freshImage('os-k32-');
 function sessionA() {
   const script = [
     'echo posix-twin-line > /root/k32-posix.txt',
-    'k32demo',
+    // stderr via file + cat, the user32-e2e pattern (#318 fail-loud pins)
+    'k32demo 2>/tmp/k32.err',
     'echo K32-EXIT=$?',
+    'cat /tmp/k32.err',
     'echo ==out',
     'cat /root/k32-out.txt',
     'echo ==twin',
@@ -60,6 +62,14 @@ function sessionA() {
     (out.match(/FAIL [^\n]*/g) || []).join('; ') || out.slice(0, 400));
   check('k32demo exits 0', out.includes('K32-EXIT=0'));
   check('no failing checks', !/\nFAIL /.test(out));
+  /* #318: the deliberate clear-failure stubs are LOUD now — the selftest's
+   * CreateThread/LoadLibraryW probes must each leave a report */
+  check('fail-loud: CreateThread refusal says so on stderr',
+    /win32: unsupported CreateThread/.test(out),
+    (out.match(/win32: unsupported [^\n]*/g) || []).join(' | '));
+  check('fail-loud: LoadLibraryW refusal says so on stderr',
+    /win32: unsupported LoadLibraryW/.test(out),
+    (out.match(/win32: unsupported [^\n]*/g) || []).join(' | '));
 
   /* twin leg 1: hush reads back what WriteFile wrote, byte-exact */
   const cut = out.split('==out\n')[1] || '';
