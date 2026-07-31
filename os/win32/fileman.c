@@ -147,6 +147,9 @@ typedef ld_ent Ent;             /* the shared listing shape (os/listdir.h) */
 static Ent g_ents[512];
 static int g_nent;    /* entries actually snapshotted (<= 512) */
 static int g_ntotal;  /* the directory's true entry count (0255) */
+static int g_listerr; /* last list_dir failed (render shows the error row) */
+static int g_fitw = -1; /* listbox width the rows were pixel-fitted for
+                         * (#317); -1 = nothing rendered yet */
 
 static int entcmp(const void *a, const void *b) {
     const Ent *ea = (const Ent *)a, *eb = (const Ent *)b;
@@ -186,32 +189,102 @@ static void status_update(void) {
     SendMessage(g_status, SB_SETTEXT, 0, (LPARAM)s);
 }
 
-static void refill(void) {
-    SendMessage(g_list, LB_RESETCONTENT, 0, 0);
-    /* The walk is os/listdir.h's shared list_dir (CD34). Dotfiles hidden
-     * unless the View toggle is on (0093/0106 — the .recycle store must
-     * not clutter /root; Explorer-style). list_dir returns the TOTAL
-     * count (may exceed the 512-entry snapshot); a clipped listing gets
-     * an explicit trailing "(N more...)" row instead of silently reading
-     * as complete (0255). That row sits at index g_nent, past every
-     * `idx < g_nent` guard, so it is inert to selection/open/ops. */
-    int total = list_dir(g_cwd, g_ents, 512,
-                         LIST_FOLLOW_LINKS | (g_hidden ? 0u : LIST_HIDE_DOTFILES));
-    if (total < 0) {
-        SendMessage(g_list, LB_ADDSTRING, 0, (LPARAM)"(cannot open directory)");
-        g_nent = 0;
-        g_ntotal = 0;
-        status_update();
+/* ---- pixel-fitted rows (#317) ----
+ *
+ * The stock font is PROPORTIONAL (the C2 flag day), so a character-count
+ * layout ("%-28s %10s  %s" until #317) cannot bound the paint width — a
+ * row's pixel width grows with its name's LETTER count at a fixed
+ * character count, and a long name pushed the date tail under the
+ * WS_VSCROLL gutter. Rows are therefore laid out in PIXELS, measured
+ * with GetTextExtentPoint32 (the same stock font the control paints
+ * with; fileman never sends WM_SETFONT): the "size  date" tail is
+ * measured and right-flushed at the usable width by computed space
+ * padding (the stock digits are uniform-width, so the tails line up as
+ * real columns), and the name is elided ("...") to the pixels the tail
+ * leaves. The scrollbar gutter is ALWAYS reserved (the bar is
+ * show-when-needed) so the bound holds for any directory, any name
+ * length, any window width; fit_tail is the floor for degenerate
+ * widths. Proper column controls arrive with the #150 SysListView32
+ * migration. */
+
+static int row_budget(void) {
+    RECT r;
+    GetClientRect(g_list, &r);
+    /* Item text draws at x=4 inside the control's 2px right well edge
+     * (user32 lb WM_PAINT), less the reserved scrollbar gutter. */
+    return r.right - 4 - 2 - GetSystemMetrics(SM_CXVSCROLL);
+}
+
+/* Chop s from the end until it measures within budget (the elision floor
+ * — also the whole fit for the diagnostic rows). */
+static void fit_tail(HDC dc, int budget, char *s) {
+    SIZE sz;
+    size_t n = strlen(s);
+    while (n > 0 && GetTextExtentPoint32(dc, s, (int)n, &sz) && sz.cx > budget)
+        s[--n] = 0;
+}
+
+static void row_fit(HDC dc, int budget, char *out, size_t cap,
+                    const char *name, const char *sizef, const char *datef) {
+    char tail[48];
+    snprintf(tail, sizeof tail, "%s  %s", sizef, datef);
+    SIZE sz;
+    if (!dc || !GetTextExtentPoint32(dc, tail, (int)strlen(tail), &sz)) {
+        /* No measurement available (a dead DC): the pre-#317 fixed
+         * layout is the only shape left — unbounded, but never reached
+         * with a live control. */
+        snprintf(out, cap, "%-28s %s", name, tail);
         return;
     }
-    g_ntotal = total;
-    g_nent = total < 512 ? total : 512;
-    qsort(g_ents, (size_t)g_nent, sizeof g_ents[0], entcmp);
+    int tail_px = sz.cx;
+    int space_px = (GetTextExtentPoint32(dc, " ", 1, &sz) && sz.cx > 0)
+                       ? sz.cx : 6;
+    int name_budget = budget - tail_px - space_px;
+    char nb[268];
+    int full = (int)strlen(name), npx = 0;
+    for (int keep = full; ; keep--) {
+        if (keep == full) snprintf(nb, sizeof nb, "%s", name);
+        else snprintf(nb, sizeof nb, "%.*s...", keep, name);
+        npx = GetTextExtentPoint32(dc, nb, (int)strlen(nb), &sz) ? sz.cx : 0;
+        if (npx <= name_budget || keep == 0) break;
+    }
+    /* Right-flush the tail at the budget edge: floor() keeps the padded
+     * width <= budget whenever the name fit its share. */
+    int pad = (budget - npx - tail_px) / space_px;
+    if (pad < 1) pad = 1;
+    size_t n = strlen(nb), t = strlen(tail);
+    if ((size_t)pad > cap - 2 - n - t) pad = (int)(cap - 2 - n - t);
+    memcpy(out, nb, n);
+    for (int i = 0; i < pad; i++) out[n++] = ' ';
+    memcpy(out + n, tail, t + 1);
+    fit_tail(dc, budget, out);      /* degenerate-width floor */
+}
+
+/* Rebuild the LISTBOX rows from the g_ents snapshot at the CURRENT list
+ * width (no directory read — refill() owns that; relayout() re-renders on
+ * a width change). */
+static void render_rows(void) {
+    SendMessage(g_list, LB_RESETCONTENT, 0, 0);
+    RECT r;
+    GetClientRect(g_list, &r);
+    g_fitw = r.right;
+    HDC dc = GetDC(g_list);
+    int budget = row_budget();
+    if (g_listerr) {
+        char row[32];
+        snprintf(row, sizeof row, "(cannot open directory)");
+        fit_tail(dc, budget, row);
+        SendMessage(g_list, LB_ADDSTRING, 0, (LPARAM)row);
+        ReleaseDC(g_list, dc);
+        return;
+    }
     for (int i = 0; i < g_nent; i++) {
         /* Details columns off the same stat: a left name field, a
-         * right-aligned size (or <DIR>), then a fixed-width date. The
-         * mono font makes space-padding an honest column (LB_SETTABSTOPS-
-         * free, 0106). Agent readers key on the name prefix. */
+         * right-aligned size (or <DIR>), then the date — approximate
+         * columns under the proportional font, pixel-fitted per row
+         * (#317; the false "mono font makes space-padding an honest
+         * column" premise is retired). Agent readers key on the name
+         * prefix, which elision preserves. */
         char namef[264], sizef[16], datef[20];
         snprintf(namef, sizeof namef, "%s%s", g_ents[i].name,
                  g_ents[i].is_dir ? "/" : "");
@@ -225,15 +298,42 @@ static void refill(void) {
                      tm->tm_hour, tm->tm_min);
         else snprintf(datef, sizeof datef, "-");
         char row[320];
-        snprintf(row, sizeof row, "%-28s %10s  %s", namef, sizef, datef);
+        row_fit(dc, budget, row, sizeof row, namef, sizef, datef);
         SendMessage(g_list, LB_ADDSTRING, 0, (LPARAM)row);
     }
     if (g_ntotal > g_nent) {
         char row[64];
         snprintf(row, sizeof row, "(%d more entries not shown)",
                  g_ntotal - g_nent);
+        fit_tail(dc, budget, row);
         SendMessage(g_list, LB_ADDSTRING, 0, (LPARAM)row);
     }
+    ReleaseDC(g_list, dc);
+}
+
+static void refill(void) {
+    /* The walk is os/listdir.h's shared list_dir (CD34). Dotfiles hidden
+     * unless the View toggle is on (0093/0106 — the .recycle store must
+     * not clutter /root; Explorer-style). list_dir returns the TOTAL
+     * count (may exceed the 512-entry snapshot); a clipped listing gets
+     * an explicit trailing "(N more...)" row instead of silently reading
+     * as complete (0255). That row sits at index g_nent, past every
+     * `idx < g_nent` guard, so it is inert to selection/open/ops. */
+    int total = list_dir(g_cwd, g_ents, 512,
+                         LIST_FOLLOW_LINKS | (g_hidden ? 0u : LIST_HIDE_DOTFILES));
+    if (total < 0) {
+        g_listerr = 1;
+        g_nent = 0;
+        g_ntotal = 0;
+        render_rows();
+        status_update();
+        return;
+    }
+    g_listerr = 0;
+    g_ntotal = total;
+    g_nent = total < 512 ? total : 512;
+    qsort(g_ents, (size_t)g_nent, sizeof g_ents[0], entcmp);
+    render_rows();
     SetWindowText(g_path, g_cwd);
     char title[600];
     snprintf(title, sizeof title, "File Manager - %s", g_cwd);
@@ -285,6 +385,28 @@ static void refill_keep_selection(void) {
                 SendMessage(g_list, LB_SETSEL, 1, (LPARAM)j);
                 break;
             }
+}
+
+/* A list-width change re-fits every row (#317: the pixel bound is
+ * width-derived) — render only, no directory read; selection (by NAME,
+ * the 0123 rule) and the scroll position are carried across the rebuild. */
+static void rerender_keep_selection(void) {
+    char keep[64][264];
+    int nkeep = 0;
+    int idx[512];
+    int top = (int)SendMessage(g_list, LB_GETTOPINDEX, 0, 0);
+    int n = (int)SendMessage(g_list, LB_GETSELITEMS, 512, (LPARAM)idx);
+    for (int i = 0; i < n && nkeep < 64; i++)
+        if (idx[i] >= 0 && idx[i] < g_nent)
+            snprintf(keep[nkeep++], sizeof keep[0], "%s", g_ents[idx[i]].name);
+    render_rows();
+    for (int i = 0; i < nkeep; i++)
+        for (int j = 0; j < g_nent; j++)
+            if (!strcmp(keep[i], g_ents[j].name)) {
+                SendMessage(g_list, LB_SETSEL, 1, (LPARAM)j);
+                break;
+            }
+    SendMessage(g_list, LB_SETTOPINDEX, top, 0);
 }
 
 /* `record` distinguishes a user navigation (pushes history) from a Back
@@ -820,6 +942,13 @@ static void relayout(HWND h) {
     MoveWindow(g_open, w - 2 * BTN_W - 8, 3, BTN_W, TOP_H - 6, TRUE);
     MoveWindow(g_with, w - BTN_W - 4, 3, BTN_W, TOP_H - 6, TRUE);
     MoveWindow(g_list, 4, TOP_H, w - 8, hgt - TOP_H - 4 - sh, TRUE);
+    /* Rows are pixel-fitted to the list width (#317): a width change
+     * invalidates the fit, so re-render from the g_ents snapshot (g_fitw
+     * < 0 = nothing rendered yet — the WM_SIZE that precedes the first
+     * refill must not render an empty listing over nothing). */
+    RECT lr;
+    GetClientRect(g_list, &lr);
+    if (g_fitw >= 0 && lr.right != g_fitw) rerender_keep_selection();
 }
 
 static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {

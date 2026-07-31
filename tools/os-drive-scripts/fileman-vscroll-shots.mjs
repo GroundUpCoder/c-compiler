@@ -29,5 +29,13 @@ export default async function (drive) {
   await drive.vt(2);
   await drive.pause(1000);                       // paint settle (no repaint marker)
   await drive.shot(M + '02-fileman-bin-scrolled.png');
+  // Narrow resize: rows re-fit to the new width (names elide, the
+  // size/date tail stays right-flush inside the gutter) — the
+  // by-construction bound, not a /bin-width coincidence.
+  await drive.sh('wmctl resize $SID 300 360 && echo R""SZ-OK');
+  await drive.waitOut('RSZ-OK', 15000);
+  await drive.vt(2);
+  await drive.pause(1000);                       // paint settle (no repaint marker)
+  await drive.shot(M + '03-fileman-bin-narrow.png');
   console.log('[317] shots done');
 }
