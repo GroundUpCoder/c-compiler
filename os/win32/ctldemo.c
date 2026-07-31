@@ -91,7 +91,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                        268, 10, 60, 24, hwnd, (HMENU)IDB_ADD, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "Greet", WS_CHILD | WS_VISIBLE,
                        336, 10, 60, 24, hwnd, (HMENU)IDB_GREET, NULL, NULL);
-        CreateWindowEx(0, "LISTBOX", "", WS_CHILD | WS_VISIBLE,
+        CreateWindowEx(0, "LISTBOX", "", WS_CHILD | WS_VISIBLE | WS_VSCROLL,
                        12, 44, 244, 120, hwnd, (HMENU)IDC_LIST, NULL, NULL);
         CreateWindowEx(0, "SCROLLBAR", "", WS_CHILD | WS_VISIBLE | SBS_VERT,
                        264, 44, 16, 120, hwnd, (HMENU)IDC_SCROLL, NULL, NULL);
@@ -216,8 +216,11 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
         } else if (code == LBN_SELCHANGE && id == IDC_LIST) {
-            int sel = (int)SendMessage(GetDlgItem(hwnd, IDC_LIST), LB_GETCURSEL, 0, 0);
-            printf("ctldemo: sel=%d\n", sel);
+            HWND lb = GetDlgItem(hwnd, IDC_LIST);
+            int sel = (int)SendMessage(lb, LB_GETCURSEL, 0, 0);
+            /* top makes scroll position observable to the e2e (0275) */
+            printf("ctldemo: sel=%d top=%d\n", sel,
+                   (int)SendMessage(lb, LB_GETTOPINDEX, 0, 0));
             fflush(stdout);
             return 0;
         } else if (code == LBN_DBLCLK && id == IDC_LIST) {
@@ -542,11 +545,59 @@ static int selftest(void) {
     st_check("undo: EM_SETHANDLE clears",
              SendMessage(ed, EM_CANUNDO, 0, 0) == FALSE);
 
-    /* fail-loud probe: a LISTBOX has no SB_VERT plumbing — the call must
-     * fail AND say so on stderr (the e2e asserts the stderr line) */
+    /* fail-loud probe: a LISTBOX WITHOUT WS_VSCROLL has no SB_VERT bar —
+     * the call must fail AND say so on stderr (the e2e asserts the
+     * stderr line) */
     HWND lb = CreateWindowEx(0, "LISTBOX", "", WS_CHILD | WS_VISIBLE,
                              10, 120, 100, 60, top, (HMENU)901, NULL, NULL);
     st_check("GetScrollPos on LISTBOX fails", GetScrollPos(lb, SB_VERT) == 0);
+
+    /* the built-in LISTBOX WS_VSCROLL bar (0275): programmatic contract.
+     * 7 items in a 60px box overflow at any live font, so the bar shows. */
+    HWND slb = CreateWindowEx(0, "LISTBOX", "",
+                              WS_CHILD | WS_VISIBLE | WS_VSCROLL,
+                              10, 190, 100, 60, top, (HMENU)902, NULL, NULL);
+    for (int i = 0; i < 7; i++) {
+        char it[8];
+        snprintf(it, sizeof it, "it%d", i);
+        SendMessage(slb, LB_ADDSTRING, 0, (LPARAM)it);
+    }
+    st_check("lb vscroll: pos starts at 0", GetScrollPos(slb, SB_VERT) == 0);
+    int lmn = -1, lmx = -1;
+    st_check("lb vscroll: GetScrollRange = the item count",
+             GetScrollRange(slb, SB_VERT, &lmn, &lmx) && lmn == 0 && lmx == 6);
+    memset(&si, 0, sizeof si);
+    si.cbSize = sizeof si;
+    si.fMask = SIF_ALL;
+    st_check("lb vscroll: GetScrollInfo page = visible rows",
+             GetScrollInfo(slb, SB_VERT, &si) &&
+             (int)si.nPage >= 1 && (int)si.nPage < 7);
+    int lrows = (int)si.nPage, lmax = 7 - lrows;
+    st_check("lb vscroll: SetScrollPos scrolls, returns the old pos",
+             SetScrollPos(slb, SB_VERT, 2, TRUE) == 0 &&
+             GetScrollPos(slb, SB_VERT) == 2);
+    st_check("lb vscroll: LB_GETTOPINDEX agrees",
+             SendMessage(slb, LB_GETTOPINDEX, 0, 0) == 2);
+    SetScrollPos(slb, SB_VERT, 99, TRUE);
+    st_check("lb vscroll: SetScrollPos clamps to the max top",
+             GetScrollPos(slb, SB_VERT) == lmax);
+    st_check("lb vscroll: LB_SETTOPINDEX drives the view",
+             SendMessage(slb, LB_SETTOPINDEX, 1, 0) == 0 &&
+             SendMessage(slb, LB_GETTOPINDEX, 0, 0) == 1);
+    st_check("lb vscroll: LB_SETTOPINDEX rejects out-of-range",
+             SendMessage(slb, LB_SETTOPINDEX, 7, 0) == LB_ERR);
+    SendMessage(slb, WM_VSCROLL, MAKEWPARAM(SB_TOP, 0), 0);
+    SendMessage(slb, WM_VSCROLL, MAKEWPARAM(SB_LINEDOWN, 0), 0);
+    st_check("lb vscroll: WM_VSCROLL SB_LINEDOWN",
+             SendMessage(slb, LB_GETTOPINDEX, 0, 0) == 1);
+    SendMessage(slb, WM_VSCROLL, MAKEWPARAM(SB_BOTTOM, 0), 0);
+    st_check("lb vscroll: WM_VSCROLL SB_BOTTOM = the max top",
+             SendMessage(slb, LB_GETTOPINDEX, 0, 0) == lmax);
+    int wexp = lmax - 3;                    /* one wheel notch = 3 rows */
+    if (wexp < 0) wexp = 0;
+    SendMessage(slb, WM_MOUSEWHEEL, MAKEWPARAM(0, 120), 0);
+    st_check("lb vscroll: the wheel rides the same clamp",
+             SendMessage(slb, LB_GETTOPINDEX, 0, 0) == wexp);
 
     printf("ctldemo selftest: %d checks, %d failed\n", st_checks, st_fails);
     fflush(stdout);

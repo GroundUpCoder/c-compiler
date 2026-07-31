@@ -4697,6 +4697,7 @@ typedef struct {
     int anchor;                 /* shift-range pivot (extended mode, 0106) */
     int top;                    /* first visible row */
     int multi;                  /* LBS_EXTENDEDSEL: a selection SET, not one row */
+    int sbDrag, sbDragOff;      /* built-in vscroll thumb drag (0275) */
 } LbState;
 
 /* Extended-sel primitives (0106): the SET lives in st->marks; st->sel is the
@@ -4718,6 +4719,52 @@ static int lb_rows(HWND h) {
     int rh = lb_row_h(h);
     int rows = (h->h - 4) / (rh > 0 ? rh : 1);
     return rows < 1 ? 1 : rows;
+}
+
+/* Highest valid top: range derives from lb_rows(), which TRUNCATES — the
+ * same clamp the wheel/key paths use, so the thumb can never desync from
+ * them (a partial last row exists under LBS_NOINTEGRALHEIGHT). */
+static int lb_maxtop(HWND h, LbState *st) {
+    int m = st->n - lb_rows(h);
+    return m < 0 ? 0 : m;
+}
+
+/* The built-in WS_VSCROLL bar (0275, the 0210 EDIT pattern): drawn inside
+ * the control's own WM_PAINT over a reserved gutter. Show-when-needed —
+ * the bar and its gutter exist only while the items overflow the visible
+ * rows (no LBS_DISABLENOSCROLL consumer in-tree). */
+static int lb_sb(HWND h, LbState *st) {
+    return (h->style & WS_VSCROLL) != 0 && st && st->n > lb_rows(h);
+}
+
+/* [up arrow][channel with proportional thumb][down arrow], inside the 2px
+ * well on the right edge; EDIT_SB_W is the one built-in bar thickness. */
+static void lb_sb_geom(HWND h, LbState *st, RECT *bar,
+                       int *btn, int *thumbY, int *thumbH) {
+    SetRect(bar, h->w - 2 - EDIT_SB_W, 2, h->w - 2, h->h - 2);
+    int len = bar->bottom - bar->top;
+    int b = EDIT_SB_W;
+    if (b * 2 > len) b = len / 2;
+    *btn = b;
+    int chan = len - 2 * b;
+    int rows = lb_rows(h), maxTop = lb_maxtop(h, st);
+    int th = maxTop > 0 ? chan * rows / st->n : chan;   /* proportional */
+    if (th < 8) th = 8;
+    if (th > chan) th = chan;
+    *thumbH = th;
+    *thumbY = bar->top + b +
+        (maxTop > 0 ? (chan - th) * st->top / maxTop : 0);
+}
+
+/* Scroll the view (wheel/bar/key semantics — the selection stays put; no
+ * LBN notification exists for scrolling, per Windows). */
+static void lb_vscroll(HWND h, LbState *st, int top) {
+    int m = lb_maxtop(h, st);
+    if (top < 0) top = 0;
+    if (top > m) top = m;
+    if (top == st->top) return;
+    st->top = top;
+    InvalidateRect(h, NULL, TRUE);
 }
 
 static void lb_show_sel(HWND h, LbState *st) {
@@ -4750,14 +4797,32 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         RECT r;
         SetRect(&r, 0, 0, h->w, h->h);
         draw_well(dc, r);
-        IntersectClipRect(dc, 2, 2, h->w - 2, h->h - 2);
+        int gut = lb_sb(h, st) ? EDIT_SB_W : 0;
+        if (gut) {                               /* built-in vscroll (0275) */
+            RECT bar, a1, a2, th;
+            int btn, ty, thh;
+            lb_sb_geom(h, st, &bar, &btn, &ty, &thh);
+            FillRect(dc, &bar, GetSysColorBrush(COLOR_SCROLLBAR));
+            SetRect(&a1, bar.left, bar.top, bar.right, bar.top + btn);
+            SetRect(&a2, bar.left, bar.bottom - btn, bar.right, bar.bottom);
+            FillRect(dc, &a1, GetSysColorBrush(COLOR_BTNFACE));
+            draw_raised(dc, a1, 0);
+            FillRect(dc, &a2, GetSysColorBrush(COLOR_BTNFACE));
+            draw_raised(dc, a2, 0);
+            sb_tri(dc, (a1.left + a1.right) / 2, (a1.top + a1.bottom) / 2, 0);
+            sb_tri(dc, (a2.left + a2.right) / 2, (a2.top + a2.bottom) / 2, 1);
+            SetRect(&th, bar.left, ty, bar.right, ty + thh);
+            FillRect(dc, &th, GetSysColorBrush(COLOR_BTNFACE));
+            draw_raised(dc, th, 0);
+        }
+        IntersectClipRect(dc, 2, 2, h->w - 2 - gut, h->h - 2);
         SetBkMode(dc, TRANSPARENT);
         int rh = lb_row_h(h);
         for (int i = st->top; i < st->n; i++) {
             int y = 2 + (i - st->top) * rh;
             if (y >= h->h - 2) break;
             RECT row;
-            SetRect(&row, 2, y, h->w - 2, y + rh);
+            SetRect(&row, 2, y, h->w - 2 - gut, y + rh);
             int selected = st->multi ? (st->marks && st->marks[i]) : (i == st->sel);
             if (selected) {
                 FillRect(dc, &row, GetSysColorBrush(COLOR_HIGHLIGHT));
@@ -4773,6 +4838,28 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_LBUTTONDOWN:
     case WM_LBUTTONDBLCLK: {
         SetFocus(h);
+        if (lb_sb(h, st)) {                      /* built-in vscroll (0275) */
+            int px = GET_X_LPARAM(lp), py = GET_Y_LPARAM(lp);
+            RECT bar;
+            int btn, ty, th;
+            lb_sb_geom(h, st, &bar, &btn, &ty, &th);
+            if (px >= bar.left) {
+                int rows = lb_rows(h);
+                if (py < bar.top + btn)
+                    lb_vscroll(h, st, st->top - 1);
+                else if (py >= bar.bottom - btn)
+                    lb_vscroll(h, st, st->top + 1);
+                else if (py >= ty && py < ty + th) {
+                    st->sbDrag = 1;
+                    st->sbDragOff = py - ty;
+                    SetCapture(h);
+                } else if (py < ty)              /* channel: page */
+                    lb_vscroll(h, st, st->top - rows);
+                else
+                    lb_vscroll(h, st, st->top + rows);
+                return 0;
+            }
+        }
         int rh = lb_row_h(h);
         int idx = st->top + (GET_Y_LPARAM(lp) - 2) / (rh > 0 ? rh : 1);
         if (idx >= 0 && idx < st->n) {
@@ -4851,14 +4938,47 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     }
-    case WM_MOUSEWHEEL: {
-        int delta = GET_WHEEL_DELTA_WPARAM(wp);
-        st->top -= 3 * (delta / WHEEL_DELTA);
-        int maxTop = st->n - lb_rows(h);
-        if (maxTop < 0) maxTop = 0;
-        if (st->top > maxTop) st->top = maxTop;
-        if (st->top < 0) st->top = 0;
-        InvalidateRect(h, NULL, TRUE);
+    case WM_MOUSEMOVE:
+        if (st->sbDrag && GetCapture() == h) {   /* thumb drag (0275) */
+            RECT bar;
+            int btn, ty, th;
+            lb_sb_geom(h, st, &bar, &btn, &ty, &th);
+            int travel = (bar.bottom - bar.top) - 2 * btn - th;
+            int m = lb_maxtop(h, st);
+            if (travel > 0 && m > 0) {
+                int ny = GET_Y_LPARAM(lp) - st->sbDragOff - (bar.top + btn);
+                lb_vscroll(h, st, (ny * m + travel / 2) / travel);
+            }
+        }
+        return 0;
+    case WM_LBUTTONUP:
+        st->sbDrag = 0;
+        if (GetCapture() == h) ReleaseCapture();
+        return 0;
+    case WM_MOUSEWHEEL:
+        lb_vscroll(h, st,
+                   st->top - 3 * (GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA));
+        return 0;
+    case WM_VSCROLL: {                           /* the classic contract (0275) */
+        int rows = lb_rows(h);
+        switch (LOWORD(wp)) {
+        case SB_LINEUP:   lb_vscroll(h, st, st->top - 1); break;
+        case SB_LINEDOWN: lb_vscroll(h, st, st->top + 1); break;
+        case SB_PAGEUP:   lb_vscroll(h, st, st->top - rows); break;
+        case SB_PAGEDOWN: lb_vscroll(h, st, st->top + rows); break;
+        case SB_TOP:      lb_vscroll(h, st, 0); break;
+        case SB_BOTTOM:   lb_vscroll(h, st, lb_maxtop(h, st)); break;
+        case SB_THUMBTRACK: case SB_THUMBPOSITION:
+            lb_vscroll(h, st, HIWORD(wp)); break;
+        }
+        return 0;
+    }
+    case LB_GETTOPINDEX:
+        return st->top;
+    case LB_SETTOPINDEX: {
+        int i = (int)wp;
+        if (i < 0 || (st->n ? i >= st->n : i != 0)) return LB_ERR;
+        lb_vscroll(h, st, i);                    /* clamps to the max top */
         return 0;
     }
     case LB_ADDSTRING: {
@@ -4950,7 +5070,8 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         int cy = GET_Y_LPARAM(lp), cx = GET_X_LPARAM(lp);
         int rh = lb_row_h(h);
         int idx = st->top + (cy - 2) / (rh > 0 ? rh : 1);
-        int outside = cx < 0 || cx >= h->w || cy < 2 || idx < 0 || idx >= st->n;
+        int outside = cx < 0 || cx >= h->w - (lb_sb(h, st) ? EDIT_SB_W : 0) ||
+                      cy < 2 || idx < 0 || idx >= st->n;
         if (idx < 0) idx = 0;
         if (st->n && idx >= st->n) idx = st->n - 1;
         return MAKELPARAM(idx, outside ? 1 : 0);
@@ -5252,7 +5373,7 @@ static LRESULT sb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
  * text; the EN_*SCROLL notifications stay user-action-only). Any other
  * combination is unsupported and says so. */
 
-enum { SBTGT_NONE, SBTGT_CTL, SBTGT_EDIT_V, SBTGT_EDIT_H };
+enum { SBTGT_NONE, SBTGT_CTL, SBTGT_EDIT_V, SBTGT_EDIT_H, SBTGT_LB_V };
 
 static int sb_target(HWND h, int bar, const char *api) {
     if (h && h->cls && h->ctl) {
@@ -5262,6 +5383,13 @@ static int sb_target(HWND h, int bar, const char *api) {
             if (bar == SB_VERT && edit_sb(h)) return SBTGT_EDIT_V;
             if (bar == SB_HORZ && edit_hsb(h)) return SBTGT_EDIT_H;
         }
+        /* Style-gated like the EDIT targets: the bar EXISTS with
+         * WS_VSCROLL (show-when-needed only hides its pixels), so the
+         * APIs answer even while the items still fit (pos 0, page-sized
+         * range) — a bar-less LISTBOX stays loudly unsupported (0275). */
+        if (bar == SB_VERT && ci_eq(h->cls->name, "LISTBOX") &&
+            (h->style & WS_VSCROLL))
+            return SBTGT_LB_V;
     }
     WIN32_UNSUPPORTED("%s: no %s scrollbar on this window (class %s)",
                       api, bar == SB_CTL ? "SB_CTL" :
@@ -5301,6 +5429,24 @@ static int edit_bar_set_pos(HWND h, int vert, int pos) {
     return old;
 }
 
+/* LISTBOX built-in bar view (0275): pos = top index, range = the item
+ * count, page = visible rows — the bar state IS the view state, the EDIT
+ * convention above. */
+static void lb_bar_get(HWND h, int *min, int *max, int *page, int *pos) {
+    LbState *st = (LbState *)h->ctl;
+    *min = 0;
+    *max = st->n > 0 ? st->n - 1 : 0;
+    *page = lb_rows(h);
+    *pos = st->top;
+}
+
+static int lb_bar_set_pos(HWND h, int pos) {
+    LbState *st = (LbState *)h->ctl;
+    int old = st->top;
+    lb_vscroll(h, st, pos);
+    return old;
+}
+
 int SetScrollPos(HWND h, int bar, int pos, BOOL redraw) {
     switch (sb_target(h, bar, "SetScrollPos")) {
     case SBTGT_CTL: {
@@ -5314,6 +5460,7 @@ int SetScrollPos(HWND h, int bar, int pos, BOOL redraw) {
     }
     case SBTGT_EDIT_V: return edit_bar_set_pos(h, 1, pos);
     case SBTGT_EDIT_H: return edit_bar_set_pos(h, 0, pos);
+    case SBTGT_LB_V:   return lb_bar_set_pos(h, pos);
     }
     return 0;
 }
@@ -5324,6 +5471,7 @@ int GetScrollPos(HWND h, int bar) {
     case SBTGT_CTL: return ((SbState *)h->ctl)->pos;
     case SBTGT_EDIT_V: edit_bar_get(h, 1, &mn, &mx, &pg, &pos); return pos;
     case SBTGT_EDIT_H: edit_bar_get(h, 0, &mn, &mx, &pg, &pos); return pos;
+    case SBTGT_LB_V:   lb_bar_get(h, &mn, &mx, &pg, &pos); return pos;
     }
     return 0;
 }
@@ -5345,6 +5493,10 @@ BOOL SetScrollRange(HWND h, int bar, int min, int max, BOOL redraw) {
         /* the EDIT owns its range (line count / content width) */
         WIN32_UNSUPPORTED("SetScrollRange on an EDIT built-in bar");
         return FALSE;
+    case SBTGT_LB_V:
+        /* the LISTBOX owns its range (item count) */
+        WIN32_UNSUPPORTED("SetScrollRange on a LISTBOX built-in bar");
+        return FALSE;
     }
     return FALSE;
 }
@@ -5358,6 +5510,7 @@ BOOL GetScrollRange(HWND h, int bar, LPINT min, LPINT max) {
         break;
     case SBTGT_EDIT_V: edit_bar_get(h, 1, &mn, &mx, &pg, &pos); break;
     case SBTGT_EDIT_H: edit_bar_get(h, 0, &mn, &mx, &pg, &pos); break;
+    case SBTGT_LB_V:   lb_bar_get(h, &mn, &mx, &pg, &pos); break;
     default: return FALSE;
     }
     if (min) *min = mn;
@@ -5391,6 +5544,14 @@ int SetScrollInfo(HWND h, int bar, const SCROLLINFO *si, BOOL redraw) {
         edit_bar_get(h, vert, &mn, &mx, &pg, &pos);
         return pos;
     }
+    case SBTGT_LB_V: {
+        if (si->fMask & (SIF_RANGE | SIF_PAGE))
+            WIN32_UNSUPPORTED("SetScrollInfo range/page on a LISTBOX bar");
+        if (si->fMask & SIF_POS) lb_bar_set_pos(h, si->nPos);
+        int mn, mx, pg, pos;
+        lb_bar_get(h, &mn, &mx, &pg, &pos);
+        return pos;
+    }
     }
     return 0;
 }
@@ -5408,6 +5569,7 @@ BOOL GetScrollInfo(HWND h, int bar, SCROLLINFO *si) {
     }
     case SBTGT_EDIT_V: edit_bar_get(h, 1, &mn, &mx, &pg, &pos); track = pos; break;
     case SBTGT_EDIT_H: edit_bar_get(h, 0, &mn, &mx, &pg, &pos); track = pos; break;
+    case SBTGT_LB_V:   lb_bar_get(h, &mn, &mx, &pg, &pos); track = pos; break;
     default: return FALSE;
     }
     if (si->fMask & SIF_RANGE) { si->nMin = mn; si->nMax = mx; }

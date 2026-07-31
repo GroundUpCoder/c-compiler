@@ -145,6 +145,37 @@ const out = boot([
   'echo ==scitree',
   'wmctl tree',
   'echo ==cut',
+  // ---- #275: the Statistics box (scientific-only) — reachable in-OS, laid
+  // out un-clipped, and its WS_VSCROLL LISTBOX scrolls with the MOUSE. Six
+  // single-digit data points ("C" clears the entry between them so row k is
+  // exactly "k" — the stat list renders without the display's trailing dot); 6 items overflow the 4 visible rows, so the bar shows.
+  'wmctl click Sta',
+  'wmctl wait win "Statistics box" 8000',
+  'SSID=$(wmctl list | grep "Statistics box$" | sed "s/[^0-9].*//")',
+  ...[1, 2, 3, 4, 5, 6].flatMap((k) => [
+    `wmctl click ${k}`, 'wmctl click Dat', 'wmctl click C',
+  ]),
+  'wmctl wait text LISTBOX:0 "6" 6000',
+  'echo ==statlist',
+  'wmctl list',
+  'echo ==cut',
+  'echo ==stattree',
+  'wmctl tree',
+  'echo ==cut',
+  // The listbox rect drives the click coordinates (the stat dialog has no
+  // menu bar, so tree rects ARE surface coords). Down arrow at the gutter
+  // foot scrolls one row; the first visible row is then item 1 ("2.") —
+  // without a working bar the click would select item 0.
+  'R=$(wmctl tree | grep "class=LISTBOX" | head -1)',
+  'LX=$(echo "$R" | sed "s/.*rect=\\([0-9]*\\),.*/\\1/")',
+  'LY=$(echo "$R" | sed "s/.*rect=[0-9]*,\\([0-9]*\\) .*/\\1/")',
+  'LW=$(echo "$R" | sed "s/.*rect=[0-9]*,[0-9]* \\([0-9]*\\)x.*/\\1/")',
+  'LH=$(echo "$R" | sed "s/.*rect=[0-9]*,[0-9]* [0-9]*x\\([0-9]*\\).*/\\1/")',
+  'wmctl click $SSID $((LX+LW-8)) $((LY+LH-8))',
+  'wmctl click $SSID $((LX+20)) $((LY+8))',
+  'echo ==statsel',
+  'wmctl tree',
+  'echo ==cut',
   '',
 ].join('\n'));
 
@@ -197,6 +228,61 @@ check('View->Scientific recreates the dialog (869x570 surface; the 316-DLU templ
   row2.includes('869x570'), row2);
 check('scientific template has the base radios',
   /class=BUTTON [^\n]*text='Hex'/.test(section(out, 'scitree')), section(out, 'scitree').slice(0, 400));
+
+/* ---- #275: the Statistics box ---- */
+const statlist = section(out, 'statlist');
+const statrow = statlist.split('\n').find(l => l.endsWith('\tStatistics box')) || '';
+check('Sta opens the Statistics box (reachable in scientific mode)',
+  statrow !== '', JSON.stringify(statlist.slice(0, 300)));
+
+const stattree = section(out, 'stattree');
+check('six data points landed in the stat LISTBOX',
+  (stattree.match(/lbrow i=\d/g) || []).length === 6 &&
+  /lbrow i=5 [^\n]*text='6'/.test(stattree), stattree.slice(-500));
+check('n=6 tallied', /class=STATIC [^\n]*text='n=6'/.test(stattree), stattree.slice(-400));
+
+/* Mouse scroll: the down-arrow click moved the view one row, so the click
+ * on the first VISIBLE row selected item 1 — pre-#275 (no bar) the same
+ * click would select item 0. */
+check('stats box scrolls with the mouse (first visible row is item 1)',
+  /lbrow i=1 sel/.test(section(out, 'statsel')), section(out, 'statsel').slice(-500));
+
+/* Layout integrity at the C2-narrowed geometry (handed down with #282's
+ * re-pin: nothing asserted clipping). Every stat-dialog control must sit
+ * inside the dialog surface, and no two may overlap. The subtree is the
+ * lines under the 'Statistics box' #32770 up to the next same-indent line. */
+{
+  const lines = stattree.split('\n');
+  const rootIdx = lines.findIndex(l => /class=#32770 [^\n]*text='Statistics box'/.test(l));
+  check('Statistics box dialog in the tree', rootIdx >= 0);
+  if (rootIdx >= 0 && statrow) {
+    const indent = (lines[rootIdx].match(/^\s*/) || [''])[0].length;
+    const kids = [];
+    for (let i = rootIdx + 1; i < lines.length; i++) {
+      const li = (lines[i].match(/^\s*/) || [''])[0].length;
+      if (lines[i].trim() === '' || li <= indent) break;
+      const m = lines[i].match(/class=(\S+) id=(-?\d+) [^\n]*rect=(\d+),(\d+) (\d+)x(\d+)/);
+      if (m) kids.push({ cls: m[1], id: m[2], x: +m[3], y: +m[4], w: +m[5], h: +m[6] });
+    }
+    const dims = (statrow.match(/(\d+)x(\d+)/) || []);
+    const SW = +dims[1], SH = +dims[2];
+    check('stat dialog has its 6 controls in the tree', kids.length === 6,
+      JSON.stringify(kids));
+    const outside = kids.filter(k => k.x < 0 || k.y < 0 || k.x + k.w > SW || k.y + k.h > SH);
+    check(`no stat-dialog control clips the ${SW}x${SH} surface`,
+      outside.length === 0, JSON.stringify(outside));
+    const overlaps = [];
+    for (let i = 0; i < kids.length; i++)
+      for (let j = i + 1; j < kids.length; j++) {
+        const a = kids[i], b2 = kids[j];
+        if (a.x < b2.x + b2.w && b2.x < a.x + a.w &&
+            a.y < b2.y + b2.h && b2.y < a.y + a.h)
+          overlaps.push([a, b2]);
+      }
+    check('no two stat-dialog controls overlap', overlaps.length === 0,
+      JSON.stringify(overlaps));
+  }
+}
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures ? `FAILURES: ${failures}` : 'ALL OK');
