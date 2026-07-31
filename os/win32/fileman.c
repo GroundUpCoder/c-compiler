@@ -836,7 +836,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         g_with = CreateWindowEx(0, "BUTTON", "With", WS_CHILD | WS_VISIBLE,
                                 0, 0, 10, 10, h, (HMENU)ID_WITH, NULL, NULL);
         g_list = CreateWindowEx(0, "LISTBOX", "",
-                                WS_CHILD | WS_VISIBLE | LBS_NOTIFY | LBS_EXTENDEDSEL,
+                                WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOTIFY | LBS_EXTENDEDSEL,
                                 0, 0, 10, 10, h, (HMENU)ID_LIST, NULL, NULL);
         g_status = CreateStatusWindow(WS_CHILD | WS_VISIBLE | CCS_BOTTOM,
                                       NULL, h, ID_STATUS);
