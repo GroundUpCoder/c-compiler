@@ -210,6 +210,8 @@ typedef struct {
                                    speaks UTF-16 in text messages */
     int menuId;                 /* lpszMenuName MAKEINTRESOURCE id, or 0 */
     int used;
+    DWORD styleSeen, exSeen;    /* style-net dedup: bits already reported
+                                   for this class (#318 (i)) */
 } Class;
 
 static Class g_classes[MAX_CLASSES];
@@ -2557,6 +2559,88 @@ LRESULT DispatchMessage(const MSG *m) {
 
 static void ensure_builtin_classes(void);
 
+/* ---- the created-style net (#318 (i), #317's exact class) -----------
+ * A style bit nothing reads is a feature the app believes it enabled —
+ * LISTBOX WS_VSCROLL sat unread for months behind three fail-loud nets
+ * that were all blind to it. At create, every bit outside the class's
+ * KNOWN set reports once per class+bit. KNOWN means one of: some code
+ * path READS the bit; the veneer honors it BY CONSTRUCTION (annotated);
+ * or the gap is already ticketed (annotated with the ticket). An
+ * app-registered class owns its low style word (Windows: the low 16
+ * style bits are class-defined vocabulary), so only the WS_ half is
+ * checked there; the veneer's own classes get the audited masks. */
+
+#define WSN_TOP ( \
+      0x80000000u /* WS_POPUP: every top-level is one kernel surface */   \
+    | 0x10000000u /* WS_VISIBLE: surfaces are visible by construction */  \
+    | 0x08000000u /* WS_DISABLED: read (hw->enabled) */                   \
+    | 0x06000000u /* WS_CLIP*: painter's-order drawing makes them moot */ \
+    | 0x00C00000u /* WS_CAPTION: kernel chrome always draws one */        \
+    | 0x00080000u /* WS_SYSMENU: the chrome close box is kernel policy */ \
+    | 0x00040000u /* WS_THICKFRAME: read (SDL_WINDOW_RESIZABLE) */        \
+    | 0x00030000u /* WS_MIN/MAXBOX: chrome boxes are kernel policy */)
+#define WSN_CHILD ( \
+      0x40000000u /* WS_CHILD: read */                                    \
+    | 0x10000000u /* WS_VISIBLE: read */                                  \
+    | 0x08000000u /* WS_DISABLED: read */                                 \
+    | 0x06000000u /* WS_CLIP*: painter's-order drawing makes them moot */ \
+    | 0x00800000u /* WS_BORDER: EDIT/LISTBOX draw their frame always */   \
+    | 0x00300000u /* WS_V/HSCROLL: read (EDIT bars, LISTBOX #275) */      \
+    | 0x00030000u /* WS_GROUP/WS_TABSTOP: read (dialog navigation) */)
+
+static const struct { const char *cls; DWORD low; } CLS_LOW_KNOWN[] = {
+    { "BUTTON",    0x4F0Fu },  /* the kind nibble (btn_kind) read; 0xF00
+                                  alignment: push text is centered both ways
+                                  by construction (BS_CENTER|BS_VCENTER —
+                                  calc's keypad — exactly honored; the
+                                  left/right/top/bottom variants would
+                                  silently center, recorded divergence);
+                                  BS_NOTIFY: BN_SETFOCUS/KILLFOCUS/DBLCLK
+                                  never sent — tracked, #343 */
+    { "STATIC",    0x1203u },  /* type & 0x3 + SS_SUNKEN read; SS_CENTERIMAGE
+                                  holds by construction (0236 single-line
+                                  vcenter — calc's display) */
+    { "EDIT",      0x29C4u },  /* ES_MULTILINE|ES_READONLY|ES_AUTOHSCROLL read;
+                                  ES_AUTOVSCROLL (caret always scrolled into
+                                  view) + ES_NOHIDESEL (selection never hidden
+                                  on focus loss) hold by construction;
+                                  ES_NUMBER: unenforced — tracked, #343
+                                  (notepad's GoTo declares it) */
+    { "LISTBOX",   0x0849u },  /* LBS_MULTIPLESEL|LBS_EXTENDEDSEL read;
+                                  LBS_NOTIFY (always notifies) + LBS_HASSTRINGS
+                                  (items are strings) hold by construction */
+    { "SCROLLBAR", 0x0001u },  /* SBS_VERT */
+    { "#32770",    0x0000u },  /* dialog frames carry no low bits here */
+    { "msctls_statusbar32", 0x0103u }, /* CCS_BOTTOM holds by construction
+                                  (self-bottom-parking); SBARS_SIZEGRIP is W5
+                                  residue (#334) */
+    { "SysListView32", 0x0007u }, /* LVS_TYPEMASK read (non-REPORT already
+                                  refuses loudly) | LVS_SINGLESEL */
+    { "SysHeader32", 0x0000u },
+};  /* not listed => app-registered: the low word is the app's own */
+
+static void style_net(Class *cls, DWORD style, DWORD exStyle) {
+    DWORD known = (style & 0x40000000u) ? WSN_CHILD : WSN_TOP;
+    DWORD low = 0xFFFFu;
+    for (int i = 0; i < (int)(sizeof CLS_LOW_KNOWN / sizeof *CLS_LOW_KNOWN); i++)
+        if (ci_eq(cls->name, CLS_LOW_KNOWN[i].cls)) { low = CLS_LOW_KNOWN[i].low; break; }
+    known |= low;
+    DWORD unk = style & ~known & ~cls->styleSeen;
+    if (unk) {
+        cls->styleSeen |= unk;
+        __win32_unsupported("style bits 0x%08X on class %s (unread — nothing "
+                            "implements them)", (unsigned)unk, cls->name);
+    }
+    /* exStyle: no bit is read anywhere yet. WS_EX_CLIENTEDGE is the one
+     * recognized-and-ticketed bit (end-to-end fix = W2-TE #322). */
+    DWORD exUnk = exStyle & ~0x200u & ~cls->exSeen;
+    if (exUnk) {
+        cls->exSeen |= exUnk;
+        __win32_unsupported("exStyle bits 0x%08X on class %s (unread — nothing "
+                            "implements them)", (unsigned)exUnk, cls->name);
+    }
+}
+
 /* The one create path (0068 refactor): both charsets funnel here with
  * UTF-8 internals; csName/csClass override the CREATESTRUCT string
  * pointers for W-class windows (same struct layout — only the pointee
@@ -2573,6 +2657,7 @@ static HWND create_window_impl(DWORD exStyle, LPCSTR className, LPCSTR windowNam
         return NULL;
     }
     if ((style & WS_CHILD) && !parent) return NULL;
+    style_net(cls, style, exStyle);              /* #318 (i): unread bits report */
     if (w == CW_USEDEFAULT) w = 400;
     if (h == CW_USEDEFAULT) h = 300;
     if (x == CW_USEDEFAULT) x = 0;

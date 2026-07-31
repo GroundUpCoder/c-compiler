@@ -604,6 +604,15 @@ static int selftest(void) {
     st_check("SetTimer TIMERPROC refused",
              SetTimer(top, 901, 50, (void *)StProc) == 0);
 
+    /* the created-style net (#318 (i)): BS_FLAT is unread on BUTTON and
+     * 0x100 (WS_EX_WINDOWEDGE) unread everywhere — both report, and the
+     * window still creates (a report is not a refusal) */
+    HWND sn = CreateWindowEx(0x100, "BUTTON", "x",
+                             WS_CHILD | WS_VISIBLE | 0x8000 /* BS_FLAT */,
+                             0, 0, 10, 10, top, (HMENU)903, NULL, NULL);
+    st_check("style-net window still creates", sn != NULL);
+    if (sn) DestroyWindow(sn);
+
     /* dlg_create template reports (#318 (iii)): IDD_ODD (ctldemo.rc, id
      * 51) asks for DS_CENTER|WS_THICKFRAME and "Courier New" 12 — both
      * discarded, both must report (honoring is #322) */
