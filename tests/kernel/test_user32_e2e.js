@@ -487,6 +487,9 @@ check('fail-loud: refused TIMERPROC SetTimer says so on stderr (#318)',
 check('fail-loud: NULL-HWND control send says so on stderr (#318)',
   /win32: unsupported control message 0x0148 to a NULL HWND/.test(outE),
   (outE.match(/win32: unsupported [^\n]*/g) || []).join(' | '));
+check('fail-loud: unhandled statusbar SB_* says so on stderr (#318)',
+  /win32: unsupported statusbar message 0x040A/.test(outE),
+  (outE.match(/win32: unsupported [^\n]*/g) || []).join(' | '));
 fs.rmSync(etmp, { recursive: true, force: true });
 
 /* ---- session F: `ctldemo menudemo` (0211, rebuilt on the 0257 anchored-

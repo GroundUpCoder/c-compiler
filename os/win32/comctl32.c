@@ -190,6 +190,21 @@ static LRESULT CALLBACK sbar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     }
+    /* Fail-loud (#318, gap #10): an SB_* contract message this proc does
+     * not handle (SB_GETRECT, SB_SIMPLE, SB_SETMINHEIGHT, ...) must not
+     * silently DefWindowProc to 0 — comctl32's first loud net, the
+     * user32/listview range-guard pattern with per-message dedup. */
+    if (msg >= WM_USER_SB && msg < WM_USER_SB + 0x80) {
+        static unsigned reported[16];
+        static int nRep;
+        int seen = 0;
+        for (int i = 0; i < nRep; i++)
+            if (reported[i] == msg) { seen = 1; break; }
+        if (!seen) {
+            if (nRep < 16) reported[nRep++] = msg;
+            __win32_unsupported("statusbar message 0x%04X", msg);
+        }
+    }
     return DefWindowProc(h, msg, wp, lp);
 }
 

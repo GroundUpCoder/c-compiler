@@ -604,6 +604,13 @@ static int selftest(void) {
     st_check("SetTimer TIMERPROC refused",
              SetTimer(top, 901, 50, (void *)StProc) == 0);
 
+    /* statusbar contract-message net (#318, gap #10): an unhandled SB_*
+     * (SB_GETRECT here) reports instead of silently DefWindowProc-ing */
+    HWND sbar = CreateStatusWindowA(WS_CHILD | WS_VISIBLE, "sb", top, 902);
+    st_check("status bar created", sbar != NULL);
+    RECT sbr;
+    SendMessageW(sbar, SB_GETRECT, 0, (LPARAM)&sbr);   /* unhandled: reports */
+
     /* NULL-HWND control sends (#318, gap #1): loud, and the LB_/CB_
      * ranges return their contract error, not fake-success 0 — the calc
      * CB_GETLBTEXT class */
