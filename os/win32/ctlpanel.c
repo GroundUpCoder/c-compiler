@@ -35,6 +35,14 @@
  *               Starfield (radios apply on click), set the idle timeout
  *               (Apply), Preview raises it now (WMP SAVER — the wmctl-saver
  *               gesture; /bin/wm answers, so no WM = silent no-op).
+ *   Network   — the Tier 2.5 HTTP bridge switch (ticket #349, os/netcfg.h,
+ *               todos/NETWORK.md): enable/disable checkbox + bridge URL
+ *               (both cfgstore `net` delta-writes; the kernel embedder
+ *               watches the store, so the toggle retargets the next
+ *               transfer live — no reboot) + a Test button that fetches
+ *               the bridge's /health over the kernel HTTP primitive. The
+ *               copy states the seam honestly: the bridge is a program on
+ *               the HOST machine the user runs themselves.
  *   Default Programs — the command-alternatives picker (todos/0338 plus
  *               todos/0130's picker leg, over os/cmdalt.h): WHICH
  *               implementation a dispatched command NAME runs. Two lists
@@ -54,10 +62,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include "../sounds.h"
 #include "../saver.h"
 #include "../keys.h"
 #include "../display.h"
+#include "../netcfg.h"
 #include "../cmdalt.h"
 #include "../wm_proto.h"
 
@@ -73,19 +83,25 @@ static void store_fail(HWND owner, const char *what) {
 
 __import int __audio_gain(int gain);             /* host.js; -1 = no mixer */
 
+/* The kernel HTTP primitive (todos/0172, fd-shaped todos/0417) — the
+ * Network applet's Test button drives it directly (no curl veneer link). */
+__import int __http_open(const char *method, const char *url, const char *headers,
+                         const void *body, int blen, int headers_ms, int idle_ms);
+__import int __http_status(int fd, int *status_out, char *hdr, int hdrcap);
+
 /* ---------------------------------------------------------- applet table */
 
 enum { APP_SOUND, APP_SOUNDS, APP_SYSTEM, APP_DISPLAY, APP_DATETIME,
-       APP_SAVER, APP_KEYBOARD, APP_DEFPROG, APP_N };
+       APP_SAVER, APP_KEYBOARD, APP_DEFPROG, APP_NET, APP_N };
 
 static const char *APP_NAME[APP_N] =             /* icon labels (unique!) */
     { "Sound", "Sounds", "System", "Display", "Date/Time", "Screen Saver",
-      "Keyboard", "Default Programs" };
+      "Keyboard", "Default Programs", "Network" };
 static const char *APP_TITLE[APP_N] =            /* applet window titles */
     { "Sound Properties", "Sounds Properties", "System Properties",
       "Display Properties", "Date/Time Properties",
       "Screen Saver Properties", "Keyboard Properties",
-      "Default Programs" };
+      "Default Programs", "Network Properties" };
 
 static HWND g_hub;
 static HWND g_icon[APP_N];
@@ -685,6 +701,129 @@ static LRESULT CALLBACK defprog_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProc(h, msg, wp, lp);
 }
 
+/* ------------------------- Network (the #349 Tier 2.5 HTTP bridge) */
+
+#define ID_NETCHK  800
+#define ID_NETURL  801
+#define ID_NETAPP  802
+#define ID_NETTEST 803
+#define ID_NETSTAT 804
+
+/* Sync the controls to the STORED config — WM_CREATE and the
+ * write-failure reverts (the saver_sync discipline, todos/0234). */
+static void net_sync(HWND h) {
+    nc_cfg c;
+    nc_get(&c);
+    SendMessage(GetDlgItem(h, ID_NETCHK), BM_SETCHECK, c.on, 0);
+    SetWindowText(GetDlgItem(h, ID_NETURL), c.url);
+}
+
+/* Fetch <url>/health over the kernel HTTP primitive and report. Blocks
+ * the message loop for at most ~3s (headers deadline) — acceptable for an
+ * explicit Test click; the transfer rides whatever path the setting says
+ * (bridge on = through the bridge to its own /health, off = direct), so
+ * the answer reflects the LIVE configuration. */
+static void net_test(HWND h) {
+    HWND stat = GetDlgItem(h, ID_NETSTAT);
+    nc_cfg c;
+    nc_get(&c);
+    char url[NC_URL_MAX + 16], msg[NC_URL_MAX + 64];
+    size_t n = strlen(c.url);
+    while (n && c.url[n - 1] == '/') c.url[--n] = 0;
+    snprintf(url, sizeof url, "%s/health", c.url);
+    SetWindowText(stat, "Testing...");
+    int fd = __http_open("GET", url, "", 0, 0, 3000, 3000);
+    if (fd < 0) {
+        snprintf(msg, sizeof msg, "Open failed: %s", strerror(errno));
+        SetWindowText(stat, msg);
+        return;
+    }
+    int status = 0;
+    char hdr[512];
+    for (int i = 0; i < 80; i++) {               /* ~4s cap at 50ms steps */
+        if (__http_status(fd, &status, hdr, sizeof hdr) >= 0) {
+            snprintf(msg, sizeof msg, "Bridge answered: HTTP %d", status);
+            SetWindowText(stat, msg);
+            close(fd);
+            return;
+        }
+        if (errno != EAGAIN && errno != EINTR) break;
+        usleep(50 * 1000);
+    }
+    snprintf(msg, sizeof msg, "No answer: %s", strerror(errno));
+    SetWindowText(stat, msg);
+    close(fd);
+}
+
+static LRESULT CALLBACK net_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_CREATE:
+        CreateWindowEx(0, "BUTTON", "HTTP Bridge",
+                       WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+                       8, 6, 368, 150, h, NULL, NULL, NULL);
+        CreateWindowEx(0, "BUTTON", "Enable HTTP bridge",
+                       WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                       20, 34, 340, 28, h, (HMENU)ID_NETCHK, NULL, NULL);
+        CreateWindowEx(0, "STATIC", "Bridge URL:", WS_CHILD | WS_VISIBLE,
+                       20, 74, 132, 28, h, NULL, NULL, NULL);
+        CreateWindowEx(0, "EDIT", "", WS_CHILD | WS_VISIBLE,
+                       156, 72, 204, 30, h, (HMENU)ID_NETURL, NULL, NULL);
+        CreateWindowEx(0, "BUTTON", "Apply URL", WS_CHILD | WS_VISIBLE,
+                       20, 112, 124, 30, h, (HMENU)ID_NETAPP, NULL, NULL);
+        CreateWindowEx(0, "BUTTON", "Test Bridge", WS_CHILD | WS_VISIBLE,
+                       152, 112, 132, 30, h, (HMENU)ID_NETTEST, NULL, NULL);
+        CreateWindowEx(0, "STATIC", "", WS_CHILD | WS_VISIBLE,
+                       16, 164, 352, 28, h, (HMENU)ID_NETSTAT, NULL, NULL);
+        /* The seam, stated honestly: the bridge is NOT part of this OS.
+         * It is a program on the host machine, and in the browser deploy
+         * the user must run it themselves (it lends the OS the host's
+         * un-CORS-gated network). */
+        CreateWindowEx(0, "STATIC", "The bridge is a program on your host machine.",
+                       WS_CHILD | WS_VISIBLE, 16, 198, 352, 28, h, NULL, NULL, NULL);
+        CreateWindowEx(0, "STATIC", "You must run it there yourself:",
+                       WS_CHILD | WS_VISIBLE, 16, 226, 352, 28, h, NULL, NULL, NULL);
+        CreateWindowEx(0, "STATIC", "  node tools/net-bridge.js",
+                       WS_CHILD | WS_VISIBLE, 16, 254, 352, 28, h, NULL, NULL, NULL);
+        net_sync(h);
+        return 0;
+    case WM_COMMAND:
+        switch (LOWORD(wp)) {
+        case ID_NETCHK: {                        /* auto-toggled; apply it */
+            HWND chk = GetDlgItem(h, ID_NETCHK);
+            int on = (int)SendMessage(chk, BM_GETCHECK, 0, 0);
+            if (nc_set("bridge", on ? "on" : "off") != 0) {
+                net_sync(h);                     /* store write failed: revert */
+                store_fail(h, "the network bridge setting");
+            }
+            return 0;
+        }
+        case ID_NETAPP: {
+            char buf[NC_URL_MAX];
+            GetWindowText(GetDlgItem(h, ID_NETURL), buf, sizeof buf);
+            if (strncmp(buf, "http://", 7) != 0 && strncmp(buf, "https://", 8) != 0) {
+                net_sync(h);                     /* not a URL: revert the edit */
+                MessageBox(h, "The bridge URL must start with http:// or https://",
+                           "Network Properties", MB_OK | MB_ICONEXCLAMATION);
+                return 0;
+            }
+            if (nc_set("url", buf) != 0) {
+                net_sync(h);                     /* store write failed: revert */
+                store_fail(h, "the bridge URL");
+            }
+            return 0;
+        }
+        case ID_NETTEST:
+            net_test(h);
+            return 0;
+        }
+        return 0;
+    case WM_DESTROY:
+        g_applet[APP_NET] = NULL;
+        return 0;
+    }
+    return DefWindowProc(h, msg, wp, lp);
+}
+
 /* ------------------------------------------------------------- the hub */
 
 typedef LRESULT (CALLBACK *WndProcFn)(HWND, UINT, WPARAM, LPARAM);
@@ -703,6 +842,7 @@ APP_DEF[APP_N] = {
     { "CplSaver",    saver_proc,    336, 212 },
     { "CplKeyboard", keyboard_proc, 496, 150 },
     { "CplDefProg",  defprog_proc,  560, 326 },
+    { "CplNetwork",  net_proc,      384, 292 },
 };
 
 static void open_applet(int i) {
@@ -865,6 +1005,21 @@ static void draw_art(HDC dc, int i, int x, int y) {
         MoveToEx(dc, x + 21, y + 9, NULL);       /* the tick on the first */
         LineTo(dc, x + 24, y + 13);
         LineTo(dc, x + 30, y + 3);
+        break;
+    }
+    case APP_NET: {                              /* globe: circle + graticule */
+        HBRUSH b = CreateSolidBrush(RGB(0, 160, 200));
+        HGDIOBJ ob = SelectObject(dc, b);
+        Ellipse(dc, x + 2, y + 2, x + 30, y + 30);
+        SelectObject(dc, ob);
+        DeleteObject(b);
+        MoveToEx(dc, x + 2, y + 16, NULL);       /* equator */
+        LineTo(dc, x + 30, y + 16);
+        MoveToEx(dc, x + 16, y + 2, NULL);       /* meridian */
+        LineTo(dc, x + 16, y + 30);
+        HGDIOBJ oh = SelectObject(dc, GetStockObject(NULL_BRUSH));
+        Ellipse(dc, x + 9, y + 2, x + 23, y + 30);   /* inner meridian ring */
+        SelectObject(dc, oh);
         break;
     }
     }
