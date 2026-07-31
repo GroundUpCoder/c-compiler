@@ -507,7 +507,14 @@ function parseDialog(id, isEx) {
   for (;;) {
     skipNl();
     if (atId('STYLE')) { next(); style = applyStyle(0, styleExpr()); }
-    else if (atId('EXSTYLE')) { next(); styleExpr(); }
+    else if (atId('EXSTYLE')) {
+      // #318 (v): the WRES format carries no exstyle — a nonzero EXSTYLE is
+      // recognized-then-DISCARDED (gap #2; the end-to-end fix is #322).
+      // Silent discard is how WS_EX_CLIENTEDGE class bugs hide for months.
+      next();
+      const ex = applyStyle(0, styleExpr());     // {or,not} -> effective bits
+      if (ex) warn(`dialog ${id}: EXSTYLE 0x${ex.toString(16)} discarded (not in WRES; #322)`);
+    }
     else if (atId('CAPTION')) { next(); caption = expect('str', 'caption').v; }
     else if (atId('FONT')) {
       next();
@@ -536,7 +543,11 @@ function parseDialog(id, isEx) {
       const st = styleExpr(); expect(',', ',');
       const x = value(); expect(',', ','); const y = value(); expect(',', ',');
       const w = value(); expect(',', ','); const h = value();
-      while (at(',')) { next(); styleExpr(); }   // exstyle tail
+      while (at(',')) {                          // exstyle tail: discarded, loudly (#318)
+        next();
+        const ex = applyStyle(0, styleExpr());
+        if (ex) warn(`dialog ${id} control ${cid}: EXSTYLE 0x${ex.toString(16)} discarded (not in WRES; #322)`);
+      }
       const cls = CTL[clsName];
       if (!cls) fail(`unsupported CONTROL class '${clsName}'`);
       controls.push({ cls, id: cid, x, y, w, h, style: applyStyle(0x40000000, st), text });
@@ -552,7 +563,13 @@ function parseDialog(id, isEx) {
       if (at(',')) {                             // optional style tail
         next();
         if (!at('nl')) style = applyStyle(style, styleExpr());
-        while (at(',')) { next(); if (!at('nl')) styleExpr(); }  // exstyle
+        while (at(',')) {                        // exstyle: discarded, loudly (#318)
+          next();
+          if (!at('nl')) {
+            const ex = applyStyle(0, styleExpr());
+            if (ex) warn(`dialog ${id} control ${cid}: EXSTYLE 0x${ex.toString(16)} discarded (not in WRES; #322)`);
+          }
+        }
       }
       controls.push({ cls: spec.cls, id: cid, x, y, w, h, style, text });
     }
@@ -600,9 +617,14 @@ function parseAccelerators(id) {
       else if (f === 'SHIFT') flags |= 0x04;
       else if (f === 'CONTROL') flags |= 0x08;
       else if (f === 'ALT') flags |= 0x10;
-      else if (f === 'ASCII') { /* default */ }
+      else if (f === 'ASCII') { /* default (and dead — warned below) */ }
       else fail(`unknown accelerator flag '${f}'`);
     }
+    // #318 (v): TranslateAcceleratorW matches VIRTKEY entries ONLY — an
+    // ASCII (or flag-less string) entry compiles fine and then never fires.
+    if (!(flags & 0x01))
+      warn(`accelerator (key ${key}, cmd ${cmd}): not VIRTKEY — ` +
+           `TranslateAccelerator skips it; the entry will never fire`);
     acc.push({ flags, key, cmd });
     skipNl();
   }

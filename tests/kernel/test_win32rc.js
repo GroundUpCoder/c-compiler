@@ -99,6 +99,46 @@ check('NOT clears from the RESULT (later OR does not resurrect the bit)',
 check('#define-carried NOT behaves like the inline spelling',
   controls[105] === controls[101], hex(controls[105]) + ' vs ' + hex(controls[101]));
 
+/* ---- #318 (v): recognized-then-discarded constructs WARN now ----
+ * EXSTYLE (dialog-level, CONTROL tail, keyword-control tail) never
+ * reaches the WRES format (gap #2 — the WS_EX_CLIENTEDGE class), and a
+ * non-VIRTKEY accelerator entry compiles fine but TranslateAcceleratorW
+ * skips it forever (gap #25). Spawned WITHOUT -q so warn() shows. */
+var rc2 = path.join(tmp2(), 'w.rc');
+var out2 = path.join(path.dirname(rc2), 'w.res');
+function tmp2() { return fs.mkdtempSync(path.join(os.tmpdir(), 'win32rc-')); }
+fs.writeFileSync(rc2, [
+  '9 DIALOGEX 0, 0, 100, 100',
+  'STYLE WS_POPUP | WS_CAPTION',
+  'EXSTYLE 0x200',                               // WS_EX_CLIENTEDGE
+  'CAPTION "w"',
+  'FONT 8, "MS Shell Dlg"',
+  'BEGIN',
+  '    CONTROL "gen", 201, "EDIT", WS_TABSTOP, 0, 0, 50, 12, 0x200',
+  '    EDITTEXT 202, 0, 20, 50, 12, WS_TABSTOP, 0x200',
+  'END',
+  '10 ACCELERATORS',
+  'BEGIN',
+  '    "Q", 300, ASCII',
+  '    VK_F5, 301, VIRTKEY',
+  'END',
+].join('\n'));
+var r2 = spawnSync(process.execPath,
+  [path.join(ROOT, 'tools/win32rc.js'), rc2, '-o', out2],
+  { encoding: 'utf8' });
+check('warn run exits 0 (warnings are not errors)', r2.status === 0, r2.stderr);
+check('dialog-level EXSTYLE discard warns',
+  /dialog 9: EXSTYLE 0x200 discarded/.test(r2.stderr), r2.stderr);
+check('CONTROL exstyle-tail discard warns',
+  /dialog 9 control 201: EXSTYLE 0x200 discarded/.test(r2.stderr), r2.stderr);
+check('keyword-control exstyle-tail discard warns',
+  /dialog 9 control 202: EXSTYLE 0x200 discarded/.test(r2.stderr), r2.stderr);
+check('non-VIRTKEY accelerator entry warns as never-fires',
+  /accelerator \(key 81, cmd 300\): not VIRTKEY/.test(r2.stderr), r2.stderr);
+check('VIRTKEY accelerator entry does not warn',
+  !/cmd 301/.test(r2.stderr), r2.stderr);
+fs.rmSync(path.dirname(rc2), { recursive: true, force: true });
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures ? 'FAILURES: ' + failures : 'ALL OK');
 process.exit(failures ? 1 : 0);
