@@ -378,6 +378,41 @@ check('script-file assignments expand (hush store intact, #296)',
   r.stdout.split('\n').includes('A=/optA B=B2'),
   JSON.stringify(r.stdout.split('\n').filter((l) => l.startsWith('A='))));
 
+// ---- #312: inherited environ strings are immortal (hush aliases them) ----
+// hush's environ import loop aliases the libc's take-ownership deep copies
+// as cur_var->varstr with max_len > 0 — hush's marker for "startup env
+// space: edit in place, NEVER free" (true on musl/glibc, where an execve'd
+// environment is never freed). Registering those copies in the ownership
+// registry made unsetenv and same-name putenv replacement FREE them under
+// hush's feet: `VAR=VAL cmd` on an inherited exported var restored a
+// dangling pointer (T1), `export -n VAR` read freed memory (T2), and
+// `export -n VAR=VAL` strcpy'd into the freed block (T3). Red control on
+// the unfixed tree: T1/T2 echoed EMPTY and the T3 line crashed pid 1 with
+// a wasm memory-access-out-of-bounds (boot exit 139).
+r = session([
+  'HOME=/x true',                 // T1: prefix assignment on inherited var
+  'echo T1=$HOME',
+  'export -n HOME',               // T2: unexport keeps the variable
+  'echo T2=$HOME',
+  'env | grep -c ^HOME=',         // ...but really removes it from env
+  'export HOME',                  // re-export putenvs the same varstr
+  'echo T2b=$HOME',
+  'export -n TERM=vt999',         // T3: unexport + in-place edit
+  'echo T3=$TERM',
+  'exit',
+  '',
+].join('\n'));
+check('environ-immortality session exits clean', r.status === 0,
+  String(r.status) + ' ' + (r.stderr || '').slice(-300));
+{
+  const im = r.stdout.split('\n');
+  const expectIm = ['T1=/root', 'T2=/root', '0', 'T2b=/root', 'T3=vt999'];
+  for (let i = 0; i < expectIm.length; i++) {
+    check('environ-immortal[' + i + '] = ' + JSON.stringify(expectIm[i]),
+      im[i] === expectIm[i], JSON.stringify(im[i]));
+  }
+}
+
 // ---- login-shell $() re-exec must not re-source profiles (todos/0177) ----
 // pid 1 is a login shell (argv[0] "-sh", todos/0174). Every $() runs via the
 // NOMMU re-exec-self machinery, which carries argv[0] into the subshell; the
