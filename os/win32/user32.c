@@ -601,13 +601,40 @@ LRESULT CallWindowProc(WNDPROC proc, HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return proc(h, msg, wp, lp);
 }
 
+/* Fail-loud (#318, gap #1): a control-contract message to a NULL HWND is
+ * a MISSING control (a skipped dialog-template class, a wrong dialog-item
+ * id) — a silent 0 fakes success: calc's CB_GETLBTEXT "succeeded" without
+ * writing the buffer and convert.c compared uninitialized stack. Report
+ * once per message number (the DefWindowProc net's dedup); the LB_/CB_
+ * ranges return their contract error value (LB_ERR/CB_ERR = -1),
+ * everything else keeps 0. */
+static LRESULT null_send(UINT msg) {
+    int lbcb = (msg >= 0x0140 && msg <= 0x0165) ||   /* CB_* */
+               (msg >= 0x0180 && msg <= 0x01B0);     /* LB_* */
+    if (lbcb ||
+        (msg >= 0x00B0 && msg <= 0x00EF) ||          /* EM_* / SBM_* */
+        (msg >= 0x00F0 && msg <= 0x00FF)) {          /* BM_* */
+        static unsigned reported[32];
+        static int nRep;
+        int seen = 0;
+        for (int i = 0; i < nRep; i++)
+            if (reported[i] == msg) { seen = 1; break; }
+        if (!seen) {
+            if (nRep < 32) reported[nRep++] = msg;
+            __win32_unsupported("control message 0x%04X to a NULL HWND "
+                                "(missing control?)", msg);
+        }
+    }
+    return lbcb ? -1 : 0;                        /* CB_ERR / LB_ERR */
+}
+
 /* The A/W translation choke point (0068, WIN32.md friction #2): text
  * messages convert when the CALLER's charset differs from the WINDOW's —
  * the same per-window marking Windows uses. Only WM_SETTEXT/WM_GETTEXT
  * carry translated text; everything else passes through (posted messages
  * never translate — don't post text pointers). */
 static LRESULT send_msg(HWND h, UINT msg, WPARAM wp, LPARAM lp, int callerW) {
-    if (!h) return 0;
+    if (!h) return null_send(msg);
     int winW = h->isW;
     if (msg == EM_REPLACESEL && lp && callerW != winW) {   /* text in lp (0048) */
         void *conv = callerW ? (void *)w2a_dup((LPCWSTR)lp)
@@ -6052,8 +6079,8 @@ UINT GetDlgItemInt(HWND dlg, int id, BOOL *translated, BOOL signed_) {
 }
 
 LRESULT SendDlgItemMessageW(HWND dlg, int id, UINT msg, WPARAM wp, LPARAM lp) {
-    HWND c = GetDlgItem(dlg, id);
-    return c ? SendMessageW(c, msg, wp, lp) : 0;
+    /* a missing item routes through send_msg's NULL net (#318) */
+    return SendMessageW(GetDlgItem(dlg, id), msg, wp, lp);
 }
 
 BOOL CheckDlgButton(HWND dlg, int id, UINT check) {

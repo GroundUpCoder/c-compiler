@@ -604,6 +604,20 @@ static int selftest(void) {
     st_check("SetTimer TIMERPROC refused",
              SetTimer(top, 901, 50, (void *)StProc) == 0);
 
+    /* NULL-HWND control sends (#318, gap #1): loud, and the LB_/CB_
+     * ranges return their contract error, not fake-success 0 — the calc
+     * CB_GETLBTEXT class */
+    char nbuf[8];
+    st_check("CB_GETLBTEXT to NULL -> CB_ERR",
+             SendMessage(NULL, CB_GETLBTEXT, 0, (LPARAM)nbuf) == CB_ERR);
+    st_check("LB_GETCOUNT to NULL -> LB_ERR",
+             SendMessage(NULL, LB_GETCOUNT, 0, 0) == LB_ERR);
+    st_check("EM_GETSEL to NULL -> 0",
+             SendMessage(NULL, EM_GETSEL, 0, 0) == 0);
+    st_check("SendDlgItemMessage to a missing id -> CB_ERR",   /* W name: no
+                              ANSI generic exists (windows.h UNICODE block) */
+             SendDlgItemMessageW(top, 9999, CB_GETCOUNT, 0, 0) == CB_ERR);
+
     printf("ctldemo selftest: %d checks, %d failed\n", st_checks, st_fails);
     fflush(stdout);
     DestroyWindow(top);
