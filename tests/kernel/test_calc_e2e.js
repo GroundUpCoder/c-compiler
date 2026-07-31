@@ -145,6 +145,28 @@ const out = boot([
   'echo ==scitree',
   'wmctl tree',
   'echo ==cut',
+  // ---- #310: geometry must round-trip across dialog recreates. Back to
+  // Standard (recreate 2), then Scientific again (recreate 3): pre-fix every
+  // recreate's WM_INITDIALOG restore (GetWindowRect -> MoveWindow) shrank
+  // the menued dialog by MENU_BAR_H. 'Hex' exists only on the scientific
+  // template, so its absence/presence marks each recreate settled.
+  'wmctl click Standard',
+  'wmctl wait nolabel Hex 8000',
+  'wmctl wait label 7 8000',
+  'echo ==stdlist',
+  'wmctl list',
+  'echo ==cut',
+  'echo ==stdtree',
+  'wmctl tree',
+  'echo ==cut',
+  'wmctl click Scientific',
+  'wmctl wait label Hex 8000',
+  'echo ==sci2list',
+  'wmctl list',
+  'echo ==cut',
+  'echo ==sci2tree',
+  'wmctl tree',
+  'echo ==cut',
   // ---- #275: the Statistics box (scientific-only) — reachable in-OS, laid
   // out un-clipped, and its WS_VSCROLL LISTBOX scrolls with the MOUSE. Six
   // single-digit data points ("C" clears the entry between them so row k is
@@ -224,8 +246,12 @@ check('popup item fires by label and the popup closes',
 /* view switch */
 const list2 = section(out, 'list2');
 const row2 = list2.split('\n').find(l => l.endsWith('\tCalculator')) || '';
-check('View->Scientific recreates the dialog (869x570 surface; the 316-DLU template at sans avgw 11)',
-  row2.includes('869x570'), row2);
+/* 869x600 measured off this test's own live `wmctl list` (#310 re-pin —
+ * the old 869x570 pin was the post-shrink surface: the pre-fix
+ * WM_INITDIALOG restore lost MENU_BAR_H). 316-DLU template at sans
+ * avgw 11, 570 client + 30 bar. */
+check('View->Scientific recreates the dialog (869x600 surface; the 316-DLU template at sans avgw 11)',
+  row2.includes('869x600'), row2);
 check('scientific template has the base radios',
   /class=BUTTON [^\n]*text='Hex'/.test(section(out, 'scitree')), section(out, 'scitree').slice(0, 400));
 /* #311: the template's `NOT WS_VISIBLE` controls must ARRIVE hidden — the
@@ -237,6 +263,43 @@ check('#311: NOT WS_VISIBLE width radios arrive hidden (Dword vis=0)',
 check('#311: the angle radios stay visible (Degrees vis=1)',
   /class=BUTTON [^\n]*vis=1 [^\n]*text='Degrees'/.test(section(out, 'scitree')),
   (section(out, 'scitree').match(/[^\n]*text='Degrees'[^\n]*/) || [])[0]);
+
+/* ---- #310: no Calculator control may exceed the dialog's CLIENT (the
+ * tree root's rect) — pre-fix the WM_INITDIALOG GetWindowRect->MoveWindow
+ * restore shrank the surface by MENU_BAR_H per recreate and the bottom
+ * keypad row clipped (Dat spanned y=490..553 in a 540 client). Checked on
+ * all three recreates. */
+function checkNoClip(sec, label) {
+  const lines = section(out, sec).split('\n');
+  const rootIdx = lines.findIndex(l => /class=#32770 [^\n]*text='Calculator'/.test(l));
+  check(`${label}: Calculator dialog in the tree`, rootIdx >= 0);
+  if (rootIdx < 0) return;
+  const rm = lines[rootIdx].match(/rect=-?\d+,-?\d+ (\d+)x(\d+)/);
+  const CW = +rm[1], CH = +rm[2];
+  const indent = (lines[rootIdx].match(/^\s*/) || [''])[0].length;
+  const kids = [];
+  for (let i = rootIdx + 1; i < lines.length; i++) {
+    const li = (lines[i].match(/^\s*/) || [''])[0].length;
+    if (lines[i].trim() === '' || li <= indent) break;
+    const m = lines[i].match(/class=(\S+) id=(-?\d+) [^\n]*rect=(-?\d+),(-?\d+) (\d+)x(\d+)[^\n]*vis=(\d)/);
+    if (m && m[7] === '1')
+      kids.push({ cls: m[1], id: m[2], x: +m[3], y: +m[4], w: +m[5], h: +m[6] });
+  }
+  check(`${label}: controls parsed`, kids.length > 10, String(kids.length));
+  const outside = kids.filter(k => k.x < 0 || k.y < 0 || k.x + k.w > CW || k.y + k.h > CH);
+  check(`${label}: no visible control clips the ${CW}x${CH} client`,
+    outside.length === 0, JSON.stringify(outside));
+}
+checkNoClip('scitree', '#310 recreate 1 (scientific)');
+checkNoClip('stdtree', '#310 recreate 2 (standard)');
+checkNoClip('sci2tree', '#310 recreate 3 (scientific)');
+
+const stdrow = section(out, 'stdlist').split('\n').find(l => l.endsWith('\tCalculator')) || '';
+check('#310: standard recreate keeps the created 464x478 surface (no MENU_BAR_H shrink)',
+  stdrow.includes('464x478'), stdrow);
+const sci2row = section(out, 'sci2list').split('\n').find(l => l.endsWith('\tCalculator')) || '';
+check('#310: scientific recreate keeps the created 869x600 surface',
+  sci2row.includes('869x600'), sci2row);
 
 /* ---- #275: the Statistics box ---- */
 const statlist = section(out, 'statlist');

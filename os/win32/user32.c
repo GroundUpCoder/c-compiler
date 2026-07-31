@@ -492,7 +492,20 @@ SDL_Window *GetWindowSDL(HWND h) {
 
 BOOL GetWindowRect(HWND h, RECT *r) {
     if (!h || !r) return FALSE;
-    if (is_top(h)) return GetClientRect(h, r);
+    if (is_top(h)) {
+        /* The SURFACE rect — client plus the in-surface menu bar strip
+         * (#310). This is the rect MoveWindow's SDL_SetWindowSize accepts,
+         * so read-modify-write geometry round-trips; the Windows analogy
+         * is caption+menu inclusion in the window rect (kernel chrome
+         * lives outside the surface and stays invisible to the process).
+         * Pre-fix this returned GetClientRect, so every
+         * GetWindowRect -> MoveWindow restore shrank a menued window by
+         * MENU_BAR_H (calc's WM_INITDIALOG did it per dialog recreate). */
+        int sw, sh;
+        if (!SDL_GetWindowSize(h->win, &sw, &sh)) return FALSE;
+        SetRect(r, 0, 0, sw, sh);
+        return TRUE;
+    }
     int ox, oy;
     hwnd_origin(h, &ox, &oy);
     SetRect(r, ox, oy, ox + h->w, oy + h->h);
@@ -6171,14 +6184,16 @@ UINT RegisterWindowMessageW(LPCWSTR name) {
     return 0xC000 + (UINT)n++;
 }
 
-/* Window placement: rcNormalPosition is the SURFACE-space client rect
- * (position is the WM's; size round-trips through MoveWindow's owner
- * resize). showCmd is always SW_SHOWNORMAL — minimize state lives in the
- * WM, invisible to processes. */
+/* Window placement: rcNormalPosition is the SURFACE rect — the same rect
+ * SetWindowPlacement's MoveWindow accepts, so a save/restore cycle
+ * round-trips (#310: reading the CLIENT rect here shrank notepad's
+ * registry-saved height by MENU_BAR_H per session). Position is the WM's;
+ * showCmd is always SW_SHOWNORMAL — minimize state lives in the WM,
+ * invisible to processes. */
 BOOL GetWindowPlacement(HWND hwnd, WINDOWPLACEMENT *wp) {
     if (!hwnd || !wp) return FALSE;
     RECT r;
-    if (!GetClientRect(hwnd->top, &r)) return FALSE;
+    if (!GetWindowRect(hwnd->top, &r)) return FALSE;
     memset(wp, 0, sizeof *wp);
     wp->length = sizeof *wp;
     wp->showCmd = SW_SHOWNORMAL;
