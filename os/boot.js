@@ -340,8 +340,15 @@ async function mountAndBoot() {
   // headless composites can never quietly go textless.
   const textService = OS_KSVC.load(kfs, { log: quiet ? () => {} : bootLog });
 
+  // The switchable HTTP fetch (ticket #349, NETWORK.md Tier 2.5) — same
+  // wrapper as the browser kernel-worker, so headless honours the same
+  // `net` store: OFF (default) is the bound global fetch, byte-identical
+  // to passing nothing; ON reroutes through the localhost bridge.
+  const netFetch = COMMON.createNetFetch();
+
   const kernel = new K.Kernel({
     fs: kfs,
+    fetch: netFetch,   // #349 — the Tier 2.5 net-bridge wrapper
     screen: screenDims || undefined,   // --screen=WxH (todos/0282)
     textService,   // todos/0275 — headless composite label text
     roImage: { prefix: '/usr', sab: roSab },   // todos/0180
@@ -422,6 +429,10 @@ async function mountAndBoot() {
       });
     }, 3000).unref();
   }
+
+  // The net-bridge toggle rides the watchPath choke (ticket #349) — a
+  // settled write to any `net` store layer retargets the NEXT transfer.
+  COMMON.netFetchAttach(netFetch, kernel, kfs);
 
   // The WM control plane (todos/0014) — same shape as kernel-worker.js:
   // endpoint first, /bin/wm as a kernel service after pid 1 (non-fatal;

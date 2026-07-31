@@ -1684,6 +1684,130 @@ NodeFileStore.prototype.resize = function (newSize) { this._fs.ftruncateSync(thi
 NodeFileStore.prototype.flush = function () { this._fs.fsyncSync(this._fd); };
 NodeFileStore.prototype.close = function () { this._fs.closeSync(this._fd); };
 
+/* ---- network bridge fetch (ticket #349; todos/NETWORK.md Tier 2.5) ----
+ *
+ * The kernel's HTTP transport runs whatever fetch the embedder hands it
+ * (KERNEL.md "HTTP transport"). Tier 2.5 makes that fetch SWITCHABLE at
+ * runtime: an OS setting — cfgstore `net`, keys `bridge` (on|off, default
+ * off) and `url` (default http://127.0.0.1:8199) — reroutes every transfer
+ * through tools/net-bridge.js, a localhost proxy the user runs themselves.
+ * In the browser that lifts the platform's CORS gate (the bridge fetches
+ * with the user's native network identity); headless honours the same
+ * setting so the two embedders never diverge.
+ *
+ * Shape: createNetFetch() returns the wrapper to pass as Kernel({fetch});
+ * netFetchAttach(netFetch, kernel, kfs) resolves the store and watches its
+ * three layers so an applet checkbox click retargets the NEXT transfer
+ * with no reboot (the displayAnnounce watchPath pattern in
+ * os/kernel-worker.js — the JS resolver below must keep matching
+ * os/netcfg.h's cfg_find semantics: per-key overlay, user > admin > baked,
+ * case-insensitive keys, '#' comments). In-flight transfers keep the path
+ * they started on.
+ *
+ * OFF is byte-identical to today: the wrapper tail-calls the bound global
+ * fetch with the caller's exact arguments. ON, the request is re-posted to
+ * the bridge (target URL/method/headers in x-guc-* headers, body verbatim)
+ * and the bridge's ENCAPSULATED reply (x-guc-status/x-guc-headers + the
+ * streamed body) is unwrapped into the {status, headers, body} shape the
+ * kernel consumes. Errno ruling (recorded in NETWORK.md Tier 2.5):
+ * `fetch: null` / no capability stays ENOSYS; a bridge that is configured
+ * ON but not answering is a transport-REACHABILITY failure = ENETUNREACH,
+ * pinned on the rejection as err.errno (kernel.js honours the string). A
+ * bridge-level policy refusal (403) is EACCES; an upstream failure the
+ * bridge reports (502) stays EIO with the upstream's error text, matching
+ * direct-fetch connect-failure semantics. */
+
+var NET_LAYERS = ['/root/.config/net', '/etc/net', '/usr/share/net'];
+var NET_DEFAULT_URL = 'http://127.0.0.1:8199';
+
+/* Resolve the effective net config from the kfs store layers. */
+function netConfig(kfs) {
+  var cfg = { on: false, url: NET_DEFAULT_URL };
+  var seen = { bridge: false, url: false };
+  for (var i = 0; i < NET_LAYERS.length; i++) {
+    var text = readFileText(kfs, NET_LAYERS[i]);
+    if (text === null) continue;
+    var lines = text.split('\n');
+    for (var j = 0; j < lines.length; j++) {
+      var m = /^(bridge|url)[ \t]+(\S+)/i.exec(lines[j]);   // '#' comments can't match
+      if (!m) continue;
+      var key = m[1].toLowerCase();
+      if (seen[key]) continue;                              // higher layer already won
+      seen[key] = true;
+      if (key === 'bridge') cfg.on = m[2].toLowerCase() === 'on';
+      else cfg.url = m[2];
+    }
+  }
+  return cfg;
+}
+
+function createNetFetch(baseFetch) {
+  var base = baseFetch !== undefined ? baseFetch
+    : (typeof fetch !== 'undefined' ? fetch.bind(globalThis) : null);
+  if (!base) return null;   // no fetch at all: the embedder passes null -> ENOSYS, as ever
+  var state = { on: false, url: NET_DEFAULT_URL };
+
+  function bridgeFetch(url, init) {
+    init = init || {};
+    var h = {
+      'x-guc-url': url + '',
+      'x-guc-method': (init.method || 'GET') + '',
+      'x-guc-headers': JSON.stringify(init.headers || []),
+    };
+    var binit = { method: 'POST', headers: h, redirect: 'error' };
+    if (init.body) binit.body = init.body;
+    if (init.signal) binit.signal = init.signal;
+    var bridgeUrl = state.url.replace(/\/+$/, '') + '/fetch';
+    return base(bridgeUrl, binit).then(function (resp) {
+      var upStatus = resp.headers.get('x-guc-status');
+      if (resp.status === 200 && upStatus !== null) {
+        var pairs = [];
+        try { pairs = JSON.parse(resp.headers.get('x-guc-headers') || '[]'); } catch (e) {}
+        return {
+          status: parseInt(upStatus, 10),
+          headers: { forEach: function (cb) {
+            for (var i = 0; i < pairs.length; i++) cb(pairs[i][1] + '', pairs[i][0] + '');
+          } },
+          body: resp.body,
+        };
+      }
+      // Bridge-level answer (never carries x-guc-status): policy or failure.
+      return resp.text().catch(function () { return ''; }).then(function (t) {
+        var e = new Error('net bridge: HTTP ' + resp.status + (t ? ' — ' + t.slice(0, 300) : ''));
+        if (resp.status === 403) e.errno = 'EACCES';
+        throw e;
+      });
+    }, function (err) {
+      // The fetch to the BRIDGE ITSELF failed: configured on, not answering.
+      if (err && err.name === 'AbortError') throw err;   // close(2) abort, not reachability
+      var e = new Error('net bridge unreachable at ' + state.url + ' ('
+        + ((err && err.message) || 'fetch failed') + ') — is tools/net-bridge.js running?');
+      e.errno = 'ENETUNREACH';
+      throw e;
+    });
+  }
+
+  function netFetch(url, init) {
+    return state.on ? bridgeFetch(url, init) : base(url, init);
+  }
+  netFetch._state = state;      // netFetchAttach writes; tests may read
+  return netFetch;
+}
+
+/* Resolve now and keep resolving on every settled write to a layer (the
+ * kernel.watchPath FSW choke — what makes the Control Panel applet's
+ * checkbox retarget live). Safe to call with netFetch null (no fetch). */
+function netFetchAttach(netFetch, kernel, kfs) {
+  if (!netFetch) return;
+  var resolve = function () {
+    var cfg = netConfig(kfs);
+    netFetch._state.on = cfg.on;
+    netFetch._state.url = cfg.url;
+  };
+  NET_LAYERS.forEach(function (p) { kernel.watchPath(p, resolve); });
+  resolve();
+}
+
 /* ---- environment exports (host.js discipline) ---- */
 var OS_COMMON = {
   createCcDriver: createCcDriver,
@@ -1717,6 +1841,9 @@ var OS_COMMON = {
   readFileBytes: readFileBytes,
   readFileText: readFileText,
   writeFile: writeFile,
+  createNetFetch: createNetFetch,
+  netFetchAttach: netFetchAttach,
+  netConfig: netConfig,
 };
 
 if (typeof module !== 'undefined' && module.exports) {

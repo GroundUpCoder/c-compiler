@@ -610,8 +610,15 @@ async function boot() {
     log: function (m) { post({ type: 'boot-log', msg: m }); },
   });
 
+  // The switchable HTTP fetch (ticket #349, NETWORK.md Tier 2.5): OFF —
+  // the cfgstore default — is the bound global fetch, byte-identical to
+  // passing nothing; ON reroutes transfers through the user-run localhost
+  // bridge. Attached to the store layers right after construction, below.
+  var netFetch = OS_COMMON.createNetFetch();
+
   kernel = new KERNEL.Kernel({
     fs: kfs,
+    fetch: netFetch,   // #349 — the Tier 2.5 net-bridge wrapper
     textService: textService,   // todos/0275 — compositor + headless text
     roImage: { prefix: '/usr', sab: roSab },   // todos/0180
     vsync: true,   // the compositor rAF calls vsyncTick() (todos/0100)
@@ -696,6 +703,11 @@ async function boot() {
   ['/root/.config/display', '/etc/display', '/usr/share/display']
     .forEach(function (p) { kernel.watchPath(p, displayAnnounce); });
   displayAnnounce();
+
+  // The net-bridge toggle rides the same watchPath choke (ticket #349):
+  // a settled write to any `net` store layer — the Network applet's
+  // checkbox, an /etc/net edit — retargets the NEXT transfer, no reboot.
+  OS_COMMON.netFetchAttach(netFetch, kernel, kfs);
 
   // The WM control plane (todos/0014): the kernel-owned endpoint first, then
   // /bin/wm as a kernel service after pid 1. Failure is non-fatal by design —
