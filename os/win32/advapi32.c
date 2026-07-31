@@ -12,12 +12,30 @@
  *
  * Key paths are stored as <ROOT>\sub\key with the root abbreviated
  * (HKCU/HKLM/HKCR/HKU); lookup is case-insensitive like Windows. HKEYs
- * are heap objects holding the canonical path; the four predefined
- * roots are recognized by value. Keys are a flat namespace (no
- * enumeration order, no security) — exactly enough for settings-reading
- * apps (winmine's board prefs, notepad's font, calc's layout via the
+ * are heap objects holding the canonical path AND the REGSAM the open
+ * asked for (#320, gap #9): there are no ACLs, so every request is
+ * grantable, but a handle grants exactly what it requested —
+ * KEY_QUERY_VALUE to query, KEY_SET_VALUE to set/delete a value,
+ * KEY_CREATE_SUB_KEY to create a new subkey; anything else is
+ * ERROR_ACCESS_DENIED. MAXIMUM_ALLOWED and the four predefined roots
+ * (recognized by value) pass every check; RegOpenKeyW, the legacy no-sam
+ * API, opens MAXIMUM_ALLOWED like Windows. Keys are a flat namespace (no
+ * enumeration order) — exactly enough for settings-reading apps
+ * (winmine's board prefs, notepad's font, calc's layout via the
  * kernel32 profile shim). RegDeleteKey/RegEnumKey grow on PORTS.md
  * demand.
+ *
+ * REG_OPTION_VOLATILE (#320): a volatile key — and its whole subtree,
+ * a stable child is refused with ERROR_CHILD_MUST_BE_VOLATILE like
+ * Windows — is memory-only. Its values read back normally in-process,
+ * but nothing under it is ever written to the hive file, so it vanishes
+ * with the process. The option decides at CREATE time only; reopening
+ * an existing key with it changes nothing. Deliberate narrowing vs real
+ * Windows: volatile keys there are machine-wide in-memory objects
+ * visible to every process until reboot; this hive's only sharing
+ * channel is the file, which volatile keys must never touch, so here
+ * they are PER-PROCESS. No corpus app shares volatile state between
+ * processes; revisit if one ever does.
  *
  * ---------------------------------------------------------------------
  * CROSS-PROCESS SHARING — reload-merge at flush (todos/0288)
@@ -94,6 +112,8 @@ typedef struct RegVal {
 
 typedef struct RegKey {
     char *key;
+    int vol;                  /* REG_OPTION_VOLATILE: memory-only, never
+                               * written to the hive file (#320) */
     struct RegKey *next;
 } RegKey;
 
@@ -126,21 +146,44 @@ static int hex_nib(char c) {
     return -1;
 }
 
-/* Record a key path in `head` (idempotent). Returns 0, or -1 on OOM — the
- * caller decides whether that's ERROR_NOT_ENOUGH_MEMORY or best-effort. */
-static int key_add_to(RegKey **head, const char *path) {
+/* Record a key path in `head` (idempotent — an existing key KEEPS its
+ * volatility; the create-time decision is the only one, like Windows).
+ * Returns 0, or -1 on OOM — the caller decides whether that's
+ * ERROR_NOT_ENOUGH_MEMORY or best-effort. */
+static int key_add_to(RegKey **head, const char *path, int vol) {
     for (RegKey *k = *head; k; k = k->next)
         if (strcasecmp(k->key, path) == 0) return 0;
     RegKey *k = (RegKey *)malloc(sizeof *k);
     if (!k) return -1;
     k->key = strdup(path);
     if (!k->key) { free(k); return -1; }
+    k->vol = vol;
     k->next = *head;
     *head = k;
     return 0;
 }
 
-static int key_add(const char *path) { return key_add_to(&g_keys, path); }
+static int key_add(const char *path) { return key_add_to(&g_keys, path, 0); }
+
+/* A key is volatile when it or ANY ancestor was created volatile — on
+ * Windows a volatile key's whole subtree is memory-only (a stable child
+ * is refused at create with ERROR_CHILD_MUST_BE_VOLATILE, so a flagless
+ * descendant can only be the volatile key itself re-added by the
+ * best-effort key_add in RegSetValueExW, which the prefix walk covers). */
+static int key_is_volatile_in(RegKey *head, const char *path) {
+    for (RegKey *k = head; k; k = k->next) {
+        if (!k->vol) continue;
+        size_t n = strlen(k->key);
+        if (strncasecmp(k->key, path, n) == 0 &&
+            (path[n] == 0 || path[n] == '\\'))
+            return 1;
+    }
+    return 0;
+}
+
+static int key_is_volatile(const char *path) {
+    return key_is_volatile_in(g_keys, path);
+}
 
 static void val_free_one(RegVal *v) {
     free(v->key);
@@ -227,7 +270,7 @@ static int hive_read(RegVal **vals, RegKey **keys) {
         size_t n = strlen(line);
         while (n && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = 0;
         if (line[0] == 'k' && line[1] == ' ') {
-            if (key_add_to(keys, line + 2) != 0) { rc = -1; break; }
+            if (key_add_to(keys, line + 2, 0) != 0) { rc = -1; break; }
         } else if (line[0] == 'v' && line[1] == ' ') {
             char *key = line + 2;
             char *p1 = strchr(key, '|');
@@ -252,7 +295,7 @@ static int hive_read(RegVal **vals, RegKey **keys) {
             if (bad) { free(data); continue; }
             DWORD type = (DWORD)strtoul(typs, NULL, 10);
             int oom = val_set_in(vals, key, name, type, data, len) == NULL ||
-                      key_add_to(keys, key) != 0;
+                      key_add_to(keys, key, 0) != 0;
             free(data);
             if (oom) { rc = -1; break; }
         }
@@ -334,17 +377,21 @@ static void hive_flush(void) {
         return;
     }
 
-    /* 2. our deletes, then our writes, over it — and nothing else */
+    /* 2. our deletes, then our writes, over it — and nothing else.
+     * Volatile keys and their values NEVER reach the file (#320): the
+     * mutators don't mark them dirty, but the volatility test here keeps
+     * the flush correct on its own terms too. */
     for (RegDel *d = g_dels; d; d = d->next)
         val_del_in(&mvals, d->key, d->name);
     int oom = 0;
     for (RegVal *v = g_vals; v && !oom; v = v->next)
-        if (v->dirty)
+        if (v->dirty && !key_is_volatile_in(g_keys, v->key))
             oom = val_set_in(&mvals, v->key, v->name, v->type, v->data,
                              v->len) == NULL;
     /* keys are append-only in this hive (no RegDeleteKey), so union them */
     for (RegKey *k = g_keys; k && !oom; k = k->next)
-        oom = key_add_to(&mkeys, k->key) != 0;
+        if (!key_is_volatile_in(g_keys, k->key))
+            oom = key_add_to(&mkeys, k->key, 0) != 0;
     if (oom) {
         vals_free(mvals); keys_free(mkeys);
         flush_warn("out of memory merging the hive");
@@ -359,7 +406,28 @@ static void hive_flush(void) {
     }
 
     /* 3. adopt the merged set: in-memory == on-disk, so this process now
-     *    also sees what its peers wrote instead of drifting further away */
+     *    also sees what its peers wrote instead of drifting further away.
+     *    Volatile keys + their values exist ONLY in this process's memory
+     *    (the file never saw them), so splice them into the adopted set
+     *    instead of freeing them — a flush must not evaporate a live
+     *    volatile key (#320). Values first: the volatility test walks
+     *    g_keys, which the key pass empties of volatile entries. */
+    for (RegVal **pp = &g_vals; *pp; ) {
+        RegVal *v = *pp;
+        if (key_is_volatile_in(g_keys, v->key)) {
+            *pp = v->next;
+            v->next = mvals;
+            mvals = v;
+        } else pp = &v->next;
+    }
+    for (RegKey **pp = &g_keys; *pp; ) {
+        RegKey *k = *pp;
+        if (k->vol) {
+            *pp = k->next;
+            k->next = mkeys;
+            mkeys = k;
+        } else pp = &k->next;
+    }
     vals_free(g_vals);
     keys_free(g_keys);
     dels_free(g_dels);
@@ -375,6 +443,7 @@ static void hive_flush(void) {
 
 typedef struct {
     unsigned magic;
+    REGSAM sam;               /* the access the caller ASKED for (#320) */
     char path[512];
 } RegHandle;
 
@@ -469,12 +538,26 @@ static int key_exists(const char *path) {
     return 0;
 }
 
-static HKEY handle_new(const char *path) {
+static HKEY handle_new(const char *path, REGSAM sam) {
     RegHandle *h = (RegHandle *)malloc(sizeof *h);
     if (!h) return NULL;
     h->magic = REG_HMAGIC;
+    h->sam = sam;
     snprintf(h->path, sizeof h->path, "%s", path);
     return (HKEY)h;
+}
+
+/* REGSAM enforcement (#320, gap #9): a handle grants exactly what its
+ * open ASKED for. The hive has no ACLs, so every request is grantable —
+ * MAXIMUM_ALLOWED (and the predefined roots, which have no open to
+ * remember a request from) pass every check. Callers run key_path first,
+ * so `key` is already known valid; ERROR_INVALID_HANDLE outranks
+ * ERROR_ACCESS_DENIED. */
+static int key_allows(HKEY key, REGSAM want) {
+    if (root_name(key)) return 1;
+    RegHandle *h = (RegHandle *)key;
+    if (h->sam & MAXIMUM_ALLOWED) return 1;
+    return (h->sam & want) == want;
 }
 
 /* Value name -> canonical escaped form; -1 = too long (refused). */
@@ -520,7 +603,7 @@ static void del_unmark(const char *key, const char *name) {
 /* ---------------------------------------------------------------- API */
 
 LONG RegOpenKeyExW(HKEY key, LPCWSTR sub, DWORD options, REGSAM sam, PHKEY out) {
-    (void)options; (void)sam;
+    (void)options;
     hive_load();
     if (!out) return ERROR_INVALID_PARAMETER;
     *out = NULL;
@@ -531,20 +614,26 @@ LONG RegOpenKeyExW(HKEY key, LPCWSTR sub, DWORD options, REGSAM sam, PHKEY out) 
     /* opening a real subkey requires existence; re-opening a root or a
      * live handle with an empty sub always succeeds */
     if (sub && sub[0] && !key_exists(path)) return ERROR_FILE_NOT_FOUND;
-    HKEY h = handle_new(path);
+    /* no ACLs: every requested access is grantable, so the open itself
+     * never denies — the handle just remembers what was asked (#320) */
+    HKEY h = handle_new(path, sam);
     if (!h) return ERROR_NOT_ENOUGH_MEMORY;
     *out = h;
     return ERROR_SUCCESS;
 }
 
 LONG RegOpenKeyW(HKEY key, LPCWSTR sub, PHKEY out) {
-    return RegOpenKeyExW(key, sub, 0, KEY_READ, out);
+    /* the legacy no-sam API opens MAXIMUM_ALLOWED, like Windows — a
+     * RegOpenKey handle must not be silently read-only (#320; notepad
+     * reads its settings through this and would otherwise be trapped
+     * the day it writes through the same handle) */
+    return RegOpenKeyExW(key, sub, 0, MAXIMUM_ALLOWED, out);
 }
 
 LONG RegCreateKeyExW(HKEY key, LPCWSTR sub, DWORD reserved, LPWSTR cls,
                      DWORD options, REGSAM sam, void *sa, PHKEY out,
                      LPDWORD disposition) {
-    (void)reserved; (void)cls; (void)options; (void)sam; (void)sa;
+    (void)reserved; (void)cls; (void)sa;
     hive_load();
     if (!out) return ERROR_INVALID_PARAMETER;
     *out = NULL;
@@ -554,12 +643,26 @@ LONG RegCreateKeyExW(HKEY key, LPCWSTR sub, DWORD reserved, LPWSTR cls,
     if (kp < 0) return ERROR_INVALID_PARAMETER;
     int existed = key_exists(path);
     if (!existed) {
-        if (key_add(path) != 0) return ERROR_NOT_ENOUGH_MEMORY;
-        g_dirty = 1;
+        /* creating mutates the parent: the handle must have asked for
+         * KEY_CREATE_SUB_KEY (in KEY_WRITE/KEY_ALL_ACCESS). Opening an
+         * existing key is not a mutation and checks nothing — Windows
+         * gates the create, not the open (#320). */
+        if (!key_allows(key, KEY_CREATE_SUB_KEY)) return ERROR_ACCESS_DENIED;
+        /* REG_OPTION_VOLATILE decides at CREATE time only, like Windows:
+         * an existing key keeps its volatility whatever a reopen passes.
+         * A stable child under a volatile parent is refused — the whole
+         * subtree of a volatile key is memory-only. */
+        int vol = (options & REG_OPTION_VOLATILE) != 0;
+        if (!vol && key_is_volatile(path))
+            return ERROR_CHILD_MUST_BE_VOLATILE;
+        if (key_add_to(&g_keys, path, vol) != 0)
+            return ERROR_NOT_ENOUGH_MEMORY;
+        if (!key_is_volatile(path))
+            g_dirty = 1;             /* volatile keys never touch the file */
     }
     if (disposition)
         *disposition = existed ? REG_OPENED_EXISTING_KEY : REG_CREATED_NEW_KEY;
-    HKEY h = handle_new(path);
+    HKEY h = handle_new(path, sam);
     if (!h) return ERROR_NOT_ENOUGH_MEMORY;
     *out = h;
     return ERROR_SUCCESS;
@@ -571,6 +674,7 @@ LONG RegQueryValueExW(HKEY key, LPCWSTR name, LPDWORD reserved, LPDWORD type,
     hive_load();
     char path[512], nm[256];
     if (key_path(key, NULL, path, sizeof path) != 1) return ERROR_INVALID_HANDLE;
+    if (!key_allows(key, KEY_QUERY_VALUE)) return ERROR_ACCESS_DENIED;
     if (name_u8(name, nm, sizeof nm) < 0) return ERROR_INVALID_PARAMETER;
     RegVal *v = val_find(path, nm);
     if (!v) return ERROR_FILE_NOT_FOUND;
@@ -592,13 +696,16 @@ LONG RegSetValueExW(HKEY key, LPCWSTR name, DWORD reserved, DWORD type,
     hive_load();
     char path[512], nm[256];
     if (key_path(key, NULL, path, sizeof path) != 1) return ERROR_INVALID_HANDLE;
+    if (!key_allows(key, KEY_SET_VALUE)) return ERROR_ACCESS_DENIED;
     if (!data && count) return ERROR_INVALID_PARAMETER;
     if (name_u8(name, nm, sizeof nm) < 0) return ERROR_INVALID_PARAMETER;
     RegVal *v = val_set_in(&g_vals, path, nm, type, data, count);
     if (!v) return ERROR_NOT_ENOUGH_MEMORY;
-    v->dirty = 1;                   /* ours: the reload-merge writes it back */
     key_add(path);                  /* best-effort: the value itself is live */
     del_unmark(path, nm);
+    if (key_is_volatile(path))      /* memory-only: never dirties the file */
+        return ERROR_SUCCESS;
+    v->dirty = 1;                   /* ours: the reload-merge writes it back */
     g_dirty = 1;
     return ERROR_SUCCESS;
 }
@@ -607,12 +714,15 @@ LONG RegDeleteValueW(HKEY key, LPCWSTR name) {
     hive_load();
     char path[512], nm[256];
     if (key_path(key, NULL, path, sizeof path) != 1) return ERROR_INVALID_HANDLE;
+    if (!key_allows(key, KEY_SET_VALUE)) return ERROR_ACCESS_DENIED;
     if (name_u8(name, nm, sizeof nm) < 0) return ERROR_INVALID_PARAMETER;
     for (RegVal **pp = &g_vals; *pp; pp = &(*pp)->next) {
         RegVal *v = *pp;
         if (strcasecmp(v->key, path) == 0 && strcasecmp(v->name, nm) == 0) {
             *pp = v->next;
             val_free_one(v);
+            if (key_is_volatile(path))  /* the file never had it (#320) */
+                return ERROR_SUCCESS;
             del_mark(path, nm);     /* ours: the reload-merge removes it */
             g_dirty = 1;
             return ERROR_SUCCESS;

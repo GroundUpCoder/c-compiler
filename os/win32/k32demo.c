@@ -13,7 +13,9 @@
  *
  * Prints "K32: <pass>/<total> PASS" and exits 0 only when everything
  * passed. Run a second time it also proves registry persistence
- * (k32demo reg-persist prints the round-tripped value).
+ * (k32demo reg-persist prints the round-tripped value; k32demo
+ * reg-vol-check proves a REG_OPTION_VOLATILE key vanished across the
+ * reload while its persistent sibling survived, #320).
  */
 
 #include <windows.h>
@@ -513,6 +515,164 @@ static void test_registry(void) {
     if (h2) RegCloseKey(h2);
 }
 
+/* #320 gap #9: a handle grants exactly the REGSAM its open asked for.
+ * Before, `(void)sam` meant a KEY_READ handle could write the hive. */
+static void test_reg_access(void) {
+    HKEY h, rw;
+    DWORD v, q, cb;
+
+    /* seed a key + a value through a full-access handle */
+    check("sam: create seed key",
+          RegCreateKeyExW(HKEY_CURRENT_USER, u"Software\\K32Sam", 0, NULL, 0,
+                          KEY_ALL_ACCESS, NULL, &rw, NULL) == ERROR_SUCCESS);
+    v = 7;
+    check("sam: seed value",
+          RegSetValueExW(rw, u"Keep", 0, REG_DWORD, (const BYTE *)&v,
+                         4) == ERROR_SUCCESS);
+    RegCloseKey(rw);
+
+    /* a KEY_READ handle queries but cannot mutate — and the refusal must
+     * leave the hive untouched, not just return the right code */
+    check("sam: open KEY_READ",
+          RegOpenKeyExW(HKEY_CURRENT_USER, u"Software\\K32Sam", 0, KEY_READ,
+                        &h) == ERROR_SUCCESS);
+    v = 9;
+    check("sam: KEY_READ write -> ERROR_ACCESS_DENIED",
+          RegSetValueExW(h, u"Intruder", 0, REG_DWORD, (const BYTE *)&v,
+                         4) == ERROR_ACCESS_DENIED);
+    check("sam: KEY_READ delete -> ERROR_ACCESS_DENIED",
+          RegDeleteValueW(h, u"Keep") == ERROR_ACCESS_DENIED);
+    cb = 4;
+    check("sam: the refused write did not land",
+          RegQueryValueExW(h, u"Intruder", NULL, NULL, (LPBYTE)&q,
+                           &cb) == ERROR_FILE_NOT_FOUND);
+    cb = 4; q = 0;
+    check("sam: the refused delete kept the value",
+          RegQueryValueExW(h, u"Keep", NULL, NULL, (LPBYTE)&q,
+                           &cb) == ERROR_SUCCESS && q == 7);
+    /* a read handle cannot create a subkey either (creation mutates) */
+    HKEY sub = (HKEY)1;
+    check("sam: KEY_READ create-subkey -> ERROR_ACCESS_DENIED",
+          RegCreateKeyExW(h, u"Child", 0, NULL, 0, KEY_ALL_ACCESS, NULL,
+                          &sub, NULL) == ERROR_ACCESS_DENIED && sub == NULL);
+    RegCloseKey(h);
+
+    /* KEY_SET_VALUE writes and deletes — but does NOT query: Windows
+     * enforces the mask in both directions, so we do too */
+    check("sam: open KEY_SET_VALUE",
+          RegOpenKeyExW(HKEY_CURRENT_USER, u"Software\\K32Sam", 0,
+                        KEY_SET_VALUE, &h) == ERROR_SUCCESS);
+    v = 8;
+    check("sam: KEY_SET_VALUE write succeeds",
+          RegSetValueExW(h, u"Keep", 0, REG_DWORD, (const BYTE *)&v,
+                         4) == ERROR_SUCCESS);
+    cb = 4;
+    check("sam: KEY_SET_VALUE query -> ERROR_ACCESS_DENIED",
+          RegQueryValueExW(h, u"Keep", NULL, NULL, (LPBYTE)&q,
+                           &cb) == ERROR_ACCESS_DENIED);
+    check("sam: KEY_SET_VALUE delete succeeds",
+          RegDeleteValueW(h, u"Keep") == ERROR_SUCCESS);
+    RegCloseKey(h);
+
+    /* a KEY_WRITE create handle writes (KEY_WRITE contains KEY_SET_VALUE
+     * and KEY_CREATE_SUB_KEY — winmine's save path) */
+    check("sam: create KEY_WRITE",
+          RegCreateKeyExW(HKEY_CURRENT_USER, u"Software\\K32Sam", 0, NULL, 0,
+                          KEY_WRITE, NULL, &h, NULL) == ERROR_SUCCESS);
+    v = 7;
+    check("sam: KEY_WRITE write succeeds",
+          RegSetValueExW(h, u"Keep", 0, REG_DWORD, (const BYTE *)&v,
+                         4) == ERROR_SUCCESS);
+    RegCloseKey(h);
+
+    /* RegOpenKeyW — the legacy no-sam API — opens MAXIMUM_ALLOWED like
+     * Windows; its handles must not be silently read-only (#320) */
+    check("sam: RegOpenKeyW opens",
+          RegOpenKeyW(HKEY_CURRENT_USER, u"Software\\K32Sam",
+                      &h) == ERROR_SUCCESS);
+    v = 11;
+    check("sam: RegOpenKeyW handle writes (MAXIMUM_ALLOWED)",
+          RegSetValueExW(h, u"Legacy", 0, REG_DWORD, (const BYTE *)&v,
+                         4) == ERROR_SUCCESS);
+    cb = 4; q = 0;
+    check("sam: RegOpenKeyW handle reads",
+          RegQueryValueExW(h, u"Legacy", NULL, NULL, (LPBYTE)&q,
+                           &cb) == ERROR_SUCCESS && q == 11);
+    check("sam: RegOpenKeyW handle deletes",
+          RegDeleteValueW(h, u"Legacy") == ERROR_SUCCESS);
+    RegCloseKey(h);
+}
+
+/* #320: REG_OPTION_VOLATILE keys are memory-only — values read back
+ * in-process (even across a flush) but never reach the hive file; the
+ * reg-vol-check mode proves the vanish from a fresh boot, against the
+ * persistent sibling K32Persist as the positive control. */
+static void test_reg_volatile(void) {
+    HKEY h, s, c;
+    DWORD disp = 0, v, q, cb;
+
+    /* the persistent sibling: whoever checks the volatile key vanished
+     * needs proof the same reload READ something */
+    check("vol: create persistent sibling",
+          RegCreateKeyExW(HKEY_CURRENT_USER, u"Software\\K32Persist", 0,
+                          NULL, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS,
+                          NULL, &s, NULL) == ERROR_SUCCESS);
+    v = 21;
+    check("vol: sibling value",
+          RegSetValueExW(s, u"Stay", 0, REG_DWORD, (const BYTE *)&v,
+                         4) == ERROR_SUCCESS);
+    RegCloseKey(s);
+
+    check("vol: create volatile key",
+          RegCreateKeyExW(HKEY_CURRENT_USER, u"Software\\K32Vol", 0, NULL,
+                          REG_OPTION_VOLATILE, KEY_ALL_ACCESS, NULL, &h,
+                          &disp) == ERROR_SUCCESS &&
+              disp == REG_CREATED_NEW_KEY);
+    v = 42;
+    check("vol: set value under it",
+          RegSetValueExW(h, u"Gone", 0, REG_DWORD, (const BYTE *)&v,
+                         4) == ERROR_SUCCESS);
+    cb = 4; q = 0;
+    check("vol: value reads back in-process",
+          RegQueryValueExW(h, u"Gone", NULL, NULL, (LPBYTE)&q,
+                           &cb) == ERROR_SUCCESS && q == 42);
+
+    /* Windows refuses a stable child under a volatile parent — the
+     * subtree is memory-only as a whole */
+    c = (HKEY)1;
+    check("vol: stable child -> ERROR_CHILD_MUST_BE_VOLATILE",
+          RegCreateKeyExW(h, u"StableChild", 0, NULL,
+                          REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &c,
+                          NULL) == ERROR_CHILD_MUST_BE_VOLATILE && c == NULL);
+    check("vol: volatile child is fine",
+          RegCreateKeyExW(h, u"VolChild", 0, NULL, REG_OPTION_VOLATILE,
+                          KEY_ALL_ACCESS, NULL, &c, NULL) == ERROR_SUCCESS);
+    if (c) RegCloseKey(c);
+    RegCloseKey(h);              /* this close FLUSHES the hive */
+
+    /* after the flush the volatile key must still be fully alive in this
+     * process (the flush adopts the merged set — volatile entries have to
+     * be carried across, not evaporated) */
+    check("vol: still open-able after a flush",
+          RegOpenKeyExW(HKEY_CURRENT_USER, u"Software\\K32Vol", 0, KEY_READ,
+                        &h) == ERROR_SUCCESS);
+    cb = 4; q = 0;
+    check("vol: value survives the flush in-process",
+          RegQueryValueExW(h, u"Gone", NULL, NULL, (LPBYTE)&q,
+                           &cb) == ERROR_SUCCESS && q == 42);
+    RegCloseKey(h);
+
+    /* the option decides at CREATE time only: reopening the persistent
+     * sibling with REG_OPTION_VOLATILE changes nothing (reg-vol-check
+     * proves it still persists across the boot) */
+    check("vol: option ignored on an existing key",
+          RegCreateKeyExW(HKEY_CURRENT_USER, u"Software\\K32Persist", 0,
+                          NULL, REG_OPTION_VOLATILE, KEY_ALL_ACCESS, NULL,
+                          &s, &disp) == ERROR_SUCCESS &&
+              disp == REG_OPENED_EXISTING_KEY);
+    RegCloseKey(s);
+}
+
 static void test_process(void) {
     /* spawn `sh -c` writing through a redirected stdout handle — the
      * kernel32 twin of `sh -c ... > file` */
@@ -781,6 +941,41 @@ int main(int argc, char **argv) {
         printf("reg-persist: hostile=%s\n", hostile ? "ok" : "LOST");
         return (v == 2 && hostile) ? 0 : 1;
     }
+    if (argc > 1 && strcmp(argv[1], "reg-vol-check") == 0) {
+        /* #320 second-session probe, fresh process (the e2e runs it on a
+         * SECOND boot): this load parses the hive FILE, so
+         *   - the volatile K32Vol key must be GONE,
+         *   - its persistent sibling K32Persist must still carry Stay=21
+         *     (the positive control — without it "gone" is
+         *     indistinguishable from "the reload read nothing"),
+         *   - the KEY_READ-refused write (Intruder) must never have
+         *     reached the file, while the granted writes left Keep=7. */
+        HKEY h;
+        DWORD q, cb;
+        int stay = 0, gone = 0, sam = 0;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, u"Software\\K32Persist", 0,
+                          KEY_READ, &h) == ERROR_SUCCESS) {
+            cb = 4; q = 0;
+            stay = RegQueryValueExW(h, u"Stay", NULL, NULL, (LPBYTE)&q,
+                                    &cb) == ERROR_SUCCESS && q == 21;
+            RegCloseKey(h);
+        }
+        gone = RegOpenKeyExW(HKEY_CURRENT_USER, u"Software\\K32Vol", 0,
+                             KEY_READ, &h) == ERROR_FILE_NOT_FOUND;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, u"Software\\K32Sam", 0,
+                          KEY_READ, &h) == ERROR_SUCCESS) {
+            cb = 4; q = 0;
+            sam = RegQueryValueExW(h, u"Keep", NULL, NULL, (LPBYTE)&q,
+                                   &cb) == ERROR_SUCCESS && q == 7;
+            cb = 4;
+            sam = sam && RegQueryValueExW(h, u"Intruder", NULL, NULL,
+                                          (LPBYTE)&q,
+                                          &cb) == ERROR_FILE_NOT_FOUND;
+            RegCloseKey(h);
+        }
+        printf("reg-vol: stay=%d gone=%d sam=%d\n", stay, gone, sam);
+        return (stay && gone && sam) ? 0 : 1;
+    }
 
     test_files();
     test_dirs_find();
@@ -790,6 +985,8 @@ int main(int argc, char **argv) {
     test_strings();
     test_time();
     test_registry();
+    test_reg_access();
+    test_reg_volatile();
     test_process();
 
     printf("K32: %d/%d PASS\n", g_pass, g_total);

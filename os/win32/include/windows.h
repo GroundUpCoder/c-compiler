@@ -1118,6 +1118,7 @@ HBRUSH   GetSysColorBrush(int index);
 #define ERROR_FILE_TOO_LARGE       223
 #define ERROR_MORE_DATA            234
 #define ERROR_NO_MORE_ITEMS        259
+#define ERROR_CHILD_MUST_BE_VOLATILE 1021
 #define NO_ERROR                   0
 #define S_OK                       ((HRESULT)0)
 #define S_FALSE                    ((HRESULT)1)
@@ -1276,6 +1277,9 @@ typedef struct _OSVERSIONINFOW {
 #define INVALID_HANDLE_VALUE ((HANDLE)(LONG_PTR)-1)
 #define GENERIC_READ  0x80000000u
 #define GENERIC_WRITE 0x40000000u
+/* ACCESS_MASK generic bit: "everything the ACL grants". This world has no
+ * ACLs, so a MAXIMUM_ALLOWED handle passes every access check (#320). */
+#define MAXIMUM_ALLOWED 0x02000000u
 #define FILE_SHARE_READ  0x1
 #define FILE_SHARE_WRITE 0x2
 #define CREATE_NEW    1
@@ -1564,10 +1568,13 @@ typedef DWORD REGSAM;
 #define HKEY_CURRENT_USER  ((HKEY)(ULONG_PTR)0x80000001u)
 #define HKEY_LOCAL_MACHINE ((HKEY)(ULONG_PTR)0x80000002u)
 #define HKEY_USERS         ((HKEY)(ULONG_PTR)0x80000003u)
-#define KEY_QUERY_VALUE  0x0001
-#define KEY_SET_VALUE    0x0002
-#define KEY_READ         0x20019
-#define KEY_WRITE        0x20006
+#define KEY_QUERY_VALUE        0x0001
+#define KEY_SET_VALUE          0x0002
+#define KEY_CREATE_SUB_KEY     0x0004
+#define KEY_ENUMERATE_SUB_KEYS 0x0008
+#define KEY_NOTIFY             0x0010
+#define KEY_READ         0x20019   /* STANDARD_RIGHTS_READ|QUERY|ENUM|NOTIFY */
+#define KEY_WRITE        0x20006   /* STANDARD_RIGHTS_WRITE|SET|CREATE_SUB_KEY */
 #define KEY_ALL_ACCESS   0xF003F
 #define REG_NONE      0
 #define REG_SZ        1
@@ -1575,6 +1582,8 @@ typedef DWORD REGSAM;
 #define REG_BINARY    3
 #define REG_DWORD     4
 #define REG_OPTION_NON_VOLATILE 0
+#define REG_OPTION_VOLATILE     0x00000001  /* memory-only key: never written
+                                             * to the hive file (#320) */
 #define REG_CREATED_NEW_KEY     1
 #define REG_OPENED_EXISTING_KEY 2
 

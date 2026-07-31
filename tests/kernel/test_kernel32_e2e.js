@@ -96,6 +96,10 @@ function sessionB() {
   const script = [
     'k32demo reg-persist',
     'echo PERSIST-EXIT=$?',
+    'k32demo reg-vol-check',
+    'echo VOL-EXIT=$?',
+    'grep -c K32Vol /root/.win32reg',
+    'echo VOLGREP-EXIT=$?',
     'grep -c K32Demo /root/.win32reg',
     '',
   ].join('\n');
@@ -111,8 +115,19 @@ function sessionB() {
    * round-trip — this boot PARSES the escaped line format fresh */
   check('hostile registry names survive the hive round-trip',
     out.includes('reg-persist: hostile=ok'), out.slice(0, 300));
+  /* #320: the volatile key session A created is GONE across the reload,
+   * its persistent sibling survived (positive control), and the
+   * KEY_READ-refused write never reached the file */
+  check('volatile key vanished, sibling survived, refused write absent',
+    out.includes('reg-vol: stay=1 gone=1 sam=1') && out.includes('VOL-EXIT=0'),
+    (out.match(/reg-vol:[^\n]*/) || ['no reg-vol line'])[0]);
+  /* belt + braces: not one hive-file LINE mentions the volatile key
+   * (grep -c prints 0 and exits 1 on no match) */
+  check('the hive file never mentions K32Vol',
+    /\n0\nVOLGREP-EXIT=1\n/.test(out),
+    (out.split('VOL-EXIT=0\n')[1] || '').slice(0, 80));
   check('the hive file is the real store ($HOME/.win32reg)',
-    /\n[1-9]\d*\n/.test('\n' + (out.split('PERSIST-EXIT=0\n')[1] || '')),
+    /\n[1-9]\d*\n/.test('\n' + (out.split('VOLGREP-EXIT=1\n')[1] || '')),
     out.slice(-200));
 }
 
