@@ -23,10 +23,25 @@
  *   - LoadLibrary fails with ERROR_CALL_NOT_IMPLEMENTED (static-link
  *     world; calc's uxtheme/htmlhelp binding degrades gracefully)
  *   - MapViewOfFile is a read-into-heap copy; FILE_MAP_WRITE views write
- *     back on UnmapViewOfFile (notepad only reads through views)
- *   - WaitForSingleObject takes process handles only
+ *     back on UnmapViewOfFile (notepad only reads through views). Since
+ *     #321 the section size is REAL: CreateFileMapping extends the file
+ *     (the Windows semantics) and views are bounded by the section.
+ *   - WaitForSingleObject takes process handles only; pi->hThread is the
+ *     SAME refcounted process object (one thread per process here), so
+ *     the standard wait-then-close-both pattern works (#321)
  *   - Global/Local/Heap alloc are one headered malloc (like modern
  *     Windows, where they all sit on the same process heap)
+ *
+ * Honesty batch #321 (the W0 apply-or-report policy — never TRUE while
+ * silently dropping a semantic request): CreateFileW triages
+ * dwFlagsAndAttributes (READONLY-on-create, DELETE_ON_CLOSE,
+ * WRITE_THROUGH, BACKUP_SEMANTICS applied; hints ignored; the rest
+ * loud); ReadFile/WriteFile honor OVERLAPPED offsets; SetFileAttributesW
+ * reports the attribute bits it cannot store; CreateProcessW passes
+ * lpEnvironment through to the spawn spec, refuses over-cap command
+ * lines/argv loudly, and maps CREATE_NEW_PROCESS_GROUP to setpgid;
+ * GlobalAlloc(GMEM_MOVEABLE) / VirtualAlloc divergences say so on
+ * stderr instead of silently diverging.
  */
 
 /* The veneer is implemented ANSI-side internally (0060 convention). */
@@ -283,6 +298,12 @@ typedef struct {
     int pid;
     int exited;
     DWORD exitCode;
+    /* #321 trailing growth (g_std's positional initializers zero these) */
+    char *delPath;      /* HK_FILE: FILE_FLAG_DELETE_ON_CLOSE, unlink here */
+    int wthrough;       /* HK_FILE: FILE_FLAG_WRITE_THROUGH, fsync each write */
+    long long mapSize;  /* HK_MAP: the section size (bounds every view) */
+    int refs;           /* HK_PROC: hProcess+hThread share one object;
+                         * 0/1 = single, CloseHandle frees at the last ref */
 } K32Obj;
 
 static K32Obj *h_alloc(int kind) {
@@ -310,6 +331,10 @@ BOOL CloseHandle(HANDLE h) {
     case HK_FILE:
     case HK_MAP:
         if (o->fd >= 0) close(o->fd);
+        if (o->delPath) {             /* FILE_FLAG_DELETE_ON_CLOSE (#321) */
+            unlink(o->delPath);
+            free(o->delPath);
+        }
         break;
     case HK_FIND:
         if (o->dir) closedir(o->dir);
@@ -319,7 +344,9 @@ BOOL CloseHandle(HANDLE h) {
     case HK_PROC:
         /* Windows: closing a process handle does NOT kill the process.
          * An unreaped child is reaped by the kernel's auto-reap on our
-         * exit; nothing to do here. */
+         * exit; nothing to do here. hProcess and hThread are the same
+         * refcounted object (#321) — free only at the last close. */
+        if (o->refs > 1) { o->refs--; return TRUE; }
         break;
     }
     if (o->is_static) return TRUE;
@@ -346,11 +373,47 @@ HANDLE GetStdHandle(DWORD which) {
 
 /* ============================================================== files */
 
+/* host.js open() O_DIRECTORY bit (Linux value; todos/0442) — the libc
+ * headers expose no O_DIRECTORY constant yet, so the raw bit rides here.
+ * A read-only open of a directory with the bit succeeds as a real dir fd
+ * (fstat/close work; read() answers EISDIR, like ReadFile on a Windows
+ * directory handle). */
+#define K32_O_DIRECTORY 0x10000
+
 HANDLE CreateFileW(LPCWSTR name, DWORD acc, DWORD share, void *sa,
                    DWORD creation, DWORD flagsAttrs, HANDLE template_) {
-    (void)share; (void)sa; (void)flagsAttrs; (void)template_;
+    (void)share; (void)sa;   /* share modes: documented 0211-list deferral;
+                              * lpSecurityAttributes: no ACLs in this world */
     char p[1024];
     if (!path_arg(name, p, sizeof p)) return INVALID_HANDLE_VALUE;
+
+    /* dwFlagsAndAttributes triage (#321, apply-or-report — it used to be
+     * cast to void wholesale). APPLIED below: READONLY-on-create,
+     * DELETE_ON_CLOSE, WRITE_THROUGH, BACKUP_SEMANTICS. Semantically free
+     * to ignore (pure cache hints, or the Windows default state of any
+     * file): NORMAL, ARCHIVE, TEMPORARY, NO_BUFFERING, RANDOM_ACCESS,
+     * SEQUENTIAL_SCAN, POSIX_SEMANTICS. Everything else is loud. */
+    if (flagsAttrs & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM))
+        WIN32_UNSUPPORTED("CreateFileW HIDDEN/SYSTEM attributes "
+                          "(no POSIX store; file created plain)");
+    if (flagsAttrs & FILE_FLAG_OVERLAPPED)
+        WIN32_UNSUPPORTED("CreateFileW FILE_FLAG_OVERLAPPED: IO completes "
+                          "synchronously (OVERLAPPED offsets ARE honored; "
+                          "hEvent never signals)");
+    {
+        DWORD known = FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_HIDDEN |
+                      FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_ARCHIVE |
+                      FILE_ATTRIBUTE_NORMAL | FILE_ATTRIBUTE_TEMPORARY |
+                      FILE_FLAG_WRITE_THROUGH | FILE_FLAG_OVERLAPPED |
+                      FILE_FLAG_NO_BUFFERING | FILE_FLAG_RANDOM_ACCESS |
+                      FILE_FLAG_SEQUENTIAL_SCAN | FILE_FLAG_DELETE_ON_CLOSE |
+                      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_POSIX_SEMANTICS;
+        if (flagsAttrs & ~known)
+            WIN32_UNSUPPORTED("CreateFileW dwFlagsAndAttributes 0x%x dropped",
+                              (unsigned)(flagsAttrs & ~known));
+    }
+    if (template_)
+        WIN32_UNSUPPORTED("CreateFileW hTemplateFile (attributes not copied)");
 
     int fl;
     if ((acc & GENERIC_READ) && (acc & GENERIC_WRITE)) fl = O_RDWR;
@@ -376,11 +439,38 @@ HANDLE CreateFileW(LPCWSTR name, DWORD acc, DWORD share, void *sa,
         return INVALID_HANDLE_VALUE;
     }
 
+    /* FILE_FLAG_BACKUP_SEMANTICS (#321): a read-only directory open
+     * really opens (the host O_DIRECTORY bit). WITHOUT the flag a
+     * directory keeps the natural EISDIR -> ERROR_ACCESS_DENIED refusal,
+     * which is the real API's answer. */
+    if ((flagsAttrs & FILE_FLAG_BACKUP_SEMANTICS) && fl == O_RDONLY) {
+        struct stat st;
+        if (stat(p, &st) == 0 && S_ISDIR(st.st_mode)) fl |= K32_O_DIRECTORY;
+    }
+
     int fd = open(p, fl, 0666);
     if (fd < 0) { set_err_errno(); return INVALID_HANDLE_VALUE; }
     K32Obj *o = h_alloc(HK_FILE);
     if (!o) { close(fd); return INVALID_HANDLE_VALUE; }
     o->fd = fd;
+    if (flagsAttrs & FILE_FLAG_DELETE_ON_CLOSE) {
+        /* one handle per CreateFile here (no dup), so CloseHandle IS the
+         * last close — unlink there (#321; the file used to survive) */
+        o->delPath = strdup(p);
+        if (!o->delPath) {
+            close(fd); o->magic = 0; free(o);
+            g_lastError = ERROR_NOT_ENOUGH_MEMORY;
+            return INVALID_HANDLE_VALUE;
+        }
+    }
+    if (flagsAttrs & FILE_FLAG_WRITE_THROUGH) o->wthrough = 1;
+    /* READONLY-on-create (#321): the attribute applies to the FILE being
+     * created (this handle keeps the write access it opened with, like
+     * Windows' creating handle). CREATE_ALWAYS re-applies to an existing
+     * file — it recreates the content, Windows merges the attributes. */
+    if ((flagsAttrs & FILE_ATTRIBUTE_READONLY) &&
+        (((fl & O_CREAT) && !existed) || (existed && creation == CREATE_ALWAYS)))
+        chmod(p, 0444);
     /* Windows quirk callers rely on: CREATE_ALWAYS/OPEN_ALWAYS report
      * whether the file pre-existed via last-error. */
     g_lastError = ((creation == CREATE_ALWAYS || creation == OPEN_ALWAYS) && existed)
@@ -388,20 +478,43 @@ HANDLE CreateFileW(LPCWSTR name, DWORD acc, DWORD share, void *sa,
     return (HANDLE)o;
 }
 
-BOOL ReadFile(HANDLE h, LPVOID buf, DWORD n, LPDWORD nread, void *ov) {
-    (void)ov;
+BOOL ReadFile(HANDLE h, LPVOID buf, DWORD n, LPDWORD nread, void *ovp) {
     K32Obj *o = h_get(h, HK_FILE);
     if (!o) return FALSE;
+    OVERLAPPED *ov = (OVERLAPPED *)ovp;
+    if (ov) {
+        /* positioned IO at the OVERLAPPED offset (#321): the offsets
+         * were silently ignored — a read at the wrong position said TRUE */
+        long long off = ((long long)ov->OffsetHigh << 32) | ov->Offset;
+        if (lseek(o->fd, off, 0) < 0) { set_err_errno(); return FALSE; }
+    }
     long r = read(o->fd, buf, n);
     if (r < 0) { set_err_errno(); return FALSE; }
-    if (nread) *nread = (DWORD)r;                 /* EOF: TRUE with 0 read */
-    return TRUE;
+    if (nread) *nread = (DWORD)r;
+    if (ov) {
+        ov->Internal = 0;
+        ov->InternalHigh = (ULONG_PTR)r;
+        if (r == 0 && n > 0) {   /* sync-handle OVERLAPPED read at EOF */
+            g_lastError = ERROR_HANDLE_EOF;
+            return FALSE;
+        }
+    }
+    return TRUE;                 /* plain EOF: TRUE with 0 read */
 }
 
-BOOL WriteFile(HANDLE h, LPCVOID buf, DWORD n, LPDWORD written, void *ov) {
-    (void)ov;
+BOOL WriteFile(HANDLE h, LPCVOID buf, DWORD n, LPDWORD written, void *ovp) {
     K32Obj *o = h_get(h, HK_FILE);
     if (!o) return FALSE;
+    OVERLAPPED *ov = (OVERLAPPED *)ovp;
+    if (ov) {                    /* positioned write (#321), like ReadFile */
+        int r;
+        if (ov->Offset == 0xFFFFFFFFu && ov->OffsetHigh == 0xFFFFFFFFu)
+            r = lseek(o->fd, 0, 2) < 0;          /* all-ones pair: append */
+        else
+            r = lseek(o->fd, ((long long)ov->OffsetHigh << 32) | ov->Offset,
+                      0) < 0;
+        if (r) { set_err_errno(); return FALSE; }
+    }
     DWORD done = 0;
     const char *p = (const char *)buf;
     while (done < n) {
@@ -409,6 +522,12 @@ BOOL WriteFile(HANDLE h, LPCVOID buf, DWORD n, LPDWORD written, void *ov) {
         if (r < 0) { set_err_errno(); if (written) *written = done; return FALSE; }
         if (r == 0) break;
         done += (DWORD)r;
+    }
+    if (ov) { ov->Internal = 0; ov->InternalHigh = (ULONG_PTR)done; }
+    if (o->wthrough && fsync(o->fd) != 0) {      /* FILE_FLAG_WRITE_THROUGH */
+        set_err_errno();
+        if (written) *written = done;
+        return FALSE;
     }
     if (written) *written = done;
     return TRUE;
@@ -502,6 +621,20 @@ DWORD GetFileAttributesW(LPCWSTR name) {
 BOOL SetFileAttributesW(LPCWSTR name, DWORD attrs) {
     char p[1024];
     if (!path_arg(name, p, sizeof p)) return FALSE;
+    /* apply-or-report (#321, the exact #317 shape this call had):
+     * READONLY maps to the POSIX write bits and is applied below;
+     * NORMAL means "clear them" and DIRECTORY is ignored like Windows.
+     * HIDDEN/SYSTEM/ARCHIVE have no store here — they used to be
+     * accepted and dropped behind TRUE; now the drop says so. */
+    {
+        DWORD dropped = attrs & ~(FILE_ATTRIBUTE_READONLY |
+                                  FILE_ATTRIBUTE_NORMAL |
+                                  FILE_ATTRIBUTE_DIRECTORY);
+        if (dropped)
+            WIN32_UNSUPPORTED("SetFileAttributesW attrs 0x%x dropped "
+                              "(only READONLY maps to the POSIX mode)",
+                              (unsigned)dropped);
+    }
     struct stat st;
     if (stat(p, &st) != 0) { set_err_errno(); return FALSE; }
     int mode = (int)(st.st_mode & 07777);
@@ -693,17 +826,43 @@ static struct {
 
 HANDLE CreateFileMappingW(HANDLE file, void *sa, DWORD protect,
                           DWORD sizeHigh, DWORD sizeLow, LPCWSTR name) {
-    (void)sa; (void)sizeHigh; (void)sizeLow;
+    (void)sa;
     if (name)
         WIN32_UNSUPPORTED("named file mappings (created PRIVATE, never shared)");
+    if (protect != PAGE_READONLY && protect != PAGE_READWRITE) {
+        WIN32_UNSUPPORTED("CreateFileMappingW protect 0x%x "
+                          "(PAGE_READONLY/PAGE_READWRITE only)",
+                          (unsigned)protect);
+        g_lastError = ERROR_INVALID_PARAMETER;
+        return NULL;
+    }
     K32Obj *f = h_get(file, HK_FILE);
     if (!f) return NULL;                          /* NB: NULL, not IHV */
+    struct stat st;
+    if (fstat(f->fd, &st) != 0) { set_err_errno(); return NULL; }
+    /* The section size is REAL (#321): a size beyond EOF EXTENDS the
+     * file right here (the Windows semantics) — it used to be ignored,
+     * and a writable view past EOF silently grew the file with NULs at
+     * unmap instead. Zero size maps the whole file; zero size on an
+     * empty file is the real API's ERROR_FILE_INVALID. */
+    long long size = ((long long)sizeHigh << 32) | sizeLow;
+    if (size == 0) {
+        if (st.st_size == 0) { g_lastError = ERROR_FILE_INVALID; return NULL; }
+        size = st.st_size;
+    } else if (size > st.st_size) {
+        if (protect != PAGE_READWRITE) {   /* can't extend through RO */
+            g_lastError = ERROR_NOT_ENOUGH_MEMORY;
+            return NULL;
+        }
+        if (ftruncate(f->fd, size) != 0) { set_err_errno(); return NULL; }
+    }
     int fd = dup(f->fd);
     if (fd < 0) { set_err_errno(); return NULL; }
     K32Obj *o = h_alloc(HK_MAP);
     if (!o) { close(fd); return NULL; }
     o->fd = fd;
     o->mapProtect = protect;
+    o->mapSize = size;
     return (HANDLE)o;
 }
 
@@ -718,11 +877,14 @@ LPVOID MapViewOfFile(HANDLE mapping, DWORD acc, DWORD offHigh,
         return NULL;
     }
     long long off = ((long long)offHigh << 32) | offLow;
-    struct stat st;
-    if (fstat(o->fd, &st) != 0) { set_err_errno(); return NULL; }
-    if (bytes == 0) {
-        if (off >= st.st_size) { g_lastError = ERROR_INVALID_PARAMETER; return NULL; }
-        bytes = (SIZE_T)(st.st_size - off);
+    /* Views are bounded by the SECTION (#321): the file already spans
+     * o->mapSize (CreateFileMappingW extended it), so a view can never
+     * silently grow the file at unmap anymore. */
+    if (off >= o->mapSize) { g_lastError = ERROR_INVALID_PARAMETER; return NULL; }
+    if (bytes == 0) bytes = (SIZE_T)(o->mapSize - off);
+    else if ((long long)bytes > o->mapSize - off) {
+        g_lastError = ERROR_INVALID_PARAMETER;
+        return NULL;
     }
     int slot = -1;
     for (int i = 0; i < MAX_VIEWS; i++)
@@ -806,6 +968,13 @@ static MemHdr *mem_hdr(void *p) {
 }
 
 HGLOBAL GlobalAlloc(UINT flags, SIZE_T bytes) {
+    /* honesty (#321): GMEM_MOVEABLE is served FIXED — the "handle" IS
+     * the pointer and GlobalLock never counts. Memory never moves here,
+     * so nothing breaks in-OS; the divergence is now loud instead of
+     * silent (an app porting back to real Windows would break). */
+    if (flags & GMEM_MOVEABLE)
+        WIN32_UNSUPPORTED("GlobalAlloc GMEM_MOVEABLE (served FIXED: "
+                          "handle==pointer, lock uncounted)");
     return (HGLOBAL)mem_alloc(bytes, flags & GMEM_ZEROINIT);
 }
 LPVOID GlobalLock(HGLOBAL h) { return mem_hdr(h) ? (LPVOID)h : NULL; }
@@ -823,6 +992,11 @@ HGLOBAL GlobalFree(HGLOBAL h) {
 }
 
 HLOCAL LocalAlloc(UINT flags, SIZE_T bytes) {
+    /* LMEM_MOVEABLE is the same served-FIXED divergence as GlobalAlloc's
+     * (#321) but deliberately NOT loud: notepad's text buffer and
+     * user32's EDIT allocate LMEM_MOVEABLE on every load/grow, and both
+     * lock before every deref — a report here would put a permanent
+     * false alarm in every boot. GlobalAlloc carries the class's report. */
     return (HLOCAL)mem_alloc(bytes, flags & LMEM_ZEROINIT);
 }
 LPVOID LocalLock(HLOCAL h) { return GlobalLock((HGLOBAL)h); }
@@ -864,7 +1038,15 @@ BOOL HeapFree(HANDLE heap, DWORD flags, LPVOID p) {
 static struct { void *base; SIZE_T size; } g_valloc[MAX_VALLOC];
 
 LPVOID VirtualAlloc(LPVOID addr, SIZE_T size, DWORD type, DWORD protect) {
-    (void)protect;
+    /* honesty (#321): wasm linear memory has no page protection and no
+     * reserve-without-commit — both divergences say so now instead of
+     * silently pretending. */
+    if (protect != PAGE_READWRITE)
+        WIN32_UNSUPPORTED("VirtualAlloc flProtect 0x%x (all memory is "
+                          "PAGE_READWRITE)", (unsigned)protect);
+    if ((type & MEM_RESERVE) && !(type & MEM_COMMIT))
+        WIN32_UNSUPPORTED("VirtualAlloc MEM_RESERVE commits immediately "
+                          "(no reserve-only tier)");
     if (addr != NULL || size == 0 || !(type & (MEM_COMMIT | MEM_RESERVE))) {
         g_lastError = ERROR_INVALID_PARAMETER;
         return NULL;
@@ -963,13 +1145,14 @@ HANDLE GetCurrentProcess(void) { return (HANDLE)(LONG_PTR)-1; }
 DWORD GetCurrentProcessId(void) { return (DWORD)getpid(); }
 
 /* Split a command line into argv, Windows-style: whitespace separates,
- * double quotes group, backslash-quote escapes a literal quote. */
-static int cmdline_split(char *s, char **argv, int cap) {
+ * double quotes group, backslash-quote escapes a literal quote. A token
+ * past the cap sets *ovfl instead of silently vanishing (#321). */
+static int cmdline_split(char *s, char **argv, int cap, int *ovfl) {
     int argc = 0;
     while (*s) {
         while (*s == ' ' || *s == '\t') s++;
         if (!*s) break;
-        if (argc >= cap - 1) break;
+        if (argc >= cap - 1) { if (ovfl) *ovfl = 1; break; }
         char *out = s;
         argv[argc++] = out;
         int quoted = 0;
@@ -1001,17 +1184,112 @@ static void path_resolve(const char *file, char *out, int cap) {
     snprintf(out, (size_t)cap, "%s", file);       /* unfound: child exits 127 */
 }
 
+/* Build a spawn envp vector from a CreateProcess environment block
+ * (#321 — lpEnvironment used to be silently swapped for the parent's
+ * env): entries are NUL-separated, the block ends with a double NUL;
+ * WCHAR entries under CREATE_UNICODE_ENVIRONMENT, else UTF-8. One
+ * allocation (vector + converted bytes); caller frees the returned
+ * pointer. NULL = out of memory. */
+static char **env_from_block(const void *block, int unicode) {
+    int count = 0;
+    size_t bytes = 0;
+    if (unicode) {
+        for (const WCHAR *w = (const WCHAR *)block; *w; count++) {
+            int wl = lstrlenW(w);
+            int u = WideCharToMultiByte(CP_UTF8, 0, w, wl, NULL, 0, NULL, NULL);
+            bytes += (size_t)u + 1;
+            w += wl + 1;
+        }
+    } else {
+        for (const char *s = (const char *)block; *s; count++) {
+            bytes += strlen(s) + 1;
+            s += strlen(s) + 1;
+        }
+    }
+    char **vec = (char **)malloc((size_t)(count + 1) * sizeof(char *) + bytes);
+    if (!vec) return NULL;
+    char *out = (char *)(vec + count + 1);
+    size_t left = bytes;
+    int i = 0;
+    if (unicode) {
+        for (const WCHAR *w = (const WCHAR *)block; *w; i++) {
+            int wl = lstrlenW(w);
+            int u = WideCharToMultiByte(CP_UTF8, 0, w, wl, out, (int)left - 1,
+                                        NULL, NULL);
+            vec[i] = out;
+            out[u] = 0;
+            out += u + 1;
+            left -= (size_t)u + 1;
+            w += wl + 1;
+        }
+    } else {
+        for (const char *s = (const char *)block; *s; i++) {
+            size_t l = strlen(s) + 1;
+            memcpy(out, s, l);
+            vec[i] = out;
+            out += l;
+            s += l;
+        }
+    }
+    vec[i] = NULL;
+    return vec;
+}
+
 BOOL CreateProcessW(LPCWSTR app, LPWSTR cmdLine, void *psa, void *tsa,
                     BOOL inheritHandles, DWORD flags, LPVOID env,
                     LPCWSTR cwdW, STARTUPINFOW *si, PROCESS_INFORMATION *pi) {
-    (void)psa; (void)tsa; (void)inheritHandles; (void)flags; (void)env;
+    (void)psa; (void)tsa;         /* no ACLs in this world (the #320 note) */
+
+    /* dwCreationFlags triage (#321): console/priority flags have nothing
+     * to govern here (benign); NEW_PROCESS_GROUP maps to the spawn spec;
+     * UNICODE_ENVIRONMENT is consumed below; SUSPENDED cannot be honored
+     * (cooperative STOP parks at safe points, never at entry — the spec
+     * growing a suspended field is OS.md's call, not a veneer hack). */
+    {
+        const DWORD benign = CREATE_NO_WINDOW | CREATE_NEW_CONSOLE |
+                             DETACHED_PROCESS | NORMAL_PRIORITY_CLASS |
+                             CREATE_UNICODE_ENVIRONMENT |
+                             CREATE_NEW_PROCESS_GROUP;
+        if (flags & CREATE_SUSPENDED)
+            WIN32_UNSUPPORTED("CreateProcessW CREATE_SUSPENDED "
+                              "(child runs immediately)");
+        if (flags & ~(benign | CREATE_SUSPENDED))
+            WIN32_UNSUPPORTED("CreateProcessW dwCreationFlags 0x%x dropped",
+                              (unsigned)(flags & ~(benign | CREATE_SUSPENDED)));
+    }
+    if (!inheritHandles && si && (si->dwFlags & STARTF_USESTDHANDLES))
+        WIN32_UNSUPPORTED("CreateProcessW bInheritHandles=FALSE ignored "
+                          "(the STARTF_USESTDHANDLES handles are wired anyway)");
+    if (si && (si->dwFlags & STARTF_USESHOWWINDOW) &&
+        si->wShowWindow != 1 && si->wShowWindow != 5 && si->wShowWindow != 10)
+        /* != SW_SHOWNORMAL/SW_SHOW/SW_SHOWDEFAULT: hide/minimize/maximize
+         * requests are dropped — windows here always show normal */
+        WIN32_UNSUPPORTED("CreateProcessW wShowWindow %d dropped "
+                          "(windows always show normal)", (int)si->wShowWindow);
+
     char line[1024];
-    if (cmdLine) w2u8(cmdLine, line, sizeof line);
+    if (cmdLine) {
+        if (WideCharToMultiByte(CP_UTF8, 0, cmdLine, -1, line, sizeof line,
+                                NULL, NULL) <= 0) {
+            /* refused loud, never truncated-silent (#321): bytes past the
+             * cap used to vanish mid-argument behind TRUE */
+            WIN32_UNSUPPORTED("CreateProcessW command line over %d UTF-8 "
+                              "bytes (refused)", (int)sizeof line);
+            g_lastError = ERROR_FILENAME_EXCED_RANGE;
+            return FALSE;
+        }
+    }
     else if (app) { if (!path_arg(app, line, sizeof line)) return FALSE; }
     else { g_lastError = ERROR_INVALID_PARAMETER; return FALSE; }
 
     char *argv[64];
-    int argc = cmdline_split(line, argv, 64);
+    int over = 0;
+    int argc = cmdline_split(line, argv, 64, &over);
+    if (over) {                   /* args past the cap used to vanish (#321) */
+        WIN32_UNSUPPORTED("CreateProcessW: more than 63 arguments (refused)");
+        g_lastError = ERROR_INVALID_PARAMETER;
+        return FALSE;
+    }
     if (argc == 0) { g_lastError = ERROR_INVALID_PARAMETER; return FALSE; }
 
     char prog[1024];
@@ -1046,16 +1324,32 @@ BOOL CreateProcessW(LPCWSTR app, LPWSTR cmdLine, void *psa, void *tsa,
     const char *cwdp = NULL;
     if (cwdW) { if (!path_arg(cwdW, cwd, sizeof cwd)) return FALSE; cwdp = cwd; }
 
-    struct __spawn_spec spec = { prog, argv, NULL, cwdp, acts, na, 0, 0, -1 };
+    char **envp = NULL;
+    if (env) {   /* lpEnvironment is REAL now (#321): the spec's envp field */
+        envp = env_from_block(env, (flags & CREATE_UNICODE_ENVIRONMENT) != 0);
+        if (!envp) { g_lastError = ERROR_NOT_ENOUGH_MEMORY; return FALSE; }
+    }
+
+    struct __spawn_spec spec = {
+        prog, argv, envp, cwdp, acts, na,
+        (flags & CREATE_NEW_PROCESS_GROUP) ? __SPAWN_SETPGID : 0u, 0, -1
+    };
     int pid = __spawn(&spec);
+    free(envp);
     if (pid < 0) { set_err_errno(); return FALSE; }
 
     K32Obj *o = h_alloc(HK_PROC);
     if (!o) return FALSE;                         /* child runs; handle lost */
     o->pid = pid;
     if (pi) {
+        /* hThread is the SAME waitable object (#321): the child has
+         * exactly one thread and it IS the process, so a wait on either
+         * handle answers at process exit. Refcounted, so the standard
+         * CloseHandle(hProcess); CloseHandle(hThread); pair frees once.
+         * (It used to be NULL — WaitForSingleObject(hThread) failed.) */
+        o->refs = 2;
         pi->hProcess = (HANDLE)o;
-        pi->hThread = NULL;
+        pi->hThread = (HANDLE)o;
         pi->dwProcessId = (DWORD)pid;
         pi->dwThreadId = (DWORD)pid;
     }

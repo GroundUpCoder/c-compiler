@@ -70,6 +70,23 @@ function sessionA() {
   check('fail-loud: LoadLibraryW refusal says so on stderr',
     /win32: unsupported LoadLibraryW/.test(out),
     (out.match(/win32: unsupported [^\n]*/g) || []).join(' | '));
+  /* #321: the honesty batch's deliberate divergence probes each leave a
+   * report — apply-or-report, never TRUE-and-silently-drop */
+  const reports = (out.match(/win32: unsupported [^\n]*/g) || []).join(' | ');
+  check('fail-loud: SetFileAttributesW dropped bits say so',
+    /win32: unsupported SetFileAttributesW attrs 0x2 dropped/.test(out), reports);
+  check('fail-loud: GMEM_MOVEABLE divergence says so',
+    /win32: unsupported GlobalAlloc GMEM_MOVEABLE/.test(out), reports);
+  check('fail-loud: VirtualAlloc MEM_RESERVE divergence says so',
+    /win32: unsupported VirtualAlloc MEM_RESERVE commits immediately/.test(out), reports);
+  check('fail-loud: VirtualAlloc flProtect divergence says so',
+    /win32: unsupported VirtualAlloc flProtect 0x2/.test(out), reports);
+  check('fail-loud: CreateProcessW arg cap says so',
+    /win32: unsupported CreateProcessW: more than 63 arguments/.test(out), reports);
+  check('fail-loud: CreateProcessW cmdline cap says so',
+    /win32: unsupported CreateProcessW command line over 1024/.test(out), reports);
+  check('fail-loud: CREATE_SUSPENDED drop says so',
+    /win32: unsupported CreateProcessW CREATE_SUSPENDED/.test(out), reports);
 
   /* twin leg 1: hush reads back what WriteFile wrote, byte-exact */
   const cut = out.split('==out\n')[1] || '';

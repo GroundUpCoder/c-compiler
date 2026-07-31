@@ -1118,6 +1118,7 @@ HBRUSH   GetSysColorBrush(int index);
 #define ERROR_FILE_TOO_LARGE       223
 #define ERROR_MORE_DATA            234
 #define ERROR_NO_MORE_ITEMS        259
+#define ERROR_FILE_INVALID         1006
 #define ERROR_CHILD_MUST_BE_VOLATILE 1021
 #define NO_ERROR                   0
 #define S_OK                       ((HRESULT)0)
@@ -1287,6 +1288,19 @@ typedef struct _OSVERSIONINFOW {
 #define OPEN_EXISTING 3
 #define OPEN_ALWAYS   4
 #define FILE_ATTRIBUTE_NORMAL 0x80
+#define FILE_ATTRIBUTE_TEMPORARY 0x00000100u
+/* dwFlagsAndAttributes flag half (#321: triaged apply-vs-report in
+ * CreateFileW — DELETE_ON_CLOSE / BACKUP_SEMANTICS / WRITE_THROUGH and
+ * READONLY-on-create are APPLIED; the pure cache hints are free to
+ * ignore; anything else reports loud). */
+#define FILE_FLAG_POSIX_SEMANTICS  0x01000000u
+#define FILE_FLAG_BACKUP_SEMANTICS 0x02000000u
+#define FILE_FLAG_DELETE_ON_CLOSE  0x04000000u
+#define FILE_FLAG_SEQUENTIAL_SCAN  0x08000000u
+#define FILE_FLAG_RANDOM_ACCESS    0x10000000u
+#define FILE_FLAG_NO_BUFFERING     0x20000000u
+#define FILE_FLAG_OVERLAPPED       0x40000000u
+#define FILE_FLAG_WRITE_THROUGH    0x80000000u
 #define FILE_BEGIN   0
 #define FILE_CURRENT 1
 #define FILE_END     2
@@ -1313,6 +1327,20 @@ DWORD  GetLastError(void);
 void   SetLastError(DWORD err);
 HANDLE CreateFileW(LPCWSTR name, DWORD access, DWORD share, void *sa,
                    DWORD creation, DWORD flagsAttrs, HANDLE template_);
+/* OVERLAPPED (#321): ReadFile/WriteFile honor the Offset pair on any
+ * file handle (positioned IO — the synchronous-handle semantics; the
+ * all-ones pair means append). Completion is ALWAYS synchronous:
+ * Internal/InternalHigh are filled at return, hEvent never signals
+ * (no async IO in this world — CreateFileW says so, loudly, when
+ * FILE_FLAG_OVERLAPPED is requested). */
+typedef struct _OVERLAPPED {
+    ULONG_PTR Internal, InternalHigh;
+    union {
+        struct { DWORD Offset, OffsetHigh; };
+        LPVOID Pointer;
+    };
+    HANDLE hEvent;
+} OVERLAPPED, *LPOVERLAPPED;
 BOOL   ReadFile(HANDLE h, LPVOID buf, DWORD n, LPDWORD read, void *ov);
 BOOL   WriteFile(HANDLE h, LPCVOID buf, DWORD n, LPDWORD written, void *ov);
 DWORD  SetFilePointer(HANDLE h, LONG dist, PLONG distHigh, DWORD method);
@@ -1517,6 +1545,14 @@ typedef struct _PROCESS_INFORMATION {
 #define CREATE_NEW_CONSOLE    0x00000010u
 #define CREATE_NO_WINDOW      0x08000000u
 #define NORMAL_PRIORITY_CLASS 0x00000020u
+/* dwCreationFlags kernel32 triages (#321): NEW_PROCESS_GROUP maps to the
+ * spawn spec's setpgid; UNICODE_ENVIRONMENT selects the lpEnvironment
+ * block's width (the block is REAL — it becomes the child's environ);
+ * SUSPENDED cannot be honored and reports loud. */
+#define CREATE_SUSPENDED           0x00000004u
+#define DETACHED_PROCESS           0x00000008u
+#define CREATE_NEW_PROCESS_GROUP   0x00000200u
+#define CREATE_UNICODE_ENVIRONMENT 0x00000400u
 BOOL CreateProcessW(LPCWSTR app, LPWSTR cmdLine, void *psa, void *tsa,
                     BOOL inheritHandles, DWORD flags, LPVOID env,
                     LPCWSTR cwd, STARTUPINFOW *si, PROCESS_INFORMATION *pi);

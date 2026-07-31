@@ -6,6 +6,12 @@
  * find, file mapping, memory, time, UTF-16<->UTF-8, the registry hive,
  * the profile shim, CreateProcess -> the real posix_spawn (a child
  * writes through a redirected std handle), and the clear-failure stubs.
+ * The #321 honesty batch adds: OVERLAPPED positioned IO, the attribute
+ * round-trip, READONLY-on-create, DELETE_ON_CLOSE, BACKUP_SEMANTICS
+ * directory opens, real section sizes (extend + view bounds), a waitable
+ * pi.hThread, a REAL lpEnvironment, loud cap refusals, and the loud
+ * GMEM_MOVEABLE / VirtualAlloc divergence probes (the e2e pins each
+ * stderr report line).
  *
  * The POSIX-twin identity legs: it writes /root/k32-out.txt through
  * WriteFile (the e2e diffs it against hush's cat) and reads back a file
@@ -111,6 +117,90 @@ static void test_files(void) {
     check("OPEN_ALWAYS existing on the RO volume opens (ERROR_ALREADY_EXISTS)",
           h != INVALID_HANDLE_VALUE && GetLastError() == ERROR_ALREADY_EXISTS);
     CloseHandle(h);
+
+    /* ---- #321: OVERLAPPED offsets are honored (positioned IO) ---- */
+    h = CreateFile(TEXT("/root/k32-ov.txt"), GENERIC_READ | GENERIC_WRITE, 0,
+                   NULL, CREATE_ALWAYS, 0, NULL);
+    WriteFile(h, "0123456789", 10, &wr, NULL);
+    OVERLAPPED ov;
+    memset(&ov, 0, sizeof ov);
+    ov.Offset = 5;
+    check("ReadFile honors the OVERLAPPED offset",
+          ReadFile(h, buf, 5, &rd, &ov) && rd == 5 &&
+          memcmp(buf, "56789", 5) == 0);
+    memset(&ov, 0, sizeof ov);
+    ov.Offset = 2;
+    check("WriteFile honors the OVERLAPPED offset",
+          WriteFile(h, "XY", 2, &wr, &ov) && wr == 2);
+    SetFilePointer(h, 0, NULL, FILE_BEGIN);
+    memset(buf, 0, sizeof buf);
+    check("the positioned write landed at 2",
+          ReadFile(h, buf, 10, &rd, NULL) && rd == 10 &&
+          memcmp(buf, "01XY456789", 10) == 0);
+    memset(&ov, 0, sizeof ov);
+    ov.Offset = 100;                 /* past EOF: the sync-handle answer */
+    check("OVERLAPPED read past EOF -> FALSE + ERROR_HANDLE_EOF",
+          !ReadFile(h, buf, 4, &rd, &ov) && rd == 0 &&
+          GetLastError() == ERROR_HANDLE_EOF);
+    memset(&ov, 0, sizeof ov);
+    ov.Offset = 0xFFFFFFFFu;         /* all-ones pair appends */
+    ov.OffsetHigh = 0xFFFFFFFFu;
+    check("OVERLAPPED all-ones offset appends",
+          WriteFile(h, "Z", 1, &wr, &ov) && GetFileSize(h, NULL) == 11);
+    CloseHandle(h);
+    DeleteFile(TEXT("/root/k32-ov.txt"));
+
+    /* ---- #321: the attribute round-trip (READONLY is real) ---- */
+    h = CreateFile(TEXT("/root/k32-attr.txt"), GENERIC_WRITE, 0, NULL,
+                   CREATE_ALWAYS, 0, NULL);
+    CloseHandle(h);
+    check("SetFileAttributes READONLY",
+          SetFileAttributes(TEXT("/root/k32-attr.txt"), FILE_ATTRIBUTE_READONLY));
+    check("GetFileAttributes reads READONLY back",
+          GetFileAttributes(TEXT("/root/k32-attr.txt")) & FILE_ATTRIBUTE_READONLY);
+    /* HIDDEN cannot be stored: still TRUE (READONLY half applied), but
+     * the drop must be LOUD (the e2e pins the stderr line) */
+    check("SetFileAttributes HIDDEN|READONLY applies READONLY, reports HIDDEN",
+          SetFileAttributes(TEXT("/root/k32-attr.txt"),
+                            FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_READONLY) &&
+          (GetFileAttributes(TEXT("/root/k32-attr.txt")) & FILE_ATTRIBUTE_READONLY));
+    check("SetFileAttributes NORMAL clears READONLY",
+          SetFileAttributes(TEXT("/root/k32-attr.txt"), FILE_ATTRIBUTE_NORMAL) &&
+          !(GetFileAttributes(TEXT("/root/k32-attr.txt")) & FILE_ATTRIBUTE_READONLY));
+    check("readonly file deletable after clearing",
+          DeleteFile(TEXT("/root/k32-attr.txt")));
+
+    /* ---- #321: READONLY-on-create sticks to the file, not the handle ---- */
+    h = CreateFile(TEXT("/root/k32-roc.txt"), GENERIC_WRITE, 0, NULL,
+                   CREATE_ALWAYS, FILE_ATTRIBUTE_READONLY, NULL);
+    check("creating handle of a READONLY create still writes",
+          h != INVALID_HANDLE_VALUE && WriteFile(h, "ro", 2, &wr, NULL));
+    CloseHandle(h);
+    check("READONLY-on-create is on the file",
+          GetFileAttributes(TEXT("/root/k32-roc.txt")) & FILE_ATTRIBUTE_READONLY);
+    SetFileAttributes(TEXT("/root/k32-roc.txt"), FILE_ATTRIBUTE_NORMAL);
+    DeleteFile(TEXT("/root/k32-roc.txt"));
+
+    /* ---- #321: FILE_FLAG_DELETE_ON_CLOSE really deletes ---- */
+    h = CreateFile(TEXT("/root/k32-doc.txt"), GENERIC_WRITE, 0, NULL,
+                   CREATE_ALWAYS, FILE_FLAG_DELETE_ON_CLOSE, NULL);
+    check("DELETE_ON_CLOSE handle opens", h != INVALID_HANDLE_VALUE);
+    WriteFile(h, "gone", 4, &wr, NULL);
+    CloseHandle(h);
+    check("DELETE_ON_CLOSE file is gone after CloseHandle",
+          GetFileAttributes(TEXT("/root/k32-doc.txt")) == INVALID_FILE_ATTRIBUTES);
+
+    /* ---- #321: directories need FILE_FLAG_BACKUP_SEMANTICS ---- */
+    h = CreateFile(TEXT("/root"), GENERIC_READ, FILE_SHARE_READ, NULL,
+                   OPEN_EXISTING, 0, NULL);
+    check("directory without BACKUP_SEMANTICS -> ERROR_ACCESS_DENIED",
+          h == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED);
+    h = CreateFile(TEXT("/root"), GENERIC_READ, FILE_SHARE_READ, NULL,
+                   OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    check("directory with BACKUP_SEMANTICS opens", h != INVALID_HANDLE_VALUE);
+    check("ReadFile on a directory handle refuses",
+          h == INVALID_HANDLE_VALUE || !ReadFile(h, buf, 4, &rd, NULL));
+    if (h != INVALID_HANDLE_VALUE) check("directory handle closes", CloseHandle(h));
 }
 
 static void test_dirs_find(void) {
@@ -248,6 +338,52 @@ static void test_mapping(void) {
           GetLastError() == ERROR_ACCESS_DENIED);
     check("UnmapViewOfFile", UnmapViewOfFile(view));
     CloseHandle(map);
+
+    /* ---- #321: the section size is real ---- */
+    /* a read-only section larger than the file cannot extend it */
+    h = CreateFile(TEXT("/root/k32-out.txt"), GENERIC_READ, 0, NULL,
+                   OPEN_EXISTING, 0, NULL);
+    check("PAGE_READONLY section past EOF refused",
+          CreateFileMappingW(h, NULL, PAGE_READONLY, 0, 4096, NULL) == NULL &&
+          GetLastError() == ERROR_NOT_ENOUGH_MEMORY);
+    CloseHandle(h);
+    /* a PAGE_READWRITE section EXTENDS the file at creation, views are
+     * bounded by the section, and a write view writes back */
+    h = CreateFile(TEXT("/root/k32-map.txt"), GENERIC_READ | GENERIC_WRITE,
+                   0, NULL, CREATE_ALWAYS, 0, NULL);
+    DWORD wr2 = 0;
+    WriteFile(h, "seed", 4, &wr2, NULL);
+    map = CreateFileMappingW(h, NULL, PAGE_READWRITE, 0, 16, NULL);
+    check("PAGE_READWRITE section creates", map != NULL);
+    check("the section size extended the file to 16",
+          GetFileSize(h, NULL) == 16);
+    check("a view beyond the section refuses",
+          MapViewOfFile(map, FILE_MAP_READ, 0, 0, 32) == NULL &&
+          GetLastError() == ERROR_INVALID_PARAMETER);
+    char *wv = (char *)MapViewOfFile(map, FILE_MAP_WRITE, 0, 0, 0);
+    check("write view spans the section, sees the seed + the NUL fill",
+          wv != NULL && memcmp(wv, "seed", 4) == 0 && wv[15] == 0);
+    if (wv) {
+        wv[15] = '!';
+        check("write view unmaps (write-back)", UnmapViewOfFile(wv));
+        char rb[16] = { 0 };
+        DWORD rd2 = 0;
+        SetFilePointer(h, 0, NULL, FILE_BEGIN);
+        check("the view's write landed in the file",
+              ReadFile(h, rb, 16, &rd2, NULL) && rd2 == 16 && rb[15] == '!');
+    }
+    CloseHandle(map);
+    CloseHandle(h);
+    DeleteFile(TEXT("/root/k32-map.txt"));
+    /* zero size on an empty file is the real API's refusal */
+    h = CreateFile(TEXT("/root/k32-empty.txt"), GENERIC_READ | GENERIC_WRITE,
+                   0, NULL, CREATE_ALWAYS, 0, NULL);
+    check("zero-size mapping of an empty file -> ERROR_FILE_INVALID",
+          CreateFileMappingW(h, NULL, PAGE_READONLY, 0, 0, NULL) == NULL &&
+          GetLastError() == ERROR_FILE_INVALID);
+    CloseHandle(h);
+    DeleteFile(TEXT("/root/k32-empty.txt"));
+
     /* single-module world: a NAMED GetModuleHandle is honest NULL (0211;
      * it used to hand a fake "loaded" handle for any DLL name) */
     check("GetModuleHandleW(name) -> NULL",
@@ -282,6 +418,19 @@ static void test_memory(void) {
     void *v = VirtualAlloc(NULL, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     check("VirtualAlloc zeroed", v != NULL && ((char *)v)[4095] == 0);
     check("VirtualFree", VirtualFree(v, 0, MEM_RELEASE));
+
+    /* ---- #321 honesty probes: the divergences are LOUD now (the e2e
+     * pins each stderr line). The calls still work — the point is that
+     * the ported-from-Windows semantics gap is announced, not silent. */
+    HGLOBAL mv = GlobalAlloc(GMEM_MOVEABLE, 16);
+    check("GlobalAlloc GMEM_MOVEABLE usable (served FIXED, loudly)",
+          mv != NULL && GlobalLock(mv) == (LPVOID)mv && GlobalFree(mv) == NULL);
+    void *rsv = VirtualAlloc(NULL, 4096, MEM_RESERVE, PAGE_READWRITE);
+    check("VirtualAlloc MEM_RESERVE commits (loudly)",
+          rsv != NULL && VirtualFree(rsv, 0, MEM_RELEASE));
+    void *ro = VirtualAlloc(NULL, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READONLY);
+    check("VirtualAlloc PAGE_READONLY serves RW (loudly)",
+          ro != NULL && VirtualFree(ro, 0, MEM_RELEASE));
 }
 
 static void test_strings(void) {
@@ -690,12 +839,20 @@ static void test_process(void) {
                             u"/root", &si, &pi);
     check("CreateProcess sh -c", ok);
     if (ok) {
+        /* #321: hThread is a real waitable pseudo-handle — wait on IT
+         * first (thread exit == process exit here), then the process
+         * handle still answers, then BOTH close (refcounted object). */
+        check("pi.hThread is real", pi.hThread != NULL);
+        check("WaitForSingleObject(hThread)",
+              WaitForSingleObject(pi.hThread, INFINITE) == WAIT_OBJECT_0);
         check("WaitForSingleObject", WaitForSingleObject(pi.hProcess, INFINITE) ==
                                      WAIT_OBJECT_0);
         DWORD code = 0;
         check("GetExitCodeProcess", GetExitCodeProcess(pi.hProcess, &code) &&
                                     code == 3);
-        CloseHandle(pi.hProcess);
+        check("CloseHandle(hThread)", CloseHandle(pi.hThread));
+        check("CloseHandle(hProcess) after the twin closed",
+              CloseHandle(pi.hProcess));
     }
     CloseHandle(out);
     HANDLE h = CreateFile(TEXT("/root/k32-child.txt"), GENERIC_READ, 0, NULL,
@@ -707,6 +864,83 @@ static void test_process(void) {
     check("child wrote through the redirected handle",
           strcmp(buf, "spawned-by-kernel32\n") == 0);
     DeleteFile(TEXT("/root/k32-child.txt"));
+
+    /* ---- #321: lpEnvironment is REAL (the spawn spec's envp) ---- */
+    out = CreateFile(TEXT("/root/k32-env.txt"), GENERIC_WRITE, 0, NULL,
+                     CREATE_ALWAYS, 0, NULL);
+    GetStartupInfo(&si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = out;
+    si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    WCHAR envCmd[] = u"sh -c \"echo env=$K32E:$K32UNSET\"";
+    /* the block REPLACES the environment: K32UNSET must come out empty */
+    WCHAR envBlk[] = u"K32E=veneer\0PATH=/usr/local/bin:/bin\0";
+    ok = CreateProcess(NULL, envCmd, NULL, NULL, TRUE,
+                       CREATE_UNICODE_ENVIRONMENT, envBlk, u"/root", &si, &pi);
+    check("CreateProcess with lpEnvironment", ok);
+    if (ok) {
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+    CloseHandle(out);
+    h = CreateFile(TEXT("/root/k32-env.txt"), GENERIC_READ, 0, NULL,
+                   OPEN_EXISTING, 0, NULL);
+    memset(buf, 0, sizeof buf);
+    rd = 0;
+    ReadFile(h, buf, sizeof buf - 1, &rd, NULL);
+    CloseHandle(h);
+    check("the child ran under the GIVEN environment",
+          strcmp(buf, "env=veneer:\n") == 0);
+    DeleteFile(TEXT("/root/k32-env.txt"));
+
+    /* ---- #321: the caps refuse LOUD instead of truncating silent ---- */
+    {
+        static WCHAR many[512];
+        int mp = 0;
+        const WCHAR *tr = u"true";
+        while (tr[mp]) { many[mp] = tr[mp]; mp++; }
+        for (int a = 0; a < 70 && mp < 500; a++) {   /* 70 one-char args */
+            many[mp++] = ' ';
+            many[mp++] = 'x';
+        }
+        many[mp] = 0;
+        PROCESS_INFORMATION pj;
+        check("more than 63 arguments refused",
+              !CreateProcess(NULL, many, NULL, NULL, FALSE, 0, NULL, NULL,
+                             &si, &pj) &&
+              GetLastError() == ERROR_INVALID_PARAMETER);
+    }
+    {
+        static WCHAR longln[1200];
+        int lp = 0;
+        const WCHAR *tr = u"true ";
+        while (tr[lp]) { longln[lp] = tr[lp]; lp++; }
+        while (lp < 1150) longln[lp++] = 'y';        /* one huge argument */
+        longln[lp] = 0;
+        PROCESS_INFORMATION pj;
+        check("a command line past 1024 UTF-8 bytes refused",
+              !CreateProcess(NULL, longln, NULL, NULL, FALSE, 0, NULL, NULL,
+                             &si, &pj) &&
+              GetLastError() == ERROR_FILENAME_EXCED_RANGE);
+    }
+    /* CREATE_SUSPENDED cannot be honored: the child runs immediately and
+     * the drop is LOUD (the e2e pins the stderr line) */
+    {
+        WCHAR sus[] = u"sh -c \"exit 0\"";
+        PROCESS_INFORMATION pj;
+        STARTUPINFO sj;
+        GetStartupInfo(&sj);
+        BOOL sok = CreateProcess(NULL, sus, NULL, NULL, FALSE,
+                                 CREATE_SUSPENDED, NULL, NULL, &sj, &pj);
+        check("CREATE_SUSPENDED spawns anyway (loudly)", sok);
+        if (sok) {
+            WaitForSingleObject(pj.hProcess, INFINITE);
+            CloseHandle(pj.hThread);
+            CloseHandle(pj.hProcess);
+        }
+    }
 
     check("GetCurrentProcessId", GetCurrentProcessId() > 0);
     WCHAR mod[MAX_PATH];
