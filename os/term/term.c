@@ -83,7 +83,7 @@ typedef struct {
                               lead cell holds the cp, its right neighbor
                               holds CP_WIDE_CONT (Phase D) */
     unsigned char fg, bg;  /* palette index: 0..15 ANSI, 16 defFg, 17 defBg */
-    unsigned char attr;    /* bit0 bold, bit1 reverse */
+    unsigned char attr;    /* bit0 bold, bit1 reverse, bit2 dim */
 } Cell;
 
 /* The continuation half of a wide pair. Renders as bg only (its colors
@@ -95,6 +95,7 @@ typedef struct {
 
 #define A_BOLD    1
 #define A_REVERSE 2
+#define A_DIM     4
 #define DEF_FG    16
 #define DEF_BG    17
 
@@ -535,7 +536,8 @@ static void do_sgr(void) {
         int p = params[i];
         if (p == 0) { cur_fg = DEF_FG; cur_bg = DEF_BG; cur_attr = 0; }
         else if (p == 1) cur_attr |= A_BOLD;
-        else if (p == 22) cur_attr &= ~A_BOLD;
+        else if (p == 2) cur_attr |= A_DIM;
+        else if (p == 22) cur_attr &= ~(A_BOLD | A_DIM);   /* ECMA-48: 22 = normal intensity */
         else if (p == 7) cur_attr |= A_REVERSE;
         else if (p == 27) cur_attr &= ~A_REVERSE;
         else if (p >= 30 && p <= 37) cur_fg = (unsigned char)(p - 30);
@@ -1673,23 +1675,28 @@ static uint32_t pack(const uint8_t *rgb) {
     return (uint32_t)rgb[0] | ((uint32_t)rgb[1] << 8) | ((uint32_t)rgb[2] << 16) | 0xFF000000u;
 }
 
-/* Resolve a cell's effective fg/bg (bold brighten, reverse, selection,
- * cursor inversion — the pre-Phase-D inline logic, shared by both render
- * passes). live_r is the cell's LIVE grid row (or -1 for a history line —
- * no cursor, no selection there); show_sel gates selection to the live view
- * (view_off==0), since sel_* coords are live-grid, not history (0273a). */
+/* Resolve a cell's effective fg/bg as packed pixels (bold brighten, dim
+ * halve, reverse, selection, cursor inversion — the pre-Phase-D inline
+ * logic, shared by both render passes). Dim (SGR 2) halves the resolved
+ * fg RGB BEFORE the swaps — the xterm order, so a reversed dim cell
+ * carries its faint color into the background patch. live_r is the cell's
+ * LIVE grid row (or -1 for a history line — no cursor, no selection
+ * there); show_sel gates selection to the live view (view_off==0), since
+ * sel_* coords are live-grid, not history (0273a). */
 static void cell_colors(const Cell *cell, int live_r, int c, int show_sel,
-                        int *fgo, int *bgo) {
+                        uint32_t *fgo, uint32_t *bgo) {
     int fg = cell->fg, bg = cell->bg;
     if (cell->attr & A_BOLD) { if (fg < 8) fg += 8; }
-    if (cell->attr & A_REVERSE) { int t = fg; fg = bg; bg = t; }
-    if (show_sel && live_r >= 0 && sel_has(live_r, c)) { int t = fg; fg = bg; bg = t; } /* 0090 */
+    uint32_t fgp = pack(PAL[fg]), bgp = pack(PAL[bg]);
+    if (cell->attr & A_DIM) fgp = ((fgp >> 1) & 0x007F7F7Fu) | 0xFF000000u;
+    if (cell->attr & A_REVERSE) { uint32_t t = fgp; fgp = bgp; bgp = t; }
+    if (show_sel && live_r >= 0 && sel_has(live_r, c)) { uint32_t t = fgp; fgp = bgp; bgp = t; } /* 0090 */
     /* The block cursor is the classic cell inversion; under/bar draw an
      * overlay strip after the glyph pass instead (todos/0273d). */
     if (cursor_style == CUR_BLOCK && cursor_visible && live_r >= 0 &&
-        live_r == cy && c == cx) { int t = fg; fg = bg; bg = t; }
-    *fgo = fg;
-    *bgo = bg;
+        live_r == cy && c == cx) { uint32_t t = fgp; fgp = bgp; bgp = t; }
+    *fgo = fgp;
+    *bgo = bgp;
 }
 
 /* Source cells for viewport row vr: a history line (sets *live_r = -1) when
@@ -1722,10 +1729,9 @@ static void render(void) {
          * spill (Phase D). */
         for (int c = 0; c < cols; c++) {
             const Cell *cell = c < slen ? &src[c] : &pad;
-            int fg, bg;
-            cell_colors(cell, live_r, c, show_sel, &fg, &bg);
+            uint32_t fgp, bgp;
+            cell_colors(cell, live_r, c, show_sel, &fgp, &bgp);
             int x0 = c * cell_w, y0 = GRID_Y + r * cell_h;
-            uint32_t bgp = pack(PAL[bg]);
             for (int y = y0; y < y0 + cell_h && y < sh; y++) {
                 uint32_t *rowp = &px[y * sw];
                 for (int x = x0; x < x0 + cell_w && x < sw; x++) rowp[x] = bgp;
@@ -1734,8 +1740,8 @@ static void render(void) {
         /* Pass 2: glyphs. */
         for (int c = 0; c < cols; c++) {
             const Cell *cell = c < slen ? &src[c] : &pad;
-            int fg, bg;
-            cell_colors(cell, live_r, c, show_sel, &fg, &bg);
+            uint32_t fgp, bgp;
+            cell_colors(cell, live_r, c, show_sel, &fgp, &bgp);
             int x0 = c * cell_w, y0 = GRID_Y + r * cell_h;
             if (cell->cp <= 32) continue;    /* space + defensive C0 +
                                                 CP_WIDE_CONT: bg only */
@@ -1746,8 +1752,8 @@ static void render(void) {
             int clip_w = cell_w * (wcwidth_cp(cell->cp) == 2 ? 2 : 1);
             int gx0 = x0 + g->left;
             int gy0 = y0 + ascent - g->top;
-            int fr = PAL[fg][0], fgg = PAL[fg][1], fb = PAL[fg][2];
-            int br = PAL[bg][0], bgg = PAL[bg][1], bb = PAL[bg][2];
+            int fr = fgp & 0xFF, fgg = (fgp >> 8) & 0xFF, fb = (fgp >> 16) & 0xFF;
+            int br = bgp & 0xFF, bgg = (bgp >> 8) & 0xFF, bb = (bgp >> 16) & 0xFF;
             for (int gy = 0; gy < g->h; gy++) {
                 int dy = gy0 + gy;
                 if (dy < y0 || dy >= y0 + cell_h || dy >= sh) continue;

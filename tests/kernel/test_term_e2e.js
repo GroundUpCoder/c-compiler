@@ -301,6 +301,57 @@ function sessionLess() {
   }
 }
 
+/* ---- session G: SGR 2 dim/faint (#304) ----
+ * gcode's chrome is CDIM (\033[2m). Dim halves the resolved fg RGB at draw
+ * time, so over the black default bg a dim glyph CORE is exactly half the
+ * theme fg (220 -> 110) while a normal core is exactly 220 — and no AA
+ * ramp of normal text can produce 110 (a*220/255 = 110 has no integer
+ * alpha), so exact-value pixel counts identify each population precisely.
+ * SGR 22 must clear dim (ECMA-48 normal intensity): the "BACK" tail types
+ * after \033[22m and feeds the bright count. */
+function sessionDim() {
+  const script = [
+    'term &',
+    'wmctl wait win term',                         // window spawn (0155)
+    'sleep 2',                                     // timing subject: hush banner + prompt freetype render (multi-frame)
+    'TSID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
+    keys("printf '\\033[2mdim dim dim dim\\033[22mBACK\\n'; echo done>/tmp/dimdone\r"),
+    'for i in $(seq 1 120); do [ -s /tmp/dimdone ] && break; sleep 0.05; done',  // typed printf ran (bounded poll, 0155)
+    'sleep 1.5',                                   // timing subject: freetype glyph render (multi-frame)
+    'wmctl shot $TSID /root/tdim.ppm && echo shotdim-ok',
+    keys('exit\r'),
+    'wmctl wait nowin term',                       // hush exits -> term reaps -> window gone (0155)
+    'echo ==done',
+    '',
+  ].join('\n');
+  const d = driveBoot(script, { image, timeout: 420000 });
+  check('dim shot written', d.stdout.includes('shotdim-ok'), d.stdout.slice(-300));
+
+  const b = driveBoot('cat /root/tdim.ppm\n', { image, timeout: 120000, maxBuffer: 16 * 1024 * 1024, encoding: null });
+  const head = b.stdout.toString('latin1', 0, 32);
+  const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
+  check('dim shot parses at 640x486', !!m && +m[1] === 640 && +m[2] === 486,
+    JSON.stringify(head.slice(0, 16)));
+  if (!m) return;
+  const w = +m[1], h = +m[2], data = m[0].length;
+  // Exact-value scan; the last 16 px columns are excluded so the 0273b
+  // scrollbar overlay blends can never alias into either population.
+  const countRGB = (v) => {
+    let n = 0;
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w - 16; x++) {
+        const i = data + (y * w + x) * 3;
+        if (b.stdout[i] === v && b.stdout[i + 1] === v && b.stdout[i + 2] === v) n++;
+      }
+    return n;
+  };
+  const dimCores = countRGB(110), brightCores = countRGB(220);
+  check('SGR 2 renders dim glyph cores at half theme fg (110,110,110)',
+    dimCores > 40, String(dimCores));
+  check('normal text (banner/prompt + post-SGR-22 tail) stays full fg (220,220,220)',
+    brightCores > 200, String(brightCores));
+}
+
 /* ---- session U: Unicode (gucOS Unicode Phase A — W1/W2/W5) ----
  * Input: typed keysyms ARE code points (2-byte é, 3-byte €, 4-byte astral
  * 😀) — term UTF-8-encodes them onto the pty, hush redirects them into a
@@ -963,7 +1014,7 @@ function sessionSettings() {
   // the kernel runner invokes with none, so full-estate behaviour is unchanged.
   const ALL = {
     term: sessionTerm, frames: sessionFrames, nested: sessionNested,
-    less: sessionLess, unicode: sessionUnicode, wide: sessionWide,
+    less: sessionLess, dim: sessionDim, unicode: sessionUnicode, wide: sessionWide,
     scrollback: sessionScrollback, scrollbar: sessionScrollbar,
     menubar: sessionMenubar, settings: sessionSettings,
   };
