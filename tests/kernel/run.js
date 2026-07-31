@@ -115,6 +115,7 @@ const tests = [
   ['test_listview_e2e.js', IMG], // 0370: SysListView32 + SysHeader32 + the AQM agent seam — lvtest message surface, rows/columns addressable by NAME (wmctl click/gettext/wait text, lvrow/hdcol tree lines), sort via header click, LISTBOX rows retrofitted as click targets
   ['test_kernel32_e2e.js', IMG], // 0059: win32 kernel32/advapi32/wide-CRT — in-OS selftest, POSIX-twin identity, registry persistence across boots
   ['test_win32_ports.js'],  // 0060: port corpus compile-check — controls still link clean, PORTS.md (the 0059+ backlog) current
+  ['test_win32rc.js'],      // #311: rc NOT semantics — bare/combined/#define-carried NOT clears bits from the assembled style, keyword defaults included
   ['test_winmine_e2e.js', IMG],  // 0068: winmine playable — sidecar resources, menu bar/popups, SURFACE_RESIZE, dialogs from templates, WM_TIMER, registry persistence
   ['test_calc_e2e.js', IMG],     // 0048: calc usable — WRES v2 template menus, owner-draw keypad, clipboard file + menu re-gray, keyboard translation, TrackPopupMenu agent path
   ['test_notepad_e2e.js', IMG],  // 0048: notepad usable — EDIT-around-a-file (EM_*HANDLE), comdlg32 file dialogs + find/replace protocol, status bar, MB_YESNOCANCEL, ShellExecuteW
