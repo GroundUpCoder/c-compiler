@@ -23886,6 +23886,7 @@ extern int errno;
 #define EAFNOSUPPORT 97
 #define EADDRINUSE   98
 #define EADDRNOTAVAIL 99
+#define ENETUNREACH  101
 #define ECONNABORTED 103
 #define ECONNRESET   104
 #define ENOBUFS      105
@@ -32140,6 +32141,7 @@ char *strerror(int errnum) {
   case EAFNOSUPPORT: return "Address family not supported by protocol";
   case EADDRINUSE: return "Address already in use";
   case EADDRNOTAVAIL: return "Cannot assign requested address";
+  case ENETUNREACH: return "Network is unreachable";
   case ECONNABORTED: return "Software caused connection abort";
   case ECONNRESET: return "Connection reset by peer";
   case ENOBUFS:    return "No buffer space available";

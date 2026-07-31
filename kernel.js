@@ -7331,7 +7331,12 @@ Kernel.prototype._httpStart = function (xfer, method, url, headerList, body, hea
     if (xfer.aborted || xfer.error !== null) return;
     if (xfer.hdrTimer) { clearTimeout(xfer.hdrTimer); xfer.hdrTimer = null; }
     xfer.error = (err && err.message) ? (err.message + '') : 'fetch failed';
-    xfer.errno = 'EIO';
+    // An embedder fetch WRAPPER may pin a POSIX errno NAME on its rejection
+    // (err.errno, a string) — the net-bridge wrapper tags a configured-but-
+    // unreachable bridge ENETUNREACH (ticket #349; ruling in NETWORK.md
+    // Tier 2.5). The typeof check keeps Node system errors out: their
+    // .errno is a NUMBER, and their EIO mapping is documented behavior.
+    xfer.errno = (err && typeof err.errno === 'string') ? err.errno : 'EIO';
     self._recheckSelects();
   });
 };

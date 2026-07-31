@@ -11751,7 +11751,9 @@ async function runModule({
     'ELOOP': 40,   // symlink cycle — realpathPhysical (todos/0263) is the first setter
     // Socket family (todos/0008) — numbers match <errno.h> in the libc.
     'ENOTSOCK': 88, 'EDESTADDRREQ': 89, 'EPROTOTYPE': 91, 'EPROTONOSUPPORT': 93,
-    'EOPNOTSUPP': 95, 'EAFNOSUPPORT': 97, 'EADDRINUSE': 98, 'ECONNABORTED': 103,
+    'EOPNOTSUPP': 95, 'EAFNOSUPPORT': 97, 'EADDRINUSE': 98,
+    'ENETUNREACH': 101,   // net bridge configured but unreachable (ticket #349)
+    'ECONNABORTED': 103,
     'ECONNRESET': 104, 'ENOBUFS': 105, 'EISCONN': 106, 'ENOTCONN': 107,
     'ETIMEDOUT': 110, 'ECONNREFUSED': 111
   };
