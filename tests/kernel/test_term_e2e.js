@@ -896,6 +896,9 @@ function sessionSelScroll() {
     ...clipRead('risclip'),
     keys('exit\r'),
     'wmctl wait nowin term',                       // hush exits -> term reaps -> window gone (0155)
+    // The image is SHARED across sessions: leave no scrollback=10 residue
+    // for scrollbar/menubar/settings (they assume the startup default).
+    'rm -f /root/.config/term',
     '',
   ].join('\n');
   const s2 = driveBoot(script2, { image, timeout: 420000 });
