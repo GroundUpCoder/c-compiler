@@ -875,6 +875,12 @@ static void select_icon(int i) {
 #define ICON_W  112
 #define ICON_H  96
 #define ICON_LBL_TOP 36                 /* art occupies the top ~34px */
+/* The hub wraps at HUB_COLS icons per row (#349 added the 9th applet —
+ * one row of 9 is 1088px, wider than an 800-1024px screen; the Win95 CPL
+ * folder wraps too). 6 columns = 728px, fits the smallest test screens. */
+#define HUB_COLS 6
+#define CELL_H  104                     /* ICON_H + row gap */
+#define HUB_ROWS ((APP_N + HUB_COLS - 1) / HUB_COLS)
 
 static int icon_index(HWND h) {
     for (int i = 0; i < APP_N; i++)
@@ -1079,17 +1085,23 @@ static LRESULT CALLBACK hub_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         for (int i = 0; i < APP_N; i++)
             g_icon[i] = CreateWindowEx(0, "CplIcon", APP_NAME[i],
                                        WS_CHILD | WS_VISIBLE,
-                                       8 + i * CELL_W, 8, ICON_W, ICON_H,
+                                       8 + (i % HUB_COLS) * CELL_W,
+                                       8 + (i / HUB_COLS) * CELL_H,
+                                       ICON_W, ICON_H,
                                        h, (HMENU)(200 + i), NULL, NULL);
         return 0;
     case WM_KEYDOWN:
-        /* one row today: Up/Down alias Left/Right until a second row */
+        /* grid nav: Left/Right walk the index (wrapping across rows the
+         * natural way), Up/Down move a whole row; select_icon's bounds
+         * check makes edge moves no-ops */
         switch (wp) {
-        case VK_LEFT: case VK_UP:    select_icon(g_sel - 1); return 0;
-        case VK_RIGHT: case VK_DOWN: select_icon(g_sel + 1); return 0;
-        case VK_HOME:                select_icon(0); return 0;
-        case VK_END:                 select_icon(APP_N - 1); return 0;
-        case VK_RETURN:              open_applet(g_sel); return 0;
+        case VK_LEFT:  select_icon(g_sel - 1); return 0;
+        case VK_RIGHT: select_icon(g_sel + 1); return 0;
+        case VK_UP:    select_icon(g_sel - HUB_COLS); return 0;
+        case VK_DOWN:  select_icon(g_sel + HUB_COLS); return 0;
+        case VK_HOME:  select_icon(0); return 0;
+        case VK_END:   select_icon(APP_N - 1); return 0;
+        case VK_RETURN: open_applet(g_sel); return 0;
         }
         return 0;
     case WM_CLOSE:                               /* hub close = quit the panel */
@@ -1133,10 +1145,12 @@ int main(int argc, char **argv) {
         wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
         RegisterClass(&wc);
     }
+    int hubCols = APP_N < HUB_COLS ? APP_N : HUB_COLS;
     g_hub = CreateWindowEx(0, "CtlPanel", "Control Panel",
                            WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                            CW_USEDEFAULT, CW_USEDEFAULT,
-                           16 + APP_N * CELL_W - (CELL_W - ICON_W), ICON_H + 16,
+                           16 + hubCols * CELL_W - (CELL_W - ICON_W),
+                           16 + HUB_ROWS * CELL_H - (CELL_H - ICON_H),
                            NULL, NULL, NULL, NULL);
     if (!g_hub) return 1;
     if (argc > 1) open_applet(applet_by_name(argv[1]));   /* todos/0091 */
