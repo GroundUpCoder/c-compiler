@@ -90,7 +90,11 @@ try {
   await page.waitForTimeout(300);            // timing subject: read_key resolves a lone ESC by timeout — air around it, no observable marker
   await page.keyboard.type(':wq\r');
   await waitOut('\x1b[?1049l');              // vi exited the alternate screen
-  await type('cat /tmp/b.txt && echo VI-CAT-OK');
+  // Split needle (#356, 0171 class): the typed command's ECHO must not
+  // contain the wait's needle, or the wait returns before cat's output
+  // exists and viSeg below captures a truncated transcript. hush glues
+  // the "" back together, so only the real `echo` output matches.
+  await type('cat /tmp/b.txt && echo VI-CAT""-OK');
   await waitOut('VI-CAT-OK');
   const viSeg = await page.evaluate(() => {
     const out = window.__osOut;
@@ -161,7 +165,10 @@ try {
   check('the retried boot reuses the image', /image: reused\/v4/.test(mode2), mode2);
   await page2.evaluate(() => window.__osVtSwitch(1));   // 0070: ready landed on VT2
   await page2.evaluate(() => { window.__osOut = ''; });
-  await page2.keyboard.type('echo GUARD-SHELL-OK\r');
+  // Split needle (#356): same 0171 class as the vi leg — if the tty's
+  // echo of the typed line renders the needle + newline, the wait is
+  // satisfied before the command runs and proves nothing.
+  await page2.keyboard.type('echo GUARD-SHELL""-OK\r');
   await page2.waitForFunction(
     () => window.__osOut.includes('GUARD-SHELL-OK\n'),
     { timeout: 30000, polling: 250 });
