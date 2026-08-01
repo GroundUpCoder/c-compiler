@@ -81,6 +81,7 @@ typedef struct {
     char id[33];
     char *path;
     char *last_stop;
+    char *response_model;   /* #348: last provider-returned model (owned) */
     long long seq, turn_index;
     usage total;
 } session;
@@ -1037,6 +1038,10 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
     cJSON_AddItemToObject(round, "raw_usage", ctx.raw_usage ? cJSON_Duplicate(ctx.raw_usage, 1) : cJSON_CreateObject());
     if (record_write(sess, round)) { ret = -1; goto done; }
     usage_add(turn_usage, &ctx.round_usage); usage_add(&sess->total, &ctx.round_usage);
+    /* #348: carry the returned model out to agent_loop's turn summary —
+     * ctx dies with this call. Only overwrite on a round that named one,
+     * so a later message_start-less error round keeps the last known. */
+    if (ctx.response_model) { free(sess->response_model); sess->response_model = strdup(ctx.response_model); }
     if (persist_message(sess, amsg, "model")) { ret = -1; goto done; }
 
     if (ctx.stop_reason && !strcmp(ctx.stop_reason, "tool_use")) {
@@ -1061,6 +1066,16 @@ done:
     free(ctx.stop_reason); free(ctx.message_id); free(ctx.response_model); cJSON_Delete(ctx.raw_usage);
     sb_free(&ctx.accum); sb_free(&ctx.raw); sb_free(&ctx.errmsg);
     return ret;
+}
+
+/* #348 display slice: the turn summary names the PROVIDER-RETURNED model,
+ * with the requested alias labelled only when it differs. A stream that
+ * never carried message_start leaves response_model unset — fall back to
+ * the requested name so the line stays well-formed. */
+static void format_model_line(char *buf, size_t cap, const char *response_model, const char *requested) {
+    const char *shown = (response_model && *response_model) ? response_model : requested;
+    if (strcmp(shown, requested)) snprintf(buf, cap, "%s (requested %s)", shown, requested);
+    else                          snprintf(buf, cap, "%s", shown);
 }
 
 /* run the agent loop for one user message already appended to `messages` */
@@ -1088,6 +1103,8 @@ static int agent_loop(config *cfg, session *sess, cJSON *messages, cJSON *tools)
     cJSON_AddStringToObject(end, "stop_reason", last > 0 ? "max_turns" : (sess->last_stop ? sess->last_stop : "")); cJSON_AddNumberToObject(end, "api_rounds", rounds);
     cJSON_AddItemToObject(end, "usage", usage_json(&turn)); cJSON_AddItemToObject(end, "session_usage", usage_json(&sess->total));
     if (record_write(sess, end)) return -1;
+    char mline[256]; format_model_line(mline, sizeof mline, sess->response_model, cfg->model);
+    fprintf(stderr, "%sturn model: %s%s\n", CDIM, mline, CRST);
     report_usage("turn", &turn, cfg->model); report_usage("session", &sess->total, cfg->model);
     /* 0 = done or interrupted (^C lands back at the prompt), -1 =
        recoverable turn error, -3 = auth (fatal — #305) */
@@ -1181,8 +1198,22 @@ static int self_test(void) {
     ok &= ctx.round_usage.input_tokens == 12 && ctx.round_usage.output_tokens == 7 &&
         ctx.round_usage.cache_creation_input_tokens == 3 && ctx.round_usage.cache_read_input_tokens == 4 &&
         json_count(ctx.raw_usage, "future_counter") == 9;
+    /* #348: the fixture's returned model must reach ctx, and — with the
+     * self-test cfg.model deliberately a DIFFERENT string — the turn line
+     * labels the requested alias as secondary. Equal / unset / empty
+     * response models print one well-formed name, never "(null)". */
+    ok &= ctx.response_model && !strcmp(ctx.response_model, "fixture-model");
+    char ml[128];
+    format_model_line(ml, sizeof ml, ctx.response_model, "requested-alias");
+    ok &= !strcmp(ml, "fixture-model (requested requested-alias)");
+    format_model_line(ml, sizeof ml, "same-model", "same-model");
+    ok &= !strcmp(ml, "same-model");
+    format_model_line(ml, sizeof ml, NULL, "requested-alias");
+    ok &= !strcmp(ml, "requested-alias");
+    format_model_line(ml, sizeof ml, "", "requested-alias");
+    ok &= !strcmp(ml, "requested-alias");
     char tmp[] = "/tmp/gcode-step2-test-XXXXXX"; if (!mkdtemp(tmp)) return 1; setenv("GCODE_STATE_DIR", tmp, 1);
-    config cfg = { "https://example.invalid", NULL, NULL, "fixture-model", "fixture-system", 123, 4, 0, 0 };
+    config cfg = { "https://example.invalid", NULL, NULL, "requested-alias", "fixture-system", 123, 4, 0, 0 };
     session s; cJSON *messages = cJSON_CreateArray();
     if (session_create(&s, &cfg)) return 1;
     struct stat logst; ok &= !stat(s.path, &logst) && (logst.st_mode & 0777) == 0600;
@@ -1198,7 +1229,7 @@ static int self_test(void) {
     ok &= cJSON_GetArraySize(loaded) == 2 && resumed.total.input_tokens == 12 && resumed.total.output_tokens == 7 && resumed.seq == 5 && resumed.turn_index == 1;
     FILE *f = fopen(path, "r"); const char *want[] = {"session_meta", "turn_start", "message", "api_round", "message"}; char *line = NULL; size_t cap = 0;
     for (int i = 0; i < 5; i++) { if (!f || getline(&line, &cap, f) < 0) { ok = 0; break; } cJSON *r = cJSON_Parse(line); ok &= r && !strcmp(jstr(r, "type"), want[i]) && json_count(r, "seq") == i + 1; cJSON_Delete(r); }
-    if (f) fclose(f); free(line); close(resumed.fd); free(resumed.path); free(resumed.last_stop); cJSON_Delete(loaded); free(path);
+    if (f) fclose(f); free(line); close(resumed.fd); free(resumed.path); free(resumed.last_stop); free(resumed.response_model); cJSON_Delete(loaded); free(path);
     for (int i = 0; i < MAX_BLOCKS; i++) { sb_free(&ctx.blocks[i].text); sb_free(&ctx.blocks[i].json); free(ctx.blocks[i].id); free(ctx.blocks[i].name); }
     free(ctx.stop_reason); free(ctx.message_id); free(ctx.response_model); cJSON_Delete(ctx.raw_usage); sb_free(&ctx.accum); sb_free(&ctx.raw); sb_free(&ctx.errmsg);
     fprintf(stderr, "gcode self-test: %s\n", ok ? "PASS" : "FAIL"); return ok ? 0 : 1;
@@ -1290,7 +1321,7 @@ int main(int argc, char **argv) {
             if (!n) continue;
             if (!strcmp(line, "/quit") || !strcmp(line, "/exit")) { session_end(&sess, "quit"); break; }
             if (!strcmp(line, "/clear")) {
-                session_end(&sess, "clear"); free(sess.path); free(sess.last_stop);
+                session_end(&sess, "clear"); free(sess.path); free(sess.last_stop); free(sess.response_model);
                 cJSON_Delete(messages); messages = cJSON_CreateArray();
                 if (persist && session_create(&sess, &cfg)) { cJSON_Delete(messages); cJSON_Delete(tools); curl_global_cleanup(); return 1; }
                 if (!persist) { memset(&sess, 0, sizeof sess); sess.fd = -1; make_session_id(sess.id); }
@@ -1307,7 +1338,7 @@ int main(int argc, char **argv) {
                replays exactly what the live session carries (#305). */
         }
     }
-    if (sess.fd >= 0) close(sess.fd); free(sess.path); free(sess.last_stop);
+    if (sess.fd >= 0) close(sess.fd); free(sess.path); free(sess.last_stop); free(sess.response_model);
     cJSON_Delete(messages); cJSON_Delete(tools);
     curl_global_cleanup();
     return 0;

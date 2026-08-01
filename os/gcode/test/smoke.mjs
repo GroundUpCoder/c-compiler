@@ -238,6 +238,38 @@ async function main() {
     check(stdout.includes('\x1b['), '#303: --color forces ANSI on a non-tty stdout');
   }
 
+  // ---- test 8 (#348 display slice): provider-returned model line ----
+  // The turn summary must name the model the PROVIDER returned, labelling
+  // the requested alias only when it differs; a stream with no model in
+  // message_start falls back to the requested name (never "(null)").
+  {
+    const withModel = (model, text) =>
+      sse('message_start', { message: { id: 'msg_m', model, usage: { input_tokens: 5, output_tokens: 0 } } })
+      + sse('content_block_start', { index: 0, content_block: { type: 'text', text: '' } })
+      + sse('content_block_delta', { index: 0, delta: { type: 'text_delta', text } })
+      + sse('content_block_stop', { index: 0 })
+      + sse('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } })
+      + sse('message_stop', {});
+
+    let srv = await startServer([withModel('actual-model-9', 'mapped')]);
+    let r = await runCodeBoth(srv.url, ['-p', 'hi', '--no-color', '--model', 'requested-alias']);
+    srv.close();
+    check(r.stderr.includes('turn model: actual-model-9 (requested requested-alias)'),
+      '#348: turn line shows the RETURNED model, requested alias secondary');
+
+    srv = await startServer([withModel('same-model', 'equal')]);
+    r = await runCodeBoth(srv.url, ['-p', 'hi', '--no-color', '--model', 'same-model']);
+    srv.close();
+    check(r.stderr.includes('turn model: same-model') && !r.stderr.includes('(requested'),
+      '#348: equal models print ONE name, not the same string twice');
+
+    srv = await startServer([textResponse('plain')]);
+    r = await runCodeBoth(srv.url, ['-p', 'hi', '--no-color', '--model', 'fallback-model']);
+    srv.close();
+    check(r.stderr.includes('turn model: fallback-model') && !r.stderr.includes('(null)'),
+      '#348: no model in message_start falls back to the requested name');
+  }
+
   console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILURE(S)`);
   process.exit(failures === 0 ? 0 : 1);
 }
