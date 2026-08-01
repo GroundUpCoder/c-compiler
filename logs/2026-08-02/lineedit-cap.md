@@ -70,3 +70,34 @@ hush re-gate: there is no hush-named suite — hush is exercised through the
 kernel e2es and the browser sweep (every `os-*.mjs` that types at a shell:
 os-boots, os-shell, os-term, os-gcode, …), so the standard full gate on this
 lane IS the hush re-gate.
+
+# #316 — persistent cross-run gcode history: DECLINED (decision recorded)
+
+`SAVEHISTORY` stays off. The three ticket questions, answered against the
+actual plumbing rather than in the abstract:
+
+1. **Location/persistence**: with `SAVEHISTORY` on, hush derives
+   `hist_file` from `$HISTFILE` (default `$HOME/.hush_history`,
+   `hush.c:10852-10861`); `/root` is on the writable root volume, so it
+   WOULD survive boots. But gcode's editor is
+   `new_line_input_t(LI_DO_HISTORY)` with **no `hist_file` set**
+   (`os/gcode/gcode.c:457`) — flipping the config gives gcode nothing.
+   Real delivery needs gcode-side plumbing (its own file, its own
+   location policy) on top of the config flip.
+2. **Sharing**: hush and gcode must NOT share a file (shell commands
+   leaking into model-prompt recall and vice versa — the ticket's own
+   read, confirmed). So the feature also implies a naming/config decision
+   per consumer, not just the flip.
+3. **Privacy**: persisting model prompts to disk by default, in a
+   browser-persisted OPFS image, is a real cost with no requester —
+   in-session recall (64 lines, hush parity) already covers the observed
+   UX need, verified by the leg-1b browser test.
+
+Against those three costs the feature has no demand, and enabling
+`SAVEHISTORY` turns on a materially larger second code path in lineedit
+(`load_history`/`save_history`/atomic-rename trim, `lineedit.c:1502-1629`)
+that would need its own evidence and gating. Declining is cheap to revisit:
+the config is one line, and ALL of the real work (file locations, sharing
+policy, gcode plumbing, tests) is unchanged whenever someone actually asks
+for cross-run history. Recorded in ticket #316 so it is not rediscovered a
+third time.
