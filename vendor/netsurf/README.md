@@ -327,7 +327,10 @@ test for those fixes.
 
 Also NOT patches, but gucOS-side additions made for this port:
 `pread`/`pwrite` and `EILSEQ` in the compiler's libc (used by
-`libnsutils/src/unistd.c` and `utils/utf8.c` + `shim/iconv.c`).
+`libnsutils/src/unistd.c` and `utils/utf8.c` + `shim/iconv.c`), and
+`gucos/httpfetch.c` — the http/https scheme fetcher (#182, see
+"Deliberate exclusions" above), a plain frontend TU registered through
+the exported `fetcher_add()` API with zero vendored-tree edits.
 
 ## Committed generated sources
 
@@ -434,8 +437,21 @@ itself moved — a `patchcheck.mjs --write-manifest` refresh of
 
 ## Deliberate exclusions
 
-- **curl / networking** — `file:`/`data:`/`resource:`/`about:` fetchers
-  only; `fetch.c`'s registration was already properly `#ifdef WITH_CURL`.
+- **curl** — `fetch.c`'s registration was already properly `#ifdef
+  WITH_CURL`, and upstream's `fetchers/curl.c` stays out permanently:
+  its `curl_multi`/socket/SSL-ctx surface is meaningless over the
+  platform fetch stack (evaluated and rejected, ticket #182).
+  **Networking itself is NOT excluded any more**: `gucos/httpfetch.c`
+  (#182) registers native `http:`/`https:` fetchers over the kernel HTTP
+  transport (`__http_open`/`__http_status`/`read`/`close`), registered
+  from `gucos/main.c` after `netsurf_init()` — no core patch.  GET +
+  urlencoded POST; redirects render the FINAL page via the #359
+  `x-guc-final-url` line (`FETCH_REDIRECT` → llcache refetch).  v1
+  descopes: multipart POST is a loud FETCH_ERROR (ticket #360,
+  LIABILITIES L72), cookies cannot work in browser direct mode (fetch
+  forbidden-header rules), no FETCH_AUTH (401 renders as content), no
+  cert introspection (platform TLS).  Test:
+  `tests/kernel/test_netsurf_http_e2e.js`.
 - **libnslog** (flex/bison; `NETSURF_USE_NSLOG := AUTO` off is a
   supported config), **libnspsl** (cookie/networking), **libutf8proc**
   (IDN).

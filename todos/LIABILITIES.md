@@ -359,4 +359,10 @@ thing this file exists to kill.
 - file: os/win32/user32.c
 - anchor:                                   (self-bottom-parking); SBARS_SIZEGRIP is W5
 
+### L72 — the gucOS http fetcher refuses multipart POST (loud FETCH_ERROR): the todos/0433 file gadget builds a correct fetch_multipart_data list whose bytes still cannot reach a server
+- ticket: #360
+- file: vendor/netsurf/gucos/httpfetch.c
+- anchor: 			"multipart POST is not supported yet (todos/0433)");
+- provenance: 0433
+
 <!-- END ENTRIES -->

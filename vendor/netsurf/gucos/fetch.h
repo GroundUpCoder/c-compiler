@@ -14,6 +14,12 @@
 #ifndef NETSURF_GUCOS_FETCH_H
 #define NETSURF_GUCOS_FETCH_H
 
+#include "utils/errors.h"
+
 extern struct gui_fetch_table *gucos_fetch_table;
+
+/* httpfetch.c (#182): the http/https scheme fetcher over the kernel HTTP
+ * transport; called from main.c right after netsurf_init(). */
+nserror gucos_http_fetcher_register(void);
 
 #endif

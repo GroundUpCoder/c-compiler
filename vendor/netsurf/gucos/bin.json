@@ -32,6 +32,7 @@
   "fetch.c",
   "font.c",
   "gui.c",
+  "httpfetch.c",
   "main.c",
   "plot.c",
   "schedule.c"

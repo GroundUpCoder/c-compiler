@@ -432,6 +432,16 @@ int main(int argc, char **argv)
 		die("NetSurf failed to initialise");
 	}
 
+	/* http/https over the kernel HTTP transport (#182, httpfetch.c).
+	 * fetcher_add is a plain table insert, so registering here is
+	 * byte-equivalent to a fetcher_init() hunk — without patching the
+	 * vendored core.  Must precede the first browser_window_create
+	 * (the initial URL may be http). */
+	ret = gucos_http_fetcher_register();
+	if (ret != NSERROR_OK) {
+		die("http fetcher failed to register");
+	}
+
 	filepath_sfinddef(respaths, buf, "mime.types", "/etc/");
 	monkey_fetch_filetype_init(buf);
 
