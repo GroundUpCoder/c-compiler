@@ -263,8 +263,11 @@ export async function openOsSession(opts = {}) {
     // auto-select macos and break the GUI+arrow snap legs). A test that wants
     // the auto-detect exercises it with hostKeys: 'mac'.
     hostKeys = 'off',
+    // Extra os.html query params, e.g. 'spawntrace=1' (ticket #350).
+    urlQuery = '',
   } = opts;
-  const url = osUrl(port, hostKeys);
+  const base = osUrl(port, hostKeys);
+  const url = urlQuery ? base + (base.includes('?') ? '&' : '?') + urlQuery : base;
   const server = startServer(port, { onLog: onServerLog, serveArgs });
   const browser = await launchBrowser(browserArgs, browserOpts);
   const { check, state } = makeCheck({ stringify });

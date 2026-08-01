@@ -157,6 +157,27 @@ var HOST_PLATFORM = (function () {
   } catch (e) { return 'other'; }
 })();
 
+// Spawn trace (ticket #350): a ?spawntrace=1 page param rides this worker's
+// URL (the hostkeys pattern — createWorker runs long before any postMessage
+// seam could deliver a flag race-free). Default OFF; when off, the only
+// residual cost anywhere is two clock reads at the top of process-worker.js.
+var SPAWN_TRACE = (function () {
+  try {
+    return new URLSearchParams(self.location.search).get('spawntrace') === '1';
+  } catch (e) { return false; }
+})();
+var TRACE_PENDING = Object.create(null);   // pid -> kernel-side stamps
+function traceNow() { return performance.timeOrigin + performance.now(); }
+// Merge the worker's phase stamps with ours and hand the page one flat
+// record; the page merges fragments by pid onto window.__spawnTraces
+// (agent probe). Pending entries are kept for the session — trace mode is
+// a profiling session, and a fragment can arrive per event (instantiate,
+// first output, exit) for one pid.
+function traceDone(m) {
+  var k = TRACE_PENDING[m.pid] || null;
+  post({ type: 'spawn-trace', trace: Object.assign({ pid: m.pid }, k || {}, m.tr) });
+}
+
 self.onmessage = function (e) {
   var m = e.data;
   if (!m) return;
@@ -387,10 +408,13 @@ function displaySet(zoom) {
 }
 
 function createWorker(procSpec) {
+  var k0 = SPAWN_TRACE ? traceNow() : 0;   // spawn trace (#350): before ctor
   var w = new Worker('process-worker.js');
+  var k1 = SPAWN_TRACE ? traceNow() : 0;   // ctor returned (async spin-up!)
   var exitCb = null;
   w.postMessage({
     type: 'boot',
+    spawnTrace: SPAWN_TRACE,
     pid: procSpec.pid, ppid: procSpec.ppid, pgid: procSpec.pgid,
     path: procSpec.path, argv: procSpec.argv, envp: procSpec.envp,
     cwd: procSpec.cwd, actions: procSpec.actions, flags: procSpec.flags,
@@ -404,9 +428,27 @@ function createWorker(procSpec) {
     // SPSC pipe rings (todos/0181): [{fd, end, sab}] — the SABs share.
     pipeRings: procSpec.pipeRings || null,
   });
+  if (SPAWN_TRACE) {
+    TRACE_PENDING[procSpec.pid] = {
+      path: procSpec.path,
+      argv0: (procSpec.argv && procSpec.argv[0]) || '',
+      hadModule: !!procSpec.module,
+      k0: k0,               // kernel thread: before new Worker
+      k1: k1,               // kernel thread: ctor returned
+      k2: traceNow(),       // kernel thread: boot message posted
+    };
+  }
   return {
     postMessage: function (m) { w.postMessage(m); },
-    onMessage: function (fn) { w.onmessage = function (ev) { fn(ev.data); }; },
+    onMessage: function (fn) {
+      w.onmessage = function (ev) {
+        var d = ev.data;
+        // Spawn trace (#350): consume the trace record here — it must not
+        // reach kernel.js's process-message handler.
+        if (SPAWN_TRACE && d && d.type === 'spawn-trace') { traceDone(d); return; }
+        fn(d);
+      };
+    },
     // Browsers have no worker 'exit' event; an uncaught error in the worker
     // is the observable equivalent of silent death (kernel treats it as
     // termsig SIGSEGV when no 'exited'/'crashed' message preceded it).

@@ -434,7 +434,14 @@ var hostKeys = (function () {
     return /mac|iphone|ipad|ipod/i.test(plat) ? 'mac' : 'other';
   } catch (e) { return 'other'; }
 })();
-var kernel = new Worker('kernel-worker.js?hostkeys=' + encodeURIComponent(hostKeys));
+// Spawn trace (ticket #350): a ?spawntrace=1 page param forwards on the
+// worker URL (the hostkeys pattern) — records land on window.__spawnTraces.
+var spawnTrace = (function () {
+  try { return new URLSearchParams(location.search).get('spawntrace') === '1'; }
+  catch (e) { return false; }
+})();
+var kernel = new Worker('kernel-worker.js?hostkeys=' + encodeURIComponent(hostKeys) +
+                        (spawnTrace ? '&spawntrace=1' : ''));
 
 // ALL tty input funnels through vt1Input so the key strip's sticky Ctrl
 // (todos/0212, below) composes with the soft keyboard too.
@@ -1415,6 +1422,16 @@ kernel.onmessage = function (e) {
       window.__osLogs.push(m.msg);
       if (window.__osLogs.length > 200) window.__osLogs.shift();
       break;
+    // Spawn trace (ticket #350, ?spawntrace=1 only): per-spawn phase stamps
+    // from kernel-worker/process-worker — agent probe, never rendered.
+    // Fragments merge by pid (instantiate / first-output / exit events).
+    case 'spawn-trace': {
+      var sta = (window.__spawnTraces = window.__spawnTraces || []);
+      var st = m.trace, sti = sta.length - 1;
+      for (; sti >= 0; sti--) if (sta[sti].pid === st.pid) { Object.assign(sta[sti], st); break; }
+      if (sti < 0) sta.push(st);
+      break;
+    }
     case 'boot-error':
       status('boot failed', true);
       window.__osState = 'error';
