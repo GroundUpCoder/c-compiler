@@ -146,6 +146,12 @@ async function main() {
     check(second.messages.some((m) => m.role === 'assistant' && Array.isArray(m.content)
       && m.content.some((b) => b.type === 'tool_use' && b.name === 'write_file')),
       'assistant tool_use block echoed back in history');
+    // #348: `messages` is attached to the request BY REFERENCE, so record
+    // metadata (model/stop_reason/usage) must never land on the message
+    // object itself — the echoed assistant turn carries ONLY role+content.
+    const echoed = second.messages.filter((m) => m.role === 'assistant');
+    check(echoed.length > 0 && echoed.every((m) => Object.keys(m).sort().join(',') === 'content,role'),
+      '#348: history assistant messages carry only role+content (no record metadata in the payload)');
     fs.rmSync(target, { force: true });
   }
 

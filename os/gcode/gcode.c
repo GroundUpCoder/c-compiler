@@ -83,6 +83,7 @@ typedef struct {
     char *last_stop;
     char *response_model;   /* #348: last provider-returned model (owned) */
     long long seq, turn_index;
+    long long round_index;  /* #348: API round within the current turn (1-based) */
     usage total;
 } session;
 
@@ -920,6 +921,56 @@ static size_t write_cb(char *ptr, size_t size, size_t nmemb, void *ud) {
     return n;
 }
 
+/* ---- #348 record contract ---------------------------------------------
+ * The metadata lives on the RECORD, never on the message object: `messages`
+ * is attached to the API request body BY REFERENCE (do_turn), so any key
+ * added to a message ships to the provider on the next round. These two
+ * writers take the stream_ctx and attach round metadata JSONL-side only.
+ * Records link by turn identity — turn_id ("<session_id>-<turn_index>",
+ * matching turn_start/turn_end) plus the 1-based round within the turn —
+ * so no adjacency inference is needed. Fields are additive; schema stays
+ * at LOG_SCHEMA_VERSION 1 (the resume reader ignores unknown fields and
+ * tolerates absent ones, so old and new logs stay mutually readable). */
+static void turn_id_str(const session *s, char out[80]) {
+    snprintf(out, 80, "%s-%lld", s->id, s->turn_index);
+}
+
+static int persist_api_round(session *s, const stream_ctx *ctx, const char *request_model) {
+    cJSON *r = record_new(s, "api_round");
+    char tid[80]; turn_id_str(s, tid);
+    cJSON_AddStringToObject(r, "turn_id", tid);
+    cJSON_AddNumberToObject(r, "round", (double)s->round_index);
+    cJSON_AddStringToObject(r, "request_model", request_model);
+    cJSON_AddStringToObject(r, "response_model", ctx->response_model ? ctx->response_model : "");
+    cJSON_AddStringToObject(r, "provider_message_id", ctx->message_id ? ctx->message_id : "");
+    cJSON_AddStringToObject(r, "stop_reason", ctx->stop_reason ? ctx->stop_reason : "");
+    cJSON_AddItemToObject(r, "usage", usage_json(&ctx->round_usage));
+    cJSON_AddItemToObject(r, "raw_usage", ctx->raw_usage ? cJSON_Duplicate(ctx->raw_usage, 1) : cJSON_CreateObject());
+    return record_write(s, r);
+}
+
+/* The persisted assistant message is self-contained: content plus the
+ * provider-returned model, request model, provider_message_id, stop_reason,
+ * normalized usage and raw_usage, and turn identity — intelligible on its
+ * own without joining the adjacent api_round line. */
+static int persist_assistant_message(session *s, cJSON *m, const stream_ctx *ctx, const char *request_model) {
+    cJSON *r = record_new(s, "message");
+    cJSON *role = cJSON_GetObjectItem(m, "role"), *content = cJSON_GetObjectItem(m, "content");
+    cJSON_AddStringToObject(r, "role", cJSON_IsString(role) ? role->valuestring : "assistant");
+    cJSON_AddStringToObject(r, "source", "model");
+    char tid[80]; turn_id_str(s, tid);
+    cJSON_AddStringToObject(r, "turn_id", tid);
+    cJSON_AddNumberToObject(r, "round", (double)s->round_index);
+    cJSON_AddStringToObject(r, "model", ctx->response_model ? ctx->response_model : "");
+    cJSON_AddStringToObject(r, "request_model", request_model);
+    cJSON_AddStringToObject(r, "provider_message_id", ctx->message_id ? ctx->message_id : "");
+    cJSON_AddStringToObject(r, "stop_reason", ctx->stop_reason ? ctx->stop_reason : "");
+    cJSON_AddItemToObject(r, "usage", usage_json(&ctx->round_usage));
+    cJSON_AddItemToObject(r, "raw_usage", ctx->raw_usage ? cJSON_Duplicate(ctx->raw_usage, 1) : cJSON_CreateObject());
+    cJSON_AddItemToObject(r, "content", cJSON_Duplicate(content, 1));
+    return record_write(s, r);
+}
+
 /* ---- one API round-trip ----------------------------------------------- */
 /* Returns 0 to stop, 1 to continue (tool_use). Errors: -1 recoverable
    (transport, HTTP != 200, API error event), -2 interrupted (^C via the
@@ -1029,20 +1080,14 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
     cJSON_AddItemToObject(amsg, "content", acontent);
     cJSON_AddItemToArray(messages, amsg);
 
-    cJSON *round = record_new(sess, "api_round");
-    cJSON_AddStringToObject(round, "request_model", cfg->model);
-    cJSON_AddStringToObject(round, "response_model", ctx.response_model ? ctx.response_model : "");
-    cJSON_AddStringToObject(round, "provider_message_id", ctx.message_id ? ctx.message_id : "");
-    cJSON_AddStringToObject(round, "stop_reason", ctx.stop_reason ? ctx.stop_reason : "");
-    cJSON_AddItemToObject(round, "usage", usage_json(&ctx.round_usage));
-    cJSON_AddItemToObject(round, "raw_usage", ctx.raw_usage ? cJSON_Duplicate(ctx.raw_usage, 1) : cJSON_CreateObject());
-    if (record_write(sess, round)) { ret = -1; goto done; }
+    sess->round_index++;
+    if (persist_api_round(sess, &ctx, cfg->model)) { ret = -1; goto done; }
     usage_add(turn_usage, &ctx.round_usage); usage_add(&sess->total, &ctx.round_usage);
     /* #348: carry the returned model out to agent_loop's turn summary —
      * ctx dies with this call. Only overwrite on a round that named one,
      * so a later message_start-less error round keeps the last known. */
     if (ctx.response_model) { free(sess->response_model); sess->response_model = strdup(ctx.response_model); }
-    if (persist_message(sess, amsg, "model")) { ret = -1; goto done; }
+    if (persist_assistant_message(sess, amsg, &ctx, cfg->model)) { ret = -1; goto done; }
 
     if (ctx.stop_reason && !strcmp(ctx.stop_reason, "tool_use")) {
         cJSON *umsg = cJSON_CreateObject();
@@ -1120,7 +1165,8 @@ static cJSON *make_user_text(const char *text) {
 }
 
 static int append_user_text(session *s, cJSON *messages, const char *text) {
-    s->turn_index++; char turn_id[80]; snprintf(turn_id, sizeof turn_id, "%s-%lld", s->id, s->turn_index);
+    s->turn_index++; s->round_index = 0;
+    char turn_id[80]; snprintf(turn_id, sizeof turn_id, "%s-%lld", s->id, s->turn_index);
     cJSON *start = record_new(s, "turn_start"); cJSON_AddStringToObject(start, "turn_id", turn_id); cJSON_AddNumberToObject(start, "turn_index", (double)s->turn_index);
     if (record_write(s, start)) return -1;
     cJSON *m = make_user_text(text); cJSON_AddItemToArray(messages, m); return persist_message(s, m, "human");
@@ -1218,17 +1264,37 @@ static int self_test(void) {
     if (session_create(&s, &cfg)) return 1;
     struct stat logst; ok &= !stat(s.path, &logst) && (logst.st_mode & 0777) == 0600;
     ok &= append_user_text(&s, messages, "hello") == 0;
-    cJSON *round = record_new(&s, "api_round"); cJSON_AddStringToObject(round, "request_model", cfg.model); cJSON_AddStringToObject(round, "response_model", "fixture-model");
-    cJSON_AddStringToObject(round, "provider_message_id", "msg_fixture"); cJSON_AddStringToObject(round, "stop_reason", "end_turn");
-    cJSON_AddItemToObject(round, "usage", usage_json(&ctx.round_usage)); cJSON_AddItemToObject(round, "raw_usage", cJSON_Duplicate(ctx.raw_usage, 1)); ok &= record_write(&s, round) == 0;
+    /* #348: write the round + assistant records through the REAL writers,
+     * fed by the parsed fixture ctx — the round-trip below then proves the
+     * persisted assistant message is self-contained. */
+    s.round_index++;
+    ok &= persist_api_round(&s, &ctx, cfg.model) == 0;
     cJSON *assistant = cJSON_CreateObject(), *content = cJSON_CreateArray(), *text = cJSON_CreateObject(); cJSON_AddStringToObject(assistant, "role", "assistant");
     cJSON_AddStringToObject(text, "type", "text"); cJSON_AddStringToObject(text, "text", "fixture"); cJSON_AddItemToArray(content, text); cJSON_AddItemToObject(assistant, "content", content); cJSON_AddItemToArray(messages, assistant);
-    ok &= persist_message(&s, assistant, "model") == 0; char *path = strdup(s.path); close(s.fd); s.fd = -1; cJSON_Delete(messages);
+    ok &= persist_assistant_message(&s, assistant, &ctx, cfg.model) == 0; char *path = strdup(s.path); close(s.fd); s.fd = -1; cJSON_Delete(messages);
     int partial = open(path, O_WRONLY | O_APPEND); if (partial >= 0) { ok &= write(partial, "{crash", 6) == 6; close(partial); } else ok = 0;
     cJSON *loaded = cJSON_CreateArray(); session resumed; ok &= session_resume(&resumed, &cfg, loaded, path) == 0;
     ok &= cJSON_GetArraySize(loaded) == 2 && resumed.total.input_tokens == 12 && resumed.total.output_tokens == 7 && resumed.seq == 5 && resumed.turn_index == 1;
     FILE *f = fopen(path, "r"); const char *want[] = {"session_meta", "turn_start", "message", "api_round", "message"}; char *line = NULL; size_t cap = 0;
-    for (int i = 0; i < 5; i++) { if (!f || getline(&line, &cap, f) < 0) { ok = 0; break; } cJSON *r = cJSON_Parse(line); ok &= r && !strcmp(jstr(r, "type"), want[i]) && json_count(r, "seq") == i + 1; cJSON_Delete(r); }
+    char exp_tid[80]; snprintf(exp_tid, sizeof exp_tid, "%s-1", s.id);
+    for (int i = 0; i < 5; i++) {
+        if (!f || getline(&line, &cap, f) < 0) { ok = 0; break; }
+        cJSON *r = cJSON_Parse(line);
+        ok &= r && !strcmp(jstr(r, "type"), want[i]) && json_count(r, "seq") == i + 1;
+        if (r && i == 3) {   /* api_round: linked by turn identity, raw_usage round-trips */
+            ok &= !strcmp(jstr(r, "turn_id"), exp_tid) && json_count(r, "round") == 1;
+            ok &= !strcmp(jstr(r, "response_model"), "fixture-model");
+            ok &= json_count(cJSON_GetObjectItem(r, "raw_usage"), "future_counter") == 9;
+        }
+        if (r && i == 4) {   /* assistant message: self-contained, no adjacency join */
+            ok &= !strcmp(jstr(r, "model"), "fixture-model") && !strcmp(jstr(r, "request_model"), "requested-alias");
+            ok &= !strcmp(jstr(r, "provider_message_id"), "msg_fixture") && !strcmp(jstr(r, "stop_reason"), "end_turn");
+            ok &= !strcmp(jstr(r, "turn_id"), exp_tid) && json_count(r, "round") == 1;
+            ok &= json_count(cJSON_GetObjectItem(r, "usage"), "input_tokens") == 12;
+            ok &= json_count(cJSON_GetObjectItem(r, "raw_usage"), "future_counter") == 9;
+        }
+        cJSON_Delete(r);
+    }
     if (f) fclose(f); free(line); close(resumed.fd); free(resumed.path); free(resumed.last_stop); free(resumed.response_model); cJSON_Delete(loaded); free(path);
     for (int i = 0; i < MAX_BLOCKS; i++) { sb_free(&ctx.blocks[i].text); sb_free(&ctx.blocks[i].json); free(ctx.blocks[i].id); free(ctx.blocks[i].name); }
     free(ctx.stop_reason); free(ctx.message_id); free(ctx.response_model); cJSON_Delete(ctx.raw_usage); sb_free(&ctx.accum); sb_free(&ctx.raw); sb_free(&ctx.errmsg);
