@@ -1,0 +1,16 @@
+{
+  "name": "libjpeg",
+  "version": "9f",
+  "summary": "IJG libjpeg source library — decode/encode JPEG with the in-OS cc",
+  "files": {
+    "include/jpeglib.h":  { "bin": "vendor/libjpeg/jpeglib.h" },
+    "include/jmorecfg.h": { "bin": "vendor/libjpeg/jmorecfg.h" },
+    "include/jconfig.h":  { "bin": "vendor/libjpeg/jconfig.h" },
+    "include/jerror.h":   { "bin": "vendor/libjpeg/jerror.h" },
+    "src/jpeg":           { "tree": "vendor/libjpeg", "exclude": ["testdata", "test_main.c", "bin.json", "lib.json", "LICENSE"] }
+  },
+  "srclib": {
+    "include": [ "include" ],
+    "src": { "jpeg": "src/jpeg" }
+  }
+}

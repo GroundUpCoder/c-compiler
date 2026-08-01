@@ -14,6 +14,7 @@
   "-DWITH_BMP",
   "-DWITH_GIF",
   "-DWITH_PNG",
+  "-DWITH_JPEG",
   "-DNETSURF_BUILTIN_LOG_FILTER=\"level:WARNING\"",
   "-DNETSURF_BUILTIN_VERBOSE_FILTER=\"level:VERBOSE\"",
   "-DDUK_OPT_HAVE_CUSTOM_H"
@@ -114,6 +115,7 @@
   "netsurf/content/handlers/image/ico.c",
   "netsurf/content/handlers/image/gif.c",
   "netsurf/content/handlers/image/png.c",
+  "netsurf/content/handlers/image/jpeg.c",
   "netsurf/content/handlers/javascript/content.c",
   "netsurf/content/handlers/javascript/fetcher.c",
   "netsurf/content/handlers/javascript/duktape/dukky.c",

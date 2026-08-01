@@ -12,7 +12,8 @@
   "libnsgif/lib.json",
   "libnsbmp/lib.json",
   "libnsutils/lib.json",
-  "../libpng/lib.json"
+  "../libpng/lib.json",
+  "../libjpeg/lib.json"
  ],
  "compilerArgs": [
   "-Dnsmonkey",

@@ -74,7 +74,7 @@ const SUITES = {
 // here — the dedicated runners above are faster and own those names.
 const PY_CATEGORIES = [
   'ast', 'extra', 'ext', 'projects', 'zlib', 'lua', 'freetype', 'libpng',
-  'cairo', 'micropython', 'micropython-upstream', 'sqlite', 'disw',
+  'libjpeg', 'cairo', 'micropython', 'micropython-upstream', 'sqlite', 'disw',
   'sourcemap', 'tcc', 'libc', 'fuzz', 'fakegit',
 ];
 for (const cat of PY_CATEGORIES) {
@@ -359,6 +359,8 @@ const RULES = [
     'the glyph engine behind ksvc/term/win32/menucore — it moves text in BOTH composites'],
   [/^vendor\/libpng\//, ['libpng', 'projects', 'kernel', 'sweep'],
     'the libpng package + the netsurf/deck image path'],
+  [/^vendor\/libjpeg\//, ['libjpeg', 'projects', 'kernel', 'sweep'],
+    'the libjpeg package + the netsurf image path (WITH_JPEG)'],
   [/^vendor\/cairo\//, ['cairo', 'projects', 'kernel', 'sweep'],
     'the cairodemo package; os-cairo.mjs asserts its pixels'],
   [/^vendor\/micropython\//, ['micropython', 'projects'], null],
