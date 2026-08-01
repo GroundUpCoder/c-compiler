@@ -22,7 +22,11 @@
  *
  * Documented divergences (also in curl.h):
  *   - redirects: transport follows silently; FOLLOWLOCATION/MAXREDIRS are
- *     accepted no-ops, EFFECTIVE_URL is the request url.
+ *     accepted no-ops. EFFECTIVE_URL is truthful (#359): the transport
+ *     surfaces the post-redirect final URL as a synthetic
+ *     "x-guc-final-url" line in the header blob, which the veneer strips
+ *     (never delivered to HEADERFUNCTION) and answers getinfo with.
+ *     Intermediate hops stay unknowable — fetch follows opaquely.
  *   - header lines: synthesized "HTTP/1.1 NNN \r\n" status line, then the
  *     transport's flattened "name: value" lines (fetch order/casing) as
  *     "name: value\r\n", then "\r\n".
@@ -89,6 +93,7 @@ typedef struct easy {
   char *errorbuffer;                          /* caller-owned, CURL_ERROR_SIZE */
   /* results of the last perform */
   long response_code;
+  char *effective_url;                        /* owned; post-redirect (#359) */
   char *content_type;                         /* owned */
   curl_off_t content_length;                  /* -1 unknown */
   curl_off_t size_download;
@@ -103,8 +108,9 @@ static void easy_defaults(easy *h) {
 
 static void easy_free_owned(easy *h) {
   free(h->url); free(h->customrequest); free(h->useragent);
-  free(h->content_type);
+  free(h->content_type); free(h->effective_url);
   h->url = h->customrequest = h->useragent = h->content_type = NULL;
+  h->effective_url = NULL;
 }
 
 CURLcode curl_global_init(long flags) { (void)flags; return CURLE_OK; }
@@ -270,6 +276,7 @@ CURLcode curl_easy_perform(CURL *handle) {
   if (!h->url || !*h->url) return fail(h, CURLE_URL_MALFORMAT, "no URL set");
   if (h->errorbuffer) h->errorbuffer[0] = 0;
   h->response_code = 0;
+  free(h->effective_url); h->effective_url = NULL;
   free(h->content_type); h->content_type = NULL;
   h->content_length = -1;
   h->size_download = 0;
@@ -386,6 +393,20 @@ CURLcode curl_easy_perform(CURL *handle) {
     while (*p) {
       char *nl = strchr(p, '\n');
       size_t ll = nl ? (size_t)(nl - p) : strlen(p);
+      /* The transport's synthetic final-URL line (#359): capture for
+         CURLINFO_EFFECTIVE_URL and STRIP — a consumer must never observe
+         a header no server sent. */
+      if (ll > 16 && !strncasecmp(p, "x-guc-final-url:", 16)) {
+        const char *v = p + 16;
+        size_t vl = ll - 16;
+        while (vl && (*v == ' ' || *v == '\t')) { v++; vl--; }
+        free(h->effective_url);
+        h->effective_url = malloc(vl + 1);
+        if (h->effective_url) { memcpy(h->effective_url, v, vl); h->effective_url[vl] = 0; }
+        if (!nl) break;
+        p = nl + 1;
+        continue;
+      }
       /* getinfo capture */
       if (ll > 13 && !strncasecmp(p, "content-type:", 13)) {
         const char *v = p + 13;
@@ -452,8 +473,9 @@ CURLcode curl_easy_getinfo(CURL *handle, CURLINFO info, ...) {
       *va_arg(ap, long *) = h->response_code; break;
     case CURLINFO_CONTENT_TYPE:
       *va_arg(ap, char **) = h->content_type; break;
-    case CURLINFO_EFFECTIVE_URL:                    /* request url — documented */
-      *va_arg(ap, char **) = h->url ? h->url : ""; break;
+    case CURLINFO_EFFECTIVE_URL:                    /* post-redirect (#359) */
+      *va_arg(ap, char **) = h->effective_url ? h->effective_url
+                           : (h->url ? h->url : ""); break;
     case CURLINFO_SIZE_DOWNLOAD_T:
       *va_arg(ap, curl_off_t *) = h->size_download; break;
     case CURLINFO_CONTENT_LENGTH_DOWNLOAD_T:

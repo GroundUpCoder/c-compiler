@@ -11,8 +11,9 @@
  *
  * Documented divergences from real libcurl (see libcurl.c):
  *   - Redirects are followed silently by the transport (fetch
- *     redirect:'follow'); FOLLOWLOCATION/MAXREDIRS are accepted no-ops and
- *     CURLINFO_EFFECTIVE_URL returns the REQUEST url.
+ *     redirect:'follow'); FOLLOWLOCATION/MAXREDIRS are accepted no-ops.
+ *     CURLINFO_EFFECTIVE_URL returns the POST-REDIRECT final url (#359);
+ *     intermediate hops are unknowable (fetch follows opaquely).
  *   - Header callback lines are synthesized from the transport's flattened
  *     header blob: casing and order are whatever fetch yields, and a
  *     synthetic "HTTP/1.1 NNN \r\n" status line is prepended.

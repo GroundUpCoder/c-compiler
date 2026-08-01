@@ -1763,8 +1763,13 @@ function createNetFetch(baseFetch) {
       if (resp.status === 200 && upStatus !== null) {
         var pairs = [];
         try { pairs = JSON.parse(resp.headers.get('x-guc-headers') || '[]'); } catch (e) {}
+        // #359: the bridge ships the upstream's post-redirect final URL as
+        // its own x-guc-final-url response header (CORS-exposed); mirror it
+        // as .url so the kernel sees the Response shape in both modes. A
+        // pre-#359 bridge yields null — fall back to the request url.
         return {
           status: parseInt(upStatus, 10),
+          url: resp.headers.get('x-guc-final-url') || (url + ''),
           headers: { forEach: function (cb) {
             for (var i = 0; i < pairs.length; i++) cb(pairs[i][1] + '', pairs[i][0] + '');
           } },

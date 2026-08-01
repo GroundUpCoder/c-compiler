@@ -7277,11 +7277,17 @@ Kernel.prototype._httpRpc = function (pcb, op, req) {
 };
 
 /* Flatten a fetch Headers object into a capped "name: value\n" blob. Order
- * and casing are whatever fetch yields (not wire-faithful — documented). */
+ * and casing are whatever fetch yields (not wire-faithful — documented).
+ * A server-sent `x-guc-final-url` is dropped: that name is the transport's
+ * synthetic final-URL line (#359, prepended in _httpStart), and an upstream
+ * copy in the same blob would make it ambiguous. This is the one choke
+ * point both modes flatten through (bridge pairs arrive via the wrapper's
+ * forEach shim), so the filter covers direct and bridge alike. */
 Kernel.prototype._httpFlattenHeaders = function (headers) {
   var out = '';
   try {
     headers.forEach(function (v, k) {
+      if ((k + '').toLowerCase() === 'x-guc-final-url') return;
       if (out.length < 64 * 1024) out += k + ': ' + v + '\n';
     });
   } catch (e) {}
@@ -7319,7 +7325,16 @@ Kernel.prototype._httpStart = function (xfer, method, url, headerList, body, hea
     if (xfer.aborted || xfer.error !== null) return;
     if (xfer.hdrTimer) { clearTimeout(xfer.hdrTimer); xfer.hdrTimer = null; }
     xfer.status = resp.status;
-    xfer.headers = self._httpFlattenHeaders(resp.headers);
+    // #359: surface the post-redirect FINAL URL as one synthetic header
+    // line. Direct mode reads the real Response.url; the bridge wrapper
+    // mirrors it as a .url property on its synthetic response. Absent
+    // either (a bare test fetch), the request url is the honest answer.
+    // PREPENDED so the line always survives the 64 KB flatten cap; the
+    // intermediate hops stay unknowable — platform fetch follows
+    // redirects opaquely in both modes (permanent ceiling, documented).
+    var finalUrl = (typeof resp.url === 'string' && resp.url) ? resp.url : url;
+    xfer.headers = 'x-guc-final-url: ' + finalUrl + '\n'
+      + self._httpFlattenHeaders(resp.headers);
     xfer.reader = (resp.body && typeof resp.body.getReader === 'function') ? resp.body.getReader() : null;
     if (!xfer.reader) {                        // no streamable body (HEAD, empty)
       xfer.done = true; self._recheckSelects(); return;

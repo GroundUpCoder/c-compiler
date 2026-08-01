@@ -45,6 +45,9 @@
 //                    NOT wire-faithful, matching the kernel's documented
 //                    header semantics; capped, oversized sets truncated
 //                    at a pair boundary)
+//     x-guc-final-url: the upstream's POST-REDIRECT final URL (#359 —
+//                    Node fetch follows redirects; this is where the
+//                    response actually came from)
 //     body:          upstream body, streamed with backpressure
 //   Encapsulation is what keeps "upstream said 403" distinguishable from
 //   "the bridge refused you": bridge-level answers are plain statuses
@@ -100,7 +103,10 @@ function originAllowed(origin, allow) {
 function corsHeaders(origin) {
   return {
     'access-control-allow-origin': origin || '*',
-    'access-control-expose-headers': 'x-guc-status, x-guc-headers',
+    // x-guc-final-url MUST stay in this list (#359): a response header
+    // absent here is silently invisible to a cross-origin reader — the
+    // shipped deploy (https origin -> 127.0.0.1 bridge) IS cross-origin.
+    'access-control-expose-headers': 'x-guc-status, x-guc-headers, x-guc-final-url',
     'vary': 'origin',
   };
 }
@@ -210,6 +216,9 @@ function main() {
           'content-type': 'application/octet-stream',
           'x-guc-status': String(up.status),
           'x-guc-headers': JSON.stringify(hp),
+          // #359: the upstream's post-redirect final URL (Node fetch
+          // follows redirects; up.url is where the response came from).
+          'x-guc-final-url': up.url || url,
         }));
         if (!up.body) { res.end(); return; }
         const reader = up.body.getReader();

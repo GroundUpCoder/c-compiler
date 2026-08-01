@@ -5,10 +5,10 @@
 // process drives OFF -> ON -> OFF -> ON-but-dead through live /etc/net
 // writes, so "OFF changed nothing" is asserted IN THE SAME RUN as a
 // positive control proving the ON path really reroutes. The bridge's
-// /health request counter is the discriminator: after one OFF fetch, one
-// bridged fetch, and another OFF fetch, the counter reads EXACTLY 1 —
-// 0 would mean the reroute never engaged, 2+ would mean OFF leaked
-// through the bridge. The live toggle is the watchPath choke (no reboot:
+// /health request counter is the discriminator: after one OFF fetch, two
+// bridged fetches (one plain, one redirecting — the #359 final-url leg),
+// and another OFF fetch, the counter reads EXACTLY 2 — 0 would mean the
+// reroute never engaged, 3+ would mean OFF leaked through the bridge. The live toggle is the watchPath choke (no reboot:
 // the same process keeps fetching across every flip), synchronized by an
 // ack-file protocol rather than a sleep: the test registers its own
 // watchPath on /etc/net AFTER netFetchAttach, so same-batch setTimeout
@@ -63,6 +63,7 @@ __import int __http_status(int fd, int *status_out, char *hdr, int hdrcap);
 __import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
 
 static char obuf[8192];
+static char g_hdr[4096];    /* last fetch's header blob (#359 leg) */
 
 static int wait_fd(int fd, int timeout_ms) {
     return __wait(&fd, 1, 0, timeout_ms);
@@ -76,8 +77,13 @@ static int fetch_all(const char *url, int *status, int *err_out) {
     if (fd < 0) { *err_out = errno; return -1; }
     char hdr[4096];
     for (;;) {
-        int hl = __http_status(fd, status, hdr, sizeof hdr);
-        if (hl >= 0) break;
+        int hl = __http_status(fd, status, hdr, sizeof hdr - 1);
+        if (hl >= 0) {
+            int cl = hl < (int)sizeof hdr - 1 ? hl : (int)sizeof hdr - 1;
+            memcpy(g_hdr, hdr, cl);
+            g_hdr[cl] = 0;
+            break;
+        }
         if (errno == EAGAIN || errno == EINTR) { wait_fd(fd, -1); continue; }
         *err_out = errno; close(fd); return -2;
     }
@@ -141,6 +147,18 @@ int main(void) {
     n = fetch_all(url, &status, &err);
     printf("two status=%d body=%.*s\\n", status, n < 0 ? 0 : n, obuf);
 
+    /* #359 in BRIDGE mode: the final url must be the post-redirect one,
+       carried by the bridge's x-guc-final-url response header (the direct-
+       mode twin is test_http_e2e's leg — both modes or neither). */
+    snprintf(url, sizeof url, "%s/redir", target);
+    n = fetch_all(url, &status, &err);
+    {
+        char *nl = strchr(g_hdr, '\\n');
+        if (nl) *nl = 0;
+        printf("bredir status=%d body=%.*s first=%s\\n",
+               status, n < 0 ? 0 : n, obuf, g_hdr);
+    }
+
     /* phase 3: OFF again -> direct again */
     if (set_net("bridge off\\n", "/ack-off") != 0) return 1;
     snprintf(url, sizeof url, "%s/three", target);
@@ -167,6 +185,11 @@ int main(void) {
 const targetPaths = [];
 const target = http.createServer((req, res) => {
   targetPaths.push(req.url);
+  if (req.url === '/redir') {   // #359: the bridge's upstream fetch follows this
+    res.writeHead(302, { location: '/landed' });
+    res.end();
+    return;
+  }
   res.writeHead(200, { 'content-type': 'text/plain' });
   res.end('T' + req.url);
 });
@@ -285,19 +308,22 @@ function compile(name, src) {
     line('one ') === 'one status=200 body=T/one', JSON.stringify(line('one ')));
   check('ON (live /etc/net write, same process, no reboot): fetch succeeds through the bridge',
     line('two ') === 'two status=200 body=T/two', JSON.stringify(line('two ')));
+  check('#359 bridge mode: final url is the POST-redirect url (bridge header -> synthetic line)',
+    line('bredir ') === `bredir status=200 body=T/landed first=x-guc-final-url: ${targetBase}/landed`,
+    JSON.stringify(line('bredir ')));
   check('OFF again (live): fetch succeeds direct',
     line('three ') === 'three status=200 body=T/three', JSON.stringify(line('three ')));
   check('ON + bridge absent: ENETUNREACH before the status phase, under 3s',
     line('four ') === 'four rc=-2 unreach=1 fast=1', JSON.stringify(line('four ')));
 
-  // THE PAIRING: the bridge saw EXACTLY the one ON-phase request. 0 =
-  // the reroute never engaged (the (HP) trap: OFF-green proving nothing);
-  // >1 = an OFF fetch leaked through the bridge.
+  // THE PAIRING: the bridge saw EXACTLY the two ON-phase requests (/two
+  // and the #359 /redir). 0 = the reroute never engaged (the (HP) trap:
+  // OFF-green proving nothing); >2 = an OFF fetch leaked through the bridge.
   const countA = await bridgeCount(bridgeBase);
-  check('positive control: bridge request counter reads exactly 1 (ON engaged, OFF stayed away)',
-    countA === 1, 'requests=' + countA);
-  check('target saw all three successful fetches',
-    targetPaths.join(',') === '/one,/two,/three', targetPaths.join(','));
+  check('positive control: bridge request counter reads exactly 2 (ON engaged, OFF stayed away)',
+    countA === 2, 'requests=' + countA);
+  check('target saw all successful fetches (redirect followed upstream of the bridge)',
+    targetPaths.join(',') === '/one,/two,/redir,/landed,/three', targetPaths.join(','));
 
   /* ============ Leg B: wrapper errno mapping + bridge HTTP surface ========= */
 
@@ -357,6 +383,51 @@ function compile(name, src) {
   } });
   check('upstream connect failure: bridge-level 502, no x-guc-status',
     r.status === 502 && r.headers.get('x-guc-status') === null, r.status);
+
+  // #359 wire level: the bridge ships the post-redirect url AND names it in
+  // access-control-expose-headers (the value a browser's CORS filter reads).
+  r = await fetch(bridgeBase + '/fetch', { method: 'POST', headers: {
+    origin: 'https://groundupcoder.com',
+    'x-guc-url': targetBase + '/redir', 'x-guc-method': 'GET', 'x-guc-headers': '[]',
+  } });
+  check('#359: bridge ships x-guc-final-url = post-redirect url, listed in expose-headers',
+    r.headers.get('x-guc-final-url') === targetBase + '/landed'
+      && /x-guc-final-url/.test(r.headers.get('access-control-expose-headers') || ''),
+    r.headers.get('x-guc-final-url') + ' expose=' + r.headers.get('access-control-expose-headers'));
+
+  /* ===== Leg B2: REAL cross-origin browser read of the #359 header ======= */
+  // A response header absent from access-control-expose-headers is
+  // INVISIBLE to a cross-origin reader — null, no error. Node-side fetch
+  // ignores that list entirely, so only a real browser can catch the
+  // omission (the shipped deploy is https://groundupcoder.com reading
+  // 127.0.0.1 — always cross-origin). Here the page sits on the TARGET's
+  // origin (127.0.0.1:targetPort) and reads the bridge on a different
+  // port: different port = different origin, CORS enforced for real,
+  // preflight included. No OS boot, no WebGPU — one blank Chromium page.
+  let pw = null;
+  try { pw = require('playwright'); } catch (e) {}
+  if (pw) {
+    const browser = await pw.chromium.launch();
+    try {
+      const page = await browser.newPage();
+      await page.goto(targetBase + '/page');
+      const got = await page.evaluate(async (args) => {
+        const resp = await fetch(args.bridge + '/fetch', { method: 'POST', headers: {
+          'x-guc-url': args.target + '/redir', 'x-guc-method': 'GET', 'x-guc-headers': '[]',
+        } });
+        return {
+          status: resp.headers.get('x-guc-status'),
+          finalUrl: resp.headers.get('x-guc-final-url'),
+          body: await resp.text(),
+        };
+      }, { bridge: bridgeBase, target: targetBase });
+      check('#359 browser cross-origin read: x-guc-final-url EXPOSED and post-redirect',
+        got.status === '200' && got.finalUrl === targetBase + '/landed' && got.body === 'T/landed',
+        JSON.stringify(got));
+    } finally { await browser.close(); }
+  } else {
+    console.log('  skip #359 browser cross-origin leg (playwright not found)');
+  }
 
   r = await fetch(bridgeBase + '/fetch', { method: 'POST', headers: { 'x-guc-url': 'ftp://x/y' } });
   check('non-http target URL: 400', r.status === 400, r.status);

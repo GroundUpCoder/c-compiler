@@ -73,6 +73,8 @@ const server = http.createServer((req, res) => {
     res.write('partial-');                          // then never finish
     return;
   }
+  if (u === '/redir') { res.writeHead(302, { location: '/redirtarget' }); res.end(); return; }   // #359
+  if (u === '/redirtarget') { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('landed'); return; }
   res.writeHead(500); res.end();
 });
 server.on('connection', (s) => { sockets.add(s); s.on('close', () => sockets.delete(s)); });
@@ -175,6 +177,17 @@ function normalize(out) {
   has('refused', 'errbuf_set=1');
   has('timeout', 'rc=28');           // CURLE_OPERATION_TIMEDOUT
   has('abortcb', 'rc=42 midstream=1'); // CURLE_ABORTED_BY_CALLBACK mid-response (#306)
+  // #359: EFFECTIVE_URL truthful after a redirect; the synthetic transport
+  // line NEVER reaches HEADERFUNCTION (the criterion most likely to pass
+  // by accident — asserted explicitly, both with and without a redirect).
+  has('redir', 'rc=0');
+  has('redir', 'status=200');
+  has('redir', `eurl=${base}/redirtarget`);
+  has('redir', 'synthetic_seen=0');
+  has('redir', 'body[6]=landed');
+  has('eurlplain', 'rc=0');
+  has('eurlplain', 'eurl_match=1');
+  has('eurlplain', 'synthetic_seen=0');
   has('escape', 'esc=a%20b%26c%2Fd~e_f');
   has('escape', 'unesc=a b&c/d len=7');
   check('reached done', lines.includes('done'), JSON.stringify(lines.slice(-3)));

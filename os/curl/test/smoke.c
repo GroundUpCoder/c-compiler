@@ -214,6 +214,48 @@ int main(int argc, char **argv) {
     printf("rc=%d midstream=%d\n", (int)rc, g_xfer_seen > 0 ? 1 : 0);
     curl_easy_cleanup(h);
 
+    /* 9 (#359): redirect — EFFECTIVE_URL is the POST-redirect final url,
+       and no header named x-guc-final-url ever reaches HEADERFUNCTION
+       (the veneer must strip its transport's synthetic line; real libcurl
+       trivially agrees — no such header exists on its wire). hdrnames are
+       NOT printed here: real curl also feeds the intermediate 302 header
+       block to the callback, which the veneer cannot see (documented
+       ceiling — fetch follows opaquely). */
+    snprintf(url, sizeof url, "%s/redir", base);
+    h = fresh(url);
+    curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 1L);
+    rc = curl_easy_perform(h);
+    {
+        long code = 0;
+        char *eurl = NULL;
+        curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &code);
+        curl_easy_getinfo(h, CURLINFO_EFFECTIVE_URL, &eurl);
+        printf("== redir ==\n");
+        printf("rc=%d\n", (int)rc);
+        printf("status=%ld\n", code);
+        printf("eurl=%s\n", eurl ? eurl : "(null)");
+        printf("synthetic_seen=%d\n", strstr(g_hdrnames, "x-guc-final-url") ? 1 : 0);
+        printf("body[%ld]=", g_blen);
+        fwrite(g_body, 1, (size_t)g_blen, stdout);
+        printf("\n");
+    }
+    curl_easy_cleanup(h);
+
+    /* 10 (#359): no redirect — EFFECTIVE_URL is byte-equal to the request
+       url, and the synthetic line still never reaches HEADERFUNCTION. */
+    snprintf(url, sizeof url, "%s/hello", base);
+    h = fresh(url);
+    rc = curl_easy_perform(h);
+    {
+        char *eurl = NULL;
+        curl_easy_getinfo(h, CURLINFO_EFFECTIVE_URL, &eurl);
+        printf("== eurlplain ==\n");
+        printf("rc=%d\n", (int)rc);
+        printf("eurl_match=%d\n", (eurl && !strcmp(eurl, url)) ? 1 : 0);
+        printf("synthetic_seen=%d\n", strstr(g_hdrnames, "x-guc-final-url") ? 1 : 0);
+    }
+    curl_easy_cleanup(h);
+
     /* 8: escape/unescape (pure — identical both sides) */
     {
         h = curl_easy_init();

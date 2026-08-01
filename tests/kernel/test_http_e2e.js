@@ -53,6 +53,7 @@ __import int __http_status(int fd, int *status_out, char *hdr, int hdrcap);
 __import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
 
 static char obuf[600000];   /* static: the wasm stack is tiny */
+static char g_hdr[8192];    /* last fetch's header blob (#359 legs) */
 
 static int wait_fd(int fd, int timeout_ms) {
     return __wait(&fd, 1, 0, timeout_ms);
@@ -69,8 +70,13 @@ static int fetch_all(const char *method, const char *url, const char *headers,
     if (fd < 0) { *err_out = errno; return -1; }
     char hdr[8192];
     for (;;) {
-        int hl = __http_status(fd, status, hdr, sizeof hdr);
-        if (hl >= 0) break;
+        int hl = __http_status(fd, status, hdr, sizeof hdr - 1);
+        if (hl >= 0) {
+            int cl = hl < (int)sizeof hdr - 1 ? hl : (int)sizeof hdr - 1;
+            memcpy(g_hdr, hdr, cl);
+            g_hdr[cl] = 0;
+            break;
+        }
         if (errno == EAGAIN || errno == EINTR) { wait_fd(fd, -1); continue; }
         *err_out = errno; close(fd); return -2;
     }
@@ -127,6 +133,14 @@ int main(void) {
     n = fetch_all("GET", url, "", 0, 0, &status, 0, 0, &err);
     printf("hello status=%d n=%d body=%.*s\\n", status, n, n < 0 ? 0 : n, obuf);
 
+    /* #359: the synthetic final-url line is PREPENDED (first line of the
+       blob) and, without a redirect, equals the request url. */
+    {
+        char *nl = strchr(g_hdr, '\\n');
+        if (nl) *nl = 0;
+        printf("plainfinal first=%s\\n", g_hdr);
+    }
+
     snprintf(url, sizeof url, "%s/echo", base);
     const char *payload = "ping-123";
     n = fetch_all("POST", url, "content-type: text/plain\\n", payload, (int)strlen(payload), &status, 0, 0, &err);
@@ -145,6 +159,28 @@ int main(void) {
     snprintf(url, sizeof url, "%s/drop", base);
     n = fetch_all("GET", url, "", 0, 0, &status, 0, 0, &err);
     printf("drop rc=%d eio=%d\\n", n, err == EIO);
+
+    /* #359: a redirecting URL reports the POST-redirect final url. */
+    snprintf(url, sizeof url, "%s/redir", base);
+    n = fetch_all("GET", url, "", 0, 0, &status, 0, 0, &err);
+    {
+        char *nl = strchr(g_hdr, '\\n');
+        if (nl) *nl = 0;
+        printf("redir status=%d n=%d first=%s\\n", status, n, g_hdr);
+    }
+
+    /* #359: a server-sent x-guc-final-url is FILTERED — exactly one line
+       with that name survives, and it is the transport's own. */
+    snprintf(url, sizeof url, "%s/spoof", base);
+    n = fetch_all("GET", url, "", 0, 0, &status, 0, 0, &err);
+    {
+        int cnt = 0;
+        const char *sp = g_hdr;
+        while ((sp = strstr(sp, "x-guc-final-url:")) != 0) { cnt++; sp++; }
+        char *nl = strchr(g_hdr, '\\n');
+        if (nl) *nl = 0;
+        printf("spoof count=%d first=%s\\n", cnt, g_hdr);
+    }
 
     /* TWO transfers through ONE __wait — the 0417 flagship. The slow
        response arrives ~400ms after the fast one; a bounded round count
@@ -295,6 +331,13 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (u === '/missing') { res.writeHead(404); res.end('nope'); return; }
+  if (u === '/redir') { res.writeHead(302, { location: '/landed' }); res.end(); return; }
+  if (u === '/landed') { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('landed.'); return; }
+  if (u === '/spoof') {   // #359: an upstream lying with the synthetic name
+    res.writeHead(200, { 'x-guc-final-url': 'http://spoofed.example/evil', 'content-type': 'text/plain' });
+    res.end('s');
+    return;
+  }
   if (u === '/drop') {
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.write('half');
@@ -408,6 +451,15 @@ function compile(name, src) {
     line('missing ') === 'missing status=404', JSON.stringify(line('missing ')));
   check('mid-stream drop: read errors with EIO (not EOF, not a timeout)',
     line('drop ') === 'drop rc=-3 eio=1', JSON.stringify(line('drop ')));
+  check('#359 non-redirect: synthetic final-url line is FIRST and equals the request url',
+    line('plainfinal ') === `plainfinal first=x-guc-final-url: ${base}/hello`,
+    JSON.stringify(line('plainfinal ')));
+  check('#359 redirect: final url is the POST-redirect url, body from the target',
+    line('redir ') === `redir status=200 n=7 first=x-guc-final-url: ${base}/landed`,
+    JSON.stringify(line('redir ')));
+  check('#359 spoof: a server-sent x-guc-final-url is filtered — one line, ours',
+    line('spoof ') === `spoof count=1 first=x-guc-final-url: ${base}/spoof`,
+    JSON.stringify(line('spoof ')));
   check('TWO transfers through ONE __wait: fast completes first, both intact, bounded rounds',
     line('mux ') === `mux first=1 fast=200/1 slow=200/9 bounded=1 ok=1`, JSON.stringify(line('mux ')));
   check('a pipe answers a mixed transfer+pipe __wait promptly',
