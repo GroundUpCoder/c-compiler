@@ -1218,11 +1218,24 @@ function sessionMenubar() {
  * /root/.config/term (cfgstore CS3). Legs: theme > flips a SECOND term's
  * band to light via the ~/.config FS_WATCH reload (cross-process live
  * apply); fontsize + re-sizes the live window off 640x486; scrollback -,
- * cursor >, bell > land in the user file; Esc closes the pane; a
- * relaunched term comes up at the SAME re-sized geometry with the light
- * band — the acceptance round-trip (change -> live -> persists). */
+ * cursor >, bell >, autoscroll > land in the user file; Esc closes the
+ * pane; a relaunched term comes up at the SAME re-sized geometry with the
+ * light band — the acceptance round-trip (change -> live -> persists).
+ *
+ * Geometry (#363): the pane derives its row box from the MEASURED stock
+ * UI cell (28px) + SET_BOX_PAD 4 = a 32px box, + SET_ROW_GAP 12 = a 44px
+ * pitch, so with SET_TOP 12 / SET_BOT 10 and SET_N_ROWS 6 the window is
+ * 300 x (12 + 6*44 + 10) = 300x286. Row i's box is y = 12+i*44 .. +32;
+ * the click y's below are mid-box, EXCEPT the Font Size one, which is
+ * deliberately in the box's BOTTOM THIRD (y=40, offset 28) — the exact
+ * band the old 22px hit test rejected while still drawing ink there. It
+ * is the positive control for #363's dead zone: if the hit region ever
+ * stops tracking the drawn box, fontsize never changes and three checks
+ * go red. */
 function sessionSettings() {
   const DOWN = 1073741905, ENTER = 13, ESC = 27;   // SDLK_DOWN/RETURN/ESCAPE
+  const SET_W = 300, SET_TOP = 12, SET_BOX_H = 32, SET_ROW_H = 44;
+  const SET_N_ROWS = 6, SET_H = SET_TOP + SET_N_ROWS * SET_ROW_H + 10;
   const script = [
     'term &',
     'wmctl wait win term',                         // window spawn (0155)
@@ -1249,18 +1262,21 @@ function sessionSettings() {
     'T2SID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//" | grep -v "^$TSID\\$" | head -1)',
     'sleep 2',                                     // timing subject: term2 banner render + its config watch armed
     // --- Theme > (dark -> light): pane term applies direct, term2 via FS_WATCH ---
-    'wmctl click $SSID 281 56',                    // row 1 cycler > (244/270 x 22-tall boxes)
+    'wmctl click $SSID 281 ' + (SET_TOP + 1 * SET_ROW_H + 16),   // row 1 cycler >
     'sleep 2',                                     // timing subject: cross-process watch reload + repaint (multi-frame)
     'wmctl shot $T2SID /root/st2.ppm && echo st2-ok',
     // --- Font Size + (14 -> 15): window re-sizes, SAME 80x24 grid ---
-    'wmctl click $SSID 281 22',                    // row 0 stepper +
+    // #363 POSITIVE CONTROL: y=40 is offset 28 into row 0's 32px box —
+    // inside the drawn ink, but past the old 22px hit test's edge.
+    'wmctl click $SSID 281 ' + (SET_TOP + 0 * SET_ROW_H + 28),   // row 0 stepper +
     'for i in $(seq 1 100); do wmctl list | grep "^$TSID\t" | grep -q 640x486 || break; sleep 0.1; done',  // re-size ack (bounded poll, 0155)
     'echo ==t1row',
     'wmctl list | grep "^$TSID\t"',
-    // --- Scrollback - (2000 -> 1500), Cursor > (block -> under), Bell > (sound -> visual) ---
-    'wmctl click $SSID 255 90',                    // row 2 stepper -
-    'wmctl click $SSID 281 124',                   // row 3 cycler >
-    'wmctl click $SSID 281 158',                   // row 4 cycler >
+    // --- Scrollback - (2000 -> 1500), Cursor >, Bell >, Autoscroll > (on -> off) ---
+    'wmctl click $SSID 255 ' + (SET_TOP + 2 * SET_ROW_H + 16),   // row 2 stepper -
+    'wmctl click $SSID 281 ' + (SET_TOP + 3 * SET_ROW_H + 16),   // row 3 cycler >
+    'wmctl click $SSID 281 ' + (SET_TOP + 4 * SET_ROW_H + 16),   // row 4 cycler >
+    'wmctl click $SSID 281 ' + (SET_TOP + 5 * SET_ROW_H + 16),   // row 5 cycler > (#358)
     'sleep 1',                                     // timing subject: the last delta-write's tmp+rename settles
     'echo ==cfg',
     'cat /root/.config/term',
@@ -1277,6 +1293,28 @@ function sessionSettings() {
     'echo ==t3row',
     'wmctl list | grep "^$T3SID\t"',
     'wmctl shot $T3SID /root/st3.ppm && echo st3-ok',
+    // --- #358 read-back leg: the RELAUNCHED term's pane must show the
+    // PERSISTED autoscroll (off), so one more > writes "on". Had the row
+    // not read the live global it would still say the default "on" and
+    // this click would write "off" again — the two outcomes are distinct,
+    // which is what makes the config file a sufficient observable. ---
+    'B3SID=$(wmctl list | grep "\tmenubar$" | sed "s/[^0-9].*//")',
+    'wmctl wait seq $B3SID 1 8000',
+    'wmctl click $B3SID 20 15',
+    'wmctl wait win "#32768" 8000',
+    'wmctl key $T3SID 0 ' + DOWN,
+    'wmctl key $T3SID 0 ' + DOWN,
+    'wmctl key $T3SID 0 ' + ENTER,
+    'wmctl wait nowin "#32768"',
+    'wmctl wait win "Term Settings" 8000',
+    'S3ID=$(wmctl list | grep "\tTerm Settings$" | sed "s/[^0-9].*//")',
+    'wmctl wait seq $S3ID 1 8000',
+    'echo ==setlist2',
+    'wmctl list | grep "\tTerm Settings$"',
+    'wmctl click $S3ID 281 ' + (SET_TOP + 5 * SET_ROW_H + 16),   // row 5 cycler >
+    'sleep 1',                                     // timing subject: the delta-write's tmp+rename settles
+    'echo ==cfg2',
+    'cat /root/.config/term',
     'pkill term',
     'wmctl wait nowin term',
     '',
@@ -1284,23 +1322,31 @@ function sessionSettings() {
   const s = driveBoot(script, { image, timeout: 420000 });
   const out = s.stdout;
 
+  const dims = SET_W + 'x' + SET_H;
   const setrow = ((out.split('==setlist\n')[1] || '').split('\n')[0] || '');
-  check('settings: "Term Settings" opened at 300x192 via Shell > Settings...',
-    setrow.includes('300x192'), setrow);
+  check('settings: "Term Settings" opened at ' + dims + ' via Shell > Settings...',
+    setrow.includes(dims), setrow);
   check('settings: pane/term2/relaunch shots written',
     out.includes('sset-ok') && out.includes('st2-ok') &&
     out.includes('st3-ok'), out.slice(-300));
   const t1row = ((out.split('==t1row\n')[1] || '').split('\n')[0] || '');
   const t1dims = (t1row.match(/\d+x\d+/) || [''])[0];
-  check('settings: Font Size + re-sized the live window off 640x486',
+  // Also the #363 dead-zone control: this click was in the box's bottom third.
+  check('settings: Font Size + at the box BOTTOM (y=40) re-sized the live window off 640x486',
     t1dims !== '' && t1dims !== '640x486', t1row);
   const cfgTxt = (out.split('==cfg\n')[1] || '').split('==')[0];
   for (const [k, v] of [['fontsize', '15'], ['theme', 'light'],
                         ['scrollback', '1500'], ['cursor', 'under'],
-                        ['bell', 'visual']])
+                        ['bell', 'visual'], ['autoscroll', 'off']])
     check('settings: user layer persisted ' + k + ' ' + v,
       new RegExp('^' + k + '\\s+' + v + '$', 'm').test(cfgTxt),
       JSON.stringify(cfgTxt.slice(0, 200)));
+  const setrow2 = ((out.split('==setlist2\n')[1] || '').split('\n')[0] || '');
+  check('settings: the relaunched term reopened the pane at ' + dims,
+    setrow2.includes(dims), setrow2);
+  const cfg2Txt = (out.split('==cfg2\n')[1] || '').split('==')[0];
+  check('settings: Autoscroll row read the PERSISTED off, so one > wrote on',
+    /^autoscroll\s+on$/m.test(cfg2Txt), JSON.stringify(cfg2Txt.slice(0, 200)));
   const t3row = ((out.split('==t3row\n')[1] || '').split('\n')[0] || '');
   const t3dims = (t3row.match(/\d+x\d+/) || [''])[0];
   check('settings: relaunch equals the live-applied geometry (fontsize persisted)',
@@ -1336,12 +1382,43 @@ function sessionSettings() {
       }
     return n;
   }
+  // Ink strictly INSIDE a row's box, counted per scanline band. The box
+  // frames are BTNSHADOW 0x808080, above the <100 dark-ink threshold, so
+  // this counts glyph ink only.
+  function darkInkBand(buf, ppm, y0, y1) {
+    let n = 0;
+    for (let y = Math.max(0, y0); y < Math.min(ppm.h, y1); y++)
+      for (let x = 0; x < ppm.w; x++) {
+        const i = ppm.data + (y * ppm.w + x) * 3;
+        if (buf[i] < 100 && buf[i + 1] < 100 && buf[i + 2] < 100) n++;
+      }
+    return n;
+  }
   const ps = parsePPM(b.stdout, 0);
-  check('settings: pane shot parses at 300x192', ps && ps.w === 300 && ps.h === 192,
+  check('settings: pane shot parses at ' + dims, ps && ps.w === SET_W && ps.h === SET_H,
     ps && `${ps.w}x${ps.h}`);
   if (!ps) return;
   check('settings: pane labels rendered (dark ink on BTNFACE)',
     darkInk(b.stdout, ps) > 150, String(darkInk(b.stdout, ps)));
+  // #363 CONTAINMENT: zero glyph ink in the top margin, the inter-row
+  // gutters or the bottom margin. This is the invariant the old
+  // "darkInk > 150 over the whole pane" assertion could not express —
+  // text that had ESCAPED its box satisfied that check better than
+  // correct text did, which is why a 9px overflow shipped in every image
+  // from 1a16e50f to 214.
+  let spill = 0;
+  const bands = [[0, SET_TOP]];
+  for (let i = 0; i < SET_N_ROWS; i++)
+    bands.push([SET_TOP + i * SET_ROW_H + SET_BOX_H, SET_TOP + (i + 1) * SET_ROW_H]);
+  bands.push([SET_TOP + SET_N_ROWS * SET_ROW_H, SET_H]);   // the bottom margin
+  const worst = [];
+  for (const [y0, y1] of bands) {
+    const n = darkInkBand(b.stdout, ps, y0, y1);
+    spill += n;
+    if (n) worst.push(`${y0}..${y1}:${n}`);
+  }
+  check('settings: no glyph ink outside a row box (margins + gutters clean)',
+    spill === 0, worst.join(' '));
   const p2 = parsePPM(b.stdout, ps.end);
   check('settings: term2 shot parses', !!p2);
   if (!p2) return;

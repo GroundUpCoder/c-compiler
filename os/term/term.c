@@ -1494,27 +1494,75 @@ static void apply_font_size(int n) {
  * the engine's raster already; user32's control tree would put a second
  * event model in the process (the 0273b scrollbar call, one level up —
  * design log logs/2026-07-23/term-settings-0273d.md). macOS Terminal is
- * the structural reference: five rows, every change applies IMMEDIATELY
- * and delta-writes its ONE key to ~/.config/term — no OK/Cancel row.
- * Numeric rows step (- / +), enum rows cycle (< / >); Esc or the close
- * box dismisses. Pointer-driven by scope (like the reference's pane);
- * keys on its windowID never reach the pty. */
+ * the structural reference: one row per key, every change applies
+ * IMMEDIATELY and delta-writes its ONE key to ~/.config/term — no
+ * OK/Cancel row. Numeric rows step (- / +), enum rows cycle (< / >); Esc
+ * or the close box dismisses. Pointer-driven by scope (like the
+ * reference's pane); keys on its windowID never reach the pty. */
 #define SET_W      300
-#define SET_ROW_H  34
 #define SET_TOP    12
-#define SET_H      (SET_TOP + 5 * SET_ROW_H + 10)
+#define SET_BOT    10                  /* margin under the last row */
 #define SET_LBL_X  12
 #define SET_VAL_X  120
 #define SET_VAL_W  112
 #define SET_BTN1_X 244
 #define SET_BTN2_X 270
 #define SET_BTN_W  22
-#define SET_BOX_H  22
+/* Vertical geometry is MEASURED, never hand-picked (#363). The original
+ * pane hardcoded a 22px box with the text at `y + 3` — Win95-at-96dpi
+ * numbers for a ~13px system font. gucOS's stock UI font is 20px with a
+ * 28px text cell (ascent+descent), and TextOut's y is the CELL TOP, so
+ * every string overflowed its own box by 9px with the BASELINE 3px below
+ * the bottom border: descenders on BTNFACE, the theme swatch cut off
+ * mid-glyph, and — because settings_mouse() hit-tests the same 22px box —
+ * the visible bottom third of every row dead to the pointer. Deriving the
+ * box from the real cell fixes all four at once and makes the pane
+ * font-size-agnostic, which term of all apps wants: it ships a Font Size
+ * setting. NB growing the box is the load-bearing half — DT_VCENTER alone
+ * would still overflow a 28px cell out of a 22px box by 3px each side. */
+#define SET_BOX_PAD 4                  /* 2px of air above and below the cell */
+#define SET_ROW_GAP 12                 /* the inter-row gutter */
 
 static SDL_Window *set_win;
 
-static const char *const SET_LABELS[5] =
-    { "Font Size", "Theme", "Scrollback", "Cursor", "Bell" };
+/* The row table is the ONE source of the row count: SET_N_ROWS derives
+ * from it, and the window height, the paint loop and the hit test all
+ * read that — so a seventh row is one edit here, not six across the file
+ * (#358; the count used to be spelled out in six places, two of which
+ * failed SILENTLY when missed). The switches in set_row_value and
+ * settings_adjust cannot be derived; both carry a loud default instead. */
+static const char *const SET_LABELS[] =
+    { "Font Size", "Theme", "Scrollback", "Cursor", "Bell", "Autoscroll" };
+#define SET_N_ROWS ((int)(sizeof SET_LABELS / sizeof SET_LABELS[0]))
+
+/* Measured geometry; 0 until set_measure() has run. */
+static int set_box_h, set_row_h, set_win_h;
+
+/* Measure the stock UI cell once. A 1x1 memory DC carries the same
+ * SYSTEM_FONT the pane's screen DC gets from dc_defaults, so this works
+ * BEFORE the window exists — which it must, since the window height is
+ * one of the derived numbers. Failure is loud and fatal to the pane
+ * (there is no honest fallback: a guessed cell height is exactly the bug
+ * this replaces). */
+static int set_measure(void) {
+    if (set_box_h) return 1;
+    HDC dc = CreateCompatibleDC(NULL);
+    TEXTMETRIC tm;
+    BOOL ok = FALSE;
+    if (dc) {
+        ok = GetTextMetrics(dc, &tm);
+        DeleteDC(dc);
+    }
+    if (!ok || tm.tmHeight < 1) {
+        fprintf(stderr, "term: settings: cannot measure the UI font cell "
+                        "(GetTextMetrics failed) — pane not opened\n");
+        return 0;
+    }
+    set_box_h = tm.tmHeight + SET_BOX_PAD;
+    set_row_h = set_box_h + SET_ROW_GAP;
+    set_win_h = SET_TOP + SET_N_ROWS * set_row_h + SET_BOT;
+    return 1;
+}
 
 static void set_row_value(int row, char *out, size_t sz) {
     switch (row) {
@@ -1523,6 +1571,13 @@ static void set_row_value(int row, char *out, size_t sz) {
     case 2: snprintf(out, sz, "%d lines", sb_max); break;
     case 3: snprintf(out, sz, "%s", CURSOR_NAMES[cursor_style]); break;
     case 4: snprintf(out, sz, "%s", BELL_NAMES[bell_mode]); break;
+    case 5: snprintf(out, sz, "%s", ONOFF_NAMES[autoscroll_on ? 1 : 0]);
+        break;
+    /* Loud by construction: settings_paint reuses ONE value buffer across
+     * the loop, so a missing case would leave the PREVIOUS row's string in
+     * it and the new row would render a plausible-looking wrong value that
+     * no screenshot can tell from success. */
+    default: snprintf(out, sz, "?row %d?", row); break;
     }
 }
 
@@ -1536,8 +1591,20 @@ static void set_box(HDC dc, int x0, int y0, int x1, int y1, HBRUSH fill) {
     FillRect(dc, &r, fill);
 }
 
+/* One string vertically centred in `box` and CLIPPED to it — the pane's
+ * only text primitive (#363). DrawText clips every glyph to the rect
+ * unless DT_NOCLIP, so ink can no longer escape a box even if the string
+ * outgrows it; DT_NOPREFIX keeps a literal '&' literal. */
+static void set_text(HDC dc, int x0, int y0, int x1, int y1, const char *s,
+                     UINT align) {
+    RECT r;
+    SetRect(&r, x0, y0, x1, y1);
+    DrawText(dc, s, -1, &r,
+             DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | align);
+}
+
 static void settings_paint(void) {
-    if (!set_win) return;
+    if (!set_win || !set_box_h) return;
     SDL_Surface *s = SDL_GetWindowSurface(set_win);
     if (!s) return;
     HDC dc = __gdi_dc_wrap(s->pixels, s->w, s->h, s->pitch / 4);
@@ -1547,37 +1614,40 @@ static void settings_paint(void) {
     FillRect(dc, &r, GetSysColorBrush(COLOR_BTNFACE));
     SetBkMode(dc, TRANSPARENT);
     char val[40];
-    for (int i = 0; i < 5; i++) {
-        int y = SET_TOP + i * SET_ROW_H;
+    for (int i = 0; i < SET_N_ROWS; i++) {
+        int y = SET_TOP + i * set_row_h, yb = y + set_box_h;
         SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
-        TextOut(dc, SET_LBL_X, y + 3, SET_LABELS[i],
-                (int)strlen(SET_LABELS[i]));
+        set_text(dc, SET_LBL_X, y, SET_VAL_X - 4, yb, SET_LABELS[i], DT_LEFT);
         /* Value box; the theme row previews its own fg-on-bg pair. */
         if (i == 1) {
             HBRUSH tb = CreateSolidBrush(RGB(THEMES[theme_idx].bg[0],
                                              THEMES[theme_idx].bg[1],
                                              THEMES[theme_idx].bg[2]));
-            set_box(dc, SET_VAL_X, y, SET_VAL_X + SET_VAL_W, y + SET_BOX_H, tb);
+            set_box(dc, SET_VAL_X, y, SET_VAL_X + SET_VAL_W, yb, tb);
             DeleteObject(tb);
             SetTextColor(dc, RGB(THEMES[theme_idx].fg[0],
                                  THEMES[theme_idx].fg[1],
                                  THEMES[theme_idx].fg[2]));
         } else {
-            set_box(dc, SET_VAL_X, y, SET_VAL_X + SET_VAL_W, y + SET_BOX_H,
+            set_box(dc, SET_VAL_X, y, SET_VAL_X + SET_VAL_W, yb,
                     GetSysColorBrush(COLOR_WINDOW));
             SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
         }
         set_row_value(i, val, sizeof val);
-        TextOut(dc, SET_VAL_X + 6, y + 3, val, (int)strlen(val));
+        /* Inside the box's 1px frame, so the value can never touch it. */
+        set_text(dc, SET_VAL_X + 6, y + 1, SET_VAL_X + SET_VAL_W - 2, yb - 1,
+                 val, DT_LEFT);
         /* Stepper (- +) on numeric rows, cycler (< >) on enum rows. */
         SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
         int num = i == 0 || i == 2;
-        set_box(dc, SET_BTN1_X, y, SET_BTN1_X + SET_BTN_W, y + SET_BOX_H,
+        set_box(dc, SET_BTN1_X, y, SET_BTN1_X + SET_BTN_W, yb,
                 GetSysColorBrush(COLOR_BTNFACE));
-        TextOut(dc, SET_BTN1_X + 7, y + 3, num ? "-" : "<", 1);
-        set_box(dc, SET_BTN2_X, y, SET_BTN2_X + SET_BTN_W, y + SET_BOX_H,
+        set_text(dc, SET_BTN1_X + 1, y + 1, SET_BTN1_X + SET_BTN_W - 1, yb - 1,
+                 num ? "-" : "<", DT_CENTER);
+        set_box(dc, SET_BTN2_X, y, SET_BTN2_X + SET_BTN_W, yb,
                 GetSysColorBrush(COLOR_BTNFACE));
-        TextOut(dc, SET_BTN2_X + 7, y + 3, num ? "+" : ">", 1);
+        set_text(dc, SET_BTN2_X + 1, y + 1, SET_BTN2_X + SET_BTN_W - 1, yb - 1,
+                 num ? "+" : ">", DT_CENTER);
     }
     __gdi_dc_unwrap(dc);
     SDL_UpdateWindowSurface(set_win);
@@ -1585,7 +1655,8 @@ static void settings_paint(void) {
 
 static void settings_open(void) {
     if (set_win) { settings_paint(); return; }     /* one pane, no dupes */
-    set_win = SDL_CreateWindow("Term Settings", SET_W, SET_H, 0);
+    if (!set_measure()) return;
+    set_win = SDL_CreateWindow("Term Settings", SET_W, set_win_h, 0);
     if (!set_win) {
         fprintf(stderr, "term: settings window failed: %s\n", SDL_GetError());
         return;
@@ -1634,16 +1705,30 @@ static void settings_adjust(int row, int dir) {
         bell_mode = (bell_mode + dir + 3) % 3;
         set_persist("bell", BELL_NAMES[bell_mode]);
         break;
+    case 5:
+        /* A two-state cycler: either arrow toggles. Same `autoscroll` key,
+         * same ONOFF_NAMES table and same live global #354 already reads —
+         * no second source of truth (the FS_WATCH reload in cfg_apply then
+         * carries the change to every other open term). */
+        autoscroll_on = (autoscroll_on + dir + 2) % 2;
+        set_persist("autoscroll", ONOFF_NAMES[autoscroll_on]);
+        break;
     default:
+        /* A row exists in SET_LABELS with no case here: loud, because the
+         * silent version is a row that paints and simply does nothing. */
+        fprintf(stderr, "term: settings: row %d has no adjust case\n", row);
         return;
     }
     settings_paint();
 }
 
 static void settings_mouse(int x, int y) {
-    if (y < SET_TOP) return;
-    int row = (y - SET_TOP) / SET_ROW_H;
-    if (row > 4 || (y - SET_TOP) % SET_ROW_H >= SET_BOX_H) return;
+    if (y < SET_TOP || !set_box_h) return;
+    int row = (y - SET_TOP) / set_row_h;
+    /* The hit region IS the drawn box (#363): same derived constants the
+     * paint loop uses, so the bottom of a row can never be dead to the
+     * pointer while its ink is visible. */
+    if (row >= SET_N_ROWS || (y - SET_TOP) % set_row_h >= set_box_h) return;
     if (x >= SET_BTN1_X && x < SET_BTN1_X + SET_BTN_W)
         settings_adjust(row, -1);
     else if (x >= SET_BTN2_X && x < SET_BTN2_X + SET_BTN_W)
