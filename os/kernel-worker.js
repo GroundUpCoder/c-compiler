@@ -178,12 +178,94 @@ function traceDone(m) {
   post({ type: 'spawn-trace', trace: Object.assign({ pid: m.pid }, k || {}, m.tr) });
 }
 
+// Warm worker pool (ticket #351 — jku's refill-on-take design). Workers stay
+// SINGLE-USE: each realm boots once and dies at process exit, exactly as
+// before — there is NO reuse, NO reset, NO re-arm handshake, and nothing is
+// ever re-shared into a used realm. The pool only moves the bootstrap cost
+// (realm create + importScripts — 3.2 + 11.2 ms of a 16.8 ms p50 spawn,
+// #350's measurement) OFF the interactive critical path: a pool entry is a
+// constructed-but-never-booted Worker whose top-level importScripts runs in
+// the background; postMessage queues, so it is usable the instant it exists
+// and no readiness protocol is needed. Invariant: free depth is constant —
+// take one, its replacement's creation starts in the same step (the cold-
+// drinks-in-a-fridge rule). A drained pool (before the first spawn, after
+// idle teardown, POOL_DEPTH=0) degrades to today's synchronous create.
+//
+// Sizing is #350's data, not guesswork: refill ≈ 13–15 ms, pipeline burst
+// arrival ≈ 10–11 ms/member, 3-way concurrent importScripts does not
+// inflate — depth 3 covers a 3-stage pipeline with headroom. ?pooldepth= /
+// ?poolidle= ride this worker's URL (the hostkeys pattern) as test/profiling
+// seams: pooldepth=0 IS the pre-#351 spawn path (profile baselines),
+// poolidle shortens the teardown wait so the e2e can see it.
+var POOL_DEPTH = (function () {
+  try {
+    var v = new URLSearchParams(self.location.search).get('pooldepth');
+    return v === null ? 3 : Math.max(0, v | 0);
+  } catch (e) { return 3; }
+})();
+var POOL_IDLE_MS = (function () {
+  try {
+    var v = new URLSearchParams(self.location.search).get('poolidle');
+    return v === null ? 60000 : Math.max(1, v | 0);
+  } catch (e) { return 60000; }
+})();
+var pool = [];             // free entries {w, born}, FIFO — oldest is warmest
+var poolIdleTimer = null;
+var poolStats = { depth: POOL_DEPTH, idleMs: POOL_IDLE_MS, created: 0,
+                  warmTakes: 0, coldCreates: 0, evicted: 0, tornDown: 0,
+                  served: 0 };
+function poolMake() {
+  var ent = { w: new Worker('process-worker.js'), born: traceNow() };
+  poolStats.created++;
+  // A worker that dies while pooled (importScripts fetch failure, OOM) must
+  // never be handed to a spawn — its boot message would vanish and the
+  // process would hang. Evict it; the next spawn's fill-to-depth heals the
+  // hole. Deliberately NOT an immediate replace: a persistent failure (dev
+  // server gone) must not tight-loop worker churn.
+  ent.w.onerror = function () {
+    var i = pool.indexOf(ent);
+    if (i >= 0) {
+      pool.splice(i, 1);
+      poolStats.evicted++;
+      ent.w.terminate();
+      post({ type: 'boot-log', msg: '[kernel] warm pool: evicted a failed idle worker' });
+    }
+  };
+  return ent;
+}
+// Restore the constant free depth (covers the per-take replacement, eviction
+// holes, and the post-teardown re-arm in one rule) and reset the idle clock.
+function poolFill() {
+  while (pool.length < POOL_DEPTH) pool.push(poolMake());
+  if (poolIdleTimer !== null) clearTimeout(poolIdleTimer);
+  poolIdleTimer = null;
+  if (!pool.length) return;
+  // Idle teardown: N booted realms are not held forever. No spawn for
+  // POOL_IDLE_MS -> terminate the free entries; the next spawn is cold
+  // (today's path) and re-arms the pool. Bounded waste by construction:
+  // at most POOL_DEPTH unused creations per idle episode.
+  poolIdleTimer = setTimeout(function () {
+    poolIdleTimer = null;
+    poolStats.tornDown += pool.length;
+    pool.forEach(function (ent) { ent.w.terminate(); });
+    pool = [];
+  }, POOL_IDLE_MS);
+}
+
 self.onmessage = function (e) {
   var m = e.data;
   if (!m) return;
   // Two-tab guard (todos/0045): boot-retry must bypass the pending queue —
   // it drives the boot, it can't wait for one.
   if (m.type === 'boot-retry') { startBoot(); return; }
+  // Warm-pool probe (ticket #351): answered even before (or without) a boot
+  // — the two-tab guard leg asserts a LOCKED tab created zero pool workers,
+  // and a queued probe would never be answered there.
+  if (m.type === 'pool-stats') {
+    post({ type: 'pool-stats',
+           stats: Object.assign({ free: pool.length }, poolStats) });
+    return;
+  }
   if (!tty) { pending.push(m); return; }
   if (m.type === 'input') tty.input(typeof m.data === 'string' ? m.data : new Uint8Array(m.data));
   else if (m.type === 'resize') tty.resize(m.cols | 0, m.rows | 0);
@@ -408,9 +490,28 @@ function displaySet(zoom) {
 }
 
 function createWorker(procSpec) {
-  var k0 = SPAWN_TRACE ? traceNow() : 0;   // spawn trace (#350): before ctor
-  var w = new Worker('process-worker.js');
-  var k1 = SPAWN_TRACE ? traceNow() : 0;   // ctor returned (async spin-up!)
+  var k0 = SPAWN_TRACE ? traceNow() : 0;   // spawn trace (#350): spawn entry
+  // Take (ticket #351): oldest entry first — it has had the longest to
+  // finish importScripts. Empty pool degrades to the synchronous create.
+  var ent = pool.shift() || null;
+  if (ent) { ent.w.onerror = null; poolStats.warmTakes++; }
+  else poolStats.coldCreates++;
+  var w = ent ? ent.w : new Worker('process-worker.js');
+  // Refill ON TAKE: the replacement's creation starts here, concurrent with
+  // the just-spawned process (#350 measured 3-way import concurrency free).
+  poolFill();
+  // Single-use invariant (#351 acceptance 3): a worker serves EXACTLY ONE
+  // process, ever. pool.shift() plus fresh ctors make a second serving
+  // structurally impossible; this tripwire keeps it a LOUD spawn failure
+  // (kernel.js maps the throw to EAGAIN + a kernel log) instead of a
+  // silently corrupted realm if a future edit breaks that.
+  if (w.__pwServedPid !== undefined) {
+    throw new Error('warm pool: worker already served pid ' + w.__pwServedPid +
+                    ' — single-use invariant violated (refusing pid ' + procSpec.pid + ')');
+  }
+  w.__pwServedPid = procSpec.pid;
+  poolStats.served++;
+  var k1 = SPAWN_TRACE ? traceNow() : 0;   // worker acquired (take or ctor)
   var exitCb = null;
   w.postMessage({
     type: 'boot',
@@ -433,8 +534,10 @@ function createWorker(procSpec) {
       path: procSpec.path,
       argv0: (procSpec.argv && procSpec.argv[0]) || '',
       hadModule: !!procSpec.module,
-      k0: k0,               // kernel thread: before new Worker
-      k1: k1,               // kernel thread: ctor returned
+      warm: !!ent,          // #351: took a pooled worker (t0/t1 predate k0!)
+      wBorn: ent ? ent.born : k0,   // pool-entry creation time (age = k0-wBorn)
+      k0: k0,               // kernel thread: spawn entry
+      k1: k1,               // kernel thread: worker acquired (take or ctor)
       k2: traceNow(),       // kernel thread: boot message posted
     };
   }
@@ -784,6 +887,12 @@ async function boot() {
   });
   await kernel.service({ path: '/bin/wm', argv: ['wm'], envp: ['PATH=/usr/local/bin:/bin'] });
   post({ type: 'ready', mode: sysMode + '/' + wsRoot.mode });
+  // Boot pre-fill (ticket #351 plan 3): usually a no-op — the pid-1 spawn's
+  // own refill-on-take already filled the pool, and #350 measured that
+  // concurrent bootstrap costs the boot nothing — but a POOL_DEPTH raise or
+  // an early eviction lands here, and the idle clock (re)arms at ready
+  // either way. The first typed command after a cold boot takes warm.
+  poolFill();
 
   var queued = pending; pending = [];
   queued.forEach(function (m) { self.onmessage({ data: m }); });

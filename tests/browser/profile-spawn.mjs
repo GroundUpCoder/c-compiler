@@ -6,7 +6,9 @@
 // cross-check of the "raw lazy-parse is ~5.5 ms" claim and a network log
 // that says whether importScripts re-fetches host.js/kernel.js per spawn.
 //
-// Usage: node tests/browser/profile-spawn.mjs [--solo=N] [--bursts=N]
+// Usage: node tests/browser/profile-spawn.mjs [--solo=N] [--bursts=N] [--nopool]
+//   --nopool: boot with ?pooldepth=0 — the warm pool (#351) disabled, i.e.
+//   the pre-#351 spawn path on the SAME tree (the before/after baseline).
 import { openOsSession, waitFor } from './lib/os-harness.mjs';
 
 const arg = (name, dflt) => {
@@ -15,6 +17,7 @@ const arg = (name, dflt) => {
 };
 const SOLO = arg('solo', 12);
 const BURSTS = arg('bursts', 5);
+const NOPOOL = process.argv.includes('--nopool');
 const PORT = 3299;
 
 const q = (xs, p) => {
@@ -28,13 +31,19 @@ const r1 = (x) => Math.round(x * 10) / 10;
 const stats = (xs) => ({ n: xs.length, p50: r1(q(xs, 0.5)), p10: r1(q(xs, 0.1)), p90: r1(q(xs, 0.9)), min: r1(Math.min(...xs)), max: r1(Math.max(...xs)) });
 
 // Per-trace phase decomposition. All stamps are timeOrigin+now() absolutes.
+// Warm takes (#351): the realm was created at pool-fill time, so t0/t1
+// PREDATE k0 — a_realm/b_import are off-critical-path there (reported NaN
+// so the aggregates only average on-path spans); d_firstOut (spawn entry ->
+// first output) stays the honest end-to-end number in both worlds.
 function phases(t) {
+  const warm = t.warm === true;
   return {
-    argv0: t.argv0, pid: t.pid, hadModule: t.hadModule,
-    ctor: t.k1 - t.k0,               // kernel thread: new Worker() sync cost
+    argv0: t.argv0, pid: t.pid, hadModule: t.hadModule, warm,
+    poolAge: warm && t.wBorn != null ? t.k0 - t.wBorn : NaN,  // pooled idle time
+    ctor: t.k1 - t.k0,               // kernel thread: take / new Worker() sync cost
     postBoot: t.k2 - t.k1,           // kernel thread: boot postMessage (module clone)
-    a_realm: t.t0 - t.k0,            // ctor call -> worker script first line
-    b_import: t.t1 - t.t0,           // importScripts fetch+parse+execute (~1MB)
+    a_realm: warm ? NaN : t.t0 - t.k0,   // ctor call -> worker script first line
+    b_import: warm ? NaN : t.t1 - t.t0,  // importScripts fetch+parse+execute (~1MB)
     bootWait: t.tBoot - Math.max(t.k2, t.t1),  // boot msg delivery after import
     setup: (t.instStart ?? t.tBoot) - t.tBoot, // RemoteFS + roFs mount + runModule preamble
     c_inst: t.instEnd != null ? t.instEnd - t.instStart : NaN,  // WASM instantiate
@@ -49,8 +58,8 @@ const main = async () => {
   const reqCounts = Object.create(null);
   const s = await openOsSession({
     port: PORT,
-    urlQuery: 'spawntrace=1',
-    readyLabel: 'boots to ready (spawntrace=1)',
+    urlQuery: 'spawntrace=1' + (NOPOOL ? '&pooldepth=0' : ''),
+    readyLabel: `boots to ready (spawntrace=1${NOPOOL ? ', pool OFF' : ''})`,
     serverTries: 1200,   // first run in a fresh worktree re-bakes the image
   });
   const { page, setVt, check } = s;
@@ -181,18 +190,30 @@ const main = async () => {
     });
 
     const agg = (list) => {
-      const keys = ['ctor', 'postBoot', 'a_realm', 'b_import', 'bootWait', 'setup', 'c_inst', 'toFirstOut', 'd_firstOut', 'total'];
+      const keys = ['ctor', 'postBoot', 'a_realm', 'b_import', 'bootWait', 'setup', 'c_inst', 'toFirstOut', 'd_firstOut', 'total', 'poolAge'];
       const o = {};
       for (const k of keys) o[k] = stats(list.map((p) => p[k]).filter((x) => !isNaN(x)));
       return o;
     };
 
+    // Warm/cold split (#351): pool stats close the loop on how many spawns
+    // actually took a pooled worker vs degraded to the synchronous create.
+    const poolStats = await page.evaluate(() =>
+      window.__osPoolStats ? window.__osPoolStats() : null);
+    const warmSplit = (list) => ({
+      warm: list.filter((p) => p.warm).length,
+      cold: list.filter((p) => !p.warm).length,
+    });
+
     const report = {
-      env: { ua: await page.evaluate(() => navigator.userAgent), solo: SOLO, bursts: BURSTS },
+      env: { ua: await page.evaluate(() => navigator.userAgent), solo: SOLO, bursts: BURSTS, nopool: NOPOOL },
       requests: { atBoot: reqAtStart, total: { ...reqCounts } },
+      poolStats,
       bootSpawns: boot,
+      soloWarmSplit: warmSplit(solo),
       soloStats: agg(solo),
       soloRaw: solo,
+      burstWarmSplit: warmSplit(burst),
       burstStats: agg(burst),
       burstGroups,
       perceived,

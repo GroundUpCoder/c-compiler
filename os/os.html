@@ -440,8 +440,23 @@ var spawnTrace = (function () {
   try { return new URLSearchParams(location.search).get('spawntrace') === '1'; }
   catch (e) { return false; }
 })();
+// Warm-pool seams (ticket #351): ?pooldepth= / ?poolidle= forward on the
+// worker URL too. pooldepth=0 disables the pool (the pre-#351 spawn path —
+// profile-spawn.mjs's same-tree baseline); poolidle shortens the idle
+// teardown so os-warmpool.mjs can see it. URL params only — nothing
+// persists into the image (the config-residue trap).
+var poolParams = (function () {
+  try {
+    var p = new URLSearchParams(location.search), out = '';
+    ['pooldepth', 'poolidle'].forEach(function (k) {
+      var v = p.get(k);
+      if (v !== null && /^[0-9]+$/.test(v)) out += '&' + k + '=' + v;
+    });
+    return out;
+  } catch (e) { return ''; }
+})();
 var kernel = new Worker('kernel-worker.js?hostkeys=' + encodeURIComponent(hostKeys) +
-                        (spawnTrace ? '&spawntrace=1' : ''));
+                        (spawnTrace ? '&spawntrace=1' : '') + poolParams);
 
 // ALL tty input funnels through vt1Input so the key strip's sticky Ctrl
 // (todos/0212, below) composes with the soft keyboard too.
@@ -1348,6 +1363,21 @@ window.__osCompositorStats = function () {
     kernel.postMessage({ type: 'compositor-stats' });
   });
 };
+// Warm-pool probe (ticket #351): fresh {free, depth, created, warmTakes,
+// coldCreates, evicted, tornDown, served} from the kernel worker. Answered
+// even on a locked/never-booted tab (the two-tab guard leg needs that).
+window.__osPoolStats = function () {
+  return new Promise(function (resolve) {
+    function h(e) {
+      if (e.data && e.data.type === 'pool-stats') {
+        kernel.removeEventListener('message', h);
+        resolve(e.data.stats);
+      }
+    }
+    kernel.addEventListener('message', h);
+    kernel.postMessage({ type: 'pool-stats' });
+  });
+};
 var outDecoder = new TextDecoder();
 
 kernel.onmessage = function (e) {
@@ -1360,6 +1390,9 @@ kernel.onmessage = function (e) {
     // On-demand-compositor probe replies (todos/0169) are consumed by the
     // one-shot listeners __osCompositorStats adds; nothing to do here.
     case 'compositor-stats':
+      break;
+    // Warm-pool probe replies (ticket #351) — same one-shot-listener pattern.
+    case 'pool-stats':
       break;
     // gucOS -> host clipboard (ticket #79): a process committed a text copy.
     case 'clipboard':

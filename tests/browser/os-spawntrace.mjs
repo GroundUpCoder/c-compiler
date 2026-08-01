@@ -32,13 +32,19 @@ try {
 
   check('trace record emitted for mkdir', !!tr);
   check('module cache hit (hadModule)', tr.hadModule === true);
-  // Phase ordering: k0 <= k1 <= k2 (kernel thread), k0 < t0 (worker first
-  // line), t0 < t1 (importScripts span), t1 <= tBoot, instStart <= instEnd,
-  // instEnd <= firstOut. Clock coarsening can tie neighbors — never invert.
-  const ord = tr.k0 <= tr.k1 && tr.k1 <= tr.k2 && tr.k0 < tr.t0 &&
+  // Phase ordering: k0 <= k1 <= k2 (kernel thread), t0 < t1 (importScripts
+  // span), t1 <= tBoot, instStart <= instEnd <= firstOut. Clock coarsening
+  // can tie neighbors — never invert. Since #351 the realm stamps t0/t1
+  // PRECEDE k0 for a warm take (the worker was created at pool-fill time,
+  // long before this spawn) — asserted positively below, not ordered here.
+  const ord = tr.k0 <= tr.k1 && tr.k1 <= tr.k2 &&
               tr.t0 < tr.t1 && tr.t1 <= tr.tBoot + 0.2 &&
               tr.instStart <= tr.instEnd && tr.instEnd <= tr.firstOut;
   check('phase stamps ordered', ord, tr);
+  // Warm pool (#351): a typed command after boot takes a pooled worker that
+  // finished its importScripts BEFORE the spawn entered — the whole point.
+  check('mkdir took a warm worker (t1 < k0)', tr.warm === true && tr.t1 < tr.k0,
+        { warm: tr.warm, importDoneBeforeSpawnMs: tr.k0 - tr.t1 });
   const total = tr.firstOut - tr.k0;
   check('spawn -> first output positive and sane (< 5s)', total > 0 && total < 5000, total);
   const b = tr.t1 - tr.t0;
