@@ -274,6 +274,22 @@ async function main() {
     srv.close();
     check(r.stderr.includes('turn model: fallback-model') && !r.stderr.includes('(null)'),
       '#348: no model in message_start falls back to the requested name');
+
+    // Mixed-model turn: round 1 (tool_use) runs on a priced model, round 2
+    // on an unknown one — the cost line must price each round with its own
+    // model and mark the unpriced rounds instead of understating silently.
+    const mixedRound1 = sse('message_start', { message: { id: 'msg_r1', model: 'claude-opus-5', usage: { input_tokens: 10, output_tokens: 0 } } })
+      + sse('content_block_start', { index: 0, content_block: { type: 'tool_use', id: 'toolu_m', name: 'bash', input: {} } })
+      + sse('content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: '{"command":"true"}' } })
+      + sse('content_block_stop', { index: 0 })
+      + sse('message_delta', { delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 2 } })
+      + sse('message_stop', {});
+    srv = await startServer([mixedRound1, withModel('mystery-model-x', 'done')]);
+    r = await runCodeBoth(srv.url, ['-p', 'mixed', '--no-color', '--model', 'claude-opus-5']);
+    srv.close();
+    check(r.stderr.includes('rounds: 2'), '#348: multi-round turn reports its API-round count');
+    check(/turn cost: \$\d+\.\d{6}  \(1 round unpriced: mystery-model-x\)/.test(r.stderr),
+      '#348: mixed turn prices known rounds and names the unpriced model explicitly');
   }
 
   console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILURE(S)`);

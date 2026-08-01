@@ -76,6 +76,16 @@ typedef struct {
     long long cache_creation_input_tokens, cache_read_input_tokens;
 } usage;
 
+/* ---- #348: per-model usage buckets ------------------------------------
+ * A provider can map the requested alias to different models across the
+ * rounds of one turn (or one session), and the flat usage totals destroy
+ * that attribution before pricing runs. Buckets are ADDITIVE alongside the
+ * scalar totals (resume and its golden depend on the scalars): one entry
+ * per distinct actual model, accumulating that model's usage + round count,
+ * in first-seen order. Helpers live after the usage/json ones they use. */
+typedef struct { char *model; usage u; int rounds; } mbucket;
+typedef struct { mbucket *v; int n, cap; } mlist;
+
 typedef struct {
     int fd, persist;
     char id[33];
@@ -85,6 +95,7 @@ typedef struct {
     long long seq, turn_index;
     long long round_index;  /* #348: API round within the current turn (1-based) */
     usage total;
+    mlist models;           /* #348: per-actual-model usage across the session */
 } session;
 
 static void usage_add(usage *a, const usage *b) {
@@ -115,6 +126,27 @@ static usage usage_from_json(cJSON *o) {
     u.cache_creation_input_tokens = json_count(o, "cache_creation_input_tokens");
     u.cache_read_input_tokens = json_count(o, "cache_read_input_tokens");
     return u;
+}
+
+static void mlist_add(mlist *l, const char *model, const usage *u) {
+    for (int i = 0; i < l->n; i++)
+        if (!strcmp(l->v[i].model, model)) { usage_add(&l->v[i].u, u); l->v[i].rounds++; return; }
+    if (l->n == l->cap) {
+        l->cap = l->cap ? l->cap * 2 : 4;
+        l->v = realloc(l->v, (size_t)l->cap * sizeof *l->v);
+        if (!l->v) { fprintf(stderr, "gcode: out of memory\n"); exit(1); }
+    }
+    l->v[l->n].model = strdup(model); l->v[l->n].u = *u; l->v[l->n].rounds = 1; l->n++;
+}
+static void mlist_free(mlist *l) {
+    for (int i = 0; i < l->n; i++) free(l->v[i].model);
+    free(l->v); l->v = NULL; l->n = l->cap = 0;
+}
+/* the ordered set of actual models, for the turn_end/session_end summaries */
+static cJSON *mlist_json(const mlist *l) {
+    cJSON *a = cJSON_CreateArray();
+    for (int i = 0; i < l->n; i++) cJSON_AddItemToArray(a, cJSON_CreateString(l->v[i].model));
+    return a;
 }
 
 /* ---- ANSI (SGR only; no cursor motion or clears — the stream stays
@@ -754,6 +786,7 @@ static int persist_message(session *s, cJSON *m, const char *source) {
 static void session_end(session *s, const char *reason) {
     if (!s->persist || s->fd < 0) return;
     cJSON *r = record_new(s, "session_end"); cJSON_AddStringToObject(r, "reason", reason); cJSON_AddItemToObject(r, "totals", usage_json(&s->total));
+    cJSON_AddItemToObject(r, "models", mlist_json(&s->models));
     record_write(s, r); close(s->fd); s->fd = -1;
 }
 
@@ -976,7 +1009,7 @@ static int persist_assistant_message(session *s, cJSON *m, const stream_ctx *ctx
    (transport, HTTP != 200, API error event), -2 interrupted (^C via the
    xferinfo abort, #306), -3 auth (HTTP 401/403 — retrying cannot succeed,
    #305). */
-static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, usage *turn_usage) {
+static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, usage *turn_usage, mlist *turn_models) {
     cJSON *body = cJSON_CreateObject();
     cJSON_AddStringToObject(body, "model", cfg->model);
     cJSON_AddNumberToObject(body, "max_tokens", (double)cfg->max_tokens);
@@ -1083,6 +1116,13 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
     sess->round_index++;
     if (persist_api_round(sess, &ctx, cfg->model)) { ret = -1; goto done; }
     usage_add(turn_usage, &ctx.round_usage); usage_add(&sess->total, &ctx.round_usage);
+    /* #348: bucket this round's usage under its ACTUAL model (the display
+     * fallback applies: a model-less stream books under the requested name) */
+    {
+        const char *mkey = (ctx.response_model && *ctx.response_model) ? ctx.response_model : cfg->model;
+        mlist_add(turn_models, mkey, &ctx.round_usage);
+        mlist_add(&sess->models, mkey, &ctx.round_usage);
+    }
     /* #348: carry the returned model out to agent_loop's turn summary —
      * ctx dies with this call. Only overwrite on a round that named one,
      * so a later message_start-less error round keeps the last known. */
@@ -1123,21 +1163,48 @@ static void format_model_line(char *buf, size_t cap, const char *response_model,
     else                          snprintf(buf, cap, "%s", shown);
 }
 
+/* #348: price each bucket with its OWN model and sum. Returns 1 with a
+ * formatted cost line in buf; 0 when nothing priced (caller omits the line
+ * — the pre-existing unknown-model behavior). A part-known set appends an
+ * explicit partial marker naming the unpriced models: a bare $ total that
+ * silently excluded rounds would read authoritative while understating,
+ * exactly the failure mode #313 exists to fix. */
+static int format_cost_line(char *buf, size_t cap, const mlist *l) {
+    double total = 0.0; int priced = 0, unpriced_rounds = 0;
+    char names[160]; size_t noff = 0; names[0] = 0;
+    for (int i = 0; i < l->n; i++) {
+        double c = price_usage(l->v[i].model, &l->v[i].u);
+        if (c >= 0.0) { total += c; priced++; }
+        else {
+            unpriced_rounds += l->v[i].rounds;
+            if (noff < sizeof names)
+                noff += (size_t)snprintf(names + noff, sizeof names - noff, "%s%s",
+                                         noff ? ", " : "", l->v[i].model);
+        }
+    }
+    if (!priced) return 0;
+    size_t off = (size_t)snprintf(buf, cap, "$%.6f", total);
+    if (unpriced_rounds && off < cap)
+        snprintf(buf + off, cap - off, "  (%d round%s unpriced: %s)",
+                 unpriced_rounds, unpriced_rounds == 1 ? "" : "s", names);
+    return 1;
+}
+
 /* run the agent loop for one user message already appended to `messages` */
-static void report_usage(const char *label, const usage *u, const char *model) {
+static void report_usage(const char *label, const usage *u, const mlist *models) {
     fprintf(stderr, "%s%s usage: input=%lld output=%lld cache-create=%lld cache-read=%lld%s\n", CDIM, label,
             u->input_tokens, u->output_tokens, u->cache_creation_input_tokens, u->cache_read_input_tokens, CRST);
-    double cost = price_usage(model, u);   /* #302: price the counters gcode already holds */
-    if (cost >= 0.0)
-        fprintf(stderr, "%s%s cost: $%.6f%s\n", R_COST, label, cost, CRST);
+    char cost[256];
+    if (format_cost_line(cost, sizeof cost, models))
+        fprintf(stderr, "%s%s cost: %s%s\n", R_COST, label, cost, CRST);
 }
 
 static int agent_loop(config *cfg, session *sess, cJSON *messages, cJSON *tools) {
-    usage turn = {0}; int rounds = 0, last = 0; const char *status = "done";
+    usage turn = {0}; mlist turn_models = {0}; int rounds = 0, last = 0; const char *status = "done";
     g_interrupted = 0;
     char turn_id[80]; snprintf(turn_id, sizeof turn_id, "%s-%lld", sess->id, sess->turn_index);
     for (long round = 0; cfg->max_turns <= 0 || round < cfg->max_turns; round++) {
-        last = do_turn(cfg, sess, messages, tools, &turn); if (last >= 0) rounds++;
+        last = do_turn(cfg, sess, messages, tools, &turn, &turn_models); if (last >= 0) rounds++;
         if (last <= 0) break;
     }
     if (last == -2) status = "interrupted";
@@ -1146,11 +1213,20 @@ static int agent_loop(config *cfg, session *sess, cJSON *messages, cJSON *tools)
     else { cJSON *lastmsg = cJSON_GetArrayItem(messages, cJSON_GetArraySize(messages) - 1); (void)lastmsg; }
     cJSON *end = record_new(sess, "turn_end"); cJSON_AddStringToObject(end, "turn_id", turn_id); cJSON_AddStringToObject(end, "status", status);
     cJSON_AddStringToObject(end, "stop_reason", last > 0 ? "max_turns" : (sess->last_stop ? sess->last_stop : "")); cJSON_AddNumberToObject(end, "api_rounds", rounds);
+    cJSON_AddItemToObject(end, "models", mlist_json(&turn_models));
     cJSON_AddItemToObject(end, "usage", usage_json(&turn)); cJSON_AddItemToObject(end, "session_usage", usage_json(&sess->total));
-    if (record_write(sess, end)) return -1;
+    if (record_write(sess, end)) { mlist_free(&turn_models); return -1; }
+    /* #348 display contract: returned model (alias secondary when it
+     * differs), round count when > 1, stop reason when abnormal */
     char mline[256]; format_model_line(mline, sizeof mline, sess->response_model, cfg->model);
-    fprintf(stderr, "%sturn model: %s%s\n", CDIM, mline, CRST);
-    report_usage("turn", &turn, cfg->model); report_usage("session", &sess->total, cfg->model);
+    fprintf(stderr, "%sturn model: %s", CDIM, mline);
+    if (rounds > 1) fprintf(stderr, ", rounds: %d", rounds);
+    if (sess->last_stop && *sess->last_stop &&
+        strcmp(sess->last_stop, "end_turn") && strcmp(sess->last_stop, "tool_use"))
+        fprintf(stderr, ", stop: %s", sess->last_stop);
+    fprintf(stderr, "%s\n", CRST);
+    report_usage("turn", &turn, &turn_models); report_usage("session", &sess->total, &sess->models);
+    mlist_free(&turn_models);
     /* 0 = done or interrupted (^C lands back at the prompt), -1 =
        recoverable turn error, -3 = auth (fatal — #305) */
     return last == -2 ? 0 : (last == -3 ? -3 : (last < 0 ? -1 : 0));
@@ -1197,6 +1273,7 @@ static int session_resume(session *s, config *cfg, cJSON *messages, const char *
     if (!s->path) { fprintf(stderr, "gcode: no matching session found\n"); return -1; }
     FILE *f = fopen(s->path, "r"); if (!f) { fprintf(stderr, "gcode: cannot read %s: %s\n", s->path, strerror(errno)); return -1; }
     char *line = NULL; size_t cap = 0; ssize_t n; int saw_meta = 0, had_fragment = 0;
+    char meta_model[128] = "";
     while ((n = getline(&line, &cap, f)) >= 0) {
         if (!n || line[n - 1] != '\n') { had_fragment = 1; break; } /* ignore crash fragment */
         cJSON *r = cJSON_ParseWithLength(line, (size_t)n); if (!r) continue;
@@ -1204,6 +1281,7 @@ static int session_resume(session *s, config *cfg, cJSON *messages, const char *
         const char *type = jstr(r, "type");
         if (!strcmp(type, "session_meta")) {
             saw_meta = 1; snprintf(s->id, sizeof s->id, "%s", jstr(r, "session_id"));
+            snprintf(meta_model, sizeof meta_model, "%s", jstr(r, "model"));
             char cwd[4096]; if (!getcwd(cwd, sizeof cwd)) strcpy(cwd, ""); char *hash = system_hash(cfg->system_prompt);
             if (strcmp(jstr(r, "model"), cfg->model)) fprintf(stderr, "gcode: warning: resumed model differs (%s -> %s)\n", jstr(r, "model"), cfg->model);
             if (strcmp(jstr(r, "base_url"), cfg->base_url)) fprintf(stderr, "gcode: warning: resumed base_url differs\n");
@@ -1214,6 +1292,14 @@ static int session_resume(session *s, config *cfg, cJSON *messages, const char *
             cJSON *content = cJSON_GetObjectItem(r, "content"); cJSON_AddItemToObject(m, "content", cJSON_Duplicate(content, 1)); cJSON_AddItemToArray(messages, m);
         } else if (!strcmp(type, "api_round")) {
             usage u = usage_from_json(cJSON_GetObjectItem(r, "usage")); usage_add(&s->total, &u);
+            /* #348: rebuild the per-model buckets so the resumed session's
+             * cost line keeps pricing each round with its own model. Old
+             * records missing the fields fall back response -> request ->
+             * session_meta model -> the current requested name. */
+            const char *rm = jstr(r, "response_model");
+            if (!*rm) rm = jstr(r, "request_model");
+            if (!*rm) rm = meta_model[0] ? meta_model : cfg->model;
+            mlist_add(&s->models, rm, &u);
         } else if (!strcmp(type, "turn_start")) {
             long long idx = json_count(r, "turn_index"); if (idx > s->turn_index) s->turn_index = idx;
         }
@@ -1258,6 +1344,22 @@ static int self_test(void) {
     ok &= !strcmp(ml, "requested-alias");
     format_model_line(ml, sizeof ml, "", "requested-alias");
     ok &= !strcmp(ml, "requested-alias");
+    /* #348: per-model buckets — a mixed turn prices each round with its own
+     * model and MARKS the unpriced rounds; all-unknown keeps omitting the
+     * line. claude-opus-5 is an undated row, so the sums are date-stable. */
+    {
+        mlist tl = {0}; char cl[256];
+        mlist_add(&tl, "claude-opus-5", &pu);
+        ok &= format_cost_line(cl, sizeof cl, &tl) == 1 && !strcmp(cl, "$30.000000");
+        mlist_add(&tl, "mystery-model", &pu);
+        mlist_add(&tl, "mystery-model", &pu);
+        ok &= format_cost_line(cl, sizeof cl, &tl) == 1 &&
+              !strcmp(cl, "$30.000000  (2 rounds unpriced: mystery-model)");
+        mlist_free(&tl);
+        mlist unk = {0}; mlist_add(&unk, "mystery-model", &pu);
+        ok &= format_cost_line(cl, sizeof cl, &unk) == 0;
+        mlist_free(&unk);
+    }
     char tmp[] = "/tmp/gcode-step2-test-XXXXXX"; if (!mkdtemp(tmp)) return 1; setenv("GCODE_STATE_DIR", tmp, 1);
     config cfg = { "https://example.invalid", NULL, NULL, "requested-alias", "fixture-system", 123, 4, 0, 0 };
     session s; cJSON *messages = cJSON_CreateArray();
@@ -1275,6 +1377,9 @@ static int self_test(void) {
     int partial = open(path, O_WRONLY | O_APPEND); if (partial >= 0) { ok &= write(partial, "{crash", 6) == 6; close(partial); } else ok = 0;
     cJSON *loaded = cJSON_CreateArray(); session resumed; ok &= session_resume(&resumed, &cfg, loaded, path) == 0;
     ok &= cJSON_GetArraySize(loaded) == 2 && resumed.total.input_tokens == 12 && resumed.total.output_tokens == 7 && resumed.seq == 5 && resumed.turn_index == 1;
+    /* #348: resume rebuilt the per-model buckets from the api_round records */
+    ok &= resumed.models.n == 1 && !strcmp(resumed.models.v[0].model, "fixture-model") &&
+          resumed.models.v[0].u.input_tokens == 12 && resumed.models.v[0].rounds == 1;
     FILE *f = fopen(path, "r"); const char *want[] = {"session_meta", "turn_start", "message", "api_round", "message"}; char *line = NULL; size_t cap = 0;
     char exp_tid[80]; snprintf(exp_tid, sizeof exp_tid, "%s-1", s.id);
     for (int i = 0; i < 5; i++) {
@@ -1295,7 +1400,7 @@ static int self_test(void) {
         }
         cJSON_Delete(r);
     }
-    if (f) fclose(f); free(line); close(resumed.fd); free(resumed.path); free(resumed.last_stop); free(resumed.response_model); cJSON_Delete(loaded); free(path);
+    if (f) fclose(f); free(line); close(resumed.fd); free(resumed.path); free(resumed.last_stop); free(resumed.response_model); mlist_free(&resumed.models); cJSON_Delete(loaded); free(path);
     for (int i = 0; i < MAX_BLOCKS; i++) { sb_free(&ctx.blocks[i].text); sb_free(&ctx.blocks[i].json); free(ctx.blocks[i].id); free(ctx.blocks[i].name); }
     free(ctx.stop_reason); free(ctx.message_id); free(ctx.response_model); cJSON_Delete(ctx.raw_usage); sb_free(&ctx.accum); sb_free(&ctx.raw); sb_free(&ctx.errmsg);
     fprintf(stderr, "gcode self-test: %s\n", ok ? "PASS" : "FAIL"); return ok ? 0 : 1;
@@ -1387,7 +1492,7 @@ int main(int argc, char **argv) {
             if (!n) continue;
             if (!strcmp(line, "/quit") || !strcmp(line, "/exit")) { session_end(&sess, "quit"); break; }
             if (!strcmp(line, "/clear")) {
-                session_end(&sess, "clear"); free(sess.path); free(sess.last_stop); free(sess.response_model);
+                session_end(&sess, "clear"); free(sess.path); free(sess.last_stop); free(sess.response_model); mlist_free(&sess.models);
                 cJSON_Delete(messages); messages = cJSON_CreateArray();
                 if (persist && session_create(&sess, &cfg)) { cJSON_Delete(messages); cJSON_Delete(tools); curl_global_cleanup(); return 1; }
                 if (!persist) { memset(&sess, 0, sizeof sess); sess.fd = -1; make_session_id(sess.id); }
@@ -1404,7 +1509,7 @@ int main(int argc, char **argv) {
                replays exactly what the live session carries (#305). */
         }
     }
-    if (sess.fd >= 0) close(sess.fd); free(sess.path); free(sess.last_stop); free(sess.response_model);
+    if (sess.fd >= 0) close(sess.fd); free(sess.path); free(sess.last_stop); free(sess.response_model); mlist_free(&sess.models);
     cJSON_Delete(messages); cJSON_Delete(tools);
     curl_global_cleanup();
     return 0;
