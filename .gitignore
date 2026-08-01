@@ -28,3 +28,7 @@ dist/
 # package sends them to /var/cache instead (todos/0340), but a host-side probe
 # run against vendor/cpython/Lib will still leave them here.
 vendor/cpython/**/__pycache__/
+
+# The native gcode oracle build (os/gcode/build-native.sh) — ~/.local/bin/gcode
+# symlinks to this artifact (#353).
+os/gcode/gcode

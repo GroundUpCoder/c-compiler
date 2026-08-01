@@ -17,8 +17,9 @@
  *   ANTHROPIC_API_KEY    -> x-api-key
  *   ANTHROPIC_AUTH_TOKEN -> Authorization: Bearer (takes precedence)
  *   ANTHROPIC_MODEL      default claude-opus-4-8
- * Flags: -p PROMPT (one-shot), --model, --system-prompt, --max-turns,
- *   --max-tokens, --resume, --continue, --no-persist, --verbose, --no-color.
+ * Flags: -p PROMPT (one-shot), --model, --system-prompt, --max-turns (opt-in
+ *   turn cap; default unlimited, #353), --max-tokens, --resume, --continue,
+ *   --no-persist, --verbose, --no-color.
  */
 
 #include <stdio.h>
@@ -1059,7 +1060,7 @@ static int agent_loop(config *cfg, session *sess, cJSON *messages, cJSON *tools)
     usage turn = {0}; int rounds = 0, last = 0; const char *status = "done";
     g_interrupted = 0;
     char turn_id[80]; snprintf(turn_id, sizeof turn_id, "%s-%lld", sess->id, sess->turn_index);
-    for (long round = 0; round < cfg->max_turns; round++) {
+    for (long round = 0; cfg->max_turns <= 0 || round < cfg->max_turns; round++) {
         last = do_turn(cfg, sess, messages, tools, &turn); if (last >= 0) rounds++;
         if (last <= 0) break;
     }
@@ -1190,7 +1191,7 @@ int main(int argc, char **argv) {
                         "files and run shell commands. Be concise. Prefer small, verifiable "
                         "steps. The C compiler is `cc`.";
     cfg.max_tokens = 4096;
-    cfg.max_turns  = 24;
+    cfg.max_turns  = 0;    /* #353: 0 = unlimited; --max-turns N is the opt-in cap */
     cfg.verbose = 0;
     cfg.color = -1;   /* #303: -1 auto (isatty), 0 forced off, 1 forced on */
 
