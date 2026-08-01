@@ -760,6 +760,156 @@ function sessionAutoscroll() {
     ink.as8 > 1000, `row0=${ink.as8}`);
 }
 
+/* ---- session X: selection while scrolled (ticket #355) ----
+ * Selection anchors are VIRTUAL (content) rows — hist_count - view_off +
+ * viewport_row, the renderer's view_row space. The pre-#355 code stored
+ * viewport rows as live-grid rows and hid the highlight while scrolled
+ * (show_sel), so a drag over a scrolled-back line silently copied the
+ * LIVE bottom rows. Three arms:
+ *   X1 scrolled copy: a marker floods into history (the oldest line),
+ *      PageUp to the top, drag across the marker row, Ctrl+Shift+C ->
+ *      clip -o must return the MARKER text (red pre-fix: live seq
+ *      digits) and the drag must render inverted cells at the dragged
+ *      row (red pre-fix: show_sel suppressed them).
+ *   X2 content tracking: a selection made on the live grid keeps copying
+ *      the same TEXT after output pushes it into history (virt indices
+ *      are content-stable), and CLEARS when the ring evicts its content
+ *      — the chord becomes a no-op and a sentinel stays in the slot.
+ *      scrollback=10 (startup config) makes eviction cheap.
+ *   X3 RIS hygiene: ESC c (hist_clear) drops the selection — a chord
+ *      after a reset must not copy stale coords. */
+function sessionSelScroll() {
+  const PGUP = 1073741899;                        // SDLK_PAGEUP
+  const MARK = 'SEL-COPY-MARKER';
+  // Drag cells 0..20 of viewport row 0 (8x19 cells; y=39 -> row 0 below
+  // the GRID_Y band; BUTTON_UP does not extend, hover supplies the final
+  // motion). Cols past the text are trailing blanks the copy trims.
+  const dragRow0 = [
+    'wmctl down $TSID 2 39',
+    'wmctl hover $TSID 162 39',
+    'wmctl up $TSID 162 39',
+  ];
+  const chord = 'wmctl key $TSID 0 67 65';        // Ctrl+Shift+C -> KA_COPY
+  const clipRead = (tag) => [
+    'echo ==' + tag,
+    'clip -o',
+    'echo ==' + tag + 'end',
+  ];
+  const script1 = [
+    'term &',
+    'wmctl wait win term',                         // window spawn (0155)
+    'sleep 2',                                     // timing subject: hush banner + prompt render (multi-frame)
+    'TSID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
+    // clear+home, the marker line, then flood it off the top into history.
+    keys("printf '\\033[2J\\033[H'; echo " + MARK + '; seq 300\r'),
+    'sleep 3',                                     // timing subject: 300 lines echo + scroll (multi-frame)
+    // PageUp clamps at the oldest history line = the marker at row 0.
+    ...Array(20).fill('wmctl key $TSID 0 ' + PGUP),
+    'sleep 1',                                     // timing subject: scrolled-view repaint (multi-frame)
+    'wmctl shot $TSID /root/x_pre.ppm && echo x-pre-ok',
+    ...dragRow0,
+    'sleep 1',                                     // timing subject: selection repaint (multi-frame)
+    'wmctl shot $TSID /root/x_sel.ppm && echo x-sel-ok',
+    chord,
+    'for i in $(seq 1 120); do clip -o >/dev/null 2>&1 && break; sleep 0.05; done',  // copy landed in the kernel slot (bounded poll, 0155)
+    ...clipRead('xclip'),
+    keys('exit\r'),
+    'wmctl wait nowin term',                       // hush exits -> term reaps -> window gone (0155)
+    '',
+  ].join('\n');
+  const s1 = driveBoot(script1, { image, timeout: 420000 });
+  const out1 = s1.stdout;
+  const grab = (out, tag) =>
+    (out.split('==' + tag + '\n')[1] || '').split('==' + tag + 'end')[0].replace(/\n$/, '');
+  check('selscroll: X1 both shots written',
+    out1.includes('x-pre-ok') && out1.includes('x-sel-ok'), out1.slice(-300));
+  check('selscroll: X1 copy while scrolled returns the marker under the cursor (not live rows)',
+    grab(out1, 'xclip') === MARK, JSON.stringify(grab(out1, 'xclip')));
+
+  // Pixel arm: the drag must add inverted cells on row 0 (the selected
+  // cells' bg becomes the fg — a large nonzero-px delta over the plain
+  // marker text; pre-fix show_sel hides the highlight => delta ~0).
+  const b1 = driveBoot('cat /root/x_pre.ppm /root/x_sel.ppm\n',
+    { image, timeout: 120000, maxBuffer: 16 * 1024 * 1024, encoding: null });
+  function parsePPM(buf, off) {
+    const head = buf.toString('latin1', off, off + 32);
+    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
+    if (!m) return null;
+    const w = +m[1], h = +m[2], data = off + m[0].length;
+    return { w, h, data, end: data + w * h * 3 };
+  }
+  function row0Ink(buf, ppm) {
+    let n = 0;
+    for (let y = GRID_Y; y < GRID_Y + 19; y++)
+      for (let x = 0; x < ppm.w; x++) {
+        const i = ppm.data + (y * ppm.w + x) * 3;
+        if (buf[i] | buf[i + 1] | buf[i + 2]) n++;
+      }
+    return n;
+  }
+  const pPre = parsePPM(b1.stdout, 0);
+  const pSel = pPre && parsePPM(b1.stdout, pPre.end);
+  if (!pPre || !pSel) { check('selscroll: X1 shots parse', false); return; }
+  const inkPre = row0Ink(b1.stdout, pPre), inkSel = row0Ink(b1.stdout, pSel);
+  check('selscroll: X1 scrolled selection renders inverted cells at the dragged row',
+    inkSel > inkPre + 1500, `pre=${inkPre} sel=${inkSel}`);
+
+  // X2 + X3 in a second boot with a tiny ring so eviction is cheap.
+  const script2 = [
+    "printf 'scrollback\\t10\\n' > /root/.config/term",
+    'term &',
+    'wmctl wait win term',                         // window spawn (0155)
+    'sleep 2',                                     // timing subject: hush banner + prompt render (multi-frame)
+    'TSID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
+    keys("printf '\\033[2J\\033[H'; echo EV-TRACK-LINE; seq 5\r"),
+    'sleep 1.5',                                   // timing subject: short output render (multi-frame)
+    // Select the live EV-TRACK-LINE row, copy: the identity baseline.
+    ...dragRow0,
+    chord,
+    'for i in $(seq 1 120); do clip -o >/dev/null 2>&1 && break; sleep 0.05; done',  // copy landed in the kernel slot (bounded poll, 0155)
+    ...clipRead('evclip1'),
+    // Push the selected line into history (4-5 pushes, cap 10 — no
+    // eviction): the chord must still copy the SAME text (virt rows are
+    // content-stable across hist_push).
+    keys('seq 20\r'),
+    'sleep 1.5',                                   // timing subject: 20 lines echo + scroll (multi-frame)
+    chord,
+    'sleep 1.5',                                   // timing subject: chord -> CLIP_SET lands (no readiness marker: the slot is already non-empty)
+    ...clipRead('evclip2'),
+    // Evict it (~40 more pushes past the cap of 10): the selection must
+    // CLEAR — the chord is a no-op and the sentinel stays in the slot.
+    'echo EV-SENTINEL | clip',
+    keys('seq 40\r'),
+    'sleep 2',                                     // timing subject: 40 lines echo + scroll (multi-frame)
+    chord,
+    'sleep 1.5',                                   // timing subject: a no-op chord has no marker; settle before reading the slot
+    ...clipRead('evclip3'),
+    // X3: RIS (ESC c -> hist_clear) drops the selection.
+    keys("printf '\\033[2J\\033[H'; echo RIS-LINE\r"),
+    'sleep 1.5',                                   // timing subject: clear + echo render (multi-frame)
+    ...dragRow0,
+    'echo RIS-SENT | clip',
+    keys("printf '\\033c'\r"),
+    'sleep 1.5',                                   // timing subject: RIS redraw (multi-frame)
+    chord,
+    'sleep 1.5',                                   // timing subject: a no-op chord has no marker; settle before reading the slot
+    ...clipRead('risclip'),
+    keys('exit\r'),
+    'wmctl wait nowin term',                       // hush exits -> term reaps -> window gone (0155)
+    '',
+  ].join('\n');
+  const s2 = driveBoot(script2, { image, timeout: 420000 });
+  const out2 = s2.stdout;
+  check('selscroll: X2 live-view baseline copy (identity mapping)',
+    grab(out2, 'evclip1') === 'EV-TRACK-LINE', JSON.stringify(grab(out2, 'evclip1')));
+  check('selscroll: X2 selection follows its content into history (copy after pushes)',
+    grab(out2, 'evclip2') === 'EV-TRACK-LINE', JSON.stringify(grab(out2, 'evclip2')));
+  check('selscroll: X2 eviction clears the selection (chord no-op, sentinel intact)',
+    grab(out2, 'evclip3') === 'EV-SENTINEL', JSON.stringify(grab(out2, 'evclip3')));
+  check('selscroll: X3 RIS clears the selection (chord no-op, sentinel intact)',
+    grab(out2, 'risclip') === 'RIS-SENT', JSON.stringify(grab(out2, 'risclip')));
+}
+
 /* ---- session R: side scrollbar (todos/0273b) ----
  * The 8px overlay bar at the right edge is a pure view + controller over
  * the (a) ring: hidden with no history, track (dim, 25% blend) + thumb
@@ -1151,7 +1301,7 @@ function sessionSettings() {
     term: sessionTerm, frames: sessionFrames, nested: sessionNested,
     less: sessionLess, dim: sessionDim, unicode: sessionUnicode, wide: sessionWide,
     scrollback: sessionScrollback, autoscroll: sessionAutoscroll,
-    scrollbar: sessionScrollbar,
+    selscroll: sessionSelScroll, scrollbar: sessionScrollbar,
     menubar: sessionMenubar, settings: sessionSettings,
   };
   const want = process.argv.slice(2);
