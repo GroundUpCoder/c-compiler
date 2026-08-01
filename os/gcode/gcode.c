@@ -28,6 +28,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
+#include <time.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <signal.h>
@@ -154,21 +155,29 @@ static const char *Ce(const char *code) { return g_color_err ? code : ""; }
  * USD per 1M tokens, matched by substring against the model id. Cache
  * writes bill at 1.25x input, cache reads at 0.1x (the API's ephemeral
  * cache economics). Longest/most-specific keys first so "claude-opus-5"
- * wins over "claude-opus-4". Rates: Anthropic first-party, 2026-07. */
-static double price_usage(const char *model, const usage *u) {
-    static const struct { const char *key; double in, out; } P[] = {
-        { "claude-fable-5",  10.0, 50.0 },
-        { "claude-mythos-5", 10.0, 50.0 },
-        { "claude-opus-5",    5.0, 25.0 },
-        { "claude-opus-4",    5.0, 25.0 },  /* 4.8/4.7/4.6/4.5/4.1/4.0 */
-        { "claude-sonnet-5",  3.0, 15.0 },
-        { "claude-sonnet-4",  3.0, 15.0 },
-        { "claude-haiku-4",   1.0,  5.0 },
+ * wins over "claude-opus-4". Rates: Anthropic first-party, 2026-08.
+ * A row may carry a dated introductory rate (#313): `until` is the LAST
+ * UTC day (YYYY-MM-DD) on which the in/out columns apply; from the next
+ * day the sticker columns in2/out2 take over. `today` is passed as a
+ * YYYY-MM-DD string so the rollover is testable with fixed dates. */
+static double price_usage_at(const char *model, const usage *u, const char *today) {
+    static const struct { const char *key; double in, out;
+                          const char *until; double in2, out2; } P[] = {
+        { "claude-fable-5",  10.0, 50.0, NULL, 0, 0 },
+        { "claude-mythos-5", 10.0, 50.0, NULL, 0, 0 },
+        { "claude-opus-5",    5.0, 25.0, NULL, 0, 0 },
+        { "claude-opus-4",    5.0, 25.0, NULL, 0, 0 },  /* 4.8/4.7/4.6/4.5/4.1/4.0 */
+        { "claude-sonnet-5",  2.0, 10.0, "2026-08-31", 3.0, 15.0 },  /* intro, then sticker */
+        { "claude-sonnet-4",  3.0, 15.0, NULL, 0, 0 },
+        { "claude-haiku-4",   1.0,  5.0, NULL, 0, 0 },
     };
     if (!model) return -1.0;
     for (size_t i = 0; i < sizeof P / sizeof P[0]; i++) {
         if (strstr(model, P[i].key)) {
             double in = P[i].in, out = P[i].out;
+            if (P[i].until && today && strcmp(today, P[i].until) > 0) {
+                in = P[i].in2; out = P[i].out2;
+            }
             return ((double)u->input_tokens * in
                   + (double)u->cache_creation_input_tokens * in * 1.25
                   + (double)u->cache_read_input_tokens * in * 0.10
@@ -176,6 +185,13 @@ static double price_usage(const char *model, const usage *u) {
         }
     }
     return -1.0;   /* unknown model — caller omits the $ line */
+}
+
+static double price_usage(const char *model, const usage *u) {
+    /* single-threaded (the gucOS libc has gmtime but not gmtime_r) */
+    char today[11]; time_t now = time(NULL); struct tm *tm = gmtime(&now);
+    if (!tm || !strftime(today, sizeof today, "%Y-%m-%d", tm)) today[0] = 0;
+    return price_usage_at(model, u, today);
 }
 
 /* ---- append-only presentation (#302) ----------------------------------
@@ -1148,13 +1164,21 @@ static int session_resume(session *s, config *cfg, cJSON *messages, const char *
 }
 
 static int self_test(void) {
+    /* #313: the dated Sonnet 5 intro rate ($2/$10 through 2026-08-31,
+     * $3/$15 sticker after) — fixed dates so the check outlives the
+     * rollover. 1M in + 1M out makes the expected sums exact doubles. */
+    usage pu = { 1000000, 1000000, 0, 0 };
+    int ok = price_usage_at("claude-sonnet-5", &pu, "2026-08-31") == 12.0 &&
+             price_usage_at("claude-sonnet-5", &pu, "2026-09-01") == 18.0 &&
+             price_usage_at("claude-opus-5", &pu, "2026-09-01") == 30.0 &&
+             price_usage_at("some-unknown-model", &pu, "2026-08-02") == -1.0;
     const char *fixture =
         "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"model\":\"fixture-model\",\"usage\":{\"input_tokens\":12,\"output_tokens\":1,\"cache_creation_input_tokens\":3,\"cache_read_input_tokens\":4,\"future_counter\":9}}}\n\n"
         "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\n"
         "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"fixture\"}}\n\n"
         "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\n";
     stream_ctx ctx; memset(&ctx, 0, sizeof ctx); write_cb((char *)fixture, 1, strlen(fixture), &ctx);
-    int ok = ctx.round_usage.input_tokens == 12 && ctx.round_usage.output_tokens == 7 &&
+    ok &= ctx.round_usage.input_tokens == 12 && ctx.round_usage.output_tokens == 7 &&
         ctx.round_usage.cache_creation_input_tokens == 3 && ctx.round_usage.cache_read_input_tokens == 4 &&
         json_count(ctx.raw_usage, "future_counter") == 9;
     char tmp[] = "/tmp/gcode-step2-test-XXXXXX"; if (!mkdtemp(tmp)) return 1; setenv("GCODE_STATE_DIR", tmp, 1);
