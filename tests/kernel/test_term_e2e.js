@@ -573,6 +573,29 @@ function sessionScrollback() {
     keys('echo SNAPMARK\r'),
     'sleep 2',                                     // timing subject: echo output + snap repaint (multi-frame)
     'wmctl shot $TSID /root/sb_snap.ppm && echo sb-snap-ok',
+    // Fractional wheel (#347): trackpads report |wheel.y| < 1 per event.
+    // Print a fresh marker + a 12-line tail so the marker sits mid-screen,
+    // then wheel in 0.25-notch (= 0.75-line) steps: one event cannot move
+    // a line, the sum must, and the signed remainder must carry (up AND
+    // back down). The marker's ROW tracks view_off exactly.
+    keys("printf '" + HASH + "\\n'; seq 12\r"),
+    'sleep 2',                                     // timing subject: echo + 13 lines render (multi-frame)
+    'wmctl shot $TSID /root/fw0.ppm && echo fw0-ok',
+    'wmctl wheel $TSID 0.25',                      // carry 0.75: below one line
+    'sleep 1',                                     // timing subject: (non-)repaint settle
+    'wmctl shot $TSID /root/fw1.ppm && echo fw1-ok',
+    'wmctl wheel $TSID 0.25',                      // 1.5 -> 1 line up, rem 0.5
+    'sleep 1',                                     // timing subject: scrolled repaint (multi-frame)
+    'wmctl shot $TSID /root/fw2.ppm && echo fw2-ok',
+    'wmctl wheel $TSID 0.25',                      // 0.5+0.75=1.25 -> 1 more line
+    'sleep 1',                                     // timing subject: scrolled repaint (multi-frame)
+    'wmctl shot $TSID /root/fw3.ppm && echo fw3-ok',
+    'wmctl wheel $TSID -0.25',                     // 0.25-0.75=-0.5: no move either way
+    'sleep 1',                                     // timing subject: (non-)repaint settle
+    'wmctl shot $TSID /root/fw4.ppm && echo fw4-ok',
+    'wmctl wheel $TSID -0.25',                     // -1.25 -> 1 line back down
+    'sleep 1',                                     // timing subject: scrolled repaint (multi-frame)
+    'wmctl shot $TSID /root/fw5.ppm && echo fw5-ok',
     keys('exit\r'),
     'wmctl wait nowin term',                       // hush exits -> term reaps -> window gone (0155)
     '',
@@ -583,9 +606,13 @@ function sessionScrollback() {
     out.includes('sb-live-ok') && out.includes('sb-up-ok') &&
     out.includes('sb-pgdn-ok') && out.includes('sb-wheel-ok') &&
     out.includes('sb-snap-ok'), out.slice(-300));
+  check('scrollback: all six fractional-wheel shots written (#347)',
+    ['fw0', 'fw1', 'fw2', 'fw3', 'fw4', 'fw5'].every((n) => out.includes(n + '-ok')),
+    out.slice(-300));
 
-  const b = driveBoot('cat /root/sb_live.ppm /root/sb_up.ppm /root/sb_pgdn.ppm /root/sb_wheel.ppm /root/sb_snap.ppm\n',
-    { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });
+  const b = driveBoot('cat /root/sb_live.ppm /root/sb_up.ppm /root/sb_pgdn.ppm /root/sb_wheel.ppm /root/sb_snap.ppm'
+    + ' /root/fw0.ppm /root/fw1.ppm /root/fw2.ppm /root/fw3.ppm /root/fw4.ppm /root/fw5.ppm\n',
+    { image, timeout: 120000, maxBuffer: 64 * 1024 * 1024, encoding: null });
   function parsePPM(buf, off) {
     const head = buf.toString('latin1', off, off + 32);
     const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
@@ -603,12 +630,29 @@ function sessionScrollback() {
       }
     return n;
   }
+  // Row r's ink (cell rows are 19px below the GRID_Y band) — the marker's
+  // ROW in a shot is the one full-ink row (>1000; seq numbers ~140).
+  function markerRow(buf, ppm) {
+    for (let r = 0; r < 24; r++) {
+      let n = 0;
+      for (let y = GRID_Y + r * 19; y < GRID_Y + (r + 1) * 19; y++)
+        for (let x = 0; x < ppm.w; x++) {
+          const i = ppm.data + (y * ppm.w + x) * 3;
+          if (buf[i] | buf[i + 1] | buf[i + 2]) n++;
+        }
+      if (n > 1000) return r;
+    }
+    return -1;
+  }
   let off = 0;
   const shots = {};
-  for (const nm of ['live', 'up', 'pgdn', 'wheel', 'snap']) {
+  const frows = {};
+  for (const nm of ['live', 'up', 'pgdn', 'wheel', 'snap',
+                    'fw0', 'fw1', 'fw2', 'fw3', 'fw4', 'fw5']) {
     const p = parsePPM(b.stdout, off);
     if (!p) { check('scrollback: ' + nm + ' shot parses', false); return; }
-    shots[nm] = row0Ink(b.stdout, p);
+    if (nm.startsWith('fw')) frows[nm] = markerRow(b.stdout, p);
+    else shots[nm] = row0Ink(b.stdout, p);
     off = p.end;
   }
   // The marker line is a full row of '#': ~2000 ink px. A live seq number is
@@ -623,6 +667,24 @@ function sessionScrollback() {
     shots.wheel > 1000, `row0=${shots.wheel}`);
   check('scrollback: new output snaps the view back to live',
     shots.snap < 500, `row0=${shots.snap}`);
+
+  // Fractional wheel (#347): the marker's row tracks view_off exactly —
+  // each up-scrolled line pushes the visible content (and the marker) one
+  // row DOWN. R = the marker's live row after the fresh print.
+  const R = frows.fw0;
+  const fr = JSON.stringify(frows);
+  check('fractional wheel: marker visible mid-screen before the leg',
+    R >= 2 && R <= 19, fr);
+  check('fractional wheel: one 0.25-notch event (0.75 lines) cannot move a line',
+    frows.fw1 === R, fr);
+  check('fractional wheel: the second event crosses one line (carry summed)',
+    frows.fw2 === R + 1, fr);
+  check('fractional wheel: the 0.5-line remainder carries into the third event',
+    frows.fw3 === R + 2, fr);
+  check('fractional wheel: opposite sign cancels the remainder (no move)',
+    frows.fw4 === R + 2, fr);
+  check('fractional wheel: accumulated down-motion scrolls one line back',
+    frows.fw5 === R + 1, fr);
 }
 
 /* ---- session AS: the `autoscroll` config key (#354) ----

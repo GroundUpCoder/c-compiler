@@ -1967,6 +1967,11 @@ static void pump_sdl(void) {
             hwnd_origin(target, &ox, &oy);
             ox += nc_edge(target);               /* into the target's CLIENT */
             oy += nc_edge(target);
+            /* Multiply BEFORE the cast so fractional trackpad notches
+             * survive as sub-WHEEL_DELTA deltas (consumers carry them in
+             * a wheelAcc, #346/0210). Motion below 1/120 notch per event
+             * still truncates here with no carry — second-order (120x
+             * finer than the per-notch class), left as-is (#346). */
             q_push(target, WM_MOUSEWHEEL,
                    MAKEWPARAM(mk_of_state(0), (int)(e.wheel.y * WHEEL_DELTA)),
                    MAKELPARAM(x - ox, y - oy), 0);
@@ -4937,6 +4942,7 @@ typedef struct {
     int top;                    /* first visible row */
     int multi;                  /* LBS_EXTENDEDSEL: a selection SET, not one row */
     int sbDrag, sbDragOff;      /* built-in vscroll thumb drag (0275) */
+    int wheelAcc;               /* fractional WM_MOUSEWHEEL carry (#346) */
 } LbState;
 
 /* Extended-sel primitives (0106): the SET lives in st->marks; st->sel is the
@@ -5194,10 +5200,19 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         st->sbDrag = 0;
         if (GetCapture() == h) ReleaseCapture();
         return 0;
-    case WM_MOUSEWHEEL:
-        lb_vscroll(h, st,
-                   st->top - 3 * (GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA));
+    case WM_MOUSEWHEEL: {                        /* 3 lines per notch; deltas
+                                                    accumulate so sub-notch
+                                                    trackpad events still add
+                                                    up (#346, the 0210 EDIT
+                                                    idiom) */
+        st->wheelAcc += GET_WHEEL_DELTA_WPARAM(wp);
+        int lines = st->wheelAcc / (WHEEL_DELTA / 3);
+        if (lines) {
+            st->wheelAcc -= lines * (WHEEL_DELTA / 3);
+            lb_vscroll(h, st, st->top - lines);
+        }
         return 0;
+    }
     case WM_VSCROLL: {                           /* the classic contract (0275) */
         int rows = lb_rows(h);
         switch (LOWORD(wp)) {
@@ -5264,6 +5279,7 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         st->sel = -1;
         st->anchor = -1;
         st->top = 0;
+        st->wheelAcc = 0;   /* a refilled list must not inherit a carry (#346) */
         InvalidateRect(h, NULL, TRUE);
         return 0;
     case LB_GETCOUNT:

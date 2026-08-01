@@ -72,6 +72,27 @@ const out = driveBoot([
   'wmctl key $SID 82 1073741906',                // -> sel=2 top=2
   'sleep 1',                                     // paint settle before the shot (no repaint marker)
   'wmctl shot $SID /root/s3.ppm && echo s3-ok',
+  // Sub-notch wheel (#346): trackpad events arrive as fractional notches;
+  // 0.25 notch = 30/120 wheel units, below the 40-unit (WHEEL_DELTA/3)
+  // one-line quantum — a single event must NOT scroll, the accumulated sum
+  // must, and the remainder must carry into later events (signed, so
+  // opposite-sign motion cancels). State entering: sel=2 top=2, carry 0.
+  // LBN_SELCHANGE fires only when sel CHANGES, so the evidence clicks
+  // alternate between rows 0 (y54) and 1 (y76) — every click below picks
+  // an index different from the previous one and therefore prints.
+  'wmctl hover $SID 100 100',
+  'wmctl wheel $SID -0.25',                      // carry -30: below quantum
+  'wmctl click $SID 100 76',                     // row 1 -> sel=3 top=2 (no move)
+  'wmctl wheel $SID -0.25',                      // -60 -> 1 row down, rem -20
+  'wmctl click $SID 100 76',                     // row 1 -> sel=4 top=3
+  'wmctl wheel $SID 0.25',                       // -20+30=+10: no move either way
+  'wmctl click $SID 100 54',                     // row 0 -> sel=3 top=3
+  'wmctl wheel $SID 0.25',                       // +40 -> 1 row up, rem 0
+  'wmctl click $SID 100 54',                     // row 0 -> sel=2 top=2
+  'wmctl wheel $SID 0.25',                       // +30: rem was consumed exactly
+  'wmctl click $SID 100 76',                     // row 1 -> sel=3 top=2 (no move)
+  'wmctl wheel $SID 0.25',                       // +60 -> 1 row up, rem +20
+  'wmctl click $SID 100 54',                     // row 0 -> sel=1 top=1
   'wmctl click Quit',                            // clean exit flushes stdout
   'wmctl wait nolabel Greet 6000',
   '',
@@ -93,6 +114,14 @@ const seq = [
   ['wheel rides the same clamp', 'ctldemo: sel=4 top=3'],
   ['key UP walks the caret in the scrolled view', 'ctldemo: sel=3 top=3'],
   ['key UP across the top edge scrolls the view', 'ctldemo: sel=2 top=2'],
+  // Sub-notch wheel (#346) — the six ordered probes above; every click
+  // changes sel (rows alternate), so each state below is a fresh print.
+  ['sub-notch: one -0.25-notch event cannot scroll', 'ctldemo: sel=3 top=2'],
+  ['sub-notch: the second -0.25 crosses the quantum (one row down)', 'ctldemo: sel=4 top=3'],
+  ['sub-notch: opposite sign cancels the remainder (no move)', 'ctldemo: sel=3 top=3'],
+  ['sub-notch: +0.25 completes the up quantum (one row up)', 'ctldemo: sel=2 top=2'],
+  ['sub-notch: an exactly-consumed remainder does not linger', 'ctldemo: sel=3 top=2'],
+  ['sub-notch: the +30 remainder carries into the next event', 'ctldemo: sel=1 top=1'],
 ];
 let at = 0;
 for (const [name, marker] of seq) {

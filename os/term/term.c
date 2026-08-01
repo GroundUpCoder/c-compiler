@@ -258,6 +258,7 @@ static int sb_max;                  /* configured capacity; 0 = disabled */
 static int hist_count;              /* valid lines, <= sb_max */
 static int hist_head;               /* ring index of the oldest line */
 static int view_off;                /* lines scrolled up from live; 0 = live */
+static float wheel_acc;             /* fractional wheel carry, in lines (#347) */
 
 /* ---- pty / child ---- */
 static int mfd = -1;
@@ -365,6 +366,7 @@ static void hist_push(const Cell *row, int len) {
 static void hist_clear(void) {
     for (int i = 0; i < hist_count; i++) free(hist_at(i)->cells);
     hist_count = 0; hist_head = 0; view_off = 0;
+    wheel_acc = 0;                     /* a cleared history owes no carry (#347) */
     sel_on = sel_drag = 0;             /* virt anchors just dangled (#355) */
 }
 
@@ -375,6 +377,17 @@ static void scroll_view(int delta) {
     if (nv < 0) nv = 0;
     if (nv > hist_count) nv = hist_count;
     if (nv != view_off) { view_off = nv; dirty = 1; }
+}
+
+/* Wheel motion in SDL notch units, possibly fractional (trackpads report
+ * |y| < 1 per event, #347): accumulate at 3 lines/notch, consume whole
+ * lines, keep the signed remainder. The (int) truncation is toward zero,
+ * so the remainder keeps its sign and opposite-sign motion cancels
+ * without drift — the user32 wheelAcc contract (0210). */
+static void scroll_wheel(float notches) {
+    wheel_acc += notches * 3.0f;
+    int lines = (int)wheel_acc;
+    if (lines) { wheel_acc -= (float)lines; scroll_view(lines); }
 }
 
 /* Snap the viewport back to the live bottom. */
@@ -401,6 +414,7 @@ static void sb_set_max(int n) {
     hist_head = 0;
     hist_count = keep;
     if (view_off > hist_count) view_off = hist_count;
+    wheel_acc = 0;         /* capacity change re-baselines the carry (#347) */
     dirty = 1;
 }
 
@@ -617,6 +631,7 @@ static void enter_alt(int enter) {
         clamp_cursor();
     }
     view_off = 0;          /* alt screen has no scrollback; keep the view live */
+    wheel_acc = 0;         /* the other screen must not inherit a carry (#347) */
     wrap_pending = 0;
 }
 
@@ -2011,7 +2026,7 @@ static void frame_cb(void) {
             /* Wheel scrolls scrollback on the main screen; alt-screen apps
              * own the viewport (no history). wheel.y > 0 = away = up into
              * history, one notch ~ 3 lines (0273a). */
-            if (!on_alt) scroll_view((int)e.wheel.y * 3);
+            if (!on_alt) scroll_wheel(e.wheel.y);
         } else if (e.type == SDL_EVENT_WINDOW_RESIZED) {
             surf = SDL_GetWindowSurface(win);   /* re-derive (SDL3 contract) */
             if (__mc.open) mc_close();          /* geometry moved under the chain */
