@@ -119,6 +119,14 @@ function startSse(scripts) {
   });
 }
 
+// #315: a >1KB single-line input for the paste leg. The tail marker starts
+// past byte 2000, so its arrival at the fake server proves the END of the
+// line survived — busybox FEATURE_EDITING_MAX_LEN=1024 truncated exactly
+// this (lineedit.c's read_line_input clamp), silently, before the raise
+// to 8192 (native gcode's fgets buffer).
+const LONG_INPUT = 'LONGLINE-BEG ' + 'abcdefghijklmnopqrstuvwxyz0123456789 '.repeat(55)
+  + 'LONGLINE-TAIL-MARKER-END';   // 2072 chars, no quotes/backslashes/newlines
+
 const STALL = {
   pre: sse('message_start', { message: { id: 'msg_s', role: 'assistant', content: [] } })
     + sse('content_block_start', { index: 0, content_block: { type: 'text', text: '' } })
@@ -135,6 +143,7 @@ const srv = await startSse([
   toolUseResponse('Let me run it.', 'toolu_b1', 'bash', { command: 'echo hello-gcode' }),
   textResponse('The command printed hello-gcode. TOOL-TURN-DONE'),
   textResponse('History recall reply. RECALL-DONE'),   // readline leg (Up-arrow)
+  textResponse('Long input received in full. LONGLINE-DONE'),   // #315 paste leg
   textResponse(longText()),
   STALL,
 ]);
@@ -147,6 +156,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 try {
   await waitForServer(URL, { tries: 240, interval: 500 });
   const context = await browser.newContext({ viewport: { width: 1100, height: 900 } });
+  // #315 paste leg: writeText + the CLIP_GET seam need the clipboard grants.
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   const page = await context.newPage();
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
@@ -319,9 +330,37 @@ try {
     JSON.stringify(recallUsers).slice(0, 200));
   await shot('2b-readline-recall');
 
+  // ---- leg 1c (#315): a >1KB paste survives the lineedit line cap -----
+  // The in-OS cap is busybox FEATURE_EDITING_MAX_LEN (raised 1024 -> 8192
+  // to match native gcode's fgets(8192) buffer); before the raise,
+  // read_line_input's clamp (lineedit.c) silently cut the line at 1023
+  // bytes. Delivery is the REAL paste path: host clipboard writeText ->
+  // term Ctrl+Shift+V (KA_PASTE, windows keymap, os/keys.h) -> the CLIP_GET
+  // seam refreshes the kernel slot -> paste_clipboard writes the pty ->
+  // lineedit raw mode. Judged by the fake server seeing the ENTIRE string
+  // in the new POST — the tail marker sits past byte 2000, so a 1024 clamp
+  // fails this check (verified as the red control at 1024).
+  await page.evaluate((t) => navigator.clipboard.writeText(t), LONG_INPUT);
+  await page.keyboard.down('Control');
+  await page.keyboard.down('Shift');
+  await page.waitForTimeout(100);   // timing subject: paced chord (the os-shell rule)
+  await page.keyboard.press('KeyV');
+  await page.waitForTimeout(100);   // timing subject: paced chord
+  await page.keyboard.up('Shift');
+  await page.keyboard.up('Control');
+  await sleep(1000);   // no-marker settle: the 2KB paste echoes onto the prompt
+  await page.keyboard.press('Enter');
+  await waitBodies(5);
+  await quiesce(G.x, G.y, G.w, G.h);
+  const longBody = JSON.stringify(srv.bodies[4].messages);
+  check('#315: >1KB paste reached the API intact (whole string in one POST)',
+    longBody.includes(LONG_INPUT),
+    `sent=${LONG_INPUT.length}ch head=${longBody.includes('LONGLINE-BEG')} tail=${longBody.includes('LONGLINE-TAIL-MARKER-END')}`);
+  await shot('2c-longline-paste');
+
   // ---- leg 2: long streamed reply, then scrollback --------------------
   await page.keyboard.type('tell me a long story\r', { delay: 30 });
-  await waitBodies(5);
+  await waitBodies(6);
   await quiesce(G.x, G.y, G.w, G.h);
   await shot('3-long-reply-live-bottom');
   const liveSig = await bright(G.x, G.y, G.w, 100);   // top rows fingerprint
@@ -372,7 +411,7 @@ try {
   // ---- leg 4: Ctrl+C aborts a stalled stream (#306 — judged since the
   // xferinfo path landed; was recorded-only while interrupt was dead) ----
   await page.keyboard.type('stall please\r', { delay: 30 });
-  await waitBodies(6);
+  await waitBodies(7);
   await sleep(1500);   // partial delta rendered; server now holds for 8s
   await shot('8-mid-stream-stall');
   await page.keyboard.down('Control');
@@ -397,7 +436,7 @@ try {
   await quiesce(G2.x, G2.y, G2.w, G2.h);   // new session line + prompt before typing
   const redBefore = await red(G2.x, G2.y, G2.w, G2.h);
   await page.keyboard.type('error demo\r', { delay: 30 });
-  await waitBodies(7);   // exhausted queue -> HTTP 500
+  await waitBodies(8);   // exhausted queue -> HTTP 500
   await quiesce(G2.x, G2.y, G2.w, G2.h);
   const redAfter = await red(G2.x, G2.y, G2.w, G2.h);
   check('HTTP error rendered in red (SGR 31)', redAfter > redBefore + 8,
@@ -408,7 +447,7 @@ try {
   // the SAME gcode must reach the API (a dead gcode drops the line into
   // hush and never POSTs; pre-#305 this was the crash-to-shell).
   await page.keyboard.type('again please\r', { delay: 30 });
-  await waitBodies(8);   // exhausted queue answers 500 again; the POST is the proof
+  await waitBodies(9);   // exhausted queue answers 500 again; the POST is the proof
   await quiesce(G2.x, G2.y, G2.w, G2.h);
   check('REPL survived the HTTP 500: follow-up send reached the API (#305)', true);
   await page.keyboard.type('/quit\r', { delay: 30 });
