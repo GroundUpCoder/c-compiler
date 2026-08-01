@@ -625,6 +625,141 @@ function sessionScrollback() {
     shots.snap < 500, `row0=${shots.snap}`);
 }
 
+/* ---- session AS: the `autoscroll` config key (#354) ----
+ * Gates the OUTPUT-driven snap (drain loop) only — the keypress snap and
+ * the sb_drag hold are deliberately independent and unchanged. Four arms
+ * in one boot, all against the session-S marker probe (row-0 ink: ~2000
+ * for the full-width '#' history marker, <500 for live content). Output
+ * is produced ON DEMAND: a foreground `while ! test -f /tmp/goN` loop
+ * typed into the term emits its line only when the BOOT shell touches
+ * the trigger file, so no shot races a timer (0171 discipline).
+ *   P1  key ABSENT (startup default): scrolled-up view snaps on output.
+ *   P2  LIVE edit -> `autoscroll off` (cfgwatch reload, no restart):
+ *       scrolled-up view survives new output. `touch /tmp/done2` runs in
+ *       the same command list as the echo — its existence proves the
+ *       output really arrived (a no-op trigger would false-pass).
+ *   P3  LIVE edit -> `autoscroll 1` (the numeric spelling): snaps again.
+ *   P4  drag-HOLD with autoscroll on: output mid-drag never snaps (the
+ *       0273b rule composes with the new gate; in off mode it is
+ *       subsumed — no snap regardless of drag).
+ * RED without the feature: as4 shows live content (the off store key
+ * changes nothing and the P2 output snaps the view). */
+function sessionAutoscroll() {
+  const PGUP = 1073741899;                        // SDLK_PAGEUP
+  const HASH = '#'.repeat(40);
+  const waitLoop = (n) =>
+    keys('while ! test -f /tmp/go' + n + '; do sleep 0.2; done; ' +
+         'echo GO' + n + '; touch /tmp/done' + n + '\r');
+  const pgup20 = Array(20).fill('wmctl key $TSID 0 ' + PGUP);
+  const script = [
+    'term &',
+    'wmctl wait win term',                         // window spawn (0155)
+    'sleep 2',                                     // timing subject: hush banner + prompt render (multi-frame)
+    'TSID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
+    keys("printf '\\033[2J\\033[H'; printf '" + HASH + "\\n'; seq 300\r"),
+    'sleep 3',                                     // timing subject: 300 lines echo + scroll (multi-frame)
+    // --- P1: key absent (startup default on) — output snaps ---
+    waitLoop(1),
+    'sleep 1',                                     // timing subject: typed loop line lands (it emits nothing)
+    ...pgup20,
+    'sleep 1',                                     // timing subject: scrolled-view repaint (multi-frame)
+    'wmctl shot $TSID /root/as1.ppm && echo as1-ok',
+    'touch /tmp/go1',
+    'sleep 2',                                     // timing subject: triggered echo + snap repaint (multi-frame)
+    'wmctl shot $TSID /root/as2.ppm && echo as2-ok',
+    // --- P2: live edit -> off; the scrolled view must survive output ---
+    "printf 'autoscroll\\toff\\n' > /root/.config/term",
+    'sleep 1',                                     // timing subject: FS_WATCH settled event + reload
+    waitLoop(2),
+    'sleep 1',                                     // timing subject: typed loop line lands
+    ...pgup20,
+    'sleep 1',                                     // timing subject: scrolled-view repaint (multi-frame)
+    'wmctl shot $TSID /root/as3.ppm && echo as3-ok',
+    'touch /tmp/go2',
+    'sleep 2',                                     // timing subject: triggered echo drained (view must NOT move)
+    'wmctl shot $TSID /root/as4.ppm && echo as4-ok',
+    'test -f /tmp/done2 && echo done2-seen',       // the P2 output really ran
+    // --- P3: live edit -> the numeric spelling `1` — snaps again ---
+    "printf 'autoscroll\\t1\\n' > /root/.config/term",
+    'sleep 1',                                     // timing subject: FS_WATCH settled event + reload
+    waitLoop(3),                                   // typing also key-snaps back to live first (unchanged rule)
+    'sleep 1',                                     // timing subject: typed loop line lands
+    ...pgup20,
+    'sleep 1',                                     // timing subject: scrolled-view repaint (multi-frame)
+    'wmctl shot $TSID /root/as5.ppm && echo as5-ok',
+    'touch /tmp/go3',
+    'sleep 2',                                     // timing subject: triggered echo + snap repaint (multi-frame)
+    'wmctl shot $TSID /root/as6.ppm && echo as6-ok',
+    // --- P4: thumb HELD with autoscroll on — mid-drag output never snaps ---
+    waitLoop(4),
+    'sleep 1',                                     // timing subject: typed loop line lands
+    'wmctl down $TSID 636 476',                    // grab the bottom-anchored thumb (0273b geometry)
+    'wmctl hover $TSID 636 32',                    // drag to the top: clamps at the marker
+    'sleep 1',                                     // timing subject: drag-scrolled repaint (multi-frame)
+    'wmctl shot $TSID /root/as7.ppm && echo as7-ok',
+    'touch /tmp/go4',
+    'sleep 2',                                     // timing subject: triggered echo drained (drag holds the view)
+    'wmctl shot $TSID /root/as8.ppm && echo as8-ok',
+    'test -f /tmp/done4 && echo done4-seen',       // the P4 output really ran
+    'wmctl up $TSID 636 32',
+    keys('exit\r'),
+    'wmctl wait nowin term',                       // hush exits -> term reaps -> window gone (0155)
+    '',
+  ].join('\n');
+  const s = driveBoot(script, { image, timeout: 420000 });
+  const out = s.stdout;
+  check('autoscroll: all eight shots written',
+    ['as1', 'as2', 'as3', 'as4', 'as5', 'as6', 'as7', 'as8']
+      .every((n) => out.includes(n + '-ok')), out.slice(-300));
+  check('autoscroll: P2 triggered output really arrived (done2)',
+    out.includes('done2-seen'));
+  check('autoscroll: P4 triggered output really arrived (done4)',
+    out.includes('done4-seen'));
+
+  const b = driveBoot('cat /root/as1.ppm /root/as2.ppm /root/as3.ppm /root/as4.ppm /root/as5.ppm /root/as6.ppm /root/as7.ppm /root/as8.ppm\n',
+    { image, timeout: 120000, maxBuffer: 48 * 1024 * 1024, encoding: null });
+  function parsePPM(buf, off) {
+    const head = buf.toString('latin1', off, off + 32);
+    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
+    if (!m) return null;
+    const w = +m[1], h = +m[2], data = off + m[0].length;
+    return { w, h, data, end: data + w * h * 3 };
+  }
+  function row0Ink(buf, ppm) {
+    let n = 0;
+    for (let y = GRID_Y; y < GRID_Y + 19; y++)
+      for (let x = 0; x < ppm.w; x++) {
+        const i = ppm.data + (y * ppm.w + x) * 3;
+        if (buf[i] | buf[i + 1] | buf[i + 2]) n++;
+      }
+    return n;
+  }
+  let off = 0;
+  const ink = {};
+  for (const nm of ['as1', 'as2', 'as3', 'as4', 'as5', 'as6', 'as7', 'as8']) {
+    const p = parsePPM(b.stdout, off);
+    if (!p) { check('autoscroll: ' + nm + ' shot parses', false); return; }
+    ink[nm] = row0Ink(b.stdout, p);
+    off = p.end;
+  }
+  check('autoscroll: P1 scrolled up to the marker (key absent)',
+    ink.as1 > 1000, `row0=${ink.as1}`);
+  check('autoscroll: P1 output snapped the view (absent = on, the default preserved)',
+    ink.as2 < 500, `row0=${ink.as2}`);
+  check('autoscroll: P2 scrolled up to the marker (after the live off edit)',
+    ink.as3 > 1000, `row0=${ink.as3}`);
+  check('autoscroll: P2 output did NOT move the view (off, applied live — no restart)',
+    ink.as4 > 1000, `row0=${ink.as4} (as3 was ${ink.as3})`);
+  check('autoscroll: P3 scrolled up to the marker (after the live `1` edit)',
+    ink.as5 > 1000, `row0=${ink.as5}`);
+  check('autoscroll: P3 output snapped the view (numeric 1 parses as on)',
+    ink.as6 < 500, `row0=${ink.as6}`);
+  check('autoscroll: P4 thumb drag reached the marker (autoscroll on)',
+    ink.as7 > 1000, `row0=${ink.as7}`);
+  check('autoscroll: P4 mid-drag output never snapped (sb_drag hold composes)',
+    ink.as8 > 1000, `row0=${ink.as8}`);
+}
+
 /* ---- session R: side scrollbar (todos/0273b) ----
  * The 8px overlay bar at the right edge is a pure view + controller over
  * the (a) ring: hidden with no history, track (dim, 25% blend) + thumb
@@ -1015,7 +1150,8 @@ function sessionSettings() {
   const ALL = {
     term: sessionTerm, frames: sessionFrames, nested: sessionNested,
     less: sessionLess, dim: sessionDim, unicode: sessionUnicode, wide: sessionWide,
-    scrollback: sessionScrollback, scrollbar: sessionScrollbar,
+    scrollback: sessionScrollback, autoscroll: sessionAutoscroll,
+    scrollbar: sessionScrollbar,
     menubar: sessionMenubar, settings: sessionSettings,
   };
   const want = process.argv.slice(2);

@@ -136,6 +136,8 @@ static int dirty = 1;
  *   scrollback  2000    (history lines, 0..10000; 0 disables)
  *   cursor      block   (block | under | bar)
  *   bell        sound   (sound | visual | none)
+ *   autoscroll  on      (on | off; 0/1 accepted — snap the view back to
+ *                        live when new output arrives, #354)
  * Loaded BEFORE glyph metrics / ring allocation at startup; applied live
  * by the settings window; live-reloaded on a ~/.config FS_WATCH event so
  * a settings change in ANY term reaches every open one (macOS Terminal
@@ -161,11 +163,14 @@ enum { CUR_BLOCK, CUR_UNDER, CUR_BAR };
 enum { BELL_SOUND, BELL_VISUAL, BELL_NONE };
 static const char *const CURSOR_NAMES[3] = { "block", "under", "bar" };
 static const char *const BELL_NAMES[3]   = { "sound", "visual", "none" };
+static const char *const ONOFF_NAMES[2]  = { "off", "on" };
 
 static int font_size = TC_DEF_FONTSIZE;
 static int theme_idx;              /* index into THEMES */
 static int cursor_style = CUR_BLOCK;
 static int bell_mode = BELL_SOUND;
+static int autoscroll_on = 1;      /* snap the view to live on new output
+                                      (#354; the `autoscroll` config key) */
 static int bell_pending;           /* BELs coalesce: one per drain pass */
 static int flash_on;               /* visual bell: grid band inverted */
 
@@ -188,7 +193,8 @@ static int tc_enum(const char *val, const char *const names[], int n,
     return def;
 }
 
-typedef struct { int fontsize, theme, scrollback, cursor, bell; } TermCfg;
+typedef struct { int fontsize, theme, scrollback, cursor, bell,
+                 autoscroll; } TermCfg;
 
 /* The effective configuration: defaults overlaid by whatever store
  * layers exist (cfg_load3 already reported any read error loudly; a
@@ -201,6 +207,7 @@ static void tc_load(TermCfg *c) {
     c->scrollback = TC_DEF_SCROLLBACK;
     c->cursor = CUR_BLOCK;
     c->bell = BELL_SOUND;
+    c->autoscroll = 1;
     cfg_user_path(user, sizeof user, "term");
     text[0] = 0;
     cfg_load3(text, sizeof text, user, "/etc/term", "/usr/share/term");
@@ -215,6 +222,11 @@ static void tc_load(TermCfg *c) {
         c->cursor = tc_enum(val, CURSOR_NAMES, 3, CUR_BLOCK);
     if (cfg_find(text, "bell", val, sizeof val))
         c->bell = tc_enum(val, BELL_NAMES, 3, BELL_SOUND);
+    if (cfg_find(text, "autoscroll", val, sizeof val))
+        /* on|off per tc_enum; a bare 0 also reads as off, anything else
+         * (incl. malformed) falls back to the on default (#354). */
+        c->autoscroll = tc_enum(val, ONOFF_NAMES, 2,
+                                strcmp(val, "0") == 0 ? 0 : 1);
 }
 
 /* ---- scrollback history ring (todos/0273a) ----
@@ -322,6 +334,12 @@ static void hist_push(const Cell *row, int len) {
     if (!slot->cells) { slot->len = 0; return; }
     memcpy(slot->cells, row, (size_t)len * sizeof(Cell));
     slot->len = len;
+    /* Content anchor (#354): a scrolled-up view (or a held thumb) tracks
+     * the LINE it shows, not its distance from live — without this every
+     * pushed line slides the content under the viewport. The snap paths
+     * (autoscroll on, any keypress) still reset to live afterwards. At a
+     * full ring's top the clamp holds: the anchored line is being evicted. */
+    if (view_off && view_off < hist_count) { view_off++; dirty = 1; }
 }
 
 static void hist_clear(void) {
@@ -1623,6 +1641,7 @@ static void cfg_apply(const TermCfg *c) {
     sb_set_max(c->scrollback);
     if (c->cursor != cursor_style) { cursor_style = c->cursor; dirty = 1; }
     bell_mode = c->bell;
+    autoscroll_on = c->autoscroll;
     if (set_win) settings_paint();     /* the pane mirrors the store */
 }
 
@@ -2002,8 +2021,10 @@ static void frame_cb(void) {
         dirty = 1;
         /* New output snaps the view back to live (0273a) — unless the
          * thumb is HELD (0273b): snapping mid-drag would rip the thumb
-         * out of the user's hand; the next output after release snaps. */
-        if (!sb_drag) view_off = 0;
+         * out of the user's hand; the next output after release snaps.
+         * `autoscroll off` (#354) suppresses the snap entirely: the view
+         * stays where the user scrolled it. */
+        if (!sb_drag && autoscroll_on) view_off = 0;
     }
     /* BELs coalesced per drain pass (0273d): a \a flood rings once per
      * frame, never once per byte. */
@@ -2041,6 +2062,7 @@ int main(int argc, char **argv) {
     theme_apply(cfg.theme);
     cursor_style = cfg.cursor;
     bell_mode = cfg.bell;
+    autoscroll_on = cfg.autoscroll;
     sb_set_max(cfg.scrollback);
 
     if (load_glyphs() != 0) {
