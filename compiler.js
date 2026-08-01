@@ -21503,9 +21503,11 @@ typedef Uint64 SDL_WindowFlags;
 #define SDLK_LCTRL 1073742048
 #define SDLK_LSHIFT 1073742049
 #define SDLK_LALT 1073742050
+#define SDLK_LGUI 1073742051
 #define SDLK_RCTRL 1073742052
 #define SDLK_RSHIFT 1073742053
 #define SDLK_RALT 1073742054
+#define SDLK_RGUI 1073742055
 
 /* SDL3 key modifier flags (SDL_Keymod, SDL_keycode.h). Populated on
    event.key.mod from the DOM modifier state. */

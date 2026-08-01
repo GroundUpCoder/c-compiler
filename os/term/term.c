@@ -247,7 +247,8 @@ static void tc_load(TermCfg *c) {
  *
  * view_off is how many lines the viewport is scrolled UP from the live
  * bottom (0 = live grid). Writing ALWAYS targets the live grid regardless
- * of view_off; only rendering reads the offset. New output or any non-
+ * of view_off; rendering and the selection anchors (#355) map through the
+ * offset. New output or any non-
  * scroll keypress snaps back to live (Terminal behaviour). The ring's
  * capacity is the `scrollback` config key (todos/0273d, default 2000):
  * a heap array of sb_max slots, re-sized live by sb_set_max. */
@@ -270,17 +271,24 @@ static pid_t child = -1;
  * ZERO times a second instead of polling the master at 60Hz. */
 __import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
 
-/* ---- selection / clipboard (todos/0090) ----
-   Mouse drag selects a linear (row-major, xterm-style) cell range on the
-   CURRENT screen; Ctrl+Shift+C copies it to the system clipboard
-   (SDL_SetClipboardText -> the kernel's one slot), Ctrl+Shift+V pastes the
-   slot into the pty master. Selection is screen coordinates — output that
-   scrolls under it moves the highlight's content, like xterm; it clears on
-   the next click or a resize. */
+/* ---- selection / clipboard (todos/0090; virtual rows since #355) ----
+   Mouse drag selects a linear (row-major, xterm-style) cell range;
+   Ctrl+Shift+C copies it to the system clipboard (SDL_SetClipboardText ->
+   the kernel's one slot), Ctrl+Shift+V pastes the slot into the pty
+   master. Selection rows are VIRTUAL line indices — the renderer's
+   view_row space: virt = hist_count - view_off + viewport_row, so
+   [0, hist_count) is history (oldest first) and [hist_count,
+   hist_count + rows) is the live grid. Virtual indices are anchored to
+   CONTENT, like xterm: a hist_push moves a live line into history without
+   changing its virt index, so the highlight follows its text; a ring
+   eviction shifts every index down one (hist_push shifts the anchors and
+   clears a selection whose content is evicted). The selection clears on
+   the next click, a resize, or a history reset (RIS / Clear Scrollback,
+   #355). Columns are plain cell columns. */
 static int sel_on;                 /* a selection exists (rendered inverted) */
 static int sel_drag;               /* left button held: extending */
-static int sel_ax, sel_ay;         /* anchor cell */
-static int sel_ex, sel_ey;         /* extent cell (inclusive) */
+static int sel_ax, sel_ay;         /* anchor cell (col, virt row) */
+static int sel_ex, sel_ey;         /* extent cell (inclusive; col, virt row) */
 
 /* ---- SDL / freetype ---- */
 static SDL_Window *win;
@@ -317,6 +325,17 @@ static void clear_cells(Cell *g, int from, int count) {
  * hist_count > 0, which implies sb_max > 0. */
 static HistLine *hist_at(int i) { return &hist[(hist_head + i) % sb_max]; }
 
+/* Dropping n lines off the FRONT of history shifts every virtual index
+ * down by n: the selection anchors follow their content, and a selection
+ * whose content is gone clears (#355). Shared by the hist_push eviction
+ * and the sb_set_max shrink. */
+static void sel_evict(int n) {
+    if (!sel_on && !sel_drag) return;
+    sel_ay -= n;
+    sel_ey -= n;
+    if (sel_ay < 0 || sel_ey < 0) { sel_on = sel_drag = 0; dirty = 1; }
+}
+
 /* Push one about-to-be-discarded screen row into the ring (oldest evicted
  * at the cap). The line keeps the width it was captured at. */
 static void hist_push(const Cell *row, int len) {
@@ -329,6 +348,7 @@ static void hist_push(const Cell *row, int len) {
         slot = &hist[hist_head];
         free(slot->cells);
         hist_head = (hist_head + 1) % sb_max;
+        sel_evict(1);
     }
     slot->cells = malloc((size_t)len * sizeof(Cell));
     if (!slot->cells) { slot->len = 0; return; }
@@ -345,6 +365,7 @@ static void hist_push(const Cell *row, int len) {
 static void hist_clear(void) {
     for (int i = 0; i < hist_count; i++) free(hist_at(i)->cells);
     hist_count = 0; hist_head = 0; view_off = 0;
+    sel_on = sel_drag = 0;             /* virt anchors just dangled (#355) */
 }
 
 /* Scroll the viewport by delta lines (+ = toward history/up), clamped to
@@ -372,6 +393,7 @@ static void sb_set_max(int n) {
     if (n && !nh) return;              /* OOM: keep the old ring */
     int keep = hist_count < n ? hist_count : n;
     for (int i = 0; i < hist_count - keep; i++) free(hist_at(i)->cells);
+    sel_evict(hist_count - keep);      /* a shrink drops oldest lines (#355) */
     for (int i = 0; i < keep; i++) nh[i] = *hist_at(hist_count - keep + i);
     free(hist);
     hist = nh;
@@ -871,13 +893,13 @@ static int cell_clamp(int v, int lim) {
     return v;
 }
 
-static void sel_bounds(int *s, int *e) {         /* linear cell indices */
+static void sel_bounds(int *s, int *e) {   /* linear cell indices, virt rows */
     int a = sel_ay * cols + sel_ax;
     int b = sel_ey * cols + sel_ex;
     if (a <= b) { *s = a; *e = b; } else { *s = b; *e = a; }
 }
 
-static int sel_has(int r, int c) {
+static int sel_has(int r, int c) {               /* r is a VIRT row (#355) */
     int s, e;
     if (!sel_on) return 0;
     sel_bounds(&s, &e);
@@ -897,9 +919,20 @@ static void copy_selection(void) {
     for (int r = r0; r <= r1; r++) {
         int c0 = r == r0 ? s % cols : 0;
         int c1 = r == r1 ? e % cols : cols - 1;
+        /* Virt row source (#355): history below hist_count (a captured
+         * line's own width; cells past it read as blanks and trim away),
+         * the live grid above it. */
+        const Cell *src;
+        int slen;
+        if (r < hist_count) {
+            HistLine *h = hist_at(r);
+            src = h->cells; slen = h->len;
+        } else {
+            src = &grid[(r - hist_count) * cols]; slen = cols;
+        }
         int line = n;
         for (int c = c0; c <= c1; c++) {
-            uint32_t cp = grid[r * cols + c].cp;
+            uint32_t cp = c < slen ? src[c].cp : ' ';
             if (cp == CP_WIDE_CONT) continue; /* the lead already encoded it */
             if (cp < 32) cp = ' ';           /* defensive: cells never hold C0 */
             n += u8_encode(cp, buf + n);
@@ -959,18 +992,23 @@ static void handle_key(const SDL_KeyboardEvent *k) {
         if (sym == SDLK_PAGEUP)   { scroll_view(rows > 1 ? rows - 1 : 1); return; }
         if (sym == SDLK_PAGEDOWN) { scroll_view(-(rows > 1 ? rows - 1 : 1)); return; }
     }
-    /* Any other key snaps the viewport back to the live bottom (Terminal). */
-    snap_live();
+    /* A pure modifier press is not input: Ctrl going down ahead of a copy
+       chord must not yank a scrolled view back to live (#355). */
+    if (sym >= SDLK_LCTRL && sym <= SDLK_RGUI) return;
     /* The terminal's copy/paste chords resolve through the scheme table
        (todos/0149, os/keys.h): Ctrl+Shift+C/V under the windows keymap,
        ⌘C/V under macos — plain Ctrl+C stays the tty's SIGINT byte either
        way. Keysyms are modifier-applied, so the shifted letter usually
-       arrives uppercase (key_action case-folds). */
+       arrives uppercase (key_action case-folds). Copy resolves BEFORE the
+       snap — copying what you scrolled to see must not scroll you away
+       from it (#355); paste types into the pty, so it snaps like any key. */
     if (sym >= 32 && sym <= 126) {
         int act = key_action(KCTX_TERM, km_from_sdl(mod), sym);
         if (act == KA_COPY) { copy_selection(); return; }
-        if (act == KA_PASTE) { paste_clipboard(); return; }
+        if (act == KA_PASTE) { snap_live(); paste_clipboard(); return; }
     }
+    /* Any other key snaps the viewport back to the live bottom (Terminal). */
+    snap_live();
     /* GUI is never a text modifier: an unbound ⌘chord DROPS here instead
        of typing its letter (the ⌘C-typed-'c' bug, folded into 0149). */
     if (mod & SDL_KMOD_GUI) return;
@@ -1094,7 +1132,10 @@ static void tmc_post_command(void *owner, int id) {
     case CM_COPY:     copy_selection(); break;
     case CM_PASTE:    paste_clipboard(); break;
     case CM_SELALL:
-        sel_ax = 0; sel_ay = 0; sel_ex = cols - 1; sel_ey = rows - 1;
+        /* The VISIBLE viewport, in virt rows (#355) — while scrolled it
+         * selects what is on screen, not the live bottom. */
+        sel_ax = 0; sel_ay = hist_count - view_off;
+        sel_ex = cols - 1; sel_ey = hist_count - view_off + rows - 1;
         sel_on = 1; sel_drag = 0;
         dirty = 1;
         break;
@@ -1699,17 +1740,17 @@ static uint32_t pack(const uint8_t *rgb) {
  * logic, shared by both render passes). Dim (SGR 2) halves the resolved
  * fg RGB BEFORE the swaps — the xterm order, so a reversed dim cell
  * carries its faint color into the background patch. live_r is the cell's
- * LIVE grid row (or -1 for a history line — no cursor, no selection
- * there); show_sel gates selection to the live view (view_off==0), since
- * sel_* coords are live-grid, not history (0273a). */
-static void cell_colors(const Cell *cell, int live_r, int c, int show_sel,
+ * LIVE grid row (or -1 for a history line — no cursor there); virt_r is
+ * its VIRTUAL row, the selection's coordinate space (#355) — history and
+ * live cells highlight alike, and a scrolled view shows its selection. */
+static void cell_colors(const Cell *cell, int live_r, int virt_r, int c,
                         uint32_t *fgo, uint32_t *bgo) {
     int fg = cell->fg, bg = cell->bg;
     if (cell->attr & A_BOLD) { if (fg < 8) fg += 8; }
     uint32_t fgp = pack(PAL[fg]), bgp = pack(PAL[bg]);
     if (cell->attr & A_DIM) fgp = ((fgp >> 1) & 0x007F7F7Fu) | 0xFF000000u;
     if (cell->attr & A_REVERSE) { uint32_t t = fgp; fgp = bgp; bgp = t; }
-    if (show_sel && live_r >= 0 && sel_has(live_r, c)) { uint32_t t = fgp; fgp = bgp; bgp = t; } /* 0090 */
+    if (sel_has(virt_r, c)) { uint32_t t = fgp; fgp = bgp; bgp = t; } /* 0090/#355 */
     /* The block cursor is the classic cell inversion; under/bar draw an
      * overlay strip after the glyph pass instead (todos/0273d). */
     if (cursor_style == CUR_BLOCK && cursor_visible && live_r >= 0 &&
@@ -1737,11 +1778,11 @@ static const Cell *view_row(int vr, int *slen, int *live_r) {
 static void render(void) {
     uint32_t *px = (uint32_t *)surf->pixels;
     int sw = surf->w, sh = surf->h;
-    int show_sel = (view_off == 0);
     Cell pad; pad.cp = ' '; pad.fg = DEF_FG; pad.bg = DEF_BG; pad.attr = 0;
     for (int r = 0; r < rows; r++) {
         int slen, live_r;
         const Cell *src = view_row(r, &slen, &live_r);
+        int virt_r = hist_count - view_off + r;    /* selection space (#355) */
         /* Pass 1: every cell's background. Separate from the glyph pass
          * because a wide lead's glyph spills into the continuation cell —
          * a single fused loop would paint the continuation's bg OVER the
@@ -1749,7 +1790,7 @@ static void render(void) {
         for (int c = 0; c < cols; c++) {
             const Cell *cell = c < slen ? &src[c] : &pad;
             uint32_t fgp, bgp;
-            cell_colors(cell, live_r, c, show_sel, &fgp, &bgp);
+            cell_colors(cell, live_r, virt_r, c, &fgp, &bgp);
             int x0 = c * cell_w, y0 = GRID_Y + r * cell_h;
             for (int y = y0; y < y0 + cell_h && y < sh; y++) {
                 uint32_t *rowp = &px[y * sw];
@@ -1760,7 +1801,7 @@ static void render(void) {
         for (int c = 0; c < cols; c++) {
             const Cell *cell = c < slen ? &src[c] : &pad;
             uint32_t fgp, bgp;
-            cell_colors(cell, live_r, c, show_sel, &fgp, &bgp);
+            cell_colors(cell, live_r, virt_r, c, &fgp, &bgp);
             int x0 = c * cell_w, y0 = GRID_Y + r * cell_h;
             if (cell->cp <= 32) continue;    /* space + defensive C0 +
                                                 CP_WIDE_CONT: bg only */
@@ -1939,9 +1980,12 @@ static void frame_cb(void) {
             else scroll_view(y < ty ? (rows > 1 ? rows - 1 : 1)
                                     : -(rows > 1 ? rows - 1 : 1));
         } else if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == 1) {
-            /* Left press: clear any selection, anchor a new one (0090). */
+            /* Left press: clear any selection, anchor a new one (0090).
+             * Rows anchor in VIRT space — the content under the pointer,
+             * scrolled or not (#355). */
             sel_ax = sel_ex = cell_clamp((int)e.button.x / cell_w, cols);
-            sel_ay = sel_ey = cell_clamp(((int)e.button.y - GRID_Y) / cell_h, rows);
+            sel_ay = sel_ey = hist_count - view_off +
+                cell_clamp(((int)e.button.y - GRID_Y) / cell_h, rows);
             sel_drag = 1;
             if (sel_on) { sel_on = 0; dirty = 1; }
         } else if (e.type == SDL_EVENT_MOUSE_MOTION && sb_drag) {
@@ -1952,7 +1996,8 @@ static void frame_cb(void) {
                                          surf->h - GRID_Y);
         } else if (e.type == SDL_EVENT_MOUSE_MOTION && sel_drag) {
             int c = cell_clamp((int)e.motion.x / cell_w, cols);
-            int r = cell_clamp(((int)e.motion.y - GRID_Y) / cell_h, rows);
+            int r = hist_count - view_off +
+                cell_clamp(((int)e.motion.y - GRID_Y) / cell_h, rows);
             if (c != sel_ex || r != sel_ey || !sel_on) {
                 sel_ex = c;
                 sel_ey = r;
@@ -2020,11 +2065,12 @@ static void frame_cb(void) {
         budget -= (int)n;
         dirty = 1;
         /* New output snaps the view back to live (0273a) — unless the
-         * thumb is HELD (0273b): snapping mid-drag would rip the thumb
-         * out of the user's hand; the next output after release snaps.
-         * `autoscroll off` (#354) suppresses the snap entirely: the view
-         * stays where the user scrolled it. */
-        if (!sb_drag && autoscroll_on) view_off = 0;
+         * thumb is HELD (0273b) or a selection drag is in flight (#355):
+         * snapping mid-drag would rip the thumb — or the text being
+         * selected — out of the user's hand; the next output after
+         * release snaps. `autoscroll off` (#354) suppresses the snap
+         * entirely: the view stays where the user scrolled it. */
+        if (!sb_drag && !sel_drag && autoscroll_on) view_off = 0;
     }
     /* BELs coalesced per drain pass (0273d): a \a flood rings once per
      * frame, never once per byte. */
