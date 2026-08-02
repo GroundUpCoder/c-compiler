@@ -31,8 +31,11 @@
 //   - the VT2_MAX_DIM backing-store ceiling clamps a 4200px pane at 0.5×
 //     to exactly 8192 logical px (WebGPU default maxTextureDimension2D),
 //     aspect preserved;
-//   - before/after screenshots at the pane's display size land in the dev
-//     log dir (the artifact jku sees).
+//   - before/after screenshots at the pane's display size land in
+//     build/test-browser/hires-shots/ (gitignored scratch; each written path
+//     is printed so the artifact stays findable). The committed
+//     logs/2026-07-25/hires-*.png are frozen July evidence cited by that
+//     day's journal — never write there, never regenerate them (#399/#183).
 //
 // Usage: node os-hires.mjs
 import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl } from './lib/os-harness.mjs';
@@ -41,7 +44,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const OUT_DIR = path.resolve(__dirname, '../../logs/2026-07-25');
+const OUT_DIR = path.resolve(__dirname, '../../build/test-browser/hires-shots');
 
 const PORT = 3276;
 const URL = osUrl(PORT);
@@ -65,8 +68,10 @@ async function snapshot(page, file) {
   });
   const b64 = dataUrl.replace(/^data:image\/png;base64,/, '');
   fs.mkdirSync(OUT_DIR, { recursive: true });
-  fs.writeFileSync(path.join(OUT_DIR, file), Buffer.from(b64, 'base64'));
-  return path.join(OUT_DIR, file);
+  const p = path.join(OUT_DIR, file);
+  fs.writeFileSync(p, Buffer.from(b64, 'base64'));
+  console.log('  shot: ' + p);
+  return p;
 }
 
 try {
@@ -123,7 +128,7 @@ try {
     await page.evaluate(() => /can't open|No such file/.test(
       window.__osOut.split('CFG0-DONE')[0].split('\n').slice(-3).join('\n'))), null);
   await setVt(2);
-  const beforePath = await snapshot(page, 'hires-before-1x.png');
+  await snapshot(page, 'hires-before-1x.png');
 
   // ---- EXPLICIT 2×: the Desktop-site toggle is the post-v163 route ----
   // (os-mobile2x.mjs owns the toggle policy; here it's just the way to
@@ -182,7 +187,7 @@ try {
   });
   check('canvas DISPLAY size stays pinned to the pane (downscales into it)',
     Math.abs(disp.cssW - disp.paneW) < 2 && Math.abs(disp.cssH - disp.paneH) < 2, disp);
-  const afterPath = await snapshot(page, 'hires-after-05x.png');
+  await snapshot(page, 'hires-after-05x.png');
 
   // ---- pointer seam under a sub-1 divide: CSS c → logical c/0.5 = 2c.
   // Click the Start button (logical ~(25, SH-14)) at CSS (12.5, (SH-14)/2);
@@ -274,8 +279,6 @@ try {
   check('ceiling preserves aspect (height scaled by the same effective divisor)',
     cap.s.h === cap.expH, cap);
   await dctx.close();
-
-  console.log('\nshots: ' + beforePath + '\n       ' + afterPath);
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));
   try {
