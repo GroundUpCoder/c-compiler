@@ -61,6 +61,57 @@ static void sb_add(sb *b, const char *s, size_t n) {
 static void sb_puts(sb *b, const char *s) { sb_add(b, s, strlen(s)); }
 static void sb_free(sb *b) { free(b->p); b->p = NULL; b->len = b->cap = 0; }
 
+/* ---- UTF-8 validation + scrub (#386/#387) ------------------------------
+ * The Messages API body must be valid UTF-8; cJSON escapes only controls
+ * (< 32 on an unsigned pointer), so a raw high byte in any string rides
+ * through to the POST verbatim and the server rejects the whole body. */
+
+/* Length (1..4) of the valid UTF-8 sequence at p (n bytes available), else
+ * 0. RFC 3629 / Unicode Table 3-7: rejects overlong forms, surrogates
+ * (U+D800..DFFF) and anything above U+10FFFF. */
+static int utf8_seq(const unsigned char *p, size_t n) {
+    if (n >= 1 && p[0] <= 0x7F) return 1;
+    if (n >= 2 && p[0] >= 0xC2 && p[0] <= 0xDF && (p[1] & 0xC0) == 0x80) return 2;
+    if (n >= 3 && (p[2] & 0xC0) == 0x80 &&
+        ((p[0] == 0xE0 && p[1] >= 0xA0 && p[1] <= 0xBF) ||
+         (p[0] >= 0xE1 && p[0] <= 0xEC && (p[1] & 0xC0) == 0x80) ||
+         (p[0] == 0xED && p[1] >= 0x80 && p[1] <= 0x9F) ||
+         (p[0] >= 0xEE && p[0] <= 0xEF && (p[1] & 0xC0) == 0x80))) return 3;
+    if (n >= 4 && (p[2] & 0xC0) == 0x80 && (p[3] & 0xC0) == 0x80 &&
+        ((p[0] == 0xF0 && p[1] >= 0x90 && p[1] <= 0xBF) ||
+         (p[0] >= 0xF1 && p[0] <= 0xF3 && (p[1] & 0xC0) == 0x80) ||
+         (p[0] == 0xF4 && p[1] >= 0x80 && p[1] <= 0x8F))) return 4;
+    return 0;
+}
+
+/* First byte offset where s stops being valid UTF-8; -1 when clean. */
+static long utf8_invalid_at(const char *s, size_t n) {
+    const unsigned char *p = (const unsigned char *)s;
+    size_t i = 0;
+    while (i < n) {
+        int l = utf8_seq(p + i, n - i);
+        if (!l) return (long)i;
+        i += (size_t)l;
+    }
+    return -1;
+}
+
+/* malloc'd copy of s with every byte that is not part of a valid sequence
+ * replaced by U+FFFD (EF BF BD) — one replacement per bad byte, so bytes
+ * are marked, never silently dropped. *replaced counts them. */
+static char *utf8_scrub(const char *s, size_t n, size_t *replaced) {
+    const unsigned char *p = (const unsigned char *)s;
+    sb out = {0}; size_t i = 0, rep = 0;
+    while (i < n) {
+        int l = utf8_seq(p + i, n - i);
+        if (l) { sb_add(&out, s + i, (size_t)l); i += (size_t)l; }
+        else   { sb_puts(&out, "\xEF\xBF\xBD"); i++; rep++; }
+    }
+    if (!out.p) sb_puts(&out, "");   /* empty input still returns a string */
+    if (replaced) *replaced = rep;
+    return out.p;
+}
+
 /* ---- config ----------------------------------------------------------- */
 typedef struct {
     const char *base_url, *api_key, *auth_token, *model, *system_prompt;
@@ -615,14 +666,35 @@ static char *tool_bash(cJSON *in) {
     return r.p;
 }
 
-/* dispatch a tool call by name; returns malloc'd result string */
+/* dispatch a tool call by name; returns malloc'd result string.
+ * #386: EVERY tool's result is scrubbed to valid UTF-8 here — this is the
+ * one seam both consumers share (the live `messages` payload and the
+ * persisted session record), so a raw high byte from any tool can never
+ * poison the request body or re-poison a --resume. Bad bytes become U+FFFD
+ * plus a visible trailer naming the count. NB an embedded NUL in tool
+ * output still truncates at this char* boundary — known, separate defect
+ * (needs a length-carrying return type; see ticket #386's adjacent
+ * finding). */
 static char *execute_tool(const char *name, cJSON *input) {
-    if (!strcmp(name, "bash"))       return tool_bash(input);
-    if (!strcmp(name, "read_file"))  return tool_read_file(input);
-    if (!strcmp(name, "write_file")) return tool_write_file(input);
-    if (!strcmp(name, "edit_file"))  return tool_edit_file(input);
-    if (!strcmp(name, "list_dir"))   return tool_list_dir(input);
-    sb r = {0}; sb_puts(&r, "error: unknown tool "); sb_puts(&r, name); return r.p;
+    char *raw;
+    if      (!strcmp(name, "bash"))       raw = tool_bash(input);
+    else if (!strcmp(name, "read_file"))  raw = tool_read_file(input);
+    else if (!strcmp(name, "write_file")) raw = tool_write_file(input);
+    else if (!strcmp(name, "edit_file"))  raw = tool_edit_file(input);
+    else if (!strcmp(name, "list_dir"))   raw = tool_list_dir(input);
+    else { sb r = {0}; sb_puts(&r, "error: unknown tool "); sb_puts(&r, name); raw = r.p; }
+    if (!raw) return NULL;
+    size_t n = strlen(raw);
+    if (utf8_invalid_at(raw, n) < 0) return raw;   /* common case: no copy */
+    size_t rep = 0;
+    char *clean = utf8_scrub(raw, n, &rep);
+    free(raw);
+    sb out = {0}; char note[96];
+    sb_puts(&out, clean); free(clean);
+    snprintf(note, sizeof note, "\n[gcode: replaced %lu invalid UTF-8 byte%s with U+FFFD]",
+             (unsigned long)rep, rep == 1 ? "" : "s");
+    sb_puts(&out, note);
+    return out.p;
 }
 
 /* ---- tool schemas (sent on every request) ----------------------------- */
@@ -1359,6 +1431,27 @@ static int self_test(void) {
         mlist unk = {0}; mlist_add(&unk, "mystery-model", &pu);
         ok &= format_cost_line(cl, sizeof cl, &unk) == 0;
         mlist_free(&unk);
+    }
+    /* #386/#387: the UTF-8 validator/scrubber shared by the tool-result
+     * seam and the pre-POST guard. Rejections per RFC 3629. */
+    {
+        ok &= utf8_invalid_at("plain ascii", 11) == -1;
+        ok &= utf8_invalid_at("caf\xC3\xA9", 5) == -1;           /* 2-byte */
+        ok &= utf8_invalid_at("\xE2\x82\xAC", 3) == -1;          /* 3-byte */
+        ok &= utf8_invalid_at("\xF0\x9F\x98\x80", 4) == -1;      /* 4-byte */
+        ok &= utf8_invalid_at("ok\x80", 3) == 2;                 /* lone continuation */
+        ok &= utf8_invalid_at("\xC0\xAF", 2) == 0;               /* overlong 2-byte */
+        ok &= utf8_invalid_at("\xE0\x80\x80", 3) == 0;           /* overlong 3-byte */
+        ok &= utf8_invalid_at("\xED\xA0\x80", 3) == 0;           /* surrogate */
+        ok &= utf8_invalid_at("\xF4\x90\x80\x80", 4) == 0;       /* > U+10FFFF */
+        ok &= utf8_invalid_at("\xE2\x82", 2) == 0;               /* truncated tail */
+        size_t rep = 0;
+        char *sc = utf8_scrub("title: \x80\xC0!", 10, &rep);
+        ok &= rep == 2 && !strcmp(sc, "title: \xEF\xBF\xBD\xEF\xBF\xBD!"); free(sc);
+        sc = utf8_scrub("caf\xC3\xA9 \xE2\x82", 8, &rep);        /* valid kept, truncated marked */
+        ok &= rep == 2 && !strcmp(sc, "caf\xC3\xA9 \xEF\xBF\xBD\xEF\xBF\xBD"); free(sc);
+        sc = utf8_scrub("", 0, &rep);
+        ok &= rep == 0 && !strcmp(sc, ""); free(sc);
     }
     char tmp[] = "/tmp/gcode-step2-test-XXXXXX"; if (!mkdtemp(tmp)) return 1; setenv("GCODE_STATE_DIR", tmp, 1);
     config cfg = { "https://example.invalid", NULL, NULL, "requested-alias", "fixture-system", 123, 4, 0, 0 };

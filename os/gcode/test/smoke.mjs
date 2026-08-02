@@ -57,11 +57,14 @@ function toolUseResponse(preface, id, name, inputObj) {
 // (#305: the REPL-survives-a-failed-turn leg).
 function startServer(scripts) {
   const bodies = [];
+  const raw = [];   // request bodies as Buffers — #386 asserts UTF-8 validity byte-level
   const server = http.createServer((req, res) => {
-    let buf = '';
-    req.on('data', (c) => (buf += c));
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
-      bodies.push(JSON.parse(buf));
+      const buf = Buffer.concat(chunks);
+      raw.push(buf);
+      bodies.push(JSON.parse(buf.toString('utf8')));
       const body = scripts.shift();
       if (body === undefined) { res.writeHead(500); res.end('no script'); return; }
       if (typeof body === 'object') {
@@ -76,7 +79,7 @@ function startServer(scripts) {
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => {
       const { port } = server.address();
-      resolve({ url: `http://127.0.0.1:${port}`, bodies, close: () => server.close() });
+      resolve({ url: `http://127.0.0.1:${port}`, bodies, raw, close: () => server.close() });
     });
   });
 }
@@ -290,6 +293,35 @@ async function main() {
     check(r.stderr.includes('rounds: 2'), '#348: multi-round turn reports its API-round count');
     check(/turn cost: \$\d+\.\d{6}  \(1 round unpriced: mystery-model-x\)/.test(r.stderr),
       '#348: mixed turn prices known rounds and names the unpriced model explicitly');
+  }
+
+  // ---- test 9 (#386): non-UTF-8 tool output is scrubbed, never POSTed ----
+  // A bash tool emits a lone continuation byte (0x80), a bare 0xC0 lead and
+  // a truncated 3-byte sequence (0xE2 0x82) next to a VALID 2-byte é. The
+  // follow-up request body must be valid UTF-8 at the BYTE level (pre-fix
+  // the raw bytes ride through and this decode throws), the bad bytes must
+  // surface as U+FFFD plus the visible replacement trailer, and the valid
+  // sequence must survive untouched.
+  {
+    const srv = await startServer([
+      toolUseResponse('inspecting', 'toolu_386', 'bash',
+        { command: "printf 'caf\\xc3\\xa9 \\x80\\xc0 tail\\xe2\\x82'" }),
+      textResponse('Scrubbed ok.'),
+    ]);
+    const { stdout } = await runCodeBoth(srv.url, ['-p', 'inspect the rom', '--no-color', '--no-persist']);
+    srv.close();
+    check(srv.bodies.length === 2, `#386: both requests reached the server (${srv.bodies.length})`);
+    let valid = true;
+    try { new TextDecoder('utf-8', { fatal: true }).decode(srv.raw[1] || Buffer.alloc(0)); }
+    catch { valid = false; }
+    check(valid, '#386: follow-up request body is valid UTF-8 at the byte level');
+    const tr = srv.bodies[1].messages[srv.bodies[1].messages.length - 1].content[0];
+    check(tr && tr.type === 'tool_result' && tr.content.includes('�'),
+      '#386: bad bytes became U+FFFD in the tool_result');
+    check(tr && tr.content.includes('[gcode: replaced 4 invalid UTF-8 bytes with U+FFFD]'),
+      '#386: the substitution is announced in the tool_result itself');
+    check(tr && tr.content.includes('café'), '#386: valid multi-byte sequences pass through untouched');
+    check(stdout.includes('Scrubbed ok.'), '#386: the turn completes (no 400, session not bricked)');
   }
 
   console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILURE(S)`);

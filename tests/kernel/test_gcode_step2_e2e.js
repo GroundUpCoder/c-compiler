@@ -43,6 +43,12 @@ fs.writeFileSync(scriptPath, JSON.stringify([
     usage: { input_tokens: 21, output_tokens: 5, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } },
   { kind: 'text', text: 'Resumed reply.',
     usage: { input_tokens: 31, output_tokens: 4, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } },
+  // #386: a bash tool whose stdout is NOT valid UTF-8 (lone 0x80, bare 0xC0
+  // lead) next to a valid 2-byte é — the scrub must mark the bad bytes and
+  // the follow-up request must complete instead of bricking the session.
+  { kind: 'tool', preface: 'inspecting', id: 'toolu_386', name: 'bash',
+    input: { command: "printf 'caf\\xc3\\xa9 \\x80\\xc0'" } },
+  { kind: 'text', text: 'Scrub done.' },
   // #306: a stream that starts (one delta) and never ends — the SIGINT leg
   // must abort it mid-flight; without the xferinfo path this run HANGS.
   { kind: 'stall', text: 'Thinking...' },
@@ -86,6 +92,10 @@ fs.writeFileSync(scriptPath, JSON.stringify([
       'echo ==t3',
       `${G} --resume ${SESS}/*.jsonl -p "once more" 2>&1`,
       'echo rc3=$?',
+      // ---- #386: raw high bytes in tool output are scrubbed in-OS ----
+      'echo ==t5',
+      `${G} --no-persist -p "inspect the rom" 2>&1`,
+      'echo rc5=$?',
       // ---- #306: Ctrl+C (SIGINT) aborts an in-flight response ----
       'echo ==t4',
       `${G} -p "interrupt me" >/tmp/g4.out 2>/tmp/g4.err &`,
@@ -141,6 +151,18 @@ fs.writeFileSync(scriptPath, JSON.stringify([
       t3.includes('session usage: input=63 output=16 cache-create=2 cache-read=3'), JSON.stringify(t3));
     check('t3: exit 0', t3.includes('rc3=0'), JSON.stringify(t3));
 
+    // ---- run 5 (#386): tool output with raw high bytes, in-OS ----
+    // busybox printf emits 0x80/0xC0 through the real spawn path; the turn
+    // completing (second script entry streamed, exit 0) is the bricked-
+    // session regression proof, the trailer the visible-substitution one.
+    const t5 = section(out, 't5');
+    check('t5: scrub trailer rendered in the tool result',
+      t5.includes('replaced 2 invalid UTF-8 bytes with U+FFFD'), JSON.stringify(t5.slice(0, 400)));
+    check('t5: follow-up turn completed (session not bricked)',
+      t5.includes('Scrub done.'), JSON.stringify(t5.slice(0, 400)));
+    check('t5: no HTTP error', !t5.includes('gcode: HTTP'), JSON.stringify(t5.slice(0, 400)));
+    check('t5: exit 0', t5.includes('rc5=0'), JSON.stringify(t5));
+
     // ---- run 4 (#306): SIGINT aborts the in-flight stalled stream ----
     // The stream never ends server-side, so this leg COMPLETING at all is
     // the early-close proof — without the xferinfo abort it hangs into the
@@ -155,7 +177,7 @@ fs.writeFileSync(scriptPath, JSON.stringify([
 
     // ---- server side: the replayed history really reached the API ----
     const bodies = fs.readFileSync(bodiesPath, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-    check('4 requests reached the server', bodies.length === 4, String(bodies.length));
+    check('6 requests reached the server', bodies.length === 6, String(bodies.length));
     const flat = (b) => JSON.stringify(b.messages);
     check('request 2 replays turn 1 (user + assistant)',
       bodies[1].messages.length === 3 && flat(bodies[1]).includes('say hi') && flat(bodies[1]).includes('First reply.'),
@@ -163,6 +185,19 @@ fs.writeFileSync(scriptPath, JSON.stringify([
     check('request 3 replays turns 1+2',
       bodies[2].messages.length === 5 && flat(bodies[2]).includes('again') && flat(bodies[2]).includes('Continued reply.'),
       flat(bodies[2] || {}).slice(0, 300));
+    // #386: the tool_result that crossed the wire is scrubbed — U+FFFD plus
+    // the trailer, with the VALID 2-byte é untouched. bodies[4] is t5's
+    // follow-up request (the one that carried the tool_result back).
+    {
+      const b = bodies[4] || { messages: [] };
+      const last = b.messages[b.messages.length - 1] || {};
+      const tr = Array.isArray(last.content) ? last.content[0] : null;
+      check('#386: wire tool_result carries U+FFFD, the trailer, and the intact é',
+        tr && tr.type === 'tool_result' && tr.content.includes('�') &&
+        tr.content.includes('[gcode: replaced 2 invalid UTF-8 bytes with U+FFFD]') &&
+        tr.content.includes('café'),
+        JSON.stringify(tr || {}).slice(0, 300));
+    }
   } finally {
     server.kill('SIGKILL');
   }
