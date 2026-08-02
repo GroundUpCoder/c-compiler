@@ -1,7 +1,8 @@
 {
   "name": "netsurf-demos",
-  "version": "3",
+  "version": "4",
   "summary": "Web Demos — eight HTML/CSS/JS pages for the browser, planted as editable copies under Desktop/Presentations/samples",
+  "deps": ["netsurf"],
   "files": {
     "demos": { "tree": "vendor/netsurf/demos/pages" }
   },
