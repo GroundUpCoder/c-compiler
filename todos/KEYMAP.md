@@ -10,7 +10,9 @@ branch `shortcuts-0149` (log `logs/2026-07-18/keymap-scheme-0149.md`) — the
 Chrome 150 on 2026-08-02** (c-compiler #396). Headline: `navigator.keyboard.lock()`
 under fullscreen recovers ⌘W/⌘Q/⌘T/⌘N from the browser; only ⌘Tab/⌘Space/⌘`
 are permanently unbindable. The measured section below replaces the old
-placeholder and its expectations.
+placeholder and its expectations. The Windows-side equivalents (c-compiler
+#406) are recorded further below — 🔴 **every Windows row is ASSUMED, none
+measured**; #416 is the probe ticket that converts them.
 
 ## 🔴 CLOSED DECISION — Ctrl carries NO edit verbs in the macOS scheme. Do not re-open.
 
@@ -199,7 +201,9 @@ arrived ×8 in run B — see limit 4.)
    reportedly captures Alt+Tab (and never Ctrl+Alt+Del) on Windows, which
    would make the unbindable set platform-specific — but that is ASSUMED from
    documentation, not measured. Every Windows claim in this file is ASSUMED
-   until someone runs the probe on a Windows host.
+   until someone runs the probe on a Windows host. The Windows-side section
+   below (#406) carries that marking row-by-row; ticket **#416** is the probe
+   that converts it.
 
 ### Caveats any binding work inherits
 
@@ -234,6 +238,69 @@ arrived ×8 in run B — see limit 4.)
 - Run C (installed PWA — lock *without* fullscreen; would remove the
   fullscreen tax and the Esc-hold conflict).
 - Safari / Firefox baselines (neither ships Keyboard Lock).
+- **The Windows probe (#416)** — converts every row of the Windows-side
+  section below from 🔴 ASSUMED to MEASURED.
+
+## The Windows-side equivalents — #406. 🔴 EVERY ROW BELOW IS ASSUMED. NOTHING IN THIS SECTION IS MEASURED.
+
+**No probe has run on a Windows host.** Every cell below is derived from the
+Keyboard Lock documentation and from Windows convention — the exact shape of
+claim the #396 measurement proved wrong on macOS (the old placeholder's "must
+NOT bind" line listed four chords the probe recovered). Ticket **#416** (light,
+P2) names the run that converts each row to MEASURED: the #396 harness is a
+static page and is portable, so a Windows run is cheap — availability of a
+box, not effort, is the constraint. **Until that run, nothing in this section
+may be treated as fact or built on as fact.**
+
+Standing rule (jku): **match platform behaviour** — each row is the
+Windows-native chord for the verb, not the ⌘ table with Ctrl substituted. Note
+the in-OS windows *scheme* itself (Ctrl edit verbs, Win+arrow snap,
+Ctrl+Alt+Tab cycle, readline rows structurally absent) is settled and is NOT
+changed by this section; what this section mirrors is #396's *host-browser
+passthrough* question — which chords a gucOS page running in Chrome on a
+Windows host can hope to receive.
+
+### Verb equivalents (every row 🔴 ASSUMED)
+
+| Verb (macOS binding) | Windows-native equivalent | Assumed passthrough class | Status |
+|---|---|---|---|
+| Edit verbs (⌘A/C/X/V/Z) | Ctrl+A / C / X / V / Z — already the windows scheme | free today: Chrome-on-Windows reportedly delivers these to a plain tab and honours `preventDefault` | 🔴 ASSUMED |
+| Close window (⌘W) | Ctrl+W (the document/tab-close convention). Alt+F4 is *window*-close — in a browser it closes the whole Chrome window, so it maps to "close all of gucOS", not to one gucOS window | eaten in a plain tab (closes the Chrome tab); reportedly recovered by fullscreen + lock — both chords | 🔴 ASSUMED |
+| Quit (⌘Q) | none — Windows has no app-quit chord distinct from close; Alt+F4 on the last window is the convention | n/a | 🔴 ASSUMED (convention claim) |
+| Minimise (⌘M) | Win+Down (the Aero convention; the windows scheme's Win+arrow snap already owns the Win+arrow row) | Win-key chords are OS-eaten in a plain tab (Start menu / OS actions); the lock reportedly captures the Win key under fullscreen | 🔴 ASSUMED |
+| Rotate windows (Ctrl+Tab on macOS) | Ctrl+Alt+Tab — already shipped (the 0032 cycle chord). Alt+Tab is the native verb, but it is NOT being bound on documentation alone — see the conservative calls below | Alt+Tab: OS-eaten in a plain tab; reportedly captured by fullscreen + lock (unlike ⌘Tab on macOS — the platform-specific difference) | 🔴 ASSUMED |
+| App-hide (⌘H — skipped on macOS) | none — Windows has no app-hide concept; Win+D show-desktop is already covered in-OS by the taskbar's Show Desktop sliver | n/a | 🔴 ASSUMED (convention claim) |
+
+### The assumed classes (the mirror of #396's three measured macOS classes — every cell 🔴 ASSUMED)
+
+| Class | Chords | Source |
+|---|---|---|
+| Assumed free today | Ctrl+A ⁄C ⁄X ⁄V ⁄Z ⁄Y, Ctrl+F ⁄L ⁄R, Esc (tap) | documentation + convention — NOT a probe |
+| Assumed recovered by fullscreen + lock | Ctrl+W, Ctrl+T, Ctrl+N, Alt+F4, **Alt+Tab**, Win-key chords | Keyboard Lock documentation — NOT a probe |
+| Assumed permanently unbindable | Ctrl+Alt+Del (the Secure Attention Sequence), Win+L | reportedly reserved by Windows below the app layer — NOT a probe |
+
+If the reported Alt+Tab capture is real, the unbindable set is genuinely
+platform-specific — macOS keeps ⌘Tab/⌘Space/⌘` forever while Windows loses
+only the SAS-class rows. **That is the first claim #416's probe must check.**
+
+### Conservative calls — what this section does and does not license
+
+- **Nothing new is bound on the Windows side by this section.** The windows
+  scheme already carries the Windows-native chord for every verb above that
+  has one (the Ctrl edit row, Win+arrow, Ctrl+Alt+Tab). The only candidate
+  upgrade — real Alt+Tab rotation under fullscreen + lock — is explicitly
+  deferred until #416 measures it. Do not bind Alt+Tab on the strength of
+  this table.
+- **Ctrl+W-as-close inherits the destructive-degradation caveat verbatim:**
+  unlocked, Ctrl+W closes the Chrome tab and the whole gucOS session with it
+  — the same `beforeunload` guard requirement as ⌘W/⌘Q applies. Alt+F4
+  degrades worse (the whole Chrome window).
+- **Esc:** the hold-to-exit-fullscreen affordance is reportedly the same on
+  Windows; a tap-vs-hold split as on macOS is ASSUMED, not measured.
+- The macOS side of this file is untouched by this section: ⌘ carries the
+  verbs, Ctrl stays reserved for readline (the CLOSED DECISION above), and
+  Ctrl+Tab's shipped-unmeasured status (limit 4) is settled — none of that
+  is re-opened here.
 
 ## Out of scope / separate axes
 
