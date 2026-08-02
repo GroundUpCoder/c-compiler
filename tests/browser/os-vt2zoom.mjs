@@ -11,8 +11,11 @@
 // loop end-to-end: the control + persistence, the shrunken-backing/pinned-
 // display geometry, and — the load-bearing part — that a physical click at a
 // CSS coordinate lands on the correct LOGICAL target after the /Z divide, and
-// that window drag + the taskbar keep working under zoom. It also writes the
-// bigger-and-crisp screenshots referenced in the dev log.
+// that window drag + the taskbar keep working under zoom. It also saves
+// bigger-and-crisp screenshots to build/test-browser/vt2zoom-shots/
+// (gitignored scratch; each written path is printed). The committed
+// logs/2026-07-18/vt2-zoom-*.png are frozen July evidence cited by that
+// day's journal — never write there, never regenerate them (#399/#183).
 //
 // Usage: node os-vt2zoom.mjs
 import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl } from './lib/os-harness.mjs';
@@ -21,7 +24,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const OUT_DIR = path.resolve(__dirname, '../../logs/2026-07-18');
+const OUT_DIR = path.resolve(__dirname, '../../build/test-browser/vt2zoom-shots');
 
 const PORT = 3262;
 const URL = osUrl(PORT);
@@ -47,8 +50,10 @@ async function snapshot(page, file, scale = 1) {
   }, scale);
   const b64 = dataUrl.replace(/^data:image\/png;base64,/, '');
   fs.mkdirSync(OUT_DIR, { recursive: true });
-  fs.writeFileSync(path.join(OUT_DIR, file), Buffer.from(b64, 'base64'));
-  return path.join(OUT_DIR, file);
+  const p = path.join(OUT_DIR, file);
+  fs.writeFileSync(p, Buffer.from(b64, 'base64'));
+  console.log('  shot: ' + p);
+  return p;
 }
 
 try {
