@@ -247,6 +247,9 @@
       "/usr/bin/fontramp": {
         "project": "os/win32/fontramp.json"
       },
+      "/usr/bin/gdiplusdemo": {
+        "project": "os/win32/gdiplusdemo.json"
+      },
       "/usr/bin/ctldemo.res": {
         "bin": "os/win32/ctldemo.res"
       },

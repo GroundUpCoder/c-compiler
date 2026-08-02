@@ -1,0 +1,19 @@
+{
+  "type": "lib",
+  "name": "gdiplus",
+  "description": "gdiplus-mini (ticket #94 / 0453): the flat GDI+ surface the ReactOS shimgvw viewer calls, over libpng/libjpeg/libnsgif/libnsbmp decode and gdi32's StretchBlt draw. A SEPARATE component from lib.json on purpose — it drags four image decoders in, and a win32 app that never touches an image must not pay for them.",
+  "deps": [
+    "lib.json",
+    "../../vendor/libpng/lib.json",
+    "../../vendor/libjpeg/lib.json",
+    "../../vendor/netsurf/libnsgif/lib.json",
+    "../../vendor/netsurf/libnsbmp/lib.json"
+  ],
+  "includes": [
+    "include"
+  ],
+  "srcRoots": { "win32": "." },
+  "sources": [
+    "gdiplus.c"
+  ]
+}

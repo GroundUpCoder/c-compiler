@@ -28,6 +28,8 @@
     "src/win32/comctl32.c": { "text": "win32/comctl32.c" },
     "src/win32/listview.c": { "text": "win32/listview.c" },
     "src/win32/comdlg32.c": { "text": "win32/comdlg32.c" },
+    "src/win32/ole32.c":    { "text": "win32/ole32.c" },
+    "src/win32/gdiplus.c":  { "text": "win32/gdiplus.c" },
     "src/win32/menucore.c": { "text": "win32/menucore.c" },
     "src/win32/menucore.h": { "text": "win32/menucore.h" },
     "src/win32/win32_internal.h": { "text": "win32/win32_internal.h" },

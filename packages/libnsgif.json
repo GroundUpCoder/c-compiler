@@ -1,0 +1,13 @@
+{
+  "name": "libnsgif",
+  "version": "1.0.0",
+  "summary": "libnsgif source library — decode GIF with the in-OS cc",
+  "files": {
+    "include/nsgif.h": { "bin": "vendor/netsurf/libnsgif/include/nsgif.h" },
+    "src/nsgif":       { "tree": "vendor/netsurf/libnsgif/src" }
+  },
+  "srclib": {
+    "include": [ "include" ],
+    "src": { "nsgif": "src/nsgif" }
+  }
+}
