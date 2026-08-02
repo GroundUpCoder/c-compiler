@@ -24,7 +24,7 @@
  ],
  "compilerArgs": [
   "-Dnsgucos",
-  "-DGUCOS_RESPATH=\"/usr/local/share/netsurf/:/usr/share/netsurf/\""
+  "-DGUCOS_RESPATH=\"/opt/netsurf/res/:/usr/opt/netsurf/res/:/usr/local/share/netsurf/\""
  ],
  "sources": [
   "../netsurf/frontends/monkey/filetype.c",

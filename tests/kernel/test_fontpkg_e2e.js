@@ -202,9 +202,14 @@ async function main() {
   // the SAME image pair (the test_ksvc_e2e same-bytes assertion, now with
   // the package chain resolving through /opt on the root volume).
   const CJK_TXT = '日本語';
-  const c = driveBoot(['gucman install font-noto-cjk-mono; echo RC4=$?'], BOOT_ARGS);
+  // winbox rides the demos package since #418 — install it alongside the
+  // face (the minimal image no longer bakes any demo app).
+  const c = driveBoot(['gucman install font-noto-cjk-mono; echo RC4=$?',
+                       'gucman install demos; echo RC5=$?'], BOOT_ARGS);
   check('title leg: reinstall font-noto-cjk-mono (exit 0)',
     String(c.stdout || '').includes('RC4=0'));
+  check('title leg: install demos for winbox (exit 0)',
+    String(c.stdout || '').includes('RC5=0'));
 
   const d = driveBoot([
     `winbox title "${CJK_TXT}" &`,

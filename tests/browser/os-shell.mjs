@@ -524,13 +524,14 @@ try {
   { const [lx, ly] = stripL(DC, 'doom');
     check('...and doom stays selected', near(await sample(lx, ly), NAVY), await sample(lx, ly)); }
 
-  // Marquee from empty desktop over the column-0 row 5-6 tiles (fileman,
-  // gameboy — column 1's few icons sit above row 3, clear of the sweep):
-  // REPLACES the set — mario drops out.
-  const FMC = cell('fileman'), GC = cell('gameboy');
+  // Marquee from empty desktop over two vertically-adjacent column-0 tiles
+  // (drmario + fileman — #418 moved the gameboy/netsurf icons off the
+  // seeded Desktop, so the grid is one column shorter): REPLACES the set —
+  // mario drops out.
+  const FMC = cell('fileman'), GC = cell('drmario');
   // Box the two icon TILES (icon at cell.x+42..74, y cell.y+6..38): start
-  // at empty desktop above-right of fileman, drag through both down to just
-  // above mario's row (fileman row 5 + gameboy row 6, mario row 7 excluded).
+  // at empty desktop above-right of the pair, drag through both, stopping
+  // above mario's row (drmario + fileman rows swept, mario's excluded).
   // The marquee must START in an EMPTY cell: desk_hit is CELL-based (a
   // press anywhere inside an occupied cell selects that icon and arms an
   // icon-move, not a marquee). Column 1 has only 5 icons, so its lower
@@ -545,8 +546,8 @@ try {
   await page.mouse.up();
   { const [lx, ly] = stripL(FMC, 'fileman'); await waitPixel(lx, ly, NAVY); }  // fileman strip
   check('marquee selects the intersected icons (fileman strip navy)', true);
-  { const [lx, ly] = stripL(GC, 'gameboy');
-    check('gameboy caught by the marquee too', near(await sample(lx, ly), NAVY), await sample(lx, ly)); }
+  { const [lx, ly] = stripL(GC, 'drmario');
+    check('drmario caught by the marquee too', near(await sample(lx, ly), NAVY), await sample(lx, ly)); }
   check('marquee replaces: mario deselected', near(await sample(MSTRIP[0], MSTRIP[1]), TEAL),
     await sample(MSTRIP[0], MSTRIP[1]));
 

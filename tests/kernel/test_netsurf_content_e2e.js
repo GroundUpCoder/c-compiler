@@ -17,12 +17,16 @@
 //   - a MISSING file:// path produces NetSurf's real fetch-error page
 //     (title from Messages "FetchErrorTitle"), not a crash or a blank
 //     window — and the browser still navigates/exits cleanly after.
-//   - a bare `netsurf` opens the baked welcome page (about:welcome ->
-//     resource:welcome.html -> /usr/share/netsurf/welcome.html): navy
-//     brand band, body text, and the about:logo netsurf.png decoded
-//     top-right (PNG decode through the resource fetcher).
-//   - the Desktop seed: /root/Desktop/netsurf is a symlink to
-//     /usr/bin/netsurf (the standard app-icon convention).
+//   - a bare `netsurf` opens the packaged welcome page (about:welcome ->
+//     resource:welcome.html -> /usr/opt/netsurf/res/welcome.html on the
+//     fat image; #417 moved netsurf out of the bake): navy brand band,
+//     body text, and the about:logo netsurf.png decoded top-right (PNG
+//     decode through the resource fetcher). This leg is the respath
+//     acceptance — the resources resolve from the package tree.
+//   - the fold plants the app: /usr/bin/netsurf is the package symlink
+//     and the control.json declares desktop eligibility (#417; the
+//     Desktop icon itself now arrives via install/desktop-defaults,
+//     not an image.json user seed).
 //
 // Run: node tests/kernel/test_netsurf_content_e2e.js
 'use strict';
@@ -130,15 +134,18 @@ const ERR_TITLE = 'Not found';
 
 /* ---- session A ---- */
 const out = driveBoot([
-  'readlink /root/Desktop/netsurf && echo LINK-OK',
+  'readlink /usr/bin/netsurf && echo LINK-OK',
+  'grep -q \'"cmd": "netsurf"\' /usr/opt/netsurf/control.json && echo DESK-ELIGIBLE',
   ...leg('netsurf /root/images.html', 'Images', '/root/i.ppm', 'images'),
   ...leg(`netsurf '${DATA_URL}'`, 'DataDoc', '/root/d.ppm', 'data'),
   ...leg('netsurf /root/no-such-page.html', ERR_TITLE, '/root/e.ppm', 'err'),
   ...leg('netsurf', 'Welcome to gucOS', '/root/w.ppm', 'welcome'),
 ], { image, timeout: 420000, maxBuffer: 64 * 1024 * 1024 }).stdout;
 
-check('desktop icon: /root/Desktop/netsurf -> /usr/bin/netsurf',
-      out.includes('/usr/bin/netsurf') && out.includes('LINK-OK'));
+check('folded app: /usr/bin/netsurf -> /usr/opt/netsurf/netsurf',
+      out.includes('/usr/opt/netsurf/netsurf') && out.includes('LINK-OK'));
+check('control.json declares desktop eligibility (design §5)',
+      out.includes('DESK-ELIGIBLE'));
 for (const tag of ['images', 'data', 'err', 'welcome']) {
   check(`${tag} rendered + shot`, out.includes(`shot-${tag}-ok`));
   check(`${tag} window closed`, out.includes(`closed-${tag}-ok`));

@@ -1,10 +1,12 @@
 <!DOCTYPE html>
-<!-- The gucOS browser start page, baked to /usr/share/netsurf/welcome.html
-     (os/image.json). A bare `netsurf` opens about:welcome, which the about
-     fetcher redirects to resource:welcome.html — resolving here through
-     the respaths (a user copy at ~/.netsurf/welcome.html wins). File-only
-     by design: every link below is a file: or about: url the v1 browser
-     can actually fetch (no networking, no JavaScript). -->
+<!-- The gucOS browser start page, shipped in the netsurf package's res/
+     tree (packages/netsurf.json — /opt/netsurf/res installed,
+     /usr/opt/netsurf/res on a fat bake). A bare `netsurf` opens
+     about:welcome, which the about fetcher redirects to
+     resource:welcome.html — resolving here through the respaths (a user
+     copy at ~/.netsurf/welcome.html wins). File-only by design: every
+     link below is a file: or about: url the v1 browser can actually
+     fetch (no networking, no JavaScript). -->
 <html>
 <head>
 <title>Welcome to gucOS</title>
@@ -34,8 +36,6 @@ kbd { font-family: monospace; background: #eeeeee; padding: 0 4px;
 <table>
 <tr><td><a href="file:///root/">Your home folder</a></td>
     <td>directory listings are pages too</td></tr>
-<tr><td><a href="file:///usr/share/netsurf/">Browser resources</a></td>
-    <td>the engine's own files</td></tr>
 </table>
 <h2>Keys</h2>
 <table>
