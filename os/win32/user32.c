@@ -799,6 +799,19 @@ static int vk_of(int sym, int sc) {
     case '\\': case '|': return VK_OEM_5;
     case ']': case '}':  return VK_OEM_6;
     case '\'': case '"': return VK_OEM_7;
+    /* ...and the shifted digit-row symbols, which the scancode rule above
+     * can't catch without a scancode ('!' is 0x21 = VK_PRIOR, '(' is 0x28
+     * = VK_DOWN — the same nav-collision class as the OEM keys). */
+    case '!': return '1';
+    case '@': return '2';
+    case '#': return '3';
+    case '$': return '4';
+    case '%': return '5';
+    case '^': return '6';
+    case '&': return '7';
+    case '*': return '8';
+    case '(': return '9';
+    case ')': return '0';
     }
     if (sym > 0 && sym < 256) return sym;        /* the remainder (Latin-1
                                                     IME chars): no VK owns
