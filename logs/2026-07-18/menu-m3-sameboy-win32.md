@@ -12,7 +12,7 @@ canonical design note.
 
 - **Window**: `RegisterClass` + `CreateWindowEx` (fixed-size — no
   `WS_THICKFRAME`, like doom/quake; scaling stays the SET_DST path) with
-  `AdjustWindowRect` reserving the bar strip: 480×452 outer, 480×432 client.
+  `AdjustWindowRect` reserving the bar strip: 480×462 outer, 480×432 client.
   **NOT CS_OWNCLIENT** — that seam (M2) is for apps presenting outside GDI;
   SameBoy is the vanilla case user32 owns end to end, which is the point.
 - **Present**: `rgb_encode` fills `fb[]` verbatim (UNTOUCHED — the directive);
@@ -56,7 +56,7 @@ no codegen, no SameBoy-codegen interlock.
 `test_sameboy_e2e.js` (rewritten, keeps the 0075 legs): RED on the
 unconverted tree — `wmctl wait win menubar` times out (driveBoot fails loud
 per the 0171 rule), since the plain-SDL sameboy has no bar child. Green
-after: menubar anchored at the window origin at 480×20, bar click →
+after: menubar anchored at the window origin at 480×30, bar click →
 "#32768" popup child at `y = win.y + MENU_BAR_H`, ESC closes,
 Emulation▸Pause freezes (time-separated client shots BYTE-IDENTICAL, then
 unpause), Options▸Palette▸DMG Green fired with the menu closed (A12
