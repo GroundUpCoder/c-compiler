@@ -101,6 +101,35 @@ Stages NOT built (approved scope was Stage 1 only): Stage 1.5
 bridge-side like the kernel's `redirect:'follow'`), Stage 2 (raw TCP
 socket broker — that is ticket #7's relay), Stage 3 (UDP).
 
+**Remote egress — `tools/net-bridge-ssh.js` (ticket #380).** "The user's
+network identity" is not always the WORKSTATION's: sometimes a request
+should leave from some other machine. `node tools/net-bridge-ssh.js HOST`
+runs the SAME bridge on HOST over ssh and `-L`-forwards it to the local
+`127.0.0.1:8199` the `net` store already points at — so nothing in `os/`
+changes, `net-bridge.js` is not modified, and the applet switch is the
+switch it always was. Posture is UNCHANGED and arguably tighter: the
+bridge still binds loopback, now on HOST where it is unreachable from
+HOST's network too, and the ssh tunnel is the only path in; the origin
+allowlist is enforced remotely, untouched. The remote needs only sshd, a
+POSIX shell and node >= 18 (global `fetch` — checked in preflight, since
+otherwise it surfaces as a bare `fetch is not defined` at the FIRST
+proxied request rather than at startup). The bridge source is shipped
+INLINE per run into a per-run `/tmp` file, never scp'd to a stable path:
+a persistent remote copy running an older wire contract against a newer
+`createNetFetch` is the drift class this repo refuses. Teardown is three
+layered guarantees, because no single one covers every exit — a remote
+stdin-EOF watchdog (the only one that survives `kill -9` of the wrapper,
+since nothing local runs then), remote shell traps for a dropped channel,
+and a bounded `pkill -f <per-run-token>` reaper on graceful shutdown.
+Two gotchas are load-bearing and commented in the file: the watchdog must
+read a SAVED fd (`exec 9<&0`), because POSIX assigns an async list's stdin
+to `/dev/null` in any non-interactive shell — read fd 0 and it EOFs
+instantly and kills the bridge on startup; and the reaper's pattern is
+bracketed (`[g]uc-nbssh-…`) so it cannot match its own command line, which
+otherwise kills the reaper's shell instead of the bridge. Not CI-testable
+end to end (needs a reachable sshd); `--dry-run` prints the composed ssh
+argv and starts nothing.
+
 Tests: `tests/kernel/test_netbridge_e2e.js` (the paired
 positive-control run: OFF/ON/OFF/ON-dead flipped live by one process,
 the bridge's request counter as the discriminator) + the ctlpanel e2e's

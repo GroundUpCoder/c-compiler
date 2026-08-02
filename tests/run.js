@@ -201,6 +201,17 @@ const RULES = [
   // test_netbridge_e2e.js drives both halves end to end.
   [/^tools\/net-bridge\.js$/, ['kernel'], 'the Tier 2.5 HTTP bridge — test_netbridge_e2e.js drives the full reroute against it'],
 
+  // The remote-egress wrapper (ticket #380): ssh -L to the SAME bridge running
+  // on another host. Explicitly NOTHING, and the decision is the point. It
+  // changes no wire contract -- it ships net-bridge.js verbatim and forwards a
+  // port, so test_netbridge_e2e.js's coverage of the bridge is untouched by an
+  // edit here. What it does own (ssh invocation, kill propagation) needs a
+  // reachable sshd, which no suite in this estate has; a rule pointing at
+  // `kernel` would run a gate that cannot observe this file at all. `--dry-run`
+  // is the inspectable surface instead.
+  [/^tools\/net-bridge-ssh\.js$/, [],
+    'operator-side ssh wrapper -- ships net-bridge.js verbatim, changes no contract; needs a live sshd, so no suite covers it'],
+
   // ---- the rest of tools/ (todos/0333) ----
   //
   // There is deliberately NO blanket `^tools/` rule. tools/ mixes load-bearing
