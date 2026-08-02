@@ -6,6 +6,9 @@
   "include",
   "src"
  ],
+ "srcRoots": {
+  "nsbmp": "src"
+ },
  "sources": [
   "src/libnsbmp.c"
  ]

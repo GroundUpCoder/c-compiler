@@ -365,4 +365,19 @@ thing this file exists to kill.
 - anchor: 			"multipart POST is not supported yet (todos/0433)");
 - provenance: 0433
 
+### L73 — gdiplus-mini's draw is SRCCOPY, so a translucent image lands OPAQUE: GdipGetImageFlags reports the alpha honestly (a viewer still draws its checkerboard) but nothing shows through, because the compositing primitive does not exist yet
+- ticket: #285
+- file: os/win32/gdiplus.c
+- anchor:          * compositing primitive is gdi32 AlphaBlend, ticket #285. */
+
+### L74 — gdiplus-mini decodes PNG/JPEG/GIF/BMP only: an ICO/CUR is a loud UnknownImageFormat, and the shimgvw loader hands GDI+ exactly that container (libnsbmp's ico_* is already linked — the decode is absent, not the decoder)
+- ticket: #379
+- file: os/win32/gdiplus.c
+- anchor:      * decode it yet — ticket #379 funds it. Until then it is a loud
+
+### L75 — gdiplus-mini's encoder table is BMP+PNG only, so the viewer's "rotate clockwise and save" will REFUSE on a JPEG: shimgvw looks the image's own rawFormat up in this list and gives up when it is absent
+- ticket: #379
+- file: os/win32/gdiplus.c
+- anchor:  * of THIS list, so it will refuse on a JPEG until ticket #379 lands one. */
+
 <!-- END ENTRIES -->

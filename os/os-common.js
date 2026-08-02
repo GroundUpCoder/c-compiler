@@ -971,6 +971,9 @@ function checkReservedPackageFiles(pkg, label) {
  *   - os/win32/gdi32.c's require set == vendor/freetype/lib.json sources,
  *     as freetype/<shim basename> (§4.2 — vendor knowledge stays with its
  *     consumer)
+ *   - os/win32/include/gdiplusflat.h's require set == gdiplus.json sources,
+ *     and os/win32/gdiplus.c's == the four decoder lib.jsons' sources
+ *     (ticket #94 — the same §4.1/§4.2 pair, for the gdiplus component)
  *   - packages/win32.json SHIPS every veneer source under src/win32/ (the
  *     payload half — todos/0387). A require block can only name what the
  *     package actually plants: `0370` added listview.c to lib.json but to
@@ -1032,12 +1035,27 @@ function win32RequireDriftErrors(readText) {
   }
   var veneer = sourcesOf('os/win32/lib.json', 'win32')
     .concat(sourcesOf('os/win32/menucore.json', 'win32'));
+  /* gdiplus (ticket #94) is the third split component, on the menucore
+   * pattern: gdiplusflat.h names its own TU (§4.1) and gdiplus.c names
+   * its four vendor decoders (§4.2). It is NOT part of `veneer` — no
+   * windows.h consumer should pull an image decoder — but packages/
+   * win32.json must still SHIP it, so it joins the payload half. */
+  var gdiplus = sourcesOf('os/win32/gdiplus.json', 'win32');
+  var gdiplusVendor = sourcesOf('vendor/libpng/lib.json', 'png')
+    .concat(sourcesOf('vendor/zlib/lib.json', 'z'))
+    .concat(sourcesOf('vendor/libjpeg/lib.json', 'jpeg'))
+    .concat(sourcesOf('vendor/netsurf/libnsgif/lib.json', 'nsgif'))
+    .concat(sourcesOf('vendor/netsurf/libnsbmp/lib.json', 'nsbmp'));
   return diff('os/win32/include/windows.h',
       requiresOf('os/win32/include/windows.h'), veneer)
     .concat(unshipped('packages/win32.json',
-      shippedOf('packages/win32.json'), veneer))
+      shippedOf('packages/win32.json'), veneer.concat(gdiplus)))
     .concat(diff('os/win32/menucore.h',
       requiresOf('os/win32/menucore.h'), sourcesOf('os/win32/menucore.json', 'win32')))
+    .concat(diff('os/win32/include/gdiplusflat.h',
+      requiresOf('os/win32/include/gdiplusflat.h'), gdiplus))
+    .concat(diff('os/win32/gdiplus.c',
+      requiresOf('os/win32/gdiplus.c'), gdiplusVendor))
     .concat(diff('os/win32/gdi32.c',
       requiresOf('os/win32/gdi32.c'), sourcesOf('vendor/freetype/lib.json', 'freetype')));
 }

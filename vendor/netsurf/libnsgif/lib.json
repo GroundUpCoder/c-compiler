@@ -6,6 +6,9 @@
   "include",
   "src"
  ],
+ "srcRoots": {
+  "nsgif": "src"
+ },
  "sources": [
   "src/gif.c",
   "src/lzw.c"

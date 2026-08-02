@@ -22,6 +22,7 @@
     "winmm.c",
     "comctl32.c",
     "listview.c",
-    "comdlg32.c"
+    "comdlg32.c",
+    "ole32.c"
   ]
 }

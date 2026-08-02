@@ -1,0 +1,11 @@
+{
+  "bin": true,
+  "name": "gdiplusdemo",
+  "description": "gdiplus-mini acceptance app (ticket #94 / 0453): headless `gdiplusdemo selftest` — per-format decode with can-fail controls, the nearest-neighbour scaled draw, rotate/flip, the codec tables, save round-trips, and the fail-loud refusals",
+  "deps": [
+    "gdiplus.json"
+  ],
+  "sources": [
+    "gdiplusdemo.c"
+  ]
+}
