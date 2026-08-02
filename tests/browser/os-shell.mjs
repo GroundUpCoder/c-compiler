@@ -513,31 +513,30 @@ try {
   // ---- selection & manipulation (todos/0077) ----
   // The click above also focused the desktop (wm.c policy), so modifier
   // and navigation keys reach the icon grid from here on.
-  // Ctrl+click mario: additive — doom stays.
-  const MC = cell('mario');
-  const MSTRIP = stripL(MC, 'mario');            // mario label strip left margin
+  // Ctrl+click paint: additive — doom stays.
+  const MC = cell('paint');
+  const MSTRIP = stripL(MC, 'paint');            // paint label strip left margin
   await page.keyboard.down('Control');
   await clickAt(MC.x + 58, MC.y + 48);
   await page.keyboard.up('Control');
   await waitPixel(MSTRIP[0], MSTRIP[1], NAVY);
-  check('ctrl+click adds to the selection (mario strip navy)', true);
+  check('ctrl+click adds to the selection (paint strip navy)', true);
   { const [lx, ly] = stripL(DC, 'doom');
     check('...and doom stays selected', near(await sample(lx, ly), NAVY), await sample(lx, ly)); }
 
   // Marquee from empty desktop over two vertically-adjacent column-0 tiles
-  // (drmario + fileman — #418 moved the gameboy/netsurf icons off the
-  // seeded Desktop, so the grid is one column shorter): REPLACES the set —
-  // mario drops out.
-  const FMC = cell('fileman'), GC = cell('drmario');
+  // (fileman + notepad — #434 removed the three sameboy launchers, so the
+  // seeded set is three icons shorter): REPLACES the set — paint drops out.
+  const FMC = cell('fileman'), GC = cell('notepad');
   // Box the two icon TILES (icon at cell.x+42..74, y cell.y+6..38): start
   // at empty desktop above-right of the pair, drag through both, stopping
-  // above mario's row (drmario + fileman rows swept, mario's excluded).
+  // above paint's row (fileman + notepad rows swept, paint's excluded).
   // The marquee must START in an EMPTY cell: desk_hit is CELL-based (a
   // press anywhere inside an occupied cell selects that icon and arms an
-  // icon-move, not a marquee). Column 1 has only 5 icons, so its lower
-  // cells and everything from column 3 right are empty — start 3 columns
-  // right of fileman and sweep back-left across the two tiles, staying
-  // above mario's row.
+  // icon-move, not a marquee). Column 1 has only term and the Recycle Bin,
+  // so everything from column 2 right is empty — start 3 columns right of
+  // fileman and sweep back-left across the two tiles, staying above
+  // paint's row.
   const mqTop = Math.min(FMC.y, GC.y) - 14, mqBot = Math.max(FMC.y, GC.y) + 44;
   await page.mouse.move(rect.x + FMC.x + 360, rect.y + mqTop);
   await page.mouse.down();
@@ -546,15 +545,15 @@ try {
   await page.mouse.up();
   { const [lx, ly] = stripL(FMC, 'fileman'); await waitPixel(lx, ly, NAVY); }  // fileman strip
   check('marquee selects the intersected icons (fileman strip navy)', true);
-  { const [lx, ly] = stripL(GC, 'drmario');
-    check('drmario caught by the marquee too', near(await sample(lx, ly), NAVY), await sample(lx, ly)); }
-  check('marquee replaces: mario deselected', near(await sample(MSTRIP[0], MSTRIP[1]), TEAL),
+  { const [lx, ly] = stripL(GC, 'notepad');
+    check('notepad caught by the marquee too', near(await sample(lx, ly), NAVY), await sample(lx, ly)); }
+  check('marquee replaces: paint deselected', near(await sample(MSTRIP[0], MSTRIP[1]), TEAL),
     await sample(MSTRIP[0], MSTRIP[1]));
 
-  // Drag-move: a plain click on the selected pokemon collapses the set to
+  // Drag-move: a plain click on the selected ctlpanel collapses the set to
   // it (mouseup rule); past the 500ms double-click window, drag it two
   // columns right — (0,r) -> (2,r), snapped and persisted (.icons).
-  const PC = cell('pokemon');
+  const PC = cell('ctlpanel');
   await clickAt(PC.x + 58, PC.y + 48);
   await new Promise(r => setTimeout(r, 600));
   await page.mouse.move(rect.x + (PC.x + 58), rect.y + (PC.y + 48));
@@ -567,12 +566,12 @@ try {
   check('the old cell is teal again', near(await sample(PC.x + 58, PC.y + 22), TEAL),
     await sample(PC.x + 58, PC.y + 22));
   check('moved icon stays selected (strip navy at the new cell)',
-    near(await sample(PC.x + 232 + (stripL(PC,'pokemon')[0]-PC.x), stripL(PC,'pokemon')[1]), NAVY),
-    await sample(PC.x + 232 + (stripL(PC,'pokemon')[0]-PC.x), stripL(PC,'pokemon')[1]));
+    near(await sample(PC.x + 232 + (stripL(PC,'ctlpanel')[0]-PC.x), stripL(PC,'ctlpanel')[1]), NAVY),
+    await sample(PC.x + 232 + (stripL(PC,'ctlpanel')[0]-PC.x), stripL(PC,'ctlpanel')[1]));
 
   // Esc clears the selection (the desktop holds focus).
   await page.keyboard.press('Escape');
-  await waitPixel(PC.x + 232 + (stripL(PC,'pokemon')[0]-PC.x), stripL(PC,'pokemon')[1], TEAL);
+  await waitPixel(PC.x + 232 + (stripL(PC,'ctlpanel')[0]-PC.x), stripL(PC,'ctlpanel')[1], TEAL);
   check('Esc clears the selection', true);
 
   // Double-click launches term (640x456 at the cascade slot; term's live
