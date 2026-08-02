@@ -57,11 +57,14 @@ function toolUseResponse(preface, id, name, inputObj) {
 // (#305: the REPL-survives-a-failed-turn leg).
 function startServer(scripts) {
   const bodies = [];
+  const raw = [];   // request bodies as Buffers — #386 asserts UTF-8 validity byte-level
   const server = http.createServer((req, res) => {
-    let buf = '';
-    req.on('data', (c) => (buf += c));
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
-      bodies.push(JSON.parse(buf));
+      const buf = Buffer.concat(chunks);
+      raw.push(buf);
+      bodies.push(JSON.parse(buf.toString('utf8')));
       const body = scripts.shift();
       if (body === undefined) { res.writeHead(500); res.end('no script'); return; }
       if (typeof body === 'object') {
@@ -76,7 +79,7 @@ function startServer(scripts) {
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => {
       const { port } = server.address();
-      resolve({ url: `http://127.0.0.1:${port}`, bodies, close: () => server.close() });
+      resolve({ url: `http://127.0.0.1:${port}`, bodies, raw, close: () => server.close() });
     });
   });
 }
@@ -290,6 +293,94 @@ async function main() {
     check(r.stderr.includes('rounds: 2'), '#348: multi-round turn reports its API-round count');
     check(/turn cost: \$\d+\.\d{6}  \(1 round unpriced: mystery-model-x\)/.test(r.stderr),
       '#348: mixed turn prices known rounds and names the unpriced model explicitly');
+  }
+
+  // ---- test 9 (#386): non-UTF-8 tool output is scrubbed, never POSTed ----
+  // A bash tool emits a lone continuation byte (0x80), a bare 0xC0 lead and
+  // a truncated 3-byte sequence (0xE2 0x82) next to a VALID 2-byte é. The
+  // follow-up request body must be valid UTF-8 at the BYTE level (pre-fix
+  // the raw bytes ride through and this decode throws), the bad bytes must
+  // surface as U+FFFD plus the visible replacement trailer, and the valid
+  // sequence must survive untouched.
+  {
+    const srv = await startServer([
+      toolUseResponse('inspecting', 'toolu_386', 'bash',
+        { command: "printf 'caf\\xc3\\xa9 \\x80\\xc0 tail\\xe2\\x82'" }),
+      textResponse('Scrubbed ok.'),
+    ]);
+    const { stdout } = await runCodeBoth(srv.url, ['-p', 'inspect the rom', '--no-color', '--no-persist']);
+    srv.close();
+    check(srv.bodies.length === 2, `#386: both requests reached the server (${srv.bodies.length})`);
+    let valid = true;
+    try { new TextDecoder('utf-8', { fatal: true }).decode(srv.raw[1] || Buffer.alloc(0)); }
+    catch { valid = false; }
+    check(valid, '#386: follow-up request body is valid UTF-8 at the byte level');
+    const tr = srv.bodies[1].messages[srv.bodies[1].messages.length - 1].content[0];
+    check(tr && tr.type === 'tool_result' && tr.content.includes('�'),
+      '#386: bad bytes became U+FFFD in the tool_result');
+    check(tr && tr.content.includes('[gcode: replaced 4 invalid UTF-8 bytes with U+FFFD]'),
+      '#386: the substitution is announced in the tool_result itself');
+    check(tr && tr.content.includes('café'), '#386: valid multi-byte sequences pass through untouched');
+    check(stdout.includes('Scrubbed ok.'), '#386: the turn completes (no 400, session not bricked)');
+  }
+
+  // ---- test 10 (#387): a body-parse 400 is permanent, and diagnosable ----
+  // Same REPL shape as test 4, but the first send gets HTTP 400: unlike the
+  // 500 there, gcode must NOT return to the prompt — the poisoned history
+  // would be re-sent identically forever — so the second ask never reaches
+  // the server. The error line must carry model, base_url and payload size.
+  {
+    const srv = await startServer([
+      { status: 400, body: '{"detail":"There was an error parsing the body"}' },
+      textResponse('never reached'),
+    ]);
+    const child = spawn(bin, ['--no-color', '--no-persist', '--model', 'test-model-387'], {
+      env: { ...process.env, ANTHROPIC_BASE_URL: srv.url, ANTHROPIC_API_KEY: 'test',
+             ASAN_OPTIONS: 'detect_leaks=0' },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let err = '';
+    child.stderr.on('data', (c) => (err += c));
+    child.stdin.write('first ask\nsecond ask\n/quit\n');
+    child.stdin.end();
+    await new Promise((resolve, reject) => {
+      const t = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('400 leg timed out')); }, 15000);
+      child.on('exit', () => { clearTimeout(t); resolve(); });
+    });
+    srv.close();
+    check(err.includes('HTTP 400'), '#387: the 400 printed its HTTP error');
+    check(err.includes('test-model-387') && err.includes(srv.url) && /payload \d+ bytes/.test(err),
+      '#387: error line names model, base_url and payload size');
+    check(err.includes('retrying cannot succeed'), '#387: 400 is reported as non-retryable');
+    check(srv.bodies.length === 1, `#387: session ended — second ask never sent (${srv.bodies.length} requests)`);
+  }
+
+  // ---- test 11 (#387): a poisoned history fails LOCALLY, before the POST --
+  // A hand-crafted session log (the pre-#386 world) carries a tool_result
+  // with a raw 0x80; --resume replays it, and the pre-POST guard must
+  // refuse to send: zero requests reach the server, the message names the
+  // byte offset and the poisoned tool_use_id.
+  {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gcode-387-'));
+    const sessDir = path.join(stateDir, 'sessions');
+    fs.mkdirSync(sessDir, { recursive: true });
+    const sessPath = path.join(sessDir, '20260802T000000Z_00112233445566778899aabbccddeeff.jsonl');
+    const lines = [
+      '{"schema_version":1,"type":"session_meta","session_id":"00112233445566778899aabbccddeeff","model":"m","base_url":"u","system_prompt_hash":"h","cwd":"/"}',
+      '{"type":"message","role":"user","content":[{"type":"text","text":"inspect the rom"}]}',
+      '{"type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_poison","name":"bash","input":{}}]}',
+      '{"type":"message","role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_poison","content":"title: \x80"}]}',
+    ];
+    fs.writeFileSync(sessPath, Buffer.from(lines.join('\n') + '\n', 'latin1'));
+    const srv = await startServer([textResponse('must not be reached')]);
+    const { stderr } = await runCodeBoth(srv.url, ['--resume', sessPath, '-p', 'go', '--no-color'],
+      { GCODE_STATE_DIR: stateDir });
+    srv.close();
+    check(srv.bodies.length === 0, `#387: nothing was POSTed (${srv.bodies.length} requests)`);
+    check(/not valid UTF-8 at byte \d+/.test(stderr), '#387: local failure names the byte offset');
+    check(stderr.includes('toolu_poison'), '#387: local failure names the poisoned tool_result');
+    check(stderr.includes('retrying cannot succeed'), '#387: local failure says retrying cannot succeed');
+    fs.rmSync(stateDir, { recursive: true, force: true });
   }
 
   console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILURE(S)`);
