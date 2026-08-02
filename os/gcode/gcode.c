@@ -1076,11 +1076,34 @@ static int persist_assistant_message(session *s, cJSON *m, const stream_ctx *ctx
     return record_write(s, r);
 }
 
+/* #387: name the first tool_result in the history whose content is not
+ * valid UTF-8 — the diagnostic for a malformed request body (a poisoned
+ * pre-#386 log replayed by --resume is the surviving way to get one). */
+static const char *find_invalid_tool_result(cJSON *messages) {
+    cJSON *m;
+    cJSON_ArrayForEach(m, messages) {
+        cJSON *content = cJSON_GetObjectItem(m, "content");
+        if (!cJSON_IsArray(content)) continue;
+        cJSON *blk;
+        cJSON_ArrayForEach(blk, content) {
+            cJSON *t = cJSON_GetObjectItem(blk, "type");
+            if (!cJSON_IsString(t) || strcmp(t->valuestring, "tool_result")) continue;
+            cJSON *c = cJSON_GetObjectItem(blk, "content");
+            if (cJSON_IsString(c) && utf8_invalid_at(c->valuestring, strlen(c->valuestring)) >= 0) {
+                cJSON *id = cJSON_GetObjectItem(blk, "tool_use_id");
+                return cJSON_IsString(id) ? id->valuestring : "?";
+            }
+        }
+    }
+    return NULL;
+}
+
 /* ---- one API round-trip ----------------------------------------------- */
 /* Returns 0 to stop, 1 to continue (tool_use). Errors: -1 recoverable
-   (transport, HTTP != 200, API error event), -2 interrupted (^C via the
-   xferinfo abort, #306), -3 auth (HTTP 401/403 — retrying cannot succeed,
-   #305). */
+   (transport, HTTP 5xx/408/429, API error event), -2 interrupted (^C via
+   the xferinfo abort, #306), -3 permanent — retrying the same conversation
+   cannot succeed (auth 401/403 #305; other 4xx and a malformed request
+   body caught before the POST, #387). */
 static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, usage *turn_usage, mlist *turn_models) {
     cJSON *body = cJSON_CreateObject();
     cJSON_AddStringToObject(body, "model", cfg->model);
@@ -1091,6 +1114,28 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
     cJSON_AddItemReferenceToObject(body, "tools", tools);
     char *payload = cJSON_PrintUnformatted(body);
     cJSON_Delete(body);
+    if (!payload) { fprintf(stderr, "%sgcode: could not serialize request body%s\n", R_ERRB, CRST); return -1; }
+    size_t payload_len = strlen(payload);
+
+    /* #387: never POST a body the server is guaranteed to reject — the bad
+     * bytes would be re-sent identically every round (the bricked-session
+     * class #386 fixed at the tool seam; this guard covers every other way
+     * the history can go bad, e.g. a poisoned pre-#386 log via --resume). */
+    {
+        long bad = utf8_invalid_at(payload, payload_len);
+        if (bad >= 0) {
+            const char *culprit = find_invalid_tool_result(messages);
+            fprintf(stderr, "\n%sgcode: request body is not valid UTF-8 at byte %ld (0x%02X) — not sent%s\n",
+                    R_ERRB, bad, (unsigned char)payload[bad], CRST);
+            if (culprit)
+                fprintf(stderr, "%sgcode: the poisoned block is tool_result tool_use_id=%s%s\n",
+                        R_ERRB, culprit, CRST);
+            fprintf(stderr, "%sgcode: the message history carries these bytes, so retrying cannot succeed — start a fresh session (or /clear)%s\n",
+                    R_ERRB, CRST);
+            free(payload);
+            return -3;
+        }
+    }
 
     stream_ctx ctx; memset(&ctx, 0, sizeof ctx); ctx.color = cfg->color;
 
@@ -1129,9 +1174,19 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
         goto done;
     }
     if (code != 200) {
-        fprintf(stderr, "\n%sgcode: HTTP %ld%s\n%.*s\n", R_ERRB, code, CRST,
+        /* #387: say what WE sent, not just what came back — and classify.
+         * A request-shaped 4xx (400 body parse, 404 bad route, 413 too
+         * large, 422 validation, ...) fails identically on every retry, the
+         * 401/403 precedent; 408 (timeout) and 429 (rate limit) stay
+         * retryable, as does every 5xx. */
+        int permanent = code >= 400 && code < 500 && code != 408 && code != 429;
+        fprintf(stderr, "\n%sgcode: HTTP %ld (model %s, %s, payload %lu bytes)%s\n%.*s\n",
+                R_ERRB, code, cfg->model, cfg->base_url, (unsigned long)payload_len, CRST,
                 (int)ctx.raw.len, ctx.raw.p ? ctx.raw.p : "");
-        ret = (code == 401 || code == 403) ? -3 : -1; goto done;
+        if (permanent && code != 401 && code != 403)
+            fprintf(stderr, "%sgcode: the server rejected the request itself — retrying cannot succeed%s\n",
+                    R_ERRB, CRST);
+        ret = permanent ? -3 : -1; goto done;
     }
     if (ctx.api_error) {
         fprintf(stderr, "\n%sgcode: API error: %s%s\n", R_ERRB, ctx.errmsg.p ? ctx.errmsg.p : "?", CRST);
@@ -1300,7 +1355,8 @@ static int agent_loop(config *cfg, session *sess, cJSON *messages, cJSON *tools)
     report_usage("turn", &turn, &turn_models); report_usage("session", &sess->total, &sess->models);
     mlist_free(&turn_models);
     /* 0 = done or interrupted (^C lands back at the prompt), -1 =
-       recoverable turn error, -3 = auth (fatal — #305) */
+       recoverable turn error, -3 = permanent (fatal — auth #305,
+       non-retryable 4xx / malformed body #387) */
     return last == -2 ? 0 : (last == -3 ? -3 : (last < 0 ? -1 : 0));
 }
 
@@ -1594,7 +1650,7 @@ int main(int argc, char **argv) {
             if (append_user_text(&sess, messages, line)) break;
             int turn_rc = agent_loop(&cfg, &sess, messages, tools);
             g_interrupted = 0;   /* consumed: a stale mid-turn ^C must not eat the next EOF */
-            if (turn_rc == -3) { session_end(&sess, "error"); break; }   /* auth: retrying cannot succeed */
+            if (turn_rc == -3) { session_end(&sess, "error"); break; }   /* permanent (#305 auth, #387 4xx): retrying cannot succeed */
             /* r == -1 (recoverable turn error — transport, 5xx/429, timeout)
                returns to the prompt like r == 0: the error line already
                printed red, and the failed user message STAYS in history —

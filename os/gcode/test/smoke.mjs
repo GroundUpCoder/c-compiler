@@ -324,6 +324,65 @@ async function main() {
     check(stdout.includes('Scrubbed ok.'), '#386: the turn completes (no 400, session not bricked)');
   }
 
+  // ---- test 10 (#387): a body-parse 400 is permanent, and diagnosable ----
+  // Same REPL shape as test 4, but the first send gets HTTP 400: unlike the
+  // 500 there, gcode must NOT return to the prompt — the poisoned history
+  // would be re-sent identically forever — so the second ask never reaches
+  // the server. The error line must carry model, base_url and payload size.
+  {
+    const srv = await startServer([
+      { status: 400, body: '{"detail":"There was an error parsing the body"}' },
+      textResponse('never reached'),
+    ]);
+    const child = spawn(bin, ['--no-color', '--no-persist', '--model', 'test-model-387'], {
+      env: { ...process.env, ANTHROPIC_BASE_URL: srv.url, ANTHROPIC_API_KEY: 'test',
+             ASAN_OPTIONS: 'detect_leaks=0' },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let err = '';
+    child.stderr.on('data', (c) => (err += c));
+    child.stdin.write('first ask\nsecond ask\n/quit\n');
+    child.stdin.end();
+    await new Promise((resolve, reject) => {
+      const t = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('400 leg timed out')); }, 15000);
+      child.on('exit', () => { clearTimeout(t); resolve(); });
+    });
+    srv.close();
+    check(err.includes('HTTP 400'), '#387: the 400 printed its HTTP error');
+    check(err.includes('test-model-387') && err.includes(srv.url) && /payload \d+ bytes/.test(err),
+      '#387: error line names model, base_url and payload size');
+    check(err.includes('retrying cannot succeed'), '#387: 400 is reported as non-retryable');
+    check(srv.bodies.length === 1, `#387: session ended — second ask never sent (${srv.bodies.length} requests)`);
+  }
+
+  // ---- test 11 (#387): a poisoned history fails LOCALLY, before the POST --
+  // A hand-crafted session log (the pre-#386 world) carries a tool_result
+  // with a raw 0x80; --resume replays it, and the pre-POST guard must
+  // refuse to send: zero requests reach the server, the message names the
+  // byte offset and the poisoned tool_use_id.
+  {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gcode-387-'));
+    const sessDir = path.join(stateDir, 'sessions');
+    fs.mkdirSync(sessDir, { recursive: true });
+    const sessPath = path.join(sessDir, '20260802T000000Z_00112233445566778899aabbccddeeff.jsonl');
+    const lines = [
+      '{"schema_version":1,"type":"session_meta","session_id":"00112233445566778899aabbccddeeff","model":"m","base_url":"u","system_prompt_hash":"h","cwd":"/"}',
+      '{"type":"message","role":"user","content":[{"type":"text","text":"inspect the rom"}]}',
+      '{"type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_poison","name":"bash","input":{}}]}',
+      '{"type":"message","role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_poison","content":"title: \x80"}]}',
+    ];
+    fs.writeFileSync(sessPath, Buffer.from(lines.join('\n') + '\n', 'latin1'));
+    const srv = await startServer([textResponse('must not be reached')]);
+    const { stderr } = await runCodeBoth(srv.url, ['--resume', sessPath, '-p', 'go', '--no-color'],
+      { GCODE_STATE_DIR: stateDir });
+    srv.close();
+    check(srv.bodies.length === 0, `#387: nothing was POSTed (${srv.bodies.length} requests)`);
+    check(/not valid UTF-8 at byte \d+/.test(stderr), '#387: local failure names the byte offset');
+    check(stderr.includes('toolu_poison'), '#387: local failure names the poisoned tool_result');
+    check(stderr.includes('retrying cannot succeed'), '#387: local failure says retrying cannot succeed');
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+
   console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILURE(S)`);
   process.exit(failures === 0 ? 0 : 1);
 }
