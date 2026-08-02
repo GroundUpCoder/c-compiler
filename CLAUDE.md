@@ -211,6 +211,60 @@ Net: **run heavy suites one at a time.** `tests/run.js all` already does
 (suites run sequentially); the guards catch the case where separate
 invocations overlap.
 
+### Gate cost + gate batching (ADOPTED rule — jku ruling 2026-08-02, ticket #415)
+
+This section is for LANES, not just the coordinator. It records a ruling jku
+has already made ("adopt the gate batching — yes"); do not re-derive it.
+
+**Authority first.** `node tests/run.js --diff origin/main --dry-run` is the
+ONLY authority on which suites a diff mandates — never this section's table,
+never intuition about "how big" the change is. And an absent
+`build/test-run/summary.json` means "did not finish", NEVER a green.
+
+**1. The measured suite-cost table** (real `planFromDiff` run, 2026-08-02):
+
+| Changed paths | Suites pulled in | Cost |
+|---|---|---|
+| `logs/**.md` | **none** | zero |
+| `todos/*.md`, `CLAUDE.md` | `todos` only | ~6.8 s |
+| `os/**.{c,h,html}`, `os/image.json` | kernel + sweep | heavy |
+| `compiler.js` | **all 25 suites** | heaviest |
+
+**2. The heavy-lock ceiling — worktrees parallelise EDITING, never the GATE.**
+`tests/lib/heavy-lock.js` makes the kernel and sweep suites mutually exclusive
+machine-wide and CROSS-PROCESS (`os/boot.js` joins too, since todos/0342). A
+second lane hitting the lock does not queue — it **exits 3**. So the standard
+worktree-per-lane dispatch convention parallelises the editing phase only:
+however many worktrees exist, at most ONE heavy gate runs at a time on this
+machine. Fan-out past roughly 3–4 concurrent lanes buys nothing on
+kernel/sweep tickets — the extra lanes just stack up waiting to gate.
+
+**3. The batching rule (the adopted part).** For behaviour-neutral tickets
+(comment/doc-only) that share ONE suite target: dispatch them as ONE lane with
+ONE gate. M separate lanes cost M gates; one batched lane costs 1, and the
+suite mapper unions the targets anyway. Both guardrails are load-bearing:
+
+- 🔴 **Batch only WITHIN a suite target.** Mixing targets unions them upward
+  and gives back the saving.
+- 🔴 **NEVER `--resume` across a batch**, and **behaviour-neutral only** — do
+  NOT batch tickets that change executable behaviour. That collides with "one
+  task, one thread" and makes a red gate **un-attributable**: you cannot tell
+  which ticket broke it.
+
+Worked example of a good batch: **#309 + #307 + #365**. Worked
+counter-example (proposed once, and wrong): **#111–#116 is the WORST possible
+batch, not the cleanest** — all six edit `compiler.js` (⇒ all 25 suites) plus
+the same `tests/run.py` skip block, and #113/#116 both edit `strftime`. The
+clean fan-out in that area is **#277 / #278 / #279**.
+
+**4. The general form (why the table alone is not enough).** 🔴 The unit of
+contention is what the suite map pulls in TRANSITIVELY, not what the ticket's
+own diff touches. Verified in source: `tests/browser/os-gcode.mjs` imports
+`startServer`/`launchBrowser` from `lib/os-harness.mjs`, and both of those
+call `latchHeavyLock()` → `joinHeavyLock`. So a one-file test edit that
+imports `os-harness.mjs` is a HEAVY lane, however light its diff looks. **Ask
+what a diff GATES, not what repo or how many lines it is.**
+
 ### Flake / under-load gate (`tests/flake.js`, todos/0147)
 
 Run this **after landing any new e2e/browser test** (and as a periodic
