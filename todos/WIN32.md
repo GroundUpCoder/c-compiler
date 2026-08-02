@@ -225,7 +225,9 @@ resources/comdlg32/shell32/winmm (winmine 29, notepad 64, calc 45).
 
 0068 landed 2026-07-10 (log: `logs/2026-07-10/win32-winmine.md`): the
 user32/resource tail — **winmine links, is seeded as `/bin/winmine`, and
-is playable**. The resource story: a tiny rc compiler (`tools/win32rc.js`,
+is playable** (seeded then; since the 0262 gucman deploy-leg winmine
+ships as the `winmine` PACKAGE — `packages/winmine.json`,
+`/usr/local/bin/winmine` — not a bake entry). The resource story: a tiny rc compiler (`tools/win32rc.js`,
 the STRINGTABLE/MENU/DIALOGEX/ACCELERATORS/BITMAP subset) emits a SIDECAR
 pack `<binary>.res` — the PE-resource-section analog, found via argv0 at
 the first Load*, zero link coupling (resource-less apps never know). The

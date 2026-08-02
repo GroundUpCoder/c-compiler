@@ -226,6 +226,9 @@ existing `deque`.)*
 | **micropolis** (SimCity classic, GPL3+trademark note) | city sim, ~50 kloc engine | STL moderate, C-style core | **High** — original UI was Tcl/Tk; needs a from-scratch SDL front-end | Deep sim for the desktop; big front-end investment |
 | **Infra Arcana** (martin-tornqvist/infra-arcana, AGPL) | Lovecraft roguelike, ~60 kloc | modern-ish STL C++ | **Medium** — SDL tiles path exists | A serious roguelike without the curses problem |
 | **bsdgames-era C++ rewrites / 2048.cpp / console tetris (various, MIT)** | tiny tty games | vector/string + ANSI escapes | **Trivial** | Filler wins; prove tty+STL path in an afternoon |
+| **Scintilla** (+ SciTE as the reference front-end) (HPND-style license) | editing component, ~90 kloc | C++17, moderate STL plus its own containers and lexer framework | **High** — a `Plat*` platform layer must be written over the `--sdl` subset; SciTE brings its own shell on top | The natural in-OS code editor. NB the Notepad++ framing is a SEPARATE proposition: Notepad++ is Win32-native, so it belongs to the win32-veneer track, not this SDL ladder — that adjacency is what makes it interesting next to the win32 corpus, and also what makes it not a plain ladder pick |
+| **DOSBox** (GPL2) | C++ x86/DOS emulator, ~130 kloc | moderate STL, C-style core, SDL front-end | **High** — size, audio/timing, SDL1→our subset | A DOS catalogue in a window. NB the emulator family has its own track — see `todos/EMULATORS.md` (routing note below) |
+| **ScummVM** (GPL2+) | adventure-game engine VM, large (core + per-engine) | C++11 with its own `Common::` container/stream layer (historically STL-averse; ported to dozens of platforms) | **High** — size; an OSystem backend must be written over the `--sdl` subset | An engine-VM whose payoff is a large catalogue of runnable adventure games — a natural gucOS showcase app |
 
 *Enabling work surfaced by this tier: `queue`/`stack` headers (trivial);
 optionally a mini-curses over ANSI for the roguelike class (medium — unlocks
@@ -260,6 +263,7 @@ corner cases, fstream+seek, tellg/putback, manipulators.)*
 | **bc-like / calc REPLs in C++ (e.g. Expression-evaluator ports over muparser)** | tiny | iostream REPL loop, getline | **Trivial** | Cheap breadth for cin/getline paths |
 | **Zork/Inform-era C++ IF interpreters (e.g. Glulxe C++ forks / scare)** | interactive fiction terps | fstream game files, iostream tty | **Medium** — check licenses per terp | Story-game shelf for term; pairs with Frotz-class C terps later |
 | **cppcheck** (GPL3) | C/C++ static analyzer, ~200 kloc | STL + iostreams + exceptions at scale | **High** — size; but pure CLI, zero OS surface | Dev-tool synergy: lint the code you write in-OS; stretch pick |
+| **CMake** (BSD-3) | the build-system generator, ~250 kloc | heavy STL + iostreams everywhere, an embedded interpreter (its own language), and it needs a process/exec model | **High** — size; process model → gucOS `posix_spawn` (the ninja precedent) | The generator half of the already-green Tier-3 ninja story: cmake → ninja → in-OS `cc` |
 
 ### Tier 6 — heavy template metaprogramming / full modern STL
 *(Proves: constexpr evaluation depth, variadic packs, SFINAE/concepts-lite,
@@ -278,6 +282,7 @@ at this tier's edge with features macro'd off — Tier 6 turns those ON.)*
 | **PEGTL** (taocpp, Boost-lic) | parser combinator library | template grammars, deep instantiation | **Medium** | Build a tiny language/config-parser demo; frontend depth test |
 | **range-v3** (ericniebler, BSL-1.0) | ranges without `<ranges>` | the deepest TMP in the pre-C++20 world | **High** — a stressor, not an app; expect mini-STL friction | Only as a conformance battery once 6 is otherwise green |
 | **nlohmann/json, restrictions lifted** (already vendored) | re-enable `JSON_HAS_THREE_WAY_COMPARISON` / ranges / `<compare>` as mini-STL grows | operator<=>, ranges integration | **Medium** (drives `<compare>`/`<span>` growth) | Turns the Tier-4 app into the Tier-6 gate with zero new vendoring |
+| **SuperTuxKart** (GPL3) | 3D kart racer, ~200 kloc + its bundled Irrlicht fork | full modern STL across engine + game code (straddles Tier 5/6) | **Very High — HARD-GATED on #374 (OpenGL-on-WebGPU): do not pick this before that GL shim exists.** Threads to strip; large assets | The marquee 3D game if the top end ever opens; meaningless pre-#374 |
 
 ### Deferred / rejected at the top
 
@@ -288,8 +293,79 @@ at this tier's edge with features macro'd off — Tier 6 turns those ON.)*
   net layer is cleanly excisable.
 - **Boost-dependent projects** (ledger, older openttd deps): the Boost
   surface is not a mini-STL-sized problem; avoid.
+  - **Wesnoth** — excluded by this existing rule (Boost-dependent). Recorded
+    by name (ticket #381) so it stops being re-proposed.
+  - **0 A.D.** — excluded twice over by existing rules: Boost-dependent, and
+    OpenGL-dependent (§1's UI constraint is the `--sdl` subset or webgpu.h —
+    no GL until #374); very large besides.
 - **Qt/GTK/wxWidgets apps**: whole-toolkit ports are out of scope; ImGui is
   our GUI substrate.
+- **Emulator cores (Snes9x / VBA-M / DeSmuME)** — routed, not shelved: the
+  emulator ladder is `todos/EMULATORS.md` (SameBoy, the `br_table` A/B and
+  the veneer-build blocker #136 live there); don't duplicate the family into
+  these tier tables. NB VBA-M's wxWidgets front-end falls under the
+  Qt/GTK/wxWidgets rejection above — the emulator core is the portable part.
+
+### llama.cpp — classified, NOT selected (ticket #373, read 2026-08-02)
+
+The 2026-08-02 brainstorm proposed llama.cpp as the first "iconic" C++ port.
+It was not selected — the ratchet stands at Tier 4 (jsonq) — but the ambition
+is placed here so it stops being re-proposed from scratch. **This is a
+classification, not a pick.**
+
+**Tier: 5, with Tier-6 edges — confirmed, not assumed.** The split matters:
+`ggml` (the entire compute core — tensors, quant kernels, threadpool) is **C,
+not C++**, so the hardest-looking half of the port is not a C++ problem at
+all. The C++ lives in the `llama` model/session layer and `common/` (C++17;
+vector/map/unordered_map/string throughout; **exceptions are the error model**
+— loading throws `std::runtime_error` → `--exceptions`, i.e. Tier 4;
+iostreams/sstream through `common/` and the tools → Tier 5). The Tier-6-ish
+surfaces (the jinja/minja chat-template engine and its `<regex>` appetite) are
+optional and cut cleanly. So: it must wait behind the Tier-4 rung and a
+Tier-5 rung — two rungs, exactly as ruled on the Tier-4 ticket.
+
+**Gap list vs clang-simplified + mini-STL** (§1 absent-header list):
+- `<filesystem>` — absent; used in `common/`/tools. Excisable or stub-level.
+- `<regex>` — absent; only the chat-template path wants it. Cut that path.
+- `<charconv>` — absent; small exposure, growable on demand.
+- `<thread>/<atomic>/<mutex>` — mini-STL threads are fake (inline-run);
+  ggml's pool is pthreads-C anyway. Build single-threaded / `n_threads=1`.
+- **mmap** — gucOS has no file mmap; upstream's `--no-mmap` fallback (heap
+  read) exists and is the path. Costs transient peak memory at load.
+- **f16/bf16** — ggml converts via software tables; no native f16 needed.
+- **SIMD** — ggml carries `wasm_simd128` paths upstream; scalar fallback
+  works but pays a multiple. Whether cc2wasm's pipeline passes SIMD128
+  through is enabling work to verify, not a known blocker.
+
+**Threading story — precedent confirmed live (2026-08).** Single-thread
+llama.cpp-on-wasm is a maintained reality: wllama (github.com/ngxson/wllama)
+ships single- AND multi-threaded wasm builds of unmodified llama.cpp (WASM
+SIMD, every GGUF quant); tangledgroup/llama-cpp-wasm likewise builds
+`llama-st`/`llama-mt` variants. Multi-thread needs SharedArrayBuffer wasm
+threads — not our model; `n_threads=1` is the gucOS shape. Cost estimate
+(order of magnitude, not measured — published single-thread numbers are
+scarce): low single-digit tok/s on a ≤1B Q4 model with SIMD, sub-1 tok/s by
+~3B. A demo cadence, not a tool cadence.
+
+**Memory — THE BINDING CONSTRAINT, more than the C++.** wasm32 is ILP32: a
+4 GiB hard address ceiling per process, minus stack/heap/KV/compute buffers.
+At Q4: ~1B ≈ 0.6–0.8 GiB of weights (fits), ~3B ≈ 2 GiB (tight, with KV +
+no-mmap load transient), **7B ≈ 4 GiB — out of reach on wasm32 regardless of
+C++ maturity.** The models people mean by "llama.cpp" do not fit; ≤1–2B chat
+models do. Delivery is the second memory wall: a model can never be baked
+(the image is ~25 MiB), and a 0.5–1 GiB gucman payload is ~60–120× the
+largest package shipped to date (quake's 8.6 MiB) — pool delivery + OPFS
+quota + BlockFS at that scale is real enabling work with no precedent here.
+
+**Go/no-go for the ladder top end: qualified GO.** As a *tiny-model*
+(≤1–2B Q4) chat/completion showcase, llama.cpp is a viable Tier-5/6 flagship:
+the C++ surface is tractable (core is C, the C++ layer is restrained and
+de-STL'd), exceptions/iostreams are exactly what Tiers 4–5 will have proven,
+and the single-thread precedent stands. As a general "local LLM in gucOS" it
+is a NO on memory alone — say so at selection time. Rung it waits behind:
+Tier 4 (jsonq) then a Tier-5 rung. If picked, the port ticket must carry the
+two enabling items by name: large-payload package delivery, and the
+SIMD128-through-cc2wasm verification.
 
 ---
 
