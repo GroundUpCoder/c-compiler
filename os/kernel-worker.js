@@ -745,6 +745,9 @@ async function boot() {
     if (OS_COMMON.seedHostKeyScheme(kfs, HOST_PLATFORM))
       post({ type: 'boot-log', msg: 'host keyboard scheme -> macos (Mac host default)' });
   }
+  // Persisted host verdict (ticket #96): every boot, fresh or stale root —
+  // keys.h's implicit host-native paste row reads /run/host-platform.
+  OS_COMMON.writeHostPlatform(kfs, HOST_PLATFORM);
   var ccCompile = OS_COMMON.createCcDriver(CompilerJS, kfs);
 
   // Kernel text service (todos/0275): the ksvc blob from the sealed system

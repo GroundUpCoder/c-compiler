@@ -224,7 +224,7 @@ check('owner-draw keypad buttons in the tree (7 present)',
 check('empty clipboard: Paste grayed at WM_ENTERMENULOOP',
   /menuitem id=40003 text='Paste' grayed/.test(section(out, 'menotree')), section(out, 'menotree'));
 check('after Copy: Paste enabled',
-  /menuitem id=40003 text='Paste'\n/.test(section(out, 'meyestree')), section(out, 'meyestree'));
+  /menuitem id=40003 text='Paste'(?! grayed)/.test(section(out, 'meyestree')), section(out, 'meyestree'));
 
 /* arithmetic + clipboard */
 check('7 + 3 = -> 10. (BM_CLICK by numeric label)',

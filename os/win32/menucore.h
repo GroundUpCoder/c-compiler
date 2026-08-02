@@ -145,6 +145,10 @@ void mc_set_font(HFONT f);
 
 HDC mc_measure_dc(void);            /* the cached measuring memory DC */
 int mc_text_w(const char *text);    /* label width up to the accel tab */
+/* Accel-column text as DRAWN (ticket #96): "Ctrl+" reads "Cmd+" under
+ * the macos scheme — the truthful twin of the TranslateAccelerator
+ * FCONTROL=>GUI swap. Measure, draw and the agent dump all use it. */
+void mc_accel_text(const char *accel, char *out, int cap);
 int mc_row_h(const MenuItem *it);
 void mc_tbl_size(MenuTbl *m, int *wOut, int *hOut);
 int mc_tbl_at(MenuTbl *m, const RECT *pr, int x, int y);

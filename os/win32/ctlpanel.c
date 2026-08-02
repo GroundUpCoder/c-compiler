@@ -479,17 +479,86 @@ static LRESULT CALLBACK saver_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 #define ID_KBWIN 500                             /* radios in KS_* order */
 #define ID_KBMAC 501
 #define ID_KBRL  502
+#define ID_KBCH0 510                             /* chord statics, +i */
 
 static const char *KB_RADIO[2] = { "windows", "macos" };
 
-/* Sync the radios + checkbox to the STORED config — WM_CREATE and the
- * write-failure reverts (the saver_sync discipline, todos/0234). */
+/* The verbs the Shortcuts panel lists (ticket #96): registry action id +
+ * display label. Static per-scheme content by construction — the values
+ * come from keys.h's resolution, so a user bind.<action> override shows
+ * too (the panel reports the EFFECTIVE chord, not the table default). */
+static const struct { int idx; const char *label; } KB_CHORDS[] = {
+    { KSA_SELECT_ALL, "Select All" },
+    { KSA_COPY,       "Copy" },
+    { KSA_CUT,        "Cut" },
+    { KSA_PASTE,      "Paste" },
+    { KSA_UNDO,       "Undo" },
+    { KSA_TERM_COPY,  "Terminal Copy" },
+    { KSA_TERM_PASTE, "Terminal Paste" },
+};
+#define KB_NCHORD ((int)(sizeof KB_CHORDS / sizeof KB_CHORDS[0]))
+
+/* One chord as UI text: "Ctrl+Shift+C", "Cmd+V", "Alt+Left". "Cmd" is the
+ * applet's GUI-modifier vocabulary (the "macOS (Cmd)" radio; the menu
+ * accel column says the same — menucore's mc_accel_text). */
+static void kb_chord_text(KsChord ch, char *out, size_t sz) {
+    char keybuf[24];
+    if (ch.key >= 'a' && ch.key <= 'z') {
+        keybuf[0] = (char)(ch.key - 32);
+        keybuf[1] = 0;
+    } else if (ch.key > ' ' && ch.key < 127) {
+        keybuf[0] = (char)ch.key;
+        keybuf[1] = 0;
+    } else {
+        keybuf[0] = 0;
+        for (size_t i = 0; i < sizeof KS_KEYNAMES / sizeof KS_KEYNAMES[0]; i++)
+            if (KS_KEYNAMES[i].key == ch.key) {
+                snprintf(keybuf, sizeof keybuf, "%s", KS_KEYNAMES[i].name);
+                if (keybuf[0] >= 'a' && keybuf[0] <= 'z') keybuf[0] -= 32;
+                break;
+            }
+    }
+    snprintf(out, sz, "%s%s%s%s%s",
+        (ch.mods & KM_CTRL) ? "Ctrl+" : "", (ch.mods & KM_ALT) ? "Alt+" : "",
+        (ch.mods & KM_SHIFT) ? "Shift+" : "",
+        (ch.mods & KM_GUI) ? "Cmd+" : "", keybuf);
+}
+
+/* Effective chord(s) for registry action `idx` under a FRESH config —
+ * ks_action_binding's resolution, but over the caller's ks_get read so a
+ * radio click's kb_sync doesn't wait out ks_cached's 1 Hz revalidate. */
+static int kb_effective(const ks_cfg *c, int idx, KsChord out[2]) {
+    if (c->ovr_state[idx] == KOV_NONE) return 0;
+    if (c->ovr_state[idx] == KOV_BOUND) {
+        out[0].mods = c->ovr_mods[idx];
+        out[0].key = c->ovr_key[idx];
+        return 1;
+    }
+    return ks_action_default(idx, c->scheme, out);
+}
+
+/* Sync the radios + checkbox + the chord listing to the STORED config —
+ * WM_CREATE, every successful write, and the write-failure reverts (the
+ * saver_sync discipline, todos/0234). */
 static void kb_sync(HWND h) {
     ks_cfg c;
     ks_get(&c);
     SendMessage(GetDlgItem(h, ID_KBWIN), BM_SETCHECK, c.scheme == KS_WINDOWS, 0);
     SendMessage(GetDlgItem(h, ID_KBMAC), BM_SETCHECK, c.scheme == KS_MACOS, 0);
     SendMessage(GetDlgItem(h, ID_KBRL), BM_SETCHECK, c.readline != 0, 0);
+    for (int i = 0; i < KB_NCHORD; i++) {
+        KsChord ch[2];
+        char buf[80], one[40];
+        int n = kb_effective(&c, KB_CHORDS[i].idx, ch);
+        buf[0] = 0;
+        for (int k = 0; k < n; k++) {
+            kb_chord_text(ch[k], one, sizeof one);
+            if (k) strncat(buf, " / ", sizeof buf - strlen(buf) - 1);
+            strncat(buf, one, sizeof buf - strlen(buf) - 1);
+        }
+        if (!n) snprintf(buf, sizeof buf, "none");
+        SetWindowText(GetDlgItem(h, ID_KBCH0 + i), buf);
+    }
 }
 
 static LRESULT CALLBACK keyboard_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
@@ -513,6 +582,20 @@ static LRESULT CALLBACK keyboard_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         CreateWindowEx(0, "BUTTON", "Emacs editing in text fields (macOS)",
                        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
                        20, 94, 464, 28, h, (HMENU)ID_KBRL, NULL, NULL);
+        /* The effective-chord listing (ticket #96): what the active scheme
+         * actually binds, so the panel never advertises a dead chord. */
+        CreateWindowEx(0, "BUTTON", "Shortcuts",
+                       WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+                       8, 142, 480, 214, h, NULL, NULL, NULL);
+        for (int i = 0; i < KB_NCHORD; i++) {
+            CreateWindowEx(0, "STATIC", KB_CHORDS[i].label,
+                           WS_CHILD | WS_VISIBLE,
+                           20, 168 + i * 26, 170, 24, h, NULL, NULL, NULL);
+            CreateWindowEx(0, "STATIC", "",
+                           WS_CHILD | WS_VISIBLE,
+                           200, 168 + i * 26, 270, 24, h,
+                           (HMENU)(ID_KBCH0 + i), NULL, NULL);
+        }
         kb_sync(h);
         return 0;
     case WM_COMMAND:
@@ -522,6 +605,8 @@ static LRESULT CALLBACK keyboard_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if (ks_set("scheme", KB_RADIO[LOWORD(wp) - ID_KBWIN]) != 0) {
                 kb_sync(h);                      /* store write failed: revert */
                 store_fail(h, "the keyboard scheme");
+            } else {
+                kb_sync(h);                      /* the chord listing follows */
             }
             return 0;
         case ID_KBRL: {
@@ -842,7 +927,7 @@ APP_DEF[APP_N] = {
     { "CplDisplay",  display_proc,  324, 288 },
     { "CplDateTime", datetime_proc, 300, 76  },
     { "CplSaver",    saver_proc,    336, 212 },
-    { "CplKeyboard", keyboard_proc, 496, 150 },
+    { "CplKeyboard", keyboard_proc, 496, 368 },
     { "CplDefProg",  defprog_proc,  560, 326 },
     { "CplNetwork",  net_proc,      384, 292 },
 };

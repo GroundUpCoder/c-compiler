@@ -1830,6 +1830,21 @@ function seedHostKeyScheme(kfs, platform) {
   return true;
 }
 
+/* ---- persisted host verdict (ticket #96 / todos/0432) ----
+ * /run/host-platform records the per-boot host hint ('mac' | 'other') so
+ * in-OS consumers can read it — first user is keys.h's implicit host-native
+ * paste row (⌘V pastes on a Mac host regardless of the in-OS scheme, which
+ * is what rescues a stale pre-v138 windows-scheme root volume). Written
+ * EVERY boot by both boot paths (os/kernel-worker.js, os/boot.js): /run is
+ * per-boot state, not config — no layering, no user override, and
+ * deliberately NOT the seedHostKeyScheme fresh-root gate (recording a fact
+ * is not choosing a scheme; the scheme seed stays gated). */
+function writeHostPlatform(kfs, platform) {
+  if (kfs.stat('/run') === null) kfs.mkdir('/run', 0o755);
+  writeFile(kfs, '/run/host-platform',
+            (platform === 'mac' ? 'mac' : 'other') + '\n', 0o644);
+}
+
 /* ---- NodeFileStore: the ByteStore interface over a plain file ----
  * The headless twin of host.js's SyncAccessHandleStore (OPFS). Takes the
  * caller's `fs` module so this file stays environment-neutral (os/boot.js
@@ -2078,6 +2093,7 @@ var OS_COMMON = {
   newestBakeInput: newestBakeInput,
   initRootVolume: initRootVolume,
   seedHostKeyScheme: seedHostKeyScheme,
+  writeHostPlatform: writeHostPlatform,
   NodeFileStore: NodeFileStore,
   readFileBytes: readFileBytes,
   readFileText: readFileText,

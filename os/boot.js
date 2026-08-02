@@ -329,6 +329,9 @@ async function mountAndBoot() {
       bootLog('host keyboard scheme -> macos (Mac host default)');
     rootStore.flush();
   }
+  // Persisted host verdict (ticket #96): every boot, fresh or stale root —
+  // keys.h's implicit host-native paste row reads /run/host-platform.
+  COMMON.writeHostPlatform(kfs, hostPlatform);
   bootLog('image ' + imagePath + ' (' + sysMode + ')' +
     ' + ' + rootImagePath + (rootFresh ? ' (seeded)' : ''));
 

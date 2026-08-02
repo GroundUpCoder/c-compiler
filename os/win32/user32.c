@@ -2285,10 +2285,22 @@ static void menu_dump(MenuTbl *m, int depth, StrBuf *sb) {
             sb_add(sb, line);
             menu_dump(MENU_T(it->sub), depth + 1, sb);
         } else {
-            snprintf(line, sizeof line, "%*smenuitem id=%d text='%s'%s%s\n",
+            /* The accel column as DRAWN (ticket #96): the rewritten text,
+             * so a tree assert covers the menucore truth-in-labeling
+             * transformation once, corpus-wide. Appended LAST — existing
+             * asserts anchor on text/checked/grayed adjacency. */
+            char accel[80] = "";
+            const char *tab = it->text ? strchr(it->text, '\t') : NULL;
+            if (tab) {
+                char ac[64];
+                mc_accel_text(tab + 1, ac, sizeof ac);
+                snprintf(accel, sizeof accel, " accel='%s'", ac);
+            }
+            snprintf(line, sizeof line, "%*smenuitem id=%d text='%s'%s%s%s\n",
                      depth * 2, "", it->id, label,
                      (it->state & MF_CHECKED) ? " checked" : "",
-                     (it->state & (MF_GRAYED | MF_DISABLED)) ? " grayed" : "");
+                     (it->state & (MF_GRAYED | MF_DISABLED)) ? " grayed" : "",
+                     accel);
             sb_add(sb, line);
         }
     }

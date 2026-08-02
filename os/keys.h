@@ -506,6 +506,29 @@ static int ks_scheme(void) {
     return ks_cached()->scheme;
 }
 
+/* Is the HOST a Mac? Reads the per-boot verdict both boot paths persist at
+ * /run/host-platform (ticket #96 / todos/0432; os-common.js
+ * writeHostPlatform). Cached per process — the file is per-boot state and
+ * never changes under a running process. Absent file (old kernel,
+ * standalone in-process fs) = not a Mac, so every pre-existing environment
+ * resolves exactly as before. */
+static int ks_host_mac(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        char buf[16] = { 0 };
+        FILE *f = fopen("/run/host-platform", "r");
+        cached = 0;
+        if (f) {
+            if (fgets(buf, sizeof buf, f)) {
+                buf[strcspn(buf, "\r\n")] = 0;
+                cached = strcasecmp(buf, "mac") == 0;
+            }
+            fclose(f);
+        }
+    }
+    return cached;
+}
+
 /* Is the default binding for KA_* `ka` in context `ctx` suppressed by a user
  * override? The rebind-MOVES rule (§5): an APP registry action with an
  * override (bound OR none) whose ctx intersects this call's ctx suppresses
@@ -556,6 +579,21 @@ static int key_action(int ctx, int mods, int key) {
         if (!ks_chord_match(b->mods, b->key, mods, key)) continue;
         return b->action;
     }
+    /* 3. the implicit host-native paste row (ticket #96 / todos/0432): on a
+     * Mac HOST the native paste chord is ⌘V, so it resolves as EDIT|LIST
+     * KA_PASTE regardless of the in-OS scheme — this is what makes ⌘V paste
+     * on a stale windows-scheme root volume (pre-v138: never seeded macos).
+     * POLICY-ALIGNED with todos/KEYMAP.md's CLOSED DECISION: the row is
+     * GUI-modifier only and exists only when the host verdict is 'mac' — it
+     * never adds a Ctrl binding anywhere (on a non-Mac host the host-native
+     * chord is Ctrl+V, which the windows scheme already binds and the macos
+     * scheme deliberately reserves — no implicit row there). Checked LAST
+     * (overrides and scheme rows win) and suppressed by an explicit
+     * edit.paste override, like any default row. */
+    if ((ctx & (KCTX_EDIT | KCTX_LIST)) && key == 'v' &&
+        ks_chord_match(KM_GUI, 'v', mods, key) &&
+        ks_host_mac() && !ks_default_suppressed(KA_PASTE, ctx))
+        return KA_PASTE;
     return KA_NONE;
 }
 

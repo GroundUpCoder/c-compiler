@@ -19,6 +19,7 @@
 
 #include "win32_internal.h"
 #include "menucore.h"
+#include "../keys.h"     /* the system keyboard scheme (accel-column truth) */
 
 MenuChain __mc;
 
@@ -187,6 +188,29 @@ int mc_row_h(const MenuItem *it) {
     return it->kind == 2 ? MENU_SEP_H : MENU_ITEM_H;
 }
 
+/* The accel column as DRAWN (ticket #96 / todos/0432). Under the macos
+ * scheme the accelerator choke maps FCONTROL to the GUI modifier
+ * (user32.c TranslateAcceleratorW), so a literal "Ctrl+..." accel string
+ * advertises a chord the scheme deliberately leaves unbound. Rewrite the
+ * modifier NAME at this one measure/draw choke — every front-end's menus
+ * (user32 bars/popups, wm.c furniture) inherit it, and the agent dump
+ * reports the same rewritten text. "Cmd" is the scheme's established UI
+ * vocabulary (the ctlpanel "macOS (Cmd)" radio); the ⌘ glyph U+2318 is
+ * absent from every baked Noto face, so the symbol would render tofu on
+ * a base image. Model text (labels, GetMenuString) is untouched. */
+void mc_accel_text(const char *accel, char *out, int cap) {
+    int n = 0, mac = ks_scheme() == KS_MACOS;
+    if (!accel) accel = "";
+    while (*accel && n < cap - 1) {
+        if (mac && !strncasecmp(accel, "Ctrl+", 5) && n + 4 <= cap - 1) {
+            memcpy(out + n, "Cmd+", 4);
+            n += 4;
+            accel += 5;
+        } else out[n++] = *accel++;
+    }
+    out[n] = 0;
+}
+
 /* Measured size of a popup table (0211: shared by root + cascade). */
 void mc_tbl_size(MenuTbl *m, int *wOut, int *hOut) {
     int w = 60, h = 2;
@@ -197,8 +221,10 @@ void mc_tbl_size(MenuTbl *m, int *wOut, int *hOut) {
             int tw = mc_text_w(it->text) + MENU_GUTTER + 20;
             const char *tab = it->text ? strchr(it->text, '\t') : NULL;
             if (tab) {
+                char ac[64];
                 SIZE az;
-                GetTextExtentPoint32(mc_measure_dc(), tab + 1, (int)strlen(tab + 1), &az);
+                mc_accel_text(tab + 1, ac, sizeof ac);
+                GetTextExtentPoint32(mc_measure_dc(), ac, (int)strlen(ac), &az);
                 tw += az.cx + 12;
             }
             if (tw > w) w = tw;
@@ -294,9 +320,13 @@ void mc_draw_tbl(HDC dc, MenuTbl *m, const RECT *prp, int hotRow) {
             char *tab = strchr(label, '\t');
             if (tab) *tab = 0;
             TextOut(dc, pr.left + MENU_GUTTER, y + 2, label, (int)strlen(label));
-            if (tab)                                          /* accel column */
-                TextOut(dc, pr.right - 8 - mc_text_w(tab + 1) - 0, y + 2,
-                        tab + 1, (int)strlen(tab + 1));
+            if (tab) {                                        /* accel column */
+                char ac[64];
+                SIZE az;
+                mc_accel_text(tab + 1, ac, sizeof ac);
+                GetTextExtentPoint32(dc, ac, (int)strlen(ac), &az);
+                TextOut(dc, pr.right - 8 - az.cx, y + 2, ac, (int)strlen(ac));
+            }
             if (it->kind == 1) {                              /* cascade ► (0211) */
                 POINT tri[3];
                 int cx = pr.right - 10, cy = y + rh / 2;

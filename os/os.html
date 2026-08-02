@@ -1052,6 +1052,22 @@ document.addEventListener('paste', function (e) {
   if (vt !== 2 || !pasteArm) return;   // VT1: xterm's native paste owns it
   var files = e.clipboardData && e.clipboardData.files;
   if (!files || !files.length) {
+    // Ticket #96: the paste EVENT carries the authoritative text flavor —
+    // post it as the kernel slot BEFORE the forwarded chord (page->worker
+    // FIFO), so the paste is permission-free: no readText, no prompt, on
+    // Chrome AND Safari. The 0398 D6 memos still gate it: a clipSynced
+    // repeat is a no-op, and the file-name shadow never clobbers a staged
+    // fmt-2 list. clipEventFresh then lets this chord's clip-read skip its
+    // host read (below) — the event already served this paste.
+    var evText = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+    if (typeof evText === 'string' && evText && evText !== clipShadow) {
+      if (evText !== clipSynced) {
+        clipSynced = evText;
+        window.__osClipEvent = (window.__osClipEvent || 0) + 1;   // agent probe
+        kernel.postMessage({ type: 'clipboard', text: evText });
+      }
+      clipEventFresh = Date.now();
+    }
     pasteArmFlush();                   // text-only: the CLIP_GET seam serves it
     return;
   }
@@ -1198,6 +1214,12 @@ var clipSynced = null;
 // app's immediately-following CLIP_GET refresh would read it and clobber
 // the staged fmt-2 file list. One more dedup memo beside clipSynced.
 var clipShadow = null;
+// clipEventFresh (ticket #96): timestamp of the last text-flavored paste
+// EVENT — that event already posted the authoritative slot, so the chord's
+// clip-read refresh skips its readText (no permission prompt). One-shot
+// with a short TTL: a paste whose consumer never runs a CLIP_GET must not
+// starve a later, unrelated read of its refresh.
+var clipEventFresh = 0;
 function clipToHost(text) {
   if (typeof text !== 'string' || text === clipSynced) return;
   clipSynced = text;
@@ -1450,6 +1472,15 @@ kernel.onmessage = function (e) {
     case 'clip-read': {
       window.__osClipRead = (window.__osClipRead || 0) + 1;   // agent probe
       var clipDone = function () { kernel.postMessage({ type: 'clip-read-done' }); };
+      // Ticket #96: a text-flavored paste EVENT just served this paste —
+      // the slot is already authoritative, so skip the readText (and its
+      // permission prompt). One-shot; the TTL bounds a memo whose chord
+      // never reached a CLIP_GET consumer.
+      if (clipEventFresh && Date.now() - clipEventFresh < 1500) {
+        clipEventFresh = 0;
+        clipDone();
+        break;
+      }
       var uact = navigator.userActivation;
       if (uact && !uact.isActive) clipDone();
       else clipFromHost(clipDone);
