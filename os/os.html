@@ -188,7 +188,11 @@
      video-only fullscreen and must not get a dead button. #vtbar stays
      VISIBLE in fullscreen on purpose: it is the only mouse route back out
      (hold-Esc alone is the trap the Chrome escape hatch exists to rescue).
-     The .on class is owned by the fullscreenchange EVENT, never the click. */
+     The .on class is owned by the fullscreenchange EVENT, never the click.
+     The label is TEXT, not a glyph: a glyph outside the mono font's coverage
+     falls back to a taller face and the flex bar stretches EVERY control to
+     it — a platform-dependent bar height that shifts desktop geometry (this
+     broke os-shell's SH-relative probes by 2px on the first attempt). */
   #fsbtn { display: none; }
   body[data-fs-ok] #fsbtn { display: inline-block; }
   #fsbtn.on { background: #4a4a77; color: #ffffff; }
@@ -348,7 +352,7 @@
     </span>
     <span id="desksite" class="fontbtn" title="desktop site: the unzoomed 1&times; desktop (tap again for the 2&times; mobile zoom)">Desktop site</span>
     <span id="uploadbtn" class="fontbtn" title="upload a file to the OS desktop (lands in /root/Desktop)">Upload</span>
-    <span id="fsbtn" class="fontbtn" title="full screen">&#9974;</span>
+    <span id="fsbtn" class="fontbtn" title="full screen">Full screen</span>
     <input id="uploadinput" type="file" multiple style="display:none">
   </div>
   <div id="desktop"><canvas id="screen" width="800" height="500" tabindex="0"></canvas></div>

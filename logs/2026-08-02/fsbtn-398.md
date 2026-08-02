@@ -44,3 +44,31 @@ deferred to the coordinator's RELEASE turn.
 Headless note: element fullscreen works fine in the sweep's headless
 Chromium — `fullscreenElement` is set and `fullscreenchange` fires, so no
 headed carve-out was needed.
+
+## Gate finding: the glyph label broke os-shell (fixed — label is text now)
+
+The first gate run failed `os-shell.mjs` deterministically at the
+taskbar-strip-menu outside-click leg, and it WAS this ticket's bug, found by
+swapping only `os/os.html` back to origin/main's (pass) vs mine (fail):
+
+- The original label was `&#9974;` (⛶ U+26F6). Menlo/Consolas don't cover
+  it; the fallback face has a taller line box, so `#fsbtn` measured 27px
+  against its siblings' 25px — and `#vtbar` is `display: flex` with the
+  default `align-items: stretch`, so EVERY control stretched to 27px and the
+  bar grew 32 → 34px.
+- The desktop pane therefore shrank 850 → 848, and os-shell's SH-relative
+  strip-menu probe (`SH - 90`) moved 2px relative to the fixed-coordinate
+  window soup: after the menu dismissed, the probe now sampled a face-gray
+  window instead of the desktop, so `waitNotPixel` timed out. The dismissal
+  itself worked; the probe's ground truth had shifted.
+- Fix: the label is TEXT ("Full screen"), the `Upload`/`Desktop site` idiom —
+  same metrics as every other control by construction. Any glyph outside the
+  mono font's coverage makes bar height platform-dependent; a comment in the
+  CSS block now pins that constraint.
+
+Lesson for the estate: a "cosmetic" one-character label choice in page
+chrome is a GEOMETRY change — the vtbar's height feeds the desktop pane,
+which feeds `__osScreen`, which feeds every SH-relative pixel probe AND the
+wm's layout. The os-shell failure was two layers removed from the cause;
+the discriminating experiment (main's os.html vs mine, everything else
+equal) was what localized it.
