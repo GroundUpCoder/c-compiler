@@ -79,4 +79,4 @@ Retired LIABILITIES.md L03–L06 (the entries funding exactly these gaps).
   recorded: 49}` — recorded == total, zero resumed (the 42 carried are this
   session's own earlier same-tip slices merging, the 0339 mechanism).
 - harness unit (`node tests/browser/lib/test-harness.js`, runs in no suite):
-  20/20 ok, PASS.
+  19/19 ok, PASS.
