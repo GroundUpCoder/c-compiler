@@ -97,12 +97,25 @@ get a spike + `*-check.mjs`/`*-renders.mjs` there, same as the unit corpus.
   catch, and `longjmp` never returns so the extra frame is unobservable. Pinned
   by `sj_longjmp_ternary`, `sj_longjmp_for_increment`, `sj_longjmp_return_expr`
   and `sj_longjmp_declarator_init` in the conformance corpus (all clang-verified).
-- **setjmp contexts required by C11 7.13.1.1p4 but rejected**:
-  `switch (setjmp(b))`, `while (setjmp(b) == 0)`, `else if (setjmp(b))`.
-  (Plain `int r = setjmp(b);` is UB per the standard — rejecting it is fine,
-  but the error message lists forms that are themselves rejected.)
-  Funded by **todos/0311**. Note that fixing it does NOT un-skip the `setjmp`
-  libc-test, whose line 23 is the UB form.
+- ~~**setjmp contexts required by C11 7.13.1.1p4 but rejected**:
+  `switch (setjmp(b))`, `while (setjmp(b) == 0)`, `else if (setjmp(b))`.~~ —
+  FIXED 2026-08-03 (ticket #117 / todos/0311). The lowering now accepts the
+  entire controlling expression of if / else-if / while (direct, `!`,
+  `== 0` / `!= 0`, `(v = setjmp)` shapes), of switch (value hoisted into a
+  temp armed by the canonical if-shape, 0→1 coercion per 7.13.2.1p4 intact),
+  and the expression-statement form `setjmp(b);` / `(void)setjmp(b);`.
+  Pinned by `sj_switch_ctrl`, `sj_while_eq0_ctrl`, `sj_else_if_ctrl`,
+  `sj_while_direct_ctrl`, `sj_expr_stmt` (all clang-verified) and
+  `diag_setjmp_assign_stmt` (the UB bare-assignment `r = setjmp(b);` STAYS
+  rejected — it is not in p4's list, and the `setjmp` libc-test, whose line
+  23 is exactly that form, correctly stays skipped).
+- **setjmp p4 residue: do/for controlling expressions and comparisons against nonzero integer constants are still rejected**
+  (`do ... while (setjmp(b) == 0);`, `for (;setjmp(b) == 0;)`,
+  `if (setjmp(b) == 2)`). p4 covers all iteration statements and any integer
+  constant expression as the comparison operand; the do/for rewrite needs a
+  scope-aware break/continue redirection (a first-iteration `break` must not
+  cross the arm point), the nonzero-constant shape generalizes from the #117
+  switch lowering. Loud diagnostic, never a miscompile. Funded by **#432**.
 - **GNU case ranges enumerate every value** (`case 0 ... 100000000:` builds a
   100M-entry table at compile time). Clamp/reject or emit range compares.
 - **Missing libm entry points** (hosted C requires them): `exp2`, `fma`/`fmaf`

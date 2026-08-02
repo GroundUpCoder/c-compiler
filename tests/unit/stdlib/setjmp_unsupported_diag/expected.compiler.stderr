@@ -1,2 +1,2 @@
 Got 1 parse errors in tests/unit/stdlib/setjmp_unsupported_diag/main.c.
-tests/unit/stdlib/setjmp_unsupported_diag/main.c:6: error: unsupported use of setjmp — only forms like 'if (setjmp(buf))', 'if (!setjmp(buf))', 'if (setjmp(buf) == 0)', or 'if ((v = setjmp(buf)))' are supported
+tests/unit/stdlib/setjmp_unsupported_diag/main.c:6: error: unsupported use of setjmp — supported contexts: the entire controlling expression of an if or while ('setjmp(buf)', '!setjmp(buf)', 'setjmp(buf) == 0', '(v = setjmp(buf))'), the entire controlling expression of a switch ('switch (setjmp(buf))'), or a full expression statement ('setjmp(buf);', '(void)setjmp(buf);')

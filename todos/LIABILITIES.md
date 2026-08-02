@@ -211,10 +211,11 @@ thing this file exists to kill.
 - anchor: # (todos/0307). %s additionally diverges from musl's expectation by the
 - provenance: 0307
 
-### L31 — three setjmp contexts C11 7.13.1.1p4 REQUIRES are rejected; the diagnostic even advertises one
-- ticket: #117
+### L76 — setjmp p4 residue: do/for controlling expressions and nonzero-constant comparisons are still rejected after #117 accepted the common contexts
+- ticket: #432
 - file: todos/CONFORMANCE-REMAINING.md
-- anchor: - **setjmp contexts required by C11 7.13.1.1p4 but rejected**:
+- anchor: - **setjmp p4 residue: do/for controlling expressions and comparisons against nonzero integer constants are still rejected**
+- provenance: 0311
 
 ### L33 — mouseover/mouseout/mouseenter/mouseleave and focusin/focusout are not generated
 - ticket: #120

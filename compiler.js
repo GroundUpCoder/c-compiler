@@ -14170,6 +14170,45 @@ function extractSetjmpCall(cond) {
 // statements follow a setjmp-if (see the comment there).
 let __setjmpRetryCounter = 0;
 
+// Find any setjmp call in a statement/expression tree (generic children
+// walk). Used both to decide whether a non-compound statement needs the
+// compound-wrapping recursion below, and for the residual check that
+// turns a setjmp in an unsupported position into a diagnostic.
+function findSetjmpCall(node) {
+  if (!node) return null;
+  if (node instanceof AST.ECall) {
+    let callee = node.callee;
+    if (callee instanceof AST.EDecay) callee = callee.operand;
+    if (callee instanceof AST.EIdent && callee.name === "setjmp") return node;
+  }
+  for (const c of (node.children || [])) {
+    const r = findSetjmpCall(c);
+    if (r) return r;
+  }
+  return null;
+}
+
+// Lower setjmp patterns in an arbitrary statement slot. The transform
+// machinery works on a compound's statements array (it splices in the
+// arm/try/catch scaffold), so a NON-compound statement that contains a
+// setjmp — an `else if (setjmp(b))`, a single-statement loop body — is
+// wrapped in a synthesized compound first. The wrap is semantically
+// neutral for a single statement, and it bounds the retry scaffold's
+// coverage to that statement (the pre-existing rule: coverage extends
+// to the end of the enclosing compound). Returns the (possibly new)
+// statement for the caller to store back.
+function lowerSetjmpInStmt(stmt, tag, counterVar) {
+  if (!stmt) return stmt;
+  if (stmt instanceof AST.SCompound) {
+    lowerSetjmpInCompound(stmt, tag, counterVar);
+    return stmt;
+  }
+  if (!findSetjmpCall(stmt)) return stmt;
+  const wrapped = new AST.SCompound(stmt.loc, [stmt]);
+  lowerSetjmpInCompound(wrapped, tag, counterVar);
+  return wrapped;
+}
+
 // Build expression: buf[0]
 function makeBufIdExpr(bufExpr) {
   const loc = bufExpr.loc;
@@ -14292,7 +14331,82 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
   const stmts = compound.statements;
 
   for (let i = 0; i < stmts.length; i++) {
-    const stmt = stmts[i];
+    let stmt = stmts[i];
+
+    // C11 7.13.1.1p4 form: the entire expression of an expression
+    // statement, optionally cast to void — `setjmp(buf);` /
+    // `(void)setjmp(buf);`. Rewritten to the canonical if-shape with an
+    // empty branch: the statement is just the arm point, and a longjmp
+    // resumes at the following statements (the retry scaffold covers
+    // them). Only the direct-call shape (comma prefixes tolerated, as
+    // in if-position): `r = setjmp(b);` is NOT in p4's list and must
+    // keep rejecting, so unwrapSetjmpAssign is deliberately not used.
+    if (stmt instanceof AST.SExpr) {
+      let e = stmt.expr;
+      if (e instanceof AST.ECast && e.targetType === Types.TVOID) e = e.expr;
+      if (getNamedCall(e, "setjmp")) {
+        stmt = stmts[i] = new AST.SIf(stmt.loc, e, new AST.SEmpty(stmt.loc), null);
+      }
+    }
+
+    // C11 7.13.1.1p4 form: setjmp as (part of) the entire controlling
+    // expression of a while. Rewritten to the canonical if-shape; the
+    // loop structure survives as a wrapper around the body:
+    //  - condition true on the DIRECT path (`while (setjmp(b) == 0)`):
+    //    "loop until a longjmp arrives" — while (1) BODY; the longjmp
+    //    lands in the catch, which is the loop exit.
+    //  - condition true on the JUMP path (`while (setjmp(b))`): the
+    //    body runs once per longjmp, then the re-evaluated setjmp
+    //    returns 0 and the loop exits — do BODY while (0).
+    // break/continue bind to the wrapper with the original semantics
+    // (continue re-evaluates a condition whose direct-path value is
+    // constant). Not re-arming per iteration is unobservable here: the
+    // catch matches on buf[0], which a re-arm would only refresh, and
+    // the resume point is identical. do/for controlling expressions
+    // are NOT handled (first-iteration break/continue cross the arm
+    // point) and fall through to the residual diagnostic.
+    if (stmt instanceof AST.SWhile) {
+      const m = extractSetjmpCall(stmt.condition);
+      if (m.call) {
+        const wrap = m.zeroIsTrue
+          ? new AST.SWhile(stmt.loc, new AST.EInt(stmt.loc, Types.TINT, 1n), stmt.body)
+          : new AST.SDoWhile(stmt.loc, stmt.body, new AST.EInt(stmt.loc, Types.TINT, 0n));
+        stmt = stmts[i] = new AST.SIf(stmt.loc, stmt.condition, wrap, null);
+      }
+    }
+
+    // C11 7.13.1.1p4 form: setjmp as the controlling expression of a
+    // switch. Unlike if/while the dispatch is N-way, so the setjmp
+    // VALUE must survive: hoist it into a temp armed by a canonical
+    // `if ((__sv = setjmp(buf)))` — whose assignTarget machinery
+    // already delivers 0 on the direct path and the (0→1 coerced,
+    // 7.13.2.1p4) longjmp value in the catch — then dispatch the
+    // original controlling expression with the setjmp call replaced by
+    // the temp. A longjmp re-enters through the retry scaffold and
+    // re-runs the switch with the fresh value: exactly a longjmp's
+    // return into the controlling expression. Restricted to
+    // prefix-free, assignment-free shapes: p4 includes neither, and
+    // the comma/assign extensions exist only for the historical
+    // if-position idioms.
+    if (stmt instanceof AST.SSwitch) {
+      const m = extractSetjmpCall(stmt.expr);
+      if (m.call && !m.assignTarget && m.prefix.length === 0) {
+        const loc = stmt.loc;
+        const svName = Lexer.intern(`__setjmp_sw_${++__setjmpRetryCounter}`);
+        const svVar = new AST.DVar(Lexer.Loc.generated(), svName, Types.TINT, Types.StorageClass.NONE, null);
+        svVar.definition = svVar;
+        svVar.initExpr = new AST.EInt(loc, Types.TINT, 0n);
+        const svRef = () => new AST.EIdent(loc, Types.TINT, svVar);
+        const dispatchExpr = AST.walkExpr(stmt.expr, n => n === m.call ? svRef() : undefined);
+        const armCond = new AST.EBinary(loc, Types.TINT, "ASSIGN", svRef(), m.call);
+        stmts.splice(i, 1,
+          new AST.SDecl(loc, [svVar]),
+          new AST.SIf(loc, armCond, new AST.SEmpty(loc), null),
+          new AST.SSwitch(loc, dispatchExpr, stmt.body));
+        i--; // reprocess from the SDecl; the arm-if transforms next
+        continue;
+      }
+    }
 
     // Recurse into nested compounds first
     switch (stmt.constructor) {
@@ -14302,31 +14416,42 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
       case AST.SIf:
         // Don't recurse into the if we're about to transform — check first
         break;
-      case AST.SWhile:
-        if (stmt.body instanceof AST.SCompound)
-          lowerSetjmpInCompound(stmt.body, tag, counterVar);
+      case AST.SWhile: {
+        const b = lowerSetjmpInStmt(stmt.body, tag, counterVar);
+        if (b !== stmt.body) stmt = stmts[i] = new AST.SWhile(stmt.loc, stmt.condition, b);
         break;
-      case AST.SDoWhile:
-        if (stmt.body instanceof AST.SCompound)
-          lowerSetjmpInCompound(stmt.body, tag, counterVar);
+      }
+      case AST.SDoWhile: {
+        const b = lowerSetjmpInStmt(stmt.body, tag, counterVar);
+        if (b !== stmt.body) stmt = stmts[i] = new AST.SDoWhile(stmt.loc, b, stmt.condition);
         break;
-      case AST.SFor:
-        if (stmt.body instanceof AST.SCompound)
-          lowerSetjmpInCompound(stmt.body, tag, counterVar);
+      }
+      case AST.SFor: {
+        const b = lowerSetjmpInStmt(stmt.body, tag, counterVar);
+        if (b !== stmt.body)
+          stmt = stmts[i] = new AST.SFor(stmt.loc, stmt.init, stmt.condition, stmt.increment, b);
         break;
-      case AST.SSwitch:
-        if (stmt.body instanceof AST.SCompound)
-          lowerSetjmpInCompound(stmt.body, tag, counterVar);
+      }
+      case AST.SSwitch: {
+        const b = lowerSetjmpInStmt(stmt.body, tag, counterVar);
+        if (b !== stmt.body) stmt = stmts[i] = new AST.SSwitch(stmt.loc, stmt.expr, b);
         break;
+      }
       case AST.SLabel:
         break;
-      case AST.STryCatch:
-        if (stmt.tryBody instanceof AST.SCompound)
-          lowerSetjmpInCompound(stmt.tryBody, tag, counterVar);
-        for (const cc of stmt.catches)
-          if (cc.body instanceof AST.SCompound)
-            lowerSetjmpInCompound(cc.body, tag, counterVar);
+      case AST.STryCatch: {
+        const t = lowerSetjmpInStmt(stmt.tryBody, tag, counterVar);
+        let catchesChanged = false;
+        const cs = stmt.catches.map(cc => {
+          const b = lowerSetjmpInStmt(cc.body, tag, counterVar);
+          if (b === cc.body) return cc;
+          catchesChanged = true;
+          return { ...cc, body: b };
+        });
+        if (t !== stmt.tryBody || catchesChanged)
+          stmt = stmts[i] = new AST.STryCatch(stmt.loc, t, cs);
         break;
+      }
       default:
         break;
     }
@@ -14336,11 +14461,14 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
 
     const { call: setjmpCall, zeroIsTrue, prefix: setjmpPrefix, assignTarget } = extractSetjmpCall(stmt.condition);
     if (!setjmpCall) {
-      // Not a setjmp if — but still recurse into its branches
-      if (stmt.thenBranch instanceof AST.SCompound)
-        lowerSetjmpInCompound(stmt.thenBranch, tag, counterVar);
-      if (stmt.elseBranch && stmt.elseBranch instanceof AST.SCompound)
-        lowerSetjmpInCompound(stmt.elseBranch, tag, counterVar);
+      // Not a setjmp if — but still recurse into its branches. The
+      // helper wraps a non-compound branch that contains a setjmp (the
+      // `else if (setjmp(b))` chain) in a synthesized compound so the
+      // transform can fire inside it.
+      const t = lowerSetjmpInStmt(stmt.thenBranch, tag, counterVar);
+      const e = lowerSetjmpInStmt(stmt.elseBranch, tag, counterVar);
+      if (t !== stmt.thenBranch || e !== stmt.elseBranch)
+        stmts[i] = new AST.SIf(stmt.loc, stmt.condition, t, e);
       continue;
     }
 
@@ -14418,11 +14546,10 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
       };
     }
 
-    // Recurse into the try body and catch body
-    if (tryBody instanceof AST.SCompound)
-      lowerSetjmpInCompound(tryBody, tag, counterVar);
-    if (catchUserBody instanceof AST.SCompound)
-      lowerSetjmpInCompound(catchUserBody, tag, counterVar);
+    // Recurse into the try body and catch body (the helper wraps a
+    // non-compound body containing a nested setjmp in a compound)
+    tryBody = lowerSetjmpInStmt(tryBody, tag, counterVar);
+    catchUserBody = lowerSetjmpInStmt(catchUserBody, tag, counterVar);
 
     // For the `(v = setjmp(buf))` form, v carries the setjmp return value:
     // 0 on the direct path (assigned just before the try below), and the
@@ -14536,19 +14663,6 @@ function lowerSetjmpLongjmp(unit, exceptionTagRegistry) {
   // setjmp was just removed from importedFunctions, so codegen would die
   // with a raw "function 'setjmp' not found" JS error — report a proper
   // diagnostic instead.
-  const findResidualSetjmp = (node) => {
-    if (!node) return null;
-    if (node instanceof AST.ECall) {
-      let callee = node.callee;
-      if (callee instanceof AST.EDecay) callee = callee.operand;
-      if (callee instanceof AST.EIdent && callee.name === "setjmp") return node;
-    }
-    for (const c of (node.children || [])) {
-      const r = findResidualSetjmp(c);
-      if (r) return r;
-    }
-    return null;
-  };
 
   // C11 places no context restriction on `longjmp` (contrast setjmp's
   // 7.13.1.1p4 list) — it is an ordinary void call and may appear in any
@@ -14684,12 +14798,14 @@ function lowerSetjmpLongjmp(unit, exceptionTagRegistry) {
     }
     func.body = lowerLongjmpInStmt(func.body, tag);
     func.body = rewriteLongjmpInStmt(func.body);
-    const residual = findResidualSetjmp(func.body);
+    const residual = findSetjmpCall(func.body);
     if (residual) {
       fatalError(residual.loc,
-        "unsupported use of setjmp — only forms like 'if (setjmp(buf))', " +
-        "'if (!setjmp(buf))', 'if (setjmp(buf) == 0)', or " +
-        "'if ((v = setjmp(buf)))' are supported");
+        "unsupported use of setjmp — supported contexts: the entire " +
+        "controlling expression of an if or while ('setjmp(buf)', " +
+        "'!setjmp(buf)', 'setjmp(buf) == 0', '(v = setjmp(buf))'), the " +
+        "entire controlling expression of a switch ('switch (setjmp(buf))'), " +
+        "or a full expression statement ('setjmp(buf);', '(void)setjmp(buf);')");
     }
   };
   for (const f of unit.definedFunctions) lowerFunc(f);

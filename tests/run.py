@@ -1528,11 +1528,15 @@ LIBC_TEST_SKIP = {
     "strptime": "not implemented: strptime() (todos/0307)",
     # Not a libc gap: the test writes the bare-assignment form `r = setjmp(jb);`
     # (vendor/libc-test/src/functional/setjmp.c:23), which compiler.js rejects
-    # by design — it is UB per C11 7.13.1.1p4. sigsetjmp/siglongjmp DO exist
-    # (compiler.js:24116). This entry is therefore PERMANENT: todos/0311 fixes
-    # the three setjmp contexts C11 does require and will NOT un-skip this.
+    # by design — it is UB per C11 7.13.1.1p4. sigsetjmp/siglongjmp DO exist.
+    # This entry is PERMANENT. The todos/0311 citation is historical: ticket
+    # #117 SHIPPED the p4-required contexts (switch / while / else-if /
+    # expression statement, pinned by the sj_*_ctrl conformance tests) and,
+    # as predicted there, this test stays skipped — line 23 is the UB form,
+    # pinned rejected by diag_setjmp_assign_stmt.
     "setjmp": "test uses the C11-UB bare-assignment setjmp form, rejected by "
-              "design — permanent, not un-skipped by todos/0311",
+              "design — permanent (todos/0311 shipped as ticket #117; the "
+              "p4-required contexts are accepted, line 23 remains UB)",
     "memstream": "not implemented: open_memstream()/fmemopen() (todos/0308)",
     "wcstol": "not implemented: wcstol() family (todos/0309)",
     "fwscanf": "not implemented: wide scanf (todos/0309)",
