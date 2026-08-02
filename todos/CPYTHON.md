@@ -7,6 +7,32 @@ and every decision in §1 survived unchanged. Landing log:
 `logs/2026-07-28/0340-cpython-vendor-tree.md`; the as-built record (patch table,
 pyconfig deltas, Tier-2 measurements) is `vendor/cpython/README.md`.
 
+> 🔴 **HOW TO RESOLVE THE `todos/NNNN` POINTERS IN THIS DOCUMENT — read this
+> before following one.** Ticket numbering moved into the cc ticket DB on
+> 2026-07-30 (cutover `416fb45c`; `todos/queue.js` is deleted) and **the numbers
+> did NOT carry over.** The legacy `NNNN` now survives only inside the ticket's
+> *title string*.
+>
+> - A **closed** item still resolves as a file: `todos/done/NNNN-*.md`.
+> - An **open** item has no file at all, and `#NNNN` in the DB is **a different,
+>   unrelated ticket**. Following the number silently lands you on the wrong work
+>   — e.g. DB `#346` is *"LISTBOX: preserve fractional WM_MOUSEWHEEL deltas"*,
+>   closed 2026-08-02, nothing to do with `tkinter`.
+>
+> **Resolve an open pointer by TITLE, never by number**
+> (`cc-meta ticket list --project 019d77d8-f894-7d09-9099-4e747aa20bfb --status all`,
+> then grep the title prefix). The open pointers this document cites, mapped
+> 2026-08-02:
+>
+> | cited here | live ticket | subject |
+> |---|---|---|
+> | `todos/0052` | **#3** | loopback AF_INET |
+> | `todos/0054` | **#7** | AF_INET relay transport |
+> | `todos/0325` | **#124** | libc surface gaps (Group D) |
+> | `todos/0331` | **#128** | ship the gucman package |
+> | `todos/0336` | **#131** | CPython startup 26× clang |
+> | `todos/0346` | **#135** | SCOPING ONLY: price Tcl + Tk (tkinter) |
+
 Original status: **DESIGN, ratified route** — designed 2026-07-28 by the M1-clang design
 lane. Funding provenance: jku's lean ("python-clang as the preferred python …
 a python that has the highest chance of being able to support pygame in the
@@ -66,10 +92,10 @@ The exclusion list (against 3.13.5):
 | excluded | reason | size |
 |---|---|---|
 | `test/` | (b) dev corpus | 32.4 MB |
-| `idlelib/` | **(c)** needs `_tkinter` (Tcl/Tk). **Not scheduled; priced separately by `todos/0346`.** NOT impossible — see the note below. | — |
-| `tkinter/` | **(c)** same — `todos/0346` | — |
-| `turtledemo/` | **(c)** same — `todos/0346` | — |
-| `turtle.py` | **(c)** same — `todos/0346` | 145,215 B |
+| `idlelib/` | **(c)** needs `_tkinter` (Tcl/Tk). **Not scheduled; priced separately by #135** (`0346`). NOT impossible — see the note below. | — |
+| `tkinter/` | **(c)** same — **#135** (`0346`) | — |
+| `turtledemo/` | **(c)** same — **#135** (`0346`) | — |
+| `turtle.py` | **(c)** same — **#135** (`0346`) | 145,215 B |
 | `ensurepip/` | (b) 1.8 MB, mostly a bundled pip wheel; pip needs `_ssl` + networking that gucOS does not have (§3.3) — revisit with the network stack (`todos/0052`/`0054`) | 1.8 MB |
 | `__pycache__/` dirs | (b) build-host artifacts | — |
 
@@ -82,8 +108,16 @@ amount of work makes it possible. Tcl/Tk is merely **unbuilt**: large, unfunded,
 and a second GUI road to where `pygame` already goes, but not impossible.
 
 **A rule-(a) label is what stops anyone ever re-examining an exclusion** — and
-jku re-examining exactly this is what produced `todos/0346`. Rule (c) exists so
-that a "not now" cannot masquerade as a "not ever".
+jku re-examining exactly this is what produced **#135** (`0346`). Rule (c) exists
+so that a "not now" cannot masquerade as a "not ever".
+
+⚠️ **This warning had already failed once, inside this document.** §3.3's
+casualty table went on saying `_tkinter` was *"permanent, by exclusion rule (a)"*
+for five weeks after the correction above was written — so a reader who went to
+the table, which is the natural place to look up a missing module, was told the
+opposite of §2. Fixed 2026-08-02. **When you correct a label, grep the whole
+document for the old one**; a correction that lands in only one section is how
+the retracted claim survives.
 
 **Result (measured): 548 files, 9,914,191 bytes installed; `tar.gz`
 2,353,854 bytes.** (538 of the files are `.py`; the 13 non-`.py` are venv
@@ -182,7 +216,7 @@ the big trees were smoked above).
 | `_bz2`, `_lzma` | `bz2`, `lzma`, `tarfile` xz/bz2 legs (`tarfile` itself + gzip leg work) | OUT — no libbz2/xz vendor. Vendoring either is a normal small port if demand appears. |
 | `_ctypes` | `ctypes` | **permanently OUT** — no dlopen/libffi on this platform (settled in 0313/OS.md; loading arbitrary native code is exactly what the no-dlopen ruling excludes). |
 | `_curses` | `curses` | OUT of M1 — needs an ncurses port. Noted as an attractive later port over the gucOS tty, not scheduled. |
-| `_tkinter` | `tkinter` tree (excluded §2) | permanent, by exclusion rule (a) |
+| `_tkinter` | `tkinter` tree (excluded §2) | **rule (c) — NOT permanent.** Unbuilt, not impossible: no `vendor/tcl`, no `vendor/tk`, and no gucOS display backend for Tk. Priced by **#135** (`0346`, SCOPING ONLY, open P3). ⚠️ This cell read *"permanent, by exclusion rule (a)"* until 2026-08-02; that contradicted §2's own correction and is exactly the mislabel §2 warns about — see the ⚠️ note under §2's exclusion table. |
 | `_multiprocessing` | `multiprocessing` beyond import | permanent in spirit — no fork, no threads; `import multiprocessing` will resolve once `_socket` lands but process pools stay honest failures. |
 | `_decimal` (libmpdec) | C-speed `decimal` only — **`_pydecimal` fallback works today** (verified) | optional Tier 2 (CPython vendors libmpdec in-tree; +~0.8 MB `.o`-scale, **final delta unmeasured**) |
 | `readline` | GNU-readline REPL | superseded: 3.13's default REPL is `_pyrepl` (pure Python) — needs termios+fcntl above, no readline port wanted |
