@@ -109,6 +109,12 @@ static HRESULT ms_Read(IStream *self, void *pv, ULONG cb, ULONG *pcbRead) {
     return S_OK;
 }
 
+/* The stream's addressable ceiling. SIZE_T is 32-bit here, while the
+ * IStream API speaks 64-bit offsets — every place the two meet has to
+ * REFUSE rather than truncate, or a wrapped length becomes a write
+ * outside the HGLOBAL. */
+#define MS_MAX ((SIZE_T)-1)
+
 /* Grow to at least `need` bytes. Returns S_OK, or a LOUD refusal when the
  * handle is not ours to move. */
 static HRESULT ms_reserve(MemStream *s, SIZE_T need) {
@@ -119,7 +125,13 @@ static HRESULT ms_reserve(MemStream *s, SIZE_T need) {
         return STG_E_MEDIUMFULL;
     }
     SIZE_T cap = s->cap ? s->cap : 256;
-    while (cap < need) cap *= 2;
+    /* Doubling must not wrap: at the top of the range clamp to `need`
+     * (which is already a valid SIZE_T) instead of folding back to a
+     * small capacity. */
+    while (cap < need) {
+        if (cap > MS_MAX / 2) { cap = need; break; }
+        cap *= 2;
+    }
     HGLOBAL h = GlobalAlloc(0, cap);
     if (!h) return E_OUTOFMEMORY;
     if (s->size) memcpy(h, s->hMem, s->size);
@@ -136,6 +148,15 @@ static HRESULT ms_Write(IStream *self, const void *pv, ULONG cb,
     if (pcbWritten) *pcbWritten = 0;
     if (!pv) return STG_E_INVALIDPOINTER;
     if (!cb) return S_OK;
+    /* pos + cb must not wrap. Without this a stream seeked near the top of
+     * the address range reserves a SMALL size and then memcpy/memset past
+     * the end of its HGLOBAL. */
+    if ((SIZE_T)cb > MS_MAX - s->pos) {
+        WIN32_UNSUPPORTED("IStream::Write of %lu bytes at offset %lu would "
+                          "overflow the address range",
+                          (unsigned long)cb, (unsigned long)s->pos);
+        return STG_E_MEDIUMFULL;
+    }
     HRESULT hr = ms_reserve(s, s->pos + cb);
     if (FAILED(hr)) return hr;
     /* A seek past the end then a write leaves a zero-filled hole. */
@@ -160,6 +181,12 @@ static HRESULT ms_Seek(IStream *self, LARGE_INTEGER move, DWORD origin,
     }
     long long to = base + move.QuadPart;
     if (to < 0) return STG_E_INVALIDFUNCTION;
+    /* Refuse rather than truncate a 64-bit offset into a 32-bit SIZE_T:
+     * a silently-wrapped position is a write at the wrong address later. */
+    if ((unsigned long long)to > (unsigned long long)MS_MAX) {
+        WIN32_UNSUPPORTED("IStream::Seek to offset beyond the address range");
+        return STG_E_INVALIDFUNCTION;
+    }
     s->pos = (SIZE_T)to;
     if (newPos) newPos->QuadPart = (ULONG64)s->pos;
     return S_OK;
@@ -167,6 +194,13 @@ static HRESULT ms_Seek(IStream *self, LARGE_INTEGER move, DWORD origin,
 
 static HRESULT ms_SetSize(IStream *self, ULARGE_INTEGER size) {
     MemStream *s = (MemStream *)self;
+    /* Same rule as Seek: a 64-bit size that does not fit is REFUSED, not
+     * silently truncated into an S_OK whose logical size is not the one
+     * the caller asked for. */
+    if (size.QuadPart > (ULONG64)MS_MAX) {
+        WIN32_UNSUPPORTED("IStream::SetSize beyond the address range");
+        return STG_E_MEDIUMFULL;
+    }
     SIZE_T want = (SIZE_T)size.QuadPart;
     HRESULT hr = ms_reserve(s, want);
     if (FAILED(hr)) return hr;

@@ -229,8 +229,6 @@ struct GpGraphics {
     HDC               hdc;
     InterpolationMode interpolation;
     SmoothingMode     smoothing;
-    int               warnedInterp;   /* one line per graphics, not per frame */
-    int               warnedAlpha;
 };
 
 struct GpImageAttributes {
@@ -502,11 +500,18 @@ static GpStatus decode_bmp(const BYTE *data, size_t size, GpImage **out) {
     if (!img) { bmp_finalise(&bmp); return OutOfMemory; }
     memcpy(img->frames[0], ((BmpBmp *)bmp.bitmap)->px,
            (size_t)img->w * img->h * 4);
+    /* Whether this BMP can carry alpha at all is libnsbmp's OWN decision,
+     * not a guess from the depth: it sets `opaque` when the header has no
+     * alpha mask (mask[3] == 0), which covers plain 24bpp and 32bpp BI_RGB
+     * alike and still finds the alpha of a BITFIELDS image that has one.
+     * Claiming alpha unconditionally made every ordinary 24bpp BMP report
+     * ImageFlagsHasAlpha, which is what a viewer reads to decide whether to
+     * paint a transparency checkerboard behind it. Read it BEFORE
+     * bmp_finalise. */
+    int canAlpha = !bmp.opaque;
     bmp_finalise(&bmp);
-    /* A 32bpp BMP may carry an alpha channel; libnsbmp forces 0xFF when
-     * it decides the image is opaque, so scanning is the honest test. */
     img->rawFormat = ImageFormatBMP;
-    image_scan_alpha(img, 1);
+    image_scan_alpha(img, canAlpha);
     *out = img;
     return Ok;
 }
@@ -833,10 +838,6 @@ GpStatus WINGDIPAPI GdipDrawImageRectRect(
         DrawImageAbort callback, void *callbackData) {
     REQUIRE_STARTED();
     if (!graphics || !image) return InvalidParameter;
-    (void)imageAttributes;   /* wrap mode only shows outside the source rect,
-                              * and the source rect is always clamped inside
-                              * the image here — so it can never be reached.
-                              * See GdipSetImageAttributesWrapMode. */
     if (srcUnit != UnitPixel) {
         WIN32_UNSUPPORTED("GdipDrawImageRectRect srcUnit %d (only UnitPixel)",
                           (int)srcUnit);
@@ -860,18 +861,42 @@ GpStatus WINGDIPAPI GdipDrawImageRectRect(
         return InvalidParameter;
     }
 
-    if (graphics->interpolation != InterpolationModeNearestNeighbor &&
-        graphics->interpolation != InterpolationModeDefault &&
-        graphics->interpolation != InterpolationModeLowQuality &&
-        !graphics->warnedInterp) {
-        graphics->warnedInterp = 1;
+    /* The source rect must lie INSIDE the image. Outside it, GDI+ fills
+     * from the GpImageAttributes wrap mode (tile / mirror / clamp), and
+     * this shim implements none of them: StretchBlt simply skips the
+     * out-of-source pixels, which would leave those destination pixels
+     * untouched while the call still returned Ok — a silent wrong answer,
+     * not a missing feature the caller could see. So it is REFUSED, and
+     * the message names the wrap mode that would have been needed.
+     *
+     * Nothing in the derived surface's consumer hits this: shimgvw always
+     * passes the whole image (its -0.5f origin rounds back to 0), which
+     * is why the wrap mode it sets is never consulted. If a real tiling
+     * consumer ever appears, this is the ONE place that grows a fill. */
+    if (sx < 0 || sy < 0 ||
+        (long long)sx + sw > (long long)image->w ||
+        (long long)sy + sh > (long long)image->h) {
+        WIN32_UNSUPPORTED("GdipDrawImageRectRect source rect (%d,%d %dx%d) "
+                          "leaves the %ux%u image; wrap mode %d would have to "
+                          "fill outside it and no wrap mode is implemented",
+                          sx, sy, sw, sh, (unsigned)image->w, (unsigned)image->h,
+                          imageAttributes ? (int)imageAttributes->wrap : -1);
+        return InvalidParameter;
+    }
+
+    /* Only NEAREST is honoured, so only NEAREST is silent. Default and
+     * LowQuality are NOT nearest on real GDI+ (Default is bilinear), so
+     * they get the notice too — otherwise the commonest case, a caller
+     * that never sets a mode at all, would be the one silently
+     * substituted. WIN32_UNSUPPORTED reports ONCE PER CALL SITE
+     * (win32_internal.h, todos/0211), so this is one line per process,
+     * not per frame — the return status is what a caller reads. */
+    if (graphics->interpolation != InterpolationModeNearestNeighbor) {
         WIN32_UNSUPPORTED("GdipDrawImageRectRect interpolation mode %d "
                           "(drawn NEAREST — 0453 accepted scope)",
                           (int)graphics->interpolation);
     }
-    if ((image->flags & (ImageFlagsHasAlpha | ImageFlagsHasTranslucent)) &&
-        !graphics->warnedAlpha) {
-        graphics->warnedAlpha = 1;
+    if (image->flags & (ImageFlagsHasAlpha | ImageFlagsHasTranslucent)) {
         /* Recorded, not silently absorbed: SRCCOPY does not blend. The
          * compositing primitive is gdi32 AlphaBlend, ticket #285. */
         WIN32_UNSUPPORTED("GdipDrawImageRectRect: image has alpha but the "
@@ -911,7 +936,6 @@ GpStatus WINGDIPAPI GdipSetInterpolationMode(GpGraphics *graphics,
         mode > InterpolationModeHighQualityBicubic)
         return InvalidParameter;
     graphics->interpolation = mode;
-    graphics->warnedInterp = 0;
     return Ok;
 }
 
@@ -1035,19 +1059,33 @@ GpStatus WINGDIPAPI GdipImageRotateFlip(GpImage *image, RotateFlipType type) {
     if (!quarters && !flipX) return Ok;
 
     /* Every frame turns, not just the active one: an animation that
-     * rotated one frame would tear on the next tick. */
+     * rotated one frame would tear on the next tick.
+     *
+     * ALL-OR-NOTHING. Turning frames in place would, on an allocation
+     * failure partway through, leave an image whose frames no longer agree
+     * with each other OR with image->w/h — and every later read of it
+     * (draw, save, another rotate) walks off the end of the short ones.
+     * So build the whole new set first and only then commit. */
+    uint32_t **turned = (uint32_t **)calloc(image->frameCount, sizeof *turned);
+    if (!turned) return OutOfMemory;
     UINT nw = image->w, nh = image->h;
     for (UINT f = 0; f < image->frameCount; f++) {
         UINT ow, oh;
-        uint32_t *rot = rotate_flip_frame(image->frames[f], image->w, image->h,
-                                          quarters, flipX, &ow, &oh);
-        if (!rot) return OutOfMemory;   /* earlier frames stay turned; the
-                                         * caller is out of memory either way */
-        free(image->frames[f]);
-        image->frames[f] = rot;
+        turned[f] = rotate_flip_frame(image->frames[f], image->w, image->h,
+                                      quarters, flipX, &ow, &oh);
+        if (!turned[f]) {
+            for (UINT k = 0; k < f; k++) free(turned[k]);
+            free(turned);
+            return OutOfMemory;         /* the image is untouched */
+        }
         nw = ow;
         nh = oh;
     }
+    for (UINT f = 0; f < image->frameCount; f++) {
+        free(image->frames[f]);
+        image->frames[f] = turned[f];
+    }
+    free(turned);
     image->w = nw;
     image->h = nh;
     return Ok;

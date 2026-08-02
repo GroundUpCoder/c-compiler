@@ -321,9 +321,130 @@ Suite registry: **146 → 147** kernel tests.
   `tests/kernel/run.js` registry at `:38`, `test_cc_libjpeg_e2e.js` registered
   at `:171`, `gdidemo.c:275`'s 2x StretchBlt assert. No gdiplus anywhere. All
   confirmed.
+- `WIN32_UNSUPPORTED` reports **once per CALL SITE**, not once per call
+  (`win32_internal.h`, todos/0211). The first version of the draw carried its
+  own `warnedInterp`/`warnedAlpha` per-graphics flags on top of that, whose
+  comment claimed a cadence the macro does not provide — dead state with a
+  false comment. Removed. The **return status** is what a caller reads; the
+  stderr line is one per process.
 - Self-inflicted, recorded so the next reader does not repeat it: `objbase.h`
   first defined its own `FILETIME`, which **already exists at
   `windows.h:1493`**, and because `ole32.c` joined the base veneer that
   redefinition broke the compile of *every* win32 port at once
   (`tools/win32ports.js --check` named all twelve). `ULARGE_INTEGER` genuinely
   was absent and is the one COM primitive `objbase.h` adds.
+
+---
+
+# Counter pass — the independent review came back RED
+
+Reviewer: codex/gpt-5.6-sol, read-only over `a054a3ff..48b3a86f`. Five findings
+plus one unverified item, plus two the coordinator added. All eight answered
+below; five produced code changes.
+
+## The silent-success walk (the axis the review says was never answered directly)
+
+The question was: *of the functions that do not call `WIN32_UNSUPPORTED`, which
+return a success status while doing nothing?* A grep is not the answer, because
+27 of the 29 refuse through the `REQUIRE_STARTED` macro and two more refuse
+through the shared `decode_memory` / `fill_codecs` helpers — all of which are
+loud transitively, and none of which contain the token in their own body. So
+this is the reasoned walk, one line per function:
+
+| # | function | verdict |
+|---|---|---|
+| 1 | `GdiplusStartup` | (a) validates version, refuses debug callback + notification hooks LOUD |
+| 2 | `GdiplusShutdown` | (a) decrements the count. Returns `void` — there is no status to fake |
+| 3 | `GdipDisposeImage` | (a) frees every frame + delays |
+| 4 | `GdipDeleteGraphics` | (a) frees |
+| 5 | `GdipLoadImageFromStream` | (a) Stat/Seek/Read + decode; (b) via `decode_memory` |
+| 6 | `GdipLoadImageFromFile` | (a) reads + decodes; (b) `FileNotFound`, and via `decode_memory` |
+| 7 | `GdipCreateFromHDC` | (a) allocates, binds the HDC |
+| 8–11 | `GdipGetImageWidth` / `Height` / `RawFormat` / `Flags` | (a) return real state |
+| 12 | `GdipDrawImageRectRect` | (a) draws; (b) five distinct refusals. **WAS (c)** for an out-of-bounds source rect — finding 2 |
+| 13 | `GdipSetSmoothingMode` | (a) stores. **The one honest asterisk — see below** |
+| 14 | `GdipSetInterpolationMode` | (a) stores; the DRAW announces the nearest substitution |
+| 15 | `GdipCreateImageAttributes` | (a) allocates |
+| 16 | `GdipSetImageAttributesWrapMode` | (a) stores. **WAS effectively (c)**: the draw ignored it — finding 2 again, same fix |
+| 17 | `GdipDisposeImageAttributes` | (a) frees |
+| 18–21 | the four frame-dimension calls | (a); a wrong dimension GUID is a real error, which shimgvw's fallback depends on |
+| 22–23 | `GdipGetPropertyItemSize` / `GdipGetPropertyItem` | (a); `PropertyNotFound` / `InsufficientBuffer` are real |
+| 24 | `GdipImageRotateFlip` | (a) rewrites every frame. `RotateNoneFlipNone` returns Ok having done nothing — that is the IDENTITY transform, not a stub |
+| 25 | `GdipSaveImageToFile` | (a) writes; (b) unknown CLSID and encoder parameters both refuse LOUD |
+| 26–29 | the four codec-table calls | (a); (b) via `fill_codecs` on a short buffer |
+
+**Category (c) before this pass: 2 members** (#12 and #16, which are the two
+halves of one defect). **After: 0.**
+
+**The asterisk, stated rather than buried.** `GdipSetSmoothingMode` stores a
+value that can never change any output this shim produces, because smoothing
+governs the anti-aliasing of VECTOR primitives and this shim draws no vectors.
+Recording state IS a setter's entire contract, so it is not a stub — but it is
+the one function whose stored value has no consumer, and a reader deserves to
+be told that at the declaration rather than discover it. It gets no
+`WIN32_UNSUPPORTED` line on purpose: the semantic does not apply to image
+drawing on real GDI+ either, so a notice would be noise, not honesty.
+
+## What changed
+
+1. **`ole32.c` — `pos + cb` could wrap** (high). A stream seeked near the top of
+   the 32-bit range reserved a wrapped-small size and then `memcpy`'d outside
+   its HGLOBAL. `SIZE_T` is 32 bits here while the `IStream` API speaks 64-bit
+   offsets, so **every** crossing now refuses instead of truncating: `Write`
+   (offset+length overflow), `Seek` (offset past `SIZE_MAX`), `SetSize` (size
+   past `SIZE_MAX`), and `ms_reserve`'s capacity doubling. Four new legs pin it,
+   including a legal seek to `0xFFFFFFF0` followed by a 64-byte write.
+
+2. **`gdiplus.c` — an out-of-bounds source rect returned `Ok`** (medium, and the
+   real category-(c) member). `StretchBlt` skips out-of-source pixels, so the
+   call reported success having left part of the destination untouched, while
+   the `GpImageAttributes` wrap mode that GDI+ would have filled from was
+   accepted and ignored. Now the source rect must lie inside the image, and the
+   refusal **names the wrap mode** that would have been needed. Not implementing
+   tiling is deliberate: shimgvw always passes the whole image (its `-0.5f`
+   origin rounds back to 0), so a tiling fill has no consumer — but "no
+   consumer" licenses a refusal, never a silent wrong answer.
+
+3. **`gdiplus.c` — RotateFlip was not atomic** (medium). It committed each frame
+   as it turned it, so an allocation failure after frame 0 left an animation
+   whose frames disagreed with each other and with `image->w/h` — and every
+   later read walks off the short ones. Now the whole new frame set is built
+   first and committed only if all of it succeeded; on failure the image is
+   untouched. A GIF rotate/rotate-back leg asserts both frames come back at the
+   new extent with the right pixels.
+
+4. **`gdiplus.c` — every BMP claimed alpha** (medium). `image_scan_alpha(img, 1)`
+   set `ImageFlagsHasAlpha` on 24-bpp BMPs that cannot carry alpha at all, and
+   that flag is exactly what a viewer reads to decide whether to paint a
+   transparency checkerboard. The predicate is now libnsbmp's **own** decision,
+   `!bmp.opaque` (it sets `opaque` when the header has no alpha mask), which is
+   better than a depth test because it still finds the alpha of a BITFIELDS
+   image that has one. Measured on the fixture: `bpp=24 opaque=1 mask3=0`.
+
+5. **`ole32.c` — `SetSize` truncated silently** (low). Same fix as 1.
+
+7. **Interpolation: the substitution scope was too wide.** The draw exempted
+   `InterpolationModeDefault` and `LowQuality` from the notice. Neither is
+   nearest on real GDI+ (Default is bilinear), so the exemption made the
+   commonest case — a caller that never sets a mode — the silently substituted
+   one. Now **only** `NearestNeighbor` is silent. The setter still returns `Ok`,
+   which is correct and is the rebuttal half: recording state is a setter's
+   whole contract, and returning an error there would break shimgvw's flow while
+   telling it something untrue.
+
+## Why each can-fail control really fails (finding 6)
+
+The reviewer could establish these were structurally non-vacuous but not that
+the fixtures are actually rejected. Measured, by calling the libraries directly
+on the same bytes:
+
+| fixture | corruption | what rejects it |
+|---|---|---|
+| PNG | bytes 50–51 flipped | inside the IDAT deflate stream. `png_image_begin_read_from_memory` still succeeds (the header is intact); `png_image_finish_read` fails — **"IDAT: invalid distance too far back"**, i.e. zlib's LZ77 back-reference now points outside the window |
+| BMP | truncated to 60 of 78 bytes | `bmp_analyse` passes (the 54-byte header fits), then `bmp_decode` returns **`BMP_INSUFFICIENT_DATA` (2)** — 6 bytes of pixel data where 24 are needed |
+| GIF | truncated to 12 of 120 bytes | `nsgif_data_scan` returns **`NSGIF_ERR_END_OF_DATA` (5)**, "Unexpected end of GIF source data", and `frame_count == 0`, which is the guard `decode_gif` fails on |
+| JPEG | truncated to a third **and** garbled | cuts inside the Huffman tables → the error manager `longjmp`s. A garble-only version does NOT fail — libjpeg reports it as a warning and returns pixels — which is how the first version of this control was vacuous |
+
+All four clean fixtures return `Ok` (0) and all four corrupt ones return
+`GenericError` (1), so the pairs are a real positive/negative control and not a
+decoder that says no to everything.

@@ -35,7 +35,7 @@ function check(name, cond, extra) {
 }
 
 // Pin: os/win32/gdiplusdemo.c's check() calls. Bump WITH the source.
-const EXPECT_CHECKS = 107;
+const EXPECT_CHECKS = 123;
 
 const { image } = freshImage('os-gdiplus-');
 
@@ -86,6 +86,10 @@ arm('arm3 PNG decodes through the shim (pixels + alpha flags) and CAN FAIL',
 arm('arm3 BMP decodes through the shim (bottom-up flipped) and CAN FAIL',
   ['bmp_load', 'bmp_rawformat', 'bmp_pixels_bottom_up_flipped',
    'bmp_truncated_rejected']);
+// A 24bpp BMP has no alpha mask and must not claim one: a viewer reads
+// exactly these bits to decide whether to paint a checkerboard behind it.
+arm('a 24bpp BMP reports NO alpha (not a blanket HasAlpha)',
+  ['bmp24_reports_no_alpha']);
 arm('arm3 JPEG decodes through the shim and CAN FAIL (longjmp error manager)',
   ['jpeg_load', 'jpeg_rawformat', 'jpeg_top_block', 'jpeg_bottom_block',
    'jpeg_corrupt_rejected']);
@@ -98,6 +102,22 @@ arm('arm3 GIF decodes through the shim (both frames + delays + loop) and CAN FAI
 arm('arm4 the 2x NEAREST draw is exact, every destination pixel asserted',
   ['draw2x_interp', 'draw2x_draw', 'draw2x_nearest_blocks_exact',
    'draw2x_subrect_exact', 'draw_halfpixel_origin_exact']);
+// A source rect outside the image would need a wrap-mode fill that does
+// not exist; StretchBlt would silently skip those pixels and the call
+// would still return Ok. It must refuse instead.
+arm('an out-of-bounds source rect is REFUSED, not silently part-drawn',
+  ['draw_src_overruns_image_refused', 'draw_src_negative_origin_refused',
+   'draw_src_out_of_bounds_refused_without_attrs']);
+// A non-nearest mode is accepted (recording state is a setter's contract)
+// and the draw succeeds, but the RESULT is the documented nearest one.
+arm('a non-nearest interpolation mode is accepted and drawn nearest, provably',
+  ['interp_bilinear_accepted', 'interp_bilinear_draw_ok',
+   'interp_bilinear_is_really_nearest']);
+// RotateFlip turns EVERY frame or none: a per-frame commit that gave up
+// partway would leave frames disagreeing with the image's own dimensions.
+arm('RotateFlip turns every frame of an animation, at the new extent',
+  ['gif_rotate90', 'gif_rotate90_dims', 'gif_rotate90_frame0_pixels',
+   'gif_rotate90_frame1_pixels', 'gif_rotate_back']);
 
 // arm 2 — the fail-loud refusals, and the frame/codec surface behind them.
 arm('arm2 unsupported requests return a real error status',
@@ -114,6 +134,13 @@ arm('the static codec tables and the save round trips',
 arm('the ole32 memory IStream the loader path rides on',
   ['stream_stat', 'stream_read', 'stream_seek_end', 'stream_short_read_ok',
    'stream_wrong_iid_refused', 'stream_release']);
+// SIZE_T is 32-bit and IStream speaks 64-bit offsets. Every crossing must
+// REFUSE: a wrapped offset or length is a write outside the HGLOBAL, and a
+// truncated SetSize is an S_OK whose size is not the one requested.
+arm('64-bit stream offsets are REFUSED at the 32-bit boundary, never truncated',
+  ['stream_setsize_beyond_address_range_refused',
+   'stream_seek_beyond_address_range_refused',
+   'stream_seek_near_top_ok', 'stream_write_offset_overflow_refused']);
 
 // --- 3. the diagnostic really reached stderr -------------------------
 const errBlock = out.slice(out.indexOf('==stderr-begin'), out.indexOf('==stderr-end'));
@@ -125,6 +152,19 @@ check('WIN32_UNSUPPORTED is LOUD: refusals print a "win32: unsupported" line',
 check('the alpha gap is RECORDED, not absorbed (SRCCOPY does not composite; #285)',
   /win32: unsupported GdipDrawImageRectRect: image has alpha but the blit is SRCCOPY/.test(errBlock),
   JSON.stringify(errBlock.slice(0, 600)));
+// The two narrowings that return Ok are the ones most able to hide, so
+// their diagnostics are asserted here by name — the in-process selftest
+// can see the status but has nothing to read stderr back from.
+check('a non-nearest interpolation mode announces the nearest substitution',
+  /win32: unsupported GdipDrawImageRectRect interpolation mode \d+ \(drawn NEAREST/.test(errBlock),
+  JSON.stringify(errBlock.slice(0, 900)));
+check('an out-of-bounds source rect names the wrap mode it would have needed',
+  /win32: unsupported GdipDrawImageRectRect source rect .* leaves the \d+x\d+ image; wrap mode/.test(errBlock),
+  JSON.stringify(errBlock.slice(0, 900)));
+check('the 32-bit stream boundary refusals are LOUD too',
+  /win32: unsupported IStream::Write of \d+ bytes at offset \d+ would overflow/.test(errBlock) &&
+  /win32: unsupported IStream::SetSize beyond the address range/.test(errBlock),
+  JSON.stringify(errBlock.slice(0, 900)));
 
 // --- 4. the save path wrote real bytes -------------------------------
 const fileBlock = out.slice(out.indexOf('==files'), out.indexOf('==done'));

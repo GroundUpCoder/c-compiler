@@ -32,10 +32,14 @@
  * function here returns Ok without having done the work. The two places
  * where behaviour is legitimately narrower than Windows are documented
  * at their declarations and are visible to the caller:
- *   - GdipSetInterpolationMode ACCEPTS the bilinear/bicubic modes (they
- *     are valid state) but the draw is nearest; the first draw under a
- *     non-nearest mode says so once, per graphics object.
+ *   - GdipSetInterpolationMode ACCEPTS every valid mode, because recording
+ *     the state IS a setter's whole contract; the DRAW then announces that
+ *     it sampled nearest anyway.
  *   - GdipDrawImageRectRect does not alpha-composite; see its comment.
+ * Neither is a silent success: both are announced at the point where the
+ * behaviour actually narrows. Where the shim would otherwise have to
+ * INVENT pixels — a source rect outside the image, which GDI+ would fill
+ * from the wrap mode — it refuses outright instead.
  */
 #pragma once
 
@@ -289,7 +293,13 @@ GpStatus WINGDIPAPI GdipGetImageFlags(GpImage *image, UINT *flags);
  *
  * srcUnit must be UnitPixel; anything else is a loud InvalidParameter.
  * `callback`/`callbackData` (the abort hook) must be NULL — there is no
- * partial-draw pump to abort. */
+ * partial-draw pump to abort.
+ *
+ * The source rect must lie INSIDE the image. Outside it GDI+ fills from
+ * the GpImageAttributes wrap mode, and no wrap mode is implemented here,
+ * so an out-of-bounds source rect is a loud InvalidParameter naming the
+ * wrap mode — never an Ok that quietly leaves those destination pixels
+ * as they were. */
 GpStatus WINGDIPAPI GdipDrawImageRectRect(
         GpGraphics *graphics, GpImage *image,
         REAL dstx, REAL dsty, REAL dstwidth, REAL dstheight,
@@ -299,13 +309,25 @@ GpStatus WINGDIPAPI GdipDrawImageRectRect(
 
 GpStatus WINGDIPAPI GdipSetSmoothingMode(GpGraphics *graphics,
                                          SmoothingMode mode);
-/* Stores the mode (it is real state, readable by the draw). The draw is
- * nearest regardless; the first draw under a non-nearest mode emits one
- * WIN32_UNSUPPORTED line naming the requested mode, so a fidelity gap can
- * never pass for a faithful render. */
+/* Stores the mode and returns Ok — which is the WHOLE contract of a GDI+
+ * state setter, so this is not a silent success: the setter really did
+ * record what it was asked to record, and a caller that reads the state
+ * back gets its own value. What is narrower is the DRAW, and that is
+ * where it is announced: every draw whose mode is not
+ * InterpolationModeNearestNeighbor emits one WIN32_UNSUPPORTED line
+ * naming the requested mode. (WIN32_UNSUPPORTED reports once per call
+ * site, so that is one line per process — the STATUS is what a caller
+ * reads, and it is Ok because the draw really happened, just nearest.)
+ * InterpolationModeDefault is included — on real GDI+ Default is
+ * bilinear, so exempting it would make the commonest case, a caller that
+ * never sets a mode at all, the one silently substituted. */
 GpStatus WINGDIPAPI GdipSetInterpolationMode(GpGraphics *graphics,
                                              InterpolationMode mode);
 GpStatus WINGDIPAPI GdipCreateImageAttributes(GpImageAttributes **attr);
+/* Stores the wrap mode. It becomes consequential only where the source
+ * rect leaves the image — and GdipDrawImageRectRect REFUSES that case
+ * loudly, naming this mode, rather than returning Ok having filled
+ * nothing. So the stored value is never quietly ignored. */
 GpStatus WINGDIPAPI GdipSetImageAttributesWrapMode(GpImageAttributes *attr,
                                                    WrapMode wrap, ARGB argb,
                                                    BOOL clamp);

@@ -305,6 +305,14 @@ static void leg_bmp(void) {
     check("bmp_height", GdipGetImageHeight(img, &h) == Ok && h == 2);
     check("bmp_rawformat", GdipGetImageRawFormat(img, &raw) == Ok &&
                            IsEqualGUID(&raw, &ImageFormatBMP));
+    /* A 24bpp BMP has no alpha mask and CANNOT carry alpha. Claiming it
+     * does is not cosmetic: a viewer reads exactly these bits to decide
+     * whether to paint a transparency checkerboard behind the image, so a
+     * blanket HasAlpha puts a checkerboard behind every ordinary bitmap. */
+    UINT flags = 0;
+    check("bmp24_reports_no_alpha", GdipGetImageFlags(img, &flags) == Ok &&
+                                    !(flags & ImageFlagsHasAlpha) &&
+                                    !(flags & ImageFlagsHasTranslucent));
 
     uint32_t got[8];
     read_frame(img, 4, 2, got);
@@ -399,6 +407,28 @@ static void leg_gif(void) {
     check("gif_frame1_pixels", all);
 
     /* The wrong dimension MUST fail — anime.c falls back on exactly this. */
+    /* RotateFlip is ALL-OR-NOTHING across frames: turn the animation and
+     * BOTH frames must come back at the new extent with the right pixels.
+     * A per-frame commit that gave up partway would leave frame 1 at the
+     * old size while the image reported the new one. */
+    check("gif_rotate90", GdipImageRotateFlip(img, Rotate90FlipNone) == Ok);
+    check("gif_rotate90_dims", GdipGetImageWidth(img, &w) == Ok && w == 2 &&
+                               GdipGetImageHeight(img, &h) == Ok && h == 4);
+    uint32_t turned[8];
+    for (UINT f = 0; f < 2; f++) {
+        const uint32_t *want = f ? k_gifFrame1 : k_gifFrame0;
+        GdipImageSelectActiveFrame(img, &FrameDimensionTime, f);
+        read_frame(img, 2, 4, turned);
+        int rot = 1;
+        for (int y = 0; y < 2; y++)
+            for (int x = 0; x < 4; x++)
+                if (RGB_OF(turned[x * 2 + (2 - 1 - y)]) != RGB_OF(want[y * 4 + x]))
+                    rot = 0;
+        check(f ? "gif_rotate90_frame1_pixels" : "gif_rotate90_frame0_pixels", rot);
+    }
+    check("gif_rotate_back", GdipImageRotateFlip(img, Rotate270FlipNone) == Ok);
+    GdipImageSelectActiveFrame(img, &FrameDimensionTime, 0);
+
     check("gif_wrong_dimension_refused",
           GdipImageSelectActiveFrame(img, &FrameDimensionPage, 0) != Ok);
     check("gif_frame_out_of_range_refused",
@@ -499,6 +529,28 @@ static void leg_draw_scaled(void) {
     check("draw_halfpixel_origin_exact",
           RGB_OF((uint32_t)GetPixel(dc, 0, 0)) == RGB_OF(k_bmpPixels[0]) &&
           RGB_OF((uint32_t)GetPixel(dc, 3, 1)) == RGB_OF(k_bmpPixels[7]));
+
+    /* A non-nearest mode is ACCEPTED (a GDI+ setter's whole contract is to
+     * record the state) and the draw still succeeds — but it is drawn
+     * NEAREST, and the shim says so on stderr. Assert both halves here:
+     * the status is Ok, and the result is bit-identical to the nearest
+     * draw above, i.e. the substitution is exactly the documented one and
+     * not some third behaviour.
+     * The stderr line itself is asserted by tests/kernel/test_gdiplus_e2e.js
+     * (in-process there is nothing to read it back from). */
+    check("interp_bilinear_accepted",
+          GdipSetInterpolationMode(g, InterpolationModeHighQualityBilinear) == Ok);
+    PatBlt(dc, 0, 0, 8, 4, BLACKNESS);
+    check("interp_bilinear_draw_ok",
+          GdipDrawImageRectRect(g, img, 0, 0, 8, 4, 0, 0, 4, 2,
+                                UnitPixel, attr, NULL, NULL) == Ok);
+    all = 1;
+    for (int y = 0; y < 4; y++)
+        for (int x = 0; x < 8; x++)
+            if (RGB_OF((uint32_t)GetPixel(dc, x, y)) !=
+                RGB_OF(k_bmpPixels[(y / 2) * 4 + (x / 2)])) all = 0;
+    check("interp_bilinear_is_really_nearest", all);
+    GdipSetInterpolationMode(g, InterpolationModeNearestNeighbor);
 
     GdipDisposeImageAttributes(attr);
     GdipDeleteGraphics(g);
@@ -710,6 +762,25 @@ static void leg_fail_loud(void) {
     check("draw_zero_extent_refused",
           GdipDrawImageRectRect(g, img, 0, 0, 0, 4, 0, 0, 4, 2,
                                 UnitPixel, NULL, NULL, NULL) == InvalidParameter);
+    /* A source rect that leaves the image would need a wrap-mode fill,
+     * which does not exist here. StretchBlt would simply skip those
+     * pixels and this call would return Ok having drawn a partial image —
+     * the silent-wrong-answer shape. It must refuse instead, with OR
+     * without an attributes object, since the attributes only choose
+     * WHICH fill would have been used. */
+    GpImageAttributes *tile = NULL;
+    GdipCreateImageAttributes(&tile);
+    GdipSetImageAttributesWrapMode(tile, WrapModeTile, 0xFF000000, FALSE);
+    check("draw_src_overruns_image_refused",
+          GdipDrawImageRectRect(g, img, 0, 0, 8, 4, 0, 0, 8, 2,
+                                UnitPixel, tile, NULL, NULL) == InvalidParameter);
+    check("draw_src_negative_origin_refused",
+          GdipDrawImageRectRect(g, img, 0, 0, 8, 4, -2, 0, 4, 2,
+                                UnitPixel, tile, NULL, NULL) == InvalidParameter);
+    check("draw_src_out_of_bounds_refused_without_attrs",
+          GdipDrawImageRectRect(g, img, 0, 0, 8, 4, 0, 0, 4, 3,
+                                UnitPixel, NULL, NULL, NULL) == InvalidParameter);
+    GdipDisposeImageAttributes(tile);
     check("interp_bad_mode_refused",
           GdipSetInterpolationMode(g, (InterpolationMode)77) == InvalidParameter);
     check("smoothing_bad_mode_refused",
@@ -761,6 +832,33 @@ static void leg_stream(void) {
     got = 0;
     check("stream_short_read_ok",
           SUCCEEDED(IStream_Read(s, tail, 8, &got)) && got == 2);
+    /* SIZE_T is 32 bits and the IStream API speaks 64-bit offsets. Every
+     * crossing must REFUSE, never truncate: a wrapped offset or length is
+     * a write outside the HGLOBAL, and a truncated SetSize is an S_OK
+     * whose logical size is not the one that was asked for. */
+    ULARGE_INTEGER huge;
+    huge.QuadPart = 0x1FFFFFFFFULL;               /* > 2^32 - 1 */
+    check("stream_setsize_beyond_address_range_refused",
+          FAILED(IStream_SetSize(s, huge)));
+    mv.QuadPart = 0x1FFFFFFFFLL;
+    check("stream_seek_beyond_address_range_refused",
+          FAILED(IStream_Seek(s, mv, STREAM_SEEK_SET, &pos)));
+    /* pos + cb must not wrap either: seek to a LEGAL offset near the top
+     * of the range, then write past it. Unguarded, the reservation wraps
+     * to a small number, succeeds, and the memcpy lands outside the
+     * allocation. */
+    mv.QuadPart = (long long)0xFFFFFFF0ULL;
+    check("stream_seek_near_top_ok",
+          SUCCEEDED(IStream_Seek(s, mv, STREAM_SEEK_SET, &pos)) &&
+          pos.QuadPart == 0xFFFFFFF0ULL);
+    BYTE spill[64];
+    memset(spill, 0xAB, sizeof spill);
+    got = 0;
+    check("stream_write_offset_overflow_refused",
+          FAILED(IStream_Write(s, spill, sizeof spill, &got)) && got == 0);
+    mv.QuadPart = 0;
+    IStream_Seek(s, mv, STREAM_SEEK_SET, &pos);
+
     HGLOBAL h = NULL;
     check("stream_gethglobal", SUCCEEDED(GetHGlobalFromStream(s, &h)) && h);
     void *unwanted = (void *)1;
