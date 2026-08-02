@@ -63,9 +63,23 @@ everything that shipped under the old system (see `todos/README.md`).
   position** (`ticket reorder` moves within a bucket). `--blocked-by` is the
   HARD dependency (not ready until every listed ticket is done);
   `--after` is the SOFT "best sequenced after" hint (never blocks).
-  `--difficulty light|medium|heavy` tags effort; it never affects order.
   View the queue with `cc-meta ticket list --project <id>` (blocked tickets
   are marked, never hidden) or the cc Tickets tab.
+- 🔴 **`--difficulty light|medium|heavy` is MANDATORY on every ticket you
+  file.** The *tool* does not sort by it — the key is
+  `projectId/priority/orderIndex` and no ordering path reads `difficulty` — but
+  **a coordinator does, by hand.** Standing policy (jku, 2026-08-02): weight is
+  the OUTER sort key, light → medium → heavy, and Pn only breaks ties *inside*
+  a tier, so **a light P3 runs before a heavy P0**. Recorded dependencies still
+  outrank both — the weight sort never reorders across a `blockedBy` edge.
+  An **unlabeled** ticket cannot be sorted at all, so it silently sinks; 86 of
+  222 ready tickets were unlabeled on 2026-08-02 because this line used to read
+  "it never affects order" and every filer took that as "the field is
+  decorative". If you pick up an unlabeled ticket, run
+  `cc-meta ticket update <ref> --difficulty …` before you queue it — never
+  guess silently, never skip it. Full policy: `~/git/meta/CLAUDE.md`, section
+  "Task WEIGHT outranks priority"; rationale and census:
+  `~/git/meta/notes/task-weight-policy-2026-08-02.md`.
 - **Design/topic docs**: `todos/NAME.md` (OS.md, KERNEL.md, SDL3.md, …) —
   long-lived designs and backlogs that tickets reference for detail. These
   stay in the repo; only the queue moved.
