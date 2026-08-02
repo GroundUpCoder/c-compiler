@@ -6,9 +6,11 @@ text fields). Decided 2026-07-12 (log:
 `logs/2026-07-12/queue-hardening-and-keymap.md`); **built 2026-07-18** on
 branch `shortcuts-0149` (log `logs/2026-07-18/keymap-scheme-0149.md`) — the
 "As built" section below is normative for the shipped behavior. The
-⌘-passthrough spike (below) is still a placeholder awaiting the human
-real-macOS-Chrome run; nothing was bound on its say-so — the table already
-excludes every chord the spike is expected to find eaten.
+⌘-passthrough spike (below) **was run by jku, by hand, on real macOS
+Chrome 150 on 2026-08-02** (c-compiler #396). Headline: `navigator.keyboard.lock()`
+under fullscreen recovers ⌘W/⌘Q/⌘T/⌘N from the browser; only ⌘Tab/⌘Space/⌘`
+are permanently unbindable. The measured section below replaces the old
+placeholder and its expectations.
 
 ## 🔴 CLOSED DECISION — Ctrl carries NO edit verbs in the macOS scheme. Do not re-open.
 
@@ -143,17 +145,95 @@ exposing `key_action(mods, keysym) → KA_*`. Consumers:
   owns window chords — Ctrl+Alt+Tab cycle, Win+arrow snap — which are a
   separate axis, unchanged by the scheme).
 
-## The ⌘-passthrough spike (do FIRST)
+## The ⌘-passthrough spike — MEASURED 2026-08-02
 
-On the macOS host, ⌘ is the GUI/Meta keysym and already reaches the WM (Win+arrow
-Aero Snap uses it). But Chrome/macOS swallow some ⌘ combos before the page sees
-them. Before binding anything, confirm empirically which reach a canvas-focused
-window:
+Run by jku, by hand, on real macOS Chrome 150 (c-compiler #396). Raw data:
+`~/git/meta/meta/probes/cmd-passthrough-396/` — `RESULTS-run-A-control.json`
+(run A: plain tab, no fullscreen, no lock), `RESULTS-run-B2-complete.json`
+(run B: fullscreen + `navigator.keyboard.lock()` with no argument = all keys;
+supersedes `RESULTS-run-B.json`, which left 3 chords untested).
 
-- **Expected to pass through** (safe to bind): ⌘A, ⌘C, ⌘X, ⌘V, ⌘Z.
-- **Expected eaten** (must NOT bind): ⌘W, ⌘Q, ⌘T, ⌘N, ⌘Tab, ⌘Space.
+**The headline — the answer to "is there really no way to tell the browser the
+page wants these keys?": yes, there is a way.** `navigator.keyboard.lock()`
+under fullscreen suppresses AppKit's `performKeyEquivalent:` menu dispatch, so
+⌘W/⌘Q/⌘T/⌘N reach the page instead of closing the tab / quitting Chrome. That
+was previously unknown to this project (and to the old placeholder here, which
+listed all four as "must NOT bind").
 
-Record the actual findings here — the scheme must never bind a swallowed chord.
+### The three measured classes (not the two the placeholder expected)
+
+| Class | Chords | Evidence |
+|---|---|---|
+| **Free today** — arrive in a plain tab; the lock contributes nothing | ⌘A ⌘C ⌘X ⌘V ⌘Z ⌘R ⌘L ⌘F ⌘, ⌘H ⌘M, Esc (tap) | arrived in run A AND run B |
+| **Recovered by fullscreen + lock** — the causal result | **⌘W ⌘Q ⌘T ⌘N** | eaten in run A, arrived in run B |
+| **Permanently unbindable** — macOS system-shortcut layer, ahead of app dispatch | ⌘Tab ⌘Space ⌘` | eaten in both runs; the lock cannot reach them |
+
+The old "Expected eaten (must NOT bind)" line was wrong about ⌘W ⌘Q ⌘T ⌘N —
+all four are recoverable. It was right about ⌘Tab and ⌘Space, and ⌘` joins
+that class. (Incidental: ⌘' also passes through under the lock; Ctrl+Tab
+arrived ×8 in run B — see limit 4.)
+
+### Limits of the measurement — do not claim more than this
+
+1. **Arrival ≠ exclusivity.** The probe records that the *page received* a
+   chord, not that the *browser refrained from acting*. Suppression is
+   INFERRED for the cases that matter: the tab never closed (⌘W), Chrome
+   never quit (⌘Q), the page never reloaded (⌘R — a reload would have zeroed
+   the matrix), and the omnibox never took focus (⌘L). If a chord ever needs a
+   hard exclusivity guarantee, that needs its own probe.
+2. **Run A varied fullscreen AND the lock together**, so the four flips are
+   attributable to the *pair*, not to the lock alone. A ~20 s run A2
+   (fullscreen, no lock) would isolate it. Low materiality — gucOS uses both
+   together anyway.
+3. **⌘H / ⌘M were not checked for double-action.** They arrive in a plain
+   tab, but nobody confirmed the Chrome window did not *also* hide/minimise.
+   Cheap human check; must happen before either is bound.
+4. **Ctrl+Tab is UNTESTED without the lock.** It arrived ×8 in run B and was
+   never probed in run A, so its unlocked class is unknown. **RULED by jku,
+   verbatim: "Just do Ctrl+Tab as though it works. If it doesn't I'll file a
+   bug later."** Status: bindable, unlocked class UNMEASURED, shipped by
+   explicit ruling. Accepted risk, not an oversight — the failure mode is
+   benign (Chrome switches tab, the user switches back). Do not gate on
+   measuring it; do not re-raise it.
+5. **Nothing on the Windows side has been measured.** Chrome's Keyboard Lock
+   reportedly captures Alt+Tab (and never Ctrl+Alt+Del) on Windows, which
+   would make the unbindable set platform-specific — but that is ASSUMED from
+   documentation, not measured. Every Windows claim in this file is ASSUMED
+   until someone runs the probe on a Windows host.
+
+### Caveats any binding work inherits
+
+- **Esc:** a *tap* reaches the page; a *hold* still exits fullscreen
+  (Chrome's hold-to-exit affordance). Any gucOS app wanting Esc (vi, dialogs)
+  inherits that.
+- **⌘W and ⌘Q degrade DESTRUCTIVELY when the lock is unavailable:** unlocked,
+  ⌘W closes the tab and ⌘Q quits Chrome — the whole gucOS session dies with
+  unsaved state, when the user meant "close this window". ⌘T/⌘N degrade
+  harmlessly (a stray tab). The binding ticket needs a `beforeunload` guard
+  so the destructive pair fails safe.
+
+### jku's design calls (decided 2026-08-02 — record, don't re-litigate)
+
+- **No "bindable free" vs "bindable only under lock" split in the keymap.**
+  Bind uniformly, attempt fullscreen+lock opportunistically, accept
+  degradation when unavailable: *"we can always just attempt and if we don't
+  get them we don't get them."* The table stays bindable / not-bindable.
+- **⌘Tab is out; Ctrl+Tab rotates gucOS windows** (see limit 4 for its
+  measurement status).
+- **⌘M → minimise the focused gucOS window** (standard macOS Window-menu
+  binding; the WM already has minimise).
+- **⌘H is app-hide on macOS (hides ALL windows of an app).** gucOS has no
+  per-app hide concept ⇒ skip ⌘H; revisit only if gucOS grows one.
+- The **"Ctrl carries NO edit verbs in the macOS scheme" CLOSED DECISION
+  above stands untouched** — nothing here re-opens it.
+
+### Still open (blocks nothing)
+
+- Run A2 (fullscreen, no lock — isolates the lock from fullscreen). Human-only.
+- The ⌘H/⌘M double-action check (limit 3). Human-only.
+- Run C (installed PWA — lock *without* fullscreen; would remove the
+  fullscreen tax and the Esc-hold conflict).
+- Safari / Firefox baselines (neither ships Keyboard Lock).
 
 ## Out of scope / separate axes
 
