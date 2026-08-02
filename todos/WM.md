@@ -1281,10 +1281,18 @@ RESIZE/EV_CONFIGURED, `test_wm_e2e.js` real-C resize leg,
   A request that can't reach the client (dead process, full ring) leaves
   no pending state — nothing would ever ack it.
 - **Chrome**: non-borderless windows grew a `WM_BORDER` (4px) Win95-ish
-  frame around title+client — same numbers in hit-testing, the browser
-  compositor, and the headless composite. Drag zones: right edge → E,
-  bottom edge → S, within `WM_GRIP` (16px) of the corner → SE; left/top
-  edges are focus-only (moving-edge resizes deliberately deferred). Drags
+  frame around title+client. Since #388 the DRAWN geometry and the HIT
+  geometry are deliberately DIFFERENT — do not "fix" one to match the
+  other: `WM_BORDER` stays the drawn width (browser compositor + headless
+  composite, unchanged), while hit-testing uses separate, larger
+  constants. The E and S edges take a `WM_BORDER_HIT` (12px) outward
+  band; the N and W edges keep the drawn 4px band and stay focus-only
+  (fattening them steals the cascade-behind title bar's chrome —
+  moving-edge resizes deliberately deferred). Drag zones: right edge → E,
+  bottom edge → S, widening to SE within `WM_GRIP_HIT` (32px) of the
+  corner, plus a `WM_GRIP_IN` (16px) inward square at a RESIZABLE
+  client's bottom-right corner ('down'-only — moves/ups/wheels still
+  reach the app) so a maximized/snapped window stays resizable. Drags
   preview as a rubber-band outline and send ONE configure at release
   (Win95 outline semantics — no per-motion SAB churn). Floor:
   `WM_MIN_SIZE` (32px) per axis.
