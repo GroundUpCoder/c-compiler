@@ -1,0 +1,31 @@
+{
+  "name": "demos",
+  "version": "1",
+  "summary": "gucOS demo apps — winbox, gpubox, gdidemo, ctldemo, fontramp, gdiplusdemo, k32demo (the windowing/GPU/GDI/controls/font/GDI+/kernel32 acceptance demos, bundled)",
+  "files": {
+    "winbox": { "c": "winbox.c" },
+    "gpubox": { "project": "os/gpubox.json" },
+    "gdidemo": { "project": "os/win32/gdidemo.json" },
+    "ctldemo": { "project": "os/win32/ctldemo.json" },
+    "ctldemo.res": { "bin": "os/win32/ctldemo.res" },
+    "fontramp": { "project": "os/win32/fontramp.json" },
+    "gdiplusdemo": { "project": "os/win32/gdiplusdemo.json" },
+    "k32demo": { "project": "os/win32/k32demo.json" }
+  },
+  "bin": {
+    "winbox": "winbox",
+    "gpubox": "gpubox",
+    "gdidemo": "gdidemo",
+    "ctldemo": "ctldemo",
+    "fontramp": "fontramp",
+    "gdiplusdemo": "gdiplusdemo",
+    "k32demo": "k32demo"
+  },
+  "menu": [
+    { "group": "Demos", "entry": "winbox", "cmd": "winbox" },
+    { "group": "Demos", "entry": "gpubox", "cmd": "gpubox" },
+    { "group": "Demos", "entry": "gdidemo", "cmd": "gdidemo" },
+    { "group": "Demos", "entry": "ctldemo", "cmd": "ctldemo" },
+    { "group": "Demos", "entry": "fontramp", "cmd": "fontramp" }
+  ]
+}

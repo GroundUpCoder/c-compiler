@@ -77,8 +77,8 @@ const script = [
   'rm /root/Desktop/doom',
   'rm /root/Desktop/pokemon',
   'rm "/root/Desktop/Presentations/gucOS/gucos.deck"',
-  'rm /root/Desktop/gameboy',
-  'printf mine > /root/Desktop/gameboy',            // name clash: user file wins
+  'rm /root/Desktop/notepad',
+  'printf mine > /root/Desktop/notepad',            // name clash: user file wins
   'printf usernote > /root/Desktop/usernote.txt',
   'printf userdeck > "/root/Desktop/Presentations/userdeck.mgp"',
   'echo ==dd1',
@@ -88,7 +88,7 @@ const script = [
   'echo "==doom L$(readlink /root/Desktop/doom)-END"',
   'test -x /root/Desktop/pokemon && grep -q sameboy /root/Desktop/pokemon && echo POKEMON-BACK',
   'test -s "/root/Desktop/Presentations/gucOS/gucos.deck" && echo DECK-BACK',
-  'echo "==squat $(cat /root/Desktop/gameboy)-END"',
+  'echo "==squat $(cat /root/Desktop/notepad)-END"',
   'echo "==unote $(cat /root/Desktop/usernote.txt)-END"',
   'echo "==udeck $(cat "/root/Desktop/Presentations/userdeck.mgp")-END"',
   // ---- leg B: idempotent re-run ----

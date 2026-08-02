@@ -1,0 +1,13 @@
+{
+  "name": "sameboy",
+  "version": "1.0.3",
+  "summary": "SameBoy v1.0.3 — cycle-accurate Game Boy / Game Boy Color emulator (MIT, embedded MIT boot ROMs); win32 menu app, the .gb/.gbc openwith default",
+  "files": {
+    "sameboy": { "project": "vendor/sameboy/bin.json" }
+  },
+  "bin": { "sameboy": "sameboy" },
+  "openwith": { "gb": "sameboy", "gbc": "sameboy" },
+  "menu": [
+    { "group": "Games", "entry": "sameboy", "cmd": "sameboy" }
+  ]
+}

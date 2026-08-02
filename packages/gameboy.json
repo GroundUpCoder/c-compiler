@@ -1,0 +1,13 @@
+{
+  "name": "gameboy",
+  "version": "8e65698",
+  "summary": "Game Boy emulator — Peanut-GB core (@8e65698, MIT) with a custom APU and SDL frontend; bare `gameboy` runs a built-in test ROM",
+  "files": {
+    "gameboy": { "project": "vendor/gameboy/bin.json" }
+  },
+  "bin": { "gameboy": "gameboy" },
+  "desktop": { "cmd": "gameboy" },
+  "menu": [
+    { "group": "Games", "entry": "gameboy", "cmd": "gameboy" }
+  ]
+}
