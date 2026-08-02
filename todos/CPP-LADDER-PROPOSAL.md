@@ -306,6 +306,67 @@ at this tier's edge with features macro'd off — Tier 6 turns those ON.)*
   these tier tables. NB VBA-M's wxWidgets front-end falls under the
   Qt/GTK/wxWidgets rejection above — the emulator core is the portable part.
 
+### llama.cpp — classified, NOT selected (ticket #373, read 2026-08-02)
+
+The 2026-08-02 brainstorm proposed llama.cpp as the first "iconic" C++ port.
+It was not selected — the ratchet stands at Tier 4 (jsonq) — but the ambition
+is placed here so it stops being re-proposed from scratch. **This is a
+classification, not a pick.**
+
+**Tier: 5, with Tier-6 edges — confirmed, not assumed.** The split matters:
+`ggml` (the entire compute core — tensors, quant kernels, threadpool) is **C,
+not C++**, so the hardest-looking half of the port is not a C++ problem at
+all. The C++ lives in the `llama` model/session layer and `common/` (C++17;
+vector/map/unordered_map/string throughout; **exceptions are the error model**
+— loading throws `std::runtime_error` → `--exceptions`, i.e. Tier 4;
+iostreams/sstream through `common/` and the tools → Tier 5). The Tier-6-ish
+surfaces (the jinja/minja chat-template engine and its `<regex>` appetite) are
+optional and cut cleanly. So: it must wait behind the Tier-4 rung and a
+Tier-5 rung — two rungs, exactly as ruled on the Tier-4 ticket.
+
+**Gap list vs clang-simplified + mini-STL** (§1 absent-header list):
+- `<filesystem>` — absent; used in `common/`/tools. Excisable or stub-level.
+- `<regex>` — absent; only the chat-template path wants it. Cut that path.
+- `<charconv>` — absent; small exposure, growable on demand.
+- `<thread>/<atomic>/<mutex>` — mini-STL threads are fake (inline-run);
+  ggml's pool is pthreads-C anyway. Build single-threaded / `n_threads=1`.
+- **mmap** — gucOS has no file mmap; upstream's `--no-mmap` fallback (heap
+  read) exists and is the path. Costs transient peak memory at load.
+- **f16/bf16** — ggml converts via software tables; no native f16 needed.
+- **SIMD** — ggml carries `wasm_simd128` paths upstream; scalar fallback
+  works but pays a multiple. Whether cc2wasm's pipeline passes SIMD128
+  through is enabling work to verify, not a known blocker.
+
+**Threading story — precedent confirmed live (2026-08).** Single-thread
+llama.cpp-on-wasm is a maintained reality: wllama (github.com/ngxson/wllama)
+ships single- AND multi-threaded wasm builds of unmodified llama.cpp (WASM
+SIMD, every GGUF quant); tangledgroup/llama-cpp-wasm likewise builds
+`llama-st`/`llama-mt` variants. Multi-thread needs SharedArrayBuffer wasm
+threads — not our model; `n_threads=1` is the gucOS shape. Cost estimate
+(order of magnitude, not measured — published single-thread numbers are
+scarce): low single-digit tok/s on a ≤1B Q4 model with SIMD, sub-1 tok/s by
+~3B. A demo cadence, not a tool cadence.
+
+**Memory — THE BINDING CONSTRAINT, more than the C++.** wasm32 is ILP32: a
+4 GiB hard address ceiling per process, minus stack/heap/KV/compute buffers.
+At Q4: ~1B ≈ 0.6–0.8 GiB of weights (fits), ~3B ≈ 2 GiB (tight, with KV +
+no-mmap load transient), **7B ≈ 4 GiB — out of reach on wasm32 regardless of
+C++ maturity.** The models people mean by "llama.cpp" do not fit; ≤1–2B chat
+models do. Delivery is the second memory wall: a model can never be baked
+(the image is ~25 MiB), and a 0.5–1 GiB gucman payload is ~60–120× the
+largest package shipped to date (quake's 8.6 MiB) — pool delivery + OPFS
+quota + BlockFS at that scale is real enabling work with no precedent here.
+
+**Go/no-go for the ladder top end: qualified GO.** As a *tiny-model*
+(≤1–2B Q4) chat/completion showcase, llama.cpp is a viable Tier-5/6 flagship:
+the C++ surface is tractable (core is C, the C++ layer is restrained and
+de-STL'd), exceptions/iostreams are exactly what Tiers 4–5 will have proven,
+and the single-thread precedent stands. As a general "local LLM in gucOS" it
+is a NO on memory alone — say so at selection time. Rung it waits behind:
+Tier 4 (jsonq) then a Tier-5 rung. If picked, the port ticket must carry the
+two enabling items by name: large-payload package delivery, and the
+SIMD128-through-cc2wasm verification.
+
 ---
 
 ## 3. Suggested proving protocol (per selected candidate)
