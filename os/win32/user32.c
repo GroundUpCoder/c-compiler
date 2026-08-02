@@ -765,7 +765,68 @@ static int vk_of(int sym, int sc) {
     if (sc >= 30 && sc <= 38) return '1' + (sc - 30);
     if (sc == 39) return '0';
     if (sc >= 4 && sc <= 29) return 'A' + (sc - 4);
-    if (sym > 0 && sym < 256) return sym;        /* punctuation: approximate */
+    /* Punctuation: the OEM keys, by scancode (#430). The old fall-through
+     * returned the ASCII keysym as the VK, which collides with the nav
+     * range — '\'' (0x27) arrived as VK_RIGHT, '.' (0x2E) as VK_DELETE —
+     * so the EDIT ran a phantom caret-move/forward-delete before every
+     * WM_CHAR insert. */
+    switch (sc) {
+    case 45: return VK_OEM_MINUS;                /* -_ */
+    case 46: return VK_OEM_PLUS;                 /* =+ */
+    case 47: return VK_OEM_4;                    /* [{ */
+    case 48: return VK_OEM_6;                    /* ]} */
+    case 49: case 50: return VK_OEM_5;           /* \| (+ NonUsHash) */
+    case 51: return VK_OEM_1;                    /* ;: */
+    case 52: return VK_OEM_7;                    /* '" */
+    case 53: return VK_OEM_3;                    /* `~ */
+    case 54: return VK_OEM_COMMA;                /* ,< */
+    case 55: return VK_OEM_PERIOD;               /* .> */
+    case 56: return VK_OEM_2;                    /* /? */
+    case 100: return VK_OEM_102;                 /* ISO extra key */
+    }
+    /* Scancode-less injection (`wmctl key SID 0 SYM`): the keysym still
+     * names the key on the one US layout — resolve it to the same OEM VK
+     * the scancode would have. */
+    switch (sym) {
+    case ';': case ':':  return VK_OEM_1;
+    case '=': case '+':  return VK_OEM_PLUS;
+    case ',': case '<':  return VK_OEM_COMMA;
+    case '-': case '_':  return VK_OEM_MINUS;
+    case '.': case '>':  return VK_OEM_PERIOD;
+    case '/': case '?':  return VK_OEM_2;
+    case '`': case '~':  return VK_OEM_3;
+    case '[': case '{':  return VK_OEM_4;
+    case '\\': case '|': return VK_OEM_5;
+    case ']': case '}':  return VK_OEM_6;
+    case '\'': case '"': return VK_OEM_7;
+    }
+    if (sym > 0 && sym < 256) return sym;        /* the remainder (Latin-1
+                                                    IME chars): no VK owns
+                                                    them, nothing dispatches
+                                                    on them — WM_CHAR carries
+                                                    the character */
+    return 0;
+}
+
+/* The OEM VK -> character pairs of the one US layout (#430's other half:
+ * ToAsciiEx/MapVirtualKey used to rely on "punctuation VK == keysym", which
+ * the vk_of remap above retired — calc's key2code path reads keys back
+ * through here). */
+static int oem_char(int vk, int shift) {
+    switch (vk) {
+    case VK_OEM_1:      return shift ? ':' : ';';
+    case VK_OEM_PLUS:   return shift ? '+' : '=';
+    case VK_OEM_COMMA:  return shift ? '<' : ',';
+    case VK_OEM_MINUS:  return shift ? '_' : '-';
+    case VK_OEM_PERIOD: return shift ? '>' : '.';
+    case VK_OEM_2:      return shift ? '?' : '/';
+    case VK_OEM_3:      return shift ? '~' : '`';
+    case VK_OEM_4:      return shift ? '{' : '[';
+    case VK_OEM_5:      return shift ? '|' : '\\';
+    case VK_OEM_6:      return shift ? '}' : ']';
+    case VK_OEM_7:      return shift ? '"' : '\'';
+    case VK_OEM_102:    return shift ? '|' : '\\';
+    }
     return 0;
 }
 
@@ -808,6 +869,7 @@ UINT MapVirtualKeyExW(UINT code, UINT type, HKL layout) {
     case 2:                     /* VK -> unshifted char */
         if ((code >= '0' && code <= '9') || (code >= 'A' && code <= 'Z'))
             return code;
+        if (oem_char((int)code, 0)) return (UINT)oem_char((int)code, 0);
         return code >= 32 && code < 127 ? code : 0;
     }
     return 0;
@@ -826,8 +888,8 @@ int ToAsciiEx(UINT vk, UINT scan, const BYTE *state, LPWORD out, UINT flags, HKL
     else if (vk == VK_BACK) ch = 8;
     else if (vk == VK_ESCAPE) ch = 27;
     else if (vk == VK_SPACE) ch = 32;
-    else if (vk >= 32 && vk < 127) ch = (int)vk;  /* punctuation VKs are the
-                                                     modifier-applied keysym */
+    else if (oem_char((int)vk, shift)) ch = oem_char((int)vk, shift);  /* #430 */
+    else if (vk >= 32 && vk < 127) ch = (int)vk;  /* pre-#430 injected VKs */
     if (!ch) return 0;
     *out = (WORD)ch;
     return 1;
