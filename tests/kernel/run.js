@@ -122,6 +122,7 @@ const tests = [
   ['test_calc_e2e.js', IMG],     // 0048: calc usable — WRES v2 template menus, owner-draw keypad, clipboard file + menu re-gray, keyboard translation, TrackPopupMenu agent path
   ['test_notepad_e2e.js', IMG],  // 0048: notepad usable — EDIT-around-a-file (EM_*HANDLE), comdlg32 file dialogs + find/replace protocol, status bar, MB_YESNOCANCEL, ShellExecuteW
   ['test_notepad_menu_e2e.js', IMG], // 0222: EVERY notepad menu item — effect or loud refusal (grayed items refuse agent clicks; Font/Print/PageSetup report unsupported), WM_SETTEXT caret-to-start, the win32rc \r fix pinned
+  ['test_edit_punct_repro.js', IMG], // #430: punctuation keysym→VK collisions (' = VK_RIGHT, . = VK_DELETE) — 13-key EOL insert matrix + type-over-selection replaces; RED until #430's vk_of OEM remap lands
   ['test_comdlg_diag_e2e.js', IMG], // 0255 R4: short listings say so — list_dir TRUE count past the fill cap, deleted-cwd "(cannot open directory)", 520-entry "(8 more...)" marker (dialog + fileman, TRUE status count), and a REAL OOM "(cannot allocate...)" row via the heap-ballast fixture under --wasm-max-mem-pages
   ['test_wm_fatal_e2e.js'],  // 0255 R5: wm fatal diagnostics name the failing layer — EV_SCREEN recreate + initial make_desk/make_bar report SDL_GetError() via fatal_sdl (pre-fix: stale strerror(errno) "Success"-class lies), forced through the kernel's real >8192 SURFACE_CREATE refusal
   ['test_fileman_e2e.js', IMG],  // 0048: file manager — dirs-first LISTBOX listing, Go/Up/Open navigation, 0066 activate() launch semantics, resize reflow
