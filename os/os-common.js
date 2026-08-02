@@ -13,6 +13,10 @@
 //     vendor builds, /usr/local -> /var/local, /usr/share/os-release with
 //     the manifest version, then seal. Runs offline (mkimage), or as the
 //     boot-time fallback when no current blob exists.
+//   checkManifestRefs(manifest)      — the #434 referential-integrity
+//     check every bake runs first: a baked launcher/menu entry/symlink/
+//     config seed referencing a command or path absent from the image
+//     being built fails the bake loudly.
 //   seedEntries(kfs, section, io)    — populate paths from a manifest
 //     section (dirs + files). Used by the bake (system section, full
 //     namespace) and by the virgin-boot user seed (user section).
@@ -1473,6 +1477,306 @@ function nodeOverlayIo(fsMod, pathMod, cryptoMod) {
   };
 }
 
+/* ---- manifest referential integrity (ticket #434) ----
+ *
+ * v223 shipped three Desktop launchers invoking `sameboy` after #417/#418
+ * moved that binary out of the baked set — dead icons on a clean first
+ * boot. An un-bake is a GRAPH EDIT: every launcher script, menu entry,
+ * symlink and config seed is an edge, and removing a node must fail the
+ * BUILD while an edge still points at it. checkManifestRefs is that check:
+ * pure (no fs, no clock), run by bakeSystemImage on every bake path
+ * (mkimage, boot.js, the in-worker fallback) BEFORE the expensive
+ * seed/compile work, over the manifest it was handed — so a minimal bake
+ * is checked against the minimal namespace and a --packages fold against
+ * the folded one, which is exactly the per-shape answer that would have
+ * caught v223.
+ *
+ * The namespace is the manifest itself (system+user dirs/files/links,
+ * parents implied) plus what the boot plants outside it: the root skeleton
+ * (initRootVolume), /bin -> /usr/bin, /usr/local -> /var/local, and
+ * /usr/share/os-release. `optional` entries count as present — they are
+ * data (ROMs), and the honest gap when their asset is missing is the
+ * seed-time skip log, not a build refusal.
+ *
+ * What is checked — and the lines that keep the result RAGGED (a checker
+ * that flags everything is a matcher bug, the #434 negative controls):
+ *   - `link` entries: the target must resolve (through /bin, /usr/local
+ *     and manifest links; hop-capped).
+ *   - `content` entries starting with `#!`: the interpreter must resolve,
+ *     and the body is scanned as shell. COMMAND-POSITION words must
+ *     resolve — bare words on the boot PATH (/usr/local/bin:/bin),
+ *     absolute words only when they sit in SEALED territory (/usr, /bin):
+ *     an absolute path under /opt, /root, /var, /tmp is runtime state
+ *     (the cpython launcher's installed-prefix probe) and is never
+ *     checked. Absolute-path ARGUMENTS follow the same territory rule
+ *     (the Demos entries' deck files must be baked; a /tmp scratch path
+ *     is nobody's business). Shell keywords are structure, not commands;
+ *     builtins and data-arg commands ([/test/echo/...) are never resolved
+ *     and their args never path-checked — `[ -f /usr/include/png.h ]` is
+ *     an honest ABSENCE probe (the minesweeper sample) and must not be
+ *     flagged; wrappers (exec/command/env/term/...) pass through to the
+ *     wrapped command; `sh -c "…"` recurses into the quoted body; any
+ *     `$…`/backtick/glob token is dynamic — statically unknowable, so
+ *     skipped, never guessed at.
+ *   - the openwith and sounds-scheme seeds: their values are commands /
+ *     WAV paths that must be baked (same dead-reference class as a
+ *     launcher). The cmdalt seed is EXEMPT by design: its values name
+ *     PACKAGES (`python  cpython-clang` is a role suggestion), and an
+ *     unresolvable pick is cmdalt's specified loud-127-with-a-named-fix
+ *     path (todos/0338), not a dead icon.
+ *
+ * Returns an array of error strings (empty = clean); bakeSystemImage
+ * throws on any. Exported for the tests/host/test_manifest_refs.js legs.
+ */
+function checkManifestRefs(manifest) {
+  var errs = [];
+
+  /* -- the namespace: manifest paths + the out-of-manifest plants -- */
+  var nodes = {};   // path -> {kind: 'file'|'dir'|'link', target}
+  function addImplicitParents(p) {
+    var i = p.lastIndexOf('/');
+    while (i > 0) {
+      p = p.slice(0, i);
+      if (!nodes[p]) nodes[p] = { kind: 'dir' };
+      i = p.lastIndexOf('/');
+    }
+  }
+  function addNode(p, node) { nodes[p] = node; addImplicitParents(p); }
+  ['/', '/etc', '/var', '/var/local', '/var/local/bin', '/tmp', '/root',
+   '/run', '/dev', '/usr'].forEach(function (d) { nodes[d] = { kind: 'dir' }; });
+  addNode('/bin', { kind: 'link', target: '/usr/bin' });          // initRootVolume
+  addNode('/usr/local', { kind: 'link', target: '/var/local' });  // bakeSystemImage
+  addNode('/usr/share/os-release', { kind: 'file' });
+  ['system', 'user'].forEach(function (sec) {
+    var s = manifest[sec] || {};
+    (s.dirs || []).forEach(function (d) { addNode(d, { kind: 'dir' }); });
+    var files = s.files || {};
+    Object.keys(files).forEach(function (p) {
+      var e = files[p];
+      addNode(p, e.link !== undefined ? { kind: 'link', target: e.link }
+                                      : { kind: 'file' });
+    });
+  });
+
+  function normalizePath(p) {
+    var out = [];
+    p.split('/').forEach(function (seg) {
+      if (seg === '' || seg === '.') return;
+      if (seg === '..') { out.pop(); return; }
+      out.push(seg);
+    });
+    return '/' + out.join('/');
+  }
+  // Resolve through links (hop-capped); null when the walk leaves the
+  // namespace. Follows a final-component link too — a link's TARGET is
+  // the reference under test.
+  function resolvePath(p) {
+    var hops = 0;
+    p = normalizePath(p);
+    for (;;) {
+      var comps = p === '/' ? [] : p.slice(1).split('/');
+      var cur = '', redirected = false;
+      for (var i = 0; i < comps.length; i++) {
+        cur += '/' + comps[i];
+        var n = nodes[cur];
+        if (!n) return null;
+        if (n.kind === 'link') {
+          if (++hops > 8) return null;   // cycle / silly chain
+          var t = n.target.charAt(0) === '/' ? n.target
+            : cur.slice(0, cur.lastIndexOf('/') + 1) + n.target;
+          var rest = comps.slice(i + 1).join('/');
+          p = normalizePath(rest ? t + '/' + rest : t);
+          redirected = true;
+          break;
+        }
+      }
+      if (!redirected) return comps.length ? nodes[p] : nodes['/'];
+    }
+  }
+  // The boot PATH every launcher context shares (hush login PATH; wm.c's
+  // children get /bin, a strict subset — checking the superset can only
+  // under-flag /usr/local/bin, which is EMPTY at first boot anyway).
+  function resolveCommand(word) {
+    if (word.charAt(0) === '/') return resolvePath(word);
+    if (word.indexOf('/') >= 0) return { kind: 'relative' };  // cwd-dependent
+    return resolvePath('/usr/local/bin/' + word) || resolvePath('/bin/' + word);
+  }
+  // Sealed territory: immutable at runtime, so an absolute reference into
+  // it either resolves in THIS image or never will.
+  var RO_PREFIX = /^\/(usr|bin)(\/|$)/;
+
+  /* -- shell scanning -- */
+  var mkset = function (s) {
+    var o = {}; s.split(' ').forEach(function (w) { o[w] = true; }); return o;
+  };
+  // Structure words: never commands; command position continues after them.
+  var KEYWORDS = mkset('if then else elif fi while until do done esac in ! { }');
+  // hush builtins + commands whose arguments are data or honest absence
+  // probes — the command itself is not a reference and its args are never
+  // path-checked ([ -f X ] asks; a dangling launcher target asserts).
+  var NO_CHECK = mkset('cd set export local read readonly return exit shift ' +
+    'trap umask unset wait eval source . : true false break continue echo ' +
+    'printf test [ type ulimit getopts hash kill alias');
+  // Wrappers: the NEXT word is again a command. 'cmd' entries are real
+  // binaries that must themselves resolve; 'builtin' entries are shell.
+  var PASS_THROUGH = { exec: 'builtin', command: 'builtin', time: 'builtin',
+                       env: 'cmd', nohup: 'cmd', term: 'cmd', xargs: 'cmd' };
+
+  // One line -> tokens: {word, dyn, quoted, glob} or {op}. Minimal POSIX
+  // quoting; a `#` starting an unquoted word comments the rest of the line.
+  function tokenizeShellLine(line) {
+    var toks = [], i = 0, n = line.length;
+    while (i < n) {
+      var c = line.charAt(i);
+      if (c === ' ' || c === '\t') { i++; continue; }
+      var two = line.slice(i, i + 2);
+      if (two === '&&' || two === '||' || two === '>>' || two === '2>') {
+        toks.push({ op: two }); i += 2; continue;
+      }
+      if (';|&()<>'.indexOf(c) >= 0) { toks.push({ op: c }); i++; continue; }
+      var word = '', dyn = false, quoted = false, glob = false, started = i;
+      while (i < n) {
+        c = line.charAt(i);
+        if (c === "'") {
+          quoted = true; i++;
+          while (i < n && line.charAt(i) !== "'") { word += line.charAt(i); i++; }
+          i++; continue;
+        }
+        if (c === '"') {
+          quoted = true; i++;
+          while (i < n && line.charAt(i) !== '"') {
+            var q = line.charAt(i);
+            if (q === '$' || q === '`') dyn = true;
+            if (q === '\\' && i + 1 < n) { i++; word += line.charAt(i); i++; continue; }
+            word += q; i++;
+          }
+          i++; continue;
+        }
+        if (' \t;|&()<>'.indexOf(c) >= 0) break;
+        if (c === '#' && i === started && !quoted) return toks;  // comment
+        if (c === '$' || c === '`') dyn = true;
+        if (c === '*' || c === '?' || c === '~') glob = true;
+        if (c === '\\' && i + 1 < n) { i++; word += line.charAt(i); i++; continue; }
+        word += c; i++;
+      }
+      toks.push({ word: word, dyn: dyn, quoted: quoted, glob: glob });
+    }
+    return toks;
+  }
+
+  function scanShellLine(line, where) {
+    var toks = tokenizeShellLine(line);
+    // mode: how the current command's ARGUMENTS are treated.
+    var cmdPos = true, mode = 'check', skipNext = false;
+    for (var k = 0; k < toks.length; k++) {
+      var tk = toks[k];
+      if (tk.op !== undefined) {
+        if (tk.op === '>' || tk.op === '>>' || tk.op === '<' || tk.op === '2>') {
+          skipNext = true;        // redirection target: created, not referenced
+          continue;
+        }
+        cmdPos = true; mode = 'check'; skipNext = false;
+        continue;
+      }
+      if (skipNext) { skipNext = false; continue; }
+      var w = tk.word;
+      if (w === '') continue;
+      if (cmdPos) {
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue;   // VAR=… prefix
+        if (tk.dyn) { mode = 'skip'; cmdPos = false; continue; }  // "$0" etc.
+        if (KEYWORDS[w]) continue;
+        if (w === 'for' || w === 'case') { mode = 'skip'; cmdPos = false; continue; }
+        if (w.charAt(0) === '-') continue;                  // wrapper flag (env -i)
+        cmdPos = false;
+        if (PASS_THROUGH[w]) {
+          if (PASS_THROUGH[w] === 'cmd' && !resolveCommand(w))
+            errs.push(where + ": command '" + w + "' is not in the image");
+          cmdPos = true;
+          continue;
+        }
+        if (NO_CHECK[w]) { mode = 'skip'; continue; }
+        if (w === 'sh' || w === '/bin/sh' || w === '/usr/bin/sh') { mode = 'sh'; continue; }
+        if (tk.glob) { mode = 'skip'; continue; }
+        if (w.charAt(0) === '/') {
+          if (RO_PREFIX.test(w) && !resolvePath(w))
+            errs.push(where + ": command '" + w + "' is not in the image");
+          mode = 'check';
+          continue;
+        }
+        if (w.indexOf('/') >= 0) { mode = 'skip'; continue; }  // ./built-at-runtime
+        if (!resolveCommand(w))
+          errs.push(where + ": command '" + w +
+            "' not found on PATH (/usr/local/bin:/bin) in the image");
+        mode = 'check';
+        continue;
+      }
+      // argument position
+      if (mode === 'skip') continue;
+      if (mode === 'sh') { if (w === '-c') mode = 'shbody'; continue; }
+      if (mode === 'shbody') {
+        if (!tk.dyn) scanShellText(w, where + ' [sh -c]');
+        mode = 'skip';
+        continue;
+      }
+      if (tk.dyn || tk.glob) continue;
+      if (w.charAt(0) === '/' && RO_PREFIX.test(w) && !resolvePath(w))
+        errs.push(where + ": path '" + w + "' is not in the image");
+    }
+  }
+  function scanShellText(text, where) {
+    text.split('\n').forEach(function (line) { scanShellLine(line, where); });
+  }
+  function scanScript(imgPath, content) {
+    var nl = content.indexOf('\n');
+    var shebang = (nl < 0 ? content : content.slice(0, nl)).slice(2);
+    var interp = shebang.split(/[ \t]+/).filter(function (s) { return s; })[0];
+    if (interp && !resolvePath(interp))
+      errs.push(imgPath + ": interpreter '" + interp + "' is not in the image");
+    if (nl >= 0) scanShellText(content.slice(nl + 1), imgPath);
+  }
+
+  /* -- the reference sweep -- */
+  ['system', 'user'].forEach(function (sec) {
+    var files = (manifest[sec] || {}).files || {};
+    Object.keys(files).sort().forEach(function (p) {
+      var e = files[p];
+      if (e.link !== undefined && !resolvePath(e.link))
+        errs.push(p + ": link target '" + e.link + "' is not in the image");
+      if (typeof e.content === 'string' && e.content.slice(0, 2) === '#!')
+        scanScript(p, e.content);
+    });
+  });
+
+  // Config seeds whose VALUES are references (per-store grammar; a manifest
+  // without the seed — the tiny test manifests — simply has nothing to check).
+  var sysFiles = (manifest.system || {}).files || {};
+  function seedLines(p) {
+    var e = sysFiles[p];
+    if (!e || typeof e.content !== 'string') return [];
+    return e.content.split('\n').filter(function (l) {
+      return l && l.charAt(0) !== '#';
+    });
+  }
+  seedLines('/usr/share/openwith').forEach(function (l) {
+    var m = /^(\S+)[ \t]+(\S+)/.exec(l);
+    if (!m) return;
+    var cmd = m[2];
+    if (!(cmd.charAt(0) === '/' ? resolvePath(cmd) : resolveCommand(cmd)))
+      errs.push("/usr/share/openwith: '" + m[1] + "' opens with '" + cmd +
+        "', which is not in the image");
+  });
+  seedLines('/usr/share/sounds/scheme').forEach(function (l) {
+    var m = /^(\S+)[ \t]+(\S+)/.exec(l);
+    if (!m || m[1] === 'mute' || m[2] === 'none') return;
+    if (!resolvePath(m[2]))
+      errs.push("/usr/share/sounds/scheme: event '" + m[1] + "' plays '" +
+        m[2] + "', which is not in the image");
+  });
+  // /usr/share/cmdalt: deliberately NOT checked — see the block comment.
+
+  return errs;
+}
+
 /* ---- baking the read-only system image (todos/0040) ----
  *
  * Bakes manifest.system into sysStore as a sealed, independently mountable
@@ -1494,6 +1798,14 @@ function nodeOverlayIo(fsMod, pathMod, cryptoMod) {
 function bakeSystemImage(BLOCK_FS, CompilerJS, sysStore, manifest, io) {
   var log = io.log || function () {};
   log('baking system image (manifest v' + manifest.version + ')');
+  // Referential integrity FIRST (ticket #434): a dangling launcher/menu/
+  // symlink reference fails the bake loudly before any expensive work.
+  // Pre-foldDesktopDefaults on purpose — the default-Desktop twins are
+  // verbatim copies, so checking them too would only duplicate errors.
+  var refErrs = checkManifestRefs(manifest);
+  if (refErrs.length)
+    throw new Error('manifest referential-integrity check failed (#434 — a baked ' +
+      'entry references something not in this image):\n  ' + refErrs.join('\n  '));
   // The default-Desktop rendering (§6.1) folds here — the ONE bake choke
   // point, so mkimage/boot.js/the in-worker fallback bake all agree.
   manifest = foldDesktopDefaults(manifest);
@@ -2077,6 +2389,7 @@ var OS_COMMON = {
   nativeSiblingProducer: nativeSiblingProducer,
   foldPackages: foldPackages,
   foldDesktopDefaults: foldDesktopDefaults,
+  checkManifestRefs: checkManifestRefs,
   listTreeFiles: listTreeFiles,
   sourcePackageDefs: sourcePackageDefs,
   validateSrclibShape: validateSrclibShape,
