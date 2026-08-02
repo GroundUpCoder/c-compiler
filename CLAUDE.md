@@ -328,10 +328,18 @@ hang-class miscompiles fail fast instead of stalling the suite.
   and env-exec all really spawn; patch table in
   `vendor/busybox/README.md`)
 - **Libraries**: `zlib`, `libpng`, `freetype`, `libgit2` (@44c05e5, core only; builds + `git_index_open` smoke test runs — used as a large-codebase stress test, see `vendor/libgit2/README.md`)
-- **Win32 port corpus (0060, compile-stage)**: `winmine`, `notepad`, `calc`
+- **Win32 port corpus (0060)**: `winmine`, `notepad`, `calc`
   (ReactOS @1a706d7, UNICODE builds vs the os/win32 veneer; per-dir READMEs
-  pin commit + patch tables — only `L"…"`→`u"…"`). NOT seeded into the OS
-  image; `tools/win32ports.js` compile-tests them and writes
+  pin commit + patch tables — only `L"…"`→`u"…"`). Shipping is per-app and
+  `os/image.json` + `packages/` are the authority, not this line (ticket
+  #143 — the old "NOT seeded" claim here outlived 0048/0068): as of this
+  correction **calc and notepad are BAKED** (`/usr/bin/calc`,
+  `/usr/bin/notepad` + `.res` sidecars, Accessories menu entries, Desktop
+  links; notepad is the `default.gui` openwith) and **winmine is the gucman
+  package** `packages/winmine.json` (moved out of the bake by the 0262
+  deploy-leg; absent from a minimal bake, folded in by the fat
+  `--packages=all` image that tests/serve.js default to).
+  `tools/win32ports.js` compile-tests all three and writes
   `os/win32/PORTS.md`, the 0059+ missing-symbol backlog (`--check` runs in
   the kernel suite). Solitaire is C++ → excluded.
 - **Frontend infra (JS, not C)**: `xterm` (terminal widget), `codemirror` (editor widget)
@@ -1109,7 +1117,9 @@ windows.h section note is canonical). `/bin/k32demo` (UNICODE build, 87
 self-checks incl. POSIX-twin identity + a redirected spawn) is the
 acceptance app; `tests/kernel/test_kernel32_e2e.js` adds
 registry-persistence-across-boots. 0068 landed the user32/resource
-tail — **winmine is seeded as `/bin/winmine` and playable**: resources
+tail — **winmine is playable** (seeded as `/bin/winmine` at 0068; since
+the 0262 deploy-leg it ships as the gucman `winmine` package instead —
+`/usr/local/bin/winmine`, absent from a minimal bake): resources
 ride a SIDECAR pack `<binary>.res` (the PE-resource-section analog)
 compiled by `tools/win32rc.js` from the app's .rc (STRINGTABLE/MENU/
 DIALOGEX/ACCELERATORS/BITMAP subset; the WRES format there MUST MATCH
