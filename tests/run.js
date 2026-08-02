@@ -199,7 +199,7 @@ const RULES = [
   // cfgstore setting reroutes kernel HTTP through. Its wire contract with
   // os-common's createNetFetch is private and version-locked, and
   // test_netbridge_e2e.js drives both halves end to end.
-  [/^tools\/net-bridge\.js$/, ['kernel'], 'the Tier 2.5 HTTP bridge — test_netbridge_e2e.js drives the full reroute against it'],
+  [/^tools\/net-bridge\.js$/, ['kernel', 'host'], 'the Tier 2.5 HTTP bridge — test_netbridge_e2e.js drives the full reroute; the #393 mislabel legs (test_netbridge_wrapper.js) run the real bridge in the host suite'],
 
   // The remote-egress wrapper (ticket #380): ssh -L to the SAME bridge running
   // on another host. Explicitly NOTHING, and the decision is the point. It

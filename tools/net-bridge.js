@@ -124,7 +124,13 @@ function main() {
       // CORS preflight (any custom x-guc-* header forces one). Chrome's
       // Private Network Access probe adds Access-Control-Request-Private-
       // Network: true and requires the mirrored allow header.
-      if (!allowed) { res.writeHead(403); res.end(); return; }
+      //
+      // The preflight answers for EVERY origin (#393): it only unlocks the
+      // browser's permission to SEND the real request — the allowlist is
+      // enforced on that request, which a refused page can then READ as a
+      // 403 with the actionable message below. A preflight-level refusal
+      // is an opaque TypeError to the page, indistinguishable from a dead
+      // bridge, so the wrapper mislabelled healthy refusals "unreachable".
       const h = Object.assign(corsHeaders(origin), {
         'access-control-allow-methods': 'GET, POST, OPTIONS',
         'access-control-allow-headers':
@@ -140,7 +146,14 @@ function main() {
 
     if (!allowed) {
       log('403 origin refused: ' + origin);
-      res.writeHead(403, { 'content-type': 'text/plain' });
+      // Drain the request and carry CORS headers (#393): answering while
+      // the client is still uploading resets the connection, and a refusal
+      // without access-control-allow-origin is unreadable cross-origin —
+      // both turn a healthy bridge's 403 into "bridge unreachable" at the
+      // wrapper. Echoing the refused origin in the allow header only lets
+      // that page READ this refusal; the bridge still proxies nothing.
+      req.resume();
+      res.writeHead(403, Object.assign(corsHeaders(origin), { 'content-type': 'text/plain' }));
       res.end('origin not allowed: ' + origin + ' (add --allow-origin=' + origin + ')');
       return;
     }
@@ -152,14 +165,17 @@ function main() {
     }
 
     if (req.method !== 'POST' || req.url !== '/fetch') {
-      res.writeHead(404, corsHeaders(origin));
-      res.end();
+      req.resume();
+      res.writeHead(404, Object.assign(corsHeaders(origin), { 'content-type': 'text/plain' }));
+      res.end('not found: ' + req.method + ' ' + req.url
+        + ' — the bridge serves POST /fetch and GET /health');
       return;
     }
 
     const url = req.headers['x-guc-url'];
     const method = (req.headers['x-guc-method'] || 'GET') + '';
     if (!url || !/^https?:\/\//i.test(url)) {
+      req.resume();   // drain: an early answer mid-upload resets the connection (#393)
       res.writeHead(400, Object.assign(corsHeaders(origin), { 'content-type': 'text/plain' }));
       res.end('x-guc-url must be an absolute http(s) URL');
       return;
@@ -182,9 +198,14 @@ function main() {
       blen += c.length;
       if (blen > BODY_CAP) {
         over = true;
-        res.writeHead(413, corsHeaders(origin));
-        res.end();
-        req.destroy();
+        // Answer AND keep draining (the `over` flag discards the rest):
+        // destroying the socket mid-upload made the client see a
+        // connection reset, so a healthy bridge's 413 read as "bridge
+        // unreachable" at the wrapper (#393). Memory stays flat — the
+        // buffered chunks are dropped and nothing further is kept.
+        chunks.length = 0;
+        res.writeHead(413, Object.assign(corsHeaders(origin), { 'content-type': 'text/plain' }));
+        res.end('request body exceeds the ' + BODY_CAP + '-byte bridge cap');
         return;
       }
       chunks.push(c);
