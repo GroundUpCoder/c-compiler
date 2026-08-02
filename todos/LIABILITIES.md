@@ -96,27 +96,6 @@ thing this file exists to kill.
 - file: os/kernel-worker.js
 - anchor: var r = await fetch(manifest.image || 'os-system.img');
 
-### L03 — "MessageBox raise stays silent" passes equally if the dialog never opened
-- ticket: #97
-- file: tests/browser/os-sounds.mjs
-- anchor: check('muted: MessageBox raise stays silent', w3 === w2, { w2, w3 });
-
-### L04 — the VT-during-boot leg abstains whenever ready wins the race
-- ticket: #97
-- file: tests/browser/os-boots.mjs
-- anchor: // ready switch and the check passes vacuously — no flake either way).
-
-### L05 — "boot streams on VT1" is unconditionally true once state !== booting
-- ticket: #97
-- file: tests/browser/os-vt.mjs
-- anchor: // fresh-OPFS first boot takes seconds; vacuously true if ready won).
-
-### L06 — the wmctl-wait-timed-out guard exists kernel-side only; no browser harness has it
-- ticket: #97
-- file: tests/kernel/lib/drive.js
-- anchor: // Loud-symptom gate (todos/0171): a `wmctl wait` that can't be satisfied
-- provenance: 0171
-
 ### L09 — NetSurf Lane D (binding fills) was left open in a topic doc, which is not the queue
 - ticket: #98
 - file: todos/NETSURF-JS.md

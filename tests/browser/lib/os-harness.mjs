@@ -159,6 +159,20 @@ export function checkPlaywrightPin() {
     `(Override with CC_NO_PLAYWRIGHT_PIN=1.)`);
 }
 
+// Browser twin of tests/kernel/lib/drive.js's todos/0171 loud-symptom gate
+// (ticket #97/0287): a `wmctl wait` that can't be satisfied prints
+// `wmctl: wait X timed out after Nms` to stderr and exits 1 — but a shell
+// script with no `set -e` just burns the full timeout and sails on, so the
+// test then samples STALE state and a wait on an unreachable condition
+// passes SLOWLY instead of failing. On the browser side that stderr lands
+// in the tty mirror (window.__osOut); this is the pure scanner the page
+// helpers (and any file-local scan, e.g. os-minimal.mjs's end-of-session
+// leg) share. No browser test legitimately expects a timeout — absence
+// checks use nowin/nolabel, which SUCCEED on absence.
+export const WMCTL_TIMEOUT_RE = /wmctl: wait .* timed out after \d+ms/;
+export const wmctlTimeoutHits = (hay) =>
+  Array.from(new Set(String(hay).match(new RegExp(WMCTL_TIMEOUT_RE.source, 'g')) || []));
+
 // The `check`/`failures` scoreboard. `stringify` controls the FAIL tail: the
 // os-*.mjs majority JSON.stringifies `extra`; os-boots prints it raw.
 export function makeCheck({ stringify = true } = {}) {
@@ -213,10 +227,35 @@ export function osHelpers(page) {
     }
   };
 
-  // Wait for the tty mirror (window.__osOut) to contain a needle.
-  const waitOut = (needle, ms) => page.waitForFunction(
-    (n) => window.__osOut && window.__osOut.includes(n), needle,
-    { timeout: ms || 20000, polling: 200 });
+  // (#97/0287) Scan the tty mirror for the drive.js-class wmctl-timeout
+  // symptom and throw naming every hit + the tty tail before the first one
+  // (0171: the diagnostic points at its cause). waitOut runs this after
+  // every satisfied wait, so a timed-out `wmctl wait` earlier in the
+  // session surfaces at the next sync point instead of poisoning later
+  // assertions silently.
+  const assertNoWmctlTimeout = async () => {
+    const out = await page.evaluate(() => window.__osOut || '');
+    const hits = wmctlTimeoutHits(out);
+    if (!hits.length) return;
+    const at = out.search(WMCTL_TIMEOUT_RE);
+    const tail = out.slice(0, at).split('\n').slice(-12);
+    throw new Error('wmctl wait timed out (a wait on an unreachable condition — ' +
+      'root-cause it, do not lengthen the timeout):\n  ' + hits.join('\n  ') +
+      '\n--- tty tail before the first timeout ---\n' + tail.join('\n'));
+  };
+
+  // Wait for the tty mirror (window.__osOut) to contain a needle. The
+  // predicate ALSO returns on a wmctl-timeout line (#97/0287): a timed-out
+  // in-OS wait means the needle's producer is not coming, so resolve now
+  // and let the scan below turn it into a named hard failure rather than
+  // an opaque waitForFunction timeout.
+  const waitOut = async (needle, ms) => {
+    await page.waitForFunction(
+      (n) => window.__osOut && (window.__osOut.includes(n) ||
+        /wmctl: wait .* timed out after \d+ms/.test(window.__osOut)),
+      needle, { timeout: ms || 20000, polling: 200 });
+    await assertNoWmctlTimeout();
+  };
 
   // Wait until the desktop canvas layout matches the live __osScreen geometry
   // (0023) — the guard every pixel test runs before sampling on VT2.
@@ -227,7 +266,7 @@ export function osHelpers(page) {
       Math.abs(r.height - window.__osScreen.h) < 2;
   }, { timeout, polling: 200 });
 
-  return { setVt, sample, near, waitPixel, waitOut, waitScreen };
+  return { setVt, sample, near, waitPixel, waitOut, waitScreen, assertNoWmctlTimeout };
 }
 
 // The generic "poll a page predicate" util 0083 asked for — a thin, named

@@ -106,18 +106,40 @@ try {
 
   // Reboot the tab: same context = same OPFS; the image must be reused and
   // the compiled a.out must still be there.
-  await page.reload();
   // 0070: a manual VT choice made DURING boot must beat the ready auto-
-  // switch. Grab VT1 while the reboot streams (a reused-image boot still
-  // takes seconds; if ready wins the race this degrades to a plain post-
-  // ready switch and the check passes vacuously — no flake either way).
-  await page.waitForFunction(() => typeof window.__osVtSwitch === 'function',
-    { timeout: 30000, polling: 100 });
-  await page.evaluate(() => window.__osVtSwitch(1));
+  // switch. The old form raced ready — "if ready wins the race this degrades
+  // to a plain post-ready switch and the check passes vacuously" — so on a
+  // warm machine the leg tested nothing (#97/0287). Make the window
+  // deterministic: intercept the __osState probe before the reloaded page's
+  // scripts run and fire the USER VT switch synchronously inside the
+  // 'booting' assignment itself (os.html defines __osVtSwitch before it sets
+  // 'booting'). __vtGrabAt records the state the switch fired at — the check
+  // below requires 'booting', so a post-ready switch can never pass again.
+  // Gated on sessionStorage: the first boot above needed the auto-switch
+  // (vtTouched unset) for its 'lands on the Desktop tab' leg.
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem('vtgrab') !== '1') return;
+    let st;
+    Object.defineProperty(window, '__osState', {
+      configurable: true,
+      get: () => st,
+      set: (v) => {
+        st = v;
+        if (v === 'booting' && !window.__vtGrabAt && typeof window.__osVtSwitch === 'function') {
+          window.__osVtSwitch(1);
+          window.__vtGrabAt = v;
+        }
+      },
+    });
+  });
+  await page.evaluate(() => sessionStorage.setItem('vtgrab', '1'));
+  await page.reload();
   await page.waitForFunction(() => window.__osState === 'ready',
     { timeout: 120000, polling: 250 });
+  const grab = await page.evaluate(() =>
+    ({ at: window.__vtGrabAt, vt: window.__osVt }));
   check('manual VT choice during boot survives ready (todos/0070)',
-    await page.evaluate(() => window.__osVt) === 1);
+    grab.at === 'booting' && grab.vt === 1, JSON.stringify(grab));
   const mode = await page.evaluate(() => document.getElementById('status').textContent);
   // 0040 mode string: <system>/<root> — blob reused + existing v4 root volume.
   check('second boot reuses the image', /image: reused\/v4/.test(mode), mode);

@@ -6,7 +6,7 @@
 // the real browser sweep (operator-owed, 0064).
 //
 //   node tests/browser/lib/test-harness.js
-import { osUrl, near, makeCheck, waitForServer } from './os-harness.mjs';
+import { osUrl, near, makeCheck, waitForServer, wmctlTimeoutHits } from './os-harness.mjs';
 
 let failures = 0;
 const check = (name, cond) => {
@@ -14,8 +14,11 @@ const check = (name, cond) => {
   else { console.log('  FAIL ' + name); failures++; }
 };
 
-// osUrl
-check('osUrl builds the os.html URL', osUrl(3193) === 'http://localhost:3193/os/os.html');
+// osUrl (hostKeys defaults to 'off' — META-ARROW-KEYBIND.md decision 4 pins
+// the keyboard-scheme host auto-detect off for the sweep; '' omits the param)
+check('osUrl builds the os.html URL (pinned hostkeys)',
+  osUrl(3193) === 'http://localhost:3193/os/os.html?hostkeys=off');
+check('osUrl with hostKeys "" omits the query', osUrl(3193, '') === 'http://localhost:3193/os/os.html');
 
 // near: channel-wise tolerance
 check('near: exact match', near([10, 20, 30], [10, 20, 30]) === true);
@@ -54,6 +57,21 @@ check('near: null got is falsy', !near(null, [0, 0, 0]));
     check('makeCheck raw extra (stringify:false)', logs[0] === '  FAIL raw  plain-extra');
   } finally { console.log = orig; }
 }
+
+// wmctlTimeoutHits (#97/0287): the drive.js-class loud-symptom scanner
+check('wmctlTimeoutHits: clean output has no hits',
+  wmctlTimeoutHits('~ # wmctl wait win About 8000\nok\n').length === 0);
+check('wmctlTimeoutHits: catches a timeout line',
+  wmctlTimeoutHits('x\nwmctl: wait win timed out after 8000ms\ny')
+    .join() === 'wmctl: wait win timed out after 8000ms');
+check('wmctlTimeoutHits: dedups repeats, keeps distinct hits', (() => {
+  const h = wmctlTimeoutHits(
+    'wmctl: wait win timed out after 8000ms\n' +
+    'wmctl: wait win timed out after 8000ms\n' +
+    'wmctl: wait label timed out after 5000ms\n');
+  return h.length === 2 && h[1] === 'wmctl: wait label timed out after 5000ms';
+})());
+check('wmctlTimeoutHits: null/undefined-safe', wmctlTimeoutHits(undefined).length === 0);
 
 // waitForServer: injected fetch
 (async () => {

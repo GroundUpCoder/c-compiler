@@ -31,14 +31,41 @@ try {
   const page = await context.newPage();
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
+  // 0070: the boot itself streams on VT1. The old probe raced the boot — a
+  // one-shot `state !== 'booting' || vt === 1` sample is unconditionally
+  // true whenever ready wins, so on a warm machine the leg tested nothing
+  // (#97/0287). Instead intercept the __osState/__osVt probe properties
+  // BEFORE any page script runs and record every transition in order: the
+  // trace deterministically contains the whole boot, so the assertion below
+  // covers the full mid-boot window instead of one racy instant.
+  await page.addInitScript(() => {
+    window.__vtTrace = [];
+    for (const k of ['__osState', '__osVt']) {
+      let val;
+      Object.defineProperty(window, k, {
+        configurable: true,
+        get: () => val,
+        set: (v) => { val = v; window.__vtTrace.push([k, v]); },
+      });
+    }
+  });
   await page.goto(URL);
-  // 0070: the boot itself streams on VT1 — probe while still booting (a
-  // fresh-OPFS first boot takes seconds; vacuously true if ready won).
-  const early = await page.evaluate(() => ({ vt: window.__osVt, state: window.__osState }));
-  check('boot streams on VT1 (log visible during boot)',
-    early.state !== 'booting' || early.vt === 1, early);
   await page.waitForFunction(() => window.__osState === 'ready', { timeout: 240000, polling: 250 });
   check('boots to ready', true);
+  // Replay the trace: 'booting' must have been OBSERVED (the init script
+  // precedes os.html's scripts, so a trace without it means the probe
+  // contract broke — fail loud, never abstain), and the VT must have been 1
+  // at every instant the state was 'booting'.
+  {
+    const trace = await page.evaluate(() => window.__vtTrace);
+    let vt = null, st = null, sawBooting = false, vt1Throughout = true;
+    for (const [k, v] of trace) {
+      if (k === '__osVt') vt = v; else st = v;
+      if (st === 'booting') { sawBooting = true; if (vt !== 1) vt1Throughout = false; }
+    }
+    check('boot streams on VT1 (VT1 across the whole traced boot window)',
+      sawBooting && vt1Throughout, trace);
+  }
   // Don't race hush's banner: typed input before the first prompt is eaten.
   await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
 

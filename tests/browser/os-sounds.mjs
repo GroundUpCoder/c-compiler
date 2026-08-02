@@ -40,12 +40,32 @@ try {
   check('boots to ready', true);
   await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
 
-  const { setVt } = osHelpers(page);
-  const waitOut = (needle, ms) => page.waitForFunction(
-    (n) => window.__osOut.includes(n), needle, { timeout: ms || 30000, polling: 200 });
+  const { setVt, waitOut } = osHelpers(page);
   const audioCtl = () => page.evaluate(() =>
     Array.from(new Int32Array(window.__osAudioSab, 0, 4)));
   const wposAt = async () => (await audioCtl())[0];
+  // Positive-leg condition (#97/0287, retires the blind sleeps): the pump's
+  // producer cursor advanced past `from` — i.e. the mixer really wrote output.
+  const waitWpos = async (from, ms) => {
+    await page.waitForFunction((f) =>
+      new Int32Array(window.__osAudioSab, 0, 4)[0] !== f, from,
+      { timeout: ms || 15000, polling: 100 });
+    return wposAt();
+  };
+  // Negative-leg baseline: the mixer is QUIET — two cursor samples 500ms
+  // apart are equal (a still-draining clip can't alias as an event beep).
+  // The 500ms is a genuine no-marker settle: quiescence IS two equal samples.
+  const waitQuiet = async (ms) => {
+    const t0 = Date.now();
+    for (;;) {
+      const a = await wposAt();
+      await sleep(500);
+      const b = await wposAt();
+      if (a === b) return b;
+      if (Date.now() - t0 > (ms || 20000))
+        throw new Error('mixer never went quiet: wpos ' + a + ' -> ' + b);
+    }
+  };
 
   // ---- the startup chime, pre-gesture: the wm service submits it at
   // desktop-ready (its worker boots ~1s AFTER the page's 'ready' — wait,
@@ -73,53 +93,71 @@ try {
   await page.mouse.click(rect.x + rect.w - 200, rect.y + 200);   // bare desktop
   await page.waitForFunction(() => window.__osAudio === 'playing', { timeout: 10000, polling: 100 });
   check('audio resumed on the gesture', true);
-  const wChime = await wposAt();
-  await sleep(4000);                       // the ~2.2s chime finishes
-  const wEnd = await wposAt();
-  await sleep(1500);
-  const wQuiet = await wposAt();
+  const wEnd = await waitWpos(ctl0[0], 10000);   // the chime is draining out
+  const wQuiet = await waitQuiet();              // ~2.2s clip ends, mixer parks
   check('chime played out once and the mixer went quiet',
-    wEnd !== ctl0[0] && wQuiet === wEnd, { wChime, wEnd, wQuiet });
+    wQuiet !== ctl0[0], { wEnd, wQuiet });
 
   // ---- MessageBox raise beeps (MessageBeep -> PlaySound SystemDefault) ----
+  // Every leg below gates on a REAL condition (#97/0287): dialog existence
+  // via `wmctl wait win`, split-needle shell markers (the tty echo of the
+  // typed line can't satisfy them), and cursor advance/quiescence polls —
+  // the blind sleeps are gone. A timed-out in-OS wait is a hard failure
+  // (the harness waitOut carries the drive.js-class guard).
   await setVt(1);
-  await sleep(500);
+  await page.keyboard.type('echo VT""1-IN\r');   // tty accepts input post-switch
+  await waitOut('VT1-IN');
   await page.keyboard.type('ctldemo &\r');
   await waitOut('ctldemo: ready', 120000);
-  await sleep(800);                        // hush job-notice settle (0089)
-  const w0 = await wposAt();
-  await page.keyboard.type('wmctl click About\r');
-  await sleep(2000);
-  const w1 = await wposAt();
+  const w0 = await waitQuiet();                  // baseline: mixer parked
+  await page.keyboard.type('wmctl click About && wmctl wait win "About ctldemo" 8000 && echo ABT""1-UP\r');
+  await waitOut('ABT1-UP');
+  const w1 = await waitWpos(w0, 10000);
   check('MessageBox raise beeps (producer cursor advanced)', w1 !== w0, { w0, w1 });
-  await page.keyboard.type('wmctl click OK\r');
-  await sleep(2000);                       // dismiss + let the clip drain out
+  await page.keyboard.type('wmctl click OK && wmctl wait nowin "About ctldemo" 8000 && echo ABT""1-DN\r');
+  await waitOut('ABT1-DN');
 
   // ---- the Sounds applet mutes events ----
   await page.keyboard.type('ctlpanel &\r');
-  await sleep(1500);
-  await page.keyboard.type('wmctl click Sounds\r');
-  await sleep(1200);
+  // Boot barrier: the Sound applet icon resolving in the agent tree means
+  // the hub is up + serving (the test_ctlpanel_e2e idiom).
+  await page.keyboard.type('wmctl wait label Sound 15000 && echo CPL""-UP\r');
+  await waitOut('CPL-UP', 30000);
+  await page.keyboard.type('wmctl click Sounds && wmctl wait win "Sounds Properties" 8000 && echo SND""-UP\r');
+  await waitOut('SND-UP');
   await page.keyboard.type('wmctl click "Enable event sounds"\r');
-  await sleep(1200);
-  await page.keyboard.type('cat /root/.config/sounds\r');
+  // The click posts WM_COMMAND; the applet delta-writes the store — poll the
+  // FILE for the mute key (waitFileHas idiom), then print it for the record.
+  await page.keyboard.type('for i in $(seq 1 100); do grep -q "mute" /root/.config/sounds 2>/dev/null && break; sleep 0.1; done; cat /root/.config/sounds\r');
   await waitOut('mute\ton');
   check('mute checkbox wrote the user scheme store', true);
-  const w2 = await wposAt();
-  await page.keyboard.type('wmctl click About\r');
+  // The vacuous leg this ticket retires: `w3 === w2` was satisfied equally
+  // by "muting works" and by "the About dialog never opened". The wait on
+  // `wmctl wait win` PROVES the dialog exists before sampling, so the check
+  // now asserts silence-WITH-a-dialog, never silence-from-absence.
+  const w2 = await waitQuiet();
+  await page.keyboard.type('wmctl click About && wmctl wait win "About ctldemo" 8000 && echo ABT""2-UP\r');
+  await waitOut('ABT2-UP');
+  // Genuine no-marker settle: silence has no completion event. The dialog is
+  // already OPEN (the wait above), so the beep — submitted at MessageBox
+  // open — would by now be advancing the cursor; the unmuted leg's advance
+  // lands well inside this window.
   await sleep(2500);
   const w3 = await wposAt();
-  check('muted: MessageBox raise stays silent', w3 === w2, { w2, w3 });
-  await page.keyboard.type('wmctl click OK\r');
-  await sleep(1000);
+  check('muted: MessageBox raise stays silent (dialog verifiably open)',
+    w3 === w2, { w2, w3 });
+  await page.keyboard.type('wmctl click OK && wmctl wait nowin "About ctldemo" 8000 && echo ABT""2-DN\r');
+  await waitOut('ABT2-DN');
 
   // ---- re-enable: the applet's Test button plays again ----
   await page.keyboard.type('wmctl click "Enable event sounds"\r');
-  await sleep(1200);
-  const w4 = await wposAt();
+  // (grep "off", not "mute<TAB>off": a typed TAB is hush completion, and the
+  // user store is a pure mute-key delta, so "off" is unambiguous there)
+  await page.keyboard.type('for i in $(seq 1 100); do grep -q off /root/.config/sounds 2>/dev/null && break; sleep 0.1; done; echo UNMU""TE-OK\r');
+  await waitOut('UNMUTE-OK');
+  const w4 = await waitQuiet();
   await page.keyboard.type('wmctl click Test\r');
-  await sleep(2000);
-  const w5 = await wposAt();
+  const w5 = await waitWpos(w4, 10000);
   check('unmuted: the Test button plays', w5 !== w4, { w4, w5 });
 
   console.log(state.failures ? `FAILURES: ${state.failures}` : 'ALL OK');
