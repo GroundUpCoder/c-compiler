@@ -423,7 +423,7 @@ static char *run_command(const char *cmd, int *exit_code) {
     }
     close(pfd[1]);
     sb out = {0};
-    int truncated = 0, timedout = 0;
+    int truncated = 0, timedout = 0, intkilled = 0;
     g_bash_alarm = 0;
     signal(SIGALRM, bash_on_alarm);
     struct itimerval itv;
@@ -437,6 +437,18 @@ static char *run_command(const char *cmd, int *exit_code) {
         if (n < 0) {
             if (errno == EINTR) {
                 if (g_bash_alarm && !timedout) { kill(pid, SIGKILL); timedout = 1; }
+                /* #412(c): ^C. The fg-pgroup SIGINT normally kills the
+                 * child too (EOF follows at once); this closes the
+                 * survivor edge — a child that traps/ignores SIGINT, or a
+                 * kill -INT aimed at gcode alone. Kill AND STOP READING:
+                 * draining to EOF would hostage the interrupt to any
+                 * pipe-holding descendant (hush runs e.g. `sleep 30` as
+                 * its own child, which inherits the write end and
+                 * survives the sh kill — measured as a 30s stall).
+                 * Everything the tool printed before the ^C was already
+                 * drained by earlier reads, and waitpid on the SIGKILLed
+                 * sh cannot block. */
+                if (g_interrupted && !intkilled) { kill(pid, SIGKILL); intkilled = 1; break; }
                 continue;                    /* drain to EOF after the kill */
             }
             break;
@@ -460,6 +472,7 @@ static char *run_command(const char *cmd, int *exit_code) {
         sb_puts(&out, "\n[command killed: exceeded 120s timeout]");
     } else {
         *exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+        if (intkilled) sb_puts(&out, "\n[command killed: interrupted by user (^C)]");
         if (truncated) {
             char m[64];
             snprintf(m, sizeof m, "\n[output truncated at %d bytes]", CAP_BASH_BYTES);
@@ -488,13 +501,21 @@ static char *run_command(const char *cmd, int *exit_code) {
     }
     close(pfd[1]);
     sb out = {0};
-    int truncated = 0;
+    int truncated = 0, intkilled = 0;
     time_t deadline = time(NULL) + CAP_BASH_SECS;
     for (;;) {
         struct pollfd pf = { pfd[0], POLLIN, 0 };
         int remain = (int)(deadline - time(NULL));
         if (remain < 0) remain = 0;
         int r = poll(&pf, 1, remain * 1000 + 100);
+        if (r < 0 && errno == EINTR) {
+            /* #412(c) native twin: a ^C whose SIGINT reached gcode but not
+             * the child (kill -INT at gcode alone, or a SIGINT-trapping
+             * child) must not drain the child's remaining runtime — kill
+             * and stop reading, like the timeout path below. */
+            if (g_interrupted && !intkilled) { kill(pid, SIGKILL); intkilled = 1; break; }
+            continue;
+        }
         if (r == 0 && time(NULL) >= deadline) {  /* timeout: kill the group */
             kill(pid, SIGKILL);
             *exit_code = -1;
@@ -521,10 +542,13 @@ static char *run_command(const char *cmd, int *exit_code) {
         *exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
     if (*exit_code == -1)
         sb_puts(&out, "\n[command killed: exceeded 120s timeout]");
-    else if (truncated) {
-        char m[64];
-        snprintf(m, sizeof m, "\n[output truncated at %d bytes]", CAP_BASH_BYTES);
-        sb_puts(&out, m);
+    else {
+        if (intkilled) sb_puts(&out, "\n[command killed: interrupted by user (^C)]");
+        if (truncated) {
+            char m[64];
+            snprintf(m, sizeof m, "\n[output truncated at %d bytes]", CAP_BASH_BYTES);
+            sb_puts(&out, m);
+        }
     }
     if (!out.p) out.p = strdup("");
     return out.p;
@@ -1105,6 +1129,11 @@ static const char *find_invalid_tool_result(cJSON *messages) {
    cannot succeed (auth 401/403 #305; other 4xx and a malformed request
    body caught before the POST, #387). */
 static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, usage *turn_usage, mlist *turn_models) {
+    /* #412(b): a ^C that landed after the previous round's tool loop had
+     * already run its last block must stop the turn HERE, before another
+     * POST is built and sent — interruption is a property of the agent
+     * loop, not of the HTTP transfer. */
+    if (g_interrupted) { fprintf(stderr, "\n%sgcode: interrupted%s\n", CDIM, CRST); return -2; }
     cJSON *body = cJSON_CreateObject();
     cJSON_AddStringToObject(body, "model", cfg->model);
     cJSON_AddNumberToObject(body, "max_tokens", (double)cfg->max_tokens);
@@ -1218,7 +1247,14 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
             /* #302: show the primary argument, then a labelled result block;
              * for edit_file, render the coloured old->new diff (diffvis.py). */
             render_tool_args(b->name ? b->name : "", input);
-            char *result = execute_tool(b->name ? b->name : "", input);
+            /* #412(a): a ^C during an earlier block of this round means
+             * the remaining tool calls must NOT run. Substitute a marker
+             * tool_result — never drop the block: every tool_use needs a
+             * tool_result or the history goes API-invalid and the session
+             * stops being resumable. */
+            char *result = g_interrupted
+                ? strdup("[interrupted by user (^C) — tool not executed]")
+                : execute_tool(b->name ? b->name : "", input);
             cJSON *tr = cJSON_CreateObject();
             cJSON_AddStringToObject(tr, "type", "tool_result");
             cJSON_AddStringToObject(tr, "tool_use_id", b->id ? b->id : "");
@@ -1262,7 +1298,11 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
         cJSON_AddItemToObject(umsg, "content", tool_results);
         cJSON_AddItemToArray(messages, umsg);
         if (persist_message(sess, umsg, "tool")) { ret = -1; goto done; }
-        ret = 1;
+        /* #412: a ^C anywhere in the tool loop ends the TURN, not just the
+         * one child. The results (real + substituted) are already appended
+         * and persisted above, so the next send resumes a valid history. */
+        if (g_interrupted) { fprintf(stderr, "\n%sgcode: interrupted%s\n", CDIM, CRST); ret = -2; }
+        else ret = 1;
     } else {
         cJSON_Delete(tool_results);
         if (ctx.stop_reason && !strcmp(ctx.stop_reason, "refusal"))
