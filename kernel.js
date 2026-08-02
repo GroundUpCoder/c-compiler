@@ -1107,15 +1107,19 @@ var WM_DEFAULT_GRABS = [
  * on the frame: right edge -> E, bottom edge -> S, near the bottom-right
  * corner -> SE (left/top edges just focus — moving-edge resizes are
  * deliberately not in this version).
- * Hit zones are FATTER than the drawn frame (#388): the band accepts
- * presses out to WM_BORDER_HIT (invisible slop OUTWARD past the 4px drawn
- * frame — outward is free, it steals nothing from the client), the SE
- * corner widens E/S into SE within WM_GRIP_HIT of the corner, and on a
- * RESIZABLE surface the SE grip also reaches WM_GRIP_IN INWARD into the
- * client — the one inward steal, sized to the classic scrollbar-corner
- * size box, so a maximized/snapped window (no outward left) stays
- * resizable. Only 'down' is intercepted in that inward square; moves,
- * ups and wheels still reach the app. WM_BORDER stays the DRAWN width —
+ * Hit zones are FATTER than the drawn frame (#388), but ONLY on the edges
+ * that resize: the band accepts presses out to WM_BORDER_HIT past the
+ * RIGHT and BOTTOM edges (invisible slop outward, steals nothing from the
+ * client), the SE corner widens E/S into SE within WM_GRIP_HIT of the
+ * corner, and on a RESIZABLE surface the SE grip also reaches WM_GRIP_IN
+ * INWARD into the client — the one inward steal, sized to the classic
+ * scrollbar-corner size box, so a maximized/snapped window (no outward
+ * left) stays resizable. Only 'down' is intercepted in that inward
+ * square; moves, ups and wheels still reach the app. The TOP and LEFT
+ * edges keep the thin WM_BORDER band: they are focus-only, and invisible
+ * slop there steals the window-behind's chrome in a cascade (a 12px top
+ * band swallows the close box of the title bar it overlaps — the
+ * os-shell applet-close regression). WM_BORDER stays the DRAWN width —
  * raising it would move every screenshot golden. */
 var WM_TITLE_H = 30;                         // font-20 retune (v133-qa): the
                                              // caption must read >= the 30px
@@ -1139,8 +1143,9 @@ var WM_BORDER = 4;                           // DRAWN frame width around
 var WM_GRIP = 16;                            // pre-#388 SE-corner hit metric —
                                              // superseded by WM_GRIP_HIT /
                                              // WM_GRIP_IN below; kept exported
-var WM_BORDER_HIT = 12;                      // hit-only band width (#388):
-                                             // outward slop, never drawn
+var WM_BORDER_HIT = 12;                      // hit-only band width past the E/S
+                                             // edges (#388): outward slop,
+                                             // never drawn; N/W stay WM_BORDER
 var WM_GRIP_HIT = 32;                        // hit-only SE widening along the
                                              // band's E/S edges (#388)
 var WM_GRIP_IN = 16;                         // hit-only SE inward reach into a
@@ -5593,8 +5598,8 @@ Kernel.prototype._wmCursorAt = function (x, y) {
       x >= s.x && x < s.x + dw && y >= s.y - WM_TITLE_H && y < s.y;
     var inClient = x >= s.x && x < s.x + dw && y >= s.y && y < s.y + dh;
     var inFrame = !s.borderless && !inTitle && !inClient &&
-      x >= s.x - WM_BORDER_HIT && x < s.x + dw + WM_BORDER_HIT &&
-      y >= s.y - WM_TITLE_H - WM_BORDER_HIT && y < s.y + dh + WM_BORDER_HIT;
+      x >= s.x - WM_BORDER && x < s.x + dw + WM_BORDER_HIT &&
+      y >= s.y - WM_TITLE_H - WM_BORDER && y < s.y + dh + WM_BORDER_HIT;
     // The SE grip's inward reach (#388) advertises itself, mirroring the
     // hit test: a resizable client's bottom-right WM_GRIP_IN square reads
     // the NWSE cursor even though moves still flow to the app.
@@ -5793,10 +5798,11 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
       x >= s.x && x < s.x + dw && y >= s.y - WM_TITLE_H && y < s.y;
     var inClient = x >= s.x && x < s.x + dw && y >= s.y && y < s.y + dh;
     // The resize frame (todos/0019): a band around title+client, accepting
-    // presses out to WM_BORDER_HIT — fatter than the 4px drawn frame (#388).
+    // presses out to WM_BORDER_HIT past the E/S edges — fatter than the 4px
+    // drawn frame (#388); the focus-only N/W edges keep the thin band.
     var inFrame = !s.borderless && !inTitle && !inClient &&
-      x >= s.x - WM_BORDER_HIT && x < s.x + dw + WM_BORDER_HIT &&
-      y >= s.y - WM_TITLE_H - WM_BORDER_HIT && y < s.y + dh + WM_BORDER_HIT;
+      x >= s.x - WM_BORDER && x < s.x + dw + WM_BORDER_HIT &&
+      y >= s.y - WM_TITLE_H - WM_BORDER && y < s.y + dh + WM_BORDER_HIT;
     // The SE grip's inward reach (#388): on a RESIZABLE surface a press in
     // the client's bottom-right WM_GRIP_IN square starts an SE resize — the
     // only way a maximized/snapped window (band clipped/covered outward)

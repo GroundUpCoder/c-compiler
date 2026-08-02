@@ -475,6 +475,16 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   ract = kernel.wmPointer('down', 390 + K.WM_BORDER_HIT, 230, {});
   check('#388: one px past the fat band is the desktop', ract === 'desktop', ract);
   kernel.wmPointer('up', 390 + K.WM_BORDER_HIT, 230, {});
+  // The focus-only N/W edges keep the thin WM_BORDER band — a fat band
+  // there steals the window-behind's title-bar chrome in a cascade.
+  ract = kernel.wmPointer('down', 200 - K.WM_BORDER - 1, 230, {});
+  check('#388: W band stays thin (one px past WM_BORDER is desktop)',
+    ract === 'desktop', ract);
+  kernel.wmPointer('up', 200 - K.WM_BORDER - 1, 230, {});
+  ract = kernel.wmPointer('down', 250, 200 - K.WM_TITLE_H - K.WM_BORDER - 1, {});
+  check('#388: N band stays thin (one px past WM_BORDER is desktop)',
+    ract === 'desktop', ract);
+  kernel.wmPointer('up', 250, 200 - K.WM_TITLE_H - K.WM_BORDER - 1, {});
   ract = kernel.wmPointer('down', 391, 320 - K.WM_GRIP_HIT + 1, {});
   let rd388 = kernel.wmScene().resizeDrag;
   check('#388: E-band press within WM_GRIP_HIT of the corner widens to SE',
