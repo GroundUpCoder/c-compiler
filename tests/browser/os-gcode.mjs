@@ -18,12 +18,14 @@
 // pixels appearing, view changing and snapping) so the file stays a live
 // sweep guard after the assessment ships.
 //
-// Ctrl+C mid-stream is exercised but NOT asserted as an interrupt: the in-OS
-// libcurl veneer retries on EINTR (wait_step, os/curl/libcurl.c:200) and has
-// no progress callback, so gcode's g_interrupted flag is never consulted
-// in-OS — the leg records whether the transfer died early and only asserts
-// gcode survives. (Native gcode aborts via CURLOPT_XFERINFOFUNCTION; that
-// option is unknown to the veneer.)
+// Ctrl+C is ASSERTED, twice. Since #306 (0f7782c2) the in-OS libcurl veneer
+// implements CURLOPT_XFERINFOFUNCTION, so gcode's g_interrupted flag IS
+// consulted in-OS: leg 4 asserts a mid-stream ^C closes the in-flight
+// transfer early. Leg 4b (#412) asserts the AGENT LOOP itself honours a ^C
+// during a BATCHED tool_use round: the running tool dies, the remaining
+// tool blocks are skipped (substituted "interrupted" tool_results keep the
+// history API-valid), NO further POST leaves the client, and the prompt
+// stays usable.
 //
 // Usage: node os-gcode.mjs
 import fs from 'fs';
@@ -65,6 +67,26 @@ function toolUseResponse(preface, id, name, inputObj) {
     + sse('content_block_delta', { index: 1, delta: { type: 'input_json_delta', partial_json: json.slice(0, mid) } })
     + sse('content_block_delta', { index: 1, delta: { type: 'input_json_delta', partial_json: json.slice(mid) } })
     + sse('content_block_stop', { index: 1 })
+    + sse('message_delta', { delta: { stop_reason: 'tool_use' } })
+    + sse('message_stop', {});
+}
+// #412: SEVERAL tool_use blocks in ONE round — the batched shape whose ^C
+// handling the agent loop must get right (a single-tool round can't show
+// the remaining-blocks-still-run bug).
+function multiToolUseResponse(preface, tools) {
+  let out = sse('message_start', { message: { id: 'msg_u2', role: 'assistant', content: [] } })
+    + sse('content_block_start', { index: 0, content_block: { type: 'text', text: '' } })
+    + sse('content_block_delta', { index: 0, delta: { type: 'text_delta', text: preface } })
+    + sse('content_block_stop', { index: 0 });
+  tools.forEach((t, i) => {
+    const json = JSON.stringify(t.input);
+    const mid = Math.floor(json.length / 2);
+    out += sse('content_block_start', { index: i + 1, content_block: { type: 'tool_use', id: t.id, name: t.name, input: {} } })
+      + sse('content_block_delta', { index: i + 1, delta: { type: 'input_json_delta', partial_json: json.slice(0, mid) } })
+      + sse('content_block_delta', { index: i + 1, delta: { type: 'input_json_delta', partial_json: json.slice(mid) } })
+      + sse('content_block_stop', { index: i + 1 });
+  });
+  return out
     + sse('message_delta', { delta: { stop_reason: 'tool_use' } })
     + sse('message_stop', {});
 }
@@ -146,6 +168,15 @@ const srv = await startSse([
   textResponse('Long input received in full. LONGLINE-DONE'),   // #315 paste leg
   textResponse(longText()),
   STALL,
+  // #412 leg 4b: tool 1 sleeps 20s (killed by the ^C ~3.5s in), tool 2 must
+  // never run. The marker in tool 1's command is SPLIT ('' concatenation):
+  // the rendered tool-args line echoes the command text itself, so an
+  // unsplit marker would appear on screen/history even when the tool dies.
+  multiToolUseResponse('Batching two commands.', [
+    { id: 'toolu_412a', name: 'bash', input: { command: "echo TOOL1-BEGIN; sleep 20; echo TOOL1-''END" } },
+    { id: 'toolu_412b', name: 'bash', input: { command: 'echo SECOND-TOOL-RAN-ANYWAY' } },
+  ]),
+  textResponse('Recovered after interrupt. BATCH-RECOVERY-DONE'),
 ]);
 
 const server = startServer(PORT);
@@ -423,6 +454,45 @@ try {
   check('Ctrl+C mid-stream aborts the in-flight transfer (#306)', srv.stall.closedEarly,
     srv.stall.restWritten ? 'stream ran to completion' : 'no early close observed');
 
+  // ---- leg 4b (#412): ^C during a BATCHED tool round stops the agent loop
+  // (the committed re-creation of the 2026-08-02 repro). Real page-keyboard
+  // Ctrl+C ~3.5s into tool 1's 20s sleep. Pre-fix: tool 1 died (the visible
+  // "partial kill") but tool 2 ran anyway and the tool_results POST went
+  // out ~200ms after the ^C.
+  await page.keyboard.type('batch tools\r', { delay: 30 });
+  await waitBodies(8);
+  await sleep(3500);   // timing subject: tool 1 must be MID-sleep when ^C lands
+  await shot('9b-mid-batch-tool1');
+  const postsAtCtrlC = srv.bodies.length;
+  await page.keyboard.down('Control');
+  await page.keyboard.press('KeyC');
+  await page.keyboard.up('Control');
+  await sleep(6000);   // pre-fix the next POST left ~200ms after the ^C; 6s is ample either way
+  check('#412: no further POST after ^C in a batched tool round',
+    srv.bodies.length === postsAtCtrlC, `POSTs ${postsAtCtrlC} -> ${srv.bodies.length}`);
+  await quiesce(G2.x, G2.y, G2.w, G2.h);
+  await shot('9c-after-batch-ctrlc');
+  // Prompt usable = a follow-up send reaches the API from the SAME gcode (a
+  // dead gcode would drop the line into hush and never POST — the #305
+  // proof shape). Its request body carries the interrupted round's history,
+  // which is where the substituted tool_results must sit.
+  await page.keyboard.type('and back to normal\r', { delay: 30 });
+  await waitBodies(9);
+  await quiesce(G2.x, G2.y, G2.w, G2.h);
+  const fb = srv.bodies[8];
+  const trs = fb.messages.filter((m) => m.role === 'user')
+    .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+    .filter((c) => c.type === 'tool_result');
+  const tr1 = trs.find((c) => c.tool_use_id === 'toolu_412a');
+  const tr2 = trs.find((c) => c.tool_use_id === 'toolu_412b');
+  check('#412: killed tool 1 left a partial tool_result (no TOOL1-END)',
+    tr1 && !tr1.content.includes('TOOL1-END'), tr1 && tr1.content);
+  check('#412: skipped tool 2 got the substituted interrupt tool_result, not its output',
+    tr2 && tr2.content.includes('interrupted by user') && !tr2.content.includes('SECOND-TOOL-RAN-ANYWAY'),
+    tr2 && tr2.content);
+  check('#412: follow-up send reached the API (prompt usable after ^C)',
+    JSON.stringify(fb.messages).includes('and back to normal'));
+
   // ---- leg 5: /clear, the CRED error path, /quit ----------------------
   const clearBefore = await bright(G2.x, G2.y, G2.w, G2.h);
   await page.keyboard.type('/clear\r', { delay: 30 });
@@ -436,7 +506,7 @@ try {
   await quiesce(G2.x, G2.y, G2.w, G2.h);   // new session line + prompt before typing
   const redBefore = await red(G2.x, G2.y, G2.w, G2.h);
   await page.keyboard.type('error demo\r', { delay: 30 });
-  await waitBodies(8);   // exhausted queue -> HTTP 500
+  await waitBodies(10);   // exhausted queue -> HTTP 500
   await quiesce(G2.x, G2.y, G2.w, G2.h);
   const redAfter = await red(G2.x, G2.y, G2.w, G2.h);
   check('HTTP error rendered in red (SGR 31)', redAfter > redBefore + 8,
@@ -447,7 +517,7 @@ try {
   // the SAME gcode must reach the API (a dead gcode drops the line into
   // hush and never POSTs; pre-#305 this was the crash-to-shell).
   await page.keyboard.type('again please\r', { delay: 30 });
-  await waitBodies(9);   // exhausted queue answers 500 again; the POST is the proof
+  await waitBodies(11);   // exhausted queue answers 500 again; the POST is the proof
   await quiesce(G2.x, G2.y, G2.w, G2.h);
   check('REPL survived the HTTP 500: follow-up send reached the API (#305)', true);
   await page.keyboard.type('/quit\r', { delay: 30 });

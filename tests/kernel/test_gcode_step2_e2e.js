@@ -16,6 +16,10 @@
 //  - -c (continue) and --resume PATH reload it: "resumed" line, message
 //    replay visible in the server's request bodies, session usage totals
 //    accumulating across processes.
+//  - #306 SIGINT aborts an in-flight stream; #412 SIGINT during a BATCHED
+//    tool round kills the running child promptly, skips the remaining
+//    tool_use blocks (substituted tool_results keep the session
+//    API-valid/resumable) and sends no further POST.
 //
 // Run: node tests/kernel/test_gcode_step2_e2e.js
 'use strict';
@@ -52,6 +56,19 @@ fs.writeFileSync(scriptPath, JSON.stringify([
   // #306: a stream that starts (one delta) and never ends — the SIGINT leg
   // must abort it mid-flight; without the xferinfo path this run HANGS.
   { kind: 'stall', text: 'Thinking...' },
+  // #412: TWO tool_use blocks in ONE round, SIGINT mid-tool-1. `kill -INT`
+  // signals gcode ALONE (unlike a tty ^C, which signals the whole fg
+  // pgroup), so tool 1's child never sees the signal — that is exactly the
+  // survivor edge run_command's interrupt kill closes: gcode must SIGKILL
+  // the child instead of draining its remaining 30s of sleep, must skip
+  // tool 2 entirely, and must not POST the tool_results round.
+  { kind: 'tools', preface: 'batching', tools: [
+    // NB the marker is SPLIT in the command text ('' concatenation): the
+    // rendered tool-args line echoes the command itself, so an unsplit
+    // marker would satisfy the "never finished" grep even when killed.
+    { id: 'toolu_412a', name: 'bash', input: { command: "touch /tmp/t6.started; sleep 30; echo T6-TOOL1-''END" } },
+    { id: 'toolu_412b', name: 'bash', input: { command: 'echo T6-SECOND-RAN | tee /tmp/t6.second' } },
+  ] },
 ]));
 
 (async () => {
@@ -106,6 +123,20 @@ fs.writeFileSync(scriptPath, JSON.stringify([
       'echo irc=$?',
       'cat /tmp/g4.out',
       'cat /tmp/g4.err',
+      // ---- #412: SIGINT during a BATCHED tool round stops the agent loop ----
+      'echo ==t6',
+      `GCODE_STATE_DIR=/tmp/t6state ${G} -p "batch interrupt" >/tmp/g6.out 2>/tmp/g6.err &`,
+      'G6=$!',
+      'for i in $(seq 1 400); do [ -f /tmp/t6.started ] && break; sleep 0.05; done',  // tool 1 is running (bounded poll, 0155)
+      'echo T6A=$(date +%s)',
+      'kill -INT $G6',
+      'wait $G6',
+      'echo g6rc=$?',
+      'echo T6B=$(date +%s)',
+      'cat /tmp/g6.out /tmp/g6.err',
+      '[ -f /tmp/t6.second ] && echo T6-SECOND-FILE-EXISTS || echo T6-SECOND-FILE-ABSENT',
+      'echo ==t6log',
+      'cat /tmp/t6state/sessions/*.jsonl',
       'echo ==end',
     ], { image, timeout: 300000 });
     const out = s.stdout;
@@ -175,9 +206,32 @@ fs.writeFileSync(scriptPath, JSON.stringify([
     check('t4: interrupted run exits 0', t4.includes('irc=0'), JSON.stringify(t4));
     check('session completed', out.includes('==end'), out.slice(-300));
 
+    // ---- run 6 (#412): SIGINT during a batched tool round ----
+    // Pre-fix: tool 1 drains its full 30s sleep (the signal never reached
+    // the child), tool 2 runs anyway, and the tool_results POST goes out.
+    const t6 = section(out, 't6');
+    const tA = /T6A=(\d+)/.exec(t6), tB = /T6B=(\d+)/.exec(t6);
+    check('#412: interrupted run returned promptly (child killed, not drained)',
+      tA && tB && Number(tB[1]) - Number(tA[1]) <= 10,
+      tA && tB ? `${Number(tB[1]) - Number(tA[1])}s` : JSON.stringify(t6.slice(0, 200)));
+    check('#412: tool 1 never finished its sleep (no T6-TOOL1-END)',
+      !t6.includes('T6-TOOL1-END'), JSON.stringify(t6.slice(0, 400)));
+    check('#412: tool 2 never executed', t6.includes('T6-SECOND-FILE-ABSENT'), JSON.stringify(t6.slice(0, 400)));
+    check('#412: interrupt surfaced as "gcode: interrupted"',
+      t6.includes('gcode: interrupted'), JSON.stringify(t6.slice(0, 400)));
+    check('#412: interrupted run exits 0', t6.includes('g6rc=0'), JSON.stringify(t6));
+    // The persisted session must stay API-valid: the skipped block gets a
+    // SUBSTITUTED tool_result (never dropped), and the turn ends interrupted.
+    const t6log = section(out, 't6log');
+    check('#412: skipped tool_use kept a substituted tool_result in the log',
+      /"tool_use_id":"toolu_412b"[^\n]*interrupted by user/.test(t6log), JSON.stringify(t6log.slice(-400)));
+    check('#412: turn_end status is interrupted',
+      t6log.includes('"status":"interrupted"'), JSON.stringify(t6log.slice(-400)));
+
     // ---- server side: the replayed history really reached the API ----
     const bodies = fs.readFileSync(bodiesPath, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-    check('6 requests reached the server', bodies.length === 6, String(bodies.length));
+    check('7 requests reached the server (#412: NO tool_results POST after the ^C)',
+      bodies.length === 7, String(bodies.length));
     const flat = (b) => JSON.stringify(b.messages);
     check('request 2 replays turn 1 (user + assistant)',
       bodies[1].messages.length === 3 && flat(bodies[1]).includes('say hi') && flat(bodies[1]).includes('First reply.'),

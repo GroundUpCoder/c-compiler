@@ -12,6 +12,8 @@
 //   { "kind": "text", "text": "..." }
 //   { "kind": "tool", "preface": "...", "id": "toolu_x", "name": "bash",
 //     "input": {...} }   (input json split in two partials on the wire)
+//   { "kind": "tools", "preface": "...", "tools": [{id, name, input}, ...] }
+//     (SEVERAL tool_use blocks in ONE round — the #412 batched-^C e2e)
 //   { "kind": "stall", "text": "..." }  (message_start + one text delta,
 //     then the stream NEVER ends — the #306 interrupt e2e aborts it)
 // Either kind takes an optional "usage": {input_tokens, output_tokens,
@@ -39,6 +41,23 @@ function render(s) {
       + sse('content_block_delta', { index: 0, delta: { type: 'text_delta', text: s.text } })
       + sse('content_block_stop', { index: 0 })
       + sse('message_delta', { delta: { stop_reason: 'end_turn' }, ...deltaExtra })
+      + sse('message_stop', {});
+  }
+  if (s.kind === 'tools') {
+    let out = sse('message_start', { message: msg })
+      + sse('content_block_start', { index: 0, content_block: { type: 'text', text: '' } })
+      + sse('content_block_delta', { index: 0, delta: { type: 'text_delta', text: s.preface } })
+      + sse('content_block_stop', { index: 0 });
+    s.tools.forEach((t, i) => {
+      const j = JSON.stringify(t.input);
+      const m = Math.floor(j.length / 2);
+      out += sse('content_block_start', { index: i + 1, content_block: { type: 'tool_use', id: t.id, name: t.name, input: {} } })
+        + sse('content_block_delta', { index: i + 1, delta: { type: 'input_json_delta', partial_json: j.slice(0, m) } })
+        + sse('content_block_delta', { index: i + 1, delta: { type: 'input_json_delta', partial_json: j.slice(m) } })
+        + sse('content_block_stop', { index: i + 1 });
+    });
+    return out
+      + sse('message_delta', { delta: { stop_reason: 'tool_use' }, ...deltaExtra })
       + sse('message_stop', {});
   }
   const json = JSON.stringify(s.input);
