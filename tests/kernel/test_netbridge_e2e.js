@@ -364,9 +364,24 @@ function compile(name, src) {
       && /x-guc-url/.test(r.headers.get('access-control-allow-headers') || ''),
     r.status + ' pna=' + r.headers.get('access-control-allow-private-network'));
 
+  // #393: the preflight answers for EVERY origin — it only unlocks sending
+  // the real request, and the allowlist refuses THAT with a 403 the page
+  // can read (a preflight-level 403 is an opaque TypeError to the browser,
+  // which the wrapper could only mislabel "bridge unreachable").
   r = await fetch(bridgeBase + '/fetch', { method: 'OPTIONS',
     headers: { origin: 'https://evil.example', 'access-control-request-method': 'POST' } });
-  check('preflight from a disallowed origin: 403', r.status === 403, r.status);
+  check('#393 preflight from a disallowed origin: 204 (refusal happens on the POST)',
+    r.status === 204, r.status);
+  r = await fetch(bridgeBase + '/fetch', { method: 'POST', headers: {
+    origin: 'https://evil.example',
+    'x-guc-url': targetBase + '/never-either', 'x-guc-method': 'GET', 'x-guc-headers': '[]',
+  } });
+  check('#393 disallowed-origin POST: readable 403 — CORS echo + actionable text',
+    r.status === 403 && r.headers.get('access-control-allow-origin') === 'https://evil.example'
+      && /allow-origin/.test(await r.text()),
+    r.status + ' acao=' + r.headers.get('access-control-allow-origin'));
+  check('the CORS-readable refusal still proxied nothing', !targetPaths.includes('/never-either'),
+    targetPaths.join(','));
 
   r = await fetch(bridgeBase + '/fetch', { method: 'POST', headers: {
     origin: 'https://groundupcoder.com',

@@ -1765,12 +1765,42 @@ function createNetFetch(baseFetch) {
   if (!base) return null;   // no fetch at all: the embedder passes null -> ENOSYS, as ever
   var state = { on: false, url: NET_DEFAULT_URL };
 
+  function errnoErr(errno, msg) {
+    var e = new Error(msg);
+    e.errno = errno;
+    return e;
+  }
+
   function bridgeFetch(url, init) {
     init = init || {};
+    // The encapsulation puts url/method/headers into HTTP header VALUES,
+    // which fetch caps at Latin-1 — one char past 0xFF and base() rejects
+    // the whole request, which the old code then blamed on the bridge
+    // (ticket #393). Make the hop transparent instead: the URL normalizes
+    // to its ASCII serialization (percent-encoded path/query, punycoded
+    // host — the same bytes direct fetch puts on the wire), and the header
+    // JSON ASCII-escapes everything past 0x7F with JSON's own \uXXXX
+    // mechanism, which the bridge's JSON.parse reverses losslessly
+    // (astral pairs included). What remains invalid is reported as OUR
+    // input being invalid (EINVAL naming the value), never as the bridge.
+    var target;
+    try { target = new URL(url + '').href; }
+    catch (e) {
+      return Promise.reject(errnoErr('EINVAL', 'net bridge: invalid target url '
+        + JSON.stringify(url + '') + ' (' + ((e && e.message) || 'unparsable') + ')'));
+    }
+    var method = (init.method || 'GET') + '';
+    if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(method)) {
+      return Promise.reject(errnoErr('EINVAL',
+        'net bridge: invalid HTTP method ' + JSON.stringify(method)));
+    }
+    var hdrJson = JSON.stringify(init.headers || []).replace(/[\u0080-\uffff]/g, function (c) {
+      return '\\u' + ('000' + c.charCodeAt(0).toString(16)).slice(-4);
+    });
     var h = {
-      'x-guc-url': url + '',
-      'x-guc-method': (init.method || 'GET') + '',
-      'x-guc-headers': JSON.stringify(init.headers || []),
+      'x-guc-url': target,
+      'x-guc-method': method,
+      'x-guc-headers': hdrJson,
     };
     var binit = { method: 'POST', headers: h, redirect: 'error' };
     if (init.body) binit.body = init.body;
@@ -1795,16 +1825,42 @@ function createNetFetch(baseFetch) {
         };
       }
       // Bridge-level answer (never carries x-guc-status): policy or failure.
+      // The bridge ANSWERED, so it is emphatically not "unreachable" — name
+      // the real status so the reader can tell a refused request from a
+      // dead bridge at a glance (ticket #393).
       return resp.text().catch(function () { return ''; }).then(function (t) {
-        var e = new Error('net bridge: HTTP ' + resp.status + (t ? ' — ' + t.slice(0, 300) : ''));
-        if (resp.status === 403) e.errno = 'EACCES';
+        var tail = t ? ' — ' + t.slice(0, 300) : '';
+        var e;
+        if (resp.status === 502) {
+          // The bridge proxied the request and the UPSTREAM fetch failed;
+          // EIO with the upstream's error text matches direct-fetch
+          // connect-failure semantics (the NETWORK.md Tier 2.5 ruling).
+          e = errnoErr('EIO', 'net bridge: upstream fetch failed (HTTP 502 from a running bridge)' + tail);
+        } else if (resp.status === 200) {
+          // 200 without the x-guc-status encapsulation: something answered
+          // at the bridge url, but not the bridge protocol.
+          e = new Error('net bridge: ' + state.url + ' answered 200 without x-guc-status'
+            + ' — is the `net` url setting really pointing at tools/net-bridge.js?');
+        } else {
+          e = new Error('net bridge: the bridge at ' + state.url
+            + ' is RUNNING but answered HTTP ' + resp.status + tail);
+          if (resp.status === 403) e.errno = 'EACCES';
+        }
         throw e;
       });
     }, function (err) {
-      // The fetch to the BRIDGE ITSELF failed: configured on, not answering.
+      // The fetch to the BRIDGE ITSELF failed — nothing answered (connection
+      // refused, no listener, DNS). Anything the bridge answers, however
+      // unhappy, resolves and is labelled with its real status above; only
+      // genuine transport failure earns "unreachable"/ENETUNREACH (#393 —
+      // the old handler branded EVERY rejection a dead bridge).
       if (err && err.name === 'AbortError') throw err;   // close(2) abort, not reachability
+      if (err && typeof err.errno === 'string') throw err;  // already honestly labelled
+      // Node's fetch buries the useful part (connect ECONNREFUSED ...) in
+      // err.cause; the top-level message is a bare "fetch failed".
+      var why = (err && err.cause && err.cause.message) || (err && err.message) || 'fetch failed';
       var e = new Error('net bridge unreachable at ' + state.url + ' ('
-        + ((err && err.message) || 'fetch failed') + ') — is tools/net-bridge.js running?');
+        + why + ') — is tools/net-bridge.js running?');
       e.errno = 'ENETUNREACH';
       throw e;
     });
