@@ -172,22 +172,40 @@ static HRESULT ms_Write(IStream *self, const void *pv, ULONG cb,
 static HRESULT ms_Seek(IStream *self, LARGE_INTEGER move, DWORD origin,
                        ULARGE_INTEGER *newPos) {
     MemStream *s = (MemStream *)self;
-    long long base;
+    unsigned long long base;
     switch (origin) {
     case STREAM_SEEK_SET: base = 0; break;
-    case STREAM_SEEK_CUR: base = (long long)s->pos; break;
-    case STREAM_SEEK_END: base = (long long)s->size; break;
+    case STREAM_SEEK_CUR: base = (unsigned long long)s->pos; break;
+    case STREAM_SEEK_END: base = (unsigned long long)s->size; break;
     default: return STG_E_INVALIDFUNCTION;
     }
-    long long to = base + move.QuadPart;
-    if (to < 0) return STG_E_INVALIDFUNCTION;
-    /* Refuse rather than truncate a 64-bit offset into a 32-bit SIZE_T:
-     * a silently-wrapped position is a write at the wrong address later. */
-    if ((unsigned long long)to > (unsigned long long)MS_MAX) {
-        WIN32_UNSUPPORTED("IStream::Seek to offset beyond the address range");
-        return STG_E_INVALIDFUNCTION;
+    /* The DISPLACEMENT is bounded BEFORE it is added, never after.
+     * `base` is always in [0, MS_MAX], but move.QuadPart is a full signed
+     * 64-bit value, so `base + move.QuadPart` can overflow signed long
+     * long — undefined behaviour. A `to < 0` test afterwards is NOT a
+     * backstop for it: a compiler may assume signed overflow cannot
+     * happen and fold `base >= 0 && move >= 0 => to >= 0`, deleting the
+     * test outright. So the whole computation is done unsigned, where
+     * wrapping is defined and each direction is range-checked first.
+     * Both refusals keep the STG_E_INVALIDFUNCTION they returned before,
+     * and only the past-the-top one is loud (seeking before the start is
+     * an ordinary caller error, not a missing capability). */
+    if (move.QuadPart < 0) {
+        /* 0 - (unsigned)v is |v| even for LLONG_MIN, where -v is itself UB. */
+        unsigned long long back = 0ULL - (unsigned long long)move.QuadPart;
+        if (back > base) return STG_E_INVALIDFUNCTION;   /* before the start */
+        s->pos = (SIZE_T)(base - back);
+    } else {
+        /* Refuse rather than truncate a 64-bit offset into a 32-bit
+         * SIZE_T: a silently-wrapped position is a write at the wrong
+         * address later. */
+        if ((unsigned long long)move.QuadPart >
+                (unsigned long long)MS_MAX - base) {
+            WIN32_UNSUPPORTED("IStream::Seek to offset beyond the address range");
+            return STG_E_INVALIDFUNCTION;
+        }
+        s->pos = (SIZE_T)(base + (unsigned long long)move.QuadPart);
     }
-    s->pos = (SIZE_T)to;
     if (newPos) newPos->QuadPart = (ULONG64)s->pos;
     return S_OK;
 }
