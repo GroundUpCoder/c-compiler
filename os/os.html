@@ -183,6 +183,15 @@
   #desksite { display: none; }
   body[data-vt="2"][data-touchui] #desksite { display: inline-block; }
   #desksite.on { background: #4a4a77; color: #ffffff; }
+  /* Full Screen toggle (#398): browser element fullscreen for the whole page.
+     Hidden unless JS proves the API exists (data-fs-ok) — iOS Safari has
+     video-only fullscreen and must not get a dead button. #vtbar stays
+     VISIBLE in fullscreen on purpose: it is the only mouse route back out
+     (hold-Esc alone is the trap the Chrome escape hatch exists to rescue).
+     The .on class is owned by the fullscreenchange EVENT, never the click. */
+  #fsbtn { display: none; }
+  body[data-fs-ok] #fsbtn { display: inline-block; }
+  #fsbtn.on { background: #4a4a77; color: #ffffff; }
   .fontlabel {
     font: 12px 'Menlo', 'Consolas', monospace; color: #8888a8;
     padding: 5px 6px; user-select: none; -webkit-user-select: none;
@@ -339,6 +348,7 @@
     </span>
     <span id="desksite" class="fontbtn" title="desktop site: the unzoomed 1&times; desktop (tap again for the 2&times; mobile zoom)">Desktop site</span>
     <span id="uploadbtn" class="fontbtn" title="upload a file to the OS desktop (lands in /root/Desktop)">Upload</span>
+    <span id="fsbtn" class="fontbtn" title="full screen">&#9974;</span>
     <input id="uploadinput" type="file" multiple style="display:none">
   </div>
   <div id="desktop"><canvas id="screen" width="800" height="500" tabindex="0"></canvas></div>
@@ -1337,6 +1347,31 @@ window.__osOskSent = function () { return oskComp.sentLog(); };   // agent probe
   var saved = null;
   try { saved = localStorage.getItem('gucos.osk.open'); } catch (e) {}
   if (saved === null ? mobileViewport() : saved === '1') oskSetOpen(true, false);
+})();
+
+// Full Screen toggle (#398). The .on class is driven by the fullscreenchange
+// EVENT, never by the click, so the button stays truthful when fullscreen
+// ends by any other route (Esc, hold-Esc, browser chrome). This handler is
+// the future host for keyboard.lock() (the Cmd-W passthrough spike) — the
+// lock/unlock calls slot in next to the request/exit pair below.
+(function () {
+  var btn = document.getElementById('fsbtn');
+  // Feature gate: element fullscreen on the page root. iOS Safari exposes
+  // neither (video-only fullscreen), so the button never appears there.
+  if (!document.fullscreenEnabled || !document.documentElement.requestFullscreen) return;
+  document.body.setAttribute('data-fs-ok', '1');
+  btn.addEventListener('pointerdown', function (e) {
+    e.preventDefault();   // keep the pane focused (oskbtn precedent)
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen().catch(function (err) {
+      // Refused (no gesture / permission): the button simply stays unlit —
+      // fullscreenchange never fired, so the .on state is already truthful.
+      console.warn('fullscreen refused: ' + err);
+    });
+  });
+  document.addEventListener('fullscreenchange', function () {
+    btn.className = 'fontbtn' + (document.fullscreenElement ? ' on' : '');
+  });
 })();
 
 // Agent/test probe (OS.md "agent-friendly by construction"): every tty
