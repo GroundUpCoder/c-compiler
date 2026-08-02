@@ -1241,12 +1241,20 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
     cJSON_ArrayForEach(it, ssrc) {
         char link[GM_PATH_MAX], target[GM_PATH_MAX];
         struct stat sst;
-        if (!cJSON_IsString(it) || !gm_valid_ns(it->string) || !gm_safe_rel(it->valuestring)) {
+        /* '.' names the PAYLOAD ROOT (todos #407): the mechanical -sources
+         * packages mount their whole repo-mirroring payload as the
+         * namespace. MUST MATCH os-common.js validateSrclibShape. */
+        int isroot = cJSON_IsString(it) && strcmp(it->valuestring, ".") == 0;
+        if (!cJSON_IsString(it) || !gm_valid_ns(it->string) ||
+            (!isroot && !gm_safe_rel(it->valuestring))) {
             fprintf(stderr, "gucman: '%s' has a malformed srclib src entry — refusing\n", name);
             fail = 1;
             break;
         }
-        snprintf(target, sizeof target, GM_OPT_DIR "/%s/%s", name, it->valuestring);
+        if (isroot)
+            snprintf(target, sizeof target, GM_OPT_DIR "/%s", name);
+        else
+            snprintf(target, sizeof target, GM_OPT_DIR "/%s/%s", name, it->valuestring);
         if (stat(target, &sst) != 0 || !S_ISDIR(sst.st_mode)) {
             fprintf(stderr, "gucman: '%s' srclib namespace %s -> %s names no packaged dir — refusing\n",
                     name, it->string, it->valuestring);

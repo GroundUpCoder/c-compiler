@@ -821,6 +821,163 @@ function listTreeFiles(fsMod, pathMod, rootDir, entry, label) {
   return files;
 }
 
+/* ---- mechanical `<name>-sources` companion packages (todos #407) ----
+ *
+ * sourcePackageDefs(fsMod, pathMod, rootDir, opts) -> sorted array of
+ * { name, parent, kind, def, inputs }: an in-memory package definition per
+ * SOURCE-BEARING unit, derived by ONE rule with no per-package hand edits.
+ *
+ * The units, both derivations through the same closure:
+ *   kind 'package' — every packages/<p>.json (ungated; a native-sibling
+ *     package's source lives in the producer repo, which publishes only
+ *     binaries) that has at least one `project`/`c` files entry. Name
+ *     <p>-sources, version = the parent's version.
+ *   kind 'image' — every os/image.json system file built from source
+ *     (`project`/`c` entries — /usr/bin/gcode et al). Name = the installed
+ *     basename minus any extension + '-sources', version = the image
+ *     version. A unit whose name a 'package' unit already claims is the
+ *     same software twice — the package derivation wins.
+ *
+ * The payload is the COMPILE CLOSURE, mirrored at repo-relative paths:
+ * every project json reached through `deps`, every listed source, every
+ * `hdrs` file, and every header under every declared include dir. Chosen
+ * over "the project's directory" so a project rooted in a shared dir
+ * (os/wm.json; gucman's includes '..') cannot drag a whole tree in, and
+ * over "no deps" so an app split across projects (netsurf's 12-source
+ * bin.json over its 360-source core) stays complete. Packages with no
+ * compilable entry (fonts, netsurf-demos, win32 — itself a source
+ * package already) get NO unit: there is no "source code for the binary"
+ * to carry. Every def declares srclib:{src:{<parent>:'.'}} — the payload
+ * root as the source namespace — landing the tree at
+ * /usr/local/src/<parent>/<repo-relative path> on install (the writable
+ * srclib tier; /usr is the sealed image volume, so an install-time plant
+ * under /usr/src is impossible by design — that path is the fold's).
+ *
+ * Node-only, and deliberately NOT part of listPackages: the -sources set
+ * ships exclusively through the package repo (tools/mkpkg.js), so the
+ * baked image, the fold, and boot.js --packages never see it and the
+ * published blob cannot grow a byte by construction. `inputs` names the
+ * repo-relative files whose CONTENT this synthesis read (the parent def /
+ * os/image.json) for mkpkg's freshness scan; the closure files themselves
+ * ride in the def as `bin` entries and are scanned as such. */
+function sourcePackageDefs(fsMod, pathMod, rootDir, opts) {
+  opts = opts || {};
+  var pkgDir = opts.packagesDir || pathMod.join(rootDir, 'packages');
+  var manifest = opts.imageManifest ||
+    JSON.parse(fsMod.readFileSync(pathMod.join(rootDir, 'os', 'image.json'), 'utf-8'));
+  var HDR_RE = /\.(h|hh|hpp|inc|def)$/i;
+  var NAME_RE = /^[a-z0-9][a-z0-9_-]*$/;
+
+  // The compile closure of one unit's root entries, as a sorted list of
+  // repo-relative file paths.
+  function closureOf(roots, label) {
+    var files = {}, seenProj = {};
+    function addFile(rel) { files[rel] = true; }
+    function walkHeaders(dirRel) {
+      var abs = pathMod.join(rootDir, dirRel);
+      var ents;
+      try { ents = fsMod.readdirSync(abs, { withFileTypes: true }); } catch (e) { return; }
+      ents.forEach(function (e) {
+        if (e.name.charAt(0) === '.') return;
+        if (e.isDirectory()) walkHeaders(dirRel + '/' + e.name);
+        else if (e.isFile() && HDR_RE.test(e.name)) addFile(dirRel + '/' + e.name);
+      });
+    }
+    function addProject(rel) {
+      var n = normalizeRelPath(rel);
+      if (seenProj[n]) return;
+      seenProj[n] = true;
+      var text;
+      try { text = fsMod.readFileSync(pathMod.join(rootDir, n), 'utf-8'); }
+      catch (e) { throw new Error(label + ': project ' + n + ' is unreadable (' + e.message + ')'); }
+      addFile(n);
+      var dir = n.slice(0, n.lastIndexOf('/'));
+      var proj = JSON.parse(text);
+      (proj.sources || []).forEach(function (s) { addFile(normalizeRelPath(dir + '/' + s)); });
+      (proj.includes || []).forEach(function (inc) { walkHeaders(normalizeRelPath(dir + '/' + inc)); });
+      (proj.deps || []).forEach(function (d) { addProject(dir + '/' + d); });
+    }
+    roots.forEach(function (entry) {
+      if (entry.project !== undefined) addProject(entry.project);
+      if (entry.c !== undefined) {
+        addFile(normalizeRelPath('os/' + entry.c));
+        (entry.hdrs || []).forEach(function (h) { addFile(normalizeRelPath('os/' + h)); });
+      }
+    });
+    var out = Object.keys(files).sort();
+    out.forEach(function (rel) {
+      if (!validRelPath(rel))
+        throw new Error(label + ': closure path ' + JSON.stringify(rel) + ' escapes the repo');
+    });
+    return out;
+  }
+
+  function makeUnit(parent, kind, version, roots, inputs, what) {
+    var name = parent + '-sources';
+    var label = "sources unit '" + name + "'";
+    if (!NAME_RE.test(name))
+      throw new Error(label + ': derived name is not a valid package name');
+    var closure = closureOf(roots, label);
+    if (!closure.length) throw new Error(label + ': empty source closure');
+    var files = {};
+    closure.forEach(function (rel) { files[rel] = { bin: rel }; });
+    var srcns = {};
+    srcns[parent] = '.';
+    return {
+      name: name,
+      parent: parent,
+      kind: kind,
+      inputs: inputs,
+      def: {
+        name: name,
+        version: version,
+        summary: 'Source code for ' + what + ' — mechanical -sources companion, readable at /usr/local/src/' + parent,
+        minBase: 0,
+        files: files,
+        srclib: { src: srcns },
+      },
+    };
+  }
+
+  var units = {};   // name -> unit; 'package' derivation wins over 'image'
+
+  listPackages(fsMod, pathMod, rootDir, { packagesDir: pkgDir }).forEach(function (p) {
+    var def;
+    try { def = JSON.parse(fsMod.readFileSync(pathMod.join(pkgDir, p + '.json'), 'utf-8')); }
+    catch (e) { return; }   // malformed → fails loud in buildPackage, not here
+    var roots = [];
+    Object.keys(def.files || {}).sort().forEach(function (rel) {
+      var entry = def.files[rel];
+      if (entry && (entry.project !== undefined || entry.c !== undefined)) roots.push(entry);
+    });
+    if (!roots.length) return;   // no compilable entry — no source to carry
+    var u = makeUnit(p, 'package', String(def.version), roots,
+      ['packages/' + p + '.json'], "the '" + p + "' package v" + def.version);
+    units[u.name] = u;
+  });
+
+  Object.keys((manifest.system || {}).files || {}).sort().forEach(function (imgPath) {
+    var entry = manifest.system.files[imgPath];
+    if (!entry || (entry.project === undefined && entry.c === undefined)) return;
+    var parent = imgPath.slice(imgPath.lastIndexOf('/') + 1).replace(/\.[A-Za-z0-9]+$/, '');
+    if (units[parent + '-sources']) return;   // same software, packaged — package wins
+    var u = makeUnit(parent, 'image', String(manifest.version | 0), [entry],
+      ['os/image.json'], imgPath + ' (base image v' + (manifest.version | 0) + ')');
+    units[u.name] = u;
+  });
+
+  // A -sources name colliding with a DECLARED package is a repo bug — the
+  // synthesis must never silently shadow (or be shadowed by) a real def.
+  listPackages(fsMod, pathMod, rootDir, { packagesDir: pkgDir, producers: ['clang', 'rust'] })
+    .forEach(function (p) {
+      if (units[p])
+        throw new Error("sources synthesis: derived package '" + p +
+          "' collides with the declared packages/" + p + '.json — rename one');
+    });
+
+  return Object.keys(units).sort().map(function (n) { return units[n]; });
+}
+
 /* ---- the `srclib` package section (win32 source-lib design §3.1) ----
  *
  * Shape validation shared by mkpkg (which also checks the mapped dirs
@@ -829,7 +986,11 @@ function listTreeFiles(fsMod, pathMod, rootDir, entry, label) {
  * plants the baked twin of gucman's install plant). Returns
  * { include: [payload-relative dir, ...], src: { ns: payload-relative dir } }.
  * Namespaces are `[a-z0-9_-]+`: builtin require names carry no '/', so
- * namespaced names (`<ns>/<file>.c`) can never collide with them. */
+ * namespaced names (`<ns>/<file>.c`) can never collide with them.
+ * A src dir of '.' names the PAYLOAD ROOT (todos #407): the mechanical
+ * `-sources` packages mount their whole repo-mirroring payload as the
+ * namespace, so the tree is browsable (and require-able) at
+ * /usr/local/src/<name> without an artificial nesting dir. */
 function validateSrclibShape(srclib, label) {
   if (typeof srclib !== 'object' || srclib === null || Array.isArray(srclib))
     throw new Error(label + ': srclib must be an object');
@@ -850,7 +1011,7 @@ function validateSrclibShape(srclib, label) {
   Object.keys(src).forEach(function (ns) {
     if (!/^[a-z0-9_-]+$/.test(ns))
       throw new Error(label + ": srclib namespace '" + ns + "' must match [a-z0-9_-]+");
-    if (!validRelPath(src[ns]))
+    if (src[ns] !== '.' && !validRelPath(src[ns]))
       throw new Error(label + ': bad srclib src dir ' + JSON.stringify(src[ns]) + " for namespace '" + ns + "'");
   });
   return { include: include, src: src };
@@ -1153,7 +1314,7 @@ function foldPackages(fsMod, pathMod, rootDir, manifest, which, opts) {
         });
       });
       Object.keys(sl.src).sort().forEach(function (ns) {
-        var payloadDir = base + '/' + sl.src[ns];
+        var payloadDir = sl.src[ns] === '.' ? base : base + '/' + sl.src[ns];
         if (!dirSeen[payloadDir])
           throw new Error("package '" + name + "': srclib src dir " + sl.src[ns] + ' is not in the payload');
         pushDir('/usr/src');
@@ -1902,6 +2063,7 @@ var OS_COMMON = {
   foldPackages: foldPackages,
   foldDesktopDefaults: foldDesktopDefaults,
   listTreeFiles: listTreeFiles,
+  sourcePackageDefs: sourcePackageDefs,
   validateSrclibShape: validateSrclibShape,
   validateSeedShape: validateSeedShape,
   packageControl: packageControl,

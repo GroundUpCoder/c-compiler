@@ -293,8 +293,17 @@ async function main() {
   const ftree = between(fout, 'fattree', 'fatcli');
   check('fat: punes card shows [built-in]', ftree.includes(`punes ${pv} [built-in]`),
     ftree.slice(0, 400));
-  check('fat: no card shows [available] (every catalog package is baked)',
-    !ftree.includes('[available]'));
+  // #407: the synthesized -sources companions are mkpkg-only by
+  // construction — the fold never sees them — so on the fat image they are
+  // exactly the cards still [available]. Their presence is the positive
+  // control that sources never enter the baked blob; every FOLDABLE
+  // catalog package must still show [built-in].
+  {
+    const fatAvail = ftree.split('\n').filter((l) => l.includes('[available]'));
+    check('fat: only the never-folded -sources cards show [available] (every foldable package is baked)',
+      fatAvail.length > 0 && fatAvail.every((l) => l.includes('-sources ')),
+      fatAvail.filter((l) => !l.includes('-sources ')).slice(0, 3).join(' | ') || `${fatAvail.length} -sources cards`);
+  }
   {
     // the BUTTON right after punes's card line is its action button:
     // label Install, DISABLED (a sealed /usr/opt package is not installable)

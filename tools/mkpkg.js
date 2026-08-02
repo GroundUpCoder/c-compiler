@@ -23,6 +23,15 @@
 //                                           //   kind: copied into user
 //                                           //   territory, never a symlink
 //
+// Besides the declared definitions, every build synthesizes the mechanical
+// `<name>-sources` companion set (todos #407; os-common sourcePackageDefs):
+// one source package per source-bearing unit — each ungated packages/ def
+// with a project/c entry, and each os/image.json system binary — carrying
+// the unit's compile closure at repo-relative paths plus
+// srclib:{src:{<name>:'.'}}, so gucman plants the /usr/local/src/<name>
+// namespace at install. Synthesized in memory only: listPackages, the
+// fold, and the baked image never see them.
+//
 // The package tree is assembled by the EXACT bake pipeline — os-common's
 // seedEntries/buildProject/createCcDriver over an in-memory BlockFS — so a
 // packaged binary is byte-identical to the same entry baked into the system
@@ -288,9 +297,22 @@ for (const f of (fs.existsSync(pkgDir) ? fs.readdirSync(pkgDir) : [])) {
 }
 
 const avail = COMMON.listPackages(fs, path, ROOT, { producers: [...enabled], packagesDir: pkgDir });
-const names = requested.length ? requested : avail;
+
+/* ---- mechanical `<name>-sources` companions (todos #407) ----------------
+ * Synthesized in memory from the ONE rule in os-common sourcePackageDefs —
+ * never written into packages/, never visible to listPackages, so the fold
+ * and the baked image are untouched by construction; sources ship
+ * exclusively through this repo's index + pool and install like any other
+ * package. Native-sibling packages get no unit (their source lives in the
+ * producer repo, which publishes only binaries). */
+const sourceUnits = new Map();
+for (const u of COMMON.sourcePackageDefs(fs, path, ROOT, { packagesDir: pkgDir, imageManifest })) {
+  sourceUnits.set(u.name, u);
+}
+const allAvail = avail.concat([...sourceUnits.keys()]).sort();
+const names = requested.length ? requested : allAvail;
 for (const n of names) {
-  if (!avail.includes(n)) {
+  if (!allAvail.includes(n)) {
     // Naming a gated package without its producer flag gets the actionable
     // message, not the generic unknown-name one.
     let req = null;
@@ -301,7 +323,8 @@ for (const n of names) {
       process.stderr.write(`mkpkg: package '${n}' is gated on the ${p} sibling ` +
         `(requires: ${JSON.stringify(req)}) — build it with --${p}\n`);
     } else {
-      process.stderr.write(`mkpkg: unknown package '${n}' (declared in packages/: ${avail.join(', ') || 'none'})\n`);
+      process.stderr.write(`mkpkg: unknown package '${n}' (declared in packages/: ${avail.join(', ') || 'none'};` +
+        ` plus ${sourceUnits.size} synthesized -sources companions)\n`);
     }
     process.exit(2);
   }
@@ -401,7 +424,7 @@ for (const p of enabled) driftCheck(p);
  * cannot be pointed at a synthetic tree the way newestBakeInput can) — an
  * under-invalidation here is invisible exactly the way 0354's was. Funded by
  * todos/0363. */
-function newestPkgInput(name, pkg) {
+function newestPkgInput(name, pkg, extraInputs) {
   const newest = { mtimeMs: 0, path: null };
   const seenDirs = {};
   const seenProjects = {};
@@ -443,6 +466,9 @@ function newestPkgInput(name, pkg) {
   statFile(path.join(ROOT, 'compiler.js'));
   statFile(path.join(ROOT, 'tools', 'mkpkg.js'));
   statFile(path.join(pkgDir, name + '.json'));
+  // A synthesized -sources def has no packages/ file; its derivation inputs
+  // (the parent def / os/image.json) are named by the synthesis instead.
+  (extraInputs || []).forEach((rel) => statFile(path.join(ROOT, rel)));
   for (const rel of Object.keys(pkg.files || {})) {
     const entry = pkg.files[rel];
     if (entry.project !== undefined) addProject(entry.project);
@@ -654,8 +680,9 @@ async function assembleTree(name, pkg) {
 /* ---- build / reuse one package; returns its index entry ----
  * `poolDir` is the payload STORE. When it is shared (--pool), this build is one
  * of several readers, so it may only ADD to it — see the superseded-drop below. */
-async function buildPackage(name, poolDir, sharedPool) {
-  const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, name + '.json'), 'utf-8'));
+async function buildPackage(name, poolDir, sharedPool, synth) {
+  const pkg = synth ? synth.def
+    : JSON.parse(fs.readFileSync(path.join(pkgDir, name + '.json'), 'utf-8'));
   if (pkg.name !== name) throw new Error(`packages/${name}.json declares name ${JSON.stringify(pkg.name)}`);
   if (!/^[a-z0-9][a-z0-9_-]*$/.test(pkg.name)) throw new Error(`package '${name}': bad name`);
   if (typeof pkg.version !== 'string' || !/^[A-Za-z0-9._-]+$/.test(pkg.version)) {
@@ -763,7 +790,7 @@ async function buildPackage(name, poolDir, sharedPool) {
     const newest = existing
       .map((f) => ({ f, mtimeMs: fs.statSync(path.join(poolDir, f)).mtimeMs }))
       .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
-    const inp = newestPkgInput(name, pkg);
+    const inp = newestPkgInput(name, pkg, synth ? synth.inputs : null);
     if (newest.mtimeMs >= inp.mtimeMs) {
       const p = path.join(poolDir, newest.f);
       const bytes = fs.readFileSync(p);
@@ -781,7 +808,8 @@ async function buildPackage(name, poolDir, sharedPool) {
   if (srclib) {
     const dirSet = new Set(payload.filter((m) => m.dir).map((m) => m.name));
     for (const d of srclib.include.concat(Object.values(srclib.src))) {
-      if (!dirSet.has(`opt/${name}/${d}`)) {
+      // '.' = the payload root (todos #407), which always exists.
+      if (d !== '.' && !dirSet.has(`opt/${name}/${d}`)) {
         throw new Error(`package '${name}': srclib dir ${d} is not in the assembled payload`);
       }
     }
@@ -821,6 +849,14 @@ async function buildPackage(name, poolDir, sharedPool) {
       }
     }
   }
+  // Cloudflare Pages refuses any single file over 25 MiB (26,214,400 B —
+  // the cap that blocked the v219 image ship, #408). A payload over it
+  // builds fine locally and then silently never deploys; warn LOUDLY here,
+  // where the byte count is first known.
+  if (gz.length > 25 * (1 << 20)) {
+    process.stderr.write(`mkpkg: WARNING: ${file} is ${(gz.length / (1 << 20)).toFixed(1)} MiB — ` +
+      `over the 25 MiB Cloudflare Pages per-file cap; this payload will not deploy\n`);
+  }
   log(`${name} ${pkg.version}: ${file} (${(gz.length / (1 << 20)).toFixed(1)} MiB) in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
   return entryFor(file, sha, gz.length);
 }
@@ -859,9 +895,9 @@ async function main() {
   };
   // Rebuild requested packages; carry every other declared package's entry
   // forward so a single-package invocation still writes a complete index.
-  for (const n of avail) {
+  for (const n of allAvail) {
     if (names.includes(n)) {
-      index.packages[n] = await buildPackage(n, store, sharedPool);
+      index.packages[n] = await buildPackage(n, store, sharedPool, sourceUnits.get(n));
     } else {
       const prev = readIndex();
       if (prev && prev.packages && prev.packages[n]) index.packages[n] = prev.packages[n];
