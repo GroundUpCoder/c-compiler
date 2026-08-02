@@ -144,7 +144,7 @@ thing this file exists to kill.
 ### L13 — only E/S/SE resize zones exist; "not in this version" has had no subsequent version
 - ticket: #102
 - file: kernel.js
-- anchor: * bottom-right corner -> SE (left/top edges just focus — moving-edge
+- anchor: * corner -> SE (left/top edges just focus — moving-edge resizes are
 
 ### L14 — the 0211 divergence list is part-funded, so its unticketed entries read as tracked
 - ticket: #103

@@ -1104,9 +1104,19 @@ var WM_DEFAULT_GRABS = [
  * browser compositor's drawing, and the headless screenshot composite.
  * The client rect is (x, y, w, h); the title bar sits ABOVE it, and a
  * WM_BORDER frame surrounds title+client (todos/0019). Resize drag zones
- * on the frame: right edge -> E, bottom edge -> S, within WM_GRIP of the
- * bottom-right corner -> SE (left/top edges just focus — moving-edge
- * resizes are deliberately not in this version). */
+ * on the frame: right edge -> E, bottom edge -> S, near the bottom-right
+ * corner -> SE (left/top edges just focus — moving-edge resizes are
+ * deliberately not in this version).
+ * Hit zones are FATTER than the drawn frame (#388): the band accepts
+ * presses out to WM_BORDER_HIT (invisible slop OUTWARD past the 4px drawn
+ * frame — outward is free, it steals nothing from the client), the SE
+ * corner widens E/S into SE within WM_GRIP_HIT of the corner, and on a
+ * RESIZABLE surface the SE grip also reaches WM_GRIP_IN INWARD into the
+ * client — the one inward steal, sized to the classic scrollbar-corner
+ * size box, so a maximized/snapped window (no outward left) stays
+ * resizable. Only 'down' is intercepted in that inward square; moves,
+ * ups and wheels still reach the app. WM_BORDER stays the DRAWN width —
+ * raising it would move every screenshot golden. */
 var WM_TITLE_H = 30;                         // font-20 retune (v133-qa): the
                                              // caption must read >= the 30px
                                              // MENU_BAR_H, not under it (was 28,
@@ -1124,8 +1134,17 @@ var WM_LABEL_PX = 20;                        // label text pixel size (todos/027
 var WM_CLOSE_W = 20, WM_CLOSE_PAD = 4;       // close box, right-aligned in the bar
 var WM_BOX_GAP = 2;                          // between the [min][max][close] boxes
                                              // (todos/0030; same 20px metrics)
-var WM_BORDER = 4;                           // resize frame around title+client
-var WM_GRIP = 16;                            // SE-corner zone (resizes both axes)
+var WM_BORDER = 4;                           // DRAWN frame width around
+                                             // title+client (both composites)
+var WM_GRIP = 16;                            // pre-#388 SE-corner hit metric —
+                                             // superseded by WM_GRIP_HIT /
+                                             // WM_GRIP_IN below; kept exported
+var WM_BORDER_HIT = 12;                      // hit-only band width (#388):
+                                             // outward slop, never drawn
+var WM_GRIP_HIT = 32;                        // hit-only SE widening along the
+                                             // band's E/S edges (#388)
+var WM_GRIP_IN = 16;                         // hit-only SE inward reach into a
+                                             // RESIZABLE client (#388)
 var WM_MIN_SIZE = 32;                        // client floor for resize requests
 var WM_DBLCLICK_MS = 400;                    // title double-click window (todos/0025)
 var WM_DBLCLICK_SLOP = 4;                    // ...and max px drift between the downs
@@ -5574,18 +5593,24 @@ Kernel.prototype._wmCursorAt = function (x, y) {
       x >= s.x && x < s.x + dw && y >= s.y - WM_TITLE_H && y < s.y;
     var inClient = x >= s.x && x < s.x + dw && y >= s.y && y < s.y + dh;
     var inFrame = !s.borderless && !inTitle && !inClient &&
-      x >= s.x - WM_BORDER && x < s.x + dw + WM_BORDER &&
-      y >= s.y - WM_TITLE_H - WM_BORDER && y < s.y + dh + WM_BORDER;
+      x >= s.x - WM_BORDER_HIT && x < s.x + dw + WM_BORDER_HIT &&
+      y >= s.y - WM_TITLE_H - WM_BORDER_HIT && y < s.y + dh + WM_BORDER_HIT;
+    // The SE grip's inward reach (#388) advertises itself, mirroring the
+    // hit test: a resizable client's bottom-right WM_GRIP_IN square reads
+    // the NWSE cursor even though moves still flow to the app.
+    if (inClient && !s.borderless && s.resizable &&
+        x >= s.x + dw - WM_GRIP_IN && y >= s.y + dh - WM_GRIP_IN)
+      return CUR_NWSE;
     if (inFrame) {
       // Resize cursors only on RESIZABLE surfaces (fixed-size frames read the
       // arrow, matching Windows — the 0024 scale-drag is a power gesture, not
       // advertised). Drag zones live on the E/S/SE edges (left/top just focus);
-      // the SE corner widens by WM_GRIP, mirroring the hit test.
+      // the SE corner widens by WM_GRIP_HIT, mirroring the hit test.
       if (!s.resizable) return CUR_DEFAULT;
       var ex = x >= s.x + dw ? 1 : 0;
       var ey = y >= s.y + dh ? 1 : 0;
-      if (ex && y >= s.y + dh - WM_GRIP) ey = 1;
-      if (ey && x >= s.x + dw - WM_GRIP) ex = 1;
+      if (ex && y >= s.y + dh - WM_GRIP_HIT) ey = 1;
+      if (ey && x >= s.x + dw - WM_GRIP_HIT) ex = 1;
       return ex && ey ? CUR_NWSE : ex ? CUR_EW : ey ? CUR_NS : CUR_DEFAULT;
     }
     if (inTitle) return CUR_DEFAULT;
@@ -5767,10 +5792,17 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
     var inTitle = !s.borderless &&
       x >= s.x && x < s.x + dw && y >= s.y - WM_TITLE_H && y < s.y;
     var inClient = x >= s.x && x < s.x + dw && y >= s.y && y < s.y + dh;
-    // The resize frame: a WM_BORDER band around title+client (todos/0019).
+    // The resize frame (todos/0019): a band around title+client, accepting
+    // presses out to WM_BORDER_HIT — fatter than the 4px drawn frame (#388).
     var inFrame = !s.borderless && !inTitle && !inClient &&
-      x >= s.x - WM_BORDER && x < s.x + dw + WM_BORDER &&
-      y >= s.y - WM_TITLE_H - WM_BORDER && y < s.y + dh + WM_BORDER;
+      x >= s.x - WM_BORDER_HIT && x < s.x + dw + WM_BORDER_HIT &&
+      y >= s.y - WM_TITLE_H - WM_BORDER_HIT && y < s.y + dh + WM_BORDER_HIT;
+    // The SE grip's inward reach (#388): on a RESIZABLE surface a press in
+    // the client's bottom-right WM_GRIP_IN square starts an SE resize — the
+    // only way a maximized/snapped window (band clipped/covered outward)
+    // stays resizable. 'down' only: moves/ups/wheels still reach the app.
+    var inGrip = inClient && !s.borderless && s.resizable &&
+      x >= s.x + dw - WM_GRIP_IN && y >= s.y + dh - WM_GRIP_IN;
     // The grab gate (todos/0256, A2): this surface is the topmost hit — with
     // a grab active, a press anywhere but the client area of the holder's
     // own window tree dismisses the holder and is consumed (chrome included:
@@ -5780,7 +5812,7 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
       var gd = this._wmGrabConsume(s, inClient);
       if (gd) return gd;
     }
-    if (inFrame) {
+    if (inFrame || (inGrip && kind === 'down')) {
       if (kind === 'down') {
         this.wmFocus(s.sid);
         // Drag zones on E/S/SE edges. Both kinds get them since todos/0024;
@@ -5788,9 +5820,11 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
         // scale the dst rect (fixed-res apps like doom stay oblivious).
         var ex = x >= s.x + dw ? 1 : 0;                // right edge -> E
         var ey = y >= s.y + dh ? 1 : 0;                // bottom edge -> S
-        // A WM_GRIP corner zone widens E/S into SE near the corner.
-        if (ex && y >= s.y + dh - WM_GRIP) ey = 1;
-        if (ey && x >= s.x + dw - WM_GRIP) ex = 1;
+        // A WM_GRIP_HIT corner zone widens E/S into SE near the corner;
+        // the inward grip square (#388) is SE by definition.
+        if (ex && y >= s.y + dh - WM_GRIP_HIT) ey = 1;
+        if (ey && x >= s.x + dw - WM_GRIP_HIT) ex = 1;
+        if (inGrip) { ex = 1; ey = 1; }
         if (!ex && !ey) return 'border';               // left/top: focus only
         this._wmResizeDrag = { sid: s.sid, ex: ex, ey: ey, x0: x, y0: y,
                                baseW: dw, baseH: dh, curW: dw, curH: dh };
@@ -9132,6 +9166,8 @@ var KERNEL_EXPORTS = {
   WM_TITLE_H: WM_TITLE_H, WM_CLOSE_W: WM_CLOSE_W, WM_CLOSE_PAD: WM_CLOSE_PAD,
   WM_BOX_GAP: WM_BOX_GAP, WM_LABEL_PX: WM_LABEL_PX,
   WM_BORDER: WM_BORDER, WM_GRIP: WM_GRIP, WM_MIN_SIZE: WM_MIN_SIZE,
+  WM_BORDER_HIT: WM_BORDER_HIT, WM_GRIP_HIT: WM_GRIP_HIT,   // hit-only (#388)
+  WM_GRIP_IN: WM_GRIP_IN,
   WM_MAP_TIMEOUT_MS: WM_MAP_TIMEOUT_MS,
   WM_ANIM_MS: WM_ANIM_MS,
   WM_COLORS: WM_COLORS,

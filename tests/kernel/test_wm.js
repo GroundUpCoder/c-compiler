@@ -462,6 +462,57 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   workers.get(appPid).msg({ type: 'wm-sabs', fb: fbDrag.sab, ring: null });
   await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 190, h: 120 });
 
+  // ---- #388 fat hit zones: the band accepts presses out to WM_BORDER_HIT
+  // (invisible slop past the 4px drawn frame), the SE corner widens within
+  // WM_GRIP_HIT of it, and the SE grip reaches WM_GRIP_IN into a RESIZABLE
+  // client. Releases at the press point resize nothing (curW==baseW), so
+  // these probe the boundaries without disturbing the geometry. Window:
+  // (200,200) 190x120 -> right edge 390, bottom edge 320.
+  ract = kernel.wmPointer('down', 390 + K.WM_BORDER_HIT - 1, 230, {});
+  check('#388: press just inside the fat E band starts a drag',
+    ract === 'resize-start', ract);
+  kernel.wmPointer('up', 390 + K.WM_BORDER_HIT - 1, 230, {});
+  ract = kernel.wmPointer('down', 390 + K.WM_BORDER_HIT, 230, {});
+  check('#388: one px past the fat band is the desktop', ract === 'desktop', ract);
+  kernel.wmPointer('up', 390 + K.WM_BORDER_HIT, 230, {});
+  ract = kernel.wmPointer('down', 391, 320 - K.WM_GRIP_HIT + 1, {});
+  let rd388 = kernel.wmScene().resizeDrag;
+  check('#388: E-band press within WM_GRIP_HIT of the corner widens to SE',
+    ract === 'resize-start' && rd388.ex === 1 && rd388.ey === 1,
+    JSON.stringify([ract, rd388]));
+  kernel.wmPointer('up', 391, 320 - K.WM_GRIP_HIT + 1, {});
+  ract = kernel.wmPointer('down', 391, 320 - K.WM_GRIP_HIT - 1, {});
+  rd388 = kernel.wmScene().resizeDrag;
+  check('#388: above the widened corner stays a width-only E drag',
+    ract === 'resize-start' && rd388.ex === 1 && !rd388.ey,
+    JSON.stringify([ract, rd388]));
+  kernel.wmPointer('up', 391, 320 - K.WM_GRIP_HIT - 1, {});
+  ract = kernel.wmPointer('down', 390 - 1, 320 - 1, {});     // inside the client
+  rd388 = kernel.wmScene().resizeDrag;
+  check('#388: SE grip reaches WM_GRIP_IN into the resizable client',
+    ract === 'resize-start' && rd388.ex === 1 && rd388.ey === 1,
+    JSON.stringify([ract, rd388]));
+  kernel.wmPointer('up', 390 - 1, 320 - 1, {});
+  ract = kernel.wmPointer('down', 390 - K.WM_GRIP_IN - 1, 320 - 1, {});
+  check('#388: one px left of the inward grip is the client', ract === 'client', ract);
+  kernel.wmPointer('up', 390 - K.WM_GRIP_IN - 1, 320 - 1, {});
+  ract = kernel.wmPointer('move', 390 - 1, 320 - 1, {});
+  check('#388: moves in the inward grip still reach the app (down-only steal)',
+    ract === 'client', ract);
+  drain(ring1);                                    // the client-leg events
+  // The cursor overlay mirrors the hit test (0105 sync rule): NWSE over the
+  // inward grip and the widened corner, EW on the fat E band, the client's
+  // own cursor (0 = default) just past the grip. CUR_NWSE=5, CUR_EW=7.
+  check('#388: cursor overlay agrees with the hit test',
+    kernel._wmCursorAt(390 - 1, 320 - 1) === 5 &&
+    kernel._wmCursorAt(391, 320 - K.WM_GRIP_HIT + 1) === 5 &&
+    kernel._wmCursorAt(390 + K.WM_BORDER_HIT - 1, 230) === 7 &&
+    kernel._wmCursorAt(390 - K.WM_GRIP_IN - 1, 320 - 1) === 0,
+    JSON.stringify([kernel._wmCursorAt(390 - 1, 320 - 1),
+      kernel._wmCursorAt(391, 320 - K.WM_GRIP_HIT + 1),
+      kernel._wmCursorAt(390 + K.WM_BORDER_HIT - 1, 230),
+      kernel._wmCursorAt(390 - K.WM_GRIP_IN - 1, 320 - 1)]));
+
   ract = kernel.wmPointer('down', 200 + 190 + 2, 200 + 30, {});   // right border
   check('E border starts a width-only drag', ract === 'resize-start', ract);
   kernel.wmPointer('move', 200 - 500, 200 + 30, {});   // far left: clamps
@@ -516,7 +567,14 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
     drain(ring1).length === 0);
   kernel.wmMove(cFix.sid, 400, 100);
   kernel.wmFocus(cFix.sid);                            // topmost for hit tests
-  let fact = kernel.wmPointer('down', 400 + 50 + 1, 100 + 40 + 1, {});   // SE grip
+  // #388: the inward SE grip is RESIZABLE-only — a fixed-size client (games)
+  // keeps every client pixel; its scale gesture stays on the outward band.
+  let fact = kernel.wmPointer('down', 400 + 50 - 1, 100 + 40 - 1, {});
+  check('#388: inward grip does not steal a fixed-size client corner',
+    fact === 'client', fact);
+  kernel.wmPointer('up', 400 + 50 - 1, 100 + 40 - 1, {});
+  drain(ring1);                                        // the client-leg events
+  fact = kernel.wmPointer('down', 400 + 50 + 1, 100 + 40 + 1, {});   // SE grip
   check('SE grip on a fixed window starts a SCALE drag (todos/0024)',
     fact === 'resize-start', fact);
   fact = kernel.wmPointer('move', 400 + 50 + 51, 100 + 40 + 41, {});
