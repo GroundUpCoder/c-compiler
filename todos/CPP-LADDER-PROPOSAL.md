@@ -226,6 +226,9 @@ existing `deque`.)*
 | **micropolis** (SimCity classic, GPL3+trademark note) | city sim, ~50 kloc engine | STL moderate, C-style core | **High** — original UI was Tcl/Tk; needs a from-scratch SDL front-end | Deep sim for the desktop; big front-end investment |
 | **Infra Arcana** (martin-tornqvist/infra-arcana, AGPL) | Lovecraft roguelike, ~60 kloc | modern-ish STL C++ | **Medium** — SDL tiles path exists | A serious roguelike without the curses problem |
 | **bsdgames-era C++ rewrites / 2048.cpp / console tetris (various, MIT)** | tiny tty games | vector/string + ANSI escapes | **Trivial** | Filler wins; prove tty+STL path in an afternoon |
+| **Scintilla** (+ SciTE as the reference front-end) (HPND-style license) | editing component, ~90 kloc | C++17, moderate STL plus its own containers and lexer framework | **High** — a `Plat*` platform layer must be written over the `--sdl` subset; SciTE brings its own shell on top | The natural in-OS code editor. NB the Notepad++ framing is a SEPARATE proposition: Notepad++ is Win32-native, so it belongs to the win32-veneer track, not this SDL ladder — that adjacency is what makes it interesting next to the win32 corpus, and also what makes it not a plain ladder pick |
+| **DOSBox** (GPL2) | C++ x86/DOS emulator, ~130 kloc | moderate STL, C-style core, SDL front-end | **High** — size, audio/timing, SDL1→our subset | A DOS catalogue in a window. NB the emulator family has its own track — see `todos/EMULATORS.md` (routing note below) |
+| **ScummVM** (GPL2+) | adventure-game engine VM, large (core + per-engine) | C++11 with its own `Common::` container/stream layer (historically STL-averse; ported to dozens of platforms) | **High** — size; an OSystem backend must be written over the `--sdl` subset | An engine-VM whose payoff is a large catalogue of runnable adventure games — a natural gucOS showcase app |
 
 *Enabling work surfaced by this tier: `queue`/`stack` headers (trivial);
 optionally a mini-curses over ANSI for the roguelike class (medium — unlocks
@@ -260,6 +263,7 @@ corner cases, fstream+seek, tellg/putback, manipulators.)*
 | **bc-like / calc REPLs in C++ (e.g. Expression-evaluator ports over muparser)** | tiny | iostream REPL loop, getline | **Trivial** | Cheap breadth for cin/getline paths |
 | **Zork/Inform-era C++ IF interpreters (e.g. Glulxe C++ forks / scare)** | interactive fiction terps | fstream game files, iostream tty | **Medium** — check licenses per terp | Story-game shelf for term; pairs with Frotz-class C terps later |
 | **cppcheck** (GPL3) | C/C++ static analyzer, ~200 kloc | STL + iostreams + exceptions at scale | **High** — size; but pure CLI, zero OS surface | Dev-tool synergy: lint the code you write in-OS; stretch pick |
+| **CMake** (BSD-3) | the build-system generator, ~250 kloc | heavy STL + iostreams everywhere, an embedded interpreter (its own language), and it needs a process/exec model | **High** — size; process model → gucOS `posix_spawn` (the ninja precedent) | The generator half of the already-green Tier-3 ninja story: cmake → ninja → in-OS `cc` |
 
 ### Tier 6 — heavy template metaprogramming / full modern STL
 *(Proves: constexpr evaluation depth, variadic packs, SFINAE/concepts-lite,
@@ -278,6 +282,7 @@ at this tier's edge with features macro'd off — Tier 6 turns those ON.)*
 | **PEGTL** (taocpp, Boost-lic) | parser combinator library | template grammars, deep instantiation | **Medium** | Build a tiny language/config-parser demo; frontend depth test |
 | **range-v3** (ericniebler, BSL-1.0) | ranges without `<ranges>` | the deepest TMP in the pre-C++20 world | **High** — a stressor, not an app; expect mini-STL friction | Only as a conformance battery once 6 is otherwise green |
 | **nlohmann/json, restrictions lifted** (already vendored) | re-enable `JSON_HAS_THREE_WAY_COMPARISON` / ranges / `<compare>` as mini-STL grows | operator<=>, ranges integration | **Medium** (drives `<compare>`/`<span>` growth) | Turns the Tier-4 app into the Tier-6 gate with zero new vendoring |
+| **SuperTuxKart** (GPL3) | 3D kart racer, ~200 kloc + its bundled Irrlicht fork | full modern STL across engine + game code (straddles Tier 5/6) | **Very High — HARD-GATED on #374 (OpenGL-on-WebGPU): do not pick this before that GL shim exists.** Threads to strip; large assets | The marquee 3D game if the top end ever opens; meaningless pre-#374 |
 
 ### Deferred / rejected at the top
 
@@ -288,8 +293,18 @@ at this tier's edge with features macro'd off — Tier 6 turns those ON.)*
   net layer is cleanly excisable.
 - **Boost-dependent projects** (ledger, older openttd deps): the Boost
   surface is not a mini-STL-sized problem; avoid.
+  - **Wesnoth** — excluded by this existing rule (Boost-dependent). Recorded
+    by name (ticket #381) so it stops being re-proposed.
+  - **0 A.D.** — excluded twice over by existing rules: Boost-dependent, and
+    OpenGL-dependent (§1's UI constraint is the `--sdl` subset or webgpu.h —
+    no GL until #374); very large besides.
 - **Qt/GTK/wxWidgets apps**: whole-toolkit ports are out of scope; ImGui is
   our GUI substrate.
+- **Emulator cores (Snes9x / VBA-M / DeSmuME)** — routed, not shelved: the
+  emulator ladder is `todos/EMULATORS.md` (SameBoy, the `br_table` A/B and
+  the veneer-build blocker #136 live there); don't duplicate the family into
+  these tier tables. NB VBA-M's wxWidgets front-end falls under the
+  Qt/GTK/wxWidgets rejection above — the emulator core is the portable part.
 
 ---
 
