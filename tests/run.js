@@ -325,6 +325,7 @@ const RULES = [
   [/^tests\/todos\//, ['todos'], null],
   [/^tests\/netsurf\//, ['netsurf-patch'], null],
   [/^tests\/serve\//, ['host'], null],
+  [/^tests\/spawn\//, ['host'], 'the posix_spawn ABI test drives host.js with fake spawnHooks — Node-only, so it rides the host suite (enrolled by #167/#431; it was UNMAPPED and in no suite)'],
   [/^tests\/run\.js$/, ['host'], 'the dispatcher itself — its RULES-closure guard (test_diff_rules.js) is a host test'],
   [/^tests\/bench\//, [], 'informational perf bench (todos/0186) — opt-in, ROM-gated, never a gating suite'],
   [/^tests\/flake\.js$/, [], 'the flake-gate orchestrator (todos/0147) — wraps other suites, no suite of its own'],

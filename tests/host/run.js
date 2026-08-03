@@ -39,6 +39,7 @@ var tests = [
   ['test_netbridge_wrapper.js', []],     // #393: bridge answers are named, never "unreachable"; non-Latin-1 crosses the hop; dead bridge keeps ENETUNREACH
   ['test_browser_out_dirs.js', []],      // no tests/browser output path names a committed dir (logs/ etc.) — sweeps must leave a clean tree clean (#399/#183)
   ['test_manifest_refs.js', []],         // #434: image.json referential integrity — dangling launcher/link/seed refs fail the bake; red-then-green + the v223 sameboy replay
+  ['../spawn/test_spawn_host.js', []],   // 0006 Layer A+B: the posix_spawn struct ABI + host-side marshalling (path/argv/envp/cwd/file_actions/flags/pgid) round-trips byte-for-byte through runModule with fake spawnHooks. Registered by #167/#431: tests/spawn/ was in no suite AND had no RULES row, so it reported UNMAPPED and ran nowhere
   ['../serve/test_first_run.js', []],    // `node serve.js .` prints a URL that 200s (COOP/COEP)
   ['../serve/test_clang_overlay.js', []],// `serve.js --clang` overlay on-ramp: fold-in vs sibling-absent (0141)
   ['../serve/test_native_base_purity.js', []], // CLANG-CPP-EPIC II guardrail (a), 0416-generalized: NO gated (-clang/-rust) name in the base set
@@ -67,11 +68,13 @@ assertMemberRegistry({
   // registering it. Empty is the healthy state.
   exclude: [],
 });
-assertMemberRegistry({
-  dir: path.join(__dirname, '..', 'serve'), pattern: HOST_MEMBER_RE, label: 'tests/host/run.js (../serve rows)',
-  entries: tests.filter(function (t) { return t[0].indexOf('../serve/') === 0; })
-                .map(function (t) { return { file: path.basename(t[0]) }; }),
-  exclude: [],
+['serve', 'spawn'].forEach(function (sub) {
+  assertMemberRegistry({
+    dir: path.join(__dirname, '..', sub), pattern: HOST_MEMBER_RE, label: 'tests/host/run.js (../' + sub + ' rows)',
+    entries: tests.filter(function (t) { return t[0].indexOf('../' + sub + '/') === 0; })
+                  .map(function (t) { return { file: path.basename(t[0]) }; }),
+    exclude: [],
+  });
 });
 
 // serve.js re-bakes a stale os-system.img BEFORE listening (todos/0082), so
