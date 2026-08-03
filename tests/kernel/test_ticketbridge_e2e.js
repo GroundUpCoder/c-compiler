@@ -218,7 +218,7 @@ async function runClient(cfg) {
       && !('body' in cap) && !('priority' in cap) && !('difficulty' in cap),
     JSON.stringify(cap));
 
-  // A3: handler ABSENT — the truthful "this host has no netguc side" leg.
+  // A3: handler ABSENT — the truthful "no handler installed here" leg.
   setHandler('absent');
   resetCapture();
   r = await runClient({

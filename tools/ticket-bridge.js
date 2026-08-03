@@ -142,7 +142,7 @@ function main() {
       fn();
     };
     child.on('error', (e) => answer(() => {
-      // ENOENT is the honest "this host has no netguc side installed"
+      // ENOENT is the honest "this host has no ticket handler installed"
       // answer — a DISTINCT status so the in-OS client can say so.
       if (e && e.code === 'ENOENT') {
         log(n + ': no handler on PATH');
