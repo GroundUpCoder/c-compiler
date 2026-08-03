@@ -1,5 +1,5 @@
 {
-  "version": 226,
+  "version": 227,
   "overlays": [
     {
       "id": "clang-apps",
@@ -75,6 +75,12 @@
       },
       "/usr/bin/curl": {
         "project": "os/curl/cli.json"
+      },
+      "/usr/bin/file-gucos-ticket": {
+        "c": "file-gucos-ticket.c",
+        "hdrs": [
+          "cfgstore.h"
+        ]
       },
       "/usr/bin/gucman": {
         "project": "os/gucman/bin.json"
