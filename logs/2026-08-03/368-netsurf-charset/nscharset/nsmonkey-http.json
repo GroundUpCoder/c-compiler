@@ -1,0 +1,39 @@
+{
+ "bin": true,
+ "name": "nsmonkey-http",
+ "description": "nsmonkey + the REAL gucOS http/https fetcher (gucos/httpfetch.c over __http_open). Charset investigation: lets a headless run exercise the transport's Content-Type header path, which file:// cannot.",
+ "deps": [
+  "../../vendor/netsurf/netsurf-core.json",
+  "../../vendor/netsurf/libwapcaplet/lib.json",
+  "../../vendor/netsurf/libparserutils/lib.json",
+  "../../vendor/netsurf/libhubbub/lib.json",
+  "../../vendor/netsurf/libdom/lib.json",
+  "../../vendor/netsurf/libcss/lib.json",
+  "../../vendor/netsurf/libnsgif/lib.json",
+  "../../vendor/netsurf/libnsbmp/lib.json",
+  "../../vendor/netsurf/libnsutils/lib.json",
+  "../../vendor/libpng/lib.json"
+ ],
+ "includes": [
+  "../../vendor/netsurf"
+ ],
+ "compilerArgs": [
+  "-Dnsmonkey",
+  "-DMONKEY_RESPATH=\"/usr/share/netsurf/\""
+ ],
+ "sources": [
+  "../../vendor/netsurf/netsurf/frontends/monkey/401login.c",
+  "../../vendor/netsurf/netsurf/frontends/monkey/bitmap.c",
+  "../../vendor/netsurf/netsurf/frontends/monkey/browser.c",
+  "../../vendor/netsurf/netsurf/frontends/monkey/dispatch.c",
+  "../../vendor/netsurf/netsurf/frontends/monkey/download.c",
+  "../../vendor/netsurf/netsurf/frontends/monkey/fetch.c",
+  "../../vendor/netsurf/netsurf/frontends/monkey/filetype.c",
+  "../../vendor/netsurf/netsurf/frontends/monkey/layout.c",
+  "monkey-main.c",
+  "../../vendor/netsurf/netsurf/frontends/monkey/output.c",
+  "../../vendor/netsurf/netsurf/frontends/monkey/plot.c",
+  "../../vendor/netsurf/netsurf/frontends/monkey/schedule.c",
+  "../../vendor/netsurf/gucos/httpfetch.c"
+ ]
+}

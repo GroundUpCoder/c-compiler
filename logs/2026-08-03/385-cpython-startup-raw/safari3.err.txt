@@ -1,0 +1,699 @@
+[serve] [mkimage] folding packages: cairodemo, font-noto-cjk-mono, font-unifont, jq, libpng, lua, mgba, micropython, netsurf-demos, punes, quake, sent, sqlite3, win32, winmine
+[serve] [mkimage] baking system image (manifest v183)
+[serve] [mkimage]   /usr/lib/ksvc.wasm (built os/ksvc/bin.json, 364054 bytes)
+[serve] [mkimage]   /usr/bin/sh (built vendor/busybox/bin.json, 246123 bytes)
+[serve] [mkimage]   /usr/bin/psh (compiled protoshell.c)
+[serve] [mkimage]   /usr/bin/cc (compiled cc.c)
+[serve] [mkimage]   /usr/bin/winbox (compiled winbox.c)
+[serve] [mkimage]   /usr/bin/gpubox (built os/gpubox.json, 541115 bytes)
+[serve] [mkimage]   /usr/bin/wm (built os/wm.json, 489600 bytes)
+[serve] [mkimage]   /usr/bin/open (compiled open.c)
+[serve] [mkimage]   /usr/bin/strace (compiled strace.c)
+[serve] [mkimage]   /usr/bin/clip (compiled clip.c)
+[serve] [mkimage]   /usr/bin/gcode (built os/gcode/bin.json, 91308 bytes)
+[serve] [mkimage]   /usr/bin/curl (built os/curl/cli.json, 23392 bytes)
+[serve] [mkimage]   /usr/bin/gucman (built os/gucman/bin.json, 146880 bytes)
+[serve] [mkimage]   /usr/bin/software (built os/win32/software.json, 550705 bytes)
+[serve] [mkimage]   /usr/bin/desktop-defaults (built os/deskdefaults.json, 40422 bytes)
+[mkimage]   /usr/share/gucman/repos (inline, 420 bytes)
+[serve] [mkimage]   /usr/bin/cmdalt (compiled cmdalt.c)
+[serve] [mkimage]   /usr/bin/code -> /usr/bin/gcode
+[serve] [mkimage]   /usr/bin/python -> /usr/bin/cmdalt
+[serve] [mkimage]   /usr/bin/wmctl (compiled wmctl.c)
+[serve] [mkimage]   /usr/bin/doom (built vendor/doom/bin.json, 506777 bytes)
+[serve] [mkimage]   /usr/bin/snake (built vendor/snake/bin.json, 13738 bytes)
+[serve] [mkimage]   /usr/bin/gameboy (built vendor/gameboy/bin.json, 79324 bytes)
+[serve] [mkimage]   /usr/bin/sameboy (built vendor/sameboy/bin.json, 771531 bytes)
+[serve] [mkimage]   /usr/bin/deck (built os/deck/bin.json, 671313 bytes)
+[serve] [mkimage]   /usr/share/deck/gucos.deck (binary os/deck/demo/gucos.deck, 7944 bytes)
+[serve] [mkimage]   /usr/share/deck/deck-title.png (binary os/deck/demo/deck-title.png, 29838 bytes)
+[serve] [mkimage]   /usr/bin/netsurf (built vendor/netsurf/gucos/bin.json, 5648394 bytes)
+[serve] [mkimage]   /usr/share/netsurf/Messages (binary vendor/netsurf/netsurf/resources/Messages.en, 56842 bytes)
+[serve] [mkimage]   /usr/share/netsurf/default.css (binary vendor/netsurf/netsurf/resources/default.css, 5179 bytes)
+[serve] [mkimage]   /usr/share/netsurf/quirks.css (binary vendor/netsurf/netsurf/resources/quirks.css, 306 bytes)
+[serve] [mkimage]   /usr/share/netsurf/internal.css (binary vendor/netsurf/netsurf/resources/internal.css, 6210 bytes)
+[serve] [mkimage]   /usr/share/netsurf/adblock.css (binary vendor/netsurf/netsurf/resources/adblock.css, 7540 bytes)
+[serve] [mkimage]   /usr/share/netsurf/netsurf.png (binary vendor/netsurf/netsurf/resources/netsurf.png, 16486 bytes)
+[serve] [mkimage]   /usr/share/netsurf/favicon.png (binary vendor/netsurf/netsurf/resources/favicon.png, 685 bytes)
+[serve] [mkimage]   /usr/share/netsurf/welcome.html (from welcome.html)
+[serve] [mkimage]   /usr/share/netsurf/mime.types (inline, 385 bytes)
+[serve] [mkimage]   /usr/bin/mgp (built vendor/magicpoint/bin.json, 835105 bytes)
+[serve] [mkimage]   /usr/bin/mgpp (built vendor/magicpoint/mgpp.json, 835342 bytes)
+[serve] [mkimage]   /usr/share/mgp/demo.mgp (binary vendor/magicpoint/demo.mgp, 1558 bytes)
+[serve] [mkimage]   /usr/share/mgp/demo.gif (binary vendor/magicpoint/demo.gif, 543 bytes)
+[serve] [mkimage]   /usr/share/mgp/text.mgp (binary vendor/magicpoint/decks/text.mgp, 1594 bytes)
+[serve] [mkimage]   /usr/share/mgp/colors.mgp (binary vendor/magicpoint/decks/colors.mgp, 1525 bytes)
+[serve] [mkimage]   /usr/share/mgp/align.mgp (binary vendor/magicpoint/decks/align.mgp, 1347 bytes)
+[serve] [mkimage]   /usr/share/mgp/bullets.mgp (binary vendor/magicpoint/decks/bullets.mgp, 1409 bytes)
+[serve] [mkimage]   /usr/share/mgp/images.mgp (binary vendor/magicpoint/decks/images.mgp, 1507 bytes)
+[serve] [mkimage]   /usr/share/mgp/backgrounds.mgp (binary vendor/magicpoint/decks/backgrounds.mgp, 1359 bytes)
+[serve] [mkimage]   /usr/share/mgp/effects.mgp (binary vendor/magicpoint/decks/effects.mgp, 1317 bytes)
+[serve] [mkimage]   /usr/share/mgp/SYNTAX (binary vendor/magicpoint/SYNTAX, 14211 bytes)
+[serve] [mkimage]   /usr/share/mgp/tutorial/01-welcome.mgp (binary vendor/magicpoint/decks/tutorial/01-welcome.mgp, 2574 bytes)
+[serve] [mkimage]   /usr/share/mgp/tutorial/02-first-deck.mgp (binary vendor/magicpoint/decks/tutorial/02-first-deck.mgp, 2841 bytes)
+[serve] [mkimage]   /usr/share/mgp/tutorial/03-text.mgp (binary vendor/magicpoint/decks/tutorial/03-text.mgp, 2486 bytes)
+[serve] [mkimage]   /usr/share/mgp/tutorial/04-color.mgp (binary vendor/magicpoint/decks/tutorial/04-color.mgp, 2144 bytes)
+[serve] [mkimage]   /usr/share/mgp/tutorial/05-alignment.mgp (binary vendor/magicpoint/decks/tutorial/05-alignment.mgp, 2250 bytes)
+[serve] [mkimage]   /usr/share/mgp/tutorial/06-lists.mgp (binary vendor/magicpoint/decks/tutorial/06-lists.mgp, 2311 bytes)
+[serve] [mkimage]   /usr/share/mgp/tutorial/07-images.mgp (binary vendor/magicpoint/decks/tutorial/07-images.mgp, 2257 bytes)
+[serve] [mkimage]   /usr/share/mgp/tutorial/08-backgrounds.mgp (binary vendor/magicpoint/decks/tutorial/08-backgrounds.mgp, 1998 bytes)
+[serve] [mkimage]   /usr/share/mgp/tutorial/09-builds.mgp (binary vendor/magicpoint/decks/tutorial/09-builds.mgp, 2133 bytes)
+[serve] [mkimage]   /usr/share/mgp/tutorial/10-mastery.mgp (binary vendor/magicpoint/decks/tutorial/10-mastery.mgp, 3132 bytes)
+[serve] [mkimage]   /usr/share/mgp/talks/posix-on-wasm.mgp (binary vendor/magicpoint/decks/talks/posix-on-wasm.mgp, 2102 bytes)
+[serve] [mkimage]   /usr/bin/term (built os/term/bin.json, 446487 bytes)
+[serve] [mkimage]   /usr/bin/gdidemo (built os/win32/gdidemo.json, 536978 bytes)
+[serve] [mkimage]   /usr/bin/ctldemo (built os/win32/ctldemo.json, 541926 bytes)
+[serve] [mkimage]   /usr/bin/ctldemo.res (binary os/win32/ctldemo.res, 173 bytes)
+[serve] [mkimage]   /usr/bin/k32demo (built os/win32/k32demo.json, 579162 bytes)
+[serve] [mkimage]   /usr/bin/calc (built vendor/calc/bin.json, 592186 bytes)
+[serve] [mkimage]   /usr/bin/calc.res (binary vendor/calc/calc.res, 9012 bytes)
+[serve] [mkimage]   /usr/bin/notepad (built vendor/notepad/bin.json, 605716 bytes)
+[serve] [mkimage]   /usr/bin/notepad.res (binary vendor/notepad/notepad.res, 3135 bytes)
+[serve] [mkimage]   /usr/bin/fileman (built os/win32/fileman.json, 557666 bytes)
+[serve] [mkimage]   /usr/bin/paint (built os/win32/paint.json, 545169 bytes)
+[serve] [mkimage]   /usr/bin/ctlpanel (built os/win32/ctlpanel.json, 566192 bytes)
+[serve] [mkimage]   /usr/share/menu/Games/doom -> /usr/bin/doom
+[serve] [mkimage]   /usr/share/menu/Games/gameboy -> /usr/bin/gameboy
+[serve] [mkimage]   /usr/share/menu/Games/sameboy -> /usr/bin/sameboy
+[serve] [mkimage]   /usr/share/menu/Games/snake (inline, 21 bytes)
+[serve] [mkimage]   /usr/share/menu/Accessories/term -> /usr/bin/term
+[serve] [mkimage]   /usr/share/menu/Accessories/calc -> /usr/bin/calc
+[serve] [mkimage]   /usr/share/menu/Accessories/notepad -> /usr/bin/notepad
+[serve] [mkimage]   /usr/share/menu/Accessories/fileman -> /usr/bin/fileman
+[serve] [mkimage]   /usr/share/menu/Accessories/paint -> /usr/bin/paint
+[serve] [mkimage]   /usr/share/menu/Accessories/netsurf -> /usr/bin/netsurf
+[serve] [mkimage]   /usr/share/menu/Accessories/software -> /usr/bin/software
+[serve] [mkimage]   /usr/share/menu/Demos/deck (inline, 42 bytes)
+[serve] [mkimage]   /usr/share/menu/Demos/mgp (inline, 38 bytes)
+[serve] [mkimage]   /usr/share/menu/Demos/learn-mgp (inline, 53 bytes)
+[serve] [mkimage]   /usr/share/menu/Demos/mgp-plus (inline, 39 bytes)
+[serve] [mkimage]   /usr/share/menu/Demos/winbox -> /usr/bin/winbox
+[serve] [mkimage]   /usr/share/menu/Demos/gpubox -> /usr/bin/gpubox
+[serve] [mkimage]   /usr/share/menu/Demos/gdidemo -> /usr/bin/gdidemo
+[serve] [mkimage]   /usr/share/menu/Demos/ctldemo -> /usr/bin/ctldemo
+[serve] [mkimage]   /usr/share/fonts/mono.ttf (binary vendor/fonts/NotoSansMono-Regular.ttf, 596428 bytes)
+[serve] [mkimage]   /usr/share/fonts/sans.ttf (binary vendor/fonts/NotoSans-Regular.ttf, 621572 bytes)
+[serve] [mkimage]   /usr/share/fonts/sans_bold.ttf (binary vendor/fonts/NotoSans-Bold.ttf, 631484 bytes)
+[serve] [mkimage]   /usr/share/fonts/sans_italic.ttf (binary vendor/fonts/NotoSans-Italic.ttf, 639124 bytes)
+[serve] [mkimage]   /usr/share/fonts/sans_italic_bold.ttf (binary vendor/fonts/NotoSans-BoldItalic.ttf, 646092 bytes)
+[serve] [mkimage]   /usr/share/fonts/serif.ttf (binary vendor/fonts/NotoSerif-Regular.ttf, 712444 bytes)
+[serve] [mkimage]   /usr/share/fonts/serif_bold.ttf (binary vendor/fonts/NotoSerif-Bold.ttf, 747144 bytes)
+[serve] [mkimage]   /usr/share/fonts/mono_bold.ttf (binary vendor/fonts/NotoSansMono-Bold.ttf, 610908 bytes)
+[serve] [mkimage]   /usr/share/sounds/scheme (inline, 682 bytes)
+[serve] [mkimage]   /usr/share/keys (inline, 523 bytes)
+[serve] [mkimage]   /usr/share/display (inline, 698 bytes)
+[serve] [mkimage]   /usr/share/screensaver (inline, 400 bytes)
+[serve] [mkimage]   /usr/share/term (inline, 537 bytes)
+[serve] [mkimage]   /usr/share/sounds/startup.wav (binary os/sounds/startup.wav, 97064 bytes)
+[serve] [mkimage]   /usr/share/sounds/ding.wav (binary os/sounds/ding.wav, 35324 bytes)
+[serve] [mkimage]   /usr/share/sounds/chord.wav (binary os/sounds/chord.wav, 44144 bytes)
+[serve] [mkimage]   /usr/share/sounds/chimes.wav (binary os/sounds/chimes.wav, 44144 bytes)
+[serve] [mkimage]   /usr/share/openwith (inline, 662 bytes)
+[serve] [mkimage]   /usr/share/cmdalt (inline, 1160 bytes)
+[serve] [mkimage]   /usr/bin/coreutils (built vendor/busybox/coreutils.json, 483118 bytes)
+[serve] [mkimage]   /usr/bin/[ -> /usr/bin/coreutils
+[mkimage]   /usr/bin/awk -> /usr/bin/coreutils
+[mkimage]   /usr/bin/base64 -> /usr/bin/coreutils
+[mkimage]   /usr/bin/basename -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/cat -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/cksum -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/cmp -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/comm -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/cp -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/cut -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/date -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/dd -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/diff -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/dirname -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/du -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/echo -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/egrep -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/env -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/expr -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/false -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/fgrep -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/find -> /usr/bin/coreutils
+[mkimage]   /usr/bin/fold -> /usr/bin/coreutils
+[mkimage]   /usr/bin/free -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/grep -> /usr/bin/coreutils
+[mkimage]   /usr/bin/gunzip -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/gzip -> /usr/bin/coreutils
+[mkimage]   /usr/bin/head -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/hostname -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/id -> /usr/bin/coreutils
+[mkimage]   /usr/bin/kill -> /usr/bin/coreutils
+[mkimage]   /usr/bin/less -> /usr/bin/coreutils
+[mkimage]   /usr/bin/ln -> /usr/bin/coreutils
+[mkimage]   /usr/bin/ls -> /usr/bin/coreutils
+[mkimage]   /usr/bin/md5sum -> /usr/bin/coreutils
+[mkimage]   /usr/bin/mkdir -> /usr/bin/coreutils
+[mkimage]   /usr/bin/mktemp -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/mv -> /usr/bin/coreutils
+[mkimage]   /usr/bin/nl -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/od -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/paste -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/pgrep -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/pkill -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/printf -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/ps -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/pwd -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/readlink -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/realpath -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/rm -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/rmdir -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/sed -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/seq -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/sha1sum -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/sha256sum -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/sleep -> /usr/bin/coreutils
+[mkimage]   /usr/bin/sort -> /usr/bin/coreutils
+[mkimage]   /usr/bin/split -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/stat -> /usr/bin/coreutils
+[mkimage]   /usr/bin/sync -> /usr/bin/coreutils
+[mkimage]   /usr/bin/tac -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/tail -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/tar -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/tee -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/test -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/top -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/touch -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/tr -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/true -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/truncate -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/uname -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/uniq -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/unlink -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/uptime -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/usleep -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/vi -> /usr/bin/coreutils
+[mkimage]   /usr/bin/wc -> /usr/bin/coreutils
+[mkimage]   /usr/bin/which -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/whoami -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/xargs -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/yes -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/bin/zcat -> /usr/bin/coreutils
+[serve] [mkimage]   /usr/opt/cairodemo/cairodemo (built vendor/cairo/demo/bin.json, 1636494 bytes)
+[serve] [mkimage]   /usr/bin/cairodemo -> /usr/opt/cairodemo/cairodemo
+[serve] [mkimage]   /usr/share/menu/Demos/cairodemo -> /usr/bin/cairodemo
+[serve] [mkimage]   /usr/opt/cairodemo/control.json (inline, 415 bytes)
+[serve] [mkimage]   /usr/opt/font-noto-cjk-mono/LICENSE (binary vendor/fonts/LICENSE-NotoCJK.txt, 4301 bytes)
+[serve] [mkimage]   /usr/opt/font-noto-cjk-mono/NotoSansMonoCJKjp-VF.ttf (binary vendor/fonts/NotoSansMonoCJKjp-VF.ttf, 35404604 bytes)
+[serve] [mkimage]   /usr/opt/font-noto-cjk-mono/control.json (inline, 280 bytes)
+[serve] [mkimage]   /usr/opt/font-unifont/COPYING (binary vendor/fonts/COPYING-unifont.txt, 24142 bytes)
+[serve] [mkimage]   /usr/opt/font-unifont/unifont.ttf (binary vendor/fonts/unifont-15.0.06.ttf, 12452236 bytes)
+[serve] [mkimage]   /usr/opt/font-unifont/control.json (inline, 273 bytes)
+[serve] [mkimage]   /usr/opt/jq/jq (built vendor/jq/bin.json, 936600 bytes)
+[serve] [mkimage]   /usr/bin/jq -> /usr/opt/jq/jq
+[serve] [mkimage]   /usr/opt/jq/control.json (inline, 281 bytes)
+[mkimage]   /usr/opt/libpng/include/png.h (binary vendor/libpng/png.h, 148525 bytes)
+[serve] [mkimage]   /usr/opt/libpng/include/pngconf.h (binary vendor/libpng/pngconf.h, 22673 bytes)
+[serve] [mkimage]   /usr/opt/libpng/include/pnglibconf.h (binary vendor/libpng/pnglibconf.h, 8090 bytes)
+[serve] [mkimage]   /usr/opt/libpng/include/zconf.h (binary vendor/zlib/src/zconf.h, 16955 bytes)
+[serve] [mkimage]   /usr/opt/libpng/include/zlib.h (binary vendor/zlib/src/zlib.h, 103848 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/png.c (binary vendor/libpng/png.c, 135428 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/png.h (binary vendor/libpng/png.h, 148525 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/pngconf.h (binary vendor/libpng/pngconf.h, 22673 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/pngdebug.h (binary vendor/libpng/pngdebug.h, 5342 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/pngerror.c (binary vendor/libpng/pngerror.c, 26366 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/pngget.c (binary vendor/libpng/pngget.c, 37561 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/pnginfo.h (binary vendor/libpng/pnginfo.h, 10964 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/pnglibconf.h (binary vendor/libpng/pnglibconf.h, 8090 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/pngmem.c (binary vendor/libpng/pngmem.c, 8574 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/pngpread.c (binary vendor/libpng/pngpread.c, 28098 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/pngpriv.h (binary vendor/libpng/pngpriv.h, 94057 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/pngread.c (binary vendor/libpng/pngread.c, 143404 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/pngrio.c (binary vendor/libpng/pngrio.c, 3898 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/pngrtran.c (binary vendor/libpng/pngrtran.c, 172583 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/pngrutil.c (binary vendor/libpng/pngrutil.c, 152278 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/pngset.c (binary vendor/libpng/pngset.c, 60382 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/pngstruct.h (binary vendor/libpng/pngstruct.h, 19190 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/pngtrans.c (binary vendor/libpng/pngtrans.c, 26220 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/pngwio.c (binary vendor/libpng/pngwio.c, 5588 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/pngwrite.c (binary vendor/libpng/pngwrite.c, 78819 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/pngwtran.c (binary vendor/libpng/pngwtran.c, 15336 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/png/pngwutil.c (binary vendor/libpng/pngwutil.c, 80258 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/adler32.c (binary vendor/zlib/src/adler32.c, 4964 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/compress.c (binary vendor/zlib/src/compress.c, 3639 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/crc32.c (binary vendor/zlib/src/crc32.c, 29735 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/crc32.h (binary vendor/zlib/src/crc32.h, 591749 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/deflate.c (binary vendor/zlib/src/deflate.c, 83286 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/deflate.h (binary vendor/zlib/src/deflate.h, 14213 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/gzclose.c (binary vendor/zlib/src/gzclose.c, 668 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/gzguts.h (binary vendor/zlib/src/gzguts.h, 7088 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/gzlib.c (binary vendor/zlib/src/gzlib.c, 17457 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/gzread.c (binary vendor/zlib/src/gzread.c, 22817 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/gzwrite.c (binary vendor/zlib/src/gzwrite.c, 22721 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/infback.c (binary vendor/zlib/src/infback.c, 21139 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/inffast.c (binary vendor/zlib/src/inffast.c, 12982 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/inffast.h (binary vendor/zlib/src/inffast.h, 422 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/inffixed.h (binary vendor/zlib/src/inffixed.h, 5968 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/inflate.c (binary vendor/zlib/src/inflate.c, 52247 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/inflate.h (binary vendor/zlib/src/inflate.h, 6683 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/inftrees.c (binary vendor/zlib/src/inftrees.c, 16672 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/inftrees.h (binary vendor/zlib/src/inftrees.h, 3003 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/trees.c (binary vendor/zlib/src/trees.c, 41030 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/trees.h (binary vendor/zlib/src/trees.h, 8472 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/uncompr.c (binary vendor/zlib/src/uncompr.c, 3711 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/zconf.h (binary vendor/zlib/src/zconf.h, 16955 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/zlib.h (binary vendor/zlib/src/zlib.h, 103848 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/zutil.c (binary vendor/zlib/src/zutil.c, 7454 bytes)
+[serve] [mkimage]   /usr/opt/libpng/src/z/zutil.h (binary vendor/zlib/src/zutil.h, 8512 bytes)
+[serve] [mkimage]   /usr/include/png.h -> /usr/opt/libpng/include/png.h
+[serve] [mkimage]   /usr/include/pngconf.h -> /usr/opt/libpng/include/pngconf.h
+[serve] [mkimage]   /usr/include/pnglibconf.h -> /usr/opt/libpng/include/pnglibconf.h
+[serve] [mkimage]   /usr/include/zconf.h -> /usr/opt/libpng/include/zconf.h
+[serve] [mkimage]   /usr/include/zlib.h -> /usr/opt/libpng/include/zlib.h
+[serve] [mkimage]   /usr/src/png -> /usr/opt/libpng/src/png
+[serve] [mkimage]   /usr/src/z -> /usr/opt/libpng/src/z
+[serve] [mkimage]   /usr/opt/libpng/control.json (inline, 328 bytes)
+[serve] [mkimage]   /usr/opt/lua/lua (built vendor/lua/bin.json, 325954 bytes)
+[serve] [mkimage]   /usr/bin/lua -> /usr/opt/lua/lua
+[serve] [mkimage]   /usr/opt/lua/control.json (inline, 226 bytes)
+[serve] [mkimage]   /usr/opt/mgba/mgba (built vendor/mgba/bin.json, 995333 bytes)
+[serve] [mkimage]   /usr/bin/mgba -> /usr/opt/mgba/mgba
+[serve] [mkimage]   /usr/share/menu/Games/mgba -> /usr/bin/mgba
+[serve] [mkimage]   /usr/opt/mgba/control.json (inline, 404 bytes)
+[serve] [mkimage]   /usr/opt/micropython/micropython (built vendor/micropython/bin.json, 652188 bytes)
+[mkimage]   /usr/bin/micropython -> /usr/opt/micropython/micropython
+[mkimage]   /usr/opt/micropython/control.json (inline, 451 bytes)
+[mkimage]   /usr/opt/netsurf-demos/demos/counter/counter.css (binary vendor/netsurf/demos/pages/counter/counter.css, 1180 bytes)
+[mkimage]   /usr/opt/netsurf-demos/demos/counter/counter.js (binary vendor/netsurf/demos/pages/counter/counter.js, 801 bytes)
+[mkimage]   /usr/opt/netsurf-demos/demos/counter/index.html (binary vendor/netsurf/demos/pages/counter/index.html, 1302 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/demos/events/events.css (binary vendor/netsurf/demos/pages/events/events.css, 1263 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/demos/events/events.js (binary vendor/netsurf/demos/pages/events/events.js, 4238 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/demos/events/index.html (binary vendor/netsurf/demos/pages/events/index.html, 1576 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/demos/hello-js/hello-js.css (binary vendor/netsurf/demos/pages/hello-js/hello-js.css, 1158 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/demos/hello-js/hello-js.js (binary vendor/netsurf/demos/pages/hello-js/hello-js.js, 835 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/demos/hello-js/index.html (binary vendor/netsurf/demos/pages/hello-js/index.html, 1142 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/demos/index.css (binary vendor/netsurf/demos/pages/index.css, 1306 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/demos/index.html (binary vendor/netsurf/demos/pages/index.html, 2390 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/demos/index.js (binary vendor/netsurf/demos/pages/index.js, 455 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/demos/paint/index.html (binary vendor/netsurf/demos/pages/paint/index.html, 1681 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/demos/paint/paint.css (binary vendor/netsurf/demos/pages/paint/paint.css, 1389 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/demos/paint/paint.js (binary vendor/netsurf/demos/pages/paint/paint.js, 5121 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/demos/sketch/index.html (binary vendor/netsurf/demos/pages/sketch/index.html, 1191 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/demos/sketch/sketch.css (binary vendor/netsurf/demos/pages/sketch/sketch.css, 1162 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/demos/sketch/sketch.js (binary vendor/netsurf/demos/pages/sketch/sketch.js, 2627 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/demos/stopwatch/index.html (binary vendor/netsurf/demos/pages/stopwatch/index.html, 1632 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/demos/stopwatch/stopwatch.css (binary vendor/netsurf/demos/pages/stopwatch/stopwatch.css, 1286 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/demos/stopwatch/stopwatch.js (binary vendor/netsurf/demos/pages/stopwatch/stopwatch.js, 2856 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/demos/todo/index.html (binary vendor/netsurf/demos/pages/todo/index.html, 2025 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/demos/todo/todo.css (binary vendor/netsurf/demos/pages/todo/todo.css, 1364 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/demos/todo/todo.js (binary vendor/netsurf/demos/pages/todo/todo.js, 2115 bytes)
+[serve] [mkimage]   /usr/opt/netsurf-demos/control.json (inline, 329 bytes)
+[serve] [mkimage]   /usr/opt/punes/punes (built vendor/punes/bin.json, 6128794 bytes)
+[serve] [mkimage]   /usr/bin/punes -> /usr/opt/punes/punes
+[serve] [mkimage]   /usr/share/menu/Games/punes -> /usr/bin/punes
+[serve] [mkimage]   /usr/opt/punes/control.json (inline, 391 bytes)
+[serve] [mkimage]   /usr/opt/quake/id1/autoexec.cfg (binary vendor/quake/data/id1/autoexec.cfg, 2925 bytes)
+[serve] [mkimage]   /usr/opt/quake/id1/pak0.pak (binary vendor/quake/data/id1/pak0.pak, 18689235 bytes)
+[serve] [mkimage]   /usr/opt/quake/quake (inline, 434 bytes)
+[serve] [mkimage]   /usr/opt/quake/quake-bin (built vendor/quake/bin.json, 496057 bytes)
+[serve] [mkimage]   /usr/bin/quake -> /usr/opt/quake/quake
+[serve] [mkimage]   /usr/share/menu/Games/quake -> /usr/bin/quake
+[serve] [mkimage]   /usr/opt/quake/control.json (inline, 391 bytes)
+[serve] [mkimage]   /usr/opt/sent/sent (built vendor/sent/bin.json, 626314 bytes)
+[serve] [mkimage]   /usr/opt/sent/share/demo.sent (binary vendor/sent/demo.sent, 333 bytes)
+[serve] [mkimage]   /usr/opt/sent/share/nyan.png (binary vendor/sent/nyan.png, 901 bytes)
+[serve] [mkimage]   /usr/opt/sent/share/trans.ff (binary vendor/sent/transparent_test.ff, 20016 bytes)
+[serve] [mkimage]   /usr/opt/sent/slides (inline, 363 bytes)
+[serve] [mkimage]   /usr/bin/sent -> /usr/opt/sent/sent
+[serve] [mkimage]   /usr/bin/slides -> /usr/opt/sent/slides
+[serve] [mkimage]   /usr/share/menu/Demos/slides -> /usr/bin/slides
+[serve] [mkimage]   /usr/opt/sent/control.json (inline, 441 bytes)
+[serve] [mkimage]   /usr/opt/sqlite3/sqlite3 (built vendor/sqlite/bin.json, 1482126 bytes)
+[serve] [mkimage]   /usr/bin/sqlite3 -> /usr/opt/sqlite3/sqlite3
+[serve] [mkimage]   /usr/opt/sqlite3/control.json (inline, 275 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/commctrl.h (binary os/win32/include/commctrl.h, 2203 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/commdlg.h (binary os/win32/include/commdlg.h, 6152 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/htmlhelp.h (binary os/win32/include/htmlhelp.h, 766 bytes)
+[mkimage]   /usr/opt/win32/include/mmsystem.h (binary os/win32/include/mmsystem.h, 827 bytes)
+[mkimage]   /usr/opt/win32/include/shellapi.h (binary os/win32/include/shellapi.h, 2524 bytes)
+[mkimage]   /usr/opt/win32/include/shlobj.h (binary os/win32/include/shlobj.h, 529 bytes)
+[mkimage]   /usr/opt/win32/include/strsafe.h (binary os/win32/include/strsafe.h, 3056 bytes)
+[mkimage]   /usr/opt/win32/include/tchar.h (binary os/win32/include/tchar.h, 2378 bytes)
+[mkimage]   /usr/opt/win32/include/tmschema.h (binary os/win32/include/tmschema.h, 369 bytes)
+[mkimage]   /usr/opt/win32/include/uxtheme.h (binary os/win32/include/uxtheme.h, 1219 bytes)
+[mkimage]   /usr/opt/win32/include/winbase.h (binary os/win32/include/winbase.h, 175 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/windef.h (binary os/win32/include/windef.h, 174 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/windows.h (binary os/win32/include/windows.h, 71160 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/wine/debug.h (binary os/win32/include/wine/debug.h, 702 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/wingdi.h (binary os/win32/include/wingdi.h, 174 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/winnls.h (binary os/win32/include/winnls.h, 174 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/winreg.h (binary os/win32/include/winreg.h, 113 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/winuser.h (binary os/win32/include/winuser.h, 175 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/config/ftconfig.h (binary vendor/freetype/include/freetype/config/ftconfig.h, 1614 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/config/ftheader.h (binary vendor/freetype/include/freetype/config/ftheader.h, 23919 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/config/ftmodule.h (binary vendor/freetype/include/freetype/config/ftmodule.h, 1443 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/config/ftoption.h (binary vendor/freetype/include/freetype/config/ftoption.h, 41690 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/config/ftstdlib.h (binary vendor/freetype/include/freetype/config/ftstdlib.h, 4576 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/config/integer-types.h (binary vendor/freetype/include/freetype/config/integer-types.h, 7450 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/config/mac-support.h (binary vendor/freetype/include/freetype/config/mac-support.h, 1597 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/config/public-macros.h (binary vendor/freetype/include/freetype/config/public-macros.h, 4240 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/freetype.h (binary vendor/freetype/include/freetype/freetype.h, 177129 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftadvanc.h (binary vendor/freetype/include/freetype/ftadvanc.h, 5470 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftbbox.h (binary vendor/freetype/include/freetype/ftbbox.h, 2638 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftbdf.h (binary vendor/freetype/include/freetype/ftbdf.h, 5648 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftbitmap.h (binary vendor/freetype/include/freetype/ftbitmap.h, 9051 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftbzip2.h (binary vendor/freetype/include/freetype/ftbzip2.h, 2786 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftcache.h (binary vendor/freetype/include/freetype/ftcache.h, 34179 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftchapters.h (binary vendor/freetype/include/freetype/ftchapters.h, 2933 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftcid.h (binary vendor/freetype/include/freetype/ftcid.h, 4022 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftcolor.h (binary vendor/freetype/include/freetype/ftcolor.h, 50791 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftdriver.h (binary vendor/freetype/include/freetype/ftdriver.h, 50570 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/fterrdef.h (binary vendor/freetype/include/freetype/fterrdef.h, 12559 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/fterrors.h (binary vendor/freetype/include/freetype/fterrors.h, 9301 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftfntfmt.h (binary vendor/freetype/include/freetype/ftfntfmt.h, 2213 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftgasp.h (binary vendor/freetype/include/freetype/ftgasp.h, 4138 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftglyph.h (binary vendor/freetype/include/freetype/ftglyph.h, 20912 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftgxval.h (binary vendor/freetype/include/freetype/ftgxval.h, 10625 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftgzip.h (binary vendor/freetype/include/freetype/ftgzip.h, 4211 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftimage.h (binary vendor/freetype/include/freetype/ftimage.h, 42337 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftincrem.h (binary vendor/freetype/include/freetype/ftincrem.h, 10696 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftlcdfil.h (binary vendor/freetype/include/freetype/ftlcdfil.h, 11257 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftlist.h (binary vendor/freetype/include/freetype/ftlist.h, 7100 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftlogging.h (binary vendor/freetype/include/freetype/ftlogging.h, 4130 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftlzw.h (binary vendor/freetype/include/freetype/ftlzw.h, 2768 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftmac.h (binary vendor/freetype/include/freetype/ftmac.h, 7771 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftmm.h (binary vendor/freetype/include/freetype/ftmm.h, 27783 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftmodapi.h (binary vendor/freetype/include/freetype/ftmodapi.h, 22544 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftmoderr.h (binary vendor/freetype/include/freetype/ftmoderr.h, 6675 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftotval.h (binary vendor/freetype/include/freetype/ftotval.h, 5346 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftoutln.h (binary vendor/freetype/include/freetype/ftoutln.h, 17403 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftparams.h (binary vendor/freetype/include/freetype/ftparams.h, 5847 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftpfr.h (binary vendor/freetype/include/freetype/ftpfr.h, 4908 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftrender.h (binary vendor/freetype/include/freetype/ftrender.h, 6625 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftsizes.h (binary vendor/freetype/include/freetype/ftsizes.h, 4288 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftsnames.h (binary vendor/freetype/include/freetype/ftsnames.h, 7730 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftstroke.h (binary vendor/freetype/include/freetype/ftstroke.h, 21773 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftsynth.h (binary vendor/freetype/include/freetype/ftsynth.h, 4483 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftsystem.h (binary vendor/freetype/include/freetype/ftsystem.h, 8502 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/fttrigon.h (binary vendor/freetype/include/freetype/fttrigon.h, 7411 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/fttypes.h (binary vendor/freetype/include/freetype/fttypes.h, 14735 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ftwinfnt.h (binary vendor/freetype/include/freetype/ftwinfnt.h, 7949 bytes)
+[mkimage]   /usr/opt/win32/include/freetype/internal/autohint.h (binary vendor/freetype/include/freetype/internal/autohint.h, 7498 bytes)
+[mkimage]   /usr/opt/win32/include/freetype/internal/cffotypes.h (binary vendor/freetype/include/freetype/internal/cffotypes.h, 2354 bytes)
+[mkimage]   /usr/opt/win32/include/freetype/internal/cfftypes.h (binary vendor/freetype/include/freetype/internal/cfftypes.h, 11866 bytes)
+[mkimage]   /usr/opt/win32/include/freetype/internal/compiler-macros.h (binary vendor/freetype/include/freetype/internal/compiler-macros.h, 11532 bytes)
+[mkimage]   /usr/opt/win32/include/freetype/internal/ftcalc.h (binary vendor/freetype/include/freetype/internal/ftcalc.h, 12767 bytes)
+[mkimage]   /usr/opt/win32/include/freetype/internal/ftdebug.h (binary vendor/freetype/include/freetype/internal/ftdebug.h, 13332 bytes)
+[mkimage]   /usr/opt/win32/include/freetype/internal/ftdrv.h (binary vendor/freetype/include/freetype/internal/ftdrv.h, 9214 bytes)
+[mkimage]   /usr/opt/win32/include/freetype/internal/ftgloadr.h (binary vendor/freetype/include/freetype/internal/ftgloadr.h, 4504 bytes)
+[mkimage]   /usr/opt/win32/include/freetype/internal/fthash.h (binary vendor/freetype/include/freetype/internal/fthash.h, 4055 bytes)
+[mkimage]   /usr/opt/win32/include/freetype/internal/ftmemory.h (binary vendor/freetype/include/freetype/internal/ftmemory.h, 16123 bytes)
+[mkimage]   /usr/opt/win32/include/freetype/internal/ftmmtypes.h (binary vendor/freetype/include/freetype/internal/ftmmtypes.h, 3003 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/ftobjs.h (binary vendor/freetype/include/freetype/internal/ftobjs.h, 41946 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/ftpsprop.h (binary vendor/freetype/include/freetype/internal/ftpsprop.h, 1130 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/ftrfork.h (binary vendor/freetype/include/freetype/internal/ftrfork.h, 7651 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/ftserv.h (binary vendor/freetype/include/freetype/internal/ftserv.h, 24053 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/ftstream.h (binary vendor/freetype/include/freetype/internal/ftstream.h, 23230 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/fttrace.h (binary vendor/freetype/include/freetype/internal/fttrace.h, 6012 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/ftvalid.h (binary vendor/freetype/include/freetype/internal/ftvalid.h, 5762 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/psaux.h (binary vendor/freetype/include/freetype/internal/psaux.h, 43936 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/pshints.h (binary vendor/freetype/include/freetype/internal/pshints.h, 20852 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/services/svbdf.h (binary vendor/freetype/include/freetype/internal/services/svbdf.h, 1731 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/services/svcfftl.h (binary vendor/freetype/include/freetype/internal/services/svcfftl.h, 2832 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/services/svcid.h (binary vendor/freetype/include/freetype/internal/services/svcid.h, 2124 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/services/svfntfmt.h (binary vendor/freetype/include/freetype/internal/services/svfntfmt.h, 1348 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/services/svgldict.h (binary vendor/freetype/include/freetype/internal/services/svgldict.h, 1865 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/services/svgxval.h (binary vendor/freetype/include/freetype/internal/services/svgxval.h, 1730 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/services/svkern.h (binary vendor/freetype/include/freetype/internal/services/svkern.h, 1080 bytes)
+[mkimage]   /usr/opt/win32/include/freetype/internal/services/svmetric.h (binary vendor/freetype/include/freetype/internal/services/svmetric.h, 3992 bytes)
+[mkimage]   /usr/opt/win32/include/freetype/internal/services/svmm.h (binary vendor/freetype/include/freetype/internal/services/svmm.h, 8962 bytes)
+[mkimage]   /usr/opt/win32/include/freetype/internal/services/svotval.h (binary vendor/freetype/include/freetype/internal/services/svotval.h, 1253 bytes)
+[mkimage]   /usr/opt/win32/include/freetype/internal/services/svpfr.h (binary vendor/freetype/include/freetype/internal/services/svpfr.h, 1570 bytes)
+[mkimage]   /usr/opt/win32/include/freetype/internal/services/svpostnm.h (binary vendor/freetype/include/freetype/internal/services/svpostnm.h, 1571 bytes)
+[mkimage]   /usr/opt/win32/include/freetype/internal/services/svprop.h (binary vendor/freetype/include/freetype/internal/services/svprop.h, 1677 bytes)
+[mkimage]   /usr/opt/win32/include/freetype/internal/services/svpscmap.h (binary vendor/freetype/include/freetype/internal/services/svpscmap.h, 4272 bytes)
+[mkimage]   /usr/opt/win32/include/freetype/internal/services/svpsinfo.h (binary vendor/freetype/include/freetype/internal/services/svpsinfo.h, 2469 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/services/svsfnt.h (binary vendor/freetype/include/freetype/internal/services/svsfnt.h, 2079 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/services/svttcmap.h (binary vendor/freetype/include/freetype/internal/services/svttcmap.h, 2397 bytes)
+[mkimage]   /usr/opt/win32/include/freetype/internal/services/svtteng.h (binary vendor/freetype/include/freetype/internal/services/svtteng.h, 1007 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/services/svttglyf.h (binary vendor/freetype/include/freetype/internal/services/svttglyf.h, 1251 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/services/svwinfnt.h (binary vendor/freetype/include/freetype/internal/services/svwinfnt.h, 1017 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/sfnt.h (binary vendor/freetype/include/freetype/internal/sfnt.h, 32700 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/svginterface.h (binary vendor/freetype/include/freetype/internal/svginterface.h, 1041 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/t1types.h (binary vendor/freetype/include/freetype/internal/t1types.h, 9563 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/tttypes.h (binary vendor/freetype/include/freetype/internal/tttypes.h, 51663 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/internal/wofftypes.h (binary vendor/freetype/include/freetype/internal/wofftypes.h, 8010 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/otsvg.h (binary vendor/freetype/include/freetype/otsvg.h, 10457 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/t1tables.h (binary vendor/freetype/include/freetype/t1tables.h, 21529 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/ttnameid.h (binary vendor/freetype/include/freetype/ttnameid.h, 58815 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/tttables.h (binary vendor/freetype/include/freetype/tttables.h, 25422 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/freetype/tttags.h (binary vendor/freetype/include/freetype/tttags.h, 5145 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/ft2build.h (binary vendor/freetype/demo/ft2build.h, 298 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/myftmodule.h (binary vendor/freetype/demo/myftmodule.h, 405 bytes)
+[serve] [mkimage]   /usr/opt/win32/include/myftoption.h (binary vendor/freetype/demo/myftoption.h, 898 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/cfgstore.h (from cfgstore.h)
+[serve] [mkimage]   /usr/opt/win32/src/fileops.h (from fileops.h)
+[serve] [mkimage]   /usr/opt/win32/src/fontchain.h (from fontchain.h)
+[serve] [mkimage]   /usr/opt/win32/src/fontcore.h (from fontcore.h)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afadjust.c (binary vendor/freetype/src/autofit/afadjust.c, 58791 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afadjust.h (binary vendor/freetype/src/autofit/afadjust.h, 5078 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afblue.c (binary vendor/freetype/src/autofit/afblue.c, 77328 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afblue.cin (binary vendor/freetype/src/autofit/afblue.cin, 830 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afblue.dat (binary vendor/freetype/src/autofit/afblue.dat, 48975 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afblue.h (binary vendor/freetype/src/autofit/afblue.h, 17056 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afblue.hin (binary vendor/freetype/src/autofit/afblue.hin, 5369 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afcjk.c (binary vendor/freetype/src/autofit/afcjk.c, 66588 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afcjk.h (binary vendor/freetype/src/autofit/afcjk.h, 4215 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afcover.h (binary vendor/freetype/src/autofit/afcover.h, 3159 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afdummy.c (binary vendor/freetype/src/autofit/afdummy.c, 2160 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afdummy.h (binary vendor/freetype/src/autofit/afdummy.h, 877 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/aferrors.h (binary vendor/freetype/src/autofit/aferrors.h, 984 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afglobal.c (binary vendor/freetype/src/autofit/afglobal.c, 14304 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afglobal.h (binary vendor/freetype/src/autofit/afglobal.h, 5413 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afgsub.c (binary vendor/freetype/src/autofit/afgsub.c, 15870 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afgsub.h (binary vendor/freetype/src/autofit/afgsub.h, 896 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afhints.c (binary vendor/freetype/src/autofit/afhints.c, 47927 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afhints.h (binary vendor/freetype/src/autofit/afhints.h, 16428 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afindic.c (binary vendor/freetype/src/autofit/afindic.c, 4719 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afindic.h (binary vendor/freetype/src/autofit/afindic.h, 840 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/aflatin.c (binary vendor/freetype/src/autofit/aflatin.c, 160239 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/aflatin.h (binary vendor/freetype/src/autofit/aflatin.h, 7408 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afloader.c (binary vendor/freetype/src/autofit/afloader.c, 24004 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afloader.h (binary vendor/freetype/src/autofit/afloader.h, 2269 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afmodule.c (binary vendor/freetype/src/autofit/afmodule.c, 14279 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afmodule.h (binary vendor/freetype/src/autofit/afmodule.h, 1349 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afranges.c (binary vendor/freetype/src/autofit/afranges.c, 37170 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afranges.h (binary vendor/freetype/src/autofit/afranges.h, 1083 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afscript.h (binary vendor/freetype/src/autofit/afscript.h, 11464 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afshaper.c (binary vendor/freetype/src/autofit/afshaper.c, 23309 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afshaper.h (binary vendor/freetype/src/autofit/afshaper.h, 1677 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afstyles.h (binary vendor/freetype/src/autofit/afstyles.h, 15087 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/aftypes.h (binary vendor/freetype/src/autofit/aftypes.h, 18694 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afws-decl.h (binary vendor/freetype/src/autofit/afws-decl.h, 872 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/afws-iter.h (binary vendor/freetype/src/autofit/afws-iter.h, 966 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/autofit.c (binary vendor/freetype/src/autofit/autofit.c, 896 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/ft-hb-decls.h (binary vendor/freetype/src/autofit/ft-hb-decls.h, 5350 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/ft-hb-ft.c (binary vendor/freetype/src/autofit/ft-hb-ft.c, 3311 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/ft-hb-ft.h (binary vendor/freetype/src/autofit/ft-hb-ft.h, 1371 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/ft-hb-types.h (binary vendor/freetype/src/autofit/ft-hb-types.h, 4139 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/ft-hb.c (binary vendor/freetype/src/autofit/ft-hb.c, 4487 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/ft-hb.h (binary vendor/freetype/src/autofit/ft-hb.h, 1795 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/hb-script-list.h (binary vendor/freetype/src/autofit/hb-script-list.h, 19854 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/module.mk (binary vendor/freetype/src/autofit/module.mk, 662 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/autofit/rules.mk (binary vendor/freetype/src/autofit/rules.mk, 2691 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftadvanc.c (binary vendor/freetype/src/base/ftadvanc.c, 5496 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftbase.c (binary vendor/freetype/src/base/ftbase.c, 1033 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftbase.h (binary vendor/freetype/src/base/ftbase.h, 2651 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftbbox.c (binary vendor/freetype/src/base/ftbbox.c, 14346 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftbdf.c (binary vendor/freetype/src/base/ftbdf.c, 2177 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftbitmap.c (binary vendor/freetype/src/base/ftbitmap.c, 28296 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftcalc.c (binary vendor/freetype/src/base/ftcalc.c, 26846 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftcid.c (binary vendor/freetype/src/base/ftcid.c, 2540 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftcolor.c (binary vendor/freetype/src/base/ftcolor.c, 3460 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftdbgmem.c (binary vendor/freetype/src/base/ftdbgmem.c, 23899 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftdebug.c (binary vendor/freetype/src/base/ftdebug.c, 14105 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/fterrors.c (binary vendor/freetype/src/base/fterrors.c, 1267 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftfntfmt.c (binary vendor/freetype/src/base/ftfntfmt.c, 1203 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftfstype.c (binary vendor/freetype/src/base/ftfstype.c, 1551 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftgasp.c (binary vendor/freetype/src/base/ftgasp.c, 1355 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftgloadr.c (binary vendor/freetype/src/base/ftgloadr.c, 11115 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftglyph.c (binary vendor/freetype/src/base/ftglyph.c, 24220 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftgxval.c (binary vendor/freetype/src/base/ftgxval.c, 3125 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/fthash.c (binary vendor/freetype/src/base/fthash.c, 8406 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftinit.c (binary vendor/freetype/src/base/ftinit.c, 6339 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftlcdfil.c (binary vendor/freetype/src/base/ftlcdfil.c, 4861 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftmac.c (binary vendor/freetype/src/base/ftmac.c, 31624 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftmm.c (binary vendor/freetype/src/base/ftmm.c, 18518 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftobjs.c (binary vendor/freetype/src/base/ftobjs.c, 161496 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftotval.c (binary vendor/freetype/src/base/ftotval.c, 2216 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftoutln.c (binary vendor/freetype/src/base/ftoutln.c, 28721 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftpatent.c (binary vendor/freetype/src/base/ftpatent.c, 1245 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftpfr.c (binary vendor/freetype/src/base/ftpfr.c, 3730 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftpsprop.c (binary vendor/freetype/src/base/ftpsprop.c, 7500 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/ftrfork.c (binary vendor/freetype/src/base/ftrfork.c, 29390 bytes)
+[mkimage]   /usr/opt/win32/src/freetype/src/base/ftsnames.c (binary vendor/freetype/src/base/ftsnames.c, 4580 bytes)
+[mkimage]   /usr/opt/win32/src/freetype/src/base/ftstream.c (binary vendor/freetype/src/base/ftstream.c, 19478 bytes)
+[mkimage]   /usr/opt/win32/src/freetype/src/base/ftstroke.c (binary vendor/freetype/src/base/ftstroke.c, 64777 bytes)
+[mkimage]   /usr/opt/win32/src/freetype/src/base/ftsynth.c (binary vendor/freetype/src/base/ftsynth.c, 5374 bytes)
+[mkimage]   /usr/opt/win32/src/freetype/src/base/ftsystem.c (binary vendor/freetype/src/base/ftsystem.c, 8149 bytes)
+[mkimage]   /usr/opt/win32/src/freetype/src/base/fttrigon.c (binary vendor/freetype/src/base/fttrigon.c, 10565 bytes)
+[mkimage]   /usr/opt/win32/src/freetype/src/base/fttype1.c (binary vendor/freetype/src/base/fttype1.c, 3047 bytes)
+[mkimage]   /usr/opt/win32/src/freetype/src/base/ftutil.c (binary vendor/freetype/src/base/ftutil.c, 10139 bytes)
+[mkimage]   /usr/opt/win32/src/freetype/src/base/ftver.rc (binary vendor/freetype/src/base/ftver.rc, 2539 bytes)
+[mkimage]   /usr/opt/win32/src/freetype/src/base/ftwinfnt.c (binary vendor/freetype/src/base/ftwinfnt.c, 1306 bytes)
+[mkimage]   /usr/opt/win32/src/freetype/src/base/md5.c (binary vendor/freetype/src/base/md5.c, 8743 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/md5.h (binary vendor/freetype/src/base/md5.h, 1410 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/base/rules.mk (binary vendor/freetype/src/base/rules.mk, 3222 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/psnames/module.mk (binary vendor/freetype/src/psnames/module.mk, 674 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/psnames/psmodule.c (binary vendor/freetype/src/psnames/psmodule.c, 16268 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/psnames/psmodule.h (binary vendor/freetype/src/psnames/psmodule.h, 748 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/psnames/psnamerr.h (binary vendor/freetype/src/psnames/psnamerr.h, 999 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/psnames/psnames.c (binary vendor/freetype/src/psnames/psnames.c, 622 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/psnames/pstables.h (binary vendor/freetype/src/psnames/pstables.h, 268144 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/psnames/rules.mk (binary vendor/freetype/src/psnames/rules.mk, 1900 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/module.mk (binary vendor/freetype/src/sfnt/module.mk, 667 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/pngshim.c (binary vendor/freetype/src/sfnt/pngshim.c, 13188 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/pngshim.h (binary vendor/freetype/src/sfnt/pngshim.h, 1184 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/rules.mk (binary vendor/freetype/src/sfnt/rules.mk, 2392 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/sfdriver.c (binary vendor/freetype/src/sfnt/sfdriver.c, 36784 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/sfdriver.h (binary vendor/freetype/src/sfnt/sfdriver.h, 740 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/sferrors.h (binary vendor/freetype/src/sfnt/sferrors.h, 966 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/sfnt.c (binary vendor/freetype/src/sfnt/sfnt.c, 928 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/sfobjs.c (binary vendor/freetype/src/sfnt/sfobjs.c, 49470 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/sfobjs.h (binary vendor/freetype/src/sfnt/sfobjs.h, 1417 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/sfwoff.c (binary vendor/freetype/src/sfnt/sfwoff.c, 12289 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/sfwoff.h (binary vendor/freetype/src/sfnt/sfwoff.h, 865 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/sfwoff2.c (binary vendor/freetype/src/sfnt/sfwoff2.c, 66531 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/sfwoff2.h (binary vendor/freetype/src/sfnt/sfwoff2.h, 2124 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttbdf.c (binary vendor/freetype/src/sfnt/ttbdf.c, 6439 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttbdf.h (binary vendor/freetype/src/sfnt/ttbdf.h, 1029 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttcmap.c (binary vendor/freetype/src/sfnt/ttcmap.c, 111810 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttcmap.h (binary vendor/freetype/src/sfnt/ttcmap.h, 3727 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttcmapc.h (binary vendor/freetype/src/sfnt/ttcmapc.h, 1227 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttcolr.c (binary vendor/freetype/src/sfnt/ttcolr.c, 62186 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttcolr.h (binary vendor/freetype/src/sfnt/ttcolr.h, 2526 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttcpal.c (binary vendor/freetype/src/sfnt/ttcpal.c, 7964 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttcpal.h (binary vendor/freetype/src/sfnt/ttcpal.h, 1036 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttgpos.c (binary vendor/freetype/src/sfnt/ttgpos.c, 24233 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttgpos.h (binary vendor/freetype/src/sfnt/ttgpos.h, 1152 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttkern.c (binary vendor/freetype/src/sfnt/ttkern.c, 7183 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttkern.h (binary vendor/freetype/src/sfnt/ttkern.h, 1093 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttload.c (binary vendor/freetype/src/sfnt/ttload.c, 41323 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttload.h (binary vendor/freetype/src/sfnt/ttload.h, 2507 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttmtx.c (binary vendor/freetype/src/sfnt/ttmtx.c, 8583 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttmtx.h (binary vendor/freetype/src/sfnt/ttmtx.h, 1289 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttpost.c (binary vendor/freetype/src/sfnt/ttpost.c, 13262 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttpost.h (binary vendor/freetype/src/sfnt/ttpost.h, 1002 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttsbit.c (binary vendor/freetype/src/sfnt/ttsbit.c, 49150 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttsbit.h (binary vendor/freetype/src/sfnt/ttsbit.h, 1672 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttsvg.c (binary vendor/freetype/src/sfnt/ttsvg.c, 10932 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/ttsvg.h (binary vendor/freetype/src/sfnt/ttsvg.h, 1014 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/woff2tags.c (binary vendor/freetype/src/sfnt/woff2tags.c, 4350 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/sfnt/woff2tags.h (binary vendor/freetype/src/sfnt/woff2tags.h, 867 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/smooth/ftgrays.c (binary vendor/freetype/src/smooth/ftgrays.c, 60249 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/smooth/ftgrays.h (binary vendor/freetype/src/smooth/ftgrays.h, 1216 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/smooth/ftsmerrs.h (binary vendor/freetype/src/smooth/ftsmerrs.h, 997 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/smooth/ftsmooth.c (binary vendor/freetype/src/smooth/ftsmooth.c, 20007 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/smooth/ftsmooth.h (binary vendor/freetype/src/smooth/ftsmooth.h, 751 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/smooth/module.mk (binary vendor/freetype/src/smooth/module.mk, 678 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/smooth/rules.mk (binary vendor/freetype/src/smooth/rules.mk, 1856 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/smooth/smooth.c (binary vendor/freetype/src/smooth/smooth.c, 657 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/truetype/module.mk (binary vendor/freetype/src/truetype/module.mk, 687 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/truetype/rules.mk (binary vendor/freetype/src/truetype/rules.mk, 1850 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/truetype/truetype.c (binary vendor/freetype/src/truetype/truetype.c, 874 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/truetype/ttdriver.c (binary vendor/freetype/src/truetype/ttdriver.c, 22120 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/truetype/ttdriver.h (binary vendor/freetype/src/truetype/ttdriver.h, 748 bytes)
+[mkimage]   /usr/opt/win32/src/freetype/src/truetype/tterrors.h (binary vendor/freetype/src/truetype/tterrors.h, 981 bytes)
+[mkimage]   /usr/opt/win32/src/freetype/src/truetype/ttgload.c (binary vendor/freetype/src/truetype/ttgload.c, 80975 bytes)
+[mkimage]   /usr/opt/win32/src/freetype/src/truetype/ttgload.h (binary vendor/freetype/src/truetype/ttgload.h, 1358 bytes)
+[mkimage]   /usr/opt/win32/src/freetype/src/truetype/ttgxvar.c (binary vendor/freetype/src/truetype/ttgxvar.c, 136495 bytes)
+[mkimage]   /usr/opt/win32/src/freetype/src/truetype/ttgxvar.h (binary vendor/freetype/src/truetype/ttgxvar.h, 13859 bytes)
+[mkimage]   /usr/opt/win32/src/freetype/src/truetype/ttinterp.c (binary vendor/freetype/src/truetype/ttinterp.c, 184677 bytes)
+[mkimage]   /usr/opt/win32/src/freetype/src/truetype/ttinterp.h (binary vendor/freetype/src/truetype/ttinterp.h, 18268 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/truetype/ttobjs.c (binary vendor/freetype/src/truetype/ttobjs.c, 39559 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/truetype/ttobjs.h (binary vendor/freetype/src/truetype/ttobjs.h, 9468 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/truetype/ttpload.c (binary vendor/freetype/src/truetype/ttpload.c, 16553 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/src/truetype/ttpload.h (binary vendor/freetype/src/truetype/ttpload.h, 1661 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/srclib/autofit.c (binary vendor/freetype/srclib/autofit.c, 591 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/srclib/ftbase.c (binary vendor/freetype/srclib/ftbase.c, 587 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/srclib/ftbitmap.c (binary vendor/freetype/srclib/ftbitmap.c, 589 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/srclib/ftdebug.c (binary vendor/freetype/srclib/ftdebug.c, 588 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/srclib/ftinit.c (binary vendor/freetype/srclib/ftinit.c, 587 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/srclib/ftmm.c (binary vendor/freetype/srclib/ftmm.c, 585 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/srclib/ftsynth.c (binary vendor/freetype/srclib/ftsynth.c, 588 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/srclib/ftsystem.c (binary vendor/freetype/srclib/ftsystem.c, 589 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/srclib/psnames.c (binary vendor/freetype/srclib/psnames.c, 591 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/srclib/sfnt.c (binary vendor/freetype/srclib/sfnt.c, 585 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/srclib/smooth.c (binary vendor/freetype/srclib/smooth.c, 589 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/freetype/srclib/truetype.c (binary vendor/freetype/srclib/truetype.c, 593 bytes)
+[serve] [mkimage]   /usr/opt/win32/src/keys.h (from keys.h)
+[serve] [mkimage]   /usr/opt/win32/src/listdir.h (from listdir.h)
+[serve] [mkimage]   /usr/opt/win32/src/sounds.h (from sounds.h)
+[serve] [mkimage]   /usr/opt/win32/src/wcwidth.h (from wcwidth.h)
+[serve] [mkimage]   /usr/opt/win32/src/win32/advapi32.c (from win32/advapi32.c)
+[serve] [mkimage]   /usr/opt/win32/src/win32/comctl32.c (from win32/comctl32.c)
+[serve] [mkimage]   /usr/opt/win32/src/win32/comdlg32.c (from win32/comdlg32.c)
+[serve] [mkimage]   /usr/opt/win32/src/win32/crt16.c (from win32/crt16.c)
+[serve] [mkimage]   /usr/opt/win32/src/win32/gdi32.c (from win32/gdi32.c)
+[serve] [mkimage]   /usr/opt/win32/src/win32/gdi32w.c (from win32/gdi32w.c)
+[serve] [mkimage]   /usr/opt/win32/src/win32/kernel32.c (from win32/kernel32.c)
+[serve] [mkimage]   /usr/opt/win32/src/win32/menucore.c (from win32/menucore.c)
+[serve] [mkimage]   /usr/opt/win32/src/win32/menucore.h (from win32/menucore.h)
+[serve] [mkimage]   /usr/opt/win32/src/win32/shell32.c (from win32/shell32.c)
+[serve] [mkimage]   /usr/opt/win32/src/win32/user32.c (from win32/user32.c)
+[serve] [mkimage]   /usr/opt/win32/src/win32/win32_internal.h (from win32/win32_internal.h)
+[serve] [mkimage]   /usr/opt/win32/src/win32/winmm.c (from win32/winmm.c)
+[serve] [mkimage]   /usr/opt/win32/src/win32/wwinmain.c (from win32/wwinmain.c)
+[serve] [mkimage]   /usr/opt/win32/src/wm_agent.h (from wm_agent.h)
+[mkimage]   /usr/include/commctrl.h -> /usr/opt/win32/include/commctrl.h
+[mkimage]   /usr/include/commdlg.h -> /usr/opt/win32/include/commdlg.h
+[mkimage]   /usr/include/freetype -> /usr/opt/win32/include/freetype
+[mkimage]   /usr/include/ft2build.h -> /usr/opt/win32/include/ft2build.h
+[mkimage]   /usr/include/htmlhelp.h -> /usr/opt/win32/include/htmlhelp.h
+[mkimage]   /usr/include/mmsystem.h -> /usr/opt/win32/include/mmsystem.h
+[mkimage]   /usr/include/myftmodule.h -> /usr/opt/win32/include/myftmodule.h
+[mkimage]   /usr/include/myftoption.h -> /usr/opt/win32/include/myftoption.h
+[mkimage]   /usr/include/shellapi.h -> /usr/opt/win32/include/shellapi.h
+[mkimage]   /usr/include/shlobj.h -> /usr/opt/win32/include/shlobj.h
+[mkimage]   /usr/include/strsafe.h -> /usr/opt/win32/include/strsafe.h
+[mkimage]   /usr/include/tchar.h -> /usr/opt/win32/include/tchar.h
+[mkimage]   /usr/include/tmschema.h -> /usr/opt/win32/include/tmschema.h
+[mkimage]   /usr/include/uxtheme.h -> /usr/opt/win32/include/uxtheme.h
+[mkimage]   /usr/include/winbase.h -> /usr/opt/win32/include/winbase.h
+[mkimage]   /usr/include/windef.h -> /usr/opt/win32/include/windef.h
+[mkimage]   /usr/include/windows.h -> /usr/opt/win32/include/windows.h
+[mkimage]   /usr/include/wine -> /usr/opt/win32/include/wine
+[mkimage]   /usr/include/wingdi.h -> /usr/opt/win32/include/wingdi.h
+[mkimage]   /usr/include/winnls.h -> /usr/opt/win32/include/winnls.h
+[serve] [mkimage]   /usr/include/winreg.h -> /usr/opt/win32/include/winreg.h
+[mkimage]   /usr/include/winuser.h -> /usr/opt/win32/include/winuser.h
+[mkimage]   /usr/src/freetype -> /usr/opt/win32/src/freetype/srclib
+[mkimage]   /usr/src/win32 -> /usr/opt/win32/src/win32
+[serve] [mkimage]   /usr/opt/win32/control.json (inline, 346 bytes)
+[serve] [mkimage]   /usr/opt/winmine/winmine (built vendor/winmine/bin.json, 555300 bytes)
+[serve] [mkimage]   /usr/opt/winmine/winmine.res (binary vendor/winmine/winmine.res, 7030 bytes)
+[serve] [mkimage]   /usr/bin/winmine -> /usr/opt/winmine/winmine
+[serve] [mkimage]   /usr/share/menu/Games/winmine -> /usr/bin/winmine
+[serve] [mkimage]   /usr/opt/winmine/control.json (inline, 411 bytes)
+[serve] [mkimage]   /usr/share/desktop/default/Presentations/MagicPoint Tutorial/01-welcome.mgp (binary vendor/magicpoint/decks/tutorial/01-welcome.mgp, 2574 bytes)
+[serve] [mkimage]   /usr/share/desktop/default/Presentations/MagicPoint Tutorial/02-first-deck.mgp (binary vendor/magicpoint/decks/tutorial/02-first-deck.mgp, 2841 bytes)
+[mkimage]   /usr/share/desktop/default/Presentations/MagicPoint Tutorial/03-text.mgp (binary vendor/magicpoint/decks/tutorial/03-text.mgp, 2486 bytes)
+[mkimage]   /usr/share/desktop/default/Presentations/MagicPoint Tutorial/04-color.mgp (binary vendor/magicpoint/decks/tutorial/04-color.mgp, 2144 bytes)
+[mkimage]   /usr/share/desktop/default/Presentations/MagicPoint Tutorial/05-alignment.mgp (binary vendor/magicpoint/decks/tutorial/05-alignment.mgp, 2250 bytes)
+[mkimage]   /usr/share/desktop/default/Presentations/MagicPoint Tutorial/06-lists.mgp (binary vendor/magicpoint/decks/tutorial/06-lists.mgp, 2311 bytes)
+[mkimage]   /usr/share/desktop/default/Presentations/MagicPoint Tutorial/07-images.mgp (binary vendor/magicpoint/decks/tutorial/07-images.mgp, 2257 bytes)
+[serve] [mkimage]   /usr/share/desktop/default/Presentations/MagicPoint Tutorial/08-backgrounds.mgp (binary vendor/magicpoint/decks/tutorial/08-backgrounds.mgp, 1998 bytes)
+[serve] [mkimage]   /usr/share/desktop/default/Presentations/MagicPoint Tutorial/09-builds.mgp (binary vendor/magicpoint/decks/tutorial/09-builds.mgp, 2133 bytes)
+[serve] [mkimage]   /usr/share/desktop/default/Presentations/MagicPoint Tutorial/10-mastery.mgp (binary vendor/magicpoint/decks/tutorial/10-mastery.mgp, 3132 bytes)
+[serve] [mkimage]   /usr/share/desktop/default/Presentations/POSIX on WebAssembly/posix-on-wasm.mgp (binary vendor/magicpoint/decks/talks/posix-on-wasm.mgp, 2102 bytes)
+[serve] [mkimage]   /usr/share/desktop/default/Presentations/gucOS/deck-title.png (binary os/deck/demo/deck-title.png, 29838 bytes)
+[serve] [mkimage]   /usr/share/desktop/default/Presentations/gucOS/gucos.deck (binary os/deck/demo/gucos.deck, 7944 bytes)
+[serve] [mkimage]   /usr/share/desktop/default/Presentations/samples/minesweeper-programming-rainbow.sh (inline, 1542 bytes)
+[serve] [mkimage]   /usr/share/desktop/default/calc -> /usr/bin/calc
+[serve] [mkimage]   /usr/share/desktop/default/ctlpanel -> /usr/bin/ctlpanel
+[serve] [mkimage]   /usr/share/desktop/default/doom -> /usr/bin/doom
+[serve] [mkimage]   /usr/share/desktop/default/drmario (inline, 40 bytes)
+[serve] [mkimage]   /usr/share/desktop/default/fileman -> /usr/bin/fileman
+[serve] [mkimage]   /usr/share/desktop/default/gameboy -> /usr/bin/gameboy
+[serve] [mkimage]   /usr/share/desktop/default/mario (inline, 50 bytes)
+[serve] [mkimage]   /usr/share/desktop/default/netsurf -> /usr/bin/netsurf
+[serve] [mkimage]   /usr/share/desktop/default/notepad -> /usr/bin/notepad
+[serve] [mkimage]   /usr/share/desktop/default/paint -> /usr/bin/paint
+[serve] [mkimage]   /usr/share/desktop/default/pokemon (inline, 44 bytes)
+[serve] [mkimage]   /usr/share/desktop/default/software -> /usr/bin/software
+[serve] [mkimage]   /usr/share/desktop/default/term -> /usr/bin/term
+[serve] [mkimage] /Users/jku/worktree/c-compiler/0379-cpython-startup/os/os-system.img: v183, 106.3 MiB, sealed
+tty tail: "echo GO19\"\"Z; /usr/opt/python-clang/bin/pytho\r\nn-clang.wasm -c pass >/dev/null 2>&1; echo DN19\"\"\r\nZ-RC=$?\nGO19Z\nhush: can't execute '/usr/opt/python-clang/bin/python-clang.wasm': No such file or directory\nDN19Z-RC=127\n~ # echo GO20\"\"Z; sh -c :; echo DN20\"\"Z-RC=$?\nGO20Z\nDN20Z-RC=0\n~ # echo GO21\"\"Z; sh -c :; echo DN21\"\"Z-RC=$?\nGO21Z\nDN21Z-RC=0\n~ # echo GO22\"\"Z; sh -c :; echo DN22\"\"Z-RC=$?\nGO22Z\nDN22Z-RC=0\n~ # echo GO23\"\"Z; sh -c :; echo DN23\"\"Z-RC=$?\nGO23Z\nDN23Z-RC=0\n~ # echo GO24\"\"Z; sh -c :; echo DN24\"\"Z-RC=$?\nGO24Z\nDN24Z-RC=0\n~ # echo GO25\"\"Z; sh -c :; echo DN25\"\"Z-RC=$?\nGO25Z\nDN25Z-RC=0\n~ # "

@@ -1,0 +1,15 @@
+{
+ "bin": true,
+ "name": "nscharset-probe",
+ "description": "Charset-chain probe for the NetSurf mojibake investigation — exercises mibenum lookup, codec creation, hubbub's <meta charset> prescan and the inputstream decode.",
+ "deps": [
+  "../../vendor/netsurf/libparserutils/lib.json",
+  "../../vendor/netsurf/libhubbub/lib.json"
+ ],
+ "includes": [
+  "../../vendor/netsurf/libhubbub/src"
+ ],
+ "sources": [
+  "probe.c"
+ ]
+}

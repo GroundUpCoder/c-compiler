@@ -1,0 +1,2 @@
+[safari] server up; starting safari
+[safari] boots to ready in 520ms

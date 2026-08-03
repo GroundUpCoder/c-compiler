@@ -1,0 +1,23 @@
+PYCS=0
+@@MARK pyv_wasm_direct.0.a
+@@MARK pyv_wasm_direct.0.b
+@@MARK pyv_wasm_direct.1.a
+@@MARK pyv_wasm_direct.1.b
+@@MARK pyv_wasm_direct.2.a
+@@MARK pyv_wasm_direct.2.b
+@@MARK pyv_wasm_direct.3.a
+@@MARK pyv_wasm_direct.3.b
+@@MARK pyv_wasm_direct.4.a
+@@MARK pyv_wasm_direct.4.b
+@@MARK pass_warm_boot2.0.a
+@@MARK pass_warm_boot2.0.b
+@@MARK pass_warm_boot2.1.a
+@@MARK pass_warm_boot2.1.b
+@@MARK pass_warm_boot2.2.a
+@@MARK pass_warm_boot2.2.b
+@@MARK pass_warm_boot2.3.a
+@@MARK pass_warm_boot2.3.b
+@@MARK pass_warm_boot2.4.a
+@@MARK pass_warm_boot2.4.b
+@@MARK done.0.a
+@@MARK done.0.b

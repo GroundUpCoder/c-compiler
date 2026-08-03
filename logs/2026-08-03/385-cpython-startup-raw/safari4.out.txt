@@ -1,0 +1,11 @@
+== REAL Safari (minimal image + gucman install) ==
+  input probe: 2ms
+  gucman install: 1014ms
+  true_applet                    p50=0ms all=[0,0,0,0,0]
+  sh_c_colon                     p50=42ms all=[23,176,147,37,42]
+  pyv_wasm_direct                p50=218ms all=[224,233,218,218,24]
+  pyv_launcher                   p50=131ms all=[132,132,131,126,127]
+  pyv_dispatcher                 p50=151ms all=[150,159,158,148,151]
+  pass_direct                    p50=79ms all=[222,76,79]
+  pass_dispatcher                p50=209ms all=[245,209,205]
+done

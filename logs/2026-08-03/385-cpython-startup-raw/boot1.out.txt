@@ -1,0 +1,162 @@
+@@MARK inst.0.a
+RC=0
+@@MARK inst.0.b
+@@MARK noop_builtin.0.a
+@@MARK noop_builtin.0.b
+@@MARK noop_builtin.1.a
+@@MARK noop_builtin.1.b
+@@MARK noop_builtin.2.a
+@@MARK noop_builtin.2.b
+@@MARK noop_builtin.3.a
+@@MARK noop_builtin.3.b
+@@MARK noop_builtin.4.a
+@@MARK noop_builtin.4.b
+@@MARK true_applet.0.a
+@@MARK true_applet.0.b
+@@MARK true_applet.1.a
+@@MARK true_applet.1.b
+@@MARK true_applet.2.a
+@@MARK true_applet.2.b
+@@MARK true_applet.3.a
+@@MARK true_applet.3.b
+@@MARK true_applet.4.a
+@@MARK true_applet.4.b
+@@MARK sh_c_colon.0.a
+@@MARK sh_c_colon.0.b
+@@MARK sh_c_colon.1.a
+@@MARK sh_c_colon.1.b
+@@MARK sh_c_colon.2.a
+@@MARK sh_c_colon.2.b
+@@MARK sh_c_colon.3.a
+@@MARK sh_c_colon.3.b
+@@MARK sh_c_colon.4.a
+@@MARK sh_c_colon.4.b
+@@MARK realpath_spawn.0.a
+@@MARK realpath_spawn.0.b
+@@MARK realpath_spawn.1.a
+@@MARK realpath_spawn.1.b
+@@MARK realpath_spawn.2.a
+@@MARK realpath_spawn.2.b
+@@MARK realpath_spawn.3.a
+@@MARK realpath_spawn.3.b
+@@MARK realpath_spawn.4.a
+@@MARK realpath_spawn.4.b
+@@MARK pyv_wasm_direct.0.a
+@@MARK pyv_wasm_direct.0.b
+@@MARK pyv_wasm_direct.1.a
+@@MARK pyv_wasm_direct.1.b
+@@MARK pyv_wasm_direct.2.a
+@@MARK pyv_wasm_direct.2.b
+@@MARK pyv_wasm_direct.3.a
+@@MARK pyv_wasm_direct.3.b
+@@MARK pyv_wasm_direct.4.a
+@@MARK pyv_wasm_direct.4.b
+@@MARK pyv_launcher.0.a
+@@MARK pyv_launcher.0.b
+@@MARK pyv_launcher.1.a
+@@MARK pyv_launcher.1.b
+@@MARK pyv_launcher.2.a
+@@MARK pyv_launcher.2.b
+@@MARK pyv_launcher.3.a
+@@MARK pyv_launcher.3.b
+@@MARK pyv_launcher.4.a
+@@MARK pyv_launcher.4.b
+@@MARK pyv_dispatcher.0.a
+@@MARK pyv_dispatcher.0.b
+@@MARK pyv_dispatcher.1.a
+@@MARK pyv_dispatcher.1.b
+@@MARK pyv_dispatcher.2.a
+@@MARK pyv_dispatcher.2.b
+@@MARK pyv_dispatcher.3.a
+@@MARK pyv_dispatcher.3.b
+@@MARK pyv_dispatcher.4.a
+@@MARK pyv_dispatcher.4.b
+@@MARK pass_cold_then_warm.0.a
+@@MARK pass_cold_then_warm.0.b
+@@MARK pass_cold_then_warm.1.a
+@@MARK pass_cold_then_warm.1.b
+@@MARK pass_cold_then_warm.2.a
+@@MARK pass_cold_then_warm.2.b
+@@MARK pass_cold_then_warm.3.a
+@@MARK pass_cold_then_warm.3.b
+@@MARK pass_cold_then_warm.4.a
+@@MARK pass_cold_then_warm.4.b
+@@MARK import_json_re.0.a
+@@MARK import_json_re.0.b
+@@MARK import_json_re.1.a
+@@MARK import_json_re.1.b
+@@MARK import_json_re.2.a
+@@MARK import_json_re.2.b
+@@IT-COLD
+Could not find platform dependent libraries <exec_prefix>
+import time: self [us] | cumulative | imported package
+import time:       689 |        689 |   _io
+import time:        99 |         99 |   marshal
+import time:       299 |        299 |   posix
+import time:      4734 |       5821 | _frozen_importlib_external
+import time:       522 |        522 |   time
+import time:       496 |       1018 | zipimport
+import time:        80 |         80 |     _codecs
+import time:      1147 |       1226 |   codecs
+import time:      1634 |       1634 |   encodings.aliases
+import time:      6828 |       9688 | encodings
+import time:       805 |        805 | encodings.utf_8
+import time:      1864 |       1864 | _signal
+import time:       128 |        128 |     _abc
+import time:       827 |        955 |   abc
+import time:      1288 |       2242 | io
+import time:       220 |        220 |       _stat
+import time:       437 |        656 |     stat
+import time:      3653 |       3653 |     _collections_abc
+import time:       238 |        238 |       errno
+import time:       298 |        298 |       genericpath
+import time:       698 |       1233 |     posixpath
+import time:      2163 |       7704 |   os
+import time:       360 |        360 |   _sitebuiltins
+import time:      2291 |       2291 |   sitecustomize
+import time:       534 |        534 |   usercustomize
+import time:      4223 |      15110 | site
+import time:      1314 |       1314 | linecache
+@@IT-COLD-END
+@@IT-WARM
+Could not find platform dependent libraries <exec_prefix>
+import time: self [us] | cumulative | imported package
+import time:       866 |        866 |   _io
+import time:       158 |        158 |   marshal
+import time:       607 |        607 |   posix
+import time:      4827 |       6457 | _frozen_importlib_external
+import time:      1184 |       1184 |   time
+import time:      4136 |       5319 | zipimport
+import time:        90 |         90 |     _codecs
+import time:      1362 |       1451 |   codecs
+import time:      2095 |       2095 |   encodings.aliases
+import time:     10918 |      14463 | encodings
+import time:       646 |        646 | encodings.utf_8
+import time:      1622 |       1622 | _signal
+import time:        66 |         66 |     _abc
+import time:       423 |        488 |   abc
+import time:       620 |       1107 | io
+import time:       108 |        108 |       _stat
+import time:       171 |        278 |     stat
+import time:      2679 |       2679 |     _collections_abc
+import time:       258 |        258 |       errno
+import time:       293 |        293 |       genericpath
+import time:       711 |       1261 |     posixpath
+import time:      1688 |       5905 |   os
+import time:       266 |        266 |   _sitebuiltins
+import time:      1945 |       1945 |   sitecustomize
+import time:       384 |        384 |   usercustomize
+import time:      2767 |      11265 | site
+import time:      2764 |       2764 | linecache
+@@IT-WARM-END
+@@SV
+3 /root/sv.txt
+@@SP
+180 /root/sp.txt
+@@SVDUMP
+FS_WRITE(fd=1, data="Python 3.13.5\n", count=14) = 14
+EXIT(code=0)
++++ exited with 0 +++
+@@SVDUMP-END
+@@MARK done.0.a
+@@MARK done.0.b
