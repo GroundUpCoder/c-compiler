@@ -239,23 +239,63 @@ however many worktrees exist, at most ONE heavy gate runs at a time on this
 machine. Fan-out past roughly 3–4 concurrent lanes buys nothing on
 kernel/sweep tickets — the extra lanes just stack up waiting to gate.
 
-**3. The batching rule (the adopted part).** For behaviour-neutral tickets
-(comment/doc-only) that share ONE suite target: dispatch them as ONE lane with
-ONE gate. M separate lanes cost M gates; one batched lane costs 1, and the
-suite mapper unions the targets anyway. Both guardrails are load-bearing:
+**3. The batching rule (the adopted part).** Tickets that share ONE suite
+target may be dispatched as ONE lane with ONE gate. M separate lanes cost M
+gates; one batched lane costs 1, and the suite mapper unions the targets
+anyway. These guardrails are load-bearing:
 
 - 🔴 **Batch only WITHIN a suite target.** Mixing targets unions them upward
   and gives back the saving.
-- 🔴 **NEVER `--resume` across a batch**, and **behaviour-neutral only** — do
-  NOT batch tickets that change executable behaviour. That collides with "one
-  task, one thread" and makes a red gate **un-attributable**: you cannot tell
-  which ticket broke it.
+- 🔴 **NEVER `--resume` across a batch.**
 
-Worked example of a good batch: **#309 + #307 + #365**. Worked
-counter-example (proposed once, and wrong): **#111–#116 is the WORST possible
-batch, not the cleanest** — all six edit `compiler.js` (⇒ all 25 suites) plus
-the same `tests/run.py` skip block, and #113/#116 both edit `strftime`. The
-clean fan-out in that area is **#277 / #278 / #279**.
+**3a. BEHAVIOUR-CHANGING tickets MAY be batched (jku ruling, 2026-08-03) —
+under the non-colliding-instruments discipline below.** This rule used to read
+*behaviour-neutral only*. That clause excluded roughly 50 of the 64 ready light
+tickets and was the single largest brake on throughput, since the heavy lock
+already caps the machine at one gate at a time. jku extended it explicitly.
+**The old restriction is GONE; the attribution burden it protected is NOT.**
+
+A batch of behaviour-changing tickets is legitimate only when ALL of these
+hold. If you cannot state each one for each member, dispatch separately:
+
+1. 🔴 **Distinct instruments.** Each member's acceptance must be adjudicated by
+   a DIFFERENT observable — a different test file, a different suite total, or
+   a different in-file leg count. **If two members are judged by the same
+   number, they collide and MUST NOT batch**, however unrelated their code is.
+2. 🔴 **Evidence pinned IN ADVANCE.** Write each member's expected
+   before→after figures into the gate kickoff *before* the run starts, so a
+   green cannot be rationalised afterwards. An unpinned batch is un-judgeable.
+3. 🔴 **No member may change the test REGISTRY.** A registry change moves suite
+   totals, and suite totals are the instrument used to adjudicate every other
+   member. Those tickets still gate ALONE, and separately from each other.
+4. **No overlapping file regions.** Two members editing the same function (or
+   the same export object) reintroduce exactly the ambiguity this discipline
+   removes. Merge them into one ticket or dispatch separately.
+5. **At most ONE member may touch `os/image.json`.** Two version bumps collide
+   *by making the identical edit*, which produces no conflict marker at all.
+6. 🔴 **On RED, attribution is the batcher's burden, not the lane's.** Re-run
+   the failing suite against each member's own branch rather than guessing, and
+   **never let a lane "fix" a product bug on the batch branch.** If a red cannot
+   be pinned to a single member within one re-run, SPLIT THE BATCH and re-gate.
+
+**Precedent — batch #1 (`#141` + `#144` + `#434`), 2026-08-03**, the pilot for
+this extension: three members with deliberately disjoint instruments (a kernel
+in-file leg count, a host in-file leg count, and a new host file), all pinned
+before the run. It went **RED**, and the red was attributed to a single member
+(`#434`'s reflow, via an os-paint stale desktop probe) and fixed on its own
+lane. **That is the discipline working, and it is the evidence the rule is
+safe** — a batch is not required to go green to be well-formed; it is required
+to be *attributable* when it does not.
+
+Worked example of a good behaviour-neutral batch: **#309 + #307 + #365**.
+Worked counter-example (proposed once, and wrong): **#111–#116 is the WORST
+possible batch, not the cleanest** — all six edit `compiler.js` (⇒ all 25
+suites) plus the same `tests/run.py` skip block, and #113/#116 both edit
+`strftime`, so their instruments collide under 3a.1 and 3a.4. Note this is now
+the *only* reason to refuse that batch: under 3a it fails on colliding
+instruments, not on being behaviour-changing. **#277 / #278 / #279** (the same
+change to three different demo apps) is the model behaviour-changing batch —
+same suite target, three genuinely separate instruments.
 
 **4. The general form (why the table alone is not enough).** 🔴 The unit of
 contention is what the suite map pulls in TRANSITIVELY, not what the ticket's
