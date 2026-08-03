@@ -8,7 +8,7 @@
 // shot`). Close box -> SDL_EVENT_QUIT -> app exits; the shell survives.
 //
 // Usage: node os-paint.mjs
-import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl } from './lib/os-harness.mjs';
+import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl, deskEntries, deskCell } from './lib/os-harness.mjs';
 
 const PORT = 3207;
 const URL = osUrl(PORT);
@@ -77,6 +77,29 @@ try {
   // palette swatch centre (surface): k = row*8 + col.
   const swatch = (k) => scr(CANVAS_X + (k % 8) * 16 + 8, (6 + 300 + 12) + Math.floor(k / 8) * 16 + 8 + BAR);
 
+  // "Desktop restored" probe point: must be (a) covered by the paint window
+  // while it is up (else the TEAL wait is vacuous) and (b) bare desktop once
+  // it exits. (b) used to be a hardcoded point that was bare only by luck:
+  // the icon grid is column-major and derived from os/image.json, so any
+  // manifest desktop change reflows every later icon (removing three
+  // launchers marched the Recycle Bin cell under the old point). Model the
+  // grid like the other desktop tests — deskEntries/deskCell at the LIVE
+  // screen height — and scan the to-be-painted rectangle's interior (in from
+  // its edges, clear of the rect-border AA) for a point outside every
+  // occupied icon cell; (a) then falls out of asserting the point RED before
+  // the close click.
+  const { h: SH } = await page.evaluate(() => window.__osScreen);
+  const DESK = deskEntries();
+  const CELLS = DESK.map((n) => deskCell(DESK, n, SH));
+  const PAD = 8;                                // label/edge AA bleed slack
+  const iconFree = (sx, sy) => CELLS.every((c) =>
+    sx < c.x - PAD || sx >= c.x + 116 + PAD || sy < c.y - PAD || sy >= c.y + 96 + PAD);
+  let probe = null;
+  for (let by = 48; by <= 152 && !probe; by += 8)
+    for (let bx = 48; bx <= 192 && !probe; bx += 8)
+      if (iconFree(WX + CANVAS_X + bx, WY + CANVAS_Y + BAR + by)) probe = [bx, by];
+  if (!probe) throw new Error('no icon-free desktop point inside the painted rect — the icon grid grew over the paint window; the close-box probe needs rethinking');
+
   // wait for the first paint: the canvas centre is white.
   await waitPixel(...bmp(120, 100), WHITE, 60000);
   check('canvas composits white', true);
@@ -107,9 +130,13 @@ try {
     await sample(...bmp(340, 260)));
 
   // Close box -> SDL_EVENT_QUIT -> WM_DESTROY -> exit; desktop restored.
+  // Pin the derived probe non-vacuously first: inside the red rectangle it
+  // must read RED while paint is up, so the TEAL wait below can only be
+  // satisfied by the window actually going away.
+  await waitPixel(...bmp(...probe), RED, 10000);
   const surfW = 464;
   await page.mouse.click(rect.x + WX + surfW - 12, rect.y + WY - 12);
-  await waitPixel(...bmp(120, 100), TEAL);
+  await waitPixel(...bmp(...probe), TEAL);
   check('close box quit paint; desktop restored', true);
 
   // The shell survives its windowed child.
