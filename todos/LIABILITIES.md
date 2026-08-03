@@ -348,4 +348,9 @@ thing this file exists to kill.
 - file: os/win32/gdiplus.c
 - anchor:  * of THIS list, so it will refuse on a JPEG until ticket #379 lands one. */
 
+### L77 — `--resume` freshness stops at the test file itself: a member whose own source is unchanged resumes even if a HELPER it reads (a tests/lib/ module, a fixture, the product code under test) changed since that pass, so the resumed green still rests on an old measurement
+- ticket: #151
+- file: tests/lib/suite-runner.js
+- anchor: // dependency-level freshness is ticket #151 and is a much heavier mechanism.
+
 <!-- END ENTRIES -->
