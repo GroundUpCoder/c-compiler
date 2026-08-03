@@ -63,12 +63,25 @@ const handlerPath = path.join(fakeBin, 'file-gucos-ticket');
 const capturePath = path.join(tmp, 'capture.json');
 const CANNED = '{"ok":true,"ref":"guc#42"}';
 
+// The bridge child's PATH is THIS DIRECTORY AND NOTHING ELSE — the
+// inherited PATH is deliberately NOT appended. That is load-bearing, not
+// tidiness: a real `file-gucos-ticket` may well be installed on the
+// machine running this suite (one was, when this test was written), and
+// with the ambient PATH in the search list the "handler absent" leg
+// silently FALLS THROUGH to it — so the leg stops testing ENOENT, and
+// worse, the suite starts invoking real ticket tooling with test payloads.
+// A private single-entry PATH makes both impossible by construction, and
+// makes every leg's verdict independent of what this host has installed.
+// Consequence the fake scripts must respect: no PATH lookup inside them,
+// so `cat`/`sleep` are spelled absolutely.
+const HANDLER_PATH_ENV = fakeBin;
+
 function setHandler(mode) {
   // Rewritten between legs; the bridge resolves PATH per exec, no caching.
   const bodies = {
-    ok: `#!/bin/sh\ncat > "$FGT_CAPTURE"\nprintf '%s' '${CANNED}'\n`,
-    fail: `#!/bin/sh\ncat > "$FGT_CAPTURE"\nprintf '%s' '{"ok":false,"error":"refused by policy"}'\nexit 3\n`,
-    sleep: `#!/bin/sh\ncat > /dev/null\nsleep 10\n`,
+    ok: `#!/bin/sh\n/bin/cat > "$FGT_CAPTURE"\nprintf '%s' '${CANNED}'\n`,
+    fail: `#!/bin/sh\n/bin/cat > "$FGT_CAPTURE"\nprintf '%s' '{"ok":false,"error":"refused by policy"}'\nexit 3\n`,
+    sleep: `#!/bin/sh\n/bin/cat > /dev/null\n/bin/sleep 10\n`,
   };
   if (mode === 'absent') { fs.rmSync(handlerPath, { force: true }); return; }
   fs.writeFileSync(handlerPath, bodies[mode], { mode: 0o755 });
@@ -81,8 +94,14 @@ function readCapture() {
 function resetCapture() { fs.rmSync(capturePath, { force: true }); }
 
 // ---- servers ----
+// process.execPath, not 'node': the ticket bridge is launched with a
+// deliberately single-entry PATH (see HANDLER_PATH_ENV), which is enough to
+// find the handler and NOT enough to find the node binary — so resolving
+// the interpreter through that PATH fails with a confusing `spawn node
+// ENOENT`. An absolute interpreter keeps the restricted PATH scoped to the
+// one lookup it is meant to restrict.
 function spawnBridge(script, name, port, extraArgs, env) {
-  const b = cp.spawn('node', [script, '--port=' + port, '--quiet'].concat(extraArgs || []),
+  const b = cp.spawn(process.execPath, [script, '--port=' + port, '--quiet'].concat(extraArgs || []),
     { stdio: ['ignore', 'pipe', 'inherit'], env: Object.assign({}, process.env, env || {}) });
   return new Promise((resolve, reject) => {
     let out = '';
@@ -122,7 +141,12 @@ const clientWasm = fs.readFileSync(clientWasmPath);
 
 // ---- one fake-worker kernel boot of the client per scenario ----
 // cfg = { argv: [...after argv0], etcTicket: 'url ...', etcNet: 'bridge on...' }
-// -> { status, stdout, stderr, ms }
+// -> { status, exit, signal, stdout, stderr, ms }
+//
+// `status` is the raw WAIT-STATUS onHalt delivers (kernel.js:1963), so a
+// plain `=== 2` comparison against an exit code silently fails: exit 2
+// arrives as 512. `exit` is the decoded code (null when signalled) and is
+// what assertions should read.
 async function runClient(cfg) {
   const images = new Map([['/bin/file-gucos-ticket', clientWasm]]);
   const store = new BLOCK_FS.MemoryByteStore(8 << 20);
@@ -145,12 +169,14 @@ async function runClient(cfg) {
   });
   const tty = kernel.createTty({ output: () => {} });
   OS_COMMON.netFetchAttach(netFetch, kernel, kfs);
-  if (cfg.stdin) { tty.input(Buffer.from(cfg.stdin)); tty.inputEof(); }
+  if (cfg.stdin) { tty.input(Buffer.from(cfg.stdin)); tty.eof(true); }
   const t0 = Date.now();
   await kernel.boot({ path: '/bin/file-gucos-ticket',
     argv: ['file-gucos-ticket'].concat(cfg.argv || []), envp: [], cwd: '/' });
   const status = await haltPromise;
-  return { status, stdout: out[1], stderr: out[2], ms: Date.now() - t0 };
+  const signal = (status & 0x7f) || null;
+  return { status, signal, exit: signal ? null : (status >> 8) & 0xff,
+           stdout: out[1], stderr: out[2], ms: Date.now() - t0 };
 }
 
 (async () => {
@@ -165,7 +191,7 @@ async function runClient(cfg) {
   // ok/fail handlers answer in milliseconds, far inside it.
   const ticketProc = await spawnBridge(TICKET_BRIDGE, 'ticket-bridge', ticketPort,
     ['--handler-timeout=1500'],
-    { PATH: fakeBin + path.delimiter + process.env.PATH, FGT_CAPTURE: capturePath });
+    { PATH: HANDLER_PATH_ENV, FGT_CAPTURE: capturePath });
   const netPort = await freePort();
   const netBase = 'http://127.0.0.1:' + netPort;
   const netProc = await spawnBridge(NET_BRIDGE, 'net-bridge', netPort);
@@ -187,7 +213,7 @@ async function runClient(cfg) {
     argv: ['--title', 'Boot smoke [451]', '--body', 'hello from gucOS',
            '--priority', '2', '--difficulty', 'light'],
   });
-  check('A1 direct+ok: exit 0', r.status === 0, r.status + ' stderr=' + r.stderr);
+  check('A1 direct+ok: exit 0', r.exit === 0, r.exit + ' stderr=' + r.stderr);
   check('A1 direct+ok: handler reply verbatim on stdout', r.stdout === CANNED,
     JSON.stringify(r.stdout));
   check('A1 direct+ok: nothing on stderr', r.stderr === '', JSON.stringify(r.stderr));
@@ -208,8 +234,8 @@ async function runClient(cfg) {
     argv: ['--title', 'quoted "title" with\nnewline', '--kind', 'alert'],
   });
   const netAfter = await bridgeCount(netBase);
-  check('A2 bridge-on: exit 0 + reply verbatim', r.status === 0 && r.stdout === CANNED,
-    r.status + ' ' + JSON.stringify(r.stdout) + ' stderr=' + r.stderr);
+  check('A2 bridge-on: exit 0 + reply verbatim', r.exit === 0 && r.stdout === CANNED,
+    r.exit + ' ' + JSON.stringify(r.stdout) + ' stderr=' + r.stderr);
   check('A2 transit proof: the net-bridge proxied exactly this one request',
     netAfter - netBefore === 1, netBefore + ' -> ' + netAfter);
   cap = readCapture();
@@ -225,7 +251,15 @@ async function runClient(cfg) {
     etcTicket: 'url ' + ticketBase + '\n',
     argv: ['--title', 'nobody home'],
   });
-  check('A3 ENOENT: nonzero exit', r.status !== 0, String(r.status));
+  // The isolation guard, asserted rather than assumed (see HANDLER_PATH_ENV):
+  // if the ambient PATH ever creeps back into the bridge's env, a real
+  // handler installed on this machine answers instead and A3 stops being an
+  // ENOENT leg at all. 501 is reachable ONLY from spawn ENOENT, so the check
+  // below is the discriminator — this one just names the cause up front.
+  check('A3 isolation: the bridge searches ONLY the private fake dir',
+    HANDLER_PATH_ENV === fakeBin && !HANDLER_PATH_ENV.includes(path.delimiter),
+    JSON.stringify(HANDLER_PATH_ENV));
+  check('A3 ENOENT: nonzero exit', r.exit !== 0, String(r.exit));
   check('A3 ENOENT: names the missing handler, not the bridge',
     /no ticket handler installed/.test(r.stderr) && !/unreachable/.test(r.stderr),
     JSON.stringify(r.stderr));
@@ -239,7 +273,7 @@ async function runClient(cfg) {
     etcTicket: 'url ' + ticketBase + '\n',
     argv: ['--title', 'reject me'],
   });
-  check('A4 handler-exit-3: nonzero exit', r.status !== 0, String(r.status));
+  check('A4 handler-exit-3: nonzero exit', r.exit !== 0, String(r.exit));
   check('A4 handler-exit-3: relayed as handler failure with exit code + its stdout',
     /handler failed \(exit 3\)/.test(r.stderr) && /refused by policy/.test(r.stderr),
     JSON.stringify(r.stderr));
@@ -257,7 +291,7 @@ async function runClient(cfg) {
     etcTicket: 'url ' + ticketBase + '\n',
     argv: ['--title', 'sleeper'],
   });
-  check('A5 handler-timeout: nonzero exit', r.status !== 0, String(r.status));
+  check('A5 handler-timeout: nonzero exit', r.exit !== 0, String(r.exit));
   check('A5 handler-timeout: bridge-level 502 naming the timeout',
     /HTTP 502/.test(r.stderr) && /timed out/.test(r.stderr), JSON.stringify(r.stderr));
 
@@ -269,28 +303,34 @@ async function runClient(cfg) {
     argv: ['--title', 'into the void'],
   });
   check('A6 unreachable: nonzero exit + says unreachable, promptly',
-    r.status !== 0 && /unreachable/.test(r.stderr) && r.ms < 5000,
-    r.status + ' ' + r.ms + 'ms ' + JSON.stringify(r.stderr));
+    r.exit !== 0 && /unreachable/.test(r.stderr) && r.ms < 5000,
+    r.exit + ' ' + r.ms + 'ms ' + JSON.stringify(r.stderr));
 
-  // A7: oversize — a stdin body whose escaped JSON exceeds the bridge's
-  // 64K cap arrives as a readable 413 (the #393 drain rule keeps it from
-  // masquerading as "unreachable").
+  // A7: oversize — a body whose ESCAPED JSON exceeds the bridge's 64 KB cap
+  // arrives in-OS as a readable 413 (the #393 drain rule is what keeps it
+  // from masquerading as "unreachable"). 40 K of '"' escapes to ~80 KB,
+  // which clears the client's own 112 KB JSON_MAX and lands on the cap.
+  // Passed as ONE argv value rather than on stdin on purpose: stdin here
+  // would ride the tty line discipline (canonical mode, no newline in this
+  // payload), which is a different mechanism than the one under test — and
+  // leg C already proves the `--body -` stdin path end to end with the real
+  // shell doing the piping.
   resetCapture();
   r = await runClient({
     etcTicket: 'url ' + ticketBase + '\n',
-    argv: ['--title', 'too big', '--body', '-'],
-    stdin: '"'.repeat(40 * 1024),   // escapes to ~80K JSON > the 64K cap
+    argv: ['--title', 'too big', '--body', '"'.repeat(40 * 1024)],
   });
   check('A7 oversize: nonzero exit + the bridge\'s 413 relayed',
-    r.status !== 0 && /HTTP 413/.test(r.stderr) && /64|cap/.test(r.stderr),
-    r.status + ' ' + JSON.stringify(r.stderr));
+    r.exit !== 0 && /HTTP 413/.test(r.stderr) && /cap/.test(r.stderr),
+    r.exit + ' ' + JSON.stringify(r.stderr.slice(0, 300)));
   check('A7 oversize: the handler never ran', readCapture() === null,
     JSON.stringify(readCapture()));
 
   // A8: usage — --title is required.
   r = await runClient({ argv: ['--body', 'no title'] });
   check('A8 usage: exit 2 naming --title',
-    r.status === 2 && /--title is required/.test(r.stderr), r.status + ' ' + JSON.stringify(r.stderr));
+    r.exit === 2 && /--title is required/.test(r.stderr),
+    r.exit + ' ' + JSON.stringify(r.stderr.slice(0, 120)));
 
   /* ============ Leg B: the bridge's browser-facing HTTP surface ========= */
 
