@@ -6,23 +6,18 @@
 var { spawnSync } = require('child_process');
 var path = require('path');
 var { ensurePrebakedImage } = require('../lib/image-fixture.js');
+var { assertMemberRegistry } = require('../lib/suite-runner.js');
 
 // Cross-tree preflight (todos/0341) — BEFORE ensurePrebakedImage(), which bakes
 // a 111 MB blob into the SCRIPT's os/ directory. A cross-tree launch would
 // rewrite another tree's image fixture, which is a write, not just a read.
 require('../lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/host/run.js' });
 
-// serve.js re-bakes a stale os-system.img BEFORE listening (todos/0082), so
-// test_first_run's 5s URL deadline needs the fixture fresh up front — the
-// same prebake the kernel/browser runners do. Without this, the first host
-// run after touching any bake input (host.js, compiler.js, os/) fails on
-// the bake, not on anything serve.js did wrong.
-ensurePrebakedImage();
-
 var tests = [
   ['test_epipe_listeners.js', []],       // runModule must not stack stream 'error' listeners
   ['test_stdout_flush.js', []],          // exit drains piped stdout; queued chunks survive memory.grow
   ['test_console_ring.js', []],          // console SAB ring blocks (pty backpressure), never overruns
+  ['test_console_capability.js', []],    // 0248/CD27: the console fast path is a POSITIVE capability (entry.console === true), so a decoy-less backend's fd 1/2 can never leak to the console — carries its own RED control (case 1). Registered by #167/#431: it landed red→green at e2579556 and then sat in NO list for weeks, the same orphan class as test_punes_e2e.js
   ['test_audio_ring_wrap.js', []],       // audio ring writePos stays masked; no RangeError at 2^31
   ['test_gcstr_imports.js', []],         // __gcstr binary shape: dedup, no data-segment copy, "#" Proxy polyfill
   ['test_blockfs_cli_clobber.js', []],   // --block-fs read error fails loud, never clobbers the image (0233/CD1)
@@ -53,6 +48,38 @@ var tests = [
   ['../serve/test_mkpkg_isolation.js', []],   // guardrail (d): repo isolation (0388) — a differing build must not prune another repo's payloads; --pool shares the warm cache; one writer per out dir
   ['../serve/test_image_determinism.js', []], // two bakes of one tree are byte-identical (0249 content-hash stability)
 ];
+
+// ---- suite-membership guard (#314's mechanism, applied here by #167/#431) ----
+//
+// The list above is HARDCODED and, unlike the kernel and blockfs suites, had
+// no completeness check — so test_console_capability.js (0248/CD27, landed
+// red→green at e2579556) sat on disk in NO list for weeks while every host
+// gate reported green. `tests/host/` and `tests/serve/` are separate
+// directories with separate rows, so they get one call each. BEFORE
+// ensurePrebakedImage() deliberately, the tree-guard precedent: a launch we
+// are about to refuse must not first write a 111 MB blob into the tree.
+var HOST_MEMBER_RE = /^test_.*\.js$/;
+assertMemberRegistry({
+  dir: __dirname, pattern: HOST_MEMBER_RE, label: 'tests/host/run.js',
+  entries: tests.filter(function (t) { return t[0].indexOf('/') < 0; })
+                .map(function (t) { return { file: t[0] }; }),
+  // Deliberate exclusions ONLY, each naming the live ticket that owns
+  // registering it. Empty is the healthy state.
+  exclude: [],
+});
+assertMemberRegistry({
+  dir: path.join(__dirname, '..', 'serve'), pattern: HOST_MEMBER_RE, label: 'tests/host/run.js (../serve rows)',
+  entries: tests.filter(function (t) { return t[0].indexOf('../serve/') === 0; })
+                .map(function (t) { return { file: path.basename(t[0]) }; }),
+  exclude: [],
+});
+
+// serve.js re-bakes a stale os-system.img BEFORE listening (todos/0082), so
+// test_first_run's 5s URL deadline needs the fixture fresh up front — the
+// same prebake the kernel/browser runners do. Without this, the first host
+// run after touching any bake input (host.js, compiler.js, os/) fails on
+// the bake, not on anything serve.js did wrong.
+ensurePrebakedImage();
 
 var failures = 0;
 for (var [file, args] of tests) {
