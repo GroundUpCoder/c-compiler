@@ -42,7 +42,6 @@
 // Run: node tests/kernel/test_gucman_e2e.js
 'use strict';
 const fs = require('fs');
-const http = require('http');
 const path = require('path');
 const { driveBoot, freshImage, section } = require('./lib/drive.js');
 const { ROOT, ensureMinimalImage, ensurePackages, startServer } = require('./lib/gucman.js');
@@ -459,22 +458,20 @@ async function main() {
    *   - GARBAGE: 200 with a whole body that simply is not JSON — the case
    *              the old message was actually about.
    * Every assertion below fails on the pre-fix binary. */
-  const SHORT_BODY = '{"baseVersion": 1, "packages": {"punes"';
-  const faults = {
-    '/empty/index.json': (res) => { res.writeHead(200, { 'content-type': 'application/json', 'content-length': '0' }); res.end(); },
-    // No content-length: chunked, so ending early is a WELL-FORMED response.
-    // (With a declared length a short body cannot end cleanly — the fetch
-    // under the veneer rejects it, and it surfaces as a curl error instead.)
-    '/short/index.json': (res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(SHORT_BODY); },
-    '/garbage/index.json': (res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('<!DOCTYPE html>\n<html><body>captive portal</body></html>\n'); },
-  };
-  const faultSrv = http.createServer((req, res) => {
-    const h = faults[req.url.split('?')[0]];
-    if (h) { h(res); return; }
-    res.writeHead(404); res.end('nope');
+  const { SHORT_BODY } = require('./lib/fault-repo.js');
+  const faultSrv = require('child_process').spawn(
+    process.execPath, [path.join(__dirname, 'lib', 'fault-repo.js')],
+    { stdio: ['ignore', 'pipe', 'pipe'] });
+  const fport = await new Promise((resolve, reject) => {
+    let buf = '';
+    const to = setTimeout(() => reject(new Error('fault-repo never announced a port: ' + buf)), 10000);
+    faultSrv.stdout.on('data', (d) => {
+      buf += d;
+      const m = /port (\d+)/.exec(buf);
+      if (m) { clearTimeout(to); resolve(parseInt(m[1], 10)); }
+    });
+    faultSrv.on('exit', (c) => { clearTimeout(to); reject(new Error('fault-repo exited ' + c)); });
   });
-  await new Promise((r) => faultSrv.listen(0, '127.0.0.1', r));
-  const fport = faultSrv.address().port;
   console.log(`[gucman] fault-injecting repo :${fport}`);
 
   const scriptF = ['mkdir -p /etc/gucman'];
@@ -487,7 +484,7 @@ async function main() {
   scriptF.push('echo ==done');
   const f = driveBoot(scriptF, BOOT_ARGS);
   const fout = String(f.stdout || '');
-  faultSrv.close();
+  faultSrv.kill();
 
   const empty = section(fout, 'empty');
   check('empty index: install fails', /RC=[1-9]/.test(empty), empty);
