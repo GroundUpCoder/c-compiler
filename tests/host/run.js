@@ -6,23 +6,18 @@
 var { spawnSync } = require('child_process');
 var path = require('path');
 var { ensurePrebakedImage } = require('../lib/image-fixture.js');
+var { assertMemberRegistry } = require('../lib/suite-runner.js');
 
 // Cross-tree preflight (todos/0341) — BEFORE ensurePrebakedImage(), which bakes
 // a 111 MB blob into the SCRIPT's os/ directory. A cross-tree launch would
 // rewrite another tree's image fixture, which is a write, not just a read.
 require('../lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/host/run.js' });
 
-// serve.js re-bakes a stale os-system.img BEFORE listening (todos/0082), so
-// test_first_run's 5s URL deadline needs the fixture fresh up front — the
-// same prebake the kernel/browser runners do. Without this, the first host
-// run after touching any bake input (host.js, compiler.js, os/) fails on
-// the bake, not on anything serve.js did wrong.
-ensurePrebakedImage();
-
 var tests = [
   ['test_epipe_listeners.js', []],       // runModule must not stack stream 'error' listeners
   ['test_stdout_flush.js', []],          // exit drains piped stdout; queued chunks survive memory.grow
   ['test_console_ring.js', []],          // console SAB ring blocks (pty backpressure), never overruns
+  ['test_console_capability.js', []],    // 0248/CD27: the console fast path is a POSITIVE capability (entry.console === true), so a decoy-less backend's fd 1/2 can never leak to the console — carries its own RED control (case 1). Registered by #167/#431: it landed red→green at e2579556 and then sat in NO list for weeks, the same orphan class as test_punes_e2e.js
   ['test_audio_ring_wrap.js', []],       // audio ring writePos stays masked; no RangeError at 2^31
   ['test_gcstr_imports.js', []],         // __gcstr binary shape: dedup, no data-segment copy, "#" Proxy polyfill
   ['test_blockfs_cli_clobber.js', []],   // --block-fs read error fails loud, never clobbers the image (0233/CD1)
@@ -45,6 +40,7 @@ var tests = [
   ['test_netbridge_wrapper.js', []],     // #393: bridge answers are named, never "unreachable"; non-Latin-1 crosses the hop; dead bridge keeps ENETUNREACH
   ['test_browser_out_dirs.js', []],      // no tests/browser output path names a committed dir (logs/ etc.) — sweeps must leave a clean tree clean (#399/#183)
   ['test_manifest_refs.js', []],         // #434: image.json referential integrity — dangling launcher/link/seed refs fail the bake; red-then-green + the v223 sameboy replay
+  ['../spawn/test_spawn_host.js', []],   // 0006 Layer A+B: the posix_spawn struct ABI + host-side marshalling (path/argv/envp/cwd/file_actions/flags/pgid) round-trips byte-for-byte through runModule with fake spawnHooks. Registered by #167/#431: tests/spawn/ was in no suite AND had no RULES row, so it reported UNMAPPED and ran nowhere
   ['../serve/test_first_run.js', []],    // `node serve.js .` prints a URL that 200s (COOP/COEP)
   ['../serve/test_clang_overlay.js', []],// `serve.js --clang` overlay on-ramp: fold-in vs sibling-absent (0141)
   ['../serve/test_native_base_purity.js', []], // CLANG-CPP-EPIC II guardrail (a), 0416-generalized: NO gated (-clang/-rust) name in the base set
@@ -54,6 +50,66 @@ var tests = [
   ['../serve/test_mkpkg_isolation.js', []],   // guardrail (d): repo isolation (0388) — a differing build must not prune another repo's payloads; --pool shares the warm cache; one writer per out dir
   ['../serve/test_image_determinism.js', []], // two bakes of one tree are byte-identical (0249 content-hash stability)
 ];
+
+// ---- suite-membership guard (#314's mechanism, applied here by #167/#431) ----
+//
+// The list above is HARDCODED and, unlike the kernel and blockfs suites, had
+// no completeness check — so test_console_capability.js (0248/CD27, landed
+// red→green at e2579556) sat on disk in NO list for weeks while every host
+// gate reported green. BEFORE ensurePrebakedImage() deliberately, the
+// tree-guard precedent: a launch we are about to refuse must not first write a
+// 111 MB blob into the tree.
+//
+// The rows span several directories, so each one needs its own set-equality
+// call — and the set of directories is DERIVED FROM THE ROWS, never written
+// down beside them. A hardcoded list (this guard shipped for one hour as
+// `['serve', 'spawn']`, caught in review) is the very defect it exists to
+// kill, moved up one level: `tests/` has 20+ sibling directories, so an
+// ordinary future row like `../unit/test_x.js` would run happily while
+// tests/unit went unguarded, and the next test_*.js added beside it would be
+// orphaned again in silence. Deriving instead makes the guard's coverage track
+// the thing it guards: a row in a new directory either starts guarding that
+// directory automatically, or — if its shape cannot be classified — REFUSES
+// the run naming the row. It can never silently do neither.
+var HOST_MEMBER_RE = /^test_.*\.js$/;
+var ROW_RE = /^(?:\.\.\/([A-Za-z0-9_.-]+)\/)?([A-Za-z0-9_.-]+)$/;   // "file.js" | "../dir/file.js"
+var partitions = new Map();     // directory (relative to __dirname) -> [{ file }]
+var unclassified = [];
+tests.forEach(function (t) {
+  var m = ROW_RE.exec(t[0]);
+  if (!m) { unclassified.push(t[0]); return; }
+  var dir = m[1] ? '../' + m[1] : '.';
+  if (!partitions.has(dir)) partitions.set(dir, []);
+  // Only test_*.js rows are members for set-equality purposes; a row naming
+  // some other script is still CLASSIFIED (so its directory gets guarded),
+  // it just is not one of the files the pattern is comparing.
+  if (HOST_MEMBER_RE.test(m[2])) partitions.get(dir).push({ file: m[2] });
+});
+if (unclassified.length) {
+  process.stderr.write('\x1b[31m[suite-registry] tests/host/run.js: row(s) belong to NO guarded partition, '
+    + 'so the directory they live in would go unguarded and a test_*.js added beside them would execute NOWHERE:\x1b[0m\n');
+  unclassified.forEach(function (r) { process.stderr.write('  ' + r + '\n'); });
+  process.stderr.write('  Rows must be "test_x.js" (this directory) or "../<dir>/test_x.js" (one sibling).\n'
+    + '  A deeper path needs this guard extended to reach it — do not just add the row.\n');
+  process.exit(2);
+}
+partitions.forEach(function (entries, dir) {
+  assertMemberRegistry({
+    dir: path.resolve(__dirname, dir), pattern: HOST_MEMBER_RE,
+    label: 'tests/host/run.js' + (dir === '.' ? '' : ' (' + dir + ' rows)'),
+    entries: entries,
+    // Deliberate exclusions ONLY, each naming the live ticket that owns
+    // registering it. Empty is the healthy state.
+    exclude: [],
+  });
+});
+
+// serve.js re-bakes a stale os-system.img BEFORE listening (todos/0082), so
+// test_first_run's 5s URL deadline needs the fixture fresh up front — the
+// same prebake the kernel/browser runners do. Without this, the first host
+// run after touching any bake input (host.js, compiler.js, os/) fails on
+// the bake, not on anything serve.js did wrong.
+ensurePrebakedImage();
 
 var failures = 0;
 for (var [file, args] of tests) {
