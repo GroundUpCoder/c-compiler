@@ -48,6 +48,7 @@ const K = require(KERNEL);
 const { BLOCK_FS } = require(HOST);
 const OS_COMMON = require(path.join(ROOT, 'os', 'os-common.js'));
 const { driveBoot } = require('./lib/drive.js');
+const { mkdtempOwned } = require('../lib/harness-temp.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -56,7 +57,15 @@ function check(name, cond, extra) {
 }
 
 // ---- the fake handler (the ONE thing a real host would add) ----
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kernel-ticketbridge-'));
+//
+// mkdtempOwned, not a bare mkdtempSync (review finding 3): it registers the
+// dir for process-lifetime cleanup (normal exit, uncaught throw, SIGINT/
+// SIGTERM) AND pid-tags the name so tests/lib/harness-leaks.js's startup
+// reaper can collect it after a SIGKILL, which runs no handler by definition.
+// The `os-` prefix is load-bearing for that second half — the reaper's
+// TEMP_DIR_RE is /^os-.*-(\d+)-[A-Za-z0-9]{6}$/, so a `kernel-`-prefixed dir
+// is tracked but never reaped.
+const tmp = mkdtempOwned('os-ticketbridge-');
 const fakeBin = path.join(tmp, 'fakebin');
 fs.mkdirSync(fakeBin);
 const handlerPath = path.join(fakeBin, 'file-gucos-ticket');
@@ -76,12 +85,27 @@ const CANNED = '{"ok":true,"ref":"guc#42"}';
 // so `cat`/`sleep` are spelled absolutely.
 const HANDLER_PATH_ENV = fakeBin;
 
+// The bridge's handler timeout for this run. Small enough that the timeout
+// leg costs ~1.5s instead of 30s, and 6.7x below the fake handler's 10s
+// sleep so A5's deadline assertion has room on both sides.
+const HANDLER_TIMEOUT_MS = 1500;
+
 function setHandler(mode) {
   // Rewritten between legs; the bridge resolves PATH per exec, no caching.
+  //
+  // `sleep` is deliberately a PROCESS TREE, not one sleeping process: the
+  // grandchild inherits the handler's stdout/stderr, which is the shape a
+  // real handler takes (a wrapper launching a tracker CLI) and the shape that
+  // broke the deadline before the killTree fix. The trailing `echo` is what
+  // GUARANTEES the tree: without a command after it, a shell may exec-replace
+  // itself with the last command, collapsing the grandchild into the child
+  // and letting a plain child.kill() look sufficient. (macOS /bin/sh does not
+  // exec-optimize even without it — verified — but dash and others do, so the
+  // leg must not depend on which shell /bin/sh happens to be.)
   const bodies = {
     ok: `#!/bin/sh\n/bin/cat > "$FGT_CAPTURE"\nprintf '%s' '${CANNED}'\n`,
     fail: `#!/bin/sh\n/bin/cat > "$FGT_CAPTURE"\nprintf '%s' '{"ok":false,"error":"refused by policy"}'\nexit 3\n`,
-    sleep: `#!/bin/sh\n/bin/cat > /dev/null\n/bin/sleep 10\n`,
+    sleep: `#!/bin/sh\n/bin/cat > /dev/null\n/bin/sleep 10\necho never-reached\n`,
   };
   if (mode === 'absent') { fs.rmSync(handlerPath, { force: true }); return; }
   fs.writeFileSync(handlerPath, bodies[mode], { mode: 0o755 });
@@ -190,7 +214,7 @@ async function runClient(cfg) {
   // --handler-timeout=1500 serves the timeout leg without a 30s stall; the
   // ok/fail handlers answer in milliseconds, far inside it.
   const ticketProc = await spawnBridge(TICKET_BRIDGE, 'ticket-bridge', ticketPort,
-    ['--handler-timeout=1500'],
+    ['--handler-timeout=' + HANDLER_TIMEOUT_MS],
     { PATH: HANDLER_PATH_ENV, FGT_CAPTURE: capturePath });
   const netPort = await freePort();
   const netBase = 'http://127.0.0.1:' + netPort;
@@ -200,6 +224,8 @@ async function runClient(cfg) {
   process.on('exit', () => {
     try { ticketProc.kill(); } catch (e) {}
     try { netProc.kill(); } catch (e) {}
+    // The mkdtemp dir needs no rm here — mkdtempOwned already tracks it for
+    // every exit path, and the reaper covers SIGKILL (see its comment above).
   });
   const deadPort = await freePort();   // just-closed port = deterministic refusal
 
@@ -284,8 +310,17 @@ async function runClient(cfg) {
     readCapture() !== null && readCapture().title === 'reject me',
     JSON.stringify(readCapture()));
 
-  // A5: handler TIMEOUT — the bridge SIGKILLs at --handler-timeout and
-  // answers a bridge-level 502 (the handler produced no result).
+  // A5: handler TIMEOUT — the bridge SIGKILLs the handler's process GROUP at
+  // --handler-timeout and answers a bridge-level 502.
+  //
+  // The DEADLINE ASSERTION below is the point of this leg, not the message
+  // (review finding 2). Asserting only /timed out/ proves the timeout is
+  // LABELLED, not that it is ENFORCED — and it stayed green through a real
+  // defect: the handler's grandchild inherited its stdout pipe, so killing
+  // only the direct child left 'close' blocked and a 1000ms timeout measured
+  // 10439ms. Fixed it measures 1031ms. HANDLER_TIMEOUT_MS is 1500 and the
+  // fake handler sleeps 10s, so the bound below separates the two by ~3x in
+  // both directions: enforced ≈ 1.5s + boot, unenforced ≈ 10s+.
   setHandler('sleep');
   r = await runClient({
     etcTicket: 'url ' + ticketBase + '\n',
@@ -294,6 +329,10 @@ async function runClient(cfg) {
   check('A5 handler-timeout: nonzero exit', r.exit !== 0, String(r.exit));
   check('A5 handler-timeout: bridge-level 502 naming the timeout',
     /HTTP 502/.test(r.stderr) && /timed out/.test(r.stderr), JSON.stringify(r.stderr));
+  check('A5 handler-timeout is ENFORCED, not just labelled: answered well '
+      + 'inside the handler\'s 10s sleep',
+    r.ms < 5000, r.ms + 'ms (cap ' + HANDLER_TIMEOUT_MS + 'ms; >=5000 means the '
+      + 'response waited on the orphaned grandchild, i.e. no wall-clock cap)');
 
   // A6: bridge UNREACHABLE — nothing listening at the configured url;
   // prompt (connect refusal, not a burned headers deadline).

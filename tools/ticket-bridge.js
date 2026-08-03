@@ -80,6 +80,26 @@ function parseArgs(argv) {
   return opts;
 }
 
+/* SIGKILL the handler's whole PROCESS GROUP, not just the process we spawned
+ * (ticket #451 review, finding 1). The handler is a WRAPPER — the contract
+ * invites it to launch a tracker CLI — so signalling only the direct child
+ * leaves the grandchild alive, and because that grandchild INHERITED the
+ * handler's stdout/stderr pipes it can hold the response open long past the
+ * deadline. Measured before the fix: a 1000ms handler timeout answered in
+ * 10439ms, i.e. the timeout labelled a failure instead of bounding one, and
+ * the request held an `inflight` slot for the whole time — weakening the
+ * concurrency clamp exactly under the abuse it exists to survive.
+ *
+ * `detached: true` at spawn makes the child a group leader (setsid), so the
+ * negative pid addresses the group. Falling back to child.kill() when the
+ * group is already gone matches the existing convention in this tree
+ * (tests/lib/suite-runner.js:80, tools/os-drive.mjs:75). net-bridge.js is no
+ * precedent here — it never spawns anything, it only fetches. */
+function killTree(child, sig) {
+  try { process.kill(-child.pid, sig); }
+  catch (e) { try { child.kill(sig); } catch (e2) {} }
+}
+
 /* Origin policy — net-bridge.js's originAllowed, verbatim. */
 function originAllowed(origin, allow) {
   if (origin === undefined || origin === null) return true;   // non-browser local client
@@ -121,7 +141,8 @@ function main() {
     const done = () => { inflight--; pump(); };
     let child;
     try {
-      child = cp.spawn(HANDLER_CMD, [], { stdio: ['pipe', 'pipe', 'pipe'] });
+      // detached: own process group, so the deadline can signal the GROUP.
+      child = cp.spawn(HANDLER_CMD, [], { stdio: ['pipe', 'pipe', 'pipe'], detached: true });
     } catch (e) {
       done();
       res.writeHead(502, Object.assign(corsHeaders(origin), { 'content-type': 'text/plain' }));
@@ -129,18 +150,38 @@ function main() {
       return;
     }
     const out = [], errChunks = [];
-    let outLen = 0, finished = false, timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      try { child.kill('SIGKILL'); } catch (e) {}
-    }, opts.handlerTimeout);
+    let outLen = 0, finished = false, drainTimer = null;
     const answer = (fn) => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
+      clearTimeout(drainTimer);
+      // Release the pipes: an orphan holding them must not keep this
+      // request's fds (or its inflight slot) alive after we have answered.
+      try { child.stdout.destroy(); child.stderr.destroy(); } catch (e) {}
       done();
       fn();
     };
+    // The deadline is a WALL-CLOCK CAP, so it answers HERE rather than
+    // waiting for 'close'. Group-killing is not sufficient on its own: a
+    // handler that double-forks out of its group would still hold the pipes,
+    // and then the cap would silently become "however long the orphan runs".
+    const timer = setTimeout(() => {
+      killTree(child, 'SIGKILL');
+      answer(() => {
+        log(n + ': handler timed out after ' + opts.handlerTimeout + 'ms');
+        res.writeHead(502, Object.assign(corsHeaders(origin), { 'content-type': 'text/plain' }));
+        res.end('ticket handler timed out after ' + opts.handlerTimeout + 'ms (killed)');
+      });
+    }, opts.handlerTimeout);
+    // Same hazard inside the deadline: the handler itself can exit promptly
+    // while a grandchild keeps the inherited pipes open, which would defer
+    // 'close' indefinitely. 'exit' therefore starts a short drain grace and
+    // then we answer with what we collected.
+    child.on('exit', () => {
+      if (finished || drainTimer) return;
+      drainTimer = setTimeout(() => { if (!finished) child.emit('close', child.exitCode, child.signalCode); }, 250);
+    });
     child.on('error', (e) => answer(() => {
       // ENOENT is the honest "this host has no ticket handler installed"
       // answer — a DISTINCT status so the in-OS client can say so.
@@ -158,7 +199,7 @@ function main() {
     child.stdout.on('data', (c) => {
       outLen += c.length;
       if (outLen > STDOUT_CAP) {
-        try { child.kill('SIGKILL'); } catch (e) {}
+        killTree(child, 'SIGKILL');   // the group: an orphan would keep writing
         answer(() => {
           log(n + ': handler stdout exceeded cap');
           res.writeHead(502, Object.assign(corsHeaders(origin), { 'content-type': 'text/plain' }));
@@ -171,12 +212,9 @@ function main() {
     child.stderr.on('data', (c) => { if (errChunks.length < 64) errChunks.push(c); });
     child.on('close', (code, signal) => answer(() => {
       const errText = Buffer.concat(errChunks).toString().slice(0, 2000);
-      if (timedOut) {
-        log(n + ': handler timed out after ' + opts.handlerTimeout + 'ms');
-        res.writeHead(502, Object.assign(corsHeaders(origin), { 'content-type': 'text/plain' }));
-        res.end('ticket handler timed out after ' + opts.handlerTimeout + 'ms (killed)');
-        return;
-      }
+      // No timedOut branch here: the deadline answers at the deadline (above),
+      // and `finished` makes this a no-op afterwards. A 'close' that arrives
+      // first is by definition not a timeout.
       if (code === null) {
         log(n + ': handler killed by ' + signal);
         res.writeHead(502, Object.assign(corsHeaders(origin), { 'content-type': 'text/plain' }));
