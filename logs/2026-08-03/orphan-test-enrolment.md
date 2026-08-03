@@ -75,6 +75,29 @@ updated — and the #97 lane fixed that expectation by hand as a courtesy. So th
 red this enrolment would have caught was already spent. The enrolment gap was
 untouched, and that gap is what #431 was actually about.
 
+## The review caught the same bug inside the fix
+
+The host guard shipped for about an hour with its guarded directories written
+down beside the registry it guards — `['serve', 'spawn'].forEach(...)`. Codex
+flagged it and it was right: `tests/` has 20+ sibling directories, so an
+ordinary future row like `../unit/test_x.js` would have *run* while tests/unit
+went unguarded, and the next `test_*.js` added beside it would have been
+orphaned in silence. That is this ticket pair's own defect one level up — a
+guard that only guards the directories somebody remembered to list.
+
+The partitions are now DERIVED from the rows: each row is classified as
+`test_x.js` or `../<dir>/test_x.js`, the distinct directories that appear
+become the guarded set, and a row matching no partition refuses the run naming
+it. Adding a row in a new directory either starts guarding that directory or
+fails loudly; it cannot silently do neither. Control: a throwaway
+`../blockfs/test_zz_sibling_control.js` row now makes the suite exit 2 naming
+tests/blockfs's undeclared files — the hardcoded version would have run it and
+said nothing.
+
+The lesson worth keeping is not "hardcoding is bad" — it is that **a guard
+whose scope is declared separately from the thing it guards will drift away
+from it**, and drift in a guard is invisible by construction.
+
 ## Residual — deliberately reported, not acted on
 
 - **The browser tier has no membership guard at all.** Discovery makes an
