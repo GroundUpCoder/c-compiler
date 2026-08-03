@@ -66,6 +66,7 @@ const tests = [
   ['test_netbridge_e2e.js', IMG], // #349: the Tier 2.5 HTTP bridge — one C process flips /etc/net OFF->ON->OFF->ON-dead live (watchPath, ack-file sync) with the bridge /fetch counter as the positive control (exactly 1); wrapper EACCES/ENETUNREACH mapping, CORS/PNA preflight, origin allowlist, 502 encapsulation; boot.js leg proves the shipped embedder wiring
   ['test_code_e2e.js', IMG],     // 0174: /bin/code in-OS vs a scripted fake SSE server — login-shell /etc/profile+~/.profile env plumbing, streamed text, write_file-on-BlockFS + posix_spawn bash tool round-trips
   ['test_gcode_step2_e2e.js', IMG], // 0174 step 2: usage accounting to stderr + durable 0600 JSONL sessions on BlockFS + -c/--resume replay across processes (fake SSE server with usage counters), in-image --self-test
+  ['test_gcode_intr_flush_e2e.js', IMG], // #433: ^C mid-stream flushes queued tty type-ahead — paced interactive session (jobctl Session machinery) vs the stalling fake SSE server; POST count 1, nothing auto-submitted at the fresh prompt
   ['test_gcode_native.js'],  // #314: the NATIVE gcode oracle — runs os/gcode/test/smoke.mjs (clang + real libcurl/cJSON vs the scripted SSE server) and asserts the CHECK COUNT against the source's check( call sites, not just exit 0 (the oracle prints no total)
   ['test_jobctl_e2e.js'],   // Phase 4: real C stop/cont — WUNTRACED/WCONTINUED, output halts
   ['test_jobctl_tty_e2e.js', IMG], // interactive Ctrl-Z/fg/bg/kill %1 through hush + the kernel tty

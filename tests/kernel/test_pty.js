@@ -173,6 +173,20 @@ async function drain(pid, fd) {
   clearPend(sh);
   check('^C echoes the caret form to the master', await drain(1, mfd) === '^C\r\n');
 
+  // ---- #433: VINTR flushes queued COOKED type-ahead over the BROKERED
+  // path — a line typed + Entered while the fg app was busy must NOT be
+  // delivered to its next read (POSIX: INTR flushes the input queue) ----
+  await wRpc(1, mfd, Buffer.from('queued line\r'));   // type-ahead, unread
+  await drain(1, mfd);                                // discard its echo
+  await wRpc(1, mfd, Buffer.from('\x03'));
+  clearPend(sh);
+  await drain(1, mfd);                                // discard the ^C caret echo
+  await wRpc(1, mfd, Buffer.from('fresh\r'));
+  r = await rpc(sh, K.OP.FS_READ, { fd: 0, count: 100 });
+  check('#433: ^C flushed queued cooked type-ahead (brokered)',
+    r.raw && str(r.raw) === 'fresh\n', JSON.stringify(r));
+  await drain(1, mfd);                                // discard the fresh echo
+
   // ---- TIOCSWINSZ on the master: winsize words + SIGWINCH ----
   await rpc(sh, K.OP.SIGDISP, { sig: 28, kind: 2 }); // SIGWINCH handler
   r = await rpc(1, K.OP.TIOCSWINSZ, { fd: mfd, rows: 50, cols: 132 });

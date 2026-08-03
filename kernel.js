@@ -1590,7 +1590,11 @@ KernelClient.prototype.spawnHooks = function () {
  * producer where the page used to be, and the LINE DISCIPLINE moves here:
  * canonical-mode editing (erase/kill/EOF), echo, ICRNL, and ISIG control
  * chars routed as signals to the FOREGROUND PROCESS GROUP (VINTR -> SIGINT:
- * Ctrl-C finally means something). The UI bridge stays dumb — raw bytes in
+ * Ctrl-C finally means something). A signal char also flushes the INPUT
+ * queue — edit buffer AND queued cooked type-ahead — unless NOFLSH is set
+ * (#433, POSIX 11.1.9); the OUTPUT-queue half of that flush (pty
+ * slave->master buffer) is a recorded descope, no observed symptom.
+ * The UI bridge stays dumb — raw bytes in
  * via tty.input(), echo/output bytes out via the output callback; a
  * scripted bridge (tests, agents) and xterm.js are two consumers of the
  * same byte protocol (OS.md "agent-friendly by construction").
@@ -1613,7 +1617,7 @@ var T_ICRNL = 0x100, T_INLCR = 0x40, T_IGNCR = 0x80,
     T_IUTF8 = 0x4000;                                          // c_iflag
 var T_OPOST = 0x1, T_ONLCR = 0x2;                              // c_oflag
 var T_ECHOE = 0x2, T_ECHOK = 0x4, T_ECHO = 0x8, T_ECHONL = 0x10,
-    T_ISIG = 0x80, T_ICANON = 0x100;                           // c_lflag
+    T_ISIG = 0x80, T_ICANON = 0x100, T_NOFLSH = 0x80000000;    // c_lflag
 var V_EOF = 0, V_ERASE = 3, V_KILL = 5, V_INTR = 8, V_QUIT = 9,
     V_SUSP = 10, V_START = 12, V_STOP = 13, V_MIN = 16, V_TIME = 17;
 var NCCS = 20;
@@ -1766,6 +1770,25 @@ Tty.prototype._signalFg = function (sig) {
   if (this.fgPgid > 0) this._kernel._killPgid(this.fgPgid, sig);
 };
 
+/* Discard queued COOKED input (the tcflush(TCIFLUSH) core, shared by the
+ * ISIG signal chars and TCSAFLUSH — #433). Brokered mode is trivially safe:
+ * _cooked lives on the kernel thread and a parked FS_READ waiter holds no
+ * snapshot of it. Ring mode: a reader PARKED on the SI_SEQ futex is safe
+ * too — it re-loads SI_AVAIL fresh after every wake, so zeroing AVAIL
+ * FIRST means any reader arriving mid-flush sees "empty" and parks rather
+ * than reading a torn index pair. The one exposed window is a reader
+ * already inside its avail>0 consume (loaded AVAIL, not yet subtracted) at
+ * the flush instant: its unconditional Atomics.sub can leave AVAIL negative
+ * — the same few-instruction race TCSAFLUSH has accepted since Phase 3
+ * ("flush during concurrent reads is undefined", POSIX agrees), not
+ * widened here, and unreachable in the OS proper (brokered). */
+Tty.prototype._flushInput = function () {
+  if (this._brokered) { this._cooked.length = 0; return; }
+  var i32 = this._i32;
+  Atomics.store(i32, SI_AVAIL, 0);
+  Atomics.store(i32, SI_READPOS, Atomics.load(i32, SI_WRITEPOS));
+};
+
 /* Raw bytes from the UI bridge (keystrokes). String or Uint8Array. */
 Tty.prototype.input = function (data) {
   var bytes = typeof data === 'string' ? textEncoder.encode(data) : data;
@@ -1784,8 +1807,21 @@ Tty.prototype.input = function (data) {
         : b === t.cc[V_QUIT] ? SIG.QUIT
         : b === t.cc[V_SUSP] ? SIG.TSTP : 0;
       if (sig) {
-        if (raw.length) { this._push(raw); raw = []; }
-        this._line.length = 0;                       // POSIX: flush the edit buffer
+        if (t.lflag & T_NOFLSH) {
+          // NOFLSH (POSIX): a signal char flushes nothing — pending raw
+          // bytes commit, the edit buffer and cooked queue survive.
+          if (raw.length) { this._push(raw); raw = []; }
+        } else {
+          // POSIX: INTR/QUIT/SUSP flush the input queue — the edit buffer,
+          // raw bytes accumulated this burst, AND completed type-ahead
+          // already sitting in the cooked queue (#433: without the queue
+          // flush, a line typed + Entered during a running command replays
+          // into the next read after ^C). Output-queue flush is a recorded
+          // descope (pty slave->master buffer; no observed symptom).
+          raw = [];
+          this._line.length = 0;
+          this._flushInput();
+        }
         if (t.lflag & T_ECHO) { this._echo([94, 64 + (b & 31)]); this._echoNl(); } // ^C style
         this._signalFg(sig);
         continue;
@@ -1889,12 +1925,9 @@ Tty.prototype.setattr = function (actions, t) {
     for (var i = 0; i < NCCS; i++) this.termios.cc[i] = (t.cc[i] | 0) & 0xff;
   }
   if (actions === TCSAFLUSH) {
-    // Discard unread input (rare; the benign race with a mid-read consumer
-    // is acceptable — flush during concurrent reads is undefined anyway).
-    Atomics.store(this._i32, SI_READPOS, Atomics.load(this._i32, SI_WRITEPOS));
-    Atomics.store(this._i32, SI_AVAIL, 0);
+    // Discard unread input (concurrency rules: _flushInput's comment).
     this._line = [];
-    this._cooked = [];              // brokered-mode queue (the ring is unused there)
+    this._flushInput();
   } else if (wasCanon && !(this.termios.lflag & T_ICANON) && this._line.length) {
     // Leaving canonical mode mid-line (Linux n_tty semantics, the 0171 wedge
     // class): the un-terminated edit buffer becomes readable NOW. Stranding

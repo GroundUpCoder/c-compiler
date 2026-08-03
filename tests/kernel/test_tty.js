@@ -168,6 +168,34 @@ const bit = (sig) => 1 << (sig - 1);
   clearPend(1);
   takeEcho();
 
+  // ---- #433: VINTR flushes queued COOKED type-ahead too (POSIX: INTR
+  // flushes the input queue unless NOFLSH) — a completed line typed +
+  // Entered while the fg app was busy must not reach its next read ----
+  tty.input('queued line\r');            // completed type-ahead, unread
+  check('type-ahead queued before ^C', ringAvail() === 12, String(ringAvail()));
+  tty.input('\x03');
+  check('^C flushes queued cooked input', ringAvail() === 0, String(ringAvail()));
+  check('^C still posts SIGINT with type-ahead queued', (pend(1) & bit(2)) !== 0);
+  clearPend(1);
+  takeEcho();
+  tty.input('fresh\r');
+  check('post-^C read sees only post-^C bytes', ringTake() === 'fresh\n');
+  takeEcho();
+
+  // ---- #433: NOFLSH suppresses the flush (Linux n_tty isig semantics:
+  // with NOFLSH set nothing is discarded — cooked queue AND edit buffer
+  // survive; the signal itself still fires) ----
+  tty.termios.lflag = (tty.termios.lflag | 0x80000000) >>> 0;   // NOFLSH
+  tty.input('kept line\r');
+  tty.input('part\x03');                 // ^C mid-line, NOFLSH set
+  check('NOFLSH: ^C still posts SIGINT', (pend(1) & bit(2)) !== 0);
+  check('NOFLSH: queued cooked input survives', ringTake() === 'kept line\n');
+  tty.input('ial\r');
+  check('NOFLSH: the edit buffer survives too', ringTake() === 'partial\n');
+  clearPend(1);
+  takeEcho();
+  tty.termios.lflag = (tty.termios.lflag & ~0x80000000) >>> 0;
+
   // ---- foreground routing: tcsetpgrp moves the target ----
   let r = await rpc(1, K.OP.SPAWN, { path: '/bin/a', argv: ['a'], envp: null, cwd: null, actions: [], flags: 1, pgid: 0 }); // pid 2, pgid 2
   await rpc(2, K.OP.SIGDISP, { sig: 2, kind: 2 });
