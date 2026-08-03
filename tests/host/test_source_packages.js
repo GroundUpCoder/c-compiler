@@ -27,6 +27,7 @@ const zlib = require('zlib');
 
 const ROOT = path.resolve(__dirname, '../..');
 const COMMON = require(path.join(ROOT, 'os', 'os-common.js'));
+const CompilerJS = require(path.join(ROOT, 'compiler.js'));
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -39,7 +40,7 @@ function throws(name, fn, re) {
 }
 
 /* ---- the synthesis rule ---- */
-const units = COMMON.sourcePackageDefs(fs, path, ROOT);
+const units = COMMON.sourcePackageDefs(fs, path, ROOT, { CompilerJS });
 const byName = new Map(units.map((u) => [u.name, u]));
 const imageVersion = String(JSON.parse(
   fs.readFileSync(path.join(ROOT, 'os', 'image.json'), 'utf-8')).version | 0);
@@ -68,15 +69,46 @@ check('no gated (-clang/-rust) def gets a unit',
   units.every((u) => !/-(clang|rust)-sources$/.test(u.name)),
   units.map((u) => u.name).filter((n) => /-(clang|rust)-sources$/.test(n)).join(','));
 
-check('every unit is uniform (name/minBase/srclib/bin-mirror files)', units.every((u) => {
+check('every unit is uniform (name/minBase/srclib; bin-mirror or builtin-content files)', units.every((u) => {
   const d = u.def;
+  // The 'builtin' derivation (#439) carries generated `content` entries —
+  // its source is compiler.js's literal maps, not repo files; the repo
+  // derivations stay strict bin mirrors.
+  const filesOk = u.kind === 'builtin'
+    ? Object.keys(d.files).every((rel) => typeof d.files[rel].content === 'string')
+    : Object.keys(d.files).every((rel) => d.files[rel].bin === rel);
   return d.name === u.parent + '-sources' && d.minBase === 0 &&
     JSON.stringify(d.srclib) === JSON.stringify({ src: { [u.parent]: '.' } }) &&
-    Object.keys(d.files).length > 0 &&
-    Object.keys(d.files).every((rel) => d.files[rel].bin === rel);
+    Object.keys(d.files).length > 0 && filesOk;
 }));
 check('synthesis is deterministic',
-  JSON.stringify(units) === JSON.stringify(COMMON.sourcePackageDefs(fs, path, ROOT)));
+  JSON.stringify(units) === JSON.stringify(COMMON.sourcePackageDefs(fs, path, ROOT, { CompilerJS })));
+
+/* ---- the 'builtin' derivation (#439): the compiler's own libc ---- */
+const libc = byName.get('libc-sources');
+check('libc-sources exists (builtin derivation)', libc && libc.kind === 'builtin');
+check('libc-sources version is the image version', libc && libc.def.version === imageVersion,
+  libc && libc.def.version);
+check('libc-sources inputs name the literal-map files',
+  libc && JSON.stringify(libc.inputs) === JSON.stringify(['compiler.js', 'libc-ext.js']),
+  libc && JSON.stringify(libc.inputs));
+{
+  const hdrs = COMMON.stdlibHeaderMap(CompilerJS);
+  const srcs = CompilerJS.getStdlibSources();
+  check('libc-sources carries every merged header BYTE-EQUAL to the compiler map',
+    libc && [...hdrs.keys()].every((n) => libc.def.files[n] &&
+      libc.def.files[n].content === hdrs.get(n)));
+  check('libc-sources carries every builtin .c unit BYTE-EQUAL to the compiler map',
+    libc && Object.keys(srcs).every((n) => libc.def.files[n] &&
+      libc.def.files[n].content === srcs[n]));
+  check('libc-sources carries the ext .c units (TRE regex engine et al)',
+    libc && ['fnmatch.c', 'glob.c', 'regcomp.c', 'regexec.c', 'regerror.c', 'tre-mem.c']
+      .every((n) => libc.def.files[n] && libc.def.files[n].content.length > 0));
+}
+check('sourcePackageDefs without CompilerJS fails loud (never a silently smaller index)', (() => {
+  try { COMMON.sourcePackageDefs(fs, path, ROOT, {}); return false; }
+  catch (e) { return /CompilerJS is required/.test(String(e.message)); }
+})());
 
 /* ---- srclib.src '.' (the payload root) ---- */
 check('validateSrclibShape accepts a payload-root namespace', (() => {

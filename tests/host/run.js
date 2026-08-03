@@ -40,6 +40,7 @@ var tests = [
   ['test_diff_rules.js', []],            // compiler.js/host.js diff rules select the run.py corpus; exclusions pinned (0362)
   ['test_launcher_convention.js', []],   // package /bin/sh launchers are spawn-free: no command substitution, both plant sites probed (0444)
   ['test_source_packages.js', []],       // #407: mechanical <name>-sources synthesis — both derivations, mechanical exclusions, uniform defs, payload-root srclib ('.') validate/fold/build
+  ['test_stdinc_fold.js', []],           // #439: baked /usr/include — the fold plants EXACTLY the compiler's merged header map byte-equal (hazard 1), collisions + missing-ext fail loud (hazard 2), coexists with every shipped srclib package
   ['test_netbridge_wrapper.js', []],     // #393: bridge answers are named, never "unreachable"; non-Latin-1 crosses the hop; dead bridge keeps ENETUNREACH
   ['test_browser_out_dirs.js', []],      // no tests/browser output path names a committed dir (logs/ etc.) — sweeps must leave a clean tree clean (#399/#183)
   ['test_manifest_refs.js', []],         // #434: image.json referential integrity — dangling launcher/link/seed refs fail the bake; red-then-green + the v223 sameboy replay

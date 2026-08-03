@@ -306,7 +306,7 @@ const avail = COMMON.listPackages(fs, path, ROOT, { producers: [...enabled], pac
  * package. Native-sibling packages get no unit (their source lives in the
  * producer repo, which publishes only binaries). */
 const sourceUnits = new Map();
-for (const u of COMMON.sourcePackageDefs(fs, path, ROOT, { packagesDir: pkgDir, imageManifest })) {
+for (const u of COMMON.sourcePackageDefs(fs, path, ROOT, { packagesDir: pkgDir, imageManifest, CompilerJS })) {
   sourceUnits.set(u.name, u);
 }
 const allAvail = avail.concat([...sourceUnits.keys()]).sort();

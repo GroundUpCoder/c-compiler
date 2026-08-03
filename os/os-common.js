@@ -864,6 +864,24 @@ function listTreeFiles(fsMod, pathMod, rootDir, entry, label) {
  * repo-relative files whose CONTENT this synthesis read (the parent def /
  * os/image.json) for mkpkg's freshness scan; the closure files themselves
  * ride in the def as `bin` entries and are scanned as such. */
+/* The full EXT_LIB_MAP (headers AND sources) read from the repo's
+ * libc-ext.js, the same JSON-object-literal slice compiler.js itself
+ * parses. Node-only; a missing/broken file throws — the ext sources are
+ * part of the libc surface, and a silently smaller libc-sources payload
+ * is the zombie-fallback failure mode. */
+function readLibcExtMap(fsMod, pathMod, rootDir) {
+  var p = pathMod.join(rootDir, 'libc-ext.js');
+  var text;
+  try { text = fsMod.readFileSync(p, 'utf-8'); }
+  catch (e) {
+    throw new Error('libc-sources: ' + p + ' is unreadable (' + e.message + ')');
+  }
+  var start = text.indexOf('{'), end = text.lastIndexOf('}');
+  if (start < 0 || end < start)
+    throw new Error('libc-sources: EXT_LIB_MAP object literal not found in libc-ext.js');
+  return JSON.parse(text.slice(start, end + 1));
+}
+
 function sourcePackageDefs(fsMod, pathMod, rootDir, opts) {
   opts = opts || {};
   var pkgDir = opts.packagesDir || pathMod.join(rootDir, 'packages');
@@ -945,6 +963,53 @@ function sourcePackageDefs(fsMod, pathMod, rootDir, opts) {
 
   var units = {};   // name -> unit; 'package' derivation wins over 'image'
 
+  // kind 'builtin' — the compiler's OWN standard library (ticket #439): the
+  // headers + .c implementation units living as literals inside compiler.js,
+  // plus ext/'s vendored pieces via libc-ext.js. Neither is a repo source
+  // tree #407's closure rule can reach, so the payload is generated from the
+  // SAME maps the compiler compiles from (inline `content` entries), landing
+  // at /usr/local/src/libc on install. The baked /usr/include twin
+  // (foldStdlibHeaders) carries the headers in the base image; this unit is
+  // the readable implementation behind them.
+  (function () {
+    var CJS = opts.CompilerJS;
+    if (!CJS)
+      throw new Error('sourcePackageDefs: opts.CompilerJS is required — the ' +
+        "libc-sources unit reads the compiler's builtin stdlib maps");
+    var name = 'libc-sources';
+    var files = {};
+    function put(n, text, what) {
+      if (!validRelPath(n))
+        throw new Error("sources unit '" + name + "': bad " + what + ' name ' + JSON.stringify(n));
+      if (files[n])
+        throw new Error("sources unit '" + name + "': " + n + ' is produced twice');
+      files[n] = { content: text };
+    }
+    stdlibHeaderMap(CJS).forEach(function (text, n) { put(n, text, 'header'); });
+    var srcs = CJS.getStdlibSources();
+    Object.keys(srcs).sort().forEach(function (n) { put(n, srcs[n], 'source'); });
+    var ext = readLibcExtMap(fsMod, pathMod, rootDir);
+    Object.keys(ext).sort().forEach(function (n) {
+      if (!/\.h$/.test(n)) put(n, ext[n], 'ext source');   // .h already rode the merged map
+    });
+    var version = String(manifest.version | 0);
+    units[name] = {
+      name: name,
+      parent: 'libc',
+      kind: 'builtin',
+      inputs: ['compiler.js', 'libc-ext.js'],
+      def: {
+        name: name,
+        version: version,
+        summary: 'Source code for the C standard library built into cc — mechanical ' +
+          '-sources companion, readable at /usr/local/src/libc',
+        minBase: 0,
+        files: files,
+        srclib: { src: { libc: '.' } },
+      },
+    };
+  })();
+
   listPackages(fsMod, pathMod, rootDir, { packagesDir: pkgDir }).forEach(function (p) {
     var def;
     try { def = JSON.parse(fsMod.readFileSync(pathMod.join(pkgDir, p + '.json'), 'utf-8')); }
@@ -957,6 +1022,9 @@ function sourcePackageDefs(fsMod, pathMod, rootDir, opts) {
     if (!roots.length) return;   // no compilable entry — no source to carry
     var u = makeUnit(p, 'package', String(def.version), roots,
       ['packages/' + p + '.json'], "the '" + p + "' package v" + def.version);
+    if (units[u.name])
+      throw new Error("sources synthesis: '" + u.name + "' collides with the " +
+        units[u.name].kind + '-derived unit — rename the package');
     units[u.name] = u;
   });
 
@@ -1466,6 +1534,66 @@ function foldDesktopDefaults(manifest) {
   return m;
 }
 
+/* ---- baked standard-library headers (ticket #439) ----
+ *
+ * stdlibHeaderMap(CompilerJS) -> the compiler's MERGED builtin-header map
+ * (Map<name, text>): the inline standardHeaders plus libc-ext.js's .h
+ * entries, read through createDefaultPPRegistry() — the exact surface
+ * `#include <...>` resolves against, in both environments. The ext headers
+ * are REQUIRED here even though the compiler treats libc-ext.js as
+ * optional: a bake that silently proceeded without them would ship a
+ * /usr/include whose contents depend on which files sat next to
+ * compiler.js, and the two embedders' blobs could differ byte-for-byte.
+ *
+ * foldStdlibHeaders(manifest, CompilerJS) plants the whole map as inline
+ * `content` entries under /usr/include. The planted files are
+ * DOCUMENTATION, not the compile input: builtins resolve BEFORE any
+ * filesystem include path by design (compiler.js, "System include dirs" —
+ * only an explicit -I may shadow a builtin). Generating them from the same
+ * literal map at the one bake choke point is what makes drift impossible;
+ * a hand-copied tree here would be a confident lie waiting to happen.
+ * Collisions with existing image entries (a folded package's srclib
+ * symlink top, a future manifest entry) throw loudly — the claim() rule. */
+function stdlibHeaderMap(CompilerJS) {
+  var pp = CompilerJS.createDefaultPPRegistry();
+  (pp.extProvidedHeaders || []).forEach(function (n) {
+    if (!pp.standardHeaders.has(n))
+      throw new Error('stdlib header bake: <' + n + '> is missing from the merged ' +
+        'standardHeaders map — libc-ext.js was not loaded; baking without it would ' +
+        'ship an environment-dependent /usr/include');
+  });
+  return pp.standardHeaders;
+}
+
+function foldStdlibHeaders(manifest, CompilerJS) {
+  var headers = stdlibHeaderMap(CompilerJS);
+  var m = JSON.parse(JSON.stringify(manifest));
+  m.system = m.system || {};
+  m.system.dirs = m.system.dirs || [];
+  m.system.files = m.system.files || {};
+  var dirSeen = {};
+  m.system.dirs.forEach(function (d) { dirSeen[d] = true; });
+  function pushDir(d) {
+    if (m.system.files[d])
+      throw new Error('foldStdlibHeaders: ' + d + ' conflicts with an existing image entry');
+    if (!dirSeen[d]) { dirSeen[d] = true; m.system.dirs.push(d); }
+  }
+  pushDir('/usr/include');
+  var names = [];
+  headers.forEach(function (content, name) { names.push(name); });
+  names.sort().forEach(function (name) {
+    if (!validRelPath(name))
+      throw new Error('foldStdlibHeaders: bad header name ' + JSON.stringify(name));
+    var p = '/usr/include/' + name;
+    var parts = name.split('/'), cur = '/usr/include';
+    for (var i = 0; i < parts.length - 1; i++) { cur += '/' + parts[i]; pushDir(cur); }
+    if (m.system.files[p] || dirSeen[p])
+      throw new Error('foldStdlibHeaders: ' + p + ' conflicts with an existing image entry');
+    m.system.files[p] = { content: headers.get(name) };
+  });
+  return m;
+}
+
 /* Build the Node-side overlay io from injected modules (keeps os-common
  * environment-neutral; only mkimage.js/boot.js — both Node — call this). */
 function nodeOverlayIo(fsMod, pathMod, cryptoMod) {
@@ -1809,6 +1937,12 @@ function bakeSystemImage(BLOCK_FS, CompilerJS, sysStore, manifest, io) {
   // The default-Desktop rendering (§6.1) folds here — the ONE bake choke
   // point, so mkimage/boot.js/the in-worker fallback bake all agree.
   manifest = foldDesktopDefaults(manifest);
+  // Baked standard-library headers (ticket #439) fold at the same choke
+  // point: /usr/include/<name> for every entry of the compiler's merged
+  // builtin-header map, generated from that map so the planted files can
+  // never drift from what `#include <...>` actually resolves (the builtins
+  // win by design — these are the readable documentation of that surface).
+  manifest = foldStdlibHeaders(manifest, CompilerJS);
   // Overlays (todos/0118): read + verify BEFORE the ~minute-long bake so a bad
   // flag fails fast. Off by default — an empty/absent io.overlays leaves the
   // base bake byte-identical to today (no overlay dirs, files, provenance, or
@@ -2050,6 +2184,9 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest) {
   }
   statFile(pathMod.join(rootDir, 'compiler.js'));
   statFile(pathMod.join(rootDir, 'host.js'));
+  // libc-ext.js is bake CONTENT since ticket #439 (its .h entries bake to
+  // /usr/include via foldStdlibHeaders), not just a runtime sibling.
+  statFile(pathMod.join(rootDir, 'libc-ext.js'));
   walk(pathMod.join(rootDir, 'os'), BAKE_INPUT_SKIP);
   // Package definitions are bake inputs whenever packages fold in (a fat
   // fixture must restale on a packages/*.json edit); scanned unconditionally
@@ -2493,6 +2630,8 @@ var OS_COMMON = {
   nativeSiblingProducer: nativeSiblingProducer,
   foldPackages: foldPackages,
   foldDesktopDefaults: foldDesktopDefaults,
+  stdlibHeaderMap: stdlibHeaderMap,
+  foldStdlibHeaders: foldStdlibHeaders,
   checkManifestRefs: checkManifestRefs,
   listTreeFiles: listTreeFiles,
   sourcePackageDefs: sourcePackageDefs,
