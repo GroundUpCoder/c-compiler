@@ -88,6 +88,45 @@ Every new assertion except one was run against the **pre-fix** `gcode.c` first:
 on both sides to mean anything. All 42 pre-existing oracle checks stayed green
 across the swap.
 
+## Counter pass (Codex review of `eb626a41..547073f0`)
+
+Two findings, both settled without redesigning anything.
+
+**Blocking — "the pair does not persist together".** Correct, and my comment
+claimed otherwise. The assistant `tool_use` and the user `tool_result` are two
+independent appended+`fsync`ed records; a stop between them leaves a complete
+assistant record with no answer, `session_resume()` skips the trailing
+fragment, and `--resume` loads a dangling `tool_use`.
+
+The window is **pre-existing** — `eb626a41` already persisted these as two
+separate writes (`persist_assistant_message` then `persist_message(…, "tool")`),
+and the original diagnosis note flagged it. What this ticket changes is *how
+many rounds reach the second write*: it used to fire only on
+`stop_reason == "tool_use"`, and on every other stop reason the result was
+skipped **entirely, with no crash required**. So the change turns a certainty
+into a narrow crash window — strictly better, but not atomic, and the comment
+now says so in those words. The atomicity gap is filed separately.
+
+Recommended fix for that ticket, in preference order: **(1) one combined
+record** — persist the assistant message and its results as a single JSONL line
+with both halves, so one `write` either lands or does not (the reader already
+tolerates unknown fields, and it removes the window rather than narrowing it);
+(2) failing that, a **resume-side repair** that drops a trailing unanswered
+`tool_use` when loading, which also heals logs already on disk — the only
+option that fixes existing damage. Append-then-rename is the weakest: it
+protects a torn write but not a stop *between* two successful ones, which is
+the actual failure mode here.
+
+**Non-blocking — truncation misclassification.** Also correct: unparseable
+arguments were reported as a max_tokens truncation regardless of stop reason.
+Fixed by attributing the cause (`cap_cut` vs malformed) in the tool result, the
+console line, and the give-up line. Both causes are still **refused
+identically** — never execute a tool whose arguments could not be read — and
+both still count toward the same streak, deliberately: the runaway guard exists
+to stop a provider repeating an unusable round, and a malformed stream does
+that just as well as a cap cut. Decoupling the counter would have opened an
+unbounded loop on `max_turns: 0`.
+
 The fixtures live in `os/gcode/test/smoke.mjs` (the scripted-SSE harness that
 drives the **real** binary through `do_turn`), so they need no suite
 registration: `tests/kernel/test_gcode_native.js` derives the required check

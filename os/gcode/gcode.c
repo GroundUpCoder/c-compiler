@@ -1302,22 +1302,44 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
              * running a half-specified `bash` command is the hazard). The
              * substituted result NAMES the cause and the cap so the model
              * can retry smaller instead of re-emitting the same call. */
-            int truncated = bad_json || (stop_max_tokens && i == last_block);
+            /* Attribute the cause, don't guess it. Only a cut at the cap is
+             * a TRUNCATION; unparseable arguments on any other stop reason
+             * are a MALFORMED stream, and saying "truncated at the
+             * max_tokens cap" there would send the next debugger into the
+             * cap code for a problem that has nothing to do with it. Both
+             * causes are refused identically (never execute a tool whose
+             * arguments we could not read) and both count toward the same
+             * streak — the runaway guard is about a provider repeating an
+             * unusable round, which either cause can do. */
+            int cap_cut = stop_max_tokens && i == last_block;
+            int refused = cap_cut || bad_json;
             char *result;
-            if (truncated) {
+            if (refused) {
                 truncated_calls++;
                 char msg[512];
-                snprintf(msg, sizeof msg,
-                         "[gcode: this tool call was TRUNCATED at the max_tokens output cap (%ld) "
-                         "and was NOT executed — %s. Nothing was run and nothing changed on disk. "
-                         "Retry with a smaller payload (for a large file, write it in several "
-                         "smaller chunks).]",
-                         cfg->max_tokens,
-                         bad_json ? "its arguments were cut mid-JSON, so they are incomplete"
-                                  : "the response ended inside this block, so it may be incomplete");
+                if (cap_cut)
+                    snprintf(msg, sizeof msg,
+                             "[gcode: this tool call was TRUNCATED at the max_tokens output cap (%ld) "
+                             "and was NOT executed — %s. Nothing was run and nothing changed on disk. "
+                             "Retry with a smaller payload (for a large file, write it in several "
+                             "smaller chunks).]",
+                             cfg->max_tokens,
+                             bad_json ? "its arguments were cut mid-JSON, so they are incomplete"
+                                      : "the response ended inside this block, so it may be incomplete");
+                else
+                    snprintf(msg, sizeof msg,
+                             "[gcode: this tool call's arguments were not valid JSON (the stream ended "
+                             "\"%s\", so this is a MALFORMED response, not the max_tokens cap) and it "
+                             "was NOT executed. Nothing was run and nothing changed on disk. Re-send "
+                             "the call with well-formed arguments.]",
+                             ctx.stop_reason ? ctx.stop_reason : "(no stop_reason)");
                 result = strdup(msg);
-                fprintf(stderr, "    %struncated at the max_tokens cap (%ld) — not executed%s\n",
-                        R_ERRB, cfg->max_tokens, CRST);
+                if (cap_cut)
+                    fprintf(stderr, "    %struncated at the max_tokens cap (%ld) — not executed%s\n",
+                            R_ERRB, cfg->max_tokens, CRST);
+                else
+                    fprintf(stderr, "    %smalformed tool arguments (stop_reason %s) — not executed%s\n",
+                            R_ERRB, ctx.stop_reason ? ctx.stop_reason : "(none)", CRST);
             } else if (g_interrupted) {
                 result = strdup("[interrupted by user (^C) — tool not executed]");
             } else {
@@ -1380,8 +1402,21 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
         cJSON_AddStringToObject(umsg, "role", "user");
         cJSON_AddItemToObject(umsg, "content", tool_results);
         cJSON_AddItemToArray(messages, umsg);
-        /* Both halves of the pair persist together, or --resume replays the
-         * same dangling tool_use and re-bricks the session. */
+        /* 🔴 NOT ATOMIC, and do not read it as such. This is the SECOND of
+         * two independent appended+fsync'd records: persist_assistant_message
+         * above wrote the tool_use, this writes the matching tool_result.
+         * Nothing makes the pair land or fail together. If the process or
+         * machine stops between them — or this write fails ENOSPC or lands
+         * short — the log holds a complete assistant record and no answer,
+         * session_resume() skips the trailing fragment, and --resume loads
+         * exactly the dangling tool_use this ticket exists to eliminate.
+         * That window is PRE-EXISTING (eb626a41 persisted these as two
+         * writes too) and is deliberately left open here: closing it needs a
+         * combined record, an append-then-rename, or a resume-side repair
+         * that drops a trailing unanswered tool_use — see the ticket filed
+         * off #462's review. What this ticket fixes is the far larger hole
+         * beside it: the tool_result used to be skipped ENTIRELY, with no
+         * crash required, on every stop reason but "tool_use". */
         if (persist_message(sess, umsg, "tool")) { ret = -1; goto done; }
     } else {
         cJSON_Delete(tool_results);
@@ -1402,9 +1437,10 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
     } else if (sess->trunc_streak > TRUNC_MAX_CONTINUATIONS) {
         /* Loud, never silent: a truncation storm that quietly ate the turn
          * budget would be a worse failure than the brick this ticket fixes. */
-        fprintf(stderr, "%sgcode: %d consecutive rounds were cut at the max_tokens cap (%ld) — "
-                        "giving up on this turn instead of retrying forever. Raise the cap with "
-                        "--max-tokens N (or ANTHROPIC_MAX_TOKENS) and ask again.%s\n",
+        fprintf(stderr, "%sgcode: %d consecutive rounds ended in an unusable tool call (cut at the "
+                        "max_tokens cap, or malformed arguments — the per-call results above say "
+                        "which) — giving up on this turn instead of retrying forever. If it was the "
+                        "cap (%ld), raise it with --max-tokens N or ANTHROPIC_MAX_TOKENS.%s\n",
                 R_ERRB, sess->trunc_streak, cfg->max_tokens, CRST);
         sess->trunc_streak = 0;   /* the next turn starts fresh */
         ret = 0;

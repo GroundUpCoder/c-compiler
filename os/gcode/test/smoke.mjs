@@ -551,11 +551,42 @@ async function main() {
       srv.close();
       check(srv.bodies.length === 4,
         `#462: a truncation storm stops after 3 consecutive continuations (${srv.bodies.length} requests, pre-fix 1)`);
-      check(/consecutive rounds were cut at the max_tokens cap/.test(stderr),
+      check(/consecutive rounds ended in an unusable tool call/.test(stderr)
+        && /max_tokens cap/.test(stderr),
         '#462: hitting the truncation cap PRINTS why — never a silent turn-budget burn');
       check(stderr.includes('--max-tokens'),
         '#462: the give-up line names the fix (raise the cap)');
       fs.rmSync(target, { force: true });
+    }
+
+    // -- leg F (#462 review): malformed args are NOT a max_tokens truncation
+    // Unparseable tool arguments on a stop reason that is not max_tokens are a
+    // MALFORMED stream. Refusing to execute is right either way, but reporting
+    // it as "truncated at the max_tokens cap" would send the next debugger
+    // into the cap code for a problem that has nothing to do with it.
+    {
+      const bad =
+        sse('message_start', { message: { id: 'msg_462f', model: 'malformed-model', usage: { input_tokens: 4, output_tokens: 0 } } })
+        + sse('content_block_start', { index: 0, content_block: { type: 'tool_use', id: 'toolu_462f', name: 'bash', input: {} } })
+        + sse('content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: '{"command": "echo oops' } })
+        + sse('content_block_stop', { index: 0 })
+        + sse('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 7 } })
+        + sse('message_stop', {});
+
+      const srv = await startServer([bad, textResponse('recovered')]);
+      const { stderr } = await runCodeBoth(srv.url, ['-p', 'malformed', '--no-color', '--no-persist']);
+      srv.close();
+      const tr = (srv.bodies[1] ? srv.bodies[1].messages : [])
+        .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+        .find((b) => b.type === 'tool_result' && b.tool_use_id === 'toolu_462f');
+      check(!!tr && tr.content.includes('MALFORMED') && !tr.content.includes('TRUNCATED'),
+        '#462: unparseable args on end_turn are reported as MALFORMED, not as a max_tokens truncation');
+      check(!!tr && tr.content.includes('end_turn'),
+        '#462: the malformed result names the actual stop_reason it arrived with');
+      check(/malformed tool arguments \(stop_reason end_turn\)/.test(stderr),
+        '#462: the console line attributes the cause correctly too');
+      check(!!tr && tr.content.includes('NOT executed'),
+        '#462 negative control: a call with unreadable arguments is still refused, whatever the cause');
     }
 
     // -- leg E: the cap itself — default, env override, clamp, --help ------
