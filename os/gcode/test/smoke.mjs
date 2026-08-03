@@ -613,6 +613,276 @@ async function main() {
     }
   }
 
+  // ---- test 13 (#463): recover from a history that is ALREADY invalid ----
+  // #462 stops gcode CREATING a dangling tool_use. This is the other half:
+  // a log poisoned by the shipped bug (jku's 900k-token session is one) or
+  // torn by a crash between the assistant record and its results is loaded
+  // by --resume and must be REPAIRED at the send seam, not refused.
+  //
+  // The fake server accepts anything, so "it did not crash" proves nothing
+  // here: every leg asserts the SENT BODY is API-valid, which is the property
+  // the real provider enforces with a 400. Legs A/B/E/F FAIL on the pre-fix
+  // binary; C/D are labelled negative controls and pass on both.
+  {
+    const META = '{"schema_version":1,"type":"session_meta","session_id":"463463463463463463463463463463ab","model":"m","base_url":"u","system_prompt_hash":"h","cwd":"/"}';
+    // Mirror of history_is_valid() in gcode.c: every tool_use answered in the
+    // message immediately after it, and no tool_result answering anything else.
+    function historyFaults(messages) {
+      const faults = [];
+      const uses = (m) => (m && m.role === 'assistant' && Array.isArray(m.content)
+        ? m.content.filter((b) => b.type === 'tool_use') : []);
+      messages.forEach((m, i) => {
+        const next = messages[i + 1];
+        for (const u of uses(m)) {
+          const answers = (next && next.role === 'user' && Array.isArray(next.content))
+            ? next.content.filter((b) => b.type === 'tool_result' && b.tool_use_id === u.id) : [];
+          if (!answers.length) faults.push(`dangling tool_use ${u.id}`);
+        }
+        const prevUses = uses(messages[i - 1]).map((u) => u.id);
+        for (const b of (Array.isArray(m.content) ? m.content : []))
+          if (b.type === 'tool_result' && !prevUses.includes(b.tool_use_id))
+            faults.push(`orphan tool_result ${b.tool_use_id}`);
+      });
+      return faults;
+    }
+    function writeLog(tag, lines) {
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), `gcode-463-${tag}-`));
+      const sessDir = path.join(stateDir, 'sessions');
+      fs.mkdirSync(sessDir, { recursive: true });
+      const sessPath = path.join(sessDir, '20260804T000000Z_463463463463463463463463463463ab.jsonl');
+      fs.writeFileSync(sessPath, [META, ...lines].join('\n') + '\n');
+      return { stateDir, sessPath };
+    }
+
+    // -- leg A: the #462 incident's exact poisoned log ---------------------
+    // assistant(tool_use) with NO tool_result, then the user's next question.
+    // PRE-FIX: gcode replays it verbatim and POSTs a body with a dangling
+    // tool_use — the body the real API answers with the 400 that killed the
+    // session. The repair inserts a marker result ahead of the user's text.
+    {
+      const { stateDir, sessPath } = writeLog('a', [
+        '{"type":"message","role":"user","content":[{"type":"text","text":"write the file"}]}',
+        '{"type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_463dangle","name":"write_file","input":{}}]}',
+        '{"type":"message","role":"user","content":[{"type":"text","text":"what happened?"}]}',
+      ]);
+      const before = fs.readFileSync(sessPath, 'utf8');
+      const srv = await startServer([textResponse('repaired and answered.')]);
+      const { stdout, stderr } = await runCodeBoth(srv.url, ['--resume', sessPath, '-p', 'go', '--no-color'],
+        { GCODE_STATE_DIR: stateDir });
+      srv.close();
+      const sent = srv.bodies[0] ? srv.bodies[0].messages : [];
+      const faults = historyFaults(sent);
+      check(srv.bodies.length === 1, `#463: the poisoned resume still SENT (${srv.bodies.length} requests)`);
+      check(faults.length === 0, `#463: the SENT history is API-valid — every tool_use answered (faults: ${faults.join('; ') || 'none'})`);
+      const marker = sent.flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+        .find((b) => b.type === 'tool_result' && b.tool_use_id === 'toolu_463dangle');
+      check(!!marker && /session repaired/.test(marker.content),
+        '#463: the inserted result is the VISIBLE marker, not a plausible fake result');
+      check(/repaired the message history/.test(stderr) && stderr.includes('toolu_463dangle'),
+        '#463: the repair is LOUD and names the id it repaired');
+      check(stdout.includes('repaired and answered.'), '#463: the session continued instead of exiting');
+      // Deliberately NOT persisted: the JSONL is append-only, so a dropped
+      // orphan could never be un-written and the log would disagree with
+      // memory. The pass is deterministic, so every load re-derives it.
+      check(fs.readFileSync(sessPath, 'utf8').startsWith(before),
+        '#463: the repair is applied in memory — the on-disk log is only appended to, never rewritten');
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+
+    // -- leg B: the REVERSE orphan --------------------------------------
+    // A tool_result answering no tool_use is just as fatal as a dangling
+    // tool_use — repairing only the forward half trades one 400 for another.
+    {
+      const { stateDir, sessPath } = writeLog('b', [
+        '{"type":"message","role":"user","content":[{"type":"text","text":"hello"}]}',
+        '{"type":"message","role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_463orphan","content":"stranded"}]}',
+      ]);
+      const srv = await startServer([textResponse('orphan dropped.')]);
+      const { stdout, stderr } = await runCodeBoth(srv.url, ['--resume', sessPath, '-p', 'go', '--no-color'],
+        { GCODE_STATE_DIR: stateDir });
+      srv.close();
+      const sent = srv.bodies[0] ? srv.bodies[0].messages : [];
+      check(historyFaults(sent).length === 0,
+        `#463: the reverse orphan is repaired too (faults: ${historyFaults(sent).join('; ') || 'none'})`);
+      check(!JSON.stringify(sent).includes('toolu_463orphan'),
+        '#463: the stranded tool_result is DROPPED, not answered with an invented tool_use');
+      check(/orphan tool_result/.test(stderr) && stderr.includes('toolu_463orphan'),
+        '#463: the drop is announced and names the orphan id');
+      check(stdout.includes('orphan dropped.'), '#463: the session continued after the orphan repair');
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+
+    // -- leg C (NEGATIVE CONTROL): a clean history is not touched --------
+    // Passes before and after on purpose. "No gratuitous rewriting" is a
+    // requirement, and a repair pass that quietly reshapes valid histories
+    // would be a worse bug than the one it fixes.
+    {
+      const { stateDir, sessPath } = writeLog('c', [
+        '{"type":"message","role":"user","content":[{"type":"text","text":"list it"}]}',
+        '{"type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_463clean","name":"bash","input":{}}]}',
+        '{"type":"message","role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_463clean","content":"a\\nb\\n"}]}',
+      ]);
+      const srv = await startServer([textResponse('clean.')]);
+      const { stderr } = await runCodeBoth(srv.url, ['--resume', sessPath, '-p', 'go', '--no-color'],
+        { GCODE_STATE_DIR: stateDir });
+      srv.close();
+      const sent = srv.bodies[0] ? srv.bodies[0].messages : [];
+      check(!/repaired the message history/.test(stderr),
+        '#463 negative control: a clean history reports NO repair');
+      check(JSON.stringify(sent.slice(0, 3)) === JSON.stringify([
+        { role: 'user', content: [{ type: 'text', text: 'list it' }] },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_463clean', name: 'bash', input: {} }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_463clean', content: 'a\nb\n' }] },
+      ]), '#463 negative control: a clean history is replayed byte-for-byte unmodified');
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+
+    // -- leg D (🔴 THE NEGATIVE CONTROL THAT MATTERS): a genuinely permanent
+    // 400 still fails FAST and does not retry. The risk this ticket carries
+    // is a classifier narrowed until real errors start looping; the gate is
+    // "did the repair mutate the history", and an unknown model mutates
+    // nothing. Same numbers as the pre-#463 binary: one request, then out.
+    {
+      const srv = await startServer([
+        { status: 400, body: '{"type":"error","error":{"type":"invalid_request_error","message":"model: nonexistent-model-9000"}}' },
+        textResponse('MUST NOT BE REACHED'),
+      ]);
+      const child = spawn(bin, ['--no-color', '--no-persist', '--model', 'nonexistent-model-9000'], {
+        env: { ...process.env, ANTHROPIC_BASE_URL: srv.url, ANTHROPIC_API_KEY: 'test', ASAN_OPTIONS: 'detect_leaks=0' },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      let out = '', err = '';
+      child.stdout.on('data', (c) => (out += c));
+      child.stderr.on('data', (c) => (err += c));
+      child.stdin.write('first ask\nsecond ask\n/quit\n');
+      child.stdin.end();
+      await new Promise((resolve, reject) => {
+        const t = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('#463 leg D timed out')); }, 15000);
+        child.on('exit', () => { clearTimeout(t); resolve(); });
+      });
+      srv.close();
+      check(srv.bodies.length === 1,
+        `#463 negative control: a permanent 400 is NOT retried — exactly 1 request (got ${srv.bodies.length})`);
+      check(/retrying cannot succeed/.test(err),
+        '#463 negative control: the unchanged permanent verdict is still reported');
+      check(!/retrying this round once/.test(err),
+        '#463 negative control: no repair-retry was announced for an unknown-model 400');
+      check(!out.includes('MUST NOT BE REACHED'), '#463 negative control: the REPL still exits on a permanent 400');
+    }
+
+    // -- leg H (NEGATIVE CONTROL): 401/403 are terminal UNCONDITIONALLY ---
+    // Not "terminal unless the repair mutates" — no credential was ever fixed
+    // by rewriting the conversation. The history here IS repairable, so this
+    // separates the auth rule from the mutation gate: a leak would show up as
+    // a retry.
+    {
+      const { stateDir, sessPath } = writeLog('h', [
+        '{"type":"message","role":"user","content":[{"type":"text","text":"run it"}]}',
+        '{"type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_463auth","name":"bash","input":{}}]}',
+        '{"type":"message","role":"user","content":[{"type":"text","text":"note"},{"type":"tool_result","tool_use_id":"toolu_463auth","content":"out"}]}',
+      ]);
+      const srv = await startServer([
+        { status: 401, body: JSON.stringify({ type: 'error', error: { type: 'authentication_error',
+          message: 'invalid x-api-key; `tool_use` id toolu_463auth appears here only to bait the id matcher' } }) },
+        textResponse('MUST NOT BE REACHED'),
+      ]);
+      const { stdout, stderr } = await runCodeBoth(srv.url, ['--resume', sessPath, '-p', 'go', '--no-color'],
+        { GCODE_STATE_DIR: stateDir });
+      srv.close();
+      check(srv.bodies.length === 1,
+        `#463 negative control: a 401 is terminal even with a repairable history (${srv.bodies.length} requests, expected 1)`);
+      check(!/retrying this round once/.test(stderr) && !/repaired the message history after/.test(stderr),
+        '#463 negative control: no repair is even attempted on an auth failure');
+      check(!stdout.includes('MUST NOT BE REACHED'), '#463 negative control: the 401 ended the turn');
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+
+    // -- leg E: a 400 NAMING dangling ids is repaired and retried ONCE ----
+    // The structural pass runs before every POST, so by the time a 400 comes
+    // back it has already had its say. What is new is the SERVER'S reading:
+    // here the result IS in the next message (gcode's invariant holds) but
+    // not at the FRONT of it, which Anthropic requires. The server names the
+    // id, the named pass relocates the REAL output, and the round is re-sent.
+    // PRE-FIX: one request, then the REPL exits.
+    {
+      const { stateDir, sessPath } = writeLog('e', [
+        '{"type":"message","role":"user","content":[{"type":"text","text":"run it"}]}',
+        '{"type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_463skewed","name":"bash","input":{}}]}',
+        '{"type":"message","role":"user","content":[{"type":"text","text":"a stray note"},{"type":"tool_result","tool_use_id":"toolu_463skewed","content":"REAL OUTPUT"}]}',
+      ]);
+      const srv = await startServer([
+        { status: 400, body: JSON.stringify({ type: 'error', error: { type: 'invalid_request_error',
+          message: 'messages.2: `tool_use` ids were found without `tool_result` blocks immediately after: toolu_463skewed. Each `tool_use` block must have a corresponding `tool_result` block in the next message.' } }) },
+        textResponse('recovered after repair.'),
+      ]);
+      const { stdout, stderr } = await runCodeBoth(srv.url, ['--resume', sessPath, '-p', 'go', '--no-color'],
+        { GCODE_STATE_DIR: stateDir });
+      srv.close();
+      check(srv.bodies.length === 2,
+        `#463: a history-shaped 400 was repaired and retried ONCE (${srv.bodies.length} requests)`);
+      const first = srv.bodies[0] ? srv.bodies[0].messages[2] : null;
+      check(!!first && first.content[0].type === 'text',
+        '#463: the FIRST request went out as the log had it — the structural pass found nothing to change');
+      const second = srv.bodies[1] ? srv.bodies[1].messages[2] : null;
+      check(!!second && second.content[0].type === 'tool_result' && second.content[0].tool_use_id === 'toolu_463skewed',
+        '#463: the retry moved the tool_result to the slot the server named');
+      check(!!second && second.content[0].content === 'REAL OUTPUT',
+        '#463: the REAL tool output was relocated, not replaced by a marker');
+      check(/retrying this round once/.test(stderr), '#463: the repair-and-retry is announced, never silent');
+      check(stdout.includes('recovered after repair.'), '#463: the turn completed instead of killing the REPL');
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+
+    // -- leg F: the retry is bounded — a second 400 is permanent ----------
+    // After the repair the history is canonical, so repairing it again is a
+    // no-op and the gate refuses a second retry. This is what stops the
+    // recovery path becoming an infinite loop against a server that 400s
+    // for a reason gcode cannot fix.
+    {
+      const { stateDir, sessPath } = writeLog('f', [
+        '{"type":"message","role":"user","content":[{"type":"text","text":"run it"}]}',
+        '{"type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_463stubborn","name":"bash","input":{}}]}',
+        '{"type":"message","role":"user","content":[{"type":"text","text":"note"},{"type":"tool_result","tool_use_id":"toolu_463stubborn","content":"out"}]}',
+      ]);
+      const err400 = { status: 400, body: JSON.stringify({ type: 'error', error: { type: 'invalid_request_error',
+        message: '`tool_use` ids were found without `tool_result` blocks immediately after: toolu_463stubborn.' } }) };
+      const srv = await startServer([err400, err400, textResponse('MUST NOT BE REACHED')]);
+      const { stdout, stderr } = await runCodeBoth(srv.url, ['--resume', sessPath, '-p', 'go', '--no-color'],
+        { GCODE_STATE_DIR: stateDir });
+      srv.close();
+      check(srv.bodies.length === 2,
+        `#463: the repair-retry fires at most ONCE per turn (${srv.bodies.length} requests, expected 2)`);
+      check(/retrying cannot succeed/.test(stderr),
+        '#463: a second unfixable 400 falls back to the pre-#463 permanent verdict');
+      check(!stdout.includes('MUST NOT BE REACHED'), '#463: no third request was made');
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+
+    // -- leg G: idempotence, end to end ----------------------------------
+    // The repair is not persisted (see leg A), so the SAME poisoned log is
+    // repaired again on the next resume — and must produce exactly the same
+    // history. repair(repair(h)) == repair(h) is asserted per-fixture in the
+    // C self-test; this is the same property across two processes.
+    {
+      const lines = [
+        '{"type":"message","role":"user","content":[{"type":"text","text":"twice"}]}',
+        '{"type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_463twice","name":"bash","input":{}}]}',
+      ];
+      const sends = [];
+      for (const tag of ['g1', 'g2']) {
+        const { stateDir, sessPath } = writeLog(tag, lines);
+        const srv = await startServer([textResponse('same both times.')]);
+        await runCodeBoth(srv.url, ['--resume', sessPath, '-p', 'go', '--no-color'], { GCODE_STATE_DIR: stateDir });
+        srv.close();
+        sends.push(JSON.stringify(srv.bodies[0] ? srv.bodies[0].messages : null));
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+      check(sends[0] === sends[1] && sends[0] !== 'null',
+        '#463: repairing the same poisoned log twice yields the identical history (idempotent across processes)');
+      check(historyFaults(JSON.parse(sends[0])).length === 0, '#463: and that history is API-valid');
+    }
+  }
+
   console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILURE(S)`);
   process.exit(failures === 0 ? 0 : 1);
 }
