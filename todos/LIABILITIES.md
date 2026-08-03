@@ -265,12 +265,6 @@ thing this file exists to kill.
 - anchor: (`_socket` is not built), so **`asyncio` does not import and is not
 - provenance: 0340
 
-### L51 — mkpkg's package-payload freshness scan has no red control, so it can under-invalidate silently
-- ticket: #144
-- file: tools/mkpkg.js
-- anchor:  * under-invalidation here is invisible exactly the way 0354's was. Funded by
-- provenance: 0354
-
 ### L52 — id allocation is blind to an unpushed id in a different clone, and no probe can see it
 - ticket: #145
 - file: todos/idspace.js

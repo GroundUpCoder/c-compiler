@@ -24,6 +24,16 @@
 //      all of them. Leg B is the standing sweep: a bin.json that starts
 //      reaching into a new tree tomorrow is caught here, not by a re-audit.
 //
+// Plus the twin's red control (todos/0363): newestPkgInput — mkpkg's
+// package-payload freshness gate, extracted to os-common so it can be pointed
+// at a synthetic tree — gets one leg PER INPUT CLASS it claims to cover
+// (definition, toolchain, project dir, deps recursion, external sources,
+// bin/text/c+hdrs assets, tree enumeration, sibling overlay, extraInputs),
+// each of which fails on a scan with that class removed, plus the
+// narrow-scope pin (the os/ tree at large must NOT be an input — synthetic
+// AND real-repo legs) and a real-repo entry-kind sweep so a new `files`
+// vocabulary word cannot ship without a leg here.
+//
 //   node tests/host/test_bakeinput_sources.js
 const assert = require('assert');
 const fs = require('fs');
@@ -202,6 +212,188 @@ check('every escaping source/include in the manifest closure is covered', () => 
     'these project inputs live outside their project dir and the scan never saw them');
 });
 
+/* ---- leg C: newestPkgInput, synthetic tree (todos/0363) ----------------
+ * One package definition exercising every input class the scan claims to
+ * cover. Each check makes ONE file the unambiguous newest on disk and
+ * asserts the scan finds exactly it — so a scan with that input class
+ * removed fails that leg (verified red at landing time by neutering each
+ * class in turn). */
+const tmp2 = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-pkginput-'));
+const w2 = (rel, text) => {
+  const p = path.join(tmp2, rel);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, text);
+  return p;
+};
+
+const P_COMPILER = w2('compiler.js', '// toolchain\n');
+const P_MKPKG = w2('tools/mkpkg.js', '// tar+control encoding\n');
+const P_OSCOMMON = w2('os/os-common.js', '// packageControl/buildProject\n');
+const P_DEF = w2('packages/mypkg.json', '{}\n');   // content read via `pkg` param; mtime is the input
+w2('vendor/myproj/bin.json', JSON.stringify({
+  bin: true, name: 'myproj',
+  deps: ['../mydep/lib.json'],
+  sources: ['main.c', '../../shared/util.c'],
+}, null, 2) + '\n');
+const P_MAIN = w2('vendor/myproj/main.c', 'int main(void){return 0;}\n');
+w2('vendor/mydep/lib.json', JSON.stringify({ name: 'mydep', sources: ['dep.c'] }, null, 2) + '\n');
+const P_DEP = w2('vendor/mydep/dep.c', 'int dep(void){return 2;}\n');
+const P_EXT = w2('shared/util.c', 'int util(void){return 3;}\n');   // reached ONLY via sources escape (0354)
+const P_BIN = w2('assets/blob.bin', 'BLOB\n');
+const P_TEXT = w2('os/motd.txt', 'hello\n');
+const P_C = w2('os/tool.c', 'int tool(void){return 4;}\n');
+const P_HDR = w2('os/tool.h', '#define TOOL 4\n');
+const P_TREE = w2('treedir/sub/file.x', 'tree payload\n');
+const P_OVERLAY = w2('overlay/overlay.json', '{"overlay":1}\n');
+const P_SYNTH = w2('synth/parent.json', '{}\n');   // an extraInputs derivation input
+const P_OS_STRAY = w2('os/unrelated.c', 'int stray;\n');   // os/ at large — must NOT be an input
+const P_STRAY = w2('elsewhere/nothing.c', 'int nothing2;\n');   // referenced by nothing
+
+const PKG = {
+  name: 'mypkg', version: '1.0',
+  requires: 'native-sibling:clang',
+  files: {
+    'bin/myproj': { project: 'vendor/myproj/bin.json' },
+    'share/blob': { bin: 'assets/blob.bin' },
+    'etc/motd': { text: 'motd.txt' },
+    'bin/tool': { c: 'tool.c', hdrs: ['tool.h'] },
+    'src': { tree: 'treedir' },
+    'bin/native': { nativeApp: 'native' },
+  },
+};
+const pkgNewestFor = (file) => {
+  ageAll(tmp2);
+  const t = Date.now() + 5000;   // strictly newer than every other file
+  fs.utimesSync(file, t / 1000, t / 1000);
+  return COMMON.newestPkgInput(fs, path, tmp2, 'mypkg', PKG, {
+    pkgDir: path.join(tmp2, 'packages'),
+    extraInputs: ['synth/parent.json'],
+    overlayPathFor: (p) => (p === 'clang' ? P_OVERLAY : null),
+  });
+};
+
+const pkgLeg = (label, file) => check('pkg: ' + label, () => {
+  const r = pkgNewestFor(file);
+  assert.strictEqual(r.path, file,
+    'newest package input should be the touched file, got ' + r.path +
+    ' — an input class newestPkgInput claims to cover is not wired');
+});
+pkgLeg('the definition file is an input', P_DEF);
+pkgLeg('compiler.js is an input (toolchain)', P_COMPILER);
+pkgLeg('tools/mkpkg.js is an input (tar/control encoding)', P_MKPKG);
+pkgLeg('os/os-common.js is an input (packageControl lives there)', P_OSCOMMON);
+pkgLeg('a project-dir source is an input', P_MAIN);
+pkgLeg('a source reached through `deps` is an input', P_DEP);
+pkgLeg('a source OUTSIDE the project dir is an input (the 0354 hole)', P_EXT);
+pkgLeg('a `bin` blob is an input', P_BIN);
+pkgLeg('a `text` asset is an input (os/-relative)', P_TEXT);
+pkgLeg('a `c` entry is an input (os/-relative)', P_C);
+pkgLeg('a `hdrs` header is an input', P_HDR);
+pkgLeg('a file under a `tree` entry is an input', P_TREE);
+pkgLeg('the native sibling overlay manifest is an input', P_OVERLAY);
+pkgLeg('an extraInputs derivation input is an input (synthesized defs)', P_SYNTH);
+
+check('pkg: the os/ tree at large is NOT an input (narrow scope)', () => {
+  // The gate's documented scope: unrelated OS work must not restale every
+  // package. A scan that walks os/ (or the repo root) wholesale passes every
+  // leg above while destroying the dev loop — pin the exclusion.
+  const r = pkgNewestFor(P_OS_STRAY);
+  assert.notStrictEqual(r.path, P_OS_STRAY,
+    'an os/ file no entry references must stay OUT of the package closure — ' +
+    'a scan that invalidates on all of os/ is the over-invalidation the ' +
+    'gate\'s header forbids');
+});
+
+check('pkg: a file referenced by nothing is NOT an input', () => {
+  const r = pkgNewestFor(P_STRAY);
+  assert.notStrictEqual(r.path, P_STRAY,
+    'a file outside every entry\'s closure must not restale the package');
+});
+
+/* ---- leg D: newestPkgInput, real repo ---------------------------------- */
+
+check('pkg: real defs never pull in the repo root or os/ wholesale', () => {
+  // The standing narrow-scope sweep: run the real scan over EVERY shipped
+  // definition with a recording fs and assert it never enumerates the repo
+  // root or the os/ tree at large. A vendored project whose sources/includes
+  // start escaping to `..` or `os` tomorrow is caught here, not by a
+  // re-audit.
+  const pkgDir = path.join(ROOT, 'packages');
+  const defs = fs.readdirSync(pkgDir).filter((n) => /\.json$/.test(n));
+  assert.ok(defs.length > 10, 'only ' + defs.length + ' packages/*.json found — ' +
+    'if the definition dir moved, re-pin this sweep');
+  // The ONE sanctioned way a single def may walk os/: a project whose OWN
+  // dir is the os root (dir granularity walks the project's directory
+  // wholesale — demos.json's os/gpubox.json today). That over-invalidates
+  // exactly that package, the cheap direction. Pinned by NAME so a new
+  // arrival is a deliberate decision, not drift — and checked for presence
+  // so the exception list can't outlive its member.
+  const OS_ROOT_PROJECT_DEFS = ['demos.json'];
+  for (const n of OS_ROOT_PROJECT_DEFS) {
+    const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, n), 'utf-8'));
+    assert.ok(Object.keys(pkg.files || {}).some((f) => {
+      const proj = pkg.files[f].project;
+      return proj !== undefined && /^os\/[^/]+\.json$/.test(proj);
+    }), n + ' no longer has an os-root project entry — its exception here is ' +
+       'stale, remove it (and if the def moved, re-pin this sweep)');
+  }
+  let sweepListed = 0;   // presence: a spy that never fires proves nothing
+  for (const n of defs) {
+    const pkgListed = new Set();
+    const pkgSpy = {
+      statSync: (p) => fs.statSync(p),
+      readdirSync: (p, o) => { pkgListed.add(rel(p)); return fs.readdirSync(p, o); },
+      realpathSync: (p) => fs.realpathSync(p),
+      readFileSync: (p, e) => fs.readFileSync(p, e),
+      lstatSync: (p) => fs.lstatSync(p),
+    };
+    const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, n), 'utf-8'));
+    COMMON.newestPkgInput(pkgSpy, path, ROOT, n.replace(/\.json$/, ''), pkg,
+      { pkgDir, overlayPathFor: () => null });
+    sweepListed += pkgListed.size;
+    assert.ok(!pkgListed.has(''), n + ': the closure enumerated the REPO ROOT');
+    if (!OS_ROOT_PROJECT_DEFS.includes(n)) {
+      assert.ok(!pkgListed.has('os'), n + ': the closure enumerated os/ at large — ' +
+        'the gate\'s narrow scope is broken (OS edits would restale this package); ' +
+        'if this def deliberately gained an os-root project, add it to ' +
+        'OS_ROOT_PROJECT_DEFS with that reasoning');
+    }
+  }
+  assert.ok(sweepListed > 0,
+    'the scan enumerated no directory across every def — the recording spy is not wired');
+});
+
+check('pkg: every `files` entry kind in real defs has a leg here', () => {
+  // The vocabulary pin: newestPkgInput covers project/bin/text/c(+hdrs)/
+  // tree(+exclude)/nativeApp/nativeFile; `content`/`mode` live inside the
+  // definition file itself (already an input). A NEW entry kind must get an
+  // input class in newestPkgInput AND a synthetic leg above — add it to this
+  // set only alongside both.
+  const covered = new Set(['project', 'bin', 'text', 'c', 'hdrs', 'content',
+                           'mode', 'tree', 'exclude', 'nativeApp', 'nativeFile']);
+  const pkgDir = path.join(ROOT, 'packages');
+  const unknown = [];
+  const seenKinds = new Set();
+  for (const n of fs.readdirSync(pkgDir).filter((f) => /\.json$/.test(f))) {
+    const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, n), 'utf-8'));
+    for (const rel of Object.keys(pkg.files || {})) {
+      for (const k of Object.keys(pkg.files[rel])) {
+        seenKinds.add(k);
+        if (!covered.has(k)) unknown.push(n + ' ' + rel + ': ' + k);
+      }
+    }
+  }
+  // Presence: the sweep must still be seeing the kinds it exists to guard —
+  // an empty or vocabulary-less packages/ means the fixture decayed, not
+  // that all is well.
+  assert.ok(seenKinds.has('project') && seenKinds.has('tree'),
+    'real defs no longer use project/tree entries — this sweep has decayed, re-pin it');
+  assert.deepStrictEqual(unknown, [],
+    'unknown `files` entry kind(s): give each an input class in newestPkgInput ' +
+    'and a red-control leg in this file, then add them to `covered`');
+});
+
 fs.rmSync(tmp, { recursive: true, force: true });
+fs.rmSync(tmp2, { recursive: true, force: true });
 console.log(failures ? failures + ' check(s) FAILED' : 'bake-input source closure OK');
 process.exit(failures ? 1 : 0);

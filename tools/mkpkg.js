@@ -413,89 +413,17 @@ function driftCheck(producer) {
 for (const p of enabled) driftCheck(p);
 
 /* ---- package-input freshness (the 0082 idea, scoped to one package) ----
- * Newest mtime across everything that can change this package's payload
- * bytes: the toolchain (compiler.js — buildProject/createCcDriver output),
- * this tool (tar/control encoding), the definition, and each file entry's
- * closure (project dirs through deps, `bin` blobs, os/-relative `c`/`text`
- * assets). Deliberately NARROW — the os/ tree at large is not an input, so
- * unrelated OS work doesn't force a punes recompile in the dev loop.
- *
- * UNTESTED: no red control exercises this scan (ROOT is module-level, so it
- * cannot be pointed at a synthetic tree the way newestBakeInput can) — an
- * under-invalidation here is invisible exactly the way 0354's was. Funded by
- * todos/0363. */
+ * The scan itself is os-common's newestPkgInput — extracted there
+ * (todos/0363) so tests/host/test_bakeinput_sources.js can drive it against
+ * a synthetic tree, exactly like its twin newestBakeInput. This wrapper
+ * binds this tool's context: the repo ROOT, the (possibly --packages-dir
+ * overridden) definition dir, and the enabled siblings' overlay paths. */
 function newestPkgInput(name, pkg, extraInputs) {
-  const newest = { mtimeMs: 0, path: null };
-  const seenDirs = {};
-  const seenProjects = {};
-  const statFile = (p) => {
-    let st;
-    try { st = fs.statSync(p); } catch (e) { return; }
-    if (st.isFile() && st.mtimeMs > newest.mtimeMs) { newest.mtimeMs = st.mtimeMs; newest.path = p; }
-  };
-  const walk = (dir) => {
-    let real;
-    try { real = fs.realpathSync(dir); } catch (e) { return; }
-    if (seenDirs[real]) return;
-    seenDirs[real] = true;
-    let ents;
-    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
-    for (const e of ents) {
-      if (e.name.charAt(0) === '.') continue;
-      if (e.isDirectory()) walk(path.join(dir, e.name));
-      else if (!/\.(img|md)$/.test(e.name)) statFile(path.join(dir, e.name));
-    }
-  };
-  const normalize = COMMON.normalizeRelPath;   // "a/b/../c" -> "a/c" (buildProject's rule)
-  const addProject = (rel) => {
-    const n = normalize(rel);
-    if (seenProjects[n]) return;
-    seenProjects[n] = true;
-    const dir = n.slice(0, n.lastIndexOf('/'));
-    walk(path.join(ROOT, dir));
-    let proj;
-    try { proj = JSON.parse(fs.readFileSync(path.join(ROOT, n), 'utf-8')); } catch (e) { return; }
-    (proj.deps || []).forEach((d) => addProject(dir + '/' + d));
-    // Same hole as newestBakeInput's (todos/0354): a source/include reaching
-    // outside the project dir is an input `deps` recursion never sees. This
-    // does NOT widen the narrow scope above — no packaged project's external
-    // dirs reach the os/ tree at large (they are freetype/libpng/os/win32,
-    // all already walked as deps today).
-    COMMON.projectExternalDirs(proj, dir).forEach((d) => walk(path.join(ROOT, d)));
-  };
-  statFile(path.join(ROOT, 'compiler.js'));
-  statFile(path.join(ROOT, 'tools', 'mkpkg.js'));
-  statFile(path.join(pkgDir, name + '.json'));
-  // A synthesized -sources def has no packages/ file; its derivation inputs
-  // (the parent def / os/image.json) are named by the synthesis instead.
-  (extraInputs || []).forEach((rel) => statFile(path.join(ROOT, rel)));
-  for (const rel of Object.keys(pkg.files || {})) {
-    const entry = pkg.files[rel];
-    if (entry.project !== undefined) addProject(entry.project);
-    if (entry.bin !== undefined) statFile(path.join(ROOT, entry.bin));
-    if (entry.text !== undefined) statFile(path.join(OS_DIR, entry.text));
-    if (entry.c !== undefined) {
-      statFile(path.join(OS_DIR, entry.c));
-      (entry.hdrs || []).forEach((h) => statFile(path.join(OS_DIR, h)));
-    }
-    // `tree` entries: the SAME enumeration that expands the payload drives
-    // the freshness scan (a changed source anywhere under the tree dir
-    // marks the package stale).
-    if (entry.tree !== undefined) {
-      let tfs;
-      try { tfs = COMMON.listTreeFiles(fs, path, ROOT, entry, rel); }
-      catch (e) { continue; }   // malformed → fails loud in the build, not here
-      tfs.forEach((tf) => statFile(path.join(ROOT, entry.tree, tf)));
-    }
-    // A nativeApp/nativeFile payload's freshness is its producer's overlay
-    // manifest's mtime — re-publishing overlay.json (new sha256s)
-    // re-materializes the package.
-    if (entry.nativeApp !== undefined || entry.nativeFile !== undefined) {
-      const producer = COMMON.nativeSiblingProducer(pkg.requires);
-      if (producer !== null && SIBLINGS[producer]) statFile(overlayPathOf(producer));
-    }
-  }
-  return newest;
+  return COMMON.newestPkgInput(fs, path, ROOT, name, pkg, {
+    pkgDir,
+    extraInputs,
+    overlayPathFor: (p) => (SIBLINGS[p] ? overlayPathOf(p) : null),
+  });
 }
 
 /* ---- deterministic ustar writer ---- */
