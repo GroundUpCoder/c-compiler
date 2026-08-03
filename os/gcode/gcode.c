@@ -1152,18 +1152,386 @@ static const char *find_invalid_tool_result(cJSON *messages) {
     return NULL;
 }
 
+/* ---- #463: validate-and-repair the history at the send seam ------------
+ *
+ * The Messages API contract is STRUCTURAL, and it has two halves:
+ *   (a) every `tool_use` block in an assistant message must be answered by a
+ *       `tool_result` carrying the same id in the IMMEDIATELY FOLLOWING
+ *       message;
+ *   (b) a `tool_result` may only answer a `tool_use` in the immediately
+ *       PRECEDING message.
+ * A history that breaks either half is rejected with an HTTP 400 on every
+ * subsequent request, which gcode classifies as permanent and exits the REPL
+ * on — a destroyed session. The incident behind #462 lost one carrying
+ * 900,480 cache-read tokens.
+ *
+ * #462 stops gcode CREATING such a history. This pass lets it RECOVER from
+ * one it already has, which is the half a forward fix cannot reach:
+ *   - a log poisoned by the shipped bug and replayed by --resume (jku's
+ *     900k-token session is one of them);
+ *   - a crash-torn round — the assistant message and its results are two
+ *     independent appended records (see the comment at the second
+ *     persist_message call), so a stop between them corrupts a normal round.
+ *
+ * 🔴 REPAIR, never refuse. Refusing only announces the session's death
+ * politely: the user's exits would still be /clear or a fresh session, both
+ * of which lose everything.
+ *
+ * 🔴 Repairing half (a) alone would trade one 400 for another — a stranded
+ * `tool_result` is just as fatal — so half (b) is repaired in the same pass.
+ *
+ * IDEMPOTENT by construction: the pass establishes exactly the invariant it
+ * checks, so a second run over its own output finds nothing and mutates
+ * nothing. That is also why the repair is deliberately NOT persisted. The
+ * JSONL is append-only, so a dropped orphan could never be un-written; the
+ * log would then disagree with memory in a way strictly worse than not
+ * recording it at all. Being deterministic, the pass re-derives the identical
+ * repair on every load, so the EFFECTIVE history after a --resume is the same
+ * whether or not it was recorded.
+ */
+
+/* The ticket's marker text, verbatim. It is visible on purpose: the model is
+ * told the result is missing rather than being handed a plausible fake. */
+#define REPAIR_MARKER "[gcode: no result recorded for this tool call \xe2\x80\x94 session repaired]"
+#define REPAIR_ID_LIST_MAX 8      /* ids named in the log line before "+N more" */
+#define REPAIR_ID_MIN_LEN  4      /* below this an id is too short to match on */
+#define REPAIR_NAMED_MAX   64     /* server-named ids canonicalized in one pass */
+
+typedef struct {
+    int inserted;       /* marker tool_results added for unanswered tool_use ids */
+    int dropped;        /* orphan tool_result blocks removed */
+    int moved;          /* results relocated to their canonical slot (#463 named pass) */
+    int msgs_added;     /* synthesized answer messages */
+    int msgs_removed;   /* messages left with no blocks by the drops */
+    int ins_listed, drop_listed, moved_listed;
+    sb  ins_ids, drop_ids, moved_ids;
+} repair_report;
+
+/* A repair is a MUTATION iff it changed a block. msgs_added is always
+ * accompanied by an insert and msgs_removed by a drop, so those never need
+ * to be counted separately — but they are reported, because "3 changes" with
+ * no mention of a deleted message would be a half-told story. */
+static int repair_total(const repair_report *r) { return r->inserted + r->dropped + r->moved; }
+static void repair_report_free(repair_report *r) {
+    sb_free(&r->ins_ids); sb_free(&r->drop_ids); sb_free(&r->moved_ids);
+}
+
+static void repair_note_id(sb *list, int *listed, const char *id) {
+    if (*listed < REPAIR_ID_LIST_MAX) {
+        if (*listed) sb_puts(list, ", ");
+        sb_puts(list, (id && *id) ? id : "(no id)");
+    }
+    (*listed)++;
+}
+
+static int blk_is(cJSON *blk, const char *type) {
+    cJSON *t = cJSON_GetObjectItem(blk, "type");
+    return cJSON_IsString(t) && !strcmp(t->valuestring, type);
+}
+static const char *blk_str(cJSON *o, const char *key) {
+    cJSON *v = cJSON_GetObjectItem(o, key);
+    return cJSON_IsString(v) ? v->valuestring : NULL;
+}
+static const char *tool_use_id_of(cJSON *blk) {
+    const char *id = blk_str(blk, "id"); return id ? id : "";
+}
+static const char *tool_result_id_of(cJSON *blk) {
+    const char *id = blk_str(blk, "tool_use_id"); return id ? id : "";
+}
+
+static cJSON *make_marker_result(const char *id) {
+    cJSON *tr = cJSON_CreateObject();
+    cJSON_AddStringToObject(tr, "type", "tool_result");
+    cJSON_AddStringToObject(tr, "tool_use_id", id ? id : "");
+    cJSON_AddStringToObject(tr, "content", REPAIR_MARKER);
+    return tr;
+}
+
+static int msg_has_tool_use(cJSON *m) {
+    cJSON *content = cJSON_GetObjectItem(m, "content"), *blk;
+    const char *role = blk_str(m, "role");
+    if (!role || strcmp(role, "assistant") || !cJSON_IsArray(content)) return 0;
+    cJSON_ArrayForEach(blk, content) if (blk_is(blk, "tool_use")) return 1;
+    return 0;
+}
+
+/* Is `m` usable as the answer message for the assistant message before it?
+ * Only a user message whose content is an ARRAY can carry a tool_result; a
+ * bare-string content or an assistant message cannot, so those are treated
+ * as "no answer message" and one is synthesized beside them. */
+static int msg_can_answer(cJSON *m) {
+    const char *role = m ? blk_str(m, "role") : NULL;
+    return role && !strcmp(role, "user") && cJSON_IsArray(cJSON_GetObjectItem(m, "content"));
+}
+
+/* Half (b): drop every tool_result that answers no tool_use in the message
+ * immediately before it. Runs FIRST, because a drop can empty a message, and
+ * removing that message is exactly what turns its predecessor into an
+ * unanswered tool_use for half (a) to fix. */
+static void repair_drop_orphans(cJSON *messages, repair_report *rep) {
+    for (int i = 0; i < cJSON_GetArraySize(messages); ) {
+        cJSON *m = cJSON_GetArrayItem(messages, i);
+        cJSON *content = cJSON_GetObjectItem(m, "content");
+        if (!cJSON_IsArray(content)) { i++; continue; }
+        cJSON *prev = i > 0 ? cJSON_GetArrayItem(messages, i - 1) : NULL;
+        cJSON *pcontent = (prev && msg_has_tool_use(prev)) ? cJSON_GetObjectItem(prev, "content") : NULL;
+        int had = cJSON_GetArraySize(content);
+        for (int k = 0; k < cJSON_GetArraySize(content); ) {
+            cJSON *b = cJSON_GetArrayItem(content, k);
+            if (!blk_is(b, "tool_result")) { k++; continue; }
+            const char *rid = tool_result_id_of(b);
+            int matched = 0;
+            if (pcontent) {
+                cJSON *pb;
+                cJSON_ArrayForEach(pb, pcontent)
+                    if (blk_is(pb, "tool_use") && !strcmp(tool_use_id_of(pb), rid)) { matched = 1; break; }
+            }
+            if (matched) { k++; continue; }
+            /* Record BEFORE the delete: rid points INTO the block, and
+             * cJSON_DeleteItemFromArray frees it (ASan caught this). */
+            rep->dropped++; repair_note_id(&rep->drop_ids, &rep->drop_listed, rid);
+            cJSON_DeleteItemFromArray(content, k);
+        }
+        /* Only remove a message THIS pass emptied. A content array that
+         * arrived empty is a different defect and not this ticket's to
+         * rewrite — "no gratuitous rewriting" cuts both ways. */
+        if (had && cJSON_GetArraySize(content) == 0) {
+            cJSON_DeleteItemFromArray(messages, i);
+            rep->msgs_removed++;
+            continue;   /* do not advance: the message now at i has a new predecessor */
+        }
+        i++;
+    }
+}
+
+/* Half (a): give every unanswered tool_use a marker tool_result in the very
+ * next message, synthesizing that message when there is none to use. */
+static void repair_fill_missing(cJSON *messages, repair_report *rep) {
+    for (int i = 0; i < cJSON_GetArraySize(messages); i++) {
+        cJSON *m = cJSON_GetArrayItem(messages, i);
+        if (!msg_has_tool_use(m)) continue;
+        cJSON *content = cJSON_GetObjectItem(m, "content"), *blk;
+        cJSON *next = i + 1 < cJSON_GetArraySize(messages) ? cJSON_GetArrayItem(messages, i + 1) : NULL;
+        if (!msg_can_answer(next)) {
+            cJSON *umsg = cJSON_CreateObject(), *arr = cJSON_CreateArray();
+            cJSON_AddStringToObject(umsg, "role", "user");
+            cJSON_AddItemToObject(umsg, "content", arr);
+            cJSON_ArrayForEach(blk, content) {
+                if (!blk_is(blk, "tool_use")) continue;
+                const char *id = tool_use_id_of(blk);
+                cJSON_AddItemToArray(arr, make_marker_result(id));
+                rep->inserted++; repair_note_id(&rep->ins_ids, &rep->ins_listed, id);
+            }
+            cJSON_InsertItemInArray(messages, i + 1, umsg);
+            rep->msgs_added++;
+            i++;            /* the message just synthesized needs no visit */
+            continue;
+        }
+        cJSON *ncontent = cJSON_GetObjectItem(next, "content");
+        cJSON_ArrayForEach(blk, content) {
+            if (!blk_is(blk, "tool_use")) continue;
+            const char *id = tool_use_id_of(blk);
+            int found = 0, last_result = -1, k = 0;
+            cJSON *nb;
+            cJSON_ArrayForEach(nb, ncontent) {
+                if (blk_is(nb, "tool_result")) {
+                    last_result = k;
+                    if (!strcmp(tool_result_id_of(nb), id)) { found = 1; break; }
+                }
+                k++;
+            }
+            if (found) continue;
+            /* After the last existing tool_result, or at the front when there
+             * is none — the API wants the tool_result run to LEAD the user
+             * message's content, and this keeps that true either way. */
+            cJSON_InsertItemInArray(ncontent, last_result + 1, make_marker_result(id));
+            rep->inserted++; repair_note_id(&rep->ins_ids, &rep->ins_listed, id);
+        }
+    }
+}
+
+/* The structural pass. Returns the number of BLOCK-level mutations IT made
+ * (a delta, so it composes with the named pass over a shared report); 0
+ * means the history was already valid and was left byte-identical. */
+static int history_repair(cJSON *messages, repair_report *rep) {
+    int before = repair_total(rep);
+    repair_drop_orphans(messages, rep);
+    repair_fill_missing(messages, rep);
+    return repair_total(rep) - before;
+}
+
+/* ---- #463: the server-directed pass -----------------------------------
+ * The structural pass runs before EVERY POST, so by the time a 400 comes
+ * back it has already had its say — running it again would be a guaranteed
+ * no-op, and a retry gated on a guaranteed no-op is dead code. What is new
+ * at that moment is the SERVER'S opinion: a rejection of this class names
+ * the offending tool_use ids in its body ("`tool_use` ids were found without
+ * `tool_result` blocks immediately after: call_00_vKx8..."). That is a
+ * second, authoritative reading of the same history, and gcode's own reading
+ * can legitimately differ from a given provider's — e.g. this pass enforces
+ * that the tool_result run LEADS the answer message, which the Anthropic API
+ * requires and the structural pass deliberately does not rewrite for.
+ *
+ * The ids are matched by looking for each id ALREADY IN OUR HISTORY inside
+ * the error body, never by parsing the sentence: no grammar to track across
+ * providers, and it cannot invent an id we do not hold. Ids shorter than
+ * REPAIR_ID_MIN_LEN are skipped so a degenerate id cannot match by accident.
+ */
+static int err_names_id(const char *errbody, const char *id) {
+    return errbody && id && strlen(id) >= REPAIR_ID_MIN_LEN && strstr(errbody, id) != NULL;
+}
+
+/* Detach the first tool_result answering `id` from anywhere in the history,
+ * deleting any further duplicates. Returns the detached block (caller owns
+ * it) or NULL when the history held none. */
+static cJSON *repair_take_result(cJSON *messages, const char *id, repair_report *rep) {
+    cJSON *taken = NULL;
+    for (int i = 0; i < cJSON_GetArraySize(messages); ) {
+        cJSON *m = cJSON_GetArrayItem(messages, i);
+        cJSON *content = cJSON_GetObjectItem(m, "content");
+        if (!cJSON_IsArray(content)) { i++; continue; }
+        int had = cJSON_GetArraySize(content);
+        for (int k = 0; k < cJSON_GetArraySize(content); ) {
+            cJSON *b = cJSON_GetArrayItem(content, k);
+            if (!blk_is(b, "tool_result") || strcmp(tool_result_id_of(b), id)) { k++; continue; }
+            if (!taken) taken = cJSON_DetachItemFromArray(content, k);
+            else        cJSON_DeleteItemFromArray(content, k);
+        }
+        if (had && cJSON_GetArraySize(content) == 0) {
+            cJSON_DeleteItemFromArray(messages, i); rep->msgs_removed++; continue;
+        }
+        i++;
+    }
+    return taken;
+}
+
+/* Is `id` already answered in canonical position — a tool_result in the very
+ * next message, with nothing but tool_results ahead of it? */
+static int repair_is_canonical(cJSON *messages, int assistant_idx, const char *id) {
+    cJSON *next = assistant_idx + 1 < cJSON_GetArraySize(messages)
+                ? cJSON_GetArrayItem(messages, assistant_idx + 1) : NULL;
+    if (!msg_can_answer(next)) return 0;
+    cJSON *ncontent = cJSON_GetObjectItem(next, "content"), *nb;
+    cJSON_ArrayForEach(nb, ncontent) {
+        if (!blk_is(nb, "tool_result")) return 0;      /* a non-result got ahead of it */
+        if (!strcmp(tool_result_id_of(nb), id)) return 1;
+    }
+    return 0;
+}
+
+/* Find the assistant message holding tool_use `id`; -1 when it is gone. */
+static int repair_find_tool_use(cJSON *messages, const char *id) {
+    for (int i = 0; i < cJSON_GetArraySize(messages); i++) {
+        cJSON *m = cJSON_GetArrayItem(messages, i), *blk;
+        if (!msg_has_tool_use(m)) continue;
+        cJSON_ArrayForEach(blk, cJSON_GetObjectItem(m, "content"))
+            if (blk_is(blk, "tool_use") && !strcmp(tool_use_id_of(blk), id)) return i;
+    }
+    return -1;
+}
+
+static int history_repair_named(cJSON *messages, const char *errbody, repair_report *rep) {
+    int before = repair_total(rep);
+    if (!errbody || !*errbody) return 0;
+    /* ONE id per sweep, restarting after each mutation. repair_take_result
+     * can delete a message it emptied, which invalidates every index and
+     * every block pointer held across the walk; a restart costs a second
+     * scan of a small array and removes that aliasing hazard entirely. The
+     * set is small by construction — a rejection names the offending ids,
+     * not the whole history — and REPAIR_NAMED_MAX bounds it regardless.
+     * Termination is structural, not just budgeted: a processed id ends up
+     * at index 0 of its answer message, which makes repair_is_canonical
+     * true for it, so it is never selected twice. */
+    for (int guard = 0; guard < REPAIR_NAMED_MAX; guard++) {
+        char *id = NULL;
+        for (int i = 0; i < cJSON_GetArraySize(messages) && !id; i++) {
+            cJSON *m = cJSON_GetArrayItem(messages, i), *blk;
+            if (!msg_has_tool_use(m)) continue;
+            cJSON_ArrayForEach(blk, cJSON_GetObjectItem(m, "content")) {
+                if (!blk_is(blk, "tool_use")) continue;
+                const char *cand = tool_use_id_of(blk);
+                if (!err_names_id(errbody, cand)) continue;
+                if (repair_is_canonical(messages, i, cand)) continue;
+                id = strdup(cand);   /* cand points INTO the history we mutate */
+                break;
+            }
+        }
+        if (!id) break;
+        /* Keep the REAL output when the history holds one — relocating a
+         * genuine tool result beats replacing it with a marker. */
+        cJSON *got = repair_take_result(messages, id, rep);
+        int a = repair_find_tool_use(messages, id);
+        if (a < 0) { cJSON_Delete(got); free(id); break; }   /* cannot happen */
+        cJSON *next = a + 1 < cJSON_GetArraySize(messages) ? cJSON_GetArrayItem(messages, a + 1) : NULL;
+        cJSON *ncontent;
+        if (!msg_can_answer(next)) {
+            cJSON *umsg = cJSON_CreateObject(); ncontent = cJSON_CreateArray();
+            cJSON_AddStringToObject(umsg, "role", "user");
+            cJSON_AddItemToObject(umsg, "content", ncontent);
+            cJSON_InsertItemInArray(messages, a + 1, umsg);
+            rep->msgs_added++;
+        } else ncontent = cJSON_GetObjectItem(next, "content");
+        cJSON_InsertItemInArray(ncontent, 0, got ? got : make_marker_result(id));
+        if (got) { rep->moved++;    repair_note_id(&rep->moved_ids, &rep->moved_listed, id); }
+        else     { rep->inserted++; repair_note_id(&rep->ins_ids,   &rep->ins_listed,   id); }
+        free(id);
+    }
+    return repair_total(rep) - before;
+}
+
+/* One line per repair KIND, each naming its ids — a silent repair is a bug
+ * that hides itself, and this whole ticket exists because a symptom was
+ * mistaken for its cause. The id list is bounded and says so when it is
+ * clipped; a repair of 200 ids must not scroll the reason off the screen. */
+static void repair_log_ids(const char *what, int count, const sb *ids, int listed) {
+    char more[32] = "";
+    if (listed > REPAIR_ID_LIST_MAX) snprintf(more, sizeof more, " (+%d more)", listed - REPAIR_ID_LIST_MAX);
+    fprintf(stderr, "%sgcode:   %d %s: %.400s%s%s\n",
+            R_ERRB, count, what, ids->p ? ids->p : "", more, CRST);
+}
+
+static void repair_log(const repair_report *rep, const char *where) {
+    int total = repair_total(rep);
+    if (!total) return;
+    fprintf(stderr, "\n%sgcode: repaired the message history %s \xe2\x80\x94 %d change(s)%s\n",
+            R_ERRB, where, total, CRST);
+    if (rep->inserted) repair_log_ids("unanswered tool_use id(s) given a marker tool_result",
+                                      rep->inserted, &rep->ins_ids, rep->ins_listed);
+    if (rep->dropped)  repair_log_ids("orphan tool_result(s) dropped (no matching tool_use before them)",
+                                      rep->dropped, &rep->drop_ids, rep->drop_listed);
+    if (rep->moved)    repair_log_ids("tool_result(s) moved to the slot the server expects them in",
+                                      rep->moved, &rep->moved_ids, rep->moved_listed);
+    if (rep->msgs_added || rep->msgs_removed)
+        fprintf(stderr, "%sgcode:   %d message(s) synthesized, %d removed (left with no content)%s\n",
+                R_ERRB, rep->msgs_added, rep->msgs_removed, CRST);
+    fprintf(stderr, "%sgcode: the session continues \xe2\x80\x94 a repaired round shows the marker text "
+                    "in place of the result that was never recorded%s\n", CDIM, CRST);
+}
+
 /* ---- one API round-trip ----------------------------------------------- */
 /* Returns 0 to stop, 1 to continue (tool_use). Errors: -1 recoverable
    (transport, HTTP 5xx/408/429, API error event), -2 interrupted (^C via
    the xferinfo abort, #306), -3 permanent — retrying the same conversation
    cannot succeed (auth 401/403 #305; other 4xx and a malformed request
-   body caught before the POST, #387). */
+   body caught before the POST, #387), -4 the history was REPAIRED in
+   response to the rejection and this exact round is worth ONE retry (#463;
+   agent_loop owns the retry budget). */
 static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, usage *turn_usage, mlist *turn_models) {
     /* #412(b): a ^C that landed after the previous round's tool loop had
      * already run its last block must stop the turn HERE, before another
      * POST is built and sent — interruption is a property of the agent
      * loop, not of the HTTP transfer. */
     if (g_interrupted) { fprintf(stderr, "\n%sgcode: interrupted%s\n", CDIM, CRST); return -2; }
+    /* #463: validate-and-repair BEFORE the body is built, beside the #387
+     * UTF-8 guard below and in the same spirit — never POST a body the
+     * server is guaranteed to reject. This is the seam a poisoned --resume
+     * log and a crash-torn round both arrive through, so it runs on every
+     * round rather than once at load: the invariant is about what we SEND. */
+    {
+        repair_report rep; memset(&rep, 0, sizeof rep);
+        if (history_repair(messages, &rep)) repair_log(&rep, "before sending");
+        repair_report_free(&rep);
+    }
     cJSON *body = cJSON_CreateObject();
     cJSON_AddStringToObject(body, "model", cfg->model);
     cJSON_AddNumberToObject(body, "max_tokens", (double)cfg->max_tokens);
@@ -1242,9 +1610,39 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
         fprintf(stderr, "\n%sgcode: HTTP %ld (model %s, %s, payload %lu bytes)%s\n%.*s\n",
                 R_ERRB, code, cfg->model, cfg->base_url, (unsigned long)payload_len, CRST,
                 (int)ctx.raw.len, ctx.raw.p ? ctx.raw.p : "");
-        if (permanent && code != 401 && code != 403)
+        /* #463: a rejection is the SERVER's reading of the history we just
+         * sent, and it is worth acting on — but only when acting on it
+         * actually changes something.
+         *
+         * 🔴 DO NOT blanket-narrow this classifier. A 400 for an unknown
+         * model, a malformed body or a bad parameter is GENUINELY permanent,
+         * and making those retry converts a clean fast failure into a masked
+         * one (or a loop). The gate is therefore not "which status code" but
+         * "did the repair MUTATE the history": mutated ⇒ exactly one retry,
+         * then the normal classification applies; no-op ⇒ the pre-#463
+         * permanent verdict, unchanged, with the same message. That way a
+         * retry can only ever fire when there is a concrete, structural
+         * reason to believe the next attempt differs from this one.
+         *
+         * 401/403 are terminal UNCONDITIONALLY — no credential was ever
+         * fixed by rewriting the conversation, so the repair is not even
+         * attempted there. */
+        if (permanent && code != 401 && code != 403) {
+            repair_report rep; memset(&rep, 0, sizeof rep);
+            const char *errbody = ctx.raw.p ? ctx.raw.p : "";
+            history_repair_named(messages, errbody, &rep);
+            history_repair(messages, &rep);     /* re-establish both halves globally */
+            int changed = repair_total(&rep);
+            if (changed) {
+                repair_log(&rep, "after the server rejected it");
+                fprintf(stderr, "%sgcode: the rejected history was repaired \xe2\x80\x94 retrying this round once%s\n",
+                        R_ERRB, CRST);
+            }
+            repair_report_free(&rep);
+            if (changed) { ret = -4; goto done; }
             fprintf(stderr, "%sgcode: the server rejected the request itself — retrying cannot succeed%s\n",
                     R_ERRB, CRST);
+        }
         ret = permanent ? -3 : -1; goto done;
     }
     if (ctx.api_error) {
@@ -1514,10 +1912,21 @@ static void report_usage(const char *label, const usage *u, const mlist *models)
 
 static int agent_loop(config *cfg, session *sess, cJSON *messages, cJSON *tools) {
     usage turn = {0}; mlist turn_models = {0}; int rounds = 0, last = 0; const char *status = "done";
+    int repair_retried = 0;
     g_interrupted = 0;
     char turn_id[80]; snprintf(turn_id, sizeof turn_id, "%s-%lld", sess->id, sess->turn_index);
     for (long round = 0; cfg->max_turns <= 0 || round < cfg->max_turns; round++) {
         last = do_turn(cfg, sess, messages, tools, &turn, &turn_models); if (last >= 0) rounds++;
+        if (last == -4) {
+            /* #463: the rejected history was repaired. Re-send it ONCE. The
+             * rejected request never became a round, so it consumes neither
+             * the round count nor the --max-turns budget. A second -4 in one
+             * turn degrades to the pre-#463 permanent verdict rather than
+             * looping: the mutation gate already makes progress a
+             * precondition, and this is the belt to that brace. */
+            if (repair_retried) { last = -3; break; }
+            repair_retried = 1; round--; continue;
+        }
         if (last <= 0) break;
     }
     if (last == -2) status = "interrupted";
@@ -1628,6 +2037,215 @@ static int session_resume(session *s, config *cfg, cJSON *messages, const char *
     fprintf(stderr, "%sresumed %s (%d messages): %s%s\n", CDIM, s->id, cJSON_GetArraySize(messages), s->path, CRST); return 0;
 }
 
+/* ---- #463 self-test scaffolding ---------------------------------------
+ * Run the repair over a history literal and compare the result to an
+ * expected literal, byte for byte after a normalizing re-print through
+ * cJSON. Every case ALSO asserts idempotence — a second structural pass
+ * over the repaired history must report zero changes and must not move a
+ * byte — so repair(repair(h)) == repair(h) is checked on every fixture
+ * rather than once on a chosen one. `errbody` NULL skips the server-directed
+ * pass, which is how the structural pass is tested in isolation. */
+static int repair_case(const char *in, const char *errbody, int want_changes, const char *want_json) {
+    cJSON *h = cJSON_Parse(in), *w = cJSON_Parse(want_json);
+    if (!h || !w) { cJSON_Delete(h); cJSON_Delete(w); return 0; }
+    repair_report rep; memset(&rep, 0, sizeof rep);
+    int n = 0;
+    if (errbody) n += history_repair_named(h, errbody, &rep);
+    n += history_repair(h, &rep);
+    repair_report_free(&rep);
+    char *got = cJSON_PrintUnformatted(h), *want = cJSON_PrintUnformatted(w);
+    int ok = got && want && !strcmp(got, want) && n == want_changes;
+    repair_report rep2; memset(&rep2, 0, sizeof rep2);
+    int n2 = history_repair(h, &rep2);
+    repair_report_free(&rep2);
+    char *again = cJSON_PrintUnformatted(h);
+    ok = ok && n2 == 0 && again && got && !strcmp(again, got);
+    if (!ok) fprintf(stderr, "gcode self-test: repair case FAILED\n  in:   %s\n  want: %s\n  got:  %s\n"
+                             "  changes want=%d got=%d; second pass changes=%d\n",
+                     in, want ? want : "(null)", got ? got : "(null)", want_changes, n, n2);
+    free(got); free(want); free(again); cJSON_Delete(h); cJSON_Delete(w);
+    return ok;
+}
+
+#define TR_MARK(id) "{\"type\":\"tool_result\",\"tool_use_id\":\"" id "\",\"content\":\"" REPAIR_MARKER "\"}"
+#define U_TEXT(t)   "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"" t "\"}]}"
+#define A_USE(id)   "{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"" id "\",\"name\":\"bash\",\"input\":{}}]}"
+#define TR(id, c)   "{\"type\":\"tool_result\",\"tool_use_id\":\"" id "\",\"content\":\"" c "\"}"
+
+/* #463: the invariant the whole ticket is about, asserted directly on a
+ * history rather than inferred from a green run — every tool_use id has a
+ * matching tool_result in the message immediately after it, and no
+ * tool_result answers anything else. Returns 1 when the history is
+ * API-valid on both halves. */
+static int history_is_valid(cJSON *messages) {
+    int n = cJSON_GetArraySize(messages);
+    for (int i = 0; i < n; i++) {
+        cJSON *m = cJSON_GetArrayItem(messages, i), *blk;
+        cJSON *content = cJSON_GetObjectItem(m, "content");
+        if (msg_has_tool_use(m)) {
+            cJSON *next = i + 1 < n ? cJSON_GetArrayItem(messages, i + 1) : NULL;
+            if (!msg_can_answer(next)) return 0;
+            cJSON_ArrayForEach(blk, content) {
+                if (!blk_is(blk, "tool_use")) continue;
+                int found = 0; cJSON *nb;
+                cJSON_ArrayForEach(nb, cJSON_GetObjectItem(next, "content"))
+                    if (blk_is(nb, "tool_result") && !strcmp(tool_result_id_of(nb), tool_use_id_of(blk))) { found = 1; break; }
+                if (!found) return 0;
+            }
+        }
+        if (!cJSON_IsArray(content)) continue;
+        cJSON *prev = i > 0 ? cJSON_GetArrayItem(messages, i - 1) : NULL;
+        cJSON *pcontent = (prev && msg_has_tool_use(prev)) ? cJSON_GetObjectItem(prev, "content") : NULL;
+        cJSON_ArrayForEach(blk, content) {
+            if (!blk_is(blk, "tool_result")) continue;
+            int matched = 0; cJSON *pb;
+            cJSON_ArrayForEach(pb, pcontent)
+                if (blk_is(pb, "tool_use") && !strcmp(tool_use_id_of(pb), tool_result_id_of(blk))) { matched = 1; break; }
+            if (!matched) return 0;
+        }
+    }
+    return 1;
+}
+
+static int repair_self_test(void) {
+    int ok = 1;
+
+    /* A clean history is left ALONE — no gratuitous rewriting. */
+    ok &= repair_case("[" U_TEXT("hi") "," A_USE("toolu_aaaa") ","
+                      "{\"role\":\"user\",\"content\":[" TR("toolu_aaaa", "ok") "]}]",
+                      NULL, 0,
+                      "[" U_TEXT("hi") "," A_USE("toolu_aaaa") ","
+                      "{\"role\":\"user\",\"content\":[" TR("toolu_aaaa", "ok") "]}]");
+
+    /* Crash-torn tail: the assistant record landed, its results did not (the
+     * two-independent-writes window at the second persist_message call). */
+    ok &= repair_case("[" U_TEXT("hi") "," A_USE("toolu_aaaa") "]",
+                      NULL, 1,
+                      "[" U_TEXT("hi") "," A_USE("toolu_aaaa") ","
+                      "{\"role\":\"user\",\"content\":[" TR_MARK("toolu_aaaa") "]}]");
+
+    /* The #462 incident's exact shape: a dangling tool_use, then the user's
+     * next question. The follow-up message IS a legal carrier, so the marker
+     * joins it AHEAD of the text — which is also the order the API wants. */
+    ok &= repair_case("[" A_USE("toolu_aaaa") "," U_TEXT("what now") "]",
+                      NULL, 1,
+                      "[" A_USE("toolu_aaaa") ",{\"role\":\"user\",\"content\":["
+                      TR_MARK("toolu_aaaa") ",{\"type\":\"text\",\"text\":\"what now\"}]}]");
+
+    /* No carrier at all (the next message is another assistant turn) — one
+     * is synthesized between them. */
+    ok &= repair_case("[" A_USE("toolu_aaaa") "," A_USE("toolu_bbbb") ","
+                      "{\"role\":\"user\",\"content\":[" TR("toolu_bbbb", "ok") "]}]",
+                      NULL, 1,
+                      "[" A_USE("toolu_aaaa") ",{\"role\":\"user\",\"content\":[" TR_MARK("toolu_aaaa") "]},"
+                      A_USE("toolu_bbbb") ",{\"role\":\"user\",\"content\":[" TR("toolu_bbbb", "ok") "]}]");
+
+    /* Partially answered round: the gap is filled in place, after the last
+     * real result, so the tool_result run keeps leading the message. */
+    ok &= repair_case("[{\"role\":\"assistant\",\"content\":["
+                      "{\"type\":\"tool_use\",\"id\":\"toolu_aaaa\",\"name\":\"bash\",\"input\":{}},"
+                      "{\"type\":\"tool_use\",\"id\":\"toolu_bbbb\",\"name\":\"bash\",\"input\":{}}]},"
+                      "{\"role\":\"user\",\"content\":[" TR("toolu_aaaa", "ok") "]}]",
+                      NULL, 1,
+                      "[{\"role\":\"assistant\",\"content\":["
+                      "{\"type\":\"tool_use\",\"id\":\"toolu_aaaa\",\"name\":\"bash\",\"input\":{}},"
+                      "{\"type\":\"tool_use\",\"id\":\"toolu_bbbb\",\"name\":\"bash\",\"input\":{}}]},"
+                      "{\"role\":\"user\",\"content\":[" TR("toolu_aaaa", "ok") "," TR_MARK("toolu_bbbb") "]}]");
+
+    /* REVERSE ORPHAN — a tool_result answering nothing. Repairing only the
+     * forward half would trade one 400 for another. Here the drop empties
+     * the message, so the message goes too. */
+    ok &= repair_case("[" U_TEXT("hi") ",{\"role\":\"user\",\"content\":[" TR("toolu_ghost", "x") "]}]",
+                      NULL, 1, "[" U_TEXT("hi") "]");
+
+    /* Reverse orphan beside a real result and a text block: only the orphan
+     * goes, the message stays. */
+    ok &= repair_case("[" A_USE("toolu_aaaa") ",{\"role\":\"user\",\"content\":["
+                      TR("toolu_aaaa", "ok") "," TR("toolu_ghost", "x") ",{\"type\":\"text\",\"text\":\"more\"}]}]",
+                      NULL, 1,
+                      "[" A_USE("toolu_aaaa") ",{\"role\":\"user\",\"content\":["
+                      TR("toolu_aaaa", "ok") ",{\"type\":\"text\",\"text\":\"more\"}]}]");
+
+    /* Both halves compounding: the orphan drop empties the answer message,
+     * whose removal exposes the tool_use the drop was hiding. Two changes,
+     * and the order of the two passes is what makes it converge in one run. */
+    ok &= repair_case("[" A_USE("toolu_aaaa") ",{\"role\":\"user\",\"content\":[" TR("toolu_ghost", "x") "]}]",
+                      NULL, 2,
+                      "[" A_USE("toolu_aaaa") ",{\"role\":\"user\",\"content\":[" TR_MARK("toolu_aaaa") "]}]");
+
+    /* ---- the server-directed pass and its gate ------------------------
+     * This history satisfies gcode's structural reading — the result IS in
+     * the next message — but not Anthropic's, which wants the tool_result
+     * run to LEAD. It is the case that makes the post-400 retry live rather
+     * than dead code. */
+    {
+        const char *skewed =
+            "[" A_USE("toolu_aaaa") ",{\"role\":\"user\",\"content\":["
+            "{\"type\":\"text\",\"text\":\"note\"}," TR("toolu_aaaa", "real output") "]}]";
+        const char *fixed =
+            "[" A_USE("toolu_aaaa") ",{\"role\":\"user\",\"content\":["
+            TR("toolu_aaaa", "real output") ",{\"type\":\"text\",\"text\":\"note\"}]}]";
+        const char *names_it =
+            "{\"error\":{\"message\":\"messages.1: `tool_use` ids were found without `tool_result` "
+            "blocks immediately after: toolu_aaaa. Each `tool_use` block must have a corresponding "
+            "`tool_result` block in the next message.\"}}";
+        /* structural pass alone: no change — gcode's reading says it is fine */
+        ok &= repair_case(skewed, NULL, 0, skewed);
+        /* the server names the id: the REAL output is relocated, not replaced */
+        ok &= repair_case(skewed, names_it, 1, fixed);
+        /* 🔴 THE NEGATIVE CONTROL. A genuinely permanent 400 — unknown model —
+         * names no id we hold, so the pass mutates NOTHING and the caller
+         * keeps its pre-#463 permanent verdict. This is the leak the ticket
+         * warns about, asserted rather than assumed. */
+        ok &= repair_case(skewed,
+                          "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\","
+                          "\"message\":\"model: nonexistent-model-9000\"}}",
+                          0, skewed);
+        /* An id too short to match on is never acted upon, however the error
+         * body reads — a degenerate id must not match by coincidence. */
+        ok &= repair_case("[{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"ab\","
+                          "\"name\":\"bash\",\"input\":{}}]},{\"role\":\"user\",\"content\":["
+                          "{\"type\":\"text\",\"text\":\"note\"}," TR("ab", "real") "]}]",
+                          "{\"error\":{\"message\":\"ids without results: ab\"}}", 0,
+                          "[{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"ab\","
+                          "\"name\":\"bash\",\"input\":{}}]},{\"role\":\"user\",\"content\":["
+                          "{\"type\":\"text\",\"text\":\"note\"}," TR("ab", "real") "]}]");
+    }
+
+    /* The repaired output is API-VALID on both halves, asserted directly —
+     * and the corrupt input is NOT, which is what makes the assertion mean
+     * something. */
+    {
+        const char *bad = "[" A_USE("toolu_aaaa") "," U_TEXT("what now") ","
+                          "{\"role\":\"user\",\"content\":[" TR("toolu_ghost", "x") "]}]";
+        cJSON *h = cJSON_Parse(bad);
+        ok &= h && !history_is_valid(h);
+        repair_report rep; memset(&rep, 0, sizeof rep);
+        ok &= history_repair(h, &rep) > 0;
+        ok &= rep.inserted == 1 && rep.dropped == 1;
+        ok &= rep.ins_ids.p && !strcmp(rep.ins_ids.p, "toolu_aaaa");
+        ok &= rep.drop_ids.p && !strcmp(rep.drop_ids.p, "toolu_ghost");
+        repair_report_free(&rep);
+        ok &= h && history_is_valid(h);
+        cJSON_Delete(h);
+    }
+    /* The id list is bounded and SAYS it was clipped — a 200-id repair must
+     * not scroll its own reason off the screen. */
+    {
+        repair_report rep; memset(&rep, 0, sizeof rep);
+        for (int i = 0; i < REPAIR_ID_LIST_MAX + 3; i++) repair_note_id(&rep.ins_ids, &rep.ins_listed, "toolu_x");
+        ok &= rep.ins_listed == REPAIR_ID_LIST_MAX + 3;
+        ok &= rep.ins_ids.p && strlen(rep.ins_ids.p) == (size_t)(REPAIR_ID_LIST_MAX * 7 + (REPAIR_ID_LIST_MAX - 1) * 2);
+        repair_report_free(&rep);
+    }
+    /* An empty history, and one holding only a bare-string content, must not
+     * trip the walk. */
+    ok &= repair_case("[]", NULL, 0, "[]");
+    ok &= repair_case("[{\"role\":\"user\",\"content\":\"plain string\"}]", NULL, 0,
+                      "[{\"role\":\"user\",\"content\":\"plain string\"}]");
+    return ok;
+}
+
 static int self_test(void) {
     /* #313: the dated Sonnet 5 intro rate ($2/$10 through 2026-08-31,
      * $3/$15 sticker after) — fixed dates so the check outlives the
@@ -1697,6 +2315,10 @@ static int self_test(void) {
         sc = utf8_scrub("", 0, &rep);
         ok &= rep == 0 && !strcmp(sc, ""); free(sc);
     }
+    /* #463: the validate-and-repair pass — both halves of the structural
+     * invariant, the server-directed pass and its no-mutation gate, and
+     * idempotence on every fixture. */
+    ok &= repair_self_test();
     char tmp[] = "/tmp/gcode-step2-test-XXXXXX"; if (!mkdtemp(tmp)) return 1; setenv("GCODE_STATE_DIR", tmp, 1);
     config cfg = { "https://example.invalid", NULL, NULL, "requested-alias", "fixture-system", 123, 4, 0, 0 };
     session s; cJSON *messages = cJSON_CreateArray();
