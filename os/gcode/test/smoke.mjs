@@ -383,6 +383,205 @@ async function main() {
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 
+  // ---- test 12 (#462): a max_tokens cut must NOT brick the session ------
+  // gcode used to pair tool_use with tool_result off `stop_reason` instead of
+  // off message SHAPE: the assistant message (tool_use blocks included) was
+  // appended unconditionally, but the matching tool_results were appended ONLY
+  // when stop_reason == "tool_use" and otherwise cJSON_Delete'd — after the
+  // tools had already run. A turn that ended `max_tokens` therefore left a
+  // DANGLING tool_use, every later request 400'd, and gcode exited the REPL.
+  //
+  // Every check below except the two labelled "negative control" FAILS on the
+  // pre-fix binary. The pre-fix behaviour is recorded per leg.
+  {
+    const tmp = os.tmpdir();
+    const tag = `gcode-462-${process.pid}`;
+
+    // -- leg A: truncated mid-input_json_delta of a write_file call --------
+    // Pre-fix: the partial JSON fails cJSON_Parse, is replaced by {}, and the
+    // tool RUNS anyway (jku's confusing "needs 'path' and 'content'"); the
+    // results are then deleted and the turn ends -> ONE request.
+    {
+      const target = path.join(tmp, `${tag}-a.txt`);
+      fs.rmSync(target, { force: true });
+      const full = JSON.stringify({ path: target, content: 'x'.repeat(64) });
+      const cutMidJson =
+        sse('message_start', { message: { id: 'msg_462a', model: 'trunc-model', usage: { input_tokens: 9, output_tokens: 0 } } })
+        + sse('content_block_start', { index: 0, content_block: { type: 'text', text: '' } })
+        + sse('content_block_delta', { index: 0, delta: { type: 'text_delta', text: "I'll write the file." } })
+        + sse('content_block_stop', { index: 0 })
+        + sse('content_block_start', { index: 1, content_block: { type: 'tool_use', id: 'toolu_462a', name: 'write_file', input: {} } })
+        // cut here: an unterminated JSON fragment, exactly as the cap leaves it
+        + sse('content_block_delta', { index: 1, delta: { type: 'input_json_delta', partial_json: full.slice(0, 25) } })
+        + sse('message_delta', { delta: { stop_reason: 'max_tokens' }, usage: { output_tokens: 512 } })
+        + sse('message_stop', {});
+
+      const stateDir = fs.mkdtempSync(path.join(tmp, 'gcode-462a-'));
+      const srv = await startServer([cutMidJson, textResponse('Retried smaller — done.')]);
+      const { stdout } = await runCodeBoth(srv.url, ['-p', 'write the file', '--no-color', '--max-tokens', '4096'],
+        { GCODE_STATE_DIR: stateDir });
+      srv.close();
+
+      check(srv.bodies.length === 2,
+        `#462: the turn CONTINUED after the cut so the model can retry smaller (${srv.bodies.length} requests, pre-fix 1)`);
+
+      // The API contract: an assistant message carrying tool_use must be
+      // followed IMMEDIATELY by a user message carrying the matching results.
+      const apiValid = (msgs) => {
+        for (let i = 0; i < msgs.length; i++) {
+          const uses = (Array.isArray(msgs[i].content) ? msgs[i].content : [])
+            .filter((b) => b.type === 'tool_use').map((b) => b.id);
+          if (!uses.length) continue;
+          const next = msgs[i + 1];
+          const got = (next && Array.isArray(next.content) ? next.content : [])
+            .filter((b) => b.type === 'tool_result').map((b) => b.tool_use_id);
+          if (next?.role !== 'user' || uses.some((id) => !got.includes(id))) return false;
+        }
+        return true;
+      };
+      const sent = srv.bodies[1] ? srv.bodies[1].messages : [];
+      check(sent.length > 0 && apiValid(sent),
+        '#462: in-memory history is API-valid — every tool_use id has a tool_result in the very next message');
+
+      const tr = sent.flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+        .find((b) => b.type === 'tool_result' && b.tool_use_id === 'toolu_462a');
+      check(!!tr, '#462: the truncated call still got a tool_result (pre-fix it was deleted)');
+      check(!!tr && tr.content.includes('TRUNCATED') && tr.content.includes('NOT executed'),
+        '#462: the tool_result explains the truncation instead of a confusing tool error');
+      check(!!tr && tr.content.includes('4096'),
+        '#462: the tool_result names the actual max_tokens cap in force');
+
+      // The PERSISTED log is a separate code path (persist_assistant_message is
+      // unconditional, persist_message(..., "tool") was inside the stop_reason
+      // branch) — a fixture that checked only the array would pass while
+      // --resume stayed broken.
+      const logFile = fs.readdirSync(path.join(stateDir, 'sessions')).filter((f) => f.endsWith('.jsonl'))[0];
+      const records = fs.readFileSync(path.join(stateDir, 'sessions', logFile), 'utf8')
+        .split('\n').filter(Boolean).map((l) => JSON.parse(l));
+      const logged = records.filter((r) => r.type === 'message')
+        .map((r) => ({ role: r.role, content: r.content }));
+      check(apiValid(logged),
+        '#462: the PERSISTED log is API-valid too — --resume replays a history the server accepts');
+      check(logged.some((m) => (m.content || []).some((b) => b.type === 'tool_result' && b.tool_use_id === 'toolu_462a')),
+        '#462: the tool_result was persisted, not just held in memory');
+
+      check(stdout.includes('Retried smaller — done.'), '#462: the session survives the cut and completes');
+      fs.rmSync(target, { force: true });
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+
+    // -- leg B: cut at a block boundary, so the partial JSON PARSES ---------
+    // Blocks stream in order, so under max_tokens only the LAST one can be
+    // cut. Pre-fix BOTH bash calls run (the second is the live hazard: a
+    // half-specified command executing).
+    {
+      const ranA = path.join(tmp, `${tag}-ran-a`);
+      const ranB = path.join(tmp, `${tag}-ran-b`);
+      fs.rmSync(ranA, { force: true }); fs.rmSync(ranB, { force: true });
+      const twoCalls =
+        sse('message_start', { message: { id: 'msg_462b', model: 'trunc-model', usage: { input_tokens: 9, output_tokens: 0 } } })
+        + sse('content_block_start', { index: 0, content_block: { type: 'tool_use', id: 'toolu_462b0', name: 'bash', input: {} } })
+        + sse('content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ command: `touch ${ranA}` }) } })
+        + sse('content_block_stop', { index: 0 })
+        + sse('content_block_start', { index: 1, content_block: { type: 'tool_use', id: 'toolu_462b1', name: 'bash', input: {} } })
+        + sse('content_block_delta', { index: 1, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ command: `touch ${ranB}` }) } })
+        + sse('message_delta', { delta: { stop_reason: 'max_tokens' }, usage: { output_tokens: 512 } })
+        + sse('message_stop', {});
+
+      const srv = await startServer([twoCalls, textResponse('ok')]);
+      await runCodeBoth(srv.url, ['-p', 'run both', '--no-color', '--no-persist']);
+      srv.close();
+
+      // NEGATIVE CONTROL: earlier blocks are complete and must still run
+      // (this one passes before AND after the fix, by design).
+      check(fs.existsSync(ranA),
+        '#462 negative control: an earlier, complete tool call in the same round still RUNS');
+      check(!fs.existsSync(ranB),
+        '#462: the LAST block under max_tokens is refused even though its JSON parses (pre-fix it executed)');
+      const results = (srv.bodies[1] ? srv.bodies[1].messages : [])
+        .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+        .filter((b) => b.type === 'tool_result');
+      check(results.some((b) => b.tool_use_id === 'toolu_462b0') && results.some((b) => b.tool_use_id === 'toolu_462b1'),
+        '#462: BOTH calls are paired — the refused one carries a marker result, never a dropped block');
+      fs.rmSync(ranA, { force: true }); fs.rmSync(ranB, { force: true });
+    }
+
+    // -- leg C: a compat shim that returns end_turn alongside tool calls ----
+    // The DeepSeek-class provider named in the diagnosis. Pairing is keyed on
+    // SHAPE, so this round completes instead of discarding its tool output.
+    {
+      const target = path.join(tmp, `${tag}-c.txt`);
+      fs.rmSync(target, { force: true });
+      const endTurnWithTool =
+        sse('message_start', { message: { id: 'msg_462c', model: 'shim-model', usage: { input_tokens: 9, output_tokens: 0 } } })
+        + sse('content_block_start', { index: 0, content_block: { type: 'tool_use', id: 'toolu_462c', name: 'write_file', input: {} } })
+        + sse('content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ path: target, content: 'shim\n' }) } })
+        + sse('content_block_stop', { index: 0 })
+        + sse('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 12 } })
+        + sse('message_stop', {});
+
+      const srv = await startServer([endTurnWithTool, textResponse('Shim round completed.')]);
+      const { stdout } = await runCodeBoth(srv.url, ['-p', 'shim', '--no-color', '--no-persist']);
+      srv.close();
+      check(srv.bodies.length === 2,
+        `#462: end_turn alongside a tool call still completes the round (${srv.bodies.length} requests, pre-fix 1)`);
+      const tr = (srv.bodies[1] ? srv.bodies[1].messages : [])
+        .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+        .find((b) => b.type === 'tool_result' && b.tool_use_id === 'toolu_462c');
+      check(!!tr, '#462: a shim end_turn no longer leaves a dangling tool_use');
+      check(stdout.includes('Shim round completed.'), '#462: the shim round reaches its follow-up turn');
+      fs.rmSync(target, { force: true });
+    }
+
+    // -- leg D: the truncation-continuation cap, and it says why -----------
+    // Independent of --max-turns (unlimited here, #353). Four truncated
+    // rounds: three continuations, then a loud stop.
+    {
+      const target = path.join(tmp, `${tag}-d.txt`);
+      const full = JSON.stringify({ path: target, content: 'y'.repeat(64) });
+      const cut = (n) =>
+        sse('message_start', { message: { id: `msg_462d${n}`, model: 'trunc-model', usage: { input_tokens: 3, output_tokens: 0 } } })
+        + sse('content_block_start', { index: 0, content_block: { type: 'tool_use', id: `toolu_462d${n}`, name: 'write_file', input: {} } })
+        + sse('content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: full.slice(0, 25) } })
+        + sse('message_delta', { delta: { stop_reason: 'max_tokens' }, usage: { output_tokens: 512 } })
+        + sse('message_stop', {});
+
+      const srv = await startServer([cut(1), cut(2), cut(3), cut(4)]);
+      const { stderr } = await runCodeBoth(srv.url, ['-p', 'storm', '--no-color', '--no-persist']);
+      srv.close();
+      check(srv.bodies.length === 4,
+        `#462: a truncation storm stops after 3 consecutive continuations (${srv.bodies.length} requests, pre-fix 1)`);
+      check(/consecutive rounds were cut at the max_tokens cap/.test(stderr),
+        '#462: hitting the truncation cap PRINTS why — never a silent turn-budget burn');
+      check(stderr.includes('--max-tokens'),
+        '#462: the give-up line names the fix (raise the cap)');
+      fs.rmSync(target, { force: true });
+    }
+
+    // -- leg E: the cap itself — default, env override, clamp, --help ------
+    {
+      const srv = await startServer([textResponse('cap ok'), textResponse('cap ok')]);
+      let r = await runCodeBoth(srv.url, ['-p', 'hi', '--no-color', '--no-persist']);
+      check(srv.bodies[0] && srv.bodies[0].max_tokens === 32768,
+        `#462: default max_tokens is 32768, not 4096 (got ${srv.bodies[0] && srv.bodies[0].max_tokens})`);
+
+      r = await runCodeBoth(srv.url, ['-p', 'hi', '--no-color', '--no-persist', '--max-tokens', '999999']);
+      srv.close();
+      check(srv.bodies[1] && srv.bodies[1].max_tokens === 128000,
+        `#462: an out-of-range cap is CLAMPED, never posted as-is (got ${srv.bodies[1] && srv.bodies[1].max_tokens})`);
+      check(/clamped to 128000/.test(r.stderr), '#462: the clamp is announced, not silent');
+
+      const help = execFileSync(bin, ['--help'], { encoding: 'utf8', env: { ...process.env, ASAN_OPTIONS: 'detect_leaks=0' } });
+      check(help.includes('ANTHROPIC_MAX_TOKENS'), '#462: --help documents the ANTHROPIC_MAX_TOKENS override');
+
+      const srv2 = await startServer([textResponse('env ok')]);
+      await runCodeBoth(srv2.url, ['-p', 'hi', '--no-color', '--no-persist'], { ANTHROPIC_MAX_TOKENS: '16384' });
+      srv2.close();
+      check(srv2.bodies[0] && srv2.bodies[0].max_tokens === 16384,
+        `#462: ANTHROPIC_MAX_TOKENS is honoured (got ${srv2.bodies[0] && srv2.bodies[0].max_tokens})`);
+    }
+  }
+
   console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILURE(S)`);
   process.exit(failures === 0 ? 0 : 1);
 }
