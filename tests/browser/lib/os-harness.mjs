@@ -11,7 +11,9 @@
 // Playwright is imported LAZILY (inside launchBrowser) so this module — and
 // its pure helpers (osUrl, near, makeCheck, startServer arg-building,
 // waitForServer against any fetch) — load in plain Node without the operator's
-// separate `playwright` install. See tests/browser/lib/test-harness.js.
+// separate `playwright` install. Their unit coverage is
+// tests/browser/os-harness-unit.mjs — a real sweep member since #431 (it sat
+// in this directory as `test-harness.js`, enrolled in no suite, and rotted).
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';

@@ -1,12 +1,22 @@
-// Unit coverage for the PURE parts of os-harness.mjs (todos/0146) — the bits
-// that don't need Playwright or a browser: osUrl, near, makeCheck, and
-// waitForServer against an injected fetch. Runs in plain Node (the harness
-// imports playwright lazily, so this import succeeds without the operator's
-// separate install). The pixel/VT helpers and openOsSession are exercised by
-// the real browser sweep (operator-owed, 0064).
+// Unit coverage for the PURE parts of lib/os-harness.mjs (todos/0146) — the
+// bits that don't need Playwright or a browser: osUrl, near, makeCheck,
+// wmctlTimeoutHits, and waitForServer against an injected fetch. Runs in plain
+// Node (the harness imports playwright lazily, so this import succeeds without
+// the operator's separate install). The pixel/VT helpers and openOsSession are
+// exercised by the real browser sweep (operator-owed, 0064).
 //
-//   node tests/browser/lib/test-harness.js
-import { osUrl, near, makeCheck, waitForServer, wmctlTimeoutHits } from './os-harness.mjs';
+//   node tests/browser/os-harness-unit.mjs
+//
+// Ticket #431: this file used to be `lib/test-harness.js` and was a member of
+// NO suite — so when osUrl grew its `hostkeys=off` default, the stale
+// expectation below went RED on main and no gate ever said so. It lives HERE,
+// under the sweep's `os-*.mjs` discovery glob, deliberately: the sweep is the
+// suite the diff planner already selects for every `tests/browser/` path, and
+// a DISCOVERED member cannot be orphaned the way an explicit registry row can
+// (the #167/#314 class). It is the one sweep member that launches no browser —
+// a couple of hundred milliseconds — and it is the only coverage the harness's
+// pure helpers have, including #97's assertNoWmctlTimeout guard.
+import { osUrl, near, makeCheck, waitForServer, wmctlTimeoutHits } from './lib/os-harness.mjs';
 
 let failures = 0;
 const check = (name, cond) => {
