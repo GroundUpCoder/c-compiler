@@ -201,6 +201,17 @@ const RULES = [
   // test_netbridge_e2e.js drives both halves end to end.
   [/^tools\/net-bridge\.js$/, ['kernel', 'host'], 'the Tier 2.5 HTTP bridge — test_netbridge_e2e.js drives the full reroute; the #393 mislabel legs (test_netbridge_wrapper.js) run the real bridge in the host suite'],
 
+  // The host ticket bridge (ticket #451): the localhost server the in-OS
+  // /usr/bin/file-gucos-ticket client POSTs to, which execs a `file-gucos-ticket`
+  // command from the HOST's PATH. Its wire contract with os/file-gucos-ticket.c is
+  // private and version-locked (the net-bridge x-guc-* encapsulation convention),
+  // and test_ticketbridge_e2e.js drives both halves end to end against a fake
+  // handler. `kernel` only: unlike net-bridge.js there is no host-suite test here —
+  // net-bridge earns its `host` entry from test_netbridge_wrapper.js (the #393
+  // mislabel legs), and this bridge's browser-facing surface is exercised Node-side
+  // inside the kernel e2e itself rather than by a separate cheap-suite file.
+  [/^tools\/ticket-bridge\.js$/, ['kernel'], 'the host ticket bridge — test_ticketbridge_e2e.js drives the in-OS client through it to a fake PATH handler in both net modes'],
+
   // The remote-egress wrapper (ticket #380): ssh -L to the SAME bridge running
   // on another host. Explicitly NOTHING, and the decision is the point. It
   // changes no wire contract -- it ships net-bridge.js verbatim and forwards a

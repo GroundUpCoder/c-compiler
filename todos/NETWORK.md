@@ -135,6 +135,65 @@ positive-control run: OFF/ON/OFF/ON-dead flipped live by one process,
 the bridge's request counter as the discriminator) + the ctlpanel e2e's
 Network-applet leg.
 
+## The ticket bridge — filing a ticket OUT of gucOS (LANDED — ticket #451)
+
+A SECOND single-file host bridge, the same shape as Tier 2.5's and
+deliberately separate from it: `tools/ticket-bridge.js` on
+**127.0.0.1:8210**, serving `POST /file` and `GET /health`. It lets the
+in-OS `/usr/bin/file-gucos-ticket` client (`os/file-gucos-ticket.c`) file
+a ticket — or raise an alert — on the host that is running the OS.
+
+**The PATH-command contract, which is the entire interface.** On a valid
+request the bridge runs a command named **`file-gucos-ticket`**, resolved
+from the HOST's PATH, with **fixed argv, the request JSON on stdin, never
+through a shell**, and relays that command's stdout and exit code. That
+command is NOT part of this repo and this repo does not describe it: the
+ONE fact the tree knows about the outside world is that such a command
+MAY exist. What filing a ticket means — which tracker, which project,
+which credentials — lives entirely on the host side of that wire. A host
+without the command installed is answered **501** ("no ticket handler
+installed"), so the OS gets a truthful answer instead of a mystery, and
+the e2e drives everything against a FAKE handler it plants on a private
+PATH dir (acceptance must never depend on real tooling existing).
+
+Transport is the plain Tier 2 HTTP seam (`__http_open`), so the client
+needs no kernel opcode and no host.js import of its own, and it transits
+the Tier 2.5 net bridge whenever the `net` store says `bridge on` with
+no special-casing at either end. Wire: one JSON object
+`{kind, title, body?, priority?, difficulty?}` (`--body -` reads stdin);
+`kind` is `ticket` or `alert` and the HANDLER decides what an alert
+means. Base URL from a new `ticket` cfgstore (`url` key; layers
+`~/.config/ticket` > `/etc/ticket` > `/usr/share/ticket`, nothing baked),
+default `http://127.0.0.1:8210`.
+
+Posture is net-bridge's, copied wholesale and for the same reasons:
+strict loopback bind with no widen flag, `originAllowed` verbatim,
+CORS/PNA preflight answered for every origin with enforcement on the
+real request as a READABLE 403 (#393). No auth token — 127.0.0.1 +
+the Origin allowlist is the gate, and revisiting that is a decision
+about BOTH bridges at once. Because this endpoint **spawns a process**
+it adds abuse limits net-bridge does not need: 64 KB request body,
+256 KB handler stdout, a 30s handler timeout (then SIGKILL), and 2
+in-flight execs behind a bounded queue (503 past it).
+
+The encapsulation convention carries over, and it is what keeps the two
+failure classes apart: a handler that ANSWERED gets **200 +
+`x-guc-exit: N`** (CORS-exposed) carrying its stdout — so a nonzero exit
+is reported in-OS as *the host handler rejected your ticket*, with its
+own words — while every bridge-level refusal is a bare status with no
+`x-guc-exit` (400 non-JSON body, 403 origin, 413 cap, 501 no handler,
+502 handler died/timed out/overflowed, 503 too busy) and is reported as
+*the bridge refused the request*.
+
+Not built, deliberately (v1 scope): no Control Panel applet and no
+auto-start/process manager (net-bridge has neither either — the user
+runs `node tools/ticket-bridge.js`).
+
+Tests: `tests/kernel/test_ticketbridge_e2e.js` — the real client against
+the fake handler in BOTH net modes (the net-bridge `/fetch` counter is
+the bridge-ON transit proof), every negative leg above, and a
+`driveBoot` leg running the SHIPPED binary out of the baked image.
+
 ## Tier 3 — DNS via DoH (folds into the HTTP stack `done/0172`/`0173`, on demand)
 
 `getaddrinfo` backed by DNS-over-HTTPS (the public DoH endpoints are
