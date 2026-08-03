@@ -127,3 +127,61 @@ sanitizer. `build-native.sh` builds with `-fsanitize=address`; keep it that way.
   the structural pass (the named pass does drop them when it relocates). No
   evidence a provider rejects them, and inventing a rule here would be scope I
   cannot justify.
+
+## Gate (re-run against the registry that exists after `7f01d2f7`)
+
+The first gate attempt was **headless** — the turn ended mid-run, the suite
+runner died, orphaned `os/boot.js` children kept the heavy lock looking valid,
+and `summary.json` froze at `recorded: 91 / total: 154`. Those 91 files were
+measured against a registry that lane B (#167 + #431) then replaced, so they
+were **discarded rather than `--resume`d**: resuming would have banked stale
+coverage under the new totals.
+
+Merged `origin/main` (`7f01d2f7`) in — clean, no conflicts. `os/image.json` went
+`228` (main) → `229` (this branch); nothing to hand-resolve.
+
+Plan re-derived on the merged tree, not carried forward:
+`node tests/run.js --diff origin/main --dry-run` → **`kernel, sweep`**, selected
+by `os/gcode/gcode.c`, `os/gcode/test/smoke.mjs` and `os/image.json` (each maps
+to both). `host` is **not** selected — the new `tests/spawn/` rule matches no
+path in this diff.
+
+| suite | done | files | non-pass | filter |
+|---|---|---|---|---|
+| kernel | true | total 155, selected 155, executed 155, recorded 155, resumed 0, carried 0 | 0 | null |
+| sweep | true | total 50, selected 50, executed 50, recorded 50, resumed 0, carried 0 | 0 | null |
+
+Both totals **moved** with the registry change — kernel 154 → **155**
+(`test_punes_e2e.js` newly enrolled; it is an image test and this branch bumps
+`os/image.json`, so it genuinely gates the change — **pass**, 14.6 s), sweep
+49 → **50** (`os-harness-unit.mjs`, ex-`lib/test-harness.js` — **pass**).
+
+`build/test-kernel/test_gcode_native.js.log` is the leg that proves the new
+checks are actually registered rather than merely present:
+
+```
+ok   smoke.mjs declares a positive check count (derived 98)
+ok   oracle ran ALL 98 checks (counted 98 ok lines)
+```
+
+68 → 98 is the whole of this ticket's e2e surface, and the count is derived from
+the source's `check(` sites, so it cannot silently fail to take.
+
+### Two harness traps worth writing down
+
+**A long gate must not outlive its turn.** `test_os_boot.js` alone ran
+**634 757 ms** — the tool cap is 600 s, so the suite can never fit in one call.
+The harness backgrounds it saying "you will be notified"; that notification is
+not a lifeline. The working shape is to stay in-turn behind a watcher that exits
+on **completion or death**, and to probe the **lock file's real holder pid**
+(`$TMPDIR/cc-heavy-tests.lock`) or the artifact — never the launching command
+name, because `node tests/run.js sweep` execs into `os-sweep.mjs` and sheds its
+own name.
+
+**A worktree needs BOTH `node_modules` symlinks.** With only the root one, the
+first sweep attempt failed **49 of 50** files at launch: resolution fell through
+the root `node_modules/playwright` (a symlink into `c-compiler-copy`, 1.61.1) and
+`checkPlaywrightPin` correctly refused, because `tests/browser/package.json` pins
+1.61.0 for a cached Chromium. The fix is `tests/browser/node_modules` symlinked
+too — **not** `CC_NO_PLAYWRIGHT_PIN=1`, which would have run an uncached
+Chromium and turned an install problem into 49 spurious product FAILs.
