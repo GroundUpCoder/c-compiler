@@ -32,7 +32,10 @@
 // shadow the dispatcher is gone), `python` then really runs MicroPython
 // with sys.argv intact and its status propagated, the picker-equivalent
 // switch works through the same store, and `gucman remove` deletes exactly
-// that claim line.
+// that claim line. It closes with the todos/0355 leg: a HAND-BUILT payload
+// carrying a `bin` claim on the dispatched name `python` (a payload mkpkg
+// refuses to build) makes gucman's install-time bin-plant guard fire —
+// refused loudly, nothing planted, no DB record.
 //
 // Run: node tests/kernel/test_cmdalt_e2e.js
 'use strict';
@@ -53,9 +56,9 @@ function check(name, cond, extra) {
  * /usr/local/bin/<name> at install, shadowing the dispatcher forever. The
  * runtime twin lives in gucman's bin-plant loop; it is unreachable through
  * the shipped pipeline (mkpkg refuses to build such a payload, and gucman
- * verifies the payload sha against the mkpkg index), so only its
- * non-firing path is covered — by every install leg in this file and the
- * gucman e2es. */
+ * verifies the payload sha against the mkpkg index) — which is why session
+ * B's ==shadowinstall leg builds the payload BY HAND (addShadowPackage
+ * below, todos/0355) to make that guard fire too. */
 function checkShadowingBinRefused(check) {
   const cp = require('child_process');
   const pathm = require('path');
@@ -83,9 +86,97 @@ function checkShadowingBinRefused(check) {
   }
 }
 
+/* The install-time twin's firing fixture (todos/0355). gucman's bin-plant
+ * loop refuses to plant /usr/local/bin/<cmd> over a name the base image
+ * DISPATCHES (`gm_same_file(disp, GM_DISPATCH)` in os/gucman/gucman.c) — the
+ * runtime backstop for a payload that arrived OUTSIDE the shipped pipeline.
+ * mkpkg will never build such a payload (that is the first tier, above), so
+ * this builds one by hand: the same ustar+gzip encoding mkpkg emits — one
+ * top-level control.json plus opt/<name>/** — carrying a `bin` claim on a
+ * dispatched name, dropped into the test repo's pool with a matching
+ * index.json entry so gucman's sha256 check accepts it all the way to the
+ * bin-plant loop. Session B's ==shadowinstall leg asserts the refusal. */
+function tarMember(name, data, mode, typeflag) {
+  const b = Buffer.alloc(512);
+  const octal = (off, len, val) => {
+    b.write(val.toString(8).padStart(len - 1, '0'), off, 'ascii');
+    b[off + len - 1] = 0;
+  };
+  if (Buffer.byteLength(name) > 100) throw new Error('tar member name too long: ' + name);
+  b.write(name, 0, 'utf8');
+  octal(100, 8, mode);            // mode
+  octal(108, 8, 0);               // uid
+  octal(116, 8, 0);               // gid
+  octal(124, 12, data ? data.length : 0);
+  octal(136, 12, 0);              // mtime
+  b.fill(0x20, 148, 156);         // chksum spaces while summing
+  b.write(typeflag, 156, 'ascii');
+  b.write('ustar', 257, 'ascii');
+  b.write('00', 263, 'ascii');
+  let sum = 0;
+  for (let i = 0; i < 512; i++) sum += b[i];
+  b.write(sum.toString(8).padStart(6, '0'), 148, 'ascii');
+  b[154] = 0;
+  b[155] = 0x20;
+  if (!data) return b;
+  const pad = (512 - (data.length % 512)) % 512;
+  return Buffer.concat([b, data, pad ? Buffer.alloc(pad) : Buffer.alloc(0)]);
+}
+
+function addShadowPackage(repo, check) {
+  const zlib = require('zlib');
+  const crypto = require('crypto');
+  const pathm = require('path');
+  /* PRESENCE controls: the fixture's premise is that the base image
+   * dispatches `python` (/usr/bin/python -> /usr/bin/cmdalt in
+   * os/image.json — the same derivation mkpkg's build-time gate uses). If
+   * either control fails, the guard under test can no longer fire for this
+   * name and the whole leg would decay into a trivially-different refusal:
+   * re-pin the fixture to a name the derivation still yields. */
+  const manifest = JSON.parse(fs.readFileSync(pathm.join(ROOT, 'os', 'image.json'), 'utf-8'));
+  const dispatched = Object.keys(manifest.system.files || {})
+    .filter((p) => p.startsWith('/usr/bin/') &&
+                   (manifest.system.files[p] || {}).link === '/usr/bin/cmdalt')
+    .map((p) => p.slice('/usr/bin/'.length));
+  check('CONTROL: the base image still dispatches at least one command name',
+        dispatched.length > 0,
+        're-pin todos/0355 fixture: os/image.json has no /usr/bin/* -> /usr/bin/cmdalt link left');
+  check('CONTROL: `python` is still a dispatched name (the shadow fixture claims it)',
+        dispatched.includes('python'),
+        `re-pin todos/0355 fixture to one of: ${dispatched.join(', ') || '(none)'}`);
+  const control = JSON.stringify({
+    name: 'shadowpkg', version: '1.0',
+    summary: 'todos/0355 fixture: a bin claim on a dispatched name',
+    bin: { python: 'tool' },
+  }, null, 2) + '\n';
+  const tool = Buffer.from('#!/bin/sh\necho SHADOW-TOOL-RAN\n');
+  const tar = Buffer.concat([
+    tarMember('control.json', Buffer.from(control), 0o644, '0'),
+    tarMember('opt/', null, 0o755, '5'),
+    tarMember('opt/shadowpkg/', null, 0o755, '5'),
+    tarMember('opt/shadowpkg/tool', tool, 0o755, '0'),
+    Buffer.alloc(1024),           // end-of-archive
+  ]);
+  const gz = zlib.gzipSync(tar, { level: 9 });
+  const sha = crypto.createHash('sha256').update(gz).digest('hex');
+  const file = `shadowpkg_1.0_${sha.slice(0, 16)}.pkg.tar.gz`;
+  fs.mkdirSync(pathm.join(repo.dir, 'pool'), { recursive: true });
+  fs.writeFileSync(pathm.join(repo.dir, 'pool', file), gz);
+  const idxPath = pathm.join(repo.dir, 'index.json');
+  const idx = JSON.parse(fs.readFileSync(idxPath, 'utf-8'));
+  idx.packages.shadowpkg = {
+    version: '1.0',
+    summary: 'todos/0355 fixture: a bin claim on a dispatched name',
+    minBase: idx.baseVersion, deps: [],
+    payload: { format: 'tar+gzip', url: 'pool/' + file, size: gz.length, sha256: sha },
+  };
+  fs.writeFileSync(idxPath, JSON.stringify(idx, null, 2) + '\n');
+}
+
 async function main() {
   checkShadowingBinRefused(check);
   const repo = ensurePackages(['micropython']);
+  addShadowPackage(repo, check);
   const idx = repo.index;
   const MIN = ensureMinimalImage();
   const { dir: tmp, image } = freshImage('os-cmdalt-');
@@ -316,6 +407,24 @@ async function main() {
     'cat /etc/cmdalt 2>/dev/null; echo STORE=$?',
     'python -c "print(1)" 2>&1; echo RC=$?',
     'echo ==cut',
+
+    // ---- todos/0355: the INSTALL-TIME shadow guard really fires ----
+    // The repo carries a hand-built payload (addShadowPackage) whose
+    // control.json claims bin `python` — a payload mkpkg refuses to build,
+    // so the only thing standing between it and a permanent PATH shadow is
+    // gucman's bin-plant guard. Last, so a regression here (an install that
+    // wrongly SUCCEEDS) cannot perturb the legs above.
+    'echo ==shadowctl',
+    'readlink /usr/bin/python',
+    'echo ==cut',
+    'echo ==shadowinstall',
+    'gucman install shadowpkg 2>&1; echo RC=$?',
+    'echo ==cut',
+    'echo ==shadowresidue',
+    'test -e /usr/local/bin/python && echo PYTHON-LINK-PLANTED || echo NO-PYTHON-LINK',
+    'test -e /var/lib/gucman/shadowpkg.json && echo DB-RECORD || echo NO-DB-RECORD',
+    'test -e /opt/shadowpkg && echo OPT-RESIDUE || echo NO-OPT-RESIDUE',
+    'echo ==cut',
   ]);
 
   const B = (n) => section(outB, n);
@@ -351,6 +460,29 @@ async function main() {
         !/^python\s+\/usr\/local\/bin\/micropython$/m.test(B('after')), JSON.stringify(B('after')));
   check('...and python is back to the 127 install hint',
         /RC=127/.test(B('after')), JSON.stringify(B('after')));
+
+  /* todos/0355: the install-time guard's FIRING path. The message regex is
+   * guard-branch-specific: gucman says "would shadow the command dispatcher
+   * at", mkpkg's build-time tier says "would shadow the base image's command
+   * dispatcher at" — so a refusal from anywhere earlier in the install
+   * (index, sha256, tar validation) cannot satisfy it. */
+  check('CONTROL: in-OS, /usr/bin/python really is the dispatcher link',
+        B('shadowctl').trim() === '/usr/bin/cmdalt',
+        `re-pin todos/0355 fixture: readlink /usr/bin/python said ${JSON.stringify(B('shadowctl'))}`);
+  check('the hand-built shadow payload is REFUSED at install (exit 1)',
+        /^RC=1$/m.test(B('shadowinstall')), JSON.stringify(B('shadowinstall')));
+  check('...by the bin-plant guard, naming package, bin and dispatcher',
+        /gucman: 'shadowpkg' bin python would shadow the command dispatcher at \/usr\/bin\/python/.test(B('shadowinstall')),
+        JSON.stringify(B('shadowinstall')));
+  check('...pointing at the `commands` claim as the right declaration',
+        /declare a `commands` claim instead/.test(B('shadowinstall')),
+        JSON.stringify(B('shadowinstall')));
+  check('the refused install plants NO /usr/local/bin/python',
+        /NO-PYTHON-LINK/.test(B('shadowresidue')), JSON.stringify(B('shadowresidue')));
+  check('...and writes NO install-DB record',
+        /NO-DB-RECORD/.test(B('shadowresidue')), JSON.stringify(B('shadowresidue')));
+  check('...and leaves NO /opt/shadowpkg residue',
+        /NO-OPT-RESIDUE/.test(B('shadowresidue')), JSON.stringify(B('shadowresidue')));
 
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(failures ? `\nFAILED (${failures})` : '\nAll cmdalt e2e checks passed');

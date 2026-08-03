@@ -253,12 +253,6 @@ thing this file exists to kill.
 - anchor: // NOT GUARDED YET: the tools/ writers and os/boot.js — funded by todos/0357.
 - provenance: 0341
 
-### L46 — gucman's refusal to plant a package `bin` over a dispatched command name has no firing test
-- ticket: #141
-- file: os/gucman/gucman.c
-- anchor: is the runtime backstop for a payload that arrived another way.
-- provenance: 0338
-
 ### L48 — `tcflush` validates and reports success without discarding anything, though the line discipline really holds an input queue
 - ticket: #124
 - file: compiler.js
