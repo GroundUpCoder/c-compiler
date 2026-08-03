@@ -55,24 +55,50 @@ var tests = [
 // The list above is HARDCODED and, unlike the kernel and blockfs suites, had
 // no completeness check — so test_console_capability.js (0248/CD27, landed
 // red→green at e2579556) sat on disk in NO list for weeks while every host
-// gate reported green. `tests/host/` and `tests/serve/` are separate
-// directories with separate rows, so they get one call each. BEFORE
-// ensurePrebakedImage() deliberately, the tree-guard precedent: a launch we
-// are about to refuse must not first write a 111 MB blob into the tree.
+// gate reported green. BEFORE ensurePrebakedImage() deliberately, the
+// tree-guard precedent: a launch we are about to refuse must not first write a
+// 111 MB blob into the tree.
+//
+// The rows span several directories, so each one needs its own set-equality
+// call — and the set of directories is DERIVED FROM THE ROWS, never written
+// down beside them. A hardcoded list (this guard shipped for one hour as
+// `['serve', 'spawn']`, caught in review) is the very defect it exists to
+// kill, moved up one level: `tests/` has 20+ sibling directories, so an
+// ordinary future row like `../unit/test_x.js` would run happily while
+// tests/unit went unguarded, and the next test_*.js added beside it would be
+// orphaned again in silence. Deriving instead makes the guard's coverage track
+// the thing it guards: a row in a new directory either starts guarding that
+// directory automatically, or — if its shape cannot be classified — REFUSES
+// the run naming the row. It can never silently do neither.
 var HOST_MEMBER_RE = /^test_.*\.js$/;
-assertMemberRegistry({
-  dir: __dirname, pattern: HOST_MEMBER_RE, label: 'tests/host/run.js',
-  entries: tests.filter(function (t) { return t[0].indexOf('/') < 0; })
-                .map(function (t) { return { file: t[0] }; }),
-  // Deliberate exclusions ONLY, each naming the live ticket that owns
-  // registering it. Empty is the healthy state.
-  exclude: [],
+var ROW_RE = /^(?:\.\.\/([A-Za-z0-9_.-]+)\/)?([A-Za-z0-9_.-]+)$/;   // "file.js" | "../dir/file.js"
+var partitions = new Map();     // directory (relative to __dirname) -> [{ file }]
+var unclassified = [];
+tests.forEach(function (t) {
+  var m = ROW_RE.exec(t[0]);
+  if (!m) { unclassified.push(t[0]); return; }
+  var dir = m[1] ? '../' + m[1] : '.';
+  if (!partitions.has(dir)) partitions.set(dir, []);
+  // Only test_*.js rows are members for set-equality purposes; a row naming
+  // some other script is still CLASSIFIED (so its directory gets guarded),
+  // it just is not one of the files the pattern is comparing.
+  if (HOST_MEMBER_RE.test(m[2])) partitions.get(dir).push({ file: m[2] });
 });
-['serve', 'spawn'].forEach(function (sub) {
+if (unclassified.length) {
+  process.stderr.write('\x1b[31m[suite-registry] tests/host/run.js: row(s) belong to NO guarded partition, '
+    + 'so the directory they live in would go unguarded and a test_*.js added beside them would execute NOWHERE:\x1b[0m\n');
+  unclassified.forEach(function (r) { process.stderr.write('  ' + r + '\n'); });
+  process.stderr.write('  Rows must be "test_x.js" (this directory) or "../<dir>/test_x.js" (one sibling).\n'
+    + '  A deeper path needs this guard extended to reach it — do not just add the row.\n');
+  process.exit(2);
+}
+partitions.forEach(function (entries, dir) {
   assertMemberRegistry({
-    dir: path.join(__dirname, '..', sub), pattern: HOST_MEMBER_RE, label: 'tests/host/run.js (../' + sub + ' rows)',
-    entries: tests.filter(function (t) { return t[0].indexOf('../' + sub + '/') === 0; })
-                  .map(function (t) { return { file: path.basename(t[0]) }; }),
+    dir: path.resolve(__dirname, dir), pattern: HOST_MEMBER_RE,
+    label: 'tests/host/run.js' + (dir === '.' ? '' : ' (' + dir + ' rows)'),
+    entries: entries,
+    // Deliberate exclusions ONLY, each naming the live ticket that owns
+    // registering it. Empty is the healthy state.
     exclude: [],
   });
 });
