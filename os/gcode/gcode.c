@@ -122,6 +122,35 @@ typedef struct {
 #define GCODE_VERSION "2"
 #define LOG_SCHEMA_VERSION 1
 
+/* ---- #462: the output cap ---------------------------------------------
+ * The old default was 4096 — far too small for an agent that writes whole
+ * source files, so hitting the cap mid-`tool_use` (and bricking the
+ * session, see do_turn) was an ordinary Monday rather than an edge case.
+ * The values below were MEASURED against the providers actually in use on
+ * 2026-08-03, not assumed — a cap the provider rejects would turn a rare
+ * brick into a 400 on every request:
+ *   api.anthropic.com   claude-opus-4-8 (the default model)  32768 -> 200
+ *                                                           128000 -> 200
+ *                                                           128001 -> 400 "> 128000"
+ *                       claude-haiku-4-5 (lowest live cap)   64000 -> 200
+ *                                                           128000 -> 400 "> 64000"
+ *                       claude-3-haiku-20240307             404 (retired)
+ *   api.deepseek.com/anthropic  deepseek-v4-flash / -pro     32768 -> 200
+ *                       (accepts 1000000 too — it does not validate at all)
+ * So 32768 sits at half the SMALLEST cap any live Anthropic model accepts,
+ * and the ceiling is the largest one any of them accepts. The floor keeps
+ * an atol() of a typo (or a negative) from posting a nonsense cap. Values
+ * outside the range are CLAMPED with a printed note, never passed through. */
+#define MAX_TOKENS_DEFAULT 32768
+#define MAX_TOKENS_FLOOR     256
+#define MAX_TOKENS_CEILING 128000
+
+/* #462: consecutive truncation-continuations before the turn gives up.
+ * Deliberately INDEPENDENT of cfg.max_turns (which defaults to unlimited,
+ * #353): a model that keeps re-sending an oversized write would otherwise
+ * spend the whole turn budget silently. Hitting it PRINTS why. */
+#define TRUNC_MAX_CONTINUATIONS 3
+
 typedef struct {
     long long input_tokens, output_tokens;
     long long cache_creation_input_tokens, cache_read_input_tokens;
@@ -145,6 +174,7 @@ typedef struct {
     char *response_model;   /* #348: last provider-returned model (owned) */
     long long seq, turn_index;
     long long round_index;  /* #348: API round within the current turn (1-based) */
+    int trunc_streak;       /* #462: consecutive rounds cut at the output cap */
     usage total;
     mlist models;           /* #348: per-actual-model usage across the session */
 } session;
@@ -1227,6 +1257,13 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
     /* build the assistant message from accumulated blocks */
     cJSON *acontent = cJSON_CreateArray();
     cJSON *tool_results = cJSON_CreateArray();   /* filled if any tool_use */
+    /* #462: a round that ended at the output cap was cut mid-stream, and
+     * because blocks stream IN ORDER the cut can only be in the LAST active
+     * block. Every earlier block is complete and runs normally. */
+    int stop_max_tokens = ctx.stop_reason && !strcmp(ctx.stop_reason, "max_tokens");
+    int last_block = -1, truncated_calls = 0;
+    for (int i = ctx.nblocks - 1; i >= 0; i--)
+        if (ctx.blocks[i].active) { last_block = i; break; }
     for (int i = 0; i < ctx.nblocks; i++) {
         cblock *b = &ctx.blocks[i];
         if (!b->active) continue;
@@ -1237,6 +1274,11 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
             cJSON_AddItemToArray(acontent, tb);
         } else if (b->type == 'u') {
             cJSON *input = b->json.len ? cJSON_Parse(b->json.p) : cJSON_CreateObject();
+            /* #462: a partial input_json_delta does not parse. The old code
+             * silently substituted {} and RAN THE TOOL ANYWAY — which is a
+             * confusing "needs 'path' and 'content'" for write_file and a
+             * live hazard for bash (a half-emitted command executing). */
+            int bad_json = !input;
             if (!input) input = cJSON_CreateObject();
             cJSON *ub = cJSON_CreateObject();
             cJSON_AddStringToObject(ub, "type", "tool_use");
@@ -1252,9 +1294,57 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
              * tool_result — never drop the block: every tool_use needs a
              * tool_result or the history goes API-invalid and the session
              * stops being resumable. */
-            char *result = g_interrupted
-                ? strdup("[interrupted by user (^C) — tool not executed]")
-                : execute_tool(b->name ? b->name : "", input);
+            /* #462: the same rule for a call the model never finished
+             * emitting. Two independent tells that this block is
+             * incomplete: its accumulated JSON does not parse, or the round
+             * stopped at the cap and this is the last block (belt and
+             * braces — a cut can leave JSON that happens to parse, and
+             * running a half-specified `bash` command is the hazard). The
+             * substituted result NAMES the cause and the cap so the model
+             * can retry smaller instead of re-emitting the same call. */
+            /* Attribute the cause, don't guess it. Only a cut at the cap is
+             * a TRUNCATION; unparseable arguments on any other stop reason
+             * are a MALFORMED stream, and saying "truncated at the
+             * max_tokens cap" there would send the next debugger into the
+             * cap code for a problem that has nothing to do with it. Both
+             * causes are refused identically (never execute a tool whose
+             * arguments we could not read) and both count toward the same
+             * streak — the runaway guard is about a provider repeating an
+             * unusable round, which either cause can do. */
+            int cap_cut = stop_max_tokens && i == last_block;
+            int refused = cap_cut || bad_json;
+            char *result;
+            if (refused) {
+                truncated_calls++;
+                char msg[512];
+                if (cap_cut)
+                    snprintf(msg, sizeof msg,
+                             "[gcode: this tool call was TRUNCATED at the max_tokens output cap (%ld) "
+                             "and was NOT executed — %s. Nothing was run and nothing changed on disk. "
+                             "Retry with a smaller payload (for a large file, write it in several "
+                             "smaller chunks).]",
+                             cfg->max_tokens,
+                             bad_json ? "its arguments were cut mid-JSON, so they are incomplete"
+                                      : "the response ended inside this block, so it may be incomplete");
+                else
+                    snprintf(msg, sizeof msg,
+                             "[gcode: this tool call's arguments were not valid JSON (the stream ended "
+                             "\"%s\", so this is a MALFORMED response, not the max_tokens cap) and it "
+                             "was NOT executed. Nothing was run and nothing changed on disk. Re-send "
+                             "the call with well-formed arguments.]",
+                             ctx.stop_reason ? ctx.stop_reason : "(no stop_reason)");
+                result = strdup(msg);
+                if (cap_cut)
+                    fprintf(stderr, "    %struncated at the max_tokens cap (%ld) — not executed%s\n",
+                            R_ERRB, cfg->max_tokens, CRST);
+                else
+                    fprintf(stderr, "    %smalformed tool arguments (stop_reason %s) — not executed%s\n",
+                            R_ERRB, ctx.stop_reason ? ctx.stop_reason : "(none)", CRST);
+            } else if (g_interrupted) {
+                result = strdup("[interrupted by user (^C) — tool not executed]");
+            } else {
+                result = execute_tool(b->name ? b->name : "", input);
+            }
             cJSON *tr = cJSON_CreateObject();
             cJSON_AddStringToObject(tr, "type", "tool_result");
             cJSON_AddStringToObject(tr, "tool_use_id", b->id ? b->id : "");
@@ -1292,21 +1382,77 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
     if (ctx.response_model) { free(sess->response_model); sess->response_model = strdup(ctx.response_model); }
     if (persist_assistant_message(sess, amsg, &ctx, cfg->model)) { ret = -1; goto done; }
 
-    if (ctx.stop_reason && !strcmp(ctx.stop_reason, "tool_use")) {
+    /* #462: PAIR ON SHAPE, NEVER ON stop_reason. The API contract is
+     * structural — any assistant message carrying a tool_use block MUST be
+     * followed by a user message carrying the matching tool_result blocks —
+     * and the assistant message above was appended unconditionally. Gating
+     * the results on `stop_reason == "tool_use"` therefore left a DANGLING
+     * tool_use on every other terminal reason (max_tokens, stop_sequence,
+     * refusal, an unknown reason, or a compat-shim provider that returns
+     * end_turn alongside tool calls), and the tools had ALREADY RUN — their
+     * results were built and then deleted. Every later request was then
+     * permanently API-invalid (HTTP 400 "tool_use ids were found without
+     * tool_result blocks"), which gcode classifies as permanent and exits
+     * the REPL on: a destroyed session. The #412 comment in the block loop
+     * above already states this invariant; the code here used to violate
+     * it. Delete the array only when it is genuinely EMPTY. */
+    int have_tool_use = cJSON_GetArraySize(tool_results) > 0;
+    if (have_tool_use) {
         cJSON *umsg = cJSON_CreateObject();
         cJSON_AddStringToObject(umsg, "role", "user");
         cJSON_AddItemToObject(umsg, "content", tool_results);
         cJSON_AddItemToArray(messages, umsg);
+        /* 🔴 NOT ATOMIC, and do not read it as such. This is the SECOND of
+         * two independent appended+fsync'd records: persist_assistant_message
+         * above wrote the tool_use, this writes the matching tool_result.
+         * Nothing makes the pair land or fail together. If the process or
+         * machine stops between them — or this write fails ENOSPC or lands
+         * short — the log holds a complete assistant record and no answer,
+         * session_resume() skips the trailing fragment, and --resume loads
+         * exactly the dangling tool_use this ticket exists to eliminate.
+         * That window is PRE-EXISTING (eb626a41 persisted these as two
+         * writes too) and is deliberately left open here: closing it needs a
+         * combined record, an append-then-rename, or a resume-side repair
+         * that drops a trailing unanswered tool_use — see the ticket filed
+         * off #462's review. What this ticket fixes is the far larger hole
+         * beside it: the tool_result used to be skipped ENTIRELY, with no
+         * crash required, on every stop reason but "tool_use". */
         if (persist_message(sess, umsg, "tool")) { ret = -1; goto done; }
+    } else {
+        cJSON_Delete(tool_results);
+    }
+
+    /* #462: whether to CONTINUE is a separate decision from whether to
+     * pair — the pairing above is unconditional so the history stays valid
+     * on every path below. */
+    sess->trunc_streak = truncated_calls ? sess->trunc_streak + 1 : 0;
+    if (have_tool_use && g_interrupted) {
         /* #412: a ^C anywhere in the tool loop ends the TURN, not just the
          * one child. The results (real + substituted) are already appended
          * and persisted above, so the next send resumes a valid history. */
-        if (g_interrupted) { fprintf(stderr, "\n%sgcode: interrupted%s\n", CDIM, CRST); ret = -2; }
-        else ret = 1;
+        fprintf(stderr, "\n%sgcode: interrupted%s\n", CDIM, CRST); ret = -2;
+    } else if (ctx.stop_reason && !strcmp(ctx.stop_reason, "refusal")) {
+        fprintf(stderr, "%sgcode: model refused the request%s\n", R_ERRB, CRST);
+        ret = 0;
+    } else if (sess->trunc_streak > TRUNC_MAX_CONTINUATIONS) {
+        /* Loud, never silent: a truncation storm that quietly ate the turn
+         * budget would be a worse failure than the brick this ticket fixes. */
+        fprintf(stderr, "%sgcode: %d consecutive rounds ended in an unusable tool call (cut at the "
+                        "max_tokens cap, or malformed arguments — the per-call results above say "
+                        "which) — giving up on this turn instead of retrying forever. If it was the "
+                        "cap (%ld), raise it with --max-tokens N or ANTHROPIC_MAX_TOKENS.%s\n",
+                R_ERRB, sess->trunc_streak, cfg->max_tokens, CRST);
+        sess->trunc_streak = 0;   /* the next turn starts fresh */
+        ret = 0;
+    } else if (have_tool_use) {
+        /* The model has results it has not seen — including the explanatory
+         * ones from a truncated call, which let it SELF-HEAL by retrying
+         * with a smaller payload instead of the turn ending on a cut. Note
+         * this is keyed on shape too: a compat-shim provider that returns
+         * end_turn alongside tool calls now gets its round completed rather
+         * than its tool output silently discarded. */
+        ret = 1;
     } else {
-        cJSON_Delete(tool_results);
-        if (ctx.stop_reason && !strcmp(ctx.stop_reason, "refusal"))
-            fprintf(stderr, "%sgcode: model refused the request%s\n", R_ERRB, CRST);
         ret = 0;
     }
 
@@ -1409,7 +1555,9 @@ static cJSON *make_user_text(const char *text) {
 }
 
 static int append_user_text(session *s, cJSON *messages, const char *text) {
-    s->turn_index++; s->round_index = 0;
+    /* #462: the truncation streak is per-TURN. A turn that ended ON the cap
+     * must not make the next one give up before its first round. */
+    s->turn_index++; s->round_index = 0; s->trunc_streak = 0;
     char turn_id[80]; snprintf(turn_id, sizeof turn_id, "%s-%lld", s->id, s->turn_index);
     cJSON *start = record_new(s, "turn_start"); cJSON_AddStringToObject(start, "turn_id", turn_id); cJSON_AddNumberToObject(start, "turn_index", (double)s->turn_index);
     if (record_write(s, start)) return -1;
@@ -1605,7 +1753,12 @@ int main(int argc, char **argv) {
                         "a small POSIX-like OS. Use the tools to explore, create, and edit "
                         "files and run shell commands. Be concise. Prefer small, verifiable "
                         "steps. The C compiler is `cc`.";
-    cfg.max_tokens = 4096;
+    /* #462: raised from 4096 (see the MAX_TOKENS_* block for the measured
+     * provider caps). --max-tokens wins over ANTHROPIC_MAX_TOKENS, which
+     * wins over the default; the result is clamped below, once colour is
+     * resolved, so the note prints in the right style. */
+    cfg.max_tokens = atol(getenv_or("ANTHROPIC_MAX_TOKENS", "0"));
+    if (cfg.max_tokens <= 0) cfg.max_tokens = MAX_TOKENS_DEFAULT;
     cfg.max_turns  = 0;    /* #353: 0 = unlimited; --max-turns N is the opt-in cap */
     cfg.verbose = 0;
     cfg.color = -1;   /* #303: -1 auto (isatty), 0 forced off, 1 forced on */
@@ -1629,7 +1782,15 @@ int main(int argc, char **argv) {
                    "            [--max-turns N] [--max-tokens N] [--resume ID|PATH] [-c|--continue]\n"
                    "            [--no-persist] [--verbose] [--no-color] [--color]\n"
                    "env: ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL,\n"
-                   "     GCODE_STATE_DIR, XDG_STATE_HOME, NO_COLOR\n");
+                   "     ANTHROPIC_MAX_TOKENS, GCODE_STATE_DIR, XDG_STATE_HOME, NO_COLOR\n"
+                   "\n"
+                   "--max-tokens N (env ANTHROPIC_MAX_TOKENS) is the per-response OUTPUT cap.\n"
+                   "Default %d; values are clamped to [%d, %d] with a printed note.\n"
+                   "A response cut at the cap never executes the truncated tool call: gcode\n"
+                   "says so in the tool result and lets the model retry smaller, up to %d\n"
+                   "consecutive times.\n",
+                   MAX_TOKENS_DEFAULT, MAX_TOKENS_FLOOR, MAX_TOKENS_CEILING,
+                   TRUNC_MAX_CONTINUATIONS);
             return 0;
         }
     }
@@ -1643,6 +1804,15 @@ int main(int argc, char **argv) {
         if (cfg.color == 1)                       { g_color = g_color_err = 1; }
         else if (cfg.color == 0 || (nc && *nc))   { g_color = g_color_err = 0; }
         else { g_color = isatty(fileno(stdout)); g_color_err = isatty(fileno(stderr)); }
+    }
+    /* #462: clamp, never pass through — an out-of-range cap is a 400 on
+     * EVERY request, which is strictly worse than the truncation this
+     * ticket fixes. Loud, so a clamped value is never a silent surprise. */
+    if (cfg.max_tokens < MAX_TOKENS_FLOOR || cfg.max_tokens > MAX_TOKENS_CEILING) {
+        long clamped = cfg.max_tokens < MAX_TOKENS_FLOOR ? MAX_TOKENS_FLOOR : MAX_TOKENS_CEILING;
+        fprintf(stderr, "%sgcode: max-tokens %ld is outside [%d, %d] — clamped to %ld%s\n",
+                CDIM, cfg.max_tokens, MAX_TOKENS_FLOOR, MAX_TOKENS_CEILING, clamped, CRST);
+        cfg.max_tokens = clamped;
     }
     signal(SIGINT, on_interrupt);
     if (do_self_test) return self_test();
