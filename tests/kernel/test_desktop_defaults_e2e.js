@@ -8,7 +8,7 @@
 //     bytes) — asserted directly against the booted image.
 //   - /usr/bin/desktop-defaults (os/deskdefaults.c) re-plants ADDITIVELY:
 //     deleted defaults come back (a top-level link, an executable launcher
-//     script, a data file nested two dirs deep inside the user's existing
+//     script and a data file each nested inside the user's existing
 //     Presentations/), user files on the Desktop and INSIDE a default
 //     subfolder survive untouched, and a user file squatting a default
 //     NAME is never overwritten (skip, counted kept). Re-run prints
@@ -56,9 +56,13 @@ const BAKED_SEED_NODES = bakedSeedPlants().reduce((n, p) => n + p.dests.reduce(
     + p.dirs.filter((d) => d === base || d.startsWith(base + '/')).length, 0), 0);
 const TOTAL = DEF_FILES.length + DEF_DIRS.length + BAKED_SEED_NODES;
 // The three deleted defaults the tool must restore — each a different
-// entry kind (link / content script / nested bin data). If a future
-// manifest edit renames one, fail loud here rather than mysteriously.
-for (const p of ['/root/Desktop/doom', '/root/Desktop/pokemon',
+// entry kind (link / content script / nested bin data). The script kind
+// is the minesweeper sample since #434 removed the top-level sameboy
+// launchers (the last top-level content scripts). If a future manifest
+// edit renames one, fail loud here rather than mysteriously.
+const SAMPLE =
+  '/root/Desktop/Presentations/samples/minesweeper-programming-rainbow.sh';
+for (const p of ['/root/Desktop/doom', SAMPLE,
                  '/root/Desktop/Presentations/gucOS/gucos.deck']) {
   if (!u.files[p]) throw new Error('manifest no longer seeds ' + p +
     ' — pick another fixture for this test');
@@ -71,11 +75,11 @@ const script = [
   'echo "==tree L$(readlink /usr/share/desktop/default/doom)-END"',
   'test -d "/usr/share/desktop/default/Presentations/MagicPoint Tutorial" && echo TREE-DIR-OK',
   'test -s "/usr/share/desktop/default/Presentations/gucOS/gucos.deck" && echo TREE-DATA-OK',
-  'test -x /usr/share/desktop/default/pokemon && echo TREE-MODE-OK',
+  `test -x "${SAMPLE.replace('/root/Desktop', '/usr/share/desktop/default')}" && echo TREE-MODE-OK`,
   // ---- leg A: delete three defaults (link / script / nested data), drop
   //      user files, squat a default name ----
   'rm /root/Desktop/doom',
-  'rm /root/Desktop/pokemon',
+  `rm "${SAMPLE}"`,
   'rm "/root/Desktop/Presentations/gucOS/gucos.deck"',
   'rm /root/Desktop/notepad',
   'printf mine > /root/Desktop/notepad',            // name clash: user file wins
@@ -86,7 +90,7 @@ const script = [
   'echo "RC=$?"',
   'echo ==dd1end',
   'echo "==doom L$(readlink /root/Desktop/doom)-END"',
-  'test -x /root/Desktop/pokemon && grep -q sameboy /root/Desktop/pokemon && echo POKEMON-BACK',
+  `test -x "${SAMPLE}" && grep -q Minesweeper "${SAMPLE}" && echo SCRIPT-BACK`,
   'test -s "/root/Desktop/Presentations/gucOS/gucos.deck" && echo DECK-BACK',
   'echo "==squat $(cat /root/Desktop/notepad)-END"',
   'echo "==unote $(cat /root/Desktop/usernote.txt)-END"',
@@ -186,7 +190,7 @@ check('first run exits 0', dd1.includes('RC=0'), dd1);
 check('deleted doom link is back (as a symlink)',
   out.includes('==doom L/usr/bin/doom-END'), section(out, 'doom'));
 check('deleted launcher script is back, executable, right content',
-  out.includes('POKEMON-BACK'));
+  out.includes('SCRIPT-BACK'));
 check('deleted nested deck data is back inside the existing folder',
   out.includes('DECK-BACK'));
 check('a user file squatting a default name is NEVER overwritten',

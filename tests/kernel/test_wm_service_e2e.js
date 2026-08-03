@@ -217,7 +217,7 @@ const script = [
   'wmctl list',
   'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
   'wmctl shot $DSID /root/d.ppm && echo desk-shot-ok',
-  `wmctl click $DSID ${desk(DESK_ENTRIES, 'drmario')}`,   // SINGLE click the drmario icon
+  `wmctl click $DSID ${desk(DESK_ENTRIES, 'notepad')}`,   // SINGLE click the notepad icon
   'sleep 2.5',                                   // timing subject: proves a single click does NOT spawn (the would-be spawn window)
   'echo ==desk2',
   'wmctl list',
@@ -534,7 +534,7 @@ const script = [
   // are asserted from surface shots after the run. The first click also
   // focuses the desktop (wm.c policy), so the later keyboard legs land on
   // the grid.
-  `wmctl click $DSID ${desk(DESK_ACT, 'drmario')}`,           // plain select
+  `wmctl click $DSID ${desk(DESK_ACT, 'fileman')}`,           // plain select
   'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (navy label strip, no window observable)
   'wmctl shot $DSID /root/s1.ppm && echo s1-ok',
   // ctrl+click doom: additive toggle (keydown/keyup hold the modifier
@@ -544,9 +544,9 @@ const script = [
   'wmctl keyup $DSID 224 1073742048 0',
   'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (ctrl+click additive, no window observable)
   'wmctl shot $DSID /root/s2.ppm && echo s2-ok',
-  // shift+click mario: range from the anchor (doom, entry order)
+  // shift+click notepad: range from the anchor (doom, entry order)
   'wmctl keydown $DSID 225 1073742049 1',                     // LSHIFT down
-  `wmctl click $DSID ${desk(DESK_ACT, 'mario')}`,
+  `wmctl click $DSID ${desk(DESK_ACT, 'notepad')}`,
   'wmctl keyup $DSID 225 1073742049 0',
   'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (shift+click range, no window observable)
   'wmctl shot $DSID /root/s2b.ppm && echo s2b-ok',
@@ -1017,8 +1017,8 @@ check('taskbar and app windows composite above it',
   row(d1, 'taskbar').split('\t')[4] !== '0' && row(d1, 'winbox').split('\t')[4] !== '0',
   JSON.stringify([row(d1, 'taskbar'), row(d1, 'winbox')]));
 check('desktop shot written', out.includes('desk-shot-ok'));
-check('single click does NOT launch (no SameBoy window from the drmario script)',
-  d2.split('\n').every(l => !l.endsWith('\tSameBoy')), JSON.stringify(d2));
+check('single click does NOT launch (no Notepad window from the notepad link)',
+  d2.split('\n').every(l => !l.includes('Notepad')), JSON.stringify(d2));
 check('injected double-click on the term icon spawns term',
   row(d3, 'term') !== '', JSON.stringify(d3));
 check('dblclick on the Presentations folder opens fileman AT it (todos/0185)',
@@ -1376,25 +1376,24 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   for (const s of ['s1', 's2', 's2b', 's3', 's4', 's5', 's6'])
     check(`${s} shot written`, out.includes(s + '-ok'));
   const p1 = readPpm('s1.ppm');
-  check('plain click selects one (drmario navy, doom teal)',
-    strip(p1, ...at('drmario')) === NAVY && strip(p1, ...at('doom')) === TEAL,
-    [strip(p1, ...at('drmario')), strip(p1, ...at('doom'))]);
+  check('plain click selects one (fileman navy, doom teal)',
+    strip(p1, ...at('fileman')) === NAVY && strip(p1, ...at('doom')) === TEAL,
+    [strip(p1, ...at('fileman')), strip(p1, ...at('doom'))]);
   const p2 = readPpm('s2.ppm');
-  check('ctrl+click adds (drmario AND doom navy)',
-    strip(p2, ...at('drmario')) === NAVY && strip(p2, ...at('doom')) === NAVY,
-    [strip(p2, ...at('drmario')), strip(p2, ...at('doom'))]);
+  check('ctrl+click adds (fileman AND doom navy)',
+    strip(p2, ...at('fileman')) === NAVY && strip(p2, ...at('doom')) === NAVY,
+    [strip(p2, ...at('fileman')), strip(p2, ...at('doom'))]);
   const p2b = readPpm('s2b.ppm');
-  check('shift+click ranges from the anchor (doom..mario navy, ends teal)',
-    strip(p2b, ...at('doom')) === NAVY && strip(p2b, ...at('drmario')) === NAVY &&
-    strip(p2b, ...at('fileman')) === NAVY &&
-    strip(p2b, ...at('mario')) === NAVY &&
-    strip(p2b, ...at('alauncher')) === TEAL && strip(p2b, ...at('notepad')) === TEAL,
-    [strip(p2b, ...at('doom')), strip(p2b, ...at('mario')), strip(p2b, ...at('notepad'))]);
+  check('shift+click ranges from the anchor (doom..notepad navy, ends teal)',
+    strip(p2b, ...at('doom')) === NAVY && strip(p2b, ...at('fileman')) === NAVY &&
+    strip(p2b, ...at('notepad')) === NAVY &&
+    strip(p2b, ...at('alauncher')) === TEAL && strip(p2b, ...at('notes.txt')) === TEAL,
+    [strip(p2b, ...at('doom')), strip(p2b, ...at('notepad')), strip(p2b, ...at('notes.txt'))]);
   const p3 = readPpm('s3.ppm');
   check('marquee REPLACES with the intersected tiles (col 0 rows 0-2)',
     strip(p3, ...at('Presentations')) === NAVY && strip(p3, ...at('alauncher')) === NAVY &&
     strip(p3, ...at('calc')) === NAVY && strip(p3, ...at('ctlpanel')) === TEAL &&
-    strip(p3, ...at('notepad')) === TEAL && strip(p3, ...at('mario')) === TEAL,
+    strip(p3, ...at('notepad')) === TEAL && strip(p3, ...at('paint')) === TEAL,
     [strip(p3, ...at('Presentations')), strip(p3, ...at('notepad'))]);
   const icons = section('sel1');
   check(`.icons persists the whole layout (term at ${MOVE.col},${MOVE.row}; Presentations pinned 0,0)`,
@@ -1417,9 +1416,9 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     out.includes('NOOP-DELTA-0'), out.slice(out.indexOf('NOOP-DELTA')).slice(0, 20));
   const p6 = readPpm('s6.ppm');
   check('Esc clears the selection',
-    strip(p6, ...at('drmario')) === TEAL &&
+    strip(p6, ...at('fileman')) === TEAL &&
     strip(p6, 'term', MOVE.col, MOVE.row) === TEAL,
-    [strip(p6, ...at('drmario')), strip(p6, 'term', MOVE.col, MOVE.row)]);
+    [strip(p6, ...at('fileman')), strip(p6, 'term', MOVE.col, MOVE.row)]);
   check('Right selects the top-left icon; Enter launches it (winbox +1)',
     out.includes('LAUNCH-DELTA-1'), out.slice(out.indexOf('LAUNCH-DELTA')).slice(0, 20));
 }

@@ -144,7 +144,7 @@ check('Up goes to the parent', /bin\//.test(section(out, 'l3')) && /share\//.tes
 check('keyboard selection marks row 0 (Desktop/)',
   /^> Desktop\//.test(section(out, 'selmark').trim()), section(out, 'selmark'));
 check('Open on a directory navigates into it',
-  /pokemon/.test(section(out, 'l4')) && /term/.test(section(out, 'l4')),
+  /paint/.test(section(out, 'l4')) && /term/.test(section(out, 'l4')),
   section(out, 'l4'));
 
 check('Open on a #! script spawns it (winbox up)',
