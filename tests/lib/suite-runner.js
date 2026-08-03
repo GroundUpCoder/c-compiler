@@ -13,8 +13,9 @@
 //   - per-file logs under the artifact dir + an incrementally checkpointed
 //     summary.json (atomic rename after EVERY completion), so an interrupted
 //     session still leaves a usable partial verdict
-//   - --resume (skip files that passed in the previous summary), --filter,
-//     --fail-fast, --timeout, -j, --list
+//   - --resume (skip files that passed in the previous summary AND whose own
+//     source has not changed since that pass — see staleForResume, #455),
+//     --filter, --fail-fast, --timeout, -j, --list
 //   - a summary that records its own SCOPE (todos/0339): `filter`, a `files`
 //     block (total / selected / executed / carried / recorded) and a `runs`
 //     list, and results MERGED across runs so a two-`--filter`-half sweep
@@ -207,6 +208,47 @@ function assertMemberRegistry({ dir, pattern, entries, exclude = [], label }) {
   process.stdout.write(`registry: ${declaredSet.size} declared + ${exclude.length} excluded == ${onDisk.length} on disk (${label})\n`);
 }
 
+// ---- resume freshness (ticket #455) ----
+//
+// `--resume` used to skip on STATUS ALONE: a file that said `pass` in the
+// previous summary was skipped, full stop — no mtime, no hash, no look at the
+// file on disk. So editing a test and then "re-running with --resume to
+// confirm" skipped the very file that was edited, and printed green. That is
+// the same shape as the defects this estate keeps finding: a mechanism that
+// reports PASS while the thing under test never executed. (The case that found
+// it: test_gdi32_e2e.js on the 277-278 lane, where a `return` had shadowed a
+// live check — the confirming run would have proved nothing.)
+//
+// The evidence of a pass is its per-file LOG, and the log path is recomputed
+// here the way runOne writes it rather than read from the record's `log` field
+// (that field is relative to the CWD of whichever run wrote it; the artifactDir
+// is absolute and stable). A resumed result carries its ORIGINAL log forward,
+// so the log's mtime keeps meaning "when this file last actually executed",
+// however long the resume chain is.
+//
+// Returns a human-readable reason to RE-EXECUTE, or null to allow the resume:
+//   - no log ............ no evidence the pass ever happened here; run it.
+//   - source newer ...... the file changed since it passed; the pass is stale.
+// Deliberately scoped to the member's OWN source, not its transitive read set —
+// dependency-level freshness is ticket #151 and is a much heavier mechanism.
+// The narrow check closes the case that actually bit, at one statSync per file.
+// What that leaves open is registered (LIABILITIES L77): a member whose own
+// source is untouched still resumes when a HELPER it reads has changed.
+function staleForResume(entry, opts) {
+  const logPath = path.join(opts.artifactDir, entry.file.replace(/[\/\\]/g, '_') + '.log');
+  let logMs;
+  try { logMs = fs.statSync(logPath).mtimeMs; }
+  catch { return `no per-file log at ${path.relative(process.cwd(), logPath)} — no evidence of that pass in this artifact dir`; }
+  const srcPath = path.join(opts.dir, entry.file);
+  let srcMs;
+  try { srcMs = fs.statSync(srcPath).mtimeMs; }
+  catch { return `source ${entry.file} is missing on disk`; }
+  if (srcMs > logMs) {
+    return `source changed since its passing log (source ${new Date(srcMs).toISOString()} > log ${new Date(logMs).toISOString()})`;
+  }
+  return null;
+}
+
 function usage(name, defaults) {
   return `Usage: node ${name} [-j N] [--filter=SUBSTR] [--timeout=MS] [--fail-fast] [--resume] [--list] [--repeat N] [--under-load[=N]]
 
@@ -217,7 +259,10 @@ function usage(name, defaults) {
                 exceeds it is SIGKILLed (whole process group) and reported
                 as "timeout". Per-file override in the suite table.
   --fail-fast   stop scheduling new files after the first failure
-  --resume      skip files that PASSED in the previous run (summary.json)
+  --resume      skip files that PASSED in the previous run (summary.json) and
+                whose own source file has not been modified since that pass
+                (#455 — an edited test is re-executed, never resumed; its
+                DEPENDENCIES are not checked, that is #151)
   --list        print the (filtered) file list and exit
   --repeat N    run each selected file N times; report a per-file flake rate
                 (a non-flaky file is N/N green). Disables --resume. (0147)
@@ -347,8 +392,14 @@ async function runSuite(entries, opts) {
   if (opts.resume) {
     files = files.filter(e => {
       const r = prevByFile.get(e.file);
-      if (r && r.status === 'pass') { resumed.push(r); return false; }
-      return true;
+      if (!r || r.status !== 'pass') return true;
+      const why = staleForResume(e, opts);
+      if (why) {
+        process.stdout.write(`\x1b[33mresume: ${e.file} NOT resumed — ${why}\x1b[0m\n`);
+        return true;
+      }
+      resumed.push(r);
+      return false;
     });
   }
 
@@ -576,9 +627,13 @@ async function runSuite(entries, opts) {
   // code 0 was not).
   //
   //   fresh run ... every selected member's log mtime >= run start, or FAIL.
-  //   --resume .... resumed files deliberately keep their old logs, so they are
-  //                 asserted for EXISTENCE only, and the summary line says so —
-  //                 a resumed run never silently claims fresh full coverage.
+  //   --resume .... resumed files deliberately keep their old logs, so THIS
+  //                 check asserts their existence only, and the summary line
+  //                 says so — a resumed run never silently claims fresh full
+  //                 coverage. What the old log is now known to be current FOR
+  //                 is the member's own source: the resume predicate refused to
+  //                 resume any file edited since that log (#455). Its
+  //                 DEPENDENCIES are still unchecked (#151).
   //   fail-fast ... a bailed run already failed and printed which files were
   //                 not run; evidence is skipped with a note instead of
   //                 re-flagging every unrun member.
@@ -615,7 +670,7 @@ async function runSuite(entries, opts) {
         for (const p of problems) process.stdout.write(`\x1b[31mEVIDENCE ${p}\x1b[0m\n`);
       } else {
         process.stdout.write(`evidence: ${freshN}/${expected.length} selected members have logs post-dating the run start`
-          + (resumedN ? ` (+${resumedN} resumed: existence only — freshness NOT asserted)` : '') + '\n');
+          + (resumedN ? ` (+${resumedN} resumed: log existence only — source unchanged since it (#455), dependencies NOT checked (#151))` : '') + '\n');
       }
     }
   }

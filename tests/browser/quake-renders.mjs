@@ -10,8 +10,12 @@ import { spawn }    from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs   from 'node:fs';
+import { requireFreshArtifacts } from './lib/fresh-artifacts.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT     = path.resolve(__dirname, '..', '..');
+const SRC_DIR  = path.join(ROOT, 'vendor', 'quake', 'src');
+const COMPILER = path.join(ROOT, 'compiler.js');
 const PORT = 3175;
 const URL  = `http://localhost:${PORT}/`;
 
@@ -45,14 +49,30 @@ async function waitForServer() {
   throw new Error('server did not come up at ' + URL);
 }
 
-// Build artifacts must exist — refuse to test stale state.
-for (const f of ['quake.wasm', 'pak0.pak', 'host.js']) {
-  const p = path.join(__dirname, 'www', f);
-  if (!fs.existsSync(p)) {
-    console.error(`Missing ${p} — run 'npm run build:quake' first.`);
-    process.exit(1);
-  }
-}
+// Build artifacts must exist AND be at least as new as the inputs build-quake.mjs
+// builds them from — otherwise this suite renders an old binary and reports the
+// result under the current compiler's name (ticket #171). The inputs mirror
+// build-quake.mjs exactly: quake.wasm is compiled from vendor/quake/src by
+// compiler.js, and pak0.pak / host.js are COPIES, so each has a real local
+// source to compare against. What mtime does not cover is stated in
+// lib/fresh-artifacts.mjs — it is not restated as a promise here.
+requireFreshArtifacts([
+  {
+    artifact: path.join(__dirname, 'www', 'quake.wasm'),
+    inputs: [COMPILER, { dir: SRC_DIR, match: /\.[ch]$/ }, path.join(__dirname, 'build-quake.mjs')],
+    rebuild: 'pnpm run build:quake',
+  },
+  {
+    artifact: path.join(__dirname, 'www', 'pak0.pak'),
+    inputs: [path.join(ROOT, 'vendor', 'quake', 'data', 'id1', 'pak0.pak')],
+    rebuild: 'pnpm run build:quake',
+  },
+  {
+    artifact: path.join(__dirname, 'www', 'host.js'),
+    inputs: [path.join(ROOT, 'host.js')],
+    rebuild: 'pnpm run build:quake',
+  },
+], { cwd: ROOT });
 
 const server  = startServer();
 const browser = await chromium.launch({ args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan'] });

@@ -20,6 +20,16 @@
 //      same stale-scope failure, reintroduced through the back door)
 //   6. an unfiltered run carries nothing, so `runs` collapses back to one entry
 //
+// And the RESUME FRESHNESS contract (ticket #455), pinned on the same fixture:
+//   7. a member whose own SOURCE is newer than its passing log is EXECUTED, not
+//      resumed — the predicate used to be status-only, so "fix the test, re-run
+//      with --resume to confirm" skipped the file that had just been fixed and
+//      printed green
+//   8. an untouched member still resumes — the regression that matters, since
+//      resume's whole purpose is the 21-resumed sweep and 152-resumed kernel run
+//   9. a member with no per-file log is executed: there is no evidence of that
+//      pass in this artifact dir, whatever the status field says
+//
 //   node tests/host/test_suite_record.js
 const assert = require('assert');
 const fs = require('fs');
@@ -141,6 +151,64 @@ function run(extra) {
   });
   check('a full run leaves no carried tags behind', () => {
     assert.strictEqual(full.results.filter(r => r.carried).length, 0);
+  });
+
+  // ---- 7 + 8 + 9: resume freshness (#455) ----
+  //
+  // All four files have just executed, so every source/log pair exists. Stamp
+  // them to EXACT times rather than relying on wall-clock ordering: the whole
+  // predicate is an mtime comparison, so a test that let the clock decide the
+  // inputs would be measuring the clock. Nothing is stamped into the future —
+  // a run that re-executes a file writes its log at the real `now`, and that
+  // must land AFTER the stamps, or case 8 would inherit case 7's staleness.
+  const srcPath = f => path.join(dir, f);
+  const logPath = f => path.join(artifactDir, f + '.log');
+  const setMtime = (p, ms) => fs.utimesSync(p, ms / 1000, ms / 1000);
+  const T0 = Date.now() - 60_000;
+  for (const n of NAMES) { setMtime(srcPath(n), T0); setMtime(logPath(n), T0 + 30_000); }
+
+  // 7: t2's source is edited after its pass. Its status is still `pass`; the
+  // pass is stale, and the old predicate would have skipped it anyway.
+  fs.writeFileSync(srcPath('t2.js'), 'process.exit(0); // edited after the pass\n');
+  setMtime(srcPath('t2.js'), T0 + 45_000);
+  await run({ resume: true });
+  const edited = readSummary();
+
+  check('a member edited since its passing log is EXECUTED, not resumed', () => {
+    const executedNow = edited.results.filter(r => !r.carried && !r.resumed).map(r => r.file);
+    assert.deepStrictEqual(executedNow, ['t2.js'],
+      'the edited file must run; skipping it is how a fix-then-confirm run reports green having proved nothing');
+    assert.strictEqual(edited.files.executed, 1);
+  });
+  check('the three untouched members still resume in that same run', () => {
+    const resumedNow = edited.results.filter(r => r.resumed).map(r => r.file).sort();
+    assert.deepStrictEqual(resumedNow, ['t1.js', 't3.js', 't4.js']);
+    assert.strictEqual(edited.files.resumed, 3);
+    assert.ok(!resumedNow.includes('t2.js'), 't2.js must not be counted as resumed');
+  });
+
+  // 8: nothing touched since — resume must still skip everything. This is the
+  // regression guard: the fix must not degrade --resume into a no-op.
+  await run({ resume: true });
+  const untouched = readSummary();
+
+  check('with nothing edited, every member resumes (resume is not a no-op)', () => {
+    assert.strictEqual(untouched.files.resumed, 4);
+    assert.strictEqual(untouched.files.executed, 0);
+    assert.deepStrictEqual(untouched.results.filter(r => r.resumed).map(r => r.file).sort(),
+      NAMES.slice().sort());
+  });
+
+  // 9: no log = no evidence of that pass in THIS artifact dir, whatever the
+  // recorded status says.
+  fs.rmSync(logPath('t3.js'));
+  await run({ resume: true });
+  const noLog = readSummary();
+
+  check('a member whose per-file log is gone is executed, not resumed', () => {
+    const executedNow = noLog.results.filter(r => !r.carried && !r.resumed).map(r => r.file);
+    assert.deepStrictEqual(executedNow, ['t3.js']);
+    assert.strictEqual(noLog.files.resumed, 3);
   });
 
   fs.rmSync(root, { recursive: true, force: true });
