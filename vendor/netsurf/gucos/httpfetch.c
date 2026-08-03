@@ -290,7 +290,7 @@ static void fetch_gucos_http_process_status(struct fetch_gucos_http_ctx *c)
 	fetch_msg msg;
 	int status = 0;
 	int hl = __http_status(c->fd, &status, gf_hdrblob, HDR_BLOB_CAP);
-	char *p, *final_url = NULL;
+	char *p, *final_url = NULL, *final_url_nl = NULL;
 
 	if (hl < 0) {
 		if (errno == EAGAIN || errno == EINTR)
@@ -310,15 +310,27 @@ static void fetch_gucos_http_process_status(struct fetch_gucos_http_ctx *c)
 	c->http_code = status;
 
 	/* Pull the synthetic final-url line out of the blob (prepended by
-	 * the kernel, but scan every line — cheap robustness). */
+	 * the kernel, but scan every line — cheap robustness).
+	 *
+	 * The value is terminated IN PLACE, which costs the blob the
+	 * newline separating that line from the next.  Because the kernel
+	 * PREPENDS the synthetic line, that newline is the very first one:
+	 * leaving it a NUL severs the blob from every real header, and the
+	 * emit loop below then walks a one-line string and emits NOTHING
+	 * (ticket #368 — the cause of the Windows-1252 mojibake, and, worse,
+	 * of llcache never seeing cache-control/expires/etag/last-modified).
+	 * So remember where the terminator went and put the newline back the
+	 * moment the value has been read. */
 	for (p = gf_hdrblob; p != NULL && *p != 0; ) {
 		char *nl = strchr(p, '\n');
 		if (strncasecmp(p, FINAL_URL_KEY, sizeof(FINAL_URL_KEY) - 1) == 0) {
 			final_url = p + sizeof(FINAL_URL_KEY) - 1;
 			while (*final_url == ' ' || *final_url == '\t')
 				final_url++;
-			if (nl != NULL)
+			if (nl != NULL) {
 				*nl = 0;        /* value ends at the line */
+				final_url_nl = nl;
+			}
 			p = nl ? nl + 1 : NULL;
 			break;                  /* the kernel emits exactly one */
 		}
@@ -348,9 +360,20 @@ static void fetch_gucos_http_process_status(struct fetch_gucos_http_ctx *c)
 		fetch_set_http_code(c->parent_fetch, 303);
 		msg.type = FETCH_REDIRECT;
 		msg.data.redirect = final_url;
-		fetch_gucos_http_send(&msg, c);
+		fetch_gucos_http_send(&msg, c);   /* consumes final_url here */
+		if (final_url_nl != NULL)
+			*final_url_nl = '\n';
 		c->finished = true;
 		return;
+	}
+
+	/* The value has been read and compared; put the newline back so the
+	 * emit loop below sees the WHOLE blob and not just its first line
+	 * (#368).  final_url stops being a terminated string at this point,
+	 * so drop it — nothing after here may use it. */
+	if (final_url_nl != NULL) {
+		*final_url_nl = '\n';
+		final_url = NULL;
 	}
 
 	fetch_set_http_code(c->parent_fetch, status);
