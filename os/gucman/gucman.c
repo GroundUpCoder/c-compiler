@@ -249,7 +249,16 @@ static size_t gm_curl_sink(char *data, size_t sz, size_t nm, void *ud) {
     return n;
 }
 
-/* GET base/rel into a malloc'd buffer; 0 on HTTP 200, -1 otherwise. */
+/* GET base/rel into a malloc'd buffer; 0 on HTTP 200, -1 otherwise.
+ *
+ * NB an empty or short body is NOT rejected here (ticket #456). A 200 that
+ * ends cleanly at the HTTP level is a successful transfer by every measure
+ * this layer has: a wire truncation never gets this far — the fetch under
+ * the veneer rejects it, so it arrives as a curl error above — and a body
+ * shorter than its own Content-Length cannot end cleanly. What DOES reach a
+ * caller is a legitimately empty or legitimately short 200, and only the
+ * caller knows what it expected the bytes to be. So the length question is
+ * answered where the content is parsed, by gm_index_parse_error. */
 static int gm_http_get(const char *base, const char *rel, struct gm_buf *out) {
     char url[GM_PATH_MAX];
     if (snprintf(url, sizeof url, "%s/%s", base, rel) >= (int)sizeof url) {
@@ -271,12 +280,14 @@ static int gm_http_get(const char *base, const char *rel, struct gm_buf *out) {
         fprintf(stderr, "gucman: %s: %s\n", url, curl_easy_strerror(rc));
         free(out->p);
         out->p = NULL;
+        out->len = 0;
         return -1;
     }
     if (code != 200) {
         fprintf(stderr, "gucman: %s: HTTP %ld\n", url, code);
         free(out->p);
         out->p = NULL;
+        out->len = 0;
         return -1;
     }
     return 0;
@@ -831,12 +842,42 @@ static void gm_seed_ev(int ev, const char *path, void *ud) {
     }
 }
 
+/* The ONE report for every way index.json can fail to parse — naming WHICH
+ * one it was (ticket #456). The old text was the bare sentence "gucman:
+ * index.json is not valid JSON", which reads as "this repository is
+ * corrupt" whether the body was 31 KB of malformed JSON, a body cut short,
+ * or nothing at all. Those are different faults with different owners, and
+ * collapsing them is why one intermittent occurrence of the EMPTY case cost
+ * two investigations: the artifact that would have identified it in a line
+ * — how many bytes arrived — was the one fact the message threw away.
+ * `buf->p` is NULL for a zero-length body, which is also why the old call
+ * handed cJSON_Parse a NULL pointer. */
+static void gm_index_parse_error(const char *base, const struct gm_buf *buf) {
+    if (!buf->p || buf->len == 0) {
+        fprintf(stderr, "gucman: %s/index.json: HTTP 200 with an EMPTY body — the repository "
+                "served no index at all (a proxy, or a partial publish; not malformed JSON)\n", base);
+        return;
+    }
+    const char *err = cJSON_GetErrorPtr();
+    unsigned long off = (err && err >= buf->p && err <= buf->p + buf->len)
+                      ? (unsigned long)(err - buf->p) : 0UL;
+    char head[41];
+    size_t n = buf->len < sizeof head - 1 ? buf->len : sizeof head - 1;
+    memcpy(head, buf->p, n);
+    head[n] = 0;
+    for (size_t i = 0; i < n; i++)
+        if ((unsigned char)head[i] < 0x20 || (unsigned char)head[i] > 0x7e) head[i] = '.';
+    fprintf(stderr, "gucman: %s/index.json is not valid JSON — %lu byte(s) received, parse "
+            "stopped at offset %lu; body starts \"%s\"\n",
+            base, (unsigned long)buf->len, off, head);
+}
+
 static cJSON *gm_fetch_index(const char *base) {
     struct gm_buf buf;
     if (gm_http_get(base, "index.json", &buf) != 0) return NULL;
-    cJSON *idx = cJSON_Parse(buf.p);
+    cJSON *idx = buf.p ? cJSON_Parse(buf.p) : NULL;
+    if (!idx) gm_index_parse_error(base, &buf);
     free(buf.p);
-    if (!idx) fprintf(stderr, "gucman: index.json is not valid JSON\n");
     return idx;
 }
 
@@ -1846,9 +1887,9 @@ static int cmd_index(void) {
     struct gm_buf buf;
     if (gm_http_get(base, "index.json", &buf) != 0) return 1;
     /* validate before echoing: a broken repo fails loud, not downstream */
-    cJSON *idx = cJSON_Parse(buf.p);
+    cJSON *idx = buf.p ? cJSON_Parse(buf.p) : NULL;
     if (!idx) {
-        fprintf(stderr, "gucman: index.json is not valid JSON\n");
+        gm_index_parse_error(base, &buf);
         free(buf.p);
         return 1;
     }

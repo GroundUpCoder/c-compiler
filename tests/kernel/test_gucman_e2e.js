@@ -26,14 +26,23 @@
 //     the tier dirs (absent on a virgin root) and recording everything in
 //     the DB; remove leaves NO residue (links gone, created tiers rmdir'd)
 //
+//   - an index.json that will not parse NAMES ITS OWN FAULT (ticket #456):
+//     an empty 200, a cleanly-terminated short body and a whole non-JSON
+//     body are three different faults with three different owners, and the
+//     report distinguishes them by byte count and parse offset instead of
+//     printing one sentence that blames the repository for all three
+//
 // Repo servers: serve.js itself, serving dist/packages (tools/mkpkg.js
 // output) as its root — the tree has no os/image.json, so serve.js's image
 // gate self-skips. A second serve.js serves a corrupted copy of the repo
-// for the refusal leg.
+// for the refusal leg. Session F adds a third, hand-rolled one: serve.js can
+// only serve a whole file correctly, so the malformed-response shapes need a
+// server that is deliberately faulty.
 //
 // Run: node tests/kernel/test_gucman_e2e.js
 'use strict';
 const fs = require('fs');
+const http = require('http');
 const path = require('path');
 const { driveBoot, freshImage, section } = require('./lib/drive.js');
 const { ROOT, ensureMinimalImage, ensurePackages, startServer } = require('./lib/gucman.js');
@@ -428,6 +437,84 @@ async function main() {
   check('fat: freetype header tree resolves', fat.includes('BAKED-FT-TREE-OK'));
   check('fat: baked payload layout (fontcore.h above src/win32/)', fat.includes('BAKED-LAYOUT-OK'));
   check('fat: baked payload layout (freetype src/ beside shims)', fat.includes('BAKED-FT-LAYOUT-OK'));
+
+  /* ---- session F: an unparseable index NAMES ITS OWN FAULT (ticket #456) ----
+   * The three ways `index.json` can fail to parse are three different faults
+   * with three different owners, and gucman used to print one sentence for
+   * all of them — "gucman: index.json is not valid JSON". That sentence reads
+   * as "this repository is corrupt", so when the EMPTY case turned up once
+   * under -j2 it cost two investigations to characterize: the one fact that
+   * would have identified it in a line, how many bytes arrived, was exactly
+   * what the message discarded.
+   *
+   * These legs are the red control for that. A fault-injecting repo (not
+   * serve.js — serve.js can only serve a whole file correctly) answers 200 on
+   * three shapes the real transport can genuinely produce:
+   *   - EMPTY:   200, Content-Length 0. This is one of only two states that
+   *              reproduce the reported symptom, and it is the state that
+   *              used to hand cJSON_Parse a NULL pointer.
+   *   - SHORT:   200, chunked, terminated cleanly part-way through valid
+   *              JSON — a complete HTTP response carrying an incomplete
+   *              document, so nothing below gucman can call it an error.
+   *   - GARBAGE: 200 with a whole body that simply is not JSON — the case
+   *              the old message was actually about.
+   * Every assertion below fails on the pre-fix binary. */
+  const SHORT_BODY = '{"baseVersion": 1, "packages": {"punes"';
+  const faults = {
+    '/empty/index.json': (res) => { res.writeHead(200, { 'content-type': 'application/json', 'content-length': '0' }); res.end(); },
+    // No content-length: chunked, so ending early is a WELL-FORMED response.
+    // (With a declared length a short body cannot end cleanly — the fetch
+    // under the veneer rejects it, and it surfaces as a curl error instead.)
+    '/short/index.json': (res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(SHORT_BODY); },
+    '/garbage/index.json': (res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('<!DOCTYPE html>\n<html><body>captive portal</body></html>\n'); },
+  };
+  const faultSrv = http.createServer((req, res) => {
+    const h = faults[req.url.split('?')[0]];
+    if (h) { h(res); return; }
+    res.writeHead(404); res.end('nope');
+  });
+  await new Promise((r) => faultSrv.listen(0, '127.0.0.1', r));
+  const fport = faultSrv.address().port;
+  console.log(`[gucman] fault-injecting repo :${fport}`);
+
+  const scriptF = ['mkdir -p /etc/gucman'];
+  for (const kind of ['empty', 'short', 'garbage']) {
+    scriptF.push(`echo ==${kind}`,
+      `echo http://127.0.0.1:${fport}/${kind} > /etc/gucman/repos`,
+      'gucman install punes 2>&1; echo RC=$?',
+      'gucman index 2>&1; echo IRC=$?');
+  }
+  scriptF.push('echo ==done');
+  const f = driveBoot(scriptF, BOOT_ARGS);
+  const fout = String(f.stdout || '');
+  faultSrv.close();
+
+  const empty = section(fout, 'empty');
+  check('empty index: install fails', /RC=[1-9]/.test(empty), empty);
+  check('empty index: named as an EMPTY body, not as bad JSON',
+    /HTTP 200 with an EMPTY body/.test(empty), empty);
+  check('empty index: does NOT blame the repository\'s JSON',
+    !/is not valid JSON/.test(empty), empty);
+  check('empty index: `gucman index` reports it the same way',
+    /IRC=[1-9]/.test(empty) && (empty.match(/HTTP 200 with an EMPTY body/g) || []).length >= 2, empty);
+
+  const short = section(fout, 'short');
+  check('short index: install fails', /RC=[1-9]/.test(short), short);
+  check(`short index: reports the byte count it actually received (${SHORT_BODY.length})`,
+    new RegExp(`\\b${SHORT_BODY.length} byte\\(s\\) received`).test(short), short);
+  check('short index: reports where the parse stopped',
+    /parse stopped at offset \d+/.test(short), short);
+  check('short index: quotes the head of what arrived',
+    /body starts "\{"baseVersion/.test(short), short);
+
+  const garbage = section(fout, 'garbage');
+  check('garbage index: install fails', /RC=[1-9]/.test(garbage), garbage);
+  check('garbage index: still reported as invalid JSON (the honest case)',
+    /is not valid JSON/.test(garbage), garbage);
+  check('garbage index: carries the byte count and offset too',
+    /\d+ byte\(s\) received, parse stopped at offset \d+/.test(garbage), garbage);
+  check('garbage index: the quoted head is printable-sanitized',
+    /body starts "<!DOCTYPE html>/.test(garbage), garbage);
 
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(failures ? `\ngucman e2e: ${failures} FAILED` : '\ngucman e2e: PASS');
