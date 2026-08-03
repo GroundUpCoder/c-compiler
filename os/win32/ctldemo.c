@@ -49,6 +49,40 @@ static void mark(const char *what) {
     fflush(stdout);
 }
 
+/* #277 relayout policy (the fileman.c relayout idiom): the design grid is
+ * the 480x360 client the WM_CREATE coordinates were authored against.
+ * Horizontal slack goes to the fill controls — the Name EDIT, the LISTBOX
+ * and the notes EDIT grow; everything to their right rides the right edge
+ * (Add/Greet, the scrollbar, the DESC_* column, About/Quit). Vertical
+ * slack goes to the notes EDIT alone (the list keeps its height so the
+ * DESC_* column's rows stay aligned with it); the bottom button row rides
+ * the bottom edge. The "Name:" label and Verbose/Options stay put. Slack
+ * clamps at 0: below the design size the layout holds its minimum and
+ * clips at the window edge (the Win32 convention). At exactly 480x360
+ * every rectangle equals its WM_CREATE literal — the geometry pinned by
+ * test_user32_e2e.js and os-user32.mjs. */
+static void relayout(HWND hwnd) {
+    RECT r;
+    GetClientRect(hwnd, &r);
+    int dw = r.right - WIN_W, dh = r.bottom - WIN_H;
+    if (dw < 0) dw = 0;
+    if (dh < 0) dh = 0;
+    MoveWindow(GetDlgItem(hwnd, IDC_NAME_EDIT), 76, 10, 180 + dw, 24, TRUE);
+    MoveWindow(GetDlgItem(hwnd, IDB_ADD), 268 + dw, 10, 60, 24, TRUE);
+    MoveWindow(GetDlgItem(hwnd, IDB_GREET), 336 + dw, 10, 60, 24, TRUE);
+    MoveWindow(GetDlgItem(hwnd, IDC_LIST), 12, 44, 244 + dw, 120, TRUE);
+    MoveWindow(GetDlgItem(hwnd, IDC_SCROLL), 264 + dw, 44, 16, 120, TRUE);
+    MoveWindow(GetDlgItem(hwnd, IDC_DESC_PLAIN), 288 + dw, 44, 130, 28, TRUE);
+    MoveWindow(GetDlgItem(hwnd, IDC_DESC_MN), 288 + dw, 78, 130, 28, TRUE);
+    MoveWindow(GetDlgItem(hwnd, IDC_DESC_REF), 288 + dw, 112, 130, 40, TRUE);
+    MoveWindow(GetDlgItem(hwnd, IDC_DESC_CHK), 288 + dw, 160, 130, 28, TRUE);
+    MoveWindow(GetDlgItem(hwnd, IDC_NOTES_EDIT), 12, 176, 268 + dw, 96 + dh, TRUE);
+    MoveWindow(GetDlgItem(hwnd, IDC_CHECK), 12, 284 + dh, 120, 28, TRUE);
+    MoveWindow(GetDlgItem(hwnd, IDB_OPTIONS), 140, 284 + dh, 96, 30, TRUE);
+    MoveWindow(GetDlgItem(hwnd, IDB_ABOUT), 300 + dw, 284 + dh, 76, 30, TRUE);
+    MoveWindow(GetDlgItem(hwnd, IDB_QUIT), 388 + dw, 284 + dh, 76, 30, TRUE);
+}
+
 /* The Options dialog (0104): keyboard-driven end to end via
  * IsDialogMessageW in DialogBoxParamW's modal loop. On IDOK it reports the
  * edit text + checkbox so the headless test can observe what the keyboard
@@ -153,6 +187,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_SIZE:
         mark("WM_SIZE");
+        relayout(hwnd);                          /* #277: live client rect */
         return 0;
 
     case WM_PAINT: {
@@ -1381,7 +1416,7 @@ int main(int argc, char **argv) {
     if (!RegisterClass(&wc)) return 3;
 
     HWND hwnd = CreateWindowEx(0, "ctldemo", "Control Demo",
-                               WS_OVERLAPPED | WS_VISIBLE,
+                               WS_OVERLAPPED | WS_THICKFRAME | WS_VISIBLE,
                                CW_USEDEFAULT, CW_USEDEFAULT, WIN_W, WIN_H,
                                NULL, NULL, NULL, NULL);
     if (!hwnd) return 3;

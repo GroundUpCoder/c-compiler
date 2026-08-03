@@ -2,8 +2,12 @@
  *
  * Two modes:
  *   gdidemo            windowed: a Petzold-style WM_PAINT scene (shapes,
- *                      text, blits) into a fixed 480x360 surface — every
- *                      visual is deterministic so wmctl shot is a golden.
+ *                      text, blits), resizable since #278 — the 480x360
+ *                      design grid scales to the live client rect by
+ *                      RE-RENDERING (WS_THICKFRAME + invalidate-on-WM_SIZE,
+ *                      never a bitmap stretch). Every visual is
+ *                      deterministic so wmctl shot is a golden at the
+ *                      default 480x360 size.
  *   gdidemo selftest   headless: memory-DC pixel asserts (GDI semantics:
  *                      right/bottom exclusivity, LineTo endpoint, ROP2,
  *                      clip, blits, DIB swizzle, text) + the leak check
@@ -26,11 +30,22 @@
 
 /* ============================================================ the scene
  * Coordinates are load-bearing: tests/kernel/test_gdi32_e2e.js probes
- * exact pixels of this layout. Change them together. */
+ * exact pixels of this layout. Change them together.
+ *
+ * Every coordinate below is authored against the 480x360 design grid and
+ * scaled per axis to the live client rect at draw time (#278): the demo
+ * re-RENDERS at the target size, never stretches. MulDiv is the identity
+ * at the design size, so the 480x360 golden shots stay bit-exact. Stroke
+ * widths, corner radii, text sizes and the 1:1 BitBlt checker stay
+ * unscaled by design — they are resolution-independent marks, and the
+ * BitBlt leg's whole point is a unit blit (StretchBlt beside it is the
+ * scaling one). */
 
-static void draw_scene(HDC hdc) {
+static void draw_scene(HDC hdc, int cw, int ch) {
+#define SX(v) MulDiv((v), cw, WIN_W)
+#define SY(v) MulDiv((v), ch, WIN_H)
     RECT rc;
-    SetRect(&rc, 0, 0, WIN_W, WIN_H);
+    SetRect(&rc, 0, 0, cw, ch);
     FillRect(hdc, &rc, (HBRUSH)GetStockObject(WHITE_BRUSH));
 
     /* Row 1: the classic shapes. */
@@ -38,48 +53,48 @@ static void draw_scene(HDC hdc) {
     HBRUSH red = CreateSolidBrush(RGB(220, 40, 40));
     HGDIOBJ oldPen = SelectObject(hdc, (HGDIOBJ)pen3);
     HGDIOBJ oldBrush = SelectObject(hdc, (HGDIOBJ)red);
-    Rectangle(hdc, 20, 20, 140, 100);
+    Rectangle(hdc, SX(20), SY(20), SX(140), SY(100));
     SelectObject(hdc, oldPen);
 
     HBRUSH blue = CreateSolidBrush(RGB(40, 80, 220));
     SelectObject(hdc, (HGDIOBJ)blue);
-    Ellipse(hdc, 160, 20, 280, 100);
+    Ellipse(hdc, SX(160), SY(20), SX(280), SY(100));
 
     HBRUSH green = CreateSolidBrush(RGB(40, 180, 90));
     SelectObject(hdc, (HGDIOBJ)green);
-    RoundRect(hdc, 300, 20, 440, 100, 24, 24);
+    RoundRect(hdc, SX(300), SY(20), SX(440), SY(100), 24, 24);
 
     /* Row 2: polygon, hatch, thick lines. */
     HBRUSH yellow = CreateSolidBrush(RGB(250, 200, 40));
     SelectObject(hdc, (HGDIOBJ)yellow);
-    POINT tri[3] = { {80, 130}, {140, 230}, {20, 230} };
+    POINT tri[3] = { {SX(80), SY(130)}, {SX(140), SY(230)}, {SX(20), SY(230)} };
     Polygon(hdc, tri, 3);
 
     HBRUSH hatch = CreateHatchBrush(HS_DIAGCROSS, RGB(150, 40, 150));
     RECT hr;
-    SetRect(&hr, 160, 130, 280, 230);
+    SetRect(&hr, SX(160), SY(130), SX(280), SY(230));
     FillRect(hdc, &hr, hatch);   /* OPAQUE default: gaps fill white */
 
     HPEN pen5 = CreatePen(PS_SOLID, 5, RGB(180, 30, 30));
     HGDIOBJ oldPen5 = SelectObject(hdc, (HGDIOBJ)pen5);
-    MoveToEx(hdc, 300, 130, NULL);
-    LineTo(hdc, 440, 230);
-    MoveToEx(hdc, 440, 130, NULL);
-    LineTo(hdc, 300, 230);
+    MoveToEx(hdc, SX(300), SY(130), NULL);
+    LineTo(hdc, SX(440), SY(230));
+    MoveToEx(hdc, SX(440), SY(130), NULL);
+    LineTo(hdc, SX(300), SY(230));
     SelectObject(hdc, oldPen5);
 
     /* Row 3: text. */
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, RGB(0, 0, 0));
-    TextOut(hdc, 20, 245, "Hello, GDI!", 11);
+    TextOut(hdc, SX(20), SY(245), "Hello, GDI!", 11);
     SetBkMode(hdc, OPAQUE);
     SetBkColor(hdc, RGB(255, 255, 0));
     SetTextColor(hdc, RGB(0, 0, 200));
-    TextOut(hdc, 20, 275, "Opaque", 6);
+    TextOut(hdc, SX(20), SY(275), "Opaque", 6);
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, RGB(0, 0, 0));
     RECT tr;
-    SetRect(&tr, 300, 245, 460, 300);
+    SetRect(&tr, SX(300), SY(245), SX(460), SY(300));
     DrawText(hdc, "Centered", -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
     /* Row 4: blits — checkerboard via a memory DC. */
@@ -93,8 +108,9 @@ static void draw_scene(HDC hdc) {
     FillRect(mem, &q, cbBlue);
     SetRect(&q, 20, 20, 40, 40);
     FillRect(mem, &q, cbBlue);
-    BitBlt(hdc, 20, 310, 40, 40, mem, 0, 0, SRCCOPY);
-    StretchBlt(hdc, 80, 310, 80, 40, mem, 0, 0, 40, 40, SRCCOPY);
+    BitBlt(hdc, SX(20), SY(310), 40, 40, mem, 0, 0, SRCCOPY);
+    StretchBlt(hdc, SX(80), SY(310), SX(160) - SX(80), SY(350) - SY(310),
+               mem, 0, 0, 40, 40, SRCCOPY);
     SelectObject(mem, oldBm);
 
     /* Leak discipline: everything created above dies here. */
@@ -109,6 +125,8 @@ static void draw_scene(HDC hdc) {
     DeleteObject((HGDIOBJ)blue);
     DeleteObject((HGDIOBJ)red);
     DeleteObject((HGDIOBJ)pen3);
+#undef SX
+#undef SY
 }
 
 /* ============================================================ window mode */
@@ -117,11 +135,19 @@ static int g_painted;
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+    case WM_SIZE:
+        /* #278: geometry re-derives from the live client rect in WM_PAINT
+         * — a size change just invalidates, and the next paint re-renders
+         * the scene at the new size (never a bitmap stretch). */
+        InvalidateRect(hwnd, NULL, TRUE);
+        return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
         if (!hdc) return 0;
-        draw_scene(hdc);
+        RECT cr;
+        GetClientRect(hwnd, &cr);
+        draw_scene(hdc, cr.right, cr.bottom);
         EndPaint(hwnd, &ps);
         if (!g_painted) {
             g_painted = 1;
@@ -143,7 +169,8 @@ static int run_window(void) {
     wc.lpfnWndProc = WndProc;
     wc.lpszClassName = "gdidemo";
     if (!RegisterClass(&wc)) return 3;
-    HWND hwnd = CreateWindowEx(0, "gdidemo", "GDI Demo", WS_OVERLAPPED | WS_VISIBLE,
+    HWND hwnd = CreateWindowEx(0, "gdidemo", "GDI Demo",
+                               WS_OVERLAPPED | WS_THICKFRAME | WS_VISIBLE,
                                CW_USEDEFAULT, CW_USEDEFAULT, WIN_W, WIN_H,
                                NULL, NULL, NULL, NULL);
     if (!hwnd) return 3;

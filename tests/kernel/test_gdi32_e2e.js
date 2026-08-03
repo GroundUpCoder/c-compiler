@@ -7,9 +7,13 @@
 //     staging, StretchBlt NN, PatBlt, DIB B<->R swizzle + bottom-up, text
 //     extents/metrics, object rules) + the leak check (repeated paint
 //     cycles return __gdi_object_count/__gdi_dc_count to baseline).
-//   - windowed `gdidemo`: WM placement + title, fixed size (no R flag),
+//   - windowed `gdidemo`: WM placement + title, resizable (R flag, #278),
 //     and a `wmctl shot` frame probed against the scene's exact geometry
 //     (coordinates mirror os/win32/gdidemo.c draw_scene — change together).
+//   - resize (#278): `wmctl resize` + maximize/restore re-RENDER the scene
+//     at the live client size (the shot parses at the NEW dims — a
+//     SET_DST-scaled fixed-size surface never does, its buffer stays put);
+//     scaled-geometry probes pin the design-grid re-derivation.
 //   - bit-exactness: shots of two INDEPENDENT boots' paints are
 //     byte-identical — the CPU rasterizer is deterministic.
 //
@@ -51,6 +55,26 @@ function sessionA() {
     'SID=$(wmctl list | grep "GDI Demo$" | sed "s/[^0-9].*//")',
     'wmctl wait seq $SID 1 6000',
     'wmctl shot $SID /root/gdi1.ppm && echo shot1-ok',
+    // ---- #278 resize legs. WS_THICKFRAME makes this a REAL kernel resize
+    // (SURFACE_RESIZE -> WM_SIZE -> invalidate -> re-render at the new
+    // client size), not a SET_DST bitmap scale — the shots below parse at
+    // the NEW dims, which a scaled fixed-size buffer never does.
+    'wmctl resize $SID 640 480 && echo resize-ok',
+    'wmctl wait dim $SID 640x480',
+    'sleep 1',       // timing subject: post-resize re-render present (the cairo idiom)
+    'wmctl shot $SID /root/gdi3.ppm && echo shot3-ok',
+    // maximize: wm.c MOVE+RESIZEs a resizable window to the work area
+    // (screen-derived — no fixed dim to wait on; annotated settle).
+    'wmctl max $SID && echo max-ok',
+    'sleep 1.2',     // timing subject: maximize MOVE+RESIZE + re-render present
+    'echo ==maxlist',
+    'wmctl list',
+    'echo ==cut',
+    'wmctl shot $SID /root/gdi4.ppm && echo shot4-ok',
+    // restore: the toggle returns to the saved floating rect — a REAL wait
+    // target (driveBoot fails loud on a wait timeout).
+    'wmctl max $SID',
+    'wmctl wait dim $SID 640x480',
     'echo ==winerr-begin',
     'cat /tmp/win.err',
     'echo ==winerr-end',
@@ -73,10 +97,22 @@ function sessionA() {
   check('gdidemo opens a WM-placed window titled "GDI Demo"', row !== '',
     JSON.stringify(list1));
   check('gdidemo window is 480x360', row.includes('480x360'), row);
-  check('gdidemo is fixed-size (no R flag — scaled, not configured)',
-    !(row.split('\t')[5] || '').includes('R'), row);
+  check('gdidemo is resizable (R flag — #278 resize sweep)',
+    (row.split('\t')[5] || '').includes('R'), row);
   check('painted marker reached stdout', out.includes('gdidemo: painted'));
   check('first shot written', out.includes('shot1-ok'));
+
+  /* #278: the resize legs' shell-level acks */
+  check('wmctl resize accepted (resizable surface)', out.includes('resize-ok'));
+  check('resized shot written', out.includes('shot3-ok'));
+  check('wmctl max accepted', out.includes('max-ok'));
+  check('maximized shot written', out.includes('shot4-ok'));
+  const maxlist = (out.split('==maxlist\n')[1] || '').split('==cut')[0];
+  const maxRow = maxlist.split('\n').find(l => l.endsWith('\tGDI Demo')) || '';
+  const maxDim = maxRow.split('\t')[2] ? maxRow.split('\t')[2].match(/^(\d+)x(\d+)\+/) : null;
+  check('maximize grew the window past 640x480 (work-area resize, not scale)',
+    maxDim !== null && (+maxDim[1] > 640 || +maxDim[2] > 480), maxRow);
+  return maxDim ? { w: +maxDim[1], h: +maxDim[2] } : null;
 
   // #342: the windowed scene keeps 0211 leak discipline — its stderr is
   // EMPTY (pen5 was deleted while selected: refused + leaked). Scoped to
@@ -104,9 +140,9 @@ function sessionA2() {
 }
 
 /* ---- session B: extract the PPMs and probe the scene ---- */
-function sessionB() {
-  const b = driveBoot('cat /root/gdi1.ppm /root/gdi2.ppm\n',
-    { image, encoding: null, timeout: 120000, maxBuffer: 32 * 1024 * 1024 });
+function sessionB(maxDims) {
+  const b = driveBoot('cat /root/gdi1.ppm /root/gdi2.ppm /root/gdi3.ppm /root/gdi4.ppm\n',
+    { image, encoding: null, timeout: 120000, maxBuffer: 64 * 1024 * 1024 });
   const buf = b.stdout;
 
   function parsePPM(off) {
@@ -192,11 +228,63 @@ function sessionB() {
     check('independent boots paint bit-exact (shot1 == shot2)',
       buf.subarray(p1.data, p1.end).equals(buf.subarray(p2.data, p2.end)));
   }
+
+  /* ---- #278: the resized shots re-RENDER the 480x360 design grid at the
+   * live client size. Probes mirror draw_scene's SX/SY = MulDiv(v, cw|ch,
+   * 480|360) scaling; all points sit >=5px inside their region so +/-1
+   * rounding can never flip them. */
+  if (!p2) return;
+  const p3 = parsePPM(p2.end);
+  check('resized shot parses at the NEW client size 640x480 (re-render, not scale)',
+    p3 !== null && p3.w === 640 && p3.h === 480, p3 && `${p3.w}x${p3.h}`);
+  if (p3) {
+    const px3 = (x, y) => {
+      const i = p3.data + (y * p3.w + x) * 3;
+      return [buf[i], buf[i + 1], buf[i + 2]];
+    };
+    const probe3 = (name, x, y, r, g, bch) =>
+      check(name, eq(px3(x, y), r, g, bch), `(${x},${y}) = ${px3(x, y)}`);
+    /* design (80,60) -> (107,80); (220,60) -> (293,80); (370,60) -> (493,80) */
+    probe3('640x480: Rectangle interior red at scaled position', 107, 80, 220, 40, 40);
+    probe3('640x480: Ellipse interior blue at scaled position', 293, 80, 40, 80, 220);
+    probe3('640x480: RoundRect interior green at scaled position', 493, 80, 40, 180, 90);
+    probe3('640x480: Polygon interior yellow at scaled position', 107, 267, 250, 200, 40);
+    probe3('640x480: background right of the scene stays white', 620, 20, 255, 255, 255);
+    /* the 1:1 BitBlt checker stays UNSCALED 40x40 at the scaled position
+     * (design (20,310) -> (27,413); quadrants stay 20px) — the unit-blit
+     * half of the demo re-renders, it does not stretch */
+    probe3('640x480: 1:1 checker top-left blue (unscaled quadrants)', 37, 423, 0, 120, 215);
+    probe3('640x480: 1:1 checker top-right white', 57, 423, 255, 255, 255);
+    probe3('640x480: 1:1 checker bottom-right blue', 57, 443, 0, 120, 215);
+    /* the StretchBlt half scales with the grid: dest (107,413) 106x54 */
+    probe3('640x480: StretchBlt dest top-left blue', 127, 423, 0, 120, 215);
+    probe3('640x480: StretchBlt dest top-right white', 190, 423, 255, 255, 255);
+    probe3('640x480: StretchBlt dest bottom-right blue', 190, 455, 0, 120, 215);
+  }
+
+  /* maximized shot: dims must equal the wmctl list row's, content at the
+   * work-area scale (screen-derived — computed, not hardcoded) */
+  const p4 = p3 ? parsePPM(p3.end) : null;
+  check('maximized shot parses at the work-area size from wmctl list',
+    p4 !== null && maxDims !== null && p4.w === maxDims.w && p4.h === maxDims.h,
+    (p4 && `${p4.w}x${p4.h}`) + ' vs ' + JSON.stringify(maxDims));
+  if (p4 && maxDims) {
+    const px4 = (x, y) => {
+      const i = p4.data + (y * p4.w + x) * 3;
+      return [buf[i], buf[i + 1], buf[i + 2]];
+    };
+    const mx = (v) => Math.round(v * maxDims.w / 480);
+    const my = (v) => Math.round(v * maxDims.h / 360);
+    check('maximized: Rectangle interior red at scaled position',
+      eq(px4(mx(80), my(60)), 220, 40, 40), `${px4(mx(80), my(60))}`);
+    check('maximized: Ellipse interior blue at scaled position',
+      eq(px4(mx(220), my(60)), 40, 80, 220), `${px4(mx(220), my(60))}`);
+  }
 }
 
-sessionA();
+const maxDims = sessionA();
 sessionA2();
-sessionB();
+sessionB(maxDims);
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures ? `\ngdi32 e2e: ${failures} FAILED` : '\ngdi32 e2e: PASS');

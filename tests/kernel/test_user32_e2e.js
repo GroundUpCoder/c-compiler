@@ -148,6 +148,26 @@ const out = boot([
   'echo ==tree2',
   'wmctl tree',
   'echo ==cut',
+  // ---- #277 resize relayout: WS_THICKFRAME makes `wmctl resize` a REAL
+  // kernel resize; ctldemo's WM_SIZE relayout re-flows the controls against
+  // the live client rect. The new geometry is tree-only — no label/text
+  // signal for "relayout done" — so this stays an annotated settle sleep
+  // (the fileman idiom, 0083 rule).
+  'wmctl resize $SID 640 480 && echo cd-resize-ok',
+  'wmctl wait dim $SID 640x480',
+  'sleep 1',                    // timing subject: WM_SIZE relayout dispatch (tree-only signal)
+  'echo ==tree3',
+  'wmctl tree',
+  'echo ==cut',
+  // maximize (work-area MOVE+RESIZE — screen-derived, no fixed dim to wait
+  // on), then restore back to the saved floating rect (a REAL wait target).
+  'wmctl max $SID && echo cd-max-ok',
+  'sleep 1.2',                  // timing subject: maximize MOVE+RESIZE + relayout dispatch
+  'echo ==maxtree',
+  'wmctl tree',
+  'echo ==cut',
+  'wmctl max $SID',
+  'wmctl wait dim $SID 640x480',
   // Teardown: label-click Quit; the surface and agent socket must go. Waiting
   // for the label to vanish proves the app fully exited (and, FIFO, flushed the
   // WM_DESTROY/bye prints) before we read the list.
@@ -179,7 +199,8 @@ check('app reaches ready', out.includes('ctldemo: ready'));
 const list1 = section('list1');
 const row = list1.split('\n').find(l => l.endsWith('\tControl Demo')) || '';
 check('WM-placed window titled "Control Demo"', row !== '', JSON.stringify(list1.slice(0, 200)));
-check('window is 480x360 fixed-size', row.includes('480x360') && !(row.split('\t')[5] || '').includes('R'), row);
+check('window is 480x360 and resizable (R flag — #277 resize sweep)',
+  row.includes('480x360') && (row.split('\t')[5] || '').includes('R'), row);
 
 const tree1 = section('tree1');
 check('tree dumps the top-level', /win \d+ class=ctldemo id=0 rect=0,0 480x360 .*text='Control Demo'/.test(tree1), tree1.slice(0, 200));
@@ -357,6 +378,46 @@ const tree2 = section('tree2');
 check('tree dumps two win32 processes',
   (tree2.match(/^== pid \d+/gm) || []).length === 2, tree2.slice(0, 200));
 check('gdidemo appears in the scan', /class=gdidemo/.test(tree2), tree2);
+
+/* ---- #277: WM_SIZE relayout against the live client rect. At 640x480
+ * the slack is dw=160/dh=120; the policy (ctldemo.c relayout): fills grow
+ * (Name EDIT, LISTBOX, notes EDIT), right-of-fill controls ride the right
+ * edge, the bottom button row rides the bottom edge, the "Name:" label
+ * and Verbose stay put. Rects come from the agent tree — no pixels. */
+check('resize accepted on the now-resizable ctldemo', out.includes('cd-resize-ok'));
+const tree3 = section('tree3');
+check('resized top-level is 640x480 in the tree',
+  /class=ctldemo id=0 rect=0,0 640x480/.test(tree3), tree3.slice(0, 200));
+for (const probe of [
+  ['"Name:" label stays put', /class=STATIC id=100 rect=12,14 60x18/],
+  ['Name EDIT fills the width (+160)', /class=EDIT id=101 rect=76,10 340x24/],
+  ['Add rides the right edge', /class=BUTTON id=200 rect=428,10 60x24/],
+  ['Greet rides the right edge', /class=BUTTON id=201 rect=496,10 60x24/],
+  ['LISTBOX fills the width (+160)', /class=LISTBOX id=103 rect=12,44 404x120/],
+  ['scrollbar rides the LISTBOX right edge', /class=SCROLLBAR id=104 rect=424,44 16x120/],
+  ['DESC column rides the right edge', /class=STATIC id=106 rect=448,44 130x28/],
+  ['notes EDIT fills width and height (+160/+120)', /class=EDIT id=102 rect=12,176 428x216/],
+  ['Verbose rides the bottom edge (x fixed)', /class=BUTTON id=105 rect=12,404 120x28/],
+  ['Quit rides the bottom-right corner', /class=BUTTON id=203 rect=548,404 76x30/],
+]) check('relayout: ' + probe[0], probe[1].test(tree3), tree3);
+
+/* maximize: work-area size is screen-derived — read it back from the tree
+ * and check the relayout arithmetic against it, then restore (the
+ * `wmctl wait dim 640x480` in the script is the restore's loud gate). */
+check('maximize accepted', out.includes('cd-max-ok'));
+const maxtree = section('maxtree');
+const mt = maxtree.match(/class=ctldemo id=0 rect=0,0 (\d+)x(\d+)/);
+check('maximized top-level grew past 640x480 (work-area resize)',
+  mt !== null && (+mt[1] > 640 || +mt[2] > 480), mt && `${mt[1]}x${mt[2]}`);
+if (mt) {
+  const MW = +mt[1], MH = +mt[2], mdw = MW - 480, mdh = MH - 360;
+  check('maximized: Quit rides the work-area bottom-right corner',
+    new RegExp(`class=BUTTON id=203 rect=${388 + mdw},${284 + mdh} 76x30`).test(maxtree),
+    maxtree.match(/class=BUTTON id=203 rect=[^ ]* 76x30/));
+  check('maximized: notes EDIT fills the work-area slack',
+    new RegExp(`class=EDIT id=102 rect=12,176 ${268 + mdw}x${96 + mdh}`).test(maxtree),
+    maxtree.match(/class=EDIT id=102 rect=[^ ]* \d+x\d+/));
+}
 
 /* teardown */
 check('Quit -> WM_DESTROY -> clean exit',
