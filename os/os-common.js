@@ -1782,6 +1782,110 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest) {
   return newest;
 }
 
+/* ---- package-input freshness (the 0082 idea, scoped to one package) ----
+ *
+ * newestPkgInput(fsMod, pathMod, rootDir, name, pkg, opts) -> { mtimeMs, path }
+ * mkpkg's twin of newestBakeInput: the newest mtime across everything that
+ * can change ONE package's payload bytes — the toolchain (compiler.js —
+ * buildProject/createCcDriver; this file — packageControl/listTreeFiles/
+ * seedEntries; tools/mkpkg.js — tar/control encoding), the definition, and
+ * each file entry's closure (project dirs through deps AND external
+ * sources/includes — projectExternalDirs, todos/0354 — plus `bin` blobs,
+ * os/-relative `c`/`text` assets, `tree` enumerations, and a native
+ * sibling's overlay manifest). Deliberately NARROW — the os/ tree at large
+ * is not an input, so unrelated OS work doesn't force a package recompile
+ * in the dev loop. Node-only (statSync), like newestBakeInput.
+ *
+ * opts (all optional):
+ *   pkgDir        — abs dir holding <name>.json (the definition file); a
+ *                   synthesized def has none and names its derivation
+ *                   inputs via extraInputs instead
+ *   extraInputs   — repo-relative paths statted as inputs
+ *   overlayPathFor— (producer) -> abs overlay.json path, or null; drives
+ *                   nativeApp/nativeFile freshness
+ *
+ * Extracted from tools/mkpkg.js (todos/0363) so the red control in
+ * tests/host/test_bakeinput_sources.js can point it at a synthetic tree —
+ * that test carries one leg per input class above plus the narrow-scope
+ * pin; a new entry kind added here needs a leg there. */
+function newestPkgInput(fsMod, pathMod, rootDir, name, pkg, opts) {
+  opts = opts || {};
+  var osDir = pathMod.join(rootDir, 'os');
+  var newest = { mtimeMs: 0, path: null };
+  var seenDirs = {}, seenProjects = {};
+  function statFile(p) {
+    var st;
+    try { st = fsMod.statSync(p); } catch (e) { return; }
+    if (st.isFile() && st.mtimeMs > newest.mtimeMs) { newest.mtimeMs = st.mtimeMs; newest.path = p; }
+  }
+  function walk(dir) {
+    var real;
+    try { real = fsMod.realpathSync(dir); } catch (e) { return; }
+    if (seenDirs[real]) return;
+    seenDirs[real] = true;
+    var ents;
+    try { ents = fsMod.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+    ents.forEach(function (e) {
+      if (e.name.charAt(0) === '.') return;
+      if (e.isDirectory()) walk(pathMod.join(dir, e.name));
+      else if (!/\.(img|md)$/.test(e.name)) statFile(pathMod.join(dir, e.name));
+    });
+  }
+  var normalize = normalizeRelPath;   // "a/b/../c" -> "a/c" (buildProject's rule)
+  function addProject(rel) {
+    var n = normalize(rel);
+    if (seenProjects[n]) return;
+    seenProjects[n] = true;
+    var dir = n.slice(0, n.lastIndexOf('/'));
+    walk(pathMod.join(rootDir, dir));
+    var proj;
+    try { proj = JSON.parse(fsMod.readFileSync(pathMod.join(rootDir, n), 'utf-8')); } catch (e) { return; }
+    (proj.deps || []).forEach(function (d) { addProject(dir + '/' + d); });
+    // Same hole as newestBakeInput's (todos/0354): a source/include reaching
+    // outside the project dir is an input `deps` recursion never sees. This
+    // does NOT widen the narrow scope above — no packaged project's external
+    // dirs reach the os/ tree at large (they are freetype/libpng/os/win32,
+    // all already walked as deps today).
+    projectExternalDirs(proj, dir).forEach(function (d) { walk(pathMod.join(rootDir, d)); });
+  }
+  statFile(pathMod.join(rootDir, 'compiler.js'));
+  statFile(pathMod.join(rootDir, 'tools', 'mkpkg.js'));
+  statFile(pathMod.join(rootDir, 'os', 'os-common.js'));
+  if (opts.pkgDir) statFile(pathMod.join(opts.pkgDir, name + '.json'));
+  // A synthesized -sources def has no packages/ file; its derivation inputs
+  // (the parent def / os/image.json) are named by the synthesis instead.
+  (opts.extraInputs || []).forEach(function (rel) { statFile(pathMod.join(rootDir, rel)); });
+  var files = pkg.files || {};
+  Object.keys(files).forEach(function (rel) {
+    var entry = files[rel];
+    if (entry.project !== undefined) addProject(entry.project);
+    if (entry.bin !== undefined) statFile(pathMod.join(rootDir, entry.bin));
+    if (entry.text !== undefined) statFile(pathMod.join(osDir, entry.text));
+    if (entry.c !== undefined) {
+      statFile(pathMod.join(osDir, entry.c));
+      (entry.hdrs || []).forEach(function (h) { statFile(pathMod.join(osDir, h)); });
+    }
+    // `tree` entries: the SAME enumeration that expands the payload drives
+    // the freshness scan (a changed source anywhere under the tree dir
+    // marks the package stale).
+    if (entry.tree !== undefined) {
+      var tfs;
+      try { tfs = listTreeFiles(fsMod, pathMod, rootDir, entry, rel); }
+      catch (e) { return; }   // malformed → fails loud in the build, not here
+      tfs.forEach(function (tf) { statFile(pathMod.join(rootDir, entry.tree, tf)); });
+    }
+    // A nativeApp/nativeFile payload's freshness is its producer's overlay
+    // manifest's mtime — re-publishing overlay.json (new sha256s)
+    // re-materializes the package.
+    if (entry.nativeApp !== undefined || entry.nativeFile !== undefined) {
+      var producer = nativeSiblingProducer(pkg.requires);
+      var op = (producer !== null && opts.overlayPathFor) ? opts.overlayPathFor(producer) : null;
+      if (op) statFile(op);
+    }
+  });
+  return newest;
+}
+
 /* Skeleton for a freshly formatted root (writable) volume: the structural
  * dirs every boot expects — /etc (user overrides only; EMPTY on a virgin
  * boot by design), /var/local/bin (the admin's PATH head), /tmp, /root,
@@ -2091,6 +2195,7 @@ var OS_COMMON = {
   normalizeRelPath: normalizeRelPath,
   projectExternalDirs: projectExternalDirs,
   newestBakeInput: newestBakeInput,
+  newestPkgInput: newestPkgInput,
   initRootVolume: initRootVolume,
   seedHostKeyScheme: seedHostKeyScheme,
   writeHostPlatform: writeHostPlatform,
