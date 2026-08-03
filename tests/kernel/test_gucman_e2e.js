@@ -462,6 +462,16 @@ async function main() {
   const faultSrv = require('child_process').spawn(
     process.execPath, [path.join(__dirname, 'lib', 'fault-repo.js')],
     { stdio: ['ignore', 'pipe', 'pipe'] });
+  // Kill it on EVERY exit path, the way lib/gucman.js registers its serve.js
+  // children — not just on the happy one below. main()'s .catch ends in
+  // process.exit, which runs no finally block, so a port-announcement
+  // timeout or a throw out of driveBoot would otherwise leave a listening
+  // node process behind. Nothing else would collect it either: the orphan
+  // reaper's kernel-suite pattern is `tests/kernel/<name>.js`
+  // (harness-leaks.js:113) and [\w.-] does not match the '/' in `lib/`, so
+  // this child is invisible to it. A squatted port poisons a LATER lane's
+  // run, which is the failure class this whole ticket is about.
+  process.on('exit', () => { try { faultSrv.kill(); } catch (e) {} });
   const fport = await new Promise((resolve, reject) => {
     let buf = '';
     const to = setTimeout(() => reject(new Error('fault-repo never announced a port: ' + buf)), 10000);
@@ -470,6 +480,9 @@ async function main() {
       const m = /port (\d+)/.exec(buf);
       if (m) { clearTimeout(to); resolve(parseInt(m[1], 10)); }
     });
+    // Without this, a spawn failure emits 'error' with no listener, which
+    // throws as an uncaught exception instead of failing the leg.
+    faultSrv.on('error', (e) => { clearTimeout(to); reject(new Error('fault-repo spawn failed: ' + e.message)); });
     faultSrv.on('exit', (c) => { clearTimeout(to); reject(new Error('fault-repo exited ' + c)); });
   });
   console.log(`[gucman] fault-injecting repo :${fport}`);

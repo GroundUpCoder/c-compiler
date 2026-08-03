@@ -55,6 +55,24 @@ function start() {
   srv.listen(0, '127.0.0.1', () => {
     process.stdout.write(`port ${srv.address().port}\n`);
   });
+
+  // Die with our parent, the same poll serve.js uses. The test file kills us
+  // from its own exit handler, but an exit handler does not run when that
+  // process is SIGKILLed — and the suite runner kills a timed-out test file
+  // exactly that way. A poll, not a handler, because a parent's death
+  // delivers no signal here. This is the layer that matters most for us:
+  // harness-leaks.js's orphan patterns anchor on `serve.js` or on
+  // `tests/kernel/<name>.js`, and neither matches `tests/kernel/lib/
+  // fault-repo.js`, so nothing external would ever reap this listener.
+  const initialPpid = process.ppid;
+  if (initialPpid > 1) {
+    const watch = setInterval(() => {
+      if (process.ppid === initialPpid) return;
+      clearInterval(watch);
+      process.exit(0);
+    }, 1000);
+    watch.unref();
+  }
 }
 
 module.exports = { SHORT_BODY, ROUTES };
