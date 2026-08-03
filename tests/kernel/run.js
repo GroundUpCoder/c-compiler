@@ -111,6 +111,7 @@ const tests = [
   ['test_os_apps_e2e.js', IMG],  // 0015: seeded vendor apps windowed in-OS — bin-entry game data, real frames via wmctl shot
   ['test_sameboy_e2e.js', IMG],  // 0075: /bin/sameboy (cycle-accurate GB/GBC core) — exact DMG grey shades, animation, CGB colorful frame, sameboy is the baked .gb/.gbc default
   ['test_mgba_e2e.js', IMG],     // 0112: /bin/mgba (mGBA 0.10.5 GBA core — ARM7TDMI, HLE BIOS) — built-in MODE3 test ROM renders a red frame at 480x320, .gba defaults to mgba, .gb/.gbc stay sameboy
+  ['test_punes_e2e.js', IMG, { timeoutMs: 900000 }], // 0088 + 0213 (registered by #167): /bin/punes (puNES NES/Famicom core — 6502/2C02/2A03) — built-in NROM test ROM composites a solid palette-$21 blue frame at 512x480, .nes defaults to punes, and the D-pad regression guard (held Up must tint the backdrop green — the SOCD filter used to erase it). Shape sibling is test_mgba_e2e.js, but this file drives THREE boots whose own driveBoot deadlines already sum to 660s, past the 600s suite default — hence 900s, sized like test_heavylock_e2e.js's four-boot row
   ['test_cairo_e2e.js', IMG],    // 0061: cairo image backend -> shm — in-OS selftest (gradients/AA/cairo-ft anchors), windowed scene via wmctl shot, theme repaint, vector re-render on resize
   ['test_gdi32_e2e.js', IMG],    // 0057: win32 gdi32 — in-OS selftest (GDI semantics + leak check), windowed scene probed via wmctl shot, bit-exact repaints
   ['test_multiface_font_e2e.js', IMG], // C1/#281: multi-face CreateFont — NULL-face default byte-identical to mono (no flag day), proportional sans/serif metrics, real bold/italic files preferred (sans italic advances shift) vs synthetic shear (mono/serif italic advances preserved), drawn underline/strikeout rules, the Win32 name mapper, /etc per-face override, per-face ramp shots
@@ -210,13 +211,12 @@ const MEMBER_RE = /^test_.*\.js$/;
 // registering the file, and the entry MUST come out in the same change that
 // registers it — assertMemberRegistry fails on an entry whose file is gone or
 // has become a declared member, so an entry cannot outlive its reason.
-const EXCLUDED = [
-  // Never registered since d8701a1e (found by todos/0387 counting the suite);
-  // cc ticket #167 (legacy id todos/0396) owns registering it and
-  // root-causing the EXPECTED first red — never delete the file, never let
-  // this entry survive #167's registration.
-  { file: 'test_punes_e2e.js', owner: '#167 (legacy todos/0396)' },
-];
+// EMPTY, and that is the point: #167 registered the one entry that used to
+// live here (test_punes_e2e.js, orphaned since d8701a1e), so the on-disk set
+// and the declared set are now equal with nothing carved out. Keep it empty
+// unless a file genuinely cannot be a member — an entry here is a coverage
+// hole with a name, not a way to quiet the guard.
+const EXCLUDED = [];
 
 const defaults = {
   // Boot-heavy files are compile-dominated; a few concurrent full-OS boots keep
