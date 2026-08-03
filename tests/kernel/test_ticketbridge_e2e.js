@@ -62,14 +62,20 @@ function check(name, cond, extra) {
 // dir for process-lifetime cleanup (normal exit, uncaught throw, SIGINT/
 // SIGTERM) AND pid-tags the name so tests/lib/harness-leaks.js's startup
 // reaper can collect it after a SIGKILL, which runs no handler by definition.
-// The `os-` prefix is load-bearing for that second half — the reaper's
-// TEMP_DIR_RE is /^os-.*-(\d+)-[A-Za-z0-9]{6}$/, so a `kernel-`-prefixed dir
-// is tracked but never reaped.
+// The `os-` prefix earns PROMPT, PID-AWARE reaping: the reaper's TEMP_DIR_RE
+// is /^os-.*-(\d+)-[A-Za-z0-9]{6}$/, and a name that does not match is
+// classified UNTAGGED and reaped on an age cutoff instead — 2h,
+// harness-leaks.js's `if (!m)` branch. So a `kernel-`-prefixed dir is not
+// invisible to the reaper, just collected late and by age rather than by
+// owner liveness. (Stated precisely because the first version of this comment
+// claimed "never reaped", which is exactly the kind of true-sounding-but-wrong
+// note the liability register exists to catch.)
 const tmp = mkdtempOwned('os-ticketbridge-');
 const fakeBin = path.join(tmp, 'fakebin');
 fs.mkdirSync(fakeBin);
 const handlerPath = path.join(fakeBin, 'file-gucos-ticket');
 const capturePath = path.join(tmp, 'capture.json');
+const kidPidPath = path.join(tmp, 'kidpid');   // the sleep handler's grandchild
 const CANNED = '{"ok":true,"ref":"guc#42"}';
 
 // The bridge child's PATH is THIS DIRECTORY AND NOTHING ELSE — the
@@ -102,10 +108,16 @@ function setHandler(mode) {
   // and letting a plain child.kill() look sufficient. (macOS /bin/sh does not
   // exec-optimize even without it — verified — but dash and others do, so the
   // leg must not depend on which shell /bin/sh happens to be.)
+  // The `sleep` handler publishes its GRANDCHILD's pid to $FGT_KIDPID so A5
+  // can assert that pid is gone afterwards (review #2). Backgrounding it and
+  // `wait`ing is what makes the grandchild addressable: `$!` is its pid, and
+  // the shell stays alive as the group leader meanwhile. Killing only the
+  // shell orphans that pid; killing the GROUP takes it too — which is the
+  // difference A5 must be able to see.
   const bodies = {
     ok: `#!/bin/sh\n/bin/cat > "$FGT_CAPTURE"\nprintf '%s' '${CANNED}'\n`,
     fail: `#!/bin/sh\n/bin/cat > "$FGT_CAPTURE"\nprintf '%s' '{"ok":false,"error":"refused by policy"}'\nexit 3\n`,
-    sleep: `#!/bin/sh\n/bin/cat > /dev/null\n/bin/sleep 10\necho never-reached\n`,
+    sleep: `#!/bin/sh\n/bin/cat > /dev/null\n/bin/sleep 10 &\necho $! > "$FGT_KIDPID"\nwait\n`,
   };
   if (mode === 'absent') { fs.rmSync(handlerPath, { force: true }); return; }
   fs.writeFileSync(handlerPath, bodies[mode], { mode: 0o755 });
@@ -116,6 +128,15 @@ function readCapture() {
   catch (e) { return null; }
 }
 function resetCapture() { fs.rmSync(capturePath, { force: true }); }
+
+// Is `pid` still a live (or unreaped) process? ESRCH is the only "gone"
+// answer; EPERM would mean it exists but is not ours, which cannot happen for
+// a process this test's own bridge spawned.
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (e) { return e.code !== 'ESRCH'; }
+}
+const naptick = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---- servers ----
 // process.execPath, not 'node': the ticket bridge is launched with a
@@ -215,7 +236,7 @@ async function runClient(cfg) {
   // ok/fail handlers answer in milliseconds, far inside it.
   const ticketProc = await spawnBridge(TICKET_BRIDGE, 'ticket-bridge', ticketPort,
     ['--handler-timeout=' + HANDLER_TIMEOUT_MS],
-    { PATH: HANDLER_PATH_ENV, FGT_CAPTURE: capturePath });
+    { PATH: HANDLER_PATH_ENV, FGT_CAPTURE: capturePath, FGT_KIDPID: kidPidPath });
   const netPort = await freePort();
   const netBase = 'http://127.0.0.1:' + netPort;
   const netProc = await spawnBridge(NET_BRIDGE, 'net-bridge', netPort);
@@ -322,6 +343,7 @@ async function runClient(cfg) {
   // fake handler sleeps 10s, so the bound below separates the two by ~3x in
   // both directions: enforced ≈ 1.5s + boot, unenforced ≈ 10s+.
   setHandler('sleep');
+  fs.rmSync(kidPidPath, { force: true });
   r = await runClient({
     etcTicket: 'url ' + ticketBase + '\n',
     argv: ['--title', 'sleeper'],
@@ -333,6 +355,38 @@ async function runClient(cfg) {
       + 'inside the handler\'s 10s sleep',
     r.ms < 5000, r.ms + 'ms (cap ' + HANDLER_TIMEOUT_MS + 'ms; >=5000 means the '
       + 'response waited on the orphaned grandchild, i.e. no wall-clock cap)');
+
+  // A5b — THE TREE KILL, asserted separately from the cap (review #2 of the
+  // delta pass). The fix gave the product TWO independent mechanisms: kill the
+  // handler's process group, AND answer at the deadline while destroying the
+  // pipes. The latency check above only exercises the second: with the group
+  // kill regressed to a plain child.kill(), the bridge still answers at ~1.5s
+  // because it no longer waits on the pipes at all — so every other A5
+  // assertion stays green while a live orphan keeps running. That orphan is
+  // what the "boring under process-spawn abuse" requirement is about, so it
+  // needs its own observable.
+  //
+  // Addressed by exact PID, not a pgrep pattern: a pattern would match any
+  // unrelated `/bin/sleep 10` on the machine (another lane, a stray probe),
+  // which is both a false-failure and a false-pass risk. Polling to a bound
+  // rather than napping a fixed interval: a killed pid disappears in
+  // milliseconds, and the regressed case runs out the full clock and fails
+  // LOUDLY with the surviving pid named.
+  let kidPid = 0;
+  try { kidPid = parseInt(fs.readFileSync(kidPidPath, 'utf8').trim(), 10); } catch (e) {}
+  check('A5b the sleep handler really published its grandchild pid (the '
+      + 'assertion below is only meaningful if this did)',
+    Number.isInteger(kidPid) && kidPid > 0, JSON.stringify(kidPid));
+  let kidGone = false;
+  for (let i = 0; i < 200 && kidPid > 0; i++) {          // <= 2s
+    if (!pidAlive(kidPid)) { kidGone = true; break; }
+    await naptick(10);
+  }
+  check('A5b the handler\'s PROCESS TREE was killed, not just the process the '
+      + 'bridge spawned (the orphan that would hold an inflight slot)',
+    kidGone, 'grandchild pid ' + kidPid + ' still alive 2s after the timeout — '
+      + 'the group kill regressed to a single-process kill; the deadline still '
+      + 'answers on time, so ONLY this check can see it');
 
   // A6: bridge UNREACHABLE — nothing listening at the configured url;
   // prompt (connect refusal, not a burned headers deadline).
