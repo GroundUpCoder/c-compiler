@@ -87,7 +87,9 @@ async function main() {
     `echo http://127.0.0.1:${port} > /etc/gucman/repos`,
     'gucman install libc-sources 2>&1; echo RC=$?',
     'readlink /usr/local/src/libc',
-    'find /usr/local/src/libc/ -type f | wc -l',
+    // Count at the payload ROOT (busybox find does not traverse a symlink
+    // argument), .c/.h only so a control sidecar can never skew it.
+    "find /opt/libc-sources -name '*.c' -o -name '*.h' | wc -l",
     'sha256sum /usr/local/src/libc/__stdio.c /usr/local/src/libc/regcomp.c /usr/local/src/libc/fnmatch.c /usr/local/src/libc/stdio.h',
     'echo ==done',
   ];
