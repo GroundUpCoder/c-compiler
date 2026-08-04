@@ -73,6 +73,14 @@ const ctx = {
 };
 const frames = [];   // every hooks.surfaceFrame(sid, bmp) landing
 let nextSid = 1;
+// #484 (producer-side present clamp): presentTo ships at most one frame per
+// vsync tick per sid, so this test advertises a FAKE tick counter and bumps
+// it before every present it expects to ship synchronously — the clamp's
+// contract ("a fresh tick ships immediately") keeps every binding assertion
+// below exactly as strong as pre-clamp. Clamp semantics themselves are
+// test_gpu_present_clamp.js's subject, not this file's.
+let vsyncTick = 1;
+const tickAdvance = function () { vsyncTick++; };
 const hooks = {
   wmSabLayout: WM_SAB_LAYOUT,
   surfaceCreate: function (w, h, title, sab, ringSab, kFlags) { return { sid: nextSid++ }; },
@@ -80,6 +88,8 @@ const hooks = {
     frames.push({ sid: sid, canvasId: bmp.canvasId, w: bmp.width, h: bmp.height });
   },
   surfaceDestroy: function () {},
+  vsyncEnabled: function () { return true; },
+  vsyncSeq: function () { return vsyncTick; },
 };
 
 (async function main() {
@@ -119,6 +129,7 @@ const hooks = {
   wenv.__wgpu_surface_configure(s2, captured.device, 0, 0x10, 32, 24, 0, 0, 0, 0);
 
   frames.length = 0;
+  tickAdvance();
   wenv.__wgpu_surface_present(s1);
   check('window 1 present lands on sid 1 even though window 2 was created after',
     frames.length === 1 && frames[0].sid === 1, JSON.stringify(frames));
@@ -131,10 +142,14 @@ const hooks = {
     frames.length === 2 && frames[0].canvasId !== frames[1].canvasId, JSON.stringify(frames));
   check('window 2 canvas is its own size', frames.length === 2 && frames[1].w === 32 && frames[1].h === 24);
 
-  // interleaved presents keep their bindings
+  // interleaved presents keep their bindings (one tick per present: the
+  // second s2 present is same-sid and must not be clamp-held)
   frames.length = 0;
+  tickAdvance();
   wenv.__wgpu_surface_present(s2);
+  tickAdvance();
   wenv.__wgpu_surface_present(s1);
+  tickAdvance();
   wenv.__wgpu_surface_present(s2);
   check('interleaved presents never cross sids',
     frames.length === 3 && frames[0].sid === 2 && frames[1].sid === 1 && frames[2].sid === 2,
@@ -143,6 +158,7 @@ const hooks = {
   // destroy window 1: only ITS canvas/binding is torn down
   env.__sdl_destroy_window(h1);
   frames.length = 0;
+  tickAdvance();
   wenv.__wgpu_surface_present(s1);
   check('present to a destroyed window drops (no frame, no throw)', frames.length === 0);
   wenv.__wgpu_surface_present(s2);
@@ -155,6 +171,7 @@ const hooks = {
   check('legacy handle-less surface still creates', sLeg !== 0);
   wenv.__wgpu_surface_configure(sLeg, captured.device, 0, 0x10, 32, 24, 0, 0, 0, 0);
   frames.length = 0;
+  tickAdvance();
   wenv.__wgpu_surface_present(sLeg);
   check('legacy surface keeps the last-created-window tail',
     frames.length === 1 && frames[0].sid === 2, JSON.stringify(frames));

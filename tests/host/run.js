@@ -26,6 +26,7 @@ var tests = [
   ['test_stream_bulk.js', []],           // stdin/pipe ByteQueue: MB-scale byte-exact passthrough (CD28)
   ['test_singlefile_emit.js', []],       // .js/.html emit cuts host.js at @cc-strip-below; missing sentinel fails loud (CD15)
   ['test_gpu_present_binding.js', []],   // per-window GPU present tail: canvasBySid + bind-at-GetWGPUSurface (A4)
+  ['test_gpu_present_clamp.js', []],     // #484: producer-side present backpressure — one ship per vsync tick, held-frame flush at pump/park
   ['test_harness_leaks.js', []],         // the startup reaper's "never delete a LIVE run's fixture/server" contract
   ['test_tree_guard.js', []],            // the cross-tree preflight REFUSES a foreign-cwd launch (0341) — the positive control, run every time
   ['test_pp_spread_bounds.js', []],      // no unbounded call-argument spread survives in compiler.js (0320)
