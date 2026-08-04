@@ -78,6 +78,14 @@ whatever the program did. When a fix can live either in "tell users to write
 better programs" (docs, examples) or in the platform (clamp, diagnose,
 contain), prefer the platform.
 
+**API honesty** (jku, 2026-08-04): *better to not implement at all, or ship
+a clearly custom API, than to incorrectly implement or lie with a standard
+API's name.* An absent symbol fails loud at link time; a subtly-divergent
+implementation under a standard name silently poisons ports, tests, and
+dogfooding. Scoped-but-honest subsets are fine when the boundary is explicit
+(SDL_ttf's classic API without `TTF_Text`; the VLA "real or absent, never
+faked" ruling is prior art).
+
 ## Non-goals
 
 - **Not an emulator.** tinyemu booting Linux is a compiler stress test, not the
