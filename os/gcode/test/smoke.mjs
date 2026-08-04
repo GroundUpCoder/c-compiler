@@ -883,6 +883,56 @@ async function main() {
     }
   }
 
+  // ---- #509: ^C mid-bash — honest survivor-edge report ----------------
+  // kill -INT at gcode ALONE (the #412(c) survivor edge — a tty ^C would
+  // signal the whole fg pgroup): gcode SIGKILLs the direct sh, whose own
+  // child (sleep 30) survives the kill. The tool_result must state what
+  // actually happened — the interrupt, the shell kill, and that spawned
+  // processes may still be running — and never claim the whole command
+  // was killed. Instrument: the persisted session log; #412 deliberately
+  // sends no tool_results POST after a ^C.
+  {
+    const marker = path.join(os.tmpdir(), `g509-${process.pid}.started`);
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'g509-state-'));
+    fs.rmSync(marker, { force: true });
+    const srv = await startServer([
+      toolUseResponse('interrupting.', 'toolu_509', 'bash',
+        { command: `touch ${marker}; sleep 30` }),
+    ]);
+    const t0 = Date.now();
+    const child = spawn(bin, ['-p', 'interrupt me', '--no-color'], {
+      env: { ...process.env, ANTHROPIC_BASE_URL: srv.url, ANTHROPIC_API_KEY: 'test',
+             ASAN_OPTIONS: 'detect_leaks=0', GCODE_STATE_DIR: stateDir },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '', err = '';
+    child.stdout.on('data', (c) => (out += c));
+    child.stderr.on('data', (c) => (err += c));
+    while (!fs.existsSync(marker) && Date.now() - t0 < 10000)
+      await new Promise((r) => setTimeout(r, 50));
+    check(fs.existsSync(marker), '#509: bash tool is running (marker file exists)');
+    child.kill('SIGINT');   // gcode alone — the survivor edge
+    const code = await new Promise((resolve, reject) => {
+      const t = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('#509 leg timed out')); }, 20000);
+      child.on('exit', (c) => { clearTimeout(t); resolve(c); });
+    });
+    srv.close();
+    check(Date.now() - t0 < 15000, '#509: returned promptly (sh killed, sleep not drained)');
+    check(code === 0, `#509: interrupted run exits 0 (got ${code})`);
+    const sessDir = path.join(stateDir, 'sessions');
+    const log = fs.readdirSync(sessDir)
+      .map((f) => fs.readFileSync(path.join(sessDir, f), 'utf8')).join('');
+    const line = log.split('\n')
+      .find((l) => l.includes('toolu_509') && l.includes('tool_result')) || '';
+    check(line.includes('interrupted by user (^C)'), '#509: tool_result names the interrupt');
+    check(line.includes('shell killed') && line.includes('may still be running'),
+      '#509: tool_result reports the sh kill honestly (shell killed + may-survive caveat)');
+    check(!line.includes('[command killed:'),
+      '#509: tool_result never claims a completed kill of the whole command');
+    fs.rmSync(stateDir, { recursive: true, force: true });
+    fs.rmSync(marker, { force: true });
+  }
+
   console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILURE(S)`);
   process.exit(failures === 0 ? 0 : 1);
 }
