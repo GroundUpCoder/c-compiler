@@ -21736,6 +21736,10 @@ enum {
 
 /* SDL button mask helper (SDL_mouse.h): SDL_BUTTON_MASK(b) == 1u << (b-1). */
 #define SDL_BUTTON_MASK(X) (1u << ((X) - 1))
+#define SDL_BUTTON_LMASK SDL_BUTTON_MASK(SDL_BUTTON_LEFT)
+#define SDL_BUTTON_MMASK SDL_BUTTON_MASK(SDL_BUTTON_MIDDLE)
+#define SDL_BUTTON_RMASK SDL_BUTTON_MASK(SDL_BUTTON_RIGHT)
+typedef Uint32 SDL_MouseButtonFlags;
 
 /* SDL3 audio format constants (SDL_AUDIO_*). Values are unchanged from SDL2. */
 typedef int SDL_AudioFormat;
@@ -21792,6 +21796,18 @@ void SDL_DestroyWindow(SDL_Window *window);
 void SDL_Quit(void);
 void SDL_Delay(Uint32 ms);
 Uint64 SDL_GetTicks(void);
+/* Input state snapshots (SDL_keyboard.h / SDL_mouse.h; #493) — the idiomatic
+   per-frame game read. Updated as events are pumped (single keyboard/mouse in
+   this runtime); the keyboard array is SDL_SCANCODE_COUNT entries, valid for
+   the whole app lifetime. SDL_GetGlobalMouseState is declared but always
+   FAILS (0 mask, 0,0, SDL error set): a gucOS process only sees pointer
+   events routed to its own windows, so desktop-global cursor position is not
+   knowable here — per the API-honesty rule it fails loud instead of lying
+   with window-relative coordinates. */
+const bool *SDL_GetKeyboardState(int *numkeys);
+SDL_Keymod SDL_GetModState(void);
+SDL_MouseButtonFlags SDL_GetMouseState(float *x, float *y);
+SDL_MouseButtonFlags SDL_GetGlobalMouseState(float *x, float *y);
 bool SDL_SetWindowTitle(SDL_Window *window, const char *title);
 bool SDL_SetWindowRelativeMouseMode(SDL_Window *window, bool enabled);
 bool SDL_GetWindowRelativeMouseMode(SDL_Window *window);
@@ -26664,6 +26680,15 @@ static Uint64 __sdl_now_ns(void) { return (Uint64)(__sdl_get_ticks() * 1000000.0
 /* Tracked to derive xrel/yrel, the wheel's mouse_x/y, and the click count. */
 static float __sdl_mx = 0, __sdl_my = 0;
 static bool __sdl_have_mpos = 0;
+/* ---- Input state snapshots (#493) ----
+   Backs SDL_GetKeyboardState / SDL_GetModState / SDL_GetMouseState. Updated
+   where the host-pumped events are synthesised (the __sdl_push_* exports) —
+   this runtime's equivalent of SDL3's "updated by SDL_PumpEvents". The motion
+   push latches the host's full button mask, so a release delivered outside
+   our windows self-heals on the next motion event. */
+static bool __sdl_key_state[SDL_SCANCODE_COUNT];
+static SDL_Keymod __sdl_mod_state = 0;
+static SDL_MouseButtonFlags __sdl_mouse_button_state = 0;
 static Uint64 __sdl_last_click_ns = 0;
 static int __sdl_last_click_btn = 0;
 static float __sdl_last_click_x = 0, __sdl_last_click_y = 0;
@@ -26732,6 +26757,9 @@ void __sdl_push_window_event(int window_id, int type, int data1, int data2) {
 __export __sdl_push_window_event = __sdl_push_window_event;
 
 void __sdl_push_key_event(int window_id, int type, int scancode, int sym, int mod, int repeat) {
+    if (scancode >= 0 && scancode < SDL_SCANCODE_COUNT)
+        __sdl_key_state[scancode] = (type == SDL_EVENT_KEY_DOWN);
+    __sdl_mod_state = (SDL_Keymod)mod;
     __SDL_EventEntry *e = __sdl_eq_alloc();
     memset(&e->event, 0, sizeof(SDL_Event));
     e->event.type = (Uint32)type;
@@ -26779,6 +26807,10 @@ void __sdl_push_mouse_button_event(int window_id, int type, int button, double x
     e->event.button.x = (float)x;
     e->event.button.y = (float)y;
     __sdl_mx = (float)x; __sdl_my = (float)y; __sdl_have_mpos = 1;
+    if (button >= 1 && button <= 32) {
+        if (down) __sdl_mouse_button_state |= SDL_BUTTON_MASK(button);
+        else      __sdl_mouse_button_state &= ~SDL_BUTTON_MASK(button);
+    }
     __sdl_eq_push(e);
 }
 __export __sdl_push_mouse_button_event = __sdl_push_mouse_button_event;
@@ -26790,6 +26822,7 @@ void __sdl_push_mouse_motion_event(int window_id, double x, double y, int state)
     float xrel = 0, yrel = 0;
     if (__sdl_have_mpos) { xrel = fx - __sdl_mx; yrel = fy - __sdl_my; }
     __sdl_mx = fx; __sdl_my = fy; __sdl_have_mpos = 1;
+    __sdl_mouse_button_state = (SDL_MouseButtonFlags)state;
     e->event.type = SDL_EVENT_MOUSE_MOTION;
     e->event.motion.timestamp = __sdl_now_ns();
     e->event.motion.windowID = (SDL_WindowID)window_id;
@@ -27042,6 +27075,37 @@ Uint64 SDL_GetTicks(void) {
     /* f64 ms since SDL_Init → Uint64. Value is a non-negative integer well below
        2^53, so the double→long long→Uint64 path is exact (no 32-bit wrap). */
     return (Uint64)(long long)__sdl_get_ticks();
+}
+
+/* ---- Input state snapshots (#493) ---- */
+
+const bool *SDL_GetKeyboardState(int *numkeys) {
+    if (numkeys) *numkeys = SDL_SCANCODE_COUNT;
+    return __sdl_key_state;
+}
+
+SDL_Keymod SDL_GetModState(void) {
+    return __sdl_mod_state;
+}
+
+SDL_MouseButtonFlags SDL_GetMouseState(float *x, float *y) {
+    if (x) *x = __sdl_mx;
+    if (y) *y = __sdl_my;
+    return __sdl_mouse_button_state;
+}
+
+SDL_MouseButtonFlags SDL_GetGlobalMouseState(float *x, float *y) {
+    /* Desktop-global cursor position is not knowable from a gucOS process (it
+       only sees pointer events routed to its own windows, in client coords),
+       so this fails loud per the header note instead of lying with
+       window-relative values. */
+    if (x) *x = 0;
+    if (y) *y = 0;
+    SDL_SetError(
+        "SDL_GetGlobalMouseState: global mouse position is not available in this "
+        "runtime (a process only sees pointer events routed to its own windows); "
+        "use SDL_GetMouseState for window-relative position");
+    return 0;
 }
 
 /* ---- Clipboard (todos/0090) ----
