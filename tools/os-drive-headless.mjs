@@ -20,6 +20,9 @@
 //                     throwaway image in an owned tmpdir, removed at exit.
 //   --keep-image      keep the throwaway image dir and print its path
 //   --timeout=MS      default run() timeout (default 20000)
+//   --ready-timeout=MS  first-prompt deadline (default 300000 — a cold image
+//                     installs a fixture in seconds but a stale/missing one
+//                     BAKES from source, which can take minutes)
 //   --under-load[=N]  spawn N busy-loop generators (default: one per core)
 //   --boot=ARG        extra boot.js flag, repeatable (e.g. --boot=--screen=800x500)
 //
@@ -408,7 +411,8 @@ export function loadStop() {
 /* ---- CLI ---- */
 async function main() {
   const argv = process.argv.slice(2);
-  let image = null, keepImage = false, underLoad = 0, runTimeout = 20000, script = null;
+  let image = null, keepImage = false, underLoad = 0, runTimeout = 20000,
+      readyTimeout = 300000, script = null;
   const bootArgs = [], scriptArgs = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -418,6 +422,7 @@ async function main() {
     else if (a === '--under-load') underLoad = -1;
     else if (a.startsWith('--under-load=')) underLoad = parseInt(a.slice(13), 10);
     else if (a.startsWith('--timeout=')) runTimeout = parseInt(a.slice(10), 10);
+    else if (a.startsWith('--ready-timeout=')) readyTimeout = parseInt(a.slice(16), 10);
     else if (a.startsWith('--boot=')) bootArgs.push(a.slice(7));
     else if (a.startsWith('--') && !script) {
       console.error(`os-drive-headless: unknown option ${a} (boot.js flags go via --boot= or after --)`);
@@ -432,7 +437,7 @@ async function main() {
   let drive;
   try {
     drive = await openHeadlessSession({
-      image, keepImage, bootArgs, runTimeout,
+      image, keepImage, bootArgs, runTimeout, readyTimeout,
       echoOutput: !script,           // REPL streams the tty live; scripts read deltas
     });
   } catch (e) {
