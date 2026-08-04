@@ -44,6 +44,34 @@ agents as by humans, at every layer, without a separate automation bolt-on:
   management (overlapping windows, decorations, taskbar) — which is also a
   good agent target: discrete widgets, deterministic layout.
 
+**Dev-experience first: a buggy program must never take down the platform**
+(jku, 2026-08-04). gucOS is a place people (and agents) write and run their own
+C programs, so the platform is judged by what happens when those programs are
+wrong. The motivating incident: a textbook-legal SDL3 render loop with no
+`SDL_Delay` presented at ~2,100 fps, never drained its input ring (unclosable
+window), and flooded the browser GPU frame transport until the whole tab died.
+The program was naive; the crash was ours. The platform's answer to userland
+misbehavior, in order of preference:
+
+1. **Absorb** — make the pathological pattern harmless by construction, at the
+   seam the resource crosses (e.g. backpressure/coalescing on the present
+   transport: mailbox semantics already say "newest frame wins", so enforce it
+   at the *producer* where the queue cannot grow). If a legal program can
+   exhaust a platform resource, that is a missing clamp, not a user error.
+2. **Surface** — when a program is doing something legal but self-harming,
+   make it observable: kernel-side per-process diagnostics (present rate,
+   undrained input ring, ring drops) that a human or agent can read, and a
+   visible warning path rather than silence.
+3. **Contain** — when a program is genuinely unresponsive (e.g. ignores a
+   close request because it never pumps events), the kernel force-quits THAT
+   process with a legible reason ("not responding"), Windows-style — never
+   lets one process wedge or crash the OS itself.
+
+A tab/compositor crash caused by userland behavior is always a platform bug,
+whatever the program did. When a fix can live either in "tell users to write
+better programs" (docs, examples) or in the platform (clamp, diagnose,
+contain), prefer the platform.
+
 ## Non-goals
 
 - **Not an emulator.** tinyemu booting Linux is a compiler stress test, not the
