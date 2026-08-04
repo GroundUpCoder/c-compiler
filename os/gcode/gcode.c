@@ -17,6 +17,7 @@
  *   ANTHROPIC_API_KEY    -> x-api-key
  *   ANTHROPIC_AUTH_TOKEN -> Authorization: Bearer (takes precedence)
  *   ANTHROPIC_MODEL      default claude-opus-4-8
+ *   GCODE_BASH_SECS      bash-tool wall-time cap (default CAP_BASH_SECS)
  * Flags: -p PROMPT (one-shot), --model, --system-prompt, --max-turns (opt-in
  *   turn cap; default unlimited, #353), --max-tokens, --resume, --continue,
  *   --no-persist, --verbose, --no-color.
@@ -43,6 +44,19 @@
 #define CAP_LIST_ENTRIES 500
 #define CAP_WHOLE_FILE   (4 * 1024 * 1024)
 #define MAX_BLOCKS       64
+
+/* #503: the bash cap, env-overridable (GCODE_BASH_SECS, positive seconds)
+ * so the timeout path is testable in seconds instead of minutes — the SAME
+ * code path as the default, only the constant moves. */
+static int bash_cap_secs(void) {
+    static int v;
+    if (!v) {
+        const char *s = getenv("GCODE_BASH_SECS");
+        long n = s ? atol(s) : 0;
+        v = (n > 0 && n <= 86400) ? (int)n : CAP_BASH_SECS;
+    }
+    return v;
+}
 
 /* ---- growable byte buffer --------------------------------------------- */
 typedef struct { char *p; size_t len, cap; } sb;
@@ -428,7 +442,8 @@ static ssize_t getline(char **buf, size_t *cap, FILE *f) {
 
 /* Timeout: setitimer(ITIMER_REAL)+SIGALRM (todos/0044). The parked pipe
  * read EINTRs when the signal lands (kernel krpc-intr); we SIGKILL the
- * child and keep draining to EOF. */
+ * child and STOP READING (#503 — draining to EOF after the kill made the
+ * cap unbounded, see the loop-top check). */
 static volatile int g_bash_alarm;
 static void bash_on_alarm(int sig) { (void)sig; g_bash_alarm = 1; }
 
@@ -458,15 +473,27 @@ static char *run_command(const char *cmd, int *exit_code) {
     signal(SIGALRM, bash_on_alarm);
     struct itimerval itv;
     itv.it_interval.tv_sec = 0; itv.it_interval.tv_usec = 0;
-    itv.it_value.tv_sec = CAP_BASH_SECS; itv.it_value.tv_usec = 0;
+    itv.it_value.tv_sec = bash_cap_secs(); itv.it_value.tv_usec = 0;
     setitimer(ITIMER_REAL, &itv, 0);
     for (;;) {
         char buf[4096];
+        /* #503: the cap check lives at the TOP of the loop, not only in
+         * the EINTR branch. Two failure modes of the old shape, both
+         * measured (#488 Pass B): (a) kill-then-keep-draining hostaged
+         * the cap to any pipe-holding descendant — `sleep 200` ran 203s,
+         * `sleep 300 &` never returned (the alarm is one-shot, nothing
+         * fired again); (b) a chatty child whose reads keep succeeding
+         * never EINTRs, so an EINTR-only check never ran at all. Kill AND
+         * STOP READING, exactly the #412(c) rule below. Gap-free by the
+         * cooperative-signal rule (the wm.c flag-then-park precedent):
+         * handlers run only at import returns, and there is no import
+         * between this check and the read. */
+        if (g_bash_alarm && !timedout) { kill(pid, SIGKILL); timedout = 1; break; }
         ssize_t n = read(pfd[0], buf, sizeof buf);
         if (n == 0) break;                   /* EOF: child (tree) is done */
         if (n < 0) {
             if (errno == EINTR) {
-                if (g_bash_alarm && !timedout) { kill(pid, SIGKILL); timedout = 1; }
+                /* Alarm EINTR: handled by the loop-top check. */
                 /* #412(c): ^C. The fg-pgroup SIGINT normally kills the
                  * child too (EOF follows at once); this closes the
                  * survivor edge — a child that traps/ignores SIGINT, or a
@@ -479,7 +506,7 @@ static char *run_command(const char *cmd, int *exit_code) {
                  * drained by earlier reads, and waitpid on the SIGKILLed
                  * sh cannot block. */
                 if (g_interrupted && !intkilled) { kill(pid, SIGKILL); intkilled = 1; break; }
-                continue;                    /* drain to EOF after the kill */
+                continue;                    /* re-check the cap at loop top */
             }
             break;
         }
@@ -499,7 +526,15 @@ static char *run_command(const char *cmd, int *exit_code) {
     waitpid(pid, &status, 0);
     if (timedout) {
         *exit_code = -1;
-        sb_puts(&out, "\n[command killed: exceeded 120s timeout]");
+        /* #503: say what actually happened — the shell got SIGKILL, but a
+         * process it spawned may survive (hush runs commands as its own
+         * children; they inherit nothing from our kill). Never claim the
+         * whole command was killed: a model told an rm -rf died will
+         * re-run it concurrently with the survivor. */
+        char m[128];
+        snprintf(m, sizeof m, "\n[command timed out after %ds: shell killed;"
+                 " processes it spawned may still be running]", bash_cap_secs());
+        sb_puts(&out, m);
     } else {
         *exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
         if (intkilled) sb_puts(&out, "\n[command killed: interrupted by user (^C)]");
@@ -532,7 +567,7 @@ static char *run_command(const char *cmd, int *exit_code) {
     close(pfd[1]);
     sb out = {0};
     int truncated = 0, intkilled = 0;
-    time_t deadline = time(NULL) + CAP_BASH_SECS;
+    time_t deadline = time(NULL) + bash_cap_secs();
     for (;;) {
         struct pollfd pf = { pfd[0], POLLIN, 0 };
         int remain = (int)(deadline - time(NULL));
@@ -546,7 +581,8 @@ static char *run_command(const char *cmd, int *exit_code) {
             if (g_interrupted && !intkilled) { kill(pid, SIGKILL); intkilled = 1; break; }
             continue;
         }
-        if (r == 0 && time(NULL) >= deadline) {  /* timeout: kill the group */
+        if (r == 0 && time(NULL) >= deadline) {  /* timeout: kill the direct
+            sh and stop reading — its descendants may survive (#503) */
             kill(pid, SIGKILL);
             *exit_code = -1;
             break;
@@ -570,9 +606,14 @@ static char *run_command(const char *cmd, int *exit_code) {
     waitpid(pid, &status, 0);
     if (*exit_code != -1)
         *exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
-    if (*exit_code == -1)
-        sb_puts(&out, "\n[command killed: exceeded 120s timeout]");
-    else {
+    if (*exit_code == -1) {
+        /* #503: same honesty as the gucOS path — the sh got SIGKILL,
+         * descendants may survive; never claim the command was killed. */
+        char m[128];
+        snprintf(m, sizeof m, "\n[command timed out after %ds: shell killed;"
+                 " processes it spawned may still be running]", bash_cap_secs());
+        sb_puts(&out, m);
+    } else {
         if (intkilled) sb_puts(&out, "\n[command killed: interrupted by user (^C)]");
         if (truncated) {
             char m[64];
