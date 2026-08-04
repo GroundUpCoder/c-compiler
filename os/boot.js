@@ -59,6 +59,18 @@
 //   --quiet        suppress boot progress on stderr
 //   --screen=WxH   headless screen dims (default: the kernel's 1024x768) —
 //                  small-viewport runs (todos/0282)
+//   --vsync[=hz]   drive kernel.vsyncTick() from a host timer (ticket #424;
+//                  default 60, want 1..1000 — a ms timer can't honestly
+//                  deliver more). The headless twin of the browser
+//                  compositor's rAF (todos/0100): the kernel advertises a
+//                  frame clock at spawn, so SDL frame loops pace off
+//                  vsyncWait instead of host.js's deadline pacer — the seam
+//                  for testing frame-paced code without a browser. rAF
+//                  semantics on overrun: missed ticks are skipped, never
+//                  queued. Off by default: a plain boot advertises nothing
+//                  and is byte-identical to today. The timer never parks
+//                  (no compositor here; the todos/0169 park protocol is the
+//                  browser's power model) and never holds the process open.
 //   --tty-out      fd 1/2 tty-kind even under pipes (isatty(1) true, so
 //                  shells go interactive — drive prompts/job control from
 //                  a script; output gains prompts/echo, no longer byte-clean)
@@ -86,6 +98,7 @@ let staleOk = false;       // skip the 0082 input-freshness check
 let quiet = false;
 let dumpState = false;
 let screenDims = null; // --screen=WxH: headless screen dims (kernel default 1024x768)
+let vsyncHz = null;   // --vsync[=hz]: timer-driven vsyncTick (#424; null = off)
 let ttyOut = false;   // force fd1/2 tty-kind under pipes (drive interactive shells)
 let requireCleanOverlays = false;
 let allOverlays = false;
@@ -115,6 +128,15 @@ for (const a of process.argv.slice(2)) {
     const m = /^(\d+)x(\d+)$/.exec(a.slice(9));   // viewport headless runs)
     if (!m) { process.stderr.write('boot: bad --screen (want WxH)\n'); process.exit(2); }
     screenDims = { w: +m[1], h: +m[2] };
+  }
+  else if (a === '--vsync') vsyncHz = 60;
+  else if (a.startsWith('--vsync=')) {
+    const hz = Number(a.slice(8));
+    if (!Number.isFinite(hz) || hz < 1 || hz > 1000) {
+      process.stderr.write('boot: bad --vsync (want hz 1..1000)\n');
+      process.exit(2);
+    }
+    vsyncHz = hz;
   }
   else if (a === '--dump-state') dumpState = true;
   else if (a === '--tty-out') ttyOut = true;
@@ -353,6 +375,9 @@ async function mountAndBoot() {
     fs: kfs,
     fetch: netFetch,   // #349 — the Tier 2.5 net-bridge wrapper
     screen: screenDims || undefined,   // --screen=WxH (todos/0282)
+    vsync: vsyncHz != null,   // --vsync[=hz] (#424): advertise the frame
+                              // clock at spawn; the timer below is its
+                              // source. False = today's no-clock boot.
     textService,   // todos/0275 — headless composite label text
     roImage: { prefix: '/usr', sab: roSab },   // todos/0180
     createWorker: K.nodeCreateWorker({ hostPath: HOST, kernelPath: KERNEL }),
@@ -390,6 +415,31 @@ async function mountAndBoot() {
     } : undefined,
     log: quiet ? () => {} : (m) => process.stderr.write('[kernel] ' + m + '\n'),
   });
+
+  /* ---- headless frame clock (--vsync[=hz], ticket #424) ----
+   * The browser twin is the compositor rAF calling vsyncTick() per composite
+   * (os/compositor.js). Here a drift-corrected setTimeout chain aims at an
+   * absolute hz schedule (the todos/0100 pacer lesson: naive fixed-delay
+   * timers add callback time to the period). Overrun keeps rAF semantics:
+   * missed ticks are SKIPPED, never queued — vsyncWait's catch-up collapses
+   * them to one immediate frame, same as a browser tab that stalled. The
+   * timer is unref'd so it never keeps a halted boot alive, and it never
+   * parks: headless has no compositor, so the 0169 park protocol (an idle-
+   * power concern) has no counterpart here — an always-visible display. */
+  if (vsyncHz != null) {
+    const period = 1000 / vsyncHz;
+    let nextDue = Date.now() + period;
+    const arm = () => {
+      setTimeout(() => {
+        kernel.vsyncTick();
+        nextDue += period;
+        const now = Date.now();
+        if (nextDue <= now) nextDue = now + period;   // overrun: skip, don't burst
+        arm();
+      }, Math.max(0, nextDue - Date.now())).unref();
+    };
+    arm();
+  }
 
   const tty = kernel.createTty({
     cols: process.stdout.columns || 80,
