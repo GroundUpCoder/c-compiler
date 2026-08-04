@@ -21,6 +21,12 @@ kernel-ish layer, BlockFS is the disk, vendored ports are the userland.
 plan to implement faithfully (see the decision below). Everything else is fair
 game.
 
+**Current primary epic (jku, 2026-08-04): game development inside gucOS.**
+The proof of the north star is a person developing real games in C + SDL3,
+with gcode, inside gucOS itself — see `todos/GAMEDEV-EPIC.md`. All current
+work batches fall under that epic; a CPython+pygame twin epic is queued
+behind it.
+
 **Agent-friendly by construction.** The environment must be as drivable by AI
 agents as by humans, at every layer, without a separate automation bolt-on:
 

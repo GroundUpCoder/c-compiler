@@ -34,6 +34,13 @@ customer" — that is the exact anti-pattern being rejected here.
 
 ## Tickets & the work queue (`cc-meta ticket`)
 
+**🎯 THE PRIMARY EPIC (jku, 2026-08-04): game development inside gucOS —
+C + SDL3 + gcode — is the north star every batch of work falls under.
+Read `todos/GAMEDEV-EPIC.md` before selecting or filing work.** The backlog
+is being rescrubbed against it; unrelated work is deprioritized (not
+deleted). A queued Epic 2 (CPython/cpython-clang + pygame) starts only when
+jku says.
+
 **The authoritative work queue is the cc ticket tracker** — per-project,
 DB-backed work items driven with the `cc-meta ticket` CLI. This repo's
 project is **c-compiler** (project id `019d77d8-f894-7d09-9099-4e747aa20bfb`).
