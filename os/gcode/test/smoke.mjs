@@ -933,6 +933,61 @@ async function main() {
     fs.rmSync(marker, { force: true });
   }
 
+  // ---- #510: ^C mid-bash with a CHATTY child — the kill still fires ----
+  // The interrupt twin of #503(b): `g_interrupted` was checked only in the
+  // poll EINTR branch, but a chatty child keeps the pipe readable, so poll
+  // keeps returning POLLIN (r > 0) and a SIGINT landing outside the poll
+  // syscall never produces EINTR — the kill branch never ran and the ^C did
+  // nothing until the wall-time cap. Composition of the #509 leg's driving
+  // (kill -INT at gcode ALONE — the survivor edge) with the chatty command
+  // from the gucOS timeout e2e's round 4. GCODE_BASH_SECS=45 bounds the
+  // pre-fix red (the 20s watchdog fires first, loudly); post-fix the ^C
+  // returns in well under a second and the cap never matters.
+  {
+    const marker = path.join(os.tmpdir(), `g510-${process.pid}.started`);
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'g510-state-'));
+    fs.rmSync(marker, { force: true });
+    const srv = await startServer([
+      toolUseResponse('interrupting.', 'toolu_510', 'bash',
+        { command: `touch ${marker}; while true; do echo spam; done` }),
+    ]);
+    const t0 = Date.now();
+    const child = spawn(bin, ['-p', 'interrupt me', '--no-color'], {
+      env: { ...process.env, ANTHROPIC_BASE_URL: srv.url, ANTHROPIC_API_KEY: 'test',
+             ASAN_OPTIONS: 'detect_leaks=0', GCODE_STATE_DIR: stateDir,
+             GCODE_BASH_SECS: '45' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '', err = '';
+    child.stdout.on('data', (c) => (out += c));
+    child.stderr.on('data', (c) => (err += c));
+    while (!fs.existsSync(marker) && Date.now() - t0 < 10000)
+      await new Promise((r) => setTimeout(r, 50));
+    check(fs.existsSync(marker), '#510: chatty bash tool is running (marker file exists)');
+    const tKill = Date.now();
+    child.kill('SIGINT');   // gcode alone — the sh keeps spamming through it
+    const code = await new Promise((resolve, reject) => {
+      const t = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('#510 leg timed out')); }, 20000);
+      child.on('exit', (c) => { clearTimeout(t); resolve(c); });
+    });
+    srv.close();
+    check(Date.now() - tKill < 10000, '#510: ^C killed the chatty sh promptly (no stall to the cap)');
+    check(code === 0, `#510: interrupted run exits 0 (got ${code})`);
+    const sessDir = path.join(stateDir, 'sessions');
+    const log = fs.readdirSync(sessDir)
+      .map((f) => fs.readFileSync(path.join(sessDir, f), 'utf8')).join('');
+    const line = log.split('\n')
+      .find((l) => l.includes('toolu_510') && l.includes('tool_result')) || '';
+    check(line.includes('interrupted by user (^C)'), '#510: tool_result names the interrupt');
+    check(line.includes('shell killed') && line.includes('may still be running'),
+      '#510: tool_result reports the sh kill honestly (shell killed + may-survive caveat)');
+    check(!line.includes('timed out after'),
+      '#510: tool_result does NOT carry the timeout message (the ^C ended the round, not the cap)');
+    check(line.includes('spam'), '#510: pre-^C output was preserved (spam present)');
+    fs.rmSync(stateDir, { recursive: true, force: true });
+    fs.rmSync(marker, { force: true });
+  }
+
   console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILURE(S)`);
   process.exit(failures === 0 ? 0 : 1);
 }
