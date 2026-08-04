@@ -21,7 +21,9 @@ typedef pcre *git_regexp;
 # define GIT_REGEX_INIT NULL
 #elif defined(GIT_REGEX_PCRE2)
 # define PCRE2_CODE_UNIT_WIDTH 8
-# include <pcre2.h>
+/* c-compiler port (#473): quote form — the bundled deps/pcre2 header, reached
+ * same-dir through an srclib forwarder rather than the system include tier. */
+# include "pcre2.h"
 typedef pcre2_code *git_regexp;
 # define GIT_REGEX_INIT NULL
 #elif defined(GIT_REGEX_REGCOMP) || defined(GIT_REGEX_REGCOMP_L)

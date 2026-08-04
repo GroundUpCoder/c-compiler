@@ -11,7 +11,10 @@
 #include "map.h"
 #include "posix.h"
 #include "util.h"
-#include <zlib.h>
+/* c-compiler port (#473): quote form — libgit2 uses ITS OWN bundled zlib
+ * (deps/zlib) through a same-dir srclib forwarder, never whatever <zlib.h>
+ * an installed package happens to have planted on the system include tier. */
+#include "zlib.h"
 
 /*
  * We only need to redefine on Windows as we expect stat(3p) et al to be
