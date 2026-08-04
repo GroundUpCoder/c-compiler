@@ -26,7 +26,6 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const cp = require('child_process');
 const { freshImage } = require('./lib/drive.js');
 
 const ROOT = path.resolve(__dirname, '../..');
@@ -40,57 +39,26 @@ function check(name, cond, extra) {
 
 const { dir: tmp, image } = freshImage('os-boot-');
 
-// ---- harness-kill honesty (#110 / todos-0304) ----
+// ---- harness-kill honesty (#110 / todos-0304; core hoisted by #513) ----
 // Every boot/bake spawn below runs under ONE wall-clock budget, and both kill
 // flavours must read as HARNESS/environment events, never as product failures
 // (the 0171/0154 class: failure text that cannot distinguish "the thing under
-// test broke" from "the harness never got to run it"). The flavours are
-// distinguishable in spawnSync's result — verified empirically, this Node
-// line only sets ETIMEDOUT for its OWN timer:
-//   - the budget kill: r.error.code === 'ETIMEDOUT' (status null, SIGTERM).
-//     The old `throw r.error` crashed the file with an unattributed stack —
-//     no leg, no budget, no wall time — and the mkimage spawn never checked
-//     r.error at all.
-//   - an EXTERNAL kill: status null + signal, NO error — memory-pressure
-//     SIGKILL or a stray/group SIGTERM on a contended box. This is the path
-//     that printed the historical bare "FAIL post-bypass boot exits clean
-//     null": String(null) names no signal and reads as an unclean exit.
-// Both abort the file: after a killed bake the image is in an undefined
-// state, so every later leg would cascade into confusing secondary reds.
-// CC_OS_BOOT_TIMEOUT_MS overrides the budget (contention relief, and the red
-// control's lever — tests/kernel/test_os_boot_kill_honesty.js).
-const BUDGET_MS = (() => {
-  const v = parseInt(process.env.CC_OS_BOOT_TIMEOUT_MS || '', 10);
-  return v > 0 ? v : 300000;
-})();
-// killSignal SIGKILL, not the default SIGTERM: os/boot.js traps SIGTERM (the
-// heavy-lock release handler, tests/lib/heavy-lock.js), and a trapped signal
-// delivered mid-bake is deferred past the bake's long synchronous compile
-// stretches — probed live, a SIGTERMed bake survived 118s+ while the caller's
-// spawnSync blocked past its own timeout waiting for the death. SIGKILL is
-// untrappable; the lock file a SIGKILLed boot leaves self-heals (dead-pid
-// steal), and its tmp images live under this test's own harness-temp dir.
+// test broke" from "the harness never got to run it"). The classify core —
+// budget kill via spawnSync's own ETIMEDOUT, external kill via status:null
+// without error, killSignal forced to SIGKILL because os/boot.js traps
+// SIGTERM (heavy-lock release) and a trapped signal defers past a
+// synchronous bake — lives in tests/lib/spawn-budget.js with the probed
+// mechanism notes. This file's policy on a kill: ABORT — after a killed bake
+// the image is in an undefined state, so every later leg would cascade into
+// confusing secondary reds. CC_OS_BOOT_TIMEOUT_MS overrides the 300s budget
+// (contention relief, and the red control's lever —
+// tests/kernel/test_os_boot_kill_honesty.js).
+const { spawnSyncBudgeted } = require('../lib/spawn-budget.js');
 function runBudgeted(what, argv, opts) {
-  const t0 = Date.now();
-  const r = cp.spawnSync('node', argv,
-    Object.assign({}, opts, { timeout: BUDGET_MS, killSignal: 'SIGKILL' }));
-  const wall = Date.now() - t0;
-  const tail = ' stderr tail: ' + String(r.stderr || '').slice(-300);
-  if (r.error && r.error.code === 'ETIMEDOUT') {
-    check(what, false,
-      'TIMED OUT: killed by the harness at its ' + BUDGET_MS + 'ms budget (' +
-      wall + 'ms wall, ' + (r.signal || 'SIGKILL') + '). NOT a product' +
-      ' failure verdict: a hung boot and a CPU-contended machine (a sibling' +
-      ' heavy suite) are indistinguishable at the kill — re-run quiet, or' +
-      ' raise CC_OS_BOOT_TIMEOUT_MS.' + tail);
-    abortKilled();
-  }
-  if (r.error) throw r.error;
-  if (r.status === null) {
-    check(what, false,
-      'killed by ' + r.signal + ' from outside the harness after ' + wall +
-      'ms (no ETIMEDOUT, so not this file\'s budget). NOT a product exit —' +
-      ' memory pressure or a stray kill on a busy machine.' + tail);
+  const { r, kill } = spawnSyncBudgeted('node', argv, Object.assign({}, opts,
+    { timeout: 300000, budgetEnv: 'CC_OS_BOOT_TIMEOUT_MS' }));
+  if (kill) {
+    check(what, false, kill.message);
     abortKilled();
   }
   return r;

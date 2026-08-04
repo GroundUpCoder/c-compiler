@@ -26,7 +26,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const cp = require('child_process');
+const { spawnSyncBudgeted } = require('../lib/spawn-budget.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 const CompilerJS = require(path.join(ROOT, 'compiler.js'));
@@ -317,24 +317,39 @@ for (const bad of ['../../etc/shadow.c', '/etc/passwd', 'a/../b.c', 'a\\b.c', 'a
   fs.writeFileSync(path.join(tmp, 'mylib/impl.c'), 'int mylib_fn(void){return 1;}\n');
   const compilerPath = path.join(ROOT, 'compiler.js');
 
-  let r = cp.spawnSync('node', [compilerPath, '--srcroot', 'mylib=' + path.join(tmp, 'mylib'),
-    '-o', path.join(tmp, 'a.wasm'), path.join(tmp, 'main.c')], { encoding: 'utf8', timeout: 120000 });
-  check('CLI --srcroot resolves a require', r.status === 0, (r.stderr || '').slice(0, 300));
+  // spawnSyncBudgeted (#513): a harness/external kill of a compiler-CLI spawn
+  // must self-describe in the check line, not print only a stderr slice with
+  // an unexplained wrong status. On a kill the leg fails once with the kill
+  // message (still red — a kill is never a pass) and its judge never runs.
+  const cli = (what, argv, judge) => {
+    const { r, kill } = spawnSyncBudgeted('node', argv, { encoding: 'utf8', timeout: 120000 });
+    if (kill) check(what, false, kill.message);
+    else judge(r);
+  };
 
-  r = cp.spawnSync('node', [compilerPath,
-    '--srcroot', 'mylib=' + path.join(tmp, 'mylib'),
-    '--srcroot', 'mylib=' + tmp,
-    '-o', path.join(tmp, 'b.wasm'), path.join(tmp, 'main.c')], { encoding: 'utf8', timeout: 120000 });
-  check('CLI conflicting --srcroot remap fails loud',
-    r.status === 1 && (r.stderr || '').includes('conflicting --srcroot remap'), (r.stderr || '').slice(0, 300));
+  cli('CLI --srcroot resolves a require',
+    [compilerPath, '--srcroot', 'mylib=' + path.join(tmp, 'mylib'),
+     '-o', path.join(tmp, 'a.wasm'), path.join(tmp, 'main.c')],
+    (r) => check('CLI --srcroot resolves a require',
+      r.status === 0, (r.stderr || '').slice(0, 300)));
+
+  cli('CLI conflicting --srcroot remap fails loud',
+    [compilerPath,
+     '--srcroot', 'mylib=' + path.join(tmp, 'mylib'),
+     '--srcroot', 'mylib=' + tmp,
+     '-o', path.join(tmp, 'b.wasm'), path.join(tmp, 'main.c')],
+    (r) => check('CLI conflicting --srcroot remap fails loud',
+      r.status === 1 && (r.stderr || '').includes('conflicting --srcroot remap'),
+      (r.stderr || '').slice(0, 300)));
 
   // Project-json expansion: lib.json srcRoots flow through expandProjectJson.
   fs.writeFileSync(path.join(tmp, 'proj.json'), JSON.stringify({
     name: 'clidemo', sources: ['main.c', 'mylib/impl.c'], srcRoots: { mylib: 'mylib' },
   }));
-  r = cp.spawnSync('node', [compilerPath, '-o', path.join(tmp, 'c.wasm'), path.join(tmp, 'proj.json')],
-    { encoding: 'utf8', timeout: 120000 });
-  check('CLI project json srcRoots expands + dedups', r.status === 0, (r.stderr || '').slice(0, 300));
+  cli('CLI project json srcRoots expands + dedups',
+    [compilerPath, '-o', path.join(tmp, 'c.wasm'), path.join(tmp, 'proj.json')],
+    (r) => check('CLI project json srcRoots expands + dedups',
+      r.status === 0, (r.stderr || '').slice(0, 300)));
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
