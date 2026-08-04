@@ -317,6 +317,8 @@ const RULES = [
     'synthesizes vendor/magicpoint/demo.gif — test_present_e2e.js + os-present.mjs assert its pixels'],
   [/^tools\/mkwebfixtures\.js$/, ['kernel'],
     'synthesizes vendor/netsurf/test/img/* — test_netsurf_content_e2e.js decodes them'],
+  [/^tools\/mkgit2srclib\.js$/, ['fakegit', 'projects', 'kernel'],
+    'generates vendor/libgit2\'s srclib forwarders + git2_srclib.h — the fakegit/projects build is what a missing forwarder breaks, and test_gucman_libgit2_e2e.js runs its --check'],
   [/^tools\/build-libc-ext\.js$/, ['ext', 'unit'],
     'generates libc-ext.js — the ext category pins its optional-library contract, the unit ext_* tests consume it'],
 
@@ -462,15 +464,41 @@ const RULES = [
   [/^vendor\/tcc\//, ['tcc', 'projects'], null],
   [/^vendor\/libc-test\//, ['libc'], null],
   [/^vendor\/disw\//, ['disw', 'projects'], null],
-  // libgit2 is a large-codebase compile stress test AND the engine under the
-  // gucOS git CLI. It ENTERED the bake closure at #474: os/git/bin.json
-  // compiles this tree, packages/git.json ships that binary, and every
-  // packages/*.json is scanned by newestBakeInput — so an edit here restales
-  // the fat fixture exactly like a seeded source, which is the kernel+sweep
-  // radius. (Before #474 nothing seeded or packaged it and the rule stopped
-  // at its category + the build check; that reasoning expired with the ship.)
+  // libgit2 is a large-codebase compile stress test, and it entered the bake
+  // closure TWICE, in two tickets, for two independent reasons — either one on
+  // its own already justifies kernel+sweep, and both are recorded here so that
+  // retiring one does not look like grounds to narrow the rule:
+  //   #474 — os/git/bin.json compiles this tree and packages/git.json ships
+  //          that BINARY, so an edit here changes a fat-fixture artifact.
+  //   #473 — packages/libgit2.json ships the tree ITSELF as a srclib package,
+  //          so an edit here changes the payload the in-OS `cc` links against
+  //          (test_gucman_libgit2_e2e.js drives exactly that link).
+  // In both cases newestBakeInput scans every packages/*.json, so an edit
+  // restales the fat fixture exactly like a seeded source. (Before #474 the
+  // rule stopped at its category + the build check because nothing seeded or
+  // packaged it; that reasoning expired with the ship.)
+  // Deliberately NOT `host`, even though a ^packages/ edit draws it — and the
+  // reason is NOT that host cannot see this tree. It can: since #473 gave
+  // packages/libgit2.json two `tree` entries, test_bakeinput_sources.js's
+  // real-repo legs enumerate vendor/libgit2 through newestBakeInput /
+  // newestPkgInput. The reason is that nothing a tree edit can do to that
+  // guard's OUTCOME is unique to it. Measured, four probes, one at a time:
+  //   edit a file's content      -> host green
+  //   add a plain file           -> host green
+  //   delete a file              -> host green
+  //   add a SYMLINK to the tree  -> host RED
+  // — because its assertions are about WHICH DIRECTORIES the scan enumerated
+  // and which `files` entry kinds the DEFINITION uses, neither of which a
+  // file's content or presence moves. The one class that does fire, the
+  // symlink, is caught by two suites this rule already selects, through the
+  // exact code paths they run: foldPackages('all') throws on it (every kernel
+  // and sweep fixture bake is --packages=all) and so does tools/mkpkg.js
+  // (tests/kernel/lib/gucman.js ensurePackages() shells out to it) — both
+  // verified RED on the same planted symlink. So host here would buy cost and
+  // no signal. packages/libgit2.json itself still draws host from ^packages/,
+  // which is the right place for definition-shaped coverage.
   [/^vendor\/libgit2\//, ['fakegit', 'projects', 'kernel', 'sweep'],
-    'the engine under os/git — its category, its build check, and the fat fixture it now ships into'],
+    'the engine under os/git AND the payload of the libgit2 srclib package — its category, its build check, and the fat fixture both ship into'],
   // The Csmith programs the `fuzz` category compiles (run.py CSMITH_CORPUS_DIR).
   // No bin.json, so `projects` would be a no-op — the category IS the gate.
   [/^vendor\/csmith-corpus\//, ['fuzz'], 'the vendored Csmith corpus the fuzz category compiles'],

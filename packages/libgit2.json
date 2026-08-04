@@ -1,0 +1,15 @@
+{
+  "name": "libgit2",
+  "version": "1.9.0",
+  "summary": "libgit2 source library — read and write real git repositories from the in-OS cc",
+  "files": {
+    "include":  { "tree": "vendor/libgit2/include" },
+    "src":      { "tree": "vendor/libgit2",
+                  "exclude": ["include", "repros", "test_main.c", "feature_probe.c",
+                              "bin.json", "lib.json", "feature_probe.json", "README.md"] }
+  },
+  "srclib": {
+    "include": [ "include" ],
+    "src": { "git2": "src" }
+  }
+}

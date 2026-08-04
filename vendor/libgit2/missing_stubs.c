@@ -43,8 +43,23 @@ struct git_index *git_iterator_index(struct git_iterator *iter)
 
 /* === Networking stubs === */
 
-int git_mbedtls_stream_global_init(void) { return -1; }
-int git_openssl_stream_global_init(void) { return -1; }
+/* A *_global_init for an ABSENT feature must SUCCEED — upstream's own
+ * "feature not compiled in" variants all `return 0`, and the failure is
+ * reported later, by the *_new/_connect call that actually needs it.
+ *
+ * These three (and the libssh2 one below) returned -1 until ticket #473.
+ * git_libgit2_init() runs its init_fns in order and STOPS at the first
+ * non-zero, so every call returned -1 and the LAST NINE subsystems never
+ * initialized at all: stream registry, socket stream, openssl, mbedtls,
+ * mwindow (its shutdown hook), POOL (git_pool_global_init is what computes
+ * system_page_size — without it every git_pool page was sized from 0),
+ * settings (shutdown hook) and reftable (its allocator binding). Nothing
+ * crashed, because the surviving nine cover the local-repository path, which
+ * is why feature_probe.c — which ignores the return value — passed for
+ * months. A caller that CHECKS the documented return, as any real program
+ * does, could not use the library at all. */
+int git_mbedtls_stream_global_init(void) { return 0; }
+int git_openssl_stream_global_init(void) { return 0; }
 int git_socket_stream_global_init(void) { return 0; }
 
 int git_socket_stream_new(struct git_stream **out, const char *host, const char *port)
@@ -53,7 +68,7 @@ int git_socket_stream_new(struct git_stream **out, const char *host, const char 
     return -1;
 }
 
-int git_transport_ssh_libssh2_global_init(void) { return -1; }
+int git_transport_ssh_libssh2_global_init(void) { return 0; }   /* #473: see above */
 
 int git_smart_subtransport_http(
     struct git_smart_subtransport **out,

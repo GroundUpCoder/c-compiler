@@ -99,7 +99,10 @@ typedef struct git_str git_str;
 # define st_mtim st_mtimespec
 #endif
 
-# include <arpa/inet.h>
+/* c-compiler port (#473): quote form so a same-dir srclib forwarder can
+ * resolve it — an angle include only searches -I and the system tier, and
+ * the package plants no arpa/ there. stubs/arpa/inet.h is the real header. */
+# include "arpa/inet.h"
 
 #endif
 
