@@ -537,7 +537,14 @@ static char *run_command(const char *cmd, int *exit_code) {
         sb_puts(&out, m);
     } else {
         *exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
-        if (intkilled) sb_puts(&out, "\n[command killed: interrupted by user (^C)]");
+        /* #509: same honesty as the timeout path above. Our SIGKILL reached
+         * only the direct sh — in the ordinary ^C the fg-pgroup SIGINT also
+         * reached the job, but in the #412(c) survivor edge (a child that
+         * traps/ignores SIGINT, or kill -INT at gcode alone) it did not.
+         * Say the shell died and that processes it spawned may survive;
+         * never claim the whole command was killed. */
+        if (intkilled) sb_puts(&out, "\n[command interrupted by user (^C): shell killed;"
+                                     " processes it spawned may still be running]");
         if (truncated) {
             char m[64];
             snprintf(m, sizeof m, "\n[output truncated at %d bytes]", CAP_BASH_BYTES);
@@ -614,7 +621,10 @@ static char *run_command(const char *cmd, int *exit_code) {
                  " processes it spawned may still be running]", bash_cap_secs());
         sb_puts(&out, m);
     } else {
-        if (intkilled) sb_puts(&out, "\n[command killed: interrupted by user (^C)]");
+        /* #509: same honesty as the gucOS path — the SIGKILL reached only
+         * the direct sh; its descendants may survive the survivor-edge ^C. */
+        if (intkilled) sb_puts(&out, "\n[command interrupted by user (^C): shell killed;"
+                                     " processes it spawned may still be running]");
         if (truncated) {
             char m[64];
             snprintf(m, sizeof m, "\n[output truncated at %d bytes]", CAP_BASH_BYTES);
