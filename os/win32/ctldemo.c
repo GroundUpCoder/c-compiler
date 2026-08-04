@@ -1231,6 +1231,25 @@ static void lv_addrow(HWND lv, int i, const char *a, const char *b) {
     SendMessage(lv, LVM_SETITEMTEXTA, (WPARAM)i, (LPARAM)&ls);
 }
 
+/* A pixel of the header's OWN rendering, at mid height.
+ *
+ * `lv_lockstep` above compares two GEOMETRY QUERIES, and both subtract the
+ * same origin — so they agree by construction and cannot see a header that
+ * REPORTS a scrolled layout while PAINTING an unscrolled one. This reads
+ * what the header actually drew. `UpdateWindow(lv)` first: the listview
+ * fills its whole client (header band included) before its children paint,
+ * so the parent must go first or we would sample a wiped band. */
+static COLORREF hd_px(HWND lv, HWND hdr, int x) {
+    RECT r;
+    GetClientRect(hdr, &r);
+    UpdateWindow(lv);
+    HDC dc = GetDC(hdr);
+    if (!dc) return CLR_INVALID;
+    COLORREF c = GetPixel(dc, x, (int)r.bottom / 2);
+    ReleaseDC(hdr, dc);
+    return c;
+}
+
 /* Background pixel of row `i`, inside column 0 but past its (short) text. */
 static COLORREF lv_row_px(HWND lv, int i) {
     RECT r;
@@ -1285,6 +1304,30 @@ static void lvtest_158(HWND top, HWND lvOld) {
     ListView_Scroll(lv, 37, 0);
     st_check("158 odd offset takes", lv_xoff(lv) == 37);
     st_check("158 header locked to the rows at 37", lv_lockstep(lv, hdr, 5));
+
+    /* --- the header's PIXELS move, not just the rects it reports ---
+     * The seam between column 0 and column 1 is column 1's left bevel: one
+     * COLOR_BTNHIGHLIGHT rule at its left edge (mc_draw_raised), with the
+     * segment's flat COLOR_BTNFACE either side of it. Columns are 100px
+     * wide, so at rest that rule is at client x=100 and at xoff=40 it must
+     * have MOVED to x=60 — a header that paints at a fixed origin leaves it
+     * at 100 while every geometry query still says 60. The vacated position
+     * is asserted as "not the rule" rather than "flat face": a glyph could
+     * in principle land there, but glyphs blend BTNFACE toward BTNTEXT and
+     * can never reach BTNHIGHLIGHT white. */
+    {
+        COLORREF rule = GetSysColor(COLOR_BTNHIGHLIGHT);
+        ListView_Scroll(lv, -10000, 0);
+        st_check("158 header seam is drawn where the columns say (at rest)",
+                 hd_px(lv, hdr, 100) == rule);
+        st_check("158 nothing drawn at the scrolled-to position yet",
+                 hd_px(lv, hdr, 60) != rule);
+        ListView_Scroll(lv, 40, 0);
+        st_check("158 the header seam MOVED with the scroll",
+                 hd_px(lv, hdr, 60) == rule);
+        st_check("158 the header seam left its old position",
+                 hd_px(lv, hdr, 100) != rule);
+    }
 
     /* --- the offset shifts the HITTEST column mapping --- */
     {

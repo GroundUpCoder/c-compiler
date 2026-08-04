@@ -121,6 +121,64 @@ off and on). The `hittest column at rest` and `header locked … at 0` legs are
 the control halves of before/after pairs — the `at 0` one still went red under
 the geometry sabotage, so it is not vacuous either.
 
+## Counter pass: the lockstep legs were geometry-only (Codex, confirmed)
+
+The review found the one hole this file was too pleased with itself to see.
+`lv_lockstep` compares `HDM_GETITEMRECT` against `LVM_GETSUBITEMRECT` — and
+**both subtract the same `xoff`**, so they agree by construction. Neither
+observes rendering. The reviewer named the exact mutation that walks through
+them: `listview.c`'s header paint, `int left = -st->xoff;` → `int left = 0;`.
+The header then freezes visually while every reported rectangle still scrolls.
+
+I ran that mutation against the unmodified tests rather than arguing about it.
+**The whole listview e2e passed, 0 FAIL.** The finding is confirmed, not
+rebuttable, and my "header lockstep was sabotaged" claim in the round above was
+true of a *different* failure (dropping the origin from the state) and blind to
+this one. Geometry-vs-geometry cannot catch a paint-only regression, and no
+amount of adding more geometry legs would have.
+
+The fix is a leg that reads what the header **drew**. The seam between column 0
+and column 1 is column 1's left bevel — one `COLOR_BTNHIGHLIGHT` rule at its
+left edge — so with 100px columns it sits at client x=100 at rest and must be
+at x=60 once `xoff` is 40. `hd_px` samples it through `GetDC(hdr)`/`GetPixel`,
+after `UpdateWindow(lv)` so the parent's full-client fill happens *before* the
+child paints (sample the other order and you read a wiped band). The vacated
+position is asserted as "not the rule" rather than "flat face": a glyph could
+in principle land there, but glyphs blend `BTNFACE` toward `BTNTEXT` and can
+never reach highlight white.
+
+### Evidence
+
+Mutation applied, unmodified tests — the finding, reproduced:
+
+```
+$ node tests/kernel/test_listview_e2e.js       # listview.c:234  -st->xoff -> 0
+  ok   lvtest 0 failed
+  ...
+PASS
+$ grep -c FAIL /tmp/mut-a.log
+0
+```
+
+Mutation reverted, new leg present — the green half:
+
+```
+$ echo 'ctldemo lvtest' | node os/boot.js
+ok 158 header seam is drawn where the columns say (at rest)
+ok 158 nothing drawn at the scrolled-to position yet
+ok 158 the header seam MOVED with the scroll
+ok 158 the header seam left its old position
+ctldemo lvtest: 105 checks, 0 failed
+```
+
+**OWED: the red control for these four legs has NOT been run.** The coordinator
+stood this lane down from the machine-wide heavy lock mid-round — my short
+back-to-back probes were starving #473's long gate window, and #473 merges
+first. Two of the four legs are expected to go red under the mutation (the two
+`at rest` ones are no-ops at `xoff == 0` and must stay green); that is a
+prediction, not a result, and it stays written here as OWED until it is a
+transcript. This branch is not merge-ready until it is.
+
 ## Left alone, deliberately
 
 Classic report view without `LVS_EX_FULLROWSELECT` does not hit-test an item
