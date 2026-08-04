@@ -115,6 +115,36 @@ are also global but are package-scoped by convention (`git2`, `png`, `z`,
 before a second package wants a common header name: today the only defence is
 that nobody has tried.
 
+## 🔴 A latent port bug the acceptance criterion flushed out
+
+`git_libgit2_init()` **always returned -1**, in every build of this tree, since
+it was vendored. The acceptance ("actually links AND runs") is what caught it:
+the demo program checks the documented return of the library's mandatory first
+call, and could not get past it.
+
+`missing_stubs.c` stubbed three absent-feature initializers as `return -1`
+(`git_openssl_stream_global_init`, `git_mbedtls_stream_global_init`,
+`git_transport_ssh_libssh2_global_init`). `git_runtime_init` runs its
+`init_fns` in order and **stops at the first non-zero**, so the last nine
+subsystems never initialized:
+
+| Skipped | Consequence |
+|---|---|
+| `git_stream_registry_global_init`, `git_socket_stream_global_init`, openssl, mbedtls | no network transports registered (moot here — they are stubs) |
+| `git_mwindow_global_init` | pack-window mutex uninitialized, shutdown hook never registered |
+| **`git_pool_global_init`** | **`system_page_size` stayed 0 — every `git_pool` page was sized from zero** |
+| `git_settings_global_init` | shutdown hook never registered |
+| `git_reftable_global_init` | reftable kept its own allocator instead of libgit2's |
+
+Nothing crashed because the nine that DO run cover the local-repository path,
+and `feature_probe.c` / `test_main.c` both call `git_libgit2_init()` **and
+throw the result away** — which is exactly why it survived. Upstream's own
+"feature not compiled in" variants all `return 0` and report the failure at
+the `*_new`/`_connect` that needs it; the stubs now match. This is a fix to
+the vendored port, not to my packaging, and it is worth a separate look: it
+means every prior claim that "libgit2 works here" rested on callers that
+ignored an error return.
+
 ## Behaviour changes I chose, and why
 
 - **`stubs/pwd.h` and `stubs/sys/param.h` deleted.** Dropping `-I stubs` made
@@ -162,3 +192,10 @@ blast radius. `tools/mkgit2srclib.js` gets its own rule (the no-blanket-`^tools/
 convention).
 
 `os/image.json` 231 → 232: the fat image gains the folded package.
+
+## Result
+
+`node tests/kernel/test_gucman_libgit2_e2e.js` — **41/41 PASS**. The in-OS
+`cc` builds the demo from two `#include`s with no `-I` and no TU list, and the
+commit it writes has the **same oid as the host build's** (`78d09cb1…`), whose
+repository `git log` / `git fsck` / `git cat-file` accept unmodified.

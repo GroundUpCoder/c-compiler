@@ -103,7 +103,13 @@ tree is self-contained and portable.
 - `deps/pcre2/config.h` — **hand-written replacement for the CMake/autoconf
   `config.h`** (#473). See "Build configuration lives in headers" below.
 - `git_stubs.c`, `missing_stubs.c` — out-of-line definitions for `GIT_INLINE`
-  functions. The c-compiler has no `inline`, so `GIT_INLINE` becomes plain
+  functions. ⚠️ **A `*_global_init` stub for an absent feature must `return 0`,
+  not -1.** `git_runtime_init` stops at the first non-zero, so three stubs
+  returning -1 made `git_libgit2_init()` always report failure and silently
+  skip the last nine subsystem initializers — including
+  `git_pool_global_init`, which is what computes `system_page_size`. Fixed in
+  #473; it survived because both in-tree probes call `git_libgit2_init()` and
+  discard the result. The c-compiler has no `inline`, so `GIT_INLINE` becomes plain
   `static`, and the matching `extern` decls would otherwise be unresolved imports.
   `missing_stubs.c` also stubs the networking transports.
 - `attr_patched.c`, `iterator.h` — patched copies of the upstream files (carry
