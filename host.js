@@ -7114,6 +7114,7 @@ function createNullSDL() {
       // nanosleep pace on a 0 return (todos/0161); no kernel WAIT either —
       // __wait callers fall back to their chunked poll on -2 (todos/0178).
       __sdl_pump_wait: function () { return 0; },
+      __sdl_pump: function () { return 0; },   // no ring — nothing to drain (#485)
       __wait: function () { return -2; },
     },
   };
@@ -8035,6 +8036,7 @@ function createSurfaceSDL({ ctx, hooks }) {
       return win ? requestResize(win.sid, w, h) : -1;
     };
     env.__sdl_pump_wait = pumpWait;   // user32 blocking GetMessage (0058)
+    env.__sdl_pump = drainInput;      // SDL_PollEvent's non-blocking pump (#485)
     env.__wait = waitMulti;           // unified multi-source wait (0178)
     env.__sdl_delay = sdlDelay;       // cooperative worker sleep (0224) —
                                       // overrides inner's standalone-page throw
@@ -8215,6 +8217,7 @@ function createSurfaceSDL({ ctx, hooks }) {
       __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = Date.now(); return Date.now() - sdlTicksBase; },
       __sdl_delay: sdlDelay,       // cooperative worker sleep (0224)
       __sdl_pump_wait: pumpWait,   // user32 blocking GetMessage (0058)
+      __sdl_pump: drainInput,      // SDL_PollEvent's non-blocking pump (#485)
       __wait: waitMulti,           // unified multi-source wait (0178)
       // Audio: real source rings into the kernel mixer in both flavors
       // (todos/0017) — see buildAudioEnv above.
@@ -8941,6 +8944,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       // on a main thread that cannot Atomics.wait. No kernel WAIT either —
       // __wait callers fall back to their chunked poll on -2 (todos/0178).
       __sdl_pump_wait: function () { return 0; },
+      __sdl_pump: function () { return 0; },   // no ring — events are page-pushed (#485)
       __wait: function () { return -2; },
       // SDL_GetTicks: ms since SDL_Init, full range (C casts to Uint64; no 32-bit
       // wrap). Lazily baseline if ticks are read before SDL_Init.

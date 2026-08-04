@@ -26384,6 +26384,15 @@ __import void __sdl_delay(int ms);
    if a ring exists (a window was created), 0 otherwise (caller paces itself).
    Wakes can be spurious; callers re-poll their queues. */
 __import int __sdl_pump_wait(int timeoutMs);
+/* Non-blocking ring pump (ticket #485; host.js drainInput): move any pending
+   OS input-ring records into the wasm event queue and return immediately —
+   never parks, never touches the frame-idle gate (unlike __sdl_pump_wait(0),
+   whose entry releases the compositor pin — a "back to waiting" signal that
+   would be wrong from a hot poll loop). SDL_PollEvent's entry pump, so a
+   poll-only loop (no SDL_Delay / SDL_WaitEvent anywhere — the most common
+   SDL main-loop idiom) still receives input. Returns the record count
+   drained (0 when dry or no ring); the dry-ring cost is ~two atomic loads. */
+__import int __sdl_pump(void);
 /* libc's sleep import (this unit doesn't include time.h) — the no-ring
    fallback pace in SDL_WaitEventTimeout. */
 __import int __nanosleep(long sec, long nsec);
@@ -26835,6 +26844,10 @@ void __sdl_push_mouse_wheel_event(int window_id, double x, double y, int directi
 __export __sdl_push_mouse_wheel_event = __sdl_push_mouse_wheel_event;
 
 bool SDL_PollEvent(SDL_Event *event) {
+    /* Upstream SDL3 pumps inside SDL_PollEvent; without this a poll-only
+       loop never sees ring input at all — the window is unclosable and the
+       app unquittable (ticket #485). */
+    __sdl_pump();
     __SDL_EventEntry *e = __sdl_eq_head;
     if (!e) return 0;
     /* SDL3: a NULL event peeks — return true if one is queued, but do NOT remove
