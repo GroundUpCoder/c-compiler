@@ -30,7 +30,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
-const util = require('util');
+const { execFileBudgeted } = require('../lib/spawn-budget.js');
 const http = require('http');
 
 const ROOT = path.resolve(__dirname, '../..');
@@ -201,13 +201,22 @@ function normalize(out) {
     const nat = path.join(tmp, 'smoke-native');
     cp.execFileSync('clang', [path.join(ROOT, 'os/curl/test/smoke.c'), '-o', nat, '-lcurl'],
       { stdio: 'pipe' });
-    // async exec — the fake server shares this event loop (the smoke.mjs rule)
-    const { stdout: natOut } = await util.promisify(cp.execFile)(nat, [base, refused],
+    // async exec — the fake server shares this event loop (the smoke.mjs
+    // rule). execFileBudgeted (#513): a harness/external kill must
+    // self-describe in the check line, not reject and crash the async leg
+    // with an unattributed ETIMEDOUT-shaped stack; a plain nonzero exit
+    // still rethrows (a product failure keeps its stack).
+    const nr = await execFileBudgeted(nat, [base, refused],
       { encoding: 'utf8', timeout: 60000 });
-    const a = normalize(natOut), b = normalize(out);
-    check('differential: native (real libcurl) output matches gucOS after normalization',
-      a === b,
-      a === b ? undefined : '\n--- native ---\n' + a + '\n--- gucOS ---\n' + b);
+    if (nr.kill) {
+      check('differential: native (real libcurl) output matches gucOS after normalization',
+        false, nr.kill.message);
+    } else {
+      const a = normalize(nr.r.stdout), b = normalize(out);
+      check('differential: native (real libcurl) output matches gucOS after normalization',
+        a === b,
+        a === b ? undefined : '\n--- native ---\n' + a + '\n--- gucOS ---\n' + b);
+    }
     fs.rmSync(tmp, { recursive: true, force: true });
   } else {
     console.log('  skip native differential leg (clang not found)');

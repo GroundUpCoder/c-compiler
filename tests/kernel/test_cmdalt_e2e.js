@@ -60,7 +60,7 @@ function check(name, cond, extra) {
  * B's ==shadowinstall leg builds the payload BY HAND (addShadowPackage
  * below, todos/0355) to make that guard fire too. */
 function checkShadowingBinRefused(check) {
-  const cp = require('child_process');
+  const { spawnSyncBudgeted } = require('../lib/spawn-budget.js');
   const pathm = require('path');
   const osm = require('os');
   const defDir = fs.mkdtempSync(pathm.join(osm.tmpdir(), 'cmdalt-defs-'));
@@ -71,10 +71,20 @@ function checkShadowingBinRefused(check) {
       files: { tool: { content: '#!/bin/sh\necho hi\n', mode: 0o755 } },
       bin: { python: 'tool' },
     }, null, 2) + '\n');
-    const r = cp.spawnSync(process.execPath,
+    // spawnSyncBudgeted (#513): a harness/external kill of mkpkg must
+    // self-describe, not print a product-shaped `status=null` under this
+    // FAIL. NB mkpkg traps SIGTERM (its lock-release handler) — the helper's
+    // SIGKILL is what makes the budget kill actually land; the .mkpkg-lock a
+    // SIGKILLed run leaves self-heals (dead-pid steal).
+    const { r, kill } = spawnSyncBudgeted(process.execPath,
       [pathm.join(ROOT, 'tools', 'mkpkg.js'), '--quiet', `--out=${outDir}`,
        `--packages-dir=${defDir}`, 'test-shadow'],
       { encoding: 'utf-8', timeout: 180000 });
+    if (kill) {
+      check('mkpkg refuses a bin that shadows a dispatched name (exit 1)',
+            false, kill.message);
+      return;
+    }
     check('mkpkg refuses a bin that shadows a dispatched name (exit 1)',
           r.status === 1, `status=${r.status}`);
     check('...naming the dispatcher and pointing at `commands`',

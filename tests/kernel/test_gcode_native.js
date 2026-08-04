@@ -12,10 +12,10 @@
 // number of check( call sites (the function DEFINITION is itself one textual
 // occurrence, hence the -1). A new check added to smoke.mjs raises the
 // requirement automatically; a run that drops one fails here even at exit 0.
-const { spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { spawnSyncBudgeted } = require('../lib/spawn-budget.js');
 
 const smoke = path.resolve(__dirname, '../../os/gcode/test/smoke.mjs');
 const src = fs.readFileSync(smoke, 'utf-8');
@@ -36,11 +36,22 @@ check(expected > 0, `smoke.mjs declares a positive check count (derived ${expect
 // os.tmpdir() honours TMPDIR, so a per-instance dir isolates both the binary
 // and the oracle's scratch files.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gcode-oracle-'));
-const r = spawnSync(process.execPath, [smoke], {
+// spawnSyncBudgeted (#513): a kill of the oracle — this file's 480s budget or
+// an external signal on a contended box — must self-describe, never render as
+// the product-shaped "oracle exits 0 (got null, signal ...)" line. Red either
+// way, but the message points at the harness/environment, not at gcode.
+const { r, kill } = spawnSyncBudgeted(process.execPath, [smoke], {
   encoding: 'utf-8', timeout: 480000,
   env: Object.assign({}, process.env, { TMPDIR: tmp }),
 });
 fs.rmSync(tmp, { recursive: true, force: true });
+
+if (kill) {
+  check(false, kill.message);
+  console.log(`\n--- oracle stdout (partial) ---\n${r.stdout || ''}`);
+  console.log(`\n1 FAILURE(S) (the oracle was KILLED — see the FAIL line above)`);
+  process.exit(1);
+}
 
 const out = r.stdout || '';
 const oks = (out.match(/^  ok /mg) || []).length;
