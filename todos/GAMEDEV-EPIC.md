@@ -4,6 +4,17 @@
 work falls under this epic until jku redirects.** Companion principle:
 `todos/OS.md` "Dev-experience first" (commit `3fc46971`).
 
+> **jku, 2026-08-04, verbatim:** *"The gamedev in gucOS is the primary focus
+> indefinitely until otherwise specified."*
+
+That directive is **not scoped to a batch or a cycle** — it stands until he
+says otherwise. **Operative reading for queue selection: gamedev primacy is a
+FILTER APPLIED BEFORE the weight sort.** Select the gamedev-advancing tickets
+first, *then* order them light → medium → heavy with Pn breaking ties inside a
+tier. It does **not** override bug-fix-first (which applies within a tier) and
+it does **not** override broken-build preemption (a build that blocks lands is
+still the top immediate priority).
+
 ## The goal
 
 gucOS is judged by whether a person can sit inside it and **actually develop
@@ -70,6 +81,33 @@ custom/deferred — never approximately.
 Each batch includes dogfood passes. Each pass is its own thread with a fresh
 context; findings become tickets (both keys set — `--difficulty` AND
 `--priority`), and fixes ride normal lanes.
+
+### 🔴 These passes are TICKETS now — prose here has no scheduling force
+
+**Round 1 is `#487` (Pass A) and `#488` (Pass B).** Until 2026-08-04 both
+passes existed *only* as the prose below, and prose does not schedule
+anything: the foundation batch would have merged, shipped and closed with no
+investigative pass ever firing. If you add a pass type here, **file it as a
+ticket in the same breath.**
+
+**PROMOTED — jku, 2026-08-04, verbatim:** *"Yes I want these passes to run
+right after. And I want this to repeat after doing the pass and identifying
+things to fix."* So: round 1 runs **immediately after `#484`/`#485`/`#486`
+merge**, by explicit manual heavy-promotion. Read as a **standing promotion
+for the Pass A / Pass B family only** — each later round is pre-promoted to
+run when its dependency edge clears, with no fresh ask per round. It does not
+generalise to any other heavy ticket.
+
+**The recurrence is a `blockedBy` chain, NOT the word "recurring".** That word
+has a perfect zero-for-three record in this tracker (`#4` is stalled literally
+*at* "round 3"; `#37` and `#109` say "recurring" and never recurred; `#220`
+was a hand re-file that collided and was dropped). **Definition of done for
+round N is three things:** (1) file every finding with both keys and evidence;
+(2) **file round N+1**; (3) **set a hard `blockedBy` edge from round N+1 onto
+round N's finding tickets**. Only then may round N close. This is
+self-perpetuating, it encodes jku's sentence exactly (N+1 cannot start until
+N's fixes land), and it terminates — cc rejects cycles. Full rationale:
+`~/git/meta/meta/notes/gamedev-dogfood-loop-2026-08-04.md`.
 
 ### Pass A — dogfood-direct (Opus plays the game developer)
 
