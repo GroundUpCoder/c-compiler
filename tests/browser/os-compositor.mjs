@@ -188,8 +188,11 @@ try {
   // the absolute bound went VACUOUS on a loaded box — the false-green twin
   // of the leg below. Scale-free form: each 1 Hz wake costs one submit plus
   // the GRACE_FRAMES coast before the re-park, so frames stay a SMALL
-  // multiple of submits (~4-5x measured); free-running is ~60 frames per
-  // 1 Hz submit, an order of magnitude clear of this bound at any fps.
+  // multiple of submits (~4-5x measured, at 90fps and at 12fps alike —
+  // GRACE_FRAMES is a frame count, not a duration); free-running is ~60
+  // frames per 1 Hz submit, an order of magnitude clear of this bound at any
+  // fps. It also fails hard at submits === 0 rather than dividing by it —
+  // the loud direction; the sibling leg above names that cause.
   check('...without free-running', wd.frames < wd.submits * 15,
     Object.assign({ perSubmit: +(wd.frames / Math.max(1, wd.submits)).toFixed(1) }, wd));
   await vt1('pkill winmine');
