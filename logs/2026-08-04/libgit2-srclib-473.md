@@ -218,3 +218,41 @@ The kernel total is 156 because this ticket adds the 156th file.
 `cc` builds the demo from two `#include`s with no `-I` and no TU list, and the
 commit it writes has the **same oid as the host build's** (`78d09cb1…`), whose
 repository `git log` / `git fsck` / `git cat-file` accept unmodified.
+
+## Rebase onto #474 (`afc46b92`)
+
+#474 merged first and moved `vendor/fakegit/` to `os/git/`, so the tree the
+Step 1 measurement above names no longer exists — that measurement stands on
+its own tip (`481421fb`) and `os/git/bin.json` inherits the same 210 libgit2
+TUs (verified identical set) plus the same four stale flags already dropped.
+
+**The `tests/run.js` conflict was semantic, not textual.** #474 and this
+ticket independently rewrote the same rule, each supplying a DIFFERENT true
+reason why `^vendor/libgit2/` is now in the bake closure: #474's is that
+`os/git/bin.json` compiles the tree and `packages/git.json` ships the binary;
+this ticket's is that `packages/libgit2.json` ships the tree ITSELF as a
+srclib package. Both are recorded in the merged comment on purpose — each
+independently justifies kernel+sweep, so retiring one must not read as grounds
+to narrow the rule.
+
+The suite list is #474's `['fakegit','projects','kernel','sweep']`, NOT the
+`+ host` this branch originally had. That `host` was reasoning by analogy with
+the `^packages/` rule and does not survive checking: **no test under
+`tests/host/` or `tests/serve/` reads `vendor/libgit2` at all**.
+`test_source_packages.js` derives units from DEFINITIONS (and
+`packages/libgit2.json`, having no `project`/`c` entry, yields none), and
+`test_mkpkg_isolation.js` builds synthetic defs through `--packages-dir`.
+`packages/libgit2.json` itself still draws `host` from the `^packages/` rule,
+which is where that coverage belongs.
+
+**`os/image.json` 232 → 233.** #474 took main to 232 and this branch had
+independently chosen 232 for the same fat-image reason; git reported no
+conflict *because* the two sides agreed, which is exactly the failure mode —
+the agreement was the bug, not the resolution.
+
+`os/git` needs no change: its 14 remaining `-D` flags are now redundant
+duplicates of the header config (`#ifndef`-guarded, or an identical
+redefinition in `NO_MMAP`'s case), and its ten `-I` roots resolve to the same
+files the forwarders already reach same-dir. Trimming them is a follow-up for
+whoever owns that file, not a change this branch should make. Confirmed by the
+`fakegit` category building `os/git/bin.json` green (11/11) after the rebase.
