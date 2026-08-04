@@ -21419,6 +21419,12 @@ typedef struct SDL_Texture {
     int w;
     int h;
     int __handle;
+    Uint32 __magic;  /* liveness tag (#497): set at create, cleared at destroy,
+                        checked by every texture-taking entry so use of a
+                        destroyed texture fails with an SDL error instead of
+                        silently "working". Best-effort (the check reads freed
+                        memory once the allocator reuses it) — the same
+                        magic-tag detection upstream SDL uses. */
 } SDL_Texture;
 
 /* Fields common to the head of every SDL event (type/reserved/timestamp), shared
@@ -23024,6 +23030,9 @@ struct SDL_Window {
     SDL_Surface surface;
     int pixels_cap;      /* high-water byte size of surface.pixels (resize) */
     bool relative_mouse; /* requested relative-mouse mode (todos/0018) */
+    SDL_Renderer *renderer; /* the window's one renderer, or NULL (#497 —
+                               SDL3 allows one per window; SDL_CreateRenderer
+                               sets, SDL_DestroyRenderer clears) */
 };
 
 #define __SDL_MAX_WINDOWS 32
@@ -26389,6 +26398,24 @@ static SDL_Window *__sdl_window_by_handle(int handle) {
     return 0;
 }
 
+/* Liveness checks (#497): use of a destroyed window/texture must fail with an
+   SDL error, never silently "succeed" against freed memory. A window is live
+   iff it is in the registry (SDL_DestroyWindow unregisters before freeing, so
+   the check never dereferences the candidate pointer). Textures carry a magic
+   tag instead (there is no texture registry) — best-effort by nature, see the
+   SDL_Texture struct note. */
+static bool __sdl_window_live(SDL_Window *w) {
+    if (!w) return 0;
+    for (int i = 0; i < __SDL_MAX_WINDOWS; i++)
+        if (__sdl_window_registry[i] == w) return 1;
+    return 0;
+}
+
+#define __SDL_TEX_MAGIC 0x53544558u  /* 'STEX' */
+static bool __sdl_texture_live(SDL_Texture *t) {
+    return t && t->__magic == __SDL_TEX_MAGIC;
+}
+
 /* Low-level host imports — all operate on primitive values only.
    The host (host.js) knows nothing about C struct layouts. */
 __import int __sdl_init(int flags);
@@ -26569,22 +26596,23 @@ SDL_Window *SDL_CreateWindow(const char *title, int w, int h, SDL_WindowFlags fl
     memset(win->surface.pixels, 0, pitch * h);
     win->pixels_cap = pitch * h;
     win->relative_mouse = 0;
+    win->renderer = NULL;
     __sdl_window_register(win);
     return win;
 }
 
 SDL_WindowID SDL_GetWindowID(SDL_Window *window) {
-    if (!window) { SDL_InvalidParamError("window"); return 0; }
+    if (!__sdl_window_live(window)) { SDL_InvalidParamError("window"); return 0; }
     return (SDL_WindowID)window->handle;
 }
 
 SDL_Surface *SDL_GetWindowSurface(SDL_Window *window) {
-    if (!window) { SDL_InvalidParamError("window"); return NULL; }
+    if (!__sdl_window_live(window)) { SDL_InvalidParamError("window"); return NULL; }
     return &window->surface;
 }
 
 bool SDL_GetWindowSize(SDL_Window *window, int *w, int *h) {
-    if (!window) return SDL_InvalidParamError("window");
+    if (!__sdl_window_live(window)) return SDL_InvalidParamError("window");
     /* The surface tracks the window size (resize events re-derive it). */
     if (w) *w = window->surface.w;
     if (h) *h = window->surface.h;
@@ -26597,7 +26625,7 @@ bool SDL_GetWindowSize(SDL_Window *window, int *w, int *h) {
    window surface in place — see __sdl_push_window_event). Only the
    kernel-surface runtime honours it; elsewhere this fails loud. */
 bool SDL_SetWindowSize(SDL_Window *window, int w, int h) {
-    if (!window) return SDL_InvalidParamError("window");
+    if (!__sdl_window_live(window)) return SDL_InvalidParamError("window");
     if (w < 1 || h < 1)
         return SDL_SetError("SDL_SetWindowSize: invalid size %dx%d", w, h);
     if (__sdl_set_window_size(window->handle, w, h) != 0)
@@ -26609,14 +26637,14 @@ bool SDL_SetWindowSize(SDL_Window *window, int w, int h) {
    so a NULL window still reports the SDL error a program might check. */
 bool SDL_SetWindowPosition(SDL_Window *window, int x, int y) {
     (void)x; (void)y;
-    if (!window) return SDL_InvalidParamError("window");
+    if (!__sdl_window_live(window)) return SDL_InvalidParamError("window");
     return 1;
 }
 
 /* No taskbar/title icon pipe yet — succeed so an icon-fatal app runs (see
    SDL.h). The surface stays owned by the caller (the game frees it). */
 bool SDL_SetWindowIcon(SDL_Window *window, SDL_Surface *icon) {
-    if (!window) return SDL_InvalidParamError("window");
+    if (!__sdl_window_live(window)) return SDL_InvalidParamError("window");
     (void)icon;
     return 1;
 }
@@ -26634,7 +26662,7 @@ void SDL_DestroySurface(SDL_Surface *surface) {
 }
 
 bool SDL_UpdateWindowSurface(SDL_Window *window) {
-    if (!window) return SDL_InvalidParamError("window");
+    if (!__sdl_window_live(window)) return SDL_InvalidParamError("window");
     SDL_Surface *s = &window->surface;
     if (__sdl_update_window_surface(window->handle, s->pixels, s->w, s->h, s->pitch) != 0)
         return SDL_SetError("SDL_UpdateWindowSurface: the window has no surface to present");
@@ -27005,6 +27033,7 @@ SDL_AudioStream *SDL_OpenAudioDeviceStream(SDL_AudioDeviceID devid,
 
 bool SDL_PutAudioStreamData(SDL_AudioStream *stream, const void *buf, int len) {
     if (!stream) return SDL_InvalidParamError("stream");
+    if (!buf) return SDL_InvalidParamError("buf");
     if (len <= 0) return 1;
     /* Drain any backlog first so the ring is as empty as possible. */
     __sdl_stream_pump(stream);
@@ -27066,6 +27095,9 @@ void SDL_DestroyAudioStream(SDL_AudioStream *stream) {
 
 void SDL_DestroyWindow(SDL_Window *window) {
     if (!window) return;
+    /* A window not in the registry is already destroyed (#497): refuse the
+       double-destroy rather than double-free. */
+    if (!__sdl_window_live(window)) { SDL_InvalidParamError("window"); return; }
     __sdl_window_unregister(window);
     __sdl_destroy_window(window->handle);
     free(window->surface.pixels);
@@ -27186,7 +27218,7 @@ bool SDL_ClearClipboardData(void) {
 void SDL_free(void *mem) { free(mem); }
 
 bool SDL_SetWindowTitle(SDL_Window *window, const char *title) {
-    if (!window) return SDL_InvalidParamError("window");
+    if (!__sdl_window_live(window)) return SDL_InvalidParamError("window");
     __sdl_set_window_title(window->handle, title);
     return 1;
 }
@@ -27199,14 +27231,14 @@ bool SDL_SetWindowTitle(SDL_Window *window, const char *title) {
    pointer is locked the host pushes motion with true relative deltas
    (__sdl_push_mouse_motion_rel_event) instead of absolute positions. */
 bool SDL_SetWindowRelativeMouseMode(SDL_Window *window, bool enabled) {
-    if (!window) return SDL_InvalidParamError("window");
+    if (!__sdl_window_live(window)) return SDL_InvalidParamError("window");
     window->relative_mouse = enabled ? 1 : 0;
     __sdl_set_relative_mouse_mode(window->handle, window->relative_mouse);
     return 1;
 }
 
 bool SDL_GetWindowRelativeMouseMode(SDL_Window *window) {
-    if (!window) return SDL_InvalidParamError("window");
+    if (!__sdl_window_live(window)) return SDL_InvalidParamError("window");
     return window->relative_mouse;
 }
 
@@ -27284,26 +27316,51 @@ bool SDL_CursorVisible(void) { return __sdl_cursor_shown ? 1 : 0; }
    Every draw flattens to __sdl_render_quad (4 dst corners + src rect). */
 struct SDL_Renderer {
     int handle;
+    SDL_Window *window;  /* backref so SDL_DestroyRenderer can clear the
+                            window's one-renderer slot (#497) */
 };
 
+/* The one render driver this runtime has (#497). SDL3's name parameter selects
+   a specific backend; asking for one we don't provide must FAIL ("Couldn't
+   find matching render driver"), not silently hand back a different backend
+   while reporting success — a developer probing for "opengl"/"software" would
+   get a false positive. NULL keeps SDL3's pick-the-default meaning. */
+#define __SDL_RENDER_DRIVER "gucos"
+
 SDL_Renderer *SDL_CreateRenderer(SDL_Window *window, const char *name) {
-    (void)name;
-    int h = __sdl_create_renderer(window ? window->handle : 0);
+    if (!__sdl_window_live(window)) { SDL_InvalidParamError("window"); return NULL; }
+    if (window->renderer) { SDL_SetError("Renderer already associated with window"); return NULL; }
+    if (name && strcmp(name, __SDL_RENDER_DRIVER) != 0) {
+        SDL_SetError("Couldn't find matching render driver");
+        return NULL;
+    }
+    int h = __sdl_create_renderer(window->handle);
     if (h <= 0) { SDL_SetError("SDL_CreateRenderer: host failed to create a renderer"); return NULL; }
     SDL_Renderer *r = (SDL_Renderer *)malloc(sizeof(SDL_Renderer));
     if (!r) { SDL_SetError("Out of memory"); return NULL; }
     r->handle = h;
+    r->window = window;
+    window->renderer = r;
     return r;
 }
 
 void SDL_DestroyRenderer(SDL_Renderer *renderer) {
     if (!renderer) return;
+    if (__sdl_window_live(renderer->window) && renderer->window->renderer == renderer)
+        renderer->window->renderer = NULL;
     __sdl_destroy_renderer(renderer->handle);
     free(renderer);
 }
 
 SDL_Texture *SDL_CreateTexture(SDL_Renderer *renderer, SDL_PixelFormat format, SDL_TextureAccess access, int w, int h) {
     if (!renderer) { SDL_InvalidParamError("renderer"); return NULL; }
+    /* SDL3 rejects degenerate and absurd dimensions at create (#497): a 0x0 or
+       negative texture is the classic failed-config-parse output, and a huge
+       one would defer a multi-GB failure to far from the call that was wrong.
+       8192 is the safe per-dimension cap across this runtime's backends (the
+       browser flavor's WebGPU default maxTextureDimension2D). */
+    if (w <= 0 || h <= 0) { SDL_SetError("Texture dimensions can't be 0"); return NULL; }
+    if (w > 8192 || h > 8192) { SDL_SetError("Texture dimensions are limited to 8192x8192"); return NULL; }
     int th = __sdl_create_texture(renderer->handle, (int)access, w, h);
     if (th <= 0) { SDL_SetError("SDL_CreateTexture: host failed to create a texture (%dx%d)", w, h); return NULL; }
     SDL_Texture *t = (SDL_Texture *)malloc(sizeof(SDL_Texture));
@@ -27312,6 +27369,7 @@ SDL_Texture *SDL_CreateTexture(SDL_Renderer *renderer, SDL_PixelFormat format, S
     t->w = w;
     t->h = h;
     t->__handle = th;
+    t->__magic = __SDL_TEX_MAGIC;
     /* SDL3 default blend mode is alpha-aware: an alpha-format texture defaults to
        SDL_BLENDMODE_BLEND, a non-alpha one to SDL_BLENDMODE_NONE
        (src/render/SDL_render.c). */
@@ -27333,13 +27391,19 @@ SDL_Texture *SDL_CreateTextureFromSurface(SDL_Renderer *renderer, SDL_Surface *s
 }
 
 void SDL_DestroyTexture(SDL_Texture *texture) {
-    if (!texture) return;
+    if (!__sdl_texture_live(texture)) {
+        /* NULL is SDL3's documented no-op; a dead tag is a double-destroy —
+           refuse it rather than double-free. */
+        if (texture) SDL_InvalidParamError("texture");
+        return;
+    }
+    texture->__magic = 0;
     __sdl_destroy_texture(texture->__handle);
     free(texture);
 }
 
 bool SDL_UpdateTexture(SDL_Texture *texture, const SDL_Rect *rect, const void *pixels, int pitch) {
-    if (!texture) return SDL_InvalidParamError("texture");
+    if (!__sdl_texture_live(texture)) return SDL_InvalidParamError("texture");
     if (!pixels) return SDL_InvalidParamError("pixels");
     /* SDL3: rect==NULL updates the entire texture; otherwise only that sub-region
        (the source buffer is rect->h rows of 'pitch' bytes). Honour the rect so a
@@ -27356,37 +27420,37 @@ bool SDL_UpdateTexture(SDL_Texture *texture, const SDL_Rect *rect, const void *p
 }
 
 bool SDL_SetTextureColorMod(SDL_Texture *texture, Uint8 r, Uint8 g, Uint8 b) {
-    if (!texture) return SDL_InvalidParamError("texture");
+    if (!__sdl_texture_live(texture)) return SDL_InvalidParamError("texture");
     __sdl_set_texture_color_mod(texture->__handle, r / 255.0, g / 255.0, b / 255.0);
     return 1;
 }
 
 bool SDL_SetTextureAlphaMod(SDL_Texture *texture, Uint8 alpha) {
-    if (!texture) return SDL_InvalidParamError("texture");
+    if (!__sdl_texture_live(texture)) return SDL_InvalidParamError("texture");
     __sdl_set_texture_alpha_mod(texture->__handle, alpha / 255.0);
     return 1;
 }
 
 bool SDL_SetTextureBlendMode(SDL_Texture *texture, SDL_BlendMode blendMode) {
-    if (!texture) return SDL_InvalidParamError("texture");
+    if (!__sdl_texture_live(texture)) return SDL_InvalidParamError("texture");
     __sdl_set_texture_blend_mode(texture->__handle, (int)blendMode);
     return 1;
 }
 
 bool SDL_GetTextureBlendMode(SDL_Texture *texture, SDL_BlendMode *blendMode) {
-    if (!texture) return SDL_InvalidParamError("texture");
+    if (!__sdl_texture_live(texture)) return SDL_InvalidParamError("texture");
     if (blendMode) *blendMode = (SDL_BlendMode)__sdl_get_texture_blend_mode(texture->__handle);
     return 1;
 }
 
 bool SDL_SetTextureScaleMode(SDL_Texture *texture, SDL_ScaleMode scaleMode) {
-    if (!texture) return SDL_InvalidParamError("texture");
+    if (!__sdl_texture_live(texture)) return SDL_InvalidParamError("texture");
     __sdl_set_texture_scale_mode(texture->__handle, (int)scaleMode);
     return 1;
 }
 
 bool SDL_GetTextureScaleMode(SDL_Texture *texture, SDL_ScaleMode *scaleMode) {
-    if (!texture) return SDL_InvalidParamError("texture");
+    if (!__sdl_texture_live(texture)) return SDL_InvalidParamError("texture");
     if (scaleMode) *scaleMode = (SDL_ScaleMode)__sdl_get_texture_scale_mode(texture->__handle);
     return 1;
 }
@@ -27419,7 +27483,7 @@ static void __sdl_quad_rect(int r, int texH, float dx, float dy, float dw, float
 bool SDL_RenderTexture(SDL_Renderer *renderer, SDL_Texture *texture,
                        const SDL_FRect *srcrect, const SDL_FRect *dstrect) {
     if (!renderer) return SDL_InvalidParamError("renderer");
-    if (!texture) return SDL_InvalidParamError("texture");
+    if (!__sdl_texture_live(texture)) return SDL_InvalidParamError("texture");
     float sx = 0, sy = 0, sw = (float)texture->w, sh = (float)texture->h;
     if (srcrect) { sx = srcrect->x; sy = srcrect->y; sw = srcrect->w; sh = srcrect->h; }
     float dx = 0, dy = 0, dw = (float)texture->w, dh = (float)texture->h;
@@ -27473,9 +27537,18 @@ bool SDL_RenderGeometry(SDL_Renderer *renderer, SDL_Texture *texture,
                         const SDL_Vertex *vertices, int num_vertices,
                         const int *indices, int num_indices) {
     if (!renderer) return SDL_InvalidParamError("renderer");
+    if (texture && !__sdl_texture_live(texture)) return SDL_InvalidParamError("texture");
     if (!vertices) return SDL_InvalidParamError("vertices");
     if (num_vertices < 3) return SDL_SetError("SDL_RenderGeometry: num_vertices must be >= 3");
     if (indices && num_indices % 3 != 0) return SDL_SetError("SDL_RenderGeometry: num_indices must be a multiple of 3");
+    /* SDL3 validates every index against num_vertices (#497): an out-of-range
+       index — the stale-count index buffer bug — must fail here, not "work" by
+       reading whatever sits past the vertex array. */
+    if (indices) {
+        for (int i = 0; i < num_indices; i++)
+            if (indices[i] < 0 || indices[i] >= num_vertices)
+                return SDL_SetError("Values of 'indices' out of bounds");
+    }
     int n = indices ? num_indices : num_vertices;
     if (n <= 0) return 1;
     /* Resolve indices into a flat triangle soup of [x,y,u,v,r,g,b,a] per vertex
@@ -28285,6 +28358,7 @@ SDL_Window *SDL_CreatePopupWindow(SDL_Window *parent, int offset_x, int offset_y
     memset(win->surface.pixels, 0, pitch * h);
     win->pixels_cap = pitch * h;
     win->relative_mouse = 0;
+    win->renderer = NULL;
     /* Slot into __SDL.c's registry directly (see __SDL_internal.h): RESIZED
        re-derivation and per-window close routing then cover popups exactly
        like top-levels. Past the cap the window still works, it just never

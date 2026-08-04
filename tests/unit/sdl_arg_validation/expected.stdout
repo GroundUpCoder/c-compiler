@@ -1,0 +1,23 @@
+windows: 1
+renderer: 1
+tex 0x0 rejected: 1 err: 1
+tex neg rejected: 1
+tex huge rejected: 1 err: 1
+tex 64x64 ok: 1
+unknown driver rejected: 1 msg: 1
+second renderer rejected: 1 msg: 1
+named driver ok: 1
+recreate after destroy ok: 1
+oob index rejected: 1 err: 1
+neg index rejected: 1
+good indices ok: 1
+audio stream: 1
+null buf rejected: 1 msg: 1
+real buf ok: 1
+dead tex mod rejected: 1 err: 1
+dead tex render rejected: 1
+tex double destroy loud: 1
+dead window title rejected: 1 err: 1
+dead window surface rejected: 1
+window double destroy loud: 1
+live window title ok: 1
