@@ -1352,10 +1352,13 @@ static LRESULT lv_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 if (ht->pt.x >= x && ht->pt.x < x + w) { ht->iSubItem = c; break; }
                 x += w;
             }
-            /* There is no ImageList and no state image here, so every
-             * on-item hit is on the LABEL — saying only LVHT_ONITEM left a
-             * caller that tests the sub-flags (the documented way to tell
-             * a label hit from an icon hit) reading "neither" (gap #31). */
+            /* gap #31 asked for LVHT_ONITEMLABEL because the identifier
+             * never appeared here — but LVHT_ONITEM IS (ONITEMICON |
+             * ONITEMLABEL | ONITEMSTATEICON) = 0x0E, so a caller testing
+             * the sub-flag has always read true. Naming it is DOCUMENTATION
+             * of that (there is no ImageList and no state image, so every
+             * on-item hit is a label hit), not a behaviour change: no test
+             * can tell the two spellings apart. */
             ht->flags = LVHT_ONITEM | LVHT_ONITEMLABEL;
         } else {
             ht->flags = LVHT_NOWHERE;

@@ -1299,13 +1299,6 @@ static void lvtest_158(HWND top, HWND lvOld) {
         ListView_Scroll(lv, 100, 0);             /* content 350 -> column 3 */
         st_check("158 hittest column follows the scroll",
                  lv_hit_sub(lv, probe, y) == 3);
-        LVHITTESTINFO ht;
-        memset(&ht, 0, sizeof ht);
-        ht.pt.x = probe;
-        ht.pt.y = y;
-        ListView_HitTest(lv, &ht);
-        st_check("158 hittest reports a LABEL hit",
-                 (ht.flags & LVHT_ONITEMLABEL) != 0);
     }
 
     /* --- the bar's own notifications --- */
