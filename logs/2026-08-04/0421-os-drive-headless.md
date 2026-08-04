@@ -161,6 +161,16 @@ Ran the plan verbatim; scripts at `/tmp/osdrive421/`, logs beside them.
    OWED and will be re-run as a fresh full `--diff` invocation when the
    lock frees.
 
+## #501/#497 stance (API honesty, recorded)
+
+The driver's `run()`/`wmctl()` propagate wmctl's own exit status faithfully —
+so it inherits wmctl's #501 silence (non-numeric SID atoi'd to 0, exit 0)
+exactly as loudly as wmctl tells it, i.e. silently. Deliberately NOT adding
+driver-side SID validation: that would be a second copy of wmctl's parsing
+rules that drifts, papering over the product bug one layer above where it
+lives. The fix belongs in `os/wmctl.c` (#501); once wmctl exits nonzero, this
+driver surfaces it with zero changes.
+
 ## Deviations / notes for @master
 
 - The kickoff's NM-2 correction held: exactly one `node_modules` at the main
