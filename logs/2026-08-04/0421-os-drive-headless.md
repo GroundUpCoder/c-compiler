@@ -125,6 +125,42 @@ ONLY after @master's release from the heavy-lock stand-down.
    `build/test-kernel/summary.json` `done: true, filter: null,
    files.recorded === files.total` (157 on current main), zero non-pass.
 
+## Verification results (release window, 2026-08-04 ~21:00 KST)
+
+Ran the plan verbatim; scripts at `/tmp/osdrive421/`, logs beside them.
+
+1. **Green smoke** — PASS, exit 0. Cold boot baked v236 from source in
+   202.8 s (the fixture at main is v231, so the bake was expected). Output:
+   `RT-OK 100000 bytes` (putFile/readFile round-trip byte-equal),
+   `SHOT-OK 1024 768` (18,955-byte PNG, visually a real desktop: winbox +
+   chrome, ksvc icon labels, taskbar/START/clock), `SAMPLE {0,128,128}` =
+   the desktop teal.
+2. **Red A (run timeout)** — predicted `run("sleep 5"): timed out after
+   1500ms`, exit 1. **Actual: verbatim match.**
+3. **Red B (0171 wait gate)** — predicted a THROW naming the wmctl timeout,
+   not a quiet status-1. **Actual: threw** `wmctl wait timed out (a wait on
+   an unreachable condition …): wmctl: wait win timed out after 2000ms`,
+   exit 1. (wmctl's message omits the window name — minor wording delta
+   from the prediction, same class.)
+4. **Red C (missing file)** — predicted `wc failed (status 1)`. **Actual:
+   verbatim match**, exit 1.
+5. **Red D (heavy-lock refusal)** — **first attempt REFUTED my harness, not
+   the driver**: exit 0, because `acquireHeavyLock` exports
+   `CC_HEAVY_LOCK_PID` and the spawned driver's boots joined RE-ENTRANTLY as
+   the holder's children (the designed todos/0342 behavior). With the marker
+   stripped from the child env: **exit 3, refusal naming
+   red-control-D-holder** — as predicted.
+6. **Restored green** — PASS, exit 0, **ready in 0.2 s** (warm image; the
+   spike's 136 ms class).
+7. **Gate** `node tests/run.js --diff origin/main` → suites
+   `todos, host, kernel` (`filter: null` in this invocation's
+   `build/test-run/summary.json`): **todos pass (6.8 s), host pass
+   (241.5 s), kernel exit 3 — heavy lock held by a ticket-488 lane's
+   `os/boot.js` (pid 17404, `/tmp/passb/os.img`)** that started inside the
+   release window. That is the lock working, not a red. The kernel leg is
+   OWED and will be re-run as a fresh full `--diff` invocation when the
+   lock frees.
+
 ## Deviations / notes for @master
 
 - The kickoff's NM-2 correction held: exactly one `node_modules` at the main
