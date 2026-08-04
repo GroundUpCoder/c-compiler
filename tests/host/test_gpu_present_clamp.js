@@ -123,5 +123,40 @@ b2.present();
 check('vsync-less flavor ships its first present (clock-fallback gate opens)',
   st2.frames === 1, `frames=${st2.frames}`);
 
+// 7b) the fallback's HELD branch — the one branch live on a vsync-less
+//    embedder. A real clock cannot be told "advance less than 8ms", so the
+//    trial MEASURES itself instead of assuming adjacency: present (ships,
+//    stamping the window at ~tA), immediately present again, and only a
+//    trial whose total elapsed dt sits inside one window asserts — with
+//    g.ms >= tA, dt < CLAMP_MS forces the second decision inside the
+//    window, so a hold is mandatory and a SHIP is a clamp violation (fail
+//    loud, no retry). A preempted trial (GC pause / --under-load stall
+//    between two adjacent calls, dt >= CLAMP_MS) retries under a deadline;
+//    exhausting the deadline is a loud FAIL, never a vacuous pass.
+const CLAMP_MS = 8;   // must match host.js PRESENT_CLAMP_MS
+let heldProved = false, violated = '';
+const trialDeadline = Date.now() + 2000;
+while (!heldProved && !violated && Date.now() < trialDeadline) {
+  const before = st2.frames;
+  const tA = Date.now();
+  b2.present();
+  if (st2.frames !== before + 1) continue;  // still inside the previous window: spin till it ships
+  b2.present();
+  const dt = Date.now() - tA;
+  if (st2.frames === before + 2) {
+    if (dt < CLAMP_MS) violated = `second present SHIPPED ${dt}ms into the window`;
+    continue;                               // dt >= CLAMP_MS: a stall between the calls, retry
+  }
+  if (dt < CLAMP_MS) heldProved = true;     // measured-valid trial: held inside one window
+  // held with dt >= CLAMP_MS is indeterminate (the decision instant was
+  // earlier than tA+dt) — retry rather than assert on it.
+}
+check('clock fallback holds a same-window present (self-measured trial)',
+  heldProved && !violated, violated || `proved=${heldProved} frames=${st2.frames}`);
+const heldAt = st2.frames;
+env2.__sdl_pump_wait(0);
+check('clock fallback: the held frame ships at park (never lost)',
+  st2.frames === heldAt + 1, `frames=${st2.frames}`);
+
 console.log(failures ? '\ngpu present clamp: ' + failures + ' FAILED' : '\ngpu present clamp: PASS');
 process.exit(failures ? 1 : 0);
