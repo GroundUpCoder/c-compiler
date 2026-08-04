@@ -193,6 +193,25 @@ convention).
 
 `os/image.json` 231 → 232: the fat image gains the folded package.
 
+## Gate
+
+`node tests/run.js --diff origin/main --dry-run` mandated **todos, host,
+projects, fakegit, kernel, sweep**. One invocation, `origin/main` = `cefc2915`,
+tree = `f790c431`:
+
+| suite | result |
+|---|---|
+| todos | pass (13.1s) |
+| host | pass (243.5s) |
+| py[projects,fakegit] | pass (304.2s) |
+| kernel | pass (1187.7s) — **156/156 selected, 156/156 recorded** |
+| sweep | pass (1163.3s) — **50/50 selected, 50/50 recorded** |
+
+5 passed, 0 failed (2911.9s). Read from `build/test-run/summary.json`
+(`results[].suite` / `.status` / `.files`), not from the runner's summary line.
+`recorded == total` on both artifact-backed suites, so nothing was filtered.
+The kernel total is 156 because this ticket adds the 156th file.
+
 ## Result
 
 `node tests/kernel/test_gucman_libgit2_e2e.js` — **41/41 PASS**. The in-OS
