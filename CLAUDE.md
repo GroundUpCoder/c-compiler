@@ -322,11 +322,30 @@ a statement about the whole tree. So:
   even when every merge in the batch gated green on its own, and even when no
   merge in the batch selected `sweep`. It is the ONLY place the browser sweep is
   guaranteed to see the composed result of a batch.
-- 🔴 **Judge it from the artifacts, never from a runner summary line.**
+- 🔴 **Judge it from the artifacts, never from a runner summary line — and the
+  RUN-LEVEL artifact first.** `build/test-run/summary.json` is the only record
+  that a *dispatcher* run finished, and it is written by atomic rename at the
+  very end, so it exists only for a run that completed. Require, from the copy
+  **this invocation wrote** (mtime post-dating the run's start — the merged
+  record carries `elapsedMs`, not a timestamp):
+  - `filter: null`, and `suites` = the full `all` set;
+  - every `results[]` entry `status: "pass"` — **all of them, not just the two
+    heavy ones**. A failing `unit`/`host`/Python suite is a red ship gate, and
+    `pass` is demanded literally: `sweep` is an `optional` suite, so a missing
+    Playwright degrades it to a **skip**, which is precisely the state a ship
+    must never be judged green in.
+  Only then read the per-suite artifacts, which say what the run-level record
+  cannot — that each heavy suite covered its WHOLE membership:
   `build/test-kernel/summary.json` and `build/test-browser/summary.json` must
   each show `done: true`, `filter: null`, `files.recorded === files.total`, and
-  zero non-`pass` results. A `--filter`ed half-sweep is not a pre-deploy sweep,
-  and an absent `summary.json` means "did not finish", never a green.
+  zero non-`pass` per-file results.
+  🔴 **The two child artifacts alone are NOT evidence** — they persist across
+  invocations, so a run that was interrupted, never started, or died in an
+  earlier suite can leave both of them satisfying every condition above. That is
+  the same rule as the "Authority first" note at the top of this section (an
+  absent `build/test-run/summary.json` means "did not finish", never a green),
+  stated where a shipper is actually looking. A `--filter`ed half-sweep is not a
+  pre-deploy sweep either, at either level.
 - 🔴 **Never `--resume` a pre-deploy sweep**, and never let it carry results in
   from an earlier tree. `--resume` deliberately ignores carried results for
   exactly this reason; a ship gate must be one run over one tree.

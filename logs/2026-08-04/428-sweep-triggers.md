@@ -183,11 +183,35 @@ The narrowing's safety net, and the half of #428 that carries the weight:
 - No gucOS image ships without a full `node tests/run.js all` on the exact tree
   being shipped, `sweep` included, `--filter` unset — even when every merge in
   the batch gated green on its own and none of them selected `sweep`.
-- Judged from `build/test-kernel/summary.json` + `build/test-browser/summary.json`
+- Judged from the **run-level** `build/test-run/summary.json` written by that
+  invocation (`filter: null`, `suites` = the full `all` set, every `results[]`
+  entry `pass`), and only then from the per-suite artifacts
   (`done: true`, `filter: null`, `files.recorded === files.total`, zero
-  non-`pass`), never from a runner summary line. Never `--resume`; never carry
+  non-`pass`). Never from a runner summary line. Never `--resume`; never carry
   results in from an earlier tree.
 - Red ⇒ bisect within the batch, do not ship.
+
+### Counter pass — Codex finding on rule 5's evidence clause (accepted)
+
+The first draft of rule 5 named **only** the two child artifacts. Codex found
+that those persist across invocations, so a run that was interrupted, never
+started, or died in an earlier suite can leave both of them satisfying every
+condition the rule stated — and that this contradicted the section's own
+"Authority first" note (an absent `build/test-run/summary.json` is never a
+green). The finding is correct and it is the one defect that would have
+mattered, because rule 5 IS the net that makes the narrowing acceptable: a net
+satisfiable by stale artifacts is not a net.
+
+Fixed by making the **run-level** record the primary evidence —
+`build/test-run/summary.json` from that invocation, `filter: null`, `suites` =
+the full `all` set, every `results[]` entry `pass` — with the child-artifact
+checks kept as the thing the run-level record *cannot* say (whole-membership
+coverage). `writeMergedSummary` (`tests/run.js:751`) writes it by atomic rename
+at the end of the run, so its presence is a completion record; it carries
+`elapsedMs` rather than a timestamp, so "this invocation's copy" is judged by
+mtime. One clause added beyond the proposed shape: `pass` is demanded
+*literally*, because `sweep` is an `optional` suite and a missing Playwright
+degrades it to a **skip** — exactly the state a ship must never read as green.
 
 Placed as rule **5** in "Gate cost + gate batching" so it extends #415/#440's
 text rather than colliding with it. #446's cadence block (still open at time of
