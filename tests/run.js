@@ -117,6 +117,46 @@ const CITED_RE = CITED.ok && CITED.files.length
 // are gated: checked BEFORE it, so `.md$` and friends can't swallow them.
 const FORCE = [/^todos\//, CITED_RE];
 
+// ---- os/'s RUNTIME-ONLY files (ticket #428) ----
+//
+// gucOS has TWO hosts over one kernel: the browser page (os.html + its
+// workers + the WebGPU compositor) and the headless Node twin (os/boot.js).
+// Almost everything under os/ is shared — seeded C sources, headers and the
+// bake manifest, all of which become blob bytes and are therefore observable
+// from BOTH suites. The six files below are the exception: each belongs to
+// exactly ONE host, and none of them is a bake input, so the OTHER suite is
+// structurally BLIND to an edit here — it neither loads the file nor boots an
+// image whose bytes it can change. Naming the blind suite would not be extra
+// coverage, it would be a 17-minute (kernel) or ~19-minute (sweep) run that
+// cannot fail because of the diff.
+//
+// The "not a bake input" half is not an assertion made here: os-common.js's
+// `BAKE_INPUT_SKIP` already declares os.html / boot.js / the two workers /
+// the compositor runtime-only, and tests/host/test_bakeinput_sources.js pins
+// that with an independent scan. osk.js joined that list in the same change
+// (it is loaded by exactly one `<script src>` in os.html and appears nowhere
+// in os/image.json or packages/*.json).
+//
+// 🔴 This list is the ONLY narrowing #428 makes. Everything else under os/ —
+// every .c/.h, os/image.json, os/os-common.js, term/, win32/, ksvc/, gcode/,
+// gucman/, sounds/, welcome.html — keeps BOTH suites, deliberately: those
+// paths change blob bytes, and the browser sweep demonstrably asserts things
+// the headless suite does not (2026-08-03: a Desktop-launcher change under
+// os/image.json went kernel-green 151/151 and sweep-RED on os-paint.mjs). The
+// pre-deploy full sweep in CLAUDE.md is the net under the rest.
+const OS_BROWSER_ONLY = ['os.html', 'osk.js', 'compositor.js',
+                         'kernel-worker.js', 'process-worker.js'];
+const OS_HEADLESS_ONLY = ['boot.js'];
+const OS_RUNTIME_ONLY = OS_BROWSER_ONLY.concat(OS_HEADLESS_ONLY);
+// Rules UNION, so the shared-os/ rule cannot SUBTRACT these — it has to not
+// match them in the first place. Built from the same array as the rules
+// below so the two can never drift.
+const OS_SHARED_RE = new RegExp(
+  '^os\\/(?!(' + OS_RUNTIME_ONLY.map(f => f.replace(/\./g, '\\.')).join('|') + ')$)');
+const OS_BROWSER_ONLY_RE = new RegExp(
+  '^os\\/(' + OS_BROWSER_ONLY.filter(f => f !== 'os.html')
+                             .map(f => f.replace(/\./g, '\\.')).join('|') + ')$');
+
 // [regex, [suite, ...], why]. Order is irrelevant (union), but grouped by
 // concern for readability.
 const RULES = [
@@ -162,8 +202,32 @@ const RULES = [
   // The owner-side kernel (process table, fds, WM/audio server).
   [/^kernel\.js$/, ['kernel', 'sweep'], 'the process control plane'],
 
-  // The reference OS build: seeded C, boot, compositor, the image manifest.
-  [/^os\//, ['kernel', 'sweep'], 'seeded OS sources restale the image; e2e + browser cover it'],
+  // The reference OS build: seeded C sources, headers, the image manifest —
+  // everything under os/ EXCEPT the six per-host runtime files carved out
+  // above (ticket #428). These paths become blob bytes, so both the headless
+  // e2es and the real-browser sweep can observe an edit, and both are named.
+  [OS_SHARED_RE, ['kernel', 'sweep'], 'seeded OS sources restale the image; e2e + browser cover it'],
+  // ---- the per-host runtime files (ticket #428) ----
+  // Browser-only page glue. os/boot.js is the headless host and loads none of
+  // it; kernel.js's BOOT_SOURCE is process-worker.js's deliberate twin, and
+  // `wmScreenshotScreen` is compositor.js's. No kernel-suite test opens any of
+  // these files, and none is a bake input (os-common.js BAKE_INPUT_SKIP,
+  // pinned by tests/host/test_bakeinput_sources.js), so the kernel suite
+  // cannot observe an edit here at all.
+  [OS_BROWSER_ONLY_RE, ['sweep'],
+    'browser-only page glue — the headless host loads none of it and it is not a bake input'],
+  // os.html is the same class, plus ONE cheap real observation: serve.js
+  // advertises and serves /os/os.html, which tests/serve/test_first_run.js
+  // (host suite) asserts returns 200 — so a rename/delete fails in seconds
+  // instead of surviving to a browser boot.
+  [/^os\/os\.html$/, ['sweep', 'host'],
+    'the browser page shell — sweep drives it; the host suite pins the path serve.js serves'],
+  // The headless Node host, the mirror image: no browser test loads boot.js
+  // (the sweep boots os.html through serve.js, and every image it boots comes
+  // from tools/mkimage.js via tests/lib/image-fixture.js — never from boot.js),
+  // and it is runtime-only, so the sweep is blind to an edit here.
+  [/^os\/boot\.js$/, ['kernel'],
+    'the headless Node host — every kernel e2e drives it; no browser test loads it and it is not a bake input'],
   // The ksvc kernel service blob (todos/0275): /usr/lib/ksvc.wasm + its
   // loader feed BOTH composites' label text — explicit so a future ^os/
   // rule split can't orphan it (same suites as ^os/ today).
@@ -789,5 +853,6 @@ if (require.main === module) {
 } else {
   // Required as a module (tests/host/test_diff_rules.js): expose the rule
   // table + the planner so the RULES closure is testable without a git diff.
-  module.exports = { SUITES, PY_CATEGORIES, RULES, IGNORE, FORCE, planFromDiff };
+  module.exports = { SUITES, PY_CATEGORIES, RULES, IGNORE, FORCE, planFromDiff,
+                     OS_BROWSER_ONLY, OS_HEADLESS_ONLY, OS_RUNTIME_ONLY };
 }

@@ -147,10 +147,28 @@ check('vendor/cjson is inside the bake-input closure', () => {
 
 check('os/ runtime-only files stay excluded', () => {
   // gucman's `includes: [".."]` reaches the os root — enrolling it must not
-  // smuggle os.html/boot.js/the workers back in as "inputs".
-  for (const f of ['os/os.html', 'os/boot.js', 'os/kernel-worker.js',
+  // smuggle os.html/osk.js/boot.js/the workers back in as "inputs".
+  for (const f of ['os/os.html', 'os/osk.js', 'os/boot.js', 'os/kernel-worker.js',
                    'os/process-worker.js', 'os/compositor.js']) {
     assert.ok(!statted.has(f), f + ' is runtime-only and must not restale the blob');
+  }
+});
+
+check('tests/run.js agrees on which os/ files are runtime-only', () => {
+  // Ticket #428 narrows the diff→suite rule for exactly these files to the
+  // ONE host that can observe them, and the justification for dropping the
+  // other suite is "it cannot change blob bytes" — i.e. THIS scan. The two
+  // statements live in different files for good reasons (one is a freshness
+  // gate, one is a gate-selection rule), so cross-check them rather than let
+  // them drift: a file added to the rule's exception list but not to
+  // BAKE_INPUT_SKIP would be narrowed on a premise this scan refutes.
+  const { OS_RUNTIME_ONLY } = require(path.join(ROOT, 'tests', 'run.js'));
+  assert.ok(Array.isArray(OS_RUNTIME_ONLY) && OS_RUNTIME_ONLY.length,
+    'tests/run.js must export OS_RUNTIME_ONLY');
+  for (const name of OS_RUNTIME_ONLY) {
+    assert.ok(!statted.has('os/' + name),
+      'tests/run.js narrows os/' + name + ' to one host, but the bake scan still treats it ' +
+      'as an input — one of the two is wrong');
   }
 });
 

@@ -227,8 +227,16 @@ never intuition about "how big" the change is. And an absent
 |---|---|---|
 | `logs/**.md` | **none** | zero |
 | `todos/*.md`, `CLAUDE.md` | `todos` only | ~6.8 s |
-| `os/**.{c,h,html}`, `os/image.json` | kernel + sweep | heavy |
+| `os/**.{c,h}`, `os/image.json`, `os/os-common.js` | kernel + sweep | heavy |
+| `os/os.html`, `os/osk.js`, `os/compositor.js`, `os/kernel-worker.js`, `os/process-worker.js` | **sweep** only (+`host` for os.html) | one heavy suite (ticket #428) |
+| `os/boot.js` | **kernel** only | one heavy suite (ticket #428) |
 | `compiler.js` | **all 25 suites** | heaviest |
+
+🔴 The two `os/` narrow rows are the ONLY per-host carve-outs, and they are
+carve-outs of *blindness*, not of judgement: those six files belong to exactly
+one of gucOS's two hosts and are not bake inputs, so the other suite cannot
+observe an edit to them at all. **Every other path under `os/` still draws BOTH
+heavy suites and that is deliberate** — see rule 5.
 
 **2. The heavy-lock ceiling — worktrees parallelise EDITING, never the GATE.**
 `tests/lib/heavy-lock.js` makes the kernel and sweep suites mutually exclusive
@@ -304,6 +312,39 @@ own diff touches. Verified in source: `tests/browser/os-gcode.mjs` imports
 call `latchHeavyLock()` → `joinHeavyLock`. So a one-file test edit that
 imports `os-harness.mjs` is a HEAVY lane, however light its diff looks. **Ask
 what a diff GATES, not what repo or how many lines it is.**
+
+**5. The PRE-DEPLOY FULL SWEEP (ticket #428) — the net under every targeted
+green.** A targeted `--diff` gate is a statement about ONE change set. A ship is
+a statement about the whole tree. So:
+
+- 🔴 **No gucOS image ships without a full `node tests/run.js all` on the exact
+  tree being shipped — including `sweep` in full, `--filter` unset.** This holds
+  even when every merge in the batch gated green on its own, and even when no
+  merge in the batch selected `sweep`. It is the ONLY place the browser sweep is
+  guaranteed to see the composed result of a batch.
+- 🔴 **Judge it from the artifacts, never from a runner summary line.**
+  `build/test-kernel/summary.json` and `build/test-browser/summary.json` must
+  each show `done: true`, `filter: null`, `files.recorded === files.total`, and
+  zero non-`pass` results. A `--filter`ed half-sweep is not a pre-deploy sweep,
+  and an absent `summary.json` means "did not finish", never a green.
+- 🔴 **Never `--resume` a pre-deploy sweep**, and never let it carry results in
+  from an earlier tree. `--resume` deliberately ignores carried results for
+  exactly this reason; a ship gate must be one run over one tree.
+- **A red pre-deploy sweep does not ship.** Bisect within the batch (the merge
+  log is the bisect space) and re-run the full pair on the fix — attribution is
+  the shipper's burden, the same rule as 3a.6.
+
+This block says WHAT the pre-ship gate is; **ticket #446's ship cadence says HOW
+OFTEN a ship happens** (merge ≠ ship; ~8 merged tickets or 24 h). They compose:
+cadence decides when, this decides what must be green when it does.
+
+**Why this is load-bearing rather than belt-and-braces.** #428 narrowed the
+`^os/` rule only where the untriggered suite is *structurally* blind, precisely
+because the sweep demonstrably catches things the headless suites do not: on
+2026-08-03 a Desktop-launcher change under `os/image.json` ran **kernel-green
+151/151 and sweep-RED** (`os-paint.mjs`). That is the standing evidence for two
+rules at once — why the wide half of `^os/` stays wide, and why a batch that
+skips the sweep on its way to main still owes it before a ship.
 
 ### Flake / under-load gate (`tests/flake.js`, todos/0147)
 

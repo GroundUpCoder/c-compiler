@@ -2130,10 +2130,19 @@ function projectExternalDirs(proj, dir) {
  *
  * Deliberately excluded (can't change blob bytes): *.img (the images
  * themselves), *.md, dotfiles, and os/'s runtime-only files (os.html,
- * boot.js, the workers, the compositor). Directory granularity
- * over-invalidates — "when in doubt, re-bake" is the cheap direction. */
+ * osk.js, boot.js, the workers, the compositor). Directory granularity
+ * over-invalidates — "when in doubt, re-bake" is the cheap direction.
+ *
+ * osk.js joined the list at ticket #428: it is the on-screen keyboard,
+ * reached by exactly one `<script src="osk.js">` in os.html, and the name
+ * appears in NO manifest (os/image.json, packages/ *.json) — so like the
+ * other five it is page glue that cannot become blob bytes. It was simply
+ * missed when it landed. #428 also narrows the tests/run.js diff rule for
+ * these six files to the ONE host that can observe them; this list is the
+ * oracle that rule's guard (tests/host/test_diff_rules.js) checks itself
+ * against, so the two statements of "runtime-only" cannot drift apart. */
 var BAKE_INPUT_SKIP = {
-  'os.html': 1, 'boot.js': 1, 'kernel-worker.js': 1,
+  'os.html': 1, 'osk.js': 1, 'boot.js': 1, 'kernel-worker.js': 1,
   'process-worker.js': 1, 'compositor.js': 1,
 };
 function newestBakeInput(fsMod, pathMod, rootDir, manifest) {
