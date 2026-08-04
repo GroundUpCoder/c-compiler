@@ -18,6 +18,13 @@
 //     SDL_Delay does NOT pin the compositor awake (compKeepAlive false)
 //   - the standalone-browser flavor (createBrowserSDL) still throws loud,
 //     and the headless null flavor (createNullSDL) really sleeps
+//   - #485 (SDL_PollEvent pumps the input ring): a POLL-ONLY loop — no
+//     SDL_Delay, no SDL_WaitEvent anywhere, the most common SDL main-loop
+//     idiom — receives injected input and a WMEV_QUIT close request via
+//     SDL_PollEvent's own entry pump (__sdl_pump -> host.js drainInput),
+//     and exits cleanly. Before #485 such a loop was input-dead: the ring
+//     drained only inside pumpWait/waitMulti or the frame driver, so the
+//     window was unclosable and the app unquittable.
 //
 // Run: node tests/kernel/test_sdl_delay_e2e.js
 'use strict';
@@ -110,12 +117,59 @@ int main(void) {
 }
 `;
 
+/* #485: the poll-only main loop, verbatim idiom — NO SDL_Delay and NO
+   SDL_WaitEvent anywhere. The ONLY pump this app ever runs is the one
+   inside SDL_PollEvent itself; if that pump is missing, the injected key
+   and the close request below never arrive and the leg times out. */
+const POLL_C = `
+#include <SDL.h>
+#include <stdio.h>
+#include <stdint.h>
+
+int main(void) {
+    int i;
+    if (!SDL_Init(SDL_INIT_VIDEO)) { printf("NOINIT\\n"); return 3; }
+    SDL_Window *w = SDL_CreateWindow("pollbox", 64, 48, 0);
+    if (!w) { printf("NOWIN\\n"); return 3; }
+    SDL_Surface *s = SDL_GetWindowSurface(w);
+    uint32_t *px = (uint32_t *)s->pixels;
+    printf("PLOOP\\n");
+    fflush(stdout);
+    int running = 1, keys = 0, lastkey = 0, sawquit = 0, frames = 0;
+    while (running) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_KEY_DOWN) {
+                keys++; lastkey = (int)ev.key.key;
+                printf("PKEY sym=%d\\n", lastkey);
+                fflush(stdout);
+            }
+            if (ev.type == SDL_EVENT_QUIT) { sawquit = 1; running = 0; }
+        }
+        for (i = 0; i < s->w * s->h; i++) px[i] = 0xFF203040u + (uint32_t)frames;
+        SDL_UpdateWindowSurface(w);
+        frames++;
+    }
+    printf("PL keys=%d lastkey=%d quit=%d\\n", keys, lastkey, sawquit);
+    fflush(stdout);
+    SDL_Quit();
+    printf("PDONE\\n");
+    fflush(stdout);
+    return 0;
+}
+`;
+
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sdl-delay-e2e-'));
 const cfile = path.join(tmp, 'app.c');
 const wasm = path.join(tmp, 'app.wasm');
 fs.writeFileSync(cfile, APP_C);
 cp.execFileSync('node', [path.join(ROOT, 'compiler.js'), cfile, '-o', wasm], { stdio: 'pipe' });
 const image = fs.readFileSync(wasm);
+const pollCfile = path.join(tmp, 'pollapp.c');
+const pollWasm = path.join(tmp, 'pollapp.wasm');
+fs.writeFileSync(pollCfile, POLL_C);
+cp.execFileSync('node', [path.join(ROOT, 'compiler.js'), pollCfile, '-o', pollWasm], { stdio: 'pipe' });
+const pollImage = fs.readFileSync(pollWasm);
 
 let out = '';
 const kernel = new K.Kernel({
@@ -236,6 +290,57 @@ const watchdog = setTimeout(() => {
 
   await waitOut('L3 done', 8000);
   await waitOut('DONE');
+
+  // ---- #485: SDL_PollEvent pumps the input ring -------------------------
+  // A poll-only loop (no SDL_Delay/SDL_WaitEvent anywhere) as its own OS
+  // process under a fresh kernel: the app spins poll/draw/present flat out,
+  // so the ONLY way input can reach it is SDL_PollEvent's own entry pump.
+  // Before #485 this loop was input-dead — the injected key and the close
+  // request below were never seen, and this leg timed out.
+  let out2 = '';
+  let halt2 = null;
+  const kernel2 = new K.Kernel({
+    createWorker: K.nodeCreateWorker({ hostPath: path.join(ROOT, 'host.js'), kernelPath: path.join(ROOT, 'kernel.js') }),
+    loadImage: (p) => (p === '/bin/pollapp' ? pollImage : null),
+    onOutput: (pid, fd, bytes) => { out2 += Buffer.from(bytes).toString(); },
+    onHalt: (code) => { halt2 = code; },
+    log: () => {},
+  });
+  const waitOut2 = (needle, ms) => new Promise((resolve, reject) => {
+    const t0 = Date.now();
+    (function poll() {
+      if (out2.includes(needle)) return resolve(Date.now() - t0);
+      if (Date.now() - t0 > (ms || 20000)) return reject(new Error('timeout waiting for ' + JSON.stringify(needle) + '; out2=' + JSON.stringify(out2)));
+      setTimeout(poll, 10);
+    })();
+  });
+  const line2 = (tag) => out2.split('\n').find((l) => l.startsWith(tag + ' ')) || '';
+  const field2 = (tag, key) => {
+    const m = line2(tag).match(new RegExp(key + '=(-?\\d+)'));
+    return m ? parseInt(m[1], 10) : NaN;
+  };
+
+  await kernel2.boot({ path: '/bin/pollapp', argv: ['pollapp'], envp: [], cwd: '/' });
+  await waitOut2('PLOOP');
+  await waitPred(() => kernel2.wmList().some((s) => s.title === 'pollbox'), 'pollbox up', 8000);
+  const psid = kernel2.wmList().find((s) => s.title === 'pollbox').sid;
+
+  // The key must arrive while the app is mid-spin — no park, no delay.
+  kernel2.wmInjectKey(psid, true, 6, 99, 0);      // 'c' down
+  await waitOut2('PKEY ', 8000);
+  check('#485: injected key reached a poll-only SDL_PollEvent loop',
+    /PKEY sym=99\b/.test(out2), JSON.stringify(line2('PKEY')));
+
+  // A close request (WMEV_QUIT, what the kernel sends for the title-bar 'x')
+  // must surface as SDL_EVENT_QUIT and let the app exit cleanly.
+  kernel2._wmEventTo(psid, [0x100, 0, 0, 0, 0, 0, 0, 0]);   // WMEV.QUIT
+  await waitOut2('PDONE', 8000);
+  check('#485: close request produced SDL_EVENT_QUIT (loop saw quit=1)',
+    field2('PL', 'quit') === 1 && field2('PL', 'keys') >= 1 && field2('PL', 'lastkey') === 99,
+    line2('PL'));
+  await waitPred(() => halt2 !== null, 'pollapp exit', 8000);
+  check('#485: poll-only app exited cleanly (status 0)', halt2 === 0, 'halt=' + halt2);
+
   clearTimeout(watchdog);
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(failures === 0 ? '\nsdl-delay e2e: PASS' : `\nsdl-delay e2e: ${failures} FAILED`);
