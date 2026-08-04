@@ -27,6 +27,17 @@
 // __osCompositorStats() posts {type:'compositor-stats'}; the worker replies
 // with {frames,submits,skipped,parks,wakes,vsyncNotifies}.
 //
+// Load discipline (#444): NOTHING here counts a frame-clock-driven quantity
+// against a wall clock. Host load throttles the kernel worker's rAF, so an
+// absolute "N submits in 1.2s" threshold measures the box and not the
+// compositor — it produced a false RED at a merge gate (every ~23s run of
+// this file passed, every ~32s run failed, identical source). The frame-clock
+// legs assert RATIOS between counters sampled in the SAME window (they are
+// scale-free), the zero-delta legs assert exact 0 (scale-free by
+// construction), and only the legs whose SOURCE is a real wall clock
+// (winmine's 1 Hz WM_TIMER) count against elapsed time. Each sampled window
+// is logged so a green states its own numbers.
+//
 // Gotchas honored: the taskbar clock repaints once a minute — a REAL wake,
 // so strict flat-window asserts retry once after re-settling; VT1 typing is
 // tty input (never compositor input); winmine is driven entirely by typed
@@ -43,6 +54,16 @@ const { page, check, setVt, waitPixel, waitScreen, waitOut } = s;
 
 const readStats = () => page.evaluate(() => window.__osCompositorStats());
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Counter deltas between two snapshots. Every sampled window is REPORTED
+// (console.log), pass or fail: a leg whose numbers are only visible on a red
+// cannot be reasoned about when it goes green for the wrong reason — which is
+// how #444's load coupling stayed invisible until it hit a merge gate.
+const delta = (a, b) => ({
+  frames: b.frames - a.frames, submits: b.submits - a.submits,
+  skipped: b.skipped - a.skipped, parks: b.parks - a.parks,
+  wakes: b.wakes - a.wakes, notifies: b.vsyncNotifies - a.vsyncNotifies,
+});
 
 // Type a line on VT1 (tty input — never touches the compositor), back to VT2.
 async function vt1(cmd) {
@@ -74,8 +95,7 @@ async function flatWindow(ms = 1500) {
     const a = await readStats();
     await sleep(ms);
     const b = await readStats();
-    const d = { frames: b.frames - a.frames, submits: b.submits - a.submits,
-                notifies: b.vsyncNotifies - a.vsyncNotifies };
+    const d = delta(a, b);
     if ((d.frames === 0 && d.submits === 0 && d.notifies === 0) || attempt >= 1) return d;
     await settle();
   }
@@ -150,18 +170,43 @@ try {
   const w0 = await readStats();
   await sleep(3500);
   const w1 = await readStats();
+  const wd = delta(w0, w1);
+  console.log('       [window] winmine 1Hz timer, 3500ms: ' + JSON.stringify(wd));
+  // The two FLOORS below (submits, parks) are anchored to a WALL-CLOCK source (winmine's 1 Hz
+  // WM_TIMER, delivered by deadline out of GetMessage's kernel WAIT), not to
+  // the frame clock — host load slows the compositor, not the timer — so
+  // counting them against elapsed time is sound here. #444's defect was the
+  // opposite: counting a FRAME-CLOCK-driven quantity against a wall clock.
   check('WM_TIMER repaints reach a parked compositor (doorbell-on-present)',
-    w1.submits - w0.submits >= 2, { dSubmits: w1.submits - w0.submits });
+    wd.submits >= 2, wd);
   check('...re-parking between ticks (wake, submit, park each second)',
-    w1.parks - w0.parks >= 2, { dParks: w1.parks - w0.parks });
-  check('...without free-running', w1.frames - w0.frames < 100,
-    { dFrames: w1.frames - w0.frames });
+    wd.parks >= 2, wd);
+  check('...without free-running', wd.frames < 100, wd);
   await vt1('pkill winmine');
   await settle();
 
   // ---- A continuously-presenting app keeps the GPU busy: the gate must
   // never drop a genuinely presented frame, and its vsync waits pin the
   // clock armed.
+  //
+  // The instrument is a RATE against the frame cadence OBSERVED IN THE SAME
+  // WINDOW, never an absolute submit count over a fixed wall clock (#444).
+  // Host load throttles the kernel worker's rAF, so an absolute threshold
+  // measures the box, not the compositor: measured 2026-08-03 on identical
+  // source, every ~23s run of this file passed and every ~32s run failed at
+  // 12-15 submits against the old `> 30`.
+  //
+  // Every COUNTED tick is accounted for exactly once — a frozen or
+  // degenerate-canvas callback returns before `frames++` and is counted
+  // nowhere, but past that point draw() bumps `frames` and then exactly one
+  // of `skipped` (damage gate said clean) or `submits` — so
+  // `frames === submits + skipped` and "no dropped frames" IS `skipped ~= 0`:
+  // while winbox presents on every vsync, a tick that submits nothing is a
+  // genuinely presented frame the damage gate ate, the 0160 class this leg
+  // exists to catch. A ratio is scale-free: it holds identically at 60fps and
+  // at 10fps. The `frames > 0` / `submits > 0` floors keep it from passing
+  // vacuously when the clock is not running at all (a stalled compositor
+  // scores 0/0, which must never read as "perfect ratio").
   base = (await readStats()).submits;
   await vt1('winbox &');
   await waitSubmit(base, 'winbox window maps');
@@ -169,8 +214,19 @@ try {
   const c0 = await readStats();
   await sleep(1200);
   const c1 = await readStats();
+  const cd = delta(c0, c1);
+  // Assert the RAW quotient; `submitRate` is a rounded display value only —
+  // asserting the rounded one would let 0.8996 round to 0.900 and pass.
+  const submitRate = cd.frames > 0 ? cd.submits / cd.frames : 0;
+  cd.submitRate = +submitRate.toFixed(3);
+  console.log('       [window] winbox churn, 1200ms: ' + JSON.stringify(cd));
   check('continuously-presenting app keeps submits flowing (no dropped frames)',
-    c1.submits - c0.submits > 30, { delta: c1.submits - c0.submits });
+    cd.frames > 0 && cd.submits > 0 && submitRate >= 0.9, cd);
+  // ...and the app's vsync waits pin the clock ARMED (compKeepAlive), so the
+  // churning screen never parks. Fully load-free: a park is a park at any
+  // frame rate, so this leg carries no threshold at all.
+  check('...pinning the clock armed (a churning screen never parks)',
+    cd.parks === 0, cd);
 
   // ---- Synthetic vsync-stop (the hidden-tab honest pause, probe form):
   // freeze the clock with winbox STILL animating — everything parks; the
