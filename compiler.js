@@ -26430,9 +26430,6 @@ __import int __sdl_get_queued_audio_size(int dev);
 __import void __sdl_clear_queued_audio(int dev);
 __import void __sdl_pause_audio_device(int dev, int pause_on);
 __import void __sdl_close_audio_device(int dev);
-/* Throws (fail-loud) — the SDL_AudioStream get-callback / pull mode has no
-   honourable implementation here (no audio thread to call it). */
-__import void __sdl_audio_callback_unsupported(void);
 
 /* SDL_Renderer primitives. Colors are 0..1 floats; the single draw primitive
    takes 4 dst corners (TL,TR,BR,BL in pixels) + a src rect (texture pixels). */
@@ -26937,9 +26934,20 @@ SDL_AudioStream *SDL_OpenAudioDeviceStream(SDL_AudioDeviceID devid,
     /* A non-NULL callback selects SDL's get-callback (pull) mode: SDL would call
        it from its own audio thread to fetch samples. There is no such thread here
        (audio is driven from the main thread via Web Audio), so this can't be
-       honoured — fail loud rather than silently fall back to push mode and play
-       silence. The host throw explains the push-mode alternative. */
-    if (callback) { __sdl_audio_callback_unsupported(); return NULL; }
+       honoured. SDL3 defines this function's failure contract — return NULL with
+       the error string set — and that IS the loud path (#491): never silently
+       fall back to push mode and play silence, and never kill the process on a
+       legal call (the old host-side throw unwound out of wasm as a crash). */
+    if (callback) {
+        SDL_SetError(
+            "SDL_OpenAudioDeviceStream: a non-NULL get-callback (pull mode) is not "
+            "supported by this runtime — there is no SDL audio thread to invoke it "
+            "(audio is driven from the main thread via Web Audio). Pass a NULL "
+            "callback and push samples yourself with SDL_PutAudioStreamData (push "
+            "mode), which this runtime backs with a SharedArrayBuffer ring into "
+            "Web Audio.");
+        return NULL;
+    }
     int dev = __sdl_open_audio_device(spec->freq, spec->format, spec->channels);
     if (dev <= 0) { SDL_SetError("SDL_OpenAudioDeviceStream: host failed to open an audio device"); return NULL; }
     SDL_AudioStream *s = (SDL_AudioStream *)malloc(sizeof(SDL_AudioStream));

@@ -1,0 +1,3 @@
+before open
+after open: 0
+error set: 1
