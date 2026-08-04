@@ -5,7 +5,8 @@
 // (SABs precede the RPC on the same FIFO channel), mailbox present + kernel
 // screenshots, the screen composite with kernel chrome, input routing (focus,
 // hit-test, title drag, close box), the agent inject API, input-ring overflow
-// + a storm (spike S5), and lifecycle cleanup on exit and SIGKILL.
+// + a storm (spike S5), lifecycle cleanup on exit and SIGKILL, and hung-app
+// containment (#486: an ignored close request force-quits the owner).
 //
 // Run: node tests/kernel/test_wm.js
 'use strict';
@@ -40,14 +41,17 @@ const images = new Map([
 const store = new BLOCK_FS.MemoryByteStore(1 << 20);
 const kfs = BLOCK_FS.createV4(store);
 const ptrLockEvents = [];   // onPointerLock wanted-state transitions (0018)
+const logLines = [];        // kernel log capture — the #486 reason strings
 const kernel = new K.Kernel({
   fs: kfs,
   createWorker,
   loadImage: (p) => images.get(p) || null,
   onHalt: () => {},
   onPointerLock: (wanted) => ptrLockEvents.push(wanted),
-  log: () => {},
+  log: (m) => logLines.push(m),
   screen: { w: 640, h: 480 },
+  hungGraceMs: 300,         // #486: short close-request grace so the
+                            // hung-app legs run in test time (default 5s)
 });
 
 function page(pid) {
@@ -806,6 +810,81 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   kernel.kill(r2.pid, 9, null);
   check('SIGKILL leaves no ghost windows', kernel.wmList().length === 0);
   check('worker terminated', workers.get(r2.pid).terminated === true);
+  // Reaps below are WNOHANG (options 1): each zombie is guaranteed by the
+  // checks just above it, and a blocking WAIT would HANG the file instead
+  // of failing loud if a regression left the child alive (0171 discipline).
+  await rpc(1, K.OP.WAIT, { pid: -1, options: 1 });
+
+  // ---- hung-app containment (#486): ignored close request -> force quit ----
+  // Kernel constructed with hungGraceMs: 300 (poll = grace/4 = 75ms); each
+  // wait below is grace + a few polls of slack, no fixed-sleep sync — the
+  // watchdog deadline IS the thing under test, so a clock wait is the spec.
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const r3 = await rpc(1, K.OP.SPAWN, { path: '/bin/app', argv: ['app'], envp: [], actions: [], flags: 0 });
+  const fbH = makeFb(48, 32);
+  const ringH = makeRing(64);
+  workers.get(r3.pid).msg({ type: 'wm-sabs', fb: fbH.sab, ring: ringH.sab });
+  const cH = await rpc(r3.pid, K.OP.SURFACE_CREATE, { w: 48, h: 32, title: 'wedged' });
+  // The app NEVER drains its ring. Close through the real chrome path.
+  const hw = kernel.wmList().find((s) => s.sid === cH.sid);
+  act = kernel.wmPointer('down', hw.x + hw.dstW - K.WM_CLOSE_PAD - 2,
+                         hw.y - K.WM_TITLE_H + K.WM_CLOSE_PAD + 2, {});
+  check('close box on the wedged app requests close', act === 'close', act);
+  check('still running inside the grace period', kernel.process(r3.pid).state === 'running');
+  await sleep(700);
+  check('hung app force-quit within grace (zombie)',
+    kernel.process(r3.pid) && kernel.process(r3.pid).state === 'zombie');
+  check('hung app: surfaces reclaimed', !kernel.wmList().some((s) => s.sid === cH.sid));
+  check('hung app: worker terminated', workers.get(r3.pid).terminated === true);
+  check('legible reason emitted (title + "not responding")',
+    logLines.some((m) => m.includes('"wedged"') && m.includes('is not responding') &&
+                         m.includes('force quit')),
+    JSON.stringify(logLines));
+  await rpc(1, K.OP.WAIT, { pid: -1, options: 1 });
+
+  // A responsive app — one that PUMPS the close request, whatever it then
+  // decides — is never touched by the watchdog (the acceptance's second leg).
+  const r4 = await rpc(1, K.OP.SPAWN, { path: '/bin/app', argv: ['app'], envp: [], actions: [], flags: 0 });
+  const fbR = makeFb(48, 32);
+  const ringR = makeRing(64);
+  workers.get(r4.pid).msg({ type: 'wm-sabs', fb: fbR.sab, ring: ringR.sab });
+  const cR = await rpc(r4.pid, K.OP.SURFACE_CREATE, { w: 48, h: 32, title: 'polite' });
+  const logsBefore = logLines.length;
+  check('CLOSE_REQ path delivers', kernel.wmCloseRequest(cR.sid) === 0);
+  evs = drain(ringR);                       // the app pumps: QUIT consumed
+  check('polite app received the QUIT', evs.some((e) => e.type === K.WMEV.QUIT),
+    JSON.stringify(evs));
+  await sleep(700);
+  check('responsive app never touched by the watchdog',
+    kernel.process(r4.pid).state === 'running' && logLines.length === logsBefore,
+    JSON.stringify([kernel.process(r4.pid).state, logLines.slice(logsBefore)]));
+
+  // Second close during grace with the first QUIT still unconsumed (the app
+  // stopped pumping): Windows-style escalation — force-quit immediately.
+  check('re-close after consumption is a fresh request', kernel.wmCloseRequest(cR.sid) === 0);
+  check('second close during grace force-quits immediately',
+    kernel.wmCloseRequest(cR.sid) === 0 && kernel.process(r4.pid).state === 'zombie');
+  check('escalation emitted the reason',
+    logLines.length === logsBefore + 1 && logLines[logsBefore].includes('"polite"'),
+    JSON.stringify(logLines.slice(logsBefore)));
+  await rpc(1, K.OP.WAIT, { pid: -1, options: 1 });
+
+  // Full ring at request time (EAGAIN — the strongest not-draining signal):
+  // the watchdog arms anyway, retries delivery each poll, and the grace
+  // clock starts at the click.
+  const r5 = await rpc(1, K.OP.SPAWN, { path: '/bin/app', argv: ['app'], envp: [], actions: [], flags: 0 });
+  const fbF = makeFb(48, 32);
+  const ringF = makeRing(8);
+  workers.get(r5.pid).msg({ type: 'wm-sabs', fb: fbF.sab, ring: ringF.sab });
+  const cF = await rpc(r5.pid, K.OP.SURFACE_CREATE, { w: 48, h: 32, title: 'flooded' });
+  for (let i = 0; i < 10; i++) kernel.wmInjectKey(cF.sid, true, 4, 97, 0);
+  check('flooded ring: close request reports EAGAIN', kernel.wmCloseRequest(cF.sid) === 'EAGAIN');
+  await sleep(700);
+  check('undeliverable close still force-quits at the deadline',
+    kernel.process(r5.pid).state === 'zombie');
+  check('flooded reason emitted', logLines.some((m) => m.includes('"flooded"')),
+    JSON.stringify(logLines));
+  await rpc(1, K.OP.WAIT, { pid: -1, options: 1 });
 
   console.log(failures ? `\ntest_wm: ${failures} FAILED` : '\ntest_wm: all passed');
   process.exit(failures ? 1 : 0);
