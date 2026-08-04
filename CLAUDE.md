@@ -87,6 +87,24 @@ everything that shipped under the old system (see `todos/README.md`).
   guess silently, never skip it. Full policy: `~/git/meta/CLAUDE.md`, section
   "Task WEIGHT outranks priority"; rationale and census:
   `~/git/meta/notes/task-weight-policy-2026-08-02.md`.
+- 🔴 **`cc-meta ticket update <ref> --blocked-by <uuid>` IS A SILENT NO-OP.** It
+  returns `HTTP 400 {"error":"Nothing to update"}` **with `exit=0`**, so a loop
+  over N edges "succeeds" and sets **nothing**. Reproduced directly, 2026-08-04.
+  ✅ **The real verb is `cc-meta ticket block <ref> --hard <id,id,…>`.**
+  **Verify by RE-READING** — require the `blockedBy` count to equal the number of
+  edges you meant to set AND `derived.ready == false`. **Never accept an exit
+  code as proof of a mutation.** This is the concrete mechanism that made every
+  "recurring" pass in this repo die silently: the chain looked healthy because
+  the tool reported success.
+- 🔴 **Every ticket you queue needs a WRITTEN epic justification** (jku,
+  2026-08-04): *"All work going forward should be justifiable in the context of
+  the epic."* Put it in the kickoff and in the coordinator's state note.
+  **Queueing a ticket with no articulated justification is itself the error.**
+  The test is an **argument**, not the word "game" — anything on the path of a
+  developer building a game inside gucOS qualifies (toolchain, text/fonts,
+  source control, the in-OS dev loop, platform stability). Full rulings:
+  `todos/GAMEDEV-EPIC.md`, section "Epic membership is ARGUED, not
+  pattern-matched".
 - **Design/topic docs**: `todos/NAME.md` (OS.md, KERNEL.md, SDL3.md, …) —
   long-lived designs and backlogs that tickets reference for detail. These
   stay in the repo; only the queue moved.
@@ -209,6 +227,18 @@ both invisible on a normal single run:
   a human browser tab against a dev `serve.js` (no repo process can lock a
   human's browser — recorded exclusion, todos/done/0342). Control test:
   `tests/kernel/test_heavylock_e2e.js`.
+- 🔴 **WHEN A GATE AND A BOOT BOTH WANT THE LOCK, THE GATE GOES FIRST.** The
+  asymmetry is structural, not a preference: **`os/boot.js` HAS
+  `--wait-lock[=SECS]`** and queues politely, while **`tests/run.js` / `kernel` /
+  `sweep` have no such flag and fail fast at exit 3.** ⇒ A boot can wait behind a
+  gate; **a gate can never wait behind a boot.** Never release a gating lane into
+  the same window a dogfood/boot lane starts — measured live 2026-08-04, where a
+  gate lost its whole `kernel` leg to a sibling's bake. **Read the lock file's
+  `argv` to learn who holds it** rather than guessing; a wrong guess stands the
+  wrong lane down. Writing a heavy-lock **red control**? `acquireHeavyLock`
+  exports `CC_HEAVY_LOCK_PID`, so your spawned child's boots join
+  **re-entrantly** as the holder's children and the control passes at exit 0 —
+  strip the marker from the child env or you are testing nothing.
 - **Memory-aware `jobs` (within the kernel pool):** the kernel `-j` (default
   AND explicit) is clamped to `floor(totalmem×0.6 / 4 GB)` so the pool can't
   over-commit RAM — e.g. `-j2` on a 16 GB box regardless of core count.

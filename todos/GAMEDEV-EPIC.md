@@ -15,6 +15,65 @@ tier. It does **not** override bug-fix-first (which applies within a tier) and
 it does **not** override broken-build preemption (a build that blocks lands is
 still the top immediate priority).
 
+## 🔴 Epic membership is ARGUED, not pattern-matched — three rulings (jku, 2026-08-04)
+
+Email `rK6UPpixi_e3`, confirmed `8ZrO7qF3eJFk` (*"Yup those assessments are
+good"*). **jku, verbatim:**
+
+> *"Largely A, but I would argue some of the git experience in a way relates to
+> game work as well. I mean how would you clone code or push code to a repo
+> without git? But if there are more fundamental things, do that first. All work
+> you should going forward should be justifiable in the context of the epic."*
+
+**These are three separable rulings. Do not collapse them.**
+
+**1. jku's own provenance on a ticket is NOT a bypass.** A P0 he filed himself
+does not ride ahead of the epic merely because he filed it — **`#391` and `#202`
+WAIT.** They are **RULED, not pending**: do not carry them forward as open asks
+and do not re-raise them as "blocked on jku". ⚠️ Distinguish this from the
+**"Foundation tickets"** section below, which is a *deliberate, explicit* manual
+promotion — the sanctioned weight-sort override. Provenance is not promotion;
+only an explicit intervention is.
+
+**2. The membership test is an ARGUMENT, not the word "game".** jku admitted git
+into the epic on a **developer-workflow** argument — *"how would you clone code
+or push code to a repo without git?"* — not because git is game code. ⇒ **Anything
+on the path of a developer building a game inside gucOS qualifies**: toolchain,
+text/fonts, source control, the in-OS dev loop, platform stability.
+🔴 **Testing membership by whether a ticket says "game" is the WRONG test** — it
+would have excluded the very work he just admitted. This is the ruling a literal
+reader is most likely to get wrong.
+
+**3. 🔴 A STANDING BURDEN OF PROOF, ON THE SELECTOR.** *"All work going forward
+should be justifiable in the context of the epic."* Every ticket queued needs a
+**written** epic justification — in the kickoff **and** in the coordinator's state
+note. **Queueing a ticket with no articulated justification is now itself the
+error.** Note the direction: a filter is something a ticket passes; a
+justification is something the selector **produces**.
+
+### The ranking jku delegated, and his confirmation of it
+
+He did **not** rank git against anything — *"if there are more fundamental
+things, do that first"* delegates that. The coordinator's call, put to him and
+**confirmed**: **`#464` (FreeType, app-side text) is more fundamental than git** —
+you cannot draw a score, a menu or a debug readout without text, and **`#468` is
+hard-blocked on `#464`** (verified by UUID). `#487` Pass A round 1 independently
+corroborated it: its finding **`#494` is "no text rendering at all"**.
+
+**Confirmed sequence:** `#487` → `#488` → `#464` → `#475` (git write set) →
+`#478` (git network) — *with dogfood findings allowed to reorder anything behind
+them*, since measuring what is actually fundamental is what those passes are for.
+
+⚠️ **One flag, recorded honestly because it was NOT put to him:** that sequence
+was presented as a ranking **among the P0 medium/heavy tickets only**. `#464` is
+`medium`, and dependency-free **`light` P1s are ready** (`#422`, `#424`, `#435`,
+`#110`, `#423`, `#446`), which his own standing weight rule puts first — his
+verbatim clause is that a blocker never takes a slot *"while any dependency-free
+light work is ready"*. The operative reading is that he approved the **relative**
+ranking he was asked about (FreeType before git), not a suspension of the weight
+rule. **Run the light front first, then `#464` → `#475` → `#478`.** He can
+override this in one sentence; until he does, his weight rule governs.
+
 ## The goal
 
 gucOS is judged by whether a person can sit inside it and **actually develop
