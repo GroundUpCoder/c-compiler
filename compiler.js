@@ -21796,6 +21796,15 @@ void SDL_DestroyWindow(SDL_Window *window);
 void SDL_Quit(void);
 void SDL_Delay(Uint32 ms);
 Uint64 SDL_GetTicks(void);
+/* Sub-millisecond timing (SDL_timer.h; #495) — the frame-pacing / delta-time
+   surface. All three ride the same monotonic host clock SDL_GetTicks
+   truncates (fractional ms since SDL_Init, performance.now()-backed). The
+   performance counter's unit is fixed at nanoseconds:
+   SDL_GetPerformanceFrequency() == 1000000000, as on SDL3's POSIX
+   clock_gettime backends. */
+Uint64 SDL_GetTicksNS(void);
+Uint64 SDL_GetPerformanceCounter(void);
+Uint64 SDL_GetPerformanceFrequency(void);
 /* Input state snapshots (SDL_keyboard.h / SDL_mouse.h; #493) — the idiomatic
    per-frame game read. Updated as events are pumped (single keyboard/mouse in
    this runtime); the keyboard array is SDL_SCANCODE_COUNT entries, valid for
@@ -26412,8 +26421,10 @@ __import int __sdl_pump(void);
 /* libc's sleep import (this unit doesn't include time.h) — the no-ring
    fallback pace in SDL_WaitEventTimeout. */
 __import int __nanosleep(long sec, long nsec);
-/* ms since SDL_Init as an f64 (exact for integer ms up to 2^53 — ~285k years),
-   so SDL_GetTicks can return a full Uint64 without the old 32-bit wrap. */
+/* ms since SDL_Init as an f64 — FRACTIONAL (performance.now()-backed, #495),
+   monotonic. SDL_GetTicks truncates to whole ms (full Uint64, no 32-bit wrap);
+   SDL_GetTicksNS / SDL_GetPerformanceCounter and the event timestamps keep the
+   sub-ms part. */
 __import double __sdl_get_ticks(void);
 __import void __sdl_set_animation_frame_func(void (*callback)(void));
 /* System clipboard (todos/0090; host.js createClipboard). __clip_has is
@@ -27075,6 +27086,24 @@ Uint64 SDL_GetTicks(void) {
     /* f64 ms since SDL_Init → Uint64. Value is a non-negative integer well below
        2^53, so the double→long long→Uint64 path is exact (no 32-bit wrap). */
     return (Uint64)(long long)__sdl_get_ticks();
+}
+
+/* ---- Sub-millisecond timing (#495) ----
+   Same clock as SDL_GetTicks, without the truncation to whole ms: the host
+   returns fractional ms (performance.now()-backed), __sdl_now_ns converts to
+   ns. The performance counter IS that ns clock — SDL3 does the same on POSIX,
+   where the counter is clock_gettime ns and the frequency is 1e9. */
+
+Uint64 SDL_GetTicksNS(void) {
+    return __sdl_now_ns();
+}
+
+Uint64 SDL_GetPerformanceCounter(void) {
+    return __sdl_now_ns();
+}
+
+Uint64 SDL_GetPerformanceFrequency(void) {
+    return 1000000000ULL;
 }
 
 /* ---- Input state snapshots (#493) ---- */

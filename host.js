@@ -7030,7 +7030,7 @@ function createNullSDL() {
   return {
     getAnimationFrameFunc: function () { return animationFrameFunc; },
     [ENV_KEY]: {
-      __sdl_init: function () { sdlTicksBase = Date.now(); return 0; },
+      __sdl_init: function () { sdlTicksBase = performance.now(); return 0; },
       __sdl_quit: function () { animationFrameFunc = null; },
       __sdl_create_window: function () { return 1; },
       __sdl_destroy_window: function () {},
@@ -7088,7 +7088,7 @@ function createNullSDL() {
       __sdl_close_audio_device: function () {},
       // SDL_GetTicks: ms since SDL_Init, full range (C casts to Uint64; no 32-bit
       // wrap). Lazily baseline if a program reads ticks before SDL_Init.
-      __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = Date.now(); return Date.now() - sdlTicksBase; },
+      __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = performance.now(); return performance.now() - sdlTicksBase; },
       // SDL_Delay (todos/0224): headless contexts CAN block — the same
       // primitive as usleep/nanosleep (Atomics.wait on a never-notified
       // cell) — so the classic while(running){ poll; draw; SDL_Delay(16); }
@@ -8230,7 +8230,7 @@ function createSurfaceSDL({ ctx, hooks }) {
       },
     },
     [ENV_KEY]: Object.assign({
-      __sdl_init: function () { sdlTicksBase = Date.now(); return 0; },
+      __sdl_init: function () { sdlTicksBase = performance.now(); return 0; },
       __sdl_quit: function () { animationFrameFunc = null; },
       __sdl_create_window: function (titlePtr, x, y, w, h, flags) {
         const s = surfaceCreate(titlePtr, w, h, flags);
@@ -8283,7 +8283,7 @@ function createSurfaceSDL({ ctx, hooks }) {
       __sdl_push_mouse_motion_event: function () {},
       __sdl_push_mouse_wheel_event: function () {},
       __sdl_push_quit_event: function () {},
-      __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = Date.now(); return Date.now() - sdlTicksBase; },
+      __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = performance.now(); return performance.now() - sdlTicksBase; },
       __sdl_delay: sdlDelay,       // cooperative worker sleep (0224)
       __sdl_pump_wait: pumpWait,   // user32 blocking GetMessage (0058)
       __sdl_pump: drainInput,      // SDL_PollEvent's non-blocking pump (#485)
@@ -9016,7 +9016,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       __wait: function () { return -2; },
       // SDL_GetTicks: ms since SDL_Init, full range (C casts to Uint64; no 32-bit
       // wrap). Lazily baseline if ticks are read before SDL_Init.
-      __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = performance.now(); return Math.floor(performance.now() - sdlTicksBase); },
+      __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = performance.now(); return performance.now() - sdlTicksBase; },
       __sdl_set_animation_frame_func: function (callbackPtr) {
         animationFrameFunc = callbackPtr;
       },
