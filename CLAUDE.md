@@ -390,9 +390,9 @@ a statement about the whole tree. So:
   log is the bisect space) and re-run the full pair on the fix — attribution is
   the shipper's burden, the same rule as 3a.6.
 
-This block says WHAT the pre-ship gate is; **ticket #446's ship cadence says HOW
-OFTEN a ship happens** (merge ≠ ship; ~8 merged tickets or 24 h). They compose:
-cadence decides when, this decides what must be green when it does.
+This rule says WHAT must be green when a ship happens; **rule 6 below says HOW
+OFTEN one happens**. They compose: the cadence decides when, this decides what
+must be green when it does.
 
 **Why this is load-bearing rather than belt-and-braces.** #428 narrowed the
 `^os/` rule only where the untriggered suite is *structurally* blind, precisely
@@ -401,6 +401,42 @@ because the sweep demonstrably catches things the headless suites do not: on
 151/151 and sweep-RED** (`os-paint.mjs`). That is the standing evidence for two
 rules at once — why the wide half of `^os/` stays wide, and why a batch that
 skips the sweep on its way to main still owes it before a ship.
+
+**6. The SHIP CADENCE — MERGE ≠ SHIP (jku ruling 2026-08-03, ticket #446).**
+Rule 5 is what must be green when a ship happens; this is how often one happens.
+It supersedes the per-green half of the old "gucOS auto-ships on green" rule.
+
+- 🔴 **A lane merges to main on a TARGETED green** — `node tests/run.js --diff`
+  over its own change set. **The full gate is NOT required per merge**, and a
+  lane must not run one "to be safe": by rule 2 the heavy lock makes every
+  unnecessary full gate a stall for every other lane on the box.
+- **The FULL gate runs once per SHIP**, over the whole batch, per rule 5.
+- **Cadence — ship when EITHER ~8 behaviour-changing tickets have merged since
+  the last ship, OR 24 h have passed with any unshipped merged work**, whichever
+  comes first.
+- 🔴 **"Behaviour-changing" HERE means it changes the behaviour of the SHIPPED
+  ARTIFACT** — observable to a user of the deployed image (decider ruling,
+  2026-08-04). **Do not borrow 3a's binary**, under which everything not
+  comment/doc-only counts: 3a's exists to answer a question about *gate
+  attribution*, this one to answer *when has enough user-visible delta
+  accumulated to justify a deploy plus a full gate*. A test-harness or
+  test-enrolment change produces zero user-visible delta, so counting it fires a
+  ship that cannot deliver anything.
+- 🔴 **Establish the BASELINE before counting.** "Since the last ship" is the
+  last line of the deploy ledger, confirmed against the live edge (the deployed
+  `build-info.json` SHA and `/os/image.json` version) — **never a handoff figure
+  and never the last deploy log file**, both of which are snapshots that go
+  stale on the next deploy. A stale baseline has twice produced a wrong count
+  (`logs/2026-08-04/deploy-231.md`). Then count forward over the merge log.
+- 🔴 **Immediate-ship exceptions — the cadence is a FLOOR on batching, never a
+  delay on urgent work.** A jku direct ask, a P0 defect fix, or a fix for a live
+  regression ships as soon as ITS OWN gate is green, whatever the counter says.
+  Precedent: v231 shipped at 6 of ~8 with the 24 h leg still four hours out,
+  because `#368` fixed a live regression that had served zero HTTP response
+  headers in production for three days.
+- **A red full gate does not ship.** Bisect within the batch — the merge log is
+  the bisect space — and re-run on the fix; the batch does not ship until green.
+  Attribution is the shipper's burden, as in rule 5 and 3a.6.
 
 ### Flake / under-load gate (`tests/flake.js`, todos/0147)
 
