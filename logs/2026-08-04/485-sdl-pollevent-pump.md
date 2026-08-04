@@ -62,6 +62,28 @@ reverted, existing legs L0–L3 stay green, then the #485 leg boots, prints
 `PLOOP`, the window appears, and `waitOut2('PKEY ')` times out after 8s with
 `out2 == "PLOOP\n"` — FATAL, exit 1.
 
+## Gate results (2026-08-04, after lock release)
+
+- **Red control: matched the pre-recorded prediction exactly.** With the
+  compiler.js veneer edit reverted, L0–L3 all green, then
+  `FATAL Error: timeout waiting for "PKEY "; out2="PLOOP\n"`, exit 1 —
+  the poll-only app spun input-dead with the window up.
+- **Green:** fixed tree, 15/15 checks (incl. the three #485 legs), exit 0.
+- **Full diff gate** (`tests/run.js --diff origin/main`, all 25 suites):
+  todos/unit/host/blockfs/py×19 green; **kernel 157/157** (evidence
+  157/157, `test_sdl_delay_e2e.js ok 7.2s`); sweep failed 49/50 on a pure
+  env problem — the worktree lacked the `tests/browser/node_modules`
+  symlink, so playwright resolved 1.61.1 against the 1.61.0 pin and every
+  file refused at launch (the harness's own message: "an install problem,
+  not a product problem"; the known worktree-needs-BOTH-symlinks gotcha).
+  After symlinking, the full unfiltered sweep re-ran **50/50 green**
+  (evidence 50/50). Artifacts judged directly: both
+  `build/test-kernel/summary.json` and `build/test-browser/summary.json`
+  show `done:true`, `filter:null`, `recorded == total`, zero non-pass.
+  Note the dispatcher `build/test-run/summary.json` reflects only the
+  sweep re-run (a `tests/run.js <suite>` invocation replaces it); the
+  first run's dispatcher verdict lives in its own transcript.
+
 ## Bookkeeping
 
 - `os/image.json` version 233 → 234: compiler.js is a bake input and every
