@@ -25,21 +25,45 @@ A new companion leg came free and is fully load-independent: while winbox
 churns, its vsync wait pins `compKeepAlive`, so the screen must never park —
 `parks === 0`, a counter with no threshold at all.
 
-## The false-GREEN twin, in the same file
+## The false-GREEN twin, in the same file — LEFT ALONE ON PURPOSE
 
-The neighbouring `...without free-running` bound was the same mistake pointing
-the other way: `frames < 100` per 3.5 s. A genuinely free-running compositor
-throttled to 25 fps produces ~88 frames and PASSES. Under load that leg went
-quietly vacuous. It is now `frames < submits * 15` — each 1 Hz wake costs one
-submit plus the `GRACE_FRAMES` coast, so the ratio holds at any frame rate
-(GRACE_FRAMES is a frame count, not a duration; measured 4.0 at 90 fps and 5.0
-at 12 fps, against a free run's ~60).
+The neighbouring `...without free-running` bound is the same mistake pointing
+the other way: `frames < 100` per 3.5 s goes quietly vacuous on a throttled
+clock, where a genuinely free-running compositor produces fewer than 100 frames
+anyway. It is NOT fixed here, and that is a deliberate call after review.
+
+The first attempt at fixing it in this ticket was `frames < submits * 15`, and
+review (Codex) correctly rejected it as **the ticket's own defect class,
+reintroduced**: `frames` follows the frame clock while winmine's `submits`
+follow its 1 Hz wall-clock timer, so the ratio compares two different clocks. At
+12 fps a free run gives ~42 frames against 3–4 submits — 14 and 10.5, both under
+15, so it passes. Diagnosing cross-clock coupling and then shipping it one leg
+over is worth recording, not just patching.
+
+Two things were learned while controlling it, and they belong to whoever picks
+up the follow-up:
+
+- A compositor that NEVER parks does not reach this leg at all — `settle()`
+  throws first (`compositor never parked (frames still advancing after
+  25000ms): frames 326, submits 2, parks 0, wakes 0`). So the leg's real job is
+  not "detect a free run" but **bound the GRACE coast**: the reachable
+  regression is a coast that is too long while the desktop still parks when
+  idle.
+- The scale-free shape that follows is frames-per-WAKE, not frames-per-submit
+  (`wakes` is a compositor-internal park→arm counter, same clock as `frames`;
+  the coast is `GRACE_FRAMES + 1`, a frame count and therefore fps-independent —
+  measured 4.0 at 90 fps and 5.0 at 12 fps). `frames < (wakes + 1) * 8` is
+  sound on that axis and strictly stronger than `< 100`. It was still not landed
+  here: its discrimination boundary sits at ~2× the real coast, so it needs its
+  own red control (a deliberately inflated `GRACE_FRAMES` at a throttled clock),
+  and a second tuned threshold in this file is worse than a deferred one.
 
 The two winmine floors (`submits >= 2`, `parks >= 2` per 3.5 s) deliberately
 still count against elapsed time: their SOURCE is a real wall clock — a 1 Hz
 `WM_TIMER` delivered by deadline out of GetMessage's kernel WAIT. Load slows the
 compositor, not the timer. That is the distinction the whole ticket turns on,
-and it is now stated at the top of the file.
+and it is now stated at the top of the file. The test for a sound assertion is
+not "is it a ratio" but "do both of its terms come from the SAME clock".
 
 ## Reproducing the regime — two harnesses that do NOT reproduce it
 
@@ -83,7 +107,9 @@ was reverted.
 
 ## Rule
 
-Do not count a frame-clock-driven quantity against a wall clock. Assert a ratio
-between counters from the same window, or count only what a real wall clock
-drives. And log the sampled window pass or fail: a green that cannot state its
-own numbers is how this stayed invisible until a merge gate hit it.
+Do not relate a frame-clock-driven quantity to a wall-clock-driven one — in
+EITHER direction, and a ratio is not a defence: `frames / submits` was just as
+cross-clock as `submits / seconds`. Assert between counters that share a clock,
+or count only what a real wall clock drives. And log the sampled window pass or
+fail: a green that cannot state its own numbers is how this stayed invisible
+until a merge gate hit it.
