@@ -21,6 +21,12 @@ kernel-ish layer, BlockFS is the disk, vendored ports are the userland.
 plan to implement faithfully (see the decision below). Everything else is fair
 game.
 
+**Current primary epic (jku, 2026-08-04): game development inside gucOS.**
+The proof of the north star is a person developing real games in C + SDL3,
+with gcode, inside gucOS itself — see `todos/GAMEDEV-EPIC.md`. All current
+work batches fall under that epic; a CPython+pygame twin epic is queued
+behind it.
+
 **Agent-friendly by construction.** The environment must be as drivable by AI
 agents as by humans, at every layer, without a separate automation bolt-on:
 
@@ -43,6 +49,42 @@ agents as by humans, at every layer, without a separate automation bolt-on:
   xdotool-as-a-syscall. Target look for the WM is Windows-95-ish window
   management (overlapping windows, decorations, taskbar) — which is also a
   good agent target: discrete widgets, deterministic layout.
+
+**Dev-experience first: a buggy program must never take down the platform**
+(jku, 2026-08-04). gucOS is a place people (and agents) write and run their own
+C programs, so the platform is judged by what happens when those programs are
+wrong. The motivating incident: a textbook-legal SDL3 render loop with no
+`SDL_Delay` presented at ~2,100 fps, never drained its input ring (unclosable
+window), and flooded the browser GPU frame transport until the whole tab died.
+The program was naive; the crash was ours. The platform's answer to userland
+misbehavior, in order of preference:
+
+1. **Absorb** — make the pathological pattern harmless by construction, at the
+   seam the resource crosses (e.g. backpressure/coalescing on the present
+   transport: mailbox semantics already say "newest frame wins", so enforce it
+   at the *producer* where the queue cannot grow). If a legal program can
+   exhaust a platform resource, that is a missing clamp, not a user error.
+2. **Surface** — when a program is doing something legal but self-harming,
+   make it observable: kernel-side per-process diagnostics (present rate,
+   undrained input ring, ring drops) that a human or agent can read, and a
+   visible warning path rather than silence.
+3. **Contain** — when a program is genuinely unresponsive (e.g. ignores a
+   close request because it never pumps events), the kernel force-quits THAT
+   process with a legible reason ("not responding"), Windows-style — never
+   lets one process wedge or crash the OS itself.
+
+A tab/compositor crash caused by userland behavior is always a platform bug,
+whatever the program did. When a fix can live either in "tell users to write
+better programs" (docs, examples) or in the platform (clamp, diagnose,
+contain), prefer the platform.
+
+**API honesty** (jku, 2026-08-04): *better to not implement at all, or ship
+a clearly custom API, than to incorrectly implement or lie with a standard
+API's name.* An absent symbol fails loud at link time; a subtly-divergent
+implementation under a standard name silently poisons ports, tests, and
+dogfooding. Scoped-but-honest subsets are fine when the boundary is explicit
+(SDL_ttf's classic API without `TTF_Text`; the VLA "real or absent, never
+faked" ruling is prior art).
 
 ## Non-goals
 

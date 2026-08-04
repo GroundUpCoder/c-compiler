@@ -7,7 +7,10 @@
 
 #include "common.h"
 
-#include <zlib.h>
+/* c-compiler port (#473): quote form — libgit2 uses ITS OWN bundled zlib
+ * (deps/zlib) through a same-dir srclib forwarder, never whatever <zlib.h>
+ * an installed package happens to have planted on the system include tier. */
+#include "zlib.h"
 #include "git2/repository.h"
 #include "git2/indexer.h"
 #include "git2/sys/odb_backend.h"
