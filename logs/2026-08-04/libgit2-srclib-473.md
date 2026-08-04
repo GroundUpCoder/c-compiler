@@ -257,7 +257,7 @@ Four probes, one edit at a time, each reverted:
 |---|---|---|
 | modify a file's content | green | — |
 | add a plain file | green | — |
-| delete a file | green | — (a build break lands in `fakegit`/`projects`) |
+| delete a file | green | only if the deletion is BUILD-REFERENCED (below) |
 | **add a symlink** | **RED** | **yes — `foldPackages('all')` AND `mkpkg` both throw** |
 
 The guard's assertions are about *which directories the scan enumerated* and
@@ -269,6 +269,38 @@ paths they run: every kernel and sweep fixture bake is `--packages=all`
 carry files and dirs only"*), and `tests/kernel/lib/gucman.js
 ensurePackages()` shells out to `tools/mkpkg.js`, which throws the same. Both
 verified RED against the same planted symlink.
+
+On the deletion row, the narrow true statement: deleting a file that the build
+REACHES (a TU in `bin.json`'s `sources`, or a header some TU includes) breaks
+`fakegit`/`projects`, both selected. Deleting an *arbitrary* payload file need
+not give any signal at all — much of the payload is deliberately not compiled
+(`deps/llhttp`, `deps/ntlmclient`, `src/util/win32`), and removing one of those
+is invisible everywhere. That is not a gap this rule can close, and `host`
+would not close it either: the guard was green on the deletion probe.
+
+### Why the enumeration is exhaustive — the space is bounded by git
+
+Listing classes only closes the question inductively, which is exactly where an
+exhaustiveness argument fails. The structural closure is that **git can
+represent only three entry modes**, and this repo uses all three: `100644`
+(12,542 files), `100755` (53), `120000` (1 symlink). Under `vendor/libgit2/`
+today: 713 files, every one `100644`. So the complete set of edits that can
+*arrive through a commit* is: change content, add, delete, flip the mode bit,
+or introduce a symlink. All five are measured above and in the mode-bit probe
+below; only the symlink turns the host guard red.
+
+The five further classes the reviewer pressed on were probed anyway, each
+mutating the real tree and reverting in a `finally` — and the interesting
+result is that four of them are not in the space at all, because git stores
+none of them:
+
+| further class | host guard | in git's model? |
+|---|---|---|
+| permission bits (`chmod +x`) | green | yes — `100644` ⇄ `100755` |
+| hardlink (second name, one inode) | green | no — stored as a second ordinary file |
+| empty directory | green | no — git tracks no empty dirs |
+| NFD + NFC filename pair | green | no — a name collision, not an entry kind |
+| non-UTF8 filename | **not producible** — APFS rejects with `EILSEQ` | n/a |
 
 `packages/libgit2.json` itself still draws `host` from the `^packages/` rule,
 which is the right place for definition-shaped coverage.
