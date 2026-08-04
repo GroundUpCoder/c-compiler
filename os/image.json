@@ -285,6 +285,12 @@
       "/usr/share/fonts/mono_bold.ttf": {
         "bin": "vendor/fonts/NotoSansMono-Bold.ttf"
       },
+      "/usr/share/fonts/symbols2.ttf": {
+        "bin": "vendor/fonts/NotoSansSymbols2-Regular.ttf"
+      },
+      "/usr/share/fonts/fallback": {
+        "content": "# Baked font fallback chain (fontchain.h's /usr layer; ticket #435).\n# One ABSOLUTE face path per line; the /etc layer (gucman font-package\n# deltas) CONCATENATES ahead of this list, so installed faces probe\n# first and install/remove semantics are unchanged.\n# Noto Sans Symbols 2 covers the Mac modifier symbols (U+2318 cmd,\n# U+2325 option, U+21E7 shift, U+232B delete-left, U+23CE return) that\n# no baked text face maps. NB U+2303 control is NOT in this family\n# (measured 2026-08-05; it lives in Noto Sans Symbols (1)).\n/usr/share/fonts/symbols2.ttf\n"
+      },
       "/usr/share/sounds/scheme": {
         "content": "# Event-sound scheme (todos/0094), consulted by PlaySound/MessageBeep\n# (os/win32) and the wm startup chime through os/sounds.h. Three layers\n# overlaid per key, highest wins: ~/.config/sounds, /etc/sounds,\n# /usr/share/sounds/scheme. Lines: EVENT<ws>WAV-PATH; the value `none`\n# silences that event; the reserved key `mute on` silences all of them\n# (the Control Panel Sounds applet toggles it).\nSystemStart\t/usr/share/sounds/startup.wav\nSystemDefault\t/usr/share/sounds/ding.wav\nSystemHand\t/usr/share/sounds/chord.wav\nSystemQuestion\t/usr/share/sounds/ding.wav\nSystemExclamation\t/usr/share/sounds/chimes.wav\nSystemAsterisk\t/usr/share/sounds/ding.wav\nBell\t/usr/share/sounds/ding.wav\n"
       },
