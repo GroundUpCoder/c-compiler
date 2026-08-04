@@ -236,14 +236,42 @@ independently justifies kernel+sweep, so retiring one must not read as grounds
 to narrow the rule.
 
 The suite list is #474's `['fakegit','projects','kernel','sweep']`, NOT the
-`+ host` this branch originally had. That `host` was reasoning by analogy with
-the `^packages/` rule and does not survive checking: **no test under
-`tests/host/` or `tests/serve/` reads `vendor/libgit2` at all**.
-`test_source_packages.js` derives units from DEFINITIONS (and
-`packages/libgit2.json`, having no `project`/`c` entry, yields none), and
-`test_mkpkg_isolation.js` builds synthetic defs through `--packages-dir`.
+`+ host` this branch originally had.
+
+**The first justification I wrote for that was false, and the Codex delta
+review was right to block on it.** I had written "no test under `tests/host/`
+or `tests/serve/` reads this tree". It does: because #473 gives
+`packages/libgit2.json` two `tree` entries,
+`tests/host/test_bakeinput_sources.js`'s real-repo legs enumerate
+`vendor/libgit2` through `newestBakeInput` / `newestPkgInput`. I had checked
+`test_source_packages.js` and `test_mkpkg_isolation.js` and generalized from
+two files to a whole directory — the generalization was the error, and it is
+the same "a true-sounding sentence is more dangerous than a false one" shape
+the liability register exists for.
+
+Excluding `host` still holds, for the reason I should have measured the first
+time: **nothing a tree edit can do to that guard's outcome is unique to it.**
+Four probes, one edit at a time, each reverted:
+
+| edit under `vendor/libgit2/**` | host guard | also caught by a selected suite? |
+|---|---|---|
+| modify a file's content | green | — |
+| add a plain file | green | — |
+| delete a file | green | — (a build break lands in `fakegit`/`projects`) |
+| **add a symlink** | **RED** | **yes — `foldPackages('all')` AND `mkpkg` both throw** |
+
+The guard's assertions are about *which directories the scan enumerated* and
+*which `files` entry kinds the definition uses* — neither of which a file's
+content or presence moves. The one class that does fire is the symlink, and
+that is caught by two suites this rule already selects, through the exact code
+paths they run: every kernel and sweep fixture bake is `--packages=all`
+(`foldPackages` throws: *"package 'libgit2': … is a symlink — tree payloads
+carry files and dirs only"*), and `tests/kernel/lib/gucman.js
+ensurePackages()` shells out to `tools/mkpkg.js`, which throws the same. Both
+verified RED against the same planted symlink.
+
 `packages/libgit2.json` itself still draws `host` from the `^packages/` rule,
-which is where that coverage belongs.
+which is the right place for definition-shaped coverage.
 
 **`os/image.json` 232 → 233.** #474 took main to 232 and this branch had
 independently chosen 232 for the same fat-image reason; git reported no

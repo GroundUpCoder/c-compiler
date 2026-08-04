@@ -477,12 +477,26 @@ const RULES = [
   // restales the fat fixture exactly like a seeded source. (Before #474 the
   // rule stopped at its category + the build check because nothing seeded or
   // packaged it; that reasoning expired with the ship.)
-  // Deliberately NOT `host`, even though a ^packages/ edit draws it: no test
-  // under tests/host/ or tests/serve/ reads this tree — test_source_packages
-  // derives units from DEFINITIONS (and libgit2.json, having no project/c
-  // entry, yields none) and test_mkpkg_isolation builds synthetic defs through
-  // --packages-dir. packages/libgit2.json itself still gets host from the
-  // ^packages/ rule, which is where that coverage belongs.
+  // Deliberately NOT `host`, even though a ^packages/ edit draws it — and the
+  // reason is NOT that host cannot see this tree. It can: since #473 gave
+  // packages/libgit2.json two `tree` entries, test_bakeinput_sources.js's
+  // real-repo legs enumerate vendor/libgit2 through newestBakeInput /
+  // newestPkgInput. The reason is that nothing a tree edit can do to that
+  // guard's OUTCOME is unique to it. Measured, four probes, one at a time:
+  //   edit a file's content      -> host green
+  //   add a plain file           -> host green
+  //   delete a file              -> host green
+  //   add a SYMLINK to the tree  -> host RED
+  // — because its assertions are about WHICH DIRECTORIES the scan enumerated
+  // and which `files` entry kinds the DEFINITION uses, neither of which a
+  // file's content or presence moves. The one class that does fire, the
+  // symlink, is caught by two suites this rule already selects, through the
+  // exact code paths they run: foldPackages('all') throws on it (every kernel
+  // and sweep fixture bake is --packages=all) and so does tools/mkpkg.js
+  // (tests/kernel/lib/gucman.js ensurePackages() shells out to it) — both
+  // verified RED on the same planted symlink. So host here would buy cost and
+  // no signal. packages/libgit2.json itself still draws host from ^packages/,
+  // which is the right place for definition-shaped coverage.
   [/^vendor\/libgit2\//, ['fakegit', 'projects', 'kernel', 'sweep'],
     'the engine under os/git AND the payload of the libgit2 srclib package — its category, its build check, and the fat fixture both ship into'],
   // The Csmith programs the `fuzz` category compiles (run.py CSMITH_CORPUS_DIR).
