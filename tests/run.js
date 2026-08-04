@@ -362,8 +362,13 @@ const RULES = [
   [/^tests\/lib\//, ['unit', 'blockfs', 'kernel', 'sweep', 'host'], 'the shared suite-runner/image-fixture/leak-reaper engine'],
 
   // The OS-page driving tool (0171) rides the browser harness seam — the
-  // sweep is what proves that seam still boots and types.
-  [/^tools\/os-drive/, ['sweep'], 'drives os.html via tests/browser/lib/os-harness.mjs'],
+  // sweep is what proves that seam still boots and types. Its headless
+  // sibling (#421) rides the os/boot.js + wmctl seam instead, which the
+  // kernel e2es prove — pulling the sweep for it would gate on a suite that
+  // cannot observe it (the net-bridge-ssh rule's reasoning).
+  [/^tools\/os-drive\.mjs$/, ['sweep'], 'drives os.html via tests/browser/lib/os-harness.mjs'],
+  [/^tools\/os-drive-headless\.mjs$/, ['kernel'],
+    'drives live os/boot.js sessions — the kernel e2es prove the boot.js/wmctl seam it rides'],
 
   // The .res compiler (0068): its output packs feed the win32 apps' menus/
   // dialogs/strings — the kernel win32 e2es are what consume them.
