@@ -728,7 +728,10 @@ var WM_SAB_LAYOUT = {
  *   FOCUS { sid }                -> R_OK | R_ERR   (restores if minimized)
  *   MINIMIZE / RESTORE { sid }   -> R_OK | R_ERR
  *   RESTACK { sid, place }       -> R_OK | R_ERR   (place: 0 raise, 1 lower)
- *   CLOSE_REQ { sid }            -> R_OK | R_ERR   (SDL_EVENT_QUIT to owner)
+ *   CLOSE_REQ { sid }            -> R_OK | R_ERR   (SDL_EVENT_QUIT to owner;
+ *                                   arms the #486 hung-app watchdog — an
+ *                                   owner that never consumes the request
+ *                                   is force-quit after the grace period)
  *   RESIZE { sid, w, h }         -> R_OK | R_ERR   (asks the client; geometry
  *                                   changes only at its SURFACE_CONFIGURE ack
  *                                   -> EV_CONFIGURED; R_ERR on a surface
@@ -1136,6 +1139,10 @@ var WM_LABEL_PX = 20;                        // label text pixel size (todos/027
                                              // from the render header (~28 at
                                              // 20px, the v133 rhythm)
 var WM_CLOSE_W = 20, WM_CLOSE_PAD = 4;       // close box, right-aligned in the bar
+var WM_HUNG_GRACE_MS = 5000;                 // #486: close request unconsumed this
+                                             // long -> owner force-quit (the
+                                             // Windows HungAppTimeout analog)
+var WM_HUNG_POLL_MS = 250;                   // #486: consumption poll cadence
 var WM_BOX_GAP = 2;                          // between the [min][max][close] boxes
                                              // (todos/0030; same 20px metrics)
 var WM_BORDER = 4;                           // DRAWN frame width around
@@ -2031,6 +2038,11 @@ function Kernel(opts) {
   // fallback (egress without a host is meaningless; the no-zombie rule).
   this._onEgress = opts.onEgress || null;
   this._log = opts.log || function () {};
+  // Hung-app containment (#486, OS.md "Contain"): how long a user close
+  // request (chrome close box / WMP CLOSE_REQ) may sit unconsumed in the
+  // owner's input ring before the kernel force-quits that process.
+  // Embedder-tunable; tests shorten it to keep the harness fast.
+  this._hungGraceMs = opts.hungGraceMs > 0 ? opts.hungGraceMs | 0 : WM_HUNG_GRACE_MS;
   this._procs = new Map();   // pid -> PCB
   this._nextPid = 1;
   this._halted = false;
@@ -2125,7 +2137,7 @@ function Kernel(opts) {
   // focus, input routing, kernel-chrome policy (v1 — a WM client takes over
   // placement policy in v2). The compositor (browser) and the screenshot
   // composite (headless) both read this state.
-  this._surfaces = new Map(); // sid -> { sid, pid, sab, i32, u8, w, h, dstW, dstH, title, x, y, bitmap, minimized, borderless, relativeMouse, pendingConfigure, mapped, mapTimer, parentSid, dx, dy, children, grab }
+  this._surfaces = new Map(); // sid -> { sid, pid, sab, i32, u8, w, h, dstW, dstH, title, x, y, bitmap, minimized, borderless, relativeMouse, pendingConfigure, mapped, mapTimer, closeWd, parentSid, dx, dy, children, grab }
   this._nextSid = 1;
   this._zOrder = [];          // sids, bottom -> top
   this._focusSid = 0;         // written ONLY through _wmSetFocus (todos/0256,
@@ -4553,6 +4565,8 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         mapped: true,             // in the composite + hit test (todos/0069);
                                   // see the map-on-placement decision below
         mapTimer: null,           // the unmapped-surface backstop timeout
+        closeWd: null,            // hung-app watchdog (#486): armed by
+                                  // wmCloseRequest, disarmed on consumption
         parentSid: 0,             // anchored child (todos/0256): the parent
                                   // surface this one is pinned to (0 = a
                                   // top-level); forms a tree (A1)
@@ -4816,6 +4830,7 @@ Kernel.prototype._wmDestroySurface = function (sid) {
     if (dgi >= 0) this._wmGrabs.splice(dgi, 1); // grab (A2)
   }
   if (s.mapTimer) { clearTimeout(s.mapTimer); s.mapTimer = null; }
+  this._wmCloseWdClear(s);      // #486: no watchdog outlives its surface
   this._wmAnims.delete(sid);    // no animating a dead surface (todos/0063)
   this._surfaces.delete(sid);
   var zi = this._zOrder.indexOf(sid);
@@ -4973,6 +4988,9 @@ Kernel.prototype._wmGrabConsume = function (target, isClient) {
   }
   this._wmGrabs.pop();
   this._wmGrabSwallowUp = true;
+  // Deliberately NOT wmCloseRequest (#486): a grab dismissal is UI
+  // housekeeping, not a user close request — a momentarily-busy owner must
+  // not be force-quit because a click landed outside its popup.
   this._wmEventTo(hSid, [WMEV.QUIT, 0, 0, 0, 0, 0, 0, 0]);
   return 'grab-dismiss';
 };
@@ -5416,6 +5434,139 @@ Kernel.prototype._wmEventTo = function (sid, words) {
   if (!pcb || pcb.state !== STATE_RUNNING) return 'ESRCH';
   words[1] = sid;
   return this._wmPushEvent(pcb, words) ? 0 : 'EAGAIN';
+};
+
+/* ---- hung-app containment (#486; OS.md "Contain") ----
+ * A close request is the one event whose non-consumption is PROOF the owner
+ * is not responding: the user asked the window to close, and an app that
+ * never advances its input-ring rpos past the QUIT record (a wedged loop, a
+ * pump-free render loop) will ignore it forever. wmCloseRequest is the ONE
+ * choke for user close requests — the chrome close box and WMP CLOSE_REQ
+ * (wm.c taskbar Close, wmctl close). Grab dismissals are deliberately
+ * excluded (_wmGrabConsume): dismissing a popup is UI housekeeping, not a
+ * request to quit, and a momentarily-busy owner must not die for it.
+ *
+ * Semantics: deliver WMEV.QUIT and arm a ONE-SHOT per-surface watchdog that
+ * polls the ring's rpos. Consumed within the grace period -> disarm; an app
+ * that pumps the request and then chooses to stay open is RESPONDING (the
+ * Windows rule: pumping = alive; what it does with the event is its
+ * business). Unconsumed at the deadline -> force-quit THAT process (the
+ * SIGKILL path — _exitProcess reclaims surfaces/fds/ring, so a hung app
+ * cannot block its own teardown) with a legible reason through _log. A
+ * second close request during the grace window with the first QUIT still
+ * unconsumed force-quits immediately (Windows-style escalation). A full
+ * ring at request time (EAGAIN — cap records already sitting undrained) is
+ * the strongest not-draining signal there is: the watchdog arms anyway,
+ * retries delivery each poll, and the grace clock still starts at the
+ * user's click.
+ *
+ * Consumption tracking: rpos/wpos live in [0, 2*cap) and a live consumer
+ * can lap that space (5s of mousemotion outruns a 256-slot ring), so ONE
+ * deadline check could alias. The poll instead keeps need = records left
+ * to consume (the QUIT last among everything queued at push time) and
+ * subtracts the per-poll rpos delta; a drained-dry ring (rpos == wpos,
+ * where wpos only moves on this thread) is alias-proof evidence on its
+ * own. Undercounting would need >= 2*cap records consumed inside one poll
+ * interval with the ring never once observed empty — not a real consumer. */
+Kernel.prototype.wmCloseRequest = function (sid) {
+  var s = this._surfaces.get(sid);
+  if (!s) return 'EINVAL';
+  var pcb = this._procs.get(s.pid);
+  if (!pcb || pcb.state !== STATE_RUNNING) return 'ESRCH';
+  if (s.closeWd) {
+    if (!this._wmCloseWdDone(pcb, s.closeWd)) {
+      // Second close during grace, first QUIT still unconsumed: hung now.
+      this._wmCloseWdClear(s);
+      this._wmForceQuit(s, pcb);
+      return 0;
+    }
+    this._wmCloseWdClear(s);       // consumed: this click is a fresh request
+  }
+  var err = this._wmEventTo(sid, [WMEV.QUIT, 0, 0, 0, 0, 0, 0, 0]);
+  if (err === 'EINVAL' || err === 'ESRCH') return err;   // no target: no watchdog
+  var wd = { deadline: Date.now() + this._hungGraceMs, timer: null,
+             delivered: false, need: 0, lastRpos: 0 };
+  s.closeWd = wd;
+  if (err === 0) this._wmCloseWdTrack(pcb, wd);
+  this._wmCloseWdSchedule(sid);
+  return err;      // EAGAIN still reported to the caller; the watchdog owns
+                   // the request from here (delivery retries in the poll)
+};
+
+/* Record what "consumed" means for the QUIT just pushed: the consumer must
+ * advance rpos past everything queued at push time — our record is last. */
+Kernel.prototype._wmCloseWdTrack = function (pcb, wd) {
+  var ring = pcb.wmRing;
+  if (!ring) return;               // undeliverable after all; the poll retries
+  var cap2 = ring.cap * 2;
+  wd.lastRpos = Atomics.load(ring.i32, IR_RPOS);
+  wd.need = (Atomics.load(ring.i32, IR_WPOS) - wd.lastRpos + cap2) % cap2;
+  wd.delivered = true;
+};
+
+Kernel.prototype._wmCloseWdDone = function (pcb, wd) {
+  if (!wd.delivered) return false;
+  var ring = pcb.wmRing;
+  if (!ring) return false;
+  var cap2 = ring.cap * 2;
+  var rpos = Atomics.load(ring.i32, IR_RPOS);
+  if (rpos === Atomics.load(ring.i32, IR_WPOS)) return true;   // drained dry
+  wd.need -= (rpos - wd.lastRpos + cap2) % cap2;
+  wd.lastRpos = rpos;
+  return wd.need <= 0;
+};
+
+Kernel.prototype._wmCloseWdClear = function (s) {
+  if (!s.closeWd) return;
+  if (s.closeWd.timer) clearTimeout(s.closeWd.timer);
+  s.closeWd = null;
+};
+
+Kernel.prototype._wmCloseWdSchedule = function (sid) {
+  var s = this._surfaces.get(sid);
+  if (!s || !s.closeWd) return;
+  var self = this;
+  // Poll fast enough that the consumer cannot lap the [0, 2*cap) index
+  // space between polls (the aliasing note above); a short grace (tests)
+  // polls at grace/4 so the deadline is hit promptly.
+  var t = setTimeout(function () { self._wmCloseWdPoll(sid); },
+                     Math.max(10, Math.min(WM_HUNG_POLL_MS, this._hungGraceMs >> 2)));
+  if (t.unref) t.unref();          // never pins a Node embedder's event loop
+  s.closeWd.timer = t;
+};
+
+Kernel.prototype._wmCloseWdPoll = function (sid) {
+  var s = this._surfaces.get(sid);
+  if (!s || !s.closeWd) return;
+  var wd = s.closeWd;
+  wd.timer = null;
+  var pcb = this._procs.get(s.pid);
+  if (!pcb || pcb.state === STATE_ZOMBIE) { s.closeWd = null; return; }  // gone already
+  if (!wd.delivered) {
+    // The ring was full (or absent) at request time — retry delivery on
+    // the SAME grace clock; a drain would have made room by now.
+    if (this._wmEventTo(sid, [WMEV.QUIT, 0, 0, 0, 0, 0, 0, 0]) === 0) {
+      this._wmCloseWdTrack(pcb, wd);
+    }
+  }
+  if (this._wmCloseWdDone(pcb, wd)) { s.closeWd = null; return; }        // responding
+  if (Date.now() >= wd.deadline) {
+    s.closeWd = null;
+    this._wmForceQuit(s, pcb);
+    return;
+  }
+  this._wmCloseWdSchedule(sid);
+};
+
+/* The containment action. Reason FIRST — the user must be able to learn why
+ * the window vanished (boot.js wires _log to stderr; the browser embedder
+ * to the boot-log console) — then the SIGKILL path. A STOPPED process
+ * force-quits too: it cannot consume a close request either, and SIGKILL
+ * reaches stopped processes by definition. */
+Kernel.prototype._wmForceQuit = function (s, pcb) {
+  this._log('"' + (s.title || 'window ' + s.sid) + '" (pid ' + pcb.pid +
+            ') is not responding — force quit');
+  this._deliver(pcb, SIG.KILL);
 };
 
 /* ---- raw input from the UI bridge (SCREEN coordinates) ----
@@ -5881,8 +6032,10 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
         var cy0 = s.y - WM_TITLE_H + WM_CLOSE_PAD;
         if (x >= cx0 && x < cx0 + WM_CLOSE_W && y >= cy0 && y < cy0 + WM_CLOSE_W) {
           // Close = request-close: SDL_EVENT_QUIT to the owner (graceful;
-          // agents/wmctl can still kill). v1: no per-window close event.
-          this._wmEventTo(s.sid, [WMEV.QUIT, 0, 0, 0, 0, 0, 0, 0]);
+          // agents/wmctl can still kill), with the #486 hung-app watchdog
+          // armed — an owner that never consumes the request is force-quit
+          // after the grace period (wmCloseRequest).
+          this.wmCloseRequest(s.sid);
           return 'close';
         }
         // Title-bar boxes (todos/0030), Win95 order [min][max][close] —
@@ -6858,7 +7011,7 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
     case WMP.RESTORE: ok(this.wmFocus(g(0))); break;    // focus restores
     case WMP.RESTACK: ok(this.wmRestack(g(0), g(1))); break;
     case WMP.CLOSE_REQ:
-      ok(this._wmEventTo(g(0), [WMEV.QUIT, 0, 0, 0, 0, 0, 0, 0]));
+      ok(this.wmCloseRequest(g(0)));  // QUIT + the #486 hung-app watchdog
       break;
     case WMP.INJECT_KEY:
       ok(this.wmInjectKey(g(0), g(1) !== 0, g(2), g(3), g(4)));
