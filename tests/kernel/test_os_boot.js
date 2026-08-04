@@ -40,15 +40,74 @@ function check(name, cond, extra) {
 
 const { dir: tmp, image } = freshImage('os-boot-');
 
+// ---- harness-kill honesty (#110 / todos-0304) ----
+// Every boot/bake spawn below runs under ONE wall-clock budget, and both kill
+// flavours must read as HARNESS/environment events, never as product failures
+// (the 0171/0154 class: failure text that cannot distinguish "the thing under
+// test broke" from "the harness never got to run it"). The flavours are
+// distinguishable in spawnSync's result — verified empirically, this Node
+// line only sets ETIMEDOUT for its OWN timer:
+//   - the budget kill: r.error.code === 'ETIMEDOUT' (status null, SIGTERM).
+//     The old `throw r.error` crashed the file with an unattributed stack —
+//     no leg, no budget, no wall time — and the mkimage spawn never checked
+//     r.error at all.
+//   - an EXTERNAL kill: status null + signal, NO error — memory-pressure
+//     SIGKILL or a stray/group SIGTERM on a contended box. This is the path
+//     that printed the historical bare "FAIL post-bypass boot exits clean
+//     null": String(null) names no signal and reads as an unclean exit.
+// Both abort the file: after a killed bake the image is in an undefined
+// state, so every later leg would cascade into confusing secondary reds.
+// CC_OS_BOOT_TIMEOUT_MS overrides the budget (contention relief, and the red
+// control's lever — tests/kernel/test_os_boot_kill_honesty.js).
+const BUDGET_MS = (() => {
+  const v = parseInt(process.env.CC_OS_BOOT_TIMEOUT_MS || '', 10);
+  return v > 0 ? v : 300000;
+})();
+// killSignal SIGKILL, not the default SIGTERM: os/boot.js traps SIGTERM (the
+// heavy-lock release handler, tests/lib/heavy-lock.js), and a trapped signal
+// delivered mid-bake is deferred past the bake's long synchronous compile
+// stretches — probed live, a SIGTERMed bake survived 118s+ while the caller's
+// spawnSync blocked past its own timeout waiting for the death. SIGKILL is
+// untrappable; the lock file a SIGKILLed boot leaves self-heals (dead-pid
+// steal), and its tmp images live under this test's own harness-temp dir.
+function runBudgeted(what, argv, opts) {
+  const t0 = Date.now();
+  const r = cp.spawnSync('node', argv,
+    Object.assign({}, opts, { timeout: BUDGET_MS, killSignal: 'SIGKILL' }));
+  const wall = Date.now() - t0;
+  const tail = ' stderr tail: ' + String(r.stderr || '').slice(-300);
+  if (r.error && r.error.code === 'ETIMEDOUT') {
+    check(what, false,
+      'TIMED OUT: killed by the harness at its ' + BUDGET_MS + 'ms budget (' +
+      wall + 'ms wall, ' + (r.signal || 'SIGKILL') + '). NOT a product' +
+      ' failure verdict: a hung boot and a CPU-contended machine (a sibling' +
+      ' heavy suite) are indistinguishable at the kill — re-run quiet, or' +
+      ' raise CC_OS_BOOT_TIMEOUT_MS.' + tail);
+    abortKilled();
+  }
+  if (r.error) throw r.error;
+  if (r.status === null) {
+    check(what, false,
+      'killed by ' + r.signal + ' from outside the harness after ' + wall +
+      'ms (no ETIMEDOUT, so not this file\'s budget). NOT a product exit —' +
+      ' memory pressure or a stray kill on a busy machine.' + tail);
+    abortKilled();
+  }
+  return r;
+}
+function abortKilled() {
+  console.log('\nos boot (headless, hush): ' + failures +
+    ' FAILED (aborted: the spawn under test was KILLED — see the FAIL line above)');
+  process.exit(1);
+}
+
 function session(input, extraArgs) {
   // Not --quiet: the [boot] lines on stderr are themselves under test
   // (seeded vs reused); program stdout stays byte-clean either way (hush is
   // non-interactive under piped stdio — no prompts).
-  const r = cp.spawnSync('node',
+  return runBudgeted('boot session [' + String(input).split('\n')[0] + ']',
     [BOOT, '--image=' + image].concat(extraArgs || []),
-    { input, encoding: 'utf8', timeout: 300000 });
-  if (r.error) throw r.error;
-  return r;
+    { input, encoding: 'utf8' });
 }
 
 // ---- first boot: seed + the full shell gauntlet ----
@@ -486,9 +545,9 @@ const vNext = (JSON.parse(fs.readFileSync(path.join(ROOT, 'os/image.json'), 'utf
   manifest.version = vNext;
   const mfPath = path.join(tmp, 'image-vnext.json');
   fs.writeFileSync(mfPath, JSON.stringify(manifest));
-  const mk = cp.spawnSync('node',
+  const mk = runBudgeted('mkimage v(N+1) bake',
     [path.join(ROOT, 'tools/mkimage.js'), '--out=' + image, '--manifest=' + mfPath, '--quiet'],
-    { encoding: 'utf8', timeout: 300000 });
+    { encoding: 'utf8' });
   check('mkimage bakes the v(N+1) blob', mk.status === 0, (mk.stderr || '').slice(-300));
 }
 r = session([
@@ -551,11 +610,9 @@ check('unknown command is 127 via $?', r.status === 127, String(r.status));
 // These legs run LAST: the aging leaves the first pair's blob stale.
 const image2 = path.join(tmp, 'os2.img');
 function session2(input, extraArgs) {
-  const r = cp.spawnSync('node',
+  return runBudgeted('fixture boot session [' + String(input).split('\n')[0] + ']',
     [BOOT, '--image=' + image2, '--fixture=' + image].concat(extraArgs || []),
-    { input, encoding: 'utf8', timeout: 300000 });
-  if (r.error) throw r.error;
-  return r;
+    { input, encoding: 'utf8' });
 }
 r = session2('cc hello.c && ./a.out\nexit\n');
 check('fixture boot exits clean', r.status === 0, String(r.status) + ' ' + (r.stderr || '').slice(-300));
