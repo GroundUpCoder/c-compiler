@@ -171,13 +171,35 @@ ok 158 the header seam left its old position
 ctldemo lvtest: 105 checks, 0 failed
 ```
 
-**OWED: the red control for these four legs has NOT been run.** The coordinator
-stood this lane down from the machine-wide heavy lock mid-round — my short
-back-to-back probes were starving #473's long gate window, and #473 merges
-first. Two of the four legs are expected to go red under the mutation (the two
-`at rest` ones are no-ops at `xoff == 0` and must stay green); that is a
-prediction, not a result, and it stays written here as OWED until it is a
-transcript. This branch is not merge-ready until it is.
+The red control — the same mutation, now with the leg present. The prediction
+was written down *before* the run (two red, the two `at rest` legs green at
+`xoff == 0`), so the result could be checked against it rather than
+rationalised after it:
+
+```
+$ sed -n '234p' os/win32/listview.c
+        int left = 0;
+$ echo 'ctldemo lvtest' | node os/boot.js
+ok   158 header seam is drawn where the columns say (at rest)
+ok   158 nothing drawn at the scrolled-to position yet
+FAIL 158 the header seam MOVED with the scroll
+FAIL 158 the header seam left its old position
+ctldemo lvtest: 105 checks, 2 failed
+```
+
+Exactly the prediction, no surprises. The load-bearing detail is the **`2`**:
+across all 105 checks those two are the *only* failures, so the four geometry
+lockstep legs stayed green under a mutation that freezes the header — the
+finding restated as a measurement rather than an argument.
+
+Mutation reverted, tree verified clean (and the clean check positive-controlled
+by appending a line, watching `git status` report it, and reverting).
+
+**Process note worth keeping.** This round's mutation probe was a compound
+`&&` chain that got rejected mid-flight — and its *leading* `python3 -c` had
+already run, leaving live sabotage in the worktree. A rejected tool call is not
+necessarily an unexecuted one; `git status` + `git diff` after any interrupted
+mutation, before trusting anything.
 
 ## Left alone, deliberately
 
