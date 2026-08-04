@@ -1513,6 +1513,10 @@ KernelClient.prototype.spawnHooks = function () {
     // frame loops off the kernel's compositor clock when advertised.
     vsyncEnabled: function () { return self.vsyncEnabled(); },
     vsyncWait: function () { return self.vsyncWait(); },
+    // Synchronous tick-counter read (ticket #484): host.js's gpu-transport
+    // present clamp asks "which vsync interval is this?" per present — a
+    // plain load, never a park (vsyncWait is the parking flavor).
+    vsyncSeq: function () { return Atomics.load(self._i32, KP_VSYNC_SEQ); },
     // On-demand compositor doorbells (todos/0169): shm presents are
     // SAB-only, so host.js re-reads the parked flag after every seq bump
     // and rings want-frame when set; frame-idle is pumpWait's entry saying

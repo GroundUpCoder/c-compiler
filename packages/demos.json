@@ -1,9 +1,10 @@
 {
   "name": "demos",
-  "version": "2",
-  "summary": "gucOS demo apps — winbox, gpubox, gdidemo, ctldemo, fontramp, gdiplusdemo, k32demo (the windowing/GPU/GDI/controls/font/GDI+/kernel32 acceptance demos, bundled)",
+  "version": "3",
+  "summary": "gucOS demo apps — winbox, pollball, gpubox, gdidemo, ctldemo, fontramp, gdiplusdemo, k32demo (the windowing/GPU/GDI/controls/font/GDI+/kernel32 acceptance demos, bundled)",
   "files": {
     "winbox": { "c": "winbox.c" },
+    "pollball": { "c": "pollball.c" },
     "gpubox": { "project": "os/gpubox.json" },
     "gdidemo": { "project": "os/win32/gdidemo.json" },
     "ctldemo": { "project": "os/win32/ctldemo.json" },
@@ -14,6 +15,7 @@
   },
   "bin": {
     "winbox": "winbox",
+    "pollball": "pollball",
     "gpubox": "gpubox",
     "gdidemo": "gdidemo",
     "ctldemo": "ctldemo",
@@ -23,6 +25,7 @@
   },
   "menu": [
     { "group": "Demos", "entry": "winbox", "cmd": "winbox" },
+    { "group": "Demos", "entry": "pollball", "cmd": "pollball" },
     { "group": "Demos", "entry": "gpubox", "cmd": "gpubox" },
     { "group": "Demos", "entry": "gdidemo", "cmd": "gdidemo" },
     { "group": "Demos", "entry": "ctldemo", "cmd": "ctldemo" },

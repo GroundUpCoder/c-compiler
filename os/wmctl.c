@@ -16,6 +16,11 @@
  *                                       seq SID N   (frame_seq >= N)
  *                                       dim SID WxH (buffer geometry ==)
  *                                       dst SID WxH (on-screen dst rect ==)
+ *   wmctl seq SID                     print the kernel frame counter for SID
+ *                                     (ticket #484) — two reads a known
+ *                                     interval apart measure the present rate
+ *                                     the kernel actually observed (the gpu-
+ *                                     transport clamp's acceptance instrument)
  *   wmctl focus|min|restore|close|raise|lower SID
  *   wmctl move SID X Y
  *   wmctl resize SID W H              asks the client; applies at its ack
@@ -133,6 +138,7 @@ static int usage(void) {
         "       wmctl wait flag|noflag SID CHAR [MS]\n"
         "       wmctl wait seq SID N [MS]\n"
         "       wmctl wait dim|dst SID WxH [MS]\n"
+        "       wmctl seq SID\n"
         "       wmctl wait label|nolabel LABEL [MS]\n"
         "       wmctl wait text LABEL SUBSTR [MS]\n"
         "       wmctl focus|min|restore|close|raise|lower SID\n"
@@ -585,6 +591,20 @@ int main(int argc, char **argv) {
 
     if (!strcmp(cmd, "list")) return do_list(fd);
     if (!strcmp(cmd, "wait")) return do_wait(fd, argc, argv);   /* todos/0083 */
+    if (!strcmp(cmd, "seq")) {          /* kernel frame counter (ticket #484):
+                                           the present RATE instrument — two
+                                           reads a known interval apart give
+                                           frames/s as the kernel saw them
+                                           (the record `wait seq` polls). */
+        if (argc < 3) return usage();
+        wmp_rec recs[256];
+        int n = wm_fetch(fd, recs, 256);
+        if (n < 0) return fail("protocol error");
+        const wmp_rec *r = wm_by_sid(recs, n, (int32_t)atoi(argv[2]));
+        if (!r) return fail("no such sid");
+        printf("%d\n", r->frame_seq);
+        return 0;
+    }
     if (!strcmp(cmd, "shot")) {
         if (argc < 3) return usage();
         return do_shot(fd, argv[2], argc > 3 ? argv[3] : NULL);

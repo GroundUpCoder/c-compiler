@@ -7483,6 +7483,11 @@ function createSurfaceSDL({ ctx, hooks }) {
    * kernel this app is back to waiting (frame-idle — clears the kernel-side
    * wantFrame pin without a per-park message from quiet pollers). */
   let presentedSinceIdle = false;
+  // Trailing-frame flush for the gpu-transport present clamp (ticket #484).
+  // Set by the browser flavor only; called at the park seams (pumpWait /
+  // waitMulti entry) so an app going quiet ships its last clamped frame
+  // instead of leaving a stale one on screen. null in every other flavor.
+  let flushPresent = null;
   function ringIfParked() {
     presentedSinceIdle = true;
     if (hooks.compParked && hooks.compParked()) hooks.wantFrame();
@@ -7601,6 +7606,10 @@ function createSurfaceSDL({ ctx, hooks }) {
    * (the marquee regression that found this). Return instead; the caller's
    * contract is already re-poll-on-any-return. */
   function pumpWait(timeoutMs) {
+    // #484: about to go quiet — ship any clamp-held trailing frame NOW
+    // (unconditionally; one frame per park can't flood), so the display
+    // shows the app's freshest frame while it waits.
+    if (flushPresent) flushPresent(false);
     // WaitEvent/GetMessage entry = this app is back to waiting on events
     // (todos/0169): release the kernel-side wantFrame pin so the compositor
     // may park. Gated on a present since the last release — an idle 25ms
@@ -7638,6 +7647,7 @@ function createSurfaceSDL({ ctx, hooks }) {
    * otherwise be slept past. */
   function waitMulti(rfdsPtr, nr, ringInterest, timeoutMs) {
     if (typeof hooks.waitMulti !== 'function') return -2;
+    if (flushPresent) flushPresent(false);   // #484: same rule as pumpWait
     if (presentedSinceIdle) {
       presentedSinceIdle = false;
       if (hooks.frameIdle) hooks.frameIdle();
@@ -7907,9 +7917,38 @@ function createSurfaceSDL({ ctx, hooks }) {
     let legacySid = 0;                 // last-created window (legacy tail only)
     /* The gpu-transport present tail (raw webgpu.h wgpuSurfacePresent and the
      * SDL renderer's flush land here): snapshot the given canvas and hand the
-     * frame to the kernel (todos/WM.md, spike S1). */
-    const presentTo = function (sid, cnv) {
-      if (!handleBySid.has(sid)) return;   // window already destroyed
+     * frame to the kernel (todos/WM.md, spike S1).
+     *
+     * Producer-side backpressure (ticket #484): each present here is a fresh
+     * ~w*h*4-byte GPU ImageBitmap plus a fire-and-forget postMessage, and the
+     * kernel's latest-frame-wins close (_wmFrame) runs at CONSUME time — so a
+     * legal poll-only render loop (no SDL_Delay; the most common game main
+     * loop) used to grow the in-flight message queue without bound (~2,100
+     * presents/s measured at 640x480 ≈ 2.5 GB/s of GPU churn) and exhaust
+     * the browser GPU process within seconds, killing the whole tab. Clamp
+     * at the producer: at most ONE transferToImageBitmap per kernel vsync
+     * tick — the same compositor rAF that consumes the mailbox
+     * (hooks.vsyncSeq, todos/0100/0167) — with a wall-clock interval as the
+     * no-advertisement fallback. Mailbox semantics unchanged (newest wins):
+     * a clamped present ships nothing, and the canvas — which still holds
+     * that frame — is HELD so the freshest frame is never lost: it re-ships
+     * through the gate at SDL_PollEvent's pump (a hot loop stays clamped) or
+     * unconditionally when the app parks (pumpWait/waitMulti entry — same JS
+     * task, so the canvas content is exactly the clamped frame). A present
+     * that acks a pending resize always ships: the ack is a protocol step
+     * (surfaceConfigure), not just pixels. Ticks stall while the tab is
+     * hidden or the compositor is parked — a shipped frame is damage that
+     * unparks it, so exactly one present rides each stall (bounded), and the
+     * steady state is one present per composite. The Node/shm path writes
+     * into a fixed double buffer (no per-present allocation) and needs no
+     * clamp. */
+    const PRESENT_CLAMP_MS = 8;      // no-vsync fallback interval (~125 fps cap)
+    const vsyncClamp = typeof hooks.vsyncSeq === 'function' &&
+                       typeof hooks.vsyncEnabled === 'function' &&
+                       hooks.vsyncEnabled();
+    const presentGate = new Map();   // sid -> { tick, ms } of the last shipped present
+    const presentHeld = new Map();   // sid -> canvas whose newest present was clamped
+    const shipFrame = function (sid, cnv) {
       try {
         const bmp = cnv.transferToImageBitmap();
         // gpu-transport resize ack (todos/0019): the first bitmap at the
@@ -7922,6 +7961,40 @@ function createSurfaceSDL({ ctx, hooks }) {
         }
         hooks.surfaceFrame(sid, bmp);
       } catch (e) { /* canvas may be zero-sized pre-configure */ }
+    };
+    const presentTo = function (sid, cnv) {
+      if (!handleBySid.has(sid)) return;   // window already destroyed
+      const win = fbByHandle.get(handleBySid.get(sid));
+      const acking = !!(win && win.pendingCfg &&
+                        cnv.width === win.pendingCfg.w &&
+                        cnv.height === win.pendingCfg.h);
+      let g = presentGate.get(sid);
+      if (!g) { g = { tick: -1, ms: 0 }; presentGate.set(sid, g); }
+      if (vsyncClamp) {
+        const t = hooks.vsyncSeq();
+        if (!acking && t === g.tick) { presentHeld.set(sid, cnv); return; }
+        g.tick = t;
+      } else {
+        const now = Date.now();
+        if (!acking && now - g.ms < PRESENT_CLAMP_MS) { presentHeld.set(sid, cnv); return; }
+        g.ms = now;
+      }
+      presentHeld.delete(sid);
+      shipFrame(sid, cnv);
+    };
+    // The trailing-frame flush (#484). respectGate=true retries held frames
+    // through the clamp (SDL_PollEvent's pump — ships once the tick moves);
+    // false ships them now (park entry — one frame per park cannot flood).
+    flushPresent = function (respectGate) {
+      if (!presentHeld.size) return;
+      for (const [sid, cnv] of presentHeld) {
+        if (respectGate) { presentTo(sid, cnv); continue; }
+        presentHeld.delete(sid);
+        if (!handleBySid.has(sid)) continue;
+        const g = presentGate.get(sid);
+        if (g) { if (vsyncClamp) g.tick = hooks.vsyncSeq(); else g.ms = Date.now(); }
+        shipFrame(sid, cnv);
+      }
     };
     // Shared-canvas tail: the SDL_Renderer flush passes its window handle; a
     // pre-A4 webgpu surface passes nothing and resolves to the legacy sid.
@@ -8013,6 +8086,8 @@ function createSurfaceSDL({ ctx, hooks }) {
         if (h === handle) {
           hooks.surfaceDestroy(sid); handleBySid.delete(sid); kFlagsBySid.delete(sid);
           canvasBySid.delete(sid);             // tear down only this sid's canvas
+          presentGate.delete(sid);             // #484 clamp state dies with the sid
+          presentHeld.delete(sid);
           if (legacySid === sid) legacySid = 0;
         }
       }
@@ -8036,7 +8111,13 @@ function createSurfaceSDL({ ctx, hooks }) {
       return win ? requestResize(win.sid, w, h) : -1;
     };
     env.__sdl_pump_wait = pumpWait;   // user32 blocking GetMessage (0058)
-    env.__sdl_pump = drainInput;      // SDL_PollEvent's non-blocking pump (#485)
+    env.__sdl_pump = function () {    // SDL_PollEvent's non-blocking pump (#485)
+      // #484: retry any clamp-held frame THROUGH the gate — a poll loop that
+      // stopped presenting (dirty-flag loops) still ships its last frame on
+      // the next tick, while a hot loop stays clamped.
+      flushPresent(true);
+      return drainInput();
+    };
     env.__wait = waitMulti;           // unified multi-source wait (0178)
     env.__sdl_delay = sdlDelay;       // cooperative worker sleep (0224) —
                                       // overrides inner's standalone-page throw
