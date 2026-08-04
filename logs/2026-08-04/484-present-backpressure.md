@@ -106,3 +106,34 @@ park, so nothing is ever lost.
 - Expected gate totals move: browser sweep **50 → 51** members
   (os-pollball.mjs joins discovery); kernel stays 157.
 - No new liability-register entries (no described-but-unscheduled gaps).
+
+## Gate results (2026-08-04, after lock release)
+
+- Merged origin/main (884b78d9, #486 hung-app contain) first — kernel.js
+  auto-merged CLEAN; interaction read: #486 judges "responding" by input-ring
+  rpos advancement, #484 touches only the present path and `__sdl_pump` still
+  drains the ring every SDL_PollEvent, so a clamped poll loop is correctly
+  alive and a wedged app still force-quits. image.json stayed 236 after the
+  3-way (verified — not the #485 counter trap). Merge commit 21eafc98.
+- **Full diff gate** (`tests/run.js --diff origin/main`, all suites, 3150s):
+  todos/unit/blockfs/py×17 green; **kernel 157/157** (done, filter null,
+  recorded==total, all pass); **sweep 51/51** — os-pollball.mjs joined
+  discovery and passed, clamped rate leg green. ONE red: host —
+  `test_gpu_present_binding.js` 3 legs, a pre-clamp fake flavor with no
+  vsync hooks whose back-to-back presents the new clamp's clock fallback
+  held (`[]` = frame held, not lost — the clamp working against a test
+  written before it existed).
+- **Repair** (@4b4c87ae): the binding test's subject is per-window binding,
+  not rate — its fake hooks now advertise a tick bumped before each present
+  that must ship; 15/15. The lane's throwaway clamp harness promoted to
+  `tests/host/test_gpu_present_clamp.js` (host members +1), 11/11.
+- **Host delta gate** (`--diff 21eafc98` → plan: host only): exit 0,
+  "All host tests passed", 636 ok / 0 FAIL. (This replaced
+  build/test-run/summary.json; the full-gate roll-up is preserved out of
+  tree and its kernel/browser artifacts are byte-identical on disk.)
+- **Browser red control, predicted in advance** (origin/main host.js, real
+  Chromium): rate leg FAILED at **72,719 presents/s** kernel-observed
+  (seq 47,012→340,579 over 4s) — and the desktop never repainted after the
+  app quit (probe read 0,0,0: the compositor died under the flood, the
+  tab-crash class live on camera). Restored tree: **8/8 green, 82/s**
+  clamped — an ~887x reduction at the same app.
