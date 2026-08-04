@@ -6,10 +6,17 @@
  * Built over PUBLIC user32/gdi32 APIs (the comctl32.c status-bar
  * precedent: state hangs off GWLP_USERDATA, no user32 internals) plus the
  * exported menucore helpers (mc_draw_raised / mc_strip_amp). The listview
- * creates its SysHeader32 as a child (the Windows architecture) and an
- * embedded SCROLLBAR child for the vertical bar — deliberately NOT
+ * creates its SysHeader32 as a child (the Windows architecture) and TWO
+ * embedded SCROLLBAR children, SBS_VERT and SBS_HORZ — deliberately NOT
  * repeating the known LISTBOX divergence ("WS_VSCROLL: no scrollbar is
  * drawn", WIN32.md 0211 audit).
+ *
+ * Scrolling (#158) has two origins: `top` (rows) and `xoff` (pixels). Each
+ * bar steals from the other's axis, so their visibility is one two-pass
+ * fixpoint (lv_bars) and nothing else may guess at it — lv_view_w and
+ * lv_vis_rows both go through it. The header scrolls in lockstep off the
+ * SAME xoff via its own paint origin; the reason it is not the Windows
+ * move-the-window trick is at hd_scroll_to.
  *
  * Report view ONLY: icon/small-icon/list views have no customer and no
  * ImageList substrate — a creation style asking for them reports through
@@ -33,11 +40,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define LV_B    2               /* sunken-well border, the LISTBOX inset */
-#define LV_SBW  16              /* embedded scrollbar width (ctldemo idiom) */
-#define LV_PADX 4               /* cell text inset */
-#define HD_MINW 8               /* divider drag floor */
-#define HD_GRIP 4               /* divider hit slop, +/- px */
+#define LV_B     2              /* sunken-well border, the LISTBOX inset */
+#define LV_SBW   16             /* embedded scrollbar width (ctldemo idiom) */
+#define LV_PADX  4              /* cell text inset */
+#define LV_HSTEP 16             /* horizontal "line" scroll, px */
+#define HD_MINW  8              /* divider drag floor */
+#define HD_GRIP  4              /* divider hit slop, +/- px */
 
 /* ---- small shared helpers ---- */
 
@@ -113,7 +121,13 @@ typedef struct {
     int press;                  /* pressed segment during a click, -1 */
     int drag;                   /* divider being dragged (col index), -1 */
     int dragOff;                /* x offset from the pointer to the edge */
+    int xoff;                   /* paint origin: content x of client x 0 */
 } HdState;
+
+/* Two x spaces live here (#158): CONTENT x measures from the first
+ * segment's left edge and is what hd_left/hd_hit speak; CLIENT x is what
+ * the pointer and the paint speak. client = content - xoff. */
+static int hd_content_x(HdState *st, int clientX) { return clientX + st->xoff; }
 
 static int hd_left(HdState *st, int i) {         /* segment left edge */
     int x = 0;
@@ -121,8 +135,8 @@ static int hd_left(HdState *st, int i) {         /* segment left edge */
     return x;
 }
 
-/* Segment index at x; -1 = past the last segment. divider != NULL: set to
- * the column whose RIGHT edge is within HD_GRIP of x (-1 none). */
+/* Segment index at CONTENT x; -1 = past the last segment. divider != NULL:
+ * set to the column whose RIGHT edge is within HD_GRIP of x (-1 none). */
 static int hd_hit(HdState *st, int x, int *divider) {
     int left = 0, seg = -1;
     if (divider) *divider = -1;
@@ -134,6 +148,25 @@ static int hd_hit(HdState *st, int x, int *divider) {
         left = right;
     }
     return seg;
+}
+
+/* The listview scrolls its header in lockstep by setting this origin.
+ *
+ * Real Windows makes the header WINDOW wider than the client and slides it
+ * left under the listview. That is unavailable here and would be a cliff,
+ * not a divergence: a child DC in this veneer is a span of the top-level
+ * surface (user32.c hwnd_span_dc), so a child whose absolute origin goes
+ * negative degenerates to the 1x1 scratch DC and the header would VANISH
+ * once xoff passed the control's own inset — and before that it would paint
+ * over the parent to the left of the listview, because a child is clipped
+ * to the surface, not to its parent. Keeping the window put and moving the
+ * origin INSIDE yields the same pixels with the header's own client rect
+ * doing the clipping. */
+static void hd_scroll_to(HWND h, int xoff) {
+    HdState *st = (HdState *)GetWindowLongPtr(h, GWLP_USERDATA);
+    if (!st || st->xoff == xoff) return;
+    st->xoff = xoff;
+    InvalidateRect(h, NULL, TRUE);
 }
 
 static void hd_notify(HWND h, UINT code, int item) {
@@ -194,29 +227,34 @@ static LRESULT hd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         FillRect(dc, &r, GetSysColorBrush(COLOR_BTNFACE));
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
-        int left = 0;
+        /* Segments are laid out at their TRUE (unclamped) rects and the
+         * DC's own bounds do the clipping — a partly-scrolled segment must
+         * keep its real bevel and its real right edge, or a right-aligned
+         * title would slide as it scrolls. */
+        int left = -st->xoff;
         for (int i = 0; i < st->n && left < r.right; i++) {
+            int w = st->it[i].cxy;
+            if (left + w <= 0) { left += w; continue; }   /* fully scrolled off */
             RECT seg;
-            SetRect(&seg, left, 0, left + st->it[i].cxy, r.bottom);
-            if (seg.right > r.right) seg.right = r.right;
+            SetRect(&seg, left, 0, left + w, r.bottom);
             mc_draw_raised(dc, seg, st->press == i);
             RECT cell;
             SetRect(&cell, seg.left + 1, seg.top + 1, seg.right - 2,
                     seg.bottom - 1);
             /* HDF alignment values match LVCFMT (left 0 / right 1 / center 2) */
             lv_cell_text(dc, cell, st->it[i].text, st->it[i].fmt);
-            left += st->it[i].cxy;
+            left += w;
         }
         EndPaint(h, &ps);
         return 0;
     }
     case WM_LBUTTONDOWN: {
         int divider;
-        int seg = hd_hit(st, GET_X_LPARAM(lp), &divider);
+        int cx = hd_content_x(st, GET_X_LPARAM(lp));
+        int seg = hd_hit(st, cx, &divider);
         if (divider >= 0) {                      /* drag-resize the divider */
             st->drag = divider;
-            st->dragOff = GET_X_LPARAM(lp)
-                          - (hd_left(st, divider) + st->it[divider].cxy);
+            st->dragOff = cx - (hd_left(st, divider) + st->it[divider].cxy);
             SetCapture(h);
         } else if (seg >= 0) {                   /* arm a segment press */
             st->press = seg;
@@ -227,7 +265,8 @@ static LRESULT hd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_MOUSEMOVE:
         if (st->drag >= 0 && GetCapture() == h) {
-            int w = GET_X_LPARAM(lp) - st->dragOff - hd_left(st, st->drag);
+            int w = hd_content_x(st, GET_X_LPARAM(lp)) - st->dragOff
+                    - hd_left(st, st->drag);
             if (w < HD_MINW) w = HD_MINW;
             if (w != st->it[st->drag].cxy) {
                 st->it[st->drag].cxy = w;
@@ -248,7 +287,7 @@ static LRESULT hd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             st->press = -1;
             ReleaseCapture();
             InvalidateRect(h, NULL, TRUE);
-            if (hd_hit(st, GET_X_LPARAM(lp), &divider) == was)
+            if (hd_hit(st, hd_content_x(st, GET_X_LPARAM(lp)), &divider) == was)
                 hd_notify(h, HDN_ITEMCLICK, was);
         }
         return 0;
@@ -273,6 +312,16 @@ static LRESULT hd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 (size_t)(st->n - i - 1) * sizeof(HdCol));
         st->n--;
         InvalidateRect(h, NULL, TRUE);
+        return TRUE;
+    }
+    case HDM_GETITEMRECT: {                      /* CLIENT coords: origin-aware */
+        int i = (int)wp;
+        RECT *out = (RECT *)lp;
+        if (i < 0 || i >= st->n || !out) return FALSE;
+        RECT r;
+        GetClientRect(h, &r);
+        int left = hd_left(st, i) - st->xoff;
+        SetRect(out, left, 0, left + st->it[i].cxy, r.bottom);
         return TRUE;
     }
     case HDM_GETITEMA:
@@ -374,30 +423,35 @@ typedef struct {
     LPARAM lParam;
 } LvItem;
 
+/* Per-column VIEW state the header cannot hold: `sub` is the subitem slot
+ * this column renders (LVCF_SUBITEM; identity by default) and `fmt` is the
+ * caller's LVCFMT_* word kept whole — only its justification bits mean
+ * anything to the header, and stuffing the rest into HDITEM.fmt would
+ * alias the HDF_* bits (#158, gap #31: the old `fmt & 3` dropped them
+ * silently on the way in AND on the way back out). */
+typedef struct { int sub; int fmt; } LvCol;
+
 typedef struct {
     LvItem *it;
     int n, cap;
     int ncols;                  /* mirrors the header's item count */
+    LvCol *col;                 /* ncols entries, grown with colcap */
+    int colcap;
     int focus;                  /* focused row, -1 (the caret) */
     int anchor;                 /* shift-range pivot */
     int top;                    /* first visible row */
+    int xoff;                   /* horizontal scroll origin, px */
     int single;                 /* LVS_SINGLESEL */
+    int showsel;                /* LVS_SHOWSELALWAYS */
     DWORD ex;                   /* LVS_EX_* */
     HWND hdr;                   /* SysHeader32 child */
-    HWND vbar;                  /* embedded SCROLLBAR child */
-    int vbarShown;
+    HWND vbar;                  /* embedded SCROLLBAR child (SBS_VERT) */
+    HWND hbar;                  /* embedded SCROLLBAR child (SBS_HORZ) */
+    int vbarShown, hbarShown;
 } LvState;
 
 static int lv_row_h(HWND h) { return lv_font_h(h) + 2; }
 static int lv_hdr_h(HWND h) { return lv_font_h(h) + 6; }
-
-static int lv_vis_rows(HWND h, LvState *st) {
-    RECT r;
-    GetClientRect(h, &r);
-    int rows = (r.bottom - 2 * LV_B - lv_hdr_h(h)) / lv_row_h(h);
-    (void)st;
-    return rows < 1 ? 1 : rows;
-}
 
 static int lv_colw(LvState *st, int c) {
     HDITEMA hi;
@@ -407,32 +461,114 @@ static int lv_colw(LvState *st, int c) {
     return hi.cxy;
 }
 
-static int lv_colfmt(LvState *st, int c) {
-    HDITEMA hi;
-    memset(&hi, 0, sizeof hi);
-    hi.mask = HDI_FORMAT;
-    if (!SendMessage(st->hdr, HDM_GETITEMA, (WPARAM)c, (LPARAM)&hi)) return 0;
-    return hi.fmt;
+static int lv_cols_w(LvState *st) {              /* summed column widths */
+    int w = 0;
+    for (int c = 0; c < st->ncols; c++) w += lv_colw(st, c);
+    return w;
+}
+
+static int lv_col_left(LvState *st, int c) {     /* content x, pre-scroll */
+    int x = 0;
+    for (int k = 0; k < c && k < st->ncols; k++) x += lv_colw(st, k);
+    return x;
+}
+
+/* The subitem slot column c renders, and that cell's text. An out-of-range
+ * mapping renders empty rather than reading past the row. */
+static int lv_col_sub(LvState *st, int c) {
+    if (c < 0 || c >= st->ncols || !st->col) return c;
+    return st->col[c].sub;
+}
+
+static const char *lv_cell_of(LvState *st, int i, int c) {
+    int s = lv_col_sub(st, c);
+    if (s < 0 || s >= st->ncols) return "";
+    const char *t = st->it[i].sub[s];
+    return t ? t : "";
+}
+
+static int lv_col_fmt(LvState *st, int c) {
+    if (c < 0 || c >= st->ncols || !st->col) return LVCFMT_LEFT;
+    return st->col[c].fmt;
+}
+
+/* ---- geometry. The two bars each steal from the other's axis, so the
+ * view rect and the bar visibility are one fixpoint (lv_bars). ---- */
+
+/* Would the bars be needed, given the OTHER one's presence? Two passes
+ * settle it: a bar can only ever appear BECAUSE the other one did. */
+static void lv_bars(HWND h, LvState *st, int *vneed, int *hneed) {
+    RECT r;
+    GetClientRect(h, &r);
+    int hh = lv_hdr_h(h), rh = lv_row_h(h);
+    int colw = lv_cols_w(st);
+    int v = 0, hz = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        int viewW = r.right - 2 * LV_B - (v ? LV_SBW : 0);
+        int bandH = r.bottom - 2 * LV_B - hh - (hz ? LV_SBW : 0);
+        int rows = bandH / rh;
+        if (rows < 1) rows = 1;
+        v = st->n > rows;
+        hz = colw > viewW;
+    }
+    *vneed = v;
+    *hneed = hz;
+}
+
+/* Width of the rows/header band (what a column must fit inside). */
+static int lv_view_w(HWND h, LvState *st) {
+    RECT r;
+    GetClientRect(h, &r);
+    int vneed, hneed;
+    lv_bars(h, st, &vneed, &hneed);
+    int w = r.right - 2 * LV_B - (vneed ? LV_SBW : 0);
+    return w < 0 ? 0 : w;
+}
+
+static int lv_vis_rows(HWND h, LvState *st) {
+    RECT r;
+    GetClientRect(h, &r);
+    int vneed, hneed;
+    lv_bars(h, st, &vneed, &hneed);
+    int rows = (r.bottom - 2 * LV_B - lv_hdr_h(h) - (hneed ? LV_SBW : 0))
+               / lv_row_h(h);
+    return rows < 1 ? 1 : rows;
+}
+
+static int lv_max_xoff(HWND h, LvState *st) {
+    int m = lv_cols_w(st) - lv_view_w(h, st);
+    return m < 0 ? 0 : m;
 }
 
 /* Layout the header + scrollbar children and clamp the scroll state; call
- * after anything that moves geometry, item count, or fonts. */
+ * after anything that moves geometry, item count, COLUMN WIDTHS, or fonts. */
 static void lv_layout(HWND h, LvState *st) {
     RECT r;
     GetClientRect(h, &r);
     int hh = lv_hdr_h(h);
+    int colw = lv_cols_w(st);
+    int vneed, hneed;
+    lv_bars(h, st, &vneed, &hneed);
+    int vsbw = vneed ? LV_SBW : 0, hsbh = hneed ? LV_SBW : 0;
+    int viewW = r.right - 2 * LV_B - vsbw;
     int vis = lv_vis_rows(h, st);
-    int need = st->n > vis;
-    int sbw = need ? LV_SBW : 0;
+
     int maxTop = st->n - vis;
     if (maxTop < 0) maxTop = 0;
     if (st->top > maxTop) st->top = maxTop;
     if (st->top < 0) st->top = 0;
-    MoveWindow(st->hdr, LV_B, LV_B, r.right - 2 * LV_B - sbw, hh, TRUE);
-    if (need) {
+    int maxX = colw - viewW;
+    if (maxX < 0) maxX = 0;
+    if (st->xoff > maxX) st->xoff = maxX;
+    if (st->xoff < 0) st->xoff = 0;
+
+    MoveWindow(st->hdr, LV_B, LV_B, viewW, hh, TRUE);
+    hd_scroll_to(st->hdr, st->xoff);             /* lockstep, every layout */
+
+    SCROLLINFO si;
+    if (vneed) {
         MoveWindow(st->vbar, r.right - LV_B - LV_SBW, LV_B + hh, LV_SBW,
-                   r.bottom - 2 * LV_B - hh, TRUE);
-        SCROLLINFO si;
+                   r.bottom - 2 * LV_B - hh - hsbh, TRUE);
         memset(&si, 0, sizeof si);
         si.cbSize = sizeof si;
         si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
@@ -446,6 +582,22 @@ static void lv_layout(HWND h, LvState *st) {
         ShowWindow(st->vbar, SW_HIDE);
         st->vbarShown = 0;
     }
+    if (hneed) {
+        MoveWindow(st->hbar, LV_B, r.bottom - LV_B - LV_SBW, viewW, LV_SBW,
+                   TRUE);
+        memset(&si, 0, sizeof si);
+        si.cbSize = sizeof si;
+        si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+        si.nMin = 0;
+        si.nMax = colw - 1;                      /* px; page makes max pos maxX */
+        si.nPage = (UINT)viewW;
+        si.nPos = st->xoff;
+        SetScrollInfo(st->hbar, SB_CTL, &si, TRUE);
+        if (!st->hbarShown) { ShowWindow(st->hbar, SW_SHOW); st->hbarShown = 1; }
+    } else if (st->hbarShown) {
+        ShowWindow(st->hbar, SW_HIDE);
+        st->hbarShown = 0;
+    }
 }
 
 static void lv_scroll_to(HWND h, LvState *st, int top) {
@@ -457,6 +609,17 @@ static void lv_scroll_to(HWND h, LvState *st, int top) {
     if (top == st->top) return;
     st->top = top;
     if (st->vbarShown) SetScrollPos(st->vbar, SB_CTL, top, TRUE);
+    InvalidateRect(h, NULL, TRUE);
+}
+
+static void lv_hscroll_to(HWND h, LvState *st, int x) {
+    int maxX = lv_max_xoff(h, st);
+    if (x > maxX) x = maxX;
+    if (x < 0) x = 0;
+    if (x == st->xoff) return;
+    st->xoff = x;
+    if (st->hbarShown) SetScrollPos(st->hbar, SB_CTL, x, TRUE);
+    hd_scroll_to(st->hdr, x);
     InvalidateRect(h, NULL, TRUE);
 }
 
@@ -484,6 +647,20 @@ static void lv_nfy(HWND h, LvState *st, UINT code, int item, int sub,
     nm.uOldState = oldst;
     nm.uChanged = code == LVN_ITEMCHANGED ? LVIF_STATE : 0;
     nm.lParam = item >= 0 && item < st->n ? st->it[item].lParam : 0;
+    SendMessage(p, WM_NOTIFY, (WPARAM)nm.hdr.idFrom, (LPARAM)&nm);
+}
+
+/* LVN_KEYDOWN carries its own record (wVKey), so it cannot ride lv_nfy. */
+static void lv_key_nfy(HWND h, LvState *st, UINT vk) {
+    HWND p = GetParent(h);
+    (void)st;
+    if (!p) return;
+    NMLVKEYDOWN nm;
+    memset(&nm, 0, sizeof nm);
+    nm.hdr.hwndFrom = h;
+    nm.hdr.idFrom = (UINT_PTR)GetDlgCtrlID(h);
+    nm.hdr.code = LVN_KEYDOWN;
+    nm.wVKey = (WORD)vk;
     SendMessage(p, WM_NOTIFY, (WPARAM)nm.hdr.idFrom, (LPARAM)&nm);
 }
 
@@ -519,18 +696,23 @@ static void lv_select_gesture(HWND h, LvState *st, int i, int shift, int ctrl) {
 }
 
 static int lv_row_at(HWND h, LvState *st, int y) {
+    RECT r;
+    GetClientRect(h, &r);
     int hh = lv_hdr_h(h);
-    if (y < LV_B + hh) return -1;
+    if (y < LV_B + hh) return -1;                /* header band */
+    if (y >= r.bottom - LV_B - (st->hbarShown ? LV_SBW : 0))
+        return -1;                               /* the h bar / the well edge */
     int i = st->top + (y - LV_B - hh) / lv_row_h(h);
     return i >= 0 && i < st->n ? i : -1;
 }
 
-/* Join a row's subitems " | " into out (agent text). */
+/* Join a row's cells " | " into out (agent text) — in COLUMN order, which
+ * is subitem order only while the LVCF_SUBITEM mapping is identity. */
 static int lv_row_join(LvState *st, int i, char *out, int cap) {
     int n = 0;
     for (int c = 0; c < st->ncols && n < cap - 1; c++) {
-        const char *t = st->it[i].sub[c] ? st->it[i].sub[c] : "";
-        n += snprintf(out + n, (size_t)(cap - n), "%s%s", c ? " | " : "", t);
+        n += snprintf(out + n, (size_t)(cap - n), "%s%s", c ? " | " : "",
+                      lv_cell_of(st, i, c));
         if (n >= cap) { n = cap - 1; break; }
     }
     out[n] = 0;
@@ -593,6 +775,68 @@ static LRESULT lv_insert_item(HWND h, LvState *st, const LVITEMA *li,
     return at;
 }
 
+/* ---- the per-column view array (LvCol), kept in lockstep with the
+ * header's items AND with each row's subitem slots.
+ *
+ * Slot invariant: there are exactly `ncols` subitem slots and a column
+ * insert/delete splices one, so a mapping that names a slot must move with
+ * it. Insert at `at` shifts every slot >= at up; delete of `c` shifts every
+ * slot > c down and RE-IDENTIFIES a mapping that pointed AT c (its slot is
+ * gone — pointing it at the column's own index is the only total answer,
+ * and it is what the identity default would have said). ---- */
+
+static int lv_col_reserve(LvState *st, int want) {
+    if (want <= st->colcap) return 1;
+    int nc = st->colcap ? st->colcap * 2 : 8;
+    while (nc < want) nc *= 2;
+    LvCol *n = (LvCol *)realloc(st->col, (size_t)nc * sizeof(LvCol));
+    if (!n) return 0;
+    st->col = n;
+    st->colcap = nc;
+    return 1;
+}
+
+/* Report LVCFMT bits nothing here draws — exactly once, per the 0211 bar. */
+static int lv_col_check_fmt(int fmt) {
+    int bad = fmt & ~LVCFMT_JUSTIFYMASK;
+    if (bad)
+        WIN32_UNSUPPORTED("listview column format 0x%x "
+                          "(justification bits only)", (unsigned)bad);
+    return fmt;
+}
+
+static int lv_col_insert(LvState *st, int at, const LVCOLUMNA *lc) {
+    if (!lv_col_reserve(st, st->ncols + 1)) return 0;
+    for (int k = 0; k < st->ncols; k++)
+        if (st->col[k].sub >= at) st->col[k].sub++;
+    memmove(&st->col[at + 1], &st->col[at],
+            (size_t)(st->ncols - at) * sizeof(LvCol));
+    st->col[at].fmt = (lc->mask & LVCF_FMT) ? lv_col_check_fmt(lc->fmt)
+                                            : LVCFMT_LEFT;
+    int sub = at;
+    if (lc->mask & LVCF_SUBITEM) {
+        sub = lc->iSubItem;
+        if (sub < 0 || sub > st->ncols) {         /* ncols is pre-increment */
+            WIN32_UNSUPPORTED("listview LVCF_SUBITEM %d out of range "
+                              "(%d columns) — using the column's own index",
+                              sub, st->ncols + 1);
+            sub = at;
+        }
+    }
+    st->col[at].sub = sub;
+    return 1;
+}
+
+static void lv_col_delete(LvState *st, int c) {
+    for (int k = 0; k < st->ncols; k++) {
+        if (k == c) continue;
+        if (st->col[k].sub > c) st->col[k].sub--;
+        else if (st->col[k].sub == c) st->col[k].sub = k < c ? k : k - 1;
+    }
+    memmove(&st->col[c], &st->col[c + 1],
+            (size_t)(st->ncols - c - 1) * sizeof(LvCol));
+}
+
 /* qsort trampoline for LVM_SORTITEMS (single-threaded world; the compare
  * context rides statics, the Windows PFNLVCOMPARE contract). */
 static PFNLVCOMPARE lv_cmp_fn;
@@ -611,6 +855,7 @@ static LRESULT lv_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         st->focus = st->anchor = -1;
         LONG style = GetWindowLong(h, GWL_STYLE);
         st->single = (style & LVS_SINGLESEL) != 0;
+        st->showsel = (style & LVS_SHOWSELALWAYS) != 0;
         if ((style & LVS_TYPEMASK) != LVS_REPORT)
             WIN32_UNSUPPORTED("listview view style %d (LVS_REPORT only; "
                               "proceeding as report)",
@@ -621,7 +866,10 @@ static LRESULT lv_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         st->vbar = CreateWindowEx(0, "SCROLLBAR", "",
                                   WS_CHILD | SBS_VERT,   /* hidden until needed */
                                   0, 0, 10, 10, h, NULL, NULL, NULL);
-        if (!st->hdr || !st->vbar) return -1;
+        st->hbar = CreateWindowEx(0, "SCROLLBAR", "",
+                                  WS_CHILD | SBS_HORZ,   /* hidden until needed */
+                                  0, 0, 10, 10, h, NULL, NULL, NULL);
+        if (!st->hdr || !st->vbar || !st->hbar) return -1;
         return 0;
     }
     case WM_SIZE:
@@ -647,39 +895,59 @@ static LRESULT lv_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         int hh = lv_hdr_h(h);
         int rh = lv_row_h(h);
         int sbw = st->vbarShown ? LV_SBW : 0;
+        int sbh = st->hbarShown ? LV_SBW : 0;
         int rowRight = r.right - LV_B - sbw;
-        IntersectClipRect(dc, LV_B, LV_B + hh, rowRight, r.bottom - LV_B);
+        int rowBottom = r.bottom - LV_B - sbh;
+        /* Where the two bars meet is DEAD SPACE, not a third control (the
+         * Windows look): neither bar covers it, so paint the 3D face. */
+        if (sbw && sbh) {
+            RECT corner;
+            SetRect(&corner, rowRight, rowBottom, rowRight + LV_SBW,
+                    rowBottom + LV_SBW);
+            FillRect(dc, &corner, GetSysColorBrush(COLOR_BTNFACE));
+        }
+        IntersectClipRect(dc, LV_B, LV_B + hh, rowRight, rowBottom);
         SetBkMode(dc, TRANSPARENT);
         int fullrow = (st->ex & LVS_EX_FULLROWSELECT) != 0;
         int focused = GetFocus() == h;
+        /* LVS_SHOWSELALWAYS (#158, gap #31): an unfocused control hides its
+         * selection entirely unless the style asks for it, in which case it
+         * draws in the inactive 3D face. Only the PIXELS change — the state
+         * (and so LVM_GETITEMSTATE, the "> " agent marker and the `sel`
+         * tree flag) is untouched. */
+        int selVisible = focused || st->showsel;
+        int selBk = focused ? COLOR_HIGHLIGHT : COLOR_BTNFACE;
+        int selFg = focused ? COLOR_HIGHLIGHTTEXT : COLOR_BTNTEXT;
         for (int i = st->top; i < st->n; i++) {
             int y = LV_B + hh + (i - st->top) * rh;
-            if (y >= r.bottom - LV_B) break;
+            if (y >= rowBottom) break;
             RECT row;
             SetRect(&row, LV_B, y, rowRight, y + rh);
-            int selected = (st->it[i].state & LVIS_SELECTED) != 0;
+            int selected = (st->it[i].state & LVIS_SELECTED) && selVisible;
+            int x0 = LV_B - st->xoff;            /* content origin for this row */
             int selRight = row.right;
             if (selected && !fullrow) {          /* classic: col-0 cell only */
-                int w0 = st->ncols ? lv_colw(st, 0) : 0;
-                selRight = LV_B + w0;
+                selRight = x0 + (st->ncols ? lv_colw(st, 0) : 0);
                 if (selRight > row.right) selRight = row.right;
             }
-            if (selected) {
+            if (selected && selRight > row.left) {
                 RECT sr;
                 SetRect(&sr, row.left, row.top, selRight, row.bottom);
-                FillRect(dc, &sr, GetSysColorBrush(COLOR_HIGHLIGHT));
+                FillRect(dc, &sr, GetSysColorBrush(selBk));
             }
-            int x = LV_B;
+            int x = x0;
             for (int c = 0; c < st->ncols; c++) {
                 int w = lv_colw(st, c);
-                RECT cell;
-                SetRect(&cell, x, y, x + w, y + rh);
-                if (cell.left >= rowRight) break;
-                if (cell.right > rowRight) cell.right = rowRight;
-                SetTextColor(dc, GetSysColor(
-                    selected && (fullrow || c == 0) ? COLOR_HIGHLIGHTTEXT
-                                                    : COLOR_WINDOWTEXT));
-                lv_cell_text(dc, cell, st->it[i].sub[c], lv_colfmt(st, c));
+                if (x >= rowRight) break;
+                if (x + w > LV_B) {              /* else fully scrolled off */
+                    RECT cell;
+                    SetRect(&cell, x, y, x + w, y + rh);
+                    SetTextColor(dc, GetSysColor(
+                        selected && (fullrow || c == 0) ? selFg
+                                                        : COLOR_WINDOWTEXT));
+                    lv_cell_text(dc, cell, lv_cell_of(st, i, c),
+                                 lv_col_fmt(st, c));
+                }
                 x += w;
             }
             if (i == st->focus && focused)
@@ -714,20 +982,40 @@ static LRESULT lv_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_GETDLGCODE:
         return DLGC_WANTARROWS;
     case WM_KEYDOWN: {
+        /* Every key is offered to the owner as LVN_KEYDOWN first (#158,
+         * gap #31 — the notification the taskmgr-lite class of app steers
+         * by), Enter additionally raises NM_RETURN, and a key this control
+         * does not consume falls THROUGH to DefWindowProc instead of being
+         * eaten. */
+        lv_key_nfy(h, st, (UINT)wp);
         int i = st->focus;
         int page = lv_vis_rows(h, st);
-        if (wp == VK_UP && i > 0) i--;
-        else if (wp == VK_DOWN && i < st->n - 1) i++;
-        else if (wp == VK_HOME && st->n) i = 0;
-        else if (wp == VK_END && st->n) i = st->n - 1;
-        else if (wp == VK_PRIOR && st->n) i = i > page ? i - page : 0;
-        else if (wp == VK_NEXT && st->n)
-            i = i + page < st->n ? i + page : st->n - 1;
-        else return 0;
+        switch (wp) {
+        case VK_LEFT:                            /* report view scrolls x */
+            lv_hscroll_to(h, st, st->xoff - LV_HSTEP);
+            return 0;
+        case VK_RIGHT:
+            lv_hscroll_to(h, st, st->xoff + LV_HSTEP);
+            return 0;
+        case VK_RETURN:
+            lv_nfy(h, st, NM_RETURN, st->focus, 0, 0, 0);
+            return 0;
+        case VK_UP:    if (i > 0) i--; break;
+        case VK_DOWN:  if (i < st->n - 1) i++; break;
+        case VK_HOME:  if (st->n) i = 0; break;
+        case VK_END:   if (st->n) i = st->n - 1; break;
+        case VK_PRIOR: if (st->n) i = i > page ? i - page : 0; break;
+        case VK_NEXT:
+            if (st->n) i = i + page < st->n ? i + page : st->n - 1;
+            break;
+        default:
+            return DefWindowProc(h, msg, wp, lp);
+        }
         if (i < 0) i = 0;
-        lv_select_gesture(h, st, i,
-                          !st->single && (GetKeyState(VK_SHIFT) & 0x8000) != 0,
-                          0);
+        if (i != st->focus || (st->n && st->focus < 0))
+            lv_select_gesture(h, st, i,
+                              !st->single
+                              && (GetKeyState(VK_SHIFT) & 0x8000) != 0, 0);
         return 0;
     }
     case WM_MOUSEWHEEL:
@@ -746,13 +1034,29 @@ static LRESULT lv_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     }
+    case WM_HSCROLL: {                           /* the SBS_HORZ sibling */
+        int pageW = lv_view_w(h, st);
+        switch (LOWORD(wp)) {
+        case SB_LINELEFT:  lv_hscroll_to(h, st, st->xoff - LV_HSTEP); break;
+        case SB_LINERIGHT: lv_hscroll_to(h, st, st->xoff + LV_HSTEP); break;
+        case SB_PAGELEFT:  lv_hscroll_to(h, st, st->xoff - pageW); break;
+        case SB_PAGERIGHT: lv_hscroll_to(h, st, st->xoff + pageW); break;
+        case SB_THUMBTRACK:
+        case SB_THUMBPOSITION: lv_hscroll_to(h, st, (int)HIWORD(wp)); break;
+        }
+        return 0;
+    }
     case WM_NOTIFY: {                            /* from the header child */
         const NMHEADERA *nm = (const NMHEADERA *)lp;
         if (!nm || nm->hdr.hwndFrom != st->hdr) return 0;
         if (nm->hdr.code == HDN_ITEMCLICK)
             lv_nfy(h, st, LVN_COLUMNCLICK, -1, nm->iItem, 0, 0);
-        else if (nm->hdr.code == HDN_ITEMCHANGED)
-            InvalidateRect(h, NULL, TRUE);       /* live reflow on drag */
+        else if (nm->hdr.code == HDN_ITEMCHANGED) {
+            /* A divider drag changes the summed width under us: re-derive
+             * the horizontal range (and the bar's very existence) live. */
+            lv_layout(h, st);
+            InvalidateRect(h, NULL, TRUE);
+        }
         return 0;
     }
     case WM_SETFOCUS:
@@ -769,7 +1073,10 @@ static LRESULT lv_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         memset(&hi, 0, sizeof hi);
         hi.mask = HDI_TEXT | HDI_WIDTH | HDI_FORMAT;
         hi.cxy = (lc->mask & LVCF_WIDTH) ? lc->cx : 60;
-        hi.fmt = (lc->mask & LVCF_FMT) ? (lc->fmt & 3) : HDF_LEFT;
+        /* Only the justification bits cross into the header (HDF_* would
+         * alias anything wider); the whole LVCFMT word lives in LvCol. */
+        hi.fmt = (lc->mask & LVCF_FMT) ? (lc->fmt & LVCFMT_JUSTIFYMASK)
+                                       : HDF_LEFT;
         char *t = NULL;
         if (lc->mask & LVCF_TEXT)
             t = msg == LVM_INSERTCOLUMNW ? lv_w2a((LPCWSTR)lc->pszText)
@@ -788,7 +1095,9 @@ static LRESULT lv_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             ns[at] = NULL;
             st->it[i].sub = ns;
         }
+        if (!lv_col_insert(st, (int)at, lc)) return -1;
         st->ncols++;
+        lv_layout(h, st);
         InvalidateRect(h, NULL, TRUE);
         return at;
     }
@@ -801,7 +1110,9 @@ static LRESULT lv_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             memmove(&st->it[i].sub[c], &st->it[i].sub[c + 1],
                     (size_t)(st->ncols - c - 1) * sizeof(char *));
         }
+        lv_col_delete(st, c);
         st->ncols--;
+        lv_layout(h, st);
         InvalidateRect(h, NULL, TRUE);
         return TRUE;
     }
@@ -813,13 +1124,13 @@ static LRESULT lv_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         memset(&hi, 0, sizeof hi);
         char buf[256];
         hi.mask = ((lc->mask & LVCF_WIDTH) ? HDI_WIDTH : 0)
-                | ((lc->mask & LVCF_FMT) ? HDI_FORMAT : 0)
                 | ((lc->mask & LVCF_TEXT) ? HDI_TEXT : 0);
         hi.pszText = buf;
         hi.cchTextMax = sizeof buf;
         if (!SendMessage(st->hdr, HDM_GETITEMA, wp, (LPARAM)&hi)) return FALSE;
         if (lc->mask & LVCF_WIDTH) lc->cx = hi.cxy;
-        if (lc->mask & LVCF_FMT) lc->fmt = hi.fmt;
+        if (lc->mask & LVCF_FMT) lc->fmt = lv_col_fmt(st, (int)wp);
+        if (lc->mask & LVCF_SUBITEM) lc->iSubItem = lv_col_sub(st, (int)wp);
         if ((lc->mask & LVCF_TEXT) && lc->pszText && lc->cchTextMax > 0) {
             if (msg == LVM_GETCOLUMNW)
                 lv_a2w_buf(buf, (LPWSTR)lc->pszText, lc->cchTextMax);
@@ -831,14 +1142,15 @@ static LRESULT lv_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case LVM_SETCOLUMNA:
     case LVM_SETCOLUMNW: {
         const LVCOLUMNA *lc = (const LVCOLUMNA *)lp;
-        if (!lc) return FALSE;
+        int c = (int)wp;
+        if (!lc || c < 0 || c >= st->ncols) return FALSE;
         HDITEMA hi;
         memset(&hi, 0, sizeof hi);
         char *t = NULL;
         hi.mask = ((lc->mask & LVCF_WIDTH) ? HDI_WIDTH : 0)
                 | ((lc->mask & LVCF_FMT) ? HDI_FORMAT : 0);
         hi.cxy = lc->cx;
-        hi.fmt = lc->fmt & 3;
+        hi.fmt = lc->fmt & LVCFMT_JUSTIFYMASK;
         if (lc->mask & LVCF_TEXT) {
             hi.mask |= HDI_TEXT;
             t = msg == LVM_SETCOLUMNW ? lv_w2a((LPCWSTR)lc->pszText)
@@ -847,6 +1159,19 @@ static LRESULT lv_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         LRESULT r = SendMessage(st->hdr, HDM_SETITEMA, wp, (LPARAM)&hi);
         free(t);
+        if (lc->mask & LVCF_FMT) st->col[c].fmt = lv_col_check_fmt(lc->fmt);
+        if (lc->mask & LVCF_SUBITEM) {
+            if (lc->iSubItem < 0 || lc->iSubItem >= st->ncols)
+                WIN32_UNSUPPORTED("listview LVCF_SUBITEM %d out of range "
+                                  "(%d columns) — mapping unchanged",
+                                  lc->iSubItem, st->ncols);
+            else
+                st->col[c].sub = lc->iSubItem;
+        }
+        /* A width change moves the horizontal range — re-derive it. (The
+         * header's own HDN_ITEMCHANGED echo does this too; doing it here
+         * keeps a programmatic set correct with no WM_NOTIFY round trip.) */
+        lv_layout(h, st);
         InvalidateRect(h, NULL, TRUE);
         return r;
     }
@@ -1021,17 +1346,75 @@ static LRESULT lv_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         ht->iItem = i;
         ht->iSubItem = 0;
         if (i >= 0) {
-            int x = LV_B;
+            int x = LV_B - st->xoff;             /* the scrolled origin */
             for (int c = 0; c < st->ncols; c++) {
                 int w = lv_colw(st, c);
                 if (ht->pt.x >= x && ht->pt.x < x + w) { ht->iSubItem = c; break; }
                 x += w;
             }
-            ht->flags = LVHT_ONITEM;
+            /* There is no ImageList and no state image here, so every
+             * on-item hit is on the LABEL — saying only LVHT_ONITEM left a
+             * caller that tests the sub-flags (the documented way to tell
+             * a label hit from an icon hit) reading "neither" (gap #31). */
+            ht->flags = LVHT_ONITEM | LVHT_ONITEMLABEL;
         } else {
             ht->flags = LVHT_NOWHERE;
         }
         return i;
+    }
+    /* ---- layout queries: the only way an app (or a test) can learn where
+     * a row or a column LANDED once the view scrolls. Both answer in
+     * CLIENT coordinates, so both carry the xoff/top origin. ---- */
+    case LVM_GETITEMRECT: {
+        RECT *out = (RECT *)lp;
+        int i = (int)wp;
+        if (!out || i < 0 || i >= st->n) return FALSE;
+        int code = (int)out->left;
+        int y = LV_B + lv_hdr_h(h) + (i - st->top) * lv_row_h(h);
+        int x0 = LV_B - st->xoff;
+        int left = x0, right;
+        switch (code) {
+        case LVIR_ICON:                          /* no ImageList: empty, at
+                                                    the label's left edge */
+            right = left;
+            break;
+        case LVIR_LABEL:
+        case LVIR_SELECTBOUNDS:                  /* == the label: no icon */
+            right = x0 + (st->ncols ? lv_colw(st, 0) : 0);
+            break;
+        default:                                 /* LVIR_BOUNDS: whole row */
+            right = x0 + lv_cols_w(st);
+            break;
+        }
+        SetRect(out, left, y, right, y + lv_row_h(h));
+        return TRUE;
+    }
+    case LVM_GETSUBITEMRECT: {
+        RECT *out = (RECT *)lp;
+        int i = (int)wp;
+        if (!out || i < 0 || i >= st->n) return FALSE;
+        int sub = (int)out->top, code = (int)out->left;
+        if (sub < 0 || sub >= st->ncols) return FALSE;
+        int y = LV_B + lv_hdr_h(h) + (i - st->top) * lv_row_h(h);
+        int left = LV_B - st->xoff + lv_col_left(st, sub);
+        int right = left + lv_colw(st, sub);
+        /* The documented quirk: column 0 + LVIR_BOUNDS reports the whole
+         * row, not the first cell — LVIR_LABEL is the per-cell answer. */
+        if (sub == 0 && code == LVIR_BOUNDS)
+            right = LV_B - st->xoff + lv_cols_w(st);
+        SetRect(out, left, y, right, y + lv_row_h(h));
+        return TRUE;
+    }
+    case LVM_SCROLL: {
+        /* dx is pixels; dy is pixels ROUNDED TO WHOLE ROWS in report view
+         * (the MSDN contract) — a caller passing one row height gets one
+         * row, and a sub-row nudge is not silently dropped either way. */
+        int rh = lv_row_h(h);
+        int dy = (int)lp;
+        int rows = dy >= 0 ? (dy + rh / 2) / rh : -((-dy + rh / 2) / rh);
+        lv_hscroll_to(h, st, st->xoff + (int)wp);
+        if (rows) lv_scroll_to(h, st, st->top + rows);
+        return TRUE;
     }
     case LVM_SORTITEMS: {
         if (!lp) return FALSE;
@@ -1121,8 +1504,7 @@ static LRESULT lv_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (!f) return 0;
         for (int i = 0; i < st->n; i++) {
             char stripped[256];
-            mc_strip_amp(st->it[i].sub[0] ? st->it[i].sub[0] : "", stripped,
-                         sizeof stripped);
+            mc_strip_amp(lv_cell_of(st, i, 0), stripped, sizeof stripped);
             if (strcmp(stripped, f->label) != 0) continue;
             char line[512];
             lv_row_join(st, i, line, sizeof line);
@@ -1140,6 +1522,7 @@ static LRESULT lv_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (st) {
             for (int i = 0; i < st->n; i++) lv_free_item(&st->it[i], st->ncols);
             free(st->it);
+            free(st->col);
             free(st);
             SetWindowLongPtr(h, GWLP_USERDATA, 0);
         }

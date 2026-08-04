@@ -2778,8 +2778,10 @@ static const struct { const char *cls; DWORD low; } CLS_LOW_KNOWN[] = {
     { "msctls_statusbar32", 0x0103u }, /* CCS_BOTTOM holds by construction
                                   (self-bottom-parking); SBARS_SIZEGRIP is W5
                                   residue (#334) */
-    { "SysListView32", 0x0007u }, /* LVS_TYPEMASK read (non-REPORT already
-                                  refuses loudly) | LVS_SINGLESEL */
+    { "SysListView32", 0x000Fu }, /* LVS_TYPEMASK read (non-REPORT already
+                                  refuses loudly) | LVS_SINGLESEL |
+                                  LVS_SHOWSELALWAYS (#158: read — the
+                                  unfocused-selection paint) */
     { "SysHeader32", 0x0000u },
 };  /* not listed => app-registered: the low word is the app's own */
 

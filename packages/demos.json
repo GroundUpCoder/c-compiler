@@ -1,6 +1,6 @@
 {
   "name": "demos",
-  "version": "1",
+  "version": "2",
   "summary": "gucOS demo apps — winbox, gpubox, gdidemo, ctldemo, fontramp, gdiplusdemo, k32demo (the windowing/GPU/GDI/controls/font/GDI+/kernel32 acceptance demos, bundled)",
   "files": {
     "winbox": { "c": "winbox.c" },

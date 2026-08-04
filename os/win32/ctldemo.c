@@ -1103,8 +1103,11 @@ static int lvdemo(void) {
     wc.lpszClassName = "lvdemo";
     wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
     if (!RegisterClass(&wc)) return 3;
+    /* WS_THICKFRAME (#158): the pane has always DESCRIBED itself as a
+     * resizable-content window, and shrinking one past its column sum is
+     * the horizontal scrollbar's motivating case — so let the WM do it. */
     HWND hwnd = CreateWindowEx(0, "lvdemo", "ListView Demo",
-                               WS_OVERLAPPED | WS_VISIBLE,
+                               WS_OVERLAPPED | WS_THICKFRAME | WS_VISIBLE,
                                CW_USEDEFAULT, CW_USEDEFAULT, WIN_W, WIN_H,
                                NULL, NULL, NULL, NULL);
     if (!hwnd) return 3;
@@ -1122,6 +1125,9 @@ static int lvdemo(void) {
  * needed. The e2e runs it headless and checks "0 failed". ---- */
 
 static int lv_nchanged;                          /* LVN_ITEMCHANGED count */
+static int lv_nkeydown;                          /* LVN_KEYDOWN count (#158) */
+static int lv_lastvk;                            /* its wVKey */
+static int lv_nreturn;                           /* NM_RETURN count (#158) */
 
 static int CALLBACK lvtest_cmp(LPARAM a, LPARAM b, LPARAM ctx) {
     (void)ctx;
@@ -1132,8 +1138,316 @@ static LRESULT CALLBACK LvTestProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_NOTIFY) {
         const NMLISTVIEW *nm = (const NMLISTVIEW *)lp;
         if (nm && nm->hdr.code == LVN_ITEMCHANGED) lv_nchanged++;
+        else if (nm && nm->hdr.code == LVN_KEYDOWN) {
+            lv_nkeydown++;
+            lv_lastvk = ((const NMLVKEYDOWN *)lp)->wVKey;
+        } else if (nm && nm->hdr.code == NM_RETURN) lv_nreturn++;
     }
     return DefWindowProc(hwnd, msg, wp, lp);
+}
+
+/* ---- #158 fixture helpers: the layout queries are the ONLY way to see
+ * where a scrolled column landed, so every geometry leg reads them. ---- */
+
+#define LV158_B    2                             /* == listview.c LV_B */
+#define LV158_STEP 16                            /* == listview.c LV_HSTEP */
+
+static int lv_cell_left(HWND lv, int sub) {      /* client x of a cell */
+    RECT r;
+    memset(&r, 0, sizeof r);
+    r.top = sub;
+    r.left = LVIR_LABEL;
+    if (!SendMessage(lv, LVM_GETSUBITEMRECT, 0, (LPARAM)&r)) return -99999;
+    return (int)r.left;
+}
+
+static int hd_seg_left(HWND hdr, int i) {        /* client x of a segment */
+    RECT r;
+    memset(&r, 0, sizeof r);
+    if (!SendMessage(hdr, HDM_GETITEMRECT, (WPARAM)i, (LPARAM)&r)) return -99999;
+    return (int)r.left;
+}
+
+/* The scroll origin, read back out of the layout (cell 0 sits at LV_B-xoff). */
+static int lv_xoff(HWND lv) { return LV158_B - lv_cell_left(lv, 0); }
+
+/* Header segments and row cells must agree at EVERY offset: the header is
+ * inset by LV_B inside the listview, so its client x trails by exactly that. */
+static int lv_lockstep(HWND lv, HWND hdr, int ncols) {
+    for (int c = 0; c < ncols; c++)
+        if (hd_seg_left(hdr, c) != lv_cell_left(lv, c) - LV158_B) return 0;
+    return 1;
+}
+
+static int lv_hit_sub(HWND lv, int x, int y) {
+    LVHITTESTINFO ht;
+    memset(&ht, 0, sizeof ht);
+    ht.pt.x = x;
+    ht.pt.y = y;
+    if (ListView_HitTest(lv, &ht) < 0) return -1;
+    return ht.iSubItem;
+}
+
+static int lv_colwidth(HWND lv, int c) {
+    LVCOLUMNA lc;
+    memset(&lc, 0, sizeof lc);
+    lc.mask = LVCF_WIDTH;
+    if (!SendMessage(lv, LVM_GETCOLUMNA, (WPARAM)c, (LPARAM)&lc)) return -1;
+    return lc.cx;
+}
+
+static void lv_setwidth(HWND lv, int c, int cx) {
+    LVCOLUMNA lc;
+    memset(&lc, 0, sizeof lc);
+    lc.mask = LVCF_WIDTH;
+    lc.cx = cx;
+    SendMessage(lv, LVM_SETCOLUMNA, (WPARAM)c, (LPARAM)&lc);
+}
+
+static void lv_addcol(HWND lv, int at, const char *text, int cx, int fmt,
+                      int sub) {
+    LVCOLUMNA lc;
+    memset(&lc, 0, sizeof lc);
+    lc.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT | (sub >= 0 ? LVCF_SUBITEM : 0);
+    lc.pszText = (char *)text;
+    lc.cx = cx;
+    lc.fmt = fmt;
+    lc.iSubItem = sub;
+    SendMessage(lv, LVM_INSERTCOLUMNA, (WPARAM)at, (LPARAM)&lc);
+}
+
+static void lv_addrow(HWND lv, int i, const char *a, const char *b) {
+    LVITEMA li;
+    memset(&li, 0, sizeof li);
+    li.mask = LVIF_TEXT;
+    li.iItem = i;
+    li.pszText = (char *)a;
+    SendMessage(lv, LVM_INSERTITEMA, 0, (LPARAM)&li);
+    if (!b) return;
+    LVITEMA ls;
+    memset(&ls, 0, sizeof ls);
+    ls.iSubItem = 1;
+    ls.pszText = (char *)b;
+    SendMessage(lv, LVM_SETITEMTEXTA, (WPARAM)i, (LPARAM)&ls);
+}
+
+/* Background pixel of row `i`, inside column 0 but past its (short) text. */
+static COLORREF lv_row_px(HWND lv, int i) {
+    RECT r;
+    memset(&r, 0, sizeof r);
+    r.left = LVIR_LABEL;
+    if (!SendMessage(lv, LVM_GETITEMRECT, (WPARAM)i, (LPARAM)&r))
+        return CLR_INVALID;
+    UpdateWindow(lv);
+    HDC dc = GetDC(lv);
+    if (!dc) return CLR_INVALID;
+    COLORREF c = GetPixel(dc, (int)r.right - 6, (int)(r.top + r.bottom) / 2);
+    ReleaseDC(lv, dc);
+    return c;
+}
+
+/* ---- #158: horizontal scroll + the gap-#31 silences. Its own controls on
+ * the shared top window (the 0370 listview above is destroyed first), so
+ * nothing here perturbs the message-surface legs. ---- */
+static void lvtest_158(HWND top, HWND lvOld) {
+    DestroyWindow(lvOld);
+
+    /* 5 x 100px columns = 500, far past any client this window can offer. */
+    HWND lv = CreateWindowEx(0, WC_LISTVIEWA, "",
+                             WS_CHILD | WS_VISIBLE | LVS_REPORT,
+                             10, 10, 300, 140, top, (HMENU)901, NULL, NULL);
+    st_check("158 listview created", lv != NULL);
+    HWND hdr = (HWND)SendMessage(lv, LVM_GETHEADER, 0, 0);
+    static const char *CN[] = { "c0", "c1", "c2", "c3", "c4" };
+    for (int c = 0; c < 5; c++) lv_addcol(lv, c, CN[c], 100, LVCFMT_LEFT, -1);
+    for (int i = 0; i < 12; i++) {
+        char nm[16];
+        snprintf(nm, sizeof nm, "r%d", i);
+        lv_addrow(lv, i, nm, NULL);
+    }
+
+    /* --- the range exists, and its ceiling tells us the view width --- */
+    st_check("158 xoff starts at 0", lv_xoff(lv) == 0);
+    ListView_Scroll(lv, 10000, 0);
+    int xmax = lv_xoff(lv);
+    st_check("158 wide columns scroll", xmax > 0);
+    int viewW = 500 - xmax;                      /* colw - maxXoff */
+    st_check("158 view narrower than the columns", viewW > 0 && viewW < 500);
+    ListView_Scroll(lv, 10000, 0);
+    st_check("158 range clamps at the right", lv_xoff(lv) == xmax);
+    st_check("158 cells shift with the origin",
+             lv_cell_left(lv, 2) == LV158_B - xmax + 200);
+    st_check("158 header locked to the rows at xmax", lv_lockstep(lv, hdr, 5));
+
+    ListView_Scroll(lv, -10000, 0);
+    st_check("158 range clamps at the left", lv_xoff(lv) == 0);
+    st_check("158 header locked to the rows at 0", lv_lockstep(lv, hdr, 5));
+    ListView_Scroll(lv, 37, 0);
+    st_check("158 odd offset takes", lv_xoff(lv) == 37);
+    st_check("158 header locked to the rows at 37", lv_lockstep(lv, hdr, 5));
+
+    /* --- the offset shifts the HITTEST column mapping --- */
+    {
+        RECT rr;
+        memset(&rr, 0, sizeof rr);
+        rr.left = LVIR_LABEL;
+        SendMessage(lv, LVM_GETITEMRECT, 0, (LPARAM)&rr);
+        int y = (int)(rr.top + rr.bottom) / 2;
+        ListView_Scroll(lv, -10000, 0);
+        int probe = LV158_B + 250;               /* content 250 -> column 2 */
+        st_check("158 hittest column at rest", lv_hit_sub(lv, probe, y) == 2);
+        ListView_Scroll(lv, 100, 0);             /* content 350 -> column 3 */
+        st_check("158 hittest column follows the scroll",
+                 lv_hit_sub(lv, probe, y) == 3);
+        LVHITTESTINFO ht;
+        memset(&ht, 0, sizeof ht);
+        ht.pt.x = probe;
+        ht.pt.y = y;
+        ListView_HitTest(lv, &ht);
+        st_check("158 hittest reports a LABEL hit",
+                 (ht.flags & LVHT_ONITEMLABEL) != 0);
+    }
+
+    /* --- the bar's own notifications --- */
+    ListView_Scroll(lv, -10000, 0);
+    SendMessage(lv, WM_HSCROLL, MAKEWPARAM(SB_LINERIGHT, 0), 0);
+    st_check("158 SB_LINERIGHT steps", lv_xoff(lv) == LV158_STEP);
+    SendMessage(lv, WM_HSCROLL, MAKEWPARAM(SB_LINELEFT, 0), 0);
+    st_check("158 SB_LINELEFT steps back", lv_xoff(lv) == 0);
+    SendMessage(lv, WM_HSCROLL, MAKEWPARAM(SB_PAGERIGHT, 0), 0);
+    st_check("158 SB_PAGERIGHT pages by the view width",
+             lv_xoff(lv) == (viewW < xmax ? viewW : xmax));
+    SendMessage(lv, WM_HSCROLL, MAKEWPARAM(SB_THUMBPOSITION, 42), 0);
+    st_check("158 thumb position takes", lv_xoff(lv) == 42);
+    SendMessage(lv, WM_KEYDOWN, VK_RIGHT, 0);
+    st_check("158 VK_RIGHT scrolls", lv_xoff(lv) == 42 + LV158_STEP);
+    SendMessage(lv, WM_KEYDOWN, VK_LEFT, 0);
+    st_check("158 VK_LEFT scrolls back", lv_xoff(lv) == 42);
+
+    /* --- width changes re-derive the range, both ways --- */
+    for (int c = 0; c < 5; c++) lv_setwidth(lv, c, 20);
+    st_check("158 narrow columns clamp the offset to 0", lv_xoff(lv) == 0);
+    ListView_Scroll(lv, 10000, 0);
+    st_check("158 no range once the columns fit", lv_xoff(lv) == 0);
+
+    /* A real divider drag on the header: hd_hit works in CONTENT x, so this
+     * must land the same width whether or not the view is scrolled. */
+    SendMessage(hdr, WM_LBUTTONDOWN, 0, MAKELPARAM(20, 5));   /* col 0 edge */
+    SendMessage(hdr, WM_MOUSEMOVE, 0, MAKELPARAM(260, 5));
+    SendMessage(hdr, WM_LBUTTONUP, 0, MAKELPARAM(260, 5));
+    st_check("158 divider drag widened column 0", lv_colwidth(lv, 0) == 260);
+    ListView_Scroll(lv, 10000, 0);
+    st_check("158 the drag brought the range back", lv_xoff(lv) > 0);
+    {
+        int off = 40;
+        ListView_Scroll(lv, -10000, 0);
+        ListView_Scroll(lv, off, 0);
+        st_check("158 scrolled before the drag", lv_xoff(lv) == off);
+        /* column 0's right edge is content 260 => client 260-off */
+        SendMessage(hdr, WM_LBUTTONDOWN, 0, MAKELPARAM(260 - off, 5));
+        SendMessage(hdr, WM_MOUSEMOVE, 0, MAKELPARAM(160 - off, 5));
+        SendMessage(hdr, WM_LBUTTONUP, 0, MAKELPARAM(160 - off, 5));
+        st_check("158 divider drag is origin-aware", lv_colwidth(lv, 0) == 160);
+        st_check("158 header still locked after the drag",
+                 lv_lockstep(lv, hdr, 5));
+    }
+
+    /* --- both bars up: the corner they leave is dead 3D face, not white
+     * client and not a third control --- */
+    for (int c = 0; c < 5; c++) lv_setwidth(lv, c, 100);
+    {
+        RECT cr;
+        GetClientRect(lv, &cr);
+        UpdateWindow(lv);
+        HDC dc = GetDC(lv);
+        COLORREF corner = dc ? GetPixel(dc, (int)cr.right - LV158_B - 8,
+                                        (int)cr.bottom - LV158_B - 8)
+                             : CLR_INVALID;
+        if (dc) ReleaseDC(lv, dc);
+        st_check("158 the two bars leave a dead corner",
+                 corner == GetSysColor(COLOR_BTNFACE));
+    }
+
+    /* --- gap #31: LVN_KEYDOWN for every key, NM_RETURN, no eaten keys --- */
+    lv_nkeydown = lv_nreturn = 0;
+    SendMessage(lv, WM_KEYDOWN, VK_RETURN, 0);
+    st_check("158 VK_RETURN notifies LVN_KEYDOWN", lv_nkeydown == 1);
+    st_check("158 VK_RETURN raises NM_RETURN", lv_nreturn == 1);
+    SendMessage(lv, WM_KEYDOWN, 'A', 0);
+    st_check("158 an unhandled key still notifies", lv_nkeydown == 2);
+    st_check("158 LVN_KEYDOWN carries the vkey", lv_lastvk == 'A');
+    SendMessage(lv, WM_KEYDOWN, VK_DOWN, 0);
+    st_check("158 a handled key notifies too", lv_nkeydown == 3);
+
+    /* --- gap #31: LVCF_SUBITEM and the whole LVCFMT word --- */
+    lv_addcol(lv, 5, "dup0", 60, LVCFMT_RIGHT | 0x0800, 0);
+    {
+        LVCOLUMNA lc;
+        memset(&lc, 0, sizeof lc);
+        lc.mask = LVCF_FMT | LVCF_SUBITEM;
+        st_check("158 get the mapped column",
+                 SendMessage(lv, LVM_GETCOLUMNA, 5, (LPARAM)&lc) != 0);
+        st_check("158 LVCF_SUBITEM round-trips", lc.iSubItem == 0);
+        st_check("158 non-justify fmt bits survive",
+                 lc.fmt == (LVCFMT_RIGHT | 0x0800));
+    }
+    {
+        char big[2048];
+        SendMessage(lv, WM_GETTEXT, sizeof big, (LPARAM)big);
+        st_check("158 a remapped column renders its subitem",
+                 strstr(big, "r0 |  |  |  |  | r0") != NULL);
+    }
+    {   /* the mapping travels with a column splice */
+        lv_addcol(lv, 0, "new", 40, LVCFMT_LEFT, -1);
+        LVCOLUMNA lc;
+        memset(&lc, 0, sizeof lc);
+        lc.mask = LVCF_SUBITEM;
+        SendMessage(lv, LVM_GETCOLUMNA, 6, (LPARAM)&lc);
+        st_check("158 an insert shifts the mapped slot", lc.iSubItem == 1);
+        SendMessage(lv, LVM_DELETECOLUMN, 0, 0);
+        memset(&lc, 0, sizeof lc);
+        lc.mask = LVCF_SUBITEM;
+        SendMessage(lv, LVM_GETCOLUMNA, 5, (LPARAM)&lc);
+        st_check("158 a delete shifts it back", lc.iSubItem == 0);
+    }
+
+    /* --- gap #31: LVS_SHOWSELALWAYS is READ, and only the pixels move --- */
+    DestroyWindow(lv);
+    HWND plain = CreateWindowEx(0, WC_LISTVIEWA, "",
+                                WS_CHILD | WS_VISIBLE | LVS_REPORT,
+                                10, 10, 200, 90, top, (HMENU)902, NULL, NULL);
+    HWND always = CreateWindowEx(0, WC_LISTVIEWA, "",
+                                 WS_CHILD | WS_VISIBLE | LVS_REPORT
+                                 | LVS_SHOWSELALWAYS,
+                                 10, 110, 200, 90, top, (HMENU)903, NULL, NULL);
+    st_check("158 showsel pair created", plain && always);
+    HWND pair[2];
+    pair[0] = plain;
+    pair[1] = always;
+    for (int k = 0; k < 2; k++) {
+        lv_addcol(pair[k], 0, "name", 100, LVCFMT_LEFT, -1);
+        lv_addrow(pair[k], 0, "aa", NULL);
+        lv_addrow(pair[k], 1, "bb", NULL);
+        ListView_SetItemState(pair[k], 0, LVIS_SELECTED, LVIS_SELECTED);
+    }
+    SetFocus(top);                               /* neither listview focused */
+    st_check("158 unfocused plain hides its selection",
+             lv_row_px(plain, 0) == GetSysColor(COLOR_WINDOW));
+    st_check("158 unfocused SHOWSELALWAYS keeps it, in the 3D face",
+             lv_row_px(always, 0) == GetSysColor(COLOR_BTNFACE));
+    st_check("158 hiding it does not change the state",
+             ListView_GetItemState(plain, 0, LVIS_SELECTED) == LVIS_SELECTED);
+    {   /* nor the agent view of it */
+        char big[512];
+        SendMessage(plain, WM_GETTEXT, sizeof big, (LPARAM)big);
+        st_check("158 the agent marker is state, not pixels",
+                 strstr(big, "\n> aa") != NULL);
+    }
+    SetFocus(plain);
+    st_check("158 focused draws the highlight",
+             lv_row_px(plain, 0) == GetSysColor(COLOR_HIGHLIGHT));
+    DestroyWindow(plain);
+    DestroyWindow(always);
 }
 
 static int lvtest(void) {
@@ -1396,6 +1710,8 @@ static int lvtest(void) {
 
     st_check("delete all", SendMessage(lv, LVM_DELETEALLITEMS, 0, 0));
     st_check("count after clear", (int)SendMessage(lv, LVM_GETITEMCOUNT, 0, 0) == 0);
+
+    lvtest_158(top, lv);                         /* takes lv over, and frees it */
 
     printf("ctldemo lvtest: %d checks, %d failed\n", st_checks, st_fails);
     fflush(stdout);

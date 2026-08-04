@@ -102,6 +102,7 @@ typedef struct tagHDITEMW {
 #define HDM_DELETEITEM   (HDM_FIRST + 2)
 #define HDM_GETITEMA     (HDM_FIRST + 3)
 #define HDM_SETITEMA     (HDM_FIRST + 4)
+#define HDM_GETITEMRECT  (HDM_FIRST + 7)
 #define HDM_INSERTITEMW  (HDM_FIRST + 10)
 #define HDM_GETITEMW     (HDM_FIRST + 11)
 #define HDM_SETITEMW     (HDM_FIRST + 12)
@@ -127,6 +128,7 @@ typedef struct tagNMHEADERA {
 #define LVN_FIRST         ((UINT)-100)
 #define LVN_ITEMCHANGED   (LVN_FIRST - 1)
 #define LVN_COLUMNCLICK   (LVN_FIRST - 8)
+#define LVN_KEYDOWN       (LVN_FIRST - 55)
 
 /* ---- SysListView32 ---- */
 #define WC_LISTVIEWA "SysListView32"
@@ -159,6 +161,7 @@ typedef struct tagNMHEADERA {
 #define LVCFMT_LEFT         0x0000
 #define LVCFMT_RIGHT        0x0001
 #define LVCFMT_CENTER       0x0002
+#define LVCFMT_JUSTIFYMASK  0x0003
 
 /* LVM_GETNEXTITEM flags */
 #define LVNI_ALL            0x0000
@@ -171,8 +174,16 @@ typedef struct tagNMHEADERA {
 
 /* hit-test flags */
 #define LVHT_NOWHERE        0x0001
+#define LVHT_ONITEMICON     0x0002
 #define LVHT_ONITEMLABEL    0x0004
+#define LVHT_ONITEMSTATEICON 0x0008
 #define LVHT_ONITEM         0x000E
+
+/* LVM_GET*RECT portions (the rect's `left` carries the code in) */
+#define LVIR_BOUNDS         0x0000
+#define LVIR_ICON           0x0001
+#define LVIR_LABEL          0x0002
+#define LVIR_SELECTBOUNDS   0x0003
 
 typedef struct tagLVCOLUMNA {
     UINT  mask;
@@ -234,6 +245,12 @@ typedef struct tagNMLISTVIEW {
     LPARAM lParam;
 } NMLISTVIEW, *LPNMLISTVIEW;
 
+typedef struct tagLVKEYDOWN {
+    NMHDR hdr;
+    WORD  wVKey;
+    UINT  flags;
+} NMLVKEYDOWN, *LPNMLVKEYDOWN;
+
 typedef int (*PFNLVCOMPARE)(LPARAM, LPARAM, LPARAM);
 
 #define LVM_FIRST                     0x1000
@@ -244,8 +261,10 @@ typedef int (*PFNLVCOMPARE)(LPARAM, LPARAM, LPARAM);
 #define LVM_DELETEITEM                (LVM_FIRST + 8)
 #define LVM_DELETEALLITEMS            (LVM_FIRST + 9)
 #define LVM_GETNEXTITEM               (LVM_FIRST + 12)
+#define LVM_GETITEMRECT               (LVM_FIRST + 14)
 #define LVM_HITTEST                   (LVM_FIRST + 18)
 #define LVM_ENSUREVISIBLE             (LVM_FIRST + 19)
+#define LVM_SCROLL                    (LVM_FIRST + 20)
 #define LVM_GETCOLUMNA                (LVM_FIRST + 25)
 #define LVM_SETCOLUMNA                (LVM_FIRST + 26)
 #define LVM_INSERTCOLUMNA             (LVM_FIRST + 27)
@@ -257,6 +276,7 @@ typedef int (*PFNLVCOMPARE)(LPARAM, LPARAM, LPARAM);
 #define LVM_SETITEMTEXTA              (LVM_FIRST + 46)
 #define LVM_SORTITEMS                 (LVM_FIRST + 48)
 #define LVM_GETSELECTEDCOUNT          (LVM_FIRST + 50)
+#define LVM_GETSUBITEMRECT            (LVM_FIRST + 56)
 #define LVM_SETEXTENDEDLISTVIEWSTYLE  (LVM_FIRST + 54)
 #define LVM_GETEXTENDEDLISTVIEWSTYLE  (LVM_FIRST + 55)
 #define LVM_GETITEMW                  (LVM_FIRST + 75)
@@ -330,7 +350,14 @@ typedef int (*PFNLVCOMPARE)(LPARAM, LPARAM, LPARAM);
 #define ListView_GetHeader(h)               ((HWND)SendMessage((h), LVM_GETHEADER, 0, 0))
 #define ListView_SetExtendedListViewStyle(h, s) \
         ((DWORD)SendMessage((h), LVM_SETEXTENDEDLISTVIEWSTYLE, 0, (LPARAM)(s)))
+#define ListView_Scroll(h, dx, dy)          ((BOOL)SendMessage((h), LVM_SCROLL, (WPARAM)(dx), (LPARAM)(dy)))
+#define ListView_GetItemRect(h, i, r, code) \
+        (((RECT *)(r))->left = (code), (BOOL)SendMessage((h), LVM_GETITEMRECT, (WPARAM)(i), (LPARAM)(r)))
+#define ListView_GetSubItemRect(h, i, sub, code, r) \
+        (((RECT *)(r))->top = (sub), ((RECT *)(r))->left = (code), \
+         (BOOL)SendMessage((h), LVM_GETSUBITEMRECT, (WPARAM)(i), (LPARAM)(r)))
 #define Header_GetItemCount(h)              ((int)SendMessage((h), HDM_GETITEMCOUNT, 0, 0))
+#define Header_GetItemRect(h, i, r)         ((BOOL)SendMessage((h), HDM_GETITEMRECT, (WPARAM)(i), (LPARAM)(r)))
 
 /* Common-control class names */
 #define WC_BUTTONW    u"Button"

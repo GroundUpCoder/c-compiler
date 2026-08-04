@@ -21,6 +21,12 @@
 //   - keyboard: VK_DOWN/VK_END move focus+selection (LVN_ITEMCHANGED
 //     echoes), the embedded SCROLLBAR child exists once rows overflow
 //   - mouse: pixel dblclick/rclick fire NM_DBLCLK/NM_RCLICK
+//   - #158 horizontal scroll, end to end: shrinking the (now WS_THICKFRAME)
+//     pane past its 430px of columns brings the SBS_HORZ sibling up beside
+//     the vertical one — two shown SCROLLBAR children, never a third
+//     control in the corner. The mechanics (origin, lockstep, hit-test
+//     remap, divider drags, the gap-#31 silences) are lvtest's, in-process
+//     and font-independent
 //
 // Pixel coordinates in the mouse leg mirror os/win32/ctldemo.c lvdemo
 // layout + the 28px stock font cell (listview at 12,12; header 34px; rows
@@ -45,8 +51,14 @@ function check(name, cond, extra) {
 
 const { image } = freshImage('os-listview-');
 
+// The fail-loud reports go to STDERR, so a guard that reads only stdout can
+// never fire (#158 — this file's own "zero fail-loud reports" leg was
+// vacuous). Keep both streams and assert against the right one.
+let bootErr = '';
 function boot(script) {
-  return driveBoot(script, { image, maxBuffer: 32 * 1024 * 1024 }).stdout;
+  const r = driveBoot(script, { image, maxBuffer: 32 * 1024 * 1024 });
+  bootErr = String(r.stderr || '');
+  return r.stdout;
 }
 
 const DOWN = 'wmctl key $SID 81 1073741905';
@@ -108,6 +120,21 @@ const out = boot([
   'wmctl down $SID 100 63 3',
   'wmctl up $SID 100 63 3',
   'sleep 0.3',
+  // ---- #158: shrink the window past the summed column widths ----
+  // Columns are 140+80+90+120 = 430; the pane opens wide enough for them,
+  // so only the vertical bar is up. Squeezing the frame is the ticket's
+  // motivating case, and the horizontal sibling must appear for it.
+  'echo ==tree-wide',
+  'wmctl tree',
+  'echo ==cut',
+  'wmctl resize $SID 320 400',
+  'wmctl wait dim $SID 320x400 8000',
+  // Barrier: the agent socket is served from the GetMessage IDLE loop, so a
+  // completed request proves the app drained the resize before we look.
+  'wmctl gettext SysListView32:0 > /dev/null',
+  'echo ==tree-narrow',
+  'wmctl tree',
+  'echo ==cut',
   // ---- LISTBOX retrofit legs (the classic ctldemo pane) ----
   'ctldemo &',
   'wmctl wait label Greet 10000',
@@ -130,9 +157,23 @@ const out = boot([
 ]);
 
 check('boot reached the end marker', out.includes('==done'));
-check('zero listview/header fail-loud reports (the 0211 bar)',
-      !/win32: unsupported (listview|header)/.test(out),
-      (out.match(/win32: unsupported [^\n]*/g) || []).join(' | '));
+
+/* The 0211 bar, now over BOTH streams. lvtest deliberately provokes exactly
+ * one report (an LVCFMT bit nothing draws) and that one is asserted below —
+ * every other listview/header report is still a failure. */
+const EXPECTED_LOUD = 'listview column format 0x800 (justification bits only)';
+const loud = ((out + '\n' + bootErr)
+              .match(/win32: unsupported (?:listview|header)[^\n]*/g) || [])
+             .filter(l => !l.includes(EXPECTED_LOUD));
+check('no unexpected listview/header fail-loud reports (the 0211 bar)',
+      loud.length === 0, loud.join(' | '));
+check('an undrawable LVCFMT bit reports (it is no longer masked away)',
+      bootErr.includes(EXPECTED_LOUD));
+/* LVS_SHOWSELALWAYS is READ now, so the class style audit must be silent
+ * about bit 3 (it reported "unread" before #158). */
+check('LVS_SHOWSELALWAYS is a read style bit',
+      !/style bits 0x0000000[0-9A-F] on class SysListView32/.test(bootErr),
+      (bootErr.match(/style bits [^\n]*SysListView32[^\n]*/g) || []).join(' | '));
 
 /* lvtest: the message surface is green in-OS */
 const lvtest = section(out, 'lvtest');
@@ -182,6 +223,32 @@ check('Name sort restores alpha first', s3.split('\n')[1].startsWith('alpha | 1.
 /* mouse */
 check('pixel dblclick fires NM_DBLCLK', /ctldemo: lv dblclk=0/.test(out));
 check('pixel right-click fires NM_RCLICK', /ctldemo: lv rclick=0/.test(out));
+
+/* #158: the horizontal sibling appears when the frame shrinks past the
+ * columns, and the corner where the two bars meet stays dead space — two
+ * SCROLLBAR children under the listview, never a third control. */
+function lvBars(tree) {
+  // The listview's children are the deeper-indented lines after its `win`
+  // line. Both bars ALWAYS exist (created hidden), so count the SHOWN ones —
+  // `vis=1` is the difference between "a bar is there" and "a bar is up".
+  const lines = tree.split('\n');
+  const at = lines.findIndex(l => /class=SysListView32/.test(l));
+  if (at < 0) return null;
+  const indent = lines[at].search(/\S/);
+  let n = 0;
+  for (let i = at + 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    if (lines[i].search(/\S/) <= indent && /\bwin \d/.test(lines[i])) break;
+    if (/class=SCROLLBAR/.test(lines[i]) && /\bvis=1\b/.test(lines[i])) n++;
+  }
+  return n;
+}
+const barsWide = lvBars(section(out, 'tree-wide'));
+const barsNarrow = lvBars(section(out, 'tree-narrow'));
+check('wide pane: only the vertical bar', barsWide === 1, barsWide);
+check('shrunk past the columns: the horizontal sibling joins it',
+      barsNarrow === 2, barsNarrow);
+check('and no third control appears in the corner', barsNarrow === 2);
 
 /* LISTBOX retrofit: the pre-0370 gap is closed */
 check('LISTBOX row click resolved', out.includes('lbclick-ok'));
