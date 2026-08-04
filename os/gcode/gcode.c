@@ -488,25 +488,30 @@ static char *run_command(const char *cmd, int *exit_code) {
          * cooperative-signal rule (the wm.c flag-then-park precedent):
          * handlers run only at import returns, and there is no import
          * between this check and the read. */
+        /* #510: the ^C check lives at the loop top too — the interrupt twin
+         * of the alarm's #503 move above. It used to sit only in the EINTR
+         * branch, but a chatty child's reads keep returning data and never
+         * park, so nothing EINTRs and the kill branch never ran: the ^C did
+         * NOTHING until the wall-time cap (measured — a 60s-capped chatty
+         * round stalled the full 60s). #412(c) semantics unchanged: the
+         * fg-pgroup SIGINT normally kills the child too (EOF follows at
+         * once); this closes the survivor edge — a child that traps/ignores
+         * SIGINT, or a kill -INT aimed at gcode alone. Kill AND STOP
+         * READING: draining to EOF would hostage the interrupt to any
+         * pipe-holding descendant. Everything the tool printed before the
+         * ^C was already drained by earlier reads, and waitpid on the
+         * SIGKILLed sh cannot block. Checked BEFORE the alarm: if both
+         * landed in one safe-point batch, the user's ^C is the truer cause. */
+        if (g_interrupted && !intkilled) { kill(pid, SIGKILL); intkilled = 1; break; }
         if (g_bash_alarm && !timedout) { kill(pid, SIGKILL); timedout = 1; break; }
         ssize_t n = read(pfd[0], buf, sizeof buf);
         if (n == 0) break;                   /* EOF: child (tree) is done */
         if (n < 0) {
             if (errno == EINTR) {
-                /* Alarm EINTR: handled by the loop-top check. */
-                /* #412(c): ^C. The fg-pgroup SIGINT normally kills the
-                 * child too (EOF follows at once); this closes the
-                 * survivor edge — a child that traps/ignores SIGINT, or a
-                 * kill -INT aimed at gcode alone. Kill AND STOP READING:
-                 * draining to EOF would hostage the interrupt to any
-                 * pipe-holding descendant (hush runs e.g. `sleep 30` as
-                 * its own child, which inherits the write end and
-                 * survives the sh kill — measured as a 30s stall).
-                 * Everything the tool printed before the ^C was already
-                 * drained by earlier reads, and waitpid on the SIGKILLed
-                 * sh cannot block. */
-                if (g_interrupted && !intkilled) { kill(pid, SIGKILL); intkilled = 1; break; }
-                continue;                    /* re-check the cap at loop top */
+                /* Alarm or ^C EINTR: both handled by the loop-top checks
+                 * (no import between them and the read, so no signal can
+                 * slip through the gap — the wm.c flag-then-park rule). */
+                continue;
             }
             break;
         }
@@ -576,18 +581,22 @@ static char *run_command(const char *cmd, int *exit_code) {
     int truncated = 0, intkilled = 0;
     time_t deadline = time(NULL) + bash_cap_secs();
     for (;;) {
+        /* #510: check BEFORE the poll, not only in its EINTR branch — a
+         * chatty child keeps the pipe readable, so poll keeps returning
+         * POLLIN and a SIGINT landing outside the poll syscall never
+         * produces EINTR: the kill branch never ran and the ^C did nothing
+         * until the cap (measured — the smoke.mjs #510 red control).
+         * #412(c) semantics unchanged: a ^C whose SIGINT reached gcode but
+         * not the child (kill -INT at gcode alone, or a SIGINT-trapping
+         * child) must not drain the child's remaining runtime — kill and
+         * stop reading, like the timeout path below. */
+        if (g_interrupted && !intkilled) { kill(pid, SIGKILL); intkilled = 1; break; }
         struct pollfd pf = { pfd[0], POLLIN, 0 };
         int remain = (int)(deadline - time(NULL));
         if (remain < 0) remain = 0;
         int r = poll(&pf, 1, remain * 1000 + 100);
-        if (r < 0 && errno == EINTR) {
-            /* #412(c) native twin: a ^C whose SIGINT reached gcode but not
-             * the child (kill -INT at gcode alone, or a SIGINT-trapping
-             * child) must not drain the child's remaining runtime — kill
-             * and stop reading, like the timeout path below. */
-            if (g_interrupted && !intkilled) { kill(pid, SIGKILL); intkilled = 1; break; }
-            continue;
-        }
+        if (r < 0 && errno == EINTR)
+            continue;                        /* ^C re-checked at loop top */
         if (r == 0 && time(NULL) >= deadline) {  /* timeout: kill the direct
             sh and stop reading — its descendants may survive (#503) */
             kill(pid, SIGKILL);
