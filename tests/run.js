@@ -237,6 +237,14 @@ const RULES = [
   // check-count assertion. Same suites as ^os/ today — explicit so a future
   // ^os/ rule split can't orphan the oracle (the ksvc precedent above).
   [/^os\/gcode\//, ['kernel', 'sweep'], 'the gcode CLI — its native oracle rides the kernel suite (test_gcode_native.js)'],
+  // The gucOS git CLI (#474). `^os/` already gives it the bake radius
+  // (packages/git.json folds it into the fat fixture); the addition here is
+  // `fakegit`, the run.py category that builds os/git/bin.json and diffs its
+  // output against tests/fakegit/*/expected.txt. That category is also the
+  // regression net for this bin.json's compiler flags, so an edit here that
+  // silently changed codegen would show up there and nowhere else.
+  [/^os\/git\//, ['fakegit', 'kernel', 'sweep'],
+    'the gucOS git CLI — the fakegit category builds and diffs it; packages/git.json puts it in the fat fixture'],
   // os-common's listPackages filter is the base-purity choke point (CLANG-CPP-
   // EPIC II §7) — host holds that guardrail (rules accumulate, so this ADDS host
   // to the ^os/ kernel+sweep above).
@@ -454,12 +462,15 @@ const RULES = [
   [/^vendor\/tcc\//, ['tcc', 'projects'], null],
   [/^vendor\/libc-test\//, ['libc'], null],
   [/^vendor\/disw\//, ['disw', 'projects'], null],
-  // libgit2 is a large-codebase compile stress test and the fakegit backend.
-  // It is NOT in the bake closure (nothing seeds or packages it), so it
-  // deliberately stops at its category + the build check — no OS suites.
-  [/^vendor\/libgit2\//, ['fakegit', 'projects'], null],
-  // The deterministic fakegit fixture: run.py's `fakegit` category builds it.
-  [/^vendor\/fakegit\//, ['fakegit', 'projects'], 'the fakegit category builds this tree'],
+  // libgit2 is a large-codebase compile stress test AND the engine under the
+  // gucOS git CLI. It ENTERED the bake closure at #474: os/git/bin.json
+  // compiles this tree, packages/git.json ships that binary, and every
+  // packages/*.json is scanned by newestBakeInput — so an edit here restales
+  // the fat fixture exactly like a seeded source, which is the kernel+sweep
+  // radius. (Before #474 nothing seeded or packaged it and the rule stopped
+  // at its category + the build check; that reasoning expired with the ship.)
+  [/^vendor\/libgit2\//, ['fakegit', 'projects', 'kernel', 'sweep'],
+    'the engine under os/git — its category, its build check, and the fat fixture it now ships into'],
   // The Csmith programs the `fuzz` category compiles (run.py CSMITH_CORPUS_DIR).
   // No bin.json, so `projects` would be a no-op — the category IS the gate.
   [/^vendor\/csmith-corpus\//, ['fuzz'], 'the vendored Csmith corpus the fuzz category compiles'],

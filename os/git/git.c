@@ -1,23 +1,78 @@
-/* fakegit — a thin git-like CLI backed by libgit2, compiled to WASM.
-   Usage: fakegit <command> [args...]
-   Commands: log, diff, show, status, rev-list, rev-parse, cat-file, ls-tree */
+/* git — the gucOS git CLI, a read-only porcelain over vendored libgit2.
+ *
+ *   git [-C <path>] <command> [args...]
+ *
+ * Commands: log, diff, show, status, rev-list, rev-parse, cat-file, ls-tree.
+ *
+ * READ-ONLY TODAY. Nothing here writes an object, a ref or the index yet —
+ * the write set (init/add/commit/branch/checkout) is ticket #475, approved
+ * and already queued behind this one, which is why the command is called
+ * `git` rather than something hedged (#474's naming question was coupled to
+ * that approval and resolved by it).
+ *
+ * The hazard the name carries is real and is handled HERE rather than by
+ * the name: an agent that types `git commit` and reads "unknown command"
+ * concludes git is BROKEN. So a real git verb that this build does not
+ * implement is answered by saying exactly that, and a typo is answered
+ * differently — see the command dispatch at the bottom of this file. Delete
+ * a verb from that list as #475 implements it.
+ *
+ * REPO DISCOVERY (the other half of feeling like git). The repository is
+ * found by walking UP from the current directory, the way real git does —
+ * there is no repo-path argument. `-C <path>` chdirs first, the same
+ * spelling and the same semantics as git's own `-C`, so a caller that
+ * cannot chdir (a test harness, a script) still has one. Discovery is
+ * deliberately GIT_REPOSITORY_OPEN_CROSS_FS: gucOS mounts the sealed /usr
+ * and the writable root as separate BlockFS volumes (MountFS), so a
+ * st_dev change inside gucOS is an artifact of the mount table, not a user
+ * crossing a filesystem the way the upstream default assumes.
+ */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <git2.h>
+
+#define GUCOS_GIT_VERSION "0.1"
 
 static char oidbuf[GIT_OID_SHA1_HEXSIZE + 1];
 
 /* ---- helpers ---- */
 
-static int open_repo(const char *path, git_repository **repo) {
-    int r = git_repository_open(repo, path);
+/* Open the repository containing the CURRENT directory, searching upward.
+   The failure message is git's, verbatim, because that string is what a
+   human or an agent greps for. */
+static int open_repo(git_repository **repo) {
+    int r = git_repository_open_ext(repo, ".", GIT_REPOSITORY_OPEN_CROSS_FS, NULL);
     if (r < 0) {
-        const git_error *e = git_error_last();
-        fprintf(stderr, "fakegit: cannot open repo '%s': %s\n", path,
-                e && e->message ? e->message : "unknown error");
+        fprintf(stderr,
+                "fatal: not a git repository (or any of the parent directories): .git\n");
     }
     return r;
+}
+
+static void usage(FILE *out) {
+    fprintf(out,
+        "usage: git [-C <path>] <command> [<args>]\n"
+        "\n"
+        "The gucOS git CLI (read-only). The repository is discovered by\n"
+        "searching up from the current directory, as in git.\n"
+        "\n"
+        "   log [-n <count>]          show commit history\n"
+        "   show <rev>                show a commit, tree or blob\n"
+        "   diff <from> <to>          list the files that differ\n"
+        "   status                    show the working-tree state\n"
+        "   rev-list [-n <n>] [<rev>] list commit ids\n"
+        "   rev-parse <rev>           resolve a revision to an object id\n"
+        "   cat-file -p <object>      print an object\n"
+        "   ls-tree [-r] [<rev>]      list a tree\n"
+        "\n"
+        "   -C <path>                 run as if started in <path>\n"
+        "   --version                 print the version\n"
+        "   --help                    print this message\n"
+        "\n"
+        "Writing commands (add, commit, checkout, ...) are not implemented.\n");
 }
 
 /* ---- log ---- */
@@ -74,21 +129,21 @@ static int cmd_log(git_repository *repo, int argc, char **argv) {
 /* ---- diff ---- */
 static int cmd_diff(git_repository *repo, int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "Usage: fakegit diff <from> <to>\n");
+        fprintf(stderr, "Usage: git diff <from> <to>\n");
         return 1;
     }
     git_commit *oc = NULL, *nc = NULL;
     git_object *obj = NULL;
 
     if (git_revparse_single(&obj, repo, argv[0]) < 0) {
-        fprintf(stderr, "fakegit: bad revision '%s'\n", argv[0]);
+        fprintf(stderr, "git: bad revision '%s'\n", argv[0]);
         return 1;
     }
     git_oid oid_a = *git_object_id(obj);
     git_object_free(obj);
 
     if (git_revparse_single(&obj, repo, argv[1]) < 0) {
-        fprintf(stderr, "fakegit: bad revision '%s'\n", argv[1]);
+        fprintf(stderr, "git: bad revision '%s'\n", argv[1]);
         return 1;
     }
     git_oid oid_b = *git_object_id(obj);
@@ -145,12 +200,12 @@ static int cmd_diff(git_repository *repo, int argc, char **argv) {
 /* ---- show ---- */
 static int cmd_show(git_repository *repo, int argc, char **argv) {
     if (argc < 1) {
-        fprintf(stderr, "Usage: fakegit show <rev>\n");
+        fprintf(stderr, "Usage: git show <rev>\n");
         return 1;
     }
     git_object *obj = NULL;
     if (git_revparse_single(&obj, repo, argv[0]) < 0) {
-        fprintf(stderr, "fakegit: bad revision '%s'\n", argv[0]);
+        fprintf(stderr, "git: bad revision '%s'\n", argv[0]);
         return 1;
     }
 
@@ -298,7 +353,7 @@ static int cmd_rev_list(git_repository *repo, int argc, char **argv) {
 /* ---- rev-parse ---- */
 static int cmd_rev_parse(git_repository *repo, int argc, char **argv) {
     if (argc < 1) {
-        fprintf(stderr, "Usage: fakegit rev-parse <rev>\n");
+        fprintf(stderr, "Usage: git rev-parse <rev>\n");
         return 1;
     }
     git_object *obj = NULL;
@@ -315,7 +370,7 @@ static int cmd_rev_parse(git_repository *repo, int argc, char **argv) {
 /* ---- cat-file ---- */
 static int cmd_cat_file(git_repository *repo, int argc, char **argv) {
     if (argc < 2 || strcmp(argv[0], "-p")) {
-        fprintf(stderr, "Usage: fakegit cat-file -p <object>\n");
+        fprintf(stderr, "Usage: git cat-file -p <object>\n");
         return 1;
     }
     git_object *obj = NULL;
@@ -368,12 +423,12 @@ static int cmd_ls_tree(git_repository *repo, int argc, char **argv) {
     const char *ref = argc > 0 ? argv[0] : "HEAD";
     git_object *obj = NULL;
     if (git_revparse_single(&obj, repo, ref) < 0) {
-        fprintf(stderr, "fakegit: bad revision '%s'\n", ref);
+        fprintf(stderr, "git: bad revision '%s'\n", ref);
         return 1;
     }
     if (git_object_type(obj) != GIT_OBJECT_COMMIT &&
         git_object_type(obj) != GIT_OBJECT_TREE) {
-        fprintf(stderr, "fakegit: '%s' is not a tree-ish\n", ref);
+        fprintf(stderr, "git: '%s' is not a tree-ish\n", ref);
         git_object_free(obj);
         return 1;
     }
@@ -430,19 +485,50 @@ static int cmd_ls_tree(git_repository *repo, int argc, char **argv) {
 /* ---- main ---- */
 
 int main(int argc, char **argv) {
-    if (argc < 3) {
-        fprintf(stderr, "Usage: fakegit <repo-path> <command> [args...]\n");
+    /* Global options, git's own spelling. Everything before the command
+       word is consumed here; the first non-option argument is the command. */
+    int i = 1;
+    for (; i < argc; i++) {
+        const char *a = argv[i];
+        if (!strcmp(a, "-C")) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "fatal: no directory given for -C\n");
+                return 1;
+            }
+            const char *dir = argv[++i];
+            if (chdir(dir) != 0) {
+                fprintf(stderr, "fatal: cannot change to '%s'\n", dir);
+                return 1;
+            }
+        } else if (!strcmp(a, "--version") || !strcmp(a, "version")) {
+            printf("git version %s (libgit2 %s)\n",
+                   GUCOS_GIT_VERSION, LIBGIT2_VERSION);
+            return 0;
+        } else if (!strcmp(a, "--help") || !strcmp(a, "-h") || !strcmp(a, "help")) {
+            usage(stdout);
+            return 0;
+        } else if (a[0] == '-' && a[1] != '\0') {
+            fprintf(stderr, "fatal: unknown option '%s'\n", a);
+            usage(stderr);
+            return 1;
+        } else {
+            break;                          /* the command word */
+        }
+    }
+
+    if (i >= argc) {
+        usage(stderr);
         return 1;
     }
 
     git_libgit2_init();
 
     git_repository *repo = NULL;
-    if (open_repo(argv[1], &repo) < 0) return 1;
+    if (open_repo(&repo) < 0) return 1;
 
-    char *cmd = argv[2];
-    int cmd_argc = argc - 3;
-    char **cmd_argv = argv + 3;
+    char *cmd = argv[i];
+    int cmd_argc = argc - i - 1;
+    char **cmd_argv = argv + i + 1;
 
     int rc = 0;
     if (!strcmp(cmd, "log"))           rc = cmd_log(repo, cmd_argc, cmd_argv);
@@ -454,7 +540,28 @@ int main(int argc, char **argv) {
     else if (!strcmp(cmd, "cat-file")) rc = cmd_cat_file(repo, cmd_argc, cmd_argv);
     else if (!strcmp(cmd, "ls-tree"))  rc = cmd_ls_tree(repo, cmd_argc, cmd_argv);
     else {
-        fprintf(stderr, "fakegit: unknown command '%s'\n", cmd);
+        /* Tell a real git command apart from a typo. Answering `commit`
+           with a bare "unknown command" is what makes a caller conclude
+           git is BROKEN rather than deliberately partial — name the
+           limitation instead, and name it in the one place the caller is
+           already looking. */
+        static const char *const unimplemented[] = {
+            "add", "am", "apply", "bisect", "blame", "branch", "checkout",
+            "cherry-pick", "clean", "clone", "commit", "config", "describe",
+            "fetch", "grep", "init", "merge", "mv", "pull", "push", "rebase",
+            "reflog", "remote", "reset", "restore", "revert", "rm", "stash",
+            "submodule", "switch", "tag", "worktree", NULL,
+        };
+        int known = 0;
+        for (int k = 0; unimplemented[k]; k++)
+            if (!strcmp(cmd, unimplemented[k])) { known = 1; break; }
+        if (known)
+            fprintf(stderr, "git: '%s' is a git command, but this build is "
+                            "read-only and does not implement it yet.\n"
+                            "See 'git --help' for what is available.\n", cmd);
+        else
+            fprintf(stderr, "git: '%s' is not a git command. "
+                            "See 'git --help'.\n", cmd);
         rc = 1;
     }
 

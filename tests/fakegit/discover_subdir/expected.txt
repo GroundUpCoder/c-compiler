@@ -1,0 +1,3 @@
+  M docs/guide.txt
+ ?? notes.txt
+ ?? scratch/

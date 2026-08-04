@@ -348,4 +348,9 @@ thing this file exists to kill.
 - file: tests/lib/suite-runner.js
 - anchor: // dependency-level freshness is ticket #151 and is a much heavier mechanism.
 
+### L78 — the shipped `git` is READ-ONLY: it is called `git` (jku's ruling, coupled to the #475 approval) but implements no verb that writes an object, a ref or the index, so an agent inside gucOS can read history and cannot record work
+- ticket: #475
+- file: os/git/git.c
+- anchor: "Writing commands (add, commit, checkout, ...) are not implemented.\n");
+
 <!-- END ENTRIES -->

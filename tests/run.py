@@ -90,7 +90,11 @@ MICROPYTHON_DIR = os.path.join(VENDOR_DIR, "micropython")
 MICROPYTHON_TEST_DIR = os.path.join(SCRIPT_DIR, "micropython")
 MICROPYTHON_UPSTREAM_TEST_DIR = os.path.join(MICROPYTHON_DIR, "tests")
 
-FAKEGIT_DIR = os.path.join(VENDOR_DIR, "fakegit")
+# The CLI under test moved out of vendor/ when it stopped being a fixture and
+# became a shipped gucOS app (ticket #474): os/git is the product, packages/
+# git.json ships it, and this category is its cheap golden-backed regression
+# net. The category and tests/fakegit/ keep their historical names.
+FAKEGIT_DIR = os.path.join(ROOT_DIR, "os", "git")
 FAKEGIT_TEST_DIR = os.path.join(SCRIPT_DIR, "fakegit")
 
 CAIRO_DIR = os.path.join(VENDOR_DIR, "cairo")
@@ -1884,11 +1888,15 @@ def run_blockfs_tests(results, filter_str=None):
 
 # --- fakegit tests ---
 #
-# Builds vendor/fakegit/bin.json once, materializes the deterministic
-# fixture repo (tests/fakegit/make-fixture.sh — todos/0183), then runs each
+# Builds os/git/bin.json once, materializes the deterministic fixture repo
+# (tests/fakegit/make-fixture.sh — todos/0183), then runs each
 # tests/fakegit/<name>/ test against it. Each directory contains:
-#   args.txt     — one argument per line (the fixture repo path is prepended
-#                  automatically)
+#   args.txt     — one argument per line. `-C <fixture>` is prepended, so the
+#                  test names only the command and its own arguments.
+#   cwd.txt      — OPTIONAL, one line: a path relative to the fixture root.
+#                  Present ⇒ the binary runs WITH that directory as its cwd
+#                  and WITHOUT -C, which is what makes the golden a proof of
+#                  repo DISCOVERY (#474) rather than of an explicit path.
 #   expected.txt — required, exact stdout match (captured from the fixture)
 
 def run_fakegit_tests(results, filter_str=None):
@@ -1948,9 +1956,25 @@ def run_fakegit_tests(results, filter_str=None):
         with open(args_file) as f:
             args = [line.strip() for line in f if line.strip()]
 
+        # A cwd.txt test proves discovery: no -C, just a cwd somewhere inside
+        # the repo. Everything else names the repo with -C, git's own spelling.
+        cwd_file = os.path.join(FAKEGIT_TEST_DIR, tdir, "cwd.txt")
+        if os.path.exists(cwd_file):
+            with open(cwd_file) as f:
+                rel = f.read().strip()
+            run_cwd = os.path.join(test_repo, rel) if rel else test_repo
+            if not os.path.isdir(run_cwd):
+                results.record(test_name, False, f"cwd.txt names no directory: {rel}")
+                continue
+            argv = ["node", "--experimental-wasm-exnref", HOST_JS, wasm] + args
+        else:
+            run_cwd = None
+            argv = ["node", "--experimental-wasm-exnref", HOST_JS, wasm,
+                    "-C", test_repo] + args
+
         try:
             r = subprocess.run(
-                ["node", "--experimental-wasm-exnref", HOST_JS, wasm, test_repo] + args,
+                argv, cwd=run_cwd,
                 capture_output=True, timeout=60,
             )
             # Compare raw bytes to handle potential binary output cleanly
