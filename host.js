@@ -7014,21 +7014,12 @@ function sdlDelayUnsupported() {
   );
 }
 
-// SDL_AudioStream get-callback (pull) mode: passing a non-NULL callback to
-// SDL_OpenAudioDeviceStream tells SDL to call it from its own audio thread to
-// PULL samples. There is no audio thread here (Web Audio is driven from the main
-// thread), so this can't be honoured — fail loud rather than silently behave as
-// push mode and play silence. Mirrors sdlDelayUnsupported: explain why + the
-// supported alternative.
-function sdlAudioGetCallbackUnsupported() {
-  throw new Error(
-    'SDL_OpenAudioDeviceStream was given a non-NULL get-callback (pull mode), ' +
-    'which is not supported in this runtime: there is no SDL audio thread to ' +
-    'invoke it (audio is driven from the main thread via Web Audio). Pass a NULL ' +
-    'callback and push samples yourself with SDL_PutAudioStreamData (push mode), ' +
-    'which this runtime backs with a SharedArrayBuffer ring into Web Audio.'
-  );
-}
+// SDL_AudioStream get-callback (pull) mode (a non-NULL callback to
+// SDL_OpenAudioDeviceStream) can't be honoured here — no SDL audio thread to
+// invoke it. The veneer rejects it per SDL3's contract (NULL + SDL_SetError,
+// #491) entirely C-side in __SDL.c; the old __sdl_audio_callback_unsupported
+// throw-only import is retired (a host throw unwound out of wasm and killed
+// the process on a legal SDL3 call).
 
 function createNullSDL() {
   let animationFrameFunc = null;
@@ -7039,7 +7030,7 @@ function createNullSDL() {
   return {
     getAnimationFrameFunc: function () { return animationFrameFunc; },
     [ENV_KEY]: {
-      __sdl_init: function () { sdlTicksBase = Date.now(); return 0; },
+      __sdl_init: function () { sdlTicksBase = performance.now(); return 0; },
       __sdl_quit: function () { animationFrameFunc = null; },
       __sdl_create_window: function () { return 1; },
       __sdl_destroy_window: function () {},
@@ -7095,10 +7086,9 @@ function createNullSDL() {
       __sdl_clear_queued_audio: function () {},
       __sdl_pause_audio_device: function () {},
       __sdl_close_audio_device: function () {},
-      __sdl_audio_callback_unsupported: function () { sdlAudioGetCallbackUnsupported(); },
       // SDL_GetTicks: ms since SDL_Init, full range (C casts to Uint64; no 32-bit
       // wrap). Lazily baseline if a program reads ticks before SDL_Init.
-      __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = Date.now(); return Date.now() - sdlTicksBase; },
+      __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = performance.now(); return performance.now() - sdlTicksBase; },
       // SDL_Delay (todos/0224): headless contexts CAN block — the same
       // primitive as usleep/nanosleep (Atomics.wait on a never-notified
       // cell) — so the classic while(running){ poll; draw; SDL_Delay(16); }
@@ -7303,7 +7293,6 @@ function createSurfaceSDL({ ctx, hooks }) {
         __sdl_clear_queued_audio: function () {},
         __sdl_pause_audio_device: function () {},
         __sdl_close_audio_device: function () {},
-        __sdl_audio_callback_unsupported: function () { sdlAudioGetCallbackUnsupported(); },
         __audio_gain: function (gain) {
           if (gain >= 0) nullGain = Math.min(200, gain | 0);
           return nullGain;
@@ -7350,7 +7339,6 @@ function createSurfaceSDL({ ctx, hooks }) {
         const d = audioDevices[dev - 1];
         if (d) { hooks.audioClose(d.aid); audioDevices[dev - 1] = null; }
       },
-      __sdl_audio_callback_unsupported: function () { sdlAudioGetCallbackUnsupported(); },
       // Master mixer gain (todos/0048, kernel AUDIO_GAIN): percent 0..200,
       // negative queries. Older embedder kernels answer ENOSYS -> -1.
       __audio_gain: function (gain) {
@@ -8242,7 +8230,7 @@ function createSurfaceSDL({ ctx, hooks }) {
       },
     },
     [ENV_KEY]: Object.assign({
-      __sdl_init: function () { sdlTicksBase = Date.now(); return 0; },
+      __sdl_init: function () { sdlTicksBase = performance.now(); return 0; },
       __sdl_quit: function () { animationFrameFunc = null; },
       __sdl_create_window: function (titlePtr, x, y, w, h, flags) {
         const s = surfaceCreate(titlePtr, w, h, flags);
@@ -8295,7 +8283,7 @@ function createSurfaceSDL({ ctx, hooks }) {
       __sdl_push_mouse_motion_event: function () {},
       __sdl_push_mouse_wheel_event: function () {},
       __sdl_push_quit_event: function () {},
-      __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = Date.now(); return Date.now() - sdlTicksBase; },
+      __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = performance.now(); return performance.now() - sdlTicksBase; },
       __sdl_delay: sdlDelay,       // cooperative worker sleep (0224)
       __sdl_pump_wait: pumpWait,   // user32 blocking GetMessage (0058)
       __sdl_pump: drainInput,      // SDL_PollEvent's non-blocking pump (#485)
@@ -9008,7 +8996,6 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       __sdl_close_audio_device: function (dev) {
         if (notifyAudio) notifyAudio({ type: 'audio-close', id: dev });
       },
-      __sdl_audio_callback_unsupported: function () { sdlAudioGetCallbackUnsupported(); },
 
       // The ONE flavor where SDL_Delay genuinely can't be honoured
       // (todos/0224 scoped the old uniform throw down to here): the
@@ -9029,7 +9016,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       __wait: function () { return -2; },
       // SDL_GetTicks: ms since SDL_Init, full range (C casts to Uint64; no 32-bit
       // wrap). Lazily baseline if ticks are read before SDL_Init.
-      __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = performance.now(); return Math.floor(performance.now() - sdlTicksBase); },
+      __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = performance.now(); return performance.now() - sdlTicksBase; },
       __sdl_set_animation_frame_func: function (callbackPtr) {
         animationFrameFunc = callbackPtr;
       },

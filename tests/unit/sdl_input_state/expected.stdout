@@ -1,0 +1,7 @@
+numkeys: 512
+initial up: 0 mod: 0 buttons: 0
+held up: 1 shift: 1
+released up: 0 mod: 0
+down mask: 1 pos: 10 20
+after motion mask: 0 pos: 30 40
+global: 0 0 0 err: 1

@@ -1,0 +1,5 @@
+freq: 1000000000
+advanced: 1
+sub-ms resolution: 1
+ns not behind ms: 1
+ns monotonic: 1
