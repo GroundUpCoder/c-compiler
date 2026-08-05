@@ -1320,6 +1320,17 @@ function foldPackages(fsMod, pathMod, rootDir, manifest, which, opts) {
   // default must be installable from the BASE repo index), no duplicates.
   // The browser in-worker bake has no packages/ to check against; these
   // Node gates are where the mistake is catchable.
+  if (manifest.defaultPackages !== undefined && opts.packagesDir) {
+    // A substitute definitions dir (the throwaway-test seam above) cannot
+    // satisfy the SHIPPED default set — its names are not in `avail` by
+    // construction — and a throwaway image's boots must not try to install
+    // it either. The default set is defined against the real repo, so a
+    // packagesDir-overridden bake carries none (no defaults file baked);
+    // every non-overridden fold still validates the shipped names below.
+    // Surfaced by #420, the first real defaultPackages member.
+    manifest = Object.assign({}, manifest);
+    delete manifest.defaultPackages;
+  }
   if (manifest.defaultPackages !== undefined) {
     var dp = manifest.defaultPackages;
     if (!Array.isArray(dp) || dp.some(function (n) { return typeof n !== 'string' || !n; }))
