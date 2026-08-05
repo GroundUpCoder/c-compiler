@@ -39,8 +39,11 @@
 #include "javascript/content.h"
 
 #include "duktape/binding.h"
+#include "duktape/private.h"
 #include "duktape/generics.js.inc"
 #include "duktape/polyfill.js.inc"
+
+#include "netsurf/browser_window.h"
 
 #include "duktape.h"
 #include "dukky.h"
@@ -862,6 +865,43 @@ duk_bool_t dukky_check_timeout(void *udata)
 			now > (heap->exec_start_time + JS_EXEC_TIMEOUT_MS);
 }
 
+/* Route an uncaught exception to the browser console (todos/0424): the
+ * error object is at the top of the value stack and stays there.  The
+ * window is read the way console.c's write_log_entry reads it — the
+ * active thread's global object carries the Window private — and the
+ * entry goes out as BW_CS_SCRIPT_ERROR, so a frontend's console_log
+ * shows it the way it shows console.error.  The NSLOG sites stay: that
+ * is the developer log surface, this is the user-visible one.  FOLDABLE
+ * because the text is a stack trace (multi-line). */
+static void dukky_report_exception(duk_context *ctx)
+{
+	/* stack is ..., errobj */
+	window_private_t *priv_win;
+	duk_size_t msglen;
+	const char *msg;
+
+	duk_dup_top(ctx);
+	/* ..., errobj, errobj */
+	(void) duk_safe_to_stacktrace(ctx, -1);
+	/* ..., errobj, stackstring */
+	duk_push_global_object(ctx);
+	duk_get_prop_string(ctx, -1, PRIVATE_MAGIC);
+	priv_win = duk_get_pointer(ctx, -1);
+	duk_pop_2(ctx);
+	/* ..., errobj, stackstring */
+	msg = duk_safe_to_lstring(ctx, -1, &msglen);
+	if (priv_win == NULL || priv_win->win == NULL ||
+	    priv_win->closed_down == true ||
+	    browser_window_console_log(priv_win->win, BW_CS_SCRIPT_ERROR,
+				       msg, msglen,
+				       BW_CS_FLAG_FOLDABLE |
+				       BW_CS_FLAG_LEVEL_ERROR) != NSERROR_OK) {
+		NSLOG(dukky, DEBUG, "Unable to console-log the exception");
+	}
+	duk_pop(ctx);
+	/* ..., errobj */
+}
+
 static void dukky_dump_error(duk_context *ctx)
 {
 	/* stack is ..., errobj */
@@ -871,6 +911,7 @@ static void dukky_dump_error(duk_context *ctx)
 	/* ..., errobj, errobj.stackstring */
 	duk_pop(ctx);
 	/* ..., errobj */
+	dukky_report_exception(ctx);
 }
 
 static void dukky_reset_start_time(duk_context *ctx)
@@ -1287,6 +1328,7 @@ static void dukky_run_js_listeners(duk_context *ctx, dom_event *evt,
 			/* ... copy handler err */
 			NSLOG(dukky, DEBUG,
 			      "OH NOES! An error running a callback.  Meh.");
+			dukky_report_exception(ctx);
 			exc = dom_event_stop_immediate_propagation(evt);
 			if (exc != DOM_NO_ERR)
 				NSLOG(dukky, DEBUG,
@@ -1411,6 +1453,7 @@ static void dukky_generic_event_handler_(dom_event *evt, duk_context *ctx,
 		/* ... err */
 		NSLOG(dukky, DEBUG,
 		      "OH NOES! An error running a callback.  Meh.");
+		dukky_report_exception(ctx);
 		exc = dom_event_stop_immediate_propagation(evt);
 		if (exc != DOM_NO_ERR)
 			NSLOG(dukky, DEBUG,
@@ -1835,6 +1878,7 @@ static bool dukky_fire_window_handler(jsthread *thread, dom_string *type,
 		/* ... err */
 		NSLOG(dukky, DEBUG,
 		      "OH NOES! An error running a handler.  Meh.");
+		dukky_report_exception(CTX);
 		duk_get_prop_string(CTX, -1, "name");
 		duk_get_prop_string(CTX, -2, "message");
 		duk_get_prop_string(CTX, -3, "fileName");

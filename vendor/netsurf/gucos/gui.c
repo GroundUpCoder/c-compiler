@@ -890,13 +890,14 @@ static struct gui_window_table window_table = {
 	.place_caret = gui_window_place_caret,
 	.file_gadget_open = gui_window_file_gadget_open,
 
-	/* Only BW_CS_SCRIPT_CONSOLE ever arrives here today.  Nothing in
-	 * the tree emits BW_CS_SCRIPT_ERROR, so an uncaught exception
-	 * reaches no tty and no log: dukky reports its four error sites
-	 * itself, three at NSLOG DEBUG (compiled out at the INFO build
-	 * level) and one at WARNING (silent without `-v`).  Routing them
-	 * through this table is todos/0424 — it belongs at dukky's error
-	 * sites, in the vendored upstream tree. */
+	/* BW_CS_SCRIPT_CONSOLE (the page's console.*) and — since ticket
+	 * #177 / todos/0424 — BW_CS_SCRIPT_ERROR both arrive here: dukky's
+	 * error sites route every uncaught exception through
+	 * dukky_report_exception → browser_window_console_log, so a thrown
+	 * listener prints as `js: exception: error: ...` on the tty.  The
+	 * NSLOG surfaces kept their old visibility (three DEBUG sites
+	 * compiled out at INFO, one WARNING silent without `-v`) — the
+	 * console channel is the one a user can see. */
 	.console_log = gui_window_console_log,
 };
 
