@@ -50,6 +50,7 @@ let requireCleanOverlays = false;
 let allOverlays = false;
 let packagesWant = [];   // [] = minimal bake; 'all' | names = fold back in
 let packagesDir = null;  // --packages-dir=DIR: read definitions from DIR
+let noDefaultPackages = false;  // --no-default-packages: throwaway bake, carry no default set
 const requestedOverlays = new Set();
 for (const a of process.argv.slice(2)) {
   if (a.startsWith('--out=')) outPath = path.resolve(a.slice(6));
@@ -61,6 +62,7 @@ for (const a of process.argv.slice(2)) {
   else if (a === '--require-clean-overlays') requireCleanOverlays = true;
   else if (a === '--packages=all') packagesWant = 'all';
   else if (a.startsWith('--packages-dir=')) packagesDir = path.resolve(a.slice(15));
+  else if (a === '--no-default-packages') noDefaultPackages = true;
   else if (a.startsWith('--packages='))
     packagesWant = a.slice(11) === 'none' ? [] : a.slice(11).split(',').filter(Boolean);
   else {
@@ -76,7 +78,7 @@ const rawManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
 let manifest, foldedPackages;
 try {
   const folded = COMMON.foldPackages(fs, path, ROOT, rawManifest, packagesWant,
-    { packagesDir });
+    { packagesDir, noDefaultPackages });
   manifest = folded.manifest;
   foldedPackages = folded.names;
 } catch (e) {

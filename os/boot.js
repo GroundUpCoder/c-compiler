@@ -104,6 +104,7 @@ let requireCleanOverlays = false;
 let allOverlays = false;
 let packagesWant = 'all';   // the package set the blob must carry (see header)
 let packagesDir = null;     // --packages-dir=DIR: read definitions from DIR
+let noDefaultPackages = false;  // --no-default-packages: throwaway bake, carry no default set
 let hostPlatform = 'other'; // --host-platform: the keyboard-scheme auto-detect
                             // hint (META-ARROW-KEYBIND.md). Default 'other' =
                             // no seed = the baked windows scheme, so every
@@ -148,6 +149,7 @@ for (const a of process.argv.slice(2)) {
   else if (a.startsWith('--packages='))
     packagesWant = a.slice(11) === 'none' ? [] : a.slice(11).split(',').filter(Boolean);
   else if (a.startsWith('--packages-dir=')) packagesDir = path.resolve(a.slice(15));
+  else if (a === '--no-default-packages') noDefaultPackages = true;
   else if (a.startsWith('--host-platform=')) hostPlatform = a.slice(16);
   else if (a.startsWith('--egress-dir=')) egressDir = path.resolve(a.slice(13));
   else if (a === '--wait-lock') waitLockMs = Infinity;
@@ -192,7 +194,7 @@ const rawManifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'image.json'
 let manifest, wantPkgs;
 try {
   const folded = COMMON.foldPackages(fs, path, ROOT, rawManifest, packagesWant,
-    { packagesDir });
+    { packagesDir, noDefaultPackages });
   manifest = folded.manifest;
   wantPkgs = folded.names;
 } catch (e) {
