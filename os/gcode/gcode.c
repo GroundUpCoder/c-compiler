@@ -42,6 +42,9 @@
 #define CAP_BASH_BYTES   (24 * 1024)
 #define CAP_BASH_SECS    120
 #define CAP_LIST_ENTRIES 500
+#define CAP_SEARCH_RESULTS 200
+#define CAP_SEARCH_VISITS  20000
+#define CAP_SEARCH_DEPTH   64
 #define CAP_WHOLE_FILE   (4 * 1024 * 1024)
 #define MAX_BLOCKS       64
 
@@ -770,6 +773,171 @@ static char *tool_list_dir(cJSON *in) {
     int ec = 0; char *out = run_command(cmd.p, &ec); sb_free(&cmd);
     return out;
 }
+/* ---- search tools (#506) ----------------------------------------------
+ * Bounded, structured search so the model stops composing `find /` and
+ * `grep -r /` bash calls (the #488 Pass B session-wedging class). Two
+ * tools, one job each: `grep` matches file CONTENTS (fixed string, not a
+ * regex — the honest description matches the implementation), `glob`
+ * matches file NAMES (* and ? wildcards on the basename). Shared
+ * discipline: a REQUIRED root that must be a directory and must not be /
+ * (refused loudly — the agent has no reason to walk /usr/opt's vendored
+ * trees), a hard result cap, a visit cap so any walk terminates, and
+ * symlinks never followed (loop-proof: /usr/local -> /var/local). */
+
+/* basename wildcard match: * (any run) and ? (any one char) */
+static int name_match(const char *pat, const char *s) {
+    const char *star = NULL, *ss = NULL;
+    while (*s) {
+        if (*pat == '*') { star = pat++; ss = s; }
+        else if (*pat == '?' || *pat == *s) { pat++; s++; }
+        else if (star) { pat = star + 1; s = ++ss; }
+        else return 0;
+    }
+    while (*pat == '*') pat++;
+    return *pat == 0;
+}
+
+typedef struct {
+    const char *pattern;
+    int is_grep;
+    sb out;
+    int results, visits, truncated, visits_capped;
+} search_ctx;
+
+/* Append one result line, enforcing the result and byte caps. */
+static int search_emit(search_ctx *sc, const char *line, size_t n) {
+    if (sc->results >= CAP_SEARCH_RESULTS || sc->out.len > CAP_FILE_BYTES) {
+        sc->truncated = 1; return 0;
+    }
+    sb_add(&sc->out, line, n);
+    sb_puts(&sc->out, "\n");
+    sc->results++;
+    return 1;
+}
+
+static void grep_file(search_ctx *sc, const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    unsigned char probe[512];
+    size_t pn = fread(probe, 1, sizeof probe, f);
+    if (pn && memchr(probe, 0, pn)) { fclose(f); return; }   /* binary: skip */
+    rewind(f);
+    char line[4096]; long lineno = 0; int at_bol = 1;
+    while (fgets(line, sizeof line, f)) {
+        size_t ll = strlen(line);
+        int ends_line = ll > 0 && line[ll - 1] == '\n';
+        if (at_bol) lineno++;
+        /* a >4K line is matched only in its first chunk — a search tool's
+         * honest simplification, not a file-content contract */
+        if (at_bol && strstr(line, sc->pattern)) {
+            if (ends_line) line[--ll] = 0;
+            if (ll > 160) { line[160] = 0; ll = 160; }   /* clip long lines */
+            sb hit = {0}; char hdr[32];
+            sb_puts(&hit, path);
+            snprintf(hdr, sizeof hdr, ":%ld: ", lineno);
+            sb_puts(&hit, hdr); sb_add(&hit, line, ll);
+            int ok = search_emit(sc, hit.p, hit.len);
+            sb_free(&hit);
+            if (!ok) break;
+        }
+        at_bol = ends_line;
+    }
+    fclose(f);
+}
+
+static void search_walk(search_ctx *sc, const char *dir, int depth) {
+    if (depth > CAP_SEARCH_DEPTH) return;
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *de;
+    while ((de = readdir(d))) {
+        const char *nm = de->d_name;
+        if (!strcmp(nm, ".") || !strcmp(nm, "..")) continue;
+        if (sc->visits++ >= CAP_SEARCH_VISITS) { sc->visits_capped = 1; break; }
+        if (sc->truncated) break;
+        sb p = {0};
+        sb_puts(&p, dir);
+        if (p.len && p.p[p.len - 1] != '/') sb_puts(&p, "/");
+        sb_puts(&p, nm);
+        struct stat st;
+        /* lstat, and only S_ISDIR/S_ISREG recursed/searched: symlinks are
+         * never followed, so a link cycle cannot hang the walk */
+        if (lstat(p.p, &st) == 0) {
+            if (S_ISDIR(st.st_mode)) {
+                search_walk(sc, p.p, depth + 1);
+            } else if (S_ISREG(st.st_mode)) {
+                if (sc->is_grep) grep_file(sc, p.p);
+                else if (name_match(sc->pattern, nm)) search_emit(sc, p.p, p.len);
+            }
+        }
+        sb_free(&p);
+        if (sc->visits_capped) break;
+    }
+    closedir(d);
+}
+
+static char *tool_search(cJSON *in, int is_grep) {
+    const char *tname = is_grep ? "grep" : "glob";
+    cJSON *jp = cJSON_GetObjectItem(in, "pattern");
+    cJSON *jr = cJSON_GetObjectItem(in, "root");
+    sb e = {0};
+    if (!cJSON_IsString(jp) || !*jp->valuestring) {
+        sb_puts(&e, "error: "); sb_puts(&e, tname);
+        sb_puts(&e, " needs a non-empty string 'pattern'"); return e.p;
+    }
+    if (!cJSON_IsString(jr) || !*jr->valuestring) {
+        sb_puts(&e, "error: "); sb_puts(&e, tname);
+        sb_puts(&e, " needs a string 'root' directory"); return e.p;
+    }
+    /* normalize the root lexically: trim trailing "/" and "/." so "//" and
+     * "/." can't dodge the refusal. This guards the accidental whole-tree
+     * search, not a determined escape ("/x/.." is the model working at it,
+     * and the visit cap still bounds that walk). */
+    sb root = {0}; sb_puts(&root, jr->valuestring);
+    for (;;) {
+        if (root.len > 1 && root.p[root.len - 1] == '/') root.p[--root.len] = 0;
+        else if (root.len > 1 && root.p[root.len - 1] == '.' && root.p[root.len - 2] == '/')
+            { root.len -= 2; root.p[root.len] = 0; if (!root.len) { sb_puts(&root, "/"); } }
+        else break;
+    }
+    if (!strcmp(root.p, "/")) {
+        sb_free(&root);
+        sb_puts(&e, "error: refusing to search from / (the whole filesystem, "
+                    "including /usr's vendored trees) — pass a narrower root, "
+                    "e.g. the project directory");
+        return e.p;
+    }
+    struct stat st;
+    if (stat(root.p, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        sb_puts(&e, "error: "); sb_puts(&e, tname); sb_puts(&e, " root ");
+        sb_puts(&e, root.p); sb_puts(&e, " is not a directory");
+        sb_free(&root); return e.p;
+    }
+    search_ctx sc; memset(&sc, 0, sizeof sc);
+    sc.pattern = jp->valuestring; sc.is_grep = is_grep;
+    search_walk(&sc, root.p, 0);
+    if (sc.truncated) {
+        char m[96];
+        snprintf(m, sizeof m, "[results truncated at %d — narrow the pattern or root]",
+                 CAP_SEARCH_RESULTS);
+        sb_puts(&sc.out, m);
+    }
+    if (sc.visits_capped) {
+        char m[96];
+        snprintf(m, sizeof m, "\n[search stopped after visiting %d entries — narrow the root]",
+                 CAP_SEARCH_VISITS);
+        sb_puts(&sc.out, m);
+    }
+    if (!sc.out.p) {
+        sb_puts(&sc.out, "no matches for \""); sb_puts(&sc.out, sc.pattern);
+        sb_puts(&sc.out, "\" under "); sb_puts(&sc.out, root.p);
+    }
+    sb_free(&root);
+    return sc.out.p;
+}
+static char *tool_grep(cJSON *in) { return tool_search(in, 1); }
+static char *tool_glob(cJSON *in) { return tool_search(in, 0); }
+
 static char *tool_bash(cJSON *in) {
     cJSON *jc = cJSON_GetObjectItem(in, "command");
     if (!cJSON_IsString(jc)) return strdup("error: bash needs a string 'command'");
@@ -796,6 +964,8 @@ static char *execute_tool(const char *name, cJSON *input) {
     else if (!strcmp(name, "write_file")) raw = tool_write_file(input);
     else if (!strcmp(name, "edit_file"))  raw = tool_edit_file(input);
     else if (!strcmp(name, "list_dir"))   raw = tool_list_dir(input);
+    else if (!strcmp(name, "grep"))       raw = tool_grep(input);
+    else if (!strcmp(name, "glob"))       raw = tool_glob(input);
     else { sb r = {0}; sb_puts(&r, "error: unknown tool "); sb_puts(&r, name); raw = r.p; }
     if (!raw) return NULL;
     size_t n = strlen(raw);
@@ -865,6 +1035,18 @@ static cJSON *build_tools(void) {
     p = cJSON_CreateObject();
     cJSON_AddItemToObject(p, "path", str_prop("Directory to list (default '.')."));
     { const char *r[] = {}; cJSON_AddItemToArray(tools, make_tool("list_dir", "List a directory (ls -la).", p, r, 0)); }
+
+    p = cJSON_CreateObject();
+    cJSON_AddItemToObject(p, "pattern", str_prop("Exact text to find (a fixed string, not a regex). Case-sensitive."));
+    cJSON_AddItemToObject(p, "root", str_prop("Directory to search under, recursively. Searching from / is refused — pass a project or system subdirectory."));
+    { const char *r[] = {"pattern", "root"}; cJSON_AddItemToArray(tools, make_tool("grep",
+      "Search file CONTENTS under a directory for a fixed string. Returns path:line: matches (capped); skips binary files; never follows symlinks. Prefer this over a bash grep -r.", p, r, 2)); }
+
+    p = cJSON_CreateObject();
+    cJSON_AddItemToObject(p, "pattern", str_prop("File name pattern with * and ? wildcards, matched against each file's basename (e.g. '*.c')."));
+    cJSON_AddItemToObject(p, "root", str_prop("Directory to search under, recursively. Searching from / is refused — pass a project or system subdirectory."));
+    { const char *r[] = {"pattern", "root"}; cJSON_AddItemToArray(tools, make_tool("glob",
+      "Find files by NAME under a directory. Returns matching paths (capped); never follows symlinks. Prefer this over a bash find.", p, r, 2)); }
 
     return tools;
 }
