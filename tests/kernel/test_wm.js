@@ -886,6 +886,35 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
     JSON.stringify(logLines));
   await rpc(1, K.OP.WAIT, { pid: -1, options: 1 });
 
+  // ---- the grace BOUNDARY, green side (#489) ----
+  // A SLOW consumer — one that first drains mid-grace, after several poll
+  // ticks, not instantly like the polite leg — must survive: this is the
+  // false-positive regression shape (a poll misjudging a near-deadline drain
+  // would kill a responding app). The red side (never drains -> killed at
+  // the deadline) is the wedged leg above; the watchdog's only observable is
+  // ring-rpos advance, so a >grace starvation is BY DESIGN indistinguishable
+  // from a wedge — that acceptance is written at WM_HUNG_GRACE_MS in
+  // kernel.js, and this leg pins the side of the boundary that IS testable.
+  const r6 = await rpc(1, K.OP.SPAWN, { path: '/bin/app', argv: ['app'], envp: [], actions: [], flags: 0 });
+  const fbS = makeFb(48, 32);
+  const ringS = makeRing(64);
+  workers.get(r6.pid).msg({ type: 'wm-sabs', fb: fbS.sab, ring: ringS.sab });
+  const cS = await rpc(r6.pid, K.OP.SURFACE_CREATE, { w: 48, h: 32, title: 'slowpoke' });
+  const logsSlow = logLines.length;
+  check('slow consumer: close request delivers', kernel.wmCloseRequest(cS.sid) === 0);
+  await sleep(150);                          // half the grace, ~2 poll ticks, undrained
+  check('slow consumer: still running mid-grace (watchdog is patient)',
+    kernel.process(r6.pid).state === 'running');
+  evs = drain(ringS);                        // the late drain, still inside grace
+  check('slow consumer: the QUIT was waiting in the ring',
+    evs.some((e) => e.type === K.WMEV.QUIT), JSON.stringify(evs));
+  await sleep(400);                          // well past the 300ms deadline
+  check('slow consumer: mid-grace drain disarms — never force-quit',
+    kernel.process(r6.pid).state === 'running' && logLines.length === logsSlow,
+    JSON.stringify([kernel.process(r6.pid).state, logLines.slice(logsSlow)]));
+  await rpc(1, K.OP.KILL, { pid: r6.pid, sig: 9 });   // cleanup
+  await rpc(1, K.OP.WAIT, { pid: -1, options: 1 });
+
   console.log(failures ? `\ntest_wm: ${failures} FAILED` : '\ntest_wm: all passed');
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.error('FATAL', e); process.exit(1); });

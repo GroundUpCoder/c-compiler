@@ -1155,6 +1155,27 @@ var WM_CLOSE_W = 20, WM_CLOSE_PAD = 4;       // close box, right-aligned in the 
 var WM_HUNG_GRACE_MS = 5000;                 // #486: close request unconsumed this
                                              // long -> owner force-quit (the
                                              // Windows HungAppTimeout analog)
+// The 5 s value is ACCEPTED PARTIALLY VALIDATED (#489, 2026-08-06). What was
+// measured: seven close-issuing kernel e2es spanning every app family behind
+// the watchdog (term/pty, the win32 veneer x3, NetSurf, wm.c) ran under the
+// load harness at #486 (--under-load, term_e2e inflated to 266 s) and pumped
+// their QUITs well inside the grace — no false fire (~29 files issue closes;
+// the coverage is by family, not by file); and test_wm.js pins BOTH sides of
+// the boundary
+// deterministically (a wedged ring force-quits at the deadline; a SLOW
+// consumer that first drains mid-grace, after several poll ticks, survives).
+// What CANNOT be validated here: a real >5 s worker starvation. The estate's
+// load harness busy-loops cores, but the OS still timeslices them, so a
+// worker provably descheduled past the grace is unproducible by construction
+// — and the watchdog's ONLY observable is ring-rpos advance, so a starved-
+// but-healthy app and a wedged one are indistinguishable BY DESIGN (the
+// Windows rule: pumping = responding; a >5 s in-worker block — long GC, a
+// 6 s pure-compute stretch, sleep(6) — force-quits on close, accepted). A
+// real-world fire is observable, not silent: _wmForceQuit logs the titled
+// reason through _log (boot.js stderr / browser boot console). 🔴 If a false
+// force-quit ever fires in CI, that is a REAL FINDING (#489): diagnose the
+// starvation — do NOT raise this grace, add a retry, or widen a timeout to
+// go green.
 var WM_HUNG_POLL_MS = 250;                   // #486: consumption poll cadence
 var WM_BOX_GAP = 2;                          // between the [min][max][close] boxes
                                              // (todos/0030; same 20px metrics)

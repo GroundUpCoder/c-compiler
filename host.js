@@ -888,8 +888,11 @@ function createFileSystem({ fs, ctx }) {
         return 0;
       }),
       __nanosleep: new WebAssembly.Suspending(async function (sec, nsec) {
+        // No floor (#146): POSIX nanosleep with a zero request returns
+        // immediately, and the block-FS/kernel-park flavors agree. A 0 ms
+        // timer still yields the macrotask queue, same as usleep(0) above.
         const ms = sec * 1000 + nsec / 1e6;
-        await new Promise(resolve => setTimeout(resolve, Math.max(1, ms)));
+        await new Promise(resolve => setTimeout(resolve, ms));
         return 0;
       }),
       __select_impl: new WebAssembly.Suspending(async function (nfds, readfds_ptr, writefds_ptr, exceptfds_ptr, timeout_sec, timeout_usec, has_timeout) {

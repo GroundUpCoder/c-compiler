@@ -27,13 +27,12 @@
 // identity` trick from test_pipe_read_block.js, so the async bodies are
 // callable directly.
 //
-// KNOWN GAP, funded by todos/0365 (register L55): the two backends disagree
-// about a ZERO-length nanosleep. The block-FS path treats it as a no-op; the
-// native-fs path floors it at 1 ms (`Math.max(1, ms)`), so nanosleep(0,0)
-// really does sleep a millisecond there, and POSIX says a zero request returns
-// immediately. This test deliberately asserts NEITHER answer for that input —
-// pinning the floor would bless it as correct — and covers the non-zero
-// durations on both. usleep(0) has no such divergence and IS asserted below.
+// The zero-length nanosleep gap this test used to decline to pin (todos/0365,
+// ticket #146) is CLOSED: the native-fs path's `Math.max(1, ms)` floor is
+// gone, so nanosleep(0,0) requests 0 ms on both backends — POSIX ("a zero
+// request shall return immediately"), matching usleep(0) — and is asserted
+// below on both. The kernel-client park flavor needed no change: park(0)
+// computes a non-positive deadline and returns 'timeout' at once.
 //
 // Run: node tests/host/test_sleep_clamp.js
 
@@ -125,6 +124,16 @@ console.log('block-FS flavor (Atomics.wait):');
   check('nanosleep(0, 50ms) parks once', nano.length === 1, JSON.stringify(nano));
   eq('nanosleep(0, 50ms) requests 50 ms', nano[0], 50);
 
+  // #146: a zero request is a no-op (POSIX "shall return immediately").
+  const nanoZero = measureBlock(() => { for (let i = 0; i < 20; i++) env.__nanosleep(0, 0); });
+  check('nanosleep(0,0) x20 never parks (#146)', nanoZero.length === 0,
+        JSON.stringify(nanoZero));
+  eq('nanosleep(0,0) returns 0', env.__nanosleep(0, 0), 0);
+
+  // ...and a sub-millisecond request is passed through, not floored.
+  const nanoSub = measureBlock(() => env.__nanosleep(0, 500000));
+  eq('nanosleep(0.5ms) requests 0.5 ms (not floored to 1)', nanoSub[0], 0.5);
+
   const nanoSec = measureBlock(() => env.__nanosleep(2, 250000000));
   eq('nanosleep(2s, 250ms) requests 2250 ms', nanoSec[0], 2250);
 
@@ -185,6 +194,21 @@ async function measureNative(fn) {
   const nano = await measureNative(() => env.__nanosleep(0, 50000000));
   check('nanosleep(0, 50ms) schedules once', nano.length === 1, JSON.stringify(nano));
   eq('nanosleep(0, 50ms) requests 50 ms', nano[0], 50);
+
+  // #146: the `Math.max(1, ms)` floor is gone — a zero request asks for 0 ms
+  // (POSIX), agreeing with the block-FS no-op and with usleep(0) above. This
+  // is the can-fail control for the fix: on the pre-#146 host.js every entry
+  // here reads 1.
+  const nanoZero = await measureNative(async () => {
+    for (let i = 0; i < 20; i++) await env.__nanosleep(0, 0);
+  });
+  check('nanosleep(0,0) x20 schedules 20 timers', nanoZero.length === 20,
+        JSON.stringify(nanoZero));
+  check('nanosleep(0,0) requests 0 ms every time (no 1 ms floor, #146)',
+        nanoZero.every(ms => ms === 0), JSON.stringify(nanoZero));
+
+  const nanoSub = await measureNative(() => env.__nanosleep(0, 500000));
+  eq('nanosleep(0.5ms) requests 0.5 ms (not floored to 1)', nanoSub[0], 0.5);
 
   const nanoSec = await measureNative(() => env.__nanosleep(2, 250000000));
   eq('nanosleep(2s, 250ms) requests 2250 ms', nanoSec[0], 2250);
