@@ -91,6 +91,7 @@ async function main() {
   const headSha = hostGit(fx.repo, ['rev-parse', 'HEAD']);
   const parentSha = hostGit(fx.repo, ['rev-parse', 'HEAD^']);
   const treeSha = hostGit(fx.repo, ['rev-parse', 'HEAD^{tree}']);
+  const headRef = hostGit(fx.repo, ['symbolic-ref', 'HEAD']);   // refs/heads/main
   const statusGolden = fs.readFileSync(
     path.join(ROOT, 'tests', 'fakegit', 'status', 'expected.txt'), 'utf-8');
 
@@ -161,6 +162,31 @@ async function main() {
     'echo ==cattree',
     `git -C /root/repo cat-file -p ${treeSha}`,
     'echo ==cattree-end',
+
+    // LINKED-WORKTREE discovery (#480): `.git` as a regular FILE containing a
+    // `gitdir:` pointer, the layout `git worktree add` produces. The shipped
+    // git is read-only, so the worktree is constructed by hand with exactly
+    // the files libgit2's is_valid_repository_path demands (HEAD + commondir
+    // in the private dir; objects/ + refs/ reached through commondir), plus
+    // the gitdir back-pointer real git writes. commondir holds the canonical
+    // relative `../..` — libgit2 normalises that join in its own path math,
+    // so kfs's lexical `..` collapse is never in the loop (and would agree
+    // anyway: no symlinks are involved). HEAD is the `ref:` form, so
+    // resolving it exercises the commondir hop for refs, and HEAD^ inflates
+    // the commit object out of the COMMON object store.
+    'echo ==worktree',
+    'mkdir -p /root/wt/a/b',
+    'echo "gitdir: /root/repo/.git/worktrees/wt" > /root/wt/.git',
+    'mkdir -p /root/repo/.git/worktrees/wt',
+    'echo "../.." > /root/repo/.git/worktrees/wt/commondir',
+    `echo "ref: ${headRef}" > /root/repo/.git/worktrees/wt/HEAD`,
+    'echo "/root/wt/.git" > /root/repo/.git/worktrees/wt/gitdir',
+    'test -f /root/wt/.git && test ! -d /root/wt/.git && echo GITFILE-IS-FILE',
+    'cd /root/wt/a/b',
+    'git rev-parse HEAD; echo RC=$?',
+    'git rev-parse HEAD^',
+    'git log -n 1',
+    'echo ==worktree-end',
 
     // Outside any repo: git's exact fatal, and a non-zero status. `cd /`,
     // not /tmp: a cd that FAILS leaves the cwd inside the repo and turns
@@ -258,6 +284,16 @@ async function main() {
   check('cat-file -p <HEAD tree> matches host git line-for-line',
     cattree.length === hostTree.length && cattree.every((l, k) => l === hostTree[k]),
     JSON.stringify(cattree) + ' vs ' + JSON.stringify(hostTree));
+
+  const wt = section(out, 'worktree');
+  check('linked-worktree fixture: .git is a regular file, not a directory',
+    has(wt, 'GITFILE-IS-FILE'), wt);
+  check('LINKED-WORKTREE DISCOVERY two levels down: the gitdir: file resolves HEAD to the host id',
+    has(wt, headSha) && has(wt, 'RC=0'), wt);
+  check('linked worktree reads refs and objects through commondir: HEAD^ matches host git',
+    has(wt, parentSha), wt);
+  check('linked worktree log inflates the commit from the common object store',
+    wt.includes('commit ' + headSha) && wt.includes('c5: final README touch'), wt);
 
   const norepo = section(out, 'norepo');
   check('outside a repository git exits non-zero', has(norepo, 'RC=1'), norepo);
