@@ -97,13 +97,16 @@ from the manifest (the 0166 rule doing its job).
 Round 1 went red in exactly five kernel files, every one a path #419 had
 never walked with a non-empty set:
 
-1. **A real mechanism seam gap** (fixed in os-common.js): foldPackages
-   validated `defaultPackages` against the OVERRIDDEN `packagesDir`, so the
-   sanctioned throwaway-definitions seam (mkimage/boot.js `--packages-dir`,
-   driven by test_seed_e2e) threw `unknown package 'doom'` before baking. A
-   packagesDir-overridden bake now drops the shipped set (it is defined
-   against the real repo; a synthetic-repo boot must not try to install it),
-   while every non-overridden fold still validates — the typo-catch stands.
+1. **A real mechanism seam gap** (fixed in os-common.js + mkimage +
+   boot.js): foldPackages validates `defaultPackages` against the OVERRIDDEN
+   `packagesDir`, so the sanctioned throwaway-definitions seam
+   (mkimage/boot.js `--packages-dir`, driven by test_seed_e2e) threw
+   `unknown package 'doom'` before baking. Round 2 taught the fix its final
+   shape: an implicit skip-when-overridden silenced #419's own red controls
+   (test_default_packages exercises the validation THROUGH the packagesDir
+   seam), so the opt-out is an EXPLICIT flag — `--no-default-packages` /
+   `opts.noDefaultPackages` — declared by the throwaway bake; every other
+   fold, packagesDir-overridden or not, validates exactly as #419 shipped.
 2. **Surprise installs**: ensurePackages builds the FULL base set, so any
    test that declares `/etc/gucman/repos` and reboots got doom genuinely
    auto-installed under its asserts (test_gucman_e2e). Fixed with the
