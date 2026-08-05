@@ -67,6 +67,13 @@ function startServer(scripts) {
       bodies.push(JSON.parse(buf.toString('utf8')));
       const body = scripts.shift();
       if (body === undefined) { res.writeHead(500); res.end('no script'); return; }
+      if (typeof body === 'object' && body.delay) {   // #507: slow first byte
+        setTimeout(() => {
+          res.writeHead(200, { 'content-type': 'text/event-stream' });
+          res.end(body.sse);
+        }, body.delay);
+        return;
+      }
       if (typeof body === 'object') {
         res.writeHead(body.status, { 'content-type': 'application/json' });
         res.end(body.body);
@@ -986,6 +993,91 @@ async function main() {
     check(line.includes('spam'), '#510: pre-^C output was preserved (spam present)');
     fs.rmSync(stateDir, { recursive: true, force: true });
     fs.rmSync(marker, { force: true });
+  }
+
+  // ---- #506: bounded search tools (grep + glob) ------------------------
+  // A scripted four-round turn: a content grep, a name glob, a grep rooted
+  // at / (must be REFUSED, not walked), and a grep that floods the result
+  // cap. The fixture tree carries a symlink loop — a walker that follows
+  // symlinks hangs here and the 15s exec timeout turns that into a FAIL.
+  {
+    const tree = fs.mkdtempSync(path.join(os.tmpdir(), 'gcode-506-'));
+    fs.mkdirSync(path.join(tree, 'sub', 'deep'), { recursive: true });
+    fs.writeFileSync(path.join(tree, 'sub', 'needle.c'), '// filler\nint MAGIC_NEEDLE_506 = 1;\n');
+    fs.writeFileSync(path.join(tree, 'sub', 'deep', 'other.h'), 'no match here\n');
+    fs.writeFileSync(path.join(tree, 'noise.txt'), 'MAGIC_NEEDLE_506 in a txt\n');
+    fs.symlinkSync(tree, path.join(tree, 'sub', 'loop'));
+    fs.writeFileSync(path.join(tree, 'flood.txt'), Array(300).fill('CAP_TRIP_506 line').join('\n') + '\n');
+
+    const srv = await startServer([
+      toolUseResponse('searching', 'toolu_506g', 'grep', { pattern: 'MAGIC_NEEDLE_506', root: tree }),
+      toolUseResponse('globbing', 'toolu_506n', 'glob', { pattern: '*.c', root: tree }),
+      toolUseResponse('refusing', 'toolu_506r', 'grep', { pattern: 'x', root: '/' }),
+      toolUseResponse('flooding', 'toolu_506c', 'grep', { pattern: 'CAP_TRIP_506', root: tree }),
+      textResponse('search done'),
+    ]);
+    await runCodeBoth(srv.url, ['-p', 'search', '--no-color', '--no-persist']);
+    srv.close();
+    check(!!srv.bodies[0] && Array.isArray(srv.bodies[0].tools)
+      && ['grep', 'glob'].every((n) => srv.bodies[0].tools.some((t) => t.name === n)),
+      '#506: grep and glob tools are advertised in the tool list');
+    const trOf = (i, id) => ((srv.bodies[i] && srv.bodies[i].messages[srv.bodies[i].messages.length - 1].content) || [])
+      .find((b) => b.type === 'tool_result' && b.tool_use_id === id);
+    const g = trOf(1, 'toolu_506g');
+    check(!!g && g.content.includes('needle.c:2:') && g.content.includes('MAGIC_NEEDLE_506'),
+      '#506: grep returns path:line: matches for a fixed string');
+    check(!!g && g.content.includes('noise.txt'),
+      '#506: grep walked the whole tree (found the second match, not just the first)');
+    const nm = trOf(2, 'toolu_506n');
+    check(!!nm && nm.content.includes('needle.c') && !nm.content.includes('other.h'),
+      '#506: glob matches file names by wildcard pattern');
+    const rf = trOf(3, 'toolu_506r');
+    check(!!rf && rf.content.startsWith('error:') && rf.content.includes('refus'),
+      '#506: a search rooted at / is REFUSED, not walked');
+    const cp = trOf(4, 'toolu_506c');
+    check(!!cp && cp.content.includes('truncated'),
+      '#506: grep results are hard-capped with a visible truncation marker');
+    fs.rmSync(tree, { recursive: true, force: true });
+  }
+
+  // ---- #507: progress signal during a long tool call --------------------
+  // The heartbeat is tty-gated with GCODE_PROGRESS as the forced test seam
+  // (the GCODE_BASH_SECS precedent): =1 forces it on down a pipe (plain
+  // newline lines, no \r games), unset on a pipe means silent — that is the
+  // non-tty degradation the harness itself relies on. The Result-line
+  // duration is unconditional (a one-shot line, honest in logs).
+  {
+    const srv = await startServer([
+      toolUseResponse('sleeping', 'toolu_507a', 'bash', { command: 'sleep 3' }),
+      textResponse('slept ok'),
+    ]);
+    const forced = await runCodeBoth(srv.url, ['-p', 'nap', '--no-color', '--no-persist'],
+      { GCODE_PROGRESS: '1' });
+    srv.close();
+    check(/running [0-9]+s/.test(forced.stderr),
+      '#507: a long tool call renders a live elapsed heartbeat (GCODE_PROGRESS=1)');
+    check(/Result \([0-9]+s\)/.test(forced.stderr),
+      '#507: the Result line names the tool call duration');
+
+    const srv2 = await startServer([
+      toolUseResponse('sleeping', 'toolu_507b', 'bash', { command: 'sleep 3' }),
+      textResponse('slept ok'),
+    ]);
+    const piped = await runCodeBoth(srv2.url, ['-p', 'nap', '--no-color', '--no-persist']);
+    srv2.close();
+    check(!/running [0-9]+s/.test(piped.stderr),
+      '#507: piped (non-tty) stderr stays heartbeat-free by default');
+    check(/Result \([0-9]+s\)/.test(piped.stderr),
+      '#507: the duration still lands on the Result line without a tty');
+
+    const srv3 = await startServer([{ delay: 3200, sse: textResponse('slow hello') }]);
+    const waiting = await runCodeBoth(srv3.url, ['-p', 'hi', '--no-color', '--no-persist'],
+      { GCODE_PROGRESS: '1' });
+    srv3.close();
+    check(/waiting for model [0-9]+s/.test(waiting.stderr),
+      '#507: a slow first byte renders a waiting-for-model heartbeat');
+    check(waiting.stdout.includes('slow hello'),
+      '#507 negative control: the delayed turn still completes normally');
   }
 
   console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILURE(S)`);
