@@ -30,6 +30,12 @@
 //   9. a member with no per-file log is executed: there is no evidence of that
 //      pass in this artifact dir, whatever the status field says
 //
+// And the RED-LOG PRESERVATION contract (ticket #456), same fixture:
+//  10. a re-run over a recorded failure moves the failing log aside under a
+//      monotonic .redN suffix instead of truncating it — the solo re-run that
+//      diagnoses a red must not be the thing that destroys its evidence;
+//      green logs are overwritten freely
+//
 //   node tests/host/test_suite_record.js
 const assert = require('assert');
 const fs = require('fs');
@@ -209,6 +215,50 @@ function run(extra) {
     const executedNow = noLog.results.filter(r => !r.carried && !r.resumed).map(r => r.file);
     assert.deepStrictEqual(executedNow, ['t3.js']);
     assert.strictEqual(noLog.files.resumed, 3);
+  });
+
+  // ---- 10: a re-run must not destroy failure evidence (ticket #456) ----
+  //
+  // The original #456 red survived only in a dispatcher probe log: the solo
+  // re-run that anyone reaches for to diagnose a red truncates the failing
+  // log into a PASS. Pinned: the failing log is moved aside under .redN
+  // before the re-run opens it, greens are overwritten freely, and the
+  // counter is monotonic across repeated red→green cycles.
+  fs.writeFileSync(srcPath('t2.js'), 'console.error("RED-EVIDENCE-42"); process.exit(1);\n');
+  await run({});
+  const redRun = readSummary();
+  check('the fixture red is a real red', () => {
+    assert.strictEqual(redRun.results.find(r => r.file === 't2.js').status, 'fail');
+    assert.ok(fs.readFileSync(logPath('t2.js'), 'utf-8').includes('RED-EVIDENCE-42'));
+  });
+
+  fs.writeFileSync(srcPath('t2.js'), 'process.exit(0); // fixed\n');
+  await run({});
+  check('the diagnosing re-run preserves the red log under .red1', () => {
+    const red1 = logPath('t2.js').replace(/\.log$/, '.red1.log');
+    assert.ok(fs.existsSync(red1), 'the failing log must survive the re-run');
+    assert.ok(fs.readFileSync(red1, 'utf-8').includes('RED-EVIDENCE-42'),
+      'the archived log must be the red evidence, not a copy of the new pass');
+    assert.ok(!fs.readFileSync(logPath('t2.js'), 'utf-8').includes('RED-EVIDENCE-42'),
+      'the live log must be the fresh run');
+  });
+  check('a passing member\'s log is overwritten freely (no archive)', () => {
+    assert.ok(!fs.existsSync(logPath('t1.js').replace(/\.log$/, '.red1.log')));
+  });
+
+  // A second red→green cycle: the red overwrites the GREEN log freely (no
+  // archive of a pass), and the next green archives to .red2, not over .red1.
+  fs.writeFileSync(srcPath('t2.js'), 'console.error("RED-EVIDENCE-43"); process.exit(1);\n');
+  await run({});
+  fs.writeFileSync(srcPath('t2.js'), 'process.exit(0); // fixed again\n');
+  await run({});
+  check('a second cycle archives to .red2 and leaves .red1 intact', () => {
+    const red1 = logPath('t2.js').replace(/\.log$/, '.red1.log');
+    const red2 = logPath('t2.js').replace(/\.log$/, '.red2.log');
+    assert.ok(fs.existsSync(red2), 'the second red must be preserved too');
+    assert.ok(fs.readFileSync(red2, 'utf-8').includes('RED-EVIDENCE-43'));
+    assert.ok(fs.readFileSync(red1, 'utf-8').includes('RED-EVIDENCE-42'),
+      'the first archive must not be clobbered by the second');
   });
 
   fs.rmSync(root, { recursive: true, force: true });

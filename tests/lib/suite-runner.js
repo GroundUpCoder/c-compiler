@@ -470,6 +470,26 @@ async function runSuite(entries, opts) {
   function runOne(entry) {
     return new Promise((resolve) => {
       const logPath = path.join(opts.artifactDir, (entry.logName || entry.file).replace(/[\/\\]/g, '_') + '.log');
+      // A re-run must not destroy failure evidence (ticket #456): when the
+      // previous invocation recorded a non-pass for this file, its log is the
+      // only artifact of that red, and the solo re-run used to DIAGNOSE it
+      // would otherwise truncate it into a PASS — the original #456 red
+      // survived nowhere but a dispatcher probe log. Move it aside under a
+      // .redN suffix before opening. Green logs are overwritten freely, so
+      // the archive only grows while a file is actually failing; summary.json
+      // stays the authoritative count (the header comment's *.log rule).
+      const prior = prevByFile.get(entry.file);
+      if (prior && prior.status !== 'pass' && fs.existsSync(logPath)) {
+        let n = 1, redPath;
+        do { redPath = logPath.replace(/\.log$/, `.red${n}.log`); n++; }
+        while (fs.existsSync(redPath));
+        try {
+          fs.renameSync(logPath, redPath);
+          process.stdout.write(`red log preserved → ${path.relative(process.cwd(), redPath)}\n`);
+        } catch (e) {
+          process.stdout.write(`warning: could not preserve red log ${logPath}: ${e.message}\n`);
+        }
+      }
       const out = fs.createWriteStream(logPath);
       const t = Date.now();
       // `-r parent-watch.js` makes the child die with US. `detached: true` gives
