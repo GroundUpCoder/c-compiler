@@ -23,6 +23,7 @@
   "compilerArgs": [
     "-DPy_BUILD_CORE",
     "-DPy_BUILD_CORE=1",
+    "-D__USE_SYSTEM_ENDIAN_H__",
     "-DPREFIX=\"/usr/local\"",
     "-DEXEC_PREFIX=\"/usr/local\"",
     "-DVERSION=\"3.13\"",

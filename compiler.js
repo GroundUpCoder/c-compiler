@@ -132,6 +132,7 @@ const Keyword = Object.freeze({
   X_MEMORY_GROW: "__memory_grow",
   X_BUILTIN: "__builtin",
   X_ATTRIBUTE: "__attribute__",
+  X_EXTENSION: "__extension__",
   X_REQUIRE_SOURCE: "__require_source",
   X_EXPORT: "__export",
   X_MINSTACK: "__minstack",
@@ -990,6 +991,7 @@ const KEYWORD_MAP = new Map([
   ["__gcstr", Keyword.X_GCSTR],
   ["__attribute__", Keyword.X_ATTRIBUTE],
   ["__attribute", Keyword.X_ATTRIBUTE],
+  ["__extension__", Keyword.X_EXTENSION],
 ]);
 
 // ====================
@@ -10867,6 +10869,10 @@ class Parser {
       // Parse members
       while (!this.atEnd() && !this.atText("}")) {
         if (this.matchText(";")) continue;
+        // GNU __extension__ before a member declaration (CPython's
+        // object.h wraps its anonymous-union member with it on pre-C11
+        // GNU compilers): semantic no-op.
+        while (this.matchKW(Lexer.Keyword.X_EXTENSION)) {}
         // C11 6.7.2.1p1: _Static_assert is allowed as a struct-declaration
         if (this.matchKW(Lexer.Keyword.STATIC_ASSERT)) {
           this.expect("(");
@@ -12335,6 +12341,15 @@ class Parser {
   }
 
   parseCastExpression() {
+    // GNU __extension__ in expression position: a semantic no-op whose only
+    // job in GCC/clang is to suppress -pedantic diagnostics on the operand
+    // that follows. Clang consumes it at cast-expression level, so
+    // `__extension__ x + y` parses as `(__extension__ x) + y` and
+    // `__extension__ (T){...}` covers the compound-literal shape.
+    if (this.atKW(Lexer.Keyword.X_EXTENSION)) {
+      while (this.matchKW(Lexer.Keyword.X_EXTENSION)) {}
+      return this.parseCastExpression();
+    }
     if (this.atText("(")) {
       // Look ahead: is this a cast or a parenthesized expression?
       const startTok = this.peek();
@@ -12993,6 +13008,13 @@ class Parser {
       return new AST.SCompound(loc, []);
     }
 
+    // GNU __extension__ before a block-scope declaration or an expression
+    // statement: semantic no-op. Consumed here, AFTER every statement
+    // keyword has been dispatched, so `__extension__ if (...)` stays
+    // rejected exactly as in GCC/clang (it is only legal before a
+    // declaration or an expression).
+    while (this.matchKW(Lexer.Keyword.X_EXTENSION)) {}
+
     // Declaration statement
     if (this.isTypeName()) {
       return this.parseDeclarationStatement();
@@ -13274,6 +13296,9 @@ class Parser {
 
   parseExternalDeclaration(unit) {
     const loc = Lexer.Loc.fromTok(this.peek());
+    // GNU __extension__ before an external declaration
+    // (`__extension__ typedef struct {...} x;`): semantic no-op.
+    while (this.matchKW(Lexer.Keyword.X_EXTENSION)) {}
     // Empty declaration: a bare `;` at file scope. C2x makes this
     // standard; GCC and clang accept it in C99/C11 as an extension. We
     // accept it silently so projects that use `MACRO;` where MACRO
