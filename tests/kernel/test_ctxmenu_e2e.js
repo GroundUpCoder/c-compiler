@@ -525,9 +525,9 @@ check('CLOSE request-closes the window (button 0 winbox gone)',
     const lx = c.x + Math.floor((116 - len * 12) / 2);
     return d(lx - 1, c.y + 42 + 3);
   };
-  check('right-click selected the icon alone (alauncher navy, doom teal)',
-    strip('alauncher') === '0,0,128' && strip('doom') === '0,128,128',
-    [strip('alauncher'), strip('doom')].join(' | '));
+  check('right-click selected the icon alone (alauncher navy, calc teal)',
+    strip('alauncher') === '0,0,128' && strip('calc') === '0,128,128',
+    [strip('alauncher'), strip('calc')].join(' | '));
   // d1.ppm: zzz.txt's icon tile is up right after REFRESH (white tile
   // histogram in its cell; the coarse tick alone would allow ~1s).
   const d1 = readPpm('d1.ppm', 1024);

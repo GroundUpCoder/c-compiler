@@ -637,7 +637,7 @@ async function boot() {
         return r.text();
       });
     },
-    // bin entries (game data: doom1.wad, ROMs) are repo-relative binaries;
+    // bin entries (game data: gameboy ROMs) are repo-relative binaries;
     // seedEntries' chain awaits the promise.
     readBinary: function (p) {
       return fetch('../' + p).then(function (r) {

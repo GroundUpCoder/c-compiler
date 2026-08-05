@@ -70,6 +70,19 @@ check('positive control: a known ungated default passes the fold', () => {
   assert.ok(r && r.manifest, 'foldPackages returned nothing');
 });
 
+check('the EXPLICIT opt-out strips the set instead of validating (#420)', () => {
+  // mkimage/boot.js --no-default-packages: a throwaway bake against a
+  // substitute defs dir declares that the shipped set is out of scope — the
+  // fold succeeds even with a name this pkgDir cannot satisfy, and the
+  // folded manifest carries NO set (so bakeSystemImage bakes no defaults
+  // file and the throwaway image's boots never attempt an install).
+  const r = COMMON.foldPackages(fs, path, ROOT, manifest(['ghost-419']), [],
+    { packagesDir: pkgDir, noDefaultPackages: true });
+  assert.ok(r && r.manifest, 'foldPackages returned nothing');
+  assert.strictEqual(r.manifest.defaultPackages, undefined,
+    'opt-out left defaultPackages on the folded manifest');
+});
+
 check('RED: a duplicate default name fails the fold, named', () => {
   let threw = null;
   try { fold(manifest(['realpkg', 'realpkg'])); } catch (e) { threw = e; }

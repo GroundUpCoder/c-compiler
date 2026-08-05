@@ -55,6 +55,8 @@ async function main() {
   const BOOT_ARGS = { image, args: ['--packages=none'], timeout: 600000 };
 
   const a = driveBoot([
+    'mkdir -p /etc/gucman',
+    'printf "# opt out of the shipped default set (#420: doom) — this test\\n# owns its package state; /etc overrides the baked file wholesale\\n" > /etc/gucman/defaults',   // keep session B's cat-a-ppm stdout byte-clean
     'echo ==baked',
     'test -f /usr/share/fonts/symbols2.ttf && echo SYM-TTF-OK',
     'test -f /usr/share/fonts/symbols.ttf && echo SYM1-TTF-OK',

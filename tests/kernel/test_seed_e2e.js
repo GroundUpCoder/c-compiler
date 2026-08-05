@@ -119,7 +119,9 @@ function refuses(label, def, re) {
  * gate shape): version-current, PACKAGES == [PKG], input-fresh. */
 function ensureSeedImage() {
   const raw = JSON.parse(fs.readFileSync(path.join(ROOT, 'os', 'image.json'), 'utf-8'));
-  const folded = COMMON.foldPackages(fs, path, ROOT, raw, [PKG], { packagesDir: DEFS }).manifest;
+  // noDefaultPackages: the shipped default set (#420: doom) is not
+  // installable from this throwaway defs dir — same flag as the bakes below.
+  const folded = COMMON.foldPackages(fs, path, ROOT, raw, [PKG], { packagesDir: DEFS, noDefaultPackages: true }).manifest;
   let fresh = false;
   try {
     const st = fs.statSync(SEED_IMG);
@@ -135,7 +137,7 @@ function ensureSeedImage() {
     console.log('[seed] baking the seed-carrying system blob…');
     const r = cp.spawnSync(process.execPath,
       [path.join(ROOT, 'tools', 'mkimage.js'), `--out=${SEED_IMG}`, '--quiet',
-       `--packages-dir=${DEFS}`, `--packages=${PKG}`],
+       `--packages-dir=${DEFS}`, `--packages=${PKG}`, '--no-default-packages'],
       { stdio: ['ignore', 'inherit', 'inherit'], timeout: 900000 });
     if (r.status !== 0) throw new Error('mkimage (seed) failed');
   }
@@ -345,7 +347,7 @@ async function main() {
     'echo "NOTE2=$(cat /root/notes.txt)-END"',
     'test ! -e /var/lib/gucman && echo STILL-NO-DB-DIR',
     'echo ==done',
-  ], { image: bakedImg, args: [`--packages=${PKG}`, `--packages-dir=${DEFS}`], timeout: 420000 });
+  ], { image: bakedImg, args: [`--packages=${PKG}`, `--packages-dir=${DEFS}`, '--no-default-packages'], timeout: 420000 });
   const dout = String(d.stdout || '') + '\n' + String(d.stderr || '');
 
   const baked = section(dout, 'baked');

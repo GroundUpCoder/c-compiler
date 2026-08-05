@@ -62,7 +62,7 @@ const TOTAL = DEF_FILES.length + DEF_DIRS.length + BAKED_SEED_NODES;
 // edit renames one, fail loud here rather than mysteriously.
 const SAMPLE =
   '/root/Desktop/Presentations/samples/minesweeper-programming-rainbow.sh';
-for (const p of ['/root/Desktop/doom', SAMPLE,
+for (const p of ['/root/Desktop/term', SAMPLE,
                  '/root/Desktop/Presentations/gucOS/gucos.deck']) {
   if (!u.files[p]) throw new Error('manifest no longer seeds ' + p +
     ' — pick another fixture for this test');
@@ -72,13 +72,13 @@ const { dir: tmp, image } = freshImage('os-deskdef-');
 
 const script = [
   // ---- the baked default rendering is in the sealed blob ----
-  'echo "==tree L$(readlink /usr/share/desktop/default/doom)-END"',
+  'echo "==tree L$(readlink /usr/share/desktop/default/term)-END"',
   'test -d "/usr/share/desktop/default/Presentations/MagicPoint Tutorial" && echo TREE-DIR-OK',
   'test -s "/usr/share/desktop/default/Presentations/gucOS/gucos.deck" && echo TREE-DATA-OK',
   `test -x "${SAMPLE.replace('/root/Desktop', '/usr/share/desktop/default')}" && echo TREE-MODE-OK`,
   // ---- leg A: delete three defaults (link / script / nested data), drop
   //      user files, squat a default name ----
-  'rm /root/Desktop/doom',
+  'rm /root/Desktop/term',
   `rm "${SAMPLE}"`,
   'rm "/root/Desktop/Presentations/gucOS/gucos.deck"',
   'rm /root/Desktop/notepad',
@@ -89,7 +89,7 @@ const script = [
   'desktop-defaults',
   'echo "RC=$?"',
   'echo ==dd1end',
-  'echo "==doom L$(readlink /root/Desktop/doom)-END"',
+  'echo "==term L$(readlink /root/Desktop/term)-END"',
   `test -x "${SAMPLE}" && grep -q Minesweeper "${SAMPLE}" && echo SCRIPT-BACK`,
   'test -s "/root/Desktop/Presentations/gucOS/gucos.deck" && echo DECK-BACK',
   'echo "==squat $(cat /root/Desktop/notepad)-END"',
@@ -122,7 +122,7 @@ const script = [
   'desktop-defaults',
   'echo ==dd4end',
   // ---- leg D: the wm.c desktop ctx-menu row fires the tool ----
-  'rm /root/Desktop/doom',
+  'rm /root/Desktop/term',
   'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
   'wmctl click $DSID 400 300 3',
   'wmctl wait win ctxmenu 8000',
@@ -130,8 +130,8 @@ const script = [
   'wmctl click $CXSID 30 106',                   // Add Default Icons (row 3)
   'wmctl wait nowin ctxmenu 8000',               // fired + dismissed
   // the spawned tool re-plants asynchronously — poll the file marker
-  'for i in $(seq 1 100); do test -L /root/Desktop/doom && break; sleep 0.1; done',
-  'test -L /root/Desktop/doom && echo CTX-RESTORED',
+  'for i in $(seq 1 100); do test -L /root/Desktop/term && break; sleep 0.1; done',
+  'test -L /root/Desktop/term && echo CTX-RESTORED',
   // ---- leg E: phase 2 re-plants missing `seed` CONTENT (gucman content-
   //      resource design §3.4) and records it back into the DB ----
   'mkdir -p /opt/fakeseed/demos/sub',
@@ -177,7 +177,7 @@ const out = r.stdout;
 
 // ---- the baked rendering ----
 check('blob carries the default link as a LINK',
-  out.includes('==tree L/usr/bin/doom-END'), section(out, 'tree'));
+  out.includes('==tree L/usr/bin/term-END'), section(out, 'tree'));
 check('blob carries a nested default dir', out.includes('TREE-DIR-OK'));
 check('blob carries nested deck data', out.includes('TREE-DATA-OK'));
 check('blob keeps the launcher-script mode (0755)', out.includes('TREE-MODE-OK'));
@@ -187,8 +187,8 @@ const dd1 = out.split('==dd1\n')[1] ? out.split('==dd1\n')[1].split('==dd1end')[
 check(`first run: added 3, kept ${TOTAL - 3} existing (counts from the manifest)`,
   dd1.includes(`desktop-defaults: added 3, kept ${TOTAL - 3} existing`), dd1);
 check('first run exits 0', dd1.includes('RC=0'), dd1);
-check('deleted doom link is back (as a symlink)',
-  out.includes('==doom L/usr/bin/doom-END'), section(out, 'doom'));
+check('deleted term link is back (as a symlink)',
+  out.includes('==term L/usr/bin/term-END'), section(out, 'term'));
 check('deleted launcher script is back, executable, right content',
   out.includes('SCRIPT-BACK'));
 check('deleted nested deck data is back inside the existing folder',

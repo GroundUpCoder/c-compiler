@@ -115,6 +115,7 @@ async function main() {
     'gucman list',
     'echo ==badrepo',
     'mkdir -p /etc/gucman',
+    'printf "# opt out of the shipped default set (#420: doom) — this test\\n# owns its package state; /etc overrides the baked file wholesale\\n" > /etc/gucman/defaults',
     `echo http://127.0.0.1:${badPort} > /etc/gucman/repos`,
     'gucman install punes; echo RC=$?',
     'test ! -e /opt/punes && echo NO-OPT-AFTER-BAD',

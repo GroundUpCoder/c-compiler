@@ -41,9 +41,10 @@ function section(out, name) {
   return (out.split('==' + name + '\n')[1] || '').split('==cut')[0];
 }
 
-/* /root fresh listing: Desktop/ roms/ | doom1.wad hello.c launcher
- * plain.txt — launcher is row 4, plain.txt row 5 (dirs-first sorted; /root/id1
- * left with the quake package in the deploy-leg split). */
+/* /root fresh listing: Desktop/ roms/ | hello.c launcher plain.txt —
+ * launcher is row 3, plain.txt row 4 (dirs-first sorted; /root/id1 left with
+ * the quake package in the deploy-leg split, /root/doom1.wad with the doom
+ * package in #420). */
 const HOME = 'wmctl key $SID 74 1073741898';
 const DOWN = 'wmctl key $SID 81 1073741905';
 const sel = (row) => ['wmctl click $SID 200 100', HOME,
@@ -92,15 +93,15 @@ const out = boot([
   'echo ==cut',
   'wmctl click Up',
   'wmctl wait text LISTBOX:0 launcher 4000',      // back at /root
-  // activate a runnable: launcher (row 4) -> sh -> winbox
-  sel(4),
+  // activate a runnable: launcher (row 3) -> sh -> winbox
+  sel(3),
   'wmctl click Open',
   'wmctl wait win winbox 8000',
   'echo ==list3',
   'wmctl list',
   'echo ==cut',
-  // activate a plain file: plain.txt (row 5) -> the GUI default (notepad)
-  sel(5),
+  // activate a plain file: plain.txt (row 4) -> the GUI default (notepad)
+  sel(4),
   'wmctl click Open',
   'wmctl wait win "plain.txt - Notepad" 12000',   // notepad loads freetype + opens
   'echo ==list4',
@@ -127,7 +128,7 @@ check('fileman window titled with the cwd',
 check('listing is dirs-first with / markers + details columns',
   /Desktop\/ +<DIR>[^']*roms\/ +<DIR>/.test(tree1), tree1);
 check('files carry a byte size + date column (status bar counts them)',
-  /class=msctls_statusbar32[^\n]*text='6 object\(s\)'/.test(tree1), tree1);
+  /class=msctls_statusbar32[^\n]*text='5 object\(s\)'/.test(tree1), tree1);
 check('path EDIT + Go/Up/Open/With buttons present',
   /class=EDIT id=100/.test(tree1) && /text='Go'/.test(tree1) &&
   /text='Up'/.test(tree1) && /text='Open'/.test(tree1) &&

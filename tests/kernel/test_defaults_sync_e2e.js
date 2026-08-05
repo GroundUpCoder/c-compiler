@@ -11,9 +11,10 @@
 //     first-existing-file convention) — that /etc layer is this test's seam.
 //   - The trigger is `gucman sync-defaults`, spawned as a kernel service on
 //     every boot where a defaults list exists at all (boot.js and
-//     kernel-worker.js, right after the /bin/wm service). No defaults file —
-//     the shipped manifest declares [] — means no spawn: every existing boot
-//     in the estate is byte-identical.
+//     kernel-worker.js, right after the /bin/wm service). Since #420 the
+//     shipped manifest declares a real set (doom), so every boot spawns the
+//     sync; headless the baked origin-relative repo is unreachable and the
+//     shipped set fails legibly without installing anything.
 //   - THE DURABILITY RULE: the default set means "install once, unless the
 //     user has ever said no". `gucman remove <name>` records a tombstone at
 //     /var/lib/gucman/removed/<name> BEFORE deleting the DB record; sync
@@ -32,9 +33,10 @@
 //     missing (non-tombstoned) default retries on the next boot.
 //
 // Sessions (one driveBoot each — reboots are the point):
-//   1. clean minimal boot: no baked defaults file (manifest declares []), no
-//      sync spawn, nothing installed; then declare defaults (punes +
-//      font-unifont) + repo via /etc at runtime.
+//   1. clean minimal boot: the baked defaults file names doom (#420), the
+//      offline sync fails legibly and installs nothing; then declare OUR
+//      defaults (punes + font-unifont) + repo via /etc at runtime — the
+//      /etc layer overrides the baked set wholesale.
 //   2. reboot = the "first boot" for those defaults: sync installs BOTH with
 //      zero user action — punes (an app: bin symlink, launches) and
 //      font-unifont (NOT an app: no executable, no launcher, nothing to
@@ -82,25 +84,33 @@ async function main() {
   console.log(`[defaults-sync] repo :${goodPort}`);
   const BOOT_ARGS = { image, args: ['--packages=none'], timeout: 420000 };
 
-  /* ---- session 1: nothing declared -> nothing runs; then declare ---- */
+  /* ---- session 1: the shipped default set, offline; then declare ours ----
+   * #420 ended the []-era this session used to pin: the shipped manifest now
+   * declares a real default set (doom), so a defaults file IS baked and sync
+   * runs on EVERY boot. Headless the baked repo default (origin-relative
+   * /packages) is unreachable, so the shipped set fails LEGIBLY and installs
+   * nothing — which is what makes the /etc WHOLESALE override below (this
+   * test's actual seam) observable in isolation. */
   const s1 = driveBoot([
     'echo ==base',
-    'test ! -e /usr/share/gucman/defaults && echo NO-BAKED-DEFAULTS',
-    `test ! -e ${STATUS} && echo NO-SYNC-RAN`,
+    'grep -x doom /usr/share/gucman/defaults && echo BAKED-DEFAULTS-DOOM',
+    waitFile(STATUS, 150, 'BASE'),
+    `grep -x "failed doom" ${STATUS} && echo BASE-SYNC-FAILED-LEGIBLY`,
     'gucman list',
     'echo ==config',
     'mkdir -p /etc/gucman',
     `echo http://127.0.0.1:${goodPort} > /etc/gucman/repos`,
     'printf "# declared at runtime — the /etc override layer\\npunes\\nfont-unifont\\n" > /etc/gucman/defaults',
     'test ! -e /var/lib/gucman/punes.json && echo NOT-YET-INSTALLED',
+    `rm -f ${STATUS}`,   // session 2's wait must see ITS OWN boot's sync
     'echo ==done',
   ], BOOT_ARGS);
   const out1 = String(s1.stdout || '');
   const base1 = section(out1, 'base');
-  check('shipped manifest bakes no defaults file (defaultPackages is [])',
-    base1.includes('NO-BAKED-DEFAULTS'), base1);
-  check('no defaults declared -> sync never ran (no status file)',
-    base1.includes('NO-SYNC-RAN'), base1);
+  check('shipped manifest bakes a defaults file naming doom (#420)',
+    base1.includes('BAKED-DEFAULTS-DOOM'), base1);
+  check('offline boot: the shipped sync ran and failed legibly (nothing installed)',
+    base1.includes('WAIT-OK-BASE') && base1.includes('BASE-SYNC-FAILED-LEGIBLY'), base1);
   check('minimal boot starts with nothing installed',
     base1.includes('no packages installed'), base1);
   check('declaring defaults mid-session does not install anything (trigger is boot)',

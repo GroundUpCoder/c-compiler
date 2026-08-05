@@ -544,11 +544,14 @@ check('no user re-seed on upgrade', !r.stderr.includes('seeding user volume'), r
 // ---- factory reset: wipe /etc + /var -> boots identically ----
 r = session('rm -rf /etc/* /var/*\nexit\n');
 check('factory-reset wipe exits clean', r.status === 0, String(r.status));
-r = session('ls /etc\necho etc-rc=$?\ncc hello.c && ./a.out\nexit\n');
+// NB the reset wiped /etc, so the shipped default set (#420) is live again
+// and the offline sync prints its legible failure onto the boot console —
+// assert emptiness with a marker, not a stdout line position.
+r = session('test -z "$(ls /etc)" && echo ETC-EMPTY\ncc hello.c && ./a.out\nexit\n');
 check('post-reset boot exits clean', r.status === 0, String(r.status) + ' ' + (r.stderr || '').slice(-300));
 {
   const fr = r.stdout.split('\n');
-  check('/etc is empty after the reset', fr[0] === 'etc-rc=0', JSON.stringify(fr.slice(0, 2)));
+  check('/etc is empty after the reset', r.stdout.includes('ETC-EMPTY'), JSON.stringify(fr.slice(0, 2)));
   check('the OS still compiles and runs', fr.includes('hello, wasm world'), JSON.stringify(fr));
 }
 

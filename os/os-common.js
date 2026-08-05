@@ -294,7 +294,7 @@ function buildProject(CompilerJS, projPath, readHostFile) {
  *   entry.content — inline string; written verbatim to /path (one-liners
  *                   like the /usr/share/menu command entries, todos/0028)
  *   entry.bin     — REPO-relative binary file; copied verbatim to /path
- *                   (game data: doom1.wad, gameboy ROMs — needs io.readBinary)
+ *                   (game data: gameboy ROMs — needs io.readBinary)
  *   entry.optional — (with entry.bin) a missing asset logs a skip instead of
  *                   failing the boot: for assets that are deliberately NOT
  *                   in the repo (the gameboy ROMs are gitignored), so other
@@ -1320,6 +1320,19 @@ function foldPackages(fsMod, pathMod, rootDir, manifest, which, opts) {
   // default must be installable from the BASE repo index), no duplicates.
   // The browser in-worker bake has no packages/ to check against; these
   // Node gates are where the mistake is catchable.
+  if (manifest.defaultPackages !== undefined && opts.noDefaultPackages) {
+    // EXPLICIT opt-out (mkimage/boot.js --no-default-packages): a bake of
+    // the real manifest against a substitute definitions dir cannot satisfy
+    // the SHIPPED default set — its names are not in `avail` by construction
+    // — and a throwaway image's boots must not try to install it either, so
+    // the caller declares that intent and the bake carries no defaults file.
+    // Deliberately NOT implied by opts.packagesDir alone: the validation
+    // below must stay testable through the packagesDir seam
+    // (tests/host/test_default_packages.js's red controls). Surfaced by
+    // #420, the first real defaultPackages member.
+    manifest = Object.assign({}, manifest);
+    delete manifest.defaultPackages;
+  }
   if (manifest.defaultPackages !== undefined) {
     var dp = manifest.defaultPackages;
     if (!Array.isArray(dp) || dp.some(function (n) { return typeof n !== 'string' || !n; }))
@@ -1520,7 +1533,7 @@ function foldPackages(fsMod, pathMod, rootDir, manifest, which, opts) {
  * links stay links (absolute /usr/bin targets), launcher scripts and deck
  * data keep their kinds, modes and `optional` semantics. The Recycle Bin
  * is not in the manifest, so it never enters the default set (wm.c's
- * ensure_recycle stays its owner); non-Desktop user seeds (doom1.wad,
+ * ensure_recycle stays its owner); non-Desktop user seeds (ROMs,
  * roms, /etc/profile) are naturally outside the prefix filter. With no
  * user Desktop entries the input manifest is returned untouched (the
  * foldPackages empty-fold identity rule). */
