@@ -12,6 +12,8 @@ import { spawn }    from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs   from 'node:fs';
+import { requireFreshArtifacts } from './lib/fresh-artifacts.mjs';
+import { doomFreshnessSpec, ROOT } from './lib/doom-artifacts.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 3176;
@@ -36,7 +38,14 @@ async function waitForServer() {
   throw new Error('server did not come up at ' + URL);
 }
 
-if (!fs.existsSync(path.join(__dirname, 'www', PAGE))) {
+// The default doom.html is build-doom.mjs's product, so its freshness is
+// checkable against that driver's input set (ticket #466 — existence alone let
+// a stale page report the OLD compiler's behaviour under the NEW compiler's
+// name). A caller-supplied custom page has no known input set, so it keeps the
+// existence check only — the spec is the contract (lib/fresh-artifacts.mjs).
+if (PAGE === 'doom.html') {
+  requireFreshArtifacts(doomFreshnessSpec(), { cwd: ROOT });
+} else if (!fs.existsSync(path.join(__dirname, 'www', PAGE))) {
   console.error(`Missing www/${PAGE} — compile it first.`);
   process.exit(1);
 }

@@ -97,8 +97,13 @@ try {
   check('strip Tab completed "ec" to "echo "', true);
 
   // ---- arrows = history: recall doubles the side effect ----
-  await page.keyboard.type('echo x >> /root/arr\r', { delay: 60 });
-  await waitOut('/root/arr');
+  // Split-needle completion marker (#175): the old wait was `/root/arr`,
+  // which the echoed command line itself contains — and the append produces
+  // no output, so the wait was satisfied before (and regardless of whether)
+  // the command ran. ARR1-OK only exists once the append completed, so the
+  // ↑ recall below can never fire against a not-yet-run first append.
+  await page.keyboard.type('echo x >> /root/arr && echo ARR""1-OK\r', { delay: 60 });
+  await waitOut('ARR1-OK');
   await page.click('[data-key="↑"]');
   await pause(200);            // VT1 input pacing (recall repaints the line)
   await page.keyboard.press('Enter');
