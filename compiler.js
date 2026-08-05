@@ -33273,31 +33273,41 @@ struct tm *localtime_r(const time_t *timep, struct tm *result) {
   return result;
 }
 
-time_t mktime(struct tm *tp) {
-  /* Normalize mon */
+/* Days from civil date (Howard Hinnant's era-based closed form; exact for
+   the whole long long year range under C's truncating division). Closed
+   form matters: the old per-year loop was O(|year-1970|), and the libc-test
+   exercises tm_year == INT_MAX (ticket #113), where a loop is a hang and
+   int year arithmetic is a wrong answer. m is 1-12; day and the caller's
+   h/m/s are linear, so out-of-range values normalize arithmetically. */
+static long long __days_from_civil(long long y, int m, long long d) {
+  y -= m <= 2;
+  long long era = (y >= 0 ? y : y - 399) / 400;
+  unsigned long long yoe = (unsigned long long)(y - era * 400);        /* [0,399] */
+  unsigned long long doy = (153ULL * (unsigned)(m + (m > 2 ? -3 : 9)) + 2) / 5;
+  unsigned long long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return era * 146097 + (long long)doe + (d - 1) - 719468;
+}
+
+/* Broken-down fields -> seconds since the epoch, fields read as UTC (no
+   zone consulted). The ONE fields->secs arithmetic: mktime, timegm and
+   strftime %s all go through it. */
+static long long __tm_to_secs_utc(const struct tm *tp) {
+  long long y = (long long)tp->tm_year + 1900;
   int m = tp->tm_mon;
-  int y = tp->tm_year + 1900;
-  while (m < 0)  { m += 12; y--; }
-  while (m >= 12) { m -= 12; y++; }
-  tp->tm_mon = m;
-  tp->tm_year = y - 1900;
-
-  /* Days from epoch to start of year */
-  time_t days = 0;
-  if (y >= 1970) {
-    for (int i = 1970; i < y; i++) days += __days_in_year(i);
-  } else {
-    for (int i = y; i < 1970; i++) days -= __days_in_year(i);
+  if (m < 0 || m >= 12) {
+    long long adj = m / 12;
+    m %= 12;
+    if (m < 0) { m += 12; adj--; }
+    y += adj;
   }
+  long long days = __days_from_civil(y, m + 1, (long long)tp->tm_mday);
+  return days * 86400 + tp->tm_hour * 3600LL + tp->tm_min * 60LL + tp->tm_sec;
+}
 
-  /* Days in months */
-  int leap = __is_leap(y);
-  for (int i = 0; i < m; i++) days += __days_in_month(i, leap);
-  days += tp->tm_mday - 1;
-
-  time_t secs = days * 86400LL + tp->tm_hour * 3600LL + tp->tm_min * 60LL + tp->tm_sec;
-
-  /* Adjust for local timezone */
+time_t mktime(struct tm *tp) {
+  /* Read the fields as local wall-clock time, then shift by the host zone's
+     offset for that instant. */
+  time_t secs = __tm_to_secs_utc(tp);
   long offset = __timezone_offset(secs);
   secs -= offset;
 
@@ -33314,21 +33324,7 @@ time_t mktime(struct tm *tp) {
    computing, so subtracting an offset afterwards is wrong across a DST
    boundary. This does the calendar arithmetic directly in UTC. */
 time_t timegm(struct tm *tp) {
-  int m = tp->tm_mon;
-  int y = tp->tm_year + 1900;
-  while (m < 0)   { m += 12; y--; }
-  while (m >= 12) { m -= 12; y++; }
-
-  time_t days = 0;
-  if (y >= 1970) { for (int i = 1970; i < y; i++) days += __days_in_year(i); }
-  else           { for (int i = y; i < 1970; i++) days -= __days_in_year(i); }
-
-  int leap = __is_leap(y);
-  for (int i = 0; i < m; i++) days += __days_in_month(i, leap);
-  days += tp->tm_mday - 1;
-
-  time_t secs = days * 86400LL + tp->tm_hour * 3600LL
-              + tp->tm_min * 60LL + tp->tm_sec;
+  time_t secs = __tm_to_secs_utc(tp);
 
   /* Like mktime, normalise the caller's struct from the result. */
   struct tm norm;
@@ -33518,9 +33514,28 @@ size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tp) {
       __ap_str(s, max, &pos, zbuf);
       break;
     }
-    case 's': { /* GNU extension, but every shell script's date +%s */
+    case 's': { /* seconds since the epoch (POSIX-next; every shell's date +%s)
+
+       DECISION (ticket #116 / todos/0310): %s is the broken-down fields
+       read as UTC MINUS tm_gmtoff (musl's semantics, TZ-independent) — it
+       used to be mktime((struct tm *)tp), the BSD-libc-shaped reading that
+       re-interprets the fields in the HOST zone. Both are real-world
+       behaviours; this target picks musl's because:
+       (1) There is no TZ control here at all — the zone belongs to the
+           host (__timezone_offset import, no env vars by design), so the
+           mktime reading was unfixably host-dependent, while this one is a
+           pure function of the struct.
+       (2) The two readings agree EXACTLY on any tm produced by this libc's
+           own localtime() — the gmtoff subtraction cancels the offset the
+           fields carry — so busybox date +%s (strftime over localtime_r,
+           date.c:390) and every shell consumer are byte-identical.
+       (3) They differ on gmtime()-derived tms (gmtoff 0): mktime returned
+           t minus the host offset there, i.e. only the musl reading
+           round-trips BOTH of this libc's own converters.
+       Evidence and the measured BSD divergence:
+       logs/2026-08-05/batch-c-time-surface.md. */
       char sbuf[24];
-      snprintf(sbuf, sizeof sbuf, "%lld", (long long)mktime((struct tm *)tp));
+      snprintf(sbuf, sizeof sbuf, "%lld", __tm_to_secs_utc(tp) - tp->tm_gmtoff);
       __ap_str(s, max, &pos, sbuf);
       break;
     }

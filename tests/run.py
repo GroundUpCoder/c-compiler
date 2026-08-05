@@ -1538,11 +1538,11 @@ LIBC_TEST_SKIP = {
               "p4-required contexts are accepted, line 23 remains UB)",
     # %s and width/'+' parsing DO exist; absent are %F %g %G %r %T %V, width
     # modifiers are honoured only by %C, and %y is wrong for negative years
-    # (todos/0307). %s additionally diverges from musl's expectation by the
-    # local UTC offset (todos/0310).
+    # (todos/0307). The %s TZ divergence is RESOLVED (ticket #116): %s is
+    # musl's TZ-independent reading now, so the test's %s rows pass as
+    # written and the remaining skip is ticket #113's alone.
     "strftime": "missing %F %g %G %r %T %V, width modifiers only on %C, "
-                "%y wrong for negative years (todos/0307); %s TZ divergence "
-                "(todos/0310)",
+                "%y wrong for negative years (todos/0307)",
     "sscanf_long": "needs setrlimit",
     # Locale machinery
     "clocale_mbfuncs": "no langinfo/locale beyond C",
