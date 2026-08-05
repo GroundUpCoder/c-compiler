@@ -180,30 +180,10 @@ thing this file exists to kill.
 - file: os/win32/advapi32.c
 - anchor: tmp+rename, and there is no advisory lock, so two flushes landing in
 
-### L25 — search.h is absent, so four libc-tests are permanently skipped
-- ticket: #111
-- file: tests/run.py
-- anchor: "search_hsearch": "not implemented: search.h (todos/0305)",
-
-### L26 — the BSD random()/srandom()/initstate() family is absent
-- ticket: #112
-- file: tests/run.py
-- anchor: "random": "not implemented: random()/srandom()/initstate()/setstate() (todos/0306)",
-
 ### L27 — strptime() is absent and strftime is missing six conversions plus width modifiers
 - ticket: #113
 - file: tests/run.py
 - anchor: "strptime": "not implemented: strptime() (todos/0307)",
-
-### L28 — open_memstream()/fmemopen() are absent; there are no memory-backed FILE streams
-- ticket: #114
-- file: tests/run.py
-- anchor: "memstream": "not implemented: open_memstream()/fmemopen() (todos/0308)",
-
-### L29 — the wcstol family and wide scanf are absent
-- ticket: #115
-- file: tests/run.py
-- anchor: "wcstol": "not implemented: wcstol() family (todos/0309)",
 
 ### L30 — strftime %s follows glibc/BSD (TZ-dependent) where musl is TZ-independent; nobody chose
 - ticket: #116

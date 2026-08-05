@@ -23191,6 +23191,8 @@ int iswctype(wint_t c, wctype_t type);
   "wchar.h": `
 #pragma once
 #include <stddef.h>
+#include <stdarg.h>
+#include <stdio.h>    /* wide stream I/O takes FILE * */
 #include <wctype.h>
 __require_source("__wchar.c");
 __require_source("__stdlib.c");  /* mbrtowc/wcrtomb use its shared UTF-8 codec */
@@ -23232,6 +23234,25 @@ double wcstod(const wchar_t *nptr, wchar_t **endptr);
 /* wcsftime (todos/0325 Group B): strftime's wide twin, for timemodule.c. */
 struct tm;
 size_t wcsftime(wchar_t *dst, size_t maxsize, const wchar_t *fmt, const struct tm *tm);
+/* Wide stream I/O (C95 7.24.3, ticket #115): UTF-8 over the byte streams.
+   Field widths and %n in the wide scanf family count BYTES for multi-byte
+   input (exact for all single-byte characters — the C locale's world).
+   fwprintf/fwide are deliberately absent, not stubbed. */
+wint_t fgetwc(FILE *stream);
+wint_t getwc(FILE *stream);
+wint_t getwchar(void);
+wint_t ungetwc(wint_t c, FILE *stream);
+wint_t fputwc(wchar_t c, FILE *stream);
+wint_t putwc(wchar_t c, FILE *stream);
+wint_t putwchar(wchar_t c);
+wchar_t *fgetws(wchar_t *ws, int n, FILE *stream);
+int fputws(const wchar_t *ws, FILE *stream);
+int fwscanf(FILE *stream, const wchar_t *fmt, ...);
+int wscanf(const wchar_t *fmt, ...);
+int swscanf(const wchar_t *s, const wchar_t *fmt, ...);
+int vfwscanf(FILE *stream, const wchar_t *fmt, va_list ap);
+int vwscanf(const wchar_t *fmt, va_list ap);
+int vswscanf(const wchar_t *s, const wchar_t *fmt, va_list ap);
   `,
   "sys/time.h": `
 #pragma once
@@ -25046,6 +25067,22 @@ typedef struct FILE {
   int buf_pos;
   int buf_len;
   int ungetc_char;
+  /* Cookie-stream seam (ticket #114, funopen/fopencookie-shaped): a stream
+   * whose backing store is not an fd sets these; NULL means fd-backed (the
+   * default — the static stdio FILEs zero-fill them, fopen/fdopen clear
+   * them explicitly). Every buffered-I/O path in __stdio.c dispatches
+   * through the seam, never straight to read/write/lseek/close, so cookie
+   * streams get buffering, ungetc, scanf, and the printf family for free.
+   * io_flush is an extension over the classic four: it runs after buffered
+   * data reaches the cookie, letting open_memstream publish its buffer at
+   * every fflush as POSIX requires. First consumers: open_memstream and
+   * fmemopen. */
+  void *cookie;
+  long (*io_read)(struct FILE *f, char *buf, long n);
+  long (*io_write)(struct FILE *f, const char *buf, long n);
+  long long (*io_seek)(struct FILE *f, long long off, int whence);
+  int (*io_flush)(struct FILE *f);
+  int (*io_close)(struct FILE *f);
 } FILE;
 
 /* 64-bit, opaque file position (LFS): fgetpos/fsetpos can address files past
@@ -25117,6 +25154,9 @@ __import int remove(const char *path);
 __import int rename(const char *oldpath, const char *newpath);
 
 FILE *freopen(const char *path, const char *mode, FILE *stream);
+/* Memory-backed streams (POSIX, ticket #114), built on the cookie seam. */
+FILE *open_memstream(char **bufp, size_t *sizep);
+FILE *fmemopen(void *buf, size_t size, const char *mode);
 FILE *tmpfile(void);
 char *tmpnam(char *s);
 FILE *popen(const char *command, const char *type);
@@ -25161,6 +25201,12 @@ double atof(const char *nptr);
 long long llabs(long long n);
 int rand(void);
 void srand(unsigned int seed);
+/* BSD/XSI random family (ticket #112) — musl's lagged Fibonacci generator.
+   31-bit outputs; the default sequence equals srandom(1)'s. */
+long random(void);
+void srandom(unsigned seed);
+char *initstate(unsigned seed, char *state, size_t size);
+char *setstate(char *state);
 void *bsearch(const void *key, const void *base, size_t nmemb,
               size_t size, int (*compar)(const void *, const void *));
 void qsort(void *base, size_t nmemb, size_t size,
@@ -28478,6 +28524,8 @@ int toupper(int c) { return islower(c) ? c + ('A' - 'a') : c; }
 #include <string.h>
 #include <limits.h>
 #include <stdlib.h>
+#include <stdio.h>    /* wide stream I/O (ticket #115) rides the byte streams */
+#include <stdarg.h>
 #include <wchar.h>
 
 /* ---- wcstol family (C95 7.24.4.1, todos/0325 Group A) ------------------
@@ -28510,6 +28558,15 @@ static unsigned long long __wcstoull_core(const wchar_t *nptr, wchar_t **endptr,
   int neg = 0, any = 0;
   unsigned long long acc = 0;
   *ovf = 0;
+
+  /* C95/POSIX: only base 0 and 2..36 are valid — anything else is EINVAL
+     with no conversion (endptr = nptr), matching strtol. */
+  if (base != 0 && (base < 2 || base > 36)) {
+    errno = EINVAL;
+    *neg_out = 0;
+    if (endptr) *endptr = (wchar_t *)nptr;
+    return 0;
+  }
 
   while (iswspace((unsigned int)*p)) p++;
   if (*p == '+' || *p == '-') { neg = (*p == '-'); p++; }
@@ -28852,6 +28909,155 @@ size_t wcrtomb(char *s, wchar_t wc, mbstate_t *ps) {
 size_t mbrtowc(wchar_t *pwc, const char *s, size_t n, mbstate_t *ps) {
   (void)ps;
   return __mbrtowc_utf8(pwc, s, n);
+}
+
+/* ---- wide stream I/O (C95 7.24.3, ticket #115) --------------------------
+ *
+ * The streams here are BYTE streams (this libc has no separate wide stream
+ * plumbing): a wide read decodes UTF-8 off the byte stream, a wide write
+ * encodes onto it, and the wide scanf family transcodes its FORMAT to the
+ * narrow one and delegates to the byte scanf machinery. In the C locale
+ * (the only one this libc has) that is exact for every single-byte
+ * character; the one documented divergence is that a conversion's FIELD
+ * WIDTH and %n count BYTES, not wide characters, when the input carries
+ * multi-byte UTF-8 — same trade wcstod already makes. No fwprintf/fwide
+ * here: unimplemented surface stays absent rather than half-true. */
+
+wint_t fgetwc(FILE *stream) {
+  int c = fgetc(stream);
+  if (c == EOF) return WEOF;
+  if (c < 0x80) return (wint_t)c;
+  /* Multi-byte lead: sequence length from the lead byte, decode the rest. */
+  char mb[4];
+  int len;
+  if ((c & 0xE0) == 0xC0) len = 2;
+  else if ((c & 0xF0) == 0xE0) len = 3;
+  else if ((c & 0xF8) == 0xF0) len = 4;
+  else { errno = EILSEQ; stream->flags |= __F_ERR; return WEOF; }
+  mb[0] = (char)c;
+  for (int k = 1; k < len; k++) {
+    int c2 = fgetc(stream);
+    if (c2 == EOF) { errno = EILSEQ; stream->flags |= __F_ERR; return WEOF; }
+    mb[k] = (char)c2;
+  }
+  wchar_t wc;
+  if (__mbrtowc_utf8(&wc, mb, (size_t)len) != (size_t)len) {
+    errno = EILSEQ;
+    stream->flags |= __F_ERR;
+    return WEOF;
+  }
+  return (wint_t)wc;
+}
+
+wint_t getwc(FILE *stream) { return fgetwc(stream); }
+wint_t getwchar(void) { return fgetwc(stdin); }
+
+/* One-slot pushback rides ungetc's byte slot, so only single-byte
+   characters can go back; a multi-byte wc reports failure (WEOF) rather
+   than corrupting the stream. C guarantees exactly one pushback. */
+wint_t ungetwc(wint_t c, FILE *stream) {
+  if (c == WEOF || c >= 0x80) return WEOF;
+  return ungetc((int)c, stream) == EOF ? WEOF : c;
+}
+
+wint_t fputwc(wchar_t c, FILE *stream) {
+  char mb[4];
+  size_t n = __wcrtomb_utf8(mb, c);
+  if (n == (size_t)-1) { errno = EILSEQ; stream->flags |= __F_ERR; return WEOF; }
+  if (fwrite(mb, 1, n, stream) != n) return WEOF;
+  return (wint_t)c;
+}
+
+wint_t putwc(wchar_t c, FILE *stream) { return fputwc(c, stream); }
+wint_t putwchar(wchar_t c) { return fputwc(c, stdout); }
+
+wchar_t *fgetws(wchar_t *ws, int n, FILE *stream) {
+  if (n <= 0) return 0;
+  int i = 0;
+  while (i < n - 1) {
+    wint_t c = fgetwc(stream);
+    if (c == WEOF) break;
+    ws[i++] = (wchar_t)c;
+    if (c == '\\n') break;
+  }
+  if (i == 0) return 0;
+  ws[i] = 0;
+  return ws;
+}
+
+int fputws(const wchar_t *ws, FILE *stream) {
+  for (; *ws; ws++)
+    if (fputwc(*ws, stream) == WEOF) return -1;
+  return 0;
+}
+
+/* Transcode a wide format/input string to malloc'd UTF-8 (NULL on ENOMEM/
+   EILSEQ). Callers free. */
+static char *__wcs_to_mbs(const wchar_t *ws) {
+  size_t cap = 64, len = 0;
+  char *out = (char *)malloc(cap);
+  if (!out) return 0;
+  for (; *ws; ws++) {
+    char mb[4];
+    size_t n = __wcrtomb_utf8(mb, *ws);
+    if (n == (size_t)-1) { free(out); errno = EILSEQ; return 0; }
+    if (len + n + 1 > cap) {
+      cap *= 2;
+      char *nb = (char *)realloc(out, cap);
+      if (!nb) { free(out); return 0; }
+      out = nb;
+    }
+    for (size_t k = 0; k < n; k++) out[len++] = mb[k];
+  }
+  out[len] = 0;
+  return out;
+}
+
+int vfwscanf(FILE *stream, const wchar_t *fmt, va_list ap) {
+  char *nfmt = __wcs_to_mbs(fmt);
+  if (!nfmt) return EOF;
+  int r = vfscanf(stream, nfmt, ap);
+  free(nfmt);
+  return r;
+}
+
+int fwscanf(FILE *stream, const wchar_t *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vfwscanf(stream, fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+int vwscanf(const wchar_t *fmt, va_list ap) {
+  return vfwscanf(stdin, fmt, ap);
+}
+
+int wscanf(const wchar_t *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vfwscanf(stdin, fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+int vswscanf(const wchar_t *s, const wchar_t *fmt, va_list ap) {
+  char *ns = __wcs_to_mbs(s);
+  if (!ns) return EOF;
+  char *nfmt = __wcs_to_mbs(fmt);
+  if (!nfmt) { free(ns); return EOF; }
+  int r = vsscanf(ns, nfmt, ap);
+  free(nfmt);
+  free(ns);
+  return r;
+}
+
+int swscanf(const wchar_t *s, const wchar_t *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vswscanf(s, fmt, ap);
+  va_end(ap);
+  return r;
 }
   `,
   "__dirent.c": `
@@ -29558,6 +29764,7 @@ char *nl_langinfo(nl_item item) {
   "__malloc.c": `
 #include <__malloc.h>
 #include <stdio.h>
+#include <errno.h>   // POSIX: the malloc family sets ENOMEM on failure
 
 // TLSF (Two-Level Segregated Fit) allocator
 //
@@ -29850,7 +30057,9 @@ static long adjust_request(long size) {
 
 void *malloc(size_t size) {
   if (size == 0) return (void *)0;
-  if (size > 0x40000000L) return (void *)0;
+  /* POSIX: every genuine allocation failure (as opposed to malloc(0))
+     reports ENOMEM — callers like hsearch's table resize rely on it. */
+  if (size > 0x40000000L) { errno = ENOMEM; return (void *)0; }
 
   if (!initialized) init_pool();
 
@@ -29860,16 +30069,16 @@ void *malloc(size_t size) {
   mapping_search(adjusted, &fl, &sl);
   if (fl >= FL_COUNT) {
     // Too large even for search
-    if (!grow_pool(adjusted)) return (void *)0;
+    if (!grow_pool(adjusted)) { errno = ENOMEM; return (void *)0; }
     mapping_search(adjusted, &fl, &sl);
   }
 
   long block = find_suitable_block(&fl, &sl);
   if (!block) {
-    if (!grow_pool(adjusted)) return (void *)0;
+    if (!grow_pool(adjusted)) { errno = ENOMEM; return (void *)0; }
     mapping_search(adjusted, &fl, &sl);
     block = find_suitable_block(&fl, &sl);
-    if (!block) return (void *)0;
+    if (!block) { errno = ENOMEM; return (void *)0; }
   }
 
   remove_free_block(block);
@@ -29902,7 +30111,7 @@ void free(void *ptr) {
 }
 
 void *calloc(size_t count, size_t size) {
-  if (size != 0 && count > 0x40000000L / size) return (void *)0;
+  if (size != 0 && count > 0x40000000L / size) { errno = ENOMEM; return (void *)0; }
   size_t total = count * size;
   void *p = malloc(total);
   if (p) __builtin(memory_fill, p, 0, total);
@@ -29914,7 +30123,7 @@ void *realloc(void *ptr, size_t new_size) {
   if (new_size == 0) { free(ptr); return (void *)0; }
   // Reject sizes malloc itself would reject; also guards adjust_request below
   // from overflowing a huge request down to MIN_BLOCK_SIZE.
-  if (new_size > 0x40000000L) return (void *)0;
+  if (new_size > 0x40000000L) { errno = ENOMEM; return (void *)0; }
 
   long block = payload_to_block((long)ptr);
   long old_payload = block_size(block) - BLOCK_OVERHEAD;
@@ -30411,10 +30620,34 @@ FILE __stderr_file = {2, __F_WRITE | __F_STATIC, _IONBF, 0, 0, 0, 0, EOF};
 static FILE *__open_files[64];
 static int __num_open_files;
 
+/* Cookie-stream seam (ticket #114): every path that used to hit the fd
+   syscalls directly funnels through these, so a FILE backed by io_* hooks
+   (open_memstream, fmemopen) behaves identically to an fd stream. */
+static long __raw_read(FILE *f, char *buf, long n) {
+  return f->io_read ? f->io_read(f, buf, n) : read(f->fd, buf, n);
+}
+static long __raw_write(FILE *f, const char *buf, long n) {
+  return f->io_write ? f->io_write(f, buf, n) : write(f->fd, buf, n);
+}
+static long long __raw_seek(FILE *f, long long off, int whence) {
+  return f->io_seek ? f->io_seek(f, off, whence) : lseek(f->fd, off, whence);
+}
+
+/* malloc'd FILEs must clear the seam fields explicitly (the static stdio
+   FILEs get them zero-filled by their partial initializers). */
+static void __clear_cookie(FILE *f) {
+  f->cookie = 0;
+  f->io_read = 0;
+  f->io_write = 0;
+  f->io_seek = 0;
+  f->io_flush = 0;
+  f->io_close = 0;
+}
+
 static int __flush_buf(FILE *stream) {
   int pos = 0;
   while (pos < stream->buf_pos) {
-    long w = write(stream->fd, stream->buf + pos, stream->buf_pos - pos);
+    long w = __raw_write(stream, stream->buf + pos, stream->buf_pos - pos);
     if (w <= 0) {
       /* Preserve unwritten data at front of buffer */
       int remaining = stream->buf_pos - pos;
@@ -30439,8 +30672,11 @@ int fflush(FILE *stream) {
     return 0;
   }
   if ((stream->flags & __F_WRITE) && !(stream->flags & __F_RBUF) && stream->buf_pos > 0) {
-    return __flush_buf(stream);
+    if (__flush_buf(stream) < 0) return -1;
   }
+  /* Cookie streams may need a post-flush step (open_memstream publishes
+     its buffer/size here — POSIX makes them current at every fflush). */
+  if (stream->io_flush) return stream->io_flush(stream);
   return 0;
 }
 
@@ -30457,7 +30693,7 @@ size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
   const char *src = (const char *)ptr;
 
   if (stream->buf_mode == _IONBF || !stream->buf) {
-    long w = write(stream->fd, src, total);
+    long w = __raw_write(stream, src, total);
     if (w < 0) { stream->flags |= __F_ERR; return 0; }
     return w / size;
   }
@@ -30509,7 +30745,7 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
          is requested on an unbuffered or line-buffered stream */
       if (stream->buf_mode != _IOFBF) fflush(0);
       if (!stream->buf || stream->buf_size == 0) {
-        long r = read(stream->fd, dst + got, total - got);
+        long r = __raw_read(stream, dst + got, total - got);
         if (r <= 0) {
           if (r == 0) stream->flags |= __F_EOF;
           else stream->flags |= __F_ERR;
@@ -30517,7 +30753,7 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
         }
         got += r;
       } else {
-        long r = read(stream->fd, stream->buf, stream->buf_size);
+        long r = __raw_read(stream, stream->buf, stream->buf_size);
         if (r <= 0) {
           if (r == 0) stream->flags |= __F_EOF;
           else stream->flags |= __F_ERR;
@@ -30690,6 +30926,7 @@ FILE *fopen(const char *path, const char *mode) {
   f->buf_pos = 0;
   f->buf_len = 0;
   f->ungetc_char = EOF;
+  __clear_cookie(f);
 
   if (__num_open_files < 64) {
     __open_files[__num_open_files++] = f;
@@ -30718,6 +30955,7 @@ FILE *fdopen(int fd, const char *mode) {
   f->buf_pos = 0;
   f->buf_len = 0;
   f->ungetc_char = EOF;
+  __clear_cookie(f);
   if (__num_open_files < 64) {
     __open_files[__num_open_files++] = f;
   }
@@ -30728,7 +30966,7 @@ int fileno(FILE *stream) { return stream ? stream->fd : -1; }
 
 int fclose(FILE *stream) {
   fflush(stream);
-  int r = close(stream->fd);
+  int r = stream->io_close ? stream->io_close(stream) : close(stream->fd);
   if (stream->buf && (stream->flags & __F_OWNBUF)) free(stream->buf);
   for (int i = 0; i < __num_open_files; i++) {
     if (__open_files[i] == stream) {
@@ -30784,17 +31022,21 @@ int fseek(FILE *stream, long offset, int whence) {
     }
     if (stream->ungetc_char != EOF) offset--;
   }
+  /* Seek FIRST, reset the buffer only on success: a failed seek (EINVAL on
+     a negative target, say) must leave the logical position — which lives
+     partly in the read-ahead buffer — untouched (POSIX; the libc-test
+     memstream test asserts ftell survives a refused fseek). */
+  long long r = __raw_seek(stream, offset, whence);
+  if (r < 0) return -1;
   stream->buf_pos = 0;
   stream->buf_len = 0;
   stream->ungetc_char = EOF;
-  long r = lseek(stream->fd, offset, whence);
-  if (r < 0) return -1;
   stream->flags &= ~(__F_EOF | __F_RBUF);
   return 0;
 }
 
 long ftell(FILE *stream) {
-  long pos = lseek(stream->fd, 0, SEEK_CUR);
+  long pos = __raw_seek(stream, 0, SEEK_CUR);
   if (pos < 0) return -1;
   if (stream->flags & __F_RBUF) {
     /* Buffer holds read-ahead: logical position is behind the fd. */
@@ -30819,7 +31061,7 @@ void rewind(FILE *stream) {
    width by mirroring ftell's buffer-adjustment logic, and restored with a
    64-bit lseek (mirroring fseek's SEEK_SET path). */
 int fgetpos(FILE *stream, fpos_t *pos) {
-  off_t p = lseek(stream->fd, 0, SEEK_CUR);
+  off_t p = __raw_seek(stream, 0, SEEK_CUR);
   if (p < 0) return -1;
   if (stream->flags & __F_RBUF) {
     p -= (stream->buf_len - stream->buf_pos);
@@ -30842,11 +31084,12 @@ int fseeko(FILE *stream, off_t offset, int whence) {
     }
     if (stream->ungetc_char != EOF) offset--;
   }
+  /* Same order as fseek: buffer state survives a refused seek. */
+  off_t r = __raw_seek(stream, offset, whence);
+  if (r < 0) return -1;
   stream->buf_pos = 0;
   stream->buf_len = 0;
   stream->ungetc_char = EOF;
-  off_t r = lseek(stream->fd, offset, whence);
-  if (r < 0) return -1;
   stream->flags &= ~(__F_EOF | __F_RBUF);
   return 0;
 }
@@ -30859,11 +31102,11 @@ off_t ftello(FILE *stream) {
 
 int fsetpos(FILE *stream, const fpos_t *pos) {
   fflush(stream);
+  off_t r = __raw_seek(stream, *pos, SEEK_SET);
+  if (r < 0) return -1;
   stream->buf_pos = 0;
   stream->buf_len = 0;
   stream->ungetc_char = EOF;
-  off_t r = lseek(stream->fd, *pos, SEEK_SET);
-  if (r < 0) return -1;
   stream->flags &= ~(__F_EOF | __F_RBUF);
   return 0;
 }
@@ -30936,7 +31179,7 @@ int vfscanf(FILE *stream, const char *fmt, va_list ap) {
 
   /* If buffer empty, try to fill it */
   if (stream->buf_pos >= stream->buf_len) {
-    long r = read(stream->fd, stream->buf, stream->buf_size);
+    long r = __raw_read(stream, stream->buf, stream->buf_size);
     if (r <= 0) {
       if (r == 0) stream->flags |= __F_EOF;
       else stream->flags |= __F_ERR;
@@ -30975,8 +31218,8 @@ int vfscanf(FILE *stream, const char *fmt, va_list ap) {
       __wasm(void, (), op 0);
     }
 
-    long got = read(stream->fd, stream->buf + stream->buf_len,
-                    stream->buf_size - stream->buf_len);
+    long got = __raw_read(stream, stream->buf + stream->buf_len,
+                          stream->buf_size - stream->buf_len);
     if (got <= 0) {
       if (got == 0) stream->flags |= __F_EOF;
       else stream->flags |= __F_ERR;
@@ -31060,7 +31303,10 @@ char *gets(char *s) {
 FILE *freopen(const char *path, const char *mode, FILE *stream) {
   if (!stream) return 0;
   fflush(stream);
-  close(stream->fd);
+  if (stream->io_close) stream->io_close(stream);
+  else close(stream->fd);
+  /* The stream is fd-backed from here on, whatever it was before. */
+  __clear_cookie(stream);
   if (!path) return 0;
   int flags = 0;
   int fflags = 0;
@@ -31142,6 +31388,222 @@ int pclose(FILE *stream) {
   int status = 0;
   if (waitpid(pid, &status, 0) < 0) return -1;
   return status;
+}
+
+/* ---- memory-backed streams (POSIX open_memstream/fmemopen, ticket #114) ----
+ *
+ * Both are cookie streams over the io_* seam; the stdio core neither knows
+ * nor cares that no fd is involved (fd is -1, so fileno() reports EBADF-ish
+ * -1 as POSIX wants). Logic follows musl 1.2.5 src/stdio/{open_memstream,
+ * fmemopen}.c, restated over this FILE's buffer discipline. */
+
+/* open_memstream: a growing write-only buffer the CALLER frees after
+   fclose. The caller's (bufp, sizep) are republished at every write, seek,
+   and fflush; the buffer always carries a NUL just past the reported size.
+   Reported size is min(data length, current position) per POSIX. */
+struct __memstream {
+  char **bufp;
+  size_t *sizep;
+  char *buf;
+  size_t pos, len, space;
+};
+
+static void __ms_publish(struct __memstream *c) {
+  c->buf[c->len] = 0;
+  *c->bufp = c->buf;
+  *c->sizep = c->pos < c->len ? c->pos : c->len;
+}
+
+static long __ms_write(FILE *f, const char *src, long n) {
+  struct __memstream *c = (struct __memstream *)f->cookie;
+  size_t need = c->pos + (size_t)n + 1;
+  if (need > c->space) {
+    size_t ns = c->space * 2;
+    if (ns < need) ns = need;
+    char *nb = (char *)realloc(c->buf, ns);
+    if (!nb) { f->flags |= __F_ERR; return -1; }   /* realloc set ENOMEM */
+    c->buf = nb;
+    c->space = ns;
+  }
+  if (c->pos > c->len)   /* a seek moved past the end: the gap reads as 0s */
+    memset(c->buf + c->len, 0, c->pos - c->len);
+  memcpy(c->buf + c->pos, src, n);
+  c->pos += n;
+  if (c->pos > c->len) c->len = c->pos;
+  __ms_publish(c);
+  return n;
+}
+
+static long long __ms_seek(FILE *f, long long off, int whence) {
+  struct __memstream *c = (struct __memstream *)f->cookie;
+  long long base = whence == SEEK_CUR ? (long long)c->pos
+                 : whence == SEEK_END ? (long long)c->len : 0;
+  if (whence != SEEK_SET && whence != SEEK_CUR && whence != SEEK_END) {
+    errno = EINVAL;
+    return -1;
+  }
+  if (off < -base) { errno = EINVAL; return -1; }
+  c->pos = (size_t)(base + off);
+  __ms_publish(c);
+  return base + off;
+}
+
+static int __ms_flush(FILE *f) {
+  __ms_publish((struct __memstream *)f->cookie);
+  return 0;
+}
+
+static int __ms_close(FILE *f) {
+  /* Publish one last time; the BUFFER survives for the caller to free. */
+  __ms_publish((struct __memstream *)f->cookie);
+  free(f->cookie);
+  return 0;
+}
+
+FILE *open_memstream(char **bufp, size_t *sizep) {
+  struct __memstream *c = (struct __memstream *)malloc(sizeof *c);
+  if (!c) return 0;
+  c->buf = (char *)malloc(32);
+  if (!c->buf) { free(c); return 0; }
+  c->bufp = bufp;
+  c->sizep = sizep;
+  c->pos = 0;
+  c->len = 0;
+  c->space = 32;
+  FILE *f = (FILE *)malloc(sizeof(FILE));
+  if (!f) { free(c->buf); free(c); return 0; }
+  f->fd = -1;
+  f->flags = __F_WRITE;
+  f->buf_mode = _IONBF;   /* writes land in the cookie directly */
+  f->buf = 0;
+  f->buf_size = 0;
+  f->buf_pos = 0;
+  f->buf_len = 0;
+  f->ungetc_char = EOF;
+  __clear_cookie(f);
+  f->cookie = c;
+  f->io_write = __ms_write;
+  f->io_seek = __ms_seek;
+  f->io_flush = __ms_flush;
+  f->io_close = __ms_close;
+  __ms_publish(c);
+  if (__num_open_files < 64) __open_files[__num_open_files++] = f;
+  return f;
+}
+
+/* fmemopen: a FILE over a caller-supplied (or, with buf == NULL, owned)
+   fixed-size buffer. musl's rules: 'r' modes read the whole size; 'w'
+   truncates (buf[0] = 0); 'a' starts at the first NUL; every write that
+   extends the data writes a terminating NUL when it still fits; writes
+   are clipped at size (error flag on the clipped remainder); seeks allow
+   0..size. Reads/writes go through the normal stdio buffer, so scanf,
+   ungetc and read-ahead all behave exactly as on an fd stream. */
+struct __memfile {
+  char *buf;
+  size_t size, pos, len;
+  int append;
+  int own;
+};
+
+static long __mf_read(FILE *f, char *dst, long n) {
+  struct __memfile *c = (struct __memfile *)f->cookie;
+  if (c->pos >= c->len) return 0;
+  size_t avail = c->len - c->pos;
+  if ((size_t)n > avail) n = (long)avail;
+  memcpy(dst, c->buf + c->pos, n);
+  c->pos += n;
+  return n;
+}
+
+static long __mf_write(FILE *f, const char *src, long n) {
+  struct __memfile *c = (struct __memfile *)f->cookie;
+  if (c->append) c->pos = c->len;
+  size_t room = c->size - c->pos;
+  if ((size_t)n > room) {
+    /* No room for all of it: write what fits, fail loudly on the rest. */
+    f->flags |= __F_ERR;
+    errno = ENOSPC;
+    if (room == 0) return -1;
+    n = (long)room;
+  }
+  memcpy(c->buf + c->pos, src, n);
+  c->pos += n;
+  if (c->pos > c->len) {
+    c->len = c->pos;
+    if (c->len < c->size) c->buf[c->len] = 0;
+  }
+  return n;
+}
+
+static long long __mf_seek(FILE *f, long long off, int whence) {
+  struct __memfile *c = (struct __memfile *)f->cookie;
+  long long base = whence == SEEK_CUR ? (long long)c->pos
+                 : whence == SEEK_END ? (long long)c->len : 0;
+  if (whence != SEEK_SET && whence != SEEK_CUR && whence != SEEK_END) {
+    errno = EINVAL;
+    return -1;
+  }
+  if (off < -base || off > (long long)c->size - base) {
+    errno = EINVAL;
+    return -1;
+  }
+  c->pos = (size_t)(base + off);
+  return base + off;
+}
+
+static int __mf_close(FILE *f) {
+  struct __memfile *c = (struct __memfile *)f->cookie;
+  if (c->own) free(c->buf);
+  free(c);
+  return 0;
+}
+
+FILE *fmemopen(void *buf, size_t size, const char *mode) {
+  int fflags = 0;
+  if (mode[0] == 'r') {
+    fflags = (mode[1] == '+' || (mode[1] == 'b' && mode[2] == '+')) ? (__F_READ | __F_WRITE) : __F_READ;
+  } else if (mode[0] == 'w') {
+    fflags = (mode[1] == '+' || (mode[1] == 'b' && mode[2] == '+')) ? (__F_READ | __F_WRITE) : __F_WRITE;
+  } else if (mode[0] == 'a') {
+    fflags = (mode[1] == '+' || (mode[1] == 'b' && mode[2] == '+')) ? (__F_READ | __F_WRITE) : __F_WRITE;
+  } else {
+    errno = EINVAL;
+    return 0;
+  }
+  struct __memfile *c = (struct __memfile *)malloc(sizeof *c);
+  if (!c) return 0;
+  c->own = 0;
+  if (!buf) {
+    buf = calloc(1, size ? size : 1);
+    if (!buf) { free(c); return 0; }
+    c->own = 1;
+  }
+  c->buf = (char *)buf;
+  c->size = size;
+  c->append = (mode[0] == 'a');
+  if (mode[0] == 'r') c->len = size;
+  else if (mode[0] == 'a') c->len = strnlen(c->buf, size);
+  else { c->len = 0; if (size) c->buf[0] = 0; }
+  c->pos = c->append ? c->len : 0;
+  FILE *f = (FILE *)malloc(sizeof(FILE));
+  if (!f) { if (c->own) free(buf); free(c); return 0; }
+  char *iobuf = (char *)malloc(BUFSIZ);
+  f->fd = -1;
+  f->flags = fflags | __F_OWNBUF;
+  f->buf_mode = _IOFBF;
+  f->buf = iobuf;
+  f->buf_size = BUFSIZ;
+  f->buf_pos = 0;
+  f->buf_len = 0;
+  f->ungetc_char = EOF;
+  __clear_cookie(f);
+  f->cookie = c;
+  f->io_read = __mf_read;
+  f->io_write = __mf_write;
+  f->io_seek = __mf_seek;
+  f->io_close = __mf_close;
+  if (__num_open_files < 64) __open_files[__num_open_files++] = f;
+  return f;
 }
   `,
   "__stdlib.c": `
@@ -31407,6 +31869,119 @@ int rand(void) {
   return (__rand_next / 65536) % 32768;
 }
 void srand(unsigned int seed) { __rand_next = seed; }
+
+/* ---- random()/srandom()/initstate()/setstate() (POSIX XSI, ticket #112) ----
+ *
+ * Ported from musl 1.2.5 src/prng/random.c (MIT), locks stripped (this
+ * target is single-threaded) and file-scope names prefixed __rnd_ so they
+ * cannot collide inside this combined translation unit. The lagged Fibonacci
+ * generator and its LCG seeding are byte-identical to musl's, so the default
+ * sequence equals srandom(1)'s, as the libc-test random test requires. */
+
+static unsigned int __rnd_init_tab[] = {
+0x00000000,0x5851f42d,0xc0b18ccf,0xcbb5f646,
+0xc7033129,0x30705b04,0x20fd5db4,0x9a8b7f78,
+0x502959d8,0xab894868,0x6c0356a7,0x88cdb7ff,
+0xb477d43f,0x70a3a52b,0xa8e4baf1,0xfd8341fc,
+0x8ae16fd9,0x742d2f7a,0x0d1f0796,0x76035e09,
+0x40f7702c,0x6fa72ca5,0xaaa84157,0x58a0df74,
+0xc74a0364,0xae533cc4,0x04185faf,0x6de3b115,
+0x0cab8628,0xf043bfa4,0x398150e9,0x37521657};
+
+static int __rnd_n = 31;
+static int __rnd_i = 3;
+static int __rnd_j = 0;
+/* &tab[1], not tab+1: array-plus-int on an array rvalue draws this
+   compiler's decay warning into every program that links stdlib. */
+static unsigned int *__rnd_x = &__rnd_init_tab[1];
+
+static unsigned int __rnd_lcg31(unsigned int x) {
+  return (1103515245u * x + 12345u) & 0x7fffffff;
+}
+
+static unsigned long long __rnd_lcg64(unsigned long long x) {
+  return 6364136223846793005ull * x + 1;
+}
+
+static void *__rnd_savestate(void) {
+  __rnd_x[-1] = (__rnd_n << 16) | (__rnd_i << 8) | __rnd_j;
+  return __rnd_x - 1;
+}
+
+static void __rnd_loadstate(unsigned int *state) {
+  __rnd_x = state + 1;
+  __rnd_n = __rnd_x[-1] >> 16;
+  __rnd_i = (__rnd_x[-1] >> 8) & 0xff;
+  __rnd_j = __rnd_x[-1] & 0xff;
+}
+
+static void __rnd_srandom(unsigned seed) {
+  int k;
+  unsigned long long s = seed;
+
+  if (__rnd_n == 0) {
+    __rnd_x[0] = s;
+    return;
+  }
+  __rnd_i = __rnd_n == 31 || __rnd_n == 7 ? 3 : 1;
+  __rnd_j = 0;
+  for (k = 0; k < __rnd_n; k++) {
+    s = __rnd_lcg64(s);
+    __rnd_x[k] = s >> 32;
+  }
+  /* make sure x contains at least one odd number */
+  __rnd_x[0] |= 1;
+}
+
+void srandom(unsigned seed) {
+  __rnd_srandom(seed);
+}
+
+char *initstate(unsigned seed, char *state, size_t size) {
+  void *old;
+
+  if (size < 8)
+    return 0;
+  old = __rnd_savestate();
+  if (size < 32)
+    __rnd_n = 0;
+  else if (size < 64)
+    __rnd_n = 7;
+  else if (size < 128)
+    __rnd_n = 15;
+  else if (size < 256)
+    __rnd_n = 31;
+  else
+    __rnd_n = 63;
+  __rnd_x = (unsigned int *)state + 1;
+  __rnd_srandom(seed);
+  __rnd_savestate();
+  return old;
+}
+
+char *setstate(char *state) {
+  void *old;
+
+  old = __rnd_savestate();
+  __rnd_loadstate((unsigned int *)state);
+  return old;
+}
+
+long random(void) {
+  long k;
+
+  if (__rnd_n == 0) {
+    k = __rnd_x[0] = __rnd_lcg31(__rnd_x[0]);
+    return k;
+  }
+  __rnd_x[__rnd_i] += __rnd_x[__rnd_j];
+  k = __rnd_x[__rnd_i] >> 1;
+  if (++__rnd_i == __rnd_n)
+    __rnd_i = 0;
+  if (++__rnd_j == __rnd_n)
+    __rnd_j = 0;
+  return k;
+}
 
 void *bsearch(const void *key, const void *base, size_t nmemb,
               size_t size, int (*compar)(const void *, const void *)) {
