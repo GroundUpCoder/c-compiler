@@ -537,14 +537,14 @@ const script = [
   `wmctl click $DSID ${desk(DESK_ACT, 'fileman')}`,           // plain select
   'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (navy label strip, no window observable)
   'wmctl shot $DSID /root/s1.ppm && echo s1-ok',
-  // ctrl+click doom: additive toggle (keydown/keyup hold the modifier
+  // ctrl+click ctlpanel: additive toggle (keydown/keyup hold the modifier
   // across the separate click injection — todos/0077 wmctl growth)
   'wmctl keydown $DSID 224 1073742048 64',                    // LCTRL down
-  `wmctl click $DSID ${desk(DESK_ACT, 'doom')}`,
+  `wmctl click $DSID ${desk(DESK_ACT, 'ctlpanel')}`,
   'wmctl keyup $DSID 224 1073742048 0',
   'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (ctrl+click additive, no window observable)
   'wmctl shot $DSID /root/s2.ppm && echo s2-ok',
-  // shift+click notepad: range from the anchor (doom, entry order)
+  // shift+click notepad: range from the anchor (ctlpanel, entry order)
   'wmctl keydown $DSID 225 1073742049 1',                     // LSHIFT down
   `wmctl click $DSID ${desk(DESK_ACT, 'notepad')}`,
   'wmctl keyup $DSID 225 1073742049 0',
@@ -1134,8 +1134,8 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
 
 // Icon pixels: read the shot back OUT of the root (writable) volume (the
 // 0040 flip: /root lives on the root volume, full path preserved) and
-// histogram icon cell 0 (doom at 16,16): white tile, navy center, black
-// link notch on the teal ground.
+// histogram icon cell 0 (the Presentations dir at 16,16): white tile, navy
+// glyph on the teal ground.
 {
   const { BLOCK_FS } = require(path.join(ROOT, 'host.js'));
   const COMMON = require(path.join(ROOT, 'os/os-common.js'));
@@ -1376,19 +1376,19 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   for (const s of ['s1', 's2', 's2b', 's3', 's4', 's5', 's6'])
     check(`${s} shot written`, out.includes(s + '-ok'));
   const p1 = readPpm('s1.ppm');
-  check('plain click selects one (fileman navy, doom teal)',
-    strip(p1, ...at('fileman')) === NAVY && strip(p1, ...at('doom')) === TEAL,
-    [strip(p1, ...at('fileman')), strip(p1, ...at('doom'))]);
+  check('plain click selects one (fileman navy, ctlpanel teal)',
+    strip(p1, ...at('fileman')) === NAVY && strip(p1, ...at('ctlpanel')) === TEAL,
+    [strip(p1, ...at('fileman')), strip(p1, ...at('ctlpanel'))]);
   const p2 = readPpm('s2.ppm');
-  check('ctrl+click adds (fileman AND doom navy)',
-    strip(p2, ...at('fileman')) === NAVY && strip(p2, ...at('doom')) === NAVY,
-    [strip(p2, ...at('fileman')), strip(p2, ...at('doom'))]);
+  check('ctrl+click adds (fileman AND ctlpanel navy)',
+    strip(p2, ...at('fileman')) === NAVY && strip(p2, ...at('ctlpanel')) === NAVY,
+    [strip(p2, ...at('fileman')), strip(p2, ...at('ctlpanel'))]);
   const p2b = readPpm('s2b.ppm');
-  check('shift+click ranges from the anchor (doom..notepad navy, ends teal)',
-    strip(p2b, ...at('doom')) === NAVY && strip(p2b, ...at('fileman')) === NAVY &&
+  check('shift+click ranges from the anchor (ctlpanel..notepad navy, ends teal)',
+    strip(p2b, ...at('ctlpanel')) === NAVY && strip(p2b, ...at('fileman')) === NAVY &&
     strip(p2b, ...at('notepad')) === NAVY &&
     strip(p2b, ...at('alauncher')) === TEAL && strip(p2b, ...at('notes.txt')) === TEAL,
-    [strip(p2b, ...at('doom')), strip(p2b, ...at('notepad')), strip(p2b, ...at('notes.txt'))]);
+    [strip(p2b, ...at('ctlpanel')), strip(p2b, ...at('notepad')), strip(p2b, ...at('notes.txt'))]);
   const p3 = readPpm('s3.ppm');
   check('marquee REPLACES with the intersected tiles (col 0 rows 0-2)',
     strip(p3, ...at('Presentations')) === NAVY && strip(p3, ...at('alauncher')) === NAVY &&

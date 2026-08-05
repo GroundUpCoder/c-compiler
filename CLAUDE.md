@@ -729,8 +729,8 @@ blob, rollback = keep the old one; user territory is never written by
 an upgrade. `image.json` is split `system`/`user`: paths map to **C
 sources compiled at bake time** by the cc driver in `os-common.js` (no
 build step), vendor `project` builds, `bin` blobs (repo-relative game
-data), raw `text`, and `link` symlinks; the `user` section (doom1.wad,
-pak0.pak, Desktop links) seeds ONCE onto a freshly created root volume
+data), raw `text`, and `link` symlinks; the `user` section (gameboy ROMs,
+Desktop links) seeds ONCE onto a freshly created root volume
 (no version gate — `/etc/.image-version` is gone). Staleness (todos/
 0082): every Node-side gate is version AND input-fresh — a blob at the
 manifest version whose mtime is older than any bake input (compiler.js,
@@ -750,8 +750,10 @@ the rw volume). pid 1 is busybox hush (`/bin/sh`, baked from
 autostarts as a kernel service (killing it falls back to kernel-chrome;
 `wm &` respawns) and reads its Start menu from `/etc/menu` if that dir
 exists, else `/usr/share/menu` (first-existing-dir wins). Windowed vendor apps are seeded in-OS (todos/0015):
-`/bin/doom` (WAD at `/root/doom1.wad` — doomgeneric searches cwd only,
-hush starts in /root), `/bin/gameboy` (ROMs under `/root/roms` — the ROM
+`doom` (a gucman package and the first real `defaultPackages` member
+since #420 — a fresh networked boot installs it via `sync-defaults`, the
+fat image folds it under `/usr/opt/doom`; the launcher keeps the
+caller's CWD and passes `-iwad`), `/bin/gameboy` (ROMs under `/root/roms` — the ROM
 files are gitignored, so their entries are `optional`: missing binary
 assets log a skip instead of failing the boot; bare `gameboy` runs a
 built-in test ROM), `/bin/snake` (tty game; needs two paced `q`s to quit

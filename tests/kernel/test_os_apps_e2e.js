@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// 0015 acceptance, headless: the seeded vendor apps (/bin/doom, /bin/gameboy,
+// 0015 acceptance, headless: the windowed vendor apps (/bin/doom, /bin/gameboy,
 // /bin/snake — built from vendor bin.jsons at seed time, game data landed via
 // image.json `bin` entries) run windowed in-OS with zero source changes,
-// driven through os/boot.js. Covers: binary-asset seeding (doom1.wad found in
+// driven through os/boot.js. Covers: binary-asset placement (doom1.wad in the
+// folded doom package since #420, found via the launcher's -iwad; found in
 // cwd /root by d_iwad.c, a ROM under /root/roms), optional-entry semantics
 // (the gitignored ROMs must not brick boots on other checkouts), WM placement
 // + titles for real SDL apps, and `wmctl shot SID` frames that are verifiably
@@ -72,7 +73,7 @@ async function testOptionalSeeding() {
 /* ---- session A: seed, launch doom + gameboy + quake, list, shot surfaces ---- */
 function sessionApps() {
   const script = [
-    'ls -l /root/doom1.wad',                        // bin entry seeded
+    'ls -l /usr/opt/doom/doom1.wad',                // folded doom package (fat fixture, #420)
     'ls -l /usr/opt/quake/id1/pak0.pak',            // 18MB, folded quake package (fat fixture)
     'doom &',
     'wmctl wait win "DOOM Shareware"',              // window spawn (0155)
@@ -101,7 +102,7 @@ function sessionApps() {
   const list1 = (out.split('==list1\n')[1] || '');
   const row = (title) => list1.split('\n').find(l => l.endsWith('\t' + title)) || '';
 
-  check('doom1.wad seeded via the bin entry (4196020 bytes)',
+  check('doom1.wad present via the folded doom package (4196020 bytes)',
     out.includes('4196020'), out.split('\n')[0]);
   const doomRow = row('DOOM Shareware');
   check('doom opens a WM-placed window titled "DOOM Shareware"',

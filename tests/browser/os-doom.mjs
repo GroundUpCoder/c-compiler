@@ -1,7 +1,7 @@
-// 0015 browser acceptance: the seeded vendor apps run windowed in the real
-// OS page. Boot os.html in headless Chromium (first boot compiles doom,
-// gameboy and snake from vendor sources and lands doom1.wad + a ROM via the
-// image.json `bin` entries), launch `doom &` from the shell, and assert on
+// 0015 browser acceptance: the windowed vendor apps run in the real OS
+// page. Boot os.html in headless Chromium against the FAT fixture (doom is
+// a folded package since #420 — its launcher + WAD live under
+// /usr/opt/doom), launch `doom &` from the shell, and assert on
 // composited desktop pixels: a real rendered frame, the attract demo
 // animating (present loop pumping), keyboard reaching the app (Escape opens
 // the DOOM menu while the title screen is otherwise static), and a clean

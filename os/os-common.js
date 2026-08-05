@@ -294,7 +294,7 @@ function buildProject(CompilerJS, projPath, readHostFile) {
  *   entry.content — inline string; written verbatim to /path (one-liners
  *                   like the /usr/share/menu command entries, todos/0028)
  *   entry.bin     — REPO-relative binary file; copied verbatim to /path
- *                   (game data: doom1.wad, gameboy ROMs — needs io.readBinary)
+ *                   (game data: gameboy ROMs — needs io.readBinary)
  *   entry.optional — (with entry.bin) a missing asset logs a skip instead of
  *                   failing the boot: for assets that are deliberately NOT
  *                   in the repo (the gameboy ROMs are gitignored), so other
@@ -1520,7 +1520,7 @@ function foldPackages(fsMod, pathMod, rootDir, manifest, which, opts) {
  * links stay links (absolute /usr/bin targets), launcher scripts and deck
  * data keep their kinds, modes and `optional` semantics. The Recycle Bin
  * is not in the manifest, so it never enters the default set (wm.c's
- * ensure_recycle stays its owner); non-Desktop user seeds (doom1.wad,
+ * ensure_recycle stays its owner); non-Desktop user seeds (ROMs,
  * roms, /etc/profile) are naturally outside the prefix filter. With no
  * user Desktop entries the input manifest is returned untouched (the
  * foldPackages empty-fold identity rule). */

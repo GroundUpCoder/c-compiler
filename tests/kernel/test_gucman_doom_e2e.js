@@ -4,9 +4,11 @@
 // The shape (#419's mechanism, doom as its first real member):
 //
 //   - packages/doom.json carries the binary (vendor/doom/bin.json), the
-//     shareware WAD and a quake-pattern self-locating launcher (d_iwad.c's
-//     BuildIWADDirList puts "." first, so cd-to-the-package-dir is the whole
-//     WAD resolution — no vendored-source patch).
+//     shareware WAD and a launcher that keeps the caller's CWD (doom's
+//     configdir is "." — a cd-launcher would litter the package dir with
+//     .savegame/) and hands the WAD over via -iwad with the known-prefix
+//     probe (/opt/doom installed, /usr/opt/doom baked) — no vendored-source
+//     patch.
 //   - os/image.json no longer bakes /usr/bin/doom, the Games menu link, the
 //     Desktop link or /root/doom1.wad; instead `defaultPackages` names doom,
 //     so bakeSystemImage writes it into /usr/share/gucman/defaults and every
@@ -183,7 +185,7 @@ async function main() {
     wadSec.includes(wadSha), wadSec);
 
   const launch = sect(outB, 'launch');
-  check('installed doom boots to its window off the installed WAD (the "." IWAD probe)',
+  check('installed doom boots to its window off the installed WAD (the launcher -iwad)',
     launch.split('\n').some((l) => l.endsWith('\tDOOM Shareware')), JSON.stringify(launch));
 
   const rem = sect(outB, 'remove');

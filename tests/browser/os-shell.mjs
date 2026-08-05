@@ -480,9 +480,10 @@ try {
   // deskEntries/deskCell (the todos/0166 rule: derived from os/image.json,
   // never hardcoded — and since 0184/0185 the seeded set wraps into column
   // 1 and leads with the Presentations DIR, so cells are looked up at the
-  // LIVE screen height). Probes below use doom (a 4-char label like the
-  // old term probe: label starts at cell x+30) in column 0; term now sits
-  // in column 1 and keeps the double-click-launch role. (The winboxes the
+  // LIVE screen height). Probes below use calc (a 4-char label like the
+  // old term probe: label starts at cell x+30) in column 0 — doom left the
+  // seeded set with the doom package (#420); term keeps the
+  // double-click-launch role. (The winboxes the
   // Start-menu legs launched were closed just above, gated on their absence.)
   const DESK_ENTRIES = deskEntries();
   const cell = (name) => deskCell(DESK_ENTRIES, name, SH);
@@ -491,10 +492,10 @@ try {
   // lw ~= min(len,9)*12 at the 12px mono advance; sample the margin center.
   const stripL = (c, name) =>
     [c.x + Math.floor((116 - Math.min(name.length, 9) * 12) / 2) - 1, c.y + 50];
-  const DC = cell('doom');
-  const I3X = DC.x + 42, I3Y = DC.y + 6;         // doom's icon tile origin
+  const DC = cell('calc');
+  const I3X = DC.x + 42, I3Y = DC.y + 6;         // calc's icon tile origin
   await waitPixel(I3X + 2, I3Y + 2, WHITE);
-  check(`desktop icon tile composited (doom, cell ${DC.col},${DC.row})`, true);
+  check(`desktop icon tile composited (calc, cell ${DC.col},${DC.row})`, true);
   check('icon glyph navy center', near(await sample(I3X + 16, I3Y + 16), NAVY),
     await sample(I3X + 16, I3Y + 16));
   // The Presentations folder icon (todos/0185): tab+body glyph — the tab
@@ -507,13 +508,13 @@ try {
 
   // Single click: selection highlight (navy label strip), NO launch.
   await clickAt(DC.x + 58, I3Y + 16);
-  { const [lx, ly] = stripL(DC, 'doom'); await waitPixel(lx, ly, NAVY); }   // label strip left
+  { const [lx, ly] = stripL(DC, 'calc'); await waitPixel(lx, ly, NAVY); }   // label strip left
   check('single click selects (navy label strip)', true);
 
   // ---- selection & manipulation (todos/0077) ----
   // The click above also focused the desktop (wm.c policy), so modifier
   // and navigation keys reach the icon grid from here on.
-  // Ctrl+click paint: additive — doom stays.
+  // Ctrl+click paint: additive — calc stays.
   const MC = cell('paint');
   const MSTRIP = stripL(MC, 'paint');            // paint label strip left margin
   await page.keyboard.down('Control');
@@ -521,8 +522,8 @@ try {
   await page.keyboard.up('Control');
   await waitPixel(MSTRIP[0], MSTRIP[1], NAVY);
   check('ctrl+click adds to the selection (paint strip navy)', true);
-  { const [lx, ly] = stripL(DC, 'doom');
-    check('...and doom stays selected', near(await sample(lx, ly), NAVY), await sample(lx, ly)); }
+  { const [lx, ly] = stripL(DC, 'calc');
+    check('...and calc stays selected', near(await sample(lx, ly), NAVY), await sample(lx, ly)); }
 
   // Marquee from empty desktop over two vertically-adjacent column-0 tiles
   // (fileman + notepad — #434 removed the three sameboy launchers, so the

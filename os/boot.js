@@ -176,7 +176,7 @@ const bootLog = quiet ? () => {} : (m) => process.stderr.write('[boot] ' + m + '
 /* ---- the seed/bake io (repo-relative assets, synchronous reads) ---- */
 const seedIo = {
   readAsset: (name) => fs.readFileSync(path.join(__dirname, name), 'utf-8'),
-  // bin entries (game data: doom1.wad, ROMs) are repo-relative binaries
+  // bin entries (game data: gameboy ROMs) are repo-relative binaries
   readBinary: (p) => fs.readFileSync(path.join(ROOT, p)),
   // project entries (busybox hush) are repo-relative multi-file builds
   buildProject: (proj) => COMMON.buildProject(CompilerJS, proj,
