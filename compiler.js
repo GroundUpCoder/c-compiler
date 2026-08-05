@@ -34541,18 +34541,28 @@ async function doRun(msg) {
                 try { fs.mkdir(dir, 0o755); } catch (e) {}
               }
 
-              var fd = fs.open(fpath, 0x40 | 0x200, 0o644); // O_CREAT | O_TRUNC
-              if (fd >= 0) {
-                fs.write(fd, fdata, fdata.length);
-                fs.close(fd);
+              // O_WRONLY | O_CREAT | O_TRUNC — the access mode matters: the
+              // fd access-mode enforcement (todos/0376) fails a write on an
+              // O_RDONLY fd, and an unchecked failure here seeds a 0-byte
+              // asset the program then reads as corrupt (ticket #542).
+              var fd = fs.open(fpath, 0x241, 0o644);
+              if (fd < 0) throw new Error('seeding ' + fpath + ': open failed');
+              var wrote = fs.write(fd, fdata, fdata.length);
+              fs.close(fd);
+              if (wrote !== fdata.length) {
+                throw new Error('seeding ' + fpath + ': wrote ' + wrote +
+                                ' of ' + fdata.length + ' bytes');
               }
             }
 
             // Write new bundle hash
+            // Same O_WRONLY requirement as above (#542). A failed hash write
+            // is not fatal — the page just re-seeds next load — but say so.
             var hashData = new TextEncoder().encode(bundleHash);
-            var hfd = fs.open('/__bundle_hash', 0x40 | 0x200, 0o644);
+            var hfd = fs.open('/__bundle_hash', 0x241, 0o644);
             if (hfd >= 0) {
-              fs.write(hfd, hashData, hashData.length);
+              if (fs.write(hfd, hashData, hashData.length) !== hashData.length)
+                console.warn('bundle-hash write failed; assets will re-seed on next load');
               fs.close(hfd);
             }
           }
