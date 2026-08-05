@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
@@ -389,8 +390,13 @@ static void render_tool_args(const char *name, cJSON *in) {
 
 /* The tool result: a bold-yellow "Result" label + an indented preview,
  * capped so a chatty command can't flood the transcript (ui.py:216-242). */
-static void render_tool_result(const char *result) {
-    fprintf(stderr, "    %sResult%s\n", R_RES, CRST);
+static void render_tool_result(const char *result, long secs) {
+    /* #507: a slow call names its duration — unconditional (not tty-gated),
+     * a one-shot line that is honest in captured logs too */
+    if (secs >= 2)
+        fprintf(stderr, "    %sResult%s %s(%lds)%s\n", R_RES, CRST, CDIM, secs, CRST);
+    else
+        fprintf(stderr, "    %sResult%s\n", R_RES, CRST);
     if (!result || !*result) { fprintf(stderr, "      %s(empty)%s\n", CDIM, CRST); return; }
     const char *line = result; int shown = 0;
     while (*line && shown < 8) {
@@ -407,8 +413,59 @@ static void render_tool_result(const char *result) {
 
 static volatile sig_atomic_t g_interrupted;
 static void on_interrupt(int sig) { (void)sig; g_interrupted = 1; }
-static int curl_progress(void *p, curl_off_t a, curl_off_t b, curl_off_t c, curl_off_t d) {
-    (void)p; (void)a; (void)b; (void)c; (void)d; return g_interrupted ? 1 : 0;
+
+/* ---- #507: progress signal during long operations ----------------------
+ * A working agent must be distinguishable from a wedged one: gcode used to
+ * print the tool header, then NOTHING until the result (the last output of
+ * a 15-minute session). The heartbeat is on by default on a tty;
+ * GCODE_PROGRESS=1/0 forces it on/off (the GCODE_BASH_SECS test seam
+ * precedent). On a real tty it renders in place with \r; forced on down a
+ * pipe it prints plain newline-terminated lines; a pipe without the env
+ * override gets nothing — the harness-safe degradation. */
+static int progress_enabled(void) {
+    static int v;                       /* 0 unknown, 1 on, 2 off */
+    if (!v) {
+        const char *s = getenv("GCODE_PROGRESS");
+        if (s && *s) v = atoi(s) ? 1 : 2;
+        else v = isatty(2) ? 1 : 2;
+    }
+    return v == 1;
+}
+static int g_progress_live;             /* an in-place \r line is showing */
+static void progress_show(const char *what, long secs) {
+    if (!progress_enabled()) return;
+    if (isatty(2)) {
+        fprintf(stderr, "\r    %s\xe2\x80\xa6 %s %lds%s\033[K", CDIM, what, secs, CRST);
+        g_progress_live = 1;
+    } else {
+        fprintf(stderr, "    %s\xe2\x80\xa6 %s %lds%s\n", CDIM, what, secs, CRST);
+    }
+    fflush(stderr);
+}
+static void progress_clear(void) {
+    if (!g_progress_live) return;
+    fprintf(stderr, "\r\033[K");
+    fflush(stderr);
+    g_progress_live = 0;
+}
+
+/* #507: while a request is in flight and no response byte has arrived,
+ * libcurl's periodic callback (already wired for the ^C abort; the in-OS
+ * veneer calls it at every wait boundary) doubles as the API-half
+ * heartbeat. dlnow > 0 means the stream is rendering its own progress. */
+static time_t g_api_start;
+static int curl_progress(void *p, curl_off_t dltotal, curl_off_t dlnow,
+                         curl_off_t ultotal, curl_off_t ulnow) {
+    (void)p; (void)dltotal; (void)ultotal; (void)ulnow;
+    if (g_api_start && dlnow == 0) {
+        long secs = (long)(time(NULL) - g_api_start);
+        static long last_shown;
+        if (secs >= 2 && secs != last_shown) {
+            progress_show("waiting for model", secs);
+            last_shown = secs;
+        }
+    }
+    return g_interrupted ? 1 : 0;
 }
 
 /* ===================================================================== */
@@ -472,11 +529,19 @@ static char *run_command(const char *cmd, int *exit_code) {
     close(pfd[1]);
     sb out = {0};
     int truncated = 0, timedout = 0, intkilled = 0;
+    time_t start = time(NULL);
+    long shown = 0;
     g_bash_alarm = 0;
     signal(SIGALRM, bash_on_alarm);
+    /* #507: the alarm is a 1-second TICK, re-armed one-shot each time it
+     * fires (only the proven one-shot itimer path is relied on); the CAP is
+     * judged at the loop top against the wall clock — the same loud kill on
+     * the same code path, so the #503 discipline is unchanged. Each tick
+     * EINTRs a parked read: that is both the heartbeat's chance to render
+     * and the cap's chance to fire on a silent child. */
     struct itimerval itv;
     itv.it_interval.tv_sec = 0; itv.it_interval.tv_usec = 0;
-    itv.it_value.tv_sec = bash_cap_secs(); itv.it_value.tv_usec = 0;
+    itv.it_value.tv_sec = 1; itv.it_value.tv_usec = 0;
     setitimer(ITIMER_REAL, &itv, 0);
     for (;;) {
         char buf[4096];
@@ -506,7 +571,14 @@ static char *run_command(const char *cmd, int *exit_code) {
          * SIGKILLed sh cannot block. Checked BEFORE the alarm: if both
          * landed in one safe-point batch, the user's ^C is the truer cause. */
         if (g_interrupted && !intkilled) { kill(pid, SIGKILL); intkilled = 1; break; }
-        if (g_bash_alarm && !timedout) { kill(pid, SIGKILL); timedout = 1; break; }
+        long elapsed = (long)(time(NULL) - start);
+        if (elapsed >= bash_cap_secs() && !timedout) { kill(pid, SIGKILL); timedout = 1; break; }
+        if (g_bash_alarm) {                  /* #507: 1s tick — render + re-arm */
+            g_bash_alarm = 0;
+            if (elapsed >= 1 && elapsed != shown) { progress_show("running", elapsed); shown = elapsed; }
+            itv.it_value.tv_sec = 1; itv.it_value.tv_usec = 0;
+            setitimer(ITIMER_REAL, &itv, 0);
+        }
         ssize_t n = read(pfd[0], buf, sizeof buf);
         if (n == 0) break;                   /* EOF: child (tree) is done */
         if (n < 0) {
@@ -529,6 +601,7 @@ static char *run_command(const char *cmd, int *exit_code) {
     }
     itv.it_value.tv_sec = 0;
     setitimer(ITIMER_REAL, &itv, 0);         /* disarm */
+    progress_clear();
     close(pfd[0]);
     int status = 0;
     waitpid(pid, &status, 0);
@@ -582,7 +655,9 @@ static char *run_command(const char *cmd, int *exit_code) {
     close(pfd[1]);
     sb out = {0};
     int truncated = 0, intkilled = 0;
-    time_t deadline = time(NULL) + bash_cap_secs();
+    time_t start = time(NULL);
+    time_t deadline = start + bash_cap_secs();
+    long shown = 0;
     for (;;) {
         /* #510: check BEFORE the poll, not only in its EINTR branch — a
          * chatty child keeps the pipe readable, so poll keeps returning
@@ -594,10 +669,14 @@ static char *run_command(const char *cmd, int *exit_code) {
          * child) must not drain the child's remaining runtime — kill and
          * stop reading, like the timeout path below. */
         if (g_interrupted && !intkilled) { kill(pid, SIGKILL); intkilled = 1; break; }
+        long elapsed = (long)(time(NULL) - start);        /* #507: heartbeat */
+        if (elapsed >= 1 && elapsed != shown) { progress_show("running", elapsed); shown = elapsed; }
         struct pollfd pf = { pfd[0], POLLIN, 0 };
         int remain = (int)(deadline - time(NULL));
         if (remain < 0) remain = 0;
-        int r = poll(&pf, 1, remain * 1000 + 100);
+        int slice = remain * 1000 + 100;
+        if (slice > 1000) slice = 1000;   /* #507: wake ~1/s so a silent child still ticks */
+        int r = poll(&pf, 1, slice);
         if (r < 0 && errno == EINTR)
             continue;                        /* ^C re-checked at loop top */
         if (r == 0 && time(NULL) >= deadline) {  /* timeout: kill the direct
@@ -620,6 +699,7 @@ static char *run_command(const char *cmd, int *exit_code) {
             }
         }
     }
+    progress_clear();
     close(pfd[0]);
     int status = 0;
     waitpid(pid, &status, 0);
@@ -1305,6 +1385,7 @@ static void handle_event(stream_ctx *ctx, const char *block, size_t len) {
 static size_t write_cb(char *ptr, size_t size, size_t nmemb, void *ud) {
     size_t n = size * nmemb;
     stream_ctx *ctx = ud;
+    progress_clear();     /* #507: first response bytes end the wait line */
     sb_add(&ctx->raw, ptr, n);
     sb_add(&ctx->accum, ptr, n);
     for (;;) {
@@ -1831,7 +1912,10 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
     curl_easy_setopt(h, CURLOPT_XFERINFOFUNCTION, curl_progress);
     if (cfg->verbose) { fprintf(stderr, "%s> POST %s%s\n%s\n", CDIM, url.p, CRST, payload); }
 
+    g_api_start = time(NULL);            /* #507: arm the waiting heartbeat */
     CURLcode rc = curl_easy_perform(h);
+    g_api_start = 0;
+    progress_clear();
     long code = 0; curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &code);
     curl_slist_free_all(hdr); curl_easy_cleanup(h);
     sb_free(&url); sb_free(&auth); free(payload);
@@ -1980,17 +2064,23 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
                 else
                     fprintf(stderr, "    %smalformed tool arguments (stop_reason %s) — not executed%s\n",
                             R_ERRB, ctx.stop_reason ? ctx.stop_reason : "(none)", CRST);
-            } else if (g_interrupted) {
-                result = strdup("[interrupted by user (^C) — tool not executed]");
-            } else {
-                result = execute_tool(b->name ? b->name : "", input);
+            }
+            long tool_secs = 0;                  /* #507: shown on Result */
+            if (!refused) {
+                if (g_interrupted) {
+                    result = strdup("[interrupted by user (^C) — tool not executed]");
+                } else {
+                    time_t t0 = time(NULL);
+                    result = execute_tool(b->name ? b->name : "", input);
+                    tool_secs = (long)(time(NULL) - t0);
+                }
             }
             cJSON *tr = cJSON_CreateObject();
             cJSON_AddStringToObject(tr, "type", "tool_result");
             cJSON_AddStringToObject(tr, "tool_use_id", b->id ? b->id : "");
             cJSON_AddStringToObject(tr, "content", result ? result : "");
             cJSON_AddItemToArray(tool_results, tr);
-            render_tool_result(result);
+            render_tool_result(result, tool_secs);
             if (b->name && !strcmp(b->name, "edit_file") && result &&
                 !strncmp(result, "edited ", 7)) {
                 cJSON *jo = cJSON_GetObjectItem(input, "old_string");

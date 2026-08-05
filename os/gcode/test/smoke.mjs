@@ -67,6 +67,13 @@ function startServer(scripts) {
       bodies.push(JSON.parse(buf.toString('utf8')));
       const body = scripts.shift();
       if (body === undefined) { res.writeHead(500); res.end('no script'); return; }
+      if (typeof body === 'object' && body.delay) {   // #507: slow first byte
+        setTimeout(() => {
+          res.writeHead(200, { 'content-type': 'text/event-stream' });
+          res.end(body.sse);
+        }, body.delay);
+        return;
+      }
       if (typeof body === 'object') {
         res.writeHead(body.status, { 'content-type': 'application/json' });
         res.end(body.body);
@@ -1031,6 +1038,46 @@ async function main() {
     check(!!cp && cp.content.includes('truncated'),
       '#506: grep results are hard-capped with a visible truncation marker');
     fs.rmSync(tree, { recursive: true, force: true });
+  }
+
+  // ---- #507: progress signal during a long tool call --------------------
+  // The heartbeat is tty-gated with GCODE_PROGRESS as the forced test seam
+  // (the GCODE_BASH_SECS precedent): =1 forces it on down a pipe (plain
+  // newline lines, no \r games), unset on a pipe means silent — that is the
+  // non-tty degradation the harness itself relies on. The Result-line
+  // duration is unconditional (a one-shot line, honest in logs).
+  {
+    const srv = await startServer([
+      toolUseResponse('sleeping', 'toolu_507a', 'bash', { command: 'sleep 3' }),
+      textResponse('slept ok'),
+    ]);
+    const forced = await runCodeBoth(srv.url, ['-p', 'nap', '--no-color', '--no-persist'],
+      { GCODE_PROGRESS: '1' });
+    srv.close();
+    check(/running [0-9]+s/.test(forced.stderr),
+      '#507: a long tool call renders a live elapsed heartbeat (GCODE_PROGRESS=1)');
+    check(/Result \([0-9]+s\)/.test(forced.stderr),
+      '#507: the Result line names the tool call duration');
+
+    const srv2 = await startServer([
+      toolUseResponse('sleeping', 'toolu_507b', 'bash', { command: 'sleep 3' }),
+      textResponse('slept ok'),
+    ]);
+    const piped = await runCodeBoth(srv2.url, ['-p', 'nap', '--no-color', '--no-persist']);
+    srv2.close();
+    check(!/running [0-9]+s/.test(piped.stderr),
+      '#507: piped (non-tty) stderr stays heartbeat-free by default');
+    check(/Result \([0-9]+s\)/.test(piped.stderr),
+      '#507: the duration still lands on the Result line without a tty');
+
+    const srv3 = await startServer([{ delay: 3200, sse: textResponse('slow hello') }]);
+    const waiting = await runCodeBoth(srv3.url, ['-p', 'hi', '--no-color', '--no-persist'],
+      { GCODE_PROGRESS: '1' });
+    srv3.close();
+    check(/waiting for model [0-9]+s/.test(waiting.stderr),
+      '#507: a slow first byte renders a waiting-for-model heartbeat');
+    check(waiting.stdout.includes('slow hello'),
+      '#507 negative control: the delayed turn still completes normally');
   }
 
   console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILURE(S)`);
