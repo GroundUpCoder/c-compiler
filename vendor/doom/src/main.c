@@ -177,13 +177,23 @@ void DG_DrawFrame()
 
 void DG_SleepMs(uint32_t ms)
 {
-  /* No-op in the browser rAF/callback model: there is no blocking sleep here.
-     main() registers doomgeneric_Tick via emscripten_set_main_loop(...,0,1) and
-     returns; the host drives it via requestAnimationFrame (no JSPI). Doom's
-     35Hz tics are paced by real-time I_GetTime() (SDL_GetTicks), which advances
-     on its own, so the init title-melt and TryRunTics wait-loops still make
-     progress without sleeping. SDL_Delay would throw without JSPI (and a
-     blocking sleep can't yield to the browser anyway), so we never call it. */
+  /* Deliberate no-op — but WHICH constraint applies depends on the runtime
+     flavor, chosen by the host at instantiation, not by this build (there is
+     no flavor axis in bin.json; host.js picks the SDL backend):
+     - STANDALONE-BROWSER callback model (createBrowserSDL): no blocking sleep
+       exists — SDL_Delay fails loud by design, because a blocked thread
+       starves the rAF pacing and the message-loop input/presents even where
+       Atomics.wait is legal. There the no-op is REQUIRED.
+     - gucOS PROCESS WORKERS (createSurfaceSDL) and headless (createNullSDL):
+       SDL_Delay is a real cooperative sleep since todos/done/0224 — a classic
+       blocking main loop is first-class there, and this no-op is a choice,
+       not a workaround.
+     Keeping the callback model — main() registers doomgeneric_Tick via
+     emscripten_set_main_loop(...,0,1) and returns; the host drives frames —
+     keeps this ONE build runnable in every flavor. Doom's 35Hz tics are paced
+     by real-time I_GetTime() (SDL_GetTicks), which advances on its own, so
+     the init title-melt and TryRunTics wait-loops still make progress without
+     sleeping. Re-verified against 0224 by ticket #119. */
   (void)ms;
 }
 
