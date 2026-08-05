@@ -21,6 +21,7 @@ var tests = [
   ['test_audio_ring_wrap.js', []],       // audio ring writePos stays masked; no RangeError at 2^31
   ['test_gcstr_imports.js', []],         // __gcstr binary shape: dedup, no data-segment copy, "#" Proxy polyfill
   ['test_blockfs_cli_clobber.js', []],   // --block-fs read error fails loud, never clobbers the image (0233/CD1)
+  ['test_host_ceiling.js', []],          // #184: CLI wall-clock ceiling — runaway import-looper dies 124 with a named message; healthy/disabled runs untouched (the 0332 orphan class)
   ['test_append_fstat_fail.js', []],     // O_APPEND fstat failure fails the open — no offset-0 "append" (0233/CD4)
   ['test_pipe_read_block.js', []],       // pipe read blocks on a live writer; EOF only at write-end close (0233/CD5)
   ['test_stream_bulk.js', []],           // stdin/pipe ByteQueue: MB-scale byte-exact passthrough (CD28)
