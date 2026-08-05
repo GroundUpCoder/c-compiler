@@ -7,4 +7,5 @@ tests/unit/core/control_flow/switch_br_table/switch_br_table.c:59: switch: br_if
 __posix.c:113: switch: br_if
 __string.c:26: switch: br_table
 __string.c:280: switch: br_table
-__time.c:347: switch: br_if
+__time.c:411: switch: br_if
+__time.c:664: switch: br_table

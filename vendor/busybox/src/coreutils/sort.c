@@ -92,24 +92,10 @@
 #include "libbb.h"
 
 /* These are sort types */
-#ifdef __wasm__
-/* WASM PORT PATCH: this libc has no strptime(); -M only ever asks it for
- * "%b" (abbreviated month name), so supply exactly that. */
-static char *strptime(const char *s, const char *fmt, struct tm *tm)
-{
-	static const char months[] ALIGN1 =
-		"Jan\0Feb\0Mar\0Apr\0May\0Jun\0Jul\0Aug\0Sep\0Oct\0Nov\0Dec";
-	int i;
-	(void)fmt; /* always "%b" here */
-	for (i = 0; i < 12; i++) {
-		if (strncasecmp(s, months + i * 4, 3) == 0) {
-			tm->tm_mon = i;
-			return (char *)s + 3;
-		}
-	}
-	return NULL;
-}
-#endif
+/* WASM PORT PATCH (retired by ticket #113): a local "%b"-only strptime()
+ * lived here while the libc had none; the libc's real strptime() now
+ * declares the symbol in <time.h>, so the shim would be an invalid static
+ * redeclaration and -M just calls the libc. */
 
 enum {
 	FLAG_n  = 1 << 0,       /* Numeric sort */

@@ -180,17 +180,6 @@ thing this file exists to kill.
 - file: os/win32/advapi32.c
 - anchor: tmp+rename, and there is no advisory lock, so two flushes landing in
 
-### L27 — strptime() is absent and strftime is missing six conversions plus width modifiers
-- ticket: #113
-- file: tests/run.py
-- anchor: "strptime": "not implemented: strptime() (todos/0307)",
-
-### L30 — strftime %s follows glibc/BSD (TZ-dependent) where musl is TZ-independent; nobody chose
-- ticket: #116
-- file: tests/run.py
-- anchor: # (todos/0307). %s additionally diverges from musl's expectation by the
-- provenance: 0307
-
 ### L76 — setjmp p4 residue: do/for controlling expressions and nonzero-constant comparisons are still rejected after #117 accepted the common contexts
 - ticket: #432
 - file: todos/CONFORMANCE-REMAINING.md
