@@ -106,14 +106,18 @@ async function main() {
   check('libc-sources installs (exit 0)', p.includes('RC=0'), p);
   check('/usr/local/src/libc -> /opt/libc-sources (the payload root)',
     p.split('\n').some((l) => l.trim() === '/opt/libc-sources'), p);
-  const nFiles = hdrs.size + Object.keys(CompilerJS.getStdlibSources()).length + 6; // + the 6 ext .c units
-  check(`the source tree carries all ${nFiles} files`,
-    p.split('\n').some((l) => l.trim() === String(nFiles)), p);
   const srcs = CompilerJS.getStdlibSources();
   const ext = JSON.parse((() => {
     const t = fs.readFileSync(path.join(ROOT, 'libc-ext.js'), 'utf-8');
     return t.slice(t.indexOf('{'), t.lastIndexOf('}') + 1);
   })());
+  // Headers + stdlib .c units + the ext .c units, the last DERIVED from
+  // libc-ext.js (a hardcoded 6 went stale the first time ext/ grew — #111
+  // added the search.h family and the count moved to 14).
+  const extCUnits = Object.keys(ext).filter((n) => n.endsWith('.c')).length;
+  const nFiles = hdrs.size + Object.keys(srcs).length + extCUnits;
+  check(`the source tree carries all ${nFiles} files`,
+    p.split('\n').some((l) => l.trim() === String(nFiles)), p);
   const psums = parseSums(p);
   check('__stdio.c is BYTE-EXACT vs the in-compiler literal map',
     psums.get('/usr/local/src/libc/__stdio.c') === sha(srcs['__stdio.c']), p);
