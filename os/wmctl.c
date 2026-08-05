@@ -116,7 +116,13 @@
  * argument is always the label form — numeric labels included (calc's
  * digit keys are buttons named "7"); there is no bare `click SID`, so
  * nothing is lost. With SID X Y it is the pixel injection above.
- * Exit: 0 ok, 1 command failed / WM endpoint unreachable, 2 usage.
+ * Exit: 0 ok, 1 command failed / WM endpoint unreachable, 2 usage —
+ * including a NON-NUMERIC numeric operand (ticket #501): every SID /
+ * scancode / coordinate / count argument is parsed full-string, and a
+ * malformed one fails loud on stderr naming the argument. atoi() used to
+ * map them to 0, which is a MEANINGFUL value on the injection paths
+ * (SID 0 = the focused window, scancode 0 = nothing), so a typo'd driver
+ * script injected nothing and reported success.
  */
 #include <dirent.h>
 #include <stdint.h>
@@ -343,6 +349,36 @@ static int do_agent(const char *cmd, const char *label, const char *text) {
 
 static int32_t f32bits(float v) { int32_t b; memcpy(&b, &v, 4); return b; }
 
+/* Strict numeric-operand parse (ticket #501). atoi() maps any non-numeric
+ * argument to 0, and 0 is meaningful on the injection paths (SID 0 = the
+ * focused window, scancode 0 = injects nothing), so `wmctl key pong Up` used
+ * to inject nothing and exit 0 — invisible exactly where wmctl is the only
+ * instrument (headless drivers; the geometry verbs only failed loud because
+ * the KERNEL rejects sid 0 for them). Full-string strtol; a malformed operand
+ * is a usage error: loud on stderr, exit 2. */
+static int32_t need_i32(const char *op, const char *what, const char *s) {
+    char *end;
+    errno = 0;
+    long v = strtol(s, &end, 10);
+    if (end == s || *end != 0 || errno == ERANGE) {
+        fprintf(stderr, "wmctl: %s: '%s' is not a numeric %s%s\n", op, s, what,
+                strcmp(what, "SID") == 0 ? " (see wmctl list)" : "");
+        exit(2);
+    }
+    return (int32_t)v;
+}
+
+/* Float flavor for the fractional operands (wheel notches, todos/0210). */
+static float need_f(const char *op, const char *what, const char *s) {
+    char *end;
+    float v = strtof(s, &end);
+    if (end == s || *end != 0) {
+        fprintf(stderr, "wmctl: %s: '%s' is not a numeric %s\n", op, s, what);
+        exit(2);
+    }
+    return v;
+}
+
 /* The 8-char FLAGS column (shared by `list` and `wait`): f m b r R A, a T/B
  * slot for pinned z-layers (todos/0038), then U for a transient/owned modal
  * (todos/0281 — no taskbar button, skipped by cycling). Kept in one place so
@@ -454,13 +490,31 @@ static int do_wait(int fd, int argc, char **argv) {
                 !strcmp(cond, "gone")) ? 1 : 2;
     if (argc < 3 + base) return usage();
     char *a[2] = { argv[3], base > 1 ? argv[4] : NULL };
-    long timeout = argc > 3 + base ? atol(argv[3 + base]) : 15000;
+    long timeout = argc > 3 + base ? need_i32("wait", "MS", argv[3 + base]) : 15000;
 
     /* Validate the condition name once (a bad name must not spin). */
     {
         wmp_rec probe[1];
         int rc = wm_cond_met(cond, a, probe, 0);
         if (rc < 0) { fprintf(stderr, "wmctl: unknown wait condition '%s'\n", cond); return 2; }
+    }
+
+    /* Validate numeric args up front (#501): a non-numeric SID must fail
+     * loud, not evaluate as sid 0 — which `gone` would call satisfied on
+     * the spot (silent false green in the one verb tests SYNC on), and the
+     * others would spin against for the whole timeout. A malformed WxH is
+     * the same spin (sscanf != 2 evaluates to "keep waiting" forever). */
+    if (!strcmp(cond, "gone") || !strcmp(cond, "flag") || !strcmp(cond, "noflag") ||
+        !strcmp(cond, "seq") || !strcmp(cond, "dim") || !strcmp(cond, "dst"))
+        (void)need_i32("wait", "SID", a[0]);
+    if (!strcmp(cond, "count") || !strcmp(cond, "atleast") || !strcmp(cond, "seq"))
+        (void)need_i32("wait", "N", a[1]);
+    if (!strcmp(cond, "dim") || !strcmp(cond, "dst")) {
+        int w, h;
+        if (sscanf(a[1], "%dx%d", &w, &h) != 2) {
+            fprintf(stderr, "wmctl: wait %s: '%s' is not WxH\n", cond, a[1]);
+            return 2;
+        }
     }
 
     long deadline = wm_now_ms() + timeout;
@@ -489,7 +543,7 @@ static int do_agent_wait(int argc, char **argv) {
     if (argc < 3 + base) return usage();
     const char *label = argv[3];
     const char *substr = isText ? argv[4] : NULL;
-    long timeout = argc > 3 + base ? atol(argv[3 + base]) : 15000;
+    long timeout = argc > 3 + base ? need_i32("wait", "MS", argv[3 + base]) : 15000;
     int wantAbsent = !strcmp(cond, "nolabel");
 
     long deadline = wm_now_ms() + timeout;
@@ -549,7 +603,7 @@ static int shot_to_ppm(int fd, const char *file) {
 
 static int do_shot(int fd, const char *what, const char *file) {
     int screen = strcmp(what, "screen") == 0;
-    int32_t a[1] = { screen ? 0 : (int32_t)atoi(what) };
+    int32_t a[1] = { screen ? 0 : need_i32("shot", "SID", what) };
     wmp_hdr h;
     if (wmp_send(fd, screen ? WMP_SHOT_SCREEN : WMP_SHOT, a, screen ? 0 : 1) != 0 ||
         wmp_next_reply(fd, &h) != 0)
@@ -613,7 +667,7 @@ int main(int argc, char **argv) {
         wmp_rec recs[256];
         int n = wm_fetch(fd, recs, 256);
         if (n < 0) return fail("protocol error");
-        const wmp_rec *r = wm_by_sid(recs, n, (int32_t)atoi(argv[2]));
+        const wmp_rec *r = wm_by_sid(recs, n, need_i32("seq", "SID", argv[2]));
         if (!r) return fail("no such sid");
         printf("%d\n", r->frame_seq);
         return 0;
@@ -623,7 +677,7 @@ int main(int argc, char **argv) {
         return do_shot(fd, argv[2], argc > 3 ? argv[3] : NULL);
     }
     if (!strcmp(cmd, "cycle")) {        /* window cycling (todos/0032) */
-        int32_t a[1] = { argc > 2 ? atoi(argv[2]) : 1 };
+        int32_t a[1] = { argc > 2 ? need_i32("cycle", "DIR", argv[2]) : 1 };
         return wmp_cmd(fd, WMP_CYCLE, a, 1) ? failop("cycle") : 0;
     }
     if (!strcmp(cmd, "menu")) {         /* Start menu toggle (todos/0078) */
@@ -660,7 +714,8 @@ int main(int argc, char **argv) {
                                            + per-surface client cursor */
         if (argc < 4) return usage();
         wmp_hdr h;
-        int32_t a[2] = { f32bits((float)atoi(argv[2])), f32bits((float)atoi(argv[3])) };
+        int32_t a[2] = { f32bits((float)need_i32("cursor", "X", argv[2])),
+                         f32bits((float)need_i32("cursor", "Y", argv[3])) };
         if (wmp_send(fd, WMP_CURSOR_AT, a, 2) != 0 ||
             wmp_next_reply(fd, &h) != 0)
             return fail("protocol error");
@@ -692,16 +747,16 @@ int main(int argc, char **argv) {
     if (!strcmp(cmd, "sdown") || !strcmp(cmd, "smove") || !strcmp(cmd, "sup")) {
         if (argc < 4) return usage();
         int32_t kind = cmd[1] == 'm' ? 0 : cmd[1] == 'd' ? 1 : 2;
-        int32_t a[4] = { kind, f32bits((float)atoi(argv[2])),
-                         f32bits((float)atoi(argv[3])),
-                         argc > 4 ? atoi(argv[4]) : 1 };
+        int32_t a[4] = { kind, f32bits((float)need_i32(cmd, "X", argv[2])),
+                         f32bits((float)need_i32(cmd, "Y", argv[3])),
+                         argc > 4 ? need_i32(cmd, "BUTTON", argv[4]) : 1 };
         return wmp_cmd(fd, WMP_INJECT_SCREEN, a, 4) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "sdrag")) {        /* screen press-move-release (0095) */
         if (argc < 6) return usage();
-        int32_t x1 = atoi(argv[2]), y1 = atoi(argv[3]);
-        int32_t x2 = atoi(argv[4]), y2 = atoi(argv[5]);
-        int32_t btn = argc > 6 ? atoi(argv[6]) : 1;
+        int32_t x1 = need_i32(cmd, "X1", argv[2]), y1 = need_i32(cmd, "Y1", argv[3]);
+        int32_t x2 = need_i32(cmd, "X2", argv[4]), y2 = need_i32(cmd, "Y2", argv[5]);
+        int32_t btn = argc > 6 ? need_i32(cmd, "BUTTON", argv[6]) : 1;
         int32_t mask = 1 << (btn - 1);
         int32_t a[4] = { 1, f32bits((float)x1), f32bits((float)y1), btn };
         if (wmp_cmd(fd, WMP_INJECT_SCREEN, a, 4)) return failop(cmd);
@@ -720,9 +775,9 @@ int main(int argc, char **argv) {
      * chords need. No SID by design: the routing decides. */
     if (!strcmp(cmd, "skey") || !strcmp(cmd, "skeydown") || !strcmp(cmd, "skeyup")) {
         if (argc < 3) return usage();
-        int32_t sc = atoi(argv[2]);
-        int32_t sym = argc > 3 ? atoi(argv[3]) : 0;
-        int32_t mod = argc > 4 ? atoi(argv[4]) : 0;
+        int32_t sc = need_i32(cmd, "SCANCODE", argv[2]);
+        int32_t sym = argc > 3 ? need_i32(cmd, "KEYSYM", argv[3]) : 0;
+        int32_t mod = argc > 4 ? need_i32(cmd, "MOD", argv[4]) : 0;
         int32_t a[5] = { cmd[4] != 'u', sc, sym, mod, 0 /* repeat */ };
         /* skeydown/skeyup: one edge only — a held modifier for a following
          * gesture, or asserting the swallow of one edge (the 0077 rule). */
@@ -733,13 +788,25 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(cmd, "glass")) {        /* Aero glass tier (todos/0063) */
         if (argc < 3) return usage();
-        int32_t a[1] = { atoi(argv[2]) };
+        int32_t a[1] = { need_i32("glass", "TIER", argv[2]) };
         return wmp_cmd(fd, WMP_GLASS, a, 1) ? failop("glass") : 0;
     }
 
-    /* Everything else leads with a SID. */
+    /* Everything else leads with a SID. Match the verb BEFORE parsing it
+     * (#501): an unknown command must stay a usage error, not a misleading
+     * "'x' is not a numeric SID" complaint. */
+    {
+        static const char *sidcmds[] = {
+            "focus", "restore", "min", "close", "raise", "lower", "move",
+            "resize", "scale", "max", "layer", "thumb", "key", "keydown",
+            "keyup", "hover", "wheel", "relmove", "click", "dblclick",
+            "down", "up", "drag", NULL };
+        int known = 0;
+        for (int i = 0; sidcmds[i]; i++) if (!strcmp(cmd, sidcmds[i])) known = 1;
+        if (!known) return usage();
+    }
     if (argc < 3) return usage();
-    int32_t sid = (int32_t)atoi(argv[2]);
+    int32_t sid = need_i32(cmd, "SID", argv[2]);
 
     if (!strcmp(cmd, "focus") || !strcmp(cmd, "restore")) {
         int32_t a[1] = { sid };
@@ -760,17 +827,17 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(cmd, "move")) {
         if (argc < 5) return usage();
-        int32_t a[3] = { sid, atoi(argv[3]), atoi(argv[4]) };
+        int32_t a[3] = { sid, need_i32(cmd, "X", argv[3]), need_i32(cmd, "Y", argv[4]) };
         return wmp_cmd(fd, WMP_MOVE, a, 3) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "resize")) {
         if (argc < 5) return usage();
-        int32_t a[3] = { sid, atoi(argv[3]), atoi(argv[4]) };
+        int32_t a[3] = { sid, need_i32(cmd, "W", argv[3]), need_i32(cmd, "H", argv[4]) };
         return wmp_cmd(fd, WMP_RESIZE, a, 3) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "scale")) {        /* viewport scaling (todos/0024) */
         if (argc < 5) return usage();
-        int32_t a[3] = { sid, atoi(argv[3]), atoi(argv[4]) };
+        int32_t a[3] = { sid, need_i32(cmd, "W", argv[3]), need_i32(cmd, "H", argv[4]) };
         return wmp_cmd(fd, WMP_SET_DST, a, 3) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "max")) {          /* maximize toggle (todos/0025) */
@@ -779,7 +846,7 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(cmd, "layer")) {        /* z-layer pin (todos/0038) */
         if (argc < 4) return usage();
-        int32_t a[2] = { sid, atoi(argv[3]) };
+        int32_t a[2] = { sid, need_i32(cmd, "LAYER", argv[3]) };
         return wmp_cmd(fd, WMP_SET_LAYER, a, 2) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "thumb")) {        /* Aero Peek thumbnail (todos/0063):
@@ -788,15 +855,17 @@ int main(int argc, char **argv) {
                                            the dims lead (0 = kernel default) */
         int32_t mw = 0, mh = 0;
         const char *file = NULL;
-        if (argc >= 5) { mw = atoi(argv[3]); mh = atoi(argv[4]); file = argc > 5 ? argv[5] : NULL; }
+        if (argc >= 5) { mw = need_i32(cmd, "MAXW", argv[3]);
+                         mh = need_i32(cmd, "MAXH", argv[4]);
+                         file = argc > 5 ? argv[5] : NULL; }
         else if (argc == 4) file = argv[3];
         return do_thumb(fd, sid, mw, mh, file);
     }
     if (!strcmp(cmd, "key") || !strcmp(cmd, "keydown") || !strcmp(cmd, "keyup")) {
         if (argc < 4) return usage();
-        int32_t sc = atoi(argv[3]);
-        int32_t sym = argc > 4 ? atoi(argv[4]) : 0;
-        int32_t mod = argc > 5 ? atoi(argv[5]) : 0;
+        int32_t sc = need_i32(cmd, "SCANCODE", argv[3]);
+        int32_t sym = argc > 4 ? need_i32(cmd, "KEYSYM", argv[4]) : 0;
+        int32_t mod = argc > 5 ? need_i32(cmd, "MOD", argv[5]) : 0;
         int32_t a[5] = { sid, cmd[3] != 'u', sc, sym, mod };
         /* keydown/keyup (todos/0077): one edge only — a HELD modifier for
          * a following click/drag needs the down without the up. */
@@ -807,7 +876,8 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(cmd, "hover")) {        /* absolute motion (todos/0063) */
         if (argc < 5) return usage();
-        int32_t x = f32bits((float)atoi(argv[3])), y = f32bits((float)atoi(argv[4]));
+        int32_t x = f32bits((float)need_i32(cmd, "X", argv[3]));
+        int32_t y = f32bits((float)need_i32(cmd, "Y", argv[4]));
         int32_t a[6] = { sid, 0 /* move */, x, y, 0, 0 };
         return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? failop(cmd) : 0;
     }
@@ -815,20 +885,22 @@ int main(int argc, char **argv) {
                                            The wheel event's position is the
                                            LAST tracked motion — hover first. */
         if (argc < 4) return usage();
-        int32_t dy = f32bits((float)atof(argv[3]));
+        int32_t dy = f32bits(need_f(cmd, "DY", argv[3]));
         int32_t a[6] = { sid, 3 /* wheel */, f32bits(0.0f), dy, 0, 0 };
         return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "relmove")) {      /* relative motion (todos/0018) */
         if (argc < 5) return usage();
-        int32_t dx = f32bits((float)atoi(argv[3])), dy = f32bits((float)atoi(argv[4]));
+        int32_t dx = f32bits((float)need_i32(cmd, "DX", argv[3]));
+        int32_t dy = f32bits((float)need_i32(cmd, "DY", argv[4]));
         int32_t a[6] = { sid, 4 /* rel */, dx, dy, 0, 0 };
         return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "click") || !strcmp(cmd, "dblclick")) {
         if (argc < 5) return usage();
-        int32_t x = f32bits((float)atoi(argv[3])), y = f32bits((float)atoi(argv[4]));
-        int32_t btn = argc > 5 ? atoi(argv[5]) : 1;
+        int32_t x = f32bits((float)need_i32(cmd, "X", argv[3]));
+        int32_t y = f32bits((float)need_i32(cmd, "Y", argv[4]));
+        int32_t btn = argc > 5 ? need_i32(cmd, "BUTTON", argv[5]) : 1;
         int reps = cmd[0] == 'd' ? 2 : 1;   /* dblclick: both clicks ride one
                                                connection, ms apart (0029) */
         for (int i = 0; i < reps; i++) {
@@ -841,8 +913,9 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(cmd, "down") || !strcmp(cmd, "up")) {   /* one edge (0077) */
         if (argc < 5) return usage();
-        int32_t x = f32bits((float)atoi(argv[3])), y = f32bits((float)atoi(argv[4]));
-        int32_t btn = argc > 5 ? atoi(argv[5]) : 1;
+        int32_t x = f32bits((float)need_i32(cmd, "X", argv[3]));
+        int32_t y = f32bits((float)need_i32(cmd, "Y", argv[4]));
+        int32_t btn = argc > 5 ? need_i32(cmd, "BUTTON", argv[5]) : 1;
         int32_t a[6] = { sid, cmd[0] == 'd' ? 1 : 2, x, y, btn, 0 };
         return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? failop(cmd) : 0;
     }
@@ -852,9 +925,9 @@ int main(int argc, char **argv) {
                                            there — the desktop marquee / icon-
                                            move gesture on one connection. */
         if (argc < 7) return usage();
-        int32_t x1 = atoi(argv[3]), y1 = atoi(argv[4]);
-        int32_t x2 = atoi(argv[5]), y2 = atoi(argv[6]);
-        int32_t btn = argc > 7 ? atoi(argv[7]) : 1;
+        int32_t x1 = need_i32(cmd, "X1", argv[3]), y1 = need_i32(cmd, "Y1", argv[4]);
+        int32_t x2 = need_i32(cmd, "X2", argv[5]), y2 = need_i32(cmd, "Y2", argv[6]);
+        int32_t btn = argc > 7 ? need_i32(cmd, "BUTTON", argv[7]) : 1;
         int32_t mask = 1 << (btn - 1);
         int32_t a[6] = { sid, 1, f32bits((float)x1), f32bits((float)y1), btn, 0 };
         if (wmp_cmd(fd, WMP_INJECT_POINTER, a, 6)) return failop(cmd);

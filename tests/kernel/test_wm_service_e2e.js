@@ -141,6 +141,17 @@ const script = [
   'wmctl list',
   'wmctl shot screen /root/s.ppm && head -c 2 /root/s.ppm && echo',
   'wmctl focus 999 || echo bad-sid-fails',
+  // ---- #501: non-numeric operands fail LOUD (stderr + exit 2) on the
+  // injection verbs. atoi() used to map them to 0 — SID 0 = the focused
+  // window, scancode 0 = nothing — so these all exited 0 having injected
+  // nothing. CAN-FAIL CONTROLS: on a pre-#501 wmctl every `|| echo` marker
+  // below stays silent (the command "succeeds"), so the JS checks go red.
+  'wmctl key pong 44 || echo 501-key-badsid-$?',
+  'wmctl key $WSID space || echo 501-key-badsc-$?',
+  'wmctl click pong 10 10 || echo 501-click-badsid-$?',
+  'wmctl wait gone pong 100 || echo 501-wait-badsid-$?',   // pre-#501: sid 0 is "gone" -> instant false green
+  'wmctl key 0 0 && echo 501-sid0-ok',           // SID 0 (focused window) stays valid
+
   'winbox fixed &',                              // viewport scaling (todos/0024)
   'wmctl wait win fixbox',
   'FSID=$(wmctl list | grep fixbox$ | sed "s/[^0-9].*//")',
@@ -913,6 +924,15 @@ check('taskbar click restores + focuses winbox', win3.includes('f---'), win3);
 // ---- shot + errors ----
 check('wmctl shot screen writes a PPM', out.includes('P6'), out.slice(0, 400));
 check('wmctl focus on a bogus sid fails', out.includes('bad-sid-fails'));
+// ---- #501: strict numeric-operand validation on the injection verbs ----
+check('#501 non-numeric SID on key fails loud (exit 2)', out.includes('501-key-badsid-2'));
+check('#501 non-numeric SCANCODE on key fails loud (exit 2)', out.includes('501-key-badsc-2'));
+check('#501 non-numeric SID on click fails loud (exit 2)', out.includes('501-click-badsid-2'));
+check('#501 non-numeric SID on wait gone fails loud, not instant false green',
+      out.includes('501-wait-badsid-2'));
+check('#501 the error names the offending argument',
+      err.includes("wmctl: key: 'pong' is not a numeric SID (see wmctl list)"));
+check('#501 SID 0 (focused window) still parses as valid', out.includes('501-sid0-ok'));
 // Distinct causes end-to-end (todos/0242): the R_ERR errno reaches wmctl's
 // stderr as strerror text — a bad sid and a mode-refusal read DIFFERENTLY.
 check('wmctl focus bogus sid names the cause (EINVAL)',
