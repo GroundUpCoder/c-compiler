@@ -28,10 +28,10 @@
 // Run: node tests/kernel/test_netbridge_e2e.js
 'use strict';
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const cp = require('child_process');
 const http = require('http');
+const { mkdtempOwned } = require('../lib/harness-temp.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 const HOST = path.join(ROOT, 'host.js');
@@ -232,7 +232,11 @@ function bridgeCount(base) {
 }
 
 // ---- compile ----
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kernel-netbridge-'));
+// mkdtempOwned (#460, the #451 ticketbridge precedent): process-lifetime
+// cleanup on exit/throw/SIGINT/SIGTERM, and the pid-tagged `os-` name lets
+// harness-leaks.js's startup reaper collect it promptly after a SIGKILL
+// (owner-pid-dead) instead of on the 2h untagged-age cutoff.
+const tmp = mkdtempOwned('os-netbridge-');
 function compile(name, src) {
   const c = path.join(tmp, name + '.c');
   const wasm = path.join(tmp, name + '.wasm');

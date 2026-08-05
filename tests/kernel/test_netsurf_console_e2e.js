@@ -30,9 +30,18 @@
 //   - `2>FILE` really is the off-switch: the same page leaves the tty
 //     clean and lands every line in the file instead.
 //
-// Uncaught exceptions are NOT asserted here.  Nothing in the tree emits
-// BW_CS_SCRIPT_ERROR, so an exception reaches no console at all — that is
-// todos/0424, and it is fixed at dukky's error sites, not in this seam.
+// Uncaught exceptions ARE asserted here since ticket #177 (todos/0424):
+// dukky's error sites route them through dukky_report_exception →
+// browser_window_console_log(BW_CS_SCRIPT_ERROR), so a thrown click
+// listener prints `js: exception: error: ...` on the tty.  The leg
+// carries its own control — the same listener RESTYLES a div BEFORE
+// throwing, and the repaint is polled off wmctl shots (the
+// test_netsurf_pointer_e2e.js pattern) — so an absent exception line can
+// never be blamed on a lost click.  (NOT a retitle: document.title's
+// setter updates the DOM only; nothing propagates a dynamic title to the
+// window, so a title wait is an unreachable condition.)  The no-throw
+// console page doubles as the negative control: its tty section must
+// carry no `js: exception:` line at all.
 //
 // Run: node tests/kernel/test_netsurf_console_e2e.js
 'use strict';
@@ -71,6 +80,29 @@ console.log('CMARK-args', 42);
 </html>
 `;
 
+/* The exception page (#177): the click listener restyles FIRST (the
+ * control — the repaint is polled off wmctl shots, the pointer-test
+ * pattern) and throws SECOND, so the control is independent of the
+ * feature under test. */
+const EXC_PAGE = `<html>
+<head>
+<style>
+body { margin: 0; background: #ffffff; }
+#ran { width: 300px; height: 120px; background: #dddddd; }
+#ran.hit { background: rgb(18, 52, 86); }
+</style>
+<script>
+document.addEventListener('click', function (e) {
+  document.getElementById('ran').className = 'hit';
+  throw new Error('EMARK-boom');
+});
+</script>
+<title>ExcReady</title>
+</head>
+<body><div id="ran"></div></body>
+</html>
+`;
+
 const { dir: tmp, image } = freshImage('os-nsconsole-');
 driveBoot('true', { image });
 
@@ -80,15 +112,31 @@ driveBoot('true', { image });
   const rootStore = new COMMON.NodeFileStore(fs, image.slice(0, -4) + '-root.img', false);
   const rfs = BLOCK_FS.createV4(rootStore);
   const W = 0x40 | 0x200 | 1; /* O_CREAT|O_TRUNC|O_WRONLY */
-  const bytes = Buffer.from(CONSOLE_PAGE, 'utf-8');
-  const fd = rfs.open('/root/console.html', W, 0o644);
-  rfs.write(fd, bytes, bytes.length);
-  rfs.close(fd);
+  for (const [p, text] of [['/root/console.html', CONSOLE_PAGE],
+                           ['/root/exc.html', EXC_PAGE]]) {
+    const bytes = Buffer.from(text, 'utf-8');
+    const fd = rfs.open(p, W, 0o644);
+    rfs.write(fd, bytes, bytes.length);
+    rfs.close(fd);
+  }
   rootStore.flush();
   rootStore.close();
 }
 
 const sidOf = (v, title) => `${v}=$(wmctl list | grep "\t${title}$" | sed "s/[^0-9].*//")`;
+
+/* Shot polling, the test_netsurf_pointer_e2e.js helpers verbatim: settle
+ * until two consecutive frames match, then detect the click's repaint as
+ * a frame that differs from the settled reference. */
+const pollStable = (sid, out) => [
+  `wmctl shot ${sid} ${out}`,
+  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.ppm; ` +
+  `cmp -s /root/poll.ppm ${out} && break; cp /root/poll.ppm ${out}; done`,
+];
+const pollChange = (sid, ref) => [
+  `for i in $(seq 1 100); do wmctl shot ${sid} /root/poll.ppm; ` +
+  `cmp -s /root/poll.ppm ${ref} || break; sleep 0.1; done`,
+];
 
 /* the same marker on both streams, so each can be cut into sections */
 const mark = (name) => `echo ==${name}; echo ==${name} >&2`;
@@ -110,6 +158,19 @@ const run = driveBoot([
   'wmctl wait win ConsoleDone 30000',
   sidOf('T', 'ConsoleDone'),
   'wmctl close $T && wmctl wait nowin ConsoleDone 8000 && echo tty-closed',
+
+  /* --- the uncaught-exception route (#177): click → restyle control →
+   *     the exception line on the tty --- */
+  mark('exc'),
+  'netsurf /root/exc.html &',
+  'wmctl wait win ExcReady 30000',
+  sidOf('E', 'ExcReady'),
+  ...pollStable('$E', '/root/e0.ppm'),
+  'echo exc-settled',
+  'wmctl click $E 100 50',
+  ...pollChange('$E', '/root/e0.ppm'),
+  'cmp -s /root/poll.ppm /root/e0.ppm || echo exc-restyled',
+  'wmctl close $E && wmctl wait nowin ExcReady 8000 && echo exc-closed',
   mark('end'),
 ], { image, timeout: 420000, maxBuffer: 64 * 1024 * 1024 });
 const out = run.stdout;
@@ -173,6 +234,22 @@ for (const [level, marker] of LEVELS) {
   const line = `js: console: ${level}: ${marker}`;
   check(`the redirected file carries console.${level}`, redirFile.includes(line), line);
 }
+
+/* --- the uncaught-exception route (#177) --- */
+const excOut = section(out, 'exc');
+const excErr = section(err, 'exc');
+check('the exception page settled before the click', excOut.includes('exc-settled'));
+check('the exception leg CONTROL fired (the same listener repainted the div)',
+      excOut.includes('exc-restyled'), JSON.stringify(excOut));
+check('the exception window closed', excOut.includes('exc-closed'));
+check('the uncaught exception reaches the tty as js: exception: error:',
+      excErr.includes('js: exception: error: Error: EMARK-boom'),
+      JSON.stringify(excErr));
+/* Negative control: the console page throws nothing, so its tty section
+ * must carry no exception line — the emission is caused by the throw,
+ * not by page traffic in general. */
+check('the no-throw page produces NO exception line',
+      !tty.includes('js: exception:'), JSON.stringify(tty.slice(0, 400)));
 
 console.log(failures === 0 ? 'PASS' : `FAIL (${failures})`);
 process.exit(failures === 0 ? 0 : 1);

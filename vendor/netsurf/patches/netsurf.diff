@@ -4533,7 +4533,7 @@ diff -urN a/content/handlers/javascript/duktape/WheelEvent.bnd b/content/handler
 +%}
 diff -urN a/content/handlers/javascript/duktape/dukky.c b/content/handlers/javascript/duktape/dukky.c
 --- a/content/handlers/javascript/duktape/dukky.c	2026-07-27 11:21:07
-+++ b/content/handlers/javascript/duktape/dukky.c	2026-07-27 12:22:46
++++ b/content/handlers/javascript/duktape/dukky.c	2026-08-06 12:00:00
 @@ -28,6 +28,7 @@
  #include <nsutils/time.h>
  
@@ -4542,7 +4542,20 @@ diff -urN a/content/handlers/javascript/duktape/dukky.c b/content/handlers/javas
  #include "utils/utils.h"
  #include "utils/nsoption.h"
  #include "utils/log.h"
-@@ -50,6 +51,10 @@
+@@ -38,9 +39,12 @@
+ #include "javascript/content.h"
+ 
+ #include "duktape/binding.h"
++#include "duktape/private.h"
+ #include "duktape/generics.js.inc"
+ #include "duktape/polyfill.js.inc"
+ 
++#include "netsurf/browser_window.h"
++
+ #include "duktape.h"
+ #include "dukky.h"
+ 
+@@ -50,6 +54,10 @@
  #define HANDLER_LISTENER_MAGIC MAGIC(HANDLER_LISTENER_MAP)
  #define HANDLER_MAGIC MAGIC(HANDLER_MAP)
  #define EVENT_LISTENER_JS_MAGIC MAGIC(EVENT_LISTENER_JS_MAP)
@@ -4553,18 +4566,70 @@ diff -urN a/content/handlers/javascript/duktape/dukky.c b/content/handlers/javas
  #define GENERICS_MAGIC MAGIC(GENERICS_TABLE)
  #define THREAD_MAP MAGIC(THREAD_MAP)
  
-@@ -695,6 +700,10 @@
+@@ -694,6 +702,10 @@
+ 	/* And now the event mapping table */
  	duk_push_object(CTX);
  	duk_put_global_string(CTX, EVENT_MAGIC);
- 
++
 +	/* And the set of event types anything is listening for */
 +	duk_push_object(CTX);
 +	duk_put_global_string(CTX, EVENT_TYPE_MAGIC);
-+
+ 
  	/* Now load the polyfills */
  	/* ... */
- 	duk_push_string(CTX, "polyfill.js");
-@@ -976,20 +985,51 @@
+@@ -853,6 +865,43 @@
+ 			now > (heap->exec_start_time + JS_EXEC_TIMEOUT_MS);
+ }
+ 
++/* Route an uncaught exception to the browser console (todos/0424): the
++ * error object is at the top of the value stack and stays there.  The
++ * window is read the way console.c's write_log_entry reads it — the
++ * active thread's global object carries the Window private — and the
++ * entry goes out as BW_CS_SCRIPT_ERROR, so a frontend's console_log
++ * shows it the way it shows console.error.  The NSLOG sites stay: that
++ * is the developer log surface, this is the user-visible one.  FOLDABLE
++ * because the text is a stack trace (multi-line). */
++static void dukky_report_exception(duk_context *ctx)
++{
++	/* stack is ..., errobj */
++	window_private_t *priv_win;
++	duk_size_t msglen;
++	const char *msg;
++
++	duk_dup_top(ctx);
++	/* ..., errobj, errobj */
++	(void) duk_safe_to_stacktrace(ctx, -1);
++	/* ..., errobj, stackstring */
++	duk_push_global_object(ctx);
++	duk_get_prop_string(ctx, -1, PRIVATE_MAGIC);
++	priv_win = duk_get_pointer(ctx, -1);
++	duk_pop_2(ctx);
++	/* ..., errobj, stackstring */
++	msg = duk_safe_to_lstring(ctx, -1, &msglen);
++	if (priv_win == NULL || priv_win->win == NULL ||
++	    priv_win->closed_down == true ||
++	    browser_window_console_log(priv_win->win, BW_CS_SCRIPT_ERROR,
++				       msg, msglen,
++				       BW_CS_FLAG_FOLDABLE |
++				       BW_CS_FLAG_LEVEL_ERROR) != NSERROR_OK) {
++		NSLOG(dukky, DEBUG, "Unable to console-log the exception");
++	}
++	duk_pop(ctx);
++	/* ..., errobj */
++}
++
+ static void dukky_dump_error(duk_context *ctx)
+ {
+ 	/* stack is ..., errobj */
+@@ -862,6 +911,7 @@
+ 	/* ..., errobj, errobj.stackstring */
+ 	duk_pop(ctx);
+ 	/* ..., errobj */
++	dukky_report_exception(ctx);
+ }
+ 
+ static void dukky_reset_start_time(duk_context *ctx)
+@@ -976,20 +1026,51 @@
  	const char *ret = PROTO_NAME(EVENT);
  	dom_string *type = NULL;
  	dom_exception err;
@@ -4621,7 +4686,7 @@ diff -urN a/content/handlers/javascript/duktape/dukky.c b/content/handlers/javas
  		goto out;
  	}
  
-@@ -1140,109 +1180,45 @@
+@@ -1140,109 +1221,45 @@
  	return true;
  }
  
@@ -4661,8 +4726,18 @@ diff -urN a/content/handlers/javascript/duktape/dukky.c b/content/handlers/javas
 -	exc = dom_event_get_type(evt, &name);
 -	if (exc != DOM_NO_ERR) {
 -		NSLOG(dukky, DEBUG, "Unable to find the event name");
--		return;
--	}
++	/* ... type this */
++	duk_dup(ctx, -1);
++	/* ... type this this */
++	duk_insert(ctx, -3);
++	/* ... this type this */
++	self = duk_get_top(ctx) - 3;
++	if (dukky_event_target_push_listeners(ctx, true)) {
++		/* Nothing to do */
++		/* ... this undefined */
++		duk_pop_2(ctx);
+ 		return;
+ 	}
 -	NSLOG(dukky, DEBUG, "Event's name is %*s", (int)dom_string_length(name),
 -	      dom_string_data(name));
 -	exc = dom_event_get_event_phase(evt, &phase);
@@ -4744,26 +4819,17 @@ diff -urN a/content/handlers/javascript/duktape/dukky.c b/content/handlers/javas
 -	duk_push_lstring(ctx, dom_string_data(name), dom_string_length(name));
 -	dukky_push_node(ctx, (dom_node *)targ);
 -	/* ... type node */
-+	/* ... type this */
-+	duk_dup(ctx, -1);
-+	/* ... type this this */
-+	duk_insert(ctx, -3);
-+	/* ... this type this */
-+	self = duk_get_top(ctx) - 3;
- 	if (dukky_event_target_push_listeners(ctx, true)) {
- 		/* Nothing to do */
+-	if (dukky_event_target_push_listeners(ctx, true)) {
+-		/* Nothing to do */
 -		duk_pop(ctx);
 -		goto out;
-+		/* ... this undefined */
-+		duk_pop_2(ctx);
-+		return;
- 	}
+-	}
 -	/* ... sublisteners */
 +	/* ... this sublisteners */
  	duk_push_array(ctx);
  	/* ... sublisteners copy */
  	idx = 0;
-@@ -1285,15 +1261,24 @@
+@@ -1285,15 +1302,24 @@
  		flags = (event_listener_flags)duk_get_int(ctx, -1);
  		duk_pop(ctx);
  		/* ... copy handler callback */
@@ -4791,7 +4857,15 @@ diff -urN a/content/handlers/javascript/duktape/dukky.c b/content/handlers/javas
  		dukky_push_event(ctx, evt);
  		/* ... copy handler callback node event */
  		dukky_reset_start_time(ctx);
-@@ -1334,21 +1319,205 @@
+@@ -1302,6 +1328,7 @@
+ 			/* ... copy handler err */
+ 			NSLOG(dukky, DEBUG,
+ 			      "OH NOES! An error running a callback.  Meh.");
++			dukky_report_exception(ctx);
+ 			exc = dom_event_stop_immediate_propagation(evt);
+ 			if (exc != DOM_NO_ERR)
+ 				NSLOG(dukky, DEBUG,
+@@ -1334,21 +1361,206 @@
  		duk_pop_2(ctx);
  		/* ... copy */
  	}
@@ -4888,6 +4962,7 @@ diff -urN a/content/handlers/javascript/duktape/dukky.c b/content/handlers/javas
 +		/* ... err */
 +		NSLOG(dukky, DEBUG,
 +		      "OH NOES! An error running a callback.  Meh.");
++		dukky_report_exception(ctx);
 +		exc = dom_event_stop_immediate_propagation(evt);
 +		if (exc != DOM_NO_ERR)
 +			NSLOG(dukky, DEBUG,
@@ -5001,7 +5076,7 @@ diff -urN a/content/handlers/javascript/duktape/dukky.c b/content/handlers/javas
  	/* ... */
  	if (ele == NULL) {
  		/* A null element is the Window object */
-@@ -1378,6 +1547,21 @@
+@@ -1378,6 +1590,21 @@
  	/* ... node handlers */
  	duk_pop_2(ctx);
  	/* ... */
@@ -5023,7 +5098,7 @@ diff -urN a/content/handlers/javascript/duktape/dukky.c b/content/handlers/javas
  	if (ele == NULL) {
  		/* Nothing more to do, Window doesn't register in the
  		 * normal event listener flow
-@@ -1385,21 +1569,13 @@
+@@ -1385,21 +1612,13 @@
  		return;
  	}
  
@@ -5052,7 +5127,7 @@ diff -urN a/content/handlers/javascript/duktape/dukky.c b/content/handlers/javas
  }
  
  /* The sub-listeners are a list of {callback,flags} tuples */
-@@ -1564,74 +1740,82 @@
+@@ -1564,74 +1783,82 @@
  	dukky_leave_thread(thread);
  }
  
@@ -5180,7 +5255,15 @@ diff -urN a/content/handlers/javascript/duktape/dukky.c b/content/handlers/javas
  		dom_node_unref(body);
  		/* ... handlers handler bodynode */
  		duk_pop(CTX);
-@@ -1668,16 +1852,101 @@
+@@ -1651,6 +1878,7 @@
+ 		/* ... err */
+ 		NSLOG(dukky, DEBUG,
+ 		      "OH NOES! An error running a handler.  Meh.");
++		dukky_report_exception(CTX);
+ 		duk_get_prop_string(CTX, -1, "name");
+ 		duk_get_prop_string(CTX, -2, "message");
+ 		duk_get_prop_string(CTX, -3, "fileName");
+@@ -1668,16 +1896,101 @@
  
  		duk_pop_n(CTX, 6);
  		/* ... */

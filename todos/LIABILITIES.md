@@ -258,11 +258,6 @@ thing this file exists to kill.
 - anchor:    time. Funded by todos/0401, which is also what keeps todos/0382 open. */
 - provenance: 0382
 
-### L63 — nothing emits BW_CS_SCRIPT_ERROR, so an uncaught JS exception reaches no console, no log and no tty
-- ticket: #177
-- file: vendor/netsurf/gucos/gui.c
-- anchor: through this table is todos/0424 — it belongs at dukky's error
-
 ### L64 — the dynamic-restyle chain walk misses a sibling combinator and cannot reach a `display: none` element
 - ticket: #178
 - file: vendor/netsurf/netsurf/content/handlers/html/interaction.c

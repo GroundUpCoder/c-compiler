@@ -10771,6 +10771,15 @@ async function runModule({
   writeOut,
   writeErr,
   onReady,
+  // Wall-clock ceiling in ms (#184): >0 arms a deadline checked at the env
+  // import choke (every import call, throttled), so an I/O-looping module
+  // that overruns dies with a named error instead of burning cores for days
+  // (the todos/0332 orphan pair: ~70 CPU-hours). CLI-only in practice — the
+  // Node CLI defaults it ON for non-interactive stdin; embedders (kernel
+  // process-worker, browser, boot.js) never set it and are untouched. A
+  // pure-compute loop that calls no imports stays uninterruptible, the same
+  // documented boundary as cooperative signals.
+  maxWallMs,
 }) {
   /* Default writers COPY the chunk (Buffer.from of a TypedArray copies):
      buf is a raw view into wasm memory, and stream.write queues chunks by
@@ -12465,6 +12474,41 @@ async function runModule({
       });
   }
 
+  /* Wall-clock ceiling (#184): the deliverSignals wrap above is the
+     precedent — wrap every non-Math import (both namespaces) with a
+     throttled deadline check. The import choke is the one place a
+     synchronously spinning module still hands us control: a JS timer never
+     fires while wasm holds the thread, but a benchmark loop calls read/
+     write imports constantly. Throttled to every 256th call so the armed
+     cost is a decrement; unarmed runs don't enter this block at all. */
+  if (maxWallMs > 0) {
+    const ceilT0 = Date.now();
+    const ceilDeadline = ceilT0 + maxWallMs;
+    let ceilBudget = 256;
+    const ceilCheck = function () {
+      ceilBudget = 256;
+      if (Date.now() >= ceilDeadline) {
+        const e = new Error('wall-clock ceiling exceeded (' +
+          Math.round((Date.now() - ceilT0) / 1000) + 's elapsed, limit ' +
+          Math.round(maxWallMs / 1000) + 's)');
+        e.wallClockExceeded = true;
+        throw e;
+      }
+    };
+    [ENV_KEY, 'wasi_snapshot_preview1'].forEach(function (ns) {
+      const nsImports = imports[ns];
+      if (!nsImports) return;
+      Object.keys(nsImports).forEach(function (name) {
+        const fn = nsImports[name];
+        if (typeof fn !== 'function' || Math[name] === fn) return;
+        nsImports[name] = function () {
+          if (--ceilBudget <= 0) ceilCheck();
+          return fn.apply(this, arguments);
+        };
+      });
+    });
+  }
+
   /* SDL 2D renderer device pre-acquisition (OS surface flavor only): WebGPU
      device acquisition is an event-loop promise chain, and an OS SDL app may
      legally BLOCK in its main loop (cooperative Atomics.wait sleeps) — so the
@@ -12753,6 +12797,12 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   // real file; bare --block-fs uses an ephemeral in-memory store.
   var useBlockFS = false;
   var blockFSPath = null;
+  // --max-seconds=N (#184): wall-clock ceiling for the module. Defaults ON
+  // (3600s) when stdin is not a TTY — the benchmark/scripted shape, where an
+  // overrun means an orphaned lane child burning cores unnoticed (todos/0332:
+  // two of them, ~70 CPU-hours over 2.5 days). Interactive runs (a human at a
+  // TTY, who can ^C) default to no ceiling. 0 disables explicitly.
+  var maxSeconds = (typeof process.stdin.isTTY !== 'undefined' && process.stdin.isTTY) ? 0 : 3600;
   var args = process.argv.slice(2);
   for (var ai = 0; ai < args.length; ai++) {
     if (args[ai] === '--block-fs') { useBlockFS = true; args.splice(ai, 1); ai--; }
@@ -12760,6 +12810,35 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
       useBlockFS = true; blockFSPath = args[ai].substring('--block-fs='.length);
       args.splice(ai, 1); ai--;
     }
+    else if (args[ai].startsWith('--max-seconds=')) {
+      maxSeconds = Number(args[ai].substring('--max-seconds='.length));
+      if (!Number.isFinite(maxSeconds) || maxSeconds < 0) {
+        process.stderr.write('host.js: --max-seconds wants a non-negative number\n');
+        process.exit(2);
+      }
+      args.splice(ai, 1); ai--;
+    }
+  }
+  var maxWallMs = maxSeconds > 0 ? maxSeconds * 1000 : 0;
+  if (maxWallMs > 0) {
+    // Event-loop backstop for hangs that never call an import (e.g. an app
+    // parked in a timer-driven frame loop). unref'd: it must never hold a
+    // finished process open. A module spinning synchronously in wasm blocks
+    // this timer — the import-choke check in runModule covers that shape.
+    setTimeout(function () {
+      process.stderr.write('host.js: wall-clock ceiling exceeded (limit ' +
+        maxSeconds + 's): ' + wasmPath +
+        ' — pass --max-seconds=N to raise, --max-seconds=0 to disable\n');
+      process.exit(124);
+    }, maxWallMs + 2000).unref();
+  }
+  // The import-choke throw lands in each branch's catch below.
+  function ceilingExit(e) {
+    if (!e || !e.wallClockExceeded) return false;
+    process.stderr.write('host.js: ' + e.message + ': ' + wasmPath +
+      ' — pass --max-seconds=N to raise, --max-seconds=0 to disable\n');
+    flushAndExit(124);
+    return true;
   }
 
   if (useBlockFS) {
@@ -12820,6 +12899,7 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
       bytes: bytes,
       args: args,
       env: process.env,
+      maxWallMs: maxWallMs,
       blockFsFactory: async function (ctx) {
         return { c: blockFS.toWasmEnv(ctx) };
       },
@@ -12839,6 +12919,7 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
       }
       flushAndExit(exitCode);
     }).catch(function (e) {
+      if (ceilingExit(e)) return;
       process.stderr.write('Fatal: ' + e.message + '\n');
       if (e.stack) process.stderr.write(e.stack + '\n');
       flushAndExit(1);
@@ -12850,10 +12931,12 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
       // anything POSIX-y) assert `argc >= 1` at entry.
       args: args,
       env: process.env,
+      maxWallMs: maxWallMs,
       fs: fs,
     }).then(function (exitCode) {
       flushAndExit(exitCode);
     }).catch(function (e) {
+      if (ceilingExit(e)) return;
       process.stderr.write('Fatal: ' + e.message + '\n');
       if (e.stack) process.stderr.write(e.stack + '\n');
       flushAndExit(1);
