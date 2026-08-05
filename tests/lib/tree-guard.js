@@ -45,16 +45,18 @@
 // ticket. 4 is unused across tests/ + tools/ (3 also appears on a few browser
 // probe watchdogs, so it is doubly spoken for).
 
-// SCOPE — what calls this today is the seven top-level TEST runners
-// (tests/run.js, run-unit.js, flake.js, blockfs/kernel/host/todos run.js and
-// browser/os-sweep.mjs). The writing entry points under tools/ (mkimage.js
-// bakes a 111 MB blob into its own os/; mkpkg.js, os-drive.js, win32rc.js …)
-// and os/boot.js are NOT guarded yet, so `node ~/git/c-compiler/tools/…` from a
-// worktree still writes cross-tree silently. That is deliberate sequencing, not
-// an oversight: those are spawned by the harness with cwds this guard has not
-// been proven against (os/boot.js in particular runs from per-test fixture
-// dirs), so extending it needs the heavy suites to say so.
-// NOT GUARDED YET: the tools/ writers and os/boot.js — funded by todos/0357.
+// SCOPE — the seven top-level TEST runners (tests/run.js, run-unit.js,
+// flake.js, blockfs/kernel/host/todos run.js, browser/os-sweep.mjs), and —
+// since #142 (todos/0357) — the writing entry points: os/boot.js and the
+// tools/ writers (mkimage.js, mkpkg.js, os-drive.mjs + os-drive-headless.mjs,
+// win32rc.js, win32ports.js, mksounds.js, mkmpgenhdr.js, build-libc-ext.js,
+// mkgif.js, mkwebfixtures.js, mkgit2srclib.js; libcprobe/probe.js opted in
+// earlier). The #142 survey measured every harness spawn of those entry
+// points before guarding them: suite-runner children run with cwd inside the
+// tree (tests/kernel, tests/browser), the host/serve rows inherit the
+// dispatcher's repo-root cwd, run.py sets cwd=ROOT_DIR, and the per-test
+// mkdtemp fixture dirs are only ever --image=/--out= ARGUMENTS, never cwds —
+// so the guard fires on foreign-cwd hand launches and on nothing else.
 const fs = require('fs');
 const path = require('path');
 

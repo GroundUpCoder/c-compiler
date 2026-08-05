@@ -21,6 +21,11 @@
 const fs = require('fs');
 const path = require('path');
 
+// Cross-tree preflight (todos/0341, extended by #142): writes the committed
+// NetSurf image fixtures next to itself. Hand-run only.
+require(path.join(__dirname, '../tests/lib/tree-guard.js'))
+  .assertSameTree(__dirname, { label: 'tools/mkwebfixtures.js' });
+
 const OUTDIR = path.join(__dirname, '..', 'vendor', 'netsurf', 'test', 'img');
 const S = 32; /* fixture edge, px */
 

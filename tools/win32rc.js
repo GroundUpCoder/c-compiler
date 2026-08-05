@@ -53,6 +53,14 @@
 const fs = require('fs');
 const path = require('path');
 
+// Cross-tree preflight (todos/0341, extended by #142). NB this tool's writes
+// are argument-relative (-o), not next-to-self — the guard here catches the
+// wrong-COPY launch: a stale tree's rc compiler producing a committed .res in
+// yours. Harness spawns (test_win32rc.js) inherit the kernel suite's in-tree
+// cwd — measured at #142.
+require(path.join(__dirname, '../tests/lib/tree-guard.js'))
+  .assertSameTree(__dirname, { label: 'tools/win32rc.js' });
+
 /* ---- builtin constants (values MUST MATCH os/win32/include/windows.h
  * where shared; the DS_/ES_/SS_/BS_ dialog styles are Windows') ---- */
 const BUILTIN = {

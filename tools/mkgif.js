@@ -14,6 +14,11 @@
 const fs = require('fs');
 const path = require('path');
 
+// Cross-tree preflight (todos/0341, extended by #142): writes the committed
+// vendor/magicpoint/demo.gif next to itself. Hand-run only.
+require(path.join(__dirname, '../tests/lib/tree-guard.js'))
+  .assertSameTree(__dirname, { label: 'tools/mkgif.js' });
+
 const W = 200, H = 150;
 // 4-entry palette (power-of-two, min code size 2): 0=magenta 1=cyan 2,3=pad.
 const PALETTE = [

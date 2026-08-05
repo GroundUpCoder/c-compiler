@@ -75,6 +75,13 @@ import readline from 'node:readline';
 
 const require = createRequire(import.meta.url);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+// Cross-tree preflight (todos/0341, extended by #142): boots its OWN tree's
+// os/boot.js (which can re-bake that tree's image). Ahead of the boot spawn so
+// the refusal is ours, not a delegated one. Hand-run only — no harness spawns.
+require(path.join(ROOT, 'tests/lib/tree-guard.js'))
+  .assertSameTree(ROOT, { label: 'tools/os-drive-headless.mjs' });
+
 const BOOT = path.join(ROOT, 'os/boot.js');
 const { parsePpm, encodePng } = require(path.join(ROOT, 'tests/lib/png.js'));
 const { mkdtempOwned, untrack } = require(path.join(ROOT, 'tests/lib/harness-temp.js'));

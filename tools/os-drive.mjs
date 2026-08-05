@@ -36,12 +36,19 @@
 //   load(n)/loadStop()     start/stop the busy-loop generators
 //   close()                tear down browser + server + load
 import { spawn } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import { openOsSession } from '../tests/browser/lib/os-harness.mjs';
+import { assertSameTree } from '../tests/lib/tree-guard.js';
+
+// Cross-tree preflight (todos/0341, extended by #142): drives its OWN tree's
+// serve.js/boot stack (and their bakes). Screenshot writes are caller-path
+// relative, but the driven stack is not. Hand-run only — no harness spawns.
+assertSameTree(path.dirname(fileURLToPath(import.meta.url)),
+  { label: 'tools/os-drive.mjs' });
 
 // ---- CLI ----
 const argv = process.argv.slice(2);

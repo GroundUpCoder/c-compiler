@@ -103,6 +103,12 @@ const path = require('path');
 const zlib = require('zlib');
 const crypto = require('crypto');
 
+// Cross-tree preflight (todos/0341, extended by #142): writes dist/packages/
+// in its own tree (and the prune REPLACES the repo there — todos/0388), so a
+// foreign-cwd launch would rewrite another tree's package repo.
+require(path.join(__dirname, '../tests/lib/tree-guard.js'))
+  .assertSameTree(__dirname, { label: 'tools/mkpkg.js' });
+
 const ROOT = path.resolve(__dirname, '..');
 const OS_DIR = path.join(ROOT, 'os');
 const { BLOCK_FS } = require(path.join(ROOT, 'host.js'));
