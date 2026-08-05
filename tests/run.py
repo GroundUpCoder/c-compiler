@@ -1524,11 +1524,6 @@ LIBC_TEST_SKIP = {
     # item that funds it (todos/0298) — a bare "TODO" is a hole the suite
     # reports green over, which is how fnmatch/fdopen/utime sat skipped for
     # months after they started passing.
-    "search_hsearch": "not implemented: search.h (todos/0305)",
-    "search_insque": "not implemented: search.h (todos/0305)",
-    "search_lsearch": "not implemented: search.h (todos/0305)",
-    "search_tsearch": "not implemented: search.h (todos/0305)",
-    "random": "not implemented: random()/srandom()/initstate()/setstate() (todos/0306)",
     "strptime": "not implemented: strptime() (todos/0307)",
     # Not a libc gap: the test writes the bare-assignment form `r = setjmp(jb);`
     # (vendor/libc-test/src/functional/setjmp.c:23), which compiler.js rejects
@@ -1541,9 +1536,6 @@ LIBC_TEST_SKIP = {
     "setjmp": "test uses the C11-UB bare-assignment setjmp form, rejected by "
               "design — permanent (todos/0311 shipped as ticket #117; the "
               "p4-required contexts are accepted, line 23 remains UB)",
-    "memstream": "not implemented: open_memstream()/fmemopen() (todos/0308)",
-    "wcstol": "not implemented: wcstol() family (todos/0309)",
-    "fwscanf": "not implemented: wide scanf (todos/0309)",
     # %s and width/'+' parsing DO exist; absent are %F %g %G %r %T %V, width
     # modifiers are honoured only by %C, and %y is wrong for negative years
     # (todos/0307). %s additionally diverges from musl's expectation by the
