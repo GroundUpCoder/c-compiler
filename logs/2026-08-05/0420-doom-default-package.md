@@ -12,8 +12,9 @@ defaultPackages` — the first non-empty member the mechanism has ever carried.
 - **`os/image.json`**: the four baked doom entries removed (`/usr/bin/doom`,
   `/usr/share/menu/Games/doom`, `/root/Desktop/doom`, `/root/doom1.wad`);
   `defaultPackages: ["doom"]`. `version` untouched (bumps at ship).
-- Zero changes to gucman.c / mkpkg / os-common — the #419 mechanism carried
-  its first real member without a single doom-shaped special case.
+- Zero doom-shaped special cases anywhere in the mechanism. gucman.c and
+  mkpkg untouched; the one os-common change is the general packagesDir seam
+  fix described under "Gate round 1 fallout" below.
 
 ## The one real design decision — the launcher is NOT quake's cd pattern
 
@@ -90,3 +91,28 @@ ctlpanel), ctxmenu (teal witness → calc), desktop_defaults (phase-1 link
 subject → term), os-shell (column-0 probe → calc), defaults_sync (session 1
 rewritten as above). Icon geometry needed nothing — `deskEntries()` derives
 from the manifest (the 0166 rule doing its job).
+
+## Gate round 1 fallout (first-real-member, all found by the full gate)
+
+Round 1 went red in exactly five kernel files, every one a path #419 had
+never walked with a non-empty set:
+
+1. **A real mechanism seam gap** (fixed in os-common.js): foldPackages
+   validated `defaultPackages` against the OVERRIDDEN `packagesDir`, so the
+   sanctioned throwaway-definitions seam (mkimage/boot.js `--packages-dir`,
+   driven by test_seed_e2e) threw `unknown package 'doom'` before baking. A
+   packagesDir-overridden bake now drops the shipped set (it is defined
+   against the real repo; a synthetic-repo boot must not try to install it),
+   while every non-overridden fold still validates — the typo-catch stands.
+2. **Surprise installs**: ensurePackages builds the FULL base set, so any
+   test that declares `/etc/gucman/repos` and reboots got doom genuinely
+   auto-installed under its asserts (test_gucman_e2e). Fixed with the
+   mechanism's own /etc wholesale-override opt-out.
+3. **Console-byte cleanliness**: the offline sync prints one stdout line,
+   which broke `parsePPM(stdout, 0)` cat-sessions (symbolfont, fontpkg —
+   same /etc opt-out) and test_os_boot's positional `/etc is empty` capture
+   on the factory-reset boot (switched to a `test -z` marker; the reset
+   wiping /etc means the shipped set is LIVE there by design).
+
+Sweep 51/51 was green on round 1 — including os-minimal.mjs, where doom now
+genuinely auto-installs over HTTP on the deploy-shaped minimal boot.
