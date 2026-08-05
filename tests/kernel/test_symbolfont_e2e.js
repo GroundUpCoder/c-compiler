@@ -1,32 +1,33 @@
 #!/usr/bin/env node
-// #435 acceptance: the Mac modifier symbols render on a CLEAN FIRST BOOT with
-// NO packages installed — Noto Sans Symbols 2 is BAKED at
-// /usr/share/fonts/symbols2.ttf and registered in the baked fallback list
-// /usr/share/fonts/fallback (fontchain.h's /usr layer; the /etc layer stays
-// absent on a virgin image, so gucman font-package install/remove semantics
-// are untouched).
+// #435 + #515 acceptance: the Mac modifier symbols render on a CLEAN FIRST
+// BOOT with NO packages installed — Noto Sans Symbols 2 is BAKED at
+// /usr/share/fonts/symbols2.ttf (#435: ⌘ ⌥ ⇧ ⌫ ⏎) and Noto Sans Symbols (1)
+// at /usr/share/fonts/symbols.ttf (#515: ⌃ — measured 2026-08-05, U+2303 is
+// glyph 265 in Symbols (1) and glyph 0 in Symbols 2; the two families are
+// complementary, Symbols (1) maps NONE of the other five), both registered in
+// the baked fallback list /usr/share/fonts/fallback (fontchain.h's /usr
+// layer; the /etc layer stays absent on a virgin image, so gucman
+// font-package install/remove semantics are untouched).
 //
 // Instruments (the test_fontpkg_e2e.js pattern):
-//   - baked-image leg: the BOOTED minimal image (not the manifest) carries the
-//     face and the list line;
-//   - term pixel leg (cp_glyph): ⌘ ⌥ ⇧ ⌫ ⏎ render ink, pairwise DISTINCT,
+//   - baked-image leg: the BOOTED minimal image (not the manifest) carries
+//     both faces and both list lines;
+//   - term pixel leg (cp_glyph): ⌘ ⌥ ⇧ ⌫ ⏎ ⌃ render ink, pairwise DISTINCT,
 //     and differ from the tofu box;
 //   - gdi32 leg (font_glyph — the SAME chain path wm.c menus/chrome draw
 //     through via TextOut): notepad on the same file prints exactly ONE
-//     "unsupported font glyph" report and it names U+0378, never U+2318.
+//     "unsupported font glyph" report and it names U+0378, never a modifier.
 //
 // In-run tofu controls (the #97 vacuity standard): U+0378/U+0379 are
 // PERMANENTLY UNASSIGNED in Unicode (verified glyph 0 in every vendored face,
-// 2026-08-05), so they render the synthesized tofu box forever — both cells
-// byte-identical proves the pixel instrument still SEES tofu, and their gdi32
-// report proves the stderr instrument is live in the very process under test.
-// Red control (pre-fix tree): no baked list, all five symbol cells collapse to
-// the identical tofu box, and the notepad report names U+2318.
-//
-// U+2303 ⌃ is deliberately NOT asserted: measured 2026-08-05, Noto Sans
-// Symbols 2 does not map it (glyph 0; it lives in Noto Sans Symbols (1), a
-// different family). #435 ruled Symbols 2 only — the ⌃ gap is reported in the
-// lane report, not hidden here.
+// incl. Symbols (1), 2026-08-05), so they render the synthesized tofu box
+// forever — both cells byte-identical proves the pixel instrument still SEES
+// tofu, and their gdi32 report proves the stderr instrument is live in the
+// very process under test.
+// Red control (#515 pre-fix tree): symbols.ttf absent, the fallback list has
+// no symbols.ttf line, the ⌃ cell IS the tofu box, and the notepad report
+// names U+2303 instead of U+0378. (#435's red state — no list at all, all
+// five Symbols 2 cells tofu, report names U+2318 — predates this tree.)
 //
 // Run: node tests/kernel/test_symbolfont_e2e.js
 'use strict';
@@ -41,11 +42,11 @@ function check(name, cond, extra) {
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
 }
 
-// "⌘ ⌥ ⇧ ⌫ ⏎ <U+0378> <U+0379>" as explicit UTF-8 byte escapes for busybox
+// "⌘ ⌥ ⇧ ⌫ ⏎ ⌃ <U+0378> <U+0379>" as explicit UTF-8 byte escapes for busybox
 // printf — glyphs space-separated so a proportional chain glyph overflowing
 // its 8px mono cell spills into a BLANK cell, never the next sample.
 const SYMS = '\\xe2\\x8c\\x98 \\xe2\\x8c\\xa5 \\xe2\\x87\\xa7 \\xe2\\x8c\\xab' +
-             ' \\xe2\\x8f\\x8e \\xcd\\xb8 \\xcd\\xb9';
+             ' \\xe2\\x8f\\x8e \\xe2\\x8c\\x83 \\xcd\\xb8 \\xcd\\xb9';
 
 async function main() {
   const MIN = ensureMinimalImage();
@@ -56,6 +57,7 @@ async function main() {
   const a = driveBoot([
     'echo ==baked',
     'test -f /usr/share/fonts/symbols2.ttf && echo SYM-TTF-OK',
+    'test -f /usr/share/fonts/symbols.ttf && echo SYM1-TTF-OK',
     'cat /usr/share/fonts/fallback',
     'test ! -e /etc/fonts/fallback && echo NO-ETC-FALLBACK',
     `printf '${SYMS}\\n' > /root/sym.txt`,
@@ -81,24 +83,28 @@ async function main() {
   const baked = section(aout, 'baked');
   check('baked image carries /usr/share/fonts/symbols2.ttf', baked.includes('SYM-TTF-OK'),
     baked.slice(0, 200));
-  check('baked /usr/share/fonts/fallback lists the symbol face',
+  check('baked image carries /usr/share/fonts/symbols.ttf', baked.includes('SYM1-TTF-OK'),
+    baked.slice(0, 200));
+  check('baked /usr/share/fonts/fallback lists the Symbols 2 face',
     baked.includes('/usr/share/fonts/symbols2.ttf'), baked.slice(0, 200));
+  check('baked /usr/share/fonts/fallback lists the Symbols (1) face',
+    /\/usr\/share\/fonts\/symbols\.ttf/.test(baked), baked.slice(0, 200));
   check('clean boot has no /etc fallback delta', baked.includes('NO-ETC-FALLBACK'));
   check('term shot written', aout.includes('shot-sym-ok'));
 
   // gdi32 chain, by stderr (the fontpkg counting instrument): the report is
   // once-per-call-site per PROCESS, so notepad reports only its FIRST
-  // uncovered cp. Green: the five symbols resolve via the chain, so the first
+  // uncovered cp. Green: all six symbols resolve via the chain, so the first
   // miss is the unassigned U+0378 control — exactly one report, naming it.
-  // Red: the first miss is U+2318 itself. The U+0378 report doubles as the
-  // positive control that the reporting path is alive in this process.
+  // Red (#515): the first miss is U+2303 itself. The U+0378 report doubles as
+  // the positive control that the reporting path is alive in this process.
   const tofuReports = (aall.match(/unsupported font glyph/g) || []).length;
   check('gdi32: exactly one tofu report and it names the U+0378 control',
     tofuReports === 1 && /unsupported font glyph U\+0378/.test(aall),
     String(tofuReports) + ' report(s): ' +
       (aall.match(/unsupported font glyph U\+[0-9A-F]+/g) || []).join(','));
   check('gdi32: no modifier symbol reports as tofu',
-    !/unsupported font glyph U\+(2318|2325|21E7|232B|23CE)/.test(aall));
+    !/unsupported font glyph U\+(2318|2325|21E7|232B|23CE|2303)/.test(aall));
   check('gdi32: the baked symbol face loads (no cannot-load report)',
     !/fallback face .* cannot load/.test(aall));
 
@@ -132,17 +138,18 @@ async function main() {
   check('shot parses', !!ppm);
   if (!ppm) return finish(tmp);
 
-  const NAMES = ['U+2318 cmd', 'U+2325 option', 'U+21E7 shift', 'U+232B delete-left', 'U+23CE return'];
-  const g = [0, 1, 2, 3, 4].map((i) => glyphBits(b.stdout, ppm, i));
-  const t = [5, 6].map((i) => glyphBits(b.stdout, ppm, i));
+  const NAMES = ['U+2318 cmd', 'U+2325 option', 'U+21E7 shift', 'U+232B delete-left',
+                 'U+23CE return', 'U+2303 control'];
+  const g = [0, 1, 2, 3, 4, 5].map((i) => glyphBits(b.stdout, ppm, i));
+  const t = [6, 7].map((i) => glyphBits(b.stdout, ppm, i));
   check('tofu control: both unassigned cells render ink', t.every((x) => ink(x) > 0),
     t.map(ink).join(','));
   check('tofu control: one box, twice (cells byte-identical)', t[0].equals(t[1]));
-  check('symbols: all five glyphs render ink', g.every((x) => ink(x) > 0), g.map(ink).join(','));
-  for (let i = 0; i < 5; i++)
+  check('symbols: all six glyphs render ink', g.every((x) => ink(x) > 0), g.map(ink).join(','));
+  for (let i = 0; i < 6; i++)
     check(`symbols: ${NAMES[i]} is not the tofu box`, !g[i].equals(t[0]));
-  for (let i = 0; i < 5; i++)
-    for (let j = i + 1; j < 5; j++)
+  for (let i = 0; i < 6; i++)
+    for (let j = i + 1; j < 6; j++)
       check(`symbols: ${NAMES[i]} != ${NAMES[j]}`, !g[i].equals(g[j]));
 
   finish(tmp);
