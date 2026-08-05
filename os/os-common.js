@@ -1799,10 +1799,18 @@ function checkManifestRefs(manifest) {
       var c = line.charAt(i);
       if (c === ' ' || c === '\t') { i++; continue; }
       var two = line.slice(i, i + 2);
-      if (two === '&&' || two === '||' || two === '>>' || two === '2>') {
+      if (two === '&&' || two === '||') {
         toks.push({ op: two }); i += 2; continue;
       }
-      if (';|&()<>'.indexOf(c) >= 0) { toks.push({ op: c }); i++; continue; }
+      // Redirections, as one token each: [fd]>, [fd]>>, <, and the fd-target
+      // forms >&N / 2>&1 (which name an fd, not a file — no target word
+      // follows, so 'redir-fd' must not arm skipNext).
+      var redir = /^[0-9]*(?:>>|>|<)(&[0-9]+)?/.exec(line.slice(i));
+      if (redir && (c === '>' || c === '<' || redir[0].length > 1)) {
+        toks.push({ op: redir[1] ? 'redir-fd' : 'redir' });
+        i += redir[0].length; continue;
+      }
+      if (';|&()'.indexOf(c) >= 0) { toks.push({ op: c }); i++; continue; }
       var word = '', dyn = false, quoted = false, glob = false, started = i;
       while (i < n) {
         c = line.charAt(i);
@@ -1833,17 +1841,18 @@ function checkManifestRefs(manifest) {
     return toks;
   }
 
-  function scanShellLine(line, where) {
+  function scanShellLine(line, where, fns) {
     var toks = tokenizeShellLine(line);
     // mode: how the current command's ARGUMENTS are treated.
     var cmdPos = true, mode = 'check', skipNext = false;
     for (var k = 0; k < toks.length; k++) {
       var tk = toks[k];
       if (tk.op !== undefined) {
-        if (tk.op === '>' || tk.op === '>>' || tk.op === '<' || tk.op === '2>') {
+        if (tk.op === 'redir') {
           skipNext = true;        // redirection target: created, not referenced
           continue;
         }
+        if (tk.op === 'redir-fd') continue;  // >&2 / 2>&1: fd target, no word
         cmdPos = true; mode = 'check'; skipNext = false;
         continue;
       }
@@ -1854,6 +1863,9 @@ function checkManifestRefs(manifest) {
         if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue;   // VAR=… prefix
         if (tk.dyn) { mode = 'skip'; cmdPos = false; continue; }  // "$0" etc.
         if (KEYWORDS[w]) continue;
+        // A name this script defines as a function is shell, not a PATH
+        // reference; its arguments have unknowable semantics — skip them.
+        if (fns && fns[w]) { mode = 'skip'; cmdPos = false; continue; }
         if (w === 'for' || w === 'case') { mode = 'skip'; cmdPos = false; continue; }
         if (w.charAt(0) === '-') continue;                  // wrapper flag (env -i)
         cmdPos = false;
@@ -1893,7 +1905,14 @@ function checkManifestRefs(manifest) {
     }
   }
   function scanShellText(text, where) {
-    text.split('\n').forEach(function (line) { scanShellLine(line, where); });
+    // Function definitions first, over the whole text: a call may textually
+    // precede its definition (execution order, not line order, governs).
+    var fns = {}, lines = text.split('\n');
+    lines.forEach(function (line) {
+      var m = /^[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*\(\)/.exec(line);
+      if (m) fns[m[1]] = true;
+    });
+    lines.forEach(function (line) { scanShellLine(line, where, fns); });
   }
   function scanScript(imgPath, content) {
     var nl = content.indexOf('\n');

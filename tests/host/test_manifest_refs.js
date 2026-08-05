@@ -174,6 +174,56 @@ check('negative control: the minesweeper Desktop sample is still in the manifest
   assert.ok(/\[ -f \/usr\/include\/png\.h \]/.test(e.content) &&
             /for f in /.test(e.content) && /\.\/minesweeper/.test(e.content),
     'the sample lost its keyword/absence-probe/relative-path traps');
+  // #394 added two more trap classes: a shell function (defined + called)
+  // and fd redirects (>&2). Pin them so the greens below stay non-vacuous.
+  assert.ok(/^fetch\(\) \{$/m.test(e.content) && /fetch "/.test(e.content) &&
+            />&2/.test(e.content),
+    'the sample lost its function/fd-redirect traps (#394)');
+});
+
+check('negative control (#394): shell functions and fd redirects are not flagged', () => {
+  const m = base();
+  m.user.files['/root/Desktop/fnscript'] = { content: [
+    '#!/bin/sh',
+    'grab() {',
+    '    doom "$1" || {',
+    '        rc=$?',
+    '        echo "grab failed ($rc): $1" >&2',
+    '        exit 1',
+    '    }',
+    '}',
+    'forward_ref',                       // defined BELOW its first call
+    'forward_ref() { echo late >&2; }',
+    'grab one 2>&1',
+    'doom > /tmp/log 2>&1',
+    ''].join('\n'), mode: 0o755 };
+  assert.deepStrictEqual(errsOf(m), []);
+});
+
+check('RED (#394): a dangling command inside a function body is still flagged', () => {
+  const m = base();
+  m.user.files['/root/Desktop/fnbody'] = { content: [
+    '#!/bin/sh',
+    'grab() {',
+    '    ghostcmd "$1" >&2',
+    '}',
+    'grab x',
+    ''].join('\n'), mode: 0o755 };
+  const errs = errsOf(m);
+  assert.strictEqual(errs.length, 1, JSON.stringify(errs));
+  assert.ok(/'ghostcmd'/.test(errs[0]), errs[0]);
+});
+
+check('RED (#394): a call to a never-defined function-looking name is still flagged', () => {
+  const m = base();
+  m.user.files['/root/Desktop/undefn'] = { content: [
+    '#!/bin/sh',
+    'grab() { doom; }',
+    'grap x',                            // typo: grap, not grab
+    ''].join('\n'), mode: 0o755 };
+  const errs = errsOf(m);
+  assert.strictEqual(errs.length, 1, JSON.stringify(errs));
+  assert.ok(/'grap'/.test(errs[0]), errs[0]);
 });
 
 check('negative control: the cmdalt seed (package-name values) is exempt', () => {
