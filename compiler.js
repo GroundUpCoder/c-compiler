@@ -13952,8 +13952,19 @@ function parseTokens(tokens, options) {
   const sink = { errors: [], warnings: [] };
 
   if (tokens.length === 0) {
-    sink.errors.push(new Lexer.LexError("No tokens to parse", null, 0));
-    return { translationUnit: AST.makeTUnit(null), errors: sink.errors, warnings: sink.warnings };
+    // An empty translation unit (every declaration preprocessed away, e.g. a
+    // whole file behind a feature #ifdef that is off for this target). C11
+    // 6.9p1 strictly requires at least one external declaration, but every
+    // production toolchain accepts this shape and emits an empty object, so
+    // rejecting it makes upstream source lists unusable. Accept it as a unit
+    // contributing nothing; -Wempty-translation-unit (clang's flag name,
+    // opt-in) preserves the strict reading as a diagnostic.
+    if (options?.warningFlags?.emptyTranslationUnit) {
+      sink.warnings.push(new Lexer.LexError(
+        "ISO C requires a translation unit to contain at least one declaration [-Wempty-translation-unit]",
+        options?.filename ?? null, 0));
+    }
+    return { translationUnit: AST.makeTUnit(options?.filename ?? null), errors: sink.errors, warnings: sink.warnings };
   }
 
   const unit = AST.makeTUnit(tokens[0].filename);
@@ -14077,7 +14088,7 @@ function parseSource(filename, source, ppRegistry) {
   if (result.errors.length > 0) {
     return { translationUnit: AST.makeTUnit(filename), errors: result.errors, warnings: result.warnings };
   }
-  const parseResult = parseTokens(result.tokens);
+  const parseResult = parseTokens(result.tokens, { filename });
   parseResult.warnings = [...result.warnings, ...parseResult.warnings];
   return parseResult;
 }
@@ -34204,7 +34215,7 @@ function parseAllUnits(fs, pp, inputFiles, options) {
       return;
     }
     const tParse = hrtime ? hrtime() : 0;
-    const parseResult = Parser.parseTokens(result.tokens, { ...options, exceptionTagRegistry });
+    const parseResult = Parser.parseTokens(result.tokens, { ...options, exceptionTagRegistry, filename: filenameInterned });
     const unit = parseResult.translationUnit;
     for (const req of unit.requiredSources) {
       if (!requiredSources.has(req)) {
@@ -35229,7 +35240,7 @@ function main() {
   const inputFiles = [];
   const opfsFiles = [];
   const runArgs = [];
-  const warningFlags = { pointerDecay: false, circularDependency: false, largeStackFrame: true };
+  const warningFlags = { pointerDecay: false, circularDependency: false, largeStackFrame: true, emptyTranslationUnit: false };
   const compilerOptions = { debugSwitch: false, allowImplicitInt: false, allowEmptyParams: false, allowKnRDefinitions: false, allowImplicitFunctionDecl: false, allowUndefined: false, allowZeroLengthArrays: false, gcSections: false, gcNoExportRoots: false, noUndefined: false, timeReport: false, dedupLiterals: false, requireSources: [], backend: "default" };
   let noXterm = false;
   // Emitted .html pages always use the synchronous single-file BLOCK_FS
@@ -35272,6 +35283,8 @@ function main() {
       else if (wflag === "no-circular-dependency") warningFlags.circularDependency = false;
       else if (wflag === "large-stack-frame") warningFlags.largeStackFrame = true;
       else if (wflag === "no-large-stack-frame") warningFlags.largeStackFrame = false;
+      else if (wflag === "empty-translation-unit") warningFlags.emptyTranslationUnit = true;
+      else if (wflag === "no-empty-translation-unit") warningFlags.emptyTranslationUnit = false;
     } else if (args[i] === "-g" || args[i] === "-g1") {
       compilerOptions.emitNames = true;
     } else if (args[i] === "-g2") {
