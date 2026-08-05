@@ -1,0 +1,18 @@
+{
+  "name": "doom",
+  "version": "1.9",
+  "summary": "DOOM (doomgeneric port) — id Software's 1993 shooter + the shareware episode 1 WAD",
+  "files": {
+    "doom-bin": { "project": "vendor/doom/bin.json" },
+    "doom1.wad": { "bin": "vendor/doom/data/doom1.wad" },
+    "doom": {
+      "content": "#!/bin/sh\n# NOT the quake cd-launcher: doom's configdir is \".\" (m_config.c\n# GetDefaultConfigDir), so it MKDIRs ./.savegame and writes default.cfg\n# into its CWD — cd'ing to the package dir would litter /opt/doom with\n# unrecorded user data (breaking gucman remove's exact replay) and go\n# EROFS under the baked /usr/opt/doom. So keep the caller's CWD (saves\n# land in $HOME exactly like the formerly-baked doom) and hand the WAD\n# over explicitly: -iwad takes an absolute path (d_iwad.c D_FindIWAD),\n# and ours sits AFTER \"$@\" so a user's own -iwad wins (M_CheckParm\n# returns the first match). Self-location is the known-prefix probe\n# (todos/0444): /opt/doom installed, /usr/opt/doom baked (fat image);\n# [ is a hush builtin — zero extra spawns. Variable-free by design\n# (#296): builtins and literal paths only. The launcher stays the game's\n# waiting parent (no exec) — job control and the e2e's pkill contract\n# rely on that.\nif [ -x /opt/doom/doom-bin ]; then\n/opt/doom/doom-bin \"$@\" -iwad /opt/doom/doom1.wad\nelse\n/usr/opt/doom/doom-bin \"$@\" -iwad /usr/opt/doom/doom1.wad\nfi\n",
+      "mode": 493
+    }
+  },
+  "bin": { "doom": "doom" },
+  "desktop": { "cmd": "doom" },
+  "menu": [
+    { "group": "Games", "entry": "doom", "cmd": "doom" }
+  ]
+}
