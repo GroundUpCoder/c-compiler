@@ -1439,10 +1439,11 @@ function foldPackages(fsMod, pathMod, rootDir, manifest, which, opts) {
     // untestable on the fat fixture. Install/remove is fully exercisable
     // on any image via gucman's /etc/fonts/fallback delta. Validate loudly
     // here (the fold is still the pre-bake definition linter), plant
-    // nothing. NB the base image itself DOES bake one chain face since
-    // #435 (symbols2.ttf + the /usr/share/fonts/fallback list — the Mac
-    // modifier glyphs are chrome, not opt-in coverage); "tofu state" above
-    // means CJK-and-beyond, which stays package territory.
+    // nothing. NB the base image itself DOES bake chain faces since #435
+    // (symbols2.ttf) and #515 (symbols.ttf), listed in the baked
+    // /usr/share/fonts/fallback — the Mac modifier glyphs are chrome, not
+    // opt-in coverage; "tofu state" above means CJK-and-beyond, which
+    // stays package territory.
     (pkg.fonts || []).forEach(function (rel) {
       if (!(pkg.files || {})[rel])
         throw new Error("package '" + name + "': fonts " + rel + ' names no package file');
