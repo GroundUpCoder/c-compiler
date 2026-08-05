@@ -1,5 +1,6 @@
 {
   "version": 237,
+  "defaultPackages": [],
   "overlays": [
     {
       "id": "clang-apps",

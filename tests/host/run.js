@@ -41,6 +41,7 @@ var tests = [
   ['test_netbridge_wrapper.js', []],     // #393: bridge answers are named, never "unreachable"; non-Latin-1 crosses the hop; dead bridge keeps ENETUNREACH
   ['test_browser_out_dirs.js', []],      // no tests/browser output path names a committed dir (logs/ etc.) — sweeps must leave a clean tree clean (#399/#183)
   ['test_manifest_refs.js', []],         // #434: image.json referential integrity — dangling launcher/link/seed refs fail the bake; red-then-green + the v223 sameboy replay
+  ['test_default_packages.js', []],      // #419: defaultPackages — fold-time validation (unknown/duplicate/gated/non-array names refuse before a bake) + bakeSystemImage derivation (non-empty set -> /usr/share/gucman/defaults, empty set -> NO file) + the shipped manifest folds clean with its declared set
   ['../spawn/test_spawn_host.js', []],   // 0006 Layer A+B: the posix_spawn struct ABI + host-side marshalling (path/argv/envp/cwd/file_actions/flags/pgid) round-trips byte-for-byte through runModule with fake spawnHooks. Registered by #167/#431: tests/spawn/ was in no suite AND had no RULES row, so it reported UNMAPPED and ran nowhere
   ['../serve/test_first_run.js', []],    // `node serve.js .` prints a URL that 200s (COOP/COEP)
   ['../serve/test_clang_overlay.js', []],// `serve.js --clang` overlay on-ramp: fold-in vs sibling-absent (0141)

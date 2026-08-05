@@ -500,4 +500,16 @@ async function mountAndBoot() {
     cwd: '/root',
   });
   await kernel.service({ path: '/bin/wm', argv: ['wm'], envp: ['PATH=/usr/local/bin:/bin'] });
+  // Default-package sync (#419): eager install of the declared default set on
+  // any boot where one is missing (jku ruling 2026-08-03 — the eager shape; a
+  // font default is pulled in by a glyph-cache miss, not a click, so the
+  // trigger must be the boot). Spawned only when a defaults list exists at
+  // all — the shipped manifest declares none, so a no-defaults boot spawns
+  // nothing and stays byte-identical. Non-fatal like wm; the service's fd 1/2
+  // route to the boot console (the progress/failure UI); a failed install
+  // retries on the next boot; outcome record at /run/gucman-sync.status.
+  if (kfs.stat('/etc/gucman/defaults') || kfs.stat('/usr/share/gucman/defaults')) {
+    await kernel.service({ path: '/bin/gucman', argv: ['gucman', 'sync-defaults'],
+                           envp: ['PATH=/usr/local/bin:/bin'] });
+  }
 }

@@ -88,6 +88,10 @@
 #define GM_HOME         "/root"                  /* seed dests root here (§2.1) */
 #define GM_DESKTOP_FLAG GM_DB_DIR "/desktop_shortcuts"  /* Q5/#90 persistent toggle */
 #define GM_OS_RELEASE   "/usr/share/os-release"
+#define GM_DEFAULTS_ETC "/etc/gucman/defaults"   /* #419: overrides wholesale */
+#define GM_DEFAULTS_USR "/usr/share/gucman/defaults"  /* baked default set */
+#define GM_REMOVED_DIR  GM_DB_DIR "/removed"     /* #419: removal tombstones */
+#define GM_SYNC_STATUS  "/run/gucman-sync.status" /* #419: sync outcome record */
 #define GM_NAME_MAX     64
 #define GM_PATH_MAX     768
 
@@ -616,6 +620,17 @@ static cJSON *gm_db_load(const char *name) {
     cJSON *db = cJSON_Parse(text);
     free(text);
     return db;
+}
+
+/* Removal tombstone (#419): an empty marker at GM_REMOVED_DIR/<name>,
+ * recording that the USER removed this package on purpose. The default set
+ * means "install once, unless the user has ever said no" — sync-defaults
+ * skips a tombstoned name forever, so a deliberate remove is durable across
+ * reboots instead of degrading "first boot" into "every boot where the app
+ * is missing". Written by cmd_remove BEFORE the DB record goes; cleared by
+ * any successful install (the user said yes again). */
+static void gm_tomb_path(const char *name, char *out, size_t cap) {
+    snprintf(out, cap, GM_REMOVED_DIR "/%s", name);
 }
 
 /* ========================= base-version gate =========================== */
@@ -1423,6 +1438,11 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
         gm_unwind(name, &undo);
         return -1;
     }
+    /* #419: a successful install clears the name's removal tombstone — an
+     * explicit install is the user saying yes again (ENOENT: never removed). */
+    char tomb[GM_PATH_MAX];
+    gm_tomb_path(name, tomb, sizeof tomb);
+    unlink(tomb);
     printf("gucman: installed %s %s\n", name, jver->valuestring);
     return 0;
 }
@@ -1554,6 +1574,16 @@ static int cmd_remove(const char *name) {
     char ver[64];
     snprintf(ver, sizeof ver, "%s", cJSON_IsString(v) ? v->valuestring : "");
     cJSON_Delete(db);
+    /* #419: the removal tombstone, BEFORE the DB record goes — a crash
+     * between the two leaves the package installed (re-run remove); the
+     * reverse order would leave it removed but tombstone-less, which is
+     * exactly the resurrection bug sync-defaults must never ship. Failure
+     * is loud but non-fatal: the remove is the user's command. */
+    char tomb[GM_PATH_MAX];
+    gm_tomb_path(name, tomb, sizeof tomb);
+    if (gm_mkdir_p(GM_REMOVED_DIR) != 0 || gm_write_file_atomic(tomb, "", 0, 0644) != 0)
+        fprintf(stderr, "gucman: warning: could not record the removal of %s (%s) — "
+                        "a defaults sync may reinstall it\n", name, strerror(errno));
     /* the DB record goes LAST — its absence == "not installed" */
     char dbp[GM_PATH_MAX];
     gm_db_path(name, dbp, sizeof dbp);
@@ -1899,6 +1929,136 @@ static int cmd_index(void) {
     return 0;
 }
 
+/* ========================= sync-defaults (#419) ======================== */
+
+/* Eager default-package install — the boot-time arm of "not baked but still
+ * feels built-in" (design fork closed by jku 2026-08-03: eager on first
+ * boot; a font default is pulled in by a glyph-cache miss, not a click, so
+ * the trigger must be the boot, not a launch). The embedders (os/boot.js,
+ * os/kernel-worker.js) spawn `gucman sync-defaults` as a kernel service
+ * right after /bin/wm, on any boot where a defaults list exists at all;
+ * service fd 1/2 route to the boot console in both hosts, so this command's
+ * output IS the progress/failure UI.
+ *
+ * The default set: GM_DEFAULTS_ETC if it exists, else GM_DEFAULTS_USR (the
+ * repos-file rule — /etc overrides wholesale). One name per line, `#`
+ * comments. The baked file is derived from os/image.json `defaultPackages`
+ * by bakeSystemImage, so a new default reaches cached installs through the
+ * normal blob-upgrade wire.
+ *
+ * Skip rules — "install once, unless the user has ever said no": a name is
+ * skipped when already installed (DB record), baked into the sealed /usr
+ * (os-release PACKAGES=), or tombstoned by a deliberate remove
+ * (GM_REMOVED_DIR — see cmd_remove). A FAILED install is NOT tombstoned:
+ * the next boot retries it. The no-work path touches no network and prints
+ * nothing (boots must stay byte-clean); one bad name does not stop the
+ * rest.
+ *
+ * Outcome record: GM_SYNC_STATUS, written atomically at every conclusion —
+ * line 1 `ok`/`failed`, then `installed <name>` / `failed <name>` lines.
+ * The machine-readable completion marker for tests and front-ends; /run
+ * persists on the root volume, so each run simply overwrites the last. */
+
+#define GM_SYNC_MAX 64
+
+struct gm_sync_log {
+    char notes[8192];
+    size_t len;
+    int installed, failed;
+};
+
+static void gm_sync_note(struct gm_sync_log *sl, const char *verb, const char *name) {
+    if (sl->len < sizeof sl->notes - 1)
+        sl->len += (size_t)snprintf(sl->notes + sl->len, sizeof sl->notes - sl->len,
+                                    "%s %s\n", verb, name);
+    if (verb[0] == 'i') sl->installed++; else sl->failed++;
+}
+
+static void gm_sync_status(const struct gm_sync_log *sl) {
+    static char text[sizeof sl->notes + 16];    /* off the 64K wasm stack */
+    int n = snprintf(text, sizeof text, "%s\n%s", sl->failed ? "failed" : "ok", sl->notes);
+    gm_mkdir_p("/run");                     /* virgin root volumes have it; be safe */
+    if (gm_write_file_atomic(GM_SYNC_STATUS, text, (size_t)n, 0644) != 0)
+        fprintf(stderr, "gucman: writing " GM_SYNC_STATUS ": %s\n", strerror(errno));
+}
+
+static int cmd_sync_defaults(void) {
+    size_t len;
+    char *text = gm_read_file(GM_DEFAULTS_ETC, &len);
+    if (!text) text = gm_read_file(GM_DEFAULTS_USR, &len);
+    if (!text) return 0;                    /* no default set declared: nothing to
+                                             * do, nothing to write, nothing to say */
+    static struct gm_sync_log sl;               /* zeroed; off the 64K wasm stack */
+    static char want[GM_SYNC_MAX][GM_NAME_MAX];
+    int nwant = 0;
+    char *save = text;
+    for (char *line = text; line && *line; ) {
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = 0;
+        while (*line == ' ' || *line == '\t') line++;
+        char *end = line + strlen(line);
+        while (end > line && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r')) *--end = 0;
+        if (*line && *line != '#') {
+            if (!gm_valid_name(line)) {
+                fprintf(stderr, "gucman: defaults: '%s' is not a valid package name — skipped\n", line);
+                sl.failed++;
+            } else if (nwant >= GM_SYNC_MAX) {
+                fprintf(stderr, "gucman: defaults: more than %d names — '%s' and the rest skipped\n",
+                        GM_SYNC_MAX, line);
+                sl.failed++;
+            } else {
+                char dbp[GM_PATH_MAX], tomb[GM_PATH_MAX];
+                gm_db_path(line, dbp, sizeof dbp);
+                gm_tomb_path(line, tomb, sizeof tomb);
+                if (!gm_exists(dbp) && !gm_is_baked(line) && !gm_exists(tomb))
+                    snprintf(want[nwant++], GM_NAME_MAX, "%s", line);
+            }
+        }
+        line = nl ? nl + 1 : NULL;
+    }
+    free(save);
+
+    if (nwant == 0 && sl.failed == 0) {     /* the every-boot fast path: no
+                                             * network, no output */
+        gm_sync_status(&sl);
+        return 0;
+    }
+
+    if (nwant > 0) {
+        printf("gucman: installing %d default package(s)\n", nwant);
+        fflush(stdout);
+        char base[GM_PATH_MAX];
+        cJSON *index = (gm_repo_base(base, sizeof base) == 0) ? gm_fetch_index(base) : NULL;
+        if (!index) {
+            /* gm_repo_base/gm_fetch_index already named the fault on stderr
+             * (#456); record every pending name as failed — the next boot
+             * retries them all. */
+            for (int i = 0; i < nwant; i++) gm_sync_note(&sl, "failed", want[i]);
+        } else {
+            for (int i = 0; i < nwant; i++) {
+                char dbp[GM_PATH_MAX];
+                gm_db_path(want[i], dbp, sizeof dbp);
+                if (gm_exists(dbp)) continue;            /* duplicate line / dep of
+                                                          * an earlier default */
+                cJSON *in_progress = cJSON_CreateObject();
+                int rc = gm_install_one(base, index, want[i], in_progress, 0);
+                cJSON_Delete(in_progress);
+                gm_sync_note(&sl, rc == 0 ? "installed" : "failed", want[i]);
+                fflush(stdout);
+                fflush(stderr);
+            }
+            cJSON_Delete(index);
+        }
+    }
+    if (sl.failed) {
+        fprintf(stderr, "gucman: %d default package(s) not installed (will retry next boot)\n",
+                sl.failed);
+        fflush(stderr);
+    }
+    gm_sync_status(&sl);
+    return sl.failed ? 1 : 0;
+}
+
 /* =============================== main ================================== */
 
 int main(int argc, char **argv) {
@@ -1929,8 +2089,15 @@ int main(int argc, char **argv) {
         curl_global_cleanup();
         return rc;
     }
+    if (argc == 2 && strcmp(argv[1], "sync-defaults") == 0) {
+        curl_global_init(CURL_GLOBAL_DEFAULT);
+        int rc = cmd_sync_defaults();
+        curl_global_cleanup();
+        return rc;
+    }
     fprintf(stderr,
             "usage: gucman install <name> | gucman remove <name> | gucman info <name>\n"
-            "       gucman list [--all]   | gucman index (raw catalog JSON)\n");
+            "       gucman list [--all]   | gucman index (raw catalog JSON)\n"
+            "       gucman sync-defaults (boot: install missing default packages)\n");
     return 2;
 }
