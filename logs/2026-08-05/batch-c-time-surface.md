@@ -162,3 +162,31 @@ starting the gate as a tracked background task and never ending the turn
 while it runs. Recorded because the "kills, not converts" behaviour also
 explains the first red gate's SIGTERM storm: attempts 1 and 2 died this
 way mid-run.
+
+## Gate verdict (from the artifacts)
+
+- **Attempt 4** (tree 5305cb72, full `--diff origin/main`, all 25 suites):
+  GATE-START 2026-08-05 23:52:40 KST, run-level
+  `build/test-run/summary.json` written 2026-08-06 00:45:07 (post-dates the
+  start), `filter: null`. Every suite `pass` — kernel `done, filter null,
+  167/167 recorded, zero non-pass`; sweep `done, filter null, 51/51
+  recorded, zero non-pass` — EXCEPT `unit`: one red,
+  `switch_br_table` (a golden pinning the libc's own switch sites by
+  file:line; strftime's switch moved 347→411 and strptime's new switch at
+  664 correctly selects br_table).
+- **Attempt 5** (tree 896d7d71 = attempt-4 tree + that golden's expected
+  file only): `node tests/run.js --diff 5305cb72` maps the delta to `unit`
+  alone; unit 813 passed / 0 failed / 1 xfailed / 3 skipped, GATE-EXIT:0,
+  run-level summary `unit: pass`. Attempt 4's run-level record preserved at
+  /tmp/batchc-attempt4-run-summary.json before the overwrite.
+
+Composed: every one of the 25 suites is green on a tree whose only delta
+from the tip is nothing (unit, on the tip itself) or one test-golden file
+(the other 24, on 5305cb72). The merge decision is the master's; a full
+25-suite re-run on 896d7d71 is available on request.
+
+Earlier attempts, for the record: attempt 1 and 2 were SIGTERM-killed by
+the harness at its Bash timeout (the kickoff's "converts into a tracked
+task at the cap" does not hold in this harness — measured, exit 143
+twice); attempt 3 ran as a tracked task and went red with the
+duplicate-strptime bake failure attributed and fixed above.
