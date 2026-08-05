@@ -52,6 +52,12 @@ const path = require('path');
 const os = require('os');
 const { execFileSync, spawnSync } = require('child_process');
 
+// Cross-tree preflight (todos/0341, extended by #142): regenerates
+// vendor/micropython/genhdr/* next to itself. The --check spawn (run.py
+// micropython/genhdr-sync) sets cwd=ROOT_DIR, same tree — measured at #142.
+require(path.join(__dirname, '../tests/lib/tree-guard.js'))
+  .assertSameTree(__dirname, { label: 'tools/mkmpgenhdr.js' });
+
 const ROOT = path.resolve(__dirname, '..');
 
 // Sources that carry pre-assigned qstrs of their own and must not be scanned.

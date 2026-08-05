@@ -14,6 +14,12 @@
 const fs = require("fs");
 const path = require("path");
 
+// Cross-tree preflight (todos/0341, extended by #142): emits libc-ext.js at
+// its own repo root — a self-tree writer the #142 survey found missing from
+// the original list. No harness spawns — hand-run only.
+require(path.join(__dirname, "../tests/lib/tree-guard.js"))
+  .assertSameTree(__dirname, { label: "tools/build-libc-ext.js" });
+
 const ROOT = path.resolve(__dirname, "..");
 const DIRS = [path.join(ROOT, "ext", "include"), path.join(ROOT, "ext", "src")];
 const OUT = path.join(ROOT, "libc-ext.js");

@@ -216,12 +216,6 @@ thing this file exists to kill.
 - file: vendor/micropython/README.md
 - anchor: - **Modules a Python programmer will reach for and not find**: `datetime`,
 
-### L45 — the cross-tree guard covers the test runners only; the tools/ writers and os/boot.js can still write into another tree
-- ticket: #142
-- file: tests/lib/tree-guard.js
-- anchor: // NOT GUARDED YET: the tools/ writers and os/boot.js — funded by todos/0357.
-- provenance: 0341
-
 ### L48 — `tcflush` validates and reports success without discarding anything, though the line discipline really holds an input queue
 - ticket: #124
 - file: compiler.js

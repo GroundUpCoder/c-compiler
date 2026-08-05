@@ -19,6 +19,11 @@
 const fs = require('fs');
 const path = require('path');
 
+// Cross-tree preflight (todos/0341, extended by #142): writes the committed
+// os/sounds/*.wav next to itself. No harness spawns — hand-run only.
+require(path.join(__dirname, '../tests/lib/tree-guard.js'))
+  .assertSameTree(__dirname, { label: 'tools/mksounds.js' });
+
 const RATE = 22050;
 const OUT_DIR = path.join(__dirname, '..', 'os', 'sounds');
 

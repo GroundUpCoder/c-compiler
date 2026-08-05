@@ -37,6 +37,13 @@
 const fs = require('fs');
 const path = require('path');
 
+// Cross-tree preflight (todos/0341, extended by #142): this bakes a 111 MB
+// blob into ITS OWN os/, so a foreign-cwd launch would silently rewrite
+// another tree's image. Every harness spawn (image-fixture, serve.js, comguc)
+// runs with a same-tree cwd — measured at #142.
+require(path.join(__dirname, '../tests/lib/tree-guard.js'))
+  .assertSameTree(__dirname, { label: 'tools/mkimage.js' });
+
 const ROOT = path.resolve(__dirname, '..');
 const OS_DIR = path.join(ROOT, 'os');
 const { BLOCK_FS } = require(path.join(ROOT, 'host.js'));

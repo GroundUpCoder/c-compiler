@@ -25,6 +25,12 @@
 const fs = require('fs');
 const path = require('path');
 
+// Cross-tree preflight (todos/0341, extended by #142): regenerates
+// os/win32/PORTS.md next to itself. --check spawns (test_win32_ports.js)
+// inherit the kernel suite's in-tree cwd — measured at #142.
+require(path.join(__dirname, '../tests/lib/tree-guard.js'))
+  .assertSameTree(__dirname, { label: 'tools/win32ports.js' });
+
 const ROOT = path.join(__dirname, '..');
 const CompilerJS = require(path.join(ROOT, 'compiler.js'));
 const COMMON = require(path.join(ROOT, 'os/os-common.js'));

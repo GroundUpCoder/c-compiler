@@ -81,6 +81,19 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
+
+// Cross-tree preflight (todos/0341, extended by #142): boot.js re-bakes and
+// installs ITS OWN tree's image fixture, so a foreign-cwd launch silently
+// rewrites another tree's blob. GUARDED, not exempted — the #142 survey
+// measured every harness spawn: the kernel e2es inherit the suite-runner's
+// `cwd: tests/kernel` (drive.js driveBoot passes no cwd; the mkdtemp fixture
+// dir is only the --image= argument, never the cwd), and test_heavylock_e2e
+// sets ROOT-based cwds explicitly. Ahead of the heavy requires and the
+// heavy-lock join below — refuse before you load a compiler or take a
+// machine-wide lock (the todos/0341 order).
+require(path.join(ROOT, 'tests/lib/tree-guard.js'))
+  .assertSameTree(__dirname, { label: 'os/boot.js' });
+
 const HOST = path.join(ROOT, 'host.js');
 const KERNEL = path.join(ROOT, 'kernel.js');
 const K = require(KERNEL);
