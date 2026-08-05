@@ -889,6 +889,15 @@ async function boot() {
     cwd: '/root',
   });
   await kernel.service({ path: '/bin/wm', argv: ['wm'], envp: ['PATH=/usr/local/bin:/bin'] });
+  // Default-package sync (#419): the browser twin of boot.js's trigger —
+  // eager install of the declared default set on any boot where one is
+  // missing, spawned only when a defaults list exists at all (the shipped
+  // manifest declares none -> no spawn, byte-identical boot). Output lands
+  // on the VT1 boot console; outcome record at /run/gucman-sync.status.
+  if (kfs.stat('/etc/gucman/defaults') || kfs.stat('/usr/share/gucman/defaults')) {
+    await kernel.service({ path: '/bin/gucman', argv: ['gucman', 'sync-defaults'],
+                           envp: ['PATH=/usr/local/bin:/bin'] });
+  }
   post({ type: 'ready', mode: sysMode + '/' + wsRoot.mode });
   // Boot pre-fill (ticket #351 plan 3): usually a no-op — the pid-1 spawn's
   // own refill-on-take already filled the pool, and #350 measured that

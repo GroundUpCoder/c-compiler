@@ -1310,6 +1310,29 @@ function foldPackages(fsMod, pathMod, rootDir, manifest, which, opts) {
   opts = opts || {};
   var pkgDir = opts.packagesDir || pathMod.join(rootDir, 'packages');
   var avail = listPackages(fsMod, pathMod, rootDir, { packagesDir: pkgDir });
+  // #419: the declarative default-package set rides the manifest
+  // (`defaultPackages`; bakeSystemImage derives /usr/share/gucman/defaults
+  // from it) and is validated HERE because every Node bake path — mkimage,
+  // boot.js, image-fixture, serve.js — folds before it bakes, fold set
+  // empty or not: a typo would otherwise ship an image whose every fresh
+  // boot fails its defaults sync loudly. Names must be known UNGATED
+  // definitions (a gated def is absent from `avail` by construction — a
+  // default must be installable from the BASE repo index), no duplicates.
+  // The browser in-worker bake has no packages/ to check against; these
+  // Node gates are where the mistake is catchable.
+  if (manifest.defaultPackages !== undefined) {
+    var dp = manifest.defaultPackages;
+    if (!Array.isArray(dp) || dp.some(function (n) { return typeof n !== 'string' || !n; }))
+      throw new Error('defaultPackages must be an array of package names');
+    var dpSeen = {};
+    dp.forEach(function (n) {
+      if (dpSeen[n]) throw new Error("defaultPackages lists '" + n + "' twice");
+      dpSeen[n] = true;
+      if (avail.indexOf(n) < 0)
+        throw new Error("defaultPackages: unknown package '" + n +
+          "' (known ungated packages/: " + (avail.join(', ') || 'none') + ')');
+    });
+  }
   var names = which === 'all' ? avail : (which || []).slice().sort();
   names.forEach(function (n) {
     if (avail.indexOf(n) < 0)
@@ -2003,6 +2026,20 @@ function bakeSystemImage(BLOCK_FS, CompilerJS, sysStore, manifest, io) {
       rel += 'PACKAGES=' + manifest.packagesBaked.join(',') + '\n';
     }
     writeFile(mfs, '/usr/share/os-release', rel);
+    // #419: the declarative default-package set (manifest.defaultPackages,
+    // validated fold-time by the Node callers) bakes to the file gucman's
+    // boot-time `sync-defaults` reads. An empty/absent set bakes NO file —
+    // which is also what gates the embedders' sync spawn off entirely, so
+    // a no-defaults image boots byte-identically to a pre-#419 one.
+    // /etc/gucman/defaults overrides this file wholesale (the repos rule).
+    if (manifest.defaultPackages && manifest.defaultPackages.length) {
+      writeFile(mfs, '/usr/share/gucman/defaults',
+        '# Default packages (#419): `gucman sync-defaults` installs these at\n' +
+        '# boot unless already installed, baked in, or removed by the user\n' +
+        '# (a remove is durable — /var/lib/gucman/removed/<name>). Overridable\n' +
+        '# wholesale at /etc/gucman/defaults. One package name per line.\n' +
+        manifest.defaultPackages.join('\n') + '\n');
+    }
     sysStore.flush && sysStore.flush();
     return BLOCK_FS.sealVolume(sysStore);
   });

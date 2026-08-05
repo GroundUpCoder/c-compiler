@@ -188,7 +188,12 @@ async function main() {
   check('installed default untouched on reboot', sync3.includes('FONT-STILL-THERE'));
   check('no duplicate fallback line on reboot (idempotent)', /^1$/m.test(sync3), sync3);
   check('no re-download of an installed default', !/downloading font-unifont/.test(all3), all3.slice(0, 400));
-  check('no resurrection download of the removed default', !/downloading punes/.test(all3));
+  // The exact instrument for "the sync never touched punes": its status
+  // record names only what it acted on. The session's OWN explicit
+  // `gucman install punes` below legitimately prints `downloading punes`,
+  // so a whole-session console regex would be the wrong probe here.
+  check('sync status never names the removed default (skipped, not retried)',
+    !/^(installed|failed) punes$/m.test(sync3), sync3);
   const re3 = section(out3, 'reinstall');
   check('explicit reinstall of a removed default succeeds', re3.includes('RC=0'), re3);
   check('explicit install clears the tombstone (the user said yes again)',
