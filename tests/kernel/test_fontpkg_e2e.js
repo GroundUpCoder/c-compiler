@@ -73,6 +73,7 @@ async function main() {
     'echo ==preg-end',
     'echo ==install',
     'mkdir -p /etc/gucman',
+    'printf "# opt out of the shipped default set (#420: doom) — this test\\n# owns its package state; /etc overrides the baked file wholesale\\n" > /etc/gucman/defaults',   // repo below carries doom; keep the ppm cat sessions byte-clean too
     `echo http://127.0.0.1:${port} > /etc/gucman/repos`,
     'gucman install font-unifont; echo RC=$?',
     'echo ==fallback',
