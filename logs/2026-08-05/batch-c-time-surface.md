@@ -124,3 +124,41 @@ Direct runs: strftime 40 diagnostics → exit 0; strptime absent → exit 0.
 `tests/unit/conformance/strftime_year_overflow` passes. L27 retired from
 todos/LIABILITIES.md in the same commit; both skip entries deleted from
 tests/run.py.
+
+## Gate-found: two vendored strptime fallbacks collide with the new symbol
+
+The first full gate went red across the whole kernel estate — every boot
+died with `Link error: Duplicate definition of symbol 'strptime'` at the
+image bake (vendor/jq/bin.json), which cascaded into 30+ kernel e2e
+failures including a SIGTERM storm from re-bake memory pressure. Cause:
+two vendored WASM-port shims existed precisely because the libc used to
+lack strptime, and #113 made them collisions:
+
+- `vendor/jq/src/jq_gucos_shims.c` — a full non-static strptime. Its own
+  header note said "if a future compiler.js grows them, drop the
+  define(s) and this TU can shrink"; this is that moment. TU deleted
+  (bin.json + README updated); `jq_gucos_shims.h` reduced to
+  `#include <time.h>` so builtin.c needs no further patching. The libc
+  strptime covers jq's full specifier set.
+- `vendor/busybox/src/coreutils/sort.c` — a static `"%b"`-only shim under
+  `__wasm__`, now an invalid static redeclaration against `<time.h>`.
+  Deleted; `sort -M` calls the libc. date.c's ISOFMT guard stays (a pure
+  config choice now — comment and README updated to stop claiming the
+  libc lacks strptime).
+
+Swept the rest of vendor/: netsurf/libgit2/duktape/cpython only CALL or
+mention strptime — these two were the only definitions. Verified: all 29
+`projects` builds pass; a headless boot bakes clean and in-OS
+`date +%s` / `sort -M` / `jq -R .` all behave.
+
+**Kickoff correction (harness mechanics, measured):** the claim "the Bash
+tool caps at 600s and the harness converts the call into a tracked task at
+the cap" is FALSE in this session's harness — a foreground call is
+SIGTERM-killed at its timeout (measured twice: explicit 600s cap and the
+120s default; exit 143 both times, gate process dead, no task created).
+The only mechanism that reaches the kickoff's mandated state (a tracked
+task + the turn held open with blocking TaskOutput until real exit) is
+starting the gate as a tracked background task and never ending the turn
+while it runs. Recorded because the "kills, not converts" behaviour also
+explains the first red gate's SIGTERM storm: attempts 1 and 2 died this
+way mid-run.

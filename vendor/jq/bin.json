@@ -29,7 +29,6 @@
   ],
   "sources": [
     "src/main.c",
-    "src/jq_gucos_shims.c",
     "oniguruma/onig_init.c",
     "oniguruma/regcomp.c",
     "oniguruma/regenc.c",

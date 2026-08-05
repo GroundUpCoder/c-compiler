@@ -1,18 +1,9 @@
 #ifndef JQ_GUCOS_SHIMS_H
 #define JQ_GUCOS_SHIMS_H
-/* Prototypes for the gucOS wasm libc gap-fillers (see jq_gucos_shims.c).
-   The repo's <time.h> does not declare these, so builtin.c pulls them in
-   here. Guarded by the same HAVE_* macros bin.json defines. */
+/* Historical gap-filler header for the gucOS wasm build. The libc now
+   provides everything jq's date builtins need — timegm()/gmtime_r()
+   (todos/0325 Group B / todos/0382 gap 5) and strptime() (ticket #113) —
+   so the companion jq_gucos_shims.c TU is gone and <time.h> declares all
+   three. The include stays so builtin.c needs no further patching. */
 #include <time.h>
-
-#ifdef HAVE_TIMEGM
-time_t timegm(struct tm *tm);
-#endif
-#ifdef HAVE_GMTIME_R
-struct tm *gmtime_r(const time_t *timep, struct tm *result);
-#endif
-#ifdef HAVE_STRPTIME
-char *strptime(const char *s, const char *format, struct tm *tm);
-#endif
-
 #endif /* JQ_GUCOS_SHIMS_H */

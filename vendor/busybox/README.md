@@ -48,8 +48,9 @@ Two binaries come out of this vendor tree:
 
   Config notes for batch 2: od is the non-DESKTOP od
   (BSD-style `-bcdox`, no GNU `-A/-t` — that's od_bloaty, DESKTOP-gated);
-  `FEATURE_DATE_ISOFMT` stays OFF (needs a real strptime this libc
-  doesn't have — see the date.c patch below); `FEATURE_STAT_FILESYSTEM`
+  `FEATURE_DATE_ISOFMT` stays OFF (a config choice now — the libc grew a
+  real strptime in ticket #113; see the date.c patch below);
+  `FEATURE_STAT_FILESYSTEM`
   OFF (no statfs); `FEATURE_SYNC_FANCY` OFF (no syncfs);
   `FEATURE_DD_SIGNAL_HANDLING` OFF (status-on-SIGUSR1, not worth the
   signal surface); `CONFIG_UNAME_OSNAME="wasm"`. For batch 3 (0035):
@@ -128,8 +129,8 @@ journaling mode:
 | `src/include/autoconf.h` | generated from `busybox.config` (allnoconfig + hush/editing/NOMMU); `CONFIG_BUSYBOX_EXEC_PATH` → `/bin/sh` (the re-exec-self image) |
 | `src/libbb/xfuncs_printf.c` | unused syscall wrappers (xsocket/xbind/…/xmkstemp/xchroot/xsettimeofday, the NOEXEC vfork helper) guarded out under `__wasm__` |
 | `src/coreutils/test.c` | `res = setjmp(leaving)` → supported if-form (every longjmp passes 2) |
-| `src/coreutils/sort.c` | tiny local `strptime()` under `__wasm__` — this libc has none and `-M` only ever asks for `"%b"` |
-| `src/coreutils/date.c` | strptime branch (`-D`, ISOFMT-gated) wrapped in `#if ENABLE_FEATURE_DATE_ISOFMT` — implicit declarations are hard errors in this compiler, so upstream's if(0)-DCE idiom can't carry the undeclared strptime; ISOFMT stays off |
+| `src/coreutils/sort.c` | RETIRED shim site (ticket #113): the `__wasm__` local `"%b"`-only `strptime()` is gone — the libc provides the real one, and a kept static copy is an invalid redeclaration against `<time.h>`; `-M` calls the libc |
+| `src/coreutils/date.c` | strptime branch (`-D`, ISOFMT-gated) wrapped in `#if ENABLE_FEATURE_DATE_ISOFMT` — the guard keeps the call out of the TU while ISOFMT is off (a pure config choice since ticket #113 gave the libc strptime) |
 | `port/include/wasm_port.h` | (0035) the former `PV_NO_INTERCEPT` always-fail `execvp` stub is gone — both binaries link the shim now; `pv_execve` grew the bare-exec emulation (spawn with empty journal + wait + exit) for env-exec-class callers |
 | `port/spawn_helpers.c` | (0035) libbb `spawn()`/`xspawn()`/`spawn_and_wait()` hand-rolled over the pv shim — upstream's vfork_daemon_rexec.c needs the kbuild applet tables this port replaced |
 | `src/archival/tar.c` | (0035) `vfork_compressor`'s xvfork site → setjmp shim form; `execlp` → `execvp` (no execlp in this libc, the intercepts route execv*); `OPT_2COMMAND` block #if-guarded (address-taken `data_extract_to_command` survives if(0) DCE — only dead CALLS are dropped) |

@@ -273,12 +273,13 @@ int date_main(int argc UNUSED_PARAM, char **argv)
 		tm_time.tm_hour = 0;
 
 		/* Process any date input to UNIX time since 1 Jan 1970 */
-#if ENABLE_FEATURE_DATE_ISOFMT /* WASM PORT PATCH: this libc has no
-		 * strptime (see sort.c's local "%b" parser); ISOFMT stays
-		 * off, and the preprocessor guard keeps the call out of the
-		 * translation unit — implicit declarations are hard errors
-		 * in this compiler, so upstream's if(0) DCE idiom can't
-		 * carry an undeclared function. */
+#if ENABLE_FEATURE_DATE_ISOFMT /* WASM PORT PATCH: ISOFMT is off in this
+		 * config, and the preprocessor guard keeps the call out of
+		 * the translation unit — upstream's if(0) DCE idiom can't
+		 * carry a call this compiler would reject. NB the libc HAS
+		 * strptime since ticket #113 (the old "no strptime" reason
+		 * here is gone), so enabling ISOFMT is now purely a config
+		 * decision. */
 		if (ENABLE_FEATURE_DATE_ISOFMT && (opt & OPT_STR2DT)) {
 			if (strptime(date_str, fmt_str2dt, &tm_time) == NULL)
 				bb_error_msg_and_die(bb_msg_invalid_date, date_str);
