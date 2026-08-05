@@ -15,13 +15,20 @@ import { spawn }    from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs   from 'node:fs';
+import { requireFreshArtifacts } from './lib/fresh-artifacts.mjs';
+import { doomFreshnessSpec, ROOT } from './lib/doom-artifacts.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 3177;
 const PAGE = process.argv[2] || 'doom.html';
 const URL  = `http://localhost:${PORT}/${PAGE}`;
 
-if (!fs.existsSync(path.join(__dirname, 'www', PAGE))) {
+// Same freshness rule as doom-renders.mjs (ticket #466): the default
+// doom.html checks against build-doom.mjs's input set; a caller-supplied
+// custom page has no known input set and keeps the existence check only.
+if (PAGE === 'doom.html') {
+  requireFreshArtifacts(doomFreshnessSpec(), { cwd: ROOT });
+} else if (!fs.existsSync(path.join(__dirname, 'www', PAGE))) {
   console.error(`Missing www/${PAGE} — run build-doom.mjs first.`);
   process.exit(1);
 }

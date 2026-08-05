@@ -51,10 +51,12 @@ async function waitForServer() {
 
 // Build artifacts must exist AND be at least as new as the inputs build-quake.mjs
 // builds them from — otherwise this suite renders an old binary and reports the
-// result under the current compiler's name (ticket #171). The inputs mirror
-// build-quake.mjs exactly: quake.wasm is compiled from vendor/quake/src by
-// compiler.js, and pak0.pak / host.js are COPIES, so each has a real local
-// source to compare against. What mtime does not cover is stated in
+// result under the current compiler's name (ticket #171). The inputs follow
+// build-quake.mjs, closed over CONSERVATIVELY: the builder enumerates only the
+// top-level .c files, but the spec takes every .c/.h under vendor/quake/src —
+// a header can only make a fresh artifact look stale, never the reverse.
+// pak0.pak / host.js are COPIES, so each has a real local source to compare
+// against. What mtime does not cover is stated in
 // lib/fresh-artifacts.mjs — it is not restated as a promise here.
 requireFreshArtifacts([
   {
