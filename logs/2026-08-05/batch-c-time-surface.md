@@ -67,3 +67,60 @@ tm_year == INT_MAX (67768036160140800).
 used by gmtime/localtime writeback) still walks years from 1970 — fine for
 sane dates (~55 iterations), O(|years|) for absurd ones. Not asserted by
 any test, not part of either ticket.
+
+## #113 (todos/0307) — strptime + the strftime tail
+
+Sequenced after #116 by the recorded hard edge; its acceptance was restated
+against the post-#116 world: with (a) chosen, the strftime test's `%s` rows
+pass as written, so the full un-skip is reachable.
+
+**Bug-fix-first (class 1, wrong answer from shipped code).** `tm_year +
+1900` was computed in `int` at every year-consuming conversion, so a
+near-INT_MAX `tm_year` wrapped (`%Y` → `-2147481749`). All year arithmetic
+now goes through `long long` (`__ap_llw`, the year-shaped formatter). The
+`%s` leg of the same class was already retired by #116's closed-form
+helper. Standing guard independent of the libc-test skip:
+`tests/unit/conformance/strftime_year_overflow` — NOTE its expected.stdout
+is musl-semantics-verified (vendor/libc-test's own assertions), NOT
+host-clang-verified: BSD libc prints no `+` for wide `%Y` and has no width
+modifiers, so the host libc cannot be the oracle for libc-owned formatting.
+
+**The width/'+' engine (`__ap_llw`).** One formatter implements the
+C23/musl `%[+0][width]` rules for %C/%F/%G/%Y, derived row-by-row from the
+libc-test's 30 width assertions: no-width = zero-pad to the default width
+counting the sign, `+` prefix once a Y/G/F year outgrows 4 digits (Austin
+#739); explicit width = pad (sign first) to exactly the width, implicit
+`+` suppressed, the `+` flag emitting only when the digits leave room.
+%F applies the width to the whole string by giving the year
+`width - strlen("-mm-dd")` (floor 1). The parser also accepts bare-digit
+widths and skips C99 E/O modifiers. Incidental fixes in the same move:
+zero-padding now goes sign-first (the old `__ap_int` emitted zeros BEFORE
+a minus), and `%y`/`%x` take `|year % 100|` in long long (musl's absolute
+value for negative years).
+
+**ISO week (`__iso_week`).** musl's yday/wday algorithm, shared by %V and
+%g/%G (they must agree). The subtraction operands stay nonnegative because
+the dec31 form only runs at yday < 7 and the jan1 form only at yday > 360 —
+noted in the comment since musl leans on unsigned wraparound instead.
+
+**strptime.** New, in `__time.c` next to strftime, sharing the name
+tables: POSIX XSI set + glibc %F/%s/%z (what the corpus exercises), glibc
+%y/%C century combination ("10.7.56 in 18th" → 1856), immediate %p
+adjustment, recursive compound conversions (%c %D %F %r %R %T %x %X),
+optional max field widths, %z filling tm_gmtoff (+hh[[:]mm] and Z). %s
+parses via gmtime_r — the parse-side face of the #116 decision (glibc
+reads it through localtime_r, i.e. TZ-dependent; the corpus runs under
+TZ=UTC0, which this target cannot express).
+
+**Measured rows (python3 tests/run.py --types=libc -v, this worktree):**
+
+| row | BEFORE (@9105adbb) | AFTER |
+|---|---|---|
+| libc/strftime | SKIP | PASS |
+| libc/strptime | SKIP | PASS |
+| suite totals | 36 passed / 0 failed / 40 skipped | 38 passed / 0 failed / 38 skipped |
+
+Direct runs: strftime 40 diagnostics → exit 0; strptime absent → exit 0.
+`tests/unit/conformance/strftime_year_overflow` passes. L27 retired from
+todos/LIABILITIES.md in the same commit; both skip entries deleted from
+tests/run.py.

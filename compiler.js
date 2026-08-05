@@ -25586,6 +25586,8 @@ char *ctime(const time_t *timep);
 char *asctime_r(const struct tm *tm, char *buf);
 char *ctime_r(const time_t *timep, char *buf);
 size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm);
+/* strptime (POSIX XSI, + the glibc %F/%s/%z extensions): ticket #113. */
+char *strptime(const char *s, const char *format, struct tm *tm);
 int clock_gettime(clockid_t clk_id, struct timespec *tp);
 int clock_getres(clockid_t clk_id, struct timespec *res);
 /* timegm: mktime's UTC twin (todos/0382 gap 5, todos/0325 Group B). */
@@ -33400,6 +33402,72 @@ static void __ap_int(char *s, size_t max, size_t *pos, int val, int width) {
   }
 }
 
+/* Year-shaped number under the C23/musl %[+0][width] rules (%C/%F/%G/%Y).
+   width < 0 = no explicit width: zero-pad to defw counting the sign, and —
+   when defplus (Y/G/F-year, per Austin #739) — prefix '+' once the value
+   outgrows 4 digits. Explicit width: pad (sign first) to exactly width;
+   the implicit '+' is suppressed, the '+' FLAG emits one only when the
+   digits leave room for it. Derived from vendor/libc-test's strftime rows,
+   which encode musl's behaviour. */
+static void __ap_llw(char *s, size_t max, size_t *pos, long long val,
+                     int defw, int width, int plus, int defplus) {
+  char buf[24];
+  int len = 0;
+  int neg = val < 0;
+  unsigned long long v = neg ? -(unsigned long long)val : (unsigned long long)val;
+  do { buf[len++] = (char)('0' + (int)(v % 10)); v /= 10; } while (v);
+  char sign = 0;
+  int total;
+  if (width < 0) {
+    if (neg) sign = '-';
+    else if (defplus && len > defw) sign = '+';
+    total = defw;
+  } else {
+    if (neg) sign = '-';
+    else if (plus && len < width) sign = '+';
+    total = width;
+  }
+  if (sign) { char sc[2] = { sign, 0 }; __ap_str(s, max, pos, sc); }
+  int have = len + (sign ? 1 : 0);
+  while (have < total) { __ap_str(s, max, pos, "0"); have++; }
+  while (len > 0) { char dc[2] = { buf[--len], 0 }; __ap_str(s, max, pos, dc); }
+}
+
+/* Leap test on a struct tm year value (offset 1900); long long so
+   tm_year == INT_MAX can't wrap. Divisibility survives truncating
+   division's sign, so negative (proleptic) years are exact too. */
+static int __tm_year_leap(long long tyear) {
+  long long y = tyear + 1900;
+  return (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
+}
+
+/* ISO-8601 week number from yday/wday/year (musl's algorithm). %V and
+   %g/%G MUST agree, so all three route through here. The subtractions
+   stay nonnegative in the branches that reach them: the dec31 form only
+   runs when val==0 (early January, yday < 7), the jan1 form only when
+   val==53 (late December, yday > 360). */
+static int __iso_week(const struct tm *tp) {
+  int val = (tp->tm_yday + 7 - (tp->tm_wday + 6) % 7) / 7;
+  /* If Jan 1 is just 1-3 days past Monday, the previous week is also in
+     this year. */
+  if ((tp->tm_wday + 371 - tp->tm_yday - 2) % 7 <= 2) val++;
+  if (!val) {
+    val = 52;
+    /* If Dec 31 of the previous year is a Thursday, or a Friday of a
+       leap year, the previous year has 53 weeks. */
+    int dec31 = (tp->tm_wday + 7 - tp->tm_yday - 1) % 7;
+    if (dec31 == 4 || (dec31 == 5 && __tm_year_leap((long long)tp->tm_year - 1)))
+      val = 53;
+  } else if (val == 53) {
+    /* If Jan 1 is not a Thursday, and not a Wednesday of a leap year,
+       this year has only 52 weeks. */
+    int jan1 = (tp->tm_wday + 371 - tp->tm_yday) % 7;
+    if (jan1 != 4 && (jan1 != 3 || !__tm_year_leap(tp->tm_year)))
+      val = 1;
+  }
+  return val;
+}
+
 static const char *__wday_full[] = {
   "Sunday", "Monday", "Tuesday", "Wednesday",
   "Thursday", "Friday", "Saturday"
@@ -33419,34 +33487,61 @@ size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tp) {
       continue;
     }
     fmt++; /* skip % */
-    /* C23/musl: optional '+' or '0' flag and field width before C/F/G/Y */
+    /* C23/musl: optional '+' or '0' flag and field width, honoured by
+       %C/%F/%G/%Y (musl zeroes the width for every other conversion). */
     int __fmt_plus = 0;
     int __fmt_width = -1;
-    if (*fmt == '+' || *fmt == '0') {
-      const char *probe = fmt + (*fmt == '+' || *fmt == '0' ? 1 : 0);
-      if (*probe >= '0' && *probe <= '9') {
-        __fmt_plus = (*fmt == '+');
+    if ((*fmt == '+' || *fmt == '0') && fmt[1] >= '0' && fmt[1] <= '9') {
+      __fmt_plus = (*fmt == '+');
+      fmt++;
+    }
+    if (*fmt >= '0' && *fmt <= '9') {
+      __fmt_width = 0;
+      while (*fmt >= '0' && *fmt <= '9') {
+        __fmt_width = __fmt_width * 10 + (*fmt - '0');
         fmt++;
-        __fmt_width = 0;
-        while (*fmt >= '0' && *fmt <= '9') {
-          __fmt_width = __fmt_width * 10 + (*fmt - '0');
-          fmt++;
-        }
       }
     }
+    /* C99 E/O locale-alternative modifiers: no locales here, plain forms */
+    if (*fmt == 'E' || *fmt == 'O') fmt++;
     switch (*fmt) {
-    case 'C': { /* century; C23 allows %[+0][width]C */
-      int cval = (tp->tm_year + 1900) / 100;
-      int w = __fmt_width >= 0 ? __fmt_width : 2;
-      if (__fmt_plus && cval >= 0) { __ap_str(s, max, &pos, "+"); if (w > 0) w--; }
-      __ap_int(s, max, &pos, cval, w);
+    case 'C': /* century; C23 allows %[+0][width]C */
+      __ap_llw(s, max, &pos, ((long long)tp->tm_year + 1900) / 100, 2,
+               __fmt_width, __fmt_plus, 0);
+      break;
+    case 'Y':
+      /* musl prints a '+' for years beyond 4 digits; an explicit width
+         suppresses it unless the '+' flag asks (see __ap_llw) */
+      __ap_llw(s, max, &pos, (long long)tp->tm_year + 1900, 4,
+               __fmt_width, __fmt_plus, 1);
+      break;
+    case 'F': { /* %Y-%m-%d; an explicit width pads the YEAR so the whole
+                   string lands on the width (musl: %F is %+4Y-%m-%d) */
+      int __yw = __fmt_width >= 0 ? (__fmt_width > 6 ? __fmt_width - 6 : 1) : -1;
+      __ap_llw(s, max, &pos, (long long)tp->tm_year + 1900, 4,
+               __yw, __fmt_plus, 1);
+      __ap_str(s, max, &pos, "-");
+      __ap_int(s, max, &pos, tp->tm_mon + 1, 2);
+      __ap_str(s, max, &pos, "-");
+      __ap_int(s, max, &pos, tp->tm_mday, 2);
       break;
     }
-    case 'Y':
-      /* musl prints a '+' for years beyond 4 digits */
-      if (tp->tm_year + 1900 > 9999) __ap_str(s, max, &pos, "+");
-      __ap_int(s, max, &pos, tp->tm_year + 1900, 4);
+    case 'g':
+    case 'G': { /* ISO-8601 week-based year; must agree with %V */
+      long long gy = (long long)tp->tm_year + 1900;
+      int wn = __iso_week(tp);
+      if (tp->tm_yday < 3 && wn != 1) gy--;
+      else if (tp->tm_yday > 360 && wn == 1) gy++;
+      if (*fmt == 'g') {
+        long long g2 = gy % 100;
+        if (g2 < 0) g2 = -g2;
+        __ap_int(s, max, &pos, (int)g2, 2);
+      } else {
+        __ap_llw(s, max, &pos, gy, 4, __fmt_width, __fmt_plus, 1);
+      }
       break;
+    }
+    case 'V': __ap_int(s, max, &pos, __iso_week(tp), 2); break;
     case 'm': __ap_int(s, max, &pos, tp->tm_mon + 1, 2); break;
     case 'd': __ap_int(s, max, &pos, tp->tm_mday, 2); break;
     case 'H': __ap_int(s, max, &pos, tp->tm_hour, 2); break;
@@ -33475,8 +33570,7 @@ size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tp) {
       __ap_str(s, max, &pos, ":");
       __ap_int(s, max, &pos, tp->tm_sec, 2);
       __ap_str(s, max, &pos, " ");
-      if (tp->tm_year + 1900 > 9999) __ap_str(s, max, &pos, "+");
-      __ap_int(s, max, &pos, tp->tm_year + 1900, 4);
+      __ap_llw(s, max, &pos, (long long)tp->tm_year + 1900, 4, -1, 0, 1);
       break;
     case 'I': {
       int h12 = tp->tm_hour % 12;
@@ -33484,19 +33578,40 @@ size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tp) {
       break;
     }
     case 'p': __ap_str(s, max, &pos, tp->tm_hour < 12 ? "AM" : "PM"); break;
+    case 'r': { /* %I:%M:%S %p */
+      int h12 = tp->tm_hour % 12;
+      __ap_int(s, max, &pos, h12 == 0 ? 12 : h12, 2);
+      __ap_str(s, max, &pos, ":");
+      __ap_int(s, max, &pos, tp->tm_min, 2);
+      __ap_str(s, max, &pos, ":");
+      __ap_int(s, max, &pos, tp->tm_sec, 2);
+      __ap_str(s, max, &pos, tp->tm_hour < 12 ? " AM" : " PM");
+      break;
+    }
     case 'j': __ap_int(s, max, &pos, tp->tm_yday + 1, 3); break;
     case 'w': __ap_int(s, max, &pos, tp->tm_wday, 1); break;
     case 'u': __ap_int(s, max, &pos, tp->tm_wday == 0 ? 7 : tp->tm_wday, 1); break;
-    case 'y': __ap_int(s, max, &pos, (tp->tm_year + 1900) % 100, 2); break;
+    case 'y': { /* last two digits of the year; long long so a near-INT_MAX
+                   tm_year can't wrap, absolute value for negative years
+                   (musl) */
+      long long yv = ((long long)tp->tm_year + 1900) % 100;
+      if (yv < 0) yv = -yv;
+      __ap_int(s, max, &pos, (int)yv, 2);
+      break;
+    }
     case 'U': __ap_int(s, max, &pos, (tp->tm_yday + 7 - tp->tm_wday) / 7, 2); break;
     case 'W': __ap_int(s, max, &pos, (tp->tm_yday + 7 - (tp->tm_wday ? tp->tm_wday - 1 : 6)) / 7, 2); break;
-    case 'x':
+    case 'x': {
       __ap_int(s, max, &pos, tp->tm_mon + 1, 2);
       __ap_str(s, max, &pos, "/");
       __ap_int(s, max, &pos, tp->tm_mday, 2);
       __ap_str(s, max, &pos, "/");
-      __ap_int(s, max, &pos, (tp->tm_year + 1900) % 100, 2);
+      long long xv = ((long long)tp->tm_year + 1900) % 100;
+      if (xv < 0) xv = -xv;
+      __ap_int(s, max, &pos, (int)xv, 2);
       break;
+    }
+    case 'T': /* %H:%M:%S — same rendering as %X */
     case 'X':
       __ap_int(s, max, &pos, tp->tm_hour, 2);
       __ap_str(s, max, &pos, ":");
@@ -33553,6 +33668,265 @@ size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tp) {
 done:
   s[pos] = '\\0';
   return pos;
+}
+
+/* ---- strptime (ticket #113 / todos/0307) ------------------------------
+ *
+ * The parse twin of strftime, over the SAME conversion vocabulary and name
+ * tables (the tickets group them for that reason). POSIX XSI set plus the
+ * glibc extensions the libc-test corpus exercises: %F, %s, %z. Rules:
+ *  - fields not named by the format are left untouched (POSIX);
+ *  - whitespace in the format matches zero or more input whitespace;
+ *  - conversions skip leading input whitespace and accept an optional
+ *    maximum field width (glibc shape: %2d);
+ *  - %y is relative: 69-99 -> 19xx, 00-68 -> 20xx, and combines with an
+ *    explicit %C wherever the two appear (glibc semantics);
+ *  - %s reads the epoch count as UTC (gmtime_r), the parse-side face of
+ *    the #116 decision: no TZ control exists here, so the TZ-dependent
+ *    glibc reading (localtime_r) would be unfixably host-dependent.
+ */
+
+static int __pt_isspace(char c) {
+  return c == ' ' || c == '\\t' || c == '\\n' || c == '\\v' ||
+         c == '\\f' || c == '\\r';
+}
+
+/* Up-to-maxw digits -> *out, range-checked; skips leading whitespace.
+   Returns the advanced cursor, or 0 on no digits / out of range. */
+static const char *__pt_num(const char *s, int maxw, int lo, int hi, int *out) {
+  while (__pt_isspace(*s)) s++;
+  int v = 0, n = 0;
+  while (n < maxw && *s >= '0' && *s <= '9') {
+    v = v * 10 + (*s - '0');
+    s++;
+    n++;
+  }
+  if (n == 0 || v < lo || v > hi) return 0;
+  *out = v;
+  return s;
+}
+
+/* Case-insensitive prefix match; returns the matched length (0 = no). */
+static int __pt_prefix_ci(const char *s, const char *name) {
+  int n = 0;
+  while (name[n]) {
+    char a = s[n], b = name[n];
+    if (a >= 'A' && a <= 'Z') a += 32;
+    if (b >= 'A' && b <= 'Z') b += 32;
+    if (a != b) return 0;
+    n++;
+  }
+  return n;
+}
+
+/* Longest case-insensitive match against full names + abbreviations. */
+static const char *__pt_name(const char *s, const char *const *full,
+                             const char *const *abbr, int count, int *out) {
+  int best = 0, bi = -1;
+  for (int i = 0; i < count; i++) {
+    int n = __pt_prefix_ci(s, full[i]);
+    if (n > best) { best = n; bi = i; }
+    n = __pt_prefix_ci(s, abbr[i]);
+    if (n > best) { best = n; bi = i; }
+  }
+  if (bi < 0) return 0;
+  *out = bi;
+  return s + best;
+}
+
+char *strptime(const char *s, const char *fmt, struct tm *tm) {
+  int century = -1, relyear = -1, want_ampm = -1;
+  for (; *fmt; fmt++) {
+    if (__pt_isspace(*fmt)) {
+      while (__pt_isspace(*s)) s++;
+      while (__pt_isspace(fmt[1])) fmt++;
+      continue;
+    }
+    if (*fmt != '%') {
+      if (*s != *fmt) return 0;
+      s++;
+      continue;
+    }
+    fmt++;
+    /* optional maximum field width (glibc) */
+    int w = -1;
+    if (*fmt >= '1' && *fmt <= '9') {
+      w = 0;
+      while (*fmt >= '0' && *fmt <= '9') { w = w * 10 + (*fmt - '0'); fmt++; }
+    }
+    if (*fmt == 'E' || *fmt == 'O') fmt++;  /* locale modifiers: plain forms */
+    int v;
+    const char *r;
+    switch (*fmt) {
+    case 'a': case 'A':
+      if (!(s = __pt_name(s, __wday_full, __wday_abbr, 7, &v))) return 0;
+      tm->tm_wday = v;
+      break;
+    case 'b': case 'B': case 'h':
+      if (!(s = __pt_name(s, __mon_full, __mon_abbr, 12, &v))) return 0;
+      tm->tm_mon = v;
+      break;
+    case 'c': /* what our strftime %c writes */
+      if (!(r = strptime(s, "%a %b %e %H:%M:%S %Y", tm))) return 0;
+      s = r;
+      break;
+    case 'C':
+      if (!(s = __pt_num(s, w < 0 ? 2 : w, 0, 99, &v))) return 0;
+      century = v;
+      break;
+    case 'd': case 'e':
+      if (!(s = __pt_num(s, w < 0 ? 2 : w, 1, 31, &v))) return 0;
+      tm->tm_mday = v;
+      break;
+    case 'D':
+      if (!(r = strptime(s, "%m/%d/%y", tm))) return 0;
+      s = r;
+      break;
+    case 'F': /* glibc: %Y-%m-%d */
+      if (!(r = strptime(s, "%Y-%m-%d", tm))) return 0;
+      s = r;
+      break;
+    case 'H':
+      if (!(s = __pt_num(s, w < 0 ? 2 : w, 0, 23, &v))) return 0;
+      tm->tm_hour = v;
+      break;
+    case 'I':
+      if (!(s = __pt_num(s, w < 0 ? 2 : w, 1, 12, &v))) return 0;
+      tm->tm_hour = v;
+      break;
+    case 'j':
+      if (!(s = __pt_num(s, w < 0 ? 3 : w, 1, 366, &v))) return 0;
+      tm->tm_yday = v - 1;
+      break;
+    case 'm':
+      if (!(s = __pt_num(s, w < 0 ? 2 : w, 1, 12, &v))) return 0;
+      tm->tm_mon = v - 1;
+      break;
+    case 'M':
+      if (!(s = __pt_num(s, w < 0 ? 2 : w, 0, 59, &v))) return 0;
+      tm->tm_min = v;
+      break;
+    case 'n': case 't':
+      while (__pt_isspace(*s)) s++;
+      break;
+    case 'p':
+      if (__pt_prefix_ci(s, "AM")) { want_ampm = 0; s += 2; }
+      else if (__pt_prefix_ci(s, "PM")) { want_ampm = 1; s += 2; }
+      else return 0;
+      break;
+    case 'r':
+      if (!(r = strptime(s, "%I:%M:%S %p", tm))) return 0;
+      s = r;
+      break;
+    case 'R':
+      if (!(r = strptime(s, "%H:%M", tm))) return 0;
+      s = r;
+      break;
+    case 'S':
+      if (!(s = __pt_num(s, w < 0 ? 2 : w, 0, 60, &v))) return 0;
+      tm->tm_sec = v;
+      break;
+    case 's': { /* glibc: seconds since the epoch. Read as UTC — the parse
+                   side of the #116 decision (see strftime %s). */
+      long long sec = 0;
+      int n = 0, neg = 0;
+      while (__pt_isspace(*s)) s++;
+      if (*s == '-') { neg = 1; s++; }
+      while (*s >= '0' && *s <= '9') { sec = sec * 10 + (*s - '0'); s++; n++; }
+      if (!n) return 0;
+      if (neg) sec = -sec;
+      time_t t = (time_t)sec;
+      gmtime_r(&t, tm);
+      break;
+    }
+    case 'T':
+      if (!(r = strptime(s, "%H:%M:%S", tm))) return 0;
+      s = r;
+      break;
+    case 'u':
+      if (!(s = __pt_num(s, w < 0 ? 1 : w, 1, 7, &v))) return 0;
+      tm->tm_wday = v % 7;
+      break;
+    case 'U': case 'W': /* week number: parsed and range-checked, but there
+                           is no field to store it in without a year+wday
+                           resolution pass; POSIX permits ignoring it */
+      if (!(s = __pt_num(s, w < 0 ? 2 : w, 0, 53, &v))) return 0;
+      break;
+    case 'w':
+      if (!(s = __pt_num(s, w < 0 ? 1 : w, 0, 6, &v))) return 0;
+      tm->tm_wday = v;
+      break;
+    case 'x':
+      if (!(r = strptime(s, "%m/%d/%y", tm))) return 0;
+      s = r;
+      break;
+    case 'X':
+      if (!(r = strptime(s, "%H:%M:%S", tm))) return 0;
+      s = r;
+      break;
+    case 'y':
+      if (!(s = __pt_num(s, w < 0 ? 2 : w, 0, 99, &v))) return 0;
+      relyear = v;
+      break;
+    case 'Y':
+      if (!(s = __pt_num(s, w < 0 ? 4 : w, 0, w < 0 ? 9999 : 99999999, &v)))
+        return 0;
+      tm->tm_year = v - 1900;
+      break;
+    case 'z': { /* [+-]hh[[:]mm], or Z for UTC -> tm_gmtoff */
+      while (__pt_isspace(*s)) s++;
+      if (*s == 'Z') { s++; tm->tm_gmtoff = 0; break; }
+      int zsign;
+      if (*s == '+') zsign = 1;
+      else if (*s == '-') zsign = -1;
+      else return 0;
+      s++;
+      int hh, mm = 0;
+      if (!(s = __pt_num(s, 2, 0, 23, &hh))) return 0;
+      if (*s == ':') {
+        s++;
+        if (!(s = __pt_num(s, 2, 0, 59, &mm))) return 0;
+      } else if (*s >= '0' && *s <= '9') {
+        if (!(s = __pt_num(s, 2, 0, 59, &mm))) return 0;
+      }
+      tm->tm_gmtoff = zsign * (hh * 3600L + mm * 60L);
+      break;
+    }
+    case 'Z': { /* no zone database: accept an alphabetic zone name or the
+                   numeric +hhmm shape our tzname publishes; no field set */
+      int n = 0;
+      if (*s == '+' || *s == '-') {
+        s++;
+        n++;
+        while (*s >= '0' && *s <= '9') { s++; n++; }
+      } else {
+        while ((*s >= 'A' && *s <= 'Z') || (*s >= 'a' && *s <= 'z')) {
+          s++;
+          n++;
+        }
+      }
+      if (!n) return 0;
+      break;
+    }
+    case '%':
+      if (*s != '%') return 0;
+      s++;
+      break;
+    default:
+      return 0;
+    }
+  }
+  if (century >= 0 || relyear >= 0) {
+    int yy;
+    if (century >= 0) yy = century * 100 + (relyear >= 0 ? relyear : 0);
+    else yy = relyear + (relyear <= 68 ? 2000 : 1900);
+    tm->tm_year = yy - 1900;
+  }
+  if (want_ampm >= 0) {
+    if (tm->tm_hour == 12) tm->tm_hour = 0;
+    if (want_ampm) tm->tm_hour += 12;
+  }
+  return (char *)s;
 }
 
 __import long __clock_ns_hi(int clk_id);

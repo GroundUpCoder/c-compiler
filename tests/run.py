@@ -1524,7 +1524,6 @@ LIBC_TEST_SKIP = {
     # item that funds it (todos/0298) — a bare "TODO" is a hole the suite
     # reports green over, which is how fnmatch/fdopen/utime sat skipped for
     # months after they started passing.
-    "strptime": "not implemented: strptime() (todos/0307)",
     # Not a libc gap: the test writes the bare-assignment form `r = setjmp(jb);`
     # (vendor/libc-test/src/functional/setjmp.c:23), which compiler.js rejects
     # by design — it is UB per C11 7.13.1.1p4. sigsetjmp/siglongjmp DO exist.
@@ -1536,13 +1535,6 @@ LIBC_TEST_SKIP = {
     "setjmp": "test uses the C11-UB bare-assignment setjmp form, rejected by "
               "design — permanent (todos/0311 shipped as ticket #117; the "
               "p4-required contexts are accepted, line 23 remains UB)",
-    # %s and width/'+' parsing DO exist; absent are %F %g %G %r %T %V, width
-    # modifiers are honoured only by %C, and %y is wrong for negative years
-    # (todos/0307). The %s TZ divergence is RESOLVED (ticket #116): %s is
-    # musl's TZ-independent reading now, so the test's %s rows pass as
-    # written and the remaining skip is ticket #113's alone.
-    "strftime": "missing %F %g %G %r %T %V, width modifiers only on %C, "
-                "%y wrong for negative years (todos/0307)",
     "sscanf_long": "needs setrlimit",
     # Locale machinery
     "clocale_mbfuncs": "no langinfo/locale beyond C",
