@@ -88,6 +88,15 @@ enum {
                                           drags, edge snap, border resizes;
                                           kind 0 move (a=buttons) / 1 down /
                                           2 up (a=button) */
+    WMP_INJECT_WMKEY = 0x23,           /* { down, scancode, keysym, mod,
+                                          repeat }: keyboard injection through
+                                          the kernel's raw wmKey entry — grab
+                                          table (chords), overview swallow,
+                                          focus routing — what a real keyboard
+                                          feeds (#423, the INJECT_SCREEN
+                                          keyboard analogue). INJECT_KEY
+                                          delivers per-window and bypasses
+                                          all of that by design */
     WMP_SHOT = 0x30, WMP_SHOT_SCREEN = 0x31,
     WMP_THUMB = 0x32,                  /* { sid, maxW, maxH }: downscaled
                                           front-buffer thumbnail (todos/0063,

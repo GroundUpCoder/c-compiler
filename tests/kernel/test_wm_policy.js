@@ -965,6 +965,71 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
     f.type === WMP.EV_SNAP_DROP && f.g(1) === 0 && idle(wm2),
     JSON.stringify([f.type, f.g(1)]));
 
+  // INJECT_WMKEY (#423, the 0x22 keyboard analogue): raw key edges through
+  // the kernel's REAL wmKey entry — grab table, both-edge chord swallow,
+  // focus routing — the path per-window INJECT_KEY bypasses by design. c1
+  // holds focus (the INJECT_SCREEN title drag above), so the swallow and
+  // delivery asserts on ring1 are meaningful, not vacuous.
+  drainRing(ring1);                                    // start from a clean ring
+  f = await cmd(wm2, WMP.INJECT_WMKEY, [1, 41, 27, 0x40, 0]);   // Ctrl+Esc down
+  check('INJECT_WMKEY chord down -> R_OK', f.type === WMP.R_OK,
+    JSON.stringify([f.type]));
+  if (f.type !== WMP.R_OK) {
+    // Hang-proofing, not tolerance: with the opcode unsupported the EV_MENU
+    // below never arrives and readEvent would park the whole file — fail
+    // the remaining legs loud instead (the 0171 rule).
+    check('INJECT_WMKEY legs unreachable — opcode unsupported', false);
+  } else {
+  f = await readEvent(wm2);
+  check('the chord traversed the grab table: EV_MENU emitted',
+    f.type === WMP.EV_MENU, JSON.stringify([f.type]));
+  f = await cmd(wm2, WMP.INJECT_WMKEY, [0, 41, 27, 0x40, 0]);   // ...and up
+  check('INJECT_WMKEY chord up -> R_OK', f.type === WMP.R_OK);
+  check('both chord edges swallowed (the focused app saw nothing)',
+    idle(wm2) && drainRing(ring1).length === 0);
+  // An unmatched key routes to the FOCUSED window — no sid in the request,
+  // the routing decides; the repeat word rides through to the ring record.
+  f = await cmd(wm2, WMP.INJECT_WMKEY, [1, 4, 97, 0, 1]);       // 'a' down, repeat
+  check('plain key down -> R_OK', f.type === WMP.R_OK);
+  f = await cmd(wm2, WMP.INJECT_WMKEY, [0, 4, 97, 0, 0]);
+  check('plain key up -> R_OK', f.type === WMP.R_OK);
+  {
+    const kr = drainRing(ring1);
+    check('unmatched key routed to the focused app, repeat flag intact',
+      kr.length === 2 && kr[0].type === K.WMEV.KEYDOWN && kr[0].w[0] === 4 &&
+      kr[0].w[1] === 97 && kr[0].w[3] === 1 &&
+      kr[1].type === K.WMEV.KEYUP && kr[1].w[3] === 0 && idle(wm2),
+      JSON.stringify(kr));
+  }
+  // The bypass twin, pinned: INJECT_KEY with the SAME chord bytes delivers
+  // straight to the window and emits NO WM event — which is exactly why
+  // INJECT_WMKEY exists (a chord can never be driven through INJECT_KEY).
+  f = await cmd(wm2, WMP.INJECT_KEY, [c1.sid, 1, 41, 27, 0x40]);
+  check('INJECT_KEY same chord bytes -> R_OK', f.type === WMP.R_OK);
+  f = await cmd(wm2, WMP.INJECT_KEY, [c1.sid, 0, 41, 27, 0x40]);
+  check('INJECT_KEY chord up -> R_OK', f.type === WMP.R_OK);
+  {
+    const br = drainRing(ring1);
+    check('INJECT_KEY bypassed the grab table: raw pair to the app, no EV_MENU',
+      br.length === 2 && br[0].w[0] === 41 && idle(wm2), JSON.stringify(br));
+  }
+  // Real-input semantics (0096): INJECT_WMKEY enters wmKey, so it stamps the
+  // idle clock — per-window INJECT_KEY deliberately does not. Backdate the
+  // clock far past any load-induced delay so neither assert is timing-tight.
+  kernel._wmLastInput = Date.now() - 100000;
+  f = await cmd(wm2, WMP.INJECT_KEY, [c1.sid, 1, 4, 97, 0]);
+  check('per-window inject -> R_OK', f.type === WMP.R_OK);
+  f = await cmd(wm2, WMP.GET_IDLE, []);
+  check('...and leaves the idle clock alone (backdated idle survives)',
+    f.type === WMP.R_IDLE && f.g(0) >= 50000, JSON.stringify([f.type, f.g(0)]));
+  f = await cmd(wm2, WMP.INJECT_WMKEY, [0, 4, 97, 0, 0]);   // any edge is real input
+  check('screen-path key edge -> R_OK', f.type === WMP.R_OK);
+  f = await cmd(wm2, WMP.GET_IDLE, []);
+  check('INJECT_WMKEY stamped the idle clock (real input, the 0x22 rule)',
+    f.type === WMP.R_IDLE && f.g(0) < 50000, JSON.stringify([f.type, f.g(0)]));
+  drainRing(ring1);                    // shed the idle-leg key records
+  }
+
   // ---- window overview / Exposé (todos/EXPOSE-MISSION-CONTROL.md) ----
   // The OVERVIEW command rides EV_OVERVIEW (the CYCLE/MENU pattern); the
   // Ctrl+Alt+E chord reaches wm.c via the grab table's EV_HOTKEY instead.

@@ -764,8 +764,8 @@ var WM_SAB_LAYOUT = {
  *                                   subscriber, since snap IS policy)
  *   GET_IDLE { }                 -> R_IDLE { ms }  (todos/0096: ms since
  *                                   the last real input — wmKey/wmPointer,
- *                                   INJECT_SCREEN included, per-window
- *                                   injection excluded. Its own reply type
+ *                                   INJECT_SCREEN/INJECT_WMKEY included,
+ *                                   per-window injection excluded. Its own reply type
  *                                   so a subscriber's fire-and-forget drain
  *                                   can route it, the R_SHOT precedent; the
  *                                   screensaver policy in /bin/wm polls it)
@@ -791,6 +791,13 @@ var WM_SAB_LAYOUT = {
  *     hit-test/chrome path a real mouse takes, so headless tests can drive
  *     title drags, edge snap, border resizes; kind: 0 move (a=buttons) |
  *     1 down | 2 up (a=button)
+ *   INJECT_WMKEY { down, scancode, keysym, mod, repeat }   -> R_OK
+ *     (#423) keyboard injection into wmKey — the grab-table/overview/focus
+ *     routing a real keyboard takes (the INJECT_SCREEN keyboard analogue),
+ *     so headless tests can drive chords (Alt+Tab, Ctrl+Esc, Win+arrow,
+ *     user grabs) that per-window INJECT_KEY bypasses by design. wmKey
+ *     always reports what happened via events/delivery, so this never
+ *     fails; R_OK doubles as the sequencing barrier (the 0x22 rule)
  *   SHOT { sid } / SHOT_SCREEN {} -> R_SHOT { sid, w, h, w*h*4 rgba } | R_ERR
  *   THUMB { sid, maxW, maxH }    -> R_SHOT { sid, w, h, rgba } | R_ERR
  *                                   (todos/0063 Aero Peek: the front buffer
@@ -910,6 +917,12 @@ var WMP = {
                                         wmPointer hit-test/chrome path
                                         (todos/0095) — headless title drags,
                                         edge snap, border resizes */
+  INJECT_WMKEY: 0x23,                /* { down, scancode, keysym, mod,
+                                        repeat }: keyboard injection through
+                                        the raw wmKey entry — grab table
+                                        (chords), overview swallow, focus
+                                        routing (#423, the INJECT_SCREEN
+                                        keyboard analogue) */
   SHOT: 0x30, SHOT_SCREEN: 0x31,
   THUMB: 0x32,                       /* { sid, maxW, maxH }: downscaled
                                         front-buffer thumbnail (todos/0063,
@@ -7035,6 +7048,14 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
       ok(0);
       break;
     }
+    case WMP.INJECT_WMKEY:
+      // Keyboard injection (#423): the raw wmKey path — grab table, chord
+      // swallow, overview, focus routing — exactly what the UI bridge feeds
+      // it. The 0x22 rule again: wmKey always reports what happened (event,
+      // delivery, or drop), so this never fails; R_OK is the barrier.
+      this.wmKey(g(0) !== 0, g(1), g(2), g(3), g(4) !== 0);
+      ok(0);
+      break;
     case WMP.SHOT: case WMP.SHOT_SCREEN: case WMP.THUMB: {
       var shot = type === WMP.SHOT ? this.wmScreenshot(g(0))
         : type === WMP.THUMB ? this.wmThumbnail(g(0), g(1), g(2))   // 0063

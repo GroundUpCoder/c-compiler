@@ -73,6 +73,17 @@
  *                                     routes the event
  *   wmctl sdrag X1 Y1 X2 Y2           press-move-release at screen coords
  *                                     (down, midpoint + endpoint motion, up)
+ *   wmctl skey SCANCODE [KEYSYM [MOD]]   key press (down+up) through the
+ *                                     kernel's wmKey routing (#423, the
+ *                                     0095 keyboard analogue) — grab table,
+ *                                     chord swallow, focus routing: what a
+ *                                     real keyboard does. Chords work
+ *                                     (Alt+Tab, Ctrl+Esc, Win+arrow, user
+ *                                     grabs) — `wmctl key` delivers per-
+ *                                     window and bypasses them by design.
+ *                                     No SID: the routing decides
+ *   wmctl skeydown|skeyup SCANCODE [KEYSYM [MOD]]   one edge only (a held
+ *                                     modifier, an asymmetric swallow)
  *   wmctl shot SID|screen [FILE]               PPM (P6) to FILE or stdout
  *   wmctl thumb SID [MAXW MAXH] [FILE]         downscaled window thumbnail
  *                                     (todos/0063 Aero Peek; default 96x72
@@ -166,6 +177,8 @@ static int usage(void) {
         "       wmctl relmove SID DX DY\n"
         "       wmctl sdown|smove|sup X Y [BUTTON]\n"
         "       wmctl sdrag X1 Y1 X2 Y2 [BUTTON]\n"
+        "       wmctl skey SCANCODE [KEYSYM [MOD]]\n"
+        "       wmctl skeydown|skeyup SCANCODE [KEYSYM [MOD]]\n"
         "       wmctl shot SID|screen [FILE]\n"
         "       wmctl thumb SID [MAXW MAXH] [FILE]\n"
         "       wmctl glass 0|1\n"
@@ -698,6 +711,25 @@ int main(int argc, char **argv) {
         if (wmp_cmd(fd, WMP_INJECT_SCREEN, m, 4)) return failop(cmd);
         a[0] = 2; a[1] = m[1]; a[2] = m[2];
         return wmp_cmd(fd, WMP_INJECT_SCREEN, a, 4) ? failop(cmd) : 0;
+    }
+    /* Screen-path KEYBOARD injection (#423, the 0095 keyboard analogue):
+     * the kernel's raw wmKey entry — grab table (Alt+Tab, Ctrl+Esc,
+     * Win+arrow, user grabs), chord swallow, focus routing — what a real
+     * keyboard does. `wmctl key` (WMP_INJECT_KEY) delivers straight to one
+     * window and BYPASSES all of that by design; this verb is the path
+     * chords need. No SID by design: the routing decides. */
+    if (!strcmp(cmd, "skey") || !strcmp(cmd, "skeydown") || !strcmp(cmd, "skeyup")) {
+        if (argc < 3) return usage();
+        int32_t sc = atoi(argv[2]);
+        int32_t sym = argc > 3 ? atoi(argv[3]) : 0;
+        int32_t mod = argc > 4 ? atoi(argv[4]) : 0;
+        int32_t a[5] = { cmd[4] != 'u', sc, sym, mod, 0 /* repeat */ };
+        /* skeydown/skeyup: one edge only — a held modifier for a following
+         * gesture, or asserting the swallow of one edge (the 0077 rule). */
+        if (wmp_cmd(fd, WMP_INJECT_WMKEY, a, 5)) return failop(cmd);
+        if (cmd[4]) return 0;                    /* skeydown / skeyup: done */
+        a[0] = 0;
+        return wmp_cmd(fd, WMP_INJECT_WMKEY, a, 5) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "glass")) {        /* Aero glass tier (todos/0063) */
         if (argc < 3) return usage();
