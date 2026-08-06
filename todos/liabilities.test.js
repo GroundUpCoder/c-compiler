@@ -316,14 +316,17 @@ test('the checked-in register passes its own check', () => {
   assert.ok(res.entries.length >= 20, `expected a seeded register, got ${res.entries.length} entries`);
 });
 
-test('the register still carries the two findings that motivated it (L10, L20)', () => {
-  // The 0286-era motivating findings (todos/0291 and todos/0300) live on as
-  // entries L10 and L20; their funding refs became cc tickets at the
-  // 2026-07-30 cutover, but the demonstration is unchanged. offline: the
-  // demonstrated shape (a pinned expired deferral to an ARCHIVED target) is
-  // judged from todos/done/, so no cc probe is needed.
+test('the register still demonstrates the pinned-expired-deferral shape (L20, L21)', () => {
+  // Of the two 0286-era motivating findings, L10 (né todos/0291) CLOSED at
+  // the #99 CD34 fold — the register's designed success path: the funded
+  // ticket landed and the entry left in the same commit. L20 (né todos/0300)
+  // lives on, and L21 is a second live instance of the demonstrated shape (a
+  // pinned expired deferral to an ARCHIVED target), so the demonstration
+  // stays two-deep. offline: judged from todos/done/, no cc probe needed.
   const res = LIB.check({ offline: true });
-  for (const id of ['L10', 'L20']) {
+  assert.ok(!res.entries.some(e => e.id === 'L10'),
+    'L10 returned — its gap closed at the #99 fold; a re-add needs a NEW gap and a new id');
+  for (const id of ['L20', 'L21']) {
     const own = res.entries.filter(e => e.id === id);
     assert.ok(own.length, `register entry ${id} is gone`);
     // Each must be the shape the checker exists to catch: a gap comment
@@ -332,14 +335,15 @@ test('the register still carries the two findings that motivated it (L10, L20)',
     const stale = own.filter(e => (e.expired || []).length);
     assert.ok(stale.length, `${id}'s entry no longer records an expired deferral`);
   }
-  assert.ok(res.pinned.some(p => p.id === 'L10'), 'L10 does not fire as a pinned expired deferral');
   assert.ok(res.pinned.some(p => p.id === 'L20'), 'L20 does not fire as a pinned expired deferral');
+  assert.ok(res.pinned.some(p => p.id === 'L21'), 'L21 does not fire as a pinned expired deferral');
 });
 
 test('unpinning the real entries turns the real register RED', () => {
   // The RED half of the demonstration, run against the CHECKED-IN register:
   // strip every `- expired:` line and the same file must fail, naming the
-  // deferral-outlived-its-premise shape for L10 and L20 (né 0291/0300).
+  // deferral-outlived-its-premise shape for L20 (né 0300) and L21 (L10, the
+  // other 0286 motivator, closed at the #99 fold).
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'liab-'));
   const registerPath = path.join(root, 'REG.md');
   const real = fs.readFileSync(path.join(__dirname, 'LIABILITIES.md'), 'utf8');
@@ -347,8 +351,8 @@ test('unpinning the real entries turns the real register RED', () => {
   const res = LIB.check({ registerPath, offline: true });
   const msg = messages(res);
   assert.match(msg, /DEFERRAL OUTLIVED ITS PREMISE/);
-  assert.match(msg, /\(L10\)/);
   assert.match(msg, /\(L20\)/);
+  assert.match(msg, /\(L21\)/);
   assert.strictEqual(res.pinned.length, 0);
 });
 
