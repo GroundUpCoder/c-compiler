@@ -89,21 +89,34 @@ try {
 
   // --- into samples/, open minesweeper-programming-rainbow.sh (keyboard
   // rows: the row-height-agnostic pattern of the kernel e2e) ---
+  // Per-step navigation: confirm each keystroke's observable effect before
+  // the next (the browser flavor drops confidence, not correctness, when
+  // injected keys run back-to-back — a step whose effect is confirmed
+  // cannot be outrun). Row names are the seeded Presentations/ set; the
+  // kernel e2e derives them from the manifest and breaks loudly on drift.
   const SH = 'minesweeper-programming-rainbow.sh';
+  const DOWN = 'wmctl key $SID 81 1073741905';
   const KEYS = [
     'SID=$(wmctl list | grep "File Manager" | sed "s/[^0-9].*//")',
-    'wmctl click $SID 100 40', 'wmctl key $SID 74 1073741898',
-    'wmctl key $SID 81 1073741905', 'wmctl key $SID 81 1073741905', 'wmctl key $SID 81 1073741905',
-    'wmctl wait text LISTBOX:0 "> samples" 8000',
-    'wmctl key $SID 40 13',
-    `wmctl wait text LISTBOX:0 "${SH}" 8000`,
+    'wmctl wait text LISTBOX:0 "samples" 8000',   // rows filled before navigating
+    'wmctl click LISTBOX:0',
+    'wmctl key $SID 74 1073741898',               // HOME -> row 0
+    'wmctl wait text LISTBOX:0 "> MagicPoint" 8000',
+    DOWN, 'wmctl wait text LISTBOX:0 "> POSIX" 8000',
+    DOWN, 'wmctl wait text LISTBOX:0 "> gucOS" 8000',
+    DOWN, 'wmctl wait text LISTBOX:0 "> samples" 8000',
+    'wmctl key $SID 40 13',                       // ENTER -> into samples/
+    `wmctl wait text LISTBOX:0 "${SH.slice(0, 16)}" 8000`,
   ].join(' && ');
-  await shell(`${KEYS} && echo ${mark('IN-SAMPLES')}`, 'IN-SAMPLES', 40000);
+  await shell(`${KEYS} && echo ${mark('IN-SAMPLES')}`, 'IN-SAMPLES', 80000);
   await setVt(2);
   await screenshot(page, '1-samples-folder');
-  // HOME alone (focus stays on the listbox): a repeat click at the same
-  // coords can pair into LBN_DBLCLK and open the row twice.
-  await shell(`wmctl key $SID 74 1073741898 && wmctl wait text LISTBOX:0 "> ${SH}" 8000 && wmctl key $SID 40 13 && echo ${mark('TAPPED')}`, 'TAPPED', 20000);
+  // Re-click the listbox first: the VT2 screenshot trip above can perturb
+  // fileman's focus (the headless e2e never leaves VT1 and needs HOME
+  // alone). The click is minutes past the last one, so it cannot pair into
+  // LBN_DBLCLK. samples/ holds TWO rows now — "Web Demos/" then the .sh —
+  // so HOME + one DOWN, each step confirmed.
+  await shell(`wmctl click LISTBOX:0 && wmctl key $SID 74 1073741898 && wmctl wait text LISTBOX:0 "> Web Demos" 8000 && wmctl key $SID 81 1073741905 && wmctl wait text LISTBOX:0 "> ${SH.slice(0, 16)}" 8000 && wmctl key $SID 40 13 && echo ${mark('TAPPED')}`, 'TAPPED', 30000);
   check('opened ' + SH, true);
 
   // --- the tap spawned the script headless (no TERM in the desktop env);
@@ -147,6 +160,11 @@ try {
   process.exit(state.failures === 0 ? 0 : 1);
 } catch (e) {
   console.error('DEMO ERROR: ' + (e && e.stack || e));
+  try {
+    const pages = browser.contexts().flatMap(c => c.pages());
+    if (pages[0]) console.error('--- tty tail at error ---\n' +
+      (await pages[0].evaluate(() => (window.__osOut || '').slice(-2500))));
+  } catch {}
   try { await browser.close(); } catch {}
   server.kill();
   process.exit(1);
