@@ -254,8 +254,19 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
+const serveStartedAt = new Date().toISOString();
+
 const server = http.createServer((req, res) => {
   const url = req.url.split('?')[0];
+  // Identity handshake (#546): the browser harness asserts the 200s it
+  // takes come from the serve.js it just SPAWNED, not from a stale one
+  // squatting the port — a stale server answers 200s indistinguishably at
+  // the HTTP level and certifies the WRONG TREE (the L77 fake-green class).
+  if (url === '/__serve-id') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ pid: process.pid, root, startedAt: serveStartedAt }));
+    return;
+  }
   let file = singleFile && url === '/' ? singleFile : path.join(root, url === '/' ? 'index.html' : url);
   // The package repo (gucman): /packages/* serves tools/mkpkg.js output from
   // dist/packages/* — the same layout the Pages deploy publishes, so the

@@ -23,7 +23,7 @@ import { openOsSession } from './lib/os-harness.mjs';
 // serverTries generous: serve.js re-bakes the image before listening when a
 // bake input (user32.c here) changed, which outruns the default 5s wait.
 const s = await openOsSession({
-  port: 3280, hostKeys: 'mac', serverTries: 400, serverInterval: 500 });
+  port: 3339, hostKeys: 'mac', serverTries: 400, serverInterval: 500 });
 const { page, check, setVt, waitOut } = s;
 
 // A held-modifier chord through the REAL keyboard (0090 pacing: explicit

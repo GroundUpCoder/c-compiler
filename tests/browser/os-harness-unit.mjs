@@ -16,13 +16,43 @@
 // (the #167/#314 class). It is the one sweep member that launches no browser —
 // a couple of hundred milliseconds — and it is the only coverage the harness's
 // pure helpers have, including #97's assertNoWmctlTimeout guard.
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { osUrl, near, makeCheck, waitForServer, wmctlTimeoutHits } from './lib/os-harness.mjs';
 
 let failures = 0;
-const check = (name, cond) => {
+const check = (name, cond, extra) => {
   if (cond) console.log('  ok   ' + name);
-  else { console.log('  FAIL ' + name); failures++; }
+  else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + JSON.stringify(extra) : '')); failures++; }
 };
+
+// Port uniqueness across sweep members (#546): members run serially and a
+// slow-dying server on a SHARED port lets the next member's waitForServer
+// take a 200 from the wrong server. The identity handshake (os-harness.mjs)
+// makes that loud; THIS scan keeps it from happening at all — every member
+// pins a port no other member uses. The scan is textual (the same forms the
+// members actually use), so a new member landing on a taken port fails the
+// sweep here, not in a flaky collision months later.
+{
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const members = fs.readdirSync(dir)
+    .filter((f) => /^os-.*\.mjs$/.test(f) && f !== 'os-sweep.mjs').sort();
+  const byPort = new Map();
+  for (const f of members) {
+    const src = fs.readFileSync(path.join(dir, f), 'utf8');
+    const found = new Set();
+    for (const re of [/const PORT2? = (\d+)/g, /\bport:\s*(\d+)/g, /startServer\((\d+)/g])
+      for (const m of src.matchAll(re)) found.add(Number(m[1]));
+    for (const p of found) {
+      if (!byPort.has(p)) byPort.set(p, []);
+      byPort.get(p).push(f);
+    }
+  }
+  const dups = [...byPort.entries()].filter(([, fl]) => fl.length > 1);
+  check('sweep members pin pairwise-unique ports (#546)', dups.length === 0,
+    dups.map(([p, fl]) => p + ': ' + fl.join(', ')).join('; '));
+}
 
 // osUrl (hostKeys defaults to 'off' — META-ARROW-KEYBIND.md decision 4 pins
 // the keyboard-scheme host auto-detect off for the sweep; '' omits the param)

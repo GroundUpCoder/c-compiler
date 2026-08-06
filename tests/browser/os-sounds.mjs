@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT = 3207;
+const PORT = 3336;   // unique per member (#546)
 const URL = osUrl(PORT);
 
 const server = startServer(PORT);
