@@ -12,8 +12,8 @@
 //     100x40 inner block) and inline-block wrapping (three 150x40
 //     blocks in a 320px container: two on line one, the third wraps to
 //     y+40).
-//   - forms.html: form controls RENDER (rendering only — no submit in
-//     the file-only browser): each control sits in its own 40px yellow
+//   - forms.html: form controls RENDER (rendering only — submit is not
+//     exercised by this test): each control sits in its own 40px yellow
 //     row strip and must paint "ink" (non-strip, non-white pixels)
 //     into its band; the unchecked vs checked checkbox rows must
 //     differ (the check glyph itself).

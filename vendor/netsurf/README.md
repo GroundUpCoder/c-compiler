@@ -87,7 +87,8 @@ netsurf core:
   own fallbacks for scandir/dirfd/unlinkat/fstatat/regex/utsname/mmap;
   `isascii`; `<strings.h>`.
 - `content/fetch.c` — `#ifdef WITH_CURL` around the one unconditional
-  curl include (file-only build).
+  curl include (upstream's curl fetcher stays excluded — gucOS
+  networking is `gucos/httpfetch.c`, #182).
 - `content/handlers/image/png.c` — `switch(setjmp(…))` →
   `if ((v = setjmp(…))) {} switch (v)`: compiler.js recognises setjmp
   only in if-condition form.
