@@ -37,13 +37,35 @@ not done. The "Known strays" section below tracks current violations of either.
   ~424 lines) flattens SDL structs to primitives and forwards to `__sdl_*`
   imports satisfied by `createBrowserSDL` in `host.js` (~550 lines). `SDL.h` is
   in `_stdlibHeaders` (~289 lines).
-- **No JSPI ⇒ SDL3's callback main loop is the natural fit.** SDL3 ships
-  `SDL_MAIN_USE_CALLBACKS` (`SDL_AppInit`/`SDL_AppIterate`/`SDL_AppEvent`/
-  `SDL_AppQuit`). `SDL_AppIterate` is *exactly* the per-frame callback this
-  runtime already uses (`__sdl_set_animation_frame_func` → rAF, shared with
-  `wgpuSetMainLoopCallback`). **Adopting the callback model should be the primary
-  SDL3 entry path**; the classic `while (SDL_PollEvent) {...} ` blocking loop only
-  works for programs that already yield via the frame callback.
+- **No JSPI ⇒ SDL3's callback main loop is the natural fit — and since #551
+  it is IMPLEMENTED and ENFORCED.** `SDL_MAIN_USE_CALLBACKS`
+  (`SDL_AppInit`/`SDL_AppIterate`/`SDL_AppEvent`/`SDL_AppQuit`, real
+  `SDL_AppResult` semantics, both `<SDL.h>` and `<SDL3/SDL_main.h>`
+  orderings) is the primary SDL3 entry path: the header-emitted `main()`
+  drives the callbacks over `__sdl_set_animation_frame_func` (shared with
+  `wgpuSetMainLoopCallback`), `SDL_APP_FAILURE` exits 1 via the
+  `__sdl_app_result` export (read post-loop, so the Dawn drain keeps its
+  order). The classic blocking loop is REFUSED per principle 1 when it
+  presents on the gpu transport: a worker stuck in `main()` never yields,
+  so its GPU frames can never be recycled and the finite blocked-worker
+  ship budget eventually killed the whole desktop (measured, #551). The
+  refusal is unconditional (fires on JSPI browsers too — relax it when the
+  frame-loop parks become genuinely suspending, don't unwind it), fd-2
+  loud, exit 69, and fires on the SECOND main-live present — the first is
+  the SDL_AppInit splash allowance, so a correct callbacks app presenting
+  inside `SDL_AppInit` is never refused. Reference apps: `os/pollball.c`
+  (pure SDL) and `os/gpubox.c` (win32 + webgpu.h, events forwarded via
+  user32's `__u32_feed_sdl_event`). The sanctioned escape for an existing
+  blocking-loop program is the EXPLICIT software renderer (#551 opt-in,
+  jku-approved): `SDL_CreateRenderer(win, "software")`, or
+  `SDL_HINT_RENDER_DRIVER`/the `SDL_RENDER_DRIVER` env var (env overrides
+  hint, as upstream) — CPU rasterize into the shm surface, no GPU budget,
+  any loop shape, NEVER auto-selected (auto/NULL stays GPU; unknown driver
+  names still fail loud, #497). First consumer: the minesweeper tap-to-run
+  sample (`SDL_RENDER_DRIVER=software`, upstream source unmodified).
+  Software/shm presents (`SDL_UpdateWindowSurface` — doom, the win32
+  veneer) stay legal from any loop shape. User-facing doc (baked, named in
+  the refusal message): `/usr/share/doc/sdl-gucos.md`.
 - **Video is already 100% WebGPU** (software blitter + batched 2D renderer in
   `createBrowserSDL`). The decision to *unify* SDL_Renderer onto the `webgpu.h`
   binding is **deferred until JSPI reaches iOS** (see `todos/WEBGPU.md` →
@@ -408,9 +430,15 @@ SDL3's typed key→value store, used by `*WithProperties` constructors across
 video/renderer/GPU. A pure-C in-wasm hash map (no host needed). Implement early
 since other subsystems' "modern" constructors depend on it.
 
-### Hints (SDL_hints) — ✗ missing — P2
-`SDL_SetHint`/`GetHint` + the hint constants programs set (e.g. render driver,
-mouse relative warp). Pure-C store; honor the few that matter, ignore the rest.
+### Hints (SDL_hints) — ✓ landed (#551, the core)
+`SDL_SetHint`/`SDL_GetHint`: a pure-C grow-only store that round-trips ANY
+name, with the upstream env-override rule (an environment variable of the
+hint's own name beats a stored value — that is what makes
+`SDL_RENDER_DRIVER=software ./game` work on unmodified source). The one
+hint the runtime READS is `SDL_HINT_RENDER_DRIVER` (SDL_CreateRenderer,
+name=NULL). Others store/round-trip but have no effect yet; the
+comma-separated driver priority list is not parsed. Add
+`SDL_SetHintWithPriority`/`SDL_ResetHint`/callbacks on demand.
 
 ### Logging / errors / version / platform — ◑ partial — P2
 `SDL_Log`/`LogError`/... → console (easy). `SDL_GetError`/`SetError` (thread-less

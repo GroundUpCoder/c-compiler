@@ -2,6 +2,15 @@
  * WIN32 app with a real menu: the M2 acceptance app of the uniform-menu
  * architecture (menu arch §4.a) — a GPU app's File/Options menu riding the
  * SAME user32 engine, anchored-child surfaces and agent tree as notepad's.
+ * Since ticket #551 it is also the SDL_MAIN_USE_CALLBACKS acceptance app
+ * for the win32+webgpu.h shape: SDL_AppInit does the setup the old main()
+ * did, SDL_AppIterate is the old frame() (PeekMessage pump + render),
+ * SDL_AppEvent forwards each SDL event to user32's router
+ * (__u32_feed_sdl_event — under the callback entry the DRIVER owns
+ * SDL_PollEvent, so events arrive here before PeekMessage could poll
+ * them), and WM_QUIT returns SDL_APP_SUCCESS (the driver then runs
+ * SDL_AppQuit + SDL_Quit; the runtime drains pending Dawn work before the
+ * exit handshake — the same S3-safe teardown order as before).
  * Run it from the shell:  gpubox &
  *
  * A lambert-shaded cube, each face a distinct color, rotating one fixed step
@@ -44,12 +53,17 @@
  * surface; the menu bar strip child overlays its top MENU_BAR_H pixels)
  * and rebuild the depth buffer — the canonical webgpu.h resize dance.
  */
+#define SDL_MAIN_USE_CALLBACKS
 #include <windows.h>
 #include <sdl3webgpu.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* user32's SDL→win32 event router (user32.c): the callback driver owns
+ * SDL_PollEvent, so SDL_AppEvent hands each event to user32 through this. */
+void __u32_feed_sdl_event(SDL_Event e);
 
 #define W 256
 #define H 256
@@ -324,30 +338,29 @@ static void build(void) {
     wgpuShaderModuleRelease(sm);
 }
 
-static void frame(void) {
+SDL_AppResult SDL_AppIterate(void *appstate) {
+    (void)appstate;
     /* The win32 pump (§4.a.3): posted messages, menu tracking, WM_TIMERs
      * and the agent socket all ride PeekMessage. WM_QUIT is the one exit
-     * path — SDL_Quit stops the frame loop and the runtime drains pending
-     * Dawn work before the EXIT handshake (never exit() from here). */
+     * path — SDL_APP_SUCCESS makes the driver run SDL_AppQuit + SDL_Quit,
+     * which stops the frame loop; the runtime drains pending Dawn work
+     * before the EXIT handshake (never exit() from here). */
     MSG m;
     while (PeekMessage(&m, NULL, 0, 0, PM_REMOVE)) {
-        if (m.message == WM_QUIT) {
-            SDL_Quit();
-            return;
-        }
+        if (m.message == WM_QUIT) return SDL_APP_SUCCESS;
         TranslateMessage(&m);
         DispatchMessage(&m);
     }
     /* A14 no-GPU survival: acquisition failed -> ready never rises; the
      * window, menu and pump above stay fully alive over the dead client. */
-    if (!ready) return;
+    if (!ready) return SDL_APP_CONTINUE;
 
     update_uniforms(fixed_pose >= 0 ? fixed_pose : frame_no);
     if (spin && fixed_pose < 0) frame_no++;      /* Spin off = pose frozen */
 
     WGPUSurfaceTexture st;
     wgpuSurfaceGetCurrentTexture(surface, &st);
-    if (!st.texture) return;
+    if (!st.texture) return SDL_APP_CONTINUE;
     WGPUTextureView view = wgpuTextureCreateView(st.texture, NULL);
     WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(device, NULL);
 
@@ -387,6 +400,7 @@ static void frame(void) {
     wgpuCommandEncoderRelease(enc);
     wgpuTextureViewRelease(view);
     wgpuTextureRelease(st.texture);
+    return SDL_APP_CONTINUE;
 }
 
 static void on_device(WGPURequestDeviceStatus status, WGPUDevice dev,
@@ -488,12 +502,13 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProc(h, msg, wp, lp);
 }
 
-int main(int argc, char **argv) {
+SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
+    (void)appstate;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-f") == 0 && i + 1 < argc) fixed_pose = atoi(argv[++i]);
         else {
             fprintf(stderr, "usage: gpubox [-f pose]\n");
-            return 1;
+            return SDL_APP_FAILURE;
         }
     }
     WNDCLASS wc;
@@ -504,7 +519,7 @@ int main(int argc, char **argv) {
     RegisterClass(&wc);
     hwnd = CreateWindowEx(0, "gpubox", "gpubox", WS_THICKFRAME,
                           0, 0, W, H, NULL, NULL, NULL, NULL);
-    if (!hwnd) { fprintf(stderr, "gpubox: no window\n"); return 3; }
+    if (!hwnd) { fprintf(stderr, "gpubox: no window\n"); return SDL_APP_FAILURE; }
     win = GetWindowSDL(hwnd);        /* §3.7a: bind WebGPU to user32's window */
 
     instance = wgpuCreateInstance(NULL);
@@ -523,6 +538,19 @@ int main(int argc, char **argv) {
         ci.callback = on_adapter; ci.userdata1 = NULL; ci.userdata2 = NULL;
         wgpuInstanceRequestAdapter(instance, &opts, ci);
     }
-    wgpuSetMainLoopCallback(frame);
-    return 0;
+    return SDL_APP_CONTINUE;         /* the driver paces SDL_AppIterate */
+}
+
+SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
+    (void)appstate;
+    __u32_feed_sdl_event(*event);    /* → user32's router → the message queue */
+    return SDL_APP_CONTINUE;
+}
+
+void SDL_AppQuit(void *appstate, SDL_AppResult result) {
+    (void)appstate; (void)result;
+    /* Teardown is the S3-safe order, driven by the runtime: the driver calls
+     * SDL_Quit right after this (stops the frame loop), then the runtime
+     * drains pending Dawn readbacks before the EXIT handshake. The window
+     * must outlive any in-flight readback, so nothing to do here. */
 }

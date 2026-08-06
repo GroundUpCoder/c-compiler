@@ -1943,9 +1943,14 @@ static void route_mouse(HWND top, UINT downMsg, int btnIdx, float fx, float fy,
     q_push(target, msg, mk_of_state(state), MAKELPARAM(x - ox, y - oy), 0);
 }
 
-static void pump_sdl(void) {
-    SDL_Event e;
-    while (SDL_PollEvent(&e)) {
+/* SDL→win32 event router, one event at a time. Split out of pump_sdl for
+ * SDL_MAIN_USE_CALLBACKS win32 apps (ticket #551): under the callback entry
+ * the DRIVER owns SDL_PollEvent (events arrive at SDL_AppEvent before the
+ * app's PeekMessage pump can poll them), so such an app forwards each event
+ * here from SDL_AppEvent and both paths route through this one switch.
+ * By-value parameter keeps the body byte-identical to the old in-loop form.
+ * First consumer: os/gpubox.c. */
+void __u32_feed_sdl_event(SDL_Event e) {
         switch (e.type) {
         case SDL_EVENT_KEY_DOWN:
         case SDL_EVENT_KEY_UP: {
@@ -2095,7 +2100,11 @@ static void pump_sdl(void) {
             break;
         }
         }
-    }
+}
+
+static void pump_sdl(void) {
+    SDL_Event e;
+    while (SDL_PollEvent(&e)) __u32_feed_sdl_event(e);
 }
 
 /* ============================================================ paint scan */

@@ -21944,6 +21944,18 @@ bool SDL_ClearError(void);
    handle reads like upstream ("Parameter 'renderer' is invalid"). */
 #define SDL_InvalidParamError(param) SDL_SetError("Parameter '%s' is invalid", (param))
 
+/* ---- Hints (SDL_hints.h subset; ticket #551) ----
+   Real SDL semantics for the store: SDL_SetHint/SDL_GetHint round-trip ANY
+   name, and an environment variable of the hint's own name OVERRIDES a
+   stored value (upstream's env-beats-normal-priority rule — which is also
+   how \`SDL_RENDER_DRIVER=software ./game\` works with zero code changes).
+   The one hint this runtime READS is SDL_HINT_RENDER_DRIVER, at
+   SDL_CreateRenderer(name=NULL). A single driver name only — upstream's
+   comma-separated priority list is not parsed (loud failure on a no-match). */
+#define SDL_HINT_RENDER_DRIVER "SDL_RENDER_DRIVER"
+bool SDL_SetHint(const char *name, const char *value);
+const char *SDL_GetHint(const char *name);
+
 /* ---- SDL_Renderer (2D accelerated) ---- */
 SDL_Renderer *SDL_CreateRenderer(SDL_Window *window, const char *name);
 void SDL_DestroyRenderer(SDL_Renderer *renderer);
@@ -21967,6 +21979,90 @@ bool SDL_RenderLine(SDL_Renderer *renderer, float x1, float y1, float x2, float 
 bool SDL_RenderPoint(SDL_Renderer *renderer, float x, float y);
 bool SDL_RenderGeometry(SDL_Renderer *renderer, SDL_Texture *texture, const SDL_Vertex *vertices, int num_vertices, const int *indices, int num_indices);
 void SDL_RenderPresent(SDL_Renderer *renderer);
+
+/* ---- SDL3 main callbacks (SDL_init.h / SDL_main.h; ticket #551) ----
+   SDL_AppResult is unconditional (SDL3 defines it in SDL_init.h); the
+   callback entry machinery lives in <__SDL_main.h> and is emitted only when
+   the app opted in with #define SDL_MAIN_USE_CALLBACKS before including
+   this header (or before <SDL3/SDL_main.h>, which repeats this include —
+   both orderings SDL3 documents compile). The callback model is THE
+   sanctioned frame loop for GPU-presenting gucOS apps: main() returns, the
+   host paces SDL_AppIterate at the compositor's cadence, and the process
+   yields between frames — a blocking main loop that presents GPU frames is
+   refused at its first present (host.js, #551). */
+typedef enum SDL_AppResult {
+    SDL_APP_CONTINUE,   /* keep iterating */
+    SDL_APP_SUCCESS,    /* terminate with success (process exit 0) */
+    SDL_APP_FAILURE     /* terminate with an error (process exit 1) */
+} SDL_AppResult;
+
+#ifdef SDL_MAIN_USE_CALLBACKS
+#include <__SDL_main.h>
+#endif
+  `,
+  /* SDL3 main-callbacks entry (ticket #551): the app defines SDL_AppInit /
+     SDL_AppIterate / SDL_AppEvent / SDL_AppQuit instead of main(); this
+     chunk supplies the main() that drives them over the animation-frame
+     seam (__setAnimationFrameFunc — the same seam emscripten_set_main_loop
+     rides). Semantics follow SDL3's README-main-functions: AppInit runs
+     first (argc/argv, appstate out-param); a non-CONTINUE result from any
+     callback stops the loop, AppQuit runs exactly once, and the process
+     exits 0 for SDL_APP_SUCCESS / 1 for SDL_APP_FAILURE. Included only via
+     the SDL_MAIN_USE_CALLBACKS gate in <SDL.h>/<SDL3/SDL_main.h> — its own
+     #pragma once makes the two gates emit it at most once. */
+  "__SDL_main.h": `
+#pragma once
+#include <SDL.h>
+
+SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]);
+SDL_AppResult SDL_AppIterate(void *appstate);
+SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event);
+void SDL_AppQuit(void *appstate, SDL_AppResult result);
+
+void exit(int status);
+
+static void *__sdl_main_appstate;
+static int __sdl_main_status;
+
+/* Read by the host after the frame loop stops (SDL_Quit below cleared the
+   frame callback): the process exit status the callbacks chose. Exported so
+   the runtime can distinguish SDL_APP_FAILURE (1) from SUCCESS (0) without
+   an in-frame exit() — Dawn-tier teardown must drain pending GPU work
+   BEFORE the exit handshake (WM.md spike S3), which exit() would skip. */
+int __sdl_app_result(void) { return __sdl_main_status; }
+__export __sdl_app_result = __sdl_app_result;
+
+static void __sdl_main_finish(SDL_AppResult result) {
+    __sdl_main_status = (result == SDL_APP_SUCCESS) ? 0 : 1;
+    SDL_AppQuit(__sdl_main_appstate, result);
+    /* SDL3's SDL_QuitMainCallbacks calls SDL_Quit after SDL_AppQuit. Here it
+       also clears the frame callback, which ends the host frame loop; the
+       host then drains pending GPU work and exits with __sdl_app_result(). */
+    SDL_Quit();
+}
+
+static void __sdl_main_frame(void) {
+    SDL_Event __sdl_main_ev;
+    SDL_AppResult r;
+    while (SDL_PollEvent(&__sdl_main_ev)) {
+        r = SDL_AppEvent(__sdl_main_appstate, &__sdl_main_ev);
+        if (r != SDL_APP_CONTINUE) { __sdl_main_finish(r); return; }
+    }
+    r = SDL_AppIterate(__sdl_main_appstate);
+    if (r != SDL_APP_CONTINUE) __sdl_main_finish(r);
+}
+
+int main(int argc, char **argv) {
+    SDL_AppResult r = SDL_AppInit(&__sdl_main_appstate, argc, argv);
+    if (r != SDL_APP_CONTINUE) {
+        /* SDL3: AppQuit runs even when AppInit itself terminates the app. */
+        SDL_AppQuit(__sdl_main_appstate, r);
+        SDL_Quit();
+        return (r == SDL_APP_SUCCESS) ? 0 : 1;
+    }
+    __setAnimationFrameFunc(__sdl_main_frame);
+    return 0;   /* the host frame loop drives __sdl_main_frame from here */
+}
   `,
   /* SDL3 spells its umbrella header <SDL3/SDL.h>; this runtime's veneer is
      keyed <SDL.h> (the SDL2-era spelling every vendored app still uses).
@@ -21977,12 +22073,18 @@ void SDL_RenderPresent(SDL_Renderer *renderer);
   `,
   /* <SDL3/SDL_main.h> — real SDL defines main()-rename machinery here so an
      app's main becomes SDL_main and the library supplies the true entry.
-     gucOS runs a plain int main(void), so this MUST be a no-op that does NOT
-     redefine main. SDL_MAIN_HANDLED tells any SDL code we own the entry. */
+     gucOS runs a plain int main(void), so for classic apps this is a no-op
+     that does NOT redefine main (SDL_MAIN_HANDLED tells any SDL code we own
+     the entry). With SDL_MAIN_USE_CALLBACKS defined it emits the callback
+     entry (ticket #551) — the same guarded chunk <SDL.h> emits, so both
+     SDL3-documented orderings (define before either include) work. */
   "SDL3/SDL_main.h": `
 #pragma once
 #ifndef SDL_MAIN_HANDLED
 #define SDL_MAIN_HANDLED
+#endif
+#ifdef SDL_MAIN_USE_CALLBACKS
+#include <__SDL_main.h>
 #endif
   `,
   /* SDL_image veneer (builtin, mirroring how <SDL.h> itself is builtin). The
@@ -26571,7 +26673,7 @@ __import void __sdl_close_audio_device(int dev);
 
 /* SDL_Renderer primitives. Colors are 0..1 floats; the single draw primitive
    takes 4 dst corners (TL,TR,BR,BL in pixels) + a src rect (texture pixels). */
-__import int  __sdl_create_renderer(int window);
+__import int  __sdl_create_renderer(int window, int software);
 __import void __sdl_destroy_renderer(int r);
 __import int  __sdl_create_texture(int r, int access, int w, int h);
 __import void __sdl_destroy_texture(int t);
@@ -27404,21 +27506,68 @@ struct SDL_Renderer {
                             window's one-renderer slot (#497) */
 };
 
-/* The one render driver this runtime has (#497). SDL3's name parameter selects
-   a specific backend; asking for one we don't provide must FAIL ("Couldn't
-   find matching render driver"), not silently hand back a different backend
-   while reporting success — a developer probing for "opengl"/"software" would
-   get a false positive. NULL keeps SDL3's pick-the-default meaning. */
+/* ---- Hints (#551): a tiny grow-only store. SDL_GetHint prefers the
+   process ENVIRONMENT — upstream gives an env var of the hint's own name
+   override priority over a normal SDL_SetHint, and that rule is exactly
+   what makes 'SDL_RENDER_DRIVER=software ./game' work on unmodified
+   third-party source. ---- */
+struct __sdl_hint { char *name; char *value; struct __sdl_hint *next; };
+static struct __sdl_hint *__sdl_hints;
+
+bool SDL_SetHint(const char *name, const char *value) {
+    if (!name || !*name) { SDL_InvalidParamError("name"); return 0; }
+    struct __sdl_hint *h = __sdl_hints;
+    while (h && strcmp(h->name, name) != 0) h = h->next;
+    if (!h) {
+        h = (struct __sdl_hint *)malloc(sizeof(struct __sdl_hint));
+        if (!h) { SDL_SetError("Out of memory"); return 0; }
+        h->name = strdup(name);
+        h->value = NULL;
+        h->next = __sdl_hints;
+        __sdl_hints = h;
+    }
+    free(h->value);
+    h->value = value ? strdup(value) : NULL;
+    return 1;
+}
+
+const char *SDL_GetHint(const char *name) {
+    if (!name || !*name) return NULL;
+    const char *e = getenv(name);
+    if (e) return e;
+    for (struct __sdl_hint *h = __sdl_hints; h; h = h->next)
+        if (strcmp(h->name, name) == 0) return h->value;
+    return NULL;
+}
+
+/* The render drivers this runtime has (#497 name honesty, #551 opt-in).
+   "gucos" is the default driver (GPU-accelerated in the browser OS flavor,
+   the CPU rasterizer headless). "software" is upstream SDL3's real software
+   driver name: the CPU rasterizer drawing into the window's shm surface —
+   NEVER auto-selected (jku veto, #551: a silent GPU→CPU swap is forbidden;
+   the explicit request is the sanctioned escape for blocking-loop apps,
+   and the #551 refusal message teaches it). NULL falls through to
+   SDL_HINT_RENDER_DRIVER (the SDL_RENDER_DRIVER env var feeds it, as
+   upstream), then to the default. Asking for any OTHER backend
+   ("opengl", "metal", …) must still FAIL ("Couldn't find matching render
+   driver"), not silently hand back a different backend while reporting
+   success — a developer probing for capabilities would get a false
+   positive. */
 #define __SDL_RENDER_DRIVER "gucos"
 
 SDL_Renderer *SDL_CreateRenderer(SDL_Window *window, const char *name) {
     if (!__sdl_window_live(window)) { SDL_InvalidParamError("window"); return NULL; }
     if (window->renderer) { SDL_SetError("Renderer already associated with window"); return NULL; }
-    if (name && strcmp(name, __SDL_RENDER_DRIVER) != 0) {
-        SDL_SetError("Couldn't find matching render driver");
-        return NULL;
+    if (!name || !*name) name = SDL_GetHint(SDL_HINT_RENDER_DRIVER);
+    int software = 0;
+    if (name && *name) {
+        if (strcmp(name, "software") == 0) software = 1;
+        else if (strcmp(name, __SDL_RENDER_DRIVER) != 0) {
+            SDL_SetError("Couldn't find matching render driver");
+            return NULL;
+        }
     }
-    int h = __sdl_create_renderer(window->handle);
+    int h = __sdl_create_renderer(window->handle, software);
     if (h <= 0) { SDL_SetError("SDL_CreateRenderer: host failed to create a renderer"); return NULL; }
     SDL_Renderer *r = (SDL_Renderer *)malloc(sizeof(SDL_Renderer));
     if (!r) { SDL_SetError("Out of memory"); return NULL; }

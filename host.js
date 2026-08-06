@@ -7271,7 +7271,7 @@ function resolveDawnGpu() {
 // (1..8 bytes), which the kernel requires (frames never straddle the wrap).
 const WMAUDIO_RING_BYTES = 256 * 1024;
 
-function createSurfaceSDL({ ctx, hooks }) {
+function createSurfaceSDL({ ctx, hooks, proc }) {
   assertWmSabLayout(hooks);   // CD26: fail the process spawn loud on layout drift
   const { readString, getMemory, getExports } = ctx;
   const handleBySid = new Map();     // sid -> SDL window handle
@@ -7597,10 +7597,13 @@ function createSurfaceSDL({ ctx, hooks }) {
    * (the marquee regression that found this). Return instead; the caller's
    * contract is already re-poll-on-any-return. */
   function pumpWait(timeoutMs) {
-    // #484: about to go quiet — ship any clamp-held trailing frame NOW
-    // (unconditionally; one frame per park can't flood), so the display
-    // shows the app's freshest frame while it waits.
-    if (flushPresent) flushPresent(false);
+    // #484: about to go quiet — ship any clamp-held trailing frame. A REAL
+    // park (>=15ms) ships unconditionally (self-limiting; the app may never
+    // present again); a short-timeout park is a frame-loop delay recurring
+    // hundreds of times a second, so it keeps the clamp ('park' mode —
+    // shipping unconditionally there voided #484 for delay-loop games and
+    // burned the browser's blocked-worker ImageBitmap budget, #551).
+    if (flushPresent) flushPresent(timeoutMs >= 15 ? 'force' : 'park');
     // WaitEvent/GetMessage entry = this app is back to waiting on events
     // (todos/0169): release the kernel-side wantFrame pin so the compositor
     // may park. Gated on a present since the last release — an idle 25ms
@@ -7638,7 +7641,8 @@ function createSurfaceSDL({ ctx, hooks }) {
    * otherwise be slept past. */
   function waitMulti(rfdsPtr, nr, ringInterest, timeoutMs) {
     if (typeof hooks.waitMulti !== 'function') return -2;
-    if (flushPresent) flushPresent(false);   // #484: same rule as pumpWait
+    // #484/#551: same rule as pumpWait (negative timeout = indefinite park).
+    if (flushPresent) flushPresent(timeoutMs < 0 || timeoutMs >= 15 ? 'force' : 'park');
     if (presentedSinceIdle) {
       presentedSinceIdle = false;
       if (hooks.frameIdle) hooks.frameIdle();
@@ -7923,9 +7927,11 @@ function createSurfaceSDL({ ctx, hooks }) {
      * no-advertisement fallback. Mailbox semantics unchanged (newest wins):
      * a clamped present ships nothing, and the canvas — which still holds
      * that frame — is HELD so the freshest frame is never lost: it re-ships
-     * through the gate at SDL_PollEvent's pump (a hot loop stays clamped) or
-     * unconditionally when the app parks (pumpWait/waitMulti entry — same JS
-     * task, so the canvas content is exactly the clamped frame). A present
+     * through the gate at SDL_PollEvent's pump (a hot loop stays clamped),
+     * gated with a wall-clock escape at short-timeout parks, and
+     * unconditionally at REAL parks (>=15ms/indefinite pumpWait/waitMulti
+     * entry — same JS task, so the canvas content is exactly the clamped
+     * frame; the mode split is #551's fix — see flushPresent). A present
      * that acks a pending resize always ships: the ack is a protocol step
      * (surfaceConfigure), not just pixels. Ticks stall while the tab is
      * hidden or the compositor is parked — a shipped frame is damage that
@@ -7939,6 +7945,117 @@ function createSurfaceSDL({ ctx, hooks }) {
                        hooks.vsyncEnabled();
     const presentGate = new Map();   // sid -> { tick, ms } of the last shipped present
     const presentHeld = new Map();   // sid -> canvas whose newest present was clamped
+    /* ---- #551: the blocking-main-loop refusal (unconditional, jku ruling
+     * 2026-08-06 on ticket #551). A GPU-transport present (this flavor's
+     * transferToImageBitmap ship) issued while main() is still on the stack
+     * means a blocking frame loop — poll-only spin or SDL_Delay-paced alike
+     * — is presenting GPU frames from a worker that never returns to its
+     * event loop. The browser can only reclaim shipped GPU frames on that
+     * event loop, and the lifetime headroom for a never-yielding worker is
+     * finite (measured on ticket #551; at exhaustion the browser destroys
+     * the KERNEL worker's WebGPU device — the whole desktop dies, not just
+     * this app). No clamp changes that arithmetic — any positive ship rate
+     * reaches the wall — so the only honest treatment is to refuse the
+     * FIRST such present, before any headroom burns and before the user
+     * sees a window that is already doomed: message on the app's stderr,
+     * distinct exit status, only this process dies (the desktop is
+     * untouched — compositor recovery is #551 leg B). The trigger is the
+     * LOOP MODEL (has main() returned?), never a park or a rate: the
+     * sanctioned frame paths — SDL_MAIN_USE_CALLBACKS / the animation-frame
+     * seam — present after main() returns and yield every frame (vsyncWait
+     * is Atomics.waitAsync), so they never trip this. shm presents
+     * (SDL_UpdateWindowSurface — doom, the win32 veneer, the software
+     * renderer) are not GPU-transport and stay legal from any loop shape.
+     *
+     * The SDL_AppInit allowance (#551 follow-up finding): a CORRECT
+     * callbacks app may legally present one frame inside SDL_AppInit — a
+     * splash, a first clear+present — and SDL_AppInit runs while main() is
+     * still on the stack (the header-provided main() calls it before
+     * registering the frame driver). Refusing that first present would
+     * kill a compliant app with a message telling it to adopt the model it
+     * already uses — a dead-end error. So the refusal fires on the SECOND
+     * GPU-transport present while main() is live: a blocking loop presents
+     * again within one frame time and still dies before its window means
+     * anything, at a cost of exactly ONE recyclable-once-main-returns
+     * frame against a budget in the thousands; and a "loop hidden inside
+     * SDL_AppInit" presents twice, so the escape stays closed.
+     *
+     * Armed by runModule around the wasm entry via out.setMainLive; embeds
+     * that drive this backend directly (unit tests) never arm it. When
+     * JSPI-based suspension lands this rule RELAXES (a suspending worker
+     * genuinely yields); it does not unwind. */
+    const BLOCKING_PRESENT_EXIT = 69;   // EX_UNAVAILABLE — the refusal's distinct exit status
+    let mainLive = false;               // true only between wasm entry and main()'s return
+    let mainPresents = 0;               // GPU-transport presents seen while mainLive
+    let refused = false;
+    /* THE FAILURE MESSAGE (single constant, populated at runtime — the
+     * wording is jku's approved shape from ticket #551; keep logic out of
+     * it). Deliberately carries no browser-specific frame budget figure:
+     * the mechanism is vendor-independent, the measured number is not.
+     * FIX 1 is the #551 software opt-in (SDL_RENDER_DRIVER=software / the
+     * "software" driver name); FIX 2 is the SDL3 callback main loop. */
+    const blockingPresentMessage = function (via) {
+      const prog = (proc && proc.name) || '?';
+      const pid = (proc && proc.pid) || 0;
+      const wgpu = via && via.indexOf('webgpu') >= 0;
+      const tier = wgpu ? 'webgpu.h surface' : 'SDL_Renderer, GPU tier';
+      const call = wgpu ? 'wgpuSurfacePresent()' : 'SDL_RenderPresent()';
+      return (
+'SDL: FATAL — this program presents GPU frames from a blocking main loop.\n' +
+'             gucOS stops it before it takes the desktop down.\n' +
+'\n' +
+'  program : ' + prog + ' (pid ' + pid + ') — ' + tier + '\n' +
+'  detected: ' + call + ' called from main(), not from a frame callback\n' +
+'\n' +
+'  WHY: a blocking main loop never returns to the browser\'s event loop, so the\n' +
+'  browser can never recycle the GPU frames this program presents. That budget\n' +
+'  is finite. Exhausting it destroys the compositor\'s GPU device and the whole\n' +
+'  desktop goes black. gucOS refuses to start that countdown.\n' +
+'\n' +
+'  FIX 1 — run it as-is, NO code changes:\n' +
+'\n' +
+'      SDL_RENDER_DRIVER=software ./' + prog + '\n' +
+'\n' +
+'  Draws on the CPU into the window surface. There is no GPU frame budget, so a\n' +
+'  blocking loop is safe. Equivalent in code: SDL_CreateRenderer(win, "software").\n' +
+'\n' +
+'  FIX 2 — keep GPU rendering, let SDL own the loop:\n' +
+'\n' +
+'      #define SDL_MAIN_USE_CALLBACKS\n' +
+'      provide SDL_AppInit / SDL_AppIterate / SDL_AppEvent / SDL_AppQuit\n' +
+'      instead of your own while() loop.\n' +
+'\n' +
+'  Standard SDL3 — the same source runs on desktop SDL3 unchanged.\n' +
+'\n' +
+'  Details: /usr/share/doc/sdl-gucos.md\n' +
+'\n' +
+'Exiting (status ' + BLOCKING_PRESENT_EXIT + '). The desktop is unaffected.\n');
+    };
+    const refuseBlockingPresent = function (via) {
+      const summary = 'SDL: GPU-transport present from a blocking main loop refused (#551)';
+      if (refused) {                 // exit already reported; just keep unwinding
+        const again = new Error(summary);
+        again.sdlRefusalExit = BLOCKING_PRESENT_EXIT;
+        throw again;
+      }
+      refused = true;
+      const msg = blockingPresentMessage(via);
+      try { console.error(msg); } catch (e) {}
+      // The app's real fd 2 (respects 2> redirection): a synchronous
+      // brokered write — the kernel has it before the exit RPC below.
+      try {
+        if (ctx.fs && typeof ctx.fs.write === 'function') {
+          const bytes = new TextEncoder().encode(msg);
+          ctx.fs.write(2, bytes, bytes.length);
+        }
+      } catch (e) {}
+      // Ordered exit handshake (the __exit shape): report the status to the
+      // kernel — it tears this worker down — then unwind wasm as fallback.
+      try { if (typeof hooks.exit === 'function') hooks.exit(BLOCKING_PRESENT_EXIT); } catch (e) {}
+      const err = new Error(summary + ' — see stderr');
+      err.sdlRefusalExit = BLOCKING_PRESENT_EXIT;
+      throw err;
+    };
     const shipFrame = function (sid, cnv) {
       try {
         const bmp = cnv.transferToImageBitmap();
@@ -7953,7 +8070,10 @@ function createSurfaceSDL({ ctx, hooks }) {
         hooks.surfaceFrame(sid, bmp);
       } catch (e) { /* canvas may be zero-sized pre-configure */ }
     };
-    const presentTo = function (sid, cnv) {
+    const presentTo = function (sid, cnv, via) {
+      // #551: second main-live present = a blocking loop (the first is the
+      // SDL_AppInit allowance, block comment above). Throws, never returns.
+      if (mainLive && ++mainPresents > 1) refuseBlockingPresent(via || 'SDL_Renderer');
       if (!handleBySid.has(sid)) return;   // window already destroyed
       const win = fbByHandle.get(handleBySid.get(sid));
       const acking = !!(win && win.pendingCfg &&
@@ -7965,6 +8085,7 @@ function createSurfaceSDL({ ctx, hooks }) {
         const t = hooks.vsyncSeq();
         if (!acking && t === g.tick) { presentHeld.set(sid, cnv); return; }
         g.tick = t;
+        g.ms = Date.now();   // wall stamp backs flushPresent's 'park' escape (#551)
       } else {
         const now = Date.now();
         if (!acking && now - g.ms < PRESENT_CLAMP_MS) { presentHeld.set(sid, cnv); return; }
@@ -7973,17 +8094,35 @@ function createSurfaceSDL({ ctx, hooks }) {
       presentHeld.delete(sid);
       shipFrame(sid, cnv);
     };
-    // The trailing-frame flush (#484). respectGate=true retries held frames
-    // through the clamp (SDL_PollEvent's pump — ships once the tick moves);
-    // false ships them now (park entry — one frame per park cannot flood).
-    flushPresent = function (respectGate) {
+    // The trailing-frame flush (#484; modes re-cut by #551). mode 'gate'
+    // retries held frames through the clamp (SDL_PollEvent's pump — ships
+    // once the tick moves). mode 'force' ships now: a REAL park (>=15ms or
+    // indefinite) is self-limiting, and the parking app may never present
+    // again, so its freshest frame must land. mode 'park' is the
+    // short-timeout park (the classic SDL_Delay(1) frame loop): those parks
+    // recur hundreds of times a second, so the old unconditional ship there
+    // voided the #484 clamp entirely — ships == presents, measured 16.5k
+    // bitmaps in 103s of play, which exhausts the browser's budget for
+    // ImageBitmap ships out of a never-yielding worker (~16.7k lifetime;
+    // the return/recycle tasks can only run on the producer's event loop)
+    // and got the COMPOSITOR's WebGPU device destroyed (#551). 'park' keeps
+    // the tick gate, with a 17ms wall-clock escape so stalled ticks (parked
+    // compositor, hidden tab) still get the ship whose damage re-wakes them
+    // — bounded at ~1/frame either way.
+    flushPresent = function (mode) {
       if (!presentHeld.size) return;
+      const now = Date.now();
       for (const [sid, cnv] of presentHeld) {
-        if (respectGate) { presentTo(sid, cnv); continue; }
-        presentHeld.delete(sid);
-        if (!handleBySid.has(sid)) continue;
+        if (mode === 'gate') { presentTo(sid, cnv); continue; }
+        if (!handleBySid.has(sid)) { presentHeld.delete(sid); continue; }
         const g = presentGate.get(sid);
-        if (g) { if (vsyncClamp) g.tick = hooks.vsyncSeq(); else g.ms = Date.now(); }
+        if (mode === 'park' && g) {
+          const tickOpen = vsyncClamp ? hooks.vsyncSeq() !== g.tick
+                                      : now - g.ms >= PRESENT_CLAMP_MS;
+          if (!tickOpen && now - g.ms < 17) continue;   // still clamped: hold
+        }
+        presentHeld.delete(sid);
+        if (g) { if (vsyncClamp) g.tick = hooks.vsyncSeq(); g.ms = now; }
         shipFrame(sid, cnv);
       }
     };
@@ -8038,6 +8177,31 @@ function createSurfaceSDL({ ctx, hooks }) {
     Object.keys(swRenderer).forEach(function (n) {
       env[n] = function () { return rdrBackend[n].apply(null, arguments); };
     });
+    // #551 software opt-in: SDL_CreateRenderer(win, "software") — or the
+    // SDL_RENDER_DRIVER env/hint — selects the CPU rasterizer (shm flip, no
+    // GPU frame budget, legal from ANY loop shape). NEVER auto-selected:
+    // auto (NULL/"gucos") stays GPU, and the blocking-loop refusal below
+    // teaches this opt-in as its FIX 1. The two backends mint handles in
+    // separate spaces, so the mode locks at the app's FIRST renderer create
+    // — a later create in the OTHER mode fails loudly (no real app mixes
+    // renderer tiers in one process; a silent cross-space handle would
+    // corrupt both).
+    let rdrLocked = null;   // 'gpu' | 'sw' once the first renderer exists
+    env.__sdl_create_renderer = function (windowHandle, software) {
+      const want = software ? 'sw' : 'gpu';
+      if (rdrLocked && rdrLocked !== want) {
+        console.error('SDL_CreateRenderer: cannot mix "software" and GPU renderers in one process');
+        return 0;
+      }
+      if (!rdrLocked) {
+        rdrLocked = want;
+        // Explicit software request wins over whatever gpuRendererReady
+        // locked (it locks GPU on success, software on failed acquisition —
+        // an explicit "software" and a failure-fallback agree anyway).
+        if (want === 'sw') rdrBackend = swRenderer;
+      }
+      return rdrBackend.__sdl_create_renderer(windowHandle);
+    };
     env.__sdl_create_window = function (titlePtr, x, y, w, h, flags) {
       const s = surfaceCreate(titlePtr, w, h, flags);
       if (!s) return 0;
@@ -8106,7 +8270,7 @@ function createSurfaceSDL({ ctx, hooks }) {
       // #484: retry any clamp-held frame THROUGH the gate — a poll loop that
       // stopped presenting (dirty-flag loops) still ships its last frame on
       // the next tick, while a hot loop stays clamped.
-      flushPresent(true);
+      flushPresent('gate');
       return drainInput();
     };
     env.__wait = waitMulti;           // unified multi-source wait (0178)
@@ -8129,6 +8293,11 @@ function createSurfaceSDL({ ctx, hooks }) {
     const out = Object.assign({}, inner);
     out[ENV_KEY] = env;
     out.drainInput = drainInput;
+    // #551 blocking-loop refusal arming (see the refusal block above):
+    // runModule flips this true right before the wasm entry and false when
+    // main() returns — the animation-frame/callback path thus never trips
+    // it. Direct embedders (unit tests) that never call it are never armed.
+    out.setMainLive = function (v) { mainLive = !!v; };
     // Awaited by runModule before main() for renderer-importing modules (see
     // the renderer-backend block above). Resolves once the WebGPU device +
     // pipelines landed (true) or acquisition failed (false — backend flips
@@ -8164,7 +8333,7 @@ function createSurfaceSDL({ ctx, hooks }) {
         const sid = win.sid;
         let c = canvasBySid.get(sid);
         if (!c) { c = new OffscreenCanvas(1, 1); canvasBySid.set(sid, c); }
-        return { canvas: c, present: function () { presentTo(sid, c); } };
+        return { canvas: c, present: function () { presentTo(sid, c, 'webgpu.h surface'); } };
       },
     };
     return out;
@@ -8359,6 +8528,7 @@ function createCanvasGPU(canvas) {
       return ad.requestDevice();
     }).then(function (dev) {
       cg.device = dev;
+      try { dev.lost.then(function (i) { console.error('[sdl-gpu] device lost: reason=' + (i && i.reason) + ' msg=' + (i && i.message)); }); } catch (e) {}
       try { dev.addEventListener('uncapturederror', function (ev) { console.error('SDL WebGPU error:', ev.error && ev.error.message); }); } catch (e) {}
       cg.format = gpu.getPreferredCanvasFormat();
       cg.context.configure({
@@ -8816,7 +8986,16 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
          primitive __sdl_render_quad takes 4 dst corners (TL,TR,BR,BL in pixels)
          + a src rect (texture pixels); the C layer composes fill/copy/line/rect
          from it. texH 0 = the 1×1 white texture (solid fill). */
-      __sdl_create_renderer: function (window) {
+      __sdl_create_renderer: function (window, software) {
+        // #551: the standalone page flavor has no software rasterizer tier
+        // (no shm surface to flip). An explicit "software" request FAILS
+        // loudly rather than silently handing back the GPU renderer — and
+        // a standalone page's event loop is the main thread's, so the OS
+        // blocked-worker hazard the opt-in exists for does not arise here.
+        if (software) {
+          console.error('SDL_CreateRenderer("software"): no software renderer on the standalone page flavor — use the default (NULL) GPU renderer');
+          return 0;
+        }
         rdrEnsure();
         // SDL renderers default to SDL_BLENDMODE_NONE for draw ops. verts is a
         // growable CPU scratch (pixel-space vertices for the current frame);
@@ -12173,7 +12352,11 @@ async function runModule({
   // worker-local OffscreenCanvas + ImageBitmap handoff in the browser, shm
   // framebuffer pixels headless.
   if (!sdl && spawnHooks && typeof spawnHooks.surfaceCreate === 'function') {
-    sdl = createSurfaceSDL({ ctx: ctx, hooks: spawnHooks });
+    sdl = createSurfaceSDL({ ctx: ctx, hooks: spawnHooks, proc: {
+      // Identity for the #551 blocking-loop refusal message.
+      name: (args && args.length) ? String(args[0]).replace(/^.*\//, '') : '?',
+      pid: pid || 0,
+    } });
   }
   // No canvas, no override → null stubs so __sdl_* imports still resolve
   // (Node CLI, headless tests). Browser host always sets getBrowserSDL.
@@ -12544,6 +12727,10 @@ async function runModule({
     typeof instance.exports.main !== 'function';
 
   let exitCode;
+  // #551: arm the blocking-loop present refusal for the span main() (or the
+  // wasip1 _start) is on the stack — the surface backend refuses any
+  // GPU-transport present issued inside it (see createSurfaceSDL).
+  if (sdl && typeof sdl.setMainLive === 'function') sdl.setMainLive(true);
   try {
     if (wasiEntry) {
       if (hasJSPI) {
@@ -12671,9 +12858,16 @@ async function runModule({
   } catch (e) {
     if (e instanceof ExitStatus) {
       exitCode = e.code;
+    } else if (e && e.sdlRefusalExit !== undefined) {
+      // #551 blocking-loop refusal: the surface backend already wrote the
+      // message to fd 2 and reported the exit to the kernel — unwind clean
+      // with its distinct status (the no-kernel twin of the __exit shape).
+      return e.sdlRefusalExit;
     } else {
       throw e;
     }
+  } finally {
+    if (sdl && typeof sdl.setMainLive === 'function') sdl.setMainLive(false);
   }
 
   if (sdl && sdl.getAnimationFrameFunc()) {
@@ -12681,6 +12875,7 @@ async function runModule({
     const raf = sdl.requestAnimationFrame;
     const FRAME_MS = 1000 / 60;
     let nextDue = 0;
+    let sawFrameExit = false;   // an explicit exit() inside a frame outranks __sdl_app_result
     await new Promise(function (resolve) {
       function scheduleFrame() {
         const doFrame = async function () {
@@ -12703,6 +12898,7 @@ async function runModule({
           } catch (e) {
             if (e instanceof ExitStatus) {
               exitCode = e.code;
+              sawFrameExit = true;
               resolve();
               return;
             }
@@ -12743,6 +12939,13 @@ async function runModule({
     // Dawn tier: drain pending GPU promises FIRST (see the gpuDrain comment
     // above) — this is why Dawn apps quit via SDL_Quit(), not exit(): exit()
     // inside a frame tick fires the EXIT handshake before any drain can run.
+    // SDL_MAIN_USE_CALLBACKS (#551): a callbacks app that quit via SDL_Quit
+    // (frame func cleared, no in-frame exit()) reports its SDL_APP_FAILURE/
+    // SUCCESS status through the __sdl_app_result export — this is how a
+    // FAILURE becomes exit 1 without an in-frame exit() skipping the drain.
+    if (!sawFrameExit && typeof instance.exports.__sdl_app_result === 'function') {
+      try { exitCode = instance.exports.__sdl_app_result() | 0; } catch (e) {}
+    }
     if (ctx.gpuDrain) { try { await ctx.gpuDrain(); } catch (e) {} }
     try {
       if (instance.exports.exit) {

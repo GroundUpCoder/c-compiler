@@ -1,5 +1,5 @@
 {
-  "version": 241,
+  "version": 242,
   "defaultPackages": ["doom"],
   "overlays": [
     {
@@ -16,6 +16,7 @@
       "/usr/lib",
       "/usr/share",
       "/usr/share/deck",
+      "/usr/share/doc",
       "/usr/share/fonts",
       "/usr/share/gucman",
       "/usr/share/menu",
@@ -30,6 +31,9 @@
     "files": {
       "/usr/lib/ksvc.wasm": {
         "project": "os/ksvc/bin.json"
+      },
+      "/usr/share/doc/sdl-gucos.md": {
+        "bin": "os/doc/sdl-gucos.md"
       },
       "/usr/bin/sh": {
         "project": "vendor/busybox/bin.json"
@@ -648,7 +652,7 @@
         "bin": "os/deck/demo/deck-title.png"
       },
       "/root/Desktop/Presentations/samples/minesweeper-programming-rainbow.sh": {
-        "content": "#!/bin/sh\n# minesweeper-programming-rainbow.sh — tap-to-run sample. Builds Programming\n# Rainbow's Minesweeper (C/SDL3) live from GitHub, compiled in-OS. Tapped on the\n# Desktop this spawns headless (no terminal); the desktop launcher sets no TERM\n# while `term` does, so with TERM unset we re-exec into a term window to show the\n# fetch/compile progress and the game. Attribution: @ProgrammingRainbow.\n[ -n \"$TERM\" ] || exec term \"$0\"\nset -e\nREPO=https://raw.githubusercontent.com/ProgrammingRainbow/Minesweeper-C-SDL3/main\n# Checked fetch that names its own cause: -s keeps the happy path quiet, -f\n# makes an HTTP error an error (a 404 page must never land in a .c file), and\n# the || arm supplies the diagnostic -s suppresses — a bridge-off browser tab\n# (cross-origin fetch = CORS block) says what broke instead of set -e killing\n# the script with no message.\nfetch() {\n    curl -sfL \"$1\" -o \"$2\" || {\n        rc=$?\n        echo \"\" >&2\n        echo \"minesweeper sample: fetch failed (curl exit $rc): $1\" >&2\n        echo \"gucOS cannot reach github.com from here. In a browser tab, external\" >&2\n        echo \"fetches need the HTTP bridge; without it cross-origin requests are\" >&2\n        echo \"blocked (CORS). Start the bridge on the host, then run this again.\" >&2\n        exit 1\n    }\n}\nmkdir -p \"$HOME/minesweeper/images\"\ncd \"$HOME/minesweeper\"\n# libpng+zlib are folded into the full image; on a minimal boot install them.\n[ -f /usr/include/png.h ] || [ -f /usr/local/include/png.h ] || gucman install libpng\necho \"fetching source…\"\nfor f in main game board border clock face init_sdl load_media mines; do\n    fetch \"$REPO/Video18/$f.c\" \"$f.c\"\n    fetch \"$REPO/Video18/$f.h\" \"$f.h\"\ndone\necho \"fetching art…\"\nfor f in board borders digits digitback faces icon; do\n    fetch \"$REPO/images/$f.png\" \"images/$f.png\"\ndone\n# this cc is __STDC_NO_VLA__ — swap game.c's one VLA for a fixed buffer\nsed -i 's/char title_str\\[length\\];/char title_str[512];/' game.c\necho \"compiling in-OS (cc *.c — pulls libpng + zlib)…\"\ncc *.c -o minesweeper\necho \"launching — left-click uncovers, right-click flags, 1-8 theme, face resets.\"\n# FOREGROUND on purpose: term ends the session (SIGHUPs the pty) when this\n# script exits, so `./minesweeper &` would kill the game the instant it launched.\n./minesweeper\n",
+        "content": "#!/bin/sh\n# minesweeper-programming-rainbow.sh — tap-to-run sample. Builds Programming\n# Rainbow's Minesweeper (C/SDL3) live from GitHub, compiled in-OS. Tapped on the\n# Desktop this spawns headless (no terminal); the desktop launcher sets no TERM\n# while `term` does, so with TERM unset we re-exec into a term window to show the\n# fetch/compile progress and the game. Attribution: @ProgrammingRainbow.\n[ -n \"$TERM\" ] || exec term \"$0\"\nset -e\nREPO=https://raw.githubusercontent.com/ProgrammingRainbow/Minesweeper-C-SDL3/main\n# Checked fetch that names its own cause: -s keeps the happy path quiet, -f\n# makes an HTTP error an error (a 404 page must never land in a .c file), and\n# the || arm supplies the diagnostic -s suppresses — a bridge-off browser tab\n# (cross-origin fetch = CORS block) says what broke instead of set -e killing\n# the script with no message.\nfetch() {\n    curl -sfL \"$1\" -o \"$2\" || {\n        rc=$?\n        echo \"\" >&2\n        echo \"minesweeper sample: fetch failed (curl exit $rc): $1\" >&2\n        echo \"gucOS cannot reach github.com from here. In a browser tab, external\" >&2\n        echo \"fetches need the HTTP bridge; without it cross-origin requests are\" >&2\n        echo \"blocked (CORS). Start the bridge on the host, then run this again.\" >&2\n        exit 1\n    }\n}\nmkdir -p \"$HOME/minesweeper/images\"\ncd \"$HOME/minesweeper\"\n# libpng+zlib are folded into the full image; on a minimal boot install them.\n[ -f /usr/include/png.h ] || [ -f /usr/local/include/png.h ] || gucman install libpng\necho \"fetching source…\"\nfor f in main game board border clock face init_sdl load_media mines; do\n    fetch \"$REPO/Video18/$f.c\" \"$f.c\"\n    fetch \"$REPO/Video18/$f.h\" \"$f.h\"\ndone\necho \"fetching art…\"\nfor f in board borders digits digitback faces icon; do\n    fetch \"$REPO/images/$f.png\" \"images/$f.png\"\ndone\n# this cc is __STDC_NO_VLA__ — swap game.c's one VLA for a fixed buffer\nsed -i 's/char title_str\\[length\\];/char title_str[512];/' game.c\necho \"compiling in-OS (cc *.c — pulls libpng + zlib)…\"\ncc *.c -o minesweeper\necho \"launching — left-click uncovers, right-click flags, 1-8 theme, face resets.\"\n# FOREGROUND on purpose: term ends the session (SIGHUPs the pty) when this\n# script exits, so `./minesweeper &` would kill the game the instant it launched.\n# SDL_RENDER_DRIVER=software (#551): the game's classic blocking loop is legal\n# on the software renderer; on the GPU tier it would be refused (see\n# /usr/share/doc/sdl-gucos.md). The upstream source stays byte-unmodified.\nSDL_RENDER_DRIVER=software ./minesweeper\n",
         "mode": 493
       },
       "/root/roms/PokemonBlue.gb": {

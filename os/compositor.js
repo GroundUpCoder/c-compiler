@@ -85,50 +85,18 @@ function startCompositor(kernel, canvas, device) {
   var format = navigator.gpu.getPreferredCanvasFormat();
   var confW = -1, confH = -1;   // reconfigure on screen-resize (todos/0023)
 
-  // Loud by design (todos/0055): there is no fallback compositor, so a lost
-  // device means a dead desktop — surface it on the boot log, don't fade.
-  device.lost.then(function (info) {
-    var msg = '[compositor] WebGPU device lost: ' + ((info && info.message) || 'unknown');
-    console.error(msg);
-    try { self.postMessage({ type: 'boot-log', msg: msg }); } catch (e) {}
-  });
+  // ---- device-derived state: everything here is (re)built by initGpuState,
+  // because the device is NOT immortal (#551): Chromium destroys this
+  // worker's device when a blocked process worker exhausts its lifetime
+  // ImageBitmap-ship budget (~16.7k transfers from a never-yielding worker),
+  // and any real GPU reset lands the same way. Loud-by-design (todos/0055)
+  // was a BOOT rule; a running OS must survive transient loss — on
+  // device.lost we say so loudly, re-acquire, rebuild, and redraw
+  // (shm surfaces re-upload from their SABs, gpu surfaces re-import the
+  // kernel-held newest bitmap, labels re-rasterize via ksvc).
+  var shader, pipeline, sampler, linSampler, whiteTex, whiteBind, blitBuf;
+  var deviceLost = false;
 
-  var shader = device.createShaderModule({ code: COMP_WGSL });
-  var pipeline = device.createRenderPipeline({
-    layout: 'auto',
-    vertex: {
-      module: shader, entryPoint: 'vs',
-      buffers: [{
-        arrayStride: 56,   // pos(2) uv(2) color(4) rect(4) misc(2) f32s (0063)
-        attributes: [
-          { shaderLocation: 0, offset: 0, format: 'float32x2' },
-          { shaderLocation: 1, offset: 8, format: 'float32x2' },
-          { shaderLocation: 2, offset: 16, format: 'float32x4' },
-          { shaderLocation: 3, offset: 32, format: 'float32x4' },
-          { shaderLocation: 4, offset: 48, format: 'float32x2' },
-        ],
-      }],
-    },
-    fragment: {
-      module: shader, entryPoint: 'fs',
-      targets: [{
-        format: format,
-        // Source-over, matching the Canvas2D path this replaces (label
-        // textures have antialiased alpha edges; app pixels are opaque).
-        blend: {
-          color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-          alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-        },
-      }],
-    },
-    primitive: { topology: 'triangle-list' },
-  });
-  // Nearest sampling (todos/0024) — pixel-art correct, and the same
-  // dst-viewport mapping the headless composite uses. The linear sampler
-  // is the glass blur chain's workhorse (todos/0063): each bilinear
-  // resample is a 2x2 box filter.
-  var sampler = device.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
-  var linSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
   function bindWith(tex, samp) {
     return device.createBindGroup({
       layout: pipeline.getBindGroupLayout(0),
@@ -137,13 +105,119 @@ function startCompositor(kernel, canvas, device) {
   }
   function bindFor(tex) { return bindWith(tex, sampler); }
 
-  var whiteTex = device.createTexture({
-    size: { width: 1, height: 1 }, format: 'rgba8unorm',
-    usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
-  });
-  device.queue.writeTexture({ texture: whiteTex }, new Uint8Array([255, 255, 255, 255]),
-    { bytesPerRow: 4 }, { width: 1, height: 1 });
-  var whiteBind = bindFor(whiteTex);
+  function initGpuState() {
+    shader = device.createShaderModule({ code: COMP_WGSL });
+    pipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: {
+        module: shader, entryPoint: 'vs',
+        buffers: [{
+          arrayStride: 56,   // pos(2) uv(2) color(4) rect(4) misc(2) f32s (0063)
+          attributes: [
+            { shaderLocation: 0, offset: 0, format: 'float32x2' },
+            { shaderLocation: 1, offset: 8, format: 'float32x2' },
+            { shaderLocation: 2, offset: 16, format: 'float32x4' },
+            { shaderLocation: 3, offset: 32, format: 'float32x4' },
+            { shaderLocation: 4, offset: 48, format: 'float32x2' },
+          ],
+        }],
+      },
+      fragment: {
+        module: shader, entryPoint: 'fs',
+        targets: [{
+          format: format,
+          // Source-over, matching the Canvas2D path this replaces (label
+          // textures have antialiased alpha edges; app pixels are opaque).
+          blend: {
+            color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+          },
+        }],
+      },
+      primitive: { topology: 'triangle-list' },
+    });
+    // Nearest sampling (todos/0024) — pixel-art correct, and the same
+    // dst-viewport mapping the headless composite uses. The linear sampler
+    // is the glass blur chain's workhorse (todos/0063): each bilinear
+    // resample is a 2x2 box filter.
+    sampler = device.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
+    linSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
+    whiteTex = device.createTexture({
+      size: { width: 1, height: 1 }, format: 'rgba8unorm',
+      usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    device.queue.writeTexture({ texture: whiteTex }, new Uint8Array([255, 255, 255, 255]),
+      { bytesPerRow: 4 }, { width: 1, height: 1 });
+    whiteBind = bindFor(whiteTex);
+    // The static fullscreen quad the blit/blur passes draw (NDC corners, so
+    // it fits any target size).
+    blitBuf = device.createBuffer({ size: 6 * 56, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+    var bd = new Float32Array(6 * 14);
+    var corners = [[-1, 1, 0, 0], [1, 1, 1, 0], [-1, -1, 0, 1],
+                   [-1, -1, 0, 1], [1, 1, 1, 0], [1, -1, 1, 1]];
+    for (var i = 0; i < 6; i++) {
+      var o = i * 14;
+      bd[o] = corners[i][0]; bd[o + 1] = corners[i][1];
+      bd[o + 2] = corners[i][2]; bd[o + 3] = corners[i][3];
+      bd[o + 4] = 1; bd[o + 5] = 1; bd[o + 6] = 1; bd[o + 7] = 1;
+    }
+    device.queue.writeBuffer(blitBuf, 0, bd);
+    // Everything cached against the OLD device is dead: per-surface textures
+    // (re-upload from SAB / re-import the held bitmap on the next draw),
+    // label textures (re-rasterize), glass chain, the vertex buffer, and the
+    // canvas configuration (confW forces a reconfigure in draw()).
+    shmCache.clear();
+    gpuCache.clear();
+    labels.clear();
+    glass = null;
+    vbuf = null; vbufBytes = 0;
+    confW = -1; confH = -1;
+  }
+
+  // device.lost -> loud + recover (#551). The guard keeps a stale device's
+  // lost (the one we just replaced) from re-triggering recovery.
+  function hookLost(dev) {
+    dev.lost.then(function (info) {
+      if (dev !== device) return;
+      var msg = '[compositor] WebGPU device lost: reason=' + ((info && info.reason) || '?') +
+                ' ' + ((info && info.message) || 'unknown') + ' — attempting recovery';
+      console.error(msg);
+      try { self.postMessage({ type: 'boot-log', msg: msg }); } catch (e) {}
+      deviceLost = true;
+      stats.deviceLosses++;
+      recoverDevice();
+    });
+  }
+  function recoverDevice() {
+    var attempt = 0;
+    var tryOnce = function () {
+      attempt++;
+      navigator.gpu.requestAdapter().then(function (ad) {
+        if (!ad) throw new Error('no WebGPU adapter');
+        return ad.requestDevice();
+      }).then(function (dev) {
+        device = dev;
+        hookLost(dev);
+        initGpuState();
+        lastSig = null;                     // full redraw — every cache is cold
+        deviceLost = false;
+        stats.recoveries++;
+        console.error('[compositor] device recovered (attempt ' + attempt + ')');
+        try { self.postMessage({ type: 'boot-log', msg: '[compositor] device recovered' }); } catch (e) {}
+        kernel.compSetParked(false);
+        armed = true;
+        requestAnimationFrame(draw);
+      }).catch(function (e) {
+        if (attempt < 5) { setTimeout(tryOnce, 300 * attempt); return; }
+        var msg = '[compositor] device recovery FAILED after ' + attempt +
+                  ' attempts (' + (e && e.message) + ') — desktop is dead';
+        console.error(msg);
+        try { self.postMessage({ type: 'boot-log', msg: msg }); } catch (e2) {}
+      });
+    };
+    tryOnce();
+  }
+  hookLost(device);
 
   var norm = function (c) { return [c[0] / 255, c[1] / 255, c[2] / 255, c[3] / 255]; };
   var CLEAR_DESKTOP = { r: K.WM_COLORS.desktop[0] / 255, g: K.WM_COLORS.desktop[1] / 255,
@@ -259,21 +333,6 @@ function startCompositor(kernel, canvas, device) {
     };
     return glass;
   }
-  // The static fullscreen quad the blit/blur passes draw (NDC corners, so
-  // it fits any target size).
-  var blitBuf = device.createBuffer({ size: 6 * 56, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
-  (function () {
-    var bd = new Float32Array(6 * 14);
-    var corners = [[-1, 1, 0, 0], [1, 1, 1, 0], [-1, -1, 0, 1],
-                   [-1, -1, 0, 1], [1, 1, 1, 0], [1, -1, 1, 1]];
-    for (var i = 0; i < 6; i++) {
-      var o = i * 14;
-      bd[o] = corners[i][0]; bd[o + 1] = corners[i][1];
-      bd[o + 2] = corners[i][2]; bd[o + 3] = corners[i][3];
-      bd[o + 4] = 1; bd[o + 5] = 1; bd[o + 6] = 1; bd[o + 7] = 1;
-    }
-    device.queue.writeBuffer(blitBuf, 0, bd);
-  })();
   function blitPass(enc, view, bind) {
     var p = enc.beginRenderPass({
       colorAttachments: [{ view: view, loadOp: 'clear', storeOp: 'store',
@@ -481,8 +540,10 @@ function startCompositor(kernel, canvas, device) {
   // Playwright cannot really hide a tab (background throttling is
   // disabled), so the hidden-tab honest pause is asserted by freezing the
   // clock and watching the wake counters go flat.
-  var stats = { frames: 0, submits: 0, skipped: 0, parks: 0, wakes: 0 };
+  var stats = { frames: 0, submits: 0, skipped: 0, parks: 0, wakes: 0,
+                deviceLosses: 0, recoveries: 0 };   // #551 recovery accounting
   self.__compositorStats = stats;   // test probe (tests/browser/os-compositor.mjs)
+  initGpuState();                   // first build of the device-derived state
   var lastSig = null;
   var armed = true;                 // the boot rAF at the bottom
   var frozen = false;
@@ -529,7 +590,7 @@ function startCompositor(kernel, canvas, device) {
   // (wmOnDamage), want-frame doorbells, and the kernel-worker's raw input/
   // resize/drop handlers all land here. No-op while armed or frozen.
   function scheduleFrame() {
-    if (frozen || armed) return;
+    if (frozen || armed || deviceLost) return;   // recovery re-arms itself (#551)
     armed = true;
     stats.wakes++;
     kernel.compSetParked(false);
@@ -562,6 +623,9 @@ function startCompositor(kernel, canvas, device) {
 
   function draw() {
     if (frozen) { armed = false; return; }   // synthetic vsync-stop (probe)
+    // Device lost (#551): stop the rAF chain AND the vsync clock (an honest
+    // pause, like a hidden tab) until recoverDevice re-arms us.
+    if (deviceLost) { armed = false; return; }
     // Vsync broadcast (todos/0100): this rAF IS the system frame clock —
     // tick before anything can early-return, so SDL frame loops stay paced
     // even on degenerate-canvas frames. Presents made while we render land
@@ -817,7 +881,10 @@ function startCompositor(kernel, canvas, device) {
   // want-frame doorbells) re-arms the parked rAF through this hook.
   kernel.wmOnDamage(scheduleFrame);
   requestAnimationFrame(draw);
-  return { scheduleFrame: scheduleFrame, setFrozen: setFrozen, stats: stats };
+  return { scheduleFrame: scheduleFrame, setFrozen: setFrozen, stats: stats,
+           // Test hook (#551, tests/browser/os-devloss.mjs): destroy the live
+           // device — fires the REAL lost path, recovery included.
+           killDevice: function () { try { device.destroy(); } catch (e) {} } };
 }
 
 /* Raw UI-bridge input -> kernel routing. `ev` is the plain object os.html
