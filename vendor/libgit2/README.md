@@ -64,7 +64,8 @@ The crash was a **compiler codegen bug, not a libgit2 bug**, with a libgit2
    the caller's `git_str buffer.ptr` (→ `0x5`); `git_str_dispose`→`free()` then
    trapped. Fixed by defining `GIT_SHA1_BUILTIN` (the macro the code actually
    checks; upstream `cmake/SelectHashes.cmake` sets it for the builtin/
-   collisiondetect backend) in `features.h`, `git2_features.h`, and `lib.json`.
+   collisiondetect backend) in `git2_features.h` and `lib.json` (and in the
+   since-deleted `features.h` — see "Porting layer" below).
 
 ## Build / run
 
@@ -92,14 +93,16 @@ tree is self-contained and portable.
   `git_sysdir_guess_home` failed; the builtin returns the root entry with
   `pw_dir = /root`, which is what gucOS actually has. (`$HOME` is tried first
   either way — `sysdir.c` only reaches the password entry as a fallback.)
-- `features.h`, `git2_features.h` — **hand-written replacements for the
-  CMake-generated feature headers** (no threads, builtin SHA, PCRE2 regex, etc.).
-  ⚠️ **`git2_features.h` is the live one; nothing includes `features.h`.**
-  `src/util/git2_util.h` includes `git2_features.h`, and that is the only path
-  into either file. The two carry the same include guard
-  (`INCLUDE_features_h__`) and near-identical bodies, so an edit to
-  `features.h` alone is silently inert — #473 hit exactly that when the
-  `NO_MMAP` line that lives there turned out never to reach `unix/map.c`.
+- `git2_features.h` — **hand-written replacement for the CMake-generated
+  feature header** (no threads, builtin SHA, PCRE2 regex, etc.).
+  `src/util/git2_util.h` includes `git2_features.h` (via the generated
+  same-dir forwarder `src/util/git2_features.h`), and that is the only path
+  in. A second copy named `features.h` used to sit beside it sharing the
+  same include guard (`INCLUDE_features_h__`) — never included, so edits to
+  it were silently inert (#473 hit exactly that when the `NO_MMAP` line
+  that lived there turned out never to reach `unix/map.c`). Deleted by
+  #481, proven dead first: an `#error` + define flip in it left the built
+  wasm byte-identical.
 - `deps/pcre2/config.h` — **hand-written replacement for the CMake/autoconf
   `config.h`** (#473). See "Build configuration lives in headers" below.
 - `git_stubs.c`, `missing_stubs.c` — out-of-line definitions for `GIT_INLINE`
