@@ -74,8 +74,10 @@ try {
   const before = await readStats();
 
   // ---- Shape 1: SDL_Delay(1) loop → refused at the FIRST present.
+  // NB the wait needles anchor on DIGITS — the bare 'RC1=' substring is
+  // satisfied by the tty ECHO of the typed command itself (the 0089 trap).
   await page.keyboard.type('/root/delayloop; echo RC1=$?\r');
-  await waitOut('RC1=', 60000);
+  await page.waitForFunction(() => /RC1=\d+/.test(window.__osOut || ''), { timeout: 60000, polling: 200 });
   let out = await osOut();
   check('delay-loop shape refused with exit 69', /RC1=69/.test(out),
     out.slice(-300));
@@ -95,7 +97,7 @@ try {
   // ---- Shape 2: the poll-only spin loop → same refusal, same status.
   // (The trigger is main()-on-stack, not a park: this shape never parks.)
   await page.keyboard.type('/root/spinloop; echo RC2=$?\r');
-  await waitOut('RC2=', 60000);
+  await page.waitForFunction(() => /RC2=\d+/.test(window.__osOut || ''), { timeout: 60000, polling: 200 });
   out = await osOut();
   check('poll-only spin shape refused with exit 69', /RC2=69/.test(out),
     out.slice(-300));
