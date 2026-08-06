@@ -4,9 +4,13 @@
      /usr/opt/netsurf/res on a fat bake). A bare `netsurf` opens
      about:welcome, which the about fetcher redirects to
      resource:welcome.html — resolving here through the respaths (a user
-     copy at ~/.netsurf/welcome.html wins). File-only by design: every
-     link below is a file: or about: url the v1 browser can actually
-     fetch (no networking, no JavaScript). -->
+     copy at ~/.netsurf/welcome.html wins). Every capability claim below
+     is checked against the tree (#365): file:/data:/about: fetchers,
+     http(s) via gucos/httpfetch.c over the kernel HTTP transport (#182),
+     JavaScript on by default via Duktape (gucos/main.c set_defaults;
+     Choices `enable_javascript:0` is the off-switch), keys per
+     gucos_key in gucos/gui.c, .html openwith per packages/netsurf.json.
+     Keep this page and those facts in sync. -->
 <html>
 <head>
 <title>Welcome to gucOS</title>
@@ -31,12 +35,17 @@ kbd { font-family: monospace; background: #eeeeee; padding: 0 4px;
 <p>NetSurf &mdash; a real browser engine, compiled to WebAssembly, running in your OS-in-a-tab.</p>
 </div>
 <div id="page">
-<h2>Browse your files</h2>
-<p>This browser speaks <b>file:</b> and <b>data:</b> urls &mdash; no network, no scripts, just documents.</p>
+<h2>Browse files &mdash; and the network</h2>
+<p>This browser speaks <b>file:</b>, <b>data:</b>, <b>http:</b> and
+<b>https:</b> urls, and JavaScript is on (put
+<kbd>enable_javascript:0</kbd> in <kbd>~/.netsurf/Choices</kbd> to turn
+it off).</p>
 <table>
 <tr><td><a href="file:///root/">Your home folder</a></td>
     <td>directory listings are pages too</td></tr>
 </table>
+<p>There is no address bar: follow links, or open a url from a
+terminal &mdash; <kbd>netsurf https://example.com</kbd>.</p>
 <h2>Keys</h2>
 <table>
 <tr><td><kbd>Alt</kbd>+<kbd>&larr;</kbd> / <kbd>Alt</kbd>+<kbd>&rarr;</kbd></td><td>history back / forward</td></tr>

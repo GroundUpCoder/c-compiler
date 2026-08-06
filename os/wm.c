@@ -663,10 +663,16 @@ static uint32_t rgb(int r, int g, int b) {
  * The font-20 retune (folded into Phase D): CHROME_PPEM 20 with
  * DEFAULT_QUALITY grayscale AA — unhinted freetype at ppem 10 was the
  * grain/blur root cause (no hinter is vendored; at 20px AA is clean
- * without one), and the 1-bit threshold amplified it. This font is now
- * THE system font everywhere: it equals the gdi32 SYSTEM_FONT stock
- * (STOCK_FONT_PX 20), so wm chrome, menucore menus at every level,
- * user32 controls and the software center all render identically.
+ * without one), and the 1-bit threshold amplified it. Post-C2 (#282)
+ * this is an explicit MONO face and deliberately does NOT track the
+ * gdi32 UI stocks: SYSTEM_FONT flipped to sans on the C2 flag day, but
+ * chrome_font() names FIXED_PITCH "mono" outright, so the flip cannot
+ * reach wm chrome — that explicit request IS the proof of the "VT2
+ * chrome byte-identical across C2" acceptance. user32 controls and the
+ * software center follow the sans stocks now and render DIFFERENTLY
+ * from chrome by design; menucore still matches chrome because
+ * mc_set_font(chrome_font()) in main() pins the engine's MEASURE and
+ * DRAW paths to this exact font object.
  * Noto Sans Mono at ppem 20: advance 12px, caps 14px (CHROME_CAP),
  * ascent 22, descent 6. */
 #define CHROME_PPEM 20
@@ -1711,9 +1717,8 @@ static HDC wmmc_win_begin(MCWIN win, int *wOut, int *hOut) {
     HDC dc = __gdi_dc_wrap(sf->pixels, sf->w, sf->h, sf->pitch / 4);
     /* The ONE chrome font, selected explicitly (font-20 retune): nested
      * menu columns draw with the exact font object the taskbar/Start
-     * root/desktop use — no fall-through to the DC default (which is
-     * ALSO this font now that SYSTEM_FONT is 20px, but explicit beats
-     * coincidental). */
+     * root/desktop use — no fall-through to the DC default, which since
+     * C2 (#282) is the SYSTEM_FONT sans stock, not this mono face. */
     if (dc) SelectObject(dc, chrome_font());
     return dc;
 }

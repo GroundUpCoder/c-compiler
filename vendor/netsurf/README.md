@@ -2,8 +2,9 @@
 
 The complete NetSurf browser — core plus its seven support libraries —
 vendored for the gucOS toolchain (`compiler.js`).  This is the foundation
-for `/bin/netsurf` (file-only, no networking; see `todos/OS.md` and the
-netsurf lanes).  The whole constellation (~850 TUs) builds with compiler.js
+for `/bin/netsurf` (file:, data: and http(s): over the kernel HTTP
+transport since #182, JavaScript on via Duktape; see `todos/OS.md` and
+the netsurf lanes).  The whole constellation (~850 TUs) builds with compiler.js
 in ~57 s into a ~5.0 MB wasm and runs end-to-end:
 `node vendor/netsurf/smoke.mjs` builds the upstream **monkey** headless
 frontend and drives a real `file://` page through
@@ -86,7 +87,8 @@ netsurf core:
   own fallbacks for scandir/dirfd/unlinkat/fstatat/regex/utsname/mmap;
   `isascii`; `<strings.h>`.
 - `content/fetch.c` — `#ifdef WITH_CURL` around the one unconditional
-  curl include (file-only build).
+  curl include (upstream's curl fetcher stays excluded — gucOS
+  networking is `gucos/httpfetch.c`, #182).
 - `content/handlers/image/png.c` — `switch(setjmp(…))` →
   `if ((v = setjmp(…))) {} switch (v)`: compiler.js recognises setjmp
   only in if-condition form.

@@ -425,6 +425,21 @@ const pollChange = (sid, ref) => [
   `for i in $(seq 1 100); do wmctl shot ${sid} /root/poll.ppm; ` +
   `cmp -s /root/poll.ppm ${ref} || break; sleep 0.1; done`,
 ];
+/* Region-scoped settle (#173, the general seam 0386 §4.3 called for):
+ * two consecutive CROPPED shots equal. Scoping the predicate to the
+ * field band means the tick region's repaints cannot block it — the
+ * per-page finite-tick workaround stops being the only route to a
+ * settled sample. */
+const pollStableRegion = (sid, out, x, y, w, h) => [
+  `wmctl shot ${sid} ${out} ${x} ${y} ${w} ${h}`,
+  `for i in $(seq 1 100); do sleep 0.1; ` +
+  `wmctl shot ${sid} /root/pollr.ppm ${x} ${y} ${w} ${h}; ` +
+  `cmp -s /root/pollr.ppm ${out} && break; cp /root/pollr.ppm ${out}; done`,
+];
+/* The field band the ink asserts read (fieldInk: x 0..260, y 2..28),
+ * as a crop rect. */
+const FIELD_RECT = '0 0 260 28';
+const FIELD = FIELD_RECT.split(' ').map(Number);
 const sidOf = (v, title) => `${v}=$(wmctl list | grep "\t${title}$" | sed "s/[^0-9].*//")`;
 
 /* Type "abcdef" a key at a time, slowly enough that the ticking page gets
@@ -489,6 +504,13 @@ const out = driveBoot([
      `wmctl shot $ST /root/s${i + 1}.ppm && echo shot-s${i + 1}-ok`]),
   ...pollStable('$ST', '/root/x1.ppm'),
   'echo shot-x1-ok',
+  /* #173 exact-crop acceptance, on the settled STATIC page so the crop
+   * and the full frame are the same content: xc must be exactly the
+   * requested 260x28 region of x1. An off-surface rect must refuse
+   * loudly and write nothing. */
+  `wmctl shot $ST /root/xc.ppm ${FIELD_RECT} && echo shot-xc-ok`,
+  'wmctl shot $ST /root/none.ppm 5000 5000 10 10 || echo crop-empty-refused',
+  '[ ! -e /root/none.ppm ] && echo crop-no-file',
   'wmctl close $ST && wmctl wait nowin NsStatic 8000 && echo static-closed',
 
   'netsurf /root/ticky.html &',
@@ -500,11 +522,14 @@ const out = driveBoot([
     [`wmctl key $TK ${sc} ${ks}; sleep 0.25`,
      `wmctl shot $TK /root/k${i + 1}.ppm && echo shot-k${i + 1}-ok`]),
   'wmctl shot $TK /root/x2.ppm && echo shot-x2-ok',
-  /* the SETTLED shot: past the finite tick's end (25 x 300 ms), so the
-   * page has genuinely stopped re-boxing and the field shows its true
-   * final state.  x2 (immediate) stays diagnostic-only: an un-barriered
-   * sample can catch a mid-window render and must not gate. */
-  'sleep 6',
+  /* the SETTLED shot (#173): the field band region-settles WHILE the
+   * tick is still repainting below (typing ends ~4 s into the 7.5 s
+   * tick run) — the region predicate replaces the old 'sleep 6' that
+   * had to wait out the finite tick.  Safe here because every x3
+   * assert is band-scoped (fieldInk).  x2 (immediate) stays
+   * diagnostic-only: an un-barriered sample can catch a mid-window
+   * render and must not gate. */
+  ...pollStableRegion('$TK', '/root/xr1.ppm', ...FIELD),
   'wmctl shot $TK /root/x3.ppm && echo shot-x3-ok',
   'wmctl close $TK && wmctl wait nowin NsTicky 8000 && echo ticky-closed',
 
@@ -517,7 +542,8 @@ const out = driveBoot([
   'wmctl click $TF 60 12',
   ...TYPED.map(([sc, ks]) => `wmctl key $TF ${sc} ${ks}; sleep 0.02`),
   'wmctl shot $TF /root/x4.ppm && echo shot-x4-ok',
-  'sleep 8',                      /* past the finite tick's end */
+  /* #173 region settle, as above — x5's asserts are band-scoped too */
+  ...pollStableRegion('$TF', '/root/xr2.ppm', ...FIELD),
   'wmctl shot $TF /root/x5.ppm && echo shot-x5-ok',
   'wmctl close $TF && wmctl wait nowin NsTicky 8000 && echo tickyfast-closed',
 
@@ -534,7 +560,10 @@ const out = driveBoot([
     [`wmctl key $BT ${sc} ${ks}; sleep 0.25`,
      `wmctl shot $BT /root/tk${i + 1}.ppm && echo shot-tk${i + 1}-ok`]),
   'wmctl shot $BT /root/bt1.ppm && echo shot-bt1-ok',
-  'sleep 6',                      /* past the finite tick's end: TRUE settle */
+  'sleep 6',                      /* past the finite tick's end: TRUE settle
+                                     * (kept, not a #173 region settle: this
+                                     * leg's vprobe reads whole-frame mirror
+                                     * rows with unpinned geometry) */
   'wmctl shot $BT /root/bt2.ppm && echo shot-bt2-ok',
   'wmctl close $BT && wmctl wait nowin NsBigT 8000 && echo bigt-closed',
 
@@ -547,7 +576,10 @@ const out = driveBoot([
   'wmctl click $BU 60 12',
   ...TYPE_KEYS('$BU'),
   'wmctl shot $BU /root/bu1.ppm && echo shot-bu1-ok',
-  'sleep 6',                      /* past the finite tick's end: TRUE settle */
+  'sleep 6',                      /* past the finite tick's end: TRUE settle
+                                     * (kept, not a #173 region settle: this
+                                     * leg's vprobe reads whole-frame mirror
+                                     * rows with unpinned geometry) */
   'wmctl shot $BU /root/bu2.ppm && echo shot-bu2-ok',
   'wmctl close $BU && wmctl wait nowin NsBigT 8000 && echo bigt2-closed',
 
@@ -636,7 +668,7 @@ const out = driveBoot([
 ], { image, timeout: 540000, maxBuffer: 64 * 1024 * 1024 }).stdout;
 
 const NAMES = ['m1', 'm2', 'r1', 'r2', 'r3', 'r4', 't1', 't2', 't3',
-               's1', 's2', 's3', 's4', 's5', 's6', 'x1',
+               's1', 's2', 's3', 's4', 's5', 's6', 'x1', 'xc',
                'k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'x2', 'x3',
                'x4', 'x5',
                'tk1', 'tk2', 'tk3', 'tk4', 'tk5', 'tk6',
@@ -645,6 +677,8 @@ const NAMES = ['m1', 'm2', 'r1', 'r2', 'r3', 'r4', 't1', 't2', 't3',
 for (const tag of NAMES) {
   check(`shot ${tag} taken`, out.includes(`shot-${tag}-ok`));
 }
+check('#173: empty crop refused loudly', out.includes('crop-empty-refused'));
+check('#173: refused crop wrote no file', out.includes('crop-no-file'));
 for (const tag of ['stopwatch', 'ruler', 'toggle', 'static', 'ticky',
                    'tickyfast', 'bigt', 'bigt2', 'bigc1', 'bigc2',
                    'gadc', 'gadt']) {
@@ -744,6 +778,26 @@ const shots = parsePPMs(back.stdout, NAMES);
   const tickyInk = fieldInk(shots.x2);
   check('typing: the static control page really accepted the keystrokes',
         staticInk > 150, `ink in the field: ${staticInk}`);
+
+  /* #173: the cropped shot is EXACTLY the requested region of the full
+   * settled static frame — dimensions and bytes (same content: the page
+   * is static and x1 was settled first). */
+  {
+    const c = shots.xc;
+    check('#173: crop dims are exactly the requested 260x28',
+          c.w === 260 && c.h === 28, `${c.w}x${c.h}`);
+    let diff = 0;
+    for (let y = 0; y < 28; y++) {
+      for (let x = 0; x < 260; x++) {
+        const i = (y * shots.x1.w + x) * 3, j = (y * c.w + x) * 3;
+        if (shots.x1.data[i] !== c.data[j] ||
+            shots.x1.data[i + 1] !== c.data[j + 1] ||
+            shots.x1.data[i + 2] !== c.data[j + 2]) diff++;
+      }
+    }
+    check('#173: crop bytes equal the full-frame region', diff === 0,
+          `diff=${diff}`);
+  }
 
   /* ---- regression readout (todos/0386): every number printed unconditionally ---- */
   const inks = (tags) => tags.map((t) => fieldInk(shots[t]));
