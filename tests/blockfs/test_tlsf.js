@@ -334,4 +334,4 @@ console.log('--- TLSF Tests ---');
 console.log('Passed: ' + passed);
 console.log('Failed: ' + failed);
 
-if (failed > 0) process.exit(1);
+if (failed > 0) process.exitCode = 1;

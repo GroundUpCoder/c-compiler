@@ -126,4 +126,4 @@ eq(rfile(v4, '/many/f74'), 'payload-74', 'grown-table file intact');
 }
 
 console.log(`\nmigrate: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+process.exitCode = failed ? 1 : 0;

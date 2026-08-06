@@ -51,6 +51,27 @@ assertMemberRegistry({
   exclude: [], label: 'tests/blockfs/run.js',
 });
 
+// #549: member files must exit NATURALLY (`process.exitCode = …`), never via
+// `process.exit()`. process.exit()'s shortcut teardown joins the V8 worker
+// pool while a concurrent sparkplug/maglev compile job can be parked in
+// CollectionBarrier::AwaitCollectionBackground waiting on a main-thread GC
+// that will never come (nodejs/node#54918, unfixed as of v25.8.2) — the file
+// then hangs AFTER printing its pass summary and the runner records a 600 s
+// timeout, turning a green gate red. Measured here: 4 hangs in ~1700 spawns
+// of test_mounts.js with process.exit, 0 in 19200 without (logs/2026-08-07).
+// Natural exit disposes the isolate first, which cancels those jobs safely.
+const fs = require('fs');
+for (const t of tests) {
+  const src = fs.readFileSync(path.join(__dirname, t.file), 'utf8');
+  if (/\bprocess\.exit\s*\(/.test(src)) {
+    process.stderr.write(
+      `tests/blockfs/run.js: ${t.file} calls process.exit() — use ` +
+      `\`process.exitCode = …\` and exit naturally (#549: process.exit can ` +
+      `deadlock Node's platform shutdown and read as a 600s timeout).\n`);
+    process.exit(2);
+  }
+}
+
 runSuite(tests, {
   name: 'blockfs suite',
   dir: __dirname,

@@ -95,4 +95,4 @@ eq(readFile(bfs, '/big.bin'), big, 'large file survives re-mount');
 eq(readFile(bfs, '/f79.txt'), 'file-79-payload', 'grown-table file survives re-mount');
 
 console.log(`\nv4: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+process.exitCode = failed ? 1 : 0;

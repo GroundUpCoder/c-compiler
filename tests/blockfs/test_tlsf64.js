@@ -321,4 +321,4 @@ function fuzz(seed, ops, reloadEvery) {
 }
 
 console.log(`\nTLSF64: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+process.exitCode = failed ? 1 : 0;
