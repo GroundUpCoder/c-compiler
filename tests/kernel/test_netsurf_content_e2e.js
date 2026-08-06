@@ -27,6 +27,13 @@
 //     and the control.json declares desktop eligibility (#417; the
 //     Desktop icon itself now arrives via install/desktop-defaults,
 //     not an image.json user seed).
+//   - big.html: a 3200x1400 PNG (17.1 MB decoded — above the OLD 3 MB
+//     image-cache ceiling, and above the #176 16 MB one) renders AT
+//     LOAD, asserted on ink. #176's premise check proved the cache
+//     limit never gates rendering (it gates retention only; decode is
+//     lazy and unconditional at redraw) — this leg pins that semantic
+//     AND the todos/0410 symptom class (a late-completing large image
+//     reaching a DONE document must still reflow to nonzero size).
 //
 // Run: node tests/kernel/test_netsurf_content_e2e.js
 'use strict';
@@ -64,8 +71,60 @@ driveBoot('true', { image });
   for (const f of ['red.gif', 'green.bmp', 'blue.ico', 'orange.png', 'teal.jpg']) {
     plant(path.join('img', f), '/root/img/' + f);
   }
+  /* the #176 big image: generated, not committed (72 KB file, 17.1 MB
+   * decoded). Orange field with a blue stripe every 200 px so a partial
+   * or garbage decode cannot fake the per-colour ink counts. */
+  const put = (dst, bytes) => {
+    const fd = rfs.open(dst, W, 0o644);
+    rfs.write(fd, bytes, bytes.length);
+    rfs.close(fd);
+  };
+  put('/root/big.png', makeBigPNG(3200, 1400));
+  put('/root/big.html', Buffer.from(
+    '<html><head><title>BigImg</title></head><body style="margin:0">' +
+    '<img src="big.png"></body></html>'));
   rootStore.flush();
   rootStore.close();
+}
+
+/* minimal PNG encoder (8-bit RGB, filter-0 rows, one IDAT) */
+function makeBigPNG(w, h) {
+  const zlib = require('zlib');
+  const table = new Int32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    table[n] = c;
+  }
+  const crc32 = (buf) => {
+    let c = 0xffffffff;
+    for (let i = 0; i < buf.length; i++) c = table[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const td = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(td));
+    return Buffer.concat([len, td, crc]);
+  };
+  const raw = Buffer.alloc(h * (1 + w * 3));
+  for (let y = 0; y < h; y++) {
+    const row = y * (1 + w * 3);
+    for (let x = 0; x < w; x++) {
+      const blue = Math.floor(x / 200) % 2;
+      raw[row + 1 + x * 3] = blue ? 0 : 255;
+      raw[row + 2 + x * 3] = blue ? 0 : 128;
+      raw[row + 3 + x * 3] = blue ? 255 : 0;
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8; ihdr[9] = 2; /* 8-bit truecolour */
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
 }
 
 /* PPM helpers (the netsurf-e2e pattern) */
@@ -140,19 +199,20 @@ const out = driveBoot([
   ...leg(`netsurf '${DATA_URL}'`, 'DataDoc', '/root/d.ppm', 'data'),
   ...leg('netsurf /root/no-such-page.html', ERR_TITLE, '/root/e.ppm', 'err'),
   ...leg('netsurf', 'Welcome to gucOS', '/root/w.ppm', 'welcome'),
+  ...leg('netsurf /root/big.html', 'BigImg', '/root/b.ppm', 'big'),
 ], { image, timeout: 420000, maxBuffer: 64 * 1024 * 1024 }).stdout;
 
 check('folded app: /usr/bin/netsurf -> /usr/opt/netsurf/netsurf',
       out.includes('/usr/opt/netsurf/netsurf') && out.includes('LINK-OK'));
 check('control.json declares desktop eligibility (design §5)',
       out.includes('DESK-ELIGIBLE'));
-for (const tag of ['images', 'data', 'err', 'welcome']) {
+for (const tag of ['images', 'data', 'err', 'welcome', 'big']) {
   check(`${tag} rendered + shot`, out.includes(`shot-${tag}-ok`));
   check(`${tag} window closed`, out.includes(`closed-${tag}-ok`));
 }
 
 /* ---- session B: read the shots back ---- */
-const NAMES = ['i', 'd', 'e', 'w'];
+const NAMES = ['i', 'd', 'e', 'w', 'b'];
 const back = driveBoot('cat ' + NAMES.map(n => '/root/' + n + '.ppm').join(' ') + '\n',
   { image, encoding: null, maxBuffer: 64 * 1024 * 1024 });
 const shots = parsePPMs(back.stdout, NAMES);
@@ -218,6 +278,23 @@ const shots = parsePPMs(back.stdout, NAMES);
                            744, 10, 784, 46);
   check('w: about:logo decoded (non-navy ink top-right)', logo > 40,
         `logo=${logo}`);
+}
+
+/* b: the #176 big image — 17.1 MB decoded renders AT LOAD. The 800px
+ * viewport spans exactly 4 orange and 4 blue 200px stripes, so both
+ * counts must be large and comparable; a blank/white or partial decode
+ * fails both. Counted over the client area above the bottom chrome. */
+{
+  const s = shots.b;
+  const orange = regionCount(s, (p) => near(p, [255, 128, 0], 12),
+                             0, 0, s.w, s.h - 18);
+  const blue = regionCount(s, (p) => near(p, [0, 0, 255], 12),
+                           0, 0, s.w, s.h - 18);
+  const area = s.w * (s.h - 18);
+  check('b: big-image orange stripes cover ~half', orange > area * 0.4,
+        `orange=${orange}/${area}`);
+  check('b: big-image blue stripes cover ~half', blue > area * 0.4,
+        `blue=${blue}/${area}`);
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

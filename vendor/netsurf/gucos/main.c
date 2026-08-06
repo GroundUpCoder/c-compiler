@@ -219,6 +219,27 @@ static nserror set_defaults(struct nsoption_s *defaults)
 	 * on — so flipping it changes page layout, not just the popup. */
 	nsoption_set_bool(core_select_menu, true);
 
+	/* Size the memory cache for the gucOS target instead of inheriting
+	 * upstream's 2010-era desktop default (12 MB core -> 3 MB image
+	 * cache after desktop/netsurf.c's /4 split).  #176's premise check
+	 * measured the TRUE semantics of this ceiling first: it never gates
+	 * rendering — image_cache_redraw() decodes lazily with no size
+	 * refusal, so a 17 MB decoded PNG renders at load even under the
+	 * 3 MB ceiling (the "large image never renders" sighting was the
+	 * todos/0410 post-DONE-reformat bug, fixed separately).  What the
+	 * ceiling DOES gate is retention: any bitmap set that exceeds it is
+	 * re-decoded on every expose/scroll after the ~10 s background
+	 * clean, so one modern image blows the whole cache and browsing
+	 * image-heavy pages (real since #182 brought networking) churns
+	 * full re-decodes.  64 MB core -> 16 MB image cache retains a
+	 * screenful of large images.  Cost: a ceiling, not a preallocation
+	 * — idle RSS is unchanged, and the worst case (+52 MB over the old
+	 * config, only while content actually fills it) is comfortably
+	 * inside the browser process's growable wasm heap.  Same override
+	 * semantics as enable_javascript above: Choices
+	 * `memory_cache_size:N` and the command line are read over it. */
+	nsoption_set_int(memory_cache_size, 64 * 1024 * 1024);
+
 	return NSERROR_OK;
 }
 
