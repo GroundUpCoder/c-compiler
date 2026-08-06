@@ -73,6 +73,63 @@ ratio, synthetic `device.destroy()` → recovery with pixel-verified repaint).
 transport; shm flips are unbounded by design (8229/s measured, compositor
 still samples at its own rAF).
 
+## What #551 changes about #484's contract — all three places, one statement
+
+#484's contract was "at most one bitmap ship per vsync tick, and the freshest
+frame is never lost: held frames flush unconditionally at every park seam."
+The second half is what #551 retires — the park seam recurs hundreds of times
+a second in a `SDL_Delay(1)` loop, so the unconditional flush made
+ships == presents and burned the blocked-worker budget. The contract change
+lands in three places, deliberately:
+
+1. **`host.js` `flushPresent`** — the mode split. 'gate' (poll pump) is
+   unchanged; 'force' keeps the unconditional flush but ONLY for real parks
+   (≥15 ms timeout or indefinite — self-limiting, and the parking app may
+   never present again, so its freshest frame must land); 'park'
+   (short-timeout parks, the delay-loop shape) keeps the vsync gate with a
+   17 ms wall-clock escape so stalled ticks (parked compositor, hidden tab)
+   still get the ship whose damage re-wakes them. Freshest-frame-never-lost
+   still holds — the bound moved from "immediately at any park" to "within
+   one tick / 17 ms".
+2. **`tests/host/test_gpu_present_clamp.js`** — re-cut to that contract
+   (12 → 14 assertions). The three park legs re-point from
+   `__sdl_pump_wait(0)` to `(1000)` (a REAL park) with predicates preserved;
+   two NEW legs pin the short-park clamp: held within the tick + 17 ms wall
+   window (self-measured trial, the 7b pattern, so it cannot flake under
+   load) and shipped once the tick advances.
+3. **`tests/browser/os-pollball.mjs`** — the present-rate leg LOST ITS
+   CEILING: `rate > 15 && rate < 300` became `rate > 15`. Stated plainly:
+   this is a weakened assertion, on purpose. The 15..300/s band measured the
+   GPU transport's ship rate, a resource that no longer exists on this path —
+   OS SDL_Render* apps now flip the shm SAB, where a poll-only loop runs at
+   its own pace by design (8,229 flips/s measured; the compositor still
+   samples seq-gated at its own rAF). The floor is load-safe per #444: a
+   lower bound only slackens in the accepted direction. The ship-rate
+   ceiling did not vanish from the estate — it moved to
+   `os-devloss.mjs`, which asserts the surviving gpu transport (webgpu.h)
+   at ships ≤ ~1 per composited frame AND that renderer apps ship zero.
+
+## The software-rasterization cost, measured
+
+The A4-era GPU renderer in OS workers was UNSOUND, not merely expensive —
+a blocked worker's GPU pixels cannot leave the worker at all (no sync
+readback, no sync canvas snapshot, and `transferToImageBitmap` carries the
+~16.7k lifetime budget), so no amount of clamping makes it correct. What
+correctness costs, same app, same machine, same 800×600 scene (Keep Up,
+poll-only, rate measured at the kernel's frameSeq):
+
+| tier | rate | per-frame |
+|---|---|---|
+| GPU renderer encode (probe E2b, pre-#551) | ~1,870/s | ~0.53 ms |
+| software rasterize + shm flip (this branch) | 953/s | ~1.05 ms |
+
+So software costs ~0.5 ms/frame more at 800×600 — ~6% of a 60 fps frame
+budget — and a paced game loop (the actual shipped shape; Keep Up runs
+~160 presents/s delay-bound) is completely unaffected: both tiers idle
+through the delay. pollball at 320×240 does 8,229 flips/s (~0.12 ms/frame).
+The GPU number above bought a dead desktop at ~103 s; the software number
+is the flagship path now and runs indefinitely.
+
 ## Residual + follow-ups (filed on #551)
 
 - **webgpu.h apps (gpubox class) still burn budget** at ≤60 ships/s → freeze
