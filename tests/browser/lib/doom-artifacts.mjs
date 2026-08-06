@@ -18,6 +18,8 @@
 // never a stale one look fresh.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { checkArtifactFreshness } from './fresh-artifacts.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TB   = path.resolve(__dirname, '..');            // tests/browser
@@ -39,4 +41,22 @@ export function doomFreshnessSpec() {
     ],
     rebuild: 'node tests/browser/build-doom.mjs',
   }];
+}
+
+// The SUITE-facing freshness form (ticket #543). The manual drivers REFUSE a
+// stale doom.html (#466 — a human measuring must be told the artifact predates
+// their edit), but a suite member must not go red for a gitignored build
+// product being absent or stale: it REBUILDS instead, so the suite always
+// tests the current tree's emitted page. Measured cost of the rebuild: ~1.3s.
+// Still fails loud if the rebuild itself fails or cannot make it fresh (a
+// missing INPUT survives a rebuild and stays a hard error).
+export function ensureFreshDoomPage() {
+  const spec = doomFreshnessSpec();
+  let problems = checkArtifactFreshness(spec, { cwd: ROOT });
+  if (!problems.length) return;
+  console.log('[doompage] rebuilding doom.html:\n  ' + problems.join('\n  '));
+  const r = spawnSync(process.execPath, [path.join(TB, 'build-doom.mjs')], { stdio: 'inherit' });
+  if (r.status !== 0) throw new Error(`build-doom.mjs failed (exit ${r.status})`);
+  problems = checkArtifactFreshness(spec, { cwd: ROOT });
+  if (problems.length) throw new Error('doom.html still stale after rebuild:\n' + problems.join('\n'));
 }
