@@ -67,9 +67,20 @@ int main() {
   printf("realloc chain: PASS\n");
 
   // === Edge cases ===
-  if (realloc(NULL, 0) != NULL) { printf("FAIL: realloc(NULL,0)\n"); return 1; }
+  // Zero-size contract (#554): realloc(NULL,0) == malloc(0) — unique
+  // non-NULL on every mainstream libc. realloc(p,0) keeps the block and
+  // returns p (musl/BSD/Darwin semantics; NOT glibc's free-and-NULL — C23
+  // made that corner UB, and NULL ⟺ failure is this libc's uniform rule).
+  char *z0 = realloc(NULL, 0);
+  if (!z0) { printf("FAIL: realloc(NULL,0)\n"); return 1; }
   char *q = malloc(32);
-  if (realloc(q, 0) != NULL) { printf("FAIL: realloc(p,0)\n"); return 1; }
+  if (!q) { printf("FAIL: malloc(32)\n"); return 1; }
+  char *q0 = realloc(q, 0);
+  if (q0 != q) { printf("FAIL: realloc(p,0) should keep pointer\n"); return 1; }
+  char *q1 = realloc(q0, 16);  // the kept block regrows like any other
+  if (!q1) { printf("FAIL: regrow after realloc(p,0)\n"); return 1; }
+  free(q1);
+  free(z0);
   char *r = realloc(NULL, 48);
   if (!r) { printf("FAIL: realloc(NULL,n)\n"); return 1; }
   char *r2 = realloc(r, 16);   // shrink => same pointer
