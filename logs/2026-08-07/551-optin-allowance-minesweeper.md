@@ -133,3 +133,18 @@ park import Suspending makes suspension real, and then drainInput's frame-
 loop call site and the wgpu callback exports become reachable mid-call —
 that re-derivation is the follow-up ticket's burden, recorded here so it
 is not rediscovered.
+
+## Post-script: the gcode system-prompt line is REVERTED (jku ruling)
+
+Surface 3 above (the hardcoded `system_prompt` literal in os/gcode/gcode.c)
+is withdrawn on jku's explicit instruction — the SDL rule should reach
+gcode as CONTENT through the doc mechanism #530 adds (GCODE.md support),
+not as a string edit. Independently, the string edit was a measured
+regression: gcode hashes cfg->system_prompt into every session record and
+recomputes on resume, so changing the literal made EVERY existing session
+print "resumed system prompt differs". os/gcode/gcode.c is byte-identical
+to main again (verified: git diff origin/main -- os/gcode/gcode.c empty);
+no test coupled to the line (git grep system_prompt -- tests/ = zero,
+positive-controlled). Discoverability keeps three surfaces: the refusal
+message itself, the baked /usr/share/doc/sdl-gucos.md it names, and
+todos/SDL3.md; the prevention surface moves to #530.

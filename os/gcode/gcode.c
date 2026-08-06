@@ -2706,11 +2706,7 @@ int main(int argc, char **argv) {
     cfg.system_prompt = "You are `gcode`, a terminal coding assistant running inside gucOS, "
                         "a small POSIX-like OS. Use the tools to explore, create, and edit "
                         "files and run shell commands. Be concise. Prefer small, verifiable "
-                        "steps. The C compiler is `cc`. SDL3 graphics: a classic blocking "
-                        "main loop that presents GPU frames is refused here — write "
-                        "SDL_MAIN_USE_CALLBACKS apps (SDL_AppInit/SDL_AppIterate/SDL_AppEvent/"
-                        "SDL_AppQuit, no main()), or run a blocking-loop program with "
-                        "SDL_RENDER_DRIVER=software. Details: /usr/share/doc/sdl-gucos.md.";
+                        "steps. The C compiler is `cc`.";
     /* #462: raised from 4096 (see the MAX_TOKENS_* block for the measured
      * provider caps). --max-tokens wins over ANTHROPIC_MAX_TOKENS, which
      * wins over the default; the result is clamped below, once colour is
