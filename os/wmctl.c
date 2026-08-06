@@ -84,7 +84,10 @@
  *                                     No SID: the routing decides
  *   wmctl skeydown|skeyup SCANCODE [KEYSYM [MOD]]   one edge only (a held
  *                                     modifier, an asymmetric swallow)
- *   wmctl shot SID|screen [FILE]               PPM (P6) to FILE or stdout
+ *   wmctl shot SID|screen [FILE [X Y W H]]     PPM (P6) to FILE or stdout;
+ *                                     the optional rect (#173) crops to a
+ *                                     surface region — the region-scoped
+ *                                     settle for never-idle pages
  *   wmctl thumb SID [MAXW MAXH] [FILE]         downscaled window thumbnail
  *                                     (todos/0063 Aero Peek; default 96x72
  *                                     box; aspect-fit, never upscaled), PPM
@@ -185,7 +188,7 @@ static int usage(void) {
         "       wmctl sdrag X1 Y1 X2 Y2 [BUTTON]\n"
         "       wmctl skey SCANCODE [KEYSYM [MOD]]\n"
         "       wmctl skeydown|skeyup SCANCODE [KEYSYM [MOD]]\n"
-        "       wmctl shot SID|screen [FILE]\n"
+        "       wmctl shot SID|screen [FILE [X Y W H]]\n"
         "       wmctl thumb SID [MAXW MAXH] [FILE]\n"
         "       wmctl glass 0|1\n"
         "       wmctl tree\n"
@@ -585,23 +588,48 @@ static int do_list(int fd) {
 }
 
 /* Read an R_SHOT payload (sid, w, h; then w*h*4 rgba) and write it as PPM
- * (P6, alpha dropped) — shared by shot and thumb (todos/0063). */
-static int shot_to_ppm(int fd, const char *file) {
+ * (P6, alpha dropped) — shared by shot and thumb (todos/0063).
+ * crop (#173) is NULL or {X,Y,W,H} in surface pixels: the reply always
+ * carries the FULL surface (no kernel/WMP change — the buffer is already
+ * whole in userspace here), the crop selects the rows/columns written.
+ * The rect is clamped to the surface; a clamp-to-empty is a loud error,
+ * never a 0x0 PPM. Region-scoped `cmp -s` over two such crops is the
+ * settle predicate for pages whose other regions never go idle. */
+static int shot_to_ppm(int fd, const char *file, const int32_t *crop) {
     int32_t head[3];
     if (wmp_read_all(fd, head, 12) != 0) return fail("short reply");
     int w = head[1], hh = head[2];
     uint8_t *rgba = (uint8_t *)malloc((size_t)w * hh * 4);
     if (!rgba || wmp_read_all(fd, rgba, w * hh * 4) != 0) return fail("short pixels");
+    int cx = 0, cy = 0, cw = w, ch = hh;
+    if (crop) {
+        cx = crop[0] < 0 ? 0 : crop[0];
+        cy = crop[1] < 0 ? 0 : crop[1];
+        int x1 = crop[0] + crop[2], y1 = crop[1] + crop[3];
+        if (x1 > w) x1 = w;
+        if (y1 > hh) y1 = hh;
+        cw = x1 - cx;
+        ch = y1 - cy;
+        if (cw <= 0 || ch <= 0) {
+            free(rgba);
+            fprintf(stderr, "wmctl: shot: crop %dx%d+%d+%d is empty on the "
+                    "%dx%d surface\n", crop[2], crop[3], crop[0], crop[1], w, hh);
+            return 1;
+        }
+    }
     FILE *out = file ? fopen(file, "wb") : stdout;
-    if (!out) return fail("cannot open output file");
-    fprintf(out, "P6\n%d %d\n255\n", w, hh);
-    for (int i = 0; i < w * hh; i++) fwrite(rgba + i * 4, 1, 3, out);   /* drop alpha */
+    if (!out) { free(rgba); return fail("cannot open output file"); }
+    fprintf(out, "P6\n%d %d\n255\n", cw, ch);
+    for (int y = cy; y < cy + ch; y++)
+        for (int x = cx; x < cx + cw; x++)
+            fwrite(rgba + ((size_t)y * w + x) * 4, 1, 3, out);   /* drop alpha */
     if (file) fclose(out);
     free(rgba);
     return 0;
 }
 
-static int do_shot(int fd, const char *what, const char *file) {
+static int do_shot(int fd, const char *what, const char *file,
+                   const int32_t *crop) {
     int screen = strcmp(what, "screen") == 0;
     int32_t a[1] = { screen ? 0 : need_i32("shot", "SID", what) };
     wmp_hdr h;
@@ -612,7 +640,7 @@ static int do_shot(int fd, const char *what, const char *file) {
         if (wmp_consume_err(fd, &h) == 0) errno = EIO;   /* unexpected type */
         return failop("shot");
     }
-    return shot_to_ppm(fd, file);
+    return shot_to_ppm(fd, file, crop);
 }
 
 /* Aero Peek thumbnail (todos/0063): a downscaled window as PPM. */
@@ -625,7 +653,7 @@ static int do_thumb(int fd, int32_t sid, int32_t mw, int32_t mh, const char *fil
         if (wmp_consume_err(fd, &h) == 0) errno = EIO;   /* unexpected type */
         return failop("thumb");
     }
-    return shot_to_ppm(fd, file);
+    return shot_to_ppm(fd, file, NULL);
 }
 
 int main(int argc, char **argv) {
@@ -674,7 +702,15 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(cmd, "shot")) {
         if (argc < 3) return usage();
-        return do_shot(fd, argv[2], argc > 3 ? argv[3] : NULL);
+        int32_t crop[4];
+        if (argc > 4) {                 /* FILE X Y W H (#173) — all four */
+            if (argc != 8) return usage();
+            static const char *cn[4] = { "X", "Y", "W", "H" };
+            for (int i = 0; i < 4; i++)
+                crop[i] = need_i32("shot", cn[i], argv[4 + i]);
+        }
+        return do_shot(fd, argv[2], argc > 3 ? argv[3] : NULL,
+                       argc > 4 ? crop : NULL);
     }
     if (!strcmp(cmd, "cycle")) {        /* window cycling (todos/0032) */
         int32_t a[1] = { argc > 2 ? need_i32("cycle", "DIR", argv[2]) : 1 };
