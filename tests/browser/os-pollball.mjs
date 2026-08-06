@@ -1,25 +1,28 @@
-// SDL_Renderer-in-OS acceptance (ticket #484, transport re-cut by #551):
-// boot the reference OS page in headless Chromium and run
-// /usr/local/bin/pollball — the GAMEDEV-EPIC repro, a poll-only
-// SDL_Renderer bouncing-ball loop with NO SDL_Delay and NO SDL_WaitEvent
-// anywhere (the most common naive game main loop).
+// SDL_Renderer-in-OS acceptance (ticket #484; re-cut twice by #551): boot
+// the reference OS page in headless Chromium and run
+// /usr/local/bin/pollball — since #551 the REFERENCE SDL_MAIN_USE_CALLBACKS
+// app, an SDL_Renderer bouncing ball on SDL3's callback main loop, riding
+// the restored GPU renderer tier.
 //
-// History: unclamped on the GPU transport this loop presented a fresh
-// ~300KB GPU ImageBitmap per iteration (~8,000/s measured headless) and
-// killed the browser GPU process — #484 clamped the shipping. #551 then
-// measured that Chromium budgets a NEVER-YIELDING worker ~16.7k lifetime
+// History: pollball's original poll-only blocking loop presented a fresh
+// GPU ImageBitmap per iteration (~8,000/s measured headless) and killed
+// the browser GPU process — #484 clamped the shipping. #551 then measured
+// that Chromium budgets a NEVER-YIELDING worker a finite lifetime of
 // transferToImageBitmap ships at ANY rate (the recycle tasks can only run
-// on the producer's event loop), so a clamped 60/s still died in ~4.6 min
-// — OS SDL_Render* apps now rasterize in software and flip into the
-// window's shm SAB: zero GPU objects per present, the wall unreachable,
-// the same tier every headless kernel e2e runs. The app must:
-//   - composite and visibly ANIMATE through the shm path
+// on the producer's event loop), so even clamped ships died in minutes —
+// blocking-loop GPU presents are now REFUSED outright (that acceptance is
+// os-loopguard.mjs, which carries the old blocking shapes as fixtures),
+// and pollball demonstrates the sanctioned model: main() returns, the
+// host paces SDL_AppIterate per composited frame, the worker yields
+// between frames, and every shipped bitmap is recyclable. The app must:
+//   - composite and visibly ANIMATE through the gpu transport
 //   - present continuously as observed BY THE KERNEL: `wmctl seq SID`
-//     advances (shm flips bump WMSH_SEQ per present; there is no GPU
-//     resource behind them, so the rate is deliberately UNBOUNDED — the
-//     old 15..300/s clamp bound measured the retired GPU transport)
+//     advances (_wmFrame bumps the same header seq the shm path uses),
+//     and the RATE sits in the vsync-clamped band — the #484 ceiling is
+//     BACK, because the GPU transport is back: a callback app presents
+//     once per composited frame, never free-runs
 //   - stay responsive: the title-bar close request (WMEV_QUIT via wmctl
-//     close) reaches SDL_PollEvent (#485's pump) and the app quits cleanly
+//     close) reaches SDL_AppEvent and the app quits cleanly
 //   - leave the OS alive: desktop restored, shell answering
 //
 // Usage: node os-pollball.mjs
@@ -83,7 +86,7 @@ try {
     if (Date.now() - t0 > 90000) throw new Error(`pollball field never composited; last ${corner}`);
     await new Promise(r => setTimeout(r, 250));
   }
-  check('pollball composited (SDL_Renderer frame through the shm transport)', true);
+  check('pollball composited (SDL_Renderer frame through the gpu transport)', true);
 
   // Animation: the ball crosses the middle band at ~140px/s — time-separated
   // probe trios must differ while the field corner stays the clear color.
@@ -99,15 +102,16 @@ try {
     const b = await probe();
     animated = b.some((v, j) => Math.abs(v - a[j]) > 12);
   }
-  check('ball animates (poll-only loop is live under the clamp)', animated);
+  check('ball animates (callback loop is live)', animated);
 
-  // ---- presents reach the kernel continuously (shm transport, #551) ----
-  // frameSeq (wmctl seq) counts flips the app presented into its SAB; a
-  // poll-only loop runs it at its own pace (no GPU resource behind a flip,
-  // so no upper bound is asserted — the retired GPU transport's 15..300/s
-  // clamp band measured a resource that no longer exists on this path).
-  // The floor is load-safe (#444: a lower bound only slackens under load
-  // in the failing direction we accept, never manufactures a green).
+  // ---- presents reach the kernel continuously (gpu transport, #551) ----
+  // frameSeq (wmctl seq) counts frames the kernel received (_wmFrame bumps
+  // the same header word shm flips do). A callback app presents once per
+  // composited frame, so the band is the #484 clamp band again: the floor
+  // is load-safe (#444 — load only lowers a frame rate), and the ceiling
+  // is physical (the producer clamp holds ships to ~1 per vsync tick /
+  // 125/s on the 8ms wall fallback — a free-running rate here means the
+  // clamp or the callback pacing regressed).
   await setVt(1);
   await page.keyboard.type('SID=$(wmctl list | grep "pollball$" | sed "s/[^0-9].*//"); wmctl wait seq $SID 60 15000 && echo SEQ""OK\r');
   await page.waitForFunction(() => window.__osOut.includes('SEQOK'), { timeout: 20000, polling: 100 });
@@ -123,13 +127,13 @@ try {
   const t2 = Date.now();
   const r2 = parseInt((await page.evaluate(() => window.__osOut)).match(/R2=(\d+)/)[1], 10);
   const rate = (r2 - r1) * 1000 / (t2 - t1);
-  check(`poll-only loop keeps presenting (${rate.toFixed(0)}/s over ${t2 - t1}ms, seq ${r1}->${r2})`,
-    rate > 15, rate.toFixed(1) + '/s');
+  check(`callback loop presents at the vsync-clamped cadence (${rate.toFixed(0)}/s over ${t2 - t1}ms, seq ${r1}->${r2})`,
+    rate > 15 && rate < 300, rate.toFixed(1) + '/s');
 
-  // Close box -> WMEV_QUIT -> SDL_PollEvent (#485's pump) -> clean quit.
+  // Close box -> WMEV_QUIT -> SDL_AppEvent (the driver polls) -> clean quit.
   await page.keyboard.type('wmctl close $SID\r');
   await page.waitForFunction(() => window.__osOut.includes('pollball: quit'), { timeout: 20000, polling: 200 });
-  check('close request quit the poll-only loop cleanly (pollball: quit)', true);
+  check('close request quit the callback loop cleanly (pollball: quit)', true);
   await setVt(2);
   const t3 = Date.now();
   for (;;) {
@@ -140,13 +144,13 @@ try {
   }
   check('desktop restored after quit', true);
 
-  // OS alive after minutes-scale flooding pressure: shell still answers.
+  // OS alive after the run: shell still answers.
   await setVt(1);
   // Split needle (the 0089 echo trap): the echo of the TYPED line must not
   // satisfy the wait — assemble the needle in the output only.
   await page.keyboard.type("echo POLLBALL-SHELL-O''K\r");
   await page.waitForFunction(() => window.__osOut.includes('POLLBALL-SHELL-OK'), { timeout: 20000, polling: 200 });
-  check('shell alive after the poll-only app exits', true);
+  check('shell alive after the callback app exits', true);
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));
   state.failures++;
