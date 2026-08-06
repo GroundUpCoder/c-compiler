@@ -305,10 +305,22 @@ const r = driveBoot([
   'wmctl key $SID 20 113',                       // q
   'wmctl wait text EDIT:0 q 6000',
 
-  // ---- File > Page Setup... / Print...: LOUD cancels ----
+  // ---- File > Page Setup... / Print...: LOUD cancels + the USER-visible
+  // notice box (todos/0145 — the stderr report is invisible to a GUI click)
   'wmctl click "Page Setup..."',
+  'wmctl wait win "Page Setup" 6000',
+  'echo ==pagesetupbox',
+  'wmctl tree',
+  'echo ==cut',
+  'wmctl click OK',
+  'wmctl wait nowin "Page Setup" 6000',
   'wmctl click "Print..."',
-  'sleep 0.5',                                   // reports flush to the tty (no window/marker to wait on)
+  'wmctl wait win "Print" 6000',
+  'echo ==printbox',
+  'wmctl tree',
+  'echo ==cut',
+  'wmctl click OK',
+  'wmctl wait nowin "Print" 6000',
   'echo ==afterloud',
   'wmctl list',
   'echo ==cut',
@@ -345,6 +357,9 @@ const r = driveBoot([
   'echo ==cut',
   'wmctl click "Save As..."',
   'wmctl wait win "Save As" 6000',
+  'echo ==saveastree',
+  'wmctl tree',
+  'echo ==cut',
   'wmctl settext EDIT:2 saveas.txt',
   'wmctl click Save',
   'wmctl wait nowin "Save As" 6000',
@@ -533,6 +548,14 @@ check('Page Setup... reports loudly (PageSetupDlgW)',
   /win32: unsupported PageSetupDlgW/.test(all), 'no PageSetupDlgW report');
 check('Print... reports loudly (PrintDlgW)',
   /win32: unsupported PrintDlgW/.test(all), 'no PrintDlgW report');
+/* ...and tells the USER (todos/0145): the click raises a notice box, so it
+ * is never a silent no-op for someone who cannot see stderr */
+check('Page Setup... shows the user-visible no-printing notice',
+  /There is no printing subsystem in this build\./.test(section(out, 'pagesetupbox')),
+  section(out, 'pagesetupbox').slice(-300));
+check('Print... shows the user-visible no-printing notice',
+  /There is no printing subsystem in this build\./.test(section(out, 'printbox')),
+  section(out, 'printbox').slice(-300));
 const loudList = section(out, 'afterloud');
 check('loud cancels open no stray windows',
   (loudList.match(/Notepad/g) || []).length === 1 && !/Font|Print|Page/.test(loudList),
@@ -554,6 +577,17 @@ check('Save writes the named file', /q/.test(section(out, 'saved')),
   JSON.stringify(section(out, 'saved')));
 check('Save As... writes the new name',
   /gamma beta delta/.test(section(out, 'saveas')), JSON.stringify(section(out, 'saveas')));
+/* ---- the documented-deliberate comdlg32 stubs now report once (0145):
+ * notepad's Save As asks for the encoding hook/template, so the plain
+ * dialog must carry the report — and NO combobox (a future hook impl
+ * flips this assert, which is the point: it must arrive with tests) */
+check('Save As tree has no COMBOBOX (OFN hook/template stays un-run)',
+  !/COMBOBOX/.test(section(out, 'saveastree')), section(out, 'saveastree').slice(-400));
+check('OFN hook/template request reports once (gap #14 honesty)',
+  /win32: unsupported OFN hook\/template not run/.test(all), 'no OFN hook report');
+check('Find/Replace forced-down direction reports once (gap #14 honesty)',
+  /win32: unsupported FindText\/ReplaceText: search direction/.test(all),
+  'no FR direction report');
 
 /* ---- New Window / Exit */
 check('New Window spawns a second notepad',

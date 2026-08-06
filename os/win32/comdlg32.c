@@ -27,7 +27,10 @@
  *
  * PrintDlgW / PageSetupDlgW return FALSE (the user "cancelled"): there is
  * no printer — a cancel is the honest answer, and the apps' cancel paths
- * are exactly the well-tested ones. Agent-drivable throughout (OS.md
+ * are exactly the well-tested ones. Both first tell the USER via a
+ * MessageBox (todos/0145 — a stderr report is invisible to a GUI click;
+ * PD_RETURNDEFAULT/PSD_RETURNDEFAULT keep the promised no-UI quiet
+ * cancel). Agent-drivable throughout (OS.md
  * pillar): `wmctl settext EDIT:n` + `wmctl click OK|Open|Save|"Find Next"`. */
 
 #undef UNICODE
@@ -279,6 +282,13 @@ static void fd_classes(void) {
 
 static BOOL file_dialog(OPENFILENAMEW *ofn, int saving) {
     if (!ofn || !ofn->lpstrFile || ofn->nMaxFile < 2) return FALSE;
+    /* hooks/templates are documented-deliberate stubs (header note; the
+     * report-once honesty pass, todos/0145): the caller asked for one, the
+     * dialog it gets is the plain browser. */
+    if ((ofn->Flags & (OFN_ENABLEHOOK | OFN_ENABLETEMPLATE)) ||
+        ofn->lpfnHook || ofn->lpTemplateName)
+        WIN32_UNSUPPORTED("OFN hook/template not run (no explorer notify "
+                          "protocol) — plain dialog shown");
     fd_classes();
     memset(&g_fd, 0, sizeof g_fd);
     g_fd.ofn = ofn;
@@ -434,6 +444,11 @@ static LRESULT CALLBACK fr_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 
 static HWND fr_dialog(FINDREPLACEW *fr, int replace) {
     if (!fr || !fr->hwndOwner) return NULL;
+    /* direction is always down (header note — the up/down radios are not
+     * worth their pixels); report-once so search-up being unreachable is
+     * inventoried, not implicit (todos/0145). */
+    WIN32_UNSUPPORTED("FindText/ReplaceText: search direction is always "
+                      "down (no up/down radios)");
     static int registered;
     if (!registered) {
         WNDCLASS wc;
@@ -734,18 +749,34 @@ BOOL ChooseFontW(CHOOSEFONTW *cf) {
 }
 
 /* ---- the honest cancels ----
- * Each reports loudly (0211 fail-loud policy) so a menu item landing here
- * reads as a missing feature, not a dead click: there is no printing
- * subsystem (Print/Page Setup). */
+ * Each reports loudly (0211 fail-loud policy) AND tells the USER (todos/
+ * 0145): the stderr line inventories the stub for a developer, but a GUI
+ * user who clicks File>Print sees no stderr — without the box the click is
+ * a silent no-op. A MessageBox, then FALSE (the well-tested cancel path).
+ * PD_RETURNDEFAULT is the no-UI query form, so it keeps the quiet FALSE:
+ * popping a box from a call that promised not to show UI would be worse
+ * than the silence. */
+
+static void no_printing_box(HWND owner, const char *title) {
+    MessageBox(owner, "There is no printing subsystem in this build.",
+               title, MB_OK | MB_ICONINFORMATION);
+}
 
 BOOL PrintDlgW(PRINTDLGW *pd) {
-    (void)pd;
     WIN32_UNSUPPORTED("PrintDlgW: no printing subsystem (returns cancel)");
+    if (!(pd && (pd->Flags & PD_RETURNDEFAULT)))
+        no_printing_box(pd ? pd->hwndOwner : NULL, "Print");
     return FALSE;
 }
 BOOL PageSetupDlgW(PAGESETUPDLGW *psd) {
-    (void)psd;
     WIN32_UNSUPPORTED("PageSetupDlgW: no printing subsystem (returns cancel)");
+    if (!(psd && (psd->Flags & PSD_RETURNDEFAULT)))
+        no_printing_box(psd ? psd->hwndOwner : NULL, "Page Setup");
     return FALSE;
 }
-DWORD CommDlgExtendedError(void) { return 0; }
+DWORD CommDlgExtendedError(void) {
+    /* no extended-error tracking — report-once so "always 0" is an
+     * inventoried stub, not an invisible one (todos/0145) */
+    WIN32_UNSUPPORTED("CommDlgExtendedError: not tracked (always 0)");
+    return 0;
+}

@@ -101,24 +101,10 @@ thing this file exists to kill.
 - file: todos/NETSURF-JS.md
 - anchor: **Lane D — binding fills (M-L, item-parallel).**
 
-### L10 — listdir.h defers wm.c's third copy to a menu redesign that has already shipped
-- ticket: #99
-- file: os/listdir.h
-- anchor: * todos/done/0250) — don't cite this header as covering it.
-- defers-to: 0250, 0259
-- expired: 0250, 0259
-
 ### L11 — `optional` bake assets make the blob machine-dependent; dependent launchers don't inherit it
 - ticket: #100
 - file: os/os-common.js
 - anchor: *   entry.optional — (with entry.bin) a missing asset logs a skip instead of
-
-### L12 — headless boot.js takes no lock; the guard is a "noted-only follow-up" in a closed item
-- ticket: #101
-- file: CLAUDE.md
-- anchor: flock-style guard is a noted-only follow-up in the 0045 item). The
-- defers-to: 0045
-- expired: 0045
 
 ### L13 — only E/S/SE resize zones exist; "not in this version" has had no subsequent version
 - ticket: #102

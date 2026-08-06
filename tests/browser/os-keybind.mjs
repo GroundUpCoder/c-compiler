@@ -49,7 +49,7 @@ import { openOsSession } from './lib/os-harness.mjs';
 // serverTries generous: serve.js re-bakes the image before listening when a
 // bake input (wm.c here) changed, which outruns the default 5s server wait.
 const s = await openOsSession({
-  port: 3231, readyLabel: 'boots to ready', serverTries: 400, serverInterval: 500 });
+  port: 3338, readyLabel: 'boots to ready', serverTries: 400, serverInterval: 500 });
 const { page, check, setVt, sample, near, waitOut } = s;
 
 const ORANGE = [255, 140, 0];

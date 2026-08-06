@@ -1,5 +1,5 @@
 {
-  "version": 240,
+  "version": 241,
   "defaultPackages": ["doom"],
   "overlays": [
     {

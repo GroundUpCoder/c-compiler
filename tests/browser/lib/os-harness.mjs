@@ -50,8 +50,19 @@ export const osUrl = (port, hostKeys = 'off') =>
 // so a leftover listener from a killed run silently keeps the port and the test
 // talks to the STALE server — reds that read as product regressions. With the
 // flag a squatted port fails immediately, naming the holder (see serve.js
-// tryListen). Ports are also REUSED across sweep files (3197 belongs to four),
-// so the flag carries a bounded same-port retry for the teardown race.
+// tryListen). Sweep-member ports are UNIQUE since #546 (os-harness-unit.mjs
+// enforces it), but the flag still carries a bounded same-port retry: --repeat
+// and back-to-back re-runs hit the SAME file's port while the previous server
+// is still releasing its socket (the teardown race).
+//
+// #546, the other half: a squatter that serve.js's refusal names is only loud
+// in serve.js's OWN stderr, which most members leave unread — while the stale
+// server answers waitForServer's poll with a 200 and the file then certifies
+// the WRONG TREE (the L77 fake-green class). So startServer records the child
+// it spawned per port, and waitForServer holds any 200 on such a port to the
+// child's IDENTITY (the /__serve-id pid handshake): a mismatched 200 is NOT
+// success — it keeps polling through the teardown race and, on exhaustion or
+// on the child dying, throws naming the squatter / the child's stderr.
 //
 // `serveArgs` appends extra serve.js flags — the seam os-minimal.mjs uses to
 // pass `--minimal` (the DEPLOY image shape: a plain bake + the /packages repo,
@@ -73,15 +84,27 @@ function latchHeavyLock() {
   joinHeavyLock({ name: `browser os test (${file})` });
 }
 
+// The servers THIS process spawned, keyed by port (#546): waitForServer holds
+// a 200 on one of these ports to the spawned child's identity. A later spawn
+// on the same port (a file reopening its session) replaces the record.
+const spawnedServers = new Map();
+
 export function startServer(port, { root = ROOT, onLog, serveArgs = [] } = {}) {
   latchHeavyLock();
   const child = spawn('node',
     [path.join(ROOT, 'serve.js'), root, String(port), '--strict-port', ...serveArgs],
     { stdio: ['ignore', 'pipe', 'pipe'] });
-  if (onLog) {
-    child.stdout.on('data', (d) => onLog(d));
-    child.stderr.on('data', (d) => onLog(d));
-  }
+  // stderr is always tapped (#546): the strict-port refusal names the squatter
+  // THERE, and waitForServer's failure path replays the tail instead of losing
+  // it to an unread pipe. stdout stays unread unless the caller asks.
+  const rec = { child, exit: null, errTail: '' };
+  child.stderr.on('data', (d) => {
+    rec.errTail = (rec.errTail + d).slice(-2000);
+    if (onLog) onLog(d);
+  });
+  if (onLog) child.stdout.on('data', (d) => onLog(d));
+  child.on('exit', (code, signal) => { rec.exit = { code, signal }; });
+  spawnedServers.set(Number(port), rec);
   return child;
 }
 
@@ -94,11 +117,41 @@ export function startServer(port, { root = ROOT, onLog, serveArgs = [] } = {}) {
 // the real cause at the source instead. Pass `{ soft: true }` for the boolean
 // return (the unit test). `fetchFn` is injectable for unit tests.
 export async function waitForServer(url, { tries = 50, interval = 100, fetchFn = fetch, soft = false } = {}) {
+  // Identity handshake (#546): when THIS process spawned the server for the
+  // polled port, a 200 only counts if /__serve-id answers with that child's
+  // pid. A stale serve.js squatting the port answers 200s indistinguishably
+  // at the HTTP level — pre-#546 that certified the WRONG TREE silently.
+  let owned = null;
+  try { owned = spawnedServers.get(Number(new URL(url).port || 0)) || null; } catch {}
+  let squatter = null;
   for (let i = 0; i < tries; i++) {
-    try { if ((await fetchFn(url)).ok) return true; } catch {}
+    if (owned && owned.exit) break;   // our server died — polling is pointless
+    try {
+      if ((await fetchFn(url)).ok) {
+        if (!owned) return true;      // not ours (remote / injected) — no identity to hold
+        try {
+          const id = await (await fetchFn(new URL('/__serve-id', url).toString())).json();
+          if (id && id.pid === owned.child.pid) return true;
+          squatter = id && id.pid !== undefined ? `pid ${id.pid}` : 'unidentifiable server';
+        } catch { squatter = 'a server with no /__serve-id (pre-#546 tree?)'; }
+        // A mismatched 200 is NOT success: during the strict-port teardown
+        // race the dying predecessor answers while our child retries the
+        // bind. Keep polling; loud failure only at exhaustion.
+      }
+    } catch {}
     await new Promise((r) => setTimeout(r, interval));
   }
   if (soft) return false;
+  if (owned && owned.exit) {
+    throw new Error(`waitForServer: the serve.js this test spawned for ${url} EXITED ` +
+      `(${JSON.stringify(owned.exit)}) before serving — its stderr said:\n` +
+      (owned.errTail || '  (nothing)'));
+  }
+  if (squatter !== null) {
+    throw new Error(`waitForServer: ${url} answered, but NOT from the serve.js this test ` +
+      `spawned (pid ${owned.child.pid}) — the 200s came from ${squatter}. A stale server is ` +
+      `squatting the port; kill stray serve.js procs (tests/lib/harness-leaks.js reaps orphans).`);
+  }
   throw new Error(`waitForServer: ${url} never answered after ${tries}×${interval}ms ` +
     `— a stale serve.js may be squatting the port (kill stray serve.js/'node -e' procs), ` +
     `or an image rebake outran the wait (raise tries, or prebake with node tools/mkimage.js).`);

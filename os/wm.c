@@ -165,6 +165,7 @@
 #include <sys/select.h>
 #include "wm_proto.h"
 #include "launch.h"
+#include "listdir.h"       /* the shared directory walk (CD34, todos/0291) */
 #include "openwith.h"
 #include "fileops.h"
 #include "egress.h"        /* icon-menu Download -> the host (todos/0398) */
@@ -1468,29 +1469,32 @@ static int entcmp(const void *a, const void *b) {
 /* Read a launcher directory: name = filename, symlink vs plain file told
  * apart by lstat; directories (or links to one) are menu GROUPS (0078).
  * Groups-first + alpha sort for a deterministic layout. Shared by the
- * Start menu (/etc/menu) and the desktop grid (/root/Desktop). */
+ * Start menu (/etc/menu) and the desktop grid (/root/Desktop).
+ *
+ * The walk itself is os/listdir.h since the CD34 fold (todos/0291) —
+ * this was the third drifted hand copy. Policy is kept exactly:
+ * dotfiles always hidden, a link to a directory cascades
+ * (LIST_FOLLOW_LINKS keeps is_link AND hands over the target's is_dir),
+ * an unopenable directory reads as EMPTY, not an error (the menu union
+ * takes /etc/menu's absence this way), and the listing clips at the
+ * caller's cap. Sort stays caller policy (entcmp). */
 static int load_entries(const char *dir, menu_ent *dst, int max) {
-    int n = 0;
-    DIR *d = opendir(dir);
-    if (!d) return 0;
-    struct dirent *de;
-    while ((de = readdir(d)) && n < max) {
-        if (de->d_name[0] == '.') continue;
-        struct stat st;
-        char path[300];
-        snprintf(path, sizeof path, "%s/%s", dir, de->d_name);
-        if (lstat(path, &st) != 0) continue;
-        menu_ent *e = &dst[n++];
+    static ld_ent raw[MAX_DESK];   /* off the 64KB wasm stack; MAX_DESK
+                                      (64) >= MAX_MENU (32), the two caps
+                                      the callers pass */
+    if (max > (int)(sizeof raw / sizeof raw[0]))
+        max = (int)(sizeof raw / sizeof raw[0]);
+    int n = list_dir(dir, raw, max, LIST_HIDE_DOTFILES | LIST_FOLLOW_LINKS);
+    if (n < 0) return 0;
+    if (n > max) n = max;          /* list_dir counts past the cap; the
+                                      menu/desktop shows the first max */
+    for (int i = 0; i < n; i++) {
+        menu_ent *e = &dst[i];
         memset(e, 0, sizeof *e);
-        snprintf(e->name, sizeof e->name, "%s", de->d_name);
-        e->is_link = S_ISLNK(st.st_mode);
-        if (S_ISDIR(st.st_mode)) e->is_dir = 1;
-        else if (e->is_link) {         /* a link to a directory cascades too */
-            struct stat st2;
-            e->is_dir = stat(path, &st2) == 0 && S_ISDIR(st2.st_mode);
-        }
+        snprintf(e->name, sizeof e->name, "%s", raw[i].name);
+        e->is_link = raw[i].is_link;
+        e->is_dir = raw[i].is_dir;
     }
-    closedir(d);
     qsort(dst, n, sizeof dst[0], entcmp);
     return n;
 }

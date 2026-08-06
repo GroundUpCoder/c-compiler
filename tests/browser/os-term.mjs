@@ -10,7 +10,7 @@
 // Usage: node os-term.mjs
 import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl } from './lib/os-harness.mjs';
 
-const PORT = 3197;
+const PORT = 3332;   // unique per member (#546)
 const URL = osUrl(PORT);
 
 const server = startServer(PORT);

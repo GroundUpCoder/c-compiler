@@ -11,7 +11,7 @@
 // Usage: node os-snap.mjs
 import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl } from './lib/os-harness.mjs';
 
-const PORT = 3226;
+const PORT = 3337;   // unique per member (#546)
 const URL = osUrl(PORT);
 
 const server = startServer(PORT);

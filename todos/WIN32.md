@@ -309,7 +309,9 @@ iPointSize tenths. user32 stores the WM_SETFONT/WM_GETFONT font on the
 HWND and selects it into every GetDC/BeginPaint DC — the one choke all
 control draws AND measures share, so edit_line_h/edit_rows/caret x and
 the glyph raster move together; PrintDlg/PageSetupDlg stay honest
-cancels — no printing subsystem); the
+cancels — no printing subsystem — and since the 0145 honesty pass tell
+the USER so via a MessageBox before the FALSE, the RETURNDEFAULT no-UI
+forms excepted); the
 comctl32 STATUS BAR (self-bottom-parking, SB_SETPARTS/SB_SETTEXTW,
 parts joined in WM_GETTEXT for the agent). user32 grew
 RegisterWindowMessageW (per-process atoms — both protocol ends live in
@@ -573,7 +575,11 @@ rough priority order — full details in logs/2026-07-16/win32-compliance.md):**
   write-back), nFileOffset is UTF-8 bytes not WCHARs, no
   lpstrFileTitle/nFileExtension, CommDlgExtendedError() is 0 (error ==
   cancel), OFN hooks/templates stay documented-deliberate stubs
-  (notepad's encoding combo never shows).
+  (notepad's encoding combo never shows), find/replace direction is
+  always down. Since the 0145 honesty pass every one of these deliberate
+  gaps that a caller actually hits reports once to stderr
+  (`WIN32_UNSUPPORTED`) — the deferral decisions stand, but they are
+  named at runtime, not implicit.
 - **gdi32**: wide-pen ellipse/roundrect outlines stay 1px; dashed pen
   styles draw solid (reported); no SetTextAlign/SaveDC/regions/mono
   bitmaps/SetStretchBltMode (undeclared — loud link failures);

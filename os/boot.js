@@ -242,6 +242,71 @@ if (resolvedOverlays.length) {
   seedIo.requireCleanOverlays = requireCleanOverlays;
 }
 
+/* ---- single-instance image guard (todos/0293, the 0045 follow-up) ---- */
+// The browser side has always been guarded (one kernel per origin: a Web
+// Lock named after the OPFS image pair, todos/0045); headless boot.js was
+// "safe by isolation, not by design" — the kernel e2es mint a fresh mkdtemp
+// pair per boot, so nothing ever collided IN TESTS, but two hand-run boots
+// against the default os/ pair are two live BlockFS instances over one
+// writable store, and BlockFS's own multi-instance rules call that silent
+// cross-file corruption. So: one boot per image pair, machine-wide, keyed
+// by a sidecar lockfile beside the WRITABLE root image (the corruptible
+// store; the pair derives 1:1 from it). Same semantics as the Web Lock:
+// REFUSE and say so — no queueing, because a second boot of one pair is
+// never a legitimate workload to wait for. Self-heals a stale file left by
+// a SIGKILLed holder (dead pid = steal), releases on exit and signals.
+// Exit 5 = IMAGE PAIR BUSY (1 boot-fail, 2 bad args, 3 heavy lock held,
+// 4 cross-tree). Taken BEFORE the machine-wide heavy lock below: refuse
+// over the narrow resource before contending for the wide one.
+const IMAGE_LOCK_PATH = rootImagePath + '.lock';
+{
+  const { pidAlive } = require(path.join(ROOT, 'tests/lib/heavy-lock.js'));
+  const readHolder = () => {
+    try { return JSON.parse(fs.readFileSync(IMAGE_LOCK_PATH, 'utf8')); }
+    catch { return null; }   // missing or half-written → treat as none
+  };
+  for (;;) {
+    try {
+      const fd = fs.openSync(IMAGE_LOCK_PATH, 'wx');   // O_EXCL: atomic
+      fs.writeSync(fd, JSON.stringify({
+        pid: process.pid,
+        image: imagePath,
+        startedAt: new Date().toISOString(),
+        argv: process.argv.slice(1),
+      }));
+      fs.closeSync(fd);
+      break;                                           // we own the pair
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      const h = readHolder();
+      if (h && h.pid !== process.pid && pidAlive(h.pid)) {
+        process.stderr.write(
+          `boot: REFUSING to boot ${imagePath}: the image pair is in use.\n` +
+          `  held by: pid ${h.pid} since ${h.startedAt} (lock ${IMAGE_LOCK_PATH})\n` +
+          `  Two boots of one pair are two writers over one root volume —\n` +
+          `  silent cross-file corruption, not sharing. Wait for that boot to\n` +
+          `  exit, or boot a different --image= pair.\n`);
+        process.exit(5);
+      }
+      // stale (dead/garbage holder): steal, then loop to re-create
+      try { fs.unlinkSync(IMAGE_LOCK_PATH); } catch { /* raced a stealer */ }
+    }
+  }
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    const h = readHolder();
+    if (h && h.pid === process.pid) {
+      try { fs.unlinkSync(IMAGE_LOCK_PATH); } catch { /* gone */ }
+    }
+  };
+  process.on('exit', release);
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+    process.on(sig, () => { release(); process.exit(130); });
+  }
+}
+
 /* ---- heavy-test host lock (todos/0342, closing todos/0303) ---- */
 // A full-OS boot is the unit of RAM the heavy lock bounds (~2-4 GB per boot
 // node), so the guard runs HERE — where the boot starts — not in whichever

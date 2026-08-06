@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl, deskEntries, deskCell, menuGroups, menuLeaves } from './lib/os-harness.mjs';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const PORT = 3197;
+const PORT = 3331;   // unique per member (#546)
 const URL = osUrl(PORT);
 
 const server = startServer(PORT);
