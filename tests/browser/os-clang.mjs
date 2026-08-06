@@ -21,13 +21,20 @@
 //
 // doom-clang itself is NOT the render subject (yet): the 2026-08-06 run of
 // this verification found the PUBLISHED artifact (clang-simplified
-// @a1a2a6b) SEGVs at startup — in the browser AND under a headless
-// `boot.js --overlay=clang-apps`, so it is the artifact (or a platform ABI
-// drift since it was built), not the serve path. This member still RUNS it
-// and prints the exit status loudly so the log records the state; the
-// render assertion rides sdldemo, which the same run measured working
-// (window + frames). When the artifact is rebuilt green, promote the
-// doom-clang leg to a real render assert.
+// @a1a2a6b) dying at startup with exit 139 in the browser AND under a
+// headless `boot.js --overlay=clang-apps`. #548 root-caused it: NOT a
+// segfault — a WebAssembly instantiation LinkError. The artifact (built
+// 2026-07-28, libc vendored from c-compiler c683322) imports
+// `c.__sdl_audio_callback_unsupported`, which af9fa850 (#491, 2026-08-04)
+// retired from the host env, so instantiation fails and the crash path
+// reports it as SEGV/139. Platform ABI drift, not a payload regression —
+// doom-clang and gameboy-clang (the two audio apps) are affected; the
+// other nine overlay binaries don't import it, which is why sdldemo still
+// renders. The fix is a clang-simplified re-vendor + rebuild (a second-repo
+// decision, logs/2026-08-07/548-doom-clang-linkerror.md). This member still
+// RUNS doom-clang and prints the exit status loudly so the log records the
+// state; the render assertion rides sdldemo. When the artifact is rebuilt
+// green, promote the doom-clang leg to a real render assert.
 //
 // Usage: node os-clang.mjs
 import fs from 'node:fs';
