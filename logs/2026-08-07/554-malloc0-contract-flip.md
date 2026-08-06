@@ -144,3 +144,24 @@ captured live page, per the ticket's own acceptance wording.
 verdict recorded in the follow-up log entry / ticket comment with the
 run-level `summary.json` evidence. `node todos/liabilities.js check`:
 OK — 38 entries, rc=0 (matches the pristine-main control).
+
+## Gate verdict (appended post-run)
+
+Attempt 1 (07:22:37) went RED on sweep alone — all 53 failures were the
+harness's own loud playwright-pin check (worktree lacked the
+`tests/browser/node_modules` symlink, so playwright resolved 1.61.1 from the
+drifted root symlink against the 1.61.0 pin). Install problem by the check's
+own wording; every other row passed. Fixed the symlink, re-ran IN FULL (no
+--resume).
+
+Attempt 2 is the gate of record: GATE2-START 08:00:41 +0900 (last code
+commit afeff8b5 at 07:22:16 — gate starts after it), `GATE-EXIT rc=0`,
+run-level `build/test-run/summary.json` mtime 08:49 with `elapsedMs`
+2912129, `filter: null`, 26 suites declared, 8/8 dispatcher rows `pass`.
+Children: kernel `done:true, filter:null, 168/168 recorded, carried 0,
+zero non-pass`; browser `done:true, filter:null, 56/56 recorded, carried 0,
+zero non-pass` (the failed attempt's results were NOT carried — all 56
+executed fresh). Both-ways row↔suite set diff empty (26 = 26) with a
+negative control surfacing an injected bogus name. The green also proves
+empirically that `old/tests` (which still pins the old contract) is wired
+into no suite.
