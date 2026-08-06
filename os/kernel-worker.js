@@ -318,9 +318,14 @@ self.onmessage = function (e) {
     // vsync-notify count (the app-worker-wake proof — flat while parked).
     post({ type: 'compositor-stats',
            stats: compositor
-             ? Object.assign({ vsyncNotifies: kernel.vsyncNotifyCount() },
+             ? Object.assign({ vsyncNotifies: kernel.vsyncNotifyCount(),
+                               wmFrames: kernel.wmFrameCount() },
                              compositor.stats)
              : null });
+  } else if (m.type === 'compositor-kill') {
+    // Test hook (#551): destroy the live compositor device — drives the REAL
+    // device.lost path, recovery included (tests/browser/os-devloss.mjs).
+    if (compositor && compositor.killDevice) compositor.killDevice();
   } else if (m.type === 'compositor-freeze') {
     // Synthetic vsync-stop (test-only, todos/0169): the hidden-tab honest
     // pause is not automatable in Playwright — freeze the clock instead

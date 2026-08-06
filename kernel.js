@@ -5163,6 +5163,13 @@ Kernel.prototype.vsyncNotifyCount = function () {
   return this._vsyncNotifies;
 };
 
+/* Cumulative count of gpu-transport frame ships (wm-frame bitmaps received)
+ * — the #551 producer-clamp probe: a delay-loop SDL app must ship at the
+ * vsync rate, never at its present rate (tests/browser/os-devloss.mjs). */
+Kernel.prototype.wmFrameCount = function () {
+  return this._wmFrameN | 0;
+};
+
 /* ---- on-demand compositor park protocol (todos/0169; IDLE-POWER piece B).
  * The compositor shares this worker: when its scene goes clean it parks the
  * rAF (no ticks, no submits) and these are the kernel half of the handshake.
@@ -5378,6 +5385,7 @@ Kernel.prototype._wmFrame = function (pcb, sid, bmp) {
   }
   if (s.bitmap && s.bitmap.close) { try { s.bitmap.close(); } catch (e) {} }
   s.bitmap = bmp;
+  this._wmFrameN = (this._wmFrameN | 0) + 1;   // gpu-ship counter (#551 clamp probe)
   Atomics.add(s.i32, SH_SEQ, 1);   // frameSeq accounting rides the header either way
   // On-demand compositor (todos/0169): every gpu present already messages
   // this worker, so the message IS the doorbell — arm unconditionally

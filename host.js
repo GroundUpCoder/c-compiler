@@ -7597,10 +7597,13 @@ function createSurfaceSDL({ ctx, hooks }) {
    * (the marquee regression that found this). Return instead; the caller's
    * contract is already re-poll-on-any-return. */
   function pumpWait(timeoutMs) {
-    // #484: about to go quiet — ship any clamp-held trailing frame NOW
-    // (unconditionally; one frame per park can't flood), so the display
-    // shows the app's freshest frame while it waits.
-    if (flushPresent) flushPresent(false);
+    // #484: about to go quiet — ship any clamp-held trailing frame. A REAL
+    // park (>=15ms) ships unconditionally (self-limiting; the app may never
+    // present again); a short-timeout park is a frame-loop delay recurring
+    // hundreds of times a second, so it keeps the clamp ('park' mode —
+    // shipping unconditionally there voided #484 for delay-loop games and
+    // burned the browser's blocked-worker ImageBitmap budget, #551).
+    if (flushPresent) flushPresent(timeoutMs >= 15 ? 'force' : 'park');
     // WaitEvent/GetMessage entry = this app is back to waiting on events
     // (todos/0169): release the kernel-side wantFrame pin so the compositor
     // may park. Gated on a present since the last release — an idle 25ms
@@ -7638,7 +7641,8 @@ function createSurfaceSDL({ ctx, hooks }) {
    * otherwise be slept past. */
   function waitMulti(rfdsPtr, nr, ringInterest, timeoutMs) {
     if (typeof hooks.waitMulti !== 'function') return -2;
-    if (flushPresent) flushPresent(false);   // #484: same rule as pumpWait
+    // #484/#551: same rule as pumpWait (negative timeout = indefinite park).
+    if (flushPresent) flushPresent(timeoutMs < 0 || timeoutMs >= 15 ? 'force' : 'park');
     if (presentedSinceIdle) {
       presentedSinceIdle = false;
       if (hooks.frameIdle) hooks.frameIdle();
@@ -7923,9 +7927,11 @@ function createSurfaceSDL({ ctx, hooks }) {
      * no-advertisement fallback. Mailbox semantics unchanged (newest wins):
      * a clamped present ships nothing, and the canvas — which still holds
      * that frame — is HELD so the freshest frame is never lost: it re-ships
-     * through the gate at SDL_PollEvent's pump (a hot loop stays clamped) or
-     * unconditionally when the app parks (pumpWait/waitMulti entry — same JS
-     * task, so the canvas content is exactly the clamped frame). A present
+     * through the gate at SDL_PollEvent's pump (a hot loop stays clamped),
+     * gated with a wall-clock escape at short-timeout parks, and
+     * unconditionally at REAL parks (>=15ms/indefinite pumpWait/waitMulti
+     * entry — same JS task, so the canvas content is exactly the clamped
+     * frame; the mode split is #551's fix — see flushPresent). A present
      * that acks a pending resize always ships: the ack is a protocol step
      * (surfaceConfigure), not just pixels. Ticks stall while the tab is
      * hidden or the compositor is parked — a shipped frame is damage that
@@ -7965,6 +7971,7 @@ function createSurfaceSDL({ ctx, hooks }) {
         const t = hooks.vsyncSeq();
         if (!acking && t === g.tick) { presentHeld.set(sid, cnv); return; }
         g.tick = t;
+        g.ms = Date.now();   // wall stamp backs flushPresent's 'park' escape (#551)
       } else {
         const now = Date.now();
         if (!acking && now - g.ms < PRESENT_CLAMP_MS) { presentHeld.set(sid, cnv); return; }
@@ -7973,17 +7980,35 @@ function createSurfaceSDL({ ctx, hooks }) {
       presentHeld.delete(sid);
       shipFrame(sid, cnv);
     };
-    // The trailing-frame flush (#484). respectGate=true retries held frames
-    // through the clamp (SDL_PollEvent's pump — ships once the tick moves);
-    // false ships them now (park entry — one frame per park cannot flood).
-    flushPresent = function (respectGate) {
+    // The trailing-frame flush (#484; modes re-cut by #551). mode 'gate'
+    // retries held frames through the clamp (SDL_PollEvent's pump — ships
+    // once the tick moves). mode 'force' ships now: a REAL park (>=15ms or
+    // indefinite) is self-limiting, and the parking app may never present
+    // again, so its freshest frame must land. mode 'park' is the
+    // short-timeout park (the classic SDL_Delay(1) frame loop): those parks
+    // recur hundreds of times a second, so the old unconditional ship there
+    // voided the #484 clamp entirely — ships == presents, measured 16.5k
+    // bitmaps in 103s of play, which exhausts the browser's budget for
+    // ImageBitmap ships out of a never-yielding worker (~16.7k lifetime;
+    // the return/recycle tasks can only run on the producer's event loop)
+    // and got the COMPOSITOR's WebGPU device destroyed (#551). 'park' keeps
+    // the tick gate, with a 17ms wall-clock escape so stalled ticks (parked
+    // compositor, hidden tab) still get the ship whose damage re-wakes them
+    // — bounded at ~1/frame either way.
+    flushPresent = function (mode) {
       if (!presentHeld.size) return;
+      const now = Date.now();
       for (const [sid, cnv] of presentHeld) {
-        if (respectGate) { presentTo(sid, cnv); continue; }
-        presentHeld.delete(sid);
-        if (!handleBySid.has(sid)) continue;
+        if (mode === 'gate') { presentTo(sid, cnv); continue; }
+        if (!handleBySid.has(sid)) { presentHeld.delete(sid); continue; }
         const g = presentGate.get(sid);
-        if (g) { if (vsyncClamp) g.tick = hooks.vsyncSeq(); else g.ms = Date.now(); }
+        if (mode === 'park' && g) {
+          const tickOpen = vsyncClamp ? hooks.vsyncSeq() !== g.tick
+                                      : now - g.ms >= PRESENT_CLAMP_MS;
+          if (!tickOpen && now - g.ms < 17) continue;   // still clamped: hold
+        }
+        presentHeld.delete(sid);
+        if (g) { if (vsyncClamp) g.tick = hooks.vsyncSeq(); g.ms = now; }
         shipFrame(sid, cnv);
       }
     };
@@ -8106,7 +8131,7 @@ function createSurfaceSDL({ ctx, hooks }) {
       // #484: retry any clamp-held frame THROUGH the gate — a poll loop that
       // stopped presenting (dirty-flag loops) still ships its last frame on
       // the next tick, while a hot loop stays clamped.
-      flushPresent(true);
+      flushPresent('gate');
       return drainInput();
     };
     env.__wait = waitMulti;           // unified multi-source wait (0178)
@@ -8359,6 +8384,7 @@ function createCanvasGPU(canvas) {
       return ad.requestDevice();
     }).then(function (dev) {
       cg.device = dev;
+      try { dev.lost.then(function (i) { console.error('[sdl-gpu] device lost: reason=' + (i && i.reason) + ' msg=' + (i && i.message)); }); } catch (e) {}
       try { dev.addEventListener('uncapturederror', function (ev) { console.error('SDL WebGPU error:', ev.error && ev.error.message); }); } catch (e) {}
       cg.format = gpu.getPreferredCanvasFormat();
       cg.context.configure({
