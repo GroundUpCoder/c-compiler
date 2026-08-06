@@ -152,4 +152,4 @@ test('duplicate dirent names are caught (todos/0375)', function () {
 console.log('\n--- fsck Tests ---');
 console.log('Passed: ' + passed);
 console.log('Failed: ' + failed);
-process.exit(failed ? 1 : 0);
+process.exitCode = failed ? 1 : 0;

@@ -435,10 +435,10 @@ async function runTests() {
   console.log('--- BlockFS C E2E Tests ---');
   console.log('Passed: ' + passed);
   console.log('Failed: ' + failed);
-  if (failed > 0) process.exit(1);
+  if (failed > 0) process.exitCode = 1;
 }
 
 runTests().catch(function (e) {
   console.error('Fatal:', e.stack || e.message);
-  process.exit(1);
+  process.exitCode = 1;
 });

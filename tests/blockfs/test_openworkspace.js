@@ -115,6 +115,6 @@ async function run() {
   eq(r.mode, 'no-legacy', 'viewLegacy with no v3 -> no-legacy');
 
   console.log(`\nopenWorkspace: ${passed} passed, ${failed} failed`);
-  process.exit(failed ? 1 : 0);
+  process.exitCode = failed ? 1 : 0;
 }
 run();

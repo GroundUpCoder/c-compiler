@@ -308,4 +308,4 @@ test('tcsetattr: publishes raw/echo/opost bitfield to the sab', function () {
 
 for (var i = 0; i < liveWorkers.length; i++) { try { liveWorkers[i].terminate(); } catch (e) {} }
 console.log('\nstdin-sab: Passed: ' + passed + '  Failed: ' + failed);
-process.exit(failed ? 1 : 0);
+process.exitCode = failed ? 1 : 0;

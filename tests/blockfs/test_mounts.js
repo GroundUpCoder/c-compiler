@@ -212,4 +212,4 @@ test('O_CREAT through a cross-volume dangling symlink escapes and creates on the
 });
 
 console.log('\ntest_mounts (blockfs): ' + passed + ' passed, ' + failed + ' failed');
-process.exit(failed ? 1 : 0);
+process.exitCode = failed ? 1 : 0;

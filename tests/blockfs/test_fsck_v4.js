@@ -137,4 +137,4 @@ function inodeOff(store, ino) {
 }
 
 console.log(`\nfsck_v4: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+process.exitCode = failed ? 1 : 0;

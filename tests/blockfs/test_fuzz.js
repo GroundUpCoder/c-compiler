@@ -163,4 +163,4 @@ for (var s = 1; s <= SEEDS; s++) {
 console.log('\n--- BlockFS Fuzz (' + SEEDS + ' seeds × {single,dual}, ' + OPS + ' ops each) ---');
 console.log('Passed: ' + passed);
 console.log('Failed: ' + failed);
-process.exit(failed ? 1 : 0);
+process.exitCode = failed ? 1 : 0;

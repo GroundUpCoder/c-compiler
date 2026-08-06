@@ -113,4 +113,4 @@ eq(bfs.stat('/dev/urandom').rdev, makedev(1, 9), '/dev/urandom rdev 1:9');
 }
 
 console.log(`\ndev: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+process.exitCode = failed ? 1 : 0;

@@ -271,8 +271,8 @@ async function sealTests() {
 
 sealTests().then(function () {
   console.log('\ntest_readonly: ' + passed + ' passed, ' + failed + ' failed');
-  process.exit(failed ? 1 : 0);
+  process.exitCode = failed ? 1 : 0;
 }, function (e) {
   console.error('FAIL (seal tests): ' + (e && e.stack || e));
-  process.exit(1);
+  process.exitCode = 1;
 });
