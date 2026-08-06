@@ -5,9 +5,15 @@
 // unclamped loop pushed ~8,000 ImageBitmaps/s into the kernel worker's
 // unbounded message queue until the browser GPU process died). Mailbox
 // newest-wins semantics: a clamped present ships nothing, but its canvas is
-// HELD and re-ships through the gate at SDL_PollEvent's pump (__sdl_pump) or
-// unconditionally at the park seams (pumpWait entry), so the freshest frame
-// is never lost. This file drives the clamp deterministically in Node with a
+// HELD and re-ships through the gate at SDL_PollEvent's pump (__sdl_pump),
+// gated at SHORT-timeout parks (#551 'park' mode: the SDL_Delay(1) frame
+// loop parks hundreds of times a second, and the old unconditional flush
+// there made ships == presents — which burned Chromium's ~16.7k lifetime
+// budget for ImageBitmap ships out of a never-yielding worker in ~2 min and
+// destroyed the compositor's device), and unconditionally at REAL parks
+// (>=15ms/indefinite — self-limiting, and the app may never present again),
+// so the freshest frame is never lost. This file drives the clamp
+// deterministically in Node with a
 // fake vsync tick (real Chromium rate evidence lives in the browser sweep's
 // os-pollball.mjs); the sibling test_gpu_present_binding.js owns the
 // per-window binding semantics.
@@ -80,13 +86,48 @@ st.tick++;
 for (let i = 0; i < 1000; i++) bound.present();
 check('next tick ships exactly 1 more', st.frames === 2, `frames=${st.frames}`);
 
-// 3) park entry (pumpWait — SDL_WaitEvent/GetMessage/SDL_Delay) ships the
-//    held trailing frame unconditionally: an app going quiet must not leave
-//    a stale frame on screen. One frame per park cannot flood.
-env.__sdl_pump_wait(0);
-check('park entry flushes the held trailing frame', st.frames === 3, `frames=${st.frames}`);
-env.__sdl_pump_wait(0);
+// 3) a REAL park entry (pumpWait >= 15ms — SDL_WaitEvent/GetMessage/long
+//    SDL_Delay) ships the held trailing frame unconditionally: an app going
+//    quiet must not leave a stale frame on screen. One frame per real park
+//    cannot flood.
+env.__sdl_pump_wait(1000);
+check('real park entry flushes the held trailing frame', st.frames === 3, `frames=${st.frames}`);
+env.__sdl_pump_wait(1000);
 check('second park ships nothing (no held frame left)', st.frames === 3, `frames=${st.frames}`);
+
+// 3b) #551: a SHORT-timeout park (the SDL_Delay(1) frame-loop shape) keeps
+//    the clamp — same tick, inside the 17ms wall-escape window, the held
+//    frame stays held. The wall escape reads the real clock, so the trial
+//    MEASURES itself (the 7b pattern): only a trial whose whole
+//    ship→hold→park sequence fits inside 17ms asserts; a preempted trial
+//    retries under a deadline, and exhausting it is a loud FAIL.
+{
+  let proved = false, violated = '';
+  const deadline = Date.now() + 2000;
+  while (!proved && !violated && Date.now() < deadline) {
+    st.tick++;
+    const t0 = Date.now();
+    bound.present();                    // fresh tick: ships, stamps the wall clock
+    const shipped = st.frames;
+    bound.present();                    // same tick: held
+    env.__sdl_pump_wait(1);             // short park — must keep the clamp
+    const dt = Date.now() - t0;
+    if (st.frames === shipped) { if (dt < 17) proved = true; continue; }
+    if (dt < 17) violated = `short park SHIPPED ${dt}ms after the tick's ship`;
+    // dt >= 17: the wall escape legitimately opened (a stall) — retry.
+  }
+  check('short park (delay-loop shape) keeps the clamp within the tick',
+    proved && !violated, violated || `proved=${proved} frames=${st.frames}`);
+}
+// ...and the held frame ships once the tick advances, even through the
+// short-park path (deterministic: the tick gate, not the wall clock).
+{
+  const before = st.frames;
+  st.tick++;
+  env.__sdl_pump_wait(1);
+  check('short park ships the held frame once the tick advances',
+    st.frames === before + 1, `frames=${st.frames}`);
+}
 
 // 4) SDL_PollEvent's pump retries THROUGH the gate: same tick keeps holding
 //    (a hot loop stays clamped), a fresh tick ships the held frame (a loop
@@ -110,7 +151,7 @@ check('paced one-present-per-tick app ships every frame', st.frames === paced0 +
 bound.present();                      // held (same tick as the last paced ship)
 env.__sdl_destroy_window(handle);
 const d0 = st.frames;
-env.__sdl_pump_wait(0);
+env.__sdl_pump_wait(1000);
 check('destroyed window ships nothing at park (held state cleared)',
   st.frames === d0, `frames=${st.frames}`);
 
@@ -154,8 +195,8 @@ while (!heldProved && !violated && Date.now() < trialDeadline) {
 check('clock fallback holds a same-window present (self-measured trial)',
   heldProved && !violated, violated || `proved=${heldProved} frames=${st2.frames}`);
 const heldAt = st2.frames;
-env2.__sdl_pump_wait(0);
-check('clock fallback: the held frame ships at park (never lost)',
+env2.__sdl_pump_wait(1000);   // a REAL park (#551): unconditional flush
+check('clock fallback: the held frame ships at a real park (never lost)',
   st2.frames === heldAt + 1, `frames=${st2.frames}`);
 
 console.log(failures ? '\ngpu present clamp: ' + failures + ' FAILED' : '\ngpu present clamp: PASS');
