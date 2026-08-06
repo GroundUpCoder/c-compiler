@@ -42,8 +42,11 @@ function check(name, cond, extra) {
 
 const { dir: tmp, image } = freshImage('os-winmine-');
 
+let bootErr = '';                                // stderr of the LAST boot()
 function boot(script) {
-  return driveBoot(script, { image, maxBuffer: 64 * 1024 * 1024 }).stdout;
+  const r = driveBoot(script, { image, maxBuffer: 64 * 1024 * 1024 });
+  bootErr = String(r.stderr || '');
+  return r.stdout;
 }
 
 function section(out, name) {
@@ -142,6 +145,10 @@ const out = boot([
   'echo ==list3',
   'wmctl list',
   'echo ==cut',
+  // 0145 gap #13: SND_RESOURCE is silent success BY DESIGN (assets not
+  // vendored, 0068) but must REPORT once — enable Options>Sound so the
+  // first reveal below fires PlaySound(SND_RESOURCE); assert on stderr.
+  'wmctl click Sound',
   // gameplay: reveal a cell, timer runs, F2 resets. All pixel-diff shots with
   // no non-pixel observable, so the render/timer settles stay annotated.
   'wmctl shot $SID /root/fresh.ppm',
@@ -190,6 +197,7 @@ const out = boot([
   'echo ==cut',
   '',
 ].join('\n'));
+const mainErr = bootErr;                         // before out2 overwrites it
 
 /* window + tree */
 const list1 = section(out, 'list1');
@@ -265,6 +273,12 @@ check('Beginner resizes back',
   const t2 = crop(ticking, TIMER.x, TIMER.y, TIMER.w, TIMER.h);
   check('WM_TIMER runs the second counter (timer LEDs change)', !t1.equals(t2));
 }
+
+/* 0145 gap #13: the sound-on reveal above hit the SND_RESOURCE path —
+ * silent success stands (0068 decision), but it must report ONCE */
+check('SND_RESOURCE silent success reports once (gap #13 honesty)',
+  /win32: unsupported PlaySound SND_RESOURCE/.test(mainErr),
+  mainErr.slice(-300));
 
 /* Fastest Times dialog */
 const timestree = section(out, 'timestree');

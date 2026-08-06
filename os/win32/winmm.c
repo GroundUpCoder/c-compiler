@@ -30,6 +30,7 @@
 #include <windows.h>
 #include <mmsystem.h>
 #include <unistd.h>
+#include "win32_internal.h"
 #include "../sounds.h"
 
 static SDL_AudioStream *g_snd;                   /* the one current sound */
@@ -48,7 +49,15 @@ BOOL PlaySoundA(LPCSTR sound, HMODULE mod, DWORD flags) {
         return TRUE;
     }
     /* NB SND_RESOURCE (0x00040004) contains the SND_MEMORY bit — full match */
-    if ((flags & SND_RESOURCE) == SND_RESOURCE) return TRUE;   /* assets not vendored (0068) */
+    if ((flags & SND_RESOURCE) == SND_RESOURCE) {
+        /* silent success BY DESIGN (0068: the corpus wave assets are not
+         * vendored, and the default ding must not fire per winmine timer
+         * tick) — but report ONCE so an inert soundscape is an inventoried
+         * decision, not a mystery (todos/0145 gap #13) */
+        WIN32_UNSUPPORTED("PlaySound SND_RESOURCE: resource waves not "
+                          "vendored (silent success, 0068)");
+        return TRUE;
+    }
     if (flags & SND_NOSTOP) {
         if (g_snd && SDL_GetAudioStreamQueued(g_snd) > 0) return FALSE;
     }
