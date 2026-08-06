@@ -1,0 +1,89 @@
+# #551 — sustained SDL play killed the compositor: root cause, fix, and what the probes ruled out
+
+Ticket #551 (P0, jku next-up promotion): jku's in-OS SDL3 game ("Keep Up",
+`RenderPresent` + `SDL_Delay(1)` loop) killed the ENTIRE browser desktop after
+~2 min — `[compositor] WebGPU device lost: Device was destroyed.`, every pixel
+black, no recovery, game process still running.
+
+## The mechanism, measured (not guessed)
+
+Instrumented counters (presents vs `transferToImageBitmap` ships) + OS-free
+probes (a plain page + workers replica of the producer→kernel shape) pinned it:
+
+| run | present rate | ship rate | death (game time) | ships at death |
+|---|---|---|---|---|
+| keepup `SDL_Delay(1)` | ~160/s | ~160/s | ~103 s | ~16.5 k |
+| keepup poll-only | ~1870/s | ~64/s | ~251 s | ~16.3 k |
+| probe, blocked producer | — | ~200/s | — | 16,744 |
+| probe, blocked + canvas rotation | — | ~200/s | — | 16,741 |
+| probe, yielding producer (any shape) | — | ~300–500/s | none | >60,000 clean |
+
+1. **The #484 producer clamp was void for delay-loop games.** `flushPresent`'s
+   park-entry flush shipped the held frame UNCONDITIONALLY, and `SDL_Delay(1)`
+   parks hundreds of times a second — so ships == presents, not ≤ vsync.
+2. **Chromium budgets a never-yielding worker ~16.7k lifetime
+   `transferToImageBitmap` ships** (16,744±3 across probes). Every OS SDL /
+   webgpu.h frame loop parks in `Atomics.wait` and never returns to its event
+   loop, where the bitmap recycle/return tasks would run. The budget is
+   rate-independent, close-discipline-independent, canvas-rotation-proof, and
+   consumed only by blocked producers. At exhaustion Chromium destroys the
+   KERNEL worker's device (`reason=destroyed`) — the other worker's device is
+   the casualty, matching the observed symptom exactly.
+3. **Past the wall the producer's canvas ships dead (transparent) frames
+   forever** — so even a recovered compositor shows a ghost window; and there
+   is **no synchronous GPU-pixel export from a blocked worker at all**
+   (`drawImage(webgpuCanvas)` reads black: canvas image publication also needs
+   the event loop; every readback API is a promise).
+4. Exonerated along the way: per-present encode/submit churn (462k encodes,
+   no death), title/label churn (idle control, prior thread), ImageBitmap
+   close discipline in `_wmFrame` (correct), the compositor label cache
+   (bounded), kernel-side import counts (not invariant at death).
+
+The wall also appears to be one-shot per session (probe ran 25k ships past a
+recovered device, clean), but the fix does not lean on that.
+
+## The fix (three legs, all landed)
+
+- **(A) `flushPresent` mode split** (host.js): 'gate' (poll pump, unchanged),
+  'force' (real parks ≥15ms/indefinite — unconditional, self-limiting),
+  'park' (short-timeout parks — keep the vsync gate, 17ms wall-clock escape
+  for stalled ticks so a parked compositor still gets its wake). Measured:
+  gpubox ships ratio 1.000/frame; pre-fix keepup measured 2.7.
+- **(B) compositor device-loss recovery** (os/compositor.js): all
+  device-derived state rebuilds via `initGpuState`; `device.lost` logs loudly
+  (reason included) and re-acquires with backoff; shm surfaces re-upload from
+  SABs, gpu surfaces re-import the kernel-held bitmap, labels re-rasterize.
+  `compositor-kill` test hook drives the REAL lost path; recovery measured at
+  attempt 1–2, sub-second. Loud-by-design (0055) was a boot rule; a running
+  OS survives transient loss now.
+- **(C+O4) OS SDL_Render\* apps rasterize software→shm** (host.js): the
+  A4-era GPU renderer lock-in reverted for the OS worker flavor — with a
+  ~16.7k lifetime budget and no sound export path, GPU-rendered pixels
+  cannot leave a blocked worker; the software tier (every headless kernel
+  e2e's tier) has zero per-present GPU objects, so the wall is unreachable
+  for the gamedev-epic app class. Standalone pages keep the GPU renderer
+  (sound there). The per-process SDL device got a loud lost logger.
+
+**Proof**: the byte-identical Keep Up repro ran 11.2 min continuous with
+zero device losses, zero blips, `wmFrames=0` (no GPU bitmaps at all), window
+and desktop alive throughout — vs death at 103 s before. Regression gate:
+`tests/browser/os-devloss.mjs` (zero-ships invariant, gpubox vsync-clamp
+ratio, synthetic `device.destroy()` → recovery with pixel-verified repaint).
+`os-pollball.mjs` re-cut: its 15..300/s band measured the retired GPU
+transport; shm flips are unbounded by design (8229/s measured, compositor
+still samples at its own rAF).
+
+## Residual + follow-ups (filed on #551)
+
+- **webgpu.h apps (gpubox class) still burn budget** at ≤60 ships/s → freeze
+  as a ghost window after ~4.6 min of continuous presenting, desktop
+  recovering fine. Structural fixes are architecture-scale, deliberately not
+  landed under a P0: **presenter-worker** (a yielding sibling owns
+  device+canvas, executes the draw stream — restores first-class GPU 2D) or
+  **JSPI** (suspend the wasm frame at park imports so the worker genuinely
+  yields — un-breaks the whole blocked-worker-vs-async-browser-API class,
+  including in-process device recovery and mapAsync).
+- Stability finding (jku's directive): any design that requires a browser
+  async round-trip from a process worker is dead on arrival — the blocked
+  main loop is legal and common. The presenter/JSPI decision should be made
+  once, as a design, not per-feature.
