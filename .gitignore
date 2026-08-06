@@ -22,6 +22,7 @@ os/os-system.*.img.tmp-*
 os/os-user.img
 media/
 os/os-root.img
+os/*.img.lock
 dist/
 
 # CPython writes bytecode caches next to the source it imports; the shipped

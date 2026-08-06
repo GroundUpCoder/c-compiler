@@ -690,8 +690,12 @@ tab gets `boot-locked` → os.html's guard screen + Retry (`boot-retry`
 re-enters; the lock frees when the winner closes; `__osState ===
 'locked'` is the probe). `boot.js` is the headless twin — same
 kernel/manifest under Node with the tty on stdio
-(`echo 'ls /' | node os/boot.js`) — deliberately unguarded (a
-flock-style guard is a noted-only follow-up in the 0045 item). The
+(`echo 'ls /' | node os/boot.js`) — guarded since todos/0293 (the 0045
+follow-up): a sidecar lockfile beside the writable root image
+(`<root>.img.lock`, stale-stealing, released on exit/signals) makes a
+second boot of the SAME pair refuse at exit 5 naming the holder pid —
+the headless twin of the Web Lock. Different pairs boot concurrently
+(the kernel e2es' per-boot mkdtemp images never contend). The
 browser compositor is ONE WebGPU render pass per rAF in the kernel
 worker (todos/0055, `os/compositor.js`: shm surfaces seq-gated
 `writeTexture` into cached GPUTextures, gpu surfaces
