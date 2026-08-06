@@ -1,29 +1,60 @@
-// #551 browser acceptance: the blocking-main-loop GPU-present REFUSAL.
+// #551 browser acceptance: the blocking-main-loop GPU-present REFUSAL,
+// its two sanctioned escapes, and the SDL_AppInit allowance.
 //
-// A GPU-transport present issued while main() is still on the stack is
-// refused at the FIRST present, unconditionally (jku ruling 2026-08-06,
-// ticket #551): the process dies with a stderr message naming
-// SDL_MAIN_USE_CALLBACKS as the fix and a distinct exit status (69), and
-// the desktop is untouched. The trigger is the LOOP MODEL, not the sleep —
-// so BOTH classic shapes must be refused identically:
+// A SECOND GPU-transport present issued while main() is still on the stack
+// is refused (jku ruling 2026-08-06, ticket #551; the FIRST is the
+// SDL_AppInit splash allowance — a correct callbacks app may present once
+// before its main() returns): the process dies with a stderr message
+// teaching FIX 1 (SDL_RENDER_DRIVER=software — the explicit software
+// opt-in, no code changes) and FIX 2 (SDL_MAIN_USE_CALLBACKS), and a
+// distinct exit status (69); the desktop is untouched. The trigger is the
+// LOOP MODEL, not the sleep — so BOTH classic shapes must be refused
+// identically:
 //   - the SDL_Delay(1) frame loop (jku's Keep Up game shape — the loop
 //     that killed the desktop at ~103s pre-#551), and
 //   - the poll-only spin loop (pollball's pre-conversion shape — never
 //     parks, floods hardest; a park-based trigger would NEVER fire here).
-// This file carries those two shapes as fixtures (compiled in-OS with cc);
-// the live demos were converted to SDL_MAIN_USE_CALLBACKS and their
+// This file carries those two shapes as fixtures (compiled in-OS with cc)
+// and proves BOTH escapes on them:
+//   - FIX 1: the same refused delayloop binary runs fine under
+//     SDL_RENDER_DRIVER=software (env var → hint → the shm rasterizer);
+//   - FIX 2: a callbacks app — including one that presents inside
+//     SDL_AppInit, the allowance case — runs fine on the GPU tier.
+// The live demos were converted to SDL_MAIN_USE_CALLBACKS and their
 // clean-run coverage lives in os-pollball.mjs / os-devloss.mjs.
 //
 // What replaced #484's pollball coverage: the flood this refusal forbids
 // can no longer be produced by a shipped app, so the acceptance moved from
 // "the flood is clamped" (old os-pollball rate band) to (a) THIS refusal
-// firing before a single bitmap ships, and (b) the callback model's ships
+// firing within one allowance frame, and (b) the callback model's ships
 // staying vsync-clamped (os-devloss ratio legs, os-pollball rate band).
 //
 // Usage: node os-loopguard.mjs
 import { openOsSession } from './lib/os-harness.mjs';
 
 const PORT = 3243;
+
+// Shape 3 — a CORRECT callbacks app that presents inside SDL_AppInit (the
+// allowance case): must run clean, never see the refusal.
+const SPLASH_C = `#define SDL_MAIN_USE_CALLBACKS
+#include <SDL.h>
+static SDL_Window *w; static SDL_Renderer *r; static int n;
+SDL_AppResult SDL_AppInit(void **as, int argc, char **argv){
+(void)as;(void)argc;(void)argv;
+SDL_Init(SDL_INIT_VIDEO);
+w=SDL_CreateWindow("splashcb",320,200,0);
+r=SDL_CreateRenderer(w,NULL);
+SDL_SetRenderDrawColor(r,20,120,220,255);SDL_RenderClear(r);
+SDL_RenderPresent(r);   /* the splash present, inside AppInit */
+return SDL_APP_CONTINUE;}
+SDL_AppResult SDL_AppEvent(void *as, SDL_Event *e){(void)as;
+return e->type==SDL_EVENT_QUIT?SDL_APP_SUCCESS:SDL_APP_CONTINUE;}
+SDL_AppResult SDL_AppIterate(void *as){(void)as;
+SDL_SetRenderDrawColor(r,20,120,220,255);SDL_RenderClear(r);
+SDL_RenderPresent(r);
+return ++n>=90?SDL_APP_SUCCESS:SDL_APP_CONTINUE;}
+void SDL_AppQuit(void *as, SDL_AppResult res){(void)as;(void)res;}
+`;
 
 // Shape 1 — the SDL_Delay(1) game loop (Keep Up's loop, minimized).
 const DELAY_C = `#include <SDL3/SDL.h>
@@ -69,7 +100,10 @@ try {
   await page.evaluate((src) => navigator.clipboard.writeText(src), SPIN_C);
   await page.keyboard.type('pbpaste > /root/spin.c && cc /root/spin.c -o /root/spinloop && echo CC2-O""K\r');
   await waitOut('CC2-OK', 180000);
-  check('both blocking-shape fixtures compiled in-OS', true);
+  await page.evaluate((src) => navigator.clipboard.writeText(src), SPLASH_C);
+  await page.keyboard.type('pbpaste > /root/splash.c && cc /root/splash.c -o /root/splashcb && echo CC3-O""K\r');
+  await waitOut('CC3-OK', 180000);
+  check('all three fixtures compiled in-OS', true);
 
   const before = await readStats();
 
@@ -82,9 +116,11 @@ try {
   check('delay-loop shape refused with exit 69', /RC1=69/.test(out),
     out.slice(-300));
   check('refusal message names the mechanism (blocking main loop)',
-    out.includes('GPU rendering from a blocking main loop is not supported'),
+    out.includes('presents GPU frames from a blocking main loop'),
     out.slice(-1200));
-  check('refusal message teaches SDL_MAIN_USE_CALLBACKS + SDL_AppIterate',
+  check('refusal message FIX 1 teaches the software opt-in',
+    out.includes('SDL_RENDER_DRIVER=software'), out.slice(-1200));
+  check('refusal message FIX 2 teaches SDL_MAIN_USE_CALLBACKS + SDL_AppIterate',
     out.includes('SDL_MAIN_USE_CALLBACKS') && out.includes('SDL_AppIterate'),
     out.slice(-1200));
   check('refusal message carries the runtime identity (program + pid)',
@@ -102,11 +138,29 @@ try {
   check('poll-only spin shape refused with exit 69', /RC2=69/.test(out),
     out.slice(-300));
 
-  // ---- Refused before any budget burned: zero GPU bitmaps shipped.
+  // ---- Budget accounting: each refused app ships AT MOST the one
+  // SDL_AppInit-allowance frame (the refusal fires on the SECOND main-live
+  // present), so two refused apps cost <= 2 bitmaps total — never a flood.
   const after = await readStats();
-  check('refusal fired before a single GPU bitmap shipped (wmFrames flat)',
-    after.wmFrames === before.wmFrames,
+  check('refusals cost at most one allowance frame each (<= 2 ships total)',
+    after.wmFrames - before.wmFrames <= 2,
     { before: before.wmFrames, after: after.wmFrames });
+
+  // ---- FIX 1 proven on the SAME refused binary: the software opt-in via
+  // the env var (env → SDL_HINT_RENDER_DRIVER → the shm rasterizer). A
+  // blocking loop is legal there — no GPU frames, no budget.
+  await page.keyboard.type('SDL_RENDER_DRIVER=software /root/delayloop & wmctl wait win delayloop && wmctl wait seq $(wmctl list | grep "delayloop$" | sed "s/[^0-9].*//") 30 20000 && pkill delayloop && echo SW-O""K\r');
+  await waitOut('SW-OK', 60000);
+  check('FIX 1 works: the refused binary runs under SDL_RENDER_DRIVER=software', true);
+
+  // ---- FIX 2 + the allowance, end to end in C: a callbacks app that
+  // presents inside SDL_AppInit must run clean (the allowance) and keep
+  // presenting from SDL_AppIterate — never refused, exits 0 on its own.
+  await page.keyboard.type('/root/splashcb; echo RC3=$?\r');
+  await page.waitForFunction(() => /RC3=\d+/.test(window.__osOut || ''), { timeout: 60000, polling: 200 });
+  out = await osOut();
+  check('callbacks app presenting in SDL_AppInit runs clean (exit 0, never refused)',
+    /RC3=0/.test(out), out.slice(-300));
 
   // ---- Only the process died: desktop composites, compositor healthy,
   // shell answers, and a callback-model GPU app still runs fine. NB the

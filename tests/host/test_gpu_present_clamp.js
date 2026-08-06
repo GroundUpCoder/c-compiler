@@ -203,11 +203,14 @@ env2.__sdl_pump_wait(1000);   // a REAL park (#551): unconditional flush
 check('clock fallback: the held frame ships at a real park (never lost)',
   st2.frames === heldAt + 1, `frames=${st2.frames}`);
 
-// 8) the #551 blocking-loop refusal: a GPU-transport present issued while
-//    main() is on the stack (setMainLive(true) — runModule's arming) is
-//    refused at the FIRST present: nothing ships, the message lands on
-//    fd 2, the exit reports 69 through hooks.exit exactly once, and the
-//    thrown error carries sdlRefusalExit for runModule's clean unwind.
+// 8) the #551 blocking-loop refusal, with the SDL_AppInit allowance: the
+//    FIRST GPU-transport present while main() is on the stack SHIPS (a
+//    correct callbacks app may legally present a splash inside
+//    SDL_AppInit, which runs before main() returns); the SECOND refuses —
+//    a blocking loop reaches it within one frame time. On refusal: the
+//    message lands on fd 2, the exit reports 69 through hooks.exit exactly
+//    once, and the thrown error carries sdlRefusalExit for runModule's
+//    clean unwind.
 {
   const st3 = { frames: 0, tick: 100, nextSid: 1, exits: [], fd2: '' };
   const hooks3 = {
@@ -234,36 +237,48 @@ check('clock fallback: the held frame ships at a real park (never lost)',
   const b3 = sdl3.webgpuConfig.bindWindow(env3.__sdl_create_window(0, 0, 0, 32, 24, 0));
   const bitmaps0 = bitmapsMade;
   sdl3.setMainLive(true);              // runModule: wasm entry is on the stack
+  b3.present();                        // the SDL_AppInit allowance: ships
+  check('first main-live present SHIPS (the SDL_AppInit splash allowance)',
+    st3.frames === 1 && bitmapsMade === bitmaps0 + 1 && st3.exits.length === 0,
+    `frames=${st3.frames} bitmaps=${bitmapsMade - bitmaps0}`);
+  st3.tick++;                          // fresh tick: the clamp is not the subject here
   let threw = null;
   try { b3.present(); } catch (e) { threw = e; }
-  check('armed present refuses (throws with sdlRefusalExit=69)',
+  check('second main-live present refuses (throws with sdlRefusalExit=69)',
     threw && threw.sdlRefusalExit === 69, threw && threw.message);
-  check('refusal ships NOTHING (no frame, no bitmap)',
-    st3.frames === 0 && bitmapsMade === bitmaps0,
+  check('refusal ships nothing beyond the allowance frame',
+    st3.frames === 1 && bitmapsMade === bitmaps0 + 1,
     `frames=${st3.frames} bitmaps=${bitmapsMade - bitmaps0}`);
   check('refusal reports exit 69 through the kernel handshake exactly once',
     st3.exits.length === 1 && st3.exits[0] === 69, JSON.stringify(st3.exits));
   check('refusal message lands on the app fd 2',
-    st3.fd2.includes('GPU rendering from a blocking main loop is not supported'),
+    st3.fd2.includes('presents GPU frames from a blocking main loop'),
     st3.fd2.slice(0, 120));
-  check('message teaches SDL_MAIN_USE_CALLBACKS / SDL_AppIterate',
+  check('message FIX 1 teaches the software opt-in (SDL_RENDER_DRIVER=software)',
+    st3.fd2.includes('SDL_RENDER_DRIVER=software') &&
+    st3.fd2.includes('SDL_CreateRenderer(win, "software")'));
+  check('message FIX 2 teaches SDL_MAIN_USE_CALLBACKS / SDL_AppIterate',
     st3.fd2.includes('SDL_MAIN_USE_CALLBACKS') && st3.fd2.includes('SDL_AppIterate'));
-  check('message carries the runtime identity (program, pid)',
-    st3.fd2.includes('blockyapp (pid 42)'), st3.fd2);
+  check('message carries the runtime identity (program, pid) + the doc path',
+    st3.fd2.includes('blockyapp (pid 42)') && st3.fd2.includes('/usr/share/doc/sdl-gucos.md'),
+    st3.fd2);
   check('message quotes no vendor-specific budget figure',
     !/16[,.]?7\d\d/.test(st3.fd2));
   // Re-entry (the app unwound into another present somehow): keeps refusing,
   // never double-reports the exit.
   let threw2 = null;
   try { b3.present(); } catch (e) { threw2 = e; }
-  check('second armed present still refuses without re-reporting exit',
+  check('third main-live present still refuses without re-reporting exit',
     threw2 && threw2.sdlRefusalExit === 69 && st3.exits.length === 1,
     JSON.stringify(st3.exits));
 }
 
-// 9) ...and the callback path is untouched: main returned (setMainLive
-//    false — the ONLY state the animation-frame loop presents in), the
-//    same first present ships.
+// 9) the callback-model shapes NEVER refuse:
+//    a) the AppInit-splash shape end to end — ONE present while main() is
+//       live (ships, leg 8), then main returns (setMainLive false) and
+//       every further present ships: the app is never told to adopt the
+//       model it already uses;
+//    b) the plain post-main shape.
 {
   const st4 = { frames: 0, tick: 100, nextSid: 1 };
   const hooks4 = {
@@ -279,11 +294,45 @@ check('clock fallback: the held frame ships at a real park (never lost)',
     proc: { name: 'cbapp', pid: 43 } });
   const env4 = sdl4[ENV];
   const b4 = sdl4.webgpuConfig.bindWindow(env4.__sdl_create_window(0, 0, 0, 32, 24, 0));
-  sdl4.setMainLive(true);
-  sdl4.setMainLive(false);             // runModule: main() returned
-  b4.present();
-  check('post-main (callback path) present ships normally', st4.frames === 1,
-    `frames=${st4.frames}`);
+  sdl4.setMainLive(true);              // the callbacks-entry main() is running
+  b4.present();                        // SDL_AppInit presents its splash
+  sdl4.setMainLive(false);             // main() returned (frame driver armed)
+  st4.tick++; b4.present();            // SDL_AppIterate presents
+  st4.tick++; b4.present();
+  check('callbacks app presenting in SDL_AppInit ships every frame (never refused)',
+    st4.frames === 3, `frames=${st4.frames}`);
+}
+
+// 10) the #551 software opt-in (__sdl_create_renderer(handle, 1)): presents
+//     flip the shm SAB — no bitmap, no refusal, from ANY loop shape — and
+//     the mode locks: a later GPU-mode create in the same process fails
+//     loudly instead of minting a cross-backend handle.
+{
+  const st5 = { frames: 0, tick: 100, nextSid: 1, exits: [] };
+  const hooks5 = {
+    wmSabLayout: WM_SAB_LAYOUT,
+    surfaceCreate: function () { return { sid: st5.nextSid++ }; },
+    surfaceFrame: function () { st5.frames++; },
+    surfaceDestroy: function () {},
+    vsyncEnabled: function () { return true; },
+    vsyncSeq: function () { return st5.tick; },
+    exit: function (code) { st5.exits.push(code); },
+  };
+  const sdl5 = host.createSurfaceSDL({ ctx: ctx, hooks: hooks5,
+    proc: { name: 'swapp', pid: 44 } });
+  const env5 = sdl5[ENV];
+  const w5 = env5.__sdl_create_window(0, 0, 0, 16, 12, 0);
+  const bitmaps0 = bitmapsMade;
+  sdl5.setMainLive(true);              // a BLOCKING loop...
+  const r5 = env5.__sdl_create_renderer(w5, 1);   // ...on the software driver
+  check('software renderer created on explicit request', r5 > 0, r5);
+  env5.__sdl_render_clear(r5);
+  for (let i = 0; i < 5; i++) env5.__sdl_render_present(r5);
+  check('software presents from a blocking loop: no bitmap, no refusal, no exit',
+    bitmapsMade === bitmaps0 && st5.exits.length === 0,
+    `bitmaps=${bitmapsMade - bitmaps0} exits=${JSON.stringify(st5.exits)}`);
+  check('mixing GPU after software in one process fails loudly',
+    env5.__sdl_create_renderer(w5, 0) === 0);
 }
 
 console.log(failures ? '\ngpu present clamp: ' + failures + ' FAILED' : '\ngpu present clamp: PASS');

@@ -7966,53 +7966,70 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
      * is Atomics.waitAsync), so they never trip this. shm presents
      * (SDL_UpdateWindowSurface — doom, the win32 veneer, the software
      * renderer) are not GPU-transport and stay legal from any loop shape.
+     *
+     * The SDL_AppInit allowance (#551 follow-up finding): a CORRECT
+     * callbacks app may legally present one frame inside SDL_AppInit — a
+     * splash, a first clear+present — and SDL_AppInit runs while main() is
+     * still on the stack (the header-provided main() calls it before
+     * registering the frame driver). Refusing that first present would
+     * kill a compliant app with a message telling it to adopt the model it
+     * already uses — a dead-end error. So the refusal fires on the SECOND
+     * GPU-transport present while main() is live: a blocking loop presents
+     * again within one frame time and still dies before its window means
+     * anything, at a cost of exactly ONE recyclable-once-main-returns
+     * frame against a budget in the thousands; and a "loop hidden inside
+     * SDL_AppInit" presents twice, so the escape stays closed.
+     *
      * Armed by runModule around the wasm entry via out.setMainLive; embeds
      * that drive this backend directly (unit tests) never arm it. When
      * JSPI-based suspension lands this rule RELAXES (a suspending worker
      * genuinely yields); it does not unwind. */
     const BLOCKING_PRESENT_EXIT = 69;   // EX_UNAVAILABLE — the refusal's distinct exit status
     let mainLive = false;               // true only between wasm entry and main()'s return
+    let mainPresents = 0;               // GPU-transport presents seen while mainLive
     let refused = false;
-    /* THE FAILURE MESSAGE (single constant, populated at runtime — wording
-     * is jku-approvable copy; keep logic out of it). Deliberately carries
-     * no browser-specific frame budget figure: the mechanism is
-     * vendor-independent, the measured number is not. */
+    /* THE FAILURE MESSAGE (single constant, populated at runtime — the
+     * wording is jku's approved shape from ticket #551; keep logic out of
+     * it). Deliberately carries no browser-specific frame budget figure:
+     * the mechanism is vendor-independent, the measured number is not.
+     * FIX 1 is the #551 software opt-in (SDL_RENDER_DRIVER=software / the
+     * "software" driver name); FIX 2 is the SDL3 callback main loop. */
     const blockingPresentMessage = function (via) {
-      const jspi = typeof WebAssembly.Suspending === 'function'
-        ? 'WebAssembly JSPI available' : 'no WebAssembly JSPI';
-      const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
-      let m, browser = 'unknown browser';
-      if ((m = ua.match(/Firefox\/(\d+)/))) browser = 'Firefox ' + m[1];
-      else if ((m = ua.match(/Edg\/(\d+)/))) browser = 'Edge ' + m[1];
-      else if ((m = ua.match(/Chrome\/(\d+)/))) browser = 'Chrome ' + m[1];
-      else if ((m = ua.match(/Version\/([\d.]+).*Safari/))) browser = 'Safari ' + m[1];
       const prog = (proc && proc.name) || '?';
       const pid = (proc && proc.pid) || 0;
+      const wgpu = via && via.indexOf('webgpu') >= 0;
+      const tier = wgpu ? 'webgpu.h surface' : 'SDL_Renderer, GPU tier';
+      const call = wgpu ? 'wgpuSurfacePresent()' : 'SDL_RenderPresent()';
       return (
-'SDL: FATAL — GPU rendering from a blocking main loop is not supported in gucOS.\n' +
+'SDL: FATAL — this program presents GPU frames from a blocking main loop.\n' +
+'             gucOS stops it before it takes the desktop down.\n' +
 '\n' +
-'  program : ' + prog + ' (pid ' + pid + ') — ' + via + '\n' +
-'  browser : ' + browser + ' (' + jspi + ')\n' +
-'  detected: a GPU frame was presented before main() returned — a blocking\n' +
-'            main loop (poll / SDL_Delay) that never yields to the browser\n' +
-'            event loop\n' +
+'  program : ' + prog + ' (pid ' + pid + ') — ' + tier + '\n' +
+'  detected: ' + call + ' called from main(), not from a frame callback\n' +
 '\n' +
-'  Why this stops now, deliberately: a worker that never returns to its\n' +
-'  event loop never lets the browser reclaim the GPU frames it presents.\n' +
-'  That headroom is finite. Exhausting it destroys the desktop\n' +
-'  compositor’s GPU device and takes down every window on the desktop.\n' +
-'  gucOS refuses to start that countdown.\n' +
+'  WHY: a blocking main loop never returns to the browser\'s event loop, so the\n' +
+'  browser can never recycle the GPU frames this program presents. That budget\n' +
+'  is finite. Exhausting it destroys the compositor\'s GPU device and the whole\n' +
+'  desktop goes black. gucOS refuses to start that countdown.\n' +
 '\n' +
-'  The fix: use the SDL3 callback main loop. Build with\n' +
+'  FIX 1 — run it as-is, NO code changes:\n' +
+'\n' +
+'      SDL_RENDER_DRIVER=software ./' + prog + '\n' +
+'\n' +
+'  Draws on the CPU into the window surface. There is no GPU frame budget, so a\n' +
+'  blocking loop is safe. Equivalent in code: SDL_CreateRenderer(win, "software").\n' +
+'\n' +
+'  FIX 2 — keep GPU rendering, let SDL own the loop:\n' +
+'\n' +
 '      #define SDL_MAIN_USE_CALLBACKS\n' +
-'      #include <SDL.h>\n' +
-'  and implement SDL_AppInit / SDL_AppIterate / SDL_AppEvent / SDL_AppQuit\n' +
-'  instead of main(). SDL_AppIterate runs once per composited frame and\n' +
-'  the process yields between frames, so GPU rendering is sound — on\n' +
-'  every browser. (Software presents — SDL_GetWindowSurface +\n' +
-'  SDL_UpdateWindowSurface — remain fine from any loop shape.)\n' +
+'      provide SDL_AppInit / SDL_AppIterate / SDL_AppEvent / SDL_AppQuit\n' +
+'      instead of your own while() loop.\n' +
 '\n' +
-'  This process is exiting with status ' + BLOCKING_PRESENT_EXIT + '. The desktop is unaffected.\n');
+'  Standard SDL3 — the same source runs on desktop SDL3 unchanged.\n' +
+'\n' +
+'  Details: /usr/share/doc/sdl-gucos.md\n' +
+'\n' +
+'Exiting (status ' + BLOCKING_PRESENT_EXIT + '). The desktop is unaffected.\n');
     };
     const refuseBlockingPresent = function (via) {
       const summary = 'SDL: GPU-transport present from a blocking main loop refused (#551)';
@@ -8054,7 +8071,9 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
       } catch (e) { /* canvas may be zero-sized pre-configure */ }
     };
     const presentTo = function (sid, cnv, via) {
-      if (mainLive) refuseBlockingPresent(via || 'SDL_Renderer (GPU-accelerated 2D)');   // #551: throws, never returns
+      // #551: second main-live present = a blocking loop (the first is the
+      // SDL_AppInit allowance, block comment above). Throws, never returns.
+      if (mainLive && ++mainPresents > 1) refuseBlockingPresent(via || 'SDL_Renderer');
       if (!handleBySid.has(sid)) return;   // window already destroyed
       const win = fbByHandle.get(handleBySid.get(sid));
       const acking = !!(win && win.pendingCfg &&
@@ -8158,6 +8177,31 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     Object.keys(swRenderer).forEach(function (n) {
       env[n] = function () { return rdrBackend[n].apply(null, arguments); };
     });
+    // #551 software opt-in: SDL_CreateRenderer(win, "software") — or the
+    // SDL_RENDER_DRIVER env/hint — selects the CPU rasterizer (shm flip, no
+    // GPU frame budget, legal from ANY loop shape). NEVER auto-selected:
+    // auto (NULL/"gucos") stays GPU, and the blocking-loop refusal below
+    // teaches this opt-in as its FIX 1. The two backends mint handles in
+    // separate spaces, so the mode locks at the app's FIRST renderer create
+    // — a later create in the OTHER mode fails loudly (no real app mixes
+    // renderer tiers in one process; a silent cross-space handle would
+    // corrupt both).
+    let rdrLocked = null;   // 'gpu' | 'sw' once the first renderer exists
+    env.__sdl_create_renderer = function (windowHandle, software) {
+      const want = software ? 'sw' : 'gpu';
+      if (rdrLocked && rdrLocked !== want) {
+        console.error('SDL_CreateRenderer: cannot mix "software" and GPU renderers in one process');
+        return 0;
+      }
+      if (!rdrLocked) {
+        rdrLocked = want;
+        // Explicit software request wins over whatever gpuRendererReady
+        // locked (it locks GPU on success, software on failed acquisition —
+        // an explicit "software" and a failure-fallback agree anyway).
+        if (want === 'sw') rdrBackend = swRenderer;
+      }
+      return rdrBackend.__sdl_create_renderer(windowHandle);
+    };
     env.__sdl_create_window = function (titlePtr, x, y, w, h, flags) {
       const s = surfaceCreate(titlePtr, w, h, flags);
       if (!s) return 0;
@@ -8942,7 +8986,16 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
          primitive __sdl_render_quad takes 4 dst corners (TL,TR,BR,BL in pixels)
          + a src rect (texture pixels); the C layer composes fill/copy/line/rect
          from it. texH 0 = the 1×1 white texture (solid fill). */
-      __sdl_create_renderer: function (window) {
+      __sdl_create_renderer: function (window, software) {
+        // #551: the standalone page flavor has no software rasterizer tier
+        // (no shm surface to flip). An explicit "software" request FAILS
+        // loudly rather than silently handing back the GPU renderer — and
+        // a standalone page's event loop is the main thread's, so the OS
+        // blocked-worker hazard the opt-in exists for does not arise here.
+        if (software) {
+          console.error('SDL_CreateRenderer("software"): no software renderer on the standalone page flavor — use the default (NULL) GPU renderer');
+          return 0;
+        }
         rdrEnsure();
         // SDL renderers default to SDL_BLENDMODE_NONE for draw ops. verts is a
         // growable CPU scratch (pixel-space vertices for the current frame);

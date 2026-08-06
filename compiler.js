@@ -21944,6 +21944,18 @@ bool SDL_ClearError(void);
    handle reads like upstream ("Parameter 'renderer' is invalid"). */
 #define SDL_InvalidParamError(param) SDL_SetError("Parameter '%s' is invalid", (param))
 
+/* ---- Hints (SDL_hints.h subset; ticket #551) ----
+   Real SDL semantics for the store: SDL_SetHint/SDL_GetHint round-trip ANY
+   name, and an environment variable of the hint's own name OVERRIDES a
+   stored value (upstream's env-beats-normal-priority rule — which is also
+   how \`SDL_RENDER_DRIVER=software ./game\` works with zero code changes).
+   The one hint this runtime READS is SDL_HINT_RENDER_DRIVER, at
+   SDL_CreateRenderer(name=NULL). A single driver name only — upstream's
+   comma-separated priority list is not parsed (loud failure on a no-match). */
+#define SDL_HINT_RENDER_DRIVER "SDL_RENDER_DRIVER"
+bool SDL_SetHint(const char *name, const char *value);
+const char *SDL_GetHint(const char *name);
+
 /* ---- SDL_Renderer (2D accelerated) ---- */
 SDL_Renderer *SDL_CreateRenderer(SDL_Window *window, const char *name);
 void SDL_DestroyRenderer(SDL_Renderer *renderer);
@@ -26661,7 +26673,7 @@ __import void __sdl_close_audio_device(int dev);
 
 /* SDL_Renderer primitives. Colors are 0..1 floats; the single draw primitive
    takes 4 dst corners (TL,TR,BR,BL in pixels) + a src rect (texture pixels). */
-__import int  __sdl_create_renderer(int window);
+__import int  __sdl_create_renderer(int window, int software);
 __import void __sdl_destroy_renderer(int r);
 __import int  __sdl_create_texture(int r, int access, int w, int h);
 __import void __sdl_destroy_texture(int t);
@@ -27494,21 +27506,68 @@ struct SDL_Renderer {
                             window's one-renderer slot (#497) */
 };
 
-/* The one render driver this runtime has (#497). SDL3's name parameter selects
-   a specific backend; asking for one we don't provide must FAIL ("Couldn't
-   find matching render driver"), not silently hand back a different backend
-   while reporting success — a developer probing for "opengl"/"software" would
-   get a false positive. NULL keeps SDL3's pick-the-default meaning. */
+/* ---- Hints (#551): a tiny grow-only store. SDL_GetHint prefers the
+   process ENVIRONMENT — upstream gives an env var of the hint's own name
+   override priority over a normal SDL_SetHint, and that rule is exactly
+   what makes 'SDL_RENDER_DRIVER=software ./game' work on unmodified
+   third-party source. ---- */
+struct __sdl_hint { char *name; char *value; struct __sdl_hint *next; };
+static struct __sdl_hint *__sdl_hints;
+
+bool SDL_SetHint(const char *name, const char *value) {
+    if (!name || !*name) { SDL_InvalidParamError("name"); return 0; }
+    struct __sdl_hint *h = __sdl_hints;
+    while (h && strcmp(h->name, name) != 0) h = h->next;
+    if (!h) {
+        h = (struct __sdl_hint *)malloc(sizeof(struct __sdl_hint));
+        if (!h) { SDL_SetError("Out of memory"); return 0; }
+        h->name = strdup(name);
+        h->value = NULL;
+        h->next = __sdl_hints;
+        __sdl_hints = h;
+    }
+    free(h->value);
+    h->value = value ? strdup(value) : NULL;
+    return 1;
+}
+
+const char *SDL_GetHint(const char *name) {
+    if (!name || !*name) return NULL;
+    const char *e = getenv(name);
+    if (e) return e;
+    for (struct __sdl_hint *h = __sdl_hints; h; h = h->next)
+        if (strcmp(h->name, name) == 0) return h->value;
+    return NULL;
+}
+
+/* The render drivers this runtime has (#497 name honesty, #551 opt-in).
+   "gucos" is the default driver (GPU-accelerated in the browser OS flavor,
+   the CPU rasterizer headless). "software" is upstream SDL3's real software
+   driver name: the CPU rasterizer drawing into the window's shm surface —
+   NEVER auto-selected (jku veto, #551: a silent GPU→CPU swap is forbidden;
+   the explicit request is the sanctioned escape for blocking-loop apps,
+   and the #551 refusal message teaches it). NULL falls through to
+   SDL_HINT_RENDER_DRIVER (the SDL_RENDER_DRIVER env var feeds it, as
+   upstream), then to the default. Asking for any OTHER backend
+   ("opengl", "metal", …) must still FAIL ("Couldn't find matching render
+   driver"), not silently hand back a different backend while reporting
+   success — a developer probing for capabilities would get a false
+   positive. */
 #define __SDL_RENDER_DRIVER "gucos"
 
 SDL_Renderer *SDL_CreateRenderer(SDL_Window *window, const char *name) {
     if (!__sdl_window_live(window)) { SDL_InvalidParamError("window"); return NULL; }
     if (window->renderer) { SDL_SetError("Renderer already associated with window"); return NULL; }
-    if (name && strcmp(name, __SDL_RENDER_DRIVER) != 0) {
-        SDL_SetError("Couldn't find matching render driver");
-        return NULL;
+    if (!name || !*name) name = SDL_GetHint(SDL_HINT_RENDER_DRIVER);
+    int software = 0;
+    if (name && *name) {
+        if (strcmp(name, "software") == 0) software = 1;
+        else if (strcmp(name, __SDL_RENDER_DRIVER) != 0) {
+            SDL_SetError("Couldn't find matching render driver");
+            return NULL;
+        }
     }
-    int h = __sdl_create_renderer(window->handle);
+    int h = __sdl_create_renderer(window->handle, software);
     if (h <= 0) { SDL_SetError("SDL_CreateRenderer: host failed to create a renderer"); return NULL; }
     SDL_Renderer *r = (SDL_Renderer *)malloc(sizeof(SDL_Renderer));
     if (!r) { SDL_SetError("Out of memory"); return NULL; }
