@@ -30243,9 +30243,12 @@ static long adjust_request(long size) {
 }
 
 void *malloc(size_t size) {
-  if (size == 0) return (void *)0;
-  /* POSIX: every genuine allocation failure (as opposed to malloc(0))
-     reports ENOMEM — callers like hsearch's table resize rely on it. */
+  /* malloc(0) returns a unique, freeable, non-NULL pointer (glibc/musl/BSD/
+     Darwin/MSVC all do) — NULL is reserved for genuine failure, which always
+     reports ENOMEM. Zero falls through: adjust_request() clamps to
+     MIN_BLOCK_SIZE, so the pointer comes from the pool and free() accepts
+     it. Reversed from NULL-on-zero by #554 (jku ruling: match the majority
+     ecosystem — NetSurf-class callers treat NULL as OOM). */
   if (size > 0x40000000L) { errno = ENOMEM; return (void *)0; }
 
   if (!initialized) init_pool();
@@ -30307,7 +30310,11 @@ void *calloc(size_t count, size_t size) {
 
 void *realloc(void *ptr, size_t new_size) {
   if (!ptr) return malloc(new_size);
-  if (new_size == 0) { free(ptr); return (void *)0; }
+  /* realloc(p, 0) keeps the block and returns p (non-NULL, freeable), like
+     musl/BSD/Darwin — NOT glibc/MSVC's free-and-return-NULL. C23 made the
+     zero-size case UB precisely because free-and-NULL is indistinguishable
+     from OOM-with-p-still-live; keeping NULL <=> failure across all three
+     allocators makes the p = realloc(p, n) pattern safe at n == 0 (#554). */
   // Reject sizes malloc itself would reject; also guards adjust_request below
   // from overflowing a huge request down to MIN_BLOCK_SIZE.
   if (new_size > 0x40000000L) { errno = ENOMEM; return (void *)0; }

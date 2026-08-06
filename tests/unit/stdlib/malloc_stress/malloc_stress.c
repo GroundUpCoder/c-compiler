@@ -167,8 +167,27 @@ int main() {
 
   // === 6. Edge-case sizes ===
   {
-    // malloc(0) returns NULL
-    if (malloc(0) != (void *)0) { printf("FAIL: malloc(0)\n"); return 1; }
+    // malloc(0) returns a unique, freeable, non-NULL pointer (#554 —
+    // mainstream contract: glibc/musl/BSD/Darwin/MSVC)
+    void *z1 = malloc(0);
+    void *z2 = malloc(0);
+    if (!z1 || !z2) { printf("FAIL: malloc(0) NULL\n"); return 1; }
+    if (z1 == z2) { printf("FAIL: malloc(0) not unique\n"); return 1; }
+    if ((long)z1 % 8 != 0) { printf("FAIL: malloc(0) align\n"); return 1; }
+    void *z3 = realloc(z1, 24);  // a zero-size block grows like any other
+    if (!z3) { printf("FAIL: realloc(malloc(0), 24)\n"); return 1; }
+    *(char *)z3 = 'Z';
+    if (*(char *)z3 != 'Z') { printf("FAIL: malloc(0) grow data\n"); return 1; }
+    free(z3);
+    free(z2);
+    // calloc(0, n) and calloc(n, 0) are non-NULL too — calloc(0, 60) is the
+    // exact NetSurf empty-flexbox shape that motivated #554
+    void *zc1 = calloc(0, 60);
+    void *zc2 = calloc(60, 0);
+    if (!zc1 || !zc2) { printf("FAIL: calloc(0) NULL\n"); return 1; }
+    if (zc1 == zc2) { printf("FAIL: calloc(0) not unique\n"); return 1; }
+    free(zc1);
+    free(zc2);
 
     // Power-of-2 sizes up to 32768, check alignment and usability
     int shift = 0;
