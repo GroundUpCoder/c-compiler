@@ -37,13 +37,25 @@ not done. The "Known strays" section below tracks current violations of either.
   ~424 lines) flattens SDL structs to primitives and forwards to `__sdl_*`
   imports satisfied by `createBrowserSDL` in `host.js` (~550 lines). `SDL.h` is
   in `_stdlibHeaders` (~289 lines).
-- **No JSPI ⇒ SDL3's callback main loop is the natural fit.** SDL3 ships
-  `SDL_MAIN_USE_CALLBACKS` (`SDL_AppInit`/`SDL_AppIterate`/`SDL_AppEvent`/
-  `SDL_AppQuit`). `SDL_AppIterate` is *exactly* the per-frame callback this
-  runtime already uses (`__sdl_set_animation_frame_func` → rAF, shared with
-  `wgpuSetMainLoopCallback`). **Adopting the callback model should be the primary
-  SDL3 entry path**; the classic `while (SDL_PollEvent) {...} ` blocking loop only
-  works for programs that already yield via the frame callback.
+- **No JSPI ⇒ SDL3's callback main loop is the natural fit — and since #551
+  it is IMPLEMENTED and ENFORCED.** `SDL_MAIN_USE_CALLBACKS`
+  (`SDL_AppInit`/`SDL_AppIterate`/`SDL_AppEvent`/`SDL_AppQuit`, real
+  `SDL_AppResult` semantics, both `<SDL.h>` and `<SDL3/SDL_main.h>`
+  orderings) is the primary SDL3 entry path: the header-emitted `main()`
+  drives the callbacks over `__sdl_set_animation_frame_func` (shared with
+  `wgpuSetMainLoopCallback`), `SDL_APP_FAILURE` exits 1 via the
+  `__sdl_app_result` export (read post-loop, so the Dawn drain keeps its
+  order). The classic blocking loop is REFUSED per principle 1 when it
+  presents on the gpu transport: a worker stuck in `main()` never yields,
+  so its GPU frames can never be recycled and the finite blocked-worker
+  ship budget eventually killed the whole desktop (measured, #551). The
+  refusal is unconditional (fires on JSPI browsers too — relax it when the
+  frame-loop parks become genuinely suspending, don't unwind it), fd-2
+  loud, exit 69, first-present-early. Reference apps: `os/pollball.c`
+  (pure SDL) and `os/gpubox.c` (win32 + webgpu.h, events forwarded via
+  user32's `__u32_feed_sdl_event`). Software/shm presents
+  (`SDL_UpdateWindowSurface` — doom, the win32 veneer) stay legal from any
+  loop shape.
 - **Video is already 100% WebGPU** (software blitter + batched 2D renderer in
   `createBrowserSDL`). The decision to *unify* SDL_Renderer onto the `webgpu.h`
   binding is **deferred until JSPI reaches iOS** (see `todos/WEBGPU.md` →
