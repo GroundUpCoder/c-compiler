@@ -1,8 +1,8 @@
 /* listdir.h — the shared directory-listing walk (code-debt CD34) for
- * comdlg32.c's file dialog and fileman.c's pane. NOT (yet) all three
- * drifted copies: wm.c's load_entries is the tracked 3rd member,
- * deliberately deferred to the menu redesign (recipe in
- * todos/done/0250) — don't cite this header as covering it.
+ * comdlg32.c's file dialog, fileman.c's pane, and wm.c's menu/desktop
+ * loader — ALL three of the class's drifted copies since the 0291 fold
+ * (the wm.c copy was deferred to the menu redesign, 0250/0259; that
+ * shipped, and the fold followed).
  *
  * Header-only by design (the openwith.h / cfgstore.h / fileops.h
  * precedent): the image manifest's `c` entries are single-source
@@ -11,9 +11,8 @@
  *
  * list_dir() is the one "opendir → readdir → stat per entry → fill"
  * loop that was hand-written (and drifting: dotfile policy, link
- * handling, caps) in comdlg32.c's file dialog and fileman.c's pane
- * (and still is in wm.c's menu/desktop loader, per the deferral
- * above). It fills a CALLER-PROVIDED ld_ent buffer
+ * handling, caps) in comdlg32.c's file dialog, fileman.c's pane and
+ * wm.c's menu/desktop loader. It fills a CALLER-PROVIDED ld_ent buffer
  * — every field comes off ONE lstat per entry (plus one stat when a
  * link is followed), so is_dir / is_link / size / mtime are all free —
  * and returns the count. SORTING IS CALLER POLICY: each caller qsorts
@@ -33,10 +32,10 @@
  *
  * Callers: comdlg32.c fd_refill (LIST_FOLLOW_LINKS — no dotfile
  * hiding), fileman.c refill (LIST_FOLLOW_LINKS, plus
- * LIST_HIDE_DOTFILES gated on the View toggle). wm.c's load_entries
- * is the tracked 3rd member of the class — menu-content code deferred
- * to the menu redesign work, and the reason is_link/LIST_FOLLOW_LINKS
- * exist in the shape already.
+ * LIST_HIDE_DOTFILES gated on the View toggle), wm.c load_entries
+ * (LIST_FOLLOW_LINKS | LIST_HIDE_DOTFILES — the "a link to a directory
+ * cascades" menu rule is why is_link and the followed is_dir are
+ * separate facts).
  */
 #ifndef LISTDIR_H
 #define LISTDIR_H
