@@ -8028,38 +8028,34 @@ function createSurfaceSDL({ ctx, hooks }) {
     const innerSetTitle = env.__sdl_set_window_title;
     const fbByHandle = new Map();              // handle -> { sid, fb, w, h }
 
-    // ---- SDL 2D renderer backend: WebGPU is THE path, software the fallback ----
-    // The GPU renderer (createBrowserSDL's, kept from `inner` above) encodes
-    // each SDL_Render* frame on the per-process WebGPU device and presents
-    // through presentTo → transferToImageBitmap → hooks.surfaceFrame — the
-    // same gpu transport webgpu.h apps use, composited uniformly with them
-    // and with direct-surface (shm) apps.
+    // ---- SDL 2D renderer backend: software/shm in OS process workers (#551) ----
+    // The GPU renderer briefly was THE path here (the A4-era lock-in below),
+    // presenting through presentTo → transferToImageBitmap. That transport is
+    // UNSOUND from an OS process worker: the app legally BLOCKS in its main
+    // loop (sdlDelay/vsyncWait are real Atomics.wait sleeps, todos/0224/0100),
+    // and Chromium budgets a worker that never returns to its event loop
+    // ~16.7k lifetime transferToImageBitmap ships — the recycle/return tasks
+    // can only run on the producer's event loop. At exhaustion the KERNEL
+    // worker's WebGPU device is destroyed (whole desktop black; the
+    // compositor now recovers, but the offending producer's canvas ships
+    // dead frames forever after — measured, ticket #551; probes: yielding
+    // producers survive 60k+, blocked producers die at 16744±3 regardless of
+    // rate/close-discipline/canvas rotation, and there is NO sync GPU-pixel
+    // export from a blocked worker: drawImage(webgpuCanvas) reads black —
+    // canvas image publication needs the event loop too).
     //
-    // Its ONE missing piece in this nested worker was scheduling, not
-    // capability: device acquisition is an event-loop promise chain
-    // (requestAdapter → requestDevice → configure), historically kicked
-    // lazily at the app's first SDL_CreateRenderer — but OS SDL apps may
-    // legally BLOCK in their main loop (sdlDelay is a real Atomics.wait
-    // sleep, todos/0224), so once main() starts this worker's event loop
-    // never turns again and the chain can neither resolve nor reject;
-    // rdrPipelines stayed null and every present hit the drop-pre-device
-    // branch (verified: a setTimeout queued at create_renderer never fires).
-    // webgpu.h apps never hit this because their main() RETURNS (callback
-    // model) — the post-main loop keeps the event loop alive.
-    //
-    // Fix: runModule awaits gpuRendererReady() BEFORE main() for any module
-    // that imports __sdl_create_renderer (tree-shaken imports make that a
-    // precise "this app uses SDL_Render*" signal — plain processes pay
-    // nothing), so pipelines exist from frame one. The backend is locked
-    // exactly once there: GPU when the device landed; the software
-    // rasterizer (shm flip — the same tier the headless flavor uses) ONLY
-    // if acquisition genuinely failed. Browser boot already hard-requires
-    // worker WebGPU (boot-nogpu), so the fallback is a no-GPU escape hatch,
-    // never the shipping path.
+    // So OS SDL_Render* apps rasterize in SOFTWARE and flip into the
+    // window's shm SAB — the same proven tier every headless kernel e2e
+    // runs, the same transport doom uses; ZERO per-present GPU objects, the
+    // wall is unreachable. The standalone page flavor (yielding event loop)
+    // keeps the GPU renderer, where it is sound. Raw webgpu.h apps keep
+    // their own device + gpu transport (their ships ARE clamped to the
+    // vsync cadence by flushPresent's #551 'park' mode, which defers their
+    // wall to hours; a presenter-worker design to restore first-class GPU
+    // 2D — and JSPI to unblock the worker class entirely — are the filed
+    // follow-ups on #551).
     const swRenderer = makeSoftwareRenderer(function (handle) { return fbByHandle.get(handle) || null; });
-    const gpuRenderer = {};
-    Object.keys(swRenderer).forEach(function (n) { gpuRenderer[n] = env[n]; });
-    let rdrBackend = gpuRenderer;
+    const rdrBackend = swRenderer;
     Object.keys(swRenderer).forEach(function (n) {
       env[n] = function () { return rdrBackend[n].apply(null, arguments); };
     });
@@ -8154,18 +8150,11 @@ function createSurfaceSDL({ ctx, hooks }) {
     const out = Object.assign({}, inner);
     out[ENV_KEY] = env;
     out.drainInput = drainInput;
-    // Awaited by runModule before main() for renderer-importing modules (see
-    // the renderer-backend block above). Resolves once the WebGPU device +
-    // pipelines landed (true) or acquisition failed (false — backend flips
-    // to the software rasterizer before the app can issue a single call).
-    out.gpuRendererReady = function () {
-      return new Promise(function (res) {
-        inner.whenRendererReady(function (ok) {
-          if (!ok) rdrBackend = swRenderer;
-          res(ok);
-        });
-      });
-    };
+    // Awaited by runModule before main() for renderer-importing modules.
+    // The OS renderer backend is the software rasterizer (#551, block
+    // above) — nothing to acquire, resolve at once (false = "no GPU
+    // renderer", the value the software tier always reported).
+    out.gpuRendererReady = function () { return Promise.resolve(false); };
     // Vsync broadcast (todos/0100, wired by todos/0167): when the kernel
     // advertises a real frame clock (compositor rAF → vsyncTick), pace the
     // frame loop by awaiting the kernel-page tick word — phase-aligned with

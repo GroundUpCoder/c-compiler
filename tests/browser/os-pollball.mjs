@@ -1,22 +1,26 @@
-// GPU present-transport backpressure acceptance (ticket #484): boot the
-// reference OS page in headless Chromium and run /usr/local/bin/pollball —
-// the GAMEDEV-EPIC repro, a poll-only SDL_Renderer bouncing-ball loop with
-// NO SDL_Delay and NO SDL_WaitEvent anywhere (the most common naive game
-// main loop). Unclamped, that loop presents a fresh ~300KB GPU ImageBitmap
-// per iteration (~8,000/s measured headless on this app) into an unbounded
-// fire-and-forget postMessage queue and kills the browser GPU process — the
-// tab-crash class #484 closes. With the producer-side clamp the app must:
-//   - composite and visibly ANIMATE (the clamp drops/coalesces, never wedges)
-//   - present at ~vsync as observed BY THE KERNEL: `wmctl seq SID` (the
-//     surface frame counter _wmFrame bumps at consume) read twice a known
-//     interval apart must show a clamped rate, not thousands/s
+// SDL_Renderer-in-OS acceptance (ticket #484, transport re-cut by #551):
+// boot the reference OS page in headless Chromium and run
+// /usr/local/bin/pollball — the GAMEDEV-EPIC repro, a poll-only
+// SDL_Renderer bouncing-ball loop with NO SDL_Delay and NO SDL_WaitEvent
+// anywhere (the most common naive game main loop).
+//
+// History: unclamped on the GPU transport this loop presented a fresh
+// ~300KB GPU ImageBitmap per iteration (~8,000/s measured headless) and
+// killed the browser GPU process — #484 clamped the shipping. #551 then
+// measured that Chromium budgets a NEVER-YIELDING worker ~16.7k lifetime
+// transferToImageBitmap ships at ANY rate (the recycle tasks can only run
+// on the producer's event loop), so a clamped 60/s still died in ~4.6 min
+// — OS SDL_Render* apps now rasterize in software and flip into the
+// window's shm SAB: zero GPU objects per present, the wall unreachable,
+// the same tier every headless kernel e2e runs. The app must:
+//   - composite and visibly ANIMATE through the shm path
+//   - present continuously as observed BY THE KERNEL: `wmctl seq SID`
+//     advances (shm flips bump WMSH_SEQ per present; there is no GPU
+//     resource behind them, so the rate is deliberately UNBOUNDED — the
+//     old 15..300/s clamp bound measured the retired GPU transport)
 //   - stay responsive: the title-bar close request (WMEV_QUIT via wmctl
 //     close) reaches SDL_PollEvent (#485's pump) and the app quits cleanly
 //   - leave the OS alive: desktop restored, shell answering
-//
-// Red control (documented for the record): with host.js's presentTo clamp
-// reverted, the measured kernel rate blows far past the upper bound (and
-// the tab may die outright) — the rate leg is the loud failure.
 //
 // Usage: node os-pollball.mjs
 import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl } from './lib/os-harness.mjs';
@@ -79,7 +83,7 @@ try {
     if (Date.now() - t0 > 90000) throw new Error(`pollball field never composited; last ${corner}`);
     await new Promise(r => setTimeout(r, 250));
   }
-  check('pollball composited (SDL_Renderer frame through the gpu transport)', true);
+  check('pollball composited (SDL_Renderer frame through the shm transport)', true);
 
   // Animation: the ball crosses the middle band at ~140px/s — time-separated
   // probe trios must differ while the field corner stays the clear color.
@@ -97,14 +101,13 @@ try {
   }
   check('ball animates (poll-only loop is live under the clamp)', animated);
 
-  // ---- the #484 clamp, measured at the KERNEL ----
-  // frameSeq (wmctl seq) counts frames the kernel CONSUMED; a poll-only
-  // flood used to push thousands/s at it. Two reads a known wall-clock
-  // interval apart bound the rate: comfortably above zero (alive) and
-  // comfortably below the flood (clamped to ~compositor rate; 60Hz rAF
-  // typical, generous headroom for fast displays and timing slop — the
-  // unclamped loop measures in the thousands, an order of magnitude past
-  // the bound in either direction).
+  // ---- presents reach the kernel continuously (shm transport, #551) ----
+  // frameSeq (wmctl seq) counts flips the app presented into its SAB; a
+  // poll-only loop runs it at its own pace (no GPU resource behind a flip,
+  // so no upper bound is asserted — the retired GPU transport's 15..300/s
+  // clamp band measured a resource that no longer exists on this path).
+  // The floor is load-safe (#444: a lower bound only slackens under load
+  // in the failing direction we accept, never manufactures a green).
   await setVt(1);
   await page.keyboard.type('SID=$(wmctl list | grep "pollball$" | sed "s/[^0-9].*//"); wmctl wait seq $SID 60 15000 && echo SEQ""OK\r');
   await page.waitForFunction(() => window.__osOut.includes('SEQOK'), { timeout: 20000, polling: 100 });
@@ -120,8 +123,8 @@ try {
   const t2 = Date.now();
   const r2 = parseInt((await page.evaluate(() => window.__osOut)).match(/R2=(\d+)/)[1], 10);
   const rate = (r2 - r1) * 1000 / (t2 - t1);
-  check(`present rate clamped to ~vsync (${rate.toFixed(0)}/s over ${t2 - t1}ms, seq ${r1}->${r2})`,
-    rate > 15 && rate < 300, rate.toFixed(1) + '/s');
+  check(`poll-only loop keeps presenting (${rate.toFixed(0)}/s over ${t2 - t1}ms, seq ${r1}->${r2})`,
+    rate > 15, rate.toFixed(1) + '/s');
 
   // Close box -> WMEV_QUIT -> SDL_PollEvent (#485's pump) -> clean quit.
   await page.keyboard.type('wmctl close $SID\r');
