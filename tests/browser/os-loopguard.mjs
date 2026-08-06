@@ -107,19 +107,23 @@ try {
     { before: before.wmFrames, after: after.wmFrames });
 
   // ---- Only the process died: desktop composites, compositor healthy,
-  // shell answers, and a callback-model GPU app still runs fine.
+  // shell answers, and a callback-model GPU app still runs fine. NB the
+  // compositor is ON-DEMAND (todos/0169) — it parks on an idle desktop —
+  // so composite-side liveness is measured WHILE the callback app
+  // presents, not on the idle desktop after the refusals.
   check('no device loss from either refusal', after.deviceLosses === 0, after);
   await setVt(2);
   await waitPixel(SW - 20, SH - 60, TEAL, 15000, 'wallpaper after refusals');
-  const f0 = await readStats();
-  await sleep(1500);
-  const f1 = await readStats();
-  check('compositor frames keep flowing after refusals', f1.frames > f0.frames,
-    { before: f0.frames, after: f1.frames });
   await setVt(1);
-  await page.keyboard.type('pollball & wmctl wait win pollball && wmctl wait seq $(wmctl list | grep "pollball$" | sed "s/[^0-9].*//") 30 15000 && pkill pollball && echo CB-O""K\r');
+  await page.keyboard.type('pollball & wmctl wait win pollball && echo CB-U""P\r');
+  await waitOut('CB-UP', 30000);
+  const f0 = await readStats();
+  await page.keyboard.type('wmctl wait seq $(wmctl list | grep "pollball$" | sed "s/[^0-9].*//") 30 15000 && pkill pollball && echo CB-O""K\r');
   await waitOut('CB-OK', 60000);
+  const f1 = await readStats();
   check('callback-model SDL_Renderer app still presents (30 frames) after refusals', true);
+  check('compositor composites the callback app (frames flow under damage)',
+    f1.frames > f0.frames, { before: f0.frames, after: f1.frames });
   await page.keyboard.type("echo GUARD-SHELL-O''K\r");
   await waitOut('GUARD-SHELL-OK', 20000);
   check('shell alive', true);
