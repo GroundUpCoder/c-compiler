@@ -52,7 +52,10 @@ const PORT = 3450;   // unique per member (#546)
   const fxDir = path.join(ROOT, 'build', 'git-cli-fixture');
   fs.mkdirSync(fxDir, { recursive: true });
   const repoDir = path.join(fxDir, 'repo');
-  if (!fs.existsSync(path.join(repoDir, '.git', 'HEAD'))) {
+  // The src/nested.txt probe rebuilds a cached pre-#571 fixture that lacks
+  // the nested file leg 7's recursive assertions need.
+  if (!fs.existsSync(path.join(repoDir, '.git', 'HEAD')) ||
+      !fs.existsSync(path.join(repoDir, 'src', 'nested.txt'))) {
     if (fs.existsSync(repoDir)) fs.rmSync(repoDir, { recursive: true, force: true });
     fs.mkdirSync(repoDir, { recursive: true });
     const env = {
@@ -72,7 +75,11 @@ const PORT = 3450;   // unique per member (#546)
     const r1 = run(['init', '-q', '-b', 'main']);
     if (r1.status !== 0) { console.error('git init failed', r1.stderr); process.exit(2); }
     fs.writeFileSync(path.join(repoDir, 'hello.txt'), 'gucOS fixture\n');
-    const r2 = run(['add', 'hello.txt']);
+    // A nested path makes ls-tree -r observable — a flat repo recurses into
+    // nothing and a "recursive" pass would be vacuous (#571).
+    fs.mkdirSync(path.join(repoDir, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(repoDir, 'src', 'nested.txt'), 'nested fixture file\n');
+    const r2 = run(['add', 'hello.txt', 'src/nested.txt']);
     if (r2.status !== 0) { console.error('git add failed', r2.stderr); process.exit(2); }
     const r3 = run(['commit', '-q', '-m', 'fixture: first commit']);
     if (r3.status !== 0) { console.error('git commit failed', r3.stderr); process.exit(2); }
@@ -274,14 +281,30 @@ try {
   }
   await shot('07-verbs');
 
-  // ---- leg 7: ls-tree -r HEAD (recursive) -----------------------------
-  // gucOS ls-tree revparses argv[0] first and then loops argv for -r, so the
-  // flag has to come AFTER the revision name.
+  // ---- leg 7: ls-tree -r — flag position must not matter (#571) --------
+  // The handler used to revparse argv[0] blindly, so `ls-tree -r HEAD`
+  // failed with "git: bad revision '-r'" while `ls-tree HEAD -r` worked.
+  // Real git accepts both orderings; assert both work AND agree, and that
+  // the listing really recursed (the nested src/nested.txt path appears).
   {
-    const r = await sh(`git -C '${dir}' ls-tree HEAD -r | head -5`, 'LSTREE', 30000);
-    check('git ls-tree HEAD -r lists the tree',
-      r.rc === 0 && /(tree|blob)\s+[0-9a-f]{40}/.test(r.seg),
-      trimSeg(r.seg, 600));
+    // Object lines only — the echoed command line and the RC tag differ
+    // between the two invocations by construction. Whitespace is normalised
+    // because the tty may render the tab separator differently.
+    const entryLines = (seg) => String(seg).replace(/\r/g, '').split('\n')
+      .map((l) => l.trim().replace(/\s+/g, ' '))
+      .filter((l) => /^\d{6} (blob|tree) [0-9a-f]{40} \S/.test(l));
+    const a = await sh(`git -C '${dir}' ls-tree -r HEAD`, 'LSTRA', 30000);
+    check('git ls-tree -r HEAD (flag BEFORE the rev) lists the tree recursively',
+      a.rc === 0 && entryLines(a.seg).some((l) => / src\/nested\.txt$/.test(l)),
+      trimSeg(a.seg, 600));
+    const b = await sh(`git -C '${dir}' ls-tree HEAD -r`, 'LSTRB', 30000);
+    check('git ls-tree HEAD -r (flag AFTER the rev) lists the tree recursively',
+      b.rc === 0 && entryLines(b.seg).some((l) => / src\/nested\.txt$/.test(l)),
+      trimSeg(b.seg, 600));
+    check('both orderings return the same recursive listing',
+      entryLines(a.seg).length > 0 &&
+      entryLines(a.seg).join('\n') === entryLines(b.seg).join('\n'),
+      JSON.stringify({ a: entryLines(a.seg), b: entryLines(b.seg) }));
   }
   await shot('08-lstree');
 
