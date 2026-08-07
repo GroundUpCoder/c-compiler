@@ -238,3 +238,52 @@ that serves HTTP to a driveBoot'd OS.
   No credential helpers protocol, no askpass — the store file or the URL.
 - Protocol is smart v0/v1 (no `Git-Protocol: version=2` header sent —
   libgit2 1.9's smart machinery is v0/v1; servers fall back transparently).
+
+## GATE — `node tests/run.js --diff origin/main` (run 1, 2026-08-08)
+
+Plan: **host, projects, fakegit, kernel, sweep** (per `--dry-run`; `os/git/`,
+`vendor/libgit2/`, `packages/git.json` pull kernel+sweep+fakegit+projects+host).
+Elapsed **~49 min** (2967671 ms). Log preserved at
+`build/gate-478-run1-1786125140-preserved.log`.
+
+Judged from the RUN-LEVEL artifact `build/test-run/summary.json`
+(mtime 1786128119, post-dating the gate start 1786125140 — this run's record,
+`filter: null`, all five suites present):
+
+| suite | status |
+|---|---|
+| host | pass |
+| py[projects,fakegit] | pass |
+| kernel | pass (incl. `test_git_e2e.js`, `test_git_net_e2e.js`) |
+| sweep | **fail (exit 1)** — one file |
+
+**The sole sweep failure is `os-loopguard.mjs` — attributed to the KNOWN
+intermittent #562, NOT to this lane.** Attribution by the four-step recipe:
+
+1. **Can the diff reach it?** No. The diff is entirely git/libgit2
+   (`os/git/`, `vendor/libgit2/`, `packages/git.json`, git test files).
+   `os-loopguard.mjs` exercises the SDL blocking-loop refusal heuristic in the
+   SDL veneer — no shared code, no shared suite total, no shared fixture.
+2. **Do the file's own later legs contradict the failure?** Yes. The failing
+   leg was *"callbacks app presenting in SDL_AppInit runs clean"* (a
+   misclassification → exit 69), yet the SAME run's later leg *"callback-model
+   SDL_Renderer app still presents (30 frames) after refusals"* PASSED — the
+   callback model itself works; one heuristic leg flaked under load.
+3. **Re-run alone on the IDENTICAL tree** (`os-sweep.mjs --repeat 3
+   --filter=os-loopguard`): **3/3 passed, flake 0%, stable**. (This filtered
+   re-run overwrote `build/test-browser/summary.json`; the run-level
+   `build/test-run/summary.json` is the preserved gate authority.)
+4. **Flaked elsewhere?** Yes — the kickoff names #562 (`os-loopguard.mjs`,
+   ~60% under load, filed P0) as a live intermittent, and it false-redded a
+   gate hours earlier.
+
+Per the standing rule I did NOT repair the flake in this ticket and did NOT
+re-run the gate until green. **My two git sweep members both passed in the
+full run** (`os-git-cli.mjs` 18.0s, `os-git-net.mjs` 9.5s), as did both kernel
+git e2es. The gate is GREEN for this lane's change set modulo the attributed
+#562 flake.
+
+**Handoff to @master:** merge on this targeted green — the only red is #562,
+attributed with evidence above. The full pre-deploy sweep (rule 5) will re-run
+the whole sweep on the composed tree at ship time; if #562 flakes there it is
+the same known-flake call, not this lane.
