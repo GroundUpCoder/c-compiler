@@ -1765,6 +1765,7 @@ static int cmd_fetch(git_repository *repo, int argc, char **argv) {
 
 static int cmd_pull(git_repository *repo, int argc, char **argv) {
     const char *name = "origin";
+    int explicit_remote = 0;
     for (int i = 0; i < argc; i++) {
         if (argv[i][0] == '-' && argv[i][1] != '\0') {
             fprintf(stderr, "git: unknown option '%s'\n", argv[i]);
@@ -1772,6 +1773,7 @@ static int cmd_pull(git_repository *repo, int argc, char **argv) {
             return 1;
         }
         name = argv[i];
+        explicit_remote = 1;
     }
     if (do_fetch(repo, name, NULL) < 0) return 1;
 
@@ -1789,8 +1791,11 @@ static int cmd_pull(git_repository *repo, int argc, char **argv) {
     }
     const char *branch = git_reference_shorthand(head);
 
+    /* An EXPLICIT `git pull <remote>` integrates THAT remote's branch; the
+       branch's configured upstream (which clone points at origin) is only
+       the default for a bare `git pull`. */
     git_reference *upstream = NULL;
-    if (git_branch_upstream(&upstream, head) < 0) {
+    if (explicit_remote || git_branch_upstream(&upstream, head) < 0) {
         char rname[PATH_MAX];
         snprintf(rname, sizeof rname, "refs/remotes/%s/%s", name, branch);
         if (git_reference_lookup(&upstream, repo, rname) < 0) {
@@ -1898,6 +1903,28 @@ static int cmd_push(git_repository *repo, int argc, char **argv) {
                  git_reference_name(head), git_reference_name(head));
         spec = specbuf;
         git_reference_free(head);
+    } else {
+        /* DWIM a branch name the way git does — libgit2 wants full refspecs,
+           so `push origin main` expands to refs/heads/main:refs/heads/main
+           (each unqualified side of a `:` form too; a leading `+` — force —
+           is preserved). */
+        const char *p = spec;
+        int force = (*p == '+');
+        if (force) p++;
+        const char *colon = strchr(p, ':');
+        char src[512], dst[512];
+        if (colon) {
+            snprintf(src, sizeof src, "%.*s", (int)(colon - p), p);
+            snprintf(dst, sizeof dst, "%s", colon + 1);
+        } else {
+            snprintf(src, sizeof src, "%s", p);
+            snprintf(dst, sizeof dst, "%s", p);
+        }
+        snprintf(specbuf, sizeof specbuf, "%s%s%s:%s%s",
+                 force ? "+" : "",
+                 (src[0] && strncmp(src, "refs/", 5)) ? "refs/heads/" : "", src,
+                 (dst[0] && strncmp(dst, "refs/", 5)) ? "refs/heads/" : "", dst);
+        spec = specbuf;
     }
 
     git_remote *remote = NULL;

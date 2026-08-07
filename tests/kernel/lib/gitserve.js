@@ -20,11 +20,22 @@
  *   redirects: { '/old.git': '/name.git' } — 301 the whole subtree, so a
  *          client that follows and re-bases its POSTs can be proven to.
  *
- * startGitServer(opts) -> Promise<{ port, url, close(), requests }>.
- * `requests` is a live array of ' METHOD path' strings — the positive control
- * that traffic really flowed through THIS server.
+ * startGitServer(opts) -> Promise<{ port, url, close(), requests }> runs the
+ * server IN-PROCESS; `requests` is a live array of 'METHOD path' strings —
+ * the positive control that traffic really flowed through THIS server.
+ *
+ * 🔴 An e2e that drives boot.js through driveBoot (spawnSYNC — the test
+ * process's event loop is DEAD for the whole boot) must NOT use the
+ * in-process form: the server would never answer and every in-OS request
+ * would ride the headers deadline into ETIMEDOUT. Use spawnGitServer(opts)
+ * instead — it runs this same file as a CHILD process (the startServer /
+ * serve.js pattern) and exposes the request log at GET /__requests so the
+ * positive control survives the synchronous gap.
  */
 'use strict';
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const http = require('http');
 const cp = require('child_process');
 
@@ -52,6 +63,11 @@ function startGitServer(opts) {
   const redirects = opts.redirects || {};
   const requests = [];
   const server = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/__requests') {   // introspection, not traffic
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(requests));
+      return;
+    }
     requests.push(req.method + ' ' + req.url);
     const u = new URL(req.url, 'http://x');
     const path = u.pathname;
@@ -150,4 +166,52 @@ function startGitServer(opts) {
   });
 }
 
-module.exports = { startGitServer, pktline };
+/* Run the server as a CHILD process (survives the caller's spawnSync gaps).
+ * Resolves { port, url, requests(), kill() }; requests() fetches the child's
+ * live log via /__requests. The child dies with the caller (kill on exit). */
+const children = [];
+function spawnGitServer(opts) {
+  const cfg = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'gitserve-')), 'config.json');
+  fs.writeFileSync(cfg, JSON.stringify(opts));
+  const child = cp.spawn(process.execPath, [__filename, '--config=' + cfg],
+    { stdio: ['ignore', 'pipe', 'pipe'] });
+  children.push(child);
+  return new Promise((resolve, reject) => {
+    let buf = '', ebuf = '';
+    const to = setTimeout(() => reject(new Error('gitserve never announced: ' + buf + ebuf)), 10000);
+    child.stderr.on('data', (d) => { ebuf += d; });
+    child.stdout.on('data', (d) => {
+      buf += d;
+      const m = /listening on (http:\/\/127\.0\.0\.1:(\d+))/.exec(buf);
+      if (m) {
+        clearTimeout(to);
+        resolve({
+          port: parseInt(m[2], 10),
+          url: m[1],
+          requests: async () => (await fetch(m[1] + '/__requests')).json(),
+          kill: () => { try { child.kill(); } catch (e) {} },
+        });
+      }
+    });
+    child.on('error', (e) => { clearTimeout(to); reject(e); });
+    child.on('exit', (code) => { clearTimeout(to); reject(new Error('gitserve exited ' + code + ': ' + ebuf)); });
+  });
+}
+process.on('exit', () => { for (const c of children) { try { c.kill(); } catch (e) {} } });
+
+if (require.main === module) {
+  const arg = process.argv.find((a) => a.startsWith('--config='));
+  if (!arg) {
+    console.error('usage: node gitserve.js --config=<json file>');
+    process.exit(2);
+  }
+  const opts = JSON.parse(fs.readFileSync(arg.slice('--config='.length), 'utf-8'));
+  startGitServer(opts).then((s) => {
+    console.log('[gitserve] listening on ' + s.url);
+  }, (e) => {
+    console.error('[gitserve] ' + (e && e.message));
+    process.exit(1);
+  });
+}
+
+module.exports = { startGitServer, spawnGitServer, pktline };
