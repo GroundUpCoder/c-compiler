@@ -118,3 +118,62 @@ CLAUDE.md heavy-lock section (gate owns the lock; contended-row rendering), the
 GATE-GOES-FIRST bullet (structural within a run since #561), batching rule 2 (a contended gate
 now fails at dispatcher start, not minutes in), plus the header comments in heavy-lock.js /
 harness-leaks.js and both runners.
+
+---
+
+# #561 addendum (same lane, post-gate review by @master cont-517/518)
+
+## Finding 2 (BLOCKING, confirmed): the guard test fabricated the enclosing gate's run-level record
+
+`test_heavylock_gate.js` legs 3/4 ran a real dispatcher to completion with only TMPDIR scoped —
+which scopes the LOCK, not `build/` (`tests/run.js:36` derives ROOT from `__dirname`; cwd cannot
+redirect the summary). So mid-gate, during the host row, the test overwrote
+`build/test-run/summary.json` with a one-row all-pass record (`suites:["kernel"],
+filter:"__no_such_test__"`) under a fresh mtime — the exact "the gate completed" signal the fleet
+judges by. A gate dying after the host row would leave a green-looking artifact: the #477
+fake-green class through a side door, inside the ticket hardening against it, and a direct
+contradiction of leg 1's own "absent/untouched summary = did not run" rationale. Reproduced and
+preserved BEFORE repair: `build/repro-561b-residue.log` (green-gate record before → residue
+after, mtime fresh). The green gate's own summary was snapshotted first to
+`build/gate-561-summary-snapshot.json` (cp -p).
+
+## Fix: `--out=DIR` on the dispatcher + auto-isolation inside gate()
+
+Adopted the coordinator's lean (a) — a real out-dir override — **as a CLI flag, not an env
+var**: argv is visible in the lock file's `argv` and every log, while an env var can leak
+ambiently into an unrelated gate. Fail-safe by construction: an `--out` run leaves the canonical
+path untouched, so a judge reading it sees a stale mtime — "did not finish", never a green.
+`--out` redirects only the DISPATCHER's record; per-suite artifacts stay put (stated in the
+flag's comment and help text).
+
+In the guard test, `gate()` now (1) ALWAYS appends `--out=<private dir>` — a future leg cannot
+forget the isolation; (2) asserts the canonical record byte-and-mtime untouched after EVERY
+child — a regression of `--out` itself fails loudly (this also un-order-depends leg 1's
+untouched assert); (3) snapshots the three per-suite artifacts and restores bytes+mtime
+(`utimesSync`) if a child moved one — leg 4's kernel child merges a 0-file run record into
+`build/test-kernel/summary.json`; the restore is asserted, and the crash-window residue
+(child wrote, test died pre-restore) is fail-safe: a filtered suite artifact fails rule 5's
+`filter: null` requirement, and the canonical run-level record was never touched at all.
+Coverage went UP, not sideways: leg 4 now also asserts the child's record at its `--out` path
+(suites `["kernel"]`, one pass row, the filter recorded).
+
+Breakage-and-revert: `build/sabotage-561b-noout.log` — stripped the `--out` injection from
+`gate()` → 3 assertions RED (`canonical … untouched` on both writing legs + the child-summary
+leg), guard rc=1 (redirect capture, no pipe), reverted, green control rc=0 with canonical
+records SHA-256-identical across the run.
+
+## Finding 1 (record honesty): the Sabotage-A rc figures — annotation, originals untouched
+
+`build/sabotage-561-A.log` literally reads `guard rc=0` and `dispatcher rc=0` while the dev log
+reported rc=1. **Cause: both figures were read through a pipe** (`… | tail -N; echo rc=$?` — rc
+is tail's, the exact trap the kickoff names). The verdict evidence inside A.log is the FAIL leg
+line, the `LOCK` row, and the `heavylock gate: 1 FAILED` line — not the rc echoes.
+**Audit of every other rc figure in the evidence:** sabotage-561-B.log, -C.log and
+-green.log all captured rc via `> file 2>&1; echo rc=$?` (no pipe) — sound. `gate-561.log`'s
+`GATE-EXIT rc=$?` is echoed inside the subshell before the pipe — sound by construction.
+The only pipe-shaped figures are A.log's two. `-A2.log` re-captured the dispatcher rc correctly
+(rc=1) but carried the stale-artifact fix in the same run — two changes at once; the rc
+conclusion does not rest on it: `tests/run.js` (`anyFail = results.some(r => r.status ===
+'fail')`) cannot exit 0 on a contended row, whose status is literally `fail`, and the
+stale-artifact fix touches only artifact attachment, never status or exit. A.log itself is
+byte-untouched; this section is the annotation.

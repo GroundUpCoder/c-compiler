@@ -628,7 +628,8 @@ const RULES = [
 function parseArgs(argv) {
   const out = { suites: [], diff: false, diffRef: null, dryRun: false,
                 list: false, help: false, filter: null, jobs: null,
-                resume: false, failFast: false, repeat: null, underLoad: null };
+                resume: false, failFast: false, repeat: null, underLoad: null,
+                out: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--help' || a === '-h') out.help = true;
@@ -648,6 +649,8 @@ function parseArgs(argv) {
     else if (a.startsWith('--diff=')) { out.diff = true; out.diffRef = a.slice(7); }
     else if (a.startsWith('--filter=')) out.filter = a.slice(9);
     else if (a === '--filter') out.filter = argv[++i];
+    else if (a.startsWith('--out=')) out.out = a.slice(6);
+    else if (a === '--out') out.out = argv[++i];
     else if (a === '-j' || a === '--jobs') out.jobs = argv[++i];
     else if (a.startsWith('-j')) out.jobs = a.slice(2);
     else if (a === 'all') out.suites.push(...ALL_SUITES);
@@ -854,8 +857,20 @@ function main() {
     results.push({ suite, ...c });
   }
 
-  writeMergedSummary(results, Date.now() - t0, opts, ordered);
-  printFinal(results, Date.now() - t0);
+  // #561b: `--out=DIR` redirects the run-level record. A NESTED dispatcher
+  // (a guard test driving refusal paths, a tool) must not fabricate its
+  // parent's completion record: build/test-run/summary.json existing with a
+  // fresh mtime and all-pass rows IS the fleet's "the gate completed" signal,
+  // and a child writing it mid-gate would hand a coordinator a green-looking
+  // artifact for a gate that later died (the #477 fake-green class through a
+  // side door). The redirect is fail-safe by construction: an --out run
+  // leaves the canonical path untouched, so a judge reading it sees a stale
+  // mtime — "did not finish", never a green. NB --out redirects only THIS
+  // dispatcher's record; the per-suite artifacts (build/test-kernel etc.) are
+  // written by the suite runners themselves and are not redirected.
+  const summaryDir = opts.out ? path.resolve(opts.out) : path.join(ROOT, 'build', 'test-run');
+  writeMergedSummary(results, Date.now() - t0, opts, ordered, summaryDir);
+  printFinal(results, Date.now() - t0, path.join(summaryDir, 'summary.json'));
 
   const anyFail = results.some(r => r.status === 'fail');
   process.exit(anyFail ? 1 : 0);
@@ -918,8 +933,7 @@ function classify(r, heavyLock) {
 // a single test file — which is exactly what a split sweep used to leave
 // behind. A reader must be able to see `filter: null` + `files.recorded: 40`
 // and know the whole suite was covered.
-function writeMergedSummary(results, ms, opts, ordered) {
-  const dir = path.join(ROOT, 'build', 'test-run');
+function writeMergedSummary(results, ms, opts, ordered, dir) {
   try {
     fs.mkdirSync(dir, { recursive: true });
     const tmp = path.join(dir, 'summary.json.tmp');
@@ -961,7 +975,7 @@ function fmtCoverage(files) {
     + (partial ? ' — PARTIAL' : '') + `]${partial ? '\x1b[0m' : ''}`;
 }
 
-function printFinal(results, ms) {
+function printFinal(results, ms, summaryPath) {
   process.stdout.write(`\n\x1b[1m━━━ tests/run.js summary ━━━\x1b[0m\n`);
   for (const r of results) {
     // A contended heavy suite is still a fail (the run exits nonzero) but its
@@ -976,9 +990,10 @@ function printFinal(results, ms) {
   const pass = results.filter(r => r.status === 'pass').length;
   const fail = results.filter(r => r.status === 'fail').length;
   const contended = results.filter(r => r.reason === 'heavy-lock-contended').length;
+  const rel = path.relative(ROOT, summaryPath);
   process.stdout.write(`\n  ${pass} passed, ${fail} failed` +
     (contended ? ` (${contended} of those DID NOT RUN — heavy lock contended)` : '') +
-    `  (${fmtSecs(ms)})  → build/test-run/summary.json\n`);
+    `  (${fmtSecs(ms)})  → ${rel && !rel.startsWith('..') ? rel : summaryPath}\n`);
 }
 
 function printList() {
@@ -1015,6 +1030,10 @@ Flags (forwarded to suites that accept them):
   --repeat N     run each file N times; per-file flake rate (kernel/blockfs/sweep)
   --under-load[=N]  run under CPU contention (flake gate, todos/0147)
   --dry-run      resolve + print the plan, run nothing
+  --out=DIR      write the run-level summary.json to DIR instead of
+                 build/test-run (#561b) — for NESTED invocations (guard tests,
+                 tooling): a child dispatcher must never fabricate its parent
+                 gate's completion record. Per-suite artifacts are unaffected.
 
 Suites: ${ALL_SUITES.join(', ')}, all
 `);
