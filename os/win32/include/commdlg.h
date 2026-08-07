@@ -84,6 +84,11 @@ typedef struct tagCHOOSEFONTW {
 #define CF_PRINTERFONTS      0x00000002
 #define CF_BOTH              (CF_SCREENFONTS | CF_PRINTERFONTS)
 #define CF_INITTOLOGFONTSTRUCT 0x00000040
+/* #330: gates the Effects checkboxes (Underline/Strikeout), the upstream
+ * contract. NB the CF_ prefix is shared with the CLIPBOARD formats
+ * (windows.h CF_TEXT/CF_BITMAP/CF_UNICODETEXT) — same prefix, disjoint
+ * names; check that block before adding a CF_ name here. */
+#define CF_EFFECTS           0x00000100
 #define CF_NOVERTFONTS       0x01000000
 
 BOOL ChooseFontW(CHOOSEFONTW *cf);

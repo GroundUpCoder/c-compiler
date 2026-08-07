@@ -132,29 +132,52 @@ static int probe(int px, const char *text) {
 }
 
 /* ============================================================ choose
- * (C2, #282) `fontramp choose [FACE]` — the ChooseFontW acceptance leg:
- * runs the REAL dialog (agent-driven by the e2e: click a face row, OK)
- * and prints the LOGFONT the caller got back. With FACE the incoming
- * LOGFONT preseeds via CF_INITTOLOGFONTSTRUCT (the preselect leg). */
-static int choose_mode(const char *initFace) {
+ * (C2 #282, style axis #330) `fontramp choose [FACE] [args...]` — the
+ * ChooseFontW acceptance leg: runs the REAL dialog (agent-driven by the
+ * e2e: click a face/style row, toggle a checkbox, OK) and prints the
+ * LOGFONT the caller got back. FACE (any non-keyword first arg) and the
+ * style keywords preseed the incoming LOGFONT via CF_INITTOLOGFONTSTRUCT
+ * (the preselect legs). Keywords:
+ *   bold / italic / underline / strikeout — incoming LOGFONT style
+ *   effects     — set CF_EFFECTS (show the Underline/Strikeout boxes)
+ *   badflag     — OR in an upstream CF_ bit this header does not define
+ *                 (0x00080000), the unknown-Flags honesty arm
+ *   printeronly — Flags = CF_PRINTERFONTS alone, the unsatisfiable arm */
+static int choose_mode(int argc, char **argv) {
     LOGFONTW lf;
     memset(&lf, 0, sizeof lf);
     CHOOSEFONTW cf;
     memset(&cf, 0, sizeof cf);
     cf.lStructSize = sizeof cf;
     cf.lpLogFont = &lf;
-    if (initFace) {
-        lf.lfHeight = -20;
-        MultiByteToWideChar(CP_UTF8, 0, initFace, -1, lf.lfFaceName,
-                            LF_FACESIZE);
+    int init = 0;
+    for (int i = 0; i < argc; i++) {
+        const char *a = argv[i];
+        if (!strcmp(a, "bold")) { lf.lfWeight = FW_BOLD; init = 1; }
+        else if (!strcmp(a, "italic")) { lf.lfItalic = 1; init = 1; }
+        else if (!strcmp(a, "underline")) { lf.lfUnderline = 1; init = 1; }
+        else if (!strcmp(a, "strikeout")) { lf.lfStrikeOut = 1; init = 1; }
+        else if (!strcmp(a, "effects")) cf.Flags |= CF_EFFECTS;
+        else if (!strcmp(a, "badflag")) cf.Flags |= 0x00080000;
+        else if (!strcmp(a, "printeronly")) cf.Flags |= CF_PRINTERFONTS;
+        else {
+            MultiByteToWideChar(CP_UTF8, 0, a, -1, lf.lfFaceName,
+                                LF_FACESIZE);
+            init = 1;
+        }
+    }
+    if (init) {
+        if (!lf.lfHeight) lf.lfHeight = -20;
         cf.Flags |= CF_INITTOLOGFONTSTRUCT;
     }
     BOOL ok = ChooseFontW(&cf);
     char face[64] = "";
     WideCharToMultiByte(CP_UTF8, 0, lf.lfFaceName, -1, face, sizeof face,
                         NULL, NULL);
-    printf("choose: ok=%d face=%s h=%d pt=%d\n", ok ? 1 : 0, face,
-           (int)lf.lfHeight, (int)cf.iPointSize);
+    printf("choose: ok=%d face=%s h=%d pt=%d wt=%d it=%d ul=%d so=%d\n",
+           ok ? 1 : 0, face, (int)lf.lfHeight, (int)cf.iPointSize,
+           (int)lf.lfWeight, (int)lf.lfItalic, (int)lf.lfUnderline,
+           (int)lf.lfStrikeOut);
     fflush(stdout);
     return 0;
 }
@@ -239,7 +262,7 @@ int main(int argc, char **argv) {
     int i = 1, doProbe = 0, px = 20;
     const char *text = "Hamburgefonstiv 0123456789";
     if (i < argc && !strcmp(argv[i], "choose"))
-        return choose_mode(i + 1 < argc ? argv[i + 1] : NULL);
+        return choose_mode(argc - i - 1, argv + i + 1);
     if (i < argc && !strcmp(argv[i], "probe")) { doProbe = 1; i++; }
     if (doProbe && i + 1 < argc && !strcmp(argv[i], "stock")) {
         for (int k = 0; k < (int)(sizeof STOCKS / sizeof STOCKS[0]); k++)

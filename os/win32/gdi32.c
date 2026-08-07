@@ -763,6 +763,17 @@ BOOL DeleteDC(HDC dc) {
 }
 
 int GetDeviceCaps(HDC dc, int index) {
+    /* LOGPIXELS is the synthetic 96dpi, device-independent in this build
+     * — answered for a NULL dc too (the Windows screen-DC query shape:
+     * GetDC(NULL) returns no DC here, and notepad's registry font
+     * round-trip runs GetDeviceCaps(GetDC(NULL), LOGPIXELSY) both ways;
+     * the old 0 made MulDiv collapse every saved height to iPointSize 0,
+     * so a relaunched notepad silently fell back to the stock 20px —
+     * found by #330's fresh-notepad leg). */
+    switch (index) {
+    case LOGPIXELSX: return 96;
+    case LOGPIXELSY: return 96;
+    }
     if (!dc) return 0;
     switch (index) {
     case HORZRES:    return dc->w;
@@ -770,8 +781,6 @@ int GetDeviceCaps(HDC dc, int index) {
     case BITSPIXEL:  return 32;
     case PLANES:     return 1;
     case NUMCOLORS:  return -1;
-    case LOGPIXELSX: return 96;
-    case LOGPIXELSY: return 96;
     default:         return 0;
     }
 }
