@@ -1,0 +1,9 @@
+commit 9a47d6ed8dd2d63bf726fb924c1e901849e03d80
+Author: Fixture Author <author@fakegit.test>
+Date:   1700000180 +0000
+tree 9c2a4797b0f827677175dd43eeebc959e296917d
+parent ae9875870427a9568a4f8f94fedb113411c80c2e
+
+    c3: add docs/guide.txt, drop hello.txt
+
+

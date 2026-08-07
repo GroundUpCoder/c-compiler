@@ -1,4 +1,6 @@
 100644 blob 1611580a70bed507b7bb8736ca207a9d303d8cae	README.md
+040000 tree 2a08f1ff7a36256d778194ed4673c654a8244d7f	docs
 100644 blob 1a643c8efbfff1f54ba83e3be5bf25e8625d79be	docs/guide.txt
+040000 tree 51429bc1efed9d15a2bc28fa3b1de190ff81e4c4	src
 100644 blob 8250209b35dd7aaed9215af11b8b8dc101802aac	src/main.c
 100644 blob 98f6fa989e750ab0ef85b73defeec364a172bece	src/util.c

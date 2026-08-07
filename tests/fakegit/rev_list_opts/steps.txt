@@ -1,0 +1,24 @@
+# #574: cmd_rev_list's old loop adopted ANY non--n argument as the
+# revision. Both directions of the defect are guarded, per the cont-528
+# ticket correction: flag-FIRST (`rev-list -r HEAD`) used to SUCCEED while
+# silently ignoring -r (the bare `!` catches that), and flag-LAST
+# (`rev-list HEAD -r`) used to exit 1 in TOTAL SILENCE — only the !"…"
+# stderr assertion can see that half, which is why the harness grew it.
+# `rev-list A B` used to silently walk only B; `rev-list nosuch` used to
+# fail with no message.
+init -q -b main .
+$ printf 'one\n' > f.txt
+add f.txt
+commit -q -m "c1: seed"
+branch side
+$ printf 'two\n' >> f.txt
+add f.txt
+commit -q -m "c2: advance main"
+rev-list main
+rev-list side
+rev-list -n 1 main
+!"unknown option '-r'" rev-list -r HEAD
+!"unknown option '-r'" rev-list HEAD -r
+!"too many revisions" rev-list side main
+!"bad revision 'nosuch'" rev-list nosuch
+!"-n needs a count" rev-list -n

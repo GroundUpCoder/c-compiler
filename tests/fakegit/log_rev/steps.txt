@@ -1,0 +1,21 @@
+# #574: `log <rev>` must log FROM the named revision. The scratch repo's
+# branch `side` stays at c1 while main advances to c2, so `log side` and
+# `log main` genuinely DIFFER — pre-#574, cmd_log ignored its positional
+# and both printed c2's log with exit 0 (the golden below would mismatch).
+# Error paths pin their message text via the !"…" stderr assertion, because
+# pre-#574 log silently IGNORED unknown flags (exit 0).
+init -q -b main .
+$ printf 'one\n' > f.txt
+add f.txt
+commit -q -m "c1: seed"
+branch side
+$ printf 'two\n' >> f.txt
+add f.txt
+commit -q -m "c2: advance main"
+log side
+log main -n 1
+log -n 1 side
+!"unknown option '--wibble'" log --wibble
+!"bad revision 'nosuch'" log nosuch
+!"too many revisions" log side main
+!"-n needs a count" log -n

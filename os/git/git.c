@@ -78,14 +78,14 @@ static void usage(FILE *out) {
         "   checkout [<rev>] -- <path>...            restore paths\n"
         "   config [--global] <key> [<value>]        get or set an option\n"
         "\n"
-        "   log [-n <count>]          show commit history\n"
+        "   log [-n <count>] [<rev>]  show commit history\n"
         "   show <rev>                show a commit, tree or blob\n"
         "   diff <from> <to>          list the files that differ\n"
         "   status                    show the working-tree state\n"
         "   rev-list [-n <n>] [<rev>] list commit ids\n"
         "   rev-parse <rev>           resolve a revision to an object id\n"
         "   cat-file -p <object>      print an object\n"
-        "   ls-tree [-r] [<rev>]      list a tree\n"
+        "   ls-tree [-r] [-t] [<rev>] list a tree\n"
         "\n"
         "   -C <path>                 run as if started in <path>\n"
         "   --version                 print the version\n"
@@ -96,15 +96,50 @@ static void usage(FILE *out) {
 
 /* ---- log ---- */
 static int cmd_log(git_repository *repo, int argc, char **argv) {
+    /* The cmd_ls_tree parse shape: one pass splitting flags from
+       positionals, unknown option = loud usage error (#574 — the old loop
+       scanned for -n only, silently ignored everything else, and always
+       walked from HEAD, so `git log somebranch` confidently logged the
+       wrong revision with exit 0). */
     int limit = 10;
+    const char *ref = NULL;
     for (int i = 0; i < argc; i++) {
-        if (!strcmp(argv[i], "-n") && i + 1 < argc) {
+        if (!strcmp(argv[i], "-n")) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "git: -n needs a count\n");
+                return 1;
+            }
             limit = atoi(argv[++i]);
+        } else if (argv[i][0] == '-' && argv[i][1] != '\0') {
+            fprintf(stderr, "git: unknown option '%s'\n", argv[i]);
+            fprintf(stderr, "usage: git log [-n <count>] [<rev>]\n");
+            return 1;
+        } else if (!ref) {
+            ref = argv[i];
+        } else {
+            fprintf(stderr, "git: too many revisions ('%s'); this git logs one <rev>\n",
+                    argv[i]);
+            fprintf(stderr, "usage: git log [-n <count>] [<rev>]\n");
+            return 1;
         }
     }
     git_revwalk *walk = NULL;
     if (git_revwalk_new(&walk, repo) < 0) return 1;
-    if (git_revwalk_push_head(walk) < 0) { git_revwalk_free(walk); return 1; }
+    if (ref) {
+        git_object *obj = NULL;
+        if (git_revparse_single(&obj, repo, ref) < 0) {
+            fprintf(stderr, "git: bad revision '%s'\n", ref);
+            git_revwalk_free(walk);
+            return 1;
+        }
+        int rc = git_revwalk_push(walk, git_object_id(obj));
+        git_object_free(obj);
+        if (rc < 0) {
+            fprintf(stderr, "git: '%s' is not a commit\n", ref);
+            git_revwalk_free(walk);
+            return 1;
+        }
+    } else if (git_revwalk_push_head(walk) < 0) { git_revwalk_free(walk); return 1; }
     git_revwalk_sorting(walk, GIT_SORT_TOPOLOGICAL | GIT_SORT_TIME);
 
     git_oid oid;
@@ -337,15 +372,33 @@ static int cmd_status(git_repository *repo) {
 
 /* ---- rev-list ---- */
 static int cmd_rev_list(git_repository *repo, int argc, char **argv) {
+    /* The cmd_ls_tree parse shape (#574 — the old loop's else-branch made
+       EVERY non--n argument the revision, so `rev-list -r HEAD` silently
+       ignored -r, `rev-list HEAD -r` failed without printing anything, and
+       `rev-list A B` silently walked only B). */
     int limit = -1;
-    const char *ref = "HEAD";
+    const char *ref = NULL;
     for (int i = 0; i < argc; i++) {
-        if (!strcmp(argv[i], "-n") && i + 1 < argc) {
+        if (!strcmp(argv[i], "-n")) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "git: -n needs a count\n");
+                return 1;
+            }
             limit = atoi(argv[++i]);
-        } else {
+        } else if (argv[i][0] == '-' && argv[i][1] != '\0') {
+            fprintf(stderr, "git: unknown option '%s'\n", argv[i]);
+            fprintf(stderr, "usage: git rev-list [-n <n>] [<rev>]\n");
+            return 1;
+        } else if (!ref) {
             ref = argv[i];
+        } else {
+            fprintf(stderr, "git: too many revisions ('%s'); this git walks one <rev>\n",
+                    argv[i]);
+            fprintf(stderr, "usage: git rev-list [-n <n>] [<rev>]\n");
+            return 1;
         }
     }
+    if (!ref) ref = "HEAD";
 
     git_revwalk *walk = NULL;
     if (git_revwalk_new(&walk, repo) < 0) return 1;
@@ -354,6 +407,7 @@ static int cmd_rev_list(git_repository *repo, int argc, char **argv) {
         git_revwalk_push(walk, git_object_id(obj));
         git_object_free(obj);
     } else {
+        fprintf(stderr, "git: bad revision '%s'\n", ref);
         git_revwalk_free(walk);
         return 1;
     }
@@ -438,25 +492,75 @@ static int cmd_cat_file(git_repository *repo, int argc, char **argv) {
 }
 
 /* ---- ls-tree ---- */
+
+/* Depth-first, entry-order walk matching real `git ls-tree -r`: under -r a
+   tree entry's own line is printed only with -t, immediately before its
+   contents; without -r every entry (trees included) prints flat, as before.
+   #573: the old inline loop recursed exactly ONE level and printed tree
+   lines unconditionally, so on any repo deeper than two levels `-r`
+   silently omitted files with exit 0. The path prefix accumulates in one
+   file-scope buffer (the oidbuf pattern) so recursion depth costs no
+   per-frame path storage on the 64K wasm stack. */
+static char ls_tree_path[4096];
+static int ls_tree_print(git_repository *repo, git_tree *tree, size_t plen,
+                         int recursive, int show_trees) {
+    size_t n = git_tree_entrycount(tree);
+    for (size_t i = 0; i < n; i++) {
+        const git_tree_entry *te = git_tree_entry_byindex(tree, i);
+        int mode = git_tree_entry_filemode(te);
+        int is_tree = (mode == GIT_FILEMODE_TREE);
+        if (!recursive || !is_tree || show_trees) {
+            git_oid_tostr(oidbuf, sizeof(oidbuf), git_tree_entry_id(te));
+            printf("%06o %s %s\t%.*s%s\n", mode,
+                   is_tree ? "tree" : "blob",
+                   oidbuf, (int)plen, ls_tree_path, git_tree_entry_name(te));
+        }
+        if (recursive && is_tree) {
+            int len = snprintf(ls_tree_path + plen, sizeof(ls_tree_path) - plen,
+                               "%s/", git_tree_entry_name(te));
+            if (len < 0 || (size_t)len >= sizeof(ls_tree_path) - plen) {
+                fprintf(stderr, "git: path too long: %.*s%s\n",
+                        (int)plen, ls_tree_path, git_tree_entry_name(te));
+                return -1;
+            }
+            git_object *sub = NULL;
+            if (git_tree_entry_to_object(&sub, repo, te) < 0) {
+                /* A subtree that cannot load is repo corruption, never a
+                   skip — the pre-#573 code swallowed this silently. */
+                fprintf(stderr, "git: cannot read tree '%.*s%s'\n",
+                        (int)plen, ls_tree_path, git_tree_entry_name(te));
+                return -1;
+            }
+            int rc = ls_tree_print(repo, (git_tree *)sub,
+                                   plen + (size_t)len, recursive, show_trees);
+            git_object_free(sub);
+            if (rc < 0) return rc;
+        }
+    }
+    return 0;
+}
+
 static int cmd_ls_tree(git_repository *repo, int argc, char **argv) {
     /* Flags first, positionals second — real git accepts `ls-tree -r HEAD`
        and `ls-tree HEAD -r` alike, so the flag scan must run BEFORE the rev
        is picked, never after it (#571: revparsing argv[0] blindly rejected
        `-r HEAD` with "bad revision '-r'"). A handler that takes flags AND a
-       rev must use THIS function's shape — split argv in one pass, then
-       revparse. Do NOT copy cmd_rev_list: its ordering is right but its
-       else-branch makes EVERY unrecognized argument the revision, so
-       `rev-list -r HEAD` silently ignores -r and `rev-list HEAD -r` fails
-       with no message (#574). An unrecognized option is a loud usage
-       error, never a revision candidate and never silently ignored. */
-    int recursive = 0;
+       rev must use THIS shape — split argv in one pass, then revparse; an
+       unrecognized option is a loud usage error, never a revision candidate
+       and never silently ignored. cmd_log and cmd_rev_list were retrofitted
+       to it by #574 (their old loops adopted every unrecognized argument,
+       so `rev-list -r HEAD` silently ignored -r and `rev-list HEAD -r`
+       failed with no message). */
+    int recursive = 0, show_trees = 0;
     const char *ref = NULL;
     for (int i = 0; i < argc; i++) {
         if (!strcmp(argv[i], "-r")) {
             recursive = 1;
+        } else if (!strcmp(argv[i], "-t")) {
+            show_trees = 1;
         } else if (argv[i][0] == '-' && argv[i][1] != '\0') {
             fprintf(stderr, "git: unknown option '%s'\n", argv[i]);
-            fprintf(stderr, "usage: git ls-tree [-r] [<rev>]\n");
+            fprintf(stderr, "usage: git ls-tree [-r] [-t] [<rev>]\n");
             return 1;
         } else if (!ref) {
             ref = argv[i];
@@ -484,41 +588,13 @@ static int cmd_ls_tree(git_repository *repo, int argc, char **argv) {
         obj = NULL;
     }
 
+    int rc = 0;
     if (tree) {
-        size_t n = git_tree_entrycount(tree);
-        for (size_t i = 0; i < n; i++) {
-            const git_tree_entry *te = git_tree_entry_byindex(tree, i);
-            int mode = git_tree_entry_filemode(te);
-            git_oid_tostr(oidbuf, sizeof(oidbuf), git_tree_entry_id(te));
-            printf("%06o %s %s\t%s\n", mode,
-                   mode == GIT_FILEMODE_TREE ? "tree" : "blob",
-                   oidbuf, git_tree_entry_name(te));
-
-            if (recursive && mode == GIT_FILEMODE_TREE) {
-                /* recurse into subtree */
-                git_object *sub = NULL;
-                if (git_tree_entry_to_object(&sub, repo, te) == 0) {
-                    /* print subtree entries prefixed with dir/ */
-                    const char *prefix = git_tree_entry_name(te);
-                    size_t plen = strlen(prefix);
-                    git_tree *st = (git_tree *)sub;
-                    size_t sn = git_tree_entrycount(st);
-                    for (size_t j = 0; j < sn; j++) {
-                        const git_tree_entry *st2 = git_tree_entry_byindex(st, j);
-                        int m2 = git_tree_entry_filemode(st2);
-                        git_oid_tostr(oidbuf, sizeof(oidbuf), git_tree_entry_id(st2));
-                        printf("%06o %s %s\t%s/%s\n", m2,
-                               m2 == GIT_FILEMODE_TREE ? "tree" : "blob",
-                               oidbuf, prefix, git_tree_entry_name(st2));
-                    }
-                    git_object_free(sub);
-                }
-            }
-        }
+        rc = ls_tree_print(repo, tree, 0, recursive, show_trees);
         git_tree_free(tree);
     }
     if (obj) git_object_free(obj);
-    return 0;
+    return rc < 0 ? 1 : 0;
 }
 
 /* ================= the write set (#475) =================
@@ -526,9 +602,10 @@ static int cmd_ls_tree(git_repository *repo, int argc, char **argv) {
  * Every handler here parses argv the cmd_ls_tree way: ONE pass that splits
  * flags from positionals BEFORE anything is revparsed, and an unrecognized
  * option is a LOUD usage error — never a revision candidate, never silently
- * ignored (the cmd_rev_list shape, where `rev-list -r HEAD` silently
- * ignores -r and `rev-list HEAD -r` fails without a message, is the defect
- * this discipline exists to keep out — #574). */
+ * ignored. (The pre-#574 cmd_rev_list shape, where `rev-list -r HEAD`
+ * silently ignored -r and `rev-list HEAD -r` failed without a message, was
+ * the defect this discipline exists to keep out; #574 retrofitted
+ * cmd_rev_list and cmd_log to the correct shape.) */
 
 /* Print libgit2's own last-error message, prefixed the way git prefixes
    its errors, so a failure names its cause instead of just a verb. */

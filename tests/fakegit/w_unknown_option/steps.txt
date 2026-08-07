@@ -1,14 +1,16 @@
 # The anti-#574 guard for the write set: an unknown option is a LOUD error
 # with a non-zero exit on EVERY write verb — never a revision candidate,
-# never silently ignored. The `!` prefix enforces the exit code; the final
-# rev-parse proves the repo was untouched by any of the refused commands.
+# never silently ignored. The `!"…"` form enforces the exit code AND pins
+# the message text (#574: a verb that exits non-zero in total silence would
+# pass a bare `!` step); the final rev-parse proves the repo was untouched
+# by any of the refused commands.
 init -q -b main .
 $ printf 'x\n' > x.txt
 add x.txt
 commit -q -m "c1: seed"
-! add --wibble
-! commit --wibble -m x
-! branch --wibble
-! checkout --wibble
-! init --wibble sub2
+!"unknown option '--wibble'" add --wibble
+!"unknown option '--wibble'" commit --wibble -m x
+!"unknown option '--wibble'" branch --wibble
+!"unknown option '--wibble'" checkout --wibble
+!"unknown option '--wibble'" init --wibble sub2
 rev-parse HEAD
