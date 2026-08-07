@@ -20,6 +20,10 @@
 //     live flip back to windows re-arms Ctrl+Shift+V
 //   - ctlpanel Keyboard applet: radios + the readline checkbox delta-write
 //     ~/.config/keys (the user layer)
+//   - wm.close (#395): the system close chord through the REAL screen path
+//     (skey -> kernel grab -> EV_HOTKEY -> wm.c CLOSE_REQ) — Alt+F4 under
+//     windows, Ctrl+Alt+W under macos, each scheme's other chord a negative
+//     control
 //
 // Run: node tests/kernel/test_keymap_e2e.js
 'use strict';
@@ -453,6 +457,70 @@ function sessionAutodetectOverride() {
     section(out, 'guidrop').trim() === '!CLEAN', JSON.stringify(section(out, 'guidrop')));
 }
 
+/* ---- session H: wm.close (#395) — the FULL grab path: a real screen-path
+ * chord (`wmctl skey` -> kernel grab table -> EV_HOTKEY -> wm.c -> CLOSE_REQ)
+ * closes the focused window. Windows scheme Alt+F4, macos Ctrl+Alt+W; each
+ * scheme's OTHER chord is the negative control (the table is a swap, not an
+ * alias). `wmctl key` would prove nothing here — INJECT_KEY bypasses the
+ * grab table by design; skey is the path chords need. Fresh image: earlier
+ * sessions leave admin/user key-config layers behind in the shared one. ---- */
+function sessionClose() {
+  const { image: img } = freshImage('os-keymap-close-');
+  const out = driveBoot([
+    'notepad &',
+    'wmctl wait label EDIT:0 12000',
+    // negative control FIRST (the windows table is pushed at wm startup):
+    // Ctrl+Alt+W is the macos chord — under windows it must close nothing.
+    'wmctl skey 26 119 320',                     // Ctrl+Alt+W (sc 26, LCTRL|LALT)
+    'sleep 0.5',   // settle: asserting the ABSENCE of an effect has no marker
+    'echo ==negwin',
+    'wmctl list | grep -c "Untitled - Notepad"',
+    'echo ==cut',
+    // Alt+F4 closes it. The wait-nowin is itself a loud positive assert:
+    // a timeout fails the whole test via driveBoot's wmctl-timeout rule.
+    'wmctl skey 61 0 256',                       // Alt+F4 (sc 61, LALT)
+    'wmctl wait nowin "Untitled - Notepad" 8000',
+    'echo ==closewin',
+    'wmctl list | grep -c "Untitled - Notepad"',
+    'echo ==cut',
+    // macos scheme: flip the admin layer; the running wm re-reads config and
+    // re-pushes the grab table on its 1 Hz poll. Inject-and-poll until the
+    // new table lands (the reval-leg pattern) — a pre-flip Ctrl+Alt+W just
+    // falls through to notepad, which ignores it.
+    'printf "scheme\\tmacos\\n" > /etc/keys',
+    'notepad &',
+    'wmctl wait label EDIT:0 12000',
+    'for i in $(seq 1 60); do',
+    '  wmctl skey 26 119 320',                   // Ctrl+Alt+W
+    '  wmctl list | grep -q "Untitled - Notepad" || break',
+    '  sleep 0.2',
+    'done',
+    'wmctl wait nowin "Untitled - Notepad" 4000',
+    'echo ==closemac',
+    'wmctl list | grep -c "Untitled - Notepad"',
+    'echo ==cut',
+    // negative control: the macos table is PROVEN live by the close above,
+    // so Alt+F4 must now close nothing.
+    'notepad &',
+    'wmctl wait label EDIT:0 12000',
+    'wmctl skey 61 0 256',                       // Alt+F4 — unbound under macos
+    'sleep 0.5',   // settle: absence-of-effect, no marker to wait on
+    'echo ==negmac',
+    'wmctl list | grep -c "Untitled - Notepad"',
+    'echo ==done',
+    '',
+  ].join('\n'), { image: img, maxBuffer: 32 * 1024 * 1024 }).stdout;
+
+  check('windows: Ctrl+Alt+W (the macos chord) closes nothing (negative control)',
+    section(out, 'negwin').trim() === '1', JSON.stringify(section(out, 'negwin')));
+  check('windows: Alt+F4 closes the focused window (grab -> EV_HOTKEY -> CLOSE_REQ)',
+    section(out, 'closewin').trim() === '0', JSON.stringify(section(out, 'closewin')));
+  check('macos: Ctrl+Alt+W closes the focused window',
+    section(out, 'closemac').trim() === '0', JSON.stringify(section(out, 'closemac')));
+  check('macos: Alt+F4 (the windows chord) closes nothing (negative control)',
+    section(out, 'negmac').trim() === '1', JSON.stringify(section(out, 'negmac')));
+}
+
 sessionWindows();
 sessionMac();
 sessionAccel();
@@ -460,6 +528,7 @@ sessionTerm();
 sessionApplet();
 sessionAutodetectMac();
 sessionAutodetectOverride();
+sessionClose();
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures ? `\nkeymap e2e: ${failures} FAILED` : '\nkeymap e2e: PASS');

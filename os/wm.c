@@ -3734,6 +3734,20 @@ static void hotkey_dispatch(int token, int flags, int sid) {
         case KTOK_OVERVIEW:
             if (!(flags & 2)) overview_toggle();   /* skip auto-repeat */
             break;
+        case KTOK_CLOSE: {                 /* #395: the CM_CLOSE path exactly —
+             * request-close, like the 'x' box. find() only knows app windows
+             * (own furniture never enters wins[]), so the chord can never
+             * close the wm's own surfaces. Auto-repeat is skipped: a close
+             * moves focus to the next window, so a held chord would cascade
+             * through the whole stack. */
+            if (flags & 2) break;
+            win_t *w = find(sid);
+            if (w) {
+                int32_t a[1] = { sid };
+                wmp_send(sock, WMP_CLOSE_REQ, a, 1);
+            }
+            break;
+        }
         default: break;                  /* unknown token: ignore, never crash */
     }
 }

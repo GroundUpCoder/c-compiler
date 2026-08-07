@@ -207,6 +207,7 @@ enum {
     KTOK_NONE = 0,
     KTOK_SNAP_LEFT = 1, KTOK_SNAP_RIGHT, KTOK_SNAP_UP, KTOK_SNAP_DOWN,
     KTOK_CYCLE, KTOK_START_MENU, KTOK_SYSMENU, KTOK_OVERVIEW,
+    KTOK_CLOSE,
 };
 
 /* action kind */
@@ -219,7 +220,7 @@ enum {
 enum {
     /* system (kernel-grabbed global chords) */
     KSA_SNAP_LEFT, KSA_SNAP_RIGHT, KSA_SNAP_UP, KSA_SNAP_DOWN,
-    KSA_CYCLE, KSA_START_MENU, KSA_SYSMENU, KSA_OVERVIEW,
+    KSA_CYCLE, KSA_START_MENU, KSA_SYSMENU, KSA_OVERVIEW, KSA_CLOSE,
     /* app (per-focused-app verbs) */
     KSA_SELECT_ALL, KSA_COPY, KSA_CUT, KSA_PASTE, KSA_UNDO,
     KSA_WORD_LEFT, KSA_WORD_RIGHT, KSA_LINE_START, KSA_LINE_END,
@@ -265,6 +266,13 @@ static const KsAction KS_ACTIONS[] = {
       schemes (todos/EXPOSE-MISSION-CONTROL.md open-Q1): F3 is a macOS Mission-
       Control media key the host eats — the wm-chord namespace, host-collision-
       free, and scheme-independent (unlike snap's win/mac split) */
+  { "wm.close",      KAK_SYS, 0, KTOK_CLOSE,
+    { {{KM_ALT,KK_F1 + 3}}, {{KM_CTRL|KM_ALT,'w'}} } },  /* #395: windows
+      Alt+F4; macos Ctrl+Alt+W, deliberately NOT ⌘W — the host eats ⌘W until
+      the ⌘-passthrough spike proves capture (rebindable to it via
+      bind.wm.close the moment it works). Last system row on purpose: the
+      §7.3 tie-break gives a collided chord to the EARLIER action, so the
+      destructive verb loses ties to every non-destructive one. */
   /* --- app (defaults derived from KS_TABLE by KA_*+ctx) --- */
   { "edit.select-all", KAK_APP, KCTX_EDIT | KCTX_LIST, KA_SELECT_ALL },
   { "edit.copy",       KAK_APP, KCTX_EDIT | KCTX_LIST, KA_COPY },
