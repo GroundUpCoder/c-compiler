@@ -408,6 +408,16 @@ const RULES = [
   // runs inside the `micropython` category.
   [/^tools\/mkmpgenhdr\.js$/, ['micropython', 'micropython-upstream'],
     'regenerates vendor/micropython/genhdr; its --check gates the micropython category'],
+  // The pinned host-python resolver (#483): every host-side Python spawn (the
+  // py batch, mkmpgenhdr's qstr generator) resolves through it — never $PATH.
+  // Its refusal paths are host-tested on fixture trees; `disw` is the cheapest
+  // real run.py category (~1s, and per test_diff_rules.js one that doesn't
+  // even execute wasm), so an edit here also proves an actual interpreter
+  // still launches and runs run.py under the pin.
+  [/^tools\/host-python\.js$/, ['host', 'disw'],
+    'the host-python resolver (#483) — fixture-tested refusals (host) + a real interpreter launch (disw)'],
+  [/^\.python-version$/, ['host', 'disw'],
+    'the host-python version pin (#483) — the resolver refuses a .venv that drifts from it'],
 
   // Test trees map to their own suite.
   [/^tests\/unit\//, ['unit'], null],
@@ -770,6 +780,14 @@ function main() {
   const pre = browserPreflight(ordered);
   if (!pre.ok) { process.stderr.write(pre.message); process.exit(2); }
 
+  // Host-python pre-flight (#483): the py batch must never ride a $PATH
+  // `python3` (system Python — the interpreter would be an ambient property
+  // of whoever's shell launched the gate). Resolve the pinned interpreter
+  // NOW, same exit-2 refusal shape as the browser pre-flight above; the
+  // resolver (tools/host-python.js) names the exact fix.
+  const pyPre = pythonPreflight(ordered);
+  if (!pyPre.ok) { process.stderr.write(pyPre.message); process.exit(2); }
+
   // Batch the run.py-backed suites into a single python invocation.
   const pyCats = ordered.filter(s => SUITES[s].pyTypes).map(s => SUITES[s].pyTypes);
 
@@ -784,7 +802,7 @@ function main() {
       pyBatchDone = true;
       const args = ['tests/run.py', `--types=${pyCats.join(',')}`];
       if (opts.filter != null) args.push(`--filter=${opts.filter}`);
-      const r = runProcess('python3', args, `run.py: ${pyCats.join(',')}`);
+      const r = runProcess(pyPre.python, args, `run.py: ${pyCats.join(',')}`);
       results.push({ suite: `py[${pyCats.join(',')}]`, ...classify(r) });
       continue;
     }
@@ -815,6 +833,16 @@ function browserPreflight(ordered, browserDir) {
   if (!ordered.includes('sweep')) return { ok: true, skipped: true };
   return require('./browser/lib/playwright-pin.cjs')
     .checkBrowserPreflight(browserDir ? { browserDir } : {});
+}
+
+// The py-leg twin (#483), same split: decision here, print-and-exit in
+// main(). Fires only when a run.py-backed suite is in the selected set; the
+// resolution itself — $PYTHON override → this tree's .venv → the main
+// clone's .venv → refusal, never $PATH — lives in tools/host-python.js and is
+// host-tested on fixture trees (tests/host/test_python_resolve.js).
+function pythonPreflight(ordered, opts) {
+  if (!ordered.some(s => SUITES[s] && SUITES[s].pyTypes)) return { ok: true, skipped: true };
+  return require('../tools/host-python.js').resolvePython(opts || {});
 }
 
 function classify(r, optional) {
@@ -940,6 +968,6 @@ if (require.main === module) {
   // Required as a module (tests/host/test_diff_rules.js): expose the rule
   // table + the planner so the RULES closure is testable without a git diff.
   module.exports = { SUITES, PY_CATEGORIES, RULES, IGNORE, FORCE, planFromDiff,
-                     browserPreflight,
+                     browserPreflight, pythonPreflight,
                      OS_BROWSER_ONLY, OS_HEADLESS_ONLY, OS_RUNTIME_ONLY };
 }
