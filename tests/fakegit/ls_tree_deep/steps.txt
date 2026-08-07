@@ -1,0 +1,23 @@
+# #573: the depth guard. Every args.txt fixture runs against the shared
+# depth-2 fixture, which is exactly why one-level recursion survived — this
+# scratch repo is THREE directories deep, so a regression to bounded
+# recursion drops a/b/two.txt and a/b/c/three.txt from every -r golden
+# below. Also pins: real-git -r semantics (tree lines OMITTED under bare
+# -r, restored by -t), the #571 flag-position invariant at depth (the -r
+# first/last pairs must stay identical), and ls-tree's loud unknown-option
+# error with its message text.
+init -q -b main .
+$ mkdir -p a/b/c
+$ printf 'top\n' > top.txt
+$ printf 'l1\n' > a/one.txt
+$ printf 'l2\n' > a/b/two.txt
+$ printf 'l3\n' > a/b/c/three.txt
+add -A
+commit -q -m "c1: three levels"
+ls-tree HEAD
+ls-tree -r HEAD
+ls-tree HEAD -r
+ls-tree -r -t HEAD
+ls-tree -t -r HEAD
+ls-tree HEAD -r -t
+!"unknown option '-x'" ls-tree -x HEAD

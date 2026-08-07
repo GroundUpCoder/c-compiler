@@ -1,0 +1,25 @@
+commit a1c32780d2240c9967b5c17f0e5613549321e03c
+Author: Fixture Author <author@fakegit.test>
+Date:   1700000000 +0000
+tree 7385b9ca65269b27de63aea3ddff716dd768c253
+
+    c1: seed
+
+
+commit 6d70e200f86953640e875ff8b737162ed6be9970
+Author: Fixture Author <author@fakegit.test>
+Date:   1700000000 +0000
+tree d3a57765c204022d501701a4ff864aa4625d96ce
+parent a1c32780d2240c9967b5c17f0e5613549321e03c
+
+    c2: advance main
+
+
+commit a1c32780d2240c9967b5c17f0e5613549321e03c
+Author: Fixture Author <author@fakegit.test>
+Date:   1700000000 +0000
+tree 7385b9ca65269b27de63aea3ddff716dd768c253
+
+    c1: seed
+
+

@@ -1889,15 +1889,22 @@ def run_blockfs_tests(results, filter_str=None):
 #                  repo DISCOVERY (#474) rather than of an explicit path.
 #   expected.txt — required, exact stdout match (captured from the fixture)
 #
-# WRITE-SET fixtures (ticket #475) carry steps.txt INSTEAD of args.txt. One
-# git invocation cannot express init -> add -> commit, and a write fixture
-# must never mutate the SHARED read fixture (it would invalidate every
-# later-sorted golden), so a steps fixture runs a SEQUENCE of invocations in
-# its own scratch repo. Each non-empty, non-# line of steps.txt is one of:
+# STEPS fixtures carry steps.txt INSTEAD of args.txt: originally the write
+# set (ticket #475 — one git invocation cannot express init -> add -> commit,
+# and a write fixture must never mutate the SHARED read fixture, which would
+# invalidate every later-sorted golden), and since #573/#574 also any read
+# fixture that needs a repo shape the shared fixture lacks (a ≥3-level tree,
+# a branch). A steps fixture runs a SEQUENCE of invocations in its own
+# scratch repo. Each non-empty, non-# line of steps.txt is one of:
 #   $ <cmd>   — host `sh -c` setup step in the scratch dir (must exit 0);
 #               its stdout is NOT part of the golden
 #   ! <args>  — a git invocation that MUST exit non-zero (a silently-
 #               succeeding error path is a fail, the #574 class)
+#   !"<substring>" <args> — as `!`, and stderr must CONTAIN <substring>.
+#               #574's other half: a verb that exits non-zero in TOTAL
+#               SILENCE passes a plain `!` step, so error-path fixtures pin
+#               the message text too. An empty substring is refused (it
+#               would match anything — a vacuous guard by construction).
 #   <args>    — a git invocation that must exit 0
 # `-C <scratch>` is prepended to every git invocation. expected.txt is the
 # concatenated stdout of the git steps, with the scratch dir's absolute path
@@ -1942,8 +1949,34 @@ def run_fakegit_steps_test(results, test_name, tdir, wasm, steps_file, expected_
                         f"  {line}\n{r.stderr.decode('utf-8', errors='replace')[:300]}")
                     return
             else:
-                want_fail = line.startswith("! ")
-                args = shlex.split(line[2:] if want_fail else line)
+                want_fail = line.startswith("!")
+                want_stderr = None
+                if line.startswith('!"'):
+                    close = line.find('"', 2)
+                    if close < 0:
+                        results.record(test_name, False,
+                            f"step (line {lineno}) has an unterminated "
+                            f"!\"…\" stderr assertion:\n  {line}")
+                        return
+                    want_stderr = line[2:close]
+                    if not want_stderr:
+                        results.record(test_name, False,
+                            f"step (line {lineno}) asserts an EMPTY stderr "
+                            f"substring — vacuous by construction:\n  {line}")
+                        return
+                    rest = line[close + 1:]
+                elif line.startswith("! "):
+                    rest = line[2:]
+                elif want_fail:
+                    # Previously `!x` would have been shlex'd into a git
+                    # invocation whose argv[0] is "!x" — a trap, not a form.
+                    results.record(test_name, False,
+                        f"step (line {lineno}) has an unrecognized ! form "
+                        f"(use `! <args>` or `!\"<substring>\" <args>`):\n  {line}")
+                    return
+                else:
+                    rest = line
+                args = shlex.split(rest)
                 r = subprocess.run(
                     ["node", "--experimental-wasm-exnref", HOST_JS, wasm,
                      "-C", scratch] + args,
@@ -1958,6 +1991,14 @@ def run_fakegit_steps_test(results, test_name, tdir, wasm, steps_file, expected_
                         f"step (line {lineno}) failed rc={r.returncode}:\n  {line}\n"
                         f"{r.stderr.decode('utf-8', errors='replace')[:300]}")
                     return
+                if want_stderr is not None:
+                    err = r.stderr.decode("utf-8", errors="replace")
+                    if want_stderr not in err:
+                        results.record(test_name, False,
+                            f"step (line {lineno}) failed as expected but its "
+                            f"stderr does not contain {want_stderr!r}:\n  {line}\n"
+                            f"stderr was:\n{err[:300] or '(empty)'}")
+                        return
         except subprocess.TimeoutExpired:
             results.record(test_name, False, f"step (line {lineno}) timed out (60s)")
             return
