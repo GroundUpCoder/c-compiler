@@ -65,7 +65,9 @@
 // A package whose pool payload is newer than all its inputs (compiler.js,
 // this tool, its definition, its files' project/bin/asset closure) is
 // REUSED, not rebuilt (--force overrides); index.json is rewritten every
-// run (baseVersion/minBase track os/image.json).
+// run (baseVersion — and every UNDECLARED minBase — track os/image.json;
+// declare an explicit minBase only on packages whose payload carries no
+// compiled code — rationale at the entryFor comment below, #518).
 //
 // ---- one repo per writer: --pool and the concurrency guard (todos/0388) ----
 //
@@ -704,9 +706,35 @@ async function buildPackage(name, poolDir, sharedPool, synth) {
     }
   }
 
+  // minBase (#518): a declared value is a CLAIM — "this package genuinely
+  // works against base v<minBase>" — so garbage must refuse, not coerce
+  // (`|0` would turn "133x"/true/NaN into a silent wrong claim). 0 stays
+  // legal: it is software.c's documented "ungated" sentinel, and the
+  // synthesized -sources defs (os-common sourcePackageDefs) declare it. A
+  // value above the current image version would disable Install everywhere
+  // including the version being built — a def bug by construction.
+  if (pkg.minBase !== undefined &&
+      (!Number.isInteger(pkg.minBase) || pkg.minBase < 0 ||
+       pkg.minBase > (imageManifest.version | 0))) {
+    throw new Error(`package '${name}': minBase must be an integer in ` +
+      `[0, ${imageManifest.version | 0}] (the current image version) — got ` +
+      JSON.stringify(pkg.minBase));
+  }
   const entryFor = (file, sha, size) => ({
     version: pkg.version,
     summary: pkg.summary || '',
+    // Undeclared minBase = the CURRENT image version, and for a payload this
+    // tool COMPILES that is correct by construction, not a lazy default: the
+    // binary is built by today's pipeline against today's host env surface,
+    // whose import set grows over time (measured for #518: today's doom-bin
+    // imports __clip_has/__getentropy/__mkdir_impl, none of which exist in
+    // the v133 host — instantiation on an older base is a LinkError). Any
+    // hand-declared lower number would rot into a too-low lie at the next
+    // libc/env growth. Declare an explicit minBase ONLY on packages whose
+    // payload carries no compiled code (fonts, seeded pages): their floor is
+    // the gucman control-key mechanism version, which does not move when the
+    // platform grows. The adjudication of every def: logs/2026-08-07/
+    // 0518-package-minbase.md.
     minBase: pkg.minBase !== undefined ? (pkg.minBase | 0) : (imageManifest.version | 0),
     deps: pkg.deps || [],
     payload: { format: 'tar+gzip', url: 'pool/' + file, size, sha256: sha },

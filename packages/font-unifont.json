@@ -2,6 +2,7 @@
   "name": "font-unifont",
   "version": "15.0.06",
   "summary": "GNU Unifont — full-BMP fallback font (all CJK renders, bitmap quality); the recommended coverage install",
+  "minBase": 133,
   "files": {
     "unifont.ttf": { "bin": "vendor/fonts/unifont-15.0.06.ttf" },
     "COPYING": { "bin": "vendor/fonts/COPYING-unifont.txt" }
