@@ -51,9 +51,12 @@
 //     already declared it parentless.
 // A live hand-run `node tests/kernel/test_wm.js` (which takes NO heavy lock) has
 // a living pid and a living parent, so nothing of its is touched. On top of
-// that, callers run preflight() AFTER acquireHeavyLock(), so no OTHER heavy
-// suite can even be mid-flight: the lock's fail-fast (exit 3) happens first and
-// this code never executes. The lock itself is untouched by this module.
+// that, callers run preflight() AFTER the heavy-lock seam (joinHeavyLock since
+// #561 — the lock is then owned either by the runner itself or by its
+// tests/run.js gate ancestor, which runs suites strictly sequentially), so no
+// OTHER heavy suite can even be mid-flight: the lock's fail-fast (exit 3)
+// happens first and this code never executes. The lock itself is untouched by
+// this module.
 const cp = require('child_process');
 const fs = require('fs');
 const os = require('os');

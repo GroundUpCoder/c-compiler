@@ -37,6 +37,7 @@ var tests = [
   ['test_bakeinput_sources.js', []],     // the 0082 closure covers out-of-dir sources/includes, not just `deps` (0354)
   ['test_diff_rules.js', []],            // compiler.js/host.js diff rules select the run.py corpus; exclusions pinned (0362)
   ['test_browser_preflight.js', []],     // #559: the browser install pre-flight refuses at gate start — worktree missing tests/browser/node_modules names the exact ln -s fix; healthy/ambient-pinned trees untouched; version hatch never excuses absence
+  ['test_heavylock_gate.js', []],        // #561: tests/run.js reserves the heavy lock up front — a contended gate exits 3 BEFORE any suite (no summary write), --dry-run and light-only gates never contend, and the kernel runner JOINS the gate's reservation instead of contending against it; all under a private-TMPDIR lock scope
   ['test_python_resolve.js', []],        // #483: the pinned host-python resolver — $PYTHON override → .venv → main clone's .venv (worktree read-through), NEVER $PATH; drift/broken/dead-override refuse naming the fix; integration leg launches the resolved interpreter and matches it to the pin
   ['test_launcher_convention.js', []],   // package /bin/sh launchers are spawn-free: no command substitution, both plant sites probed (0444)
   ['test_source_packages.js', []],       // #407: mechanical <name>-sources synthesis — both derivations, mechanical exclusions, uniform defs, payload-root srclib ('.') validate/fold/build

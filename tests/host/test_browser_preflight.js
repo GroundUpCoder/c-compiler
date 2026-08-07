@@ -207,6 +207,34 @@ check('classify() hard-fails a spawn failure — never a skip (#477)', () => {
   assert.strictEqual(bad.status, 'fail');
 });
 
+// ---- #561: a heavy runner's exit 3 is "contended — did not run", never a ----
+// ---- plain red, and never anything softer than a literal 'fail' either  ----
+check('classify() marks a heavy suite exit 3 contended — status stays literally "fail" (#561)', () => {
+  const c = classify({ ms: 5, status: 3, signal: null, spawnError: undefined }, true);
+  assert.strictEqual(c.status, 'fail',
+    'the status must stay literally "fail": a non-fail status would let a targeted gate exit 0 with the suite never run — the #477 fake green');
+  assert.strictEqual(c.reason, 'heavy-lock-contended');
+  assert.ok(/DID NOT RUN/.test(c.note), c.note);
+  assert.strictEqual(c.exit, 3);
+});
+check('classify() exit 3 on a NON-heavy suite, and exit 1 on a heavy one, stay plain fails (#561)', () => {
+  // Exit 3 is only reserved for the lock in the two heavy runners' exit-code
+  // space; a light runner exiting 3 is just a red. And a heavy runner's exit 1
+  // is a genuine red — the reason tag must never soften it.
+  const light = classify({ ms: 5, status: 3, signal: null, spawnError: undefined }, false);
+  assert.strictEqual(light.status, 'fail');
+  assert.strictEqual(light.reason, undefined);
+  const red = classify({ ms: 5, status: 1, signal: null, spawnError: undefined }, true);
+  assert.strictEqual(red.status, 'fail');
+  assert.strictEqual(red.reason, undefined);
+});
+check('exactly the two heavy suites carry heavyLock in the registry (#561)', () => {
+  const heavy = Object.entries(SUITES).filter(([, s]) => s.heavyLock).map(([n]) => n).sort();
+  assert.deepStrictEqual(heavy, ['kernel', 'sweep'],
+    'heavyLock must name exactly the suites that take the host heavy-test lock — ' +
+    'a missing entry hides a contended row as a plain red; a spurious one softens a genuine exit-3 red');
+});
+
 // ---- the pure helpers ----
 check('mainTreeOf: worktree pointer file → the main clone; a clone → null', () => {
   const main = makeFixture(path.join(tmp, 'mt-main'), {});

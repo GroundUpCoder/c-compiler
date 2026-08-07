@@ -18,7 +18,7 @@ const path = require('path');
 const os = require('os');
 const { runSuite, parseSuiteArgs, usage, matchesFilter, memoryCappedJobs, assertMemberRegistry } = require('../lib/suite-runner.js');
 const { ensurePrebakedImage } = require('../lib/image-fixture.js');
-const { acquireHeavyLock } = require('../lib/heavy-lock.js');
+const { joinHeavyLock } = require('../lib/heavy-lock.js');
 const { preflight } = require('../lib/harness-leaks.js');
 
 // Cross-tree preflight (todos/0341) — FIRST, ahead of acquireHeavyLock(): a
@@ -265,7 +265,12 @@ if (safeJobs < opts.jobs) {
 // Heavy-suite mutual exclusion: refuse to start if another heavy runner (a
 // second kernel run, or a browser sweep) already owns the host — their overlap
 // is what exhausted RAM and crashed the machine. Skipped for --list (no boots).
-if (!opts.list) acquireHeavyLock({ name: 'kernel suite' });
+// joinHeavyLock, not acquire (#561): under a tests/run.js gate the DISPATCHER
+// owns the lock for the whole selected run (its reservation is what stops a
+// sibling boot seizing the lock between suites) and this joins re-entrantly
+// through the verified marker; hand-run there is no marker, so this acquires
+// and owns exactly as before.
+if (!opts.list) joinHeavyLock({ name: 'kernel suite' });
 
 // Leak pre-flight — AFTER the lock, deliberately (see the same call in
 // tests/browser/os-sweep.mjs). THIS suite is the one that mints the $TMPDIR

@@ -23,9 +23,15 @@
 // ~2-4 GB) or an os.html boot in a Chromium — so the guard runs at the seams
 // every such boot funnels through, NOT at a list of callers (caller lists
 // rot):
-//   - the two suite runners (tests/kernel/run.js, tests/browser/os-sweep.mjs)
-//     ACQUIRE the lock at startup and FAIL FAST (exit 3) when another heavy
+//   - the dispatcher (tests/run.js) ACQUIRES the lock up front for the whole
+//     selected run whenever a heavy suite is in the set (#561 — closing the
+//     windows before and between the heavy rows in which a sibling could
+//     seize the lock mid-gate), and FAILS FAST (exit 3) when another heavy
 //     job owns the host;
+//   - the two suite runners (tests/kernel/run.js, tests/browser/os-sweep.mjs)
+//     JOIN at startup (#561): under a dispatcher gate they ride its
+//     reservation re-entrantly; hand-run there is no marker, so they acquire,
+//     own, and FAIL FAST (exit 3) exactly as they always did;
 //   - os/boot.js itself JOINS at startup (joinHeavyLock), so a single-file
 //     kernel e2e, a bench tool, and a bare `node os/boot.js` are all guarded
 //     no matter who spawned them (`--wait-lock[=SECS]` is boot.js's explicit
@@ -164,16 +170,20 @@ function contendForLock({ name, waitMs = 0 }) {
 // Acquire the host heavy-test lock or exit(3). Returns a release() that is also
 // wired to run on normal exit and on SIGINT/SIGTERM/SIGHUP, so a lock is never
 // left behind by an orderly shutdown (only a hard kill leaves a stale file, and
-// the next contender reclaims that). Runner entry points use this: a runner
-// always OWNS the lock — it never joins re-entrantly, because two runners are
-// exactly what must not overlap.
+// the next contender reclaims that). The dispatcher (tests/run.js) uses this
+// for its whole-gate reservation (#561): the gate always OWNS the lock — it
+// never joins re-entrantly, because two gates are exactly what must not
+// overlap. (The suite runners themselves joinHeavyLock since #561: two runners
+// still cannot overlap — either each owns the lock as before, or they share
+// ONE dispatcher ancestor, which runs its suites strictly sequentially.)
 function acquireHeavyLock({ name = 'heavy suite' } = {}) {
   if (process.env.CC_NO_HEAVY_LOCK === '1') return () => {};
   return contendForLock({ name });
 }
 
 // Join the host heavy-test lock at a full-OS-boot seam (os/boot.js startup,
-// tests/browser/lib/os-harness.mjs). Three outcomes, checked in this order:
+// tests/browser/lib/os-harness.mjs) or at a suite-runner startup under a
+// dispatcher gate (#561). Three outcomes, checked in this order:
 //   1. CC_NO_HEAVY_LOCK=1 → no-op (the documented isolated-host escape).
 //   2. CC_HEAVY_LOCK_PID names a pid that is ALIVE and EQUALS the lock file's
 //      recorded holder → re-entrant join: an ancestor owns the lock for its

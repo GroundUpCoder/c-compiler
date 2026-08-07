@@ -22,7 +22,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runSuite, parseSuiteArgs, usage } from '../lib/suite-runner.js';
 import { ensurePrebakedImage } from '../lib/image-fixture.js';
-import { acquireHeavyLock } from '../lib/heavy-lock.js';
+import { joinHeavyLock } from '../lib/heavy-lock.js';
 import { preflight } from '../lib/harness-leaks.js';
 import { assertSameTree } from '../lib/tree-guard.js';
 import { checkBrowserPreflight } from './lib/playwright-pin.cjs';
@@ -62,7 +62,12 @@ if (!opts.list) {
   if (!pinPre.ok) { process.stderr.write(pinPre.message); process.exit(2); }
 }
 
-if (!opts.list) acquireHeavyLock({ name: 'browser os sweep' });
+// joinHeavyLock, not acquire (#561): under a tests/run.js gate the dispatcher
+// owns the lock for the whole run — including the gap between the kernel row
+// and this one, which an acquire-per-runner design left open (~0.1s of free
+// lock every gate) — and this joins re-entrantly through the verified marker.
+// Hand-run there is no marker, so this acquires and owns exactly as before.
+if (!opts.list) joinHeavyLock({ name: 'browser os sweep' });
 
 // Leak pre-flight — AFTER the lock, deliberately. Holding it proves no other
 // heavy suite is mid-flight, so the reaper cannot race one; a lane that lost the
