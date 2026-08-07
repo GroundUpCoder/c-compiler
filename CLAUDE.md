@@ -168,6 +168,24 @@ invocable; this just knows how to invoke them uniformly and, the point,
   (the suite-runner-backed suites), plus `--repeat N`/`--under-load[=N]`
   (kernel/blockfs/sweep — the flake gate, below).
 
+**Worktree lanes: two gitignored symlinks BEFORE you gate (#559).** A fresh
+`git worktree` has neither `node_modules` (root) nor
+`tests/browser/node_modules` — both are gitignored — so the sweep's Node
+resolution falls through to a drifted ancestor playwright (or none) and every
+member fails at launch. Create both:
+`ln -s ~/git/c-compiler/node_modules <wt>/node_modules` and
+`ln -s ~/git/c-compiler/tests/browser/node_modules <wt>/tests/browser/node_modules`.
+Since #559 this is PRE-FLIGHTED rather than discovered mid-gate: `tests/run.js`
+(whenever the sweep is in the selected set) and `os-sweep.mjs` (before the
+heavy lock and the bake) refuse at **exit 2** within a second, naming the exact
+`ln -s` fix — the same fault used to surface as 56 spurious sweep FAILs 33
+minutes into a gate (lane-554, 2026-08-07; previously 39/39 on 2026-07-26).
+Exit 2 = refused before anything ran, never a test red (3 is the heavy lock's,
+4 the tree guard's). The one implementation, launch-time assert included:
+`tests/browser/lib/playwright-pin.cjs`. (`os-clang.mjs` additionally needs the
+sibling symlink `<wt>/../clang-simplified` → `~/git/clang-simplified`, or that
+member skips.)
+
 **The record states its own scope (todos/0339).** A full browser sweep does not
 fit one tool call, so it is habitually split into two `--filter` halves — and a
 `pass` whose scope is unrecorded is not evidence of scope. Every suite-runner
