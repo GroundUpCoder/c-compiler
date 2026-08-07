@@ -361,15 +361,23 @@ function windowSession() {
       i === 0 ? r.stdout.slice(-800) : undefined);
 }
 
-/* ---- ChooseFontW session (C2, #282) --------------------------------
+/* ---- ChooseFontW session (C2 #282, style axis + flags honesty #330) --
  * The dialog enumerates gdi32's family table (never a parallel list), a
- * face-row click re-renders the SAMPLE (the cf_preview defect arm: the
- * sample must show what OK will return, not a hardcoded mono), and the
- * selection round-trips into the caller's LOGFONT. Preselect leg: a
- * CF_INITTOLOGFONTSTRUCT face selects its own row, so an immediate OK
- * returns it unchanged. */
+ * face-row OR style-row click re-renders the SAMPLE (the cf_preview
+ * defect arm: the sample must show what OK will return, not a hardcoded
+ * mono regular), and the selection round-trips into the caller's
+ * LOGFONT — style fields included (the #330 defect: cf_accept used to
+ * leave lfWeight/lfItalic/lfUnderline/lfStrikeOut untouched). Preselect
+ * legs: a CF_INITTOLOGFONTSTRUCT face/style selects its own row.
+ * Effects legs: CF_EFFECTS shows the Underline/Strikeout checkboxes and
+ * ONLY then does cf_accept own those two fields — without the flag they
+ * pass through untouched AND no checkbox exists. Flags honesty legs: an
+ * unknown Flags bit reports via WIN32_UNSUPPORTED (never a silent
+ * discard); CF_PRINTERFONTS alone is the honest cancel. */
 function chooseSession() {
   const lines = [
+    // arm 1 (default flags): style rows exist, NO effects checkboxes;
+    // Bold Italic + sans round-trip; ul/so stay 0 (untouched)
     'fontramp choose &',
     'wmctl wait win Font 15000',
     'FSID=$(wmctl list | grep "Font$" | sed "s/[^0-9].*//")',
@@ -378,36 +386,115 @@ function chooseSession() {
     'wmctl tree',
     'echo ==cut',
     'wmctl shot $FSID /root/cf-mono.ppm && echo cfshot0-ok',
-    'wmctl click sans',                    // face LISTBOX row (AQM, 0370)
+    'wmctl click "Bold Italic"',           // style LISTBOX row (#330)
     'wmctl tree > /dev/null',              // paint barrier for the re-font
-    'wmctl shot $FSID /root/cf-sans.ppm && echo cfshot1-ok',
+    'wmctl shot $FSID /root/cf-bi.ppm && echo cfshot1-ok',
+    'wmctl click sans',                    // face LISTBOX row (AQM, 0370)
+    'wmctl tree > /dev/null',
+    'wmctl shot $FSID /root/cf-sans.ppm && echo cfshot2-ok',
     'wmctl click OK',
     'wmctl wait nowin Font 8000',
     'wait',                                // reap: the choose line prints
-    'fontramp choose serif &',             // preselect leg
+    // arm 2: CF_INITTOLOGFONTSTRUCT carries face AND style in — the row
+    // preselects, an immediate OK returns them unchanged (without the
+    // preselect a plain OK would silently CLEAR a caller's held bold)
+    'fontramp choose serif bold italic &',
     'wmctl wait win Font 15000',
+    'echo ==cfpretree',
+    'wmctl tree',
+    'echo ==cut',
     'wmctl click OK',
     'wmctl wait nowin Font 8000',
     'wait',
+    // arm 3: CF_EFFECTS — checkboxes exist; the incoming underline
+    // preselects CHECKED (the click below toggles it OFF — ul=0 in the
+    // result proves both the preselect and that cf_accept WRITES the
+    // field, not passes it through); Strikeout toggles on
+    'fontramp choose mono effects underline &',
+    'wmctl wait win Font 15000',
+    'echo ==cfefftree',
+    'wmctl tree',
+    'echo ==cut',
+    'wmctl click Underline',
+    'wmctl click Strikeout',
+    'wmctl click OK',
+    'wmctl wait nowin Font 8000',
+    'wait',
+    // arm 4: NO CF_EFFECTS pass-through — the fields walk in set, no
+    // checkbox exists, and they come back UNTOUCHED (ul=1 so=1)
+    'fontramp choose mono underline strikeout &',
+    'wmctl wait win Font 15000',
+    'echo ==cfnoefftree',
+    'wmctl tree',
+    'echo ==cut',
+    'wmctl click OK',
+    'wmctl wait nowin Font 8000',
+    'wait',
+    // arm 5: unknown Flags bit — the dialog still works, but the discard
+    // is REPORTED (stderr), never silent
+    'fontramp choose badflag &',
+    'wmctl wait win Font 15000',
+    'wmctl click Cancel',
+    'wmctl wait nowin Font 8000',
+    'wait',
+    // arm 6: CF_PRINTERFONTS alone — unsatisfiable, honest cancel, no UI
+    'fontramp choose printeronly',
     ''];
-  const r = driveBoot(lines.join('\n'), { image, timeout: 240000 });
+  const r = driveBoot(lines.join('\n'), { image, timeout: 300000 });
+  const all = r.stdout + '\n' + String(r.stderr || '');
   const tree = (r.stdout.split('==cftree')[1] || '').split('==cut')[0];
   check('face LISTBOX enumerates the family table (mono/sans/serif rows)',
     /\bmono\b/.test(tree) && /\bsans\b/.test(tree) && /\bserif\b/.test(tree),
     tree.slice(0, 500));
+  check('style LISTBOX rows present, Regular preselected (#330)',
+    /class=LISTBOX[^\n]*text='> Regular\\nItalic\\nBold\\nBold Italic\\n'/.test(tree),
+    tree.slice(-800));
+  check('no Effects checkboxes without CF_EFFECTS',
+    !/text='Underline'/.test(tree) && !/text='Strikeout'/.test(tree),
+    tree.slice(-800));
   check('sample shots written', r.stdout.includes('cfshot0-ok') &&
-    r.stdout.includes('cfshot1-ok'), r.stdout.slice(-600));
-  check('sans selection round-trips into the caller LOGFONT',
-    r.stdout.includes('choose: ok=1 face=sans h=-20 pt=150'),
-    r.stdout.match(/^choose:.*$/m));
-  check('CF_INITTOLOGFONTSTRUCT preselects the incoming face (serif)',
-    r.stdout.includes('choose: ok=1 face=serif h=-20 pt=150'),
-    (r.stdout.match(/^choose:.*$/mg) || []).join(' | '));
+    r.stdout.includes('cfshot1-ok') && r.stdout.includes('cfshot2-ok'),
+    r.stdout.slice(-600));
+  const chosen = r.stdout.match(/^choose:.*$/mg) || [];
+  check('Bold Italic + sans round-trip into the caller LOGFONT (#330)',
+    chosen[0] === 'choose: ok=1 face=sans h=-20 pt=150 wt=700 it=1 ul=0 so=0',
+    chosen[0]);
+  const pretree = (r.stdout.split('==cfpretree')[1] || '').split('==cut')[0];
+  check('CF_INITTOLOGFONTSTRUCT preselects the incoming style row',
+    /class=LISTBOX[^\n]*text='Regular\\nItalic\\nBold\\n> Bold Italic\\n'/.test(pretree),
+    pretree.slice(-800));
+  check('CF_INITTOLOGFONTSTRUCT face+style survive an immediate OK',
+    chosen[1] === 'choose: ok=1 face=serif h=-20 pt=150 wt=700 it=1 ul=0 so=0',
+    chosen[1]);
+  const efftree = (r.stdout.split('==cfefftree')[1] || '').split('==cut')[0];
+  check('CF_EFFECTS shows the Underline/Strikeout checkboxes',
+    /class=BUTTON[^\n]*text='Underline'/.test(efftree) &&
+    /class=BUTTON[^\n]*text='Strikeout'/.test(efftree), efftree.slice(-800));
+  check('effects toggles round-trip (preselected ul clicked OFF, so ON)',
+    chosen[2] === 'choose: ok=1 face=mono h=-20 pt=150 wt=400 it=0 ul=0 so=1',
+    chosen[2]);
+  const noefftree = (r.stdout.split('==cfnoefftree')[1] || '').split('==cut')[0];
+  check('no checkboxes without CF_EFFECTS even with effects walked in',
+    !/text='Underline'/.test(noefftree) && !/text='Strikeout'/.test(noefftree),
+    noefftree.slice(-800));
+  check('without CF_EFFECTS lfUnderline/lfStrikeOut pass through UNTOUCHED',
+    chosen[3] === 'choose: ok=1 face=mono h=-20 pt=150 wt=400 it=0 ul=1 so=1',
+    chosen[3]);
+  check('unknown Flags bit reports loudly (never a silent discard)',
+    /win32: unsupported ChooseFontW: Flags 0x80000/.test(all),
+    all.match(/win32: unsupported[^\n]*/g));
+  check('unknown Flags bit does not break the dialog (cancel returns 0)',
+    chosen[4] === 'choose: ok=0 face= h=0 pt=0 wt=0 it=0 ul=0 so=0', chosen[4]);
+  check('CF_PRINTERFONTS-only reports loudly',
+    /win32: unsupported ChooseFontW: CF_PRINTERFONTS-only/.test(all),
+    all.match(/win32: unsupported[^\n]*/g));
+  check('CF_PRINTERFONTS-only is the honest cancel (no dialog)',
+    chosen[5] === 'choose: ok=0 face= h=0 pt=0 wt=0 it=0 ul=0 so=0', chosen[5]);
 }
 
 function extractSession() {
   const names = SHOTS.map((_, i) => `/root/ramp${i}.ppm`)
-    .concat(['/root/cf-mono.ppm', '/root/cf-sans.ppm']);
+    .concat(['/root/cf-mono.ppm', '/root/cf-bi.ppm', '/root/cf-sans.ppm']);
   const r = driveBoot('cat ' + names.join(' ') + '\n',
     { image, encoding: null, timeout: 240000, maxBuffer: 64 * 1024 * 1024 });
   const outDir = path.join(ROOT, 'build/test-kernel/fontramp');
@@ -429,25 +516,27 @@ function extractSession() {
       encodePng(p.w, p.h, rgb));
     off = p.next;
   }
-  /* The ChooseFontW sample crops (C2, #282): same dialog, same size,
-   * mono-selected vs sans-selected — the SAMPLE box region must differ
-   * (the arm cf_accept alone cannot prove: the returned LOGFONT can be
-   * right while the sample the user stared at stayed mono). Crop to the
-   * sample STATIC (x 8..372, y 272..336 of the 380x380 dialog) so the
-   * face-list highlight, which also moved, cannot be what differs. */
+  /* The ChooseFontW sample crops (C2 #282, style axis #330): same
+   * dialog, same size — mono-Regular vs mono-Bold-Italic vs
+   * sans-Bold-Italic. The SAMPLE box region must differ across BOTH
+   * axes (the arm cf_accept alone cannot prove: the returned LOGFONT
+   * can be right while the sample the user stared at stayed mono
+   * regular). Crop to the sample STATIC (x 8..452, y 312..376 of the
+   * 460x420 dialog) so the list highlights, which also moved, cannot
+   * be what differs. */
   const cfBufs = [];
-  for (const label of ['cf-mono', 'cf-sans']) {
+  for (const label of ['cf-mono', 'cf-bi', 'cf-sans']) {
     let p = null;
     try { p = parsePpm(r.stdout, off); } catch (e) { /* short output */ }
-    check(`shot ${label} parses at 380x380`,
-      p !== null && p.w === 380 && p.h === 380, p && `${p.w}x${p.h}`);
+    check(`shot ${label} parses at 460x420`,
+      p !== null && p.w === 460 && p.h === 420, p && `${p.w}x${p.h}`);
     if (!p) return;
     fs.writeFileSync(path.join(outDir, `${label}.png`),
       encodePng(p.w, p.h, p.rgb));
-    const crop = Buffer.alloc((372 - 8) * (336 - 272) * 3);
+    const crop = Buffer.alloc((452 - 8) * (376 - 312) * 3);
     let ci = 0;
-    for (let y = 272; y < 336; y++)
-      for (let x = 8; x < 372; x++) {
+    for (let y = 312; y < 376; y++)
+      for (let x = 8; x < 452; x++) {
         const s = (y * p.w + x) * 3;
         crop[ci++] = p.rgb[s];
         crop[ci++] = p.rgb[s + 1];
@@ -460,9 +549,12 @@ function extractSession() {
     cfBufs.push(crop);
     off = p.next;
   }
-  if (cfBufs.length === 2)
-    check('ChooseFontW sample re-renders in the selected face (crops differ)',
+  if (cfBufs.length === 3) {
+    check('sample re-renders in the selected STYLE (mono vs bold-italic crops differ, #330)',
       !cfBufs[0].equals(cfBufs[1]));
+    check('sample re-renders in the selected FACE (bold-italic mono vs sans crops differ)',
+      !cfBufs[1].equals(cfBufs[2]));
+  }
 
   let allDistinct = true;
   for (let a = 0; a < bufs.length && allDistinct; a++)

@@ -14,7 +14,11 @@
 //   Format: Word Wrap (checkmark + Go To grays + buffer survives the EDIT
 //         recreate), Font... (the REAL ChooseFontW dialog, todos/0223 —
 //         pick a larger size, OK, and the EDIT's rendered line height
-//         visibly grows: shot-before/shot-after last-ink-row pixel assert)
+//         visibly grows: shot-before/shot-after last-ink-row pixel assert;
+//         plus the #330 style axis: Bold through the dialog at the same
+//         28pt must grow the ink COUNT, the reopened dialog preselects
+//         '> Bold', and after Exit the hive carries lfWeight=700 and a
+//         FRESH notepad renders bold + preselects Bold from the registry)
 //   View: Status Bar (hide/show, tree vis flag)
 //   Help: View Help (grayed at WM_CREATE), About Notepad (ShellAbout box;
 //         the win32rc \r fix keeps 'Palamarchuk' intact)
@@ -300,6 +304,31 @@ const r = driveBoot([
   'echo ==fshot1',
   'base64 /root/font-after.ppm',
   'echo ==cut',
+
+  // ---- #330: the style axis — Bold through the dialog, same 28pt.
+  // The pixel proof is ink COUNT at identical size/text: embolden adds
+  // stem pixels, so fshot2 must carry strictly more dark pixels than
+  // fshot1. Then reopen: the style row must preselect '> Bold' (the
+  // dialog wrote lfWeight=700 into notepad's live LOGFONT and reads it
+  // back), and the size must still say 28.
+  'wmctl click "Font..."',
+  'wmctl wait win Font 8000',
+  'wmctl click Bold',                            // style LISTBOX row
+  'wmctl click OK',
+  'wmctl wait nowin Font 8000',
+  'wmctl tree > /dev/null',                      // paint barrier for the re-font
+  'wmctl shot $SID /root/font-bold.ppm && echo fshot2-ok',
+  'echo ==fshot2',
+  'base64 /root/font-bold.ppm',
+  'echo ==cut',
+  'wmctl click "Font..."',
+  'wmctl wait win Font 8000',
+  'echo ==fonttree2',
+  'wmctl tree',
+  'echo ==cut',
+  'wmctl click Cancel',
+  'wmctl wait nowin Font 8000',
+
   // settext cleared EM_GETMODIFY; the New leg below expects the modified
   // prompt — re-modify with a real keystroke
   'wmctl key $SID 20 113',                       // q
@@ -383,6 +412,34 @@ const r = driveBoot([
   'echo ==final',
   'wmctl list',
   'echo ==cut',
+
+  // ---- #330: bold round-trips through the registry to a fresh notepad.
+  // The Exit above saved settings (NOTEPAD_SaveSettingsToRegistry) — the
+  // hive must carry lfWeight=700 (REG_DWORD LE hex bc020000), and a
+  // brand-new notepad must come up rendering bold (ink count vs the
+  // 28pt-Regular fshot1 baseline, same 720x420 geometry + text) with the
+  // Font dialog preselecting the Bold row straight from the registry.
+  'echo ==reg',
+  'grep lfWeight /root/.win32reg || echo no-lfWeight-line',
+  'echo ==cut',
+  'notepad &',
+  'wmctl wait label EDIT:0 12000',
+  'SID2=$(wmctl list | grep "Notepad$" | sed "s/[^0-9].*//")',
+  'wmctl resize $SID2 720 420',
+  'wmctl wait dim $SID2 720x420 8000',
+  'wmctl settext EDIT:0 "$(printf \'MMMM\\nMMMM\\nMMMM\')"',
+  'wmctl tree > /dev/null',                      // paint barrier
+  'wmctl shot $SID2 /root/font-persist.ppm && echo fshot3-ok',
+  'echo ==fshot3',
+  'base64 /root/font-persist.ppm',
+  'echo ==cut',
+  'wmctl click "Font..."',
+  'wmctl wait win Font 8000',
+  'echo ==fonttree3',
+  'wmctl tree',
+  'echo ==cut',
+  'wmctl click Cancel',
+  'wmctl wait nowin Font 8000',
   '',
 ], { image, maxBuffer: 64 * 1024 * 1024 });
 
@@ -505,9 +562,14 @@ check('Font dialog opens (WCFontDlg, the file_dialog shape)',
  * matches and row 0 (mono) keeps the selection. */
 check('family rows enumerated, row 0 selected (incoming face is not a family name)',
   /class=LISTBOX[^\n]*text='> mono\\nsans\\nserif\\n'/.test(ftree), ftree.slice(-600));
-check('CF_INITTOLOGFONTSTRUCT preselects the stock size (15pt = 20px)',
-  /class=EDIT[^\n]*text='15'/.test(ftree) &&
-  /class=LISTBOX[^\n]*> 15\\n/.test(ftree), ftree.slice(-600));
+/* Notepad's real default is upstream's 10pt (dwPointSize 100). Before
+ * the #330 NULL-dc LOGPIXELSY fix, HeightFromPointSize collapsed it to
+ * lfHeight 0 and the dialog fell back to the 20px stock (15pt) — this
+ * check used to pin THAT collapsed value. The incoming height is honest
+ * now: 100 units -> -13px -> 10pt preselected. */
+check('CF_INITTOLOGFONTSTRUCT preselects notepad\'s real default (10pt)',
+  /class=EDIT[^\n]*text='10'/.test(ftree) &&
+  /class=LISTBOX[^\n]*> 10\\n/.test(ftree), ftree.slice(-600));
 check('live sample STATIC present (WM_SETFONT-driven preview)',
   /text='AaBbYyZz'/.test(ftree), ftree.slice(-600));
 
@@ -542,6 +604,49 @@ const ink1 = lastInkRow(fp1, 10, 200, 36, 340);
 console.log('  info fontink ' + JSON.stringify({ ink0, ink1 }));
 check('EDIT line height visibly grew (last ink row moved down >= 30px)',
   ink0 > 0 && ink1 > ink0 + 30, JSON.stringify({ ink0, ink1 }));
+
+/* ---- #330: the style axis through the dialog ---- */
+function inkCount(P, x0, x1, y0, y1) {
+  let n = 0;
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    const i = P.data + (y * P.w + x) * 3;
+    if (P.buf[i] < 100 && P.buf[i + 1] < 100 && P.buf[i + 2] < 100) n++;
+  }
+  return n;
+}
+check('bold shot captured', out.includes('fshot2-ok'), out.slice(-400));
+const fp2 = parsePpm(section(out, 'fshot2'));
+const cnt1 = inkCount(fp1, 10, 700, 36, 340);
+const cnt2 = inkCount(fp2, 10, 700, 36, 340);
+console.log('  info boldink ' + JSON.stringify({ cnt1, cnt2 }));
+check('EDIT renders visibly BOLDER at the same 28pt (ink count grew >5%)',
+  cnt1 > 0 && cnt2 > cnt1 * 1.05, JSON.stringify({ cnt1, cnt2 }));
+const ftree2 = section(out, 'fonttree2');
+check('reopened dialog preselects the Bold style row (#330)',
+  /class=LISTBOX[^\n]*text='Regular\\nItalic\\n> Bold\\nBold Italic\\n'/.test(ftree2),
+  ftree2.slice(-600));
+check('reopened dialog holds the 28pt size',
+  /class=EDIT[^\n]*text='28'/.test(ftree2), ftree2.slice(-600));
+
+/* ---- #330: registry round-trip into a fresh notepad ---- */
+check('lfWeight=700 landed in the registry hive on exit (#330)',
+  /lfWeight[^\n]*bc020000/.test(section(out, 'reg')), section(out, 'reg'));
+check('persist shot captured', out.includes('fshot3-ok'), out.slice(-400));
+const fp3 = parsePpm(section(out, 'fshot3'));
+const cnt3 = inkCount(fp3, 10, 700, 36, 340);
+console.log('  info persistink ' + JSON.stringify({ cnt1, cnt3 }));
+check('a FRESH notepad renders the registry-held bold (ink > Regular baseline)',
+  cnt3 > cnt1 * 1.05, JSON.stringify({ cnt1, cnt3 }));
+const ftree3 = section(out, 'fonttree3');
+check('fresh notepad Font dialog preselects Bold from the registry (#330)',
+  /class=LISTBOX[^\n]*text='Regular\\nItalic\\n> Bold\\nBold Italic\\n'/.test(ftree3),
+  ftree3.slice(-600));
+/* The size half of the same round-trip: notepad converts height<->points
+ * through GetDeviceCaps(GetDC(NULL), LOGPIXELSY), which returned 0 for
+ * the NULL dc and silently collapsed every saved height to the stock
+ * 20px (fixed with #330 — LOGPIXELS answers for a NULL dc). */
+check('fresh notepad dialog holds 28pt from the registry (NULL-dc LOGPIXELSY)',
+  /class=EDIT[^\n]*text='28'/.test(ftree3), ftree3.slice(-600));
 
 /* ---- the loud cancels: Page Setup / Print */
 check('Page Setup... reports loudly (PageSetupDlgW)',

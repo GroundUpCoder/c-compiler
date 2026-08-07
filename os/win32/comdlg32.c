@@ -19,11 +19,18 @@
  *
  * ChooseFontW is REAL (todos/0223): the file-dialog modal shape with a
  * face LISTBOX enumerating gdi32's baked family table (C2/#282 —
- * __gdi_font_families, never a parallel list), a size EDIT + point-size
- * LISTBOX, and a live sample STATIC driven through WM_SETFONT in the
- * SELECTED face (dogfooding the 0223 user32 plumbing). OK fills the
- * caller's LOGFONTW (negative lfHeight = em px, the CreateFont
- * convention) and returns TRUE.
+ * __gdi_font_families, never a parallel list), a style LISTBOX
+ * (Regular/Italic/Bold/Bold Italic — #330, the C1 axes gdi32 renders),
+ * a size EDIT + point-size LISTBOX, and a live sample STATIC driven
+ * through WM_SETFONT in the SELECTED face+style (dogfooding the 0223
+ * user32 plumbing). CF_EFFECTS shows the Underline/Strikeout checkboxes
+ * (the upstream contract); WITHOUT it those two LOGFONT fields pass
+ * through UNTOUCHED, so a caller's registry-held effects survive a
+ * size-only change. OK fills the caller's LOGFONTW (negative lfHeight =
+ * em px, the CreateFont convention) and returns TRUE. Flags honesty
+ * (#330): an unknown Flags bit reports via WIN32_UNSUPPORTED, never a
+ * silent discard; CF_PRINTERFONTS-only is unsatisfiable (no printer
+ * subsystem) and takes the honest cancel.
  *
  * PrintDlgW / PageSetupDlgW return FALSE (the user "cancelled"): there is
  * no printer — a cancel is the honest answer, and the apps' cancel paths
@@ -523,9 +530,12 @@ HWND ReplaceTextW(FINDREPLACEW *fr) { return fr_dialog(fr, 1); }
 #define IDC_SIZEED 111
 #define IDC_SIZES  112
 #define IDC_SAMPLE 113
+#define IDC_STYLE  114
+#define IDC_UL     115
+#define IDC_SO     116
 
-#define CFD_W 380
-#define CFD_H 380
+#define CFD_W 460
+#define CFD_H 420
 
 /* the classic list, plus 15 — the stock 20px cell is 15pt at 96dpi, so
  * the platform default preselects a real row */
@@ -534,11 +544,16 @@ static const int cf_ptsizes[] =
 #define CF_NSIZES ((int)(sizeof cf_ptsizes / sizeof cf_ptsizes[0]))
 
 static struct {
-    HWND win, face, sizeEd, sizes, sample;
+    HWND win, face, style, sizeEd, sizes, sample;
+    HWND ul, so;                /* Effects checkboxes; NULL without CF_EFFECTS */
     CHOOSEFONTW *cf;
     HFONT sampleFont;           /* transient preview HFONT (we own this one) */
     int done;                   /* 1 = accepted, -1 = cancelled */
 } g_cf;
+
+/* The style rows, indexed (bold<<1)|italic — the classic dialog's order. */
+static const char *const cf_styles[] =
+    { "Regular", "Italic", "Bold", "Bold Italic" };
 
 /* Selected point size, or 0 when the EDIT doesn't hold a usable number. */
 static int cf_cur_pt(void) {
@@ -556,18 +571,35 @@ static void cf_cur_face(char *out, int cap) {
         SendMessage(g_cf.face, LB_GETTEXT, (WPARAM)sel, (LPARAM)out);
 }
 
+/* The selected style row as the (bold, italic) pair; no selection reads
+ * as Regular. Row index IS (bold<<1)|italic by construction. */
+static void cf_cur_style(int *bold, int *ital) {
+    int sel = (int)SendMessage(g_cf.style, LB_GETCURSEL, 0, 0);
+    if (sel < 0) sel = 0;
+    *bold = (sel >> 1) & 1;
+    *ital = sel & 1;
+}
+
 /* Re-font the sample through WM_SETFONT — the exact consumer contract
  * (ChooseFont -> CreateFontIndirect -> WM_SETFONT) the caller will run.
- * The SELECTED face drives it (C2, #282): the sample must show what OK
- * will return — the old "mono" literal here let the accept path go
- * face-generic while the sample kept rendering mono. */
+ * The SELECTED face AND style drive it (C2 #282, #330): the sample must
+ * show what OK will return — the old "mono" literal here let the accept
+ * path go face-generic while the sample kept rendering mono. Without
+ * CF_EFFECTS there are no checkboxes and the sample draws no rules —
+ * the dialog does not own those fields then (they pass through). */
 static void cf_preview(void) {
     int pt = cf_cur_pt();
     if (!pt) return;
     char face[64];
     cf_cur_face(face, sizeof face);
-    HFONT nf = CreateFont(-MulDiv(pt, 96, 72), 0, 0, 0, FW_NORMAL,
-                          0, 0, 0, 0, 0, 0, 0, 0, face);
+    int bold, ital;
+    cf_cur_style(&bold, &ital);
+    int ul = g_cf.ul && SendMessage(g_cf.ul, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    int so = g_cf.so && SendMessage(g_cf.so, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    HFONT nf = CreateFont(-MulDiv(pt, 96, 72), 0, 0, 0,
+                          bold ? FW_BOLD : FW_NORMAL,
+                          (DWORD)ital, (DWORD)ul, (DWORD)so,
+                          0, 0, 0, 0, 0, face);
     if (!nf) return;
     SendMessage(g_cf.sample, WM_SETFONT, (WPARAM)nf, TRUE);
     if (g_cf.sampleFont) DeleteObject((HGDIOBJ)g_cf.sampleFont);
@@ -581,6 +613,23 @@ static void cf_accept(void) {
     lf->lfHeight = -MulDiv(pt, 96, 72);          /* negative = em px, the
                                                     CreateFont convention */
     lf->lfWidth = 0;
+    /* The style axis (#330): weight/italic from the style row — gdi32's
+     * own binarization (bold = lfWeight >= FW_BOLD, #281) in reverse. */
+    int bold, ital;
+    cf_cur_style(&bold, &ital);
+    lf->lfWeight = bold ? FW_BOLD : FW_NORMAL;
+    lf->lfItalic = (BYTE)(ital ? 1 : 0);
+    /* Effects: ONLY under CF_EFFECTS does the dialog own these fields;
+     * without the flag they pass through untouched (upstream contract —
+     * and what keeps a caller's registry-held underline across a
+     * size-only change). lfCharSet is deliberately never written: there
+     * is no Script selector, and the walked-in value round-trips. */
+    if (g_cf.ul)
+        lf->lfUnderline = (BYTE)
+            (SendMessage(g_cf.ul, BM_GETCHECK, 0, 0) == BST_CHECKED);
+    if (g_cf.so)
+        lf->lfStrikeOut = (BYTE)
+            (SendMessage(g_cf.so, BM_GETCHECK, 0, 0) == BST_CHECKED);
     char face[64];
     cf_cur_face(face, sizeof face);
     cd_a2w(face, lf->lfFaceName, LF_FACESIZE);
@@ -616,10 +665,15 @@ static LRESULT CALLBACK cf_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if (HIWORD(wp) == EN_CHANGE) cf_preview();
             return 0;
         case IDC_FACE:
-            /* face selection re-renders the sample (C2, #282); dbl-click
-             * accepts, the size-list convention */
+        case IDC_STYLE:
+            /* face/style selection re-renders the sample (C2 #282, #330);
+             * dbl-click accepts, the size-list convention */
             if (HIWORD(wp) == LBN_SELCHANGE) cf_preview();
             else if (HIWORD(wp) == LBN_DBLCLK) { cf_preview(); cf_accept(); }
+            return 0;
+        case IDC_UL:
+        case IDC_SO:
+            cf_preview();                        /* effects toggle re-renders */
             return 0;
         }
         return 0;
@@ -644,6 +698,32 @@ static void cf_class(void) {
 
 BOOL ChooseFontW(CHOOSEFONTW *cf) {
     if (!cf || !cf->lpLogFont) return FALSE;
+    /* ---- Flags honesty (#330) ----
+     * Satisfied by construction, so HONORED with no code to run:
+     *   CF_SCREENFONTS — the family table IS the screen-font set (there
+     *   is no other font source);
+     *   CF_BOTH — the printer-font set is empty (no printing subsystem),
+     *   so screen ∪ printer == screen;
+     *   CF_NOVERTFONTS — no vertical face exists among the baked
+     *   families (mono/sans/serif; no '@'-style vertical variants).
+     * Unsatisfiable: CF_PRINTERFONTS alone asks for a list that cannot
+     * have members — the honest cancel (the PrintDlgW pattern), never a
+     * screen-font list dressed up as a printer's.
+     * Anything this build does not implement reports loudly rather than
+     * silently discarding — a caller must be able to LEARN. */
+    {
+        const DWORD known = CF_SCREENFONTS | CF_PRINTERFONTS |
+                            CF_INITTOLOGFONTSTRUCT | CF_EFFECTS |
+                            CF_NOVERTFONTS;
+        if (cf->Flags & ~known)
+            WIN32_UNSUPPORTED("ChooseFontW: Flags 0x%x not implemented "
+                              "(ignored)", (unsigned)(cf->Flags & ~known));
+        if ((cf->Flags & CF_BOTH) == CF_PRINTERFONTS) {
+            WIN32_UNSUPPORTED("ChooseFontW: CF_PRINTERFONTS-only — no "
+                              "printer subsystem (returns cancel)");
+            return FALSE;
+        }
+    }
     cf_class();
     memset(&g_cf, 0, sizeof g_cf);
     g_cf.cf = cf;
@@ -669,21 +749,44 @@ BOOL ChooseFontW(CHOOSEFONTW *cf) {
       if (mdc) { TEXTMETRIC tm;
                  if (GetTextMetrics(mdc, &tm)) rh = tm.tmHeight + 2;
                  ReleaseDC(g_cf.win, mdc); } }
-    int listTop = 66, listBot = CFD_H - 140;     /* sample sits below */
+    int listTop = 66, listBot = CFD_H - 180;     /* effects + sample below */
     int listH = ((listBot - listTop) / rh) * rh;
     CreateWindowEx(0, "STATIC", "Font:", WS_CHILD | WS_VISIBLE,
                    8, 8, 150, 28, g_cf.win, NULL, NULL, NULL);
     g_cf.face = CreateWindowEx(0, "LISTBOX", "", WS_CHILD | WS_VISIBLE | LBS_NOTIFY | WS_TABSTOP,
                                8, listTop, 190, listH, g_cf.win,
                                (HMENU)IDC_FACE, NULL, NULL);
+    CreateWindowEx(0, "STATIC", "Style:", WS_CHILD | WS_VISIBLE,
+                   210, 8, 150, 28, g_cf.win, NULL, NULL, NULL);
+    g_cf.style = CreateWindowEx(0, "LISTBOX", "", WS_CHILD | WS_VISIBLE | LBS_NOTIFY | WS_TABSTOP,
+                                210, listTop, 150, listH, g_cf.win,
+                                (HMENU)IDC_STYLE, NULL, NULL);
     CreateWindowEx(0, "STATIC", "Size:", WS_CHILD | WS_VISIBLE,
-                   210, 8, 80, 28, g_cf.win, NULL, NULL, NULL);
+                   372, 8, 80, 28, g_cf.win, NULL, NULL, NULL);
     g_cf.sizeEd = CreateWindowEx(0, "EDIT", "", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-                                 210, 34, 80, 30, g_cf.win,
+                                 372, 34, 80, 30, g_cf.win,
                                  (HMENU)IDC_SIZEED, NULL, NULL);
     g_cf.sizes = CreateWindowEx(0, "LISTBOX", "", WS_CHILD | WS_VISIBLE | LBS_NOTIFY | WS_TABSTOP,
-                                210, listTop, 80, listH, g_cf.win,
+                                372, listTop, 80, listH, g_cf.win,
                                 (HMENU)IDC_SIZES, NULL, NULL);
+    /* Effects (#330): shown ONLY under CF_EFFECTS — without the flag the
+     * dialog does not own lfUnderline/lfStrikeOut (they pass through). */
+    if (cf->Flags & CF_EFFECTS) {
+        g_cf.ul = CreateWindowEx(0, "BUTTON", "Underline",
+                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+                                 8, CFD_H - 176, 140, 28, g_cf.win,
+                                 (HMENU)IDC_UL, NULL, NULL);
+        g_cf.so = CreateWindowEx(0, "BUTTON", "Strikeout",
+                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+                                 160, CFD_H - 176, 140, 28, g_cf.win,
+                                 (HMENU)IDC_SO, NULL, NULL);
+        if (cf->Flags & CF_INITTOLOGFONTSTRUCT) {
+            if (cf->lpLogFont->lfUnderline)
+                CheckDlgButton(g_cf.win, IDC_UL, BST_CHECKED);
+            if (cf->lpLogFont->lfStrikeOut)
+                CheckDlgButton(g_cf.win, IDC_SO, BST_CHECKED);
+        }
+    }
     CreateWindowEx(0, "STATIC", "Sample:", WS_CHILD | WS_VISIBLE,
                    8, CFD_H - 136, 150, 28, g_cf.win, NULL, NULL, NULL);
     g_cf.sample = CreateWindowEx(0, "STATIC", "AaBbYyZz", WS_CHILD | WS_VISIBLE | SS_SUNKEN,
@@ -714,6 +817,21 @@ BOOL ChooseFontW(CHOOSEFONTW *cf) {
             if (inface[0] && !strcmp(inface, fams[i])) sel0 = i;
         }
         SendMessage(g_cf.face, LB_SETCURSEL, (WPARAM)sel0, 0);
+    }
+    /* Style rows + preselect (#330). The preselect is load-bearing, not
+     * cosmetic: callers pass their LIVE LOGFONT (notepad's registry-held
+     * font), so a style list defaulting to Regular would make a plain
+     * size change silently CLEAR a held bold on OK. Binarization is
+     * gdi32's own (#281): bold = lfWeight >= FW_BOLD. */
+    {
+        int b0 = 0, it0 = 0;
+        if (cf->Flags & CF_INITTOLOGFONTSTRUCT) {
+            b0 = cf->lpLogFont->lfWeight >= FW_BOLD;
+            it0 = cf->lpLogFont->lfItalic != 0;
+        }
+        for (int i = 0; i < 4; i++)
+            SendMessage(g_cf.style, LB_ADDSTRING, 0, (LPARAM)cf_styles[i]);
+        SendMessage(g_cf.style, LB_SETCURSEL, (WPARAM)((b0 << 1) | it0), 0);
     }
     for (int i = 0; i < CF_NSIZES; i++) {
         char row[16];
