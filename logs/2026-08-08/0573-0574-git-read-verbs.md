@@ -165,4 +165,39 @@ comment assigns the stderr-harness work to this lane, and the alternative
 (shipping #574 with only the exit-code half of its guard) is the
 reads-as-complete half guard the repo's rules exist to prevent.
 
-(verdict appended after the run)
+### Run 1 — INTERRUPTED, not red (owned as a process mistake)
+
+The first gate was launched as a background task and the turn ENDED; the
+shell reparented to init, its tee died, and the run was killed ~4 minutes in
+(`build/summary-run1-INTERRUPTED.json`: elapsedMs 234119, blockfs exit 130 =
+SIGINT, py "failed" in 124 ms — an abort signature, not a result). The gate
+is the one sanctioned background exception ONLY as a tracked task WITH THE
+TURN HELD; run 2 held the turn through TaskOutput blocking waits. Run 1's
+truncated log is preserved (`build/gate-573574-run1-truncated.log`); run 2
+tee'd to a NEW path per the lane rule.
+
+### Run 2 — COMPLETE; 22/23 pass; the one red attributed to a pre-existing flake, filed #575
+
+`build/gate-573574-run2.log` (GATE-START 00:36:28 +0900, GATE-EXIT rc=1) and
+`build/test-run/summary.json` (preserved as `build/summary-run2-gate.json`):
+`filter: null`, elapsedMs 3282250 (54.7 min — the declared full price), and
+`.suites` SET-EQUALS the 23-suite dry-run plan both ways (nothing planned is
+missing from the record; nothing recorded is outside the plan — the py row
+reads `py[19 categories]`, matched on meaning per the dispatcher-row rule).
+Rows: unit pass, blockfs pass, py[19] pass, kernel pass (168/168 recorded ==
+total), sweep FAIL exit 1.
+
+The sweep red is `os-pollball.mjs`, ONE leg — `ball animates (callback loop
+is live)`, a fixed-point pixel-delta probe — while the SAME file's later legs
+passed, measuring 67 presents/s (seq 871→1140) and a clean quit. Attribution
+per rule 3a.6, on the identical tree immediately after the gate:
+`os-sweep.mjs --repeat 3 --filter=os-pollball` → 3/3 pass. The lane's diff
+(git CLI, py harness, fakegit data) has no path into compositor animation.
+Verdict: pre-existing timing flake of the #562 class (callback-app legs under
+gate load), NOT caused by and not maskable by this diff. Gate-fail artifacts
+preserved (`build/os-pollball-run2-fail.log`,
+`build/test-browser-summary-run2-gate.json`); filed as **#575** (P0, medium,
+`pkgdev:os-proper`) after a positive-controlled ticket search (245 tickets,
+'pollball' in no title; control 'loopguard' → #562). Per the lane rules the
+red is reported, not repaired here; fakegit — the suite that adjudicates both
+tickets — is green in the gate record, as are kernel and every py category.
