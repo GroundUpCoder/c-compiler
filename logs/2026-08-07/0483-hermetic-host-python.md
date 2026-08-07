@@ -137,3 +137,28 @@ at exit 2 with that exact command in the message (self-diagnosing, not a red);
 a host-only run would fail `test_python_resolve.js`'s integration leg with the
 same message. Existing worktrees need nothing — read-through covers them.
 lane-483's worktree carries its own `.venv` (created for this gate).
+
+## Gate result (attempt 2 — attempt 1 was killed by a released turn, log kept)
+
+`build/gate-483-2.log`: **GATE-EXIT rc=0**, 747.6s. `build/test-run/summary.json`
+(mtime post-GATE-START): `filter: null`, 23 suites, 5 rows all literally `pass`,
+rows expand to exactly the dry-run plan (set-equality both ways), and
+`elapsedMs − Σ(row ms) = 0` (serial). The py banner shows the batch ran under
+`…/lane-483/.venv/bin/python`.
+
+Skip profile, every skip named (py batch 887/0/112; unit 815/0/3):
+- 65 micropython-upstream — CPython-dialect scripts the baseline interpreter
+  rejects; A/B-verified identical under 3.9.6 and 3.12.13.
+- 38 libc — the static LIBC_TEST_SKIP list.
+- 7 lua — static skip set (stable across reruns).
+- 1 disw — PRE-EXISTING runner quirk, surfaced by this work: run_disw_tests
+  iterates every subdir of tests/disw/, and the __pycache__ dir CPython drops
+  on first run (gitignored, absent from the main clone until someone runs the
+  category) has no build.py → silent skip from the second run onward.
+  Recommend a micro-ticket: ignore __pycache__ in the disw/sourcemap-style
+  dir walks.
+- 1 fuzz/live — a random-seed csmith program whose native oracle leg declined
+  (skip-by-design: "native itself slow/odd: not our problem"); count varies
+  per run by construction.
+- 3 unit — the documented `fallback: true` class (stdin events, subprocess
+  stdio, chdir-in-worker); stable baseline.
