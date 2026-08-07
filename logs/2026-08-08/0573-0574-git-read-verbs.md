@@ -116,6 +116,53 @@ exist to prevent.
 - No `--format`/`-z`/`--name-only` etc. — not claimed by usage, refused loudly
   by the unknown-option guard.
 
+## Breakage evidence (build/breakage-evidence-573574.log)
+
+Four deliberate breakages, each applied to the worktree, run, and reverted
+(`git checkout -- os/git/git.c`, diff-clean verified each time):
+
+- **B1** — nested `ls_tree_print` call given `recursive=0` (the one-level
+  regression). `ls_tree_deep` RED (21 lines vs 32: deep blobs missing,
+  spurious `a/b` tree line); `ls_tree`, both flag goldens, and `ls_tree_r_t`
+  all stayed GREEN — measured proof that every depth-≤2 fixture is
+  structurally blind to the class and the depth-3 fixture is the only net.
+- **B2** — `cmd_rev_list`'s unknown-option fprintfs deleted, `return 1`
+  kept. Exit code unchanged, so a bare `!` step passes; `rev_list_opts` went
+  RED only via the new stderr assertion (`stderr was: (empty)`). This is
+  defect (b) of cont-529 reproduced and caught — the harness addition is
+  load-bearing, not decoration. Negative controls: `w_unknown_option` and
+  `ls_tree_deep` stayed GREEN under B2.
+- **B3** — `cmd_add`'s `unknown option` fprintf deleted, usage line kept.
+  Stderr non-empty but missing the message → retrofit `w_unknown_option`
+  RED. The assertion tests the message text, not mere stderr noise.
+- **B4** — `cmd_log`'s positional disabled (`ref && 0`). `log_head2` RED
+  (HEAD's id where c3's belongs) and `log_rev` RED (`log nosuch`
+  unexpectedly exits 0 — the ignored positional makes even the error path
+  vacuous). Both #574-log guards fire.
+- Final: all reverts confirmed clean, full fakegit 26/26 GREEN.
+
+No breakage came back green — no dead-code finding to file.
+
+## Bypass scan (build/bypass-scan-573574.log)
+
+`build/bypass-scan-573574.sh` (script file, not inline) over
+`origin/main..HEAD` (51593e32 → tip): scans added lines for weakening
+constructs (knownBug/xfail/skip/--resume/heavy-lock bypass/.only/DISABLED)
+and deleted assertion-bearing test lines. Positive control (planted
+`knownBug` line) matched 1 BEFORE the zero was accepted; negative control
+(harmless line) matched 0. Result: CLEAN — 0 weakening additions, 0 deleted
+assertions. The re-cut goldens are expected.txt data files, not assertion
+code, and are declared above.
+
 ## Gate
 
-(figures appended after the dry-run and the run)
+`node tests/run.js --diff origin/main --dry-run` (the only authority): 16
+changed paths, 1 ignored (the dev log) → **23 suites** — `os/git/git.c` →
+kernel + sweep + fakegit; `tests/run.py` → all 19 py categories + unit +
+blockfs. That is the ~50-minute price of the harness deliverable (#475's
+same-shape run measured 3046 s), declared here and accepted: the cont-529
+comment assigns the stderr-harness work to this lane, and the alternative
+(shipping #574 with only the exit-code half of its guard) is the
+reads-as-complete half guard the repo's rules exist to prevent.
+
+(verdict appended after the run)
