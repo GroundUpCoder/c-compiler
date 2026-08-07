@@ -768,34 +768,37 @@ static int cmd_add(git_repository *repo, int argc, char **argv) {
 
     int rc = 0;
     if (all || (update && npaths == 0)) {
+        /* git_index_add_all IS `git add -A`: its index-to-workdir diff walk
+           adds untracked, updates modified AND removes deleted entries
+           (apply_each_file removes the entry when the workdir side has no
+           GIT_DIFF_FLAG_EXISTS) — no separate update_all pass is needed.
+           `-u` alone maps to update_all, which skips untracked files. */
         struct add_count c = {0};
-        if (all && git_index_add_all(idx, NULL, GIT_INDEX_ADD_DEFAULT,
-                                     add_count_cb, &c) < 0) rc = 1;
-        if (!rc && git_index_update_all(idx, NULL, add_count_cb, &c) < 0) rc = 1;
-        if (rc) print_giterr("add");
+        int r = all ? git_index_add_all(idx, NULL, GIT_INDEX_ADD_DEFAULT,
+                                        add_count_cb, &c)
+                    : git_index_update_all(idx, NULL, add_count_cb, &c);
+        if (r < 0) { print_giterr("add"); rc = 1; }
     } else {
         /* git >= 2.0 semantics: `git add <pathspec>` stages creations,
-           modifications AND deletions under the spec — add_all covers the
-           on-disk side, update_all the deleted-tracked side. Per-spec so a
-           spec that matches NOTHING is git's fatal, not a silent no-op. */
+           modifications AND deletions under the spec (add_all covers all
+           three, see above). Per-spec so a spec that matches NOTHING is
+           git's fatal, not a silent no-op. */
         for (int i = 0; i < npaths && rc == 0; i++) {
             char rel[PATH_MAX];
             if (workdir_rel(repo, paths[i], rel, sizeof(rel)) != 0) { rc = 1; break; }
             struct add_count c = {0};
             if (rel[0] == '\0') {
-                if (git_index_add_all(idx, NULL, GIT_INDEX_ADD_DEFAULT,
-                                      add_count_cb, &c) < 0 ||
-                    git_index_update_all(idx, NULL, add_count_cb, &c) < 0) {
-                    print_giterr("add"); rc = 1; break;
-                }
+                int r = update ? git_index_update_all(idx, NULL, add_count_cb, &c)
+                               : git_index_add_all(idx, NULL, GIT_INDEX_ADD_DEFAULT,
+                                                   add_count_cb, &c);
+                if (r < 0) { print_giterr("add"); rc = 1; break; }
             } else {
                 char *specv[1] = { rel };
                 git_strarray specs = { specv, 1 };
-                if (git_index_add_all(idx, &specs, GIT_INDEX_ADD_DEFAULT,
-                                      add_count_cb, &c) < 0 ||
-                    git_index_update_all(idx, &specs, add_count_cb, &c) < 0) {
-                    print_giterr("add"); rc = 1; break;
-                }
+                int r = update ? git_index_update_all(idx, &specs, add_count_cb, &c)
+                               : git_index_add_all(idx, &specs, GIT_INDEX_ADD_DEFAULT,
+                                                   add_count_cb, &c);
+                if (r < 0) { print_giterr("add"); rc = 1; break; }
                 if (c.n == 0 && !git_index_get_bypath(idx, rel, 0)) {
                     int ignored = 0;
                     if (git_ignore_path_is_ignored(&ignored, repo, rel) == 0 && ignored) {
