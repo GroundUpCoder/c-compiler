@@ -53,7 +53,7 @@
 #define PATH_MAX 4096
 #endif
 
-#define GUCOS_GIT_VERSION "0.2"
+#define GUCOS_GIT_VERSION "0.3"
 
 static char oidbuf[GIT_OID_SHA1_HEXSIZE + 1];
 

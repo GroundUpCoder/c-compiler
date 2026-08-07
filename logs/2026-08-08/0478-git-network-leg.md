@@ -217,6 +217,17 @@ CHILD process (`spawnGitServer`, request log via `GET /__requests`). The
 gotcha is now documented in gitserve.js itself — it will bite any future e2e
 that serves HTTP to a driveBoot'd OS.
 
+## Committed assertions this change invalidated (declared before touching)
+
+- `os-git-cli.mjs` help-text check pinned *"merge, tag, reset and the network
+  commands are not implemented"* and the `git version 0.2` line. Both became
+  false the moment the network verbs landed. Re-cut with **MORE** coverage,
+  not less: the help assertion now additionally requires `clone`/`fetch`/`push`
+  to be listed (a network verb that silently vanished from help would fail it),
+  and the version pin moved to `0.3`. The `unimplemented[]` verb list in git.c
+  shrank (clone/fetch/pull/push/remote removed) — the fakegit `w_unknown_option`
+  golden is unaffected (it tests `--wibble`, not a verb name), verified green.
+
 ## Declared bounds (no silent caps)
 
 - Request bodies are buffered whole (fetch cannot stream uploads) — a push
