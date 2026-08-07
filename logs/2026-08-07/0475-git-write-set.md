@@ -165,6 +165,36 @@ lives (the alternative, kernel-e2e-only coverage, would leave git.c
 regressions detectable only by a 25-minute suite). Dry-run plan and the
 gate log: `build/gate-475.log`, judged from `build/test-run/summary.json`.
 
+## The gate restart — the coordinator's ask, accounted for
+
+Gate run #1 (GATE-START 23:02:47, the kickoff's exact `tee | tail -0`
+shape) was **killed by the Bash tool's 10-minute cap** — the tool result
+reads verbatim "Command timed out after 10m 0s", exit code 143 (SIGTERM),
+at ≈23:12:47. It was not stopped by me, it was not red, and it did not
+finish: no `GATE-EXIT` line, no run-level summary (an absent
+`build/test-run/summary.json` means "did not finish", and that is how I
+treated it). The kickoff's cap mechanism ("at the 600 s cap you get a task
+ID") did not fire in this harness — the tool kills instead — so run #2
+(GATE-START 23:13:22) used the sanctioned fallback: a tracked background
+task with the turn held, blocked on TaskOutput until completion.
+
+**The log clobber is a real mistake I own**: run #2 redirected with `>`
+onto the same `build/gate-475.log`, destroying run #1's partial log. The
+kickoff's "tee to a NEW path" rule is written on the exit-3 case and I
+applied it only there; the correct reading is ANY re-gate. What I can say
+about run #1's content: the coordinator's own 23:12 snapshot (68218 bytes,
+`projects` complete at 235.8s, tail inside `lua`, no failure lines) is the
+only surviving record, and run #2 ran the identical plan — same tree, same
+`--diff origin/main`, no `--resume` — to completion, all green. Nothing in
+run #1 is known to have failed; nothing from run #1 was reused.
+
+Verdict record: run #2's `GATE-EXIT rc=0` at 3046.0s; run-level
+`build/test-run/summary.json` written by that run (mtime 00:04 > start),
+`filter: null`, all 25 selected suites, all rows the literal `pass`;
+`build/test-kernel/summary.json` done/filter-null/168-of-168
+recorded/zero non-pass; `build/test-browser/summary.json`
+done/filter-null/57-of-57 recorded/zero non-pass.
+
 ## Pre-authorised rebuttal — the condition under which this is wrong
 
 - **"The repos only fsck because the tests ran on host fs"** — refuted in
