@@ -141,3 +141,89 @@ oracle, corrected.
 `BODY_CAP = 32 MB` on bridge request bodies — a >32 MB push THROUGH THE BRIDGE
 fails as a loud 413 (headless/direct fetch is uncapped). Not silently widened
 here; recorded as the bridge's documented v1 posture.
+
+## What landed
+
+- **`vendor/libgit2/http_subtransport.c`** (new): the real
+  `git_smart_subtransport_http` — the four smart-HTTP actions over the kernel
+  HTTP fd primitives (`__http_open`/`__http_status`/`read`/`close`/`__wait`,
+  the WAIT-first discipline). Stateless rpc=1: one stream = one request;
+  write() buffers the request body (platform fetch cannot stream uploads —
+  the curl veneer's documented posture), first read() performs, then the
+  response STREAMS through the backpressured fd (a clone pack never sits
+  whole in process memory — the reason the subtransport speaks to the
+  primitives rather than through `curl_easy_perform`, argued above).
+  Content-type validated (dumb protocol = loud error), 401 → Basic auth via
+  URL userinfo then `git_transport_smart_credentials` (≤3 attempts →
+  GIT_EAUTH), redirect re-base from the #359 `x-guc-final-url` line.
+  Public-header-only deps (own grow-buffer/base64/userinfo parse) — no
+  internal libgit2 headers, matching the missing_stubs.c posture. The stub in
+  `missing_stubs.c` is deleted; `transport.c`'s builtin table lights up
+  http:// and https:// with no registration code.
+- **`os/git/git.c`**: `clone` / `fetch` / `pull` / `push` / `remote
+  [-v|add|remove]`. pull is FAST-FORWARD ONLY (no merge verb exists; a
+  diverged branch is a loud fatal, never a guess); `git pull <remote>`
+  integrates THAT remote's branch (the configured upstream only serves bare
+  `git pull`). push DWIMs a bare branch name into a full refspec (libgit2
+  wants full refspecs) and preserves `+` force. Credential callback reads
+  git's own credential-store format (`$HOME/.git-credentials`, then
+  `$HOME/.config/git/credentials`) IN-PROCESS; values are never echoed. A
+  server per-ref refusal prints `! [rejected]` and exits nonzero.
+- **Enrollment**: both bin.jsons + `mkgit2srclib.js` regenerated
+  (`git2_srclib.h` 211 TUs, `--check` green) — the srclib package ships the
+  subtransport too. `packages/git.json` 0.2 → 0.3.
+- **Tests**: `tests/fakegit/net_verbs/` (offline surface: parse guards, remote
+  round-trip, the loud transportless-clone error — 27/27 category green);
+  `tests/kernel/test_git_net_e2e.js` + `tests/kernel/lib/gitserve.js` (the
+  server's far end is HOST git via `upload-pack`/`receive-pack
+  --stateless-rpc`; registered in the kernel run.js member list per #314).
+
+## Acceptance evidence (headless)
+
+**Kernel e2e: 31/31 ALL OK** — clone (multi-MB pack, blob sha256 byte-exact
+vs host), fetch + FF pull + "Already up to date.", push judged SERVER-SIDE by
+host git (`rev-parse` == in-OS sha, `git fsck --strict` clean, log subject and
+blob content round-tripped), non-FF push refuses loud + server unmoved, auth
+(credential-less clone fails NAMED; URL-embedded and ~/.git-credentials both
+work; authed push lands), 301 redirect clone with the POST provably re-based
+(server request log shows `POST /repo.git/git-upload-pack`, nothing on
+`/moved.git`).
+
+**Real remote, real internet** (manual, headless `node os/boot.js`):
+
+```
+Cloning into '/root/hw'...
+Enumerating objects: 13, done.
+Total 13 (delta 0), reused 0 (delta 0), pack-reused 13 (from 1)
+7fd1a60b01f91b314f59955a4e4d4e80d8edf11d        <- in-OS rev-parse HEAD
+```
+Host `git ls-remote https://github.com/octocat/Hello-World.git HEAD` says the
+same `7fd1a60b…` — gucOS cloned GitHub over https and agrees with GitHub about
+where HEAD is. `log`/`cat README` render correctly.
+
+**Breakage evidence** (`build/breakage-evidence-478.log`): the single break
+(`git_smart_subtransport_http` early `return -1`, the pre-#478 stub) reddens
+BOTH instruments — fakegit `26 passed, 1 failed` (net_verbs) and the e2e
+(clone/push legs FAIL) — and the revert restores fakegit `27 passed` and the
+e2e `ALL OK`. Negative control = the same suites green on the unbroken tree,
+shown in the same log.
+
+## One infrastructure gotcha worth keeping
+
+The first cut of the e2e ran gitserve IN-PROCESS and every in-OS request rode
+the 30 s headers deadline into ETIMEDOUT: `driveBoot` is **spawnSync**, so the
+test process's event loop is dead for the whole boot. The server must be a
+CHILD process (`spawnGitServer`, request log via `GET /__requests`). The
+gotcha is now documented in gitserve.js itself — it will bite any future e2e
+that serves HTTP to a driveBoot'd OS.
+
+## Declared bounds (no silent caps)
+
+- Request bodies are buffered whole (fetch cannot stream uploads) — a push
+  pack lives in process memory once; through the BRIDGE it is additionally
+  capped at 32 MB (loud 413).
+- pull is fast-forward only; merge/tag/reset remain unimplemented and say so.
+- Auth is HTTP Basic only (TLS is the platform's; token hosts speak Basic).
+  No credential helpers protocol, no askpass — the store file or the URL.
+- Protocol is smart v0/v1 (no `Git-Protocol: version=2` header sent —
+  libgit2 1.9's smart machinery is v0/v1; servers fall back transparently).
