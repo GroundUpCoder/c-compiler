@@ -112,6 +112,34 @@ try {
   check('the parked CLIP_GET drove a clip-read round-trip (probe)',
     await page.evaluate((n) => (window.__osClipRead || 0) > n, clipRead0), true);
 
+  // ---- #562: the freshness window is per-CONSUMER ----
+  // Two pbpastes from two PROCESSES around a host rewrite, back to back: a
+  // `read`-gated one-liner holds the shell between them, so releasing the
+  // gate fires the second pbpaste within the old CLIP_FRESH_MS window of
+  // the first one's settle (~250ms measured — exactly the cadence that
+  // compiled os-loopguard's fixture N from clipboard N-1). The pid-blind
+  // window then served the FIRST process's refresh to the SECOND process's
+  // first read: no round-trip (__osClipRead flat — red pre-fix) and the
+  // superseded text (red pre-fix). Fixed, a consumer the last refresh did
+  // not serve ALWAYS takes its own round-trip, so both checks are
+  // timing-independent green.
+  await page.evaluate(() => navigator.clipboard.writeText('PIDWIN-OLD-562'));
+  await page.evaluate(() => { window.__osOut = ''; });
+  await page.keyboard.type('pbpaste > /root/pw1; echo PW1""-DONE; read pw; pbpaste > /root/pw2; echo PW2""-DONE\r');
+  await waitOut('PW1-DONE', 30000);
+  const clipReadA = await page.evaluate(() => window.__osClipRead || 0);
+  await page.evaluate(() => navigator.clipboard.writeText('PIDWIN-NEW-562'));
+  await page.keyboard.type('\r');   // release the read gate: pbpaste #2 fires NOW
+  await waitOut('PW2-DONE', 30000);
+  check('a second process\'s first paste takes its own clip-read round-trip (#562)',
+    await page.evaluate((n) => (window.__osClipRead || 0) > n, clipReadA), true);
+  await page.keyboard.type('cat /root/pw2; echo PW""CAT-DONE\r');
+  await waitOut('PWCAT-DONE', 15000);
+  const pwOut = await page.evaluate(() => window.__osOut);
+  check('the second paste reads the rewritten host clipboard, not the prior refresh (#562)',
+    pwOut.includes('PIDWIN-NEW-562') && !pwOut.includes('PIDWIN-OLD-562'),
+    pwOut.slice(-300));
+
   // ---- OSK paste chord on VT2: the same seam from a REAL pointer tap
   // (its activation is what legalizes readText on iOS — synthetic
   // __osOskTap probes carry no activation, so this leg drives the actual

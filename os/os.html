@@ -1462,13 +1462,15 @@ kernel.onmessage = function (e) {
       break;
     // The clipboard seam: a paste consumer is PARKED in the kernel on
     // CLIP_GET awaiting this refresh. The triggering keystroke/tap/click is
-    // milliseconds old, so its transient user activation legalizes readText
-    // here — on iOS this is where the paste callout raises, AT paste time
-    // (the platform's own paste-security UI, surfaced instead of failed
-    // around). A gesture-less consumer (a scripted `clip -o`) gets an
-    // immediate done and is served the cached slot — pre-seam semantics, no
-    // prompt spam. The done must ALWAYS post: the kernel worker's timeout
-    // is the backstop, not the plan.
+    // usually milliseconds old, so its transient user activation legalizes
+    // any permission PROMPT readText needs — on iOS this is where the paste
+    // callout raises, AT paste time (the platform's own paste-security UI,
+    // surfaced instead of failed around). A gesture-less or stale-gesture
+    // consumer still ATTEMPTS the read (#562): under a granted permission
+    // it succeeds without activation, and under 'prompt' it rejects
+    // quietly (no activation = no prompt raised) into the cached-slot
+    // fallback — pre-seam semantics, no prompt spam. The done must ALWAYS
+    // post: the kernel worker's timeout is the backstop, not the plan.
     case 'clip-read': {
       window.__osClipRead = (window.__osClipRead || 0) + 1;   // agent probe
       var clipDone = function () { kernel.postMessage({ type: 'clip-read-done' }); };
@@ -1481,9 +1483,17 @@ kernel.onmessage = function (e) {
         clipDone();
         break;
       }
-      var uact = navigator.userActivation;
-      if (uact && !uact.isActive) clipDone();
-      else clipFromHost(clipDone);
+      // Always ATTEMPT the readText (#562). The old pre-check skipped it
+      // whenever transient activation had lapsed — but activation is only
+      // needed to RAISE the permission prompt, not to read under an
+      // already-granted permission, so the skip traded real freshness (a
+      // paste that reached the consumer >~5s after the triggering
+      // keystroke — e.g. behind a spawn pipeline under load — read a stale
+      // slot) for nothing: an activation-less readText under a 'prompt'
+      // permission rejects QUIETLY, prompt-free, and clipFromHost's
+      // rejection path already serves the cached slot. Attempting always
+      // is strictly fresher with the same worst case.
+      clipFromHost(clipDone);
       break;
     }
     // Egress (todos/0398): the kernel materialized ONE artifact (a file's

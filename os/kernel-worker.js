@@ -132,19 +132,33 @@ var displayAnnounce = null;   // display-density bridge (set at boot, below)
 var post = function (m) { self.postMessage(m); };
 var pending = [];   // input that raced the boot
 // Deferred CLIP_GET refresh state (the clipboard seam — see onClipRead in
-// the Kernel opts below): parked-reader done callbacks sharing one page
-// round-trip, the freshness stamp that dedupes back-to-back reads, and the
-// timeout backstop that keeps the always-done contract.
+// the Kernel opts below): parked readers sharing one page round-trip, the
+// freshness stamp that dedupes back-to-back reads, and the timeout backstop
+// that keeps the always-done contract. The freshness window is scoped to
+// the pids the last refresh actually SERVED (#562): its one purpose is to
+// let a single consumer's size-then-read pair (SDL_GetClipboardText, the
+// clipio helpers — two CLIP_GETs milliseconds apart) cost ONE round-trip.
+// A pid-blind window also served one process's refresh to the NEXT
+// process's first paste — with the host clipboard rewritten in between,
+// that first paste read a stale slot ("first paste fresh by construction"
+// broken; os-loopguard compiled fixture N from clipboard N-1).
 var CLIP_FRESH_MS = 300, CLIP_READ_TIMEOUT_MS = 10000;
-var clipReadPending = [];
+var clipReadPending = [];    // [{pid, done}] parked on the in-flight round-trip
 var clipReadTimer = null;
 var clipFreshAt = -1e9;
+// Pids the stamped refresh is fresh FOR: a Set for a round-trip settle (only
+// the consumers that trip served), null for "every pid" (the host-paste-files
+// stamp below — the staged fmt-2 slot is authoritative for whichever process
+// the forwarded chord lands in).
+var clipFreshPids = null;
 function clipReadSettle() {
   if (clipReadTimer !== null) { clearTimeout(clipReadTimer); clipReadTimer = null; }
   clipFreshAt = Date.now();
-  var dones = clipReadPending;
+  var served = clipReadPending;
   clipReadPending = [];
-  for (var i = 0; i < dones.length; i++) dones[i]();
+  clipFreshPids = new Set();
+  for (var i = 0; i < served.length; i++) clipFreshPids.add(served[i].pid);
+  for (var j = 0; j < served.length; j++) served[j].done();
 }
 // Host keyboard-scheme auto-detect hint (META-ARROW-KEYBIND.md decision 4).
 // os.html reads navigator (or a ?hostkeys= test override) and passes the
@@ -457,6 +471,7 @@ function hostPasteFiles(m) {
     if (paths.length) {
       kernel.clipSet(2, new TextEncoder().encode('copy\n' + paths.join('\n') + '\n'));
       clipFreshAt = Date.now();
+      clipFreshPids = null;   // fresh for EVERY pid — see the state comment
       note(paths.length + ' file(s) staged');
     }
   } catch (e) {
@@ -799,9 +814,13 @@ async function boot() {
     // SDL_GetClipboardText's size-then-read pair costs ONE round-trip.
     // The timeout backstop keeps the always-done contract even if the
     // page never answers (dead page, wedged permission UI).
-    onClipRead: function (done) {
-      if (Date.now() - clipFreshAt < CLIP_FRESH_MS) { done(); return; }
-      clipReadPending.push(done);
+    onClipRead: function (done, pid) {
+      // Fresh only for a pid the last refresh served (#562): the window
+      // exists for one consumer's size-then-read pair, never to hand a
+      // possibly-superseded slot to a different process's first paste.
+      if (Date.now() - clipFreshAt < CLIP_FRESH_MS &&
+          (clipFreshPids === null || clipFreshPids.has(pid))) { done(); return; }
+      clipReadPending.push({ pid: pid, done: done });
       if (clipReadPending.length > 1) return;   // round-trip already in flight
       post({ type: 'clip-read' });
       clipReadTimer = setTimeout(clipReadSettle, CLIP_READ_TIMEOUT_MS);
