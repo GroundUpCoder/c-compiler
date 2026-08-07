@@ -420,7 +420,30 @@ static int cmd_cat_file(git_repository *repo, int argc, char **argv) {
 
 /* ---- ls-tree ---- */
 static int cmd_ls_tree(git_repository *repo, int argc, char **argv) {
-    const char *ref = argc > 0 ? argv[0] : "HEAD";
+    /* Flags first, positionals second — real git accepts `ls-tree -r HEAD`
+       and `ls-tree HEAD -r` alike, so the flag scan must run BEFORE the rev
+       is picked, never after it (#571: revparsing argv[0] blindly rejected
+       `-r HEAD` with "bad revision '-r'"). A handler that takes flags AND a
+       rev must use this shape — split argv in one pass, then revparse; see
+       cmd_rev_list, which interleaves the same split with its `-n <count>`
+       value flag. An unrecognized option is a loud usage error, never a
+       revision candidate and never silently ignored. */
+    int recursive = 0;
+    const char *ref = NULL;
+    for (int i = 0; i < argc; i++) {
+        if (!strcmp(argv[i], "-r")) {
+            recursive = 1;
+        } else if (argv[i][0] == '-' && argv[i][1] != '\0') {
+            fprintf(stderr, "git: unknown option '%s'\n", argv[i]);
+            fprintf(stderr, "usage: git ls-tree [-r] [<rev>]\n");
+            return 1;
+        } else if (!ref) {
+            ref = argv[i];
+        }
+        /* Further positionals would be pathspecs; not implemented (#474
+           scope) — the first positional is the rev, as before. */
+    }
+    if (!ref) ref = "HEAD";
     git_object *obj = NULL;
     if (git_revparse_single(&obj, repo, ref) < 0) {
         fprintf(stderr, "git: bad revision '%s'\n", ref);
@@ -441,11 +464,6 @@ static int cmd_ls_tree(git_repository *repo, int argc, char **argv) {
     }
 
     if (tree) {
-        int recursive = 0;
-        for (int i = 0; i < argc; i++) {
-            if (!strcmp(argv[i], "-r")) recursive = 1;
-        }
-
         size_t n = git_tree_entrycount(tree);
         for (size_t i = 0; i < n; i++) {
             const git_tree_entry *te = git_tree_entry_byindex(tree, i);
