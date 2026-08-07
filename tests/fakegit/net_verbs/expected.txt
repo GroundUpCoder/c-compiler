@@ -1,0 +1,4 @@
+origin
+origin	http://example.invalid/repo.git (fetch)
+origin	http://example.invalid/repo.git (push)
+Cloning into 'sub'...

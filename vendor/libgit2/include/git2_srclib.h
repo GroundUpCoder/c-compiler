@@ -88,6 +88,7 @@ __require_source("git2/deps/zlib/inflate.c");
 __require_source("git2/deps/zlib/inftrees.c");
 __require_source("git2/deps/zlib/trees.c");
 __require_source("git2/deps/zlib/zutil.c");
+__require_source("git2/http_subtransport.c");
 __require_source("git2/missing_stubs.c");
 __require_source("git2/src/libgit2/annotated_commit.c");
 __require_source("git2/src/libgit2/apply.c");

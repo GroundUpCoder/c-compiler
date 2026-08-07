@@ -70,11 +70,6 @@ int git_socket_stream_new(struct git_stream **out, const char *host, const char 
 
 int git_transport_ssh_libssh2_global_init(void) { return 0; }   /* #473: see above */
 
-int git_smart_subtransport_http(
-    struct git_smart_subtransport **out,
-    struct git_transport *owner,
-    void *param)
-{
-    (void)out; (void)owner; (void)param;
-    return -1;
-}
+/* git_smart_subtransport_http lived here as a return -1 stub until ticket
+   #478; the real implementation is http_subtransport.c (smart HTTP over the
+   kernel's Tier 2 fetch transport). */

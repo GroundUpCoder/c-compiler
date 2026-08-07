@@ -67,6 +67,7 @@
     "deps/zlib/inftrees.c",
     "deps/zlib/trees.c",
     "deps/zlib/zutil.c",
+    "http_subtransport.c",
     "missing_stubs.c",
     "src/libgit2/annotated_commit.c",
     "src/libgit2/apply.c",
