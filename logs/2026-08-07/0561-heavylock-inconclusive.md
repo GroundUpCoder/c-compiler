@@ -177,3 +177,26 @@ conclusion does not rest on it: `tests/run.js` (`anyFail = results.some(r => r.s
 'fail')`) cannot exit 0 on a contended row, whose status is literally `fail`, and the
 stale-artifact fix touches only artifact attachment, never status or exit. A.log itself is
 byte-untouched; this section is the annotation.
+
+---
+
+# Gate-561b red: attributed to a pre-existing #551 flake, not this lane's diff
+
+`build/gate-561b.log:1335` — GATE-EXIT rc=1: sweep 55/56, the one red is
+`os-loopguard.mjs` ("callbacks app presenting in SDL_AppInit runs clean" — the #551 AppInit
+allowance: splashcb's `SDL_AppInit` present was refused with the blocking-loop diagnostic,
+exit 69). Preserved: `build/gate-561b-sweep-summary.json`, `build/gate-561b-os-loopguard-fail.log`.
+
+Attribution (measured, not guessed):
+- The delta since the green gate (`4d567d38 → bd7adb21`) is dispatcher summary plumbing +
+  tests/host — nothing bootable observes it; this lane's `heavy-lock.js` edits are
+  comments-only and `os-loopguard.mjs` / `os/` are untouched vs origin/main.
+- The same member passed 56/56 in gate-561 with ALL the lock-mechanism changes already in.
+- Same tree, `--repeat 3`: **3/3 pass** (`build/attrib-561b-loopguard.log`).
+- Same tree, `--repeat 5 --under-load`: **2/5 pass, flake 60%**
+  (`build/attrib-561b-loopguard-load.log`) — a live timing sensitivity in the #551 leg
+  (merged to main yesterday as 52a27e1f), present independently of this lane.
+
+Filed as a P0 (flaky guard on a shipped feature); re-gating to `build/gate-561c.log` for the
+merge record. The flaky member is NOT quarantined or filtered — the re-gate runs the full
+selection.
