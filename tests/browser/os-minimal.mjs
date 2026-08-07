@@ -73,6 +73,31 @@ const INDEX = JSON.parse(fsMod.readFileSync(
 const NAMES = Object.keys(INDEX.packages).sort();
 if (!INDEX.packages[PKG]) { console.error(`mkpkg produced no ${PKG} entry`); process.exit(1); }
 const PKG_VER = INDEX.packages[PKG].version;
+// minBase pins (#518). netsurf-demos DECLARES its floor now (169, the seed
+// content-kind's first shipped version), so it no longer sits on the
+// minBase == base boundary — that role moves to `netsurf`, the card sorted
+// directly above it (visible in the same viewport after the scroll below),
+// which stays undeclared and therefore stamps the current image version.
+// Both pins are preconditions: if either package's declaration changes, this
+// test must be re-pointed, not silently allowed to go vacuous.
+const PKG_MINBASE = require(path.join(ROOT, 'packages', PKG + '.json')).minBase;
+if (!Number.isInteger(PKG_MINBASE) || INDEX.packages[PKG].minBase !== PKG_MINBASE ||
+    !(PKG_MINBASE < (MANIFEST.version | 0))) {
+  console.error(`${PKG} must declare an explicit minBase below the image version and it must ` +
+    `ride the index verbatim (def=${PKG_MINBASE}, index=${INDEX.packages[PKG].minBase}, ` +
+    `image=${MANIFEST.version}) — if its declaration changed, re-point this test`);
+  process.exit(1);
+}
+const BOUNDARY_PKG = 'netsurf';
+const BOUNDARY_VER = INDEX.packages[BOUNDARY_PKG] && INDEX.packages[BOUNDARY_PKG].version;
+if (!INDEX.packages[BOUNDARY_PKG] ||
+    INDEX.packages[BOUNDARY_PKG].minBase !== (MANIFEST.version | 0)) {
+  console.error(`${BOUNDARY_PKG} is this test's minBase == base boundary card and must stay ` +
+    `undeclared (index minBase=${INDEX.packages[BOUNDARY_PKG] &&
+    INDEX.packages[BOUNDARY_PKG].minBase}, image=${MANIFEST.version}) — if it now declares ` +
+    `a floor, pick another undeclared package for the boundary leg`);
+  process.exit(1);
+}
 // Card order is sorted-by-name; the header contributes two buttons before the
 // first card (Refresh, then the "Install to Desktop" toggle) — the same
 // prediction tests/kernel/test_software_e2e.js makes and re-verifies.
@@ -197,15 +222,26 @@ try {
     for (let i = 0; i < downs; i++) {
       await sh('wmctl down $SWID 632 420 && wmctl up $SWID 632 420', `SCRL${i}`);
     }
-    // Deliverable B, the AVAILABLE half: netsurf-demos declares no explicit
-    // minBase, so mkpkg stamps it with the image version — minBase == the
-    // running base. software.c gates on `g_base < minBase`, so this card MUST
-    // read [available]; with `<=` it would read [needs newer OS] on the very
+    // Deliverable B, the AVAILABLE half, both minBase cases on real cards
+    // (#518). The BOUNDARY case: netsurf declares no explicit minBase, so
+    // mkpkg stamps it with the image version — minBase == the running base.
+    // software.c gates on `g_base < minBase`, so its card MUST read
+    // [available]; with `<=` it would read [needs newer OS] on the very
     // version that introduced it. (The boundary's other side — minBase ==
-    // base + 1 — is pinned in tests/kernel/test_software_e2e.js.)
+    // base + 1 — is pinned in tests/kernel/test_software_e2e.js.) The
+    // DECLARED-FLOOR case: netsurf-demos declares minBase 169 < base, and
+    // that card must read [available] too — the declared value rode the
+    // index (pinned above) and the gate honoured it. netsurf sorts directly
+    // above netsurf-demos, so both cards share the scrolled viewport
+    // (`wait label` needs a VISIBLE card — software.c renders card-granular
+    // from g_scroll).
+    const rb = await sh(`wmctl wait label '${BOUNDARY_PKG} ${BOUNDARY_VER} [available]' 30000`,
+      'SWBOUND', 60000);
+    check(`${BOUNDARY_PKG} lists as [available] at minBase == base (v${MANIFEST.version})`,
+      rb.rc === 0, rb.seg.slice(-600));
     const r = await sh(`wmctl wait label '${PKG} ${PKG_VER} [available]' 30000`,
       'SWCARD', 60000);
-    check(`${PKG} lists as [available] at minBase == base (v${MANIFEST.version})`,
+    check(`${PKG} lists as [available] at declared minBase ${PKG_MINBASE} < base (v${MANIFEST.version})`,
       r.rc === 0, r.seg.slice(-600));
   }
   {
