@@ -443,10 +443,12 @@ static int cmd_ls_tree(git_repository *repo, int argc, char **argv) {
        and `ls-tree HEAD -r` alike, so the flag scan must run BEFORE the rev
        is picked, never after it (#571: revparsing argv[0] blindly rejected
        `-r HEAD` with "bad revision '-r'"). A handler that takes flags AND a
-       rev must use this shape — split argv in one pass, then revparse; see
-       cmd_rev_list, which interleaves the same split with its `-n <count>`
-       value flag. An unrecognized option is a loud usage error, never a
-       revision candidate and never silently ignored. */
+       rev must use THIS function's shape — split argv in one pass, then
+       revparse. Do NOT copy cmd_rev_list: its ordering is right but its
+       else-branch makes EVERY unrecognized argument the revision, so
+       `rev-list -r HEAD` silently ignores -r and `rev-list HEAD -r` fails
+       with no message (#574). An unrecognized option is a loud usage
+       error, never a revision candidate and never silently ignored. */
     int recursive = 0;
     const char *ref = NULL;
     for (int i = 0; i < argc; i++) {
