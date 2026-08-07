@@ -1,0 +1,10 @@
+# branch create + list: the new branch points at HEAD (same oid twice in
+# the golden), and the list marks the current branch with '*'.
+init -q -b main .
+$ printf 'x\n' > x.txt
+add x.txt
+commit -q -m "c1: seed"
+branch feature
+branch
+rev-parse feature
+rev-parse HEAD

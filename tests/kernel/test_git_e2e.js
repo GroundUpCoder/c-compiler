@@ -18,6 +18,13 @@
 //      argv[1], which is the one thing guaranteed to feel wrong to every
 //      human and every agent that has ever used git.
 //
+// Since #475 a THIRD thing is on trial: the WRITE set. A repo is inited,
+// staged, committed, branched and checked out entirely inside gucOS, then
+// shipped out through the tty (tar+base64) and judged by the HOST's real
+// git — `git fsck --strict` plus content/identity/history readbacks. That
+// cross-implementation check is the acceptance that proves the written
+// objects, index and refs are git's formats and not merely self-consistent.
+//
 // The repo under test is the deterministic fixture the `fakegit` category
 // already uses (tests/fakegit/make-fixture.sh — fixed author/committer/date/
 // tz, host git config masked, so its object ids are byte-stable anywhere).
@@ -195,12 +202,61 @@ async function main() {
     'cd /',
     'git log; echo RC=$?',
 
-    // Read-only honesty: a real git command that is not implemented must say
-    // so, not read as "git is broken".
-    'echo ==readonly',
+    // Partial-build honesty: a real git command that is not implemented must
+    // say so, not read as "git is broken". (Before #475 this leg used
+    // `commit`; commit is implemented now, so `merge` carries the assertion —
+    // the coverage moved, it did not shrink.)
+    'echo ==unimpl',
     'cd /root/repo',
-    'git commit -m x; echo RC=$?',
+    'git merge other; echo RC=$?',
     'git wibble; echo RC=$?',
+
+    // ---- the WRITE set (#475): a repo authored entirely inside gucOS ----
+    // Identity comes from `git config`, not env — this is the config->commit
+    // chain an in-OS agent will actually use.
+    'echo ==winit',
+    'mkdir -p /root/wrepo && cd /root/wrepo',
+    'git init -b main .; echo RC=$?',
+    'git config user.name "GucOS Dev"; echo RC=$?',
+    'git config user.email dev@gucos.test',
+    'git config user.name',
+
+    'echo ==wcommit',
+    'echo alpha-v1 > a.txt',
+    'mkdir sub && echo beta-v1 > sub/b.txt',
+    'git add .; echo RC=$?',
+    'git status',
+    'git commit -m "c1: first in-OS commit"; echo RC=$?',
+    'git log -n 1',
+
+    'echo ==wbranch',
+    'echo alpha-v2 > a.txt',
+    'git commit -am "c2: bump a"; echo RC=$?',
+    'git checkout -b topic; echo RC=$?',
+    'echo gamma > c.txt',
+    'git add c.txt',
+    'git commit -m "c3: topic adds c"; echo RC=$?',
+    'git checkout main; echo RC=$?',
+    'test ! -e c.txt && echo C-ABSENT',
+    'cat a.txt',
+    'git branch',
+
+    'echo ==wdel',
+    'git branch -d topic; echo RC=$?',
+    'git branch keep',
+    'git branch -d keep; echo RC=$?',
+    'rm sub/b.txt',
+    'git add -A; echo RC=$?',
+    'git commit -m "c4: drop b"; echo RC=$?',
+
+    // Ship the gucOS-authored repo out through the tty (tar + base64 — both
+    // shipped busybox applets) so the HOST's real git can judge it. This is
+    // the acceptance that matters: a repo only our own reader accepts proves
+    // nothing.
+    'echo ==wship',
+    'cd /root && tar -czf wrepo.tar.gz wrepo; echo TAR-RC=$?',
+    'base64 wrepo.tar.gz',
+    'echo ==wship-end',
     'echo ==done',
   ];
   const r = driveBoot(script, { image, args: ['--packages=none'], timeout: 600000 });
@@ -300,12 +356,90 @@ async function main() {
   check("outside a repository git prints git's own fatal",
     (norepo + err).includes('fatal: not a git repository'), norepo);
 
-  const ro = section(out, 'readonly');
-  check('an unimplemented WRITE command says git is read-only, not "unknown"',
-    (ro + err).includes("'commit' is a git command, but this build is read-only"), ro);
+  const ro = section(out, 'unimpl');
+  check('an unimplemented command (merge) is named as unimplemented, not "unknown"',
+    (ro + err).includes("'merge' is a git command, but this build does not implement it yet"), ro);
   check('a nonsense command is reported as not a git command',
     (ro + err).includes("'wibble' is not a git command"), ro);
   check('both refusals exit non-zero', lines(ro).filter((l) => l === 'RC=1').length === 2, ro);
+
+  // ---- the WRITE set (#475) ----
+  const winit = section(out, 'winit');
+  check('git init -b main succeeds in-OS', has(winit, 'RC=0') &&
+    winit.includes('Initialized empty Git repository in /root/wrepo/.git/'), winit);
+  check('git config set + get round-trips (identity for commit)',
+    has(winit, 'GucOS Dev'), winit);
+
+  const wcommit = section(out, 'wcommit');
+  check('git add . stages the new files', has(wcommit, 'RC=0'), wcommit);
+  check('status shows both files staged',
+    /A\s+a\.txt/.test(wcommit) && /A\s+sub\/b\.txt/.test(wcommit), wcommit);
+  check('commit -m records the root commit with git\'s summary line',
+    /\[main \(root-commit\) [0-9a-f]{7,}\] c1: first in-OS commit/.test(wcommit), wcommit);
+  check('log shows the commit with the config identity',
+    /Author: GucOS Dev <dev@gucos\.test>/.test(wcommit) &&
+    /commit [0-9a-f]{40}/.test(wcommit), wcommit);
+
+  const wbranch = section(out, 'wbranch');
+  check('commit -am stages tracked modifications and commits',
+    /\[main [0-9a-f]{7,}\] c2: bump a/.test(wbranch), wbranch);
+  check('checkout -b creates and switches (commit lands on topic)',
+    /\[topic [0-9a-f]{7,}\] c3: topic adds c/.test(wbranch), wbranch);
+  check('checkout main really moves the working tree (c.txt gone, a.txt = v2)',
+    has(wbranch, 'C-ABSENT') && has(wbranch, 'alpha-v2'), wbranch);
+  check('branch lists both branches with * on main',
+    has(wbranch, '* main') && has(wbranch, 'topic'), wbranch);
+
+  const wdel = section(out, 'wdel');
+  check('branch -d refuses the unmerged topic branch (exit 1)',
+    has(wdel, 'RC=1') &&
+    (wdel + err).includes("the branch 'topic' is not fully merged"), wdel);
+  check('branch -d deletes a merged branch',
+    /Deleted branch keep \(was [0-9a-f]{7}\)\./.test(wdel), wdel);
+  check('add -A stages a deletion and commits it',
+    /\[main [0-9a-f]{7,}\] c4: drop b/.test(wdel), wdel);
+
+  // ---- the load-bearing acceptance: REAL git fscks the gucOS repo ----
+  const wship = section(out, 'wship');
+  check('tar of the authored repo succeeded in-OS', has(wship, 'TAR-RC=0'), wship);
+  {
+    const b64 = lines(wship)
+      .map((l) => l.replace(/\r/g, ''))
+      .filter((l) => /^[A-Za-z0-9+/]+={0,2}$/.test(l))
+      .join('');
+    const shipDir = mkdtempOwned('os-git-ship-');
+    const tgz = path.join(shipDir, 'wrepo.tar.gz');
+    fs.writeFileSync(tgz, Buffer.from(b64, 'base64'));
+    const untar = cp.spawnSync('tar', ['-xzf', tgz, '-C', shipDir],
+      { encoding: 'utf-8', timeout: 60000 });
+    check('the extracted tarball unpacks on the host', untar.status === 0,
+      untar.stderr);
+    const shipped = path.join(shipDir, 'wrepo');
+    const fsck = cp.spawnSync('git', ['-C', shipped, 'fsck', '--strict'],
+      { encoding: 'utf-8', timeout: 60000 });
+    check('REAL git fsck --strict accepts the gucOS-authored repository',
+      fsck.status === 0, (fsck.stdout || '') + (fsck.stderr || ''));
+    const hlog = cp.spawnSync('git', ['-C', shipped, 'log', '--oneline', '--all'],
+      { encoding: 'utf-8', timeout: 60000 });
+    check('host git reads the full in-OS history (c1..c4 across both branches)',
+      hlog.status === 0 && /c1: first in-OS commit/.test(hlog.stdout) &&
+      /c2: bump a/.test(hlog.stdout) && /c3: topic adds c/.test(hlog.stdout) &&
+      /c4: drop b/.test(hlog.stdout), hlog.stdout + hlog.stderr);
+    const hident = cp.spawnSync('git', ['-C', shipped, 'log', '-1', '--format=%an <%ae>'],
+      { encoding: 'utf-8', timeout: 60000 });
+    check('host git sees the config-sourced identity on the tip commit',
+      hident.status === 0 && hident.stdout.trim() === 'GucOS Dev <dev@gucos.test>',
+      hident.stdout + hident.stderr);
+    const hcat = cp.spawnSync('git', ['-C', shipped, 'cat-file', '-p', 'main:a.txt'],
+      { encoding: 'utf-8', timeout: 60000 });
+    check('host git reads the committed blob content back byte-for-byte',
+      hcat.status === 0 && hcat.stdout === 'alpha-v2\n', JSON.stringify(hcat.stdout));
+    const hstat = cp.spawnSync('git', ['-C', shipped, 'status', '--porcelain'],
+      { encoding: 'utf-8', timeout: 60000 });
+    check('the extracted working tree is clean under host git',
+      hstat.status === 0 && hstat.stdout.trim() === '', hstat.stdout);
+    fs.rmSync(shipDir, { recursive: true, force: true });
+  }
 
   /* ---------------- session 2: reboot, then remove ---------------- */
   const script2 = [
@@ -313,6 +447,11 @@ async function main() {
     'test -x /opt/git/git && echo OPT-SURVIVED',
     'cd /root/repo/src',
     'git rev-parse HEAD; echo RC=$?',
+    // The repo AUTHORED in session 1 must survive the reboot too — loose
+    // objects and refs written by our CLI onto BlockFS, reread cold.
+    'cd /root/wrepo',
+    'git rev-parse HEAD; echo WREPO-RC=$?',
+    'git log -n 1',
     'echo ==remove',
     'gucman remove git; echo RC=$?',
     'test ! -e /opt/git && echo OPT-GONE',
@@ -333,6 +472,8 @@ async function main() {
     has(persist, 'OPT-SURVIVED'), persist);
   check('git still discovers the repo from a subdirectory after reboot',
     has(persist, headSha) && has(persist, 'RC=0'), persist);
+  check('the gucOS-authored repo survives the reboot (refs + objects reread cold)',
+    has(persist, 'WREPO-RC=0') && persist.includes('c4: drop b'), persist);
 
   const rem = section(out2, 'remove');
   check('remove succeeds (exit 0)', has(rem, 'RC=0'), rem);

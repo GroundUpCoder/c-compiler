@@ -1,0 +1,5 @@
+  M k.txt
+ ?? untracked.txt
+ ?? untracked.txt
+ ?? untracked.txt
+keep

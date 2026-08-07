@@ -1,8 +1,9 @@
-// gucOS Git CLI browser acceptance — read-only verbs + the unimplemented-verb
-// error path. Tickets #474/#475/#478 cover the surface; this file lives under
-// tests/browser/ as a MANUAL-tier sweep member (run serially), not as part of
-// the auto-sweep, so a real user-shaped flow exists and the screenshots below
-// can be re-captured by hand against any tree.
+// gucOS Git CLI browser acceptance — the read verbs, the #475 write set
+// (init/config/add/commit/branch/checkout driven at the VT1 shell), and the
+// unimplemented-verb error path. Tickets #474/#475/#478 cover the surface.
+// This is an ordinary sweep member (os-sweep.mjs discovers every os-*.mjs,
+// and the diff planner maps it to `sweep`); the screenshots below exist so a
+// human can re-inspect the user-shaped flow against any tree.
 //
 // Boots a Chromium against a serve.js, drives /bin/git on VT1, captures a
 // screenshot at every meaningful state, and prints each evidence path so the
@@ -171,14 +172,15 @@ try {
   {
     const r = await sh('git --version', 'VER');
     check('git --version prints the gucOS version line',
-      /git version 0\.1 \(libgit2/.test(r.seg), trimSeg(r.seg));
+      /git version 0\.2 \(libgit2/.test(r.seg), trimSeg(r.seg));
   }
   {
     const r = await sh('git --help', 'HELP');
-    check('git --help lists log/show/diff/status/rev-list/rev-parse/cat-file/ls-tree',
+    check('git --help lists the read verbs AND the #475 write set',
       /log/.test(r.seg) && /status/.test(r.seg) && /ls-tree/.test(r.seg) &&
-      /Writing commands .* are not implemented/.test(r.seg),
-      trimSeg(r.seg, 800));
+      /init/.test(r.seg) && /commit/.test(r.seg) && /checkout/.test(r.seg) &&
+      /merge, tag, reset and the network commands are not implemented/.test(r.seg),
+      trimSeg(r.seg, 1200));
   }
   await shot('02-help');
 
@@ -219,37 +221,55 @@ try {
   }
   await shot('05-rev-parse');
 
-  // ---- leg 5: the unimplemented-verb message --------------------------
-  // open_repo() runs BEFORE the verb is dispatched, so the "this build is
-  // read-only" reply only surfaces when the cwd is inside a real repo. We
-  // point at the fixture with -C so cwd doesn't matter.
-  console.log('\nleg 5 — known-but-unimplemented verbs answer by name');
+  // ---- leg 5: the #475 write set at the shell -------------------------
+  // A repo authored entirely in the browser session: init -> config ->
+  // add -> commit -> branch -> checkout, with the commit summary line and
+  // the branch list as the observables. (The old leg asserted init/add/
+  // commit answered "read-only" — those verbs are implemented now, so the
+  // coverage flipped from refusal to behaviour; the unimplemented-verb path
+  // is still asserted below with `merge`, and the typo path is unchanged.)
+  console.log('\nleg 5 — the write set: init/config/add/commit/branch/checkout');
   {
-    const r = await sh(`git -C '${dir}' commit -m hi`, 'COMM');
-    check('git commit (a real verb) answers that this build is read-only',
-      r.rc !== 0 && /is a git command, but this build is read-only/.test(r.seg),
+    const r = await sh('mkdir -p /tmp/w && cd /tmp/w && git init -b main .', 'WINIT');
+    check('git init -b main creates a repository',
+      r.rc === 0 && /Initialized empty Git repository/.test(r.seg), trimSeg(r.seg));
+  }
+  {
+    const r = await sh('git config user.name Dev && git config user.email dev@guc && git config user.name', 'WCFG');
+    check('git config set + get round-trips', r.rc === 0 && /^Dev$/m.test(r.seg.replace(/\r/g, '')),
       trimSeg(r.seg));
   }
   {
-    const r = await sh(`git -C '${dir}' init`, 'INIT');
-    check('git init (a real verb) answers that this build is read-only',
-      r.rc !== 0 && /is a git command, but this build is read-only/.test(r.seg),
+    const r = await sh('echo one > f.txt && git add . && git commit -m first', 'WCOMMIT');
+    check('add + commit produce git\'s root-commit summary line',
+      r.rc === 0 && /\[main \(root-commit\) [0-9a-f]{7,}\] first/.test(r.seg),
       trimSeg(r.seg));
   }
   {
-    const r = await sh(`git -C '${dir}' add .`, 'ADD');
-    check('git add (a real verb) answers that this build is read-only',
-      r.rc !== 0 && /is a git command, but this build is read-only/.test(r.seg),
+    const r = await sh('git checkout -b feat && echo two > g.txt && git add g.txt && git commit -m second', 'WBRANCH');
+    check('checkout -b + commit land on the new branch',
+      r.rc === 0 && /\[feat [0-9a-f]{7,}\] second/.test(r.seg), trimSeg(r.seg));
+  }
+  {
+    const r = await sh('git checkout main && git branch && test ! -e g.txt && echo G-ABSENT', 'WSWITCH');
+    check('checkout main switches the working tree (branch list + g.txt gone)',
+      r.rc === 0 && /\* main/.test(r.seg) && /feat/.test(r.seg) &&
+      /G-ABSENT/.test(r.seg), trimSeg(r.seg, 600));
+  }
+  {
+    const r = await sh('git merge feat', 'MERGE');
+    check('git merge (a real verb) answers that this build does not implement it',
+      r.rc !== 0 && /is a git command, but this build does not implement it yet/.test(r.seg),
       trimSeg(r.seg));
   }
   {
     const r = await sh(`git -C '${dir}' notarealcommand`, 'TYPO');
     check('a typo answers differently from a known verb',
       r.rc !== 0 && /is not a git command/.test(r.seg) &&
-      !/is a git command, but this build is read-only/.test(r.seg),
+      !/is a git command, but this build does not implement/.test(r.seg),
       trimSeg(r.seg));
   }
-  await shot('06-unimplemented');
+  await shot('06-write-set');
 
   // ---- leg 6: log + status + ls-tree on the discovered repo ----------
   console.log('\nleg 6 — read-only verbs over the fixture repo');

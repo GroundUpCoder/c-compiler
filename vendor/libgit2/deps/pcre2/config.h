@@ -84,9 +84,13 @@
 #endif
 
 /* ---- newline convention --------------------------------------------------
- * 10 = PCRE2_NEWLINE_LF. git patterns are LF-terminated. */
+ * 2 = PCRE2_NEWLINE_LF (pcre2.h enum, NOT the ASCII code — that was PCRE1's
+ * convention). git patterns are LF-terminated. The old value 10 fell through
+ * pcre2_compile's newline switch, so EVERY pattern compile failed with
+ * "internal error: unknown newline setting" — first hit by #475's
+ * `branch -d` via git_config_rename_section's regexp. */
 #ifndef NEWLINE_DEFAULT
-#define NEWLINE_DEFAULT 10
+#define NEWLINE_DEFAULT 2
 #endif
 
 #endif /* GUC_PCRE2_CONFIG_H */

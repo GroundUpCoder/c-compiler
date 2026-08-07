@@ -30,6 +30,8 @@ import argparse
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1886,6 +1888,96 @@ def run_blockfs_tests(results, filter_str=None):
 #                  and WITHOUT -C, which is what makes the golden a proof of
 #                  repo DISCOVERY (#474) rather than of an explicit path.
 #   expected.txt — required, exact stdout match (captured from the fixture)
+#
+# WRITE-SET fixtures (ticket #475) carry steps.txt INSTEAD of args.txt. One
+# git invocation cannot express init -> add -> commit, and a write fixture
+# must never mutate the SHARED read fixture (it would invalidate every
+# later-sorted golden), so a steps fixture runs a SEQUENCE of invocations in
+# its own scratch repo. Each non-empty, non-# line of steps.txt is one of:
+#   $ <cmd>   — host `sh -c` setup step in the scratch dir (must exit 0);
+#               its stdout is NOT part of the golden
+#   ! <args>  — a git invocation that MUST exit non-zero (a silently-
+#               succeeding error path is a fail, the #574 class)
+#   <args>    — a git invocation that must exit 0
+# `-C <scratch>` is prepended to every git invocation. expected.txt is the
+# concatenated stdout of the git steps, with the scratch dir's absolute path
+# replaced by <SCRATCH> (init prints it). Identity and dates are pinned via
+# GIT_AUTHOR_*/GIT_COMMITTER_* env — the same values make-fixture.sh uses —
+# and HOME points into the scratch dir so no host ~/.gitconfig can leak into
+# the goldens; commit hashes in the goldens are therefore byte-stable on any
+# machine.
+
+FAKEGIT_STEP_ENV = {
+    "GIT_AUTHOR_NAME": "Fixture Author",
+    "GIT_AUTHOR_EMAIL": "author@fakegit.test",
+    "GIT_COMMITTER_NAME": "Fixture Committer",
+    "GIT_COMMITTER_EMAIL": "committer@fakegit.test",
+    "GIT_AUTHOR_DATE": "1700000000 +0000",
+    "GIT_COMMITTER_DATE": "1700000000 +0000",
+}
+
+
+def run_fakegit_steps_test(results, test_name, tdir, wasm, steps_file, expected_file):
+    scratch = os.path.join(TEST_TMPDIR, "fakegit-w-" + tdir)
+    if os.path.exists(scratch):
+        shutil.rmtree(scratch)
+    os.makedirs(scratch)
+    env = dict(os.environ, HOME=scratch, **FAKEGIT_STEP_ENV)
+
+    with open(steps_file) as f:
+        steps = [l.rstrip("\n") for l in f]
+
+    out = b""
+    for lineno, line in enumerate(steps, 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            if line.startswith("$ "):
+                r = subprocess.run(["sh", "-c", line[2:]], cwd=scratch, env=env,
+                                   capture_output=True, timeout=60)
+                if r.returncode != 0:
+                    results.record(test_name, False,
+                        f"setup step (line {lineno}) failed rc={r.returncode}:\n"
+                        f"  {line}\n{r.stderr.decode('utf-8', errors='replace')[:300]}")
+                    return
+            else:
+                want_fail = line.startswith("! ")
+                args = shlex.split(line[2:] if want_fail else line)
+                r = subprocess.run(
+                    ["node", "--experimental-wasm-exnref", HOST_JS, wasm,
+                     "-C", scratch] + args,
+                    env=env, capture_output=True, timeout=60)
+                out += r.stdout
+                if want_fail and r.returncode == 0:
+                    results.record(test_name, False,
+                        f"step (line {lineno}) was expected to FAIL but exited 0:\n  {line}")
+                    return
+                if not want_fail and r.returncode != 0:
+                    results.record(test_name, False,
+                        f"step (line {lineno}) failed rc={r.returncode}:\n  {line}\n"
+                        f"{r.stderr.decode('utf-8', errors='replace')[:300]}")
+                    return
+        except subprocess.TimeoutExpired:
+            results.record(test_name, False, f"step (line {lineno}) timed out (60s)")
+            return
+
+    actual = out.replace(scratch.encode(), b"<SCRATCH>")
+    with open(expected_file, "rb") as f:
+        expected = f.read()
+    if actual == expected:
+        results.record(test_name, True)
+        return
+    alines = actual.decode("utf-8", errors="replace").split("\n")
+    elines = expected.decode("utf-8", errors="replace").split("\n")
+    msg = f"stdout lines: got {len(alines)}, expected {len(elines)}\n"
+    for i, (a, e) in enumerate(zip(alines, elines)):
+        if a != e:
+            msg += f"  L{i+1}  got: {a[:100]}\n  L{i+1}  exp: {e[:100]}\n"
+            break
+    if len(actual) != len(expected):
+        msg += f"stdout bytes: got {len(actual)}, expected {len(expected)}\n"
+    results.record(test_name, False, msg.strip())
 
 def run_fakegit_tests(results, filter_str=None):
     bin_json = os.path.join(FAKEGIT_DIR, "bin.json")
@@ -1932,13 +2024,19 @@ def run_fakegit_tests(results, filter_str=None):
             continue
 
         args_file = os.path.join(FAKEGIT_TEST_DIR, tdir, "args.txt")
+        steps_file = os.path.join(FAKEGIT_TEST_DIR, tdir, "steps.txt")
         expected_file = os.path.join(FAKEGIT_TEST_DIR, tdir, "expected.txt")
 
-        if not os.path.exists(args_file):
-            results.record(test_name, False, f"Missing args.txt")
-            continue
         if not os.path.exists(expected_file):
             results.record(test_name, False, f"Missing expected.txt")
+            continue
+        if os.path.exists(steps_file):
+            # A write-set fixture: its own scratch repo, see the block comment.
+            run_fakegit_steps_test(results, test_name, tdir, wasm,
+                                   steps_file, expected_file)
+            continue
+        if not os.path.exists(args_file):
+            results.record(test_name, False, f"Missing args.txt (or steps.txt)")
             continue
 
         with open(args_file) as f:

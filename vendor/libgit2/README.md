@@ -105,6 +105,15 @@ tree is self-contained and portable.
   wasm byte-identical.
 - `deps/pcre2/config.h` — **hand-written replacement for the CMake/autoconf
   `config.h`** (#473). See "Build configuration lives in headers" below.
+  **`NEWLINE_DEFAULT` is the PCRE2 enum value 2 (`PCRE2_NEWLINE_LF`), NOT
+  the ASCII code 10** — 10 was PCRE1's convention, falls through
+  `pcre2_compile`'s newline switch, and made EVERY pattern compile fail
+  with "internal error: unknown newline setting". Nothing on the read-only
+  path compiles a regex, so this survived until #475's `branch -d` hit it
+  via `git_config_rename_section`. (`os/git/bin.json` carried the same
+  wrong value as a `-D` duplicate; #475 removed that whole flag block —
+  every flag in it was header-covered or dead, per this file's #473
+  section.)
 - `git_stubs.c`, `missing_stubs.c` — out-of-line definitions for `GIT_INLINE`
   functions. ⚠️ **A `*_global_init` stub for an absent feature must `return 0`,
   not -1.** `git_runtime_init` stops at the first non-zero, so three stubs

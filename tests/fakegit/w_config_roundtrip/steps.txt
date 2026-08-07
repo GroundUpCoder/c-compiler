@@ -1,0 +1,8 @@
+# config set/get round-trip (the verb that makes commit usable without env
+# identity). A missing key is git's silent exit 1 — enforced by `!`.
+init -q -b main .
+config user.name "Cfg User"
+config user.name
+config core.wibblesetting somevalue
+config core.wibblesetting
+! config no.such.key

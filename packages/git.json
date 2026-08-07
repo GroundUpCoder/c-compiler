@@ -1,7 +1,7 @@
 {
   "name": "git",
-  "version": "0.1",
-  "summary": "git — the gucOS git CLI over libgit2 1.9.0: log, show, diff, status, rev-list, rev-parse, cat-file and ls-tree, with the repository discovered from the current directory as in git. Read-only for now; the write set (init/add/commit/branch/checkout) is ticket #475.",
+  "version": "0.2",
+  "summary": "git — the gucOS git CLI over libgit2 1.9.0: init, add, commit, branch, checkout and config (the #475 write set) plus log, show, diff, status, rev-list, rev-parse, cat-file and ls-tree, with the repository discovered from the current directory as in git. merge/tag/reset and the network verbs are not implemented yet (#478 covers the network leg).",
   "files": {
     "git": { "project": "os/git/bin.json" }
   },

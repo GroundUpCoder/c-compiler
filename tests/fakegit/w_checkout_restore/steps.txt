@@ -1,0 +1,16 @@
+# checkout -- <path> restores a dirtied file from the index; the first
+# status shows ' M', the second shows only the untracked marker. The rev
+# form (checkout HEAD -- <path>) restores from a commit.
+init -q -b main .
+$ printf 'keep\n' > k.txt
+$ printf 'marker\n' > untracked.txt
+add k.txt
+commit -q -m "c1: k"
+$ printf 'scribble\n' > k.txt
+status
+checkout -- k.txt
+status
+$ printf 'scribble2\n' > k.txt
+checkout HEAD -- k.txt
+status
+show HEAD:k.txt

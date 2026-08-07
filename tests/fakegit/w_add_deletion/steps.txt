@@ -1,0 +1,11 @@
+# `git add -A` stages DELETIONS too (git >= 2.0 semantics) — the ls-tree
+# after the second commit must show only the surviving file.
+init -q -b main .
+$ printf 'alpha\n' > a.txt && printf 'beta\n' > b.txt
+add .
+commit -q -m "c1: two files"
+$ rm b.txt
+add -A
+status
+commit -m "c2: drop b"
+ls-tree
