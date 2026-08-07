@@ -1,8 +1,14 @@
-# GAMEDEV-EPIC — game development inside gucOS is THE primary epic
+# GAMEDEV-EPIC — game development inside gucOS is the SECOND epic
 
-**Status: ACTIVE — jku, 2026-08-04. This is the north star. Every batch of
-work falls under this epic until jku redirects.** Companion principle:
-`todos/OS.md` "Dev-experience first" (commit `3fc46971`).
+**Status: ACTIVE but SECOND PLACE — jku, 2026-08-07: `todos/PKGDEV-EPIC.md`
+(in-OS development of packages) now ranks ABOVE this epic.** jku verbatim:
+*"let's promote this epic, make the gamedev epic second place, and put all
+our focus on this work now."* This epic stays active: its rules (membership
+argued, justification burden, dogfood mechanics, API honesty) are inherited
+by PKGDEV-EPIC and still bind; the queue filter selects PKGDEV-advancing
+tickets first, gamedev second. Original status (2026-08-04, superseded on
+precedence only): the north star every batch falls under. Companion
+principle: `todos/OS.md` "Dev-experience first" (commit `3fc46971`).
 
 > **jku, 2026-08-04, verbatim:** *"The gamedev in gucOS is the primary focus
 > indefinitely until otherwise specified."*
