@@ -127,16 +127,6 @@ thing this file exists to kill.
 - anchor: - [ ] **C-level unit tests for the 10 untested WASM imports** listed above.
 
 
-### L18 — the dispatcher documents a Playwright-missing skip that only fires on a spawn failure
-- ticket: #106
-- file: tests/run.js
-- anchor: // `optional` suites (browser sweep) report a launch failure as a skip, not a
-
-### L19 — CLAUDE.md repeats the same skip-not-fail promise the sweep classifier does not keep
-- ticket: #106
-- file: CLAUDE.md
-- anchor: process; the browser `sweep` is optional (a missing-Playwright launch
-
 ### L20 — modals still draw min/max boxes; the descope points at a closed item
 - ticket: #107
 - file: os/wm.c

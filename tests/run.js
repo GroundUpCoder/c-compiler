@@ -49,8 +49,13 @@ require('./lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/run.js'
 // flags the underlying runner accepts, so we never hand run.py a `-j` it
 // doesn't understand. `pyTypes` marks a run.py category — those are BATCHED
 // into a single `run.py --types=a,b,c` process (one python run, one section).
-// `optional` suites (browser sweep) report a launch failure as a skip, not a
-// hard fail — Playwright isn't installed in every clone.
+// The sweep hard-requires Playwright, but that dependency is enforced UP
+// FRONT, not per-row: whenever `sweep` is in the selected set, the #559
+// pre-flight (browserPreflight below) refuses a missing or drifted install at
+// exit 2 before any suite runs, naming the exact fix. There is no
+// optional/skip tier (#477 — the old `optional: true` skip only fired on
+// spawnSync failing to launch `node` itself, which no missing Playwright
+// ever causes).
 
 const SUITES = {
   unit:    { desc: 'compiler unit corpus (in-process worker runner)',
@@ -60,8 +65,7 @@ const SUITES = {
   kernel:  { desc: 'kernel control plane + OS e2e suite',
              cmd: ['node', 'tests/kernel/run.js'], supports: ['filter', 'jobs', 'resume', 'failFast', 'repeat', 'underLoad'] },
   sweep:   { desc: 'browser OS acceptance sweep (real Chromium; needs Playwright)',
-             cmd: ['node', 'tests/browser/os-sweep.mjs'], supports: ['filter', 'jobs', 'resume', 'failFast', 'repeat', 'underLoad'],
-             optional: true },
+             cmd: ['node', 'tests/browser/os-sweep.mjs'], supports: ['filter', 'jobs', 'resume', 'failFast', 'repeat', 'underLoad'] },
   host:    { desc: 'host.js Node output path + serve.js first-run (Node-only)',
              cmd: ['node', 'tests/host/run.js'], supports: [] },
   todos:   { desc: 'liability register validator + Lnn id-allocator tests (todos/done/0286)',
@@ -808,7 +812,7 @@ function main() {
     }
     const args = [...SUITES[suite].cmd.slice(1), ...suiteArgs(suite, opts)];
     const r = runProcess(SUITES[suite].cmd[0], args, `${suite} suite`);
-    const c = classify(r, SUITES[suite].optional);
+    const c = classify(r);
     const art = suiteArtifact(suite);
     if (art && fs.existsSync(path.join(ROOT, art))) {
       c.artifact = art;
@@ -845,11 +849,16 @@ function pythonPreflight(ordered, opts) {
   return require('../tools/host-python.js').resolvePython(opts || {});
 }
 
-function classify(r, optional) {
+function classify(r) {
   if (r.spawnError) {
-    // Couldn't even launch the runner. Optional suites (browser sweep with
-    // no Playwright) degrade to a skip; required ones are a hard failure.
-    return { status: optional ? 'skip' : 'fail', ms: r.ms,
+    // Couldn't even launch the runner — a hard failure on EVERY suite, the
+    // sweep included (#477). The sweep's Playwright dependency never reaches
+    // this branch: an absent/drifted install is refused at exit 2 by the
+    // #559 pre-flight before any suite runs, and a launch failure inside a
+    // successfully-spawned `node` is a nonzero exit, not a spawnError. A
+    // `skip` here would let main()'s fail-only exit check report 0 with a
+    // selected suite never having run.
+    return { status: 'fail', ms: r.ms,
              note: `could not launch: ${r.spawnError.message}` };
   }
   return { status: r.status === 0 ? 'pass' : 'fail', ms: r.ms,
@@ -908,19 +917,14 @@ function fmtCoverage(files) {
 function printFinal(results, ms) {
   process.stdout.write(`\n\x1b[1m━━━ tests/run.js summary ━━━\x1b[0m\n`);
   for (const r of results) {
-    const tag = r.status === 'pass' ? '\x1b[32mok  \x1b[0m'
-              : r.status === 'skip' ? '\x1b[33mskip\x1b[0m'
-              : '\x1b[31mFAIL\x1b[0m';
+    const tag = r.status === 'pass' ? '\x1b[32mok  \x1b[0m' : '\x1b[31mFAIL\x1b[0m';
     process.stdout.write(`  ${tag} ${r.suite.padEnd(28)} ${fmtSecs(r.ms)}` +
       fmtCoverage(r.files) +
       (r.note ? `  (${r.note})` : '') + (r.artifact ? `  → ${r.artifact}` : '') + '\n');
   }
   const pass = results.filter(r => r.status === 'pass').length;
   const fail = results.filter(r => r.status === 'fail').length;
-  const skip = results.filter(r => r.status === 'skip').length;
-  const parts = [`${pass} passed`, `${fail} failed`];
-  if (skip) parts.push(`${skip} skipped`);
-  process.stdout.write(`\n  ${parts.join(', ')}  (${fmtSecs(ms)})  → build/test-run/summary.json\n`);
+  process.stdout.write(`\n  ${pass} passed, ${fail} failed  (${fmtSecs(ms)})  → build/test-run/summary.json\n`);
 }
 
 function printList() {
@@ -968,6 +972,6 @@ if (require.main === module) {
   // Required as a module (tests/host/test_diff_rules.js): expose the rule
   // table + the planner so the RULES closure is testable without a git diff.
   module.exports = { SUITES, PY_CATEGORIES, RULES, IGNORE, FORCE, planFromDiff,
-                     browserPreflight, pythonPreflight,
+                     browserPreflight, pythonPreflight, classify,
                      OS_BROWSER_ONLY, OS_HEADLESS_ONLY, OS_RUNTIME_ONLY };
 }

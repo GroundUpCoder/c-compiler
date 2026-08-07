@@ -21,7 +21,7 @@ const path = require('path');
 const { mkdtempOwned } = require('../lib/harness-temp.js');
 const { pinnedPlaywright, resolvedPlaywright, checkPlaywrightPin,
         checkBrowserPreflight, mainTreeOf } = require('../browser/lib/playwright-pin.cjs');
-const { browserPreflight } = require('../run.js');
+const { browserPreflight, SUITES, classify } = require('../run.js');
 
 const PIN = '1.61.0';
 const DRIFT = '1.61.1';
@@ -184,6 +184,27 @@ check('browserPreflight refuses a broken tree whenever sweep is in the set', () 
     assert.strictEqual(r.ok, false, `sweep in [${ordered}] must pre-flight`);
     assert.ok(r.message.includes(DRIFT));
   }
+});
+
+// ---- #477: the skip tier is GONE — the pre-flight above is the sweep's ----
+// ---- ONLY Playwright handling, and a spawn failure is a hard fail ----
+check('no suite in the registry carries `optional` (#477)', () => {
+  for (const [name, s] of Object.entries(SUITES)) {
+    assert.ok(!('optional' in s),
+      `suite '${name}' carries \`optional\` — the skip tier was removed by #477; ` +
+      'a soft-failing suite would let a targeted gate exit 0 with that suite never run');
+  }
+});
+check('classify() hard-fails a spawn failure — never a skip (#477)', () => {
+  const c = classify({ ms: 5, status: null, signal: null,
+                       spawnError: new Error('spawn node ENOENT') });
+  assert.strictEqual(c.status, 'fail',
+    'a runner that could not launch must be a fail: main() exits 0 unless some result is literally "fail"');
+  assert.ok(/could not launch/.test(c.note), c.note);
+  const ok = classify({ ms: 5, status: 0, signal: null, spawnError: undefined });
+  assert.strictEqual(ok.status, 'pass');
+  const bad = classify({ ms: 5, status: 1, signal: null, spawnError: undefined });
+  assert.strictEqual(bad.status, 'fail');
 });
 
 // ---- the pure helpers ----
