@@ -8,6 +8,13 @@
 // getExtLibMap()); the compiler is fully functional without it.
 //
 // Run from the repo root:  node tools/build-libc-ext.js
+//   --check      compare instead of write: exit 1 if the target differs from
+//                what ext/ generates (the mkmpgenhdr --check precedent — the
+//                artifact is committed, so drift between ext/ and libc-ext.js
+//                is otherwise invisible to every suite). Run by tests/ext/run.js.
+//   --out=PATH   write to / check PATH instead of <repo>/libc-ext.js
+//                (exists for the ext suite's red control, which must prove
+//                --check fails on a tampered copy without touching the tree).
 //
 // Do NOT hand-edit libc-ext.js — edit ext/ and regenerate.
 
@@ -16,13 +23,23 @@ const path = require("path");
 
 // Cross-tree preflight (todos/0341, extended by #142): emits libc-ext.js at
 // its own repo root — a self-tree writer the #142 survey found missing from
-// the original list. No harness spawns — hand-run only.
+// the original list. Spawned by tests/ext/run.js in --check mode (#534);
+// generation stays hand-run only.
 require(path.join(__dirname, "../tests/lib/tree-guard.js"))
   .assertSameTree(__dirname, { label: "tools/build-libc-ext.js" });
 
 const ROOT = path.resolve(__dirname, "..");
 const DIRS = [path.join(ROOT, "ext", "include"), path.join(ROOT, "ext", "src")];
-const OUT = path.join(ROOT, "libc-ext.js");
+
+const args = process.argv.slice(2);
+const CHECK = args.includes("--check");
+const outArg = args.find((a) => a.startsWith("--out="));
+const OUT = outArg ? path.resolve(outArg.slice(6)) : path.join(ROOT, "libc-ext.js");
+const unknown = args.filter((a) => a !== "--check" && !a.startsWith("--out="));
+if (unknown.length) {
+  process.stderr.write(`build-libc-ext: unknown argument(s): ${unknown.join(" ")}\n`);
+  process.exit(2);
+}
 
 const map = {};
 for (const dir of DIRS) {
@@ -54,10 +71,32 @@ const body =
   "const EXT_LIB_MAP = " + JSON.stringify(sorted) + ";\n" +
   "if (typeof globalThis !== 'undefined') globalThis.EXT_LIB_MAP = EXT_LIB_MAP;\n";
 
-fs.writeFileSync(OUT, body);
-
 const names = Object.keys(sorted);
 const bytes = Buffer.byteLength(body);
+
+if (CHECK) {
+  let current = null;
+  try {
+    current = fs.readFileSync(OUT, "utf-8");
+  } catch (e) {
+    process.stderr.write(
+      `build-libc-ext --check: ${path.relative(ROOT, OUT)} is missing — ` +
+      `run \`node tools/build-libc-ext.js\` to regenerate it from ext/\n`);
+    process.exit(1);
+  }
+  if (current !== body) {
+    process.stderr.write(
+      `build-libc-ext --check: ${path.relative(ROOT, OUT)} is OUT OF SYNC with ext/ — ` +
+      `run \`node tools/build-libc-ext.js\` and commit the result\n`);
+    process.exit(1);
+  }
+  process.stdout.write(
+    `check ok — ${path.relative(ROOT, OUT)} matches ext/ (${names.length} entries, ${(bytes / 1024).toFixed(1)} KB)\n`);
+  process.exit(0);
+}
+
+fs.writeFileSync(OUT, body);
+
 process.stdout.write(
   `wrote ${path.relative(ROOT, OUT)} — ${names.length} entries, ${(bytes / 1024).toFixed(1)} KB\n` +
   `  ${names.join(", ")}\n`,
