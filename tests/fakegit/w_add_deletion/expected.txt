@@ -1,0 +1,3 @@
+ D  b.txt
+[main 1bf9878] c2: drop b
+100644 blob 4a58007052a65fbc2fc3f910f2855f45a4058e74	a.txt

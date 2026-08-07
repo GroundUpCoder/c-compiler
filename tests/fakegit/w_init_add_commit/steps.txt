@@ -1,0 +1,9 @@
+# The core write loop (#475): init -> add -> status -> commit -> log.
+# The commit hash in the golden is byte-stable (pinned env identity/dates).
+init -b main .
+$ printf 'alpha v1\n' > a.txt
+$ mkdir sub && printf 'beta v1\n' > sub/b.txt
+add .
+status
+commit -m "c1: first"
+log -n 1

@@ -1,0 +1,17 @@
+# branch -d refuses an UNMERGED branch (the `!` enforces the non-zero exit
+# — a silently-succeeding refusal is the #574 failure class), -D forces,
+# and -d deletes a merged one. Deletion lines carry the short oid.
+init -q -b main .
+$ printf 'x\n' > x.txt
+add .
+commit -q -m "c1: seed"
+branch merged-br
+checkout -b topic
+$ printf 'y\n' > y.txt
+add y.txt
+commit -q -m "c2: topic work"
+checkout main
+! branch -d topic
+branch -D topic
+branch -d merged-br
+branch

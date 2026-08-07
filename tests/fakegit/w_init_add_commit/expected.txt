@@ -1,0 +1,12 @@
+Initialized empty Git repository in <SCRATCH>/.git/
+ A  a.txt
+ A  sub/b.txt
+[main (root-commit) 031ae1e] c1: first
+commit 031ae1ead839fe9bb656a01de5af9bd742fb0c07
+Author: Fixture Author <author@fakegit.test>
+Date:   1700000000 +0000
+tree 57ef7d14b7f2fb1f1cb38d155d9314656e914f23
+
+    c1: first
+
+

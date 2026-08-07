@@ -14,22 +14,6 @@
     "../../vendor/libgit2/deps/zlib",
     "../../vendor/libgit2/stubs/netinet"
   ],
-  "compilerArgs": [
-    "-DNO_MMAP",
-    "-DLINK_SIZE=2",
-    "-DHAVE_LONG_LONG=1",
-    "-DPCRE2_EXPORT=",
-    "-DPCRE2_STATIC",
-    "-DPCRE2_CODE_UNIT_WIDTH=8",
-    "-DMAX_NAME_SIZE=32",
-    "-DMAX_NAME_COUNT=10000",
-    "-DMATCH_LIMIT=10000000",
-    "-DMATCH_LIMIT_DEPTH=10000000",
-    "-DHEAP_LIMIT=20000000",
-    "-DNEWLINE_DEFAULT=10",
-    "-DPARENS_NEST_LIMIT=250",
-    "-DMAX_VARLOOKBEHIND=512"
-  ],
   "sources": [
     "../../vendor/libgit2/attr_patched.c",
     "../../vendor/libgit2/deps/pcre2/pcre2_auto_possess.c",

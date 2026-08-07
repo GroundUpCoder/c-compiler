@@ -1,0 +1,17 @@
+# checkout -b + switching back: two branches with DIFFERENT content for the
+# same path. show <branch>:<path> proves the committed sides; the status
+# after switching (only the untracked marker file, no ' M a.txt') proves the
+# WORKING TREE really moved to the target branch's content.
+init -q -b main .
+$ printf 'v1\n' > a.txt
+$ printf 'marker\n' > untracked.txt
+add a.txt
+commit -q -m "c1: v1"
+checkout -b feature
+$ printf 'v2\n' > a.txt
+commit -q -am "c2: v2 on feature"
+show feature:a.txt
+checkout main
+show HEAD:a.txt
+status
+branch
