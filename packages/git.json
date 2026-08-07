@@ -1,7 +1,7 @@
 {
   "name": "git",
-  "version": "0.2",
-  "summary": "git — the gucOS git CLI over libgit2 1.9.0: init, add, commit, branch, checkout and config (the #475 write set) plus log, show, diff, status, rev-list, rev-parse, cat-file and ls-tree, with the repository discovered from the current directory as in git. merge/tag/reset and the network verbs are not implemented yet (#478 covers the network leg).",
+  "version": "0.3",
+  "summary": "git — the gucOS git CLI over libgit2 1.9.0: init, add, commit, branch, checkout and config (the #475 write set), log, show, diff, status, rev-list, rev-parse, cat-file and ls-tree, and the #478 network leg — clone, fetch, fast-forward pull, push and remote over smart HTTP(S), with credentials from ~/.git-credentials. The repository is discovered from the current directory as in git. merge/tag/reset are not implemented yet.",
   "files": {
     "git": { "project": "os/git/bin.json" }
   },

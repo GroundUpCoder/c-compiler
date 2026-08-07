@@ -7,6 +7,14 @@
  * of this CLI: an agent inside gucOS can now RECORD work, not just read it).
  * config is here because commit is unusable without an identity and telling
  * a user to hand-edit .git/config is not an interface.
+ * Network set (#478): clone, fetch, pull (fast-forward only), push, remote —
+ * smart HTTP v0/v1 over vendor/libgit2/http_subtransport.c, which rides the
+ * kernel's Tier 2 fetch transport (and therefore the Tier 2.5 net bridge in
+ * the browser, transparently). Push credentials come from git's own
+ * credential-store format at ~/.git-credentials (then
+ * ~/.config/git/credentials); the values are read in-process, never echoed.
+ * pull is deliberately fast-forward-only until a merge verb exists — a
+ * diverged branch is a loud fatal, never a silent guess.
  *
  * A repo written by this CLI must be a repo REAL git accepts — `git fsck`
  * on the host is the acceptance oracle (tests/kernel/test_git_e2e.js
@@ -45,7 +53,7 @@
 #define PATH_MAX 4096
 #endif
 
-#define GUCOS_GIT_VERSION "0.2"
+#define GUCOS_GIT_VERSION "0.3"
 
 static char oidbuf[GIT_OID_SHA1_HEXSIZE + 1];
 
@@ -78,6 +86,12 @@ static void usage(FILE *out) {
         "   checkout [<rev>] -- <path>...            restore paths\n"
         "   config [--global] <key> [<value>]        get or set an option\n"
         "\n"
+        "   clone [-q] <url> [<dir>]  clone a repository over http(s)\n"
+        "   fetch [<remote>]          download refs and objects\n"
+        "   pull [<remote>]           fetch, then fast-forward the branch\n"
+        "   push [<remote> [<refspec>]] upload commits to a remote\n"
+        "   remote [-v] | add | remove  manage remotes\n"
+        "\n"
         "   log [-n <count>] [<rev>]  show commit history\n"
         "   show <rev>                show a commit, tree or blob\n"
         "   diff <from> <to>          list the files that differ\n"
@@ -91,7 +105,8 @@ static void usage(FILE *out) {
         "   --version                 print the version\n"
         "   --help                    print this message\n"
         "\n"
-        "merge, tag, reset and the network commands are not implemented yet.\n");
+        "merge, tag and reset are not implemented yet. Credentials for push\n"
+        "come from ~/.git-credentials (scheme://user:token@host, one per line).\n");
 }
 
 /* ---- log ---- */
@@ -1529,6 +1544,457 @@ static int cmd_config(int argc, char **argv) {
     return rc;
 }
 
+/* ---- network verbs (#478): clone / fetch / pull / push / remote ----
+ *
+ * The transport underneath is http_subtransport.c (smart HTTP over the
+ * kernel's Tier 2 fetch transport); everything here is ordinary libgit2
+ * remote API plus the credential callback that makes push usable.
+ *
+ * CREDENTIALS resolve from git's own credential-store format — one
+ * `scheme://user:pass@host` line per remote — read from $HOME/.git-credentials
+ * then $HOME/.config/git/credentials (the two paths real git's
+ * credential-store helper reads, user layer first). The values are read in
+ * THIS process and handed to libgit2; they are never echoed anywhere. A 401
+ * with no matching entry fails loud naming the file to fix. */
+
+/* Server sideband (band 2) forwarded raw to stderr — it is the server
+   talking, and its message is often the actionable one (hook refusals). */
+static int net_sideband_cb(const char *str, int len, void *payload) {
+    (void)payload;
+    fwrite(str, 1, (size_t)len, stderr);
+    return 0;
+}
+
+/* One credential-store line: scheme://user:pass@host[/...]. Match on scheme
+   + host(:port) (+ optional username filter); yield the FIRST match. */
+static int cred_from_store(git_credential **out, const char *path,
+                           const char *url, const char *username_from_url) {
+    FILE *f = fopen(path, "r");
+    if (!f) return GIT_PASSTHROUGH;
+
+    /* the request's scheme://host[:port] prefix */
+    const char *se = strstr(url, "://");
+    if (!se) { fclose(f); return GIT_PASSTHROUGH; }
+    const char *rhost = se + 3;
+    size_t rhl = strcspn(rhost, "/");
+
+    char line[1024];
+    int rc = GIT_PASSTHROUGH;
+    while (fgets(line, sizeof line, f)) {
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = 0;
+        if (!line[0] || line[0] == '#') continue;
+        char *lse = strstr(line, "://");
+        if (!lse || (size_t)(lse - line) != (size_t)(se - url)
+            || strncmp(line, url, (size_t)(se - url)))
+            continue;                          /* scheme mismatch */
+        char *luser = lse + 3;
+        char *at = strchr(luser, '@');
+        if (!at) continue;                     /* no credentials on this line */
+        char *lhost = at + 1;
+        size_t lhl = strcspn(lhost, "/");
+        if (lhl != rhl || strncmp(lhost, rhost, rhl)) continue;   /* host mismatch */
+        char *colon = memchr(luser, ':', (size_t)(at - luser));
+        size_t ul = colon ? (size_t)(colon - luser) : (size_t)(at - luser);
+        char user[256], pass[512];
+        if (ul >= sizeof user) continue;
+        memcpy(user, luser, ul); user[ul] = 0;
+        if (colon) {
+            size_t pl = (size_t)(at - colon - 1);
+            if (pl >= sizeof pass) continue;
+            memcpy(pass, colon + 1, pl); pass[pl] = 0;
+        } else pass[0] = 0;
+        if (username_from_url && *username_from_url && strcmp(user, username_from_url))
+            continue;
+        rc = git_credential_userpass_plaintext_new(out, user, pass);
+        break;
+    }
+    fclose(f);
+    return rc;
+}
+
+/* One payload struct shared by every callback on a git_remote_callbacks —
+   the struct has a single payload slot, so the fields split it. */
+typedef struct { int asked; int rejected; } net_ctx;
+
+static int net_cred_cb(git_credential **out, const char *url,
+                       const char *username_from_url,
+                       unsigned int allowed_types, void *payload) {
+    net_ctx *ctx = payload;
+    if (!(allowed_types & GIT_CREDENTIAL_USERPASS_PLAINTEXT))
+        return GIT_PASSTHROUGH;
+    if (ctx->asked++ > 0)
+        return GIT_PASSTHROUGH;   /* the store is static — asking twice loops */
+    const char *home = getenv("HOME");
+    if (!home || !*home) home = "/root";
+    char path[PATH_MAX];
+    snprintf(path, sizeof path, "%s/.git-credentials", home);
+    int rc = cred_from_store(out, path, url, username_from_url);
+    if (rc != GIT_PASSTHROUGH) return rc;
+    snprintf(path, sizeof path, "%s/.config/git/credentials", home);
+    return cred_from_store(out, path, url, username_from_url);
+}
+
+/* push_update_reference: the SERVER's per-ref verdict. A refusal must be a
+   loud nonzero exit, not a printed-and-forgotten note. */
+static int net_push_ref_cb(const char *refname, const char *status, void *data) {
+    net_ctx *ctx = data;
+    if (status && *status) {
+        fprintf(stderr, " ! [rejected]        %s (%s)\n", refname, status);
+        ctx->rejected++;
+    } else {
+        fprintf(stderr, " * [updated]         %s\n", refname);
+    }
+    return 0;
+}
+
+static void net_callbacks(git_remote_callbacks *cb, net_ctx *ctx) {
+    git_remote_init_callbacks(cb, GIT_REMOTE_CALLBACKS_VERSION);
+    cb->sideband_progress = net_sideband_cb;
+    cb->credentials = net_cred_cb;
+    cb->payload = ctx;
+}
+
+static int cmd_clone(int argc, char **argv) {
+    const char *url = NULL, *dir = NULL;
+    int quiet = 0;
+    for (int i = 0; i < argc; i++) {
+        if (!strcmp(argv[i], "-q") || !strcmp(argv[i], "--quiet")) quiet = 1;
+        else if (argv[i][0] == '-' && argv[i][1] != '\0') {
+            fprintf(stderr, "git: unknown option '%s'\n", argv[i]);
+            fprintf(stderr, "usage: git clone [-q] <url> [<directory>]\n");
+            return 1;
+        } else if (!url) url = argv[i];
+        else if (!dir) dir = argv[i];
+        else {
+            fprintf(stderr, "usage: git clone [-q] <url> [<directory>]\n");
+            return 1;
+        }
+    }
+    if (!url) {
+        fprintf(stderr, "usage: git clone [-q] <url> [<directory>]\n");
+        return 1;
+    }
+    /* derive the directory from the URL the way git does: last path
+       component, .git suffix stripped */
+    char derived[PATH_MAX];
+    if (!dir) {
+        const char *e = url + strlen(url);
+        while (e > url && e[-1] == '/') e--;
+        const char *b = e;
+        while (b > url && b[-1] != '/') b--;
+        size_t n = (size_t)(e - b);
+        if (n > 4 && !strncmp(e - 4, ".git", 4)) n -= 4;
+        if (n == 0 || n >= sizeof derived) {
+            fprintf(stderr, "fatal: cannot derive a directory name from '%s'\n", url);
+            return 1;
+        }
+        memcpy(derived, b, n); derived[n] = 0;
+        dir = derived;
+    }
+    if (!quiet) printf("Cloning into '%s'...\n", dir);
+    fflush(stdout);
+
+    net_ctx ctx = { 0, 0 };
+    git_clone_options opts;
+    git_clone_options_init(&opts, GIT_CLONE_OPTIONS_VERSION);
+    net_callbacks(&opts.fetch_opts.callbacks, &ctx);
+
+    git_repository *repo = NULL;
+    if (git_clone(&repo, url, dir, &opts) < 0) {
+        print_giterr("clone");
+        return 1;
+    }
+    git_repository_free(repo);
+    return 0;
+}
+
+/* Shared fetch leg: lookup the remote, fetch with credentials + sideband.
+   Prints "From <url>" once any tip actually moved (via update_tips). */
+static int fetch_updated;
+static int net_update_tips_cb(const char *refname, const git_oid *a,
+                              const git_oid *b, void *data) {
+    (void)data;
+    char oa[8] = "", ob[8] = "";
+    git_oid_tostr(oa, sizeof oa, a);
+    git_oid_tostr(ob, sizeof ob, b);
+    if (git_oid_is_zero(a))
+        fprintf(stderr, " * [new ref]          -> %s\n", refname);
+    else
+        fprintf(stderr, "   %s..%s  %s\n", oa, ob, refname);
+    fetch_updated++;
+    return 0;
+}
+
+static int do_fetch(git_repository *repo, const char *name, git_remote **out) {
+    git_remote *remote = NULL;
+    if (git_remote_lookup(&remote, repo, name) < 0) {
+        fprintf(stderr, "fatal: '%s' does not appear to be a git repository\n", name);
+        return -1;
+    }
+    net_ctx ctx = { 0, 0 };
+    git_fetch_options opts;
+    git_fetch_options_init(&opts, GIT_FETCH_OPTIONS_VERSION);
+    net_callbacks(&opts.callbacks, &ctx);
+    opts.callbacks.update_tips = net_update_tips_cb;
+    fetch_updated = 0;
+    if (git_remote_fetch(remote, NULL, &opts, "fetch") < 0) {
+        print_giterr("fetch");
+        git_remote_free(remote);
+        return -1;
+    }
+    if (fetch_updated)
+        fprintf(stderr, "From %s\n", git_remote_url(remote));
+    if (out) *out = remote;
+    else git_remote_free(remote);
+    return 0;
+}
+
+static int cmd_fetch(git_repository *repo, int argc, char **argv) {
+    const char *name = "origin";
+    for (int i = 0; i < argc; i++) {
+        if (argv[i][0] == '-' && argv[i][1] != '\0') {
+            fprintf(stderr, "git: unknown option '%s'\n", argv[i]);
+            fprintf(stderr, "usage: git fetch [<remote>]\n");
+            return 1;
+        }
+        name = argv[i];
+    }
+    return do_fetch(repo, name, NULL) < 0 ? 1 : 0;
+}
+
+static int cmd_pull(git_repository *repo, int argc, char **argv) {
+    const char *name = "origin";
+    int explicit_remote = 0;
+    for (int i = 0; i < argc; i++) {
+        if (argv[i][0] == '-' && argv[i][1] != '\0') {
+            fprintf(stderr, "git: unknown option '%s'\n", argv[i]);
+            fprintf(stderr, "usage: git pull [<remote>]\n");
+            return 1;
+        }
+        name = argv[i];
+        explicit_remote = 1;
+    }
+    if (do_fetch(repo, name, NULL) < 0) return 1;
+
+    /* Where are we, and what did we just fetch for it? */
+    git_reference *head = NULL;
+    if (git_repository_head(&head, repo) < 0) {
+        fprintf(stderr, "fatal: cannot pull: HEAD is unborn or detached "
+                        "(checkout a branch first)\n");
+        return 1;
+    }
+    if (!git_reference_is_branch(head)) {
+        fprintf(stderr, "fatal: cannot pull onto a detached HEAD\n");
+        git_reference_free(head);
+        return 1;
+    }
+    const char *branch = git_reference_shorthand(head);
+
+    /* An EXPLICIT `git pull <remote>` integrates THAT remote's branch; the
+       branch's configured upstream (which clone points at origin) is only
+       the default for a bare `git pull`. */
+    git_reference *upstream = NULL;
+    if (explicit_remote || git_branch_upstream(&upstream, head) < 0) {
+        char rname[PATH_MAX];
+        snprintf(rname, sizeof rname, "refs/remotes/%s/%s", name, branch);
+        if (git_reference_lookup(&upstream, repo, rname) < 0) {
+            fprintf(stderr, "fatal: no upstream for branch '%s' "
+                            "(nothing at %s)\n", branch, rname);
+            git_reference_free(head);
+            return 1;
+        }
+    }
+
+    git_annotated_commit *ac = NULL;
+    if (git_annotated_commit_from_ref(&ac, repo, upstream) < 0) {
+        print_giterr("pull");
+        git_reference_free(head); git_reference_free(upstream);
+        return 1;
+    }
+
+    git_merge_analysis_t analysis;
+    git_merge_preference_t pref;
+    int rc = 1;
+    if (git_merge_analysis(&analysis, &pref, repo,
+                           (const git_annotated_commit **)&ac, 1) < 0) {
+        print_giterr("pull");
+        goto done;
+    }
+
+    if (analysis & GIT_MERGE_ANALYSIS_UP_TO_DATE) {
+        printf("Already up to date.\n");
+        rc = 0;
+    } else if (analysis & (GIT_MERGE_ANALYSIS_FASTFORWARD | GIT_MERGE_ANALYSIS_UNBORN)) {
+        /* fast-forward: move the branch ref and check out its tree */
+        const git_oid *target = git_annotated_commit_id(ac);
+        git_commit *commit = NULL;
+        if (git_commit_lookup(&commit, repo, target) < 0) { print_giterr("pull"); goto done; }
+        git_checkout_options co;
+        git_checkout_options_init(&co, GIT_CHECKOUT_OPTIONS_VERSION);
+        co.checkout_strategy = GIT_CHECKOUT_SAFE;
+        if (git_checkout_tree(repo, (const git_object *)commit, &co) < 0) {
+            print_giterr("pull (working tree not updated)");
+            git_commit_free(commit);
+            goto done;
+        }
+        git_commit_free(commit);
+        char oldid[8] = "", newid[8] = "";
+        git_oid_tostr(oldid, sizeof oldid, git_reference_target(head));
+        git_oid_tostr(newid, sizeof newid, target);
+        if (analysis & GIT_MERGE_ANALYSIS_UNBORN) {
+            git_reference *nref = NULL;
+            if (git_reference_create(&nref, repo, git_reference_name(head), target,
+                                     1, "pull: fast-forward") == 0) {
+                git_reference_free(nref);
+            } else { print_giterr("pull"); goto done; }
+        } else {
+            git_reference *nref = NULL;
+            if (git_reference_set_target(&nref, head, target, "pull: fast-forward") < 0) {
+                print_giterr("pull");
+                goto done;
+            }
+            git_reference_free(nref);
+        }
+        printf("Updating %s..%s\nFast-forward\n", oldid, newid);
+        rc = 0;
+    } else {
+        fprintf(stderr, "fatal: not a fast-forward — this git does not "
+                        "implement merge yet.\n"
+                        "Your branch and the upstream have diverged; "
+                        "rebase or reset by hand.\n");
+    }
+done:
+    git_annotated_commit_free(ac);
+    git_reference_free(upstream);
+    git_reference_free(head);
+    return rc;
+}
+
+static int cmd_push(git_repository *repo, int argc, char **argv) {
+    const char *name = "origin", *spec = NULL;
+    int npos = 0;
+    for (int i = 0; i < argc; i++) {
+        if (argv[i][0] == '-' && argv[i][1] != '\0') {
+            fprintf(stderr, "git: unknown option '%s'\n", argv[i]);
+            fprintf(stderr, "usage: git push [<remote> [<refspec>]]\n");
+            return 1;
+        }
+        if (npos == 0) name = argv[i];
+        else if (npos == 1) spec = argv[i];
+        else {
+            fprintf(stderr, "usage: git push [<remote> [<refspec>]]\n");
+            return 1;
+        }
+        npos++;
+    }
+
+    char specbuf[PATH_MAX];
+    if (!spec) {
+        /* default: the current branch to its same-named remote ref */
+        git_reference *head = NULL;
+        if (git_repository_head(&head, repo) < 0 || !git_reference_is_branch(head)) {
+            fprintf(stderr, "fatal: no branch checked out — say what to push: "
+                            "git push <remote> <branch>\n");
+            git_reference_free(head);
+            return 1;
+        }
+        snprintf(specbuf, sizeof specbuf, "%s:%s",
+                 git_reference_name(head), git_reference_name(head));
+        spec = specbuf;
+        git_reference_free(head);
+    } else {
+        /* DWIM a branch name the way git does — libgit2 wants full refspecs,
+           so `push origin main` expands to refs/heads/main:refs/heads/main
+           (each unqualified side of a `:` form too; a leading `+` — force —
+           is preserved). */
+        const char *p = spec;
+        int force = (*p == '+');
+        if (force) p++;
+        const char *colon = strchr(p, ':');
+        char src[512], dst[512];
+        if (colon) {
+            snprintf(src, sizeof src, "%.*s", (int)(colon - p), p);
+            snprintf(dst, sizeof dst, "%s", colon + 1);
+        } else {
+            snprintf(src, sizeof src, "%s", p);
+            snprintf(dst, sizeof dst, "%s", p);
+        }
+        snprintf(specbuf, sizeof specbuf, "%s%s%s:%s%s",
+                 force ? "+" : "",
+                 (src[0] && strncmp(src, "refs/", 5)) ? "refs/heads/" : "", src,
+                 (dst[0] && strncmp(dst, "refs/", 5)) ? "refs/heads/" : "", dst);
+        spec = specbuf;
+    }
+
+    git_remote *remote = NULL;
+    if (git_remote_lookup(&remote, repo, name) < 0) {
+        fprintf(stderr, "fatal: '%s' does not appear to be a git repository\n", name);
+        return 1;
+    }
+
+    net_ctx ctx = { 0, 0 };
+    git_push_options opts;
+    git_push_options_init(&opts, GIT_PUSH_OPTIONS_VERSION);
+    net_callbacks(&opts.callbacks, &ctx);
+    opts.callbacks.push_update_reference = net_push_ref_cb;
+
+    char *specs[1] = { (char *)spec };
+    git_strarray sa = { specs, 1 };
+    fprintf(stderr, "To %s\n", git_remote_url(remote));
+    int prc = git_remote_push(remote, &sa, &opts);
+    git_remote_free(remote);
+    if (prc < 0) {
+        print_giterr("push");
+        return 1;
+    }
+    if (ctx.rejected) {
+        fprintf(stderr, "error: failed to push some refs\n");
+        return 1;
+    }
+    return 0;
+}
+
+static int cmd_remote(git_repository *repo, int argc, char **argv) {
+    if (argc == 0 || !strcmp(argv[0], "-v")) {
+        int verbose = argc > 0;
+        git_strarray names = { 0 };
+        if (git_remote_list(&names, repo) < 0) { print_giterr("remote"); return 1; }
+        for (size_t i = 0; i < names.count; i++) {
+            if (!verbose) { printf("%s\n", names.strings[i]); continue; }
+            git_remote *r = NULL;
+            if (git_remote_lookup(&r, repo, names.strings[i]) == 0) {
+                const char *u = git_remote_url(r);
+                const char *pu = git_remote_pushurl(r);
+                printf("%s\t%s (fetch)\n", names.strings[i], u ? u : "");
+                printf("%s\t%s (push)\n", names.strings[i], pu ? pu : (u ? u : ""));
+                git_remote_free(r);
+            }
+        }
+        git_strarray_dispose(&names);
+        return 0;
+    }
+    if (!strcmp(argv[0], "add") && argc == 3) {
+        git_remote *r = NULL;
+        if (git_remote_create(&r, repo, argv[1], argv[2]) < 0) {
+            print_giterr("remote add");
+            return 1;
+        }
+        git_remote_free(r);
+        return 0;
+    }
+    if ((!strcmp(argv[0], "remove") || !strcmp(argv[0], "rm")) && argc == 2) {
+        if (git_remote_delete(repo, argv[1]) < 0) {
+            print_giterr("remote remove");
+            return 1;
+        }
+        return 0;
+    }
+    fprintf(stderr, "usage: git remote [-v] | remote add <name> <url> | "
+                    "remote remove <name>\n");
+    return 1;
+}
+
 /* ---- main ---- */
 
 int main(int argc, char **argv) {
@@ -1586,6 +2052,11 @@ int main(int argc, char **argv) {
         git_libgit2_shutdown();
         return rc0;
     }
+    if (!strcmp(cmd, "clone")) {
+        int rc0 = cmd_clone(cmd_argc, cmd_argv);
+        git_libgit2_shutdown();
+        return rc0;
+    }
 
     git_repository *repo = NULL;
     if (open_repo(&repo) < 0) return 1;
@@ -1603,6 +2074,10 @@ int main(int argc, char **argv) {
     else if (!strcmp(cmd, "commit"))   rc = cmd_commit(repo, cmd_argc, cmd_argv);
     else if (!strcmp(cmd, "branch"))   rc = cmd_branch(repo, cmd_argc, cmd_argv);
     else if (!strcmp(cmd, "checkout")) rc = cmd_checkout(repo, cmd_argc, cmd_argv);
+    else if (!strcmp(cmd, "fetch"))    rc = cmd_fetch(repo, cmd_argc, cmd_argv);
+    else if (!strcmp(cmd, "pull"))     rc = cmd_pull(repo, cmd_argc, cmd_argv);
+    else if (!strcmp(cmd, "push"))     rc = cmd_push(repo, cmd_argc, cmd_argv);
+    else if (!strcmp(cmd, "remote"))   rc = cmd_remote(repo, cmd_argc, cmd_argv);
     else {
         /* Tell a real git command apart from a typo. Answering `merge`
            with a bare "unknown command" is what makes a caller conclude
@@ -1611,9 +2086,9 @@ int main(int argc, char **argv) {
            already looking. */
         static const char *const unimplemented[] = {
             "am", "apply", "bisect", "blame",
-            "cherry-pick", "clean", "clone", "describe",
-            "fetch", "grep", "merge", "mv", "pull", "push", "rebase",
-            "reflog", "remote", "reset", "restore", "revert", "rm", "stash",
+            "cherry-pick", "clean", "describe",
+            "grep", "merge", "mv", "rebase",
+            "reflog", "reset", "restore", "revert", "rm", "stash",
             "submodule", "switch", "tag", "worktree", NULL,
         };
         int known = 0;

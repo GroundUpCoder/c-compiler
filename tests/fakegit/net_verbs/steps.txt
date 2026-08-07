@@ -1,0 +1,21 @@
+# The network verbs' OFFLINE surface (#478): parse guards stay loud (the
+# anti-#574 discipline), remote management round-trips, and a transportless
+# host fails clone with a NAMED cause — the fakegit harness runs the wasm
+# standalone (no kernel), where __http_open answers ENOSYS, so this pins the
+# no-zombie-fallback posture: no network means a loud error naming the fact,
+# never a hang and never a silent 0. The live network legs are covered by
+# tests/kernel/test_git_net_e2e.js against a real host-git server.
+init -q -b main .
+remote add origin http://example.invalid/repo.git
+remote
+remote -v
+!"unknown option '--wibble'" clone --wibble
+!"unknown option '--wibble'" fetch --wibble
+!"unknown option '--wibble'" pull --wibble
+!"unknown option '--wibble'" push --wibble
+!"usage: git clone" clone
+!"does not appear to be a git repository" fetch nosuch
+!"no network transport" clone http://example.invalid/repo.git sub
+!"usage: git remote" remote add onlyname
+remote remove origin
+remote

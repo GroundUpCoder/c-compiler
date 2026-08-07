@@ -76,6 +76,7 @@
     "../../vendor/libgit2/deps/zlib/inftrees.c",
     "../../vendor/libgit2/deps/zlib/trees.c",
     "../../vendor/libgit2/deps/zlib/zutil.c",
+    "../../vendor/libgit2/http_subtransport.c",
     "../../vendor/libgit2/missing_stubs.c",
     "../../vendor/libgit2/src/libgit2/annotated_commit.c",
     "../../vendor/libgit2/src/libgit2/apply.c",

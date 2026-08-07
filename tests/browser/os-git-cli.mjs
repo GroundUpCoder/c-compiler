@@ -172,14 +172,15 @@ try {
   {
     const r = await sh('git --version', 'VER');
     check('git --version prints the gucOS version line',
-      /git version 0\.2 \(libgit2/.test(r.seg), trimSeg(r.seg));
+      /git version 0\.3 \(libgit2/.test(r.seg), trimSeg(r.seg));
   }
   {
     const r = await sh('git --help', 'HELP');
-    check('git --help lists the read verbs AND the #475 write set',
+    check('git --help lists the read verbs, the #475 write set AND the #478 network verbs',
       /log/.test(r.seg) && /status/.test(r.seg) && /ls-tree/.test(r.seg) &&
       /init/.test(r.seg) && /commit/.test(r.seg) && /checkout/.test(r.seg) &&
-      /merge, tag, reset and the network commands are not implemented/.test(r.seg),
+      /clone/.test(r.seg) && /fetch/.test(r.seg) && /push/.test(r.seg) &&
+      /merge, tag and reset are not implemented/.test(r.seg),
       trimSeg(r.seg, 1200));
   }
   await shot('02-help');
