@@ -117,3 +117,15 @@ always-FALSE PrintDlg.
   `> Bold` + size 28), then post-Exit hive assert + a FRESH notepad leg
   (renders registry bold, dialog preselects Bold and 28pt). 90 checks,
   ALL OK.
+
+## Gate
+
+Plan (`--dry-run` vs origin/main): kernel, sweep — the two `os/**` heavy
+suites, as the RULES table mandates. Gate run 1 (`build/gate-330.log`):
+rc=1 — sweep 56/56 green, kernel 167/168 with ONE red,
+`test_netsurf_mutation_e2e.js` ("a mid-window radio repaint reaches the
+screen AT ONCE", the 0386 mid-window re-conversion timing class,
+documented open and intermittent; netsurf links none of this diff's
+code). Attribution re-run of that single file on the same tree: PASS.
+Re-gate (`build/gate-330b.log`): **rc=0, kernel 168/168, sweep 56/56,
+zero fails** — the flake did not recur.
