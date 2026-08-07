@@ -11,13 +11,40 @@ changed.
 > And, same conversation: *"Ok, yea, let's promote this epic, make the gamedev
 > epic second place, and put all our focus on this work now."*
 
-**Queue selection:** the epic filter now selects PKGDEV-advancing tickets
-first, gamedev-advancing second, then everything else — then the standing
-weight sort (light → medium → heavy, Pn inside a tier) orders within each
-band. Bug-fix-first within a tier, broken-build preemption, and dependency
-edges are unchanged. A large set of tickets advances BOTH epics (git, srclib,
-DX, platform stability) — say so in the justification and take the higher
-band.
+## 🔴 Queue selection — EXCLUSIVE focus + delegated heavy promotion (jku, 2026-08-07 eve)
+
+Three rulings from the promotion conversation, superseding the softer
+"PKGDEV first, gamedev second, rest last" banding for as long as they stand:
+
+1. **EXCLUSIVITY.** jku verbatim: *"I want it so that the work for this epic
+   comes before work for anything else. Only once we actually get this epic
+   to a good state are we allowed to do anything else."* ⇒ The queue selects
+   PKGDEV-advancing work ONLY. Gamedev-advancing and unaffiliated tickets do
+   not run — not even dependency-free light ones — until jku declares the
+   epic "in a good state". (Broken-build preemption still outranks
+   everything, as always.)
+2. **HEAVY PROMOTION IS DELEGATED for this epic.** jku verbatim: *"Yea,
+   promote the heavy stuff as needed."* ⇒ A PKGDEV-advancing heavy ticket
+   (#568 D1, #478, #563, the dogfood rounds…) runs when it is the right next
+   epic work — the coordinator decides, no per-ticket jku ask. This is a
+   scoped exception to the standing "only jku promotes heavy work" rule; it
+   applies ONLY to tickets carrying a written PKGDEV justification. The
+   weight sort still orders WITHIN the epic (prefer the lighter
+   epic-advancing ticket when both are ready and unordered by the ladder).
+3. **A BLOCKING BUG IS EPIC WORK.** jku verbatim: *"if there's a general bug
+   blocking this epic from working well, that's a part of it, so make sure to
+   keep that in mind as well when deciding how to order the work."* ⇒ Any
+   bug — however far from packaging on its face — that measurably impedes
+   the in-OS dev loop (crashes/wedges under the loop, toolchain defects,
+   bridge/network faults like #362/#391, gcode tool failures like #504,
+   platform instability the dogfood rounds hit) is IN the epic and ordered
+   by bug-fix-first within its tier. The membership test remains an
+   argument: write down what the bug blocks.
+
+Within the epic band the standing weight sort applies (light → medium →
+heavy, Pn inside a tier), dependency edges outrank the sort, and the
+justification burden is unchanged. Tickets advancing both epics ride at
+full PKGDEV standing.
 
 ## The goal
 
