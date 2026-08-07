@@ -62,10 +62,16 @@ const SUITES = {
              cmd: ['node', 'tests/run-unit.js'], supports: ['filter', 'jobs'] },
   blockfs: { desc: 'BlockFS/MountFS filesystem suite',
              cmd: ['node', 'tests/blockfs/run.js'], supports: ['filter', 'jobs', 'resume', 'failFast', 'repeat', 'underLoad'] },
+  // `heavyLock: true` = the runner participates in the host heavy-test lock
+  // (tests/lib/heavy-lock.js): the gate reserves the lock up front for these
+  // (#561, main() below), and their exit-code space reserves 3 for the lock's
+  // refusal, which classify() reports as "contended — did not run".
   kernel:  { desc: 'kernel control plane + OS e2e suite',
-             cmd: ['node', 'tests/kernel/run.js'], supports: ['filter', 'jobs', 'resume', 'failFast', 'repeat', 'underLoad'] },
+             cmd: ['node', 'tests/kernel/run.js'], supports: ['filter', 'jobs', 'resume', 'failFast', 'repeat', 'underLoad'],
+             heavyLock: true },
   sweep:   { desc: 'browser OS acceptance sweep (real Chromium; needs Playwright)',
-             cmd: ['node', 'tests/browser/os-sweep.mjs'], supports: ['filter', 'jobs', 'resume', 'failFast', 'repeat', 'underLoad'] },
+             cmd: ['node', 'tests/browser/os-sweep.mjs'], supports: ['filter', 'jobs', 'resume', 'failFast', 'repeat', 'underLoad'],
+             heavyLock: true },
   host:    { desc: 'host.js Node output path + serve.js first-run (Node-only)',
              cmd: ['node', 'tests/host/run.js'], supports: [] },
   todos:   { desc: 'liability register validator + Lnn id-allocator tests (todos/done/0286)',
@@ -622,7 +628,8 @@ const RULES = [
 function parseArgs(argv) {
   const out = { suites: [], diff: false, diffRef: null, dryRun: false,
                 list: false, help: false, filter: null, jobs: null,
-                resume: false, failFast: false, repeat: null, underLoad: null };
+                resume: false, failFast: false, repeat: null, underLoad: null,
+                out: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--help' || a === '-h') out.help = true;
@@ -642,6 +649,8 @@ function parseArgs(argv) {
     else if (a.startsWith('--diff=')) { out.diff = true; out.diffRef = a.slice(7); }
     else if (a.startsWith('--filter=')) out.filter = a.slice(9);
     else if (a === '--filter') out.filter = argv[++i];
+    else if (a.startsWith('--out=')) out.out = a.slice(6);
+    else if (a === '--out') out.out = argv[++i];
     else if (a === '-j' || a === '--jobs') out.jobs = argv[++i];
     else if (a.startsWith('-j')) out.jobs = a.slice(2);
     else if (a === 'all') out.suites.push(...ALL_SUITES);
@@ -792,6 +801,29 @@ function main() {
   const pyPre = pythonPreflight(ordered);
   if (!pyPre.ok) { process.stderr.write(pyPre.message); process.exit(2); }
 
+  // Heavy-lock reservation (#561). The heavy suites take the host heavy-test
+  // lock — but only when THEIR row starts, and RUN_ORDER puts them last. That
+  // left two windows in which another heavy job could seize the lock and cost
+  // this gate its heavy legs at exit 3: gate start → the first heavy row
+  // (deterministic and minutes long — every cheap suite plus the py batch runs
+  // first), and the kernel row's exit → the sweep row's acquire (~60-110ms
+  // measured: the lock is released at kernel exit and re-taken at sweep
+  // startup, and a boot's --wait-lock poll ticks every 1s). A gate lost its
+  // whole kernel leg to a sibling's bake exactly this way on 2026-08-04. So
+  // the GATE takes the lock ONCE, up front, for the whole selected run; the
+  // heavy runners join re-entrantly through the verified CC_HEAVY_LOCK_PID
+  // marker (tests/lib/heavy-lock.js — the same contract their own child boots
+  // already use). This also makes the fleet rule "a boot can wait behind a
+  // gate; a gate never waits behind a boot" structural: a queued --wait-lock
+  // boot now waits out the whole gate, not one suite. A contended start is
+  // exit 3 naming the holder — nothing has run and no summary is written (an
+  // absent summary already means "did not finish", never a green). After the
+  // exit-2 preflights, deliberately: a misconfigured run must not take the
+  // machine-wide lock first (the os-sweep.mjs ordering precedent).
+  if (ordered.some(s => SUITES[s].heavyLock)) {
+    require('./lib/heavy-lock.js').acquireHeavyLock({ name: 'tests/run.js gate' });
+  }
+
   // Batch the run.py-backed suites into a single python invocation.
   const pyCats = ordered.filter(s => SUITES[s].pyTypes).map(s => SUITES[s].pyTypes);
 
@@ -812,8 +844,11 @@ function main() {
     }
     const args = [...SUITES[suite].cmd.slice(1), ...suiteArgs(suite, opts)];
     const r = runProcess(SUITES[suite].cmd[0], args, `${suite} suite`);
-    const c = classify(r);
-    const art = suiteArtifact(suite);
+    const c = classify(r, !!SUITES[suite].heavyLock);
+    // A contended suite never ran, so any artifact on disk is an EARLIER
+    // run's — attaching it would dress a did-not-run row in another run's
+    // record (#561, the same honesty class as the reason field itself).
+    const art = c.reason === 'heavy-lock-contended' ? null : suiteArtifact(suite);
     if (art && fs.existsSync(path.join(ROOT, art))) {
       c.artifact = art;
       const sel = readSuiteSelection(path.join(ROOT, art));
@@ -822,8 +857,20 @@ function main() {
     results.push({ suite, ...c });
   }
 
-  writeMergedSummary(results, Date.now() - t0, opts, ordered);
-  printFinal(results, Date.now() - t0);
+  // #561b: `--out=DIR` redirects the run-level record. A NESTED dispatcher
+  // (a guard test driving refusal paths, a tool) must not fabricate its
+  // parent's completion record: build/test-run/summary.json existing with a
+  // fresh mtime and all-pass rows IS the fleet's "the gate completed" signal,
+  // and a child writing it mid-gate would hand a coordinator a green-looking
+  // artifact for a gate that later died (the #477 fake-green class through a
+  // side door). The redirect is fail-safe by construction: an --out run
+  // leaves the canonical path untouched, so a judge reading it sees a stale
+  // mtime — "did not finish", never a green. NB --out redirects only THIS
+  // dispatcher's record; the per-suite artifacts (build/test-kernel etc.) are
+  // written by the suite runners themselves and are not redirected.
+  const summaryDir = opts.out ? path.resolve(opts.out) : path.join(ROOT, 'build', 'test-run');
+  writeMergedSummary(results, Date.now() - t0, opts, ordered, summaryDir);
+  printFinal(results, Date.now() - t0, path.join(summaryDir, 'summary.json'));
 
   const anyFail = results.some(r => r.status === 'fail');
   process.exit(anyFail ? 1 : 0);
@@ -849,7 +896,7 @@ function pythonPreflight(ordered, opts) {
   return require('../tools/host-python.js').resolvePython(opts || {});
 }
 
-function classify(r) {
+function classify(r, heavyLock) {
   if (r.spawnError) {
     // Couldn't even launch the runner — a hard failure on EVERY suite, the
     // sweep included (#477). The sweep's Playwright dependency never reaches
@@ -861,6 +908,21 @@ function classify(r) {
     return { status: 'fail', ms: r.ms,
              note: `could not launch: ${r.spawnError.message}` };
   }
+  // #561: a heavy runner's exit 3 is the heavy-lock refusal — the suite never
+  // ran. The code alone is the signal here, no stderr marker needed: in both
+  // heavy runners the ONLY process.exit(3) is tests/lib/heavy-lock.js's, and
+  // the rest of their exit space is spoken for (0/1 the verdict, 2 refusal/
+  // fatal, 4 cross-tree, 130 SIGINT; a member test exiting 3 is a FAILED
+  // member → runner exit 1). Status stays literally 'fail' — main() must exit
+  // nonzero and rule 5's literal-'pass' ship gate must stay red; a non-fail
+  // status here would be the #477 fake green again. `reason` is what lets a
+  // reader tell "contended, did not run" from "ran and failed". With the
+  // gate-level reservation in main() this is a backstop (the runners join the
+  // gate's own lock), but it is the honest reading whenever it fires.
+  if (heavyLock && r.status === 3) {
+    return { status: 'fail', reason: 'heavy-lock-contended', ms: r.ms, exit: r.status,
+             note: 'DID NOT RUN — the host heavy-test lock was held (exit 3)' };
+  }
   return { status: r.status === 0 ? 'pass' : 'fail', ms: r.ms,
            exit: r.status, signal: r.signal || undefined };
 }
@@ -871,8 +933,7 @@ function classify(r) {
 // a single test file — which is exactly what a split sweep used to leave
 // behind. A reader must be able to see `filter: null` + `files.recorded: 40`
 // and know the whole suite was covered.
-function writeMergedSummary(results, ms, opts, ordered) {
-  const dir = path.join(ROOT, 'build', 'test-run');
+function writeMergedSummary(results, ms, opts, ordered, dir) {
   try {
     fs.mkdirSync(dir, { recursive: true });
     const tmp = path.join(dir, 'summary.json.tmp');
@@ -914,17 +975,25 @@ function fmtCoverage(files) {
     + (partial ? ' — PARTIAL' : '') + `]${partial ? '\x1b[0m' : ''}`;
 }
 
-function printFinal(results, ms) {
+function printFinal(results, ms, summaryPath) {
   process.stdout.write(`\n\x1b[1m━━━ tests/run.js summary ━━━\x1b[0m\n`);
   for (const r of results) {
-    const tag = r.status === 'pass' ? '\x1b[32mok  \x1b[0m' : '\x1b[31mFAIL\x1b[0m';
+    // A contended heavy suite is still a fail (the run exits nonzero) but its
+    // tag says what happened: the suite DID NOT RUN — the reader must not have
+    // to hand-decode exit 3 to tell that from a genuine red (#561).
+    const tag = r.status === 'pass' ? '\x1b[32mok  \x1b[0m'
+      : r.reason === 'heavy-lock-contended' ? '\x1b[31mLOCK\x1b[0m' : '\x1b[31mFAIL\x1b[0m';
     process.stdout.write(`  ${tag} ${r.suite.padEnd(28)} ${fmtSecs(r.ms)}` +
       fmtCoverage(r.files) +
       (r.note ? `  (${r.note})` : '') + (r.artifact ? `  → ${r.artifact}` : '') + '\n');
   }
   const pass = results.filter(r => r.status === 'pass').length;
   const fail = results.filter(r => r.status === 'fail').length;
-  process.stdout.write(`\n  ${pass} passed, ${fail} failed  (${fmtSecs(ms)})  → build/test-run/summary.json\n`);
+  const contended = results.filter(r => r.reason === 'heavy-lock-contended').length;
+  const rel = path.relative(ROOT, summaryPath);
+  process.stdout.write(`\n  ${pass} passed, ${fail} failed` +
+    (contended ? ` (${contended} of those DID NOT RUN — heavy lock contended)` : '') +
+    `  (${fmtSecs(ms)})  → ${rel && !rel.startsWith('..') ? rel : summaryPath}\n`);
 }
 
 function printList() {
@@ -961,6 +1030,10 @@ Flags (forwarded to suites that accept them):
   --repeat N     run each file N times; per-file flake rate (kernel/blockfs/sweep)
   --under-load[=N]  run under CPU contention (flake gate, todos/0147)
   --dry-run      resolve + print the plan, run nothing
+  --out=DIR      write the run-level summary.json to DIR instead of
+                 build/test-run (#561b) — for NESTED invocations (guard tests,
+                 tooling): a child dispatcher must never fabricate its parent
+                 gate's completion record. Per-suite artifacts are unaffected.
 
 Suites: ${ALL_SUITES.join(', ')}, all
 `);

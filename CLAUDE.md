@@ -232,10 +232,20 @@ death spiral → launchservicesd lock convoy → WindowServer watchdog kill (the
 GUI died; uptime intact — not a reboot). Two guards now enforce the policy,
 both invisible on a normal single run:
 
-- **Host lock (across processes):** kernel + sweep take an exclusive
-  `os.tmpdir()/cc-heavy-tests.lock` at startup and **fail fast (exit 3)** if
-  another heavy runner owns it — they are mutually exclusive, kernel ⟷ sweep
-  included. Self-heals from a stale lock left by a killed holder. Bypass on a
+- **Host lock (across processes):** the heavy jobs contend for an exclusive
+  `os.tmpdir()/cc-heavy-tests.lock` and **fail fast (exit 3)** if another
+  heavy job owns it — kernel ⟷ sweep mutual exclusion included. **Since #561
+  the GATE owns the lock, not the rows:** `tests/run.js` acquires it up front
+  for the whole selected run whenever kernel/sweep is in the set (a contended
+  gate refuses at exit 3 with NOTHING run and no summary written), and the two
+  runners join its reservation re-entrantly — hand-run, they still acquire at
+  startup exactly as before. This closes the two theft windows an
+  acquire-per-row design had (gate start → first heavy row, minutes; kernel
+  exit → sweep acquire, ~0.1 s — the 2026-08-04 lost-kernel-leg incident). If
+  a heavy ROW still exits 3 (the backstop), `classify()` records it
+  `status: "fail"` + `reason: "heavy-lock-contended"` with a `LOCK` tag —
+  "did not run", distinguishable from a genuine red, and still a nonzero
+  gate. Self-heals from a stale lock left by a killed holder. Bypass on a
   genuinely isolated host (own container/VM) with `CC_NO_HEAVY_LOCK=1`.
   **Since todos/0342 the lock guards the BOOT, not just the runners:**
   `os/boot.js` itself joins at startup (so a single-file kernel e2e, a bench
@@ -255,9 +265,12 @@ both invisible on a normal single run:
   asymmetry is structural, not a preference: **`os/boot.js` HAS
   `--wait-lock[=SECS]`** and queues politely, while **`tests/run.js` / `kernel` /
   `sweep` have no such flag and fail fast at exit 3.** ⇒ A boot can wait behind a
-  gate; **a gate can never wait behind a boot.** Never release a gating lane into
-  the same window a dogfood/boot lane starts — measured live 2026-08-04, where a
-  gate lost its whole `kernel` leg to a sibling's bake. **Read the lock file's
+  gate; **a gate can never wait behind a boot.** Since #561 the gate's up-front
+  reservation makes this structural WITHIN a run — a queued `--wait-lock` boot
+  waits out the whole gate, and can no longer seize the lock between a gate's
+  suites (measured live 2026-08-04, where a gate lost its whole `kernel` leg to
+  a sibling's bake). Still never release a gating lane into the same window a
+  dogfood/boot lane starts: two GATES contend at start, and the loser exits 3. **Read the lock file's
   `argv` to learn who holds it** rather than guessing; a wrong guess stands the
   wrong lane down. Writing a heavy-lock **red control**? `acquireHeavyLock`
   exports `CC_HEAVY_LOCK_PID`, so your spawned child's boots join
@@ -302,7 +315,9 @@ heavy suites and that is deliberate** — see rule 5.
 **2. The heavy-lock ceiling — worktrees parallelise EDITING, never the GATE.**
 `tests/lib/heavy-lock.js` makes the kernel and sweep suites mutually exclusive
 machine-wide and CROSS-PROCESS (`os/boot.js` joins too, since todos/0342). A
-second lane hitting the lock does not queue — it **exits 3**. So the standard
+second lane hitting the lock does not queue — it **exits 3**, and since #561 a
+gate whose selection includes a heavy suite contends AT DISPATCHER START (the
+whole-run reservation), not minutes in at its first heavy row. So the standard
 worktree-per-lane dispatch convention parallelises the editing phase only:
 however many worktrees exist, at most ONE heavy gate runs at a time on this
 machine. Fan-out past roughly 3–4 concurrent lanes buys nothing on
