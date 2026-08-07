@@ -62,5 +62,28 @@ check('regex+fnmatch+glob compile with libc-ext.js', rxWithExt.code === 0,
   `exit ${rxWithExt.code}: ${rxWithExt.stderr.trim()}`);
 fs.rmSync(tmp2, { recursive: true, force: true });
 
+// --- 3. SYNC: the committed libc-ext.js matches what ext/ generates (#534) ---
+// Without this, an edit under ext/ that skips regeneration is invisible to
+// every suite — the compiler reads the committed artifact, not the sources.
+const GEN = path.join(ROOT, 'tools', 'build-libc-ext.js');
+const syncOk = run(GEN, ['--check'], ROOT);
+check('libc-ext.js is in sync with ext/ (build-libc-ext.js --check)',
+  syncOk.code === 0, `exit ${syncOk.code}: ${syncOk.stderr.trim()}`);
+
+// Red control: --check must actually FAIL on a drifted artifact, or the leg
+// above proves nothing. Generate into a temp file, tamper it, re-check.
+const tmp3 = fs.mkdtempSync(path.join(os.tmpdir(), 'libcext-sync-'));
+const tampered = path.join(tmp3, 'libc-ext.js');
+const genOut = run(GEN, [`--out=${tampered}`], ROOT);
+check('--out generation succeeds (red-control setup)', genOut.code === 0,
+  `exit ${genOut.code}: ${genOut.stderr.trim()}`);
+fs.appendFileSync(tampered, '// drift\n');
+const syncRed = run(GEN, ['--check', `--out=${tampered}`], ROOT);
+check('--check FAILS on a tampered artifact (red control)', syncRed.code === 1,
+  `exit ${syncRed.code} (expected 1)`);
+check('...and the failure names the regeneration fix',
+  /build-libc-ext\.js/.test(syncRed.stderr), `stderr: ${syncRed.stderr.trim()}`);
+fs.rmSync(tmp3, { recursive: true, force: true });
+
 console.log(failures === 0 ? '\next: all passed' : `\next: ${failures} failed`);
 process.exit(failures === 0 ? 0 : 1);

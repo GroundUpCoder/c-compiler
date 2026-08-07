@@ -151,6 +151,46 @@ check('every OTHER os/ path still selects sweep', missSweep.length === 0,
   check(f + ' keeps BOTH heavy suites', s.has('kernel') && s.has('sweep'), [...s].join(', '));
 });
 
+// ---- ext/ + libc-ext.js: the extension surface (#534) ----
+//
+// This path class merged green with ZERO suites selected until #534 — the
+// UNMAPPED report is a yellow warning, not a failure, so nothing forced the
+// decision. The pinned set is argued from measured coverage, each suite
+// covering what the others cannot: `ext` pins the optional-library contract
+// and runs build-libc-ext.js --check (drift between ext/ and the committed
+// artifact is otherwise invisible to every suite); `unit` EXECUTES
+// regex/fnmatch/glob via the ext_* goldens; `libc` is the only suite that
+// executes the search.h family (libc-test search_tsearch/hsearch/lsearch/
+// insque + fnmatch). Quantified over the REAL tree, the os/ walk's shape, so
+// a NEW file under ext/ is covered without anyone remembering this guard.
+var EXT_SET = ['ext', 'unit', 'libc'];
+var extFiles = [];
+(function walkExt(dir) {
+  fs.readdirSync(dir, { withFileTypes: true }).forEach(function (e) {
+    if (e.name.charAt(0) === '.') return;
+    var abs = path.join(dir, e.name);
+    var rel = path.relative(ROOT, abs).split(path.sep).join('/');
+    if (e.isDirectory()) walkExt(abs);
+    else if (!dropped(rel)) extFiles.push(rel);
+  });
+})(path.join(ROOT, 'ext'));
+check('the ext/ walk found the real tree (an empty walk makes the next check vacuous)',
+      extFiles.length >= 15, extFiles.length + ' files');
+EXT_SET.forEach(function (want) {
+  var miss = extFiles.filter(function (f) { return !planFromDiff([f]).suites.has(want); });
+  check('every ext/ file selects ' + want, miss.length === 0,
+        miss.length ? 'missing: ' + miss.slice(0, 8).join(', ') : extFiles.length + ' files');
+});
+// The generated-and-committed artifact and its generator draw the same set:
+// all three are one surface — sources, generator, artifact — and a diff can
+// legally contain any subset of them.
+['libc-ext.js', 'tools/build-libc-ext.js'].forEach(function (f) {
+  var s = planFromDiff([f]).suites;
+  var miss = EXT_SET.filter(function (want) { return !s.has(want); });
+  check(f + ' selects ext+unit+libc', miss.length === 0,
+        miss.length ? 'missing: ' + miss.join(', ') : [...s].join(', '));
+});
+
 // ---- the dispatcher gates itself ----
 // An edit to the RULES table must select the suite this guard runs in — with
 // the old `[]` mapping, breaking the closure selected nothing.

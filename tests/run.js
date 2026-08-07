@@ -319,8 +319,23 @@ const RULES = [
     'synthesizes vendor/netsurf/test/img/* — test_netsurf_content_e2e.js decodes them'],
   [/^tools\/mkgit2srclib\.js$/, ['fakegit', 'projects', 'kernel'],
     'generates vendor/libgit2\'s srclib forwarders + git2_srclib.h — the fakegit/projects build is what a missing forwarder breaks, and test_gucman_libgit2_e2e.js runs its --check'],
-  [/^tools\/build-libc-ext\.js$/, ['ext', 'unit'],
-    'generates libc-ext.js — the ext category pins its optional-library contract, the unit ext_* tests consume it'],
+  [/^tools\/build-libc-ext\.js$/, ['ext', 'unit', 'libc'],
+    'generates libc-ext.js — the ext category pins its optional-library contract (and runs its --check), the unit ext_* goldens and the libc-test search/fnmatch corpus consume it'],
+  // The libc extension surface itself (#534). ext/ holds the vendored sources
+  // (TRE regex, fnmatch/glob, the search.h family); libc-ext.js is their
+  // GENERATED-AND-COMMITTED artifact, loaded by compiler.js when it sits next
+  // to it — so an edit here reaches every C program including these headers.
+  // Three consumers, each covering what the others cannot: the ext category
+  // pins the optional-library contract and runs build-libc-ext.js --check
+  // (without that sync check an ext/ edit that skips regeneration is invisible
+  // to EVERY suite — the artifact, not the sources, is what compiles); the
+  // unit ext_* goldens EXECUTE regex/fnmatch/glob; and the libc-test
+  // functional corpus is the only suite that executes the search.h family
+  // (search_tsearch/hsearch/lsearch/insque, plus its own fnmatch).
+  [/^ext\//, ['ext', 'unit', 'libc'],
+    'the libc extension sources — ext contract+sync check, unit ext_* goldens, libc-test search.h/fnmatch'],
+  [/^libc-ext\.js$/, ['ext', 'unit', 'libc'],
+    'the generated-and-committed extension artifact compiler.js loads — same consumers as ext/'],
 
   // OS-driving harnesses. They gate nothing themselves; they RIDE a test seam,
   // and the suite that proves the seam is what tells their editor the ground
