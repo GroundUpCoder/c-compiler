@@ -14,6 +14,9 @@ node_modules
 test-results/
 tools/disasm/index.html
 *.pyc
+# The pinned host-python venv (#483, tools/host-python.js) — derived from the
+# committed .python-version by `uv venv`; worktrees read the main clone's.
+.venv/
 os/os.img
 os/os-system.img
 os/os-system.*.img

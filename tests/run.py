@@ -978,8 +978,8 @@ def run_micropython_genhdr_check(results, filter_str=None):
     (upstream generates them per build; this repo commits them, since vendored
     projects have no Makefile). A config edit that adds a qstr and forgets the
     regeneration is a link error at best and a stale pool at worst, so the
-    regenerator's --check is a test. Needs `cc` + python3 — the same two host
-    tools the tcc/fuzz categories already hard-require.
+    regenerator's --check is a test. Needs `cc` plus the pinned host python
+    (tools/host-python.js, #483) — mkmpgenhdr resolves the interpreter itself.
     """
     test_name = "micropython/genhdr-sync"
     if filter_str and filter_str not in test_name:
@@ -1143,7 +1143,11 @@ def run_micropython_upstream_tests(results, filter_str=None):
             try:
                 with open(script_path, "rb") as sf:
                     script_bytes = sf.read()
-                cpy = subprocess.run(["python3", "-"], input=script_bytes,
+                # sys.executable, not a $PATH "python3" (#483): the CPython
+                # baseline must be computed by the same pinned interpreter
+                # that is running this suite, or the expected output is an
+                # ambient property of the launching shell.
+                cpy = subprocess.run([sys.executable, "-"], input=script_bytes,
                                      capture_output=True, timeout=10)
                 if cpy.returncode != 0:
                     # CPython rejected the script — usually means the test
@@ -1157,7 +1161,7 @@ def run_micropython_upstream_tests(results, filter_str=None):
                 continue
             except FileNotFoundError:
                 results.record(test_name, False,
-                               "python3 not found (needed to compute expected output)")
+                               f"{sys.executable} not found (needed to compute expected output)")
                 return
 
         # Run through our MicroPython.

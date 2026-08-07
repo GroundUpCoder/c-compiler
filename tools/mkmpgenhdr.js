@@ -28,9 +28,9 @@
 //                                         # are stale (the sync guard)
 //   node tools/mkmpgenhdr.js --dir vendor/micropython --project bin.json ...
 //
-// Requirements: `cc` (a C preprocessor; Apple clang / gcc both work) and
-// `python3` — the same two host tools tests/run.py already hard-requires for
-// the tcc/fuzz differential categories.
+// Requirements: `cc` (a C preprocessor; Apple clang / gcc both work) and the
+// pinned host python (tools/host-python.js, #483 — the repo .venv, or a
+// $PYTHON override; never a $PATH `python3`).
 //
 // NOTES ON FIDELITY TO UPSTREAM
 // - The preprocessor pass is the HOST cc, not our wasm compiler (compiler.js
@@ -155,8 +155,12 @@ function main() {
   // The preprocessor flags. `-I genhdr` still resolves because NO_QSTR makes
   // py/qstr.h skip the generated include — so this is not circular.
   const cppFlags = ['-E', '-DNO_QSTR', '-D__wasm__', '-I.', '-Igenhdr', '-Wno-everything'];
+  // The pinned host python (#483) — never a $PATH `python3`. Refusal exits
+  // loud with the resolver's own fix-naming message.
+  const pyRes = require('./host-python.js').resolvePython();
+  if (!pyRes.ok) { process.stderr.write(pyRes.message); process.exit(1); }
   const py = (script, args) =>
-    run('python3', [path.join('py', script), ...args], { cwd: dir });
+    run(pyRes.python, [path.join('py', script), ...args], { cwd: dir });
 
   // --- 2. one preprocessed blob over every source ----------------------
   py('makeqstrdefs.py', ['pp', opts.cc, 'output', path.join(tmp, 'qstr.i.last'),

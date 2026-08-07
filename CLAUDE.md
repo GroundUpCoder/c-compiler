@@ -175,6 +175,12 @@ resolution falls through to a drifted ancestor playwright (or none) and every
 member fails at launch. Create both:
 `ln -s ~/git/c-compiler/node_modules <wt>/node_modules` and
 `ln -s ~/git/c-compiler/tests/browser/node_modules <wt>/tests/browser/node_modules`.
+The py leg needs NO per-worktree step (#483): `tests/run.js` resolves the host
+python as `$PYTHON` → `<tree>/.venv` → the main clone's `.venv` (worktree
+read-through via the gitdir pointer) — never a `$PATH` `python3` — so one
+`uv venv` in `~/git/c-compiler` (pinned by the committed `.python-version`)
+serves every worktree; a missing/drifted venv refuses at exit 2 naming the fix
+(`tools/host-python.js`, host-tested in `test_python_resolve.js`).
 Since #559 this is PRE-FLIGHTED rather than discovered mid-gate: `tests/run.js`
 (whenever the sweep is in the selected set) and `os-sweep.mjs` (before the
 heavy lock and the bake) refuse at **exit 2** within a second, naming the exact
