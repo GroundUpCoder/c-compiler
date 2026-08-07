@@ -392,9 +392,12 @@ a statement about the whole tree. So:
   - `filter: null`, and `suites` = the full `all` set;
   - every `results[]` entry `status: "pass"` — **all of them, not just the two
     heavy ones**. A failing `unit`/`host`/Python suite is a red ship gate, and
-    `pass` is demanded literally: `sweep` is an `optional` suite, so a missing
-    Playwright degrades it to a **skip**, which is precisely the state a ship
-    must never be judged green in.
+    `pass` is demanded literally — any status that is not the literal string
+    `pass` fails the gate, whatever produced it. (A missing/drifted Playwright
+    cannot soften this: the #559 pre-flight refuses the whole run at exit 2
+    before any suite starts, and #477 removed the sweep's `optional`/skip
+    tier — which was unreachable anyway — so a launch failure on any suite is
+    a hard `fail`.)
   Only then read the per-suite artifacts, which say what the run-level record
   cannot — that each heavy suite covered its WHOLE membership:
   `build/test-kernel/summary.json` and `build/test-browser/summary.json` must
@@ -484,8 +487,9 @@ re-encode it as prose. `node tests/run.js --list` prints the table + the
 IGNORE set (docs/todos/logs → nothing). A changed CODE path that matches no
 rule is reported as **UNMAPPED** (warned, never silently skipped) — that's
 the signal to add a rule. run.py categories are BATCHED into one python
-process; the browser `sweep` is optional (a missing-Playwright launch
-failure degrades to a skip, not a hard fail).
+process; the browser `sweep` hard-requires Playwright — a missing or drifted
+install is refused at exit 2 by the #559 pre-flight whenever `sweep` is in
+the selected set (#477 removed the old, unreachable optional-skip tier).
 
 ### Test-sync discipline — root cause over quiet symptom (todos/0171)
 
