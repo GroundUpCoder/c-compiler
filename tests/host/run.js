@@ -36,6 +36,7 @@ var tests = [
   ['test_sleep_clamp.js', []],           // sleep primitives request EXACTLY the asked duration — no clock in the assertion (0361)
   ['test_bakeinput_sources.js', []],     // the 0082 closure covers out-of-dir sources/includes, not just `deps` (0354)
   ['test_diff_rules.js', []],            // compiler.js/host.js diff rules select the run.py corpus; exclusions pinned (0362)
+  ['test_browser_preflight.js', []],     // #559: the browser install pre-flight refuses at gate start — worktree missing tests/browser/node_modules names the exact ln -s fix; healthy/ambient-pinned trees untouched; version hatch never excuses absence
   ['test_launcher_convention.js', []],   // package /bin/sh launchers are spawn-free: no command substitution, both plant sites probed (0444)
   ['test_source_packages.js', []],       // #407: mechanical <name>-sources synthesis — both derivations, mechanical exclusions, uniform defs, payload-root srclib ('.') validate/fold/build
   ['test_stdinc_fold.js', []],           // #439: baked /usr/include — the fold plants EXACTLY the compiler's merged header map byte-equal (hazard 1), collisions + missing-ext fail loud (hazard 2), coexists with every shipped srclib package

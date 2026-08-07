@@ -25,6 +25,7 @@ import { ensurePrebakedImage } from '../lib/image-fixture.js';
 import { acquireHeavyLock } from '../lib/heavy-lock.js';
 import { preflight } from '../lib/harness-leaks.js';
 import { assertSameTree } from '../lib/tree-guard.js';
+import { checkBrowserPreflight } from './lib/playwright-pin.cjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -49,6 +50,18 @@ if (opts.jobs !== 1) { process.stderr.write('os-sweep is serial by design (0045 
 // refuse to start if another heavy runner (the kernel suite, or a second
 // sweep) already owns the host — their overlap is what crashed the machine on
 // 2026-07-25. Taken before the bake so two sweeps can't both bake either.
+// Browser install pre-flight (#559) — BEFORE the heavy lock and the bake: a
+// run we are about to refuse must not take the machine-wide lock or spend a
+// bake first (the tree-guard precedent above). tests/run.js runs the same
+// check at gate start; this covers the hand-run `node tests/browser/
+// os-sweep.mjs`, converting 56 identical per-member pin failures into ONE
+// refusal that names the missing worktree symlink and the fix. Exit 2 =
+// refused before anything ran (3 is the heavy lock's, 4 the tree guard's).
+if (!opts.list) {
+  const pinPre = checkBrowserPreflight();
+  if (!pinPre.ok) { process.stderr.write(pinPre.message); process.exit(2); }
+}
+
 if (!opts.list) acquireHeavyLock({ name: 'browser os sweep' });
 
 // Leak pre-flight — AFTER the lock, deliberately. Holding it proves no other

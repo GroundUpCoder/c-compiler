@@ -399,6 +399,11 @@ const RULES = [
   [/^tests\/run-unit\.js$/, ['unit'], null],
   [/^tests\/blockfs\//, ['blockfs'], null],
   [/^tests\/kernel\//, ['kernel'], null],
+  // playwright-pin.cjs is the ONE implementation behind two gates: the sweep's
+  // launch-time pin assert AND the dispatcher's gate-start pre-flight (#559),
+  // whose decision logic is host-tested — so an edit here owes both suites.
+  [/^tests\/browser\/lib\/playwright-pin\.cjs$/, ['sweep', 'host'],
+    'the browser install pre-flight — launch assert (sweep) + gate-start check (host-tested, #559)'],
   [/^tests\/browser\//, ['sweep'], null],
   [/^tests\/host\//, ['host'], null],
   [/^tests\/todos\//, ['todos'], null],
@@ -738,6 +743,18 @@ function main() {
     process.exit(0);
   }
 
+  // Browser-tier pre-flight (#559): when the sweep is in the selected set, a
+  // knowable install fault — a worktree missing its gitignored
+  // tests/browser/node_modules, so playwright resolves drifted or not at all —
+  // must refuse NOW, not when the sweep row finally runs after every other
+  // suite (lane-554 paid 33 minutes of green suites for a fault one file read
+  // would have named). Exit 2 = refused before any suite ran; no summary is
+  // written, and an absent build/test-run/summary.json already means "did not
+  // finish". Deliberately NOT exit 3 (heavy-lock contention) or 4 (cross-tree
+  // launch) — both codes carry trained meanings in this fleet.
+  const pre = browserPreflight(ordered);
+  if (!pre.ok) { process.stderr.write(pre.message); process.exit(2); }
+
   // Batch the run.py-backed suites into a single python invocation.
   const pyCats = ordered.filter(s => SUITES[s].pyTypes).map(s => SUITES[s].pyTypes);
 
@@ -773,6 +790,16 @@ function main() {
 
   const anyFail = results.some(r => r.status === 'fail');
   process.exit(anyFail ? 1 : 0);
+}
+
+// The decision half of the #559 pre-flight, split out so the host suite can
+// exercise it against fixture trees (tests/host/test_browser_preflight.js)
+// the way test_diff_rules.js exercises planFromDiff — main() above owns only
+// the print-and-exit. `browserDir` defaults to this tree's tests/browser.
+function browserPreflight(ordered, browserDir) {
+  if (!ordered.includes('sweep')) return { ok: true, skipped: true };
+  return require('./browser/lib/playwright-pin.cjs')
+    .checkBrowserPreflight(browserDir ? { browserDir } : {});
 }
 
 function classify(r, optional) {
@@ -898,5 +925,6 @@ if (require.main === module) {
   // Required as a module (tests/host/test_diff_rules.js): expose the rule
   // table + the planner so the RULES closure is testable without a git diff.
   module.exports = { SUITES, PY_CATEGORIES, RULES, IGNORE, FORCE, planFromDiff,
+                     browserPreflight,
                      OS_BROWSER_ONLY, OS_HEADLESS_ONLY, OS_RUNTIME_ONLY };
 }
