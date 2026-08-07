@@ -63,6 +63,12 @@ static void test_registry_defaults(void) {
     CHECK("overview = ctrl+alt+e both schemes",
         ks_action_default(KSA_OVERVIEW, KS_WINDOWS, d) == 1 && chord_is(d[0], KM_CTRL | KM_ALT, 'e') &&
         ks_action_default(KSA_OVERVIEW, KS_MACOS, d) == 1 && chord_is(d[0], KM_CTRL | KM_ALT, 'e'));
+    /* close (#395): windows Alt+F4, macos Ctrl+Alt+W — deliberately not ⌘W
+     * (host-eaten until the ⌘-passthrough spike; rebindable via bind.wm.close) */
+    CHECK("close windows = alt+f4",
+        ks_action_default(KSA_CLOSE, KS_WINDOWS, d) == 1 && chord_is(d[0], KM_ALT, KK_F1 + 3));
+    CHECK("close macos = ctrl+alt+w",
+        ks_action_default(KSA_CLOSE, KS_MACOS, d) == 1 && chord_is(d[0], KM_CTRL | KM_ALT, 'w'));
 
     /* app — defaults derived from the KS_TABLE rows by (scheme, KA_*, ctx) */
     CHECK("edit.copy windows = ctrl+c",
@@ -103,6 +109,10 @@ static void test_registry_shape(void) {
     /* index self-consistency (the enum id IS the array index) */
     CHECK("KSA_OVERVIEW is a system action w/ its token",
         KS_ACTIONS[KSA_OVERVIEW].kind == KAK_SYS && KS_ACTIONS[KSA_OVERVIEW].token == KTOK_OVERVIEW);
+    CHECK("KSA_CLOSE is a system action w/ its token (and the LAST system row: "
+          "the SS7.3 tie-break must give a collided chord to any other system action)",
+        KS_ACTIONS[KSA_CLOSE].kind == KAK_SYS && KS_ACTIONS[KSA_CLOSE].token == KTOK_CLOSE &&
+        KS_ACTIONS[KSA_CLOSE + 1].kind == KAK_APP);
     CHECK("KSA_COPY is an EDIT+LIST app action mapping KA_COPY",
         KS_ACTIONS[KSA_COPY].kind == KAK_APP &&
         KS_ACTIONS[KSA_COPY].ctx == (KCTX_EDIT | KCTX_LIST) &&   /* 0398 */
@@ -110,7 +120,7 @@ static void test_registry_shape(void) {
     CHECK("KSA_TERM_COPY is a TERM app action mapping KA_COPY",
         KS_ACTIONS[KSA_TERM_COPY].kind == KAK_APP && KS_ACTIONS[KSA_TERM_COPY].ctx == KCTX_TERM &&
         KS_ACTIONS[KSA_TERM_COPY].token == KA_COPY);
-    CHECK("first 8 registry entries are the system actions",
+    CHECK("the system block precedes the app block",
         KS_ACTIONS[KSA_SNAP_LEFT].kind == KAK_SYS && KS_ACTIONS[KSA_SYSMENU].kind == KAK_SYS &&
         KS_ACTIONS[KSA_SELECT_ALL].kind == KAK_APP);
 }
@@ -239,6 +249,11 @@ static int body_macos_overrides(void) {
         ks_action_binding(KSA_SNAP_RIGHT, c) == 1 && chord_is(c[0], KM_CTRL | KM_ALT, KK_RIGHT));
     LCHECK(lf, "macos: ks_action_binding(wm.cycle) = the dual default (2 chords)",
         ks_action_binding(KSA_CYCLE, c) == 2);
+    /* wm.close (#395) resolves through the same bind.<action> machinery as
+     * every other system action: the F9 override is the ONE effective chord
+     * (count 1 == the ctrl+alt+w default moved, not aliased). */
+    LCHECK(lf, "macos: ks_action_binding(wm.close) = the F9 override (moved)",
+        ks_action_binding(KSA_CLOSE, c) == 1 && chord_is(c[0], 0, KK_F1 + 8));
     return lf;
 }
 
@@ -300,6 +315,7 @@ int main(void) {
         "bind.edit.cut\tnone\n"
         "bind.edit.line-start\tf6\n"
         "bind.wm.overview\tctrl+alt+e\n"
+        "bind.wm.close\tf9\n"
         "bind.wm.snap-left\tnone\n", body_macos_overrides);
     printf("-- override: windows scheme-independence --\n");
     fails += run_forked("scheme\twindows\nbind.edit.copy\tf5\n", body_windows_override);
