@@ -119,6 +119,13 @@ class Results:
         self.failed = 0
         self.skipped = 0
         self.failures = []
+        # Per-category tallies (#582). section() is called exactly once per
+        # category with the category name, so sections are the buckets. Each
+        # skip records its NAME (and a reason where the call site knows one) —
+        # a bare count cannot be baselined: "one skip fixed + one new skip"
+        # nets to zero and hides the regression.
+        self.by_category = {}
+        self._current = None
         self._in_dots = False
         self._section_start = None
 
@@ -135,6 +142,8 @@ class Results:
             self._section_start = None
 
     def record(self, name, ok, msg=""):
+        if self._current is not None:
+            self._current["passed" if ok else "failed"] += 1
         if ok:
             self.passed += 1
             if self.verbosity >= 2:
@@ -153,14 +162,22 @@ class Results:
                 print("F", end="", flush=True)
                 self._in_dots = True
 
-    def skip(self, name=""):
+    def skip(self, name="", reason=None):
         self.skipped += 1
+        if self._current is not None:
+            self._current["skipped"] += 1
+            entry = {"name": name}
+            if reason:
+                entry["reason"] = reason
+            self._current["skips"].append(entry)
         if self.verbosity >= 2 and name:
             print(f"  SKIP  {name}")
 
     def section(self, title):
         self._end_section()
         self._section_start = time.time()
+        self._current = self.by_category.setdefault(
+            title, {"passed": 0, "failed": 0, "skipped": 0, "skips": []})
         if self.verbosity >= 1:
             print(f"--- {title} ---")
 
@@ -181,6 +198,32 @@ class Results:
         return self.failed == 0
 
 
+def write_py_summary(results, categories, filter_str):
+    """The py leg's machine-readable record (#582): per-category
+    passed/failed/skipped tallies plus every skip's NAME and reason, published
+    by atomic rename to build/test-py/summary.json. tests/run.js reads it right
+    after the batch exits (freshness-gated on mtime), attaches the tallies to
+    the run-level record, and enforces tests/py-skip-baseline.json against the
+    skip names — a skip that stops (or starts) happening must show up as a
+    baseline diff, never as a silently different tally line on stdout."""
+    out_dir = os.path.join(BUILD_DIR, "test-py")
+    os.makedirs(out_dir, exist_ok=True)
+    payload = {
+        "tool": "tests/run.py",
+        "types": categories,
+        "filter": filter_str,
+        "done": True,
+        "totals": {"passed": results.passed, "failed": results.failed,
+                   "skipped": results.skipped},
+        "categories": results.by_category,
+    }
+    tmp = os.path.join(out_dir, "summary.json.tmp")
+    with open(tmp, "w") as f:
+        json.dump(payload, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, os.path.join(out_dir, "summary.json"))
+
+
 # --- Test discovery ---
 
 def load_expected(test_dir, filename):
@@ -189,6 +232,15 @@ def load_expected(test_dir, filename):
         with open(path) as f:
             return f.read()
     return None
+
+
+def not_artifact_dir(name):
+    """True when a directory name is a real test dir, not tooling residue.
+    A build.py importing a sibling helper (tests/disw/wasm_builder.py) makes
+    Python drop a __pycache__ next to the test dirs; counting it as a
+    "skipped test" made the skip tally depend on whether the suite had run
+    before (#582 — found establishing the skip baseline)."""
+    return not (name.startswith("__") or name.startswith("."))
 
 
 def collect_tests(directory, filter_str=None):
@@ -397,7 +449,10 @@ def run_unit_or_extra(test_base, compiler_cmd, results, filter_str=None, label_p
     for test_dir in collect_tests(test_base, filter_str):
         result = run_single_test(test_dir, compiler_cmd)
         if result is None:
-            results.skip()
+            # Name the skip (#582): an anonymous tally line cannot be
+            # baselined or attributed.
+            results.skip(f"{label_prefix}{os.path.relpath(test_dir, SCRIPT_DIR)}",
+                         "no .c files in test dir")
             continue
         name, ok, msg = result
         if label_prefix:
@@ -458,7 +513,7 @@ def run_unit_node(results, filter_str=None):
             results.record(name, False, obj.get("msg", ""))
         elif status == "xfail":
             # Pinned known-bug (todos NNNN): expected failure, stays GREEN.
-            results.skip(name)
+            results.skip(name, "xfail (knownBug pin in config.json)")
         elif status == "xpass":
             # A pinned bug started passing — loud failure: drop the tag.
             results.record(name, False, obj.get("msg", ""))
@@ -466,7 +521,7 @@ def run_unit_node(results, filter_str=None):
             if obj.get("fallback"):
                 fallback_names.append(name)
             else:
-                results.skip(name)
+                results.skip(name, "run-unit.js skip")
 
     proc.wait()
     err_reader.join(timeout=2)
@@ -482,7 +537,7 @@ def run_unit_node(results, filter_str=None):
         test_dir = os.path.join(SCRIPT_DIR, name)
         result = run_single_test(test_dir, COMPILER_CMD)
         if result is None:
-            results.skip(name)
+            results.skip(name, "no .c files in test dir")
             continue
         result_name, ok, msg = result
         results.record(result_name, ok, msg)
@@ -504,6 +559,7 @@ def discover_projects():
     re-reads itself every run instead of becoming folklore.
     """
     projects = []
+    skipped = []
     for entry in sorted(os.listdir(VENDOR_DIR)):
         pj = os.path.join(VENDOR_DIR, entry, "bin.json")
         if not os.path.isfile(pj):
@@ -517,6 +573,7 @@ def discover_projects():
                     f"{pj}: compileCheck:false needs a compileCheckSkip reason "
                     f"naming the open ticket")
             print(f"  skip projects/{proj.get('name', entry)} — {reason}")
+            skipped.append((proj.get("name", entry), reason))
             continue
         projects.append((proj.get("name", entry), pj))
     # NetSurf gucOS frontend app: nested under vendor/netsurf/, so the
@@ -526,12 +583,21 @@ def discover_projects():
     gucos = os.path.join(VENDOR_DIR, "netsurf", "gucos", "bin.json")
     if os.path.isfile(gucos):
         projects.append(("netsurf-gucos", gucos))
-    return projects
+    return projects, skipped
 
 
 def run_projects(results, filter_str=None):
     """Compile-only test for each vendor project."""
-    for name, pj_path in discover_projects():
+    projects, skipped = discover_projects()
+    # compileCheck:false exclusions COUNT as skips (#582): they were print-only
+    # before, so the tally understated what the suite deliberately does not
+    # build — exactly the class the skip baseline exists to pin.
+    for name, reason in skipped:
+        test_name = f"projects/{name}"
+        if filter_str and filter_str not in test_name:
+            continue
+        results.skip(test_name, reason)
+    for name, pj_path in projects:
         test_name = f"projects/{name}"
         if filter_str and filter_str not in test_name:
             continue
@@ -714,7 +780,7 @@ def run_lua_tests(results, filter_str=None):
         if filter_str and filter_str not in test_name:
             continue
         if f in LUA_SKIP:
-            results.skip(test_name)
+            results.skip(test_name, "LUA_SKIP list (tests/run.py)")
             continue
 
         test_path = os.path.join(LUA_TEST_DIR, f)
@@ -1127,7 +1193,7 @@ def run_micropython_upstream_tests(results, filter_str=None):
         if filter_str and filter_str not in test_name:
             continue
         if any(skip in test_name for skip in MICROPYTHON_UPSTREAM_SKIP):
-            results.skip(test_name)
+            results.skip(test_name, "MICROPYTHON_UPSTREAM_SKIP list (tests/run.py)")
             continue
 
         script_path = os.path.join(MICROPYTHON_UPSTREAM_TEST_DIR, rel)
@@ -1155,7 +1221,7 @@ def run_micropython_upstream_tests(results, filter_str=None):
                     # CPython rejected the script — usually means the test
                     # uses MicroPython-specific syntax or relies on an
                     # exception in CPython. Skip rather than failing noisily.
-                    results.skip(test_name)
+                    results.skip(test_name, "CPython baseline rejected the script")
                     continue
                 expected = cpy.stdout.decode("utf-8", errors="replace")
             except subprocess.TimeoutExpired:
@@ -1180,7 +1246,7 @@ def run_micropython_upstream_tests(results, filter_str=None):
             # Upstream convention (run-tests.py): a test that prints exactly
             # "SKIP" is declaring a needed feature absent in this build.
             if actual == "SKIP\n":
-                results.skip(test_name)
+                results.skip(test_name, "test printed SKIP (feature absent in this build)")
                 continue
             if actual == expected:
                 results.record(test_name, True)
@@ -1210,7 +1276,7 @@ def run_sqlite_tests(results, filter_str=None):
 
     subdirs = sorted(
         d for d in os.listdir(SQLITE_TEST_DIR)
-        if os.path.isdir(os.path.join(SQLITE_TEST_DIR, d))
+        if os.path.isdir(os.path.join(SQLITE_TEST_DIR, d)) and not_artifact_dir(d)
     )
     for d in subdirs:
         test_name = f"sqlite/{d}"
@@ -1237,7 +1303,7 @@ def run_sqlite_tests(results, filter_str=None):
                 results.record(test_name, False, f"Bad config.json: {e}")
                 continue
         if cfg.get("skip"):
-            results.skip(test_name)
+            results.skip(test_name, cfg.get("skipReason") or "config.json skip")
             continue
 
         shell_args = cfg.get("shellArgs", ["-batch"])
@@ -1324,7 +1390,7 @@ def run_disw_tests(results, filter_str=None):
 
     test_dirs = sorted(
         d for d in os.listdir(DISW_TEST_DIR)
-        if os.path.isdir(os.path.join(DISW_TEST_DIR, d))
+        if os.path.isdir(os.path.join(DISW_TEST_DIR, d)) and not_artifact_dir(d)
     )
 
     for name in test_dirs:
@@ -1338,7 +1404,7 @@ def run_disw_tests(results, filter_str=None):
         config_file = os.path.join(test_path, "config.json")
 
         if not os.path.exists(build_py) or not os.path.exists(expected_file):
-            results.skip(test_name)
+            results.skip(test_name, "missing build.py or expected.stdout")
             continue
 
         r = subprocess.run(
@@ -1453,7 +1519,7 @@ def run_tcc_tests(results, filter_str=None):
 
     test_dirs = sorted(
         d for d in os.listdir(TCC_TEST_DIR)
-        if os.path.isdir(os.path.join(TCC_TEST_DIR, d))
+        if os.path.isdir(os.path.join(TCC_TEST_DIR, d)) and not_artifact_dir(d)
     )
     for name in test_dirs:
         test_name = f"tcc/{name}"
@@ -1462,7 +1528,7 @@ def run_tcc_tests(results, filter_str=None):
         test_path = os.path.join(TCC_TEST_DIR, name)
         input_c = os.path.join(test_path, "input.c")
         if not os.path.exists(input_c):
-            results.skip(test_name)
+            results.skip(test_name, "no input.c")
             continue
 
         flags = []
@@ -1570,7 +1636,7 @@ def run_libc_tests(results, filter_str=None):
         if filter_str and filter_str not in test_name:
             continue
         if name in LIBC_TEST_SKIP:
-            results.skip(test_name)
+            results.skip(test_name, "LIBC_TEST_SKIP list (tests/run.py)")
             continue
         wasm = os.path.join(TEST_TMPDIR, f"libc_{name}.wasm")
         r = subprocess.run(
@@ -1720,14 +1786,15 @@ def run_fuzz_tests(results, filter_str=None):
             r = subprocess.run(["clang", "-w", f"-I{runtime_dir}", src, "-o", nat],
                                capture_output=True, text=True, timeout=120)
             if r.returncode != 0:
-                results.skip(test_name)
+                results.skip(test_name, "clang could not compile the generated program")
                 continue
             n = subprocess.run([nat], capture_output=True, text=True, timeout=10)
             if n.returncode != 0:
-                results.skip(test_name)  # native itself slow/odd: not our problem
+                # native itself slow/odd: not our problem
+                results.skip(test_name, "native run exited nonzero")
                 continue
         except subprocess.TimeoutExpired:
-            results.skip(test_name)
+            results.skip(test_name, "csmith/native leg timed out")
             continue
         got, err = compile_and_run(src, f"live_{seed}")
         if err:
@@ -1748,7 +1815,7 @@ def run_fuzz_tests(results, filter_str=None):
 def run_sourcemap_tests(results, filter_str=None):
     test_dirs = sorted(
         d for d in os.listdir(SOURCEMAP_DIR)
-        if os.path.isdir(os.path.join(SOURCEMAP_DIR, d))
+        if os.path.isdir(os.path.join(SOURCEMAP_DIR, d)) and not_artifact_dir(d)
     )
 
     for name in test_dirs:
@@ -1762,7 +1829,7 @@ def run_sourcemap_tests(results, filter_str=None):
             os.path.join(test_path, f) for f in os.listdir(test_path) if f.endswith(".c")
         )
         if not c_files or not os.path.exists(verify_js):
-            results.skip(test_name)
+            results.skip(test_name, "missing .c files or verify.js")
             continue
 
         with tempfile.NamedTemporaryFile(suffix=".wasm", delete=False) as tmp:
@@ -2259,6 +2326,13 @@ def main():
             run_fakegit_tests(results, filter_str=args.filter)
 
     results.print_summary()
+    # Written on failure too — the record of a red run is still a record
+    # (best-effort: a summary-write fault must not turn a green run red).
+    try:
+        write_py_summary(results, categories, args.filter)
+    except OSError as e:
+        print(f"warning: could not write build/test-py/summary.json: {e}",
+              file=sys.stderr)
     sys.exit(0 if results.success else 1)
 
 
