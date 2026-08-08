@@ -66,7 +66,7 @@ function makeSibling(tamper, extraApp) {
 
 function runMkpkg(clangRoot, outDir, extraArgs) {
   return cp.spawnSync(process.execPath,
-    [MKPKG, 'doom-clang', '--clang', `--clang-root=${clangRoot}`, `--out=${outDir}`, '--quiet']
+    [MKPKG, '--no-baseline', 'doom-clang', '--clang', `--clang-root=${clangRoot}`, `--out=${outDir}`, '--quiet']
       .concat(extraArgs || []),
     { cwd: ROOT, encoding: 'utf-8', timeout: 60000 });
 }

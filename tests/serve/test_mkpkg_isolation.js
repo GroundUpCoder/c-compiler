@@ -69,7 +69,7 @@ const DEFS_BOTH = defsDir('both', ['iso-alpha', 'iso-common']);
 const DEFS_ONE = defsDir('one', ['iso-common']);
 
 function mkpkg(args, opts) {
-  return cp.spawnSync(process.execPath, [MKPKG, '--quiet', ...args],
+  return cp.spawnSync(process.execPath, [MKPKG, '--no-baseline', '--quiet', ...args],
     Object.assign({ encoding: 'utf-8', timeout: 120000 }, opts || {}));
 }
 function readIndex(dir) {

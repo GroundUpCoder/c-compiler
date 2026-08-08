@@ -183,7 +183,7 @@ try {
 const out = fs.mkdtempSync(path.join(os.tmpdir(), 'srcpkg-'));
 try {
   const r = cp.spawnSync(process.execPath,
-    [path.join(ROOT, 'tools', 'mkpkg.js'), '--quiet', `--out=${out}`, 'cc-sources'],
+    [path.join(ROOT, 'tools', 'mkpkg.js'), '--no-baseline', '--quiet', `--out=${out}`, 'cc-sources'],
     { encoding: 'utf-8', timeout: 120000 });
   check('mkpkg builds cc-sources', r.status === 0, String(r.stderr));
   const idx = JSON.parse(fs.readFileSync(path.join(out, 'index.json'), 'utf-8'));
