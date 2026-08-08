@@ -790,6 +790,7 @@ async function buildPackage(name, poolDir, sharedPool, synth) {
   const entryFor = (file, sha, size) => ({
     version: pkg.version,
     summary: pkg.summary || '',
+    ...(synth ? { sourceKind: synth.kind } : {}),
     // Undeclared minBase = the CURRENT image version, and for a payload this
     // tool COMPILES that is correct by construction, not a lazy default: the
     // binary is built by today's pipeline against today's host env surface,
@@ -1031,11 +1032,13 @@ async function main() {
   // with no served history.
   if (baseline.index) {
     for (const unit of sourceUnits.values()) {
-      if (unit.kind === 'package' && baseline.index.packages[unit.name] &&
-          !unit.sourcesVersionDeclared) {
+      const published = baseline.index.packages[unit.name];
+      const bakedHistory = published && (published.sourceKind === 'image' ||
+        /\(base image v[^)]+\)/.test(published.summary || ''));
+      if (unit.kind === 'package' && bakedHistory && !unit.sourcesVersionDeclared) {
         process.stderr.write(
           `mkpkg: ${unit.name} already exists in the required baseline at version ` +
-          `${baseline.index.packages[unit.name].version}, but packages/${unit.parent}.json ` +
+          `${published.version}, but packages/${unit.parent}.json ` +
           `does not declare sourcesVersion\n` +
           `  an unbake must continue the published companion lineage explicitly\n`);
         process.exit(1);

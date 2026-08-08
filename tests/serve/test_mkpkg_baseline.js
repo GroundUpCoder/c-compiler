@@ -63,7 +63,9 @@ fs.writeFileSync(path.join(srcDefs, 'future.json'), JSON.stringify({
   name: 'future', version: '0.1', summary: 'unbake fixture',
   files: { future: { c: 'hello.c' } }, bin: { future: 'future' },
 }));
-writeIndex(base, { 'future-sources': { version: '244' } });
+writeIndex(base, { 'future-sources': {
+  version: '244', summary: 'Source code for /usr/bin/future (base image v244)',
+} });
 r = run([`--out=${path.join(tmp, 'unbake')}`, `--packages-dir=${srcDefs}`,
   '--baseline', base, 'future-sources']);
 check('published companion history without sourcesVersion refuses loudly', r.status === 1, r.stderr);
