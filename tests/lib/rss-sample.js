@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 // Per-test-file peak-RSS sampler (#576 A4) — the instrument behind the
-// kernel suite's HEAVY_GB/LIGHT_GB weights (tests/kernel/run.js). The
+// kernel suite's per-class RAM weights (tests/kernel/run.js). The
 // weighted pool is only as safe as its weights are honest, and the old
 // uniform 4 GB/job figure predates the prebaked fixture (todos/0082), so
 // re-measure here whenever the boot path's memory profile might have moved:
@@ -37,6 +37,15 @@ const cmd = argv.slice(sep + 1);
 const TEST_RE = /tests\/[a-z0-9_-]+\/(test_[A-Za-z0-9_.-]+\.js)/;
 const peaks = new Map();   // "file#rootPid" -> { file, rootPid, peakKb, samples }
 let peakTotalKb = 0;       // summed RSS across ALL tracked trees at one instant
+// ACHIEVED concurrency (#579): how many member files were really running at
+// once, sampled on the same tick as the RSS. The declared `jobs` is only a
+// cap — under a RAM-weighted pool the binding constraint is the weight
+// budget, so the only honest way to know the pool's real width is to count
+// live trees. `trees` is the per-sample count; the mean is time-weighted by
+// construction (a fixed sampling interval) and EXCLUDES the empty head/tail
+// samples, which measure the runner's own startup, not the pool's width.
+const conc = [];           // one entry per sample: { tMs, trees, totalKb }
+const t0 = Date.now();
 
 function sample() {
   let out;
@@ -54,7 +63,7 @@ function sample() {
     if (!kids.has(ppid)) kids.set(ppid, []);
     kids.get(ppid).push(pid);
   }
-  let totalKb = 0;
+  let totalKb = 0, trees = 0;
   for (const [pid, p] of procs) {
     const tm = p.cmd.match(TEST_RE);
     if (!tm) continue;
@@ -70,6 +79,7 @@ function sample() {
       for (const c of kids.get(q) || []) stack.push(c);
     }
     totalKb += sumKb;
+    trees++;
     const key = tm[1] + '#' + pid;
     const rec = peaks.get(key) || { file: tm[1], rootPid: pid, peakKb: 0, samples: 0 };
     rec.peakKb = Math.max(rec.peakKb, sumKb);
@@ -77,6 +87,23 @@ function sample() {
     peaks.set(key, rec);
   }
   peakTotalKb = Math.max(peakTotalKb, totalKb);
+  conc.push({ tMs: Date.now() - t0, trees, totalKb });
+}
+
+// Concurrency stats over the BUSY samples only (trees > 0). The head and tail
+// zeros are the runner booting and tearing down; averaging them in would
+// report a pool narrower than it ever was.
+function concurrencyStats() {
+  const busy = conc.filter(s => s.trees > 0);
+  const hist = {};
+  for (const s of busy) hist[s.trees] = (hist[s.trees] || 0) + 1;
+  return {
+    samples: conc.length,
+    busySamples: busy.length,
+    maxTrees: busy.reduce((m, s) => Math.max(m, s.trees), 0),
+    meanTrees: busy.length ? +(busy.reduce((a, s) => a + s.trees, 0) / busy.length).toFixed(2) : 0,
+    histogram: hist,   // trees -> sample count (× intervalMs = time at that width)
+  };
 }
 
 const child = spawn(cmd[0], cmd.slice(1), { stdio: 'inherit' });
@@ -92,10 +119,19 @@ child.on('exit', (code, signal) => {
     process.stderr.write(`  ${gb(r.peakKb).padStart(6)} GB  ${r.file}  (pid ${r.rootPid}, ${r.samples} samples)\n`);
   }
   process.stderr.write(`  ${gb(peakTotalKb).padStart(6)} GB  <all tracked trees at one instant>\n`);
+  const cs = concurrencyStats();
+  process.stderr.write(`[rss-sample] achieved concurrency: mean ${cs.meanTrees}, max ${cs.maxTrees} ` +
+    `member files running at once (${cs.busySamples}/${cs.samples} busy samples)\n`);
+  process.stderr.write('  width  time\n');
+  for (const w of Object.keys(cs.histogram).map(Number).sort((a, b) => a - b)) {
+    process.stderr.write(`  ${String(w).padStart(5)}  ${(cs.histogram[w] * intervalMs / 1000).toFixed(0)}s\n`);
+  }
   if (outPath) {
     fs.writeFileSync(outPath, JSON.stringify({
-      intervalMs, peakTotalKb,
+      intervalMs, peakTotalKb, wallMs: Date.now() - t0,
+      concurrency: cs,
       trees: rows.map(r => ({ file: r.file, rootPid: r.rootPid, peakKb: r.peakKb, samples: r.samples })),
+      series: conc,
     }, null, 2) + '\n');
     process.stderr.write(`[rss-sample] wrote ${outPath}\n`);
   }
