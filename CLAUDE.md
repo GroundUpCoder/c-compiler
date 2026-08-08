@@ -165,6 +165,18 @@ invocable; this just knows how to invoke them uniformly and, the point,
 - `node tests/run.js --diff [ref]` — map the touched paths → suites and
   run exactly those (default: the working set vs HEAD; pass a ref to diff
   against it). `--dry-run` prints the plan and runs nothing.
+- `node tests/run.js smoke | diff [ref] | full` — the formal TIERS (#576 F1,
+  `logs/2026-08-08/576-batch15.md`): `smoke` is the fast confidence check
+  (measured 2.5 min warm; a fresh worktree pays the one-time image bake on
+  top) — cheap suites + blockfs + disw + a filtered kernel leg that really
+  boots the OS from the fixture; `diff` is `--diff` under its tier name;
+  `full` is the whole registry unfiltered — the SHIP gate — and REFUSES
+  `--filter`/`--resume` (`all` stays the permissive legacy form). A tier run
+  records `tier` + `omitted` + `tierFilters` in `build/test-run/summary.json`
+  and prints what it deliberately did NOT run at the banner and the verdict —
+  a green smoke is never mistakable for a full gate. The tier definitions are
+  pinned by `tests/host/test_diff_rules.js` (registry set-equality, dead
+  smoke-filter tokens go guard-RED, `test_os_boot.js` pinned OUT of smoke).
 - Passthrough: `--filter=STR` (all suites), `-j N`/`--resume`/`--fail-fast`
   (the suite-runner-backed suites), plus `--repeat N`/`--under-load[=N]`
   (kernel/blockfs/sweep — the flake gate, below).
