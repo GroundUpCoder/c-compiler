@@ -236,9 +236,11 @@ weights**, which is the comparison that matters, it *increases* it:
 Using the class maxima, surrounding tree RSS goes from ~`3.866 + 1.628 + 0.171 =
 5.665 GiB` to ~`3.866 + 2×1.628 + 0.171 = 7.293 GiB`, and live ~150 MiB fixtures
 around os_boot go 3 → 4. **So the timeout is not exonerated.** Disk exhaustion
-is still the most likely proximate cause, but it is **not independent of this
-change**: more concurrent rows is more concurrent fixture space on a volume that
-had none to give.
+remains a *candidate* proximate cause — calling it the most likely one would be
+a ranking I have not earned, since nothing here measures the two against each
+other. What is certain is that it would **not be independent of this change**:
+more concurrent rows is more concurrent fixture space on a volume that had none
+to give.
 
 What is established: os_boot's duration across runs was 723 / 748 / 716 / 697 /
 **797** s, the outlier being the last one chronologically; and **free disk on the
@@ -290,12 +292,29 @@ The key is on the **19 `ensureMinimalImage` rows only**, not on
 `test_punes_e2e.js`: punes is XL for its memory alone, so it stays free to
 overlap a gucman row on a host with the RAM for both.
 
-Pinned by `tests/host/test_pool_exclusive.js` (4 legs), whose third is a **RED
-CONTROL**: same three 7 GB rows with no key and a 14.4 GB budget — exactly a
-24 GiB host — asserting that **2 are admitted**. That test fails if anyone ever
-folds the exclusion back into the constant. It also pins that distinct/absent
-keys still run concurrently, and that a lone row heavier than the entire budget
-still runs rather than deadlocking.
+Pinned by `tests/host/test_pool_exclusive.js` (6 legs).
+
+⚠️ **I first described the weight-only leg as "the RED CONTROL". It is not, and
+that mislabel is worth more than the line it occupied.** That leg supplies no
+exclusion keys, so it reads `peak 2` under the old scheduler *and* the new one —
+it cannot fail on this bug, and calling it the safety net invites someone to
+delete the leg that actually is one. **Established by mutation, not by reading:**
+with `exclusiveFree()` forced to `true`,
+
+| leg | intact | mutated | is it a control? |
+|---|---|---|---|
+| 1 — same-key rows, unbounded budget | 1 | **3** | 🔴 yes |
+| 2a — no keys, 24 GiB budget | 2 | 2 | no — demonstration only |
+| 2b — same rows + keys, 24 GiB budget | 1 | **2** | 🔴 yes |
+| 3 — distinct/absent keys still parallel | >1 | >1 | no |
+| 4 — lone over-budget row still runs | ok | ok | no |
+| 5 — empty-string key still excludes | 1 | **2** | 🔴 yes |
+
+Leg 2a keeps its place for what it really does: it pins the *arithmetic* of the
+defect (7 + 7 fits a 24 GiB host's 14.4 GiB budget) immediately beside 2b, which
+runs identical rows at an identical budget **with** keys and gets 1. Same host,
+same weights, keys or not — 2 versus 1. That pair is the whole argument in two
+numbers, and legs 1/2b/5 are what go red if the primitive is removed.
 
 ## 2. The timeout is NOT exonerated — see the retraction above
 

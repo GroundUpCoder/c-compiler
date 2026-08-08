@@ -643,8 +643,11 @@ async function runSuite(entries, opts) {
   // exactly where there is most room to run both. Entries that must not overlap
   // for a reason that is not memory — a shared on-disk build dir, one external
   // service, a global lock — declare it, and it holds on every host.
+  // Absence is tested explicitly (`== null`), not through truthiness: the key
+  // is caller-supplied and arbitrary, so '' and 0 are legitimate keys and must
+  // exclude like any other rather than silently meaning "unkeyed".
   const exclusiveFree = (e) => {
-    if (!e.exclusive) return true;
+    if (e.exclusive == null) return true;
     for (const r of running.values()) if (r.exclusive === e.exclusive) return false;
     return true;
   };
