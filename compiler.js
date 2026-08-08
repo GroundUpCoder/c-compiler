@@ -4043,6 +4043,12 @@ class Expr {
       this.staticLocals = []; this.externLocals = []; this.externLocalFuncs = [];
       this.definition = null;
       this.importModule = null; this.importName = null;
+      // The prototyped function type another spelling in this function's
+      // re-declaration chain carried, when THIS node's own type is
+      // unprototyped — stamped by Parser._noteChainPrototype. Read only by
+      // the call-site arity diagnostic (#127); never by type checking or
+      // codegen.
+      this.chainProtoType = null;
       Object.seal(this);
     }
   }
@@ -10568,6 +10574,32 @@ class Parser {
     if (def) def.inlineHint = true;
   }
 
+  // A prototype is a property of the FUNCTION's re-declaration chain the
+  // way `inline` above is (C11 6.2.7p4 composes it into the composite
+  // type), but the node calls bind through may not be the spelling that
+  // carried it: the 6.2.2p4 re-declaration `continue`s keep the first
+  // static/import decl in scope, and a prototype-style definition types
+  // the call while an earlier `int f();` keeps the binding. Stamp both
+  // nodes, since either may be the one that keeps the scope binding.
+  // chainProtoType is consulted ONLY by the call-site arity diagnostic,
+  // so an over-arity call is not blamed on an "unprototyped function"
+  // whose chain does carry a prototype (#127) — never by type checking
+  // or codegen. Callers must skip K&R spellings (an identifier-list
+  // definition's type lists its parameters but is NOT a prototype), and
+  // like _noteInlineHint must invoke this ABOVE the re-declaration
+  // `continue`s.
+  _noteChainPrototype(funcDecl, prev) {
+    if (!(prev instanceof AST.DFunc) || !prev.type.isFunction()) return;
+    const prevUq = prev.type.removeQualifiers();
+    const newUq = funcDecl.type.removeQualifiers();
+    const proto =
+      (!prevUq.hasUnspecifiedParams ? prevUq : prev.chainProtoType) ||
+      (!newUq.hasUnspecifiedParams ? newUq : funcDecl.chainProtoType);
+    if (!proto) return;
+    if (newUq.hasUnspecifiedParams && !funcDecl.chainProtoType) funcDecl.chainProtoType = proto;
+    if (prevUq.hasUnspecifiedParams && !prev.chainProtoType) prev.chainProtoType = proto;
+  }
+
   // --- parseDeclSpecifiers ---
   parseDeclSpecifiers() {
     let type = null;
@@ -13133,6 +13165,9 @@ class Parser {
         // and back-propagate onto a definition already parsed; a definition
         // parsed LATER picks it up from fnInlineHints.
         this._noteInlineHint(name, funcDecl, prevFn);
+        // …and the chain's prototype for the arity diagnostic (#127) —
+        // same before-the-drop rule.
+        if (!decl._isKnR) this._noteChainPrototype(funcDecl, prevFn);
         if (prevFn instanceof AST.DFunc &&
             prevFn.storageClass === Types.StorageClass.STATIC &&
             specs.storageClass !== Types.StorageClass.STATIC &&
@@ -13417,6 +13452,10 @@ class Parser {
         // Update previous declaration's definition pointer
         const prev = this.varScope.get(name);
         this._noteInlineHint(name, funcDecl, prev);
+        // A prototype-style definition supplies the chain's prototype for
+        // the arity diagnostic; a K&R identifier-list definition does not
+        // (its type lists parameters but is not a prototype) — #127.
+        if (!decl._isKnR) this._noteChainPrototype(funcDecl, prev);
         if (prev && prev instanceof AST.DFunc) {
           if (!prev.type.isCompatibleWith(funcDecl.type)) {
             this.error(this.peek(), `conflicting types for '${name}' (previously declared as '${prev.type.toString()}', now defined as '${funcDecl.type.toString()}')`);
@@ -13539,6 +13578,10 @@ class Parser {
         // outside the prevFunc guard so a FIRST declaration records its
         // hint for a definition parsed later.
         this._noteInlineHint(name, funcDecl, prevFunc);
+        // So does the chain's prototype (#127) — a prototyped
+        // re-declaration dropped by the `continue`s below is otherwise
+        // invisible to the call-site arity diagnostic.
+        if (!decl._isKnR) this._noteChainPrototype(funcDecl, prevFunc);
         if (prevFunc && prevFunc instanceof AST.DFunc) {
           // Redeclarations accumulate attributes (gcc semantics); a decl
           // AFTER the definition also back-propagates onto it.
@@ -20132,13 +20175,30 @@ class CodeGenerator {
             // types per-arg below (todos/0159).
             const viaUnprototyped = !!funcDecl.type.removeQualifiers().hasUnspecifiedParams;
             if (viaUnprototyped && expr.arguments.length !== callParamTypes.length) {
-              const what = funcDef.body
-                ? `the definition takes ${callParamTypes.length}`
-                : `no visible definition types the call`;
+              // "Unprototyped" is only honest when NO spelling in the
+              // function's re-declaration chain carried a prototype — a
+              // dropped 6.2.2p4 re-declaration or a prototype-style
+              // definition may have, without becoming the node this call
+              // bound (#127). When one did, use sema's ordinary arity
+              // wording, sized by the definition's parameter list — the
+              // list this check enforces. With no definition the enforced
+              // arity really is the bound decl's own (unprototyped)
+              // signature, so that case keeps the wording below.
+              let message;
+              if (funcDef.body && funcDecl.chainProtoType) {
+                message = `${expr.arguments.length < callParamTypes.length ? 'too few' : 'too many'} ` +
+                          `arguments to function call (expected ${callParamTypes.length}, ` +
+                          `got ${expr.arguments.length})`;
+              } else {
+                const what = funcDef.body
+                  ? `the definition takes ${callParamTypes.length}`
+                  : `no visible definition types the call`;
+                message = `call to unprototyped function '${funcDef.name}' with ` +
+                          `${expr.arguments.length} argument(s), but ${what} ` +
+                          `(in function '${this.currentFuncDef?.name || '?'}')`;
+              }
               this.gotoErrors.push({
-                message: `call to unprototyped function '${funcDef.name}' with ` +
-                         `${expr.arguments.length} argument(s), but ${what} ` +
-                         `(in function '${this.currentFuncDef?.name || '?'}')`,
+                message,
                 filename: expr.loc?.filename || '?',
                 line: expr.loc?.line || 0,
               });
