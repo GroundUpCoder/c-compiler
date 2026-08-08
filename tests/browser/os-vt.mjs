@@ -50,7 +50,7 @@ try {
     }
   });
   await page.goto(URL);
-  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 240000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 240000, polling: 'raf' });
   check('boots to ready', true);
   // Replay the trace: 'booting' must have been OBSERVED (the init script
   // precedes os.html's scripts, so a trace without it means the probe
@@ -67,7 +67,7 @@ try {
       sawBooting && vt1Throughout, trace);
   }
   // Don't race hush's banner: typed input before the first prompt is eaten.
-  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
   const vtState = () => page.evaluate(() => ({
     vt: window.__osVt,
@@ -209,7 +209,7 @@ try {
   // path; xterm focus is on the hidden VT1 so typing can't reach it.
   await page.keyboard.press('Control+Alt+F2');
   await page.evaluate(() => kernel.postMessage({ type: 'input', data: 'exit 3\r' }));
-  await page.waitForFunction(() => window.__osState === 'halted:3', { timeout: 30000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'halted:3', { timeout: 30000, polling: 'raf' });
   s = await vtState();
   check('halt forces VT1 (escape hatch surfaces the notice)', s.vt === 1 && s.termVisible, s);
 

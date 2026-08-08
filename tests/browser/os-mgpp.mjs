@@ -37,9 +37,9 @@ try {
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
   await page.goto(URL);
-  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 'raf' });
   check('boots to ready', true);
-  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
   const { setVt, sample, waitPixel, waitScreen } = osHelpers(page);
   const TEAL = [0, 128, 128];
@@ -52,7 +52,7 @@ try {
     await page.keyboard.type(`wmctl wait win ${title} >/dev/null; wmctl list | grep "${title}"\r`);
     await page.waitForFunction(
       (t) => new RegExp('\\d+x\\d+\\+\\d+\\+\\d+[^\\n]*' + t).test(window.__osOut),
-      title, { timeout: 30000, polling: 200 });
+      title, { timeout: 30000, polling: 'raf' });
     const out = await page.evaluate(() => window.__osOut);
     const matches = [...out.matchAll(/(\d+)x(\d+)\+(\d+)\+(\d+)/g)];
     const m = matches[matches.length - 1];
@@ -156,7 +156,7 @@ try {
   // MGPP-SHELL-OK` needle is satisfied by its own echo — this leg passed
   // with hush DEAD, which is the one thing it exists to rule out.
   await page.keyboard.type("echo MGPP-SHELL-O''K\r");
-  await page.waitForFunction(() => window.__osOut.includes('MGPP-SHELL-OK'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('MGPP-SHELL-OK'), { timeout: 20000, polling: 'raf' });
   check('shell alive after mgpp exit', true);
 
   console.log('  look-confirm PNGs:\n    ' + shot2 + '\n    ' + shotBack);

@@ -33,9 +33,9 @@ try {
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
   await page.goto(URL);
-  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 'raf' });
   check('boots to ready', true);
-  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
   const { setVt, sample, near, waitPixel, waitOut, waitScreen } = osHelpers(page);
   await setVt(2);
@@ -107,7 +107,7 @@ try {
     await page.keyboard.type(`${cmd} && echo ${mark[0]}""${mark.slice(1)}\r`, { delay: 40 });
     try {
       await page.waitForFunction(m => window.__osOut.includes(m), mark,
-        { timeout: ms || 30000, polling: 200 });
+        { timeout: ms || 30000, polling: 'raf' });
     } catch { throw new Error(`shLine: ${mark} never echoed (after: ${cmd})`); }
   };
   // Window geometry DERIVED from its live `wmctl list` row (os-undo model).
@@ -115,7 +115,7 @@ try {
     await page.keyboard.type(
       `wmctl list | grep "${grepNeedle}"; echo ${tag[0]}""${tag.slice(1)}\r`, { delay: 40 });
     await page.waitForFunction(m => window.__osOut.includes(m), tag,
-      { timeout: 20000, polling: 200 });
+      { timeout: 20000, polling: 'raf' });
     const out = await page.evaluate(() => window.__osOut);
     const line = out.split('\n').filter(l => lineRe.test(l)).pop() || '';
     const m = /(\d+)x(\d+)\+(-?\d+)\+(-?\d+)/.exec(line);

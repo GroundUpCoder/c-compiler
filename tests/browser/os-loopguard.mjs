@@ -127,7 +127,7 @@ try {
   // NB the wait needles anchor on DIGITS — the bare 'RC1=' substring is
   // satisfied by the tty ECHO of the typed command itself (the 0089 trap).
   await page.keyboard.type('/root/delayloop; echo RC1=$?\r');
-  await page.waitForFunction(() => /RC1=\d+/.test(window.__osOut || ''), { timeout: 60000, polling: 200 });
+  await page.waitForFunction(() => /RC1=\d+/.test(window.__osOut || ''), { timeout: 60000, polling: 'raf' });
   let out = await osOut();
   check('delay-loop shape refused with exit 69', /RC1=69/.test(out),
     out.slice(-300));
@@ -149,7 +149,7 @@ try {
   // ---- Shape 2: the poll-only spin loop → same refusal, same status.
   // (The trigger is main()-on-stack, not a park: this shape never parks.)
   await page.keyboard.type('/root/spinloop; echo RC2=$?\r');
-  await page.waitForFunction(() => /RC2=\d+/.test(window.__osOut || ''), { timeout: 60000, polling: 200 });
+  await page.waitForFunction(() => /RC2=\d+/.test(window.__osOut || ''), { timeout: 60000, polling: 'raf' });
   out = await osOut();
   check('poll-only spin shape refused with exit 69', /RC2=69/.test(out),
     out.slice(-300));
@@ -173,7 +173,7 @@ try {
   // presents inside SDL_AppInit must run clean (the allowance) and keep
   // presenting from SDL_AppIterate — never refused, exits 0 on its own.
   await page.keyboard.type('/root/splashcb; echo RC3=$?\r');
-  await page.waitForFunction(() => /RC3=\d+/.test(window.__osOut || ''), { timeout: 60000, polling: 200 });
+  await page.waitForFunction(() => /RC3=\d+/.test(window.__osOut || ''), { timeout: 60000, polling: 'raf' });
   out = await osOut();
   check('callbacks app presenting in SDL_AppInit runs clean (exit 0, never refused)',
     /RC3=0/.test(out), out.slice(-300));

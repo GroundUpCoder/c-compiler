@@ -39,7 +39,7 @@ try {
   await page.waitForFunction(() => window.__osState === 'ready', { timeout: 240000, polling: 250 });
   check('mobile-viewport boot reaches ready', true);
 
-  const { setVt, sample, near, waitPixel } = osHelpers(page);
+  const { setVt, sample, near, waitPixel } = osHelpers(page, { polling: 250 });
   const FACE = [192, 192, 192];
   await setVt(2);
 

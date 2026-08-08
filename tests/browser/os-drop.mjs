@@ -67,7 +67,7 @@ try {
   // osHelpers closes over the page it was handed, and the reload below
   // reassigns `page` (a stale capture here would call evaluate() on the
   // closed original: "Target page has been closed").
-  let { setVt, sample, near, waitPixel, waitScreen } = osHelpers(page);
+  let { setVt, sample, near, waitPixel, waitScreen } = osHelpers(page, { polling: 250 });
   const shellExpect = async (cmd, pred, name, ms) => {
     await setVt(1);
     await page.evaluate(() => { window.__osOut = ''; });
@@ -161,7 +161,7 @@ try {
   // ---- persistence: the files survive a page reload (OPFS flush) ----
   await page.close();                    // frees the 0045 boot lock
   page = await context.newPage();        // same context = same OPFS
-  ({ setVt, sample, near, waitPixel, waitScreen } = osHelpers(page));  // rebind to the new page
+  ({ setVt, sample, near, waitPixel, waitScreen } = osHelpers(page, { polling: 250 }));  // rebind to the new page
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
   await page.goto(URL);
   await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });

@@ -34,10 +34,10 @@ try {
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
   await page.goto(URL);
-  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 'raf' });
   check('boots to ready', true);
   // Don't race hush's banner: typed input before the first prompt is eaten.
-  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
   const sample = (x, y) => page.evaluate(([sx, sy]) => {
     const c = document.getElementById('screen');
@@ -68,7 +68,7 @@ try {
     const r = document.getElementById('screen').getBoundingClientRect();
     const s = window.__osScreen;
     return s && Math.abs(r.width - s.w) < 2 && Math.abs(r.height - s.h) < 2;
-  }, { timeout: 30000, polling: 200 });
+  }, { timeout: 30000, polling: 'raf' });
   // 0258: the top MENU_BAR_H(30)px of the window are the "menubar" anchored
   // child strip — client probes sit BELOW it (the clear-color corner moved
   // from +4 to BAR+4).
@@ -147,7 +147,7 @@ try {
   // (a posted WM_COMMAND lands on the next pump tick — never race it).
   await setVt(1);
   await page.keyboard.type('wmctl click Spin\r');
-  await page.waitForFunction(() => window.__osOut.includes('gpubox: spin off'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('gpubox: spin off'), { timeout: 20000, polling: 'raf' });
   await setVt(2);
   const s0 = await probe();
   let frozen = true;
@@ -160,7 +160,7 @@ try {
   // spin back on: the demo keeps animating for the resize/close legs below
   await setVt(1);
   await page.keyboard.type('wmctl click Spin\r');
-  await page.waitForFunction(() => window.__osOut.includes('gpubox: spin on'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('gpubox: spin on'), { timeout: 20000, polling: 'raf' });
   await setVt(2);
 
   // Client resize through the gpu transport (todos/0019): configure event ->
@@ -198,7 +198,7 @@ try {
   // GPU-SHELL-OK` needle is satisfied by its own echo — this leg passed
   // with hush DEAD, which is the one thing it exists to rule out.
   await page.keyboard.type("echo GPU-SHELL-O''K\r");
-  await page.waitForFunction(() => window.__osOut.includes('GPU-SHELL-OK'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('GPU-SHELL-OK'), { timeout: 20000, polling: 'raf' });
   check('shell alive after the GPU app exits', true);
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));

@@ -26,7 +26,7 @@ try {
   // usage error prints — wait for a COMPLETE mkdir record, not just any.
   await waitFor(page, (n) => (window.__spawnTraces || [])
     .slice(n).some((t) => t.argv0 === 'mkdir' && t.firstOut), {
-    arg: before, timeout: 30000, polling: 100 });
+    arg: before, timeout: 30000, polling: 'raf' });
   const tr = await page.evaluate(
     (n) => window.__spawnTraces.slice(n).find((t) => t.argv0 === 'mkdir'), before);
 

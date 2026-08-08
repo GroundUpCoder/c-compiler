@@ -40,7 +40,7 @@ try {
   await page.evaluate(() => navigator.clipboard.writeText('HOST-TO-GUC-79'));
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await page.waitForFunction(() => (window.__osClipFromHost || 0) >= 1,
-    { timeout: 10000, polling: 100 });
+    { timeout: 10000, polling: 'raf' });
   check('focus sync read the host clipboard (__osClipFromHost)', true);
   // The needle arrives from the CLIPBOARD, not the typed line — clip -o
   // output satisfying the wait proves the kernel slot really holds it.
@@ -51,11 +51,11 @@ try {
   // ---- gucOS -> host via the commit hook ----
   await page.keyboard.type("printf 'GUC-TO-HOST-79' | clip\r");
   await page.waitForFunction(() => window.__osClipLast === 'GUC-TO-HOST-79',
-    { timeout: 15000, polling: 100 });
+    { timeout: 15000, polling: 'raf' });
   check('gucOS copy reached the page (__osClipLast)', true);
   await page.waitForFunction(
     () => navigator.clipboard.readText().then((t) => t === 'GUC-TO-HOST-79'),
-    { timeout: 10000, polling: 200 });
+    { timeout: 10000, polling: 'raf' });
   check('host clipboard holds the gucOS copy (gucOS -> host)', true);
 
   // ---- loop guard: the bridged text must not bounce back ----
@@ -189,7 +189,7 @@ try {
     document.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt }));
   });
   await page.waitForFunction(() => (window.__osPasteFiles || 0) >= 1,
-    { timeout: 10000, polling: 100 });
+    { timeout: 10000, polling: 'raf' });
   check('paste event with files took the staging path (__osPasteFiles)', true);
   await page.evaluate(() => window.__osVtSwitch(1));
   await page.keyboard.type('i=0; while [ $i -lt 20 ]; do [ -f "/root/Desktop/hostpaste.txt" ] && break; sleep 0.5; i=$((i+1)); done; cat "/root/Desktop/hostpaste.txt"; echo FP1""-DONE\r');

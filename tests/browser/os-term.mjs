@@ -24,10 +24,10 @@ try {
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
   await page.goto(URL);
-  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 'raf' });
   check('boots to ready', true);
   // Don't race hush's banner: typed input before the first prompt is eaten.
-  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
   const sample = (x, y) => page.evaluate(([sx, sy]) => {
     const c = document.getElementById('screen');
@@ -89,7 +89,7 @@ try {
     const r = document.getElementById('screen').getBoundingClientRect();
     const s = window.__osScreen;
     return s && Math.abs(r.width - s.w) < 2 && Math.abs(r.height - s.h) < 2;
-  }, { timeout: 30000, polling: 200 });
+  }, { timeout: 30000, polling: 'raf' });
   await waitPixel(TX + 320, TY + 300, BLACK, 90000);   // client fill composited
   check('term window composited (black client)', true);
   check('focused title bar navy', near(await sample(TX + 300, TY - 12), NAVY), await sample(TX + 300, TY - 12));
@@ -113,7 +113,7 @@ try {
     await page.keyboard.type(`${cmd} && echo ${mark[0]}""${mark.slice(1)}\r`, { delay: 40 });
     try {
       await page.waitForFunction(m => window.__osOut.includes(m), mark,
-        { timeout: ms || 30000, polling: 200 });
+        { timeout: ms || 30000, polling: 'raf' });
     } catch { throw new Error(`shLine: ${mark} never echoed (after: ${cmd})`); }
   };
   // Read a `wmctl list` row for a title, DERIVING its live geometry rather
@@ -124,7 +124,7 @@ try {
     await page.keyboard.type(
       `echo ${b[0]}""${b.slice(1)}; wmctl list | grep -F '${needle}'; echo ${e[0]}""${e.slice(1)}\r`,
       { delay: 40 });
-    await page.waitForFunction(m => window.__osOut.includes(m), e, { timeout: 20000, polling: 200 });
+    await page.waitForFunction(m => window.__osOut.includes(m), e, { timeout: 20000, polling: 'raf' });
     const out = await page.evaluate(() => window.__osOut);
     const seg = out.slice(out.lastIndexOf(b) + b.length, out.lastIndexOf(e));
     // SID \t PID \t WxH+X+Y \t DST \t Z \t FLAGS \t TITLE  (wmctl.c do_list)
@@ -179,14 +179,14 @@ try {
     `${uniBefore} -> ${uniAfter}`);
   await setVt(1);
   await page.keyboard.type('cat /tmp/uni.txt\r');
-  await page.waitForFunction(() => window.__osOut.includes('héllo€😀'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('héllo€😀'), { timeout: 20000, polling: 'raf' });
   check('typed é/€/😀 reached the app as correct UTF-8 (VT1 cat round-trip)', true);
   await setVt(2);
 
   // wmctl from the system shell sees the terminal window.
   await setVt(1);
   await page.keyboard.type('wmctl list\r');
-  await page.waitForFunction(() => /\tterm/.test(window.__osOut), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => /\tterm/.test(window.__osOut), { timeout: 20000, polling: 'raf' });
   check('wmctl list sees the term window', true);
 
   // Menu bar (todos/0273c): the "menubar" strip child composites over the
@@ -269,7 +269,7 @@ try {
   // TERM-SHELL-OK` needle is satisfied by its own echo — this leg passed
   // with hush DEAD, which is the one thing it exists to rule out.
   await page.keyboard.type("echo TERM-SHELL-O''K\r");
-  await page.waitForFunction(() => window.__osOut.includes('TERM-SHELL-OK'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('TERM-SHELL-OK'), { timeout: 20000, polling: 'raf' });
   check('shell alive after the terminal session', true);
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));

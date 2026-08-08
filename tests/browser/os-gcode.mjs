@@ -193,9 +193,9 @@ try {
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
   await page.goto(URL);
-  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 'raf' });
   check('boots to ready', true);
-  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
   const { setVt, sample, near, waitOut, waitScreen } = osHelpers(page);
 
@@ -258,7 +258,7 @@ try {
     await page.keyboard.type(`${cmd} && echo ${mark[0]}""${mark.slice(1)}\r`, { delay: 40 });
     try {
       await page.waitForFunction(m => window.__osOut.includes(m), mark,
-        { timeout: ms || 30000, polling: 200 });
+        { timeout: ms || 30000, polling: 'raf' });
     } catch { throw new Error(`shLine: ${mark} never echoed (after: ${cmd})`); }
   };
   const wmRow = async (needle, tag) => {
@@ -266,7 +266,7 @@ try {
     await page.keyboard.type(
       `echo ${b[0]}""${b.slice(1)}; wmctl list | grep -F '${needle}'; echo ${e[0]}""${e.slice(1)}\r`,
       { delay: 40 });
-    await page.waitForFunction(m => window.__osOut.includes(m), e, { timeout: 20000, polling: 200 });
+    await page.waitForFunction(m => window.__osOut.includes(m), e, { timeout: 20000, polling: 'raf' });
     const out = await page.evaluate(() => window.__osOut);
     const seg = out.slice(out.lastIndexOf(b) + b.length, out.lastIndexOf(e));
     const m = /(\d+)x(\d+)\+(-?\d+)\+(-?\d+)/.exec(seg);

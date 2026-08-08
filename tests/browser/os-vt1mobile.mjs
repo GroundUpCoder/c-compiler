@@ -34,7 +34,7 @@ try {
   check('boots to ready', true);
   await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
 
-  const { setVt, waitOut, waitPixel, waitScreen } = osHelpers(page);
+  const { setVt, waitOut, waitPixel, waitScreen } = osHelpers(page, { polling: 250 });
   // timing subject: VT1 input pacing and the vi-mode settles (annotated at
   // each site; vi's mode switches paint no page-observable marker).
   const pause = (ms) => page.waitForTimeout(ms);

@@ -340,7 +340,7 @@ async function mountAndBoot() {
    * prebaked fixture (file copy ≪ bake; --fixture=, default the repo's
    * os/os-system.img) when that fixture is itself version-current and
    * input-fresh; --no-fixture and --fresh-system force a real bake. */
-  const store = new COMMON.NodeFileStore(fs, imagePath, freshBoot || freshSystem);
+  let store = new COMMON.NodeFileStore(fs, imagePath, freshBoot || freshSystem);
   const mfVersion = manifest.version | 0;
   let inputScan = null;   // lazy: ~10-25ms over ~2500 files, only when needed
   const newestInput = () => inputScan ||
@@ -366,22 +366,34 @@ async function mountAndBoot() {
       path.resolve(fixturePath) !== imagePath) {
     try {
       const fSt = fs.statSync(fixturePath);
-      const bytes = fs.readFileSync(fixturePath);
-      const mem = new BLOCK_FS.MemoryByteStore(bytes.length);
-      mem.setBytes(0, bytes);
-      const fv = COMMON.bakedVersion(BLOCK_FS, mem);
-      if (fv >= mfVersion && !pkgsMatch(mem)) {
+      // Validate against the fixture file directly (the image-fixture.js
+      // pattern) — bakedVersion/bakedPackages are a handful of small reads,
+      // not a reason to pull the whole blob into memory.
+      const fxStore = new COMMON.NodeFileStore(fs, fixturePath, false);
+      const fv = COMMON.bakedVersion(BLOCK_FS, fxStore);
+      const fxPkgs = COMMON.bakedPackages(BLOCK_FS, fxStore);
+      fxStore.close();
+      if (fv >= mfVersion && fxPkgs.join(',') !== wantPkgKey) {
         bootLog('prebaked ' + fixturePath + ' package set [' +
-          COMMON.bakedPackages(BLOCK_FS, mem).join(',') + '] != wanted [' +
+          fxPkgs.join(',') + '] != wanted [' +
           wantPkgKey + '] — baking instead');
       } else if (fv >= mfVersion && (staleOk || fSt.mtimeMs >= newestInput().mtimeMs)) {
         bootLog('installing prebaked system image ' + fixturePath + ' (v' + fv + ')');
-        // Superblock LAST (the kernel-worker discipline): a crash mid-copy
-        // reads version -1 next boot and re-materializes.
-        store.resize(0);
-        if (bytes.length > 256) store.setBytes(256, bytes.subarray(256));
-        store.setBytes(0, bytes.subarray(0, Math.min(256, bytes.length)));
-        store.flush();
+        // Install by clone, not by rewrite (#576 A3): COPYFILE_FICLONE is a
+        // copy-on-write clonefile on APFS — byte-identical, no data I/O —
+        // with a silent full-copy fallback elsewhere. Landing under a tmp
+        // name and renaming keeps the crash discipline the old
+        // superblock-last write ordering provided: a crash leaves either
+        // the previous blob or the complete new one, never a half-copy.
+        // The clone runs BEFORE store.close() so a throw (ENOSPC, ...)
+        // leaves the store open for the bake fallback; the finally reopens
+        // it whatever the rename did, so no path exits with a dead fd.
+        const tmp = imagePath + '.installing';
+        fs.rmSync(tmp, { force: true });
+        fs.copyFileSync(fixturePath, tmp, fs.constants.COPYFILE_FICLONE);
+        store.close();
+        try { fs.renameSync(tmp, imagePath); }
+        finally { store = new COMMON.NodeFileStore(fs, imagePath, false); }
         fs.utimesSync(imagePath, fSt.atime, fSt.mtime);  // freshness rides along
         sysMode = 'installed';
       } else if (fv >= mfVersion) {

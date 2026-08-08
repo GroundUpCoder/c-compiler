@@ -67,9 +67,9 @@ try {
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
   await page.goto(URL);
-  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 'raf' });
   check('boots to ready', true);
-  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
   const { setVt, sample, near, waitPixel, waitOut } = osHelpers(page);
   const TEAL = [0, 128, 128], FACE = [192, 192, 192], ORANGE = [255, 140, 0];
@@ -87,7 +87,7 @@ try {
       const p = document.getElementById('desktop');
       const s = window.__osScreen;
       return s && s.w === Math.floor(p.clientWidth / z) && s.h === Math.floor(p.clientHeight / z);
-    }, Z, { timeout: 30000, polling: 150 });
+    }, Z, { timeout: 30000, polling: 'raf' });
     const s = await page.evaluate(() => window.__osScreen);
     // Sample the empty strip just LEFT of the clock (s.w - 108): reliably bar
     // face, clear of the app-button strip — which since todos/EXPOSE starts
@@ -216,7 +216,7 @@ try {
 
   // ---- persistence across a reload: Z=2 restored, backing re-halved.
   await page.reload();
-  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 'raf' });
   await setVt(2);
   const s2r = await settleZoom(2);
   const paneR = await paneSize();

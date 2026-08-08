@@ -40,10 +40,10 @@ try {
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
   await page.goto(URL);
-  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 240000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 240000, polling: 'raf' });
   check('boots to ready (doom/gameboy/snake + game data seeded)', true);
   // Don't race hush's banner: typed input before the first prompt is eaten.
-  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
   // The audio mixer (todos/0017): the kernel handed the page its output
   // ring at boot; playback is gated on the first user gesture.
@@ -101,7 +101,7 @@ try {
     const r = document.getElementById('screen').getBoundingClientRect();
     const s = window.__osScreen;
     return s && Math.abs(r.width - s.w) < 2 && Math.abs(r.height - s.h) < 2;
-  }, { timeout: 30000, polling: 200 });
+  }, { timeout: 30000, polling: 'raf' });
   // Settle: the re-mode re-lays the desktop (0023) — wait for icons to be
   // painted and two consecutive identical snapshots before baselining.
   const stableRegion = async (reg) => {
@@ -163,13 +163,13 @@ try {
   // request delivers SDL_EVENT_QUIT and doom exits cleanly.
   await setVt(1);
   await page.keyboard.type('wmctl list\r');
-  await page.waitForFunction(() => window.__osOut.includes('DOOM Shareware'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('DOOM Shareware'), { timeout: 20000, polling: 'raf' });
   check('wmctl list from the shell shows DOOM Shareware', true);
   // Wait for the close to be TYPED + EXECUTED before leaving VT1 (0171: a
   // line lost under load is otherwise indistinguishable from a stuck app);
   // split needle so the typed echo can't satisfy the wait.
   await page.keyboard.type('wmctl close $(wmctl list | grep "DOOM Shareware$" | sed "s/[^0-9].*//") && echo CLOSE-S""ENT-1\r');
-  await page.waitForFunction(() => window.__osOut.includes('CLOSE-SENT-1'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('CLOSE-SENT-1'), { timeout: 20000, polling: 'raf' });
   await setVt(2);
   // "Restored" = the region returns to the pre-launch baseline signature
   // (icon grid and all) — only the WINDOW must be gone, not the icons.
@@ -177,7 +177,7 @@ try {
   check('wmctl close quit doom; desktop restored', true);
   await setVt(1);
   await page.keyboard.type('echo DOOM-GONE-$?\r');
-  await page.waitForFunction(() => window.__osOut.includes('DOOM-GONE-0'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('DOOM-GONE-0'), { timeout: 20000, polling: 'raf' });
   check('shell alive after doom exits', true);
 
   // Gameboy with the seeded ROM: cascade slot 2 (doom took slot 1), 480x432
@@ -190,13 +190,13 @@ try {
     true, { colors: gb.colors });
   await setVt(1);
   await page.keyboard.type('wmctl close $(wmctl list | grep "Peanut-GB$" | sed "s/[^0-9].*//") && echo CLOSE-S""ENT-2\r');
-  await page.waitForFunction(() => window.__osOut.includes('CLOSE-SENT-2'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('CLOSE-SENT-2'), { timeout: 20000, polling: 'raf' });
   await setVt(2);
   await waitFrame(GB_REGION, s => s.h === baseGb.h, 30000);   // icons stay (0029)
   check('wmctl close quit gameboy; desktop restored', true);
   await setVt(1);
   await page.keyboard.type('echo GB-GONE-$?\r');
-  await page.waitForFunction(() => window.__osOut.includes('GB-GONE-0'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('GB-GONE-0'), { timeout: 20000, polling: 'raf' });
   check('shell alive after gameboy exits', true);
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));

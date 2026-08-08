@@ -206,9 +206,19 @@ export function makeCheck({ stringify = true } = {}) {
 // assertion primitive. Pure, so unit-testable.
 export const near = (got, want, tol) => got && got.every((v, i) => Math.abs(v - want[i]) <= (tol || 8));
 
+// Wait-polling policy (#576 D3): poll on animation frames. A satisfied
+// condition resolves on the next frame instead of up to 200ms later, which
+// across a sweep's hundreds of sequential waits is real wall time. The one
+// caveat is Chromium's background-page throttling: rAF can stall in a page
+// that is not frontmost (the os-boots.mjs stall note, 2026-07-06), so
+// MULTI-PAGE tests pass osHelpers an explicit interval instead — a wait
+// against a backgrounded page must never depend on its frames.
+export const POLL = 'raf';
+
 // Per-page pixel/tty/VT helpers, bound to a Playwright page. Byte-identical to
-// the inline definitions the sweep files carry.
-export function osHelpers(page) {
+// the inline definitions the sweep files carry. `polling` overrides the wait
+// policy for every helper this instance returns (see POLL above).
+export function osHelpers(page, { polling = POLL } = {}) {
   const setVt = (n) => page.evaluate((v) => window.__osVtSwitch(v), n);
 
   // Sample one composited pixel off the (transferred) desktop canvas, sizing
@@ -239,7 +249,7 @@ export function osHelpers(page) {
       if (near(got, want)) return got;
       if (Date.now() - t0 > (ms || 30000))
         throw new Error(`pixel (${x},${y}) never became ${want}${what ? ` (${what})` : ''}; last ${got}`);
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise(r => setTimeout(r, 50));
     }
   };
 
@@ -269,7 +279,7 @@ export function osHelpers(page) {
     await page.waitForFunction(
       (n) => window.__osOut && (window.__osOut.includes(n) ||
         /wmctl: wait .* timed out after \d+ms/.test(window.__osOut)),
-      needle, { timeout: ms || 20000, polling: 200 });
+      needle, { timeout: ms || 20000, polling });
     await assertNoWmctlTimeout();
   };
 
@@ -280,7 +290,7 @@ export function osHelpers(page) {
     return window.__osScreen && window.__osScreen.w > 800 &&
       Math.abs(r.width - window.__osScreen.w) < 2 &&
       Math.abs(r.height - window.__osScreen.h) < 2;
-  }, { timeout, polling: 200 });
+  }, { timeout, polling });
 
   return { setVt, sample, near, waitPixel, waitOut, waitScreen, assertNoWmctlTimeout };
 }
@@ -288,7 +298,7 @@ export function osHelpers(page) {
 // The generic "poll a page predicate" util 0083 asked for — a thin, named
 // wrapper over page.waitForFunction so ad-hoc `for(;;){…await timeout}` polls
 // have one home. `arg` is forwarded to the predicate (playwright semantics).
-export function waitFor(page, pred, { timeout = 30000, polling = 200, arg } = {}) {
+export function waitFor(page, pred, { timeout = 30000, polling = POLL, arg } = {}) {
   return page.waitForFunction(pred, arg, { timeout, polling });
 }
 
@@ -332,12 +342,12 @@ export async function openOsSession(opts = {}) {
     const page = await context.newPage();
     page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
     await page.goto(url);
-    await page.waitForFunction(() => window.__osState === 'ready', { timeout: readyTimeout, polling: 250 });
+    await page.waitForFunction(() => window.__osState === 'ready', { timeout: readyTimeout, polling: POLL });
     check(readyLabel, true);
     if (promptNeedle) {
       await page.waitForFunction(
         (src) => new RegExp(src).test(window.__osOut), promptNeedle.source,
-        { timeout: promptTimeout, polling: 200 });
+        { timeout: promptTimeout, polling: POLL });
     }
     const helpers = osHelpers(page);
     return {

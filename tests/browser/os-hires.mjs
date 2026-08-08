@@ -88,7 +88,7 @@ try {
   check('boots to ready (phone viewport)', true);
   await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
 
-  const { setVt, sample, near, waitPixel, waitOut } = osHelpers(page);
+  const { setVt, sample, near, waitPixel, waitOut } = osHelpers(page, { polling: 250 });
   const FACE = [192, 192, 192];
 
   await setVt(2);
