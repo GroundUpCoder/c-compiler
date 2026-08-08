@@ -57,6 +57,7 @@ var tests = [
   ['../serve/test_mkpkg_rust.js', []],        // 0416: mkpkg --rust — purity + POSITIVE control in one run, sha256 refusal, absent-sibling exit 1, rust drift gate, unknown-gate validation
   ['../serve/test_mkpkg_isolation.js', []],   // guardrail (d): repo isolation (0388) — a differing build must not prune another repo's payloads; --pool shares the warm cache; one writer per out dir
   ['../serve/test_mkpkg_minbase.js', []],     // #518: declared minBase rides the index verbatim (0 included), undeclared defaults to the image version, garbage refuses; pure-data packages/ defs must declare an explicit floor
+  ['../serve/test_mkpkg_version_guard.js', []], // #595: a version DOWNGRADE over a published entry refuses loudly naming both versions ("0.10" > "0.9" numerically, equal republish is routine); --allow-downgrade is the stated-rollback override
   ['../serve/test_image_determinism.js', []], // two bakes of one tree are byte-identical (0249 content-hash stability)
 ];
 

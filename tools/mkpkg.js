@@ -54,6 +54,10 @@
 //   node tools/mkpkg.js --prune            # ALSO drop entries this build
 //                                          # cannot see (explicit removal —
 //                                          # see the additive-publish block)
+//   node tools/mkpkg.js --allow-downgrade  # publish a version DECREASE over an
+//                                          # already-published entry (a stated
+//                                          # rollback; refused loudly otherwise
+//                                          # — see the version-ordering guard)
 //   node tools/mkpkg.js --packages-dir=DIR   # read definitions from DIR
 //                                            # instead of <repo>/packages
 //   node tools/mkpkg.js --pool=DIR           # SHARED payload store (below)
@@ -145,6 +149,9 @@ let quiet = false;
 let force = false;
 // #580: removal is opt-in. false = additive publish (carry unknown entries).
 let prune = false;
+// #595: a rollback is opt-in. false = a rebuilt entry whose version orders
+// BELOW the already-published one refuses the publish (verCompare, below).
+let allowDowngrade = false;
 // ---- native siblings (todos/0416; RUST.md §3 rule 4) ----------------------
 // A NATIVE SIBLING is an out-of-repo producer of prebuilt payloads: one
 // repository builds the binaries and publishes an `out-image/overlay.json`
@@ -202,6 +209,7 @@ for (const a of process.argv.slice(2)) {
   if (a === '--quiet') { quiet = true; continue; }
   if (a === '--force') { force = true; continue; }
   if (a === '--prune') { prune = true; continue; }
+  if (a === '--allow-downgrade') { allowDowngrade = true; continue; }
   let handled = false;
   for (const p of Object.keys(SIBLINGS)) {
     if (a === '--' + p) { enabled.add(p); handled = true; }
@@ -879,6 +887,44 @@ function materializeView(store, view, live) {
   }
 }
 
+/* ---- version ordering (#595) --------------------------------------------
+ * The additive upsert (#580) overwrites an existing index entry
+ * unconditionally, and the index is what every gucman client trusts as
+ * "current" — so a version that moves BACKWARD must be a stated intent
+ * (--allow-downgrade), never a typo that publishes silently.
+ *
+ * The comparison rule: versions are free-form strings here (validated only
+ * as [A-Za-z0-9._-]+; the published set includes "0.10.5", "1.28-3", "9f",
+ * git SHAs), so they compare rpm/dpkg-style — split into runs of digits and
+ * runs of letters (separators . _ - delimit tokens and otherwise vanish),
+ * then element-wise: two digit runs compare NUMERICALLY (leading zeros
+ * stripped, then longer-is-greater, then lexical — so "0.10" > "0.9" and
+ * "06" == "6", never a string `<`), two letter runs compare ASCII-lexically,
+ * a digit run outranks a letter run, and a version that is a proper token
+ * prefix is older ("1.0" < "1.0.1"). EQUAL is not a downgrade: every routine
+ * rebuild republishes the unchanged version over itself (the payload-reuse
+ * path exists for exactly that), so only a STRICT decrease refuses. A scheme
+ * with no meaningful order (git SHAs) gets a deterministic but arbitrary
+ * verdict; when a legitimate bump trips the guard, --allow-downgrade is the
+ * override — the same escape a genuine rollback uses. */
+function verCompare(a, b) {
+  const toks = (v) => String(v == null ? '' : v).match(/\d+|[A-Za-z]+/g) || [];
+  const ta = toks(a), tb = toks(b);
+  for (let i = 0; i < ta.length && i < tb.length; i++) {
+    const x = ta[i], y = tb[i];
+    const xd = /^\d/.test(x), yd = /^\d/.test(y);
+    if (xd !== yd) return xd ? 1 : -1;               // digits outrank letters
+    if (xd) {
+      const xs = x.replace(/^0+/, ''), ys = y.replace(/^0+/, '');
+      if (xs.length !== ys.length) return xs.length < ys.length ? -1 : 1;
+      if (xs !== ys) return xs < ys ? -1 : 1;
+    } else if (x !== y) {
+      return x < y ? -1 : 1;
+    }
+  }
+  return ta.length === tb.length ? 0 : (ta.length < tb.length ? -1 : 1);
+}
+
 async function main() {
   acquireLock();
   // The STORE is where payloads are built and reused; the VIEW is the pool/
@@ -905,7 +951,19 @@ async function main() {
   // forward so a single-package invocation still writes a complete index.
   for (const n of allAvail) {
     if (names.includes(n)) {
-      index.packages[n] = await buildPackage(n, store, sharedPool, sourceUnits.get(n));
+      const built = await buildPackage(n, store, sharedPool, sourceUnits.get(n));
+      const old = prev && prev.packages ? prev.packages[n] : null;
+      if (old && verCompare(built.version, old.version) < 0 && !allowDowngrade) {
+        // Nothing has been published yet (the index writes by atomic rename at
+        // the very end), so refusing here leaves the served repo untouched.
+        process.stderr.write(
+          `mkpkg: refusing to publish ${n} ${built.version} over the already-published ` +
+          `${old.version} — the index would offer every gucman client a version ` +
+          `DOWNGRADE as current\n` +
+          `  a deliberate rollback is a real operation: re-run with --allow-downgrade\n`);
+        process.exit(1);
+      }
+      index.packages[n] = built;
     } else if (prev && prev.packages && prev.packages[n]) {
       index.packages[n] = prev.packages[n];
     }
