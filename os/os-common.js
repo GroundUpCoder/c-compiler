@@ -953,6 +953,8 @@ function sourcePackageDefs(fsMod, pathMod, rootDir, opts) {
       def: {
         name: name,
         version: version,
+        // MUST MATCH tools/mkpkg.js bakedHistory legacy-summary recognizer.
+        // Published pre-sourceKind indexes are the history proof for unbakes.
         summary: 'Source code for ' + what + ' — mechanical -sources companion, readable at /usr/local/src/' + parent,
         minBase: 0,
         files: files,

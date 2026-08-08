@@ -103,7 +103,7 @@ const servedDir = path.resolve(forward[0] || 'build');
 const pkgOut = path.join(servedDir, 'dist', 'packages');
 console.log('[serve-with-clang] prebaking *-clang packages (mkpkg --clang)…');
 const mk = cp.spawnSync(process.execPath,
-  [MKPKG, `--clang-root=${clangRoot}`, '--clang', `--out=${pkgOut}`],
+  [MKPKG, '--no-baseline', `--clang-root=${clangRoot}`, '--clang', `--out=${pkgOut}`],
   { cwd: REPO_ROOT, stdio: 'inherit' });
 if (mk.status !== 0) {
   die(['serve-with-clang: mkpkg --clang failed — not serving a clang origin without its packages']);

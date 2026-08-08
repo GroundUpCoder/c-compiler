@@ -24,6 +24,17 @@ function check(name, cond, extra) {
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
 }
 
+// Pin the successful-preflight path too. This is deliberately an execution
+// check of the wrapper's actual mkpkg argv: a future mkpkg contract change or
+// another edit that drops the explicit baseline decision fails here instead
+// of leaving the only covered paths before the package spawn.
+{
+  const source = fs.readFileSync(WRAPPER, 'utf-8');
+  const spawn = source.match(/cp\.spawnSync\(process\.execPath,\s*\n\s*\[MKPKG,([^\]]+)\]/);
+  check('mkpkg prebake makes an explicit developer baseline decision',
+    spawn && /['"]--no-baseline['"]/.test(spawn[1]), spawn && spawn[0]);
+}
+
 // Run serve-with-clang.js SYNCHRONOUSLY to completion (it must exit at
 // preflight — it never reaches the listen step in these cases). Returns
 // { status, stderr }.

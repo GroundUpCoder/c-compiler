@@ -52,6 +52,9 @@ const gucman = byName.get('gucman-sources');
 check('gucman-sources exists (image derivation)', gucman && gucman.kind === 'image');
 check('gucman-sources version is the image version', gucman && gucman.def.version === imageVersion,
   gucman && gucman.def.version);
+check('legacy image summary keeps the baked-history marker used by mkpkg',
+  gucman && gucman.def.summary.includes(`(base image v${imageVersion})`),
+  gucman && gucman.def.summary);
 check('gucman-sources closure carries gucman.c + its project + cJSON',
   gucman && gucman.def.files['os/gucman/gucman.c'] !== undefined &&
   gucman.def.files['os/gucman/bin.json'] !== undefined &&

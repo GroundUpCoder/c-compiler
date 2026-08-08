@@ -54,10 +54,13 @@
 //   node tools/mkpkg.js --prune            # ALSO drop entries this build
 //                                          # cannot see (explicit removal —
 //                                          # see the additive-publish block)
-//   node tools/mkpkg.js --allow-downgrade  # publish a version DECREASE over an
+//   node tools/mkpkg.js --allow-downgrade  # construct a version DECREASE over
 //                                          # already-published entry (a stated
 //                                          # rollback; refused loudly otherwise
-//                                          # — see the version-ordering guard)
+//                                          # — see the version-ordering guard);
+//                                          # also bypasses explicit served-floor
+//                                          # checks at build time. deploy still
+//                                          # enforces the live floor with no opt-out
 //   node tools/mkpkg.js --baseline FILE     # compare against an explicit served
 //   node tools/mkpkg.js --baseline-url URL  # index snapshot (file or fetched)
 //   node tools/mkpkg.js --no-baseline       # explicit developer-only construction
@@ -152,8 +155,9 @@ let quiet = false;
 let force = false;
 // #580: removal is opt-in. false = additive publish (carry unknown entries).
 let prune = false;
-// #595: a rollback is opt-in. false = a rebuilt entry whose version orders
-// BELOW the already-published one refuses the publish (verCompare, below).
+// #595: a rollback is opt-in. It also overrides #598's explicit served floor
+// during construction. Deployment independently rechecks live truth and has
+// no override, so this cannot authorize publication of a downgrade.
 let allowDowngrade = false;
 let baselineFile = null;
 let baselineUrl = null;
@@ -936,6 +940,8 @@ function materializeView(store, view, live) {
  * with no meaningful order (git SHAs) gets a deterministic but arbitrary
  * verdict; when a legitimate bump trips the guard, --allow-downgrade is the
  * override — the same escape a genuine rollback uses. */
+// MUST MATCH comguc/scripts/package-floor.mjs verCompare: construction and
+// deployment must use exactly the same ordering contract.
 function verCompare(a, b) {
   const toks = (v) => String(v == null ? '' : v).match(/\d+|[A-Za-z]+/g) || [];
   const ta = toks(a), tb = toks(b);
@@ -972,13 +978,15 @@ function parseBaseline(bytes, source) {
 
 async function loadBaseline() {
   if (noBaseline) return { index: null, provenance: { mode: 'none' } };
-  let bytes, source;
+  let bytes, source, provenanceSource;
   if (baselineFile) {
     source = baselineFile;
+    provenanceSource = `file:${path.basename(path.resolve(baselineFile))}`;
     try { bytes = fs.readFileSync(baselineFile); }
     catch (e) { throw new Error(`baseline ${baselineFile} is unreadable (${e.message})`); }
   } else {
     source = baselineUrl;
+    provenanceSource = source;
     let response;
     try { response = await fetch(baselineUrl); }
     catch (e) { throw new Error(`baseline fetch ${baselineUrl} failed (${e.message})`); }
@@ -989,7 +997,7 @@ async function loadBaseline() {
   return {
     index: parseBaseline(bytes, source),
     provenance: {
-      source,
+      source: provenanceSource,
       retrievalTime: new Date().toISOString(),
       sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
     },
@@ -1033,6 +1041,8 @@ async function main() {
   if (baseline.index) {
     for (const unit of sourceUnits.values()) {
       const published = baseline.index.packages[unit.name];
+      // MUST MATCH os/os-common.js makeUnit image-summary format until every
+      // published baseline carries structured sourceKind provenance.
       const bakedHistory = published && (published.sourceKind === 'image' ||
         /\(base image v[^)]+\)/.test(published.summary || ''));
       if (unit.kind === 'package' && bakedHistory && !unit.sourcesVersionDeclared) {

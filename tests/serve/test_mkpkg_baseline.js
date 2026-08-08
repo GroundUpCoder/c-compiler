@@ -66,8 +66,10 @@ check('file baseline construction succeeds', r.status === 0, r.stderr);
 if (r.status === 0) {
   const idx = JSON.parse(fs.readFileSync(path.join(out, 'index.json')));
   check('candidate records source, retrieval time, and content hash',
-    idx.baseline.source === base && /^\d{4}-/.test(idx.baseline.retrievalTime) &&
+    idx.baseline.source === 'file:baseline.json' && /^\d{4}-/.test(idx.baseline.retrievalTime) &&
       /^[0-9a-f]{64}$/.test(idx.baseline.sha256), JSON.stringify(idx.baseline));
+  check('file provenance does not ship an absolute local path',
+    !idx.baseline.source.includes(tmp), idx.baseline.source);
 }
 
 const dataUrl = 'data:application/json,' + encodeURIComponent(fs.readFileSync(base, 'utf-8'));
