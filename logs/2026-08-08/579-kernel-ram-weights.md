@@ -169,14 +169,21 @@ attribution ambiguity (`build/rss-579-pkgsolo.json`, 3x each):
 | `test_gucman_e2e.js` | 4.88 / 4.69 / 4.59 GiB | 5.344 |
 | `test_defaults_sync_e2e.js` | 4.28 / 4.10 / 3.74 GiB | 5.080 |
 
-**Contention inflates a tree's peak** (phases that are sequential on a quiet box
-overlap on a loaded one), so a solo measurement is a floor, not the answer.
+**What this establishes:** the solo peaks are *lower* than the loaded ones, so a
+solo measurement is a floor and is unsuitable as an upper bound — the weight has
+to clear the loaded figure. **What it does not establish** is *why*. My
+suggested mechanism (phases that run sequentially on a quiet box overlapping on
+a loaded one) is **inferred, not measured** — nothing here distinguishes it from
+delayed page reclaim under pressure or any other cause.
 
 `PKG` and `punes` are now one **XL class at 7 GiB** — one physical shape, a full
-boot with a second heavy node process resident beside it. XL=7 keeps the
-serializer property (2 XL = 14 GiB, unreachable under 24 GB RAM) and gives up
-the `4.5 + 5 = 9.5` pairing with `test_os_boot.js`, which was never a memory
-margin in the first place: PKG's real peak was *above* its own reservation.
+boot with a second heavy node process resident beside it — giving up the
+`4.5 + 5 = 9.5` pairing with `test_os_boot.js`, which was never a memory margin
+in the first place: PKG's real peak was *above* its own reservation.
+
+⚠️ The claim in this section's first draft that XL=7 "keeps the serializer
+property (2 XL = 14 GiB, unreachable under 24 GB RAM)" is **wrong and is
+retracted** — see the second correction below.
 `test_os_boot.js` gets its own weight (5); that is free, because `9.6 − 5` still
 admits 2 BOOT beside it exactly as `9.6 − 4.5` did.
 
@@ -215,16 +222,108 @@ The XL run was **168 pass / 1 FAIL**: `test_os_boot.js` timed out in its
 fixture-boot leg at the 300 s `CC_OS_BOOT_TIMEOUT_MS` budget. Wall 984.1 s,
 os_boot 798.6 s.
 
-The weights cannot be the cause: pool width *around* os_boot is unchanged
-(`9.6 − 5` → 2 BOOT + 1 LIGHT; `9.6 − 4.5` → 2 BOOT + 2 LIGHT), and XL=7
-*removes* load because an XL row can no longer co-run with os_boot at all.
-os_boot's duration across runs was 723 / 748 / 716 / 697 / **797** s — the
-outlier is the last one chronologically.
+🔴 **RETRACTED: "the weights cannot be the cause".** That claim was wrong, and
+wrong in an instructive way — **I compared against my own previous cut instead
+of against the ticket's baseline.** Relative to `eda3f661` the counter-fix does
+reduce pressure slightly, which is what I checked. Relative to the **old uniform
+weights**, which is the comparison that matters, it *increases* it:
 
-What did change is the machine: **free disk on the data volume fell to 7 GB of
-460 (99% full)** during the session, and the runner's own preflight warns that
-exhaustion there "reports as timeouts, not as ENOSPC" — precisely this failure's
-shape. Reproducibility could not be tested: lane `580-additive-publish` took the
-heavy lock at 23:01:20 and the re-run was refused at **exit 3 (inconclusive, not
+| config | admissible schedule around `test_os_boot.js` | files |
+|---|---|---|
+| old uniform | `os_boot(4) + heavy(4) + LIGHT(1)` = 9.0 | **3** |
+| new | `os_boot(5) + BOOT(2) + BOOT(2) + LIGHT(0.5)` = 9.5 | **4** |
+
+Using the class maxima, surrounding tree RSS goes from ~`3.866 + 1.628 + 0.171 =
+5.665 GiB` to ~`3.866 + 2×1.628 + 0.171 = 7.293 GiB`, and live ~150 MiB fixtures
+around os_boot go 3 → 4. **So the timeout is not exonerated.** Disk exhaustion
+is still the most likely proximate cause, but it is **not independent of this
+change**: more concurrent rows is more concurrent fixture space on a volume that
+had none to give.
+
+What is established: os_boot's duration across runs was 723 / 748 / 716 / 697 /
+**797** s, the outlier being the last one chronologically; and **free disk on the
+data volume fell to 7 GB of 460 (99% full)** during the session, with the
+runner's own preflight warning that exhaustion there "reports as timeouts, not
+as ENOSPC". What is *not* established is which of the two did it. Reproducibility
+could not be tested: lane `580-additive-publish` took the heavy lock at 23:01:20
+and the re-run was refused at **exit 3 (inconclusive, not
 red)**. Measuring under a sibling heavy suite is the one thing this ticket's own
 method forbids, so it stopped there.
+
+---
+
+# CORRECTION 2 after the re-review (tip `0ac2bb7c` → this commit)
+
+Two more blocking findings, both correct, both accepted.
+
+## 1. A WEIGHT CANNOT BE A SERIALIZER — the property failed at 23⅓ GiB
+
+I justified `XL_GB = 7` partly as a mutual-exclusion mechanism: "two XL rows are
+14 GiB, so the pool can never run two at once on any box under 24 GB RAM."
+
+`ramBudgetGb()` is `totalmem × 0.6`, so the budget reaches 14 GiB at
+`14 / 0.6 = 23.333… GiB`. A **24 GiB** box has a 14.4 GiB budget and admits the
+first 7 GiB row and then a **second**, because 7 still fits in the remaining 7.4.
+
+| RAM | budget | two XL (14) |
+|---|---|---|
+| 16 GiB | 9.6 | refused |
+| 23 GiB | 13.8 | refused |
+| **24 GiB** | **14.4** | **BOTH ADMITTED** |
+| 64 GiB | 38.4 | both admitted |
+
+So the property held only on hosts small enough, and vanished silently exactly
+where there is most room to run two — the worst possible failure direction, and
+on a host class ("24 GB") my own sentence named as safe.
+
+**The fix is a primitive, not a bigger constant**, and that is the argument
+rather than a preference. Any weight-based exclusion is a statement about the
+*host's RAM*, so for every weight there is a machine where it stops excluding;
+picking a bigger number just moves the threshold and costs real concurrency on
+small hosts on the way. `tests/lib/suite-runner.js` now takes an **`exclusive`
+key** on an entry: at most one running entry may carry a given key, checked
+alongside the budget, on every host. `XL_GB = 7` goes back to being what it
+should always have been — a memory figure, 5.783 worst observed, 1.21× — and
+`XL_EXCL = 'gucman-mkpkg'` carries the serialization.
+
+The key is on the **19 `ensureMinimalImage` rows only**, not on
+`test_punes_e2e.js`: punes is XL for its memory alone, so it stays free to
+overlap a gucman row on a host with the RAM for both.
+
+Pinned by `tests/host/test_pool_exclusive.js` (4 legs), whose third is a **RED
+CONTROL**: same three 7 GB rows with no key and a 14.4 GB budget — exactly a
+24 GiB host — asserting that **2 are admitted**. That test fails if anyone ever
+folds the exclusion back into the constant. It also pins that distinct/absent
+keys still run concurrently, and that a lone row heavier than the entire budget
+still runs rather than deadlocking.
+
+## 2. The timeout is NOT exonerated — see the retraction above
+
+Corrected in place in the "Not yet green" section: I compared against my own
+previous cut rather than the ticket's baseline, and against the real baseline
+the change raises admissible width around `test_os_boot.js` from **3 files to
+4**. The reviewer asked for this to be tested independently of the disk and it
+does not survive that test.
+
+## Also corrected
+- The evidence table in `run.js` claimed five runs "each 169/169 pass". It now
+  states each artifact's real scope and verdict: `rss-579-xl.json` is a full run
+  that is **168/169**, and `rss-579-pkgsolo.json` is **two rows repeated three
+  times**, not a suite run.
+- "The observed maximum creeps up with every run" is **not** what the artifacts
+  show. `test_gucman_e2e.js` chronologically: **4.802 → 3.917 → 5.344 → 5.434** —
+  down, then up. The statistical point survives and is the real one: a sampled
+  maximum is a **lower bound**, so more runs can expose more of the tail. The
+  non-monotonicity is itself the argument against settling a weight on one run.
+- The contention *mechanism* is marked **inferred**, not measured. The solo runs
+  establish that solo peaks are lower and unusable as upper bounds; they do not
+  establish why.
+
+## Standing
+Confirmed by the reviewer, and unchanged: the hoist retraction is correct, the
+mkpkg-pool-hoist follow-up stays **unfiled**, and the blob hoist stands on its
+own merit (no unlocked double-bake).
+
+**The code is not landable until a clean 169/169 runs on a volume with real
+headroom.** That run is @master's to schedule — the disk is a machine-wide
+condition and reclaiming it is not this lane's call.

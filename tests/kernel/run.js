@@ -253,26 +253,35 @@ const EXCLUDED = [];
 // that crashed a 16 GB box on 2026-07-25, and the budget is the guard that
 // replaced the uniform -j clamp.
 //
-// 🔴 THE EVIDENCE. Every figure below is the WORST across FIVE sampled runs
-// on an idle 16 GB box (#579, 2026-08-08), each 169/169 pass. Units are GiB
-// (`ps rss` is KiB). Re-measure with:
+// 🔴 THE EVIDENCE. Every figure below is the WORST across all six sampled
+// artifacts below (#579, 2026-08-08, idle 16 GB box). Units are GiB (`ps rss`
+// reports KiB). Re-measure with:
 //   node tests/lib/rss-sample.js --out=build/rss.json -- node tests/kernel/run.js
 //
-//   artifact                        config          wall     concurrency mean
-//   build/rss-579-baseline.json     old weights   1289.5 s   2.01  (cold pool)
-//   build/rss-579-baseline-warm.json old weights  1153.8 s   2.00
-//   build/rss-579-after.json        1st cut        765.2 s   3.15
-//   build/rss-579-final.json        2nd cut        879.1 s   2.67
-//   build/rss-579-pkgsolo.json      2 rows, serial, 250 ms, 3x each
+//   artifact                         scope + config              wall  verdict
+//   build/rss-579-baseline.json      full, old weights (cold)  1289.5s 169/169
+//   build/rss-579-baseline-warm.json full, old weights         1153.8s 169/169
+//   build/rss-579-after.json         full, 1st cut              765.2s 169/169
+//   build/rss-579-final.json         full, 2nd cut              879.1s 169/169
+//   build/rss-579-xl.json            full, XL cut               984.1s 168/169
+//   build/rss-579-pkgsolo.json       2 ROWS ONLY, serial, 3x each, 250 ms
 //
-// FIVE runs, not one, and that is the whole methodology. The sampler
-// UNDER-states (it samples; spikes between samples are missed) AND the
-// observed maximum CREEPS UP with every run added, because each run samples
-// more of the same tail. Two rows show it starkly:
+// Read that table honestly: rss-579-xl.json is NOT a green run (test_os_boot.js
+// timed out at its 300 s leg budget on a 99%-full disk), and rss-579-pkgsolo
+// is not a suite run at all — it is two rows repeated three times to get an
+// uncontended read. Both are still valid as RSS evidence, which is all they
+// are used for here.
+//
+// Six artifacts, not one, and that is the whole methodology. The sampler
+// UNDER-states a true peak (it samples; spikes between samples are missed), so
+// a sampled maximum is a LOWER BOUND on the real one, and adding runs can
+// expose more of the tail. It is not a monotonic creep — the same row moves
+// both ways run to run:
 //   test_micropython_script_e2e.js  1.01 -> 1.46 -> 1.628 GiB
-//   test_gucman_e2e.js              3.92 -> 4.80 -> 5.344 GiB
-// The first cut of #579 sized BOOT off one run at 1.5 (1.03x) and PKG at 5 —
-// which the NEXT run exceeded outright at 5.344. So: worst of every artifact,
+//   test_gucman_e2e.js       4.802 -> 3.917 -> 5.344 -> 5.434 GiB (chronological)
+// That non-monotonicity is exactly why one run cannot settle a weight: the
+// first cut of #579 sized BOOT off one run at 1.5 (1.03x), and sized PKG at 5
+// off two runs when a LATER run recorded 5.344. So: worst of every artifact,
 // then real margin, and treat any headroom under ~1.2x as not yet proven.
 //
 //   class    rows  worst peak  from which run          weight  headroom
@@ -322,13 +331,25 @@ const OSBOOT_GB = 5;
 // — a full boot with a second heavy node process (mkpkg / a second boot)
 // resident beside it — so they get one weight.
 //
-// 7 is chosen for a PROPERTY, not just for margin: two XL rows are 14 GiB,
-// so the pool can never run two at once on any box under 24 GB RAM. That is
-// what serialises the mkpkg builds. It also means XL can no longer share the
-// box with test_os_boot.js (5 + 7 = 12 > 9.6); the earlier 4.5 + 5 = 9.5
-// pairing was retired because PKG's real peak (5.344) was ABOVE its own 5
-// GiB reservation, so that 0.1 GiB of "slack" was never a memory margin.
+// 7 GiB is a MEMORY figure and nothing else: 5.783 worst observed, 1.21x.
+// It also means XL cannot share the box with test_os_boot.js (5 + 7 = 12 >
+// 9.6 here); the earlier 4.5 + 5 = 9.5 pairing was retired because PKG's real
+// peak (5.344) was ABOVE its own 5 GiB reservation, so that 0.1 GiB of
+// "slack" was never a memory margin at all.
+//
+// 🔴 The mkpkg mutual exclusion is NOT this number. An earlier cut of #579
+// claimed "two XL is 14 GiB, so they can never both run" — false on any host
+// where the budget reaches 14, i.e. totalmem >= 14 / 0.6 = 23.34 GiB. A 24 GiB
+// box has a 14.4 GiB budget and admits BOTH. So a weight can only ever buy
+// mutual exclusion on machines small enough, and silently drops it exactly
+// where there is room to run two. Exclusion is now declared on its own axis
+// (XL_EXCL -> the `exclusive` option in tests/lib/suite-runner.js) and holds
+// on every host regardless of RAM.
 const XL_GB = 7;
+// One exclusion key for the whole XL class: these rows drive mkpkg over the
+// shared content-addressed pool (tests/kernel/lib/gucman.js), and two builds
+// at once is the todos/0388 race that retargeted a sibling's repo mid-read.
+const XL_EXCL = 'gucman-mkpkg';
 
 const defaults = {
   // `jobs` is now only the CPU-axis cap (concurrent files); RAM is governed
@@ -398,11 +419,16 @@ for (const e of entries) {
 // Weight assignment, most-specific first. Anything that matches nothing gets
 // HEAVY_GB, so a brand-new e2e is over-charged rather than under-charged.
 for (const e of entries) {
+  const xl = e.pkg || e.file === 'test_punes_e2e.js';
   e.gb = e.file === 'test_os_boot.js' ? OSBOOT_GB
-       : (e.pkg || e.file === 'test_punes_e2e.js') ? XL_GB
+       : xl ? XL_GB
        : e.light ? LIGHT_GB
        : e.boot ? BOOT_GB
        : HEAVY_GB;
+  // Only the mkpkg users need the exclusion; test_punes_e2e.js is XL for its
+  // memory alone, so it stays free to overlap a gucman row on a host with the
+  // RAM for both.
+  if (e.pkg) e.exclusive = XL_EXCL;
 }
 
 // Longest-first hints for a FRESH artifact dir (#576 A1): a lane worktree

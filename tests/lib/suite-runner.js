@@ -632,11 +632,30 @@ async function runSuite(entries, opts) {
   let usedGb = 0;
   const running = new Map();   // settled-and-cleaned promise -> entry
   const queue = parallel.slice();
+  // `exclusive` (#579): at most ONE running entry may carry a given exclusion
+  // key. This is a SEPARATE axis from the RAM weight on purpose. Mutual
+  // exclusion had been expressed by making a class's weight big enough that two
+  // could not fit the budget — but budgetGb scales with the HOST's RAM, so such
+  // a weight only excludes on hosts small enough: two 7 GB rows are mutually
+  // exclusive at 16 GB (budget 9.6) and NOT at 24 GB (budget 14.4). A weight
+  // can therefore never express "never two of these", only "never two of these
+  // on a small enough machine", which is the same property silently absent
+  // exactly where there is most room to run both. Entries that must not overlap
+  // for a reason that is not memory — a shared on-disk build dir, one external
+  // service, a global lock — declare it, and it holds on every host.
+  const exclusiveFree = (e) => {
+    if (!e.exclusive) return true;
+    for (const r of running.values()) if (r.exclusive === e.exclusive) return false;
+    return true;
+  };
   while (queue.length && !bailed) {
     let idx = -1;
     if (running.size < opts.jobs) {
+      // Nothing running -> the head always runs (never deadlock a lone entry,
+      // however heavy or exclusive it is); otherwise the first entry that fits
+      // BOTH the remaining budget and the exclusion set.
       idx = running.size === 0 ? 0
-          : queue.findIndex(e => gbOf(e) <= budgetGb - usedGb);
+          : queue.findIndex(e => gbOf(e) <= budgetGb - usedGb && exclusiveFree(e));
     }
     if (idx === -1) { await Promise.race(running.keys()); continue; }
     const entry = queue.splice(idx, 1)[0];
