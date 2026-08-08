@@ -253,57 +253,82 @@ const EXCLUDED = [];
 // that crashed a 16 GB box on 2026-07-25, and the budget is the guard that
 // replaced the uniform -j clamp.
 //
-// 🔴 THE EVIDENCE. Every figure below is the WORST of TWO full unfiltered
-// kernel-suite runs on an idle 16 GB box (#579, 2026-08-08), each 169/169
-// pass and each sampled by tests/lib/rss-sample.js at 500 ms:
-//   build/rss-579-baseline.json  old weights, 1289.5 s, concurrency mean 2.01
-//   build/rss-579-after.json     new weights,  765.2 s, concurrency mean 3.15
-// Re-measure with:
+// 🔴 THE EVIDENCE. Every figure below is the WORST across FIVE sampled runs
+// on an idle 16 GB box (#579, 2026-08-08), each 169/169 pass. Units are GiB
+// (`ps rss` is KiB). Re-measure with:
 //   node tests/lib/rss-sample.js --out=build/rss.json -- node tests/kernel/run.js
 //
-// TWO runs, not one, on purpose. The sampler UNDER-states (it samples;
-// spikes between samples are missed, and macOS compresses idle pages under
-// pressure) and the run-to-run spread is REAL: test_micropython_*_e2e.js
-// read 1.01 GB in the first run and 1.46 GB in the second — 45% apart. A
-// weight picked off a single run would have shipped that class at 1.03x
-// headroom. So: take the worst of both, then leave margin on top.
+//   artifact                        config          wall     concurrency mean
+//   build/rss-579-baseline.json     old weights   1289.5 s   2.01  (cold pool)
+//   build/rss-579-baseline-warm.json old weights  1153.8 s   2.00
+//   build/rss-579-after.json        1st cut        765.2 s   3.15
+//   build/rss-579-final.json        2nd cut        879.1 s   2.67
+//   build/rss-579-pkgsolo.json      2 rows, serial, 250 ms, 3x each
 //
-//   class    rows  worst peak of both runs             weight  headroom
-//   LIGHT      21  0.17 GB (test_wm_policy.js)            0.5     2.9x
-//   BOOT      118  1.46 GB (test_micropython_*_e2e.js)    2       1.37x
-//   (default)  10  3.76 GB (test_os_boot.js)              4.5     1.20x
-//   PKG        19  4.09 GB (test_defaults_sync_e2e.js)    5       1.22x
-//   punes       1  5.46 GB (test_punes_e2e.js)            7       1.28x
+// FIVE runs, not one, and that is the whole methodology. The sampler
+// UNDER-states (it samples; spikes between samples are missed) AND the
+// observed maximum CREEPS UP with every run added, because each run samples
+// more of the same tail. Two rows show it starkly:
+//   test_micropython_script_e2e.js  1.01 -> 1.46 -> 1.628 GiB
+//   test_gucman_e2e.js              3.92 -> 4.80 -> 5.344 GiB
+// The first cut of #579 sized BOOT off one run at 1.5 (1.03x) and PKG at 5 —
+// which the NEXT run exceeded outright at 5.344. So: worst of every artifact,
+// then real margin, and treat any headroom under ~1.2x as not yet proven.
 //
-// #579 was filed on the premise that HEAVY_GB=4 was uniformly too big. The
-// measurement says it is too big for 118 rows and TOO SMALL for two: puNES
-// drives three boots and peaked at 5.46 GB, and a gucman-family row that
-// won the ensureMinimalImage() race peaked at 4.80 GB — both were charged
-// 4. So this is NOT a global reduction: one class moved down hard and two
-// moved up. test_os_boot.js is the reason the default moved 4 -> 4.5; at 4
-// its 3.76 GB peak had 6% headroom, which is not headroom.
+//   class    rows  worst peak  from which run          weight  headroom
+//   LIGHT      21  0.171 GiB   after   (wm_policy)        0.5     2.9x
+//   BOOT      118  1.628 GiB   basewarm(micropython)      2       1.23x
+//   (default)   9  1.547 GiB   final   (egress)           4.5     2.9x
+//   os_boot     1  3.866 GiB   final                      5       1.29x
+//   XL         20  5.783 GiB   final   (punes)            7       1.21x
 //
-// 10 LIGHT rows and 4 default rows produced NO sample row in EITHER run:
-// they finish inside one 500 ms tick. "No row" is NOT "no memory" — those
-// 4 are why the default stays conservative, and why LIGHT_GB is 0.5 rather
-// than the ~0.2 the sampled LIGHT rows on their own would justify.
-const HEAVY_GB = 4.5;  // default: untagged, i.e. UNMEASURED or measured >1.1 GB
+// #579 was filed on the premise that HEAVY_GB=4 was uniformly too big. It is
+// too big for 118 rows and TOO SMALL for twenty: every gucman-family row can
+// reach ~5 GiB (test_gucman_e2e.js 5.344, test_defaults_sync_e2e.js 5.080)
+// and test_punes_e2e.js reaches 5.783 — all were charged 4. So this is NOT a
+// global reduction: one class moved down hard and one moved up.
+//
+// The 0.6 budget fraction is the SECOND line of defence and it is what makes
+// a 1.2x per-class margin acceptable: if every running row overshot its
+// charge by 25% at once, a full 9.6 GiB reservation lands at ~12 GiB on a
+// 16 GB box. The 2026-07-25 OOM was a 4x class error (16.7 GiB charged on a
+// 16 GB box), not a 20% one — that is the failure this budget exists to stop.
+//
+// 10 LIGHT rows and 4 default rows produced NO sample row in ANY run: they
+// finish inside one sampling tick. "No row" is NOT "no memory" — those 4 are
+// why the default stays conservative, and why LIGHT_GB is 0.5 rather than
+// the ~0.2 the sampled LIGHT rows on their own would justify.
+//
+// ⚠️ ONE ROW MAY EXCEED THE WHOLE BUDGET. runSuite admits queue index 0 with
+// no budget comparison when nothing is running (suite-runner.js), so a lone
+// overweight row always runs rather than deadlocking. That window widens
+// with these weights: a row is "lone-overweight" below 7.5 GB RAM at the
+// default, below 8.33 at os_boot's 5, and below 11.67 GB at XL's 7. On such
+// a box the pool deliberately exceeds its nominal 60% headroom for exactly
+// one member at a time. That is the intended trade — refusing to run at all
+// would be worse — but it is why XL rows must never be able to PAIR.
+const HEAVY_GB = 4.5;  // default: untagged, i.e. UNMEASURED or measured >1.1 GiB
 const LIGHT_GB = 0.5;
 const BOOT_GB = 2;
-// PKG_GB covers the gucman-family rows — see PKG_RE below. Once the blob
-// bake is hoisted out of the pool (below) their cost is the mkpkg pool
-// build, 4.09 GB measured. 5 GB is also load-bearing as a SERIALIZER: two
-// of these at once is 10 GB > the 9.6 GB budget of a 16 GB box, so the pool
-// never runs two concurrently — which is what stops two concurrent mkpkg
-// builds. They serialize to ~400 s against test_os_boot.js's 750 s, so that
-// costs no makespan, and 4.5 + 5 = 9.5 GB deliberately still FITS, so one
-// PKG row can run alongside test_os_boot.js. That last 0.1 GB of slack is
-// why the default is 4.5 and not 5.
-const PKG_GB = 5;
-// test_punes_e2e.js is the one row that needs a weight of its own: it is a
-// single file driving THREE sequential boots of the NES core, and at
-// 5.46 GB it is the heaviest tree in the suite — heavier than the cold bake.
-const PUNES_GB = 7;
+// test_os_boot.js gets its own weight rather than riding the default: it is
+// the most-sampled row in the suite by three orders of magnitude (~1500
+// samples per full run, since it IS the long pole), so its 3.866 GiB is the
+// best-characterised number here and does not need the default's slack for
+// the unmeasured. Costs nothing: 9.6 - 5 = 4.6 still admits 2 BOOT + 1 LIGHT
+// beside it, exactly as 9.6 - 4.5 = 5.1 did (a third BOOT needs 6).
+const OSBOOT_GB = 5;
+// XL = the 19 gucman-family rows (derived, see PKG_RE below) + the one
+// three-boot NES row. Measured 5.080-5.783 GiB; they are one physical class
+// — a full boot with a second heavy node process (mkpkg / a second boot)
+// resident beside it — so they get one weight.
+//
+// 7 is chosen for a PROPERTY, not just for margin: two XL rows are 14 GiB,
+// so the pool can never run two at once on any box under 24 GB RAM. That is
+// what serialises the mkpkg builds. It also means XL can no longer share the
+// box with test_os_boot.js (5 + 7 = 12 > 9.6); the earlier 4.5 + 5 = 9.5
+// pairing was retired because PKG's real peak (5.344) was ABOVE its own 5
+// GiB reservation, so that 0.1 GiB of "slack" was never a memory margin.
+const XL_GB = 7;
 
 const defaults = {
   // `jobs` is now only the CPU-axis cap (concurrent files); RAM is governed
@@ -354,11 +379,16 @@ const entries = tests.map(([file, ...rest]) => Object.assign({ file }, ...rest.f
 // is a property of the SOURCE, and a hand-maintained mirror of a source
 // property is precisely the bookkeeping that #314 shows goes stale silently —
 // except that here a stale entry does not merely hide a test, it UNDER-CHARGES
-// a 3.5 GB mkimage and over-commits the box. Deriving it means a new
+// a ~5 GiB row by 2.5 GiB and over-commits the box. Deriving it means a new
 // gucman-family e2e is weighted and pre-baked correctly the day it lands, with
-// nothing to remember. (tests/kernel/lib/gucman.js is the only definition of
-// the helper; a member that reaches it through a further indirection would be
-// missed, so keep calling it by name.)
+// nothing to remember.
+//
+// This NARROWS the stale-bookkeeping window; it does not close it. The match is
+// textual, so a member reaching the helper through a WRAPPER would not match.
+// That fails to the 4.5 default — safe-ish, though it also skips the pre-bake —
+// but a row that is ALSO tagged BOOT would land at 2 GiB, which is not safe. No
+// current member is misclassified (checked, not assumed). So "call
+// ensureMinimalImage by name" is a convention here, not an enforced invariant.
 const PKG_RE = /ensureMinimalImage/;
 for (const e of entries) {
   try { e.pkg = PKG_RE.test(fs.readFileSync(path.join(__dirname, e.file), 'utf-8')); }
@@ -368,8 +398,8 @@ for (const e of entries) {
 // Weight assignment, most-specific first. Anything that matches nothing gets
 // HEAVY_GB, so a brand-new e2e is over-charged rather than under-charged.
 for (const e of entries) {
-  e.gb = e.file === 'test_punes_e2e.js' ? PUNES_GB
-       : e.pkg ? PKG_GB
+  e.gb = e.file === 'test_os_boot.js' ? OSBOOT_GB
+       : (e.pkg || e.file === 'test_punes_e2e.js') ? XL_GB
        : e.light ? LIGHT_GB
        : e.boot ? BOOT_GB
        : HEAVY_GB;
@@ -392,17 +422,21 @@ if (!opts.list && entries.some(e => e.image && matchesFilter(e.file, opts.filter
   ensurePrebakedImage();
 }
 
-// The same pre-step for the MINIMAL (no-packages) blob, for the same reason
-// (#579). Every PKG row calls ensureMinimalImage() lazily against one cached
-// path with NO lock, so before this hoist the blob was baked INSIDE the pool
-// by whichever row won the race — measured at 4.80 GB peak for that row
-// (test_gucman_e2e.js in the #579 baseline) against a 1.05 GB peak for the
-// same row once the blob is warm. Charging all 19 PKG rows for a spike that
-// happens at most once per tree is the very "one weight for everything"
-// defect this file is fixing, one level down; hoisting it makes PKG_GB an
-// honest description of the pool build that is actually left. It also closes
-// the unlocked double-bake: two PKG rows admitted together used to be able to
-// run two full mkimage processes at once.
+// The same pre-step for the MINIMAL (no-packages) blob (#579). Every PKG row
+// calls ensureMinimalImage() lazily against one cached path with NO lock, so
+// without this the blob is baked INSIDE the pool by whichever row wins the
+// race, and two rows admitted together can each run a full mkimage.
+//
+// 🔴 What this does NOT do: make the XL rows cheaper. That was the original
+// rationale and it was WRONG — it rested on a misread figure (a 1.05 GiB
+// "warm" number that belonged to a different row). Measured properly, solo
+// and serial, with the blob and the mkpkg pool both already warm,
+// test_gucman_e2e.js still peaks 4.59-4.88 GiB (build/rss-579-pkgsolo.json,
+// 3 runs), against 4.80 with a cold bake. The bake is NOT the dominant cost;
+// a full boot plus a second heavy node process beside it is. So XL_GB is
+// sized for the row's intrinsic cost, and this hoist is kept for what it
+// actually buys: the unlocked double-bake is gone, and a cold tree pays that
+// bake once, up front and visibly, instead of inside one arbitrary row.
 if (!opts.list && entries.some(e => e.pkg && matchesFilter(e.file, opts.filter))) {
   require('./lib/gucman.js').ensureMinimalImage();
 }
