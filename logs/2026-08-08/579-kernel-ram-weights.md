@@ -142,3 +142,89 @@ timeouts later. The 765 s number is real and deliberately **not** what shipped.
 - Free disk sat at 9.2–9.4 GB throughout and the runner warns about it. Higher
   concurrency means more live ~150 MB per-file fixtures at once; this did not
   bite, but it is the other resource whose exhaustion also presents as timeouts.
+
+---
+
+# CORRECTION after the Codex review (tip `d50c6aa6`)
+
+The review returned RED on one blocking finding, and it was right. Everything
+above the line stands as a record of what I measured; three claims in it are
+**wrong** and are corrected here rather than quietly edited, because the way
+they were wrong is the reusable lesson.
+
+## 1. `PKG_GB = 5` was below observed RSS — in the shipped config's own artifact
+
+`build/rss-579-final.json` — the run of the configuration I shipped — records
+`test_gucman_e2e.js` at **5.344 GiB** and `test_defaults_sync_e2e.js` at
+**5.080 GiB**, both charged 5. My class table said "4.09 GB worst / 1.22x"
+because I built it from **two** artifacts and then produced a third without
+re-reading it. I had already corrected exactly this class of error once (BOOT,
+1.01 → 1.46) and did not apply the same discipline to PKG.
+
+Re-measured solo + serial at 250 ms, where there is no co-scheduling
+attribution ambiguity (`build/rss-579-pkgsolo.json`, 3x each):
+
+| row | solo peaks | under full-suite load |
+|---|---|---|
+| `test_gucman_e2e.js` | 4.88 / 4.69 / 4.59 GiB | 5.344 |
+| `test_defaults_sync_e2e.js` | 4.28 / 4.10 / 3.74 GiB | 5.080 |
+
+**Contention inflates a tree's peak** (phases that are sequential on a quiet box
+overlap on a loaded one), so a solo measurement is a floor, not the answer.
+
+`PKG` and `punes` are now one **XL class at 7 GiB** — one physical shape, a full
+boot with a second heavy node process resident beside it. XL=7 keeps the
+serializer property (2 XL = 14 GiB, unreachable under 24 GB RAM) and gives up
+the `4.5 + 5 = 9.5` pairing with `test_os_boot.js`, which was never a memory
+margin in the first place: PKG's real peak was *above* its own reservation.
+`test_os_boot.js` gets its own weight (5); that is free, because `9.6 − 5` still
+admits 2 BOOT beside it exactly as `9.6 − 4.5` did.
+
+**The methodology lesson: the observed maximum CREEPS UP with every run added**,
+because each run samples more of the same tail — `gucman_e2e` went
+3.92 → 4.80 → 5.344 across three runs. "Worst of N runs" is itself biased low.
+Treat any headroom under ~1.2x as not yet proven.
+
+## 2. The hoist rationale rested on a figure I misread
+
+I wrote that the blob bake cost a PKG row 4.80 GiB "against a 1.05 GB peak for
+the same row once the blob is warm". **1.05 was `test_cc_win32_e2e.js`'s
+number.** Warm `gucman_e2e` is 4.59–4.88 solo. The bake is *not* the dominant
+cost of these rows.
+
+That also **refutes my own follow-up proposal** from the section above — hoisting
+the mkpkg pool build would not have helped either. The pool was already warm
+(20:39) before the run that recorded 5.344 (~21:0x), so that 5.344 is the row's
+intrinsic cost, not a cold-pool artifact. Do not file that follow-up.
+
+The blob hoist is **kept**, but only for what it actually buys: the unlocked
+double-bake is gone, and a cold tree pays the bake once, up front and visibly,
+instead of inside one arbitrary row. Its comment now says that instead of
+claiming a memory saving.
+
+## 3. The headline win shrinks
+
+The −23.8% figure was measured against a PKG weight that was unsafe. At correct
+weights the win is roughly **1153.8 s → ~984 s, about −15%**. The 879.1 s and
+765.2 s numbers are both retired for the same reason: they were bought with
+headroom I did not have.
+
+## Not yet green — the gate at XL weights is OWED
+
+The XL run was **168 pass / 1 FAIL**: `test_os_boot.js` timed out in its
+fixture-boot leg at the 300 s `CC_OS_BOOT_TIMEOUT_MS` budget. Wall 984.1 s,
+os_boot 798.6 s.
+
+The weights cannot be the cause: pool width *around* os_boot is unchanged
+(`9.6 − 5` → 2 BOOT + 1 LIGHT; `9.6 − 4.5` → 2 BOOT + 2 LIGHT), and XL=7
+*removes* load because an XL row can no longer co-run with os_boot at all.
+os_boot's duration across runs was 723 / 748 / 716 / 697 / **797** s — the
+outlier is the last one chronologically.
+
+What did change is the machine: **free disk on the data volume fell to 7 GB of
+460 (99% full)** during the session, and the runner's own preflight warns that
+exhaustion there "reports as timeouts, not as ENOSPC" — precisely this failure's
+shape. Reproducibility could not be tested: lane `580-additive-publish` took the
+heavy lock at 23:01:20 and the re-run was refused at **exit 3 (inconclusive, not
+red)**. Measuring under a sibling heavy suite is the one thing this ticket's own
+method forbids, so it stopped there.
