@@ -98,6 +98,66 @@ const RUN_ORDER = ['todos', 'netsurf-patch', 'unit', 'host', 'blockfs', ...PY_CA
 // `all` = the entire estate.
 const ALL_SUITES = ['todos', 'netsurf-patch', 'unit', 'host', 'blockfs', ...PY_CATEGORIES, 'kernel', 'sweep'];
 
+// ---------- Tiers (#576 F1) ----------
+//
+// Three FORMAL, NAMED tiers over the same suite registry. The full gate's
+// wall time is untouched — the tiers change what a lane WAITS ON, not what a
+// ship requires:
+//
+//   node tests/run.js smoke      fast confidence check (~3-5 min)
+//   node tests/run.js diff       what the current change needs (= --diff)
+//   node tests/run.js full       everything, unfiltered — the SHIP gate
+//
+// The whole risk of a tiering system is a gate that LIES: a green that only
+// means "we didn't run the thing that would have failed". Three mechanisms
+// hold the line, all pinned by tests/host/test_diff_rules.js:
+//   - `full` is set-equal to the ENTIRE suite registry, and refuses the
+//     softening flags (--filter/--resume) outright — rule 5's ship gate in
+//     one command that cannot be accidentally narrowed.
+//   - smoke's per-suite filter tokens are guard-checked against the on-disk
+//     tree with the SAME matcher the suite runner uses (matchesFilter), so a
+//     renamed/deleted test cannot silently shrink the tier to a green no-op.
+//   - every tier run RECORDS what it deliberately did not run (`tier` +
+//     `omitted` in summary.json, and loudly on stdout) — a green smoke is
+//     unmistakably not a full gate, to a human and to a judge.
+//
+// SMOKE composition (measured, 2026-08-08 — see logs/2026-08-08/576-batch15.md):
+// the cheap native suites + blockfs + one real run.py category (disw, the
+// cheapest — proves the pinned-python plumbing end to end) + a filtered
+// kernel leg. The kernel filter picks the SAB-protocol core plus real-C e2es
+// plus ONE fixture-boot e2e (test_strace_e2e, ~1s warm), so smoke really
+// compiles C, really runs it, and really boots the OS — while avoiding the
+// boot-heavy long poles (test_os_boot.js ~710s is the bake-path test;
+// os-git-cli/os-clang are 200s+ sweep members). The browser sweep is
+// deliberately OUT of smoke: its floor (Chromium + serve + bake) is minutes,
+// headless boot covers the kernel/OS core, and browser-only edits pull
+// `sweep` through the diff tier's #428 rules anyway. That is a recorded
+// decision, pinned by the guard — not an oversight.
+const SMOKE_KERNEL_FILTER = [
+  'test_kernel.',    // process-table semantics over the real SAB protocol
+  'test_tty',        // line discipline + a real-C e2e over the scripted bridge
+  'test_pipes',      // pipe OFDs (protocol + SPSC ring) + real-C pipelines
+  'test_fs_e2e',     // brokered fs RPCs with real C
+  'test_wm.',        // WM surface registry / input routing / chrome (no wasm)
+  'test_strace_e2e', // IMG: a REAL fixture boot — spawn, trace, exit status
+].join(',');
+
+const TIERS = {
+  smoke: {
+    desc: 'fast confidence check (~3-5 min): cheap suites + blockfs + disw + a filtered kernel leg incl. one real OS boot',
+    suites: ['todos', 'netsurf-patch', 'unit', 'host', 'blockfs', 'disw', 'kernel'],
+    filters: { kernel: SMOKE_KERNEL_FILTER },
+  },
+  diff: {
+    desc: 'the suites the current change needs (the --diff selection; optional ref)',
+    dynamic: true,
+  },
+  full: {
+    desc: 'the entire estate, unfiltered — what gates a SHIP (refuses --filter/--resume)',
+    suites: ALL_SUITES,
+  },
+};
+
 // ---------- Diff → suite rule table ----------
 //
 // UNION semantics: every rule whose regex matches a changed path contributes
@@ -629,7 +689,11 @@ function parseArgs(argv) {
   const out = { suites: [], diff: false, diffRef: null, dryRun: false,
                 list: false, help: false, filter: null, jobs: null,
                 resume: false, failFast: false, repeat: null, underLoad: null,
-                out: null };
+                out: null, tier: null };
+  const setTier = (t) => {
+    if (out.tier) { process.stderr.write(`one tier at a time: ${out.tier} and ${t} cannot combine\n`); process.exit(2); }
+    out.tier = t;
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--help' || a === '-h') out.help = true;
@@ -654,10 +718,28 @@ function parseArgs(argv) {
     else if (a === '-j' || a === '--jobs') out.jobs = argv[++i];
     else if (a.startsWith('-j')) out.jobs = a.slice(2);
     else if (a === 'all') out.suites.push(...ALL_SUITES);
+    // Tier tokens (#576 F1). `diff` takes an optional ref, exactly like --diff.
+    else if (a === 'smoke' || a === 'full') setTier(a);
+    else if (a === 'diff') {
+      setTier('diff');
+      if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) out.diffRef = argv[++i];
+    }
     else if (a.startsWith('-')) { process.stderr.write(`unknown flag: ${a}\n`); process.exit(2); }
     else if (SUITES[a]) out.suites.push(a);
     else { process.stderr.write(`unknown suite: ${a}\n  (see: node tests/run.js --list)\n`); process.exit(2); }
   }
+  // A tier is a complete statement of what runs — mixing it with named suites
+  // (or with --diff) would make the recorded `tier` a lie about the selection.
+  if (out.tier && out.suites.length) {
+    process.stderr.write(`a tier (${out.tier}) and named suites cannot combine — run one or the other\n`);
+    process.exit(2);
+  }
+  if (out.tier && out.tier !== 'diff' && out.diff) {
+    process.stderr.write(`a tier (${out.tier}) and --diff cannot combine\n`);
+    process.exit(2);
+  }
+  if (out.tier === 'diff') out.diff = true;
+  else if (out.diff) out.tier = 'diff'; // --diff IS the diff tier; record it as such
   return out;
 }
 
@@ -704,11 +786,15 @@ function planFromDiff(files) {
 
 // ---------- Execution ----------
 
-function suiteArgs(suite, opts) {
+function suiteArgs(suite, opts, tierFilters) {
   const s = SUITES[suite];
   const args = [];
   const sup = new Set(s.supports || []);
-  if (opts.filter != null && sup.has('filter')) args.push(`--filter=${opts.filter}`);
+  // A tier's per-suite filter (#576 F1). Mutually exclusive with a user
+  // --filter by the refusal in main(), so there is never a merge question.
+  const filter = opts.filter != null ? opts.filter
+    : (tierFilters && tierFilters[suite] != null ? tierFilters[suite] : null);
+  if (filter != null && sup.has('filter')) args.push(`--filter=${filter}`);
   if (opts.jobs != null && sup.has('jobs')) args.push('-j', String(opts.jobs));
   if (opts.resume && sup.has('resume')) args.push('--resume');
   if (opts.failFast && sup.has('failFast')) args.push('--fail-fast');
@@ -753,14 +839,39 @@ function main() {
   if (opts.help) { printHelp(); process.exit(0); }
   if (opts.list) { printList(); process.exit(0); }
 
+  // Tier flag discipline (#576 F1), before anything runs:
+  //   - smoke's per-suite filters ARE its definition — a user --filter on top
+  //     would silently redefine what "smoke green" means. Run suites by name
+  //     with --filter for a hand-narrowed run.
+  //   - `full` is rule 5's ship gate as one command: an unfiltered, no-carry
+  //     run of the whole registry. --filter narrows it and --resume carries
+  //     results in from an earlier tree — both are exactly what a ship gate
+  //     must refuse (CLAUDE.md rule 5). `all` keeps the legacy permissive
+  //     behavior for hand-driven work; `full` is the one that cannot soften.
+  if (opts.tier === 'smoke' && opts.filter != null) {
+    process.stderr.write(`smoke defines its own per-suite filters — --filter cannot combine with it.\n` +
+                         `  (narrow by hand instead: node tests/run.js <suite> --filter=...)\n`);
+    process.exit(2);
+  }
+  if (opts.tier === 'full' && (opts.filter != null || opts.resume)) {
+    process.stderr.write(`full is the unfiltered no-carry ship tier (CLAUDE.md rule 5) — ` +
+                         `${opts.filter != null ? '--filter' : '--resume'} cannot combine with it.\n` +
+                         `  (use \`all\` for a hand-softened whole-estate run)\n`);
+    process.exit(2);
+  }
+
   // Resolve the suite set.
   let requested;
   let diffInfo = null;
+  let tierFilters = null;
   if (opts.diff) {
     const files = changedFiles(opts.diffRef);
     diffInfo = planFromDiff(files);
     requested = [...diffInfo.suites];
     printDiffPlan(opts.diffRef, files, diffInfo, requested);
+  } else if (opts.tier) {
+    requested = [...TIERS[opts.tier].suites];
+    tierFilters = TIERS[opts.tier].filters || null;
   } else if (opts.suites.length) {
     requested = [...new Set(opts.suites)];
   } else {
@@ -771,6 +882,11 @@ function main() {
   // Order + dedup.
   const ordered = RUN_ORDER.filter(s => requested.includes(s))
     .concat(requested.filter(s => !RUN_ORDER.includes(s)));
+
+  // What a tier deliberately does NOT run — recorded in the summary and said
+  // out loud. A green smoke must be unmistakably not a full gate.
+  const omitted = opts.tier ? ALL_SUITES.filter(s => !ordered.includes(s)) : null;
+  if (opts.tier) printTierBanner(opts.tier, ordered, tierFilters, omitted);
 
   if (opts.dryRun) {
     process.stdout.write(`\nplan: ${ordered.length ? ordered.join(', ') : '(nothing)'}\n`);
@@ -842,7 +958,7 @@ function main() {
       results.push({ suite: `py[${pyCats.join(',')}]`, ...classify(r) });
       continue;
     }
-    const args = [...SUITES[suite].cmd.slice(1), ...suiteArgs(suite, opts)];
+    const args = [...SUITES[suite].cmd.slice(1), ...suiteArgs(suite, opts, tierFilters)];
     const r = runProcess(SUITES[suite].cmd[0], args, `${suite} suite`);
     const c = classify(r, !!SUITES[suite].heavyLock);
     // A contended suite never ran, so any artifact on disk is an EARLIER
@@ -869,8 +985,10 @@ function main() {
   // dispatcher's record; the per-suite artifacts (build/test-kernel etc.) are
   // written by the suite runners themselves and are not redirected.
   const summaryDir = opts.out ? path.resolve(opts.out) : path.join(ROOT, 'build', 'test-run');
-  writeMergedSummary(results, Date.now() - t0, opts, ordered, summaryDir);
-  printFinal(results, Date.now() - t0, path.join(summaryDir, 'summary.json'));
+  writeMergedSummary(results, Date.now() - t0, opts, ordered, summaryDir,
+                     { tier: opts.tier, tierFilters, omitted });
+  printFinal(results, Date.now() - t0, path.join(summaryDir, 'summary.json'),
+             opts.tier, omitted);
 
   const anyFail = results.some(r => r.status === 'fail');
   process.exit(anyFail ? 1 : 0);
@@ -933,13 +1051,23 @@ function classify(r, heavyLock) {
 // a single test file — which is exactly what a split sweep used to leave
 // behind. A reader must be able to see `filter: null` + `files.recorded: 40`
 // and know the whole suite was covered.
-function writeMergedSummary(results, ms, opts, ordered, dir) {
+function writeMergedSummary(results, ms, opts, ordered, dir, tierInfo) {
   try {
     fs.mkdirSync(dir, { recursive: true });
     const tmp = path.join(dir, 'summary.json.tmp');
     fs.writeFileSync(tmp, JSON.stringify({
       tool: 'tests/run.js', node: process.version, elapsedMs: ms,
       filter: opts.filter == null ? null : opts.filter,
+      // #576 F1: which formal tier this run was (null for hand-named suites)
+      // and what it DELIBERATELY did not run. `tierFilters` records any
+      // per-suite narrowing the tier applied — a judge must never have to
+      // infer from the child artifacts that a kernel row was a smoke slice.
+      // NB rule 5's ship-gate reading is unchanged and still sufficient:
+      // a smoke/diff record has a partial `suites` list, and a tier-filtered
+      // child artifact carries its own non-null `filter`.
+      tier: tierInfo && tierInfo.tier ? tierInfo.tier : null,
+      tierFilters: tierInfo && tierInfo.tierFilters ? tierInfo.tierFilters : undefined,
+      omitted: tierInfo && tierInfo.omitted ? tierInfo.omitted : undefined,
       suites: ordered,
       results,
     }, null, 2));
@@ -963,6 +1091,24 @@ function printDiffPlan(ref, files, info, suites) {
   process.stdout.write(`\n  \x1b[1msuites:\x1b[0m ${suites.length ? suites.join(', ') : '(none)'}\n`);
 }
 
+// The tier banner (#576 F1): before anything runs, say which tier this is,
+// what it runs (with any per-suite narrowing spelled out inline), and what it
+// deliberately does NOT run. The whole failure mode of a tiering system is a
+// green that quietly means "we didn't run the thing that would have failed" —
+// so the omission is printed as prominently as the selection.
+function printTierBanner(tier, ordered, tierFilters, omitted) {
+  process.stdout.write(`\n\x1b[1m━━━ tier: ${tier} ━━━\x1b[0m\n`);
+  const runs = ordered.map(s =>
+    tierFilters && tierFilters[s] != null ? `${s} [--filter=${tierFilters[s]}]` : s);
+  process.stdout.write(`  runs: ${runs.join(', ') || '(nothing)'}\n`);
+  if (omitted && omitted.length) {
+    process.stdout.write(`  \x1b[33mdeliberately NOT run: ${omitted.join(', ')}\x1b[0m\n` +
+      `  a green ${tier} is NOT a full gate — ships require \`node tests/run.js full\`.\n`);
+  } else {
+    process.stdout.write(`  omits nothing — the whole registry (${ordered.length} suites), unfiltered.\n`);
+  }
+}
+
 // `[N/M files]` when a suite reports its selection, marked PARTIAL when the
 // record does not account for the whole suite (todos/0339) — the one line that
 // stops "sweep: pass" from meaning "some of the sweep passed".
@@ -975,7 +1121,7 @@ function fmtCoverage(files) {
     + (partial ? ' — PARTIAL' : '') + `]${partial ? '\x1b[0m' : ''}`;
 }
 
-function printFinal(results, ms, summaryPath) {
+function printFinal(results, ms, summaryPath, tier, omitted) {
   process.stdout.write(`\n\x1b[1m━━━ tests/run.js summary ━━━\x1b[0m\n`);
   for (const r of results) {
     // A contended heavy suite is still a fail (the run exits nonzero) but its
@@ -994,10 +1140,30 @@ function printFinal(results, ms, summaryPath) {
   process.stdout.write(`\n  ${pass} passed, ${fail} failed` +
     (contended ? ` (${contended} of those DID NOT RUN — heavy lock contended)` : '') +
     `  (${fmtSecs(ms)})  → ${rel && !rel.startsWith('..') ? rel : summaryPath}\n`);
+  // The tier restated AT THE VERDICT, not just in the banner a screenful up:
+  // the last line is what a human (or a transcript excerpt) actually reads.
+  if (tier && omitted && omitted.length) {
+    process.stdout.write(`  \x1b[33mtier: ${tier} — NOT a full gate` +
+      ` (deliberately not run: ${omitted.length <= 4 ? omitted.join(', ')
+        : omitted.slice(0, 3).join(', ') + ` + ${omitted.length - 3} more`})\x1b[0m\n`);
+  } else if (tier === 'full') {
+    process.stdout.write(`  tier: full — the whole registry, unfiltered\n`);
+  }
 }
 
 function printList() {
-  process.stdout.write('Suites:\n');
+  process.stdout.write('Tiers (#576 F1):\n');
+  for (const [name, t] of Object.entries(TIERS)) {
+    process.stdout.write(`  ${name.padEnd(22)} ${t.desc}\n`);
+    if (t.suites) {
+      const runs = t.suites.map(s =>
+        t.filters && t.filters[s] != null ? `${s} [--filter=${t.filters[s]}]` : s);
+      process.stdout.write(`  ${''.padEnd(22)}   runs: ${runs.join(', ')}\n`);
+      const omitted = ALL_SUITES.filter(s => !t.suites.includes(s));
+      if (omitted.length) process.stdout.write(`  ${''.padEnd(22)}   omits: ${omitted.join(', ')}\n`);
+    }
+  }
+  process.stdout.write('\nSuites:\n');
   for (const name of ALL_SUITES) {
     process.stdout.write(`  ${name.padEnd(22)} ${SUITES[name].desc}\n`);
   }
@@ -1016,11 +1182,15 @@ function printHelp() {
   process.stdout.write(`Unified test entry point (todos/0084).
 
 Usage:
+  node tests/run.js smoke               fast confidence check (~3-5 min) — NOT a full gate
+  node tests/run.js diff [ref]          run the suites the current change needs (= --diff)
+  node tests/run.js full                the entire estate, unfiltered — the SHIP gate
+                                        (refuses --filter/--resume; \`all\` is the permissive form)
   node tests/run.js all                 run the entire estate, one summary
   node tests/run.js <suite>...          run named suites
   node tests/run.js --diff [ref]        run the suites the diff needs
   node tests/run.js --diff --dry-run    print the plan only
-  node tests/run.js --list              list suites + the rule table
+  node tests/run.js --list              list tiers, suites + the rule table
 
 Flags (forwarded to suites that accept them):
   --filter=STR   substring filter on test name
@@ -1046,5 +1216,6 @@ if (require.main === module) {
   // table + the planner so the RULES closure is testable without a git diff.
   module.exports = { SUITES, PY_CATEGORIES, RULES, IGNORE, FORCE, planFromDiff,
                      browserPreflight, pythonPreflight, classify,
-                     OS_BROWSER_ONLY, OS_HEADLESS_ONLY, OS_RUNTIME_ONLY };
+                     OS_BROWSER_ONLY, OS_HEADLESS_ONLY, OS_RUNTIME_ONLY,
+                     TIERS, ALL_SUITES };
 }
