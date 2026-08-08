@@ -51,6 +51,9 @@
 //   node tools/mkpkg.js                # build every packages/<name>.json
 //   node tools/mkpkg.js punes          # build specific packages
 //   node tools/mkpkg.js --out=DIR --force --quiet
+//   node tools/mkpkg.js --prune            # ALSO drop entries this build
+//                                          # cannot see (explicit removal —
+//                                          # see the additive-publish block)
 //   node tools/mkpkg.js --packages-dir=DIR   # read definitions from DIR
 //                                            # instead of <repo>/packages
 //   node tools/mkpkg.js --pool=DIR           # SHARED payload store (below)
@@ -69,15 +72,35 @@
 // declare an explicit minBase only on packages whose payload carries no
 // compiled code — rationale at the entryFor comment below, #518).
 //
+// ---- ADDITIVE publish + --prune (#580) -------------------------------------
+//
+// The publish is ADDITIVE: the fresh index ADDS and UPDATES entries for the
+// names this invocation can enumerate, and CARRIES every other entry of the
+// previously published index.json forward untouched — so a base run keeps the
+// gated (`requires:"native-sibling:*"`) names a --clang run published, and an
+// image-side rebuild cannot unpublish a package it does not know about. That
+// property is what lets the package repo release on its own cadence (#580).
+// Before it, a build REPLACED the repo: the index was rewritten to exactly
+// this invocation's names and the orphan prune deleted every payload the
+// fresh index did not name — not a bleeding wound day to day (the deploy
+// default builds the full superset, todos/0337), but the reason the superset
+// workaround was LOAD-BEARING: any independent publisher would have silently
+// destroyed every entry it did not itself build.
+//
+// REMOVING an entry is therefore an explicit act: --prune additionally drops
+// every index entry whose name this invocation cannot see (definition
+// deleted, or gated behind a producer flag not passed), then the orphan prune
+// deletes the newly unreferenced payloads from the private view. Every
+// dropped name is logged. A carried entry whose payload bytes are missing
+// from both the view and the store is a LOUD exit 1 naming --prune as the
+// deliberate-removal path — never a silently-404ing index row.
+//
 // ---- one repo per writer: --pool and the concurrency guard (todos/0388) ----
 //
-// `index.json` + `pool/` are ONE repo, and a build REPLACES it: a base run's
-// `avail` excludes every gated (`requires:"native-sibling:*"`) definition, so it rewrites
-// the index without those names AND its orphan prune DELETES their payload
-// bytes. Sequentially that is just the accepted clang/base thrash. Concurrently
-// it is a race that silently retargets another builder's repo mid-read — and
-// the dangerous direction is base-vs-base, where the result still LOOKS
-// correct. So two builds must never share one output dir:
+// Additive publish does not change the interleave hazard: index.json + pool/
+// are still one unit, two concurrent writers still race mid-read, and the
+// dangerous direction is still base-vs-base, where the result LOOKS correct.
+// So two builds must never share one output dir:
 //
 //   --pool=DIR  puts the expensive content-addressed payload store at DIR
 //               instead of <out>/pool, so N isolated repos share ONE warm
@@ -106,8 +129,8 @@ const zlib = require('zlib');
 const crypto = require('crypto');
 
 // Cross-tree preflight (todos/0341, extended by #142): writes dist/packages/
-// in its own tree (and the prune REPLACES the repo there — todos/0388), so a
-// foreign-cwd launch would rewrite another tree's package repo.
+// in its own tree (and --prune deletes payloads there — todos/0388, #580), so
+// a foreign-cwd launch would rewrite another tree's package repo.
 require(path.join(__dirname, '../tests/lib/tree-guard.js'))
   .assertSameTree(__dirname, { label: 'tools/mkpkg.js' });
 
@@ -120,6 +143,8 @@ const COMMON = require(path.join(OS_DIR, 'os-common.js'));
 let outDir = path.join(ROOT, 'dist', 'packages');
 let quiet = false;
 let force = false;
+// #580: removal is opt-in. false = additive publish (carry unknown entries).
+let prune = false;
 // ---- native siblings (todos/0416; RUST.md §3 rule 4) ----------------------
 // A NATIVE SIBLING is an out-of-repo producer of prebuilt payloads: one
 // repository builds the binaries and publishes an `out-image/overlay.json`
@@ -176,6 +201,7 @@ for (const a of process.argv.slice(2)) {
   if (a.startsWith('--packages-dir=')) { pkgDir = path.resolve(a.slice(15)); continue; }
   if (a === '--quiet') { quiet = true; continue; }
   if (a === '--force') { force = true; continue; }
+  if (a === '--prune') { prune = true; continue; }
   let handled = false;
   for (const p of Object.keys(SIBLINGS)) {
     if (a === '--' + p) { enabled.add(p); handled = true; }
@@ -833,8 +859,14 @@ function materializeView(store, view, live) {
     const src = path.join(store, f);
     const dst = path.join(view, f);
     const s = fs.statSync(src, { throwIfNoEntry: false });
-    if (!s) throw new Error(`mkpkg: shared pool ${store} is missing ${f}`);
     const d = fs.statSync(dst, { throwIfNoEntry: false });
+    // A carried payload (#580) can predate --pool or survive a store reclaim:
+    // the view copy alone keeps it servable, and the content-addressed name
+    // means it is the right bytes.
+    if (!s) {
+      if (d) continue;
+      throw new Error(`mkpkg: shared pool ${store} is missing ${f}`);
+    }
     if (d && d.ino === s.ino && d.dev === s.dev) continue;   // already this payload
     if (d) fs.unlinkSync(dst);
     try { fs.linkSync(src, dst); }
@@ -855,17 +887,53 @@ async function main() {
     baseVersion: imageManifest.version | 0,
     packages: {},
   };
+  const prev = readIndex();
+  if (prev && prev.packages && (prev.schemaVersion | 0) !== 1) {
+    // A future-schema index must not be silently demoted to what this tool
+    // understands — merging would carry entries whose shape it cannot judge.
+    process.stderr.write(`mkpkg: ${path.join(outDir, 'index.json')} has schemaVersion ` +
+      `${JSON.stringify(prev.schemaVersion)} — this tool writes schemaVersion 1 and ` +
+      `cannot merge with it\n`);
+    process.exit(1);
+  }
   // Rebuild requested packages; carry every other declared package's entry
   // forward so a single-package invocation still writes a complete index.
   for (const n of allAvail) {
     if (names.includes(n)) {
       index.packages[n] = await buildPackage(n, store, sharedPool, sourceUnits.get(n));
-    } else {
-      const prev = readIndex();
-      if (prev && prev.packages && prev.packages[n]) index.packages[n] = prev.packages[n];
+    } else if (prev && prev.packages && prev.packages[n]) {
+      index.packages[n] = prev.packages[n];
     }
   }
+  // ADDITIVE publish (#580): carry every previously published entry this
+  // invocation cannot enumerate (gated behind a producer flag not passed, or
+  // its definition removed) — under --prune, drop them instead, each by name.
+  const foreign = prev && prev.packages
+    ? Object.keys(prev.packages).filter((n) => !allAvail.includes(n)).sort() : [];
+  for (const n of foreign) {
+    if (prune) log(`--prune: dropping index entry ${n} ${prev.packages[n].version}`);
+    else index.packages[n] = prev.packages[n];
+  }
+  if (foreign.length && !prune) {
+    log(`carried ${foreign.length} published entr${foreign.length === 1 ? 'y' : 'ies'} ` +
+      `outside this build's package set: ${foreign.join(', ')}`);
+  }
   const live = new Set(Object.values(index.packages).map((p) => path.basename(p.payload.url)));
+  // Every index row must stay SERVABLE: a payload built this run exists by
+  // construction, but a carried entry's bytes must already sit in the view
+  // (or, under --pool, the store). Publishing a 404 row would be strictly
+  // worse than either keeping or dropping the entry deliberately.
+  for (const n of Object.keys(index.packages).sort()) {
+    const f = path.basename(index.packages[n].payload.url);
+    if (fs.existsSync(path.join(view, f))) continue;
+    if (sharedPool && fs.existsSync(path.join(store, f))) continue;
+    process.stderr.write(
+      `mkpkg: index entry ${n} ${index.packages[n].version} references pool/${f}, ` +
+      `which exists in neither the pool view nor the store\n` +
+      `  a published entry must stay installable: rebuild it (restore its definition,\n` +
+      `  or pass its producer flag), or drop it deliberately with --prune\n`);
+    process.exit(1);
+  }
   fs.mkdirSync(outDir, { recursive: true });
   // Populate the view BEFORE publishing the index, so the repo is never
   // momentarily advertising a payload that isn't there yet.

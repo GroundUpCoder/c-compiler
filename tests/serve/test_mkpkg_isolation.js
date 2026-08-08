@@ -1,23 +1,31 @@
-// Guardrail (d) — mkpkg repo ISOLATION (todos/0388).
+// Guardrail (d) — mkpkg repo ISOLATION (todos/0388) + ADDITIVE publish (#580).
 //
-// `index.json` + `pool/` are one repo and a build REPLACES it: the orphan prune
-// deletes every payload the fresh index does not name. Sequentially that is the
-// accepted clang/base thrash. Concurrently — eight kernel e2es used to build
-// into the one dist/packages at -j2 — it is a race that retargets another
-// builder's repo mid-read, and the dangerous direction is base-vs-base, where
-// the surviving index still LOOKS correct.
+// `index.json` + `pool/` are one repo. Since #580 a build UPSERTS it: entries
+// this invocation cannot enumerate are carried forward, and only --prune drops
+// them (and their payload bytes). Before #580 every build REPLACED the repo —
+// the orphan prune deleted every payload the fresh index did not name — which
+// is why 41 consecutive deploys silently unpublished the -clang set, and why
+// concurrent builders (eight kernel e2es used to build into the one
+// dist/packages at -j2) could retarget each other's repo mid-read; the
+// dangerous direction is base-vs-base, where the surviving index still LOOKS
+// correct.
 //
-// This file is the executable form of that claim. It proves, on the REAL tool
-// with synthetic definitions (no compilation, no clang sibling needed):
+// This file is the executable form of those claims. It proves, on the REAL
+// tool with synthetic definitions (no compilation, no clang sibling needed):
 //
-//   RED CONTROL  two differing builds into ONE out dir: the second DELETES the
-//                first's payload and drops its name. This is the bug, still
-//                reproducible on demand — without it, the green leg below
-//                would pass just as well against a tool that never prunes at
-//                all, and would prove nothing.
-//   GREEN        the same two builds into per-build out dirs over a SHARED
-//                --pool: both repos stay complete and BOTH payloads stay
-//                readable, while the pool is warm-cached rather than rebuilt.
+//   UNION        two differing builds into ONE out dir: the second KEEPS the
+//                first's name and payload (the #580 regression guard for the
+//                41-deploy episode — set A then set B publishes the union).
+//   RED CONTROL  the same second build WITH --prune drops the name and
+//                DELETES its payload. The destruction stays reproducible on
+//                demand — without it, the union legs would pass just as well
+//                against a tool that never prunes at all, and would prove
+//                nothing about the instrument.
+//   SERVABLE     a carried entry whose payload bytes are gone refuses loudly
+//                (exit 1, naming --prune) instead of publishing a 404 row.
+//   GREEN        the two differing builds into per-build out dirs over a
+//                SHARED --pool: both repos stay complete and BOTH payloads
+//                stay readable, while the pool is warm-cached, not rebuilt.
 //   SHARED POOL  the shared store is never deleted from (append-only), and the
 //                per-repo pool/ is a hardlinked view, not a byte copy.
 //   LOCK         two concurrent builds of one out dir refuse loudly (exit 1)
@@ -78,21 +86,49 @@ function serves(dir, name) {
   return fs.existsSync(path.join(dir, entry.payload.url));
 }
 
-/* ---- RED CONTROL: one out dir, two differing builds ---- */
+/* ---- UNION (#580): one out dir, two differing builds — additive default ---- */
 {
   const out = path.join(tmp, 'shared-outdir');
   const a = mkpkg([`--out=${out}`, `--packages-dir=${DEFS_BOTH}`]);
-  check('control: the two-package build succeeds', a.status === 0, a.stderr);
-  check('control: it serves iso-alpha', serves(out, 'iso-alpha'));
+  check('union: the two-package build succeeds', a.status === 0, a.stderr);
+  check('union: it serves iso-alpha', serves(out, 'iso-alpha'));
   const alphaUrl = readIndex(out).packages['iso-alpha'].payload.url;
 
   const b = mkpkg([`--out=${out}`, `--packages-dir=${DEFS_ONE}`]);
-  check('control: the one-package build succeeds', b.status === 0, b.stderr);
-  // THE BUG, on demand: same dir, so the second build owns it and prunes.
-  check('RED CONTROL: a differing build into the SAME out dir drops the name',
+  check('union: the one-package build succeeds', b.status === 0, b.stderr);
+  // The #580 regression guard for the 41-deploy episode: publishing set A
+  // then set B yields the UNION, not B alone.
+  check('🔴 UNION: a differing build into the SAME out dir KEEPS the carried name',
+    serves(out, 'iso-alpha'));
+  check('🔴 UNION: ...including its payload bytes', fs.existsSync(path.join(out, alphaUrl)), alphaUrl);
+  check('union: the build\'s own name is served too', serves(out, 'iso-common'));
+
+  /* RED CONTROL: the destruction, on demand, via --prune. Same dir, same defs
+   * — only the flag differs, so the union legs above are proven against a
+   * tool whose prune instrument demonstrably still fires. */
+  const c = mkpkg([`--out=${out}`, `--packages-dir=${DEFS_ONE}`, '--prune']);
+  check('prune: the --prune build succeeds', c.status === 0, c.stderr);
+  check('RED CONTROL (--prune): drops the carried name',
     !readIndex(out).packages['iso-alpha']);
-  check('RED CONTROL: ...and DELETES its payload bytes',
+  check('RED CONTROL (--prune): ...and DELETES its payload bytes',
     !fs.existsSync(path.join(out, alphaUrl)), alphaUrl);
+  check('prune: the build\'s own name survives the prune', serves(out, 'iso-common'));
+}
+
+/* ---- SERVABLE: a carried entry with missing payload bytes refuses ---- */
+{
+  const out = path.join(tmp, 'missing-payload');
+  mkpkg([`--out=${out}`, `--packages-dir=${DEFS_BOTH}`]);
+  const alphaUrl = readIndex(out).packages['iso-alpha'].payload.url;
+  fs.unlinkSync(path.join(out, alphaUrl));
+  const r = mkpkg([`--out=${out}`, `--packages-dir=${DEFS_ONE}`]);
+  check('servable: carrying an entry whose bytes are gone refuses (exit 1)',
+    r.status === 1, `status=${r.status}`);
+  check('servable: ...naming the entry and the --prune fix',
+    /iso-alpha/.test(String(r.stderr)) && /--prune/.test(String(r.stderr)),
+    String(r.stderr).slice(0, 300));
+  check('servable: the refused run left the previous index in place (no partial write)',
+    !!readIndex(out).packages['iso-alpha']);
 }
 
 /* ---- GREEN: per-build out dirs over one shared pool ---- */
