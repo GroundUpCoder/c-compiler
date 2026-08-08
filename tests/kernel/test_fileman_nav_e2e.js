@@ -60,6 +60,19 @@ const SHIFT_DOWN_KEY = ['wmctl keydown $SID 225 1073742049 1',
 // Row pitch is font-derived (20px em -> ~29px rows, listbox top TOP_H=26):
 // clickRow(n) targets the CENTER of visual row n.
 const clickRow = (n) => `wmctl click $SID 100 ${26 + n * 29 + 14}`;
+// #344: the SDL veneer's click counter pairs consecutive button-downs within
+// 500ms AND 32px into a double-click — and agent-path clicks (wmctl click
+// LABEL, settext) never touch that chain, so two clickRow()s at the SAME
+// coordinates pair across any number of agent steps between them.  Measured
+// on an idle box the pair below (line ~142 vs ~124) ran 536-567ms apart —
+// a ~40ms margin that gate jitter can erase, turning the select-click into
+// a DOUBLE-click that navigates by itself (the #342 gate red: title already
+// "File Manager - /root/Desktop" before ENTER).  Where a click follows an
+// earlier same-position click with no intervening SDL-path click, use the
+// x-offset variant: >32px sideways in the same row breaks the chain
+// DETERMINISTICALLY (no timing guess), and the row is full-width so the
+// selection behavior is identical.
+const clickRowFar = (n) => `wmctl click $SID 180 ${26 + n * 29 + 14}`;
 const RC_PANE = 'wmctl click $SID 100 320 3';
 
 const out = boot([
@@ -139,7 +152,9 @@ const out = boot([
   'wmctl settext EDIT:0 /root',
   'wmctl click Go',
   'wmctl wait win "File Manager - /root" 8000',
-  clickRow(0),                               // row 0 of /root: a directory
+  clickRowFar(0),                            // row 0 of /root: a directory
+  // (#344: x-offset variant — the previous SDL-path click was clickRow(0) at
+  // the same spot ~540ms ago, a near-miss of the 500ms double-click window)
   // (the click -> ENTER pair is FIFO in the ring; no gap needed)
   'echo ==beforeenter',
   'wmctl tree',
@@ -186,7 +201,10 @@ const out = boot([
   'echo ==autorefresh',
   'wmctl gettext LISTBOX:0',
   'echo ==cut',
-  'wmctl click $SID 100 260',                // focus listbox (empty space)
+  'wmctl click $SID 140 260',                // focus listbox (empty space;
+                                             // #344: x-offset from the earlier
+                                             // (100,260) focus click — same
+                                             // double-click-window class)
   F5,
   'wmctl wait text LISTBOX:0 "late.txt" 8000',
   'echo ==afterf5',
