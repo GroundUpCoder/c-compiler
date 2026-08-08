@@ -58,10 +58,11 @@ check('gucman-sources closure carries gucman.c + its project + cJSON',
   gucman.def.files['vendor/cjson/cJSON.c'] !== undefined);
 
 const gcode = byName.get('gcode-sources');
-const gcodeVer = JSON.parse(fs.readFileSync(path.join(ROOT, 'packages', 'gcode.json'), 'utf-8')).version;
+const gcodeDef = JSON.parse(fs.readFileSync(path.join(ROOT, 'packages', 'gcode.json'), 'utf-8'));
 check('gcode-sources exists (package derivation — #578 pulled gcode out of the image)',
   gcode && gcode.kind === 'package');
-check('gcode-sources version is the gcode package version', gcode && gcode.def.version === gcodeVer,
+check('gcode-sources version uses its explicit companion lineage',
+  gcode && gcode.def.version === gcodeDef.sourcesVersion,
   gcode && gcode.def.version);
 check('gcode-sources closure carries gcode.c + its project + cJSON',
   gcode && gcode.def.files['os/gcode/gcode.c'] !== undefined &&

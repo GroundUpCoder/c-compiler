@@ -75,7 +75,7 @@ process.on('exit', () => {
 function runMkpkg(dir, extraArgs, timeout) {
   fs.mkdirSync(dir, { recursive: true });
   const r = cp.spawnSync(process.execPath,
-    [path.join(ROOT, 'tools', 'mkpkg.js'), '--quiet', `--out=${dir}`, `--pool=${POOL}`,
+    [path.join(ROOT, 'tools', 'mkpkg.js'), '--no-baseline', '--quiet', `--out=${dir}`, `--pool=${POOL}`,
      ...extraArgs],
     { stdio: ['ignore', 'inherit', 'inherit'], timeout });
   if (r.status !== 0) throw new Error(`mkpkg ${extraArgs.join(' ')} failed (exit ${r.status})`);

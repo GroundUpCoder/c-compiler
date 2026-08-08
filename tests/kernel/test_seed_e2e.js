@@ -93,7 +93,7 @@ function writeDefs() {
 
 function mkpkg(defsDir, outDir, names) {
   return cp.spawnSync(process.execPath,
-    [path.join(ROOT, 'tools', 'mkpkg.js'), '--quiet',
+    [path.join(ROOT, 'tools', 'mkpkg.js'), '--no-baseline', '--quiet',
      `--packages-dir=${defsDir}`, `--out=${outDir}`, ...names],
     { encoding: 'utf-8', timeout: 300000 });
 }

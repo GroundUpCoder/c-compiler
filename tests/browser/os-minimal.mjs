@@ -65,7 +65,7 @@ const fatBefore = fsMod.existsSync(FAT_IMG)
 // image's version (the minBase gate), exactly like os-gucman.mjs.
 {
   const r = spawnSync(process.execPath,
-    [path.join(ROOT, 'tools', 'mkpkg.js'), '--quiet'], { stdio: 'inherit' });
+    [path.join(ROOT, 'tools', 'mkpkg.js'), '--no-baseline', '--quiet'], { stdio: 'inherit' });
   if (r.status !== 0) { console.error('mkpkg failed — cannot serve a package repo'); process.exit(1); }
 }
 const INDEX = JSON.parse(fsMod.readFileSync(

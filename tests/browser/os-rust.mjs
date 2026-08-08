@@ -50,7 +50,7 @@ const SIB = path.join(ROOT, 'build', 'test-rust-sibling');
 // sequential thrash of todos/0388, exactly as in os-gucman.mjs).
 {
   const r = spawnSync(process.execPath,
-    [path.join(ROOT, 'tools', 'mkpkg.js'), 'wc-rust', '--rust', `--rust-root=${SIB}`, '--quiet'],
+    [path.join(ROOT, 'tools', 'mkpkg.js'), '--no-baseline', 'wc-rust', '--rust', `--rust-root=${SIB}`, '--quiet'],
     { stdio: 'inherit' });
   if (r.status !== 0) { console.error('mkpkg --rust failed — cannot serve the -rust card'); process.exit(1); }
 }
