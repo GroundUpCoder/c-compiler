@@ -458,7 +458,7 @@ the code, not assumed):
   surface sits at the bottom of z, every "desktop" click is an ordinary
   client click on it. No protocol addition needed.
 - **opendir/readdir and posix_spawn are available to seeded apps**
-  (protoshell.c is the in-repo pattern for both); wm.c just doesn't
+  (`deskdefaults.c` and `open.c` are the respective in-repo patterns); wm.c just doesn't
   include those headers yet.
 
 **Start menu (todos/0028).** A ~50px Start button at the taskbar's left

@@ -370,7 +370,8 @@ export async function openOsSession(opts = {}) {
 // ---- the seeded desktop grid model (todos/0184/0185) ----
 // Twin of tests/kernel/lib/drive.js deskEntries/deskSort/deskCell — one
 // behavior, two module systems. The seeded /root/Desktop set derives from
-// os/image.json's user section (the todos/0166 rule) — FILES and DIRS,
+// os/image.json's user section plus status-quo default Desktop packages (the
+// todos/0166 rule) — FILES and DIRS,
 // direct children only (the deck links inside Presentations/ are not
 // icons), plus wm.c's always-recreated Recycle Bin. deskSort replicates
 // wm.c entcmp (Recycle Bin last, dirs first, byte-order strcmp); deskCell
@@ -378,8 +379,9 @@ export async function openOsSession(opts = {}) {
 // pushed the seeded set past one column, so column-0 y math alone is
 // no longer safe.
 export function deskEntries(extras = []) {
-  const u = JSON.parse(
-    fs.readFileSync(path.join(ROOT, 'os/image.json'), 'utf8')).user;
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(ROOT, 'os/image.json'), 'utf8'));
+  const u = manifest.user;
   const child = (p) => {
     if (!p.startsWith('/root/Desktop/')) return null;
     const n = p.slice('/root/Desktop/'.length);
@@ -393,6 +395,11 @@ export function deskEntries(extras = []) {
   for (const p of u.dirs || []) {
     const n = child(p);
     if (n) ents.push({ name: n, dir: true });
+  }
+  for (const name of manifest.defaultPackages || []) {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(ROOT, 'packages', name + '.json'), 'utf8'));
+    if (pkg.desktop?.default === true) ents.push({ name, dir: false });
   }
   ents.push({ name: 'Recycle Bin', dir: false });   // wm.c ensure_recycle
   return deskSort(ents.concat(

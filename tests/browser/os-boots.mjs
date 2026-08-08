@@ -1,5 +1,5 @@
 // 0004 acceptance, browser half: boot the reference OS page (os/os.html) in
-// headless Chromium and drive the protoshell through the real xterm input
+// headless Chromium and drive the desktop/terminal through the real input
 // path — keystrokes -> kernel worker -> tty line discipline -> pid 1.
 //
 // Serves the REPO ROOT with serve.js (COOP/COEP for SAB), so the page loads
@@ -48,7 +48,7 @@ try {
   };
   const type = async (line) => { await page.keyboard.type(line + '\r'); };
 
-  // Boot: seeding compiles protoshell + cc in the kernel worker (slow-ish).
+  // Boot: seeding compiles cc and the image projects in the kernel worker (slow-ish).
   await page.waitForFunction(() => window.__osState === 'ready',
     { timeout: 120000, polling: 250 });
   check('boots to ready over OPFS', true);

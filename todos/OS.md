@@ -2,7 +2,7 @@
 
 The OS's name is **gucOS** (groundupcoder OS) — the todos/0114 sweep renamed
 every live surface (boot page, os-release, /proc/version builder token,
-protoshell banner, Start-menu band, saver marquee) off the old wasm-os
+Start-menu band, saver marquee) off the old wasm-os
 placeholder; historical logs/done items keep the old name as the record.
 
 ## Goal (repo north star)
@@ -229,10 +229,9 @@ os/os.html            thin boot shim (UI bridge): xterm + canvas + input
   stdio — so `echo 'ls /' | node os/boot.js` drives the OS with pipes and
   exit codes. `tests/kernel/test_os_boot.js` scripts it;
   `tests/browser/os-boots.mjs` drives the real page in headless Chromium.
-- **pid 1**: eventually the shell. Until the busybox port lands, the
-  ~230-line C *protoshell* (`os/protoshell.c`: builtins, spawn, `&&`,
-  trailing `&`, foreground pgroup handoff via tcsetpgrp) is the boot
-  program — it doubles as the live harness for kernel Phases 1–4.
+- **pid 1**: busybox hush (`/bin/sh`), the real shell port and live boot
+  program. It exercises the spawn, pipe, signal, tty, and job-control
+  substrate delivered by kernel Phases 1–4.
 
 ## Roadmap
 

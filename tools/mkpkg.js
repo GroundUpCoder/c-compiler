@@ -692,7 +692,9 @@ async function buildPackage(name, poolDir, sharedPool, synth) {
     if (!me.group || !me.entry || !bin[me.cmd]) throw new Error(`package '${name}': bad menu entry ${JSON.stringify(me)}`);
   }
   // Explicit desktop eligibility (win32 source-lib design §5): an object so
-  // it can grow (icon asset, label, …); today exactly {cmd}. Absent = the
+  // it can grow (icon asset, label, …). `default: true` says a package in
+  // defaultPackages preserves a built-in Desktop shortcut during sync.
+  // Absent = the
   // package is desktop-ineligible — gucman plants icons by THIS field, not
   // by any launchable-command heuristic.
   if (pkg.desktop !== undefined) {
@@ -701,10 +703,13 @@ async function buildPackage(name, poolDir, sharedPool, synth) {
       throw new Error(`package '${name}': desktop must be an object {cmd}`);
     }
     for (const k of Object.keys(d)) {
-      if (k !== 'cmd') throw new Error(`package '${name}': desktop has an unknown key ${JSON.stringify(k)}`);
+      if (k !== 'cmd' && k !== 'default') throw new Error(`package '${name}': desktop has an unknown key ${JSON.stringify(k)}`);
     }
     if (typeof d.cmd !== 'string' || !bin[d.cmd]) {
       throw new Error(`package '${name}': desktop.cmd ${JSON.stringify(d.cmd)} names no bin command`);
+    }
+    if (d.default !== undefined && d.default !== true) {
+      throw new Error(`package '${name}': desktop.default must be true when present`);
     }
   }
   for (const fp of pkg.fonts || []) {

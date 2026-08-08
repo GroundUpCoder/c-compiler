@@ -3,7 +3,7 @@
 // Node with busybox hush as pid 1 (/bin/sh), driven the way an agent or CI
 // would drive it — pipes and exit codes.
 //
-//   - first boot seeds the image from os/image.json: protoshell, cc,
+//   - first boot seeds the image from os/image.json: cc,
 //     BUSYBOX HUSH built from vendor/busybox/bin.json, and the busybox
 //     COREUTILS multicall (vendor/busybox/coreutils.json) with its /bin
 //     applet symlinks — all by the kernel's own compiler (no build step)

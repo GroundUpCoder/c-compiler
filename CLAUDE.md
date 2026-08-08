@@ -806,7 +806,7 @@ bake START time; mkimage publishes via atomic rename. Still bump
 (the in-browser gate can't stat inputs). Writes under /usr fail EROFS (host.js `readonly`
 volume flag, decided AFTER the path walk so `/usr/local/...` escapes to
 the rw volume). pid 1 is busybox hush (`/bin/sh`, baked from
-`vendor/busybox/bin.json`); `protoshell.c` stays as `/bin/psh`; `/bin/wm`
+`vendor/busybox/bin.json`); `/bin/wm`
 autostarts as a kernel service (killing it falls back to kernel-chrome;
 `wm &` respawns) and reads its Start menu from `/etc/menu` if that dir
 exists, else `/usr/share/menu` (first-existing-dir wins). Windowed vendor apps are seeded in-OS (todos/0015):

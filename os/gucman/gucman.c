@@ -706,6 +706,16 @@ static int gm_desktop_flag(void) {
     return on;
 }
 
+/* A package may explicitly say its Desktop shortcut is part of the default
+ * built-in surface. sync-defaults honors that bit for its top-level package;
+ * ordinary desktop eligibility remains governed by the user's preference. */
+static int gm_syncing_defaults;
+
+static int gm_desktop_is_default(cJSON *desktop) {
+    cJSON *d = desktop ? cJSON_GetObjectItemCaseSensitive(desktop, "default") : NULL;
+    return cJSON_IsTrue(d);
+}
+
 /* ============================== install ================================ */
 
 /* Undo bookkeeping so a failed plant unwinds what it already did (the DB
@@ -1386,7 +1396,8 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
      * name collision, malformed field or FS error is a warning, never an
      * install failure — the icon is cosmetic; the install is not. */
     cJSON *cdesk = fail ? NULL : cJSON_GetObjectItemCaseSensitive(control, "desktop");
-    if (cdesk && depth == 0 && gm_desktop_flag()) {
+    if (cdesk && depth == 0 &&
+        (gm_desktop_flag() || (gm_syncing_defaults && gm_desktop_is_default(cdesk)))) {
         cJSON *dcmd = cJSON_GetObjectItemCaseSensitive(cdesk, "cmd");
         if (!cJSON_IsString(dcmd) || !gm_valid_name(dcmd->valuestring) ||
             !cbin || !cJSON_GetObjectItemCaseSensitive(cbin, dcmd->valuestring)) {
@@ -1982,6 +1993,36 @@ static void gm_sync_status(const struct gm_sync_log *sl) {
         fprintf(stderr, "gucman: writing " GM_SYNC_STATUS ": %s\n", strerror(errno));
 }
 
+/* A folded default has no install transaction or DB record, but its verified
+ * control.json is the baked twin of that transaction. Plant only shortcuts
+ * explicitly marked as default surface; plain `desktop: {cmd}` packages such
+ * as doom remain opt-in. */
+static void gm_sync_baked_desktop(const char *name) {
+    char control_path[GM_PATH_MAX];
+    snprintf(control_path, sizeof control_path, "/usr/opt/%s/control.json", name);
+    size_t len;
+    char *text = gm_read_file(control_path, &len);
+    if (!text) return;
+    cJSON *control = cJSON_ParseWithLength(text, len);
+    free(text);
+    if (!control) return;
+    cJSON *desk = cJSON_GetObjectItemCaseSensitive(control, "desktop");
+    cJSON *cmd = desk ? cJSON_GetObjectItemCaseSensitive(desk, "cmd") : NULL;
+    cJSON *bin = cJSON_GetObjectItemCaseSensitive(control, "bin");
+    if (gm_desktop_is_default(desk) && cJSON_IsString(cmd) &&
+        gm_valid_name(cmd->valuestring) && cJSON_IsObject(bin) &&
+        cJSON_GetObjectItemCaseSensitive(bin, cmd->valuestring)) {
+        char link[GM_PATH_MAX], target[GM_PATH_MAX];
+        snprintf(link, sizeof link, GM_DESKTOP_DIR "/%s", name);
+        snprintf(target, sizeof target, "/usr/bin/%s", cmd->valuestring);
+        if (!gm_exists(link) && gm_mkdir_p(GM_DESKTOP_DIR) == 0 &&
+            symlink(target, link) != 0)
+            fprintf(stderr, "gucman: planting %s: %s — Desktop shortcut skipped\n",
+                    link, strerror(errno));
+    }
+    cJSON_Delete(control);
+}
+
 static int cmd_sync_defaults(void) {
     size_t len;
     char *text = gm_read_file(GM_DEFAULTS_ETC, &len);
@@ -2010,8 +2051,10 @@ static int cmd_sync_defaults(void) {
                 char dbp[GM_PATH_MAX], tomb[GM_PATH_MAX];
                 gm_db_path(line, dbp, sizeof dbp);
                 gm_tomb_path(line, tomb, sizeof tomb);
-                if (!gm_exists(dbp) && !gm_is_baked(line) && !gm_exists(tomb))
-                    snprintf(want[nwant++], GM_NAME_MAX, "%s", line);
+                if (!gm_exists(dbp) && !gm_exists(tomb)) {
+                    if (gm_is_baked(line)) gm_sync_baked_desktop(line);
+                    else snprintf(want[nwant++], GM_NAME_MAX, "%s", line);
+                }
             }
         }
         line = nl ? nl + 1 : NULL;
@@ -2041,7 +2084,9 @@ static int cmd_sync_defaults(void) {
                 if (gm_exists(dbp)) continue;            /* duplicate line / dep of
                                                           * an earlier default */
                 cJSON *in_progress = cJSON_CreateObject();
+                gm_syncing_defaults = 1;
                 int rc = gm_install_one(base, index, want[i], in_progress, 0);
+                gm_syncing_defaults = 0;
                 cJSON_Delete(in_progress);
                 gm_sync_note(&sl, rc == 0 ? "installed" : "failed", want[i]);
                 fflush(stdout);

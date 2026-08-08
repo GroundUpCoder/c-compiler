@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// #417 + #418 acceptance, headless: NetSurf, the demo bundle and the two GB
-// emulators live OUT of the base image as gucman packages. Each app must
+// #417 + #418 + #583 acceptance, headless: NetSurf, the demo bundle, the two GB
+// emulators, Calc and Paint live OUT of the base image as gucman packages. Each app must
 // install from a MINIMAL image (boot.js --packages=none) that provably does
 // not contain it, and then LAUNCH AND RUN — an installed package that does
 // not start is a fail.
@@ -63,7 +63,7 @@ function minimalRom() {
 const ROM_B64 = minimalRom().toString('base64');
 
 async function main() {
-  const repo = ensurePackages(['netsurf', 'demos', 'gameboy', 'sameboy']);
+  const repo = ensurePackages(['netsurf', 'demos', 'gameboy', 'sameboy', 'calc', 'paint']);
   const MIN = ensureMinimalImage();
   const { dir: tmp, image } = freshImage('os-gucman-apps-');
   fs.copyFileSync(MIN, image);   // copy mtime = now -> input-fresh at boot
@@ -73,7 +73,7 @@ async function main() {
 
   const script = [
     'echo ==minimal',
-    'for b in netsurf winbox gpubox gdidemo ctldemo fontramp gdiplusdemo k32demo gameboy sameboy; do test ! -e /bin/$b || echo BAKED-$b; done',
+    'for b in netsurf winbox gpubox gdidemo ctldemo fontramp gdiplusdemo k32demo gameboy sameboy calc paint; do test ! -e /bin/$b || echo BAKED-$b; done',
     'echo BIN-SWEEP-DONE',
     'test ! -e /usr/share/netsurf && echo NO-NETSURF-RES',
     'test ! -e /usr/share/menu/Accessories/netsurf && echo NO-NETSURF-MENU',
@@ -81,17 +81,38 @@ async function main() {
     'test ! -e /usr/share/menu/Games/sameboy && echo NO-SAMEBOY-MENU',
     'grep -q "^html" /usr/share/openwith || echo NO-HTML-KEY',
     'grep -q "^gb" /usr/share/openwith || echo NO-GB-KEY',
+    'grep -q "^bmp" /usr/share/openwith || echo NO-BMP-KEY',
     'echo ==install',
     'mkdir -p /etc/gucman',
+    'mkdir -p /var/lib/gucman && echo on > /var/lib/gucman/desktop_shortcuts',
     `echo http://127.0.0.1:${port} > /etc/gucman/repos`,
     'gucman install netsurf; echo NS-RC=$?',
     'gucman install demos; echo DM-RC=$?',
     'gucman install gameboy; echo GB-RC=$?',
     'gucman install sameboy; echo SB-RC=$?',
+    'gucman install calc; echo CALC-RC=$?',
+    'gucman install paint; echo PAINT-RC=$?',
     'readlink /usr/local/bin/netsurf',
     'readlink /etc/menu/Accessories/netsurf && echo NS-MENU-OK',
     'grep "^html" /etc/openwith',
     'grep "^gb" /etc/openwith',
+    'grep "^bmp" /etc/openwith',
+    'readlink /etc/menu/Accessories/calc && echo CALC-MENU-OK',
+    'readlink /etc/menu/Accessories/paint && echo PAINT-MENU-OK',
+    'readlink /root/Desktop/calc && echo CALC-DESK-OK',
+    'readlink /root/Desktop/paint && echo PAINT-DESK-OK',
+    'calc &',
+    'wmctl wait win Calculator 30000 || { echo CALC-WAIT-FAIL; wmctl list; exit 1; }',
+    'CSID=$(wmctl list | grep "\tCalculator$" | sed "s/[^0-9].*//")',
+    'wmctl close $CSID',
+    'wmctl wait nowin Calculator 8000',
+    'echo CALC-OK',
+    'paint &',
+    'wmctl wait win "untitled - Paint" 30000 || { echo PAINT-WAIT-FAIL; wmctl list; exit 1; }',
+    'PTSID=$(wmctl list | grep "\tuntitled - Paint$" | sed "s/[^0-9].*//")',
+    'wmctl close $PTSID',
+    'wmctl wait nowin "untitled - Paint" 8000',
+    'echo PAINT-OK',
     'echo ==netsurf',
     // resource closure: about:welcome -> resource:welcome.html out of
     // /opt/netsurf/res (Messages/css/png ride the same respath)
@@ -151,17 +172,24 @@ async function main() {
   check('no baked menu entries (netsurf/winbox/sameboy)',
     out.includes('NO-NETSURF-MENU') && out.includes('NO-WINBOX-MENU') &&
     out.includes('NO-SAMEBOY-MENU'));
-  check('no baked html/gb openwith keys',
-    out.includes('NO-HTML-KEY') && out.includes('NO-GB-KEY'));
+  check('no baked html/gb/bmp openwith keys',
+    out.includes('NO-HTML-KEY') && out.includes('NO-GB-KEY') && out.includes('NO-BMP-KEY'));
 
-  check('all four packages install (RC=0)',
+  check('all six packages install (RC=0)',
     out.includes('NS-RC=0') && out.includes('DM-RC=0') &&
-    out.includes('GB-RC=0') && out.includes('SB-RC=0'), section(out, 'install'));
+    out.includes('GB-RC=0') && out.includes('SB-RC=0') &&
+    out.includes('CALC-RC=0') && out.includes('PAINT-RC=0'), section(out, 'install'));
   check('install plants the netsurf bin symlink',
     out.includes('/opt/netsurf/netsurf'));
   check('install plants the netsurf menu entry', out.includes('NS-MENU-OK'));
-  check('install plants html + gb openwith keys',
-    /html\t.*netsurf/.test(out) && /gb\t.*sameboy/.test(out));
+  check('install plants html + gb + bmp openwith keys',
+    /html\t.*netsurf/.test(out) && /gb\t.*sameboy/.test(out) &&
+    /bmp\t.*paint/.test(out));
+  check('calc/paint install plants menu + Desktop entries',
+    out.includes('CALC-MENU-OK') && out.includes('PAINT-MENU-OK') &&
+    out.includes('CALC-DESK-OK') && out.includes('PAINT-DESK-OK'));
+  check('packaged calc launches', out.includes('CALC-OK'));
+  check('packaged paint launches', out.includes('PAINT-OK'));
 
   check('bare netsurf opens the packaged welcome page (resource closure)',
     out.includes('WELCOME-OK'));

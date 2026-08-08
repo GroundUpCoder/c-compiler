@@ -132,6 +132,7 @@ function section(out, name) {
 
 // ---- the seeded desktop grid model (todos/0184/0185) ----
 // The seeded /root/Desktop set is DERIVED from os/image.json's user section
+// plus default packages that explicitly preserve a built-in Desktop shortcut
 // (the todos/0166 rule: a new seeded icon must not silently shift hardcoded
 // rows) — FILES and DIRS, direct children only (the deck links inside
 // Presentations/ are not icons), plus wm.c's always-recreated Recycle Bin.
@@ -141,8 +142,9 @@ function section(out, name) {
 // column-0 math is no longer safe. Entries are {name, dir}; `extras` folds
 // in a test's runtime-created entries (string = plain file) before sorting.
 function deskEntries(extras = []) {
-  const u = JSON.parse(
-    fs.readFileSync(path.join(ROOT, 'os/image.json'), 'utf8')).user;
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(ROOT, 'os/image.json'), 'utf8'));
+  const u = manifest.user;
   const child = (p) => {
     if (!p.startsWith('/root/Desktop/')) return null;
     const n = p.slice('/root/Desktop/'.length);
@@ -156,6 +158,11 @@ function deskEntries(extras = []) {
   for (const p of u.dirs || []) {
     const n = child(p);
     if (n) ents.push({ name: n, dir: true });
+  }
+  for (const name of manifest.defaultPackages || []) {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(ROOT, 'packages', name + '.json'), 'utf8'));
+    if (pkg.desktop && pkg.desktop.default === true) ents.push({ name, dir: false });
   }
   ents.push({ name: 'Recycle Bin', dir: false });   // wm.c ensure_recycle
   return deskSort(ents.concat(

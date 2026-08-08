@@ -17,7 +17,7 @@
  * user-installed binaries deliberately win over system ones), HOME is /root.
  * term.c reuses the strings for its pty session leader's env (a superset
  * adding TERM); its spawn shape (file actions, posix_spawnp) — like
- * protoshell/open/strace's env-inheriting spawns — is legitimately different
+ * open/strace's env-inheriting spawns — is legitimately different
  * and deliberately NOT folded into spawn_path.
  */
 #ifndef LAUNCH_H

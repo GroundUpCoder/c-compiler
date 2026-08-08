@@ -1,0 +1,14 @@
+{
+  "name": "calc",
+  "version": "1a706d7",
+  "summary": "Calculator — ReactOS Calc (reactos @1a706d7, GPL-2.0+; UNICODE win32 veneer port with .res resource sidecar)",
+  "files": {
+    "calc": { "project": "vendor/calc/bin.json" },
+    "calc.res": { "bin": "vendor/calc/calc.res" }
+  },
+  "bin": { "calc": "calc" },
+  "desktop": { "cmd": "calc", "default": true },
+  "menu": [
+    { "group": "Accessories", "entry": "calc", "cmd": "calc" }
+  ]
+}

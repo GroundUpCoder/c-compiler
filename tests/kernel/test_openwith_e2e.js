@@ -106,6 +106,12 @@ const out = boot([
   "printf 'x\\n' > /root/data.zzz",
   "printf 'y\\n' > /root/noext",
 
+  // The fat fixture folds default packages: this line is derived from
+  // packages/paint.json, not carried by the raw image manifest.
+  'echo ==pkgow',
+  'grep "^bmp" /usr/share/openwith',
+  'echo ==cut',
+
   // ---- open(1), the terminal context ----
   'open --set zzz /root/probe.sh',
   'open /root/data.zzz && echo open-zzz-ok',
@@ -255,6 +261,9 @@ const out = boot([
 ].join('\n'));
 
 const count = (sec, re) => sec.split('\n').filter(l => re.test(l)).length;
+
+check('paint package provides the folded bmp association',
+  section(out, 'pkgow').trim() === 'bmp\t/bin/paint', section(out, 'pkgow'));
 
 check('open --set + ext association runs the probe with the path appended',
   section(out, 'probe1').trim() === 'opened:/root/data.zzz' && out.includes('open-zzz-ok'),
