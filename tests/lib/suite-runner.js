@@ -132,20 +132,20 @@ function parseSuiteArgs(argv, defaults) {
   return opts;
 }
 
-// Cap a requested worker count so the pool can't exhaust RAM. For the heavy
-// suites a job's real cost is MEMORY, not CPU: each kernel file boots a full
-// OS and spawns a nested os/boot.js node, ~PER_JOB_GB resident. Sizing `jobs`
-// off cpu count alone is what let 4 jobs ≈ 16.7 GB take down a 16 GB machine
-// (2026-07-25 OOM → WindowServer watchdog kill; see tests/lib/heavy-lock.js).
-// We keep the caller's number but clamp it to floor(usableRAM / perJobGb),
-// usableRAM = totalmem × memFraction (headroom for the OS, the GUI, and the
-// parent runner). Never below 1. Bypass with CC_NO_MEM_CAP=1 on a big/isolated
-// host where the caller's count is deliberate.
-function memoryCappedJobs(requested, perJobGb = 4, memFraction = 0.6) {
-  if (process.env.CC_NO_MEM_CAP === '1') return Math.max(1, requested);
-  const usableGb = (os.totalmem() / 2 ** 30) * memFraction;
-  const ramCap = Math.max(1, Math.floor(usableGb / perJobGb));
-  return Math.max(1, Math.min(requested, ramCap));
+// The RAM budget the weighted pool schedules against (#576 A2; supersedes
+// the uniform per-job clamp `memoryCappedJobs`). For the heavy suites a
+// job's real cost is MEMORY, not CPU: a kernel e2e boots a full OS in a
+// nested os/boot.js node, gigabytes resident, while a protocol test is a
+// bare node process. Sizing `jobs` off cpu count alone is what let 4 jobs
+// ≈ 16.7 GB take down a 16 GB machine (2026-07-25 OOM → WindowServer
+// watchdog kill; see tests/lib/heavy-lock.js). Callers pass this as
+// opts.budgetGb and weight each entry with `gb` (per-class peak RSS,
+// measured — see tests/kernel/run.js); the scheduler then never lets the
+// running set's summed weights exceed it. usable = totalmem × memFraction
+// (headroom for the OS, the GUI, and the parent runner). CC_NO_MEM_CAP=1
+// disables the budget on a big/isolated host.
+function ramBudgetGb(memFraction = 0.6) {
+  return (os.totalmem() / 2 ** 30) * memFraction;
 }
 
 // ---- member-registry completeness (ticket #314) ----
@@ -403,9 +403,30 @@ async function runSuite(entries, opts) {
     });
   }
 
-  // Longest-first from the previous run's timings improves makespan; files
-  // with no history run first (unknown cost = schedule early).
-  const known = f => { const r = prevByFile.get(f); return r && r.ms != null ? r.ms : Infinity; };
+  // Longest-first scheduling improves makespan. Cost sources, most current
+  // first: this artifact dir's previous run (an own result, then a carried
+  // one — both real measurements from here), then the suite's committed
+  // hints table (#576 A1: a fresh worktree has no summary at all, and
+  // unhinted it would run in declaration order and leave the longest files
+  // for the tail). No history anywhere = Infinity = schedule first (unknown
+  // cost is assumed expensive).
+  //
+  // Order is a SCHEDULING choice, never a semantic one: members are
+  // mkdtemp-isolated by construction and already execute under whatever
+  // interleaving the pool and the previous run's timings produce, so no
+  // member may assume another ran before it. The shared caches that do
+  // exist (the prebaked fixture, the cached minimal blob, the mkpkg pool)
+  // are lock- or atomic-rename-guarded, order-independent by design.
+  const priorMs = new Map(prevResults.filter(r => r.carried && r.ms != null)
+    .map(r => [r.file, r.ms]));
+  const hints = opts.hints || {};
+  const known = f => {
+    const r = prevByFile.get(f);
+    if (r && r.ms != null) return r.ms;
+    if (priorMs.has(f)) return priorMs.get(f);
+    if (hints[f] != null) return hints[f];
+    return Infinity;
+  };
   const parallel = files.filter(e => !e.serial).sort((a, b) => known(b.file) - known(a.file));
   const serial = files.filter(e => e.serial);
 
@@ -596,14 +617,35 @@ async function runSuite(entries, opts) {
   process.stdout.write(banner + '\n');
   startLoad();
 
-  let next = 0;
-  async function pump() {
-    while (next < parallel.length && !bailed) {
-      const entry = parallel[next++];
-      await runOne(entry);
+  // RAM-weighted pool (#576 A2/A4). `jobs` caps concurrent FILES (the CPU
+  // axis); `opts.budgetGb` caps the SUM of the running entries' `gb`
+  // weights (the RAM axis — the 2026-07-25 OOM guard, stronger than the
+  // old uniform per-job clamp because a light protocol test no longer
+  // costs a full boot's reservation). No budgetGb, or CC_NO_MEM_CAP=1, is
+  // the old pure-jobs pool. A lone entry always runs, however heavy (never
+  // below one job); when the queue head does not fit the remaining budget,
+  // the first entry that DOES fit runs instead — that is the two-pool
+  // effect: light files flow through the RAM the boots leave free.
+  const budgetGb = (opts.budgetGb != null && process.env.CC_NO_MEM_CAP !== '1')
+    ? opts.budgetGb : Infinity;
+  const gbOf = (e) => (e.gb != null ? e.gb : (opts.defaultGb || 0));
+  let usedGb = 0;
+  const running = new Map();   // settled-and-cleaned promise -> entry
+  const queue = parallel.slice();
+  while (queue.length && !bailed) {
+    let idx = -1;
+    if (running.size < opts.jobs) {
+      idx = running.size === 0 ? 0
+          : queue.findIndex(e => gbOf(e) <= budgetGb - usedGb);
     }
+    if (idx === -1) { await Promise.race(running.keys()); continue; }
+    const entry = queue.splice(idx, 1)[0];
+    const g = gbOf(entry);
+    usedGb += g;
+    const p = runOne(entry).finally(() => { usedGb -= g; running.delete(p); });
+    running.set(p, entry);
   }
-  await Promise.all(Array.from({ length: Math.min(opts.jobs, parallel.length || 1) }, pump));
+  await Promise.all([...running.keys()]);
   for (const entry of serial) {
     if (bailed) break;
     await runOne(entry);
@@ -711,4 +753,4 @@ async function runSuite(entries, opts) {
   };
 }
 
-module.exports = { runSuite, parseSuiteArgs, usage, matchesFilter, memoryCappedJobs, assertMemberRegistry };
+module.exports = { runSuite, parseSuiteArgs, usage, matchesFilter, ramBudgetGb, assertMemberRegistry };
