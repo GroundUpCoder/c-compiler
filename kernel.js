@@ -2049,7 +2049,10 @@ function Kernel(opts) {
   this._onClipboard = opts.onClipboard || null;
   // Deferred CLIP_GET (the clipboard seam): the INBOUND twin of onClipboard.
   // When present, a data read of the slot (CLIP_GET off 0, peek 0) PARKS the
-  // calling process and fires this hook with a done callback; the embedder
+  // calling process and fires this hook with (done, pid) — pid is the parked
+  // consumer, so the embedder can scope any refresh-freshness cache per
+  // consumer (#562: a pid-blind time window served one process's refresh to
+  // the NEXT process's first paste); the embedder
   // refreshes the slot from the host clipboard (the browser page runs
   // navigator.clipboard.readText inside the still-live activation of the
   // keystroke/tap that triggered the paste) and calls done(), and the parked
@@ -3241,7 +3244,11 @@ Kernel.prototype._dispatchRpc = function (pcb) {
           cself._cancelWaiter(pcb);
           cself._clipServe(pcb, gfmt, goff);
         };
-        try { this._onClipRead(cdone); }
+        // The consumer's pid rides along (#562): the embedder's freshness
+        // window is per-CONSUMER — a size-then-read pair from one process
+        // shares one refresh, while a DIFFERENT process's first read always
+        // re-reads the host clipboard (first paste fresh by construction).
+        try { this._onClipRead(cdone, pcb.pid); }
         catch (e) {
           this._log('onClipRead threw: ' + (e && e.message));
           cdone();   // never wedge the parked reader on a broken hook

@@ -88,21 +88,48 @@ try {
   }
   check('pollball composited (SDL_Renderer frame through the gpu transport)', true);
 
-  // Animation: the ball crosses the middle band at ~140px/s — time-separated
-  // probe trios must differ while the field corner stays the clear color.
-  const probe = async () => [
-    ...(await sample(WX + (CW >> 1), WY + (CH >> 1))),
-    ...(await sample(WX + (CW >> 1) - 60, WY + (CH >> 1) - 45)),
-    ...(await sample(WX + (CW >> 1) + 60, WY + (CH >> 1) + 45)),
-  ];
-  const a = await probe();
-  let animated = false;
+  // Animation: whole-window frame differencing (#575). The old probe
+  // sampled three FIXED POINTS against a fixed baseline — the 36px ball
+  // covers each point ~2.2% of the time, so a run missed motion entirely
+  // with ~7% probability by pure trajectory phase (a gate false red),
+  // while a genuinely frozen screen was indistinguishable from a miss.
+  // Differencing consecutive whole-client-rect grabs observes the actual
+  // signal: the ball moves >= ~33px between samples 300ms apart (wall-
+  // clock motion, >= 110px/s), repainting ~2400px, whereas a static frame
+  // differs in ZERO pixels — the verdict now separates "animating" from
+  // "frozen" deterministically and reports the measured delta either way.
+  const frameDelta = () => page.evaluate(([sx, sy, w, h]) => {
+    const c = document.getElementById('screen');
+    const t = document.createElement('canvas');
+    t.width = c.width; t.height = c.height;
+    const ctx = t.getContext('2d');
+    ctx.drawImage(c, 0, 0);
+    const d = ctx.getImageData(sx, sy, w, h).data;
+    const prev = window.__pbPrevFrame;
+    window.__pbPrevFrame = d;
+    if (!prev || prev.length !== d.length) return -1;   // no baseline yet
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (Math.abs(d[i] - prev[i]) > 12 || Math.abs(d[i + 1] - prev[i + 1]) > 12 ||
+          Math.abs(d[i + 2] - prev[i + 2]) > 12) n++;
+    }
+    return n;
+  }, [WX, WY, CW, CH]);
+  await frameDelta();   // seed the baseline frame
+  let animated = false, maxDelta = 0;
+  // 600 changed px ≈ a quarter of one full ball displacement — far above
+  // noise (a static screen scores 0), far below the ~2400px real signal.
+  // Consecutive-pair retries make a degenerate pair (a mid-interval bounce
+  // returning the ball near its sampled spot) self-healing: the next pair
+  // shows the full displacement.
   for (let i = 0; i < 40 && !animated; i++) {
     await new Promise(r => setTimeout(r, 300));
-    const b = await probe();
-    animated = b.some((v, j) => Math.abs(v - a[j]) > 12);
+    const n = await frameDelta();
+    if (n > maxDelta) maxDelta = n;
+    animated = n >= 600;
   }
-  check('ball animates (callback loop is live)', animated);
+  check('ball animates (callback loop is live)', animated,
+    { maxChangedPx: maxDelta });
 
   // ---- presents reach the kernel continuously (gpu transport, #551) ----
   // frameSeq (wmctl seq) counts frames the kernel received (_wmFrame bumps

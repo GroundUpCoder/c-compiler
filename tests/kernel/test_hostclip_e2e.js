@@ -173,13 +173,16 @@ int main(void) {
   out = '';
   let reads = 0;
   let k2halt = null;
+  let k2pid = null;
+  const hookPids = [];
   const k2 = new K.Kernel({
     createWorker: K.nodeCreateWorker({ hostPath: path.join(ROOT, 'host.js'), kernelPath: path.join(ROOT, 'kernel.js') }),
     loadImage: (p) => (p === '/bin/seam' ? seamImage : null),
     onOutput: (pid, fd, bytes) => { out += Buffer.from(bytes).toString(); },
     onHalt: (status) => { k2halt = status; },
-    onClipRead: (done) => {
+    onClipRead: (done, pid) => {
       reads++;
+      hookPids.push(pid);
       if (reads === 1) {
         // Hold the park across a real delay and feed the slot FIRST — the
         // parked read must serve the refreshed text, proving both the park
@@ -191,7 +194,7 @@ int main(void) {
     },
     log: () => {},
   });
-  await k2.boot({ path: '/bin/seam', argv: ['seam'], envp: [], cwd: '/' });
+  k2pid = await k2.boot({ path: '/bin/seam', argv: ['seam'], envp: [], cwd: '/' });
   await waitOut('GOT2:');
   check('parked first read served the hook-fed slot (first paste fresh)',
     out.includes('GOT:REFRESHED'), JSON.stringify(out));
@@ -205,6 +208,12 @@ int main(void) {
   // The peek between them contributes ZERO — if SDL_HasClipboardText were
   // data-shaped this would read 5, which is the menu-graying regression.
   check('exactly 4 deferred reads; the peek fired none', reads === 4, reads);
+  // #562: the hook names the parked CONSUMER — the embedder scopes its
+  // refresh-freshness window per pid (a pid-blind window served one
+  // process's refresh to the next process's first paste).
+  check('every deferred read carried the consumer pid (#562)',
+    hookPids.length === 4 && hookPids.every((p) => p === k2pid),
+    JSON.stringify({ hookPids, k2pid }));
 
   // ---- Phase 3: killed while parked; late done is a no-op ----
   out = '';

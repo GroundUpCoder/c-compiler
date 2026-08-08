@@ -94,15 +94,31 @@ try {
 
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   await setVt(1);
+  // Each compile line echoes the pasted source's byte count, asserted
+  // against the fixture string (#562): the clipboard seam once served a
+  // paste from the PREVIOUS host write (the pid-blind freshness window),
+  // silently compiling fixture N from source N-1 — the refusal legs then
+  // misattributed the wrong program's behavior. A stale paste now fails
+  // HERE, naming the real cause (todos/0171: make the failure point at
+  // its cause). The three sources have pairwise-distinct byte counts.
   await page.evaluate((src) => navigator.clipboard.writeText(src), DELAY_C);
-  await page.keyboard.type('pbpaste > /root/delay.c && cc /root/delay.c -o /root/delayloop && echo CC1-O""K\r');
+  await page.keyboard.type('pbpaste > /root/delay.c && cc /root/delay.c -o /root/delayloop && echo CC1-O""K Z1=$(wc -c < /root/delay.c)\r');
   await waitOut('CC1-OK', 180000);
   await page.evaluate((src) => navigator.clipboard.writeText(src), SPIN_C);
-  await page.keyboard.type('pbpaste > /root/spin.c && cc /root/spin.c -o /root/spinloop && echo CC2-O""K\r');
+  await page.keyboard.type('pbpaste > /root/spin.c && cc /root/spin.c -o /root/spinloop && echo CC2-O""K Z2=$(wc -c < /root/spin.c)\r');
   await waitOut('CC2-OK', 180000);
   await page.evaluate((src) => navigator.clipboard.writeText(src), SPLASH_C);
-  await page.keyboard.type('pbpaste > /root/splash.c && cc /root/splash.c -o /root/splashcb && echo CC3-O""K\r');
+  await page.keyboard.type('pbpaste > /root/splash.c && cc /root/splash.c -o /root/splashcb && echo CC3-O""K Z3=$(wc -c < /root/splash.c)\r');
   await waitOut('CC3-OK', 180000);
+  {
+    const out3 = await osOut();
+    check('fixture sources are the pasted sources (no stale clipboard read)',
+      new RegExp('Z1=' + DELAY_C.length + '\\b').test(out3) &&
+      new RegExp('Z2=' + SPIN_C.length + '\\b').test(out3) &&
+      new RegExp('Z3=' + SPLASH_C.length + '\\b').test(out3),
+      (out3.match(/Z\d=\d+/g) || []).join(' ') +
+        ` want Z1=${DELAY_C.length} Z2=${SPIN_C.length} Z3=${SPLASH_C.length}`);
+  }
   check('all three fixtures compiled in-OS', true);
 
   const before = await readStats();
