@@ -1,6 +1,7 @@
 {
   "name": "calc",
   "version": "1a706d7",
+  "sourcesVersion": "245",
   "summary": "Calculator — ReactOS Calc (reactos @1a706d7, GPL-2.0+; UNICODE win32 veneer port with .res resource sidecar)",
   "files": {
     "calc": { "project": "vendor/calc/bin.json" },

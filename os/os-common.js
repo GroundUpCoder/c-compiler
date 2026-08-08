@@ -1020,8 +1020,11 @@ function sourcePackageDefs(fsMod, pathMod, rootDir, opts) {
       if (entry && (entry.project !== undefined || entry.c !== undefined)) roots.push(entry);
     });
     if (!roots.length) return;   // no compilable entry — no source to carry
-    var u = makeUnit(p, 'package', String(def.version), roots,
+    var sourcesVersionDeclared = Object.prototype.hasOwnProperty.call(def, 'sourcesVersion');
+    var companionVersion = sourcesVersionDeclared ? String(def.sourcesVersion) : String(def.version);
+    var u = makeUnit(p, 'package', companionVersion, roots,
       ['packages/' + p + '.json'], "the '" + p + "' package v" + def.version);
+    u.sourcesVersionDeclared = sourcesVersionDeclared;
     if (units[u.name])
       throw new Error("sources synthesis: '" + u.name + "' collides with the " +
         units[u.name].kind + '-derived unit — rename the package');
