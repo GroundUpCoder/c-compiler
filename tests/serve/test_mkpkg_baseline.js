@@ -42,6 +42,23 @@ r = run([`--out=${path.join(tmp, 'down')}`, `--packages-dir=${defs}`, '--baselin
 check('served baseline downgrade refuses with no warm index', r.status === 1, r.stderr);
 check('served refusal names both versions', r.stderr.includes('vg 1') && r.stderr.includes('2'), r.stderr);
 
+// A row outside the current definition set is carried from warm state by the
+// additive publisher. The served floor must still outrank that poisoned cache.
+const carryDefs = path.join(tmp, 'carrydefs');
+const carryOut = path.join(tmp, 'carryout');
+fs.mkdirSync(carryDefs);
+for (const name of ['carry', 'current']) fs.writeFileSync(path.join(carryDefs, name + '.json'),
+  JSON.stringify({ name, version: '1', summary: 'fixture', minBase: 0,
+    files: { note: { content: name + '\n' } } }));
+r = run([`--out=${carryOut}`, `--packages-dir=${carryDefs}`, '--no-baseline']);
+check('carried-floor setup builds a two-row warm index', r.status === 0, r.stderr);
+fs.unlinkSync(path.join(carryDefs, 'carry.json'));
+writeIndex(base, { carry: { version: '2' }, current: { version: '1' } });
+r = run([`--out=${carryOut}`, `--packages-dir=${carryDefs}`, '--baseline', base]);
+check('served floor refuses a lower carried warm row', r.status === 1, r.stderr);
+check('carried-row refusal names row and both versions',
+  r.stderr.includes('carry 1') && r.stderr.includes('floor 2'), r.stderr);
+
 writeIndex(base, { vg: { version: '1' } });
 const out = path.join(tmp, 'ok');
 r = run([`--out=${out}`, `--packages-dir=${defs}`, `--baseline=${base}`]);

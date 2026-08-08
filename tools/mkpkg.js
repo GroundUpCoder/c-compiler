@@ -1081,6 +1081,20 @@ async function main() {
     log(`carried ${foreign.length} published entr${foreign.length === 1 ? 'y' : 'ies'} ` +
       `outside this build's package set: ${foreign.join(', ')}`);
   }
+  // Reconcile the WHOLE candidate, not just rows rebuilt above. A warm index
+  // may carry a producer-gated/removed row that the server has since advanced;
+  // carrying that lower local row would recreate the poisoned-cache hole.
+  for (const [n, built] of Object.entries(index.packages)) {
+    const warm = prev && prev.packages ? prev.packages[n] : null;
+    const served = baseline.index ? baseline.index.packages[n] : null;
+    const floor = higherFloor(served, warm);
+    if (floor && verCompare(built.version, floor.version) < 0 && !allowDowngrade) {
+      process.stderr.write(
+        `mkpkg: refusing candidate ${n} ${built.version} below the maximum known floor ` +
+        `${floor.version} — a carried warm row may never lower the served floor\n`);
+      process.exit(1);
+    }
+  }
   const live = new Set(Object.values(index.packages).map((p) => path.basename(p.payload.url)));
   // Every index row must stay SERVABLE: a payload built this run exists by
   // construction, but a carried entry's bytes must already sit in the view
