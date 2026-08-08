@@ -1,16 +1,20 @@
 #!/usr/bin/env node
 // todos #407 acceptance, headless: the mechanical `<pkg>-sources` companion
 // packages install through the normal gucman path and land readable source
-// on the OS — BOTH derivations of the one rule, with no per-package edits:
+// on the OS, with no per-package edits (the install path is derivation-
+// agnostic — kind is a synthesis-time distinction; both kinds' synthesis is
+// pinned host-side in tests/host/test_source_packages.js, whose real mkpkg
+// build leg builds the image-derived cc-sources):
 //
-//   - gcode-sources (image derivation — the jku demo: gcode is a BAKED
-//     binary, /usr/bin/gcode): install plants the payload root as the
-//     /usr/local/src/gcode source namespace (the writable srclib tier —
-//     /usr is the sealed image volume, so /usr/src belongs to the fold),
-//     creating the tier on a virgin root, and the source bytes are
-//     BYTE-EXACT vs the repo (in-OS sha256sum vs a host hash)
-//   - lua-sources (package derivation — the second package the ticket
-//     requires): same rule, same layout, /usr/local/src/lua readable
+//   - gcode-sources (was the image-derivation demo until #578 shipped gcode
+//     as a package — now package-derived like lua): install plants the
+//     payload root as the /usr/local/src/gcode source namespace (the
+//     writable srclib tier — /usr is the sealed image volume, so /usr/src
+//     belongs to the fold), creating the tier on a virgin root, and the
+//     source bytes are BYTE-EXACT vs the repo (in-OS sha256sum vs a host
+//     hash)
+//   - lua-sources (the second package the ticket requires): same rule,
+//     same layout, /usr/local/src/lua readable
 //   - remove replays exactly: links gone, /opt trees gone, and the tier
 //     dir its creator recorded is rmdir'd once empty — NO residue
 //     (remove order lua first, then gcode: the tier's recorded creator

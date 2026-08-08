@@ -1,6 +1,6 @@
 {
   "version": 244,
-  "defaultPackages": ["doom"],
+  "defaultPackages": ["doom", "gcode"],
   "overlays": [
     {
       "id": "clang-apps",
@@ -75,9 +75,6 @@
           "clipio.h"
         ]
       },
-      "/usr/bin/gcode": {
-        "project": "os/gcode/bin.json"
-      },
       "/usr/bin/curl": {
         "project": "os/curl/cli.json"
       },
@@ -105,9 +102,6 @@
           "cmdalt.h",
           "cfgstore.h"
         ]
-      },
-      "/usr/bin/code": {
-        "link": "/usr/bin/gcode"
       },
       "/usr/bin/python": {
         "link": "/usr/bin/cmdalt"

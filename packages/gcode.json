@@ -1,0 +1,9 @@
+{
+  "name": "gcode",
+  "version": "0.1",
+  "summary": "gcode — the gucOS line-oriented agentic coding assistant (todos/0174): Anthropic Messages API over the libcurl veneer, cJSON, and a posix_spawn /bin/sh bash tool, with busybox lineedit line editing. Reads ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL from the environment (export them in ~/.profile); state lives under ~/.local/state/gcode. `code` is the same binary under its back-compat name.",
+  "files": {
+    "gcode": { "project": "os/gcode/bin.json" }
+  },
+  "bin": { "gcode": "gcode", "code": "gcode" }
+}

@@ -4,9 +4,12 @@
 //
 // Guards the ONE rule (os-common sourcePackageDefs) that derives a source
 // package per source-bearing unit, with no per-package hand edits:
-//   - both derivations produce units: gcode-sources (an image binary — the
-//     jku acceptance demo) and lua-sources (a catalog package), each with
-//     the right version lineage and its compile closure at repo paths
+//   - both derivations produce units: gucman-sources (an image binary — the
+//     package manager itself, the one unit that can never move out of the
+//     image, so this exemplar never needs re-pointing) and gcode-sources +
+//     lua-sources (catalog packages; gcode was the image exemplar until
+//     #578 shipped it as a package), each with the right version lineage
+//     and its compile closure at repo paths
 //   - the exclusions are mechanical, not a hand list: a source-only package
 //     (win32), a data package (font-unifont), a seed package
 //     (netsurf-demos), and every native-sibling-gated def get NO unit
@@ -45,9 +48,20 @@ const byName = new Map(units.map((u) => [u.name, u]));
 const imageVersion = String(JSON.parse(
   fs.readFileSync(path.join(ROOT, 'os', 'image.json'), 'utf-8')).version | 0);
 
+const gucman = byName.get('gucman-sources');
+check('gucman-sources exists (image derivation)', gucman && gucman.kind === 'image');
+check('gucman-sources version is the image version', gucman && gucman.def.version === imageVersion,
+  gucman && gucman.def.version);
+check('gucman-sources closure carries gucman.c + its project + cJSON',
+  gucman && gucman.def.files['os/gucman/gucman.c'] !== undefined &&
+  gucman.def.files['os/gucman/bin.json'] !== undefined &&
+  gucman.def.files['vendor/cjson/cJSON.c'] !== undefined);
+
 const gcode = byName.get('gcode-sources');
-check('gcode-sources exists (image derivation)', gcode && gcode.kind === 'image');
-check('gcode-sources version is the image version', gcode && gcode.def.version === imageVersion,
+const gcodeVer = JSON.parse(fs.readFileSync(path.join(ROOT, 'packages', 'gcode.json'), 'utf-8')).version;
+check('gcode-sources exists (package derivation — #578 pulled gcode out of the image)',
+  gcode && gcode.kind === 'package');
+check('gcode-sources version is the gcode package version', gcode && gcode.def.version === gcodeVer,
   gcode && gcode.def.version);
 check('gcode-sources closure carries gcode.c + its project + cJSON',
   gcode && gcode.def.files['os/gcode/gcode.c'] !== undefined &&
