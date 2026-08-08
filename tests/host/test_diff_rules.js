@@ -191,6 +191,99 @@ EXT_SET.forEach(function (want) {
         miss.length ? 'missing: ' + miss.join(', ') : [...s].join(', '));
 });
 
+// ---- tiers (#576 F1) ----
+//
+// A tiering system's whole risk is a gate that LIES: a green that only means
+// "we didn't run the thing that would have failed". Every pin below closes a
+// concrete silent-drop path:
+//   - registry set-equality (the #314 shape at dispatcher level): a suite
+//     added to SUITES but forgotten from ALL_SUITES would silently vanish
+//     from `all`/`full` — the ship gate itself.
+//   - filter-token liveness: smoke selects kernel files by substring token;
+//     a renamed/deleted test would otherwise shrink the tier to a green
+//     no-op with nobody deciding that. Checked with the SAME matcher the
+//     suite runner uses (matchesFilter), against the real on-disk tree.
+//   - pinned members: smoke must keep really booting the OS (test_strace_e2e
+//     is the fixture-boot leg) and really driving the SAB core (test_kernel).
+var TIERS = runjs.TIERS;
+var SUITES = runjs.SUITES;
+var ALL_SUITES = runjs.ALL_SUITES;
+var matchesFilter = require(path.join(__dirname, '..', 'lib', 'suite-runner.js')).matchesFilter;
+
+check('TIERS is exactly {smoke, diff, full}',
+      TIERS && Object.keys(TIERS).sort().join(',') === 'diff,full,smoke',
+      Object.keys(TIERS || {}).join(', '));
+check('no tier name collides with a suite name (the CLI token would be ambiguous)',
+      Object.keys(TIERS).every(function (t) { return !SUITES[t]; }));
+
+// Registry set-equality: ALL_SUITES <-> Object.keys(SUITES), both directions.
+var suiteKeys = Object.keys(SUITES);
+var notInAll = suiteKeys.filter(function (s) { return ALL_SUITES.indexOf(s) === -1; });
+var notInReg = ALL_SUITES.filter(function (s) { return !SUITES[s]; });
+check('every registered suite is in ALL_SUITES (a suite missing here silently drops from all/full)',
+      notInAll.length === 0, notInAll.length ? 'missing: ' + notInAll.join(', ') : suiteKeys.length + ' suites');
+check('every ALL_SUITES entry is a registered suite', notInReg.length === 0,
+      notInReg.length ? 'unregistered: ' + notInReg.join(', ') : '');
+
+// full == the whole registry, by value (a refactor must not quietly narrow it).
+var fullMiss = ALL_SUITES.filter(function (s) { return TIERS.full.suites.indexOf(s) === -1; });
+var fullExtra = (TIERS.full.suites || []).filter(function (s) { return ALL_SUITES.indexOf(s) === -1; });
+check('full tier == ALL_SUITES (set equality — full is the ship gate and cannot narrow)',
+      fullMiss.length === 0 && fullExtra.length === 0,
+      fullMiss.length ? 'missing: ' + fullMiss.join(', ') : fullExtra.length ? 'extra: ' + fullExtra.join(', ') : ALL_SUITES.length + ' suites');
+
+// diff is the planner, not a static list — a refactor that freezes it into a
+// snapshot of "what diffs usually need" would go stale silently.
+check('diff tier is dynamic (planFromDiff-driven, never a static list)',
+      TIERS.diff.dynamic === true && !TIERS.diff.suites);
+
+// smoke: every named suite exists, and it is a PROPER subset — a smoke that
+// runs everything is a mislabeled full, and one that runs nothing is a no-op.
+var smoke = TIERS.smoke;
+var smokeBad = (smoke.suites || []).filter(function (s) { return !SUITES[s]; });
+check('every smoke suite is a registered suite', smokeBad.length === 0,
+      smokeBad.length ? 'unknown: ' + smokeBad.join(', ') : smoke.suites.join(', '));
+check('smoke is a proper nonempty subset of the registry',
+      smoke.suites.length > 0 && smoke.suites.length < ALL_SUITES.length,
+      smoke.suites.length + ' of ' + ALL_SUITES.length);
+// Recorded decisions, not oversights (flip these WITH the tier if policy
+// changes): the sweep's floor (Chromium + serve + bake) is minutes, so smoke
+// covers the OS headless — kernel must stay in, sweep must stay out.
+check('smoke includes kernel (the OS-coverage leg)', smoke.suites.indexOf('kernel') !== -1);
+check('smoke omits the sweep (recorded: browser coverage belongs to diff/full)',
+      smoke.suites.indexOf('sweep') === -1);
+
+// Per-suite filter liveness — THE silent-drop guard. Every filter must
+// belong to a selected suite, and every comma token must match >=1 on-disk
+// test file in that suite's directory under the runner's own matcher.
+Object.keys(smoke.filters || {}).forEach(function (s) {
+  check('smoke filter target ' + s + ' is in smoke.suites (a filter for an unselected suite is dead)',
+        smoke.suites.indexOf(s) !== -1);
+  var cmd = SUITES[s] && SUITES[s].cmd;
+  check('smoke filter target ' + s + ' is a suite-runner suite with a filterable dir',
+        !!(cmd && cmd[1]), cmd ? cmd.join(' ') : '(no cmd)');
+  if (!cmd || !cmd[1]) return;
+  var dir = path.join(ROOT, path.dirname(cmd[1]));
+  var members = fs.readdirSync(dir).filter(function (f) { return /^test_.*\.js$/.test(f); });
+  smoke.filters[s].split(',').map(function (t) { return t.trim(); }).filter(Boolean)
+    .forEach(function (tok) {
+      var n = members.filter(function (f) { return matchesFilter(f, tok); }).length;
+      check('smoke ' + s + ' filter token "' + tok + '" matches >=1 on-disk file (a dead token silently shrinks the tier)',
+            n >= 1, n + ' file(s)');
+    });
+});
+// The two load-bearing members by name: smoke must keep really booting the
+// OS from the fixture and really driving the SAB protocol core.
+check('smoke kernel filter selects test_strace_e2e.js (the real fixture-boot leg)',
+      matchesFilter('test_strace_e2e.js', smoke.filters.kernel));
+check('smoke kernel filter selects test_kernel.js (the SAB protocol core)',
+      matchesFilter('test_kernel.js', smoke.filters.kernel));
+// ...and must NOT select the bake-path monster — pulling test_os_boot.js
+// (~710s, --no-fixture) in by an over-broad token would silently turn the
+// 5-minute tier into a 15-minute one.
+check('smoke kernel filter does NOT select test_os_boot.js (the ~710s bake-path test)',
+      !matchesFilter('test_os_boot.js', smoke.filters.kernel));
+
 // ---- the dispatcher gates itself ----
 // An edit to the RULES table must select the suite this guard runs in — with
 // the old `[]` mapping, breaking the closure selected nothing.
