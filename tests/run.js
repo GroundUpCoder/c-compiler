@@ -509,6 +509,11 @@ const RULES = [
   [/^tests\/bench\//, [], 'informational perf bench (todos/0186) — opt-in, ROM-gated, never a gating suite'],
   [/^tests\/flake\.js$/, [], 'the flake-gate orchestrator (todos/0147) — wraps other suites, no suite of its own'],
   [/^tests\/run\.py$/, PY_CATEGORIES.concat(['unit', 'blockfs']), 'the python runner backs every py category'],
+  // #582: a baseline edit is a CLAIM about what the py leg skips — only
+  // running the categories verifies it (host carries the shape guard,
+  // test_skip_baseline.js).
+  [/^tests\/py-skip-baseline\.json$/, PY_CATEGORIES.concat(['host']),
+    'the committed skip baseline (#582) — adjudicated by running the py leg'],
   [/^tests\/sourcemap\//, ['sourcemap'], null],
   [/^tests\/disw\//, ['disw'], null],
   [/^tests\/tcc\//, ['tcc'], null],
@@ -833,6 +838,148 @@ function readSuiteSelection(artifactAbs) {
   } catch { return null; }
 }
 
+// Pass/fail/skip counts derived from the suite's own per-file records (#582)
+// — a count of what the artifact SAYS, never an invention: suites without an
+// artifact get no tallies. (The suite-runner vocabulary today is pass/fail
+// only; `skipped` stays 0 until a runner starts emitting 'skip' rows.)
+function readSuiteTallies(artifactAbs) {
+  try {
+    const j = JSON.parse(fs.readFileSync(artifactAbs, 'utf-8'));
+    if (!j || !Array.isArray(j.results)) return null;
+    const t = { passed: 0, failed: 0, skipped: 0 };
+    for (const r of j.results) {
+      if (r.status === 'pass') t.passed++;
+      else if (r.status === 'fail') t.failed++;
+      else if (r.status === 'skip') t.skipped++;
+      else t[`status:${r.status}`] = (t[`status:${r.status}`] || 0) + 1;
+    }
+    return t;
+  } catch { return null; }
+}
+
+// ---------- The py skip baseline (#582) ----------
+//
+// The one outcome that looks identical to success is a SKIP: a test that
+// stops running does not fail, it just leaves the tally — the v244 ship gate
+// said "902 passed, 0 failed, 113 skipped" and nothing could say whether 113
+// was normal. So the py leg's skips are pinned BY NAME in a committed
+// baseline, and the gate goes RED (not a banner warning: gates are judged
+// from summary.json's literal `status: "pass"` rows, so anything softer is
+// invisible to the fleet) whenever the run's skip set differs from the
+// baseline in EITHER direction:
+//   - a skip the baseline doesn't list  → a test silently stopped running;
+//   - a baseline entry that didn't skip → the gate retired (xpass-style: the
+//     fixer claims the win) or the test vanished — either way the baseline
+//     is stale and the same commit must update it.
+// An intentional new gate is a one-line baseline update carrying its
+// attribution (todos/NNNN). `exemptPrefixes` covers the one legitimately
+// nondeterministic family (fuzz/live-<random seed>, present only where
+// csmith is installed and dependent on the native leg's behavior).
+// Enforcement only on UNFILTERED runs — a --filter run's skip set is a
+// function of the filter, not of the tree.
+const PY_ARTIFACT = path.join('build', 'test-py', 'summary.json');
+const SKIP_BASELINE = path.join('tests', 'py-skip-baseline.json');
+
+function checkSkipBaseline(pyRecord, baseline) {
+  const violations = [];
+  const exempt = (baseline && baseline.exemptPrefixes) || [];
+  const isExempt = n => exempt.some(p => n.startsWith(p));
+  const baseCats = (baseline && baseline.categories) || {};
+  for (const [cat, rec] of Object.entries(pyRecord.categories || {})) {
+    const base = baseCats[cat];
+    if (!base) {
+      violations.push({ category: cat, kind: 'unbaselined-category',
+        detail: `category "${cat}" has no entry in ${SKIP_BASELINE} — add one (an empty {} pins "no skips")` });
+      continue;
+    }
+    const actual = new Set();
+    for (const s of rec.skips || []) {
+      if (!s.name) {
+        violations.push({ category: cat, kind: 'unnamed-skip',
+          detail: 'a skip with no name cannot be baselined — name it at the results.skip() call site' });
+        continue;
+      }
+      if (isExempt(s.name)) continue;
+      actual.add(s.name);
+    }
+    for (const name of actual) {
+      if (!(name in base)) {
+        violations.push({ category: cat, kind: 'new-skip', name,
+          detail: `"${name}" skipped but is not in the baseline — a test stopped running; if intentional, add it WITH its attribution` });
+      }
+    }
+    for (const name of Object.keys(base)) {
+      if (isExempt(name) || actual.has(name)) continue;
+      violations.push({ category: cat, kind: 'stale-baseline', name,
+        detail: `baseline lists "${name}" but it did not skip — it now runs (drop the entry) or no longer exists` });
+    }
+  }
+  return violations;
+}
+
+// Read this run's py record (freshness-gated), attach tallies to the row, and
+// enforce the baseline. Mutates `row` — on violations the row goes to
+// status 'fail' with reason 'skip-baseline', which is what makes the gate
+// exit nonzero and rule 5's literal-'pass' reading stay red.
+function attachPyRecord(row, opts, tStart) {
+  const artAbs = path.join(ROOT, PY_ARTIFACT);
+  let rec = null;
+  try {
+    if (fs.statSync(artAbs).mtimeMs >= tStart) {
+      rec = JSON.parse(fs.readFileSync(artAbs, 'utf-8'));
+    }
+  } catch { /* absent = not written by this run */ }
+
+  if (rec) {
+    row.artifact = PY_ARTIFACT;
+    const cats = {};
+    for (const [cat, c] of Object.entries(rec.categories || {})) {
+      cats[cat] = { passed: c.passed, failed: c.failed, skipped: c.skipped };
+    }
+    row.tallies = { ...rec.totals, categories: cats };
+  }
+
+  if (opts.filter != null || (rec && rec.filter != null)) {
+    row.skipBaseline = { checked: false, why: 'filtered run — the skip set is a function of the filter' };
+    return;
+  }
+  if (!rec) {
+    // An unfiltered py leg that left no fresh record cannot prove its skip
+    // set. Usually the leg already failed (exit != 0 keeps the row red); the
+    // explicit fail here closes the "exit 0 but no record" corner.
+    row.status = 'fail';
+    row.reason = 'skip-baseline';
+    row.note = (row.note ? row.note + '; ' : '') +
+      `no fresh ${PY_ARTIFACT} from this run — skip baseline unverifiable`;
+    return;
+  }
+  let baseline = null;
+  try {
+    baseline = JSON.parse(fs.readFileSync(path.join(ROOT, SKIP_BASELINE), 'utf-8'));
+  } catch (e) {
+    row.status = 'fail';
+    row.reason = 'skip-baseline';
+    row.note = (row.note ? row.note + '; ' : '') +
+      `${SKIP_BASELINE} missing/unreadable: ${e.message}`;
+    return;
+  }
+  const violations = checkSkipBaseline(rec, baseline);
+  row.skipBaseline = { checked: true, violations };
+  if (violations.length) {
+    row.status = 'fail';
+    row.reason = 'skip-baseline';
+    row.note = (row.note ? row.note + '; ' : '') +
+      `SKIP BASELINE: ${violations.length} violation(s) vs ${SKIP_BASELINE}`;
+    process.stdout.write(`\n\x1b[31m━━━ SKIP BASELINE VIOLATIONS (#582) ━━━\x1b[0m\n`);
+    for (const v of violations) {
+      process.stdout.write(`  \x1b[31m${v.kind}\x1b[0m [${v.category}] ${v.detail}\n`);
+    }
+    process.stdout.write(
+      `  A skip that stops (or starts) happening must not pass silently.\n` +
+      `  Intentional? Update ${SKIP_BASELINE} in the SAME commit, with the attribution.\n`);
+  }
+}
+
 function main() {
   const opts = parseArgs(process.argv.slice(2));
 
@@ -954,8 +1101,14 @@ function main() {
       pyBatchDone = true;
       const args = ['tests/run.py', `--types=${pyCats.join(',')}`];
       if (opts.filter != null) args.push(`--filter=${opts.filter}`);
+      const tPy = Date.now();
       const r = runProcess(pyPre.python, args, `run.py: ${pyCats.join(',')}`);
-      results.push({ suite: `py[${pyCats.join(',')}]`, ...classify(r) });
+      const row = { suite: `py[${pyCats.join(',')}]`, ...classify(r) };
+      // #582: attach run.py's own record (per-category tallies) and hold the
+      // skip set against the committed baseline — on an unfiltered run a
+      // skip-set diff is a FAIL, not a stdout footnote.
+      attachPyRecord(row, opts, tPy);
+      results.push(row);
       continue;
     }
     const args = [...SUITES[suite].cmd.slice(1), ...suiteArgs(suite, opts, tierFilters)];
@@ -969,6 +1122,8 @@ function main() {
       c.artifact = art;
       const sel = readSuiteSelection(path.join(ROOT, art));
       if (sel) c.files = sel;
+      const tal = readSuiteTallies(path.join(ROOT, art));
+      if (tal) c.tallies = tal;
     }
     results.push({ suite, ...c });
   }
@@ -1129,8 +1284,15 @@ function printFinal(results, ms, summaryPath, tier, omitted) {
     // to hand-decode exit 3 to tell that from a genuine red (#561).
     const tag = r.status === 'pass' ? '\x1b[32mok  \x1b[0m'
       : r.reason === 'heavy-lock-contended' ? '\x1b[31mLOCK\x1b[0m' : '\x1b[31mFAIL\x1b[0m';
+    // #582: a skip count on the verdict line, colored when nonzero — the one
+    // number that used to vanish into unpreserved stdout.
+    const tal = r.tallies;
+    const talStr = tal && tal.passed != null
+      ? `  [${tal.passed}P/${tal.failed}F` +
+        (tal.skipped ? `/\x1b[33m${tal.skipped}S\x1b[0m` : '/0S') + ']'
+      : '';
     process.stdout.write(`  ${tag} ${r.suite.padEnd(28)} ${fmtSecs(r.ms)}` +
-      fmtCoverage(r.files) +
+      fmtCoverage(r.files) + talStr +
       (r.note ? `  (${r.note})` : '') + (r.artifact ? `  → ${r.artifact}` : '') + '\n');
   }
   const pass = results.filter(r => r.status === 'pass').length;
@@ -1217,5 +1379,5 @@ if (require.main === module) {
   module.exports = { SUITES, PY_CATEGORIES, RULES, IGNORE, FORCE, planFromDiff,
                      browserPreflight, pythonPreflight, classify,
                      OS_BROWSER_ONLY, OS_HEADLESS_ONLY, OS_RUNTIME_ONLY,
-                     TIERS, ALL_SUITES };
+                     TIERS, ALL_SUITES, checkSkipBaseline };
 }
