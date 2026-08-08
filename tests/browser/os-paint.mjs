@@ -24,9 +24,9 @@ try {
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
   await page.goto(URL);
-  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 'raf' });
   check('boots to ready', true);
-  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
   const { setVt, waitScreen } = osHelpers(page);
   // sample takes PAGE coords (the same space page.mouse uses — scr()/bmp()
@@ -112,10 +112,10 @@ try {
   // `paint: tool=N` / `paint: fg=...` to its tty on each pick — wait on
   // __osOut instead of pacing blind (todos/0083).
   await page.mouse.click(...tbCell(5));
-  await page.waitForFunction(() => window.__osOut.includes('paint: tool=5'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('paint: tool=5'), { timeout: 20000, polling: 'raf' });
   check('toolbox click selected Filled Rectangle (tool=5)', true);
   await page.mouse.click(...swatch(10));                 // k=10 -> red
-  await page.waitForFunction(() => window.__osOut.includes('paint: fg='), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('paint: fg='), { timeout: 20000, polling: 'raf' });
   check('palette click set the red foreground', true);
   const [dx0, dy0] = bmp(40, 40), [dx1, dy1] = bmp(200, 160);
   await page.mouse.move(dx0, dy0);
@@ -146,7 +146,7 @@ try {
   // PAINT-SHELL-OK` needle is satisfied by its own echo — this leg passed
   // with hush DEAD, which is the one thing it exists to rule out.
   await page.keyboard.type("echo PAINT-SHELL-O''K\r");
-  await page.waitForFunction(() => window.__osOut.includes('PAINT-SHELL-OK'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('PAINT-SHELL-OK'), { timeout: 20000, polling: 'raf' });
   check('shell alive after paint exits', true);
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));

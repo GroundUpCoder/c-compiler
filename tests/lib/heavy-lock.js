@@ -5,7 +5,7 @@
 // RAM-heavy suites: the kernel suite fans out several concurrent full-OS boots
 // (each an os/boot.js node at ~2-3 GB), and the sweep drives a real Chromium
 // per file. A SINGLE runner is bounded — the kernel pool by the memory-aware
-// `jobs` cap (see suite-runner.js: memoryCappedJobs), the sweep by being serial
+// RAM budget (see suite-runner.js: ramBudgetGb), the sweep by being serial
 // (todos/0045 one-kernel-per-origin lock). What nothing bounded until now was
 // TWO heavy runners at once: two work lanes, a stray re-run, or a coordinator
 // kicking a suite while another still holds one. Their process trees stack and

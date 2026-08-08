@@ -42,10 +42,10 @@ try {
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
   await page.goto(URL);
-  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 'raf' });
   check('boots to ready', true);
   // Don't race hush's banner: typed input before the first prompt is eaten.
-  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
   const sample = (x, y) => page.evaluate(([sx, sy]) => {
     const c = document.getElementById('screen');
@@ -73,7 +73,7 @@ try {
     const r = document.getElementById('screen').getBoundingClientRect();
     const s = window.__osScreen;
     return s && Math.abs(r.width - s.w) < 2 && Math.abs(r.height - s.h) < 2;
-  }, { timeout: 30000, polling: 200 });
+  }, { timeout: 30000, polling: 'raf' });
 
   // Client origin lands at (12,36) once the wm's placement MOVE settles; the
   // corner probe doubles as the "really at the slot" gate (the ball sweeps
@@ -141,16 +141,16 @@ try {
   // clamp or the callback pacing regressed).
   await setVt(1);
   await page.keyboard.type('SID=$(wmctl list | grep "pollball$" | sed "s/[^0-9].*//"); wmctl wait seq $SID 60 15000 && echo SEQ""OK\r');
-  await page.waitForFunction(() => window.__osOut.includes('SEQOK'), { timeout: 20000, polling: 100 });
+  await page.waitForFunction(() => window.__osOut.includes('SEQOK'), { timeout: 20000, polling: 'raf' });
   check('kernel saw >= 60 presented frames (wmctl wait seq)', true);
 
   await page.keyboard.type('echo R1=$(wmctl seq $SID)\r');
-  await page.waitForFunction(() => /R1=\d+/.test(window.__osOut), { timeout: 20000, polling: 100 });
+  await page.waitForFunction(() => /R1=\d+/.test(window.__osOut), { timeout: 20000, polling: 'raf' });
   const t1 = Date.now();
   const r1 = parseInt((await page.evaluate(() => window.__osOut)).match(/R1=(\d+)/)[1], 10);
   await new Promise(r => setTimeout(r, 4000));
   await page.keyboard.type('echo R2=$(wmctl seq $SID)\r');
-  await page.waitForFunction(() => /R2=\d+/.test(window.__osOut), { timeout: 20000, polling: 100 });
+  await page.waitForFunction(() => /R2=\d+/.test(window.__osOut), { timeout: 20000, polling: 'raf' });
   const t2 = Date.now();
   const r2 = parseInt((await page.evaluate(() => window.__osOut)).match(/R2=(\d+)/)[1], 10);
   const rate = (r2 - r1) * 1000 / (t2 - t1);
@@ -159,7 +159,7 @@ try {
 
   // Close box -> WMEV_QUIT -> SDL_AppEvent (the driver polls) -> clean quit.
   await page.keyboard.type('wmctl close $SID\r');
-  await page.waitForFunction(() => window.__osOut.includes('pollball: quit'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('pollball: quit'), { timeout: 20000, polling: 'raf' });
   check('close request quit the callback loop cleanly (pollball: quit)', true);
   await setVt(2);
   const t3 = Date.now();
@@ -176,7 +176,7 @@ try {
   // Split needle (the 0089 echo trap): the echo of the TYPED line must not
   // satisfy the wait — assemble the needle in the output only.
   await page.keyboard.type("echo POLLBALL-SHELL-O''K\r");
-  await page.waitForFunction(() => window.__osOut.includes('POLLBALL-SHELL-OK'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('POLLBALL-SHELL-OK'), { timeout: 20000, polling: 'raf' });
   check('shell alive after the callback app exits', true);
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));

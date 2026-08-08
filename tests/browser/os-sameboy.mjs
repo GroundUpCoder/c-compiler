@@ -32,10 +32,10 @@ try {
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
   await page.goto(URL);
-  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 'raf' });
   check('boots to ready', true);
   // Don't race hush's banner: typed input before the first prompt is eaten.
-  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
   const sample = (x, y) => page.evaluate(([sx, sy]) => {
     const c = document.getElementById('screen');
@@ -68,7 +68,7 @@ try {
     const r = document.getElementById('screen').getBoundingClientRect();
     const s = window.__osScreen;
     return s && Math.abs(r.width - s.w) < 2 && Math.abs(r.height - s.h) < 2;
-  }, { timeout: 30000, polling: 200 });
+  }, { timeout: 30000, polling: 'raf' });
 
   // Window geometry: surface at (12,36), 480x452 — the top 20px are the
   // anchored "menubar" strip child, the GB client (160x144 tripled) below.
@@ -139,7 +139,7 @@ try {
   // on the next pump tick — never race it).
   await setVt(1);
   await page.keyboard.type('wmctl click Pause\r');
-  await page.waitForFunction(() => window.__osOut.includes('sameboy: pause on'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('sameboy: pause on'), { timeout: 20000, polling: 'raf' });
   await setVt(2);
   const s0 = await probe();
   let frozen = true;
@@ -151,14 +151,14 @@ try {
   check('Emulation>Pause froze the client (time-separated probes equal)', frozen);
   await setVt(1);
   await page.keyboard.type('wmctl click Pause\r');
-  await page.waitForFunction(() => window.__osOut.includes('sameboy: pause off'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('sameboy: pause off'), { timeout: 20000, polling: 'raf' });
   await setVt(2);
 
   // Nested submenu action over the live client: Options>Palette>DMG Green
   // re-colors the next presented frames to the DMG green shades.
   await setVt(1);
   await page.keyboard.type('wmctl click "DMG Green"\r');
-  await page.waitForFunction(() => window.__osOut.includes('sameboy: palette 1'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('sameboy: palette 1'), { timeout: 20000, polling: 'raf' });
   await setVt(2);
   const tG = Date.now();
   for (;;) {
@@ -188,7 +188,7 @@ try {
   // SB-SHELL-OK` needle is satisfied by its own echo — this leg passed
   // with hush DEAD, which is the one thing it exists to rule out.
   await page.keyboard.type("echo SB-SHELL-O''K\r");
-  await page.waitForFunction(() => window.__osOut.includes('SB-SHELL-OK'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('SB-SHELL-OK'), { timeout: 20000, polling: 'raf' });
   check('shell alive after the emulator exits', true);
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));

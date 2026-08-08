@@ -35,9 +35,9 @@ try {
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
   await page.goto(URL);
-  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 'raf' });
   check('boots to ready', true);
-  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
   const { setVt, sample, near, waitPixel, waitScreen } = osHelpers(page);
 
@@ -134,7 +134,7 @@ try {
     await setVt(1);
     await page.waitForTimeout(400);              // timing subject: VT1 prompt-settle pacing (no page-observable marker)
     await page.keyboard.type('echo WBQ""$(wmctl list | grep -c "winbox$")\r', { delay: 40 });
-    await page.waitForFunction(() => /WBQ\d/.test(window.__osOut), { timeout: 20000, polling: 200 });
+    await page.waitForFunction(() => /WBQ\d/.test(window.__osOut), { timeout: 20000, polling: 'raf' });
     const out = await page.evaluate(() => window.__osOut);
     const n = +(/WBQ(\d+)(?![\s\S]*WBQ\d)/.exec(out)[1]);
     await page.evaluate(() => { window.__osOut = window.__osOut.replace(/WBQ\d+/g, ''); });
@@ -171,7 +171,7 @@ try {
       'R=/root/.config; rm -f $R/recent $R/pinned; ' +
       `test ! -e $R/recent && test ! -e $R/pinned && echo RCL""R${clrN}\r`, { delay: 40 });
     try {
-      await page.waitForFunction((t) => window.__osOut.includes(t), tag, { timeout: 20000, polling: 200 });
+      await page.waitForFunction((t) => window.__osOut.includes(t), tag, { timeout: 20000, polling: 'raf' });
     } catch {
       const tail = await page.evaluate(() => window.__osOut.slice(-300));
       throw new Error(`clearRecents: ${tag} never printed — ~/.config/{recent,pinned} ` +
@@ -225,7 +225,7 @@ try {
   };
   await setVt(1);
   await page.keyboard.type('rm -f /root/.config/recent /root/.config/pinned && echo REC""-CLR\r', { delay: 40 });
-  await page.waitForFunction(() => window.__osOut.includes('REC-CLR'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('REC-CLR'), { timeout: 20000, polling: 'raf' });
   await setVt(2);
   await waitPixel(400, BARY, FACE);
   await waitPixel(120, SM_Y + 74, TEAL);         // wait on the observable the check asserts (was a blind settle)
@@ -404,7 +404,7 @@ try {
   // Create a single launcher, search its name, Enter launches it.
   await setVt(1);
   await page.keyboard.type('mkdir /etc/menu && ln -s /usr/bin/winbox /etc/menu/solo && echo MENU""-SET\r', { delay: 40 });
-  await page.waitForFunction(() => window.__osOut.includes('MENU-SET'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('MENU-SET'), { timeout: 20000, polling: 'raf' });
   await setVt(2);
   await waitPixel(400, BARY, FACE);
   await page.waitForTimeout(800);                // timing subject: let wm pick up the new /etc/menu before the winCount baseline (no marker)
@@ -420,7 +420,7 @@ try {
   check('override search hit launches (winbox +1)', wo1 === wo0 + 1, { wo0, wo1 });
   await setVt(1);
   await page.keyboard.type('rm -rf /etc/menu && echo MENU""-RESET\r', { delay: 40 });
-  await page.waitForFunction(() => window.__osOut.includes('MENU-RESET'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('MENU-RESET'), { timeout: 20000, polling: 'raf' });
   await setVt(2);
   // The revert is a MENU fact, not a filesystem one. The MENU-RESET marker is
   // correctly split, so it genuinely proves `rm -rf /etc/menu` ran — but that
@@ -468,7 +468,7 @@ try {
   await setVt(1);
   await page.keyboard.type('for s in $(wmctl list | grep "winbox$" | sed "s/[^0-9].*//"); do wmctl close $s; done; ' +
     'wmctl wait nowin winbox 15000 && echo WB""-CLOSED\r', { delay: 30 });
-  await page.waitForFunction(() => window.__osOut.includes('WB-CLOSED'), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('WB-CLOSED'), { timeout: 30000, polling: 'raf' });
   await setVt(2);
   await waitPixel(400, BARY, FACE);
 
@@ -587,7 +587,7 @@ try {
   // recreate on the VT2-entry resize) and sits at the bottom of z.
   await setVt(1);
   await page.keyboard.type('wmctl list\r');
-  await page.waitForFunction(() => window.__osOut.split('\n').some(l => l.trim().endsWith('desktop')), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.split('\n').some(l => l.trim().endsWith('desktop')), { timeout: 20000, polling: 'raf' });
   const dline = await page.evaluate(() => window.__osOut.split('\n').find(l => l.trim().endsWith('desktop')));
   check('desktop layer recreated at the live screen size (EV_SCREEN)',
     dline.includes(`${SW}x${SH}+0+0`), { dline, SW, SH });
@@ -643,7 +643,7 @@ try {
   // (waitForFunction must fire on the output, not the input echo).
   await page.waitForTimeout(800);                // timing subject: async job-notice ([1] pid) has no distinct page-observable marker
   await page.keyboard.type('i=0; while [ $i -lt 30 ]; do wmctl list | grep -q "Control Panel" && break; sleep 1; i=$((i+1)); done; wmctl list; echo CP-U""P\r');
-  await page.waitForFunction(() => window.__osOut.includes('CP-UP'), { timeout: 120000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('CP-UP'), { timeout: 120000, polling: 'raf' });
   const cpLine = await page.evaluate(() => window.__osOut.split('\n').find(l => /Control Panel\s*$/.test(l)));
   check('ctlpanel hub listed', !!cpLine,
     cpLine || await page.evaluate(() => window.__osOut.slice(-400)));
@@ -660,7 +660,7 @@ try {
   await clickAt(CPX + 46, CPY + 38);
   await setVt(1);
   await page.keyboard.type('i=0; while [ $i -lt 20 ]; do wmctl list | grep -q "Sound Properties" && break; sleep 1; i=$((i+1)); done; wmctl list; echo CP-SN""D\r');
-  await page.waitForFunction(() => window.__osOut.includes('CP-SND'), { timeout: 60000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('CP-SND'), { timeout: 60000, polling: 'raf' });
   const sndLine = await page.evaluate(() => window.__osOut.split('\n').find(l => /Sound Properties\s*$/.test(l)));
   check('Sound applet opened as its own window', !!sndLine,
     sndLine || await page.evaluate(() => window.__osOut.slice(-400)));
@@ -672,12 +672,12 @@ try {
   // The 0048 volume drive, through the applet's agent tree.
   await setVt(1);
   await page.keyboard.type('wmctl click "Vol +"; sleep 1; wmctl gettext STATIC:0; echo CP-VO""L\r');
-  await page.waitForFunction(() => window.__osOut.includes('CP-VOL'), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('CP-VOL'), { timeout: 30000, polling: 'raf' });
   check('Vol + through the applet steps the kernel gain (110%)',
     await page.evaluate(() => window.__osOut.includes('Volume: 110%')), true);
   // The System applet, through the agent path (icon label click).
   await page.keyboard.type('wmctl click System; sleep 1; wmctl tree | grep "NAME="; echo CP-SY""S\r');
-  await page.waitForFunction(() => window.__osOut.includes('CP-SYS'), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('CP-SYS'), { timeout: 30000, polling: 'raf' });
   check('System applet shows os-release',
     await page.evaluate(() => /NAME=gucOS/.test(window.__osOut)), true);
   await setVt(2);
@@ -685,7 +685,7 @@ try {
   await clickAt(SNX + SNW - 12, SNY - 12);
   await setVt(1);
   await page.keyboard.type('sleep 1; echo CP-MAR""K; wmctl list; echo CP-AFTE""R\r');
-  await page.waitForFunction(() => window.__osOut.includes('CP-AFTER'), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('CP-AFTER'), { timeout: 30000, polling: 'raf' });
   const afterClose = await page.evaluate(() =>
     window.__osOut.slice(window.__osOut.lastIndexOf('CP-MARK')));
   check('close box closes only the applet: hub + System alive, Sound gone',
@@ -719,7 +719,7 @@ try {
   await page.keyboard.type('notepad &\r');
   await page.waitForTimeout(800);                // timing subject: the async job-notice trap (no distinct page-observable marker)
   await page.keyboard.type('i=0; while [ $i -lt 30 ]; do wmctl list | grep -q Notepad && break; sleep 1; i=$((i+1)); done; sleep 1; wmctl list; echo NP-U""P1\r');
-  await page.waitForFunction(() => window.__osOut.includes('NP-UP1'), { timeout: 120000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('NP-UP1'), { timeout: 120000, polling: 'raf' });
   const np1Line = (await npLines()).pop() || '';
   const np1 = /(\d+)x(\d+)\+(\d+)\+(\d+)/.exec(np1Line);
   check('first notepad listed', !!np1, np1Line);
@@ -748,7 +748,7 @@ try {
   await chord('c');
   await setVt(1);
   await page.keyboard.type('sleep 1; clip -o; echo " "CLIP-GO""T1\r');
-  await page.waitForFunction(() => window.__osOut.includes('CLIP-GOT1'), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('CLIP-GOT1'), { timeout: 30000, polling: 'raf' });
   check('Ctrl+C filled the kernel slot (clip -o)',
     await page.evaluate(() => window.__osOut.includes('CLIP-ROCKS CLIP-GOT1')),
     await page.evaluate(() => window.__osOut.slice(-300)));
@@ -756,7 +756,7 @@ try {
   await page.keyboard.type('notepad &\r');
   await page.waitForTimeout(800);                // timing subject: the async job-notice trap (no distinct page-observable marker)
   await page.keyboard.type('i=0; while [ $i -lt 30 ]; do [ $(wmctl list | grep -c Notepad) -ge 2 ] && break; sleep 1; i=$((i+1)); done; sleep 1; wmctl list; echo NP-U""P2\r');
-  await page.waitForFunction(() => window.__osOut.includes('NP-UP2'), { timeout: 120000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('NP-UP2'), { timeout: 120000, polling: 'raf' });
   const np2Line = (await npLines()).filter(l => !l.includes(`+${N1X}+${N1Y}`)).pop() || '';
   const np2 = /(\d+)x(\d+)\+(\d+)\+(\d+)/.exec(np2Line);
   check('second notepad listed at its own position', !!np2, np2Line);
@@ -780,7 +780,7 @@ try {
   await chord('x');
   await setVt(1);
   await page.keyboard.type('sleep 1; echo GT-"["$(wmctl gettext EDIT:0)"]"; clip -o; echo " "CLIP-GO""T2\r');
-  await page.waitForFunction(() => window.__osOut.includes('CLIP-GOT2'), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('CLIP-GOT2'), { timeout: 30000, polling: 'raf' });
   check('Ctrl+X emptied the source EDIT and the slot keeps the text',
     await page.evaluate(() => window.__osOut.includes('GT-[]') &&
       window.__osOut.includes('CLIP-ROCKS CLIP-GOT2')),
@@ -793,11 +793,11 @@ try {
   // wmctl so the reveal is a deterministic pixel, not window-placement luck.
   await setVt(1);
   await page.keyboard.type('winbox & echo TP""-WB\r', { delay: 40 });
-  await page.waitForFunction(() => window.__osOut.includes('TP-WB'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('TP-WB'), { timeout: 20000, polling: 'raf' });
   await page.waitForTimeout(1200);               // timing subject: TP-WB fires at the & echo, not when winbox is up; let it spawn before wmctl targets it
   // move it to (300,300) and raise it so it owns the (350,350) sample point.
   await page.keyboard.type('TPW=$(wmctl list | grep "winbox$" | sed "s/[^0-9].*//" | sort -n | tail -1); wmctl move $TPW 300 300; wmctl raise $TPW; echo TP""-MV\r', { delay: 30 });
-  await page.waitForFunction(() => window.__osOut.includes('TP-MV'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('TP-MV'), { timeout: 20000, polling: 'raf' });
   await setVt(2);
   await waitPixel(350, 350, ORANGE);
   check('a winbox is parked over the sample point (orange)', true);
@@ -859,12 +859,12 @@ try {
   // box on a modified notepad raises a modal save prompt that keeps focus
   // (and SIGTERM can't wake a process parked in GetMessage).
   await page.keyboard.type('pkill -9 notepad; pkill -9 ctlpanel; pkill -9 winbox; pkill -9 term; echo WCL""-DONE\r', { delay: 20 });
-  await page.waitForFunction(() => window.__osOut.includes('WCL-DONE'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('WCL-DONE'), { timeout: 20000, polling: 'raf' });
   // Drop the seeded Presentations DIR too: dirs sort first (todos/0185),
   // so it would steal the top-left cell from aaa — the long-name leg
   // below wipes the whole Desktop anyway.
   await page.keyboard.type('rm -f /root/Desktop/.icons; rm -rf /root/Desktop/Presentations; printf x > /root/Desktop/aaa; echo RN-""SETUP\r', { delay: 20 });
-  await page.waitForFunction(() => window.__osOut.includes('RN-SETUP'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('RN-SETUP'), { timeout: 20000, polling: 'raf' });
   await new Promise(r => setTimeout(r, 2500));       // desk_load re-read tick
   await setVt(2);
   // Focus the desktop on an empty cell (col ~5), then Right selects the
@@ -895,7 +895,7 @@ try {
   await setVt(1);
   await page.keyboard.type('test -e /root/Desktop/bbb && echo RN-BBB""-YES; test -e /root/Desktop/aaa || echo RN-AAA""-GONE\r', { delay: 20 });
   await page.waitForFunction(() => window.__osOut.includes('RN-BBB-YES') && window.__osOut.includes('RN-AAA-GONE'),
-    { timeout: 20000, polling: 200 });
+    { timeout: 20000, polling: 'raf' });
   check('inline rename committed on disk (aaa -> bbb)', true);
   await setVt(2);
 
@@ -912,7 +912,7 @@ try {
     "printf '#!/bin/sh\\nwinbox\\n' > '/root/Desktop/My App'; " +
     "printf '#!/bin/sh\\nwinbox\\n' > '/root/Desktop/My Really Long Application Name Here'; echo LN-\"\"SETUP\r",
     { delay: 20 });
-  await page.waitForFunction(() => window.__osOut.includes('LN-SETUP'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('LN-SETUP'), { timeout: 20000, polling: 'raf' });
   await new Promise(r => setTimeout(r, 2500));       // desk_load re-read tick
   await setVt(2);
   const ln0 = await winCount();                      // winCount() ends back on VT2
@@ -936,7 +936,7 @@ try {
   // SHELL-OK` needle is satisfied by its own echo — this leg passed
   // with hush DEAD, which is the one thing it exists to rule out.
   await page.keyboard.type("echo SHELL-O''K\r");
-  await page.waitForFunction(() => window.__osOut.includes('SHELL-OK'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('SHELL-OK'), { timeout: 20000, polling: 'raf' });
   check('VT1 shell alive after menu driving', true);
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));

@@ -34,13 +34,13 @@ try {
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
   await page.goto(URL);
-  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 'raf' });
   check('boots to ready', true);
-  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
   const { setVt, sample, waitPixel, waitScreen } = osHelpers(page);
   const waitOut = (needle, ms) => page.waitForFunction(
-    (n) => window.__osOut.includes(n), needle, { timeout: ms || 30000, polling: 200 });
+    (n) => window.__osOut.includes(n), needle, { timeout: ms || 30000, polling: 'raf' });
 
   const WHITE = [255, 255, 255];
 
@@ -180,7 +180,7 @@ try {
   // EDIT client actually painted.
   await page.evaluate(() => { window.__osOut = ''; });
   await page.keyboard.type('wmctl list\r');
-  await page.waitForFunction(() => /Notepad/.test(window.__osOut), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => /Notepad/.test(window.__osOut), { timeout: 20000, polling: 'raf' });
   const npOut = await page.evaluate(() => window.__osOut);
   const npRow = npOut.split('\n').filter(l => /posix-on-wasm\.mgp - Notepad$/.test(l.trim())).pop() || '';
   const npGeom = /(\d+)x(\d+)\+(-?\d+)\+(-?\d+)/.exec(npRow);

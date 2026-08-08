@@ -14,9 +14,10 @@
 // Per-file logs + an incrementally checkpointed summary.json land in
 // build/test-kernel/ (an interrupted run keeps its partial verdict; --resume
 // picks up from it).
+const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { runSuite, parseSuiteArgs, usage, matchesFilter, memoryCappedJobs, assertMemberRegistry } = require('../lib/suite-runner.js');
+const { runSuite, parseSuiteArgs, usage, matchesFilter, ramBudgetGb, assertMemberRegistry } = require('../lib/suite-runner.js');
 const { ensurePrebakedImage } = require('../lib/image-fixture.js');
 const { joinHeavyLock } = require('../lib/heavy-lock.js');
 const { preflight } = require('../lib/harness-leaks.js');
@@ -34,13 +35,19 @@ require('../lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/kernel
 // of every file re-baking an identical blob. test_os_boot.js is deliberately
 // untagged: it is the bake-path test and really bakes (--no-fixture).
 const IMG = { image: true };
+// Rows tagged LIGHT are the pure-protocol tests — fake workers over the SAB
+// protocol or small headless probes, no full-OS boot, no in-process corpus
+// compile — so the weighted pool (#576 A2) schedules them into the RAM the
+// boots leave free instead of charging each one a boot-sized reservation.
+// An UNTAGGED row is assumed boot-heavy: the safe default for a new e2e.
+const LIGHT = { light: true };
 
 const tests = [
-  ['test_kernel.js'],       // process-table semantics over the real SAB protocol
+  ['test_kernel.js', LIGHT],       // process-table semantics over the real SAB protocol
   ['test_e2e.js'],          // real C programs in worker_threads via nodeCreateWorker
   ['test_signals_e2e.js'],  // Phase 2: async delivery, EINTR/SA_RESTART, pause, exit handshake
   ['test_itimer_e2e.js'],   // 0044: alarm/setitimer(ITIMER_REAL) -> SIGALRM — EINTR on blocked read, interval reload, DFL terminate
-  ['test_tty.js'],          // Phase 3: line discipline semantics (kernel-side, no wasm)
+  ['test_tty.js', LIGHT],          // Phase 3: line discipline semantics (kernel-side, no wasm)
   ['test_tty_e2e.js'],      // Phase 3: real C driven by a scripted UI bridge
   ['test_fs_e2e.js'],       // 0009: brokered fs — shared offsets, fd_actions, SIGKILL+fsck, winsize
   ['test_read_fill_e2e.js'], // 0140: a single read() of a >KP_FS_CHUNK REGULAR FILE fills the whole count (not one capped chunk) like native — the mGBA-ROM short-read class; scoped to regular files (pipes keep POSIX short-read)
@@ -48,19 +55,19 @@ const tests = [
   ['test_mounts.js'],       // 0026: MountFS — prefix routing, EXDEV/EBUSY, symlink escapes (no wasm)
   ['test_module_cache.js'], // 0037+#188: compiled-Module cache on spawn — RO immutable + rw VALIDATED keys, replace-on-rewrite, ss/no-fs exclusions, real clone e2e, in-OS recompile loop
   ['test_procfs.js'],       // 0043: synthetic /proc — Linux formats, snapshot-at-open, zombies, EROFS, GETSID (no wasm)
-  ['test_readdir_page.js'], // 0241: paginated FS_OPENDIR/FS_READDIR — 3000-entry dir lists fully in order (raw RPC + RemoteFS drain), small dirs single-page, stale cursor EBADF, handle release on exhaustion AND death mid-drain (no wasm)
-  ['test_pipes.js'],        // Phase 4: pipe OFD semantics over the SAB protocol (no wasm)
+  ['test_readdir_page.js', LIGHT], // 0241: paginated FS_OPENDIR/FS_READDIR — 3000-entry dir lists fully in order (raw RPC + RemoteFS drain), small dirs single-page, stale cursor EBADF, handle release on exhaustion AND death mid-drain (no wasm)
+  ['test_pipes.js', LIGHT],        // Phase 4: pipe OFD semantics over the SAB protocol (no wasm)
   ['test_pipes_e2e.js'],    // Phase 4: real C pipelines — blocking wake, EOF, SIGPIPE death
-  ['test_pipes_spsc.js'],   // 0181: SPSC ring mechanics over the SAB protocol — pipe-sab handshake, LATENT->FAST->DEMOTED ladder (promotion on removal, spawn-inherit demotion, strace pseudo-holder, in-process dup stays FAST), stale-mode ring service, PR_RWAIT/PR_WWAIT doorbell + PIPE_KICK, ring EOF/EPIPE flags (no wasm)
+  ['test_pipes_spsc.js', LIGHT],   // 0181: SPSC ring mechanics over the SAB protocol — pipe-sab handshake, LATENT->FAST->DEMOTED ladder (promotion on removal, spawn-inherit demotion, strace pseudo-holder, in-process dup stays FAST), stale-mode ring service, PR_RWAIT/PR_WWAIT doorbell + PIPE_KICK, ring EOF/EPIPE flags (no wasm)
   ['test_spsc_e2e.js'],     // 0181: real C pipelines — RPC-op counter shows 8MB moving with ZERO pipe data RPCs (wakes counted separately), fast-writer SIGPIPE via kick{epipe}, mid-stream demotion byte-identical
-  ['test_strace.js'],       // 0046: per-pid RPC trace — spec.trace validation, decode, deferred/unfinished, -f inheritance, drop policy (no wasm)
+  ['test_strace.js', LIGHT],       // 0046: per-pid RPC trace — spec.trace validation, decode, deferred/unfinished, -f inheritance, drop policy (no wasm)
   ['test_strace_e2e.js', IMG],   // 0046: /bin/strace in-OS — cat's fd stream, exit/signal status propagation, -f, -o
-  ['test_pty.js'],          // 0020: pty pair semantics over the SAB protocol (no wasm)
+  ['test_pty.js', LIGHT],          // 0020: pty pair semantics over the SAB protocol (no wasm)
   ['test_pty_e2e.js'],      // 0020: real C over a pty — openpty, spawn-on-slave, winsize, SIGHUP
-  ['test_zerolen_read.js'], // 0253: read(fd, buf, 0) returns 0 immediately (never parks) on every brokered read kind — pipe/socket/pty-master (_streamRead) + tty FS_READ, empty stream + live writer; count>0 blocking semantics unchanged (no wasm)
-  ['test_sockets.js'],      // 0008: AF_UNIX OFD semantics over the SAB protocol (no wasm)
+  ['test_zerolen_read.js', LIGHT], // 0253: read(fd, buf, 0) returns 0 immediately (never parks) on every brokered read kind — pipe/socket/pty-master (_streamRead) + tty FS_READ, empty stream + live writer; count>0 blocking semantics unchanged (no wasm)
+  ['test_sockets.js', LIGHT],      // 0008: AF_UNIX OFD semantics over the SAB protocol (no wasm)
   ['test_sockets_e2e.js'],  // 0008: real C client/server — accept/connect/send/recv, poll
-  ['test_http.js'],         // 0172: HTTP transport (0x06xx) over the SAB protocol with a fake fetch — deferred status, streaming, backpressure, EOF/error split, teardown (no wasm)
+  ['test_http.js', LIGHT],         // 0172: HTTP transport (0x06xx) over the SAB protocol with a fake fetch — deferred status, streaming, backpressure, EOF/error split, teardown (no wasm)
   ['test_http_e2e.js'],     // 0172: real C over the full stack — Node fetch to a local server: streamed GET, POST echo, 512K integrity, 404, mid-stream drop
   ['test_curl_e2e.js'],     // 0173: the libcurl veneer differential smoke — ONE C program built gucOS (veneer) AND native (clang -lcurl, the oracle), outputs diffed after documented normalization; callbacks, getinfo, refused=7, timeout=28
   ['test_netbridge_e2e.js', IMG], // #349: the Tier 2.5 HTTP bridge — one C process flips /etc/net OFF->ON->OFF->ON-dead live (watchPath, ack-file sync) with the bridge /fetch counter as the positive control (exactly 1); wrapper EACCES/ENETUNREACH mapping, CORS/PNA preflight, origin allowlist, 502 encapsulation; boot.js leg proves the shipped embedder wiring
@@ -84,15 +91,15 @@ const tests = [
   ['test_repl_pty_e2e.js'], // 0036: lua/micropython/sqlite3 interactive on a kernel pty — prompt, eval, LD erase, ^D exit
   ['test_micropython_script_e2e.js'], // 0117 R1: the micropython CLI as an OS process — argv/sys.argv, open() on BlockFS, FS import, sys.exit status, traceback on fd 2 not fd 1, -c
   ['test_micropython_stdlib_e2e.js'], // 0117 R2: sys.path policy (script dir / site dir / symlink-chased package lib), two-file import from another cwd, -m, os+os.path over the kernel fs, the curated stdlib
-  ['test_wm.js'],           // WM.md: surface registry, input routing, chrome, screenshots (no wasm)
-  ['test_wm_anchored.js'],  // 0256 Spike 1: anchored child surfaces (A1 tree, A11 materialized dst, A5 owner child resize, clamp, cascade, thumbnail compositing) + the grab (A2) + the focus-funnel owner pair (A9) — kernel seam, no wasm
-  ['test_wm_aero.js'],      // 0063: has-alpha src-over blend goldens, wmThumbnail box filter, glass headless invariance, minimize/restore anim records (no wasm)
+  ['test_wm.js', LIGHT],           // WM.md: surface registry, input routing, chrome, screenshots (no wasm)
+  ['test_wm_anchored.js', LIGHT],  // 0256 Spike 1: anchored child surfaces (A1 tree, A11 materialized dst, A5 owner child resize, clamp, cascade, thumbnail compositing) + the grab (A2) + the focus-funnel owner pair (A9) — kernel seam, no wasm
+  ['test_wm_aero.js', LIGHT],      // 0063: has-alpha src-over blend goldens, wmThumbnail box filter, glass headless invariance, minimize/restore anim records (no wasm)
   ['test_wm_e2e.js'],       // WM.md: real C SDL app windowed — shm present, ring input, QUIT
   ['test_menubox_e2e.js', IMG], // 0256 Spike 1 e2e: SDL_CreatePopupWindow through the real veneer — subtree drag-follow (2-deep chain), hide/show, composited child text + popup overflow, grab dismiss+consume, A5 strip resize, the owner focus pair, cascade close
-  ['test_audio.js'],        // 0017: the kernel mixer — exact-value mixes, resample, lifecycle (no wasm)
+  ['test_audio.js', LIGHT],        // 0017: the kernel mixer — exact-value mixes, resample, lifecycle (no wasm)
   ['test_audio_e2e.js'],    // 0017: real C SDL audio streams — AUDIO_OPEN handshake, mix, SIGKILL drain
   ['test_sounds_e2e.js'],   // 0094: the event-sound scheme — PlaySound aliases/flags/mute store, MessageBeep + MessageBox beep, SYNC drain-dry reclaim
-  ['test_vsync.js'],        // 0100: vsync broadcast — spawn-time advertise flag, vsyncTick bump/notify per live pcb, vsyncWait park + rAF catch-up semantics (no wasm)
+  ['test_vsync.js', LIGHT],        // 0100: vsync broadcast — spawn-time advertise flag, vsyncTick bump/notify per live pcb, vsyncWait park + rAF catch-up semantics (no wasm)
   ['test_vsync_boot_e2e.js', IMG, { timeoutMs: 600000 }], // #424: boot.js --vsync[=hz] — timer-driven vsyncTick under the headless host: bad-hz loud refusal (exit 2 before image work), a real C frame-loop app paced at 20Hz (30 frames >= 1.1s wall vs the fallback pacer's ~0.5s — the load-bearing bound), bare --vsync defaults 60Hz
   ['test_waitevent_e2e.js'], // 0161: SDL_WaitEvent(Timeout) parks on the input ring via __sdl_pump_wait — no-ring nanosleep fallback, full-timeout park, chunk-crossing wake on injected input, signal-while-parked, NULL peek
   ['test_sdl_delay_e2e.js'], // 0224: SDL_Delay cooperative in worker flavors — the classic while(running){poll;draw;Delay} corpus loop runs unmodified as an OS process: pre-ring blocking fallback, full-duration sleeps with mid-delay input queued, frame-idle release mid-delay (compositor may park), standalone-browser throw preserved; + #485: a POLL-ONLY loop (no Delay/WaitEvent) gets input + close via SDL_PollEvent's own ring pump
@@ -102,13 +109,13 @@ const tests = [
   ['test_fswatch_e2e.js'],   // #75/0264: FS_WATCH — path-keyed watch fds fed from the _fsRpc choke: cross-process settle-on-close, FS_WAIT park wake, the rename-over settle (the inotify-trap case), EAGAIN contract, SELF_GONE + re-arm, dir names, one-record rename, O_TRUNC settle, overflow clear+latch with the writer unblocked, MODIFY opt-in, EINVAL/ENOENT
   ['test_realpath_e2e.js'],  // #76/0263: realpath(3)/readlink -f resolve symlinks PHYSICALLY — real busybox over the baked /bin->/usr/bin + ls->coreutils + /usr/local->/var/local chains, relative '../' targets, ELOOP failure, ENOENT-on-missing (fs.realpathSync oracle parity); the kernel FS_REALPATH RPC now walks lstat/readlink instead of the lexical _resolvePath
   ['test_symlink_create_e2e.js'], // 0375: open(O_CREAT) through a dangling symlink creates the TARGET, never a duplicate dirent — hush redirects + ln/rm/mkdir over the brokered FS RPCs: single-link create, rm removes the link only, chain create at the end, mkdir-over-dangling EEXIST
-  ['test_vdso.js'],          // 0179: the seqlock vDSO block — spawn publish, zero-RPC getpgid/getsid/getppid/uptime/screen, SETPGID/SETSID/reparent/wmSetScreen republish, wedge -> RPC fallback, payload-cap arithmetic (no wasm)
+  ['test_vdso.js', LIGHT],          // 0179: the seqlock vDSO block — spawn publish, zero-RPC getpgid/getsid/getppid/uptime/screen, SETPGID/SETSID/reparent/wmSetScreen republish, wedge -> RPC fallback, payload-cap arithmetic (no wasm)
   ['test_vdso_e2e.js'],      // 0179: real C reads pid/ppid/pgrp/sid off the page — RPC-op counter shows ZERO GETPGID/GETSID across setsid + orphan-reparent mutations; the libc setsid() acceptance
-  ['test_rofs.js'],          // 0180: process-side read-only /usr — RemoteFS fast-path mechanics vs a fake RPC recorder: zero-RPC reads (incl. in-volume symlinks), final local errors, brokered fallbacks (relative / '..' / write-intent / escapes), RO_FD_BASE dup family, dup2/spawn-action twin promotion (no wasm)
+  ['test_rofs.js', LIGHT],          // 0180: process-side read-only /usr — RemoteFS fast-path mechanics vs a fake RPC recorder: zero-RPC reads (incl. in-volume symlinks), final local errors, brokered fallbacks (relative / '..' / write-intent / escapes), RO_FD_BASE dup family, dup2/spawn-action twin promotion (no wasm)
   ['test_rofs_e2e.js'],      // 0180: real C under Kernel opts.roImage — RPC-op counter shows ZERO fs RPCs for /usr reads; EROFS after the walk, /usr/local -> /var/local escape write, DUP2-action promotion feeds a child's stdin
-  ['test_wm_policy.js'],    // 0014: the WM protocol over the kernel-owned /run/wm.sock (no wasm)
-  ['test_keybind.js'],      // KEYBINDING-OVERRIDE-SYSTEM §3 (CHUNK 1): the kernel key-grab table — GRAB_SET install/replace/cap/n=0, EV_HOTKEY + both-edge swallow, exact-modifier match, the Shift amendment (named vs masked) + repeat flag, non-subscriber refusal, subscriber-gone reset, the default table reproducing legacy EV_CYCLE/MENU/SNAP_KEY/SYSMENU, and the km-fold twin vs os/keys.h (no wasm)
-  ['test_keybind_registry.js'], // KEYBINDING-OVERRIDE-SYSTEM §2/§5 (CHUNK 2): the keys.h named-action registry + bind.<action> override resolution + chord parse/format, exercised by a native-C probe (clang, no boot) — registry defaults per scheme (macos line/doc-nav + Ctrl+Alt+arrow tiling + F3 overview), rebind moves/none unbinds/default restores/malformed loud-fallback, readline-row immunity, scheme-independence, parse/format round-trip, and the ks_chord_scancode twin vs kernel.js WM_DEFAULT_GRABS
+  ['test_wm_policy.js', LIGHT],    // 0014: the WM protocol over the kernel-owned /run/wm.sock (no wasm)
+  ['test_keybind.js', LIGHT],      // KEYBINDING-OVERRIDE-SYSTEM §3 (CHUNK 1): the kernel key-grab table — GRAB_SET install/replace/cap/n=0, EV_HOTKEY + both-edge swallow, exact-modifier match, the Shift amendment (named vs masked) + repeat flag, non-subscriber refusal, subscriber-gone reset, the default table reproducing legacy EV_CYCLE/MENU/SNAP_KEY/SYSMENU, and the km-fold twin vs os/keys.h (no wasm)
+  ['test_keybind_registry.js', LIGHT], // KEYBINDING-OVERRIDE-SYSTEM §2/§5 (CHUNK 2): the keys.h named-action registry + bind.<action> override resolution + chord parse/format, exercised by a native-C probe (clang, no boot) — registry defaults per scheme (macos line/doc-nav + Ctrl+Alt+arrow tiling + F3 overview), rebind moves/none unbinds/default restores/malformed loud-fallback, readline-row immunity, scheme-independence, parse/format round-trip, and the ks_chord_scancode twin vs kernel.js WM_DEFAULT_GRABS
   ['test_wm_service_e2e.js', IMG], // 0014: real /bin/wm + wmctl through os/boot.js — autostart, taskbar, crash+respawn
   ['test_snap_e2e.js', IMG],     // 0095: Aero Snap — drag-to-edge tiling via wmctl sdown/smove/sup, translucent preview pixels, drag-off restore, quarters, wmctl snap (= Win+arrow), fixed-size letterbox, no-WM refusal
   ['test_skey_e2e.js', IMG],     // #423: WMP screen-path keyboard (INJECT_WMKEY, the 0095 keyboard analogue) — wmctl skey/skeydown/skeyup through the kernel's REAL wmKey grab table: Ctrl+Esc Start-menu toggle, single-edge chord swallow, Alt+Tab LRU cycle, with the INJECT_KEY bypass pinned as the control
@@ -128,7 +135,7 @@ const tests = [
   ['test_listview_e2e.js', IMG], // 0370: SysListView32 + SysHeader32 + the AQM agent seam — lvtest message surface, rows/columns addressable by NAME (wmctl click/gettext/wait text, lvrow/hdcol tree lines), sort via header click, LISTBOX rows retrofitted as click targets
   ['test_kernel32_e2e.js', IMG], // 0059: win32 kernel32/advapi32/wide-CRT — in-OS selftest, POSIX-twin identity, registry persistence across boots
   ['test_win32_ports.js'],  // 0060: port corpus compile-check — controls still link clean, PORTS.md (the 0059+ backlog) current
-  ['test_win32rc.js'],      // #311: rc NOT semantics — bare/combined/#define-carried NOT clears bits from the assembled style, keyword defaults included
+  ['test_win32rc.js', LIGHT],      // #311: rc NOT semantics — bare/combined/#define-carried NOT clears bits from the assembled style, keyword defaults included
   ['test_winmine_e2e.js', IMG],  // 0068: winmine playable — sidecar resources, menu bar/popups, SURFACE_RESIZE, dialogs from templates, WM_TIMER, registry persistence
   ['test_calc_e2e.js', IMG],     // 0048: calc usable — WRES v2 template menus, owner-draw keypad, clipboard file + menu re-gray, keyboard translation, TrackPopupMenu agent path
   ['test_notepad_e2e.js', IMG],  // 0048: notepad usable — EDIT-around-a-file (EM_*HANDLE), comdlg32 file dialogs + find/replace protocol, status bar, MB_YESNOCANCEL, ShellExecuteW
@@ -232,15 +239,23 @@ const MEMBER_RE = /^test_.*\.js$/;
 // hole with a name, not a way to quiet the guard.
 const EXCLUDED = [];
 
+// Per-class peak RSS weights for the RAM-budgeted pool (#576 A2/A4). The
+// pool admits entries while the running set's summed weights stay under
+// ramBudgetGb() (totalmem × 0.6), so how many BOOTS run at once is
+// floor(budget / HEAVY_GB) and LIGHT rows flow through what is left —
+// 4 uniform jobs ≈ 16.7 GB is the shape that crashed a 16 GB box on
+// 2026-07-25, and the budget is the guard that replaced the uniform -j
+// clamp. HEAVY_GB is the conservative pre-#576 4 GB figure until the A4
+// measurement lands a smaller number with its evidence recorded here.
+const HEAVY_GB = 4;
+const LIGHT_GB = 1;
+
 const defaults = {
-  // Boot-heavy files are compile-dominated; a few concurrent full-OS boots keep
-  // this box responsive without starving the in-OS `sleep N` waits (the
-  // timing-flake class). The CPU-based number is then RAM-capped: each job is
-  // ~4 GB resident (a boot + its nested os/boot.js node), so cpu count alone
-  // over-commits memory — 4 jobs ≈ 16.7 GB crashed a 16 GB box on 2026-07-25.
-  // Bump with -j if the machine is idle (still RAM-clamped; CC_NO_MEM_CAP=1 to
-  // override entirely).
-  jobs: memoryCappedJobs(Math.max(1, Math.min(4, os.cpus().length - 2)), 4),
+  // `jobs` is now only the CPU-axis cap (concurrent files); RAM is governed
+  // by the weight budget above. Kept modest: boots are compile-dominated
+  // and too much CPU contention starves the in-OS `sleep N` waits (the
+  // timing-flake class). CC_NO_MEM_CAP=1 drops the RAM budget entirely.
+  jobs: Math.max(1, Math.min(6, os.cpus().length - 2)),
   timeoutMs: 600000,
 };
 const opts = parseSuiteArgs(process.argv.slice(2), defaults);
@@ -255,13 +270,10 @@ assertMemberRegistry({
   exclude: EXCLUDED, label: 'tests/kernel/run.js',
 });
 
-// Crash safety: clamp EVEN an explicit -j to what RAM allows — an over-eager
-// -j8 on a 16 GB box is exactly the OOM that killed the GUI (2026-07-25).
-const safeJobs = memoryCappedJobs(opts.jobs, 4);
-if (safeJobs < opts.jobs) {
-  process.stderr.write(`[mem-cap] -j${opts.jobs} exceeds this host's safe RAM budget; clamping to -j${safeJobs} (CC_NO_MEM_CAP=1 to override)\n`);
-  opts.jobs = safeJobs;
-}
+// Crash safety: EVEN an explicit -j runs under the RAM-weight budget — an
+// over-eager -j8 on a 16 GB box is exactly the OOM that killed the GUI
+// (2026-07-25). The budget admits extra jobs only when their summed weights
+// fit, so -j8 here means "up to 8 files when RAM allows", never 8 boots.
 
 // Heavy-suite mutual exclusion: refuse to start if another heavy runner (a
 // second kernel run, or a browser sweep) already owns the host — their overlap
@@ -281,6 +293,18 @@ if (!opts.list) joinHeavyLock({ name: 'kernel suite' });
 if (!opts.list) preflight({ name: 'kernel suite' });
 
 const entries = tests.map(([file, ...rest]) => Object.assign({ file }, ...rest.filter(x => typeof x === 'object')));
+for (const e of entries) e.gb = e.light ? LIGHT_GB : HEAVY_GB;
+
+// Longest-first hints for a FRESH artifact dir (#576 A1): a lane worktree
+// has no build/test-kernel/summary.json, and without one the pool used to
+// run in declaration order — the 700s files landing mid-list left a long
+// serial tail. timings.json is a committed snapshot of real full-run
+// timings (regenerate: node tests/lib/update-timings.js). Scheduling hint
+// ONLY — staleness costs a little makespan, never correctness; a file
+// absent from it schedules first (unknown = assumed expensive).
+let hints = {};
+try { hints = JSON.parse(fs.readFileSync(path.join(__dirname, 'timings.json'), 'utf-8')).files || {}; }
+catch (e) { /* missing/unreadable hints -> unknown-first scheduling */ }
 
 // 0082 pre-step: only when the (filtered) run actually contains fixture
 // consumers — a --filter=test_tlsf-style quick run never pays a bake here.
@@ -295,6 +319,7 @@ runSuite(entries, {
   jobs: opts.jobs, timeoutMs: opts.timeoutMs, filter: opts.filter,
   failFast: opts.failFast, resume: opts.resume, list: opts.list,
   repeat: opts.repeat, underLoad: opts.underLoad,
+  budgetGb: ramBudgetGb(), defaultGb: HEAVY_GB, hints,
   evidence: { pattern: MEMBER_RE, exclude: EXCLUDED },
 }).then(r => process.exit(r.failed ? 1 : 0))
   .catch(e => { process.stderr.write(`Fatal: ${e.stack || e.message}\n`); process.exit(2); });

@@ -46,7 +46,7 @@ const accounting = (st) =>
   st.created === st.warmTakes + st.free + st.evicted + st.tornDown;
 const tracesLen = () => page.evaluate(() => (window.__spawnTraces || []).length);
 const promptBack = () => waitFor(page, () => /~ # $/.test(window.__osOut),
-                                 { timeout: 30000, polling: 100 });
+                                 { timeout: 30000, polling: 'raf' });
 
 try {
   await setVt(1);
@@ -63,7 +63,7 @@ try {
   await page.keyboard.type('mkdir\r');
   await waitFor(page, (n) => (window.__spawnTraces || [])
     .slice(n).some((t) => t.argv0 === 'mkdir' && t.firstOut), {
-    arg: before, timeout: 30000, polling: 100 });
+    arg: before, timeout: 30000, polling: 'raf' });
   await promptBack();
   const tr = await page.evaluate(
     (n) => window.__spawnTraces.slice(n).find((t) => t.argv0 === 'mkdir'), before);
@@ -78,7 +78,7 @@ try {
   const servedBefore = st.served;
   await page.keyboard.type('ls | cat | grep x | wc -l\r');
   await waitFor(page, (n) => (window.__spawnTraces || []).length >= n,
-                { arg: before + 4, timeout: 30000, polling: 100 });
+                { arg: before + 4, timeout: 30000, polling: 'raf' });
   await promptBack();
   st = await stats();
   check('burst of 4 served (all spawns through the pool path)',
@@ -100,7 +100,7 @@ try {
   await page.evaluate(() => { window.__osOut = ''; });
   await page.keyboard.type('mkdir\r');
   await waitFor(page, () => window.__osOut.includes('invalid usage'),
-                { timeout: 30000, polling: 100 });
+                { timeout: 30000, polling: 'raf' });
   await promptBack();
   const tr2 = await page.evaluate(
     (n) => window.__spawnTraces.slice(n).find((t) => t.argv0 === 'mkdir'), before);
@@ -115,7 +115,7 @@ try {
   const page2 = await context.newPage();
   await page2.goto(s.url);
   await page2.waitForFunction(() => window.__osState === 'locked',
-    { timeout: 30000, polling: 250 });
+    { timeout: 30000, polling: 'raf' });
   const st2 = await page2.evaluate(() => window.__osPoolStats());
   check('locked tab created zero pool workers',
         st2.created === 0 && st2.free === 0 && st2.served === 0, st2);

@@ -36,9 +36,9 @@ try {
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
   await page.goto(URL);
-  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 240000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 240000, polling: 'raf' });
   check('boots to ready', true);
-  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
   const { setVt, waitOut } = osHelpers(page);
   const audioCtl = () => page.evaluate(() =>
@@ -49,7 +49,7 @@ try {
   const waitWpos = async (from, ms) => {
     await page.waitForFunction((f) =>
       new Int32Array(window.__osAudioSab, 0, 4)[0] !== f, from,
-      { timeout: ms || 15000, polling: 100 });
+      { timeout: ms || 15000, polling: 'raf' });
     return wposAt();
   };
   // Negative-leg baseline: the mixer is QUIET — two cursor samples 500ms
@@ -73,7 +73,7 @@ try {
   // drains until the gesture, so queuedBytes parks at the pump's target.
   // NB no typing/clicking before this — a gesture would start draining.
   await page.waitForFunction(() => window.__osAudioSab &&
-    new Int32Array(window.__osAudioSab, 0, 4)[1] > 0, { timeout: 20000, polling: 100 });
+    new Int32Array(window.__osAudioSab, 0, 4)[1] > 0, { timeout: 20000, polling: 'raf' });
   const ctl0 = await audioCtl();
   check('startup chime mixed into the output ring before any gesture',
     (await page.evaluate(() => window.__osAudio)) === 'ready' &&
@@ -85,13 +85,13 @@ try {
     const r = document.getElementById('screen').getBoundingClientRect();
     return window.__osScreen && window.__osScreen.w > 800 &&
       Math.abs(r.width - window.__osScreen.w) < 2;
-  }, { timeout: 30000, polling: 200 });
+  }, { timeout: 30000, polling: 'raf' });
   const rect = await page.evaluate(() => {
     const r = document.getElementById('screen').getBoundingClientRect();
     return { x: r.x, y: r.y, w: r.width, h: r.height };
   });
   await page.mouse.click(rect.x + rect.w - 200, rect.y + 200);   // bare desktop
-  await page.waitForFunction(() => window.__osAudio === 'playing', { timeout: 10000, polling: 100 });
+  await page.waitForFunction(() => window.__osAudio === 'playing', { timeout: 10000, polling: 'raf' });
   check('audio resumed on the gesture', true);
   const wEnd = await waitWpos(ctl0[0], 10000);   // the chime is draining out
   const wQuiet = await waitQuiet();              // ~2.2s clip ends, mixer parks

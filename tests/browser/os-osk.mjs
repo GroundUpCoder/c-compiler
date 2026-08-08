@@ -42,9 +42,9 @@ try {
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
   await page.goto(URL);
-  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 'raf' });
   check('boots to ready', true);
-  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
   const { setVt, sample, near, waitPixel, waitOut } = osHelpers(page);
   const FACE = [192, 192, 192];
@@ -62,7 +62,7 @@ try {
       const p = document.getElementById('desktop');
       const s = window.__osScreen;
       return s && s.w === Math.floor(p.clientWidth / z) && s.h === Math.floor(p.clientHeight / z);
-    }, Z, { timeout: 30000, polling: 150 });
+    }, Z, { timeout: 30000, polling: 'raf' });
     const s = await page.evaluate(() => window.__osScreen);
     await waitPixel(s.w - 9, s.h - 18, FACE, 60000, 'taskbar re-laid');   // Show Desktop sliver face (right edge)
     return s;
@@ -183,7 +183,7 @@ try {
   await page.evaluate(() => window.__osOskDown('x'));
   await pause(1000);
   await page.evaluate(() => window.__osOskUp());
-  await page.waitForFunction(() => /x{8,}/.test(window.__osOut), { timeout: 5000, polling: 100 });
+  await page.waitForFunction(() => /x{8,}/.test(window.__osOut), { timeout: 5000, polling: 'raf' });
   check('held key repeats on VT1 (>=8 x\'s echoed)', true);
   await tap('Ctrl'); await tap('u');
 
@@ -403,7 +403,7 @@ try {
   check('explicit close persisted', await page.evaluate(() =>
     localStorage.getItem('gucos.osk.open')) === '0', true);
   await page.reload();
-  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 'raf' });
   const re = await page.evaluate(() => ({
     open: window.__osOsk.open,
     dataOsk: document.body.hasAttribute('data-osk'),

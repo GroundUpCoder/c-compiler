@@ -261,6 +261,100 @@ function run(extra) {
       'the first archive must not be clobbered by the second');
   });
 
+  // ---- the RAM-WEIGHTED POOL contract (#576 A2/A4), same real engine ----
+  //
+  // Entries carry `gb` weights; opts.budgetGb caps the running set's summed
+  // weights (the 2026-07-25 OOM guard, generalized from the old uniform
+  // per-job clamp). Pinned on a 5-file synthetic suite whose members stamp
+  // their own start/end times:
+  //  11. two heavies never co-run past the budget — but a light DOES co-run
+  //      beside a heavy (the two-pool effect; without this positive control
+  //      a serial scheduler would pass the exclusion check trivially)
+  //  12. the scheduler drops NOTHING: executed set == declared set, both
+  //      ways — with a negative control proving the comparator can fail
+  //  13. an entry heavier than the whole budget still runs alone (never
+  //      below one job)
+  //  14. hints order a FRESH artifact dir longest-first (#576 A1 — no
+  //      summary.json exists in a lane worktree; at jobs:1 the recorded
+  //      completion order IS the schedule)
+  const schedDir = path.join(root, 'sched');
+  const marksDir = path.join(root, 'marks');
+  fs.mkdirSync(schedDir, { recursive: true });
+  fs.mkdirSync(marksDir, { recursive: true });
+  const SCHED = [
+    { file: 'h1.js', gb: 1.0, sleep: 700 },
+    { file: 'h2.js', gb: 1.0, sleep: 700 },
+    { file: 'l1.js', gb: 0.1, sleep: 400 },
+    { file: 'l2.js', gb: 0.1, sleep: 400 },
+    { file: 'l3.js', gb: 0.1, sleep: 400 },
+  ];
+  for (const s of SCHED) {
+    fs.writeFileSync(path.join(schedDir, s.file),
+      `const fs = require('fs');\nconst t0 = Date.now();\n` +
+      `setTimeout(() => {\n` +
+      `  fs.writeFileSync(${JSON.stringify(path.join(marksDir, s.file + '.json'))},\n` +
+      `    JSON.stringify({ start: t0, end: Date.now() }));\n` +
+      `  process.exit(0);\n` +
+      `}, ${s.sleep});\n`);
+  }
+  const schedEntries = SCHED.map(({ file, gb }) => ({ file, gb }));
+  const schedArt = path.join(root, 'sched-artifacts');
+  await runSuite(schedEntries, {
+    name: 'sched fixture', dir: schedDir, artifactDir: schedArt,
+    jobs: 5, timeoutMs: 30000, filter: null, failFast: false, resume: false,
+    budgetGb: 1.1,
+  });
+  const mark = (f) => JSON.parse(fs.readFileSync(path.join(marksDir, f + '.json'), 'utf-8'));
+  const overlaps = (a, b) => a.start < b.end && b.start < a.end;
+
+  check('two budget-sized heavies never co-run (RAM budget holds)', () => {
+    assert.ok(!overlaps(mark('h1.js'), mark('h2.js')),
+      'h1+h2 = 2.0gb > budget 1.1gb, yet their run intervals overlap');
+  });
+  check('a light co-runs beside a heavy (the two-pool effect, positive control)', () => {
+    assert.ok(overlaps(mark('h1.js'), mark('l1.js')),
+      'h1(1.0)+l1(0.1) fit the 1.1gb budget and should have co-run');
+  });
+  const setEqual = (a, b) => a.length === b.length &&
+    a.slice().sort().every((v, i) => v === b.slice().sort()[i]);
+  check('the weighted scheduler drops nothing: executed == declared, both ways', () => {
+    const sum = JSON.parse(fs.readFileSync(path.join(schedArt, 'summary.json'), 'utf-8'));
+    const executed = sum.results.filter(r => !r.carried).map(r => r.file);
+    assert.ok(setEqual(executed, SCHED.map(s => s.file)),
+      `executed [${executed}] != declared [${SCHED.map(s => s.file)}]`);
+    assert.ok(sum.results.every(r => r.status === 'pass'));
+  });
+  check('the set comparator can fail (negative control)', () => {
+    assert.ok(!setEqual(['a.js', 'b.js'], ['a.js']), 'dropped member not detected');
+    assert.ok(!setEqual(['a.js'], ['a.js', 'b.js']), 'extra member not detected');
+  });
+
+  // 13: heavier than the whole budget → still runs, alone.
+  const bigArt = path.join(root, 'big-artifacts');
+  const r13 = await runSuite([{ file: 'h1.js', gb: 99 }], {
+    name: 'oversize fixture', dir: schedDir, artifactDir: bigArt,
+    jobs: 2, timeoutMs: 30000, filter: null, failFast: false, resume: false,
+    budgetGb: 1,
+  });
+  check('an entry heavier than the budget still runs alone (never below 1 job)', () => {
+    assert.strictEqual(r13.passed, 1);
+    assert.strictEqual(r13.failed, 0);
+  });
+
+  // 14: hints order a fresh artifact dir (#576 A1). jobs:1 → completion
+  // order == schedule order; every file hinted so the order is total.
+  const hintArt = path.join(root, 'hint-artifacts');
+  await runSuite(schedEntries, {
+    name: 'hint fixture', dir: schedDir, artifactDir: hintArt,
+    jobs: 1, timeoutMs: 30000, filter: null, failFast: false, resume: false,
+    hints: { 'h2.js': 9000, 'l3.js': 5000, 'l1.js': 800, 'h1.js': 500, 'l2.js': 100 },
+  });
+  check('a fresh artifact dir schedules longest-first from the hints table', () => {
+    const sum = JSON.parse(fs.readFileSync(path.join(hintArt, 'summary.json'), 'utf-8'));
+    assert.deepStrictEqual(sum.results.map(r => r.file),
+      ['h2.js', 'l3.js', 'l1.js', 'h1.js', 'l2.js']);
+  });
+
   fs.rmSync(root, { recursive: true, force: true });
   console.log(failures ? `\n${failures} check(s) FAILED` : '\nsuite-record: all checks passed');
   process.exit(failures ? 1 : 0);

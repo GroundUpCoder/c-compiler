@@ -39,7 +39,7 @@ try {
   await page.waitForFunction(() =>
     document.fullscreenElement === document.documentElement &&
     document.getElementById('fsbtn').classList.contains('on'),
-    { timeout: 10000, polling: 100 });
+    { timeout: 10000, polling: 'raf' });
   check('click enters fullscreen and the fullscreenchange event lights the button', true);
 
   // (b) the bar is the way back out: it must still be laid out in fullscreen.
@@ -55,7 +55,7 @@ try {
   await page.waitForFunction(() =>
     document.fullscreenElement === null &&
     !document.getElementById('fsbtn').classList.contains('on'),
-    { timeout: 10000, polling: 100 });
+    { timeout: 10000, polling: 'raf' });
   check('second click exits fullscreen and unlights the button', true);
 
   // (d) truthfulness: re-enter by click, leave WITHOUT the button — the
@@ -63,12 +63,12 @@ try {
   // click-driven .on would stay stuck lit here.
   await page.click('#fsbtn');
   await page.waitForFunction(() => document.fullscreenElement !== null,
-    { timeout: 10000, polling: 100 });
+    { timeout: 10000, polling: 'raf' });
   await page.evaluate(() => document.exitFullscreen());
   await page.waitForFunction(() =>
     document.fullscreenElement === null &&
     !document.getElementById('fsbtn').classList.contains('on'),
-    { timeout: 10000, polling: 100 });
+    { timeout: 10000, polling: 'raf' });
   check('non-click exit (Esc class) unlights the button — .on rides the event', true);
 
   // (e) unsupported host (the iOS Safari shape): spoof the API away before

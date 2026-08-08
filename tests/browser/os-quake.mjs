@@ -40,10 +40,10 @@ try {
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
   await page.goto(URL);
-  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 240000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 240000, polling: 'raf' });
   check('boots to ready (quake package folded into the fat image)', true);
   // Don't race hush's banner: typed input before the first prompt is eaten.
-  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
   // VTs (todos/0022): shell typing on VT1, canvas pixels/input on VT2 (the
   // compositor may idle while its placeholder canvas is hidden). Deep VT
@@ -89,14 +89,14 @@ try {
     const r = document.getElementById('screen').getBoundingClientRect();
     const s = window.__osScreen;
     return s && Math.abs(r.width - s.w) < 2 && Math.abs(r.height - s.h) < 2;
-  }, { timeout: 30000, polling: 200 });
+  }, { timeout: 30000, polling: 'raf' });
   const first = await waitFrame(Q_REGION, s => s.colors > 50 && s.nonTeal > s.n * 0.9, 120000);
   check('quake composites a real frame (rich colors over the window region)',
     true, { colors: first.colors });
 
   // The flag round trip: quake asked for relative mouse at VID_Init; the
   // kernel told the page it wants the pointer lock.
-  await page.waitForFunction(() => window.__osPtrLockWanted === true, { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osPtrLockWanted === true, { timeout: 20000, polling: 'raf' });
   check('kernel asked the page for the pointer lock (wanted state)', true);
   check('not locked before any gesture',
     (await page.evaluate(() => !!window.__osPtrLock)) === false);
@@ -111,7 +111,7 @@ try {
   });
   const offers0 = await page.evaluate(() => window.__osPtrLockOffers || 0);
   await page.mouse.click(rect.x + 12 + 160, rect.y + 36 + 100);
-  await page.waitForFunction(o => (window.__osPtrLockOffers || 0) > o, offers0, { timeout: 10000, polling: 100 });
+  await page.waitForFunction(o => (window.__osPtrLockOffers || 0) > o, offers0, { timeout: 10000, polling: 'raf' });
   check('client click re-offers the lock (kernel-hit-tested gesture)', true);
 
   // A title-bar drag must NOT re-offer — and must still move the window
@@ -150,7 +150,7 @@ try {
   await page.waitForFunction(() => {
     const m = window.__osOut.match(/(\d+)x(\d+)\+(\d+)\+(\d+)\t-\t\d+\tf..r----\tQuake/);
     return m && +m[3] === 72 && +m[4] === 76;
-  }, { timeout: 20000, polling: 200 }).then(
+  }, { timeout: 20000, polling: 'raf' }).then(
     () => check('title drag moved the window while unlocked (wmctl list geometry + r flag)', true),
     async () => check('title drag moved the window while unlocked (wmctl list geometry + r flag)',
       false, await page.evaluate(() => window.__osOut.slice(-500))));
@@ -171,7 +171,7 @@ try {
   await page.waitForFunction(() => {
     const i = window.__osOut.indexOf('GRIP-DONE');
     return i >= 0 && /320x200\+72\+76\t400x250\t\d+\tf..r----\tQuake/.test(window.__osOut.slice(i));
-  }, { timeout: 20000, polling: 200 }).then(
+  }, { timeout: 20000, polling: 'raf' }).then(
     () => check('SE grip drag scales fixed-res quake (aspect-fit dst, buffer untouched — todos/0024)', true),
     async () => check('SE grip drag scales fixed-res quake (aspect-fit dst, buffer untouched — todos/0024)',
       false, await page.evaluate(() => window.__osOut.slice(-500))));
@@ -189,7 +189,7 @@ try {
     (await page.evaluate(() => window.__osPtrLockWanted)) === false);
   await setVt(1);
   await page.keyboard.type('echo QUAKE-GONE-$?\r');
-  await page.waitForFunction(() => window.__osOut.includes('QUAKE-GONE-0'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('QUAKE-GONE-0'), { timeout: 20000, polling: 'raf' });
   check('shell alive after quake exits', true);
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));

@@ -24,9 +24,9 @@ try {
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
   await page.goto(URL);
-  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 240000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 240000, polling: 'raf' });
   check('boots to ready', true);
-  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
   const { setVt, sample, near, waitPixel, waitOut } = osHelpers(page);
   // The screen is settled when the page's last-sent size matches BOTH the
@@ -39,7 +39,7 @@ try {
     return s && (document.body.getAttribute('data-vt') !== '2' ||
       (s.w === pane.clientWidth && s.h === pane.clientHeight)) &&
       Math.abs(r.width - s.w) < 2 && Math.abs(r.height - s.h) < 2;
-  }, { timeout: 30000, polling: 200 });
+  }, { timeout: 30000, polling: 'raf' });
   const screenDims = () => page.evaluate(() => window.__osScreen);
 
   const TEAL = [0, 128, 128], FACE = [192, 192, 192], ORANGE = [255, 140, 0];

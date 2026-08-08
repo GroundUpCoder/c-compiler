@@ -26,10 +26,10 @@ try {
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
   await page.goto(URL);
-  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 'raf' });
   check('boots to ready', true);
   // Don't race hush's banner: typed input before the first prompt is eaten.
-  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
   // VTs (todos/0022; 0070: a healthy boot lands on VT2): the tty is VT1 and
   // only one is visible. Shell typing happens on VT1, canvas pixels/input on VT2
@@ -232,12 +232,12 @@ try {
   // WM-SHELL-OK` needle is satisfied by its own echo — this leg passed
   // with hush DEAD, which is the one thing it exists to rule out.
   await page.keyboard.type("echo WM-SHELL-O''K\r");
-  await page.waitForFunction(() => window.__osOut.includes('WM-SHELL-OK'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('WM-SHELL-OK'), { timeout: 20000, polling: 'raf' });
   check('shell alive after windowed app exits', true);
 
   // 0014: wmctl from the shell, in the browser — one op set, everywhere.
   await page.keyboard.type('wmctl list\r');
-  await page.waitForFunction(() => window.__osOut.includes('taskbar'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('taskbar'), { timeout: 20000, polling: 'raf' });
   check('wmctl list from the in-browser shell sees the taskbar', true);
 
   // ---- window cycling (todos/0032): the Ctrl+Alt+Tab chord ----
@@ -316,7 +316,7 @@ try {
   await page.keyboard.type(
     "wmctl wait win ctxmenu 8000 && wmctl list | " +
     "awk '$NF==\"ctxmenu\"&&$(NF-1)~/^f/{print \"SYSMENU-FOCUS\" \"ED\"}'\r");
-  await page.waitForFunction(() => window.__osOut.includes('SYSMENU-FOCUSED'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('SYSMENU-FOCUSED'), { timeout: 20000, polling: 'raf' });
   check('Alt+Space opened the window system menu (popup holds focus)', true);
   await setVt(2);
   await waitPixel(CX + 200, CY + 100, GREEN, 30000,
@@ -351,7 +351,7 @@ try {
   await page.keyboard.type(
     "wmctl wait win ctxmenu 8000 && wmctl list | " +
     "awk '$NF==\"ctxmenu\"&&$(NF-1)~/^f/{print \"SYSMENU2-FOCUS\" \"ED\"}'\r");
-  await page.waitForFunction(() => window.__osOut.includes('SYSMENU2-FOCUSED'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('SYSMENU2-FOCUSED'), { timeout: 20000, polling: 'raf' });
   await setVt(2);
   for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');            // Close
@@ -387,7 +387,7 @@ try {
   // wmctl agrees: the LAST list row (top of z) is the pinned taskbar.
   await setVt(1);
   await page.keyboard.type("wmctl list | sed '$!d' | grep -q taskbar && echo Z-TOP-O''K\r");
-  await page.waitForFunction(() => window.__osOut.includes('Z-TOP-OK'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('Z-TOP-OK'), { timeout: 20000, polling: 'raf' });
   check('wmctl list: top of z is the taskbar (todos/0038)', true);
   await setVt(2);
   // Put B back where the kill-the-wm legs expect it.
@@ -404,7 +404,7 @@ try {
   // subscriber). B was clicked once above, so it carries one black mark.
   await setVt(1);
   await page.keyboard.type('WMPID=$(wmctl list | grep taskbar$ | sed "s/^[0-9]*.//;s/[^0-9].*//") && kill $WMPID && echo WM-DEAD\r');
-  await page.waitForFunction(() => window.__osOut.includes('WM-DEAD'), { timeout: 20000, polling: 200 });
+  await page.waitForFunction(() => window.__osOut.includes('WM-DEAD'), { timeout: 20000, polling: 'raf' });
   await setVt(2);
   // The kill is cooperative (SIGTERM at a safe point): wait for the wm's
   // surfaces to actually vanish (taskbar strip -> teal) before the chord,

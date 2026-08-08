@@ -29,9 +29,9 @@ try {
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
   await page.goto(URL);
-  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });
+  await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 'raf' });
   check('boots to ready', true);
-  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
   const { setVt, sample, near, waitPixel, waitScreen } = osHelpers(page);
   const TEAL = [0, 128, 128], ORANGE = [255, 140, 0], GREEN = [0, 200, 80],
@@ -56,7 +56,7 @@ try {
     await setVt(1);
     await page.keyboard.type(cmd + '\r');
     await page.waitForFunction(m => window.__osOut.includes(m), marker,
-      { timeout: 20000, polling: 150 });
+      { timeout: 20000, polling: 'raf' });
     await setVt(2);
   };
   // Poll a pixel until pred(sample) holds (the "loop the assertion" rule).
