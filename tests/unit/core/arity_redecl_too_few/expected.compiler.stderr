@@ -1,0 +1,1 @@
+tests/unit/core/arity_redecl_too_few/main.c:6: error: too few arguments to function call (expected 2, got 1)

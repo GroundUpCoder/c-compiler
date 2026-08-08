@@ -1,0 +1,1 @@
+tests/unit/core/arity_unprototyped_wording/main.c:6: error: call to unprototyped function 'f' with 3 argument(s), but the definition takes 0 (in function 'main')

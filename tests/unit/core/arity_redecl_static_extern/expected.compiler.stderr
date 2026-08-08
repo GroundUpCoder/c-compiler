@@ -1,0 +1,1 @@
+tests/unit/core/arity_redecl_static_extern/main.c:7: error: too many arguments to function call (expected 1, got 3)
