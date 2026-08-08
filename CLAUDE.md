@@ -1282,12 +1282,18 @@ OUT of the baked blob as `packages/<name>.json` definitions →
 `tools/mkpkg.js` builds deterministic tar+gzip payloads + `index.json`
 into `dist/packages/` (gitignored; served at `/packages/*` by serve.js,
 built by the SAME seedEntries/buildProject pipeline as the bake — bytes
-identical). **`index.json` + `pool/` are ONE repo and a build REPLACES
-it** — the orphan prune deletes every payload the fresh index doesn't
-name, so a base build strips the `-clang` entries AND their payload
-bytes. Sequentially that's the accepted clang/base thrash; concurrently
-it was a race that silently retargeted another builder's repo mid-read
-(todos/0388 — it cost a 185 gate a false red). So **two builds must
+identical). **`index.json` + `pool/` are ONE repo, and since #580 a
+build UPSERTS it**: entries the invocation cannot enumerate (gated
+behind an unpassed producer flag, or definition removed) are CARRIED
+forward, the orphan prune keys off the MERGED index, and only an
+explicit `--prune` drops the unknown entries + their payload bytes
+(each by name; a carried entry whose bytes are gone refuses at exit 1).
+That is what lets the package repo publish independently of an image
+deploy (comguc `build.mjs --image-only` / `--packages-only`). Before
+#580 a build REPLACED the repo — 41 consecutive deploys silently
+unpublished the `-clang` set that way. Concurrent same-dir builds are
+still the todos/0388 race that silently retargeted another builder's
+repo mid-read (it cost a 185 gate a false red). So **two builds must
 never share an out dir**: `--pool=DIR` decouples the expensive
 content-addressed payload STORE from the index, `<out>/pool` becomes a
 HARDLINKED VIEW of just that index's payloads, and a shared store is
