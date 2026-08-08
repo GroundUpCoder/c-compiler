@@ -31,8 +31,8 @@ const path = require('path');
 const cp = require('child_process');
 
 const REPO_ROOT = __dirname;
-const SERVE = path.join(REPO_ROOT, 'serve.js');
-const MKPKG = path.join(REPO_ROOT, 'tools', 'mkpkg.js');
+const SERVE = process.env.SERVE_WITH_CLANG_SERVE_UNDER_TEST || path.join(REPO_ROOT, 'serve.js');
+const MKPKG = process.env.SERVE_WITH_CLANG_MKPKG_UNDER_TEST || path.join(REPO_ROOT, 'tools', 'mkpkg.js');
 
 // --- args: consume the wrapper-only flags, forward the rest to serve.js ---
 let clangRoot = path.resolve(REPO_ROOT, '..', 'clang-simplified');
