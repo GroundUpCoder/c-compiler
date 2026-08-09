@@ -78,8 +78,39 @@ Security posture (Stage 1, deliberate): strict `127.0.0.1` bind with no
 widen flag (a LAN-reachable bridge is an open proxy — that conversation
 is Tier 4's); Origin allowlist (no-Origin local clients allowed;
 browser origins must match localhost:any-port, the shipped deploy, or
-`--allow-origin`); CORS + Private Network Access preflight answers
-(the platform facts in Tier 4's list apply to the bridge too).
+`--allow-origin`); CORS + Private Network Access preflight answers.
+NB the bridge does NOT inherit Tier 4's platform facts (#362): the
+bridge hop is a `fetch()`, which IS CORS-gated — Tier 4's "WebSocket is
+not CORS-gated" asserts the opposite for this tier — and answering the
+CORS/PNA preflight is the bridge's OWN obligation, not something the
+relay's preflight answers cover. Only the trustworthy-origin carve-out
+(an https page may address `http://127.0.0.1` at all) transfers, by
+analogy.
+
+**Https-origin reachability (ticket #362 — measured 2026-08-02, landed
+2026-08-10).** On the shipped image at the `https://groundupcoder.com`
+origin, 3/3 off-origin targets failed `ENETUNREACH` with the bridge
+healthy and its `/fetch` counter at ZERO — the request, preflight
+included, never left the page. Cause: Chrome 142+ **Local Network
+Access** (the PNA successor) gates every public-origin fetch to
+loopback behind a one-time user permission grant, and a WORKER fetch is
+silently denied without it — only a window context can raise the
+prompt. What landed: the kernel worker announces the effective `net`
+config to the page (`netFetchAttach` onChange), os.html probes the
+permission + the bridge's `/health` from window context (that fetch is
+what raises the prompt, right at the applet click that enabled the
+bridge; a later grant re-probes via `PermissionStatus.onchange`), the
+verdict is recorded at `/run/net-status`, and the Network applet's Test
+reads it on an ENETUNREACH failure — "blocked by the browser, not the
+bridge" / "unreachable from an https origin" instead of a bare
+strerror. A LOCAL page origin (dev serve.js) never blames the browser:
+Chrome reports the permission 'prompt' there while gating nothing
+(local→local is exempt). Coverage:
+`tests/browser/os-netbridge-https.mjs` (the real wrapper + real bridge
+from a synthetic PUBLIC https origin — the no-grant leg pins the
+platform block at zero wire requests, the granted leg the full hop),
+`test_netbridge_e2e` leg C2 (the Test verdicts), and the os-gucman
+bridge leg (the real page-probe pipeline).
 
 **Same-origin passthrough ruling (ticket #391, decided 2026-08-02,
 landed 2026-08-09).** jku's standing invariant: **bridge ON must be a
