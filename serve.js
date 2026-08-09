@@ -253,10 +253,20 @@ if (assertProducers.length && !singleFile) {
 // serving an OS tree (an os/image.json to serve against) — a bare-dir serve
 // (the gucman e2es' repo servers) has no package origin to guard.
 if (!singleFile && fs.existsSync(path.join(root, 'os', 'image.json'))) {
-  if (noExtraPackages) {
+  // A served tree that carries os/image.json but no (or a pre-#614)
+  // os-common.js is a synthetic fixture or a legacy checkout, not a repo
+  // with definition sources to guard — stand down rather than crash the
+  // serve (test_clang_overlay's trees are exactly this shape).
+  let COMMON = null;
+  try {
+    COMMON = require(path.join(root, 'os', 'os-common.js'));
+    if (typeof COMMON.resolveSiblingRepo !== 'function') COMMON = null;
+  } catch (e) { COMMON = null; }
+  if (COMMON === null) {
+    // nothing to guard
+  } else if (noExtraPackages) {
     console.log('[serve] --no-extra-packages: sibling definition sources ignored');
   } else {
-    const COMMON = require(path.join(root, 'os', 'os-common.js'));
     const sibling = COMMON.resolveSiblingRepo(fs, path, root, 'gucos-packages',
       { env: process.env.GUCOS_PACKAGES });
     if (sibling && !fs.existsSync(sibling.root)) {
