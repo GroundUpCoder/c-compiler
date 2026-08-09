@@ -18,6 +18,8 @@
 //      image), and releases on exit too.
 //   4. a stale lock left by a dead holder is STOLEN (self-heal), and the
 //      stealer releases on exit.
+//   5. (#620) --image= into a MISSING directory is a named one-line refusal
+//      at exit 2 — not the uncaught lockfile-ENOENT stack it used to be.
 //
 // Run: node tests/kernel/test_boot_guard_e2e.js
 'use strict';
@@ -116,6 +118,22 @@ const sleepMs = (ms) =>
       r.status === 0 && String(r.stdout || '').includes('D-OK'),
       { status: r.status, deadPid: dead.pid, stderr: String(r.stderr || '').slice(-500) });
     check('leg 4: the stealer released on exit', !fs.existsSync(imageLock));
+  }
+
+  // ---- leg 5 (#620): a missing image directory refuses by NAME ----
+  // The lock opener handles only EEXIST; before the up-front stat, a missing
+  // parent dir surfaced as an uncaught ENOENT stack naming the LOCKFILE.
+  {
+    const goneDir = path.join(priv, 'gone-dir');   // never created
+    const r = cp.spawnSync('node', [BOOT, '--image=' + path.join(goneDir, 'os.img'), '--quiet'],
+      { encoding: 'utf8', timeout: 60000, env: childEnv() });
+    const rErr = String(r.stderr || '');
+    check('leg 5: missing image dir refused at exit 2',
+      r.status === 2, { status: r.status, stderr: rErr.slice(-500) });
+    check('leg 5: the refusal names the missing directory', rErr.includes(goneDir), rErr.slice(-500));
+    check('leg 5: one line, no stack trace',
+      !rErr.includes('at ') && !rErr.includes('ENOENT') && rErr.trim().split('\n').length === 1,
+      rErr.slice(-500));
   }
 
   console.log(failures === 0 ? '\nboot guard e2e: PASS' : `\nboot guard e2e: ${failures} FAILED`);

@@ -242,6 +242,22 @@ if (resolvedOverlays.length) {
   seedIo.requireCleanOverlays = requireCleanOverlays;
 }
 
+/* ---- image directory must exist (#620) ---- */
+// The sidecar-lock opener below creates rootImagePath + '.lock' and handles
+// only EEXIST; with the image's parent directory missing, its ENOENT used to
+// escape as an uncaught stack blaming the LOCKFILE for a fault in --image=.
+// Nothing host-side ever creates this directory (bakes write INTO it), so
+// refuse up front by name — exit 2, bad args, before any lock is taken.
+{
+  const imageDir = path.dirname(rootImagePath);
+  let st = null;
+  try { st = fs.statSync(imageDir); } catch { /* missing */ }
+  if (!st || !st.isDirectory()) {
+    process.stderr.write(`boot: image directory does not exist: ${imageDir} (from --image=${imagePath})\n`);
+    process.exit(2);
+  }
+}
+
 /* ---- single-instance image guard (todos/0293, the 0045 follow-up) ---- */
 // The browser side has always been guarded (one kernel per origin: a Web
 // Lock named after the OPFS image pair, todos/0045); headless boot.js was
