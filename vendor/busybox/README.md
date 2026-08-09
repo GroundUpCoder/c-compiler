@@ -18,7 +18,11 @@ Two binaries come out of this vendor tree:
   plus — batch 4, todos/0043, the PROCESS TOOLS over the kernel's synthetic
   /proc — **ps top pgrep pkill uptime free** (upstream applets + libbb
   `procps.c`/`duration.c`/`getopt_allopts.c`; uptime/free go through the
-  port's `sysinfo()` in libbb_stubs.c, which itself reads /proc). The
+  port's `sysinfo()` in libbb_stubs.c, which itself reads /proc); plus —
+  batch 5, ticket #619, the DEV-LOOP pair — **time strings** (`time`
+  reports real wall time via `monotonic_ms`, but user/sys print 0.00: this
+  platform does not track child CPU time — the same honesty rule as
+  /proc's 0 cpu fields; patch table below). The
   `/bin` applet names are BlockFS symlinks to it and dispatch is by
   argv[0] (`port/multicall_main.c` — a hand-rolled table, NOT upstream's
   kbuild-generated appletlib, so the 0005 appletlib stubs stay). Invoked
@@ -138,6 +142,7 @@ journaling mode:
 | `src/findutils/xargs.c` | (0035) `ISSPACE` statement expression → ALWAYS_INLINE helper (no GNU statement exprs; same rewrite as libbb.h's ctype trio) |
 | `src/editors/awk.c` | (0035) F_rn: `#elif` branch composing 63 uniform bits from five 15-bit rand() draws — this libc's RAND_MAX is 32767, upstream only handles ≥31-bit |
 | `src/miscutils/less.c` | (0035) three VLAs (`re_wrap` linebuf, `print_found`/`print_ascii` buf) → xmalloc/free (no VLAs in this compiler) |
+| `src/miscutils/time.c` | (#619) `HAVE_WAIT3` fallback body: `wait4` (absent from this libc) → `waitpid` + `getrusage` (which this runtime zeroes — user/sys honestly 0.00, wall time real); `xvfork` site → the setjmp journaling-shim form (the hush/tar rewrite); `getenv("TIME") ? : default` elvis → explicit fallback (no GNU `?:` in this compiler) |
 | `src/editors/vi.c` | `sig = sigsetjmp(...); if (sig != 0)` → supported if-form (the value was only ever tested against 0); 6 GNU `?:` elvis sites → plain ternary (side-effect-free operands, this compiler has no `?:`) |
 | `src/procps/kill.c` | killall/killall5 branches guarded out (predates 0043's /proc; un-guarding them is a possible follow-up now that procps_scan works) |
 | `src/procps/ps.c` | (0043) the cmdline print buffer VLA → xmalloc/free (no VLAs in this compiler; same rewrite as less.c's three) |

@@ -462,6 +462,9 @@ typedef unsigned smalluint;
 # undef HAVE_STPCPY
 # undef HAVE_STPNCPY
 # undef HAVE_STRSEP
+/* no wait3/wait4 either — time.c's own fallback is patched to
+ * waitpid + getrusage (ticket #619; see the README patch table) */
+# undef HAVE_WAIT3
 /* HAVE_STRSIGNAL stays undef'd even though the libc grew a real strsignal
  * (todos/0325 Group B). This one is NOT a gap: busybox's fallback is a MACRO
  * to get_signame(), which deliberately prints the short names ("STOP" rather

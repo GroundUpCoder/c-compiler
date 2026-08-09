@@ -94,6 +94,8 @@
     "src/editors/sed.c",
     "src/editors/vi.c",
     "src/miscutils/less.c",
+    "src/miscutils/strings.c",
+    "src/miscutils/time.c",
     "src/procps/free.c",
     "src/procps/kill.c",
     "src/procps/pgrep.c",

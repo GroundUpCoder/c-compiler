@@ -350,6 +350,45 @@ check('procps session exits clean', r.status === 0, String(r.status) + ' ' + (r.
   check('/proc/uptime format', rest[10] === '1', JSON.stringify(rest[10]));
 }
 
+// ---- the dev-loop pair (#619): time + strings, BEHAVIOUR not registration ----
+// time must produce a plausible wall time (>=0.9s for `sleep 1` — the libc's
+// getrusage zeroes user/sys by design, so real is the figure that means
+// anything) and propagate the child's exit status; strings must extract real
+// printable runs from a real binary (the multicall's own applet-name table)
+// and honour -n. Both are invoked by their bare /bin names, which is the
+// symlink+argv[0] dispatch path.
+r = session([
+  'time -p sleep 1 2>&1 | awk "/^real/ {print (\\$2 >= 0.9 && \\$2 < 30) ? \\"time-real-ok\\" : \\"time-bad \\" \\$2}"',
+  'time false 2>/dev/null; echo time-rc=$?',
+  'time true 2>/dev/null && echo time-rc0-ok',
+  'printf "ab\\000hello-world-marker\\000c" > /tmp/sb.bin',
+  'strings /tmp/sb.bin',                     // only the >=4-char run prints
+  'echo S1-END',
+  'strings -n 2 /tmp/sb.bin | head -1',      // -n 2 admits the 2-char run
+  'strings /bin/coreutils | grep -qx sha256sum && echo strings-bin-ok',
+  'exit',
+  '',
+].join('\n'));
+check('time/strings session exits clean', r.status === 0, String(r.status) + ' ' + (r.stderr || '').slice(-200));
+{
+  const ts = r.stdout.split('\n');
+  check('time reports a plausible wall time for sleep 1', ts.includes('time-real-ok'),
+    JSON.stringify(ts.filter((l) => /^time-/.test(l))));
+  check('time propagates a failing child status', ts.includes('time-rc=1'),
+    JSON.stringify(ts.filter((l) => /^time-rc/.test(l))));
+  check('time exits 0 on a clean child', ts.includes('time-rc0-ok'),
+    JSON.stringify(ts.filter((l) => /^time-rc/.test(l))));
+  const s1end = ts.indexOf('S1-END');
+  const run1 = ts.slice(0, s1end < 0 ? 0 : s1end);
+  check('strings extracts the >=4-char run and only it',
+    run1.includes('hello-world-marker') && !run1.includes('ab') && !run1.includes('c'),
+    JSON.stringify(run1.filter((l) => /hello|^ab$|^c$/.test(l))) + ' s1end=' + s1end);
+  check('strings -n 2 admits the 2-char run', ts[s1end + 1] === 'ab',
+    JSON.stringify(ts[s1end + 1]));
+  check('strings finds real data in a real binary', ts.includes('strings-bin-ok'),
+    JSON.stringify(ts.slice(-6)));
+}
+
 // ---- shebang exec (todos/0065): `./script` runs via its #! line ----
 // The kernel re-dispatches a "#!" image to its interpreter, so a shell
 // script is directly executable (no explicit `sh`) — the 0066 launcher
