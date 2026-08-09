@@ -13,6 +13,34 @@ principle: `todos/OS.md` "Dev-experience first" (commit `3fc46971`).
 > **jku, 2026-08-04, verbatim:** *"The gamedev in gucOS is the primary focus
 > indefinitely until otherwise specified."*
 
+## 🔴 THE ACCEPTANCE BAR, RAISED — jku, 2026-08-09
+
+> **jku, verbatim:** *"That one should clearly show making various games should
+> be very stable and very enjoyable both when coding is done manually as well
+> as when it's done with gcode."*
+
+This is **higher than the bar the rest of this document states**, and it is the
+bar this epic is judged against when it eventually takes primacy back from
+PKGDEV. Three things it changes:
+
+1. **"Various games", not one showcase.** A single working demo does not
+   satisfy it. The plural is load-bearing.
+2. **"Very stable AND very enjoyable."** Stability is measured today (crashes,
+   wedges, gate greens). 🔴 **"Enjoyable" is measured by NOTHING in the current
+   acceptance estate** — there is no frame-pacing, input-latency, or
+   authoring-friction criterion anywhere in this epic. Until such a criterion
+   exists, any claim that this epic is met is an assertion, not a measurement.
+   Closing that gap is itself epic work.
+3. **The gcode-authored path is FIRST-CLASS, not a side quest.** The bar must
+   be met *both* when a human writes the game by hand *and* when gcode writes
+   it. A game that is pleasant to build by hand but not through gcode fails
+   this bar. Every gamedev pass therefore has two arms, and a pass that
+   exercises only the hand-coded arm is incomplete.
+
+Recorded by @master from the email thread of 2026-08-09 (the same reply that
+ruled PKGDEV not yet done, so this bar governs the epic that is *next*, not the
+one running now).
+
 That directive is **not scoped to a batch or a cycle** — it stands until he
 says otherwise. **Operative reading for queue selection: gamedev primacy is a
 FILTER APPLIED BEFORE the weight sort.** Select the gamedev-advancing tickets

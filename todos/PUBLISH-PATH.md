@@ -1,8 +1,14 @@
 # PUBLISH-PATH — how in-OS-developed packages reach the served repo (#564)
 
-Status: DESIGN, awaiting jku sign-off (ticket #564, PKGDEV-EPIC ladder item 4).
+**Status: RATIFIED — jku signed this off by email on 2026-08-09.** Option 1
+(git-push publish) is the accepted design; Option 2 (a direct-upload endpoint)
+stays rejected on the trust grounds in §3. Ticket #564, PKGDEV-EPIC ladder
+item 4. Implementation is tracked by **#596** (publish T1, host-side intake),
+which this sign-off unblocked.
+
 Deliverable: this decision doc + the follow-on implementation tickets proposed
-at the end (@master files them). Nothing here is implemented.
+at the end (@master files them). The design is ratified; the code is not yet
+written.
 
 **Recommendation in one line: git-push-based publish (Option 1) — the in-OS
 developer pushes SOURCE via the landed #478 network leg; a host-side intake
