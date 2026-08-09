@@ -151,6 +151,52 @@ check('every OTHER os/ path still selects sweep', missSweep.length === 0,
   check(f + ' keeps BOTH heavy suites', s.has('kernel') && s.has('sweep'), [...s].join(', '));
 });
 
+// ---- baked docs-shaped image inputs (ticket #622) ----
+//
+// os/gcode/GCODE.md and os/doc/sdl-gucos.md are `bin` entries in
+// os/image.json — blob bytes — yet the docs IGNORE used to drop them, so a
+// content-only edit re-baked the image and then gated ZERO suites (#505,
+// the next dogfood round, edits exactly that file). The set is DERIVED from
+// the manifest + the package definitions (never hardcoded), so these pins
+// check the derivation stayed live in both directions: baked docs price
+// both heavy suites; plain docs outside the bake closure stay free.
+var BAKED_DOCS = runjs.BAKED_DOCS;
+check('BAKED_DOCS derivation parsed os/image.json', BAKED_DOCS.ok === true,
+      BAKED_DOCS.ok ? BAKED_DOCS.files.length + ' file(s)' : BAKED_DOCS.error);
+var bakedFiles = BAKED_DOCS.files || [];
+// The two manifest members by name (the #622 motivating pair)...
+['os/gcode/GCODE.md', 'os/doc/sdl-gucos.md'].forEach(function (f) {
+  check('derivation finds ' + f + ' (an image.json bin entry)', bakedFiles.indexOf(f) !== -1);
+});
+// ...and one package-borne member: LICENCE.md rides packages/libgit2.json's
+// `src` tree payload (the top-level README.md is exclude-listed; this one is
+// not), pinning the packages/tree half of the derivation non-vacuous. If
+// libgit2's definition later excludes it, pick another payload doc here —
+// this pin failing IS the signal the derivation lost its only live tree case.
+check('derivation finds vendor/libgit2/deps/pcre2/LICENCE.md (a tree-payload doc)',
+      bakedFiles.indexOf('vendor/libgit2/deps/pcre2/LICENCE.md') !== -1);
+// The filter is live: every derived path is one IGNORE would drop — the
+// alternation is the RESCUED set, never the whole bake closure.
+var notDocs = bakedFiles.filter(function (f) {
+  return !runjs.IGNORE.some(function (re) { return re.test(f); });
+});
+check('every derived path is docs-shaped (IGNORE would drop it)', notDocs.length === 0,
+      notDocs.length ? 'not ignored: ' + notDocs.slice(0, 5).join(', ') : bakedFiles.length + ' paths');
+// Direction 1+2: a baked-doc-only diff prices BOTH heavy suites (blob bytes
+// are observable from both hosts — the ^os/ shared rule's reasoning).
+bakedFiles.forEach(function (f) {
+  var s = planFromDiff([f]).suites;
+  check(f + ' prices kernel + sweep', s.has('kernel') && s.has('sweep'), [...s].join(', '));
+});
+// Direction 3: plain docs OUTSIDE the bake closure stay IGNORE — a change
+// that puts a heavy suite behind every dev-log commit is a regression, not a
+// fix. Fabricated names guarantee not-baked and not-LIABILITIES-cited.
+var plain = planFromDiff(['logs/2026-01-01/no-such-note.md', 'NO-SUCH-DESIGN-SCRATCH.md',
+                          'os/NO-SUCH-NOTES.md', 'vendor/libgit2/README.md']);
+check('plain docs price NOTHING', plain.suites.size === 0, [...plain.suites].join(', '));
+check('plain docs are ignored, not unmapped', plain.ignored.length === 4 && plain.unmapped.length === 0,
+      plain.ignored.length + ' ignored, ' + plain.unmapped.length + ' unmapped');
+
 // ---- ext/ + libc-ext.js: the extension surface (#534) ----
 //
 // This path class merged green with ZERO suites selected until #534 — the

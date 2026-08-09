@@ -183,9 +183,78 @@ const CITED_RE = CITED.ok && CITED.files.length
   ? new RegExp('^(' + CITED.files.map(f => f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')$')
   : /^/;
 
-// IGNORE drops docs-shaped paths, but todos/ and the register's cited files
-// are gated: checked BEFORE it, so `.md$` and friends can't swallow them.
-const FORCE = [/^todos\//, CITED_RE];
+// ---- baked docs-shaped image inputs (ticket #622) ----
+//
+// os/image.json can bake ANY repo file into the system blob via a `bin`
+// entry, and gucman package definitions do the same via file-level `bin`
+// and `tree` entries (the fat fixture folds every package in). Most such
+// blobs are binary assets no IGNORE pattern touches — but a docs-shaped one
+// (os/gcode/GCODE.md, os/doc/sdl-gucos.md, a LICENCE.md riding a tree
+// payload) is swallowed by the `.md$`/README patterns before any rule is
+// consulted, so a content-only edit re-bakes the blob and then gates ZERO
+// suites (found live by lane-530511's dry-run — ticket #622). Derived from
+// the manifest and the package definitions themselves, the CITED_RE shape:
+// a newly-baked doc is covered by construction, with nobody remembering
+// this block exists. The set is filtered to paths IGNORE would drop —
+// non-docs baked paths already reach the rule table and keep whatever
+// their own rules say.
+//
+// Failure directions, both deliberate: an UNPARSABLE os/image.json yields
+// a match-everything pattern (the gate widens — and the kernel leg's bake
+// names the parse error — rather than quietly opening; the CITED_RE rule).
+// A malformed PACKAGE definition is skipped like newestBakeInput's scan:
+// a definition that cannot parse cannot bake, fold, or install, so nothing
+// it names can ship unobserved.
+const OS_COMMON = require('../os/os-common.js');
+function bakedIgnoredDocs() {
+  const paths = new Set();
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'os/image.json'), 'utf-8'));
+  } catch (e) { return { ok: false, error: e.message }; }
+  for (const section of ['system', 'user']) {
+    const files = (manifest[section] && manifest[section].files) || {};
+    for (const k of Object.keys(files)) {
+      if (files[k] && typeof files[k].bin === 'string') paths.add(files[k].bin);
+    }
+  }
+  let pkgNames = [];
+  try {
+    pkgNames = fs.readdirSync(path.join(ROOT, 'packages')).filter(n => /\.json$/.test(n));
+  } catch (e) { /* no packages/ dir — the image.json half stands alone */ }
+  for (const n of pkgNames) {
+    let pkg;
+    try { pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'packages', n), 'utf-8')); }
+    catch (e) { continue; }   // malformed → fails loud in the fold, not here
+    const files = pkg.files || {};
+    for (const k of Object.keys(files)) {
+      const entry = files[k];
+      if (!entry) continue;
+      if (typeof entry.bin === 'string') paths.add(entry.bin);
+      if (typeof entry.tree === 'string') {
+        // The SAME enumeration that expands the payload (dotfiles and the
+        // definition's exclude globs never ride), so the two agree by
+        // construction — newestBakeInput's listTreeFiles rule.
+        let tfs;
+        try { tfs = OS_COMMON.listTreeFiles(fs, path, ROOT, entry, n + ': ' + k); }
+        catch (e) { continue; }
+        for (const tf of tfs) paths.add(entry.tree + '/' + tf);
+      }
+    }
+  }
+  return { ok: true, files: [...paths].filter(p => IGNORE.some(re => re.test(p))).sort() };
+}
+const BAKED_DOCS = bakedIgnoredDocs();
+const BAKED_DOCS_RE = BAKED_DOCS.ok
+  ? (BAKED_DOCS.files.length
+      ? new RegExp('^(' + BAKED_DOCS.files.map(f => f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')$')
+      : /(?!)/)   // parse-ok + no docs-shaped baked inputs: a legitimate state, match nothing
+  : /^/;
+
+// IGNORE drops docs-shaped paths, but todos/, the register's cited files and
+// the baked docs-shaped image inputs are gated: checked BEFORE it, so `.md$`
+// and friends can't swallow them.
+const FORCE = [/^todos\//, CITED_RE, BAKED_DOCS_RE];
 
 // ---- os/'s RUNTIME-ONLY files (ticket #428) ----
 //
@@ -329,6 +398,17 @@ const RULES = [
   // AND feed tools/mkpkg.js payloads; test_gucman_e2e consumes both; the base-
   // purity + nativeApp guardrails (host) also read them (CLANG-CPP-EPIC II §7).
   [/^packages\//, ['kernel', 'sweep', 'host'], 'package definitions restale the fat fixture + the mkpkg pool + the base-purity guardrail'],
+  // Baked docs-shaped inputs (ticket #622): repo files the image manifest or
+  // a package definition bakes into blob/payload bytes, whose paths IGNORE
+  // would otherwise drop (derivation + failure directions at the FORCE block
+  // above). Blob bytes are observable from BOTH hosts, so both heavy suites
+  // — the ^os/ shared rule's reasoning, and for os/-resident members the
+  // union makes this a no-op on top of it; the entry is what prices a baked
+  // doc OUTSIDE os/ (a tree-payload LICENCE.md under vendor/).
+  [BAKED_DOCS_RE, ['kernel', 'sweep'],
+    'docs-shaped bake inputs — blob/payload bytes both hosts boot; IGNORE-exempted via FORCE',
+    BAKED_DOCS.ok ? `baked docs-shaped inputs (${BAKED_DOCS.files.length} file(s))`
+                  : `os/image.json UNPARSABLE: ${BAKED_DOCS.error}`],
   [/^tools\/mkpkg\.js$/, ['kernel', 'host'], 'builds the gucman package pool test_gucman_e2e installs from; host holds the mkpkg --clang guardrail'],
   // The overlay-drift gate's exemption list (todos/0337): an edit here changes
   // which published clang apps mkpkg --clang accepts as unpackaged, which is
@@ -1338,6 +1418,10 @@ function printList() {
     + IGNORE.map(re => re.source).join('  ') + '\n');
   process.stdout.write('Never ignored (gated even though docs-shaped):\n  todos/  '
     + (CITED.ok ? CITED.files.join('  ') : '(register unparsable — every path)') + '\n');
+  process.stdout.write('Baked docs-shaped inputs (#622 — blob bytes, gated kernel+sweep):\n  '
+    + (BAKED_DOCS.ok
+        ? (BAKED_DOCS.files.length ? BAKED_DOCS.files.join('  ') : '(none)')
+        : '(os/image.json unparsable — every path)') + '\n');
 }
 
 function printHelp() {
@@ -1379,5 +1463,5 @@ if (require.main === module) {
   module.exports = { SUITES, PY_CATEGORIES, RULES, IGNORE, FORCE, planFromDiff,
                      browserPreflight, pythonPreflight, classify,
                      OS_BROWSER_ONLY, OS_HEADLESS_ONLY, OS_RUNTIME_ONLY,
-                     TIERS, ALL_SUITES, checkSkipBaseline };
+                     TIERS, ALL_SUITES, checkSkipBaseline, BAKED_DOCS };
 }
