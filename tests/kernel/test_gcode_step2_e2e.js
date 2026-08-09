@@ -137,6 +137,9 @@ fs.writeFileSync(scriptPath, JSON.stringify([
       '[ -f /tmp/t6.second ] && echo T6-SECOND-FILE-EXISTS || echo T6-SECOND-FILE-ABSENT',
       'echo ==t6log',
       'cat /tmp/t6state/sessions/*.jsonl',
+      // ---- #530: the baked platform context layer really shipped ----
+      'echo ==ctx530',
+      '[ -f /usr/share/gcode/GCODE.md ] && echo CTX530-BAKED || echo CTX530-MISSING',
       'echo ==end',
     ], { image, timeout: 300000 });
     const out = s.stdout;
@@ -251,6 +254,24 @@ fs.writeFileSync(scriptPath, JSON.stringify([
         tr.content.includes('[gcode: replaced 2 invalid UTF-8 bytes with U+FFFD]') &&
         tr.content.includes('café'),
         JSON.stringify(tr || {}).slice(0, 300));
+    }
+    // ---- #530: the baked /usr/share/gcode/GCODE.md loads in-OS ----
+    // The bake proof (file present) and the load proof (the platform layer
+    // rode the first request's system prompt) are separate failures.
+    const ctx530 = section(out, 'ctx530');
+    check('#530: /usr/share/gcode/GCODE.md is baked into the image',
+      ctx530.includes('CTX530-BAKED'), JSON.stringify(ctx530));
+    {
+      const sys = (bodies[0] && bodies[0].system) || '';
+      check('#530: in-OS gcode loads the baked platform layer into the system prompt',
+        sys.includes('[GCODE.md context: /usr/share/gcode/GCODE.md]'), sys.slice(0, 200));
+      // The #551 SDL rule MOVED from the C literal to the file — present
+      // exactly once, never duplicated (a duplicated rule that drifts is
+      // worse than either alone — the #530 inherited-scope ruling).
+      check('#530: the SDL blocking-loop rule appears exactly once (moved out of the literal, not duplicated)',
+        sys.indexOf('SDL_MAIN_USE_CALLBACKS') !== -1 &&
+        sys.indexOf('SDL_MAIN_USE_CALLBACKS') === sys.lastIndexOf('SDL_MAIN_USE_CALLBACKS'),
+        sys.slice(0, 200));
     }
   } finally {
     server.kill('SIGKILL');

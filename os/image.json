@@ -18,6 +18,7 @@
       "/usr/share/deck",
       "/usr/share/doc",
       "/usr/share/fonts",
+      "/usr/share/gcode",
       "/usr/share/gucman",
       "/usr/share/menu",
       "/usr/share/menu/Accessories",
@@ -34,6 +35,9 @@
       },
       "/usr/share/doc/sdl-gucos.md": {
         "bin": "os/doc/sdl-gucos.md"
+      },
+      "/usr/share/gcode/GCODE.md": {
+        "bin": "os/gcode/GCODE.md"
       },
       "/usr/bin/sh": {
         "project": "vendor/busybox/bin.json"

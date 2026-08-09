@@ -20,7 +20,12 @@
  *   GCODE_BASH_SECS      bash-tool wall-time cap (default CAP_BASH_SECS)
  * Flags: -p PROMPT (one-shot), --model, --system-prompt, --max-turns (opt-in
  *   turn cap; default unlimited, #353), --max-tokens, --resume, --continue,
- *   --no-persist, --verbose, --no-color.
+ *   --no-persist, --no-context, --verbose, --no-color.
+ *
+ * Context files (#530): layered GCODE.md — /usr/share/gcode + /etc/gcode +
+ *   ~/.config/gcode + a project-tree walk-up from cwd — appended to the
+ *   system prompt, general first, specific last. See context_load.
+ *   GCODE_CONTEXT_ROOT is the system-layer test seam; --no-context is off.
  */
 
 #include <stdio.h>
@@ -135,6 +140,13 @@ typedef struct {
     const char *base_url, *api_key, *auth_token, *model, *system_prompt;
     long max_tokens, max_turns;
     int  verbose, color;
+    /* #530: layered GCODE.md context (fields LAST — self_test's positional
+     * initializer zero-fills them). system_sent is the string actually
+     * POSTed as `system` (base prompt + context blocks; NULL = no context
+     * loaded, fall back to system_prompt). context_files lists what was
+     * loaded, for session_meta. */
+    char  *system_sent;
+    cJSON *context_files;
 } config;
 
 #define GCODE_VERSION "2"
@@ -412,7 +424,31 @@ static void render_tool_result(const char *result, long secs) {
 }
 
 static volatile sig_atomic_t g_interrupted;
-static void on_interrupt(int sig) { (void)sig; g_interrupted = 1; }
+#ifndef __MTOTS__
+/* #511: the native self-pipe. A SIGINT landing in the instructions between
+ * run_command's loop-top g_interrupted check and poll(2) entering used to be
+ * handled BEFORE poll blocked — no EINTR, so against a SILENT child the ^C
+ * stayed latent until the next slice timeout (up to 1s, the #507 clamp). The
+ * handler writes one byte here and the read end joins run_command's pollfd
+ * set, so a signal at ANY point wakes the poll: landing before the syscall
+ * leaves the byte already readable, landing during it is EINTR/POLLIN either
+ * way. The FLAG stays authoritative — the pipe is only a wake mechanism, so
+ * draining a stale byte can never lose an interrupt. gucOS does not need
+ * this: cooperative signals run handlers only at import returns, and there
+ * is no import between the loop-top check and the read (the wm.c
+ * flag-then-park rule). */
+static int g_intr_pipe[2] = { -1, -1 };
+#endif
+static void on_interrupt(int sig) {
+    (void)sig; g_interrupted = 1;
+#ifndef __MTOTS__
+    if (g_intr_pipe[1] >= 0) {          /* async-signal-safe; preserve errno */
+        int e = errno;
+        ssize_t w = write(g_intr_pipe[1], "x", 1); (void)w;
+        errno = e;
+    }
+#endif
+}
 
 /* ---- #507: progress signal during long operations ----------------------
  * A working agent must be distinguishable from a wedged one: gcode used to
@@ -639,6 +675,19 @@ static char *run_command(const char *cmd, int *exit_code) {
 #else /* native */
 #include <poll.h>
 
+/* #511: create the interrupt self-pipe (once, from main). Nonblocking both
+ * ends — the handler's write must never block on a full pipe, and the drain
+ * loop ends at EAGAIN — and CLOEXEC so the sh child never inherits the fds.
+ * On failure the fds stay -1: poll ignores a negative fd, so every failure
+ * mode degrades to the pre-#511 behavior, never to a broken loop. */
+static void intr_pipe_init(void) {
+    if (pipe(g_intr_pipe)) { g_intr_pipe[0] = g_intr_pipe[1] = -1; return; }
+    for (int i = 0; i < 2; i++) {
+        fcntl(g_intr_pipe[i], F_SETFL, O_NONBLOCK);
+        fcntl(g_intr_pipe[i], F_SETFD, FD_CLOEXEC);
+    }
+}
+
 /* Returns malloc'd captured output (truncation-marked if over cap).
  * *exit_code set to the child's exit status (or -1 killed by timeout). */
 static char *run_command(const char *cmd, int *exit_code) {
@@ -658,6 +707,13 @@ static char *run_command(const char *cmd, int *exit_code) {
     time_t start = time(NULL);
     time_t deadline = start + bash_cap_secs();
     long shown = 0;
+    /* #511: shed bytes a ^C consumed elsewhere (the REPL prompt) left in the
+     * pipe — the flag is authoritative, so eating a stale byte loses nothing
+     * and a fresh signal after this drain leaves its own byte for poll. */
+    if (g_intr_pipe[0] >= 0) {
+        char junk[64];
+        while (read(g_intr_pipe[0], junk, sizeof junk) > 0) {}
+    }
     for (;;) {
         /* #510: check BEFORE the poll, not only in its EINTR branch — a
          * chatty child keeps the pipe readable, so poll keeps returning
@@ -671,21 +727,36 @@ static char *run_command(const char *cmd, int *exit_code) {
         if (g_interrupted && !intkilled) { kill(pid, SIGKILL); intkilled = 1; break; }
         long elapsed = (long)(time(NULL) - start);        /* #507: heartbeat */
         if (elapsed >= 1 && elapsed != shown) { progress_show("running", elapsed); shown = elapsed; }
-        struct pollfd pf = { pfd[0], POLLIN, 0 };
+        /* #511 test seam (GCODE_TEST_INTR_BEFORE_POLL=1): raise SIGINT once,
+         * exactly in the raced window — after the loop-top check, before poll
+         * enters. The only deterministic way to place a signal there; the
+         * product path is untouched (the hook is a raise(), not a branch). */
+        static int selfraise = -1;
+        if (selfraise < 0) {
+            const char *s = getenv("GCODE_TEST_INTR_BEFORE_POLL");
+            selfraise = (s && atoi(s)) ? 1 : 0;
+        }
+        if (selfraise == 1) { selfraise = 2; raise(SIGINT); }
+        struct pollfd pf[2] = { { pfd[0], POLLIN, 0 }, { g_intr_pipe[0], POLLIN, 0 } };
         int remain = (int)(deadline - time(NULL));
         if (remain < 0) remain = 0;
         int slice = remain * 1000 + 100;
         if (slice > 1000) slice = 1000;   /* #507: wake ~1/s so a silent child still ticks */
-        int r = poll(&pf, 1, slice);
+        int r = poll(pf, 2, slice);
         if (r < 0 && errno == EINTR)
             continue;                        /* ^C re-checked at loop top */
+        if (r > 0 && (pf[1].revents & POLLIN)) {   /* #511: interrupt wake */
+            char junk[64];
+            while (read(g_intr_pipe[0], junk, sizeof junk) > 0) {}
+            continue;                        /* loop top re-checks the flag */
+        }
         if (r == 0 && time(NULL) >= deadline) {  /* timeout: kill the direct
             sh and stop reading — its descendants may survive (#503) */
             kill(pid, SIGKILL);
             *exit_code = -1;
             break;
         }
-        if (r > 0 && (pf.revents & (POLLIN | POLLHUP))) {
+        if (r > 0 && (pf[0].revents & (POLLIN | POLLHUP))) {
             char buf[4096];
             ssize_t n = read(pfd[0], buf, sizeof buf);
             if (n <= 0) break;               /* EOF */
@@ -1144,6 +1215,136 @@ static char *system_hash(const char *s) {
     char *out = malloc(17); snprintf(out, 17, "%016llx", (unsigned long long)h); return out;
 }
 
+/* ---- #530: layered GCODE.md context files ------------------------------
+ * The system prompt proper stays the small hardcoded literal (or the
+ * --system-prompt override) — portable, no platform content baked into the
+ * binary (jku's #551 architecture ruling). Orientation comes from GCODE.md
+ * context files, layered stable-and-general first, specific-and-volatile
+ * last:
+ *
+ *   1. /usr/share/gcode/GCODE.md     the platform's shipped default
+ *   2. /etc/gcode/GCODE.md           local admin additions
+ *   3. $HOME/.config/gcode/GCODE.md  per-user additions
+ *   4. GCODE.md in each directory from the walk-up root down to cwd
+ *      (collected walking up, emitted parent-most first so the most
+ *      specific directory has the last word)
+ *
+ * The cfgstore precedent (~/.config > /etc > /usr/share, todos/NETWORK.md)
+ * fixes the layer set; unlike cfgstore's per-key override, prose context
+ * CONCATENATES — an /etc file adds to the shipped orientation instead of
+ * silently discarding it (the Claude Code CLAUDE.md layering model, which
+ * this ticket was asked to follow). Absent files are a silent no-op ("IF
+ * present"); with no file anywhere the POSTed system prompt is
+ * byte-identical to the bare literal.
+ *
+ * Bounds: the walk up stops at $HOME (when cwd is under it), at a mount
+ * boundary (st_dev change), at /, or at CAP_CONTEXT_DEPTH directories.
+ * CAP_CONTEXT_BYTES bounds the TOTAL, consumed in emission order; the file
+ * that crosses the cap is truncated with an in-band marker and a stderr
+ * warning, later files are dropped with a stderr warning — never a silent
+ * trim.
+ *
+ * DELIBERATE (#530 design point ii): context files are EXCLUDED from
+ * system_prompt_hash. The hash keeps meaning "the base prompt or
+ * --system-prompt changed", so editing a project GCODE.md never trains
+ * users to ignore the resume warning; what was loaded is recorded in
+ * session_meta's `context_files` list instead.
+ *
+ * GCODE_CONTEXT_ROOT (test seam, the GCODE_STATE_DIR precedent) prefixes
+ * the two absolute system-layer paths so the native oracle can exercise
+ * them hermetically; --no-context disables file context entirely. */
+#define CAP_CONTEXT_BYTES (48 * 1024)
+#define CAP_CONTEXT_DEPTH 32
+
+static long context_append(sb *out, cJSON *files, const char *path, long budget) {
+    struct stat st;
+    if (stat(path, &st) || !S_ISREG(st.st_mode) || st.st_size == 0) return 0;
+    if (budget <= 0) {
+        fprintf(stderr, "%sgcode: warning: %s dropped (the %d-byte context cap is spent)%s\n",
+                CDIM, path, CAP_CONTEXT_BYTES, CRST);
+        return 0;
+    }
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    sb_puts(out, "\n\n[GCODE.md context: "); sb_puts(out, path); sb_puts(out, "]\n");
+    char buf[4096]; size_t n; long took = 0; int truncated = 0;
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0) {
+        size_t room = (size_t)(budget - took);
+        size_t take = n < room ? n : room;
+        sb_add(out, buf, take); took += (long)take;
+        if (take < n) { truncated = 1; break; }
+    }
+    fclose(f);
+    if (truncated) {
+        char m[96];
+        snprintf(m, sizeof m, "\n[gcode: context truncated at the %d-byte total cap]", CAP_CONTEXT_BYTES);
+        sb_puts(out, m);
+        fprintf(stderr, "%sgcode: warning: %s truncated at the %d-byte context cap%s\n",
+                CDIM, path, CAP_CONTEXT_BYTES, CRST);
+    }
+    cJSON_AddItemToArray(files, cJSON_CreateString(path));
+    return took;
+}
+
+static void context_load(config *cfg) {
+    const char *root = getenv("GCODE_CONTEXT_ROOT"); if (!root) root = "";
+    const char *home = getenv("HOME");
+    sb ctx = {0}; cJSON *files = cJSON_CreateArray();
+    long budget = CAP_CONTEXT_BYTES;
+    char p[4200];
+
+    snprintf(p, sizeof p, "%s/usr/share/gcode/GCODE.md", root);
+    budget -= context_append(&ctx, files, p, budget);
+    snprintf(p, sizeof p, "%s/etc/gcode/GCODE.md", root);
+    budget -= context_append(&ctx, files, p, budget);
+    if (home && *home) {
+        snprintf(p, sizeof p, "%s/.config/gcode/GCODE.md", home);
+        budget -= context_append(&ctx, files, p, budget);
+    }
+
+    static char dirs[CAP_CONTEXT_DEPTH][4096];   /* static: 128K is stack-hostile */
+    int ndirs = 0;
+    char cur[4096];
+    if (getcwd(cur, sizeof cur)) {
+        /* $HOME is matched by INODE, not by string: getcwd returns the real
+         * path while $HOME may spell the same directory through a symlink
+         * (macOS /var -> /private/var is the live case), and a string
+         * compare would sail past $HOME. */
+        struct stat st, hst; int home_ok = 0;
+        if (home && *home && !stat(home, &hst)) home_ok = 1;
+        if (stat(cur, &st)) st.st_dev = 0, st.st_ino = 0;
+        while (ndirs < CAP_CONTEXT_DEPTH) {
+            snprintf(dirs[ndirs], sizeof dirs[ndirs], "%s", cur); ndirs++;
+            if (home_ok && st.st_dev == hst.st_dev && st.st_ino == hst.st_ino)
+                break;                                         /* never above $HOME */
+            if (!strcmp(cur, "/")) break;
+            char *slash = strrchr(cur, '/');
+            if (!slash) break;                                 /* relative — bail */
+            if (slash == cur) cur[1] = 0; else *slash = 0;
+            struct stat pst;
+            if (stat(cur, &pst) || pst.st_dev != st.st_dev) break;  /* mount boundary */
+            st = pst;
+        }
+    }
+    for (int i = ndirs - 1; i >= 0; i--) {
+        snprintf(p, sizeof p, "%s/GCODE.md", dirs[i]);
+        budget -= context_append(&ctx, files, p, budget);
+    }
+
+    if (ctx.len) {
+        sb full = {0};
+        if (cfg->system_prompt) sb_puts(&full, cfg->system_prompt);
+        sb_add(&full, ctx.p, ctx.len);
+        cfg->system_sent = full.p;
+        cfg->context_files = files;
+    } else {
+        cfg->system_sent = NULL;
+        cfg->context_files = NULL;
+        cJSON_Delete(files);
+    }
+    sb_free(&ctx);
+}
+
 static int mkdirs(const char *path) {
     char *p = strdup(path); if (!p) return -1;
     for (char *q = p + 1; *q; q++) if (*q == '/') {
@@ -1212,6 +1413,9 @@ static int session_meta(session *s, config *cfg) {
     cJSON_AddStringToObject(r, "model", cfg->model); cJSON_AddStringToObject(r, "base_url", cfg->base_url);
     cJSON_AddStringToObject(r, "system_prompt_hash", hash); cJSON_AddStringToObject(r, "cwd", cwd);
     cJSON_AddNumberToObject(r, "max_tokens", cfg->max_tokens); cJSON_AddNumberToObject(r, "max_turns", cfg->max_turns);
+    /* #530: record WHICH context files were loaded (they are deliberately
+     * outside system_prompt_hash — see context_load) */
+    if (cfg->context_files) cJSON_AddItemToObject(r, "context_files", cJSON_Duplicate(cfg->context_files, 1));
     free(hash); return record_write(s, r);
 }
 
@@ -1859,7 +2063,12 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
     cJSON_AddStringToObject(body, "model", cfg->model);
     cJSON_AddNumberToObject(body, "max_tokens", (double)cfg->max_tokens);
     cJSON_AddBoolToObject(body, "stream", 1);
-    if (cfg->system_prompt) cJSON_AddStringToObject(body, "system", cfg->system_prompt);
+    /* #530: system_sent = base prompt + GCODE.md context (NULL = no context
+     * files found; the bare prompt goes out byte-identical). */
+    {
+        const char *sysp = cfg->system_sent ? cfg->system_sent : cfg->system_prompt;
+        if (sysp) cJSON_AddStringToObject(body, "system", sysp);
+    }
     cJSON_AddItemReferenceToObject(body, "messages", messages);
     cJSON_AddItemReferenceToObject(body, "tools", tools);
     char *payload = cJSON_PrintUnformatted(body);
@@ -2652,7 +2861,7 @@ static int self_test(void) {
      * idempotence on every fixture. */
     ok &= repair_self_test();
     char tmp[] = "/tmp/gcode-step2-test-XXXXXX"; if (!mkdtemp(tmp)) return 1; setenv("GCODE_STATE_DIR", tmp, 1);
-    config cfg = { "https://example.invalid", NULL, NULL, "requested-alias", "fixture-system", 123, 4, 0, 0 };
+    config cfg = { "https://example.invalid", NULL, NULL, "requested-alias", "fixture-system", 123, 4, 0, 0, NULL, NULL };
     session s; cJSON *messages = cJSON_CreateArray();
     if (session_create(&s, &cfg)) return 1;
     struct stat logst; ok &= !stat(s.path, &logst) && (logst.st_mode & 0777) == 0600;
@@ -2703,14 +2912,17 @@ int main(int argc, char **argv) {
     cfg.api_key       = getenv("ANTHROPIC_API_KEY");
     cfg.auth_token    = getenv("ANTHROPIC_AUTH_TOKEN");
     cfg.model         = getenv_or("ANTHROPIC_MODEL", "claude-opus-4-8");
-    cfg.system_prompt = "You are `gcode`, a terminal coding assistant running inside gucOS, "
-                        "a small POSIX-like OS. Use the tools to explore, create, and edit "
-                        "files and run shell commands. Be concise. Prefer small, verifiable "
-                        "steps. The C compiler is `cc`. SDL3 graphics: a classic blocking "
-                        "main loop that presents GPU frames is refused here — write "
-                        "SDL_MAIN_USE_CALLBACKS apps (SDL_AppInit/SDL_AppIterate/SDL_AppEvent/"
-                        "SDL_AppQuit, no main()), or run a blocking-loop program with "
-                        "SDL_RENDER_DRIVER=software. Details: /usr/share/doc/sdl-gucos.md.";
+    /* #530: the literal carries NO platform content — gcode is dual-target
+     * and env-pointable at non-Anthropic providers, so a binary running
+     * anywhere else must not inherit a gucOS steer (jku's #551 ruling).
+     * Platform orientation (the gucOS identity, `cc`, the SDL rule #551
+     * inlined here temporarily) now ships as the PLATFORM's baked
+     * /usr/share/gcode/GCODE.md and loads via context_load below. */
+    cfg.system_prompt = "You are `gcode`, a terminal coding assistant. Use the tools to "
+                        "explore, create, and edit files and run shell commands. Be "
+                        "concise. Prefer small, verifiable steps.";
+    cfg.system_sent   = NULL;
+    cfg.context_files = NULL;
     /* #462: raised from 4096 (see the MAX_TOKENS_* block for the measured
      * provider caps). --max-tokens wins over ANTHROPIC_MAX_TOKENS, which
      * wins over the default; the result is clamped below, once colour is
@@ -2721,7 +2933,7 @@ int main(int argc, char **argv) {
     cfg.verbose = 0;
     cfg.color = -1;   /* #303: -1 auto (isatty), 0 forced off, 1 forced on */
 
-    const char *prompt = NULL, *resume = NULL; int persist = 1, do_continue = 0, do_self_test = 0;
+    const char *prompt = NULL, *resume = NULL; int persist = 1, do_continue = 0, do_self_test = 0, no_context = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-p") && i + 1 < argc)                 prompt = argv[++i];
         else if (!strcmp(argv[i], "--model") && i + 1 < argc)       cfg.model = argv[++i];
@@ -2732,13 +2944,14 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--no-color"))                    cfg.color = 0;
         else if (!strcmp(argv[i], "--color"))                       cfg.color = 1;
         else if (!strcmp(argv[i], "--no-persist"))                  persist = 0;
+        else if (!strcmp(argv[i], "--no-context"))                  no_context = 1;   /* #530 */
         else if (!strcmp(argv[i], "--resume") && i + 1 < argc)      resume = argv[++i];
         else if (!strcmp(argv[i], "-c") || !strcmp(argv[i], "--continue")) do_continue = 1;
         else if (!strcmp(argv[i], "--self-test"))                   do_self_test = 1;
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             printf("usage: gcode [-p PROMPT] [--model M] [--system-prompt S]\n"
                    "            [--max-turns N] [--max-tokens N] [--resume ID|PATH] [-c|--continue]\n"
-                   "            [--no-persist] [--verbose] [--no-color] [--color]\n"
+                   "            [--no-persist] [--no-context] [--verbose] [--no-color] [--color]\n"
                    "env: ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL,\n"
                    "     ANTHROPIC_MAX_TOKENS, GCODE_STATE_DIR, XDG_STATE_HOME, NO_COLOR\n"
                    "\n"
@@ -2773,7 +2986,11 @@ int main(int argc, char **argv) {
         cfg.max_tokens = clamped;
     }
     signal(SIGINT, on_interrupt);
+#ifndef __MTOTS__
+    intr_pipe_init();   /* #511: arm the interrupt self-pipe (native only) */
+#endif
     if (do_self_test) return self_test();
+    if (!no_context) context_load(&cfg);   /* #530: after self_test — the self-test stays hermetic */
     if (!persist && (resume || do_continue)) { fprintf(stderr, "gcode: --no-persist cannot be used with resume\n"); return 2; }
     if (!cfg.api_key && !cfg.auth_token)
         fprintf(stderr, "%sgcode: warning: no ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN set%s\n", CDIM, CRST);
@@ -2828,6 +3045,7 @@ int main(int argc, char **argv) {
     }
     if (sess.fd >= 0) close(sess.fd); free(sess.path); free(sess.last_stop); free(sess.response_model); mlist_free(&sess.models);
     cJSON_Delete(messages); cJSON_Delete(tools);
+    free(cfg.system_sent); cJSON_Delete(cfg.context_files);   /* #530 */
     curl_global_cleanup();
     return 0;
 }
