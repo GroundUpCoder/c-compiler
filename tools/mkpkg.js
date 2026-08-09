@@ -66,6 +66,18 @@
 //   node tools/mkpkg.js --no-baseline       # explicit developer-only construction
 //   node tools/mkpkg.js --packages-dir=DIR   # read definitions from DIR
 //                                            # instead of <repo>/packages
+//   node tools/mkpkg.js --defs=ROOT          # ADD an ordered definition
+//                                            # source (repeatable; #612): the
+//                                            # root contributes
+//                                            # <ROOT>/packages/*.json, and
+//                                            # every repo-relative path in
+//                                            # those definitions resolves
+//                                            # against ROOT (gucos-packages
+//                                            # is the intended resident).
+//                                            # c-compiler is implicit source
+//                                            # 0; a duplicate name across
+//                                            # sources refuses loudly naming
+//                                            # both files
 //   node tools/mkpkg.js --pool=DIR           # SHARED payload store (below)
 //   node tools/mkpkg.js --clang [--clang-root=DIR] [--clang-unpackaged=FILE]
 //   node tools/mkpkg.js --rust  [--rust-root=DIR]  [--rust-unpackaged=FILE]
@@ -208,6 +220,10 @@ const enabled = new Set();   // producers opted in on this run
 // definition points this at a tmpdir instead of writing into it (the same
 // seam foldPackages/boot.js/mkimage.js expose as --packages-dir).
 let pkgDir = path.join(ROOT, 'packages');
+// Additional ordered definition sources (#612, design §4B): each --defs root
+// contributes <root>/packages/*.json with its asset paths resolving against
+// that root. c-compiler (ROOT + pkgDir above) is the implicit source 0.
+const defsRoots = [];
 // The shared payload store (todos/0388). null = the classic layout, where the
 // store IS <out>/pool and this tool owns it outright.
 let poolStore = null;
@@ -218,6 +234,7 @@ for (let ai = 0; ai < cliArgs.length; ai++) {
   if (a.startsWith('--out=')) { outDir = path.resolve(a.slice(6)); continue; }
   if (a.startsWith('--pool=')) { poolStore = path.resolve(a.slice(7)); continue; }
   if (a.startsWith('--packages-dir=')) { pkgDir = path.resolve(a.slice(15)); continue; }
+  if (a.startsWith('--defs=')) { defsRoots.push(path.resolve(a.slice(7))); continue; }
   if (a === '--quiet') { quiet = true; continue; }
   if (a === '--force') { force = true; continue; }
   if (a === '--prune') { prune = true; continue; }
@@ -349,28 +366,86 @@ for (const p of enabled) {
   }
 }
 
+/* ---- definition sources (#612) --------------------------------------------
+ * The ordered source list: c-compiler is the implicit source 0, each --defs
+ * root a further source (packageDefSources is the one normalizer). An
+ * EXPLICIT --defs that cannot contribute is a loud, actionable failure —
+ * the sibling-preflight discipline above, never a silent base fallback —
+ * and a root given twice (or aliasing source 0) would make every one of its
+ * names collide with itself, so refuse that up front by realpath. */
+for (const r of defsRoots) {
+  if (!fs.existsSync(r)) {
+    process.stderr.write(
+      `mkpkg: --defs root not found at ${r}\n` +
+      `  fix: clone the definition-source repo there, or pass a different --defs=PATH\n`);
+    process.exit(1);
+  }
+  if (!fs.existsSync(path.join(r, 'packages'))) {
+    process.stderr.write(
+      `mkpkg: --defs root ${r} has no packages/ dir\n` +
+      `  a definition source contributes <root>/packages/*.json (design §7)\n`);
+    process.exit(1);
+  }
+}
+const SOURCES = COMMON.packageDefSources(path, ROOT, { packagesDir: pkgDir, defs: defsRoots });
+{
+  const seenSrc = new Map();   // realpath(pkgDir) -> as-given pkgDir
+  for (const s of SOURCES) {
+    let key;
+    try { key = fs.realpathSync(s.pkgDir); } catch (e) { key = s.pkgDir; }
+    if (seenSrc.has(key)) {
+      process.stderr.write(
+        `mkpkg: definition source ${s.pkgDir} is already in the source list ` +
+        `(as ${seenSrc.get(key)})\n  pass each --defs root once\n`);
+      process.exit(1);
+    }
+    seenSrc.set(key, s.pkgDir);
+  }
+}
+// The source owning <name>.json (first match; listPackages' duplicate
+// refusal below makes "first" mean "only").
+function defOwner(name) {
+  for (const s of SOURCES) {
+    const f = path.join(s.pkgDir, name + '.json');
+    if (fs.existsSync(f)) return { root: s.root, pkgDir: s.pkgDir, file: f };
+  }
+  return null;
+}
+
 /* ---- gate validation: an unknown `requires` value fails LOUD --------------
  * listPackages EXCLUDES any gated def whose value it cannot parse (that is
  * what keeps the base pure by construction) — but without this check a
  * typo'd gate would silently drop its package from EVERY enumeration
- * forever. Runs on every build, flags or none. */
-for (const f of (fs.existsSync(pkgDir) ? fs.readdirSync(pkgDir) : [])) {
-  if (!/\.json$/.test(f)) continue;
-  let req;
-  try { req = JSON.parse(fs.readFileSync(path.join(pkgDir, f), 'utf-8')).requires; }
-  catch (e) { continue; }   // malformed json fails loud in buildPackage, not here
-  if (req === undefined || req === null || req === '') continue;
-  const p = COMMON.nativeSiblingProducer(req);
-  if (p === null || !SIBLINGS[p]) {
-    process.stderr.write(
-      `mkpkg: ${f} declares requires: ${JSON.stringify(req)}, which is not a known gate\n` +
-      `  a gated definition names its producer: requires: "native-sibling:<producer>"\n` +
-      `  known producers: ${Object.keys(SIBLINGS).join(', ')}\n`);
-    process.exit(1);
+ * forever. Runs on every build, flags or none, over every source. */
+for (const s of SOURCES) {
+  for (const f of (fs.existsSync(s.pkgDir) ? fs.readdirSync(s.pkgDir) : [])) {
+    if (!/\.json$/.test(f)) continue;
+    let req;
+    try { req = JSON.parse(fs.readFileSync(path.join(s.pkgDir, f), 'utf-8')).requires; }
+    catch (e) { continue; }   // malformed json fails loud in buildPackage, not here
+    if (req === undefined || req === null || req === '') continue;
+    const p = COMMON.nativeSiblingProducer(req);
+    if (p === null || !SIBLINGS[p]) {
+      process.stderr.write(
+        `mkpkg: ${path.join(s.pkgDir, f)} declares requires: ${JSON.stringify(req)}, which is not a known gate\n` +
+        `  a gated definition names its producer: requires: "native-sibling:<producer>"\n` +
+        `  known producers: ${Object.keys(SIBLINGS).join(', ')}\n`);
+      process.exit(1);
+    }
   }
 }
 
-const avail = COMMON.listPackages(fs, path, ROOT, { producers: [...enabled], packagesDir: pkgDir });
+// listPackages / sourcePackageDefs throw on a cross-source duplicate name —
+// the #612 shadowing refusal — so surface that as mkpkg's own loud exit 1.
+let avail, sourceUnitList;
+try {
+  avail = COMMON.listPackages(fs, path, ROOT, { producers: [...enabled], packagesDir: pkgDir, defs: defsRoots });
+  sourceUnitList = COMMON.sourcePackageDefs(fs, path, ROOT,
+    { packagesDir: pkgDir, defs: defsRoots, imageManifest, CompilerJS });
+} catch (e) {
+  process.stderr.write(`mkpkg: ${e.message}\n`);
+  process.exit(1);
+}
 
 /* ---- mechanical `<name>-sources` companions (todos #407) ----------------
  * Synthesized in memory from the ONE rule in os-common sourcePackageDefs —
@@ -380,7 +455,7 @@ const avail = COMMON.listPackages(fs, path, ROOT, { producers: [...enabled], pac
  * package. Native-sibling packages get no unit (their source lives in the
  * producer repo, which publishes only binaries). */
 const sourceUnits = new Map();
-for (const u of COMMON.sourcePackageDefs(fs, path, ROOT, { packagesDir: pkgDir, imageManifest, CompilerJS })) {
+for (const u of sourceUnitList) {
   sourceUnits.set(u.name, u);
 }
 const allAvail = avail.concat([...sourceUnits.keys()]).sort();
@@ -390,7 +465,8 @@ for (const n of names) {
     // Naming a gated package without its producer flag gets the actionable
     // message, not the generic unknown-name one.
     let req = null;
-    try { req = JSON.parse(fs.readFileSync(path.join(pkgDir, n + '.json'), 'utf-8')).requires; }
+    const hintOwner = defOwner(n);
+    try { req = hintOwner ? JSON.parse(fs.readFileSync(hintOwner.file, 'utf-8')).requires : null; }
     catch (e) { /* fall through to unknown */ }
     const p = COMMON.nativeSiblingProducer(req);
     if (p !== null && SIBLINGS[p]) {
@@ -445,9 +521,9 @@ function driftCheck(producer) {
   // box2d-clang` must still gate the whole relation, or a single-package
   // rebuild would launder the drift away.
   const claimedBy = new Map();
-  for (const n of COMMON.listPackages(fs, path, ROOT, { producers: [producer], packagesDir: pkgDir })) {
+  for (const n of COMMON.listPackages(fs, path, ROOT, { producers: [producer], packagesDir: pkgDir, defs: defsRoots })) {
     let def;
-    try { def = JSON.parse(fs.readFileSync(path.join(pkgDir, n + '.json'), 'utf-8')); }
+    try { def = JSON.parse(fs.readFileSync(defOwner(n).file, 'utf-8')); }
     catch (e) { continue; }   // malformed → fails loud in the build below
     if (COMMON.nativeSiblingProducer(def.requires) !== producer) continue;   // ungated base defs claim nothing
     for (const entry of Object.values(def.files || {})) {
@@ -490,12 +566,14 @@ for (const p of enabled) driftCheck(p);
  * The scan itself is os-common's newestPkgInput — extracted there
  * (todos/0363) so tests/host/test_bakeinput_sources.js can drive it against
  * a synthetic tree, exactly like its twin newestBakeInput. This wrapper
- * binds this tool's context: the repo ROOT, the (possibly --packages-dir
- * overridden) definition dir, and the enabled siblings' overlay paths. */
-function newestPkgInput(name, pkg, extraInputs) {
+ * binds this tool's context: the repo ROOT (the toolchain inputs), the
+ * definition's OWNING source (#612 — its pkgDir and asset root), and the
+ * enabled siblings' overlay paths. */
+function newestPkgInput(name, pkg, owner, synth) {
   return COMMON.newestPkgInput(fs, path, ROOT, name, pkg, {
-    pkgDir,
-    extraInputs,
+    pkgDir: synth ? undefined : owner.pkgDir,
+    assetRoot: owner.root,
+    extraInputs: synth ? synth.inputs : null,
     overlayPathFor: (p) => (SIBLINGS[p] ? overlayPathOf(p) : null),
   });
 }
@@ -551,8 +629,11 @@ function tarball(members) {
   return Buffer.concat(parts);
 }
 
-/* ---- assemble one package tree via the bake pipeline ---- */
-async function assembleTree(name, pkg) {
+/* ---- assemble one package tree via the bake pipeline ----
+ * srcRoot (#612): the definition's owning source root — every repo-relative
+ * path in the def (project/bin/tree; os/-relative c/text) resolves against
+ * it. Source-0 defs pass ROOT, byte-identical to the pre-seam behavior. */
+async function assembleTree(name, pkg, srcRoot) {
   const store = new BLOCK_FS.MemoryByteStore(1 << 20);
   const mfs = BLOCK_FS.createV4(store, { noDevNodes: true });
   mfs.mkdir('/etc', 0o755);   // seedEntries' c-compile staging area
@@ -588,7 +669,7 @@ async function assembleTree(name, pkg) {
     // `bin` (repo-relative bytes) entry per enumerated file, dirs derived
     // from the file paths. Same enumeration as the freshness scan below.
     if (entry.tree !== undefined) {
-      const treeFiles = COMMON.listTreeFiles(fs, path, ROOT, entry, `package '${name}': ${rel}`);
+      const treeFiles = COMMON.listTreeFiles(fs, path, srcRoot, entry, `package '${name}': ${rel}`);
       for (const tf of treeFiles) {
         pushDirs(rel + '/' + tf);
         claim(base + '/' + rel + '/' + tf, { bin: entry.tree + '/' + tf });
@@ -627,10 +708,10 @@ async function assembleTree(name, pkg) {
     }
   }
   await COMMON.seedEntries(mfs, section, {
-    readAsset: (n) => fs.readFileSync(path.join(OS_DIR, n), 'utf-8'),
-    readBinary: (p) => fs.readFileSync(path.join(ROOT, p)),
+    readAsset: (n) => fs.readFileSync(path.join(srcRoot, 'os', n), 'utf-8'),
+    readBinary: (p) => fs.readFileSync(path.join(srcRoot, p)),
     buildProject: (proj) => COMMON.buildProject(CompilerJS, proj,
-      (p) => fs.readFileSync(path.join(ROOT, p), 'utf-8')),
+      (p) => fs.readFileSync(path.join(srcRoot, p), 'utf-8')),
     compile: COMMON.createCcDriver(CompilerJS, mfs),
     log: () => {},
   });
@@ -683,9 +764,14 @@ async function assembleTree(name, pkg) {
  * `poolDir` is the payload STORE. When it is shared (--pool), this build is one
  * of several readers, so it may only ADD to it — see the superseded-drop below. */
 async function buildPackage(name, poolDir, sharedPool, synth) {
+  // The definition's owning source (#612): a synthesized unit carries its
+  // own root; a declared def resolves through the ordered source list.
+  const owner = synth ? { root: synth.root, pkgDir: null } : defOwner(name);
   const pkg = synth ? synth.def
-    : JSON.parse(fs.readFileSync(path.join(pkgDir, name + '.json'), 'utf-8'));
-  if (pkg.name !== name) throw new Error(`packages/${name}.json declares name ${JSON.stringify(pkg.name)}`);
+    : JSON.parse(fs.readFileSync(owner.file, 'utf-8'));
+  if (pkg.name !== name) {
+    throw new Error(`${synth ? name : owner.file} declares name ${JSON.stringify(pkg.name)}`);
+  }
   if (!/^[a-z0-9][a-z0-9_-]*$/.test(pkg.name)) throw new Error(`package '${name}': bad name`);
   if (typeof pkg.version !== 'string' || !/^[A-Za-z0-9._-]+$/.test(pkg.version)) {
     throw new Error(`package '${name}': bad version ${JSON.stringify(pkg.version)}`);
@@ -824,7 +910,7 @@ async function buildPackage(name, poolDir, sharedPool, synth) {
     const newest = existing
       .map((f) => ({ f, mtimeMs: fs.statSync(path.join(poolDir, f)).mtimeMs }))
       .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
-    const inp = newestPkgInput(name, pkg, synth ? synth.inputs : null);
+    const inp = newestPkgInput(name, pkg, owner, synth);
     if (newest.mtimeMs >= inp.mtimeMs) {
       const p = path.join(poolDir, newest.f);
       const bytes = fs.readFileSync(p);
@@ -838,7 +924,7 @@ async function buildPackage(name, poolDir, sharedPool, synth) {
 
   log(`${name} ${pkg.version}: building…`);
   const t0 = Date.now();
-  const payload = await assembleTree(name, pkg);
+  const payload = await assembleTree(name, pkg, owner.root);
   if (srclib) {
     const dirSet = new Set(payload.filter((m) => m.dir).map((m) => m.name));
     for (const d of srclib.include.concat(Object.values(srclib.src))) {

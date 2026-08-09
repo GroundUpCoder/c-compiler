@@ -59,6 +59,7 @@ var tests = [
   ['../serve/test_mkpkg_minbase.js', []],     // #518: declared minBase rides the index verbatim (0 included), undeclared defaults to the image version, garbage refuses; pure-data packages/ defs must declare an explicit floor
   ['../serve/test_mkpkg_version_guard.js', []], // #595: a version DOWNGRADE over a published entry refuses loudly naming both versions ("0.10" > "0.9" numerically, equal republish is routine); --allow-downgrade is the stated-rollback override
   ['../serve/test_mkpkg_baseline.js', []],    // #598: explicit baseline decision, served-floor refusal/provenance, and sourcesVersion history guard
+  ['../serve/test_mkpkg_defs.js', []],        // #612: ordered --defs definition sources — a compiled sibling def (+ its -sources companion) builds/reuses from its OWNING root, cross-source duplicate names refuse naming both files (gated dups included), --defs preflight is loud, and foldPackages relocates sibling paths so ROOT-bound bake readers still compile them
   ['../serve/test_image_determinism.js', []], // two bakes of one tree are byte-identical (0249 content-hash stability)
 ];
 
