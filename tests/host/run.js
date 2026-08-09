@@ -34,7 +34,8 @@ var tests = [
   ['test_suite_record.js', []],          // a split suite's summary records its scope + merges, never clobbers (0339); --resume never skips a file edited since its pass (#455)
   ['test_artifact_freshness.js', []],    // #171: browser build artifacts are checked for FRESHNESS, not existence; the stale message names artifact + input, and quake-renders.mjs is wired to it
   ['test_sleep_clamp.js', []],           // sleep primitives request EXACTLY the asked duration — no clock in the assertion (0361)
-  ['test_bakeinput_sources.js', []],     // the 0082 closure covers out-of-dir sources/includes, not just `deps` (0354)
+  ['test_bakeinput_sources.js', []],     // the 0082 closure covers out-of-dir sources/includes, not just `deps` (0354); #614 adds the opts.defs sibling legs
+  ['test_sibling_resolve.js', []],       // #614: resolveSiblingRepo — env override wins (and never falls through), a linked worktree resolves the MAIN clone's sibling via the gitdir pointer, naive fallback, null when absent
   ['test_diff_rules.js', []],            // compiler.js/host.js diff rules select the run.py corpus; exclusions pinned (0362)
   ['test_browser_preflight.js', []],     // #559: the browser install pre-flight refuses at gate start — worktree missing tests/browser/node_modules names the exact ln -s fix; healthy/ambient-pinned trees untouched; version hatch never excuses absence
   ['test_heavylock_gate.js', []],        // #561: tests/run.js reserves the heavy lock up front — a contended gate exits 3 BEFORE any suite (no summary write), --dry-run and light-only gates never contend, and the kernel runner JOINS the gate's reservation instead of contending against it; all under a private-TMPDIR lock scope
@@ -61,6 +62,7 @@ var tests = [
   ['../serve/test_mkpkg_baseline.js', []],    // #598: explicit baseline decision, served-floor refusal/provenance, and sourcesVersion history guard
   ['../serve/test_mkpkg_defs.js', []],        // #612: ordered --defs definition sources — a compiled sibling def (+ its -sources companion) builds/reuses from its OWNING root, cross-source duplicate names refuse naming both files (gated dups included), --defs preflight is loud, and foldPackages relocates sibling paths so ROOT-bound bake readers still compile them
   ['../serve/test_image_determinism.js', []], // two bakes of one tree are byte-identical (0249 content-hash stability)
+  ['../serve/test_sibling_guard.js', []],     // #614: the dev origin's sibling guard — bad GUCOS_PACKAGES refuses, a served index missing a sibling package refuses naming the mkpkg --defs fix, --minimal demands the /packages half, the fat shape warns loudly, --no-extra-packages opts out, cross-source dups refuse at serve start
 ];
 
 // ---- suite-membership guard (#314's mechanism, applied here by #167/#431) ----

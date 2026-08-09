@@ -20,6 +20,17 @@ const requestedOverlays = new Set();
 // byte-identical to today.
 const KNOWN_PRODUCERS = ['clang', 'rust'];
 const assertProducers = [];
+// Sibling definition sources (#614, design §7): the dev origin resolves the
+// gucos-packages sibling checkout by default (GUCOS_PACKAGES= override →
+// worktree-aware main-clone sibling → naive sibling; os-common
+// resolveSiblingRepo) and asserts the served /packages index COVERS every
+// package the sibling defines — the deploy box mandates the sibling
+// (comguc), so a dev origin silently serving a base index while sibling
+// definitions exist would be exactly the partial-index lie the deploy path
+// refuses. `--no-extra-packages` is the explicit opt-out (comguc's flag);
+// a box without the checkout is untouched (nothing resolves, nothing
+// changes).
+let noExtraPackages = false;
 // `--strict-port`: bind the REQUESTED port or fail loudly — never the silent
 // walk to port+1 that tryListen does for a developer's convenience. The browser
 // harness passes it (tests/browser/lib/os-harness.mjs startServer) because the
@@ -48,6 +59,7 @@ let minimalImage = false;
 for (const a of process.argv.slice(2)) {
   if (a === '--clang') requestedOverlays.add('clang-apps');
   else if (a === '--minimal') minimalImage = true;
+  else if (a === '--no-extra-packages') noExtraPackages = true;
   else if (a === '--strict-port') strictPort = true;
   else if (a.startsWith('--overlay=')) requestedOverlays.add(a.slice(10));
   else if (a.startsWith('--overlays=')) a.slice(11).split(',').forEach((id) => id && requestedOverlays.add(id));
@@ -233,6 +245,77 @@ if (assertProducers.length && !singleFile) {
       process.exit(1);
     }
     console.log(`[serve] ${p} package index: ${cards.length} *-${p} card(s)`);
+  }
+}
+
+// Sibling definition-source guard (#614): resolve the gucos-packages sibling
+// and hold the served /packages repo to the MERGED result. Runs only when
+// serving an OS tree (an os/image.json to serve against) — a bare-dir serve
+// (the gucman e2es' repo servers) has no package origin to guard.
+if (!singleFile && fs.existsSync(path.join(root, 'os', 'image.json'))) {
+  // A served tree that carries os/image.json but no (or a pre-#614)
+  // os-common.js is a synthetic fixture or a legacy checkout, not a repo
+  // with definition sources to guard — stand down rather than crash the
+  // serve (test_clang_overlay's trees are exactly this shape).
+  let COMMON = null;
+  try {
+    COMMON = require(path.join(root, 'os', 'os-common.js'));
+    if (typeof COMMON.resolveSiblingRepo !== 'function') COMMON = null;
+  } catch (e) { COMMON = null; }
+  if (COMMON === null) {
+    // nothing to guard
+  } else if (noExtraPackages) {
+    console.log('[serve] --no-extra-packages: sibling definition sources ignored');
+  } else {
+    const sibling = COMMON.resolveSiblingRepo(fs, path, root, 'gucos-packages',
+      { env: process.env.GUCOS_PACKAGES });
+    if (sibling && !fs.existsSync(sibling.root)) {
+      // Only the env override can name a nonexistent path (discovery
+      // candidates are existence-checked) — an explicit override that is
+      // wrong must fail loud, never fall through to a discovered candidate.
+      console.error(`serve.js: GUCOS_PACKAGES=${process.env.GUCOS_PACKAGES} does not exist`);
+      console.error('  fix: point it at the gucos-packages checkout, unset it, or pass --no-extra-packages');
+      process.exit(1);
+    }
+    if (sibling) {
+      let siblingNames;
+      try {
+        // The union enumeration surfaces a cross-source duplicate name LOUDLY
+        // at serve start (#612's refusal), before any browser boots against it.
+        COMMON.listPackages(fs, path, root, { defs: [sibling.root] });
+        siblingNames = COMMON.listPackages(fs, path, sibling.root, {});
+      } catch (e) {
+        console.error(`serve.js: sibling definition source at ${sibling.root}: ${e.message}`);
+        process.exit(1);
+      }
+      console.log(`[serve] gucos-packages sibling: ${sibling.root} (via ${sibling.via}, ${siblingNames.length} package(s))`);
+      if (siblingNames.length) {
+        const idxPath = path.join(root, 'dist', 'packages', 'index.json');
+        if (fs.existsSync(idxPath)) {
+          let idxNames = [];
+          try { idxNames = Object.keys(JSON.parse(fs.readFileSync(idxPath, 'utf-8')).packages || {}); }
+          catch (e) { /* unreadable index: every sibling name reports missing below */ }
+          const missing = siblingNames.filter((n) => !idxNames.includes(n));
+          if (missing.length) {
+            console.error(`serve.js: ${path.relative(root, idxPath)} is missing sibling package(s): ${missing.join(', ')}`);
+            console.error(`  the served /packages repo must be the MERGED index over the sibling definitions`);
+            console.error(`  fix: node tools/mkpkg.js --defs=${sibling.root}   (or pass --no-extra-packages)`);
+            process.exit(1);
+          }
+          console.log(`[serve] merged package index covers all ${siblingNames.length} sibling package(s)`);
+        } else if (minimalImage) {
+          // The deploy shape serves optional apps EXCLUSIVELY through
+          // /packages — with sibling definitions present and no repo built,
+          // the origin cannot match the deploy behaviour it claims to model.
+          console.error(`serve.js --minimal: sibling defines ${siblingNames.length} package(s) but there is no dist/packages/index.json`);
+          console.error(`  fix: node tools/mkpkg.js --defs=${sibling.root}   (or pass --no-extra-packages)`);
+          process.exit(1);
+        } else {
+          console.error(`[serve] ⚠ sibling defines ${siblingNames.length} package(s) but no dist/packages repo is built — ` +
+            `gucman installs of ${siblingNames.join(', ')} will 404 (build one: node tools/mkpkg.js --defs=${sibling.root})`);
+        }
+      }
+    }
   }
 }
 

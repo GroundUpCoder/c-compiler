@@ -118,6 +118,47 @@ check('the closure does not swallow the whole repo', () => {
     'invalidates on everything is not a freshness gate');
 });
 
+/* ---- leg A2: sibling definition sources (#614) --------------------------
+ * A baker that folds sibling defs (foldPackages opts.defs) must scan with
+ * the SAME roots, or a fat blob goes staleness-blind to sibling edits. The
+ * sibling root lives inside tmp only so ageAll covers it — the source-0
+ * scan must never reach it (the narrow-scope pin below). */
+const SIB = path.join(tmp, 'sib');
+w('sib/packages/sibpkg.json', JSON.stringify({
+  name: 'sibpkg', version: '1', summary: 'sibling fixture', minBase: 0,
+  files: { 'bin/sibapp': { project: 'src/sibapp/bin.json' } },
+}, null, 2) + '\n');
+w('sib/src/sibapp/bin.json', JSON.stringify({
+  bin: true, name: 'sibapp', sources: ['sibapp.c'],
+}, null, 2) + '\n');
+const SIB_SRC = w('sib/src/sibapp/sibapp.c', 'int main(void){return 0;}\n');
+const SIB_DEF = path.join(tmp, 'sib/packages/sibpkg.json');
+const newestForDefs = (file) => {
+  ageAll(tmp);
+  const t = Date.now() + 5000;
+  fs.utimesSync(file, t / 1000, t / 1000);
+  return COMMON.newestBakeInput(fs, path, tmp, MANIFEST, { defs: [SIB] });
+};
+
+check('defs: a sibling package source is a bake input (opts.defs)', () => {
+  const r = newestForDefs(SIB_SRC);
+  assert.strictEqual(r.path, SIB_SRC,
+    'a defs-folding bake must restale on a sibling source edit, got ' + r.path);
+});
+
+check('defs: a sibling definition edit is a bake input (opts.defs)', () => {
+  const r = newestForDefs(SIB_DEF);
+  assert.strictEqual(r.path, SIB_DEF,
+    'a defs-folding bake must restale on a sibling definition edit, got ' + r.path);
+});
+
+check('defs: without opts.defs the sibling stays OUT of the closure', () => {
+  const r = newestFor(SIB_SRC);
+  assert.notStrictEqual(r.path, SIB_SRC,
+    'a defs-less bake does not fold sibling packages, so a sibling edit must ' +
+    'not restale it — the scan and the fold must agree on the source list');
+});
+
 /* ---- leg B: the real repo ---------------------------------------------- */
 
 // Record every path the scan touches, delegating to the real fs.

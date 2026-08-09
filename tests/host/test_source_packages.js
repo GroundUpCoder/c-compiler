@@ -212,5 +212,110 @@ try {
   fs.rmSync(out, { recursive: true, force: true });
 }
 
+/* ---- #617: the closure follows textual #include — and REBUILDS ----------
+ * The measured hole (#568 dogfood D1): busybox's `#include "x_template.c"`
+ * idiom is listed nowhere (not a source, not a header under an include dir,
+ * not a dep), so the -sources payload omitted it and the shipped sources
+ * could not rebuild the shipped binary — while the bake never noticed,
+ * because bake-time cc resolves includes against the full repo tree. The
+ * fix follows quoted includes transitively in cc's resolution order. These
+ * legs pin it three ways: the real-repo pins, a synthetic transitive
+ * fixture, and — the leg whose absence let this ship — a real compile from
+ * PAYLOAD-ONLY inputs in a hermetic dir. */
+
+// Real-repo pins: the exact dogfooded miss, and the wholesale-headers miss.
+check('#617: gcode closure carries the busybox template idiom',
+  Object.prototype.hasOwnProperty.call(byName.get('gcode-sources').def.files,
+    'vendor/busybox/src/libbb/xatonum_template.c'));
+check('#617: doom closure carries its includer-relative sibling headers',
+  Object.prototype.hasOwnProperty.call(byName.get('doom-sources').def.files,
+    'vendor/doom/src/d_main.h'),
+  'doom declares no include dir, so every header rides the include follower');
+
+// Materialize a unit's payload (its def's bin entries, verbatim) into a
+// hermetic dir and compile the named project from THOSE files only — the
+// exact in-OS `gucman install <p>-sources` + `cc` loop, host-side.
+function compileFromPayload(unit, srcRoot, projRel) {
+  const her = fs.mkdtempSync(path.join(os.tmpdir(), 'srcpkg-hermetic-'));
+  try {
+    for (const [rel, entry] of Object.entries(unit.def.files)) {
+      const dst = path.join(her, rel);
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.copyFileSync(path.join(srcRoot, entry.bin), dst);
+    }
+    const wasm = COMMON.buildProject(CompilerJS, projRel,
+      (p) => fs.readFileSync(path.join(her, p), 'utf-8'));
+    return wasm && wasm.length;
+  } finally {
+    fs.rmSync(her, { recursive: true, force: true });
+  }
+}
+
+check('#617: 🔴 gcode REBUILDS from payload-only inputs (the dogfood loop, hermetic)', (() => {
+  try { return compileFromPayload(byName.get('gcode-sources'), ROOT, 'os/gcode/bin.json') > 0; }
+  catch (e) { console.log('         ' + String(e.message).split('\n').slice(0, 4).join('\n         ')); return false; }
+})());
+
+// Synthetic transitive fixture: a template chain two levels deep, an
+// -I-resolved non-header include, and an include escaping the source root
+// (must be SKIPPED, and must not poison the closure's escape validation).
+{
+  const fixRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'srcpkg-follow-'));
+  const fix = path.join(fixRoot, 'repo');
+  const wf = (rel, text) => {
+    const p = path.join(fix, rel);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, text);
+  };
+  fs.writeFileSync(path.join(fixRoot, 'outside.c'), 'int outside;\n');   // exists, but OUTSIDE the root
+  wf('libc-ext.js', 'var EXT_LIB_MAP = {};\n');
+  wf('src/app/bin.json', JSON.stringify({
+    bin: true, name: 'app', sources: ['app.c'], compilerArgs: ['-I../../inc'],
+  }) + '\n');
+  wf('src/app/app.c', [
+    '#include "app_template.c"',
+    // The follower is TEXTUAL — it sees through #if 0, which is exactly why
+    // an unresolvable target must be a silent skip (cc never took the
+    // branch) and an escaping one must be skipped, not shipped and not a
+    // validation error. cc itself skips the block, so the hermetic compile
+    // still proves the payload complete.
+    '#if 0',
+    '#include "../../../outside.c"',    // escapes the source root: never ship
+    '#include "no_such_file.h"',        // unresolved anywhere: builtin/conditional shape
+    '#endif',
+    'int main(void) { return t_value() + I_VALUE; }',
+    '',
+  ].join('\n'));
+  wf('src/app/app_template.c', [
+    '#include "deep/nested.inc.c"',     // transitive, includer-relative
+    '#include "only_in_incdir.c"',      // resolves via -I only
+    'int t_value(void) { return NESTED; }',
+    '',
+  ].join('\n'));
+  wf('src/app/deep/nested.inc.c', '#define NESTED 40\n');
+  wf('inc/only_in_incdir.c', '#define I_VALUE 2\n');
+  try {
+    const fixUnits = COMMON.sourcePackageDefs(fs, path, fix, {
+      CompilerJS,
+      imageManifest: { version: 1, system: { files: { '/bin/app': { project: 'src/app/bin.json' } } } },
+    });
+    const app = fixUnits.find((u) => u.name === 'app-sources');
+    const fset = Object.keys(app.def.files);
+    check('#617: a template include rides the closure', fset.includes('src/app/app_template.c'), fset.join(','));
+    check('#617: the follower is TRANSITIVE (template → nested include)',
+      fset.includes('src/app/deep/nested.inc.c'), fset.join(','));
+    check('#617: an -I-resolved non-header include rides the closure',
+      fset.includes('inc/only_in_incdir.c'), fset.join(','));
+    check('#617: an include escaping the source root is skipped, not shipped',
+      !fset.some((f) => /outside\.c$/.test(f)), fset.join(','));
+    check('#617: the synthetic unit also rebuilds payload-only', (() => {
+      try { return compileFromPayload(app, fix, 'src/app/bin.json') > 0; }
+      catch (e) { console.log('         ' + String(e.message).split('\n').slice(0, 4).join('\n         ')); return false; }
+    })());
+  } finally {
+    fs.rmSync(fixRoot, { recursive: true, force: true });
+  }
+}
+
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall ok');
 process.exit(failures ? 1 : 0);
