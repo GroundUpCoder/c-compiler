@@ -1080,6 +1080,53 @@ async function main() {
       '#507 negative control: the delayed turn still completes normally');
   }
 
+  // ---- #511: signal-before-poll race — the self-pipe closes the window --
+  // GCODE_TEST_INTR_BEFORE_POLL=1 makes native run_command raise SIGINT
+  // exactly between the loop-top g_interrupted check and poll(2) entering —
+  // the raced window, unreachable deterministically from outside the
+  // process. Pre-#511 the handler ran before poll blocked, poll got no
+  // EINTR, and against a SILENT child the ^C stayed latent for the full 1s
+  // slice (the #507 clamp). Post-fix the handler's self-pipe byte makes
+  // poll return immediately. ANNOTATED TIMING ASSERTION: the latency is the
+  // mechanism's only externally visible effect, so the third check is
+  // differential timing against a control run of the same shape — the
+  // pre-fix floor is a hard +1000ms (poll always sleeps its full slice),
+  // the post-fix path is a few ms, and the 800ms margin rides on the
+  // control so shared load cancels out.
+  {
+    const srv0 = await startServer([
+      toolUseResponse('ctl', 'toolu_511c', 'bash', { command: 'true' }),
+      textResponse('done'),
+    ]);
+    const c0 = Date.now();
+    await runCodeBoth(srv0.url, ['-p', 'control', '--no-color', '--no-persist']);
+    const ctlMs = Date.now() - c0;
+    srv0.close();
+
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gcode-511-'));
+    const srv = await startServer([
+      toolUseResponse('race', 'toolu_511', 'bash', { command: 'sleep 30' }),
+    ]);
+    const t0 = Date.now();
+    await runCodeBoth(srv.url, ['-p', 'race', '--no-color'],
+      { GCODE_TEST_INTR_BEFORE_POLL: '1', GCODE_BASH_SECS: '45', GCODE_STATE_DIR: stateDir });
+    const raceMs = Date.now() - t0;
+    srv.close();
+
+    const sessDir = path.join(stateDir, 'sessions');
+    const log = fs.readdirSync(sessDir)
+      .map((f) => fs.readFileSync(path.join(sessDir, f), 'utf8')).join('');
+    const line = log.split('\n')
+      .find((l) => l.includes('toolu_511') && l.includes('tool_result')) || '';
+    check(line.includes('interrupted by user (^C)'),
+      '#511: the in-window SIGINT killed the silent child (tool_result names the ^C)');
+    check(!line.includes('timed out after'),
+      '#511: the round ended on the ^C, not on the wall-time cap');
+    check(raceMs < ctlMs + 800,
+      `#511: the in-window ^C woke poll immediately (race ${raceMs}ms vs control ${ctlMs}ms; pre-fix floor is control+1000ms)`);
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+
   console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILURE(S)`);
   process.exit(failures === 0 ? 0 : 1);
 }

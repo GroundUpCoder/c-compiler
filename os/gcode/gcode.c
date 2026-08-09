@@ -412,7 +412,31 @@ static void render_tool_result(const char *result, long secs) {
 }
 
 static volatile sig_atomic_t g_interrupted;
-static void on_interrupt(int sig) { (void)sig; g_interrupted = 1; }
+#ifndef __MTOTS__
+/* #511: the native self-pipe. A SIGINT landing in the instructions between
+ * run_command's loop-top g_interrupted check and poll(2) entering used to be
+ * handled BEFORE poll blocked — no EINTR, so against a SILENT child the ^C
+ * stayed latent until the next slice timeout (up to 1s, the #507 clamp). The
+ * handler writes one byte here and the read end joins run_command's pollfd
+ * set, so a signal at ANY point wakes the poll: landing before the syscall
+ * leaves the byte already readable, landing during it is EINTR/POLLIN either
+ * way. The FLAG stays authoritative — the pipe is only a wake mechanism, so
+ * draining a stale byte can never lose an interrupt. gucOS does not need
+ * this: cooperative signals run handlers only at import returns, and there
+ * is no import between the loop-top check and the read (the wm.c
+ * flag-then-park rule). */
+static int g_intr_pipe[2] = { -1, -1 };
+#endif
+static void on_interrupt(int sig) {
+    (void)sig; g_interrupted = 1;
+#ifndef __MTOTS__
+    if (g_intr_pipe[1] >= 0) {          /* async-signal-safe; preserve errno */
+        int e = errno;
+        ssize_t w = write(g_intr_pipe[1], "x", 1); (void)w;
+        errno = e;
+    }
+#endif
+}
 
 /* ---- #507: progress signal during long operations ----------------------
  * A working agent must be distinguishable from a wedged one: gcode used to
@@ -639,6 +663,19 @@ static char *run_command(const char *cmd, int *exit_code) {
 #else /* native */
 #include <poll.h>
 
+/* #511: create the interrupt self-pipe (once, from main). Nonblocking both
+ * ends — the handler's write must never block on a full pipe, and the drain
+ * loop ends at EAGAIN — and CLOEXEC so the sh child never inherits the fds.
+ * On failure the fds stay -1: poll ignores a negative fd, so every failure
+ * mode degrades to the pre-#511 behavior, never to a broken loop. */
+static void intr_pipe_init(void) {
+    if (pipe(g_intr_pipe)) { g_intr_pipe[0] = g_intr_pipe[1] = -1; return; }
+    for (int i = 0; i < 2; i++) {
+        fcntl(g_intr_pipe[i], F_SETFL, O_NONBLOCK);
+        fcntl(g_intr_pipe[i], F_SETFD, FD_CLOEXEC);
+    }
+}
+
 /* Returns malloc'd captured output (truncation-marked if over cap).
  * *exit_code set to the child's exit status (or -1 killed by timeout). */
 static char *run_command(const char *cmd, int *exit_code) {
@@ -658,6 +695,13 @@ static char *run_command(const char *cmd, int *exit_code) {
     time_t start = time(NULL);
     time_t deadline = start + bash_cap_secs();
     long shown = 0;
+    /* #511: shed bytes a ^C consumed elsewhere (the REPL prompt) left in the
+     * pipe — the flag is authoritative, so eating a stale byte loses nothing
+     * and a fresh signal after this drain leaves its own byte for poll. */
+    if (g_intr_pipe[0] >= 0) {
+        char junk[64];
+        while (read(g_intr_pipe[0], junk, sizeof junk) > 0) {}
+    }
     for (;;) {
         /* #510: check BEFORE the poll, not only in its EINTR branch — a
          * chatty child keeps the pipe readable, so poll keeps returning
@@ -671,21 +715,36 @@ static char *run_command(const char *cmd, int *exit_code) {
         if (g_interrupted && !intkilled) { kill(pid, SIGKILL); intkilled = 1; break; }
         long elapsed = (long)(time(NULL) - start);        /* #507: heartbeat */
         if (elapsed >= 1 && elapsed != shown) { progress_show("running", elapsed); shown = elapsed; }
-        struct pollfd pf = { pfd[0], POLLIN, 0 };
+        /* #511 test seam (GCODE_TEST_INTR_BEFORE_POLL=1): raise SIGINT once,
+         * exactly in the raced window — after the loop-top check, before poll
+         * enters. The only deterministic way to place a signal there; the
+         * product path is untouched (the hook is a raise(), not a branch). */
+        static int selfraise = -1;
+        if (selfraise < 0) {
+            const char *s = getenv("GCODE_TEST_INTR_BEFORE_POLL");
+            selfraise = (s && atoi(s)) ? 1 : 0;
+        }
+        if (selfraise == 1) { selfraise = 2; raise(SIGINT); }
+        struct pollfd pf[2] = { { pfd[0], POLLIN, 0 }, { g_intr_pipe[0], POLLIN, 0 } };
         int remain = (int)(deadline - time(NULL));
         if (remain < 0) remain = 0;
         int slice = remain * 1000 + 100;
         if (slice > 1000) slice = 1000;   /* #507: wake ~1/s so a silent child still ticks */
-        int r = poll(&pf, 1, slice);
+        int r = poll(pf, 2, slice);
         if (r < 0 && errno == EINTR)
             continue;                        /* ^C re-checked at loop top */
+        if (r > 0 && (pf[1].revents & POLLIN)) {   /* #511: interrupt wake */
+            char junk[64];
+            while (read(g_intr_pipe[0], junk, sizeof junk) > 0) {}
+            continue;                        /* loop top re-checks the flag */
+        }
         if (r == 0 && time(NULL) >= deadline) {  /* timeout: kill the direct
             sh and stop reading — its descendants may survive (#503) */
             kill(pid, SIGKILL);
             *exit_code = -1;
             break;
         }
-        if (r > 0 && (pf.revents & (POLLIN | POLLHUP))) {
+        if (r > 0 && (pf[0].revents & (POLLIN | POLLHUP))) {
             char buf[4096];
             ssize_t n = read(pfd[0], buf, sizeof buf);
             if (n <= 0) break;               /* EOF */
@@ -2773,6 +2832,9 @@ int main(int argc, char **argv) {
         cfg.max_tokens = clamped;
     }
     signal(SIGINT, on_interrupt);
+#ifndef __MTOTS__
+    intr_pipe_init();   /* #511: arm the interrupt self-pipe (native only) */
+#endif
     if (do_self_test) return self_test();
     if (!persist && (resume || do_continue)) { fprintf(stderr, "gcode: --no-persist cannot be used with resume\n"); return 2; }
     if (!cfg.api_key && !cfg.auth_token)
