@@ -65,7 +65,8 @@ const writeApp = (path, lines) => [
 
 // A rendered 24px 'A' from a real face: nonzero box, a plausible number of
 // strong-coverage pixels (an empty or garbage raster fails both ways).
-const FTDEMO_RE = /FTDEMO face=\S+ w=([1-9]\d*) h=([1-9]\d*) dark=([1-9]\d*)/;
+// NB the face name has spaces ("Noto Sans Mono") — match to end-of-facts.
+const FTDEMO_RE = /FTDEMO face=.+ w=([1-9]\d*) h=([1-9]\d*) dark=([1-9]\d*)/;
 
 async function main() {
   /* ---- session A: the fat image (baked /usr/{include,src} tiers) ---- */
