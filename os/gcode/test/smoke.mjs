@@ -107,13 +107,14 @@ async function runCode(url, args, env = {}) {
 }
 
 // Like runCode but returns BOTH streams (presentation lives on stderr: the
-// prompt, tool blocks, Cost line, and the diff renderer).
-async function runCodeBoth(url, args, env = {}) {
+// prompt, tool blocks, Cost line, and the diff renderer). cwd is the #530
+// walk-up seam — the context legs pin it to a fixture directory.
+async function runCodeBoth(url, args, env = {}, cwd = undefined) {
   try {
     const { stdout, stderr } = await execFileAsync(bin, args, {
       env: { ...process.env, ANTHROPIC_BASE_URL: url, ANTHROPIC_API_KEY: 'test',
              ASAN_OPTIONS: 'detect_leaks=0', ...env },
-      encoding: 'utf8', timeout: 15000,
+      encoding: 'utf8', timeout: 15000, cwd,
     });
     return { stdout, stderr };
   } catch (e) {
@@ -1078,6 +1079,155 @@ async function main() {
       '#507: a slow first byte renders a waiting-for-model heartbeat');
     check(waiting.stdout.includes('slow hello'),
       '#507 negative control: the delayed turn still completes normally');
+  }
+
+  // ---- #530: layered GCODE.md context files ----------------------------
+  // The fake server records request bodies, so `system` is asserted
+  // directly. GCODE_CONTEXT_ROOT redirects the two absolute system-layer
+  // paths into a fixture (the GCODE_STATE_DIR precedent); HOME and cwd
+  // control the user layer and the project walk-up.
+  {
+    const fx = fs.mkdtempSync(path.join(os.tmpdir(), 'gcode-530-'));
+    const emptyRoot = path.join(fx, 'emptyroot');
+    fs.mkdirSync(emptyRoot, { recursive: true });
+    const BASE = 'You are `gcode`, a terminal coding assistant. Use the tools to '
+      + 'explore, create, and edit files and run shell commands. Be '
+      + 'concise. Prefer small, verifiable steps.';
+
+    // -- leg A: no files anywhere -> byte-identical bare literal ---------
+    // The cfgstore "nothing baked" property, plus the #551 inherited-scope
+    // acceptance: the literal no longer carries platform content.
+    {
+      const home = path.join(fx, 'homeA'); const cwd = path.join(home, 'work');
+      fs.mkdirSync(cwd, { recursive: true });
+      const srv = await startServer([textResponse('bare')]);
+      await runCodeBoth(srv.url, ['-p', 'hi', '--no-color', '--no-persist'],
+        { HOME: home, GCODE_CONTEXT_ROOT: emptyRoot }, cwd);
+      srv.close();
+      const sys = srv.bodies[0] ? srv.bodies[0].system : undefined;
+      check(sys === BASE,
+        '#530: with no GCODE.md anywhere the POSTed system prompt is the bare literal, byte-identical');
+      check(typeof sys === 'string' && !sys.includes('SDL_MAIN_USE_CALLBACKS') && !sys.includes('gucOS'),
+        '#530: the binary literal carries no platform content (the #551 SDL rule moved to the file layer)');
+    }
+
+    // -- leg B: all four layers, emitted general-first / specific-last ---
+    {
+      const ctxRoot = path.join(fx, 'ctxroot');
+      fs.mkdirSync(path.join(ctxRoot, 'usr/share/gcode'), { recursive: true });
+      fs.mkdirSync(path.join(ctxRoot, 'etc/gcode'), { recursive: true });
+      fs.writeFileSync(path.join(ctxRoot, 'usr/share/gcode/GCODE.md'), 'USR-LAYER-530 platform facts\n');
+      fs.writeFileSync(path.join(ctxRoot, 'etc/gcode/GCODE.md'), 'ETC-LAYER-530 admin adds\n');
+      const home = path.join(fx, 'homeB');
+      fs.mkdirSync(path.join(home, '.config/gcode'), { recursive: true });
+      fs.writeFileSync(path.join(home, '.config/gcode/GCODE.md'), 'USER-LAYER-530\n');
+      fs.writeFileSync(path.join(fx, 'GCODE.md'), 'ABOVE-HOME-530\n');   // above $HOME — must not load
+      const proj = path.join(home, 'proj'); const sub = path.join(proj, 'sub');
+      fs.mkdirSync(sub, { recursive: true });
+      fs.writeFileSync(path.join(proj, 'GCODE.md'), 'PROJ-TOP-530\n');
+      fs.writeFileSync(path.join(sub, 'GCODE.md'), 'PROJ-SUB-530\n');
+
+      let srv = await startServer([textResponse('layered')]);
+      await runCodeBoth(srv.url, ['-p', 'hi', '--no-color', '--no-persist'],
+        { HOME: home, GCODE_CONTEXT_ROOT: ctxRoot }, sub);
+      srv.close();
+      const sys = (srv.bodies[0] && srv.bodies[0].system) || '';
+      const order = ['USR-LAYER-530', 'ETC-LAYER-530', 'USER-LAYER-530', 'PROJ-TOP-530', 'PROJ-SUB-530']
+        .map((m) => sys.indexOf(m));
+      check(order.every((i) => i >= 0) && order.every((i, k) => k === 0 || i > order[k - 1]),
+        `#530: /usr/share + /etc + ~/.config + walk-up all load, stable-and-general first, specific last (indices ${order.join(',')})`);
+      check(sys.startsWith(BASE), '#530: the base prompt stays the stable cache prefix');
+      check(sys.includes(`[GCODE.md context: ${path.join(ctxRoot, 'etc/gcode/GCODE.md')}]`),
+        '#530: each block is headed by the path it came from');
+      check(!sys.includes('ABOVE-HOME-530'), '#530: the walk-up never reads above $HOME');
+
+      // -- leg F: --no-context turns all of it off ----------------------
+      srv = await startServer([textResponse('off')]);
+      await runCodeBoth(srv.url, ['-p', 'hi', '--no-color', '--no-persist', '--no-context'],
+        { HOME: home, GCODE_CONTEXT_ROOT: ctxRoot }, sub);
+      srv.close();
+      check(srv.bodies[0] && srv.bodies[0].system === BASE,
+        '#530: --no-context sends the bare literal even with every layer present');
+    }
+
+    // -- leg C: editing a project GCODE.md must NOT make --resume warn ---
+    // Design point (ii): context files are excluded from system_prompt_hash,
+    // so the warning keeps meaning "the BASE prompt changed". A regression
+    // that folds context into the hash fails the first check; the negative
+    // control proves the warning itself still works.
+    {
+      const home = path.join(fx, 'homeC'); const p = path.join(home, 'p');
+      fs.mkdirSync(p, { recursive: true });
+      fs.writeFileSync(path.join(p, 'GCODE.md'), 'EDITABLE-530 v1\n');
+      const stateDir = path.join(fx, 'stateC');
+      const envC = { HOME: home, GCODE_CONTEXT_ROOT: emptyRoot, GCODE_STATE_DIR: stateDir };
+      let srv = await startServer([textResponse('one')]);
+      await runCodeBoth(srv.url, ['-p', 'one', '--no-color'], envC, p);
+      srv.close();
+      const sessDir = path.join(stateDir, 'sessions');
+      const sessPath = path.join(sessDir, fs.readdirSync(sessDir).filter((f) => f.endsWith('.jsonl'))[0]);
+      const meta = JSON.parse(fs.readFileSync(sessPath, 'utf8').split('\n')[0]);
+      // realpath: walk-up paths derive from getcwd, which resolves the
+      // macOS /var -> /private/var tmpdir symlink the fixture path spells.
+      check(Array.isArray(meta.context_files)
+        && meta.context_files[meta.context_files.length - 1] === path.join(fs.realpathSync(p), 'GCODE.md'),
+        '#530: session_meta records the loaded context files');
+
+      fs.appendFileSync(path.join(p, 'GCODE.md'), 'EDITED-530 v2\n');
+      srv = await startServer([textResponse('two')]);
+      const r2 = await runCodeBoth(srv.url, ['--resume', sessPath, '-p', 'two', '--no-color'], envC, p);
+      srv.close();
+      check(!r2.stderr.includes('resumed system prompt differs'),
+        '#530: editing a project GCODE.md does NOT make --resume warn (context excluded from the hash)');
+      check(srv.bodies[0] && srv.bodies[0].system.includes('EDITED-530 v2'),
+        '#530: the resumed request carries the freshly loaded (edited) context');
+
+      srv = await startServer([textResponse('three')]);
+      const r3 = await runCodeBoth(srv.url,
+        ['--resume', sessPath, '-p', 'three', '--no-color', '--system-prompt', 'a different base'], envC, p);
+      srv.close();
+      check(r3.stderr.includes('resumed system prompt differs'),
+        '#530 negative control: a changed BASE prompt still warns on resume');
+    }
+
+    // -- leg D: the total byte cap is loud, in-band and on stderr --------
+    {
+      const home = path.join(fx, 'homeD'); const s = path.join(home, 's');
+      fs.mkdirSync(s, { recursive: true });
+      fs.writeFileSync(path.join(home, 'GCODE.md'), 'A'.repeat(60 * 1024));
+      fs.writeFileSync(path.join(s, 'GCODE.md'), 'DROPPED-530\n');
+      const srv = await startServer([textResponse('capped')]);
+      const r = await runCodeBoth(srv.url, ['-p', 'hi', '--no-color', '--no-persist'],
+        { HOME: home, GCODE_CONTEXT_ROOT: emptyRoot }, s);
+      srv.close();
+      const sys = (srv.bodies[0] && srv.bodies[0].system) || '';
+      check(sys.includes('[gcode: context truncated at the 49152-byte total cap]'),
+        '#530: the file crossing the cap gets an in-band truncation marker');
+      check(sys.length < BASE.length + 49152 + 300,
+        `#530: the POSTed system prompt stays bounded by the cap (${sys.length} bytes)`);
+      check(!sys.includes('DROPPED-530'), '#530: files past a spent budget are dropped, not half-included');
+      check(r.stderr.includes('truncated at the 49152-byte context cap')
+        && r.stderr.includes('dropped (the 49152-byte context cap is spent)'),
+        '#530: both the truncation and the drop are announced on stderr — never a silent trim');
+    }
+
+    // -- leg E: the walk-up is depth-bounded (CAP_CONTEXT_DEPTH = 32) ----
+    {
+      const home = path.join(fx, 'deep'); let d = home;
+      for (let i = 0; i < 40; i++) d = path.join(d, 'd' + i);
+      fs.mkdirSync(d, { recursive: true });
+      fs.writeFileSync(path.join(home, 'GCODE.md'), 'TOO-FAR-530\n');
+      fs.writeFileSync(path.join(d, 'GCODE.md'), 'NEAR-530\n');
+      const srv = await startServer([textResponse('deep')]);
+      await runCodeBoth(srv.url, ['-p', 'hi', '--no-color', '--no-persist'],
+        { HOME: home, GCODE_CONTEXT_ROOT: emptyRoot }, d);
+      srv.close();
+      const sys = (srv.bodies[0] && srv.bodies[0].system) || '';
+      check(sys.includes('NEAR-530'), '#530: a file inside the walk bound is read');
+      check(!sys.includes('TOO-FAR-530'),
+        '#530: a file 41 directories up is beyond the depth bound and is not read');
+    }
+    fs.rmSync(fx, { recursive: true, force: true });
   }
 
   // ---- #511: signal-before-poll race — the self-pipe closes the window --
