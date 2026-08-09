@@ -46,10 +46,15 @@ function check(name, cond, extra) {
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
 }
 
-/* ---- transient package definitions (the test-bad-desktop pattern:
- * mkpkg has no packages-dir seam, so defs are written into packages/ for
- * exactly the duration of the build and removed in finally). All four are
- * VALID defs a sibling test's all-defs mkpkg run could build harmlessly. */
+/* ---- transient package definitions, in a PRIVATE defs dir --------------
+ * These used to be written into the repo's shared packages/ dir "for
+ * exactly the duration of the build" — but the kernel suite runs files in
+ * parallel, and every concurrently-booting e2e folds --packages=all over
+ * that same dir, so for those ~6 seconds hatch-fail's script-carrying def
+ * made every fat boot REFUSE (the #74 fold gate) and six unrelated e2es
+ * died at boot (lane-614617's first gate, 2026-08-09). mkpkg grew a
+ * --packages-dir seam long ago; the defs live in a temp dir now and the
+ * shared packages/ is never touched. */
 const DEFS = {
   'hatch-ok': {
     name: 'hatch-ok', version: '1.0', summary: 'postinst/prerm success fixture',
@@ -85,10 +90,14 @@ const DEFS = {
   },
 };
 
+// The private definitions dir every mkpkg run in this file reads instead of
+// the repo's packages/ (created in main(), before the first writeDefs).
+let DEFS_DIR = null;
+
 function writeDefs(defs) {
   const paths = [];
   for (const name of Object.keys(defs)) {
-    const p = path.join(ROOT, 'packages', `${name}.json`);
+    const p = path.join(DEFS_DIR, `${name}.json`);
     fs.writeFileSync(p, JSON.stringify(defs[name], null, 2) + '\n');
     paths.push(p);
   }
@@ -99,7 +108,7 @@ function mkpkgRun(outDir, names, expectFail) {
   fs.mkdirSync(outDir, { recursive: true });
   const r = cp.spawnSync(process.execPath,
     [path.join(ROOT, 'tools', 'mkpkg.js'), '--no-baseline', '--quiet',
-     `--out=${outDir}`, `--pool=${POOL}`, ...names],
+     `--packages-dir=${DEFS_DIR}`, `--out=${outDir}`, `--pool=${POOL}`, ...names],
     { encoding: 'utf-8', timeout: 600000 });
   if (!expectFail && r.status !== 0) {
     throw new Error(`mkpkg ${names.join(' ')} failed (exit ${r.status}):\n${r.stderr}`);
@@ -201,6 +210,7 @@ async function main() {
   // the pre-#74 packageControl silently DROPS unknown def keys).
   fs.mkdirSync(PKG_ROOT, { recursive: true });
   const outDir = fs.mkdtempSync(path.join(PKG_ROOT, 'scripts-e2e-'));
+  DEFS_DIR = fs.mkdtempSync(path.join(PKG_ROOT, 'scripts-defs-'));
   const defPaths = writeDefs(DEFS);
   let index;
   try {
@@ -214,7 +224,7 @@ async function main() {
     check('mkpkg: control.json carries prerm', ctl.prerm === 'prerm', JSON.stringify(ctl));
 
     // Negative: postinst naming no payload member refuses the build.
-    const badDef = path.join(ROOT, 'packages', 'hatch-badref.json');
+    const badDef = path.join(DEFS_DIR, 'hatch-badref.json');
     fs.writeFileSync(badDef, JSON.stringify({
       name: 'hatch-badref', version: '1.0', summary: 'negative fixture',
       files: { 'hello.txt': { content: 'hi\n' } },
@@ -230,7 +240,7 @@ async function main() {
     } finally { fs.rmSync(badDef, { force: true }); }
 
     // Negative: a non-runnable script member refuses the build.
-    const nrDef = path.join(ROOT, 'packages', 'hatch-noshebang.json');
+    const nrDef = path.join(DEFS_DIR, 'hatch-noshebang.json');
     fs.writeFileSync(nrDef, JSON.stringify({
       name: 'hatch-noshebang', version: '1.0', summary: 'negative fixture',
       files: { 'postinst': { content: 'echo no shebang\n', mode: 0o755 } },
@@ -264,6 +274,7 @@ async function main() {
     }
   } finally {
     for (const p of defPaths) fs.rmSync(p, { force: true });
+    fs.rmSync(DEFS_DIR, { recursive: true, force: true });
   }
 
   /* ================= the e2e boot session ================= */

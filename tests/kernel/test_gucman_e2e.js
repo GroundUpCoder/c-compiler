@@ -61,11 +61,14 @@ async function main() {
    * Host-side negative check: a def whose desktop.cmd names no bin command
    * FAILS the package build loudly (the field is validated at build time so
    * gucman never sees a malformed one through the official pipeline). The
-   * bad def is written into packages/ (mkpkg has no packages-dir seam),
-   * built with --out into the temp dir, and removed again in finally. */
+   * bad def lives in a PRIVATE --packages-dir, never the repo's shared
+   * packages/ — a transient def there is visible to every concurrently
+   * booting e2e's --packages=all fold (the hatch-fail race that killed six
+   * unrelated kernel e2es, lane-614617 2026-08-09). */
   {
     const cp = require('child_process');
-    const badDef = path.join(ROOT, 'packages', 'test-bad-desktop.json');
+    const badDefsDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mkpkg-bad-defs-'));
+    const badDef = path.join(badDefsDir, 'test-bad-desktop.json');
     const badOut = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mkpkg-bad-'));
     try {
       fs.writeFileSync(badDef, JSON.stringify({
@@ -75,14 +78,15 @@ async function main() {
         desktop: { cmd: 'nope' },
       }, null, 2) + '\n');
       const r = cp.spawnSync(process.execPath,
-        [path.join(ROOT, 'tools', 'mkpkg.js'), '--no-baseline', '--quiet', `--out=${badOut}`, 'test-bad-desktop'],
+        [path.join(ROOT, 'tools', 'mkpkg.js'), '--no-baseline', '--quiet',
+         `--packages-dir=${badDefsDir}`, `--out=${badOut}`, 'test-bad-desktop'],
         { encoding: 'utf-8', timeout: 60000 });
       check('mkpkg refuses desktop.cmd naming no bin command (exit 1)', r.status === 1,
         `status=${r.status}`);
       check('mkpkg refusal names the desktop.cmd cause',
         /desktop\.cmd .* names no bin command/.test(String(r.stderr)), String(r.stderr));
     } finally {
-      fs.rmSync(badDef, { force: true });
+      fs.rmSync(badDefsDir, { recursive: true, force: true });
       fs.rmSync(badOut, { recursive: true, force: true });
     }
   }
