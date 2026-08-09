@@ -1,0 +1,17 @@
+{
+  "name": "freetype",
+  "version": "2.14.1",
+  "summary": "FreeType source library — TrueType font rendering with the in-OS cc",
+  "files": {
+    "include/ft2build.h":   { "bin": "vendor/freetype/demo/ft2build.h" },
+    "include/myftmodule.h": { "bin": "vendor/freetype/demo/myftmodule.h" },
+    "include/myftoption.h": { "bin": "vendor/freetype/demo/myftoption.h" },
+    "include/freetype":     { "tree": "vendor/freetype/include/freetype" },
+    "srclib":               { "tree": "vendor/freetype/srclib" },
+    "src":                  { "tree": "vendor/freetype/src" }
+  },
+  "srclib": {
+    "include": [ "include" ],
+    "src": { "freetype": "srclib" }
+  }
+}

@@ -75,7 +75,9 @@ const waitFile = (p, secs, tag) =>
   `test -e ${p} && echo WAIT-OK-${tag} || echo WAIT-TIMEOUT-${tag}`;
 
 async function main() {
-  const repo = ensurePackages(['punes', 'font-unifont', 'jq', 'win32']);
+  // #464: win32 deps freetype, so the repo must carry it for the sync's
+  // transitive install to resolve.
+  const repo = ensurePackages(['punes', 'font-unifont', 'jq', 'win32', 'freetype']);
   const MIN = ensureMinimalImage();
   const { image } = freshImage('os-defsync-');
   fs.copyFileSync(MIN, image);   // copy mtime = now -> input-fresh at boot

@@ -2102,7 +2102,8 @@ int  SetMapMode(HDC hdc, int mode);
  * planted by the win32 package) and pulls the whole veneer, SDL.h-style.
  * The set below MUST equal lib.json ∪ menucore.json sources — the §4.4
  * drift gate (tools/mkpkg.js + tools/win32ports.js --check) enforces it.
- * Freetype requires live with their consumer, gdi32.c (§4.2), not here.
+ * Freetype requires live in the library's own ft2build.h (#464 — the
+ * freetype srclib package; gdi32.c's #include pulls them), not here.
  * wwinmain.c is deliberately absent: the wWinMain CRT shim is a per-app
  * explicit TU (cc -DUNICODE app.c /usr/src/win32/wwinmain.c).
  *

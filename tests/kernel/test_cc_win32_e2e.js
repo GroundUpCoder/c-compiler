@@ -199,7 +199,9 @@ async function main() {
     /Undefined symbol/.test(engine) && /e2rc=[^0]/.test(engine), engine);
 
   /* ---- session B: the minimal image + gucman install win32 ---- */
-  const repo = ensurePackages(['win32']);
+  // #464: freetype is win32's package DEPENDENCY now — the repo must carry
+  // both, and `gucman install win32` below pulls freetype transitively.
+  const repo = ensurePackages(['win32', 'freetype']);
   const MIN = ensureMinimalImage();
   const { dir: tmpB, image: minImage } = freshImage('os-ccwin32-min-');
   fs.copyFileSync(MIN, minImage);   // copy mtime = now -> input-fresh at boot
@@ -214,6 +216,7 @@ async function main() {
     'mkdir -p /etc/gucman',
     `echo http://127.0.0.1:${goodPort} > /etc/gucman/repos`,
     'gucman install win32; echo IRC=$?',
+    'test -f /var/lib/gucman/freetype.json && echo FT-DEP-OK',   // #464 transitive
     'echo ==cc2',
     'cc hellowin.c -o hellowin.out',
     'echo ccrc=$?',
@@ -240,6 +243,8 @@ async function main() {
 
   const inst = section(bout, 'install');
   check('minimal: gucman install win32 succeeds', inst.includes('IRC=0'), inst);
+  check('minimal: freetype pulled TRANSITIVELY by the win32 dep (#464)',
+    inst.includes('FT-DEP-OK'), inst);
 
   const cc2 = section(bout, 'cc2');
   check('minimal: cc compiles through /usr/local/{include,src}',

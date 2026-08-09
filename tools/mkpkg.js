@@ -849,12 +849,13 @@ async function buildPackage(name, poolDir, sharedPool, synth) {
     ? COMMON.validateSrclibShape(pkg.srclib, `package '${name}'`) : null;
   const seed = pkg.seed !== undefined
     ? COMMON.validateSeedShape(pkg.seed, `package '${name}'`) : null;
-  // The §4.4 require-block drift gate (Lane B2): the win32 payload ships
-  // windows.h/menucore.h/gdi32.c whose hand-written __require_source
+  // The §4.4 require-block drift gate (Lane B2; freetype since #464): the
+  // win32 payload ships windows.h/menucore.h, the freetype payload ships
+  // ft2build.h + the shim tree, and their hand-written __require_source
   // blocks must equal the lib.json truth — refuse to build a package that
   // would plant a drifted veneer. (tools/win32ports.js runs the same gate
   // host-side; os-common win32RequireDriftErrors is the ONE checker.)
-  if (name === 'win32') {
+  if (name === 'win32' || name === 'freetype') {
     const drift = COMMON.win32RequireDriftErrors((rel) => {
       try { return fs.readFileSync(path.join(ROOT, rel), 'utf8'); } catch (e) { return null; }
     });

@@ -1410,9 +1410,16 @@ function checkReservedPackageFiles(pkg, label) {
  *     sources, as win32/<basename> (§4.1)
  *   - os/win32/menucore.h's require set == menucore.json sources (§4.1 —
  *     the menucore-only in-OS link set)
- *   - os/win32/gdi32.c's require set == vendor/freetype/lib.json sources,
- *     as freetype/<shim basename> (§4.2 — vendor knowledge stays with its
- *     consumer)
+ *   - vendor/freetype/demo/ft2build.h's require set == vendor/freetype/
+ *     lib.json sources, as freetype/<shim basename> (§4.2 as amended by
+ *     #464 — freetype is a standalone srclib package, so the library's
+ *     own header is the single source of link metadata), and every
+ *     required shim really exists in vendor/freetype/srclib (the tree
+ *     packages/freetype.json ships — file-level, since a `tree` entry
+ *     has no per-file keys for unshipped() to cross-check)
+ *   - os/win32/gdi32.c's require set is EMPTY (#464): its freetype
+ *     block moved into ft2build.h — a require reappearing here would
+ *     be a second, driftable copy of the link metadata
  *   - os/win32/include/gdiplusflat.h's require set == gdiplus.json sources,
  *     and os/win32/gdiplus.c's == the four decoder lib.jsons' sources
  *     (ticket #94 — the same §4.1/§4.2 pair, for the gdiplus component)
@@ -1498,8 +1505,36 @@ function win32RequireDriftErrors(readText) {
       requiresOf('os/win32/include/gdiplusflat.h'), gdiplus))
     .concat(diff('os/win32/gdiplus.c',
       requiresOf('os/win32/gdiplus.c'), gdiplusVendor))
-    .concat(diff('os/win32/gdi32.c',
-      requiresOf('os/win32/gdi32.c'), sourcesOf('vendor/freetype/lib.json', 'freetype')));
+    /* #464: the freetype block lives in the library's own ft2build.h now
+     * (the freetype srclib package ships header + shims + upstream tree);
+     * gdi32.c is pinned EMPTY so the metadata cannot grow a second copy. */
+    .concat(diff('vendor/freetype/demo/ft2build.h',
+      requiresOf('vendor/freetype/demo/ft2build.h'),
+      sourcesOf('vendor/freetype/lib.json', 'freetype')))
+    .concat(diff('os/win32/gdi32.c', requiresOf('os/win32/gdi32.c'), []))
+    /* The freetype payload half, file-level: packages/freetype.json ships
+     * the shims as ONE `tree` over vendor/freetype/srclib (no per-file
+     * keys for unshipped() to see), so cross-check that the namespace
+     * maps to that tree and that every lib.json source exists in it. */
+    .concat((function () {
+      var errs = [];
+      var pkg = JSON.parse(mustRead('packages/freetype.json'));
+      var ns = pkg.srclib && pkg.srclib.src && pkg.srclib.src.freetype;
+      var entry = ns ? (pkg.files || {})[ns] : undefined;
+      if (!entry || entry.tree !== 'vendor/freetype/srclib') {
+        errs.push('packages/freetype.json does not map srclib namespace ' +
+          "'freetype' to the vendor/freetype/srclib tree (require-block drift, design §4.4)");
+        return errs;
+      }
+      (JSON.parse(mustRead('vendor/freetype/lib.json')).sources || []).forEach(function (s) {
+        var rel = 'vendor/freetype/srclib/' + s.replace(/^.*\//, '');
+        var text = readText(rel);
+        if (text === null || text === undefined)
+          errs.push('packages/freetype.json ships no ' + rel +
+            ', which ft2build.h requires (require-block drift, design §4.4)');
+      });
+      return errs;
+    })());
 }
 
 /* which: 'all' | array of names | [] (fold nothing). Returns

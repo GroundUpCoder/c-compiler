@@ -24,7 +24,11 @@
 //     the srclib symlink farms — /usr/local/include/<entry> per top-level
 //     include entry, /usr/local/src/<ns> per require namespace — creating
 //     the tier dirs (absent on a virgin root) and recording everything in
-//     the DB; remove leaves NO residue (links gone, created tiers rmdir'd)
+//     the DB; remove leaves NO residue (links gone, created tiers rmdir'd).
+//     Since #464 freetype is a STANDALONE srclib package win32 pulls as a
+//     transitive dep: the freetype tiers are freetype's own plants, they
+//     survive win32's removal (no dep cascade), and the tier dirs fall
+//     only when the last srclib package goes
 //
 //   - an index.json that will not parse NAMES ITS OWN FAULT (ticket #456):
 //     an empty 200, a cleanly-terminated short body and a whole non-JSON
@@ -53,7 +57,7 @@ function check(name, cond, extra) {
 }
 
 async function main() {
-  const repo = ensurePackages(['punes', 'win32', 'jq']);
+  const repo = ensurePackages(['punes', 'win32', 'freetype', 'jq']);
   const idx = repo.index;
   const MIN = ensureMinimalImage();
 
@@ -348,8 +352,13 @@ async function main() {
     'echo on > /var/lib/gucman/desktop_shortcuts',   // §5: even with the toggle ON…
     'gucman install win32; echo RC=$?',
     'test ! -e "/root/Desktop/win32" && echo NO-SRCLIB-DESK',  // …no bin, no field ⇒ no icon
+    // #464: freetype is a standalone srclib package now; win32 pulls it as
+    // a TRANSITIVE dependency (index deps, depth-first), and the freetype
+    // tiers below are freetype's OWN plants over /opt/freetype.
+    'test -f /var/lib/gucman/freetype.json && echo FT-DEP-DB-OK',
     'readlink /usr/local/include/windows.h',
     'readlink /usr/local/src/win32',
+    'readlink /usr/local/src/freetype',
     'test -f /usr/local/include/windows.h && echo INC-RESOLVES',
     'test -f /usr/local/src/win32/user32.c && echo SRC-RESOLVES',
     'test -f /usr/local/include/ft2build.h && echo FT2BUILD-OK',
@@ -358,22 +367,32 @@ async function main() {
     // the §3.3 layout invariants relative quote-includes depend on, asserted
     // IN THE PAYLOAD (real dirs, where lexical `..` == physical): fontcore.h
     // one level above src/win32/ (gdi32.c's "../fontcore.h"), the freetype
-    // upstream src/ tree beside the shim dir ("../src/base/ftbase.c").
+    // upstream src/ tree beside the shim dir ("../src/base/ftbase.c") — in
+    // the freetype package's OWN payload since #464.
     // NB the visible-tier form (/usr/local/src/win32/../fontcore.h) does NOT
     // resolve: BlockFS collapses `..` LEXICALLY before the walk (host.js
     // _walkPath — logical, not physical), so `..` never enters the namespace
     // symlink. How the in-OS compile crosses that is Lane B2's seam.
     'test -f /opt/win32/src/win32/../fontcore.h && echo FONTCORE-LAYOUT-OK',
-    'test -f /opt/win32/src/freetype/srclib/../src/base/ftbase.c && echo FT-LAYOUT-OK',
+    'test -f /opt/freetype/srclib/../src/base/ftbase.c && echo FT-LAYOUT-OK',
+    'test ! -e /opt/win32/src/freetype && echo NO-WIN32-FT-PAYLOAD',
     'grep -q include_entries /var/lib/gucman/win32.json && echo DB-INC-OK',
     'grep -q src_namespaces /var/lib/gucman/win32.json && echo DB-NS-OK',
     'grep -q srclib_dirs /var/lib/gucman/win32.json && echo DB-DIRS-OK',
     'echo ==slremove',
+    // #464: remove replays each package's OWN DB record — removing win32
+    // must NOT cascade to its freetype dependency (no auto-remove of deps,
+    // the existing gucman contract), so the tiers survive win32's removal
+    // and fall only when freetype itself goes.
     'gucman remove win32; echo RC=$?',
-    'test ! -e /usr/local/include && echo INC-TIER-GONE',
-    'test ! -e /usr/local/src && echo SRC-TIER-GONE',
     'test ! -e /opt/win32 && echo OPT-GONE',
     'test ! -e /var/lib/gucman/win32.json && echo DB-GONE',
+    'test ! -e /usr/local/include/windows.h && echo WIN32-PLANTS-GONE',
+    'test -f /usr/local/src/freetype/ftbase.c && echo FT-SURVIVES',
+    'gucman remove freetype; echo RC2=$?',
+    'test ! -e /usr/local/include && echo INC-TIER-GONE',
+    'test ! -e /usr/local/src && echo SRC-TIER-GONE',
+    'test ! -e /opt/freetype && echo FT-OPT-GONE',
     'echo ==done',
   ];
   const d = driveBoot(scriptD, BOOT_ARGS);
@@ -387,10 +406,14 @@ async function main() {
   check('win32 install succeeds (exit 0)', sli.includes('RC=0'), sli);
   check('toggle ON + srclib package (no bin, no field): NO Desktop icon',
     sli.includes('NO-SRCLIB-DESK'), sli);
+  check('freetype installed TRANSITIVELY as a win32 dep (#464)',
+    sli.includes('FT-DEP-DB-OK'), sli);
   check('/usr/local/include/windows.h -> /opt/win32/include/windows.h',
     sli.includes('/opt/win32/include/windows.h'), sli);
   check('/usr/local/src/win32 -> /opt/win32/src/win32',
     sli.split('\n').some((l) => l.trim() === '/opt/win32/src/win32'), sli);
+  check('/usr/local/src/freetype -> /opt/freetype/srclib (freetype-owned plant)',
+    sli.split('\n').some((l) => l.trim() === '/opt/freetype/srclib'), sli);
   check('include-tier link resolves to a real header', sli.includes('INC-RESOLVES'));
   check('src-namespace link resolves to user32.c', sli.includes('SRC-RESOLVES'));
   check('demo ft2build.h planted as a top-level include entry', sli.includes('FT2BUILD-OK'));
@@ -398,16 +421,24 @@ async function main() {
   check('freetype require namespace maps to the shim dir', sli.includes('FT-NS-OK'));
   check('payload layout: fontcore.h one level above src/win32/', sli.includes('FONTCORE-LAYOUT-OK'));
   check('payload layout: freetype src/ tree beside the shim dir', sli.includes('FT-LAYOUT-OK'));
+  check('win32 payload carries NO freetype namespace of its own (#464)',
+    sli.includes('NO-WIN32-FT-PAYLOAD'), sli);
   check('DB records include_entries', sli.includes('DB-INC-OK'));
   check('DB records src_namespaces', sli.includes('DB-NS-OK'));
   check('DB records the created tier dirs', sli.includes('DB-DIRS-OK'));
 
   const slr = section(dout, 'slremove');
   check('win32 remove succeeds (exit 0)', slr.includes('RC=0'), slr);
-  check('created include tier rmdir\'d on remove', slr.includes('INC-TIER-GONE'), slr);
-  check('created src tier rmdir\'d on remove', slr.includes('SRC-TIER-GONE'));
-  check('/opt/win32 fully removed', slr.includes('OPT-GONE'));
+  check('/opt/win32 fully removed', slr.includes('OPT-GONE'), slr);
   check('win32 DB record removed', slr.includes('DB-GONE'));
+  check('win32 plants gone from the include tier', slr.includes('WIN32-PLANTS-GONE'));
+  check('freetype dep SURVIVES win32 removal (no cascade)', slr.includes('FT-SURVIVES'), slr);
+  check('freetype remove succeeds (exit 0)', slr.includes('RC2=0'), slr);
+  check('created include tier rmdir\'d once the last srclib package goes',
+    slr.includes('INC-TIER-GONE'), slr);
+  check('created src tier rmdir\'d once the last srclib package goes',
+    slr.includes('SRC-TIER-GONE'));
+  check('/opt/freetype fully removed', slr.includes('FT-OPT-GONE'));
 
   /* ---- session E: the FAT image carries the baked srclib fold ---- *
    * foldPackages' twin of the gucman plant: /usr/include + /usr/src symlink
@@ -421,10 +452,15 @@ async function main() {
     'test -f /usr/src/win32/user32.c && echo BAKED-SRC-OK',
     'test -f /usr/src/freetype/ftbase.c && echo BAKED-FT-OK',
     'test -f /usr/include/freetype/freetype.h && echo BAKED-FT-TREE-OK',
+    'readlink /usr/src/freetype',
     // the baked payload's §3.3 layout invariants (see session D note: `..`
-    // is asserted through the REAL payload dirs, not the symlink tier)
+    // is asserted through the REAL payload dirs, not the symlink tier);
+    // since #464 the freetype tree is its OWN package's payload, and the
+    // win32 payload must carry no duplicate of it (ownership collision =
+    // foldPackages' loud claim() throw, absence asserted here at file level)
     'test -f /usr/opt/win32/src/win32/../fontcore.h && echo BAKED-LAYOUT-OK',
-    'test -f /usr/opt/win32/src/freetype/srclib/../src/base/ftbase.c && echo BAKED-FT-LAYOUT-OK',
+    'test -f /usr/opt/freetype/srclib/../src/base/ftbase.c && echo BAKED-FT-LAYOUT-OK',
+    'test ! -e /usr/opt/win32/src/freetype && echo BAKED-NO-WIN32-FT-DUP',
     'echo ==done',
   ];
   const e = driveBoot(scriptE, { timeout: 420000 });
@@ -439,8 +475,12 @@ async function main() {
   check('fat: /usr/src/win32/user32.c resolves', fat.includes('BAKED-SRC-OK'));
   check('fat: freetype shim namespace resolves', fat.includes('BAKED-FT-OK'));
   check('fat: freetype header tree resolves', fat.includes('BAKED-FT-TREE-OK'));
+  check('fat: /usr/src/freetype links into the freetype payload (#464)',
+    fat.split('\n').some((l) => l.trim() === '/usr/opt/freetype/srclib'), fat);
   check('fat: baked payload layout (fontcore.h above src/win32/)', fat.includes('BAKED-LAYOUT-OK'));
   check('fat: baked payload layout (freetype src/ beside shims)', fat.includes('BAKED-FT-LAYOUT-OK'));
+  check('fat: win32 payload carries NO duplicate freetype tree (#464)',
+    fat.includes('BAKED-NO-WIN32-FT-DUP'), fat);
 
   /* ---- session F: an unparseable index NAMES ITS OWN FAULT (ticket #456) ----
    * The three ways `index.json` can fail to parse are three different faults

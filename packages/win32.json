@@ -2,12 +2,9 @@
   "name": "win32",
   "version": "1.0.0",
   "summary": "Win32 source library — build windows.h apps with the in-OS cc",
+  "deps": [ "freetype" ],
   "files": {
     "include":              { "tree": "os/win32/include" },
-    "include/ft2build.h":   { "bin": "vendor/freetype/demo/ft2build.h" },
-    "include/myftmodule.h": { "bin": "vendor/freetype/demo/myftmodule.h" },
-    "include/myftoption.h": { "bin": "vendor/freetype/demo/myftoption.h" },
-    "include/freetype":     { "tree": "vendor/freetype/include/freetype" },
     "src/fontcore.h":       { "text": "fontcore.h" },
     "src/fontchain.h":      { "text": "fontchain.h" },
     "src/wcwidth.h":        { "text": "wcwidth.h" },
@@ -33,12 +30,10 @@
     "src/win32/menucore.c": { "text": "win32/menucore.c" },
     "src/win32/menucore.h": { "text": "win32/menucore.h" },
     "src/win32/win32_internal.h": { "text": "win32/win32_internal.h" },
-    "src/win32/wwinmain.c": { "text": "win32/wwinmain.c" },
-    "src/freetype/srclib":  { "tree": "vendor/freetype/srclib" },
-    "src/freetype/src":     { "tree": "vendor/freetype/src" }
+    "src/win32/wwinmain.c": { "text": "win32/wwinmain.c" }
   },
   "srclib": {
     "include": [ "include" ],
-    "src": { "win32": "src/win32", "freetype": "src/freetype/srclib" }
+    "src": { "win32": "src/win32" }
   }
 }

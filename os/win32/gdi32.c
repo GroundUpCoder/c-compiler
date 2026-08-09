@@ -1862,23 +1862,8 @@ int EndPage(HDC hdc) { (void)hdc; return print_stub("EndPage"); }
 int EndDoc(HDC hdc) { (void)hdc; return print_stub("EndDoc"); }
 int AbortDoc(HDC hdc) { (void)hdc; return print_stub("AbortDoc"); }
 
-/* ---------------- freetype requires (source-lib design §4.2) ----
- * Vendor knowledge stays with its consumer: gdi32.c is the TU that uses
- * freetype, so IT names the srclib shims — not windows.h. Host-side these
- * dedup against the freetype lib.json TUs (srcRoots {freetype: srclib});
- * in-OS the transitive require drain pulls them from /usr/src/freetype.
- * The set MUST equal vendor/freetype/lib.json sources — the §4.4 drift
- * gate enforces it. Each shim is a SELF-CONTAINED TU (the three build
- * defines live in-file, §3.4). */
-__require_source("freetype/ftbase.c");
-__require_source("freetype/ftsystem.c");
-__require_source("freetype/ftdebug.c");
-__require_source("freetype/ftinit.c");
-__require_source("freetype/autofit.c");
-__require_source("freetype/ftbitmap.c");
-__require_source("freetype/ftmm.c");
-__require_source("freetype/ftsynth.c");
-__require_source("freetype/sfnt.c");
-__require_source("freetype/truetype.c");
-__require_source("freetype/smooth.c");
-__require_source("freetype/psnames.c");
+/* The freetype require block moved to the library's OWN ft2build.h
+ * (ticket #464, source-lib design §4.2): freetype is a standalone srclib
+ * package now, so including its header is the single source of link
+ * metadata — this TU includes <ft2build.h> above, which is the whole
+ * link story. The §4.4 drift gate pins this file's require set EMPTY. */
