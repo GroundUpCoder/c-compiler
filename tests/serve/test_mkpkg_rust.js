@@ -72,7 +72,7 @@ function makeSibling(tamper, extraApp) {
 }
 
 function run(args) {
-  return cp.spawnSync(process.execPath, [MKPKG, ...args],
+  return cp.spawnSync(process.execPath, [MKPKG, '--no-baseline', ...args],
     { cwd: ROOT, encoding: 'utf-8', timeout: 120000 });
 }
 function runRust(rustRoot, outDir, extraArgs) {

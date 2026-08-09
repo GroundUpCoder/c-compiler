@@ -1,6 +1,7 @@
 {
   "name": "paint",
   "version": "0.1",
+  "sourcesVersion": "245",
   "summary": "Paint — gucOS bitmap editor (win32 veneer app with drawing tools and 24-bit BMP round-trip)",
   "files": {
     "paint": { "project": "os/win32/paint.json" }

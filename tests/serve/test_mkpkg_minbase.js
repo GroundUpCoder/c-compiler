@@ -71,7 +71,7 @@ function fixtureDef(name, minBase) {
 }
 function mkpkg(out, defsDir) {
   return cp.spawnSync(process.execPath,
-    [MKPKG, '--quiet', `--out=${out}`, `--packages-dir=${defsDir}`],
+    [MKPKG, '--no-baseline', '--quiet', `--out=${out}`, `--packages-dir=${defsDir}`],
     { encoding: 'utf-8', timeout: 120000 });
 }
 

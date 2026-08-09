@@ -52,16 +52,20 @@ const gucman = byName.get('gucman-sources');
 check('gucman-sources exists (image derivation)', gucman && gucman.kind === 'image');
 check('gucman-sources version is the image version', gucman && gucman.def.version === imageVersion,
   gucman && gucman.def.version);
+check('legacy image summary keeps the baked-history marker used by mkpkg',
+  gucman && gucman.def.summary.includes(`(base image v${imageVersion})`),
+  gucman && gucman.def.summary);
 check('gucman-sources closure carries gucman.c + its project + cJSON',
   gucman && gucman.def.files['os/gucman/gucman.c'] !== undefined &&
   gucman.def.files['os/gucman/bin.json'] !== undefined &&
   gucman.def.files['vendor/cjson/cJSON.c'] !== undefined);
 
 const gcode = byName.get('gcode-sources');
-const gcodeVer = JSON.parse(fs.readFileSync(path.join(ROOT, 'packages', 'gcode.json'), 'utf-8')).version;
+const gcodeDef = JSON.parse(fs.readFileSync(path.join(ROOT, 'packages', 'gcode.json'), 'utf-8'));
 check('gcode-sources exists (package derivation — #578 pulled gcode out of the image)',
   gcode && gcode.kind === 'package');
-check('gcode-sources version is the gcode package version', gcode && gcode.def.version === gcodeVer,
+check('gcode-sources version uses its explicit companion lineage',
+  gcode && gcode.def.version === gcodeDef.sourcesVersion,
   gcode && gcode.def.version);
 check('gcode-sources closure carries gcode.c + its project + cJSON',
   gcode && gcode.def.files['os/gcode/gcode.c'] !== undefined &&
@@ -183,7 +187,7 @@ try {
 const out = fs.mkdtempSync(path.join(os.tmpdir(), 'srcpkg-'));
 try {
   const r = cp.spawnSync(process.execPath,
-    [path.join(ROOT, 'tools', 'mkpkg.js'), '--quiet', `--out=${out}`, 'cc-sources'],
+    [path.join(ROOT, 'tools', 'mkpkg.js'), '--no-baseline', '--quiet', `--out=${out}`, 'cc-sources'],
     { encoding: 'utf-8', timeout: 120000 });
   check('mkpkg builds cc-sources', r.status === 0, String(r.stderr));
   const idx = JSON.parse(fs.readFileSync(path.join(out, 'index.json'), 'utf-8'));

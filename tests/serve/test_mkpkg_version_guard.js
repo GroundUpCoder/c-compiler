@@ -47,7 +47,7 @@ function writeDef(version) {
 }
 function mkpkg(extra) {
   return cp.spawnSync(process.execPath,
-    [MKPKG, '--quiet', `--out=${out}`, `--packages-dir=${defsDir}`].concat(extra || []),
+    [MKPKG, '--no-baseline', '--quiet', `--out=${out}`, `--packages-dir=${defsDir}`].concat(extra || []),
     { encoding: 'utf-8', timeout: 120000 });
 }
 function publishedVersion() {

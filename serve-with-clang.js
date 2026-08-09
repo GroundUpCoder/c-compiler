@@ -31,8 +31,8 @@ const path = require('path');
 const cp = require('child_process');
 
 const REPO_ROOT = __dirname;
-const SERVE = path.join(REPO_ROOT, 'serve.js');
-const MKPKG = path.join(REPO_ROOT, 'tools', 'mkpkg.js');
+const SERVE = process.env.SERVE_WITH_CLANG_SERVE_UNDER_TEST || path.join(REPO_ROOT, 'serve.js');
+const MKPKG = process.env.SERVE_WITH_CLANG_MKPKG_UNDER_TEST || path.join(REPO_ROOT, 'tools', 'mkpkg.js');
 
 // --- args: consume the wrapper-only flags, forward the rest to serve.js ---
 let clangRoot = path.resolve(REPO_ROOT, '..', 'clang-simplified');
@@ -103,7 +103,7 @@ const servedDir = path.resolve(forward[0] || 'build');
 const pkgOut = path.join(servedDir, 'dist', 'packages');
 console.log('[serve-with-clang] prebaking *-clang packages (mkpkg --clang)…');
 const mk = cp.spawnSync(process.execPath,
-  [MKPKG, `--clang-root=${clangRoot}`, '--clang', `--out=${pkgOut}`],
+  [MKPKG, '--no-baseline', `--clang-root=${clangRoot}`, '--clang', `--out=${pkgOut}`],
   { cwd: REPO_ROOT, stdio: 'inherit' });
 if (mk.status !== 0) {
   die(['serve-with-clang: mkpkg --clang failed — not serving a clang origin without its packages']);

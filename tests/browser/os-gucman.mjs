@@ -30,7 +30,7 @@ const SEED_DEST = Object.keys(require(
 // image's version (the minBase gate).
 {
   const r = spawnSync(process.execPath,
-    [path.join(ROOT, 'tools', 'mkpkg.js'), '--quiet'], { stdio: 'inherit' });
+    [path.join(ROOT, 'tools', 'mkpkg.js'), '--no-baseline', '--quiet'], { stdio: 'inherit' });
   if (r.status !== 0) { console.error('mkpkg failed — cannot serve a package repo'); process.exit(1); }
 }
 

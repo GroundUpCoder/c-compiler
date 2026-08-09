@@ -27,14 +27,43 @@ function check(name, cond, extra) {
 // Run serve-with-clang.js SYNCHRONOUSLY to completion (it must exit at
 // preflight — it never reaches the listen step in these cases). Returns
 // { status, stderr }.
-function run(clangRoot) {
+function run(clangRoot, env = {}) {
   const served = fs.mkdtempSync(path.join(os.tmpdir(), 'swc-served-'));
   try {
     const r = cp.spawnSync(process.execPath,
       [WRAPPER, served, '0', `--clang-root=${clangRoot}`],
-      { cwd: ROOT, encoding: 'utf-8', timeout: 20000 });
+      { cwd: ROOT, encoding: 'utf-8', timeout: 20000,
+        env: { ...process.env, ...env } });
     return { status: r.status, stderr: r.stderr || '', stdout: r.stdout || '' };
   } finally { fs.rmSync(served, { recursive: true, force: true }); }
+}
+
+// Execute the successful-preflight path with test doubles. The mkpkg double
+// refuses unless the wrapper's actual spawned argv carries --no-baseline, so
+// future construction-contract changes cannot hide behind preflight coverage.
+{
+  const sib = fs.mkdtempSync(path.join(os.tmpdir(), 'swc-sib-'));
+  const doubles = fs.mkdtempSync(path.join(os.tmpdir(), 'swc-double-'));
+  try {
+    fs.mkdirSync(path.join(sib, 'simple1', 'out'), { recursive: true });
+    fs.mkdirSync(path.join(sib, 'out-image'), { recursive: true });
+    fs.writeFileSync(path.join(sib, 'simple1', 'out', 'clang'), 'fixture\n');
+    fs.writeFileSync(path.join(sib, 'out-image', 'overlay.json'), '{}\n');
+    const fakeMkpkg = path.join(doubles, 'mkpkg.js');
+    const fakeServe = path.join(doubles, 'serve.js');
+    fs.writeFileSync(fakeMkpkg,
+      "process.exit(process.argv.includes('--no-baseline') ? 0 : 42);\n");
+    fs.writeFileSync(fakeServe, 'process.exit(0);\n');
+    const r = run(sib, {
+      SERVE_WITH_CLANG_MKPKG_UNDER_TEST: fakeMkpkg,
+      SERVE_WITH_CLANG_SERVE_UNDER_TEST: fakeServe,
+    });
+    check('successful preflight passes an explicit baseline decision to mkpkg',
+      r.status === 0, `exit ${r.status} ${r.stderr}`);
+  } finally {
+    fs.rmSync(sib, { recursive: true, force: true });
+    fs.rmSync(doubles, { recursive: true, force: true });
+  }
 }
 
 // --- 1. sibling ABSENT ------------------------------------------------------

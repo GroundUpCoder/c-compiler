@@ -77,7 +77,7 @@ function checkShadowingBinRefused(check) {
     // SIGKILL is what makes the budget kill actually land; the .mkpkg-lock a
     // SIGKILLed run leaves self-heals (dead-pid steal).
     const { r, kill } = spawnSyncBudgeted(process.execPath,
-      [pathm.join(ROOT, 'tools', 'mkpkg.js'), '--quiet', `--out=${outDir}`,
+      [pathm.join(ROOT, 'tools', 'mkpkg.js'), '--no-baseline', '--quiet', `--out=${outDir}`,
        `--packages-dir=${defDir}`, 'test-shadow'],
       { encoding: 'utf-8', timeout: 180000 });
     if (kill) {

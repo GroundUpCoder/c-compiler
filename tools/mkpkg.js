@@ -54,10 +54,16 @@
 //   node tools/mkpkg.js --prune            # ALSO drop entries this build
 //                                          # cannot see (explicit removal —
 //                                          # see the additive-publish block)
-//   node tools/mkpkg.js --allow-downgrade  # publish a version DECREASE over an
+//   node tools/mkpkg.js --allow-downgrade  # construct a version DECREASE over
 //                                          # already-published entry (a stated
 //                                          # rollback; refused loudly otherwise
-//                                          # — see the version-ordering guard)
+//                                          # — see the version-ordering guard);
+//                                          # also bypasses explicit served-floor
+//                                          # checks at build time. deploy still
+//                                          # enforces the live floor with no opt-out
+//   node tools/mkpkg.js --baseline FILE     # compare against an explicit served
+//   node tools/mkpkg.js --baseline-url URL  # index snapshot (file or fetched)
+//   node tools/mkpkg.js --no-baseline       # explicit developer-only construction
 //   node tools/mkpkg.js --packages-dir=DIR   # read definitions from DIR
 //                                            # instead of <repo>/packages
 //   node tools/mkpkg.js --pool=DIR           # SHARED payload store (below)
@@ -149,9 +155,13 @@ let quiet = false;
 let force = false;
 // #580: removal is opt-in. false = additive publish (carry unknown entries).
 let prune = false;
-// #595: a rollback is opt-in. false = a rebuilt entry whose version orders
-// BELOW the already-published one refuses the publish (verCompare, below).
+// #595: a rollback is opt-in. It also overrides #598's explicit served floor
+// during construction. Deployment independently rechecks live truth and has
+// no override, so this cannot authorize publication of a downgrade.
 let allowDowngrade = false;
+let baselineFile = null;
+let baselineUrl = null;
+let noBaseline = false;
 // ---- native siblings (todos/0416; RUST.md §3 rule 4) ----------------------
 // A NATIVE SIBLING is an out-of-repo producer of prebuilt payloads: one
 // repository builds the binaries and publishes an `out-image/overlay.json`
@@ -202,7 +212,9 @@ let pkgDir = path.join(ROOT, 'packages');
 // store IS <out>/pool and this tool owns it outright.
 let poolStore = null;
 const requested = [];
-for (const a of process.argv.slice(2)) {
+const cliArgs = process.argv.slice(2);
+for (let ai = 0; ai < cliArgs.length; ai++) {
+  const a = cliArgs[ai];
   if (a.startsWith('--out=')) { outDir = path.resolve(a.slice(6)); continue; }
   if (a.startsWith('--pool=')) { poolStore = path.resolve(a.slice(7)); continue; }
   if (a.startsWith('--packages-dir=')) { pkgDir = path.resolve(a.slice(15)); continue; }
@@ -210,6 +222,17 @@ for (const a of process.argv.slice(2)) {
   if (a === '--force') { force = true; continue; }
   if (a === '--prune') { prune = true; continue; }
   if (a === '--allow-downgrade') { allowDowngrade = true; continue; }
+  if (a === '--no-baseline') { noBaseline = true; continue; }
+  if (a === '--baseline' || a === '--baseline-url') {
+    if (ai + 1 >= cliArgs.length) {
+      process.stderr.write(`mkpkg: ${a} requires a value\n`); process.exit(2);
+    }
+    if (a === '--baseline') baselineFile = path.resolve(cliArgs[++ai]);
+    else baselineUrl = cliArgs[++ai];
+    continue;
+  }
+  if (a.startsWith('--baseline=')) { baselineFile = path.resolve(a.slice(11)); continue; }
+  if (a.startsWith('--baseline-url=')) { baselineUrl = a.slice(15); continue; }
   let handled = false;
   for (const p of Object.keys(SIBLINGS)) {
     if (a === '--' + p) { enabled.add(p); handled = true; }
@@ -223,6 +246,15 @@ for (const a of process.argv.slice(2)) {
     process.exit(2);
   }
   requested.push(a);
+}
+const baselineChoices = Number(!!baselineFile) + Number(!!baselineUrl) + Number(noBaseline);
+if (baselineChoices !== 1) {
+  process.stderr.write(
+    'mkpkg: choose exactly one baseline decision:\n' +
+    '  --baseline <file>       compare with a saved served index\n' +
+    '  --baseline-url <url>    fetch and compare with the served index\n' +
+    '  --no-baseline           developer-only construction; deploy still rechecks live\n');
+  process.exit(2);
 }
 const log = quiet ? () => {} : (m) => process.stderr.write('[mkpkg] ' + m + '\n');
 
@@ -762,6 +794,7 @@ async function buildPackage(name, poolDir, sharedPool, synth) {
   const entryFor = (file, sha, size) => ({
     version: pkg.version,
     summary: pkg.summary || '',
+    ...(synth ? { sourceKind: synth.kind } : {}),
     // Undeclared minBase = the CURRENT image version, and for a payload this
     // tool COMPILES that is correct by construction, not a lazy default: the
     // binary is built by today's pipeline against today's host env surface,
@@ -907,6 +940,8 @@ function materializeView(store, view, live) {
  * with no meaningful order (git SHAs) gets a deterministic but arbitrary
  * verdict; when a legitimate bump trips the guard, --allow-downgrade is the
  * override — the same escape a genuine rollback uses. */
+// MUST MATCH comguc/scripts/package-floor.mjs verCompare: construction and
+// deployment must use exactly the same ordering contract.
 function verCompare(a, b) {
   const toks = (v) => String(v == null ? '' : v).match(/\d+|[A-Za-z]+/g) || [];
   const ta = toks(a), tb = toks(b);
@@ -925,7 +960,58 @@ function verCompare(a, b) {
   return ta.length === tb.length ? 0 : (ta.length < tb.length ? -1 : 1);
 }
 
+function parseBaseline(bytes, source) {
+  let value;
+  try { value = JSON.parse(bytes.toString('utf-8')); }
+  catch (e) { throw new Error(`baseline ${source} is malformed JSON (${e.message})`); }
+  if (!value || value.schemaVersion !== 1 || !value.packages ||
+      Array.isArray(value.packages) || typeof value.packages !== 'object') {
+    throw new Error(`baseline ${source} has unknown or malformed schema ` +
+      `(expected schemaVersion 1 with a packages object)`);
+  }
+  for (const [name, row] of Object.entries(value.packages)) {
+    if (!row || typeof row.version !== 'string')
+      throw new Error(`baseline ${source} has malformed package row ${JSON.stringify(name)}`);
+  }
+  return value;
+}
+
+async function loadBaseline() {
+  if (noBaseline) return { index: null, provenance: { mode: 'none' } };
+  let bytes, source, provenanceSource;
+  if (baselineFile) {
+    source = baselineFile;
+    provenanceSource = `file:${path.basename(path.resolve(baselineFile))}`;
+    try { bytes = fs.readFileSync(baselineFile); }
+    catch (e) { throw new Error(`baseline ${baselineFile} is unreadable (${e.message})`); }
+  } else {
+    source = baselineUrl;
+    provenanceSource = source;
+    let response;
+    try { response = await fetch(baselineUrl); }
+    catch (e) { throw new Error(`baseline fetch ${baselineUrl} failed (${e.message})`); }
+    if (!response.ok)
+      throw new Error(`baseline fetch ${baselineUrl} failed (HTTP ${response.status})`);
+    bytes = Buffer.from(await response.arrayBuffer());
+  }
+  return {
+    index: parseBaseline(bytes, source),
+    provenance: {
+      source: provenanceSource,
+      retrievalTime: new Date().toISOString(),
+      sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+    },
+  };
+}
+
+function higherFloor(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  return verCompare(a.version, b.version) >= 0 ? a : b;
+}
+
 async function main() {
+  const baseline = await loadBaseline();
   acquireLock();
   // The STORE is where payloads are built and reused; the VIEW is the pool/
   // the index's relative urls address. They are the same dir unless --pool
@@ -936,6 +1022,7 @@ async function main() {
   const index = {
     schemaVersion: 1,
     baseVersion: imageManifest.version | 0,
+    baseline: baseline.provenance,
     packages: {},
   };
   const prev = readIndex();
@@ -947,12 +1034,35 @@ async function main() {
       `cannot merge with it\n`);
     process.exit(1);
   }
+  // Published-name history is the only durable evidence that a package-derived
+  // companion inherited an older baked series. An unbake must state the new
+  // companion lineage explicitly; package version fallback is only for names
+  // with no served history.
+  if (baseline.index) {
+    for (const unit of sourceUnits.values()) {
+      const published = baseline.index.packages[unit.name];
+      // MUST MATCH os/os-common.js makeUnit image-summary format until every
+      // published baseline carries structured sourceKind provenance.
+      const bakedHistory = published && (published.sourceKind === 'image' ||
+        /\(base image v[^)]+\)/.test(published.summary || ''));
+      if (unit.kind === 'package' && bakedHistory && !unit.sourcesVersionDeclared) {
+        process.stderr.write(
+          `mkpkg: ${unit.name} already exists in the required baseline at version ` +
+          `${published.version}, but packages/${unit.parent}.json ` +
+          `does not declare sourcesVersion\n` +
+          `  an unbake must continue the published companion lineage explicitly\n`);
+        process.exit(1);
+      }
+    }
+  }
   // Rebuild requested packages; carry every other declared package's entry
   // forward so a single-package invocation still writes a complete index.
   for (const n of allAvail) {
     if (names.includes(n)) {
       const built = await buildPackage(n, store, sharedPool, sourceUnits.get(n));
-      const old = prev && prev.packages ? prev.packages[n] : null;
+      const warm = prev && prev.packages ? prev.packages[n] : null;
+      const served = baseline.index ? baseline.index.packages[n] : null;
+      const old = higherFloor(served, warm);
       if (old && verCompare(built.version, old.version) < 0 && !allowDowngrade) {
         // Nothing has been published yet (the index writes by atomic rename at
         // the very end), so refusing here leaves the served repo untouched.
@@ -980,6 +1090,20 @@ async function main() {
   if (foreign.length && !prune) {
     log(`carried ${foreign.length} published entr${foreign.length === 1 ? 'y' : 'ies'} ` +
       `outside this build's package set: ${foreign.join(', ')}`);
+  }
+  // Reconcile the WHOLE candidate, not just rows rebuilt above. A warm index
+  // may carry a producer-gated/removed row that the server has since advanced;
+  // carrying that lower local row would recreate the poisoned-cache hole.
+  for (const [n, built] of Object.entries(index.packages)) {
+    const warm = prev && prev.packages ? prev.packages[n] : null;
+    const served = baseline.index ? baseline.index.packages[n] : null;
+    const floor = higherFloor(served, warm);
+    if (floor && verCompare(built.version, floor.version) < 0 && !allowDowngrade) {
+      process.stderr.write(
+        `mkpkg: refusing candidate ${n} ${built.version} below the maximum known floor ` +
+        `${floor.version} — a carried warm row may never lower the served floor\n`);
+      process.exit(1);
+    }
   }
   const live = new Set(Object.values(index.packages).map((p) => path.basename(p.payload.url)));
   // Every index row must stay SERVABLE: a payload built this run exists by

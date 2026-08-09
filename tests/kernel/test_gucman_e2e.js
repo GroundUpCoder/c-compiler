@@ -75,7 +75,7 @@ async function main() {
         desktop: { cmd: 'nope' },
       }, null, 2) + '\n');
       const r = cp.spawnSync(process.execPath,
-        [path.join(ROOT, 'tools', 'mkpkg.js'), '--quiet', `--out=${badOut}`, 'test-bad-desktop'],
+        [path.join(ROOT, 'tools', 'mkpkg.js'), '--no-baseline', '--quiet', `--out=${badOut}`, 'test-bad-desktop'],
         { encoding: 'utf-8', timeout: 60000 });
       check('mkpkg refuses desktop.cmd naming no bin command (exit 1)', r.status === 1,
         `status=${r.status}`);
