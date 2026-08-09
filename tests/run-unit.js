@@ -74,7 +74,24 @@ function buildTestDescriptor(testDir) {
   const ex = path.join(testDir, 'expected.exitcode');
   if (fs.existsSync(ex)) expected.exitcode = parseInt(fs.readFileSync(ex, 'utf-8').trim(), 10);
 
-  return { name, testDir, cFiles, config, expected };
+  // Assertionless detection (ticket #600). With no expectation of ANY kind,
+  // every comparison in runOne is null-guarded away and the exit-code
+  // defaults are satisfied by any clean run, so a program the compiler
+  // ACCEPTS "passes" with zero assertions performed — the missing-diagnostic
+  // case degrades silently while the rejection case degrades loudly.
+  // An expectation is: any expected.* file (an empty expected.stdout is a
+  // real assertion — "prints nothing"), or a config.json `expected` block
+  // whose `exitcode` the runners actually read. Keys the runners do NOT read
+  // deliberately don't count — an ignored key must not re-open the vacuous
+  // class through config.json.
+  const assertionless =
+    expected.compilerStderr == null &&
+    expected.stdout == null &&
+    expected.stderr == null &&
+    !fs.existsSync(ce) && !fs.existsSync(ex) &&
+    !(config.expected && config.expected.exitcode != null);
+
+  return { name, testDir, cFiles, config, expected, assertionless };
 }
 
 // ---------- Worker logic ----------
@@ -184,6 +201,18 @@ function workerMain() {
   }
 
   async function runOne(td) {
+    // Assertionless dirs fail LOUD instead of green (ticket #600). Checked
+    // before the fallback skips on purpose: tests/run.py's subprocess path
+    // has the same null-guarded comparisons, so falling back cannot turn an
+    // assertion-free dir into a real test.
+    if (td.assertionless) {
+      return { name: td.name, status: 'fail', assertionless: true,
+               msg: 'Assertionless test dir: no expected.stdout / expected.stderr / ' +
+                    'expected.compiler.stderr / expected.compiler.exitcode / ' +
+                    'expected.exitcode file, and no "expected" exitcode in config.json. ' +
+                    'This dir would pass vacuously whenever the compiler accepts its ' +
+                    'program — add a real expectation (ticket #600).' };
+    }
     // Skips tagged `fallback: true` are things the in-process runner
     // can't handle, but a subprocess-based runner (tests/run.py's
     // run_single_test) can — the orchestrator can pick them back up.
@@ -387,7 +416,9 @@ function workerMain() {
     } catch (e) {
       result = { name: td.name, status: 'fail', msg: `Runner error: ${e.message}\n${e.stack || ''}` };
     }
-    if (td.config && td.config.knownBug) result = applyKnownBug(td, result);
+    // An assertionless fail is a harness-policy red, not the pinned compiler
+    // bug — a knownBug tag must not launder it into a green xfail.
+    if (td.config && td.config.knownBug && !td.assertionless) result = applyKnownBug(td, result);
     parentPort.postMessage(result);
   });
 }
@@ -454,7 +485,7 @@ async function mainMain() {
 
   const queue = descriptors.slice();
   let nextIdx = 0;
-  let passed = 0, failed = 0, skipped = 0, xfailed = 0;
+  let passed = 0, failed = 0, skipped = 0, xfailed = 0, assertionless = 0;
   const failures = [];
 
   function reportJsonl(result) {
@@ -497,7 +528,10 @@ async function mainMain() {
         if (result.status === 'pass') passed++;
         else if (result.status === 'xfail') xfailed++;
         else if (result.status === 'skip') skipped++;
-        else { failed++; failures.push(result); }  // 'fail' and 'xpass' both fail loud
+        else {  // 'fail' and 'xpass' both fail loud
+          failed++; failures.push(result);
+          if (result.assertionless) assertionless++;
+        }
 
         if (opts.jsonl) reportJsonl(result);
         else reportHuman(result);
@@ -557,6 +591,7 @@ async function mainMain() {
       }
     }
     const parts = [`${passed} passed`, `${failed} failed`];
+    if (assertionless) parts.push(`${assertionless} assertionless`);  // subset of failed (#600)
     if (xfailed) parts.push(`${xfailed} xfailed`);
     if (skipped) parts.push(`${skipped} skipped`);
     process.stdout.write(`\n${parts.join(', ')}  (${elapsed.toFixed(1)}s)\n`);
