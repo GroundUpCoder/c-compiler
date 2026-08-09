@@ -588,7 +588,16 @@ hang-class miscompiles fail fast instead of stalling the suite.
 
 ## Vendored projects
 
-`vendor/` contains real-world C codebases already ported to this compiler — each has its own `bin.json`. **Check this list before proposing a "new" port; many obvious candidates are already done.** As of writing:
+`vendor/` contains real-world C codebases already ported to this compiler — each has its own `bin.json`. **Check this list before proposing a "new" port; many obvious candidates are already done.**
+
+**Placement policy (#616):** new large assets, optional-app payloads, and
+independently-authored package sources default to the sibling repo
+**`gucos-packages`** (`github.com/josephkimgpt/gucos-packages`), not here. A
+new top-level vendor blob larger than **~5 MB** needs a stated reason to live
+in c-compiler — every lane clones this repo, and a repo that compounds per
+asset drop taxes the whole dev loop.
+
+As of writing:
 
 - **Games / engines**: `doom` (doomgeneric), `quake` (1996 software renderer), `gameboy` (Peanut-GB emulator; the lighter alternate GB core), `sameboy` (SameBoy v1.0.3 — cycle-accurate GB/GBC second core, embedded MIT boot ROMs, the baked `.gb`/`.gbc` openwith default; since todos/0260 a win32 app on the uniform menu facility — GDI-blitted client, File▸Open ROM… via comdlg32, Pause/model/palette menu; patch table in `vendor/sameboy/README.md`), `snake`
 - **Interpreters / DBs**: `lua` (5.5), `micropython` (1.28), `sqlite` (3.53)

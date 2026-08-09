@@ -121,6 +121,13 @@ batches select work that advances SDL3/C gamedev DX in-OS. Unrelated work is
 deprioritized — not deleted — subject to the standing bug-fix-first and
 broken-build-preemption rules.
 
+**Asset placement policy (#616):** new large assets, optional-app payloads,
+and independently-authored package sources default to the sibling repo
+**`gucos-packages`** (`github.com/josephkimgpt/gucos-packages`). A new
+top-level vendor blob larger than **~5 MB** needs a stated reason to live in
+c-compiler — keeping the platform repo lean is what keeps every lane's clone
+(and this epic's dev loop) cheap.
+
 ## Foundation tickets (jku manual promotion, 2026-08-04)
 
 Pulled to the **front of P0 and scheduled for the next cycle** by explicit
