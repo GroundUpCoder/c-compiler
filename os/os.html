@@ -748,6 +748,54 @@ function applyDisplayConfig(z) {
   }
   if (isFinite(+z) && +z > 0) vt2SetZoom(+z, 'config');
 }
+// The net-bridge reachability probe (ticket #362). The kernel worker
+// announces the effective `net` store config (boot + every settled store
+// write). A WORKER cannot raise Chrome's local-network-access permission
+// prompt — since Chrome 142 any fetch from a public origin to loopback
+// (the bridge at http://127.0.0.1:8199) is denied without a user grant,
+// and only a window context can prompt for it. So when the bridge is ON
+// the PAGE probes: permission query, then a /health fetch (the fetch is
+// what raises the prompt — right at the applet click that enabled the
+// bridge), then re-read the permission (the user may have just answered).
+// The verdict posts back to the worker, which records /run/net-status for
+// the Network applet's Test button. A later grant from site settings
+// re-probes via the PermissionStatus onchange hook.
+var netCfgLast = { on: false, url: '' };
+function netBridgeProbe(on, url) {
+  netCfgLast = { on: !!on, url: String(url || '') };
+  if (!on) return;   // default-off boots stay silent: no query, no fetch
+  var report = { type: 'net-probe', origin: location.origin,
+                 permission: 'unsupported', health: 'untried' };
+  var done = function () {
+    // agent probe (tests/browser/os-netbridge-https.mjs and friends)
+    window.__osNetProbe = { permission: report.permission,
+                            health: report.health, url: netCfgLast.url };
+    kernel.postMessage(report);
+  };
+  var query = (navigator.permissions && navigator.permissions.query)
+    ? navigator.permissions.query({ name: 'local-network-access' }).then(function (st) {
+        report.permission = st.state;
+        st.onchange = function () {
+          if (netCfgLast.on) netBridgeProbe(netCfgLast.on, netCfgLast.url);
+        };
+        return st;
+      }, function () { return null; })   // name unknown to this browser
+    : Promise.resolve(null);
+  query.then(function (st) {
+    var abs = null;
+    try { abs = new URL(netCfgLast.url.replace(/\/+$/, '') + '/health', location.href); }
+    catch (e) {}
+    // A same-origin bridge url has no hop to prove (and no permission gate).
+    if (!abs || abs.origin === location.origin) { done(); return; }
+    fetch(abs.href, { mode: 'cors' }).then(
+      function (r) { report.health = r.ok ? 'ok' : 'fail'; },
+      function () { report.health = 'fail'; }
+    ).then(function () {
+      if (st) report.permission = st.state;   // live: reflects a just-answered prompt
+      done();
+    });
+  });
+}
 // ± walk the ordered factor list: − is the next-smaller factor (denser past
 // 1× — the sub-1 high-density steps), + the next-bigger (magnified).
 function vt2Step(dir) {
@@ -1624,6 +1672,12 @@ kernel.onmessage = function (e) {
     // Panel Display applet's live Apply).
     case 'display-config':
       applyDisplayConfig(m.zoom);
+      break;
+    // The net store's effective config (#362): probe the bridge hop from
+    // the window context — the one context that can raise Chrome's
+    // local-network-access prompt (see netBridgeProbe).
+    case 'net-config':
+      netBridgeProbe(m.on, m.url);
       break;
     // The audio mixer's output ring (todos/0017): play it with host.js's
     // createAudioReceiver — one synthetic device, resumed on the first user

@@ -2991,8 +2991,21 @@ function createNetFetch(baseFetch) {
       // Node's fetch buries the useful part (connect ECONNREFUSED ...) in
       // err.cause; the top-level message is a bare "fetch failed".
       var why = (err && err.cause && err.cause.message) || (err && err.message) || 'fetch failed';
-      var e = new Error('net bridge unreachable at ' + state.url + ' ('
-        + why + ') — is tools/net-bridge.js running?');
+      var msg = 'net bridge unreachable at ' + state.url + ' ('
+        + why + ') — is tools/net-bridge.js running?';
+      // #362: from an https page a rejected loopback fetch has a SECOND
+      // candidate cause the browser reports identically (a bare TypeError):
+      // Chrome 142+ gates every public→local request behind the user
+      // "local network access" permission, and a worker-context fetch is
+      // silently denied unless the page already holds the grant. Name it —
+      // the bridge may be running fine. The page-side probe (os.html,
+      // net-config → /run/net-status) is what tells the two apart.
+      if (typeof location !== 'undefined' && location.protocol === 'https:'
+          && /^http:\/\/(localhost|127\.0\.0\.1)([:/]|$)/i.test(state.url)) {
+        msg += ' (or the browser denied it: an https page needs the'
+          + ' local-network-access permission to reach a loopback bridge)';
+      }
+      var e = new Error(msg);
       e.errno = 'ENETUNREACH';
       throw e;
     });
@@ -3029,16 +3042,49 @@ function createNetFetch(baseFetch) {
 
 /* Resolve now and keep resolving on every settled write to a layer (the
  * kernel.watchPath FSW choke — what makes the Control Panel applet's
- * checkbox retarget live). Safe to call with netFetch null (no fetch). */
-function netFetchAttach(netFetch, kernel, kfs) {
+ * checkbox retarget live). Safe to call with netFetch null (no fetch).
+ * onChange (optional, #362): called with the effective {on, url} after
+ * every resolve — the browser embedder forwards it to the page, whose
+ * window context is the only one that can raise Chrome's local-network-
+ * access permission prompt (a worker fetch is silently denied without the
+ * grant). Headless boot.js passes nothing and is unchanged. */
+function netFetchAttach(netFetch, kernel, kfs, onChange) {
   if (!netFetch) return;
   var resolve = function () {
     var cfg = netConfig(kfs);
     netFetch._state.on = cfg.on;
     netFetch._state.url = cfg.url;
+    if (onChange) onChange(cfg);
   };
   NET_LAYERS.forEach(function (p) { kernel.watchPath(p, resolve); });
   resolve();
+}
+
+/* ---- persisted bridge-reachability probe (ticket #362) ----
+ * /run/net-status records what the EMBEDDER PAGE measured about the
+ * bridge hop, because the in-OS view is structurally blind to it: on the
+ * shipped https origin, Chrome 142+ Local Network Access denies a
+ * worker's loopback fetch with the same bare rejection a dead bridge
+ * produces, so kernel-side errno (ENETUNREACH) cannot say WHICH. The
+ * page can: it queries the local-network-access permission and fetches
+ * the bridge's /health from window context (the one context that can
+ * raise the permission prompt). os.html posts the verdict; the kernel
+ * worker lands it here (the /run/host-platform pattern — per-boot fact,
+ * no layering). Absent on headless boots and on browser boots that never
+ * turned the bridge on. Consumer: the Network applet's Test button
+ * (os/win32/ctlpanel.c net_test) — keep the key/value sets in sync.
+ * Lines:  origin <page origin url>
+ *         permission granted|denied|prompt|unsupported|unknown
+ *         health ok|fail|untried */
+function writeNetStatus(kfs, st) {
+  var line = function (v, dflt) {
+    return String(v === undefined || v === null ? dflt : v).split('\n')[0];
+  };
+  if (kfs.stat('/run') === null) kfs.mkdir('/run', 0o755);
+  writeFile(kfs, '/run/net-status',
+    'origin ' + line(st.origin, 'unknown') + '\n'
+    + 'permission ' + line(st.permission, 'unknown') + '\n'
+    + 'health ' + line(st.health, 'untried') + '\n', 0o644);
 }
 
 /* ---- environment exports (host.js discipline) ---- */
@@ -3085,6 +3131,7 @@ var OS_COMMON = {
   writeFile: writeFile,
   createNetFetch: createNetFetch,
   netFetchAttach: netFetchAttach,
+  writeNetStatus: writeNetStatus,
   netConfig: netConfig,
 };
 
