@@ -12,8 +12,15 @@
 // unbound-fetch kernel.js (GUC-RC=1 + the "Couldn't connect" symptom),
 // green on fetch.bind(globalThis).
 //
+// Since #391 a final leg reruns the install with the net bridge ON (a real
+// tools/net-bridge.js): same-origin /packages fetches must take the BASE
+// fetch (passthrough), proven by the bridge's own /fetch counter — an
+// off-origin curl transits it (the switch is really ON), the install
+// does not. Pre-#391 the install died "Couldn't connect to server".
+//
 // Usage: node os-gucman.mjs
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import http from 'node:http';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { openOsSession, ROOT } from './lib/os-harness.mjs';
@@ -32,6 +39,40 @@ const SEED_DEST = Object.keys(require(
   const r = spawnSync(process.execPath,
     [path.join(ROOT, 'tools', 'mkpkg.js'), '--no-baseline', '--quiet'], { stdio: 'inherit' });
   if (r.status !== 0) { console.error('mkpkg failed — cannot serve a package repo'); process.exit(1); }
+}
+
+// ---- #391 bridge-leg helpers (the test_netbridge_e2e.js shapes) ----
+function freePort() {
+  return new Promise((resolve) => {
+    const srv = http.createServer();
+    srv.listen(0, '127.0.0.1', () => {
+      const p = srv.address().port;
+      srv.close(() => resolve(p));
+    });
+  });
+}
+function spawnBridge(port) {
+  const b = spawn(process.execPath,
+    [path.join(ROOT, 'tools', 'net-bridge.js'), '--port=' + port, '--quiet'],
+    { stdio: ['ignore', 'pipe', 'inherit'] });
+  return new Promise((resolve, reject) => {
+    let out = '';
+    b.stdout.on('data', (d) => { out += d; if (out.includes('listening')) resolve(b); });
+    b.on('exit', (c) => reject(new Error('bridge exited ' + c + ' before listening')));
+  });
+}
+// agent:false — a fresh connection each probe (pooled sockets die across
+// the long OS waits and EPIPE the count).
+function bridgeCount(base) {
+  return new Promise((resolve, reject) => {
+    http.get(base + '/health', { agent: false }, (res) => {
+      let body = '';
+      res.on('data', (d) => { body += d; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(body).requests); } catch (e) { reject(e); }
+      });
+    }).on('error', reject);
+  });
 }
 
 // A stale image makes serve.js re-bake BEFORE listening — give it room
@@ -145,6 +186,48 @@ try {
   check('...and the baked layer\'s seeds SURVIVE it', /SEED2-RC=0/.test(afterRemove));
   for (const name of NSDEMOS.demoNames()) {
     check(`  "${name}" still there after remove`, afterRemove.includes(name));
+  }
+
+  // ---- #391: bridge ON — same-origin passthrough keeps gucman working ----
+  // The shipped bug: with the bridge ON, gucman's relative /packages urls
+  // went to the bridge and every catalogue/install fetch died ("Couldn't
+  // connect to server"). The fix routes same-origin targets to the BASE
+  // fetch even with the bridge explicitly ON. The proof of WHICH path ran
+  // is the bridge's own /fetch counter: the off-origin control transits it
+  // (counter moves — the switch is genuinely ON, and it doubles as the
+  // settle barrier for the live /etc/net watch, which has no other
+  // OS-visible completion marker), and the install then leaves the counter
+  // untouched (same-origin traffic never bridged).
+  const bridgePort = await freePort();
+  const bridgeBase = `http://127.0.0.1:${bridgePort}`;
+  const bridge = await spawnBridge(bridgePort);
+  try {
+    await page.keyboard.type(`printf 'bridge on\\nurl ${bridgeBase}\\n' > /etc/net; echo NET-""SET=$?\r`);
+    await waitOut('NET-SET=0', 20000);
+
+    const count0 = await bridgeCount(bridgeBase);
+    let engaged = false;
+    for (let i = 0; i < 30 && !engaged; i++) {
+      await page.keyboard.type(`curl -s ${bridgeBase}/health > /dev/null; echo BRC${i}-""RC=$?\r`);
+      await waitOut(`BRC${i}-RC=`, 20000);
+      engaged = (await bridgeCount(bridgeBase)) > count0;
+    }
+    check('#391 positive control: off-origin curl transits the bridge (switch really ON)', engaged);
+
+    const count1 = await bridgeCount(bridgeBase);
+    await page.keyboard.type('gucman install lua; echo GUC2-""RC=$?\r');
+    await waitOut('GUC2-RC=', 120000);
+    const bout = await page.evaluate(() => window.__osOut);
+    const rc2 = /GUC2-RC=(\d+)/.exec(bout);
+    check('#391 bridge ON: gucman install works (same-origin passthrough)',
+      rc2 && rc2[1] === '0', rc2 && rc2[1]);
+    check('#391 no "Couldn\'t connect to server" with the bridge ON',
+      !bout.slice(bout.indexOf('NET-SET=')).includes("Couldn't connect to server"));
+    const count2 = await bridgeCount(bridgeBase);
+    check('#391 which-path proof: /fetch counter untouched by the install',
+      count2 === count1, count1 + ' -> ' + count2);
+  } finally {
+    try { bridge.kill(); } catch (e) { /* already gone */ }
   }
 } catch (e) {
   s.fail(e);
