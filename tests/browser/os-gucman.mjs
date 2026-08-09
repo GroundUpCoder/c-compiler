@@ -248,7 +248,7 @@ try {
     const nsTail = nsout.slice(Math.max(0, nsout.indexOf('NS-DONE') - 400),
                                nsout.indexOf('NS-DONE'));
     check('#362 /run/net-status recorded by the kernel worker (origin + health)',
-      /origin http:\/\/127\.0\.0\.1:\d+/.test(nsTail) && /health ok/.test(nsTail),
+      /origin http:\/\/(localhost|127\.0\.0\.1):\d+/.test(nsTail) && /health ok/.test(nsTail),
       JSON.stringify(nsTail.slice(-200)));
   } finally {
     try { bridge.kill(); } catch (e) { /* already gone */ }

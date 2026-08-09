@@ -845,13 +845,18 @@ static void net_fail(HWND h, const char *what, int err) {
     HWND stat = GetDlgItem(h, ID_NETSTAT), det = GetDlgItem(h, ID_NETDET);
     char msg[NC_URL_MAX + 64], perm[40];
     int https = 0;
-    if (err == ENETUNREACH && net_status_read(perm, sizeof perm, &https)) {
+    /* The browser-blamed verdicts require an https (public) page origin:
+     * on a LOCAL origin (dev serve.js at http://localhost) Chrome reports
+     * the permission as 'prompt' while gating nothing — local->local
+     * requests are exempt — so a dead bridge there must stay a dead
+     * bridge (measured in the os-gucman.mjs bridge leg). */
+    if (err == ENETUNREACH && net_status_read(perm, sizeof perm, &https) && https) {
         if (strcmp(perm, "denied") == 0 || strcmp(perm, "prompt") == 0) {
             SetWindowText(stat, "Result: blocked by the browser, not the bridge");
             SetWindowText(det, "Allow local network access for this site, then retest.");
             return;
         }
-        if (https && strcmp(perm, "granted") != 0) {
+        if (strcmp(perm, "granted") != 0) {
             SetWindowText(stat, "Result: unreachable from an https origin");
             SetWindowText(det, "This browser blocks loopback fetches from https pages.");
             return;
