@@ -14,7 +14,10 @@
 // watchPath on /etc/net AFTER netFetchAttach, so same-batch setTimeout
 // FIFO guarantees the wrapper re-resolved before the ack lands.
 // ON-but-dead asserts the settled errno ruling — ENETUNREACH, promptly
-// (a timing bound, not just the errno).
+// (a timing bound, not just the errno). Phases 5/6 (#391) pin the
+// headless RELATIVE-url contract: no `location` means no same-origin
+// passthrough, so bridge ON rejects EINVAL before the wire and bridge
+// OFF fails loudly too — the strict-subset invariant.
 //
 // Leg B units: the wrapper's 403->EACCES mapping (a browser-origin bridge
 // refusal), and the bridge's HTTP surface a real browser needs — the
@@ -176,6 +179,23 @@ int main(void) {
     long dt = now_ms() - t0;
     printf("four rc=%d unreach=%d fast=%d\\n", n, err == ENETUNREACH, dt < 3000);
 
+    /* phase 5 (#391): bridge ON + RELATIVE url. The headless embedder has
+       no location, so there is NO same-origin passthrough — the wrapper
+       must refuse promptly with EINVAL (never a silent success, never a
+       bridge transit: the still-configured dead bridge would ENETUNREACH,
+       so einval=1 also proves the request died BEFORE the wire). */
+    t0 = now_ms();
+    n = fetch_all("/packages/index.json", &status, &err);
+    dt = now_ms() - t0;
+    printf("five rc=%d einval=%d fast=%d\\n", n, err == EINVAL, dt < 3000);
+
+    /* phase 6 (#391): bridge OFF + RELATIVE url — the strict-subset twin:
+       direct mode has no base url headless either, so this also fails
+       loudly (errno nonzero), just not with the bridge's EINVAL label. */
+    if (set_net("bridge off\\n# p6\\n", "/ack-off6") != 0) return 1;
+    n = fetch_all("/packages/index.json", &status, &err);
+    printf("six rc=%d loud=%d\\n", n, err != 0);
+
     printf("done\\n");
     return 0;
 }
@@ -293,7 +313,8 @@ function compile(name, src) {
   kernel.watchPath('/etc/net', () => {
     const text = OS_COMMON.readFileText(kfs, '/etc/net') || '';
     let ack = null;
-    if (/bridge on/.test(text) && text.includes(bridgeBase)) ack = '/ack-on';
+    if (/# p6/.test(text)) ack = '/ack-off6';   // phase 6's distinct off (plain off's ack persists from phase 3)
+    else if (/bridge on/.test(text) && text.includes(bridgeBase)) ack = '/ack-on';
     else if (/bridge off/.test(text)) ack = '/ack-off';
     else if (/bridge on/.test(text)) ack = '/ack-dead';
     if (ack) OS_COMMON.writeFile(kfs, ack, 'x');
@@ -319,6 +340,10 @@ function compile(name, src) {
     line('three ') === 'three status=200 body=T/three', JSON.stringify(line('three ')));
   check('ON + bridge absent: ENETUNREACH before the status phase, under 3s',
     line('four ') === 'four rc=-2 unreach=1 fast=1', JSON.stringify(line('four ')));
+  check('#391 ON + relative url (headless: no location, no passthrough): prompt EINVAL, pre-wire',
+    line('five ') === 'five rc=-2 einval=1 fast=1', JSON.stringify(line('five ')));
+  check('#391 OFF + relative url (headless): still fails loudly (strict subset)',
+    /^six rc=-\d loud=1$/.test(line('six ')), JSON.stringify(line('six ')));
 
   // THE PAIRING: the bridge saw EXACTLY the two ON-phase requests (/two
   // and the #359 /redir). 0 = the reroute never engaged (the (HP) trap:
