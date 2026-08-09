@@ -956,7 +956,13 @@ function listTreeFiles(fsMod, pathMod, rootDir, entry, label) {
  *
  * The payload is the COMPILE CLOSURE, mirrored at repo-relative paths:
  * every project json reached through `deps`, every listed source, every
- * `hdrs` file, and every header under every declared include dir. Chosen
+ * `hdrs` file, every header under every declared include dir (`includes`
+ * and `-I` compilerArgs alike), plus — #617 — every file a collected file
+ * textually `#include "…"`s, transitively, resolved in cc's quoted-include
+ * order (includer's dir, then the include path) and kept only when it
+ * lands inside the source root (busybox's `#include "x_template.c"` idiom
+ * is the measured victim: listed nowhere, headers-walk-invisible, and the
+ * bake never noticed because bake-time cc reads the full repo). Chosen
  * over "the project's directory" so a project rooted in a shared dir
  * (os/wm.json; gucman's includes '..') cannot drag a whole tree in, and
  * over "no deps" so an app split across projects (netsurf's 12-source
@@ -1010,7 +1016,13 @@ function sourcePackageDefs(fsMod, pathMod, rootDir, opts) {
   // --defs source carries its closure at that repo's paths, not c-compiler's).
   function closureOf(roots, label, srcRoot) {
     var files = {}, seenProj = {};
+    var incDirs = [], seenInc = {};   // the units' -I search path, in order (#617)
     function addFile(rel) { files[rel] = true; }
+    function addIncDir(dirRel) {
+      if (seenInc[dirRel]) return;
+      seenInc[dirRel] = true;
+      incDirs.push(dirRel);
+    }
     function walkHeaders(dirRel) {
       var abs = pathMod.join(srcRoot, dirRel);
       var ents;
@@ -1032,7 +1044,20 @@ function sourcePackageDefs(fsMod, pathMod, rootDir, opts) {
       var dir = n.slice(0, n.lastIndexOf('/'));
       var proj = JSON.parse(text);
       (proj.sources || []).forEach(function (s) { addFile(normalizeRelPath(dir + '/' + s)); });
-      (proj.includes || []).forEach(function (inc) { walkHeaders(normalizeRelPath(dir + '/' + inc)); });
+      (proj.includes || []).forEach(function (inc) {
+        var d = normalizeRelPath(dir + '/' + inc);
+        walkHeaders(d);
+        addIncDir(d);
+      });
+      // -I compilerArgs are include dirs too (buildProject treats them
+      // identically) — walked for headers AND on the include search path.
+      (proj.compilerArgs || []).forEach(function (a) {
+        if (a.lastIndexOf('-I', 0) === 0) {
+          var d = normalizeRelPath(dir + '/' + a.substring(2));
+          walkHeaders(d);
+          addIncDir(d);
+        }
+      });
       (proj.deps || []).forEach(function (d) { addProject(dir + '/' + d); });
     }
     roots.forEach(function (entry) {
@@ -1042,6 +1067,50 @@ function sourcePackageDefs(fsMod, pathMod, rootDir, opts) {
         (entry.hdrs || []).forEach(function (h) { addFile(normalizeRelPath('os/' + h)); });
       }
     });
+    // #617: follow textual `#include "..."` in every collected file,
+    // TRANSITIVELY. The lists above see only declared shapes (sources,
+    // headers under include dirs, deps) — a file a source #includes
+    // directly, resolved against the includer's own directory (busybox's
+    // `#include "xatonum_template.c"` idiom) or an -I dir under a non-header
+    // extension, is invisible to them, and the bake never notices because
+    // bake-time cc resolves against the full repo tree. The dogfooded
+    // symptom is a -sources payload that cannot rebuild its own binary
+    // (#568 D1). Resolution mirrors cc's quoted-include order — includer's
+    // directory first, then the include path — and accepts a target only
+    // when it lands inside the source root (validRelPath after
+    // normalization); anything unresolved here is a builtin/system header
+    // or a conditional include cc never took, and nothing to ship. The
+    // union include path across the unit's projects can over-resolve
+    // relative to any single TU's flags — over-inclusion ships an extra
+    // source file, the cheap direction; under-inclusion is the bug.
+    (function followIncludes() {
+      var queue = Object.keys(files);
+      var scanned = {};
+      while (queue.length) {
+        var rel = queue.pop();
+        if (scanned[rel]) continue;
+        scanned[rel] = true;
+        if (/\.json$/i.test(rel)) continue;   // project recipes carry no includes
+        var text;
+        try { text = fsMod.readFileSync(pathMod.join(srcRoot, rel), 'utf-8'); }
+        catch (e) { continue; }
+        var dir = rel.indexOf('/') < 0 ? '' : rel.slice(0, rel.lastIndexOf('/'));
+        var re = /^[ \t]*#[ \t]*include[ \t]*"([^"\n]+)"/mg;
+        var m;
+        while ((m = re.exec(text)) !== null) {
+          var cands = [normalizeRelPath(dir ? dir + '/' + m[1] : m[1])];
+          for (var i = 0; i < incDirs.length; i++) cands.push(normalizeRelPath(incDirs[i] + '/' + m[1]));
+          for (var j = 0; j < cands.length; j++) {
+            var c = cands[j];
+            if (!validRelPath(c)) continue;   // escaped the source root
+            if (files[c]) break;              // already carried
+            var st;
+            try { st = fsMod.statSync(pathMod.join(srcRoot, c)); } catch (e) { st = null; }
+            if (st && st.isFile()) { addFile(c); queue.push(c); break; }
+          }
+        }
+      }
+    })();
     var out = Object.keys(files).sort();
     out.forEach(function (rel) {
       if (!validRelPath(rel))
