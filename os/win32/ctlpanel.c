@@ -793,6 +793,7 @@ static LRESULT CALLBACK defprog_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 #define ID_NETAPP  802
 #define ID_NETTEST 803
 #define ID_NETSTAT 804
+#define ID_NETDET  805
 
 /* Sync the controls to the STORED config — WM_CREATE and the
  * write-failure reverts (the saver_sync discipline, todos/0234). */
@@ -801,6 +802,69 @@ static void net_sync(HWND h) {
     nc_get(&c);
     SendMessage(GetDlgItem(h, ID_NETCHK), BM_SETCHECK, c.on, 0);
     SetWindowText(GetDlgItem(h, ID_NETURL), c.url);
+}
+
+/* /run/net-status (#362): the embedder PAGE's bridge-hop verdict — written
+ * by os-common.js writeNetStatus (keep the key/value sets in sync there).
+ * Absent on headless boots and when the bridge was never enabled. Returns
+ * 1 if the file was read; fills the permission value and whether the page
+ * origin is https. */
+static int net_status_read(char *perm, size_t psz, int *https_origin) {
+    char buf[512];
+    FILE *f = fopen("/run/net-status", "r");
+    size_t n;
+    char *line;
+    if (!f) return 0;
+    n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    perm[0] = 0;
+    *https_origin = 0;
+    line = buf;
+    while (line && *line) {
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = 0;
+        if (strncmp(line, "origin ", 7) == 0)
+            *https_origin = strncmp(line + 7, "https://", 8) == 0;
+        else if (strncmp(line, "permission ", 11) == 0)
+            snprintf(perm, psz, "%s", line + 11);
+        line = nl ? nl + 1 : NULL;
+    }
+    return 1;
+}
+
+/* Compose the Test failure verdict (#362). A dead bridge and a
+ * browser-denied loopback hop surface IDENTICALLY kernel-side (both are
+ * ENETUNREACH — the browser rejects a denied local-network fetch with the
+ * same bare error as a connect refusal), but the embedder page can tell
+ * them apart, so trust its /run/net-status verdict when nothing answered.
+ * Chrome 142+ gates any public-origin fetch to loopback behind the user
+ * "local network access" permission; other browsers (no such permission
+ * name) block the https->http loopback hop outright. */
+static void net_fail(HWND h, const char *what, int err) {
+    HWND stat = GetDlgItem(h, ID_NETSTAT), det = GetDlgItem(h, ID_NETDET);
+    char msg[NC_URL_MAX + 64], perm[40];
+    int https = 0;
+    /* The browser-blamed verdicts require an https (public) page origin:
+     * on a LOCAL origin (dev serve.js at http://localhost) Chrome reports
+     * the permission as 'prompt' while gating nothing — local->local
+     * requests are exempt — so a dead bridge there must stay a dead
+     * bridge (measured in the os-gucman.mjs bridge leg). */
+    if (err == ENETUNREACH && net_status_read(perm, sizeof perm, &https) && https) {
+        if (strcmp(perm, "denied") == 0 || strcmp(perm, "prompt") == 0) {
+            SetWindowText(stat, "Result: blocked by the browser, not the bridge");
+            SetWindowText(det, "Allow local network access for this site, then retest.");
+            return;
+        }
+        if (strcmp(perm, "granted") != 0) {
+            SetWindowText(stat, "Result: unreachable from an https origin");
+            SetWindowText(det, "This browser blocks loopback fetches from https pages.");
+            return;
+        }
+    }
+    snprintf(msg, sizeof msg, "Result: %s: %s", what, strerror(err));
+    SetWindowText(stat, msg);
+    SetWindowText(det, "");
 }
 
 /* Fetch <url>/health over the kernel HTTP primitive and report. Blocks
@@ -819,10 +883,10 @@ static void net_test(HWND h) {
     /* "Result:" is a STABLE PREFIX: agent needles prefix-match, so the
      * e2e can wait on this STATIC across every outcome text. */
     SetWindowText(stat, "Result: testing...");
+    SetWindowText(GetDlgItem(h, ID_NETDET), "");
     int fd = __http_open("GET", url, "", 0, 0, 3000, 3000);
     if (fd < 0) {
-        snprintf(msg, sizeof msg, "Result: open failed: %s", strerror(errno));
-        SetWindowText(stat, msg);
+        net_fail(h, "open failed", errno);
         return;
     }
     int status = 0;
@@ -837,8 +901,7 @@ static void net_test(HWND h) {
         if (errno != EAGAIN && errno != EINTR) break;
         usleep(50 * 1000);
     }
-    snprintf(msg, sizeof msg, "Result: no answer: %s", strerror(errno));
-    SetWindowText(stat, msg);
+    net_fail(h, "no answer", errno);
     close(fd);
 }
 
@@ -861,16 +924,21 @@ static LRESULT CALLBACK net_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                        152, 112, 132, 30, h, (HMENU)ID_NETTEST, NULL, NULL);
         CreateWindowEx(0, "STATIC", "Result: (not tested)", WS_CHILD | WS_VISIBLE,
                        16, 164, 352, 28, h, (HMENU)ID_NETSTAT, NULL, NULL);
+        /* The verdict detail line (#362): the actionable second sentence
+         * when a Test failure is the BROWSER's doing, not the bridge's
+         * (net_fail) — empty otherwise. */
+        CreateWindowEx(0, "STATIC", "", WS_CHILD | WS_VISIBLE,
+                       16, 192, 352, 28, h, (HMENU)ID_NETDET, NULL, NULL);
         /* The seam, stated honestly: the bridge is NOT part of this OS.
          * It is a program on the host machine, and in the browser deploy
          * the user must run it themselves (it lends the OS the host's
          * un-CORS-gated network). */
         CreateWindowEx(0, "STATIC", "The bridge is a program on your host machine.",
-                       WS_CHILD | WS_VISIBLE, 16, 198, 352, 28, h, NULL, NULL, NULL);
-        CreateWindowEx(0, "STATIC", "You must run it there yourself:",
                        WS_CHILD | WS_VISIBLE, 16, 226, 352, 28, h, NULL, NULL, NULL);
-        CreateWindowEx(0, "STATIC", "  node tools/net-bridge.js",
+        CreateWindowEx(0, "STATIC", "You must run it there yourself:",
                        WS_CHILD | WS_VISIBLE, 16, 254, 352, 28, h, NULL, NULL, NULL);
+        CreateWindowEx(0, "STATIC", "  node tools/net-bridge.js",
+                       WS_CHILD | WS_VISIBLE, 16, 282, 352, 28, h, NULL, NULL, NULL);
         net_sync(h);
         return 0;
     case WM_COMMAND:
@@ -929,7 +997,7 @@ APP_DEF[APP_N] = {
     { "CplSaver",    saver_proc,    336, 212 },
     { "CplKeyboard", keyboard_proc, 496, 368 },
     { "CplDefProg",  defprog_proc,  560, 326 },
-    { "CplNetwork",  net_proc,      384, 292 },
+    { "CplNetwork",  net_proc,      384, 320 },
 };
 
 static void open_applet(int i) {

@@ -345,6 +345,12 @@ self.onmessage = function (e) {
     // pause is not automatable in Playwright — freeze the clock instead
     // and let the test watch every wake counter go flat.
     if (compositor) compositor.setFrozen(!!m.on);
+  } else if (m.type === 'net-probe') {
+    // The page's bridge-reachability verdict (#362): what the WINDOW
+    // context measured about the loopback hop — permission state + a
+    // /health fetch — recorded at /run/net-status for in-OS consumers
+    // (the Network applet's Test button reads it on failure).
+    OS_COMMON.writeNetStatus(kfs, m);
   }
 };
 
@@ -879,7 +885,14 @@ async function boot() {
   // The net-bridge toggle rides the same watchPath choke (ticket #349):
   // a settled write to any `net` store layer — the Network applet's
   // checkbox, an /etc/net edit — retargets the NEXT transfer, no reboot.
-  OS_COMMON.netFetchAttach(netFetch, kernel, kfs);
+  // The onChange announce (#362) mirrors the effective config to the page:
+  // on the shipped https origin only the WINDOW context can raise Chrome's
+  // local-network-access permission prompt (a worker fetch to the loopback
+  // bridge is silently denied without the grant), so os.html probes the
+  // hop page-side and posts the verdict back (net-probe, below).
+  OS_COMMON.netFetchAttach(netFetch, kernel, kfs, function (cfg) {
+    post({ type: 'net-config', on: cfg.on, url: cfg.url });
+  });
 
   // The WM control plane (todos/0014): the kernel-owned endpoint first, then
   // /bin/wm as a kernel service after pid 1. Failure is non-fatal by design —

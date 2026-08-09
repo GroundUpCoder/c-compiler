@@ -506,6 +506,36 @@ function compile(name, src) {
     'wmctl click "Test Bridge"',
     'wmctl wait label "Result: bridge answered: HTTP 200" 8000',
     'echo NETTEST-OK',
+    // #362 leg C2: the honest failure verdict. A dead bridge and a
+    // browser-denied loopback hop are both ENETUNREACH kernel-side; the
+    // applet breaks the tie with the embedder PAGE's /run/net-status
+    // verdict — planted by hand here (headless has no page to write it;
+    // the browser writer path is tests/browser/os-netbridge-https.mjs
+    // territory). Port 1 is a prompt connect refusal. The label waits ARE
+    // the assertions (exact-match agent needles; a timeout is a loud
+    // driveBoot failure).
+    // Sub-case order is load-bearing: consecutive expected labels must
+    // DIFFER, or a wait is satisfied by the previous verdict's stale text.
+    `printf 'bridge on\\nurl http://127.0.0.1:1\\n' > /etc/net`,
+    `printf 'origin https://groundupcoder.com\\npermission denied\\nhealth fail\\n' > /run/net-status`,
+    'wmctl click "Test Bridge"',
+    'wmctl wait label "Result: blocked by the browser, not the bridge" 8000',
+    // A LOCAL page origin never blames the browser: Chrome reports the
+    // permission 'prompt' there while gating nothing (local->local is
+    // exempt — measured in the os-gucman.mjs bridge leg), so a dead
+    // bridge stays a dead bridge.
+    `printf 'origin http://localhost:3252\\npermission prompt\\nhealth ok\\n' > /run/net-status`,
+    'wmctl click "Test Bridge"',
+    'wmctl wait label "Result: no answer: Network is unreachable" 8000',
+    `printf 'origin https://groundupcoder.com\\npermission unsupported\\nhealth fail\\n' > /run/net-status`,
+    'wmctl click "Test Bridge"',
+    'wmctl wait label "Result: unreachable from an https origin" 8000',
+    // No verdict file (headless boots, bridge never enabled): the generic
+    // errno text stands — the pre-#362 behaviour, unchanged.
+    'rm /run/net-status',
+    'wmctl click "Test Bridge"',
+    'wmctl wait label "Result: no answer: Network is unreachable" 8000',
+    'echo NETTEST-HONEST-OK',
     'exit',
   ], { image });
   const countAfter = await bridgeCount(bridgeBase);
@@ -516,6 +546,8 @@ function compile(name, src) {
     countAfter - countBefore === 1, countBefore + ' -> ' + countAfter);
   check('leg C: the applet Test Bridge round-trip reported HTTP 200',
     boot.stdout.includes('NETTEST-OK'), JSON.stringify(boot.stdout.slice(-200)));
+  check('leg C2 (#362): Test reports the page verdict — browser-blocked / https-origin / generic',
+    boot.stdout.includes('NETTEST-HONEST-OK'), JSON.stringify(boot.stdout.slice(-200)));
 
   bridgeProc.kill();
   target.close();

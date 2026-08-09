@@ -226,6 +226,30 @@ try {
     const count2 = await bridgeCount(bridgeBase);
     check('#391 which-path proof: /fetch counter untouched by the install',
       count2 === count1, count1 + ' -> ' + count2);
+
+    // #362: the page-side bridge probe PIPELINE, in a real browser boot —
+    // enabling the bridge made the kernel worker announce net-config,
+    // os.html's window-context probe ran, and the verdict landed at
+    // /run/net-status. The headless e2e can only PLANT that file (no page
+    // exists there); this is the one place the real writer runs. On this
+    // http origin the hop is local->local, so no permission gate applies
+    // and health must be ok (the bridge is live). The platform-BLOCKED
+    // half of the story is os-netbridge-https.mjs's.
+    let probe = null;
+    for (let i = 0; i < 50 && !(probe && probe.health === 'ok'); i++) {
+      probe = await page.evaluate(() => window.__osNetProbe || null);
+      if (!probe || probe.health !== 'ok') await new Promise((r) => setTimeout(r, 200));
+    }
+    check('#362 page probe ran and reached the bridge (window.__osNetProbe)',
+      !!probe && probe.health === 'ok', JSON.stringify(probe));
+    await page.keyboard.type('cat /run/net-status; echo NS-""DONE\r');
+    await waitOut('NS-DONE', 20000);
+    const nsout = await page.evaluate(() => window.__osOut);
+    const nsTail = nsout.slice(Math.max(0, nsout.indexOf('NS-DONE') - 400),
+                               nsout.indexOf('NS-DONE'));
+    check('#362 /run/net-status recorded by the kernel worker (origin + health)',
+      /origin http:\/\/(localhost|127\.0\.0\.1):\d+/.test(nsTail) && /health ok/.test(nsTail),
+      JSON.stringify(nsTail.slice(-200)));
   } finally {
     try { bridge.kill(); } catch (e) { /* already gone */ }
   }
