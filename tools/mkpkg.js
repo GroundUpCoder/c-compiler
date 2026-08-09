@@ -856,6 +856,23 @@ async function buildPackage(name, poolDir, sharedPool, synth) {
       }
     }
   }
+  // postinst/prerm (#74): the build-time twin of gucman's install-time
+  // checks — the named script must be a FILE member of the assembled
+  // payload and pass the runnable peek (#! or wasm magic), so a def author
+  // learns of a typo or a shebang-less script here, not at first install.
+  for (const key of ['postinst', 'prerm']) {
+    if (pkg[key] === undefined) continue;
+    const member = payload.find((m) => m.name === `opt/${name}/${pkg[key]}`);
+    if (!member || member.dir) {
+      throw new Error(`package '${name}': ${key} ${pkg[key]} names no file in the assembled payload`);
+    }
+    const h = member.data;
+    const runnable = (h.length >= 2 && h[0] === 0x23 && h[1] === 0x21) ||
+      (h.length >= 4 && h[0] === 0 && h[1] === 0x61 && h[2] === 0x73 && h[3] === 0x6d);
+    if (!runnable) {
+      throw new Error(`package '${name}': ${key} ${pkg[key]} is not runnable (must start with '#!' or wasm magic)`);
+    }
+  }
   // The ONE control.json producer (os-common packageControl) — the same
   // bytes foldPackages bakes at /usr/opt/<name>/control.json, so installed
   // and built-in packages present an identical manifest.

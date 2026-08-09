@@ -1181,7 +1181,20 @@ function packageControl(pkg, label) {
     control.srclib = { include: sl.include, src: sl.src };
   }
   if (pkg.seed !== undefined) control.seed = validateSeedShape(pkg.seed, label);
+  // postinst/prerm (#74): payload-relative script paths, run by gucman at
+  // the install/remove transaction edges. Path shape is validated here; the
+  // payload reference and the runnable magic are the caller's cross-checks
+  // (mkpkg, against the assembled tar), and foldPackages refuses script-
+  // carrying defs outright before ever reaching this producer.
+  if (pkg.postinst !== undefined) control.postinst = validateScriptRel(pkg.postinst, label, 'postinst');
+  if (pkg.prerm !== undefined) control.prerm = validateScriptRel(pkg.prerm, label, 'prerm');
   return control;
+}
+
+function validateScriptRel(v, label, key) {
+  if (typeof v !== 'string' || !validRelPath(v))
+    throw new Error(label + ': ' + key + ' must be a safe payload-relative path — got ' + JSON.stringify(v));
+  return v;
 }
 
 function packageControlText(pkg, label) {
@@ -1378,6 +1391,12 @@ function foldPackages(fsMod, pathMod, rootDir, manifest, which, opts) {
     if (pkg.name !== name)
       throw new Error('packages/' + name + '.json declares name ' + JSON.stringify(pkg.name));
     checkReservedPackageFiles(pkg, "package '" + name + "'");
+    // postinst/prerm (#74): a baked package never runs an install
+    // transaction, so its scripts would silently never run — folding one
+    // would ship it unconfigured. Script-carrying packages are install-only.
+    if (pkg.postinst !== undefined || pkg.prerm !== undefined)
+      throw new Error("package '" + name + "': carries postinst/prerm scripts and cannot be folded " +
+        'into the baked image — scripts run only in a real gucman install transaction (#74)');
     var bin = pkg.bin || {};
     var base = '/usr/opt/' + name;
     pushDir('/usr/opt');

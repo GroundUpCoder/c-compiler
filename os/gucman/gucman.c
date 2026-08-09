@@ -27,9 +27,43 @@
  * files COPIED into /root as the user's own, never symlinked — see the
  * seed section below); install records the
  * EXACT planted list in the install DB /var/lib/gucman/<name>.json and
- * remove replays that record in reverse. No custom scripts in Slice 1
- * (postinst/prerm are a reserved narrow escape hatch, not yet implemented —
- * a control.json carrying them is refused loudly rather than half-run).
+ * remove replays that record in reverse.
+ *
+ * The postinst/prerm script hatch (ticket #74 — the narrow escape valve
+ * Slice 1 reserved): control.json may name two optional payload-relative
+ * scripts. They are ORDINARY payload members (sha256-verified with the
+ * payload, validated by the same tar rules, recorded in `files` like any
+ * other plant — never inline strings, which would be a second content
+ * channel outside the recorded plant). Contract: argv[1] is the verb
+ * ("install"/"remove"; an upgrade verb can slot in later), cwd is
+ * /opt/<name>, env is the canonical desktop pair (PATH=/usr/local/bin:/bin,
+ * HOME=/root — launch.h's LAUNCH_ENV values), stdio is inherited so script
+ * output IS the progress UI, and a wall-clock bound (GM_SCRIPT_TIMEOUT_MS,
+ * overridable via the GUCMAN_SCRIPT_TIMEOUT_MS env var — the test seam)
+ * SIGKILLs a hung script. Ordering + failure semantics:
+ *   - postinst runs AFTER the whole declarative plant and BEFORE the DB
+ *     write. Failure/timeout rolls the install back COMPLETELY (gm_unwind),
+ *     so the DB stays binary: record exists <=> correctly installed. A
+ *     crash after postinst but before the DB write leaves a recordless
+ *     /opt/<name>; the next install sweeps it and re-runs the script —
+ *     scripts must tolerate re-running.
+ *   - prerm runs FIRST in remove, while the package is fully intact.
+ *     Failure/timeout warns loudly and the removal CONTINUES (an
+ *     unremovable package is worse than a dirty one). A crash after prerm
+ *     leaves the DB record; re-running remove re-runs prerm.
+ *   - a script's side effects OUTSIDE the recorded plant are its own
+ *     responsibility: gucman can only unwind what it tracks. A postinst
+ *     that creates state must ship the prerm that removes it (a leftover
+ *     under /opt/<name> surfaces as remove's "kept — files not planted by
+ *     gucman remain" message).
+ * HONESTY: this is NOT a sandbox — gucOS has no such primitive. The script
+ * runs with gucman's full authority. What IS constrained: provenance
+ * (sha256 against the index before extraction), a build-time and
+ * install-time runnable check (#!/wasm magic, refused before anything
+ * publishes), the fixed argv/env/cwd contract, the wall-clock bound, and
+ * exit-status capture. foldPackages refuses a script-carrying definition:
+ * a baked package never runs an install transaction, so folding one would
+ * ship it silently unconfigured.
  *
  * Safety invariants (the engine, not per-package policy):
  *   - sha256 is verified against the index BEFORE anything is extracted;
@@ -58,11 +92,14 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
+#include <spawn.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <curl/curl.h>
@@ -94,6 +131,7 @@
 #define GM_SYNC_STATUS  "/run/gucman-sync.status" /* #419: sync outcome record */
 #define GM_NAME_MAX     64
 #define GM_PATH_MAX     768
+#define GM_SCRIPT_TIMEOUT_MS 120000     /* postinst/prerm wall-clock bound (#74) */
 
 /* ======================= small file/string helpers ===================== */
 
@@ -867,6 +905,122 @@ static void gm_seed_ev(int ev, const char *path, void *ud) {
     }
 }
 
+/* ================= postinst/prerm script hatch (#74) =================== */
+
+/* The ow_is_runnable peek (openwith.h — not included here; that header is
+ * the whole association resolver): a file whose first bytes are wasm magic
+ * or a #! line is spawnable, anything else is refused BEFORE it can run. */
+static int gm_runnable(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    unsigned char b[4];
+    size_t n = fread(b, 1, 4, f);
+    fclose(f);
+    if (n >= 4 && b[0] == 0 && b[1] == 'a' && b[2] == 's' && b[3] == 'm') return 1;
+    if (n >= 2 && b[0] == '#' && b[1] == '!') return 1;
+    return 0;
+}
+
+static int gm_script_timeout_ms(void) {
+    const char *e = getenv("GUCMAN_SCRIPT_TIMEOUT_MS");     /* the test seam */
+    if (e && *e) {
+        int v = atoi(e);
+        if (v > 0) return v;
+    }
+    return GM_SCRIPT_TIMEOUT_MS;
+}
+
+/* Resolve + validate one script field ("postinst"/"prerm") against the
+ * STAGED tree, before anything publishes. Absent -> 0 with out[0] == 0;
+ * present and valid -> 0 with out = the FINAL /opt/<name>/<rel> path;
+ * malformed / missing / not runnable -> -1, loudly. */
+static int gm_script_field(cJSON *control, const char *key, const char *name,
+                           const char *stagedir, char *out, size_t cap) {
+    out[0] = 0;
+    cJSON *s = cJSON_GetObjectItemCaseSensitive(control, key);
+    if (!s) return 0;
+    if (!cJSON_IsString(s) || !gm_safe_rel(s->valuestring)) {
+        fprintf(stderr, "gucman: '%s' has a malformed %s entry — refusing\n", name, key);
+        return -1;
+    }
+    char staged[GM_PATH_MAX];
+    if (snprintf(staged, sizeof staged, "%s/%s", stagedir, s->valuestring) >= (int)sizeof staged ||
+        snprintf(out, cap, GM_OPT_DIR "/%s/%s", name, s->valuestring) >= (int)cap) {
+        fprintf(stderr, "gucman: '%s' %s path too long — refusing\n", name, key);
+        return -1;
+    }
+    struct stat st;
+    if (stat(staged, &st) != 0 || !S_ISREG(st.st_mode)) {
+        fprintf(stderr, "gucman: '%s' %s %s names no packaged file — refusing\n",
+                name, key, s->valuestring);
+        return -1;
+    }
+    if (!gm_runnable(staged)) {
+        fprintf(stderr, "gucman: '%s' %s %s is not runnable (no #! line or wasm magic) — refusing\n",
+                name, key, s->valuestring);
+        return -1;
+    }
+    return 0;
+}
+
+/* Run one package script synchronously: the cmdalt.c spawn-and-wait shape
+ * (posix_spawn — the kernel's #! re-dispatch runs the interpreter line —
+ * then reap), with a WNOHANG poll instead of a blocking waitpid so the
+ * wall-clock bound can SIGKILL a hung script (there is no SIGALRM to lean
+ * on; the 50 ms tick is a bounded supervision poll, not a sync primitive).
+ * The child inherits gucman's stdio (script output IS the progress UI) and
+ * pgroup (a tty ^C reaches it), gets the fixed verb argv and the canonical
+ * desktop env, and runs with cwd /opt/<name>. Returns 0 only for exit(0);
+ * every other outcome is reported here, loudly, with its cause. */
+static int gm_run_script(const char *path, const char *verb, const char *name) {
+    char cwd[GM_PATH_MAX], pdir[GM_PATH_MAX];
+    snprintf(pdir, sizeof pdir, GM_OPT_DIR "/%s", name);
+    if (!getcwd(cwd, sizeof cwd)) cwd[0] = 0;
+    if (chdir(pdir) != 0) {
+        fprintf(stderr, "gucman: %s %s: chdir %s: %s\n", name, verb, pdir, strerror(errno));
+        return -1;
+    }
+    char *argv[3] = { (char *)path, (char *)verb, 0 };
+    static char *const envp[] = { "PATH=/usr/local/bin:/bin", "HOME=/root", 0 };
+    pid_t pid;
+    int rc = posix_spawn(&pid, path, 0, 0, argv, envp);
+    /* the spawn snapshot took the child's cwd; restore ours right away */
+    if (cwd[0]) chdir(cwd);
+    if (rc != 0) {
+        fprintf(stderr, "gucman: running %s: %s\n", path, strerror(rc));
+        return -1;
+    }
+    int timeout = gm_script_timeout_ms(), waited = 0, status = 0;
+    for (;;) {
+        pid_t r = waitpid(pid, &status, WNOHANG);
+        if (r == pid) break;
+        if (r < 0 && errno != EINTR) {
+            fprintf(stderr, "gucman: waitpid %s: %s\n", path, strerror(errno));
+            return -1;
+        }
+        if (waited >= timeout) {
+            fprintf(stderr, "gucman: %s script %s did not finish within %d ms — killing it\n",
+                    verb, path, timeout);
+            kill(pid, SIGKILL);
+            while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+            return -1;
+        }
+        usleep(50 * 1000);
+        waited += 50;
+    }
+    if (WIFSIGNALED(status)) {
+        fprintf(stderr, "gucman: %s script %s was killed by signal %d\n",
+                verb, path, WTERMSIG(status));
+        return -1;
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        fprintf(stderr, "gucman: %s script %s exited %d\n",
+                verb, path, WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+        return -1;
+    }
+    return 0;
+}
+
 /* The ONE report for every way index.json can fail to parse — naming WHICH
  * one it was (ticket #456). The old text was the bare sentence "gucman:
  * index.json is not valid JSON", which reads as "this repository is
@@ -1044,16 +1198,22 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
         cJSON_Delete(db);
         return -1;
     }
-    /* Slice 1 has no script hatch — refuse rather than half-honor one. */
-    if (cJSON_GetObjectItemCaseSensitive(control, "postinst") ||
-        cJSON_GetObjectItemCaseSensitive(control, "prerm")) {
-        fprintf(stderr, "gucman: '%s' carries postinst/prerm scripts, which this gucman does not run — refusing\n", name);
+    /* The #74 script hatch: validate both fields against the STAGED tree —
+     * a malformed, missing or non-runnable script refuses the install with
+     * nothing published (only staging to sweep). The FINAL paths go into
+     * the DB record: remove replays the RECORD, never the manifest, and
+     * `gucman info` can tell the truth about what hooks a package carries. */
+    char post_path[GM_PATH_MAX], prerm_path[GM_PATH_MAX];
+    if (gm_script_field(control, "postinst", name, stage, post_path, sizeof post_path) != 0 ||
+        gm_script_field(control, "prerm", name, stage, prerm_path, sizeof prerm_path) != 0) {
         fo_delete(stage);
         free(control_text);
         cJSON_Delete(control);
         cJSON_Delete(db);
         return -1;
     }
+    if (post_path[0]) cJSON_AddStringToObject(db, "postinst", post_path);
+    if (prerm_path[0]) cJSON_AddStringToObject(db, "prerm", prerm_path);
     /* Materialize the VERIFIED manifest at /opt/<name>/control.json (written
      * into the staging dir, so it publishes atomically with the tree and is
      * recorded in db_files like any other planted file). This is the twin of
@@ -1420,6 +1580,21 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
         }
     }
 
+    /* postinst (#74): the LAST act before the DB write — the whole
+     * declarative plant is in place, so the script sees the package exactly
+     * as a user would. A failure/timeout joins the plant-failure path below
+     * and unwinds EVERYTHING (the DB stays binary: record <=> installed).
+     * A crash right after the script leaves a recordless /opt/<name>, which
+     * the next install sweeps and re-runs — scripts must tolerate re-runs. */
+    if (!fail && post_path[0]) {
+        printf("gucman: running %s postinst...\n", name);
+        fflush(stdout);
+        if (gm_run_script(post_path, "install", name) != 0) {
+            fprintf(stderr, "gucman: '%s' postinst failed — rolling back the install\n", name);
+            fail = 1;
+        }
+    }
+
     if (fail) {
         gm_unwind(name, &undo);
         cJSON_Delete(control);
@@ -1495,6 +1670,23 @@ static int cmd_remove(const char *name) {
     if (!db) {
         fprintf(stderr, "gucman: %s is not installed\n", name);
         return 1;
+    }
+    /* prerm (#74) runs FIRST, while the package is fully intact — the
+     * script may need the package's own files. Failure or timeout is loud
+     * but NEVER blocks the removal (an unremovable package is worse than a
+     * dirty one); a crash after prerm leaves the DB record, so re-running
+     * remove re-runs prerm. */
+    cJSON *jprerm = cJSON_GetObjectItemCaseSensitive(db, "prerm");
+    if (cJSON_IsString(jprerm)) {
+        if (!gm_exists(jprerm->valuestring)) {
+            fprintf(stderr, "gucman: %s prerm %s is gone — skipped\n",
+                    name, jprerm->valuestring);
+        } else {
+            printf("gucman: running %s prerm...\n", name);
+            fflush(stdout);
+            if (gm_run_script(jprerm->valuestring, "remove", name) != 0)
+                fprintf(stderr, "gucman: '%s' prerm failed — removing anyway\n", name);
+        }
     }
     /* Replay the recorded plant in reverse install order. ENOENT along the
      * way is fine — a crashed remove re-runs to completion. */
@@ -1909,6 +2101,10 @@ static int cmd_info(const char *name) {
         gm_info_strings(db, "include_entries", "include entries:");
         gm_info_strings(db, "src_namespaces", "source namespaces:");
         gm_info_seeds(db);
+        cJSON *ps = cJSON_GetObjectItemCaseSensitive(db, "postinst");
+        cJSON *pr = cJSON_GetObjectItemCaseSensitive(db, "prerm");
+        if (cJSON_IsString(ps)) printf("%-11s%s\n", "postinst:", ps->valuestring);
+        if (cJSON_IsString(pr)) printf("%-11s%s\n", "prerm:", pr->valuestring);
     }
     cJSON_Delete(db);
     cJSON_Delete(index);
