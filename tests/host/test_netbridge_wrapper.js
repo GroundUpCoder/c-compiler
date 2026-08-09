@@ -26,6 +26,14 @@
 //   D. the REAL tools/net-bridge.js: an over-cap body gets a clean 413
 //      through the wrapper (drain, not destroy), and a disallowed-origin
 //      request gets a CORS-readable 403 after a passing preflight.
+//   E. ticket #391 path selection under a mocked `location`: same-origin
+//      targets (relative AND absolute) take the BASE fetch even with the
+//      bridge ON — proven by WHICH url the counting base fetch received,
+//      not by "it worked" — off-origin targets go bridged with x-guc-url
+//      ABSOLUTIZED, an opaque location origin never matches, no location
+//      (headless) means no passthrough (relative stays a loud EINVAL —
+//      the strict-subset invariant), and bridge OFF stays an exact-args
+//      tail call.
 //
 // Run: node tests/host/test_netbridge_wrapper.js
 'use strict';
@@ -213,11 +221,116 @@ async function legD() {
   }
 }
 
+async function legE() {
+  console.log('--- leg E (#391): same-origin passthrough / off-origin absolutization / headless subset');
+  // The wrapper posts bridged requests through the SAME base fetch it
+  // passes same-origin traffic to, so a recording base is the one
+  // discriminator that proves WHICH path a call took: passthrough hands
+  // base the caller's original url; the bridged path hands it
+  // `<bridge>/fetch` and the target only ever appears in x-guc-url.
+  let seenUrl = null;   // x-guc-url the fake bridge received
+  const echo = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      seenUrl = req.headers['x-guc-url'];
+      res.writeHead(200, { 'x-guc-status': '200', 'x-guc-headers': '[]' });
+      res.end();
+    });
+  });
+  const port = await listen(echo);
+
+  const baseCalls = [];
+  const SENTINEL = { sentinel: true };
+  const countingBase = (url, init) => {
+    baseCalls.push(url + '');
+    if ((url + '').startsWith('http://127.0.0.1:' + port)) return fetch(url, init);
+    return Promise.resolve(SENTINEL);   // passthrough traffic never leaves the mock
+  };
+  const f = OS_COMMON.createNetFetch(countingBase);
+  f._state.on = true;
+  f._state.url = 'http://127.0.0.1:' + port;
+
+  const ORIGIN = 'http://10.9.9.9:7777';   // never 127.0.0.1: must not collide with the bridge
+  globalThis.location = { href: ORIGIN + '/os.html', origin: ORIGIN };
+  try {
+    // Same-origin RELATIVE (jku's exact case: gucman's /packages/index.json).
+    let got = await f('/packages/index.json', {});
+    check('bridge ON + same-origin relative url: the BASE fetch ran, with the caller\'s exact url',
+      got === SENTINEL && baseCalls.length === 1 && baseCalls[0] === '/packages/index.json',
+      JSON.stringify(baseCalls));
+    check('...and the bridge never saw it', seenUrl === null, seenUrl);
+
+    // Same-origin ABSOLUTE: same passthrough.
+    got = await f(ORIGIN + '/abs', {});
+    check('bridge ON + same-origin absolute url: still the base fetch',
+      got === SENTINEL && baseCalls[1] === ORIGIN + '/abs' && seenUrl === null,
+      JSON.stringify(baseCalls));
+
+    // Off-origin, non-absolute form (protocol-relative — the one relative
+    // shape that resolves OFF-origin): bridged, and x-guc-url is the
+    // ABSOLUTIZED serialization. Pre-#391 this was an EINVAL (new URL
+    // with no base throws on '//host/path').
+    let r = await f('//example.com/pkg', {});
+    check('bridge ON + off-origin protocol-relative url: bridged, x-guc-url absolutized',
+      r.status === 200 && seenUrl === 'http://example.com/pkg',
+      'x-guc-url=' + seenUrl);
+    check('...via the bridge endpoint, not passthrough',
+      baseCalls[2] === 'http://127.0.0.1:' + port + '/fetch', JSON.stringify(baseCalls));
+
+    // Off-origin absolute: bridged, untouched.
+    seenUrl = null;
+    r = await f('http://example.com/other', {});
+    check('bridge ON + off-origin absolute url: bridged verbatim',
+      r.status === 200 && seenUrl === 'http://example.com/other', seenUrl);
+
+    // An opaque origin must never satisfy the same-origin test.
+    globalThis.location = { href: ORIGIN + '/os.html', origin: 'null' };
+    seenUrl = null;
+    r = await f(ORIGIN + '/opaque', {});
+    check('opaque (\'null\') location origin: no passthrough, goes bridged',
+      r.status === 200 && seenUrl === ORIGIN + '/opaque', seenUrl);
+
+    // Bridge OFF with a location: the exact-args tail call is unchanged
+    // (relative url handed through untouched, no resolution).
+    globalThis.location = { href: ORIGIN + '/os.html', origin: ORIGIN };
+    f._state.on = false;
+    got = await f('/packages/index.json', {});
+    check('bridge OFF: exact-args tail call to base, url untouched',
+      got === SENTINEL && baseCalls[baseCalls.length - 1] === '/packages/index.json',
+      JSON.stringify(baseCalls.slice(-1)));
+    f._state.on = true;
+  } finally {
+    delete globalThis.location;
+  }
+
+  // Headless (no location): NO passthrough. A relative url keeps failing
+  // loudly — EINVAL naming the url, never a silent success and never a
+  // bridge transit (the strict-subset invariant).
+  seenUrl = null;
+  const callsBefore = baseCalls.length;
+  let r = await errOf(f('/packages/index.json', {}));
+  check('no location + relative url: loud EINVAL naming the url (subset invariant)',
+    r.errno === 'EINVAL' && /invalid target url/.test(r.message)
+      && /\/packages\/index\.json/.test(r.message),
+    r.errno + ':' + r.message);
+  check('no location + relative url: nothing fetched, bridge never saw it',
+    seenUrl === null && baseCalls.length === callsBefore, JSON.stringify(baseCalls.slice(callsBefore)));
+
+  // Headless + absolute url: still bridged (nothing regressed for the
+  // urls that always worked).
+  r = await f('http://example.com/headless', {});
+  check('no location + absolute url: bridged as ever',
+    r.status === 200 && seenUrl === 'http://example.com/headless', seenUrl);
+
+  await new Promise((ok) => echo.close(ok));
+}
+
 async function main() {
   await legA();
   await legB();
   await legC();
   await legD();
+  await legE();
   console.log(failures ? failures + ' FAILURE(S)' : 'all netbridge-wrapper checks passed');
   process.exit(failures ? 1 : 0);
 }
