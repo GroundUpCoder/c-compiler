@@ -288,8 +288,10 @@ async function main() {
     'echo ==okinstall',
     'gucman install hatch-ok 2>&1; echo RC=$?',
     'cat /root/hatch.log',
-    'grep -o "\\"postinst\\": \\"/opt/hatch-ok/postinst\\"" /var/lib/gucman/hatch-ok.json',
-    'grep -o "\\"prerm\\": \\"/opt/hatch-ok/prerm\\"" /var/lib/gucman/hatch-ok.json',
+    // cJSON_Print separates key and value with ':' + TAB, not ': ' — match any
+    // separator but still demand the exact quoted path on the key's line.
+    'grep -o "\\"postinst\\":.*\\"/opt/hatch-ok/postinst\\"" /var/lib/gucman/hatch-ok.json',
+    'grep -o "\\"prerm\\":.*\\"/opt/hatch-ok/prerm\\"" /var/lib/gucman/hatch-ok.json',
     'echo ==okinfo',
     'gucman info hatch-ok 2>/dev/null',
     'echo ==okremove',
@@ -335,9 +337,9 @@ async function main() {
   check('postinst ran with verb "install" and cwd /opt/hatch-ok',
     ok.includes('postinst:install:/opt/hatch-ok'), ok);
   check('DB records the postinst path',
-    ok.includes('"postinst": "/opt/hatch-ok/postinst"'), ok);
+    /"postinst":\s*"\/opt\/hatch-ok\/postinst"/.test(ok), ok);
   check('DB records the prerm path',
-    ok.includes('"prerm": "/opt/hatch-ok/prerm"'), ok);
+    /"prerm":\s*"\/opt\/hatch-ok\/prerm"/.test(ok), ok);
 
   const info = section(out, 'okinfo');
   check('info shows the postinst script', /^postinst:\s+\/opt\/hatch-ok\/postinst/m.test(info), info);
