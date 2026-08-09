@@ -796,6 +796,64 @@ function nativeSiblingProducer(req) {
   return p.length ? p : null;
 }
 
+/* ---- sibling definition-source discovery (#614, design §7) ----
+ *
+ * resolveSiblingRepo(fsMod, pathMod, rootDir, name, opts) -> { root, via } | null
+ * Where a sibling checkout (gucos-packages is the intended resident) lives
+ * relative to THIS c-compiler tree. The naive `<rootDir>/../<name>` is wrong
+ * from a linked git worktree — `~/worktree/c-compiler/<slug>/../<name>` is a
+ * sibling of the SLUG, not of the clone — and deploys build from exactly such
+ * a worktree, so the resolution is explicit and ordered:
+ *   1. opts.env (an explicit override, e.g. GUCOS_PACKAGES=): returned
+ *      verbatim WITHOUT an existence check — an explicit override that is
+ *      wrong must fail loudly at the caller, never silently fall through to
+ *      a discovered candidate (the cmdalt no-silent-fallback rule).
+ *   2. the MAIN clone's sibling: rootDir's main worktree root is derived from
+ *      the `.git` gitdir pointer (a linked worktree's `.git` is a file naming
+ *      `<main>/.git/worktrees/<slug>`), and the candidate is
+ *      `<mainRoot>/../<name>`.
+ *   3. the naive sibling `<rootDir>/../<name>` (the two coincide when rootDir
+ *      IS the main clone).
+ * Discovery candidates (2/3) must exist as directories; none found -> null,
+ * and whether null is an error (comguc: mandatory) or a quiet no-op (a dev
+ * box without the checkout) is the CALLER's policy. Node-only (statSync). */
+function mainWorktreeRoot(fsMod, pathMod, rootDir) {
+  var dotGit = pathMod.join(rootDir, '.git');
+  var st;
+  try { st = fsMod.statSync(dotGit); } catch (e) { return null; }   // not a git tree
+  if (st.isDirectory()) return rootDir;
+  if (!st.isFile()) return null;
+  var m;
+  try { m = /^gitdir:\s*(.+?)\s*$/m.exec(fsMod.readFileSync(dotGit, 'utf-8')); }
+  catch (e) { return null; }
+  if (!m) return null;
+  var gitdir = pathMod.resolve(rootDir, m[1]);   // may be relative to rootDir
+  // <mainRoot>/.git/worktrees/<slug> -> <mainRoot>; anything else is not a
+  // linked-worktree pointer we can interpret.
+  var parts = gitdir.split(pathMod.sep);
+  var i = parts.lastIndexOf('worktrees');
+  if (i < 2 || parts[i - 1] !== '.git') return null;
+  return parts.slice(0, i - 1).join(pathMod.sep) || pathMod.sep;
+}
+function resolveSiblingRepo(fsMod, pathMod, rootDir, name, opts) {
+  opts = opts || {};
+  if (opts.env) return { root: pathMod.resolve(opts.env), via: 'env' };
+  var cands = [];
+  var main = mainWorktreeRoot(fsMod, pathMod, rootDir);
+  if (main) cands.push({ root: pathMod.join(pathMod.dirname(main), name), via: 'main-clone sibling' });
+  cands.push({ root: pathMod.join(pathMod.dirname(pathMod.resolve(rootDir)), name), via: 'sibling' });
+  var seen = {};
+  for (var i = 0; i < cands.length; i++) {
+    var c = cands[i];
+    if (seen[c.root]) continue;
+    seen[c.root] = true;
+    var st;
+    try { st = fsMod.statSync(c.root); } catch (e) { st = null; }
+    if (st && st.isDirectory()) return c;
+  }
+  return null;
+}
+
 function validRelPath(rel) {
   if (typeof rel !== 'string' || !rel.length || rel.charAt(0) === '/') return false;
   var parts = rel.split('/');
@@ -2345,7 +2403,19 @@ var BAKE_INPUT_SKIP = {
   'os.html': 1, 'osk.js': 1, 'boot.js': 1, 'kernel-worker.js': 1,
   'process-worker.js': 1, 'compositor.js': 1,
 };
-function newestBakeInput(fsMod, pathMod, rootDir, manifest) {
+/* opts (all optional):
+ *   defs — ordered definition-source roots (#614, the packageDefSources
+ *          list minus the implicit source 0): a baker that folds sibling
+ *          defs (foldPackages opts.defs) must scan with the SAME roots, or
+ *          a fat blob goes staleness-blind to sibling edits — the bake
+ *          would silently reuse a stale image after a sibling source
+ *          changes. Each root contributes its packages/ dir plus every
+ *          definition's file closure resolved against THAT root (the
+ *          newestPkgInput assetRoot rule). Scanned unconditionally like
+ *          source 0's packages/ — over-invalidating is the cheap
+ *          direction. */
+function newestBakeInput(fsMod, pathMod, rootDir, manifest, opts) {
+  opts = opts || {};
   var newest = { mtimeMs: 0, path: null };
   var seenDirs = {}, seenProjects = {};
   function statFile(p) {
@@ -2374,21 +2444,24 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest) {
     });
   }
   var normalize = normalizeRelPath;   // "a/b/../c" -> "a/c" (buildProject's rule)
-  function addProject(rel) {   // repo-relative bin.json/lib.json path
+  // `root` is the owning source root (#614): source 0 (rootDir) for the
+  // repo's own closures, a defs root for a sibling definition's.
+  function addProject(root, rel) {   // root-relative bin.json/lib.json path
     var n = normalize(rel);
-    if (seenProjects[n]) return;
-    seenProjects[n] = true;
+    var key = root + ' ' + n;
+    if (seenProjects[key]) return;
+    seenProjects[key] = true;
     var dir = n.slice(0, n.lastIndexOf('/'));
-    walk(pathMod.join(rootDir, dir), null);
+    walk(pathMod.join(root, dir), null);
     var proj;
-    try { proj = JSON.parse(fsMod.readFileSync(pathMod.join(rootDir, n), 'utf-8')); } catch (e) { return; }
-    (proj.deps || []).forEach(function (d) { addProject(dir + '/' + d); });
+    try { proj = JSON.parse(fsMod.readFileSync(pathMod.join(root, n), 'utf-8')); } catch (e) { return; }
+    (proj.deps || []).forEach(function (d) { addProject(root, dir + '/' + d); });
     // `deps` was never the only way in (todos/0354): sources/includes/
     // srcRoots reaching outside the project dir are bake inputs too. The
     // os root keeps its runtime-only skip list wherever it is reached from
     // (gucman's `includes: [".."]`), so this can't enrol os.html.
     projectExternalDirs(proj, dir).forEach(function (d) {
-      walk(pathMod.join(rootDir, d), d === 'os' ? BAKE_INPUT_SKIP : null);
+      walk(pathMod.join(root, d), d === 'os' && root === rootDir ? BAKE_INPUT_SKIP : null);
     });
   }
   statFile(pathMod.join(rootDir, 'compiler.js'));
@@ -2406,26 +2479,34 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest) {
   // manifest closure below, so without this an mgp.c edit leaves a fat
   // fixture 'fresh' (found by the ticket #75 consumer red run). Same
   // over-invalidation rule: scanned unconditionally.
-  var pkgDir = pathMod.join(rootDir, 'packages');
-  var pkgNames = [];
-  try { pkgNames = fsMod.readdirSync(pkgDir).filter(function (n) { return /\.json$/.test(n); }); } catch (e) {}
-  pkgNames.forEach(function (n) {
-    var pj;
-    try { pj = JSON.parse(fsMod.readFileSync(pathMod.join(pkgDir, n), 'utf-8')); } catch (e) { return; }
-    var pf = pj.files || {};
-    Object.keys(pf).forEach(function (fp) {
-      if (pf[fp].project !== undefined) addProject(pf[fp].project);
-      if (pf[fp].bin !== undefined) statFile(pathMod.join(rootDir, pf[fp].bin));
-      // `tree` entries: the SAME enumeration that expands the payload
-      // drives the freshness scan, so they agree by construction.
-      if (pf[fp].tree !== undefined) {
-        var tfs;
-        try { tfs = listTreeFiles(fsMod, pathMod, rootDir, pf[fp], n + ': ' + fp); }
-        catch (e) { return; }   // malformed → fails loud in the fold, not here
-        tfs.forEach(function (tf) { statFile(pathMod.join(rootDir, pf[fp].tree, tf)); });
-      }
+  function scanPackagesDir(root) {
+    var pkgDir = pathMod.join(root, 'packages');
+    var pkgNames = [];
+    try { pkgNames = fsMod.readdirSync(pkgDir).filter(function (n) { return /\.json$/.test(n); }); } catch (e) {}
+    pkgNames.forEach(function (n) {
+      var pj;
+      try { pj = JSON.parse(fsMod.readFileSync(pathMod.join(pkgDir, n), 'utf-8')); } catch (e) { return; }
+      var pf = pj.files || {};
+      Object.keys(pf).forEach(function (fp) {
+        if (pf[fp].project !== undefined) addProject(root, pf[fp].project);
+        if (pf[fp].bin !== undefined) statFile(pathMod.join(root, pf[fp].bin));
+        // `tree` entries: the SAME enumeration that expands the payload
+        // drives the freshness scan, so they agree by construction.
+        if (pf[fp].tree !== undefined) {
+          var tfs;
+          try { tfs = listTreeFiles(fsMod, pathMod, root, pf[fp], n + ': ' + fp); }
+          catch (e) { return; }   // malformed → fails loud in the fold, not here
+          tfs.forEach(function (tf) { statFile(pathMod.join(root, pf[fp].tree, tf)); });
+        }
+      });
     });
-  });
+    // The definition FILES are inputs too (source 0's packages/ dir was
+    // already walked above — seenDirs dedups; a defs root gets its walk
+    // here), so a definition edit restales the blob, not just its closure.
+    walk(pkgDir, null);
+  }
+  scanPackagesDir(rootDir);
+  (opts.defs || []).forEach(function (r) { scanPackagesDir(r); });
   // Scan the manifest AS BAKED: foldDesktopDefaults twins the user
   // Desktop set into the system section, so its `bin` blobs (deck/mgp
   // data) are blob bytes now — the scan and the bake agree by
@@ -2434,7 +2515,7 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest) {
   var files = (baked.system && baked.system.files) || {};
   Object.keys(files).forEach(function (fp) {
     var entry = files[fp];
-    if (entry.project !== undefined) addProject(entry.project);
+    if (entry.project !== undefined) addProject(rootDir, entry.project);
     if (entry.bin !== undefined) statFile(pathMod.join(rootDir, entry.bin));
   });
   return newest;
@@ -2845,6 +2926,7 @@ var OS_COMMON = {
   listPackages: listPackages,
   packageDefSources: packageDefSources,
   findPackageDef: findPackageDef,
+  resolveSiblingRepo: resolveSiblingRepo,
   nativeSiblingProducer: nativeSiblingProducer,
   foldPackages: foldPackages,
   foldDesktopDefaults: foldDesktopDefaults,
