@@ -13,7 +13,9 @@
  * user layer):
  *   $HOME/.config/net   per-user (what nc_set writes)
  *   /etc/net            admin override
- *   /usr/share/net      baked default (none is baked — no store = off)
+ *   /usr/share/net      baked default (`bridge off` + the default url is
+ *                       baked since #391, so the layer paths exist; the
+ *                       effective default is off either way)
  * Keys ('#' starts a comment; matching is case-insensitive):
  *   bridge   on | off   Route kernel HTTP transfers through the localhost
  *                       bridge process (tools/net-bridge.js). DEFAULT OFF:

@@ -56,9 +56,10 @@ Tier 2's browser asymmetry (CORS-gated fetch) lifted by an OPT-IN
 localhost proxy: `tools/net-bridge.js`, a single-file dependency-free
 Node process THE USER RUNS THEMSELVES. With the cfgstore `net` setting
 ON (`bridge on`, `url http://127.0.0.1:8199`; layers
-`~/.config/net` > `/etc/net` > `/usr/share/net`, nothing baked —
-**no store at all = off, byte-identical to a build without the
-feature**), the kernel embedder's fetch wrapper (os-common.js
+`~/.config/net` > `/etc/net` > `/usr/share/net` — since #391 the baked
+layer ships `bridge off` + the default url, so the layer paths exist
+and the effective default stays **off, byte-identical to a build
+without the feature**), the kernel embedder's fetch wrapper (os-common.js
 `createNetFetch`, wired identically in kernel-worker.js and boot.js so
 the two embedders never diverge) re-posts every transfer to the bridge,
 which performs the real request with the user's native network identity
@@ -79,6 +80,26 @@ is Tier 4's); Origin allowlist (no-Origin local clients allowed;
 browser origins must match localhost:any-port, the shipped deploy, or
 `--allow-origin`); CORS + Private Network Access preflight answers
 (the platform facts in Tier 4's list apply to the bridge too).
+
+**Same-origin passthrough ruling (ticket #391, decided 2026-08-02,
+landed 2026-08-09).** jku's standing invariant: **bridge ON must be a
+strict superset of bridge OFF; bridge OFF a strict subset that fails
+loudly where unsupported.** The wrapper therefore resolves every target
+against `location.href` when a location exists (the browser embedder):
+a target on the embedder's OWN origin takes the BASE fetch even with
+the bridge explicitly ON, and everything off-origin goes bridged
+ABSOLUTIZED (the relative form a caller used never reaches
+`x-guc-url`). Rationale: the bridge exists to lift CORS and change the
+identity of EXTERNAL egress; a same-origin fetch is never CORS-gated
+and the origin already served the entire OS, so bridging it buys
+nothing while adding real failure modes — a REMOTE bridge
+(net-bridge-ssh) fetches the embedder-origin URL from its own loopback
+(unreachable by construction, which is exactly how the Software
+Manager broke: the shipped repo base is the relative `/packages`), a
+dead-but-enabled bridge takes down the package system, and cookies
+drop. Headless has no `location`: nothing resolves, nothing passes
+through — a relative url fails loudly (EINVAL), the correct
+strict-subset behaviour.
 
 **Errno ruling (settled here, 2026-08-01 — the two documents used to
 disagree and ticket #349's acceptance imported the wrong one).**
@@ -132,8 +153,13 @@ argv and starts nothing.
 
 Tests: `tests/kernel/test_netbridge_e2e.js` (the paired
 positive-control run: OFF/ON/OFF/ON-dead flipped live by one process,
-the bridge's request counter as the discriminator) + the ctlpanel e2e's
-Network-applet leg.
+the bridge's request counter as the discriminator; + the #391
+bridge-ON relative-url headless leg) + `tests/host/
+test_netbridge_wrapper.js` (leg E: path selection under a mocked
+`location` — passthrough/bridged/no-location proven by counters) +
+`tests/browser/os-gucman.mjs` (bridge-ON leg: gucman works with the
+bridge ON via passthrough, the /fetch counter as the which-path
+discriminator) + the ctlpanel e2e's Network-applet leg.
 
 ## The ticket bridge — filing a ticket OUT of gucOS (LANDED — ticket #451)
 

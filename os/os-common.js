@@ -2818,7 +2818,9 @@ NodeFileStore.prototype.close = function () { this._fs.closeSync(this._fd); };
  * they started on.
  *
  * OFF is byte-identical to today: the wrapper tail-calls the bound global
- * fetch with the caller's exact arguments. ON, the request is re-posted to
+ * fetch with the caller's exact arguments. ON, same-origin targets STILL
+ * take the base fetch (#391 ruling: bridge ON is a strict superset of
+ * bridge OFF — see netFetch), and every off-origin request is re-posted to
  * the bridge (target URL/method/headers in x-guc-* headers, body verbatim)
  * and the bridge's ENCAPSULATED reply (x-guc-status/x-guc-headers + the
  * streamed body) is unwrapped into the {status, headers, body} shape the
@@ -2962,7 +2964,29 @@ function createNetFetch(baseFetch) {
   }
 
   function netFetch(url, init) {
-    return state.on ? bridgeFetch(url, init) : base(url, init);
+    if (!state.on) return base(url, init);   // OFF: tail-call, caller's exact args
+    // #391: same-origin passthrough + absolutization, ruled at THIS one
+    // choke point. With a real `location` (the browser embedder) every
+    // target resolves against it; a target on the embedder's OWN origin
+    // takes the BASE fetch even though the bridge is ON — bridge ON must
+    // be a strict superset of bridge OFF, and the bridge exists to lift
+    // CORS on EXTERNAL egress (a same-origin fetch is never CORS-gated,
+    // and a REMOTE bridge cannot reach a dev loopback origin at all, so
+    // bridging it can only lose functionality). Everything off-origin
+    // goes bridged ABSOLUTIZED, so the relative form a caller used never
+    // reaches x-guc-url. Headless has no `location`: nothing resolves,
+    // nothing passes through — a relative url keeps failing loudly
+    // (bridgeFetch's EINVAL), the correct strict-subset behaviour.
+    if (typeof location !== 'undefined' && location.href
+        && location.origin && location.origin !== 'null') {
+      var resolved = null;
+      try { resolved = new URL(url + '', location.href); } catch (e) {}
+      if (resolved) {
+        if (resolved.origin === location.origin) return base(url, init);
+        return bridgeFetch(resolved.href, init);
+      }
+    }
+    return bridgeFetch(url, init);
   }
   netFetch._state = state;      // netFetchAttach writes; tests may read
   return netFetch;

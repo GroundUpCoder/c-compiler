@@ -1,5 +1,5 @@
 {
-  "version": 245,
+  "version": 246,
   "defaultPackages": ["doom", "gcode", "calc", "paint"],
   "overlays": [
     {
@@ -298,6 +298,9 @@
       },
       "/usr/share/openwith": {
         "content": "# File associations (todos/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). Three layers overlaid per key, highest wins:\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\ndeck\t/bin/deck\nmgp\t/bin/mgp\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"
+      },
+      "/usr/share/net": {
+        "content": "# Network (HTTP bridge) configuration (tickets #349/#391), consulted by\n# the kernel embedder's fetch wrapper (os/os-common.js netConfig) and the\n# Control Panel Network applet through os/netcfg.h. Three layers overlaid\n# per key, highest wins: ~/.config/net, /etc/net, /usr/share/net. Keys:\n# bridge (on | off — route off-origin kernel HTTP transfers through the\n# localhost bridge process, tools/net-bridge.js; same-origin fetches\n# always take the direct path, #391), url (the bridge's base URL). The\n# bridge is NOT part of the OS image — the user runs it themselves.\nbridge\toff\nurl\thttp://127.0.0.1:8199\n"
       },
       "/usr/share/cmdalt": {
         "content": "# Command alternatives (todos/0338): which implementation a dispatched\n# command NAME runs. Consulted by /usr/bin/cmdalt — every /usr/bin/<name>\n# link resolves to that one binary, which takes the key from its own\n# argv[0] — and by the Control Panel's Default Programs applet.\n# Three layers overlaid per key, highest wins:\n#   ~/.config/cmdalt (the user's pick), /etc/cmdalt (package claims),\n#   /usr/share/cmdalt (this file, the baked suggestion).\n# Lines: KEY<ws>VALUE. KEY is a command name; VALUE is an argv prefix, and\n# the dispatched command's own arguments are appended to it verbatim. Bare\n# program words resolve through /usr/local/bin:/bin. A key may carry\n# SEVERAL lines — that is the candidate set the picker offers — and the\n# FIRST one wins, so the earliest package claim stays the default until\n# the user picks otherwise.\n# Nothing python is baked into the image: `python` is a ROLE name, and the\n# line below is only the SUGGESTION a fresh boot shows when no\n# implementation is installed —\n#   python: no python implementation is installed\n#          install one:  gucman install cpython-clang\npython\tcpython-clang\n"
