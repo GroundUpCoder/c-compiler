@@ -128,6 +128,8 @@ const Keyword = Object.freeze({
   X_BUILTIN_UNREACHABLE: "__builtin_unreachable",
   X_BUILTIN_ABORT: "__builtin_abort",
   X_BUILTIN_EXPECT: "__builtin_expect",
+  X_BUILTIN_TRAP: "__builtin_trap",
+  X_BUILTIN_CONSTANT_P: "__builtin_constant_p",
   X_MEMORY_SIZE: "__memory_size",
   X_MEMORY_GROW: "__memory_grow",
   X_BUILTIN: "__builtin",
@@ -941,6 +943,7 @@ const KEYWORD_MAP = new Map([
   ["_Alignof", Keyword.ALIGNOF],
   ["_Alignas", Keyword.ALIGNAS],
   ["_Thread_local", Keyword.THREAD_LOCAL],
+  ["__thread", Keyword.THREAD_LOCAL],
   ["typeof", Keyword.TYPEOF],
   ["typeof_unqual", Keyword.TYPEOF_UNQUAL],
   ["__typeof", Keyword.TYPEOF],
@@ -954,6 +957,8 @@ const KEYWORD_MAP = new Map([
   ["__builtin_unreachable", Keyword.X_BUILTIN_UNREACHABLE],
   ["__builtin_abort", Keyword.X_BUILTIN_ABORT],
   ["__builtin_expect", Keyword.X_BUILTIN_EXPECT],
+  ["__builtin_trap", Keyword.X_BUILTIN_TRAP],
+  ["__builtin_constant_p", Keyword.X_BUILTIN_CONSTANT_P],
   ["__memory_size", Keyword.X_MEMORY_SIZE],
   ["__memory_grow", Keyword.X_MEMORY_GROW],
   ["__builtin", Keyword.X_BUILTIN],
@@ -11619,6 +11624,7 @@ class Parser {
     if (this.atKW(Lexer.Keyword.X_BUILTIN_VA_COPY)) { return this.parseIntrinsic(Types.IntrinsicKind.VA_COPY); }
     if (this.atKW(Lexer.Keyword.X_BUILTIN_UNREACHABLE)) { return this.parseIntrinsic(Types.IntrinsicKind.UNREACHABLE); }
     if (this.atKW(Lexer.Keyword.X_BUILTIN_ABORT)) { return this.parseIntrinsic(Types.IntrinsicKind.UNREACHABLE); }
+    if (this.atKW(Lexer.Keyword.X_BUILTIN_TRAP)) { return this.parseIntrinsic(Types.IntrinsicKind.UNREACHABLE); }
     if (this.matchKW(Lexer.Keyword.X_BUILTIN_EXPECT)) {
       this.expect("(");
       const first = this.parseAssignmentExpression();
@@ -11626,6 +11632,20 @@ class Parser {
       this.parseAssignmentExpression(); // discard the hint
       this.expect(")");
       return first;
+    }
+
+    // __builtin_constant_p(expr) — 1 when the operand is a constant
+    // expression (integer or floating, per ConstEval), 0 otherwise.
+    // The operand is parsed but NOT evaluated (gcc semantics), and the
+    // result is itself an integer constant expression, so it works in
+    // static contexts (array sizes, enum initializers).
+    if (this.matchKW(Lexer.Keyword.X_BUILTIN_CONSTANT_P)) {
+      const kwTok = this.peek(-1);
+      this.expect("(");
+      const arg = this.parseAssignmentExpression();
+      this.expect(")");
+      return new AST.EInt(Lexer.Loc.fromTok(kwTok), Types.TINT,
+        constEvalItem(arg) !== null ? 1n : 0n);
     }
 
     // __struct_new(__struct Foo, args...) — struct.new / struct.new_default
