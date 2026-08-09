@@ -153,5 +153,76 @@ check('exit 69 / callbacks / software-renderer claims agree with sdl-gucos.md', 
   }
 });
 
+// ---- 6. the commonly-missing-symbols claims, behaviorally (#625) ------
+// #505's measured n=3 run showed BOTH arms burning turns on the same four
+// symbol classes (SDL_Log, SDLK letter keys, sqrtf/libm, snprintf). The doc
+// now states which exist and which don't; each claim is pinned by a REAL
+// compile through the same createCcDriver the OS ships, so the doc cannot
+// drift from the compiler's actual surface. NB the ticket's transcript
+// claim "libm needs __require_source(\"__math.c\")" is FALSE as a user
+// requirement — <math.h> carries that pragma itself, and the compile below
+// is the proof.
+const ccHarness = (() => {
+  const CompilerJS = require(path.join(ROOT, 'compiler.js'));
+  const store = new BLOCK_FS.MemoryByteStore(64 * 1024 * 1024);
+  const kfs = BLOCK_FS.create(store);
+  const compile = COMMON.createCcDriver(CompilerJS, kfs);
+  const enc = new TextEncoder();
+  let n = 0;
+  return (src) => {
+    const p = '/sym' + (n++) + '.c';
+    const fd = kfs.open(p, 0x1 | 0x40 | 0x200, 0o644);
+    const b = enc.encode(src);
+    kfs.write(fd, b, b.length);
+    kfs.close(fd);
+    return compile(['cc', p, '-o', '/sym.out'], '/');
+  };
+})();
+const compiles = (src) => {
+  const r = ccHarness(src);
+  assert(r.exitCode === 0, 'expected exit 0, got ' + r.exitCode + ': ' + r.stderr);
+};
+const undeclared = (src, sym) => {
+  const r = ccHarness(src);
+  assert(r.exitCode !== 0 && (r.stderr || '').includes("Undeclared identifier '" + sym + "'"),
+    sym + ' unexpectedly compiled (exit ' + r.exitCode + ') — it EXISTS now; the doc claims it does not: ' + r.stderr);
+};
+
+check('libm: sqrtf/fabsf/floorf/sinf compile with only #include <math.h>', () => {
+  compiles('#include <math.h>\nint main(void){float x=2;' +
+    'return (int)(sqrtf(x)+fabsf(-x)+floorf(x)+sinf(x));}\n');
+  assert(doc.includes('#include <math.h>'), 'GCODE.md lost the <math.h> claim');
+});
+
+check('absent symbols: SDL_Log, SDL_snprintf, SDLK_r, SDLK_R all fail as undeclared', () => {
+  undeclared('#include <SDL.h>\nint main(void){SDL_Log("x");return 0;}\n', 'SDL_Log');
+  undeclared('#include <SDL.h>\nint main(void){char b[8];SDL_snprintf(b,8,"x");return 0;}\n', 'SDL_snprintf');
+  undeclared('#include <SDL.h>\nint main(void){return SDLK_r;}\n', 'SDLK_r');
+  undeclared('#include <SDL.h>\nint main(void){return SDLK_R;}\n', 'SDLK_R');
+  for (const token of ['SDL_Log', 'SDL_snprintf', 'do NOT exist'])
+    assert(doc.includes(token), 'GCODE.md lost the claim: ' + token);
+});
+
+check('the documented replacements compile: char-literal keys, scancodes, snprintf', () => {
+  compiles('#include <SDL.h>\nint main(void){SDL_Event e;e.key.key=114;' +
+    "return e.key.key=='r'?0:1;}\n");
+  compiles('#include <SDL.h>\nint main(void){return SDL_SCANCODE_R==21?0:1;}\n');
+  compiles('#include <stdio.h>\nint main(void){char b[8];snprintf(b,sizeof b,"%d",42);return 0;}\n');
+  for (const token of ["event.key.key == 'r'", 'SDL_SCANCODE_A', '`snprintf`'])
+    assert(doc.includes(token), 'GCODE.md lost the claim: ' + token);
+});
+
+check('RED control: the absence checker flags a symbol that DOES exist', () => {
+  const r = ccHarness('#include <SDL.h>\nint main(void){return SDL_GetError()!=0;}\n');
+  assert(r.exitCode === 0,
+    'SDL_GetError no longer compiles — the "undeclared" greens above may be vacuous');
+});
+
+check('RED control: the compiles checker fails on a truly absent symbol', () => {
+  const r = ccHarness('#include <math.h>\nint main(void){return (int)definitely_not_a_symbol(1);}\n');
+  assert(r.exitCode !== 0,
+    'a bogus symbol compiled — the exit-0 greens above prove nothing');
+});
+
 console.log(failures ? '\n' + failures + ' gcode-orientation check(s) FAILED' : '\nAll gcode-orientation checks passed');
 process.exit(failures ? 1 : 0);

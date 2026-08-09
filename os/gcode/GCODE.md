@@ -24,6 +24,16 @@ WebAssembly module built by the in-OS C compiler. Facts you cannot guess:
   with `SDL_MAIN_USE_CALLBACKS` (SDL_AppInit/SDL_AppIterate/SDL_AppEvent/
   SDL_AppQuit, no main()), or run an unmodified blocking-loop program with
   `SDL_RENDER_DRIVER=software`. Details: `/usr/share/doc/sdl-gucos.md`.
+- Commonly-missing SDL symbols: `SDL_Log` and `SDL_snprintf` do NOT exist —
+  log with `printf`/`fprintf(stderr, ...)` and format with `snprintf`, from
+  `<stdio.h>`. The `SDLK_a`…`SDLK_z` letter-key constants do NOT exist:
+  `event.key.key` is the modifier-applied ASCII character, so compare a
+  char literal (`event.key.key == 'r'`; Shift gives `'R'`). Physical keys
+  are `SDL_SCANCODE_A`…`SDL_SCANCODE_Z` on `event.key.scancode`.
+- Math functions (`sqrtf`, `fabsf`, `floorf`, `sinf`, …) need
+  `#include <math.h>` — the header links the implementation automatically,
+  like the other system headers. Without the include the compile fails
+  with an "Undeclared identifier" error.
 - `/usr` is read-only (writes fail EROFS); `/usr/local` is writable. Put
   installed binaries in `/usr/local/bin`.
 - `wmctl` observes and drives windows without pixels: `wmctl list` shows
