@@ -707,15 +707,32 @@ function plantOverlays(mfs, loaded, log) {
  * validation is where an unknown `requires` value fails LOUDLY. */
 function listPackages(fsMod, pathMod, rootDir, opts) {
   opts = opts || {};
-  var dir = opts.packagesDir || pathMod.join(rootDir, 'packages');
+  var sources = packageDefSources(pathMod, rootDir, opts);
   var producers = opts.producers || [];
+  var ownerFile = {};   // name -> defining file (cross-source dup refusal, #612)
   var names = [];
-  try {
-    fsMod.readdirSync(dir).forEach(function (f) {
+  sources.forEach(function (src) {
+    var list;
+    try { list = fsMod.readdirSync(src.pkgDir); }
+    catch (e) { return; }   // no packages/ dir in this source — nothing to fold
+    list.forEach(function (f) {
       if (!/\.json$/.test(f)) return;
       var name = f.slice(0, -5);
+      var file = pathMod.join(src.pkgDir, f);
+      // #612: a duplicate name across definition sources refuses LOUDLY,
+      // naming both files — a silent last-wins (or first-wins) would let one
+      // source SHADOW another's package. Checked BEFORE the gating filter so
+      // a producer-gated def collides too: whether the colliding pair is
+      // visible to THIS enumeration must not decide whether the repo is
+      // well-formed.
+      if (ownerFile[name] !== undefined) {
+        throw new Error("package name '" + name + "' is declared by two definition sources:\n" +
+          '  ' + ownerFile[name] + '\n  ' + file + '\n' +
+          '  cross-source shadowing is refused — rename one (#612)');
+      }
+      ownerFile[name] = file;
       var req;
-      try { req = JSON.parse(fsMod.readFileSync(pathMod.join(dir, f), 'utf-8')).requires; }
+      try { req = JSON.parse(fsMod.readFileSync(file, 'utf-8')).requires; }
       catch (e) { req = undefined; }   // malformed → not excluded; fails loud downstream
       if (req !== undefined && req !== null && req !== '') {
         var p = nativeSiblingProducer(req);
@@ -723,8 +740,45 @@ function listPackages(fsMod, pathMod, rootDir, opts) {
       }
       names.push(name);
     });
-  } catch (e) { /* no packages/ dir — nothing to fold */ }
+  });
   return names.sort();
+}
+
+/* ---- ordered definition sources (#612, design §4B) ----
+ *
+ * packageDefSources(pathMod, rootDir, opts) -> [{ root, pkgDir }, ...]
+ * The ordered list of package DEFINITION SOURCES: c-compiler itself is the
+ * implicit source 0 (its pkgDir overridable via opts.packagesDir, the
+ * existing test seam), and each opts.defs root (mkpkg --defs=<root>;
+ * gucos-packages is the intended resident) contributes <root>/packages/
+ * *.json with every repo-relative asset path in those definitions resolving
+ * against THAT root. The list is threaded through listPackages (which
+ * refuses cross-source duplicate names), sourcePackageDefs, foldPackages
+ * and — as opts.assetRoot — newestPkgInput; mkpkg binds assembleTree's
+ * readers per owning source. gucman, the index schema, sha256/deps/minBase,
+ * sync-defaults and the storefront never see any of this: the merge happens
+ * at build time and the client still sees exactly ONE index. */
+function packageDefSources(pathMod, rootDir, opts) {
+  opts = opts || {};
+  var sources = [{ root: rootDir, pkgDir: opts.packagesDir || pathMod.join(rootDir, 'packages') }];
+  (opts.defs || []).forEach(function (r) {
+    sources.push({ root: r, pkgDir: pathMod.join(r, 'packages') });
+  });
+  return sources;
+}
+
+/* The source owning <name>.json, or null — first match in source order
+ * (listPackages' duplicate refusal makes "first" mean "only" on any path
+ * that enumerated before resolving). */
+function findPackageDef(fsMod, pathMod, rootDir, name, opts) {
+  var sources = packageDefSources(pathMod, rootDir, opts);
+  for (var i = 0; i < sources.length; i++) {
+    var file = pathMod.join(sources[i].pkgDir, name + '.json');
+    var st;
+    try { st = fsMod.statSync(file); } catch (e) { st = null; }
+    if (st && st.isFile()) return { root: sources[i].root, pkgDir: sources[i].pkgDir, file: file };
+  }
+  return null;
 }
 
 /* The ONE parser of the gate value (todos/0416): `requires:
@@ -861,9 +915,12 @@ function listTreeFiles(fsMod, pathMod, rootDir, entry, label) {
  * ships exclusively through the package repo (tools/mkpkg.js), so the
  * baked image, the fold, and boot.js --packages never see it and the
  * published blob cannot grow a byte by construction. `inputs` names the
- * repo-relative files whose CONTENT this synthesis read (the parent def /
- * os/image.json) for mkpkg's freshness scan; the closure files themselves
- * ride in the def as `bin` entries and are scanned as such. */
+ * files (relative to the unit's `root`) whose CONTENT this synthesis read
+ * (the parent def / os/image.json) for mkpkg's freshness scan; the closure
+ * files themselves ride in the def as `bin` entries and are scanned as
+ * such. opts.defs (#612) adds ordered definition-source roots: a package
+ * unit derived from a --defs source carries `root` = that source's root,
+ * and its whole closure resolves there. */
 /* The full EXT_LIB_MAP (headers AND sources) read from the repo's
  * libc-ext.js, the same JSON-object-literal slice compiler.js itself
  * parses. Node-only; a missing/broken file throws — the ext sources are
@@ -891,12 +948,13 @@ function sourcePackageDefs(fsMod, pathMod, rootDir, opts) {
   var NAME_RE = /^[a-z0-9][a-z0-9_-]*$/;
 
   // The compile closure of one unit's root entries, as a sorted list of
-  // repo-relative file paths.
-  function closureOf(roots, label) {
+  // file paths relative to the unit's OWNING source root (#612: a def from a
+  // --defs source carries its closure at that repo's paths, not c-compiler's).
+  function closureOf(roots, label, srcRoot) {
     var files = {}, seenProj = {};
     function addFile(rel) { files[rel] = true; }
     function walkHeaders(dirRel) {
-      var abs = pathMod.join(rootDir, dirRel);
+      var abs = pathMod.join(srcRoot, dirRel);
       var ents;
       try { ents = fsMod.readdirSync(abs, { withFileTypes: true }); } catch (e) { return; }
       ents.forEach(function (e) {
@@ -910,7 +968,7 @@ function sourcePackageDefs(fsMod, pathMod, rootDir, opts) {
       if (seenProj[n]) return;
       seenProj[n] = true;
       var text;
-      try { text = fsMod.readFileSync(pathMod.join(rootDir, n), 'utf-8'); }
+      try { text = fsMod.readFileSync(pathMod.join(srcRoot, n), 'utf-8'); }
       catch (e) { throw new Error(label + ': project ' + n + ' is unreadable (' + e.message + ')'); }
       addFile(n);
       var dir = n.slice(0, n.lastIndexOf('/'));
@@ -934,12 +992,12 @@ function sourcePackageDefs(fsMod, pathMod, rootDir, opts) {
     return out;
   }
 
-  function makeUnit(parent, kind, version, roots, inputs, what) {
+  function makeUnit(parent, kind, version, roots, inputs, what, srcRoot) {
     var name = parent + '-sources';
     var label = "sources unit '" + name + "'";
     if (!NAME_RE.test(name))
       throw new Error(label + ': derived name is not a valid package name');
-    var closure = closureOf(roots, label);
+    var closure = closureOf(roots, label, srcRoot);
     if (!closure.length) throw new Error(label + ': empty source closure');
     var files = {};
     closure.forEach(function (rel) { files[rel] = { bin: rel }; });
@@ -949,6 +1007,7 @@ function sourcePackageDefs(fsMod, pathMod, rootDir, opts) {
       name: name,
       parent: parent,
       kind: kind,
+      root: srcRoot,   // #612: the source root every def path resolves against
       inputs: inputs,
       def: {
         name: name,
@@ -999,6 +1058,7 @@ function sourcePackageDefs(fsMod, pathMod, rootDir, opts) {
       name: name,
       parent: 'libc',
       kind: 'builtin',
+      root: rootDir,
       inputs: ['compiler.js', 'libc-ext.js'],
       def: {
         name: name,
@@ -1012,9 +1072,13 @@ function sourcePackageDefs(fsMod, pathMod, rootDir, opts) {
     };
   })();
 
-  listPackages(fsMod, pathMod, rootDir, { packagesDir: pkgDir }).forEach(function (p) {
+  listPackages(fsMod, pathMod, rootDir, { packagesDir: pkgDir, defs: opts.defs }).forEach(function (p) {
+    // #612: the def may live in any definition source; its companion's
+    // closure resolves against the OWNING source's root (design §5d — a
+    // gucos-packages game's -sources package mirrors THAT repo's tree).
+    var owner = findPackageDef(fsMod, pathMod, rootDir, p, { packagesDir: pkgDir, defs: opts.defs });
     var def;
-    try { def = JSON.parse(fsMod.readFileSync(pathMod.join(pkgDir, p + '.json'), 'utf-8')); }
+    try { def = JSON.parse(fsMod.readFileSync(owner.file, 'utf-8')); }
     catch (e) { return; }   // malformed → fails loud in buildPackage, not here
     var roots = [];
     Object.keys(def.files || {}).sort().forEach(function (rel) {
@@ -1025,7 +1089,7 @@ function sourcePackageDefs(fsMod, pathMod, rootDir, opts) {
     var sourcesVersionDeclared = Object.prototype.hasOwnProperty.call(def, 'sourcesVersion');
     var companionVersion = sourcesVersionDeclared ? String(def.sourcesVersion) : String(def.version);
     var u = makeUnit(p, 'package', companionVersion, roots,
-      ['packages/' + p + '.json'], "the '" + p + "' package v" + def.version);
+      ['packages/' + p + '.json'], "the '" + p + "' package v" + def.version, owner.root);
     u.sourcesVersionDeclared = sourcesVersionDeclared;
     if (units[u.name])
       throw new Error("sources synthesis: '" + u.name + "' collides with the " +
@@ -1039,13 +1103,13 @@ function sourcePackageDefs(fsMod, pathMod, rootDir, opts) {
     var parent = imgPath.slice(imgPath.lastIndexOf('/') + 1).replace(/\.[A-Za-z0-9]+$/, '');
     if (units[parent + '-sources']) return;   // same software, packaged — package wins
     var u = makeUnit(parent, 'image', String(manifest.version | 0), [entry],
-      ['os/image.json'], imgPath + ' (base image v' + (manifest.version | 0) + ')');
+      ['os/image.json'], imgPath + ' (base image v' + (manifest.version | 0) + ')', rootDir);
     units[u.name] = u;
   });
 
   // A -sources name colliding with a DECLARED package is a repo bug — the
   // synthesis must never silently shadow (or be shadowed by) a real def.
-  listPackages(fsMod, pathMod, rootDir, { packagesDir: pkgDir, producers: ['clang', 'rust'] })
+  listPackages(fsMod, pathMod, rootDir, { packagesDir: pkgDir, defs: opts.defs, producers: ['clang', 'rust'] })
     .forEach(function (p) {
       if (units[p])
         throw new Error("sources synthesis: derived package '" + p +
@@ -1323,11 +1387,23 @@ function win32RequireDriftErrors(readText) {
  * <rootDir>/packages) — the listPackages seam, exposed so a test can bake
  * and boot a throwaway definition without writing into the repo's packages/
  * dir, which is a bake input AND a shared mkpkg input for every other
- * concurrently running test. */
+ * concurrently running test.
+ *
+ * opts.defs (#612) adds ordered definition-source roots (packageDefSources).
+ * A def owned by a non-implicit source folds with its asset paths REWRITTEN
+ * to resolve against rootDir (pathMod.relative — Node-only, like the fold
+ * itself): the folded manifest keeps its one contract — every path in it is
+ * rootDir-relative — so bakeSystemImage's rootDir-bound readers need no
+ * change. `text` entries are inlined as `content` at fold time (their
+ * os/-relative resolution has no cross-source spelling); `c` entries from a
+ * non-implicit source refuse loudly — their staged-compile path is
+ * image.json vocabulary rooted in c-compiler's os/ tree; a sibling def
+ * compiles through `project` (the sibling contract's compile vocabulary).
+ * Such a def still BUILDS as an installable package via mkpkg. */
 function foldPackages(fsMod, pathMod, rootDir, manifest, which, opts) {
   opts = opts || {};
   var pkgDir = opts.packagesDir || pathMod.join(rootDir, 'packages');
-  var avail = listPackages(fsMod, pathMod, rootDir, { packagesDir: pkgDir });
+  var avail = listPackages(fsMod, pathMod, rootDir, { packagesDir: pkgDir, defs: opts.defs });
   // #419: the declarative default-package set rides the manifest
   // (`defaultPackages`; bakeSystemImage derives /usr/share/gucman/defaults
   // from it) and is validated HERE because every Node bake path — mkimage,
@@ -1386,8 +1462,33 @@ function foldPackages(fsMod, pathMod, rootDir, manifest, which, opts) {
   }
   var cmdaltClaims = '';   // todos/0338: folded `commands` claims, spliced below
   names.forEach(function (name) {
-    var pkg = JSON.parse(fsMod.readFileSync(
-      pathMod.join(pkgDir, name + '.json'), 'utf-8'));
+    var owner = findPackageDef(fsMod, pathMod, rootDir, name, { packagesDir: pkgDir, defs: opts.defs });
+    var srcRoot = owner.root;
+    var pkg = JSON.parse(fsMod.readFileSync(owner.file, 'utf-8'));
+    // The #612 relocation: a non-implicit-source entry's asset paths are
+    // rewritten so pathMod.join(rootDir, p) lands on the owning source's
+    // file — the folded manifest stays rootDir-relative by contract.
+    var fromRoot = function (p) {
+      return pathMod.relative(rootDir, pathMod.join(srcRoot, p)).split(pathMod.sep).join('/');
+    };
+    var relocate = function (rel, entry) {
+      if (srcRoot === rootDir) return entry;
+      var e = {};
+      Object.keys(entry).forEach(function (k) { e[k] = entry[k]; });
+      if (e.bin !== undefined) e.bin = fromRoot(e.bin);
+      if (e.project !== undefined) e.project = fromRoot(e.project);
+      if (e.text !== undefined) {
+        // Inline at fold time (Node-only): `text` resolves against the
+        // source's os/ dir, a spelling the baked manifest cannot carry.
+        e.content = fsMod.readFileSync(pathMod.join(srcRoot, 'os', e.text), 'utf-8');
+        delete e.text;
+      }
+      if (e.c !== undefined)
+        throw new Error("package '" + name + "': " + rel + ' — a `c` entry from a --defs ' +
+          'definition source cannot fold into the baked image; compile through a `project` ' +
+          'entry instead (#612)');
+      return e;
+    };
     if (pkg.name !== name)
       throw new Error('packages/' + name + '.json declares name ' + JSON.stringify(pkg.name));
     checkReservedPackageFiles(pkg, "package '" + name + "'");
@@ -1409,19 +1510,20 @@ function foldPackages(fsMod, pathMod, rootDir, manifest, which, opts) {
         throw new Error("package '" + name + "': " + rel + ' — link entries are not supported in packages (v1 tar+gzip payloads carry files and dirs only)');
       if (entry.tree !== undefined) {
         // Recursive directory copy (§3.2): one `bin` (repo-relative bytes)
-        // entry per enumerated file; dirs derive from the file paths.
-        var treeFiles = listTreeFiles(fsMod, pathMod, rootDir, entry,
+        // entry per enumerated file; dirs derive from the file paths. The
+        // enumeration and the emitted paths both use the OWNING source (#612).
+        var treeFiles = listTreeFiles(fsMod, pathMod, srcRoot, entry,
           "package '" + name + "': " + rel);
         treeFiles.forEach(function (tf) {
           var tparts = (rel + '/' + tf).split('/'), tcur = base;
           for (var ti = 0; ti < tparts.length - 1; ti++) { tcur += '/' + tparts[ti]; pushDir(tcur); }
-          claim(name, base + '/' + rel + '/' + tf, { bin: entry.tree + '/' + tf });
+          claim(name, base + '/' + rel + '/' + tf, relocate(rel, { bin: entry.tree + '/' + tf }));
         });
         return;
       }
       var parts = rel.split('/'), cur = base;
       for (var i = 0; i < parts.length - 1; i++) { cur += '/' + parts[i]; pushDir(cur); }
-      claim(name, base + '/' + rel, entry);
+      claim(name, base + '/' + rel, relocate(rel, entry));
     });
     if (pkg.srclib !== undefined) {
       // The baked twin of gucman's srclib install plant (§3.1): both
@@ -2356,9 +2458,15 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest) {
  *   pkgDir        — abs dir holding <name>.json (the definition file); a
  *                   synthesized def has none and names its derivation
  *                   inputs via extraInputs instead
- *   extraInputs   — repo-relative paths statted as inputs
+ *   extraInputs   — assetRoot-relative paths statted as inputs
  *   overlayPathFor— (producer) -> abs overlay.json path, or null; drives
  *                   nativeApp/nativeFile freshness
+ *   assetRoot     — the definition's OWNING source root (#612): every file
+ *                   entry (project/bin/text/c/hdrs/tree) and extraInput
+ *                   resolves against it. Default rootDir — the implicit
+ *                   source 0. The toolchain inputs (compiler.js, mkpkg.js,
+ *                   os-common.js) always stat against rootDir: whichever
+ *                   repo the definition lives in, the BUILDER is c-compiler.
  *
  * Extracted from tools/mkpkg.js (todos/0363) so the red control in
  * tests/host/test_bakeinput_sources.js can point it at a synthetic tree —
@@ -2366,7 +2474,8 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest) {
  * pin; a new entry kind added here needs a leg there. */
 function newestPkgInput(fsMod, pathMod, rootDir, name, pkg, opts) {
   opts = opts || {};
-  var osDir = pathMod.join(rootDir, 'os');
+  var assetRoot = opts.assetRoot || rootDir;
+  var osDir = pathMod.join(assetRoot, 'os');
   var newest = { mtimeMs: 0, path: null };
   var seenDirs = {}, seenProjects = {};
   function statFile(p) {
@@ -2393,16 +2502,16 @@ function newestPkgInput(fsMod, pathMod, rootDir, name, pkg, opts) {
     if (seenProjects[n]) return;
     seenProjects[n] = true;
     var dir = n.slice(0, n.lastIndexOf('/'));
-    walk(pathMod.join(rootDir, dir));
+    walk(pathMod.join(assetRoot, dir));
     var proj;
-    try { proj = JSON.parse(fsMod.readFileSync(pathMod.join(rootDir, n), 'utf-8')); } catch (e) { return; }
+    try { proj = JSON.parse(fsMod.readFileSync(pathMod.join(assetRoot, n), 'utf-8')); } catch (e) { return; }
     (proj.deps || []).forEach(function (d) { addProject(dir + '/' + d); });
     // Same hole as newestBakeInput's (todos/0354): a source/include reaching
     // outside the project dir is an input `deps` recursion never sees. This
     // does NOT widen the narrow scope above — no packaged project's external
     // dirs reach the os/ tree at large (they are freetype/libpng/os/win32,
     // all already walked as deps today).
-    projectExternalDirs(proj, dir).forEach(function (d) { walk(pathMod.join(rootDir, d)); });
+    projectExternalDirs(proj, dir).forEach(function (d) { walk(pathMod.join(assetRoot, d)); });
   }
   statFile(pathMod.join(rootDir, 'compiler.js'));
   statFile(pathMod.join(rootDir, 'tools', 'mkpkg.js'));
@@ -2410,12 +2519,12 @@ function newestPkgInput(fsMod, pathMod, rootDir, name, pkg, opts) {
   if (opts.pkgDir) statFile(pathMod.join(opts.pkgDir, name + '.json'));
   // A synthesized -sources def has no packages/ file; its derivation inputs
   // (the parent def / os/image.json) are named by the synthesis instead.
-  (opts.extraInputs || []).forEach(function (rel) { statFile(pathMod.join(rootDir, rel)); });
+  (opts.extraInputs || []).forEach(function (rel) { statFile(pathMod.join(assetRoot, rel)); });
   var files = pkg.files || {};
   Object.keys(files).forEach(function (rel) {
     var entry = files[rel];
     if (entry.project !== undefined) addProject(entry.project);
-    if (entry.bin !== undefined) statFile(pathMod.join(rootDir, entry.bin));
+    if (entry.bin !== undefined) statFile(pathMod.join(assetRoot, entry.bin));
     if (entry.text !== undefined) statFile(pathMod.join(osDir, entry.text));
     if (entry.c !== undefined) {
       statFile(pathMod.join(osDir, entry.c));
@@ -2426,9 +2535,9 @@ function newestPkgInput(fsMod, pathMod, rootDir, name, pkg, opts) {
     // marks the package stale).
     if (entry.tree !== undefined) {
       var tfs;
-      try { tfs = listTreeFiles(fsMod, pathMod, rootDir, entry, rel); }
+      try { tfs = listTreeFiles(fsMod, pathMod, assetRoot, entry, rel); }
       catch (e) { return; }   // malformed → fails loud in the build, not here
-      tfs.forEach(function (tf) { statFile(pathMod.join(rootDir, entry.tree, tf)); });
+      tfs.forEach(function (tf) { statFile(pathMod.join(assetRoot, entry.tree, tf)); });
     }
     // A nativeApp/nativeFile payload's freshness is its producer's overlay
     // manifest's mtime — re-publishing overlay.json (new sha256s)
@@ -2734,6 +2843,8 @@ var OS_COMMON = {
   plantOverlays: plantOverlays,
   nodeOverlayIo: nodeOverlayIo,
   listPackages: listPackages,
+  packageDefSources: packageDefSources,
+  findPackageDef: findPackageDef,
   nativeSiblingProducer: nativeSiblingProducer,
   foldPackages: foldPackages,
   foldDesktopDefaults: foldDesktopDefaults,
