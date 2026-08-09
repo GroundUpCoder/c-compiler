@@ -35,7 +35,9 @@ int find_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int gunzip_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int gzip_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int less_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+int strings_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int tar_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+int time_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int xargs_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int cksum_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int cmp_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
@@ -221,12 +223,14 @@ static const struct applet {
 	{ "sort",     sort_main },
 	{ "split",    split_main },
 	{ "stat",     stat_main },
+	{ "strings",  strings_main },
 	{ "sync",     sync_main },
 	{ "tac",      tac_main },
 	{ "tail",     tail_main },
 	{ "tar",      tar_main },
 	{ "tee",      tee_main },
 	{ "test",     test_main },
+	{ "time",     time_main },
 	{ "top",      top_main },
 	{ "touch",    touch_main },
 	{ "tr",       tr_main },

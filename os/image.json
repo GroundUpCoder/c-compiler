@@ -1,5 +1,5 @@
 {
-  "version": 244,
+  "version": 245,
   "defaultPackages": ["doom", "gcode", "calc", "paint"],
   "overlays": [
     {
@@ -479,6 +479,9 @@
       "/usr/bin/stat": {
         "link": "/usr/bin/coreutils"
       },
+      "/usr/bin/strings": {
+        "link": "/usr/bin/coreutils"
+      },
       "/usr/bin/sync": {
         "link": "/usr/bin/coreutils"
       },
@@ -495,6 +498,9 @@
         "link": "/usr/bin/coreutils"
       },
       "/usr/bin/test": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/time": {
         "link": "/usr/bin/coreutils"
       },
       "/usr/bin/top": {

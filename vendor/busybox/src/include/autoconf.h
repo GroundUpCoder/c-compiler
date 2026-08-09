@@ -3819,14 +3819,22 @@
 #define ENABLE_SETSERIAL 0
 #define IF_SETSERIAL(...)
 #define IF_NOT_SETSERIAL(...) __VA_ARGS__
-#undef CONFIG_STRINGS
-#define ENABLE_STRINGS 0
-#define IF_STRINGS(...)
-#define IF_NOT_STRINGS(...) __VA_ARGS__
-#undef CONFIG_TIME
-#define ENABLE_TIME 0
-#define IF_TIME(...)
-#define IF_NOT_TIME(...) __VA_ARGS__
+#define CONFIG_STRINGS 1
+#define ENABLE_STRINGS 1
+#ifdef MAKE_SUID
+# define IF_STRINGS(...) __VA_ARGS__ "CONFIG_STRINGS"
+#else
+# define IF_STRINGS(...) __VA_ARGS__
+#endif
+#define IF_NOT_STRINGS(...)
+#define CONFIG_TIME 1
+#define ENABLE_TIME 1
+#ifdef MAKE_SUID
+# define IF_TIME(...) __VA_ARGS__ "CONFIG_TIME"
+#else
+# define IF_TIME(...) __VA_ARGS__
+#endif
+#define IF_NOT_TIME(...)
 #undef CONFIG_TREE
 #define ENABLE_TREE 0
 #define IF_TREE(...)
