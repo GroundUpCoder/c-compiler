@@ -9,7 +9,15 @@ WebAssembly module built by the in-OS C compiler. Facts you cannot guess:
   implementation. Known system libraries (SDL, libpng, zlib, freetype) pull
   their own sources automatically via the compiler's `__require_source`
   mechanism when you include their headers.
-- `<SDL.h>` is a documented SUBSET of SDL3, not stock SDL3. Read
+- `cc` understands only `-o OUT`, `-IDIR`, `-DNAME[=VAL]` and `-g`. Every
+  other flag (`-Wall`, `-O2`, `-c`, `-std=…`, `-l…`) is silently IGNORED —
+  no error, no effect. There is no separate compile/link step: one `cc`
+  command takes all the .c files and writes the runnable output (default
+  `./a.out`, so `cc hello.c && ./a.out` works). Headers live under
+  `/usr/include` (and `/usr/local/include`).
+- `<SDL.h>` is a documented SUBSET of SDL3, not stock SDL3. The headers in
+  `/usr/include` are the authoritative API surface — when unsure whether a
+  function exists, read the header, don't assume stock SDL3. Read
   `/usr/share/doc/sdl-gucos.md` before writing SDL code.
 - SDL3 graphics: a classic blocking main loop that presents GPU frames is
   refused at the second present (fatal, exit 69). Either write the program
@@ -19,7 +27,9 @@ WebAssembly module built by the in-OS C compiler. Facts you cannot guess:
 - `/usr` is read-only (writes fail EROFS); `/usr/local` is writable. Put
   installed binaries in `/usr/local/bin`.
 - `wmctl` observes and drives windows without pixels: `wmctl list` shows
-  open windows, `wmctl tree` dumps a win32 app's widgets, `wmctl shot FILE`
-  screenshots. Use it to verify a GUI program actually opened a window.
+  open windows (first column = SID, the window id), `wmctl tree` dumps a
+  win32 app's widgets, `wmctl shot SID FILE` screenshots a window
+  (`wmctl shot screen FILE` the whole screen). Use it to verify a GUI
+  program actually opened a window.
 - Never run `find /` or `grep -r /`: the full-tree walk is catastrophically
   slow and cannot be interrupted. Search a specific directory instead.
