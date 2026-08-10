@@ -34,6 +34,16 @@
 //     synthetic test-rdapp -> test-rdlib edge (private --packages-dir repo)
 //     proves the guard generic, plus the legacy-record index fallback with
 //     backfill, offline behaviour, and the conservative cannot-verify refusal
+//   - the created-dir claim survives any interleaving (#630): force-removing
+//     the tier CREATOR while a dependent's plants keep the tiers alive
+//     migrates the srclib_dirs claims into the survivor's record, so the
+//     last-package-drops-the-tiers legs hold with the remove+reinstall
+//     interleaving inserted; an existing-but-unclaimed tier is ADOPTED by
+//     the next srclib install (legacy-orphan repair — sound because the
+//     tiers ship in no image); a tier kept alive by USER content lapses its
+//     claim but is re-adopted once emptied; synthetic menu/seed package
+//     pairs (session G) prove the transfer generic over menu_dirs and
+//     seed_dirs, where a plain remove (no --force) reaches the same hole
 //
 //   - an index.json that will not parse NAMES ITS OWN FAULT (ticket #456):
 //     an empty 200, a cleanly-terminated short body and a whole non-JSON
@@ -146,10 +156,55 @@ async function main() {
     }
   }
 
+  // #630: the created-dir orphan mechanism is one hole shared by all THREE
+  // recorded families (srclib_dirs / menu_dirs / seed_dirs). Session D
+  // covers srclib on the real freetype/win32 pair; these synthetic pairs
+  // prove the remove-side claim transfer generic over the menu and seed
+  // families (private --packages-dir, the mkpkg-bad-defs isolation rule).
+  const dtRepoDir = path.join(tmp, 'dirs-repo');
+  {
+    const cp = require('child_process');
+    const dtDefsDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mkpkg-dt-defs-'));
+    try {
+      const sh = { content: '#!/bin/sh\necho hi\n', mode: 0o755 };
+      fs.writeFileSync(path.join(dtDefsDir, 'test-menua.json'), JSON.stringify({
+        name: 'test-menua', version: '1.0', summary: 'menu-dir fixture a', minBase: 1,
+        files: { menua: sh }, bin: { menua: 'menua' },
+        menu: [{ group: 'TestGames', entry: 'menua', cmd: 'menua' }],
+      }, null, 2) + '\n');
+      fs.writeFileSync(path.join(dtDefsDir, 'test-menub.json'), JSON.stringify({
+        name: 'test-menub', version: '1.0', summary: 'menu-dir fixture b', minBase: 1,
+        files: { menub: sh }, bin: { menub: 'menub' },
+        menu: [{ group: 'TestGames', entry: 'menub', cmd: 'menub' }],
+      }, null, 2) + '\n');
+      fs.writeFileSync(path.join(dtDefsDir, 'test-seeda.json'), JSON.stringify({
+        name: 'test-seeda', version: '1.0', summary: 'seed-dir fixture a', minBase: 1,
+        files: { 'a.txt': { content: 'a\n' } },
+        seed: { 'testshare/suba/a.txt': 'a.txt' },
+      }, null, 2) + '\n');
+      fs.writeFileSync(path.join(dtDefsDir, 'test-seedb.json'), JSON.stringify({
+        name: 'test-seedb', version: '1.0', summary: 'seed-dir fixture b', minBase: 1,
+        files: { 'b.txt': { content: 'b\n' } },
+        seed: { 'testshare/subb/b.txt': 'b.txt' },
+      }, null, 2) + '\n');
+      const r = cp.spawnSync(process.execPath,
+        [path.join(ROOT, 'tools', 'mkpkg.js'), '--no-baseline', '--quiet',
+         `--packages-dir=${dtDefsDir}`, `--out=${dtRepoDir}`],
+        { encoding: 'utf-8', timeout: 120000 });
+      if (r.status !== 0) throw new Error('mkpkg (#630 dir fixtures) failed: ' + r.stderr);
+      const dtIdx = JSON.parse(fs.readFileSync(path.join(dtRepoDir, 'index.json'), 'utf-8'));
+      for (const n of ['test-menua', 'test-menub', 'test-seeda', 'test-seedb'])
+        if (!dtIdx.packages[n]) throw new Error('#630 fixture repo has no ' + n);
+    } finally {
+      fs.rmSync(dtDefsDir, { recursive: true, force: true });
+    }
+  }
+
   const goodPort = await startServer(goodDir);
   const badPort = await startServer(badDir);
   const rdPort = await startServer(rdRepoDir);
-  console.log(`[gucman] repo :${goodPort}, corrupted repo :${badPort}, revdep repo :${rdPort}`);
+  const dtPort = await startServer(dtRepoDir);
+  console.log(`[gucman] repo :${goodPort}, corrupted repo :${badPort}, revdep repo :${rdPort}, #630 repo :${dtPort}`);
 
   const BOOT_ARGS = { image, args: ['--packages=none'], timeout: 420000 };
 
@@ -422,15 +477,30 @@ async function main() {
     // #624: the OTHER direction of the install/remove asymmetry — freetype
     // has an installed dependent (win32), so removing it would silently
     // break win32's srclib compile. remove refuses BEFORE any side effect
-    // and names the dependent. Refusal only here: a --force removal +
-    // reinstall would orphan the srclib TIER-DIR recording (the reinstall
-    // finds the tiers alive under win32's plants and so never re-records
-    // them), breaking the last-package-drops-the-tiers legs below. The
-    // --force override is proven on the synthetic edge in session RD.
+    // and names the dependent.
     'gucman remove freetype; echo RC=$?',
     'test -f /var/lib/gucman/freetype.json && echo FT-STILL-INSTALLED',
     'test -e /opt/freetype && echo FT-OPT-INTACT',
     'test -f /usr/local/src/freetype/ftbase.c && echo FT-PLANTS-INTACT',
+    'echo ==interleave',
+    // #630: the interleaving that used to orphan the tier-dir recording.
+    // Force-removing the tier CREATOR (freetype) while win32's plants keep
+    // the tiers alive must MIGRATE the created-dir claims into win32's
+    // record (the surviving package whose plants sit inside), so the
+    // last-package-drops-the-tiers legs in ==slremove still hold after the
+    // reinstall. Before #630 the claims died with freetype's record and the
+    // tiers became permanent residue. NB the grep patterns quote the CLOSING
+    // '"' — win32's include_entries legitimately contain paths UNDER the
+    // tier, and only the bare-dir claim string must match.
+    'gucman remove freetype --force; echo RC=$?',
+    'test ! -e /usr/local/src/freetype && echo FT-PLANTS-GONE',
+    'test -f /usr/local/include/windows.h && echo TIER-ALIVE-UNDER-WIN32',
+    'grep -q \'"/usr/local/include"\' /var/lib/gucman/win32.json && echo INC-CLAIM-TRANSFERRED',
+    'grep -q \'"/usr/local/src"\' /var/lib/gucman/win32.json && echo SRC-CLAIM-TRANSFERRED',
+    'gucman install freetype; echo RC2=$?',
+    'test -f /usr/local/include/ft2build.h && echo FT-REPLANTED',
+    // the reinstall must NOT double-claim what win32 now owns
+    'grep -q \'"/usr/local/include"\' /var/lib/gucman/freetype.json || echo FT-NO-DOUBLE-CLAIM',
     'echo ==slremove',
     // #464: remove replays each package's OWN DB record — removing win32
     // must NOT cascade to its freetype dependency (no auto-remove of deps,
@@ -445,6 +515,34 @@ async function main() {
     'test ! -e /usr/local/include && echo INC-TIER-GONE',
     'test ! -e /usr/local/src && echo SRC-TIER-GONE',
     'test ! -e /opt/freetype && echo FT-OPT-GONE',
+    'echo ==adopt',
+    // #630 adoption: an existing-but-unclaimed tier is exactly what a
+    // pre-#630 orphan looks like (and what a hand-mkdir'd tier looks like —
+    // same treatment by decision: the tiers ship in NO image, so gucman is
+    // the presumed creator). The next srclib install adopts it and its
+    // remove can finally clean it up.
+    'mkdir /usr/local/include',
+    'gucman install freetype; echo RC=$?',
+    'grep -q \'"/usr/local/include"\' /var/lib/gucman/freetype.json && echo ADOPTED',
+    'grep -q \'"/usr/local/src"\' /var/lib/gucman/freetype.json && echo SRC-RECORDED',
+    'gucman remove freetype; echo RC2=$?',
+    'test ! -e /usr/local/include && echo ADOPTED-TIER-GONE',
+    'test ! -e /usr/local/src && echo SRC-TIER-GONE2',
+    'echo ==usercontent',
+    // #630: NO transferee — user content (not any package's plants) keeps
+    // the tier alive, so the claim lapses with the dir CORRECTLY kept (it
+    // holds user data). Once the user empties it the orphan is healed by
+    // the next install's adoption.
+    'gucman install freetype; echo RC=$?',
+    'touch /usr/local/include/userfile.h',
+    'gucman remove freetype; echo RC2=$?',
+    'test -d /usr/local/include && echo TIER-KEPT-USER-CONTENT',
+    'test ! -e /usr/local/src && echo SRC-TIER-GONE3',
+    'rm /usr/local/include/userfile.h',
+    'gucman install freetype; echo RC3=$?',
+    'grep -q \'"/usr/local/include"\' /var/lib/gucman/freetype.json && echo RE-ADOPTED',
+    'gucman remove freetype; echo RC4=$?',
+    'test ! -e /usr/local/include && echo TIER-FINALLY-GONE',
     'echo ==done',
   ];
   const d = driveBoot(scriptD, BOOT_ARGS);
@@ -490,6 +588,19 @@ async function main() {
   check('#624: refused remove leaves /opt/freetype', rdw.includes('FT-OPT-INTACT'));
   check('#624: refused remove leaves the srclib plants', rdw.includes('FT-PLANTS-INTACT'));
 
+  const ilv = section(dout, 'interleave');
+  check('#630: --force removal of the tier creator succeeds', ilv.includes('RC=0'), ilv);
+  check('#630: the forced remove unlinks its own plants', ilv.includes('FT-PLANTS-GONE'), ilv);
+  check('#630: the shared tier survives under win32\'s plants',
+    ilv.includes('TIER-ALIVE-UNDER-WIN32'), ilv);
+  check('#630: the include-tier claim MIGRATES into win32\'s record',
+    ilv.includes('INC-CLAIM-TRANSFERRED'), ilv);
+  check('#630: the src-tier claim migrates too', ilv.includes('SRC-CLAIM-TRANSFERRED'), ilv);
+  check('#630: freetype reinstalls after the forced remove', ilv.includes('RC2=0'), ilv);
+  check('#630: the reinstall replants its tier links', ilv.includes('FT-REPLANTED'), ilv);
+  check('#630: the reinstall does not double-claim the transferred tier',
+    ilv.includes('FT-NO-DOUBLE-CLAIM'), ilv);
+
   const slr = section(dout, 'slremove');
   check('win32 remove succeeds (exit 0)', slr.includes('RC=0'), slr);
   check('/opt/win32 fully removed', slr.includes('OPT-GONE'), slr);
@@ -497,11 +608,28 @@ async function main() {
   check('win32 plants gone from the include tier', slr.includes('WIN32-PLANTS-GONE'));
   check('freetype dep SURVIVES win32 removal (no cascade)', slr.includes('FT-SURVIVES'), slr);
   check('freetype remove succeeds (exit 0)', slr.includes('RC2=0'), slr);
-  check('created include tier rmdir\'d once the last srclib package goes',
+  check('created include tier rmdir\'d once the last srclib package goes — WITH the #630 interleaving inserted',
     slr.includes('INC-TIER-GONE'), slr);
-  check('created src tier rmdir\'d once the last srclib package goes',
+  check('created src tier rmdir\'d once the last srclib package goes — WITH the #630 interleaving inserted',
     slr.includes('SRC-TIER-GONE'));
   check('/opt/freetype fully removed', slr.includes('FT-OPT-GONE'));
+
+  const adp = section(dout, 'adopt');
+  check('#630 adoption: install over an unclaimed pre-existing tier succeeds', adp.includes('RC=0'), adp);
+  check('#630 adoption: the orphan tier is ADOPTED into the installer\'s record',
+    adp.includes('ADOPTED'), adp);
+  check('#630 adoption: the tier it really created is recorded as before',
+    adp.includes('SRC-RECORDED'), adp);
+  check('#630 adoption: remove finally cleans the adopted orphan', adp.includes('ADOPTED-TIER-GONE'), adp);
+  check('#630 adoption: the created tier goes as before', adp.includes('SRC-TIER-GONE2'), adp);
+
+  const usr = section(dout, 'usercontent');
+  check('#630 no-transferee: a tier holding USER content is kept on remove',
+    usr.includes('TIER-KEPT-USER-CONTENT'), usr);
+  check('#630 no-transferee: the user-free tier still goes', usr.includes('SRC-TIER-GONE3'), usr);
+  check('#630 no-transferee: adoption re-claims the lapsed tier on the next install',
+    usr.includes('RE-ADOPTED'), usr);
+  check('#630 no-transferee: whose remove then cleans it', usr.includes('TIER-FINALLY-GONE'), usr);
 
   /* ---- session RD (#624): the reverse-dependency guard is GENERIC ---- *
    * A deps edge that is neither freetype nor win32 (synthetic test-rdapp ->
@@ -589,6 +717,67 @@ async function main() {
   const rdc = section(rdout, 'rdcleanup');
   check('#624: post-#624 records remove OFFLINE with no index consult',
     rdc.includes('RC=0') && rdc.includes('APP2-GONE'), rdc);
+
+  /* ---- session G (#630): the claim transfer is GENERIC over families ---- *
+   * The orphan mechanism was one existence-check hole shared by menu_dirs
+   * and seed_dirs too (no --force needed there: the families carry no deps
+   * edge, so a plain remove of the creator reaches it). A fresh image keeps
+   * these legs independent of the D/RD state. */
+  const image630 = path.join(tmp, 'os-630.img');
+  fs.copyFileSync(MIN, image630);
+  const gScript = [
+    'echo ==menuvirgin',
+    'mkdir -p /etc/gucman',
+    'printf "# #630 legs own their package state\\n" > /etc/gucman/defaults',
+    `echo http://127.0.0.1:${dtPort} > /etc/gucman/repos`,
+    'test ! -e /etc/menu && echo NO-MENU-VIRGIN',
+    'echo ==menuxfer',
+    'gucman install test-menua; echo RC=$?',
+    'gucman install test-menub; echo RC2=$?',
+    'grep -q \'"/etc/menu"\' /var/lib/gucman/test-menua.json && echo A-OWNS-ROOT',
+    'grep -q \'"/etc/menu"\' /var/lib/gucman/test-menub.json || echo B-OWNS-NOTHING',
+    // remove the CREATOR while b's entry keeps the group alive — the claims
+    // (root AND group) must migrate to test-menub, ancestors kept first
+    'gucman remove test-menua; echo RC3=$?',
+    'test -h /etc/menu/TestGames/menub && echo B-ENTRY-KEPT',
+    'grep -q \'"/etc/menu"\' /var/lib/gucman/test-menub.json && echo ROOT-CLAIM-TRANSFERRED',
+    'grep -q \'"/etc/menu/TestGames"\' /var/lib/gucman/test-menub.json && echo GRP-CLAIM-TRANSFERRED',
+    'gucman remove test-menub; echo RC4=$?',
+    'test ! -e /etc/menu && echo MENU-ROOT-GONE',
+    'echo ==seedxfer',
+    'gucman install test-seeda; echo RC=$?',
+    'gucman install test-seedb; echo RC2=$?',
+    'grep -q \'"/root/testshare"\' /var/lib/gucman/test-seeda.json && echo A-OWNS-SHARE',
+    'gucman remove test-seeda; echo RC3=$?',
+    'test -f /root/testshare/subb/b.txt && echo B-SEED-KEPT',
+    'test ! -e /root/testshare/suba && echo A-SUBDIR-GONE',
+    'grep -q \'"/root/testshare"\' /var/lib/gucman/test-seedb.json && echo SHARE-CLAIM-TRANSFERRED',
+    'gucman remove test-seedb; echo RC4=$?',
+    'test ! -e /root/testshare && echo SHARE-GONE',
+    'echo ==done',
+  ];
+  const g = driveBoot(gScript, { image: image630, args: ['--packages=none'], timeout: 420000 });
+  const gout = String(g.stdout || '');
+
+  const mnu = section(gout, 'menuvirgin');
+  check('#630 menu: a virgin minimal root has no /etc/menu', mnu.includes('NO-MENU-VIRGIN'), mnu);
+  const mx = section(gout, 'menuxfer');
+  check('#630 menu: both fixture packages install', mx.includes('RC=0') && mx.includes('RC2=0'), mx);
+  check('#630 menu: the first install claims the menu root', mx.includes('A-OWNS-ROOT'), mx);
+  check('#630 menu: the second claims nothing (dirs pre-existed)', mx.includes('B-OWNS-NOTHING'), mx);
+  check('#630 menu: removing the creator keeps the shared group', mx.includes('RC3=0') && mx.includes('B-ENTRY-KEPT'), mx);
+  check('#630 menu: the /etc/menu claim migrates to the survivor', mx.includes('ROOT-CLAIM-TRANSFERRED'), mx);
+  check('#630 menu: the group claim migrates too', mx.includes('GRP-CLAIM-TRANSFERRED'), mx);
+  check('#630 menu: the last package drops root AND group — no residue',
+    mx.includes('RC4=0') && mx.includes('MENU-ROOT-GONE'), mx);
+  const sx = section(gout, 'seedxfer');
+  check('#630 seed: both fixture packages install', sx.includes('RC=0') && sx.includes('RC2=0'), sx);
+  check('#630 seed: the first install claims the shared parent', sx.includes('A-OWNS-SHARE'), sx);
+  check('#630 seed: removing the creator keeps the shared parent (b\'s seed inside)',
+    sx.includes('RC3=0') && sx.includes('B-SEED-KEPT'), sx);
+  check('#630 seed: the creator\'s own subdir goes', sx.includes('A-SUBDIR-GONE'), sx);
+  check('#630 seed: the parent claim migrates to the survivor', sx.includes('SHARE-CLAIM-TRANSFERRED'), sx);
+  check('#630 seed: the last package leaves no residue', sx.includes('RC4=0') && sx.includes('SHARE-GONE'), sx);
 
   /* ---- session E: the FAT image carries the baked srclib fold ---- *
    * foldPackages' twin of the gucman plant: /usr/include + /usr/src symlink

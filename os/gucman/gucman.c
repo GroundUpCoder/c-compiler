@@ -818,11 +818,58 @@ static void gm_unwind(const char *name, struct gm_undo *u) {
     fo_delete(opt);
 }
 
+/* #630: does `arr` (an array of path strings) contain `path` exactly? */
+static int gm_arr_contains(cJSON *arr, const char *path) {
+    cJSON *it;
+    cJSON_ArrayForEach(it, arr)
+        if (cJSON_IsString(it) && strcmp(it->valuestring, path) == 0) return 1;
+    return 0;
+}
+
+/* #630: is `dir` claimed by any installed record's `dirs_key` array? The
+ * installing package's own record does not exist yet (it is written LAST),
+ * so no self-exclusion is needed on the install path. Same cost class as
+ * the #624 reverse-dependency scan (parse every record under
+ * /var/lib/gucman), which already runs on every remove. */
+static int gm_installed_names(char names[][GM_NAME_MAX], int max);
+static int gm_dir_claimed(const char *dir, const char *dirs_key) {
+    char (*names)[GM_NAME_MAX] = malloc((size_t)GM_LIST_MAX * GM_NAME_MAX);
+    if (!names) return 1;              /* OOM: treat as claimed — never adopt */
+    int n = gm_installed_names(names, GM_LIST_MAX);
+    int claimed = 0;
+    for (int i = 0; i < n && !claimed; i++) {
+        cJSON *rec = gm_db_load(names[i]);
+        if (!rec) continue;
+        claimed = gm_arr_contains(cJSON_GetObjectItemCaseSensitive(rec, dirs_key), dir);
+        cJSON_Delete(rec);
+    }
+    free(names);
+    return claimed;
+}
+
 /* mkdir-if-absent one srclib tier dir (/usr/local/include, /usr/local/src —
  * neither exists on a virgin root), RECORDING a dir WE created so
- * remove/unwind can rmdir it once it is empty again (the menu-dir rule). */
+ * remove/unwind can rmdir it once it is empty again (the menu-dir rule).
+ *
+ * #630 adoption: a tier that exists but that NO installed record claims is
+ * an orphan — a pre-#630 remove+reinstall interleaving dropped the creator's
+ * claim with its record, so no later remove could ever rmdir it. The
+ * installer adopts it (records it as its own), restoring a cleanup owner.
+ * This is sound for the two srclib tiers ONLY: neither ships in any image
+ * (minimal or fat — the fold's twin tiers live at sealed /usr/include and
+ * /usr/src), so an unclaimed existing tier is gucman residue, and the worst
+ * case against a hand-mkdir'd tier is an rmdir that only fires once the dir
+ * is EMPTY. The menu/seed families get no adoption: /etc/menu is a
+ * documented hand-customization target and /root is user territory, so
+ * existence cannot prove gucman provenance there — those families rely on
+ * the remove-side claim transfer instead, which never lets a claim die
+ * while gucman content keeps the dir alive. */
 static int gm_tier_mkdir(const char *dir, cJSON *db_dirs) {
-    if (gm_exists(dir)) return 0;
+    if (gm_exists(dir)) {
+        if (!gm_arr_contains(db_dirs, dir) && !gm_dir_claimed(dir, "srclib_dirs"))
+            cJSON_AddItemToArray(db_dirs, cJSON_CreateString(dir));
+        return 0;
+    }
     if (mkdir(dir, 0755) != 0) {
         fprintf(stderr, "gucman: mkdir %s: %s\n", dir, strerror(errno));
         return -1;
@@ -1766,6 +1813,101 @@ static int gm_revdep_refuse(const char *name) {
     return refused;
 }
 
+/* #630: does the record reference ANY path strictly inside `dir`? Checked
+ * across every planted-path array (plus seeds' {path} objects): a package
+ * with any recorded plant inside the dir is a valid next owner, because its
+ * own remove is guaranteed to revisit the dir through the transferred claim. */
+static int gm_rec_inside(cJSON *rec, const char *dir) {
+    static const char *keys[] = { "files", "dirs", "symlinks", "menu_entries",
+        "menu_dirs", "desktop", "include_entries", "src_namespaces",
+        "srclib_dirs", "seed_dirs", NULL };
+    size_t dl = strlen(dir);
+    cJSON *it;
+    for (int k = 0; keys[k]; k++)
+        cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(rec, keys[k]))
+            if (cJSON_IsString(it) && strncmp(it->valuestring, dir, dl) == 0 &&
+                it->valuestring[dl] == '/') return 1;
+    cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(rec, "seeds")) {
+        cJSON *p = cJSON_GetObjectItemCaseSensitive(it, "path");
+        if (cJSON_IsString(p) && strncmp(p->valuestring, dir, dl) == 0 &&
+            p->valuestring[dl] == '/') return 1;
+    }
+    return 0;
+}
+
+/* #630: replay one created-dir family (srclib_dirs / menu_dirs / seed_dirs),
+ * innermost-first. Before #630 a dir kept on ENOTEMPTY silently lost its
+ * claim when this record was deleted moments later — the reinstall then
+ * found the dir alive and never re-recorded it, so no later remove could
+ * rmdir it (permanent empty-dir residue once its content went; the #624
+ * lane hit this live on the srclib tiers). Now a kept dir's claim MIGRATES:
+ * it is appended to a surviving installed record whose own plants lie
+ * inside the dir (atomic rewrite, the #624 backfill precedent), so whoever
+ * still needs the dir also owns cleaning it up. The transfer keeps
+ * ancestors before descendants in the destination array (insert before the
+ * first entry inside the transferred dir — reverse replay needs
+ * innermost-first), skips an already-present claim (a crashed remove
+ * re-runs idempotently), and when NO surviving record has content inside
+ * (only user files remain — a kept-modified seed, a hand-added header) the
+ * claim lapses with the dir correctly kept: it holds user data, and for the
+ * srclib tiers gm_tier_mkdir's adoption re-claims it once it is orphaned
+ * again. */
+static void gm_dirs_replay(const char *self, cJSON *db, const char *dirs_key) {
+    cJSON *arr = cJSON_GetObjectItemCaseSensitive(db, dirs_key);
+    int n = cJSON_GetArraySize(arr);
+    if (n <= 0) return;
+    char *kept = calloc((size_t)n, 1);
+    for (int i = n - 1; i >= 0; i--) {       /* innermost-first rmdir */
+        cJSON *d = cJSON_GetArrayItem(arr, i);
+        if (!cJSON_IsString(d)) continue;
+        if (rmdir(d->valuestring) == 0) continue;
+        if (kept && (errno == ENOTEMPTY || errno == EEXIST))
+            kept[i] = 1;                     /* still shared: keep + transfer */
+    }
+    char (*names)[GM_NAME_MAX] = NULL;
+    int nn = -1;
+    for (int i = 0; kept && i < n; i++) {    /* forward: ancestors first */
+        if (!kept[i]) continue;
+        const char *dir = cJSON_GetArrayItem(arr, i)->valuestring;
+        if (nn < 0) {
+            names = malloc((size_t)GM_LIST_MAX * GM_NAME_MAX);
+            nn = names ? gm_installed_names(names, GM_LIST_MAX) : 0;
+        }
+        for (int j = 0; j < nn; j++) {
+            if (strcmp(names[j], self) == 0) continue;
+            cJSON *rec = gm_db_load(names[j]);   /* fresh per dir: an earlier
+                                                  * transfer may have rewritten
+                                                  * this very record */
+            if (!rec) continue;
+            if (!gm_rec_inside(rec, dir)) { cJSON_Delete(rec); continue; }
+            cJSON *tarr = cJSON_GetObjectItemCaseSensitive(rec, dirs_key);
+            if (!cJSON_IsArray(tarr)) tarr = cJSON_AddArrayToObject(rec, dirs_key);
+            if (tarr && !gm_arr_contains(tarr, dir)) {
+                int pos = cJSON_GetArraySize(tarr), ti = 0;
+                size_t dl = strlen(dir);
+                cJSON *t;
+                cJSON_ArrayForEach(t, tarr) {
+                    if (cJSON_IsString(t) && strncmp(t->valuestring, dir, dl) == 0 &&
+                        t->valuestring[dl] == '/') { pos = ti; break; }
+                    ti++;
+                }
+                cJSON_InsertItemInArray(tarr, pos, cJSON_CreateString(dir));
+                char *txt = cJSON_Print(rec);
+                char dbp[GM_PATH_MAX];
+                gm_db_path(names[j], dbp, sizeof dbp);
+                if (!txt || gm_write_file_atomic(dbp, txt, strlen(txt), 0644) != 0)
+                    fprintf(stderr, "gucman: warning: could not transfer the %s claim to %s\n",
+                            dir, names[j]);
+                free(txt);
+            }
+            cJSON_Delete(rec);
+            break;                           /* one owner per dir */
+        }
+    }
+    free(names);
+    free(kept);
+}
+
 static int cmd_remove(const char *name, int force) {
     if (!gm_valid_name(name)) {
         fprintf(stderr, "gucman: '%s' is not a valid package name\n", name);
@@ -1826,34 +1968,25 @@ static int cmd_remove(const char *name, int force) {
         }
     }
     /* seed dirs we created, innermost first — one holding a kept-modified or
-     * user-added file survives on ENOTEMPTY, automatically. */
-    cJSON *sdirs = cJSON_GetObjectItemCaseSensitive(db, "seed_dirs");
-    for (int i = cJSON_GetArraySize(sdirs) - 1; i >= 0; i--) {
-        cJSON *d = cJSON_GetArrayItem(sdirs, i);
-        if (cJSON_IsString(d)) rmdir(d->valuestring);
-    }
+     * user-added file survives on ENOTEMPTY (claim transferred, #630). */
+    gm_dirs_replay(name, db, "seed_dirs");
     /* srclib plants (§3.1): the include-tier and namespace symlinks, then
      * the tier dirs WE created — innermost-first replay like menu_dirs;
-     * rmdir on a now-shared (non-empty) tier just keeps it. */
+     * rmdir on a now-shared (non-empty) tier keeps it, claim transferred
+     * to a surviving srclib package (#630). */
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "include_entries"))
         if (cJSON_IsString(it)) unlink(it->valuestring);
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "src_namespaces"))
         if (cJSON_IsString(it)) unlink(it->valuestring);
-    cJSON *sldirs = cJSON_GetObjectItemCaseSensitive(db, "srclib_dirs");
-    for (int i = cJSON_GetArraySize(sldirs) - 1; i >= 0; i--) {
-        cJSON *d = cJSON_GetArrayItem(sldirs, i);
-        if (cJSON_IsString(d)) rmdir(d->valuestring);         /* ENOTEMPTY: shared now, keep */
-    }
+    gm_dirs_replay(name, db, "srclib_dirs");
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "font_faces"))
         if (cJSON_IsString(it)) gm_fontline_set(it->valuestring, 0);
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "menu_entries"))
         if (cJSON_IsString(it)) unlink(it->valuestring);
-    /* menu dirs we created, innermost first (recorded outermost first) */
-    cJSON *mdirs = cJSON_GetObjectItemCaseSensitive(db, "menu_dirs");
-    for (int i = cJSON_GetArraySize(mdirs) - 1; i >= 0; i--) {
-        cJSON *d = cJSON_GetArrayItem(mdirs, i);
-        if (cJSON_IsString(d)) rmdir(d->valuestring);            /* ENOTEMPTY: shared now, keep */
-    }
+    /* menu dirs we created, innermost first (recorded outermost first);
+     * a group still holding another package's entries keeps the dir and
+     * hands that package the claim (#630) */
+    gm_dirs_replay(name, db, "menu_dirs");
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "openwith_keys"))
         if (cJSON_IsString(it)) gm_openwith_set(it->valuestring, NULL);
     /* cmdalt claims: delete exactly the recorded key+value LINE, never the
