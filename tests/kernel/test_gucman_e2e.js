@@ -295,6 +295,8 @@ async function main() {
   check('gucman list prints the header', /^NAME\s+VERSION\s+SUMMARY/m.test(list2), list2);
   check('reinstall is an already-installed no-op', list2.includes('RC2=0') &&
     /already installed/.test(list2), list2);
+  check('the no-op names the upgrade path (#545)',
+    /`gucman upgrade punes`/.test(list2), list2);
 
   /* ---- #83: the human catalog (list --all) + per-package info ---- */
   const cat = section(aout, 'catalog');

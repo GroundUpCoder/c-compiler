@@ -1,6 +1,8 @@
 /*
  * gucman — the gucOS package manager (Slice 1: install / remove / list;
- * ticket #83 grew the human-readable catalog: `list [--all]` + `info`).
+ * ticket #83 grew the human-readable catalog: `list [--all]` + `info`;
+ * ticket #545 grew `upgrade [<name>]` — see cmd_upgrade for the semantics
+ * and the crash-window reasoning).
  *
  * CLI surface split (locked): `gucman index` prints the repository
  * index.json RAW — the machine-readable catalog for front-ends (the
@@ -35,7 +37,10 @@
  * payload, validated by the same tar rules, recorded in `files` like any
  * other plant — never inline strings, which would be a second content
  * channel outside the recorded plant). Contract: argv[1] is the verb
- * ("install"/"remove"; an upgrade verb can slot in later), cwd is
+ * ("install"/"remove"/"upgrade" — #545 slotted the reserved third verb in:
+ * an upgrade runs the OLD version's prerm and the NEW version's postinst,
+ * both with argv[1] = "upgrade", so a script can tell replacement from
+ * first-install and from removal), cwd is
  * /opt/<name>, env is the canonical desktop pair (PATH=/usr/local/bin:/bin,
  * HOME=/root — launch.h's LAUNCH_ENV values), stdio is inherited so script
  * output IS the progress UI, and a wall-clock bound (GM_SCRIPT_TIMEOUT_MS,
@@ -571,9 +576,13 @@ static int gm_openwith_set(const char *key, const char *value) {
  * the earliest-installed implementation stays the default and a later
  * install never silently steals the name). Remove deletes exactly THIS
  * key+value line, so two implementations installed and one removed leaves
- * the other's claim standing. Duplicates are idempotent: an identical line
- * is not appended twice. Removing the last line unlinks the file, so a
- * package-less system carries no empty config (the gm_fontline_set rule). */
+ * the other's claim standing. Duplicates are idempotent IN PLACE (#545):
+ * re-adding an existing identical line leaves the file untouched — line
+ * ORDER is meaning here (the first claim wins the dispatch), so an upgrade
+ * re-planting its claim must never move it to the end and silently flip
+ * the default to another package's claim. Removing the last line unlinks
+ * the file, so a package-less system carries no empty config (the
+ * gm_fontline_set rule). */
 static int gm_cmdalt_set(const char *key, const char *value, int add) {
     size_t len = 0;
     char *old = gm_read_file(GM_CMDALT, &len);
@@ -582,6 +591,7 @@ static int gm_cmdalt_set(const char *key, const char *value, int add) {
     char *out = malloc(cap);
     if (!out) { free(old); return -1; }
     size_t o = 0;
+    int found = 0;
     if (old) {
         for (char *line = old; line && *line; ) {
             char *nl = strchr(line, '\n');
@@ -598,10 +608,12 @@ static int gm_cmdalt_set(const char *key, const char *value, int add) {
                                 v[rest - 1] == '\r')) rest--;
                 is_ours = rest == vl && strncmp(v, value, vl) == 0;
             }
+            if (is_ours) found = 1;
             if (!is_ours) { memcpy(out + o, line, ll); o += ll; }
             line = nl ? nl + 1 : NULL;
         }
     }
+    if (add && found) { free(out); free(old); return 0; }   /* in place, untouched */
     if (o && out[o - 1] != '\n') out[o++] = '\n';
     if (add) o += (size_t)snprintf(out + o, cap - o, "%s\t%s\n", key, value);
     free(old);
@@ -622,7 +634,10 @@ static int gm_cmdalt_set(const char *key, const char *value, int add) {
  * CONCATENATE ahead of the baked /usr/share list, so this only ever
  * touches the delta). Preserves every other line, comments included;
  * creates the file (and /etc/fonts) when absent; removing the last line
- * unlinks the file so a package-less system carries no empty config. */
+ * unlinks the file so a package-less system carries no empty config.
+ * Re-adding an existing line leaves the file untouched (#545): the list
+ * is PRIORITY order, so an upgrade re-planting its face must keep its
+ * position rather than fall to the end of the chain. */
 static int gm_fontline_set(const char *path, int add) {
     size_t len = 0;
     char *old = gm_read_file(GM_FONT_LIST, &len);
@@ -631,16 +646,19 @@ static int gm_fontline_set(const char *path, int add) {
     if (!out) { free(old); return -1; }
     size_t o = 0;
     size_t pl = strlen(path);
+    int found = 0;
     if (old) {
         for (char *line = old; line && *line; ) {
             char *nl = strchr(line, '\n');
             size_t ll = nl ? (size_t)(nl - line) + 1 : strlen(line);
             size_t body = ll - (nl ? 1 : 0);
             int is_path = body == pl && strncmp(line, path, pl) == 0;
+            if (is_path) found = 1;
             if (!is_path) { memcpy(out + o, line, ll); o += ll; }
             line = nl ? nl + 1 : NULL;
         }
     }
+    if (add && found) { free(out); free(old); return 0; }   /* in place, untouched */
     if (o && out[o - 1] != '\n') out[o++] = '\n';
     if (add) o += (size_t)snprintf(out + o, cap - o, "%s\n", path);
     free(old);
@@ -765,6 +783,21 @@ static int gm_desktop_is_default(cJSON *desktop) {
     cJSON *d = desktop ? cJSON_GetObjectItemCaseSensitive(desktop, "default") : NULL;
     return cJSON_IsTrue(d);
 }
+
+/* ========================= upgrade context (#545) ====================== */
+
+/* The in-flight upgrade, one at a time (gucman is a CLI). Set by
+ * gm_upgrade_name around gm_install_one for the TARGET package only:
+ * dependency installs triggered by the new version run at depth > 0 and
+ * stay plain installs. An already-installed dep is deliberately never
+ * force-upgraded by a named upgrade — `gucman upgrade` with no name is the
+ * way to converge every installed package. */
+static struct {
+    int active;
+    cJSON *old_db;              /* the installed record being replaced */
+    char oldver[64];
+    int had_desktop;            /* a planted Desktop shortcut existed pre-upgrade */
+} gm_upg;
 
 /* ============================== install ================================ */
 
@@ -1121,6 +1154,44 @@ static cJSON *gm_fetch_index(const char *base) {
 
 static int gm_install_one(const char *base, cJSON *index, const char *name,
                           cJSON *in_progress, int depth);
+static void gm_replay_plant(const char *name, cJSON *db, int upgrading);
+
+/* #545: does the freshly-planted `commands` array carry this exact claim? */
+static int gm_cmds_contain(cJSON *arr, const char *k, const char *v) {
+    cJSON *it;
+    cJSON_ArrayForEach(it, arr) {
+        cJSON *ik = cJSON_GetObjectItemCaseSensitive(it, "name");
+        cJSON *iv = cJSON_GetObjectItemCaseSensitive(it, "value");
+        if (cJSON_IsString(ik) && cJSON_IsString(iv) &&
+            strcmp(ik->valuestring, k) == 0 && strcmp(iv->valuestring, v) == 0) return 1;
+    }
+    return 0;
+}
+
+/* #545: an upgrade that failed PAST its point of commitment — the old plant
+ * is gone and the new one just unwound, so the only honest DB state is "not
+ * installed". Remove the cmdalt/font lines the upgrade replay deliberately
+ * kept in place, then drop the record so it cannot lie. Deliberately NO
+ * tombstone: the user did not remove this package, so a defaults sync may
+ * legitimately restore a default one on the next boot — a tombstone here
+ * would make this crash window durable, which is exactly the #419 trap a
+ * remove+install upgrade would have fallen into. */
+static void gm_upgrade_fail_uninstall(const char *name) {
+    cJSON *it;
+    cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(gm_upg.old_db, "commands")) {
+        cJSON *k = cJSON_GetObjectItemCaseSensitive(it, "name");
+        cJSON *v = cJSON_GetObjectItemCaseSensitive(it, "value");
+        if (cJSON_IsString(k) && cJSON_IsString(v))
+            gm_cmdalt_set(k->valuestring, v->valuestring, 0);
+    }
+    cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(gm_upg.old_db, "font_faces"))
+        if (cJSON_IsString(it)) gm_fontline_set(it->valuestring, 0);
+    char dbp[GM_PATH_MAX];
+    gm_db_path(name, dbp, sizeof dbp);
+    unlink(dbp);
+    fprintf(stderr, "gucman: upgrading %s failed mid-replacement — %s is now NOT "
+            "installed; run `gucman install %s` to restore it\n", name, name, name);
+}
 
 static int gm_install_deps(const char *base, cJSON *index, cJSON *deps,
                            cJSON *in_progress, int depth) {
@@ -1145,6 +1216,9 @@ static int gm_install_deps(const char *base, cJSON *index, cJSON *deps,
 
 static int gm_install_one(const char *base, cJSON *index, const char *name,
                           cJSON *in_progress, int depth) {
+    /* #545: this call replaces an installed version (only ever the upgrade
+     * TARGET — dependency installs recurse at depth > 0 and stay plain). */
+    int upgrading = gm_upg.active && depth == 0;
     if (depth > 8) {
         fprintf(stderr, "gucman: dependency chain too deep — refusing\n");
         return -1;
@@ -1305,10 +1379,41 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
     }
     free(control_text);
 
+    /* #545: the upgrade's point of commitment. Everything above — download,
+     * sha256, decompress, tar validation, extraction, control + script
+     * validation — aborted with the OLD install fully intact, which covers
+     * the common failure classes (network, corrupt payload, malformed
+     * manifest). From here the old version comes out: run its prerm with the
+     * "upgrade" verb (non-fatal, the remove rule), then un-plant its record.
+     * Deliberately NOT cmd_remove: no reverse-dependency guard (the name is
+     * not leaving the system, so dependents stay satisfied and the #624
+     * guard is neither refused-into nor --force-disarmed), NO tombstone (a
+     * crash mid-upgrade must never read as a deliberate remove — #419's
+     * sync-defaults skips a tombstoned name FOREVER), and the DB record
+     * STAYS until the new one atomically replaces it, so "record exists ==
+     * installed" never lies: a crash anywhere in this window leaves the old
+     * record and a re-run of `upgrade` replays it again (ENOENT-tolerant,
+     * the crashed-remove rule) and converges. */
+    if (upgrading) {
+        cJSON *jprerm = cJSON_GetObjectItemCaseSensitive(gm_upg.old_db, "prerm");
+        if (cJSON_IsString(jprerm) && gm_exists(jprerm->valuestring)) {
+            printf("gucman: running %s prerm (upgrade)...\n", name);
+            fflush(stdout);
+            if (gm_run_script(jprerm->valuestring, "upgrade", name) != 0)
+                fprintf(stderr, "gucman: '%s' prerm failed — upgrading anyway\n", name);
+        }
+        gm_replay_plant(name, gm_upg.old_db, 1);
+    }
+
     /* A recordless /opt/<name> is a crashed install (the DB write is LAST);
-     * sweep it and take its place. */
+     * sweep it and take its place. On an upgrade the replay above already
+     * removed everything the old version planted, so a surviving /opt tree
+     * holds only unrecorded files — package territory goes with the old
+     * tree, exactly as the remove+install route always treated it. */
     if (gm_exists(opt)) {
-        fprintf(stderr, "gucman: sweeping leftover %s from an interrupted install\n", opt);
+        fprintf(stderr, upgrading
+                ? "gucman: %s still holds files not planted by the old version — removing them with the old tree\n"
+                : "gucman: sweeping leftover %s from an interrupted install\n", opt);
         fo_delete(opt);
     }
     if (rename(stage, opt) != 0) {
@@ -1316,6 +1421,7 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
         fo_delete(stage);
         cJSON_Delete(control);
         cJSON_Delete(db);
+        if (upgrading) gm_upgrade_fail_uninstall(name);
         return -1;
     }
 
@@ -1621,10 +1727,18 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
      * symlink model as menu/bin entries and is RECORDED in db_desktop so
      * uninstall's reverse replay removes exactly this and nothing else. A
      * name collision, malformed field or FS error is a warning, never an
-     * install failure — the icon is cosmetic; the install is not. */
+     * install failure — the icon is cosmetic; the install is not.
+     *
+     * On an UPGRADE (#545) the current toggle is ignored in both directions:
+     * eligibility is whether a planted shortcut was PRESENT just before the
+     * upgrade (gm_upg.had_desktop, measured before the replay unlinked it).
+     * Present stays present even if the toggle has since gone off; absent
+     * stays absent even if it is now on — a user's deleted icon must not
+     * resurrect because they upgraded. */
     cJSON *cdesk = fail ? NULL : cJSON_GetObjectItemCaseSensitive(control, "desktop");
     if (cdesk && depth == 0 &&
-        (gm_desktop_flag() || (gm_syncing_defaults && gm_desktop_is_default(cdesk)))) {
+        (upgrading ? gm_upg.had_desktop
+                   : (gm_desktop_flag() || (gm_syncing_defaults && gm_desktop_is_default(cdesk))))) {
         cJSON *dcmd = cJSON_GetObjectItemCaseSensitive(cdesk, "cmd");
         if (!cJSON_IsString(dcmd) || !gm_valid_name(dcmd->valuestring) ||
             !cbin || !cJSON_GetObjectItemCaseSensitive(cbin, dcmd->valuestring)) {
@@ -1654,9 +1768,9 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
      * A crash right after the script leaves a recordless /opt/<name>, which
      * the next install sweeps and re-runs — scripts must tolerate re-runs. */
     if (!fail && post_path[0]) {
-        printf("gucman: running %s postinst...\n", name);
+        printf("gucman: running %s postinst%s...\n", name, upgrading ? " (upgrade)" : "");
         fflush(stdout);
-        if (gm_run_script(post_path, "install", name) != 0) {
+        if (gm_run_script(post_path, upgrading ? "upgrade" : "install", name) != 0) {
             fprintf(stderr, "gucman: '%s' postinst failed — rolling back the install\n", name);
             fail = 1;
         }
@@ -1666,15 +1780,19 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
         gm_unwind(name, &undo);
         cJSON_Delete(control);
         cJSON_Delete(db);
+        if (upgrading) gm_upgrade_fail_uninstall(name);
         return -1;
     }
 
-    /* the DB record — LAST, atomically: its existence == "installed" */
+    /* the DB record — LAST, atomically: its existence == "installed" (an
+     * upgrade's write atomically REPLACES the old record over the same
+     * path, so the record is never absent mid-upgrade) */
     if (gm_mkdir_p(GM_DB_DIR) != 0) {
         perror("gucman: mkdir " GM_DB_DIR);
         gm_unwind(name, &undo);
         cJSON_Delete(control);
         cJSON_Delete(db);
+        if (upgrading) gm_upgrade_fail_uninstall(name);
         return -1;
     }
     cJSON *csum = cJSON_GetObjectItemCaseSensitive(control, "summary");
@@ -1685,10 +1803,14 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
     rc = db_text ? gm_write_file_atomic(dbp, db_text, strlen(db_text), 0644) : -1;
     free(db_text);
     cJSON_Delete(control);
-    cJSON_Delete(db);
     if (rc != 0) {
         fprintf(stderr, "gucman: writing %s: %s\n", dbp, strerror(errno));
+        /* NB unwind BEFORE deleting db — the undo arrays are db's children
+         * (this ordering was wrong here before #545: the one failure path
+         * that unwound after cJSON_Delete(db) replayed freed memory). */
         gm_unwind(name, &undo);
+        cJSON_Delete(db);
+        if (upgrading) gm_upgrade_fail_uninstall(name);
         return -1;
     }
     /* #419: a successful install clears the name's removal tombstone — an
@@ -1696,7 +1818,32 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
     char tomb[GM_PATH_MAX];
     gm_tomb_path(name, tomb, sizeof tomb);
     unlink(tomb);
-    printf("gucman: installed %s %s\n", name, jver->valuestring);
+    if (upgrading) {
+        /* #545: reconcile the two kept-in-place line families now that the
+         * new record is the truth on disk — a claim or face the new version
+         * no longer declares goes here (and only here: one the new version
+         * re-declared was left untouched at its original position by the
+         * idempotent add). Failure is a warning: a stale claim line names a
+         * now-missing path, which cmdalt reports loudly with a named fix. */
+        cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(gm_upg.old_db, "commands")) {
+            cJSON *k = cJSON_GetObjectItemCaseSensitive(it, "name");
+            cJSON *v = cJSON_GetObjectItemCaseSensitive(it, "value");
+            if (cJSON_IsString(k) && cJSON_IsString(v) &&
+                !gm_cmds_contain(db_cmd, k->valuestring, v->valuestring) &&
+                gm_cmdalt_set(k->valuestring, v->valuestring, 0) != 0)
+                fprintf(stderr, "gucman: warning: could not drop the stale %s claim\n",
+                        k->valuestring);
+        }
+        cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(gm_upg.old_db, "font_faces"))
+            if (cJSON_IsString(it) && !gm_arr_contains(db_fonts, it->valuestring) &&
+                gm_fontline_set(it->valuestring, 0) != 0)
+                fprintf(stderr, "gucman: warning: could not drop the stale fallback line %s\n",
+                        it->valuestring);
+        printf("gucman: upgraded %s %s -> %s\n", name, gm_upg.oldver, jver->valuestring);
+    } else {
+        printf("gucman: installed %s %s\n", name, jver->valuestring);
+    }
+    cJSON_Delete(db);
     return 0;
 }
 
@@ -1708,10 +1855,16 @@ static int cmd_install(const char *name) {
     char dbp[GM_PATH_MAX];
     gm_db_path(name, dbp, sizeof dbp);
     if (gm_exists(dbp)) {
+        /* #545: install stays install-if-absent (offline, no surprise
+         * mutation for the storefront and scripts that spawn it), but the
+         * no-op now NAMES the path to newer bits instead of hiding it —
+         * before the upgrade verb existed this line was the dead end that
+         * froze every installed package at its first version. */
         cJSON *db = gm_db_load(name);
         cJSON *v = db ? cJSON_GetObjectItemCaseSensitive(db, "version") : NULL;
-        printf("gucman: %s is already installed (%s)\n", name,
-               cJSON_IsString(v) ? v->valuestring : "?");
+        printf("gucman: %s is already installed (%s) — `gucman upgrade %s` moves it "
+               "to the repository version\n", name,
+               cJSON_IsString(v) ? v->valuestring : "?", name);
         cJSON_Delete(db);
         return 0;
     }
@@ -1941,8 +2094,42 @@ static int cmd_remove(const char *name, int force) {
                 fprintf(stderr, "gucman: '%s' prerm failed — removing anyway\n", name);
         }
     }
-    /* Replay the recorded plant in reverse install order. ENOENT along the
-     * way is fine — a crashed remove re-runs to completion. */
+    gm_replay_plant(name, db, 0);
+    cJSON *v = cJSON_GetObjectItemCaseSensitive(db, "version");
+    char ver[64];
+    snprintf(ver, sizeof ver, "%s", cJSON_IsString(v) ? v->valuestring : "");
+    cJSON_Delete(db);
+    /* #419: the removal tombstone, BEFORE the DB record goes — a crash
+     * between the two leaves the package installed (re-run remove); the
+     * reverse order would leave it removed but tombstone-less, which is
+     * exactly the resurrection bug sync-defaults must never ship. Failure
+     * is loud but non-fatal: the remove is the user's command. */
+    char tomb[GM_PATH_MAX];
+    gm_tomb_path(name, tomb, sizeof tomb);
+    if (gm_mkdir_p(GM_REMOVED_DIR) != 0 || gm_write_file_atomic(tomb, "", 0, 0644) != 0)
+        fprintf(stderr, "gucman: warning: could not record the removal of %s (%s) — "
+                        "a defaults sync may reinstall it\n", name, strerror(errno));
+    /* the DB record goes LAST — its absence == "not installed" */
+    char dbp[GM_PATH_MAX];
+    gm_db_path(name, dbp, sizeof dbp);
+    if (unlink(dbp) != 0) {
+        fprintf(stderr, "gucman: removing %s: %s\n", dbp, strerror(errno));
+        return 1;
+    }
+    printf("gucman: removed %s %s\n", name, ver);
+    return 0;
+}
+
+/* Replay a recorded plant in reverse install order (shared by remove and
+ * upgrade — #545). ENOENT along the way is fine: a crashed remove or
+ * upgrade re-runs to completion. `upgrading` skips the two POSITIONAL /etc
+ * line families — cmdalt claim lines and font fallback lines — because
+ * their order is meaning (the first claim wins the dispatch; the fallback
+ * list is priority order): the upgrade's re-plant leaves a re-declared
+ * line untouched at its original position (the idempotent add) and
+ * gm_install_one reconciles dropped ones after the new record is written,
+ * so an upgrade can never reorder a user's command default. */
+static void gm_replay_plant(const char *name, cJSON *db, int upgrading) {
     cJSON *it;
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "desktop"))
         if (cJSON_IsString(it)) unlink(it->valuestring);      /* Q5: remove the shortcut we planted */
@@ -1979,8 +2166,9 @@ static int cmd_remove(const char *name, int force) {
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "src_namespaces"))
         if (cJSON_IsString(it)) unlink(it->valuestring);
     gm_dirs_replay(name, db, "srclib_dirs");
-    cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "font_faces"))
-        if (cJSON_IsString(it)) gm_fontline_set(it->valuestring, 0);
+    if (!upgrading)                              /* positional: see header */
+        cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "font_faces"))
+            if (cJSON_IsString(it)) gm_fontline_set(it->valuestring, 0);
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "menu_entries"))
         if (cJSON_IsString(it)) unlink(it->valuestring);
     /* menu dirs we created, innermost first (recorded outermost first);
@@ -1990,13 +2178,15 @@ static int cmd_remove(const char *name, int force) {
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "openwith_keys"))
         if (cJSON_IsString(it)) gm_openwith_set(it->valuestring, NULL);
     /* cmdalt claims: delete exactly the recorded key+value LINE, never the
-     * key — another implementation's claim on the same name must survive. */
-    cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "commands")) {
-        cJSON *k = cJSON_GetObjectItemCaseSensitive(it, "name");
-        cJSON *v = cJSON_GetObjectItemCaseSensitive(it, "value");
-        if (cJSON_IsString(k) && cJSON_IsString(v))
-            gm_cmdalt_set(k->valuestring, v->valuestring, 0);
-    }
+     * key — another implementation's claim on the same name must survive.
+     * Skipped on upgrade (positional; the re-plant keeps the line in place). */
+    if (!upgrading)
+        cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "commands")) {
+            cJSON *k = cJSON_GetObjectItemCaseSensitive(it, "name");
+            cJSON *v = cJSON_GetObjectItemCaseSensitive(it, "value");
+            if (cJSON_IsString(k) && cJSON_IsString(v))
+                gm_cmdalt_set(k->valuestring, v->valuestring, 0);
+        }
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "symlinks"))
         if (cJSON_IsString(it)) unlink(it->valuestring);
     /* files, then dirs innermost-first, exactly the recorded list */
@@ -2014,32 +2204,9 @@ static int cmd_remove(const char *name, int force) {
     }
     char opt[GM_PATH_MAX];
     snprintf(opt, sizeof opt, GM_OPT_DIR "/%s", name);
-    if (rmdir(opt) != 0 && errno != ENOENT)
+    if (rmdir(opt) != 0 && errno != ENOENT && !upgrading)
         fprintf(stderr, "gucman: removing %s: %s (kept — files not planted by gucman remain)\n",
                 opt, strerror(errno));
-    cJSON *v = cJSON_GetObjectItemCaseSensitive(db, "version");
-    char ver[64];
-    snprintf(ver, sizeof ver, "%s", cJSON_IsString(v) ? v->valuestring : "");
-    cJSON_Delete(db);
-    /* #419: the removal tombstone, BEFORE the DB record goes — a crash
-     * between the two leaves the package installed (re-run remove); the
-     * reverse order would leave it removed but tombstone-less, which is
-     * exactly the resurrection bug sync-defaults must never ship. Failure
-     * is loud but non-fatal: the remove is the user's command. */
-    char tomb[GM_PATH_MAX];
-    gm_tomb_path(name, tomb, sizeof tomb);
-    if (gm_mkdir_p(GM_REMOVED_DIR) != 0 || gm_write_file_atomic(tomb, "", 0, 0644) != 0)
-        fprintf(stderr, "gucman: warning: could not record the removal of %s (%s) — "
-                        "a defaults sync may reinstall it\n", name, strerror(errno));
-    /* the DB record goes LAST — its absence == "not installed" */
-    char dbp[GM_PATH_MAX];
-    gm_db_path(name, dbp, sizeof dbp);
-    if (unlink(dbp) != 0) {
-        fprintf(stderr, "gucman: removing %s: %s\n", dbp, strerror(errno));
-        return 1;
-    }
-    printf("gucman: removed %s %s\n", name, ver);
-    return 0;
 }
 
 /* ============================ list / info ============================== */
@@ -2353,6 +2520,119 @@ static int cmd_info(const char *name) {
     return 0;
 }
 
+/* ============================== upgrade ================================ */
+
+/* #545: `gucman upgrade [<name>]` — converge installed package(s) on the
+ * repository's published version.
+ *
+ * Version semantics (decided here, recorded once): there is NO ordering
+ * over package version strings — they are opaque labels, and the `(update)`
+ * marker in `list --all` is the same bare inequality. So "differs from the
+ * index" IS the upgrade condition, in both directions: the repository is
+ * the single authority, and a publisher rolling BACK a bad release must
+ * reach installs the same way a release does. The banner prints the exact
+ * move ("upgrading X 3.13 -> 3.12") and claims no direction.
+ *
+ * The mechanism is a staged REPLACEMENT inside gm_install_one, not
+ * remove+install — see the point-of-commitment comment there for why
+ * (short form: the #624 reverse-dependency guard must be neither hit nor
+ * --force-disarmed, and the #419 tombstone state must never be transited,
+ * or a crash mid-upgrade would permanently unhook a default package from
+ * sync-defaults).
+ *
+ * `update` is deliberately NOT this verb: #73 scopes `update` as the
+ * apt-style index fetch/cache. Installed DEPS of a named target are not
+ * upgraded transitively (gm_install_deps' existed-already gate stands);
+ * the no-name form converges every installed package, which covers them.
+ *
+ * gm_upgrade_name returns -1 failed, 0 nothing to do, 1 upgraded. `lone`
+ * marks the single-package form, whose no-op cases speak (and whose
+ * missing-from-index case is an error rather than a skip). */
+static int gm_upgrade_name(const char *base, cJSON *index, const char *name, int lone) {
+    cJSON *db = gm_db_load(name);
+    if (!db) {
+        if (gm_is_baked(name))
+            fprintf(stderr, "gucman: %s is built into the system image — it upgrades "
+                    "with the OS, not through gucman\n", name);
+        else
+            fprintf(stderr, "gucman: %s is not installed — `gucman install %s` installs it\n",
+                    name, name);
+        return -1;
+    }
+    cJSON *pkgs = cJSON_GetObjectItemCaseSensitive(index, "packages");
+    cJSON *ent = pkgs ? cJSON_GetObjectItemCaseSensitive(pkgs, name) : NULL;
+    cJSON *av = ent ? cJSON_GetObjectItemCaseSensitive(ent, "version") : NULL;
+    if (!cJSON_IsString(av)) {
+        if (lone)
+            fprintf(stderr, "gucman: %s is installed but not in the repository index — "
+                    "cannot upgrade it\n", name);
+        else
+            fprintf(stderr, "gucman: %s is not in the repository index — skipped\n", name);
+        cJSON_Delete(db);
+        return lone ? -1 : 0;
+    }
+    char iv[64];
+    gm_db_fields(db, iv, sizeof iv, NULL, 0);
+    if (strcmp(iv, av->valuestring) == 0) {
+        if (lone) printf("gucman: %s is already up to date (%s)\n", name, iv);
+        cJSON_Delete(db);
+        return 0;
+    }
+    printf("gucman: upgrading %s %s -> %s\n", name, iv, av->valuestring);
+    fflush(stdout);
+    gm_upg.active = 1;
+    gm_upg.old_db = db;
+    snprintf(gm_upg.oldver, sizeof gm_upg.oldver, "%s", iv);
+    gm_upg.had_desktop = 0;
+    cJSON *it;
+    cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(db, "desktop"))
+        if (cJSON_IsString(it) && gm_exists(it->valuestring)) gm_upg.had_desktop = 1;
+    cJSON *in_progress = cJSON_CreateObject();
+    int rc = gm_install_one(base, index, name, in_progress, 0);
+    cJSON_Delete(in_progress);
+    memset(&gm_upg, 0, sizeof gm_upg);
+    cJSON_Delete(db);
+    return rc == 0 ? 1 : -1;
+}
+
+static int cmd_upgrade(const char *name) {
+    if (name && !gm_valid_name(name)) {
+        fprintf(stderr, "gucman: '%s' is not a valid package name\n", name);
+        return 1;
+    }
+    char base[GM_PATH_MAX];
+    if (gm_repo_base(base, sizeof base) != 0) return 1;
+    cJSON *index = gm_fetch_index(base);
+    if (!index) return 1;
+    int rc = 0;
+    if (name) {
+        rc = gm_upgrade_name(base, index, name, 1) < 0 ? 1 : 0;
+    } else {
+        char (*names)[GM_NAME_MAX] = malloc((size_t)GM_LIST_MAX * GM_NAME_MAX);
+        int n = names ? gm_installed_names(names, GM_LIST_MAX) : 0;
+        if (n == 0) {
+            printf("no packages installed\n");
+        } else {
+            int failed = 0, moved = 0;
+            for (int i = 0; i < n; i++) {
+                int r = gm_upgrade_name(base, index, names[i], 0);
+                if (r < 0) failed++; else moved += r;
+            }
+            if (failed) {
+                fprintf(stderr, "gucman: %d package(s) upgraded, %d FAILED\n", moved, failed);
+                rc = 1;
+            } else if (moved) {
+                printf("gucman: %d package(s) upgraded\n", moved);
+            } else {
+                printf("gucman: all installed packages are up to date\n");
+            }
+        }
+        free(names);
+    }
+    cJSON_Delete(index);
+    return rc;
+}
+
 /* =============================== index ================================= */
 
 /* Print the repository index RAW to stdout (the catalog surface for
@@ -2570,6 +2850,12 @@ int main(int argc, char **argv) {
             return rc;
         }
     }
+    if ((argc == 2 || argc == 3) && strcmp(argv[1], "upgrade") == 0) {
+        curl_global_init(CURL_GLOBAL_DEFAULT);
+        int rc = cmd_upgrade(argc == 3 ? argv[2] : NULL);
+        curl_global_cleanup();
+        return rc;
+    }
     if (argc == 2 && strcmp(argv[1], "list") == 0) return cmd_list(0);
     if (argc == 3 && strcmp(argv[1], "list") == 0 &&
         (strcmp(argv[2], "--all") == 0 || strcmp(argv[2], "-a") == 0)) {
@@ -2598,6 +2884,7 @@ int main(int argc, char **argv) {
     }
     fprintf(stderr,
             "usage: gucman install <name> | gucman remove <name> [--force] | gucman info <name>\n"
+            "       gucman upgrade [<name>] (converge on the repository version; no name = all)\n"
             "       gucman list [--all]   | gucman index (raw catalog JSON)\n"
             "       gucman sync-defaults (boot: install missing default packages)\n");
     return 2;
