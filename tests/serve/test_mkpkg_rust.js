@@ -87,11 +87,12 @@ function runRust(rustRoot, outDir, extraArgs) {
   const outRust = fs.mkdtempSync(path.join(os.tmpdir(), 'mkpkg-rout-'));
   try {
     // The purity arm: plain mkpkg over the REAL packages/ tree — the cheapest
-    // named base package (a font blob copy, no compilation) keeps the run
+    // named base package (a data-tree copy, no compilation; the fonts this
+    // arm used to name moved to gucos-packages at #615) keeps the run
     // fast; the written index is the assertion surface. The sibling root
     // points at the live synthetic sibling so the arm cannot pass by mere
     // absence of a resolvable overlay.
-    const rb = run(['font-unifont', `--rust-root=${sib}`, `--out=${outBase}`, '--quiet',
+    const rb = run(['netsurf-demos', `--rust-root=${sib}`, `--out=${outBase}`, '--quiet',
                     `--pool=${path.join(ROOT, 'build', 'test-packages', 'pool')}`]);
     check('purity: plain mkpkg exits 0', rb.status === 0, 'exit ' + rb.status + '  ' + rb.stderr);
     const idxB = JSON.parse(fs.readFileSync(path.join(outBase, 'index.json'), 'utf-8'));

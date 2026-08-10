@@ -13,8 +13,6 @@ picked every file below.
 | `NotoSansMono-Bold.ttf` | **The baked bold mono face** (`/usr/share/fonts/mono_bold.ttf`, NetSurf Lane 4): fills netsurf's `FB_FACE_MONOSPACE_BOLD` slot (bold `<code>`/`<pre>` text); term/wm keep rendering the regular face. | Noto fonts project, hinted build — `github.com/notofonts/notofonts.github.io` `fonts/NotoSansMono/hinted/ttf/`, fetched 2026-07-24. | SIL OFL 1.1 (`OFL-NotoSansMono.txt`) |
 | `NotoSansSymbols2-Regular.ttf` | **The first baked symbol face** (`/usr/share/fonts/symbols2.ttf`, ticket #435): registered in the baked `/usr/share/fonts/fallback` chain so five of the Mac modifier symbols (U+2318 ⌘, U+2325 ⌥, U+21E7 ⇧, U+232B ⌫, U+23CE ⏎) render in menus/chrome on a clean no-packages boot. NB U+2303 ⌃ is NOT in this family (measured: cmap glyph 0) — it lives in Noto Sans Symbols (1), vendored below since ticket #515. 2660 glyphs, upem 1000. | Noto fonts project — `github.com/notofonts/notofonts.github.io` `fonts/NotoSansSymbols2/hinted/ttf/`, fetched 2026-08-05 (source repo `github.com/notofonts/symbols`). | SIL OFL 1.1 (`OFL-NotoSansSymbols2.txt` — body identical to the sans/mono text, Symbols copyright line) |
 | `NotoSansSymbols-Regular.ttf` | **The second baked symbol face** (`/usr/share/fonts/symbols.ttf`, ticket #515): Noto Sans Symbols (1), appended to the baked fallback chain after Symbols 2 for the sixth Mac modifier symbol, U+2303 ⌃ (measured 2026-08-05: cmap glyph 265 here, glyph 0 in Symbols 2). The two families are complementary — Symbols (1) maps NONE of the five modifiers Symbols 2 covers, so chain order carries no ambiguity. 846 glyphs, upem 1000. | Noto fonts project — `github.com/notofonts/notofonts.github.io` `fonts/NotoSansSymbols/hinted/ttf/`, fetched 2026-08-05 (source repo `github.com/notofonts/symbols`). | SIL OFL 1.1 (`OFL-NotoSansSymbols.txt` — byte-identical to `OFL-NotoSansSymbols2.txt`; one source repo hosts both families) |
-| `unifont-15.0.06.ttf` | `font-unifont` package payload: GNU Unifont, full-BMP bitmap-traced coverage (57087 code points incl. all CJK) — the recommended "everything renders" install. | `ftp.gnu.org/gnu/unifont/unifont-15.0.06/`, fetched 2026-07-19. 15.0.06 is the LAST TrueType build — 15.1+ ships only CFF `.otf`. | Dual SIL OFL 1.1 / GPLv2+ with font-embedding exception (`COPYING-unifont.txt`) |
-| `NotoSansMonoCJKjp-VF.ttf` | `font-noto-cjk-mono` package payload: real CJK quality, family-consistent with the Noto base. Variable font; the default instance (Regular) is what freetype renders. | `github.com/notofonts/noto-cjk` `Sans/Variable/TTF/Mono/`, fetched 2026-07-19. The variable TTF is the ONLY TrueType-flavored official build (static OTF/OTC are CFF) — hence 35 MB instead of the ~16 MB static file. | SIL OFL 1.1 (`LICENSE-NotoCJK.txt`) |
 
 sha256 (fetched artifacts, for provenance):
 
@@ -26,15 +24,16 @@ sha256 (fetched artifacts, for provenance):
     1df075a380fc7cb898acf64c1f7b3b4dd780de3caa860178bf929de35817a913  NotoSans-Bold.ttf
     467e3f89eeca4108bb8710a2b9e0cf2281ac56d5b0609211a83776d0505eecb5  NotoSans-Italic.ttf
     1b602a9d6353be42c91df097a4857b69fa2696f26703d7a33b54a15d87c2622c  NotoSans-BoldItalic.ttf
-    9a91b2f42ad958fd4295586809f85366f0afa020b85ac70b39916c25bc5cda15  NotoSansMonoCJKjp-VF.ttf
-    9282b6eff54eeca2e7f58c9a40a91049bd219f3e6a45fbee8eba013379b9af3a  unifont-15.0.06.ttf
     c4a0a80f0041ce4be81e2478faad22776d23edb98ae3f0d19bd37044820ecf9d  NotoSansSymbols2-Regular.ttf
     d0e98e9a2c046594c5021437273943be7e79e0fd980fde125279e22302212595  NotoSansSymbols-Regular.ttf
 
-The mono/sans/serif Noto faces above are baked into the system image, and
-so are the two symbol faces (Symbols 2 since ticket #435, Symbols (1)
-since ticket #515 — the two baked fallback-chain entries, via the baked
-`/usr/share/fonts/fallback` list); the CJK fonts ship exclusively as
-gucman packages (`packages/font-*.json`) that append their face to the
-`/etc/fonts/fallback` chain on install (the /etc layer probes ahead of
-the baked list).
+Every face above is baked into the system image: the mono/sans/serif Noto
+families plus the two symbol faces (Symbols 2 since ticket #435, Symbols
+(1) since ticket #515 — the two baked fallback-chain entries, via the
+baked `/usr/share/fonts/fallback` list). The CJK coverage fonts
+(`font-unifont`, `font-noto-cjk-mono`) ship exclusively as gucman
+packages that append their face to the `/etc/fonts/fallback` chain on
+install (the /etc layer probes ahead of the baked list); since #615 their
+definitions, payload blobs, licenses and e2e live in the gucos-packages
+sibling repo (`packages/` + `assets/` + `tests/` there — provenance and
+sha256 in its `assets/README.md`).

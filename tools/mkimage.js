@@ -27,6 +27,15 @@
 // freshness gates compare, since a fat and a minimal blob share a version).
 //   --packages=all            fold every packages/<name>.json into the bake
 //   --packages=a,b            fold specific packages
+//   --defs=ROOT               add an ordered package definition source
+//                             (repeatable; the mkpkg --defs seam, #612/#615):
+//                             ROOT/packages/*.json join the fold set with
+//                             every repo-relative asset path resolved against
+//                             ROOT. Never auto-discovered — a fat image's
+//                             content must not depend on which optional
+//                             checkouts happen to sit beside the tree; the
+//                             estate's fat bakes (image-fixture, serve.js,
+//                             boot.js) deliberately fold the base set only.
 //
 // os/boot.js bakes the same blob on demand (missing/stale image), so this
 // tool is optional for the headless dev loop; it exists to prebake the blob
@@ -58,6 +67,7 @@ let allOverlays = false;
 let packagesWant = [];   // [] = minimal bake; 'all' | names = fold back in
 let packagesDir = null;  // --packages-dir=DIR: read definitions from DIR
 let noDefaultPackages = false;  // --no-default-packages: throwaway bake, carry no default set
+const defsRoots = [];    // --defs=ROOT (repeatable): ordered definition sources
 const requestedOverlays = new Set();
 for (const a of process.argv.slice(2)) {
   if (a.startsWith('--out=')) outPath = path.resolve(a.slice(6));
@@ -69,6 +79,7 @@ for (const a of process.argv.slice(2)) {
   else if (a === '--require-clean-overlays') requireCleanOverlays = true;
   else if (a === '--packages=all') packagesWant = 'all';
   else if (a.startsWith('--packages-dir=')) packagesDir = path.resolve(a.slice(15));
+  else if (a.startsWith('--defs=')) defsRoots.push(path.resolve(a.slice(7)));
   else if (a === '--no-default-packages') noDefaultPackages = true;
   else if (a.startsWith('--packages='))
     packagesWant = a.slice(11) === 'none' ? [] : a.slice(11).split(',').filter(Boolean);
@@ -80,12 +91,25 @@ for (const a of process.argv.slice(2)) {
 const log = quiet ? () => {} : (m) => process.stderr.write('[mkimage] ' + m + '\n');
 const rawManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
 
+// An explicit --defs root that cannot contribute is a loud usage error
+// (mkpkg's preflight discipline) — never a silently smaller fold set.
+for (const r of defsRoots) {
+  if (!fs.existsSync(r)) {
+    process.stderr.write(`mkimage: --defs root not found at ${r}\n`);
+    process.exit(2);
+  }
+  if (!fs.existsSync(path.join(r, 'packages'))) {
+    process.stderr.write(`mkimage: --defs root ${r} has no packages/ dir\n`);
+    process.exit(2);
+  }
+}
+
 // Fold requested packages back into the bake (gucman fixture mode). An
 // unknown name is a usage error, BEFORE any bake.
 let manifest, foldedPackages;
 try {
   const folded = COMMON.foldPackages(fs, path, ROOT, rawManifest, packagesWant,
-    { packagesDir, noDefaultPackages });
+    { packagesDir, noDefaultPackages, defs: defsRoots });
   manifest = folded.manifest;
   foldedPackages = folded.names;
 } catch (e) {

@@ -35,17 +35,17 @@
 // Sessions (one driveBoot each — reboots are the point):
 //   1. clean minimal boot: the baked defaults file names doom (#420), the
 //      offline sync fails legibly and installs nothing; then declare OUR
-//      defaults (punes + font-unifont) + repo via /etc at runtime — the
+//      defaults (punes + font-fixture) + repo via /etc at runtime — the
 //      /etc layer overrides the baked set wholesale.
 //   2. reboot = the "first boot" for those defaults: sync installs BOTH with
 //      zero user action — punes (an app: bin symlink, launches) and
-//      font-unifont (NOT an app: no executable, no launcher, nothing to
+//      font-fixture (NOT an app: no executable, no launcher, nothing to
 //      click — its /etc/fonts/fallback line is the whole point, the #437
 //      glyph-cache-miss shape). Then the user removes punes -> tombstone.
 //   3. reboot: jq (appended to the defaults after session 2 — the
 //      cached-image "newly added default" case) installs = positive control
 //      that sync RAN; punes STAYS GONE (durable removal, the load-bearing
-//      negative); font-unifont is not re-downloaded (idempotency, and its
+//      negative); font-fixture is not re-downloaded (idempotency, and its
 //      fallback line is not duplicated). Explicit `gucman install punes`
 //      clears the tombstone.
 //   4. dead repo + a still-missing default (win32): sync fails LOUD
@@ -58,6 +58,8 @@
 // Run: node tests/kernel/test_defaults_sync_e2e.js
 'use strict';
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { driveBoot, freshImage, section } = require('./lib/drive.js');
 const { ensureMinimalImage, ensurePackages, startServer } = require('./lib/gucman.js');
 
@@ -75,9 +77,27 @@ const waitFile = (p, secs, tag) =>
   `test -e ${p} && echo WAIT-OK-${tag} || echo WAIT-TIMEOUT-${tag}`;
 
 async function main() {
+  /* The non-app data-package default is a FIXTURE font built through a
+   * private --defs root (#615: the real font packages live in the
+   * gucos-packages sibling, and a NATIVE test must not depend on that
+   * checkout — the sibling-tests.js 'absent' rule). Inline `content`
+   * bytes as the face are the test_gucman_upgrade_e2e precedent: the
+   * fontchain skips an unloadable face, and nothing here renders it —
+   * the /etc/fonts/fallback PLANT is the subject. minBase 1 (#518: no
+   * compiled code). */
+  const fixRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'defsync-defs-'));
+  fs.mkdirSync(path.join(fixRoot, 'packages'));
+  fs.writeFileSync(path.join(fixRoot, 'packages', 'font-fixture.json'), JSON.stringify({
+    name: 'font-fixture', version: '1.0', minBase: 1,
+    summary: 'defaults-sync fixture: a non-app data package with a fonts plant',
+    files: { 'fixture.ttf': { content: 'not-a-real-face\n' } },
+    fonts: ['fixture.ttf'],
+  }));
   // #464: win32 deps freetype, so the repo must carry it for the sync's
   // transitive install to resolve.
-  const repo = ensurePackages(['punes', 'font-unifont', 'jq', 'win32', 'freetype']);
+  const repo = ensurePackages(['punes', 'font-fixture', 'jq', 'win32', 'freetype'],
+    { defs: [fixRoot] });
+  fs.rmSync(fixRoot, { recursive: true, force: true });   // consumed by the mkpkg run above
   const MIN = ensureMinimalImage();
   const { image } = freshImage('os-defsync-');
   fs.copyFileSync(MIN, image);   // copy mtime = now -> input-fresh at boot
@@ -102,7 +122,7 @@ async function main() {
     'echo ==config',
     'mkdir -p /etc/gucman',
     `echo http://127.0.0.1:${goodPort} > /etc/gucman/repos`,
-    'printf "# declared at runtime — the /etc override layer\\npunes\\nfont-unifont\\n" > /etc/gucman/defaults',
+    'printf "# declared at runtime — the /etc override layer\\npunes\\nfont-fixture\\n" > /etc/gucman/defaults',
     'test ! -e /var/lib/gucman/punes.json && echo NOT-YET-INSTALLED',
     `rm -f ${STATUS}`,   // session 2's wait must see ITS OWN boot's sync
     'echo ==done',
@@ -124,9 +144,9 @@ async function main() {
     waitFile(STATUS, 150, 'STATUS'),
     `cat ${STATUS}`,
     'test -e /var/lib/gucman/punes.json && echo PUNES-DB-OK',
-    'test -e /var/lib/gucman/font-unifont.json && echo FONT-DB-OK',
+    'test -e /var/lib/gucman/font-fixture.json && echo FONT-DB-OK',
     'readlink /usr/local/bin/punes',
-    'grep -c unifont /etc/fonts/fallback',
+    'grep -c fixture.ttf /etc/fonts/fallback',
     'echo ==launch',
     'punes &',
     'wmctl wait win puNES',
@@ -146,16 +166,16 @@ async function main() {
   check('sync completed (status file appeared)', sync2.includes('WAIT-OK-STATUS'), sync2);
   check('status reports ok', /^ok$/m.test(sync2), sync2);
   check('status names installed punes', /^installed punes$/m.test(sync2), sync2);
-  check('status names installed font-unifont', /^installed font-unifont$/m.test(sync2), sync2);
+  check('status names installed font-fixture', /^installed font-fixture$/m.test(sync2), sync2);
   check('punes DB record exists (installed with zero user action)',
     sync2.includes('PUNES-DB-OK'), sync2);
-  check('font-unifont DB record exists (a non-app default: nothing to click)',
+  check('font-fixture DB record exists (a non-app default: nothing to click)',
     sync2.includes('FONT-DB-OK'), sync2);
   check('punes bin symlink planted', sync2.includes('/opt/punes/punes'), sync2);
   check('font fallback line planted exactly once (glyph-cache reachable)',
     /^1$/m.test(sync2), sync2);
   check('sync console output announces the install',
-    /installed punes/.test(all2) && /installed font-unifont/.test(all2));
+    /installed punes/.test(all2) && /installed font-fixture/.test(all2));
   // The window itself is guarded by driveBoot: a failed `wmctl wait win
   // puNES` fails the whole session loudly (the 0171 rule).
   check('the default-installed punes launches (present AND working)',
@@ -175,8 +195,8 @@ async function main() {
     'test ! -e /var/lib/gucman/punes.json && echo PUNES-STAYS-GONE',
     'test ! -e /opt/punes && echo PUNES-OPT-GONE',
     'test ! -e /usr/local/bin/punes && echo PUNES-LINK-GONE',
-    'test -e /var/lib/gucman/font-unifont.json && echo FONT-STILL-THERE',
-    'grep -c unifont /etc/fonts/fallback',
+    'test -e /var/lib/gucman/font-fixture.json && echo FONT-STILL-THERE',
+    'grep -c fixture.ttf /etc/fonts/fallback',
     'echo ==reinstall',
     'gucman install punes; echo RC=$?',
     'test ! -e /var/lib/gucman/removed/punes && echo TOMBSTONE-CLEARED',
@@ -199,7 +219,7 @@ async function main() {
   check('removed default stays gone: no bin symlink', sync3.includes('PUNES-LINK-GONE'));
   check('installed default untouched on reboot', sync3.includes('FONT-STILL-THERE'));
   check('no duplicate fallback line on reboot (idempotent)', /^1$/m.test(sync3), sync3);
-  check('no re-download of an installed default', !/downloading font-unifont/.test(all3), all3.slice(0, 400));
+  check('no re-download of an installed default', !/downloading font-fixture/.test(all3), all3.slice(0, 400));
   // The exact instrument for "the sync never touched punes": its status
   // record names only what it acted on. The session's OWN explicit
   // `gucman install punes` below legitimately prints `downloading punes`,
@@ -257,7 +277,7 @@ async function main() {
   check('unknown-name failure is legible on the console',
     /nosuchpkg-419.*not found in the repository index/.test(all5), all5.slice(-400));
   check('installed defaults are not re-touched on the retry boot',
-    !/downloading jq/.test(all5) && !/downloading font-unifont/.test(all5));
+    !/downloading jq/.test(all5) && !/downloading font-fixture/.test(all5));
 
   console.log(failures ? `\n${failures} check(s) FAILED` : '\ndefaults-sync e2e OK');
   process.exit(failures ? 1 : 0);

@@ -15,7 +15,7 @@
 //     <= maxW, no fillText squish) + same-bytes.
 //   - CJK title (no font package on the fixture root): honest tofu boxes,
 //     same-bytes — coverage parity with gdi32/term on the same image (the
-//     real-glyph CJK title leg lives in test_fontpkg_e2e.js, which owns
+//     real-glyph CJK title leg lives in gucos-packages/tests/test_fontpkg_e2e.js (#615), which owns
 //     the install/remove story).
 //   - Exposé caption: overview N=1 → the caption renders centered under
 //     the cell, same-bytes over the desktop/border background.

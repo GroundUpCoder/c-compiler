@@ -88,9 +88,16 @@ function requireEntries(index, need, what) {
   }
 }
 
+/* opts.defs (#615): ordered definition-source roots forwarded as mkpkg
+ * --defs=<root> — the sibling-owned tests (gucos-packages) pass their own
+ * repo, and test fixtures pass a private root. NEVER auto-discovered here:
+ * a native c-compiler test that needs a --defs package would silently
+ * couple the land gate to an optional checkout (the sibling-tests.js
+ * 'absent' rule) — the caller states the root or gets the base set. */
 function ensurePackages(need, opts) {
-  const dir = testRepoDir((opts || {}).tag);
-  const index = runMkpkg(dir, [], 600000);
+  opts = opts || {};
+  const dir = testRepoDir(opts.tag);
+  const index = runMkpkg(dir, (opts.defs || []).map((r) => `--defs=${r}`), 600000);
   requireEntries(index, need, 'mkpkg');
   return { dir, index };
 }

@@ -11,7 +11,8 @@
 //     #578 shipped it as a package), each with the right version lineage
 //     and its compile closure at repo paths
 //   - the exclusions are mechanical, not a hand list: a source-only package
-//     (win32), a data package (font-unifont), a seed package
+//     (win32), a data package (a fixture def — the real data packages, the
+//     fonts, live in gucos-packages since #615), a seed package
 //     (netsurf-demos), and every native-sibling-gated def get NO unit
 //   - every def is uniform: name = <parent>-sources, minBase 0,
 //     srclib {src:{<parent>:'.'}}, every file a repo-mirroring bin entry
@@ -81,7 +82,27 @@ check('lua-sources closure carries the interpreter source',
   lua && Object.keys(lua.def.files).some((f) => f === 'vendor/lua/src/lua.c'));
 
 check('win32 (source-only package) gets NO unit', !byName.has('win32-sources'));
-check('font-unifont (data package) gets NO unit', !byName.has('font-unifont-sources'));
+// The data-package exclusion is pinned on a FIXTURE def since #615 moved the
+// real data packages (the fonts) to the gucos-packages sibling: a native test
+// must not depend on that checkout, and pointing this at whichever real def
+// happens to qualify is how the pin went vacuous once already. The fixture is
+// hermetic and cannot move out from under the check.
+{
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'srcdata-'));
+  try {
+    fs.writeFileSync(path.join(dataDir, 'datapkg.json'), JSON.stringify({
+      name: 'datapkg', version: '1', summary: 'pure-data fixture (bin blob, no compilable entry)',
+      minBase: 1, files: { 'blob.ttf': { bin: 'x.ttf' } }, fonts: ['blob.ttf'],
+    }));
+    const dataUnits = COMMON.sourcePackageDefs(fs, path, ROOT,
+      { CompilerJS, packagesDir: dataDir, imageManifest: { version: 1, system: { dirs: [], files: {} } } });
+    check('a data package (bin-only def) gets NO unit',
+      !dataUnits.some((u) => u.name === 'datapkg-sources'),
+      dataUnits.map((u) => u.name).join(','));
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+}
 check('netsurf-demos (seed package) gets NO unit', !byName.has('netsurf-demos-sources'));
 check('no gated (-clang/-rust) def gets a unit',
   units.every((u) => !/-(clang|rust)-sources$/.test(u.name)),
