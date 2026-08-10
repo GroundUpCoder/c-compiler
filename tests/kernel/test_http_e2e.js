@@ -275,14 +275,22 @@ int main(void) {
 
     /* #392: the error-TEXT peek. Healthy = 0 bytes; after the failure the
        real diagnostic (Node's cause chain: connect ECONNREFUSED host:port)
-       crosses to C, NUL-terminated. Peek BEFORE close — the last release
-       frees the transfer, text included. */
-    snprintf(url, sizeof url, "%s/x", refused);
-    int efd = __http_open("GET", url, "", 0, 0, 0, 0);
+       crosses to C, NUL-terminated. The healthy peek runs on a transfer
+       that CANNOT have settled — /never accepts the connect and sends
+       nothing, and no deadline is armed — because peeking an fd that is
+       EXPECTED to fail races the connect rejection (a refused localhost
+       port can land its error before the peek: a measured 5% flake).
+       Peek the failed text BEFORE close — the last release frees the
+       transfer, text included. */
+    snprintf(url, sizeof url, "%s/never", base);
+    int hfd = __http_open("GET", url, "", 0, 0, 0, 0);
     char etxt[512];
     etxt[0] = 'Z';                               /* prove the healthy peek writes the NUL */
-    int epre = __http_error(efd, etxt, (int)sizeof etxt);
+    int epre = __http_error(hfd, etxt, (int)sizeof etxt);
     int eprenul = etxt[0] == 0;
+    close(hfd);                                  /* aborts the pending fetch */
+    snprintf(url, sizeof url, "%s/x", refused);
+    int efd = __http_open("GET", url, "", 0, 0, 0, 0);
     for (;;) {
         char hdr[256];
         if (__http_status(efd, &status, hdr, sizeof hdr) >= 0) break;
