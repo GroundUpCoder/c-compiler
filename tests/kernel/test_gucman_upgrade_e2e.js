@@ -231,10 +231,18 @@ async function main() {
     `echo http://127.0.0.1:${portC} > /etc/gucman/repos`,
     'touch /root/up3-hang',
     'gucman upgrade test-up &',
-    // marker wait, 1s supervision tick (the postinst signals its own start)
-    'while test ! -e /root/up3-started; do sleep 1; done',
+    // marker wait, 1s supervision tick, BOUNDED (0171: a wait that cannot be
+    // satisfied must surface as a failed assert, not eat the clock)
+    'n=0',
+    'while test ! -e /root/up3-started -a $n -lt 60; do sleep 1; n=$((n+1)); done',
+    'test -e /root/up3-started && echo POSTINST-STARTED',
     'pkill -9 gucman',
-    'wait',
+    // NB no bare `wait` here: the SIGKILLed gucman's postinst child gets
+    // reparented to pid 1 — which IS this driving shell — so `wait` would
+    // block on the adopted, still-parked script. Poll the pid out instead.
+    'n=0',
+    'while pgrep gucman >/dev/null && test $n -lt 15; do sleep 1; n=$((n+1)); done',
+    'pgrep gucman >/dev/null || echo GUCMAN-GONE',
     'test ! -e /var/lib/gucman/removed/test-up && echo NO-TOMB-AFTER-CRASH',
     'test -f /var/lib/gucman/test-up.json && echo DB-SURVIVES-CRASH',
     'grep \'"version"\' /var/lib/gucman/test-up.json',
@@ -329,6 +337,8 @@ async function main() {
     dsg.includes('DESK-STAYS-GONE'), dsg);
 
   const cr = section(out, 'crash');
+  check('the crash-window postinst really started', cr.includes('POSTINST-STARTED'), cr);
+  check('SIGKILL took gucman down mid-window', cr.includes('GUCMAN-GONE'), cr);
   check('SIGKILL mid-upgrade leaves NO tombstone (the #419 hazard)',
     cr.includes('NO-TOMB-AFTER-CRASH'), cr);
   check('the DB record survives the crash (still "installed")',
