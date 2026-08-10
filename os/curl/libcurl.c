@@ -62,6 +62,12 @@
 __import int __http_open(const char *method, const char *url, const char *headers,
                          const void *body, int blen, int headers_ms, int idle_ms);
 __import int __http_status(int fd, int *status_out, char *hdr, int hdrcap);
+/* The error-TEXT peek (#392): the transfer's recorded failure text (the
+   transport's own diagnostic — a CORS denial, a dead bridge, the fetch cause
+   chain), NUL-terminated into buf. 0 while healthy; non-consuming; must run
+   BEFORE close(fd) (close aborts and frees the transfer, text included).
+   -1/ENOSYS on an embedder predating the op — degrade to errno-only text. */
+__import int __http_error(int fd, char *buf, int cap);
 /* The unified multi-source wait (todos/0178; wm.c precedent). why: 0 =
    timeout, 1 = an fd is readable, 2 = input ring, -1 = EINTR (the handler
    already ran), -2 = no kernel WAIT in this flavor. */
@@ -249,6 +255,50 @@ static CURLcode fail(easy *h, CURLcode code, const char *msg) {
   return code;
 }
 
+/* Transport failure on a LIVE fd (#392). Before this, everything but
+   ETIMEDOUT collapsed to CURLE_COULDNT_CONNECT / "connection failed", so a
+   CORS denial, a bridge policy refusal and a dead bridge all read "Couldn't
+   connect to server". Two fixes in one place: the errno picks a DISTINCT
+   code, and the transport's own error text (via __http_error — fetched
+   FIRST: the caller closes the fd right after, which frees the transfer)
+   becomes the message. reading_body selects the post-headers vocabulary.
+   The caller still owns close(fd). */
+static CURLcode fail_transport(easy *h, int fd, int serrno, int reading_body) {
+  static char text[CURL_ERROR_SIZE];   /* single-threaded, the g_hdrblob rule */
+  text[0] = 0;
+  int tn = __http_error(fd, text, (int)sizeof text);
+  CURLcode code;
+  const char *what;
+  switch (serrno) {
+    case ETIMEDOUT:
+      code = CURLE_OPERATION_TIMEDOUT;
+      what = reading_body ? "timed out reading body" : "timed out waiting for response";
+      break;
+    case ENETUNREACH:                  /* bridge configured but unreachable (#349) */
+      code = CURLE_COULDNT_CONNECT;
+      what = "network unreachable";
+      break;
+    case EACCES:                       /* bridge policy refusal (NETWORK.md Tier 2.5) */
+      code = CURLE_REMOTE_ACCESS_DENIED;
+      what = "access denied";
+      break;
+    case EINVAL:                       /* wrapper rejected the target URL itself */
+      code = CURLE_URL_MALFORMAT;
+      what = "bad URL";
+      break;
+    default:
+      code = reading_body ? CURLE_RECV_ERROR : CURLE_COULDNT_CONNECT;
+      what = reading_body ? "body read failed" : "connection failed";
+      break;
+  }
+  char msg[CURL_ERROR_SIZE];
+  if (tn > 0 && text[0])
+    snprintf(msg, sizeof msg, "%s: %s", what, text);
+  else
+    snprintf(msg, sizeof msg, "%s (%s)", what, strerror(serrno));
+  return fail(h, code, msg);
+}
+
 /* Feed one synthesized header line to the header sink. No HEADERFUNCTION
    but a HEADERDATA -> fwrite to it as a FILE* (real curl's default). */
 static int emit_header(easy *h, const char *line, size_t len) {
@@ -355,7 +405,11 @@ CURLcode curl_easy_perform(CURL *handle) {
   free(hdrs); free(rbody);
   if (fd < 0) {
     if (errno == ENOSYS) return fail(h, CURLE_UNSUPPORTED_PROTOCOL, "no network transport (fetch disabled)");
-    return fail(h, CURLE_COULDNT_CONNECT, "could not open transfer");
+    /* No fd, so no __http_error channel — these are local staging errors;
+       the errno text is the whole story (#392). */
+    char omsg[CURL_ERROR_SIZE];
+    snprintf(omsg, sizeof omsg, "could not open transfer (%s)", strerror(errno));
+    return fail(h, CURLE_COULDNT_CONNECT, omsg);
   }
 
   /* status + headers: WAIT on the fd, consume the status when it lands */
@@ -373,10 +427,9 @@ CURLcode curl_easy_perform(CURL *handle) {
       return fail(h, CURLE_COULDNT_CONNECT, "no kernel wait (__wait unsupported in this flavor)");
     }
     int serrno = errno;
+    CURLcode fc = fail_transport(h, fd, serrno, 0);   /* reads the text; close frees it */
     close(fd);
-    if (serrno == ETIMEDOUT)
-      return fail(h, CURLE_OPERATION_TIMEDOUT, "timed out waiting for response");
-    return fail(h, CURLE_COULDNT_CONNECT, "connection failed");
+    return fc;
   }
   int copied = hl < HDR_BLOB_CAP ? hl : HDR_BLOB_CAP;
   g_hdrblob[copied] = 0;
@@ -449,11 +502,7 @@ CURLcode curl_easy_perform(CURL *handle) {
                     : fail(h, CURLE_RECV_ERROR, "no kernel wait (__wait unsupported in this flavor)");
       break;
     }
-    if (errno == ETIMEDOUT) {
-      rc = fail(h, CURLE_OPERATION_TIMEDOUT, "timed out reading body");
-      break;
-    }
-    rc = fail(h, CURLE_RECV_ERROR, "body read failed");
+    rc = fail_transport(h, fd, errno, 1);   /* the loop exit's close(fd) frees it */
     break;
   }
   close(fd);
@@ -497,6 +546,7 @@ const char *curl_easy_strerror(CURLcode code) {
     case CURLE_URL_MALFORMAT:        return "URL using bad/illegal format or missing URL";
     case CURLE_COULDNT_RESOLVE_HOST: return "Couldn't resolve host name";
     case CURLE_COULDNT_CONNECT:      return "Couldn't connect to server";
+    case CURLE_REMOTE_ACCESS_DENIED: return "Access denied to remote resource";
     case CURLE_HTTP_RETURNED_ERROR:  return "HTTP response code said error";
     case CURLE_ABORTED_BY_CALLBACK:  return "Operation was aborted by an application callback";
     case CURLE_WRITE_ERROR:          return "Failed writing received data to disk/application";

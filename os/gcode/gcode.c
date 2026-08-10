@@ -2196,6 +2196,9 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
     else if (cfg->api_key) { sb_puts(&auth, "x-api-key: "); sb_puts(&auth, cfg->api_key); }
     if (auth.len) hdr = curl_slist_append(hdr, auth.p);
 
+    static char curl_errbuf[CURL_ERROR_SIZE];   /* #392: the transport's own words */
+    curl_errbuf[0] = 0;
+    curl_easy_setopt(h, CURLOPT_ERRORBUFFER, curl_errbuf);
     curl_easy_setopt(h, CURLOPT_URL, url.p);
     curl_easy_setopt(h, CURLOPT_POST, 1L);
     curl_easy_setopt(h, CURLOPT_POSTFIELDS, payload);
@@ -2218,7 +2221,10 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
     int ret = 0;
     if (rc != CURLE_OK) {
         if (g_interrupted && rc == CURLE_ABORTED_BY_CALLBACK) { fprintf(stderr, "\n%sgcode: interrupted%s\n", CDIM, CRST); ret = -2; }
-        else { fprintf(stderr, "\n%sgcode: transport error: %s%s\n", R_ERRB, curl_easy_strerror(rc), CRST); ret = -1; }
+        /* #392: prefer the errorbuffer — the veneer writes the transport's
+           real diagnostic there; strerror(rc) is the blanket category. */
+        else { fprintf(stderr, "\n%sgcode: transport error: %s%s\n", R_ERRB,
+                       curl_errbuf[0] ? curl_errbuf : curl_easy_strerror(rc), CRST); ret = -1; }
         goto done;
     }
     if (code != 200) {

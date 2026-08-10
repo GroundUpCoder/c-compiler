@@ -3012,7 +3012,29 @@ function createNetFetch(baseFetch) {
   }
 
   function netFetch(url, init) {
-    if (!state.on) return base(url, init);   // OFF: tail-call, caller's exact args
+    if (!state.on) {
+      // OFF: tail-call, caller's exact args — except that a BROWSER
+      // cross-origin rejection is a bare TypeError indistinguishable from a
+      // dead server, and the user reads it as "Couldn't connect" (#392).
+      // Name the platform gate and the fix on the rejection text; the
+      // request itself is untouched (same call, same args, same errno —
+      // EIO by kernel.js's default mapping).
+      if (typeof location !== 'undefined' && location.href
+          && location.origin && location.origin !== 'null') {
+        var xo = null;
+        try { xo = new URL(url + '', location.href); } catch (e) {}
+        if (xo && xo.origin !== location.origin
+            && (xo.protocol === 'http:' || xo.protocol === 'https:')) {
+          return base(url, init).catch(function (err) {
+            if (err && (err.name === 'AbortError' || typeof err.errno === 'string')) throw err;
+            var why = (err && err.cause && err.cause.message) || (err && err.message) || 'fetch failed';
+            throw new Error(why + ' — cross-origin fetch is CORS-gated in the'
+              + ' browser; the HTTP bridge lifts this (Control Panel > Network)');
+          });
+        }
+      }
+      return base(url, init);
+    }
     // #391: same-origin passthrough + absolutization, ruled at THIS one
     // choke point. With a real `location` (the browser embedder) every
     // target resolves against it; a target on the embedder's OWN origin

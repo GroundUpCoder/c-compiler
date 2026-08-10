@@ -6927,6 +6927,14 @@ function createEgress(ctx, hooks) {
      __http_status(fd, status_out, hdr, hdr_cap) -> total header bytes | -1
         NON-BLOCKING: -1/EAGAIN before the headers arrive. Writes the
         numeric status to *status_out; copies min(total, hdr_cap).
+     __http_error(fd, buf, cap) -> total error-text bytes | -1
+        The error-TEXT peek (#392): the transfer's recorded failure text —
+        the transport's own diagnostic (a CORS denial, a dead bridge, the
+        fetch cause chain) that errno alone cannot carry. 0 while healthy;
+        never consumes anything; callable any time the fd is open (so call
+        it BEFORE close — close aborts and frees the transfer). Copies
+        min(total, cap-1) bytes + NUL. -1/ENOSYS on an embedder predating
+        the op (the veneer degrades to errno-only messages).
      read(fd, buf, cap) -> n>0 | 0 (clean EOF) | -1 (EAGAIN dry; ETIMEDOUT
         deadline; EIO failed)
      close(fd) aborts the transfer.
@@ -6983,6 +6991,25 @@ function createHttp(ctx, hooks) {
       const n = Math.min(hdrCap >>> 0, hb.length);
       if (n > 0 && hdrPtr) new Uint8Array(ctx.getMemory().buffer).set(hb.subarray(0, n), hdrPtr);
       return hb.length;
+    },
+    __http_error: function (fd, bufPtr, cap) {
+      // The error-TEXT channel (#392): what __http_status's console.error
+      // above keeps host-visible, this hands to the C surface — the veneer
+      // writes it into CURLOPT_ERRORBUFFER. An embedder without the hook or
+      // a kernel predating OP.HTTP_ERROR answers ENOSYS (fail loud; the
+      // veneer composes an errno-only message instead).
+      if (!have || typeof hooks.httpError !== 'function') { ctx.setErrnoName('ENOSYS'); return -1; }
+      const r = hooks.httpError(fd | 0);
+      if (!r || r.errno) { ctx.setErrnoName((r && r.errno) || 'EIO'); return -1; }
+      const eb = enc.encode(r.error || '');
+      cap = cap >>> 0;
+      if (cap > 0 && bufPtr) {
+        const n = Math.min(cap - 1, eb.length);
+        const mem = new Uint8Array(ctx.getMemory().buffer);
+        if (n > 0) mem.set(eb.subarray(0, n), bufPtr);
+        mem[bufPtr + n] = 0;
+      }
+      return eb.length;
     },
   } };
 }

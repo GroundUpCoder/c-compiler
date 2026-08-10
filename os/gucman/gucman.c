@@ -310,16 +310,23 @@ static int gm_http_get(const char *base, const char *rel, struct gm_buf *out) {
     memset(out, 0, sizeof *out);
     CURL *h = curl_easy_init();
     if (!h) { fprintf(stderr, "gucman: curl init failed\n"); return -1; }
+    char errbuf[CURL_ERROR_SIZE];
+    errbuf[0] = 0;
     curl_easy_setopt(h, CURLOPT_URL, url);
     curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, gm_curl_sink);
     curl_easy_setopt(h, CURLOPT_WRITEDATA, out);
     curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 30L);
+    curl_easy_setopt(h, CURLOPT_ERRORBUFFER, errbuf);
     CURLcode rc = curl_easy_perform(h);
     long code = 0;
     curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &code);
     curl_easy_cleanup(h);
     if (rc != CURLE_OK) {
-        fprintf(stderr, "gucman: %s: %s\n", url, curl_easy_strerror(rc));
+        /* #392: the errorbuffer carries the transport's own diagnostic (a
+           CORS denial, a dead bridge, the refused address) — strerror alone
+           said "Couldn't connect to server" for all of them. */
+        fprintf(stderr, "gucman: %s: %s\n", url,
+                errbuf[0] ? errbuf : curl_easy_strerror(rc));
         free(out->p);
         out->p = NULL;
         out->len = 0;

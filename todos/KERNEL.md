@@ -845,6 +845,19 @@ leak, so those are what's pinned:
   mid-stream drop on `FS_READ` (after some bytes) — both carry the error
   string for `curl_easy_strerror` fidelity (`RemoteFS.read` logs it; the
   ticket-#78 visibility rule).
+- **The error TEXT crosses to C** (`HTTP_ERROR` 0x0606, ticket #392): JSON
+  `{fd}` → `{error}` — the transfer's recorded failure text (`''` while
+  healthy), non-consuming, callable in any state while the fd lives. The
+  C surface is `__http_error(fd, buf, cap)` (host.js `createHttp`), and
+  the libcurl veneer writes it into `CURLOPT_ERRORBUFFER` — so a CORS
+  denial, a dead bridge and a bad URL stop collapsing into "Couldn't
+  connect to server". Consumers must read it BEFORE `close(fd)` (the
+  last release frees the transfer, text included). The kernel also digs
+  a Node fetch rejection's `err.cause.message` into the text
+  (`_fetchErrorText`) — the top-level message is a bare "fetch failed";
+  the useful part (`connect ECONNREFUSED …`) lives in the cause. An
+  embedder predating the op answers ENOSYS and the veneer degrades to
+  errno-derived messages.
 - **Needs both halves.** `fetch: null` at construction disables network
   entirely, and a no-fs kernel has no fd table for a transfer to live in —
   either way `HTTP_OPEN` → ENOSYS (standalone pages stay offline).

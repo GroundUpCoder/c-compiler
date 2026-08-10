@@ -285,7 +285,21 @@ async function drain(pid, fd, count) {
   check('mid-stream: got the partial bytes first', d.buf.toString() === 'partial', JSON.stringify(d.buf.toString()));
   check('mid-stream: failure surfaces as EIO, not EOF', d.err && d.err.errno === 'EIO', JSON.stringify(d.err));
   check('mid-stream: error string carried through', d.err && /stream broke/.test(d.err.error || ''), JSON.stringify(d.err));
+  r = await rpc(1, K.OP.HTTP_ERROR, { fd: fdE });
+  check('HTTP_ERROR after a mid-stream drop hands the text (#392)',
+    !r.errno && /stream broke/.test(r.error || ''), JSON.stringify(r));
   await rpc(1, K.OP.FS_CLOSE, { fd: fdE });
+
+  // ---- F0: #392 healthy peek — a still-pending transfer reports ''.
+  // (A rejected fetch settles on the microtask queue before any RPC can
+  // round-trip, so the healthy state needs a never-settling fetch.) ----
+  fakeFetch.setScript(() => new Promise(() => {}));
+  r = await rpc(1, K.OP.HTTP_OPEN, { method: 'GET', url: 'http://pending/', headers: [] });
+  const fdF0 = r.fd;
+  r = await rpc(1, K.OP.HTTP_ERROR, { fd: fdF0 });
+  check('HTTP_ERROR on a healthy transfer is the empty string (#392)',
+    !r.errno && r.error === '', JSON.stringify(r));
+  await rpc(1, K.OP.FS_CLOSE, { fd: fdF0 });
 
   // ---- F: connect error (fetch rejects) -> readable, HTTP_STATUS EIO ----
   fakeFetch.setScript(() => Promise.reject(new Error('ECONNREFUSED')));
@@ -297,7 +311,32 @@ async function drain(pid, fd, count) {
   r = await rpc(1, K.OP.HTTP_STATUS, { fd: fdF });
   check('connect error: HTTP_STATUS returns EIO', r.errno === 'EIO', JSON.stringify(r));
   check('connect error: message carried', /ECONNREFUSED/.test(r.error || ''), JSON.stringify(r));
+  // #392: the error-TEXT peek — the C surface's channel to the diagnostic.
+  r = await rpc(1, K.OP.HTTP_ERROR, { fd: fdF });
+  check('HTTP_ERROR hands the transport text (#392)',
+    !r.errno && /ECONNREFUSED/.test(r.error || ''), JSON.stringify(r));
+  r = await rpc(1, K.OP.HTTP_ERROR, { fd: fdF });
+  check('HTTP_ERROR is non-consuming (second peek identical)',
+    !r.errno && /ECONNREFUSED/.test(r.error || ''), JSON.stringify(r));
+  r = await rpc(1, K.OP.HTTP_ERROR, { fd: 0 });
+  check('HTTP_ERROR on a non-http fd -> EBADF', r.errno === 'EBADF', JSON.stringify(r));
   await rpc(1, K.OP.FS_CLOSE, { fd: fdF });
+  r = await rpc(1, K.OP.HTTP_ERROR, { fd: fdF });
+  check('HTTP_ERROR after close -> EBADF (the text died with the transfer)',
+    r.errno === 'EBADF', JSON.stringify(r));
+
+  // ---- F2: Node buries the real reason in err.cause — the kernel digs it
+  // out (#392: a bare "fetch failed" told the user nothing). ----
+  fakeFetch.setScript(() => Promise.reject(new Error('fetch failed',
+    { cause: new Error('connect ECONNREFUSED 127.0.0.1:9') })));
+  r = await rpc(1, K.OP.HTTP_OPEN, { method: 'GET', url: 'http://nope2/', headers: [] });
+  const fdF2 = r.fd;
+  await settle(5);
+  r = await rpc(1, K.OP.HTTP_ERROR, { fd: fdF2 });
+  check('the fetch cause chain surfaces in the text (#392)',
+    !r.errno && /fetch failed \(connect ECONNREFUSED 127\.0\.0\.1:9\)/.test(r.error || ''),
+    JSON.stringify(r));
+  await rpc(1, K.OP.FS_CLOSE, { fd: fdF2 });
 
   // ---- G: synchronous throw in fetch (bad URL) -> EIO, no crash ----
   fakeFetch.setScript(() => { throw new TypeError('Invalid URL'); });

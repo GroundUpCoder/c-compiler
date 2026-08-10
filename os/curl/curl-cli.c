@@ -149,6 +149,9 @@ int main(int argc, char **argv) {
     if (!silent) fprintf(stderr, "curl: (2) init failed\n");
     return CURLE_FAILED_INIT;
   }
+  char errbuf[CURL_ERROR_SIZE];
+  errbuf[0] = 0;
+  curl_easy_setopt(h, CURLOPT_ERRORBUFFER, errbuf);   /* #392: real curl's -v-less detail */
   curl_easy_setopt(h, CURLOPT_URL, url);
   curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 1L); /* uniform with the veneer */
   curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, write_cb);
@@ -168,7 +171,10 @@ int main(int argc, char **argv) {
 
   int exitcode;
   if (rc != CURLE_OK) {
-    if (!silent) fprintf(stderr, "curl: (%d) %s\n", (int)rc, curl_easy_strerror(rc));
+    /* real curl prints the detailed message when one exists; the category
+       string is the fallback (#392) */
+    if (!silent) fprintf(stderr, "curl: (%d) %s\n", (int)rc,
+                         errbuf[0] ? errbuf : curl_easy_strerror(rc));
     exitcode = (int)rc;
   } else if (failon && code >= 400) {
     if (!silent)

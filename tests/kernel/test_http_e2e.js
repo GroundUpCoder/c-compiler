@@ -50,6 +50,7 @@ const INIT_C = `
 __import int __http_open(const char *method, const char *url, const char *headers,
                          const void *body, int blen, int headers_ms, int idle_ms);
 __import int __http_status(int fd, int *status_out, char *hdr, int hdrcap);
+__import int __http_error(int fd, char *buf, int cap);   /* #392: error-TEXT peek */
 __import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
 
 static char obuf[600000];   /* static: the wasm stack is tiny */
@@ -272,6 +273,29 @@ int main(void) {
     n = fetch_all("GET", url, "", 0, 0, &status, 0, 0, &err);
     printf("refused rc=%d etimedout=%d\\n", n, err == ETIMEDOUT);
 
+    /* #392: the error-TEXT peek. Healthy = 0 bytes; after the failure the
+       real diagnostic (Node's cause chain: connect ECONNREFUSED host:port)
+       crosses to C, NUL-terminated. Peek BEFORE close — the last release
+       frees the transfer, text included. */
+    snprintf(url, sizeof url, "%s/x", refused);
+    int efd = __http_open("GET", url, "", 0, 0, 0, 0);
+    char etxt[512];
+    etxt[0] = 'Z';                               /* prove the healthy peek writes the NUL */
+    int epre = __http_error(efd, etxt, (int)sizeof etxt);
+    int eprenul = etxt[0] == 0;
+    for (;;) {
+        char hdr[256];
+        if (__http_status(efd, &status, hdr, sizeof hdr) >= 0) break;
+        if (errno == EAGAIN || errno == EINTR) { wait_fd(efd, -1); continue; }
+        break;                                   /* the error landed */
+    }
+    int elen = __http_error(efd, etxt, (int)sizeof etxt);
+    close(efd);
+    printf("errtext pre=%d prenul=%d has=%d refused=%d nul=%d\\n",
+           epre, eprenul, elen > 0,
+           strstr(etxt, "ECONNREFUSED") != 0,
+           elen > 0 && elen < (int)sizeof etxt && etxt[elen] == 0);
+
     /* close(2) aborts the fetch: start an endless stream, read one chunk,
        close, then ask the server whether it saw the connection die. */
     snprintf(url, sizeof url, "%s/bigabort", base);
@@ -474,6 +498,9 @@ function compile(name, src) {
     line('slowfeed ') === 'slowfeed status=200 n=4', JSON.stringify(line('slowfeed ')));
   check('connect error stays distinguishable from a timeout',
     /^refused rc=-2 etimedout=0$/.test(line('refused ')), JSON.stringify(line('refused ')));
+  check('#392 __http_error: empty while healthy, the real diagnostic after (cause chain, NUL-terminated)',
+    line('errtext ') === 'errtext pre=0 prenul=1 has=1 refused=1 nul=1',
+    JSON.stringify(line('errtext ')));
   check('close(2) aborts the fetch — the server saw the connection die',
     line('abort ') === 'abort seen=yes', JSON.stringify(line('abort ')));
   check('reached done', lines[lines.length - 1] === 'done', JSON.stringify(lines[lines.length - 1]));

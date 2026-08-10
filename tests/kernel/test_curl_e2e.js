@@ -340,6 +340,10 @@ function normalize(out) {
     secHas('refused', 'RC=7');
     secHas('refused', 'RC2=7');
     secHas('refused', 'curl: (7)');
+    // #392: the errorbuffer carries the transport's REAL diagnostic (Node's
+    // cause chain) through the veneer to the CLI — pre-#392 this line read
+    // "curl: (7) Couldn't connect to server" for every failure class.
+    secHas('refused', 'ECONNREFUSED');
     // HTTP 404 without -f is SUCCESS (curl idiom): body printed, exit 0
     secHas('404', 'nope|RC=0');
     // -f: exit 22, body suppressed (0-byte -o file)

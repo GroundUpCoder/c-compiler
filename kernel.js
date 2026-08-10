@@ -274,7 +274,13 @@ var OP = {
   // todos/0417 + the "HTTP transport" section in KERNEL.md.
   // 0x0604 (HTTP_READ) and 0x0605 (HTTP_CLOSE) are RETIRED by 0417 —
   // FS_READ/FS_CLOSE serve their roles; the opcodes are never reused.
+  // HTTP_ERROR (#392) is the error-TEXT peek: {fd} -> {error, errno} — the
+  // transfer's recorded failure text ('' while healthy), never consuming,
+  // callable in any state while the fd lives. The C surface only saw errno
+  // before this; the precise transport diagnostic (a CORS denial, a dead
+  // bridge, a bad URL) died in a host-side console.error.
   HTTP_BODY: 0x0601, HTTP_OPEN: 0x0602, HTTP_STATUS: 0x0603,
+  HTTP_ERROR: 0x0606,
   // 0x1xxx — WM surfaces (todos/WM.md). Control plane only: present rides
   // the surface SAB (flip+seq, mailbox) and gpu-transport frames ride
   // {type:'wm-frame'} messages — never RPCs. 0x1004 stays reserved for a
@@ -1541,6 +1547,7 @@ KernelClient.prototype.spawnHooks = function () {
     httpBody: function (bytes) { return self.callRaw(OP.HTTP_BODY, bytes); },
     httpOpen: function (spec) { return self.call(OP.HTTP_OPEN, spec); },
     httpStatus: function (fd) { return self.call(OP.HTTP_STATUS, { fd: fd }); },
+    httpError: function (fd) { return self.call(OP.HTTP_ERROR, { fd: fd }); },
     sigpoll: function () { return self.sigpoll(); },
     sigmask: function (mask) { self.sigmask(mask); },
     park: function (ms) { return self.park(ms); },
@@ -7558,10 +7565,38 @@ Kernel.prototype._httpRpc = function (pcb, op, req) {
       this._respond(pcb, { errno: 'EAGAIN' });   // not yet — WAIT on the fd
       break;
     }
+    case OP.HTTP_ERROR: {
+      // The error-TEXT peek (#392): hand the transfer's recorded failure
+      // text to the process. Non-consuming and stateless — callable before,
+      // during and after HTTP_STATUS/FS_READ have reported the errno — so a
+      // consumer can always enrich its errno with the transport's own words
+      // (CURLOPT_ERRORBUFFER is the first customer). '' while healthy.
+      var eid = pcb.fds.get(req.fd | 0);
+      var eo = eid === undefined ? null : this._ofds.get(eid);
+      if (!eo || eo.kind !== 'http') { this._respond(pcb, { errno: 'EBADF' }); break; }
+      var ex = eo.xfer;
+      // {error} only — the caller already holds the errno from the failing
+      // HTTP_STATUS/FS_READ, and an errno key here would read as an RPC
+      // failure to the host-side hook plumbing.
+      this._respond(pcb, { error: ex.error !== null ? ex.error : '' });
+      break;
+    }
     default:
       this._respond(pcb, { errno: 'ENOSYS' });
   }
 };
+
+/* Compose a fetch rejection's honest text (#392). Node's fetch buries the
+ * useful part (connect ECONNREFUSED host:port, ENOTFOUND, a TLS verdict) in
+ * err.cause and rejects with a bare "fetch failed" on top — surface both,
+ * skipping the cause when the top-level message already carries it (the
+ * net-bridge wrapper digs its own cause out; ticket #393). */
+function _fetchErrorText(err) {
+  var msg = (err && err.message) ? (err.message + '') : 'fetch failed';
+  var cause = err && err.cause && err.cause.message ? (err.cause.message + '') : '';
+  if (cause && msg.indexOf(cause) < 0) msg += ' (' + cause + ')';
+  return msg;
+}
 
 /* Flatten a fetch Headers object into a capped "name: value\n" blob. Order
  * and casing are whatever fetch yields (not wire-faithful — documented).
@@ -7632,7 +7667,7 @@ Kernel.prototype._httpStart = function (xfer, method, url, headerList, body, hea
   }, function (err) {
     if (xfer.aborted || xfer.error !== null) return;
     if (xfer.hdrTimer) { clearTimeout(xfer.hdrTimer); xfer.hdrTimer = null; }
-    xfer.error = (err && err.message) ? (err.message + '') : 'fetch failed';
+    xfer.error = _fetchErrorText(err);
     // An embedder fetch WRAPPER may pin a POSIX errno NAME on its rejection
     // (err.errno, a string) — the net-bridge wrapper tags a configured-but-
     // unreachable bridge ENETUNREACH (ticket #349; ruling in NETWORK.md
@@ -7704,7 +7739,7 @@ Kernel.prototype._httpPump = function (xfer) {
     self._httpPump(xfer);
   }, function (err) {
     if (xfer.aborted || xfer.error !== null) return;
-    xfer.error = (err && err.message) ? (err.message + '') : 'stream read failed';
+    xfer.error = (err && err.message) ? _fetchErrorText(err) : 'stream read failed';
     xfer.errno = 'EIO';
     if (xfer.idleTimer) { clearTimeout(xfer.idleTimer); xfer.idleTimer = null; }
     self._recheckSelects();
