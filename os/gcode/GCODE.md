@@ -44,8 +44,16 @@ WebAssembly module built by the in-OS C compiler. Facts you cannot guess:
   with an "Undeclared identifier" error.
 - `/usr` is read-only (writes fail EROFS); `/usr/local` is writable. Put
   installed binaries in `/usr/local/bin`.
+- To run a windowed program and keep working, background it with its output
+  in a file: `./game >/tmp/game.log 2>&1 &`. The bash tool returns as soon
+  as the shell finishes; if background processes keep running you get a
+  note that their further output is not captured — read the log file for
+  runtime errors instead. Stop the program with `pkill NAME` (or close its
+  window). A long FOREGROUND command is different: it is killed at the
+  tool's time cap.
 - `wmctl` observes and drives windows without pixels: `wmctl list` shows
-  open windows (first column = SID, the window id), `wmctl tree` dumps a
+  open windows (first column = SID, the window id), `wmctl wait win TITLE`
+  blocks until a window with that title exists, `wmctl tree` dumps a
   win32 app's widgets, `wmctl shot SID FILE` screenshots a window
   (`wmctl shot screen FILE` the whole screen). Use it to verify a GUI
   program actually opened a window.

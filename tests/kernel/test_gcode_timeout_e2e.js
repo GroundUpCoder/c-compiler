@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-// #503 e2e: the bash-tool cap BOUNDS wall time and reports honestly.
+// #503 + #504 e2e: the bash-tool cap BOUNDS wall time, a backgrounded
+// launch returns at the sh-exit reap instead of burning the cap, and both
+// report honestly.
 //
 // The two defects this pins (measured in the #488 Pass B dogfood):
 //   1. The cap did not bound. On SIGALRM the drain loop killed the direct
@@ -19,19 +21,30 @@
 //   round 2  bash `sleep 30`                     parked-read timeout (sh
 //            alive at the alarm; its sleep child survives the sh kill and
 //            holds the pipe — the drain-to-EOF trap)
-//   round 3  bash `sleep 30 &`                   sh already gone at the
-//            alarm; ONLY the orphan holds the pipe (pre-fix: no EOF until
-//            the orphan dies — the unbounded shape)
+//   round 3  bash `sleep 30 &`                   sh already gone; ONLY the
+//            orphan holds the pipe. #504: the sh-exit reap returns this in
+//            ~1s with the real [exit 0] + the survivors note (it used to
+//            burn the cap and report [exit -1] for a launch that worked)
 //   round 4  bash `while true; do echo spam; done`  chatty child: reads
 //            keep succeeding, so an EINTR-only alarm check NEVER fires
 //            (pre-fix: unbounded — this leg is the red control's hang)
-//   round 5  text ALL-DONE-MARKER
+//   round 5  bash `cd /root && winbox >/tmp/w.log 2>&1 &`   the #504
+//            dogfood shape: a compound background launch, whose NOMMU
+//            re-exec'd hush wrapper holds the pipe for the app's lifetime
+//            (mechanism: logs/2026-08-10/504-gcode-windowed-launch.md) —
+//            returns [exit 0] + note in ~1s via the same reap
+//   round 6  bash `wmctl wait win winbox && echo WIN-UP`    the early
+//            return must not have lost the launch: the window exists
+//   round 7  text ALL-DONE-MARKER
 //
 // Instruments (before -> after):
 //   wall time gcode-start -> ALL-DONE-MARKER: unbounded (hangs in round 4;
-//     the expect timeout is the red) -> ~12s (three 3s timeouts + overhead)
-//   tool_result rounds 2-4: "[exit 0]"/plain output after the cap ->
+//     the expect timeout is the red) -> ~10s (two 3s timeouts + two ~1s
+//     reaps + overhead)
+//   tool_result rounds 2/4: "[exit 0]"/plain output after the cap ->
 //     "[exit -1]" + "timed out after 3s" + the may-still-be-running caveat
+//   tool_result rounds 3/5 (#504): "[exit -1]" + a false timeout report ->
+//     "[exit 0]" + "still running; their further output is not captured"
 //   tool_result round 1: "[exit 0]" + PROBE-OK (positive control, both
 //     sides — proves the instrument can see a healthy round)
 //
@@ -60,6 +73,15 @@ fs.writeFileSync(scriptPath, JSON.stringify([
   { kind: 'tool', preface: 'holder-live-sh.', id: 't2', name: 'bash', input: { command: 'sleep 30' } },
   { kind: 'tool', preface: 'holder-orphan.', id: 't3', name: 'bash', input: { command: 'sleep 30 &' } },
   { kind: 'tool', preface: 'chatty.', id: 't4', name: 'bash', input: { command: 'while true; do echo spam; done' } },
+  // #504: the compound background launch — hush runs `cd X && app &` in a
+  // NOMMU re-exec'd subshell wrapper that inherits the capture pipe and
+  // survives (waiting) for the app's whole lifetime, so pipe EOF never
+  // comes. Pre-#504 this burned the full cap and reported [exit -1] for a
+  // launch that succeeded; post-#504 the sh-exit reap returns it in ~1s
+  // with [exit 0] + the survivors note. Same fix serves round 3.
+  { kind: 'tool', preface: 'launch.', id: 't5', name: 'bash', input: { command: 'cd /root && winbox >/tmp/w.log 2>&1 &' } },
+  // The early return must not have lost the launch: the window really exists.
+  { kind: 'tool', preface: 'verify.', id: 't6', name: 'bash', input: { command: 'wmctl wait win winbox && echo WIN-UP' } },
   { kind: 'text', text: 'ALL-DONE-MARKER' },
 ]));
 
@@ -126,22 +148,24 @@ async function main() {
       'ANTHROPIC_API_KEY=test-key gcode --no-color --no-persist -p go ' +
       '&& echo GCODE-EXIT-0\n');
     // Pre-fix this expect is the red: round 4 (chatty) never returns — the
-    // 90s budget is 30x the fixed cost of the three timeout rounds and
-    // strictly less than any pre-fix completion path.
+    // 90s budget is many times the fixed cost of the two timeout rounds
+    // and strictly less than any pre-fix completion path.
     await s.expectOut('ALL-DONE-MARKER', 90000);
     const elapsed = Date.now() - t0;
 
-    // The cap BOUNDS: three 3s-capped rounds plus a fast probe round. 60s
-    // (~5x the post-fix measurement) tolerates load; every pre-fix path is
-    // >= 60s here (two 30s sleeps + an unbounded round).
-    check('cap bounds wall time (' + elapsed + 'ms for 3 capped rounds)', elapsed < 60000);
+    // The cap BOUNDS: two 3s-capped rounds (live-sh, chatty) plus fast
+    // rounds — the orphan and launch rounds return at the ~1s sh-exit reap
+    // (#504), not the cap. 60s (~5x the post-fix measurement) tolerates
+    // load; every pre-fix path is >= 60s here (two 30s sleeps + an
+    // unbounded round).
+    check('cap bounds wall time (' + elapsed + 'ms for 2 capped + 2 reaped rounds)', elapsed < 60000);
 
     await s.expectOut('GCODE-EXIT-0', 30000);
     check('gcode exited 0 after the capped rounds', true);
 
     // ---- tool_result honesty, from the POST bodies the server recorded ----
     const bodies = fs.readFileSync(bodiesPath, 'utf8').trim().split('\n');
-    check('five POSTs recorded (4 tool rounds + final)', bodies.length === 5,
+    check('seven POSTs recorded (6 tool rounds + final)', bodies.length === 7,
       'got ' + bodies.length);
 
     // body[i] carries the tool_result for script round i (body[0] is the
@@ -151,7 +175,7 @@ async function main() {
     check('probe round: [exit 0] + PROBE-OK (positive control)',
       probe.includes('[exit 0]') && probe.includes('PROBE-OK'));
 
-    for (const [i, name] of [[2, 'live-sh holder'], [3, 'orphan holder'], [4, 'chatty']]) {
+    for (const [i, name] of [[2, 'live-sh holder'], [4, 'chatty']]) {
       const b = bodies[i] || '';
       check(name + ': reports [exit -1]', b.includes('[exit -1]'),
         JSON.stringify(b.slice(0, 300)));
@@ -162,6 +186,35 @@ async function main() {
       check(name + ': does NOT claim a completed kill of the whole command',
         !b.includes('command killed: exceeded'));
     }
+    // #504: rounds whose direct sh exits while a survivor holds the pipe
+    // return promptly with the REAL exit status and the honest note — no
+    // cap burn, no [exit -1] for a launch that succeeded. Round 3 is the
+    // simple orphan (`sleep 30 &` — the orphan itself inherits fds 1/2);
+    // round 5 is the compound launch (`cd X && winbox &` — the NOMMU
+    // re-exec'd hush wrapper holds the pipe; the #504 dogfood shape).
+    // Pre-#504 both burned the cap and reported [exit -1]: these checks
+    // are the red control against unfixed gcode (verified red 2026-08-10).
+    // NB assert on the round's OWN tool_result (the request's last
+    // message), not the whole body — every body accumulates the earlier
+    // rounds' results, so a whole-body substring check is vacuous.
+    const lastResult = (i) => {
+      try {
+        const msgs = JSON.parse(bodies[i]).messages || [];
+        return JSON.stringify(msgs[msgs.length - 1].content) || '';
+      } catch (e) { return ''; }
+    };
+    for (const [i, name] of [[3, 'orphan holder'], [5, 'compound launch']]) {
+      const b = lastResult(i);
+      check(name + ': returns the real [exit 0]', b.includes('[exit 0]'),
+        JSON.stringify(b.slice(0, 300)));
+      check(name + ': notes survivors\' output is not captured',
+        b.includes('still running; their further output is not captured'));
+      check(name + ': did NOT burn the cap (no timeout report)',
+        b !== '' && !b.includes('timed out after'));
+    }
+    // The early return must not have LOST the launch: the window exists.
+    check('launch verify: wmctl saw the winbox window (WIN-UP)',
+      lastResult(6).includes('[exit 0]') && lastResult(6).includes('WIN-UP'));
     // Output produced BEFORE the cap must still reach the model.
     check('chatty: pre-cap output was delivered (spam present)',
       (bodies[4] || '').includes('spam'));

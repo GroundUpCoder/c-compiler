@@ -535,6 +535,7 @@ static ssize_t getline(char **buf, size_t *cap, FILE *f) {
 #ifdef __MTOTS__
 #include <spawn.h>
 #include <sys/time.h>
+#include <sys/select.h>   /* #504: the post-exit nonblocking pipe drain */
 
 /* Timeout: setitimer(ITIMER_REAL)+SIGALRM (todos/0044). The parked pipe
  * read EINTRs when the signal lands (kernel krpc-intr); we SIGKILL the
@@ -565,6 +566,14 @@ static char *run_command(const char *cmd, int *exit_code) {
     close(pfd[1]);
     sb out = {0};
     int truncated = 0, timedout = 0, intkilled = 0;
+    /* #504: the direct sh exiting means the FOREGROUND work is done (a shell
+     * waits its foreground children before exiting) — only processes the
+     * command itself backgrounded can still hold the pipe write end. Blocking
+     * on to their EOF was the #504 wedge: `cd X && app &` leaves a NOMMU
+     * re-exec'd hush subshell wrapper holding fds 1/2 for the app's whole
+     * lifetime (there is no real exec to collapse it into the redirected
+     * app), so every compound background launch burned the full cap. */
+    int shdone = 0, survivors = 0, shstatus = 0;
     time_t start = time(NULL);
     long shown = 0;
     g_bash_alarm = 0;
@@ -611,6 +620,12 @@ static char *run_command(const char *cmd, int *exit_code) {
         if (elapsed >= bash_cap_secs() && !timedout) { kill(pid, SIGKILL); timedout = 1; break; }
         if (g_bash_alarm) {                  /* #507: 1s tick — render + re-arm */
             g_bash_alarm = 0;
+            /* #504: reap-check the direct sh at the tick. Gone means the
+             * foreground work finished — return now (after a nonblocking
+             * drain below) instead of parking on an EOF only a background
+             * survivor can deliver. Tick-gated, so a launch costs at most
+             * ~1s; the EOF path still serves every survivor-free command. */
+            if (waitpid(pid, &shstatus, WNOHANG) == pid) { shdone = 1; break; }
             if (elapsed >= 1 && elapsed != shown) { progress_show("running", elapsed); shown = elapsed; }
             itv.it_value.tv_sec = 1; itv.it_value.tv_usec = 0;
             setitimer(ITIMER_REAL, &itv, 0);
@@ -638,9 +653,35 @@ static char *run_command(const char *cmd, int *exit_code) {
     itv.it_value.tv_sec = 0;
     setitimer(ITIMER_REAL, &itv, 0);         /* disarm */
     progress_clear();
+    /* #504: sh exited — collect what is already buffered, without ever
+     * blocking (a background survivor may hold the write end open forever).
+     * EOF during the drain means nothing holds the pipe: survivor-free. */
+    if (shdone) {
+        for (;;) {
+            fd_set rf; struct timeval tv = { 0, 0 };
+            FD_ZERO(&rf); FD_SET(pfd[0], &rf);
+            int r = select(pfd[0] + 1, &rf, 0, 0, &tv);
+            if (r < 0 && errno == EINTR) continue;
+            if (r <= 0) { survivors = 1; break; }    /* open but dry */
+            char dbuf[4096];
+            ssize_t n = read(pfd[0], dbuf, sizeof dbuf);
+            if (n == 0) break;                       /* EOF: survivor-free */
+            if (n < 0) { if (errno == EINTR) continue; survivors = 1; break; }
+            if (out.len < CAP_BASH_BYTES) {
+                size_t room = CAP_BASH_BYTES - out.len;
+                size_t take = (size_t)n < room ? (size_t)n : room;
+                sb_add(&out, dbuf, take);
+                if (take < (size_t)n) truncated = 1;
+            } else {                                 /* firehose survivor: stop —
+                we are leaving, not draining to EOF (#503's rule) */
+                truncated = 1; survivors = 1; break;
+            }
+        }
+    }
     close(pfd[0]);
     int status = 0;
-    waitpid(pid, &status, 0);
+    if (shdone) status = shstatus;
+    else waitpid(pid, &status, 0);
     if (timedout) {
         *exit_code = -1;
         /* #503: say what actually happened — the shell got SIGKILL, but a
@@ -662,6 +703,12 @@ static char *run_command(const char *cmd, int *exit_code) {
          * never claim the whole command was killed. */
         if (intkilled) sb_puts(&out, "\n[command interrupted by user (^C): shell killed;"
                                      " processes it spawned may still be running]");
+        /* #504: an honest early return — the pipe is still open, so
+         * something the command backgrounded is alive; its future output
+         * has nowhere captured to go. */
+        if (shdone && survivors)
+            sb_puts(&out, "\n[background processes spawned by this command are"
+                          " still running; their further output is not captured]");
         if (truncated) {
             char m[64];
             snprintf(m, sizeof m, "\n[output truncated at %d bytes]", CAP_BASH_BYTES);
@@ -704,6 +751,14 @@ static char *run_command(const char *cmd, int *exit_code) {
     close(pfd[1]);
     sb out = {0};
     int truncated = 0, intkilled = 0;
+    /* #504: same contract as the gucOS flavor — the direct sh exiting means
+     * the foreground work is done; only backgrounded survivors can still
+     * hold the pipe, and parking on their EOF wedges every `app &` whose
+     * output lands in our pipe (an unredirected orphan holds fds 1/2). */
+    int shdone = 0, survivors = 0, shstatus = 0;
+    *exit_code = 0;   /* the timeout path overwrites with -1; every other
+                         path used to read this uninitialized in the
+                         `!= -1` guard below */
     time_t start = time(NULL);
     time_t deadline = start + bash_cap_secs();
     long shown = 0;
@@ -725,6 +780,9 @@ static char *run_command(const char *cmd, int *exit_code) {
          * child) must not drain the child's remaining runtime — kill and
          * stop reading, like the timeout path below. */
         if (g_interrupted && !intkilled) { kill(pid, SIGKILL); intkilled = 1; break; }
+        /* #504: reap-check the direct sh (the poll below wakes at least
+         * once a second, so a backgrounded launch returns within ~1s). */
+        if (waitpid(pid, &shstatus, WNOHANG) == pid) { shdone = 1; break; }
         long elapsed = (long)(time(NULL) - start);        /* #507: heartbeat */
         if (elapsed >= 1 && elapsed != shown) { progress_show("running", elapsed); shown = elapsed; }
         /* #511 test seam (GCODE_TEST_INTR_BEFORE_POLL=1): raise SIGINT once,
@@ -771,9 +829,33 @@ static char *run_command(const char *cmd, int *exit_code) {
         }
     }
     progress_clear();
+    /* #504: sh exited — nonblocking drain of what is already buffered; EOF
+     * here means nothing holds the pipe (survivor-free). Mirrors the gucOS
+     * flavor's select drain. */
+    if (shdone) {
+        for (;;) {
+            struct pollfd pf = { pfd[0], POLLIN, 0 };
+            int r = poll(&pf, 1, 0);
+            if (r < 0 && errno == EINTR) continue;
+            if (r <= 0 || !(pf.revents & (POLLIN | POLLHUP))) { survivors = 1; break; }
+            char dbuf[4096];
+            ssize_t n = read(pfd[0], dbuf, sizeof dbuf);
+            if (n == 0) break;                       /* EOF: survivor-free */
+            if (n < 0) { if (errno == EINTR) continue; survivors = 1; break; }
+            if (out.len < CAP_BASH_BYTES) {
+                size_t room = CAP_BASH_BYTES - out.len;
+                size_t take = (size_t)n < room ? (size_t)n : room;
+                sb_add(&out, dbuf, take);
+                if (take < (size_t)n) truncated = 1;
+            } else {
+                truncated = 1; survivors = 1; break;
+            }
+        }
+    }
     close(pfd[0]);
     int status = 0;
-    waitpid(pid, &status, 0);
+    if (shdone) status = shstatus;
+    else waitpid(pid, &status, 0);
     if (*exit_code != -1)
         *exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
     if (*exit_code == -1) {
@@ -788,6 +870,10 @@ static char *run_command(const char *cmd, int *exit_code) {
          * the direct sh; its descendants may survive the survivor-edge ^C. */
         if (intkilled) sb_puts(&out, "\n[command interrupted by user (^C): shell killed;"
                                      " processes it spawned may still be running]");
+        /* #504: same honest early-return note as the gucOS flavor. */
+        if (shdone && survivors)
+            sb_puts(&out, "\n[background processes spawned by this command are"
+                          " still running; their further output is not captured]");
         if (truncated) {
             char m[64];
             snprintf(m, sizeof m, "\n[output truncated at %d bytes]", CAP_BASH_BYTES);
