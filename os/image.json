@@ -1,5 +1,5 @@
 {
-  "version": 254,
+  "version": 255,
   "defaultPackages": ["doom", "gcode", "calc", "paint"],
   "overlays": [
     {

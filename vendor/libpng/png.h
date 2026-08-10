@@ -3521,6 +3521,42 @@ PNG_EXPORT(244, int, png_set_option, (png_structrp png_ptr, int option,
 }
 #endif
 
+/* ---------------- the libpng require block (source-lib design §4.2,
+ * tickets #464/#498) ----
+ * Including this header IS the link metadata (the ft2build.h pattern): the
+ * set below MUST equal vendor/libpng/lib.json sources — the §4.4 drift
+ * gate (os-common win32RequireDriftErrors, run by tools/mkpkg.js +
+ * tools/win32ports.js --check) enforces it. zlib is deliberately NOT
+ * listed: the libpng TUs reach it through pngstruct.h's #include "zlib.h",
+ * whose own require block pulls the z set — vendor knowledge stays with
+ * its consumer. Host-side project builds no-op these via path-identity
+ * dedup (lib.json srcRoots {png: .}); the in-OS cc resolves them at the
+ * srclib install tiers (/usr/local/src -> /usr/src, planted by the libpng
+ * source-lib package). Inside the PNG_VERSION_INFO_ONLY guard on purpose:
+ * a version-macros-only consumer links nothing.
+ *
+ * PNG_NO_REQUIRE_SOURCES (the FT_NO_REQUIRE_SOURCES of this library)
+ * suppresses the block for a consumer that wants the declarations without
+ * the sources. Macro state is per-TU; required-source NAMES dedup
+ * per-compile. */
+#ifndef PNG_NO_REQUIRE_SOURCES
+__require_source("png/png.c");
+__require_source("png/pngerror.c");
+__require_source("png/pngget.c");
+__require_source("png/pngmem.c");
+__require_source("png/pngpread.c");
+__require_source("png/pngread.c");
+__require_source("png/pngrio.c");
+__require_source("png/pngrtran.c");
+__require_source("png/pngrutil.c");
+__require_source("png/pngset.c");
+__require_source("png/pngtrans.c");
+__require_source("png/pngwio.c");
+__require_source("png/pngwrite.c");
+__require_source("png/pngwtran.c");
+__require_source("png/pngwutil.c");
+#endif /* !PNG_NO_REQUIRE_SOURCES */
+
 #endif /* PNG_VERSION_INFO_ONLY */
 /* Do not put anything past this line */
 #endif /* PNG_H */

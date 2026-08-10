@@ -22171,11 +22171,12 @@ int main(int argc, char **argv) {
      surface is a real SDL_image API with a decoder-dispatch extension point
      (IMG_Load picks a decoder by content/extension); PNG is the only decoder
      shipped because libpng is the only codec we have. The impl __SDL_image.c
-     is the CONSUMER that carries the libpng/zlib __require_source block, so
-     only programs that use SDL_image pull libpng into the link — a program
-     including just <SDL3/SDL.h> stays libpng-free. libpng's <png.h> is reached
-     through the system-include tier (the libpng source-lib package); a loud
-     link error if that package is absent is honest. */
+     reaches libpng's <png.h> through the system-include tier (the libpng
+     source-lib package), and since #498 that header carries its own
+     __require_source block (source-lib §4.2, the ft2build.h pattern) — so
+     only programs whose include closure reaches <png.h> pull libpng into
+     the link, and a program including just <SDL3/SDL.h> stays libpng-free.
+     A loud compile error if that package is absent is honest. */
   "SDL3_image/SDL_image.h": `
 #pragma once
 #include <SDL3/SDL.h>
@@ -27898,36 +27899,20 @@ void __setAnimationFrameFunc(void (*callback)(void)) {
     __sdl_set_animation_frame_func(callback);
 }
   `,
-  /* SDL_image veneer impl (builtin; the <SDL.h>/__SDL.c pattern). This TU is
-     the CONSUMER that carries the libpng+zlib __require_source block, so
-     libpng is linked ONLY into programs that use SDL_image. Decode is the
-     libpng "simplified API" (png_image_*) — the same path /bin/deck uses —
-     forced to RGBA32, wrapped in a heap SDL_Surface tagged IMG_SURFACE_OWNED
-     so SDL_DestroySurface reclaims it. IMG_Load dispatches on content later;
-     today PNG is the only decoder (libpng is the only codec). */
+  /* SDL_image veneer impl (builtin; the <SDL.h>/__SDL.c pattern). The libpng
+     + zlib link metadata lives in <png.h>/<zlib.h> themselves since #498
+     (source-lib §4.2, the ft2build.h pattern) — this TU's #include <png.h>
+     is what pulls the library, and the drift gate pins the header blocks to
+     the vendor lib.json source sets. Decode is the libpng "simplified API"
+     (png_image_*) — the same path /bin/deck uses — forced to RGBA32, wrapped
+     in a heap SDL_Surface tagged IMG_SURFACE_OWNED so SDL_DestroySurface
+     reclaims it. IMG_Load dispatches on content later; today PNG is the only
+     decoder (libpng is the only codec). */
   "__SDL_image.c": `
 #include <SDL3_image/SDL_image.h>
 #include <png.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* zlib first (libpng depends on it), then libpng — the vendor lib.json source
-   sets (vendor/zlib/lib.json ∪ vendor/libpng/lib.json), resolved in-OS from
-   /usr/src/{z,png} (the libpng source-lib package) via the __require_source
-   FS tiers. Keep in sync with those lib.json 'sources' arrays. */
-__require_source("z/adler32.c"); __require_source("z/crc32.c");
-__require_source("z/inflate.c"); __require_source("z/inftrees.c");
-__require_source("z/inffast.c"); __require_source("z/zutil.c");
-__require_source("z/compress.c"); __require_source("z/uncompr.c");
-__require_source("z/deflate.c"); __require_source("z/trees.c");
-__require_source("png/png.c"); __require_source("png/pngerror.c");
-__require_source("png/pngget.c"); __require_source("png/pngmem.c");
-__require_source("png/pngpread.c"); __require_source("png/pngread.c");
-__require_source("png/pngrio.c"); __require_source("png/pngrtran.c");
-__require_source("png/pngrutil.c"); __require_source("png/pngset.c");
-__require_source("png/pngtrans.c"); __require_source("png/pngwio.c");
-__require_source("png/pngwrite.c"); __require_source("png/pngwtran.c");
-__require_source("png/pngwutil.c");
 
 const char *IMG_GetError(void) { return SDL_GetError(); }
 

@@ -5,7 +5,11 @@ Vendored from upstream [madler/zlib](https://github.com/madler/zlib) tag
 (February 17, 2026).
 
 This is the first release after the 7ASecurity audit of zlib.
-All source files are unmodified from the upstream tag.
+All source files are unmodified from the upstream tag, with ONE
+exception: `src/zlib.h` ends with an appended guarded `__require_source`
+block (source-lib §4.2, tickets #464/#498) so the in-OS `cc` links
+`<zlib.h>` standalone — pinned to `lib.json` sources by the os-common
+require-drift gate; `ZLIB_NO_REQUIRE_SOURCES` is the opt-out hatch.
 
 ## Structure
 

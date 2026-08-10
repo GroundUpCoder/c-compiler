@@ -39,85 +39,12 @@
 #include <nsgif.h>
 #include <libnsbmp.h>
 
-/* Vendor knowledge stays with its consumer (source-lib design §4.2, the
- * gdi32.c/freetype rule): the in-OS link set for gdiplus is this TU plus
- * every decoder TU it calls into. Keep in sync with the `deps` of
- * os/win32/gdiplus.json — the require-drift gate in os/os-common.js
- * checks exactly that. */
-__require_source("png/png.c");
-__require_source("png/pngerror.c");
-__require_source("png/pngget.c");
-__require_source("png/pngmem.c");
-__require_source("png/pngpread.c");
-__require_source("png/pngread.c");
-__require_source("png/pngrio.c");
-__require_source("png/pngrtran.c");
-__require_source("png/pngrutil.c");
-__require_source("png/pngset.c");
-__require_source("png/pngtrans.c");
-__require_source("png/pngwio.c");
-__require_source("png/pngwrite.c");
-__require_source("png/pngwtran.c");
-__require_source("png/pngwutil.c");
-__require_source("z/adler32.c");
-__require_source("z/compress.c");
-__require_source("z/crc32.c");
-__require_source("z/deflate.c");
-__require_source("z/inflate.c");
-__require_source("z/inftrees.c");
-__require_source("z/inffast.c");
-__require_source("z/trees.c");
-__require_source("z/uncompr.c");
-__require_source("z/zutil.c");
-__require_source("jpeg/jaricom.c");
-__require_source("jpeg/jcapimin.c");
-__require_source("jpeg/jcapistd.c");
-__require_source("jpeg/jcarith.c");
-__require_source("jpeg/jccoefct.c");
-__require_source("jpeg/jccolor.c");
-__require_source("jpeg/jcdctmgr.c");
-__require_source("jpeg/jchuff.c");
-__require_source("jpeg/jcinit.c");
-__require_source("jpeg/jcmainct.c");
-__require_source("jpeg/jcmarker.c");
-__require_source("jpeg/jcmaster.c");
-__require_source("jpeg/jcomapi.c");
-__require_source("jpeg/jcparam.c");
-__require_source("jpeg/jcprepct.c");
-__require_source("jpeg/jcsample.c");
-__require_source("jpeg/jctrans.c");
-__require_source("jpeg/jdapimin.c");
-__require_source("jpeg/jdapistd.c");
-__require_source("jpeg/jdarith.c");
-__require_source("jpeg/jdatadst.c");
-__require_source("jpeg/jdatasrc.c");
-__require_source("jpeg/jdcoefct.c");
-__require_source("jpeg/jdcolor.c");
-__require_source("jpeg/jddctmgr.c");
-__require_source("jpeg/jdhuff.c");
-__require_source("jpeg/jdinput.c");
-__require_source("jpeg/jdmainct.c");
-__require_source("jpeg/jdmarker.c");
-__require_source("jpeg/jdmaster.c");
-__require_source("jpeg/jdmerge.c");
-__require_source("jpeg/jdpostct.c");
-__require_source("jpeg/jdsample.c");
-__require_source("jpeg/jdtrans.c");
-__require_source("jpeg/jerror.c");
-__require_source("jpeg/jfdctflt.c");
-__require_source("jpeg/jfdctfst.c");
-__require_source("jpeg/jfdctint.c");
-__require_source("jpeg/jidctflt.c");
-__require_source("jpeg/jidctfst.c");
-__require_source("jpeg/jidctint.c");
-__require_source("jpeg/jquant1.c");
-__require_source("jpeg/jquant2.c");
-__require_source("jpeg/jutils.c");
-__require_source("jpeg/jmemmgr.c");
-__require_source("jpeg/jmemnobs.c");
-__require_source("nsgif/gif.c");
-__require_source("nsgif/lzw.c");
-__require_source("nsbmp/libnsbmp.c");
+/* No __require_source block here — pinned EMPTY by the drift gate (#498,
+ * the gdi32.c/#464 rule): the decoder link metadata lives in the libraries'
+ * own headers now (<png.h>, <zlib.h>, <jpeglib.h>, <nsgif.h>, <libnsbmp.h>,
+ * each pinned to its vendor lib.json by os-common win32RequireDriftErrors),
+ * so this TU's includes above ARE the in-OS link set — a require reappearing
+ * here would be a second, driftable copy of that metadata. */
 
 /* ============================================================ 1. GUIDs */
 

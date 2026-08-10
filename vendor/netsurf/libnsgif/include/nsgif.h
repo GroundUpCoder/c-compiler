@@ -524,4 +524,23 @@ void nsgif_set_frame_delay_behaviour(
 		uint16_t delay_min,
 		uint16_t delay_default);
 
+/* ---------------- the libnsgif require block (source-lib design §4.2,
+ * tickets #464/#498) ----
+ * Including this header IS the link metadata (the ft2build.h pattern): the
+ * set below MUST equal vendor/netsurf/libnsgif/lib.json sources — the §4.4
+ * drift gate (os-common win32RequireDriftErrors, run by tools/mkpkg.js +
+ * tools/win32ports.js --check) enforces it. Host-side project builds no-op
+ * these via path-identity dedup (lib.json srcRoots {nsgif: src}); the
+ * in-OS cc resolves them at the srclib install tiers (/usr/local/src ->
+ * /usr/src, planted by the libnsgif source-lib package).
+ *
+ * NSGIF_NO_REQUIRE_SOURCES (the FT_NO_REQUIRE_SOURCES of this library)
+ * suppresses the block for a consumer that wants the declarations without
+ * the sources. Macro state is per-TU; required-source NAMES dedup
+ * per-compile. */
+#ifndef NSGIF_NO_REQUIRE_SOURCES
+__require_source("nsgif/gif.c");
+__require_source("nsgif/lzw.c");
+#endif /* !NSGIF_NO_REQUIRE_SOURCES */
+
 #endif

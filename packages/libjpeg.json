@@ -1,6 +1,6 @@
 {
   "name": "libjpeg",
-  "version": "9f",
+  "version": "9f-2",
   "summary": "IJG libjpeg source library — decode/encode JPEG with the in-OS cc",
   "files": {
     "include/jpeglib.h":  { "bin": "vendor/libjpeg/jpeglib.h" },

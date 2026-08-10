@@ -1420,9 +1420,12 @@ function checkReservedPackageFiles(pkg, label) {
  *   - os/win32/gdi32.c's require set is EMPTY (#464): its freetype
  *     block moved into ft2build.h — a require reappearing here would
  *     be a second, driftable copy of the link metadata
- *   - os/win32/include/gdiplusflat.h's require set == gdiplus.json sources,
- *     and os/win32/gdiplus.c's == the four decoder lib.jsons' sources
- *     (ticket #94 — the same §4.1/§4.2 pair, for the gdiplus component)
+ *   - os/win32/include/gdiplusflat.h's require set == gdiplus.json sources
+ *     (ticket #94 — §4.1 for the gdiplus component); gdiplus.c's require
+ *     set is EMPTY since #498 — its five decoder lists moved into the
+ *     libraries' own shipped headers (<png.h>, <zlib.h>, <jpeglib.h>,
+ *     <nsgif.h>, <libnsbmp.h>), each checked against its vendor lib.json
+ *     and its srclib package payload exactly like freetype's ft2build.h
  *   - packages/win32.json SHIPS every veneer source under src/win32/ (the
  *     payload half — todos/0387). A require block can only name what the
  *     package actually plants: `0370` added listview.c to lib.json but to
@@ -1485,16 +1488,50 @@ function win32RequireDriftErrors(readText) {
   var veneer = sourcesOf('os/win32/lib.json', 'win32')
     .concat(sourcesOf('os/win32/menucore.json', 'win32'));
   /* gdiplus (ticket #94) is the third split component, on the menucore
-   * pattern: gdiplusflat.h names its own TU (§4.1) and gdiplus.c names
-   * its four vendor decoders (§4.2). It is NOT part of `veneer` — no
-   * windows.h consumer should pull an image decoder — but packages/
-   * win32.json must still SHIP it, so it joins the payload half. */
+   * pattern: gdiplusflat.h names its own TU (§4.1). It is NOT part of
+   * `veneer` — no windows.h consumer should pull an image decoder — but
+   * packages/win32.json must still SHIP it, so it joins the payload half. */
   var gdiplus = sourcesOf('os/win32/gdiplus.json', 'win32');
-  var gdiplusVendor = sourcesOf('vendor/libpng/lib.json', 'png')
-    .concat(sourcesOf('vendor/zlib/lib.json', 'z'))
-    .concat(sourcesOf('vendor/libjpeg/lib.json', 'jpeg'))
-    .concat(sourcesOf('vendor/netsurf/libnsgif/lib.json', 'nsgif'))
-    .concat(sourcesOf('vendor/netsurf/libnsbmp/lib.json', 'nsbmp'));
+  /* The srclib libraries carry their link metadata in their OWN shipped
+   * headers (#464 for freetype, #498 for the decoder set — source-lib
+   * §4.2): each header's require set must equal its lib.json sources, and
+   * each package must really ship every TU the block names — the payload
+   * is ONE `tree` entry (no per-file keys for unshipped() to see), so the
+   * check is file-level: the namespace maps to the expected vendor tree
+   * and every lib.json source exists in it. */
+  var srclibs = [
+    { header: 'vendor/freetype/demo/ft2build.h', lib: 'vendor/freetype/lib.json',
+      ns: 'freetype', pkg: 'packages/freetype.json', tree: 'vendor/freetype/srclib' },
+    { header: 'vendor/zlib/src/zlib.h', lib: 'vendor/zlib/lib.json',
+      ns: 'z', pkg: 'packages/libpng.json', tree: 'vendor/zlib/src' },
+    { header: 'vendor/libpng/png.h', lib: 'vendor/libpng/lib.json',
+      ns: 'png', pkg: 'packages/libpng.json', tree: 'vendor/libpng' },
+    { header: 'vendor/libjpeg/jpeglib.h', lib: 'vendor/libjpeg/lib.json',
+      ns: 'jpeg', pkg: 'packages/libjpeg.json', tree: 'vendor/libjpeg' },
+    { header: 'vendor/netsurf/libnsgif/include/nsgif.h', lib: 'vendor/netsurf/libnsgif/lib.json',
+      ns: 'nsgif', pkg: 'packages/libnsgif.json', tree: 'vendor/netsurf/libnsgif/src' },
+    { header: 'vendor/netsurf/libnsbmp/include/libnsbmp.h', lib: 'vendor/netsurf/libnsbmp/lib.json',
+      ns: 'nsbmp', pkg: 'packages/libnsbmp.json', tree: 'vendor/netsurf/libnsbmp/src' },
+  ];
+  function srclibErrors(sl) {
+    var errs = diff(sl.header, requiresOf(sl.header), sourcesOf(sl.lib, sl.ns));
+    var pkg = JSON.parse(mustRead(sl.pkg));
+    var key = pkg.srclib && pkg.srclib.src && pkg.srclib.src[sl.ns];
+    var entry = key ? (pkg.files || {})[key] : undefined;
+    if (!entry || entry.tree !== sl.tree) {
+      errs.push(sl.pkg + " does not map srclib namespace '" + sl.ns +
+        "' to the " + sl.tree + ' tree (require-block drift, design §4.4)');
+      return errs;
+    }
+    (JSON.parse(mustRead(sl.lib)).sources || []).forEach(function (s) {
+      var rel = sl.tree + '/' + s.replace(/^.*\//, '');
+      var text = readText(rel);
+      if (text === null || text === undefined)
+        errs.push(sl.pkg + ' ships no ' + rel + ', which ' + sl.header +
+          ' requires (require-block drift, design §4.4)');
+    });
+    return errs;
+  }
   return diff('os/win32/include/windows.h',
       requiresOf('os/win32/include/windows.h'), veneer)
     .concat(unshipped('packages/win32.json',
@@ -1503,38 +1540,12 @@ function win32RequireDriftErrors(readText) {
       requiresOf('os/win32/menucore.h'), sourcesOf('os/win32/menucore.json', 'win32')))
     .concat(diff('os/win32/include/gdiplusflat.h',
       requiresOf('os/win32/include/gdiplusflat.h'), gdiplus))
-    .concat(diff('os/win32/gdiplus.c',
-      requiresOf('os/win32/gdiplus.c'), gdiplusVendor))
-    /* #464: the freetype block lives in the library's own ft2build.h now
-     * (the freetype srclib package ships header + shims + upstream tree);
-     * gdi32.c is pinned EMPTY so the metadata cannot grow a second copy. */
-    .concat(diff('vendor/freetype/demo/ft2build.h',
-      requiresOf('vendor/freetype/demo/ft2build.h'),
-      sourcesOf('vendor/freetype/lib.json', 'freetype')))
+    /* #464/#498: the library blocks live in the libraries' own headers now;
+     * gdi32.c AND gdiplus.c are pinned EMPTY so the metadata cannot grow a
+     * second copy in a consumer TU. */
+    .concat(diff('os/win32/gdiplus.c', requiresOf('os/win32/gdiplus.c'), []))
     .concat(diff('os/win32/gdi32.c', requiresOf('os/win32/gdi32.c'), []))
-    /* The freetype payload half, file-level: packages/freetype.json ships
-     * the shims as ONE `tree` over vendor/freetype/srclib (no per-file
-     * keys for unshipped() to see), so cross-check that the namespace
-     * maps to that tree and that every lib.json source exists in it. */
-    .concat((function () {
-      var errs = [];
-      var pkg = JSON.parse(mustRead('packages/freetype.json'));
-      var ns = pkg.srclib && pkg.srclib.src && pkg.srclib.src.freetype;
-      var entry = ns ? (pkg.files || {})[ns] : undefined;
-      if (!entry || entry.tree !== 'vendor/freetype/srclib') {
-        errs.push('packages/freetype.json does not map srclib namespace ' +
-          "'freetype' to the vendor/freetype/srclib tree (require-block drift, design §4.4)");
-        return errs;
-      }
-      (JSON.parse(mustRead('vendor/freetype/lib.json')).sources || []).forEach(function (s) {
-        var rel = 'vendor/freetype/srclib/' + s.replace(/^.*\//, '');
-        var text = readText(rel);
-        if (text === null || text === undefined)
-          errs.push('packages/freetype.json ships no ' + rel +
-            ', which ft2build.h requires (require-block drift, design §4.4)');
-      });
-      return errs;
-    })());
+    .concat(srclibs.reduce(function (acc, sl) { return acc.concat(srclibErrors(sl)); }, []));
 }
 
 /* which: 'all' | array of names | [] (fold nothing). Returns

@@ -76,6 +76,12 @@
   "libcss": {
    "src/parse/mq.c": "6d21bb695a35d41b6cc902b60e91caebe9069928c8d14b26c1f45dd5854a92c8"
   },
+  "libnsgif": {
+   "include/nsgif.h": "586ed21a3e12d6b0cd423af262fb6beee4f0e45b848672040505cb5d395d71fa"
+  },
+  "libnsbmp": {
+   "include/libnsbmp.h": "42a35ee5f063f81e6a7884920c357d8f8efd0d9aeb2a56d98330425cd043f89f"
+  },
   "libnsfb": {
    "src/surface.h": "c3ecb1f62fe1126c51a7f518b4f3bd14b41afedfb34da39e6ed1ab95fdfe0ea7",
    "src/surface/surface.c": "fba5e98edb14a3d7cdee6d406ed44344b51f2e0c59394d8d7b6ebc868eea1dca"

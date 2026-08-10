@@ -1180,4 +1180,67 @@ struct jpeg_color_quantizer { long dummy; };
 #endif
 #endif
 
+/* ---------------- the libjpeg require block (source-lib design §4.2,
+ * tickets #464/#498) ----
+ * Including this header IS the link metadata (the ft2build.h pattern): the
+ * set below MUST equal vendor/libjpeg/lib.json sources — the §4.4 drift
+ * gate (os-common win32RequireDriftErrors, run by tools/mkpkg.js +
+ * tools/win32ports.js --check) enforces it. Host-side project builds no-op
+ * these via path-identity dedup (lib.json srcRoots {jpeg: .}); the in-OS
+ * cc resolves them at the srclib install tiers (/usr/local/src ->
+ * /usr/src, planted by the libjpeg source-lib package).
+ *
+ * JPEG_NO_REQUIRE_SOURCES (the FT_NO_REQUIRE_SOURCES of this library)
+ * suppresses the block for a consumer that wants the declarations without
+ * the sources. Macro state is per-TU; required-source NAMES dedup
+ * per-compile. */
+#ifndef JPEG_NO_REQUIRE_SOURCES
+__require_source("jpeg/jaricom.c");
+__require_source("jpeg/jcapimin.c");
+__require_source("jpeg/jcapistd.c");
+__require_source("jpeg/jcarith.c");
+__require_source("jpeg/jccoefct.c");
+__require_source("jpeg/jccolor.c");
+__require_source("jpeg/jcdctmgr.c");
+__require_source("jpeg/jchuff.c");
+__require_source("jpeg/jcinit.c");
+__require_source("jpeg/jcmainct.c");
+__require_source("jpeg/jcmarker.c");
+__require_source("jpeg/jcmaster.c");
+__require_source("jpeg/jcomapi.c");
+__require_source("jpeg/jcparam.c");
+__require_source("jpeg/jcprepct.c");
+__require_source("jpeg/jcsample.c");
+__require_source("jpeg/jctrans.c");
+__require_source("jpeg/jdapimin.c");
+__require_source("jpeg/jdapistd.c");
+__require_source("jpeg/jdarith.c");
+__require_source("jpeg/jdatadst.c");
+__require_source("jpeg/jdatasrc.c");
+__require_source("jpeg/jdcoefct.c");
+__require_source("jpeg/jdcolor.c");
+__require_source("jpeg/jddctmgr.c");
+__require_source("jpeg/jdhuff.c");
+__require_source("jpeg/jdinput.c");
+__require_source("jpeg/jdmainct.c");
+__require_source("jpeg/jdmarker.c");
+__require_source("jpeg/jdmaster.c");
+__require_source("jpeg/jdmerge.c");
+__require_source("jpeg/jdpostct.c");
+__require_source("jpeg/jdsample.c");
+__require_source("jpeg/jdtrans.c");
+__require_source("jpeg/jerror.c");
+__require_source("jpeg/jfdctflt.c");
+__require_source("jpeg/jfdctfst.c");
+__require_source("jpeg/jfdctint.c");
+__require_source("jpeg/jidctflt.c");
+__require_source("jpeg/jidctfst.c");
+__require_source("jpeg/jidctint.c");
+__require_source("jpeg/jquant1.c");
+__require_source("jpeg/jquant2.c");
+__require_source("jpeg/jutils.c");
+__require_source("jpeg/jmemmgr.c");
+__require_source("jpeg/jmemnobs.c");
+#endif /* !JPEG_NO_REQUIRE_SOURCES */
+
 #endif /* JPEGLIB_H */

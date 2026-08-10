@@ -1,6 +1,6 @@
 {
   "name": "libnsbmp",
-  "version": "1.0.0",
+  "version": "1.0.0-2",
   "summary": "libnsbmp source library — decode BMP/ICO with the in-OS cc",
   "files": {
     "include/libnsbmp.h": { "bin": "vendor/netsurf/libnsbmp/include/libnsbmp.h" },

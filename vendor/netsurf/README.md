@@ -311,6 +311,13 @@ libnsfb:
   subset ships only the ram surface).
 
 libs:
+- `libnsgif include/nsgif.h` + `libnsbmp include/libnsbmp.h` — appended
+  guarded `__require_source` blocks (source-lib §4.2, tickets #464/#498):
+  including the header IS the in-OS link metadata, pinned to each
+  component's `lib.json` sources by the os-common require-drift gate;
+  `NSGIF_NO_REQUIRE_SOURCES`/`NSBMP_NO_REQUIRE_SOURCES` are the opt-out
+  hatches. Host-side builds no-op them via path-identity dedup. NOT
+  upstreamable (compiler.js dialect).
 - `libparserutils src/charset/codec.c` — const-correct codec handler
   table (compiler.js's strict whole-program link caught non-const extern
   decls of const definitions; upstreamable).

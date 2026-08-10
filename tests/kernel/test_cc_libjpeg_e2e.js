@@ -1,27 +1,34 @@
 #!/usr/bin/env node
-// libjpeg source-lib e2e (0448 / #93): the in-OS `cc` builds a program
-// against the libjpeg package (folded "Built-in" into the fat image) with
-// NO -I and NO explicit TU list — the program's own __require_source block
-// pulls the jpeg TUs from /usr/src/jpeg via the FS tiers (the
-// __SDL_image.c/windows.h consumer pattern; libjpeg ships no veneer, so
-// the consumer carries the block), and <jpeglib.h> resolves through the
-// /usr/include srclib tier.
+// libjpeg srclib e2e (0448 / #93; STANDALONE link since #498): the in-OS
+// `cc` builds a program against the libjpeg package with NO -I and NO
+// explicit TU list — <jpeglib.h> itself carries the guarded
+// __require_source block (source-lib §4.2, the #464 ft2build.h pattern),
+// so including the header IS the whole link story. Before #498 this test
+// hand-wrote the TU list into the program, which made it read as a
+// standalone proof while proving the consumer-carries-the-block path.
 //
-// The program is a self-contained JPEG ROUND TRIP plus an error-path
-// control (no window, no renderer):
-//   - libjpeg ENCODES a 16x16 RGB gradient to /root/t.jpg (quality 85,
-//     baseline, islow DCT — byte-deterministic; the same pixels as
-//     vendor/libjpeg/testdata/gradient_16x16.*)
-//   - libjpeg DECODES it back and asserts EXACT pixel values (decode of
-//     a given stream by this code is deterministic — the values below
-//     are from the clang-native golden gradient_16x16_dec.rgb)
-//   - a truncated+garbled copy must be REJECTED through the error
-//     manager (longjmp, not exit) — the positive control that the
-//     decode path can really fail
+//   - FAT image: a self-contained JPEG ROUND TRIP plus an error-path
+//     control (no window, no renderer):
+//       - libjpeg ENCODES a 16x16 RGB gradient to /root/t.jpg (quality 85,
+//         baseline, islow DCT — byte-deterministic; the same pixels as
+//         vendor/libjpeg/testdata/gradient_16x16.*)
+//       - libjpeg DECODES it back and asserts EXACT pixel values (decode
+//         of a given stream by this code is deterministic — the values
+//         are from the clang-native golden gradient_16x16_dec.rgb)
+//       - a truncated+garbled copy must be REJECTED through the error
+//         manager (longjmp, not exit) — the positive control that the
+//         decode path can really fail
+//   - the hatch: -DJPEG_NO_REQUIRE_SOURCES suppresses the block, so the
+//     SAME program must FAIL AT LINK naming a jpeg symbol
+//   - MINIMAL image: <jpeglib.h> fails CLEAN (absence is honest),
+//     `gucman install libjpeg` plants the include/src tiers, and the same
+//     compile + run works through them
 //
 // Run: node tests/kernel/test_cc_libjpeg_e2e.js
 'use strict';
-const { driveBoot, freshImage } = require('./lib/drive.js');
+const fs = require('fs');
+const { driveBoot, freshImage, section } = require('./lib/drive.js');
+const { ensureMinimalImage, ensurePackages, startServer } = require('./lib/gucman.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -29,29 +36,17 @@ function check(name, cond, extra) {
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
 }
 
-const { image } = freshImage('os-libjpeg-');
-
-// Keep in sync with vendor/libjpeg/lib.json 'sources' (the __SDL_image.c
-// rule): every library TU, resolved in-OS from /usr/src/jpeg.
-const JPEG_TUS = [
-  'jaricom', 'jcapimin', 'jcapistd', 'jcarith', 'jccoefct', 'jccolor',
-  'jcdctmgr', 'jchuff', 'jcinit', 'jcmainct', 'jcmarker', 'jcmaster',
-  'jcomapi', 'jcparam', 'jcprepct', 'jcsample', 'jctrans', 'jdapimin',
-  'jdapistd', 'jdarith', 'jdatadst', 'jdatasrc', 'jdcoefct', 'jdcolor',
-  'jddctmgr', 'jdhuff', 'jdinput', 'jdmainct', 'jdmarker', 'jdmaster',
-  'jdmerge', 'jdpostct', 'jdsample', 'jdtrans', 'jerror', 'jfdctflt',
-  'jfdctfst', 'jfdctint', 'jidctflt', 'jidctfst', 'jidctint', 'jquant1',
-  'jquant2', 'jutils', 'jmemmgr', 'jmemnobs',
+const writeApp = (path, lines) => [
+  `cat > ${path} << 'EOF'`, ...lines, 'EOF',
 ];
 
-const script = [
-  "cat > /root/jpgrt.c << 'EOF'",
+// The round trip, STANDALONE: no __require_source anywhere in the program.
+const JPGRT_C = [
   '#include <stdio.h>',
   '#include <stdlib.h>',
   '#include <string.h>',
   '#include <setjmp.h>',
   '#include <jpeglib.h>',
-  ...JPEG_TUS.map(tu => `__require_source("jpeg/${tu}.c");`),
   'struct ej { struct jpeg_error_mgr mgr; jmp_buf jb; };',
   'static void err_exit(j_common_ptr ci) { longjmp(((struct ej *)ci->err)->jb, 1); }',
   'static unsigned char *dec(const char *path, int *w, int *h) {',
@@ -132,34 +127,100 @@ const script = [
   '    free(buf);',
   '    return 0;',
   '}',
-  'EOF',
-  'cd /root && cc jpgrt.c -o jpgrt && ./jpgrt',
-  'echo rc=$?',
-  // The libjpeg package is folded "Built-in" — assert it lands in os-release.
-  'echo ==pkgs',
-  'grep -o "PACKAGES=[^ ]*" /usr/share/os-release || echo NO-PACKAGES-LINE',
-  'echo ==done',
-  'exit',
-].join('\n');
+];
 
-const r = driveBoot(script, { image, timeout: 600000 });
-check('session exits clean', r.status === 0, String(r.status) + ' ' + (r.stderr || '').slice(-300));
-
-const lines = r.stdout.split('\n');
 // Exact values from the clang-native golden gradient_16x16_dec.rgb:
 // (0,0)=(1,1,1) (5,5)=(80,80,80) (10,3)=(161,47,107) (15,15)=(240,240,240).
-check('cc built + ran the libjpeg round trip IN-OS (no -I, no TU list), decode exact',
-  lines.some(l => l.startsWith('JPGRT w=16 h=16') && l.includes('p00=1,1,1') &&
-                  l.includes('p55=80,80,80') && l.includes('pA3=161,47,107') &&
-                  l.includes('pFF=240,240,240')),
-  JSON.stringify(lines.filter(l => l.includes('JPGRT') || l.includes('FAIL')).slice(0, 4)));
-check('corrupt JPEG rejected through the error manager (error path can fail)',
-  lines.includes('JPGRT-CORRUPT-REJECTED'), JSON.stringify(lines.slice(-10)));
-check('program exited clean', lines.includes('JPGRT-DONE') && lines.includes('rc=0'),
-  JSON.stringify(lines.slice(-8)));
-check('libjpeg folded as a Built-in package (os-release PACKAGES=)',
-  /^PACKAGES=(.*,)?libjpeg(,|$)/m.test(r.stdout),
-  JSON.stringify(lines.filter(l => l.includes('PACKAGES')).slice(0, 2)));
+const JPGRT_RE_OK = (s) =>
+  /JPGRT w=16 h=16/.test(s) && s.includes('p00=1,1,1') &&
+  s.includes('p55=80,80,80') && s.includes('pA3=161,47,107') &&
+  s.includes('pFF=240,240,240');
 
-console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);
-process.exit(failures === 0 ? 0 : 1);
+async function main() {
+  /* ---- session A: the fat image (baked /usr/{include,src} tiers) ---- */
+  const { dir: tmpA, image } = freshImage('os-libjpeg-');
+  const scriptA = [
+    ...writeApp('/root/jpgrt.c', JPGRT_C),
+    'echo ==cc',
+    'cd /root && cc jpgrt.c -o jpgrt && ./jpgrt',
+    'echo rc=$?',
+    // the hatch: with the block suppressed nothing links libjpeg, so the
+    // SAME program must die at link naming a jpeg symbol
+    'echo ==hatch',
+    'cc -DJPEG_NO_REQUIRE_SOURCES jpgrt.c -o hatch.out 2>&1',
+    'echo hrc=$?',
+    // The libjpeg package is folded "Built-in" — assert it lands in os-release.
+    'echo ==pkgs',
+    'grep -o "PACKAGES=[^ ]*" /usr/share/os-release || echo NO-PACKAGES-LINE',
+    'echo ==done',
+    'exit',
+  ].join('\n');
+  const a = driveBoot(scriptA, { image, timeout: 800000 });
+  const aout = String(a.stdout || '');
+  check('fat session exits clean', a.status === 0,
+    String(a.status) + ' ' + String(a.stderr || '').slice(-300));
+
+  const cc = section(aout, 'cc');
+  check('fat: <jpeglib.h> STANDALONE round trip, decode exact (#498, no -I, no TU list)',
+    JPGRT_RE_OK(cc), cc.slice(0, 600));
+  check('fat: corrupt JPEG rejected through the error manager (error path can fail)',
+    cc.includes('JPGRT-CORRUPT-REJECTED'), cc.slice(-400));
+  check('fat: program exited clean', cc.includes('JPGRT-DONE') && cc.includes('rc=0'),
+    cc.slice(-400));
+  const hatch = section(aout, 'hatch');
+  check('fat: JPEG_NO_REQUIRE_SOURCES suppresses the block (loud link error)',
+    /Undefined symbol.*jpeg_/i.test(hatch) && /hrc=[^0]/.test(hatch), hatch);
+  check('fat: libjpeg folded as a Built-in package (os-release PACKAGES=)',
+    /^PACKAGES=(.*,)?libjpeg(,|$)/m.test(aout), section(aout, 'pkgs'));
+
+  /* ---- session B: minimal image + gucman install libjpeg ---- */
+  const repo = ensurePackages(['libjpeg']);
+  const MIN = ensureMinimalImage();
+  const { dir: tmpB, image: minImage } = freshImage('os-libjpeg-min-');
+  fs.copyFileSync(MIN, minImage);   // copy mtime = now -> input-fresh at boot
+  const goodPort = await startServer(repo.dir);
+
+  const scriptB = [
+    ...writeApp('/root/jpgrt.c', JPGRT_C),
+    'echo ==nolib',
+    'cd /root && cc jpgrt.c 2>&1',
+    'echo norc=$?',
+    'echo ==install',
+    'mkdir -p /etc/gucman',
+    `echo http://127.0.0.1:${goodPort} > /etc/gucman/repos`,
+    'gucman install libjpeg; echo IRC=$?',
+    'test -f /usr/local/include/jpeglib.h && echo JPEG-INC-OK',
+    'test -f /usr/local/src/jpeg/jdapimin.c && echo JPEG-SRC-OK',
+    'echo ==cc2',
+    'cc jpgrt.c -o jpgrt && ./jpgrt',
+    'echo rc=$?',
+    'echo ==done',
+    'exit',
+  ].join('\n');
+  const b = driveBoot(scriptB, { image: minImage, args: ['--packages=none'], timeout: 800000 });
+  const bout = String(b.stdout || '');
+  check('minimal session exits clean', b.status === 0,
+    String(b.status) + ' ' + String(b.stderr || '').slice(-300));
+
+  const nolib = section(bout, 'nolib');
+  check('minimal: <jpeglib.h> fails CLEAN without the libjpeg package',
+    /norc=[^0]/.test(nolib) && /jpeglib\.h/.test(nolib), nolib);
+  const inst = section(bout, 'install');
+  check('minimal: gucman install libjpeg succeeds', inst.includes('IRC=0'), inst);
+  check('minimal: jpeglib.h planted at the include tier', inst.includes('JPEG-INC-OK'), inst);
+  check('minimal: jpeg require namespace planted', inst.includes('JPEG-SRC-OK'), inst);
+  const cc2 = section(bout, 'cc2');
+  check('minimal: the round trip works through /usr/local/{include,src}',
+    JPGRT_RE_OK(cc2) && cc2.includes('JPGRT-DONE') && cc2.includes('rc=0'),
+    cc2.slice(0, 600));
+
+  fs.rmSync(tmpA, { recursive: true, force: true });
+  fs.rmSync(tmpB, { recursive: true, force: true });
+  console.log(failures ? `\ncc-libjpeg e2e: ${failures} FAILED` : '\ncc-libjpeg e2e: PASS');
+  process.exit(failures ? 1 : 0);
+}
+
+main().catch((e) => {
+  console.error(e && e.stack || e);
+  process.exit(1);
+});
