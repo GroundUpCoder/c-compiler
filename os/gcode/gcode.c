@@ -19,8 +19,10 @@
  *   ANTHROPIC_MODEL      default claude-opus-4-8
  *   GCODE_BASH_SECS      bash-tool wall-time cap (default CAP_BASH_SECS)
  * Flags: -p PROMPT (one-shot), --model, --system-prompt, --max-turns (opt-in
- *   turn cap; default unlimited, #353), --max-tokens, --resume, --continue,
- *   --no-persist, --no-context, --verbose, --no-color.
+ *   turn cap; default unlimited, #353), --max-tokens, --context-tokens
+ *   (#467: the model's context window override; env GCODE_CONTEXT_TOKENS,
+ *   with GCODE_WARN_PCT/GCODE_COMPACT_PCT as the threshold knobs),
+ *   --resume, --continue, --no-persist, --no-context, --verbose, --no-color.
  *
  * Context files (#530): layered GCODE.md — /usr/share/gcode + /etc/gcode +
  *   ~/.config/gcode + a project-tree walk-up from cwd — appended to the
@@ -147,6 +149,9 @@ typedef struct {
      * loaded, for session_meta. */
     char  *system_sent;
     cJSON *context_files;
+    /* #467: context-window override (--context-tokens / GCODE_CONTEXT_TOKENS;
+     * 0 = derive from the model). Field LAST, same zero-fill rule as above. */
+    long   context_tokens;
 } config;
 
 #define GCODE_VERSION "2"
@@ -181,6 +186,29 @@ typedef struct {
  * spend the whole turn budget silently. Hitting it PRINTS why. */
 #define TRUNC_MAX_CONTINUATIONS 3
 
+/* ---- #467: the context-window budget -----------------------------------
+ * gcode has no client-side tokenizer, so the live accounting is the
+ * provider's own usage numbers: the assembled prompt of round N is
+ * input_tokens + cache_creation_input_tokens + cache_read_input_tokens.
+ * On a cached conversation input_tokens ALONE is tiny while cache_read
+ * carries the real size (the #462 incident logged 900,480 cache-read
+ * tokens) — thresholding on the wrong field undercounts by orders of
+ * magnitude and the compactor looks implemented while being dead.
+ *
+ * The window table below is substring-matched like the pricing table, but
+ * its unknown-model fallback is a LIVE conservative default, never "omit
+ * the feature": pricing can honestly omit a $ line for a model it cannot
+ * price, while a compactor keyed only on known ids would silently never
+ * fire against exactly the providers gcode is live-tested on. A default
+ * smaller than the real window compacts early (safe, mildly lossy); the
+ * provider's own context-length 400 nets a default that is too large. */
+#define CTX_WINDOW_DEFAULT   128000
+#define CTX_WARN_PCT_DEFAULT     75
+#define CTX_COMPACT_PCT_DEFAULT  85
+#define CTX_TARGET_PCT           50
+#define CAP_COMPACT_SUMMARY (16 * 1024)
+#define COMPACT_MARKER "[gcode: compacted history]"
+
 typedef struct {
     long long input_tokens, output_tokens;
     long long cache_creation_input_tokens, cache_read_input_tokens;
@@ -205,6 +233,8 @@ typedef struct {
     long long seq, turn_index;
     long long round_index;  /* #348: API round within the current turn (1-based) */
     int trunc_streak;       /* #462: consecutive rounds cut at the output cap */
+    long long last_prompt_tokens;  /* #467: input+cache_create+cache_read of the last round */
+    int ctx_warned;         /* #467: soft-threshold warning latched until usage drops below */
     usage total;
     mlist models;           /* #348: per-actual-model usage across the session */
 } session;
@@ -2121,6 +2151,358 @@ static void repair_log(const repair_report *rep, const char *where) {
                     "in place of the result that was never recorded%s\n", CDIM, CRST);
 }
 
+/* ---- #467: compact at the context ceiling ------------------------------
+ *
+ * Ruled (night decider, 2026-08-03): gcode COMPACTS — summarize-and-drop the
+ * oldest rounds, in-process, and keeps going. It does not warn-and-refuse.
+ * The warning half survives: compaction is LOUD, announced before (the soft
+ * threshold) and when it fires. A silent compaction would be worse than the
+ * brick it prevents, because the user could not tell half the session was
+ * forgotten.
+ *
+ * The fold is mechanical, synthesized in-process from the folded messages
+ * (user asks, assistant text, tool calls and result heads) rather than by a
+ * summarize API call: it works against every provider, cannot itself fail or
+ * 400, is deterministic (testable byte-for-byte), and is available at the
+ * exact moment the provider is rejecting our requests. The most recent
+ * exchanges and the ORIGINAL first user message are always kept verbatim.
+ *
+ * Invariants (the #462/#463 family):
+ *   - the cut lands only where the preceding message carries no tool_use, so
+ *     a tool_use/tool_result pair is never split across the fold boundary;
+ *   - a prior summary folds INTO the new one body-first (its marker header
+ *     dropped), so summaries never nest and the marker appears exactly once;
+ *   - the compacted history is PERSISTED (a "compact" record carrying the
+ *     splice), so --resume loads what the live session ended with instead of
+ *     re-blowing the ceiling. This deliberately differs from #463's
+ *     unpersisted repair: a repair re-derives deterministically from the log,
+ *     a compaction depends on usage numbers a re-reader may not reproduce. */
+
+static long context_window_for(const char *model) {
+    static const struct { const char *key; long window; } W[] = {
+        { "claude",   200000 },
+        { "deepseek", 128000 },
+    };
+    if (model)
+        for (size_t i = 0; i < sizeof W / sizeof W[0]; i++)
+            if (strstr(model, W[i].key)) return W[i].window;
+    return CTX_WINDOW_DEFAULT;   /* unknown model: a LIVE ceiling, never "off" */
+}
+
+/* env-tunable thresholds (the GCODE_BASH_SECS pattern); invalid values fall
+ * back to the defaults rather than disabling the guard. */
+static int ctx_pct_env(const char *name, int dflt) {
+    const char *s = getenv(name);
+    long n = s ? atol(s) : 0;
+    return (n >= 1 && n <= 99) ? (int)n : dflt;
+}
+static int ctx_warn_pct(void) {
+    static int v; if (!v) v = ctx_pct_env("GCODE_WARN_PCT", CTX_WARN_PCT_DEFAULT); return v;
+}
+static int ctx_compact_pct(void) {
+    static int v; if (!v) v = ctx_pct_env("GCODE_COMPACT_PCT", CTX_COMPACT_PCT_DEFAULT); return v;
+}
+
+/* The usable budget: the window minus the output reservation (a request whose
+ * prompt leaves no room for max_tokens of output is rejected too). Floored at
+ * half the window so a huge output cap cannot zero the budget. */
+static long long ctx_ceiling(const config *cfg, const session *sess) {
+    long win = cfg->context_tokens > 0 ? cfg->context_tokens
+             : context_window_for((sess->response_model && *sess->response_model)
+                                  ? sess->response_model : cfg->model);
+    long long c = (long long)win - cfg->max_tokens;
+    if (c < win / 2) c = win / 2;
+    return c;
+}
+
+/* ASCII case-insensitive strstr — the gucOS libc has strcasecmp but no
+ * strcasestr, and the error bodies matched below are ASCII. */
+static const char *stristr(const char *h, const char *n) {
+    size_t nl = strlen(n);
+    if (!nl) return h;
+    for (; *h; h++) {
+        size_t i = 0;
+        while (i < nl) {
+            char a = h[i], b = n[i];
+            if (a >= 'A' && a <= 'Z') a += 32;
+            if (b >= 'A' && b <= 'Z') b += 32;
+            if (a != b) break;
+            i++;
+        }
+        if (i == nl) return h;
+    }
+    return NULL;
+}
+
+/* Does this rejection describe a context-length overflow? Matched against the
+ * live provider phrasings, NOT by narrowing the permanent classifier: a 400
+ * for an unknown model / bad parameter must keep failing fast, so only a
+ * body that talks about length is even considered, and the caller still
+ * gates the retry on the compaction having actually shrunk the history.
+ * (A validation error that merely ECHOES one of these phrases from user
+ * content would cost one bounded compact-and-retry, then go permanent —
+ * the same once-only budget as the #463 repair retry.) */
+static int err_is_context_length(const char *body) {
+    static const char *P[] = {
+        "prompt is too long",              /* Anthropic: "...: X tokens > Y maximum" */
+        "exceed context limit",            /* Anthropic: "input length and `max_tokens` exceed context limit" */
+        "context_length",                  /* OpenAI-compat error code */
+        "context length",                  /* "...maximum context length is N tokens" */
+        "too many tokens",
+        "maximum context",
+    };
+    if (!body) return 0;
+    for (size_t i = 0; i < sizeof P / sizeof P[0]; i++)
+        if (stristr(body, P[i])) return 1;
+    return 0;
+}
+
+/* Largest prefix of s[0..cap) that ends on a UTF-8 boundary — a clip that
+ * splits a sequence would poison the summary and trip the #387 pre-POST
+ * guard on the very request the compaction was meant to save. */
+static size_t utf8_clip_at(const char *s, size_t n, size_t cap) {
+    if (n <= cap) return n;
+    size_t i = cap;
+    while (i > 0 && ((unsigned char)s[i] & 0xC0) == 0x80) i--;
+    return i;
+}
+
+/* One clipped single-line summary entry: newlines flattened, UTF-8-safe cut,
+ * an ellipsis when clipped. */
+static void sum_add_clip(sb *out, const char *prefix, const char *s, size_t cap) {
+    sb_puts(out, prefix);
+    size_t n = strlen(s), take = utf8_clip_at(s, n, cap), start = out->len;
+    sb_add(out, s, take);
+    for (size_t i = start; i < out->len; i++)
+        if (out->p[i] == '\n' || out->p[i] == '\r') out->p[i] = ' ';
+    if (take < n) sb_puts(out, "\xE2\x80\xA6");
+    sb_puts(out, "\n");
+}
+
+static int msg_is_summary(cJSON *m) {
+    const char *role = m ? blk_str(m, "role") : NULL;
+    if (!role || strcmp(role, "user")) return 0;
+    cJSON *content = cJSON_GetObjectItem(m, "content");
+    if (!cJSON_IsArray(content) || cJSON_GetArraySize(content) != 1) return 0;
+    cJSON *b = cJSON_GetArrayItem(content, 0);
+    if (!blk_is(b, "text")) return 0;
+    const char *t = blk_str(b, "text");
+    return t && !strncmp(t, COMPACT_MARKER, strlen(COMPACT_MARKER));
+}
+
+/* The synthesized summary for messages[from..to): one entry per message,
+ * bounded by CAP_COMPACT_SUMMARY with the NEWEST entries kept when the cap
+ * forces a choice (they are closest to the live conversation). A prior
+ * summary contributes its BODY (the marker header line dropped), so the
+ * marker never nests and repeated compaction stays flat. */
+static char *compact_summary_text(cJSON *messages, int from, int to, int *rounds_out) {
+    int count = to - from, rounds = 0;
+    sb *entries = calloc((size_t)count, sizeof *entries);
+    if (!entries) return NULL;
+    for (int i = from; i < to; i++) {
+        cJSON *m = cJSON_GetArrayItem(messages, i);
+        sb *e = &entries[i - from];
+        const char *role = blk_str(m, "role");
+        int assistant = role && !strcmp(role, "assistant");
+        if (assistant) rounds++;
+        cJSON *content = cJSON_GetObjectItem(m, "content");
+        if (cJSON_IsString(content)) {
+            if (*content->valuestring)
+                sum_add_clip(e, assistant ? "gcode: " : "You: ", content->valuestring, 300);
+            continue;
+        }
+        if (!cJSON_IsArray(content)) continue;
+        if (msg_is_summary(m)) {
+            const char *t = blk_str(cJSON_GetArrayItem(content, 0), "text");
+            const char *nl = t ? strchr(t, '\n') : NULL;
+            if (nl && nl[1]) sb_puts(e, nl + 1);   /* body only — header dropped */
+            continue;
+        }
+        cJSON *blk;
+        cJSON_ArrayForEach(blk, content) {
+            if (blk_is(blk, "text")) {
+                const char *t = blk_str(blk, "text");
+                if (t && *t) sum_add_clip(e, assistant ? "gcode: " : "You: ", t, 300);
+            } else if (blk_is(blk, "tool_use")) {
+                const char *nm = blk_str(blk, "name");
+                cJSON *in = cJSON_GetObjectItem(blk, "input");
+                const char *arg = in ? blk_str(in, (nm && !strcmp(nm, "bash")) ? "command" : "path") : NULL;
+                sb line = {0};
+                sb_puts(&line, nm ? nm : "?");
+                if (arg && *arg) { sb_puts(&line, " "); sb_puts(&line, arg); }
+                sum_add_clip(e, "  tool: ", line.p ? line.p : "", 160);
+                sb_free(&line);
+            } else if (blk_is(blk, "tool_result")) {
+                cJSON *c = cJSON_GetObjectItem(blk, "content");
+                if (cJSON_IsString(c) && *c->valuestring)
+                    sum_add_clip(e, "  result: ", c->valuestring, 160);
+            }
+        }
+    }
+    size_t total = 0;
+    for (int i = 0; i < count; i++) total += entries[i].len;
+    int start = 0;
+    while (start < count && total > CAP_COMPACT_SUMMARY) total -= entries[start++].len;
+    sb out = {0};
+    char hdr[320];
+    snprintf(hdr, sizeof hdr, COMPACT_MARKER " %d message(s) — %d assistant round(s) — were"
+             " folded into this summary to keep the conversation inside the model's context"
+             " window. The original first user message precedes this summary; the most recent"
+             " exchanges follow it verbatim.\n", count, rounds);
+    sb_puts(&out, hdr);
+    if (start > 0) {
+        char m[96];
+        snprintf(m, sizeof m, "[%d oldest folded message(s) not itemized — summary size cap]\n", start);
+        sb_puts(&out, m);
+    }
+    for (int i = start; i < count; i++)
+        if (entries[i].len) sb_add(&out, entries[i].p, entries[i].len);
+    for (int i = 0; i < count; i++) sb_free(&entries[i]);
+    free(entries);
+    if (rounds_out) *rounds_out = rounds;
+    return out.p;
+}
+
+/* Fold modes. AUTO no-ops when the estimate already fits the target (that is
+ * what makes threshold-driven compaction idempotent at the fold level);
+ * REJECTED skips that early-out because the provider just proved the
+ * estimate wrong; MANUAL (/compact) takes the largest pair-safe fold. */
+#define COMPACT_AUTO     0
+#define COMPACT_REJECTED 1
+#define COMPACT_MANUAL   2
+
+/* Fold messages[1..k) into one summary message spliced at index 1. The cut k
+ * is pair-safe (messages[k-1] carries no tool_use — its answer would be
+ * messages[k], and dropping one half manufactures exactly the dangling-id
+ * 400 that #462/#463 exist to prevent), keeps at least the last two
+ * messages verbatim, and must include at least one non-summary message
+ * (re-folding only the previous summary is churn, not progress). Token
+ * estimates are serialized-bytes × tok_per_byte — self-calibrated from the
+ * provider's own numbers by the caller. Returns messages REMOVED (0 = no
+ * fold possible or needed). */
+static int compact_fold(cJSON *messages, long long target_tokens, double tok_per_byte,
+                        int mode, long long *est_after, int *rounds_out) {
+    int n = cJSON_GetArraySize(messages);
+    if (n < 4) return 0;
+    size_t *lens = malloc((size_t)n * sizeof *lens);
+    if (!lens) return 0;
+    size_t total = 0;
+    for (int i = 0; i < n; i++) {
+        char *s = cJSON_PrintUnformatted(cJSON_GetArrayItem(messages, i));
+        lens[i] = s ? strlen(s) : 0; free(s); total += lens[i];
+    }
+    if (mode == COMPACT_AUTO &&
+        (long long)(tok_per_byte * (double)total) <= target_tokens) {
+        free(lens); return 0;   /* already fits: compaction is a no-op */
+    }
+    int prior_summary = msg_is_summary(cJSON_GetArrayItem(messages, 1));
+    int k = 0;
+    for (int c = 2; c <= n - 2; c++) {
+        if (msg_has_tool_use(cJSON_GetArrayItem(messages, c - 1))) continue;
+        if (prior_summary && c == 2) continue;
+        k = c;
+        if (mode != COMPACT_MANUAL) {
+            size_t suffix = 0, folded_bytes = 0;
+            for (int i = c; i < n; i++) suffix += lens[i];
+            for (int i = 1; i < c; i++) folded_bytes += lens[i];
+            size_t sum_est = folded_bytes / 8;
+            if (sum_est < 512) sum_est = 512;
+            if (sum_est > CAP_COMPACT_SUMMARY) sum_est = CAP_COMPACT_SUMMARY;
+            long long est = (long long)(tok_per_byte * (double)(lens[0] + sum_est + suffix));
+            if (est <= target_tokens) break;   /* smallest sufficient fold */
+        }
+        /* MANUAL keeps walking to the largest pair-safe cut */
+    }
+    free(lens);
+    if (k < 2) return 0;
+    int rounds = 0;
+    char *text = compact_summary_text(messages, 1, k, &rounds);
+    cJSON *umsg = cJSON_CreateObject(), *arr = cJSON_CreateArray(), *tb = cJSON_CreateObject();
+    cJSON_AddStringToObject(umsg, "role", "user");
+    cJSON_AddStringToObject(tb, "type", "text");
+    cJSON_AddStringToObject(tb, "text", text ? text : COMPACT_MARKER);
+    cJSON_AddItemToArray(arr, tb);
+    cJSON_AddItemToObject(umsg, "content", arr);
+    free(text);
+    for (int i = 1; i < k; i++) cJSON_DeleteItemFromArray(messages, 1);
+    cJSON_InsertItemInArray(messages, 1, umsg);
+    if (est_after) {
+        char *s = cJSON_PrintUnformatted(messages);
+        *est_after = (long long)(tok_per_byte * (double)(s ? strlen(s) : 0));
+        free(s);
+    }
+    if (rounds_out) *rounds_out = rounds;
+    return k - 1;
+}
+
+/* The one entry point: fold, announce, persist, refresh the accounting.
+ * reason is "auto" | "manual" | "rejected". Returns messages removed. */
+static int compact_apply(config *cfg, session *sess, cJSON *messages, const char *reason) {
+    long long ceiling = ctx_ceiling(cfg, sess);
+    long long target = ceiling * CTX_TARGET_PCT / 100;
+    double tpb = 0.25;   /* no usage signal yet: ~4 bytes/token */
+    long long before = sess->last_prompt_tokens;
+    {
+        char *s = cJSON_PrintUnformatted(messages);
+        size_t bytes = s ? strlen(s) : 0; free(s);
+        if (before > 0 && bytes > 0) tpb = (double)before / (double)bytes;
+        else if (bytes > 0) before = (long long)(tpb * (double)bytes);
+    }
+    int mode = !strcmp(reason, "manual")   ? COMPACT_MANUAL
+             : !strcmp(reason, "rejected") ? COMPACT_REJECTED : COMPACT_AUTO;
+    long long est_after = 0; int rounds = 0;
+    int folded = compact_fold(messages, target, tpb, mode, &est_after, &rounds);
+    if (!folded) return 0;
+    fprintf(stderr, "\n%sgcode: compacted the history (%s) — folded %d message(s), %d assistant"
+                    " round(s), into one summary: ~%lld -> ~%lld tokens of the ~%lld-token budget%s\n",
+            R_INFO, reason, folded, rounds, before, est_after, ceiling, CRST);
+    sess->last_prompt_tokens = est_after;
+    sess->ctx_warned = 0;
+    /* Persist the splice so --resume loads the compacted history. On a write
+     * failure record_write already printed; the live session continues. */
+    cJSON *r = record_new(sess, "compact");
+    cJSON_AddStringToObject(r, "reason", reason);
+    cJSON_AddNumberToObject(r, "folded", (double)folded);
+    cJSON_AddNumberToObject(r, "rounds", (double)rounds);
+    cJSON_AddNumberToObject(r, "est_tokens_before", (double)before);
+    cJSON_AddNumberToObject(r, "est_tokens_after", (double)est_after);
+    cJSON_AddItemToObject(r, "summary", cJSON_Duplicate(cJSON_GetArrayItem(messages, 1), 1));
+    record_write(sess, r);
+    return folded;
+}
+
+/* The decision point, at the top of every round. The usage signal LAGS by
+ * one round by construction (round N's usage prices round N+1's send), so
+ * the firm threshold sits below 100% to absorb ordinary growth; a single
+ * overgrown round that jumps the ceiling inside one round is netted by the
+ * context-length-400 recovery in do_turn's rejection path. */
+static void context_guard(config *cfg, session *sess, cJSON *messages) {
+    if (sess->last_prompt_tokens <= 0) return;   /* no signal yet */
+    long long ceiling = ctx_ceiling(cfg, sess);
+    if (ceiling <= 0) return;
+    long long pct = sess->last_prompt_tokens * 100 / ceiling;
+    if (pct >= ctx_compact_pct()) {
+        fprintf(stderr, "\n%sgcode: context is at %lld%% of the ~%lld-token budget"
+                        " (%lld tokens) — compacting%s\n",
+                R_INFO, pct, ceiling, sess->last_prompt_tokens, CRST);
+        if (!compact_apply(cfg, sess, messages, "auto"))
+            fprintf(stderr, "%sgcode: the history is too short to fold — sending as is"
+                            " (the provider may reject it)%s\n", CDIM, CRST);
+    } else if (pct >= ctx_warn_pct()) {
+        if (!sess->ctx_warned) {
+            sess->ctx_warned = 1;
+            fprintf(stderr, "\n%sgcode: context is at %lld%% of the ~%lld-token budget"
+                            " (%lld tokens, model %s) — gcode will compact automatically at %d%%;"
+                            " /compact folds the oldest rounds now, /clear starts fresh%s\n",
+                    R_INFO, pct, ceiling, sess->last_prompt_tokens,
+                    (sess->response_model && *sess->response_model) ? sess->response_model : cfg->model,
+                    ctx_compact_pct(), CRST);
+        }
+    } else {
+        sess->ctx_warned = 0;   /* dropped below: re-arm the warning */
+    }
+}
+
 /* ---- one API round-trip ----------------------------------------------- */
 /* Returns 0 to stop, 1 to continue (tool_use). Errors: -1 recoverable
    (transport, HTTP 5xx/408/429, API error event), -2 interrupted (^C via
@@ -2145,6 +2527,10 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
         if (history_repair(messages, &rep)) repair_log(&rep, "before sending");
         repair_report_free(&rep);
     }
+    /* #467: warn/compact BEFORE the body is built, on the last round's usage
+     * (after the repair above, so the fold walks a structurally valid
+     * history). */
+    context_guard(cfg, sess, messages);
     cJSON *body = cJSON_CreateObject();
     cJSON_AddStringToObject(body, "model", cfg->model);
     cJSON_AddNumberToObject(body, "max_tokens", (double)cfg->max_tokens);
@@ -2267,6 +2653,20 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
             }
             repair_report_free(&rep);
             if (changed) { ret = -4; goto done; }
+            /* #467: a context-length rejection is REPAIRABLE by compaction —
+             * but only that phrasing class, and only when the fold actually
+             * shrinks the history (a no-op fold followed by a retry is an
+             * infinite loop; a fold that happened is a concrete structural
+             * reason the next attempt differs). Every other 4xx keeps the
+             * pre-#467 permanent verdict below, and the retry shares
+             * agent_loop's once-per-turn budget with the #463 repair. */
+            if (err_is_context_length(errbody)) {
+                if (compact_apply(cfg, sess, messages, "rejected")) {
+                    fprintf(stderr, "%sgcode: the provider rejected the conversation as too long"
+                                    " — compacted, retrying this round once%s\n", R_ERRB, CRST);
+                    ret = -4; goto done;
+                }
+            }
             fprintf(stderr, "%sgcode: the server rejected the request itself — retrying cannot succeed%s\n",
                     R_ERRB, CRST);
         }
@@ -2400,6 +2800,13 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
     sess->round_index++;
     if (persist_api_round(sess, &ctx, cfg->model)) { ret = -1; goto done; }
     usage_add(turn_usage, &ctx.round_usage); usage_add(&sess->total, &ctx.round_usage);
+    /* #467: the assembled-prompt size of THIS round — all three input
+     * counters. On a cached conversation input_tokens alone is tiny while
+     * cache_read carries the real size; summing fewer than the three is the
+     * bug that makes the compactor look implemented while being dead. */
+    sess->last_prompt_tokens = ctx.round_usage.input_tokens
+        + ctx.round_usage.cache_creation_input_tokens
+        + ctx.round_usage.cache_read_input_tokens;
     /* #348: bucket this round's usage under its ACTUAL model (the display
      * fallback applies: a model-less stream books under the requested name) */
     {
@@ -2551,7 +2958,10 @@ static int agent_loop(config *cfg, session *sess, cJSON *messages, cJSON *tools)
     for (long round = 0; cfg->max_turns <= 0 || round < cfg->max_turns; round++) {
         last = do_turn(cfg, sess, messages, tools, &turn, &turn_models); if (last >= 0) rounds++;
         if (last == -4) {
-            /* #463: the rejected history was repaired. Re-send it ONCE. The
+            /* #463/#467: the rejected history was repaired (or compacted
+             * after a context-length rejection — the two share this budget
+             * deliberately: one free retry per turn, of any kind). Re-send
+             * it ONCE. The
              * rejected request never became a round, so it consumes neither
              * the round count nor the --max-turns budget. A second -4 in one
              * turn degrades to the pre-#463 permanent verdict rather than
@@ -2650,6 +3060,12 @@ static int session_resume(session *s, config *cfg, cJSON *messages, const char *
             cJSON *content = cJSON_GetObjectItem(r, "content"); cJSON_AddItemToObject(m, "content", cJSON_Duplicate(content, 1)); cJSON_AddItemToArray(messages, m);
         } else if (!strcmp(type, "api_round")) {
             usage u = usage_from_json(cJSON_GetObjectItem(r, "usage")); usage_add(&s->total, &u);
+            /* #467: rebuild the context accounting — the LAST round's
+             * assembled-prompt size (all three input counters), so a resumed
+             * near-ceiling session compacts BEFORE its first POST instead of
+             * discovering the ceiling with a 400. */
+            s->last_prompt_tokens = u.input_tokens
+                + u.cache_creation_input_tokens + u.cache_read_input_tokens;
             /* #348: rebuild the per-model buckets so the resumed session's
              * cost line keeps pricing each round with its own model. Old
              * records missing the fields fall back response -> request ->
@@ -2660,6 +3076,29 @@ static int session_resume(session *s, config *cfg, cJSON *messages, const char *
             mlist_add(&s->models, rm, &u);
         } else if (!strcmp(type, "turn_start")) {
             long long idx = json_count(r, "turn_index"); if (idx > s->turn_index) s->turn_index = idx;
+        } else if (!strcmp(type, "compact")) {
+            /* #467: replay the splice. At the time the record was written the
+             * loaded array mirrored the live one exactly (every message is
+             * persisted), so the identical splice reproduces the compacted
+             * history — the resumed session must not re-blow the ceiling. A
+             * record that no longer matches (a hand-edited log) is skipped
+             * LOUDLY: the un-spliced history is still complete and valid,
+             * merely big. */
+            long long folded = json_count(r, "folded");
+            cJSON *summ = cJSON_GetObjectItem(r, "summary");
+            int have = cJSON_GetArraySize(messages);
+            if (cJSON_IsObject(summ) && folded > 0 && folded + 1 <= have) {
+                for (long long i = 0; i < folded; i++) cJSON_DeleteItemFromArray(messages, 1);
+                cJSON *m = cJSON_CreateObject();
+                cJSON_AddStringToObject(m, "role", jstr(summ, "role"));
+                cJSON_AddItemToObject(m, "content", cJSON_Duplicate(cJSON_GetObjectItem(summ, "content"), 1));
+                cJSON_InsertItemInArray(messages, 1, m);
+                long long ea = json_count(r, "est_tokens_after");
+                if (ea > 0) s->last_prompt_tokens = ea;
+            } else {
+                fprintf(stderr, "gcode: warning: compact record does not match the replayed log"
+                                " (folded %lld, loaded %d) — ignored\n", folded, have);
+            }
         }
         cJSON_Delete(r);
     }
@@ -2879,6 +3318,128 @@ static int repair_self_test(void) {
     return ok;
 }
 
+/* ---- #467 self-test: the compaction machinery -------------------------- */
+#define A_TEXT(t) "{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"" t "\"}]}"
+
+static int count_markers(cJSON *h) {
+    char *s = cJSON_PrintUnformatted(h);
+    int cnt = 0;
+    for (const char *p = s; p && (p = strstr(p, COMPACT_MARKER)); p++) cnt++;
+    free(s);
+    return cnt;
+}
+
+static int compact_self_test(void) {
+    int ok = 1;
+
+    /* The window table's unknown-model fallback is a LIVE ceiling — the
+     * vacuous-green hazard is a compactor that silently never fires against
+     * an off-table provider, which is exactly how gcode is live-tested. */
+    ok &= context_window_for("claude-opus-5") == 200000;
+    ok &= context_window_for("claude-fable-5") == 200000;
+    ok &= context_window_for("deepseek-v4-pro") == 128000;
+    ok &= context_window_for("totally-unknown-model") == CTX_WINDOW_DEFAULT;
+    ok &= context_window_for(NULL) == CTX_WINDOW_DEFAULT;
+    ok &= CTX_WINDOW_DEFAULT > 0;
+
+    /* The 400-recovery gate must catch the live phrasings and MUST NOT catch
+     * a genuinely-permanent 400 — narrowing the permanent classifier is the
+     * regression the ticket warns about. */
+    ok &= err_is_context_length("{\"error\":{\"message\":\"prompt is too long: 213462 tokens > 204698 maximum\"}}");
+    ok &= err_is_context_length("{\"error\":{\"message\":\"input length and `max_tokens` exceed context limit: 195000 + 32768 > 204698\"}}");
+    ok &= err_is_context_length("{\"error\":{\"code\":\"context_length_exceeded\"}}");
+    ok &= err_is_context_length("This model's maximum context length is 128000 tokens");
+    ok &= !err_is_context_length("model: nonexistent-model-9000");
+    ok &= !err_is_context_length("There was an error parsing the body");
+    ok &= !err_is_context_length(NULL);
+
+    /* The usable budget: window minus the output reservation, floored at
+     * half the window; the response model outranks the requested alias. */
+    {
+        config c; memset(&c, 0, sizeof c);
+        session s; memset(&s, 0, sizeof s);
+        c.context_tokens = 10000; c.max_tokens = 1000; c.model = "x";
+        ok &= ctx_ceiling(&c, &s) == 9000;
+        c.max_tokens = 32768;
+        ok &= ctx_ceiling(&c, &s) == 5000;
+        c.context_tokens = 0; c.max_tokens = 1000; c.model = "totally-unknown";
+        ok &= ctx_ceiling(&c, &s) == CTX_WINDOW_DEFAULT - 1000;
+        s.response_model = (char *)"deepseek-v4-flash";
+        ok &= ctx_ceiling(&c, &s) == 128000 - 1000;
+    }
+
+    /* A clip landing inside a multi-byte sequence must back off to the
+     * boundary — a split sequence would trip the #387 pre-POST guard on the
+     * very request the compaction was meant to save. */
+    {
+        sb b = {0};
+        sum_add_clip(&b, "", "ab\xC3\xA9\xC3\xA9", 3);   /* cap splits the first é */
+        ok &= b.p && utf8_invalid_at(b.p, b.len) == -1;
+        sb_free(&b);
+    }
+
+    /* The fold itself: pair-safe cut, first user message kept verbatim, the
+     * summary spliced at index 1, and the result API-valid. */
+    {
+        const char *hist =
+            "[" U_TEXT("first ask") ","
+            A_USE("toolu_aaaa") ",{\"role\":\"user\",\"content\":[" TR("toolu_aaaa", "out a") "]},"
+            A_TEXT("done a") ","
+            U_TEXT("second ask") ","
+            A_USE("toolu_bbbb") ",{\"role\":\"user\",\"content\":[" TR("toolu_bbbb", "out b") "]},"
+            A_TEXT("done b") "]";
+        cJSON *h = cJSON_Parse(hist);
+        long long ea = 0; int rounds = 0;
+        /* target 1 token: nothing suffices, so the largest pair-safe fold —
+         * k=5 (k=2 and k=6 are blocked by the tool_use before the cut). */
+        int folded = compact_fold(h, 1, 0.25, COMPACT_AUTO, &ea, &rounds);
+        ok &= folded == 4 && rounds == 2 && cJSON_GetArraySize(h) == 5;
+        ok &= history_is_valid(h);
+        cJSON *m0 = cJSON_GetArrayItem(h, 0);
+        const char *t0 = blk_str(cJSON_GetArrayItem(cJSON_GetObjectItem(m0, "content"), 0), "text");
+        ok &= t0 && !strcmp(t0, "first ask");
+        ok &= msg_is_summary(cJSON_GetArrayItem(h, 1));
+        ok &= !msg_is_summary(cJSON_GetArrayItem(h, 0));
+        ok &= count_markers(h) == 1;
+        /* the kept tail is verbatim: the toolu_bbbb pair survived intact */
+        ok &= msg_has_tool_use(cJSON_GetArrayItem(h, 2));
+
+        /* Idempotent at a satisfied target: an AUTO fold over a history that
+         * already fits is a no-op — the property that stops threshold-driven
+         * compaction firing forever on its own output. */
+        long long ea2 = 0; int r2 = 0;
+        ok &= compact_fold(h, 1000000000, 0.25, COMPACT_AUTO, &ea2, &r2) == 0;
+        ok &= cJSON_GetArraySize(h) == 5;
+
+        /* Summaries never nest: a second fold that swallows the first
+         * summary merges its BODY, so the marker still appears exactly once
+         * and the message count strictly falls. */
+        cJSON_AddItemToArray(h, cJSON_Parse(U_TEXT("third ask")));
+        cJSON_AddItemToArray(h, cJSON_Parse(A_TEXT("done c")));
+        long long ea3 = 0; int r3 = 0;
+        int folded3 = compact_fold(h, 1, 0.25, COMPACT_MANUAL, &ea3, &r3);
+        ok &= folded3 == 4 && cJSON_GetArraySize(h) == 4;
+        ok &= history_is_valid(h) && count_markers(h) == 1;
+
+        /* A fold that could only swallow the previous summary is refused —
+         * churn, not progress ([U0, SUM, U2, At2] has no other cut). */
+        long long ea4 = 0; int r4 = 0;
+        ok &= compact_fold(h, 1, 0.25, COMPACT_MANUAL, &ea4, &r4) == 0;
+        cJSON_Delete(h);
+    }
+
+    /* Too short to fold: never invent a cut that would drop the live tail. */
+    {
+        cJSON *h = cJSON_Parse("[" U_TEXT("a") "," A_TEXT("b") "," U_TEXT("c") "]");
+        long long ea = 0; int r = 0;
+        ok &= compact_fold(h, 1, 0.25, COMPACT_MANUAL, &ea, &r) == 0;
+        cJSON_Delete(h);
+    }
+
+    if (!ok) fprintf(stderr, "gcode self-test: compact case FAILED\n");
+    return ok;
+}
+
 static int self_test(void) {
     /* #313: the dated Sonnet 5 intro rate ($2/$10 through 2026-08-31,
      * $3/$15 sticker after) — fixed dates so the check outlives the
@@ -2952,6 +3513,9 @@ static int self_test(void) {
      * invariant, the server-directed pass and its no-mutation gate, and
      * idempotence on every fixture. */
     ok &= repair_self_test();
+    /* #467: window table, rejection matcher, ceiling arithmetic, and the
+     * fold's pair-safety/idempotence/no-nesting invariants. */
+    ok &= compact_self_test();
     char tmp[] = "/tmp/gcode-step2-test-XXXXXX"; if (!mkdtemp(tmp)) return 1; setenv("GCODE_STATE_DIR", tmp, 1);
     config cfg = { "https://example.invalid", NULL, NULL, "requested-alias", "fixture-system", 123, 4, 0, 0, NULL, NULL };
     session s; cJSON *messages = cJSON_CreateArray();
@@ -3022,6 +3586,11 @@ int main(int argc, char **argv) {
     cfg.max_tokens = atol(getenv_or("ANTHROPIC_MAX_TOKENS", "0"));
     if (cfg.max_tokens <= 0) cfg.max_tokens = MAX_TOKENS_DEFAULT;
     cfg.max_turns  = 0;    /* #353: 0 = unlimited; --max-turns N is the opt-in cap */
+    /* #467: 0 = derive the window from the model; a positive override wins.
+     * Negative/garbage atol results collapse to auto rather than to a dead
+     * guard. */
+    cfg.context_tokens = atol(getenv_or("GCODE_CONTEXT_TOKENS", "0"));
+    if (cfg.context_tokens < 0) cfg.context_tokens = 0;
     cfg.verbose = 0;
     cfg.color = -1;   /* #303: -1 auto (isatty), 0 forced off, 1 forced on */
 
@@ -3032,6 +3601,10 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--system-prompt") && i + 1 < argc) cfg.system_prompt = argv[++i];
         else if (!strcmp(argv[i], "--max-turns") && i + 1 < argc)   cfg.max_turns = atol(argv[++i]);
         else if (!strcmp(argv[i], "--max-tokens") && i + 1 < argc)  cfg.max_tokens = atol(argv[++i]);
+        else if (!strcmp(argv[i], "--context-tokens") && i + 1 < argc) {
+            cfg.context_tokens = atol(argv[++i]);                    /* #467 */
+            if (cfg.context_tokens < 0) cfg.context_tokens = 0;
+        }
         else if (!strcmp(argv[i], "--verbose"))                     cfg.verbose = 1;
         else if (!strcmp(argv[i], "--no-color"))                    cfg.color = 0;
         else if (!strcmp(argv[i], "--color"))                       cfg.color = 1;
@@ -3042,18 +3615,27 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--self-test"))                   do_self_test = 1;
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             printf("usage: gcode [-p PROMPT] [--model M] [--system-prompt S]\n"
-                   "            [--max-turns N] [--max-tokens N] [--resume ID|PATH] [-c|--continue]\n"
+                   "            [--max-turns N] [--max-tokens N] [--context-tokens N]\n"
+                   "            [--resume ID|PATH] [-c|--continue]\n"
                    "            [--no-persist] [--no-context] [--verbose] [--no-color] [--color]\n"
                    "env: ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL,\n"
-                   "     ANTHROPIC_MAX_TOKENS, GCODE_STATE_DIR, XDG_STATE_HOME, NO_COLOR\n"
+                   "     ANTHROPIC_MAX_TOKENS, GCODE_CONTEXT_TOKENS, GCODE_WARN_PCT, GCODE_COMPACT_PCT,\n"
+                   "     GCODE_STATE_DIR, XDG_STATE_HOME, NO_COLOR\n"
                    "\n"
                    "--max-tokens N (env ANTHROPIC_MAX_TOKENS) is the per-response OUTPUT cap.\n"
                    "Default %d; values are clamped to [%d, %d] with a printed note.\n"
                    "A response cut at the cap never executes the truncated tool call: gcode\n"
                    "says so in the tool result and lets the model retry smaller, up to %d\n"
-                   "consecutive times.\n",
+                   "consecutive times.\n"
+                   "\n"
+                   "--context-tokens N (env GCODE_CONTEXT_TOKENS) overrides the model's context\n"
+                   "window (default: derived from the model id; %d for an unknown model). Long\n"
+                   "sessions warn at %d%% of the usable budget and COMPACT at %d%% (the oldest\n"
+                   "rounds fold into a summary and the session keeps going); /compact folds on\n"
+                   "demand, /clear still starts over.\n",
                    MAX_TOKENS_DEFAULT, MAX_TOKENS_FLOOR, MAX_TOKENS_CEILING,
-                   TRUNC_MAX_CONTINUATIONS);
+                   TRUNC_MAX_CONTINUATIONS, CTX_WINDOW_DEFAULT,
+                   CTX_WARN_PCT_DEFAULT, CTX_COMPACT_PCT_DEFAULT);
             return 0;
         }
     }
@@ -3123,6 +3705,14 @@ int main(int argc, char **argv) {
                 if (persist && session_create(&sess, &cfg)) { cJSON_Delete(messages); cJSON_Delete(tools); curl_global_cleanup(); return 1; }
                 if (!persist) { memset(&sess, 0, sizeof sess); sess.fd = -1; make_session_id(sess.id); }
                 fprintf(stderr, "%s[history cleared]%s\n", CDIM, CRST); continue;
+            }
+            if (!strcmp(line, "/compact")) {
+                /* #467: the graduated option beside /clear's nuclear one —
+                 * the largest pair-safe fold, announced by compact_apply. */
+                if (!compact_apply(&cfg, &sess, messages, "manual"))
+                    fprintf(stderr, "%s[nothing to compact — the history is too short to fold]%s\n",
+                            CDIM, CRST);
+                continue;
             }
             if (append_user_text(&sess, messages, line)) break;
             int turn_rc = agent_loop(&cfg, &sess, messages, tools);

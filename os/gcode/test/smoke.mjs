@@ -1277,6 +1277,230 @@ async function main() {
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 
+  // ---- test 14 (#467): compaction at the context ceiling -----------------
+  // gcode used to grow its history unbounded until the provider returned a
+  // context-length 400, which the permanent classifier turned into a REPL
+  // exit — a destroyed session. Ruled (night decider, 2026-08-03): gcode
+  // COMPACTS — loudly — and keeps going. Legs A/C/E/F FAIL on the pre-#467
+  // binary (leg C is the ticket's positive control: the same script exits the
+  // REPL there); legs B and D are the guard rails.
+  {
+    // Big numbers ride in message_delta usage (merge_usage overlays them on
+    // message_start's). Leg A deliberately puts the bulk in CACHE_READ with a
+    // small input_tokens: a compactor thresholding on input_tokens alone —
+    // the plausible wrong field — never fires, and this leg goes red.
+    const usageTool = (id, cmd, usage) =>
+      sse('message_start', { message: { id: `msg_${id}`, model: 'compact-model', usage: { input_tokens: 5, output_tokens: 0 } } })
+      + sse('content_block_start', { index: 0, content_block: { type: 'tool_use', id, name: 'bash', input: {} } })
+      + sse('content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ command: cmd }) } })
+      + sse('content_block_stop', { index: 0 })
+      + sse('message_delta', { delta: { stop_reason: 'tool_use' }, usage })
+      + sse('message_stop', {});
+    // GCODE_CONTEXT_TOKENS=20000 with --max-tokens 2000 -> an 18000-token
+    // usable budget: warn at 13500 (75%), compact at 15300 (85%).
+    const ENV467 = { GCODE_CONTEXT_TOKENS: '20000' };
+    const ARGS467 = ['--no-color', '--max-tokens', '2000'];
+    const apiValid = (msgs) => {
+      for (let i = 0; i < msgs.length; i++) {
+        const uses = (Array.isArray(msgs[i].content) ? msgs[i].content : [])
+          .filter((b) => b.type === 'tool_use').map((b) => b.id);
+        if (!uses.length) continue;
+        const next = msgs[i + 1];
+        const got = (next && Array.isArray(next.content) ? next.content : [])
+          .filter((b) => b.type === 'tool_result').map((b) => b.tool_use_id);
+        if (next?.role !== 'user' || uses.some((id) => !got.includes(id))) return false;
+      }
+      return true;
+    };
+    const MARKER = '[gcode: compacted history]';
+
+    // -- leg A: the firm threshold compacts, loudly, without splitting a pair
+    // (and leg F below resumes the same log). Round 2 reports 16300 tokens —
+    // 200 input + 300 cache-create + 15800 CACHE-READ — so round 3's send is
+    // compacted first. Pre-fix: nothing fires and all 4 requests carry the
+    // full history.
+    const stateA = fs.mkdtempSync(path.join(os.tmpdir(), 'gcode-467a-'));
+    {
+      const srv = await startServer([
+        usageTool('t467a1', 'true', { output_tokens: 2, input_tokens: 300, cache_read_input_tokens: 200 }),
+        usageTool('t467a2', 'true', { output_tokens: 2, input_tokens: 200, cache_creation_input_tokens: 300, cache_read_input_tokens: 15800 }),
+        usageTool('t467a3', 'true', { output_tokens: 2, input_tokens: 400, cache_read_input_tokens: 100 }),
+        textResponse('finished after compaction.'),
+      ]);
+      const { stdout, stderr } = await runCodeBoth(srv.url, ['-p', 'long session', ...ARGS467],
+        { ...ENV467, GCODE_STATE_DIR: stateA });
+      srv.close();
+      check(srv.bodies.length === 4, `#467: the session ran all 4 rounds (${srv.bodies.length})`);
+      const sent = srv.bodies[2] ? srv.bodies[2].messages : [];
+      check(sent.length === 4 && JSON.stringify(sent[1]).includes(MARKER),
+        `#467: round 3 went out COMPACTED — oldest round folded into a summary at index 1 (${sent.length} messages)`);
+      check(apiValid(sent), '#467: the compacted history is API-valid — no tool pair was split by the fold');
+      check(!JSON.stringify(sent).includes('t467a1') && JSON.stringify(sent).includes('t467a2'),
+        '#467: the folded round\'s tool id is gone, the kept round\'s survives verbatim');
+      check(Array.isArray(sent[0]?.content) && JSON.stringify(sent[0]).includes('long session'),
+        '#467: the ORIGINAL first user message is kept verbatim ahead of the summary');
+      check(/context is at 9\d% of the ~18000-token budget/.test(stderr),
+        '#467: the compaction names the numbers (percent + budget) before folding');
+      check(/compacted the history \(auto\) — folded 2 message\(s\), 1 assistant round\(s\)/.test(stderr),
+        '#467: the compaction announces itself — rounds folded and resulting size, never silent');
+      check(stdout.includes('finished after compaction.'),
+        '#467: the session CONTINUES past the ceiling instead of exiting the REPL');
+    }
+
+    // -- leg B (guard rail): the soft threshold warns and does NOT compact --
+    // 14000 of 18000 is 77% — inside [75, 85). The user must get the warning
+    // while they can still act, and the history must go out untouched.
+    {
+      const srv = await startServer([
+        usageTool('t467b1', 'true', { output_tokens: 2, input_tokens: 14000 }),
+        textResponse('done b.'),
+      ]);
+      const { stderr } = await runCodeBoth(srv.url, ['-p', 'warn only', ...ARGS467, '--no-persist'], ENV467);
+      srv.close();
+      check(/context is at 77% of the ~18000-token budget .*will compact automatically at 85%/.test(stderr)
+        && stderr.includes('/compact') && stderr.includes('/clear'),
+        '#467: the soft threshold warns with the numbers and names /compact and /clear');
+      const sent = srv.bodies[1] ? srv.bodies[1].messages : [];
+      check(sent.length === 3 && !JSON.stringify(sent).includes(MARKER),
+        '#467: a warned history still goes out UNcompacted (warn is not compact)');
+      check(!/compacted the history/.test(stderr), '#467: no compaction below the firm threshold');
+    }
+
+    // -- legs C/D need a resumable log of complete rounds -------------------
+    const writeLog467 = (tag, ids) => {
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), `gcode-467-${tag}-`));
+      const sessDir = path.join(stateDir, 'sessions');
+      fs.mkdirSync(sessDir, { recursive: true });
+      const sessPath = path.join(sessDir, '20260811T000000Z_467467467467467467467467467467ab.jsonl');
+      const lines = [
+        '{"schema_version":1,"type":"session_meta","session_id":"467467467467467467467467467467ab","model":"m","base_url":"u","system_prompt_hash":"h","cwd":"/"}',
+        '{"type":"message","role":"user","content":[{"type":"text","text":"long-running ask"}]}',
+        `{"type":"message","role":"assistant","content":[{"type":"tool_use","id":"${ids[0]}","name":"bash","input":{"command":"true"}}]}`,
+        `{"type":"message","role":"user","content":[{"type":"tool_result","tool_use_id":"${ids[0]}","content":"out one"}]}`,
+        '{"type":"message","role":"assistant","content":[{"type":"text","text":"step one done"}]}',
+        '{"type":"message","role":"user","content":[{"type":"text","text":"keep going"}]}',
+        `{"type":"message","role":"assistant","content":[{"type":"tool_use","id":"${ids[1]}","name":"bash","input":{"command":"true"}}]}`,
+        `{"type":"message","role":"user","content":[{"type":"tool_result","tool_use_id":"${ids[1]}","content":"out two"}]}`,
+        '{"type":"message","role":"assistant","content":[{"type":"text","text":"step two done"}]}',
+      ];
+      fs.writeFileSync(sessPath, lines.join('\n') + '\n');
+      return { stateDir, sessPath };
+    };
+
+    // -- leg C (THE POSITIVE CONTROL): a context-length 400 is recovered ----
+    // by compact-and-retry-once. On the pre-#467 binary this exact script is
+    // a permanent verdict after ONE request and the REPL dies — the brick the
+    // ticket exists to remove.
+    {
+      const { stateDir, sessPath } = writeLog467('c', ['toolu_467c1', 'toolu_467c2']);
+      const srv = await startServer([
+        { status: 400, body: '{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 22000 tokens > 18000 maximum"}}' },
+        textResponse('recovered after compaction.'),
+      ]);
+      const { stdout, stderr } = await runCodeBoth(srv.url, ['--resume', sessPath, '-p', 'go', ...ARGS467],
+        { ...ENV467, GCODE_STATE_DIR: stateDir });
+      srv.close();
+      check(srv.bodies.length === 2,
+        `#467: a context-length 400 was compacted and retried ONCE (${srv.bodies.length} requests; pre-fix 1 and the REPL exits)`);
+      check(srv.bodies[0] && !JSON.stringify(srv.bodies[0].messages).includes(MARKER),
+        '#467: the first request went out as the log had it — the guard had no usage signal yet');
+      const retry = srv.bodies[1] ? srv.bodies[1].messages : [];
+      check(retry.length > 0 && JSON.stringify(retry).includes(MARKER) && retry.length < srv.bodies[0].messages.length,
+        '#467: the retry is COMPACTED — fewer messages plus the summary');
+      check(apiValid(retry), '#467: the post-400 compacted history is API-valid');
+      check(/compacted the history \(rejected\)/.test(stderr) && /retrying this round once/.test(stderr),
+        '#467: the recovery is announced — compaction plus the once-only retry');
+      check(stdout.includes('recovered after compaction.'),
+        '#467: the session survives the rejection instead of exiting the REPL');
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+
+    // -- leg D (🔴 the guard rail that matters): a genuinely permanent 400 --
+    // still fails fast. Same repairable-looking long history, but the body
+    // names an unknown model — nothing about length — so no compaction, no
+    // retry, the pre-#467 verdict verbatim. This is the "do NOT blanket-
+    // narrow the permanent classifier" clause, asserted.
+    {
+      const { stateDir, sessPath } = writeLog467('d', ['toolu_467d1', 'toolu_467d2']);
+      const srv = await startServer([
+        { status: 400, body: '{"type":"error","error":{"type":"invalid_request_error","message":"model: nonexistent-model-9000"}}' },
+        textResponse('MUST NOT BE REACHED'),
+      ]);
+      const { stdout, stderr } = await runCodeBoth(srv.url, ['--resume', sessPath, '-p', 'go', ...ARGS467],
+        { ...ENV467, GCODE_STATE_DIR: stateDir });
+      srv.close();
+      check(srv.bodies.length === 1,
+        `#467 negative control: an unknown-model 400 is NOT compact-retried (${srv.bodies.length} requests)`);
+      check(/retrying cannot succeed/.test(stderr) && !/compacted the history/.test(stderr),
+        '#467 negative control: the permanent verdict is unchanged and no compaction fired');
+      check(!stdout.includes('MUST NOT BE REACHED'), '#467 negative control: the REPL still exits');
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+
+    // -- leg E: manual /compact beside an unchanged /clear ------------------
+    {
+      const srv = await startServer([
+        toolUseResponse('working', 'toolu_467e1', 'bash', { command: 'true' }),
+        textResponse('first done.'),
+        textResponse('second done.'),
+        textResponse('third done.'),
+      ]);
+      const child = spawn(bin, ['--no-color', '--no-persist'], {
+        env: { ...process.env, ANTHROPIC_BASE_URL: srv.url, ANTHROPIC_API_KEY: 'test',
+               ASAN_OPTIONS: 'detect_leaks=0' },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      let out = '', err = '';
+      child.stdout.on('data', (c) => (out += c));
+      child.stderr.on('data', (c) => (err += c));
+      child.stdin.write('first ask\nsecond ask\n/compact\n/compact\nthird ask\n/clear\n/quit\n');
+      child.stdin.end();
+      await new Promise((resolve, reject) => {
+        const t = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('#467 leg E timed out')); }, 15000);
+        child.on('exit', () => { clearTimeout(t); resolve(); });
+      });
+      srv.close();
+      check(/compacted the history \(manual\) — folded 3 message\(s\)/.test(err),
+        '#467: /compact folds on demand and announces what it folded');
+      check(err.includes('nothing to compact'),
+        '#467: a second /compact with only the summary left says so instead of churning');
+      // request indices: 0 = first ask (tool round), 1 = its follow-up,
+      // 2 = second ask, 3 = the post-/compact third ask.
+      const sent = srv.bodies[3] ? srv.bodies[3].messages : [];
+      check(sent.length > 0 && JSON.stringify(sent[1]).includes(MARKER) && apiValid(sent)
+        && !JSON.stringify(sent).includes('toolu_467e1'),
+        '#467: the post-/compact request carries the summary, valid, folded tool id gone');
+      check(err.includes('[history cleared]'), '#467: /clear is unchanged beside /compact');
+    }
+
+    // -- leg F: persistence + --resume of the compacted leg-A log -----------
+    // The compacted history is what the log carries forward: the resume must
+    // load the spliced shape (ONE summary), not the pre-compact history, and
+    // must not immediately re-compact (idempotence across processes).
+    {
+      const sessDir = path.join(stateA, 'sessions');
+      const logFile = fs.readdirSync(sessDir).filter((f) => f.endsWith('.jsonl'))[0];
+      const records = fs.readFileSync(path.join(sessDir, logFile), 'utf8')
+        .split('\n').filter(Boolean).map((l) => JSON.parse(l));
+      const comp = records.find((r) => r.type === 'compact');
+      check(!!comp && comp.reason === 'auto' && comp.folded === 2 && comp.summary?.role === 'user',
+        '#467: the compaction is PERSISTED — a compact record with the splice and the summary');
+      const srv = await startServer([textResponse('resumed fine.')]);
+      const { stderr } = await runCodeBoth(srv.url,
+        ['--resume', path.join(sessDir, logFile), '-p', 'go', ...ARGS467],
+        { ...ENV467, GCODE_STATE_DIR: stateA });
+      srv.close();
+      const sent = srv.bodies[0] ? srv.bodies[0].messages : [];
+      const markers = (JSON.stringify(sent).match(/\[gcode: compacted history\]/g) || []).length;
+      check(markers === 1 && !JSON.stringify(sent).includes('t467a1'),
+        `#467: --resume replays the COMPACTED history — one summary, folded round gone (${markers} markers)`);
+      check(apiValid(sent), '#467: the resumed compacted history is API-valid');
+      check(!/compacted the history/.test(stderr) && !/does not match/.test(stderr),
+        '#467: the resume does not immediately re-compact and the splice applied cleanly');
+      fs.rmSync(stateA, { recursive: true, force: true });
+    }
+  }
+
   console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILURE(S)`);
   process.exit(failures === 0 ? 0 : 1);
 }
