@@ -29,7 +29,15 @@ WebAssembly module built by the in-OS C compiler. Facts you cannot guess:
   `<stdio.h>`. The `SDLK_a`…`SDLK_z` letter-key constants do NOT exist:
   `event.key.key` is the modifier-applied ASCII character, so compare a
   char literal (`event.key.key == 'r'`; Shift gives `'R'`). Physical keys
-  are `SDL_SCANCODE_A`…`SDL_SCANCODE_Z` on `event.key.scancode`.
+  are `SDL_SCANCODE_A`…`SDL_SCANCODE_Z` on `event.key.scancode`. The
+  special-key `SDLK_*` constants DO exist and match `event.key.key`:
+  `SDLK_ESCAPE`, `SDLK_LEFT`/`SDLK_RIGHT`/`SDLK_UP`/`SDLK_DOWN`,
+  `SDLK_RETURN`/`SDLK_TAB`/`SDLK_SPACE`/`SDLK_BACKSPACE`/`SDLK_DELETE`,
+  Insert/Home/End/PageUp/PageDown, `SDLK_F1`…`SDLK_F12`, and the L/R
+  modifiers (`SDLK_LSHIFT`, `SDLK_LCTRL`, …) — the full list is the
+  `SDLK_` block in `<SDL.h>`. Digits and punctuation are char literals
+  like the letters (only `SDLK_PLUS`/`SDLK_MINUS`/`SDLK_EQUALS` exist),
+  and there are no `SDLK_KP_*` keypad constants.
 - Math functions (`sqrtf`, `fabsf`, `floorf`, `sinf`, …) need
   `#include <math.h>` — the header links the implementation automatically,
   like the other system headers. Without the include the compile fails

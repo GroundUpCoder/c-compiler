@@ -224,5 +224,92 @@ check('RED control: the compiles checker fails on a truly absent symbol', () => 
     'a bogus symbol compiled — the exit-0 greens above prove nothing');
 });
 
+// ---- 7. the non-letter SDLK_* surface (#626) --------------------------
+// The flip side of #625's letter-key claim. That sentence is true but
+// invites over-generalisation — an agent inferring "no SDLK_* at all"
+// would avoid SDLK_ESCAPE/SDLK_LEFT, exactly the keys a game needs for
+// quit and movement. The doc now states the boundary; these checks pin
+// BOTH sides: every special-key constant compiles (the ASCII tier via
+// negative-array-size value pins carrying the very character codes
+// event.key.key delivers; the extended tier is 0x40000000|scancode, which
+// SDLK_LEFT pins), the digit/punctuation/keypad names stay absent, and
+// the doc's "full list is the SDLK_ block in <SDL.h>" claim is held to
+// set-equality against the SAME header map the compiler resolves
+// <SDL.h> from and foldStdlibHeaders bakes to /usr/include/SDL.h — so a
+// future SDLK_ addition or removal is a loud resync-the-doc failure, not
+// silent drift.
+const SDLK_SURFACE = [
+  'SDLK_BACKSPACE', 'SDLK_TAB', 'SDLK_RETURN', 'SDLK_ESCAPE', 'SDLK_SPACE',
+  'SDLK_PLUS', 'SDLK_MINUS', 'SDLK_EQUALS', 'SDLK_DELETE', 'SDLK_CAPSLOCK',
+  'SDLK_F1', 'SDLK_F2', 'SDLK_F3', 'SDLK_F4', 'SDLK_F5', 'SDLK_F6',
+  'SDLK_F7', 'SDLK_F8', 'SDLK_F9', 'SDLK_F10', 'SDLK_F11', 'SDLK_F12',
+  'SDLK_PRINTSCREEN', 'SDLK_SCROLLLOCK', 'SDLK_PAUSE', 'SDLK_INSERT',
+  'SDLK_HOME', 'SDLK_PAGEUP', 'SDLK_END', 'SDLK_PAGEDOWN', 'SDLK_RIGHT',
+  'SDLK_LEFT', 'SDLK_DOWN', 'SDLK_UP', 'SDLK_NUMLOCKCLEAR', 'SDLK_LCTRL',
+  'SDLK_LSHIFT', 'SDLK_LALT', 'SDLK_LGUI', 'SDLK_RCTRL', 'SDLK_RSHIFT',
+  'SDLK_RALT', 'SDLK_RGUI',
+];
+const sdlkDefines = (text) => {
+  const out = new Set();
+  const re = /#define (SDLK_\w+)/g;
+  let m;
+  while ((m = re.exec(text)) !== null) out.add(m[1]);
+  return out;
+};
+const sdlkDiff = (docList, headerSet) => ({
+  missing: docList.filter((k) => !headerSet.has(k)),
+  extra: [...headerSet].filter((k) => !docList.includes(k)),
+});
+
+check('every special-key SDLK_* compiles; the ASCII tier matches the chars event.key.key carries', () => {
+  const pins = 'int p0[SDLK_ESCAPE==27?1:-1];int p1[SDLK_RETURN==13?1:-1];' +
+    'int p2[SDLK_TAB==9?1:-1];int p3[SDLK_BACKSPACE==8?1:-1];' +
+    "int p4[SDLK_SPACE==' '?1:-1];int p5[SDLK_DELETE==127?1:-1];" +
+    "int p6[SDLK_MINUS=='-'?1:-1];int p7[SDLK_EQUALS=='='?1:-1];" +
+    "int p8[SDLK_PLUS=='+'?1:-1];int p9[SDLK_LEFT==(0x40000000|80)?1:-1];";
+  compiles('#include <SDL.h>\n' + pins + '\nint main(void){SDL_Event e;' +
+    'e.key.key=SDLK_ESCAPE;long long s=' + SDLK_SURFACE.join('+') + ';(void)s;' +
+    'return e.key.key==SDLK_ESCAPE?0:1;}\n');
+  for (const token of ['DO exist', 'SDLK_ESCAPE', 'SDLK_LEFT', 'SDLK_F1', 'SDLK_LSHIFT'])
+    assert(doc.includes(token), 'GCODE.md lost the claim: ' + token);
+});
+
+check('the boundary: digit/punctuation/keypad SDLK_* names stay absent', () => {
+  undeclared('#include <SDL.h>\nint main(void){return SDLK_0;}\n', 'SDLK_0');
+  undeclared('#include <SDL.h>\nint main(void){return SDLK_COMMA;}\n', 'SDLK_COMMA');
+  undeclared('#include <SDL.h>\nint main(void){return (int)SDLK_KP_1;}\n', 'SDLK_KP_1');
+  for (const token of ['SDLK_KP_*', 'SDLK_PLUS'])
+    assert(doc.includes(token), 'GCODE.md lost the boundary claim: ' + token);
+});
+
+check('the full SDLK_ surface is exactly the set the doc boundary describes', () => {
+  const CompilerJS = require(path.join(ROOT, 'compiler.js'));
+  const sdlHeader = CompilerJS.createDefaultPPRegistry().standardHeaders.get('SDL.h');
+  assert(sdlHeader, 'standardHeaders has no SDL.h — the header map moved; resync this test');
+  const baked = sdlkDefines(sdlHeader);
+  assert(baked.has('SDLK_ESCAPE'),
+    'extractor found no SDLK_ESCAPE in SDL.h — the regex rotted; the equality below is vacuous');
+  const d = sdlkDiff(SDLK_SURFACE, baked);
+  assert(d.missing.length === 0 && d.extra.length === 0,
+    'SDLK_ surface drifted from the doc boundary — resync GCODE.md. missing from header: [' +
+    d.missing.join(',') + '] new in header: [' + d.extra.join(',') + ']');
+});
+
+check('RED control: a drifted SDLK value fails the pin compile', () => {
+  const r = ccHarness('#include <SDL.h>\nint a[SDLK_ESCAPE==9999?1:-1];\nint main(void){return 0;}\n');
+  assert(r.exitCode !== 0,
+    'a wrong-value pin compiled — the value pins above prove nothing');
+});
+
+check('RED control: the surface comparator flags an added or a removed constant', () => {
+  const withExtra = new Set(SDLK_SURFACE);
+  withExtra.add('SDLK_COMMA');
+  assert(sdlkDiff(SDLK_SURFACE, withExtra).extra.includes('SDLK_COMMA'),
+    'an injected header constant was not reported — the set-equality green is vacuous');
+  const d = sdlkDiff(SDLK_SURFACE.concat('SDLK_KP_1'), new Set(SDLK_SURFACE));
+  assert(d.missing.includes('SDLK_KP_1'),
+    'a removed header constant was not reported — the set-equality green is vacuous');
+});
+
 console.log(failures ? '\n' + failures + ' gcode-orientation check(s) FAILED' : '\nAll gcode-orientation checks passed');
 process.exit(failures ? 1 : 0);
