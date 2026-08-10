@@ -56,9 +56,12 @@
 #include <sys/time.h>
 
 /* The kernel HTTP primitive (todos/0172, fd-shaped todos/0417), surfaced by
-   host.js as env imports. Declared here like any other consumer (the
-   compiler prelude's copies live in the SDL block; identical redeclaration
-   is fine). Body drain is plain read(2), teardown is plain close(2). */
+   host.js as env imports. Declared here like every consumer — there is NO
+   prelude for these (#392 finding): the twin decls in compiler.js live
+   inside the __SDL.c stdlib SOURCE (a separate TU that never calls them —
+   dead text, tree-shaken, kept as the canonical contract comment), so no
+   program sees them without its own declaration. Identical redeclaration
+   is fine. Body drain is plain read(2), teardown is plain close(2). */
 __import int __http_open(const char *method, const char *url, const char *headers,
                          const void *body, int blen, int headers_ms, int idle_ms);
 __import int __http_status(int fd, int *status_out, char *hdr, int hdrcap);

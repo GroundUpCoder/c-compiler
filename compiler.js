@@ -26741,9 +26741,17 @@ __import int __clip_has(int fmt);
    status), then read() until EAGAIN, then park again. read() gives
    n > 0 bytes, 0 at clean EOF, -1/errno on failure. close(fd) aborts
    the transfer. A consumer that does not consume its pending status
-   spins — that is the caller's bug. */
+   spins — that is the caller's bug.
+   __http_error (#392) is the error-TEXT peek: the transfer's recorded
+   failure text (the transport's own diagnostic — a CORS denial, a dead
+   bridge, the fetch cause chain), NUL-terminated into buf; returns the
+   total text bytes (0 while healthy), never consumes anything. Read it
+   BEFORE close(fd) — the last release frees the transfer, text
+   included. -1/ENOSYS on an embedder predating the op: degrade to
+   errno-derived text, never crash. */
 __import int __http_open(const char *method, const char *url, const char *headers, const void *body, int blen, int headers_ms, int idle_ms);
 __import int __http_status(int fd, int *status_out, char *hdr, int hdrcap);
+__import int __http_error(int fd, char *buf, int cap);
 __import int __sdl_open_audio_device(int freq, int format, int channels);
 __import int __sdl_queue_audio(int dev, const void *data, int len);
 __import int __sdl_get_queued_audio_size(int dev);

@@ -108,3 +108,32 @@ settles on the microtask queue before any RPC can round-trip, so the
 `node tests/run.js --diff origin/main` (plan: 23 suites — kernel.js and
 host.js sit under every compiled-C suite). Image resealed
 `--packages=all` at v251 before the gate. Record in the lane report.
+
+## Addendum — the "prelude" that wasn't (coordinator counter-pass)
+
+The coordinator flagged that compiler.js:26745-26746 already declares
+`__http_open`/`__http_status` "in the real prelude", making my
+consumer-side-only ruling asymmetric. Investigating that claim showed
+BOTH of our premises were wrong:
+
+- Those decls live inside the `"__SDL.c"` entry of `_stdlibSources` — a
+  separate translation unit, not a prelude. A plain program calling
+  `__http_status` with no local declaration fails: *Undeclared
+  identifier* (verified by compile). Nobody ever got the siblings for
+  free; every consumer hand-declares, which is what libcurl.c's
+  "identical redeclaration is fine" was already accommodating.
+- `__SDL.c` itself never calls `__http_*`, and this compiler
+  tree-shakes unused `__import`s (verified: an unused decl emits no
+  import entry; a used one does). The sibling decls are dead text.
+- Estate-wide inertness proven the memory's way: `vendor/sameboy`
+  built via `buildProject` under HEAD vs the edited compiler is
+  **byte-identical** (sha256 4d6401d7bb8a0e3f, 830350 bytes, both).
+
+The decl + contract sentence were added anyway (`__http_error` beside
+its siblings, read-BEFORE-close stated where KERNEL.md and host.js
+point readers), because that block is the repo's canonical HTTP
+contract comment and an incomplete family there is how this
+investigation started. The two false signposts are corrected in the
+same commit (libcurl.c:60, KERNEL.md "compiler prelude" → the __SDL.c
+contract block, with the tree-shake facts). Touching compiler.js draws
+the full mapper set — re-gated accordingly.

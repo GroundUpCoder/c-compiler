@@ -818,8 +818,12 @@ leak, so those are what's pinned:
   discipline. Consumer contract (the fswatch shape): WAIT on the fd; on a
   wake consume the status if you have not, then read until EAGAIN, then
   re-wait. A consumer that refuses to consume its pending status spins —
-  the caller's bug, named in host.js's `createHttp` doc and the compiler
-  prelude.
+  the caller's bug, named in host.js's `createHttp` doc and in the
+  `__SDL.c` stdlib source's contract block (compiler.js). NB that block
+  is NOT a prelude (#392 finding): its `__http_*` decls are dead text in
+  a TU that never calls them (unused imports are tree-shaken — verified
+  byte-identical builds with and without), so every consumer declares
+  the imports itself, the `os/fswatch.h`/`os/egress.h` convention.
 - **Two kernel deadlines bound every transfer** (todos/0417): a HEADERS
   deadline (response headers must arrive within it; default
   `HTTP_HEADERS_MS` 30s, `headersMs` overrides, never disableable) and an
