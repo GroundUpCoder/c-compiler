@@ -1,6 +1,6 @@
 {
   "name": "sent",
-  "version": "1",
+  "version": "2",
   "summary": "sent — suckless plain-text presentation tool (drw rebuilt over SDL+freetype2+libpng; .sent decks) + the demo deck",
   "files": {
     "sent": { "project": "vendor/sent/bin.json" },

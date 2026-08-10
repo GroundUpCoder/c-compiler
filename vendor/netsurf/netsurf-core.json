@@ -375,10 +375,6 @@
   "netsurf/desktop/treeview.c",
   "netsurf/desktop/version.c",
   "shim/iconv.c",
-  "shim/inet.c",
-  "../zlib/src/gzlib.c",
-  "../zlib/src/gzread.c",
-  "../zlib/src/gzwrite.c",
-  "../zlib/src/gzclose.c"
+  "shim/inet.c"
  ]
 }

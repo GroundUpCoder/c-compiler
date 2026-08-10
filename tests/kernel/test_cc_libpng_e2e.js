@@ -11,7 +11,8 @@
 //                  chain an unmodified SDL3 game uses; pixel + owned-free
 //                  asserts as before #498)
 //       ponly.c  — <png.h> ONLY: simplified-API write → read round trip
-//       zonly.c  — <zlib.h> ONLY: compress → uncompress round trip
+//       zonly.c  — <zlib.h> ONLY: compress → uncompress round trip, a
+//                  gz* file round trip + inflateBack linkage (#631)
 //   - the hatches: -DPNG_NO_REQUIRE_SOURCES / -DZLIB_NO_REQUIRE_SOURCES
 //     suppress the blocks, so the SAME programs must FAIL AT LINK naming a
 //     library symbol — proving the header blocks are the link metadata
@@ -107,11 +108,15 @@ const PONLY_C = [
 ];
 
 // <zlib.h> ONLY: compress → uncompress round trip + zlibVersion (the
-// ticket's own probe symbols).
+// ticket's own probe symbols), plus — since #631 promoted the gz* file
+// layer and infback into lib.json — a gzopen/gzwrite/gzprintf/gzclose →
+// gzopen/gzread file round trip and an inflateBackInit/End linkage check:
+// every API this header declares must link.
 const ZONLY_C = [
   '#include <zlib.h>',
   '#include <stdio.h>',
   '#include <string.h>',
+  'static unsigned char ibwin[32768];',
   'int main(void) {',
   '    const char *msg = "gucos zlib standalone round trip 0123456789";',
   '    unsigned char comp[256]; uLongf clen = sizeof comp;',
@@ -120,8 +125,22 @@ const ZONLY_C = [
   '    char back[256]; uLongf blen = sizeof back;',
   '    if (uncompress((Bytef *)back, &blen, comp, clen) != Z_OK) {',
   '        printf("ZONLY-UNCOMPRESS-FAIL\\n"); return 1; }',
-  '    printf("ZONLY clen=%lu match=%d ver=%s\\n", (unsigned long)clen,',
-  '           strcmp(back, msg) == 0, zlibVersion());',
+  '    gzFile g = gzopen("/root/zt.gz", "wb");',
+  '    if (!g || gzwrite(g, msg, (unsigned)strlen(msg) + 1) <= 0 ||',
+  '        gzprintf(g, "line2 %d", 631) <= 0 || gzclose(g) != Z_OK) {',
+  '        printf("ZONLY-GZWRITE-FAIL\\n"); return 1; }',
+  '    char gback[256]; memset(gback, 0, sizeof gback);',
+  '    g = gzopen("/root/zt.gz", "rb");',
+  '    int gn = g ? gzread(g, gback, sizeof gback) : -1;',
+  '    if (!g || gzclose(g) != Z_OK || gn <= 0) {',
+  '        printf("ZONLY-GZREAD-FAIL\\n"); return 1; }',
+  '    int gz = strcmp(gback, msg) == 0 &&',
+  '        strcmp(gback + strlen(msg) + 1, "line2 631") == 0;',
+  '    z_stream ib; ib.zalloc = Z_NULL; ib.zfree = Z_NULL; ib.opaque = Z_NULL;',
+  '    int iback = inflateBackInit(&ib, 15, ibwin) == Z_OK &&',
+  '        inflateBackEnd(&ib) == Z_OK;',
+  '    printf("ZONLY clen=%lu match=%d gz=%d iback=%d ver=%s\\n", (unsigned long)clen,',
+  '           strcmp(back, msg) == 0, gz, iback, zlibVersion());',
   '    printf("ZONLY-DONE\\n");',
   '    return 0;',
   '}',
@@ -184,8 +203,8 @@ async function main() {
     /PONLY w=6 h=4 px5=50,30,15/.test(ponly) && ponly.includes('PONLY-DONE') &&
     ponly.includes('prc=0'), ponly);
   const zonly = section(aout, 'zonly');
-  check('fat: <zlib.h> STANDALONE links + round-trips (#498)',
-    /ZONLY clen=[1-9]\d* match=1 ver=1\./.test(zonly) && zonly.includes('ZONLY-DONE') &&
+  check('fat: <zlib.h> STANDALONE links + round-trips incl. gz*/infback (#498/#631)',
+    /ZONLY clen=[1-9]\d* match=1 gz=1 iback=1 ver=1\./.test(zonly) && zonly.includes('ZONLY-DONE') &&
     zonly.includes('zrc=0'), zonly);
   const phatch = section(aout, 'phatch');
   check('fat: PNG_NO_REQUIRE_SOURCES suppresses the block (loud link error)',
@@ -256,7 +275,7 @@ async function main() {
   check('minimal: <png.h> standalone works through /usr/local/{include,src}',
     /PONLY w=6 h=4 px5=50,30,15/.test(cc2) && cc2.includes('prc=0'), cc2);
   check('minimal: <zlib.h> standalone works through the installed tiers',
-    /ZONLY clen=[1-9]\d* match=1 ver=1\./.test(cc2) && cc2.includes('zrc=0'), cc2);
+    /ZONLY clen=[1-9]\d* match=1 gz=1 iback=1 ver=1\./.test(cc2) && cc2.includes('zrc=0'), cc2);
 
   fs.rmSync(tmpA, { recursive: true, force: true });
   fs.rmSync(tmpB, { recursive: true, force: true });

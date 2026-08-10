@@ -1,6 +1,6 @@
 {
   "name": "libpng",
-  "version": "1.6.58-2",
+  "version": "1.6.58-3",
   "summary": "libpng + zlib source library — decode/encode PNG with the in-OS cc",
   "files": {
     "include/png.h":        { "bin": "vendor/libpng/png.h" },

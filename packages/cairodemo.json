@@ -1,6 +1,6 @@
 {
   "name": "cairodemo",
-  "version": "1.0",
+  "version": "1.0-2",
   "summary": "cairodemo — vector-graphics showcase over the vendored cairo library (windowed scenes + selftest/png modes)",
   "files": {
     "cairodemo": { "project": "vendor/cairo/demo/bin.json" }

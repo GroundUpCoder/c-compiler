@@ -1,6 +1,6 @@
 {
   "name": "netsurf",
-  "version": "3.12-2",
+  "version": "3.12-3",
   "summary": "NetSurf — the gucOS browser (NetSurf 3.12 core + gucOS SDL frontend; file:, data: and http(s): over the kernel HTTP transport)",
   "files": {
     "netsurf": { "project": "vendor/netsurf/gucos/bin.json" },

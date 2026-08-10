@@ -2063,10 +2063,11 @@ ZEXTERN int            ZEXPORTVA gzvprintf(gzFile file,
  * these TUs through lib.json (srcRoots {z: src} resolves each name to the
  * SAME path, so the compiler's path-identity dedup no-ops the require);
  * the in-OS cc resolves them via /usr/local/src -> /usr/src (the srclib
- * install tiers, planted by the libpng source-lib package). The gz* family
- * (gzlib/gzread/gzwrite/gzclose) is deliberately NOT here — it is not in
- * lib.json sources; a consumer that wants gzopen requires those TUs itself
- * (the netsurf-core.json precedent).
+ * install tiers, planted by the libpng source-lib package). Since #631 the
+ * set is ALL 15 upstream libz TUs — the gz* file layer and infback
+ * included — because this header declares gzopen and inflateBack
+ * unconditionally, and a header on the default include path must link
+ * everything it promises.
  *
  * ZLIB_NO_REQUIRE_SOURCES (the FT_NO_REQUIRE_SOURCES of this library)
  * suppresses the block for a consumer that wants the declarations without
@@ -2077,6 +2078,11 @@ __require_source("z/adler32.c");
 __require_source("z/compress.c");
 __require_source("z/crc32.c");
 __require_source("z/deflate.c");
+__require_source("z/gzclose.c");
+__require_source("z/gzlib.c");
+__require_source("z/gzread.c");
+__require_source("z/gzwrite.c");
+__require_source("z/infback.c");
 __require_source("z/inflate.c");
 __require_source("z/inftrees.c");
 __require_source("z/inffast.c");
