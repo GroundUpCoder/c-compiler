@@ -132,7 +132,9 @@ disk but never scheduled is an EVIDENCE failure, not a silent green.
 - The ticket and design note cite "kernel run.js:250" for the registry call
   site — stale; it is ~line 372 (pre-change). Line numbers in both docs
   drifted.
-- The kickoff's sweep baseline of 59 files: 60 `os-*.mjs` are on disk.
+- 60 `os-*.mjs` are on disk but the sweep total is 59 — the 60th is
+  `os-sweep.mjs` itself, a named evidence exclusion ("the runner itself").
+  The kickoff's 59 baseline was correct.
 
 ## Ship-boundary argument (why skip-on-absent is safe)
 
