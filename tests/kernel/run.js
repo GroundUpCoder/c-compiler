@@ -18,6 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { runSuite, parseSuiteArgs, usage, matchesFilter, ramBudgetGb, assertMemberRegistry } = require('../lib/suite-runner.js');
+const { loadSiblingTests } = require('../lib/sibling-tests.js');
 const { ensurePrebakedImage } = require('../lib/image-fixture.js');
 const { joinHeavyLock } = require('../lib/heavy-lock.js');
 const { preflight } = require('../lib/harness-leaks.js');
@@ -374,6 +375,46 @@ assertMemberRegistry({
   exclude: EXCLUDED, label: 'tests/kernel/run.js',
 });
 
+// ---- sibling-owned tests (#613, design §3) ----
+//
+// gucos-packages carries its own per-package e2es + member manifest; when the
+// checkout is present beside c-compiler (resolved through the worktree's
+// gitdir pointer — the naive ../gucos-packages does not exist from a linked
+// worktree) they JOIN this suite, and a sibling red blocks a c-compiler land.
+// That coupling direction is correct: a compiler.js change that breaks a
+// shipping package is exactly what those tests exist to catch. ABSENT is a
+// loud SKIP, never a failure — failing would make every contributor's gate
+// depend on cloning an optional repo, the exact coupling the sibling repo
+// removes, reintroduced through the back door; the hole is closed at the
+// SHIP boundary instead (comguc's assertSiblingUsable makes the sibling
+// mandatory where the #428 rule-5 pre-deploy gate runs). A present-but-
+// MALFORMED sibling is loud-fatal: every malformed-manifest shape degrades
+// to "zero members", which is indistinguishable from "no tests" and would
+// print green while the sibling's tests never run.
+const CC_ROOT = path.resolve(__dirname, '..', '..');
+const sibling = loadSiblingTests({ ccRoot: CC_ROOT });
+if (sibling.status === 'invalid') {
+  process.stderr.write(`\x1b[31m[sibling-tests] ${sibling.name} at ${sibling.root} is present but its test contract is broken:\x1b[0m\n`);
+  for (const e of sibling.errors) process.stderr.write(`  ${e}\n`);
+  process.stderr.write('  Fix the sibling checkout (its README\'s "Tests" section is the contract), or remove/unset it to skip.\n');
+  process.exit(2);
+} else if (sibling.status === 'absent') {
+  process.stdout.write(`\x1b[33msibling tests: SKIPPED — ${sibling.name} is not present beside c-compiler; `
+    + `clone github.com/josephkimgpt/${sibling.name} beside the main clone (or set GUCOS_PACKAGES=) to run its package tests.\x1b[0m\n`);
+} else {
+  // The sibling's half of the #314 guard: set equality between its tests/
+  // dir and its own manifest, per repo — a sibling test_*.js on disk that is
+  // in no member list refuses the run naming the file, exactly like a native
+  // one. A second call, not an extension of the first: the guard is
+  // per-directory, so sibling files can never trip c-compiler's own check.
+  assertMemberRegistry({
+    dir: sibling.testsDir, pattern: sibling.pattern, entries: sibling.members,
+    exclude: sibling.exclude, label: `${sibling.name}/tests/manifest.json`,
+  });
+  process.stdout.write(`sibling tests: ${sibling.name} at ${sibling.root} (via ${sibling.via}) — `
+    + `${sibling.entries.length} member(s) join the suite\n`);
+}
+
 // Crash safety: EVEN an explicit -j runs under the RAM-weight budget — an
 // over-eager -j8 on a 16 GB box is exactly the OOM that killed the GUI
 // (2026-07-25). The budget admits extra jobs only when their summed weights
@@ -396,7 +437,12 @@ if (!opts.list) joinHeavyLock({ name: 'kernel suite' });
 // a hand-run single e2e (which takes no lock) is never touched.
 if (!opts.list) preflight({ name: 'kernel suite' });
 
-const entries = tests.map(([file, ...rest]) => Object.assign({ file }, ...rest.filter(x => typeof x === 'object')));
+const entries = tests.map(([file, ...rest]) => Object.assign({ file }, ...rest.filter(x => typeof x === 'object')))
+  // Sibling members ride the same pool. Deliberately UNTAGGED for the RAM
+  // classes (no light/boot — those are assertions about measurements, #579),
+  // so each lands in the over-charged HEAVY_GB default; the manifest may pass
+  // timeoutMs/serial/image through, nothing else (sibling-tests.js validates).
+  .concat(sibling.status === 'ok' ? sibling.entries : []);
 
 // The PKG class is DERIVED from each member's source, not declared in the
 // table above. That is deliberate: "does this file call ensureMinimalImage()"
@@ -415,7 +461,10 @@ const entries = tests.map(([file, ...rest]) => Object.assign({ file }, ...rest.f
 // ensureMinimalImage by name" is a convention here, not an enforced invariant.
 const PKG_RE = /ensureMinimalImage/;
 for (const e of entries) {
-  try { e.pkg = PKG_RE.test(fs.readFileSync(path.join(__dirname, e.file), 'utf-8')); }
+  // e.src (sibling members, #613) is where the source actually lives; joining
+  // __dirname with a prefixed key would always throw and land every sibling
+  // row in the expensive class silently.
+  try { e.pkg = PKG_RE.test(fs.readFileSync(e.src || path.join(__dirname, e.file), 'utf-8')); }
   catch (err) { e.pkg = true; }   // unreadable -> assume the expensive class
 }
 
@@ -478,6 +527,25 @@ runSuite(entries, {
   failFast: opts.failFast, resume: opts.resume, list: opts.list,
   repeat: opts.repeat, underLoad: opts.underLoad,
   budgetGb: ramBudgetGb(), defaultGb: HEAVY_GB, hints,
-  evidence: { pattern: MEMBER_RE, exclude: EXCLUDED },
+  // The sibling-member contract (#613): children run with cwd = THIS dir
+  // (the tree guard in os/boot.js et al. demands a c-compiler cwd), a
+  // sibling test finds its own repo via __dirname and this repo via CC_ROOT.
+  env: { CC_ROOT },
+  // evidence.extra makes the sibling dir part of the EXPECTED set — without
+  // it a sibling member that silently never ran would leave the evidence
+  // line green (the #314 defect class, one level up).
+  evidence: {
+    pattern: MEMBER_RE, exclude: EXCLUDED,
+    extra: sibling.status === 'ok'
+      ? [{ dir: sibling.testsDir, pattern: sibling.pattern, exclude: sibling.exclude, prefix: sibling.prefix }]
+      : [],
+  },
+  // The artifact states whether sibling tests joined or were skipped — a
+  // shipper must be able to tell a sibling-less green from a full one.
+  summaryExtra: {
+    sibling: sibling.status === 'ok'
+      ? { repo: sibling.name, status: 'ok', root: sibling.root, via: sibling.via, members: sibling.entries.length }
+      : { repo: sibling.name, status: 'absent' },
+  },
 }).then(r => process.exit(r.failed ? 1 : 0))
   .catch(e => { process.stderr.write(`Fatal: ${e.stack || e.message}\n`); process.exit(2); });

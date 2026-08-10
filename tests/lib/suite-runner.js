@@ -239,7 +239,11 @@ function staleForResume(entry, opts) {
   let logMs;
   try { logMs = fs.statSync(logPath).mtimeMs; }
   catch { return `no per-file log at ${path.relative(process.cwd(), logPath)} — no evidence of that pass in this artifact dir`; }
-  const srcPath = path.join(opts.dir, entry.file);
+  // A sibling-owned member (#613) lives outside opts.dir; its entry carries
+  // the absolute source path in `src`, and freshness must stat THAT file —
+  // joining opts.dir with a prefixed key would stat a path that never exists
+  // and mis-decide every sibling resume as "source missing".
+  const srcPath = entry.src || path.join(opts.dir, entry.file);
   let srcMs;
   try { srcMs = fs.statSync(srcPath).mtimeMs; }
   catch { return `source ${entry.file} is missing on disk`; }
@@ -308,9 +312,13 @@ function logTail(logPath, maxBytes) {
   } catch { return '(no log)'; }
 }
 
-// entries: [{ file, args?, timeoutMs?, serial? }]
+// entries: [{ file, args?, timeoutMs?, serial?, src? }] — `file` is the
+//   record/log/filter KEY; `src` (absolute) overrides where the source lives
+//   for spawn + resume-freshness (sibling-owned members, #613, whose keys are
+//   '<repo>/<file>' so they can never collide with a native basename).
 // opts: { name, dir, artifactDir, jobs, timeoutMs, filter, failFast, resume,
-//         env? } — `dir` is both the file root and the spawn cwd.
+//         env?, summaryExtra?, evidence? } — `dir` is the default file root
+//   and the spawn cwd for EVERY entry (src included; see runOne).
 async function runSuite(entries, opts) {
   // Stamped before anything is scheduled: the execution-evidence check at the
   // end (ticket #314) compares per-file log mtimes against this instant.
@@ -468,6 +476,12 @@ async function runSuite(entries, opts) {
       results: all,
       ...(flake ? { flake } : {}),
       ...(evidence ? { evidence } : {}),
+      // Caller-supplied top-level record fields (must not collide with the
+      // schema above). First user: the kernel suite's `sibling` block (#613)
+      // — the artifact must state whether sibling-owned tests joined the run
+      // or were skipped, or a shipper cannot tell a sibling-less green from
+      // a full one ("the record states its own scope", todos/0339).
+      ...(opts.summaryExtra || {}),
     });
   }
 
@@ -520,8 +534,14 @@ async function runSuite(entries, opts) {
       // The preload closes that: it polls its ppid and tears its own group down
       // when we vanish. CC_HARNESS_GROUP_LEADER tells it the group kill is its
       // to make (true exactly because we detached it). See parent-watch.js.
+      // `entry.src` (sibling-owned members, #613) overrides the file root but
+      // NOT the cwd: cwd stays opts.dir deliberately, because the children a
+      // test spawns from there (os/boot.js and the tools/ writers) run the
+      // tree guard (todos/0341) against THEIR cwd — a sibling-repo cwd would
+      // make every driveBoot refuse at exit 4. A sibling test finds its own
+      // repo via __dirname and the host repo via the env its caller passes.
       const child = spawn(process.execPath,
-        ['-r', PARENT_WATCH, path.join(opts.dir, entry.file), ...(entry.args || [])], {
+        ['-r', PARENT_WATCH, entry.src || path.join(opts.dir, entry.file), ...(entry.args || [])], {
         cwd: opts.dir, detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: Object.assign({}, process.env, { CC_HARNESS_GROUP_LEADER: '1' }, opts.env || {}),
@@ -725,10 +745,25 @@ async function runSuite(entries, opts) {
     if (bailed) {
       process.stdout.write('evidence: not asserted (fail-fast bailed before the suite completed)\n');
     } else {
-      const excl = new Set((opts.evidence.exclude || []).map(e => e.file || e));
-      const expected = fs.readdirSync(opts.dir)
-        .filter(f => opts.evidence.pattern.test(f) && !excl.has(f) && matchesFilter(f, opts.filter))
-        .sort();
+      // The expected set is rebuilt from DIRECTORY READS, one per source —
+      // opts.dir plus any `evidence.extra` sources ({ dir, pattern, exclude,
+      // prefix }; sibling-owned test dirs, #613). Extra-source names are
+      // PREFIXED exactly the way their entries' `file` keys are, so the log
+      // lookup below finds the same flattened names runOne wrote. Leaving a
+      // source out of `expected` is the fake-negative trap: the suite prints
+      // "N/N selected members have logs" and is green while that source's
+      // tests never ran — the #314 defect class, reintroduced one level up.
+      const evSources = [{ dir: opts.dir, pattern: opts.evidence.pattern,
+                           exclude: opts.evidence.exclude, prefix: null }]
+        .concat(opts.evidence.extra || []);
+      const expected = [];
+      for (const s of evSources) {
+        const excl = new Set((s.exclude || []).map(e => e.file || e));
+        for (const f of fs.readdirSync(s.dir).filter(f => s.pattern.test(f) && !excl.has(f)).sort()) {
+          const key = s.prefix ? `${s.prefix}/${f}` : f;
+          if (matchesFilter(key, opts.filter)) expected.push(key);
+        }
+      }
       const resumedSet = new Set(resumed.map(r => r.file));
       const problems = [];
       let freshN = 0, resumedN = 0;
