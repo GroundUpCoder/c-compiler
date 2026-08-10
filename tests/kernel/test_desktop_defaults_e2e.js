@@ -105,10 +105,12 @@ const script = [
   'printf "#!/bin/sh\\necho fake\\n" > /usr/local/bin/fakecmd',
   'chmod +x /usr/local/bin/fakecmd',
   'printf "{\\"name\\":\\"fakepkg\\",\\"version\\":\\"1.0\\",\\"bin\\":{\\"fakecmd\\":\\"x\\"},\\"desktop\\":{\\"cmd\\":\\"fakecmd\\"}}" > /opt/fakepkg/control.json',
-  'printf "{\\"name\\":\\"fakepkg\\",\\"version\\":\\"1.0\\"}" > /var/lib/gucman/fakepkg.json',
+  // deps:[] — a real install always records it (#624); a deps-less record
+  // reads as pre-#624 and makes every later remove refuse ("cannot verify")
+  'printf "{\\"name\\":\\"fakepkg\\",\\"version\\":\\"1.0\\",\\"deps\\":[]}" > /var/lib/gucman/fakepkg.json',
   // a bin-bearing but FIELD-LESS package: never an icon (the §5 rule)
   'printf "{\\"name\\":\\"fakecli\\",\\"version\\":\\"1.0\\",\\"bin\\":{\\"fakecli\\":\\"x\\"}}" > /opt/fakecli/control.json',
-  'printf "{\\"name\\":\\"fakecli\\",\\"version\\":\\"1.0\\"}" > /var/lib/gucman/fakecli.json',
+  'printf "{\\"name\\":\\"fakecli\\",\\"version\\":\\"1.0\\",\\"deps\\":[]}" > /var/lib/gucman/fakecli.json',
   // the install-time global flag OFF — the explicit action must override it
   'rm -f /var/lib/gucman/desktop_shortcuts',
   'echo ==dd3',
@@ -139,7 +141,7 @@ const script = [
   'printf deep > /opt/fakeseed/demos/sub/deep.txt',
   'printf note > /opt/fakeseed/note.txt',
   'printf "{\\"name\\":\\"fakeseed\\",\\"version\\":\\"1.0\\",\\"seed\\":{\\"Demos\\":\\"demos\\",\\"note.txt\\":\\"note.txt\\"}}" > /opt/fakeseed/control.json',
-  'printf "{\\"name\\":\\"fakeseed\\",\\"version\\":\\"1.0\\"}" > /var/lib/gucman/fakeseed.json',
+  'printf "{\\"name\\":\\"fakeseed\\",\\"version\\":\\"1.0\\",\\"deps\\":[]}" > /var/lib/gucman/fakeseed.json',
   'echo ==dd5',
   'desktop-defaults',
   'echo "RC=$?"',
