@@ -112,3 +112,67 @@ wrappers — select the LOWEST pid (the persistent one), not the highest.
   `pv_execve` parent's fds after a successful spawn) would kill the
   wrapper-holds-pipe class for every pipe consumer, not just gcode. Bigger
   blast radius; needs its own ticket if wanted.
+
+## Implementation (A + B, @master-approved; C filed separately by @master)
+
+**A — `run_command` returns at direct-sh exit (os/gcode/gcode.c, both
+flavors).** Blocking on pipe EOF was a defect in gcode's own capture logic
+(@master's framing, adopted): the direct sh exiting already means the
+foreground work is done — a shell waits its foreground children — so only
+processes the command itself backgrounded can still hold the write end.
+Both flavors now `waitpid(pid, WNOHANG)` at the existing ~1/s wake (the
+#507 alarm tick in the gucOS flavor, the poll slice in the native one); on
+reap they drain what is already buffered WITHOUT blocking (`select`/`poll`
+with a zero timeout — EOF during the drain means survivor-free), then
+return the child's real exit status. When the pipe is still held, the
+result carries "[background processes spawned by this command are still
+running; their further output is not captured]". The #503 cap path is
+unchanged for genuinely long foreground commands, and the #510 ^C ordering
+(interrupt checked before everything) is preserved. Also fixed en route:
+the native flavor read `*exit_code` uninitialized in its `!= -1` guard on
+every non-timeout path; it is now initialized to 0.
+
+**B — GCODE.md launch idiom.** Background a windowed program with its
+output in a log file; the tool returns at once; read the log for runtime
+errors; verify with `wmctl wait win`/`shot`; `pkill` to stop. Verified
+against the build: the new e2e rounds exercise exactly this recipe.
+
+**Test (tests/kernel/test_gcode_timeout_e2e.js, edit approved).** Round 3
+(`sleep 30 &`) re-pinned from "[exit -1] at the cap" to "[exit 0] + note in
+~1s"; new round 5 (`cd /root && winbox >/tmp/w.log 2>&1 &` — the dogfood
+shape) and round 6 (`wmctl wait win winbox && echo WIN-UP` — the early
+return must not have lost the launch). The #504 checks assert on the
+round's OWN tool_result: the whole-body substring check was vacuous, since
+every request body accumulates the earlier rounds' results (found when the
+red control's `[exit 0]` leg failed to go red).
+
+**Red control (#97):** with the gcode.c fix stashed and the updated test in
+place, the run fails 6/20 — both #504 rounds report `[exit -1]` + a cap
+burn on their own tool_results — and goes 20/20 with the fix restored.
+Outputs: `redcontrol-test-prefix-gcode.txt` / `green-test-postfix-gcode.txt`
+in the S3 prefix. Wall time dropped 12.1 s → 7.9 s (the two reaped rounds
+cost ~1 s instead of a 3 s cap each).
+
+**image.json 249 → 250** — demanded by the persistent-browser-image gate:
+`gcode.c` and `GCODE.md` are baked sources, and a persistent OPFS image
+only re-fetches on a version bump.
+
+**Gate (host + kernel + sweep per `--diff origin/main --dry-run`;
+artifact dirs deleted before the first run; all foreground, `--filter`
+batches, zero resumed):**
+
+- host: pass, 97.6 s, exit 0.
+- kernel: 170P/0F/0S, `files {total:171, executed:34(+136 carried from this
+  gate's own 4 earlier batches), resumed:0, recorded:170}`, 5 runs. The one
+  unrecorded member is `test_os_boot.js` — ticket #627 (needs ~730 s
+  against the 600 s tool cap), pre-declared by @master as expected and
+  handled by them.
+- sweep: 59P/0F/0S, `files {total:59, executed:15(+44 carried from this
+  gate's own 3 earlier batches), resumed:0, recorded:59}`, 4 runs,
+  ~1268 s of real execution across the batches.
+
+Bake gotcha that cost ~20 min of confused slow boots: a plain
+`node tools/mkimage.js` bakes the MINIMAL image (package set `[]`), so
+every subsequent test boot silently re-baked the FAT image in-worker
+(~3.5 min each). The refresh a test tree wants is
+`node tools/mkimage.js --packages=all`.
