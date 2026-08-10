@@ -87,6 +87,10 @@
  * headless boots. Payload decompression is in-process zlib (gzip); JSON is
  * cJSON. Dependencies install depth-first off the index's deps[] (exact
  * names, cycle -> refuse), minBase gates against os-release VERSION_ID.
+ * The edges are recorded in the DB record (`deps`), and remove refuses —
+ * naming the dependents, --force to override — while an installed package
+ * depends on the target (#624, gm_revdep_refuse); deps are never
+ * auto-removed in either direction.
  */
 #include <ctype.h>
 #include <dirent.h>
@@ -130,6 +134,7 @@
 #define GM_REMOVED_DIR  GM_DB_DIR "/removed"     /* #419: removal tombstones */
 #define GM_SYNC_STATUS  "/run/gucman-sync.status" /* #419: sync outcome record */
 #define GM_NAME_MAX     64
+#define GM_LIST_MAX     128
 #define GM_PATH_MAX     768
 #define GM_SCRIPT_TIMEOUT_MS 120000     /* postinst/prerm wall-clock bound (#74) */
 
@@ -1170,6 +1175,14 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
     cJSON_AddStringToObject(db, "name", name);
     cJSON_AddStringToObject(db, "version", jver->valuestring);
     cJSON_AddStringToObject(db, "sha256", jsha->valuestring);
+    /* #624: record the dependency edges so remove's reverse-dependency guard
+     * works OFFLINE, like every other remove input (the DB record is the one
+     * thing remove replays). An empty array means "known: no deps" — its
+     * absence marks a pre-#624 record, which the guard resolves through the
+     * index and backfills. Kept off the record's tail so a line-oriented
+     * reader of the pretty print never sees it as the last member. */
+    cJSON_AddItemToObject(db, "deps",
+        cJSON_IsArray(deps) ? cJSON_Duplicate(deps, 1) : cJSON_CreateArray());
     cJSON *db_files = cJSON_AddArrayToObject(db, "files");
     cJSON *db_dirs = cJSON_AddArrayToObject(db, "dirs");
     cJSON *db_links = cJSON_AddArrayToObject(db, "symlinks");
@@ -1668,7 +1681,92 @@ static int cmd_install(const char *name) {
 
 /* ============================== remove ================================= */
 
-static int cmd_remove(const char *name) {
+static int gm_installed_names(char names[][GM_NAME_MAX], int max);
+
+/* Does a record's deps[] name `name`? */
+static int gm_deps_contain(cJSON *deps, const char *name) {
+    cJSON *d;
+    cJSON_ArrayForEach(d, deps)
+        if (cJSON_IsString(d) && strcmp(d->valuestring, name) == 0) return 1;
+    return 0;
+}
+
+/* #624: the reverse-dependency guard. Removing a package another installed
+ * package depends on silently breaks the dependent — the failure surfaces
+ * much later, as an undefined-symbol or missing-file error that reads like a
+ * broken install. So remove REFUSES and names the dependents; --force is the
+ * explicit override. The graph source is the install DB (`deps`, recorded at
+ * install), so the check is offline like the rest of remove. Records written
+ * before deps was recorded carry no `deps` member; those fall back to the
+ * repo index ONCE per remove and the answer is BACKFILLED into the record
+ * (atomic rewrite), so the DB converges to offline-correct. A record the
+ * index cannot resolve either (unreachable repo, or the package is no longer
+ * published) has UNKNOWN edges — and unknown is not "no dependents", so the
+ * remove refuses conservatively, naming the unresolvable records.
+ * Returns 0 = clear to remove, 1 = refused (message already printed). */
+static int gm_revdep_refuse(const char *name) {
+    char (*names)[GM_NAME_MAX] = malloc((size_t)GM_LIST_MAX * GM_NAME_MAX);
+    char (*blockers)[GM_NAME_MAX] = malloc((size_t)GM_LIST_MAX * GM_NAME_MAX);
+    char (*unknowns)[GM_NAME_MAX] = malloc((size_t)GM_LIST_MAX * GM_NAME_MAX);
+    if (!names || !blockers || !unknowns) {
+        free(names); free(blockers); free(unknowns);
+        fprintf(stderr, "gucman: out of memory\n");
+        return 1;
+    }
+    int n = gm_installed_names(names, GM_LIST_MAX);
+    cJSON *index = NULL;
+    int index_tried = 0, nblock = 0, nunknown = 0;
+    for (int i = 0; i < n; i++) {
+        if (strcmp(names[i], name) == 0) continue;
+        cJSON *rec = gm_db_load(names[i]);
+        if (!rec) continue;
+        cJSON *deps = cJSON_GetObjectItemCaseSensitive(rec, "deps");
+        if (!cJSON_IsArray(deps)) {
+            if (!index_tried) {
+                index_tried = 1;
+                char base[GM_PATH_MAX];
+                if (gm_repo_base(base, sizeof base) == 0) index = gm_fetch_index(base);
+            }
+            cJSON *pkgs = index ? cJSON_GetObjectItemCaseSensitive(index, "packages") : NULL;
+            cJSON *ent = pkgs ? cJSON_GetObjectItemCaseSensitive(pkgs, names[i]) : NULL;
+            cJSON *ideps = ent ? cJSON_GetObjectItemCaseSensitive(ent, "deps") : NULL;
+            if (!cJSON_IsArray(ideps)) {
+                snprintf(unknowns[nunknown++], GM_NAME_MAX, "%s", names[i]);
+                cJSON_Delete(rec);
+                continue;
+            }
+            cJSON_AddItemToObject(rec, "deps", cJSON_Duplicate(ideps, 1));
+            deps = cJSON_GetObjectItemCaseSensitive(rec, "deps");
+            char *txt = cJSON_Print(rec);
+            char dbp[GM_PATH_MAX];
+            gm_db_path(names[i], dbp, sizeof dbp);
+            if (!txt || gm_write_file_atomic(dbp, txt, strlen(txt), 0644) != 0)
+                fprintf(stderr, "gucman: warning: could not backfill deps into %s\n", dbp);
+            free(txt);
+        }
+        if (gm_deps_contain(deps, name))
+            snprintf(blockers[nblock++], GM_NAME_MAX, "%s", names[i]);
+        cJSON_Delete(rec);
+    }
+    cJSON_Delete(index);
+    if (nblock) {
+        fprintf(stderr, "gucman: cannot remove '%s': installed package(s) depend on it:", name);
+        for (int i = 0; i < nblock; i++) fprintf(stderr, " %s", blockers[i]);
+        fprintf(stderr, "\n        remove the dependent package(s) first, or re-run with --force\n");
+    } else if (nunknown) {
+        fprintf(stderr, "gucman: cannot verify reverse dependencies of '%s': installed "
+                        "record(s) predate dependency tracking and the repository index "
+                        "could not resolve them:", name);
+        for (int i = 0; i < nunknown; i++) fprintf(stderr, " %s", unknowns[i]);
+        fprintf(stderr, "\n        re-run with the repository reachable (the answer is then "
+                        "recorded), remove those packages first, or re-run with --force\n");
+    }
+    int refused = (nblock || nunknown) ? 1 : 0;
+    free(names); free(blockers); free(unknowns);
+    return refused;
+}
+
+static int cmd_remove(const char *name, int force) {
     if (!gm_valid_name(name)) {
         fprintf(stderr, "gucman: '%s' is not a valid package name\n", name);
         return 1;
@@ -1676,6 +1774,12 @@ static int cmd_remove(const char *name) {
     cJSON *db = gm_db_load(name);
     if (!db) {
         fprintf(stderr, "gucman: %s is not installed\n", name);
+        return 1;
+    }
+    /* #624: refuse BEFORE any side effect (prerm included) when an installed
+     * package depends on this one — see gm_revdep_refuse. */
+    if (!force && gm_revdep_refuse(name)) {
+        cJSON_Delete(db);
         return 1;
     }
     /* prerm (#74) runs FIRST, while the package is fully intact — the
@@ -1806,8 +1910,6 @@ static int cmd_remove(const char *name) {
 }
 
 /* ============================ list / info ============================== */
-
-#define GM_LIST_MAX 128
 
 /* Collect installed package names (sorted) from the DB dir. */
 static int gm_installed_names(char names[][GM_NAME_MAX], int max) {
@@ -2316,7 +2418,25 @@ int main(int argc, char **argv) {
         curl_global_cleanup();
         return rc;
     }
-    if (argc >= 3 && strcmp(argv[1], "remove") == 0) return cmd_remove(argv[2]);
+    if (argc >= 3 && strcmp(argv[1], "remove") == 0) {
+        /* `remove <name> [--force]`, flag position free; a second name or an
+         * unknown flag falls through to usage. curl is initialized because
+         * the reverse-dep guard may consult the repo index for records that
+         * predate dependency tracking (#624) — remove itself stays offline. */
+        const char *rname = NULL;
+        int force = 0, bad = 0;
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--force") == 0) force = 1;
+            else if (!rname && argv[i][0] != '-') rname = argv[i];
+            else bad = 1;
+        }
+        if (rname && !bad) {
+            curl_global_init(CURL_GLOBAL_DEFAULT);
+            int rc = cmd_remove(rname, force);
+            curl_global_cleanup();
+            return rc;
+        }
+    }
     if (argc == 2 && strcmp(argv[1], "list") == 0) return cmd_list(0);
     if (argc == 3 && strcmp(argv[1], "list") == 0 &&
         (strcmp(argv[2], "--all") == 0 || strcmp(argv[2], "-a") == 0)) {
@@ -2344,7 +2464,7 @@ int main(int argc, char **argv) {
         return rc;
     }
     fprintf(stderr,
-            "usage: gucman install <name> | gucman remove <name> | gucman info <name>\n"
+            "usage: gucman install <name> | gucman remove <name> [--force] | gucman info <name>\n"
             "       gucman list [--all]   | gucman index (raw catalog JSON)\n"
             "       gucman sync-defaults (boot: install missing default packages)\n");
     return 2;

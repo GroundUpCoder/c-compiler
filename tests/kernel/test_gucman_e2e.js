@@ -29,6 +29,11 @@
 //     transitive dep: the freetype tiers are freetype's own plants, they
 //     survive win32's removal (no dep cascade), and the tier dirs fall
 //     only when the last srclib package goes
+//   - the reverse-dependency guard (#624): `gucman remove freetype` with
+//     win32 installed is REFUSED naming win32, --force overrides; a
+//     synthetic test-rdapp -> test-rdlib edge (private --packages-dir repo)
+//     proves the guard generic, plus the legacy-record index fallback with
+//     backfill, offline behaviour, and the conservative cannot-verify refusal
 //
 //   - an index.json that will not parse NAMES ITS OWN FAULT (ticket #456):
 //     an empty 200, a cleanly-terminated short body and a whole non-JSON
@@ -108,9 +113,43 @@ async function main() {
   payload[payload.length >> 1] ^= 0xff;
   fs.writeFileSync(path.join(badDir, poolRel), payload);
 
+  // #624: a synthetic dependency edge OTHER than freetype/win32 proves the
+  // reverse-dep guard generic over the deps graph. Two tiny text-only defs in
+  // a PRIVATE --packages-dir (the mkpkg-bad-defs isolation rule): test-rdapp
+  // depends on test-rdlib. minBase is pinned to 1 per the #518 rule — these
+  // payloads carry no compiled code, so their floor is the control-key
+  // mechanism version, not the current image version.
+  const rdRepoDir = path.join(tmp, 'rd-repo');
+  {
+    const cp = require('child_process');
+    const rdDefsDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mkpkg-rd-defs-'));
+    try {
+      fs.writeFileSync(path.join(rdDefsDir, 'test-rdlib.json'), JSON.stringify({
+        name: 'test-rdlib', version: '1.0', summary: 'revdep fixture lib', minBase: 1,
+        files: { 'lib.txt': { content: 'lib\n' } },
+      }, null, 2) + '\n');
+      fs.writeFileSync(path.join(rdDefsDir, 'test-rdapp.json'), JSON.stringify({
+        name: 'test-rdapp', version: '1.0', summary: 'revdep fixture app', minBase: 1,
+        deps: ['test-rdlib'],
+        files: { 'app.txt': { content: 'app\n' } },
+      }, null, 2) + '\n');
+      const r = cp.spawnSync(process.execPath,
+        [path.join(ROOT, 'tools', 'mkpkg.js'), '--no-baseline', '--quiet',
+         `--packages-dir=${rdDefsDir}`, `--out=${rdRepoDir}`],
+        { encoding: 'utf-8', timeout: 120000 });
+      if (r.status !== 0) throw new Error('mkpkg (revdep fixtures) failed: ' + r.stderr);
+      const rdIdx = JSON.parse(fs.readFileSync(path.join(rdRepoDir, 'index.json'), 'utf-8'));
+      for (const n of ['test-rdlib', 'test-rdapp'])
+        if (!rdIdx.packages[n]) throw new Error('revdep fixture repo has no ' + n);
+    } finally {
+      fs.rmSync(rdDefsDir, { recursive: true, force: true });
+    }
+  }
+
   const goodPort = await startServer(goodDir);
   const badPort = await startServer(badDir);
-  console.log(`[gucman] repo :${goodPort}, corrupted repo :${badPort}`);
+  const rdPort = await startServer(rdRepoDir);
+  console.log(`[gucman] repo :${goodPort}, corrupted repo :${badPort}, revdep repo :${rdPort}`);
 
   const BOOT_ARGS = { image, args: ['--packages=none'], timeout: 420000 };
 
@@ -379,6 +418,20 @@ async function main() {
     'grep -q include_entries /var/lib/gucman/win32.json && echo DB-INC-OK',
     'grep -q src_namespaces /var/lib/gucman/win32.json && echo DB-NS-OK',
     'grep -q srclib_dirs /var/lib/gucman/win32.json && echo DB-DIRS-OK',
+    'echo ==revdep',
+    // #624: the OTHER direction of the install/remove asymmetry — freetype
+    // has an installed dependent (win32), so removing it would silently
+    // break win32's srclib compile. remove refuses BEFORE any side effect
+    // and names the dependent; --force is the explicit override. Reinstall
+    // restores exactly the state slremove starts from.
+    'gucman remove freetype; echo RC=$?',
+    'test -f /var/lib/gucman/freetype.json && echo FT-STILL-INSTALLED',
+    'test -e /opt/freetype && echo FT-OPT-INTACT',
+    'test -f /usr/local/src/freetype/ftbase.c && echo FT-PLANTS-INTACT',
+    'gucman remove freetype --force; echo RCF=$?',
+    'test ! -e /opt/freetype && echo FT-FORCED-GONE',
+    'gucman install freetype; echo RCI=$?',
+    'test -f /usr/local/src/freetype/ftbase.c && echo FT-REPLANTED',
     'echo ==slremove',
     // #464: remove replays each package's OWN DB record — removing win32
     // must NOT cascade to its freetype dependency (no auto-remove of deps,
@@ -427,6 +480,21 @@ async function main() {
   check('DB records src_namespaces', sli.includes('DB-NS-OK'));
   check('DB records the created tier dirs', sli.includes('DB-DIRS-OK'));
 
+  const dall = dout + '\n' + String(d.stderr || '');
+  const rdw = section(dout, 'revdep');
+  check('#624: removing freetype with win32 installed is REFUSED (exit 1)',
+    rdw.includes('RC=1'), rdw);
+  check('#624: the refusal names win32 as the blocking dependent',
+    /cannot remove 'freetype': installed package\(s\) depend on it: win32/.test(dall),
+    dall.slice(-800));
+  check('#624: refused remove leaves the DB record', rdw.includes('FT-STILL-INSTALLED'), rdw);
+  check('#624: refused remove leaves /opt/freetype', rdw.includes('FT-OPT-INTACT'));
+  check('#624: refused remove leaves the srclib plants', rdw.includes('FT-PLANTS-INTACT'));
+  check('#624: --force overrides the guard (exit 0)', rdw.includes('RCF=0'), rdw);
+  check('#624: --force really removed freetype', rdw.includes('FT-FORCED-GONE'));
+  check('#624: freetype reinstalls after the forced removal', rdw.includes('RCI=0'), rdw);
+  check('#624: the reinstall replants the srclib tier', rdw.includes('FT-REPLANTED'));
+
   const slr = section(dout, 'slremove');
   check('win32 remove succeeds (exit 0)', slr.includes('RC=0'), slr);
   check('/opt/win32 fully removed', slr.includes('OPT-GONE'), slr);
@@ -439,6 +507,93 @@ async function main() {
   check('created src tier rmdir\'d once the last srclib package goes',
     slr.includes('SRC-TIER-GONE'));
   check('/opt/freetype fully removed', slr.includes('FT-OPT-GONE'));
+
+  /* ---- session RD (#624): the reverse-dependency guard is GENERIC ---- *
+   * A deps edge that is neither freetype nor win32 (synthetic test-rdapp ->
+   * test-rdlib) exercises: refusal naming the dependent, removing the
+   * dependent freeing the dep, a legacy pre-#624 record (no `deps` member)
+   * resolving through the index with atomic BACKFILL, the backfilled record
+   * answering OFFLINE, the unresolvable-record conservative refusal, and
+   * --force working with no repo at all. */
+  const rdScript = [
+    'echo ==rdinstall',
+    `echo http://127.0.0.1:${rdPort} > /etc/gucman/repos`,
+    'gucman install test-rdapp; echo RC=$?',
+    'test -f /var/lib/gucman/test-rdlib.json && echo RDLIB-DEP-DB-OK',
+    "grep -q '\"deps\"' /var/lib/gucman/test-rdapp.json && echo APP-DEPS-RECORDED",
+    "grep -q '\"deps\"' /var/lib/gucman/test-rdlib.json && echo LIB-DEPS-RECORDED",
+    'echo ==rdrefuse',
+    'gucman remove test-rdlib; echo RC=$?',
+    'test -f /var/lib/gucman/test-rdlib.json && echo LIB-STILL-INSTALLED',
+    'test -e /opt/test-rdlib && echo LIB-OPT-INTACT',
+    'echo ==rdfree',
+    'gucman remove test-rdapp; echo RC=$?',
+    'gucman remove test-rdlib; echo RC2=$?',
+    'test ! -e /opt/test-rdapp && echo APP-GONE',
+    'test ! -e /opt/test-rdlib && echo LIB-GONE',
+    'echo ==rdlegacy',
+    'gucman install test-rdapp; echo RC=$?',
+    'cp /var/lib/gucman/test-rdapp.json /root/rdapp-record.json',
+    // a v251 record: valid JSON, no `deps` member (the pre-#624 writer)
+    'printf \'{"name":"test-rdapp","version":"1.0"}\' > /var/lib/gucman/test-rdapp.json',
+    'gucman remove test-rdlib; echo RC2=$?',
+    "grep -q '\"deps\"' /var/lib/gucman/test-rdapp.json && echo BACKFILL-OK",
+    'echo ==rdoffline',
+    'echo http://127.0.0.1:9/unreachable > /etc/gucman/repos',
+    'gucman remove test-rdlib; echo RC=$?',
+    'printf \'{"name":"test-rdapp","version":"1.0"}\' > /var/lib/gucman/test-rdapp.json',
+    'gucman remove test-rdlib; echo RC2=$?',
+    'gucman remove test-rdlib --force; echo RCF=$?',
+    'test ! -e /opt/test-rdlib && echo LIB-FORCED-GONE',
+    'echo ==rdcleanup',
+    'cp /root/rdapp-record.json /var/lib/gucman/test-rdapp.json',
+    'gucman remove test-rdapp; echo RC=$?',
+    'test ! -e /opt/test-rdapp && echo APP2-GONE',
+    `echo http://127.0.0.1:${goodPort} > /etc/gucman/repos`,
+    'echo ==done',
+  ];
+  const rd = driveBoot(rdScript, BOOT_ARGS);
+  const rdout = String(rd.stdout || '');
+  const rdall = rdout + '\n' + String(rd.stderr || '');
+
+  const rdi = section(rdout, 'rdinstall');
+  check('#624 generic: test-rdapp installs, test-rdlib pulled as its dep',
+    rdi.includes('RC=0') && rdi.includes('RDLIB-DEP-DB-OK'), rdi);
+  check('#624 generic: install records deps on the dependent', rdi.includes('APP-DEPS-RECORDED'), rdi);
+  check('#624 generic: install records deps ([]) on the dep too', rdi.includes('LIB-DEPS-RECORDED'), rdi);
+
+  const rdr = section(rdout, 'rdrefuse');
+  check('#624 generic: removing the dep is REFUSED (exit 1)', rdr.includes('RC=1'), rdr);
+  check('#624 generic: the refusal names test-rdapp',
+    /cannot remove 'test-rdlib': installed package\(s\) depend on it: test-rdapp/.test(rdall),
+    rdall.slice(-800));
+  check('#624 generic: refused remove changes nothing',
+    rdr.includes('LIB-STILL-INSTALLED') && rdr.includes('LIB-OPT-INTACT'), rdr);
+
+  const rdf = section(rdout, 'rdfree');
+  check('#624 generic: removing the dependent first succeeds', rdf.includes('RC=0'), rdf);
+  check('#624 generic: the dep then removes freely', rdf.includes('RC2=0'), rdf);
+  check('#624 generic: both really gone', rdf.includes('APP-GONE') && rdf.includes('LIB-GONE'), rdf);
+
+  const rdl = section(rdout, 'rdlegacy');
+  check('#624 legacy: reinstalled for the legacy-record leg', rdl.includes('RC=0'), rdl);
+  check('#624 legacy: a pre-#624 record resolves through the index -> refused',
+    rdl.includes('RC2=1'), rdl);
+  check('#624 legacy: the index answer is BACKFILLED into the record',
+    rdl.includes('BACKFILL-OK'), rdl);
+
+  const rdo = section(rdout, 'rdoffline');
+  check('#624 offline: the backfilled record refuses with NO repo', rdo.includes('RC=1'), rdo);
+  check('#624 offline: unresolvable legacy record -> conservative refusal',
+    rdo.includes('RC2=1'), rdo);
+  check('#624 offline: the conservative refusal says it cannot verify',
+    /cannot verify reverse dependencies of 'test-rdlib'/.test(rdall), rdall.slice(-800));
+  check('#624 offline: --force works with no repo',
+    rdo.includes('RCF=0') && rdo.includes('LIB-FORCED-GONE'), rdo);
+
+  const rdc = section(rdout, 'rdcleanup');
+  check('#624: post-#624 records remove OFFLINE with no index consult',
+    rdc.includes('RC=0') && rdc.includes('APP2-GONE'), rdc);
 
   /* ---- session E: the FAT image carries the baked srclib fold ---- *
    * foldPackages' twin of the gucman plant: /usr/include + /usr/src symlink
