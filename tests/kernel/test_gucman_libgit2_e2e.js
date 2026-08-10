@@ -189,6 +189,27 @@ async function main() {
     'test -f /root/demo/.git/HEAD && echo HEAD-FILE-OK',
     'cat /root/demo/.git/HEAD',
     'find /root/demo/.git/objects -type f | wc -l',
+    'echo ==hint',
+    // #632: <git2.h> WITHOUT <git2_srclib.h> must fail at link NAMING the
+    // fix (git2/common.h's __link_hint), never as a bare Undefined symbol.
+    "cat > /root/bare.c << 'EOF'",
+    '#include <git2.h>',
+    'int main(void) { return git_libgit2_init() < 0; }',
+    'EOF',
+    'cd /root && cc bare.c -o bare > /root/bare.err 2>&1; echo BARERC=$?',
+    'grep -q git2_srclib /root/bare.err && echo BARE-HINT-NAMED',
+    'grep -q "does not link automatically" /root/bare.err && echo BARE-HINT-TEXT',
+    'head -2 /root/bare.err',
+    // Scope control: an undefined symbol OUTSIDE the git_ prefix in a TU
+    // that registered the hint stays a bare error.
+    "cat > /root/ctl.c << 'EOF'",
+    '#include <git2.h>',
+    'extern int not_a_git_symbol(void);',
+    'int main(void) { return not_a_git_symbol(); }',
+    'EOF',
+    'cd /root && cc ctl.c -o ctl > /root/ctl.err 2>&1; echo CTLRC=$?',
+    'grep -q git2_srclib /root/ctl.err || echo CTL-NO-HINT',
+    'grep -q not_a_git_symbol /root/ctl.err && echo CTL-BARE-ERROR',
     'echo ==done',
     'exit',
   ];
@@ -248,6 +269,14 @@ async function main() {
   const objs = parseInt((/^(\d+)$/m.exec(rep.split('\n').map((l) => l.trim()).join('\n')) || [])[1], 10);
   check('the ODB wrote at least 3 loose objects (blob, tree, commit)',
     objs >= 3, rep);
+
+  const hint = section(outA, 'hint');
+  check('bare <git2.h> compile fails at link (no auto-require, by design)',
+    hint.includes('BARERC=1'), hint);
+  check('the failure names <git2_srclib.h> (the #632 link hint)',
+    hint.includes('BARE-HINT-NAMED') && hint.includes('BARE-HINT-TEXT'), hint);
+  check('a non-git_ undefined symbol stays a bare error (prefix-scope control)',
+    hint.includes('CTLRC=1') && hint.includes('CTL-NO-HINT') && hint.includes('CTL-BARE-ERROR'), hint);
 
   /* ---- session B: persistence across reboot, then exact removal ---- */
   const scriptB = [

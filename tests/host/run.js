@@ -31,6 +31,7 @@ var tests = [
   ['test_harness_leaks.js', []],         // the startup reaper's "never delete a LIVE run's fixture/server" contract
   ['test_tree_guard.js', []],            // the cross-tree preflight REFUSES a foreign-cwd launch (0341) — the positive control, run every time
   ['test_pp_spread_bounds.js', []],      // no unbounded call-argument spread survives in compiler.js (0320)
+  ['test_link_hint.js', []],             // #632: __link_hint — prefix-scoped link-error advice; git2/common.h's hint names <git2_srclib.h> (leg 5 is the wiring red control)
   ['test_suite_record.js', []],          // a split suite's summary records its scope + merges, never clobbers (0339); --resume never skips a file edited since its pass (#455)
   ['test_artifact_freshness.js', []],    // #171: browser build artifacts are checked for FRESHNESS, not existence; the stale message names artifact + input, and quake-renders.mjs is wired to it
   ['test_sleep_clamp.js', []],           // sleep primitives request EXACTLY the asked duration — no clock in the assertion (0361)

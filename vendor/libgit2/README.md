@@ -180,6 +180,22 @@ tiers under `/usr/{include,src}`. A consumer then writes:
 
 and builds with `cc prog.c -o prog` — no `-I`, no TU list.
 
+**`<git2.h>` alone fails HONESTLY (#632).** The library deliberately does NOT
+auto-require its sources the way `<zlib.h>`/`<png.h>`/`<jpeglib.h>` do (#498),
+for two measured reasons: the TU set is 211 translation units (~19 s per in-OS
+compile, an order of magnitude past the largest auto-required library), and
+libgit2 links its own bundled `deps/zlib`, so an auto-requiring `<git2.h>`
+would make ANY program that also includes `<zlib.h>` or `<png.h>` fail with
+duplicate definitions (`adler32`, `crc32`, …) even when it never calls a
+`git_*` function. Instead `include/git2/common.h` carries
+`__link_hint("git_", …)`: an undefined `git_*` symbol at link time names
+`#include <git2_srclib.h>` as the fix instead of dying as a bare
+`Undefined symbol`. Every public header reaches `common.h`, so the hint covers
+direct `#include <git2/repository.h>`-style consumers too. Guards:
+`tests/host/test_link_hint.js` (leg 5 pins the hint's presence in the real
+header, on every compiler.js diff) and the `==hint` legs of
+`test_gucman_libgit2_e2e.js` (the in-OS path).
+
 **Forwarders.** libgit2's own build wants nine `-I` roots; the srclib model
 offers exactly one ambient header tier, and putting libgit2's ~150 internal
 header names (`str.h`, `vector.h`, `util.h`, `config.h`, …) on a *system*

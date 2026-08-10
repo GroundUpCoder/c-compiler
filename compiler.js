@@ -136,6 +136,7 @@ const Keyword = Object.freeze({
   X_ATTRIBUTE: "__attribute__",
   X_EXTENSION: "__extension__",
   X_REQUIRE_SOURCE: "__require_source",
+  X_LINK_HINT: "__link_hint",
   X_EXPORT: "__export",
   X_MINSTACK: "__minstack",
   X_WASM: "__wasm",
@@ -963,6 +964,7 @@ const KEYWORD_MAP = new Map([
   ["__memory_grow", Keyword.X_MEMORY_GROW],
   ["__builtin", Keyword.X_BUILTIN],
   ["__require_source", Keyword.X_REQUIRE_SOURCE],
+  ["__link_hint", Keyword.X_LINK_HINT],
   ["__export", Keyword.X_EXPORT],
   ["__minstack", Keyword.X_MINSTACK],
   ["__wasm", Keyword.X_WASM],
@@ -5786,6 +5788,7 @@ class TUnit {
     this.externVariables = [];
     this.localExternVariables = [];
     this.requiredSources = new Set();
+    this.linkHints = [];
     this.minStackBytes = 0;
     this.exportDirectives = [];
     this.exceptionTags = [];
@@ -9631,6 +9634,22 @@ function linkTranslationUnits(units, compilerOptions) {
 
   function addError(message, locations) { errors.push({ message, locations: locations || [] }); }
 
+  // __link_hint directives, unioned across every unit (a hint declared by a
+  // header in one TU must reach an undefined reference made in another).
+  // First matching hint wins; exact duplicates (the same header included by
+  // many TUs) collapse.
+  const linkHints = [];
+  for (const unit of units) {
+    for (const h of unit.linkHints || []) {
+      if (!linkHints.some((x) => x.prefix === h.prefix && x.message === h.message))
+        linkHints.push(h);
+    }
+  }
+  function linkHintFor(name) {
+    const h = linkHints.find((x) => name.startsWith(x.prefix));
+    return h ? ` — ${h.message}` : "";
+  }
+
   function isStatic(decl) {
     return decl.storageClass === Types.StorageClass.STATIC;
   }
@@ -9767,7 +9786,7 @@ function linkTranslationUnits(units, compilerOptions) {
         if (compilerOptions.allowUndefined && it instanceof AST.DFunc) {
           it.storageClass = Types.StorageClass.IMPORT;
         } else {
-          addError(`Undefined symbol '${name}' during linking`, [decl.loc || it.loc]);
+          addError(`Undefined symbol '${name}' during linking${linkHintFor(name)}`, [decl.loc || it.loc]);
           return;
         }
       }
@@ -10279,6 +10298,7 @@ class Parser {
     this.currentParsingFunc = null;
     this.currentCompound = null;
     this.requiredSources = new Set();
+    this.linkHints = [];
     this.exportDirectives = [];
     this.parsedExceptionTags = [];
     this.parsedLabels = new Map();
@@ -14078,6 +14098,31 @@ function parseTokens(tokens, options) {
         parser.expect(";");
         continue;
       }
+      // __link_hint("prefix", "message") — a header-carried diagnostic for a
+      // library that deliberately does NOT auto-require its sources (a
+      // require block would be too costly, or would collide with another
+      // library's TU set — libgit2's vendored zlib vs <zlib.h>'s z/* block
+      // is the founding case, ticket #632). At link time, an undefined
+      // symbol whose name starts with `prefix` gets `message` appended to
+      // its error, so "Undefined symbol 'git_x'" names the fix instead of
+      // leaving a default-include-path header's promise a bare lie.
+      if (parser.atKW(Lexer.Keyword.X_LINK_HINT)) {
+        parser.advance();
+        parser.expect("(");
+        const prefixTok = parser.expectKind(Lexer.TokenKind.STRING);
+        const prefix = prefixTok.text.substring(1, prefixTok.text.length - 1);
+        parser.expect(",");
+        const msgTok = parser.expectKind(Lexer.TokenKind.STRING);
+        const message = msgTok.text.substring(1, msgTok.text.length - 1);
+        parser.expect(")");
+        parser.expect(";");
+        if (prefix.length === 0 || message.length === 0) {
+          parser.error(prefixTok, "__link_hint requires a non-empty symbol prefix and a non-empty message");
+        } else {
+          parser.linkHints.push({ prefix, message });
+        }
+        continue;
+      }
       // __minstack
       if (parser.atKW(Lexer.Keyword.X_MINSTACK)) {
         parser.advance();
@@ -14166,6 +14211,7 @@ function parseTokens(tokens, options) {
   });
 
   unit.requiredSources = parser.requiredSources;
+  unit.linkHints = parser.linkHints;
   unit.exportDirectives = parser.exportDirectives;
 
   return { translationUnit: unit, errors: sink.errors, warnings: sink.warnings };

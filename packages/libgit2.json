@@ -1,6 +1,6 @@
 {
   "name": "libgit2",
-  "version": "1.9.0",
+  "version": "1.9.0-2",
   "summary": "libgit2 source library — read and write real git repositories from the in-OS cc",
   "files": {
     "include":  { "tree": "vendor/libgit2/include" },
