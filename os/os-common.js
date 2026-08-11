@@ -2501,10 +2501,17 @@ function projectExternalDirs(proj, dir) {
  * Bakers stamp the blob's mtime with the bake START time (an input
  * edited mid-bake may or may not be reflected, so it must read newer).
  *
- * Deliberately excluded (can't change blob bytes): *.img (the images
- * themselves), *.md, dotfiles, and os/'s runtime-only files (os.html,
- * osk.js, boot.js, the workers, the compositor). Directory granularity
- * over-invalidates — "when in doubt, re-bake" is the cheap direction.
+ * Deliberately excluded: *.img and *.img.tmp-<pid> (bake OUTPUTS — an
+ * output counted as an input would perpetually self-stale the bake),
+ * dotfiles, and os/'s runtime-only files (os.html, osk.js, boot.js, the
+ * workers, the compositor). *.md is NOT excluded (#634): #566 baked
+ * /usr/share/doc, so docs ARE blob bytes — the shipped ones are `bin`
+ * entries the manifest closure stats directly, but a `text` entry is an
+ * os/-relative FILE only the walk covers, so the walk must see every
+ * extension. Directory granularity over-invalidates — "when in doubt,
+ * re-bake" is the cheap direction (the cost of seeing .md: a vendor
+ * README edit or a regenerated os/win32/PORTS.md restales the blob;
+ * both are rare, deliberate edits).
  *
  * osk.js joined the list at ticket #428: it is the on-screen keyboard,
  * reached by exactly one `<script src="osk.js">` in os.html, and the name
@@ -2555,7 +2562,7 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest, opts) {
       // .img.tmp-<pid> is mkimage's atomic-rename temp (a bake OUTPUT):
       // one left behind by a killed bake would read as an ever-newer
       // "input" and make the published image perpetually stale.
-      else if (!/\.(img|md)$/.test(e.name) && !/\.img\.tmp-\d+$/.test(e.name)) statFile(pathMod.join(dir, e.name));
+      else if (!/\.img$/.test(e.name) && !/\.img\.tmp-\d+$/.test(e.name)) statFile(pathMod.join(dir, e.name));
     });
   }
   var normalize = normalizeRelPath;   // "a/b/../c" -> "a/c" (buildProject's rule)
@@ -2689,7 +2696,11 @@ function newestPkgInput(fsMod, pathMod, rootDir, name, pkg, opts) {
     ents.forEach(function (e) {
       if (e.name.charAt(0) === '.') return;
       if (e.isDirectory()) walk(pathMod.join(dir, e.name));
-      else if (!/\.(img|md)$/.test(e.name)) statFile(pathMod.join(dir, e.name));
+      // Bake OUTPUTS stay out (#634): demos.json's os-root project walks os/
+      // itself, where mkimage's blob and its atomic-rename temp land —
+      // counting either would perpetually restale that package. *.md is an
+      // input like any other file (payload docs are real: GCODE.md).
+      else if (!/\.img$/.test(e.name) && !/\.img\.tmp-\d+$/.test(e.name)) statFile(pathMod.join(dir, e.name));
     });
   }
   var normalize = normalizeRelPath;   // "a/b/../c" -> "a/c" (buildProject's rule)
