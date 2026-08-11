@@ -110,7 +110,7 @@ try {
 
   // verify the wheel really scrolled: first visible line is no longer 1
   await setVt(1);
-  await type(`wmctl shot ${sid2} /root/after.ppm && echo SH""OT-OK`);
+  await type(`wmctl shot ${sid2} /root/after.png && echo SH""OT-OK`);
   await waitOut('SHOT-OK');
   check('wheel scroll captured', true);
 } catch (e) {

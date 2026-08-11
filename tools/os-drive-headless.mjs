@@ -42,7 +42,7 @@
 //                          through the tty; byte-count verified)
 //   screen()               -> {w, h, rgb}: the CPU-composited desktop
 //                          (wmctl shot screen — a fresh composite per call)
-//   shot(file, {target})   PNG (or raw .ppm) of the screen or one surface SID
+//   shot(file, {target})   PNG of the screen or one surface SID
 //   sample(x, y)           -> {r, g, b} of one composited screen pixel
 //   pause(ms)              plain sleep (diagnostics may pace; tests must not)
 //   load(n)/loadStop()     start/stop the busy-loop generators
@@ -83,7 +83,7 @@ require(path.join(ROOT, 'tests/lib/tree-guard.js'))
   .assertSameTree(ROOT, { label: 'tools/os-drive-headless.mjs' });
 
 const BOOT = path.join(ROOT, 'os/boot.js');
-const { parsePpm, encodePng } = require(path.join(ROOT, 'tests/lib/png.js'));
+const { parsePng } = require(path.join(ROOT, 'tests/lib/png.js'));
 const { mkdtempOwned, untrack } = require(path.join(ROOT, 'tests/lib/harness-temp.js'));
 
 /* ---- helpers ---- */
@@ -316,28 +316,31 @@ export async function openHeadlessSession(opts = {}) {
 
     // The CPU-composited screen (kernel wmScreenshotScreen — bit-exact, no
     // compositor furniture). Each call is a fresh composite.
-    screen: (o = {}) => drive.shotPpm('screen', o).then(parsePpm),
+    screen: (o = {}) => drive.shotBytes('screen', o).then((b) => parsePng(b)),
     sample: async (x, y, o = {}) => {
-      const { w, h, rgb } = await drive.screen(o);
-      if (x < 0 || y < 0 || x >= w || y >= h)
-        throw new Error(`sample(${x},${y}): outside ${w}x${h}`);
-      const i = (y * w + x) * 3;
-      return { r: rgb[i], g: rgb[i + 1], b: rgb[i + 2] };
+      const shot = await drive.screen(o);
+      if (x < 0 || y < 0 || x >= shot.w || y >= shot.h)
+        throw new Error(`sample(${x},${y}): outside ${shot.w}x${shot.h}`);
+      const [r, g, b] = shot.px(x, y);
+      return { r, g, b };
     },
-    shotPpm: async (target = 'screen', { timeout = 60000 } = {}) => {
-      const tmp = `/tmp/.osdrive-${seq++}.ppm`;
+    // The raw PNG bytes `wmctl shot` wrote, via a scratch file in the OS.
+    shotBytes: async (target = 'screen', { timeout = 60000 } = {}) => {
+      const tmp = `/tmp/.osdrive-${seq++}.png`;
       const r = await drive.wmctl(`shot ${target} ${tmp}`, { timeout });
       if (r.status !== 0) throw sessionError(
         `shot ${target}: wmctl failed (status ${r.status}): ${r.out.trim()}`);
-      const ppm = await drive.readFile(tmp, { timeout });
+      const png = await drive.readFile(tmp, { timeout });
       await drive.sh(`rm -f ${sq(tmp)}`);
-      return ppm;
+      return png;
     },
-    // PNG to `file` (raw P6 when `file` ends .ppm); target 'screen' or a SID.
+    // PNG to `file`; target 'screen' or a SID. The bytes are written VERBATIM
+    // as the OS encoded them (#657) — no host-side decode/re-encode hop, so
+    // what lands on disk is exactly what wmctl produced.
     shot: async (file, { target = 'screen', timeout = 60000 } = {}) => {
-      const ppm = await drive.shotPpm(target, { timeout });
-      const { w, h, rgb } = parsePpm(ppm);
-      fs.writeFileSync(file, file.endsWith('.ppm') ? ppm : encodePng(w, h, rgb));
+      const png = await drive.shotBytes(target, { timeout });
+      const { w, h } = parsePng(png);            // validate before we persist
+      fs.writeFileSync(file, png);
       return { w, h };
     },
 
@@ -476,7 +479,7 @@ async function main() {
     console.log(`\n[drive] boot.js exited (code=${code} signal=${signal}) — :q to leave`));
   const HELP = `  :run CMD         marker-synced run; prints the delta + exit status
   :out [N] / :err [N]   dump the last N chars of stdout/stderr (default 2000)
-  :shot FILE [SID] PNG (or .ppm) of the screen / surface SID
+  :shot FILE [SID] PNG of the screen / surface SID
   :read OS LOCAL   copy a file out of the OS
   :put LOCAL OS    copy a host file into the OS
   :sample X Y      composited screen pixel at (X,Y)

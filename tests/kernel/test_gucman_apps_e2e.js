@@ -127,7 +127,7 @@ async function main() {
     'netsurf /root/t.html &',
     'wmctl wait win PkgPage 30000',
     'PSID=$(wmctl list | grep "\tPkgPage$" | sed "s/[^0-9].*//")',
-    'wmctl shot $PSID /root/ns.ppm && [ -s /root/ns.ppm ] && echo PAGE-SHOT-OK',
+    'wmctl shot $PSID /root/ns.png && [ -s /root/ns.png ] && echo PAGE-SHOT-OK',
     'wmctl close $PSID',
     'wmctl wait nowin PkgPage 8000',
     'echo ==demos',
