@@ -92,7 +92,15 @@ function createCcDriver(CompilerJS, kfs) {
       return p.charCodeAt(0) === 47 ? p : (cwd === '/' ? '' : cwd) + '/' + p;
     };
 
-    var pp = CompilerJS.createDefaultPPRegistry();
+    var pp;
+    try {
+      pp = CompilerJS.createDefaultPPRegistry();
+    } catch (e) {
+      // An invalid host SOURCE_DATE_EPOCH (boot.js hosts the kernel inside
+      // the host's environment) must refuse naming the variable, not surface
+      // as a bare EIO from the compile hook's catch-all.
+      return { exitCode: 1, stdout: '', stderr: 'cc: ' + ((e && e.message) || String(e)) + '\n' };
+    }
     pp.fileReader = function (filePath) { return readFileText(kfs, abs(filePath)); };
     // Standard OS install locations for system headers and require-able
     // sources (Lane A of the source-lib design): the admin tier

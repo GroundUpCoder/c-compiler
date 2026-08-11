@@ -1345,6 +1345,13 @@ class PPRegistry {
     // payload's real tree. Null (the default) keeps lexical paths — host
     // builds run on a physical-'..' filesystem and need no canonicalizing.
     this.realpath = null;
+    // __DATE__/__TIME__ override (the reproducible-builds SOURCE_DATE_EPOCH
+    // convention, as in gcc/clang): UTC seconds since the Unix epoch, or
+    // null for the host's local wall clock. createDefaultPPRegistry seeds it
+    // from the environment where a process environment exists (Node);
+    // embedders may set it directly. 0 is a valid instant (1970-01-01
+    // 00:00:00 UTC) — consumers must test against null, never truthiness.
+    this.sourceDateEpoch = null;
   }
 
   loadFile(path) {
@@ -1387,13 +1394,21 @@ function preprocess(filename, initialTokens, ppRegistry) {
     return ifStack.length === 0 || ifStack[ifStack.length - 1].active;
   }
 
-  // Compute __DATE__ and __TIME__ once (frozen at translation start per C standard)
-  const now = new Date();
+  // Compute __DATE__ and __TIME__ once (frozen at translation start per C
+  // standard). With sourceDateEpoch set, the instant is that epoch rendered
+  // in UTC — so two builds of one source agree byte-for-byte regardless of
+  // wall clock or timezone, which is the whole point of the override. Unset
+  // keeps the host's LOCAL time, matching gcc/clang without the variable.
+  const sde = ppRegistry.sourceDateEpoch;
+  const utc = sde != null;
+  const now = utc ? new Date(sde * 1000) : new Date();
   const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const day = now.getDate();
-  const dateStr = `"${months[now.getMonth()]} ${day < 10 ? " " : ""}${day} ${now.getFullYear()}"`;
+  const day = utc ? now.getUTCDate() : now.getDate();
+  const dateStr = `"${months[utc ? now.getUTCMonth() : now.getMonth()]} ${day < 10 ? " " : ""}${day} ${utc ? now.getUTCFullYear() : now.getFullYear()}"`;
   const pad2 = n => n < 10 ? "0" + n : "" + n;
-  const timeStr = `"${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}"`;
+  const timeStr = utc
+    ? `"${pad2(now.getUTCHours())}:${pad2(now.getUTCMinutes())}:${pad2(now.getUTCSeconds())}"`
+    : `"${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}"`;
 
   // __COUNTER__ (GNU extension): one counter per preprocess run (= per
   // translation unit, matching gcc), bumped at each expansion.
@@ -34375,8 +34390,31 @@ function getExtLibMap() {
   return _extLibMap;
 }
 
+// SOURCE_DATE_EPOCH (reproducible-builds.org): the value must be a string of
+// ASCII decimal digits whose numeric value is at most 253402300799
+// (9999-12-31T23:59:59Z — gcc's cap, which also keeps the year four digits
+// wide, the width the "Mmm dd yyyy" __DATE__ format assumes). Anything else
+// refuses the build loudly: a silent fallback to the wall clock would
+// un-reproduce exactly the builds the variable exists to pin.
+function parseSourceDateEpoch(value) {
+  if (!/^\d+$/.test(value) || Number(value) > 253402300799) {
+    throw new Error('environment variable SOURCE_DATE_EPOCH must expand to a '
+      + 'non-negative integer no greater than 253402300799, not "' + value + '"');
+  }
+  return Number(value);
+}
+
 function createDefaultPPRegistry() {
   const pp = new Lexer.PPRegistry();
+
+  // Honour SOURCE_DATE_EPOCH wherever a process environment exists — the CLI,
+  // mkpkg/bake embedders, and a boot.js-hosted kernel alike. Browser workers
+  // (kernel-worker/ksvc) have no process global, so the variable cannot exist
+  // there and the wall-clock default stands.
+  if (typeof process !== 'undefined' && process.env
+      && process.env.SOURCE_DATE_EPOCH !== undefined) {
+    pp.sourceDateEpoch = parseSourceDateEpoch(process.env.SOURCE_DATE_EPOCH);
+  }
 
   // Load standard library headers
   const headers = getStdlibHeaders();
@@ -34674,7 +34712,7 @@ function parseAllUnits(fs, pp, inputFiles, options) {
   return units;
 }
 
-return { getStdlibHeaders, getStdlibSources, createDefaultPPRegistry, parseAllUnits };
+return { getStdlibHeaders, getStdlibSources, createDefaultPPRegistry, parseAllUnits, parseSourceDateEpoch };
 })();
 
 // ====================
@@ -35577,7 +35615,15 @@ function main() {
   // it needs no JSPI, and gives O(1) rename + hard links/symlinks. It is
   // the only browser filesystem backend; the legacy broad-tree full-OPFS
   // backend has been removed.
-  const pp = Stdlib.createDefaultPPRegistry();
+  let pp;
+  try {
+    pp = Stdlib.createDefaultPPRegistry();
+  } catch (e) {
+    // An invalid SOURCE_DATE_EPOCH refuses here with its rule, not a stack
+    // trace — the value is the caller's to fix before anything compiles.
+    process.stderr.write("error: " + e.message + "\n");
+    process.exit(1);
+  }
 
   // Set up file reader. Returns raw source — splicing happens at lex
   // time so the lexer can track per-token line-offset adjustments.
@@ -36010,6 +36056,7 @@ var _exports = {
   gcSectionsPass: Parser.gcSectionsPass,
   // Pipeline
   createDefaultPPRegistry: Stdlib.createDefaultPPRegistry,
+  parseSourceDateEpoch: Stdlib.parseSourceDateEpoch,
   parseAllUnits: Stdlib.parseAllUnits,
   generateCode: Codegen.generateCode,
   getStdlibHeaders: Stdlib.getStdlibHeaders,
