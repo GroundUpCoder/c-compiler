@@ -3384,6 +3384,10 @@ var BLOCK_FS = (function () {
     var w = this._walkPath(resolved);
     if (!w) return this._setErr('ENOENT');
     if ((w.ino.mode & S_IFMT) !== S_IFDIR) return this._setErr('ENOTDIR');
+    // Root is never removable (POSIX EBUSY) — populated or not. Without
+    // this, the parent derivation below yields root ITSELF with an empty
+    // name, and on an empty fs the arithmetic frees inode 1 (#635).
+    if (resolved === '/') return this._setErr('EBUSY');
     // EROFS only after the walks: an escaping path retries on its owner.
     if (this._readonly) return this._setErr('EROFS');
 
@@ -3442,6 +3446,10 @@ var BLOCK_FS = (function () {
     var oldResolved = this._resolvePath(oldPath);
     var newResolved = this._resolvePath(newPath);
     if (oldResolved === newResolved) return 0;
+    // Neither end may resolve to root (POSIX EBUSY): root has no parent
+    // dirent, so the name derivation below would hand back root itself
+    // with an empty name and run the entry arithmetic on inode 1 (#635).
+    if (oldResolved === '/' || newResolved === '/') return this._setErr('EBUSY');
 
     var oldW = this._walkPath(oldResolved, true);   // rename the link itself, not its target
     if (!oldW) return this._setErr('ENOENT');
@@ -3460,6 +3468,14 @@ var BLOCK_FS = (function () {
     // Pre-flight every failure we can detect BEFORE touching the source
     // dirent, so those paths need no rollback (a prior version restored the
     // source on some failure paths but forgot on others, orphaning it).
+    var oldIsDir = (oldW.ino.mode & S_IFMT) === S_IFDIR;
+    // A directory cannot move into its own subtree (POSIX EINVAL). With an
+    // EXISTING target inside the source this used to corrupt: the target's
+    // inode was dropped while its dirent survived, because the post-removal
+    // re-walk of the (now-detached) parent failed and skipped the dirent
+    // removal but not the _dropLink (#635).
+    if (oldIsDir && newResolved.indexOf(oldResolved + '/') === 0)
+      return this._setErr('EINVAL');
     var newPW = this._walkPath(newParentPath);
     if (!newPW) return this._setErr('ENOENT');
     if ((newPW.ino.mode & S_IFMT) !== S_IFDIR) return this._setErr('ENOTDIR');
@@ -3469,7 +3485,14 @@ var BLOCK_FS = (function () {
       // POSIX: if oldpath and newpath are links to the same inode, rename
       // does nothing and succeeds — neither entry is removed.
       if (newW.inoId === oldW.inoId) return 0;
-      if ((newW.ino.mode & S_IFMT) === S_IFDIR &&
+      // Cross-type replacement: a directory may only replace a directory
+      // (ENOTDIR the other way, EISDIR this way). fsck cannot catch a
+      // violation — the damage is semantic, a name silently changing type,
+      // so the preflight is the only line of defense (#635).
+      var newIsDir = (newW.ino.mode & S_IFMT) === S_IFDIR;
+      if (oldIsDir && !newIsDir) return this._setErr('ENOTDIR');
+      if (!oldIsDir && newIsDir) return this._setErr('EISDIR');
+      if (newIsDir &&
           newW.ino.extentOffset && newW.ino.dataSize > 0) {
         var ent = dirList(this._s, newW.ino.extentOffset, newW.ino.dataSize);
         if (ent.length > 0) return this._setErr('ENOTEMPTY');
