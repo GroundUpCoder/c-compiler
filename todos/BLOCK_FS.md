@@ -177,6 +177,27 @@ When the primitive is genuinely unavailable, the timing syscalls fall back to
 ENOSYS rather than busy-waiting.  (`sleep` was also previously *missing* from
 the env — a latent `LinkError` for any program calling it; it is now provided.)
 
+## Settled semantics where POSIX is UNDEFINED
+
+POSIX leaves some open()/fd cases explicitly undefined. Where it does, gucOS
+picks the **Linux** answer — Linux is the platform it emulates (Linux flag
+values, Linux errno set, Linux `/proc` formats, a busybox userland), so a
+program ported in expects the Linux behaviour. These are decided; re-open one
+only with new evidence, not with a fresh reading of the standard.
+
+| Case | Answer | Why |
+|---|---|---|
+| `open(path, O_RDONLY \| O_TRUNC)` on an existing regular file (#641) | **Truncates**, and the resulting fd is still NOT write-capable (`accmode` 0 ⇒ `write()` is `EBADF`) | POSIX: *"the result of using O_TRUNC without either O_RDWR or O_WRONLY is undefined."* Linux truncates — `fs/namei.c do_open()` gates the truncate on regular-file + `O_TRUNC` alone, and `fs/open.c build_open_flags()` folds `O_TRUNC` into the **permission** request (`MAY_WRITE`), never into the access mode. Darwin was measured doing the same. Rejecting it would diverge from both. |
+
+`ftruncate()` requiring a writable fd (`EINVAL`, todos/0376) is **not** an
+inconsistency with the row above: POSIX *defines* `ftruncate` and deliberately
+leaves the `O_TRUNC` case open. Do not harmonize them.
+
+Pinned by `tests/blockfs/test_posix.js` (in-process BlockFS) and leg 11 of
+`tests/kernel/test_fs_e2e.js` (the kernel-brokered twin — the two backends must
+never disagree). A read-only volume still refuses the whole open with `EROFS`
+before any of this (`tests/blockfs/test_readonly.js`).
+
 ## Block FS vs the removed full-OPFS backend
 
 The legacy multi-file full-OPFS backend (`createBrowserFileSystem`) was removed
