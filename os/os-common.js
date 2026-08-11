@@ -2698,8 +2698,14 @@ function newestPkgInput(fsMod, pathMod, rootDir, name, pkg, opts) {
       if (e.isDirectory()) walk(pathMod.join(dir, e.name));
       // Bake OUTPUTS stay out (#634): demos.json's os-root project walks os/
       // itself, where mkimage's blob and its atomic-rename temp land —
-      // counting either would perpetually restale that package. *.md is an
-      // input like any other file (payload docs are real: GCODE.md).
+      // counting either would perpetually restale that package. *.md is NOT
+      // excluded — no current package payload has a .md the walk is
+      // responsible for (payload docs reach the scan through direct stats:
+      // the tree enumeration carries libgit2's LICENCE.md, `bin`/`text` are
+      // statted per entry). The walk sees every extension because it is
+      // dir-granular over-approximation by design and a per-extension hole
+      // in it is a class of invisible inputs — over-invalidating is the
+      // cheap direction.
       else if (!/\.img$/.test(e.name) && !/\.img\.tmp-\d+$/.test(e.name)) statFile(pathMod.join(dir, e.name));
     });
   }
