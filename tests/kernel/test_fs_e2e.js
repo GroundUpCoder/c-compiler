@@ -21,6 +21,10 @@
 //     used to SILENTLY MUTATE the file, read() on an O_WRONLY fd disclosed
 //     it — EBADF both, in the FS_OPEN arm and the spawn fd-action OPEN arm
 //     (the two kernel _makeOfd('file') sites)
+//   - open(O_RDONLY|O_TRUNC) truncates (#641): POSIX leaves it undefined,
+//     Linux and Darwin both truncate, so gucOS does — and the brokered
+//     backend must answer exactly as in-process BlockFS does. The fd is
+//     still not write-capable; the truncate is not write access.
 //
 // Run: node tests/kernel/test_fs_e2e.js
 'use strict';
@@ -190,6 +194,33 @@ int main(void) {
     if (f) fclose(f);
     printf("modechild=%d body=[%s]\\n", WEXITSTATUS(st), line);
 
+    /* 11 (#641): open(O_RDONLY|O_TRUNC) over the BROKERED path. POSIX
+       leaves this undefined; Linux truncates and so does Darwin (both
+       measured), so gucOS truncates — and the two backends must not
+       disagree, so this is the kernel-side twin of the BlockFS case in
+       tests/blockfs/test_posix.js. The truncate is NOT write access: the
+       kernel OFD still carries accmode 0, so write() on the fd is EBADF
+       (todos/0376) and the file stays empty. */
+    fd = open("/otrunc.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    write(fd, "HELLO WORLD", 11);
+    close(fd);
+    struct stat tb; stat("/otrunc.txt", &tb);
+    errno = 0;
+    int tfd = open("/otrunc.txt", O_RDONLY | O_TRUNC);
+    int terr = errno;
+    struct stat ta; memset(&ta, 0, sizeof ta);
+    if (tfd >= 0) fstat(tfd, &ta);
+    char tbuf[8]; memset(tbuf, 0, sizeof tbuf);
+    int tr = tfd >= 0 ? read(tfd, tbuf, 4) : -1;
+    errno = 0;
+    int tw = tfd >= 0 ? write(tfd, "EVIL", 4) : -1;
+    int twe = errno == EBADF;
+    if (tfd >= 0) close(tfd);
+    struct stat tp; stat("/otrunc.txt", &tp);
+    printf("otrunc pre=%d ok=%d err=%d fsize=%d rd=%d wr=%d we=%d post=%d\\n",
+           (int)tb.st_size, tfd >= 0, terr, (int)ta.st_size, tr, tw, twe,
+           (int)tp.st_size);
+
     printf("done\\n");
     return 42;
 }
@@ -322,6 +353,10 @@ const watchdog = setTimeout(() => {
     'romode w=-1 e=1 r=4 body=[SAFE]',   // 0376: refused write left the bytes alone
     'womode r=-1 e=1 w=4',
     'modechild=11 body=[GOOD]',          // fd-action O_RDONLY: child write refused
+    // #641: O_RDONLY|O_TRUNC succeeds and empties the file (the Linux
+    // answer), the fd is still not write-capable (wr=-1 we=1), and the
+    // refused write leaves it empty.
+    'otrunc pre=11 ok=1 err=0 fsize=0 rd=0 wr=-1 we=1 post=0',
     'done',
   ];
   for (let i = 0; i < expect.length; i++) {
