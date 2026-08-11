@@ -74,8 +74,18 @@ const EXT_C = w('ext/lib/ext.c', 'int ext(void){return 1;}\n');
 const EXT_H = w('ext/lib/ext.h', '#define EXT 1\n');   // beside the source, quoted-include reach
 const INC_H = w('ext/inc/hdr.h', '#define HDR 1\n');
 const OUTSIDE = w('unrelated/nothing.c', 'int nothing;\n');   // in no project's closure
+// #634 fixtures: a text-entry doc (os/-relative FILE — blob bytes the manifest
+// closure never stats individually), a doc beside a project source, and two
+// bake OUTPUTS that must stay excluded.
+const DOC_MD = w('os/doc/guide.md', '# guide\n');
+const EXT_MD = w('ext/lib/README.md', '# patch table\n');   // the vendor-README shape
+const OUT_IMG = w('os/os-system.img', 'IMG\n');
+const OUT_TMP = w('os/os-system.img.tmp-123', 'TMP\n');
 
-const MANIFEST = { version: 1, system: { files: { '/bin/myapp': { project: 'os/myapp/bin.json' } } } };
+const MANIFEST = { version: 1, system: { files: {
+  '/bin/myapp': { project: 'os/myapp/bin.json' },
+  '/usr/share/doc/guide.md': { text: 'doc/guide.md' },
+} } };
 
 // Age everything, then make one file the unambiguous newest.
 const OLD = Date.now() - 60 * 60 * 1000;
@@ -116,6 +126,42 @@ check('the closure does not swallow the whole repo', () => {
   assert.notStrictEqual(r.path, OUTSIDE,
     'a file no project references must stay OUT of the closure — a scan that ' +
     'invalidates on everything is not a freshness gate');
+});
+
+/* ---- leg A3: *.md bake inputs (#634) ------------------------------------
+ * #566 baked seven .md files into /usr/share/doc, so ".md can't change blob
+ * bytes" is false. The shipped docs happen to be `bin` entries — statted
+ * directly by the manifest closure — but a `text` entry is an os/-relative
+ * FILE that closure never stats individually: it relies on the os/ walk,
+ * where the old \.(img|md)$ carve-out made it invisible. A .md edit that is
+ * blob bytes must restale the blob; the *.img exclusions stay (bake OUTPUTS
+ * — an output counted as an input would perpetually self-stale the bake).
+ * The first two legs FAIL on the pre-#634 os-common.js. */
+
+check('a text-entry .md under os/ is a bake input (#634 red control)', () => {
+  const r = newestFor(DOC_MD);
+  assert.strictEqual(r.path, DOC_MD,
+    'a `text` entry names an os/-relative file whose bytes are copied verbatim ' +
+    'into the blob; the walk must see it whatever its extension, got ' + r.path);
+});
+
+check('a .md beside a project source is a bake input (no extension carve-outs)', () => {
+  const r = newestFor(EXT_MD);
+  assert.strictEqual(r.path, EXT_MD,
+    'the walk is dir-granular over-approximation by design — a per-extension ' +
+    'hole in it is a class of invisible inputs, got ' + r.path);
+});
+
+check('*.img stays excluded (a bake OUTPUT, not an input)', () => {
+  const r = newestFor(OUT_IMG);
+  assert.notStrictEqual(r.path, OUT_IMG,
+    'the baked blob itself must never be an input — it would self-stale every bake');
+});
+
+check('*.img.tmp-<pid> stays excluded (mkimage atomic-rename temp)', () => {
+  const r = newestFor(OUT_TMP);
+  assert.notStrictEqual(r.path, OUT_TMP,
+    'a temp left by a killed bake must not read as an ever-newer input');
 });
 
 /* ---- leg A2: sibling definition sources (#614) --------------------------
@@ -307,6 +353,10 @@ const P_OVERLAY = w2('overlay/overlay.json', '{"overlay":1}\n');
 const P_SYNTH = w2('synth/parent.json', '{}\n');   // an extraInputs derivation input
 const P_OS_STRAY = w2('os/unrelated.c', 'int stray;\n');   // os/ at large — must NOT be an input
 const P_STRAY = w2('elsewhere/nothing.c', 'int nothing2;\n');   // referenced by nothing
+// #634: a doc in the project dir (walked) IS an input; bake outputs are not.
+const P_PROJ_MD = w2('vendor/myproj/README.md', '# patch table\n');
+const P_OUT_IMG = w2('vendor/myproj/stale.img', 'IMG\n');
+const P_OUT_TMP = w2('vendor/myproj/stale.img.tmp-42', 'TMP\n');
 
 const PKG = {
   name: 'mypkg', version: '1.0',
@@ -351,6 +401,21 @@ pkgLeg('a `hdrs` header is an input', P_HDR);
 pkgLeg('a file under a `tree` entry is an input', P_TREE);
 pkgLeg('the native sibling overlay manifest is an input', P_OVERLAY);
 pkgLeg('an extraInputs derivation input is an input (synthesized defs)', P_SYNTH);
+pkgLeg('a project-dir .md is an input (#634 — no extension carve-outs in the walk)', P_PROJ_MD);
+
+check('pkg: *.img stays excluded (bake output)', () => {
+  const r = pkgNewestFor(P_OUT_IMG);
+  assert.notStrictEqual(r.path, P_OUT_IMG,
+    'demos.json\'s os-root project walks os/ itself, where mkimage\'s blob ' +
+    'lands — counting it would perpetually restale that package');
+});
+
+check('pkg: *.img.tmp-<pid> stays excluded (#634 — mkimage temp on the same walk)', () => {
+  const r = pkgNewestFor(P_OUT_TMP);
+  assert.notStrictEqual(r.path, P_OUT_TMP,
+    'a temp left in os/ by a killed bake must not read as an ever-newer ' +
+    'package input — same output-as-input class as *.img');
+});
 
 check('pkg: the os/ tree at large is NOT an input (narrow scope)', () => {
   // The gate's documented scope: unrelated OS work must not restale every
