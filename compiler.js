@@ -35421,17 +35421,36 @@ function generate({ wasmBinary, hostJsSource, opfsFiles, runArgs, programName })
   let dataFileSetup = '';
   if (opfsEntries.length > 0) {
     dataFileSetup = `
-// Write embedded data files to disk
+// Write embedded data files to a per-invocation temp dir, removed on exit.
+// mkdtemp (not a pid-derived name): pids are reused, and a predictable path
+// would make two concurrent runs of the same bundle share a cwd.
 var __opfsFiles = ${JSON.stringify(opfsEntries)};
-var __tmpDir = __require("os").tmpdir();
-var __dataDir = __require("path").join(__tmpDir, "cjs-" + process.pid);
-__require("fs").mkdirSync(__dataDir, { recursive: true });
+var __fs = __require("fs"), __path = __require("path"), __os = __require("os");
+var __dataDir = __fs.mkdtempSync(__path.join(__os.tmpdir(), "cjs-"));
 for (var __i = 0; __i < __opfsFiles.length; __i++) {
-  var __dest = __require("path").join(__dataDir, __opfsFiles[__i].path);
-  __require("fs").mkdirSync(__require("path").dirname(__dest), { recursive: true });
-  __require("fs").writeFileSync(__dest, Buffer.from(__opfsFiles[__i].data, "base64"));
+  var __dest = __path.join(__dataDir, __opfsFiles[__i].path);
+  __fs.mkdirSync(__path.dirname(__dest), { recursive: true });
+  __fs.writeFileSync(__dest, Buffer.from(__opfsFiles[__i].data, "base64"));
 }
 process.chdir(__dataDir);
+var __dataDirGone = false;
+function __rmDataDir() {
+  if (__dataDirGone) return;
+  __dataDirGone = true;
+  // chdir out first: rmSync of the process cwd is not portable.
+  try { process.chdir(__os.tmpdir()); } catch (__e) {}
+  try { __fs.rmSync(__dataDir, { recursive: true, force: true }); } catch (__e) {}
+}
+process.on("exit", __rmDataDir);
+["SIGINT", "SIGTERM", "SIGHUP"].forEach(function (__sig) {
+  process.once(__sig, function () {
+    // Another listener means the program handles this signal itself; the
+    // process is not dying, so keep the data dir and let "exit" clean up.
+    if (process.listenerCount(__sig) > 0) return;
+    __rmDataDir();
+    process.kill(process.pid, __sig);
+  });
+});
 `;
   }
 
