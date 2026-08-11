@@ -1,5 +1,5 @@
 {
-  "version": 257,
+  "version": 258,
   "defaultPackages": ["doom", "gcode", "calc", "paint"],
   "overlays": [
     {
@@ -132,11 +132,7 @@
         "link": "/usr/bin/cmdalt"
       },
       "/usr/bin/wmctl": {
-        "c": "wmctl.c",
-        "hdrs": [
-          "wm_proto.h",
-          "wm_agent.h"
-        ]
+        "project": "os/wmctl.json"
       },
       "/usr/bin/snake": {
         "project": "vendor/snake/bin.json"
