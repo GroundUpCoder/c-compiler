@@ -83,7 +83,7 @@ function sessionFrames() {
   for (let y = 0; y < p.h; y += 4) {
     for (let x = 0; x < p.w; x += 4) {
       const i = (y * p.w + x) * 4;
-      const r = b.stdout[i], g = b.stdout[i + 1], bl = b.stdout[i + 2];
+      const r = p.rgba[i], g = p.rgba[i + 1], bl = p.rgba[i + 2];
       sampled++;
       if (r > 0x80 && g < 0x40 && bl < 0x40) red++;
     }

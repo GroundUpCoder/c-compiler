@@ -279,18 +279,18 @@ function sessionLess() {
 
   // Pixel pass on the in-less shot (same parser as session B).
   const b = driveBoot('cat /root/tless.png\n', { image, timeout: 120000, maxBuffer: 16 * 1024 * 1024, encoding: null });
-  const head = b.stdout.toString('latin1', 0, 32);
-  const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-  check('less shot parses at 640x486', !!m && +m[1] === 640 && +m[2] === 486,
-    JSON.stringify(head.slice(0, 16)));
-  if (m) {
-    const w = +m[1], h = +m[2], data = m[0].length;
+  const shot = parseShot(b.stdout, 0);
+  check('less shot parses at 640x486',
+    shot !== null && shot.w === 640 && shot.h === 486,
+    shot ? `${shot.w}x${shot.h}` : 'undecodable');
+  if (shot) {
+    const w = shot.w, h = shot.h, rgba = shot.rgba;
     const fg = (y0, y1) => {
       let n = 0;
       for (let y = y0; y < y1; y++) {
         for (let x = 0; x < w; x++) {
-          const i = data + (y * w + x) * 3;
-          if (b.stdout[i] | b.stdout[i + 1] | b.stdout[i + 2]) n++;
+          const i = (y * w + x) * 4;
+          if (rgba[i] | rgba[i + 1] | rgba[i + 2]) n++;
         }
       }
       return n;
@@ -329,20 +329,20 @@ function sessionDim() {
   check('dim shot written', d.stdout.includes('shotdim-ok'), d.stdout.slice(-300));
 
   const b = driveBoot('cat /root/tdim.png\n', { image, timeout: 120000, maxBuffer: 16 * 1024 * 1024, encoding: null });
-  const head = b.stdout.toString('latin1', 0, 32);
-  const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-  check('dim shot parses at 640x486', !!m && +m[1] === 640 && +m[2] === 486,
-    JSON.stringify(head.slice(0, 16)));
-  if (!m) return;
-  const w = +m[1], h = +m[2], data = m[0].length;
+  const shot = parseShot(b.stdout, 0);
+  check('dim shot parses at 640x486',
+    shot !== null && shot.w === 640 && shot.h === 486,
+    shot ? `${shot.w}x${shot.h}` : 'undecodable');
+  if (!shot) return;
+  const w = shot.w, h = shot.h, rgba = shot.rgba;
   // Exact-value scan; the last 16 px columns are excluded so the 0273b
   // scrollbar overlay blends can never alias into either population.
   const countRGB = (v) => {
     let n = 0;
     for (let y = 0; y < h; y++)
       for (let x = 0; x < w - 16; x++) {
-        const i = data + (y * w + x) * 3;
-        if (b.stdout[i] === v && b.stdout[i + 1] === v && b.stdout[i + 2] === v) n++;
+        const i = (y * w + x) * 4;
+        if (rgba[i] === v && rgba[i + 1] === v && rgba[i + 2] === v) n++;
       }
     return n;
   };

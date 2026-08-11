@@ -146,9 +146,9 @@ function compareLabel(shot, label, x0, y0, bg) {
       ];
       const di = ((y0 + gy) * shot.w + (x0 + gx)) * 4;
       for (let c = 0; c < 3; c++) {
-        if (b.stdout[di + c] !== exp[c]) {
+        if (shot.rgba[di + c] !== exp[c]) {
           return { x: x0 + gx, y: y0 + gy, c,
-                   got: b.stdout[di + c], want: exp[c], alpha: al };
+                   got: shot.rgba[di + c], want: exp[c], alpha: al };
         }
       }
     }
@@ -177,8 +177,8 @@ function titleLeg(tag, name) {
   for (let gy = 0; gy < copy.h; gy++)
     for (let gx = 0; gx < copy.w; gx++) {
       const di = ((y0 + gy) * shots[tag].w + (x0 + gx)) * 4;
-      if (b.stdout[di] !== NAVY[0] || b.stdout[di + 1] !== NAVY[1] ||
-          b.stdout[di + 2] !== NAVY[2]) ink++;
+      if (shots[tag].rgba[di] !== NAVY[0] || shots[tag].rgba[di + 1] !== NAVY[1] ||
+          shots[tag].rgba[di + 2] !== NAVY[2]) ink++;
     }
   check(`${tag}: title text ink present`, ink > 20, String(ink));
   return { g, label: copy };
@@ -195,7 +195,8 @@ if (base) {
   for (let yy = by; yy < by + K.WM_CLOSE_W; yy++)
     for (let xx = bx; xx < bx + K.WM_CLOSE_W; xx++) {
       const di = (yy * shots.base.w + xx) * 4;
-      if (b.stdout[di] < 96 && b.stdout[di + 1] < 96 && b.stdout[di + 2] < 96) dark++;
+      if (shots.base.rgba[di] < 96 && shots.base.rgba[di + 1] < 96 &&
+          shots.base.rgba[di + 2] < 96) dark++;
     }
   check('base: close box has the rasterized x (dark ink)', dark > 5, String(dark));
 }
@@ -226,8 +227,9 @@ titleLeg('cjk', CJK);
     // sanity: the live miniature is really there (interior orange)
     const mi = ((cell.y + 64) * shots.ov.w + (cell.x + 88)) * 4;
     check('ov: miniature interior is winbox orange',
-      b.stdout[mi] === 255 && b.stdout[mi + 1] === 140 && b.stdout[mi + 2] === 0,
-      [b.stdout[mi], b.stdout[mi + 1], b.stdout[mi + 2]].join(','));
+      shots.ov.rgba[mi] === 255 && shots.ov.rgba[mi + 1] === 140 &&
+      shots.ov.rgba[mi + 2] === 0,
+      [shots.ov.rgba[mi], shots.ov.rgba[mi + 1], shots.ov.rgba[mi + 2]].join(','));
     const label = svc.render('winbox', K.WM_LABEL_PX, Math.max(8, cell.w), 0xFFFFFFFF, 1);
     const copy = { w: label.w, h: label.h, bytes: Uint8Array.from(label.bytes) };
     const x0 = Math.round(cell.x + cell.w / 2 - copy.w / 2);

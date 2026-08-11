@@ -131,22 +131,22 @@ function sessionPixels() {
   check('pose-0 shot parses as PNG at full client size 256x256',
     g0 !== null && g0.w === 256 && g0.h === 256, g0 && `${g0.w}x${g0.h}`);
   if (!g0) return;
-  const c0 = px(b.stdout, g0, 128, 128);
+  const c0 = px(g0, 128, 128);
   check(`pose-0 center is the lit red +Z face (~${CENTER0}, tol 30)`,
     near(c0, CENTER0, 30), c0.join(','));
   check('pose-0 corners are the clear color (' + CLEAR + ', tol 12)',
-    near(px(b.stdout, g0, 4, 4), CLEAR, 12) && near(px(b.stdout, g0, 251, 251), CLEAR, 12),
-    px(b.stdout, g0, 4, 4).join(','));
+    near(px(g0, 4, 4), CLEAR, 12) && near(px(g0, 251, 251), CLEAR, 12),
+    px(g0, 4, 4).join(','));
 
   const gr = parseShot(b.stdout, g0.next);
   check('resized shot parses as PNG at the NEW client size 320x200',
     gr !== null && gr.w === 320 && gr.h === 200, gr && `${gr.w}x${gr.h}`);
   if (!gr) return;
   check('resized center is still the lit red +Z face (re-rendered, not scaled)',
-    near(px(b.stdout, gr, 160, 100), CENTER0, 30), px(b.stdout, gr, 160, 100).join(','));
+    near(px(gr, 160, 100), CENTER0, 30), px(gr, 160, 100).join(','));
   check('resized corners are the clear color (depth/color targets match)',
-    near(px(b.stdout, gr, 4, 4), CLEAR, 12) && near(px(b.stdout, gr, 315, 195), CLEAR, 12),
-    px(b.stdout, gr, 315, 195).join(','));
+    near(px(gr, 4, 4), CLEAR, 12) && near(px(gr, 315, 195), CLEAR, 12),
+    px(gr, 315, 195).join(','));
 
   const g45 = parseShot(b.stdout, gr.next);
   check('pose-45 shot parses as PNG 256x256',
@@ -155,7 +155,7 @@ function sessionPixels() {
   const colors45 = colorCount(g45);
   check('pose-45 shows a rotated cube (>=3 flat-lit colors: faces + clear)',
     colors45.size >= 3, colors45.size + ' distinct colors');
-  const c45 = px(b.stdout, g45, 128, 128);
+  const c45 = px(g45, 128, 128);
   check('poses differ (the rotation actually rotated)',
     !near(c45, c0, 20), `center ${c45} vs ${c0}`);
 }

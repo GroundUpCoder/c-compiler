@@ -221,10 +221,10 @@ if (shots.length === NSHOTS) {
   check('mgp page 3 differs from page 2', differ(m2, m3));
   let topBlue = 0, botDark = 0;
   for (let x = 0; x < m3.w; x += 4) {
-    let i = m3.data + (10 * m3.w + x) * 3;
-    if (m3.buf[i] < 90 && m3.buf[i + 1] < 90 && m3.buf[i + 2] > 120) topBlue++;
-    i = m3.data + ((m3.h - 10) * m3.w + x) * 3;
-    if (m3.buf[i] < 50 && m3.buf[i + 1] < 50 && m3.buf[i + 2] < 70) botDark++;
+    let i = (10 * m3.w + x) * 4;
+    if (m3.rgba[i] < 90 && m3.rgba[i + 1] < 90 && m3.rgba[i + 2] > 120) topBlue++;
+    i = ((m3.h - 10) * m3.w + x) * 4;
+    if (m3.rgba[i] < 50 && m3.rgba[i + 1] < 50 && m3.rgba[i + 2] < 70) botDark++;
   }
   check('mgp page 3 gradient: blue top band', topBlue > m3.w / 8, String(topBlue));
   check('mgp page 3 gradient: dark bottom band', botDark > m3.w / 8, String(botDark));
@@ -272,10 +272,10 @@ if (shots.length === NSHOTS) {
     const g2 = deck.backgrounds[1];
     let topBlue = 0, botDark = 0;
     for (let x = 0; x < g2.w; x += 4) {
-      let i = g2.data + (10 * g2.w + x) * 3;
-      if (g2.buf[i] < 90 && g2.buf[i + 1] < 90 && g2.buf[i + 2] > 120) topBlue++;
-      i = g2.data + ((g2.h - 10) * g2.w + x) * 3;
-      if (g2.buf[i] < 50 && g2.buf[i + 1] < 50 && g2.buf[i + 2] < 70) botDark++;
+      let i = (10 * g2.w + x) * 4;
+      if (g2.rgba[i] < 90 && g2.rgba[i + 1] < 90 && g2.rgba[i + 2] > 120) topBlue++;
+      i = ((g2.h - 10) * g2.w + x) * 4;
+      if (g2.rgba[i] < 50 && g2.rgba[i + 1] < 50 && g2.rgba[i + 2] < 70) botDark++;
     }
     check('backgrounds page 2 gradient: blue top band', topBlue > g2.w / 8, String(topBlue));
     check('backgrounds page 2 gradient: dark bottom band', botDark > g2.w / 8, String(botDark));
