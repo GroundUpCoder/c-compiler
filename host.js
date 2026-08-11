@@ -2995,10 +2995,12 @@ var BLOCK_FS = (function () {
       // and hands back a fd that is STILL not write-capable: accmode below
       // is flags & 3, so write() on it is EBADF (todos/0376).
       //
-      // ftruncate() requiring a writable fd (EINVAL, :3846) is NOT an
-      // inconsistency with this: POSIX *defines* that one and leaves this
-      // one open. Do not "harmonize" them — a program written against Linux
-      // would then lose a truncate it was promised.
+      // ftruncate() requiring a writable fd (its `entry.accmode === 0` ->
+      // EINVAL, todos/0376) is NOT an inconsistency with this: POSIX
+      // *defines* that one and leaves this one open. Do not "harmonize"
+      // them — a program written against Linux would then lose a truncate
+      // it was promised. Pinned by tests/blockfs/test_posix.js and leg 11
+      // of tests/kernel/test_fs_e2e.js (the brokered twin).
       if (trunc) {
         if (w.ino.extentOffset) {
           this._alloc.free(w.ino.extentOffset);
