@@ -26,6 +26,7 @@ var tests = [
   ['test_pipe_read_block.js', []],       // pipe read blocks on a live writer; EOF only at write-end close (0233/CD5)
   ['test_stream_bulk.js', []],           // stdin/pipe ByteQueue: MB-scale byte-exact passthrough (CD28)
   ['test_singlefile_emit.js', []],       // .js/.html emit cuts host.js at @cc-strip-below; missing sentinel fails loud (CD15)
+  ['test_cjs_datadir.js', []],           // #638: CJS bundle data dir is per-invocation (mkdtemp) and removed on exit — no leak, no pid-reuse contamination, concurrent same-bundle runs never collide
   ['test_gpu_present_binding.js', []],   // per-window GPU present tail: canvasBySid + bind-at-GetWGPUSurface (A4)
   ['test_gpu_present_clamp.js', []],     // #484: producer-side present backpressure — one ship per vsync tick, held-frame flush at pump/park
   ['test_harness_leaks.js', []],         // the startup reaper's "never delete a LIVE run's fixture/server" contract
