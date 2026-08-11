@@ -12,6 +12,9 @@ var host = require('../../host.js');
 var BLOCK_FS = host.BLOCK_FS;
 var MemoryByteStore = BLOCK_FS.MemoryByteStore;
 var { fsck } = require('./fsck.js');
+// The #641 timestamp case needs v4 (ms stamps + an injectable clock); v4
+// images are checked by the v4 checker, not the v3 one.
+var fsck_v4 = require('./fsck_v4.js').fsck;
 
 var passed = 0;
 var failed = 0;
@@ -728,6 +731,96 @@ test('rename() file over a file still succeeds (control)', function () {
   assertEq(r.fs.stat('/g').ino, fIno, 'target is the source inode');
   assertEq(readFile(r.fs, '/g'), 'new', 'content replaced');
   fsckClean(r.store, 'after file-over-file rename');
+});
+
+// ---------------------------------------------------------------
+// open(O_RDONLY | O_TRUNC) — #641. POSIX: "the result of using O_TRUNC
+// without either O_RDWR or O_WRONLY is undefined", so the platform picks.
+// gucOS emulates Linux, which TRUNCATES (fs/namei.c do_open() gates the
+// truncate on regular-file + O_TRUNC alone; fs/open.c build_open_flags()
+// folds O_TRUNC into the PERMISSION request, not the access mode). Darwin
+// was measured doing the same. These cases PIN that answer so a future
+// audit does not "harmonize" it with ftruncate's EINVAL — POSIX defines
+// ftruncate and deliberately leaves this one open, and a program written
+// against Linux would silently lose its truncate.
+//
+// The other half of the pin is that truncating is NOT write access: the
+// returned fd still carries accmode 0, so write() on it is EBADF.
+// ---------------------------------------------------------------
+
+test('open(O_RDONLY|O_TRUNC) truncates, and the fd stays read-only', function () {
+  var r = makeFS();
+  mkfile(r.fs, '/t.txt', 'HELLO WORLD');
+  assertEq(r.fs.stat('/t.txt').size, 11, 'seeded size');
+
+  var fd = r.fs.open('/t.txt', O_TRUNC /* | O_RDONLY (0) */, 0);
+  assert(!isErr(fd), 'O_RDONLY|O_TRUNC must SUCCEED (the Linux answer), got ' + r.fs._lastError);
+  assertEq(r.fs.stat('/t.txt').size, 0, 'file emptied by the open');
+  assertEq(r.fs.fstat(fd).size, 0, 'fstat through the new fd agrees');
+
+  // Reading is what this fd is for, and there is nothing left to read.
+  var buf = new Uint8Array(16);
+  assertEq(r.fs.read(fd, buf, 16), 0, 'read on the truncated file returns EOF');
+
+  // ...but the fd is NOT write-capable: O_TRUNC never grants write access.
+  r.fs._lastError = null;
+  assert(isErr(r.fs.write(fd, encode('X'), 1)), 'write on the O_RDONLY fd must fail');
+  assertEq(r.fs._lastError, 'EBADF', 'write on the O_RDONLY fd is EBADF');
+  assertEq(r.fs.stat('/t.txt').size, 0, 'the refused write left nothing behind');
+
+  assertEq(r.fs.close(fd), 0, 'close');
+  assertEq(readFile(r.fs, '/t.txt'), '', 'contents are gone for good');
+  // The freed extent must be returned to the allocator, not orphaned.
+  fsckClean(r.store, 'after O_RDONLY|O_TRUNC');
+});
+
+test('O_TRUNC without O_CREAT on a missing file is still ENOENT', function () {
+  var r = makeFS();
+  r.fs._lastError = null;
+  assert(isErr(r.fs.open('/nope.txt', O_TRUNC, 0)), 'must not create');
+  assertEq(r.fs._lastError, 'ENOENT', 'errno');
+  assertEq(r.fs.stat('/nope.txt'), null, 'nothing was created');
+  fsckClean(r.store, 'after the refused O_TRUNC');
+});
+
+// POSIX open(): a successful O_TRUNC "shall mark for update the last data
+// modification and last file status change timestamps of the file" — BOTH.
+// ftruncate() carries the identical sentence. Both used to set mtime only,
+// so a size change was invisible to a ctime-based staleness check (#641).
+// v4 + an injected clock: v3 stores whole seconds, which a fast test cannot
+// tell apart, and v4 is the format the shipped OS actually mounts.
+test('O_TRUNC and ftruncate bump ctime as well as mtime (v4, injected clock)', function () {
+  var now = 1000000;                                   // ms since epoch
+  var store = new MemoryByteStore(1024 * 1024);
+  var fs = BLOCK_FS.createV4(store, { clock: function () { return now; } });
+
+  mkfile(fs, '/c.txt', 'HELLO WORLD');
+  var st0 = fs.stat('/c.txt');
+  assertEq(st0.ctime, 1000, 'seeded ctime (seconds)');
+
+  now = 5000000;
+  var fd = fs.open('/c.txt', O_TRUNC, 0);
+  assert(!isErr(fd), 'O_RDONLY|O_TRUNC: ' + fs._lastError);
+  fs.close(fd);
+  var st1 = fs.stat('/c.txt');
+  assertEq(st1.mtime, 5000, 'O_TRUNC bumped mtime');
+  assertEq(st1.ctime, 5000, 'O_TRUNC bumped ctime too');
+  assert(st1.ctime > st0.ctime, 'ctime moved forward');
+
+  // ftruncate(2) — same POSIX sentence, same rule.
+  var wfd = fs.open('/c.txt', O_RDWR, 0);
+  var b = encode('ABCDEF');
+  assertEq(fs.write(wfd, b, b.length), 6, 'refill');
+  now = 9000000;
+  assertEq(fs.ftruncate(wfd, 2), 0, 'ftruncate: ' + fs._lastError);
+  fs.close(wfd);
+  var st2 = fs.stat('/c.txt');
+  assertEq(st2.size, 2, 'ftruncate shortened the file');
+  assertEq(st2.mtime, 9000, 'ftruncate bumped mtime');
+  assertEq(st2.ctime, 9000, 'ftruncate bumped ctime too');
+
+  var p = fsck_v4(store);
+  assert(p.length === 0, 'v4 image fsck should be clean, got:\n  ' + p.join('\n  '));
 });
 
 // ---------------------------------------------------------------

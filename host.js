@@ -2984,6 +2984,21 @@ var BLOCK_FS = (function () {
           inoId: w.inoId, position: 0, accmode: flags & 3, path: resolved
         });
       }
+      // O_TRUNC on an existing regular file. NOTE the deliberate absence of
+      // an access-mode test (#641): POSIX says "the result of using O_TRUNC
+      // without either O_RDWR or O_WRONLY is undefined", and gucOS emulates
+      // Linux, which TRUNCATES — fs/namei.c do_open() gates the truncate on
+      // "the file is regular and O_TRUNC is set" alone, and fs/open.c
+      // build_open_flags() folds O_TRUNC into the *permission* request
+      // (MAY_WRITE), never into the access mode. Darwin was measured doing
+      // the same. So an O_RDONLY|O_TRUNC open succeeds, empties the file,
+      // and hands back a fd that is STILL not write-capable: accmode below
+      // is flags & 3, so write() on it is EBADF (todos/0376).
+      //
+      // ftruncate() requiring a writable fd (EINVAL, :3846) is NOT an
+      // inconsistency with this: POSIX *defines* that one and leaves this
+      // one open. Do not "harmonize" them — a program written against Linux
+      // would then lose a truncate it was promised.
       if (trunc) {
         if (w.ino.extentOffset) {
           this._alloc.free(w.ino.extentOffset);
@@ -2991,7 +3006,11 @@ var BLOCK_FS = (function () {
         w.ino.extentOffset = 0;
         w.ino.extentCapacity = 0;
         w.ino.dataSize = 0;
-        w.ino.mtime = this._now();
+        // POSIX open(): a successful O_TRUNC marks BOTH the last data
+        // modification AND the last file status change timestamps for
+        // update. ctime used to be left stale here, so a size change was
+        // invisible to any ctime-based staleness check (#641).
+        w.ino.mtime = w.ino.ctime = this._now();
         this._inodes.write(w.inoId, w.ino);
       }
     } else {
@@ -3867,7 +3886,10 @@ var BLOCK_FS = (function () {
     }
 
     ino.dataSize = size;
-    ino.mtime = this._now();
+    // POSIX ftruncate(): marks the last data modification AND last file
+    // status change timestamps for update — the same rule the O_TRUNC arm
+    // of open() follows (#641). ctime was stale here too.
+    ino.mtime = ino.ctime = this._now();
     this._inodes.write(entry.inoId, ino);
 
     // Clamp fd position if past new EOF

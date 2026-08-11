@@ -3658,7 +3658,10 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       // watches), pre-stat O_CREAT existence only when watches are live
       // (the parent-dir CREATE event), and mark O_TRUNC / fresh-create
       // dirty so `echo -n > file` — truncate or create, zero writes —
-      // still settles at close.
+      // still settles at close. The O_TRUNC test is deliberately on the
+      // FLAG, not on the access mode: O_RDONLY|O_TRUNC really does empty
+      // the file here (the Linux answer — see BlockFS.open's #641 block),
+      // so it owes a watcher the same settle a writable truncate does.
       var oAbs = P(req.path);
       var oExisted = true;
       if (this._watches.size && (req.flags & 0x40)) oExisted = fs.stat(oAbs) !== null;
