@@ -1,5 +1,5 @@
 {
-  "version": 256,
+  "version": 257,
   "defaultPackages": ["doom", "gcode", "calc", "paint"],
   "overlays": [
     {
@@ -35,6 +35,30 @@
       },
       "/usr/share/doc/sdl-gucos.md": {
         "bin": "os/doc/sdl-gucos.md"
+      },
+      "/usr/share/doc/README.md": {
+        "bin": "os/doc/README.md"
+      },
+      "/usr/share/doc/toolchain.md": {
+        "bin": "os/doc/toolchain.md"
+      },
+      "/usr/share/doc/packages.md": {
+        "bin": "os/doc/packages.md"
+      },
+      "/usr/share/doc/git.md": {
+        "bin": "os/doc/git.md"
+      },
+      "/usr/share/doc/publish.md": {
+        "bin": "os/doc/publish.md"
+      },
+      "/usr/share/doc/gcode.md": {
+        "bin": "os/doc/gcode.md"
+      },
+      "/usr/share/doc/debugging.md": {
+        "bin": "os/doc/debugging.md"
+      },
+      "/usr/doc": {
+        "link": "/usr/share/doc"
       },
       "/usr/share/gcode/GCODE.md": {
         "bin": "os/gcode/GCODE.md"

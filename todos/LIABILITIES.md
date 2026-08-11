@@ -276,4 +276,19 @@ thing this file exists to kill.
 - file: tests/lib/suite-runner.js
 - anchor: // dependency-level freshness is ticket #151 and is a much heavier mechanism.
 
+### L78 — the baked developer docs teach a hand translation of bin.json/lib.json into a cc command because `cc --project` does not exist: every in-OS rebuild pays the manual dep-walk the D1 dogfood measured (47 files, 5 -I, 3 -D for gcode)
+- ticket: #618
+- file: os/doc/packages.md
+- anchor: - `cc` has no `--project bin.json` mode. The hand translation above is
+
+### L79 — the baked developer docs state that gucman can neither build a `.pkg.tar.gz` inside gucOS nor install from a local file: an in-OS developer's local test loop stops at `cc` build + run
+- ticket: #563
+- file: os/doc/packages.md
+- anchor: - gucman cannot build a `.pkg.tar.gz` inside gucOS, and cannot install
+
+### L80 — the baked developer docs state that publish intake is a manual maintainer action: nothing automates the path from a developer's `git push` to the served package index
+- ticket: #596
+- file: os/doc/publish.md
+- anchor: - The maintainer intake is manual. There is no automatic pipeline
+
 <!-- END ENTRIES -->
