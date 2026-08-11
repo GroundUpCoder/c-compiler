@@ -13,10 +13,10 @@
 //   const r = driveBoot(['winbox &', 'sleep 2', 'echo ==l1', 'wmctl list']);
 //   const list = section(r.stdout, 'l1');
 //
-//   // multi-session (seed then read the PPMs back over the SAME image):
+//   // multi-session (seed then read the shots back over the SAME image):
 //   const { dir, image } = freshImage('os-apps-');
 //   driveBoot(seedScript, { image, timeout: 300000 });
-//   const back = driveBoot('cat /root/a.ppm\n', { image, encoding: null,
+//   const back = driveBoot('cat /root/a.png\n', { image, encoding: null,
 //                                                 maxBuffer: 32 * 1024 * 1024 });
 //   fs.rmSync(dir, { recursive: true, force: true });
 //
@@ -60,9 +60,9 @@ function freshImage(prefix = 'os-e2e-') {
 //   prefix    mkdtemp prefix when minting a fresh image (default 'os-e2e-')
 //   args      extra boot.js flags, e.g. ['--tty-out']
 //   timeout   spawn timeout ms (default 300000)
-//   maxBuffer stdout cap (default node's — pass for big PPM cat-backs)
+//   maxBuffer stdout cap (default node's — pass for big shot cat-backs)
 //   encoding  stdout encoding (default 'utf8'; pass null/'buffer' for raw
-//             Buffer output, e.g. reading binary PPM frames back)
+//             Buffer output, e.g. reading binary PNG frames back)
 function driveBoot(script, opts = {}) {
   const image = opts.image || freshImage(opts.prefix).image;
   let input = Array.isArray(script) ? script.join('\n') : String(script);
@@ -339,7 +339,44 @@ function userDirEntries(absDir) {
                                      : (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)));
 }
 
+/* Read shots back OUT of a boot's root volume and decode them (#657).
+ *
+ * `wmctl shot`/`wmctl thumb` write PNG (os/wmctl.c); a test that shot to
+ * /root/x.png reads it here AFTER the boot has exited, without a second
+ * cat-back session and without the six lines of BlockFS boilerplate that
+ * used to be copy-pasted into every file that does this.
+ *
+ *   const { d, bar } = readShots(tmp, { d: 'd.png', bar: 'bar.png' });
+ *   check('desktop is 1024x768', d.w === 1024 && d.h === 768);
+ *   check('empty area is teal', String(d.px(500, 400).slice(0, 3)) === '0,128,128');
+ *
+ * `tmp` is freshImage()'s dir. Names are relative to /root unless absolute.
+ * A missing or undecodable shot THROWS naming the path — a shot the test
+ * believes it took must never silently degrade into a skipped assertion.
+ * Values are parsePng results: { w, h, rgba, px(x,y) -> [r,g,b,a], next }. */
+function readShots(tmp, names) {
+  const { BLOCK_FS } = require(path.join(ROOT, 'host.js'));
+  const COMMON = require(path.join(ROOT, 'os/os-common.js'));
+  const { parsePng } = require('../../lib/png.js');
+  const bytes = fs.readFileSync(path.join(tmp, 'os-root.img'));
+  const store = new BLOCK_FS.MemoryByteStore(bytes.length);
+  store.setBytes(0, bytes);
+  const ufs = BLOCK_FS.createV4(store);
+  const out = {};
+  for (const key of Object.keys(names)) {
+    const name = names[key];
+    const abs = name.charAt(0) === '/' ? name : '/root/' + name;
+    let raw;
+    try { raw = COMMON.readFileBytes(ufs, abs); }
+    catch (e) { throw new Error(`readShots: ${abs} is not in the image (${e.message})`); }
+    if (!raw) throw new Error(`readShots: ${abs} is not in the image`);
+    try { out[key] = parsePng(Buffer.from(raw)); }
+    catch (e) { throw new Error(`readShots: ${abs} did not decode as PNG (${e.message})`); }
+  }
+  return out;
+}
+
 module.exports = { ROOT, BOOT, freshImage, driveBoot, section,
                    deskEntries, deskSort, deskCell,
-                   menuGroups, menuLeaves,
+                   menuGroups, menuLeaves, readShots,
                    pkgSeedPlants, bakedSeedPlants, userDirEntries };
