@@ -119,6 +119,13 @@ to non-zero bytes, so that trick does not merely need porting, it becomes
 **silently wrong**. It now reads the shot out base64 and counts non-black
 PIXELS host-side: the same predicate, on decoded pixels.
 
+The **sibling repo** (`gucos-packages`) needed the same treatment. Its
+`tests/test_fontpkg_e2e.js` runs as a member of c-compiler's kernel suite and
+carried its own P6 walker, so it went red at "pre shot parses" the moment
+wmctl changed. It now decodes through c-compiler's `tests/lib/png.js`
+(gucos-packages @c458559). Nothing outside these two repos consumes
+`wmctl shot`.
+
 `tools/os-drive-headless.mjs` loses its PPM tempfile and its host-side
 conversion entirely. `shot()` writes the bytes the OS produced **verbatim**
 (after a validating decode), and the raw `.ppm` output option is gone — a
