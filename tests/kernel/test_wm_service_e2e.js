@@ -397,6 +397,11 @@ const script = [
   // (560,360): inside alphabox AND the winbox interior — expected exactly
   // (96, 96, 224); asserted host-side out of /root/a.png after shutdown.
   'wmctl shot screen /root/a.png && echo alpha-shot-ok',
+  // #657 ALPHA CONTRACT: a PER-SURFACE shot of a SDL_WINDOW_TRANSPARENT
+  // window carries that window's own straight-alpha bytes (wmScreenshot
+  // copies the front buffer verbatim), so the PNG must be colour type 6
+  // with a=128 in alphabox's interior. The old PPM writer dropped it.
+  'wmctl shot $ASID /root/asurf.png && echo asurf-shot-ok',
   // Glass is browser-only: toggling it must not change the headless
   // composite at that pixel (nor anything else — unit-tested bit-exactly);
   // /root/g.png compared to a.png host-side.
@@ -1347,6 +1352,7 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   check('winbox rows carry no A flag',
     !((row(ae3, 'winbox').split('\t')[5] || '').includes('A')), row(ae3, 'winbox'));
   check('alpha screen shot written', out.includes('alpha-shot-ok'), out.slice(-2000));
+  check('alphabox per-surface shot written', out.includes('asurf-shot-ok'));
   // Glass: accepted by the endpoint, invisible to the headless composite
   // (pixel asserts on a.png/g.png live host-side below).
   check('wmctl glass toggles on and off',
@@ -1386,6 +1392,25 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     const g = parsePng(Buffer.from(COMMON.readFileBytes(ufs, '/root/g.png')));
     check('glass never changes the headless composite',
       String(g.px(560, 360)) === String(a.px(560, 360)), String(g.px(560, 360)));
+    // ---- #657: alpha survives the PNG encode, end to end ----
+    // alphabox is 240x160; its 4px border is opaque white and the interior
+    // is rgba(0,0,255,128). A per-surface shot copies that buffer verbatim,
+    // so the PNG must carry a=128 in the interior — the property the old
+    // P6 writer discarded by construction.
+    const asurf = parsePng(Buffer.from(COMMON.readFileBytes(ufs, '/root/asurf.png')));
+    check('alphabox surface shot is 240x160', asurf.w === 240 && asurf.h === 160,
+      `${asurf.w}x${asurf.h}`);
+    check('per-pixel ALPHA survives the PNG encode (interior a=128, not 255)',
+      String(asurf.px(120, 80)) === '0,0,255,128', String(asurf.px(120, 80)));
+    check('the opaque border still encodes a=255 (alpha is carried, not forced)',
+      String(asurf.px(1, 1)) === '255,255,255,255', String(asurf.px(1, 1)));
+    // Screen composites are opaque BY CONSTRUCTION (kernel.js
+    // wmScreenshotScreen writes 255 on every path it synthesizes), so the
+    // same encoder that preserved 128 above must show 255 here — which is
+    // what makes the assert above a statement about the ENCODER, not about
+    // one lucky buffer.
+    check('the screen composite stays opaque (a=255)',
+      a.px(560, 360)[3] === 255, String(a.px(560, 360)));
   }
   const NAVY = '0,0,128', TEAL = '0,128,128', WHITE = '255,255,255';
   const strip = (px, name, c, r) => {
