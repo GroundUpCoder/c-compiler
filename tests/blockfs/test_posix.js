@@ -606,6 +606,130 @@ test('pipe ends refuse the wrong direction (same class, fixed ends)', function (
   r.fs.close(rfd); r.fs.close(wfd);
 });
 
+// ---- #635: root-directory + cross-type preflight (rmdir / rename) ----
+// The class: any path that resolves to "/" makes lastIndexOf('/')-based
+// parent derivation hand back root ITSELF with an empty name, so the
+// entry-removal arithmetic runs against inode 1. And rename() never
+// compared source type to target type, so a rename could silently flip a
+// name's type with fsck staying clean (the corruption is semantic).
+
+var S_IFMT_ = 0xF000, S_IFDIR_ = 0x4000, S_IFREG_ = 0x8000;
+
+test('rmdir("/") on an EMPTY fs is EBUSY; root stays live and usable', function () {
+  var r = makeFS();
+  assertEq(r.fs.rmdir('/'), null, 'rmdir("/") refused');
+  assertEq(r.fs._lastError, 'EBUSY', 'errno EBUSY');
+  var st = r.fs.stat('/');
+  assert(st && (st.mode & S_IFMT_) === S_IFDIR_, 'root still a live directory');
+  assert(st.nlink > 0, 'root nlink alive');
+  // The proof inode 1 was NOT freed: the fs still takes new entries.
+  assertEq(r.fs.mkdir('/x'), 0, 'fs still usable: ' + r.fs._lastError);
+  fsckClean(r.store, 'after refused rmdir("/") on empty fs');
+});
+
+test('rmdir("/") on a POPULATED fs is EBUSY (root qua root, not merely non-empty)', function () {
+  var r = makeFS();
+  mkfile(r.fs, '/keep', 'K');
+  assertEq(r.fs.rmdir('/'), null, 'rmdir("/") refused');
+  assertEq(r.fs._lastError, 'EBUSY', 'errno EBUSY');
+  assertEq(readFile(r.fs, '/keep'), 'K', 'contents intact');
+  fsckClean(r.store, 'after refused rmdir("/") on populated fs');
+});
+
+test('rename() file over a directory is EISDIR; both intact, same inodes', function () {
+  var r = makeFS();
+  r.fs.mkdir('/d');
+  mkfile(r.fs, '/f', 'payload');
+  var fIno = r.fs.stat('/f').ino, dIno = r.fs.stat('/d').ino;
+  assertEq(r.fs.rename('/f', '/d'), null, 'file-over-directory refused');
+  assertEq(r.fs._lastError, 'EISDIR', 'errno EISDIR');
+  var fSt = r.fs.stat('/f'), dSt = r.fs.stat('/d');
+  assert(fSt && (fSt.mode & S_IFMT_) === S_IFREG_, 'source still a regular file');
+  assertEq(fSt.ino, fIno, 'source same inode');
+  assertEq(readFile(r.fs, '/f'), 'payload', 'source content intact');
+  assert(dSt && (dSt.mode & S_IFMT_) === S_IFDIR_, 'target still a directory');
+  assertEq(dSt.ino, dIno, 'target same inode');
+  fsckClean(r.store, 'after refused file-over-directory rename');
+});
+
+test('rename() directory over a file is ENOTDIR; both intact, same inodes', function () {
+  var r = makeFS();
+  r.fs.mkdir('/d');
+  mkfile(r.fs, '/d/child', 'c');
+  mkfile(r.fs, '/f', 'F');
+  var fIno = r.fs.stat('/f').ino, dIno = r.fs.stat('/d').ino;
+  assertEq(r.fs.rename('/d', '/f'), null, 'directory-over-file refused');
+  assertEq(r.fs._lastError, 'ENOTDIR', 'errno ENOTDIR');
+  var fSt = r.fs.stat('/f'), dSt = r.fs.stat('/d');
+  assert(dSt && (dSt.mode & S_IFMT_) === S_IFDIR_, 'source still a directory');
+  assertEq(dSt.ino, dIno, 'source same inode');
+  assertEq(readFile(r.fs, '/d/child'), 'c', 'source children intact');
+  assert(fSt && (fSt.mode & S_IFMT_) === S_IFREG_, 'target still a regular file');
+  assertEq(fSt.ino, fIno, 'target same inode');
+  assertEq(readFile(r.fs, '/f'), 'F', 'target content intact');
+  fsckClean(r.store, 'after refused directory-over-file rename');
+});
+
+test('rename() with "/" as source or target is EBUSY; tree intact', function () {
+  var r = makeFS();
+  r.fs.mkdir('/keep');
+  assertEq(r.fs.rename('/', '/x'), null, 'root as source refused');
+  assertEq(r.fs._lastError, 'EBUSY', 'errno EBUSY');
+  assertEq(r.fs.stat('/x'), null, 'no /x materialized');
+  assertEq(r.fs.rename('/keep', '/'), null, 'root as target refused');
+  assertEq(r.fs._lastError, 'EBUSY', 'errno EBUSY');
+  var st = r.fs.stat('/keep');
+  assert(st && (st.mode & S_IFMT_) === S_IFDIR_, '/keep intact');
+  assertEq(r.fs.mkdir('/y'), 0, 'fs still usable: ' + r.fs._lastError);
+  fsckClean(r.store, 'after refused root renames');
+});
+
+test('rename() of a directory into its own subtree is EINVAL; source intact', function () {
+  var r = makeFS();
+  r.fs.mkdir('/a');
+  r.fs.mkdir('/a/b');
+  var aIno = r.fs.stat('/a').ino;
+  // Nonexistent deep target: the base code got this one "right" by accident
+  // (ENOENT via a failed walk) — pin the POSIX errno.
+  assertEq(r.fs.rename('/a', '/a/b/c'), null, 'deep subtree rename refused');
+  assertEq(r.fs._lastError, 'EINVAL', 'errno EINVAL');
+  // EXISTING empty target inside the source: before the preflight this
+  // returned an error AND had already corrupted the store — the target's
+  // inode was dropped while its dirent survived ("entry -> not-live inode").
+  assertEq(r.fs.rename('/a', '/a/b'), null, 'existing-subtree-target rename refused');
+  assertEq(r.fs._lastError, 'EINVAL', 'errno EINVAL');
+  var st = r.fs.stat('/a');
+  assert(st && (st.mode & S_IFMT_) === S_IFDIR_, '/a still a directory');
+  assertEq(st.ino, aIno, '/a same inode');
+  assert(r.fs.stat('/a/b'), '/a/b intact');
+  fsckClean(r.store, 'after refused subtree renames');
+});
+
+test('rename() directory over an EMPTY directory still succeeds (control)', function () {
+  var r = makeFS();
+  r.fs.mkdir('/src');
+  mkfile(r.fs, '/src/kid', 'k');
+  r.fs.mkdir('/dst');
+  var srcIno = r.fs.stat('/src').ino;
+  assertEq(r.fs.rename('/src', '/dst'), 0, 'dir-over-empty-dir permitted: ' + r.fs._lastError);
+  assertEq(r.fs.stat('/src'), null, 'source gone');
+  assertEq(r.fs.stat('/dst').ino, srcIno, 'target is the source inode');
+  assertEq(readFile(r.fs, '/dst/kid'), 'k', 'children came along');
+  fsckClean(r.store, 'after dir-over-empty-dir rename');
+});
+
+test('rename() file over a file still succeeds (control)', function () {
+  var r = makeFS();
+  mkfile(r.fs, '/f', 'new');
+  mkfile(r.fs, '/g', 'old');
+  var fIno = r.fs.stat('/f').ino;
+  assertEq(r.fs.rename('/f', '/g'), 0, 'file-over-file permitted: ' + r.fs._lastError);
+  assertEq(r.fs.stat('/f'), null, 'source gone');
+  assertEq(r.fs.stat('/g').ino, fIno, 'target is the source inode');
+  assertEq(readFile(r.fs, '/g'), 'new', 'content replaced');
+  fsckClean(r.store, 'after file-over-file rename');
+});
+
 // ---------------------------------------------------------------
 
 console.log('--- POSIX-semantics Tests ---');
