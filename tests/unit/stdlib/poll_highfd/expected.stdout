@@ -1,0 +1,5 @@
+highfd n=1 nval=1 other=0
+edge n=1 nval=1 other=0
+lowfd n=1 in=1
+mix n=1 f63_nval=0 f200_nval=1
+negfd n=0 rev=0

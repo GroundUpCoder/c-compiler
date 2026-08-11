@@ -23601,16 +23601,30 @@ int getitimer(int __which, struct itimerval *__cur);
 #pragma once
 #include <sys/time.h>
 
+/* THE FD LIMIT IS FD_SETSIZE (64) AND IT IS ENFORCED, NOT MERELY DOCUMENTED
+   (#637). fds_bits holds FD_SETSIZE bits; an fd outside [0, FD_SETSIZE) would
+   index it out of bounds. The FD_* macros below bounds-check every fd against
+   [0, FD_SETSIZE) — with (unsigned) folding a negative fd into the same
+   rejection — so FD_SET/FD_CLR become a no-op and FD_ISSET reads 0 for an
+   out-of-range fd instead of touching stack memory past the struct. This makes
+   both poll() (below) and every direct select() caller memory-safe; poll()
+   additionally reports POLLNVAL for such an fd (its ->revents), which is
+   POSIX's own answer for an invalid fd. The limit is not removed — poll() still
+   cannot watch an fd >= FD_SETSIZE — because __select_impl is a link-time ABI
+   with the runtime (host.js / kernel.js), whose fd_set backends are fixed at
+   this width; widening it is a coordinated multi-backend change, not a header
+   edit. */
 #define FD_SETSIZE 64
 
 typedef struct {
   unsigned long fds_bits[FD_SETSIZE / (8 * sizeof(unsigned long))];
 } fd_set;
 
+#define __FD_INRANGE(fd) ((unsigned long)(fd) < (unsigned long)FD_SETSIZE)
 #define FD_ZERO(set)  do { for (int _i = 0; _i < (int)(sizeof((set)->fds_bits)/sizeof((set)->fds_bits[0])); _i++) (set)->fds_bits[_i] = 0; } while(0)
-#define FD_SET(fd, set)   ((set)->fds_bits[(fd) / (8 * sizeof(unsigned long))] |= (1UL << ((fd) % (8 * sizeof(unsigned long)))))
-#define FD_CLR(fd, set)   ((set)->fds_bits[(fd) / (8 * sizeof(unsigned long))] &= ~(1UL << ((fd) % (8 * sizeof(unsigned long)))))
-#define FD_ISSET(fd, set) ((set)->fds_bits[(fd) / (8 * sizeof(unsigned long))] & (1UL << ((fd) % (8 * sizeof(unsigned long)))))
+#define FD_SET(fd, set)   (__FD_INRANGE(fd) ? ((set)->fds_bits[(fd) / (8 * sizeof(unsigned long))] |= (1UL << ((fd) % (8 * sizeof(unsigned long))))) : 0UL)
+#define FD_CLR(fd, set)   (__FD_INRANGE(fd) ? ((set)->fds_bits[(fd) / (8 * sizeof(unsigned long))] &= ~(1UL << ((fd) % (8 * sizeof(unsigned long))))) : 0UL)
+#define FD_ISSET(fd, set) (__FD_INRANGE(fd) ? ((set)->fds_bits[(fd) / (8 * sizeof(unsigned long))] & (1UL << ((fd) % (8 * sizeof(unsigned long))))) : 0UL)
 
 __import int __select_impl(int nfds, int *readfds, int *writefds, int *exceptfds, long timeout_sec, long timeout_usec, int has_timeout);
 
@@ -24034,17 +24048,22 @@ struct pollfd {
 #define POLLWRNORM POLLOUT
 #define POLLWRBAND 0x100
 /* poll() implemented over select(). Limitations inherited from select():
-   fds must be < FD_SETSIZE (64); POLLPRI maps to the exceptfds set (which this
+   fds must be < FD_SETSIZE (64) — an fd >= FD_SETSIZE cannot be watched by this
+   runtime's fd_set-based transport, so poll() reports POLLNVAL for it (POSIX's
+   answer for an invalid fd) rather than indexing the fd_set out of bounds (see
+   the FD_* note above; #637). POLLPRI maps to the exceptfds set (which this
    runtime never reports, so POLLPRI/POLLERR/POLLHUP never fire); end-of-stream
    shows up as POLLIN (readable), not POLLHUP. */
 static inline int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
   fd_set rfds, wfds, efds;
   FD_ZERO(&rfds); FD_ZERO(&wfds); FD_ZERO(&efds);
   int maxfd = -1;
+  int nvalid = 0;   /* count of fds already resolved as POLLNVAL (out of range) */
   for (nfds_t i = 0; i < nfds; i++) {
     fds[i].revents = 0;
     int fd = fds[i].fd;
     if (fd < 0) continue;
+    if (fd >= FD_SETSIZE) { fds[i].revents = POLLNVAL; nvalid++; continue; }
     if (fds[i].events & (POLLIN | POLLRDNORM)) FD_SET(fd, &rfds);
     if (fds[i].events & (POLLOUT | POLLWRNORM | POLLWRBAND)) FD_SET(fd, &wfds);
     if (fds[i].events & POLLPRI) FD_SET(fd, &efds);
@@ -24052,13 +24071,16 @@ static inline int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
   }
   struct timeval tv;
   struct timeval *ptv = 0;
-  if (timeout >= 0) { tv.tv_sec = timeout / 1000; tv.tv_usec = (long)(timeout % 1000) * 1000; ptv = &tv; }
+  /* An invalid fd is an immediate event, so poll() must not block when one is
+     present (POSIX/Linux return without waiting on the timeout). */
+  if (nvalid > 0) { tv.tv_sec = 0; tv.tv_usec = 0; ptv = &tv; }
+  else if (timeout >= 0) { tv.tv_sec = timeout / 1000; tv.tv_usec = (long)(timeout % 1000) * 1000; ptv = &tv; }
   int r = select(maxfd + 1, &rfds, &wfds, &efds, ptv);
   if (r < 0) return -1;
-  int count = 0;
+  int count = nvalid;
   for (nfds_t i = 0; i < nfds; i++) {
     int fd = fds[i].fd;
-    if (fd < 0) continue;
+    if (fd < 0 || fd >= FD_SETSIZE) continue;   /* POLLNVAL already set above */
     short re = 0;
     if (FD_ISSET(fd, &rfds)) re |= (short)(fds[i].events & (POLLIN | POLLRDNORM));
     if (FD_ISSET(fd, &wfds)) re |= (short)(fds[i].events & (POLLOUT | POLLWRNORM | POLLWRBAND));
