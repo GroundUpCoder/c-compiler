@@ -24,7 +24,7 @@
 const fs = require('fs');
 const path = require('path');
 const { driveBoot, freshImage } = require('./lib/drive.js');
-const { parsePpm, encodePng } = require('../lib/png.js');
+const { parsePng, encodePng } = require('../lib/png.js');
 
 const OUT = process.argv[2] || '/tmp/nsprobe';
 fs.mkdirSync(OUT, { recursive: true });
@@ -194,7 +194,7 @@ for (const p of RUN) {
     `wmctl wait win "${p.title}" 60000`,
     `S=$(wmctl list | grep "\t${p.title}$" | sed "s/[^0-9].*//")`,
     ...p.drive,
-    `wmctl shot $S /root/shot-${p.name}.ppm && echo shot-${p.name}-ok`,
+    `wmctl shot $S /root/shot-${p.name}.png && echo shot-${p.name}-ok`,
     /* close by sid and wait on the SID, not the title — the link probe's
      * navigation changed its window title mid-run */
     `wmctl close $S`, `wmctl wait gone $S 8000`,
@@ -206,18 +206,18 @@ const r = driveBoot(script, { image, timeout: 900000, maxBuffer: 64 * 1024 * 102
 for (const p of RUN)
   check(`${p.name}: window came up and was shot`, r.stdout.includes(`shot-${p.name}-ok`));
 
-const back = driveBoot('cat ' + PROBES.map((p) => `/root/shot-${p.name}.ppm`).join(' ') + '\n',
+const back = driveBoot('cat ' + PROBES.map((p) => `/root/shot-${p.name}.png`).join(' ') + '\n',
                        { image, encoding: null, maxBuffer: 128 * 1024 * 1024 });
 let off = 0;
 for (const p of RUN) {
-  const s = parsePpm(back.stdout, off);
+  const s = parsePng(back.stdout, off);
   off = s.next;
-  fs.writeFileSync(path.join(OUT, `probe-${p.name}.png`), encodePng(s.w, s.h, s.rgb));
+  fs.writeFileSync(path.join(OUT, `probe-${p.name}.png`), encodePng(s.w, s.h, s.rgba));
   const count = (want, tol) => {
     let n = 0;
-    for (let i = 0; i < s.rgb.length; i += 3)
-      if (Math.abs(s.rgb[i] - want[0]) <= tol && Math.abs(s.rgb[i + 1] - want[1]) <= tol &&
-          Math.abs(s.rgb[i + 2] - want[2]) <= tol) n++;
+    for (let i = 0; i < s.rgba.length; i += 4)
+      if (Math.abs(s.rgba[i] - want[0]) <= tol && Math.abs(s.rgba[i + 1] - want[1]) <= tol &&
+          Math.abs(s.rgba[i + 2] - want[2]) <= tol) n++;
     return n;
   };
   for (const e of p.expect) {

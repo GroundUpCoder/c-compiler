@@ -176,4 +176,11 @@ function parsePng(buf, off = 0) {
   return { w, h, rgba, px, next: p };
 }
 
-module.exports = { encodePng, parsePng };
+/* Decode a base64-armoured PNG — the `base64 /root/shot.png` cat-back the
+ * kernel e2es use when a shot rides the tty rather than a binary readback.
+ * Same return shape as parsePng. */
+function parseB64Png(b64, off = 0) {
+  return parsePng(Buffer.from(String(b64).replace(/\s+/g, ''), 'base64'), off);
+}
+
+module.exports = { encodePng, parsePng, parseB64Png };

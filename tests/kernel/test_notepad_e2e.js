@@ -23,6 +23,7 @@ const os = require('os');
 const path = require('path');
 const cp = require('child_process');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng, parseB64Png } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -67,9 +68,9 @@ const out = boot([
   // retune the default window is 640px and the EOLN pane is 210px so the
   // text now FITS — but this still guards that it stays within its cell and
   // does not bleed into the "UTF-8" pane (comctl32 ExtTextOut ETO_CLIPPED).
-  'wmctl shot $SID /root/sbar.ppm && echo sbar-shot-ok',
+  'wmctl shot $SID /root/sbar.png && echo sbar-shot-ok',
   'echo ==sbarshot',
-  'base64 /root/sbar.ppm',
+  'base64 /root/sbar.png',
   'echo ==cut',
   // type into the EDIT, then Save As through the real file dialog
   'wmctl settext EDIT:0 "hello from notepad"',
@@ -202,9 +203,9 @@ const out = boot([
   'wmctl settext EDIT:2 long.txt',
   'wmctl click Open',
   'wmctl wait text EDIT:0 "line 100" 6000',
-  'wmctl shot $SID /root/sb.ppm && echo sb-shot-ok',
+  'wmctl shot $SID /root/sb.png && echo sb-shot-ok',
   'echo ==sbshot',
-  'base64 /root/sb.ppm',
+  'base64 /root/sb.png',
   'echo ==cut',
   // Scrollbar furniture coords (0211): the EDIT shows its WS_HSCROLL bar
   // too, so the vbar ends 16px higher — all y offsets hang off SBY (the
@@ -303,33 +304,24 @@ check('Find grayed while the document is empty',
 /* status-bar part clipping (regression): the wide "Windows (CR + LF)" pane
  * must clip at its cell border, not overflow into the fixed "UTF-8" pane.
  * Pre-fix this band held the bled "LF)" glyphs (~14 dark px); clipped it's 0. */
-function parsePpm(b64) {
-  const buf = Buffer.from(String(b64).replace(/\s+/g, ''), 'base64');
-  let p = 0;
-  const tok = () => { while ([32, 10, 9, 13].includes(buf[p])) p++;
-                      let s = p; while (![32, 10, 9, 13].includes(buf[p])) p++;
-                      return buf.slice(s, p).toString(); };
-  const magic = tok(); const w = +tok(), h = +tok(); tok(); p++;
-  return { buf, w, h, data: p, magic };
-}
 function darkCount(P, x0, x1, y0, y1) {
   let n = 0;
   for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
-    const i = P.data + (y * P.w + x) * 3;
-    if (P.buf[i] < 100 && P.buf[i + 1] < 100 && P.buf[i + 2] < 100) n++;
+    const i = (y * P.w + x) * 4;
+    if (P.rgba[i] < 100 && P.rgba[i + 1] < 100 && P.rgba[i + 2] < 100) n++;
   }
   return n;
 }
 function maxInkRow(P, x0, x1, y0, y1) {          // last row with any dark px
   let m = y0 - 1;
   for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
-    const i = P.data + (y * P.w + x) * 3;
-    if (P.buf[i] < 100 && P.buf[i + 1] < 100 && P.buf[i + 2] < 100) { m = y; break; }
+    const i = (y * P.w + x) * 4;
+    if (P.rgba[i] < 100 && P.rgba[i + 1] < 100 && P.rgba[i + 2] < 100) { m = y; break; }
   }
   return m;
 }
-const sp = parsePpm(section(out, 'sbarshot'));
-check('status-bar shot is a P6 frame', sp.magic === 'P6', sp.magic);
+const sp = parseB64Png(section(out, 'sbarshot'));
+check("status-bar shot decodes as a valid PNG", sp.w > 0 && sp.h > 0, `x`);
 // The status-bar height is FONT-DERIVED (0229), so every pixel check anchors
 // on the live rect from the tree dump (never a hardcoded 20): the bar parks
 // at the client bottom == the surface bottom, so its surface top is h-H.
@@ -405,8 +397,8 @@ check('WM_SETTEXT strips \\r\\n and lone \\r (agent settext path)',
   JSON.stringify(section(out, 'setcr')));
 
 /* the built-in WS_VSCROLL scrollbar (todos/0210) */
-const sbp = parsePpm(section(out, 'sbshot'));
-check('EDIT scrollbar shot is a P6 frame', sbp.magic === 'P6', sbp.magic);
+const sbp = parseB64Png(section(out, 'sbshot'));
+check("EDIT scrollbar shot decodes as a valid PNG", sbp.w > 0 && sbp.h > 0, `x`);
 // The channel paints COLOR_SCROLLBAR gray (192,192,192) where an unscrolled
 // pre-0210 EDIT was white text area: sample the bar column below the thumb.
 // All rows hang off the tree-derived EDIT bottom (EB = surface bottom minus
@@ -415,9 +407,9 @@ const EB = sbp.h - sbH;                       // EDIT surface bottom
 let sbGray = 0;
 for (let y = 120; y < EB - 44; y++) {         // channel, above the down arrow
   for (let x = 386; x < 396; x++) {
-    const i = sbp.data + (y * sbp.w + x) * 3;
-    if (Math.abs(sbp.buf[i] - 192) < 12 && Math.abs(sbp.buf[i + 1] - 192) < 12 &&
-        Math.abs(sbp.buf[i + 2] - 192) < 12) sbGray++;
+    const i = (y * sbp.w + x) * 4;
+    if (Math.abs(sbp.rgba[i] - 192) < 12 && Math.abs(sbp.rgba[i + 1] - 192) < 12 &&
+        Math.abs(sbp.rgba[i + 2] - 192) < 12) sbGray++;
   }
 }
 check('WS_VSCROLL draws the right-edge scrollbar channel', sbGray > 400,
@@ -427,9 +419,9 @@ check('WS_VSCROLL draws the right-edge scrollbar channel', sbGray > 400,
 let hbGray = 0;
 for (let y = EB - 16; y < EB - 4; y++) {
   for (let x = 60; x < 320; x++) {
-    const i = sbp.data + (y * sbp.w + x) * 3;
-    if (Math.abs(sbp.buf[i] - 192) < 12 && Math.abs(sbp.buf[i + 1] - 192) < 12 &&
-        Math.abs(sbp.buf[i + 2] - 192) < 12) hbGray++;
+    const i = (y * sbp.w + x) * 4;
+    if (Math.abs(sbp.rgba[i] - 192) < 12 && Math.abs(sbp.rgba[i + 1] - 192) < 12 &&
+        Math.abs(sbp.rgba[i + 2] - 192) < 12) hbGray++;
   }
 }
 check('WS_HSCROLL draws the bottom-edge scrollbar', hbGray > 1500,
