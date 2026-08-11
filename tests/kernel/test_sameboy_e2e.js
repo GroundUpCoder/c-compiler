@@ -31,6 +31,7 @@ const os = require('os');
 const path = require('path');
 const cp = require('child_process');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -92,7 +93,7 @@ function sessionApps() {
     // first checkerboard frame instead of betting one fixed sleep against
     // CPU contention (the flake-gate lesson — a lone sleep-3 shot caught
     // dmg_boot's 2-shade logo under load ×10).
-    'for i in 1 2 3 4 5 6 7 8; do wmctl shot $SID /root/sb$i.ppm; sleep 1.5; done',
+    'for i in 1 2 3 4 5 6 7 8; do wmctl shot $SID /root/sb$i.png; sleep 1.5; done',
     'echo shots-ok',
     // bar click opens File as a REAL "#32768" popup child over the LIVE client
     'wmctl click $SID 12 10',
@@ -100,16 +101,16 @@ function sessionApps() {
     'echo ==plist',
     'wmctl list',
     'echo ==cut',
-    'wmctl shot screen /root/menu.ppm && echo shot-menu-ok',
+    'wmctl shot screen /root/menu.png && echo shot-menu-ok',
     'wmctl key $SID 41 27',                        // ESC closes the popup
     'wmctl wait nowin "#32768" 8000',
     // Emulation>Pause via the agent path (label click, menu closed — A12):
     // the frame loop freezes, so time-separated client shots go identical.
     'wmctl click Pause',
     waitTree("text='Pause' checked"),
-    'wmctl shot $SID /root/p1.ppm && echo shot-p1-ok',
+    'wmctl shot $SID /root/p1.png && echo shot-p1-ok',
     'sleep 2',                                     // timing subject: WOULD animate here if Pause did not really freeze the loop
-    'wmctl shot $SID /root/p2.ppm && echo shot-p2-ok',
+    'wmctl shot $SID /root/p2.png && echo shot-p2-ok',
     'wmctl click Pause',
     waitTree("text='Pause'$"),
     // nested submenu action (Options>Palette>DMG Green) over the live emulator
@@ -118,7 +119,7 @@ function sessionApps() {
     // Same series shape: presents are per-GB-frame, so under load the first
     // shot could still be a pre-swap grey frame — the checker accepts the
     // first fully-DMG-green one (render-settle, pixel-only).
-    'for i in 1 2 3; do wmctl shot $SID /root/pal$i.ppm; sleep 1; done',
+    'for i in 1 2 3; do wmctl shot $SID /root/pal$i.png; sleep 1; done',
     'echo shot-pal-ok',
     // File>Open ROM... -> the real comdlg32 modal -> the live-reload path.
     // Any >=0x150-byte file is a loadable (if nonsensical) cart image.
@@ -139,7 +140,7 @@ function sessionApps() {
     'wmctl wait win SameBoy',                       // window spawn (0155)
     'sleep 20',                                    // timing subject: cgb_boot animation + game intro frames render
     'CSID=$(wmctl list | grep "SameBoy$" | sed "s/[^0-9].*//")',
-    'wmctl shot $CSID /root/sbc.ppm && echo shot-cgb-ok',
+    'wmctl shot $CSID /root/sbc.png && echo shot-cgb-ok',
   ] : []).concat([
     'grep "^gb" /etc/openwith /usr/share/openwith 2>/dev/null || echo ==assoc',
     'cat /usr/share/openwith',
@@ -220,32 +221,30 @@ function sessionApps() {
   return { win1, pop };
 }
 
-/* ---- session B: pixel-level proof from the PPMs ---- */
+/* ---- session B: pixel-level proof from the PNG shots ---- */
 function sessionFrames(geom) {
-  const files = ['/root/sb1.ppm', '/root/sb2.ppm', '/root/sb3.ppm', '/root/sb4.ppm',
-                 '/root/sb5.ppm', '/root/sb6.ppm', '/root/sb7.ppm', '/root/sb8.ppm',
-                 '/root/p1.ppm', '/root/p2.ppm',
-                 '/root/pal1.ppm', '/root/pal2.ppm', '/root/pal3.ppm', '/root/menu.ppm']
-    .concat(HAVE_GBC ? ['/root/sbc.ppm'] : []);
+  const files = ['/root/sb1.png', '/root/sb2.png', '/root/sb3.png', '/root/sb4.png',
+                 '/root/sb5.png', '/root/sb6.png', '/root/sb7.png', '/root/sb8.png',
+                 '/root/p1.png', '/root/p2.png',
+                 '/root/pal1.png', '/root/pal2.png', '/root/pal3.png', '/root/menu.png']
+    .concat(HAVE_GBC ? ['/root/sbc.png'] : []);
   const b = driveBoot('cat ' + files.join(' ') + '\n',
     { image, timeout: 120000, maxBuffer: 64 * 1024 * 1024, encoding: null });
 
-  function parsePPM(buf, off) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) return null;
-    const w = +m[1], h = +m[2], data = off + m[0].length;
-    return { w, h, data, end: data + w * h * 3 };
+  // One PNG shot out of the concatenated cat-back stream (#657);
+  // null on a missing/short shot, so the callers' `if (!p)` guards hold.
+  function parseShot(buf, off) {
+    try { return parsePng(buf, off); } catch (e) { return null; }
   }
   /* Sample the CLIENT area only (y >= y0): the window shot is the parent
    * surface, whose top MENU_BAR_H rows are the never-painted strip under
    * the anchored bar child (zeros), not emulator pixels. */
-  function colorSet(buf, ppm, y0) {
+  function colorSet(shot, y0) {
     const colors = new Set();
-    for (let y = y0; y < ppm.h; y += 3) {
-      for (let x = 0; x < ppm.w; x += 3) {
-        const i = ppm.data + (y * ppm.w + x) * 3;
-        colors.add((buf[i] << 16) | (buf[i + 1] << 8) | buf[i + 2]);
+    for (let y = y0; y < shot.h; y += 3) {
+      for (let x = 0; x < shot.w; x += 3) {
+        const i = (y * shot.w + x) * 4;
+        colors.add((shot.rgba[i] << 16) | (shot.rgba[i + 1] << 8) | shot.rgba[i + 2]);
       }
     }
     return colors;
@@ -256,12 +255,12 @@ function sessionFrames(geom) {
   const series = [];
   let cursor = 0;
   for (let i = 0; i < 8; i++) {
-    const p = parsePPM(b.stdout, cursor);
+    const p = parseShot(b.stdout, cursor);
     if (!p) break;
     series.push(p);
-    cursor = p.end;
+    cursor = p.next;
   }
-  check('all 8 DMG series shots parse as P6 at full window size 480x462',
+  check('all 8 DMG series shots parse as PNG at full window size 480x462',
     series.length === 8 && series.every(p => p.w === 480 && p.h === 462),
     series.length + ' parsed');
   if (!series.length) return;
@@ -271,7 +270,7 @@ function sessionFrames(geom) {
   // not a histogram guess. The checkerboard uses at least 3 of them; scan
   // for the first frame past dmg_boot's logo.
   const GREYS = new Set([0x000000, 0x555555, 0xAAAAAA, 0xFFFFFF]);
-  const sets = series.map(p => colorSet(b.stdout, p, 30));
+  const sets = series.map(p => colorSet(p, 30));
   const k = sets.findIndex(s => s.size >= 3 && [...s].every(c => GREYS.has(c)));
   check('a series frame reaches the checkerboard (>=3 exact GB_PALETTE_GREY shades)',
     k >= 0, sets.map(s => s.size).join(','));
@@ -283,8 +282,8 @@ function sessionFrames(geom) {
     for (let j = k; j + 1 < series.length && !animated; j++) {
       let diff = 0;
       const a1 = series[j], a2 = series[j + 1];
-      for (let i = 0; i < a1.end - a1.data; i++) {
-        if (b.stdout[a1.data + i] !== b.stdout[a2.data + i]) diff++;
+      for (let i = 0; i < a1.rgba.length; i++) {
+        if (a1.rgba[i] !== a2.rgba[i]) diff++;
       }
       if (diff > 1000) animated = true;
     }
@@ -293,18 +292,18 @@ function sessionFrames(geom) {
   }
 
   /* ---- Pause really froze the frame loop: byte-identical shots 2s apart ---- */
-  const q1 = parsePPM(b.stdout, cursor);
-  const q2 = q1 ? parsePPM(b.stdout, q1.end) : null;
+  const q1 = parseShot(b.stdout, cursor);
+  const q2 = q1 ? parseShot(b.stdout, q1.next) : null;
   check('pause shots parse at 480x462',
     q1 && q2 && q1.w === 480 && q1.h === 462 && q2.w === 480 && q2.h === 462);
   if (q1 && q2) {
     let pdiff = 0;
-    for (let i = 0; i < q1.end - q1.data; i++) {
-      if (b.stdout[q1.data + i] !== b.stdout[q2.data + i]) pdiff++;
+    for (let i = 0; i < q1.rgba.length; i++) {
+      if (q1.rgba[i] !== q2.rgba[i]) pdiff++;
     }
     check('Emulation>Pause froze the client (shots 2s apart byte-identical)',
       pdiff === 0, pdiff + ' bytes differ');
-    cursor = q2.end;
+    cursor = q2.next;
   }
 
   /* ---- the nested-submenu palette action landed on the next frames ----
@@ -313,10 +312,10 @@ function sessionFrames(geom) {
    * frame — accept the first fully-DMG-green one in the 3-shot series. */
   const pals = [];
   for (let i = 0; i < 3; i++) {
-    const p = parsePPM(b.stdout, cursor);
+    const p = parseShot(b.stdout, cursor);
     if (!p) break;
     pals.push(p);
-    cursor = p.end;
+    cursor = p.next;
   }
   check('all 3 palette shots parse at 480x462',
     pals.length === 3 && pals.every(p => p.w === 480 && p.h === 462),
@@ -326,7 +325,7 @@ function sessionFrames(geom) {
     // LCD-off shade) — the swizzle chain (rgb_encode -> DIB -> SetDIBits ->
     // StretchBlt -> shot) must round-trip these bytes exactly.
     const DMGPAL = new Set([0x081810, 0x396139, 0x84A563, 0xC6DE8C, 0xD2E6A6]);
-    const psets = pals.map(p => colorSet(b.stdout, p, 30));
+    const psets = pals.map(p => colorSet(p, 30));
     check('a palette shot is fully DMG Green (>=3 exact GB_PALETTE_DMG shades, no others)',
       psets.some(s => s.size >= 3 && [...s].every(c => DMGPAL.has(c))),
       psets.map(s => [...s].map(c => c.toString(16)).join('/')).join(' | '));
@@ -334,11 +333,11 @@ function sessionFrames(geom) {
 
   /* ---- deterministic headless composite: COLOR_MENU over the live shm
    * client — the same §3.4 probe the gpubox test runs over a GPU client ---- */
-  const ms = parsePPM(b.stdout, cursor);
+  const ms = parseShot(b.stdout, cursor);
   check('menu screen shot parses', !!ms, ms && `${ms.w}x${ms.h}`);
   if (ms && geom && geom.win1) {
     const px = (x, y) => String(Array.from(
-      b.stdout.subarray(ms.data + (y * ms.w + x) * 3, ms.data + (y * ms.w + x) * 3 + 3)));
+      ms.px(x, y).slice(0, 3)));
     // bar strip: COLOR_MENU face at the right end of the strip (past titles)
     const barP = px(geom.win1.x + geom.win1.w - 4, geom.win1.y + 10);
     check('bar strip composites COLOR_MENU over the emulator window',
@@ -347,17 +346,17 @@ function sessionFrames(geom) {
     const popP = geom.pop ? px(geom.pop.x + 8, geom.pop.y + 9) : 'no-row';
     check('popup child composites COLOR_MENU over the live client',
       popP === '192,192,192', popP);
-    cursor = ms.end;
+    cursor = ms.next;
   } else if (ms) {
-    cursor = ms.end;
+    cursor = ms.next;
   }
 
   if (HAVE_GBC) {
-    const p3 = parsePPM(b.stdout, cursor);
+    const p3 = parseShot(b.stdout, cursor);
     check('CGB shot parses at 480x462', p3 !== null && p3.w === 480 && p3.h === 462);
     if (p3) {
       const GREYS2 = new Set([0x000000, 0x555555, 0xAAAAAA, 0xFFFFFF]);
-      const c3 = colorSet(b.stdout, p3, 30);
+      const c3 = colorSet(p3, 30);
       const nonGrey = [...c3].filter(c => !GREYS2.has(c));
       check('CGB frame is colorful (>=6 distinct colors — real cgb_boot handoff)',
         c3.size >= 6, c3.size + ' colors');

@@ -24,6 +24,7 @@ const os = require('os');
 const path = require('path');
 const cp = require('child_process');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -54,7 +55,7 @@ function sessionA() {
     'wmctl list',
     'SID=$(wmctl list | grep "GDI Demo$" | sed "s/[^0-9].*//")',
     'wmctl wait seq $SID 1 6000',
-    'wmctl shot $SID /root/gdi1.ppm && echo shot1-ok',
+    'wmctl shot $SID /root/gdi1.png && echo shot1-ok',
     // ---- #278 resize legs. WS_THICKFRAME makes this a REAL kernel resize
     // (SURFACE_RESIZE -> WM_SIZE -> invalidate -> re-render at the new
     // client size), not a SET_DST bitmap scale — the shots below parse at
@@ -62,7 +63,7 @@ function sessionA() {
     'wmctl resize $SID 640 480 && echo resize-ok',
     'wmctl wait dim $SID 640x480',
     'sleep 1',       // timing subject: post-resize re-render present (the cairo idiom)
-    'wmctl shot $SID /root/gdi3.ppm && echo shot3-ok',
+    'wmctl shot $SID /root/gdi3.png && echo shot3-ok',
     // maximize: wm.c MOVE+RESIZEs a resizable window to the work area
     // (screen-derived — no fixed dim to wait on; annotated settle).
     'wmctl max $SID && echo max-ok',
@@ -70,7 +71,7 @@ function sessionA() {
     'echo ==maxlist',
     'wmctl list',
     'echo ==cut',
-    'wmctl shot $SID /root/gdi4.ppm && echo shot4-ok',
+    'wmctl shot $SID /root/gdi4.png && echo shot4-ok',
     // restore: the toggle returns to the saved floating rect — a REAL wait
     // target (driveBoot fails loud on a wait timeout).
     'wmctl max $SID',
@@ -136,33 +137,31 @@ function sessionA2() {
     'wmctl wait win "GDI Demo" 10000',
     'SID=$(wmctl list | grep "GDI Demo$" | sed "s/[^0-9].*//")',
     'wmctl wait seq $SID 1 6000',
-    'wmctl shot $SID /root/gdi2.ppm && echo shot2-ok',
+    'wmctl shot $SID /root/gdi2.png && echo shot2-ok',
     '',
   ].join('\n'), { image }).stdout;
   check('second boot shot written', out.includes('shot2-ok'));
 }
 
-/* ---- session B: extract the PPMs and probe the scene ---- */
+/* ---- session B: extract the PNG shots and probe the scene ---- */
 function sessionB(maxDims) {
-  const b = driveBoot('cat /root/gdi1.ppm /root/gdi2.ppm /root/gdi3.ppm /root/gdi4.ppm\n',
+  const b = driveBoot('cat /root/gdi1.png /root/gdi2.png /root/gdi3.png /root/gdi4.png\n',
     { image, encoding: null, timeout: 120000, maxBuffer: 64 * 1024 * 1024 });
   const buf = b.stdout;
 
-  function parsePPM(off) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) return null;
-    const w = +m[1], h = +m[2], data = off + m[0].length;
-    return { w, h, data, end: data + w * h * 3 };
+  // One PNG shot out of the concatenated cat-back stream (#657);
+  // null on a missing/short shot, so the callers' `if (!p)` guards hold.
+  function parseShot(off) {
+    try { return parsePng(buf, off); } catch (e) { return null; }
   }
-  const p1 = parsePPM(0);
-  check('shot parses as P6 at full client size 480x360',
+  const p1 = parseShot(0);
+  check('shot parses as PNG at full client size 480x360',
     p1 !== null && p1.w === 480 && p1.h === 360, p1 && `${p1.w}x${p1.h}`);
   if (!p1) return;
 
   const px = (x, y) => {
-    const i = p1.data + (y * p1.w + x) * 3;
-    return [buf[i], buf[i + 1], buf[i + 2]];
+    const i = (y * p1.w + x) * 4;
+    return [p1.rgba[i], p1.rgba[i + 1], p1.rgba[i + 2]];
   };
   const eq = (p, r, g, bch) => p[0] === r && p[1] === g && p[2] === bch;
   const probe = (name, x, y, r, g, bch) =>
@@ -224,12 +223,12 @@ function sessionB(maxDims) {
   probe('StretchBlt 2x bottom-right blue', 130, 340, 0, 120, 215);
 
   /* Bit-exactness: two independent boots' paints are byte-identical. */
-  const p2 = parsePPM(p1.end);
+  const p2 = parseShot(p1.next);
   check('second shot parses at 480x360',
     p2 !== null && p2.w === 480 && p2.h === 360, p2 && `${p2.w}x${p2.h}`);
   if (p2) {
     check('independent boots paint bit-exact (shot1 == shot2)',
-      buf.subarray(p1.data, p1.end).equals(buf.subarray(p2.data, p2.end)));
+      p1.rgba.equals(p2.rgba));
   }
 
   /* ---- #278: the resized shots re-RENDER the 480x360 design grid at the
@@ -237,13 +236,13 @@ function sessionB(maxDims) {
    * 480|360) scaling; all points sit >=5px inside their region so +/-1
    * rounding can never flip them. */
   if (!p2) return;
-  const p3 = parsePPM(p2.end);
+  const p3 = parseShot(p2.next);
   check('resized shot parses at the NEW client size 640x480 (re-render, not scale)',
     p3 !== null && p3.w === 640 && p3.h === 480, p3 && `${p3.w}x${p3.h}`);
   if (p3) {
     const px3 = (x, y) => {
-      const i = p3.data + (y * p3.w + x) * 3;
-      return [buf[i], buf[i + 1], buf[i + 2]];
+      const i = (y * p3.w + x) * 4;
+      return [p3.rgba[i], p3.rgba[i + 1], p3.rgba[i + 2]];
     };
     const probe3 = (name, x, y, r, g, bch) =>
       check(name, eq(px3(x, y), r, g, bch), `(${x},${y}) = ${px3(x, y)}`);
@@ -267,14 +266,14 @@ function sessionB(maxDims) {
 
   /* maximized shot: dims must equal the wmctl list row's, content at the
    * work-area scale (screen-derived — computed, not hardcoded) */
-  const p4 = p3 ? parsePPM(p3.end) : null;
+  const p4 = p3 ? parseShot(p3.next) : null;
   check('maximized shot parses at the work-area size from wmctl list',
     p4 !== null && maxDims !== null && p4.w === maxDims.w && p4.h === maxDims.h,
     (p4 && `${p4.w}x${p4.h}`) + ' vs ' + JSON.stringify(maxDims));
   if (p4 && maxDims) {
     const px4 = (x, y) => {
-      const i = p4.data + (y * p4.w + x) * 3;
-      return [buf[i], buf[i + 1], buf[i + 2]];
+      const i = (y * p4.w + x) * 4;
+      return [p4.rgba[i], p4.rgba[i + 1], p4.rgba[i + 2]];
     };
     const mx = (v) => Math.round(v * maxDims.w / 480);
     const my = (v) => Math.round(v * maxDims.h / 360);

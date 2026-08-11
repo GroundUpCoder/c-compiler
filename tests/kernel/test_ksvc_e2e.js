@@ -25,6 +25,7 @@
 const fs = require('fs');
 const path = require('path');
 const { driveBoot, freshImage, section } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 const K = require(path.join(ROOT, 'kernel.js'));
@@ -55,7 +56,7 @@ function episode(title, tag) {
     'sleep 1',   // genuine no-marker settle: wm.c EV_CREATED MOVE (map ack)
     `echo ==list-${tag}`,
     'wmctl list',
-    `wmctl shot screen /root/${tag}.ppm && echo shot-${tag}-ok`,
+    `wmctl shot screen /root/${tag}.png && echo shot-${tag}-ok`,
     'pkill winbox',
     `wmctl wait nowin "${name}"`,
   ];
@@ -74,7 +75,7 @@ const script = [
   'wmctl list',
   'wmctl overview && echo overview-ok',
   'sleep 1',   // genuine no-marker settle: EV_OVERVIEW -> OVERVIEW_SET round-trip
-  'wmctl shot screen /root/ov.ppm && echo shot-ov-ok',
+  'wmctl shot screen /root/ov.png && echo shot-ov-ok',
   'echo ==done',
 ];
 
@@ -84,26 +85,24 @@ for (const tag of ['base', 'long', 'cjk', 'ov'])
   check(`${tag} shot written`, aout.includes(`shot-${tag}-ok`));
 check('overview entered', aout.includes('overview-ok'));
 
-// ---- read the PPMs back over the same image ----
-const b = driveBoot('cat /root/base.ppm /root/long.ppm /root/cjk.ppm /root/ov.ppm\n',
+// ---- read the PNG shots back over the same image ----
+const b = driveBoot('cat /root/base.png /root/long.png /root/cjk.png /root/ov.png\n',
   { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });
 
-function parsePPM(buf, off) {
-  const head = buf.toString('latin1', off, off + 32);
-  const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-  if (!m) return null;
-  const w = +m[1], h = +m[2], data = off + m[0].length;
-  return { w, h, data, end: data + w * h * 3 };
+// One PNG shot out of the concatenated cat-back stream (#657);
+// null on a missing/short shot, so the callers' `if (!p)` guards hold.
+function parseShot(buf, off) {
+  try { return parsePng(buf, off); } catch (e) { return null; }
 }
 const shots = {};
 {
   let off = 0;
   for (const tag of ['base', 'long', 'cjk', 'ov']) {
-    const p = parsePPM(b.stdout, off);
-    check(`${tag} PPM parses`, !!p);
+    const p = parseShot(b.stdout, off);
+    check(`${tag} PNG parses`, !!p);
     if (!p) return finish();
     shots[tag] = p;
-    off = p.end;
+    off = p.next;
   }
 }
 
@@ -134,7 +133,7 @@ const srcover = (s, a, d) => (s * a + d * (255 - a) + 127) / 255 | 0;
 
 // Bit-compare a label render against a composite region whose background is
 // given per-row by bg(row) -> [r,g,b]. Returns the first mismatch or null.
-function compareLabel(ppm, label, x0, y0, bg) {
+function compareLabel(shot, label, x0, y0, bg) {
   for (let gy = 0; gy < label.h; gy++) {
     for (let gx = 0; gx < label.w; gx++) {
       const si = (gy * label.w + gx) * 4;
@@ -145,7 +144,7 @@ function compareLabel(ppm, label, x0, y0, bg) {
         srcover(label.bytes[si + 1], al, back[1]),
         srcover(label.bytes[si + 2], al, back[2]),
       ];
-      const di = ppm.data + ((y0 + gy) * ppm.w + (x0 + gx)) * 3;
+      const di = ((y0 + gy) * shot.w + (x0 + gx)) * 4;
       for (let c = 0; c < 3; c++) {
         if (b.stdout[di + c] !== exp[c]) {
           return { x: x0 + gx, y: y0 + gy, c,
@@ -177,7 +176,7 @@ function titleLeg(tag, name) {
   let ink = 0;
   for (let gy = 0; gy < copy.h; gy++)
     for (let gx = 0; gx < copy.w; gx++) {
-      const di = shots[tag].data + ((y0 + gy) * shots[tag].w + (x0 + gx)) * 3;
+      const di = ((y0 + gy) * shots[tag].w + (x0 + gx)) * 4;
       if (b.stdout[di] !== NAVY[0] || b.stdout[di + 1] !== NAVY[1] ||
           b.stdout[di + 2] !== NAVY[2]) ink++;
     }
@@ -195,7 +194,7 @@ if (base) {
   let dark = 0;
   for (let yy = by; yy < by + K.WM_CLOSE_W; yy++)
     for (let xx = bx; xx < bx + K.WM_CLOSE_W; xx++) {
-      const di = shots.base.data + (yy * shots.base.w + xx) * 3;
+      const di = (yy * shots.base.w + xx) * 4;
       if (b.stdout[di] < 96 && b.stdout[di + 1] < 96 && b.stdout[di + 2] < 96) dark++;
     }
   check('base: close box has the rasterized x (dark ink)', dark > 5, String(dark));
@@ -225,7 +224,7 @@ titleLeg('cjk', CJK);
     // N=1 grid on 1024x768: cell 240x160+392+288 (test_overview_e2e).
     const cell = { x: 392, y: 288, w: 240, h: 160 };
     // sanity: the live miniature is really there (interior orange)
-    const mi = shots.ov.data + ((cell.y + 64) * shots.ov.w + (cell.x + 88)) * 3;
+    const mi = ((cell.y + 64) * shots.ov.w + (cell.x + 88)) * 4;
     check('ov: miniature interior is winbox orange',
       b.stdout[mi] === 255 && b.stdout[mi + 1] === 140 && b.stdout[mi + 2] === 0,
       [b.stdout[mi], b.stdout[mi + 1], b.stdout[mi + 2]].join(','));

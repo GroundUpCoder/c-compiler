@@ -27,6 +27,7 @@ const os = require('os');
 const path = require('path');
 const cp = require('child_process');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 try { require.resolve('webgpu'); }
 catch (e) {
@@ -58,14 +59,14 @@ function sessionRender() {
     'wmctl list',
     'SID=$(wmctl list | grep "gpubox$" | sed "s/[^0-9].*//")',
     'wmctl wait seq $SID 1',                         // first Dawn frame presented (device+surface ready) (0155)
-    'wmctl shot $SID /root/g0.ppm && echo shot0-ok',
+    'wmctl shot $SID /root/g0.png && echo shot0-ok',
     // Client resize (todos/0019): configure -> gpubox reconfigures its Dawn
     // surface + depth at 320x200 -> readback ack swaps the kernel buffer.
     'wmctl resize $SID 320 200 && echo resize-ok',
     'wmctl wait dim $SID 320x200',                   // reconfigure ack: readback swapped the kernel buffer (0155)
     'echo ==list1b',
     'wmctl list',
-    'wmctl shot $SID /root/gr.ppm && echo shotr-ok',
+    'wmctl shot $SID /root/gr.png && echo shotr-ok',
     'wmctl close $SID',
     'wmctl wait nowin gpubox',                       // SDL_Quit -> Dawn drain -> exit -> window gone (0155)
     'echo ==list2',
@@ -74,7 +75,7 @@ function sessionRender() {
     'wmctl wait win gpubox',                         // window spawn (0155)
     'SID=$(wmctl list | grep "gpubox$" | sed "s/[^0-9].*//")',
     'wmctl wait seq $SID 1',                         // first Dawn frame presented (0155)
-    'wmctl shot $SID /root/g45.ppm && echo shot45-ok',
+    'wmctl shot $SID /root/g45.png && echo shot45-ok',
     'wmctl close $SID',
     'wmctl wait nowin gpubox',                       // window gone (0155)
     'echo ==list3',
@@ -89,11 +90,11 @@ function sessionRender() {
     out.includes('gpubox: ready 256x256'), JSON.stringify(out.slice(0, 300)));
   const row1 = section('list1').split('\n').find((l) => l.endsWith('\tgpubox')) || '';
   check('gpubox opens a WM-placed 256x256 window', row1.includes('256x256'), row1);
-  check('both poses shot to PPM', out.includes('shot0-ok') && out.includes('shot45-ok'));
+  check('both poses shot to PNG', out.includes('shot0-ok') && out.includes('shot45-ok'));
   const row1b = section('list1b').split('\n').find((l) => l.endsWith('\tgpubox')) || '';
   check('wmctl resize renegotiates: window is 320x200 after the ack',
     out.includes('resize-ok') && row1b.includes('320x200'), row1b);
-  check('resized pose shot to PPM', out.includes('shotr-ok'));
+  check('resized pose shot to PNG', out.includes('shotr-ok'));
   // A ghost window would show as a list ROW (title column); the next launch's
   // "gpubox: ready" stdout may interleave into the section — ignore non-rows.
   const hasRow = (sec) => sec.split('\n').some((l) => l.endsWith('\tgpubox'));
@@ -102,33 +103,32 @@ function sessionRender() {
   check('...and again at pose 45', !hasRow(section('list3')));
 }
 
-/* ---- session B: extract the PPMs byte-clean and tolerance-check ---- */
+/* ---- session B: extract the PNG shots byte-clean and tolerance-check ---- */
 function sessionPixels() {
-  const b = driveBoot('cat /root/g0.ppm /root/gr.ppm /root/g45.ppm\n', { image, timeout: 120000, maxBuffer: 8 * 1024 * 1024, encoding: null });
+  const b = driveBoot('cat /root/g0.png /root/gr.png /root/g45.png\n', { image, timeout: 120000, maxBuffer: 8 * 1024 * 1024, encoding: null });
 
-  function parsePPM(buf, off) {
-    const m = buf.toString('latin1', off, off + 32).match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) return null;
-    const w = +m[1], h = +m[2], data = off + m[0].length;
-    return { w, h, data, end: data + w * h * 3 };
+  // One PNG shot out of the concatenated cat-back stream (#657);
+  // null on a missing/short shot, so the callers' `if (!p)` guards hold.
+  function parseShot(buf, off) {
+    try { return parsePng(buf, off); } catch (e) { return null; }
   }
-  const px = (buf, ppm, x, y) => {
-    const i = ppm.data + (y * ppm.w + x) * 3;
-    return [buf[i], buf[i + 1], buf[i + 2]];
+  const px = (shot, x, y) => {
+    const i = (y * shot.w + x) * 4;
+    return [shot.rgba[i], shot.rgba[i + 1], shot.rgba[i + 2]];
   };
   const near = (got, want, tol) => got.every((v, i) => Math.abs(v - want[i]) <= tol);
-  const colorCount = (buf, ppm) => {
+  const colorCount = (shot) => {
     const colors = new Set();
-    for (let y = 0; y < ppm.h; y += 3)
-      for (let x = 0; x < ppm.w; x += 3) {
-        const p = px(buf, ppm, x, y);
+    for (let y = 0; y < shot.h; y += 3)
+      for (let x = 0; x < shot.w; x += 3) {
+        const p = px(shot, x, y);
         colors.add((p[0] << 16) | (p[1] << 8) | p[2]);
       }
     return colors;
   };
 
-  const g0 = parsePPM(b.stdout, 0);
-  check('pose-0 shot parses as P6 at full client size 256x256',
+  const g0 = parseShot(b.stdout, 0);
+  check('pose-0 shot parses as PNG at full client size 256x256',
     g0 !== null && g0.w === 256 && g0.h === 256, g0 && `${g0.w}x${g0.h}`);
   if (!g0) return;
   const c0 = px(b.stdout, g0, 128, 128);
@@ -138,8 +138,8 @@ function sessionPixels() {
     near(px(b.stdout, g0, 4, 4), CLEAR, 12) && near(px(b.stdout, g0, 251, 251), CLEAR, 12),
     px(b.stdout, g0, 4, 4).join(','));
 
-  const gr = parsePPM(b.stdout, g0.end);
-  check('resized shot parses as P6 at the NEW client size 320x200',
+  const gr = parseShot(b.stdout, g0.next);
+  check('resized shot parses as PNG at the NEW client size 320x200',
     gr !== null && gr.w === 320 && gr.h === 200, gr && `${gr.w}x${gr.h}`);
   if (!gr) return;
   check('resized center is still the lit red +Z face (re-rendered, not scaled)',
@@ -148,11 +148,11 @@ function sessionPixels() {
     near(px(b.stdout, gr, 4, 4), CLEAR, 12) && near(px(b.stdout, gr, 315, 195), CLEAR, 12),
     px(b.stdout, gr, 315, 195).join(','));
 
-  const g45 = parsePPM(b.stdout, gr.end);
-  check('pose-45 shot parses as P6 256x256',
+  const g45 = parseShot(b.stdout, gr.next);
+  check('pose-45 shot parses as PNG 256x256',
     g45 !== null && g45.w === 256 && g45.h === 256, g45 && `${g45.w}x${g45.h}`);
   if (!g45) return;
-  const colors45 = colorCount(b.stdout, g45);
+  const colors45 = colorCount(g45);
   check('pose-45 shows a rotated cube (>=3 flat-lit colors: faces + clear)',
     colors45.size >= 3, colors45.size + ' distinct colors');
   const c45 = px(b.stdout, g45, 128, 128);

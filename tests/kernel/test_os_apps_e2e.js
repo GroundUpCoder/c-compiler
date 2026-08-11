@@ -20,6 +20,7 @@ const os = require('os');
 const path = require('path');
 const cp = require('child_process');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 const BOOT = path.join(ROOT, 'os/boot.js');
@@ -91,9 +92,9 @@ function sessionApps() {
     // 0021 acceptance: doom is fixed-res (no SDL_WINDOW_RESIZABLE) — the
     // kernel refuses the resize and the window keeps its geometry.
     'wmctl resize $DSID 900 700 || echo resize-refused',
-    'wmctl shot $DSID /root/doom.ppm && echo shot-doom-ok',
-    'wmctl shot $GSID /root/gb.ppm && echo shot-gb-ok',
-    'wmctl shot $QSID /root/quake.ppm && echo shot-quake-ok',
+    'wmctl shot $DSID /root/doom.png && echo shot-doom-ok',
+    'wmctl shot $GSID /root/gb.png && echo shot-gb-ok',
+    'wmctl shot $QSID /root/quake.png && echo shot-quake-ok',
     '',
   ].join('\n');
 
@@ -132,56 +133,54 @@ function sessionApps() {
     out.includes('resize-refused'));
   check('doom is not resizable (no R flag in wmctl list)',
     !(doomRow.split('\t')[5] || '').includes('R'), doomRow);   // FLAGS col (after DST, 0024)
-  check('wmctl shot wrote all three surface PPMs',
+  check('wmctl shot wrote all three surface PNGs',
     out.includes('shot-doom-ok') && out.includes('shot-gb-ok') &&
     out.includes('shot-quake-ok'));
 }
 
-/* ---- session B: extract the PPMs byte-clean and prove they're real frames ---- */
+/* ---- session B: extract the PNG shots byte-clean and prove they're real frames ---- */
 function sessionFrames() {
-  const b = driveBoot('cat /root/doom.ppm /root/gb.ppm /root/quake.ppm\n',
-    { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });   // three raw PPMs ≈ 1.6MB
+  const b = driveBoot('cat /root/doom.png /root/gb.png /root/quake.png\n',
+    { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });   // three PNG shots ≈ 1.6MB
 
-  function parsePPM(buf, off) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) return null;
-    const w = +m[1], h = +m[2], data = off + m[0].length;
-    return { w, h, data, end: data + w * h * 3 };
+  // One PNG shot out of the concatenated cat-back stream (#657);
+  // null on a missing/short shot, so the callers' `if (!p)` guards hold.
+  function parseShot(buf, off) {
+    try { return parsePng(buf, off); } catch (e) { return null; }
   }
-  function frameStats(buf, ppm) {
+  function frameStats(shot) {
     const colors = new Set();
-    for (let y = 0; y < ppm.h; y += 3) {
-      for (let x = 0; x < ppm.w; x += 3) {
-        const i = ppm.data + (y * ppm.w + x) * 3;
-        colors.add((buf[i] << 16) | (buf[i + 1] << 8) | buf[i + 2]);
+    for (let y = 0; y < shot.h; y += 3) {
+      for (let x = 0; x < shot.w; x += 3) {
+        const i = (y * shot.w + x) * 4;
+        colors.add((shot.rgba[i] << 16) | (shot.rgba[i + 1] << 8) | shot.rgba[i + 2]);
       }
     }
     return colors.size;
   }
 
-  const doomPPM = parsePPM(b.stdout, 0);
-  check('doom shot parses as P6 at full client size 640x400',
-    doomPPM !== null && doomPPM.w === 640 && doomPPM.h === 400,
-    doomPPM && `${doomPPM.w}x${doomPPM.h}`);
-  if (doomPPM) {
-    const n = frameStats(b.stdout, doomPPM);
+  const doomShot = parseShot(b.stdout, 0);
+  check('doom shot parses as PNG at full client size 640x400',
+    doomShot !== null && doomShot.w === 640 && doomShot.h === 400,
+    doomShot && `${doomShot.w}x${doomShot.h}`);
+  if (doomShot) {
+    const n = frameStats(doomShot);
     check('doom frame is a real render (rich color histogram, not a fill)',
       n > 50, n + ' distinct colors');
-    const gbPPM = parsePPM(b.stdout, doomPPM.end);
-    check('gameboy shot parses as P6 at full client size 480x432',
-      gbPPM !== null && gbPPM.w === 480 && gbPPM.h === 432,
-      gbPPM && `${gbPPM.w}x${gbPPM.h}`);
-    if (gbPPM) {
-      const gn = frameStats(b.stdout, gbPPM);
+    const gbShot = parseShot(b.stdout, doomShot.next);
+    check('gameboy shot parses as PNG at full client size 480x432',
+      gbShot !== null && gbShot.w === 480 && gbShot.h === 432,
+      gbShot && `${gbShot.w}x${gbShot.h}`);
+    if (gbShot) {
+      const gn = frameStats(gbShot);
       check('gameboy frame has the LCD palette (>=2 colors, not a fill)',
         gn >= 2, gn + ' distinct colors');
-      const qPPM = parsePPM(b.stdout, gbPPM.end);
-      check('quake shot parses as P6 at full client size 320x200 (todos/0018)',
-        qPPM !== null && qPPM.w === 320 && qPPM.h === 200,
-        qPPM && `${qPPM.w}x${qPPM.h}`);
-      if (qPPM) {
-        const qn = frameStats(b.stdout, qPPM);
+      const qShot = parseShot(b.stdout, gbShot.next);
+      check('quake shot parses as PNG at full client size 320x200 (todos/0018)',
+        qShot !== null && qShot.w === 320 && qShot.h === 200,
+        qShot && `${qShot.w}x${qShot.h}`);
+      if (qShot) {
+        const qn = frameStats(qShot);
         check('quake frame is a real render (rich color histogram, not a fill)',
           qn > 50, qn + ' distinct colors');
       }

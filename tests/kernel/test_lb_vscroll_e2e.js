@@ -23,6 +23,7 @@
 'use strict';
 const fs = require('fs');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -44,11 +45,11 @@ const out = driveBoot([
   ...[0, 1, 2].flatMap(addItem),
   'wmctl wait text LISTBOX:0 it2 4000',
   'sleep 1',                                     // paint settle before the shot (no repaint marker)
-  'wmctl shot $SID /root/s1.ppm && echo s1-ok',
+  'wmctl shot $SID /root/s1.png && echo s1-ok',
   ...[3, 4, 5, 6, 7].flatMap(addItem),
   'wmctl wait text LISTBOX:0 it7 4000',
   'sleep 1',                                     // paint settle before the shot (no repaint marker)
-  'wmctl shot $SID /root/s2.ppm && echo s2-ok',
+  'wmctl shot $SID /root/s2.png && echo s2-ok',
   // down arrow: one row. Row clicks after each step print "sel=N top=M" —
   // input injections serialize through the app's queue, so the print is
   // ordered evidence of the state the click saw.
@@ -71,7 +72,7 @@ const out = driveBoot([
   'wmctl key $SID 82 1073741906',                // -> sel=3 top=3
   'wmctl key $SID 82 1073741906',                // -> sel=2 top=2
   'sleep 1',                                     // paint settle before the shot (no repaint marker)
-  'wmctl shot $SID /root/s3.ppm && echo s3-ok',
+  'wmctl shot $SID /root/s3.png && echo s3-ok',
   // Sub-notch wheel (#346): trackpad events arrive as fractional notches;
   // 0.25 notch = 30/120 wheel units, below the 40-unit (WHEEL_DELTA/3)
   // one-line quantum — a single event must NOT scroll, the accumulated sum
@@ -131,33 +132,31 @@ for (const [name, marker] of seq) {
 }
 
 /* ---- pixel legs: extract the shots, probe the gutter ---- */
-const b = driveBoot('cat /root/s1.ppm /root/s2.ppm /root/s3.ppm\n',
+const b = driveBoot('cat /root/s1.png /root/s2.png /root/s3.png\n',
   { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });
 const buf = b.stdout;
 
-function parsePPM(off) {
-  const head = buf.toString('latin1', off, off + 32);
-  const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-  if (!m) return null;
-  const w = +m[1], h = +m[2], data = off + m[0].length;
-  return { w, h, data, end: data + w * h * 3 };
+// One PNG shot out of the concatenated cat-back stream (#657);
+// null on a missing/short shot, so the callers' `if (!p)` guards hold.
+function parseShot(off) {
+  try { return parsePng(buf, off); } catch (e) { return null; }
 }
 const mkpx = (p) => (x, y) => {
-  const i = p.data + (y * p.w + x) * 3;
-  return [buf[i], buf[i + 1], buf[i + 2]];
+  const i = (y * p.w + x) * 4;
+  return [p.rgba[i], p.rgba[i + 1], p.rgba[i + 2]];
 };
 const gray = (px) => px[0] === 0xC0 && px[1] === 0xC0 && px[2] === 0xC0;
 const white = (px) => px[0] === 0xFF && px[1] === 0xFF && px[2] === 0xFF;
 
-const p1 = parsePPM(0);
-check('shot1 parses as P6', p1 !== null, buf.slice(0, 16).toString('latin1'));
+const p1 = parseShot(0);
+check('shot1 parses as PNG', p1 !== null, buf.slice(0, 16).toString('latin1'));
 if (p1) {
   const px = mkpx(p1);
   check('3 items: no bar — gutter column is the white well interior',
     white(px(246, 100)) && white(px(246, 54)), `${px(246, 100)} ${px(246, 54)}`);
 }
-const p2 = p1 && parsePPM(p1.end);
-check('shot2 parses as P6', p2 !== null && p2 !== undefined);
+const p2 = p1 && parseShot(p1.next);
+check('shot2 parses as PNG', p2 !== null && p2 !== undefined);
 if (p2) {
   const px = mkpx(p2);
   /* top=0: thumb spans y 62..114 (btnface), channel 114..146 (scrollbar
@@ -171,8 +170,8 @@ if (p2) {
   check('rows narrowed to the gutter, well edge intact', white(px(234, 100)),
     `${px(234, 100)}`);
 }
-const p3 = p2 && parsePPM(p2.end);
-check('shot3 parses as P6', p3 !== null && p3 !== undefined);
+const p3 = p2 && parseShot(p2.next);
+check('shot3 parses as PNG', p3 !== null && p3 !== undefined);
 if (p3) {
   const px = mkpx(p3);
   /* top=2 after the key nav: thumbY = 18 + 32*2/3 = 39 lb-local -> client

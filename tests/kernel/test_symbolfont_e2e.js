@@ -34,6 +34,7 @@
 const fs = require('fs');
 const path = require('path');
 const { driveBoot, freshImage, section } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 const { ensureMinimalImage } = require('./lib/gucman.js');
 
 let failures = 0;
@@ -56,7 +57,7 @@ async function main() {
 
   const a = driveBoot([
     'mkdir -p /etc/gucman',
-    'printf "# opt out of the shipped default set (#420: doom) — this test\\n# owns its package state; /etc overrides the baked file wholesale\\n" > /etc/gucman/defaults',   // keep session B's cat-a-ppm stdout byte-clean
+    'printf "# opt out of the shipped default set (#420: doom) — this test\\n# owns its package state; /etc overrides the baked file wholesale\\n" > /etc/gucman/defaults',   // keep session B's cat-a-shot stdout byte-clean
     'echo ==baked',
     'test -f /usr/share/fonts/symbols2.ttf && echo SYM-TTF-OK',
     'test -f /usr/share/fonts/symbols.ttf && echo SYM1-TTF-OK',
@@ -68,7 +69,7 @@ async function main() {
     'wmctl wait win term',
     'sleep 2',                       // timing subject: freetype render (multi-frame, no signal)
     'TSID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
-    'wmctl shot $TSID /root/sym.ppm && echo shot-sym-ok',
+    'wmctl shot $TSID /root/sym.png && echo shot-sym-ok',
     'pkill term',
     'wmctl wait nowin term',
     'echo ==gdi',
@@ -111,39 +112,37 @@ async function main() {
     !/fallback face .* cannot load/.test(aall));
 
   // ---- pixel proof (term) --------------------------------------------
-  const b = driveBoot('cat /root/sym.ppm\n',
+  const b = driveBoot('cat /root/sym.png\n',
     { image, args: ['--packages=none'], timeout: 120000, maxBuffer: 16 * 1024 * 1024, encoding: null });
-  function parsePPM(buf, off) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) return null;
-    const w = +m[1], h = +m[2], data = off + m[0].length;
-    return { w, h, data, end: data + w * h * 3 };
+  // One PNG shot out of the concatenated cat-back stream (#657);
+  // null on a missing/short shot, so the callers' `if (!p)` guards hold.
+  function parseShot(buf, off) {
+    try { return parsePng(buf, off); } catch (e) { return null; }
   }
   // One 16x19 bitmap per glyph at row 0: glyph i sits in cell 2i (8px cells,
   // space-separated), sampled with its trailing blank cell to keep any
   // proportional overflow inside the sample. Row 0 renders below the 30px
   // term menu bar band (todos/0273c), as in test_fontpkg_e2e.js.
   const GRID_Y = 30;
-  function glyphBits(buf, ppm, i) {
+  function glyphBits(shot, i) {
     const out = Buffer.alloc(16 * 19 * 3);
     for (let y = 0; y < 19; y++) {
       for (let x = 0; x < 16; x++) {
-        const s = ppm.data + ((GRID_Y + y) * ppm.w + (i * 16 + x)) * 3;
-        buf.copy(out, (y * 16 + x) * 3, s, s + 3);
+        const s = ((GRID_Y + y) * shot.w + (i * 16 + x)) * 4;
+        shot.rgba.copy(out, (y * 16 + x) * 3, s, s + 3);
       }
     }
     return out;
   }
   const ink = (bits) => { let n = 0; for (const v of bits) if (v) n++; return n; };
-  const ppm = parsePPM(b.stdout, 0);
-  check('shot parses', !!ppm);
-  if (!ppm) return finish(tmp);
+  const shot = parseShot(b.stdout, 0);
+  check('shot parses', !!shot);
+  if (!shot) return finish(tmp);
 
   const NAMES = ['U+2318 cmd', 'U+2325 option', 'U+21E7 shift', 'U+232B delete-left',
                  'U+23CE return', 'U+2303 control'];
-  const g = [0, 1, 2, 3, 4, 5].map((i) => glyphBits(b.stdout, ppm, i));
-  const t = [6, 7].map((i) => glyphBits(b.stdout, ppm, i));
+  const g = [0, 1, 2, 3, 4, 5].map((i) => glyphBits(shot, i));
+  const t = [6, 7].map((i) => glyphBits(shot, i));
   check('tofu control: both unassigned cells render ink', t.every((x) => ink(x) > 0),
     t.map(ink).join(','));
   check('tofu control: one box, twice (cells byte-identical)', t[0].equals(t[1]));

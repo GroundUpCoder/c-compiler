@@ -32,6 +32,7 @@
 const fs = require('fs');
 const path = require('path');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 const { BLOCK_FS } = require(path.join(ROOT, 'host.js'));
@@ -92,7 +93,7 @@ function row(listOut, title) {
     'wmctl list',
     'echo ==cut',
     'wmctl wait seq $BSID 1 8000',          // the bar has PRESENTED its glyphs
-    'wmctl shot screen /root/s1.ppm && echo S1-OK',
+    'wmctl shot screen /root/s1.png && echo S1-OK',
 
     // tooltip chain (A1): key t opens mb-tpop + mb-tsub (no grab)
     'wmctl key $PSID 23',
@@ -105,7 +106,7 @@ function row(listOut, title) {
     'echo ==l2',
     'wmctl list',
     'echo ==cut',
-    'wmctl shot screen /root/s2.ppm && echo S2-OK',
+    'wmctl shot screen /root/s2.png && echo S2-OK',
 
     // a REAL title drag carries the whole subtree
     'wmctl sdrag 450 240 550 340',
@@ -115,9 +116,9 @@ function row(listOut, title) {
 
     // minimize hides the subtree; restore shows it
     'wmctl min $PSID',
-    'wmctl shot screen /root/s3.ppm && echo S3-OK',
+    'wmctl shot screen /root/s3.png && echo S3-OK',
     'wmctl restore $PSID',
-    'wmctl shot screen /root/s4.ppm && echo S4-OK',
+    'wmctl shot screen /root/s4.png && echo S4-OK',
 
     // mid-tree cascade: the app destroys mb-tpop ONLY; the kernel takes tsub
     'wmctl key $PSID 6',
@@ -171,7 +172,7 @@ function row(listOut, title) {
     'wmctl resize $PSID 400 240',
     'wmctl wait dim $PSID 400x240 8000',
     'wmctl wait dim $BSID 400x20 8000',
-    'wmctl shot screen /root/s5.ppm && echo S5-OK',
+    'wmctl shot screen /root/s5.png && echo S5-OK',
 
     // destroy cascade: close the parent; bar + open popup die kernel-side,
     // the sibling top-level survives
@@ -240,34 +241,33 @@ function row(listOut, title) {
   const store2 = new BLOCK_FS.MemoryByteStore(bytes.length);
   store2.setBytes(0, bytes);
   const ufs = BLOCK_FS.createV4(store2);
+  const shotCache = new Map();
   const px = (name, x, y) => {
-    const ppm = COMMON.readFileBytes(ufs, '/root/' + name);
-    const head = Buffer.from(ppm.subarray(0, 20)).toString('latin1');
-    const off = head.indexOf('255\n') + 4;
-    return String(Array.from(
-      ppm.subarray(off + (y * 1024 + x) * 3, off + (y * 1024 + x) * 3 + 3)));
+    if (!shotCache.has(name))
+      shotCache.set(name, parsePng(Buffer.from(COMMON.readFileBytes(ufs, '/root/' + name))));
+    return String(shotCache.get(name).px(x, y).slice(0, 3));
   };
   const GRAY = '200,200,200', BLACK = '0,0,0', YELLOW = '230,210,40', MAGENTA = '200,40,180';
   // s1: parent at (300,250); bar glyph 'M' first ink pixel at bar-local (4,3)
   check('child TEXT pixels composite over the parent (glyph ink)',
-    px('s1.ppm', 304, 253) === BLACK, px('s1.ppm', 304, 253));
-  check('...on the bar strip ground', px('s1.ppm', 316, 260) === GRAY, px('s1.ppm', 316, 260));
+    px('s1.png', 304, 253) === BLACK, px('s1.png', 304, 253));
+  check('...on the bar strip ground', px('s1.png', 316, 260) === GRAY, px('s1.png', 316, 260));
   // s2: popup overflow — yellow BELOW the parent's bottom edge (450)
-  check('popup pixels composite INSIDE the parent area', px('s2.ppm', 350, 400) === YELLOW,
-    px('s2.ppm', 350, 400));
+  check('popup pixels composite INSIDE the parent area', px('s2.png', 350, 400) === YELLOW,
+    px('s2.png', 350, 400));
   check('popup OVERFLOWS the parent window (yellow past its bottom)',
-    px('s2.ppm', 350, 500) === YELLOW, px('s2.ppm', 350, 500));
-  check('grandchild pixels composite too', px('s2.ppm', 450, 300) === MAGENTA,
-    px('s2.ppm', 450, 300));
+    px('s2.png', 350, 500) === YELLOW, px('s2.png', 350, 500));
+  check('grandchild pixels composite too', px('s2.png', 450, 300) === MAGENTA,
+    px('s2.png', 450, 300));
   // s3/s4: minimize hides the subtree, restore shows it (parent at 400,350)
-  check('minimize hides the bar strip', px('s3.ppm', 440, 360) !== GRAY, px('s3.ppm', 440, 360));
-  check('minimize hides the overflowing popup', px('s3.ppm', 450, 600) !== YELLOW,
-    px('s3.ppm', 450, 600));
-  check('restore shows the bar again', px('s4.ppm', 440, 360) === GRAY, px('s4.ppm', 440, 360));
-  check('restore shows the popup again', px('s4.ppm', 450, 600) === YELLOW, px('s4.ppm', 450, 600));
+  check('minimize hides the bar strip', px('s3.png', 440, 360) !== GRAY, px('s3.png', 440, 360));
+  check('minimize hides the overflowing popup', px('s3.png', 450, 600) !== YELLOW,
+    px('s3.png', 450, 600));
+  check('restore shows the bar again', px('s4.png', 440, 360) === GRAY, px('s4.png', 440, 360));
+  check('restore shows the popup again', px('s4.png', 450, 600) === YELLOW, px('s4.png', 450, 600));
   // s5 (A5): the strip spans the resized parent's full 400px width
   check('owner-resized strip spans the new parent width',
-    px('s5.ppm', 790, 360) === GRAY, px('s5.ppm', 790, 360));
+    px('s5.png', 790, 360) === GRAY, px('s5.png', 790, 360));
 
   fs.rmSync(dir, { recursive: true, force: true });
   console.log(failures === 0 ? '\nmenubox e2e: PASS' : `\nmenubox e2e: ${failures} FAILED`);

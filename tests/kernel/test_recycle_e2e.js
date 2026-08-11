@@ -41,6 +41,7 @@ const os = require('os');
 const path = require('path');
 const cp = require('child_process');
 const { driveBoot, freshImage, deskEntries, deskCell } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -247,7 +248,7 @@ const script = [
   // or the 0184 column wrap — can't silently shift them.
   `BINX=${BIN.x + 58}`,
   `BINY=${BIN.y + 22}`,
-  'wmctl shot $DSID /root/e.ppm && echo E-SHOT',
+  'wmctl shot $DSID /root/e.png && echo E-SHOT',
   'printf junk > /root/Desktop/junk.txt',
   'sleep 1.5',                                   // the coarse desk tick (wm.c re-reads Desktop on a timer — no event)
   // junk.txt's sorted cell; icon menu
@@ -262,7 +263,7 @@ const script = [
                                                  // rows 0259: 1+5*30+10+15)
   'sleep 1.5',                                   // wm.c trashes + the coarse glyph tick must flip empty->full before F-SHOT (no event)
   'test ! -f /root/Desktop/junk.txt && test -f /root/.recycle/files/junk.txt && echo DESK-TRASH',
-  'wmctl shot $DSID /root/f.ppm && echo F-SHOT',
+  'wmctl shot $DSID /root/f.png && echo F-SHOT',
   // ---- the bin's own menu: OPEN / EMPTY RECYCLE BIN (bin row, y=$BINY) ----
   'wmctl click $DSID $BINX $BINY 3',
   'wmctl wait win ctxmenu 8000',
@@ -273,7 +274,7 @@ const script = [
   'wmctl click $CXSID 30 56',                    // Empty Recycle Bin (1+1*30+10+15)
   'sleep 1.5',                                   // wm.c empties + the coarse glyph tick must flip full->empty before G-SHOT (no event)
   'echo "==binleft B$(ls /root/.recycle/files | wc -l | tr -d \\" \\")-END"',
-  'wmctl shot $DSID /root/g.ppm && echo G-SHOT',
+  'wmctl shot $DSID /root/g.png && echo G-SHOT',
   // grayed EMPTY: click leaves the menu open
   'wmctl click $DSID $BINX $BINY 3',
   'wmctl wait win ctxmenu 8000',
@@ -395,12 +396,11 @@ check('double-clicking the bin opens fileman at the store',
   const store = new BLOCK_FS.MemoryByteStore(bytes.length);
   store.setBytes(0, bytes);
   const ufs = BLOCK_FS.createV4(store);
+  const shotCache = new Map();
   const px = (name, x, y) => {
-    const ppm = COMMON.readFileBytes(ufs, '/root/' + name);
-    const head = Buffer.from(ppm.subarray(0, 20)).toString('latin1');
-    const off = head.indexOf('255\n') + 4;
-    return String(Array.from(
-      ppm.subarray(off + (y * 1024 + x) * 3, off + (y * 1024 + x) * 3 + 3)));
+    if (!shotCache.has(name))
+      shotCache.set(name, parsePng(Buffer.from(COMMON.readFileBytes(ufs, '/root/' + name))));
+    return String(shotCache.get(name).px(x, y).slice(0, 3));
   };
   for (const s of ['E', 'F', 'G']) check(`${s} shot written`, out.includes(s + '-SHOT'));
   const WHITE = '255,255,255', NAVY = '0,0,128';
@@ -409,12 +409,12 @@ check('double-clicking the bin opens fileman at the store',
   // empty / navy full), x at the tile center (+42).
   const BX = BIN.x + 58, CEN = BIN.y + 22, RIM = BIN.y + 10;
   check('bin glyph starts empty (white center, navy rim)',
-    px('e.ppm', BX, CEN) === WHITE && px('e.ppm', BX, RIM) === NAVY,
-    [px('e.ppm', BX, CEN), px('e.ppm', BX, RIM)].join(' | '));
+    px('e.png', BX, CEN) === WHITE && px('e.png', BX, RIM) === NAVY,
+    [px('e.png', BX, CEN), px('e.png', BX, RIM)].join(' | '));
   check('trashing flips the glyph full (navy center)',
-    px('f.ppm', BX, CEN) === NAVY, px('f.ppm', BX, CEN));
+    px('f.png', BX, CEN) === NAVY, px('f.png', BX, CEN));
   check('emptying flips it back (white center)',
-    px('g.ppm', BX, CEN) === WHITE, px('g.ppm', BX, CEN));
+    px('g.png', BX, CEN) === WHITE, px('g.png', BX, CEN));
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

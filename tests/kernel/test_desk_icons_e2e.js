@@ -16,6 +16,7 @@
 const fs = require('fs');
 const path = require('path');
 const { driveBoot, freshImage, deskEntries, deskCell } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -49,7 +50,7 @@ const script = [
   // todos/0171.
   'sleep 2',
   'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
-  'wmctl shot $DSID /root/d.ppm && echo D-SHOT',
+  'wmctl shot $DSID /root/d.png && echo D-SHOT',
 ];
 
 const r = driveBoot(script, { image, timeout: 300000 });
@@ -63,13 +64,10 @@ const bytes = fs.readFileSync(path.join(tmp, 'os-root.img'));
 const store = new BLOCK_FS.MemoryByteStore(bytes.length);
 store.setBytes(0, bytes);
 const ufs = BLOCK_FS.createV4(store);
-const ppm = COMMON.readFileBytes(ufs, '/root/d.ppm');
-const head = Buffer.from(ppm.subarray(0, 20)).toString('latin1');
-const m = /^P6\n(\d+) (\d+)\n255\n/.exec(head);
-check('shot is a 1024x768 P6', !!m && m[1] === '1024' && m[2] === '768', head);
-const off = head.indexOf('255\n') + 4, W = 1024;
-const px = (x, y) => String(Array.from(
-  ppm.subarray(off + (y * W + x) * 3, off + (y * W + x) * 3 + 3)));
+const shot = parsePng(Buffer.from(COMMON.readFileBytes(ufs, '/root/d.png')));
+check('shot is a 1024x768 PNG', shot.w === 1024 && shot.h === 768,
+  `${shot.w}x${shot.h}`);
+const px = (x, y) => String(shot.px(x, y).slice(0, 3));
 
 const WHITE = '255,255,255', NAVY = '0,0,128';
 // Icon tile origin inside a cell: ix = cell.x + (116-32)/2 = +42,

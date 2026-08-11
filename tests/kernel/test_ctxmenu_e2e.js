@@ -23,6 +23,7 @@ const os = require('os');
 const path = require('path');
 const cp = require('child_process');
 const { driveBoot, freshImage, deskEntries, deskCell } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -86,7 +87,7 @@ const script = [
   'echo ==ctx1',
   'wmctl list',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  'wmctl shot $CXSID /root/c1.ppm && echo c1-ok',
+  'wmctl shot $CXSID /root/c1.png && echo c1-ok',
   'wmctl key $CXSID 41 27',                      // Esc
   'wmctl wait nowin ctxmenu 8000',               // dismissed
   'echo ==ctx2',
@@ -156,7 +157,7 @@ const script = [
   'wmctl wait nowin ctxmenu 8000',               // refresh re-scanned + redrew + dismissed
   'echo ==ctx10',
   'wmctl list',
-  'wmctl shot $DSID /root/d1.ppm && echo d1-ok',
+  'wmctl shot $DSID /root/d1.png && echo d1-ok',
   // ---- one popup at a time: Start menu and ctxmenu displace each other ----
   'wmctl menu',
   'wmctl wait win startmenu 8000',               // Start menu up
@@ -175,7 +176,7 @@ const script = [
   'wmctl wait win ctxmenu 8000',                 // icon menu up
   'echo ==icon1',
   'wmctl list',
-  'wmctl shot $DSID /root/d2.ppm && echo d2-ok',
+  'wmctl shot $DSID /root/d2.png && echo d2-ok',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   'N1=$(wmctl list | grep -c winbox$)',
   `wmctl click $CXSID 30 ${rowY(0)}`,            // OPEN -> winbox
@@ -488,20 +489,16 @@ check('CLOSE request-closes the window (button 0 winbox gone)',
   const store = new BLOCK_FS.MemoryByteStore(bytes.length);
   store.setBytes(0, bytes);
   const ufs = BLOCK_FS.createV4(store);
-  const readPpm = (name, w) => {
-    const ppm = COMMON.readFileBytes(ufs, '/root/' + name);
-    const head = Buffer.from(ppm.subarray(0, 32)).toString('latin1');
-    if (w == null) w = parseInt(/P6\s+(\d+)/.exec(head)[1], 10);
-    const off = head.indexOf('255\n') + 4;
-    return (x, y) => String(Array.from(
-      ppm.subarray(off + (y * w + x) * 3, off + (y * w + x) * 3 + 3)));
+  const readPng = (name) => {
+    const shot = parsePng(Buffer.from(COMMON.readFileBytes(ufs, '/root/' + name)));
+    return (x, y) => String(shot.px(x, y).slice(0, 3));
   };
-  // c1.ppm: the measured-width x 194 desktop menu on the ENGINE raster
+  // c1.png: the measured-width x 194 desktop menu on the ENGINE raster
   // (menucore, 0259): Win95 raised edge (outer white/black, inner
   // face/shadow), face, black freetype item text, the separator groove at
   // y 151..160 (5 rows above it since Lane D's Add Default Icons), the
   // flyout arrows on the sub rows at the right gutter.
-  const p = readPpm('c1.ppm', null);
+  const p = readPng('c1.png');
   const W = cg1.w;                     // the listed menu width
   check('menu face is the Win95 gray with a raised edge',
     p(5, 40) === '192,192,192' && p(0, 0) === '255,255,255' &&
@@ -517,8 +514,8 @@ check('CLOSE request-closes the window (button 0 winbox gone)',
     [p(30, 155), p(30, 156)].join(' | '));
   check('sub rows carry the flyout arrow', p(W - 10, 16) === '0,0,0',
     p(W - 10, 16));
-  // d2.ppm: right-click selected the alauncher icon alone (navy strip).
-  const d = readPpm('d2.ppm', 1024);
+  // d2.png: right-click selected the alauncher icon alone (navy strip).
+  const d = readPng('d2.png');
   const strip = (name) => {
     const c = deskCell(DESK1, name);
     const len = Math.min(13, name.length);
@@ -528,9 +525,9 @@ check('CLOSE request-closes the window (button 0 winbox gone)',
   check('right-click selected the icon alone (alauncher navy, calc teal)',
     strip('alauncher') === '0,0,128' && strip('calc') === '0,128,128',
     [strip('alauncher'), strip('calc')].join(' | '));
-  // d1.ppm: zzz.txt's icon tile is up right after REFRESH (white tile
+  // d1.png: zzz.txt's icon tile is up right after REFRESH (white tile
   // histogram in its cell; the coarse tick alone would allow ~1s).
-  const d1 = readPpm('d1.ppm', 1024);
+  const d1 = readPng('d1.png');
   let white = 0;
   const zc = deskCell(DESK1, 'zzz.txt');
   for (let y = zc.y; y < zc.y + 48; y++)
