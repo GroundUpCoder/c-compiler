@@ -22,9 +22,12 @@
 //     it — EBADF both, in the FS_OPEN arm and the spawn fd-action OPEN arm
 //     (the two kernel _makeOfd('file') sites)
 //   - open(O_RDONLY|O_TRUNC) truncates (#641): POSIX leaves it undefined,
-//     Linux and Darwin both truncate, so gucOS does — and the brokered
-//     backend must answer exactly as in-process BlockFS does. The fd is
-//     still not write-capable; the truncate is not write access.
+//     so gucOS takes the Linux answer — source-verified (O_TRUNC adds
+//     MAY_WRITE to the PERMISSION check only; do_open() truncates without
+//     consulting the fd access mode), and Darwin was measured doing the
+//     same. The brokered backend must answer exactly as in-process BlockFS
+//     does. The fd is still not write-capable; the truncate is not write
+//     access.
 //
 // Run: node tests/kernel/test_fs_e2e.js
 'use strict';
