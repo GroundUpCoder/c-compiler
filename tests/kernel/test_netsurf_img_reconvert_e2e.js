@@ -30,6 +30,7 @@
 const fs = require('fs');
 const path = require('path');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -98,12 +99,12 @@ driveBoot('true', { image });
  * consecutive frames match.  The page has no timers, so it settles. */
 const pollStable = (sid, out) => [
   `wmctl shot ${sid} ${out}`,
-  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.ppm; ` +
-  `cmp -s /root/poll.ppm ${out} && break; cp /root/poll.ppm ${out}; done`,
+  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.png; ` +
+  `cmp -s /root/poll.png ${out} && break; cp /root/poll.png ${out}; done`,
 ];
 const pollChange = (sid, ref) => [
-  `for i in $(seq 1 100); do wmctl shot ${sid} /root/poll.ppm; ` +
-  `cmp -s /root/poll.ppm ${ref} || break; sleep 0.1; done`,
+  `for i in $(seq 1 100); do wmctl shot ${sid} /root/poll.png; ` +
+  `cmp -s /root/poll.png ${ref} || break; sleep 0.1; done`,
 ];
 
 /* ---- session A: load, then three cover toggles ---- */
@@ -111,19 +112,19 @@ const out = driveBoot([
   'netsurf /root/imgrcv.html &',
   'wmctl wait win NsImgRcv 30000',
   'SID=$(wmctl list | grep "\tNsImgRcv$" | sed "s/[^0-9].*//")',
-  ...pollStable('$SID', '/root/a.ppm'),
+  ...pollStable('$SID', '/root/a.png'),
   'echo shot-a-ok',
   'wmctl click $SID 600 300',
-  ...pollChange('$SID', '/root/a.ppm'),
-  ...pollStable('$SID', '/root/b.ppm'),
+  ...pollChange('$SID', '/root/a.png'),
+  ...pollStable('$SID', '/root/b.png'),
   'echo shot-b-ok',
   'wmctl click $SID 600 300',
-  ...pollChange('$SID', '/root/b.ppm'),
-  ...pollStable('$SID', '/root/c.ppm'),
+  ...pollChange('$SID', '/root/b.png'),
+  ...pollStable('$SID', '/root/c.png'),
   'echo shot-c-ok',
   'wmctl click $SID 600 300',
-  ...pollChange('$SID', '/root/c.ppm'),
-  ...pollStable('$SID', '/root/d.ppm'),
+  ...pollChange('$SID', '/root/c.png'),
+  ...pollStable('$SID', '/root/d.png'),
   'echo shot-d-ok',
   'wmctl close $SID && wmctl wait nowin NsImgRcv 8000 && echo closed-ok',
 ], { image, timeout: 420000, maxBuffer: 64 * 1024 * 1024 }).stdout;
@@ -133,27 +134,26 @@ for (const tag of ['shot-a-ok', 'shot-b-ok', 'shot-c-ok', 'shot-d-ok', 'closed-o
 }
 
 /* ---- session B: read the shots back and count INK ---- */
-const back = driveBoot('cat /root/a.ppm /root/b.ppm /root/c.ppm /root/d.ppm\n',
+const back = driveBoot('cat /root/a.png /root/b.png /root/c.png /root/d.png\n',
   { image, encoding: null, maxBuffer: 64 * 1024 * 1024 });
-function parsePPMs(buf, names) {
-  const shots = {}; let off = 0;
+function parsePngs(buf, names) {
+  const shots = {};
+  let off = 0;
   for (const name of names) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) throw new Error('bad ppm stream at ' + name + ': ' + JSON.stringify(head));
-    const w = +m[1], h = +m[2];
-    const data = off + m[0].length;
-    shots[name] = { w, h, data: buf.slice(data, data + w * h * 3) };
-    off = data + w * h * 3;
+    let p;
+    try { p = parsePng(buf, off); }
+    catch (e) { throw new Error(`bad png stream at ${name}: ${e.message}`); }
+    shots[name] = { w: p.w, h: p.h, data: p.rgba };
+    off = p.next;
   }
   return shots;
 }
-const shots = parsePPMs(back.stdout, ['a', 'b', 'c', 'd']);
+const shots = parsePngs(back.stdout, ['a', 'b', 'c', 'd']);
 function orangeCount(s) {
   let n = 0;
   for (let y = 0; y < s.h - STATUS_H; y++) {
     for (let x = 0; x < s.w; x++) {
-      const i = (y * s.w + x) * 3;
+      const i = (y * s.w + x) * 4;
       if (s.data[i] > 200 && s.data[i + 1] > 90 && s.data[i + 1] < 170 &&
           s.data[i + 2] < 60) n++;
     }

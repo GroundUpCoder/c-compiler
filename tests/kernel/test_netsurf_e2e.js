@@ -40,6 +40,7 @@
 const fs = require('fs');
 const path = require('path');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -75,24 +76,22 @@ driveBoot('true', { image });
   rootStore.close();
 }
 
-/* PPM helpers (the winmine/term pattern) */
-function parsePPMs(buf, names) {
+/* PNG shot helpers (the winmine/term pattern) */
+function parsePngs(buf, names) {
   const shots = {};
   let off = 0;
   for (const name of names) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) throw new Error('bad ppm stream at ' + name + ': ' + JSON.stringify(head));
-    const w = +m[1], h = +m[2];
-    const data = off + m[0].length;
-    shots[name] = { w, h, data: buf.slice(data, data + w * h * 3) };
-    off = data + w * h * 3;
+    let p;
+    try { p = parsePng(buf, off); }
+    catch (e) { throw new Error(`bad png stream at ${name}: ${e.message}`); }
+    shots[name] = { w: p.w, h: p.h, data: p.rgba };
+    off = p.next;
   }
   return shots;
 }
-const px = (s, x, y) => [s.data[(y * s.w + x) * 3],
-                         s.data[(y * s.w + x) * 3 + 1],
-                         s.data[(y * s.w + x) * 3 + 2]];
+const px = (s, x, y) => [s.data[(y * s.w + x) * 4],
+                         s.data[(y * s.w + x) * 4 + 1],
+                         s.data[(y * s.w + x) * 4 + 2]];
 const isBlue = (p) => p[0] < 80 && p[1] < 80 && p[2] > 180;
 const isRed = (p) => p[0] > 180 && p[1] < 80 && p[2] < 80;
 const isGreen = (p) => p[0] < 100 && p[1] > 140 && p[2] < 100;
@@ -119,7 +118,7 @@ function stripCount(s, pred) {
 }
 /* raw bytes of the status strip, for change comparison */
 function stripBytes(s) {
-  return s.data.slice((s.h - STATUS_H) * s.w * 3);
+  return s.data.slice((s.h - STATUS_H) * s.w * 4);
 }
 
 /* SDL scancode + SDLK_ keycode pairs (compiler.js veneer values);
@@ -130,19 +129,19 @@ const K_ALT_LEFT = '80 1073741904 256';
 const K_ALT_RIGHT = '79 1073741903 256';
 
 /* Repaints after scroll/status injections have no wmctl-visible marker,
- * so the driver polls PIXELS: shot to a scratch ppm until it differs
+ * so the driver polls PIXELS: shot to a scratch png until it differs
  * from the reference (bounded condition poll, not a fixed sleep). */
 const pollChange = (sid, ref) => [
-  `for i in $(seq 1 100); do wmctl shot ${sid} /root/poll.ppm; ` +
-  `cmp -s /root/poll.ppm ${ref} || break; sleep 0.1; done`,
+  `for i in $(seq 1 100); do wmctl shot ${sid} /root/poll.png; ` +
+  `cmp -s /root/poll.png ${ref} || break; sleep 0.1; done`,
 ];
 /* Post-title-barrier settle: shot until two consecutive frames match
  * (late load-progress status repaints land just after the <title>
  * barrier; the stable pair is the quiesce marker). */
 const pollStable = (sid, out) => [
   `wmctl shot ${sid} ${out}`,
-  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.ppm; ` +
-  `cmp -s /root/poll.ppm ${out} && break; cp /root/poll.ppm ${out}; done`,
+  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.png; ` +
+  `cmp -s /root/poll.png ${out} && break; cp /root/poll.png ${out}; done`,
 ];
 
 /* ---- session A: the whole interactive story in one boot ---- */
@@ -152,56 +151,56 @@ const out = driveBoot([
   'open /root/hello.html &',
   'wmctl wait win Smoke 30000',            // spawn + engine init + first layout
   'SID=$(wmctl list | grep "\tSmoke$" | sed "s/[^0-9].*//")',
-  ...pollStable('$SID', '/root/s1.ppm'),
+  ...pollStable('$SID', '/root/s1.png'),
   'echo shot-s1-ok',
 
   'netsurf /root/squares.html &',
   'wmctl wait win Squares 30000',
   'SQ=$(wmctl list | grep "\tSquares$" | sed "s/[^0-9].*//")',
-  ...pollStable('$SQ', '/root/s2.ppm'),
+  ...pollStable('$SQ', '/root/s2.png'),
   'echo shot-s2-ok',
 
   // status leg: hover the link block -> set_status paints the URL
   'wmctl hover $SQ 200 60',
-  ...pollChange('$SQ', '/root/s2.ppm'),
-  'wmctl shot $SQ /root/s2h.ppm && echo shot-s2h-ok',
+  ...pollChange('$SQ', '/root/s2.png'),
+  'wmctl shot $SQ /root/s2h.png && echo shot-s2h-ok',
 
   // resize -> RESIZED -> synchronous reformat -> floats re-wrap.  The
   // frontend reformats BEFORE the ack present, so the dim wait IS the
   // reflow barrier (no stale-crop frame exists to race).
   'wmctl resize $SQ 500 400',
   'wmctl wait dim $SQ 500x400 8000',
-  'wmctl shot $SQ /root/s3.ppm && echo shot-s3-ok',
+  'wmctl shot $SQ /root/s3.png && echo shot-s3-ok',
 
   // wheel: 3 notches down = +300px scroll (the blue block scrolls off)
   'wmctl wheel $SQ -3',
-  ...pollChange('$SQ', '/root/s3.ppm'),
-  'wmctl shot $SQ /root/s4.ppm && echo shot-s4-ok',
+  ...pollChange('$SQ', '/root/s3.png'),
+  'wmctl shot $SQ /root/s4.png && echo shot-s4-ok',
 
   // PageDown: +382px (the content viewport) -> the green marker scrolls in
   `wmctl key $SQ ${K_PGDN}`,
-  ...pollChange('$SQ', '/root/s4.ppm'),
-  'wmctl shot $SQ /root/s5.ppm && echo shot-s5-ok',
+  ...pollChange('$SQ', '/root/s4.png'),
+  'wmctl shot $SQ /root/s5.png && echo shot-s5-ok',
 
   // Home, then click the blue <a> block -> NAVIGATE to two.html.
   // The title change is the navigation barrier.
   `wmctl key $SQ ${K_HOME}`,
   'wmctl click $SQ 200 60',
   'wmctl wait win Two 20000',
-  ...pollChange('$SQ', '/root/s5.ppm'),
-  'wmctl shot $SQ /root/s6.ppm && echo shot-s6-ok',
+  ...pollChange('$SQ', '/root/s5.png'),
+  'wmctl shot $SQ /root/s6.png && echo shot-s6-ok',
 
   // history: Alt+Left -> BACK to squares.html (title + repaint barrier)
   `wmctl key $SQ ${K_ALT_LEFT}`,
   'wmctl wait win Squares 20000',
-  ...pollChange('$SQ', '/root/s6.ppm'),
-  'wmctl shot $SQ /root/s7.ppm && echo shot-s7-ok',
+  ...pollChange('$SQ', '/root/s6.png'),
+  'wmctl shot $SQ /root/s7.png && echo shot-s7-ok',
 
   // history: Alt+Right -> FORWARD to two.html again
   `wmctl key $SQ ${K_ALT_RIGHT}`,
   'wmctl wait win Two 20000',
-  ...pollChange('$SQ', '/root/s7.ppm'),
-  'wmctl shot $SQ /root/s8.ppm && echo shot-s8-ok',
+  ...pollChange('$SQ', '/root/s7.png'),
+  'wmctl shot $SQ /root/s8.png && echo shot-s8-ok',
 
   // close box path: CLOSE_REQUESTED -> last-window exit
   'wmctl close $SQ',
@@ -226,9 +225,9 @@ check('close leg: smoke window gone', out.includes('closed-smoke-ok'));
 
 /* ---- session B: read the shots back ---- */
 const NAMES = ['s1', 's2', 's2h', 's3', 's4', 's5', 's6', 's7', 's8'];
-const back = driveBoot('cat ' + NAMES.map(n => '/root/' + n + '.ppm').join(' ') + '\n',
+const back = driveBoot('cat ' + NAMES.map(n => '/root/' + n + '.png').join(' ') + '\n',
   { image, encoding: null, maxBuffer: 64 * 1024 * 1024 });
-const shots = parsePPMs(back.stdout, NAMES);
+const shots = parsePngs(back.stdout, NAMES);
 
 /* s1: hello.html rendered from the BAKED app — white page + real AA
  * text + the silver status strip */

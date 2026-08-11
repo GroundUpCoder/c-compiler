@@ -41,6 +41,7 @@
 const fs = require('fs');
 const path = require('path');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -150,23 +151,21 @@ driveBoot('true', { image });
 }
 
 /* ---- shot helpers (the netsurf-e2e pattern) ------------------------- */
-function parsePPMs(buf, names) {
+function parsePngs(buf, names) {
   const shots = {};
   let off = 0;
   for (const name of names) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) throw new Error('bad ppm stream at ' + name + ': ' + JSON.stringify(head));
-    const w = +m[1], h = +m[2];
-    const data = off + m[0].length;
-    shots[name] = { w, h, data: buf.slice(data, data + w * h * 3) };
-    off = data + w * h * 3;
+    let p;
+    try { p = parsePng(buf, off); }
+    catch (e) { throw new Error(`bad png stream at ${name}: ${e.message}`); }
+    shots[name] = { w: p.w, h: p.h, data: p.rgba };
+    off = p.next;
   }
   return shots;
 }
-const px = (s, x, y) => [s.data[(y * s.w + x) * 3],
-                         s.data[(y * s.w + x) * 3 + 1],
-                         s.data[(y * s.w + x) * 3 + 2]];
+const px = (s, x, y) => [s.data[(y * s.w + x) * 4],
+                         s.data[(y * s.w + x) * 4 + 1],
+                         s.data[(y * s.w + x) * 4 + 2]];
 const near = (want) => (p) => Math.abs(p[0] - want[0]) < 12 &&
                               Math.abs(p[1] - want[1]) < 12 &&
                               Math.abs(p[2] - want[2]) < 12;
@@ -185,14 +184,14 @@ const hist = (s) => Object.fromEntries(Object.entries(C)
 /* Post-load settle: shot until two consecutive frames match. */
 const pollStable = (sid, out) => [
   `wmctl shot ${sid} ${out}`,
-  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.ppm; ` +
-  `cmp -s /root/poll.ppm ${out} && break; cp /root/poll.ppm ${out}; done`,
+  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.png; ` +
+  `cmp -s /root/poll.png ${out} && break; cp /root/poll.png ${out}; done`,
 ];
 /* A repaint with no wmctl-visible marker: poll PIXELS until the frame
  * differs from a reference (a bounded condition poll, not a fixed sleep). */
 const pollChange = (sid, ref) => [
-  `for i in $(seq 1 100); do wmctl shot ${sid} /root/poll.ppm; ` +
-  `cmp -s /root/poll.ppm ${ref} || break; sleep 0.1; done`,
+  `for i in $(seq 1 100); do wmctl shot ${sid} /root/poll.png; ` +
+  `cmp -s /root/poll.png ${ref} || break; sleep 0.1; done`,
 ];
 const sidOf = (v, title) => `${v}=$(wmctl list | grep "\t${title}$" | sed "s/[^0-9].*//")`;
 
@@ -204,13 +203,13 @@ const clickOut = driveBoot([
   'netsurf /root/ptr/click.html &',
   'wmctl wait win NsPtrClick 30000',
   sidOf('K', 'NsPtrClick'),
-  ...pollStable('$K', '/root/k0.ppm'),
+  ...pollStable('$K', '/root/k0.png'),
   'echo shot-k0-ok',
   'wmctl click $K 60 120',              /* inside a#keep (80..160) */
-  ...pollChange('$K', '/root/k0.ppm'),
+  ...pollChange('$K', '/root/k0.png'),
   /* settle past the frame the class flip landed in: a navigation, had it
    * happened, would repaint again right after */
-  ...pollStable('$K', '/root/k1.ppm'),
+  ...pollStable('$K', '/root/k1.png'),
   'echo shot-k1-ok',
   'wmctl close $K && wmctl wait gone $K 8000 && echo k-closed',
 
@@ -218,12 +217,12 @@ const clickOut = driveBoot([
   'netsurf /root/ptr/click.html &',
   'wmctl wait win NsPtrClick 30000',
   sidOf('G', 'NsPtrClick'),
-  ...pollStable('$G', '/root/g0.ppm'),
+  ...pollStable('$G', '/root/g0.png'),
   'echo shot-g0-ok',
   'wmctl click $G 60 200',              /* inside a#go (160..240) */
   /* the navigation retitles the window, which IS a wmctl-visible marker */
   'wmctl wait win NsPtrB 20000 && echo navigated',
-  ...pollStable('$G', '/root/g1.ppm'),
+  ...pollStable('$G', '/root/g1.png'),
   'echo shot-g1-ok',
   'wmctl close $G && wmctl wait gone $G 8000 && echo g-closed',
 ], { image, timeout: 300000, maxBuffer: 64 * 1024 * 1024 }).stdout;
@@ -242,34 +241,34 @@ const hoverOut = driveBoot([
   /* park the pointer well away from every probe box first, so the frames
    * below are transitions and not a first-entry artefact */
   `wmctl hover $H 600 ${Y_FAR}`,
-  ...pollStable('$H', '/root/h0.ppm'),
+  ...pollStable('$H', '/root/h0.png'),
   'echo shot-h0-ok',
 
   `wmctl hover $H 60 ${Y_LINK}`,
-  ...pollChange('$H', '/root/h0.ppm'),
-  ...pollStable('$H', '/root/h1.ppm'),
+  ...pollChange('$H', '/root/h0.png'),
+  ...pollStable('$H', '/root/h1.png'),
   'echo shot-h1-ok',
 
   /* leave the link again: the exit half of the delta */
   `wmctl hover $H 600 ${Y_FAR}`,
-  ...pollChange('$H', '/root/h1.ppm'),
-  ...pollStable('$H', '/root/h2.ppm'),
+  ...pollChange('$H', '/root/h1.png'),
+  ...pollStable('$H', '/root/h2.png'),
   'echo shot-h2-ok',
 
   /* the pointer on the INNER span, styling the OUTER div */
   `wmctl hover $H 60 ${Y_INNER}`,
-  ...pollChange('$H', '/root/h2.ppm'),
-  ...pollStable('$H', '/root/h3.ppm'),
+  ...pollChange('$H', '/root/h2.png'),
+  ...pollStable('$H', '/root/h3.png'),
   'echo shot-h3-ok',
 
   /* :active — hold the button down over #press, shoot, then release */
   `wmctl down $H 60 ${Y_PRESS}`,
-  ...pollChange('$H', '/root/h3.ppm'),
-  ...pollStable('$H', '/root/h4.ppm'),
+  ...pollChange('$H', '/root/h3.png'),
+  ...pollStable('$H', '/root/h4.png'),
   'echo shot-h4-ok',
   `wmctl up $H 60 ${Y_PRESS}`,
-  ...pollChange('$H', '/root/h4.ppm'),
-  ...pollStable('$H', '/root/h5.ppm'),
+  ...pollChange('$H', '/root/h4.png'),
+  ...pollStable('$H', '/root/h5.png'),
   'echo shot-h5-ok',
 
   'wmctl close $H && wmctl wait gone $H 8000 && echo h-closed',
@@ -282,9 +281,9 @@ check('the hover window closed', hoverOut.includes('h-closed'));
 
 /* ---- read every shot back ------------------------------------------- */
 const NAMES = ['k0', 'k1', 'g0', 'g1', 'h0', 'h1', 'h2', 'h3', 'h4', 'h5'];
-const back = driveBoot('cat ' + NAMES.map((n) => `/root/${n}.ppm`).join(' ') + '\n',
+const back = driveBoot('cat ' + NAMES.map((n) => `/root/${n}.png`).join(' ') + '\n',
                        { image, encoding: null, maxBuffer: 256 * 1024 * 1024 });
-const shots = parsePPMs(back.stdout, NAMES);
+const shots = parsePngs(back.stdout, NAMES);
 const h = {};
 for (const n of NAMES) {
   h[n] = hist(shots[n]);

@@ -130,12 +130,12 @@ const sidOf = (v, title) => `${v}=$(wmctl list | grep "\t${title}$" | sed "s/[^0
  * a frame that differs from the settled reference. */
 const pollStable = (sid, out) => [
   `wmctl shot ${sid} ${out}`,
-  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.ppm; ` +
-  `cmp -s /root/poll.ppm ${out} && break; cp /root/poll.ppm ${out}; done`,
+  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.png; ` +
+  `cmp -s /root/poll.png ${out} && break; cp /root/poll.png ${out}; done`,
 ];
 const pollChange = (sid, ref) => [
-  `for i in $(seq 1 100); do wmctl shot ${sid} /root/poll.ppm; ` +
-  `cmp -s /root/poll.ppm ${ref} || break; sleep 0.1; done`,
+  `for i in $(seq 1 100); do wmctl shot ${sid} /root/poll.png; ` +
+  `cmp -s /root/poll.png ${ref} || break; sleep 0.1; done`,
 ];
 
 /* the same marker on both streams, so each can be cut into sections */
@@ -165,11 +165,11 @@ const run = driveBoot([
   'netsurf /root/exc.html &',
   'wmctl wait win ExcReady 30000',
   sidOf('E', 'ExcReady'),
-  ...pollStable('$E', '/root/e0.ppm'),
+  ...pollStable('$E', '/root/e0.png'),
   'echo exc-settled',
   'wmctl click $E 100 50',
-  ...pollChange('$E', '/root/e0.ppm'),
-  'cmp -s /root/poll.ppm /root/e0.ppm || echo exc-restyled',
+  ...pollChange('$E', '/root/e0.png'),
+  'cmp -s /root/poll.png /root/e0.png || echo exc-restyled',
   'wmctl close $E && wmctl wait nowin ExcReady 8000 && echo exc-closed',
   mark('end'),
 ], { image, timeout: 420000, maxBuffer: 64 * 1024 * 1024 });

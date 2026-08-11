@@ -28,6 +28,7 @@
 const fs = require('fs');
 const path = require('path');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -61,30 +62,28 @@ driveBoot('true', { image });
   rootStore.close();
 }
 
-/* PPM helpers (the netsurf-e2e pattern) */
-function parsePPMs(buf, names) {
+/* PNG shot helpers (the netsurf-e2e pattern; tests/lib/png.js since #657) */
+function parsePngs(buf, names) {
   const shots = {};
   let off = 0;
   for (const name of names) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) throw new Error('bad ppm stream at ' + name + ': ' + JSON.stringify(head));
-    const w = +m[1], h = +m[2];
-    const data = off + m[0].length;
-    shots[name] = { w, h, data: buf.slice(data, data + w * h * 3) };
-    off = data + w * h * 3;
+    let p;
+    try { p = parsePng(buf, off); }
+    catch (e) { throw new Error(`bad png stream at ${name}: ${e.message}`); }
+    shots[name] = { w: p.w, h: p.h, data: p.rgba };
+    off = p.next;
   }
   return shots;
 }
-const px = (s, x, y) => [s.data[(y * s.w + x) * 3],
-                         s.data[(y * s.w + x) * 3 + 1],
-                         s.data[(y * s.w + x) * 3 + 2]];
+const px = (s, x, y) => [s.data[(y * s.w + x) * 4],
+                         s.data[(y * s.w + x) * 4 + 1],
+                         s.data[(y * s.w + x) * 4 + 2]];
 const near = (p, rgb, tol = 4) => Math.abs(p[0] - rgb[0]) <= tol &&
                                   Math.abs(p[1] - rgb[1]) <= tol &&
                                   Math.abs(p[2] - rgb[2]) <= tol;
 const WHITE = [255, 255, 255], YELLOW = [255, 216, 0];
 /* raw bytes of a horizontal band [y0, y1) */
-const bandBytes = (s, y0, y1) => s.data.slice(y0 * s.w * 3, y1 * s.w * 3);
+const bandBytes = (s, y0, y1) => s.data.slice(y0 * s.w * 4, y1 * s.w * 4);
 /* count pixels matching pred in a band */
 function bandCount(s, pred, y0, y1) {
   let n = 0;
@@ -101,12 +100,12 @@ function bandCount(s, pred, y0, y1) {
  * barrier; the stable pair is the quiesce marker). */
 const pollStable = (sid, out) => [
   `wmctl shot ${sid} ${out}`,
-  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.ppm; ` +
-  `cmp -s /root/poll.ppm ${out} && break; cp /root/poll.ppm ${out}; done`,
+  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.png; ` +
+  `cmp -s /root/poll.png ${out} && break; cp /root/poll.png ${out}; done`,
 ];
 
 /* one leg per page: open via the CLI, settle, shot, close. The shot
- * echo is GATED on the settled ppm existing so a leg that never found
+ * echo is GATED on the settled png existing so a leg that never found
  * its window cannot print success markers (its `wait win` timeout
  * also hard-fails the test via driveBoot's 0171 rule). */
 const leg = (page, title, out) => [
@@ -122,10 +121,10 @@ const leg = (page, title, out) => [
 
 /* ---- session A: render all four fixtures ---- */
 const out = driveBoot([
-  ...leg('table.html', 'Table', '/root/t.ppm'),
-  ...leg('flow.html', 'Flow', '/root/f.ppm'),
-  ...leg('forms.html', 'Forms', '/root/o.ppm'),
-  ...leg('fonts.html', 'Fonts', '/root/n.ppm'),
+  ...leg('table.html', 'Table', '/root/t.png'),
+  ...leg('flow.html', 'Flow', '/root/f.png'),
+  ...leg('forms.html', 'Forms', '/root/o.png'),
+  ...leg('fonts.html', 'Fonts', '/root/n.png'),
 ], { image, timeout: 420000, maxBuffer: 64 * 1024 * 1024 }).stdout;
 
 for (const t of ['Table', 'Flow', 'Forms', 'Fonts']) {
@@ -135,9 +134,9 @@ for (const t of ['Table', 'Flow', 'Forms', 'Fonts']) {
 
 /* ---- session B: read the shots back ---- */
 const NAMES = ['t', 'f', 'o', 'n'];
-const back = driveBoot('cat ' + NAMES.map(n => '/root/' + n + '.ppm').join(' ') + '\n',
+const back = driveBoot('cat ' + NAMES.map(n => '/root/' + n + '.png').join(' ') + '\n',
   { image, encoding: null, maxBuffer: 64 * 1024 * 1024 });
-const shots = parsePPMs(back.stdout, NAMES);
+const shots = parsePngs(back.stdout, NAMES);
 
 /* t: table cell geometry — the golden expected-geometry table.
  * Cells are exactly 100x50 from the origin (margin 0, collapsed). */

@@ -50,6 +50,7 @@
 const fs = require('fs');
 const path = require('path');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -339,24 +340,22 @@ driveBoot('true', { image });
   rootStore.close();
 }
 
-/* PPM helpers (the netsurf-e2e pattern) */
-function parsePPMs(buf, names) {
+/* PNG shot helpers (the netsurf-e2e pattern; tests/lib/png.js since #657) */
+function parsePngs(buf, names) {
   const shots = {};
   let off = 0;
   for (const name of names) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) throw new Error('bad ppm stream at ' + name + ': ' + JSON.stringify(head));
-    const w = +m[1], h = +m[2];
-    const data = off + m[0].length;
-    shots[name] = { w, h, data: buf.slice(data, data + w * h * 3) };
-    off = data + w * h * 3;
+    let p;
+    try { p = parsePng(buf, off); }
+    catch (e) { throw new Error(`bad png stream at ${name}: ${e.message}`); }
+    shots[name] = { w: p.w, h: p.h, data: p.rgba };
+    off = p.next;
   }
   return shots;
 }
-const px = (s, x, y) => [s.data[(y * s.w + x) * 3],
-                         s.data[(y * s.w + x) * 3 + 1],
-                         s.data[(y * s.w + x) * 3 + 2]];
+const px = (s, x, y) => [s.data[(y * s.w + x) * 4],
+                         s.data[(y * s.w + x) * 4 + 1],
+                         s.data[(y * s.w + x) * 4 + 2]];
 const isRed = (p) => p[0] > 180 && p[1] < 80 && p[2] < 80;
 function countContent(s, pred) {
   let n = 0;
@@ -374,7 +373,7 @@ function diffRows(a, b) {
   for (let y = 0; y < a.h - STATUS_H; y++) {
     let n = 0;
     for (let x = 0; x < a.w; x++) {
-      const i = (y * a.w + x) * 3;
+      const i = (y * a.w + x) * 4;
       if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] ||
           a.data[i + 2] !== b.data[i + 2]) n++;
     }
@@ -416,14 +415,14 @@ function rulerScroll(s) {
  * for pages that DO settle. */
 const pollStable = (sid, out) => [
   `wmctl shot ${sid} ${out}`,
-  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.ppm; ` +
-  `cmp -s /root/poll.ppm ${out} && break; cp /root/poll.ppm ${out}; done`,
+  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.png; ` +
+  `cmp -s /root/poll.png ${out} && break; cp /root/poll.png ${out}; done`,
 ];
 /* Repaints with no wmctl-visible marker: poll PIXELS until the frame differs
  * from the reference (bounded condition poll, not a fixed sleep). */
 const pollChange = (sid, ref) => [
-  `for i in $(seq 1 100); do wmctl shot ${sid} /root/poll.ppm; ` +
-  `cmp -s /root/poll.ppm ${ref} || break; sleep 0.1; done`,
+  `for i in $(seq 1 100); do wmctl shot ${sid} /root/poll.png; ` +
+  `cmp -s /root/poll.png ${ref} || break; sleep 0.1; done`,
 ];
 /* Region-scoped settle (#173, the general seam 0386 §4.3 called for):
  * two consecutive CROPPED shots equal. Scoping the predicate to the
@@ -433,8 +432,8 @@ const pollChange = (sid, ref) => [
 const pollStableRegion = (sid, out, x, y, w, h) => [
   `wmctl shot ${sid} ${out} ${x} ${y} ${w} ${h}`,
   `for i in $(seq 1 100); do sleep 0.1; ` +
-  `wmctl shot ${sid} /root/pollr.ppm ${x} ${y} ${w} ${h}; ` +
-  `cmp -s /root/pollr.ppm ${out} && break; cp /root/pollr.ppm ${out}; done`,
+  `wmctl shot ${sid} /root/pollr.png ${x} ${y} ${w} ${h}; ` +
+  `cmp -s /root/pollr.png ${out} && break; cp /root/pollr.png ${out}; done`,
 ];
 /* The field band the ink asserts read (fieldInk: x 0..260, y 2..28),
  * as a crop rect. */
@@ -456,61 +455,61 @@ const out = driveBoot([
   'netsurf /root/stopwatch/index.html &',
   'wmctl wait win Stopwatch 30000',
   sidOf('SW', 'Stopwatch'),
-  'wmctl shot $SW /root/m1.ppm && echo shot-m1-ok',
-  ...pollChange('$SW', '/root/m1.ppm'),
-  'wmctl shot $SW /root/m2.ppm && echo shot-m2-ok',
+  'wmctl shot $SW /root/m1.png && echo shot-m1-ok',
+  ...pollChange('$SW', '/root/m1.png'),
+  'wmctl shot $SW /root/m2.png && echo shot-m2-ok',
   'wmctl close $SW && wmctl wait nowin Stopwatch 8000 && echo stopwatch-closed',
 
   /* --- leg 2: scroll survives a re-conversion --- */
   'netsurf /root/ruler.html &',
   'wmctl wait win NsRuler 30000',
   sidOf('RU', 'NsRuler'),
-  'wmctl shot $RU /root/r1.ppm && echo shot-r1-ok',
+  'wmctl shot $RU /root/r1.png && echo shot-r1-ok',
   `wmctl wheel $RU -${SCROLL_NOTCHES}`,
-  ...pollChange('$RU', '/root/r1.ppm'),
+  ...pollChange('$RU', '/root/r1.png'),
   /* r2 is the scrolled reference.  The tick timer is still running, so the
    * NEXT differing frame is a re-conversion landing on top of that scroll. */
-  'wmctl shot $RU /root/r2.ppm && echo shot-r2-ok',
-  ...pollChange('$RU', '/root/r2.ppm'),
-  'wmctl shot $RU /root/r3.ppm && echo shot-r3-ok',
-  ...pollChange('$RU', '/root/r3.ppm'),
-  'wmctl shot $RU /root/r4.ppm && echo shot-r4-ok',
+  'wmctl shot $RU /root/r2.png && echo shot-r2-ok',
+  ...pollChange('$RU', '/root/r2.png'),
+  'wmctl shot $RU /root/r3.png && echo shot-r3-ok',
+  ...pollChange('$RU', '/root/r3.png'),
+  'wmctl shot $RU /root/r4.png && echo shot-r4-ok',
   'wmctl close $RU && wmctl wait nowin NsRuler 8000 && echo ruler-closed',
 
   /* --- leg 3: a real click inserting and removing an element --- */
   'netsurf /root/toggle.html &',
   'wmctl wait win NsToggle 30000',
   sidOf('TG', 'NsToggle'),
-  ...pollStable('$TG', '/root/t1.ppm'),
+  ...pollStable('$TG', '/root/t1.png'),
   'echo shot-t1-ok',
   'wmctl click $TG 200 50',
-  ...pollChange('$TG', '/root/t1.ppm'),
-  'wmctl shot $TG /root/t2.ppm && echo shot-t2-ok',
+  ...pollChange('$TG', '/root/t1.png'),
+  'wmctl shot $TG /root/t2.png && echo shot-t2-ok',
   'wmctl click $TG 200 50',
-  ...pollChange('$TG', '/root/t2.ppm'),
-  'wmctl shot $TG /root/t3.ppm && echo shot-t3-ok',
+  ...pollChange('$TG', '/root/t2.png'),
+  'wmctl shot $TG /root/t3.png && echo shot-t3-ok',
   'wmctl close $TG && wmctl wait nowin NsToggle 8000 && echo toggle-closed',
 
   /* --- leg 4: typing survives re-conversion (static control vs ticking) --- */
   'netsurf /root/static.html &',
   'wmctl wait win NsStatic 30000',
   sidOf('ST', 'NsStatic'),
-  ...pollStable('$ST', '/root/x0.ppm'),
+  ...pollStable('$ST', '/root/x0.png'),
   'wmctl click $ST 60 12',        /* focus the field (its own pinned geometry) */
   /* 0386 D3: shot after each key — the six deltas are the per-glyph ink
    * table that retro-explains any missing-glyph count */
   ...TYPED.flatMap(([sc, ks], i) =>
     [`wmctl key $ST ${sc} ${ks}; sleep 0.25`,
-     `wmctl shot $ST /root/s${i + 1}.ppm && echo shot-s${i + 1}-ok`]),
-  ...pollStable('$ST', '/root/x1.ppm'),
+     `wmctl shot $ST /root/s${i + 1}.png && echo shot-s${i + 1}-ok`]),
+  ...pollStable('$ST', '/root/x1.png'),
   'echo shot-x1-ok',
   /* #173 exact-crop acceptance, on the settled STATIC page so the crop
    * and the full frame are the same content: xc must be exactly the
    * requested 260x28 region of x1. An off-surface rect must refuse
    * loudly and write nothing. */
-  `wmctl shot $ST /root/xc.ppm ${FIELD_RECT} && echo shot-xc-ok`,
-  'wmctl shot $ST /root/none.ppm 5000 5000 10 10 || echo crop-empty-refused',
-  '[ ! -e /root/none.ppm ] && echo crop-no-file',
+  `wmctl shot $ST /root/xc.png ${FIELD_RECT} && echo shot-xc-ok`,
+  'wmctl shot $ST /root/none.png 5000 5000 10 10 || echo crop-empty-refused',
+  '[ ! -e /root/none.png ] && echo crop-no-file',
   'wmctl close $ST && wmctl wait nowin NsStatic 8000 && echo static-closed',
 
   'netsurf /root/ticky.html &',
@@ -520,8 +519,8 @@ const out = driveBoot([
   /* D3 on the ticky leg: the step that fails to grow names the lost key */
   ...TYPED.flatMap(([sc, ks], i) =>
     [`wmctl key $TK ${sc} ${ks}; sleep 0.25`,
-     `wmctl shot $TK /root/k${i + 1}.ppm && echo shot-k${i + 1}-ok`]),
-  'wmctl shot $TK /root/x2.ppm && echo shot-x2-ok',
+     `wmctl shot $TK /root/k${i + 1}.png && echo shot-k${i + 1}-ok`]),
+  'wmctl shot $TK /root/x2.png && echo shot-x2-ok',
   /* the SETTLED shot (#173): the field band region-settles WHILE the
    * tick is still repainting below (typing ends ~4 s into the 7.5 s
    * tick run) — the region predicate replaces the old 'sleep 6' that
@@ -529,8 +528,8 @@ const out = driveBoot([
    * assert is band-scoped (fieldInk).  x2 (immediate) stays
    * diagnostic-only: an un-barriered sample can catch a mid-window
    * render and must not gate. */
-  ...pollStableRegion('$TK', '/root/xr1.ppm', ...FIELD),
-  'wmctl shot $TK /root/x3.ppm && echo shot-x3-ok',
+  ...pollStableRegion('$TK', '/root/xr1.png', ...FIELD),
+  'wmctl shot $TK /root/x3.png && echo shot-x3-ok',
   'wmctl close $TK && wmctl wait nowin NsTicky 8000 && echo ticky-closed',
 
   /* --- 0386 D4: the direct M2 probe — same small ticky page, 20 ms key
@@ -541,10 +540,10 @@ const out = driveBoot([
   sidOf('TF', 'NsTicky'),
   'wmctl click $TF 60 12',
   ...TYPED.map(([sc, ks]) => `wmctl key $TF ${sc} ${ks}; sleep 0.02`),
-  'wmctl shot $TF /root/x4.ppm && echo shot-x4-ok',
+  'wmctl shot $TF /root/x4.png && echo shot-x4-ok',
   /* #173 region settle, as above — x5's asserts are band-scoped too */
-  ...pollStableRegion('$TF', '/root/xr2.ppm', ...FIELD),
-  'wmctl shot $TF /root/x5.ppm && echo shot-x5-ok',
+  ...pollStableRegion('$TF', '/root/xr2.png', ...FIELD),
+  'wmctl shot $TF /root/x5.png && echo shot-x5-ok',
   'wmctl close $TF && wmctl wait nowin NsTicky 8000 && echo tickyfast-closed',
 
   /* --- 0386 D2 arm T: focus FIRST (page still quiet — the tick starts at
@@ -558,13 +557,13 @@ const out = driveBoot([
   'sleep 2',                      /* ticking is now underway */
   ...TYPED.flatMap(([sc, ks], i) =>
     [`wmctl key $BT ${sc} ${ks}; sleep 0.25`,
-     `wmctl shot $BT /root/tk${i + 1}.ppm && echo shot-tk${i + 1}-ok`]),
-  'wmctl shot $BT /root/bt1.ppm && echo shot-bt1-ok',
+     `wmctl shot $BT /root/tk${i + 1}.png && echo shot-tk${i + 1}-ok`]),
+  'wmctl shot $BT /root/bt1.png && echo shot-bt1-ok',
   'sleep 6',                      /* past the finite tick's end: TRUE settle
                                      * (kept, not a #173 region settle: this
                                      * leg's vprobe reads whole-frame mirror
                                      * rows with unpinned geometry) */
-  'wmctl shot $BT /root/bt2.ppm && echo shot-bt2-ok',
+  'wmctl shot $BT /root/bt2.png && echo shot-bt2-ok',
   'wmctl close $BT && wmctl wait nowin NsBigT 8000 && echo bigt-closed',
 
   /* --- D2 arm T2 (the todos/0402 shape): the CLICK itself lands mid
@@ -575,12 +574,12 @@ const out = driveBoot([
   sidOf('BU', 'NsBigT'),
   'wmctl click $BU 60 12',
   ...TYPE_KEYS('$BU'),
-  'wmctl shot $BU /root/bu1.ppm && echo shot-bu1-ok',
+  'wmctl shot $BU /root/bu1.png && echo shot-bu1-ok',
   'sleep 6',                      /* past the finite tick's end: TRUE settle
                                      * (kept, not a #173 region settle: this
                                      * leg's vprobe reads whole-frame mirror
                                      * rows with unpinned geometry) */
-  'wmctl shot $BU /root/bu2.ppm && echo shot-bu2-ok',
+  'wmctl shot $BU /root/bu2.png && echo shot-bu2-ok',
   'wmctl close $BU && wmctl wait nowin NsBigT 8000 && echo bigt2-closed',
 
   /* --- D2 arm C1 (size control): same 3000-element page, NO timer. --- */
@@ -590,9 +589,9 @@ const out = driveBoot([
   sidOf('BC', 'NsBigC1'),
   'wmctl click $BC 60 12',
   ...TYPE_KEYS('$BC'),
-  'wmctl shot $BC /root/bc11.ppm && echo shot-bc11-ok',
+  'wmctl shot $BC /root/bc11.png && echo shot-bc11-ok',
   'sleep 2',
-  'wmctl shot $BC /root/bc12.ppm && echo shot-bc12-ok',
+  'wmctl shot $BC /root/bc12.png && echo shot-bc12-ok',
   'wmctl close $BC && wmctl wait nowin NsBigC1 8000 && echo bigc1-closed',
 
   /* --- D2 arm C2 (period control): first tick at +8 s, typing done by
@@ -604,12 +603,12 @@ const out = driveBoot([
   'wmctl click $BD 60 12',
   'sleep 2',
   ...TYPE_KEYS('$BD'),
-  'wmctl shot $BD /root/bc21.ppm && echo shot-bc21-ok',
+  'wmctl shot $BD /root/bc21.png && echo shot-bc21-ok',
   /* the settled shot must land BETWEEN tick 1 (+8 s from load) and tick
    * 2 (+13 s): after the one post-typing re-conversion completes, before
    * the next opens a window */
   'sleep 4.5',
-  'wmctl shot $BD /root/bc22.ppm && echo shot-bc22-ok',
+  'wmctl shot $BD /root/bc22.png && echo shot-bc22-ok',
   'wmctl close $BD && wmctl wait nowin NsBigC2 8000 && echo bigc2-closed',
 
   /* --- todos/0412 arm GC (control): the same gadget page with NO timer,
@@ -622,18 +621,18 @@ const out = driveBoot([
   /* CHANGE-then-SETTLE, not a clock.  This page holds 6000 elements, so
    * the window appears long before the first layout lands and two
    * identical BLANK frames would satisfy pollStable on their own. */
-  'wmctl shot $GC /root/gcr.ppm',
-  ...pollChange('$GC', '/root/gcr.ppm'),
-  ...pollStable('$GC', '/root/gc0.ppm'),
+  'wmctl shot $GC /root/gcr.png',
+  ...pollChange('$GC', '/root/gcr.png'),
+  ...pollStable('$GC', '/root/gc0.png'),
   'echo shot-gc0-ok',
   `wmctl click $GC 9 ${radioCentre(2)}`,   /* radio r2, centre of its blob */
-  ...pollChange('$GC', '/root/gc0.ppm'),
+  ...pollChange('$GC', '/root/gc0.png'),
   /* The click repaints at once, then the `change` listener's textContent
    * write starts a re-conversion whose swap repaints again ~600 ms later.
    * pollStable can exit in the quiet gap between the two, so give the
    * second repaint room before settling.  No marker exists for it. */
   'sleep 2',
-  ...pollStable('$GC', '/root/gc1.ppm'),
+  ...pollStable('$GC', '/root/gc1.png'),
   'echo shot-gc1-ok',
   'wmctl close $GC && wmctl wait nowin NsGadC 8000 && echo gadc-closed',
 
@@ -647,9 +646,9 @@ const out = driveBoot([
   sidOf('GR', 'NsGadT'),
   /* settle the page BEFORE the tick starts (it is delayed 6 s for exactly
    * this), so the click lands on a laid-out page at known geometry */
-  'wmctl shot $GR /root/grr.ppm',
-  ...pollChange('$GR', '/root/grr.ppm'),
-  ...pollStable('$GR', '/root/gr0.ppm'),
+  'wmctl shot $GR /root/grr.png',
+  ...pollChange('$GR', '/root/grr.png'),
+  ...pollStable('$GR', '/root/gr0.png'),
   'echo shot-gr0-ok',
   'sleep 6',                      /* ticking is now underway */
   `wmctl click $GR 9 ${radioCentre(2)}`,   /* radio r2 */
@@ -658,11 +657,11 @@ const out = driveBoot([
    * measures against is ~600 ms wide (6000 elements), so 300 ms sits
    * between the two with margin at both ends.  D6 prints the numbers. */
   'sleep 0.3',
-  'wmctl shot $GR /root/gr1.ppm && echo shot-gr1-ok',
+  'wmctl shot $GR /root/gr1.png && echo shot-gr1-ok',
   /* 25 ticks at 300 ms, each collapsing into a ~600 ms pass, plus the
    * trailing pass: past the finite tick's end with margin */
   'sleep 14',
-  ...pollStable('$GR', '/root/gr2.ppm'),
+  ...pollStable('$GR', '/root/gr2.png'),
   'echo shot-gr2-ok',
   'wmctl close $GR && wmctl wait nowin NsGadT 8000 && echo gadt-closed',
 ], { image, timeout: 540000, maxBuffer: 64 * 1024 * 1024 }).stdout;
@@ -686,9 +685,9 @@ for (const tag of ['stopwatch', 'ruler', 'toggle', 'static', 'ticky',
 }
 
 /* ---- session B: read the shots back ---- */
-const back = driveBoot('cat ' + NAMES.map((n) => `/root/${n}.ppm`).join(' ') + '\n',
+const back = driveBoot('cat ' + NAMES.map((n) => `/root/${n}.png`).join(' ') + '\n',
                        { image, encoding: null, maxBuffer: 128 * 1024 * 1024 });
-const shots = parsePPMs(back.stdout, NAMES);
+const shots = parsePngs(back.stdout, NAMES);
 
 /* --- leg 1: a timer-driven textContent write reaches real pixels --- */
 {
@@ -767,7 +766,7 @@ const shots = parsePPMs(back.stdout, NAMES);
     let n = 0;
     for (let y = 2; y < 28; y++) {
       for (let x = 0; x < Math.min(a.w, b.w, 260); x++) {
-        const i = (y * a.w + x) * 3, j = (y * b.w + x) * 3;
+        const i = (y * a.w + x) * 4, j = (y * b.w + x) * 4;
         if (a.data[i] !== b.data[j] || a.data[i + 1] !== b.data[j + 1] ||
             a.data[i + 2] !== b.data[j + 2]) n++;
       }
@@ -789,7 +788,7 @@ const shots = parsePPMs(back.stdout, NAMES);
     let diff = 0;
     for (let y = 0; y < 28; y++) {
       for (let x = 0; x < 260; x++) {
-        const i = (y * shots.x1.w + x) * 3, j = (y * c.w + x) * 3;
+        const i = (y * shots.x1.w + x) * 4, j = (y * c.w + x) * 4;
         if (shots.x1.data[i] !== c.data[j] ||
             shots.x1.data[i + 1] !== c.data[j + 1] ||
             shots.x1.data[i + 2] !== c.data[j + 2]) diff++;
@@ -830,7 +829,7 @@ const shots = parsePPMs(back.stdout, NAMES);
     const xs = [], ys = [], sample = [];
     for (let y = 2; y < 28; y++) {
       for (let x = 0; x < Math.min(a.w, b.w, 260); x++) {
-        const i = (y * a.w + x) * 3, j = (y * b.w + x) * 3;
+        const i = (y * a.w + x) * 4, j = (y * b.w + x) * 4;
         if (a.data[i] !== b.data[j] || a.data[i + 1] !== b.data[j + 1] ||
             a.data[i + 2] !== b.data[j + 2]) {
           xs.push(x); ys.push(y);
@@ -937,7 +936,7 @@ const shots = parsePPMs(back.stdout, NAMES);
     const hi = Math.min(y1, a.h - STATUS_H, b.h - STATUS_H);
     for (let y = y0; y < hi; y++) {
       for (let x = 0; x < Math.min(a.w, b.w); x++) {
-        const i = (y * a.w + x) * 3, j = (y * b.w + x) * 3;
+        const i = (y * a.w + x) * 4, j = (y * b.w + x) * 4;
         if (a.data[i] !== b.data[j] || a.data[i + 1] !== b.data[j + 1] ||
             a.data[i + 2] !== b.data[j + 2]) n++;
       }

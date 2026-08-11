@@ -40,7 +40,7 @@
 //
 // GEOMETRY IS MEASURED, NEVER DERIVED FROM FONT MATH (the 0422 pattern):
 // a first session opens each menu and shoots it; Node reads the
-// selected-row highlight band out of the PPM; a second session replays
+// selected-row highlight band out of the PNG; a second session replays
 // with computed client coordinates.
 //
 // Run: node tests/kernel/test_netsurf_select_reconvert_e2e.js
@@ -48,6 +48,7 @@
 const fs = require('fs');
 const path = require('path');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -184,23 +185,21 @@ driveBoot('true', { image });
 }
 
 /* ---- shot helpers (the netsurf-e2e pattern) ------------------------- */
-function parsePPMs(buf, names) {
+function parsePngs(buf, names) {
   const shots = {};
   let off = 0;
   for (const name of names) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) throw new Error('bad ppm stream at ' + name + ': ' + JSON.stringify(head));
-    const w = +m[1], h = +m[2];
-    const data = off + m[0].length;
-    shots[name] = { w, h, data: buf.slice(data, data + w * h * 3) };
-    off = data + w * h * 3;
+    let p;
+    try { p = parsePng(buf, off); }
+    catch (e) { throw new Error(`bad png stream at ${name}: ${e.message}`); }
+    shots[name] = { w: p.w, h: p.h, data: p.rgba };
+    off = p.next;
   }
   return shots;
 }
-const px = (s, x, y) => [s.data[(y * s.w + x) * 3],
-                         s.data[(y * s.w + x) * 3 + 1],
-                         s.data[(y * s.w + x) * 3 + 2]];
+const px = (s, x, y) => [s.data[(y * s.w + x) * 4],
+                         s.data[(y * s.w + x) * 4 + 1],
+                         s.data[(y * s.w + x) * 4 + 2]];
 const near = (want, tol = 6) => (p) => Math.abs(p[0] - want[0]) < tol &&
                                        Math.abs(p[1] - want[1]) < tol &&
                                        Math.abs(p[2] - want[2]) < tol;
@@ -234,12 +233,12 @@ function rowExtent(s, y, want) {
 
 const pollStable = (sid, out) => [
   `wmctl shot ${sid} ${out}`,
-  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.ppm; ` +
-  `cmp -s /root/poll.ppm ${out} && break; cp /root/poll.ppm ${out}; done`,
+  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.png; ` +
+  `cmp -s /root/poll.png ${out} && break; cp /root/poll.png ${out}; done`,
 ];
 const pollChange = (sid, ref) => [
-  `for i in $(seq 1 100); do wmctl shot ${sid} /root/poll.ppm; ` +
-  `cmp -s /root/poll.ppm ${ref} || break; sleep 0.1; done`,
+  `for i in $(seq 1 100); do wmctl shot ${sid} /root/poll.png; ` +
+  `cmp -s /root/poll.png ${ref} || break; sleep 0.1; done`,
 ];
 const sidOf = (v, title) => `${v}=$(wmctl list | grep "\t${title}$" | sed "s/[^0-9].*//")`;
 
@@ -250,11 +249,11 @@ const measureOut = driveBoot([].concat(...[
   `netsurf /root/rc/${tag}.html &`,
   `wmctl wait win ${title} 30000`,
   sidOf('K', title),
-  ...pollStable('$K', `/root/${tag}0.ppm`),
+  ...pollStable('$K', `/root/${tag}0.png`),
   `echo shot-${tag}0-ok`,
   'wmctl click $K 12 8',
-  ...pollChange('$K', `/root/${tag}0.ppm`),
-  ...pollStable('$K', `/root/${tag}open.ppm`),
+  ...pollChange('$K', `/root/${tag}0.png`),
+  ...pollStable('$K', `/root/${tag}open.png`),
   `echo shot-${tag}open-ok`,
   `wmctl close $K && wmctl wait gone $K 8000 && echo ${tag}-closed`,
 ])), { image, timeout: 420000, maxBuffer: 64 * 1024 * 1024 }).stdout;
@@ -265,9 +264,9 @@ for (const tag of ['a0', 'aopen', 'r0', 'ropen', 'c0', 'copen']) {
 check('measure windows closed',
       ['a', 'r', 'c'].every((t) => measureOut.includes(`${t}-closed`)));
 
-const back1 = driveBoot('cat /root/a0.ppm /root/aopen.ppm /root/r0.ppm /root/ropen.ppm /root/c0.ppm /root/copen.ppm\n',
+const back1 = driveBoot('cat /root/a0.png /root/aopen.png /root/r0.png /root/ropen.png /root/c0.png /root/copen.png\n',
                         { image, encoding: null, maxBuffer: 64 * 1024 * 1024 });
-const M = parsePPMs(back1.stdout, ['a0', 'aopen', 'r0', 'ropen', 'c0', 'copen']);
+const M = parsePngs(back1.stdout, ['a0', 'aopen', 'r0', 'ropen', 'c0', 'copen']);
 
 /* band-variant detection off the first open shot */
 let BAND = BAND_A;
@@ -359,26 +358,26 @@ const legOut = driveBoot([
   'netsurf /root/rc/a.html &',
   'wmctl wait win NsRcA 30000',
   sidOf('K', 'NsRcA'),
-  ...pollStable('$K', '/root/s0.ppm'),
+  ...pollStable('$K', '/root/s0.png'),
   'wmctl click $K 12 8',
-  ...pollChange('$K', '/root/s0.ppm'),
-  ...pollStable('$K', '/root/sopen.ppm'),
+  ...pollChange('$K', '/root/s0.png'),
+  ...pollStable('$K', '/root/sopen.png'),
   'echo shot-sopen-ok',
   ...Array(6).fill(arrowClick(GA)),
-  ...pollChange('$K', '/root/sopen.ppm'),
-  ...pollStable('$K', '/root/sscroll.ppm'),
+  ...pollChange('$K', '/root/sopen.png'),
+  ...pollStable('$K', '/root/sscroll.png'),
   'echo shot-sscroll-ok',
   rowClick(GA, PICK, SCROLL),
-  ...pollChange('$K', '/root/sscroll.ppm'),
-  ...pollStable('$K', '/root/ssurv.ppm'),
+  ...pollChange('$K', '/root/sscroll.png'),
+  ...pollStable('$K', '/root/ssurv.png'),
   'echo shot-ssurv-ok',
   outsideClick(GA),
-  ...pollChange('$K', '/root/ssurv.ppm'),
-  ...pollStable('$K', '/root/sdism.ppm'),
+  ...pollChange('$K', '/root/ssurv.png'),
+  ...pollStable('$K', '/root/sdism.png'),
   'echo shot-sdism-ok',
   `wmctl click $K 210 ${readY}`,
-  ...pollChange('$K', '/root/sdism.ppm'),
-  ...pollStable('$K', '/root/sread.ppm'),
+  ...pollChange('$K', '/root/sdism.png'),
+  ...pollStable('$K', '/root/sread.png'),
   'echo shot-sread-ok',
   'wmctl close $K && wmctl wait gone $K 8000 && echo s-closed',
 
@@ -386,18 +385,18 @@ const legOut = driveBoot([
   'netsurf /root/rc/r.html &',
   'wmctl wait win NsRcR 30000',
   sidOf('K', 'NsRcR'),
-  ...pollStable('$K', '/root/t0.ppm'),
+  ...pollStable('$K', '/root/t0.png'),
   'wmctl click $K 12 8',
-  ...pollChange('$K', '/root/t0.ppm'),
-  ...pollStable('$K', '/root/topen.ppm'),
+  ...pollChange('$K', '/root/t0.png'),
+  ...pollStable('$K', '/root/topen.png'),
   'echo shot-topen-ok',
   rowClick(GR, 3, 0),
-  ...pollChange('$K', '/root/topen.ppm'),
-  ...pollStable('$K', '/root/tsurv.ppm'),
+  ...pollChange('$K', '/root/topen.png'),
+  ...pollStable('$K', '/root/tsurv.png'),
   'echo shot-tsurv-ok',
   `wmctl click $K 210 ${readY}`,
-  ...pollChange('$K', '/root/tsurv.ppm'),
-  ...pollStable('$K', '/root/tread.ppm'),
+  ...pollChange('$K', '/root/tsurv.png'),
+  ...pollStable('$K', '/root/tread.png'),
   'echo shot-tread-ok',
   'wmctl close $K && wmctl wait gone $K 8000 && echo t-closed',
 
@@ -405,25 +404,25 @@ const legOut = driveBoot([
   'netsurf /root/rc/c.html &',
   'wmctl wait win NsRcC 30000',
   sidOf('K', 'NsRcC'),
-  ...pollStable('$K', '/root/u0.ppm'),
+  ...pollStable('$K', '/root/u0.png'),
   'wmctl click $K 12 8',
-  ...pollChange('$K', '/root/u0.ppm'),
-  ...pollStable('$K', '/root/uopen.ppm'),
+  ...pollChange('$K', '/root/u0.png'),
+  ...pollStable('$K', '/root/uopen.png'),
   'echo shot-uopen-ok',
   rowClick(GC, 1, 0),
-  ...pollChange('$K', '/root/uopen.ppm'),
-  ...pollStable('$K', '/root/usurv.ppm'),
+  ...pollChange('$K', '/root/uopen.png'),
+  ...pollStable('$K', '/root/usurv.png'),
   'echo shot-usurv-ok',
   ...Array(clampClicks).fill(arrowClick(GC)),
-  ...pollChange('$K', '/root/usurv.ppm'),
-  ...pollStable('$K', '/root/uclamp.ppm'),
+  ...pollChange('$K', '/root/usurv.png'),
+  ...pollStable('$K', '/root/uclamp.png'),
   'echo shot-uclamp-ok',
   outsideClick(GC),
-  ...pollChange('$K', '/root/uclamp.ppm'),
-  ...pollStable('$K', '/root/udism.ppm'),
+  ...pollChange('$K', '/root/uclamp.png'),
+  ...pollStable('$K', '/root/udism.png'),
   `wmctl click $K 210 ${readY}`,
-  ...pollChange('$K', '/root/udism.ppm'),
-  ...pollStable('$K', '/root/uread.ppm'),
+  ...pollChange('$K', '/root/udism.png'),
+  ...pollStable('$K', '/root/uread.png'),
   'echo shot-uread-ok',
   'wmctl close $K && wmctl wait gone $K 8000 && echo u-closed',
 ], { image, timeout: 420000, maxBuffer: 64 * 1024 * 1024 }).stdout;
@@ -439,9 +438,9 @@ check('leg windows closed',
 const NAMES = ['sopen', 'sscroll', 'ssurv', 'sdism', 'sread',
                'topen', 'tsurv', 'tread',
                'uopen', 'usurv', 'uclamp', 'uread'];
-const back2 = driveBoot('cat ' + NAMES.map((n) => `/root/${n}.ppm`).join(' ') + '\n',
+const back2 = driveBoot('cat ' + NAMES.map((n) => `/root/${n}.png`).join(' ') + '\n',
                         { image, encoding: null, maxBuffer: 256 * 1024 * 1024 });
-const S = parsePPMs(back2.stdout, NAMES);
+const S = parsePngs(back2.stdout, NAMES);
 
 const OPEN_A = (s) => occl(s, GA) < 300;
 const CLOSED_A = (s) => occl(s, GA) > baseA - 300;

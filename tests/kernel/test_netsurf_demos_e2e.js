@@ -112,7 +112,7 @@ function openShoot(demoDir, title, tag, interaction) {
      * straight past an unopened window */
     `wmctl wait win "${title}" 60000`,
     sidOf('S', title),
-    `wmctl shot $S /root/${tag}.ppm && echo shot-${tag}-ok`,
+    `wmctl shot $S /root/${tag}.png && echo shot-${tag}-ok`,
   ];
   for (const ph of (interaction ? interaction.phases : [])) {
     for (const st of ph.do) lines.push(...stepLines(st));
@@ -120,7 +120,7 @@ function openShoot(demoDir, title, tag, interaction) {
      * (netsurf schedules redraws on 0-delay callbacks), so each phase
      * settles on a genuine no-marker sleep before its shot. */
     lines.push('sleep 1');
-    lines.push(`wmctl shot $S /root/${tag}-${ph.name}.ppm && echo shot-${tag}-${ph.name}-ok`);
+    lines.push(`wmctl shot $S /root/${tag}-${ph.name}.png && echo shot-${tag}-${ph.name}-ok`);
   }
   lines.push(`wmctl close $S && wmctl wait nowin "${title}" 8000 && echo closed-${tag}`);
   return lines;
@@ -225,7 +225,7 @@ console.log('\nleg 1 — the seed landed on a fresh boot');
 /* ---- leg 2: every demo runs, from its seeded copy ---- */
 console.log('\nleg 2 — every seeded demo runs in a real netsurf window');
 /* Window tags get a close marker; every tag (windows + per-phase interaction
- * shots) gets a shot marker and a PPM to read back — in exactly the order
+ * shots) gets a shot marker and a PNG to read back — in exactly the order
  * openShoot emitted them. */
 const WIN_TAGS = DEMOS.map((d) => 'd-' + d.name).concat(['nojs', 'nocss']);
 const TAGS = [];
@@ -239,18 +239,24 @@ TAGS.push('nocss');
 for (const t of TAGS) check(`${t}: the window came up and was shot`, out.includes(`shot-${t}-ok`));
 for (const t of WIN_TAGS) check(`${t}: the window closed cleanly`, out.includes(`closed-${t}`));
 
-const back = driveBoot('cat ' + TAGS.map((t) => `/root/${t}.ppm`).join(' ') + '\n',
+const back = driveBoot('cat ' + TAGS.map((t) => `/root/${t}.png`).join(' ') + '\n',
                        { image, encoding: null, maxBuffer: 256 * 1024 * 1024 });
 const shots = {};
 {
-  const { parsePpm } = require('../lib/png.js');
+  const { parsePng } = require('../lib/png.js');
   let off = 0;
   for (const t of TAGS) {
     try {
-      const s = parsePpm(back.stdout, off);
-      shots[t] = { w: s.w, h: s.h, rgb: s.rgb };
+      const s = parsePng(back.stdout, off);
+      // demos.js's shot contract is packed RGB (rgb[(y*w+x)*3]) — shared
+      // with the browser driver, which repacks canvas RGBA the same way.
+      const rgb = Buffer.alloc(s.w * s.h * 3);
+      for (let i = 0, o = 0; i < s.rgba.length; i += 4, o += 3) {
+        rgb[o] = s.rgba[i]; rgb[o + 1] = s.rgba[i + 1]; rgb[o + 2] = s.rgba[i + 2];
+      }
+      shots[t] = { w: s.w, h: s.h, rgb };
       off = s.next;
-    } catch (e) { throw new Error('bad ppm stream at ' + t + ': ' + e.message); }
+    } catch (e) { throw new Error('bad png stream at ' + t + ': ' + e.message); }
   }
 }
 /* The pill's two states — the predicates live next to the CSS they read
