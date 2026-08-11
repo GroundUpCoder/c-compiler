@@ -28,6 +28,7 @@ const os = require('os');
 const path = require('path');
 const cp = require('child_process');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng, parseB64Png } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -61,9 +62,9 @@ const out = boot([
   // ---- STATIC vcenter descender legs (0236): shot before anything moves.
   // The tree round-trip above is the paint barrier (agent socket served
   // from the GetMessage idle loop, WM_PAINT delivered before it idles).
-  'wmctl shot $SID /root/cd.ppm && echo cd-shot-ok',
+  'wmctl shot $SID /root/cd.png && echo cd-shot-ok',
   'echo ==dshot',
-  'base64 /root/cd.ppm',
+  'base64 /root/cd.png',
   'echo ==cut',
   // Label click, no pixels: BM_CLICK -> BN_CLICKED -> WM_COMMAND. No wait: the
   // GetMessage loop serves ONE agent request then dispatches ONE queued message
@@ -225,25 +226,16 @@ for (const probe of [
  * x+36..74 (descenders): dj = maxInk(gyp) - maxInk(o) is the descender
  * extent, invariant under vertical placement — it only shrinks when the
  * bottom edge CLIPS. Each short static must show the reference's full dj. */
-function parsePpm(b64) {
-  const buf = Buffer.from(String(b64).replace(/\s+/g, ''), 'base64');
-  let p = 0;
-  const tok = () => { while ([32, 10, 9, 13].includes(buf[p])) p++;
-                      let s = p; while (![32, 10, 9, 13].includes(buf[p])) p++;
-                      return buf.slice(s, p).toString(); };
-  const magic = tok(); const w = +tok(), h = +tok(); tok(); p++;
-  return { buf, w, h, data: p, magic };
-}
 function maxInkRow(P, x0, x1, y0, y1) {          // last row with any dark px
   let m = y0 - 1;
   for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
-    const i = P.data + (y * P.w + x) * 3;
-    if (P.buf[i] < 100 && P.buf[i + 1] < 100 && P.buf[i + 2] < 100) { m = y; break; }
+    const i = (y * P.w + x) * 4;
+    if (P.rgba[i] < 100 && P.rgba[i + 1] < 100 && P.rgba[i + 2] < 100) { m = y; break; }
   }
   return m;
 }
-const dP = parsePpm(section('dshot'));
-check('ctldemo shot is a P6 frame', dP.magic === 'P6', dP.magic);
+const dP = parseB64Png(section('dshot'));
+check("ctldemo shot decodes as a valid PNG", dP.w > 0 && dP.h > 0, `x`);
 /* Measuring columns derive from the LIVE font's advances (C2, #282:
  * the stock font is proportional, so "cols 12..26 = the 'o' glyph" is
  * no longer a constant) — ctldemo prints the "No gyp" prefix extents.
@@ -627,7 +619,7 @@ const outF = driveBoot([
   'echo ==deep',
   'wmctl list',
   'echo ==cut',
-  'wmctl shot screen /root/deep.ppm && echo DEEP-OK',
+  'wmctl shot screen /root/deep.png && echo DEEP-OK',
   ENTER,                                         // fire 304
   'wmctl wait nowin "#32768" 8000',             // whole chain closed
   // ---- the grab (A2 via user32): outside press dismisses + is consumed ----
@@ -695,11 +687,8 @@ check('the chain OVERFLOWS the parent window (fidelity upgrade)',
   const store = new BLOCK_FS.MemoryByteStore(bytes.length);
   store.setBytes(0, bytes);
   const ufs = BLOCK_FS.createV4(store);
-  const ppm = COMMON.readFileBytes(ufs, '/root/deep.ppm');
-  const head = Buffer.from(ppm.subarray(0, 20)).toString('latin1');
-  const off = head.indexOf('255\n') + 4;
-  const px = (x, y) => String(Array.from(
-    ppm.subarray(off + (y * 1024 + x) * 3, off + (y * 1024 + x) * 3 + 3)));
+  const shot = parsePng(Buffer.from(COMMON.readFileBytes(ufs, '/root/deep.png')));
+  const px = (x, y) => String(shot.px(x, y).slice(0, 3));
   const p = pops.length === 3 ? px(pops[2].x + 10, pops[2].y + 10) : 'no-shot';
   check('deepest level composites in the headless shot (hot row navy)',
     p === '0,0,128', p);

@@ -40,6 +40,7 @@
 const fs = require('fs');
 const path = require('path');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -127,24 +128,22 @@ function makeBigPNG(w, h) {
   ]);
 }
 
-/* PPM helpers (the netsurf-e2e pattern) */
-function parsePPMs(buf, names) {
+/* PNG shot helpers (the netsurf-e2e pattern; tests/lib/png.js since #657) */
+function parsePngs(buf, names) {
   const shots = {};
   let off = 0;
   for (const name of names) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) throw new Error('bad ppm stream at ' + name + ': ' + JSON.stringify(head));
-    const w = +m[1], h = +m[2];
-    const data = off + m[0].length;
-    shots[name] = { w, h, data: buf.slice(data, data + w * h * 3) };
-    off = data + w * h * 3;
+    let p;
+    try { p = parsePng(buf, off); }
+    catch (e) { throw new Error(`bad png stream at ${name}: ${e.message}`); }
+    shots[name] = { w: p.w, h: p.h, data: p.rgba };
+    off = p.next;
   }
   return shots;
 }
-const px = (s, x, y) => [s.data[(y * s.w + x) * 3],
-                         s.data[(y * s.w + x) * 3 + 1],
-                         s.data[(y * s.w + x) * 3 + 2]];
+const px = (s, x, y) => [s.data[(y * s.w + x) * 4],
+                         s.data[(y * s.w + x) * 4 + 1],
+                         s.data[(y * s.w + x) * 4 + 2]];
 const near = (p, rgb, tol = 4) => Math.abs(p[0] - rgb[0]) <= tol &&
                                   Math.abs(p[1] - rgb[1]) <= tol &&
                                   Math.abs(p[2] - rgb[2]) <= tol;
@@ -162,11 +161,11 @@ function regionCount(s, pred, x0, y0, x1, y1) {
 /* Post-title-barrier settle (see test_netsurf_e2e.js) */
 const pollStable = (sid, out) => [
   `wmctl shot ${sid} ${out}`,
-  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.ppm; ` +
-  `cmp -s /root/poll.ppm ${out} && break; cp /root/poll.ppm ${out}; done`,
+  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.png; ` +
+  `cmp -s /root/poll.png ${out} && break; cp /root/poll.png ${out}; done`,
 ];
 
-/* the shot echo is GATED on the settled ppm existing, and the closed
+/* the shot echo is GATED on the settled png existing, and the closed
  * echo on the close being accepted, so a leg that never found its
  * window cannot print success markers (its `wait win` timeout also
  * hard-fails the test via driveBoot's 0171 rule) */
@@ -195,11 +194,11 @@ const ERR_TITLE = 'Not found';
 const out = driveBoot([
   'readlink /usr/bin/netsurf && echo LINK-OK',
   'grep -q \'"cmd": "netsurf"\' /usr/opt/netsurf/control.json && echo DESK-ELIGIBLE',
-  ...leg('netsurf /root/images.html', 'Images', '/root/i.ppm', 'images'),
-  ...leg(`netsurf '${DATA_URL}'`, 'DataDoc', '/root/d.ppm', 'data'),
-  ...leg('netsurf /root/no-such-page.html', ERR_TITLE, '/root/e.ppm', 'err'),
-  ...leg('netsurf', 'Welcome to gucOS', '/root/w.ppm', 'welcome'),
-  ...leg('netsurf /root/big.html', 'BigImg', '/root/b.ppm', 'big'),
+  ...leg('netsurf /root/images.html', 'Images', '/root/i.png', 'images'),
+  ...leg(`netsurf '${DATA_URL}'`, 'DataDoc', '/root/d.png', 'data'),
+  ...leg('netsurf /root/no-such-page.html', ERR_TITLE, '/root/e.png', 'err'),
+  ...leg('netsurf', 'Welcome to gucOS', '/root/w.png', 'welcome'),
+  ...leg('netsurf /root/big.html', 'BigImg', '/root/b.png', 'big'),
 ], { image, timeout: 420000, maxBuffer: 64 * 1024 * 1024 }).stdout;
 
 check('folded app: /usr/bin/netsurf -> /usr/opt/netsurf/netsurf',
@@ -213,9 +212,9 @@ for (const tag of ['images', 'data', 'err', 'welcome', 'big']) {
 
 /* ---- session B: read the shots back ---- */
 const NAMES = ['i', 'd', 'e', 'w', 'b'];
-const back = driveBoot('cat ' + NAMES.map(n => '/root/' + n + '.ppm').join(' ') + '\n',
+const back = driveBoot('cat ' + NAMES.map(n => '/root/' + n + '.png').join(' ') + '\n',
   { image, encoding: null, maxBuffer: 64 * 1024 * 1024 });
-const shots = parsePPMs(back.stdout, NAMES);
+const shots = parsePngs(back.stdout, NAMES);
 
 /* i: every decoder's colour lands at its stacked block offset —
  * blocks are 32px tall from the origin, the scaled GIF 64px, the JPEG

@@ -27,6 +27,7 @@
 'use strict';
 const fs = require('fs');
 const { driveBoot, freshImage, section } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const BIN = process.argv[2] || 'mgpp';   // RED harness: `... mgp` must fail
 
@@ -45,36 +46,36 @@ const key = (sid, sym) => 'wmctl key ' + sid + ' 0 ' + sym;
 // so the fork's hit-test splits at x=400 — 100 is the left half, 700 right.
 const click = (sid, x) => 'wmctl click ' + sid + ' ' + x + ' 300 1';
 
-/* ---- session A: drive mgpp, leave PPM shots on the root volume ---- */
+/* ---- session A: drive mgpp, leave PNG shots on the root volume ---- */
 const script = [
   BIN + ' /usr/share/mgp/demo.mgp &',
   'wmctl wait win MagicPoint',
   'sleep 3',                       // page 1 render (freetype at several sizes)
   'MSID=$(wmctl list | grep "MagicPoint" | sed "s/[^0-9].*//")',
-  'wmctl shot $MSID /root/p1.ppm && echo p1-ok',    // page 1
+  'wmctl shot $MSID /root/p1.png && echo p1-ok',    // page 1
 
   key('$MSID', 32), 'sleep 2',                       // space -> page 2
-  'wmctl shot $MSID /root/p2.ppm && echo p2-ok',
+  'wmctl shot $MSID /root/p2.png && echo p2-ok',
   key('$MSID', 32), 'sleep 2',                       // space -> page 3
-  'wmctl shot $MSID /root/p3.ppm && echo p3-ok',
+  'wmctl shot $MSID /root/p3.png && echo p3-ok',
 
   // on page 3: Left arrow -> back to page 2
   key('$MSID', SDLK_LEFT), 'sleep 2',
-  'wmctl shot $MSID /root/kl.ppm && echo kl-ok',
+  'wmctl shot $MSID /root/kl.png && echo kl-ok',
   // on page 2: Right arrow -> forward to page 3
   key('$MSID', SDLK_RIGHT), 'sleep 2',
-  'wmctl shot $MSID /root/kr.ppm && echo kr-ok',
+  'wmctl shot $MSID /root/kr.png && echo kr-ok',
 
   // on page 3: left-half click -> back to page 2
   click('$MSID', 100), 'sleep 2',
-  'wmctl shot $MSID /root/cl.ppm && echo cl-ok',
+  'wmctl shot $MSID /root/cl.png && echo cl-ok',
   // on page 2: right-half click -> forward to page 3
   click('$MSID', 700), 'sleep 2',
-  'wmctl shot $MSID /root/cr.ppm && echo cr-ok',
+  'wmctl shot $MSID /root/cr.png && echo cr-ok',
 
   // on page 3: `b` still goes back to page 2 (unchanged binding)
   key('$MSID', 'b'.charCodeAt(0)), 'sleep 2',
-  'wmctl shot $MSID /root/bb.ppm && echo bb-ok',
+  'wmctl shot $MSID /root/bb.png && echo bb-ok',
 
   // `q` still quits
   key('$MSID', 'q'.charCodeAt(0)),
@@ -92,29 +93,28 @@ for (const s of ['p1', 'p2', 'p3', 'kl', 'kr', 'cl', 'cr', 'bb'])
 check(BIN + ' window closed on q', section(out, 'mgppgone').trim() === '0');
 check('session A completed', out.includes('ALLDONE'));
 
-/* ---- session B: read the PPMs back and assert page identity ---- */
+/* ---- session B: read the PNG shots back and assert page identity ---- */
 const NAMES = ['p1', 'p2', 'p3', 'kl', 'kr', 'cl', 'cr', 'bb'];
-const b = driveBoot('cat ' + NAMES.map((n) => '/root/' + n + '.ppm').join(' ') + '\n',
+const b = driveBoot('cat ' + NAMES.map((n) => '/root/' + n + '.png').join(' ') + '\n',
   { image, timeout: 120000, maxBuffer: 64 * 1024 * 1024, encoding: null });
 const buf = b.stdout;
 
-function parsePpms(buffer) {
-  const ppms = [];
+function parseShot(buffer) {
+  // concatenated PNG shots (#657); stop at the first non-PNG byte, which is
+  // the normal trailing tty noise after the last cat-back.
+  const shots = [];
   let off = 0;
   while (off < buffer.length) {
-    const head = buffer.slice(off, off + 64).toString('latin1');
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) break;
-    const w = parseInt(m[1], 10), h = parseInt(m[2], 10);
-    const data = off + m[0].length;
-    ppms.push({ w, h, data, buf: buffer });
-    off = data + w * h * 3;
+    let p;
+    try { p = parsePng(buffer, off); } catch (e) { break; }
+    shots.push(p);
+    off = p.next;
   }
-  return ppms;
+  return shots;
 }
-const ppms = parsePpms(buf);
-check('read ' + NAMES.length + ' PPMs back', ppms.length === NAMES.length,
-  'got ' + ppms.length);
+const shots = parseShot(buf);
+check('read ' + NAMES.length + ' PNGs back', shots.length === NAMES.length,
+  'got ' + shots.length);
 
 // Count sampled pixels that differ between two shots (the present-test metric).
 function diffCount(p1, p2) {
@@ -122,18 +122,18 @@ function diffCount(p1, p2) {
   let n = 0;
   for (let y = 0; y < p1.h; y += 4)
     for (let x = 0; x < p1.w; x += 4) {
-      const i = p1.data + (y * p1.w + x) * 3, j = p2.data + (y * p2.w + x) * 3;
-      if (p1.buf[i] !== p2.buf[j] || p1.buf[i + 1] !== p2.buf[j + 1] ||
-          p1.buf[i + 2] !== p2.buf[j + 2]) n++;
+      const i = (y * p1.w + x) * 4, j = (y * p2.w + x) * 4;
+      if (p1.rgba[i] !== p2.rgba[j] || p1.rgba[i + 1] !== p2.rgba[j + 1] ||
+          p1.rgba[i + 2] !== p2.rgba[j + 2]) n++;
     }
   return n;
 }
 const differ = (p, q) => diffCount(p, q) > 50;   // distinct pages
 const same = (p, q) => diffCount(p, q) === 0;     // identical render == same page
 
-if (ppms.length === NAMES.length) {
+if (shots.length === NAMES.length) {
   const S = {};
-  NAMES.forEach((n, i) => { S[n] = ppms[i]; });
+  NAMES.forEach((n, i) => { S[n] = shots[i]; });
 
   // sanity: the three forward baselines are pairwise-distinct pages
   check('page 1 / page 2 differ', differ(S.p1, S.p2), String(diffCount(S.p1, S.p2)));

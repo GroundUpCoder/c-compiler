@@ -30,6 +30,7 @@
 const fs = require('fs');
 const path = require('path');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 const NODAWN = path.join(__dirname, 'lib/nodawn-require.js');
@@ -87,7 +88,7 @@ const r = driveBoot([
   'echo ==plist',
   'wmctl list',
   'echo ==cut',
-  'wmctl shot screen /root/menu.ppm && echo SHOT-OK',
+  'wmctl shot screen /root/menu.png && echo SHOT-OK',
   'wmctl key $SID 41 27',                        // ESC closes the popup
   'wmctl wait nowin "#32768" 8000',
   // fire Spin by label with the menu CLOSED (A12); wait for the toggle to
@@ -161,14 +162,8 @@ check('screen shot written', out.includes('SHOT-OK'));
   const store = new BLOCK_FS.MemoryByteStore(bytes.length);
   store.setBytes(0, bytes);
   const ufs = BLOCK_FS.createV4(store);
-  const ppm = COMMON.readFileBytes(ufs, '/root/menu.ppm');
-  const head = Buffer.from(ppm.subarray(0, 32)).toString('latin1');
-  const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-  if (!m) throw new Error('bad screen ppm: ' + JSON.stringify(head));
-  const W = +m[1];
-  const off = m[0].length;
-  const px = (x, y) => String(Array.from(
-    ppm.subarray(off + (y * W + x) * 3, off + (y * W + x) * 3 + 3)));
+  const shot = parsePng(Buffer.from(COMMON.readFileBytes(ufs, '/root/menu.png')));
+  const px = (x, y) => String(shot.px(x, y).slice(0, 3));
   // bar strip: COLOR_MENU face at the right end of the strip (past titles)
   const barP = win1 && bar1 ? px(bar1.x + bar1.w - 4, bar1.y + 10) : 'no-row';
   check('bar strip composites COLOR_MENU over the GPU window', barP === '192,192,192', barP);

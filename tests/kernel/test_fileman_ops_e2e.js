@@ -35,6 +35,7 @@ const os = require('os');
 const path = require('path');
 const cp = require('child_process');
 const { driveBoot, freshImage, deskEntries, deskCell } = require('./lib/drive.js');
+const { parsePng, parseB64Png } = require('../lib/png.js');
 
 // The seeded desktop grid (drive.js model, todos/0184/0185): dirs sort
 // first and the set wraps past column 0, so the test's dropped files land
@@ -96,9 +97,9 @@ const script = [
   // landed in the surface and the shot below can't catch a pre-paint frame.
   'wmctl tree',
   'echo ==cut',
-  'wmctl shot $SID /root/ss.ppm && echo ss-shot-ok',
+  'wmctl shot $SID /root/ss.png && echo ss-shot-ok',
   'echo ==ssshot',
-  'base64 /root/ss.ppm',
+  'base64 /root/ss.png',
   'echo ==cut',
   // ---- the file menu on a DIRECTORY row (sub/ is row 0: dirs first) ----
   RC_ROW0,
@@ -326,20 +327,11 @@ const item = (dump, label) =>
 // descender rows must not clip at the bottom edge (the 0229 disease at the
 // old private-STATIC site). Every pixel check anchors on the live rect from
 // the tree dump, never a hardcoded height.
-function parsePpm(b64) {
-  const buf = Buffer.from(String(b64).replace(/\s+/g, ''), 'base64');
-  let p = 0;
-  const tok = () => { while ([32, 10, 9, 13].includes(buf[p])) p++;
-                      let s = p; while (![32, 10, 9, 13].includes(buf[p])) p++;
-                      return buf.slice(s, p).toString(); };
-  const magic = tok(); const w = +tok(), h = +tok(); tok(); p++;
-  return { buf, w, h, data: p, magic };
-}
 function maxInkRow(P, x0, x1, y0, y1) {          // last row with any dark px
   let m = y0 - 1;
   for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
-    const i = P.data + (y * P.w + x) * 3;
-    if (P.buf[i] < 100 && P.buf[i + 1] < 100 && P.buf[i + 2] < 100) { m = y; break; }
+    const i = (y * P.w + x) * 4;
+    if (P.rgba[i] < 100 && P.rgba[i + 1] < 100 && P.rgba[i + 2] < 100) { m = y; break; }
   }
   return m;
 }
@@ -348,8 +340,8 @@ const ssRow = section('sstree').split('\n')
 const ssM = ssRow.match(/rect=(-?\d+),(-?\d+) (\d+)x(\d+)/) || [];
 const [ssX, ssY, , ssH] = ssM.slice(1).map(Number);
 check('status strip located in the agent tree', ssM.length > 0, ssRow);
-const ssP = parsePpm(section('ssshot'));
-check('status-strip shot is a P6 frame', ssP.magic === 'P6', ssP.magic);
+const ssP = parseB64Png(section('ssshot'));
+check("status-strip shot decodes as a valid PNG", ssP.w > 0 && ssP.h > 0, `x`);
 /* 0230 red->green pin: the old STATUS_H 18 vs the 19px stock cell. */
 check('status-strip height derives from the stock font cell (0230)',
   ssH >= 21, 'H=' + ssH + ' row=' + JSON.stringify(ssRow.slice(0, 120)));

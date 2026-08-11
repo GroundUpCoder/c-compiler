@@ -21,6 +21,7 @@
 'use strict';
 const fs = require('fs');
 const { driveBoot, freshImage, section } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -31,7 +32,7 @@ function check(name, cond, extra) {
 const { dir, image } = freshImage('os-present-');
 const keys = (sid, ch) => 'wmctl key ' + sid + ' 0 ' + ch.charCodeAt(0);
 
-/* ---- session A: drive both apps, leave PPMs on the root volume ---- */
+/* ---- session A: drive both apps, leave PNG shots on the root volume ---- */
 const script = [
   // sent — driven through the `slides` launcher (todos/0444), not a manual
   // cd + bare binary: the baked launcher at /usr/bin/slides probes
@@ -43,10 +44,10 @@ const script = [
   'wmctl wait win sent',
   'sleep 2',                     // first paint: freetype title render
   'SSID=$(wmctl list | grep "\tsent$" | sed "s/[^0-9].*//")',
-  'wmctl shot $SSID /root/s1.ppm && echo s1-ok',
+  'wmctl shot $SSID /root/s1.png && echo s1-ok',
   keys('$SSID', ' '),
   'sleep 1.5',
-  'wmctl shot $SSID /root/s2.ppm && echo s2-ok',
+  'wmctl shot $SSID /root/s2.png && echo s2-ok',
   keys('$SSID', 'q'),
   'sleep 1.5',
   'echo ==sentgone',
@@ -57,16 +58,16 @@ const script = [
   'wmctl wait win MagicPoint',
   'sleep 3',                     // page 1 render (freetype at several sizes)
   'MSID=$(wmctl list | grep "MagicPoint" | sed "s/[^0-9].*//")',
-  'wmctl shot $MSID /root/m1.ppm && echo m1-ok',
+  'wmctl shot $MSID /root/m1.png && echo m1-ok',
   keys('$MSID', ' '),
   'sleep 2',
-  'wmctl shot $MSID /root/m2.ppm && echo m2-ok',
+  'wmctl shot $MSID /root/m2.png && echo m2-ok',
   keys('$MSID', ' '),
   'sleep 2',
-  'wmctl shot $MSID /root/m3.ppm && echo m3-ok',
+  'wmctl shot $MSID /root/m3.png && echo m3-ok',
   keys('$MSID', ' '),
   'sleep 2',
-  'wmctl shot $MSID /root/m4.ppm && echo m4-ok',
+  'wmctl shot $MSID /root/m4.png && echo m4-ok',
   keys('$MSID', 'q'),
   'sleep 1.5',
   'echo ==mgpgone',
@@ -114,10 +115,10 @@ for (const d of ALL) {
     'wmctl wait win MagicPoint',
     'sleep 2.5',                   // title page render (freetype at several sizes)
     'MSID=$(wmctl list | grep "MagicPoint" | sed "s/[^0-9].*//")',
-    `wmctl shot $MSID /root/${d.n}1.ppm && echo ${d.n}1-ok`,
+    `wmctl shot $MSID /root/${d.n}1.png && echo ${d.n}1-ok`,
     keys('$MSID', ' '),
     'sleep 1.5',                   // page 2 render (images/bgrad decode)
-    `wmctl shot $MSID /root/${d.n}2.ppm && echo ${d.n}2-ok`);
+    `wmctl shot $MSID /root/${d.n}2.png && echo ${d.n}2-ok`);
   for (let i = 2; i < d.steps; i++)
     script.push(keys('$MSID', ' '), 'sleep 0.6');   // page-N draw settle before the next advance (no marker)
   script.push(
@@ -148,38 +149,36 @@ for (const d of ALL) {
 }
 check('session A completed', out.includes('ALLDONE'));
 
-/* ---- session B: read the PPMs back and assert pixels ---- */
-const DECK_PPMS = ALL.flatMap((d) => [`/root/${d.n}1.ppm`, `/root/${d.n}2.ppm`]);
-const b = driveBoot('cat /root/s1.ppm /root/s2.ppm /root/m1.ppm /root/m2.ppm /root/m3.ppm /root/m4.ppm ' +
-  DECK_PPMS.join(' ') + '\n',
+/* ---- session B: read the PNGs back and assert pixels ---- */
+const DECK_SHOTS = ALL.flatMap((d) => [`/root/${d.n}1.png`, `/root/${d.n}2.png`]);
+const b = driveBoot('cat /root/s1.png /root/s2.png /root/m1.png /root/m2.png /root/m3.png /root/m4.png ' +
+  DECK_SHOTS.join(' ') + '\n',
   { image, timeout: 120000, maxBuffer: 160 * 1024 * 1024, encoding: null });
 const buf = b.stdout;
 
-// Parse concatenated binary P6 PPMs.
-function parsePpms(buffer) {
-  const ppms = [];
+function parseShots(buffer) {
+  // concatenated PNG shots; stop at the first non-PNG byte (trailing tty
+  // noise after the last cat-back is normal)
+  const shots = [];
   let off = 0;
   while (off < buffer.length) {
-    const head = buffer.slice(off, off + 64).toString('latin1');
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) break;
-    const w = parseInt(m[1], 10), h = parseInt(m[2], 10);
-    const data = off + m[0].length;
-    ppms.push({ w, h, data, buf: buffer });
-    off = data + w * h * 3;
+    let p;
+    try { p = parsePng(buffer, off); } catch (e) { break; }
+    shots.push(p);
+    off = p.next;
   }
-  return ppms;
+  return shots;
 }
-const ppms = parsePpms(buf);
-const NPPM = 6 + DECK_PPMS.length;
-check(`read ${NPPM} PPMs back`, ppms.length === NPPM, 'got ' + ppms.length);
+const shots = parseShots(buf);
+const NSHOTS = 6 + DECK_SHOTS.length;
+check(`read ${NSHOTS} PNGs back`, shots.length === NSHOTS, 'got ' + shots.length);
 
-function count(ppm, pred) {
+function count(shot, pred) {
   let n = 0;
-  for (let y = 0; y < ppm.h; y++)
-    for (let x = 0; x < ppm.w; x++) {
-      const i = ppm.data + (y * ppm.w + x) * 3;
-      if (pred(ppm.buf[i], ppm.buf[i + 1], ppm.buf[i + 2])) n++;
+  for (let y = 0; y < shot.h; y++)
+    for (let x = 0; x < shot.w; x++) {
+      const i = (y * shot.w + x) * 4;
+      if (pred(shot.rgba[i], shot.rgba[i + 1], shot.rgba[i + 2])) n++;
     }
   return n;
 }
@@ -188,15 +187,15 @@ function differ(p1, p2) {
   let n = 0;
   for (let y = 0; y < p1.h; y += 4)
     for (let x = 0; x < p1.w; x += 4) {
-      const i = p1.data + (y * p1.w + x) * 3, j = p2.data + (y * p2.w + x) * 3;
-      if (p1.buf[i] !== p2.buf[j] || p1.buf[i + 1] !== p2.buf[j + 1] ||
-          p1.buf[i + 2] !== p2.buf[j + 2]) n++;
+      const i = (y * p1.w + x) * 4, j = (y * p2.w + x) * 4;
+      if (p1.rgba[i] !== p2.rgba[j] || p1.rgba[i + 1] !== p2.rgba[j + 1] ||
+          p1.rgba[i + 2] !== p2.rgba[j + 2]) n++;
     }
   return n > 50;
 }
 
-if (ppms.length === NPPM) {
-  const [s1, s2, m1, m2, m3, m4] = ppms;
+if (shots.length === NSHOTS) {
+  const [s1, s2, m1, m2, m3, m4] = shots;
   const spix = s1.w * s1.h;
   // sent slide 1: white background, black "sent" title
   const white = count(s1, (r, g, b) => r > 240 && g > 240 && b > 240);
@@ -222,10 +221,10 @@ if (ppms.length === NPPM) {
   check('mgp page 3 differs from page 2', differ(m2, m3));
   let topBlue = 0, botDark = 0;
   for (let x = 0; x < m3.w; x += 4) {
-    let i = m3.data + (10 * m3.w + x) * 3;
-    if (m3.buf[i] < 90 && m3.buf[i + 1] < 90 && m3.buf[i + 2] > 120) topBlue++;
-    i = m3.data + ((m3.h - 10) * m3.w + x) * 3;
-    if (m3.buf[i] < 50 && m3.buf[i + 1] < 50 && m3.buf[i + 2] < 70) botDark++;
+    let i = (10 * m3.w + x) * 4;
+    if (m3.rgba[i] < 90 && m3.rgba[i + 1] < 90 && m3.rgba[i + 2] > 120) topBlue++;
+    i = ((m3.h - 10) * m3.w + x) * 4;
+    if (m3.rgba[i] < 50 && m3.rgba[i + 1] < 50 && m3.rgba[i + 2] < 70) botDark++;
   }
   check('mgp page 3 gradient: blue top band', topBlue > m3.w / 8, String(topBlue));
   check('mgp page 3 gradient: dark bottom band', botDark > m3.w / 8, String(botDark));
@@ -241,7 +240,7 @@ if (ppms.length === NPPM) {
 
   // ---- the 0185 showcase + 0202 tutorial decks (title + page-2 shots) ----
   const deck = {};
-  ALL.forEach((d, i) => { deck[d.n] = [ppms[6 + i * 2], ppms[6 + i * 2 + 1]]; });
+  ALL.forEach((d, i) => { deck[d.n] = [shots[6 + i * 2], shots[6 + i * 2 + 1]]; });
   const nearC = (p, q, tol = 14) => Math.abs(p - q) <= tol;
   for (const d of ALL) {
     const [t, p2] = deck[d.n];
@@ -273,10 +272,10 @@ if (ppms.length === NPPM) {
     const g2 = deck.backgrounds[1];
     let topBlue = 0, botDark = 0;
     for (let x = 0; x < g2.w; x += 4) {
-      let i = g2.data + (10 * g2.w + x) * 3;
-      if (g2.buf[i] < 90 && g2.buf[i + 1] < 90 && g2.buf[i + 2] > 120) topBlue++;
-      i = g2.data + ((g2.h - 10) * g2.w + x) * 3;
-      if (g2.buf[i] < 50 && g2.buf[i + 1] < 50 && g2.buf[i + 2] < 70) botDark++;
+      let i = (10 * g2.w + x) * 4;
+      if (g2.rgba[i] < 90 && g2.rgba[i + 1] < 90 && g2.rgba[i + 2] > 120) topBlue++;
+      i = ((g2.h - 10) * g2.w + x) * 4;
+      if (g2.rgba[i] < 50 && g2.rgba[i + 1] < 50 && g2.rgba[i + 2] < 70) botDark++;
     }
     check('backgrounds page 2 gradient: blue top band', topBlue > g2.w / 8, String(topBlue));
     check('backgrounds page 2 gradient: dark bottom band', botDark > g2.w / 8, String(botDark));

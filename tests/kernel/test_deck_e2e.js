@@ -27,6 +27,7 @@
 const fs = require('fs');
 const zlib = require('zlib');
 const { driveBoot, freshImage, section } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -78,24 +79,24 @@ const script = [
   'wmctl wait dim $(wmctl list | grep "deck: live" | sed "s/[^0-9].*//") 1024x704 && echo max-ok',
   'sleep 3',                     // first maximized render settle (freetype; no marker)
   'SID=$(wmctl list | grep "deck: live" | sed "s/[^0-9].*//")',
-  'wmctl shot $SID /root/p1.ppm && echo p1-ok',
+  'wmctl shot $SID /root/p1.png && echo p1-ok',
   'wmctl key $SID 0 1073741903', // Right arrow (SDLK_RIGHT) -> slide "two"
   'sleep 2',                     // nav re-render settle (no marker)
-  'wmctl shot $SID /root/p2.ppm && echo p2-ok',
+  'wmctl shot $SID /root/p2.png && echo p2-ok',
   // Leg: tmp + RENAME-OVER (editor atomic save) reload, slide preserved BY
   // ID — "two" moved from index 1 to index 2, the view must follow the id.
   `echo '${v2}' > /root/live.tmp`,
   'mv /root/live.tmp /root/live.deck && echo mv-ok',
   'sleep 3',                     // watch wake -> reload -> re-render (no marker)
-  'wmctl shot $SID /root/p3.ppm && echo p3-ok',
+  'wmctl shot $SID /root/p3.png && echo p3-ok',
   // Leg: BROKEN truncate-rewrite save — last-good holds + red banner.
   'echo '.concat("'", '{"deck":1, broken', "'", ' > /root/live.deck'),
   'sleep 3',                     // watch wake -> failed reload -> banner (no marker)
-  'wmctl shot $SID /root/p4.ppm && echo p4-ok',
+  'wmctl shot $SID /root/p4.png && echo p4-ok',
   // Leg: good save recovers (banner drops with the fresh deck).
   `echo '${v4}' > /root/live.deck`,
   'sleep 3',                     // watch wake -> reload -> re-render (no marker)
-  'wmctl shot $SID /root/p5.ppm && echo p5-ok',
+  'wmctl shot $SID /root/p5.png && echo p5-ok',
   // Leg: Ctrl-R manual reload (keysym r + KMOD_LCTRL) — a 3rd "reloaded"
   // stderr line with no file change.
   'wmctl key $SID 0 114 64',
@@ -147,35 +148,35 @@ check('session A completed', out.includes('ALLDONE'));
 
 /* ---- session B: read the shots + the --shot PNG back ---- */
 const b = driveBoot(
-  'cat /root/p1.ppm /root/p2.ppm /root/p3.ppm /root/p4.ppm /root/p5.ppm\n' +
+  'cat /root/p1.png /root/p2.png /root/p3.png /root/p4.png /root/p5.png\n' +
   'base64 /root/arch.png\n',
   { image, timeout: 120000, maxBuffer: 64 * 1024 * 1024, encoding: null });
 const buf = b.stdout;
 
-function parsePpms(buffer) {
-  const ppms = [];
+function parseShot(buffer) {
+  // concatenated PNG shots (#657); stop at the first non-PNG byte, which is
+  // the normal trailing tty noise after the last cat-back.
+  const shots = [];
   let off = 0;
   while (off < buffer.length) {
-    const head = buffer.slice(off, off + 64).toString('latin1');
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) break;
-    const w = parseInt(m[1], 10), h = parseInt(m[2], 10);
-    ppms.push({ w, h, data: off + m[0].length, buf: buffer });
-    off = ppms[ppms.length - 1].data + w * h * 3;
+    let p;
+    try { p = parsePng(buffer, off); } catch (e) { break; }
+    shots.push(p);
+    off = p.next;
   }
-  return { ppms, tail: off };
+  return { shots: shots, tail: off };
 }
-const { ppms, tail } = parsePpms(buf);
-check('read 5 PPMs back', ppms.length === 5, 'got ' + ppms.length);
+const { shots, tail } = parseShot(buf);
+check('read 5 PNGs back', shots.length === 5, 'got ' + shots.length);
 
 const near = (v, t) => Math.abs(v - t) <= 12;
-function fraction(ppm, [r, g, b]) {
+function fraction(shot, [r, g, b]) {
   let n = 0;
-  const total = ppm.w * ppm.h;
-  for (let y = 0; y < ppm.h; y++)
-    for (let x = 0; x < ppm.w; x++) {
-      const i = ppm.data + (y * ppm.w + x) * 3;
-      if (near(ppm.buf[i], r) && near(ppm.buf[i + 1], g) && near(ppm.buf[i + 2], b)) n++;
+  const total = shot.w * shot.h;
+  for (let y = 0; y < shot.h; y++)
+    for (let x = 0; x < shot.w; x++) {
+      const i = (y * shot.w + x) * 4;
+      if (near(shot.rgba[i], r) && near(shot.rgba[i + 1], g) && near(shot.rgba[i + 2], b)) n++;
     }
   return n / total;
 }
@@ -183,8 +184,8 @@ function fraction(ppm, [r, g, b]) {
 const ONE = [0x28, 0x50, 0x28], TWO = [0x7a, 0x30, 0x30];
 const EXTRA = [0x30, 0x60, 0x70], FIXED = [0x60, 0x30, 0x70];
 const BANNER = [178, 24, 32];
-if (ppms.length === 5) {
-  const [p1, p2, p3, p4, p5] = ppms;
+if (shots.length === 5) {
+  const [p1, p2, p3, p4, p5] = shots;
   check('p1: slide "one" dominant', fraction(p1, ONE) > 0.6,
     fraction(p1, ONE).toFixed(3));
   check('p2: Right arrow navigated to "two"', fraction(p2, TWO) > 0.6,

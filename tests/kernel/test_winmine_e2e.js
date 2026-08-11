@@ -31,6 +31,7 @@ const os = require('os');
 const path = require('path');
 const cp = require('child_process');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -55,34 +56,32 @@ function section(out, name) {
 
 /* Shots are written in-OS under /root; a follow-up boot session cats the
  * concatenation to stdout (the test_gdi32_e2e pattern) and we split the
- * P6 stream back into images here. */
+ * PNG stream back into images here (parsePng walks it by `next`). */
 const SHOTS = ['bar', 'base', 'popup', 'closed', 'fresh', 'revealed', 'ticking', 'reset'];
 const shots = {};
 
 function extractShots() {
-  const r = driveBoot('cat ' + SHOTS.map(n => '/root/' + n + '.ppm').join(' ') + '\n',
+  const r = driveBoot('cat ' + SHOTS.map(n => '/root/' + n + '.png').join(' ') + '\n',
     { image, encoding: null, maxBuffer: 64 * 1024 * 1024 });
   const buf = r.stdout;
   let off = 0;
   for (const name of SHOTS) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) throw new Error('bad ppm stream at ' + name + ': ' + JSON.stringify(head));
-    const w = +m[1], h = +m[2];
-    const data = off + m[0].length;
-    shots[name] = { w, h, data: buf.slice(data, data + w * h * 3) };
-    off = data + w * h * 3;
+    let p;
+    try { p = parsePng(buf, off); }
+    catch (e) { throw new Error('bad png stream at ' + name + ': ' + e.message); }
+    shots[name] = { w: p.w, h: p.h, data: p.rgba };
+    off = p.next;
   }
 }
 
 function crop(img, x, y, w, h) {
-  const out = Buffer.alloc(w * h * 3);
+  const out = Buffer.alloc(w * h * 4);
   for (let r = 0; r < h; r++)
-    img.data.copy(out, r * w * 3, ((y + r) * img.w + x) * 3, ((y + r) * img.w + x + w) * 3);
+    img.data.copy(out, r * w * 4, ((y + r) * img.w + x) * 4, ((y + r) * img.w + x + w) * 4);
   return out;
 }
 
-function readShot(name) { return shots[name.replace('.ppm', '')]; }
+function readShot(name) { return shots[name.replace('.png', '')]; }
 
 /* Geometry (main.h mirror). Client coords + the 20px menu bar on top. */
 const BAR = 30;
@@ -116,7 +115,7 @@ const out = boot([
   // 0280: the menu bar lives on its own strip child surface ("menubar");
   // shot it for the "last title fits" pixel probe below.
   'MSID=$(wmctl list | grep "menubar$" | sed "s/[^0-9].*//")',
-  'wmctl shot $MSID /root/bar.ppm',
+  'wmctl shot $MSID /root/bar.png',
   'echo ==list1',
   'wmctl list',
   'echo ==cut',
@@ -127,13 +126,13 @@ const out = boot([
   // ("#32768" in wmctl list — a waitable marker; the old in-surface popup
   // needed blind pixel settles). The parent's own buffer must NOT change:
   // the popup never overwrites client pixels anymore (couplings #1/#4).
-  'wmctl shot $SID /root/base.ppm',
+  'wmctl shot $SID /root/base.png',
   'wmctl click $SID 10 10',
   'wmctl wait win "#32768" 8000',                // popup child window is up
-  'wmctl shot $SID /root/popup.ppm',             // parent buffer: untouched
+  'wmctl shot $SID /root/popup.png',             // parent buffer: untouched
   'wmctl key $SID 41 27',                        // ESC closes the popup
   'wmctl wait nowin "#32768" 8000',              // and its window is gone
-  'wmctl shot $SID /root/closed.ppm',
+  'wmctl shot $SID /root/closed.png',
   // difficulty via the agent path (menu items by label, no pixels)
   'wmctl click Advanced',
   waitGeom(`${ADV_W}x${ADV_H + BAR}`),           // board resized (SURFACE_RESIZE)
@@ -151,15 +150,15 @@ const out = boot([
   'wmctl click Sound',
   // gameplay: reveal a cell, timer runs, F2 resets. All pixel-diff shots with
   // no non-pixel observable, so the render/timer settles stay annotated.
-  'wmctl shot $SID /root/fresh.ppm',
+  'wmctl shot $SID /root/fresh.png',
   `wmctl click $SID ${CELL_X} ${CELL_Y}`,
   'sleep 1',                                     // cell reveal paint (pixel-only)
-  'wmctl shot $SID /root/revealed.ppm',
+  'wmctl shot $SID /root/revealed.png',
   'sleep 2',                                     // >= 1 full WM_TIMER tick (genuine timing subject)
-  'wmctl shot $SID /root/ticking.ppm',
+  'wmctl shot $SID /root/ticking.png',
   'wmctl key $SID 59 1073741883',                // F2 = New (accelerator)
   'sleep 1',                                     // board reset paint (pixel-only)
-  'wmctl shot $SID /root/reset.ppm',
+  'wmctl shot $SID /root/reset.png',
   // Fastest Times dialog: template + LoadStringW default names
   'wmctl click "Fastest Times..."',
   'wmctl wait win "Fastest Times" 6000',
@@ -231,12 +230,12 @@ extractShots();
  * empty bar) yet leave the rightmost columns clean; the bottom BTNSHADOW
  * edge row is excluded. */
 {
-  const bar = readShot('bar.ppm');
+  const bar = readShot('bar.png');
   check(`menubar strip spans the beginner window (${BEG_W}px)`, bar.w === BEG_W, bar.w);
   let rightmost = -1;
   for (let y = 0; y < bar.h - 1; y++)
     for (let x = rightmost + 1; x < bar.w; x++) {
-      const o = (y * bar.w + x) * 3;
+      const o = (y * bar.w + x) * 4;
       if (bar.data[o] < 0x60 && bar.data[o + 1] < 0x60 && bar.data[o + 2] < 0x60)
         if (x > rightmost) rightmost = x;
     }
@@ -246,7 +245,7 @@ extractShots();
 }
 
 {
-  const base = readShot('base.ppm'), popup = readShot('popup.ppm'), closed = readShot('closed.ppm');
+  const base = readShot('base.png'), popup = readShot('popup.png'), closed = readShot('closed.png');
   // popup area: below the bar at the Options title; 60x60 probe
   const a = crop(base, 4, BAR + 2, 60, 60), b = crop(popup, 4, BAR + 2, 60, 60), c = crop(closed, 4, BAR + 2, 60, 60);
   check('open popup never touches the parent buffer (pixels identical)', a.equals(b));
@@ -263,8 +262,8 @@ check('Beginner resizes back',
 
 /* gameplay pixels */
 {
-  const fresh = readShot('fresh.ppm'), revealed = readShot('revealed.ppm');
-  const ticking = readShot('ticking.ppm'), reset = readShot('reset.ppm');
+  const fresh = readShot('fresh.png'), revealed = readShot('revealed.png');
+  const ticking = readShot('ticking.png'), reset = readShot('reset.png');
   const cellRect = [CELL_X - 8, CELL_Y - 8, 16, 16];
   const f = crop(fresh, ...cellRect), r = crop(revealed, ...cellRect), z = crop(reset, ...cellRect);
   check('cell click reveals (mines-rect pixels change)', !f.equals(r));

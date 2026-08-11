@@ -18,6 +18,7 @@ const os = require('os');
 const path = require('path');
 const cp = require('child_process');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -38,17 +39,17 @@ function sessionA() {
     'echo ==list1',
     'wmctl list',
     'SID=$(wmctl list | grep "cairodemo$" | sed "s/[^0-9].*//")',
-    'wmctl shot $SID /root/c1.ppm && echo shot1-ok',
+    'wmctl shot $SID /root/c1.png && echo shot1-ok',
     'wmctl key $SID 7 100',                          // any KEYDOWN -> dark theme
     'sleep 2',                                       // timing subject: dark-theme vector redraw render
-    'wmctl shot $SID /root/c2.ppm && echo shot2-ok',
+    'wmctl shot $SID /root/c2.png && echo shot2-ok',
     'wmctl key $SID 7 100',                          // toggle back
     'wmctl resize $SID 600 450 && echo resize-ok',
     'wmctl wait dim $SID 600x450',                   // resize ack landed (0155)
     'sleep 1',                                       // timing subject: post-resize vector redraw render
     'echo ==list2',
     'wmctl list',
-    'wmctl shot $SID /root/c3.ppm && echo shot3-ok',
+    'wmctl shot $SID /root/c3.png && echo shot3-ok',
     '',
   ].join('\n');
 
@@ -75,28 +76,26 @@ function sessionA() {
     out.includes('shot2-ok') && out.includes('shot3-ok'));
 }
 
-/* ---- session B: extract the PPMs and probe the scene ---- */
+/* ---- session B: extract the PNG shots and probe the scene ---- */
 function sessionB() {
-  const b = driveBoot('cat /root/c1.ppm /root/c2.ppm /root/c3.ppm\n', { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });
+  const b = driveBoot('cat /root/c1.png /root/c2.png /root/c3.png\n', { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });
   const buf = b.stdout;
 
-  function parsePPM(off) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) return null;
-    const w = +m[1], h = +m[2], data = off + m[0].length;
-    return { w, h, data, end: data + w * h * 3 };
+  // One PNG shot out of the concatenated cat-back stream (#657);
+  // null on a missing/short shot, so the callers' `if (!p)` guards hold.
+  function parseShot(off) {
+    try { return parsePng(buf, off); } catch (e) { return null; }
   }
   const mkpx = (p) => (x, y) => {
-    const i = p.data + (y * p.w + x) * 3;
-    return [buf[i], buf[i + 1], buf[i + 2]];
+    const i = (y * p.w + x) * 4;
+    return [p.rgba[i], p.rgba[i + 1], p.rgba[i + 2]];
   };
   const near = (p, r, g, bch, tol) =>
     Math.abs(p[0] - r) <= tol && Math.abs(p[1] - g) <= tol && Math.abs(p[2] - bch) <= tol;
 
   /* shot 1: the light scene at 480x360 — anchors mirror the selftest */
-  const p1 = parsePPM(0);
-  check('shot1 parses as P6 480x360', p1 !== null && p1.w === 480 && p1.h === 360,
+  const p1 = parseShot(0);
+  check('shot1 parses as PNG 480x360', p1 !== null && p1.w === 480 && p1.h === 360,
     p1 && `${p1.w}x${p1.h}`);
   if (!p1) return;
   const px1 = mkpx(p1);
@@ -115,8 +114,8 @@ function sessionB() {
   check('cairo-ft label ink present', ink);
 
   /* shot 2: dark theme — bg flips dark, vector content stays */
-  const p2 = parsePPM(p1.end);
-  check('shot2 parses as P6 480x360', p2 !== null && p2.w === 480 && p2.h === 360,
+  const p2 = parseShot(p1.next);
+  check('shot2 parses as PNG 480x360', p2 !== null && p2.w === 480 && p2.h === 360,
     p2 && `${p2.w}x${p2.h}`);
   if (p2) {
     const px2 = mkpx(p2);
@@ -126,8 +125,8 @@ function sessionB() {
 
   /* shot 3: after resize to 600x450 (1.25x) — the VECTOR scene rescaled,
    * light theme again; scene-space anchors land at 1.25x coordinates */
-  const p3 = parsePPM(p2 ? p2.end : p1.end);
-  check('shot3 parses as P6 600x450', p3 !== null && p3.w === 600 && p3.h === 450,
+  const p3 = parseShot(p2 ? p2.next : p1.next);
+  check('shot3 parses as PNG 600x450', p3 !== null && p3.w === 600 && p3.h === 450,
     p3 && `${p3.w}x${p3.h}`);
   if (p3) {
     const px3 = mkpx(p3);

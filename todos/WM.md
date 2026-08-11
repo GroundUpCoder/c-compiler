@@ -969,7 +969,7 @@ corners, animations, glass).**
   focus handed straight back), refreshes it every 30 ticks, dismisses on
   click/motion-elsewhere/EV_SCREEN/150-tick idle backstop (the wm only
   sees motion over its own windows). `wmctl thumb SID [W H] [FILE]`
-  writes it as PPM; `wmctl hover SID X Y` injects absolute motion to
+  writes it as PNG; `wmctl hover SID X Y` injects absolute motion to
   drive it headless.
 - **Minimize/restore animation**: kernel keeps transient records
   (`_wmAnims`: geometry at transition + t0, pruned after WM_ANIM_MS
@@ -1133,7 +1133,7 @@ browser `os-wm.mjs`):
   minimizes (the Win95 toggle). Autostarted at boot via `Kernel.service()`
   (parentless, auto-reaped, non-fatal if missing).
 - **/bin/wmctl** (os/wmctl.c, seeded): list/focus/min/restore/close/raise/
-  lower/move/key/click/shot (PPM out) — xdotool-as-a-syscall from hush.
+  lower/move/key/click/shot (RGBA PNG out) — xdotool-as-a-syscall from hush.
 - **Crashed-WM story verified**: kill /bin/wm → its surfaces are reclaimed,
   kernel-chrome fallback keeps the system driveable (the endpoint is the
   KERNEL's, so wmctl keeps working), and `wm &` respawns it — the snapshot

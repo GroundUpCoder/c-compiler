@@ -14,6 +14,8 @@ const os = require('os');
 const path = require('path');
 const cp = require('child_process');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
+const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -32,7 +34,7 @@ function sessionApps() {
     'echo ==list1',
     'wmctl list',
     'SID=$(wmctl list | grep "puNES$" | sed "s/[^0-9].*//")',
-    'wmctl shot $SID /root/nes1.ppm && echo shot-1-ok',
+    'wmctl shot $SID /root/nes1.png && echo shot-1-ok',
     'kill %1',
     'wmctl wait nowin puNES',                     // window gone (0155)
     'echo ==assoc',
@@ -55,20 +57,18 @@ function sessionApps() {
     /nes\t\/bin\/punes/.test(out), out.split('\n').slice(-6).join('|'));
 }
 
-/* ---- session B: pixel-level proof from the PPM ---- */
+/* ---- session B: pixel-level proof from the PNG shots ---- */
 function sessionFrames() {
-  const b = driveBoot('cat /root/nes1.ppm\n', { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });
+  const b = driveBoot('cat /root/nes1.png\n', { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });
 
-  function parsePPM(buf, off) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) return null;
-    const w = +m[1], h = +m[2], data = off + m[0].length;
-    return { w, h, data, end: data + w * h * 3 };
+  // One PNG shot out of the concatenated cat-back stream (#657);
+  // null on a missing/short shot, so the callers' `if (!p)` guards hold.
+  function parseShot(buf, off) {
+    try { return parsePng(buf, off); } catch (e) { return null; }
   }
 
-  const p = parsePPM(b.stdout, 0);
-  check('frame parses as P6 at full client size 512x480',
+  const p = parseShot(b.stdout, 0);
+  check('frame parses as PNG at full client size 512x480',
     p !== null && p.w === 512 && p.h === 480, p && `${p.w}x${p.h}`);
   if (!p) return;
 
@@ -80,8 +80,8 @@ function sessionFrames() {
   let blue = 0, sampled = 0;
   for (let y = 0; y < p.h; y += 4) {
     for (let x = 0; x < p.w; x += 4) {
-      const i = p.data + (y * p.w + x) * 3;
-      const r = b.stdout[i], g = b.stdout[i + 1], bl = b.stdout[i + 2];
+      const i = (y * p.w + x) * 4;
+      const r = p.rgba[i], g = p.rgba[i + 1], bl = p.rgba[i + 2];
       sampled++;
       if (r < 0x80 && g > 0x60 && bl > 0xC0 && bl > r) blue++;
     }
@@ -110,38 +110,38 @@ function sessionInput() {
     'wmctl wait win puNES',                          // window spawn (0155)
     'sleep 4',                                       // timing subject: core init + emu_turn_on + PPU frames render (blue fill)
     'SID=$(wmctl list | grep "puNES$" | sed "s/[^0-9].*//")',
-    'wmctl shot $SID /root/ni.ppm && echo ni-ok',   // no input: blue
+    'wmctl shot $SID /root/ni.png && echo ni-ok',   // no input: blue
     'wmctl keydown $SID 0 122 0',                    // hold A
     'sleep 1',                                       // timing subject: NMI polls the pad -> backdrop tints white over the next frames
-    'wmctl shot $SID /root/ap.ppm && echo ap-ok',    // A held: white
+    'wmctl shot $SID /root/ap.png && echo ap-ok',    // A held: white
     'wmctl keyup $SID 0 122 0',
     'sleep 1',                                       // timing subject: NMI sees the release -> backdrop returns to blue
-    'wmctl shot $SID /root/ar.ppm && echo ar-ok',    // A released: blue again
+    'wmctl shot $SID /root/ar.png && echo ar-ok',    // A released: blue again
     'wmctl keydown $SID 0 1073741906 0',             // hold Up (SDLK_UP; the D-pad axis 0213 fixed)
     'sleep 1',                                       // timing subject: NMI polls the pad -> backdrop tints green over the next frames
-    'wmctl shot $SID /root/up.ppm && echo up-ok',    // Up held: green
+    'wmctl shot $SID /root/up.png && echo up-ok',    // Up held: green
     'wmctl keyup $SID 0 1073741906 0',
     'kill %1',
     'wmctl wait nowin puNES',                        // window gone (0155)
-    'printf __NI__; cat /root/ni.ppm; printf __AP__; cat /root/ap.ppm; printf __AR__; cat /root/ar.ppm; printf __UP__; cat /root/up.ppm; printf __END__',
+    'printf __NI__; cat /root/ni.png; printf __AP__; cat /root/ap.png; printf __AR__; cat /root/ar.png; printf __UP__; cat /root/up.png; printf __END__',
     '',
   ].join('\n');
   const c = driveBoot(script, { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });
   const out = c.stdout;
   const text = out.toString('latin1');
 
-  // dominant pixel of the PPM starting at the given byte offset (a P6 header
-  // may sit a few bytes past the marker; find it, then sample a sparse grid).
+  // dominant pixel of the PNG starting at the given byte offset (the shot's
+  // signature may sit a few bytes past the marker; find it, decode, then
+  // sample the same sparse grid).
   function domColor(off) {
-    const start = out.indexOf(Buffer.from('P6\n'), off);
+    const start = out.indexOf(PNG_SIG, off);
     if (start < 0) return null;
-    const head = out.toString('latin1', start, start + 24);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) return null;
-    const w = +m[1], h = +m[2], data = start + m[0].length, end = data + w * h * 3;
+    let shot = null;
+    try { shot = parsePng(out, start); } catch (e) { return null; }
+    const px = shot.rgba, end = shot.w * shot.h * 4;
     const counts = new Map();
-    for (let p = data; p + 2 < end && p + 2 < out.length; p += 3 * 97) {
-      const key = (out[p] << 16) | (out[p + 1] << 8) | out[p + 2];
+    for (let p = 0; p + 2 < end; p += 4 * 97) {
+      const key = (px[p] << 16) | (px[p + 1] << 8) | px[p + 2];
       counts.set(key, (counts.get(key) || 0) + 1);
     }
     let best = 0, bestn = -1;

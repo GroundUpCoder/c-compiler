@@ -17,6 +17,7 @@
 // Run: node tests/kernel/test_sdl_render_e2e.js
 'use strict';
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -86,7 +87,7 @@ const scriptA = [
   'wmctl wait win rdrtest 15000',
   'SID=$(wmctl list | grep "rdrtest$" | sed "s/[^0-9].*//")',
   'wmctl wait seq $SID 1 8000',
-  'wmctl shot $SID /root/rdr.ppm && echo shot-ok',
+  'wmctl shot $SID /root/rdr.png && echo shot-ok',
   '',
 ].join('\n');
 
@@ -98,18 +99,18 @@ check('app created window + renderer + presented (RDR-UP)', a.stdout.includes('R
   (a.stdout.match(/(INIT|WIN|RDR)-FAIL[^\n]*/g) || []).join('; '));
 check('shot written', a.stdout.includes('shot-ok'));
 
-/* ---- session B: extract the PPM and probe the scene ---- */
+/* ---- session B: extract the PNG shot and probe the scene ---- */
 if (failures === 0) {
-  const b = driveBoot('cat /root/rdr.ppm\n',
+  const b = driveBoot('cat /root/rdr.png\n',
     { image, encoding: null, timeout: 120000, maxBuffer: 8 * 1024 * 1024 });
   const buf = b.stdout;
-  const head = buf.toString('latin1', 0, 32);
-  const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-  check('shot parses as P6 at client size 256x128', !!m && +m[1] === 256 && +m[2] === 128,
-    m ? m[1] + 'x' + m[2] : JSON.stringify(head));
-  if (m) {
-    const W = +m[1], data = m[0].length;
-    const px = (x, y) => { const i = data + (y * W + x) * 3; return [buf[i], buf[i + 1], buf[i + 2]]; };
+  let shot = null;
+  try { shot = parsePng(buf, 0); } catch (e) { /* short/garbled output */ }
+  check('shot parses as PNG at client size 256x128',
+    shot !== null && shot.w === 256 && shot.h === 128,
+    shot ? shot.w + 'x' + shot.h : 'undecodable');
+  if (shot) {
+    const px = (x, y) => shot.px(x, y).slice(0, 3);
     const near = (p, r, g, bch, tol) =>
       Math.abs(p[0] - r) <= tol && Math.abs(p[1] - g) <= tol && Math.abs(p[2] - bch) <= tol;
     const probe = (name, x, y, r, g, bch, tol) =>

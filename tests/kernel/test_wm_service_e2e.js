@@ -19,6 +19,7 @@ const path = require('path');
 const cp = require('child_process');
 const { driveBoot, freshImage, deskEntries, deskCell,
         menuGroups, menuLeaves } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -139,7 +140,7 @@ const script = [
   'wmctl wait flag $WSID f',
   'echo ==list3',
   'wmctl list',
-  'wmctl shot screen /root/s.ppm && head -c 2 /root/s.ppm && echo',
+  'wmctl shot screen /root/s.png && head -c 4 /root/s.png | tail -c 3 && echo',
   'wmctl focus 999 || echo bad-sid-fails',
   // ---- #501: non-numeric operands fail LOUD (stderr + exit 2) on the
   // injection verbs. atoi() used to map them to 0 — SID 0 = the focused
@@ -197,7 +198,7 @@ const script = [
   'echo ==menu1',
   'wmctl list',
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
-  'wmctl shot $MSID /root/m.ppm && echo menu-shot-ok',
+  'wmctl shot $MSID /root/m.png && echo menu-shot-ok',
   `wmctl hover $MSID 60 ${AP_ROW * SM_ROW_H + 14}`,   // All Programs (bottom row) -> the tree
   'wmctl wait win startmenu2',
   'echo ==menu1b',
@@ -227,7 +228,7 @@ const script = [
   'echo ==desk1',
   'wmctl list',
   'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
-  'wmctl shot $DSID /root/d.ppm && echo desk-shot-ok',
+  'wmctl shot $DSID /root/d.png && echo desk-shot-ok',
   `wmctl click $DSID ${desk(DESK_ENTRIES, 'notepad')}`,   // SINGLE click the notepad icon
   'sleep 2.5',                                   // timing subject: proves a single click does NOT spawn (the would-be spawn window)
   'echo ==desk2',
@@ -276,7 +277,7 @@ const script = [
   'wmctl list',
   'wmctl click $TSID 1000 14',                    // toggle the date tooltip off
   'wmctl wait nowin datepop',
-  'wmctl shot $TSID /root/bar.ppm && echo bar-shot-ok',
+  'wmctl shot $TSID /root/bar.png && echo bar-shot-ok',
   // ---- window cycling (todos/0032): wmctl cycle -> WMP CYCLE -> the same
   // EV_CYCLE -> wm.c policy. Focus fixbox then winbox so the recency
   // ladder's top three are known: [.., W6(create), fixbox, winbox]. ----
@@ -367,21 +368,15 @@ const script = [
   'echo ==aero1',
   'wmctl list',
   'PSID=$(wmctl list | grep peek$ | sed "s/[^0-9].*//")',
-  'wmctl shot $PSID /root/p.ppm && echo peek-shot-ok',
+  'wmctl shot $PSID /root/p.png && echo peek-shot-ok',
   'wmctl hover $TSID 25 14',
   'wmctl wait nowin peek',
   'echo ==aero2',
   'wmctl list',
   // wmctl thumb: fixbox (240x160 orange, white 4px border) into 60x40 —
-  // dst(0,0) averages the pure-white border block, the center pure orange.
-  'wmctl thumb $FSID 60 40 /root/t.ppm',
-  'head -c 13 /root/t.ppm && echo =thumb-hdr',   // "P6\\n60 40\\n255\\n"
-  'tail -c +14 /root/t.ppm | head -c 3 > /root/tpx.bin',
-  "printf '\\377\\377\\377' > /root/texp.bin",
-  'cmp /root/tpx.bin /root/texp.bin && echo thumb-border-white',
-  `tail -c +${14 + ((20 * 60) + 30) * 3} /root/t.ppm | head -c 3 > /root/tpx2.bin`,
-  "printf '\\377\\214\\000' > /root/texp2.bin",  // orange 255,140,0
-  'cmp /root/tpx2.bin /root/texp2.bin && echo thumb-center-orange',
+  // dst(0,0) averages the pure-white border block, the center pure orange
+  // (pixels asserted host-side out of /root/t.png after shutdown).
+  'wmctl thumb $FSID 60 40 /root/t.png && echo thumb-shot-ok',
   // Per-pixel alpha end to end: SDL_WINDOW_TRANSPARENT -> kernel bit3 ->
   // the deterministic src-over composite. A CHROMED window's client blends
   // over its own frame fill (the face gray drawn under title+client — same
@@ -399,18 +394,19 @@ const script = [
   'wmctl move $ASID 480 280',
   'wmctl raise $ASID',
   'sleep 0.3',                                   // timing subject: move+raise composite settle before the alpha-blend screen shot
-  'wmctl shot screen /root/a.ppm',
-  // (560,360): inside alphabox AND the winbox interior. PPM header is 16
-  // bytes on the 1024x768 screen; tail -c is 1-based.
-  `tail -c +${17 + ((360 * 1024) + 560) * 3} /root/a.ppm | head -c 3 > /root/apx.bin`,
-  "printf '\\140\\140\\340' > /root/aexp.bin",   // 96, 96, 224
-  'cmp /root/apx.bin /root/aexp.bin && echo alpha-blend-ok',
+  // (560,360): inside alphabox AND the winbox interior — expected exactly
+  // (96, 96, 224); asserted host-side out of /root/a.png after shutdown.
+  'wmctl shot screen /root/a.png && echo alpha-shot-ok',
+  // #657 ALPHA CONTRACT: a PER-SURFACE shot of a SDL_WINDOW_TRANSPARENT
+  // window carries that window's own straight-alpha bytes (wmScreenshot
+  // copies the front buffer verbatim), so the PNG must be colour type 6
+  // with a=128 in alphabox's interior. The old PPM writer dropped it.
+  'wmctl shot $ASID /root/asurf.png && echo asurf-shot-ok',
   // Glass is browser-only: toggling it must not change the headless
-  // composite at that pixel (nor anything else — unit-tested bit-exactly).
+  // composite at that pixel (nor anything else — unit-tested bit-exactly);
+  // /root/g.png compared to a.png host-side.
   'wmctl glass 1 && echo glass-on-ok',
-  'wmctl shot screen /root/g.ppm',
-  `tail -c +${17 + ((360 * 1024) + 560) * 3} /root/g.ppm | head -c 3 > /root/gpx.bin`,
-  'cmp /root/gpx.bin /root/aexp.bin && echo glass-headless-invariant',
+  'wmctl shot screen /root/g.png && echo glass-shot-ok',
   'wmctl glass 0 && echo glass-off-ok',
   // ---- Start menu v2 tail (todos/0098): command path, live search, Esc
   // clear-then-close, the RUN... place, and the keyboard All Programs
@@ -431,7 +427,7 @@ const script = [
   'wmctl key $MSID 5 98',                        // b
   'wmctl key $MSID 18 111',                      // o
   'wmctl key $MSID 27 120',                      // x
-  'wmctl shot $MSID /root/ms.ppm && echo search-shot-ok',
+  'wmctl shot $MSID /root/ms.png && echo search-shot-ok',
   'N1=$(wmctl list | grep -c winbox$)',
   'wmctl key $MSID 40 13',                       // Enter -> launch the top hit
   'wmctl wait atleast winbox $((N1+1))',         // the search top hit spawns
@@ -547,25 +543,25 @@ const script = [
   // the grid.
   `wmctl click $DSID ${desk(DESK_ACT, 'fileman')}`,           // plain select
   'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (navy label strip, no window observable)
-  'wmctl shot $DSID /root/s1.ppm && echo s1-ok',
+  'wmctl shot $DSID /root/s1.png && echo s1-ok',
   // ctrl+click ctlpanel: additive toggle (keydown/keyup hold the modifier
   // across the separate click injection — todos/0077 wmctl growth)
   'wmctl keydown $DSID 224 1073742048 64',                    // LCTRL down
   `wmctl click $DSID ${desk(DESK_ACT, 'ctlpanel')}`,
   'wmctl keyup $DSID 224 1073742048 0',
   'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (ctrl+click additive, no window observable)
-  'wmctl shot $DSID /root/s2.ppm && echo s2-ok',
+  'wmctl shot $DSID /root/s2.png && echo s2-ok',
   // shift+click notepad: range from the anchor (ctlpanel, entry order)
   'wmctl keydown $DSID 225 1073742049 1',                     // LSHIFT down
   `wmctl click $DSID ${desk(DESK_ACT, 'notepad')}`,
   'wmctl keyup $DSID 225 1073742049 0',
   'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (shift+click range, no window observable)
-  'wmctl shot $DSID /root/s2b.ppm && echo s2b-ok',
+  'wmctl shot $DSID /root/s2b.png && echo s2b-ok',
   // marquee from empty desktop over the column-0 tiles of rows 0-2:
   // REPLACES the set (x stays short of column 1's tiles at x>=174)
   'wmctl drag $DSID 160 10 40 250',
   'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (marquee replace, no window observable)
-  'wmctl shot $DSID /root/s3.ppm && echo s3-ok',
+  'wmctl shot $DSID /root/s3.png && echo s3-ok',
   // drag-move: press term (its sorted DESK_ACT cell) and drop on MOVE —
   // the first empty cell of the auto-flowed grid, derived above; the
   // plain press on the unselected icon first collapses the set
@@ -574,7 +570,7 @@ const script = [
   'echo ==sel1',
   'cat /root/Desktop/.icons',
   'echo ==sel2',
-  'wmctl shot $DSID /root/s4.ppm && echo s4-ok',
+  'wmctl shot $DSID /root/s4.png && echo s4-ok',
   'N1=$(wmctl list | grep -c winbox$)',
   // Ctrl+A selects all; Enter on a multi-selection is the multi-launch
   // guard no-op (never silently spawn N windows)
@@ -582,14 +578,14 @@ const script = [
   'wmctl key $DSID 4 97 64',                     // a
   'wmctl keyup $DSID 224 1073742048 0',
   'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (Ctrl+A select-all, no window observable)
-  'wmctl shot $DSID /root/s5.ppm && echo s5-ok',
+  'wmctl shot $DSID /root/s5.png && echo s5-ok',
   'wmctl key $DSID 40 13',                       // Enter: multi -> no-op
   'sleep 2',                                     // timing subject: proves no spawn
   'N2=$(wmctl list | grep -c winbox$)',
   'echo NOOP-DELTA-$((N2-N1))',
   'wmctl key $DSID 41 27',                       // Esc clears
   'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (Esc clears, no window observable)
-  'wmctl shot $DSID /root/s6.ppm && echo s6-ok',
+  'wmctl shot $DSID /root/s6.png && echo s6-ok',
   // arrows: Right with nothing selected takes the top-left icon (the
   // Presentations dir since 0185 — dirs sort first), Down steps to
   // alauncher at (0,1); Enter on the single selection launches it
@@ -651,7 +647,7 @@ const script = [
   'echo ==tp6',
   'wmctl list',
   'DPSID=$(wmctl list | grep datepop$ | sed "s/[^0-9].*//")',
-  'wmctl shot $DPSID /root/date.ppm && echo date-shot-ok',
+  'wmctl shot $DPSID /root/date.png && echo date-shot-ok',
   'wmctl click $TSID 980 14',                     // click again toggles it off
   'wmctl wait nowin datepop',
   'echo ==tp7',
@@ -922,7 +918,7 @@ const win3 = row(l3, 'winbox');
 check('taskbar click restores + focuses winbox', win3.includes('f---'), win3);
 
 // ---- shot + errors ----
-check('wmctl shot screen writes a PPM', out.includes('P6'), out.slice(0, 400));
+check('wmctl shot screen writes a PNG', out.includes('PNG'), out.slice(0, 400));
 check('wmctl focus on a bogus sid fails', out.includes('bad-sid-fails'));
 // ---- #501: strict numeric-operand validation on the injection verbs ----
 check('#501 non-numeric SID on key fails loud (exit 2)', out.includes('501-key-badsid-2'));
@@ -1163,13 +1159,14 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   const store = new BLOCK_FS.MemoryByteStore(bytes.length);
   store.setBytes(0, bytes);
   const ufs = BLOCK_FS.createV4(store);
-  const ppm = COMMON.readFileBytes(ufs, '/root/d.ppm');
-  const head = Buffer.from(ppm.subarray(0, 20)).toString('latin1');
-  const m = /^P6\n(\d+) (\d+)\n255\n/.exec(head);
-  check('desktop shot is a 1024x768 P6', !!m && m[1] === '1024' && m[2] === '768', head);
-  if (m) {
-    const off = head.indexOf('255\n') + 4, W = 1024;
-    const px = (x, y) => Array.from(ppm.subarray(off + (y * W + x) * 3, off + (y * W + x) * 3 + 3));
+  const dShot = (() => {
+    try { return parsePng(Buffer.from(COMMON.readFileBytes(ufs, '/root/d.png'))); }
+    catch (e) { return null; }
+  })();
+  check('desktop shot is a 1024x768 PNG', !!dShot && dShot.w === 1024 && dShot.h === 768,
+    dShot ? dShot.w + 'x' + dShot.h : 'missing/unparseable');
+  if (dShot) {
+    const px = (x, y) => dShot.px(x, y).slice(0, 3);
     let white = 0, navy = 0, black = 0, teal = 0;
     for (let y = 16; y < 112; y++) {
       for (let x = 16; x < 132; x++) {
@@ -1202,19 +1199,20 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
 
   // The taskbar shot (todos/0031): clock digits render in the right-aligned
   // HH.MM cell — histogram the black text pixels over the clock area.
-  const bppm = COMMON.readFileBytes(ufs, '/root/bar.ppm');
-  const bhead = Buffer.from(bppm.subarray(0, 20)).toString('latin1');
-  const bm = /^P6\n(\d+) (\d+)\n255\n/.exec(bhead);
-  check('taskbar shot is a 1024x36 P6', !!bm && bm[1] === '1024' && bm[2] === '36', bhead);
-  if (bm) {
-    const boff = bhead.indexOf('255\n') + 4, BW = 1024;
+  const bShot = (() => {
+    try { return parsePng(Buffer.from(COMMON.readFileBytes(ufs, '/root/bar.png'))); }
+    catch (e) { return null; }
+  })();
+  check('taskbar shot is a 1024x36 PNG', !!bShot && bShot.w === 1024 && bShot.h === 36,
+    bShot ? bShot.w + 'x' + bShot.h : 'missing/unparseable');
+  if (bShot) {
     let clock = 0;
     // clock cell moved left of the 0101 Show Desktop sliver: left edge is
     // clock_left()=1024-18-75=931, digits drawn at cx+8=939.
     for (let y = 10; y < 28; y++) {
       for (let x = 939; x < 1006; x++) {
-        const i = boff + (y * BW + x) * 3;
-        if (bppm[i] === 0 && bppm[i + 1] === 0 && bppm[i + 2] === 0) clock++;
+        const [r, g, b] = bShot.px(x, y);
+        if (r === 0 && g === 0 && b === 0) clock++;
       }
     }
     check('clock digits present in the taskbar shot (black-pixel histogram)',
@@ -1226,15 +1224,15 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   // it is [Settings (row 0), Run... (row 1), All Programs (row 2, cascade
   // arrow)] with grooves, and the search box with its "Search" ghost at the
   // foot. Hover is -1 before the shot, so nothing is navy-highlighted.
-  const mppm = COMMON.readFileBytes(ufs, '/root/m.ppm');
-  const mhead = Buffer.from(mppm.subarray(0, 20)).toString('latin1');
-  const mmm = /^P6\n(\d+) (\d+)\n255\n/.exec(mhead);
-  check(`menu shot is a ${SM_W}x${SM_H} P6`,
-    !!mmm && mmm[1] === String(SM_W) && mmm[2] === String(SM_H), mhead);
-  if (mmm) {
-    const moff = mhead.indexOf('255\n') + 4, MW = SM_W;
-    const mpx = (x, y) =>
-      Array.from(mppm.subarray(moff + (y * MW + x) * 3, moff + (y * MW + x) * 3 + 3));
+  const mShot = (() => {
+    try { return parsePng(Buffer.from(COMMON.readFileBytes(ufs, '/root/m.png'))); }
+    catch (e) { return null; }
+  })();
+  check(`menu shot is a ${SM_W}x${SM_H} PNG`,
+    !!mShot && mShot.w === SM_W && mShot.h === SM_H,
+    mShot ? mShot.w + 'x' + mShot.h : 'missing/unparseable');
+  if (mShot) {
+    const mpx = (x, y) => mShot.px(x, y).slice(0, 3);
     // the gucOS branding band: a blue gradient (blue channel high, red low)
     const band = mpx(15, Math.floor(SM_H / 4));
     check('gucOS branding band is a blue gradient down the left',
@@ -1343,11 +1341,9 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   check('peek popup is shot-able (pixels live)', out.includes('peek-shot-ok'));
   check('hover off the buttons dismisses the peek', row(ae2, 'peek') === '',
     JSON.stringify(ae2));
-  // wmctl thumb: exact box-filter goldens out of the real fixbox frame.
-  check('wmctl thumb writes the aspect-fit PPM header', out.includes('60 40'),
-    out.slice(out.indexOf('=thumb-hdr') - 20, out.indexOf('=thumb-hdr') + 12));
-  check('thumb corner averages fixbox\'s white border', out.includes('thumb-border-white'));
-  check('thumb center averages fixbox\'s orange fill', out.includes('thumb-center-orange'));
+  // wmctl thumb: exact box-filter goldens out of the real fixbox frame
+  // (dims + pixels asserted host-side below, out of /root/t.png).
+  check('wmctl thumb writes the shot', out.includes('thumb-shot-ok'));
   // Per-pixel alpha end to end (SDL_WINDOW_TRANSPARENT -> record flag 'A'
   // -> the deterministic src-over composite).
   const ab = row(ae3, 'alphabox');
@@ -1355,13 +1351,13 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     (ab.split('\t')[5] || '').includes('A'), ab);
   check('winbox rows carry no A flag',
     !((row(ae3, 'winbox').split('\t')[5] || '').includes('A')), row(ae3, 'winbox'));
-  check('50%-alpha client composites to the exact src-over blend',
-    out.includes('alpha-blend-ok'), out.slice(-2000));
-  // Glass: accepted by the endpoint, invisible to the headless composite.
+  check('alpha screen shot written', out.includes('alpha-shot-ok'), out.slice(-2000));
+  check('alphabox per-surface shot written', out.includes('asurf-shot-ok'));
+  // Glass: accepted by the endpoint, invisible to the headless composite
+  // (pixel asserts on a.png/g.png live host-side below).
   check('wmctl glass toggles on and off',
     out.includes('glass-on-ok') && out.includes('glass-off-ok'));
-  check('glass never changes the headless composite',
-    out.includes('glass-headless-invariant'));
+  check('glass screen shot written', out.includes('glass-shot-ok'));
 }
 
 // ---- desktop icon selection & manipulation (todos/0077) ----
@@ -1376,13 +1372,46 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   const store = new BLOCK_FS.MemoryByteStore(bytes.length);
   store.setBytes(0, bytes);
   const ufs = BLOCK_FS.createV4(store);
-  const readPpm = (name) => {
-    const ppm = COMMON.readFileBytes(ufs, '/root/' + name);
-    const head = Buffer.from(ppm.subarray(0, 20)).toString('latin1');
-    const off = head.indexOf('255\n') + 4;
-    return (x, y) => String(Array.from(
-      ppm.subarray(off + (y * 1024 + x) * 3, off + (y * 1024 + x) * 3 + 3)));
+  const readShot = (name) => {
+    const p = parsePng(Buffer.from(COMMON.readFileBytes(ufs, '/root/' + name)));
+    return (x, y) => String(p.px(x, y).slice(0, 3));
   };
+  // ---- thumb + alpha/glass pixel goldens (shot in the aero section) ----
+  {
+    const t = parsePng(Buffer.from(COMMON.readFileBytes(ufs, '/root/t.png')));
+    check('thumb is the aspect-fit 60x40', t.w === 60 && t.h === 40, t.w + 'x' + t.h);
+    check('thumb corner averages fixbox\'s white border',
+      String(t.px(0, 0).slice(0, 3)) === '255,255,255', String(t.px(0, 0)));
+    check('thumb center averages fixbox\'s orange fill',
+      String(t.px(30, 20).slice(0, 3)) === '255,140,0', String(t.px(30, 20)));
+    // (560,360): inside alphabox AND the winbox interior — 50%-alpha blue
+    // over gray 192 is exactly (96, 96, 224) under the 0063 src-over math.
+    const a = parsePng(Buffer.from(COMMON.readFileBytes(ufs, '/root/a.png')));
+    check('50%-alpha client composites to the exact src-over blend',
+      String(a.px(560, 360).slice(0, 3)) === '96,96,224', String(a.px(560, 360)));
+    const g = parsePng(Buffer.from(COMMON.readFileBytes(ufs, '/root/g.png')));
+    check('glass never changes the headless composite',
+      String(g.px(560, 360)) === String(a.px(560, 360)), String(g.px(560, 360)));
+    // ---- #657: alpha survives the PNG encode, end to end ----
+    // alphabox is 240x160; its 4px border is opaque white and the interior
+    // is rgba(0,0,255,128). A per-surface shot copies that buffer verbatim,
+    // so the PNG must carry a=128 in the interior — the property the old
+    // P6 writer discarded by construction.
+    const asurf = parsePng(Buffer.from(COMMON.readFileBytes(ufs, '/root/asurf.png')));
+    check('alphabox surface shot is 240x160', asurf.w === 240 && asurf.h === 160,
+      `${asurf.w}x${asurf.h}`);
+    check('per-pixel ALPHA survives the PNG encode (interior a=128, not 255)',
+      String(asurf.px(120, 80)) === '0,0,255,128', String(asurf.px(120, 80)));
+    check('the opaque border still encodes a=255 (alpha is carried, not forced)',
+      String(asurf.px(1, 1)) === '255,255,255,255', String(asurf.px(1, 1)));
+    // Screen composites are opaque BY CONSTRUCTION (kernel.js
+    // wmScreenshotScreen writes 255 on every path it synthesizes), so the
+    // same encoder that preserved 128 above must show 255 here — which is
+    // what makes the assert above a statement about the ENCODER, not about
+    // one lucky buffer.
+    check('the screen composite stays opaque (a=255)',
+      a.px(560, 360)[3] === 255, String(a.px(560, 360)));
+  }
   const NAVY = '0,0,128', TEAL = '0,128,128', WHITE = '255,255,255';
   const strip = (px, name, c, r) => {
     const len = Math.min(9, name.length);   // text_fit caps at CELL_W-8 = 108px = 9 chars
@@ -1395,21 +1424,21 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   };
   for (const s of ['s1', 's2', 's2b', 's3', 's4', 's5', 's6'])
     check(`${s} shot written`, out.includes(s + '-ok'));
-  const p1 = readPpm('s1.ppm');
+  const p1 = readShot('s1.png');
   check('plain click selects one (fileman navy, ctlpanel teal)',
     strip(p1, ...at('fileman')) === NAVY && strip(p1, ...at('ctlpanel')) === TEAL,
     [strip(p1, ...at('fileman')), strip(p1, ...at('ctlpanel'))]);
-  const p2 = readPpm('s2.ppm');
+  const p2 = readShot('s2.png');
   check('ctrl+click adds (fileman AND ctlpanel navy)',
     strip(p2, ...at('fileman')) === NAVY && strip(p2, ...at('ctlpanel')) === NAVY,
     [strip(p2, ...at('fileman')), strip(p2, ...at('ctlpanel'))]);
-  const p2b = readPpm('s2b.ppm');
+  const p2b = readShot('s2b.png');
   check('shift+click ranges from the anchor (ctlpanel..notepad navy, ends teal)',
     strip(p2b, ...at('ctlpanel')) === NAVY && strip(p2b, ...at('fileman')) === NAVY &&
     strip(p2b, ...at('notepad')) === NAVY &&
     strip(p2b, ...at('alauncher')) === TEAL && strip(p2b, ...at('notes.txt')) === TEAL,
     [strip(p2b, ...at('ctlpanel')), strip(p2b, ...at('notepad')), strip(p2b, ...at('notes.txt'))]);
-  const p3 = readPpm('s3.ppm');
+  const p3 = readShot('s3.png');
   check('marquee REPLACES with the intersected tiles (col 0 rows 0-2)',
     strip(p3, ...at('Presentations')) === NAVY && strip(p3, ...at('alauncher')) === NAVY &&
     strip(p3, ...at('calc')) === NAVY && strip(p3, ...at('ctlpanel')) === TEAL &&
@@ -1420,21 +1449,21 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     icons.includes(`${MOVE.col} ${MOVE.row} term`) && icons.includes('0 0 Presentations') &&
     icons.includes('0 1 alauncher'), icons);
   const termCell = deskCell(DESK_ACT, 'term');
-  const p4 = readPpm('s4.ppm');
+  const p4 = readShot('s4.png');
   check(`drag-move relocated term to (${MOVE.col},${MOVE.row}): tile there, old cell teal, still selected`,
     p4(MOVE.x + 45, MOVE.y + 9) === WHITE &&
     p4(termCell.x + 58, termCell.y + 22) === TEAL &&   // old cell, derived (todos/0166)
     strip(p4, 'term', MOVE.col, MOVE.row) === NAVY,
     [p4(MOVE.x + 45, MOVE.y + 9), p4(termCell.x + 58, termCell.y + 22),
      strip(p4, 'term', MOVE.col, MOVE.row)]);
-  const p5 = readPpm('s5.ppm');
+  const p5 = readShot('s5.png');
   check('Ctrl+A selects all (alauncher, notes.txt, moved term navy)',
     strip(p5, ...at('alauncher')) === NAVY && strip(p5, ...at('notes.txt')) === NAVY &&
     strip(p5, 'term', MOVE.col, MOVE.row) === NAVY,
     [strip(p5, ...at('alauncher')), strip(p5, ...at('notes.txt'))]);
   check('Enter on the multi-selection is a no-op (the multi-launch guard)',
     out.includes('NOOP-DELTA-0'), out.slice(out.indexOf('NOOP-DELTA')).slice(0, 20));
-  const p6 = readPpm('s6.ppm');
+  const p6 = readShot('s6.png');
   check('Esc clears the selection',
     strip(p6, ...at('fileman')) === TEAL &&
     strip(p6, 'term', MOVE.col, MOVE.row) === TEAL,

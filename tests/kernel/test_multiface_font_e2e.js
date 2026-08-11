@@ -29,7 +29,7 @@
 const fs = require('fs');
 const path = require('path');
 const { driveBoot, freshImage } = require('./lib/drive.js');
-const { parsePpm, encodePng } = require('../lib/png.js');
+const { parsePng, encodePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -350,7 +350,7 @@ function windowSession() {
       `wmctl wait win "${title}" 15000`,
       `SID=$(wmctl list | grep "${title}$" | sed "s/[^0-9].*//")`,
       'wmctl wait seq $SID 1 8000',
-      `wmctl shot $SID /root/ramp${i}.ppm && echo shot${i}-ok`,
+      `wmctl shot $SID /root/ramp${i}.png && echo shot${i}-ok`,
       'wmctl close $SID',
       `wmctl wait nowin "${title}" 8000`);
   }
@@ -385,13 +385,13 @@ function chooseSession() {
     'echo ==cftree',
     'wmctl tree',
     'echo ==cut',
-    'wmctl shot $FSID /root/cf-mono.ppm && echo cfshot0-ok',
+    'wmctl shot $FSID /root/cf-mono.png && echo cfshot0-ok',
     'wmctl click "Bold Italic"',           // style LISTBOX row (#330)
     'wmctl tree > /dev/null',              // paint barrier for the re-font
-    'wmctl shot $FSID /root/cf-bi.ppm && echo cfshot1-ok',
+    'wmctl shot $FSID /root/cf-bi.png && echo cfshot1-ok',
     'wmctl click sans',                    // face LISTBOX row (AQM, 0370)
     'wmctl tree > /dev/null',
-    'wmctl shot $FSID /root/cf-sans.ppm && echo cfshot2-ok',
+    'wmctl shot $FSID /root/cf-sans.png && echo cfshot2-ok',
     'wmctl click OK',
     'wmctl wait nowin Font 8000',
     'wait',                                // reap: the choose line prints
@@ -493,8 +493,8 @@ function chooseSession() {
 }
 
 function extractSession() {
-  const names = SHOTS.map((_, i) => `/root/ramp${i}.ppm`)
-    .concat(['/root/cf-mono.ppm', '/root/cf-bi.ppm', '/root/cf-sans.ppm']);
+  const names = SHOTS.map((_, i) => `/root/ramp${i}.png`)
+    .concat(['/root/cf-mono.png', '/root/cf-bi.png', '/root/cf-sans.png']);
   const r = driveBoot('cat ' + names.join(' ') + '\n',
     { image, encoding: null, timeout: 240000, maxBuffer: 64 * 1024 * 1024 });
   const outDir = path.join(ROOT, 'build/test-kernel/fontramp');
@@ -503,14 +503,14 @@ function extractSession() {
   const bufs = [];
   for (let i = 0; i < SHOTS.length; i++) {
     let p = null;
-    try { p = parsePpm(r.stdout, off); } catch (e) { /* short output */ }
+    try { p = parsePng(r.stdout, off); } catch (e) { /* short output */ }
     check(`shot ${SHOTS[i][0]} parses at 640x420`,
       p !== null && p.w === 640 && p.h === 420, p && `${p.w}x${p.h}`);
     if (!p) return;
-    const rgb = p.rgb;
+    const rgb = p.rgba;
     bufs.push(rgb);
     let ink = 0;
-    for (let j = 0; j < rgb.length; j += 3) if (rgb[j] !== 255) ink++;
+    for (let j = 0; j < rgb.length; j += 4) if (rgb[j] !== 255) ink++;
     check(`shot ${SHOTS[i][0]} is inked (glyphs rendered)`, ink > 3000, 'ink=' + ink);
     fs.writeFileSync(path.join(outDir, `fontramp-${SHOTS[i][0]}.png`),
       encodePng(p.w, p.h, rgb));
@@ -527,20 +527,20 @@ function extractSession() {
   const cfBufs = [];
   for (const label of ['cf-mono', 'cf-bi', 'cf-sans']) {
     let p = null;
-    try { p = parsePpm(r.stdout, off); } catch (e) { /* short output */ }
+    try { p = parsePng(r.stdout, off); } catch (e) { /* short output */ }
     check(`shot ${label} parses at 460x420`,
       p !== null && p.w === 460 && p.h === 420, p && `${p.w}x${p.h}`);
     if (!p) return;
     fs.writeFileSync(path.join(outDir, `${label}.png`),
-      encodePng(p.w, p.h, p.rgb));
+      encodePng(p.w, p.h, p.rgba));
     const crop = Buffer.alloc((452 - 8) * (376 - 312) * 3);
     let ci = 0;
     for (let y = 312; y < 376; y++)
       for (let x = 8; x < 452; x++) {
-        const s = (y * p.w + x) * 3;
-        crop[ci++] = p.rgb[s];
-        crop[ci++] = p.rgb[s + 1];
-        crop[ci++] = p.rgb[s + 2];
+        const s = (y * p.w + x) * 4;
+        crop[ci++] = p.rgba[s];
+        crop[ci++] = p.rgba[s + 1];
+        crop[ci++] = p.rgba[s + 2];
       }
     let ink = 0;
     for (let j = 0; j < crop.length; j += 3)

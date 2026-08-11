@@ -84,13 +84,13 @@
  *                                     No SID: the routing decides
  *   wmctl skeydown|skeyup SCANCODE [KEYSYM [MOD]]   one edge only (a held
  *                                     modifier, an asymmetric swallow)
- *   wmctl shot SID|screen [FILE [X Y W H]]     PPM (P6) to FILE or stdout;
- *                                     the optional rect (#173) crops to a
- *                                     surface region — the region-scoped
+ *   wmctl shot SID|screen [FILE [X Y W H]]     RGBA PNG (#657) to FILE or
+ *                                     stdout; the optional rect (#173) crops
+ *                                     to a surface region — the region-scoped
  *                                     settle for never-idle pages
  *   wmctl thumb SID [MAXW MAXH] [FILE]         downscaled window thumbnail
  *                                     (todos/0063 Aero Peek; default 96x72
- *                                     box; aspect-fit, never upscaled), PPM
+ *                                     box; aspect-fit, never upscaled), PNG
  *   wmctl glass 0|1                   Aero glass tier toggle (todos/0063) —
  *                                     browser compositor only; the headless
  *                                     composite/goldens never change
@@ -128,6 +128,8 @@
  * script injected nothing and reported success.
  */
 #include <dirent.h>
+#include <errno.h>
+#include <png.h>            /* shot/thumb PNG encode (#657) — vendored libpng */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -587,15 +589,23 @@ static int do_list(int fd) {
     return 0;
 }
 
-/* Read an R_SHOT payload (sid, w, h; then w*h*4 rgba) and write it as PPM
- * (P6, alpha dropped) — shared by shot and thumb (todos/0063).
+/* Read an R_SHOT payload (sid, w, h; then w*h*4 rgba) and write it as an
+ * RGBA PNG (#657, via the vendored libpng+zlib) — shared by shot and thumb
+ * (todos/0063). The payload's alpha bytes are carried VERBATIM: transparent
+ * surfaces (WMP_F_ALPHA) keep their per-pixel alpha, opaque surfaces write
+ * 255 by contract (host.js's software renderer forces it; the browser
+ * compositor's src-alpha blend already depends on it), and the kernel's
+ * screen composite and thumbnails emit 255 on every path they synthesize.
+ * libpng's fixed encoder settings make equal pixels equal bytes, so
+ * bytewise `cmp -s` over two shots stays a valid settle predicate.
  * crop (#173) is NULL or {X,Y,W,H} in surface pixels: the reply always
  * carries the FULL surface (no kernel/WMP change — the buffer is already
- * whole in userspace here), the crop selects the rows/columns written.
- * The rect is clamped to the surface; a clamp-to-empty is a loud error,
- * never a 0x0 PPM. Region-scoped `cmp -s` over two such crops is the
- * settle predicate for pages whose other regions never go idle. */
-static int shot_to_ppm(int fd, const char *file, const int32_t *crop) {
+ * whole in userspace here), the crop selects the rows/columns encoded
+ * (a pointer offset + full-width row stride; no copy). The rect is clamped
+ * to the surface; a clamp-to-empty is a loud error, never a 0x0 PNG. A
+ * failed or short encode is loud and UNLINKS the output — no truncated
+ * file ever reads as success. */
+static int shot_to_png(int fd, const char *file, const int32_t *crop) {
     int32_t head[3];
     if (wmp_read_all(fd, head, 12) != 0) return fail("short reply");
     int w = head[1], hh = head[2];
@@ -617,14 +627,30 @@ static int shot_to_ppm(int fd, const char *file, const int32_t *crop) {
             return 1;
         }
     }
+    png_image pi;
+    memset(&pi, 0, sizeof pi);
+    pi.version = PNG_IMAGE_VERSION;
+    pi.width = (png_uint_32)cw;
+    pi.height = (png_uint_32)ch;
+    pi.format = PNG_FORMAT_RGBA;
     FILE *out = file ? fopen(file, "wb") : stdout;
     if (!out) { free(rgba); return fail("cannot open output file"); }
-    fprintf(out, "P6\n%d %d\n255\n", cw, ch);
-    for (int y = cy; y < cy + ch; y++)
-        for (int x = cx; x < cx + cw; x++)
-            fwrite(rgba + ((size_t)y * w + x) * 4, 1, 3, out);   /* drop alpha */
-    if (file) fclose(out);
+    /* row_stride is the FULL surface width: the crop is a window into the
+     * whole buffer, selected by the base pointer + stride. */
+    int ok = png_image_write_to_stdio(&pi, out,
+                                      0 /* convert_to_8bit: already 8-bit */,
+                                      rgba + ((size_t)cy * w + cx) * 4,
+                                      (png_int_32)(w * 4), NULL);
+    if (ok && fflush(out) != 0) ok = 0;      /* a short write is a failure */
+    if (ferror(out)) ok = 0;
+    if (file && fclose(out) != 0) ok = 0;    /* close flushes: check it too */
     free(rgba);
+    if (!ok) {
+        if (file) unlink(file);              /* never leave a truncated PNG */
+        fprintf(stderr, "wmctl: shot: PNG write failed: %s\n",
+                (pi.warning_or_error & 2) ? pi.message : strerror(errno));
+        return 1;
+    }
     return 0;
 }
 
@@ -640,10 +666,10 @@ static int do_shot(int fd, const char *what, const char *file,
         if (wmp_consume_err(fd, &h) == 0) errno = EIO;   /* unexpected type */
         return failop("shot");
     }
-    return shot_to_ppm(fd, file, crop);
+    return shot_to_png(fd, file, crop);
 }
 
-/* Aero Peek thumbnail (todos/0063): a downscaled window as PPM. */
+/* Aero Peek thumbnail (todos/0063): a downscaled window as PNG. */
 static int do_thumb(int fd, int32_t sid, int32_t mw, int32_t mh, const char *file) {
     int32_t a[3] = { sid, mw, mh };
     wmp_hdr h;
@@ -653,7 +679,7 @@ static int do_thumb(int fd, int32_t sid, int32_t mw, int32_t mh, const char *fil
         if (wmp_consume_err(fd, &h) == 0) errno = EIO;   /* unexpected type */
         return failop("thumb");
     }
-    return shot_to_ppm(fd, file, NULL);
+    return shot_to_png(fd, file, NULL);
 }
 
 int main(int argc, char **argv) {

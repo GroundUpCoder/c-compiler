@@ -42,7 +42,7 @@
 //
 // GEOMETRY IS MEASURED, NEVER DERIVED FROM FONT MATH: the gadget and the
 // submit button carry probe background colours; a first session shoots the
-// page and Node reads their extents out of the PPM, then a second session
+// page and Node reads their extents out of the PNG, then a second session
 // replays with computed coordinates (the select-e2e pattern).
 //
 // Run: node tests/kernel/test_netsurf_filegadget_e2e.js
@@ -50,6 +50,7 @@
 const fs = require('fs');
 const path = require('path');
 const { driveBoot, freshImage, section } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -88,23 +89,21 @@ driveBoot('true', { image });
 }
 
 /* ---- shot helpers (the netsurf-e2e pattern) --------------------------- */
-function parsePPMs(buf, names) {
+function parsePngs(buf, names) {
   const shots = {};
   let off = 0;
   for (const name of names) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) throw new Error('bad ppm stream at ' + name + ': ' + JSON.stringify(head));
-    const w = +m[1], h = +m[2];
-    const data = off + m[0].length;
-    shots[name] = { w, h, data: buf.slice(data, data + w * h * 3) };
-    off = data + w * h * 3;
+    let p;
+    try { p = parsePng(buf, off); }
+    catch (e) { throw new Error(`bad png stream at ${name}: ${e.message}`); }
+    shots[name] = { w: p.w, h: p.h, data: p.rgba };
+    off = p.next;
   }
   return shots;
 }
-const px = (s, x, y) => [s.data[(y * s.w + x) * 3],
-                         s.data[(y * s.w + x) * 3 + 1],
-                         s.data[(y * s.w + x) * 3 + 2]];
+const px = (s, x, y) => [s.data[(y * s.w + x) * 4],
+                         s.data[(y * s.w + x) * 4 + 1],
+                         s.data[(y * s.w + x) * 4 + 2]];
 const near = (want, tol = 6) => (p) => Math.abs(p[0] - want[0]) < tol &&
                                        Math.abs(p[1] - want[1]) < tol &&
                                        Math.abs(p[2] - want[2]) < tol;
@@ -138,8 +137,8 @@ function regionDiffers(a, b, x0, y0, x1, y1) {
 /* post-load settle: shot until two consecutive frames match */
 const pollStable = (sid, out) => [
   `wmctl shot ${sid} ${out}`,
-  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.ppm; ` +
-  `cmp -s /root/poll.ppm ${out} && break; cp /root/poll.ppm ${out}; done`,
+  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.png; ` +
+  `cmp -s /root/poll.png ${out} && break; cp /root/poll.png ${out}; done`,
 ];
 const sidOf = (v, title) => `${v}=$(wmctl list | grep "\t${title}$" | sed "s/[^0-9].*//")`;
 
@@ -149,7 +148,7 @@ const measureOut = driveBoot([
   'netsurf /root/fi/file-input.html 2>/root/js.log &',
   'wmctl wait win NsFile 30000',
   sidOf('K', 'NsFile'),
-  ...pollStable('$K', '/root/s0.ppm'),
+  ...pollStable('$K', '/root/s0.png'),
   'echo shot-s0-ok',
   /* first open: the dialogue exists, is agent-served, and starts at $HOME.
    * The label wait is the agent barrier (the notepad pattern): the window
@@ -185,9 +184,9 @@ check('picker: the first open starts at $HOME (/root)',
 /* NB the measure session's gadget click at (20,12) assumes only that the
  * gadget's box reaches that point from the page's top-left corner; the
  * REPLAY session below uses the measured extents throughout. */
-const back1 = driveBoot('cat /root/s0.ppm\n',
+const back1 = driveBoot('cat /root/s0.png\n',
                         { image, encoding: null, maxBuffer: 64 * 1024 * 1024 });
-const m1 = parsePPMs(back1.stdout, ['s0']);
+const m1 = parsePngs(back1.stdout, ['s0']);
 
 const gad = colourExtent(m1.s0, C_GADGET);
 const sub = colourExtent(m1.s0, C_SUBMIT);
@@ -206,7 +205,7 @@ const actOut = driveBoot([
   'netsurf /root/fi/file-input.html 2>/root/js.log &',
   'wmctl wait win NsFile 30000',
   sidOf('K', 'NsFile'),
-  ...pollStable('$K', '/root/a0.ppm'),
+  ...pollStable('$K', '/root/a0.png'),
   'echo shot-a0-ok',
 
   /* open + the one-picker rule + cancel.  The second gadget click MUST be
@@ -232,8 +231,8 @@ const actOut = driveBoot([
   'echo ch-marker-waited',
   /* the gadget repaints its displayed value: poll until the frame moved
    * off a0, then hand the stable frame back for the region assert */
-  'for i in $(seq 1 100); do wmctl shot $K /root/ach.ppm; ' +
-  'cmp -s /root/ach.ppm /root/a0.ppm || break; sleep 0.1; done',
+  'for i in $(seq 1 100); do wmctl shot $K /root/ach.png; ' +
+  'cmp -s /root/ach.png /root/a0.png || break; sleep 0.1; done',
   'echo shot-ach-ok',
 
   /* lastdir: the re-open starts at the last ACCEPTED pick's directory —
@@ -295,9 +294,9 @@ check('submit: the GET query carries the gadget VALUE (the picked path)',
       JSON.stringify(queryLines));
 
 /* ---- the displayed-value repaint -------------------------------------- */
-const back2 = driveBoot('cat /root/a0.ppm /root/ach.ppm\n',
+const back2 = driveBoot('cat /root/a0.png /root/ach.png\n',
                         { image, encoding: null, maxBuffer: 64 * 1024 * 1024 });
-const m2 = parsePPMs(back2.stdout, ['a0', 'ach']);
+const m2 = parsePngs(back2.stdout, ['a0', 'ach']);
 check('choose: the gadget repainted its displayed value',
       regionDiffers(m2.a0, m2.ach, gad.x0, gad.y0, gad.x1 + 1, gad.y1 + 1));
 

@@ -14,6 +14,7 @@ const os = require('os');
 const path = require('path');
 const cp = require('child_process');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -32,7 +33,7 @@ function sessionApps() {
     'echo ==list1',
     'wmctl list',
     'SID=$(wmctl list | grep "mGBA$" | sed "s/[^0-9].*//")',
-    'wmctl shot $SID /root/gba1.ppm && echo shot-1-ok',
+    'wmctl shot $SID /root/gba1.png && echo shot-1-ok',
     'kill %1',
     'wmctl wait nowin mGBA',                      // window gone (0155)
     'grep "^gb" /etc/openwith /usr/share/openwith 2>/dev/null || echo ==assoc',
@@ -58,21 +59,19 @@ function sessionApps() {
     out.split('\n').slice(-10).join('|'));
 }
 
-/* ---- session B: pixel-level proof from the PPM ---- */
+/* ---- session B: pixel-level proof from the PNG shots ---- */
 function sessionFrames() {
-  const b = driveBoot('cat /root/gba1.ppm\n',
+  const b = driveBoot('cat /root/gba1.png\n',
     { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });
 
-  function parsePPM(buf, off) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) return null;
-    const w = +m[1], h = +m[2], data = off + m[0].length;
-    return { w, h, data, end: data + w * h * 3 };
+  // One PNG shot out of the concatenated cat-back stream (#657);
+  // null on a missing/short shot, so the callers' `if (!p)` guards hold.
+  function parseShot(buf, off) {
+    try { return parsePng(buf, off); } catch (e) { return null; }
   }
 
-  const p = parsePPM(b.stdout, 0);
-  check('frame parses as P6 at full client size 480x320',
+  const p = parseShot(b.stdout, 0);
+  check('frame parses as PNG at full client size 480x320',
     p !== null && p.w === 480 && p.h === 320, p && `${p.w}x${p.h}`);
   if (!p) return;
 
@@ -83,8 +82,8 @@ function sessionFrames() {
   let red = 0, sampled = 0;
   for (let y = 0; y < p.h; y += 4) {
     for (let x = 0; x < p.w; x += 4) {
-      const i = p.data + (y * p.w + x) * 3;
-      const r = b.stdout[i], g = b.stdout[i + 1], bl = b.stdout[i + 2];
+      const i = (y * p.w + x) * 4;
+      const r = p.rgba[i], g = p.rgba[i + 1], bl = p.rgba[i + 2];
       sampled++;
       if (r > 0x80 && g < 0x40 && bl < 0x40) red++;
     }

@@ -23,6 +23,7 @@ const os = require('os');
 const path = require('path');
 const cp = require('child_process');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -36,6 +37,13 @@ const { dir: tmp, image } = freshImage('os-term-');
 // window; the grid band starts below it (shots are the term SURFACE — the
 // strip child is a separate surface, so the band renders as background).
 const GRID_Y = 30;
+
+// One shot out of a concatenated cat-back stream (tests/lib/png.js, #657):
+// null on a missing/short shot so each session's early-return guards hold.
+// `.next` walks to the following shot in the stream.
+function parseShot(buf, off) {
+  try { return parsePng(buf, off); } catch (e) { return null; }
+}
 
 // Inject a string as SDL key events (down+up per char). SDL3 keysyms are
 // modifier-applied characters, so term maps them straight to pty bytes;
@@ -51,15 +59,15 @@ function sessionTerm() {
     'echo ==list1',
     'wmctl list',
     'TSID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
-    'wmctl shot $TSID /root/t1.ppm && echo shot1-ok',
+    'wmctl shot $TSID /root/t1.png && echo shot1-ok',
     keys('ls /bin\r'),
     'sleep 2',                                     // timing subject: pty echo + ls output freetype render (multi-frame)
-    'wmctl shot $TSID /root/t2.ppm && echo shot2-ok',
+    'wmctl shot $TSID /root/t2.png && echo shot2-ok',
     // vi inside the terminal. ESC is sent alone with air on both sides:
     // vi's read_key resolves a lone ESC by timeout.
     keys('vi /tmp/t.txt\r'),
     'sleep 2.5',                                   // timing subject: vi alt-screen render (multi-frame)
-    'wmctl shot $TSID /root/tvi.ppm && echo shotvi-ok',
+    'wmctl shot $TSID /root/tvi.png && echo shotvi-ok',
     keys('ihey from term'),
     'sleep 1.5',                                   // timing subject: insert-mode text render (multi-frame)
     keys('\x1b'),
@@ -72,7 +80,7 @@ function sessionTerm() {
     'wmctl wait dim $TSID 500x260',                // resize ack: SURFACE_CONFIGURE + reflow landed (0155)
     'echo ==list2',
     'wmctl list',
-    'wmctl shot $TSID /root/trs.ppm && echo shotrs-ok',
+    'wmctl shot $TSID /root/trs.png && echo shotrs-ok',
     // Session teardown: hush exits -> term reaps it -> window gone.
     keys('exit\r'),
     'wmctl wait nowin term',                       // hush exits -> term reaps -> window gone (0155)
@@ -109,61 +117,54 @@ function sessionTerm() {
     body.startsWith('hey from term'), JSON.stringify(body.slice(0, 40)));
 }
 
-/* ---- session B: extract the PPMs byte-clean, assert rendered text ---- */
+/* ---- session B: extract the PNGs byte-clean, assert rendered text ---- */
 function sessionFrames() {
-  const b = driveBoot('cat /root/t1.ppm /root/t2.ppm /root/tvi.ppm /root/trs.ppm\n', { image, timeout: 120000, maxBuffer: 16 * 1024 * 1024, encoding: null });
+  const b = driveBoot('cat /root/t1.png /root/t2.png /root/tvi.png /root/trs.png\n', { image, timeout: 120000, maxBuffer: 16 * 1024 * 1024, encoding: null });
 
-  function parsePPM(buf, off) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) return null;
-    const w = +m[1], h = +m[2], data = off + m[0].length;
-    return { w, h, data, end: data + w * h * 3 };
-  }
   // Foreground = any non-black pixel (the terminal's default bg is black;
   // glyphs are light gray + antialiasing ramps).
-  function fgPixels(buf, ppm, y0, y1) {
+  function fgPixels(shot, y0, y1) {
     let n = 0;
-    const ya = y0 === undefined ? 0 : y0, yb = y1 === undefined ? ppm.h : y1;
+    const ya = y0 === undefined ? 0 : y0, yb = y1 === undefined ? shot.h : y1;
     for (let y = ya; y < yb; y++) {
-      for (let x = 0; x < ppm.w; x++) {
-        const i = ppm.data + (y * ppm.w + x) * 3;
-        if (buf[i] | buf[i + 1] | buf[i + 2]) n++;
+      for (let x = 0; x < shot.w; x++) {
+        const i = (y * shot.w + x) * 4;
+        if (shot.rgba[i] | shot.rgba[i + 1] | shot.rgba[i + 2]) n++;
       }
     }
     return n;
   }
 
-  const t1 = parsePPM(b.stdout, 0);
+  const t1 = parseShot(b.stdout, 0);
   check('shot1 parses at 640x486', t1 && t1.w === 640 && t1.h === 486,
     t1 && `${t1.w}x${t1.h}`);
   if (!t1) return;
-  const t1fg = fgPixels(b.stdout, t1);
+  const t1fg = fgPixels(t1);
   check('shot1 shows rendered text (hush banner + prompt)', t1fg > 1500, String(t1fg));
 
-  const t2 = parsePPM(b.stdout, t1.end);
+  const t2 = parseShot(b.stdout, t1.next);
   check('shot2 parses at 640x486', t2 && t2.w === 640 && t2.h === 486);
   if (!t2) return;
-  const t2fg = fgPixels(b.stdout, t2);
+  const t2fg = fgPixels(t2);
   check('ls /bin rendered more text (echo + output over the pty)',
     t2fg > t1fg + 1000, `${t1fg} -> ${t2fg}`);
 
-  const tvi = parsePPM(b.stdout, t2.end);
+  const tvi = parseShot(b.stdout, t2.next);
   check('vi shot parses at 640x486', tvi && tvi.w === 640 && tvi.h === 486);
   if (!tvi) return;
   // The alternate screen replaced the shell: mostly empty rows of tildes +
   // the status line in the bottom cell row (cell height 18).
-  const statusFg = fgPixels(b.stdout, tvi, tvi.h - 18, tvi.h);
+  const statusFg = fgPixels(tvi, tvi.h - 18, tvi.h);
   check('vi status line rendered in the bottom row', statusFg > 100, String(statusFg));
-  const middleFg = fgPixels(b.stdout, tvi, GRID_Y + 5 * 19, GRID_Y + 6 * 19);
+  const middleFg = fgPixels(tvi, GRID_Y + 5 * 19, GRID_Y + 6 * 19);
   check('vi cleared the shell scrollback (alt screen row is tilde-only)',
     middleFg > 0 && middleFg < 200, String(middleFg));
 
-  const trs = parsePPM(b.stdout, tvi.end);
+  const trs = parseShot(b.stdout, tvi.next);
   check('post-resize shot parses at 500x260 (reflowed present)',
     trs && trs.w === 500 && trs.h === 260, trs && `${trs.w}x${trs.h}`);
   if (!trs) return;
-  const rsfg = fgPixels(b.stdout, trs);
+  const rsfg = fgPixels(trs);
   check('post-resize shot still renders text', rsfg > 800, String(rsfg));
 }
 
@@ -255,7 +256,7 @@ function sessionLess() {
     'TSID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
     keys('less /tmp/big.txt\r'),
     'sleep 2.5',                                   // timing subject: less alt-screen render (multi-frame)
-    'wmctl shot $TSID /root/tless.ppm && echo shotless-ok',
+    'wmctl shot $TSID /root/tless.png && echo shotless-ok',
     keys(' '),                       // space: page down inside less
     'sleep 1.5',                                   // timing subject: page-down render (multi-frame)
     keys('q'),                       // quit back to hush
@@ -277,19 +278,19 @@ function sessionLess() {
     rc === 'lessrc=0', JSON.stringify(rc));
 
   // Pixel pass on the in-less shot (same parser as session B).
-  const b = driveBoot('cat /root/tless.ppm\n', { image, timeout: 120000, maxBuffer: 16 * 1024 * 1024, encoding: null });
-  const head = b.stdout.toString('latin1', 0, 32);
-  const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-  check('less shot parses at 640x486', !!m && +m[1] === 640 && +m[2] === 486,
-    JSON.stringify(head.slice(0, 16)));
-  if (m) {
-    const w = +m[1], h = +m[2], data = m[0].length;
+  const b = driveBoot('cat /root/tless.png\n', { image, timeout: 120000, maxBuffer: 16 * 1024 * 1024, encoding: null });
+  const shot = parseShot(b.stdout, 0);
+  check('less shot parses at 640x486',
+    shot !== null && shot.w === 640 && shot.h === 486,
+    shot ? `${shot.w}x${shot.h}` : 'undecodable');
+  if (shot) {
+    const w = shot.w, h = shot.h, rgba = shot.rgba;
     const fg = (y0, y1) => {
       let n = 0;
       for (let y = y0; y < y1; y++) {
         for (let x = 0; x < w; x++) {
-          const i = data + (y * w + x) * 3;
-          if (b.stdout[i] | b.stdout[i + 1] | b.stdout[i + 2]) n++;
+          const i = (y * w + x) * 4;
+          if (rgba[i] | rgba[i + 1] | rgba[i + 2]) n++;
         }
       }
       return n;
@@ -318,7 +319,7 @@ function sessionDim() {
     keys("printf '\\033[2mdim dim dim dim\\033[22mBACK\\n'; echo done>/tmp/dimdone\r"),
     'for i in $(seq 1 120); do [ -s /tmp/dimdone ] && break; sleep 0.05; done',  // typed printf ran (bounded poll, 0155)
     'sleep 1.5',                                   // timing subject: freetype glyph render (multi-frame)
-    'wmctl shot $TSID /root/tdim.ppm && echo shotdim-ok',
+    'wmctl shot $TSID /root/tdim.png && echo shotdim-ok',
     keys('exit\r'),
     'wmctl wait nowin term',                       // hush exits -> term reaps -> window gone (0155)
     'echo ==done',
@@ -327,21 +328,21 @@ function sessionDim() {
   const d = driveBoot(script, { image, timeout: 420000 });
   check('dim shot written', d.stdout.includes('shotdim-ok'), d.stdout.slice(-300));
 
-  const b = driveBoot('cat /root/tdim.ppm\n', { image, timeout: 120000, maxBuffer: 16 * 1024 * 1024, encoding: null });
-  const head = b.stdout.toString('latin1', 0, 32);
-  const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-  check('dim shot parses at 640x486', !!m && +m[1] === 640 && +m[2] === 486,
-    JSON.stringify(head.slice(0, 16)));
-  if (!m) return;
-  const w = +m[1], h = +m[2], data = m[0].length;
+  const b = driveBoot('cat /root/tdim.png\n', { image, timeout: 120000, maxBuffer: 16 * 1024 * 1024, encoding: null });
+  const shot = parseShot(b.stdout, 0);
+  check('dim shot parses at 640x486',
+    shot !== null && shot.w === 640 && shot.h === 486,
+    shot ? `${shot.w}x${shot.h}` : 'undecodable');
+  if (!shot) return;
+  const w = shot.w, h = shot.h, rgba = shot.rgba;
   // Exact-value scan; the last 16 px columns are excluded so the 0273b
   // scrollbar overlay blends can never alias into either population.
   const countRGB = (v) => {
     let n = 0;
     for (let y = 0; y < h; y++)
       for (let x = 0; x < w - 16; x++) {
-        const i = data + (y * w + x) * 3;
-        if (b.stdout[i] === v && b.stdout[i + 1] === v && b.stdout[i + 2] === v) n++;
+        const i = (y * w + x) * 4;
+        if (rgba[i] === v && rgba[i + 1] === v && rgba[i + 2] === v) n++;
       }
     return n;
   };
@@ -374,7 +375,7 @@ function sessionUnicode() {
     'wmctl wait win term',                         // window spawn (0155)
     'sleep 2',                                     // timing subject: hush banner + prompt render (multi-frame)
     'TSID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
-    'wmctl shot $TSID /root/u0.ppm && echo shotu0-ok',
+    'wmctl shot $TSID /root/u0.png && echo shotu0-ok',
     // W1: typed non-ASCII reaches the app as correct UTF-8 bytes.
     keysU('echo héllo€😀 >/tmp/u1.txt\r'),
     'for i in $(seq 1 120); do [ -s /tmp/u1.txt ] && break; sleep 0.05; done',  // typed redirect landed (bounded poll, 0155)
@@ -383,12 +384,12 @@ function sessionUnicode() {
     // W2 output: real glyphs for everything the baked face covers.
     keysU('cat /tmp/uu.txt\r'),
     'sleep 2',                                     // timing subject: freetype glyph render (multi-frame)
-    'wmctl shot $TSID /root/u1.ppm && echo shotu1-ok',
+    'wmctl shot $TSID /root/u1.png && echo shotu1-ok',
     // Tofu + U+FFFD: CJK the face lacks draws a box; malformed bytes
     // (invalid lead FF, stray continuation 80) become U+FFFD.
     keysU('printf "\\xe6\\xb1\\x89 \\xff\\x80 x\\n"\r'),
     'sleep 2',                                     // timing subject: tofu render (multi-frame)
-    'wmctl shot $TSID /root/u2.ppm && echo shotu2-ok',
+    'wmctl shot $TSID /root/u2.png && echo shotu2-ok',
     // Selection copy: clear + print héllo at home, drag cells 0..4 of row
     // 0 (8x19 cells; BUTTON_UP does not extend, so hover supplies the
     // final motion), chord-copy, read the kernel slot from the system
@@ -421,38 +422,31 @@ function sessionUnicode() {
 
   // Pixel pass: the Unicode output rendered real glyphs, and the tofu/
   // U+FFFD line added more (a box outline is pixel-heavy).
-  const b = driveBoot('cat /root/u0.ppm /root/u1.ppm /root/u2.ppm\n',
+  const b = driveBoot('cat /root/u0.png /root/u1.png /root/u2.png\n',
     { image, timeout: 120000, maxBuffer: 16 * 1024 * 1024, encoding: null });
-  function parsePPM(buf, off) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) return null;
-    const w = +m[1], h = +m[2], data = off + m[0].length;
-    return { w, h, data, end: data + w * h * 3 };
-  }
-  function fgPixels(buf, ppm) {
+  function fgPixels(shot) {
     let n = 0;
-    for (let y = 0; y < ppm.h; y++) {
-      for (let x = 0; x < ppm.w; x++) {
-        const i = ppm.data + (y * ppm.w + x) * 3;
-        if (buf[i] | buf[i + 1] | buf[i + 2]) n++;
+    for (let y = 0; y < shot.h; y++) {
+      for (let x = 0; x < shot.w; x++) {
+        const i = (y * shot.w + x) * 4;
+        if (shot.rgba[i] | shot.rgba[i + 1] | shot.rgba[i + 2]) n++;
       }
     }
     return n;
   }
-  const p0 = parsePPM(b.stdout, 0);
+  const p0 = parseShot(b.stdout, 0);
   check('unicode: baseline shot parses at 640x486', p0 && p0.w === 640 && p0.h === 486);
   if (!p0) return;
-  const p1 = parsePPM(b.stdout, p0.end);
+  const p1 = parseShot(b.stdout, p0.next);
   check('unicode: post-cat shot parses', !!p1);
   if (!p1) return;
-  const f0 = fgPixels(b.stdout, p0), f1 = fgPixels(b.stdout, p1);
+  const f0 = fgPixels(p0), f1 = fgPixels(p1);
   check('unicode: é/€/α/λ/ж rendered as real glyphs (fg pixels grew)',
     f1 > f0 + 200, `${f0} -> ${f1}`);
-  const p2 = parsePPM(b.stdout, p1.end);
+  const p2 = parseShot(b.stdout, p1.next);
   check('unicode: tofu shot parses', !!p2);
   if (!p2) return;
-  const f2 = fgPixels(b.stdout, p2);
+  const f2 = fgPixels(p2);
   check('unicode: CJK tofu box + U+FFFD rendered (fg pixels grew again)',
     f2 > f1 + 50, `${f1} -> ${f2}`);
 }
@@ -474,7 +468,7 @@ function sessionWide() {
     // narrow X — 日 must own cells 0+1 and X land at cell 2.
     keysU('printf "\\033[2J\\033[H\\xe6\\x97\\xa5X\\n"\r'),
     'sleep 2',                                     // timing subject: glyph render (multi-frame)
-    'wmctl shot $TSID /root/w0.ppm && echo shotw0-ok',
+    'wmctl shot $TSID /root/w0.png && echo shotw0-ok',
     // Canonical-mode wide ERASE: `read` holds the tty canonical at home;
     // type 日 (tty echo renders its 2-cell tofu), then ONE Backspace —
     // the width-aware erase echo must wipe BOTH cells.
@@ -482,10 +476,10 @@ function sessionWide() {
     'sleep 1.5',                                   // timing subject: clear + read prompt (multi-frame)
     keysU('日'),
     'sleep 1',                                     // timing subject: echo render (multi-frame)
-    'wmctl shot $TSID /root/w1.ppm && echo shotw1-ok',
+    'wmctl shot $TSID /root/w1.png && echo shotw1-ok',
     'wmctl key $TSID 0 8',                         // Backspace -> tty ERASE
     'sleep 1',                                     // timing subject: erase echo render (multi-frame)
-    'wmctl shot $TSID /root/w2.ppm && echo shotw2-ok',
+    'wmctl shot $TSID /root/w2.png && echo shotw2-ok',
     keysU('ok\r'),
     keysU('exit\r'),
     'wmctl wait nowin term',
@@ -496,44 +490,37 @@ function sessionWide() {
     w.stdout.includes('shotw0-ok') && w.stdout.includes('shotw1-ok') &&
     w.stdout.includes('shotw2-ok'));
 
-  const b = driveBoot('cat /root/w0.ppm /root/w1.ppm /root/w2.ppm\n',
+  const b = driveBoot('cat /root/w0.png /root/w1.png /root/w2.png\n',
     { image, timeout: 120000, maxBuffer: 16 * 1024 * 1024, encoding: null });
-  function parsePPM(buf, off) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) return null;
-    const w2 = +m[1], h = +m[2], data = off + m[0].length;
-    return { w: w2, h, data, end: data + w2 * h * 3 };
-  }
   // Ink pixels of one 8x19 cell at (col, row 0) — below the menu bar band.
-  function cellInk(buf, ppm, col) {
+  function cellInk(shot, col) {
     let n = 0;
     for (let y = GRID_Y; y < GRID_Y + 19; y++) {
       for (let x = col * 8; x < col * 8 + 8; x++) {
-        const i = ppm.data + (y * ppm.w + x) * 3;
-        if (buf[i] | buf[i + 1] | buf[i + 2]) n++;
+        const i = (y * shot.w + x) * 4;
+        if (shot.rgba[i] | shot.rgba[i + 1] | shot.rgba[i + 2]) n++;
       }
     }
     return n;
   }
-  const p0 = parsePPM(b.stdout, 0);
+  const p0 = parseShot(b.stdout, 0);
   check('wide: w0 parses', !!p0);
   if (!p0) return;
-  const c0 = cellInk(b.stdout, p0, 0), c1 = cellInk(b.stdout, p0, 1),
-        c2 = cellInk(b.stdout, p0, 2), c3 = cellInk(b.stdout, p0, 3);
+  const c0 = cellInk(p0, 0), c1 = cellInk(p0, 1),
+        c2 = cellInk(p0, 2), c3 = cellInk(p0, 3);
   check('wide: 2-cell tofu spans cells 0 AND 1', c0 > 0 && c1 > 0, `${c0},${c1}`);
   check('wide: narrow X advanced to cell 2 (cursor moved 2)', c2 > 0, String(c2));
   check('wide: cell 3 stays blank', c3 === 0, String(c3));
-  const p1 = parsePPM(b.stdout, p0.end);
+  const p1 = parseShot(b.stdout, p0.next);
   check('wide: w1 parses', !!p1);
   if (!p1) return;
   check('wide: typed CJK echo renders into the continuation cell',
-    cellInk(b.stdout, p1, 1) > 0, String(cellInk(b.stdout, p1, 1)));
-  const p2 = parsePPM(b.stdout, p1.end);
+    cellInk(p1, 1) > 0, String(cellInk(p1, 1)));
+  const p2 = parseShot(b.stdout, p1.next);
   check('wide: w2 parses', !!p2);
   if (!p2) return;
   check('wide: ONE erase wiped the continuation cell too',
-    cellInk(b.stdout, p2, 1) === 0, String(cellInk(b.stdout, p2, 1)));
+    cellInk(p2, 1) === 0, String(cellInk(p2, 1)));
 }
 
 /* ---- session S: scrollback history ring (todos/0273a) ----
@@ -556,23 +543,23 @@ function sessionScrollback() {
     // clear+home, a full-ink marker line, then flood past the 24-row viewport.
     keys("printf '\\033[2J\\033[H'; printf '" + HASH + "\\n'; seq 300\r"),
     'sleep 3',                                     // timing subject: 300 lines echo + scroll (multi-frame)
-    'wmctl shot $TSID /root/sb_live.ppm && echo sb-live-ok',
+    'wmctl shot $TSID /root/sb_live.png && echo sb-live-ok',
     // PageUp to the top of history (clamps at the oldest line = the marker).
     ...Array(20).fill('wmctl key $TSID 0 ' + PGUP),
     'sleep 1',                                     // timing subject: scrolled-view repaint (multi-frame)
-    'wmctl shot $TSID /root/sb_up.ppm && echo sb-up-ok',
+    'wmctl shot $TSID /root/sb_up.png && echo sb-up-ok',
     // PageDown back down: clamps exactly at the live bottom.
     ...Array(20).fill('wmctl key $TSID 0 ' + PGDN),
     'sleep 1',                                     // timing subject: repaint back to live (multi-frame)
-    'wmctl shot $TSID /root/sb_pgdn.ppm && echo sb-pgdn-ok',
+    'wmctl shot $TSID /root/sb_pgdn.png && echo sb-pgdn-ok',
     // Mouse-wheel up to the marker (the other scroll input, todos/0210).
     'wmctl wheel $TSID 100',
     'sleep 1',                                     // timing subject: wheel-scrolled repaint (multi-frame)
-    'wmctl shot $TSID /root/sb_wheel.ppm && echo sb-wheel-ok',
+    'wmctl shot $TSID /root/sb_wheel.png && echo sb-wheel-ok',
     // New output snaps the view back to the live bottom (Terminal behaviour).
     keys('echo SNAPMARK\r'),
     'sleep 2',                                     // timing subject: echo output + snap repaint (multi-frame)
-    'wmctl shot $TSID /root/sb_snap.ppm && echo sb-snap-ok',
+    'wmctl shot $TSID /root/sb_snap.png && echo sb-snap-ok',
     // Fractional wheel (#347): trackpads report |wheel.y| < 1 per event.
     // Print a fresh marker + a 12-line tail so the marker sits mid-screen,
     // then wheel in 0.25-notch (= 0.75-line) steps: one event cannot move
@@ -580,22 +567,22 @@ function sessionScrollback() {
     // back down). The marker's ROW tracks view_off exactly.
     keys("printf '" + HASH + "\\n'; seq 12\r"),
     'sleep 2',                                     // timing subject: echo + 13 lines render (multi-frame)
-    'wmctl shot $TSID /root/fw0.ppm && echo fw0-ok',
+    'wmctl shot $TSID /root/fw0.png && echo fw0-ok',
     'wmctl wheel $TSID 0.25',                      // carry 0.75: below one line
     'sleep 1',                                     // timing subject: (non-)repaint settle
-    'wmctl shot $TSID /root/fw1.ppm && echo fw1-ok',
+    'wmctl shot $TSID /root/fw1.png && echo fw1-ok',
     'wmctl wheel $TSID 0.25',                      // 1.5 -> 1 line up, rem 0.5
     'sleep 1',                                     // timing subject: scrolled repaint (multi-frame)
-    'wmctl shot $TSID /root/fw2.ppm && echo fw2-ok',
+    'wmctl shot $TSID /root/fw2.png && echo fw2-ok',
     'wmctl wheel $TSID 0.25',                      // 0.5+0.75=1.25 -> 1 more line
     'sleep 1',                                     // timing subject: scrolled repaint (multi-frame)
-    'wmctl shot $TSID /root/fw3.ppm && echo fw3-ok',
+    'wmctl shot $TSID /root/fw3.png && echo fw3-ok',
     'wmctl wheel $TSID -0.25',                     // 0.25-0.75=-0.5: no move either way
     'sleep 1',                                     // timing subject: (non-)repaint settle
-    'wmctl shot $TSID /root/fw4.ppm && echo fw4-ok',
+    'wmctl shot $TSID /root/fw4.png && echo fw4-ok',
     'wmctl wheel $TSID -0.25',                     // -1.25 -> 1 line back down
     'sleep 1',                                     // timing subject: scrolled repaint (multi-frame)
-    'wmctl shot $TSID /root/fw5.ppm && echo fw5-ok',
+    'wmctl shot $TSID /root/fw5.png && echo fw5-ok',
     keys('exit\r'),
     'wmctl wait nowin term',                       // hush exits -> term reaps -> window gone (0155)
     '',
@@ -610,35 +597,28 @@ function sessionScrollback() {
     ['fw0', 'fw1', 'fw2', 'fw3', 'fw4', 'fw5'].every((n) => out.includes(n + '-ok')),
     out.slice(-300));
 
-  const b = driveBoot('cat /root/sb_live.ppm /root/sb_up.ppm /root/sb_pgdn.ppm /root/sb_wheel.ppm /root/sb_snap.ppm'
-    + ' /root/fw0.ppm /root/fw1.ppm /root/fw2.ppm /root/fw3.ppm /root/fw4.ppm /root/fw5.ppm\n',
+  const b = driveBoot('cat /root/sb_live.png /root/sb_up.png /root/sb_pgdn.png /root/sb_wheel.png /root/sb_snap.png'
+    + ' /root/fw0.png /root/fw1.png /root/fw2.png /root/fw3.png /root/fw4.png /root/fw5.png\n',
     { image, timeout: 120000, maxBuffer: 64 * 1024 * 1024, encoding: null });
-  function parsePPM(buf, off) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) return null;
-    const w = +m[1], h = +m[2], data = off + m[0].length;
-    return { w, h, data, end: data + w * h * 3 };
-  }
   // Ink pixels of the TOP cell row (below the bar band — the 8x19 cell).
-  function row0Ink(buf, ppm) {
+  function row0Ink(shot) {
     let n = 0;
     for (let y = GRID_Y; y < GRID_Y + 19; y++)
-      for (let x = 0; x < ppm.w; x++) {
-        const i = ppm.data + (y * ppm.w + x) * 3;
-        if (buf[i] | buf[i + 1] | buf[i + 2]) n++;
+      for (let x = 0; x < shot.w; x++) {
+        const i = (y * shot.w + x) * 4;
+        if (shot.rgba[i] | shot.rgba[i + 1] | shot.rgba[i + 2]) n++;
       }
     return n;
   }
   // Row r's ink (cell rows are 19px below the GRID_Y band) — the marker's
   // ROW in a shot is the one full-ink row (>1000; seq numbers ~140).
-  function markerRow(buf, ppm) {
+  function markerRow(shot) {
     for (let r = 0; r < 24; r++) {
       let n = 0;
       for (let y = GRID_Y + r * 19; y < GRID_Y + (r + 1) * 19; y++)
-        for (let x = 0; x < ppm.w; x++) {
-          const i = ppm.data + (y * ppm.w + x) * 3;
-          if (buf[i] | buf[i + 1] | buf[i + 2]) n++;
+        for (let x = 0; x < shot.w; x++) {
+          const i = (y * shot.w + x) * 4;
+          if (shot.rgba[i] | shot.rgba[i + 1] | shot.rgba[i + 2]) n++;
         }
       if (n > 1000) return r;
     }
@@ -649,11 +629,11 @@ function sessionScrollback() {
   const frows = {};
   for (const nm of ['live', 'up', 'pgdn', 'wheel', 'snap',
                     'fw0', 'fw1', 'fw2', 'fw3', 'fw4', 'fw5']) {
-    const p = parsePPM(b.stdout, off);
+    const p = parseShot(b.stdout, off);
     if (!p) { check('scrollback: ' + nm + ' shot parses', false); return; }
-    if (nm.startsWith('fw')) frows[nm] = markerRow(b.stdout, p);
-    else shots[nm] = row0Ink(b.stdout, p);
-    off = p.end;
+    if (nm.startsWith('fw')) frows[nm] = markerRow(p);
+    else shots[nm] = row0Ink(p);
+    off = p.next;
   }
   // The marker line is a full row of '#': ~2000 ink px. A live seq number is
   // ~140. Thresholds sit well clear of both (measured live 139, marker 1960).
@@ -725,10 +705,10 @@ function sessionAutoscroll() {
     'sleep 1',                                     // timing subject: typed loop line lands (it emits nothing)
     ...pgup20,
     'sleep 1',                                     // timing subject: scrolled-view repaint (multi-frame)
-    'wmctl shot $TSID /root/as1.ppm && echo as1-ok',
+    'wmctl shot $TSID /root/as1.png && echo as1-ok',
     'touch /tmp/go1',
     'sleep 2',                                     // timing subject: triggered echo + snap repaint (multi-frame)
-    'wmctl shot $TSID /root/as2.ppm && echo as2-ok',
+    'wmctl shot $TSID /root/as2.png && echo as2-ok',
     // --- P2: live edit -> off; the scrolled view must survive output ---
     "printf 'autoscroll\\toff\\n' > /root/.config/term",
     'sleep 1',                                     // timing subject: FS_WATCH settled event + reload
@@ -736,10 +716,10 @@ function sessionAutoscroll() {
     'sleep 1',                                     // timing subject: typed loop line lands
     ...pgup20,
     'sleep 1',                                     // timing subject: scrolled-view repaint (multi-frame)
-    'wmctl shot $TSID /root/as3.ppm && echo as3-ok',
+    'wmctl shot $TSID /root/as3.png && echo as3-ok',
     'touch /tmp/go2',
     'sleep 2',                                     // timing subject: triggered echo drained (view must NOT move)
-    'wmctl shot $TSID /root/as4.ppm && echo as4-ok',
+    'wmctl shot $TSID /root/as4.png && echo as4-ok',
     'test -f /tmp/done2 && echo done2-seen',       // the P2 output really ran
     // --- P3: live edit -> the numeric spelling `1` — snaps again ---
     "printf 'autoscroll\\t1\\n' > /root/.config/term",
@@ -748,20 +728,20 @@ function sessionAutoscroll() {
     'sleep 1',                                     // timing subject: typed loop line lands
     ...pgup20,
     'sleep 1',                                     // timing subject: scrolled-view repaint (multi-frame)
-    'wmctl shot $TSID /root/as5.ppm && echo as5-ok',
+    'wmctl shot $TSID /root/as5.png && echo as5-ok',
     'touch /tmp/go3',
     'sleep 2',                                     // timing subject: triggered echo + snap repaint (multi-frame)
-    'wmctl shot $TSID /root/as6.ppm && echo as6-ok',
+    'wmctl shot $TSID /root/as6.png && echo as6-ok',
     // --- P4: thumb HELD with autoscroll on — mid-drag output never snaps ---
     waitLoop(4),
     'sleep 1',                                     // timing subject: typed loop line lands
     'wmctl down $TSID 636 476',                    // grab the bottom-anchored thumb (0273b geometry)
     'wmctl hover $TSID 636 32',                    // drag to the top: clamps at the marker
     'sleep 1',                                     // timing subject: drag-scrolled repaint (multi-frame)
-    'wmctl shot $TSID /root/as7.ppm && echo as7-ok',
+    'wmctl shot $TSID /root/as7.png && echo as7-ok',
     'touch /tmp/go4',
     'sleep 2',                                     // timing subject: triggered echo drained (drag holds the view)
-    'wmctl shot $TSID /root/as8.ppm && echo as8-ok',
+    'wmctl shot $TSID /root/as8.png && echo as8-ok',
     'test -f /tmp/done4 && echo done4-seen',       // the P4 output really ran
     'wmctl up $TSID 636 32',
     keys('exit\r'),
@@ -778,31 +758,24 @@ function sessionAutoscroll() {
   check('autoscroll: P4 triggered output really arrived (done4)',
     out.includes('done4-seen'));
 
-  const b = driveBoot('cat /root/as1.ppm /root/as2.ppm /root/as3.ppm /root/as4.ppm /root/as5.ppm /root/as6.ppm /root/as7.ppm /root/as8.ppm\n',
+  const b = driveBoot('cat /root/as1.png /root/as2.png /root/as3.png /root/as4.png /root/as5.png /root/as6.png /root/as7.png /root/as8.png\n',
     { image, timeout: 120000, maxBuffer: 48 * 1024 * 1024, encoding: null });
-  function parsePPM(buf, off) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) return null;
-    const w = +m[1], h = +m[2], data = off + m[0].length;
-    return { w, h, data, end: data + w * h * 3 };
-  }
-  function row0Ink(buf, ppm) {
+  function row0Ink(shot) {
     let n = 0;
     for (let y = GRID_Y; y < GRID_Y + 19; y++)
-      for (let x = 0; x < ppm.w; x++) {
-        const i = ppm.data + (y * ppm.w + x) * 3;
-        if (buf[i] | buf[i + 1] | buf[i + 2]) n++;
+      for (let x = 0; x < shot.w; x++) {
+        const i = (y * shot.w + x) * 4;
+        if (shot.rgba[i] | shot.rgba[i + 1] | shot.rgba[i + 2]) n++;
       }
     return n;
   }
   let off = 0;
   const ink = {};
   for (const nm of ['as1', 'as2', 'as3', 'as4', 'as5', 'as6', 'as7', 'as8']) {
-    const p = parsePPM(b.stdout, off);
+    const p = parseShot(b.stdout, off);
     if (!p) { check('autoscroll: ' + nm + ' shot parses', false); return; }
-    ink[nm] = row0Ink(b.stdout, p);
-    off = p.end;
+    ink[nm] = row0Ink(p);
+    off = p.next;
   }
   check('autoscroll: P1 scrolled up to the marker (key absent)',
     ink.as1 > 1000, `row0=${ink.as1}`);
@@ -868,10 +841,10 @@ function sessionSelScroll() {
     // PageUp clamps at the oldest history line = the marker at row 0.
     ...Array(20).fill('wmctl key $TSID 0 ' + PGUP),
     'sleep 1',                                     // timing subject: scrolled-view repaint (multi-frame)
-    'wmctl shot $TSID /root/x_pre.ppm && echo x-pre-ok',
+    'wmctl shot $TSID /root/x_pre.png && echo x-pre-ok',
     ...dragRow0,
     'sleep 1',                                     // timing subject: selection repaint (multi-frame)
-    'wmctl shot $TSID /root/x_sel.ppm && echo x-sel-ok',
+    'wmctl shot $TSID /root/x_sel.png && echo x-sel-ok',
     chord,
     'for i in $(seq 1 120); do clip -o >/dev/null 2>&1 && break; sleep 0.05; done',  // copy landed in the kernel slot (bounded poll, 0155)
     ...clipRead('xclip'),
@@ -891,28 +864,21 @@ function sessionSelScroll() {
   // Pixel arm: the drag must add inverted cells on row 0 (the selected
   // cells' bg becomes the fg — a large nonzero-px delta over the plain
   // marker text; pre-fix show_sel hides the highlight => delta ~0).
-  const b1 = driveBoot('cat /root/x_pre.ppm /root/x_sel.ppm\n',
+  const b1 = driveBoot('cat /root/x_pre.png /root/x_sel.png\n',
     { image, timeout: 120000, maxBuffer: 16 * 1024 * 1024, encoding: null });
-  function parsePPM(buf, off) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) return null;
-    const w = +m[1], h = +m[2], data = off + m[0].length;
-    return { w, h, data, end: data + w * h * 3 };
-  }
-  function row0Ink(buf, ppm) {
+  function row0Ink(shot) {
     let n = 0;
     for (let y = GRID_Y; y < GRID_Y + 19; y++)
-      for (let x = 0; x < ppm.w; x++) {
-        const i = ppm.data + (y * ppm.w + x) * 3;
-        if (buf[i] | buf[i + 1] | buf[i + 2]) n++;
+      for (let x = 0; x < shot.w; x++) {
+        const i = (y * shot.w + x) * 4;
+        if (shot.rgba[i] | shot.rgba[i + 1] | shot.rgba[i + 2]) n++;
       }
     return n;
   }
-  const pPre = parsePPM(b1.stdout, 0);
-  const pSel = pPre && parsePPM(b1.stdout, pPre.end);
+  const pPre = parseShot(b1.stdout, 0);
+  const pSel = pPre && parseShot(b1.stdout, pPre.next);
   if (!pPre || !pSel) { check('selscroll: X1 shots parse', false); return; }
-  const inkPre = row0Ink(b1.stdout, pPre), inkSel = row0Ink(b1.stdout, pSel);
+  const inkPre = row0Ink(pPre), inkSel = row0Ink(pSel);
   check('selscroll: X1 scrolled selection renders inverted cells at the dragged row',
     inkSel > inkPre + 1500, `pre=${inkPre} sel=${inkSel}`);
 
@@ -995,12 +961,12 @@ function sessionScrollbar() {
     'sleep 2',                                     // timing subject: hush banner + prompt render (multi-frame)
     'TSID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
     // No history yet: the bar must be hidden (byte-identical right strip).
-    'wmctl shot $TSID /root/bar0.ppm && echo bar0-ok',
+    'wmctl shot $TSID /root/bar0.png && echo bar0-ok',
     // Marker + flood (the session-S probe): history forms, the bar appears
     // with the thumb flush at the live bottom.
     keys("printf '\\033[2J\\033[H'; printf '" + HASH + "\\n'; seq 300\r"),
     'sleep 3',                                     // timing subject: 300 lines echo + scroll (multi-frame)
-    'wmctl shot $TSID /root/bar1.ppm && echo bar1-ok',
+    'wmctl shot $TSID /root/bar1.png && echo bar1-ok',
     // Thumb drag to the top: press inside the bottom-anchored thumb
     // (window 640x486; the thumb ends at y=486 and is >=12 tall, so
     // y=476 is always inside it), drag to the grid-band top (y=32; the
@@ -1010,12 +976,12 @@ function sessionScrollbar() {
     'wmctl hover $TSID 636 32',
     'wmctl up $TSID 636 32',
     'sleep 1',                                     // timing subject: scrolled-view repaint (multi-frame)
-    'wmctl shot $TSID /root/bar2.ppm && echo bar2-ok',
+    'wmctl shot $TSID /root/bar2.png && echo bar2-ok',
     // Track click below the (now top-parked) thumb: pages DOWN one
     // viewport toward the click — the marker leaves row 0.
     'wmctl click $TSID 636 450',
     'sleep 1',                                     // timing subject: paged-view repaint (multi-frame)
-    'wmctl shot $TSID /root/bar3.ppm && echo bar3-ok',
+    'wmctl shot $TSID /root/bar3.png && echo bar3-ok',
     keys('exit\r'),
     'wmctl wait nowin term',                       // hush exits -> term reaps -> window gone (0155)
     '',
@@ -1026,46 +992,39 @@ function sessionScrollbar() {
     out.includes('bar0-ok') && out.includes('bar1-ok') &&
     out.includes('bar2-ok') && out.includes('bar3-ok'), out.slice(-300));
 
-  const b = driveBoot('cat /root/bar0.ppm /root/bar1.ppm /root/bar2.ppm /root/bar3.ppm\n',
+  const b = driveBoot('cat /root/bar0.png /root/bar1.png /root/bar2.png /root/bar3.png\n',
     { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });
-  function parsePPM(buf, off) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) return null;
-    const w = +m[1], h = +m[2], data = off + m[0].length;
-    return { w, h, data, end: data + w * h * 3 };
-  }
   // Right-edge 8px strip, rows y0..y1: ink = any nonzero pixel (track OR
   // thumb), bright = any channel > 100 (thumb only — the 25% track blend
   // over the blank black right column is 32).
-  function strip(buf, ppm, y0, y1, minCh) {
+  function strip(shot, y0, y1, minCh) {
     let n = 0;
     for (let y = y0; y < y1; y++)
-      for (let x = ppm.w - 8; x < ppm.w; x++) {
-        const i = ppm.data + (y * ppm.w + x) * 3;
-        if (buf[i] > minCh || buf[i + 1] > minCh || buf[i + 2] > minCh) n++;
+      for (let x = shot.w - 8; x < shot.w; x++) {
+        const i = (y * shot.w + x) * 4;
+        if (shot.rgba[i] > minCh || shot.rgba[i + 1] > minCh || shot.rgba[i + 2] > minCh) n++;
       }
     return n;
   }
   // Ink of the TOP cell row (below the bar band) — the session-S probe.
-  function row0Ink(buf, ppm) {
+  function row0Ink(shot) {
     let n = 0;
     for (let y = GRID_Y; y < GRID_Y + 19; y++)
-      for (let x = 0; x < ppm.w; x++) {
-        const i = ppm.data + (y * ppm.w + x) * 3;
-        if (buf[i] | buf[i + 1] | buf[i + 2]) n++;
+      for (let x = 0; x < shot.w; x++) {
+        const i = (y * shot.w + x) * 4;
+        if (shot.rgba[i] | shot.rgba[i + 1] | shot.rgba[i + 2]) n++;
       }
     return n;
   }
   let off = 0;
   const shots = {};
   for (const nm of ['bar0', 'bar1', 'bar2', 'bar3']) {
-    const p = parsePPM(b.stdout, off);
+    const p = parseShot(b.stdout, off);
     if (!p) { check('scrollbar: ' + nm + ' shot parses', false); return; }
     shots[nm] = { p };
-    off = p.end;
+    off = p.next;
   }
-  const S = (nm, y0, y1, minCh) => strip(b.stdout, shots[nm].p, y0, y1, minCh);
+  const S = (nm, y0, y1, minCh) => strip(shots[nm].p, y0, y1, minCh);
   const h = shots.bar0.p.h;
   check('scrollbar: hidden with no history (right strip is pure background)',
     S('bar0', 0, h, 0) === 0, String(S('bar0', 0, h, 0)));
@@ -1076,11 +1035,11 @@ function sessionScrollbar() {
   check('scrollbar: no thumb at the top while live (track only)',
     S('bar1', GRID_Y, GRID_Y + 40, 100) === 0, String(S('bar1', GRID_Y, GRID_Y + 40, 100)));
   check('scrollbar: thumb drag scrolled the view to the top (marker row visible)',
-    row0Ink(b.stdout, shots.bar2.p) > 1000, String(row0Ink(b.stdout, shots.bar2.p)));
+    row0Ink(shots.bar2.p) > 1000, String(row0Ink(shots.bar2.p)));
   check('scrollbar: the thumb followed the drag to the top of the track',
     S('bar2', GRID_Y, GRID_Y + 40, 100) > 50, String(S('bar2', GRID_Y, GRID_Y + 40, 100)));
   check('scrollbar: track click below the thumb pages down (marker leaves row 0)',
-    row0Ink(b.stdout, shots.bar3.p) < 500, String(row0Ink(b.stdout, shots.bar3.p)));
+    row0Ink(shots.bar3.p) < 500, String(row0Ink(shots.bar3.p)));
 }
 
 /* ---- session M: menu bar (todos/0273c) ----
@@ -1108,7 +1067,7 @@ function sessionMenubar() {
     'BSID=$(wmctl list | grep "\tmenubar$" | sed "s/[^0-9].*//")',
     'wmctl move $TSID 80 10',                      // pin screen coords for the sdown leg
     'wmctl wait seq $BSID 1 8000',                 // the strip PRESENTED its labels
-    'wmctl shot $BSID /root/mb_bar.ppm && echo mb-bar-ok',
+    'wmctl shot $BSID /root/mb_bar.png && echo mb-bar-ok',
     // History for the View leg (the 0273a marker probe).
     keys("printf '\\033[2J\\033[H'; printf '" + HASH + "\\n'; seq 300\r"),
     'sleep 3',                                     // timing subject: 300 lines echo + scroll (multi-frame)
@@ -1117,7 +1076,7 @@ function sessionMenubar() {
     'wmctl wait win "#32768" 8000',
     'PSID=$(wmctl list | grep "#32768" | sed "s/[^0-9].*//")',
     'wmctl wait seq $PSID 1 8000',                 // the engine painted the level
-    'wmctl shot $PSID /root/mb_pop.ppm && echo mb-pop-ok',
+    'wmctl shot $PSID /root/mb_pop.png && echo mb-pop-ok',
     // --- item click: New Window (row 0) -> an independent sibling term ---
     'wmctl click $PSID 60 15',
     'wmctl wait nowin "#32768"',                   // the fire closed the chain
@@ -1145,7 +1104,7 @@ function sessionMenubar() {
     'wmctl key $TSID 0 ' + ENTER,
     'wmctl wait nowin "#32768"',
     'sleep 1',                                     // timing subject: scrolled-view repaint (multi-frame)
-    'wmctl shot $TSID /root/mb_top.ppm && echo mb-top-ok',
+    'wmctl shot $TSID /root/mb_top.png && echo mb-top-ok',
     // Teardown: end session 1, then the New Window sibling.
     keys('exit\r'),
     'sleep 1',                                     // timing subject: term1 teardown settles before the pkill
@@ -1162,53 +1121,46 @@ function sessionMenubar() {
   check('menubar: New Window item spawned an independent sibling term',
     parseInt(nterms, 10) >= 2, JSON.stringify(nterms));
 
-  const b = driveBoot('cat /root/mb_bar.ppm /root/mb_pop.ppm /root/mb_top.ppm\n',
+  const b = driveBoot('cat /root/mb_bar.png /root/mb_pop.png /root/mb_top.png\n',
     { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });
-  function parsePPM(buf, off) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m2 = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m2) return null;
-    const w = +m2[1], h = +m2[2], data = off + m2[0].length;
-    return { w, h, data, end: data + w * h * 3 };
-  }
   // Dark ink = all channels < 100 (label text is BTNTEXT black on the
   // BTNFACE/MENU 192-gray ground; GRAYTEXT 128 stays excluded).
-  function darkInk(buf, ppm) {
+  function darkInk(shot) {
     let n = 0;
-    for (let y = 0; y < ppm.h; y++)
-      for (let x = 0; x < ppm.w; x++) {
-        const i = ppm.data + (y * ppm.w + x) * 3;
-        if (buf[i] < 100 && buf[i + 1] < 100 && buf[i + 2] < 100) n++;
+    for (let y = 0; y < shot.h; y++)
+      for (let x = 0; x < shot.w; x++) {
+        const i = (y * shot.w + x) * 4;
+        if (shot.rgba[i] < 100 && shot.rgba[i + 1] < 100 && shot.rgba[i + 2] < 100) n++;
       }
     return n;
   }
-  function row0Ink(buf, ppm) {
+  function row0Ink(shot) {
     let n = 0;
     for (let y = GRID_Y; y < GRID_Y + 19; y++)
-      for (let x = 0; x < ppm.w; x++) {
-        const i = ppm.data + (y * ppm.w + x) * 3;
-        if (buf[i] | buf[i + 1] | buf[i + 2]) n++;
+      for (let x = 0; x < shot.w; x++) {
+        const i = (y * shot.w + x) * 4;
+        if (shot.rgba[i] | shot.rgba[i + 1] | shot.rgba[i + 2]) n++;
       }
     return n;
   }
-  const pb = parsePPM(b.stdout, 0);
+  const pb = parseShot(b.stdout, 0);
   check('menubar: bar strip shot parses at 640x30 (the full-width GRID_Y band)',
     pb && pb.w === 640 && pb.h === GRID_Y, pb && `${pb.w}x${pb.h}`);
   if (!pb) return;
   check('menubar: Shell/Edit/View labels rendered on the strip (dark ink)',
-    darkInk(b.stdout, pb) > 80, String(darkInk(b.stdout, pb)));
-  const pp = parsePPM(b.stdout, pb.end);
+    darkInk(pb) > 80, String(darkInk(pb)));
+  const pp = parseShot(b.stdout, pb.next);
   check('menubar: dropdown shot parses (3 x MENU_ITEM_H rows + separator)',
     pp && pp.h >= 95 && pp.h <= 115 && pp.w >= 100 && pp.w <= 320,
     pp && `${pp.w}x${pp.h}`);
   if (!pp) return;
   check('menubar: engine-drawn item labels on the dropdown (dark ink)',
-    darkInk(b.stdout, pp) > 100, String(darkInk(b.stdout, pp)));
-  const pt = parsePPM(b.stdout, pp.end);
+    darkInk(pp) > 100, String(darkInk(pp)));
+  const pt = parseShot(b.stdout, pp.next);
   check('menubar: Scroll-to-Top shot parses', !!pt);
   if (!pt) return;
   check('menubar: View > Scroll to Top moved the view — the marker row is at the grid top',
-    row0Ink(b.stdout, pt) > 1000, String(row0Ink(b.stdout, pt)));
+    row0Ink(pt) > 1000, String(row0Ink(pt)));
 }
 
 /* ---- session P: settings window + cfgstore persistence (todos/0273d) ----
@@ -1255,7 +1207,7 @@ function sessionSettings() {
     'wmctl wait seq $SSID 1 8000',                 // the pane painted
     'echo ==setlist',
     'wmctl list | grep "\tTerm Settings$"',
-    'wmctl shot $SSID /root/sset.ppm && echo sset-ok',
+    'wmctl shot $SSID /root/sset.png && echo sset-ok',
     // --- a second term BEFORE any change: baked defaults, watching ~/.config ---
     'term &',
     'for i in $(seq 1 200); do [ $(wmctl list | grep -c "\tterm$") -ge 2 ] && break; sleep 0.05; done',  // sibling up (bounded poll, 0155)
@@ -1264,7 +1216,7 @@ function sessionSettings() {
     // --- Theme > (dark -> light): pane term applies direct, term2 via FS_WATCH ---
     'wmctl click $SSID 281 ' + (SET_TOP + 1 * SET_ROW_H + 16),   // row 1 cycler >
     'sleep 2',                                     // timing subject: cross-process watch reload + repaint (multi-frame)
-    'wmctl shot $T2SID /root/st2.ppm && echo st2-ok',
+    'wmctl shot $T2SID /root/st2.png && echo st2-ok',
     // --- Font Size + (14 -> 15): window re-sizes, SAME 80x24 grid ---
     // #363 POSITIVE CONTROL: y=40 is offset 28 into row 0's 32px box —
     // inside the drawn ink, but past the old 22px hit test's edge.
@@ -1292,7 +1244,7 @@ function sessionSettings() {
     'T3SID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
     'echo ==t3row',
     'wmctl list | grep "^$T3SID\t"',
-    'wmctl shot $T3SID /root/st3.ppm && echo st3-ok',
+    'wmctl shot $T3SID /root/st3.png && echo st3-ok',
     // --- #358 read-back leg: the RELAUNCHED term's pane must show the
     // PERSISTED autoscroll (off), so one more > writes "on". Had the row
     // not read the live global it would still say the default "on" and
@@ -1354,52 +1306,45 @@ function sessionSettings() {
 
   // Pixel pass: pane labels inked; the LIGHT band on term2 (cross-process
   // live reload) and on the relaunched term (startup load).
-  const b = driveBoot('cat /root/sset.ppm /root/st2.ppm /root/st3.ppm\n',
+  const b = driveBoot('cat /root/sset.png /root/st2.png /root/st3.png\n',
     { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });
-  function parsePPM(buf, off) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m2 = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m2) return null;
-    const w = +m2[1], h = +m2[2], data = off + m2[0].length;
-    return { w, h, data, end: data + w * h * 3 };
-  }
-  function darkInk(buf, ppm) {
+  function darkInk(shot) {
     let n = 0;
-    for (let y = 0; y < ppm.h; y++)
-      for (let x = 0; x < ppm.w; x++) {
-        const i = ppm.data + (y * ppm.w + x) * 3;
-        if (buf[i] < 100 && buf[i + 1] < 100 && buf[i + 2] < 100) n++;
+    for (let y = 0; y < shot.h; y++)
+      for (let x = 0; x < shot.w; x++) {
+        const i = (y * shot.w + x) * 4;
+        if (shot.rgba[i] < 100 && shot.rgba[i + 1] < 100 && shot.rgba[i + 2] < 100) n++;
       }
     return n;
   }
   // Light-theme pixels (all channels >= 200) in the grid band below GRID_Y.
-  function lightBand(buf, ppm) {
+  function lightBand(shot) {
     let n = 0;
-    for (let y = GRID_Y; y < ppm.h; y++)
-      for (let x = 0; x < ppm.w; x++) {
-        const i = ppm.data + (y * ppm.w + x) * 3;
-        if (buf[i] >= 200 && buf[i + 1] >= 200 && buf[i + 2] >= 200) n++;
+    for (let y = GRID_Y; y < shot.h; y++)
+      for (let x = 0; x < shot.w; x++) {
+        const i = (y * shot.w + x) * 4;
+        if (shot.rgba[i] >= 200 && shot.rgba[i + 1] >= 200 && shot.rgba[i + 2] >= 200) n++;
       }
     return n;
   }
   // Ink strictly INSIDE a row's box, counted per scanline band. The box
   // frames are BTNSHADOW 0x808080, above the <100 dark-ink threshold, so
   // this counts glyph ink only.
-  function darkInkBand(buf, ppm, y0, y1) {
+  function darkInkBand(buf, shot, y0, y1) {
     let n = 0;
-    for (let y = Math.max(0, y0); y < Math.min(ppm.h, y1); y++)
-      for (let x = 0; x < ppm.w; x++) {
-        const i = ppm.data + (y * ppm.w + x) * 3;
-        if (buf[i] < 100 && buf[i + 1] < 100 && buf[i + 2] < 100) n++;
+    for (let y = Math.max(0, y0); y < Math.min(shot.h, y1); y++)
+      for (let x = 0; x < shot.w; x++) {
+        const i = (y * shot.w + x) * 4;
+        if (shot.rgba[i] < 100 && shot.rgba[i + 1] < 100 && shot.rgba[i + 2] < 100) n++;
       }
     return n;
   }
-  const ps = parsePPM(b.stdout, 0);
+  const ps = parseShot(b.stdout, 0);
   check('settings: pane shot parses at ' + dims, ps && ps.w === SET_W && ps.h === SET_H,
     ps && `${ps.w}x${ps.h}`);
   if (!ps) return;
   check('settings: pane labels rendered (dark ink on BTNFACE)',
-    darkInk(b.stdout, ps) > 150, String(darkInk(b.stdout, ps)));
+    darkInk(ps) > 150, String(darkInk(ps)));
   // #363 CONTAINMENT: zero glyph ink in the top margin, the inter-row
   // gutters or the bottom margin. This is the invariant the old
   // "darkInk > 150 over the whole pane" assertion could not express —
@@ -1419,20 +1364,20 @@ function sessionSettings() {
   }
   check('settings: no glyph ink outside a row box (margins + gutters clean)',
     spill === 0, worst.join(' '));
-  const p2 = parsePPM(b.stdout, ps.end);
+  const p2 = parseShot(b.stdout, ps.next);
   check('settings: term2 shot parses', !!p2);
   if (!p2) return;
   const band2 = p2.w * (p2.h - GRID_Y);
   check('settings: term2 band went LIGHT via the FS_WATCH cross-process reload',
-    lightBand(b.stdout, p2) > band2 * 0.6,
-    lightBand(b.stdout, p2) + '/' + band2);
-  const p3 = parsePPM(b.stdout, p2.end);
+    lightBand(p2) > band2 * 0.6,
+    lightBand(p2) + '/' + band2);
+  const p3 = parseShot(b.stdout, p2.next);
   check('settings: relaunch shot parses', !!p3);
   if (!p3) return;
   const band3 = p3.w * (p3.h - GRID_Y);
   check('settings: relaunched term band is LIGHT (theme persisted to startup)',
-    lightBand(b.stdout, p3) > band3 * 0.6,
-    lightBand(b.stdout, p3) + '/' + band3);
+    lightBand(p3) > band3 * 0.6,
+    lightBand(p3) + '/' + band3);
 }
 
 (async () => {

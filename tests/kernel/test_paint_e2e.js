@@ -24,6 +24,7 @@ const os = require('os');
 const path = require('path');
 const cp = require('child_process');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -78,7 +79,7 @@ const out = boot([
   'SID=$(wmctl list | grep -- "- Paint$" | sed "s/[^0-9].*//")',
   'echo ==list', 'wmctl list', 'echo ==cut',
   'echo ==tree', 'wmctl tree', 'echo ==cut',
-  'wmctl shot $SID /root/base.ppm',
+  'wmctl shot $SID /root/base.png',
   // filled red rectangle (FIFO-ordered, no inter-op sleeps)
   'wmctl click "Filled Rectangle"',
   `wmctl click $SID ${swx(RED)} ${swy(RED)}`,
@@ -88,7 +89,7 @@ const out = boot([
   `wmctl click $SID ${swx(GREEN)} ${swy(GREEN)}`,
   `wmctl click $SID ${sx(350)} ${sy(270)}`,
   'sleep 1',                                       // render-settle: fill paint presents before the SHOT (pixel-only)
-  'wmctl shot $SID /root/art.ppm',
+  'wmctl shot $SID /root/art.png',
   // Save As pic.bmp (comdlg32 modal: settext the name EDIT, click Save)
   'wmctl click "Save As..."',
   'wmctl wait label Save 6000',
@@ -101,11 +102,11 @@ const out = boot([
   // single-level Undo reverts the fill
   'wmctl click Undo',
   'sleep 1',                                       // render-settle: undo repaint presents before the SHOT (pixel-only)
-  'wmctl shot $SID /root/undone.ppm',
+  'wmctl shot $SID /root/undone.png',
   // New clears
   'wmctl click New',
   'sleep 1',                                       // render-settle: cleared canvas presents before the SHOT (pixel-only)
-  'wmctl shot $SID /root/cleared.ppm',
+  'wmctl shot $SID /root/cleared.png',
   // Open pic.bmp restores the art
   'wmctl click "Open..."',
   'wmctl wait label Open 6000',
@@ -113,7 +114,7 @@ const out = boot([
   'wmctl click Open',
   'wmctl wait nowin Open 6000',
   'sleep 1',                                       // render-settle: loaded art presents before the SHOT (pixel-only)
-  'wmctl shot $SID /root/reopened.ppm',
+  'wmctl shot $SID /root/reopened.png',
   // Save As pic2.bmp for the byte-identical check
   'wmctl click "Save As..."',
   'wmctl wait label Save 6000',
@@ -169,20 +170,19 @@ check('Save As opens the comdlg32 file dialog', /class=WCFileDlg[^\n]*text='Save
 const SHOTS = ['base', 'art', 'undone', 'cleared', 'reopened'];
 const shots = {};
 {
-  const buf = bootBin('cat ' + SHOTS.map(n => '/root/' + n + '.ppm').join(' ') + '\n');
+  const buf = bootBin('cat ' + SHOTS.map(n => '/root/' + n + '.png').join(' ') + '\n');
   let off = 0;
   for (const name of SHOTS) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) { check('shot stream parses (' + name + ')', false, JSON.stringify(head)); break; }
-    const w = +m[1], h = +m[2], data = off + m[0].length;
-    shots[name] = { w, h, data: buf.slice(data, data + w * h * 3) };
-    off = data + w * h * 3;
+    let p = null;
+    try { p = parsePng(buf, off); }
+    catch (e) { check('shot stream parses (' + name + ')', false, e.message); break; }
+    shots[name] = { w: p.w, h: p.h, data: p.rgba };
+    off = p.next;
   }
 }
 function px(img, x, y) {
   if (!img || x < 0 || y < 0 || x >= img.w || y >= img.h) return null;
-  const o = (y * img.w + x) * 3;
+  const o = (y * img.w + x) * 4;
   return [img.data[o], img.data[o + 1], img.data[o + 2]];
 }
 const eq = (a, b) => a && b && a[0] === b[0] && a[1] === b[1] && a[2] === b[2];

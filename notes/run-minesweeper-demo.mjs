@@ -16,6 +16,8 @@
 // Usage: node notes/run-minesweeper-demo.mjs
 import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl } from '../tests/browser/lib/os-harness.mjs';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
+const { parsePng } = createRequire(import.meta.url)('../tests/lib/png.js');
 
 const PORT = 3271;
 const URL = osUrl(PORT);
@@ -149,24 +151,36 @@ try {
   // screen means every frame arrives as an ImageBitmap through the WebGPU
   // renderer (rdrFlush → transferToImageBitmap → hooks.surfaceFrame). The
   // software fallback would have filled the SAB with the very pixels we just
-  // sampled. tail -c +16 skips the 15-byte "P6\n328 414\n255\n" header;
-  // tr -d strips NULs, so NONZERO=0 ⇔ an all-black shot.
+  // sampled, so an ALL-BLACK shot ⇔ the shm SAB was never touched.
+  //
+  // Shots are PNG since #657, so "count the non-NUL bytes" no longer means
+  // anything (a black frame still compresses to non-zero bytes). Read the
+  // shot out base64 and count non-black PIXELS host-side — the same
+  // predicate, on decoded pixels.
   await setVt(1);
-  // NB the wait marker is /NONZ=\d/ — the TYPED command echo contains
-  // "NONZ=$(" (no digit), so only the executed output can satisfy it
-  // (the 0171 split-needle rule).
+  // NB the wait marker is /GPUSHOT-END/ — the TYPED command echo contains it
+  // only split ("GPUSHOT""-END"), so just the executed output can satisfy the
+  // wait (the 0171 split-needle rule).
   await shell(
     `SID=$(wmctl list | grep "Minesweeper" | head -1 | sed "s/[^0-9].*//"); ` +
-    `wmctl shot $SID /root/gpu.ppm && ` +
-    `echo NONZ=$(tail -c +16 /root/gpu.ppm | tr -d "\\000" | wc -c)`,
-    /NONZ=\d/, 30000);
-  const probe = await page.evaluate(() => {
-    const m = window.__osOut.match(/NONZ=(\d+)/g);
-    return m ? m[m.length - 1] : null;
+    `wmctl shot $SID /root/gpu.png && echo GPUSHOT-BEG && base64 /root/gpu.png ` +
+    `&& echo GPUSHOT""-END`,
+    /GPUSHOT-END/, 30000);
+  const b64 = await page.evaluate(() => {
+    const m = /GPUSHOT-BEG\n([\s\S]*?)\nGPUSHOT-END/.exec(window.__osOut);
+    return m ? m[1] : null;
   });
-  log('gpu-transport probe: ' + probe + ' (0 = shm SAB untouched = GPU path)');
+  let nonBlack = null, dims = null;
+  if (b64) {
+    const shot = parsePng(Buffer.from(b64.replace(/\s+/g, ''), 'base64'));
+    dims = `${shot.w}x${shot.h}`;
+    nonBlack = 0;
+    for (let k = 0; k < shot.rgba.length; k += 4)
+      if (shot.rgba[k] | shot.rgba[k + 1] | shot.rgba[k + 2]) nonBlack++;
+  }
+  log(`gpu-transport probe: ${nonBlack} non-black px of ${dims} (0 = shm SAB untouched = GPU path)`);
   check('frames ride the GPU path — shm SAB blank while screen is live (not the software fallback)',
-    probe === 'NONZ=0');
+    nonBlack === 0);
   await setVt(2);
 
   // 4) INTERACT — left-click a board cell (uncovers). Board grid begins below

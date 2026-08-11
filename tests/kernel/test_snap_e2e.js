@@ -20,7 +20,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
-const { driveBoot, freshImage } = require('./lib/drive.js');
+const { driveBoot, freshImage , readShots } = require('./lib/drive.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -32,8 +32,10 @@ const { dir: tmp, image } = freshImage('os-snap-');
 
 // Preview pixels (todos/0063 deterministic src-over, integer math): white
 // fill a=80 over the teal desktop -> (80,168,168); the 2px border a=192 ->
-// (192,224,224). PPM header on 1024x768 is 16 bytes; tail -c is 1-based.
-const ppmOff = (x, y) => 17 + (y * 1024 + x) * 3;
+// (192,224,224). Asserted host-side out of the shot PNG after the boot
+// (#657): a compressed image has no fixed byte offset per pixel, and the
+// decoded compare reports the ACTUAL rgb on a miss instead of a silent
+// `cmp` mismatch.
 
 const script = [
   'winbox &',
@@ -50,19 +52,14 @@ const script = [
   'wmctl wait win snappreview',
   'echo ==mid',
   'wmctl list',
-  'wmctl shot screen /root/mid.ppm && echo mid-shot-ok',
+  'wmctl shot screen /root/mid.png && echo mid-shot-ok',
   'wmctl sup 4 300',                             // drop -> snap left
   'wmctl wait nowin snappreview',
   'echo ==left',
   'wmctl list',
-  // The preview pixels, read from the mid-drag shot: fill well inside the
-  // left half but clear of the dragged window; border at x=1.
-  `tail -c +${ppmOff(450, 150)} /root/mid.ppm | head -c 3 > /root/p1.bin`,
-  "printf '\\120\\250\\250' > /root/e1.bin",     // 80,168,168
-  'cmp /root/p1.bin /root/e1.bin && echo prev-fill-ok',
-  `tail -c +${ppmOff(1, 150)} /root/mid.ppm | head -c 3 > /root/p2.bin`,
-  "printf '\\300\\340\\340' > /root/e2.bin",     // 192,224,224
-  'cmp /root/p2.bin /root/e2.bin && echo prev-border-ok',
+  // The preview pixels are asserted host-side from /root/mid.png below:
+  // fill well inside the left half but clear of the dragged window (450,150),
+  // border at x=1 (1,150).
   // ---- drag-off: dragging the snapped window away restores its floating
   // SIZE at the drop point (down on the snapped title: y 4..28).
   'wmctl sdrag 256 14 500 300',
@@ -166,10 +163,15 @@ check('winbox placed by the WM (240x160+12+36)',
   check('the dragged window keeps focus (preview hand-back)',
     flags(row(mid, 'winbox'))[0] === 'f', row(mid, 'winbox'));
   check('mid-drag screen shot written', out.includes('mid-shot-ok'));
+  const { mid: midShot } = readShots(tmp, { mid: 'mid.png' });
+  check('mid-drag shot is the full 1024x768 screen',
+    midShot.w === 1024 && midShot.h === 768, `${midShot.w}x${midShot.h}`);
   check('preview fill blends the exact 0063 src-over (80,168,168 over teal)',
-    out.includes('prev-fill-ok'));
+    String(midShot.px(450, 150).slice(0, 3)) === '80,168,168',
+    String(midShot.px(450, 150)));
   check('preview border blends the exact src-over (192,224,224)',
-    out.includes('prev-border-ok'));
+    String(midShot.px(1, 150).slice(0, 3)) === '192,224,224',
+    String(midShot.px(1, 150)));
 }
 
 // ---- the drop: left half; preview gone ----

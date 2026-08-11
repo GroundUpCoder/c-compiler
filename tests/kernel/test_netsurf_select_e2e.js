@@ -42,7 +42,7 @@
 //
 // GEOMETRY IS MEASURED, NEVER DERIVED FROM FONT MATH: a first session
 // opens the menu and shoots it; Node reads the selected-row highlight band
-// (SELECT_SELECTED_COLOUR 0xDB9370) out of the PPM to get the menu origin,
+// (SELECT_SELECTED_COLOUR 0xDB9370) out of the PNG to get the menu origin,
 // the row pitch and the scrollbar edge; a second session over the same
 // image replays deterministically with computed coordinates.
 //
@@ -51,6 +51,7 @@
 const fs = require('fs');
 const path = require('path');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -194,23 +195,21 @@ driveBoot('true', { image });
 }
 
 /* ---- shot helpers (the netsurf-e2e pattern) ------------------------- */
-function parsePPMs(buf, names) {
+function parsePngs(buf, names) {
   const shots = {};
   let off = 0;
   for (const name of names) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) throw new Error('bad ppm stream at ' + name + ': ' + JSON.stringify(head));
-    const w = +m[1], h = +m[2];
-    const data = off + m[0].length;
-    shots[name] = { w, h, data: buf.slice(data, data + w * h * 3) };
-    off = data + w * h * 3;
+    let p;
+    try { p = parsePng(buf, off); }
+    catch (e) { throw new Error(`bad png stream at ${name}: ${e.message}`); }
+    shots[name] = { w: p.w, h: p.h, data: p.rgba };
+    off = p.next;
   }
   return shots;
 }
-const px = (s, x, y) => [s.data[(y * s.w + x) * 3],
-                         s.data[(y * s.w + x) * 3 + 1],
-                         s.data[(y * s.w + x) * 3 + 2]];
+const px = (s, x, y) => [s.data[(y * s.w + x) * 4],
+                         s.data[(y * s.w + x) * 4 + 1],
+                         s.data[(y * s.w + x) * 4 + 2]];
 const near = (want, tol = 6) => (p) => Math.abs(p[0] - want[0]) < tol &&
                                        Math.abs(p[1] - want[1]) < tol &&
                                        Math.abs(p[2] - want[2]) < tol;
@@ -256,14 +255,14 @@ function regionDiffers(a, b, x0, y0, x1, y1) {
 /* Post-load settle: shot until two consecutive frames match. */
 const pollStable = (sid, out) => [
   `wmctl shot ${sid} ${out}`,
-  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.ppm; ` +
-  `cmp -s /root/poll.ppm ${out} && break; cp /root/poll.ppm ${out}; done`,
+  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.png; ` +
+  `cmp -s /root/poll.png ${out} && break; cp /root/poll.png ${out}; done`,
 ];
 /* A repaint with no wmctl-visible marker: poll PIXELS until the frame
  * differs from a reference (a bounded condition poll, not a fixed sleep). */
 const pollChange = (sid, ref) => [
-  `for i in $(seq 1 100); do wmctl shot ${sid} /root/poll.ppm; ` +
-  `cmp -s /root/poll.ppm ${ref} || break; sleep 0.1; done`,
+  `for i in $(seq 1 100); do wmctl shot ${sid} /root/poll.png; ` +
+  `cmp -s /root/poll.png ${ref} || break; sleep 0.1; done`,
 ];
 const sidOf = (v, title) => `${v}=$(wmctl list | grep "\t${title}$" | sed "s/[^0-9].*//")`;
 
@@ -272,11 +271,11 @@ const measureOut = driveBoot([
   'netsurf /root/sel/a.html &',
   'wmctl wait win NsSelA 30000',
   sidOf('K', 'NsSelA'),
-  ...pollStable('$K', '/root/s0.ppm'),
+  ...pollStable('$K', '/root/s0.png'),
   'echo shot-s0-ok',
   'wmctl click $K 12 8',
-  ...pollChange('$K', '/root/s0.ppm'),
-  ...pollStable('$K', '/root/s1.ppm'),
+  ...pollChange('$K', '/root/s0.png'),
+  ...pollStable('$K', '/root/s1.png'),
   'echo shot-s1-ok',
   'wmctl close $K && wmctl wait gone $K 8000 && echo k-closed',
 
@@ -285,13 +284,13 @@ const measureOut = driveBoot([
   'netsurf --core_select_menu=0 /root/sel/b.html &',
   'wmctl wait win NsSelB 30000',
   sidOf('L', 'NsSelB'),
-  ...pollStable('$L', '/root/b0.ppm'),
+  ...pollStable('$L', '/root/b0.png'),
   'echo shot-b0-ok',
   'wmctl click $L 12 8',
   /* deliberate fixed settle: this leg asserts the ABSENCE of a menu, and
    * an absence has no marker to wait on */
   'sleep 1',
-  ...pollStable('$L', '/root/b1.ppm'),
+  ...pollStable('$L', '/root/b1.png'),
   'echo shot-b1-ok',
   'wmctl close $L && wmctl wait gone $L 8000 && echo l-closed',
 ], { image, timeout: 420000, maxBuffer: 64 * 1024 * 1024 }).stdout;
@@ -302,9 +301,9 @@ for (const tag of ['s0', 's1', 'b0', 'b1']) {
 check('measure windows closed',
       measureOut.includes('k-closed') && measureOut.includes('l-closed'));
 
-const back1 = driveBoot('cat /root/s0.ppm /root/s1.ppm /root/b0.ppm /root/b1.ppm\n',
+const back1 = driveBoot('cat /root/s0.png /root/s1.png /root/b0.png /root/b1.png\n',
                         { image, encoding: null, maxBuffer: 64 * 1024 * 1024 });
-const m1 = parsePPMs(back1.stdout, ['s0', 's1', 'b0', 'b1']);
+const m1 = parsePngs(back1.stdout, ['s0', 's1', 'b0', 'b1']);
 
 /* -- the layout differential (and its strip anchors) ------------------ */
 const belowTop = firstRowOf(m1.s0, C.below, 100);
@@ -388,47 +387,47 @@ const singleOut = driveBoot([
   'netsurf /root/sel/a.html &',
   'wmctl wait win NsSelA 30000',
   sidOf('K', 'NsSelA'),
-  ...pollStable('$K', '/root/a0.ppm'),
+  ...pollStable('$K', '/root/a0.png'),
   'echo shot-a0-ok',
 
   /* open */
   'wmctl click $K 12 8',
-  ...pollChange('$K', '/root/a0.ppm'),
-  ...pollStable('$K', '/root/aopen.ppm'),
+  ...pollChange('$K', '/root/a0.png'),
+  ...pollStable('$K', '/root/aopen.png'),
   'echo shot-aopen-ok',
 
   /* choose row 2 */
   rowClick(2),
-  ...pollChange('$K', '/root/aopen.ppm'),
-  ...pollStable('$K', '/root/achoose.ppm'),
+  ...pollChange('$K', '/root/aopen.png'),
+  ...pollStable('$K', '/root/achoose.png'),
   'echo shot-achoose-ok',
 
   /* reopen: the new selection's band renders */
   'wmctl click $K 12 8',
-  ...pollChange('$K', '/root/achoose.ppm'),
-  ...pollStable('$K', '/root/areopen.ppm'),
+  ...pollChange('$K', '/root/achoose.png'),
+  ...pollStable('$K', '/root/areopen.png'),
   'echo shot-areopen-ok',
 
   /* scroll: six down-arrow clicks = 96px */
   arrowClick, arrowClick, arrowClick, arrowClick, arrowClick, arrowClick,
-  ...pollChange('$K', '/root/areopen.ppm'),
-  ...pollStable('$K', '/root/ascroll.ppm'),
+  ...pollChange('$K', '/root/areopen.png'),
+  ...pollStable('$K', '/root/ascroll.png'),
   'echo shot-ascroll-ok',
 
   /* choose through the scrolled mapping */
   `wmctl click $K ${menuX + 10} ${menuTop + 1 + yPick}`,
-  ...pollChange('$K', '/root/ascroll.ppm'),
-  ...pollStable('$K', '/root/apick.ppm'),
+  ...pollChange('$K', '/root/ascroll.png'),
+  ...pollStable('$K', '/root/apick.png'),
   'echo shot-apick-ok',
 
   /* reopen, then dismiss with an outside click */
   'wmctl click $K 12 8',
-  ...pollChange('$K', '/root/apick.ppm'),
-  ...pollStable('$K', '/root/are2.ppm'),
+  ...pollChange('$K', '/root/apick.png'),
+  ...pollStable('$K', '/root/are2.png'),
   'echo shot-are2-ok',
   outsideClick,
-  ...pollChange('$K', '/root/are2.ppm'),
-  ...pollStable('$K', '/root/adism.ppm'),
+  ...pollChange('$K', '/root/are2.png'),
+  ...pollStable('$K', '/root/adism.png'),
   'echo shot-adism-ok',
 
   'wmctl close $K && wmctl wait gone $K 8000 && echo a-closed',
@@ -444,11 +443,11 @@ const multiMeasureOut = driveBoot([
   'netsurf /root/sel/m.html &',
   'wmctl wait win NsSelM 30000',
   sidOf('K', 'NsSelM'),
-  ...pollStable('$K', '/root/m0.ppm'),
+  ...pollStable('$K', '/root/m0.png'),
   'echo shot-m0-ok',
   'wmctl click $K 12 8',
-  ...pollChange('$K', '/root/m0.ppm'),
-  ...pollStable('$K', '/root/mopen.ppm'),
+  ...pollChange('$K', '/root/m0.png'),
+  ...pollStable('$K', '/root/mopen.png'),
   'echo shot-mopen-ok',
   'wmctl close $K && wmctl wait gone $K 8000 && echo m-closed',
 ], { image, timeout: 420000, maxBuffer: 64 * 1024 * 1024 }).stdout;
@@ -458,9 +457,9 @@ for (const tag of ['m0', 'mopen']) {
 }
 check('the multi measure window closed', multiMeasureOut.includes('m-closed'));
 
-const back2 = driveBoot('cat /root/m0.ppm /root/mopen.ppm\n',
+const back2 = driveBoot('cat /root/m0.png /root/mopen.png\n',
                         { image, encoding: null, maxBuffer: 64 * 1024 * 1024 });
-const m2 = parsePPMs(back2.stdout, ['m0', 'mopen']);
+const m2 = parsePngs(back2.stdout, ['m0', 'mopen']);
 
 const mbelowTop = firstRowOf(m2.m0, C.mbelow, 100);
 check('m0: the multi occlusion block is on screen', mbelowTop > 0,
@@ -500,42 +499,42 @@ const multiOut = driveBoot([
   'netsurf /root/sel/m.html &',
   'wmctl wait win NsSelM 30000',
   sidOf('K', 'NsSelM'),
-  ...pollStable('$K', '/root/n0.ppm'),
+  ...pollStable('$K', '/root/n0.png'),
   'echo shot-n0-ok',
 
   'wmctl click $K 12 8',
-  ...pollChange('$K', '/root/n0.ppm'),
-  ...pollStable('$K', '/root/nopen.ppm'),
+  ...pollChange('$K', '/root/n0.png'),
+  ...pollStable('$K', '/root/nopen.png'),
   'echo shot-nopen-ok',
 
   /* toggle option 1 on — the menu must STAY open */
   mRowClick(1),
-  ...pollChange('$K', '/root/nopen.ppm'),
-  ...pollStable('$K', '/root/n1.ppm'),
+  ...pollChange('$K', '/root/nopen.png'),
+  ...pollStable('$K', '/root/n1.png'),
   'echo shot-n1-ok',
 
   /* toggle option 2 on */
   mRowClick(2),
-  ...pollChange('$K', '/root/n1.ppm'),
-  ...pollStable('$K', '/root/n2.ppm'),
+  ...pollChange('$K', '/root/n1.png'),
+  ...pollStable('$K', '/root/n2.png'),
   'echo shot-n2-ok',
 
   /* toggle option 1 OFF again */
   mRowClick(1),
-  ...pollChange('$K', '/root/n2.ppm'),
-  ...pollStable('$K', '/root/n3.ppm'),
+  ...pollChange('$K', '/root/n2.png'),
+  ...pollStable('$K', '/root/n3.png'),
   'echo shot-n3-ok',
 
   /* dismiss */
   mOutsideClick,
-  ...pollChange('$K', '/root/n3.ppm'),
-  ...pollStable('$K', '/root/ndism.ppm'),
+  ...pollChange('$K', '/root/n3.png'),
+  ...pollStable('$K', '/root/ndism.png'),
   'echo shot-ndism-ok',
 
   /* read the final DOM state back through the button */
   `wmctl click $K 200 ${readY}`,
-  ...pollChange('$K', '/root/ndism.ppm'),
-  ...pollStable('$K', '/root/nread.ppm'),
+  ...pollChange('$K', '/root/ndism.png'),
+  ...pollStable('$K', '/root/nread.png'),
   'echo shot-nread-ok',
 
   'wmctl close $K && wmctl wait gone $K 8000 && echo n-closed',
@@ -549,9 +548,9 @@ check('the multi window closed', multiOut.includes('n-closed'));
 /* ---- read the replay shots back ------------------------------------- */
 const NAMES = ['a0', 'aopen', 'achoose', 'areopen', 'ascroll', 'apick', 'are2', 'adism',
                'n0', 'nopen', 'n1', 'n2', 'n3', 'ndism', 'nread'];
-const back3 = driveBoot('cat ' + NAMES.map((n) => `/root/${n}.ppm`).join(' ') + '\n',
+const back3 = driveBoot('cat ' + NAMES.map((n) => `/root/${n}.png`).join(' ') + '\n',
                         { image, encoding: null, maxBuffer: 256 * 1024 * 1024 });
-const S = parsePPMs(back3.stdout, NAMES);
+const S = parsePngs(back3.stdout, NAMES);
 
 /* the occlusion oracle: probe-colour count inside the menu rectangle */
 const menuBelow = (s) =>

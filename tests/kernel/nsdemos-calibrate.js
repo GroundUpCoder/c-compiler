@@ -6,7 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const { driveBoot, freshImage } = require('./lib/drive.js');
-const { parsePpm, encodePng } = require('../lib/png.js');
+const { parsePng, encodePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 const NSDEMOS = require(path.join(ROOT, 'vendor/netsurf/demos/demos.js'));
@@ -25,7 +25,7 @@ for (const d of DEMOS) {
     `netsurf "${BASE}/${d.name}/index.html" &`,
     `wmctl wait win "${d.title}" 60000`,
     `S=$(wmctl list | grep "\t${d.title}$" | sed "s/[^0-9].*//")`,
-    `wmctl shot $S /root/cal-${d.name}.ppm && echo shot-${d.name}-ok`,
+    `wmctl shot $S /root/cal-${d.name}.png && echo shot-${d.name}-ok`,
     `wmctl close $S && wmctl wait nowin "${d.title}" 8000 && echo closed-${d.name}`,
   );
 }
@@ -35,11 +35,11 @@ const r = driveBoot(script, { image, timeout: 900000, maxBuffer: 64 * 1024 * 102
 for (const d of DEMOS) {
   if (!r.stdout.includes(`shot-${d.name}-ok`)) { console.log('NO SHOT: ' + d.name); }
 }
-const back = driveBoot('cat ' + DEMOS.map((d) => `/root/cal-${d.name}.ppm`).join(' ') + '\n',
+const back = driveBoot('cat ' + DEMOS.map((d) => `/root/cal-${d.name}.png`).join(' ') + '\n',
                        { image, encoding: null, maxBuffer: 256 * 1024 * 1024 });
 let off = 0;
 for (const d of DEMOS) {
-  const { w, h, rgb, next } = parsePpm(back.stdout, off);
+  const { w, h, rgba: rgb, next } = parsePng(back.stdout, off);
   off = next;
   fs.writeFileSync(path.join(OUT, `cal-${d.name}.png`), encodePng(w, h, rgb));
   console.log(`saved ${OUT}/cal-${d.name}.png (${w}x${h})`);

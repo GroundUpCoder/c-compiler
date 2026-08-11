@@ -23,7 +23,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
-const { driveBoot, freshImage } = require('./lib/drive.js');
+const { driveBoot, freshImage , readShots } = require('./lib/drive.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -33,9 +33,11 @@ function check(name, cond, extra) {
 
 const { dir: tmp, image } = freshImage('os-saver-');
 
-// Fullscreen saver shots are 1024x768 PPMs: "P6\n1024 768\n255\n" = 16
-// bytes of header; tail -c is 1-based.
-const ppmOff = (x, y) => 17 + (y * 1024 + x) * 3;
+// Fullscreen saver shots are 1024x768 PNGs (#657): the corner-black assert
+// runs host-side out of the decoded image after the boot, since a
+// compressed image has no fixed byte offset per pixel. The two-shot
+// `cmp` stays in-shell — libpng's fixed encoder settings make equal
+// pixels equal bytes, so differing bytes still mean differing frames.
 
 const script = [
   // ---- the mechanism: the idle clock answers from boot ----
@@ -55,13 +57,10 @@ const script = [
   'wmctl list',
   // ---- the animation: two shots of the saver differ; corner stays black.
   'SSID=$(wmctl list | grep screensaver$ | sed "s/[^0-9].*//")',
-  'wmctl shot $SSID /root/s1.ppm && echo shot-ok',
+  'wmctl shot $SSID /root/s1.png && echo shot-ok',
   'sleep 0.6',                                   // timing subject: let the marquee advance between shots
-  'wmctl shot $SSID /root/s2.ppm',
-  'cmp /root/s1.ppm /root/s2.ppm || echo anim-ok',
-  `tail -c +${ppmOff(2, 2)} /root/s1.ppm | head -c 3 > /root/px.bin`,
-  "printf '\\0\\0\\0' > /root/black.bin",
-  'cmp /root/px.bin /root/black.bin && echo black-ok',
+  'wmctl shot $SSID /root/s2.png',
+  'cmp /root/s1.png /root/s2.png || echo anim-ok',
   // ---- dismissal: screen-injected motion is real input (it resets the
   // kernel clock AND lands on the saver window) ----
   'wmctl smove 500 300',
@@ -154,7 +153,13 @@ check('the baked /usr/share/screensaver defaults exist', out.includes('baked-def
 // ---- the animation ----
 check('saver window shot written', out.includes('shot-ok'));
 check('successive shots differ (the marquee animates)', out.includes('anim-ok'));
-check('the saver background is black', out.includes('black-ok'));
+{
+  const { s1 } = readShots(tmp, { s1: 's1.png' });
+  check('saver shot is the full 1024x768 window', s1.w === 1024 && s1.h === 768,
+    `${s1.w}x${s1.h}`);
+  check('the saver background is black',
+    String(s1.px(2, 2).slice(0, 3)) === '0,0,0', String(s1.px(2, 2)));
+}
 
 // ---- dismissal + clock reset ----
 {

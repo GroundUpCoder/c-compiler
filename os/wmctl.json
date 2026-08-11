@@ -1,0 +1,13 @@
+{
+  "name": "wmctl",
+  "description": "/bin/wmctl — xdotool-as-a-syscall agent control CLI (todos/0014); shot/thumb encode RGBA PNG via the vendored libpng+zlib (#657)",
+  "deps": [
+    "../vendor/libpng/lib.json"
+  ],
+  "includes": [
+    "../vendor/libpng"
+  ],
+  "sources": [
+    "wmctl.c"
+  ]
+}

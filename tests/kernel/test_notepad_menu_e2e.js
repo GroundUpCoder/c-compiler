@@ -32,6 +32,7 @@
 'use strict';
 const fs = require('fs');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng, parseB64Png } = require('../lib/png.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -287,9 +288,9 @@ const r = driveBoot([
   // shot again: the EDIT's last ink row must move DOWN (line height grew).
   'wmctl settext EDIT:0 "$(printf \'MMMM\\nMMMM\\nMMMM\')"',
   'wmctl tree > /dev/null',                      // paint barrier (agent served at queue-dry, after WM_PAINT)
-  'wmctl shot $SID /root/font-before.ppm && echo fshot0-ok',
+  'wmctl shot $SID /root/font-before.png && echo fshot0-ok',
   'echo ==fshot0',
-  'base64 /root/font-before.ppm',
+  'base64 /root/font-before.png',
   'echo ==cut',
   'wmctl click "Font..."',
   'wmctl wait win Font 8000',
@@ -300,9 +301,9 @@ const r = driveBoot([
   'wmctl click OK',
   'wmctl wait nowin Font 8000',
   'wmctl tree > /dev/null',                      // paint barrier for the re-font
-  'wmctl shot $SID /root/font-after.ppm && echo fshot1-ok',
+  'wmctl shot $SID /root/font-after.png && echo fshot1-ok',
   'echo ==fshot1',
-  'base64 /root/font-after.ppm',
+  'base64 /root/font-after.png',
   'echo ==cut',
 
   // ---- #330: the style axis — Bold through the dialog, same 28pt.
@@ -317,9 +318,9 @@ const r = driveBoot([
   'wmctl click OK',
   'wmctl wait nowin Font 8000',
   'wmctl tree > /dev/null',                      // paint barrier for the re-font
-  'wmctl shot $SID /root/font-bold.ppm && echo fshot2-ok',
+  'wmctl shot $SID /root/font-bold.png && echo fshot2-ok',
   'echo ==fshot2',
-  'base64 /root/font-bold.ppm',
+  'base64 /root/font-bold.png',
   'echo ==cut',
   'wmctl click "Font..."',
   'wmctl wait win Font 8000',
@@ -429,9 +430,9 @@ const r = driveBoot([
   'wmctl wait dim $SID2 720x420 8000',
   'wmctl settext EDIT:0 "$(printf \'MMMM\\nMMMM\\nMMMM\')"',
   'wmctl tree > /dev/null',                      // paint barrier
-  'wmctl shot $SID2 /root/font-persist.ppm && echo fshot3-ok',
+  'wmctl shot $SID2 /root/font-persist.png && echo fshot3-ok',
   'echo ==fshot3',
-  'base64 /root/font-persist.ppm',
+  'base64 /root/font-persist.png',
   'echo ==cut',
   'wmctl click "Font..."',
   'wmctl wait win Font 8000',
@@ -576,29 +577,21 @@ check('live sample STATIC present (WM_SETFONT-driven preview)',
 /* the pixel proof: 3 lines of 'M' — the LAST ink row inside the EDIT
  * (x past the caret/border, y between the well top and the status bar)
  * must move DOWN when 28pt (37px em) replaces the 20px stock. */
-function parsePpm(b64) {
-  const buf = Buffer.from(String(b64).replace(/\s+/g, ''), 'base64');
-  let p = 0;
-  const tok = () => { while ([32, 10, 9, 13].includes(buf[p])) p++;
-                      let s = p; while (![32, 10, 9, 13].includes(buf[p])) p++;
-                      return buf.slice(s, p).toString(); };
-  const magic = tok(); const w = +tok(), h = +tok(); tok(); p++;
-  return { buf, w, h, data: p, magic };
-}
 function lastInkRow(P, x0, x1, y0, y1) {
   let m = -1;
   for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
-    const i = P.data + (y * P.w + x) * 3;
-    if (P.buf[i] < 100 && P.buf[i + 1] < 100 && P.buf[i + 2] < 100) { m = y; break; }
+    const i = (y * P.w + x) * 4;
+    if (P.rgba[i] < 100 && P.rgba[i + 1] < 100 && P.rgba[i + 2] < 100) { m = y; break; }
   }
   return m;
 }
 check('font-change shots captured', out.includes('fshot0-ok') && out.includes('fshot1-ok'),
   out.slice(-400));
-const fp0 = parsePpm(section(out, 'fshot0'));
-const fp1 = parsePpm(section(out, 'fshot1'));
-check('font shots are P6 frames', fp0.magic === 'P6' && fp1.magic === 'P6',
-  fp0.magic + '/' + fp1.magic);
+const fp0 = parseB64Png(section(out, 'fshot0'));
+const fp1 = parseB64Png(section(out, 'fshot1'));
+check('font shots decode as valid PNGs at matching dims',
+  fp0.w > 0 && fp0.h > 0 && fp0.w === fp1.w && fp0.h === fp1.h,
+  `${fp0.w}x${fp0.h} / ${fp1.w}x${fp1.h}`);
 const ink0 = lastInkRow(fp0, 10, 200, 36, 340);
 const ink1 = lastInkRow(fp1, 10, 200, 36, 340);
 console.log('  info fontink ' + JSON.stringify({ ink0, ink1 }));
@@ -609,13 +602,13 @@ check('EDIT line height visibly grew (last ink row moved down >= 30px)',
 function inkCount(P, x0, x1, y0, y1) {
   let n = 0;
   for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
-    const i = P.data + (y * P.w + x) * 3;
-    if (P.buf[i] < 100 && P.buf[i + 1] < 100 && P.buf[i + 2] < 100) n++;
+    const i = (y * P.w + x) * 4;
+    if (P.rgba[i] < 100 && P.rgba[i + 1] < 100 && P.rgba[i + 2] < 100) n++;
   }
   return n;
 }
 check('bold shot captured', out.includes('fshot2-ok'), out.slice(-400));
-const fp2 = parsePpm(section(out, 'fshot2'));
+const fp2 = parseB64Png(section(out, 'fshot2'));
 const cnt1 = inkCount(fp1, 10, 700, 36, 340);
 const cnt2 = inkCount(fp2, 10, 700, 36, 340);
 console.log('  info boldink ' + JSON.stringify({ cnt1, cnt2 }));
@@ -632,7 +625,7 @@ check('reopened dialog holds the 28pt size',
 check('lfWeight=700 landed in the registry hive on exit (#330)',
   /lfWeight[^\n]*bc020000/.test(section(out, 'reg')), section(out, 'reg'));
 check('persist shot captured', out.includes('fshot3-ok'), out.slice(-400));
-const fp3 = parsePpm(section(out, 'fshot3'));
+const fp3 = parseB64Png(section(out, 'fshot3'));
 const cnt3 = inkCount(fp3, 10, 700, 36, 340);
 console.log('  info persistink ' + JSON.stringify({ cnt1, cnt3 }));
 check('a FRESH notepad renders the registry-held bold (ink > Regular baseline)',

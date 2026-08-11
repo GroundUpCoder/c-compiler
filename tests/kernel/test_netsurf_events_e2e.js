@@ -31,6 +31,7 @@
 const fs = require('fs');
 const path = require('path');
 const { driveBoot, freshImage } = require('./lib/drive.js');
+const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -163,24 +164,22 @@ if (!PAINT_W || !PAINT_H) {
   process.exit(1);
 }
 
-/* PPM helpers (the netsurf-e2e pattern) */
-function parsePPMs(buf, names) {
+/* PNG shot helpers (the netsurf-e2e pattern; tests/lib/png.js since #657) */
+function parsePngs(buf, names) {
   const shots = {};
   let off = 0;
   for (const name of names) {
-    const head = buf.toString('latin1', off, off + 32);
-    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-    if (!m) throw new Error('bad ppm stream at ' + name + ': ' + JSON.stringify(head));
-    const w = +m[1], h = +m[2];
-    const data = off + m[0].length;
-    shots[name] = { w, h, data: buf.slice(data, data + w * h * 3) };
-    off = data + w * h * 3;
+    let p;
+    try { p = parsePng(buf, off); }
+    catch (e) { throw new Error(`bad png stream at ${name}: ${e.message}`); }
+    shots[name] = { w: p.w, h: p.h, data: p.rgba };
+    off = p.next;
   }
   return shots;
 }
-const px = (s, x, y) => [s.data[(y * s.w + x) * 3],
-                         s.data[(y * s.w + x) * 3 + 1],
-                         s.data[(y * s.w + x) * 3 + 2]];
+const px = (s, x, y) => [s.data[(y * s.w + x) * 4],
+                         s.data[(y * s.w + x) * 4 + 1],
+                         s.data[(y * s.w + x) * 4 + 2]];
 const near = (p, want, tol = 40) =>
   Math.abs(p[0] - want[0]) <= tol &&
   Math.abs(p[1] - want[1]) <= tol &&
@@ -209,14 +208,14 @@ function inkIn(s, x0, y0, x1, y1) {
 /* Repaints with no wmctl-visible marker: poll PIXELS until the frame differs
  * from the reference (bounded condition poll, not a fixed sleep). */
 const pollChange = (sid, ref) => [
-  `for i in $(seq 1 100); do wmctl shot ${sid} /root/poll.ppm; ` +
-  `cmp -s /root/poll.ppm ${ref} || break; sleep 0.1; done`,
+  `for i in $(seq 1 100); do wmctl shot ${sid} /root/poll.png; ` +
+  `cmp -s /root/poll.png ${ref} || break; sleep 0.1; done`,
 ];
 /* Post-title-barrier settle: shot until two consecutive frames match. */
 const pollStable = (sid, out) => [
   `wmctl shot ${sid} ${out}`,
-  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.ppm; ` +
-  `cmp -s /root/poll.ppm ${out} && break; cp /root/poll.ppm ${out}; done`,
+  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.png; ` +
+  `cmp -s /root/poll.png ${out} && break; cp /root/poll.png ${out}; done`,
 ];
 const sidOf = (v, title) => `${v}=$(wmctl list | grep "\t${title}$" | sed "s/[^0-9].*//")`;
 
@@ -240,37 +239,37 @@ const out = driveBoot([
   'netsurf /root/paint/index.html &',
   'wmctl wait win Paint 30000',
   sidOf('PA', 'Paint'),
-  ...pollStable('$PA', '/root/p0.ppm'),
+  ...pollStable('$PA', '/root/p0.png'),
   'echo shot-p0-ok',
   /* Clear: scene -> white pad, so ink counting starts from zero.  The
    * click doubles as a liveness step — a dead script clears nothing. */
   `wmctl click $PA ${CLEAR_AT[0]} ${CLEAR_AT[1]}`,
-  ...pollChange('$PA', '/root/p0.ppm'),
-  ...pollStable('$PA', '/root/p1.ppm'),
+  ...pollChange('$PA', '/root/p0.png'),
+  ...pollStable('$PA', '/root/p1.png'),
   'echo shot-p1-ok',
   `wmctl drag $PA ${STROKE.x0} ${STROKE.y0} ${STROKE.x1} ${STROKE.y1}`,
-  ...pollChange('$PA', '/root/p1.ppm'),
-  'wmctl shot $PA /root/p2.ppm && echo shot-p2-ok',
+  ...pollChange('$PA', '/root/p1.png'),
+  'wmctl shot $PA /root/p2.png && echo shot-p2-ok',
   'wmctl close $PA && wmctl wait nowin Paint 8000 && echo paint-closed',
 
   /* --- leg 2: real key press AND release, capture, change --- */
   'netsurf /root/probe.html &',
   'wmctl wait win NsEvents 30000',
   sidOf('EV', 'NsEvents'),
-  ...pollStable('$EV', '/root/e1.ppm'),
+  ...pollStable('$EV', '/root/e1.png'),
   'echo shot-e1-ok',
   /* focus the field, then ONE keystroke: wmctl key sends the down AND the
    * up, so both slabs must light. */
   'wmctl click $EV 40 10',
   `wmctl key $EV 4 97`,
-  ...pollChange('$EV', '/root/e1.ppm'),
-  ...pollStable('$EV', '/root/e2.ppm'),
+  ...pollChange('$EV', '/root/e1.png'),
+  ...pollStable('$EV', '/root/e2.png'),
   'echo shot-e2-ok',
   /* click the inner box: its CAPTURE listener sits on the outer one, and
    * clicking away from the field also blurs it, which commits `change`. */
   `wmctl click $EV 60 ${4 * PAD_H + 60}`,
-  ...pollChange('$EV', '/root/e2.ppm'),
-  ...pollStable('$EV', '/root/e3.ppm'),
+  ...pollChange('$EV', '/root/e2.png'),
+  ...pollStable('$EV', '/root/e3.png'),
   'echo shot-e3-ok',
   'wmctl close $EV && wmctl wait nowin NsEvents 8000 && echo probe-closed',
 ], { image, timeout: 420000, maxBuffer: 64 * 1024 * 1024 }).stdout;
@@ -287,9 +286,9 @@ for (const tag of ['paint', 'probe']) {
  * unlit probe are what a dead script looks like), never from the log. */
 
 /* --- read the shots back --- */
-const back = driveBoot('cat ' + NAMES.map((n) => `/root/${n}.ppm`).join(' ') + '\n',
+const back = driveBoot('cat ' + NAMES.map((n) => `/root/${n}.png`).join(' ') + '\n',
                        { image, encoding: null, maxBuffer: 128 * 1024 * 1024 });
-const shots = parsePPMs(back.stdout, NAMES);
+const shots = parsePngs(back.stdout, NAMES);
 
 /* ---- leg 1: the ink -------------------------------------------------- */
 {

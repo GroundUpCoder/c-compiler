@@ -118,8 +118,8 @@ driveBoot('true', { image });
  * needs) has happened.  The netsurf-pointer-e2e pattern. */
 const pollStable = (sid, out) => [
   `wmctl shot ${sid} ${out}`,
-  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.ppm; ` +
-  `cmp -s /root/poll.ppm ${out} && break; cp /root/poll.ppm ${out}; done`,
+  `for i in $(seq 1 100); do sleep 0.1; wmctl shot ${sid} /root/poll.png; ` +
+  `cmp -s /root/poll.png ${out} && break; cp /root/poll.png ${out}; done`,
 ];
 const sidOf = (v, title) => `${v}=$(wmctl list | grep "\t${title}$" | sed "s/[^0-9].*//")`;
 
@@ -127,7 +127,7 @@ const run = driveBoot([
   'netsurf /root/slop.html &',
   'wmctl wait win NsSlop 30000',
   sidOf('S', 'NsSlop'),
-  ...pollStable('$S', '/root/s0.ppm'),
+  ...pollStable('$S', '/root/s0.png'),
   'echo page-settled',
 
   /* leg 1: press, sub-slop move, supra-slop move, release */
@@ -149,10 +149,10 @@ const run = driveBoot([
    * restyle is the first frame that can differ from the settled shot —
    * and it can only be processed after every event injected above it */
   'wmctl hover $S 500 350',
-  `for i in $(seq 1 100); do wmctl shot $S /root/poll.ppm; ` +
-  `cmp -s /root/poll.ppm /root/s0.ppm || break; sleep 0.1; done`,
+  `for i in $(seq 1 100); do wmctl shot $S /root/poll.png; ` +
+  `cmp -s /root/poll.png /root/s0.png || break; sleep 0.1; done`,
   /* the loop exits on the flip OR on its budget: say which, loudly */
-  'cmp -s /root/poll.ppm /root/s0.ppm || echo sentinel-painted',
+  'cmp -s /root/poll.png /root/s0.png || echo sentinel-painted',
   'wmctl close $S && wmctl wait gone $S 8000 && echo win-closed',
 ], { image, timeout: 300000, maxBuffer: 64 * 1024 * 1024 });
 
