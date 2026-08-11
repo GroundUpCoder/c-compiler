@@ -949,7 +949,8 @@ void Host_Name_f (void)
 void Host_Version_f (void)
 {
 	Con_Printf ("Version %4.2f\n", VERSION);
-	Con_Printf ("Exe: "__TIME__" "__DATE__"\n");
+	// PATCH: __TIME__/__DATE__ pinned to a fixed string (#633) — see host.c.
+	Con_Printf ("Exe: xx:xx:xx xx/xx/xx\n");
 }
 
 #ifdef IDGODS

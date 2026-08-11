@@ -88,7 +88,8 @@ easy to grep. Files fall into three buckets:
 - **Added** (new files for this port, written from scratch):
   `vid_sdl.c`, `sys_sdl.c`, `in_sdl.c` — see "Added files" below.
 - **Changed** (upstream files with `// PATCH:` edits):
-  `chase.c`, `net.h`, `net_main.c`, `quakedef.h` — see "Changed files".
+  `chase.c`, `net.h`, `net_main.c`, `host.c`, `host_cmd.c`, `quakedef.h`
+  — see "Changed files".
 - **Removed** (upstream files dropped or superseded):
   `sys_null.c`, `vid_null.c`, `in_null.c` (replaced by the SDL versions
   above); the various other upstream platform variants were never
@@ -184,6 +185,16 @@ mismatch produces a stack-imbalance error.
 To match the new `net.h` pointer type, both `Slist_Send` and
 `Slist_Poll` now take `void *unused` (forward decls and definitions).
 The bodies never read the parameter.
+
+### `host.c` / `host_cmd.c`
+
+The classic "Exe:" build banner (printed at `Host_Init` and by the
+`version` console command) embedded `__TIME__" "__DATE__`, so every
+compile baked the wall-clock time into the wasm bytes and two builds
+of an unchanged tree differed — breaking mkpkg's deterministic-payload
+contract (the quake package sha flipped on every build; ticket #633).
+Both sites are pinned to the fixed string `"Exe: xx:xx:xx xx/xx/xx"`,
+the same convention cpython's `Modules/getbuildinfo.c` uses.
 
 ### `sys_null.c` *(removed; superseded by added `sys_sdl.c`)*
 

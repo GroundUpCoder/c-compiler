@@ -868,7 +868,10 @@ void Host_Init (quakeparms_t *parms)
 	NET_Init ();
 	SV_Init ();
 
-	Con_Printf ("Exe: "__TIME__" "__DATE__"\n");
+	// PATCH: __TIME__/__DATE__ pinned to a fixed string (#633) — the wall-clock
+	// banner made every compile produce different wasm bytes, breaking mkpkg's
+	// deterministic-payload contract (same convention as cpython getbuildinfo.c).
+	Con_Printf ("Exe: xx:xx:xx xx/xx/xx\n");
 	Con_Printf ("%4.1f megabyte heap\n",parms->memsize/ (1024*1024.0));
 	
 	R_InitTextures ();		// needed even for dedicated servers
