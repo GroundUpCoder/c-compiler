@@ -1481,6 +1481,13 @@ var SRCLIB_TABLE = [
     ns: 'gif', pkg: 'packages/giflib.json', tree: 'vendor/giflib' },
   { header: 'vendor/cjson/cJSON.h', lib: 'vendor/cjson/lib.json',
     ns: 'cjson', pkg: 'packages/cjson.json', tree: 'vendor/cjson' },
+  /* #663: the first two packages that ship BOTH a binary and a srclib —
+   * the package that owns the NAME owns everything planted under it
+   * (the (a) ruling; a -dev split was rejected, see the ticket). */
+  { header: 'vendor/lua/src/lua.h', lib: 'vendor/lua/lib.json',
+    ns: 'lua', pkg: 'packages/lua.json', tree: 'vendor/lua/src' },
+  { header: 'vendor/sqlite/sqlite3.h', lib: 'vendor/sqlite/lib.json',
+    ns: 'sqlite3', pkg: 'packages/sqlite3.json', tree: 'vendor/sqlite' },
 ];
 
 /* Package names the §4.4 drift gate adjudicates: every srclib owner plus

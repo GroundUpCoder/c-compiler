@@ -1,9 +1,15 @@
 {
   "name": "sqlite3",
-  "version": "3.53.1",
-  "summary": "SQLite 3.53.1 — the sqlite3 shell (file-backed DBs on the writable volume, piped and interactive/pty use)",
+  "version": "3.53.1-2",
+  "summary": "SQLite 3.53.1 — the sqlite3 shell + linkable source library (file-backed DBs on the writable volume)",
   "files": {
-    "sqlite3": { "project": "vendor/sqlite/bin.json" }
+    "sqlite3":           { "project": "vendor/sqlite/bin.json" },
+    "include/sqlite3.h": { "bin": "vendor/sqlite/sqlite3.h" },
+    "src/sqlite3":       { "tree": "vendor/sqlite", "exclude": ["README.md", "bin.json", "lib.json", "shell.c", "sqlite3.h", "sqlite3ext.h", "memory.h", "utime.h", "sys"] }
   },
-  "bin": { "sqlite3": "sqlite3" }
+  "bin": { "sqlite3": "sqlite3" },
+  "srclib": {
+    "include": [ "include" ],
+    "src": { "sqlite3": "src/sqlite3" }
+  }
 }

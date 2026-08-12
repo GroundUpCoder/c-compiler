@@ -1,0 +1,10 @@
+{
+  "type": "lib",
+  "name": "sqlite3",
+  "description": "SQLite 3.53.1 amalgamation — embeddable SQL database library",
+  "includes": ["."],
+  "srcRoots": { "sqlite3": "." },
+  "sources": [
+    "sqlite3.c"
+  ]
+}

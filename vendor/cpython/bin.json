@@ -20,7 +20,7 @@
     "../zlib/src",
     "../sqlite"
   ],
-  "srcRoots": { "z": "../zlib/src" },
+  "srcRoots": { "z": "../zlib/src", "sqlite3": "../sqlite" },
   "compilerArgs": [
     "-DPy_BUILD_CORE",
     "-DPy_BUILD_CORE=1",

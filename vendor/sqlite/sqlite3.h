@@ -14332,4 +14332,33 @@ struct fts5_api {
 #endif /* _FTS5_H */
 
 /******** End of fts5.h *********/
+
+/* ---------------- the sqlite3 require block (source-lib design §4.2,
+ * #663) ----
+ * Including this header IS the link metadata (the zlib.h/ft2build.h
+ * pattern): the in-OS cc resolves the name via /usr/local/src -> /usr/src
+ * (the srclib install tiers, planted by the sqlite3 package), so a bare
+ * `cc app.c` with `#include <sqlite3.h>` links the whole database engine
+ * with no -I flags and no TU list. The amalgamation carries its gucOS
+ * build configuration in-file (§3.4, guarded #ifndef at its top), so the
+ * flagless pull compiles the same proven config as the shipped shell.
+ * Host-side project builds reach the same TU through
+ * vendor/sqlite/lib.json, whose srcRoots {sqlite3: .} resolves the name
+ * to the SAME path, so the compiler's path-identity dedup no-ops the
+ * require (vendor/cpython/bin.json does the same, its zlib precedent).
+ * The set below MUST equal lib.json's sources — the §4.4 drift gate
+ * (os-common requireDriftErrors, run by tools/mkpkg.js +
+ * tools/win32ports.js --check) enforces it. shell.c (the sqlite3 REPL's
+ * main) is deliberately NOT here: it is an application, not part of the
+ * library. NB the amalgamation does not read this header — its own copy
+ * is inlined — so the block fires only in real consumers.
+ *
+ * SQLITE_NO_REQUIRE_SOURCES (the ZLIB_NO_REQUIRE_SOURCES of this
+ * library) suppresses the block for a consumer that wants the
+ * declarations without the source. Macro state is per-TU;
+ * required-source NAMES dedup per-compile. */
+#ifndef SQLITE_NO_REQUIRE_SOURCES
+__require_source("sqlite3/sqlite3.c");
+#endif /* !SQLITE_NO_REQUIRE_SOURCES */
+
 #endif /* SQLITE3_H */

@@ -22,6 +22,39 @@
 **
 **    
 */
+/* ---- gucOS build configuration (#663) --------------------------------
+** The srclib install path compiles this TU from a bare in-OS `cc app.c`
+** with NO -D flags (sqlite3.h's __require_source pulls it), so the proven
+** configuration of the shipped shell lives IN-FILE (source-lib design
+** §3.4 — a required TU is self-contained). Every guard is #ifndef so the
+** project builds' command-line flags (vendor/sqlite/bin.json and
+** vendor/cpython/bin.json pass this exact set, and clang-simplified's
+** image manifest mirrors it) stay the authority when present. */
+#ifndef SQLITE_WASI
+#define SQLITE_WASI 1
+#endif
+#ifndef SQLITE_THREADSAFE
+#define SQLITE_THREADSAFE 0
+#endif
+#ifndef SQLITE_OMIT_LOAD_EXTENSION
+#define SQLITE_OMIT_LOAD_EXTENSION 1
+#endif
+#ifndef SQLITE_OMIT_WAL
+#define SQLITE_OMIT_WAL 1
+#endif
+#ifndef SQLITE_MAX_MMAP_SIZE
+#define SQLITE_MAX_MMAP_SIZE 0
+#endif
+#ifndef SQLITE_DEFAULT_MEMSTATUS
+#define SQLITE_DEFAULT_MEMSTATUS 0
+#endif
+#ifndef SQLITE_OMIT_DEPRECATED
+#define SQLITE_OMIT_DEPRECATED 1
+#endif
+#ifndef HAVE_USLEEP
+#define HAVE_USLEEP 1
+#endif
+/* ---- end gucOS build configuration ---------------------------------- */
 #ifndef SQLITE_AMALGAMATION
 #define SQLITE_CORE 1
 #define SQLITE_AMALGAMATION 1

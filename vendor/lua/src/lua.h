@@ -544,4 +544,57 @@ struct lua_Debug {
 ******************************************************************************/
 
 
+/* ---------------- the lua require block (source-lib design §4.2, #663) ----
+ * Including this header IS the link metadata (the zlib.h/ft2build.h
+ * pattern): the in-OS cc resolves these names via /usr/local/src ->
+ * /usr/src (the srclib install tiers, planted by the lua package), so a
+ * bare `cc app.c` with `#include <lua.h>` links the whole interpreter
+ * library with no -I flags and no TU list. Host-side project builds reach
+ * the same TUs through vendor/lua/lib.json, whose srcRoots {lua: src}
+ * resolves each name to the SAME path, so the compiler's path-identity
+ * dedup no-ops the require. The set below MUST equal lib.json's sources —
+ * the §4.4 drift gate (os-common requireDriftErrors, run by tools/mkpkg.js
+ * + tools/win32ports.js --check) enforces it. lua.c (the standalone
+ * shell's main) is deliberately NOT here: it is an application, not part
+ * of the library.
+ *
+ * LUA_NO_REQUIRE_SOURCES (the ZLIB_NO_REQUIRE_SOURCES of this library)
+ * suppresses the block for a consumer that wants the declarations without
+ * the sources. Macro state is per-TU; required-source NAMES dedup
+ * per-compile. */
+#ifndef LUA_NO_REQUIRE_SOURCES
+__require_source("lua/lapi.c");
+__require_source("lua/lauxlib.c");
+__require_source("lua/lbaselib.c");
+__require_source("lua/lcode.c");
+__require_source("lua/lcorolib.c");
+__require_source("lua/lctype.c");
+__require_source("lua/ldblib.c");
+__require_source("lua/ldebug.c");
+__require_source("lua/ldo.c");
+__require_source("lua/ldump.c");
+__require_source("lua/lfunc.c");
+__require_source("lua/lgc.c");
+__require_source("lua/linit.c");
+__require_source("lua/liolib.c");
+__require_source("lua/llex.c");
+__require_source("lua/lmathlib.c");
+__require_source("lua/lmem.c");
+__require_source("lua/loadlib.c");
+__require_source("lua/lobject.c");
+__require_source("lua/lopcodes.c");
+__require_source("lua/loslib.c");
+__require_source("lua/lparser.c");
+__require_source("lua/lstate.c");
+__require_source("lua/lstring.c");
+__require_source("lua/lstrlib.c");
+__require_source("lua/ltable.c");
+__require_source("lua/ltablib.c");
+__require_source("lua/ltm.c");
+__require_source("lua/lundump.c");
+__require_source("lua/lutf8lib.c");
+__require_source("lua/lvm.c");
+__require_source("lua/lzio.c");
+#endif /* !LUA_NO_REQUIRE_SOURCES */
+
 #endif

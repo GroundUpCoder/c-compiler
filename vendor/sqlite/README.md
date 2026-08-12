@@ -60,6 +60,25 @@ node host.js /tmp/sqlite.wasm
 The expected first-light goal is the `sqlite>` REPL prompt, with
 `.help` and `SELECT 1;` working against an in-memory database.
 
+## Patches (#663 — the linkable source library)
+
+The amalgamation was vendored verbatim until #663 promoted the tree to a
+srclib (`lib.json` + a `srclib` block in `packages/sqlite3.json`, so the
+in-OS cc links the engine from a bare `#include <sqlite3.h>`). Two files
+carry gucOS additions; everything else is byte-identical upstream:
+
+| File | Change |
+|---|---|
+| `sqlite3.h` | `__require_source("sqlite3/sqlite3.c")` appended (source-lib design §4.2 — the set must equal `lib.json` sources; `SQLITE_NO_REQUIRE_SOURCES` suppresses). The amalgamation never reads this header (its own copy is inlined), so the block fires only in real consumers. |
+| `sqlite3.c` | The build-flag table below duplicated IN-FILE at the top, each `#ifndef`-guarded (§3.4 — a required TU is self-contained), so a flagless in-OS pull compiles the same proven config; command-line `-D` flags stay the authority when present. |
+
+Build shape: `bin.json` (the shell) is `deps: ["lib.json"]` + `shell.c` and
+keeps the `-D` flag set (shell.c reads several of these itself); `lib.json`
+owns `sqlite3.c`, `includes` and the `srcRoots {sqlite3: .}` namespace that
+path-identity-dedups the require block in project builds
+(`vendor/cpython/bin.json` carries the same namespace for its explicit
+`../sqlite/sqlite3.c` TU — its zlib pattern).
+
 ## Build flags
 
 The `bin.json` sets:

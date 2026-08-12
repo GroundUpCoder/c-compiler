@@ -12,9 +12,8 @@
     "-DSQLITE_OMIT_DEPRECATED",
     "-DHAVE_USLEEP=1"
   ],
-  "includes": ["."],
+  "deps": ["lib.json"],
   "sources": [
-    "sqlite3.c",
     "shell.c"
   ]
 }

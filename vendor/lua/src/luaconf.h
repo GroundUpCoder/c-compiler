@@ -11,6 +11,16 @@
 #include <limits.h>
 #include <stddef.h>
 
+/* gucOS (#663): pin LUA_USE_C89 in the HEADER, not on a command line.
+** The choice is ABI-visible — LUA_C89_NUMBERS (below) makes lua_Integer
+** `long` and lua_Number `double` — so the library TUs, the shell, and any
+** consumer built with a bare in-OS `cc app.c` (which passes no -D flags)
+** must all agree on it. This replaces the old -DLUA_USE_C89 in bin.json;
+** upstream's own note above endorses ABI config living directly here. */
+#if !defined(LUA_USE_C89)
+#define LUA_USE_C89
+#endif
+
 
 /*
 ** ===================================================================

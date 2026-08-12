@@ -1,9 +1,19 @@
 {
   "name": "lua",
-  "version": "5.5.0",
-  "summary": "Lua 5.5.0 — the stock lua REPL/interpreter (unmodified upstream, MIT)",
+  "version": "5.5.0-2",
+  "summary": "Lua 5.5.0 — the stock lua REPL/interpreter + linkable source library (MIT)",
   "files": {
-    "lua": { "project": "vendor/lua/bin.json" }
+    "lua":               { "project": "vendor/lua/bin.json" },
+    "include/lua.h":     { "bin": "vendor/lua/src/lua.h" },
+    "include/luaconf.h": { "bin": "vendor/lua/src/luaconf.h" },
+    "include/lualib.h":  { "bin": "vendor/lua/src/lualib.h" },
+    "include/lauxlib.h": { "bin": "vendor/lua/src/lauxlib.h" },
+    "include/lua.hpp":   { "bin": "vendor/lua/src/lua.hpp" },
+    "src/lua":           { "tree": "vendor/lua/src", "exclude": ["lua.c", "lua.hpp"] }
   },
-  "bin": { "lua": "lua" }
+  "bin": { "lua": "lua" },
+  "srclib": {
+    "include": [ "include" ],
+    "src": { "lua": "src/lua" }
+  }
 }
