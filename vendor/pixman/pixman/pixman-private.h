@@ -15,8 +15,27 @@
 
 #ifndef __ASSEMBLER__
 
+/* gucOS patch (#661): self-configuring build defines.
+ *
+ * An FS-require-able source must be a SELF-CONTAINED TU (source-lib §3.4):
+ * required TUs share ONE global define set with no per-TU compilerArgs, so a
+ * library's build-config defines have to live in the sources themselves. Since
+ * #661 pixman is a source-library PACKAGE whose TUs the in-OS `cc` pulls in
+ * through <pixman.h>'s __require_source block — compiled under the CONSUMER's
+ * options, which cannot name -DPACKAGE — this header is where they belong.
+ * Every pixman TU includes it, and it precedes the pixman-compiler.h include
+ * below that reads PIXMAN_NO_TLS.
+ *
+ * Same shape as the freetype srclib shims (vendor/freetype/srclib/ftbase.c),
+ * ifndef-guarded so the -D duplicates from project builds (lib.json
+ * compilerArgs, kept) stay legal and win. Verified byte-identical: pixman's
+ * test_main.c links to the same wasm with the flags, without them, and before
+ * this patch. */
 #ifndef PACKAGE
-#  error config.h must be included before pixman-private.h
+#  define PACKAGE pixman
+#endif
+#ifndef PIXMAN_NO_TLS   /* single-threaded wasm: TLS degrades to a plain static */
+#  define PIXMAN_NO_TLS 1
 #endif
 
 #define PIXMAN_DISABLE_DEPRECATED
