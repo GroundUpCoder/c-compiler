@@ -73,19 +73,41 @@ end of their header. Include the header and compile — no other step:
 
 | Header | Library | Ships in package |
 |---|---|---|
-| `<zlib.h>` | zlib (15 files) | libpng |
+| `<zlib.h>` | zlib (15 files) | zlib |
 | `<png.h>` | libpng (15 files) | libpng |
 | `<jpeglib.h>` | libjpeg (45 files) | libjpeg |
+| `<gif_lib.h>` | giflib (4 files, decode only) | giflib |
 | `<nsgif.h>` | libnsgif | libnsgif |
 | `<libnsbmp.h>` | libnsbmp | libnsbmp |
+| `<pixman.h>` | pixman (30 files) | pixman |
+| `<cairo.h>`, `<cairo-ft.h>` | cairo (121 files) | cairo |
 | `<ft2build.h>` | freetype (12 files) | freetype |
 | `<windows.h>` | the win32 veneer | win32 |
 | `<gdiplusflat.h>` | gdiplus-mini | win32 |
 | `<regex.h>`, `<glob.h>`, `<search.h>`, `<fnmatch.h>` | extension libc | builtin — no package |
 | `<math.h>` and the rest of libc | builtin libc | builtin — no package |
 
-Note: there is no zlib package. The libpng package ships `<zlib.h>` and
-the zlib sources.
+### Depend on a package — do not copy it
+
+Each library above is ONE package, and that package is the supported way to
+depend on the library. Install it and include its header. Do not copy the
+sources into your own project, and do not list another library's translation
+units in your own build: a second copy of a library in one program is a
+duplicate-symbol link error, and only one package may own a given header.
+
+A package pulls in what it needs. Installing `cairo` also installs `pixman`,
+`libpng`, `zlib` and `freetype`, because cairo declares them as dependencies:
+
+```
+gucman install cairo
+```
+
+Then `#include <cairo.h>` links cairo, and cairo's own sources pull pixman,
+libpng, zlib and freetype in behind it. You name one library; you get its
+whole graph.
+
+`gucman remove` refuses to remove a package another installed package depends
+on, and names the packages that are blocking it.
 
 To get declarations without the sources, define the library's opt-out
 macro before the include. Each library names its own: `ZLIB_NO_REQUIRE_SOURCES`,
