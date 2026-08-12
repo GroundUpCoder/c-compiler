@@ -3,6 +3,7 @@
   "name": "pixman",
   "description": "pixman 0.42.2 — pixel manipulation library (cairo's raster backend)",
   "includes": ["pixman"],
+  "srcRoots": { "pixman": "pixman" },
   "compilerArgs": ["-DPACKAGE=pixman", "-DPIXMAN_NO_TLS=1"],
   "sources": [
     "pixman/pixman.c",

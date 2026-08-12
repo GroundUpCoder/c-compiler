@@ -3,6 +3,7 @@
   "name": "giflib",
   "description": "giflib 5.2.2 — GIF decode subset (dgif). Encoder/quantize/hash .c files not vendored; decode-only is fully self-contained.",
   "includes": ["."],
+  "srcRoots": { "gif": "." },
   "compilerArgs": ["--allow-old-c"],
   "sources": [
     "dgif_lib.c",

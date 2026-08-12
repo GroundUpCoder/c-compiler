@@ -3345,4 +3345,152 @@ cairo_debug_reset_static_data (void);
 
 CAIRO_END_DECLS
 
+/* ---------------- the cairo require block (source-lib design §4.2,
+ * tickets #464/#498, this library #661) ----
+ * Including this header IS the link metadata (the ft2build.h pattern): the
+ * set below MUST equal vendor/cairo/lib.json sources — the §4.4 drift gate
+ * (os-common win32RequireDriftErrors, run by tools/mkpkg.js +
+ * tools/win32ports.js --check) enforces it. Host-side project builds reach
+ * these TUs through lib.json (srcRoots resolves each name to the SAME path,
+ * so the compiler's path-identity dedup no-ops the require); the in-OS cc
+ * resolves them via /usr/local/src -> /usr/src (the srclib install tiers,
+ * planted by the cairo source-lib package).
+ *
+ * Only cairo's OWN TUs are listed. Its dependencies ride in transitively
+ * through the headers those TUs include: <pixman.h> (cairoint.h) pulls
+ * pixman, <png.h> (cairo-png.c) pulls libpng and, through pngstruct.h,
+ * zlib, and ft2build.h (cairo-ft-font.c) pulls freetype. Each of those
+ * headers owns its own block, so no set is duplicated here.
+ *
+ * The TUs also need cairo's hand-written config.h, which they reach by
+ * quote-include from their own directory: packages/cairo.json ships it
+ * INSIDE the src payload dir for exactly that reason.
+ *
+ * CAIRO_NO_REQUIRE_SOURCES suppresses the block for a consumer that wants the
+ * declarations without the sources. Macro state is per-TU; required-source
+ * NAMES dedup per-compile. */
+#ifndef CAIRO_NO_REQUIRE_SOURCES
+__require_source("cairo/cairo-analysis-surface.c");
+__require_source("cairo/cairo-arc.c");
+__require_source("cairo/cairo-array.c");
+__require_source("cairo/cairo-atomic.c");
+__require_source("cairo/cairo-base64-stream.c");
+__require_source("cairo/cairo-base85-stream.c");
+__require_source("cairo/cairo-bentley-ottmann-rectangular.c");
+__require_source("cairo/cairo-bentley-ottmann-rectilinear.c");
+__require_source("cairo/cairo-bentley-ottmann.c");
+__require_source("cairo/cairo-botor-scan-converter.c");
+__require_source("cairo/cairo-boxes-intersect.c");
+__require_source("cairo/cairo-boxes.c");
+__require_source("cairo/cairo-cache.c");
+__require_source("cairo/cairo-clip-boxes.c");
+__require_source("cairo/cairo-clip-polygon.c");
+__require_source("cairo/cairo-clip-region.c");
+__require_source("cairo/cairo-clip-surface.c");
+__require_source("cairo/cairo-clip-tor-scan-converter.c");
+__require_source("cairo/cairo-clip.c");
+__require_source("cairo/cairo-color.c");
+__require_source("cairo/cairo-composite-rectangles.c");
+__require_source("cairo/cairo-compositor.c");
+__require_source("cairo/cairo-contour.c");
+__require_source("cairo/cairo-damage.c");
+__require_source("cairo/cairo-debug.c");
+__require_source("cairo/cairo-default-context.c");
+__require_source("cairo/cairo-device.c");
+__require_source("cairo/cairo-error.c");
+__require_source("cairo/cairo-fallback-compositor.c");
+__require_source("cairo/cairo-fixed.c");
+__require_source("cairo/cairo-font-face-twin-data.c");
+__require_source("cairo/cairo-font-face-twin.c");
+__require_source("cairo/cairo-font-face.c");
+__require_source("cairo/cairo-font-options.c");
+__require_source("cairo/cairo-freed-pool.c");
+__require_source("cairo/cairo-freelist.c");
+__require_source("cairo/cairo-gstate.c");
+__require_source("cairo/cairo-hash.c");
+__require_source("cairo/cairo-hull.c");
+__require_source("cairo/cairo-image-compositor.c");
+__require_source("cairo/cairo-image-info.c");
+__require_source("cairo/cairo-image-source.c");
+__require_source("cairo/cairo-image-surface.c");
+__require_source("cairo/cairo-line.c");
+__require_source("cairo/cairo-lzw.c");
+__require_source("cairo/cairo-mask-compositor.c");
+__require_source("cairo/cairo-matrix.c");
+__require_source("cairo/cairo-mempool.c");
+__require_source("cairo/cairo-mesh-pattern-rasterizer.c");
+__require_source("cairo/cairo-misc.c");
+__require_source("cairo/cairo-mono-scan-converter.c");
+__require_source("cairo/cairo-mutex.c");
+__require_source("cairo/cairo-no-compositor.c");
+__require_source("cairo/cairo-observer.c");
+__require_source("cairo/cairo-output-stream.c");
+__require_source("cairo/cairo-paginated-surface.c");
+__require_source("cairo/cairo-path-bounds.c");
+__require_source("cairo/cairo-path-fill.c");
+__require_source("cairo/cairo-path-fixed.c");
+__require_source("cairo/cairo-path-in-fill.c");
+__require_source("cairo/cairo-path-stroke-boxes.c");
+__require_source("cairo/cairo-path-stroke-polygon.c");
+__require_source("cairo/cairo-path-stroke-traps.c");
+__require_source("cairo/cairo-path-stroke-tristrip.c");
+__require_source("cairo/cairo-path-stroke.c");
+__require_source("cairo/cairo-path.c");
+__require_source("cairo/cairo-pattern.c");
+__require_source("cairo/cairo-pen.c");
+__require_source("cairo/cairo-polygon-intersect.c");
+__require_source("cairo/cairo-polygon-reduce.c");
+__require_source("cairo/cairo-polygon.c");
+__require_source("cairo/cairo-raster-source-pattern.c");
+__require_source("cairo/cairo-recording-surface.c");
+__require_source("cairo/cairo-rectangle.c");
+__require_source("cairo/cairo-rectangular-scan-converter.c");
+__require_source("cairo/cairo-region.c");
+__require_source("cairo/cairo-rtree.c");
+__require_source("cairo/cairo-scaled-font.c");
+__require_source("cairo/cairo-shape-mask-compositor.c");
+__require_source("cairo/cairo-slope.c");
+__require_source("cairo/cairo-spans-compositor.c");
+__require_source("cairo/cairo-spans.c");
+__require_source("cairo/cairo-spline.c");
+__require_source("cairo/cairo-stroke-dash.c");
+__require_source("cairo/cairo-stroke-style.c");
+__require_source("cairo/cairo-surface-clipper.c");
+__require_source("cairo/cairo-surface-fallback.c");
+__require_source("cairo/cairo-surface-observer.c");
+__require_source("cairo/cairo-surface-offset.c");
+__require_source("cairo/cairo-surface-snapshot.c");
+__require_source("cairo/cairo-surface-subsurface.c");
+__require_source("cairo/cairo-surface-wrapper.c");
+__require_source("cairo/cairo-surface.c");
+__require_source("cairo/cairo-time.c");
+__require_source("cairo/cairo-tor-scan-converter.c");
+__require_source("cairo/cairo-tor22-scan-converter.c");
+__require_source("cairo/cairo-toy-font-face.c");
+__require_source("cairo/cairo-traps-compositor.c");
+__require_source("cairo/cairo-traps.c");
+__require_source("cairo/cairo-tristrip.c");
+__require_source("cairo/cairo-unicode.c");
+__require_source("cairo/cairo-user-font.c");
+__require_source("cairo/cairo-version.c");
+__require_source("cairo/cairo-wideint.c");
+__require_source("cairo/cairo.c");
+__require_source("cairo/cairo-cff-subset.c");
+__require_source("cairo/cairo-scaled-font-subsets.c");
+__require_source("cairo/cairo-truetype-subset.c");
+__require_source("cairo/cairo-type1-fallback.c");
+__require_source("cairo/cairo-type1-glyph-names.c");
+__require_source("cairo/cairo-type1-subset.c");
+__require_source("cairo/cairo-type3-glyph-surface.c");
+__require_source("cairo/cairo-pdf-operators.c");
+__require_source("cairo/cairo-pdf-shading.c");
+__require_source("cairo/cairo-tag-attributes.c");
+__require_source("cairo/cairo-tag-stack.c");
+__require_source("cairo/cairo-deflate-stream.c");
+__require_source("cairo/cairo-png.c");
+__require_source("cairo/cairo-ft-font.c");
+__require_source("cairo/cairo-colr-glyph-render.c");
+__require_source("cairo/cairo-svg-glyph-render.c");
+#endif /* !CAIRO_NO_REQUIRE_SOURCES */
+
 #endif /* CAIRO_H */

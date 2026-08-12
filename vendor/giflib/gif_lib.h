@@ -287,6 +287,33 @@ extern void GifDrawBoxedText8x8(SavedImage *Image, const int x, const int y,
 #ifdef __cplusplus
 }
 #endif /* __cplusplus */
+/* ---------------- the gif require block (source-lib design §4.2,
+ * tickets #464/#498, this library #661) ----
+ * Including this header IS the link metadata (the ft2build.h pattern): the
+ * set below MUST equal vendor/giflib/lib.json sources — the §4.4 drift gate
+ * (os-common win32RequireDriftErrors, run by tools/mkpkg.js +
+ * tools/win32ports.js --check) enforces it. Host-side project builds reach
+ * these TUs through lib.json (srcRoots resolves each name to the SAME path,
+ * so the compiler's path-identity dedup no-ops the require); the in-OS cc
+ * resolves them via /usr/local/src -> /usr/src (the srclib install tiers,
+ * planted by the gif source-lib package).
+ *
+ * Decode-only: the vendored subset is dgif + alloc + error + reallocarray
+ * (the encoder/quantize/hash TUs are not vendored). lib.json passes
+ * --allow-old-c for the host build, but the four TUs compile clean under the
+ * strict default too — measured, and pinned by the in-OS e2e — so a consumer
+ * that cannot pass flags still links them.
+ *
+ * GIF_NO_REQUIRE_SOURCES suppresses the block for a consumer that wants the
+ * declarations without the sources. Macro state is per-TU; required-source
+ * NAMES dedup per-compile. */
+#ifndef GIF_NO_REQUIRE_SOURCES
+__require_source("gif/dgif_lib.c");
+__require_source("gif/gifalloc.c");
+__require_source("gif/gif_err.c");
+__require_source("gif/openbsd-reallocarray.c");
+#endif /* !GIF_NO_REQUIRE_SOURCES */
+
 #endif /* _GIF_LIB_H */
 
 /* end */

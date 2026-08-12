@@ -1416,4 +1416,57 @@ void	      pixman_add_triangles       (pixman_image_t              *image,
 
 PIXMAN_END_DECLS
 
+/* ---------------- the pixman require block (source-lib design §4.2,
+ * tickets #464/#498, this library #661) ----
+ * Including this header IS the link metadata (the ft2build.h pattern): the
+ * set below MUST equal vendor/pixman/lib.json sources — the §4.4 drift gate
+ * (os-common win32RequireDriftErrors, run by tools/mkpkg.js +
+ * tools/win32ports.js --check) enforces it. Host-side project builds reach
+ * these TUs through lib.json (srcRoots resolves each name to the SAME path,
+ * so the compiler's path-identity dedup no-ops the require); the in-OS cc
+ * resolves them via /usr/local/src -> /usr/src (the srclib install tiers,
+ * planted by the pixman source-lib package).
+ *
+ * cairo pulls this block TRANSITIVELY: every cairo TU includes cairoint.h,
+ * which includes <pixman.h>, so <cairo.h> requires no pixman TU of its own.
+ *
+ * The TUs need PACKAGE/PIXMAN_NO_TLS, which they cannot get from a consumer's
+ * command line — pixman-private.h defines both itself (source-lib §3.4).
+ *
+ * PIXMAN_NO_REQUIRE_SOURCES suppresses the block for a consumer that wants the
+ * declarations without the sources. Macro state is per-TU; required-source
+ * NAMES dedup per-compile. */
+#ifndef PIXMAN_NO_REQUIRE_SOURCES
+__require_source("pixman/pixman.c");
+__require_source("pixman/pixman-access.c");
+__require_source("pixman/pixman-access-accessors.c");
+__require_source("pixman/pixman-bits-image.c");
+__require_source("pixman/pixman-combine32.c");
+__require_source("pixman/pixman-combine-float.c");
+__require_source("pixman/pixman-conical-gradient.c");
+__require_source("pixman/pixman-edge.c");
+__require_source("pixman/pixman-edge-accessors.c");
+__require_source("pixman/pixman-fast-path.c");
+__require_source("pixman/pixman-filter.c");
+__require_source("pixman/pixman-general.c");
+__require_source("pixman/pixman-glyph.c");
+__require_source("pixman/pixman-gradient-walker.c");
+__require_source("pixman/pixman-image.c");
+__require_source("pixman/pixman-implementation.c");
+__require_source("pixman/pixman-linear-gradient.c");
+__require_source("pixman/pixman-matrix.c");
+__require_source("pixman/pixman-noop.c");
+__require_source("pixman/pixman-radial-gradient.c");
+__require_source("pixman/pixman-region16.c");
+__require_source("pixman/pixman-region32.c");
+__require_source("pixman/pixman-solid-fill.c");
+__require_source("pixman/pixman-timer.c");
+__require_source("pixman/pixman-trap.c");
+__require_source("pixman/pixman-utils.c");
+__require_source("pixman/pixman-x86.c");
+__require_source("pixman/pixman-arm.c");
+__require_source("pixman/pixman-ppc.c");
+__require_source("pixman/pixman-mips.c");
+#endif /* !PIXMAN_NO_REQUIRE_SOURCES */
+
 #endif /* PIXMAN_H__ */

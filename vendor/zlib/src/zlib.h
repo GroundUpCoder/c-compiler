@@ -2063,7 +2063,9 @@ ZEXTERN int            ZEXPORTVA gzvprintf(gzFile file,
  * these TUs through lib.json (srcRoots {z: src} resolves each name to the
  * SAME path, so the compiler's path-identity dedup no-ops the require);
  * the in-OS cc resolves them via /usr/local/src -> /usr/src (the srclib
- * install tiers, planted by the libpng source-lib package). Since #631 the
+ * install tiers, planted by the ZLIB source-lib package since #661 — before
+ * that libpng owned this tree, and every zlib consumer had to install a PNG
+ * decoder to get it). Since #631 the
  * set is ALL 15 upstream libz TUs — the gz* file layer and infback
  * included — because this header declares gzopen and inflateBack
  * unconditionally, and a header on the default include path must link
