@@ -1686,6 +1686,25 @@ function preprocess(filename, initialTokens, ppRegistry) {
               args.push(currentArg);
             }
 
+            // C11 6.10.3p4: the argument count shall agree with the parameter
+            // count. It used to bind min(params, args) and say nothing: a
+            // missing argument left its parameter NAME in the expansion, where
+            // it captured any in-scope identifier (a silent miscompile), and
+            // extra arguments were silently dropped. An EMPTY argument is
+            // still an argument (`M(1,,3)` is three), and a variadic macro
+            // may receive zero trailing arguments (`V(fmt)` — C23/GNU; the
+            // empty-argument rule above already makes `V()` one empty arg).
+            if (m.isVariadic ? args.length < m.params.length
+                             : args.length !== m.params.length) {
+              const expected = m.isVariadic
+                ? `at least ${m.params.length}` : `${m.params.length}`;
+              result.errors.push(new LexError(
+                `too ${args.length < m.params.length ? "few" : "many"} ` +
+                `arguments provided to function-like macro invocation of ` +
+                `'${t.text}' (got ${args.length}, expected ${expected})`,
+                t.filename, t.line));
+            }
+
             // Build parameter-to-argument maps
             const paramMap = new Map();
             const rawParamMap = new Map();
