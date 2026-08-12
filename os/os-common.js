@@ -1477,6 +1477,8 @@ var SRCLIB_TABLE = [
     ns: 'cairo', pkg: 'packages/cairo.json', tree: 'vendor/cairo/src' },
   { header: 'vendor/giflib/gif_lib.h', lib: 'vendor/giflib/lib.json',
     ns: 'gif', pkg: 'packages/giflib.json', tree: 'vendor/giflib' },
+  { header: 'vendor/cjson/cJSON.h', lib: 'vendor/cjson/lib.json',
+    ns: 'cjson', pkg: 'packages/cjson.json', tree: 'vendor/cjson' },
 ];
 
 /* Package names the §4.4 drift gate adjudicates: every srclib owner plus

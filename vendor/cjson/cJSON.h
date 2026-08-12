@@ -303,4 +303,24 @@ CJSON_PUBLIC(void) cJSON_free(void *object);
 }
 #endif
 
+/* ---------------- the cjson require block (source-lib design §4.2, tickets
+ * #464/#498, this library #662) ----
+ * Including this header IS the link metadata (the ft2build.h pattern): the
+ * set below MUST equal vendor/cjson/lib.json sources — the §4.4 drift gate
+ * (os-common win32RequireDriftErrors, run by tools/mkpkg.js +
+ * tools/win32ports.js --check) enforces it. Host-side project builds reach
+ * the TU through lib.json (srcRoots {cjson: .} resolves the name to the
+ * SAME path, so the compiler's path-identity dedup no-ops the require);
+ * the in-OS cc resolves it via /usr/local/src -> /usr/src (the srclib
+ * install tiers, planted by the cjson source-lib package).
+ *
+ * CJSON_NO_REQUIRE_SOURCES (the FT_NO_REQUIRE_SOURCES of this library)
+ * suppresses the block for a consumer that wants the declarations without
+ * the source — the native-clang gcode build (os/gcode/build-native.sh)
+ * passes it, since __require_source is this compiler's keyword. Macro
+ * state is per-TU; required-source NAMES dedup per-compile. */
+#ifndef CJSON_NO_REQUIRE_SOURCES
+__require_source("cjson/cJSON.c");
+#endif /* !CJSON_NO_REQUIRE_SOURCES */
+
 #endif

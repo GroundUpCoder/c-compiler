@@ -3,19 +3,18 @@
   "description": "/bin/deck (todos/0284): the gucOS slide presenter — frozen .deck v1 JSON (WYSIWYG-first: stable ids + explicit geometry), supersample-AA CPU rasterizer (raster.c), fontcore text, libpng images, mgpp nav; --shot renders a slide headless to PNG (the e2e/golden surface)",
   "deps": [
     "../../vendor/freetype/lib.json",
-    "../../vendor/libpng/lib.json"
+    "../../vendor/libpng/lib.json",
+    "../../vendor/cjson/lib.json"
   ],
   "includes": [
     "../../vendor/freetype/demo",
     "../../vendor/freetype/include",
-    "../../vendor/libpng",
-    "../../vendor/cjson"
+    "../../vendor/libpng"
   ],
   "sources": [
     "deck.c",
     "model.c",
     "raster.c",
-    "text.c",
-    "../../vendor/cjson/cJSON.c"
+    "text.c"
   ]
 }

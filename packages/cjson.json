@@ -1,0 +1,14 @@
+{
+  "name": "cjson",
+  "version": "1.7.19",
+  "summary": "cJSON source library — parse and serialize JSON with the in-OS cc",
+  "files": {
+    "include/cJSON.h": { "bin": "vendor/cjson/cJSON.h" },
+    "src/cjson":       { "tree": "vendor/cjson", "exclude": ["lib.json", "LICENSE", "README.md"] },
+    "LICENSE":         { "bin": "vendor/cjson/LICENSE" }
+  },
+  "srclib": {
+    "include": [ "include" ],
+    "src": { "cjson": "src/cjson" }
+  }
+}

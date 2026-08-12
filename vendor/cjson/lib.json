@@ -1,0 +1,10 @@
+{
+  "type": "lib",
+  "name": "cjson",
+  "description": "cJSON 1.7.19 — lightweight JSON parser/serializer, one TU, zero deps",
+  "includes": ["."],
+  "srcRoots": { "cjson": "." },
+  "sources": [
+    "cJSON.c"
+  ]
+}

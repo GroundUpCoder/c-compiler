@@ -79,6 +79,7 @@ end of their header. Include the header and compile — no other step:
 | `<gif_lib.h>` | giflib (4 files, decode only) | giflib |
 | `<nsgif.h>` | libnsgif | libnsgif |
 | `<libnsbmp.h>` | libnsbmp | libnsbmp |
+| `<cJSON.h>` | cJSON (1 file) | cjson |
 | `<pixman.h>` | pixman (30 files) | pixman |
 | `<cairo.h>`, `<cairo-ft.h>` | cairo (121 files) | cairo |
 | `<ft2build.h>` | freetype (12 files) | freetype |

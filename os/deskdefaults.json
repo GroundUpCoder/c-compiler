@@ -2,11 +2,10 @@
   "bin": true,
   "name": "desktop-defaults",
   "description": "/usr/bin/desktop-defaults (Lane D, source-lib design §6.2): the additive default-Desktop reconcile — re-plant missing entries from the baked /usr/share/desktop/default rendering (fileops.h fo_copy, recursive folder merge, never overwrite/delete), then re-plant missing icons for installed desktop-eligible packages (control.json desktop.cmd, recorded into the gucman DB so remove unplants).",
-  "includes": [
-    "../vendor/cjson"
+  "deps": [
+    "../vendor/cjson/lib.json"
   ],
   "sources": [
-    "deskdefaults.c",
-    "../vendor/cjson/cJSON.c"
+    "deskdefaults.c"
   ]
 }
