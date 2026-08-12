@@ -22,7 +22,7 @@
  * package), so a bare `cc app.c` with `#include <ft2build.h>` pulls the
  * whole library with no -I flags and no TU list. The set below MUST
  * equal vendor/freetype/lib.json sources — the §4.4 drift gate
- * (os-common win32RequireDriftErrors, run by tools/mkpkg.js +
+ * (os-common requireDriftErrors, run by tools/mkpkg.js +
  * tools/win32ports.js --check) enforces it. Each shim is a
  * SELF-CONTAINED TU (the three build defines live in-file, §3.4).
  *

@@ -62,6 +62,49 @@ vendor/freetype/srclib tree"). End-to-end caller refusal re-proved the #662
 way: drifted ft2build.h on disk → `node tools/mkpkg.js freetype` exits 1 with
 `package 'freetype': require-block drift` naming the stray require.
 
+## Counter-pass follow-up (the tenth header, and two rules)
+
+The first commit (`4a47dc4a`) claimed "all ten srclib headers" but landed
+NINE: the mkpkg negative control ended with `git checkout --
+vendor/freetype/demo/ft2build.h` to restore the test drift, and with nothing
+committed yet that checkout silently reverted the uncommitted rename in the
+same file. The completeness grep was not wrong, it was STALE — it ran before
+the control, so it certified a tree the control then changed. The `git
+status` before the commit showed nine headers where ten were expected; the
+absence was there to be seen. Rules adopted (@master ruling):
+
+1. **Run the completeness grep LAST** — after every control, immediately
+   before the commit — and paste its empty output into the report.
+2. **A negative control must never restore state with `git checkout` over a
+   file carrying uncommitted work.** Commit before destructive controls, or
+   restore from a saved copy. Both is better.
+3. Cheap tripwire: read your own `git status` against an expected file count.
+
+The fix commit re-applies the one-line rename to
+`vendor/freetype/demo/ft2build.h` — which is row 1 of SRCLIB_TABLE and the
+exemplar every other srclib header cites, so it was the worst possible file
+to leave stale.
+
+## Precedent: when does changed baked content owe an image.json bump?
+
+This change edits ten baked srclib headers and does NOT bump `os/image.json`.
+Ruled with @master (accepted on this rule, recorded here as the precedent the
+next baked-content question gets decided against):
+
+**Bump when the changed baked bytes are addressed to the image's USER; skip
+when they are addressed to the repo's DEVELOPER and merely mirrored into the
+image.** `os/doc/toolchain.md` (#661, bump 258→259) was the former — the doc
+text WAS the deliverable to the in-OS reader, so not bumping meant the
+payload never reached existing browser-OPFS users (whose staleness gate is
+version-only). These header comments name a host-side tooling symbol
+(`os-common requireDriftErrors`) whose callers (`tools/mkpkg.js`,
+`tools/win32ports.js`) do not exist inside the OS at all; the intended
+reader's authoritative copy is git HEAD. Nothing in the delta is
+in-OS-actionable. Corollary boundary: touching a `__require_source` BLOCK is
+functional in-OS link metadata and WOULD owe a bump. Supporting mkpkg facts:
+package versions come from the def, and the #595 guard's "EQUAL is not a
+downgrade" rule makes same-version/new-sha republish the designed path.
+
 Explicitly left alone (out of scope per the ticket): the win32-internal pins
 (windows.h/menucore.h/gdiplusflat.h/gdiplus.c/the gdi32.c empty-pin) stay
 hardcoded inside the checker — they are win32's own multi-header blocks, not
