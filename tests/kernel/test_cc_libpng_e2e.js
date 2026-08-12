@@ -17,7 +17,10 @@
 //     suppress the blocks, so the SAME programs must FAIL AT LINK naming a
 //     library symbol — proving the header blocks are the link metadata
 //   - MINIMAL image: a <SDL3/SDL.h>-only program links and runs with NO
-//     libpng anywhere (the compiler.js "SDL stays libpng-free" intent,
+//     libpng anywhere (#661 note: zlib is its own package now, and libpng
+//     deps on it — `gucman install libpng` still plants BOTH tiers, which
+//     is exactly what the minimal legs below keep pinning)
+//     (the compiler.js "SDL stays libpng-free" intent,
 //     measured on the one image that can prove absence), <png.h> fails
 //     CLEAN (absence is honest), `gucman install libpng` plants both
 //     include/src tiers, and the standalone programs work through them
@@ -240,6 +243,9 @@ async function main() {
     'echo ==install',
     'mkdir -p /etc/gucman',
     `echo http://127.0.0.1:${goodPort} > /etc/gucman/repos`,
+    // Since #661 the z tier arrives through libpng's deps:["zlib"], not out
+    // of libpng's own payload — these four assertions are unchanged on
+    // purpose: the split must be INVISIBLE to a libpng consumer.
     'gucman install libpng; echo IRC=$?',
     'test -f /usr/local/include/png.h && echo PNG-INC-OK',
     'test -f /usr/local/include/zlib.h && echo ZLIB-INC-OK',

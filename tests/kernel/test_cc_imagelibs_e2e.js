@@ -251,10 +251,13 @@ async function main() {
     'mkdir -p /etc/gucman',
     `echo http://127.0.0.1:${port} > /etc/gucman/repos`,
     // absence is honest before anything is installed
+    // NB no pipeline here: `cc ... | head` would make $? head's status, so
+    // the leg could never fail. Redirect instead (the libpng e2e's form).
     'echo ==absent',
-    'cc caonly.c 2>&1 | head -3',
+    'cc caonly.c 2>&1',
     'echo arc=$?',
-    'cc gifdec.c 2>&1 | head -3',
+    'cc gifdec.c 2>&1',
+    'echo garc=$?',
     // 1. zlib STANDALONE — no PNG decoder required to get a compressor
     'echo ==zinstall',
     'gucman install zlib; echo ZRC=$?',
@@ -287,8 +290,10 @@ async function main() {
     'cc gifdec.c -o gifdec && ./gifdec',
     'echo grc=$?',
     // 5. the dependency edges are RECORDED, not just declared
+    // 2>&1: the refusal is written to stderr, which driveBoot reports
+    // separately — without this the wording never reaches the assertion.
     'echo ==revdep',
-    'gucman remove zlib; echo RMRC=$?',
+    'gucman remove zlib 2>&1; echo RMRC=$?',
     'echo ==done',
     'exit',
   ].join('\n');
@@ -299,7 +304,9 @@ async function main() {
 
   const absent = section(bout, 'absent');
   check('minimal: <cairo.h>/<gif_lib.h> fail CLEAN with nothing installed',
-    /cairo\.h/.test(absent) && /gif_lib\.h/.test(absent) && /arc=[^0]/.test(absent), absent);
+    /Could not find include file: cairo\.h/.test(absent) &&
+    /Could not find include file: gif_lib\.h/.test(absent) &&
+    /arc=[^0]/.test(absent) && /garc=[^0]/.test(absent), absent);
   const zi = section(bout, 'zinstall');
   check('minimal: gucman install zlib succeeds STANDALONE (no libpng needed)',
     zi.includes('ZRC=0') && zi.includes('ZLIB-INC-OK') && zi.includes('Z-SRC-OK'), zi);
@@ -325,7 +332,8 @@ async function main() {
     gi.includes('GRC=0') && /GIFDEC w=2 h=2 n=1 idx=0110/.test(gi) && gi.includes('grc=0'), gi);
   const rd = section(bout, 'revdep');
   check('minimal: `gucman remove zlib` REFUSES while libpng/cairo depend on it',
-    /RMRC=[^0]/.test(rd) && /depend/i.test(rd), rd);
+    /RMRC=[^0]/.test(rd) && /cannot remove 'zlib': installed package\(s\) depend on it/.test(rd) &&
+    /libpng/.test(rd) && /cairo/.test(rd), rd);
 
   fs.rmSync(tmpA, { recursive: true, force: true });
   fs.rmSync(tmpB, { recursive: true, force: true });
