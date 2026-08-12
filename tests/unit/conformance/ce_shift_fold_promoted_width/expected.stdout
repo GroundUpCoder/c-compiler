@@ -1,0 +1,23 @@
+sc8=256 uc1=256 sh3=32768 i30=1073741824 u31=2147483648
+l20=1048576 ul31=2147483648 ll40=1099511627776 ull63=9223372036854775808
+sr=-16 usr=1
+char 1<<3                AGREE
+short 1<<9               AGREE
+int 1<<30                AGREE
+uint 1<<31               AGREE
+long 1<<20               AGREE
+llong 1<<40              AGREE
+ullong 1<<63             AGREE
+int -256>>4              AGREE
+char 1<<32 (prom int)    AGREE
+char 1<<40 (prom int)    AGREE
+short 1<<33 (prom int)   AGREE
+int 1<<32                AGREE
+int 1<<33                AGREE
+uint 1<<32               AGREE
+long 1<<32               AGREE
+ulong 1<<40              AGREE
+int -8>>32               AGREE
+uint hi>>32              AGREE
+llong 1<<64              AGREE
+ullong 1<<65             AGREE

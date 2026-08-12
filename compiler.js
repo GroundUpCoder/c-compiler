@@ -17494,10 +17494,21 @@ function constEvalExpr(expr, policy) {
           case "BAND": result = lv & rv; break;
           case "BOR": result = lv | rv; break;
           case "BXOR": result = lv ^ rv; break;
-          // Out-of-range shift counts are UB and would blow up BigInt —
-          // decline to fold and let runtime semantics stand.
-          case "SHL": result = (rv < 0n || rv >= 64n) ? null : lv << rv; break;
-          case "SHR": result = (rv < 0n || rv >= 64n) ? null : lv >> rv; break;
+          // Out-of-range shift counts are UB — decline to fold and let
+          // runtime semantics stand, exactly like ConstEval.binary. The
+          // bound is the PROMOTED left operand's width (C11 6.5.7p3) —
+          // that is expr.type, which sema promotes — not a blanket 64
+          // (#645): a 32-bit shift with a count in 32..63 used to fold
+          // to a value the runtime shift (which masks the count, wasm
+          // semantics) disagrees with. Sub-int sizes clamp up to int in
+          // case an unpromoted type ever reaches here.
+          case "SHL":
+          case "SHR": {
+            const w = BigInt(Math.max(4, expr.type.removeQualifiers().size) * 8);
+            result = (rv < 0n || rv >= w) ? null
+                   : (expr.op === "SHL" ? lv << rv : lv >> rv);
+            break;
+          }
           case "EQ": result = lv === rv ? 1n : 0n; break;
           case "NE": result = lv !== rv ? 1n : 0n; break;
           case "LT": result = lv < rv ? 1n : 0n; break;
