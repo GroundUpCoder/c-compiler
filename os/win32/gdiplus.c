@@ -42,7 +42,7 @@
 /* No __require_source block here — pinned EMPTY by the drift gate (#498,
  * the gdi32.c/#464 rule): the decoder link metadata lives in the libraries'
  * own headers now (<png.h>, <zlib.h>, <jpeglib.h>, <nsgif.h>, <libnsbmp.h>,
- * each pinned to its vendor lib.json by os-common win32RequireDriftErrors),
+ * each pinned to its vendor lib.json by os-common requireDriftErrors),
  * so this TU's includes above ARE the in-OS link set — a require reappearing
  * here would be a second, driftable copy of that metadata. */
 

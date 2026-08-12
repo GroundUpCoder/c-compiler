@@ -854,13 +854,14 @@ async function buildPackage(name, poolDir, sharedPool, synth) {
   // menucore.h, and each srclib package ships a header whose hand-written
   // __require_source block must equal the lib.json truth — refuse to build
   // a package that would plant a drifted one. (tools/win32ports.js runs
-  // the same gate host-side; os-common win32RequireDriftErrors is the ONE
-  // checker.)
+  // the same gate host-side; os-common requireDriftErrors is the ONE
+  // checker — named for what it checks, not for its first customer: it
+  // adjudicates every srclibDriftPackages() member, win32 included, #623.)
   // The gated set is DERIVED from the one srclibs table (#661) — a package
   // added to the table but forgotten in a second list here would build with
   // its drift check silently skipped.
   if (COMMON.srclibDriftPackages()[name]) {
-    const drift = COMMON.win32RequireDriftErrors((rel) => {
+    const drift = COMMON.requireDriftErrors((rel) => {
       try { return fs.readFileSync(path.join(ROOT, rel), 'utf8'); } catch (e) { return null; }
     });
     if (drift.length) {

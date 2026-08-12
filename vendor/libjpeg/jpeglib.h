@@ -1184,7 +1184,7 @@ struct jpeg_color_quantizer { long dummy; };
  * tickets #464/#498) ----
  * Including this header IS the link metadata (the ft2build.h pattern): the
  * set below MUST equal vendor/libjpeg/lib.json sources — the §4.4 drift
- * gate (os-common win32RequireDriftErrors, run by tools/mkpkg.js +
+ * gate (os-common requireDriftErrors, run by tools/mkpkg.js +
  * tools/win32ports.js --check) enforces it. Host-side project builds no-op
  * these via path-identity dedup (lib.json srcRoots {jpeg: .}); the in-OS
  * cc resolves them at the srclib install tiers (/usr/local/src ->

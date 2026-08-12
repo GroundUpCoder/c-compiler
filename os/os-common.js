@@ -1411,9 +1411,11 @@ function checkReservedPackageFiles(pkg, label) {
 
 /* ---- the require-block drift gate (source-lib design §4.4, Lane B2) ----
  *
- * The hand-written __require_source blocks in the win32 veneer WILL drift
- * from the lib.json truth without a tripwire. Given a repo-relative text
- * reader (string|null), cross-checks:
+ * The hand-written __require_source blocks — the win32 veneer's and every
+ * srclib package's shipped header (#623: the checker is named for the whole
+ * set it adjudicates, not for its first customer) — WILL drift from the
+ * lib.json truth without a tripwire. Given a repo-relative text reader
+ * (string|null), cross-checks:
  *   - os/win32/include/windows.h's require set == lib.json ∪ menucore.json
  *     sources, as win32/<basename> (§4.1)
  *   - os/win32/menucore.h's require set == menucore.json sources (§4.1 —
@@ -1492,7 +1494,7 @@ function srclibDriftPackages() {
   return names;
 }
 
-function win32RequireDriftErrors(readText) {
+function requireDriftErrors(readText) {
   function mustRead(relPath) {
     var text = readText(relPath);
     if (text === null || text === undefined)
@@ -3202,7 +3204,7 @@ var OS_COMMON = {
   packageControl: packageControl,
   packageControlText: packageControlText,
   checkReservedPackageFiles: checkReservedPackageFiles,
-  win32RequireDriftErrors: win32RequireDriftErrors,
+  requireDriftErrors: requireDriftErrors,
   srclibDriftPackages: srclibDriftPackages,
   bakedVersion: bakedVersion,
   bakedOverlays: bakedOverlays,

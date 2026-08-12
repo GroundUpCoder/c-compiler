@@ -1420,7 +1420,7 @@ PIXMAN_END_DECLS
  * tickets #464/#498, this library #661) ----
  * Including this header IS the link metadata (the ft2build.h pattern): the
  * set below MUST equal vendor/pixman/lib.json sources — the §4.4 drift gate
- * (os-common win32RequireDriftErrors, run by tools/mkpkg.js +
+ * (os-common requireDriftErrors, run by tools/mkpkg.js +
  * tools/win32ports.js --check) enforces it. Host-side project builds reach
  * these TUs through lib.json (srcRoots resolves each name to the SAME path,
  * so the compiler's path-identity dedup no-ops the require); the in-OS cc

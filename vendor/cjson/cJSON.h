@@ -307,7 +307,7 @@ CJSON_PUBLIC(void) cJSON_free(void *object);
  * #464/#498, this library #662) ----
  * Including this header IS the link metadata (the ft2build.h pattern): the
  * set below MUST equal vendor/cjson/lib.json sources — the §4.4 drift gate
- * (os-common win32RequireDriftErrors, run by tools/mkpkg.js +
+ * (os-common requireDriftErrors, run by tools/mkpkg.js +
  * tools/win32ports.js --check) enforces it. Host-side project builds reach
  * the TU through lib.json (srcRoots {cjson: .} resolves the name to the
  * SAME path, so the compiler's path-identity dedup no-ops the require);

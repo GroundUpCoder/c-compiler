@@ -224,11 +224,11 @@ let failed = false;
 
 /* The §4.4 require-block drift gate (Lane B2): the hand-written
  * __require_source blocks in windows.h/menucore.h/gdi32.c must equal the
- * lib.json truth (os-common win32RequireDriftErrors is the ONE checker,
+ * lib.json truth (os-common requireDriftErrors is the ONE checker,
  * shared with tools/mkpkg.js). Runs first — a drifted block makes every
  * target result suspect. --check runs in the kernel suite, so this is the
  * CI tripwire. */
-const drift = COMMON.win32RequireDriftErrors((rel) => {
+const drift = COMMON.requireDriftErrors((rel) => {
   try { return fs.readFileSync(path.join(ROOT, rel), 'utf8'); } catch (e) { return null; }
 });
 if (drift.length) {

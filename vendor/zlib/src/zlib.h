@@ -2058,7 +2058,7 @@ ZEXTERN int            ZEXPORTVA gzvprintf(gzFile file,
  * #464/#498) ----
  * Including this header IS the link metadata (the ft2build.h pattern): the
  * set below MUST equal vendor/zlib/lib.json sources — the §4.4 drift gate
- * (os-common win32RequireDriftErrors, run by tools/mkpkg.js +
+ * (os-common requireDriftErrors, run by tools/mkpkg.js +
  * tools/win32ports.js --check) enforces it. Host-side project builds reach
  * these TUs through lib.json (srcRoots {z: src} resolves each name to the
  * SAME path, so the compiler's path-identity dedup no-ops the require);

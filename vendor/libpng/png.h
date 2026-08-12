@@ -3525,7 +3525,7 @@ PNG_EXPORT(244, int, png_set_option, (png_structrp png_ptr, int option,
  * tickets #464/#498) ----
  * Including this header IS the link metadata (the ft2build.h pattern): the
  * set below MUST equal vendor/libpng/lib.json sources — the §4.4 drift
- * gate (os-common win32RequireDriftErrors, run by tools/mkpkg.js +
+ * gate (os-common requireDriftErrors, run by tools/mkpkg.js +
  * tools/win32ports.js --check) enforces it. zlib is deliberately NOT
  * listed: the libpng TUs reach it through pngstruct.h's #include "zlib.h",
  * whose own require block pulls the z set — vendor knowledge stays with
