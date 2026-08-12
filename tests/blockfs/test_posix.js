@@ -823,6 +823,66 @@ test('O_TRUNC and ftruncate bump ctime as well as mtime (v4, injected clock)', f
   assert(p.length === 0, 'v4 image fsck should be clean, got:\n  ' + p.join('\n  '));
 });
 
+// POSIX write(): "If nbyte is zero and the file is a regular file ... the
+// write() function shall return zero and have no other results" (#644).
+// Seeking far past EOF and issuing a zero-length write used to run the full
+// write path — extent growth, hole zero-fill, dataSize + mtime/ctime updates
+// — so a 5-byte file became a 1 MB file with no bytes written. v4 + an
+// injected clock so an mtime/ctime bump is detectable.
+test('#644: zero-length write past EOF is a no-op on a regular file (v4)', function () {
+  var now = 1000000;                                   // ms since epoch
+  var store = new MemoryByteStore(8 * 1024 * 1024);
+  var fs = BLOCK_FS.createV4(store, { clock: function () { return now; } });
+
+  mkfile(fs, '/z.txt', 'hello');
+  var st0 = fs.stat('/z.txt');
+  assertEq(st0.size, 5, 'seeded size');
+
+  now = 5000000;
+  var fd = fs.open('/z.txt', O_RDWR, 0);
+  assertEq(fs.lseek(fd, 1048576, 0), 1048576, 'seek past EOF');
+  assertEq(fs.write(fd, new Uint8Array(0), 0), 0, 'write(...,0) returns 0');
+  // "no other results": size, stamps and the file offset all hold.
+  var st1 = fs.stat('/z.txt');
+  assertEq(st1.size, 5, 'size unchanged');
+  assertEq(st1.mtime, st0.mtime, 'mtime unchanged');
+  assertEq(st1.ctime, st0.ctime, 'ctime unchanged');
+  assertEq(fs.lseek(fd, 0, 1), 1048576, 'offset unchanged');
+
+  // O_APPEND flavor: same rule, same nothing.
+  fs.close(fd);
+  var afd = fs.open('/z.txt', O_RDWR | 0x400 /* O_APPEND */, 0);
+  assertEq(fs.write(afd, new Uint8Array(0), 0), 0, 'append write(...,0)');
+  fs.close(afd);
+  assertEq(fs.stat('/z.txt').size, 5, 'append flavor: size unchanged');
+
+  // A real write at the far offset still does the documented hole fill —
+  // the short-circuit must not have disturbed the nonzero path.
+  fd = fs.open('/z.txt', O_RDWR, 0);
+  fs.lseek(fd, 1048576, 0);
+  assertEq(fs.write(fd, encode('XYZ'), 3), 3, 'nonzero write past EOF');
+  var st2 = fs.stat('/z.txt');
+  assertEq(st2.size, 1048579, 'nonzero write extended');
+  fs.lseek(fd, 500000, 0);                             // a hole byte
+  var hb = new Uint8Array(1);
+  assertEq(fs.read(fd, hb, 1), 1);
+  assertEq(hb[0], 0, 'hole reads back zero');
+  fs.close(fd);
+
+  // In-process pipe: nbyte == 0 is unspecified by POSIX; gucOS takes the
+  // Linux "null write succeeds" answer — 0 even with the read end gone,
+  // while a nonzero write still gets EPIPE.
+  var pfds = fs.pipe();
+  fs.close(pfds[0]);                                   // reader gone
+  assertEq(fs.write(pfds[1], new Uint8Array(0), 0), 0, 'pipe write(...,0) is 0, not EPIPE');
+  assert(isErr(fs.write(pfds[1], encode('x'), 1)), 'nonzero pipe write still EPIPE');
+  assertEq(fs._lastError, 'EPIPE', 'errno');
+  fs.close(pfds[1]);
+
+  var p = fsck_v4(store);
+  assert(p.length === 0, 'v4 image fsck should be clean, got:\n  ' + p.join('\n  '));
+});
+
 // ---------------------------------------------------------------
 
 console.log('--- POSIX-semantics Tests ---');

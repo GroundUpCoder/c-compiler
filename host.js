@@ -997,6 +997,9 @@ function createFileSystem({ fs, ctx }) {
 
   result[ENV_KEY].write = function (fd, buf_ptr, count) {
     if (fd >= 0 && fd < fdTable.length && fdTable[fd] && fdTable[fd].type === 'pipe') {
+      /* nbyte == 0: 0 immediately, BEFORE the EPIPE check — the Linux
+         "null write succeeds" rule; see BlockFS.write's pipe branch. (#644) */
+      if (count === 0) return 0;
       const entry = fdTable[fd];
       const pipe = entry.pipe;
       if (pipe.closed.read) { setErrnoName('EPIPE'); return -1; }
@@ -3188,6 +3191,10 @@ var BLOCK_FS = (function () {
     if (entry.type === 'pipe') {
       // The read end can't write (todos/0376 — same class, fixed direction).
       if (entry.pipeEnd !== 'write') return this._setErr('EBADF');
+      // nbyte == 0 on a pipe is unspecified by POSIX; gucOS takes the Linux
+      // answer ("null write succeeds", fs/pipe.c): 0 immediately — no EPIPE
+      // on a gone reader, no empty chunk queued. (#644)
+      if (count === 0) return 0;
       if (entry.pipeId !== undefined && this._pipeBroker) {
         var w = this._pipeBroker.pipeWrite(entry.pipeId, buf.subarray(0, count));
         if (w < 0) return this._setErr('EPIPE');
@@ -3207,6 +3214,13 @@ var BLOCK_FS = (function () {
 
     var ino = this._inodes.read(entry.inoId);
     if (!ino) return this._setErr('EBADF');
+
+    // POSIX (#644): nbyte == 0 on a regular file "shall return zero without
+    // attempting any other action" (error detection above is permitted).
+    // Without this, a probing write(fd, buf, 0) after an lseek far past EOF
+    // ran the whole path below — extent growth, hole zero-fill, dataSize and
+    // mtime/ctime updates — so the file silently gained bytes nobody wrote.
+    if (count === 0) return 0;
 
     var writePos = entry.append ? ino.dataSize : entry.position;
     var newEnd = writePos + count;

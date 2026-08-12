@@ -197,6 +197,43 @@ const spawnReq = (p, extra) => Object.assign(
   workers.get(bpid).msg({ type: 'exited', code: 0 });
   await rpc(1, K.OP.WAIT, { pid: bpid, options: 0 });
 
+  // ---- #644: zero-length writes — the Linux "null write succeeds" rule ----
+  // POSIX leaves nbyte==0 unspecified on pipes; gucOS answers like Linux
+  // (fs/pipe.c): n=0 IMMEDIATELY. On a FULL pipe the old path deferred the
+  // writer behind free===0; with every read end gone it EPIPE'd + SIGPIPE'd.
+  r = await rpc(1, K.OP.PIPE_CREATE, {});
+  const rfdZ = r.rfd, wfdZ = r.wfd;
+  // Fill to cap in two writes: one payload can't exceed KP_FS_CHUNK (60000),
+  // and the second write partial-lands the remaining 5536 (cap 65536).
+  r = await wRpc(1, wfdZ, Buffer.alloc(60000, 67));
+  const zfill = r.n;
+  r = await wRpc(1, wfdZ, Buffer.alloc(6000, 67));
+  check('pipe filled to cap', zfill === 60000 && r.n === 5536, JSON.stringify(r));
+  const dz = wDefer(1, wfdZ, Buffer.alloc(0));
+  await tick();
+  check('zero write on a FULL pipe does not defer', !dz.pending());
+  r = await dz.finish();
+  check('zero write on a full pipe returns 0', r.n === 0, JSON.stringify(r));
+  r = await rpc(1, K.OP.FS_READ, { fd: rfdZ, count: 60000 });
+  const zdrain = r.raw ? r.raw.length : -1;
+  r = await rpc(1, K.OP.FS_READ, { fd: rfdZ, count: 60000 });
+  check('fill intact after the null write', zdrain === 60000 &&
+    r.raw && r.raw.length === 5536 && r.raw[0] === 67, zdrain + '+' + (r.raw && r.raw.length));
+  // Reader-less: a child holding the write end (the EPIPE-section shape).
+  r = await rpc(1, K.OP.SPAWN, spawnReq('/bin/a', { actions: [{ op: 2, fd: rfdZ }] }));
+  const zpid = r.pid;
+  await rpc(1, K.OP.FS_CLOSE, { fd: rfdZ });           // last read end gone
+  r = await wRpc(zpid, wfdZ, Buffer.alloc(0));
+  check('zero write to a reader-less pipe returns 0, not EPIPE', r.n === 0, JSON.stringify(r));
+  check('no SIGPIPE for the null write: writer still running, no bit posted',
+    kernel.process(zpid).state === 'running' &&
+    (Atomics.load(page(zpid).i32, K.KP_SIGPEND) & (1 << 12)) === 0);
+  r = await wRpc(zpid, wfdZ, Buffer.from('doomed'));   // control: nonzero still dies
+  check('nonzero write still EPIPE + SIGPIPE at DFL', r.errno === 'EPIPE' &&
+    kernel.process(zpid).state === 'zombie', JSON.stringify(r));
+  await rpc(1, K.OP.WAIT, { pid: zpid, options: 0 });
+  await rpc(1, K.OP.FS_CLOSE, { fd: wfdZ });
+
   // ---- fd_actions wire a pipe across spawn (the shell-pipeline shape) ----
   r = await rpc(1, K.OP.PIPE_CREATE, {});
   const rfd5 = r.rfd, wfd5 = r.wfd;

@@ -224,6 +224,34 @@ int main(void) {
            (int)tb.st_size, tfd >= 0, terr, (int)ta.st_size, tr, tw, twe,
            (int)tp.st_size);
 
+    /* 12 (#644): a zero-length write past EOF is a NO-OP on a regular file
+       (POSIX: "shall return zero and have no other results") — no hole
+       fill, no size change, offset untouched. This is the brokered twin of
+       the BlockFS case in tests/blockfs/test_posix.js: the two backends
+       must not disagree. On a pipe POSIX leaves nbyte==0 unspecified;
+       gucOS takes the Linux "null write succeeds" answer — 0 with the read
+       end gone, no EPIPE, and no SIGPIPE (disposition is default here, so
+       surviving the call IS the assertion). */
+    fd = open("/zw.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    write(fd, "hello", 5);
+    close(fd);
+    struct stat zb; stat("/zw.txt", &zb);
+    fd = open("/zw.txt", O_WRONLY);
+    long zoff = (long)lseek(fd, 1048576, SEEK_SET);
+    int zw = write(fd, "", 0);
+    struct stat za; fstat(fd, &za);
+    long zpos = (long)lseek(fd, 0, SEEK_CUR);
+    close(fd);
+    int zp2[2];
+    if (pipe(zp2) != 0) { printf("pipe failed\\n"); return 98; }
+    close(zp2[0]);                     /* reader gone */
+    errno = 0;
+    int pz = write(zp2[1], "", 0);
+    int pze = errno;
+    close(zp2[1]);
+    printf("zw pre=%d off=%ld ret=%d fsize=%d pos=%ld pipe0=%d perr=%d\\n",
+           (int)zb.st_size, zoff, zw, (int)za.st_size, zpos, pz, pze);
+
     printf("done\\n");
     return 42;
 }
@@ -360,6 +388,10 @@ const watchdog = setTimeout(() => {
     // answer), the fd is still not write-capable (wr=-1 we=1), and the
     // refused write leaves it empty.
     'otrunc pre=11 ok=1 err=0 fsize=0 rd=0 wr=-1 we=1 post=0',
+    // #644: zero-length write past EOF returned 0 and changed NOTHING —
+    // size stays 5, offset stays where lseek put it; the pipe null write
+    // is 0 with no EPIPE and the process survived (no SIGPIPE).
+    'zw pre=5 off=1048576 ret=0 fsize=5 pos=1048576 pipe0=0 perr=0',
     'done',
   ];
   for (let i = 0; i < expect.length; i++) {

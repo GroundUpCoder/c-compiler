@@ -7377,6 +7377,12 @@ Kernel.prototype._streamRead = function (pcb, dir, count) {
 };
 
 Kernel.prototype._streamWrite = function (pcb, dir, data) {
+  // A zero-length write on a pipe/socket is unspecified by POSIX; gucOS
+  // takes the Linux answer for both ("null write succeeds", fs/pipe.c;
+  // AF_UNIX's send loop never iterates for len 0): respond 0 BEFORE the
+  // EPIPE/SIGPIPE check and before any space check — a full stream must
+  // never park a zero-length writer. (#644)
+  if (data.length === 0) { this._respond(pcb, { n: 0 }); return; }
   if (!dir.rOpen || !dir.wOpen) {
     // POSIX: write to a pipe/socket nobody reads = EPIPE + SIGPIPE (default
     // action terminates — the `yes | head` pipeline death). !wOpen is the
@@ -8501,6 +8507,10 @@ RemoteFS.prototype.write = function (fd, buf, count) {
   // landings above it — the brokered _streamWrite rules, verbatim.
   var pw = this._pipes.get(fd);
   if (pw && pw.end === 'write') {
+    // Zero-length write: 0 immediately — the _streamWrite rule (Linux
+    // "null write succeeds"): never FS_WAIT on a full ring, never
+    // EPIPE/SIGPIPE a gone reader. (#644)
+    if (count === 0) return 0;
     while (Atomics.load(pw.i32, PR_MODE) === PR_FAST) {
       if (Atomics.load(pw.i32, PR_FLAGS) & PRF_RGONE) {
         // Reader gone: EPIPE, and the kernel deals us our SIGPIPE (the
