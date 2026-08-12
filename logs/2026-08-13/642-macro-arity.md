@@ -31,6 +31,21 @@ function-like macro invocation of 'M' (got N, expected [at least] M)") via the
 covers every invocation route: `applyTrailingCall` and the `#if`-expression
 paths all delegate to `expand()`.
 
+## Scope widening: too-many is diagnosed too — a decision, not an accident
+
+The ticket is written about too-FEW arguments. The landed check also diagnoses
+too-MANY, and this was approved by @master (2026-08-13) rather than trimmed to
+the ticket's letter. Reasoning: it is the same root cause (the binder took
+`min(params, args)` and said nothing in either direction), C11 6.10.3p4
+requires the counts to *agree* — both directions are constraint violations —
+and clang errors on both. Shipping the half-fix would knowingly leave a second
+silent miscompile (`M(1,2,3,4)` silently dropped the extra and printed 6 at
+base) in the exact code being touched — "build to the goal, not to the demo".
+The blast radius is real: existing code passing extra macro args now fails to
+compile; the full 25-suite diff tier is the instrument that proves the estate
+carries none. Variadic macros are unaffected in this direction (extras land in
+`__VA_ARGS__` by construction).
+
 ## Empty vs absent — the subtle part
 
 An **empty argument is still an argument** (C11 6.10.3p4: arguments "may
