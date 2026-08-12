@@ -19,11 +19,11 @@
 // does not. Pre-#391 the install died "Couldn't connect to server".
 //
 // Usage: node os-gucman.mjs
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import http from 'node:http';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { openOsSession, ROOT } from './lib/os-harness.mjs';
+import { openOsSession, ROOT, buildPackageRepo } from './lib/os-harness.mjs';
 
 const PORT = 3252;
 const require = createRequire(import.meta.url);
@@ -34,12 +34,8 @@ const SEED_DEST = Object.keys(require(
 
 // serve.js bakes/validates the FAT system image itself but does NOT run
 // mkpkg — build dist/packages here so the repo index matches the served
-// image's version (the minBase gate).
-{
-  const r = spawnSync(process.execPath,
-    [path.join(ROOT, 'tools', 'mkpkg.js'), '--no-baseline', '--quiet'], { stdio: 'inherit' });
-  if (r.status !== 0) { console.error('mkpkg failed — cannot serve a package repo'); process.exit(1); }
-}
+// image's version (the minBase gate). Merged over the sibling defs (#665).
+buildPackageRepo();
 
 // ---- #391 bridge-leg helpers (the test_netbridge_e2e.js shapes) ----
 function freePort() {

@@ -22,7 +22,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { openOsSession, ROOT } from './lib/os-harness.mjs';
+import { openOsSession, ROOT, buildPackageRepo } from './lib/os-harness.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const EVIDENCE_DIR = path.join(__dirname, 'media', 'git-cli');
@@ -33,15 +33,10 @@ const PORT = 3450;   // unique per member (#546)
 // Build the package repo so the served /packages index matches the running
 // image — same discipline os-minimal.mjs applies. The git CLI ships as a
 // gucman package, not baked into the fat image (the minimal install test
-// explicitly proves the baked twin is absent).
-{
-  const r = spawnSync(process.execPath,
-    [path.join(ROOT, 'tools', 'mkpkg.js'), '--no-baseline', '--quiet'], { stdio: 'inherit' });
-  if (r.status !== 0) {
-    console.error('mkpkg failed — cannot serve a package repo');
-    process.exit(2);
-  }
-}
+// explicitly proves the baked twin is absent). buildPackageRepo (#665)
+// merges the sibling definition sources and verifies coverage — a bare
+// no-defs mkpkg here poisoned the shared index in every cold tree.
+buildPackageRepo();
 
 // Plant a tiny real git repo under build/git-cli-fixture so the host-built
 // repo + tarball are inside an already-gitignored path (build/, .gitignore:1)

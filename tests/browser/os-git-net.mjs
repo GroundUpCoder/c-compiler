@@ -27,7 +27,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
-import { openOsSession, ROOT } from './lib/os-harness.mjs';
+import { openOsSession, ROOT, buildPackageRepo } from './lib/os-harness.mjs';
 import { spawnGitServer } from '../kernel/lib/gitserve.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -36,15 +36,8 @@ fs.mkdirSync(EVIDENCE_DIR, { recursive: true });
 
 const PORT = 3451;   // unique per member (#546)
 
-// ---- package repo (git ships as a gucman package) ----------------------
-{
-  const r = spawnSync(process.execPath,
-    [path.join(ROOT, 'tools', 'mkpkg.js'), '--no-baseline', '--quiet'], { stdio: 'inherit' });
-  if (r.status !== 0) {
-    console.error('mkpkg failed — cannot serve a package repo');
-    process.exit(2);
-  }
-}
+// ---- package repo (git ships as a gucman package; #665 merged rebuild) --
+buildPackageRepo();
 
 // ---- host-side fixture: a work repo + a bare server repo ---------------
 const fxDir = path.join(ROOT, 'build', 'git-net-fixture');

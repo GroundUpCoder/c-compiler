@@ -17,11 +17,10 @@
 // busybox wc applet IN the same terminal, clean remove.
 //
 // Usage: node os-rust.mjs
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { openOsSession, ROOT } from './lib/os-harness.mjs';
+import { openOsSession, ROOT, buildPackageRepo } from './lib/os-harness.mjs';
 
 const PORT = 3280;
 
@@ -47,13 +46,11 @@ const SIB = path.join(ROOT, 'build', 'test-rust-sibling');
 // serve.js serves /packages from dist/packages but never runs mkpkg — build
 // the wc-rust card there (base entries already present are carried forward;
 // the sweep is serial, so the shared dist/packages repo is the accepted
-// sequential thrash of todos/0388, exactly as in os-gucman.mjs).
-{
-  const r = spawnSync(process.execPath,
-    [path.join(ROOT, 'tools', 'mkpkg.js'), '--no-baseline', 'wc-rust', '--rust', `--rust-root=${SIB}`, '--quiet'],
-    { stdio: 'inherit' });
-  if (r.status !== 0) { console.error('mkpkg --rust failed — cannot serve the -rust card'); process.exit(1); }
-}
+// sequential thrash of todos/0388, exactly as in os-gucman.mjs). A NAMED
+// build like this one gets the sibling package names appended by the helper
+// (#665): in a cold tree there is no prior index to carry them from, and
+// serve.js's #614 guard refuses an index that lacks them.
+buildPackageRepo({ args: ['wc-rust', '--rust', `--rust-root=${SIB}`] });
 
 // A stale image makes serve.js re-bake BEFORE listening — give it room.
 const s = await openOsSession({ port: PORT, serverTries: 600, serverInterval: 500 });

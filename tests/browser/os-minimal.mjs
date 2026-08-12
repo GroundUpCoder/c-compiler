@@ -29,11 +29,10 @@
 // the base version from os/image.json.
 //
 // Usage: node os-minimal.mjs
-import { spawnSync } from 'node:child_process';
 import fsMod from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { openOsSession, ROOT } from './lib/os-harness.mjs';
+import { openOsSession, ROOT, buildPackageRepo } from './lib/os-harness.mjs';
 
 const PORT = 3255;
 const require = createRequire(import.meta.url);
@@ -62,12 +61,9 @@ const fatBefore = fsMod.existsSync(FAT_IMG)
 
 // serve.js bakes/validates the system image itself but does NOT run mkpkg —
 // build dist/packages here so the served repo's index matches the served
-// image's version (the minBase gate), exactly like os-gucman.mjs.
-{
-  const r = spawnSync(process.execPath,
-    [path.join(ROOT, 'tools', 'mkpkg.js'), '--no-baseline', '--quiet'], { stdio: 'inherit' });
-  if (r.status !== 0) { console.error('mkpkg failed — cannot serve a package repo'); process.exit(1); }
-}
+// image's version (the minBase gate), exactly like os-gucman.mjs. Merged
+// over the sibling definition sources (#665).
+buildPackageRepo();
 const INDEX = JSON.parse(fsMod.readFileSync(
   path.join(ROOT, 'dist', 'packages', 'index.json'), 'utf8'));
 const NAMES = Object.keys(INDEX.packages).sort();

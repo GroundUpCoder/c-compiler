@@ -14,8 +14,9 @@
 // separate `playwright` install. Their unit coverage is
 // tests/browser/os-harness-unit.mjs — a real sweep member since #431 (it sat
 // in this directory as `test-harness.js`, enrolled in no suite, and rotted).
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import fs from 'node:fs';
 // The baked Start-menu tree model (menuGroups/menuLeaves) is re-exported
@@ -157,6 +158,84 @@ export async function waitForServer(url, { tries = 50, interval = 100, fetchFn =
   throw new Error(`waitForServer: ${url} never answered after ${tries}×${interval}ms ` +
     `— a stale serve.js may be squatting the port (kill stray serve.js/'node -e' procs), ` +
     `or an image rebake outran the wait (raise tries, or prebake with node tools/mkimage.js).`);
+}
+
+// ---- package repo rebuild (#665) ----------------------------------------
+// The members that rebuild dist/packages (os-git-cli, os-git-net, os-gucman,
+// os-minimal, os-rust) must merge the SIBLING definition sources, or a COLD
+// tree writes an index missing the sibling-defined packages (the #615 fonts)
+// and serve.js's #614 guard then refuses to start for EVERY later member —
+// 38 waitForServer deaths that read as a product regression. Resolution is
+// the ONE existing discovery (os-common resolveSiblingRepo: GUCOS_PACKAGES
+// override, linked-worktree main-clone sibling, naive sibling); an absent
+// sibling contributes nothing and the serve guard stands down to match.
+
+// -> { root, via, names } | null (no sibling checkout found — a normal state)
+export function resolveSiblingDefs(root = ROOT) {
+  const requireCjs = createRequire(import.meta.url);
+  const COMMON = requireCjs(path.join(root, 'os', 'os-common.js'));
+  const sibling = COMMON.resolveSiblingRepo(fs, path, root, 'gucos-packages',
+    { env: process.env.GUCOS_PACKAGES });
+  if (!sibling) return null;
+  // Only the env override can name a nonexistent path (discovery candidates
+  // are existence-checked in the resolver) — and an explicit override that is
+  // wrong must fail LOUD, never quietly demote to 'absent' (the cmdalt
+  // no-silent-fallback rule; same behavior as serve.js/sibling-tests.js).
+  if (!fs.existsSync(sibling.root)) {
+    console.error(`GUCOS_PACKAGES=${process.env.GUCOS_PACKAGES} does not exist — ` +
+      `point it at the gucos-packages checkout, or unset it to use discovery`);
+    process.exit(2);
+  }
+  return { ...sibling, names: COMMON.listPackages(fs, path, sibling.root, {}) };
+}
+
+// The coverage check serve.js's #614 guard applies, as a reusable probe:
+// -> { idxPath, missing } — missing is [] when covered, when there is no
+// sibling (or it defines nothing), or when no index exists yet (a bare cold
+// tree serves without one; only a PRESENT-but-incomplete index refuses).
+export function siblingIndexGap(root = ROOT, sibling = resolveSiblingDefs(root)) {
+  const idxPath = path.join(root, 'dist', 'packages', 'index.json');
+  if (!sibling || !sibling.names.length || !fs.existsSync(idxPath)) {
+    return { idxPath, missing: [] };
+  }
+  let idxNames = [];
+  try { idxNames = Object.keys(JSON.parse(fs.readFileSync(idxPath, 'utf-8')).packages || {}); }
+  catch (e) { /* unreadable index: every sibling name reports missing */ }
+  return { idxPath, missing: sibling.names.filter((n) => !idxNames.includes(n)) };
+}
+
+// Build dist/packages the way every rebuilding member must: mkpkg over the
+// MERGED definition sources, then verify the written index actually covers
+// the sibling set — so a regression of this seam fails HERE, in the one test
+// that owns the rebuild, with the cause named, instead of poisoning shared
+// state for every member that follows (#665 acceptance). `args` are extra
+// mkpkg arguments (os-rust's producer flags + package name); a NAMED build
+// gets the sibling names appended, because a cold tree has no prior index to
+// carry them from (#580's upsert only preserves entries that already exist).
+export function buildPackageRepo({ root = ROOT, args = [] } = {}) {
+  const sibling = resolveSiblingDefs(root);
+  const named = args.some((a) => !a.startsWith('--'));
+  const r = spawnSync(process.execPath, [
+    path.join(root, 'tools', 'mkpkg.js'), '--no-baseline', '--quiet',
+    ...args,
+    ...(named && sibling ? sibling.names : []),
+    ...(sibling ? [`--defs=${sibling.root}`] : []),
+  ], { stdio: 'inherit' });
+  if (r.status !== 0) {
+    console.error(`buildPackageRepo: mkpkg exited ${r.status} — cannot serve a package repo`);
+    process.exit(2);
+  }
+  const { idxPath, missing } = siblingIndexGap(root, sibling);
+  if (missing.length) {
+    console.error(`buildPackageRepo: rebuilt ${path.relative(root, idxPath)} is still ` +
+      `missing sibling package(s): ${missing.join(', ')}`);
+    console.error(`  sibling: ${sibling.root} (via ${sibling.via}) — serve.js's #614 guard ` +
+      `would refuse this index for every later member`);
+    console.error(`  removing the bad index so THIS test is the one loud failure (#665)`);
+    try { fs.rmSync(idxPath); } catch (e) {}
+    process.exit(2);
+  }
+  return sibling;
 }
 
 // The one WebGPU-flagged Chromium the whole sweep launches. Playwright is

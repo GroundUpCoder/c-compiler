@@ -26,6 +26,7 @@ import { joinHeavyLock } from '../lib/heavy-lock.js';
 import { preflight } from '../lib/harness-leaks.js';
 import { assertSameTree } from '../lib/tree-guard.js';
 import { checkBrowserPreflight } from './lib/playwright-pin.cjs';
+import { siblingIndexGap, buildPackageRepo } from './lib/os-harness.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -83,6 +84,26 @@ if (!opts.list) preflight({ name: 'browser os sweep' });
 // (serve.js runs the same gate per test file; this keeps the one bake out
 // of the first test's timing and log.)
 if (!opts.list) ensurePrebakedImage();
+
+// #665 pre-step: a dist/packages/index.json missing sibling-defined packages
+// (a no-defs rebuild left by a pre-#665 run, or a sibling that gained a
+// package since) makes serve.js's #614 guard refuse for EVERY member that
+// serves the OS tree — whichever members sort before the first rebuilder
+// would cascade-fail on serve start. Repair it once, visibly, with the same
+// merged rebuild the members use (#580's upsert preserves carried entries,
+// so nothing already published is lost). No index at all is a normal cold
+// state (the guard only refuses a PRESENT-but-incomplete index) and an
+// absent sibling means there is nothing to cover — both leave gap.missing
+// empty and skip this. buildPackageRepo exits 2 loudly if even the merged
+// rebuild cannot cover the sibling set.
+if (!opts.list) {
+  const gap = siblingIndexGap();
+  if (gap.missing.length) {
+    process.stderr.write(`[os-sweep] dist/packages/index.json is missing sibling package(s): ` +
+      `${gap.missing.join(', ')} — repairing with a merged rebuild (#665)\n`);
+    buildPackageRepo();
+  }
+}
 
 runSuite(files, {
   name: 'browser os sweep',
