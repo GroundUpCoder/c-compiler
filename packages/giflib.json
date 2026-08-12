@@ -1,0 +1,14 @@
+{
+  "name": "giflib",
+  "version": "5.2.2",
+  "summary": "giflib source library — decode GIF with the in-OS cc",
+  "files": {
+    "include/gif_lib.h": { "bin": "vendor/giflib/gif_lib.h" },
+    "src/gif":           { "tree": "vendor/giflib", "exclude": ["lib.json", "COPYING"] },
+    "COPYING":           { "bin": "vendor/giflib/COPYING" }
+  },
+  "srclib": {
+    "include": [ "include" ],
+    "src": { "gif": "src/gif" }
+  }
+}

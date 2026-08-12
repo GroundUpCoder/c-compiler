@@ -1,0 +1,15 @@
+{
+  "name": "zlib",
+  "version": "1.3.2",
+  "summary": "zlib source library — deflate/inflate, gz files and checksums with the in-OS cc",
+  "files": {
+    "include/zlib.h":  { "bin": "vendor/zlib/src/zlib.h" },
+    "include/zconf.h": { "bin": "vendor/zlib/src/zconf.h" },
+    "src/z":           { "tree": "vendor/zlib/src" },
+    "LICENSE":         { "bin": "vendor/zlib/LICENSE" }
+  },
+  "srclib": {
+    "include": [ "include" ],
+    "src": { "z": "src/z" }
+  }
+}

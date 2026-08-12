@@ -1,0 +1,22 @@
+{
+  "name": "cairo",
+  "version": "1.18.4",
+  "summary": "cairo source library — 2D vector graphics (image surface + FreeType fonts + PNG) with the in-OS cc",
+  "deps": [ "pixman", "libpng", "zlib", "freetype" ],
+  "files": {
+    "include/cairo.h":            { "bin": "vendor/cairo/src/cairo.h" },
+    "include/cairo-version.h":    { "bin": "vendor/cairo/src/cairo-version.h" },
+    "include/cairo-features.h":   { "bin": "vendor/cairo/src/cairo-features.h" },
+    "include/cairo-deprecated.h": { "bin": "vendor/cairo/src/cairo-deprecated.h" },
+    "include/cairo-ft.h":         { "bin": "vendor/cairo/src/cairo-ft.h" },
+    "src/cairo":                  { "tree": "vendor/cairo/src" },
+    "src/cairo/config.h":         { "bin": "vendor/cairo/config.h" },
+    "COPYING":                    { "bin": "vendor/cairo/COPYING" },
+    "COPYING-LGPL-2.1":           { "bin": "vendor/cairo/COPYING-LGPL-2.1" },
+    "COPYING-MPL-1.1":            { "bin": "vendor/cairo/COPYING-MPL-1.1" }
+  },
+  "srclib": {
+    "include": [ "include" ],
+    "src": { "cairo": "src/cairo" }
+  }
+}

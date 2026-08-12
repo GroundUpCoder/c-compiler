@@ -856,8 +856,10 @@ async function buildPackage(name, poolDir, sharedPool, synth) {
   // a package that would plant a drifted one. (tools/win32ports.js runs
   // the same gate host-side; os-common win32RequireDriftErrors is the ONE
   // checker.)
-  if (name === 'win32' || name === 'freetype' || name === 'libpng' ||
-      name === 'libjpeg' || name === 'libnsbmp' || name === 'libnsgif') {
+  // The gated set is DERIVED from the one srclibs table (#661) — a package
+  // added to the table but forgotten in a second list here would build with
+  // its drift check silently skipped.
+  if (COMMON.srclibDriftPackages()[name]) {
     const drift = COMMON.win32RequireDriftErrors((rel) => {
       try { return fs.readFileSync(path.join(ROOT, rel), 'utf8'); } catch (e) { return null; }
     });

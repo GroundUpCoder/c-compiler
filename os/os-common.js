@@ -1447,6 +1447,49 @@ function checkReservedPackageFiles(pkg, label) {
  * Callers fail LOUD: tools/mkpkg.js refuses to build the win32 package,
  * tools/win32ports.js fails its run and its --check (the kernel-suite
  * tripwire). */
+/* The srclib libraries carry their link metadata in their OWN shipped headers
+ * (#464 freetype, #498 the decoder set, #661 the image/compositing stack).
+ * ONE table, at module scope so the set of packages the gate applies to is
+ * DERIVED (srclibDriftPackages) rather than restated as a second hand-kept
+ * list in tools/mkpkg.js — a package added here and forgotten there would be
+ * built with its drift check silently skipped.
+ *
+ * `pkg` is the OWNER: the one package that ships this tree and plants its
+ * namespace. Since #661 zlib owns `z` (libpng shipped it until then, so every
+ * zlib consumer had to install a PNG decoder, and the two packages could not
+ * be installed together — gucman refuses to overwrite a planted link). */
+var SRCLIB_TABLE = [
+  { header: 'vendor/freetype/demo/ft2build.h', lib: 'vendor/freetype/lib.json',
+    ns: 'freetype', pkg: 'packages/freetype.json', tree: 'vendor/freetype/srclib' },
+  { header: 'vendor/zlib/src/zlib.h', lib: 'vendor/zlib/lib.json',
+    ns: 'z', pkg: 'packages/zlib.json', tree: 'vendor/zlib/src' },
+  { header: 'vendor/libpng/png.h', lib: 'vendor/libpng/lib.json',
+    ns: 'png', pkg: 'packages/libpng.json', tree: 'vendor/libpng' },
+  { header: 'vendor/libjpeg/jpeglib.h', lib: 'vendor/libjpeg/lib.json',
+    ns: 'jpeg', pkg: 'packages/libjpeg.json', tree: 'vendor/libjpeg' },
+  { header: 'vendor/netsurf/libnsgif/include/nsgif.h', lib: 'vendor/netsurf/libnsgif/lib.json',
+    ns: 'nsgif', pkg: 'packages/libnsgif.json', tree: 'vendor/netsurf/libnsgif/src' },
+  { header: 'vendor/netsurf/libnsbmp/include/libnsbmp.h', lib: 'vendor/netsurf/libnsbmp/lib.json',
+    ns: 'nsbmp', pkg: 'packages/libnsbmp.json', tree: 'vendor/netsurf/libnsbmp/src' },
+  { header: 'vendor/pixman/pixman/pixman.h', lib: 'vendor/pixman/lib.json',
+    ns: 'pixman', pkg: 'packages/pixman.json', tree: 'vendor/pixman/pixman' },
+  { header: 'vendor/cairo/src/cairo.h', lib: 'vendor/cairo/lib.json',
+    ns: 'cairo', pkg: 'packages/cairo.json', tree: 'vendor/cairo/src' },
+  { header: 'vendor/giflib/gif_lib.h', lib: 'vendor/giflib/lib.json',
+    ns: 'gif', pkg: 'packages/giflib.json', tree: 'vendor/giflib' },
+];
+
+/* Package names the §4.4 drift gate adjudicates: every srclib owner plus
+ * win32 (whose windows.h/menucore.h/gdiplusflat.h blocks the gate also
+ * checks). tools/mkpkg.js runs the gate for exactly these. */
+function srclibDriftPackages() {
+  var names = { win32: true };
+  SRCLIB_TABLE.forEach(function (sl) {
+    names[sl.pkg.replace(/^packages\//, '').replace(/\.json$/, '')] = true;
+  });
+  return names;
+}
+
 function win32RequireDriftErrors(readText) {
   function mustRead(relPath) {
     var text = readText(relPath);
@@ -1500,27 +1543,12 @@ function win32RequireDriftErrors(readText) {
    * `veneer` — no windows.h consumer should pull an image decoder — but
    * packages/win32.json must still SHIP it, so it joins the payload half. */
   var gdiplus = sourcesOf('os/win32/gdiplus.json', 'win32');
-  /* The srclib libraries carry their link metadata in their OWN shipped
-   * headers (#464 for freetype, #498 for the decoder set — source-lib
-   * §4.2): each header's require set must equal its lib.json sources, and
-   * each package must really ship every TU the block names — the payload
-   * is ONE `tree` entry (no per-file keys for unshipped() to see), so the
-   * check is file-level: the namespace maps to the expected vendor tree
-   * and every lib.json source exists in it. */
-  var srclibs = [
-    { header: 'vendor/freetype/demo/ft2build.h', lib: 'vendor/freetype/lib.json',
-      ns: 'freetype', pkg: 'packages/freetype.json', tree: 'vendor/freetype/srclib' },
-    { header: 'vendor/zlib/src/zlib.h', lib: 'vendor/zlib/lib.json',
-      ns: 'z', pkg: 'packages/libpng.json', tree: 'vendor/zlib/src' },
-    { header: 'vendor/libpng/png.h', lib: 'vendor/libpng/lib.json',
-      ns: 'png', pkg: 'packages/libpng.json', tree: 'vendor/libpng' },
-    { header: 'vendor/libjpeg/jpeglib.h', lib: 'vendor/libjpeg/lib.json',
-      ns: 'jpeg', pkg: 'packages/libjpeg.json', tree: 'vendor/libjpeg' },
-    { header: 'vendor/netsurf/libnsgif/include/nsgif.h', lib: 'vendor/netsurf/libnsgif/lib.json',
-      ns: 'nsgif', pkg: 'packages/libnsgif.json', tree: 'vendor/netsurf/libnsgif/src' },
-    { header: 'vendor/netsurf/libnsbmp/include/libnsbmp.h', lib: 'vendor/netsurf/libnsbmp/lib.json',
-      ns: 'nsbmp', pkg: 'packages/libnsbmp.json', tree: 'vendor/netsurf/libnsbmp/src' },
-  ];
+  /* Each srclib header's require set must equal its lib.json sources, and
+   * the OWNING package must really ship every TU the block names — the
+   * payload is ONE `tree` entry (no per-file keys for unshipped() to see),
+   * so the check is file-level: the namespace maps to the expected vendor
+   * tree and every lib.json source exists in it. Table: SRCLIB_TABLE. */
+  var srclibs = SRCLIB_TABLE;
   function srclibErrors(sl) {
     var errs = diff(sl.header, requiresOf(sl.header), sourcesOf(sl.lib, sl.ns));
     var pkg = JSON.parse(mustRead(sl.pkg));
@@ -3173,6 +3201,7 @@ var OS_COMMON = {
   packageControlText: packageControlText,
   checkReservedPackageFiles: checkReservedPackageFiles,
   win32RequireDriftErrors: win32RequireDriftErrors,
+  srclibDriftPackages: srclibDriftPackages,
   bakedVersion: bakedVersion,
   bakedOverlays: bakedOverlays,
   bakedPackages: bakedPackages,

@@ -1,0 +1,15 @@
+{
+  "name": "pixman",
+  "version": "0.42.2",
+  "summary": "pixman source library — pixel manipulation and software compositing with the in-OS cc",
+  "files": {
+    "include/pixman.h":         { "bin": "vendor/pixman/pixman/pixman.h" },
+    "include/pixman-version.h": { "bin": "vendor/pixman/pixman/pixman-version.h" },
+    "src/pixman":               { "tree": "vendor/pixman/pixman" },
+    "COPYING":                  { "bin": "vendor/pixman/COPYING" }
+  },
+  "srclib": {
+    "include": [ "include" ],
+    "src": { "pixman": "src/pixman" }
+  }
+}
