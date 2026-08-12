@@ -1,0 +1,33 @@
+int    + uint   -> uint
+uint   + int    -> uint
+int    + long   -> long
+long   + int    -> long
+int    + ulong  -> ulong
+ulong  + int    -> ulong
+int    + llong  -> llong
+llong  + int    -> llong
+int    + ullong -> ullong
+ullong + int    -> ullong
+uint   + long   -> ulong
+long   + uint   -> ulong
+uint   + ulong  -> ulong
+ulong  + uint   -> ulong
+uint   + llong  -> llong
+llong  + uint   -> llong
+uint   + ullong -> ullong
+ullong + uint   -> ullong
+long   + ulong  -> ulong
+ulong  + long   -> ulong
+long   + llong  -> llong
+llong  + long   -> llong
+long   + ullong -> ullong
+ullong + long   -> ullong
+ulong  + llong  -> llong
+llong  + ulong  -> llong
+ulong  + ullong -> ullong
+ullong + ulong  -> ullong
+llong  + ullong -> ullong
+ullong + llong  -> ullong
+cmp 0
+ternary ulong
+dispatch 1

@@ -3531,7 +3531,15 @@ function usualArithmeticConversions(a, b) {
   a = promote(a);
   b = promote(b);
   if (a === b) return a;
-  // C99 §6.3.1.8: rank by size, then handle signed/unsigned conflicts.
+  // C99 §6.3.1.8 decides by conversion RANK (§6.3.1.1), not width: int and
+  // long share a width on this target but long still outranks int, so
+  // `long + unsigned int` is unsigned long — never unsigned int (#643).
+  const rankOf = (t) => {
+    if (t === TLLONG || t === TULLONG) return 3;
+    if (t === TLONG || t === TULONG) return 2;
+    if (t === TINT || t === TUINT) return 1;
+    return 0; // non-canonical (error recovery); width breaks ties below
+  };
   const isU = (t) => t === TUINT || t === TULONG || t === TULLONG;
   const toU = (t) => {
     if (t === TINT) return TUINT;
@@ -3540,15 +3548,21 @@ function usualArithmeticConversions(a, b) {
     return t;
   };
   const aU = isU(a), bU = isU(b);
-  const aSize = a.size, bSize = b.size;
-  // Same signedness: higher rank (larger size) wins
-  if (aU === bU) return aSize >= bSize ? a : b;
-  // Different signedness
+  // Same signedness: the greater rank wins (width as the tie-break for
+  // rank-0 non-canonical types).
+  if (aU === bU) {
+    if (rankOf(a) !== rankOf(b)) return rankOf(a) > rankOf(b) ? a : b;
+    return a.size >= b.size ? a : b;
+  }
+  // Mixed signedness (§6.3.1.8p1, the three signed/unsigned rules):
   const signedT = aU ? b : a;
   const unsignedT = aU ? a : b;
-  const sSize = signedT.size, uSize = unsignedT.size;
-  if (uSize >= sSize) return unsignedT;
-  if (sSize > uSize) return signedT;
+  // 1. unsigned rank >= signed rank → the unsigned operand's type.
+  if (rankOf(unsignedT) >= rankOf(signedT)) return unsignedT;
+  // 2. the signed type can represent every value of the unsigned type
+  //    (strictly wider, given its rank is higher) → the signed type.
+  if (signedT.size > unsignedT.size) return signedT;
+  // 3. otherwise → the unsigned type corresponding to the signed type.
   return toU(signedT);
 }
 
