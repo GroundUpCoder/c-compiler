@@ -202,6 +202,11 @@ never faked" ruling is prior art). Pass A/B findings proposing new SDL3
 surface must respect this: implement correctly, or file it as
 custom/deferred — never approximately.
 
+🔴 **This ruling is the seed of `todos/PRINCIPLES.md` (jku, 2026-08-13)** — the
+canonical contract-anchored-correctness + honest-shape principles, which generalize
+it beyond SDL surface and add the filing classification and the P0 rule. The jku
+verbatims above stay here; `PRINCIPLES.md` is the operative text.
+
 ## The two recurring pass types
 
 Each batch includes dogfood passes. Each pass is its own thread with a fresh

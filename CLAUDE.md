@@ -28,6 +28,34 @@ When something obviously should be implemented, implement it cleanly. This
 applies to design reviews too: do not justify a recommendation with "no current
 customer" — that is the exact anti-pattern being rejected here.
 
+## PRINCIPLES — contract-anchored correctness + honest shape (jku, 2026-08-13)
+
+**Canonical text: `todos/PRINCIPLES.md`. Read it before filing or designing.** Set
+in stone by jku (email uid 928); these two govern how work is classified and shaped.
+
+1. **Contract-anchored correctness.** Correctness is judged against what the API's
+   **documented contract** promises, not intuition. Behavior the contract permits
+   (lateness, jitter, implementation-defined limits) is **not** a correctness defect
+   — POSIX/SDL sleeps are *minimum*-duration, so overshoot is legal. It may still be
+   a real **quality gap**; reclassify it, never bury it.
+2. **Honest shape.** Expose what the platform cleanly offers; never build ugly
+   machinery to fake a semantic it cannot carry. If a standard interface
+   fundamentally mismatches the platform: don't expose it (absence is honest), fail
+   loud and documented, or ship a **differently-named** custom API. **Never
+   approximately implement a standard name.** Prefer existing APIs and repo seams
+   over novel ones.
+
+**Every defect ticket names its governing contract and classifies itself:**
+`contract-violation` | `quality-gap` | `feature-gap` | `stability`.
+
+🔴 **P0 = a contract violation in a shipped feature, or a platform-stability break,
+or broken-build preemption — never permitted-envelope lateness.** Quality gaps file
+at P1 (epic-critical) or P2.
+
+🔴 **A mechanism claim in a ticket body is a hypothesis until re-derived from current
+source** — cite file, line, and the commit you read it at. **Filling an absence is a
+two-sided edit**: implement the symbol *and* retire the test that pinned its absence.
+
 ## Portability
 
 `compiler.js` MUST work in both browser and Node.js environments. Never use `process.env`, `process.stderr`, `process.exit`, `process.hrtime`, or any other Node.js-specific API without a `typeof process !== 'undefined'` guard and a browser-compatible fallback. No environment variables — use compiler options and CLI flags instead.
@@ -134,10 +162,15 @@ everything that shipped under the old system (see `todos/README.md`).
 bucket then position, so P0 items lead the queue by construction — keep it
 that way:
 
-- **P0 — correctness bugs in existing/shipped features.** Anything that already
-  works but is now broken or wrong is P0 and jumps the queue ahead of all
-  feature work. **Any bug found from anywhere — a report, a manual UX sweep, an
-  incidental discovery — is filed P0 unless the user explicitly says otherwise.**
+- **P0 — contract violations in existing/shipped features**, and platform-stability
+  breaks. Anything that already works but now violates its documented contract is P0
+  and jumps the queue ahead of all feature work. **Any bug found from anywhere — a
+  report, a manual UX sweep, an incidental discovery — is filed P0 unless the user
+  explicitly says otherwise.** 🔴 **Correctness here is contract-anchored**
+  (`todos/PRINCIPLES.md`): behavior inside the contract's permitted envelope —
+  permitted lateness, jitter, implementation-defined limits — is a **quality gap**
+  and files at P1/P2 with its harm measured, NOT at P0. Reclassifying is not
+  dismissing: a quality gap can still be epic-critical and urgent.
 - **P1 (default) — feature work, new capabilities, ports, enhancements.** New
   things and "make it better" work sit behind the bug backlog.
 - Set with `--priority 0` at `ticket create`, or `cc-meta ticket update <ref>
