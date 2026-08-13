@@ -24,9 +24,10 @@ WebAssembly module built by the in-OS C compiler. Facts you cannot guess:
   with `SDL_MAIN_USE_CALLBACKS` (SDL_AppInit/SDL_AppIterate/SDL_AppEvent/
   SDL_AppQuit, no main()), or run an unmodified blocking-loop program with
   `SDL_RENDER_DRIVER=software`. Details: `/usr/share/doc/sdl-gucos.md`.
-- Commonly-missing SDL symbols: `SDL_Log` and `SDL_snprintf` do NOT exist —
-  log with `printf`/`fprintf(stderr, ...)` and format with `snprintf`, from
-  `<stdio.h>`. The `SDLK_a`…`SDLK_z` letter-key constants do NOT exist:
+- Commonly-missing SDL symbols: `SDL_snprintf` does NOT exist — format with
+  `snprintf` from `<stdio.h>`. `SDL_Log` exists (message to stderr with a
+  trailing newline); `printf`/`fprintf(stderr, ...)` work too.
+  The `SDLK_a`…`SDLK_z` letter-key constants do NOT exist:
   `event.key.key` is the modifier-applied ASCII character, so compare a
   char literal (`event.key.key == 'r'`; Shift gives `'R'`). Physical keys
   are `SDL_SCANCODE_A`…`SDL_SCANCODE_Z` on `event.key.scancode`. The

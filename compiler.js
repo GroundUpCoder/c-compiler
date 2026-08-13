@@ -21722,6 +21722,19 @@ typedef struct SDL_WindowEvent {
     Sint32 data2;
 } SDL_WindowEvent;
 
+/* App-defined events (#604): SDL_RegisterEvents hands out types in the
+   [SDL_EVENT_USER, SDL_EVENT_LAST] range and SDL_UserEvent is the payload
+   shape a SDL_PushEvent caller fills in (code/data1/data2 are the app's). */
+typedef struct SDL_UserEvent {
+    Uint32 type;
+    Uint32 reserved;
+    Uint64 timestamp;
+    SDL_WindowID windowID;
+    Sint32 code;
+    void *data1;
+    void *data2;
+} SDL_UserEvent;
+
 typedef union SDL_Event {
     Uint32 type;
     SDL_CommonEvent common;
@@ -21730,6 +21743,7 @@ typedef union SDL_Event {
     SDL_MouseButtonEvent button;
     SDL_MouseWheelEvent wheel;
     SDL_WindowEvent window;
+    SDL_UserEvent user;
     Uint8 padding[128];
 } SDL_Event;
 
@@ -21804,6 +21818,11 @@ typedef Uint64 SDL_WindowFlags;
 #define SDL_EVENT_MOUSE_BUTTON_DOWN 0x401
 #define SDL_EVENT_MOUSE_BUTTON_UP 0x402
 #define SDL_EVENT_MOUSE_WHEEL 0x403
+/* App-registered event range (#604): SDL_RegisterEvents allocates from
+   SDL_EVENT_USER upward; SDL_EVENT_LAST bounds the legal type space. */
+#define SDL_EVENT_FIRST 0x0
+#define SDL_EVENT_USER 0x8000
+#define SDL_EVENT_LAST 0xFFFF
 #define SDL_BUTTON_LEFT 1
 #define SDL_BUTTON_MIDDLE 2
 #define SDL_BUTTON_RIGHT 3
@@ -22005,6 +22024,14 @@ SDL_Surface *SDL_GetWindowSurface(SDL_Window *window);
 bool SDL_UpdateWindowSurface(SDL_Window *window);
 bool SDL_GetWindowSize(SDL_Window *window, int *w, int *h);
 bool SDL_SetWindowSize(SDL_Window *window, int w, int h);
+/* Create-time window flags (#601). The contract here is what the veneer
+   really knows: the flags the window was created with (which are also what
+   the kernel surface honours — borderless/resizable/transparent/utility/
+   popup; a popup additionally reports BORDERLESS, since that is how it is
+   created). DYNAMIC state bits (INPUT_FOCUS, MOUSE_FOCUS, MINIMIZED,
+   MAXIMIZED, ...) are never reported — the same honesty contract as
+   SDL_GetGlobalMouseState: no invented state. */
+SDL_WindowFlags SDL_GetWindowFlags(SDL_Window *window);
 /* Window placement is the WM's job in gucOS, so SDL_SetWindowPosition is an
    honest accept-and-succeed no-op (a self-placing app would only fight the
    compositor). SDL_SetWindowIcon likewise succeeds without a taskbar-icon
@@ -22019,6 +22046,29 @@ void SDL_DestroySurface(SDL_Surface *surface);
 bool SDL_PollEvent(SDL_Event *event);
 bool SDL_WaitEvent(SDL_Event *event);
 bool SDL_WaitEventTimeout(SDL_Event *event, Sint32 timeoutMS);
+/* ---- Event-queue manipulation (#604) ----
+   Operations over the veneer's own queue. SDL_PumpEvents is the explicit
+   drain of the OS input ring (the same primitive SDL_PollEvent pumps
+   through), which also advances the #493 input-state snapshots — so the
+   upstream SDL_PumpEvents + SDL_GetKeyboardState no-event-loop idiom reads
+   exactly as documented. The scan/flush entries operate on the queue as-is
+   (upstream semantics: they do not pump). SDL_PushEvent stamps a zero
+   timestamp; this runtime is single-threaded, so a push can never race a
+   parked SDL_WaitEvent — the wait loop re-polls before every park, and a
+   pushed event completes the next wait without parking. */
+void SDL_PumpEvents(void);
+bool SDL_PushEvent(SDL_Event *event);
+Uint32 SDL_RegisterEvents(int numevents);
+bool SDL_HasEvent(Uint32 type);
+bool SDL_HasEvents(Uint32 minType, Uint32 maxType);
+void SDL_FlushEvent(Uint32 type);
+void SDL_FlushEvents(Uint32 minType, Uint32 maxType);
+typedef enum SDL_EventAction {
+    SDL_ADDEVENT,
+    SDL_PEEKEVENT,
+    SDL_GETEVENT
+} SDL_EventAction;
+int SDL_PeepEvents(SDL_Event *events, int numevents, SDL_EventAction action, Uint32 minType, Uint32 maxType);
 void SDL_DestroyWindow(SDL_Window *window);
 void SDL_Quit(void);
 void SDL_Delay(Uint32 ms);
@@ -22103,6 +22153,39 @@ char *SDL_GetClipboardText(void);
 bool SDL_HasClipboardText(void);
 bool SDL_ClearClipboardData(void);
 void SDL_free(void *mem);
+/* ---- Allocation family (#601) ----
+   Over the one libc heap (SDL pointers and libc pointers are interchangeable
+   here by construction), with SDL3's zero-size contract: a zero request is
+   bumped to 1 so the return is never NULL for lack of size. */
+void *SDL_malloc(size_t size);
+void *SDL_calloc(size_t nmemb, size_t size);
+void *SDL_realloc(void *mem, size_t size);
+
+/* ---- Pseudo-random numbers (#601, SDL_stdinc.h) ----
+   Upstream SDL3's exact generator and scaling — NOT a libc rand alias:
+   SDL_rand(n) is uniform over [0, n) via a 32x32 high multiply, and
+   SDL_srand(0) seeds from the performance counter, as upstream. */
+void SDL_srand(Uint64 seed);
+Sint32 SDL_rand(Sint32 n);
+Uint32 SDL_rand_bits(void);
+float SDL_randf(void);
+
+/* SDL_Log (#601): SDL3's INFO-priority app log — the formatted message to
+   stderr with a trailing newline (upstream's default output function; INFO
+   carries no prefix). */
+void SDL_Log(const char *fmt, ...);
+
+/* ---- Base / pref paths (#601, SDL_filesystem.h) ----
+   SDL_GetBasePath: the directory of the running binary WITH the trailing
+   slash, resolved the way the exec actually found it (argv[0] from the
+   synthetic /proc, a bare name re-run through $PATH, symlinks chased) —
+   SDL3 ownership: the pointer is cached and owned by SDL, do not free.
+   Fails loud (NULL + error) where there is no /proc.
+   SDL_GetPrefPath: a writable per-app dir under $HOME (the XDG data-home
+   shape: $HOME/.local/share/<org>/<app>/), created if missing, WITH the
+   trailing slash — the caller frees with SDL_free. org may be NULL/empty. */
+const char *SDL_GetBasePath(void);
+char *SDL_GetPrefPath(const char *org, const char *app);
 
 SDL_AudioStream *SDL_OpenAudioDeviceStream(SDL_AudioDeviceID devid,
                                            const SDL_AudioSpec *spec,
@@ -22155,6 +22238,7 @@ bool SDL_GetTextureBlendMode(SDL_Texture *texture, SDL_BlendMode *blendMode);
 bool SDL_SetTextureScaleMode(SDL_Texture *texture, SDL_ScaleMode scaleMode);
 bool SDL_GetTextureScaleMode(SDL_Texture *texture, SDL_ScaleMode *scaleMode);
 bool SDL_SetRenderDrawColor(SDL_Renderer *renderer, Uint8 r, Uint8 g, Uint8 b, Uint8 a);
+bool SDL_GetRenderDrawColor(SDL_Renderer *renderer, Uint8 *r, Uint8 *g, Uint8 *b, Uint8 *a);
 bool SDL_SetRenderDrawBlendMode(SDL_Renderer *renderer, SDL_BlendMode blendMode);
 bool SDL_RenderClear(SDL_Renderer *renderer);
 bool SDL_RenderTexture(SDL_Renderer *renderer, SDL_Texture *texture, const SDL_FRect *srcrect, const SDL_FRect *dstrect);
@@ -22162,6 +22246,13 @@ bool SDL_RenderFillRect(SDL_Renderer *renderer, const SDL_FRect *rect);
 bool SDL_RenderRect(SDL_Renderer *renderer, const SDL_FRect *rect);
 bool SDL_RenderLine(SDL_Renderer *renderer, float x1, float y1, float x2, float y2);
 bool SDL_RenderPoint(SDL_Renderer *renderer, float x, float y);
+/* Batch draw calls (#601): loops over the singular primitives with
+   upstream's argument contract. SDL_RenderLines draws count-1 CONNECTED
+   segments (a polyline), not count/2 independent pairs. */
+bool SDL_RenderFillRects(SDL_Renderer *renderer, const SDL_FRect *rects, int count);
+bool SDL_RenderRects(SDL_Renderer *renderer, const SDL_FRect *rects, int count);
+bool SDL_RenderLines(SDL_Renderer *renderer, const SDL_FPoint *points, int count);
+bool SDL_RenderPoints(SDL_Renderer *renderer, const SDL_FPoint *points, int count);
 bool SDL_RenderGeometry(SDL_Renderer *renderer, SDL_Texture *texture, const SDL_Vertex *vertices, int num_vertices, const int *indices, int num_indices);
 void SDL_RenderPresent(SDL_Renderer *renderer);
 
@@ -23354,6 +23445,8 @@ struct SDL_Window {
     SDL_Surface surface;
     int pixels_cap;      /* high-water byte size of surface.pixels (resize) */
     bool relative_mouse; /* requested relative-mouse mode (todos/0018) */
+    SDL_WindowFlags flags;  /* create-time flags (#601 SDL_GetWindowFlags —
+                               the static contract documented in SDL.h) */
     SDL_Renderer *renderer; /* the window's one renderer, or NULL (#497 —
                                SDL3 allows one per window; SDL_CreateRenderer
                                sets, SDL_DestroyRenderer clears) */
@@ -26751,6 +26844,9 @@ __externref __jss(const char *s) {
 #include <stdio.h>
 #include <stdarg.h>
 #include <math.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 
 /* Opaque to user code (only the forward declaration is in SDL.h).
    'handle' is a 1-based index into the host's sdlWindows array.
@@ -26998,6 +27094,7 @@ SDL_Window *SDL_CreateWindow(const char *title, int w, int h, SDL_WindowFlags fl
     memset(win->surface.pixels, 0, pitch * h);
     win->pixels_cap = pitch * h;
     win->relative_mouse = 0;
+    win->flags = flags;
     win->renderer = NULL;
     __sdl_window_register(win);
     return win;
@@ -27019,6 +27116,13 @@ bool SDL_GetWindowSize(SDL_Window *window, int *w, int *h) {
     if (w) *w = window->surface.w;
     if (h) *h = window->surface.h;
     return 1;
+}
+
+/* Create-time flags only — the static honesty contract in SDL.h (#601):
+   dynamic state bits are never reported, not guessed at. */
+SDL_WindowFlags SDL_GetWindowFlags(SDL_Window *window) {
+    if (!__sdl_window_live(window)) { SDL_InvalidParamError("window"); return 0; }
+    return window->flags;
 }
 
 /* Ask the window system for a new size (todos/0068). ASYNC like upstream
@@ -27368,6 +27472,117 @@ bool SDL_WaitEvent(SDL_Event *event) {
     return SDL_WaitEventTimeout(event, -1);
 }
 
+/* ---- Event-queue manipulation (#604) ----
+   All over the freelist queue above. SDL_PumpEvents is the explicit
+   non-blocking ring drain (the #485 primitive SDL_PollEvent pumps through),
+   which also advances the #493 input-state snapshots — the push exports ARE
+   this runtime's "updated by SDL_PumpEvents" point. The scan/flush entries
+   operate on the queue as-is (upstream semantics: they do not pump).
+   Single-threaded runtime: SDL_PushEvent can never race a parked
+   SDL_WaitEvent — the wait loop re-polls before every park, so a pushed
+   event completes the next wait without parking. */
+
+void SDL_PumpEvents(void) {
+    __sdl_pump();
+}
+
+static bool __sdl_eq_type_in(Uint32 type, Uint32 minType, Uint32 maxType) {
+    return type >= minType && type <= maxType;
+}
+
+/* Append a copy of *event, stamping a zero timestamp (upstream SDL_AddEvent). */
+static void __sdl_eq_add(const SDL_Event *event) {
+    __SDL_EventEntry *e = __sdl_eq_alloc();
+    e->event = *event;
+    if (!e->event.common.timestamp) e->event.common.timestamp = __sdl_now_ns();
+    __sdl_eq_push(e);
+}
+
+bool SDL_PushEvent(SDL_Event *event) {
+    if (!event) return SDL_InvalidParamError("event");
+    __sdl_eq_add(event);
+    return 1;
+}
+
+/* Hand out types from the [SDL_EVENT_USER, SDL_EVENT_LAST] range; 0 on a
+   nonpositive or unsatisfiable request (upstream's exhaustion contract). */
+static Uint32 __sdl_next_user_event = SDL_EVENT_USER;
+
+Uint32 SDL_RegisterEvents(int numevents) {
+    if (numevents <= 0) return 0;
+    if ((Uint32)numevents > (Uint32)(SDL_EVENT_LAST - __sdl_next_user_event) + 1) return 0;
+    Uint32 first = __sdl_next_user_event;
+    __sdl_next_user_event += (Uint32)numevents;
+    return first;
+}
+
+int SDL_PeepEvents(SDL_Event *events, int numevents, SDL_EventAction action,
+                   Uint32 minType, Uint32 maxType) {
+    if (action == SDL_ADDEVENT) {
+        if (!events) { SDL_InvalidParamError("events"); return -1; }
+        for (int i = 0; i < numevents; i++)
+            __sdl_eq_add(&events[i]);
+        return numevents > 0 ? numevents : 0;
+    }
+    if (action != SDL_PEEKEVENT && action != SDL_GETEVENT) {
+        SDL_InvalidParamError("action");
+        return -1;
+    }
+    /* NULL events = a counting peek capped at one — upstream's exact rule
+       (SDL_HasEvents only needs "is there at least one"). */
+    SDL_Event tmp;
+    if (!events) { events = &tmp; numevents = 1; action = SDL_PEEKEVENT; }
+    int used = 0;
+    __SDL_EventEntry *e = __sdl_eq_head, *prev = 0;
+    while (e && used < numevents) {
+        __SDL_EventEntry *next = e->next;
+        if (__sdl_eq_type_in(e->event.type, minType, maxType)) {
+            events[used++] = e->event;
+            if (action == SDL_GETEVENT) {
+                if (prev) prev->next = next; else __sdl_eq_head = next;
+                if (__sdl_eq_tail == e) __sdl_eq_tail = prev;
+                e->next = __sdl_eq_free;
+                __sdl_eq_free = e;
+                e = next;
+                continue;
+            }
+        }
+        prev = e;
+        e = next;
+    }
+    return used;
+}
+
+bool SDL_HasEvents(Uint32 minType, Uint32 maxType) {
+    for (__SDL_EventEntry *e = __sdl_eq_head; e; e = e->next)
+        if (__sdl_eq_type_in(e->event.type, minType, maxType)) return 1;
+    return 0;
+}
+
+bool SDL_HasEvent(Uint32 type) {
+    return SDL_HasEvents(type, type);
+}
+
+void SDL_FlushEvents(Uint32 minType, Uint32 maxType) {
+    __SDL_EventEntry *e = __sdl_eq_head, *prev = 0;
+    while (e) {
+        __SDL_EventEntry *next = e->next;
+        if (__sdl_eq_type_in(e->event.type, minType, maxType)) {
+            if (prev) prev->next = next; else __sdl_eq_head = next;
+            if (__sdl_eq_tail == e) __sdl_eq_tail = prev;
+            e->next = __sdl_eq_free;
+            __sdl_eq_free = e;
+        } else {
+            prev = e;
+        }
+        e = next;
+    }
+}
+
+void SDL_FlushEvent(Uint32 type) {
+    SDL_FlushEvents(type, type);
+}
+
 /* ---- Audio ----
    SDL3 replaced the SDL2 device + queue API with SDL_AudioStream. We keep the
    host's primitive __sdl_* audio imports (one device == one ring) and model a
@@ -27619,6 +27834,166 @@ bool SDL_ClearClipboardData(void) {
 
 void SDL_free(void *mem) { free(mem); }
 
+/* ---- Allocation family (#601) ----
+   SDL_free landed with the clipboard (todos/0090); these complete the family
+   over the same libc heap, with SDL3's zero-size contract (a zero request is
+   bumped to 1, so the return is never NULL for lack of size). */
+
+void *SDL_malloc(size_t size) {
+    return malloc(size ? size : 1);
+}
+
+void *SDL_calloc(size_t nmemb, size_t size) {
+    if (!nmemb || !size) { nmemb = 1; size = 1; }
+    return calloc(nmemb, size);
+}
+
+void *SDL_realloc(void *mem, size_t size) {
+    return realloc(mem, size ? size : 1);
+}
+
+/* ---- Pseudo-random numbers (#601) ----
+   Upstream SDL3's exact generator (SDL_stdinc: the LCG upstream selected via
+   PractRand/TestU01 — state*0xff1cd035+0x05, high 32 bits out), NOT a libc
+   rand alias: SDL_rand(n)'s [0,n) contract is a 32x32 high multiply (no
+   modulo), and its seeding is independent of libc srand. SDL_srand(0) seeds
+   from the performance counter, as upstream. */
+static Uint64 __sdl_rand_state;
+static bool __sdl_rand_seeded = 0;
+
+void SDL_srand(Uint64 seed) {
+    if (!seed) seed = SDL_GetPerformanceCounter();
+    __sdl_rand_state = seed;
+    __sdl_rand_seeded = 1;
+}
+
+Uint32 SDL_rand_bits(void) {
+    if (!__sdl_rand_seeded) SDL_srand(0);
+    __sdl_rand_state = __sdl_rand_state * 0xff1cd035ULL + 0x05;
+    return (Uint32)(__sdl_rand_state >> 32);
+}
+
+Sint32 SDL_rand(Sint32 n) {
+    return (Sint32)(((Uint64)SDL_rand_bits() * (Uint64)n) >> 32);
+}
+
+float SDL_randf(void) {
+    /* The top 23 bits scaled by 2^-23 — uniform in [0, 1), as upstream. */
+    return (float)(SDL_rand_bits() >> 9) * (1.0f / 8388608.0f);
+}
+
+/* SDL_Log (#601): SDL3's INFO-priority app log — formatted message to stderr
+   with a trailing newline (upstream's default output function; INFO carries
+   no prefix). */
+void SDL_Log(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    fputc('\\n', stderr);
+}
+
+/* ---- Base / pref paths (#601) ----
+   SDL_GetBasePath resolves the running binary's directory the way the exec
+   actually found it (the kernel32 proc_info_init / user32 res_chase
+   precedent): argv[0] from the synthetic /proc/<pid>/cmdline, a bare name
+   re-run through $PATH, then realpath to chase symlinks — a gucman
+   /usr/local/bin link must yield the package's REAL bin dir. SDL3 ownership:
+   the returned pointer is cached and owned by SDL (do not free). Fails loud
+   (NULL + error) where there is no /proc (no-kernel flavors). */
+static char *__sdl_base_path;
+
+const char *SDL_GetBasePath(void) {
+    if (__sdl_base_path) return __sdl_base_path;
+    char proc[64], argv0[1024];
+    snprintf(proc, sizeof proc, "/proc/%d/cmdline", getpid());
+    int fd = open(proc, O_RDONLY);
+    if (fd < 0) {
+        SDL_SetError("SDL_GetBasePath: no /proc/<pid>/cmdline in this runtime");
+        return NULL;
+    }
+    long n = read(fd, argv0, sizeof argv0 - 1);
+    close(fd);
+    if (n <= 0) {
+        SDL_SetError("SDL_GetBasePath: empty /proc/<pid>/cmdline");
+        return NULL;
+    }
+    argv0[n] = 0;               /* first NUL-terminated entry = argv[0] */
+    char abs[1024];
+    if (argv0[0] == '/') {
+        snprintf(abs, sizeof abs, "%s", argv0);
+    } else if (!strchr(argv0, '/')) {
+        /* Bare name: the exec found it on $PATH — re-run that search
+           (cwd-joining it would invent a file that never existed, the
+           kernel32 0048 lesson). */
+        const char *path = getenv("PATH");
+        if (!path || !*path) path = "/usr/local/bin:/bin";
+        abs[0] = 0;
+        while (*path) {
+            const char *colon = strchr(path, ':');
+            int dlen = colon ? (int)(colon - path) : (int)strlen(path);
+            char cand[1024];
+            snprintf(cand, sizeof cand, "%.*s/%s", dlen, path, argv0);
+            struct stat st;
+            if (stat(cand, &st) == 0 && S_ISREG(st.st_mode)) {
+                snprintf(abs, sizeof abs, "%s", cand);
+                break;
+            }
+            path = colon ? colon + 1 : path + dlen;
+        }
+        if (!abs[0]) {
+            SDL_SetError("SDL_GetBasePath: cannot resolve argv[0] '%s' on PATH", argv0);
+            return NULL;
+        }
+    } else {
+        char cwd[512];
+        if (!getcwd(cwd, sizeof cwd)) strcpy(cwd, "/");
+        snprintf(abs, sizeof abs, "%s%s%s", cwd, strcmp(cwd, "/") == 0 ? "" : "/", argv0);
+    }
+    char real[1024];
+    if (!realpath(abs, real)) snprintf(real, sizeof real, "%s", abs);
+    char *slash = strrchr(real, '/');
+    if (!slash) {
+        SDL_SetError("SDL_GetBasePath: unresolvable path '%s'", real);
+        return NULL;
+    }
+    slash[1] = 0;               /* keep the trailing slash */
+    __sdl_base_path = strdup(real);
+    if (!__sdl_base_path) { SDL_SetError("Out of memory"); return NULL; }
+    return __sdl_base_path;
+}
+
+/* A writable per-app dir under $HOME (the XDG data-home shape upstream uses
+   on POSIX: $HOME/.local/share/<org>/<app>/), created mkdir -p style,
+   returned WITH the trailing slash. Caller frees with SDL_free. */
+char *SDL_GetPrefPath(const char *org, const char *app) {
+    if (!app || !*app) { SDL_InvalidParamError("app"); return NULL; }
+    const char *home = getenv("HOME");
+    if (!home || !*home) { SDL_SetError("SDL_GetPrefPath: HOME is not set"); return NULL; }
+    char full[1024];
+    if (org && *org)
+        snprintf(full, sizeof full, "%s/.local/share/%s/%s/", home, org, app);
+    else
+        snprintf(full, sizeof full, "%s/.local/share/%s/", home, app);
+    /* mkdir -p: create every component after $HOME (an existing component is
+       fine — the result is verified as a directory at the end, instead of
+       tracking per-call errno). */
+    for (char *p = full + strlen(home) + 1; *p; p++) {
+        if (*p != '/') continue;
+        *p = 0;
+        mkdir(full, 0700);
+        *p = '/';
+    }
+    struct stat st;
+    if (stat(full, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        SDL_SetError("SDL_GetPrefPath: could not create '%s'", full);
+        return NULL;
+    }
+    char *out = strdup(full);
+    if (!out) SDL_SetError("Out of memory");
+    return out;
+}
+
 bool SDL_SetWindowTitle(SDL_Window *window, const char *title) {
     if (!__sdl_window_live(window)) return SDL_InvalidParamError("window");
     __sdl_set_window_title(window->handle, title);
@@ -27720,6 +28095,10 @@ struct SDL_Renderer {
     int handle;
     SDL_Window *window;  /* backref so SDL_DestroyRenderer can clear the
                             window's one-renderer slot (#497) */
+    Uint8 draw_r, draw_g, draw_b, draw_a;  /* last-set draw color (#601
+                            SDL_GetRenderDrawColor); the create-time default
+                            is white, matching both upstream SDL3 and the
+                            host renderer's initial drawColor [1,1,1,1] */
 };
 
 /* ---- Hints (#551): a tiny grow-only store. SDL_GetHint prefers the
@@ -27789,6 +28168,7 @@ SDL_Renderer *SDL_CreateRenderer(SDL_Window *window, const char *name) {
     if (!r) { SDL_SetError("Out of memory"); return NULL; }
     r->handle = h;
     r->window = window;
+    r->draw_r = r->draw_g = r->draw_b = r->draw_a = 255;
     window->renderer = r;
     return r;
 }
@@ -27906,7 +28286,20 @@ bool SDL_GetTextureScaleMode(SDL_Texture *texture, SDL_ScaleMode *scaleMode) {
 
 bool SDL_SetRenderDrawColor(SDL_Renderer *renderer, Uint8 r, Uint8 g, Uint8 b, Uint8 a) {
     if (!renderer) return SDL_InvalidParamError("renderer");
+    renderer->draw_r = r;
+    renderer->draw_g = g;
+    renderer->draw_b = b;
+    renderer->draw_a = a;
     __sdl_set_draw_color(renderer->handle, r / 255.0, g / 255.0, b / 255.0, a / 255.0);
+    return 1;
+}
+
+bool SDL_GetRenderDrawColor(SDL_Renderer *renderer, Uint8 *r, Uint8 *g, Uint8 *b, Uint8 *a) {
+    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (r) *r = renderer->draw_r;
+    if (g) *g = renderer->draw_g;
+    if (b) *b = renderer->draw_b;
+    if (a) *a = renderer->draw_a;
     return 1;
 }
 
@@ -27979,6 +28372,44 @@ bool SDL_RenderLine(SDL_Renderer *renderer, float x1, float y1, float x2, float 
 bool SDL_RenderPoint(SDL_Renderer *renderer, float x, float y) {
     if (!renderer) return SDL_InvalidParamError("renderer");
     __sdl_quad_rect(renderer->handle, 0, x, y, 1, 1, 0, 0, 1, 1);
+    return 1;
+}
+
+/* ---- Batch draw calls (#601): loops over the singular primitives, with
+   upstream's argument contract (a NULL array is an error; count < 1 — or
+   < 2 for the polyline — draws nothing and succeeds). ---- */
+
+bool SDL_RenderFillRects(SDL_Renderer *renderer, const SDL_FRect *rects, int count) {
+    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!rects) return SDL_InvalidParamError("rects");
+    for (int i = 0; i < count; i++)
+        if (!SDL_RenderFillRect(renderer, &rects[i])) return 0;
+    return 1;
+}
+
+bool SDL_RenderRects(SDL_Renderer *renderer, const SDL_FRect *rects, int count) {
+    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!rects) return SDL_InvalidParamError("rects");
+    for (int i = 0; i < count; i++)
+        if (!SDL_RenderRect(renderer, &rects[i])) return 0;
+    return 1;
+}
+
+bool SDL_RenderPoints(SDL_Renderer *renderer, const SDL_FPoint *points, int count) {
+    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!points) return SDL_InvalidParamError("points");
+    for (int i = 0; i < count; i++)
+        if (!SDL_RenderPoint(renderer, points[i].x, points[i].y)) return 0;
+    return 1;
+}
+
+/* count-1 CONNECTED segments (a polyline), per SDL3 — not count/2 pairs. */
+bool SDL_RenderLines(SDL_Renderer *renderer, const SDL_FPoint *points, int count) {
+    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!points) return SDL_InvalidParamError("points");
+    for (int i = 0; i + 1 < count; i++)
+        if (!SDL_RenderLine(renderer, points[i].x, points[i].y,
+                            points[i + 1].x, points[i + 1].y)) return 0;
     return 1;
 }
 
@@ -28791,6 +29222,9 @@ SDL_Window *SDL_CreatePopupWindow(SDL_Window *parent, int offset_x, int offset_y
     memset(win->surface.pixels, 0, pitch * h);
     win->pixels_cap = pitch * h;
     win->relative_mouse = 0;
+    /* A popup is created chrome-free by construction, so BORDERLESS is part
+       of its honest create-time flags (#601 SDL_GetWindowFlags). */
+    win->flags = flags | SDL_WINDOW_BORDERLESS;
     win->renderer = NULL;
     /* Slot into __SDL.c's registry directly (see __SDL_internal.h): RESIZED
        re-derivation and per-window close routing then cover popups exactly
