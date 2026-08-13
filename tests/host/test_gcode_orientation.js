@@ -194,21 +194,23 @@ check('libm: sqrtf/fabsf/floorf/sinf compile with only #include <math.h>', () =>
   assert(doc.includes('#include <math.h>'), 'GCODE.md lost the <math.h> claim');
 });
 
-check('absent symbols: SDL_Log, SDL_snprintf, SDLK_r, SDLK_R all fail as undeclared', () => {
-  undeclared('#include <SDL.h>\nint main(void){SDL_Log("x");return 0;}\n', 'SDL_Log');
+// SDL_Log moved OUT of the absent list when #601 implemented it — the doc's
+// claim flipped with it, and the compiles() leg below pins the new state.
+check('absent symbols: SDL_snprintf, SDLK_r, SDLK_R all fail as undeclared', () => {
   undeclared('#include <SDL.h>\nint main(void){char b[8];SDL_snprintf(b,8,"x");return 0;}\n', 'SDL_snprintf');
   undeclared('#include <SDL.h>\nint main(void){return SDLK_r;}\n', 'SDLK_r');
   undeclared('#include <SDL.h>\nint main(void){return SDLK_R;}\n', 'SDLK_R');
-  for (const token of ['SDL_Log', 'SDL_snprintf', 'do NOT exist'])
+  for (const token of ['SDL_snprintf', 'do NOT exist'])
     assert(doc.includes(token), 'GCODE.md lost the claim: ' + token);
 });
 
-check('the documented replacements compile: char-literal keys, scancodes, snprintf', () => {
+check('the documented replacements compile: char-literal keys, scancodes, snprintf, SDL_Log', () => {
   compiles('#include <SDL.h>\nint main(void){SDL_Event e;e.key.key=114;' +
     "return e.key.key=='r'?0:1;}\n");
   compiles('#include <SDL.h>\nint main(void){return SDL_SCANCODE_R==21?0:1;}\n');
   compiles('#include <stdio.h>\nint main(void){char b[8];snprintf(b,sizeof b,"%d",42);return 0;}\n');
-  for (const token of ["event.key.key == 'r'", 'SDL_SCANCODE_A', '`snprintf`'])
+  compiles('#include <SDL.h>\nint main(void){SDL_Log("x %d", 1);return 0;}\n');
+  for (const token of ["event.key.key == 'r'", 'SDL_SCANCODE_A', '`snprintf`', '`SDL_Log` exists'])
     assert(doc.includes(token), 'GCODE.md lost the claim: ' + token);
 });
 
