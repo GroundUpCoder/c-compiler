@@ -34187,7 +34187,7 @@ char *ctime(const time_t *timep) {
    POSIX requires the buffer to be at least 26 bytes. Named in the todos/0350
    zip-harness gap list alongside gmtime_r (todos/0382). */
 char *asctime_r(const struct tm *tp, char *buf) {
-  sprintf(buf, "%s %s %2d %02d:%02d:%02d %d\n",
+  sprintf(buf, "%s %s %2d %02d:%02d:%02d %d\\n",
       __wday_abbr[tp->tm_wday], __mon_abbr[tp->tm_mon],
       tp->tm_mday, tp->tm_hour, tp->tm_min, tp->tm_sec,
       tp->tm_year + 1900);
