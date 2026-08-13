@@ -7425,16 +7425,27 @@ Kernel.prototype._pipeNotify = function (pipe) {
       pipe.drain(Uint8Array.from(pipe.buf.splice(0, pipe.buf.length)));
       progress = true;
     }
-    while (pipe.readWaiters.length) {
-      var rpcb = this._procs.get(pipe.readWaiters[0]);
+    var ri = 0;
+    while (ri < pipe.readWaiters.length) {
+      var rpcb = this._procs.get(pipe.readWaiters[ri]);
       if (!rpcb || !rpcb.waiter || rpcb.waiter.op !== 'piperead' || rpcb.waiter.pipe !== pipe) {
-        pipe.readWaiters.shift();
+        pipe.readWaiters.splice(ri, 1);
         continue;
       }
+      // Serve-time eligibility (#647): a STOPPED process's parked read stays
+      // parked and consumes nothing — the _ttyNotify rule (a Ctrl-Z'd reader
+      // must not steal bytes a running reader behind it in the FIFO should
+      // get, and bytes handed to a stopped-then-killed process are destroyed
+      // where the pipe would have kept them). _contProcess re-notifies this
+      // stream on resume, so the skip can never strand the waiter. Writers
+      // are deliberately NOT gated: a parked write's bytes were committed at
+      // the write() call, so completing it while stopped loses nothing and
+      // unblocks running readers.
+      if (rpcb.state === STATE_STOPPED) { ri++; continue; }
       var ravail = this._pipeAvail(pipe);
       if (ravail > 0) {
         var count = rpcb.waiter.count;
-        this._cancelWaiter(rpcb);
+        this._cancelWaiter(rpcb);                       // splices index ri out
         this._respondRaw(rpcb, this._pipeTake(pipe, Math.min(count, ravail)));
         progress = true;
       } else if (!pipe.wOpen) {
@@ -7442,7 +7453,7 @@ Kernel.prototype._pipeNotify = function (pipe) {
         this._respondRaw(rpcb, new Uint8Array(0));     // EOF
         progress = true;
       } else {
-        break;                                          // no data yet
+        break;                                          // no data for anyone eligible
       }
     }
     while (pipe.writeWaiters.length) {
@@ -8169,6 +8180,17 @@ Kernel.prototype._contProcess = function (pcb) {
   Atomics.and(pcb.i32, KP_FLAGS, ~KF_STOP);
   this._ring(pcb);                                     // wakes the stop-park
   this._jobNotifyParent(pcb, 'cont');
+  // A read parked across the stop was deliberately skipped by the serve
+  // loops (#647: a stopped process is parked, not a consumer) — re-run the
+  // stream's notify now so data or EOF that arrived during the stop is
+  // served at resume. Without this a resumed pipe reader hangs forever on
+  // bytes already sitting in the buffer (a tty self-heals on the next
+  // keystroke; a pipe has no such heartbeat).
+  var w = pcb.waiter;
+  if (w) {
+    if (w.op === 'piperead' || w.op === 'pipewrite') this._pipeNotify(w.pipe);
+    else if (w.op === 'ttyread') this._ttyNotify(w.tty);
+  }
 };
 
 /* SIGCHLD + a parked wait answer for a stop/continue transition — the same

@@ -267,6 +267,73 @@ const spawnReq = (p, extra) => Object.assign(
   r = await wRpc(1, wfd6, Buffer.from('nobody'));
   check('write after victim death still lands (init holds the read end)', r.n === 6, JSON.stringify(r));
 
+  // ---- job control (#647): a STOPPED pipe reader is parked, not a consumer ----
+  // The tty serve loop skips STATE_STOPPED waiters (a Ctrl-Z'd cat must not
+  // steal the shell's next typed line); _pipeNotify applies the same rule,
+  // and _contProcess re-notifies the parked stream so data (or EOF) that
+  // arrived during the stop is served at resume — never stranded.
+  r = await rpc(1, K.OP.PIPE_CREATE, {});
+  const rfd7 = r.rfd, wfd7 = r.wfd;
+  r = await rpc(1, K.OP.SPAWN, spawnReq('/bin/a', { actions: [{ op: 2, fd: wfd7 }] }));
+  const spid = r.pid;
+  const dstop = submit(spid, K.OP.FS_READ, { fd: rfd7, count: 100 });
+  await tick();
+  check('reader parked before stop', dstop.pending());
+  kernel.kill(spid, K.SIG.STOP);
+  await tick();
+  check('SIGSTOP stops the parked reader', kernel.process(spid).state === 'stopped');
+  r = await wRpc(1, wfd7, Buffer.from('held'));
+  check('write succeeds while the reader is stopped', r.n === 4, JSON.stringify(r));
+  await tick();
+  check('stopped reader consumes nothing: read still parked', dstop.pending());
+  kernel.kill(spid, K.SIG.CONT);
+  await tick();
+  check('SIGCONT serves the parked read — no strand', !dstop.pending());
+  r = await dstop.finish();
+  check('resumed reader gets the bytes written during the stop',
+    r.raw && str(r.raw) === 'held', JSON.stringify(r));
+
+  // Steal shape: two readers share the read end; the stopped one parked
+  // FIRST must not shadow the running one behind it in the FIFO.
+  r = await rpc(1, K.OP.SPAWN, spawnReq('/bin/a', { actions: [{ op: 2, fd: wfd7 }] }));
+  const spid2 = r.pid;
+  const da = submit(spid, K.OP.FS_READ, { fd: rfd7, count: 100 });
+  await tick();
+  kernel.kill(spid, K.SIG.STOP);
+  await tick();
+  const db = submit(spid2, K.OP.FS_READ, { fd: rfd7, count: 100 });
+  await tick();
+  r = await wRpc(1, wfd7, Buffer.from('mine'));
+  await tick();
+  check('running reader is served past the stopped one ahead of it',
+    !db.pending() && da.pending());
+  r = await db.finish();
+  check('...and gets the written bytes', r.raw && str(r.raw) === 'mine', JSON.stringify(r));
+  kernel.kill(spid, K.SIG.CONT);
+  await tick();
+  check('resumed reader stays parked on the now-empty pipe', da.pending());
+  r = await wRpc(1, wfd7, Buffer.from('next'));
+  r = await da.finish();
+  check('next write serves the resumed reader', r.raw && str(r.raw) === 'next', JSON.stringify(r));
+
+  // EOF landing during a stop is served at resume (the !wOpen leg of the
+  // cont-side re-notify).
+  r = await rpc(1, K.OP.PIPE_CREATE, {});
+  const rfd8 = r.rfd, wfd8 = r.wfd;
+  r = await rpc(1, K.OP.SPAWN, spawnReq('/bin/a', { actions: [{ op: 2, fd: wfd8 }] }));
+  const epid = r.pid;
+  const dceof = submit(epid, K.OP.FS_READ, { fd: rfd8, count: 10 });
+  await tick();
+  kernel.kill(epid, K.SIG.STOP);
+  await tick();
+  await rpc(1, K.OP.FS_CLOSE, { fd: wfd8 });           // last write end gone
+  await tick();
+  check('EOF while stopped: read still parked', dceof.pending());
+  kernel.kill(epid, K.SIG.CONT);
+  await tick();
+  r = await dceof.finish();
+  check('resume serves the EOF', r.raw && r.raw.length === 0, JSON.stringify(r));
+
   console.log(failures === 0 ? '\npipe semantics: PASS' : `\npipe semantics: ${failures} FAILED`);
   process.exit(failures === 0 ? 0 : 1);
 })().catch((e) => { console.error(e); process.exit(1); });
