@@ -1,0 +1,7 @@
+[
+  { "waitFor": "~ #", "timeoutMs": 60000 },
+  { "send": "export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic ANTHROPIC_MODEL=deepseek-v4-flash ANTHROPIC_API_KEY=${KEY}\n", "waitFor": "~ #", "timeoutMs": 15000 },
+  { "send": "gcode -c\n", "waitFor": "You:", "timeoutMs": 30000 },
+  { "send": "Keep going with the play-test from where you left off.\n", "waitFor": "You:", "timeoutMs": 420000, "note": "patience run: how long until the resumed turn completes?" },
+  { "send": "/quit\n", "waitFor": "~ #", "timeoutMs": 20000 }
+]

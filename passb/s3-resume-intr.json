@@ -1,0 +1,11 @@
+[
+  { "waitFor": "~ #", "timeoutMs": 60000 },
+  { "send": "export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic ANTHROPIC_MODEL=deepseek-v4-flash ANTHROPIC_API_KEY=${KEY}\n", "waitFor": "~ #", "timeoutMs": 15000 },
+  { "send": "gcode -c\n", "waitFor": "You:", "timeoutMs": 30000, "note": "resume after the killed-mid-turn boot: does the session survive?" },
+  { "send": "Keep going with the play-test from where you left off.\n", "waitFor": "gcode:", "timeoutMs": 60000, "note": "let the turn start" },
+  { "sleep": 45000, "note": "let it work ~45s, then interrupt mid-turn" },
+  { "send": "\u0003", "waitFor": "You:", "timeoutMs": 45000, "note": "^C mid-turn: expect interrupt + fresh prompt (#305/#510/#511)" },
+  { "send": "Sorry — carry on, and when the play-test passes give me a one-paragraph summary.\n", "waitFor": "You:", "timeoutMs": 480000, "note": "post-^C turn: session must be intact" },
+  { "send": "/quit\n", "waitFor": "~ #", "timeoutMs": 20000 },
+  { "send": "ls -la /root/asteroids/shots 2>/dev/null; echo D\"\"ONE3\n", "waitFor": "DONE3", "timeoutMs": 20000 }
+]

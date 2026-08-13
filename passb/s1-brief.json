@@ -1,0 +1,9 @@
+[
+  { "waitFor": "~ #", "timeoutMs": 60000 },
+  { "send": "export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic ANTHROPIC_MODEL=deepseek-v4-flash ANTHROPIC_API_KEY=${KEY}\n", "waitFor": "~ #", "timeoutMs": 15000 },
+  { "send": "curl -s -o /tmp/h.json -X POST https://api.deepseek.com/anthropic/v1/messages ; cat /tmp/h.json ; echo B\"\"RIDGE\n", "waitFor": "BRIDGE", "timeoutMs": 60000, "note": "egress check: expect a JSON error body from the API, proving the bridge routes" },
+  { "send": "gcode\n", "waitFor": "You:", "timeoutMs": 30000, "note": "enter the interactive REPL" },
+  { "send": "Build an Asteroids game in C with SDL3 in /root/asteroids. The ship is a triangle that rotates with Left/Right, thrusts with Up (momentum and drift), fires with Space. Asteroids drift, wrap at screen edges, and split in two when shot until they are small. Ship hit = lose a life, 3 lives, and draw the score and lives on screen. Build it with cc until it compiles cleanly, then run it and verify a window actually opened.\n", "waitFor": "You:", "timeoutMs": 480000, "note": "turn 1: the whole game brief" },
+  { "send": "/quit\n", "waitFor": "~ #", "timeoutMs": 20000 },
+  { "send": "ls -la /root/asteroids; echo D\"\"ONE1\n", "waitFor": "DONE1", "timeoutMs": 20000 }
+]

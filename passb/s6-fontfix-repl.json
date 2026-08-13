@@ -1,0 +1,12 @@
+[
+  { "waitFor": "~ #", "timeoutMs": 420000 },
+  { "send": "export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic ANTHROPIC_MODEL=deepseek-v4-flash ANTHROPIC_API_KEY=${KEY}\n", "waitFor": "~ #", "timeoutMs": 15000 },
+  { "send": "gcode -c\n", "waitFor": "You:", "timeoutMs": 30000 },
+  { "send": "I just looked at the game with my own eyes: every letter of the HUD and title text is drawn MIRRORED (flipped left-right). Your screenshots verified it as fine, but it is not. Find the bug, fix it, and this time prove the text is really readable.\n", "waitFor": "You:", "timeoutMs": 480000, "note": "human reports the visual bug the agent's verify missed" },
+  { "send": "\u001b[A", "waitFor": "really readable", "timeoutMs": 15000, "note": "up-arrow: history recall should redisplay the last input" },
+  { "send": "\u0003", "waitFor": "You:", "timeoutMs": 15000, "note": "^C cancels the recalled line, fresh prompt" },
+  { "send": "\u0003", "waitFor": "You:", "timeoutMs": 15000, "note": "^C at empty prompt must re-prompt, not exit (#305)" },
+  { "send": "/compact\n", "waitFor": "compact", "timeoutMs": 60000, "note": "manual compact" },
+  { "send": "In one short sentence: what state is the project in?\n", "waitFor": "You:", "timeoutMs": 240000, "note": "small-turn latency after compact" },
+  { "send": "/quit\n", "waitFor": "~ #", "timeoutMs": 20000 }
+]

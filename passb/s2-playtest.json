@@ -1,0 +1,8 @@
+[
+  { "waitFor": "~ #", "timeoutMs": 60000 },
+  { "send": "export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic ANTHROPIC_MODEL=deepseek-v4-flash ANTHROPIC_API_KEY=${KEY}\n", "waitFor": "~ #", "timeoutMs": 15000 },
+  { "send": "gcode -c\n", "waitFor": "You:", "timeoutMs": 30000, "note": "resume the session in the REPL" },
+  { "send": "Play-test it for me: start the game, then drive it with injected input (rotate, thrust, fire) and prove with before/after screenshots that the ship actually turns and bullets actually appear. If anything doesn't respond to input, find out why and fix it. Save the proof screenshots under /root/asteroids/shots/.\n", "waitFor": "You:", "timeoutMs": 480000, "note": "turn 2: interactive play-test via wmctl injection" },
+  { "send": "/quit\n", "waitFor": "~ #", "timeoutMs": 20000 },
+  { "send": "ls -la /root/asteroids/shots 2>/dev/null; echo D\"\"ONE2\n", "waitFor": "DONE2", "timeoutMs": 20000 }
+]

@@ -1,0 +1,7 @@
+[
+  { "waitFor": "~ #", "timeoutMs": 60000 },
+  { "send": "export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic ANTHROPIC_MODEL=deepseek-v4-flash ANTHROPIC_API_KEY=${KEY}\n", "waitFor": "~ #", "timeoutMs": 15000 },
+  { "send": "gcode -c\n", "waitFor": "You:", "timeoutMs": 30000 },
+  { "send": "Two additions please. First, sound effects: a laser zap on fire, an explosion when an asteroid breaks, and a low rumble while thrusting. Second, a title screen: game name drawn big, plus a slowly spinning ship drawn from a pre-rendered texture rather than re-rasterizing the lines every frame. Verify both actually work - prove the sounds really play and the title ship really spins.\n", "waitFor": "You:", "timeoutMs": 540000, "note": "turn: audio + texture-rotation frontier" },
+  { "send": "/quit\n", "waitFor": "~ #", "timeoutMs": 20000 }
+]

@@ -1,0 +1,7 @@
+[
+  { "waitFor": "~ #", "timeoutMs": 300000, "note": "boot to hush prompt (fixture install on first run)" },
+  { "send": "which gcode && gcode --help | head -4 && echo T\"\"OK1\n", "waitFor": "TOK1", "timeoutMs": 30000 },
+  { "send": "ls /usr/local/bin | head -20 && echo T\"\"OK2\n", "waitFor": "TOK2", "timeoutMs": 20000 },
+  { "send": "curl -sS -o /tmp/h.json -w '%{http_code}' https://api.deepseek.com/anthropic/v1/messages ; echo ; cat /tmp/h.json ; echo T\"\"OK3\n", "waitFor": "TOK3", "timeoutMs": 60000 },
+  { "send": "head -5 /usr/share/doc/sdl-gucos.md; echo T\"\"OK4\n", "waitFor": "TOK4", "timeoutMs": 20000 }
+]

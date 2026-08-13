@@ -1,0 +1,16 @@
+import fs from 'node:fs';
+const ESC = '', CTRLC = '';
+const steps = [
+  { waitFor: '~ #', timeoutMs: 420000 },
+  { send: 'export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic ANTHROPIC_MODEL=deepseek-v4-flash ANTHROPIC_API_KEY=${KEY}\n', waitFor: '~ #', timeoutMs: 15000 },
+  { send: 'gcode -c\n', waitFor: 'You:', timeoutMs: 30000 },
+  { send: 'Keep going, but stay focused: it is almost certainly a one-line bit-order mismatch between the FONT table and draw_text. Fix it, rebuild, and show me the title screenshot proof.\n', waitFor: 'You:', timeoutMs: 480000, note: 'focused nudge' },
+  { send: ESC + '[A', waitFor: 'stay focused', timeoutMs: 15000, note: 'up-arrow history recall' },
+  { send: CTRLC, waitFor: 'You:', timeoutMs: 15000, note: '^C cancels recalled line' },
+  { send: CTRLC, waitFor: 'You:', timeoutMs: 15000, note: '^C at empty prompt re-prompts (#305)' },
+  { send: '/compact\n', waitFor: 'compact', timeoutMs: 90000, note: 'manual compact' },
+  { send: 'In one short sentence: what state is the project in?\n', waitFor: 'You:', timeoutMs: 240000, note: 'small-turn latency after compact' },
+  { send: '/quit\n', waitFor: '~ #', timeoutMs: 20000 },
+];
+fs.writeFileSync('passb/s7-finish.json', JSON.stringify(steps, null, 1));
+console.log('wrote s7-finish.json');
