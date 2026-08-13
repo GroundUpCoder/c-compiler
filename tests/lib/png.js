@@ -20,7 +20,8 @@
 // parsePng covers exactly what the estate's writers emit — 8-bit, colour
 // type 2 (truecolour) or 6 (truecolour+alpha), non-interlaced — and THROWS
 // on anything else: a malformed or truncated shot must fail the test, not
-// decode to a quiet zero.
+// decode to a quiet zero. Every chunk's CRC is verified (#659): a shot the
+// transport damaged is refused even where the damage would still decode.
 const zlib = require('zlib');
 
 const CRC_TABLE = (() => {
@@ -97,6 +98,11 @@ function parsePng(buf, off = 0) {
     const type = buf.toString('latin1', p + 4, p + 8);
     if (p + 12 + len > buf.length)
       throw new Error(`parsePng: truncated inside ${type} (${buf.length - p - 8} of ${len})`);
+    const stored = buf.readUInt32BE(p + 8 + len);
+    const actual = crc32(buf.subarray(p + 4, p + 8 + len));
+    if (stored !== actual)
+      throw new Error(`parsePng: CRC mismatch in ${type} at offset ${p} ` +
+        `(stored ${stored.toString(16).padStart(8, '0')}, computed ${actual.toString(16).padStart(8, '0')}) — corrupted shot`);
     const data = buf.subarray(p + 8, p + 8 + len);
     if (type === 'IHDR') {
       w = data.readUInt32BE(0);

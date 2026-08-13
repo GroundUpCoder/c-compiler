@@ -13,7 +13,8 @@
 // that "parses fine" proves nothing. Control 1 shows a one-pixel change in
 // an otherwise identical PNG is DETECTED by the px() assert idiom the tests
 // use; controls 2-4 show malformed input (truncation, bad filter byte,
-// unsupported format) throws loudly instead of decoding to a quiet zero.
+// unsupported format, CRC mismatch — #659) throws loudly instead of
+// decoding to a quiet zero.
 //
 // Run: node tests/host/test_png_helper.js
 
@@ -30,6 +31,32 @@ function throws(name, fn, re) {
   try { fn(); check(name, false, 'did not throw'); }
   catch (e) { check(name, re.test(e.message), e.message); }
 }
+
+// CRC + chunk assembly re-derived from the PNG spec here, INDEPENDENTLY of
+// png.js's own table — the hand-built fixtures must not certify the decoder
+// with its own arithmetic.
+const crcT = (() => {
+  const t = new Int32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c;
+  }
+  return t;
+})();
+const crc32 = (b) => {
+  let c = 0xffffffff;
+  for (let i = 0; i < b.length; i++) c = crcT[(c ^ b[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+};
+const chunk = (type, data) => {
+  const out = Buffer.alloc(12 + data.length);
+  out.writeUInt32BE(data.length, 0);
+  out.write(type, 4, 'latin1');
+  data.copy(out, 8);
+  out.writeUInt32BE(crc32(out.subarray(4, 8 + data.length)), 8 + data.length);
+  return out;
+};
 
 // A deterministic 7x5 RGBA test card: every channel varies with position so
 // any pixel swap or channel transposition changes some asserted value.
@@ -86,28 +113,6 @@ for (let y = 0; y < H; y++)
     }
   }
   // Assemble a whole PNG around the hand-filtered stream.
-  const crcT = (() => {
-    const t = new Int32Array(256);
-    for (let n = 0; n < 256; n++) {
-      let c = n;
-      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
-      t[n] = c;
-    }
-    return t;
-  })();
-  const crc32 = (b) => {
-    let c = 0xffffffff;
-    for (let i = 0; i < b.length; i++) c = crcT[(c ^ b[i]) & 0xff] ^ (c >>> 8);
-    return (c ^ 0xffffffff) >>> 0;
-  };
-  const chunk = (type, data) => {
-    const out = Buffer.alloc(12 + data.length);
-    out.writeUInt32BE(data.length, 0);
-    out.write(type, 4, 'latin1');
-    data.copy(out, 8);
-    out.writeUInt32BE(crc32(out.subarray(4, 8 + data.length)), 8 + data.length);
-    return out;
-  };
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(W, 0); ihdr.writeUInt32BE(H, 4);
   ihdr[8] = 8; ihdr[9] = 6;
@@ -162,28 +167,33 @@ for (let y = 0; y < H; y++)
   const png = encodePng(W, H, card);
   const evil = Buffer.from(png);
   evil[8 + 8 + 9] = 3;                                  // IHDR colour type -> palette
-  // fix the IHDR CRC so the guard under test is the format check, not CRC luck
-  // (parsePng does not verify CRCs; the write below keeps the chunk walk intact)
+  // re-seal the IHDR CRC over the mutated data (#659): parsePng now verifies
+  // CRCs first, and the guard under test here is the FORMAT check
+  evil.writeUInt32BE(crc32(evil.subarray(8 + 4, 8 + 8 + 13)), 8 + 8 + 13);
   throws('CONTROL: palette PNG refuses', () => parsePng(evil), /unsupported format/);
   throws('CONTROL: bad filter byte throws', () => {
     // hand-build: valid IHDR, IDAT whose first filter byte is 9
     const raw = Buffer.alloc(H * (1 + W * 4));
     raw[0] = 9;
-    const parts = parsePng(png);          // reuse dims
-    void parts;
     const ihdr = Buffer.from(png.subarray(8, 8 + 25));  // whole IHDR chunk
-    const mk = (type, data) => {
-      const out = Buffer.alloc(12 + data.length);
-      out.writeUInt32BE(data.length, 0);
-      out.write(type, 4, 'latin1');
-      data.copy(out, 8);
-      return out;                          // CRC left zero: parsePng skips CRCs
-    };
     parsePng(Buffer.concat([png.subarray(0, 8), ihdr,
-                            mk('IDAT', zlib.deflateSync(raw)), mk('IEND', Buffer.alloc(0))]));
+                            chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]));
   }, /bad filter type 9/);
 }
-// (d) px() bounds: out of range throws rather than reading undefined.
+// (d) CRC validation (#659): a chunk whose stored CRC disagrees with its
+// contents throws, naming the chunk — even where the damage would still
+// decode (the Codex #657 repro: a corrupted IHDR CRC was ACCEPTED pre-fix
+// and returned the original pixels).
+{
+  const png = encodePng(W, H, card);
+  const ihdrCrc = Buffer.from(png);
+  ihdrCrc[8 + 8 + 13] ^= 0xff;               // first byte of the IHDR CRC field
+  throws('CONTROL: corrupted IHDR CRC throws', () => parsePng(ihdrCrc), /CRC mismatch in IHDR/);
+  const idatCrc = Buffer.from(png);
+  idatCrc[png.length - 12 - 1] ^= 0xff;      // last byte of the IDAT CRC (IEND is the final 12)
+  throws('CONTROL: corrupted IDAT CRC throws', () => parsePng(idatCrc), /CRC mismatch in IDAT/);
+}
+// (e) px() bounds: out of range throws rather than reading undefined.
 {
   const p = parsePng(encodePng(W, H, card));
   throws('CONTROL: px() out of range throws', () => p.px(W, 0), /out of/);
