@@ -1481,7 +1481,10 @@
 /* #undef HAVE_TERM_H */
 
 /* Define to 1 if you have the `timegm' function. */
-/* #undef HAVE_TIMEGM */
+/* timegm grew into the libc at todos/0325 Group B (#544 re-vendor turned it
+   on): both toolchains now link the real one, which — unlike timemodule.c's
+   static fallback — is correct for tm_year < 1970. */
+#define HAVE_TIMEGM 1
 
 /* Define if you have the 'timerfd_create' function. */
 /* #undef HAVE_TIMERFD_CREATE */
