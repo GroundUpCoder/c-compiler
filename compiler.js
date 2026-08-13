@@ -21722,6 +21722,19 @@ typedef struct SDL_WindowEvent {
     Sint32 data2;
 } SDL_WindowEvent;
 
+/* App-defined events (#604): SDL_RegisterEvents hands out types in the
+   [SDL_EVENT_USER, SDL_EVENT_LAST] range and SDL_UserEvent is the payload
+   shape a SDL_PushEvent caller fills in (code/data1/data2 are the app's). */
+typedef struct SDL_UserEvent {
+    Uint32 type;
+    Uint32 reserved;
+    Uint64 timestamp;
+    SDL_WindowID windowID;
+    Sint32 code;
+    void *data1;
+    void *data2;
+} SDL_UserEvent;
+
 typedef union SDL_Event {
     Uint32 type;
     SDL_CommonEvent common;
@@ -21730,6 +21743,7 @@ typedef union SDL_Event {
     SDL_MouseButtonEvent button;
     SDL_MouseWheelEvent wheel;
     SDL_WindowEvent window;
+    SDL_UserEvent user;
     Uint8 padding[128];
 } SDL_Event;
 
@@ -21804,6 +21818,11 @@ typedef Uint64 SDL_WindowFlags;
 #define SDL_EVENT_MOUSE_BUTTON_DOWN 0x401
 #define SDL_EVENT_MOUSE_BUTTON_UP 0x402
 #define SDL_EVENT_MOUSE_WHEEL 0x403
+/* App-registered event range (#604): SDL_RegisterEvents allocates from
+   SDL_EVENT_USER upward; SDL_EVENT_LAST bounds the legal type space. */
+#define SDL_EVENT_FIRST 0x0
+#define SDL_EVENT_USER 0x8000
+#define SDL_EVENT_LAST 0xFFFF
 #define SDL_BUTTON_LEFT 1
 #define SDL_BUTTON_MIDDLE 2
 #define SDL_BUTTON_RIGHT 3
@@ -22027,6 +22046,29 @@ void SDL_DestroySurface(SDL_Surface *surface);
 bool SDL_PollEvent(SDL_Event *event);
 bool SDL_WaitEvent(SDL_Event *event);
 bool SDL_WaitEventTimeout(SDL_Event *event, Sint32 timeoutMS);
+/* ---- Event-queue manipulation (#604) ----
+   Operations over the veneer's own queue. SDL_PumpEvents is the explicit
+   drain of the OS input ring (the same primitive SDL_PollEvent pumps
+   through), which also advances the #493 input-state snapshots — so the
+   upstream SDL_PumpEvents + SDL_GetKeyboardState no-event-loop idiom reads
+   exactly as documented. The scan/flush entries operate on the queue as-is
+   (upstream semantics: they do not pump). SDL_PushEvent stamps a zero
+   timestamp; this runtime is single-threaded, so a push can never race a
+   parked SDL_WaitEvent — the wait loop re-polls before every park, and a
+   pushed event completes the next wait without parking. */
+void SDL_PumpEvents(void);
+bool SDL_PushEvent(SDL_Event *event);
+Uint32 SDL_RegisterEvents(int numevents);
+bool SDL_HasEvent(Uint32 type);
+bool SDL_HasEvents(Uint32 minType, Uint32 maxType);
+void SDL_FlushEvent(Uint32 type);
+void SDL_FlushEvents(Uint32 minType, Uint32 maxType);
+typedef enum SDL_EventAction {
+    SDL_ADDEVENT,
+    SDL_PEEKEVENT,
+    SDL_GETEVENT
+} SDL_EventAction;
+int SDL_PeepEvents(SDL_Event *events, int numevents, SDL_EventAction action, Uint32 minType, Uint32 maxType);
 void SDL_DestroyWindow(SDL_Window *window);
 void SDL_Quit(void);
 void SDL_Delay(Uint32 ms);
@@ -27430,6 +27472,116 @@ bool SDL_WaitEvent(SDL_Event *event) {
     return SDL_WaitEventTimeout(event, -1);
 }
 
+/* ---- Event-queue manipulation (#604) ----
+   All over the freelist queue above. SDL_PumpEvents is the explicit
+   non-blocking ring drain (the #485 primitive SDL_PollEvent pumps through),
+   which also advances the #493 input-state snapshots — the push exports ARE
+   this runtime's "updated by SDL_PumpEvents" point. The scan/flush entries
+   operate on the queue as-is (upstream semantics: they do not pump).
+   Single-threaded runtime: SDL_PushEvent can never race a parked
+   SDL_WaitEvent — the wait loop re-polls before every park, so a pushed
+   event completes the next wait without parking. */
+
+void SDL_PumpEvents(void) {
+    __sdl_pump();
+}
+
+static bool __sdl_eq_type_in(Uint32 type, Uint32 minType, Uint32 maxType) {
+    return type >= minType && type <= maxType;
+}
+
+/* Append a copy of *event, stamping a zero timestamp (upstream SDL_AddEvent). */
+static void __sdl_eq_add(const SDL_Event *event) {
+    __SDL_EventEntry *e = __sdl_eq_alloc();
+    e->event = *event;
+    if (!e->event.common.timestamp) e->event.common.timestamp = __sdl_now_ns();
+    __sdl_eq_push(e);
+}
+
+bool SDL_PushEvent(SDL_Event *event) {
+    if (!event) return SDL_InvalidParamError("event");
+    __sdl_eq_add(event);
+    return 1;
+}
+
+/* Hand out types from the [SDL_EVENT_USER, SDL_EVENT_LAST] range; 0 on a
+   nonpositive or unsatisfiable request (upstream's exhaustion contract). */
+static Uint32 __sdl_next_user_event = SDL_EVENT_USER;
+
+Uint32 SDL_RegisterEvents(int numevents) {
+    if (numevents <= 0) return 0;
+    if ((Uint32)numevents > (Uint32)(SDL_EVENT_LAST - __sdl_next_user_event) + 1) return 0;
+    Uint32 first = __sdl_next_user_event;
+    __sdl_next_user_event += (Uint32)numevents;
+    return first;
+}
+
+int SDL_PeepEvents(SDL_Event *events, int numevents, SDL_EventAction action,
+                   Uint32 minType, Uint32 maxType) {
+    if (action == SDL_ADDEVENT) {
+        if (!events) { SDL_InvalidParamError("events"); return -1; }
+        for (int i = 0; i < numevents; i++)
+            __sdl_eq_add(&events[i]);
+        return numevents > 0 ? numevents : 0;
+    }
+    if (action != SDL_PEEKEVENT && action != SDL_GETEVENT) {
+        SDL_InvalidParamError("action");
+        return -1;
+    }
+    /* NULL events = a counting peek capped at one — upstream's exact rule
+       (SDL_HasEvents only needs "is there at least one"). */
+    SDL_Event tmp;
+    if (!events) { events = &tmp; numevents = 1; action = SDL_PEEKEVENT; }
+    int used = 0;
+    __SDL_EventEntry *e = __sdl_eq_head, *prev = 0;
+    while (e && used < numevents) {
+        __SDL_EventEntry *next = e->next;
+        if (__sdl_eq_type_in(e->event.type, minType, maxType)) {
+            events[used++] = e->event;
+            if (action == SDL_GETEVENT) {
+                if (prev) prev->next = next; else __sdl_eq_head = next;
+                if (__sdl_eq_tail == e) __sdl_eq_tail = prev;
+                e->next = __sdl_eq_free;
+                __sdl_eq_free = e;
+                e = next;
+                continue;
+            }
+        }
+        prev = e;
+        e = next;
+    }
+    return used;
+}
+
+bool SDL_HasEvents(Uint32 minType, Uint32 maxType) {
+    for (__SDL_EventEntry *e = __sdl_eq_head; e; e = e->next)
+        if (__sdl_eq_type_in(e->event.type, minType, maxType)) return 1;
+    return 0;
+}
+
+bool SDL_HasEvent(Uint32 type) {
+    return SDL_HasEvents(type, type);
+}
+
+void SDL_FlushEvents(Uint32 minType, Uint32 maxType) {
+    __SDL_EventEntry *e = __sdl_eq_head, *prev = 0;
+    while (e) {
+        __SDL_EventEntry *next = e->next;
+        if (__sdl_eq_type_in(e->event.type, minType, maxType)) {
+            if (prev) prev->next = next; else __sdl_eq_head = next;
+            if (__sdl_eq_tail == e) __sdl_eq_tail = prev;
+            e->next = __sdl_eq_free;
+            __sdl_eq_free = e;
+        } else {
+            prev = e;
+        }
+        e = next;
+    }
+}
+
+void SDL_FlushEvent(Uint32 type) {
+    SDL_FlushEvents(type, type);
+}
 
 /* ---- Audio ----
    SDL3 replaced the SDL2 device + queue API with SDL_AudioStream. We keep the
