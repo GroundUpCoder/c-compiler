@@ -3859,9 +3859,13 @@ var BLOCK_FS = (function () {
 
   // fsync(fd)/fdatasync(fd) — durability. The store is one handle, so
   // flush() is whole-image (allowed: fsync may flush more than requested).
-  // No fd validation, matching the historical env behavior: stdio and
-  // freshly-dup'd fds all land here and must not fail.
+  // A descriptor that is not open is EBADF (#652) — the stdio entries are
+  // seeded in the table and dup shares entry objects, so every live fd
+  // (console/pipe/dev included) still succeeds: fsync on a non-file kind is
+  // a harmless whole-store flush, matching the kernel's FS_FSYNC arm.
   BlockFS.prototype.fsync = function (fd) {
+    if (fd < 0 || fd >= this._fdTable.length || !this._fdTable[fd])
+      return this._setErr('EBADF');
     this._s.flush();
     return 0;
   };
@@ -3887,7 +3891,19 @@ var BLOCK_FS = (function () {
 
     if (size > ino.extentCapacity) {
       if (this._growExtent(ino, size) === null) return this._setErr('ENOSPC');
-    } else if (size < ino.dataSize && size > 0 &&
+    } else if (size === 0) {
+      // Truncate-to-zero releases the extent outright, exactly like the
+      // O_TRUNC arm of open() (#652). The shrink branch below is gated on
+      // size > 0, so before this a truncate-and-rewrite cycle retained the
+      // file's whole old extent — a slow space leak on the ordinary save
+      // path. Safe against concurrent readers on the same inode: every
+      // read()/write() re-reads the inode through the store (the
+      // read-through invariant), sees dataSize 0, and returns EOF / grows a
+      // fresh extent before ever touching extentOffset.
+      if (ino.extentOffset) this._alloc.free(ino.extentOffset);
+      ino.extentOffset = 0;
+      ino.extentCapacity = 0;
+    } else if (size < ino.dataSize &&
                size < ino.extentCapacity / 4) {
       // Shrink extent if significantly smaller than capacity
       var newExt = this._alloc.realloc(ino.extentOffset, Math.max(size, 256));

@@ -883,6 +883,81 @@ test('#644: zero-length write past EOF is a no-op on a regular file (v4)', funct
   assert(p.length === 0, 'v4 image fsck should be clean, got:\n  ' + p.join('\n  '));
 });
 
+// ftruncate(fd, 0) must release the file's extent, exactly like the O_TRUNC
+// arm of open() does (#652). The shrink branch is gated on size > 0, so
+// truncate-to-zero used to keep the whole old extent allocated — size read 0
+// but the space stayed consumed, a slow leak on every file truncated empty
+// and left that way. v4 + fsck_v4: the format the shipped OS mounts, and the
+// free must leave the allocator/free-list accounting clean.
+test('ftruncate(fd, 0) releases the extent (and survives a concurrent reader)', function () {
+  var store = new MemoryByteStore(4 * 1024 * 1024);
+  var fs = BLOCK_FS.createV4(store);
+
+  var fd = fs.open('/f', O_CREAT | O_RDWR, 0o644);
+  assert(!isErr(fd), 'open: ' + fs._lastError);
+  var big = new Uint8Array(256 * 1024).fill(0x41);
+  assertEq(fs.write(fd, big, big.length), big.length, 'write 256K');
+
+  // A second fd on the same inode — the concurrent reader the release must
+  // not break (reads go through the inode on every call, so it sees EOF).
+  var rfd = fs.open('/f', 0, 0);
+  assert(!isErr(rfd), 'reader open: ' + fs._lastError);
+
+  var inoId = fs._fdTable[fd].inoId;
+  var before = fs._inodes.read(inoId);
+  assert(before.extentOffset !== 0 && before.extentCapacity >= big.length,
+    'precondition: extent allocated (' + before.extentCapacity + ')');
+
+  assertEq(fs.ftruncate(fd, 0), 0, 'ftruncate(fd,0): ' + fs._lastError);
+  var after = fs._inodes.read(inoId);
+  assertEq(after.dataSize, 0, 'size is 0');
+  assertEq(after.extentOffset, 0, 'extent released (offset)');
+  assertEq(after.extentCapacity, 0, 'extent released (capacity)');
+
+  // The concurrent reader sees EOF, not stale bytes or a crash.
+  var buf = new Uint8Array(16);
+  assertEq(fs.read(rfd, buf, 16), 0, 'reader sees EOF');
+
+  // Rewrite through the surviving reader-side inode: a fresh extent grows.
+  var wfd2 = fs.open('/f', O_RDWR, 0);
+  assertEq(fs.write(wfd2, encode('NEW'), 3), 3, 'rewrite after release');
+  assertEq(fs.read(rfd, buf, 16), 3, 'reader sees the rewrite');
+  assertEq(decode(buf.subarray(0, 3)), 'NEW', 'content correct');
+  fs.close(fd); fs.close(rfd); fs.close(wfd2);
+
+  var p = fsck_v4(store);
+  assert(p.length === 0, 'v4 image fsck should be clean, got:\n  ' + p.join('\n  '));
+});
+
+// fsync(fd): POSIX answers EBADF for a descriptor that is not open (#652).
+// BlockFS.fsync used to skip fd validation entirely, so a program syncing a
+// closed or never-opened fd never saw its own bug. Every LIVE fd — stdio
+// (seeded in the table), files, pipes — must keep succeeding: fsync on a
+// non-file kind stays a harmless whole-store flush (the kernel FS_FSYNC rule).
+test('fsync() on a descriptor that is not open is EBADF; live fds still succeed', function () {
+  var r = makeFS();
+  assertEq(r.fs.fsync(999), null, 'never-opened fd refused');
+  assertEq(r.fs._lastError, 'EBADF', 'errno EBADF');
+  assertEq(r.fs.fsync(-1), null, 'negative fd refused');
+  assertEq(r.fs._lastError, 'EBADF', 'errno EBADF');
+
+  var fd = r.fs.open('/f', O_CREAT | O_RDWR, 0o644);
+  assertEq(r.fs.fsync(fd), 0, 'live file fd syncs');
+  r.fs.close(fd);
+  assertEq(r.fs.fsync(fd), null, 'closed fd refused');
+  assertEq(r.fs._lastError, 'EBADF', 'errno EBADF');
+
+  // Controls: stdio and pipe fds are live entries and must not fail.
+  assertEq(r.fs.fsync(0), 0, 'stdin');
+  assertEq(r.fs.fsync(1), 0, 'stdout');
+  assertEq(r.fs.fsync(2), 0, 'stderr');
+  var pfds = r.fs.pipe();
+  assertEq(r.fs.fsync(pfds[0]), 0, 'pipe read end');
+  assertEq(r.fs.fsync(pfds[1]), 0, 'pipe write end');
+  r.fs.close(pfds[0]); r.fs.close(pfds[1]);
+  fsckClean(r.store, 'after fsync probes');
+});
+
 // ---------------------------------------------------------------
 
 console.log('--- POSIX-semantics Tests ---');
