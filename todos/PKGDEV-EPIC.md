@@ -1,9 +1,40 @@
-# PKGDEV-EPIC — in-OS development of packages is THE primary epic
+# PKGDEV-EPIC — in-OS development of packages (TABLED)
 
-**Status: ACTIVE — jku, 2026-08-07. This is now the north star, ranked ABOVE
-the gamedev epic.** `todos/GAMEDEV-EPIC.md` is explicitly SECOND: it remains
+## 🔴 STATUS: TABLED — jku direct email ruling, 2026-08-13
+
+**Do not dispatch PKGDEV tickets.** jku ruled: table PKGDEV now, temporarily
+defer its real-GitHub authenticated Git dogfood (return to it in the future —
+it is NOT a gate on beginning gamedev), and pivot all work to gamedev full
+throttle. `todos/GAMEDEV-EPIC.md` is once again PRIMARY and EXCLUSIVE in
+allocation.
+
+Consequences, precisely:
+
+- **#569** (the real-GitHub dogfood, which was the narrowed exit gate) is
+  **deferred**. Its lane was STOPPED before completion. **No result from that
+  lane may be represented as a passed gate** — the evidence record is on the
+  ticket.
+- **PKGDEV resumes only on a later explicit jku ruling.** A coordinator may
+  NOT restart it by argument.
+- **Already-landed PKGDEV capability remains available to gamedev.** A defect
+  in landed package/Git functionality may still be selected when concrete
+  evidence shows it BLOCKS active gamedev — that is gamedev-blocker work on a
+  gamedev argument, not an indirect restart of the PKGDEV backlog.
+- The standing **broken-build preemption** is unaffected and still outranks
+  everything.
+
+Ruling note: `~/git/meta/meta/notes/ruling-gamedev-full-throttle-pkgdev-tabled-2026-08-13.md`.
+Current ranking: `~/git/meta/notes/gamedev-queue-ranking.md`.
+
+Everything below is the RETIRED 2026-08-07 promotion, kept as history for
+whoever resumes the epic. **Do not re-apply it while the tabling stands.**
+
+---
+
+**Retired status (2026-08-07 → 2026-08-13): ACTIVE, ranked ABOVE the gamedev
+epic.** `todos/GAMEDEV-EPIC.md` was explicitly SECOND: it remained
 active and its rules (membership-is-argued, written justification burden,
-dogfood-pass mechanics, API honesty) apply verbatim here — only the precedence
+dogfood-pass mechanics, API honesty) applied verbatim here — only the precedence
 changed.
 
 > **jku, 2026-08-07, verbatim:** *"Even higher than the gamedev epic, I'm

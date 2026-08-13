@@ -34,13 +34,19 @@ customer" — that is the exact anti-pattern being rejected here.
 
 ## Tickets & the work queue (`cc-meta ticket`)
 
-**🎯 THE PRIMARY EPIC (jku, 2026-08-07): in-OS development of packages —
-read `todos/PKGDEV-EPIC.md` before selecting or filing work. The gamedev
-epic (`todos/GAMEDEV-EPIC.md`) is explicitly SECOND** — still active, its
-rules inherited by the primary epic; the queue filter selects
-PKGDEV-advancing tickets first, gamedev-advancing second, then the rest.
-Many tickets advance both — say so in the justification. A queued Epic
-(CPython/cpython-clang + pygame) starts only when jku says.
+**🎯 THE PRIMARY EPIC (jku direct ruling, 2026-08-13): gamedev, full
+throttle — read `todos/GAMEDEV-EPIC.md` before selecting or filing work.
+`todos/PKGDEV-EPIC.md` is TABLED** and must not be dispatched; the 2026-08-07
+promotion that ranked PKGDEV first is superseded. Gamedev is PRIMARY and
+EXCLUSIVE in allocation: select gamedev-advancing tickets, then apply the
+weight sort (light → medium → heavy, `Pn` breaks ties, bug-fix-first within a
+tier; dependencies outrank the sort). Every queued ticket needs a WRITTEN
+gamedev justification — membership is ARGUED, never pattern-matched. A defect
+in already-landed package/Git functionality may be selected only on a
+concrete gamedev-blocker argument, never to restart PKGDEV indirectly. PKGDEV
+resumes only on a later explicit jku ruling. Broken-build preemption still
+outranks everything. A queued Epic (CPython/cpython-clang + pygame) starts
+only when jku says.
 
 **The authoritative work queue is the cc ticket tracker** — per-project,
 DB-backed work items driven with the `cc-meta ticket` CLI. This repo's

@@ -1,14 +1,40 @@
-# GAMEDEV-EPIC — game development inside gucOS is the SECOND epic
+# GAMEDEV-EPIC — game development inside gucOS is THE primary epic
 
-**Status: ACTIVE but SECOND PLACE — jku, 2026-08-07: `todos/PKGDEV-EPIC.md`
-(in-OS development of packages) now ranks ABOVE this epic.** jku verbatim:
-*"let's promote this epic, make the gamedev epic second place, and put all
-our focus on this work now."* This epic stays active: its rules (membership
-argued, justification burden, dogfood mechanics, API honesty) are inherited
-by PKGDEV-EPIC and still bind; the queue filter selects PKGDEV-advancing
-tickets first, gamedev second. Original status (2026-08-04, superseded on
-precedence only): the north star every batch falls under. Companion
-principle: `todos/OS.md` "Dev-experience first" (commit `3fc46971`).
+## 🟢 STATUS: PRIMARY AND EXCLUSIVE — full throttle (jku direct ruling, 2026-08-13)
+
+jku ruled by email on 2026-08-13: **table PKGDEV, pivot all work to gamedev
+full throttle.** `todos/PKGDEV-EPIC.md` is TABLED and must not be dispatched;
+the 2026-08-07 promotion that put PKGDEV above this epic is **superseded**.
+
+Selection policy, in order:
+
+0. **Broken-build preemption** — unchanged, always first (`main` red, or
+   landing requires `--no-verify`).
+1. **Gamedev is PRIMARY and EXCLUSIVE in allocation.** Select work that
+   directly advances this document, then apply the standing weight sort
+   (light → medium → heavy, `Pn` breaks ties inside a tier, bug-fix-first
+   within a tier). **Dependencies outrank the sort** — only recorded
+   `blockedBy` edges count.
+2. **Every queued ticket still needs a WRITTEN gamedev justification**, in
+   the kickoff AND the state note. Membership is ARGUED, never
+   pattern-matched — "does the ticket say game" is the WRONG test. The burden
+   of proof is on the selector.
+3. **A landed-PKGDEV defect may be selected only on a concrete
+   gamedev-blocker argument**, never to restart the PKGDEV backlog
+   indirectly.
+
+Ruling note: `~/git/meta/meta/notes/ruling-gamedev-full-throttle-pkgdev-tabled-2026-08-13.md`.
+Current ranking: `~/git/meta/notes/gamedev-queue-ranking.md`.
+
+> **jku, 2026-08-04, verbatim:** *"The gamedev in gucOS is the primary focus
+> indefinitely until otherwise specified."* — restored in full on 2026-08-13.
+
+**Retired status (2026-08-07 → 2026-08-13): ACTIVE but SECOND PLACE**, while
+`todos/PKGDEV-EPIC.md` ranked above this epic. Its rules (membership argued,
+justification burden, dogfood mechanics, API honesty) were inherited by
+PKGDEV-EPIC. Original status (2026-08-04): the north star every batch falls
+under. Companion principle: `todos/OS.md` "Dev-experience first" (commit
+`3fc46971`).
 
 > **jku, 2026-08-04, verbatim:** *"The gamedev in gucOS is the primary focus
 > indefinitely until otherwise specified."*

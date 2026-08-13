@@ -1,5 +1,21 @@
 # Queue epic membership — the EXCLUSIVITY axis (#572, PKGDEV-EPIC rung 6b completion)
 
+> 🔴 **THE AXIS IS STILL VALID; ITS DIRECTION FLIPPED (jku, 2026-08-13).**
+> PKGDEV is TABLED and gamedev is PRIMARY AND EXCLUSIVE. The `epic:` token and
+> the classification method below are unchanged and still the right
+> instrument — but the selector now keeps **`epic:gamedev`** and parks
+> `epic:pkgdev`, which is the exact opposite of what the 2026-08-07 text below
+> says. See `todos/GAMEDEV-EPIC.md`.
+>
+> ⚠️ Two traps this flip creates, both measured:
+> - **A ticket tagged `epic:pkgdev` may still be gamedev-advancing** — #548
+>   (published doom SEGV) is tagged pkgdev and its own body argues the gamedev
+>   case. Read the argument, do not trust the token alone.
+> - **A lane- or coordinator-filed ticket has NO `epic:` token at all** and
+>   reads as ABSENT, not as "neither" — it will vanish from a
+>   token-filtered queue. Classify it yourself before concluding the queue is
+>   empty.
+
 Snapshot: 2026-08-09. **This file is the at-a-glance snapshot; the ticket DB
 is the live truth.** Every open ticket (statuses open + in_progress +
 deferred; done/dropped excluded) now carries a SECOND classification token in
