@@ -23,7 +23,10 @@ WebAssembly module built by the in-OS C compiler. Facts you cannot guess:
   refused at the second present (fatal, exit 69). Either write the program
   with `SDL_MAIN_USE_CALLBACKS` (SDL_AppInit/SDL_AppIterate/SDL_AppEvent/
   SDL_AppQuit, no main()), or run an unmodified blocking-loop program with
-  `SDL_RENDER_DRIVER=software`. Details: `/usr/share/doc/sdl-gucos.md`.
+  `SDL_RENDER_DRIVER=software`. Details: `/usr/share/doc/sdl-gucos.md` —
+  it also covers audio on headless boots (the queue never drains; keep a
+  bounded backlog, never block on drain) and text (there is no SDL_ttf;
+  use FreeType with the shipped fonts).
 - Commonly-missing SDL symbols: `SDL_snprintf` does NOT exist — format with
   `snprintf` from `<stdio.h>`. `SDL_Log` exists (message to stderr with a
   trailing newline); `printf`/`fprintf(stderr, ...)` work too.
