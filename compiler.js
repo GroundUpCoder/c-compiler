@@ -130,6 +130,9 @@ const Keyword = Object.freeze({
   X_BUILTIN_EXPECT: "__builtin_expect",
   X_BUILTIN_TRAP: "__builtin_trap",
   X_BUILTIN_CONSTANT_P: "__builtin_constant_p",
+  X_BUILTIN_BSWAP16: "__builtin_bswap16",
+  X_BUILTIN_BSWAP32: "__builtin_bswap32",
+  X_BUILTIN_BSWAP64: "__builtin_bswap64",
   X_MEMORY_SIZE: "__memory_size",
   X_MEMORY_GROW: "__memory_grow",
   X_BUILTIN: "__builtin",
@@ -960,6 +963,9 @@ const KEYWORD_MAP = new Map([
   ["__builtin_expect", Keyword.X_BUILTIN_EXPECT],
   ["__builtin_trap", Keyword.X_BUILTIN_TRAP],
   ["__builtin_constant_p", Keyword.X_BUILTIN_CONSTANT_P],
+  ["__builtin_bswap16", Keyword.X_BUILTIN_BSWAP16],
+  ["__builtin_bswap32", Keyword.X_BUILTIN_BSWAP32],
+  ["__builtin_bswap64", Keyword.X_BUILTIN_BSWAP64],
   ["__memory_size", Keyword.X_MEMORY_SIZE],
   ["__memory_grow", Keyword.X_MEMORY_GROW],
   ["__builtin", Keyword.X_BUILTIN],
@@ -2690,6 +2696,7 @@ const IntrinsicKind = Object.freeze({
   MEMORY_SIZE: "memory_size", MEMORY_GROW: "memory_grow",
   MEMORY_COPY: "memory_copy", MEMORY_FILL: "memory_fill",
   HEAP_BASE: "heap_base", ALLOCA: "alloca", UNREACHABLE: "unreachable",
+  BSWAP16: "bswap16", BSWAP32: "bswap32", BSWAP64: "bswap64",
   REF_IS_NULL: "ref_is_null", REF_EQ: "ref_eq", REF_NULL: "ref_null",
   REF_TEST: "ref_test", REF_TEST_NULL: "ref_test_null",
   REF_CAST: "ref_cast", REF_CAST_NULL: "ref_cast_null",
@@ -5938,6 +5945,26 @@ function constEvalItem(expr) {
     case AST.ESizeofType: return new ConstEval.Item(BigInt(expr.operandType.sizeofResult()), Types.TUINT);
     case AST.EAlignofExpr: return new ConstEval.Item(BigInt(expr.expr.type.align), Types.TUINT);
     case AST.EAlignofType: return new ConstEval.Item(BigInt(expr.operandType.align), Types.TUINT);
+    // __builtin_bswapN(const) is an integer constant expression (GCC folds
+    // it; vendored headers use it in static contexts — #680's ICE leg). The
+    // operand funnels through ConstEval.convert like a cast, then the bytes
+    // swap. Other intrinsic kinds are not constant expressions.
+    case AST.EIntrinsic: {
+      let width;
+      switch (expr.intrinsicKind) {
+        case Types.IntrinsicKind.BSWAP16: width = 2; break;
+        case Types.IntrinsicKind.BSWAP32: width = 4; break;
+        case Types.IntrinsicKind.BSWAP64: width = 8; break;
+        default: return null;
+      }
+      const a = constEvalItem(expr.args[0]);
+      if (a === null) return null;
+      const conv = ConstEval.convert(a, expr.type);
+      if (conv === null || ConstEval.isFloatItem(conv)) return null;
+      let v = conv.value, r = 0n;
+      for (let i = 0; i < width; i++) { r = (r << 8n) | (v & 0xffn); v >>= 8n; }
+      return new ConstEval.Item(r, expr.type);
+    }
     default: return null;
   }
 }
@@ -9254,6 +9281,9 @@ function printC(units, options) {
       case Types.IntrinsicKind.VA_END: return "__builtin_va_end(" + args + ")";
       case Types.IntrinsicKind.VA_COPY: return "__builtin_va_copy(" + args + ")";
       case Types.IntrinsicKind.UNREACHABLE: return "__builtin_unreachable()";
+      case Types.IntrinsicKind.BSWAP16: return "__builtin_bswap16(" + args + ")";
+      case Types.IntrinsicKind.BSWAP32: return "__builtin_bswap32(" + args + ")";
+      case Types.IntrinsicKind.BSWAP64: return "__builtin_bswap64(" + args + ")";
       case Types.IntrinsicKind.ALLOCA: return "__builtin(alloca" + (args ? ", " + args : "") + ")";
       case Types.IntrinsicKind.MEMORY_SIZE: return "__builtin(memory_size)";
       case Types.IntrinsicKind.MEMORY_GROW: return "__builtin(memory_grow, " + args + ")";
@@ -11693,6 +11723,16 @@ class Parser {
     if (this.atKW(Lexer.Keyword.X_BUILTIN_UNREACHABLE)) { return this.parseIntrinsic(Types.IntrinsicKind.UNREACHABLE); }
     if (this.atKW(Lexer.Keyword.X_BUILTIN_ABORT)) { return this.parseIntrinsic(Types.IntrinsicKind.UNREACHABLE); }
     if (this.atKW(Lexer.Keyword.X_BUILTIN_TRAP)) { return this.parseIntrinsic(Types.IntrinsicKind.UNREACHABLE); }
+
+    // __builtin_bswap16/32/64(x) — GCC byte-swap builtins (#680). Real
+    // intrinsics, not prelude macros: the argument is converted to the
+    // unsigned result type (GCC's uintN_t parameter) and evaluated exactly
+    // once; a constant argument still folds in an integer constant
+    // expression via constEvalItem's EIntrinsic case.
+    if (this.atKW(Lexer.Keyword.X_BUILTIN_BSWAP16)) { return this.parseBswap(Types.IntrinsicKind.BSWAP16, Types.TUSHORT); }
+    if (this.atKW(Lexer.Keyword.X_BUILTIN_BSWAP32)) { return this.parseBswap(Types.IntrinsicKind.BSWAP32, Types.TUINT); }
+    if (this.atKW(Lexer.Keyword.X_BUILTIN_BSWAP64)) { return this.parseBswap(Types.IntrinsicKind.BSWAP64, Types.TULLONG); }
+
     if (this.matchKW(Lexer.Keyword.X_BUILTIN_EXPECT)) {
       this.expect("(");
       const first = this.parseAssignmentExpression();
@@ -12360,6 +12400,22 @@ class Parser {
     let retType = Types.TVOID;
     if (ikind === Types.IntrinsicKind.VA_START || ikind === Types.IntrinsicKind.VA_END || ikind === Types.IntrinsicKind.VA_COPY) retType = Types.TVOID;
     return new AST.EIntrinsic(Lexer.Loc.fromTok(kwTok), retType, ikind, args);
+  }
+
+  // __builtin_bswapN(x): one argument, converted as if by assignment to the
+  // unsigned parameter type (GCC signatures: uint16_t(uint16_t),
+  // uint32_t(uint32_t), uint64_t(uint64_t)) and evaluated exactly once.
+  parseBswap(ikind, retType) {
+    const kwTok = this.peek();
+    this.advance();
+    this.expect("(");
+    const arg = this.parseAssignmentExpression();
+    this.expect(")");
+    const at = arg.type.removeQualifiers();
+    if (!at.isInteger() && !at.isFloatingPoint()) {
+      this.error(kwTok, `${kwTok.text} requires an arithmetic argument, got '${arg.type.toString()}'`);
+    }
+    return new AST.EIntrinsic(Lexer.Loc.fromTok(kwTok), retType, ikind, [arg]);
   }
 
   parseVaArg() {
@@ -17362,6 +17418,16 @@ function constEvalExpr(expr, policy) {
   switch (expr.constructor) {
     case AST.EInt: return { kind: "int", intVal: expr.value };
     case AST.EFloat: return { kind: "float", floatVal: expr.value };
+    // __builtin_bswapN(const) in a static initializer (#680): the typed
+    // evaluator owns the fold — delegate so the two never disagree.
+    // Non-bswap intrinsic kinds yield null there, hence stay non-constant.
+    case AST.EIntrinsic: {
+      const item = constEvalItem(expr);
+      if (item === null) return null;
+      return ConstEval.isFloatItem(item)
+        ? { kind: "float", floatVal: item.fval }
+        : { kind: "int", intVal: item.value };
+    }
     case AST.EString: {
       const addr = policy.getStringAddr(expr.value, expr);
       if (addr === null || addr === undefined) return null;
@@ -20643,6 +20709,73 @@ class CodeGenerator {
             break;
           case Types.IntrinsicKind.UNREACHABLE:
             this.body.unreachable(); break;
+          // __builtin_bswap16/32/64 (#680): wasm has no bswap opcode, so the
+          // swap is shifts+masks over a temp local — the argument is emitted
+          // (and thus evaluated) exactly ONCE, converted to the unsigned
+          // result type first (emitConversion masks/extends as needed).
+          case Types.IntrinsicKind.BSWAP16: {
+            // t <= 0xffff after the u16 conversion: ((t << 8) | (t >> 8)) & 0xffff
+            this.emitExpr(expr.args[0]);
+            this.emitConversion(expr.args[0].type, Types.TUSHORT, expr.args[0]);
+            this.pushLocalScope();
+            const t = this.allocLocal(WT_I32);
+            this.body.localTee(t);
+            this.body.i32Const(8); this.body.aop(WT_I32, ALU.OP_SHL);
+            this.body.localGet(t);
+            this.body.i32Const(8); this.body.aop(WT_I32, ALU.OP_SHR_U);
+            this.body.aop(WT_I32, ALU.OP_OR);
+            this.body.i32Const(0xffff); this.body.aop(WT_I32, ALU.OP_AND);
+            this.popLocalScope();
+            break;
+          }
+          case Types.IntrinsicKind.BSWAP32: {
+            this.emitExpr(expr.args[0]);
+            this.emitConversion(expr.args[0].type, Types.TUINT, expr.args[0]);
+            this.pushLocalScope();
+            const t = this.allocLocal(WT_I32);
+            this.body.localTee(t);
+            this.body.i32Const(24); this.body.aop(WT_I32, ALU.OP_SHL);
+            this.body.localGet(t);
+            this.body.i32Const(8); this.body.aop(WT_I32, ALU.OP_SHL);
+            this.body.i32Const(0x00ff0000); this.body.aop(WT_I32, ALU.OP_AND);
+            this.body.aop(WT_I32, ALU.OP_OR);
+            this.body.localGet(t);
+            this.body.i32Const(8); this.body.aop(WT_I32, ALU.OP_SHR_U);
+            this.body.i32Const(0x0000ff00); this.body.aop(WT_I32, ALU.OP_AND);
+            this.body.aop(WT_I32, ALU.OP_OR);
+            this.body.localGet(t);
+            this.body.i32Const(24); this.body.aop(WT_I32, ALU.OP_SHR_U);
+            this.body.aop(WT_I32, ALU.OP_OR);
+            this.popLocalScope();
+            break;
+          }
+          case Types.IntrinsicKind.BSWAP64: {
+            this.emitExpr(expr.args[0]);
+            this.emitConversion(expr.args[0].type, Types.TULLONG, expr.args[0]);
+            this.pushLocalScope();
+            const t = this.allocLocal(WT_I64);
+            this.body.localTee(t);
+            this.body.i64Const(56n); this.body.aop(WT_I64, ALU.OP_SHL);
+            const masks = [
+              [40n, ALU.OP_SHL, 0x00ff000000000000n],
+              [24n, ALU.OP_SHL, 0x0000ff0000000000n],
+              [8n, ALU.OP_SHL, 0x000000ff00000000n],
+              [8n, ALU.OP_SHR_U, 0x00000000ff000000n],
+              [24n, ALU.OP_SHR_U, 0x0000000000ff0000n],
+              [40n, ALU.OP_SHR_U, 0x000000000000ff00n],
+            ];
+            for (const [amt, op, mask] of masks) {
+              this.body.localGet(t);
+              this.body.i64Const(amt); this.body.aop(WT_I64, op);
+              this.body.i64Const(mask); this.body.aop(WT_I64, ALU.OP_AND);
+              this.body.aop(WT_I64, ALU.OP_OR);
+            }
+            this.body.localGet(t);
+            this.body.i64Const(56n); this.body.aop(WT_I64, ALU.OP_SHR_U);
+            this.body.aop(WT_I64, ALU.OP_OR);
+            this.popLocalScope();
+            break;
+          }
           case Types.IntrinsicKind.REF_IS_NULL:
             this.emitExpr(expr.args[0]); this.body.refIsNull(); break;
           case Types.IntrinsicKind.REF_EQ:
@@ -35021,12 +35154,9 @@ function createDefaultPPRegistry() {
     "#define __builtin_ctzl(x) __builtin_ctz(x)",
     "#define __builtin_clzll(x) ((int)__wasm(long long, (x), op 0x79))",
     "#define __builtin_ctzll(x) ((int)__wasm(long long, (x), op 0x7a))",
-    // Byte-swap builtins (GCC/Clang). wasm has no native bswap opcode, so
-    // expand to the arithmetic form. Callers pass simple values in practice;
-    // the argument is parenthesized but evaluated more than once.
-    "#define __builtin_bswap16(x) ((unsigned short)((((unsigned short)(x) & 0xff00u) >> 8) | (((unsigned short)(x) & 0x00ffu) << 8)))",
-    "#define __builtin_bswap32(x) ((unsigned int)((((unsigned int)(x) & 0xff000000u) >> 24) | (((unsigned int)(x) & 0x00ff0000u) >> 8) | (((unsigned int)(x) & 0x0000ff00u) << 8) | (((unsigned int)(x) & 0x000000ffu) << 24)))",
-    "#define __builtin_bswap64(x) ((unsigned long long)( (((unsigned long long)(x) & 0xff00000000000000ull) >> 56) | (((unsigned long long)(x) & 0x00ff000000000000ull) >> 40) | (((unsigned long long)(x) & 0x0000ff0000000000ull) >> 24) | (((unsigned long long)(x) & 0x000000ff00000000ull) >> 8) | (((unsigned long long)(x) & 0x00000000ff000000ull) << 8) | (((unsigned long long)(x) & 0x0000000000ff0000ull) << 24) | (((unsigned long long)(x) & 0x000000000000ff00ull) << 40) | (((unsigned long long)(x) & 0x00000000000000ffull) << 56) ))",
+    // __builtin_bswap16/32/64 are REAL builtins (parser intrinsics, #680) —
+    // single argument evaluation, ICE-foldable. Never re-add them here as
+    // macros: the macro form evaluated the argument up to 8 times.
   ].join("\n") + "\n";
 
   return pp;
