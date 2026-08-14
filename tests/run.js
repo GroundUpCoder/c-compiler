@@ -467,6 +467,8 @@ const RULES = [
     'synthesizes vendor/magicpoint/demo.gif — test_present_e2e.js + os-present.mjs assert its pixels'],
   [/^tools\/mkwebfixtures\.js$/, ['kernel'],
     'synthesizes vendor/netsurf/test/img/* — test_netsurf_content_e2e.js decodes them'],
+  [/^tools\/mksdlindex\.js$/, ['host'],
+    'generates os/doc/sdl-api-index.md (#677) — test_sdl_api_index.js runs its --check drift gate + red controls'],
   [/^tools\/mkgit2srclib\.js$/, ['fakegit', 'projects', 'kernel'],
     'generates vendor/libgit2\'s srclib forwarders + git2_srclib.h — the fakegit/projects build is what a missing forwarder breaks, and test_gucman_libgit2_e2e.js runs its --check'],
   [/^tools\/build-libc-ext\.js$/, ['ext', 'unit', 'libc'],
