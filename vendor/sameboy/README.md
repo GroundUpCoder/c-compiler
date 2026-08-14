@@ -73,11 +73,17 @@ In-OS: `sameboy /root/roms/SuperMarioDeluxe.gbc &` (kernel e2e:
 | `core/defs.h` | `__builtin_bswap16/32/64` as static inlines | builtins not provided by the compiler |
 | `core/gb.c` | `#include <alloca.h>` | alloca is not in `<stdlib.h>` in this libc |
 | `core/gb.c` | `vasprintf` → fixed 512-byte `vsnprintf` | no vasprintf in this libc |
-| `core/gb.c` | rtc-section VLA → checked 128-byte buffer | `offsetof` doesn't fold to an integer constant expression yet |
+| `core/gb.c` | rtc-section VLA → checked 128-byte buffer | `offsetof` through an anonymous union/struct member (`GB_SECTION`'s `*_section_start` markers) doesn't fold to an integer constant expression; plain-member `offsetof` folds since `bfe4edc5` (re-measured for #684) |
 | `core/printer.c` | image VLA → `static` max-size buffer | VLAs unsupported; 128 KB doesn't fit the 64 KB wasm stack, hence static (single-threaded world) |
 | `core/display.c` | one statement expression unrolled | no `({…})` support |
 | `core/apu.c` `core/random.c` | `__attribute__((constructor))` → lazy init | constructors unsupported; random.c seeds on first `GB_random` (explicit `GB_random_seed` still wins) |
-| `core/apu.c` `core/display.c` `core/sgb.c` | `x ?: y` → `x ? x : y` (5 sites) | no GNU elvis operator; operands side-effect-free |
 
 Multi-character char constants (`'GBS\x01'`, `'TPP1'`, …) needed no patch:
 the compiler learned the GCC packing in todos/0085 (found by this port).
+
+### Retired patches (#684 — upstream text restored)
+
+- `core/apu.c` `core/display.c` `core/sgb.c` `x ?: y` → `x ? x : y` (5 sites):
+  the GNU elvis operator landed in `8999f38d` (#681), first operand evaluated
+  exactly once — the old rewrite's "operands side-effect-free" caveat is gone
+  with it.

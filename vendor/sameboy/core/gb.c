@@ -1707,8 +1707,10 @@ static void GB_reset_internal(GB_gameboy_t *gb, bool quick)
     uint32_t mbc_ram_size = gb->mbc_ram_size;
     GB_model_t model = gb->model;
     GB_update_clock_rate(gb);
-    /* PATCH(c-compiler): offsetof does not fold to an integer constant
-       expression here, so the VLA becomes a checked fixed buffer */
+    /* PATCH(c-compiler): offsetof through an anonymous union/struct member
+       (GB_SECTION's *_section_start markers) does not fold to an integer
+       constant expression, so the VLA becomes a checked fixed buffer.
+       Plain-member offsetof folds since bfe4edc5 (#684 re-measure). */
     size_t rtc_size = GB_SECTION_SIZE(rtc);
     uint8_t rtc_section[128];
     if (rtc_size > sizeof(rtc_section)) abort();

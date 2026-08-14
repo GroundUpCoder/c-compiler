@@ -12,7 +12,7 @@ const GB_palette_t GB_PALETTE_GBL  = {{{0x0A, 0x1C, 0x15}, {0x35, 0x78, 0x62}, {
 
 void GB_update_dmg_palette(GB_gameboy_t *gb)
 {
-    const GB_palette_t *palette = gb->dmg_palette ? gb->dmg_palette : &GB_PALETTE_GREY; /* PATCH(c-compiler): no GNU ?: */
+    const GB_palette_t *palette = gb->dmg_palette ?: &GB_PALETTE_GREY;
     if (gb->rgb_encode_callback && !GB_is_cgb(gb)) {
         gb->object_palettes_rgb[4] = gb->object_palettes_rgb[0] = gb->background_palettes_rgb[0] =
         gb->rgb_encode_callback(gb, palette->colors[3].r, palette->colors[3].g, palette->colors[3].b);

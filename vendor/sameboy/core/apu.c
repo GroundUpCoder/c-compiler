@@ -2288,7 +2288,7 @@ int GB_start_audio_recording(GB_gameboy_t *gb, const char *path, GB_audio_format
         case GB_AUDIO_FORMAT_AIFF: {
             aiff_header_t header = {0,};
             if (fwrite(&header, sizeof(header), 1, gb->apu_output.output_file) != 1) {
-                int ret = errno ? errno : EIO; /* PATCH(c-compiler): no GNU ?: */
+                int ret = errno ?: EIO;
                 fclose(gb->apu_output.output_file);
                 gb->apu_output.output_file = NULL;
                 return ret;
@@ -2298,7 +2298,7 @@ int GB_start_audio_recording(GB_gameboy_t *gb, const char *path, GB_audio_format
         case GB_AUDIO_FORMAT_WAV: {
             wav_header_t header = {0,};
             if (fwrite(&header, sizeof(header), 1, gb->apu_output.output_file) != 1) {
-                int ret = errno ? errno : EIO; /* PATCH(c-compiler): no GNU ?: */
+                int ret = errno ?: EIO;
                 fclose(gb->apu_output.output_file);
                 gb->apu_output.output_file = NULL;
                 return ret;
@@ -2314,7 +2314,7 @@ int GB_start_audio_recording(GB_gameboy_t *gb, const char *path, GB_audio_format
 int GB_stop_audio_recording(GB_gameboy_t *gb)
 {
     if (!gb->apu_output.output_file) {
-        int ret  = gb->apu_output.output_error ? gb->apu_output.output_error : -1; /* PATCH(c-compiler): no GNU ?: */
+        int ret  = gb->apu_output.output_error ?: -1;
         gb->apu_output.output_error = 0;
         return ret;
     }
