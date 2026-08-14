@@ -142,8 +142,8 @@ journaling mode:
 | `src/findutils/xargs.c` | (0035) `ISSPACE` statement expression → ALWAYS_INLINE helper (no GNU statement exprs; same rewrite as libbb.h's ctype trio) |
 | `src/editors/awk.c` | (0035) F_rn: `#elif` branch composing 63 uniform bits from five 15-bit rand() draws — this libc's RAND_MAX is 32767, upstream only handles ≥31-bit |
 | `src/miscutils/less.c` | (0035) three VLAs (`re_wrap` linebuf, `print_found`/`print_ascii` buf) → xmalloc/free (no VLAs in this compiler) |
-| `src/miscutils/time.c` | (#619) `HAVE_WAIT3` fallback body: `wait4` (absent from this libc) → `waitpid` + `getrusage` (which this runtime zeroes — user/sys honestly 0.00, wall time real); `xvfork` site → the setjmp journaling-shim form (the hush/tar rewrite); `getenv("TIME") ? : default` elvis → explicit fallback (no GNU `?:` in this compiler) |
-| `src/editors/vi.c` | `sig = sigsetjmp(...); if (sig != 0)` → supported if-form (the value was only ever tested against 0); 6 GNU `?:` elvis sites → plain ternary (side-effect-free operands, this compiler has no `?:`) |
+| `src/miscutils/time.c` | (#619) `HAVE_WAIT3` fallback body: `wait4` (absent from this libc) → `waitpid` + `getrusage` (which this runtime zeroes — user/sys honestly 0.00, wall time real); `xvfork` site → the setjmp journaling-shim form (the hush/tar rewrite) |
+| `src/editors/vi.c` | `sig = sigsetjmp(...); if (sig != 0)` → supported if-form (the value was only ever tested against 0) |
 | `src/procps/kill.c` | killall/killall5 branches guarded out (predates 0043's /proc; un-guarding them is a possible follow-up now that procps_scan works) |
 | `src/procps/ps.c` | (0043) the cmdline print buffer VLA → xmalloc/free (no VLAs in this compiler; same rewrite as less.c's three) |
 | `src/procps/uptime.c`, `src/procps/free.c` | (0043) `<sys/sysinfo.h>` include gate widened to `__wasm__` (the port carries the header + a /proc-reading `sysinfo()` in libbb_stubs.c) |
@@ -152,6 +152,13 @@ journaling mode:
 
 (`xfuncs_printf.c`'s former "xmkstemp guarded out" entry is gone: the libc
 grew `mkstemp()` for `sed -i`, todos/0010.)
+
+(RETIRED, #685 — upstream text restored: the 7 GNU `?:` elvis rewrites,
+`vi.c` ×6 + `time.c` ×1. The elvis operator landed in `8999f38d` (#681),
+first operand evaluated exactly once, so the old rewrite's "operands must be
+side-effect-free" caveat — and time.c's split `getenv("TIME")` fallback,
+which existed because `x ? x : y` would have called it twice — are gone
+with it.)
 
 `busybox.config` records the exact configuration; regenerate `autoconf.h`
 with busybox's kconfig if it changes (then re-apply the exec-path edit —

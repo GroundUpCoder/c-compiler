@@ -788,7 +788,7 @@ static int next_tabstop(int col)
 
 static int prev_tabstop(int col)
 {
-	return col - ((col % tabstop) ? (col % tabstop) : tabstop); /* WASM PORT PATCH: GNU ?: */
+	return col - ((col % tabstop) ?: tabstop);
 }
 
 static int next_column(char c, int co)
@@ -1190,7 +1190,7 @@ static int get_motion_char(void)
 			// get any non-zero motion count
 			for (cnt = 0; isdigit(c); c = get_one_char())
 				cnt = cnt * 10 + (c - '0');
-			cmdcnt = (cmdcnt ? cmdcnt : 1) * cnt; /* WASM PORT PATCH: GNU ?: */
+			cmdcnt = (cmdcnt ?: 1) * cnt;
 		} else {
 			// ensure standalone '0' works
 			cmdcnt = 0;
@@ -1934,7 +1934,7 @@ static char *bound_dot(char *p) // make sure  text[0] <= P < "end"
 static void start_new_cmd_q(char c)
 {
 	// get buffer for new cmd
-	dotcnt = cmdcnt ? cmdcnt : 1; /* WASM PORT PATCH: GNU ?: */
+	dotcnt = cmdcnt ?: 1;
 	last_modifying_cmd[0] = c;
 	lmc_len = 1;
 	adding2q = 1;
@@ -3618,7 +3618,7 @@ static int find_range(char **start, char **stop, int cmd)
 			buftype = -1;
 	} else if (c == ' ' || c == 'l') {
 		// forward motion by character
-		int tmpcnt = (cmdcnt ? cmdcnt : 1); /* WASM PORT PATCH: GNU ?: */
+		int tmpcnt = (cmdcnt ?: 1);
 		buftype = PARTIAL;
 		do_cmd(c);		// execute movement cmd
 		// exclude last char unless range isn't what we expected
@@ -3921,7 +3921,7 @@ static void do_cmd(int c)
 			break;
 		}
 		cnt = 0;
-		i = cmdcnt ? cmdcnt : 1; /* WASM PORT PATCH: GNU ?: */
+		i = cmdcnt ?: 1;
 		// are we putting whole lines or strings
 		if (regtype[YDreg] == WHOLE) {
 			if (c == 'P') {
@@ -4469,7 +4469,7 @@ static void do_cmd(int c)
 	case 'r':			// r- replace the current char with user input
 		c1 = get_one_char();	// get the replacement char
 		if (c1 != 27) {
-			if (end_line(dot) - dot < (cmdcnt ? cmdcnt : 1)) { /* WASM PORT PATCH: GNU ?: */
+			if (end_line(dot) - dot < (cmdcnt ?: 1)) {
 				indicate_error();
 				goto dc6;
 			}

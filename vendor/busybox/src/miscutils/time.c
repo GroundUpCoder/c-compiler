@@ -449,9 +449,7 @@ int time_main(int argc UNUSED_PARAM, char **argv)
 {
 	resource_t res;
 	/* $TIME has lowest prio (-v,-p,-f FMT override it) */
-	/* WASM PORT PATCH: GNU "?:" (elvis) is not supported by this
-	 * compiler — spell the fallback out. */
-	const char *output_format = getenv("TIME");
+	const char *output_format = getenv("TIME") ? : default_format;
 	char *output_filename;
 	int output_fd;
 	int opt;
@@ -463,9 +461,6 @@ int time_main(int argc UNUSED_PARAM, char **argv)
 		OPT_o = (1 << 3),
 		OPT_f = (1 << 4),
 	};
-
-	if (!output_format)	/* WASM PORT PATCH (the elvis rewrite, above) */
-		output_format = default_format;
 
 	/* "+": stop on first non-option */
 	opt = getopt32(argv, "^+" "vpao:f:" "\0" "-1"/*at least one arg*/,
