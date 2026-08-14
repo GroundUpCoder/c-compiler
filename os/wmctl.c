@@ -53,7 +53,12 @@
  *   wmctl layer SID L                 pin to a z layer (todos/0038): -1
  *                                     bottom, 0 normal, 1 top; z ops never
  *                                     cross layers (list flags: T/B)
- *   wmctl key SID SCANCODE [KEYSYM [MOD]]      key press (down+up)
+ *   wmctl key SID SCANCODE [KEYSYM [MOD]]      key press (down+up); an
+ *                                     omitted KEYSYM derives the unmodified
+ *                                     press's keysym from SCANCODE (#676) —
+ *                                     `key SID 80` delivers SDLK_LEFT, not
+ *                                     the 0 no app matches; explicit KEYSYM
+ *                                     (shifted chars, chords) overrides
  *   wmctl click SID X Y [BUTTON]               click (down+up), local coords
  *   wmctl dblclick SID X Y [BUTTON]            two clicks on one connection
  *                                     (fast enough for client double-click
@@ -81,7 +86,9 @@
  *                                     (Alt+Tab, Ctrl+Esc, Win+arrow, user
  *                                     grabs) — `wmctl key` delivers per-
  *                                     window and bypasses them by design.
- *                                     No SID: the routing decides
+ *                                     No SID: the routing decides. An
+ *                                     omitted KEYSYM derives from SCANCODE
+ *                                     like `key` (#676)
  *   wmctl skeydown|skeyup SCANCODE [KEYSYM [MOD]]   one edge only (a held
  *                                     modifier, an asymmetric swallow)
  *   wmctl shot SID|screen [FILE [X Y W H]]     RGBA PNG (#657) to FILE or
@@ -371,6 +378,38 @@ static int32_t need_i32(const char *op, const char *what, const char *s) {
         exit(2);
     }
     return (int32_t)v;
+}
+
+/* Default keysym for a plain (no-modifier) press of SCANCODE (#676). An
+ * omitted KEYSYM used to inject 0 — an event no app can see, since gucOS
+ * apps match `event.key.key` (char literals / SDLK_*), so the injection
+ * "succeeded" and nothing reacted. Derive what real input delivers instead,
+ * mirroring the platform's one real mapping (host.js SDL_WEB `keysym()`,
+ * which turns the DOM event into the SDL event for every browser press):
+ * printable keys give their unshifted US-layout character, named keys their
+ * SDLK_* value — scancode | 0x40000000, SDL's SDLK_SCANCODE_MASK (arrows,
+ * F-keys, keypad, modifiers; SDLK_LEFT = 80|mask = 1073741904). Modifier
+ * application is not needed here: the syntax can only omit KEYSYM when MOD
+ * is also absent, so the derived press is always the unmodified one — an
+ * explicit KEYSYM (shifted chars, chord asymmetries) still overrides. */
+static int32_t sym_from_scancode(int32_t sc) {
+    if (sc <= 0) return 0;                            /* no key: nothing to derive */
+    if (sc >= 4 && sc <= 29) return 'a' + (sc - 4);   /* A..Z */
+    if (sc >= 30 && sc <= 38) return '1' + (sc - 30); /* 1..9 */
+    if (sc == 39) return '0';
+    switch (sc) {
+    case 40: return 13;     /* Return */
+    case 41: return 27;     /* Escape */
+    case 42: return 8;      /* Backspace */
+    case 43: return 9;      /* Tab */
+    case 44: return ' ';
+    case 45: return '-';    case 46: return '=';
+    case 47: return '[';    case 48: return ']';    case 49: return '\\';
+    case 51: return ';';    case 52: return '\'';   case 53: return '`';
+    case 54: return ',';    case 55: return '.';    case 56: return '/';
+    case 76: return 127;    /* Delete */
+    }
+    return sc | 0x40000000;
 }
 
 /* Float flavor for the fractional operands (wheel notches, todos/0210). */
@@ -838,7 +877,8 @@ int main(int argc, char **argv) {
     if (!strcmp(cmd, "skey") || !strcmp(cmd, "skeydown") || !strcmp(cmd, "skeyup")) {
         if (argc < 3) return usage();
         int32_t sc = need_i32(cmd, "SCANCODE", argv[2]);
-        int32_t sym = argc > 3 ? need_i32(cmd, "KEYSYM", argv[3]) : 0;
+        int32_t sym = argc > 3 ? need_i32(cmd, "KEYSYM", argv[3])
+                               : sym_from_scancode(sc);       /* #676 */
         int32_t mod = argc > 4 ? need_i32(cmd, "MOD", argv[4]) : 0;
         int32_t a[5] = { cmd[4] != 'u', sc, sym, mod, 0 /* repeat */ };
         /* skeydown/skeyup: one edge only — a held modifier for a following
@@ -926,7 +966,8 @@ int main(int argc, char **argv) {
     if (!strcmp(cmd, "key") || !strcmp(cmd, "keydown") || !strcmp(cmd, "keyup")) {
         if (argc < 4) return usage();
         int32_t sc = need_i32(cmd, "SCANCODE", argv[3]);
-        int32_t sym = argc > 4 ? need_i32(cmd, "KEYSYM", argv[4]) : 0;
+        int32_t sym = argc > 4 ? need_i32(cmd, "KEYSYM", argv[4])
+                               : sym_from_scancode(sc);       /* #676 */
         int32_t mod = argc > 5 ? need_i32(cmd, "MOD", argv[5]) : 0;
         int32_t a[5] = { sid, cmd[3] != 'u', sc, sym, mod };
         /* keydown/keyup (todos/0077): one edge only — a HELD modifier for

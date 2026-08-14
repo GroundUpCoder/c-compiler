@@ -57,6 +57,11 @@ WebAssembly module built by the in-OS C compiler. Facts you cannot guess:
   blocks until a window with that title exists, `wmctl tree` dumps a
   win32 app's widgets, `wmctl shot SID FILE` screenshots a window
   (`wmctl shot screen FILE` the whole screen). Use it to verify a GUI
-  program actually opened a window.
+  program actually opened a window. To play-test, inject input:
+  `wmctl key SID SCANCODE` presses a key — the keysym your app sees on
+  `event.key.key` is derived from the scancode (scancode 80 delivers
+  SDLK_LEFT, scancode 4 delivers 'a'); pass an explicit KEYSYM argument
+  only for shifted characters (`wmctl key SID SCANCODE KEYSYM [MOD]`).
+  `wmctl click SID X Y` clicks at window-local coordinates.
 - Never run `find /` or `grep -r /`: the full-tree walk is catastrophically
   slow and cannot be interrupted. Search a specific directory instead.
