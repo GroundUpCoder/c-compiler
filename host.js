@@ -7803,9 +7803,11 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
   // ({ fb, pendingCfg? }); pendingCfg drives the resize ack where present.
   // Covers the sprite-blit surface real SDL games use (RenderClear +
   // RenderTexture, nearest/linear sampling, per-texture color/alpha mod,
-  // src-over BLEND). Arbitrary affine quads (__sdl_render_quad off the axis)
-  // and __sdl_render_geometry degrade to a bbox / no-op — no sprite-blit game
-  // needs them (a noted follow-up).
+  // src-over BLEND), plus a real triangle rasterizer (#668) behind rotated
+  // __sdl_render_quad corners (RenderLine diagonals, rotated textured quads)
+  // and __sdl_render_geometry — pixel-center coverage under the GPU's
+  // top-left fill rule, so the two tiers cover the same pixels and split
+  // quads neither gap nor double-blend their shared edge.
   function makeSoftwareRenderer(winFor) {
     const rends = [];   // 1-based renderer records
     const texs = [];    // 1-based texture records
@@ -7931,6 +7933,103 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
         }
       }
     };
+    // ---- Triangle rasterizer (#668) ----
+    // One triangle from the flat 8-float-per-vertex layout [x,y,u,v,r,g,b,a]
+    // (u,v normalized 0..1, colors 0..1 — RENDER_WGSL's vertex layout, so both
+    // tiers rasterize the same input). oa/ob/oc are element offsets into V.
+    // Coverage is pixel-center sampling under the GPU's top-left fill rule:
+    // the two triangles of a split quad never gap and never double-blend
+    // their shared edge, and abutting geometry triangles compose exactly as
+    // on the GPU tier. Colors round to nearest at the write (the GPU's
+    // float→unorm8 conversion); the axis-aligned quad() fast path keeps its
+    // historical truncation — the two paths never rasterize the same call.
+    const tri = (rd, tx, blend, V, oa, ob, oc) => {
+      if (!rd.fb) ensureFb(rd);
+      const f = rd.fb, FW = rd.fbw, FH = rd.fbh;
+      const ax = V[oa], ay = V[oa + 1];
+      let bx = V[ob], by = V[ob + 1], cx = V[oc], cy = V[oc + 1];
+      // Wind clockwise (screen coords, y down) so the edge functions are
+      // positive inside; a CCW listing swaps B/C (attributes follow).
+      let area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+      if (area === 0) return;                       // degenerate: no pixels
+      if (area < 0) {
+        const t = ob; ob = oc; oc = t;
+        bx = V[ob]; by = V[ob + 1]; cx = V[oc]; cy = V[oc + 1];
+        area = -area;
+      }
+      const xmin = Math.max(0, Math.floor(Math.min(ax, bx, cx) - 0.5));
+      const xmax = Math.min(FW - 1, Math.ceil(Math.max(ax, bx, cx)));
+      const ymin = Math.max(0, Math.floor(Math.min(ay, by, cy) - 0.5));
+      const ymax = Math.min(FH - 1, Math.ceil(Math.max(ay, by, cy)));
+      if (xmax < xmin || ymax < ymin) return;
+      // Edge vectors: e0 = B→C (opposite A), e1 = C→A, e2 = A→B. For an edge
+      // P→Q, E(x,y) = (Q.x−P.x)(y−P.y) − (Q.y−P.y)(x−P.x); with clockwise
+      // winding all three are ≥0 inside, and E over the whole triangle at the
+      // opposite vertex equals area (so w/area are the barycentrics).
+      const e0x = cx - bx, e0y = cy - by;
+      const e1x = ax - cx, e1y = ay - cy;
+      const e2x = bx - ax, e2y = by - ay;
+      // Top-left rule, clockwise: top edges run right, left edges run up.
+      const tl0 = (e0y === 0 && e0x > 0) || e0y < 0;
+      const tl1 = (e1y === 0 && e1x > 0) || e1y < 0;
+      const tl2 = (e2y === 0 && e2x > 0) || e2y < 0;
+      const px0 = xmin + 0.5, py0 = ymin + 0.5;
+      let w0r = e0x * (py0 - by) - e0y * (px0 - bx);
+      let w1r = e1x * (py0 - cy) - e1y * (px0 - cx);
+      let w2r = e2x * (py0 - ay) - e2y * (px0 - ax);
+      const inv = 1 / area;
+      const au = V[oa + 2], av = V[oa + 3], ar = V[oa + 4], ag = V[oa + 5], ab = V[oa + 6], aa = V[oa + 7];
+      const bu = V[ob + 2], bv = V[ob + 3], br = V[ob + 4], bg = V[ob + 5], bb = V[ob + 6], ba = V[ob + 7];
+      const cu = V[oc + 2], cv = V[oc + 3], cr = V[oc + 4], cg = V[oc + 5], cb = V[oc + 6], ca = V[oc + 7];
+      let tp = null, TW = 0, TH = 0, linear = false;
+      if (tx) { tp = tx.cpuPixels; if (!tp) return; TW = tx.w; TH = tx.h; linear = tx.scaleMode === 1; }
+      const cl = (v) => (v < 0 ? 0 : v > 255 ? 255 : v);   // pre-put clamp: soup colors may exceed [0,1]
+      for (let y = ymin; y <= ymax; y++, w0r += e0x, w1r += e1x, w2r += e2x) {
+        let w0 = w0r, w1 = w1r, w2 = w2r;
+        let o = (y * FW + xmin) * 4;
+        for (let x = xmin; x <= xmax; x++, o += 4, w0 -= e0y, w1 -= e1y, w2 -= e2y) {
+          if (!((w0 > 0 || (w0 === 0 && tl0)) &&
+                (w1 > 0 || (w1 === 0 && tl1)) &&
+                (w2 > 0 || (w2 === 0 && tl2)))) continue;
+          const l0 = w0 * inv, l1 = w1 * inv, l2 = w2 * inv;
+          let r = ar * l0 + br * l1 + cr * l2;
+          let g = ag * l0 + bg * l1 + cg * l2;
+          let b = ab * l0 + bb * l1 + cb * l2;
+          let a = aa * l0 + ba * l1 + ca * l2;
+          if (tp) {
+            const U = (au * l0 + bu * l1 + cu * l2) * TW;
+            const Vt = (av * l0 + bv * l1 + cv * l2) * TH;
+            if (!linear) {
+              let ix = Math.floor(U); if (ix < 0) ix = 0; else if (ix >= TW) ix = TW - 1;
+              let iy = Math.floor(Vt); if (iy < 0) iy = 0; else if (iy >= TH) iy = TH - 1;
+              const so = (iy * TW + ix) * 4;
+              r *= tp[so]; g *= tp[so + 1]; b *= tp[so + 2]; a *= tp[so + 3];
+            } else {
+              // Bilinear at texel-center + clamp-to-edge — quad()'s formula,
+              // so the two software paths sample identically.
+              const uu = U - 0.5, vv = Vt - 0.5;
+              let tx0 = Math.floor(uu); const fx = uu - tx0; let tx1 = tx0 + 1;
+              let ty0 = Math.floor(vv); const fy = vv - ty0; let ty1 = ty0 + 1;
+              if (tx0 < 0) tx0 = 0; else if (tx0 >= TW) tx0 = TW - 1;
+              if (tx1 < 0) tx1 = 0; else if (tx1 >= TW) tx1 = TW - 1;
+              if (ty0 < 0) ty0 = 0; else if (ty0 >= TH) ty0 = TH - 1;
+              if (ty1 < 0) ty1 = 0; else if (ty1 >= TH) ty1 = TH - 1;
+              const a00 = (ty0 * TW + tx0) * 4, a01 = (ty0 * TW + tx1) * 4;
+              const a10 = (ty1 * TW + tx0) * 4, a11 = (ty1 * TW + tx1) * 4;
+              const w00 = (1 - fx) * (1 - fy), w01 = fx * (1 - fy), w10 = (1 - fx) * fy, w11 = fx * fy;
+              r *= tp[a00] * w00 + tp[a01] * w01 + tp[a10] * w10 + tp[a11] * w11;
+              g *= tp[a00 + 1] * w00 + tp[a01 + 1] * w01 + tp[a10 + 1] * w10 + tp[a11 + 1] * w11;
+              b *= tp[a00 + 2] * w00 + tp[a01 + 2] * w01 + tp[a10 + 2] * w10 + tp[a11 + 2] * w11;
+              a *= tp[a00 + 3] * w00 + tp[a01 + 3] * w01 + tp[a10 + 3] * w10 + tp[a11 + 3] * w11;
+            }
+          } else {
+            r *= 255; g *= 255; b *= 255; a *= 255;
+          }
+          put(f, o, cl(r + 0.5), cl(g + 0.5), cl(b + 0.5), cl(a + 0.5), blend);
+        }
+      }
+    };
+    const quadScratch = new Float64Array(32);   // 4 verts × 8 for the split-quad path
     return {
       __sdl_create_renderer: function (windowHandle) {
         rends.push({ win: windowHandle, fb: null, fbw: 0, fbh: 0, drawR: 0, drawG: 0, drawB: 0, drawA: 255, drawBlend: 0 });
@@ -7978,18 +8077,59 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
         const f = ensureFb(rd), R = rd.drawR, G = rd.drawG, B = rd.drawB;
         for (let i = 0; i < f.length; i += 4) { f[i] = R; f[i + 1] = G; f[i + 2] = B; f[i + 3] = 255; }
       },
-      // SDL_RenderTexture/FillRect/Rect/Point/Line funnel through the C-side
-      // __sdl_quad_rect -> __sdl_render_quad (TL,TR,BR,BL corners + a src rect).
-      // Every quad __sdl_quad_rect produces is axis-aligned, so the corner bbox
-      // IS the dst rect; a rotated thin-quad (RenderLine diagonal) degrades to
-      // its bbox — no sprite-blit game draws them.
+      // The single draw primitive: 4 dst corners (TL,TR,BR,BL) + a src rect.
+      // Axis-labeled quads — everything the C-side __sdl_quad_rect emits:
+      // fills, sprite blits, rect edges, points, axis-aligned lines — keep
+      // the direct scanline path (byte-identical to pre-#668). Genuinely
+      // rotated corners (RenderLine diagonals, rotated textured quads) split
+      // into the GPU tier's two triangles (TL,TR,BR)+(TL,BR,BL) with its UV
+      // corner mapping and rasterize for real — before #668 they collapsed
+      // to their bounding box.
       __sdl_render_quad: function (r, texH, x0, y0, x1, y1, x2, y2, x3, y3, sx, sy, sw, sh) {
         const rd = rends[r - 1]; if (!rd) return;
-        const minx = Math.min(x0, x1, x2, x3), miny = Math.min(y0, y1, y2, y3);
-        const maxx = Math.max(x0, x1, x2, x3), maxy = Math.max(y0, y1, y2, y3);
-        quad(rd, texH, minx, miny, maxx - minx, maxy - miny, sx, sy, sw, sh);
+        if (y0 === y1 && x1 === x2 && y2 === y3 && x3 === x0) {
+          quad(rd, texH, x0, y0, x2 - x0, y2 - y0, sx, sy, sw, sh);
+          return;
+        }
+        const tx = texH ? texs[texH - 1] : null;
+        if (texH && (!tx || !tx.cpuPixels)) return;
+        let u0 = 0, v0 = 0, u1 = 0, v1 = 0, cr, cg, cb, ca, blend;
+        if (tx) {
+          const tw = tx.w || 1, th = tx.h || 1;
+          u0 = sx / tw; u1 = (sx + sw) / tw; v0 = sy / th; v1 = (sy + sh) / th;
+          cr = tx.colorR; cg = tx.colorG; cb = tx.colorB; ca = tx.alpha;
+          blend = tx.blendMode;
+        } else {
+          cr = rd.drawR / 255; cg = rd.drawG / 255; cb = rd.drawB / 255; ca = rd.drawA / 255;
+          blend = rd.drawBlend;
+        }
+        const V = quadScratch;
+        V[0] = x0; V[1] = y0; V[2] = u0; V[3] = v0;
+        V[8] = x1; V[9] = y1; V[10] = u1; V[11] = v0;
+        V[16] = x2; V[17] = y2; V[18] = u1; V[19] = v1;
+        V[24] = x3; V[25] = y3; V[26] = u0; V[27] = v1;
+        for (let i = 0; i < 32; i += 8) { V[i + 4] = cr; V[i + 5] = cg; V[i + 6] = cb; V[i + 7] = ca; }
+        tri(rd, tx, blend, V, 0, 8, 16);
+        tri(rd, tx, blend, V, 0, 16, 24);
       },
-      __sdl_render_geometry: function () {},
+      // SDL_RenderGeometry: C resolves indices into a flat triangle soup of
+      // [x,y,u,v,r,g,b,a] per vertex (vertCount a multiple of 3, u/v
+      // normalized, colors 0..1) — the exact layout the GPU tier copies into
+      // its vertex batch; here each triple feeds the triangle rasterizer.
+      // Per-vertex soup colors ride verbatim (texture color/alpha mods do NOT
+      // apply — for quads the host bakes mods into the vertices, for
+      // geometry the app's own vertex colors take that role; the GPU tier is
+      // identical). Textured geometry uses the texture's blend mode,
+      // untextured the renderer's draw blend mode — the GPU tier's rule.
+      __sdl_render_geometry: function (r, texH, vertsPtr, vertCount) {
+        const rd = rends[r - 1]; if (!rd || vertCount < 3) return;
+        const tx = texH ? texs[texH - 1] : null;
+        if (texH && (!tx || !tx.cpuPixels)) return;
+        const blend = tx ? tx.blendMode : rd.drawBlend;
+        const V = new Float32Array(getMemory().buffer, vertsPtr, vertCount * 8);
+        for (let i = 0; i + 2 < vertCount; i += 3)
+          tri(rd, tx, blend, V, i * 8, (i + 1) * 8, (i + 2) * 8);
+      },
       __sdl_render_present: function (r) { const rd = rends[r - 1]; if (rd) present(rd); },
     };
   }
