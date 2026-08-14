@@ -4389,12 +4389,29 @@ var BLOCK_FS = (function () {
     }
   })();
 
-  // Block the calling thread for `ms` milliseconds. `ms` may be fractional but
-  // is honoured at millisecond granularity (matching the JSPI setTimeout path).
+  // Block the calling thread for `ms` milliseconds (fractional honoured) —
+  // never less: the loop re-checks a monotonic deadline after every wake.
+  //
+  // Leeway compensation (#492): every OS timed-wait primitive wakes LATE by a
+  // timer-coalescing leeway — measured on macOS as a deterministic
+  // min(request/2, 10ms), identical for Atomics.wait, nanosleep,
+  // pthread_cond_timedwait and mach_wait_until, so no alternative primitive
+  // dodges it (usleep(16000) really slept 24ms; the textbook SDL_Delay(16)
+  // game loop ran 44fps). Requesting 2/3 of the remainder makes a full-leeway
+  // wake land ON the deadline, while an on-time wake shrinks the remainder by
+  // 1/3 — wakes are log-bounded (measured ~1.2 per sleep on macOS) and the
+  // final sub-ms request bounds the residual overshoot at ~0.5ms. The thread
+  // stays parked throughout: this is a deadline loop, never a spin.
   // No-op when blocking is unavailable or the duration is non-positive.
   function blockingSleepMs(ms) {
     if (!_canBlock || !(ms > 0)) return;
-    Atomics.wait(_sleepCell, 0, 0, ms); // cell stays 0 → can only time out
+    var end = performance.now() + ms;
+    for (;;) {
+      var left = end - performance.now();
+      if (left <= 0) return;
+      // cell stays 0 and is never notified → each wait can only time out
+      Atomics.wait(_sleepCell, 0, 0, left > 1 ? left * (2 / 3) : left);
+    }
   }
 
   BlockFS.prototype.toWasmEnv = function (ctx) {
@@ -7781,11 +7798,24 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
    * no ring yet (pumpWait returns 0 without sleeping) — fall back to the
    * raw blocking sleep, never a spin. */
   function sdlDelay(ms) {
-    const end = Date.now() + (ms | 0);
+    // #551 flush-mode parity: the shortened parks below would re-bin a
+    // 15–22ms delay from 'force' to 'park' at pumpWait's entry flush. Keep
+    // the mode keyed on the APP's requested duration — one force-ship per
+    // real park, exactly what the un-shortened first pumpWait used to do
+    // (no held frame can appear mid-delay; this thread is the presenter).
+    if (flushPresent && (ms | 0) >= 15) flushPresent('force');
+    const end = performance.now() + (ms | 0);
     for (;;) {
-      const left = end - Date.now();
+      const left = end - performance.now();
       if (left <= 0) return;
-      if (pumpWait(left) === 0) { BLOCK_FS.blockingSleepMs(left); return; }
+      // #492: request 2/3 of the remainder — the ring park is the same OS
+      // timed-wait as blockingSleepMs and carries the same min(request/2,
+      // 10ms) coalescing leeway; this deadline loop already re-parks after
+      // every early wake, so the shortened request costs nothing extra.
+      if (pumpWait(left > 1 ? left * (2 / 3) : left) === 0) {
+        BLOCK_FS.blockingSleepMs(left);
+        return;
+      }
     }
   }
 

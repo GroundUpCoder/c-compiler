@@ -1463,19 +1463,29 @@ KernelClient.prototype.screen = function () {
 };
 
 /* Park on the doorbell until a signal is deliverable ('signal') or the
- * timeout elapses ('timeout'). ms undefined/null → wait forever. */
+ * timeout elapses ('timeout'). ms undefined/null → wait forever.
+ *
+ * Timed parks compensate the OS timed-wait leeway (#492): Atomics.wait
+ * timeouts wake late by a timer-coalescing leeway — measured on macOS as a
+ * deterministic min(request/2, 10ms), which made usleep(16000) really sleep
+ * 24ms. Requesting 2/3 of the remainder against a monotonic deadline makes a
+ * full-leeway wake land ON the deadline while an on-time wake shrinks the
+ * remainder by 1/3 (log-bounded wakes, ~1.2 per park measured); the final
+ * sub-ms request bounds residual overshoot at ~0.5ms. 'timed-out' from a
+ * shortened wait no longer means the deadline passed — only the monotonic
+ * re-check decides. The thread stays parked throughout; never a spin. */
 KernelClient.prototype.park = function (ms) {
   var i32 = this._i32;
-  var deadline = (ms === undefined || ms === null) ? null : Date.now() + ms;
+  var deadline = (ms === undefined || ms === null) ? null : performance.now() + ms;
   for (;;) {
     var seq = Atomics.load(i32, KP_DOORBELL);
     if (this.pending()) return 'signal';
     if (deadline === null) {
       Atomics.wait(i32, KP_DOORBELL, seq);
     } else {
-      var left = deadline - Date.now();
+      var left = deadline - performance.now();
       if (left <= 0) return 'timeout';
-      if (Atomics.wait(i32, KP_DOORBELL, seq, left) === 'timed-out') return 'timeout';
+      Atomics.wait(i32, KP_DOORBELL, seq, left > 1 ? left * (2 / 3) : left);
     }
   }
 };
