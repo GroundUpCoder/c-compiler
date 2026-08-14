@@ -72,3 +72,35 @@ Scope fence honoured: #603's other three names (SetRenderScale,
 SetRenderLogicalPresentation, GetRenderOutputSize) are untouched; nothing
 in this shape makes them awkward later — they compose above the same
 primitive.
+
+## Counter pass (coordinator review finding, accepted)
+
+The review caught that "every existing emitter is canonical" was FALSE:
+a horizontal SDL_RenderLine emits its thin quad BOTTOM-ROW-FIRST
+(ny = +0.5), an order-reversed axis-aligned untextured quad. The first
+predicate (`x1 > x0 && y2 > y0` unconditionally) rerouted it from quad()
+to tri(), and at INTEGER y the two disagree by one row: quad() rounds
+60.5/59.5 → rows [60,61) = row 60; tri() excludes row 60 (pixel centres
+sit on a non-top-left bottom edge) and includes row 59 (top edge under
+the top-left rule). Measured, not assumed: the L legs went red on the
+unfixed tip exactly as predicted — row 209 painted, row 210 empty.
+
+Fix: corner order only carries meaning WITH a texture (quad() with
+texH === 0 ignores the src rect entirely; a mirrored slot order on a flat
+fill is unobservable except through rasterization rounding — which is the
+byte-identity being protected). The predicate is now
+`shape && (!texH || canonical)`: untextured quads of any order keep
+quad()'s round-and-swap path (horizontal lines, inverted FillRects —
+byte-identical to pre-#668), textured non-canonical quads
+(RenderTextureRotated flips, 180° rotations, negative-extent dstrects)
+rasterize through tri() with slot UVs honored.
+
+Degenerate-input census (the review's second ask), measured via legs
+L/R/T: untextured inverted FillRect → normalize-and-fill, identical to
+pre-#668 (leg R; at integer coords tri() happened to agree anyway, so the
+leg is a pin, not a discriminator). Zero-extent → nothing on both paths
+(quad: empty clip; tri: area === 0). TEXTURED negative-extent dstrect →
+now renders MIRRORED (slot mapping honored, leg T) where pre-#672 the
+software tier normalized it unmirrored — a deliberate change that removes
+a tier divergence: the GPU tier (triangles, no culling) and upstream SDL3
+GPU backends have always rendered it mirrored.

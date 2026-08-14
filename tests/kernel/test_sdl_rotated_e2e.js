@@ -24,7 +24,19 @@
 //      (exercises the real degrees->radians trig path, not just the exact
 //      90/180 corners);
 //   H. NULL dstrect defaults to the texture's rect at the origin;
-//   I. NULL renderer / destroyed texture fail with false + an SDL error.
+//   I. NULL renderer / destroyed texture fail with false + an SDL error;
+//   L. a horizontal RenderLine at INTEGER y draws ITS row — RenderLine's
+//      thin quad is emitted bottom-row-first (an order-reversed axis-
+//      aligned UNTEXTURED quad), and the #672 predicate tightening must not
+//      reroute it from quad() to tri(), which shifts it up one row (RED
+//      CONTROL: with the canonical-order check applied to untextured quads
+//      too, row 209 paints and row 210 stays empty);
+//   R. an inverted FillRect (negative w/h) keeps quad()'s pre-#668
+//      round-and-swap normalization: the normalized rect fills;
+//   T. a TEXTURED blit with a negative-extent dstrect renders with the
+//      slot mapping honored (mirrored, texel 0 at the GIVEN top-left
+//      side) — the GPU tier's and upstream SDL3's behavior; pre-#672 the
+//      software tier normalized it unmirrored, a tier divergence.
 //
 // Headless the renderer resolves to the SOFTWARE tier, which since #668
 // rasterizes rotated quads as real triangles; expected values are exact
@@ -103,6 +115,17 @@ const scriptA = [
   '    chk("G rot45", SDL_RenderTextureRotated(r, t, NULL, &dG, 45.0, NULL, SDL_FLIP_NONE));',
   '    /* H: NULL dstrect = texture rect at the origin (2x1 at 0,0) */',
   '    chk("H nulldst", SDL_RenderTextureRotated(r, t, NULL, NULL, 0.0, NULL, SDL_FLIP_NONE));',
+  '    /* L: horizontal RenderLine at INTEGER y (order-reversed untextured',
+  '       quad — must keep the scanline path, not shift up a row via tri) */',
+  '    SDL_SetRenderDrawColor(r, 200, 0, 0, 255);',
+  '    chk("L hline", SDL_RenderLine(r, 8, 210, 40, 210));',
+  '    /* R: inverted FillRect normalizes and fills (96..120, 208..220) */',
+  '    SDL_SetRenderDrawColor(r, 0, 200, 200, 255);',
+  '    SDL_FRect dR = { 120, 220, -24, -12 };',
+  '    chk("R invrect", SDL_RenderFillRect(r, &dR));',
+  '    /* T: textured blit with a negative-extent dstrect: mirror honored */',
+  '    SDL_FRect dT = { 312, 228, -48, -24 };',
+  '    chk("T negdst", SDL_RenderTexture(r, t, NULL, &dT));',
   '    /* I: validation matches the SDL_RenderTexture discipline */',
   '    chkf("I null renderer", SDL_RenderTextureRotated(NULL, t, NULL, &dA, 0.0, NULL, SDL_FLIP_NONE));',
   '    SDL_Texture *dead = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, 1, 1);',
@@ -193,6 +216,20 @@ if (failures === 0) {
     /* H: NULL dstrect: the 2x1 texture at the origin */
     probe('H nulldst: (0,0) is texel 0', 0, 0, 0, 0, 200, 0);
     probe('H nulldst: (1,0) is texel 1', 1, 0, 200, 120, 0, 0);
+
+    /* L: the horizontal line owns exactly its own row */
+    probe('L hline: row 210 drawn', 20, 210, 200, 0, 0, 0);
+    probe('L hline: row 209 untouched (no one-row shift up)', 20, 209, 20, 20, 20, 0);
+    probe('L hline: row 211 untouched', 20, 211, 20, 20, 20, 0);
+
+    /* R: inverted rect fills its normalized footprint */
+    probe('R invrect: normalized interior drawn', 108, 214, 0, 200, 200, 0);
+    probe('R invrect: left of the normalized rect untouched', 94, 214, 20, 20, 20, 0);
+    probe('R invrect: above the normalized rect untouched', 108, 206, 20, 20, 20, 0);
+
+    /* T: footprint (264..312, 204..228), texel 0 at the x=312 side */
+    probe('T negdst: texel 0 at the GIVEN top-left side (mirror honored)', 300, 216, 0, 0, 200, 0);
+    probe('T negdst: texel 1 at the far side', 276, 216, 200, 120, 0, 0);
 
     /* untouched clear region between the figures */
     probe('clear color intact outside every figure', 96, 96, 20, 20, 20, 0);

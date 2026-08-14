@@ -8078,20 +8078,26 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
         for (let i = 0; i < f.length; i += 4) { f[i] = R; f[i + 1] = G; f[i + 2] = B; f[i + 3] = 255; }
       },
       // The single draw primitive: 4 dst corners (TL,TR,BR,BL) + a src rect.
-      // CANONICALLY-ordered axis-aligned quads — everything the C-side
-      // __sdl_quad_rect emits: fills, sprite blits, rect edges, points,
-      // axis-aligned lines — keep the direct scanline path (byte-identical to
-      // pre-#668). Everything else — genuinely rotated corners (RenderLine
-      // diagonals, rotated textured quads) AND axis-aligned quads whose slot
-      // order is mirrored or reversed (RenderTextureRotated flips, exact
-      // 90/180-degree rotations; #672) — splits into the GPU tier's two
+      // Axis-aligned quads keep the direct scanline path when corner ORDER
+      // cannot matter: always for untextured quads (quad() ignores the src
+      // rect and fills with the flat draw color, so a mirrored slot order is
+      // unobservable — this keeps horizontal RenderLines, whose thin quad is
+      // emitted bottom-row-first, and inverted FillRects byte-identical to
+      // pre-#668 via quad()'s round-and-swap normalization), and for TEXTURED
+      // quads only in canonical TL-first order (everything __sdl_quad_rect
+      // emits). Everything else — genuinely rotated corners (RenderLine
+      // diagonals, rotated textured quads) and textured axis-aligned quads
+      // whose slot order is mirrored or reversed (RenderTextureRotated flips,
+      // exact 90/180-degree rotations; #672) — splits into the GPU tier's two
       // triangles (TL,TR,BR)+(TL,BR,BL) with its UV corner mapping and
       // rasterizes for real: the primitive's contract maps the src rect onto
-      // the SLOTS, so corner order carries meaning the scanline path (which
-      // samples left-to-right, top-to-bottom from the bbox) cannot honor.
+      // the SLOTS, so on a textured quad corner order carries meaning the
+      // scanline path (which samples top-to-bottom, left-to-right from the
+      // normalized bbox) cannot honor.
       __sdl_render_quad: function (r, texH, x0, y0, x1, y1, x2, y2, x3, y3, sx, sy, sw, sh) {
         const rd = rends[r - 1]; if (!rd) return;
-        if (y0 === y1 && x1 === x2 && y2 === y3 && x3 === x0 && x1 > x0 && y2 > y0) {
+        if (y0 === y1 && x1 === x2 && y2 === y3 && x3 === x0 &&
+            (!texH || (x1 > x0 && y2 > y0))) {
           quad(rd, texH, x0, y0, x2 - x0, y2 - y0, sx, sy, sw, sh);
           return;
         }
