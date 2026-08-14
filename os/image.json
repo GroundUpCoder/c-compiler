@@ -1,5 +1,5 @@
 {
-  "version": 263,
+  "version": 264,
   "defaultPackages": ["doom", "gcode", "calc", "paint"],
   "overlays": [
     {
@@ -56,6 +56,9 @@
       },
       "/usr/share/doc/debugging.md": {
         "bin": "os/doc/debugging.md"
+      },
+      "/usr/share/doc/sdl-api-index.md": {
+        "bin": "os/doc/sdl-api-index.md"
       },
       "/usr/doc": {
         "link": "/usr/share/doc"

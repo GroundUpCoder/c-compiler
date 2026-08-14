@@ -15,10 +15,12 @@ WebAssembly module built by the in-OS C compiler. Facts you cannot guess:
   command takes all the .c files and writes the runnable output (default
   `./a.out`, so `cc hello.c && ./a.out` works). Headers live under
   `/usr/include` (and `/usr/local/include`).
-- `<SDL.h>` is a documented SUBSET of SDL3, not stock SDL3. The headers in
-  `/usr/include` are the authoritative API surface — when unsure whether a
-  function exists, read the header, don't assume stock SDL3. Read
-  `/usr/share/doc/sdl-gucos.md` before writing SDL code.
+- `<SDL.h>` is a documented SUBSET of SDL3, not stock SDL3. Read
+  `/usr/share/doc/sdl-api-index.md` FIRST: the generated index of the whole
+  surface, one line per symbol (functions, types, constants) plus the
+  notably-absent list — it answers "does X exist?" without grepping the
+  header. The headers in `/usr/include` remain the authoritative API
+  surface. Read `/usr/share/doc/sdl-gucos.md` before writing SDL code.
 - SDL3 graphics: a classic blocking main loop that presents GPU frames is
   refused at the second present (fatal, exit 69). Either write the program
   with `SDL_MAIN_USE_CALLBACKS` (SDL_AppInit/SDL_AppIterate/SDL_AppEvent/

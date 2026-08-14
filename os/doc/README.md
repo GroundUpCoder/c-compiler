@@ -18,6 +18,7 @@ symlink.
 | `gcode.md` | gcode, the in-OS coding agent |
 | `debugging.md` | strace, exit codes, /proc, wmctl |
 | `sdl-gucos.md` | SDL3 on gucOS: main loops and the software renderer |
+| `sdl-api-index.md` | Generated SDL symbol index: every function, type, constant — and what is absent |
 
 ## What gucOS is
 
