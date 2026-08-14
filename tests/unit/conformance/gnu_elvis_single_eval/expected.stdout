@@ -11,3 +11,6 @@ uac 8 1 4 1 1.5
 bf 5 1
 ptr dflt lit 1
 tern 2 6
+rt 3 -3 4294967295 3.0
+rte 7 4.0 2.5 6
+rtn 5 1

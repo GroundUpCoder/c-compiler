@@ -21,6 +21,17 @@
 //      null-pointer-constant case work; the ordinary ternary is unaffected.
 //      NB `?:` inside #if is NOT accepted — clang (the oracle) rejects it
 //      there; the extension is a C-expression extension, not a cpp one.
+//      #686: every mixed-type case above has a constant condition and folds
+//      before codegen, so the `rt`/`rte`/`rtn` legs pin the RUNTIME arm
+//      conversions the elvis codegen hand-rolls (in place of the parser's
+//      ECast on the shared condition node): then arm int->long long widens
+//      with SIGN (rt -3, a zero-extend would print 4294967293) and unsigned
+//      zero-extends (rt 4294967295, a sign-extend would print -1), int ->
+//      double converts (rt 3.0); else arm int -> long long / int -> double
+//      convert (rte 7 4.0 — these ride the parser's implicit-cast wrapper on
+//      the else operand; the codegen's own else-arm conversion only fires on
+//      a qualifier-distinct operand, rte 6); the condition still evaluates
+//      once when its value crosses a conversion (rtn 5 1).
 #include <stdio.h>
 
 enum { K = 4 ?: 9 };                 /* ICE: enum value == 4 */
@@ -95,5 +106,33 @@ int main(void) {
 
   /* the ordinary ternary is unaffected */
   printf("tern %d %d\n", r2 - 42 ? 1 : 2, r1 ? r1 + 1 : 0);
+
+  /* #686: NON-CONSTANT condition + differing result type — the runtime arm
+     conversions in the elvis codegen path (nothing above reaches them: the
+     mixed-type cases all fold on their constant conditions). */
+  int xi = 3, x0 = 0;
+  int neg = -3;
+  unsigned int ub = 0xffffffffu;
+  long long tw = xi ?: 5LL;   /* THEN arm: int -> long long, widening */
+  long long ts = neg ?: 5LL;  /* THEN arm: sign-extends, not zero */
+  long long tz = ub ?: 5LL;   /* THEN arm: unsigned zero-extends, not sign */
+  double td = xi ?: 2.5;      /* THEN arm: int -> double */
+  printf("rt %lld %lld %lld %.1f\n", tw, ts, tz, td);
+
+  long long la = 0;
+  double dz = 0.0;
+  long long ec = la ?: 7;     /* ELSE arm: int -> long long (via the parser's
+                                 implicit-cast wrapper on the else operand) */
+  double ed = dz ?: 4;        /* ELSE arm: int -> double (same wrapper) */
+  double ee = x0 ?: 2.5;      /* else taken PAST the emitted then-conversion */
+  int ev = x0 ?: v;           /* ELSE arm: qualifier-distinct operand (volatile
+                                 int vs int) — the one shape that reaches the
+                                 codegen's own else-arm conversion */
+  printf("rte %lld %.1f %.1f %d\n", ec, ed, ee, ev);
+
+  /* single evaluation survives the conversion: f() once, value 5 -> 5LL */
+  n = 0;
+  long long sc = f() ?: 6LL;
+  printf("rtn %lld %d\n", sc, n);
   return 0;
 }
