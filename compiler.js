@@ -2044,6 +2044,9 @@ function preprocess(filename, initialTokens, ppRegistry) {
 
         if (op.atPunct(Punct.QMARK)) {
           const cond = left.value !== 0n;
+          // NB the GNU elvis `a ?: b` (#681) is deliberately NOT accepted
+          // here: it is a C-expression extension, and clang (the
+          // conformance oracle) rejects `?:` inside #if expressions.
           // Only the selected arm is semantically evaluated (6.5.15).
           const thenVal = parseBinary(0, evaluating && cond);
           const next = peek();
@@ -4317,14 +4320,20 @@ class Expr {
     _withChildren([operand]) { return new EUnary(this.loc, this.type, this.op, operand); }
   }
   class ETernary extends Expr {
-    constructor(loc, type, condition, thenExpr, elseExpr) {
+    // `elvis` marks the GNU omitted-middle form `a ?: b` (#681). The parser
+    // still fills thenExpr (a cast/decay wrapper around the SAME condition
+    // node) so every analysis pass sees a well-formed `a ? a : b` — but
+    // codegen keys on the flag to evaluate the condition exactly ONCE
+    // (temp local), which is the extension's load-bearing semantic.
+    constructor(loc, type, condition, thenExpr, elseExpr, elvis = false) {
       // Control flow: only one branch evaluates. Conservative LINEAR.
       super(loc, type, [condition, thenExpr, elseExpr], Linearity.LINEAR);
       this.condition = condition; this.thenExpr = thenExpr; this.elseExpr = elseExpr;
+      this.elvis = elvis;
       Object.freeze(this);
     }
     _withChildren([condition, thenExpr, elseExpr]) {
-      return new ETernary(this.loc, this.type, condition, thenExpr, elseExpr);
+      return new ETernary(this.loc, this.type, condition, thenExpr, elseExpr, this.elvis);
     }
   }
   class ECall extends Expr {
@@ -6124,7 +6133,7 @@ function foldExpr(expr) {
       const thenE = foldExpr(expr.thenExpr);
       const elseE = foldExpr(expr.elseExpr);
       return (cond === expr.condition && thenE === expr.thenExpr && elseE === expr.elseExpr) ? expr
-        : new AST.ETernary(expr.loc, expr.type, cond, thenE, elseE);
+        : new AST.ETernary(expr.loc, expr.type, cond, thenE, elseE, expr.elvis);
     }
 
     case AST.ECall: {
@@ -8470,6 +8479,7 @@ function fmtExpr(e) {
     return op + fmtExpr(e.operand);
   }
   if (e instanceof AST.ETernary) {
+    if (e.elvis) return fmtExpr(e.condition) + ' ?: ' + fmtExpr(e.elseExpr);
     return fmtExpr(e.condition) + ' ? ' + fmtExpr(e.thenExpr) + ' : ' + fmtExpr(e.elseExpr);
   }
   if (e instanceof AST.ECall) {
@@ -8761,7 +8771,7 @@ function dumpExpr(expr, ctx, indent) {
       ret += dumpExpr(expr.operand, ctx, indent + 1);
       break;
     case AST.ETernary:
-      ret += "TERNARY";
+      ret += expr.elvis ? "TERNARY (elvis ?:)" : "TERNARY";
       ret += dumpExpr(expr.condition, ctx, indent + 1);
       ret += dumpExpr(expr.thenExpr, ctx, indent + 1);
       ret += dumpExpr(expr.elseExpr, ctx, indent + 1);
@@ -9183,8 +9193,12 @@ function printC(units, options) {
     }
     if (expr instanceof AST.ETernary) {
       const c = paren(emitExpr(expr.condition), exprPrec(expr.condition), PREC.TERNARY + 1);
-      const t = emitExpr(expr.thenExpr);
       const e = paren(emitExpr(expr.elseExpr), exprPrec(expr.elseExpr), PREC.TERNARY);
+      // GNU elvis (#681): print the omitted-middle form back out — printing
+      // the filled-in thenExpr would DUPLICATE the condition's side effects
+      // in reparsed C.
+      if (expr.elvis) return c + " ?: " + e;
+      const t = emitExpr(expr.thenExpr);
       return c + " ? " + t + " : " + e;
     }
     if (expr instanceof AST.ECall) {
@@ -12726,8 +12740,20 @@ class Parser {
       // Ternary
       if (op === "?") {
         left = this._validateCond(left, opTok, "ternary");
-        let thenExpr = this.parseExpression();
-        this.expect(":");
+        // GNU elvis `a ?: b` (#681): omitted middle operand — `a ? a : b`
+        // with `a` evaluated exactly ONCE. The middle slot reuses the SAME
+        // (already-decayed, _validateCond) condition node under cast/decay
+        // wrappers so type computation, const eval, and folding are the
+        // ternary's verbatim; codegen sees `elvis` and emits the condition
+        // once into a temp. A missing THIRD operand still errors below.
+        const elvis = this.matchText(":");
+        let thenExpr;
+        if (elvis) {
+          thenExpr = left;
+        } else {
+          thenExpr = this.parseExpression();
+          this.expect(":");
+        }
         let elseExpr = this.parseBinaryExpression(3);
         // Decay array/function-typed branches; ternary results are
         // always pointer-typed (or scalar/aggregate).
@@ -12743,7 +12769,7 @@ class Parser {
         // implicit cast to resType when needed.
         thenExpr = maybeImplicitCast(thenExpr, resType);
         elseExpr = maybeImplicitCast(elseExpr, resType);
-        left = new AST.ETernary(left.loc, resType, left, thenExpr, elseExpr);
+        left = new AST.ETernary(left.loc, resType, left, thenExpr, elseExpr, elvis);
         continue;
       }
 
@@ -20641,6 +20667,30 @@ class CodeGenerator {
       }
       case AST.ETernary: {
         const resultType = cToWasmType(expr.type, this.wmod);
+        // GNU elvis `a ?: b` (#681): the condition is ALSO the then-value
+        // and must evaluate exactly once — emit it into a temp, test the
+        // temp, and convert the temp to the result type in the then arm
+        // (the same emitConversion an ECast around the condition would
+        // run, so types/values match the desugared ternary exactly).
+        // thenExpr is a wrapper over the shared condition node; emitting
+        // it here would evaluate the condition a second time, so it is
+        // deliberately NOT emitted.
+        if (expr.elvis) {
+          this.emitExpr(expr.condition);
+          this.pushLocalScope();
+          const t = this.allocLocal(cToWasmType(expr.condition.type, this.wmod));
+          this.body.localTee(t);
+          this.emitConditionToI32(expr.condition.type);
+          this.body.if_(resultType);
+          this.body.localGet(t);
+          if (expr.condition.type !== expr.type) this.emitConversion(expr.condition.type, expr.type);
+          this.body.else_();
+          this.emitExpr(expr.elseExpr);
+          if (expr.elseExpr.type !== expr.type) this.emitConversion(expr.elseExpr.type, expr.type);
+          this.body.end();
+          this.popLocalScope();
+          break;
+        }
         this.emitExpr(expr.condition);
         this.emitConditionToI32(expr.condition.type);
         this.body.if_(resultType);
