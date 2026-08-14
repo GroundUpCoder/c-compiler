@@ -1,0 +1,13 @@
+evals 1 1 0
+vals 5 42
+incr 3 4
+incr 88 1
+redctl 5 2
+vol 6 9
+ice 4 1 42 3
+case ok
+nest 7 1
+uac 8 1 4 1 1.5
+bf 5 1
+ptr dflt lit 1
+tern 2 6
