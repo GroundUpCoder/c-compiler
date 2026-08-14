@@ -70,7 +70,7 @@ In-OS: `sameboy /root/roms/SuperMarioDeluxe.gbc &` (kernel e2e:
 | `core/gb.h` | 4 `#ifndef GB_DISABLE_*` blocks removed inside `GB_SECTION(unsaved, …)` | directives embedded in macro arguments (UB that gcc/clang accept) — the removed members are always compiled out in this build anyway |
 | `core/defs.h` | `MIN`/`MAX` → plain ternaries | no GNU statement expressions; every call site in the subset audited side-effect-free |
 | `core/defs.h` | `GB_inline_const` → compound literal | same; value-identical for the lookup-table uses |
-| `core/defs.h` | `__builtin_bswap16/32/64` as static inlines | builtins not provided by the compiler |
+| `core/defs.h` | pre-GCC-4.8 `__builtin_bswap16` fallback macro removed | `__builtin_bswap16/32/64` are real intrinsics since `30f12ece` (#680), but the fallback's `#if __GNUC__ < 4 …` guard fires (this compiler predefines no `__GNUC__`) and its body is a statement expression |
 | `core/gb.c` | `#include <alloca.h>` | alloca is not in `<stdlib.h>` in this libc |
 | `core/gb.c` | `vasprintf` → fixed 512-byte `vsnprintf` | no vasprintf in this libc |
 | `core/gb.c` | rtc-section VLA → checked 128-byte buffer | `offsetof` through an anonymous union/struct member (`GB_SECTION`'s `*_section_start` markers) doesn't fold to an integer constant expression; plain-member `offsetof` folds since `bfe4edc5` (re-measured for #684) |
@@ -87,3 +87,6 @@ the compiler learned the GCC packing in todos/0085 (found by this port).
   the GNU elvis operator landed in `8999f38d` (#681), first operand evaluated
   exactly once — the old rewrite's "operands side-effect-free" caveat is gone
   with it.
+- `core/defs.h` `__builtin_bswap16/32/64` static inlines: real intrinsics
+  since `30f12ece` (#680). The residual defs.h patch (table above) only drops
+  upstream's pre-GCC-4.8 statement-expression fallback macro.

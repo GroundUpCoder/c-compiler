@@ -31,26 +31,12 @@
 #define MAX(A, B)    ((A) < (B) ? (B) : (A))
 #endif
 
-/* PATCH(c-compiler): this compiler has no __builtin_bswap*; provide all
-   three as static inline functions (single evaluation, unlike the macro
-   this replaces). */
-#include <stdint.h>
-static inline uint16_t __sameboy_bswap16(uint16_t x)
-{
-    return (uint16_t)(x >> 8 | x << 8);
-}
-static inline uint32_t __sameboy_bswap32(uint32_t x)
-{
-    return x >> 24 | ((x >> 8) & 0xFF00) | ((x << 8) & 0xFF0000) | x << 24;
-}
-static inline uint64_t __sameboy_bswap64(uint64_t x)
-{
-    return (uint64_t)__sameboy_bswap32((uint32_t)(x >> 32)) |
-           ((uint64_t)__sameboy_bswap32((uint32_t)x) << 32);
-}
-#define __builtin_bswap16 __sameboy_bswap16
-#define __builtin_bswap32 __sameboy_bswap32
-#define __builtin_bswap64 __sameboy_bswap64
+/* PATCH(c-compiler): upstream's pre-GCC-4.8 fallback defined
+   __builtin_bswap16 as a statement-expression macro behind
+   `#if __GNUC__ < 4 || (__GNUC__ == 4 && __GNUC_MINOR__ < 8)`. This
+   compiler predefines no __GNUC__ (the guard fires) and does not support
+   ({...}), so the fallback is removed; __builtin_bswap16/32/64 are real
+   intrinsics (single evaluation, constant-fold). */
 
 #define internal __attribute__((visibility("hidden")))
 #define noinline __attribute__((noinline))
