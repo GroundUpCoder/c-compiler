@@ -73,6 +73,7 @@ const server = http.createServer((req, res) => {
     res.write('partial-');                          // then never finish
     return;
   }
+  if (u === '/stallhdr') return;                    // accept, never respond (#669)
   if (u === '/redir') { res.writeHead(302, { location: '/redirtarget' }); res.end(); return; }   // #359
   if (u === '/redirtarget') { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('landed'); return; }
   res.writeHead(500); res.end();
@@ -177,6 +178,13 @@ function normalize(out) {
   has('refused', 'errbuf_set=1');
   has('timeout', 'rc=28');           // CURLE_OPERATION_TIMEDOUT
   has('abortcb', 'rc=42 midstream=1'); // CURLE_ABORTED_BY_CALLBACK mid-response (#306)
+  // #669: the progress callback TICKS through a silent wait (~1/s chunked
+  // parks) — both the pre-response stall (gcode's "waiting for model") and
+  // a mid-body stall. Pre-fix, the veneer parked indefinitely after one
+  // callback run: hbstatus would ride the kernel's 30s headers deadline to
+  // rc=28, hbbody its 15s TIMEOUT_MS backstop to rc=28.
+  has('hbstatus', 'rc=42 ticks_ge_3=1');
+  has('hbbody', 'rc=42 midstall=1');
   // #359: EFFECTIVE_URL truthful after a redirect; the synthetic transport
   // line NEVER reaches HEADERFUNCTION (the criterion most likely to pass
   // by accident — asserted explicitly, both with and without a redirect).

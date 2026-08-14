@@ -88,7 +88,11 @@ typedef enum {
   CURLOPT_READFUNCTION = 20012,
   CURLOPT_HEADERFUNCTION = 20079,
   CURLOPT_XFERINFOFUNCTION = 20219,  /* called at every transfer wait
-                                        boundary when NOPROGRESS is 0;
+                                        boundary when NOPROGRESS is 0 —
+                                        parks are capped at ~1s while a
+                                        callback is armed, so it keeps
+                                        ticking through a silent wait
+                                        (#669, upstream's idle cadence);
                                         non-zero return aborts the transfer
                                         (CURLE_ABORTED_BY_CALLBACK) */
   CURLOPT_LASTENTRY

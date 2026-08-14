@@ -39,6 +39,10 @@
  *     including an EINTR wake, which is how a signal handler's flag becomes
  *     visible mid-transfer — and a non-zero return aborts the transfer with
  *     CURLE_ABORTED_BY_CALLBACK (Ctrl+C on an in-flight response, #306).
+ *     With a callback armed, no park exceeds PROGRESS_WAIT_MS (#669), so
+ *     the callback keeps ticking ~1/s through a silent wait — upstream's
+ *     own cadence ("during slow periods … about one call per second"),
+ *     and what gcode's "waiting for model" heartbeat (#507) rides on.
  *   - descoped: multi interface, cookies, proxies, non-HTTP protocols,
  *     PROGRESSFUNCTION (the old double-based form; use XFERINFOFUNCTION).
  * Unknown options fail loud: CURLE_UNKNOWN_OPTION (+ a stderr line under
@@ -218,20 +222,34 @@ static long long now_ms(void) {
   return (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
+/* Progress heartbeat chunk (#669): with a progress callback armed, no
+   single park may exceed this, or the callback only runs when bytes or
+   signals arrive — a silent model wait parked INDEFINITELY and gcode's
+   "waiting for model" heartbeat (#507) never fired. 1s matches upstream
+   curl's idle callback cadence. */
+#define PROGRESS_WAIT_MS 1000
+
 /* One WAIT-first step against the whole-operation deadline: park on the fd
    until it is readable, the deadline passes, or a signal lands (EINTR —
-   the handler ran; re-check the clock and re-park). Returns 0 to retry the
-   consume, -1 when the total deadline has passed, -2 when no kernel WAIT
-   exists in this flavor (fail loud — never a poll loop). */
-static int wait_step(int fd, long long total_deadline) {
+   the handler ran; re-check the clock and re-park). With a progress
+   callback armed (NOPROGRESS 0 + XFERINFOFUNCTION) the park is capped at
+   PROGRESS_WAIT_MS so the caller's loop reaches its check_progress
+   boundary ~1/s (#669); a chunk expiry is a retry, never a timeout.
+   Returns 0 to retry the consume, -1 when the total deadline has passed,
+   -2 when no kernel WAIT exists in this flavor (fail loud — never a poll
+   loop). */
+static int wait_step(easy *h, int fd, long long total_deadline) {
   int timeout_ms = -1;
   if (total_deadline > 0) {
     long long remain = total_deadline - now_ms();
     if (remain <= 0) return -1;
     timeout_ms = (int)remain;
   }
+  int chunked = !h->noprogress && h->xferinfo_cb
+             && (timeout_ms < 0 || timeout_ms > PROGRESS_WAIT_MS);
+  if (chunked) timeout_ms = PROGRESS_WAIT_MS;
   int why = __wait(&fd, 1, 0, timeout_ms);
-  if (why == 0) return -1;                    /* the total deadline passed */
+  if (why == 0) return chunked ? 0 : -1;      /* chunk tick / deadline passed */
   if (why == -2) return -2;                   /* no unified WAIT here */
   return 0;                                   /* readable or EINTR: retry */
 }
@@ -240,8 +258,9 @@ static int wait_step(int fd, long long total_deadline) {
    drives the callback from its transfer loop; this veneer's loop parks in
    wait_step, so every wait boundary — including an EINTR wake, which is how
    a signal handler's flag (gcode's g_interrupted) becomes visible mid-
-   transfer — asks the callback whether to continue. Non-zero return means
-   abort (#306). */
+   transfer, and the ~1/s PROGRESS_WAIT_MS chunk expiry that keeps the
+   boundaries existing through a silent wait (#669) — asks the callback
+   whether to continue. Non-zero return means abort (#306). */
 static int check_progress(easy *h) {
   if (h->noprogress || !h->xferinfo_cb) return 0;
   curl_off_t dltotal = h->content_length > 0 ? h->content_length : 0;
@@ -423,7 +442,7 @@ CURLcode curl_easy_perform(CURL *handle) {
     if (errno == EAGAIN || errno == EINTR) {
       if (check_progress(h)) { close(fd);
         return fail(h, CURLE_ABORTED_BY_CALLBACK, "aborted by progress callback"); }
-      int ws = wait_step(fd, total_deadline);
+      int ws = wait_step(h, fd, total_deadline);
       if (ws == 0) continue;
       close(fd);
       if (ws == -1) return fail(h, CURLE_OPERATION_TIMEDOUT, "timed out waiting for response");
@@ -499,7 +518,7 @@ CURLcode curl_easy_perform(CURL *handle) {
     if (n == 0) break;                             /* clean EOF */
     if (errno == EAGAIN || errno == EINTR) {
       if (check_progress(h)) { rc = fail(h, CURLE_ABORTED_BY_CALLBACK, "aborted by progress callback"); break; }
-      int ws = wait_step(fd, total_deadline);
+      int ws = wait_step(h, fd, total_deadline);
       if (ws == 0) continue;
       rc = ws == -1 ? fail(h, CURLE_OPERATION_TIMEDOUT, "timed out reading body")
                     : fail(h, CURLE_RECV_ERROR, "no kernel wait (__wait unsupported in this flavor)");

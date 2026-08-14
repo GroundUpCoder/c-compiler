@@ -88,6 +88,34 @@ static int on_xfer(void *ud, curl_off_t dltotal, curl_off_t dlnow,
     return g_xfer_seen > 0 ? 1 : 0;
 }
 
+/* heartbeat ticks (#669): the callback must KEEP running through a silent
+   wait — the veneer caps its parks at ~1s while a callback is armed (real
+   curl's idle cadence), which is what gcode's "waiting for model" line
+   rides on. Count invocations that observe an unchanged byte count and
+   abort after 3, proving the boundaries exist DURING the stall rather than
+   only when bytes arrive. #306's on_xfer above cannot see the difference:
+   it aborts at the boundary a byte creates. */
+static curl_off_t g_hb_last;
+static int g_hb_ticks;
+/* headers-stall shape: the server never responds at all (gcode's silent
+   model wait) — every tick sees dlnow still 0 */
+static int on_hb_status(void *ud, curl_off_t dltotal, curl_off_t dlnow,
+                        curl_off_t ultotal, curl_off_t ulnow) {
+    (void)ud; (void)dltotal; (void)ultotal; (void)ulnow;
+    if (dlnow == 0) g_hb_ticks++;
+    return g_hb_ticks >= 3;
+}
+/* body-stall shape: bytes arrive, then the stream goes silent — ticks only
+   count once data has been seen and stopped moving, so the (fast, local)
+   pre-response phase can never trip the abort early */
+static int on_hb_body(void *ud, curl_off_t dltotal, curl_off_t dlnow,
+                      curl_off_t ultotal, curl_off_t ulnow) {
+    (void)ud; (void)dltotal; (void)ultotal; (void)ulnow;
+    if (dlnow > 0 && dlnow == g_hb_last) g_hb_ticks++;
+    else if (dlnow != g_hb_last) { g_hb_last = dlnow; g_hb_ticks = 0; }
+    return g_hb_ticks >= 3;
+}
+
 static void report(const char *name, CURL *h, CURLcode rc) {
     printf("== %s ==\n", name);
     printf("rc=%d\n", (int)rc);
@@ -212,6 +240,40 @@ int main(int argc, char **argv) {
     rc = curl_easy_perform(h);
     printf("== abortcb ==\n");
     printf("rc=%d midstream=%d\n", (int)rc, g_xfer_seen > 0 ? 1 : 0);
+    curl_easy_cleanup(h);
+
+    /* 7b (#669): heartbeat through a headers stall — the server accepts
+       and sends NOTHING (gcode's silent model wait, dlnow pinned at 0).
+       The callback must tick anyway; 3 ticks abort with rc 42. NO
+       CURLOPT_TIMEOUT — the gcode shape is exactly "no whole-op deadline";
+       a regressed veneer parks forever, which the harness watchdog turns
+       into a loud TIMEOUT (the kernel's default 30s headers deadline
+       [rc 28] fires first in-OS — either way, not 42). */
+    snprintf(url, sizeof url, "%s/stallhdr", base);
+    h = fresh(url);
+    g_hb_ticks = 0;
+    curl_easy_setopt(h, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(h, CURLOPT_XFERINFOFUNCTION, on_hb_status);
+    rc = curl_easy_perform(h);
+    printf("== hbstatus ==\n");
+    printf("rc=%d ticks_ge_3=%d\n", (int)rc, g_hb_ticks >= 3 ? 1 : 0);
+    curl_easy_cleanup(h);
+
+    /* 7c (#669): heartbeat through a body stall — bytes arrive, then the
+       stream goes silent; ticks count only past that point. TIMEOUT_MS is
+       the #306-style backstop: a regressed veneer fails fast as rc=28
+       instead of hanging (the chunked-park code path is the same one the
+       no-deadline case above exercises). */
+    snprintf(url, sizeof url, "%s/stall", base);
+    h = fresh(url);
+    g_hb_last = 0;
+    g_hb_ticks = 0;
+    curl_easy_setopt(h, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(h, CURLOPT_XFERINFOFUNCTION, on_hb_body);
+    curl_easy_setopt(h, CURLOPT_TIMEOUT_MS, 15000L);
+    rc = curl_easy_perform(h);
+    printf("== hbbody ==\n");
+    printf("rc=%d midstall=%d\n", (int)rc, (g_hb_last > 0 && g_hb_ticks >= 3) ? 1 : 0);
     curl_easy_cleanup(h);
 
     /* 9 (#359): redirect — EFFECTIVE_URL is the POST-redirect final url,
