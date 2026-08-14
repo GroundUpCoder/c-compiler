@@ -1,0 +1,6 @@
+evals 1 1 1
+zero 0 0 0
+run 2211 44332211 8877665544332211
+conv 5634 ffffffff ffffffffffffffff
+ice 1 2 1144201745 8877665544332211
+case ok
