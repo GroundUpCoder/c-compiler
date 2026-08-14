@@ -21633,6 +21633,13 @@ typedef enum SDL_ScaleMode {
     SDL_SCALEMODE_LINEAR = 1
 } SDL_ScaleMode;
 
+/* Bitmask: HORIZONTAL|VERTICAL is a legal combination. */
+typedef enum SDL_FlipMode {
+    SDL_FLIP_NONE = 0,
+    SDL_FLIP_HORIZONTAL = 1,
+    SDL_FLIP_VERTICAL = 2
+} SDL_FlipMode;
+
 /* SDL3 SDL_Texture exposes format/w/h as public fields (programs read tex->w/h);
    the host handle is an internal trailer. */
 typedef struct SDL_Texture {
@@ -22242,6 +22249,7 @@ bool SDL_GetRenderDrawColor(SDL_Renderer *renderer, Uint8 *r, Uint8 *g, Uint8 *b
 bool SDL_SetRenderDrawBlendMode(SDL_Renderer *renderer, SDL_BlendMode blendMode);
 bool SDL_RenderClear(SDL_Renderer *renderer);
 bool SDL_RenderTexture(SDL_Renderer *renderer, SDL_Texture *texture, const SDL_FRect *srcrect, const SDL_FRect *dstrect);
+bool SDL_RenderTextureRotated(SDL_Renderer *renderer, SDL_Texture *texture, const SDL_FRect *srcrect, const SDL_FRect *dstrect, double angle, const SDL_FPoint *center, SDL_FlipMode flip);
 bool SDL_RenderFillRect(SDL_Renderer *renderer, const SDL_FRect *rect);
 bool SDL_RenderRect(SDL_Renderer *renderer, const SDL_FRect *rect);
 bool SDL_RenderLine(SDL_Renderer *renderer, float x1, float y1, float x2, float y2);
@@ -28331,6 +28339,51 @@ bool SDL_RenderTexture(SDL_Renderer *renderer, SDL_Texture *texture,
     float dx = 0, dy = 0, dw = (float)texture->w, dh = (float)texture->h;
     if (dstrect) { dx = dstrect->x; dy = dstrect->y; dw = dstrect->w; dh = dstrect->h; }
     __sdl_quad_rect(renderer->handle, texture->__handle, dx, dy, dw, dh, sx, sy, sw, sh);
+    return 1;
+}
+
+/* Rotated blit (#672): dstrect's corners rotate 'angle' degrees CLOCKWISE
+   (the SDL3 convention; y-down screen coords make the standard rotation
+   matrix clockwise for positive angles) about 'center', which is relative to
+   dstrect's top-left (NULL = dstrect's middle). 'flip' mirrors the TEXTURE,
+   not the geometry — SDL3 swaps the source UVs on the rotated quad — and
+   since __sdl_render_quad maps the src rect onto its corner slots in fixed
+   TL,TR,BR,BL order, a flip is exactly a permutation of which rotated corner
+   is emitted in which slot. */
+bool SDL_RenderTextureRotated(SDL_Renderer *renderer, SDL_Texture *texture,
+                              const SDL_FRect *srcrect, const SDL_FRect *dstrect,
+                              double angle, const SDL_FPoint *center, SDL_FlipMode flip) {
+    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_texture_live(texture)) return SDL_InvalidParamError("texture");
+    float sx = 0, sy = 0, sw = (float)texture->w, sh = (float)texture->h;
+    if (srcrect) { sx = srcrect->x; sy = srcrect->y; sw = srcrect->w; sh = srcrect->h; }
+    float dx = 0, dy = 0, dw = (float)texture->w, dh = (float)texture->h;
+    if (dstrect) { dx = dstrect->x; dy = dstrect->y; dw = dstrect->w; dh = dstrect->h; }
+    float cx = dx + (center ? center->x : dw * 0.5f);
+    float cy = dy + (center ? center->y : dh * 0.5f);
+    double rad = angle * (3.14159265358979323846 / 180.0);
+    float c = (float)cos(rad), s = (float)sin(rad);
+    float px[4] = { dx, dx + dw, dx + dw, dx };      /* TL,TR,BR,BL */
+    float py[4] = { dy, dy, dy + dh, dy + dh };
+    float rx[4], ry[4];
+    for (int i = 0; i < 4; i++) {
+        float ox = px[i] - cx, oy = py[i] - cy;
+        rx[i] = cx + ox * c - oy * s;
+        ry[i] = cy + ox * s + oy * c;
+    }
+    /* Slot i samples src corner i; flip re-aims the sample at the mirrored
+       geometric corner. H: TL<->TR, BL<->BR.  V: TL<->BL, TR<->BR. */
+    static const int perm[4][4] = {
+        { 0, 1, 2, 3 },   /* SDL_FLIP_NONE */
+        { 1, 0, 3, 2 },   /* SDL_FLIP_HORIZONTAL */
+        { 3, 2, 1, 0 },   /* SDL_FLIP_VERTICAL */
+        { 2, 3, 0, 1 },   /* HORIZONTAL|VERTICAL */
+    };
+    const int *m = perm[flip & 3];
+    __sdl_render_quad(renderer->handle, texture->__handle,
+                      rx[m[0]], ry[m[0]], rx[m[1]], ry[m[1]],
+                      rx[m[2]], ry[m[2]], rx[m[3]], ry[m[3]],
+                      sx, sy, sw, sh);
     return 1;
 }
 
