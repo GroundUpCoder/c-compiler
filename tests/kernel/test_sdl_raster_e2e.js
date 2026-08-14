@@ -85,6 +85,15 @@ const scriptA = [
   '        { { 176, 176 }, { 0.8f, 0.0f, 0.0f, 0.5f }, { 0, 0 } },',
   '        { { 112, 176 }, { 0.8f, 0.0f, 0.0f, 0.5f }, { 0, 0 } } };',
   '    chk("RenderGeometry blended", SDL_RenderGeometry(r, NULL, bl, 3, NULL, 0));',
+  '    /* 6: 45-degree ROTATED textured quad (diamond) — rotated UV gradients,',
+  '       the capability RenderTextureRotated (#672) sits on */',
+  '    SDL_Vertex dm[4] = {',
+  '        { { 208, 112 }, { 1, 1, 1, 1 }, { 0, 0 } },',
+  '        { { 240, 144 }, { 1, 1, 1, 1 }, { 1, 0 } },',
+  '        { { 208, 176 }, { 1, 1, 1, 1 }, { 1, 1 } },',
+  '        { { 176, 144 }, { 1, 1, 1, 1 }, { 0, 1 } } };',
+  '    int dmi[6] = { 0, 1, 2, 0, 2, 3 };',
+  '    chk("RenderGeometry rotated textured", SDL_RenderGeometry(r, t, dm, 4, dmi, 6));',
   '    SDL_RenderPresent(r);',
   '    printf("RAS-UP fails=%d\\n", fails);',
   '    fflush(stdout);',
@@ -157,6 +166,11 @@ if (failures === 0) {
     /* 5: untextured geometry under BLEND: src (204,0,0)@a=128 over (20,20,20)
        -> r = 204*128/255 + 20*127/255 = 112.3; g = b = 20*127/255 = 9.96 */
     probe('blended triangle: src-over on the clear', 144, 160, 112, 10, 10, 3);
+
+    /* 6: rotated textured diamond — UV gradients off the axes */
+    probe('rotated textured quad: left of the diamond is texel 0', 196, 144, 0, 0, 200, 0);
+    probe('rotated textured quad: right of the diamond is texel 1', 220, 144, 200, 120, 0, 0);
+    probe('rotated textured quad: bbox corner outside the diamond untouched', 182, 118, 20, 20, 20, 0);
 
     /* untouched clear region */
     probe('clear color intact outside every figure', 100, 100, 20, 20, 20, 0);
