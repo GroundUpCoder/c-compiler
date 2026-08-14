@@ -842,29 +842,36 @@ const script = [
   'echo ==rn6',
   'ls /root/Desktop | tr "\\n" " "; echo',         // aab gone, mmm present
 
-  // ---- #676: an omitted KEYSYM derives from the scancode. The same rename
-  // flow again with NO keysym argument anywhere. Every key below is
+  // ---- #676: an omitted KEYSYM derives from the scancode. The rename flow
+  // again with NO keysym argument anywhere. Every key below is
   // KEYSYM-matched in wm.c — SDLK_RIGHT/SDLK_F2 exercise the derived
   // scancode|0x40000000 branch, Backspace(8)/Enter(13) the named-key branch,
   // 'k' the printable branch — so the pre-#676 default of keysym 0 fails
   // every match and the rename never lands: this leg asserts the app
-  // REACTED, not that wmctl exited 0. ----
+  // REACTED, not that wmctl exited 0. The target is a fresh 'aaa' seeded to
+  // OWN the top-left cell (the rn0 trick — the seeded Desktop icons
+  // alauncher/calc/… are still present and sort ahead of everything not
+  // starting 'aa'; the first cut of this leg aimed at mmm and renamed
+  // alauncher instead, proof the keys derived but the target model was
+  // wrong). ----
+  'printf q > /root/Desktop/aaa',                  // sorts first again (rn2 freed the name)
+  'sleep 2.5',                                     // timing subject: wm.c desk_load re-read poll (~1s tick) picks up aaa
   'wmctl click $DSID 500 400',                     // empty cell: focus + clear
   'sleep 0.5',                                     // timing subject: desktop focus + selection-clear render (no observable)
-  'wmctl key $DSID 79',                            // Right (derived SDLK_RIGHT) -> top-left = mmm
+  'wmctl key $DSID 79',                            // Right (derived SDLK_RIGHT) -> top-left = aaa
   'sleep 0.3',                                     // timing subject: arrow-select render (no observable)
   'wmctl key $DSID 59',                            // F2 (derived SDLK_F2) -> inline editor
   'sleep 0.3',                                     // timing subject: inline-editor-open render (no observable)
-  'wmctl key $DSID 42',                            // Backspace (derived 8) x3 clears "mmm"
+  'wmctl key $DSID 42',                            // Backspace (derived 8) x3 clears "aaa"
   'wmctl key $DSID 42',
   'wmctl key $DSID 42',
   'wmctl key $DSID 14',                            // k (derived 107)
   'wmctl key $DSID 14',
   'wmctl key $DSID 14',
   'wmctl key $DSID 40',                            // Enter (derived 13) -> commit
-  'for i in $(seq 1 120); do [ -e /root/Desktop/kkk ] && break; sleep 0.05; done',  // rename mmm->kkk landed (bounded poll, 0155)
+  'for i in $(seq 1 120); do [ -e /root/Desktop/kkk ] && break; sleep 0.05; done',  // rename aaa->kkk landed (bounded poll, 0155)
   'echo ==rn7',
-  'ls /root/Desktop | tr "\\n" " "; echo',         // mmm gone, kkk present
+  'ls /root/Desktop | tr "\\n" " "; echo',         // aaa gone, kkk present
 
   // ---- long/spaced Desktop-icon launch (todos/0151): menu_ent.name[32]
   // truncation. A launcher whose filename is >= 32 chars WITH spaces used to
@@ -1617,8 +1624,8 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   check('icon-menu Rename renames via the inline editor (aab -> mmm)',
     !rn6.includes('aab') && rn6.includes('mmm'), JSON.stringify(rn6));
   check('#676: keysym-omitted injection derives from the scancode — the ' +
-        'all-derived rename flow lands (mmm -> kkk)',
-    !rn7.includes('mmm') && rn7.includes('kkk'), JSON.stringify(rn7));
+        'all-derived rename flow lands (aaa -> kkk)',
+    !rn7.includes('aaa') && rn7.includes('kkk'), JSON.stringify(rn7));
 }
 
 // ---- long/spaced Desktop-icon launch (todos/0151): the menu_ent.name[32]
