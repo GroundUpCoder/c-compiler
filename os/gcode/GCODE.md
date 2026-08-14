@@ -27,8 +27,9 @@ WebAssembly module built by the in-OS C compiler. Facts you cannot guess:
   SDL_AppQuit, no main()), or run an unmodified blocking-loop program with
   `SDL_RENDER_DRIVER=software`. Details: `/usr/share/doc/sdl-gucos.md` —
   it also covers audio on headless boots (the queue never drains; keep a
-  bounded backlog, never block on drain) and text (there is no SDL_ttf;
-  use FreeType with the shipped fonts).
+  bounded backlog, never block on drain) and text (`<SDL3_ttf/SDL_ttf.h>`
+  is the classic SDL_ttf render-to-surface API over the shipped fonts;
+  render once, cache the texture).
 - Commonly-missing SDL symbols: `SDL_snprintf` does NOT exist — format with
   `snprintf` from `<stdio.h>`. `SDL_Log` exists (message to stderr with a
   trailing newline); `printf`/`fprintf(stderr, ...)` work too.

@@ -14,8 +14,8 @@ read it before writing SDL code.
 Includes: `#include <SDL.h>` (or `<SDL3/SDL.h>` — same header).
 `#define SDL_MAIN_USE_CALLBACKS` before the include opts into the
 callback main loop. Optional subsidiary headers: `<SDL_popup.h>`,
-`<SDL3_image/SDL_image.h>`, `<sdl3webgpu.h>` (each pulls its own
-implementation; sections below).
+`<SDL3_image/SDL_image.h>`, `<SDL3_ttf/SDL_ttf.h>`, `<sdl3webgpu.h>`
+(each pulls its own implementation; sections below).
 
 ## Functions
 
@@ -235,6 +235,60 @@ SDL_Texture *IMG_LoadTexture(SDL_Renderer *renderer, const char *file);
 const char *IMG_GetError(void);
 ```
 
+### Text rendering (SDL_ttf, classic API) — `#include <SDL3_ttf/SDL_ttf.h>`
+
+The classic render-to-surface half of SDL3_ttf over FreeType (on a minimal boot `gucman install freetype` first). Renderers return RGBA32 heap surfaces (free with SDL_DestroySurface; no palettized surfaces here) — render once and cache the texture. `length` params are bytes, 0 = null-terminated UTF-8. The modern TTF_Text/TTF_TextEngine API, the LCD renderers, TTF_OpenFontIO and TTF_SetFontOutline are absent. Fonts: /usr/share/fonts/{mono,sans,serif}.ttf + bold/italic variants.
+
+```c
+bool TTF_Init(void);
+void TTF_Quit(void);
+int TTF_WasInit(void);
+TTF_Font *TTF_OpenFont(const char *file, float ptsize);
+void TTF_CloseFont(TTF_Font *font);
+bool TTF_SetFontSize(TTF_Font *font, float ptsize);
+bool TTF_SetFontSizeDPI(TTF_Font *font, float ptsize, int hdpi, int vdpi);
+float TTF_GetFontSize(TTF_Font *font);
+bool TTF_GetFontDPI(TTF_Font *font, int *hdpi, int *vdpi);
+void TTF_SetFontStyle(TTF_Font *font, TTF_FontStyleFlags style);
+TTF_FontStyleFlags TTF_GetFontStyle(const TTF_Font *font);
+void TTF_SetFontHinting(TTF_Font *font, TTF_HintingFlags hinting);
+TTF_HintingFlags TTF_GetFontHinting(const TTF_Font *font);
+void TTF_SetFontKerning(TTF_Font *font, bool enabled);
+bool TTF_GetFontKerning(const TTF_Font *font);
+int TTF_GetFontHeight(const TTF_Font *font);
+int TTF_GetFontAscent(const TTF_Font *font);
+int TTF_GetFontDescent(const TTF_Font *font);
+int TTF_GetFontLineSkip(const TTF_Font *font);
+void TTF_SetFontLineSkip(TTF_Font *font, int lineskip);
+bool TTF_FontIsFixedWidth(const TTF_Font *font);
+const char *TTF_GetFontFamilyName(const TTF_Font *font);
+const char *TTF_GetFontStyleName(const TTF_Font *font);
+bool TTF_FontHasGlyph(TTF_Font *font, Uint32 ch);
+bool TTF_GetGlyphMetrics(TTF_Font *font, Uint32 ch, int *minx, int *maxx, int *miny, int *maxy, int *advance);
+bool TTF_GetGlyphKerning(TTF_Font *font, Uint32 previous_ch, Uint32 ch, int *kerning);
+bool TTF_GetStringSize(TTF_Font *font, const char *text, size_t length, int *w, int *h);
+bool TTF_GetStringSizeWrapped(TTF_Font *font, const char *text, size_t length, int wrap_width, int *w, int *h);
+bool TTF_MeasureString(TTF_Font *font, const char *text, size_t length, int max_width, int *measured_width, size_t *measured_length);
+SDL_Surface *TTF_RenderText_Solid(TTF_Font *font, const char *text, size_t length, SDL_Color fg);
+SDL_Surface *TTF_RenderText_Solid_Wrapped(TTF_Font *font, const char *text, size_t length, SDL_Color fg, int wrapLength);
+SDL_Surface *TTF_RenderText_Shaded(TTF_Font *font, const char *text, size_t length, SDL_Color fg, SDL_Color bg);
+SDL_Surface *TTF_RenderText_Shaded_Wrapped(TTF_Font *font, const char *text, size_t length, SDL_Color fg, SDL_Color bg, int wrap_width);
+SDL_Surface *TTF_RenderText_Blended(TTF_Font *font, const char *text, size_t length, SDL_Color fg);
+SDL_Surface *TTF_RenderText_Blended_Wrapped(TTF_Font *font, const char *text, size_t length, SDL_Color fg, int wrap_width);
+SDL_Surface *TTF_RenderGlyph_Solid(TTF_Font *font, Uint32 ch, SDL_Color fg);
+SDL_Surface *TTF_RenderGlyph_Shaded(TTF_Font *font, Uint32 ch, SDL_Color fg, SDL_Color bg);
+SDL_Surface *TTF_RenderGlyph_Blended(TTF_Font *font, Uint32 ch, SDL_Color fg);
+const char *TTF_GetError(void);
+```
+
+```
+TTF_STYLE_NORMAL 0x00
+TTF_STYLE_BOLD 0x01
+TTF_STYLE_ITALIC 0x02
+TTF_STYLE_UNDERLINE 0x04
+TTF_STYLE_STRIKETHROUGH 0x08
+```
+
 ### WebGPU bridge — `#include <sdl3webgpu.h>`
 
 Raw GPU access for an SDL window (with <webgpu.h>). A window uses EITHER SDL_UpdateWindowSurface/SDL_Renderer OR WebGPU, never both.
@@ -266,6 +320,7 @@ typedef struct SDL_Rect { int x, y, w, h; } SDL_Rect;
 typedef struct SDL_FRect { float x, y, w, h; } SDL_FRect;
 typedef struct SDL_FPoint { float x, y; } SDL_FPoint;
 typedef struct SDL_FColor { float r, g, b, a; } SDL_FColor;
+typedef struct SDL_Color { Uint8 r, g, b, a; } SDL_Color;
 typedef struct SDL_Vertex { SDL_FPoint position; SDL_FColor color; SDL_FPoint tex_coord; } SDL_Vertex;
 typedef struct SDL_Renderer SDL_Renderer;   /* opaque */
 typedef struct SDL_Texture { SDL_PixelFormat format; int w; int h; int __handle; Uint32 __magic; } SDL_Texture;
@@ -286,6 +341,8 @@ typedef struct SDL_AudioSpec { SDL_AudioFormat format; int channels; int freq; }
 typedef struct SDL_AudioStream SDL_AudioStream;   /* opaque */
 typedef void (*SDL_AudioStreamCallback)(void *userdata, SDL_AudioStream *stream, int additional_amount, int total_amount);
 typedef struct SDL_Cursor SDL_Cursor;   /* opaque */
+typedef struct TTF_Font TTF_Font;   /* opaque */
+typedef Uint32 TTF_FontStyleFlags;
 ```
 
 Enums:
@@ -298,6 +355,7 @@ typedef enum SDL_FlipMode { SDL_FLIP_NONE = 0, SDL_FLIP_HORIZONTAL = 1, SDL_FLIP
 typedef enum SDL_EventAction { SDL_ADDEVENT, SDL_PEEKEVENT, SDL_GETEVENT } SDL_EventAction;
 typedef enum SDL_SystemCursor { SDL_SYSTEM_CURSOR_DEFAULT, SDL_SYSTEM_CURSOR_TEXT, SDL_SYSTEM_CURSOR_WAIT, SDL_SYSTEM_CURSOR_CROSSHAIR, SDL_SYSTEM_CURSOR_PROGRESS, SDL_SYSTEM_CURSOR_NWSE_RESIZE, SDL_SYSTEM_CURSOR_NESW_RESIZE, SDL_SYSTEM_CURSOR_EW_RESIZE, SDL_SYSTEM_CURSOR_NS_RESIZE, SDL_SYSTEM_CURSOR_MOVE, SDL_SYSTEM_CURSOR_NOT_ALLOWED, SDL_SYSTEM_CURSOR_POINTER, SDL_SYSTEM_CURSOR_NW_RESIZE, SDL_SYSTEM_CURSOR_N_RESIZE, SDL_SYSTEM_CURSOR_NE_RESIZE, SDL_SYSTEM_CURSOR_E_RESIZE, SDL_SYSTEM_CURSOR_SE_RESIZE, SDL_SYSTEM_CURSOR_S_RESIZE, SDL_SYSTEM_CURSOR_SW_RESIZE, SDL_SYSTEM_CURSOR_W_RESIZE, SDL_SYSTEM_CURSOR_COUNT } SDL_SystemCursor;
 typedef enum SDL_AppResult { SDL_APP_CONTINUE, SDL_APP_SUCCESS, SDL_APP_FAILURE } SDL_AppResult;
+typedef enum TTF_HintingFlags { TTF_HINTING_INVALID = -1, TTF_HINTING_NORMAL = 0, TTF_HINTING_LIGHT = 1, TTF_HINTING_MONO = 2, TTF_HINTING_NONE = 3 } TTF_HintingFlags;
 ```
 
 ## Constants
@@ -508,7 +566,7 @@ Every claim in this list is re-verified against the header surface each
 time this file is generated — an entry here is absent TODAY, not folklore.
 An absent symbol fails loud at compile time (“Undeclared identifier”).
 
-- SDL_ttf: no `TTF_*` function exists; `#include <SDL_ttf.h>` fails. Draw text with FreeType (`<ft2build.h>`) + the shipped fonts under `/usr/share/fonts/`, or an embedded bitmap font — see sdl-gucos.md.
+- SDL_ttf modern API: `TTF_Text` / `TTF_TextEngine` (`TTF_CreateText`, `TTF_CreateSurfaceTextEngine`, `TTF_CreateRendererTextEngine`, `TTF_DrawSurfaceText`, `TTF_DrawRendererText`) do not exist — only the classic render-to-surface API above. Also absent: `TTF_OpenFontIO` (no SDL_IOStream), `TTF_SetFontOutline`, the `TTF_RenderText_LCD*` family, and `TTF_HINTING_LIGHT_SUBPIXEL`.
 - Render targets: `SDL_SetRenderTarget` / `SDL_GetRenderTarget`. SDL_TEXTUREACCESS_TARGET is defined, but rendering INTO a texture is not available — compose CPU-side and upload with SDL_UpdateTexture.
 - Texture pixel access: `SDL_LockTexture` / `SDL_UnlockTexture` — upload with SDL_UpdateTexture instead.
 - Renderer state: `SDL_SetRenderViewport`, `SDL_SetRenderClipRect`, `SDL_SetRenderScale`, `SDL_SetRenderLogicalPresentation`, `SDL_RenderReadPixels`, `SDL_GetRenderOutputSize` — none exist; draw in window pixels 1:1.

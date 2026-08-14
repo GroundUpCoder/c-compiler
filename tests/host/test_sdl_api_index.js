@@ -122,7 +122,10 @@ const ccHarness = (() => {
 })();
 
 check('documented-absent symbols really fail as undeclared', () => {
-  for (const sym of ['SDL_SetRenderTarget', 'SDL_LockTexture', 'TTF_OpenFont']) {
+  // NB TTF_OpenFont left this list when #468 made the classic SDL_ttf
+  // surface real (the two-sided edit); Mix_OpenAudio pins the SDL_mixer
+  // absence claim in its place.
+  for (const sym of ['SDL_SetRenderTarget', 'SDL_LockTexture', 'Mix_OpenAudio']) {
     const r = ccHarness('#include <SDL.h>\nint main(void){' + sym + '(0);return 0;}\n');
     assert(r.exitCode !== 0 && (r.stderr || '').includes("Undeclared identifier '" + sym + "'"),
       sym + ' unexpectedly compiled (exit ' + r.exitCode + ') — it EXISTS now; '

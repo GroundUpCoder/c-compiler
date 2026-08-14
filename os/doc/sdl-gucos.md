@@ -117,30 +117,46 @@ accepts the data, so on a headless boot the queue grows without bound.
 With the bounded pattern the same program plays sound in the browser
 and runs silently, with bounded memory, on a headless boot.
 
-## Text: there is no SDL_ttf
+## Text: SDL_ttf (the classic API) over FreeType
 
-SDL_ttf is not part of this platform. No `TTF_*` function exists, and
-`#include <SDL_ttf.h>` fails. Draw text with FreeType, the way the
-in-OS apps (the terminal, the deck viewer) do:
+`#include <SDL3_ttf/SDL_ttf.h>` is the sanctioned text path: the classic
+SDL_ttf render-to-surface API, spelled exactly as SDL3_ttf 3.x —
+`TTF_Init` / `TTF_OpenFont` / `TTF_RenderText_{Solid,Shaded,Blended}`
+(plus `_Wrapped` and `TTF_RenderGlyph_*` variants), `TTF_GetStringSize`,
+font metrics, style/hinting/kerning. The header pulls FreeType through
+the freetype source package automatically (on a minimal boot,
+`gucman install freetype` first); a program that does not include it
+stays FreeType-free. Shipped TrueType fonts live under
+`/usr/share/fonts/` (`mono.ttf`, `sans.ttf`, `serif.ttf`, bold/italic
+variants; user overrides in `/etc/fonts`).
 
 ```c
-#include <ft2build.h>
-#include FT_FREETYPE_H
+#include <SDL3_ttf/SDL_ttf.h>
+
+TTF_Init();
+TTF_Font *font = TTF_OpenFont("/usr/share/fonts/sans.ttf", 24.0f);
+SDL_Color white = { 255, 255, 255, 255 };
+SDL_Surface *s = TTF_RenderText_Blended(font, "Score: 100", 0, white);
+SDL_Texture *t = SDL_CreateTextureFromSurface(renderer, s);
+SDL_DestroySurface(s);
+/* draw t with SDL_RenderTexture each frame */
 ```
 
-The FreeType headers pull their own sources, like the other system
-libraries (on a minimal boot, `gucman install freetype` first). Then:
+Rules and boundaries:
 
-1. `FT_Init_FreeType`, and `FT_New_Face` on a shipped font. TrueType
-   fonts live under `/usr/share/fonts/` (`mono.ttf`, `sans.ttf`,
-   `serif.ttf`, bold/italic variants). Try `/etc/fonts/mono.ttf` first
-   and fall back to `/usr/share/fonts/mono.ttf` — user overrides live
-   in `/etc/fonts`.
-2. `FT_Set_Pixel_Sizes`, then `FT_Load_Glyph` + `FT_Render_Glyph` per
-   character.
-3. Blit each glyph bitmap into your own pixels — the window surface, or
-   a streaming texture on the renderer path.
-
-For a small fixed HUD (score, lives), an embedded bitmap font drawn
-with `SDL_RenderFillRect` per pixel also works and needs no library.
-For anything more, use FreeType and the shipped fonts.
+- Render once and CACHE the texture; re-render only when the string
+  changes. A per-frame `TTF_RenderText_*` + `SDL_CreateTextureFromSurface`
+  round trip works but burns CPU for nothing.
+- Every returned surface is RGBA32 (this platform has no palettized
+  surfaces). The visual semantics are upstream's: Solid = bilevel ink on
+  a transparent background, Shaded = antialiased on an opaque bg-colored
+  box, Blended = antialiased with per-pixel alpha.
+- Text is UTF-8 (the `length` parameter is bytes, 0 = null-terminated);
+  invalid bytes render as the replacement glyph, never garbage.
+- The modern `TTF_Text` / `TTF_TextEngine` API is NOT part of this
+  platform (tracked separately), and the LCD renderers, `TTF_OpenFontIO`
+  and `TTF_SetFontOutline` do not exist — absent names fail loud at
+  compile time.
+- Raw FreeType (`<ft2build.h>`, see the freetype package) stays available
+  for custom rasterization; an embedded bitmap font still works for a
+  tiny fixed HUD.

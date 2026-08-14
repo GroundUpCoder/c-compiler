@@ -54,6 +54,9 @@ const SUB_HEADERS = [
   { key: 'SDL3_image/SDL_image.h', include: '<SDL3_image/SDL_image.h>',
     title: 'Image loading (SDL_image)',
     note: 'PNG is the only decoder shipped (libpng). IMG_Load returns a heap SDL_Surface (free with SDL_DestroySurface); on a minimal boot `gucman install libpng` first.' },
+  { key: 'SDL3_ttf/SDL_ttf.h', include: '<SDL3_ttf/SDL_ttf.h>',
+    title: 'Text rendering (SDL_ttf, classic API)',
+    note: 'The classic render-to-surface half of SDL3_ttf over FreeType (on a minimal boot `gucman install freetype` first). Renderers return RGBA32 heap surfaces (free with SDL_DestroySurface; no palettized surfaces here) — render once and cache the texture. `length` params are bytes, 0 = null-terminated UTF-8. The modern TTF_Text/TTF_TextEngine API, the LCD renderers, TTF_OpenFontIO and TTF_SetFontOutline are absent. Fonts: /usr/share/fonts/{mono,sans,serif}.ttf + bold/italic variants.' },
   { key: 'sdl3webgpu.h', include: '<sdl3webgpu.h>',
     title: 'WebGPU bridge',
     note: 'Raw GPU access for an SDL window (with <webgpu.h>). A window uses EITHER SDL_UpdateWindowSurface/SDL_Renderer OR WebGPU, never both.' },
@@ -135,8 +138,11 @@ const CLUSTERS = [
 // instead" advice cannot rot either). #672 is the live precedent: an
 // "absent" claim about SDL_RenderTextureRotated would refuse today.
 const ABSENT = [
-  { label: 'SDL_ttf: no `TTF_*` function exists; `#include <SDL_ttf.h>` fails. Draw text with FreeType (`<ft2build.h>`) + the shipped fonts under `/usr/share/fonts/`, or an embedded bitmap font — see sdl-gucos.md.',
-    absent: ['TTF_Init', 'TTF_OpenFont', 'TTF_RenderText_Solid'] },
+  { label: 'SDL_ttf modern API: `TTF_Text` / `TTF_TextEngine` (`TTF_CreateText`, `TTF_CreateSurfaceTextEngine`, `TTF_CreateRendererTextEngine`, `TTF_DrawSurfaceText`, `TTF_DrawRendererText`) do not exist — only the classic render-to-surface API above. Also absent: `TTF_OpenFontIO` (no SDL_IOStream), `TTF_SetFontOutline`, the `TTF_RenderText_LCD*` family, and `TTF_HINTING_LIGHT_SUBPIXEL`.',
+    absent: ['TTF_CreateText', 'TTF_CreateSurfaceTextEngine', 'TTF_CreateRendererTextEngine',
+             'TTF_DrawSurfaceText', 'TTF_DrawRendererText', 'TTF_OpenFontIO', 'TTF_SetFontOutline',
+             'TTF_RenderText_LCD', 'TTF_HINTING_LIGHT_SUBPIXEL'],
+    see: ['TTF_RenderText_Blended', 'TTF_GetStringSize'] },
   { label: 'Render targets: `SDL_SetRenderTarget` / `SDL_GetRenderTarget`. SDL_TEXTUREACCESS_TARGET is defined, but rendering INTO a texture is not available — compose CPU-side and upload with SDL_UpdateTexture.',
     absent: ['SDL_SetRenderTarget', 'SDL_GetRenderTarget'],
     see: ['SDL_TEXTUREACCESS_TARGET', 'SDL_UpdateTexture'] },
@@ -270,9 +276,11 @@ function assertAbsent(entries, strippedSurface) {
         throw new Error('"notably absent" advice points at ' + n + ' but the header surface LACKS it — fix the `see` anchor in tools/mksdlindex.js');
     }
   }
-  // Family sweeps: nothing TTF_/Mix_-shaped may exist anywhere in the surface.
-  const fam = /\b(TTF|Mix)_\w+/.exec(strippedSurface);
-  if (fam) throw new Error('surface grew a ' + fam[0] + ' symbol — the SDL_ttf/SDL_mixer absence claims are stale');
+  // Family sweep: nothing Mix_-shaped may exist anywhere in the surface.
+  // (The TTF_ half of this sweep retired with #468 — the classic SDL_ttf
+  // surface is real now; its remaining absences are pinned by name above.)
+  const fam = /\bMix_\w+/.exec(strippedSurface);
+  if (fam) throw new Error('surface grew a ' + fam[0] + ' symbol — the SDL_mixer absence claim is stale');
 }
 
 // ---- emission -------------------------------------------------------------
@@ -348,8 +356,8 @@ function generate() {
   push('Includes: `#include <SDL.h>` (or `<SDL3/SDL.h>` — same header).');
   push('`#define SDL_MAIN_USE_CALLBACKS` before the include opts into the');
   push('callback main loop. Optional subsidiary headers: `<SDL_popup.h>`,');
-  push('`<SDL3_image/SDL_image.h>`, `<sdl3webgpu.h>` (each pulls its own');
-  push('implementation; sections below).');
+  push('`<SDL3_image/SDL_image.h>`, `<SDL3_ttf/SDL_ttf.h>`, `<sdl3webgpu.h>`');
+  push('(each pulls its own implementation; sections below).');
   push('');
   push('## Functions');
   for (const g of GROUPS) {
@@ -372,6 +380,14 @@ function generate() {
     push('```c');
     for (const p of s.parsed.protos) push(fmtProto(p));
     push('```');
+    // A sub-header's #defines are surface too (the TTF_STYLE_* flags are the
+    // first case) — emit them in the header's own section.
+    if (s.parsed.defines.length) {
+      push('');
+      push('```');
+      for (const d of s.parsed.defines) push(d.name + (d.params || '') + ' ' + d.value);
+      push('```');
+    }
   }
   push('');
   push('## Types');

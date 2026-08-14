@@ -456,8 +456,11 @@ callback model the supported entry path). `SDL_malloc`/`free`/`memcpy` etc. map
 to libc. `SDL_GetEnvironment`.
 
 ### Satellite libraries — out of scope here (track separately)
-SDL_image (browser image decode could back it), SDL_ttf (font rasterization),
-SDL_mixer (on top of audio). Note as future, separate docs.
+SDL_image (✓ landed — `<SDL3_image/SDL_image.h>` builtin veneer over libpng),
+SDL_ttf (✓ landed #468 — `<SDL3_ttf/SDL_ttf.h>` builtin veneer over the #464
+freetype srclib: the CLASSIC render-to-surface API of SDL3_ttf 3.x;
+TTF_Text/TTF_TextEngine is #527), SDL_mixer (✗ — on top of audio; still
+future, tracked separately).
 
 ## Suggested build order
 
