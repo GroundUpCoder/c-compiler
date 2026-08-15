@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 'use strict';
-// Host-level regression test (todos/0361): the sleep primitives must request
-// EXACTLY the duration they were asked for — no floor, no clamp, no unit slip.
+// Host-level regression test (todos/0361, reworked for #492): the sleep
+// primitives must request the duration they were asked for — no floor, no
+// clamp, no unit slip — and, since #492, must do it as a bounded deadline
+// loop, never a spin.
 //
 // This replaces a wall-clock encoding of the same property. The unit tests
 // `stdlib/usleep_zero` / `blockfs_usleep_zero` used to run 20 × usleep(0) and
@@ -18,10 +20,27 @@
 //   * native-fs / CLI flavor (JSPI)  -> setTimeout(resolve, ms)
 //   * block-FS flavor (no JSPI)      -> Atomics.wait(cell, 0, 0, ms)
 //
-// We record the `ms` each one is handed. usleep(0) must request 0 ms (or, on
-// the block-FS path where a non-positive duration is a documented no-op, not
-// park at all) — and usleep(50000) must request 50, which also pins the unit
-// conversion the old `elapsed < 500000` upper bounds were groping at.
+// #492 changed the block-FS primitive's SHAPE: blockingSleepMs is now a
+// monotonic-deadline LOOP over Atomics.wait (OS timer-coalescing leeway wakes
+// every timed wait late by min(request/2, ~10ms); requesting 2/3 of the
+// remainder compensates, sub-ms tails pass whole). "Requests exactly" is
+// therefore a statement about the request SEQUENCE, and the recorder must
+// honour the primitive's contract to observe it: a real 'timed-out' return
+// means that much time ELAPSED, so the mock advances a VIRTUAL
+// performance.now() by exactly the requested duration (the pre-#492 recorder
+// returned instantly, which against a deadline loop records parks forever —
+// an unfaithful mock, not a product spin: the real cell is private and never
+// notified, so real waits can only time out and consume real time). Under
+// the zero-leeway virtual clock the invariants are exact, deterministic and
+// clock-free:
+//
+//   * sum(requests) == asked ms   (unit conversion + never-early + no
+//     over-sleep, one line — usleep(50000) sums to 50, not 50000 or 0.05)
+//   * first request <= asked; requests strictly decrease
+//   * a sub-ms ask is ONE request of exactly the asked value (no 1 ms floor)
+//   * park count <= PARKS_MAX     (#492's log-bounded-wakes claim, pinned —
+//     a spin shows up here as a count explosion)
+//   * a zero ask never parks at all (#146, POSIX "shall return immediately")
 //
 // The suspending imports are unwrapped with the `WebAssembly.Suspending =
 // identity` trick from test_pipe_read_block.js, so the async bodies are
@@ -72,16 +91,23 @@ function makeCtx() {
 // ---------------------------------------------------------------------------
 // Backend A — block-FS flavor: the sync Atomics.wait sleep primitive.
 // ---------------------------------------------------------------------------
-// blockingSleepMs() reads Atomics.wait off the global Atomics namespace object
-// at CALL time, so replacing the property intercepts every park. The recorder
-// returns 'timed-out' without waiting, which is what a real timeout returns —
-// so control flow above it is unchanged and the test costs no wall-clock time.
+// blockingSleepMs() reads Atomics.wait and performance.now off their global
+// namespace objects at CALL time, so replacing the properties intercepts
+// every park AND its clock. The recorder advances the virtual clock by
+// exactly the requested duration — the primitive's own contract for a
+// 'timed-out' return — which is what makes the #492 deadline loop terminate
+// deterministically (zero leeway: the fewest-progress, most-parks case) with
+// zero real wall-clock involvement.
 const waits = [];
+let vnow = 0;
 const realAtomicsWait = Atomics.wait;
+const realPerfNow = performance.now;
 Atomics.wait = function (arr, idx, val, timeout) {
   waits.push(timeout);
+  vnow += timeout;
   return 'timed-out';
 };
+performance.now = function () { return vnow; };
 
 function blockEnv() {
   const store = new BLOCK_FS.MemoryByteStore(1 << 20);
@@ -91,8 +117,26 @@ function blockEnv() {
 
 function measureBlock(fn) {
   waits.length = 0;
+  vnow = 0;
   fn();
   return waits.slice();
+}
+
+// #492 worst case under zero leeway: the remainder shrinks by 1/3 per park
+// until <= 1 ms, then one whole-tail park — ceil(log3(ms)) + 2 with float
+// slack. 12 covers the largest ask below (2250 ms -> 9 parks) with margin;
+// a spin regression overshoots this by orders of magnitude, never by 1.
+const PARKS_MAX = 12;
+function seqChecks(tag, seq, askedMs) {
+  const sum = seq.reduce((a, b) => a + b, 0);
+  check(tag + `: requests sum to ${askedMs} ms (unit conversion, no over-sleep)`,
+        Math.abs(sum - askedMs) < 1e-6, JSON.stringify(seq));
+  check(tag + ': first request <= asked (never over-requests)',
+        seq.length > 0 && seq[0] <= askedMs, JSON.stringify(seq));
+  check(tag + ': requests strictly decrease (deadline-loop shape)',
+        seq.every((v, i) => i === 0 || v < seq[i - 1]), JSON.stringify(seq));
+  check(tag + `: park count ${seq.length} <= ${PARKS_MAX} (log-bounded, no spin)`,
+        seq.length >= 1 && seq.length <= PARKS_MAX, JSON.stringify(seq));
 }
 
 console.log('block-FS flavor (Atomics.wait):');
@@ -104,25 +148,26 @@ console.log('block-FS flavor (Atomics.wait):');
   // control, and this is it — without it, an env that lost its sleep
   // primitive entirely would read as "usleep(0) does not park". PASS.
   const control = measureBlock(() => env.usleep(50000));
-  check('positive control: usleep(50000) parks exactly once', control.length === 1,
+  check('positive control: usleep(50000) parks at least once', control.length >= 1,
         JSON.stringify(control));
-  eq('usleep(50000) requests 50 ms', control[0], 50);
+  seqChecks('usleep(50000)', control, 50);
 
   // THE property the wall-clock test was after.
   const zero = measureBlock(() => { for (let i = 0; i < 20; i++) env.usleep(0); });
   check('usleep(0) x20 never parks', zero.length === 0, JSON.stringify(zero));
 
   // A sub-millisecond request must stay sub-millisecond: a `Math.max(1, ms)`
-  // floor would show up here as 1 even though usleep(0) short-circuits.
+  // floor would show up here as 1 even though usleep(0) short-circuits. Under
+  // #492 a sub-ms remainder is passed WHOLE, so the sequence is exactly [0.5].
   const sub = measureBlock(() => env.usleep(500));
-  check('usleep(500) parks once', sub.length === 1, JSON.stringify(sub));
+  check('usleep(500) parks exactly once (sub-ms tail passes whole)',
+        sub.length === 1, JSON.stringify(sub));
   eq('usleep(500) requests 0.5 ms (not floored to 1)', sub[0], 0.5);
 
   eq('usleep(0) returns 0', env.usleep(0), 0);
 
   const nano = measureBlock(() => env.__nanosleep(0, 50000000));
-  check('nanosleep(0, 50ms) parks once', nano.length === 1, JSON.stringify(nano));
-  eq('nanosleep(0, 50ms) requests 50 ms', nano[0], 50);
+  seqChecks('nanosleep(0, 50ms)', nano, 50);
 
   // #146: a zero request is a no-op (POSIX "shall return immediately").
   const nanoZero = measureBlock(() => { for (let i = 0; i < 20; i++) env.__nanosleep(0, 0); });
@@ -132,25 +177,25 @@ console.log('block-FS flavor (Atomics.wait):');
 
   // ...and a sub-millisecond request is passed through, not floored.
   const nanoSub = measureBlock(() => env.__nanosleep(0, 500000));
+  check('nanosleep(0.5ms) parks exactly once', nanoSub.length === 1, JSON.stringify(nanoSub));
   eq('nanosleep(0.5ms) requests 0.5 ms (not floored to 1)', nanoSub[0], 0.5);
 
   const nanoSec = measureBlock(() => env.__nanosleep(2, 250000000));
-  eq('nanosleep(2s, 250ms) requests 2250 ms', nanoSec[0], 2250);
+  seqChecks('nanosleep(2s, 250ms)', nanoSec, 2250);
 
   const sec = measureBlock(() => env.sleep(1));
-  check('sleep(1) parks once', sec.length === 1, JSON.stringify(sec));
-  eq('sleep(1) requests 1000 ms', sec[0], 1000);
+  seqChecks('sleep(1)', sec, 1000);
 
   // select-as-sleep: empty fd sets, so the whole call IS the timeout.
   const selZero = measureBlock(() => env.__select_impl(0, 0, 0, 0, 0, 0, 1));
   check('select(timeout=0) never parks', selZero.length === 0, JSON.stringify(selZero));
 
   const sel = measureBlock(() => env.__select_impl(0, 0, 0, 0, 0, 50000, 1));
-  check('select(timeout=50ms) parks once', sel.length === 1, JSON.stringify(sel));
-  eq('select(timeout=50ms) requests 50 ms', sel[0], 50);
+  seqChecks('select(timeout=50ms)', sel, 50);
 }
 
 Atomics.wait = realAtomicsWait;
+performance.now = realPerfNow;
 
 // ---------------------------------------------------------------------------
 // Backend B — native-fs / CLI flavor: the JSPI setTimeout sleep primitive.
