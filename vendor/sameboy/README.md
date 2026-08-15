@@ -73,7 +73,6 @@ In-OS: `sameboy /root/roms/SuperMarioDeluxe.gbc &` (kernel e2e:
 | `core/defs.h` | pre-GCC-4.8 `__builtin_bswap16` fallback macro removed | `__builtin_bswap16/32/64` are real intrinsics since `30f12ece` (#680), but the fallback's `#if __GNUC__ < 4 …` guard fires (this compiler predefines no `__GNUC__`) and its body is a statement expression |
 | `core/gb.c` | `#include <alloca.h>` | alloca is not in `<stdlib.h>` in this libc |
 | `core/gb.c` | `vasprintf` → fixed 512-byte `vsnprintf` | no vasprintf in this libc |
-| `core/gb.c` | rtc-section VLA → checked 128-byte buffer | `offsetof` through an anonymous union/struct member (`GB_SECTION`'s `*_section_start` markers) doesn't fold to an integer constant expression; plain-member `offsetof` folds since `bfe4edc5` (re-measured for #684) |
 | `core/printer.c` | image VLA → `static` max-size buffer | VLAs unsupported; 128 KB doesn't fit the 64 KB wasm stack, hence static (single-threaded world) |
 | `core/display.c` | one statement expression unrolled | no `({…})` support |
 | `core/apu.c` `core/random.c` | `__attribute__((constructor))` → lazy init | constructors unsupported; random.c seeds on first `GB_random` (explicit `GB_random_seed` still wins) |
@@ -87,6 +86,15 @@ the compiler learned the GCC packing in todos/0085 (found by this port).
   the GNU elvis operator landed in `8999f38d` (#681), first operand evaluated
   exactly once — the old rewrite's "operands side-effect-free" caveat is gone
   with it.
+
+### Retired patches (#687 — upstream text restored)
+
+- `core/gb.c` rtc-section VLA → checked 128-byte buffer: `offsetof` through
+  nested/anonymous member designators folds to an integer constant expression
+  since #687 (locked by `tests/unit/core/offsetof_designators/`), so
+  `GB_SECTION_SIZE(rtc)` is a constant and upstream's
+  `uint8_t rtc_section[GB_SECTION_SIZE(rtc)]` was never a VLA here to begin
+  with — the bound folds at compile time.
 - `core/defs.h` `__builtin_bswap16/32/64` static inlines: real intrinsics
   since `30f12ece` (#680). The residual defs.h patch (table above) only drops
   upstream's pre-GCC-4.8 statement-expression fallback macro.
