@@ -22495,6 +22495,20 @@ bool SDL_RenderPresent(SDL_Renderer *renderer);
    an error (upstream leaves it undefined). */
 bool SDL_SetRenderTarget(SDL_Renderer *renderer, SDL_Texture *texture);
 SDL_Texture *SDL_GetRenderTarget(SDL_Renderer *renderer);
+/* Renderer vsync (#500): synchronize SDL_RenderPresent to the display clock —
+   in gucOS, the compositor's real per-frame tick. vsync = N presents at most
+   one frame per N display ticks (a paced present publishes its frame, then
+   blocks to the tick — software tier; GPU-tier callback apps are paced at the
+   frame driver). 0 disables pacing and is the DEFAULT on a fresh renderer,
+   per upstream SDL3. Unsupported modes — adaptive (-1), or any pacing where
+   no display clock exists (headless boot.js, standalone pages) — return
+   false with SDL_GetError() set and leave the mode UNCHANGED.
+   SDL_GetRenderVSync round-trips the value that was set; it does not report
+   the platform's own frame cadence. Doc: /usr/share/doc/sdl-gucos.md. */
+#define SDL_RENDERER_VSYNC_DISABLED 0
+#define SDL_RENDERER_VSYNC_ADAPTIVE (-1)
+bool SDL_SetRenderVSync(SDL_Renderer *renderer, int vsync);
+bool SDL_GetRenderVSync(SDL_Renderer *renderer, int *vsync);
 /* Debug text (#494): upstream SDL3's built-in 8x8 font (SDL 3.2+). Draws in
    the current render draw color at (x, y), 8 px per glyph — for debug
    overlays, scores, HUDs; use SDL_ttf for real typography. ASCII is the
@@ -27373,6 +27387,7 @@ __import void __sdl_render_quad(int r, int texH, double x0, double y0, double x1
 __import void __sdl_render_geometry(int r, int texH, const float *verts, int vertCount);
 __import void __sdl_render_present(int r);
 __import void __sdl_set_render_target(int r, int t);  /* t 0 = the window (#496) */
+__import int __sdl_set_render_vsync(int r, int vsync);  /* 1 accepted / 0 unsupported (#500) */
 
 /* ---- Error handling ----
    Single-threaded runtime ⇒ one global error buffer. SDL_GetError returns it
@@ -28474,6 +28489,10 @@ struct SDL_Renderer {
     SDL_Texture *debug_atlas;  /* lazy 8x8 debug-font atlas, one per renderer
                             (#494, upstream SDL_render.c shape); owned here —
                             SDL_DestroyRenderer reclaims it */
+    int vsync;            /* SDL_SetRenderVSync mode (#500); 0 = disabled, the
+                            create-time default per upstream SDL3. GetRenderVSync
+                            round-trips THIS value — what was set, never the
+                            platform's own cadence. */
 };
 
 /* ---- Hints (#551): a tiny grow-only store. SDL_GetHint prefers the
@@ -28546,6 +28565,7 @@ SDL_Renderer *SDL_CreateRenderer(SDL_Window *window, const char *name) {
     r->draw_r = r->draw_g = r->draw_b = r->draw_a = 255;
     r->target = NULL;
     r->debug_atlas = NULL;
+    r->vsync = 0;   /* SDL3: vsync defaults to SDL_RENDERER_VSYNC_DISABLED (#500) */
     window->renderer = r;
     return r;
 }
@@ -28921,6 +28941,24 @@ bool SDL_SetRenderTarget(SDL_Renderer *renderer, SDL_Texture *texture) {
 SDL_Texture *SDL_GetRenderTarget(SDL_Renderer *renderer) {
     if (!renderer) { SDL_InvalidParamError("renderer"); return NULL; }
     return renderer->target;
+}
+
+/* ---- Renderer vsync (#500) ---- */
+
+bool SDL_SetRenderVSync(SDL_Renderer *renderer, int vsync) {
+    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (vsync < 0)   /* adaptive (-1) and friends: nothing here can late-tear */
+        return SDL_SetError("SDL_SetRenderVSync: adaptive vsync is not supported (mode unchanged)");
+    if (!__sdl_set_render_vsync(renderer->handle, vsync))
+        return SDL_SetError("SDL_SetRenderVSync: vsync is not supported here — no display clock (headless or standalone; mode unchanged)");
+    renderer->vsync = vsync;
+    return 1;
+}
+
+bool SDL_GetRenderVSync(SDL_Renderer *renderer, int *vsync) {
+    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (vsync) *vsync = renderer->vsync;
+    return 1;
 }
 
 

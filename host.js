@@ -7199,6 +7199,9 @@ function createNullSDL() {
       __sdl_render_geometry: function () {},
       __sdl_render_present: function () {},
       __sdl_set_render_target: function () {},   // #496: C owns the contract; no pixels here
+      // #500: no display, no display clock — vsync=0 (the default) is
+      // accepted, anything else reports unsupported (C sets SDL_GetError).
+      __sdl_set_render_vsync: function (r, n) { return n === 0 ? 1 : 0; },
       __sdl_set_animation_frame_func: function (callbackPtr) { animationFrameFunc = callbackPtr; },
       __sdl_push_key_event: function () {},
       __sdl_push_mouse_button_event: function () {},
@@ -7820,6 +7823,21 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     }
   }
 
+  /* Renderer vsync pacing source (#500, SDL_SetRenderVSync): the kernel's
+   * compositor clock, when advertised at spawn (KP_VSYNC_EN — browser boots;
+   * a test kernel built with {vsync:true}). Without it there is no display
+   * clock here (boot.js's deadline pacer is a timer, not a display), so
+   * SDL_SetRenderVSync(>=1) reports unsupported — the honest refusal, never
+   * a setTimeout stand-in. seq is a plain load; waitUntil is the blocking
+   * park (KernelClient.vsyncWaitUntil — ARMED/doorbell discipline, STOP
+   * release, signal-interruptible). */
+  const vsyncPace = (typeof hooks.vsyncEnabled === 'function' &&
+                     typeof hooks.vsyncSeq === 'function' &&
+                     typeof hooks.vsyncWaitUntil === 'function' &&
+                     hooks.vsyncEnabled())
+    ? { seq: hooks.vsyncSeq, waitUntil: hooks.vsyncWaitUntil }
+    : null;
+
   // ---- Software SDL 2D renderer (SDL_Render*) over the shm window surface ----
   // The OS process worker has no working per-process GPU 2D-renderer path (the
   // compositor owns the one WebGPU pass in the kernel worker; the browser
@@ -7839,7 +7857,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
   // and __sdl_render_geometry — pixel-center coverage under the GPU's
   // top-left fill rule, so the two tiers cover the same pixels and split
   // quads neither gap nor double-blend their shared edge.
-  function makeSoftwareRenderer(winFor) {
+  function makeSoftwareRenderer(winFor, pace) {
     const rends = [];   // 1-based renderer records
     const texs = [];    // 1-based texture records
     const clamp = (v) => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
@@ -8092,8 +8110,22 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     const quadScratch = new Float64Array(32);   // 4 verts × 8 for the split-quad path
     return {
       __sdl_create_renderer: function (windowHandle) {
-        rends.push({ win: windowHandle, fb: null, fbw: 0, fbh: 0, drawR: 0, drawG: 0, drawB: 0, drawA: 255, drawBlend: 0, target: 0 });
+        rends.push({ win: windowHandle, fb: null, fbw: 0, fbh: 0, drawR: 0, drawG: 0, drawB: 0, drawA: 255, drawBlend: 0, target: 0, vsync: 0, lastTick: 0 });
         return rends.length;
+      },
+      /* SDL_SetRenderVSync (#500): accept vsync=0 always (the SDL3 default —
+       * a fresh renderer is unpaced); vsync>=1 only over a real display clock
+       * (pace = the kernel compositor tick). Adaptive (-1) and any other
+       * negative are unsupported everywhere. Returns 1 accepted / 0
+       * unsupported — the C layer owns SDL_GetError and leaves the stored
+       * mode unchanged on 0. */
+      __sdl_set_render_vsync: function (r, n) {
+        const rd = rends[r - 1]; if (!rd) return 0;
+        if (n === 0) { rd.vsync = 0; return 1; }
+        if (n < 0 || !pace) return 0;
+        rd.vsync = n;
+        rd.lastTick = pace.seq();   // phase baseline: next present parks to the Nth tick from here
+        return 1;
       },
       __sdl_destroy_renderer: function (r) { if (r > 0 && rends[r - 1]) rends[r - 1] = null; },
       // #496: t 0 = the window. The C layer owns the contract (TARGET access
@@ -8215,7 +8247,21 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
         for (let i = 0; i + 2 < vertCount; i += 3)
           tri(rd, tx, blend, V, i * 8, (i + 1) * 8, (i + 2) * 8);
       },
-      __sdl_render_present: function (r) { const rd = rends[r - 1]; if (rd) present(rd); },
+      /* Present, then pace (#500): PUBLISH-THEN-PARK. The frame lands in the
+       * shm buffer first (freshest frame is on screen before any wait — no
+       * queue, so a hidden tab pauses with NOTHING to burst on resume), then
+       * a vsync>=1 renderer parks until the Nth tick after its last paced
+       * present. Structurally <=1 present completes per tick interval. A slow
+       * app finds seq already advanced and never parks (missed ticks
+       * COLLAPSE); the re-baseline on the returned seq means an early
+       * signal/stop return never accumulates tick debt. The pacing lives
+       * HERE, in the SDL renderer's own present — never in the generic shm
+       * present path non-SDL producers use. */
+      __sdl_render_present: function (r) {
+        const rd = rends[r - 1]; if (!rd) return;
+        present(rd);
+        if (rd.vsync > 0 && pace) rd.lastTick = pace.waitUntil(rd.lastTick + rd.vsync);
+      },
     };
   }
 
@@ -8462,7 +8508,8 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
       const sid = win ? win.sid : legacySid;
       if (sid) presentTo(sid, canvas);
     };
-    const inner = createBrowserSDL({ canvas, ctx, onPresent: presentFrame });
+    const inner = createBrowserSDL({ canvas, ctx, onPresent: presentFrame,
+                                     vsyncCapable: !!vsyncPace });   // #500: kernel tick = a real display clock
     // Audio goes to the kernel mixer, not the page: override the inner
     // backend's ring-less stubs (it was built without sharedAudioBuffer).
     const env = Object.assign({}, inner[ENV_KEY], audioEnv);
@@ -8499,7 +8546,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     // if acquisition genuinely failed. Browser boot already hard-requires
     // worker WebGPU (boot-nogpu), so the fallback is a no-GPU escape hatch,
     // never the shipping path.
-    const swRenderer = makeSoftwareRenderer(function (handle) { return fbByHandle.get(handle) || null; });
+    const swRenderer = makeSoftwareRenderer(function (handle) { return fbByHandle.get(handle) || null; }, vsyncPace);
     const gpuRenderer = {};
     Object.keys(swRenderer).forEach(function (n) { gpuRenderer[n] = env[n]; });
     let rdrBackend = gpuRenderer;
@@ -8647,7 +8694,16 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     // the advertisement (standalone pages) keep inner's deadline pacer.
     if (typeof hooks.vsyncEnabled === 'function' &&
         typeof hooks.vsyncWait === 'function' && hooks.vsyncEnabled()) {
-      out.requestAnimationFrame = function (cb) { hooks.vsyncWait().then(cb); };
+      out.requestAnimationFrame = function (cb) {
+        /* #500 GPU-tier vsync=N: await N ticks per SDL_AppIterate — the
+         * iterate runs for tick T and publishes the frame made for it (the
+         * present transport never blocks). N<=1 is the single await this
+         * line always was; the driver re-reads gpuVsyncMax per frame so
+         * SDL_SetRenderVSync takes effect at the next frame boundary. */
+        let p = hooks.vsyncWait();
+        for (let i = inner.gpuVsyncMax(); i > 1; i--) p = p.then(function () { return hooks.vsyncWait(); });
+        p.then(cb);
+      };
     }
     // Raw webgpu.h apps (runModule builds the webgpu binding from this):
     // bindWindow hands out the PER-WINDOW canvas + present tail at
@@ -8793,7 +8849,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
       // (todos/0017) — see buildAudioEnv above.
       // SDL 2D renderer (SDL_Render*): the software rasterizer over each
       // window's shm surface (headless/Node has no GPU renderer at all).
-    }, audioEnv, makeSoftwareRenderer(function (h) { return windows[h - 1]; })),
+    }, audioEnv, makeSoftwareRenderer(function (h) { return windows[h - 1]; }, vsyncPace)),
   };
 }
 
@@ -8891,7 +8947,7 @@ function createCanvasGPU(canvas) {
  * @param {RuntimeContext} options.ctx - Runtime helpers shared with the host.
  * @returns {Object} Object with WASM imports keyed by ENV_KEY.
  */
-function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyWindow, onPresent }) {
+function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyWindow, onPresent, vsyncCapable }) {
   const { readString, getMemory, getExports } = ctx;
   // onPresent (todos/WM.md gpu transport): called after every frame actually
   // reaches the canvas (software blit or renderer flush) — the OS surface
@@ -9391,8 +9447,25 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         // growable CPU scratch (pixel-space vertices for the current frame);
         // vertCount tracks how many are written; batch records draw ranges into it.
         sdlRenderers.push({ window: window, drawColor: [1, 1, 1, 1], drawBlendMode: 0, clear: { r: 0, g: 0, b: 0, a: 1 }, batch: [], verts: null, vertCount: 0,
-                            target: null, segClear: null, winFlushed: false });   // #496 render-target state
+                            target: null, segClear: null, winFlushed: false,      // #496 render-target state
+                            vsync: 0 });   // #500 SDL_SetRenderVSync (default DISABLED)
         return sdlRenderers.length;
+      },
+      /* SDL_SetRenderVSync, GPU tier (#500): vsync=0 always accepted (the
+       * default); vsync>=1 only when the embedder advertised a real display
+       * clock (vsyncCapable — the OS surface flavor over the kernel's
+       * compositor tick; a STANDALONE page has no kernel clock and refuses,
+       * honestly). The GPU tier NEVER blocks in present — a blocked worker
+       * starves the event loop its own device needs — so pacing is applied
+       * by the frame-loop driver (the OS flavor's requestAnimationFrame
+       * override awaits gpuVsyncMax() ticks per SDL_AppIterate), and a
+       * blocking GPU main loop keeps the #551 refusal regardless. */
+      __sdl_set_render_vsync: function (r, n) {
+        const rd = sdlRenderers[r - 1]; if (!rd) return 0;
+        if (n === 0) { rd.vsync = 0; return 1; }
+        if (n < 0 || !vsyncCapable) return 0;
+        rd.vsync = n;
+        return 1;
       },
       __sdl_destroy_renderer: function (r) {
         if (r > 0 && sdlRenderers[r - 1]) sdlRenderers[r - 1] = null;
@@ -9640,6 +9713,17 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     whenRendererReady: function (cb) {
       rdrEnsure();
       cgpu.whenReady(function () { cb(!!cgpu.device); });
+    },
+    /* #500: the strictest vsync divisor across live GPU renderers (0 = none
+     * paced). The frame driver paces SDL_AppIterate by it: with several
+     * renderers the iterate cadence is the SLOWEST requested — each
+     * renderer still presents at most once per its own N ticks (the
+     * upstream multi-renderer coupling), and the one-renderer case (every
+     * real app) is exact. */
+    gpuVsyncMax: function () {
+      let n = 0;
+      for (const rd of sdlRenderers) if (rd && rd.vsync > n) n = rd.vsync;
+      return n;
     },
     // #496: the promise form runModule's pre-main gate awaits — previously only
     // the OS surface flavor exposed it, so on a STANDALONE page render-target
