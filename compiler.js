@@ -21739,10 +21739,12 @@ typedef unsigned int Uint32;
 typedef unsigned short Uint16;
 typedef unsigned char Uint8;
 typedef int Sint32;
+typedef short Sint16;   /* gamepad axis values (#607) */
 
 typedef Uint32 SDL_WindowID;
 typedef Uint32 SDL_KeyboardID;
 typedef Uint32 SDL_MouseID;
+typedef Uint32 SDL_JoystickID;   /* gamepad instance id (#607); 0 is invalid */
 typedef Uint32 SDL_Scancode;
 typedef Uint32 SDL_Keycode;
 typedef Uint16 SDL_Keymod;
@@ -21965,6 +21967,38 @@ typedef struct SDL_UserEvent {
     void *data2;
 } SDL_UserEvent;
 
+/* Gamepad events (#607) — field-for-field upstream SDL3 layouts. */
+typedef struct SDL_GamepadDeviceEvent {
+    Uint32 type;                /* SDL_EVENT_GAMEPAD_ADDED / _REMOVED */
+    Uint32 reserved;
+    Uint64 timestamp;
+    SDL_JoystickID which;
+} SDL_GamepadDeviceEvent;
+
+typedef struct SDL_GamepadButtonEvent {
+    Uint32 type;                /* SDL_EVENT_GAMEPAD_BUTTON_DOWN / _UP */
+    Uint32 reserved;
+    Uint64 timestamp;
+    SDL_JoystickID which;
+    Uint8 button;               /* SDL_GamepadButton */
+    bool down;
+    Uint8 padding1;
+    Uint8 padding2;
+} SDL_GamepadButtonEvent;
+
+typedef struct SDL_GamepadAxisEvent {
+    Uint32 type;                /* SDL_EVENT_GAMEPAD_AXIS_MOTION */
+    Uint32 reserved;
+    Uint64 timestamp;
+    SDL_JoystickID which;
+    Uint8 axis;                 /* SDL_GamepadAxis */
+    Uint8 padding1;
+    Uint8 padding2;
+    Uint8 padding3;
+    Sint16 value;               /* sticks -32768..32767, triggers 0..32767 */
+    Uint16 padding4;
+} SDL_GamepadAxisEvent;
+
 typedef union SDL_Event {
     Uint32 type;
     SDL_CommonEvent common;
@@ -21973,6 +22007,9 @@ typedef union SDL_Event {
     SDL_MouseButtonEvent button;
     SDL_MouseWheelEvent wheel;
     SDL_WindowEvent window;
+    SDL_GamepadDeviceEvent gdevice;
+    SDL_GamepadButtonEvent gbutton;
+    SDL_GamepadAxisEvent gaxis;
     SDL_UserEvent user;
     Uint8 padding[128];
 } SDL_Event;
@@ -22048,6 +22085,14 @@ typedef Uint64 SDL_WindowFlags;
 #define SDL_EVENT_MOUSE_BUTTON_DOWN 0x401
 #define SDL_EVENT_MOUSE_BUTTON_UP 0x402
 #define SDL_EVENT_MOUSE_WHEEL 0x403
+/* Gamepad events (#607). The five delivered kinds — this runtime has no
+   touchpad/sensor/remap sources, so those constants are deliberately not
+   declared (absence is honest, the API-honesty rule). */
+#define SDL_EVENT_GAMEPAD_AXIS_MOTION 0x650
+#define SDL_EVENT_GAMEPAD_BUTTON_DOWN 0x651
+#define SDL_EVENT_GAMEPAD_BUTTON_UP 0x652
+#define SDL_EVENT_GAMEPAD_ADDED 0x653
+#define SDL_EVENT_GAMEPAD_REMOVED 0x654
 /* App-registered event range (#604): SDL_RegisterEvents allocates from
    SDL_EVENT_USER upward; SDL_EVENT_LAST bounds the legal type space. */
 #define SDL_EVENT_FIRST 0x0
@@ -22324,6 +22369,93 @@ const bool *SDL_GetKeyboardState(int *numkeys);
 SDL_Keymod SDL_GetModState(void);
 SDL_MouseButtonFlags SDL_GetMouseState(float *x, float *y);
 SDL_MouseButtonFlags SDL_GetGlobalMouseState(float *x, float *y);
+
+/* ---- Gamepads (SDL_gamepad.h; #607) ----
+   The full SDL3 gamepad object model over the OS pad registry: instance
+   ids, ADDED/REMOVED hotplug events, per-button/axis events and state.
+   Requires SDL_Init(SDL_INIT_GAMEPAD). Pads route to the FOCUSED window's
+   process (the keyboard rule); an unfocused process sees frozen state and
+   is reconciled on focus gain. In the browser the backing device is the
+   Web Gamepad API's "standard" mapping (the browser did the mapping —
+   there is no mapping-DB API here, and pads the browser cannot map to the
+   standard layout are not exposed). Enum values and event layouts are
+   upstream SDL3, verbatim. Deliberately absent (honest boundary, not yet
+   backed): the joystick-level API (SDL_INIT_JOYSTICK still fails loud —
+   this runtime has no unmapped-device view, so unlike upstream,
+   SDL_INIT_GAMEPAD does NOT imply it), rumble, touchpad/sensor/LED,
+   mappings, player indices. */
+typedef enum SDL_GamepadType {
+    SDL_GAMEPAD_TYPE_UNKNOWN = 0,
+    SDL_GAMEPAD_TYPE_STANDARD,      /* every pad here: the web standard mapping */
+    SDL_GAMEPAD_TYPE_COUNT
+} SDL_GamepadType;
+
+typedef enum SDL_GamepadButton {
+    SDL_GAMEPAD_BUTTON_INVALID = -1,
+    SDL_GAMEPAD_BUTTON_SOUTH,           /* 0  */
+    SDL_GAMEPAD_BUTTON_EAST,            /* 1  */
+    SDL_GAMEPAD_BUTTON_WEST,            /* 2  */
+    SDL_GAMEPAD_BUTTON_NORTH,           /* 3  */
+    SDL_GAMEPAD_BUTTON_BACK,            /* 4  */
+    SDL_GAMEPAD_BUTTON_GUIDE,           /* 5  */
+    SDL_GAMEPAD_BUTTON_START,           /* 6  */
+    SDL_GAMEPAD_BUTTON_LEFT_STICK,      /* 7  */
+    SDL_GAMEPAD_BUTTON_RIGHT_STICK,     /* 8  */
+    SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,   /* 9  */
+    SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER,  /* 10 */
+    SDL_GAMEPAD_BUTTON_DPAD_UP,         /* 11 */
+    SDL_GAMEPAD_BUTTON_DPAD_DOWN,       /* 12 */
+    SDL_GAMEPAD_BUTTON_DPAD_LEFT,       /* 13 */
+    SDL_GAMEPAD_BUTTON_DPAD_RIGHT,      /* 14 */
+    SDL_GAMEPAD_BUTTON_MISC1,           /* 15 — never delivered here */
+    SDL_GAMEPAD_BUTTON_RIGHT_PADDLE1,   /* 16 — never delivered here */
+    SDL_GAMEPAD_BUTTON_LEFT_PADDLE1,    /* 17 — never delivered here */
+    SDL_GAMEPAD_BUTTON_RIGHT_PADDLE2,   /* 18 — never delivered here */
+    SDL_GAMEPAD_BUTTON_LEFT_PADDLE2,    /* 19 — never delivered here */
+    SDL_GAMEPAD_BUTTON_TOUCHPAD,        /* 20 — never delivered here */
+    SDL_GAMEPAD_BUTTON_MISC2,           /* 21 — never delivered here */
+    SDL_GAMEPAD_BUTTON_MISC3,           /* 22 — never delivered here */
+    SDL_GAMEPAD_BUTTON_MISC4,           /* 23 — never delivered here */
+    SDL_GAMEPAD_BUTTON_MISC5,           /* 24 — never delivered here */
+    SDL_GAMEPAD_BUTTON_MISC6,           /* 25 — never delivered here */
+    SDL_GAMEPAD_BUTTON_COUNT            /* 26, as upstream */
+} SDL_GamepadButton;
+
+typedef enum SDL_GamepadAxis {
+    SDL_GAMEPAD_AXIS_INVALID = -1,
+    SDL_GAMEPAD_AXIS_LEFTX,             /* 0 */
+    SDL_GAMEPAD_AXIS_LEFTY,             /* 1 */
+    SDL_GAMEPAD_AXIS_RIGHTX,            /* 2 */
+    SDL_GAMEPAD_AXIS_RIGHTY,            /* 3 */
+    SDL_GAMEPAD_AXIS_LEFT_TRIGGER,      /* 4 — 0..32767, never negative */
+    SDL_GAMEPAD_AXIS_RIGHT_TRIGGER,     /* 5 — 0..32767, never negative */
+    SDL_GAMEPAD_AXIS_COUNT
+} SDL_GamepadAxis;
+
+typedef struct SDL_Gamepad SDL_Gamepad;   /* opaque, as upstream */
+
+SDL_JoystickID *SDL_GetGamepads(int *count);   /* 0-terminated; SDL_free() it */
+bool SDL_HasGamepad(void);
+bool SDL_IsGamepad(SDL_JoystickID instance_id);
+SDL_Gamepad *SDL_OpenGamepad(SDL_JoystickID instance_id);
+void SDL_CloseGamepad(SDL_Gamepad *gamepad);
+SDL_Gamepad *SDL_GetGamepadFromID(SDL_JoystickID instance_id);
+SDL_JoystickID SDL_GetGamepadID(SDL_Gamepad *gamepad);
+const char *SDL_GetGamepadName(SDL_Gamepad *gamepad);
+const char *SDL_GetGamepadNameForID(SDL_JoystickID instance_id);
+bool SDL_GamepadConnected(SDL_Gamepad *gamepad);
+SDL_GamepadType SDL_GetGamepadType(SDL_Gamepad *gamepad);
+bool SDL_GetGamepadButton(SDL_Gamepad *gamepad, SDL_GamepadButton button);
+Sint16 SDL_GetGamepadAxis(SDL_Gamepad *gamepad, SDL_GamepadAxis axis);
+bool SDL_GamepadHasButton(SDL_Gamepad *gamepad, SDL_GamepadButton button);
+bool SDL_GamepadHasAxis(SDL_Gamepad *gamepad, SDL_GamepadAxis axis);
+void SDL_UpdateGamepads(void);
+const char *SDL_GetGamepadStringForButton(SDL_GamepadButton button);
+SDL_GamepadButton SDL_GetGamepadButtonFromString(const char *str);
+const char *SDL_GetGamepadStringForAxis(SDL_GamepadAxis axis);
+SDL_GamepadAxis SDL_GetGamepadAxisFromString(const char *str);
+void SDL_SetGamepadEventsEnabled(bool enabled);
+bool SDL_GamepadEventsEnabled(void);
 bool SDL_SetWindowTitle(SDL_Window *window, const char *title);
 bool SDL_SetWindowRelativeMouseMode(SDL_Window *window, bool enabled);
 bool SDL_GetWindowRelativeMouseMode(SDL_Window *window);
@@ -27319,6 +27451,12 @@ __import int __sdl_pump_wait(int timeoutMs);
    SDL main-loop idiom) still receives input. Returns the record count
    drained (0 when dry or no ring); the dry-ring cost is ~two atomic loads. */
 __import int __sdl_pump(void);
+/* Gamepad name query (#607): fills buf (NUL-terminated, cap permitting) and
+   returns the pad name's full byte length, or -1 for an instance id the
+   kernel never allocated. Names outlive disconnect kernel-side, so an open
+   handle can still answer SDL_GetGamepadName after REMOVED. Kernel-less
+   runtimes (standalone pages, null SDL) return -1. */
+__import int __sdl_gamepad_name(int instance_id, char *buf, int cap);
 /* libc's sleep import (this unit doesn't include time.h) — the no-ring
    fallback pace in SDL_WaitEventTimeout. */
 __import int __nanosleep(long sec, long nsec);
@@ -27413,11 +27551,17 @@ bool SDL_ClearError(void) {
 }
 
 /* Subsystems this runtime actually backs: VIDEO (WebGPU canvas), AUDIO (Web
-   Audio), and EVENTS (the event queue needs no device). Joystick/haptic/gamepad/
-   sensor/camera have no backend yet, so SDL_Init FAILS LOUD on them rather than
-   pretending it initialized (Guiding principle 1: behave like SDL or fail loud).
-   When iOS/gamepad support lands, widen this mask. */
-#define __SDL_SUPPORTED_SUBSYSTEMS (SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS)
+   Audio), EVENTS (the event queue needs no device), and GAMEPAD (#607: the
+   OS pad registry over the Web Gamepad API / wmctl injection). Joystick-level
+   API/haptic/sensor/camera have no backend, so SDL_Init FAILS LOUD on them
+   rather than pretending it initialized (Guiding principle 1: behave like SDL
+   or fail loud). NB unlike upstream, SDL_INIT_GAMEPAD does NOT imply
+   SDL_INIT_JOYSTICK here — there is no joystick subsystem to imply (this
+   runtime has no unmapped-device view; declared divergence, see the header's
+   gamepad section). When a subsystem's backend lands, widen this mask. */
+#define __SDL_SUPPORTED_SUBSYSTEMS (SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS | SDL_INIT_GAMEPAD)
+
+static void __sdl_gamepad_init_added(void);   /* fwd: ADDED synth at init (#607) */
 
 static SDL_InitFlags __sdl_initted = 0;
 /* Whether the host __sdl_init (which baselines the SDL_GetTicks clock) has run
@@ -27431,15 +27575,20 @@ static bool __sdl_do_init(SDL_InitFlags flags) {
     if (unsupported) {
         return SDL_SetError(
             "SDL_Init: requested subsystem(s) 0x%X are not supported by this runtime "
-            "(supported: SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS). "
-            "Joystick/gamepad/haptic/sensor/camera have no web backend yet.",
+            "(supported: SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS | SDL_INIT_GAMEPAD). "
+            "Joystick-level API/haptic/sensor/camera have no web backend yet.",
             (unsigned)unsupported);
     }
-    /* SDL implicitly brings up EVENTS alongside VIDEO/AUDIO. */
-    if (flags & (SDL_INIT_VIDEO | SDL_INIT_AUDIO)) flags |= SDL_INIT_EVENTS;
+    /* SDL implicitly brings up EVENTS alongside VIDEO/AUDIO/GAMEPAD. */
+    if (flags & (SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) flags |= SDL_INIT_EVENTS;
     /* Baseline the tick clock exactly once per init cycle. */
     if (!__sdl_host_inited) { __sdl_init((int)flags); __sdl_host_inited = 1; }
+    bool gamepadNew = (flags & SDL_INIT_GAMEPAD) && !(__sdl_initted & SDL_INIT_GAMEPAD);
     __sdl_initted |= flags;
+    /* Upstream contract: pads already connected at gamepad-subsystem init
+       deliver SDL_EVENT_GAMEPAD_ADDED. The registry below tracks connects
+       from ring drains whether or not the subsystem is up (#607). */
+    if (gamepadNew) __sdl_gamepad_init_added();
     return 1;
 }
 
@@ -27803,6 +27952,335 @@ void __sdl_push_mouse_wheel_event(int window_id, double x, double y, int directi
     __sdl_eq_push(e);
 }
 __export __sdl_push_mouse_wheel_event = __sdl_push_mouse_wheel_event;
+
+/* ---- Gamepads (#607) ----
+   The registry mirrors what the kernel routed to this process: the pushes
+   below (called by host.js drainInput on GAMEPAD ring records) keep it
+   current whether or not the subsystem is up, and event queueing follows
+   the upstream gates — ADDED/REMOVED once SDL_INIT_GAMEPAD is up (with
+   events enabled), BUTTON/AXIS additionally only for pads this app OPENED.
+   SDL_Gamepad (opaque in the header) is a pointer to a registry slot;
+   instance ids are kernel-allocated, monotonic, never reused, so a slot is
+   reusable the moment it is disconnected AND closed. */
+
+#define __SDL_MAX_GAMEPADS 8
+
+struct SDL_Gamepad {
+    Uint32 id;                          /* 0 = free slot */
+    bool connected;
+    int opened;                         /* SDL_OpenGamepad refcount */
+    Uint32 buttons;                     /* bitmask by SDL_GamepadButton */
+    Sint16 axes[SDL_GAMEPAD_AXIS_COUNT];
+    bool name_fetched;
+    char name[128];
+};
+
+static struct SDL_Gamepad __sdl_gamepads[__SDL_MAX_GAMEPADS];
+static bool __sdl_gamepad_events_on = 1;
+
+static struct SDL_Gamepad *__sdl_pad_by_id(Uint32 id) {
+    if (!id) return NULL;
+    for (int i = 0; i < __SDL_MAX_GAMEPADS; i++)
+        if (__sdl_gamepads[i].id == id) return &__sdl_gamepads[i];
+    return NULL;
+}
+
+/* Validate an app-supplied handle: must point at a live slot. */
+static struct SDL_Gamepad *__sdl_pad_valid(SDL_Gamepad *g) {
+    for (int i = 0; i < __SDL_MAX_GAMEPADS; i++)
+        if (g == &__sdl_gamepads[i] && __sdl_gamepads[i].id) return &__sdl_gamepads[i];
+    SDL_SetError("Invalid gamepad");
+    return NULL;
+}
+
+static void __sdl_pad_free_if_done(struct SDL_Gamepad *p) {
+    if (!p->connected && p->opened <= 0) memset(p, 0, sizeof(*p));
+}
+
+static void __sdl_gq_push_device(Uint32 type, Uint32 id) {
+    __SDL_EventEntry *e = __sdl_eq_alloc();
+    memset(&e->event, 0, sizeof(SDL_Event));
+    e->event.type = type;
+    e->event.gdevice.timestamp = __sdl_now_ns();
+    e->event.gdevice.which = (SDL_JoystickID)id;
+    __sdl_eq_push(e);
+}
+
+static bool __sdl_gamepad_events_live(void) {
+    return (__sdl_initted & SDL_INIT_GAMEPAD) && __sdl_gamepad_events_on;
+}
+
+/* ADDED synth at SDL_Init(SDL_INIT_GAMEPAD) — the upstream already-connected
+   contract; the forward declaration sits next to __SDL_SUPPORTED_SUBSYSTEMS. */
+static void __sdl_gamepad_init_added(void) {
+    if (!__sdl_gamepad_events_on) return;
+    for (int i = 0; i < __SDL_MAX_GAMEPADS; i++)
+        if (__sdl_gamepads[i].id && __sdl_gamepads[i].connected)
+            __sdl_gq_push_device(SDL_EVENT_GAMEPAD_ADDED, __sdl_gamepads[i].id);
+}
+
+void __sdl_push_gamepad_added(int id) {
+    struct SDL_Gamepad *p = __sdl_pad_by_id((Uint32)id);
+    if (p) { p->connected = 1; return; }        /* duplicate ADDED: idempotent */
+    for (int i = 0; i < __SDL_MAX_GAMEPADS; i++) {
+        if (__sdl_gamepads[i].id) continue;
+        p = &__sdl_gamepads[i];
+        memset(p, 0, sizeof(*p));
+        p->id = (Uint32)id;
+        p->connected = 1;
+        if (__sdl_gamepad_events_live())
+            __sdl_gq_push_device(SDL_EVENT_GAMEPAD_ADDED, p->id);
+        return;
+    }
+    /* More than __SDL_MAX_GAMEPADS live pads: drop (documented cap). */
+}
+__export __sdl_push_gamepad_added = __sdl_push_gamepad_added;
+
+void __sdl_push_gamepad_removed(int id) {
+    struct SDL_Gamepad *p = __sdl_pad_by_id((Uint32)id);
+    if (!p || !p->connected) return;
+    p->connected = 0;
+    p->buttons = 0;                              /* a gone pad reads all-zero */
+    memset(p->axes, 0, sizeof(p->axes));
+    if (__sdl_gamepad_events_live())
+        __sdl_gq_push_device(SDL_EVENT_GAMEPAD_REMOVED, p->id);
+    __sdl_pad_free_if_done(p);                   /* open handles keep the slot */
+}
+__export __sdl_push_gamepad_removed = __sdl_push_gamepad_removed;
+
+void __sdl_push_gamepad_button(int id, int button, int down) {
+    struct SDL_Gamepad *p = __sdl_pad_by_id((Uint32)id);
+    if (!p || !p->connected || button < 0 || button >= 32) return;
+    Uint32 bit = 1u << button;
+    if (down) p->buttons |= bit; else p->buttons &= ~bit;
+    if (!__sdl_gamepad_events_live() || p->opened <= 0) return;
+    __SDL_EventEntry *e = __sdl_eq_alloc();
+    memset(&e->event, 0, sizeof(SDL_Event));
+    e->event.type = down ? SDL_EVENT_GAMEPAD_BUTTON_DOWN : SDL_EVENT_GAMEPAD_BUTTON_UP;
+    e->event.gbutton.timestamp = __sdl_now_ns();
+    e->event.gbutton.which = (SDL_JoystickID)p->id;
+    e->event.gbutton.button = (Uint8)button;
+    e->event.gbutton.down = down ? 1 : 0;
+    __sdl_eq_push(e);
+}
+__export __sdl_push_gamepad_button = __sdl_push_gamepad_button;
+
+void __sdl_push_gamepad_axis(int id, int axis, int value) {
+    struct SDL_Gamepad *p = __sdl_pad_by_id((Uint32)id);
+    if (!p || !p->connected || axis < 0 || axis >= SDL_GAMEPAD_AXIS_COUNT) return;
+    if (value < -32768) value = -32768;
+    if (value > 32767) value = 32767;
+    p->axes[axis] = (Sint16)value;
+    if (!__sdl_gamepad_events_live() || p->opened <= 0) return;
+    __SDL_EventEntry *e = __sdl_eq_alloc();
+    memset(&e->event, 0, sizeof(SDL_Event));
+    e->event.type = SDL_EVENT_GAMEPAD_AXIS_MOTION;
+    e->event.gaxis.timestamp = __sdl_now_ns();
+    e->event.gaxis.which = (SDL_JoystickID)p->id;
+    e->event.gaxis.axis = (Uint8)axis;
+    e->event.gaxis.value = (Sint16)value;
+    __sdl_eq_push(e);
+}
+__export __sdl_push_gamepad_axis = __sdl_push_gamepad_axis;
+
+/* The public gamepad API. Everything below requires the subsystem; the
+   init check fails loud instead of reading a registry the app never asked
+   to exist (upstream's SDL_JoystickList behaves the same way). */
+
+static bool __sdl_gamepad_initted(void) {
+    if (__sdl_initted & SDL_INIT_GAMEPAD) return 1;
+    SDL_SetError("Gamepad subsystem is not initialized (SDL_Init(SDL_INIT_GAMEPAD))");
+    return 0;
+}
+
+SDL_JoystickID *SDL_GetGamepads(int *count) {
+    if (count) *count = 0;
+    if (!__sdl_gamepad_initted()) return NULL;
+    __sdl_pump();                    /* fresh hotplug view, the PollEvent rule */
+    int n = 0;
+    for (int i = 0; i < __SDL_MAX_GAMEPADS; i++)
+        if (__sdl_gamepads[i].id && __sdl_gamepads[i].connected) n++;
+    SDL_JoystickID *ids = (SDL_JoystickID *)SDL_malloc((n + 1) * sizeof(SDL_JoystickID));
+    if (!ids) { SDL_SetError("Out of memory"); return NULL; }
+    int k = 0;
+    for (int i = 0; i < __SDL_MAX_GAMEPADS; i++)
+        if (__sdl_gamepads[i].id && __sdl_gamepads[i].connected)
+            ids[k++] = (SDL_JoystickID)__sdl_gamepads[i].id;
+    ids[k] = 0;
+    if (count) *count = n;
+    return ids;
+}
+
+bool SDL_HasGamepad(void) {
+    if (!(__sdl_initted & SDL_INIT_GAMEPAD)) return 0;
+    __sdl_pump();
+    for (int i = 0; i < __SDL_MAX_GAMEPADS; i++)
+        if (__sdl_gamepads[i].id && __sdl_gamepads[i].connected) return 1;
+    return 0;
+}
+
+bool SDL_IsGamepad(SDL_JoystickID instance_id) {
+    /* Every device here IS a gamepad (the browser already mapped it). */
+    struct SDL_Gamepad *p = __sdl_pad_by_id((Uint32)instance_id);
+    return p && p->connected;
+}
+
+SDL_Gamepad *SDL_OpenGamepad(SDL_JoystickID instance_id) {
+    if (!__sdl_gamepad_initted()) return NULL;
+    __sdl_pump();
+    struct SDL_Gamepad *p = __sdl_pad_by_id((Uint32)instance_id);
+    if (!p || !p->connected) {
+        SDL_SetError("SDL_OpenGamepad: invalid gamepad instance id %u",
+                     (unsigned)instance_id);
+        return NULL;
+    }
+    p->opened++;
+    return p;
+}
+
+void SDL_CloseGamepad(SDL_Gamepad *gamepad) {
+    struct SDL_Gamepad *p = gamepad ? __sdl_pad_valid(gamepad) : NULL;
+    if (!p || p->opened <= 0) return;
+    p->opened--;
+    __sdl_pad_free_if_done(p);
+}
+
+SDL_Gamepad *SDL_GetGamepadFromID(SDL_JoystickID instance_id) {
+    struct SDL_Gamepad *p = __sdl_pad_by_id((Uint32)instance_id);
+    if (p && p->opened > 0) return p;
+    SDL_SetError("SDL_GetGamepadFromID: gamepad %u has not been opened",
+                 (unsigned)instance_id);
+    return NULL;
+}
+
+SDL_JoystickID SDL_GetGamepadID(SDL_Gamepad *gamepad) {
+    struct SDL_Gamepad *p = __sdl_pad_valid(gamepad);
+    return p ? (SDL_JoystickID)p->id : 0;
+}
+
+const char *SDL_GetGamepadName(SDL_Gamepad *gamepad) {
+    struct SDL_Gamepad *p = __sdl_pad_valid(gamepad);
+    if (!p) return NULL;
+    if (!p->name_fetched) {
+        if (__sdl_gamepad_name((int)p->id, p->name, (int)sizeof(p->name)) < 0)
+            p->name[0] = '\\0';
+        p->name_fetched = 1;
+    }
+    return p->name;
+}
+
+const char *SDL_GetGamepadNameForID(SDL_JoystickID instance_id) {
+    /* Static-buffer return, valid until the next call — works for pads this
+       app never opened (the kernel's name cache outlives disconnect). */
+    static char nameBuf[128];
+    if (__sdl_gamepad_name((int)instance_id, nameBuf, (int)sizeof(nameBuf)) < 0) {
+        SDL_SetError("SDL_GetGamepadNameForID: unknown gamepad instance id %u",
+                     (unsigned)instance_id);
+        return NULL;
+    }
+    return nameBuf;
+}
+
+bool SDL_GamepadConnected(SDL_Gamepad *gamepad) {
+    struct SDL_Gamepad *p = __sdl_pad_valid(gamepad);
+    return p && p->connected;
+}
+
+SDL_GamepadType SDL_GetGamepadType(SDL_Gamepad *gamepad) {
+    return __sdl_pad_valid(gamepad) ? SDL_GAMEPAD_TYPE_STANDARD
+                                    : SDL_GAMEPAD_TYPE_UNKNOWN;
+}
+
+bool SDL_GetGamepadButton(SDL_Gamepad *gamepad, SDL_GamepadButton button) {
+    struct SDL_Gamepad *p = __sdl_pad_valid(gamepad);
+    if (!p || !p->connected || button < 0 || (int)button >= 32) return 0;
+    return (p->buttons >> (int)button) & 1u;
+}
+
+Sint16 SDL_GetGamepadAxis(SDL_Gamepad *gamepad, SDL_GamepadAxis axis) {
+    struct SDL_Gamepad *p = __sdl_pad_valid(gamepad);
+    if (!p || !p->connected || axis < 0 || (int)axis >= SDL_GAMEPAD_AXIS_COUNT) return 0;
+    return p->axes[(int)axis];
+}
+
+/* The web standard mapping carries SDL buttons 0..14 (SOUTH..DPAD_RIGHT —
+   the W3C triggers surface as the trigger AXES) and all six axes. */
+bool SDL_GamepadHasButton(SDL_Gamepad *gamepad, SDL_GamepadButton button) {
+    struct SDL_Gamepad *p = __sdl_pad_valid(gamepad);
+    return p && button >= SDL_GAMEPAD_BUTTON_SOUTH && button <= SDL_GAMEPAD_BUTTON_DPAD_RIGHT;
+}
+
+bool SDL_GamepadHasAxis(SDL_Gamepad *gamepad, SDL_GamepadAxis axis) {
+    struct SDL_Gamepad *p = __sdl_pad_valid(gamepad);
+    return p && axis > SDL_GAMEPAD_AXIS_INVALID && axis < SDL_GAMEPAD_AXIS_COUNT;
+}
+
+void SDL_UpdateGamepads(void) {
+    __sdl_pump();
+}
+
+/* Button/axis name tables — upstream SDL3 strings verbatim (SDL_gamepad.c
+   map_StringForGamepadButton: the mapping-DB vocabulary, so SOUTH is "a"),
+   index == enum value. */
+static const char *const __sdl_gamepad_button_names[] = {
+    "a", "b", "x", "y", "back", "guide", "start",
+    "leftstick", "rightstick", "leftshoulder", "rightshoulder",
+    "dpup", "dpdown", "dpleft", "dpright", "misc1",
+    "paddle1", "paddle2", "paddle3", "paddle4", "touchpad",
+    "misc2", "misc3", "misc4", "misc5", "misc6",
+};
+static const char *const __sdl_gamepad_axis_names[] = {
+    "leftx", "lefty", "rightx", "righty", "lefttrigger", "righttrigger",
+};
+
+static bool __sdl_strieq(const char *a, const char *b) {
+    while (*a && *b) {
+        char ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb) return 0;
+        a++; b++;
+    }
+    return *a == *b;
+}
+
+const char *SDL_GetGamepadStringForButton(SDL_GamepadButton button) {
+    if (button <= SDL_GAMEPAD_BUTTON_INVALID || button >= SDL_GAMEPAD_BUTTON_COUNT)
+        return NULL;
+    return __sdl_gamepad_button_names[(int)button];
+}
+
+SDL_GamepadButton SDL_GetGamepadButtonFromString(const char *str) {
+    if (str) {
+        for (int i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; i++)
+            if (__sdl_strieq(str, __sdl_gamepad_button_names[i]))
+                return (SDL_GamepadButton)i;
+    }
+    return SDL_GAMEPAD_BUTTON_INVALID;
+}
+
+const char *SDL_GetGamepadStringForAxis(SDL_GamepadAxis axis) {
+    if (axis <= SDL_GAMEPAD_AXIS_INVALID || axis >= SDL_GAMEPAD_AXIS_COUNT)
+        return NULL;
+    return __sdl_gamepad_axis_names[(int)axis];
+}
+
+SDL_GamepadAxis SDL_GetGamepadAxisFromString(const char *str) {
+    if (str) {
+        for (int i = 0; i < SDL_GAMEPAD_AXIS_COUNT; i++)
+            if (__sdl_strieq(str, __sdl_gamepad_axis_names[i]))
+                return (SDL_GamepadAxis)i;
+    }
+    return SDL_GAMEPAD_AXIS_INVALID;
+}
+
+void SDL_SetGamepadEventsEnabled(bool enabled) {
+    __sdl_gamepad_events_on = enabled;
+}
+
+bool SDL_GamepadEventsEnabled(void) {
+    return __sdl_gamepad_events_on;
+}
 
 bool SDL_PollEvent(SDL_Event *event) {
     /* Upstream SDL3 pumps inside SDL_PollEvent; without this a poll-only

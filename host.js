@@ -7234,6 +7234,7 @@ function createNullSDL() {
       __sdl_pump_wait: function () { return 0; },
       __sdl_pump: function () { return 0; },   // no ring — nothing to drain (#485)
       __wait: function () { return -2; },
+      __sdl_gamepad_name: function () { return -1; },   // no kernel — no pads (#607)
     },
   };
 }
@@ -7307,7 +7308,11 @@ const WMEV_QUIT = 0x100, WMEV_WINDOW_RESIZED = 0x206,
       WMEV_FOCUS_GAINED = 0x20E, WMEV_FOCUS_LOST = 0x20F,
       WMEV_KEYDOWN = 0x300, WMEV_KEYUP = 0x301,
       WMEV_MOUSEMOTION = 0x400, WMEV_MOUSEBUTTONDOWN = 0x401,
-      WMEV_MOUSEBUTTONUP = 0x402, WMEV_MOUSEWHEEL = 0x403;
+      WMEV_MOUSEBUTTONUP = 0x402, WMEV_MOUSEWHEEL = 0x403,
+      // Gamepad (#607) — SDL3 numbers verbatim, like everything above.
+      WMEV_GAMEPAD_AXIS = 0x650, WMEV_GAMEPAD_BUTTON_DOWN = 0x651,
+      WMEV_GAMEPAD_BUTTON_UP = 0x652, WMEV_GAMEPAD_ADDED = 0x653,
+      WMEV_GAMEPAD_REMOVED = 0x654;
 
 /* CD26 tripwire (mirrors todos/0235's payloadChunk rule): the constants
  * above re-declare kernel.js's SH_* / IR_* / WMEV / AU_* SAB layouts —
@@ -7336,6 +7341,11 @@ function assertWmSabLayout(hooks) {
       KEYDOWN: WMEV_KEYDOWN, KEYUP: WMEV_KEYUP,
       MOUSEMOTION: WMEV_MOUSEMOTION, MOUSEBUTTONDOWN: WMEV_MOUSEBUTTONDOWN,
       MOUSEBUTTONUP: WMEV_MOUSEBUTTONUP, MOUSEWHEEL: WMEV_MOUSEWHEEL,
+      GAMEPAD_AXIS: WMEV_GAMEPAD_AXIS,
+      GAMEPAD_BUTTON_DOWN: WMEV_GAMEPAD_BUTTON_DOWN,
+      GAMEPAD_BUTTON_UP: WMEV_GAMEPAD_BUTTON_UP,
+      GAMEPAD_ADDED: WMEV_GAMEPAD_ADDED,
+      GAMEPAD_REMOVED: WMEV_GAMEPAD_REMOVED,
     },
   };
   const theirs = hooks && hooks.wmSabLayout;
@@ -7696,6 +7706,29 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
           // SDL_EVENT_WINDOW_FOCUS_GAINED/LOST, delivered per-window.
           if (ex.__sdl_push_window_event) {
             ex.__sdl_push_window_event(handle, type, 0, 0);
+          }
+          break;
+        // Gamepads (#607): per-PROCESS events — word [1] is 0 by design
+        // (SDL gamepad events carry no windowID), so `handle` is unused.
+        // The export guards also cover a binary compiled before the
+        // gamepad veneer landed (a user-built a.out on a persisted root
+        // volume): it degrades to not seeing pads, never a worker crash.
+        case WMEV_GAMEPAD_ADDED:
+          if (ex.__sdl_push_gamepad_added) ex.__sdl_push_gamepad_added(ring.i32[base + 2]);
+          break;
+        case WMEV_GAMEPAD_REMOVED:
+          if (ex.__sdl_push_gamepad_removed) ex.__sdl_push_gamepad_removed(ring.i32[base + 2]);
+          break;
+        case WMEV_GAMEPAD_BUTTON_DOWN: case WMEV_GAMEPAD_BUTTON_UP:
+          if (ex.__sdl_push_gamepad_button) {
+            ex.__sdl_push_gamepad_button(ring.i32[base + 2], ring.i32[base + 3],
+                                         type === WMEV_GAMEPAD_BUTTON_DOWN ? 1 : 0);
+          }
+          break;
+        case WMEV_GAMEPAD_AXIS:
+          if (ex.__sdl_push_gamepad_axis) {
+            ex.__sdl_push_gamepad_axis(ring.i32[base + 2], ring.i32[base + 3],
+                                       ring.i32[base + 4]);
           }
           break;
       }
@@ -8845,6 +8878,20 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
       __sdl_pump_wait: pumpWait,   // user32 blocking GetMessage (0058)
       __sdl_pump: drainInput,      // SDL_PollEvent's non-blocking pump (#485)
       __wait: waitMulti,           // unified multi-source wait (0178)
+      // Gamepad name query (#607): the one pad datum the ring cannot carry.
+      // Returns the full byte length (NUL excluded; the veneer caps at its
+      // own buffer), -1 for an id the kernel never allocated.
+      __sdl_gamepad_name: function (id, ptr, cap) {
+        const r = hooks.padName ? hooks.padName(id | 0) : null;
+        if (!r || r.errno || typeof r.name !== 'string') return -1;
+        const bytes = new TextEncoder().encode(r.name);
+        cap >>>= 0;
+        const n = Math.min(bytes.length, cap > 0 ? cap - 1 : 0);
+        const mem = new Uint8Array(getMemory().buffer);
+        if (n > 0) mem.set(bytes.subarray(0, n), ptr);
+        if (cap > 0) mem[ptr + n] = 0;
+        return bytes.length;
+      },
       // Audio: real source rings into the kernel mixer in both flavors
       // (todos/0017) — see buildAudioEnv above.
       // SDL 2D renderer (SDL_Render*): the software rasterizer over each
@@ -9689,6 +9736,9 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       __sdl_pump_wait: function () { return 0; },
       __sdl_pump: function () { return 0; },   // no ring — events are page-pushed (#485)
       __wait: function () { return -2; },
+      // Standalone pages have no kernel pad registry; page-pushed gamepad
+      // support is a recorded follow-on (#607) — absence, not a stub lie.
+      __sdl_gamepad_name: function () { return -1; },
       // SDL_GetTicks: ms since SDL_Init, full range (C casts to Uint64; no 32-bit
       // wrap). Lazily baseline if ticks are read before SDL_Init.
       __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = performance.now(); return performance.now() - sdlTicksBase; },

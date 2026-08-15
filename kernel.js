@@ -322,6 +322,11 @@ var OP = {
   // control panel's volume): master output gain in percent, 0..200;
   // gain < 0 queries. Applied in audioPump before the clamp.
   AUDIO_OPEN: 0x2001, AUDIO_CLOSE: 0x2002, AUDIO_GAIN: 0x2003,
+  // 0x21xx — gamepad (#607). Control-plane query only: pad STATE rides the
+  // input ring (WMEV.GAMEPAD_*); this fetches the one thing an 8-word ring
+  // record cannot carry, the device name string. {id} -> {name} (JSON, the
+  // GETSID shape); ENODEV for an id the kernel never allocated.
+  PAD_NAME: 0x2101,
 };
 
 /* strace (todos/0046): the decode table IS the OP table — opcode names come
@@ -630,6 +635,11 @@ var S_IFSOCK_MODE = 0o140000;
  *             (pointer-lock motion / injected rel), not positions
  *     button: [2] x(f32 bits) [3] y(f32 bits) [4] button index
  *     wheel:  [2] x(f32 bits) [3] y(f32 bits) [4] direction
+ *     gamepad (#607): [1] is 0 — SDL gamepad events carry no windowID;
+ *     routing is per-PROCESS (focus-follows, the keyboard rule).
+ *       added/removed: [2] instance id
+ *       gbutton:       [2] instance id [3] SDL_GamepadButton [4] down (0/1)
+ *       gaxis:         [2] instance id [3] SDL_GamepadAxis   [4] value (i16)
  *   The kernel rings the process doorbell after each write, so
  *   SDL_WaitEvent-style parks wake like every other blocking op; it also
  *   Atomics.notifies IR_WPOS itself so a host parked on the ring (host.js
@@ -655,7 +665,11 @@ var WMEV = { QUIT: 0x100, WINDOW_RESIZED: 0x206,
              FOCUS_GAINED: 0x20E, FOCUS_LOST: 0x20F,
              KEYDOWN: 0x300, KEYUP: 0x301,
              MOUSEMOTION: 0x400, MOUSEBUTTONDOWN: 0x401, MOUSEBUTTONUP: 0x402,
-             MOUSEWHEEL: 0x403 };
+             MOUSEWHEEL: 0x403,
+             // Gamepad (#607) — SDL3 numbers verbatim, like everything above.
+             GAMEPAD_AXIS: 0x650, GAMEPAD_BUTTON_DOWN: 0x651,
+             GAMEPAD_BUTTON_UP: 0x652, GAMEPAD_ADDED: 0x653,
+             GAMEPAD_REMOVED: 0x654 };
 
 /* ============================================================
  * Audio mixer (todos/0017; design: WM.md "Audio mixing — the kernel sound
@@ -929,6 +943,20 @@ var WMP = {
                                         (chords), overview swallow, focus
                                         routing (#423, the INJECT_SCREEN
                                         keyboard analogue) */
+  // Virtual gamepads (#607) — the headless twin of the os.html Gamepad API
+  // poller: both feed the SAME padConnect/padButton/padAxis kernel entries,
+  // so a wmctl-driven pad is indistinguishable from a browser pad below the
+  // page layer. Injection does NOT stamp the idle clock (the INJECT_KEY
+  // agent-poke rule); the browser path does.
+  PAD_CONNECT: 0x24,                 /* { slot }: connect a virtual pad at
+                                        slot (kernel names it) -> R_OK id */
+  PAD_DISCONNECT: 0x25,              /* { slot } */
+  PAD_BUTTON: 0x26,                  /* { slot, button, down }: button is an
+                                        SDL_GamepadButton index */
+  PAD_AXIS: 0x27,                    /* { slot, axis, value }: axis is an
+                                        SDL_GamepadAxis index, value an i16
+                                        (sticks -32768..32767, triggers
+                                        0..32767) */
   SHOT: 0x30, SHOT_SCREEN: 0x31,
   THUMB: 0x32,                       /* { sid, maxW, maxH }: downscaled
                                         front-buffer thumbnail (todos/0063,
@@ -1574,6 +1602,8 @@ KernelClient.prototype.spawnHooks = function () {
     clipGet: function (fmt, off, peek) {
       return self.call(OP.CLIP_GET, { fmt: fmt, off: off, peek: peek ? 1 : 0 });
     },
+    // Gamepad name query (#607) — backs host.js __sdl_gamepad_name.
+    padName: function (id) { return self.call(OP.PAD_NAME, { id: id | 0 }); },
     // Egress (todos/0398): the pre-framed textual disposition+path list
     // (host.js createEgress composes it; layout in the OP table). One RPC,
     // one artifact; the kernel materializes and hands it to the embedder.
@@ -2231,6 +2261,17 @@ function Kernel(opts) {
   this._focusSid = 0;         // written ONLY through _wmSetFocus (todos/0256,
                               // menu arch A9) — the one choke point that emits
                               // the owner FOCUS_GAINED/LOST pair + EV_FOCUS
+  this._pads = new Map();     // gamepads (#607): slot -> {id, name, buttons
+                              // (SDL-button bitmask), axes (Int16Array(6))}.
+                              // The kernel is the ONE holder of pad truth;
+                              // per-pcb views (pcb.padView) record what each
+                              // process has been TOLD, so a focus gain can
+                              // reconcile (freeze-on-unfocus, the Chrome
+                              // per-page model — background processes see
+                              // frozen state, never a lying live one).
+  this._padNextId = 1;        // SDL instance ids: monotonic, never reused
+  this._padNames = new Map(); // id -> name; outlives disconnect (an OPEN
+                              // SDL handle may query the name after REMOVED)
   this._wmAnchoredN = 0;      // live anchored-child count (todos/0256) — the
                               // zero-cost fast path for the _wmZNormalize
                               // subtree post-pass on anchor-free scenes
@@ -3112,6 +3153,14 @@ Kernel.prototype._dispatchRpc = function (pcb) {
     case OP.GETSID: {
       var tSid = (req.pid | 0) === 0 ? pcb : this._procs.get(req.pid | 0);
       this._respond(pcb, tSid ? { sid: tSid.sid } : { errno: 'ESRCH' });
+      break;
+    }
+    case OP.PAD_NAME: {
+      // Gamepad name query (#607): the one pad datum an 8-word ring record
+      // cannot carry. Names outlive disconnect (bounded cache) so an open
+      // SDL handle can still answer SDL_GetGamepadName after REMOVED.
+      var pnm = this._padNames.get(req.id | 0);
+      this._respond(pcb, pnm !== undefined ? { name: pnm } : { errno: 'ENODEV' });
       break;
     }
     // Interval timers (todos/0044): pure kernel-side bookkeeping over the
@@ -4975,6 +5024,15 @@ Kernel.prototype._wmSetFocus = function (sid) {
   // drops its event — same contract as every ring push).
   if (prev) this._wmEventTo(prev, [WMEV.FOCUS_LOST, 0, 0, 0, 0, 0, 0, 0]);
   if (sid) this._wmEventTo(sid, [WMEV.FOCUS_GAINED, 0, 0, 0, 0, 0, 0, 0]);
+  // Gamepads follow focus (#607): bring the new owner's frozen pad view
+  // current (added/removed/state deltas since it last held focus). The
+  // view-size leg covers the all-pads-gone case — a stale view still needs
+  // its REMOVED events even when the registry is empty.
+  if (sid) {
+    var fp = this._padFocusPcb();
+    if (fp && (this._pads.size || (fp.padView && fp.padView.size)))
+      this._padSyncTo(fp);
+  }
   this._wmEmit(WMP.EV_FOCUS, [sid]);
   this._bumpWm();
 };
@@ -6577,6 +6635,160 @@ Kernel.prototype.wmInjectPointer = function (sid, kind, lx, ly, opts) {
   return 'EINVAL';              // unknown kind
 };
 
+/* ---- Gamepads (#607) ----
+ * The kernel owns the pad registry; input routes to the FOCUSED surface's
+ * process (the keyboard rule — no hit test), and a process that is not
+ * focused sees FROZEN state (the Chrome per-page model): _wmSetFocus calls
+ * _padSyncTo, which diffs the process's recorded view against the registry
+ * and pushes synthetic added/removed/button/axis deltas. Two producers feed
+ * these entries — os.html's Gamepad API poller (opts.user: stamps the idle
+ * clock, real input) and the WMP PAD_* injection ops (no stamp, the
+ * INJECT_KEY agent-poke rule) — so headless pads are indistinguishable from
+ * browser pads below the page layer. Values: button is an SDL_GamepadButton
+ * index (0..31 fits the view bitmask), axis an SDL_GamepadAxis index (0..5),
+ * value an i16. Dedup is kernel-side: a report that does not change the
+ * registry pushes nothing, so view diffs stay coherent. */
+
+Kernel.prototype._padFocusPcb = function () {
+  if (!this._focusSid) return null;
+  var s = this._surfaces.get(this._focusSid);
+  if (!s) return null;
+  var pcb = this._procs.get(s.pid);
+  return (pcb && pcb.state === STATE_RUNNING && pcb.wmRing) ? pcb : null;
+};
+
+Kernel.prototype._padView = function (pcb) {
+  return pcb.padView || (pcb.padView = new Map());
+};
+
+Kernel.prototype.padConnect = function (slot, name, opts) {
+  slot = slot | 0;
+  if (this._pads.has(slot)) this.padDisconnect(slot);   // self-heal a missed disconnect
+  var pad = { id: this._padNextId++,
+              name: String(name || ('Virtual Gamepad ' + slot)).slice(0, 128),
+              buttons: 0, axes: new Int16Array(6) };
+  this._pads.set(slot, pad);
+  this._padNames.set(pad.id, pad.name);
+  // Names outlive disconnect for open handles, but not forever: keep the
+  // most recent 64 (ids are monotonic; Map iterates in insertion order).
+  if (this._padNames.size > 64) {
+    this._padNames.delete(this._padNames.keys().next().value);
+  }
+  if (opts && opts.user) this._wmLastInput = Date.now();
+  var pcb = this._padFocusPcb();
+  if (pcb && this._wmPushEvent(pcb, [WMEV.GAMEPAD_ADDED, 0, pad.id, 0, 0, 0, 0, 0])) {
+    this._padView(pcb).set(pad.id, { buttons: 0, axes: new Int16Array(6) });
+  }
+  return pad.id;
+};
+
+Kernel.prototype.padDisconnect = function (slot) {
+  var pad = this._pads.get(slot | 0);
+  if (!pad) return 'ENODEV';
+  this._pads.delete(slot | 0);
+  var pcb = this._padFocusPcb();
+  if (pcb) {
+    var view = this._padView(pcb);
+    if (view.has(pad.id) &&
+        this._wmPushEvent(pcb, [WMEV.GAMEPAD_REMOVED, 0, pad.id, 0, 0, 0, 0, 0])) {
+      view.delete(pad.id);
+    }
+  }
+  return 0;
+};
+
+Kernel.prototype.padButton = function (slot, button, down, opts) {
+  var pad = this._pads.get(slot | 0);
+  if (!pad) return 'ENODEV';
+  button = button | 0;
+  if (button < 0 || button > 31) return 'EINVAL';
+  var bit = 1 << button;
+  var next = down ? (pad.buttons | bit) : (pad.buttons & ~bit);
+  if (next === pad.buttons) return 0;                    // dedup: no change
+  pad.buttons = next;
+  if (opts && opts.user) this._wmLastInput = Date.now();
+  var pcb = this._padFocusPcb();
+  if (pcb) {
+    var v = this._padView(pcb).get(pad.id);
+    // A pad the focused process was never told about — defensive: a full
+    // sync emits ADDED plus the just-applied change (the registry is
+    // already updated), so no direct push here or it would double-deliver.
+    if (!v) { this._padSyncTo(pcb); }
+    else if (this._wmPushEvent(pcb,
+        [down ? WMEV.GAMEPAD_BUTTON_DOWN : WMEV.GAMEPAD_BUTTON_UP, 0,
+         pad.id, button, down ? 1 : 0, 0, 0, 0])) {
+      v.buttons = down ? (v.buttons | bit) : (v.buttons & ~bit);
+    }
+  }
+  return 0;
+};
+
+Kernel.prototype.padAxis = function (slot, axis, value, opts) {
+  var pad = this._pads.get(slot | 0);
+  if (!pad) return 'ENODEV';
+  axis = axis | 0;
+  if (axis < 0 || axis > 5) return 'EINVAL';
+  value = value | 0;
+  if (value < -32768) value = -32768;
+  if (value > 32767) value = 32767;
+  if (pad.axes[axis] === value) return 0;                // dedup: no change
+  pad.axes[axis] = value;
+  if (opts && opts.user) this._wmLastInput = Date.now();
+  var pcb = this._padFocusPcb();
+  if (pcb) {
+    var v = this._padView(pcb).get(pad.id);
+    if (!v) { this._padSyncTo(pcb); }    // sync emits the delta; see padButton
+    else if (this._wmPushEvent(pcb,
+        [WMEV.GAMEPAD_AXIS, 0, pad.id, axis, value, 0, 0, 0])) {
+      v.axes[axis] = value;
+    }
+  }
+  return 0;
+};
+
+/* Bring a process's pad view current with the registry: removals first
+ * (ids it was told about that no longer exist), then adds, then per-pad
+ * button/axis deltas. Pushed through _wmPushEvent like all input — a full
+ * ring drops records (counted), leaving the view honestly behind so the
+ * next sync retries the delta. */
+Kernel.prototype._padSyncTo = function (pcb) {
+  if (!pcb || pcb.state !== STATE_RUNNING || !pcb.wmRing) return;
+  var view = this._padView(pcb);
+  var live = new Map();                                   // id -> pad
+  this._pads.forEach(function (pad) { live.set(pad.id, pad); });
+  var self = this;
+  var stale = [];
+  view.forEach(function (v, id) { if (!live.has(id)) stale.push(id); });
+  stale.forEach(function (id) {
+    if (self._wmPushEvent(pcb, [WMEV.GAMEPAD_REMOVED, 0, id, 0, 0, 0, 0, 0]))
+      view.delete(id);
+  });
+  live.forEach(function (pad, id) {
+    var v = view.get(id);
+    if (!v) {
+      if (!self._wmPushEvent(pcb, [WMEV.GAMEPAD_ADDED, 0, id, 0, 0, 0, 0, 0])) return;
+      v = { buttons: 0, axes: new Int16Array(6) };
+      view.set(id, v);
+    }
+    for (var b = 0; b < 32; b++) {
+      var bit = 1 << b;
+      if ((v.buttons & bit) === (pad.buttons & bit)) continue;
+      var bd = (pad.buttons & bit) !== 0;
+      if (self._wmPushEvent(pcb,
+          [bd ? WMEV.GAMEPAD_BUTTON_DOWN : WMEV.GAMEPAD_BUTTON_UP, 0,
+           id, b, bd ? 1 : 0, 0, 0, 0])) {
+        v.buttons = bd ? (v.buttons | bit) : (v.buttons & ~bit);
+      }
+    }
+    for (var a = 0; a < 6; a++) {
+      if (v.axes[a] === pad.axes[a]) continue;
+      if (self._wmPushEvent(pcb, [WMEV.GAMEPAD_AXIS, 0, id, a, pad.axes[a], 0, 0, 0])) {
+        v.axes[a] = pad.axes[a];
+      }
+    }
+  });
+};
+
 /* Screenshot one surface: a copy of its front (shm) framebuffer, at BUFFER
  * resolution — scaling (todos/0024) is a composite affordance; the app's
  * own pixels are what an agent wants here. gpu-kind surfaces have no CPU
@@ -7146,6 +7358,17 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
       this.wmKey(g(0) !== 0, g(1), g(2), g(3), g(4) !== 0);
       ok(0);
       break;
+    case WMP.PAD_CONNECT: {
+      // Virtual gamepads (#607): the same kernel entries the browser
+      // poller feeds; no idle-clock stamp (agent injection). padConnect
+      // returns the instance id (number) — fold to R_OK; errnos to R_ERR.
+      var pcr = this.padConnect(g(0), null, null);
+      ok(typeof pcr === 'string' ? pcr : 0);
+      break;
+    }
+    case WMP.PAD_DISCONNECT: ok(this.padDisconnect(g(0))); break;
+    case WMP.PAD_BUTTON: ok(this.padButton(g(0), g(1), g(2) !== 0, null)); break;
+    case WMP.PAD_AXIS: ok(this.padAxis(g(0), g(1), g(2), null)); break;
     case WMP.SHOT: case WMP.SHOT_SCREEN: case WMP.THUMB: {
       var shot = type === WMP.SHOT ? this.wmScreenshot(g(0))
         : type === WMP.THUMB ? this.wmThumbnail(g(0), g(1), g(2))   // 0063

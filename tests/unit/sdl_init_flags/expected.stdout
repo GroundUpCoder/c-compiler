@@ -1,9 +1,11 @@
 video=1
 wasinit_video=1 events=1
 audio_add=1 wasinit_audio=1
-gamepad=0
-err=[SDL_Init: requested subsystem(s) 0x2000 are not supported by this runtime (supported: SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS). Joystick/gamepad/haptic/sensor/camera have no web backend yet.]
-wasinit_gamepad=0
+gamepad=1
+wasinit_gamepad=1 has_gamepad=0
+joystick=0
+err=[SDL_Init: requested subsystem(s) 0x200 are not supported by this runtime (supported: SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS | SDL_INIT_GAMEPAD). Joystick-level API/haptic/sensor/camera have no web backend yet.]
+wasinit_joystick=0
 after_quit_audio=0
 mask_has_video=1 mask_has_events=1
 after_quit_all=0
