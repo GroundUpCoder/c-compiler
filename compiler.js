@@ -5899,6 +5899,44 @@ return {
 // constEvalInt is a thin wrapper returning BigInt or null for callers
 // that don't need the type.
 
+// Address-constant view of an lvalue (C11 6.6p9), as a BigInt address or
+// null. This is what makes offsetof's expansion
+// `(size_t)&((T *)0)->a.b[2].c` an integer constant expression (C11
+// 7.19p3): the member designator may walk named members, anonymous-member
+// links (makeMember/makeArrow chain each anonymous hop as its own
+// EMember/EArrow node, so one designator is several AST levels), and
+// constant array subscripts. Mirrors the static-initializer evaluator's
+// constEvalAddr — keep the two shapes in agreement (#687).
+function constEvalAddrInt(e) {
+  if (!e) return null;
+  // Decay wraps an array lvalue with the decayed pointer type; its
+  // address is the operand's address.
+  if (e instanceof AST.EDecay) return constEvalAddrInt(e.operand);
+  // base->m: addr = base's pointer VALUE + member offset.
+  if (e instanceof AST.EArrow) {
+    const base = constEvalItem(e.base);
+    if (base === null || ConstEval.isFloatItem(base)) return null;
+    return base.value + BigInt(e.memberDecl.byteOffset);
+  }
+  // base.m: addr = base's ADDRESS + member offset.
+  if (e instanceof AST.EMember) {
+    const base = constEvalAddrInt(e.base);
+    return base === null ? null : base + BigInt(e.memberDecl.byteOffset);
+  }
+  // base[i]: addr = base's address + i * element size.
+  if (e instanceof AST.ESubscript) {
+    const base = constEvalAddrInt(e.array);
+    const idx = constEvalInt(e.index);
+    if (base === null || idx === null) return null;
+    return base + idx * BigInt(e.type.sizeofResult());
+  }
+  // Anything whose VALUE is a constant pointer (the `(T *)0` cast at the
+  // bottom of every offsetof chain).
+  const v = constEvalItem(e);
+  if (v === null || ConstEval.isFloatItem(v)) return null;
+  return v.value;
+}
+
 function constEvalItem(expr) {
   if (!expr) return null;
   switch (expr.constructor) {
@@ -5925,13 +5963,8 @@ function constEvalItem(expr) {
     }
     case AST.EUnary: {
       if (expr.op === "OP_ADDR") {
-        const inner = expr.operand;
-        if (inner instanceof AST.EArrow || inner instanceof AST.EMember) {
-          const base = constEvalItem(inner.base);
-          if (base !== null && !ConstEval.isFloatItem(base))
-            return new ConstEval.Item(base.value + BigInt(inner.memberDecl.byteOffset), expr.type);
-        }
-        return null;
+        const addr = constEvalAddrInt(expr.operand);
+        return addr === null ? null : new ConstEval.Item(addr, expr.type);
       }
       const a = constEvalItem(expr.operand);
       if (a === null) return null;
