@@ -7198,6 +7198,7 @@ function createNullSDL() {
       __sdl_render_quad: function () {},
       __sdl_render_geometry: function () {},
       __sdl_render_present: function () {},
+      __sdl_set_render_target: function () {},   // #496: C owns the contract; no pixels here
       __sdl_set_animation_frame_func: function (callbackPtr) { animationFrameFunc = callbackPtr; },
       __sdl_push_key_event: function () {},
       __sdl_push_mouse_button_event: function () {},
@@ -7844,28 +7845,38 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     const clamp = (v) => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
     // Blend src (r,g,b,a — floats fine, color-mod pre-applied) into fb at byte
     // offset o. The arms mirror SDL_BLEND_DESC (the GPU tier's pipelines), so
-    // both tiers produce the same pixels; the fb alpha stays opaque in every
-    // mode (the window surface composites over the desktop).
-    //   NONE:  dst = src            BLEND: dst = src*srcA + dst*(1-srcA)
-    //   ADD:   dst = dst + src*srcA (clamped)     MOD: dst = src*dst
-    const put = (f, o, r, g, b, a, blend) => {
+    // both tiers produce the same pixels. On the WINDOW backbuffer (ta false)
+    // the fb alpha stays opaque in every mode (the window surface composites
+    // over the desktop) — byte-identical to the pre-#496 path. On a bound
+    // render TARGET (ta true) the dst alpha runs SDL_BLEND_DESC's real alpha
+    // rows — a target is an alpha surface that gets composited again later:
+    //   NONE:  dst = src (incl A)   BLEND: dstRGB = src*srcA + dst*(1-srcA),
+    //                                      dstA   = srcA + dstA*(1-srcA)
+    //   ADD:   dstRGB += src*srcA (clamped), dstA unchanged
+    //   MOD:   dstRGB = src*dst,             dstA unchanged
+    const put = (f, o, r, g, b, a, blend, ta) => {
       if (blend === 2) {                       // ADD
         if (a <= 0) return;
         const sa = a / 255;
         f[o] = clamp(f[o] + r * sa); f[o + 1] = clamp(f[o + 1] + g * sa);
-        f[o + 2] = clamp(f[o + 2] + b * sa); f[o + 3] = 255;
+        f[o + 2] = clamp(f[o + 2] + b * sa); if (!ta) f[o + 3] = 255;
         return;
       }
       if (blend === 4) {                       // MOD (srcA ignored, like the GPU desc)
         f[o] = (f[o] * r / 255) | 0; f[o + 1] = (f[o + 1] * g / 255) | 0;
-        f[o + 2] = (f[o + 2] * b / 255) | 0; f[o + 3] = 255;
+        f[o + 2] = (f[o + 2] * b / 255) | 0; if (!ta) f[o + 3] = 255;
         return;
       }
-      if (blend === 0 || a >= 255) { f[o] = r | 0; f[o + 1] = g | 0; f[o + 2] = b | 0; f[o + 3] = 255; return; }
+      if (blend === 0 || a >= 255) {
+        f[o] = r | 0; f[o + 1] = g | 0; f[o + 2] = b | 0;
+        f[o + 3] = (ta && blend === 0) ? a | 0 : 255;
+        return;
+      }
       if (a <= 0) return;
       const ia = a / 255, na = 1 - ia;
       f[o] = (r * ia + f[o] * na) | 0; f[o + 1] = (g * ia + f[o + 1] * na) | 0;
-      f[o + 2] = (b * ia + f[o + 2] * na) | 0; f[o + 3] = 255;
+      f[o + 2] = (b * ia + f[o + 2] * na) | 0;
+      f[o + 3] = ta ? (a + f[o + 3] * na) | 0 : 255;
     };
     // Resize renegotiation (todos/0019): pendingCfg only exists once drainInput
     // delivered the RESIZED event (created in the same drain iteration that
@@ -7883,6 +7894,25 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
       const th = cfg ? cfg.h : (win && win.fb ? win.fb.h : (rd.fbh || 1));
       if (!rd.fb || rd.fbw !== tw || rd.fbh !== th) { rd.fb = new Uint8Array(tw * th * 4); rd.fbw = tw; rd.fbh = th; }
       return rd.fb;
+    };
+    // #496 render targets: every draw resolves its destination through here —
+    // the bound TARGET texture's cpuPixels (the identical RGBA8 layout the
+    // window backbuffer uses, allocated zeroed = transparent black on first
+    // bind) or the window fb. ta marks a target so put() runs the real
+    // dst-alpha rows; the window path stays byte-identical. One reused
+    // scratch — no per-draw allocation.
+    const dstScratch = { f: null, FW: 0, FH: 0, ta: false };
+    const curDst = (rd) => {
+      if (rd.target) {
+        const tx = texs[rd.target - 1];
+        if (!tx) return null;                 // target destroyed while bound: drop the draw
+        const need = tx.w * 4 * tx.h;
+        if (!tx.cpuPixels || tx.cpuPixels.length !== need) tx.cpuPixels = new Uint8Array(need);
+        dstScratch.f = tx.cpuPixels; dstScratch.FW = tx.w; dstScratch.FH = tx.h; dstScratch.ta = true;
+        return dstScratch;
+      }
+      dstScratch.f = ensureFb(rd); dstScratch.FW = rd.fbw; dstScratch.FH = rd.fbh; dstScratch.ta = false;
+      return dstScratch;
     };
     const present = (rd) => {
       const win = winFor(rd.win); if (!win) return;
@@ -7906,8 +7936,8 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     // Blit texture sub-rect (sx,sy,sw,sh texels) scaled into dst (dx,dy,dw,dh);
     // texH 0 = fill dst with the draw color.
     const quad = (rd, texH, dx, dy, dw, dh, sx, sy, sw, sh) => {
-      if (!rd.fb) ensureFb(rd);
-      const f = rd.fb, FW = rd.fbw, FH = rd.fbh;
+      const dst = curDst(rd); if (!dst) return;
+      const f = dst.f, FW = dst.FW, FH = dst.FH, ta = dst.ta;
       let x0 = Math.round(dx), y0 = Math.round(dy), x1 = Math.round(dx + dw), y1 = Math.round(dy + dh);
       if (x1 < x0) { const t = x0; x0 = x1; x1 = t; }
       if (y1 < y0) { const t = y0; y0 = y1; y1 = t; }
@@ -7915,7 +7945,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
       if (cx1 <= cx0 || cy1 <= cy0) return;
       if (texH === 0) {
         const R = rd.drawR, G = rd.drawG, B = rd.drawB, A = rd.drawA, bl = rd.drawBlend;
-        for (let y = cy0; y < cy1; y++) { let o = (y * FW + cx0) * 4; for (let x = cx0; x < cx1; x++, o += 4) put(f, o, R, G, B, A, bl); }
+        for (let y = cy0; y < cy1; y++) { let o = (y * FW + cx0) * 4; for (let x = cx0; x < cx1; x++, o += 4) put(f, o, R, G, B, A, bl, ta); }
         return;
       }
       const tx = texs[texH - 1]; if (!tx || !tx.cpuPixels) return;
@@ -7933,7 +7963,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
             const sxf = sx + ((x + 0.5 - x0) / ddw) * sw;
             let ix = Math.floor(sxf); if (ix < 0) ix = 0; else if (ix >= TW) ix = TW - 1;
             const so = (rowBase + ix) * 4;
-            put(f, o, tp[so] * cmR, tp[so + 1] * cmG, tp[so + 2] * cmB, tp[so + 3] * cmA, bl);
+            put(f, o, tp[so] * cmR, tp[so + 1] * cmG, tp[so + 2] * cmB, tp[so + 3] * cmA, bl, ta);
           }
         } else {
           // Bilinear — texel centers at integer+0.5, clamp-to-edge: the GPU
@@ -7958,7 +7988,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
               (tp[a00 + 1] * w00 + tp[a01 + 1] * w01 + tp[a10 + 1] * w10 + tp[a11 + 1] * w11) * cmG,
               (tp[a00 + 2] * w00 + tp[a01 + 2] * w01 + tp[a10 + 2] * w10 + tp[a11 + 2] * w11) * cmB,
               (tp[a00 + 3] * w00 + tp[a01 + 3] * w01 + tp[a10 + 3] * w10 + tp[a11 + 3] * w11) * cmA,
-              bl);
+              bl, ta);
           }
         }
       }
@@ -7974,8 +8004,8 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     // float→unorm8 conversion); the axis-aligned quad() fast path keeps its
     // historical truncation — the two paths never rasterize the same call.
     const tri = (rd, tx, blend, V, oa, ob, oc) => {
-      if (!rd.fb) ensureFb(rd);
-      const f = rd.fb, FW = rd.fbw, FH = rd.fbh;
+      const dst = curDst(rd); if (!dst) return;
+      const f = dst.f, FW = dst.FW, FH = dst.FH, ta = dst.ta;
       const ax = V[oa], ay = V[oa + 1];
       let bx = V[ob], by = V[ob + 1], cx = V[oc], cy = V[oc + 1];
       // Wind clockwise (screen coords, y down) so the edge functions are
@@ -8055,22 +8085,32 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
           } else {
             r *= 255; g *= 255; b *= 255; a *= 255;
           }
-          put(f, o, cl(r + 0.5), cl(g + 0.5), cl(b + 0.5), cl(a + 0.5), blend);
+          put(f, o, cl(r + 0.5), cl(g + 0.5), cl(b + 0.5), cl(a + 0.5), blend, ta);
         }
       }
     };
     const quadScratch = new Float64Array(32);   // 4 verts × 8 for the split-quad path
     return {
       __sdl_create_renderer: function (windowHandle) {
-        rends.push({ win: windowHandle, fb: null, fbw: 0, fbh: 0, drawR: 0, drawG: 0, drawB: 0, drawA: 255, drawBlend: 0 });
+        rends.push({ win: windowHandle, fb: null, fbw: 0, fbh: 0, drawR: 0, drawG: 0, drawB: 0, drawA: 255, drawBlend: 0, target: 0 });
         return rends.length;
       },
       __sdl_destroy_renderer: function (r) { if (r > 0 && rends[r - 1]) rends[r - 1] = null; },
+      // #496: t 0 = the window. The C layer owns the contract (TARGET access
+      // gate, present-while-bound refusal, destroy-unbinds); this just aims
+      // curDst.
+      __sdl_set_render_target: function (r, t) { const rd = rends[r - 1]; if (rd) rd.target = t; },
       __sdl_create_texture: function (r, access, w, h) {
         texs.push({ w: w, h: h, access: access, cpuPixels: null, pitch: w * 4, colorR: 1, colorG: 1, colorB: 1, alpha: 1, blendMode: 0, scaleMode: 1 });
         return texs.length;
       },
-      __sdl_destroy_texture: function (t) { if (t > 0 && texs[t - 1]) texs[t - 1] = null; },
+      __sdl_destroy_texture: function (t) {
+        if (t > 0 && texs[t - 1]) texs[t - 1] = null;
+        // Belt: the C layer unbinds a bound target before destroying it; if a
+        // destroyed texture is somehow still aimed, curDst drops the draws —
+        // clear the aim so it cannot dangle.
+        for (const rd of rends) if (rd && rd.target === t) rd.target = 0;
+      },
       __sdl_update_texture: function (t, pixelsPtr, pitch, x, y, w, h) {
         const tx = texs[t - 1]; if (!tx) return;
         const fullPitch = tx.w * 4;
@@ -8104,8 +8144,13 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
       },
       __sdl_render_clear: function (r) {
         const rd = rends[r - 1]; if (!rd) return;
-        const f = ensureFb(rd), R = rd.drawR, G = rd.drawG, B = rd.drawB;
-        for (let i = 0; i < f.length; i += 4) { f[i] = R; f[i + 1] = G; f[i + 2] = B; f[i + 3] = 255; }
+        const dst = curDst(rd); if (!dst) return;
+        const f = dst.f, R = rd.drawR, G = rd.drawG, B = rd.drawB;
+        // Window clear stays opaque (byte-identical pre-#496); a TARGET clear
+        // writes the draw alpha — SDL_RenderClear uses the full draw color, and
+        // clearing a target to transparent is the standard offscreen idiom.
+        const A = dst.ta ? rd.drawA : 255;
+        for (let i = 0; i < f.length; i += 4) { f[i] = R; f[i + 1] = G; f[i + 2] = B; f[i + 3] = A; }
       },
       // The single draw primitive: 4 dst corners (TL,TR,BR,BL) + a src rect.
       // Axis-aligned quads keep the direct scanline path when corner ORDER
@@ -8938,8 +8983,12 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
   // the next present instead of destroying it out from under an in-flight draw.
   const pendingTexDestroy = [];
   // One pipeline per SDL blend mode (chosen per draw); a shared explicit bind
-  // layout so a texture's bind group works with ANY of them.
-  let rdrPipelines = null, rdrSamplerLinear = null, rdrSamplerNearest = null, rdrWhiteView = null, rdrWhiteBind = null, rdrBindLayout = null;
+  // layout so a texture's bind group works with ANY of them. rdrPipelinesTex is
+  // the same family against 'rgba8unorm' — the render-TARGET attachment format
+  // (#496); textures are rgba8unorm while the canvas is the preferred format
+  // (bgra8unorm on most desktops), and a pipeline's fragment target format
+  // must match its attachment. Aliased to rdrPipelines when they coincide.
+  let rdrPipelines = null, rdrPipelinesTex = null, rdrSamplerLinear = null, rdrSamplerNearest = null, rdrWhiteView = null, rdrWhiteBind = null, rdrBindLayout = null;
   // ONE persistent vertex buffer reused (and grown) across presents — never
   // created/destroyed per frame. Vertices for a frame accumulate in each
   // renderer's own growable CPU scratch (rd.verts) at draw time, are transformed
@@ -8985,7 +9034,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       });
       const pipelineLayout = dev.createPipelineLayout({ bindGroupLayouts: [rdrBindLayout] });
       const shader = dev.createShaderModule({ code: RENDER_WGSL });
-      const mkPipeline = function (blend) {
+      const mkPipeline = function (blend, format) {
         return dev.createRenderPipeline({
           layout: pipelineLayout,
           vertex: {
@@ -9001,13 +9050,19 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
           },
           fragment: {
             module: shader, entryPoint: 'fs',
-            targets: [blend ? { format: cgpu.format, blend: blend } : { format: cgpu.format }],
+            targets: [blend ? { format: format, blend: blend } : { format: format }],
           },
           primitive: { topology: 'triangle-list' },
         });
       };
       rdrPipelines = {};
-      for (const mode of [0, 1, 2, 4]) rdrPipelines[mode] = mkPipeline(SDL_BLEND_DESC[mode]);
+      for (const mode of [0, 1, 2, 4]) rdrPipelines[mode] = mkPipeline(SDL_BLEND_DESC[mode], cgpu.format);
+      if (cgpu.format === 'rgba8unorm') {
+        rdrPipelinesTex = rdrPipelines;
+      } else {
+        rdrPipelinesTex = {};
+        for (const mode of [0, 1, 2, 4]) rdrPipelinesTex[mode] = mkPipeline(SDL_BLEND_DESC[mode], 'rgba8unorm');
+      }
       const white = dev.createTexture({ size: { width: 1, height: 1 }, format: 'rgba8unorm', usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING });
       dev.queue.writeTexture({ texture: white }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4, rowsPerImage: 1 }, { width: 1, height: 1 });
       rdrWhiteView = white.createView();
@@ -9033,13 +9088,40 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     });
   }
 
-  // Materialize + upload a texture's GPU resources (called at present time).
+  // Materialize a texture's GPU resources. A TARGET-access texture (#496) gets
+  // RENDER_ATTACHMENT so segment flushes can render into it; WebGPU textures
+  // are zero-initialized, so a never-drawn target samples as transparent black
+  // — the same start state as the software tier's zeroed cpuPixels.
+  function texEnsureGpu(t) {
+    if (t.view) return;
+    const dev = cgpu.device;
+    const usage = GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING |
+                  (t.access === 2 ? GPUTextureUsage.RENDER_ATTACHMENT : 0);
+    t.gpuTex = dev.createTexture({ size: { width: t.w, height: t.h }, format: 'rgba8unorm', usage: usage });
+    t.view = t.gpuTex.createView();
+  }
+  // Upload the dirty bounding box of CPU-side updates, sourced from the full
+  // cpuPixels buffer (queue.writeTexture has no 256-byte bytesPerRow
+  // constraint, so the full stride + a row offset addresses the sub-rect
+  // directly). A full-texture update has dx/dy=0 and dw/dh=w/h, so this stays
+  // a single full upload. Only the dirty RECT is written, so on a render
+  // target the surrounding GPU-rendered content survives an SDL_UpdateTexture.
+  function texUploadDirty(t) {
+    if (!t.dirty || !t.cpuPixels) return;
+    const dev = cgpu.device;
+    const fullPitch = t.w * 4;
+    const dx = t.dx, dy = t.dy, dw = t.dx2 - t.dx, dh = t.dy2 - t.dy;
+    dev.queue.writeTexture(
+      { texture: t.gpuTex, origin: { x: dx, y: dy } },
+      t.cpuPixels,
+      { offset: dy * fullPitch + dx * 4, bytesPerRow: fullPitch, rowsPerImage: dh },
+      { width: dw, height: dh });
+    t.dirty = false;
+  }
+  // Materialize + upload a texture's GPU resources (called at flush time).
   function texBindGroup(t) {
     const dev = cgpu.device;
-    if (!t.view) {
-      t.gpuTex = dev.createTexture({ size: { width: t.w, height: t.h }, format: 'rgba8unorm', usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING });
-      t.view = t.gpuTex.createView();
-    }
+    texEnsureGpu(t);
     // Rebuild the bind group whenever it's been invalidated — first materialize,
     // or after SDL_SetTextureScaleMode nulled it to swap samplers. Gating this on
     // !t.view (as before) left a scale-mode change AFTER the texture's first
@@ -9049,20 +9131,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       const sampler = t.scaleMode === 0 ? rdrSamplerNearest : rdrSamplerLinear;
       t.bindGroup = dev.createBindGroup({ layout: rdrBindLayout, entries: [{ binding: 0, resource: sampler }, { binding: 1, resource: t.view }] });
     }
-    if (t.dirty && t.cpuPixels) {
-      // Upload only the dirty bounding box, sourced from the full cpuPixels buffer
-      // (queue.writeTexture has no 256-byte bytesPerRow constraint, so the full
-      // stride + a row offset addresses the sub-rect directly). A full-texture
-      // update has dx/dy=0 and dw/dh=w/h, so this stays a single full upload.
-      const fullPitch = t.w * 4;
-      const dx = t.dx, dy = t.dy, dw = t.dx2 - t.dx, dh = t.dy2 - t.dy;
-      dev.queue.writeTexture(
-        { texture: t.gpuTex, origin: { x: dx, y: dy } },
-        t.cpuPixels,
-        { offset: dy * fullPitch + dx * 4, bytesPerRow: fullPitch, rowsPerImage: dh },
-        { width: dw, height: dh });
-      t.dirty = false;
-    }
+    texUploadDirty(t);
     return t.bindGroup;
   }
 
@@ -9151,20 +9220,46 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
   }
   function rdrResetBatch(rd) { rd.batch = []; rd.vertCount = 0; }
 
-  function rdrFlush(rd) {
+  // #496 render targets split the old one-flush-per-present model into
+  // SEGMENTS: a segment is the run of batched draws between render-target
+  // switches (upstream SDL flushes its command queue at SDL_SetRenderTarget the
+  // same way). Each segment flushes into ITS attachment — a TARGET texture's
+  // GPU texture (rgba8unorm pipeline family) or the canvas (preferred-format
+  // family). loadOp is 'clear' only when SDL_RenderClear was issued for that
+  // attachment (segClear on a target; the persisted rd.clear on the window's
+  // FIRST segment of a frame — the pre-#496 behavior byte-for-byte when no
+  // target is ever bound), else 'load' so target content persists across
+  // binds and the window keeps its earlier segments. Mid-frame segment
+  // flushes never ship a frame: onPresent/readback/texture-destroy drain are
+  // PRESENT-time tails (rdrPresent) — a half-frame ImageBitmap ship would
+  // burn the #484 budget.
+  function rdrFlushSegment(rd) {
+    if (!rdrPipelines) { rdrResetBatch(rd); rd.segClear = null; return; }
     const dev = cgpu.device;
-    const W = canvas.width || 1, H = canvas.height || 1;
+    const tgt = rd.target;
+    const clearVal = tgt ? rd.segClear : (rd.winFlushed ? null : rd.clear);
+    if (!rd.batch.length && !clearVal) { rdrResetBatch(rd); return; }
+    let view, W, H, pipelines;
+    if (tgt) {
+      texEnsureGpu(tgt);
+      texUploadDirty(tgt);   // program order: CPU-side updates land before this pass
+      view = tgt.view; W = tgt.w; H = tgt.h; pipelines = rdrPipelinesTex;
+    } else {
+      view = cgpu.context.getCurrentTexture().createView();
+      W = canvas.width || 1; H = canvas.height || 1; pipelines = rdrPipelines;
+    }
     const entries = rd.batch;
     const totalVerts = rd.vertCount;
     const verts = rd.verts;
-    // Transform this frame's pixel-space vertices to NDC IN PLACE (no new array).
-    // Only x,y change; uv/rgba are left as written.
+    // Transform this segment's pixel-space vertices to NDC IN PLACE (no new
+    // array). Only x,y change; uv/rgba are left as written.
     for (let i = 0; i < totalVerts; i++) {
       const s = i * 8;
       verts[s] = (verts[s] / W) * 2 - 1;
       verts[s + 1] = 1 - (verts[s + 1] / H) * 2;
     }
-    // Reuse (and grow) the one persistent vertex buffer — never per-present churn.
+    // Reuse (and grow) the one persistent vertex buffer — never per-flush churn
+    // (writeBuffer is queue-ordered, so back-to-back segments can share it).
     const byteLen = Math.max(32, totalVerts * 8 * 4);
     if (!rdrVbuf || rdrVbufSize < byteLen) {
       if (rdrVbuf) rdrVbuf.destroy();
@@ -9175,31 +9270,42 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     }
     if (totalVerts) dev.queue.writeBuffer(rdrVbuf, 0, verts, 0, totalVerts * 8);
     const enc = dev.createCommandEncoder();
-    const curTex = cgpu.context.getCurrentTexture();
-    const pass = enc.beginRenderPass({ colorAttachments: [{ view: curTex.createView(), loadOp: 'clear', storeOp: 'store', clearValue: rd.clear }] });
+    const pass = enc.beginRenderPass({ colorAttachments: [{
+      view: view, loadOp: clearVal ? 'clear' : 'load', storeOp: 'store',
+      clearValue: clearVal || { r: 0, g: 0, b: 0, a: 0 },
+    }] });
     pass.setVertexBuffer(0, rdrVbuf);
     for (const e of entries) {
-      pass.setPipeline(rdrPipelines[e.blend]);   // e.blend ∈ {0,1,2,4}, validated when set
+      pass.setPipeline(pipelines[e.blend]);   // e.blend ∈ {0,1,2,4}, validated when set
       // e.tex is the texture OBJECT captured at draw time (not a slot index), so a
       // texture destroyed mid-frame still renders this frame — its GPU free is
-      // deferred until after this submit (pendingTexDestroy).
+      // deferred until after the present-time submit (pendingTexDestroy).
       pass.setBindGroup(0, e.tex ? texBindGroup(e.tex) : rdrWhiteBind);
       pass.draw(e.n, 1, e.first, 0);
     }
     pass.end();
-    // On-demand GPU readback: only when getLastFrame() has been called since the
-    // last present (surface probe or camera capture). Encoded in the same command
-    // encoder so it's ordered after the draw calls. Non-capture frames skip this
-    // entirely — zero GPU→CPU transfer cost.
-    let didReadback = false;
+    dev.queue.submit([enc.finish()]);
+    if (tgt) rd.segClear = null;
+    else rd.winFlushed = true;
+    rdrResetBatch(rd);
+  }
+
+  // Present: flush the window's final segment, then the present-only tails —
+  // on-demand readback (getLastFrame), the per-window present hook, the frame
+  // reset, and the deferred texture frees.
+  function rdrPresent(rd) {
+    const dev = cgpu.device;
+    const W = canvas.width || 1, H = canvas.height || 1;
+    rdrFlushSegment(rd);
     if (rdrCapturePending) {
       rdrCapturePending = false;
-      didReadback = rdrEncodeReadback(enc, dev, curTex, W, H);
+      const enc = dev.createCommandEncoder();
+      const didReadback = rdrEncodeReadback(enc, dev, cgpu.context.getCurrentTexture(), W, H);
+      dev.queue.submit([enc.finish()]);
+      if (didReadback) rdrStartReadbackMap();
     }
-    dev.queue.submit([enc.finish()]);
-    if (didReadback) rdrStartReadbackMap();
     if (onPresent) onPresent(rd.window);   // per-window tail: the renderer's window (A4)
-    rdrResetBatch(rd);
+    rd.winFlushed = false;                 // the next frame's first window flush clears again
     // Now that this frame's draws are submitted, free any textures destroyed since
     // the last present (their GPU resources are no longer referenced by a batch).
     if (pendingTexDestroy.length) {
@@ -9284,11 +9390,24 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         // SDL renderers default to SDL_BLENDMODE_NONE for draw ops. verts is a
         // growable CPU scratch (pixel-space vertices for the current frame);
         // vertCount tracks how many are written; batch records draw ranges into it.
-        sdlRenderers.push({ window: window, drawColor: [1, 1, 1, 1], drawBlendMode: 0, clear: { r: 0, g: 0, b: 0, a: 1 }, batch: [], verts: null, vertCount: 0 });
+        sdlRenderers.push({ window: window, drawColor: [1, 1, 1, 1], drawBlendMode: 0, clear: { r: 0, g: 0, b: 0, a: 1 }, batch: [], verts: null, vertCount: 0,
+                            target: null, segClear: null, winFlushed: false });   // #496 render-target state
         return sdlRenderers.length;
       },
       __sdl_destroy_renderer: function (r) {
         if (r > 0 && sdlRenderers[r - 1]) sdlRenderers[r - 1] = null;
+      },
+      // #496: t 0 = the window. Switching flushes the OUTGOING segment into its
+      // attachment (upstream flushes its render commands at SDL_SetRenderTarget
+      // the same way), so draw order across switches is submit order — a window
+      // draw that sampled this target before a re-bind keeps the pre-re-bind
+      // pixels. The C layer owns the contract (TARGET access gate,
+      // present-while-bound refusal, destroy-unbinds, no-op rebind filter).
+      __sdl_set_render_target: function (r, t) {
+        const rd = sdlRenderers[r - 1]; if (!rd) return;
+        rdrFlushSegment(rd);
+        rd.target = t ? sdlTextures[t - 1] : null;
+        rd.segClear = null;
       },
       __sdl_create_texture: function (r, access, w, h) {
         sdlTextures.push({
@@ -9304,14 +9423,22 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         const tx = sdlTextures[t - 1];
         if (!tx) return;
         sdlTextures[t - 1] = null;
+        // Belt (#496): the C layer unbinds a bound target before destroying it;
+        // clear any stale aim so a segment flush can never attach a freed view.
+        for (const rd of sdlRenderers) if (rd && rd.target === tx) { rd.target = null; rd.segClear = null; }
         // Defer the GPU free: the current frame's batch may still reference this
         // texture (it captures the object, not the slot). Freeing now would null a
-        // bind group at present. Drained right after the next submit.
+        // bind group at present. Drained right after the next present-time submit.
         pendingTexDestroy.push(tx);
       },
       __sdl_update_texture: function (t, pixelsPtr, pitch, x, y, w, h) {
         const tx = sdlTextures[t - 1];
         if (!tx) return;
+        // #496 program order: if this texture is a BOUND target with batched
+        // draws, flush them first — the update must land over those draws, and
+        // the dirty-rect upload below rides the queue after the flushed pass.
+        for (const rd of sdlRenderers)
+          if (rd && rd.target === tx && (rd.batch.length || rd.segClear)) rdrFlushSegment(rd);
         // Keep cpuPixels as the FULL texture (tightly packed, fullPitch stride) and
         // patch the (x,y,w,h) sub-region into it. A one-pixel update is then O(1),
         // and we only ever read the rect->h rows the caller actually provided
@@ -9365,7 +9492,16 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       },
       __sdl_render_clear: function (r) {
         const rd = sdlRenderers[r - 1]; if (!rd) return;
-        const c = rd.drawColor; rd.clear = { r: c[0], g: c[1], b: c[2], a: c[3] }; rdrResetBatch(rd);
+        const c = rd.drawColor;
+        rdrResetBatch(rd);   // the clear covers everything batched so far in this segment
+        if (rd.target) {
+          // #496: a clear aimed at a TARGET is segment state — it must not
+          // disturb the window's persisted clear color.
+          rd.segClear = { r: c[0], g: c[1], b: c[2], a: c[3] };
+        } else {
+          rd.clear = { r: c[0], g: c[1], b: c[2], a: c[3] };
+          rd.winFlushed = false;   // discard earlier window segments: next flush clears
+        }
       },
       __sdl_render_quad: function (r, texH, x0, y0, x1, y1, x2, y2, x3, y3, sx, sy, sw, sh) {
         const rd = sdlRenderers[r - 1]; if (!rd) return;
@@ -9415,7 +9551,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       __sdl_render_present: function (r) {
         const rd = sdlRenderers[r - 1]; if (!rd) return;
         if (!rdrPipelines) { rdrEnsure(); rdrResetBatch(rd); return; }   // drop pre-device frames
-        rdrFlush(rd);
+        rdrPresent(rd);
       },
 
       /* ---- Audio ---- */

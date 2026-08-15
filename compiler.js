@@ -21840,6 +21840,9 @@ typedef struct SDL_Texture {
                         silently "working". Best-effort (the check reads freed
                         memory once the allocator reuses it) — the same
                         magic-tag detection upstream SDL uses. */
+    int __access;    /* SDL_TextureAccess at create (#496) — gates SDL_SetRenderTarget */
+    SDL_Renderer *__renderer;  /* creating renderer (#496) — SDL_DestroyTexture
+                        unbinds a still-bound target through it */
 } SDL_Texture;
 
 /* Fields common to the head of every SDL event (type/reserved/timestamp), shared
@@ -22449,7 +22452,16 @@ bool SDL_RenderRects(SDL_Renderer *renderer, const SDL_FRect *rects, int count);
 bool SDL_RenderLines(SDL_Renderer *renderer, const SDL_FPoint *points, int count);
 bool SDL_RenderPoints(SDL_Renderer *renderer, const SDL_FPoint *points, int count);
 bool SDL_RenderGeometry(SDL_Renderer *renderer, SDL_Texture *texture, const SDL_Vertex *vertices, int num_vertices, const int *indices, int num_indices);
-void SDL_RenderPresent(SDL_Renderer *renderer);
+/* Returns false (with SDL_GetError set) while a render target is bound —
+   upstream documents that presenting to a texture target must fail. */
+bool SDL_RenderPresent(SDL_Renderer *renderer);
+/* Render targets (#496): 'texture' must be created with
+   SDL_TEXTUREACCESS_TARGET; NULL restores the window as the target. Viewport/
+   clip/scale do not exist in this runtime, so there is no per-target state for
+   them. Drawing the currently-bound target as its own source is refused with
+   an error (upstream leaves it undefined). */
+bool SDL_SetRenderTarget(SDL_Renderer *renderer, SDL_Texture *texture);
+SDL_Texture *SDL_GetRenderTarget(SDL_Renderer *renderer);
 
 /* ---- SDL3 main callbacks (SDL_init.h / SDL_main.h; ticket #551) ----
    SDL_AppResult is unconditional (SDL3 defines it in SDL_init.h); the
@@ -27317,6 +27329,7 @@ __import void __sdl_render_clear(int r);
 __import void __sdl_render_quad(int r, int texH, double x0, double y0, double x1, double y1, double x2, double y2, double x3, double y3, double sx, double sy, double sw, double sh);
 __import void __sdl_render_geometry(int r, int texH, const float *verts, int vertCount);
 __import void __sdl_render_present(int r);
+__import void __sdl_set_render_target(int r, int t);  /* t 0 = the window (#496) */
 
 /* ---- Error handling ----
    Single-threaded runtime ⇒ one global error buffer. SDL_GetError returns it
@@ -28414,6 +28427,7 @@ struct SDL_Renderer {
                             SDL_GetRenderDrawColor); the create-time default
                             is white, matching both upstream SDL3 and the
                             host renderer's initial drawColor [1,1,1,1] */
+    SDL_Texture *target;  /* current render target, NULL = the window (#496) */
 };
 
 /* ---- Hints (#551): a tiny grow-only store. SDL_GetHint prefers the
@@ -28484,6 +28498,7 @@ SDL_Renderer *SDL_CreateRenderer(SDL_Window *window, const char *name) {
     r->handle = h;
     r->window = window;
     r->draw_r = r->draw_g = r->draw_b = r->draw_a = 255;
+    r->target = NULL;
     window->renderer = r;
     return r;
 }
@@ -28505,6 +28520,10 @@ SDL_Texture *SDL_CreateTexture(SDL_Renderer *renderer, SDL_PixelFormat format, S
        browser flavor's WebGPU default maxTextureDimension2D). */
     if (w <= 0 || h <= 0) { SDL_SetError("Texture dimensions can't be 0"); return NULL; }
     if (w > 8192 || h > 8192) { SDL_SetError("Texture dimensions are limited to 8192x8192"); return NULL; }
+    /* #496: the access value is meaningful now (TARGET gates SDL_SetRenderTarget),
+       so an out-of-enum value must fail here — not ride along silently. */
+    if (access != SDL_TEXTUREACCESS_STATIC && access != SDL_TEXTUREACCESS_STREAMING &&
+        access != SDL_TEXTUREACCESS_TARGET) { SDL_InvalidParamError("access"); return NULL; }
     int th = __sdl_create_texture(renderer->handle, (int)access, w, h);
     if (th <= 0) { SDL_SetError("SDL_CreateTexture: host failed to create a texture (%dx%d)", w, h); return NULL; }
     SDL_Texture *t = (SDL_Texture *)malloc(sizeof(SDL_Texture));
@@ -28514,6 +28533,8 @@ SDL_Texture *SDL_CreateTexture(SDL_Renderer *renderer, SDL_PixelFormat format, S
     t->h = h;
     t->__handle = th;
     t->__magic = __SDL_TEX_MAGIC;
+    t->__access = (int)access;
+    t->__renderer = renderer;
     /* SDL3 default blend mode is alpha-aware: an alpha-format texture defaults to
        SDL_BLENDMODE_BLEND, a non-alpha one to SDL_BLENDMODE_NONE
        (src/render/SDL_render.c). */
@@ -28541,6 +28562,12 @@ void SDL_DestroyTexture(SDL_Texture *texture) {
         if (texture) SDL_InvalidParamError("texture");
         return;
     }
+    /* #496: destroying the bound render target implicitly restores the window
+       (upstream SDL_render.c). Renderer liveness is best-effort through the
+       window backref chain — the same idiom as the __magic tag above. */
+    SDL_Renderer *rr = texture->__renderer;
+    if (rr && __sdl_window_live(rr->window) && rr->window->renderer == rr && rr->target == texture)
+        SDL_SetRenderTarget(rr, NULL);
     texture->__magic = 0;
     __sdl_destroy_texture(texture->__handle);
     free(texture);
@@ -28641,6 +28668,8 @@ bool SDL_RenderTexture(SDL_Renderer *renderer, SDL_Texture *texture,
                        const SDL_FRect *srcrect, const SDL_FRect *dstrect) {
     if (!renderer) return SDL_InvalidParamError("renderer");
     if (!__sdl_texture_live(texture)) return SDL_InvalidParamError("texture");
+    if (texture == renderer->target)
+        return SDL_SetError("texture is the current render target — it cannot be its own source");
     float sx = 0, sy = 0, sw = (float)texture->w, sh = (float)texture->h;
     if (srcrect) { sx = srcrect->x; sy = srcrect->y; sw = srcrect->w; sh = srcrect->h; }
     float dx = 0, dy = 0, dw = (float)texture->w, dh = (float)texture->h;
@@ -28662,6 +28691,8 @@ bool SDL_RenderTextureRotated(SDL_Renderer *renderer, SDL_Texture *texture,
                               double angle, const SDL_FPoint *center, SDL_FlipMode flip) {
     if (!renderer) return SDL_InvalidParamError("renderer");
     if (!__sdl_texture_live(texture)) return SDL_InvalidParamError("texture");
+    if (texture == renderer->target)
+        return SDL_SetError("texture is the current render target — it cannot be its own source");
     float sx = 0, sy = 0, sw = (float)texture->w, sh = (float)texture->h;
     if (srcrect) { sx = srcrect->x; sy = srcrect->y; sw = srcrect->w; sh = srcrect->h; }
     float dx = 0, dy = 0, dw = (float)texture->w, dh = (float)texture->h;
@@ -28778,6 +28809,8 @@ bool SDL_RenderGeometry(SDL_Renderer *renderer, SDL_Texture *texture,
                         const int *indices, int num_indices) {
     if (!renderer) return SDL_InvalidParamError("renderer");
     if (texture && !__sdl_texture_live(texture)) return SDL_InvalidParamError("texture");
+    if (texture && texture == renderer->target)
+        return SDL_SetError("texture is the current render target — it cannot be its own source");
     if (!vertices) return SDL_InvalidParamError("vertices");
     if (num_vertices < 3) return SDL_SetError("SDL_RenderGeometry: num_vertices must be >= 3");
     if (indices && num_indices % 3 != 0) return SDL_SetError("SDL_RenderGeometry: num_indices must be a multiple of 3");
@@ -28808,9 +28841,34 @@ bool SDL_RenderGeometry(SDL_Renderer *renderer, SDL_Texture *texture,
     return 1;
 }
 
-void SDL_RenderPresent(SDL_Renderer *renderer) {
-    if (!renderer) { SDL_InvalidParamError("renderer"); return; }
+/* bool per upstream SDL3 (#496): the documented present-while-target-bound
+   failure has to be reportable. */
+bool SDL_RenderPresent(SDL_Renderer *renderer) {
+    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (renderer->target)
+        return SDL_SetError("SDL_RenderPresent: a render target is bound — call SDL_SetRenderTarget(renderer, NULL) first (presenting to a texture target is not supported)");
     __sdl_render_present(renderer->handle);
+    return 1;
+}
+
+/* ---- Render targets (#496) ---- */
+
+bool SDL_SetRenderTarget(SDL_Renderer *renderer, SDL_Texture *texture) {
+    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (texture) {
+        if (!__sdl_texture_live(texture)) return SDL_InvalidParamError("texture");
+        if (texture->__access != SDL_TEXTUREACCESS_TARGET)
+            return SDL_SetError("texture is not a render target");  /* upstream's message */
+    }
+    if (renderer->target == texture) return 1;
+    renderer->target = texture;
+    __sdl_set_render_target(renderer->handle, texture ? texture->__handle : 0);
+    return 1;
+}
+
+SDL_Texture *SDL_GetRenderTarget(SDL_Renderer *renderer) {
+    if (!renderer) { SDL_InvalidParamError("renderer"); return NULL; }
+    return renderer->target;
 }
 
 void __setAnimationFrameFunc(void (*callback)(void)) {
