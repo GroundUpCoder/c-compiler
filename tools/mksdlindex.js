@@ -84,7 +84,7 @@ const GROUPS = [
     note: 'SDL_SetWindowPosition and SDL_SetWindowIcon are honest accept-and-succeed no-ops — the WM owns placement; no taskbar-icon pipe yet.' },
   { title: 'Renderer & textures (2D accelerated)',
     re: /Render|Texture/,
-    note: 'SDL_CreateRenderer(win, NULL) = the GPU tier (requires the callback main loop). "software" (or SDL_RENDER_DRIVER=software) = CPU into the window surface, blocking loops legal. Any other driver name fails.' },
+    note: 'SDL_CreateRenderer(win, NULL) = the GPU tier (requires the callback main loop). "software" (or SDL_RENDER_DRIVER=software) = CPU into the window surface, blocking loops legal. Any other driver name fails. Render targets (#496): SDL_SetRenderTarget(r, tex) redirects drawing into a SDL_TEXTUREACCESS_TARGET texture (NULL restores the window; content persists across binds; a target is a real alpha surface). SDL_RenderPresent returns false while a target is bound, and drawing the bound target as its own source is refused.' },
   { title: 'Timing',
     re: /Ticks|Performance|^SDL_Delay$/,
     note: 'SDL_GetPerformanceFrequency() == 1000000000 (ns units). SDL_Delay waits AT LEAST the asked time.' },
@@ -143,9 +143,8 @@ const ABSENT = [
              'TTF_DrawSurfaceText', 'TTF_DrawRendererText', 'TTF_OpenFontIO', 'TTF_SetFontOutline',
              'TTF_RenderText_LCD', 'TTF_HINTING_LIGHT_SUBPIXEL'],
     see: ['TTF_RenderText_Blended', 'TTF_GetStringSize'] },
-  { label: 'Render targets: `SDL_SetRenderTarget` / `SDL_GetRenderTarget`. SDL_TEXTUREACCESS_TARGET is defined, but rendering INTO a texture is not available — compose CPU-side and upload with SDL_UpdateTexture.',
-    absent: ['SDL_SetRenderTarget', 'SDL_GetRenderTarget'],
-    see: ['SDL_TEXTUREACCESS_TARGET', 'SDL_UpdateTexture'] },
+  // Render targets left this list at #496 (the two-sided edit): SDL_SetRenderTarget /
+  // SDL_GetRenderTarget are real on every tier now — see the renderer section note.
   { label: 'Texture pixel access: `SDL_LockTexture` / `SDL_UnlockTexture` — upload with SDL_UpdateTexture instead.',
     absent: ['SDL_LockTexture', 'SDL_UnlockTexture'],
     see: ['SDL_UpdateTexture'] },

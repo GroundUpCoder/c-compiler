@@ -124,8 +124,10 @@ const ccHarness = (() => {
 check('documented-absent symbols really fail as undeclared', () => {
   // NB TTF_OpenFont left this list when #468 made the classic SDL_ttf
   // surface real (the two-sided edit); Mix_OpenAudio pins the SDL_mixer
-  // absence claim in its place.
-  for (const sym of ['SDL_SetRenderTarget', 'SDL_LockTexture', 'Mix_OpenAudio']) {
+  // absence claim in its place. SDL_SetRenderTarget left at #496 the same
+  // way (render targets are real on every tier now); SDL_SetRenderViewport
+  // pins the renderer-state absence claim in its place.
+  for (const sym of ['SDL_SetRenderViewport', 'SDL_LockTexture', 'Mix_OpenAudio']) {
     const r = ccHarness('#include <SDL.h>\nint main(void){' + sym + '(0);return 0;}\n');
     assert(r.exitCode !== 0 && (r.stderr || '').includes("Undeclared identifier '" + sym + "'"),
       sym + ' unexpectedly compiled (exit ' + r.exitCode + ') — it EXISTS now; '
@@ -138,6 +140,9 @@ check('the documented alternatives compile (incl. #672’s SDL_RenderTextureRota
   assert(r1.exitCode === 0, 'SDL_UpdateTexture no longer compiles: ' + r1.stderr);
   const r2 = ccHarness('#include <SDL.h>\nint main(void){SDL_RenderTextureRotated(0,0,0,0,0.0,0,SDL_FLIP_NONE);return 0;}\n');
   assert(r2.exitCode === 0, 'SDL_RenderTextureRotated no longer compiles — the index’s present list is stale: ' + r2.stderr);
+  // #496's inversion: the once-pinned-absent render-target pair compiles now.
+  const r3 = ccHarness('#include <SDL.h>\nint main(void){SDL_SetRenderTarget(0,0);(void)SDL_GetRenderTarget(0);return 0;}\n');
+  assert(r3.exitCode === 0, 'SDL_SetRenderTarget/SDL_GetRenderTarget no longer compile — #496 regressed: ' + r3.stderr);
 });
 
 console.log(failures ? '\n' + failures + ' sdl-api-index check(s) FAILED' : '\nAll sdl-api-index checks passed');

@@ -93,7 +93,7 @@ bool SDL_SetWindowTitle(SDL_Window *window, const char *title);
 
 ### Renderer & textures (2D accelerated)
 
-SDL_CreateRenderer(win, NULL) = the GPU tier (requires the callback main loop). "software" (or SDL_RENDER_DRIVER=software) = CPU into the window surface, blocking loops legal. Any other driver name fails.
+SDL_CreateRenderer(win, NULL) = the GPU tier (requires the callback main loop). "software" (or SDL_RENDER_DRIVER=software) = CPU into the window surface, blocking loops legal. Any other driver name fails. Render targets (#496): SDL_SetRenderTarget(r, tex) redirects drawing into a SDL_TEXTUREACCESS_TARGET texture (NULL restores the window; content persists across binds; a target is a real alpha surface). SDL_RenderPresent returns false while a target is bound, and drawing the bound target as its own source is refused.
 
 ```c
 SDL_Renderer *SDL_CreateRenderer(SDL_Window *window, const char *name);
@@ -123,7 +123,9 @@ bool SDL_RenderRects(SDL_Renderer *renderer, const SDL_FRect *rects, int count);
 bool SDL_RenderLines(SDL_Renderer *renderer, const SDL_FPoint *points, int count);
 bool SDL_RenderPoints(SDL_Renderer *renderer, const SDL_FPoint *points, int count);
 bool SDL_RenderGeometry(SDL_Renderer *renderer, SDL_Texture *texture, const SDL_Vertex *vertices, int num_vertices, const int *indices, int num_indices);
-void SDL_RenderPresent(SDL_Renderer *renderer);
+bool SDL_RenderPresent(SDL_Renderer *renderer);
+bool SDL_SetRenderTarget(SDL_Renderer *renderer, SDL_Texture *texture);
+SDL_Texture *SDL_GetRenderTarget(SDL_Renderer *renderer);
 ```
 
 ### Timing
@@ -323,7 +325,7 @@ typedef struct SDL_FColor { float r, g, b, a; } SDL_FColor;
 typedef struct SDL_Color { Uint8 r, g, b, a; } SDL_Color;
 typedef struct SDL_Vertex { SDL_FPoint position; SDL_FColor color; SDL_FPoint tex_coord; } SDL_Vertex;
 typedef struct SDL_Renderer SDL_Renderer;   /* opaque */
-typedef struct SDL_Texture { SDL_PixelFormat format; int w; int h; int __handle; Uint32 __magic; } SDL_Texture;
+typedef struct SDL_Texture { SDL_PixelFormat format; int w; int h; int __handle; Uint32 __magic; int __access; SDL_Renderer *__renderer; } SDL_Texture;
 typedef struct SDL_CommonEvent { Uint32 type; Uint32 reserved; Uint64 timestamp; } SDL_CommonEvent;
 typedef struct SDL_KeyboardEvent { Uint32 type; Uint32 reserved; Uint64 timestamp; SDL_WindowID windowID; SDL_KeyboardID which; SDL_Scancode scancode; SDL_Keycode key; SDL_Keymod mod; Uint16 raw; bool down; bool repeat; } SDL_KeyboardEvent;
 typedef struct SDL_MouseMotionEvent { Uint32 type; Uint32 reserved; Uint64 timestamp; SDL_WindowID windowID; SDL_MouseID which; Uint32 state; float x; float y; float xrel; float yrel; } SDL_MouseMotionEvent;
@@ -567,7 +569,6 @@ time this file is generated — an entry here is absent TODAY, not folklore.
 An absent symbol fails loud at compile time (“Undeclared identifier”).
 
 - SDL_ttf modern API: `TTF_Text` / `TTF_TextEngine` (`TTF_CreateText`, `TTF_CreateSurfaceTextEngine`, `TTF_CreateRendererTextEngine`, `TTF_DrawSurfaceText`, `TTF_DrawRendererText`) do not exist — only the classic render-to-surface API above. Also absent: `TTF_OpenFontIO` (no SDL_IOStream), `TTF_SetFontOutline`, the `TTF_RenderText_LCD*` family, and `TTF_HINTING_LIGHT_SUBPIXEL`.
-- Render targets: `SDL_SetRenderTarget` / `SDL_GetRenderTarget`. SDL_TEXTUREACCESS_TARGET is defined, but rendering INTO a texture is not available — compose CPU-side and upload with SDL_UpdateTexture.
 - Texture pixel access: `SDL_LockTexture` / `SDL_UnlockTexture` — upload with SDL_UpdateTexture instead.
 - Renderer state: `SDL_SetRenderViewport`, `SDL_SetRenderClipRect`, `SDL_SetRenderScale`, `SDL_SetRenderLogicalPresentation`, `SDL_RenderReadPixels`, `SDL_GetRenderOutputSize` — none exist; draw in window pixels 1:1.
 - Gamepad / joystick: no device API at all (`SDL_OpenGamepad`, `SDL_GetGamepads`, `SDL_OpenJoystick`, …). The SDL_INIT_GAMEPAD / SDL_INIT_JOYSTICK flag constants exist, but input is keyboard + mouse only.

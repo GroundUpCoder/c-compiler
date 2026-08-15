@@ -314,8 +314,16 @@ desktop/current mode); `SDL_ShowWindow`/`Hide`; `SDL_GetWindowFlags`;
 `devicePixelRatio`, Fullscreen API.
 
 ### 2D Renderer (SDL_render) — ◑ partial — P0
-Missing: **render targets** (`SDL_SetRenderTarget` + texture with
-TEXTUREACCESS_TARGET); **viewport / clip rect / scale** (`SetRenderViewport`,
+(Landed 2026-08-15, #496: **render targets** — `SDL_SetRenderTarget` /
+`SDL_GetRenderTarget` on all three tiers. GPU tier renders segments into an
+rgba8unorm RENDER_ATTACHMENT texture (flush-on-switch, loadOp 'load'
+preserves content across binds); software tier redirects the rasterizer into
+the texture's cpuPixels with real dst-alpha blending; `SDL_RenderPresent` is
+`bool` per upstream and fails while a target is bound; a non-TARGET-access
+texture is refused with upstream's error; the bound target as its own source
+is refused loudly. Tests: `test_sdl_rendertarget_e2e.js` +
+`os-rendertarget.mjs`.)
+Missing: **viewport / clip rect / scale** (`SetRenderViewport`,
 `SetRenderClipRect`, `SetRenderScale`); **logical presentation**
 (`SetRenderLogicalPresentation` — letterbox/scale, very common); plural
 primitives (`RenderLines`, `RenderPoints`, `RenderRects`, `RenderFillRects`);
