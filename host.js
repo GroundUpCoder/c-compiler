@@ -9641,6 +9641,18 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       rdrEnsure();
       cgpu.whenReady(function () { cb(!!cgpu.device); });
     },
+    // #496: the promise form runModule's pre-main gate awaits — previously only
+    // the OS surface flavor exposed it, so on a STANDALONE page render-target
+    // content drawn once in SDL_AppInit (before the first present) fell into
+    // the drop-pre-device branch and was lost forever (a per-frame redraw
+    // self-heals; a once-only target render does not). Resolves false on
+    // failed acquisition — callers proceed and flushes drop, as before.
+    gpuRendererReady: function () {
+      return new Promise(function (res) {
+        rdrEnsure();
+        cgpu.whenReady(function () { res(!!cgpu.device); });
+      });
+    },
     // NESTED workers (OS process workers are workers-of-workers) expose
     // requestAnimationFrame as a global but THROW NotSupportedError on call
     // (Chromium). Latch to a setTimeout pacer on the first failure instead
