@@ -918,6 +918,75 @@ screen.addEventListener('wheel', function (e) {
 }, { passive: false });
 screen.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 
+// Gamepads (#607). The Gamepad API is Window-only and poll-based, so the
+// poller lives HERE (the page stays the dumb input-capture bridge): a rAF
+// loop armed by gamepadconnected, disarmed when the browser stops reporting
+// pads — zero per-frame work with no pad, the IDLE-POWER discipline. Each
+// frame diffs against the last-forwarded snapshot and ships only CHANGES
+// through the same wm-input seam as the mouse, already SDL-mapped (the W3C
+// "standard" mapping -> SDL_GamepadButton/Axis table below; the W3C analog
+// triggers 6/7 become the SDL trigger AXES 4/5). Pads the browser cannot
+// map to the standard layout are NOT forwarded — a documented absence, not
+// a broken half-pad. NB browsers expose a pad only after the user presses
+// something on it (privacy gating); nothing here can or should defeat that.
+(function () {
+  // W3C standard-mapping button index -> SDL_GamepadButton (-1 = analog
+  // trigger, surfaced as an axis instead).
+  var W3C_TO_SDL_BTN = [0, 1, 2, 3, 9, 10, -1, -1, 4, 6, 7, 8, 11, 12, 13, 14, 5];
+  var padState = [];            // per W3C index: {buttons: bitmask, axes: [6]}
+  var padRafOn = false;
+  function q16(v) {             // [-1,1] float -> i16, the SDL axis unit
+    v = Math.round(v * 32767);
+    return v < -32768 ? -32768 : v > 32767 ? 32767 : v;
+  }
+  function padPoll() {
+    var pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    var any = false;
+    for (var i = 0; i < pads.length; i++) {
+      var gp = pads[i], st = padState[i];
+      if (gp) any = true;
+      if (gp && gp.mapping === 'standard') {
+        if (!st) {
+          padState[i] = st = { buttons: 0, axes: [0, 0, 0, 0, 0, 0] };
+          wmSend({ kind: 'padconn', slot: i, name: gp.id });
+        }
+        for (var b = 0; b < gp.buttons.length && b < W3C_TO_SDL_BTN.length; b++) {
+          var sdlb = W3C_TO_SDL_BTN[b];
+          if (sdlb < 0) continue;
+          var bit = 1 << sdlb;
+          var down = gp.buttons[b].pressed;
+          if (down !== !!(st.buttons & bit)) {
+            st.buttons ^= bit;
+            wmSend({ kind: 'padbtn', slot: i, btn: sdlb, down: down });
+          }
+        }
+        for (var a = 0; a < 4 && a < gp.axes.length; a++) {
+          var v = q16(gp.axes[a]);
+          if (v !== st.axes[a]) { st.axes[a] = v; wmSend({ kind: 'padaxis', slot: i, axis: a, v: v }); }
+        }
+        for (var t = 0; t < 2; t++) {   // W3C 6/7 analog value -> SDL axes 4/5
+          var tb = gp.buttons[6 + t];
+          var tv = tb ? q16(Math.max(0, Math.min(1, tb.value))) : 0;
+          if (tv !== st.axes[4 + t]) { st.axes[4 + t] = tv; wmSend({ kind: 'padaxis', slot: i, axis: 4 + t, v: tv }); }
+        }
+      } else if (st) {
+        // Gone, or demoted to a mapping we do not forward: disconnect.
+        padState[i] = null;
+        wmSend({ kind: 'paddis', slot: i });
+      }
+    }
+    padRafOn = any;
+    window.__osPadPolling = any;        // agent probe
+    if (any) requestAnimationFrame(padPoll);
+  }
+  function padArm() {
+    if (!padRafOn) { padRafOn = true; requestAnimationFrame(padPoll); }
+  }
+  window.addEventListener('gamepadconnected', padArm);
+  // The last pad's removal still needs one poll pass to ship its paddis.
+  window.addEventListener('gamepaddisconnected', padArm);
+})();
+
 // Touch input (todos/0212): synthesize the SAME wm-input records the mouse
 // handlers above send, so the kernel/WM never learns touch exists. Page-side
 // ONLY, and additive — touch events don't fire for a mouse, and preventDefault

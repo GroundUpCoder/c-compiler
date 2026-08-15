@@ -923,6 +923,17 @@ function routeInput(kernel, sdlWeb, ev) {
     var notch = ev.deltaMode === 1 ? 1 / 3 : ev.deltaMode === 2 ? 3 : 1 / 100;
     kernel.wmPointer('wheel', ev.x, ev.y,
       { wheelX: ev.deltaX * notch, wheelY: -ev.deltaY * notch, direction: 0 });
+  } else if (ev.kind === 'padconn') {
+    // Gamepads (#607): os.html's Gamepad API poller already diffed and
+    // SDL-mapped (W3C standard mapping -> SDL button/axis ids); these are
+    // real user input, so opts.user stamps the kernel idle clock.
+    kernel.padConnect(ev.slot | 0, ev.name, { user: true });
+  } else if (ev.kind === 'paddis') {
+    kernel.padDisconnect(ev.slot | 0);
+  } else if (ev.kind === 'padbtn') {
+    kernel.padButton(ev.slot | 0, ev.btn | 0, !!ev.down, { user: true });
+  } else if (ev.kind === 'padaxis') {
+    kernel.padAxis(ev.slot | 0, ev.axis | 0, ev.v | 0, { user: true });
   }
 }
 

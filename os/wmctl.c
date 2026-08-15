@@ -195,6 +195,10 @@ static int usage(void) {
         "       wmctl relmove SID DX DY\n"
         "       wmctl sdown|smove|sup X Y [BUTTON]\n"
         "       wmctl sdrag X1 Y1 X2 Y2 [BUTTON]\n"
+        "       wmctl pad connect|disconnect [SLOT]\n"
+        "       wmctl pad button SLOT NAME|IDX 0|1\n"
+        "       wmctl pad press SLOT NAME|IDX\n"
+        "       wmctl pad axis SLOT NAME|IDX VALUE\n"
         "       wmctl skey SCANCODE [KEYSYM [MOD]]\n"
         "       wmctl skeydown|skeyup SCANCODE [KEYSYM [MOD]]\n"
         "       wmctl shot SID|screen [FILE [X Y W H]]\n"
@@ -892,6 +896,60 @@ int main(int argc, char **argv) {
         if (argc < 3) return usage();
         int32_t a[1] = { need_i32("glass", "TIER", argv[2]) };
         return wmp_cmd(fd, WMP_GLASS, a, 1) ? failop("glass") : 0;
+    }
+    /* Virtual gamepads (#607): the headless twin of the browser pad. Button
+     * and axis take the SDL mapping-DB names (a/b/x/y/back/guide/start/
+     * leftstick/rightstick/leftshoulder/rightshoulder/dpup/dpdown/dpleft/
+     * dpright; leftx/lefty/rightx/righty/lefttrigger/righttrigger) or a raw
+     * index; axis VALUE is a float — -1..1 sticks, 0..1 triggers — scaled
+     * to the wire i16 here. `pad press` sends both button edges (the skey
+     * shape). Default SLOT is 0. */
+    if (!strcmp(cmd, "pad")) {
+        if (argc < 3) return usage();
+        const char *sub = argv[2];
+        if (!strcmp(sub, "connect") || !strcmp(sub, "disconnect")) {
+            int32_t a[1] = { argc > 3 ? need_i32("pad", "SLOT", argv[3]) : 0 };
+            return wmp_cmd(fd, sub[0] == 'c' ? WMP_PAD_CONNECT : WMP_PAD_DISCONNECT,
+                           a, 1) ? failop(sub) : 0;
+        }
+        static const char *btn_names[] = {
+            "a", "b", "x", "y", "back", "guide", "start",
+            "leftstick", "rightstick", "leftshoulder", "rightshoulder",
+            "dpup", "dpdown", "dpleft", "dpright", NULL };
+        static const char *axis_names[] = {
+            "leftx", "lefty", "rightx", "righty",
+            "lefttrigger", "righttrigger", NULL };
+        if (!strcmp(sub, "button") || !strcmp(sub, "press")) {
+            int both = sub[0] == 'p';
+            if (argc < (both ? 5 : 6)) return usage();
+            int32_t slot = need_i32("pad", "SLOT", argv[3]);
+            int32_t btn = -1;
+            for (int i = 0; btn_names[i]; i++)
+                if (!strcmp(argv[4], btn_names[i])) { btn = i; break; }
+            if (btn < 0) btn = need_i32("pad", "NAME|IDX", argv[4]);
+            if (both) {
+                int32_t a[3] = { slot, btn, 1 };
+                if (wmp_cmd(fd, WMP_PAD_BUTTON, a, 3)) return failop(sub);
+                a[2] = 0;
+                return wmp_cmd(fd, WMP_PAD_BUTTON, a, 3) ? failop(sub) : 0;
+            }
+            int32_t a[3] = { slot, btn, need_i32("pad", "0|1", argv[5]) != 0 };
+            return wmp_cmd(fd, WMP_PAD_BUTTON, a, 3) ? failop(sub) : 0;
+        }
+        if (!strcmp(sub, "axis")) {
+            if (argc < 6) return usage();
+            int32_t slot = need_i32("pad", "SLOT", argv[3]);
+            int32_t axis = -1;
+            for (int i = 0; axis_names[i]; i++)
+                if (!strcmp(argv[4], axis_names[i])) { axis = i; break; }
+            if (axis < 0) axis = need_i32("pad", "NAME|IDX", argv[4]);
+            double v = atof(argv[5]) * 32767.0;
+            if (v < -32768.0) v = -32768.0;
+            if (v > 32767.0) v = 32767.0;
+            int32_t a[3] = { slot, axis, (int32_t)v };
+            return wmp_cmd(fd, WMP_PAD_AXIS, a, 3) ? failop(sub) : 0;
+        }
+        return usage();
     }
 
     /* Everything else leads with a SID. Match the verb BEFORE parsing it

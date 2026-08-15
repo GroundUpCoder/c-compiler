@@ -97,6 +97,16 @@ enum {
                                           keyboard analogue). INJECT_KEY
                                           delivers per-window and bypasses
                                           all of that by design */
+    /* Virtual gamepads (#607) — the headless twin of the browser Gamepad
+       API poller: both feed the same kernel pad entries, so a wmctl pad is
+       indistinguishable from a real one below the page layer. Button is an
+       SDL_GamepadButton index, axis an SDL_GamepadAxis index, value an i16
+       (sticks -32768..32767, triggers 0..32767). No idle-clock stamp
+       (agent injection, the INJECT_KEY rule). */
+    WMP_PAD_CONNECT = 0x24,            /* { slot } */
+    WMP_PAD_DISCONNECT = 0x25,         /* { slot } */
+    WMP_PAD_BUTTON = 0x26,             /* { slot, button, down } */
+    WMP_PAD_AXIS = 0x27,               /* { slot, axis, value } */
     WMP_SHOT = 0x30, WMP_SHOT_SCREEN = 0x31,
     WMP_THUMB = 0x32,                  /* { sid, maxW, maxH }: downscaled
                                           front-buffer thumbnail (todos/0063,
