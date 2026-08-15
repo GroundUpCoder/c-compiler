@@ -126,6 +126,8 @@ bool SDL_RenderGeometry(SDL_Renderer *renderer, SDL_Texture *texture, const SDL_
 bool SDL_RenderPresent(SDL_Renderer *renderer);
 bool SDL_SetRenderTarget(SDL_Renderer *renderer, SDL_Texture *texture);
 SDL_Texture *SDL_GetRenderTarget(SDL_Renderer *renderer);
+bool SDL_RenderDebugText(SDL_Renderer *renderer, float x, float y, const char *str);
+bool SDL_RenderDebugTextFormat(SDL_Renderer *renderer, float x, float y, const char *fmt, ...);
 ```
 
 ### Timing
@@ -548,6 +550,14 @@ Every texture/surface is RGBA bytes in memory; use SDL_PIXELFORMAT_RGBA32.
 SDL_HINT_RENDER_DRIVER="SDL_RENDER_DRIVER"
 ```
 
+### Debug text
+
+```
+SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE=8
+```
+
+SDL_RenderDebugText glyphs are 8x8 window pixels (no SDL_SetRenderScale in this runtime).
+
 ### Error helper
 
 ```
@@ -578,4 +588,3 @@ An absent symbol fails loud at compile time (“Undeclared identifier”).
 - Text input & custom cursors: `SDL_StartTextInput` (use key events — event.key.key is already the applied character) and `SDL_CreateCursor` (system cursor shapes only, via SDL_CreateSystemCursor).
 - stdinc wrappers: `SDL_snprintf`, `SDL_strlcpy`, `SDL_memcpy`, `SDL_sinf`, … — use libc (`<stdio.h>`, `<string.h>`, `<math.h>`); SDL and libc share one heap here.
 - Threads, IO abstraction, properties, message boxes, GL: `SDL_CreateThread` (single-threaded platform), `SDL_IOStream`/`SDL_RWops` (use stdio), `SDL_GetWindowProperties`, `SDL_ShowSimpleMessageBox`, `SDL_GL_*` — GPU access is `<webgpu.h>` + `<sdl3webgpu.h>`.
-- `SDL_RenderDebugText` — absent; debug/HUD text is FreeType or a bitmap font.

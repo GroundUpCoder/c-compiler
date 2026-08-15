@@ -143,6 +143,12 @@ check('the documented alternatives compile (incl. #672’s SDL_RenderTextureRota
   // #496's inversion: the once-pinned-absent render-target pair compiles now.
   const r3 = ccHarness('#include <SDL.h>\nint main(void){SDL_SetRenderTarget(0,0);(void)SDL_GetRenderTarget(0);return 0;}\n');
   assert(r3.exitCode === 0, 'SDL_SetRenderTarget/SDL_GetRenderTarget no longer compile — #496 regressed: ' + r3.stderr);
+  // #494's inversion: the once-pinned-absent debug-text surface compiles now
+  // (its ABSENT row was DELETED, not re-pointed — the renderer-state row and
+  // the three compile-pins above still cover genuinely-absent neighbors).
+  const r4 = ccHarness('#include <SDL.h>\nint main(void){SDL_RenderDebugText(0,1.0f,2.0f,"hi");'
+    + 'SDL_RenderDebugTextFormat(0,1.0f,2.0f,"score %d",42);return SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE-8;}\n');
+  assert(r4.exitCode === 0, 'SDL_RenderDebugText/SDL_RenderDebugTextFormat no longer compile — #494 regressed: ' + r4.stderr);
 });
 
 console.log(failures ? '\n' + failures + ' sdl-api-index check(s) FAILED' : '\nAll sdl-api-index checks passed');

@@ -328,8 +328,14 @@ Missing: **viewport / clip rect / scale** (`SetRenderViewport`,
 (`SetRenderLogicalPresentation` — letterbox/scale, very common); plural
 primitives (`RenderLines`, `RenderPoints`, `RenderRects`, `RenderFillRects`);
 `RenderTextureRotated` / `RenderTextureTiled` / `RenderTexture9Grid`;
-`RenderReadPixels`; `SetRenderVSync`; `GetRenderOutputSize`; render debug text
-(`SDL_RenderDebugText`); `SDL_GetRenderDrawColorFloat` / float-color variants.
+`RenderReadPixels`; `SetRenderVSync`; `GetRenderOutputSize`;
+`SDL_GetRenderDrawColorFloat` / float-color variants.
+(Landed 2026-08-15, #494: **debug text** — `SDL_RenderDebugText` /
+`SDL_RenderDebugTextFormat` / `SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE`, upstream's
+built-in 8x8 public-domain font as a lazy per-renderer atlas tinted by the
+current draw color; ASCII contract, glyphs always 8 window-pixels since
+`SetRenderScale` doesn't exist here. Tests: `test_sdl_debugtext_e2e.js` +
+`os-debugtext.mjs`.)
 (Fixed 2026-06-20: `SDL_SetTextureScaleMode`/`GetTextureScaleMode` — nearest +
 linear samplers, per-texture bind-group selection, pixel-art crispness tested,
 runtime mode change honoured. Renderer vertex path now uses one reused/grown GPU

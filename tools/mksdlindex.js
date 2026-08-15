@@ -126,6 +126,8 @@ const CLUSTERS = [
   { title: 'Pixel formats & helpers', prefixes: ['SDL_PIXELFORMAT_', 'SDL_PIXEL', 'SDL_PACKEDORDER_', 'SDL_ISPIXELFORMAT_'],
     note: 'Every texture/surface is RGBA bytes in memory; use SDL_PIXELFORMAT_RGBA32.' },
   { title: 'Hint names', prefixes: ['SDL_HINT_'] },
+  { title: 'Debug text', prefixes: ['SDL_DEBUG_TEXT_'],
+    note: 'SDL_RenderDebugText glyphs are 8x8 window pixels (no SDL_SetRenderScale in this runtime).' },
   { title: 'Error helper', prefixes: ['SDL_InvalidParamError'] },
   { title: 'Veneer sentinel', prefixes: ['IMG_SURFACE_OWNED'],
     note: 'Set in SDL_Surface.flags on heap surfaces this runtime owns (IMG_Load results) — how SDL_DestroySurface knows to free.' },
@@ -170,8 +172,6 @@ const ABSENT = [
   { label: 'Threads, IO abstraction, properties, message boxes, GL: `SDL_CreateThread` (single-threaded platform), `SDL_IOStream`/`SDL_RWops` (use stdio), `SDL_GetWindowProperties`, `SDL_ShowSimpleMessageBox`, `SDL_GL_*` — GPU access is `<webgpu.h>` + `<sdl3webgpu.h>`.',
     absent: ['SDL_CreateThread', 'SDL_IOFromFile', 'SDL_RWFromFile', 'SDL_GetWindowProperties',
              'SDL_ShowSimpleMessageBox', 'SDL_GL_CreateContext'] },
-  { label: '`SDL_RenderDebugText` — absent; debug/HUD text is FreeType or a bitmap font.',
-    absent: ['SDL_RenderDebugText'] },
 ];
 
 // ---- parsing --------------------------------------------------------------
