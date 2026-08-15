@@ -289,3 +289,11 @@ The same epic shape on **CPython (cpython-clang) + pygame**: dogfood-direct
 and dogfood-via-agent passes for Python game development inside gucOS.
 Interpreter state: `todos/CPYTHON.md`. Queued behind Epic 1 by design — no
 pygame work rides the current batches.
+
+## Inactive successor epic
+
+`todos/GUCODE-EPIC.md` defines the separate, dormant `gucode` successor epic.
+Its existence does not change this epic's PRIMARY AND EXCLUSIVE allocation,
+recurrence, ranking or standing promotions. Activation and any later allocation
+relationship require the exact jku rulings and reviewed gates defined in that
+document.

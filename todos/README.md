@@ -44,6 +44,9 @@ don't duplicate them. Current map:
   + POSIX kernel (→ 0057–0060). Chosen because the HWND tree makes agent-
   drivability structural; supersedes microui/MVU. Includes the windowing-
   vs-drawing (Win7/DWM) split and the POSIX-coexistence model.
+- `GUCODE-EPIC.md` — the dormant `gucode` successor epic, its activation and
+  exact-artifact review gates, initial non-ready ticket graph, and recurring
+  pass contracts. Its presence does not change gamedev allocation.
 - `TOOLKIT.md` — **superseded by `WIN32.md`** (2026-07-09): the former
   Elm/MVU direction (0047/0056), now dropped; kept as a redirect + history.
 - `CONFORMANCE-REMAINING.md` — verified-but-unfixed compiler/host findings.
