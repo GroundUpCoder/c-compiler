@@ -1386,6 +1386,37 @@ KernelClient.prototype.vsyncWait = function () {
   });
 };
 
+/* Synchronous vsync park (#500, SDL_SetRenderVSync): block the PROCESS
+ * WORKER until KP_VSYNC_SEQ reaches `target` (signed-diff compare, wrap
+ * safe), returning the seq actually observed. This is vsyncWait's blocking
+ * twin for the software renderer's paced present — a worker may legally
+ * block, and the tick notify wakes Atomics.wait directly (no event loop).
+ * Discipline per park chunk, in order:
+ *   - STOP: park UNARMED in _stopWait instead — a SIGSTOPped vsync app must
+ *     release the compositor (KP_VSYNC_ARMED 0 -> compKeepAlive lets the rAF
+ *     park; todos/0169), not pin it awake. Resumes the vsync park on SIGCONT.
+ *   - deliverable pending signal: give up the park (return the current seq)
+ *     so the import returns and dispatch runs at the safe point — FS_WAIT's
+ *     EINTR shape. The caller re-baselines on the returned seq, so an early
+ *     return never accumulates tick debt.
+ *   - ARMED count + parked-flag doorbell around the wait: the same Dekker
+ *     pair vsyncWait implements — without it a paced app strands against the
+ *     on-demand parked compositor. 1s chunks bound stop/signal latency while
+ *     ticks are stopped (hidden tab = parked here, the honest pause). */
+KernelClient.prototype.vsyncWaitUntil = function (target) {
+  var i32 = this._i32;
+  for (;;) {
+    var cur = Atomics.load(i32, KP_VSYNC_SEQ);
+    if (((cur - target) | 0) >= 0) return cur;
+    if (Atomics.load(i32, KP_FLAGS) & KF_STOP) { this._stopWait(); continue; }
+    if (this.pending()) return cur;
+    Atomics.add(i32, KP_VSYNC_ARMED, 1);
+    if (Atomics.load(i32, KP_COMP_PARKED) === 1) this._post({ type: 'want-frame' });
+    Atomics.wait(i32, KP_VSYNC_SEQ, cur, 1000);
+    Atomics.sub(i32, KP_VSYNC_ARMED, 1);
+  }
+};
+
 /* Job control (todos/0003): park while the kernel asserts STOP, until
  * SIGCONT clears the flag (SIGKILL terminates the worker outright). Runs at
  * the two safe-point families a process is guaranteed to hit: entry to
@@ -1571,6 +1602,9 @@ KernelClient.prototype.spawnHooks = function () {
     // frame loops off the kernel's compositor clock when advertised.
     vsyncEnabled: function () { return self.vsyncEnabled(); },
     vsyncWait: function () { return self.vsyncWait(); },
+    // Blocking tick park (#500): the software renderer's SDL_SetRenderVSync
+    // present pacing — see KernelClient.vsyncWaitUntil for the discipline.
+    vsyncWaitUntil: function (target) { return self.vsyncWaitUntil(target); },
     // Synchronous tick-counter read (ticket #484): host.js's gpu-transport
     // present clamp asks "which vsync interval is this?" per present — a
     // plain load, never a park (vsyncWait is the parking flavor).
