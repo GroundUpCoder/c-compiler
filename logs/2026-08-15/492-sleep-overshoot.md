@@ -109,6 +109,38 @@ never-early (contract) + p50 < 4 ms (quality; >2× margin both ways). Red
 control against `06b7c24e`: 4/4 quality legs FAIL (p50u 8035–8043 µs),
 contract legs green. Flake gate: 3/3 stable under ×10 load.
 
+## Counter pass (gate red on test_sleep_clamp, 2026-08-15)
+
+The first diff gate came back red on `tests/host/test_sleep_clamp.js` (0361):
+its recorder returned 'timed-out' *instantly*, and against the deadline loop
+that records parks until `JSON.stringify` overflows. Two separable findings:
+
+1. The test pinned the single-park MECHANISM ("requests exactly, once"), and
+   #492 deliberately changed the mechanism. Reworked (not weakened): the
+   recorder now advances a virtual `performance.now` by the requested
+   duration — the primitive's own contract for a timeout return — keeping
+   the test clock-free while making the invariants exact: sum(requests) ==
+   asked, first ≤ asked, strictly decreasing, sub-ms asks un-floored and
+   single, zero asks never park, and park count ≤ 12 (the first executable
+   pin of the log-bounded-wakes claim). All 0361/#146 properties survive.
+
+2. **Why early wakes cannot degenerate the loops into spins**, per path:
+   - `blockingSleepMs`: the cell is private, always 0, and never notified —
+     `Atomics.wait` can only return 'timed-out', which by contract consumes
+     the requested real time. The mock was unfaithful; the product cannot
+     spin. (Not-equal is impossible: nothing ever stores to the cell.)
+   - `KernelClient.park`: the doorbell IS notified and a stale `seq` returns
+     'not-equal' immediately — but that exposure is UNCHANGED from the
+     pre-#492 code, which also looped on every non-timeout wake (its
+     `'timed-out'` early-return was the only exit my restructure moved, and
+     it moved onto the monotonic deadline check). Each notify wake re-checks
+     `pending()`; wake frequency is bounded by real doorbell activity, and
+     timeout wakes still consume ≥2/3 of the remainder each.
+   - `sdlDelay`/`pumpWait`: `pumpWait` returns 1 without parking when its
+     entry drain produced events — also pre-existing (0224's deadline loop
+     had the identical re-loop); iteration frequency is bounded by real
+     input-ring arrivals, and #492 only shortens the requested timeout.
+
 ## Residuals (NOT fixed here, reported to @master, no tickets filed by lane)
 
 - `SDL_WaitEventTimeout`/`GetMessage` timeout legs (pumpWait/waitMulti callers)
