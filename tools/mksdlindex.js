@@ -126,6 +126,8 @@ const CLUSTERS = [
   { title: 'Pixel formats & helpers', prefixes: ['SDL_PIXELFORMAT_', 'SDL_PIXEL', 'SDL_PACKEDORDER_', 'SDL_ISPIXELFORMAT_'],
     note: 'Every texture/surface is RGBA bytes in memory; use SDL_PIXELFORMAT_RGBA32.' },
   { title: 'Hint names', prefixes: ['SDL_HINT_'] },
+  { title: 'SDL_RENDERER_VSYNC_* — SDL_SetRenderVSync modes', prefixes: ['SDL_RENDERER_VSYNC_'],
+    note: 'vsync = N paces SDL_RenderPresent to every Nth compositor tick (#500); DISABLED (0) is the fresh-renderer default. ADAPTIVE (-1) is declared for source compatibility but always unsupported: SDL_SetRenderVSync returns false, sets SDL_GetError and leaves the mode unchanged. vsync >= 1 needs a display clock — the browser OS compositor, or boot.js --vsync[=hz]; a plain headless boot or a standalone page refuses (false + error, mode unchanged).' },
   { title: 'Debug text', prefixes: ['SDL_DEBUG_TEXT_'],
     note: 'SDL_RenderDebugText glyphs are 8x8 window pixels (no SDL_SetRenderScale in this runtime).' },
   { title: 'Error helper', prefixes: ['SDL_InvalidParamError'] },

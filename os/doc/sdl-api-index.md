@@ -126,6 +126,8 @@ bool SDL_RenderGeometry(SDL_Renderer *renderer, SDL_Texture *texture, const SDL_
 bool SDL_RenderPresent(SDL_Renderer *renderer);
 bool SDL_SetRenderTarget(SDL_Renderer *renderer, SDL_Texture *texture);
 SDL_Texture *SDL_GetRenderTarget(SDL_Renderer *renderer);
+bool SDL_SetRenderVSync(SDL_Renderer *renderer, int vsync);
+bool SDL_GetRenderVSync(SDL_Renderer *renderer, int *vsync);
 bool SDL_RenderDebugText(SDL_Renderer *renderer, float x, float y, const char *str);
 bool SDL_RenderDebugTextFormat(SDL_Renderer *renderer, float x, float y, const char *fmt, ...);
 ```
@@ -549,6 +551,14 @@ Every texture/surface is RGBA bytes in memory; use SDL_PIXELFORMAT_RGBA32.
 ```
 SDL_HINT_RENDER_DRIVER="SDL_RENDER_DRIVER"
 ```
+
+### SDL_RENDERER_VSYNC_* — SDL_SetRenderVSync modes
+
+```
+SDL_RENDERER_VSYNC_DISABLED=0  SDL_RENDERER_VSYNC_ADAPTIVE=(-1)
+```
+
+vsync = N paces SDL_RenderPresent to every Nth compositor tick (#500); DISABLED (0) is the fresh-renderer default. ADAPTIVE (-1) is declared for source compatibility but always unsupported: SDL_SetRenderVSync returns false, sets SDL_GetError and leaves the mode unchanged. vsync >= 1 needs a display clock — the browser OS compositor, or boot.js --vsync[=hz]; a plain headless boot or a standalone page refuses (false + error, mode unchanged).
 
 ### Debug text
 

@@ -71,6 +71,34 @@ The software renderer is NEVER auto-selected: `SDL_CreateRenderer(win,
 NULL)` always means the GPU tier. Asking for any other driver name
 ("opengl", "metal", …) fails with "Couldn't find matching render driver".
 
+## Frame pacing — SDL_SetRenderVSync (#500)
+
+`SDL_SetRenderVSync(r, 1)` is the standard SDL3 way to pace a game to the
+display, and it is real here: the display clock is the OS compositor's own
+per-frame tick (the one clock that drives every composited frame), never a
+timer.
+
+- **Software renderer, blocking loop** (Option 2 — the common game shape):
+  a paced `SDL_RenderPresent` publishes the frame, then blocks until the
+  next Nth compositor tick. One frame per N ticks, freshest frame always on
+  screen. A hidden tab stops the ticks, so the game pauses honestly and
+  resumes without a burst of stale frames.
+- **GPU tier, callback loop** (Option 1): `SDL_AppIterate` already runs
+  once per compositor tick — the platform cadence — so `vsync = 1` matches
+  what you get by default. `vsync = N` runs the iterate every Nth tick
+  (half rate at 2, and so on). `SDL_GetRenderVSync` reports what you SET
+  (0 on a fresh renderer, per SDL3) — it does not report the platform's
+  own cadence.
+- **Defaults and refusals**: vsync starts DISABLED (0). Adaptive (`-1`) is
+  unsupported: `SDL_SetRenderVSync` returns false, sets `SDL_GetError()`,
+  and leaves the mode unchanged. The same refusal applies anywhere there is
+  no display clock — a plain headless `boot.js` (use `--vsync[=hz]` to give
+  the headless host a tick clock) or a standalone page.
+- An UNPACED loop stays legal (SDL's contract): it simply burns CPU
+  producing frames the display cannot show. Prefer `vsync = 1` over
+  `SDL_Delay(16)` — a delay loop free-runs against the compositor and
+  beats (dropped/duplicated frames); vsync is aligned by construction.
+
 ## What is unaffected
 
 - Programs that draw with `SDL_GetWindowSurface` + `SDL_UpdateWindowSurface`
