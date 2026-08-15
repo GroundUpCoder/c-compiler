@@ -117,6 +117,11 @@ const scriptA = [
   'SID=$(wmctl list | grep "rttest$" | sed "s/[^0-9].*//")',
   'wmctl wait seq $SID 1 8000',
   'wmctl shot $SID /root/rt.png && echo shot-ok',
+  // The app calls SDL_RenderPresent exactly ONCE (the bound-target present was
+  // refused, and target binds/draws must not flip the window) — so the kernel
+  // frame counter must read exactly 1. An implementation that ships per draw
+  // or per target switch reads higher here.
+  'echo SEQ-N=$(wmctl seq $SID)',
   '',
 ].join('\n');
 
@@ -135,6 +140,9 @@ check('GetRenderTarget returns NULL after unbind', a.stdout.includes('GRT0-OK'))
 check('app composed + presented (RT-UP)', a.stdout.includes('RT-UP'),
   (a.stdout.match(/(INIT|WIN|RDR|BIND|UNBIND)-FAIL[^\n]*/g) || []).join('; '));
 check('shot written', a.stdout.includes('shot-ok'));
+check('exactly ONE frame reached the kernel for one present (no per-draw/per-switch ships)',
+  /SEQ-N=1\b/.test(a.stdout),
+  (a.stdout.match(/SEQ-N=\d+/) || ['SEQ-N missing'])[0]);
 
 /* ---- session B: extract the PNG shot and probe the composition ---- */
 if (failures === 0) {

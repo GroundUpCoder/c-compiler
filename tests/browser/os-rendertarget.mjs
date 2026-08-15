@@ -20,6 +20,13 @@
 // A target that silently draws to the screen fails twice: the window clear
 // erases the strays AND the composited squares never appear.
 //
+// The HALF-FRAME discriminator (the #484/#551 budget hazard): every
+// AppIterate paints the window magenta, binds a target (flushing that
+// magenta segment onto the canvas mid-frame), re-renders t3 cyan, then draws
+// the real blue frame and presents. Only the present flush may fire the
+// ship tail — 30 screen samples during continuous frames must never read
+// magenta, and t3's cyan proves the per-frame segment machinery composes.
+//
 // Usage: node os-rendertarget.mjs
 import { openOsSession } from './lib/os-harness.mjs';
 
@@ -28,7 +35,7 @@ const PORT = 3452;   // unique per member (#546)
 const RT_C = `#define SDL_MAIN_USE_CALLBACKS
 #include <SDL.h>
 static SDL_Window *w; static SDL_Renderer *r;
-static SDL_Texture *t1, *t2;
+static SDL_Texture *t1, *t2, *t3;
 SDL_AppResult SDL_AppInit(void **as, int argc, char **argv){
 (void)as;(void)argc;(void)argv;
 SDL_Init(SDL_INIT_VIDEO);
@@ -58,21 +65,34 @@ SDL_FRect top={0,0,16,8};
 SDL_SetRenderDrawColor(r,255,255,255,128);SDL_RenderFillRect(r,&top);
 SDL_SetRenderTarget(r,NULL);
 /* t2 keeps its default BLEND (RGBA32 alpha default) */
+t3=SDL_CreateTexture(r,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,16,16);
+if(!t3)return SDL_APP_FAILURE;
 return SDL_APP_CONTINUE;}
 SDL_AppResult SDL_AppEvent(void *as, SDL_Event *e){(void)as;
 return e->type==SDL_EVENT_QUIT?SDL_APP_SUCCESS:SDL_APP_CONTINUE;}
 SDL_AppResult SDL_AppIterate(void *as){(void)as;
 SDL_SetRenderDrawBlendMode(r,SDL_BLENDMODE_NONE);
+/* half-frame discriminator: paint the window MAGENTA, then bind a target —
+   the bind flushes that magenta segment onto the canvas mid-frame. Only the
+   PRESENT may ship a frame, so the screen must never show magenta; an
+   implementation whose segment flush fires the present tail ships it. */
+SDL_SetRenderDrawColor(r,255,0,255,255);SDL_RenderClear(r);
+SDL_FRect full={0,0,256,128};SDL_RenderFillRect(r,&full);
+SDL_SetRenderTarget(r,t3);
+SDL_SetRenderDrawColor(r,0,255,255,255);SDL_RenderClear(r); /* cyan, re-rendered every frame */
+SDL_SetRenderTarget(r,NULL);
+/* the real frame */
 SDL_SetRenderDrawColor(r,0,0,255,255);SDL_RenderClear(r);
 SDL_FRect d1={32,32,64,64};SDL_RenderTexture(r,t1,NULL,&d1);
 SDL_FRect d2={160,32,32,32};SDL_RenderTexture(r,t2,NULL,&d2);
+SDL_FRect d3={208,32,32,32};SDL_RenderTexture(r,t3,NULL,&d3);
 SDL_RenderPresent(r);
 return SDL_APP_CONTINUE;}
 void SDL_AppQuit(void *as, SDL_AppResult res){(void)as;(void)res;}
 `;
 
 const s = await openOsSession({ port: PORT, readyLabel: 'boots to ready' });
-const { page, check, setVt, waitPixel, waitScreen, waitOut } = s;
+const { page, check, setVt, sample, near, waitPixel, waitScreen, waitOut } = s;
 
 try {
   await setVt(2);
@@ -115,6 +135,24 @@ try {
   check('semi-white target region BLENDs over blue', true);
   await waitPixel(WX + 176, WY + 56, [0, 0, 255], 15000, 'transparent target region');
   check('transparent target region paints nothing', true);
+  await waitPixel(WX + 216, WY + 40, [0, 255, 255], 15000, 't3 cyan (re-rendered into a target every frame)');
+  check('per-frame target re-render composites (segment machinery under continuous use)', true);
+
+  // ---- the half-frame discriminator ----
+  // Every AppIterate paints the window MAGENTA, binds a target (flushing that
+  // magenta segment onto the canvas mid-frame), then draws the real blue
+  // frame and presents. Only the PRESENT may ship a bitmap; an
+  // implementation whose mid-frame segment flush fires the present tail
+  // ships the magenta canvas onto the screen on open ticks. 30 samples over
+  // ~2s of continuous frames: the clear-blue probe must never read magenta.
+  let magentaHits = 0, last = null;
+  for (let i = 0; i < 30; i++) {
+    last = await sample(WX + 16, WY + 16);
+    if (near(last, [255, 0, 255])) magentaHits++;
+    await new Promise((r) => setTimeout(r, 70));
+  }
+  check('mid-frame segment state never ships (screen never magenta)',
+    magentaHits === 0, { magentaHits, lastSample: last });
 
   // Shut down cleanly; the shell must still answer.
   await setVt(1);
