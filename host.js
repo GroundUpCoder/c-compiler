@@ -8849,11 +8849,16 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
          * row padding) -> back buffer -> mailbox flip, mirroring shmPresent —
          * including the renegotiation gate: a Dawn app that reconfigured its
          * surface to the pending size acks through here (todos/0019). */
+        /* #712: the main-live guard for this transport does NOT live here —
+         * this function runs inside shmPresentTail's mapAsync continuation,
+         * i.e. only after the wasm stack unwound, so mainLive is false by
+         * construction and a guard here can never fire (the counter-pass
+         * finding on the first landing). The honest choke is the synchronous
+         * wgpuSurfacePresent import: guardMainLivePresent below, called by
+         * __wgpu_surface_present's shm branch — the same position the
+         * browser flavor counts the CALL (presentTo), not the delivery. */
+        guardMainLivePresent: function () { guardPresent('webgpu.h surface'); },
         present: function (win, src, srcPitch, sw, sh) {
-          // #712: Dawn presents are the headless twin of the browser's
-          // gpu-transport ship — same refusal, same via (throws, never
-          // returns, when a blocking main() presents a second frame).
-          guardPresent('webgpu.h surface');
           const cfg = win.pendingCfg;
           const fb = (cfg && sw === cfg.w && sh === cfg.h) ? cfg.fb : win.fb;
           const cw = Math.min(sw, fb.w), ch = Math.min(sh, fb.h);
@@ -10325,7 +10330,17 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow, resolveGpu, shmSurface
 
       __wgpu_surface_present: function (surface) {
         const s = get(surface);
-        if (s && s.shm) { shmPresentTail(s); return; }
+        if (s && s.shm) {
+          /* #712: count the main-live present CALL synchronously — the
+           * browser twin (presentTo) guards before its own early-returns,
+           * and the async readback tail below runs only after the wasm
+           * unwinds, where mainLive is false by construction. */
+          if (shmSurface && typeof shmSurface.guardMainLivePresent === 'function') {
+            shmSurface.guardMainLivePresent();
+          }
+          shmPresentTail(s);
+          return;
+        }
         /* Canvas: presentation is implicit (the browser presents the configured
          * context after the frame). Under the OS the gpu transport hands the
          * finished frame to the kernel here (ImageBitmap handoff) — a

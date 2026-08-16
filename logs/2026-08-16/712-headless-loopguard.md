@@ -82,3 +82,34 @@ call itself — that belongs to #689.
   results recorded in the lane thread, not assumed here.
 - image.json 270 → 271: host.js/compiler.js are bake inputs, sdl-gucos.md
   is baked content.
+
+## Counter-pass (Codex review findings — both real, both fixed)
+
+**The first landing's webgpu-tail guard was INERT.** `shmSurface.present`
+runs inside `shmPresentTail`'s `mapAsync` continuation — after the wasm
+stack unwinds — so `mainLive` is false there by construction and the guard
+could never fire. The review asked for acceptance coverage of the webgpu
+transport; writing it exposed the placement defect. The guard moved to the
+synchronous `__wgpu_surface_present` import's shm branch (exposed as
+`shmSurface.guardMainLivePresent`), which is the same position the browser
+flavor counts the CALL (`presentTo` guards before its own early-returns).
+
+Two measured facts shaped the test:
+
+- a blocking `main()` headless can never acquire a Dawn device — the
+  adapter/device callbacks ride the event loop a blocking loop never
+  yields (probe: NO-DEVICE-IN-MAIN). So the only raw-webgpu present a
+  main-live program can issue is a deviceless `wgpuSurfacePresent()`, and
+  counting the CALL (as the browser does) is what makes the guard
+  reachable at all;
+- the deviceless path needs no Dawn package — `SDL_GetWGPUSurface`'s
+  shm-surface record is created deviceless — so
+  `test_wgpu_loopguard_headless_e2e.js` never skips. It ran RED (6 FAILs,
+  `WNAIVE-EXIT=0`) against BOTH the no-guard base `8fd47e71` and the
+  inert-placement first landing `014a4c12`, and green after the move —
+  the second red is the review finding demonstrated executable.
+
+**Doc honesty fix (finding 2):** `sdl-gucos.md` claimed both hosts use
+"the same message"; the message deliberately varies its host-facts lines.
+Now says: same exit status, equivalent diagnostic — same detection line
+and fixes, rationale worded per host.
