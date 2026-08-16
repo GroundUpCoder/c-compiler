@@ -10,8 +10,8 @@ WebAssembly module built by the in-OS C compiler. Facts you cannot guess:
   their own sources automatically via the compiler's `__require_source`
   mechanism when you include their headers.
 - `cc` understands only `-o OUT`, `-IDIR`, `-DNAME[=VAL]` and `-g`. Every
-  other flag (`-Wall`, `-O2`, `-c`, `-std=…`, `-l…`) is silently IGNORED —
-  no error, no effect. There is no separate compile/link step: one `cc`
+  other flag (`-Wall`, `-O2`, `-c`, `-std=…`, `-l…`) is REFUSED by name
+  (exit 1) — do not pass them. There is no separate compile/link step: one `cc`
   command takes all the .c files and writes the runnable output (default
   `./a.out`, so `cc hello.c && ./a.out` works). Headers live under
   `/usr/include` (and `/usr/local/include`).

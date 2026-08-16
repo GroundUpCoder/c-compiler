@@ -79,9 +79,11 @@ function writeFile(kfs, path, data, mode) {
  *
  * Returns compile(argv, cwd) -> {exitCode, stdout, stderr} — exactly the
  * kernel's opts.compile contract (the __compile RPC behind /bin/cc). Flag
- * surface is the useful subset of the CLI: -o, -I, -D, -g; unknown dash
- * options are ignored (CLI parity). Default output is ./a.out — spawnable
- * directly, since every binary here is a wasm module.
+ * surface is the useful subset of the CLI: -o, -I, -D, -g; an unrecognised
+ * dash option is refused by name (#710 — the silent discard sent developers
+ * to measure their own code after `cc -O2` delivered nothing). Default
+ * output is ./a.out — spawnable directly, since every binary here is a wasm
+ * module.
  */
 function createCcDriver(CompilerJS, kfs) {
   return function compile(argv, cwd) {
@@ -135,11 +137,22 @@ function createCcDriver(CompilerJS, kfs) {
         else pp.defines.set(def, '1');
       }
       else if (a === '-g' || a === '-g1') { compilerOptions.emitNames = true; }
-      else if (a.charCodeAt(0) === 45) { /* ignore unknown options, like the CLI */ }
+      else if (a.charCodeAt(0) === 45) {
+        // #710: an unrecognised option is refused BY NAME, never silently
+        // dropped — `cc -O2` reporting success while delivering nothing sent
+        // the developer to profile their own code, and a working `cc -lm`
+        // (math is builtin) taught a -l linking model that does not exist.
+        var msg = 'cc: error: unrecognized option \'' + a + '\'\n';
+        if (a.lastIndexOf('-l', 0) === 0) {
+          msg += 'cc: there is no -l linking: libraries link through headers' +
+                 ' (__require_source) — see /usr/doc/toolchain.md\n';
+        }
+        return { exitCode: 1, stdout: '', stderr: msg };
+      }
       else sources.push(abs(a));
     }
     if (!sources.length) {
-      return { exitCode: 1, stdout: '', stderr: 'usage: cc [-o out] [-Ipath] [-Dname[=val]] file.c...\n' };
+      return { exitCode: 1, stdout: '', stderr: 'usage: cc [-o out] [-Ipath] [-Dname[=val]] [-g] file.c...\n' };
     }
 
     // parseAllUnits reads the top-level sources through its `fs` parameter

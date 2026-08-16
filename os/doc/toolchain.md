@@ -17,11 +17,11 @@ cc [-o OUT] [-IPATH] [-DNAME[=VAL]] [-g] FILE.c ...
 | `-DNAME[=VAL]` | Define a preprocessor macro. |
 | `-g` | Emit a name section for readable stack traces. |
 
-Warning: `cc` ignores every other dash option silently. `-c`, `-O2`,
-`-Wall`, `-std=…`, and `-l…` have no effect and give no error. Never pass
-`-l` and expect a library to link — libraries link through headers (see
-below). A `cc` command with no source file prints the usage line and
-exits 1.
+Every other dash option is refused by name: `cc -O2 game.c` exits 1 with
+`cc: error: unrecognized option '-O2'`. `-c`, `-Wall`, `-std=…` and
+`-fanything` do not exist here. `-l…` is refused with an extra hint —
+libraries link through headers (see below), never through `-l`. A `cc`
+command with no source file prints the usage line and exits 1.
 
 Name every project source file on the command line:
 

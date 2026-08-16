@@ -11,7 +11,7 @@
 //     nothing) — with a RED control on the extractor;
 //   - the cc flag surface is checked BEHAVIORALLY against the real driver
 //     (createCcDriver over an in-memory BlockFS): -o/-I/-D/-g work, unknown
-//     flags are silently ignored (exit 0, output produced), and the
+//     flags are refused by name at exit 1 (#710), and the
 //     driver's own usage line names the same flags the doc documents;
 //   - every wmctl verb the doc names appears in os/wmctl.c's usage table,
 //     the doc carries the REAL `shot SID` shape, and the exact wrong claim
@@ -77,12 +77,14 @@ check('RED control: a dangling doc path fails the path check', () => {
 });
 
 // ---- 3. the cc flag surface, behaviorally -----------------------------
-// The doc's claim: only -o/-I/-D/-g do anything; every other dash flag is
-// silently ignored (no error). Run the REAL driver over an in-memory
-// BlockFS with the exact flags the doc lists as ignored, plus -g and -o.
-// Exit 0 with a wasm output pins both halves at once: the known flags
-// worked and the unknown ones neither worked nor errored.
-check('cc accepts -o/-g, silently ignores -Wall/-O2/-c/-std/-l, emits wasm', function () {
+// The doc's claim (#710 inverted the old silent-ignore pin): only
+// -o/-I/-D/-g do anything, and every other dash flag is REFUSED by name at
+// exit 1 — `cc -O2` reporting success while delivering nothing sent the
+// #502 dogfood developer to profile their own code. Run the REAL driver
+// over an in-memory BlockFS both ways: the known flags compile to wasm,
+// each doc-listed unknown flag refuses naming itself, and -l carries the
+// libraries-link-through-headers hint.
+check('cc accepts -o/-g, refuses -Wall/-O2/-c/-std/-l by name (#710), emits wasm', function () {
   const CompilerJS = require(path.join(ROOT, 'compiler.js'));
   const store = new BLOCK_FS.MemoryByteStore(64 * 1024 * 1024);
   const kfs = BLOCK_FS.create(store);
@@ -94,8 +96,8 @@ check('cc accepts -o/-g, silently ignores -Wall/-O2/-c/-std/-l, emits wasm', fun
     kfs.close(fd);
   }
   const compile = COMMON.createCcDriver(CompilerJS, kfs);
-  const r = compile(['cc', '-O2', '-Wall', '-c', '-std=c11', '-lSDL', '-g', 'hello.c', '-o', 'prog'], '/');
-  assert(r.exitCode === 0, 'cc exited ' + r.exitCode + ' — an "ignored" flag was not ignored: ' + r.stderr);
+  const r = compile(['cc', '-g', 'hello.c', '-o', 'prog'], '/');
+  assert(r.exitCode === 0, 'cc -g exited ' + r.exitCode + ': ' + r.stderr);
   const fd = kfs.open('/prog', 0, 0);
   assert(fd !== null, '-o prog produced no output file');
   const head = new Uint8Array(4);
@@ -104,13 +106,29 @@ check('cc accepts -o/-g, silently ignores -Wall/-O2/-c/-std/-l, emits wasm', fun
   assert(head[0] === 0 && head[1] === 0x61 && head[2] === 0x73 && head[3] === 0x6d,
     'output is not a wasm module');
 
+  // Every flag the doc lists as refused really refuses, naming the flag.
+  for (const flag of ['-O2', '-Wall', '-c', '-std=c11', '-lSDL', '-fsanitize=address']) {
+    const rf = compile(['cc', flag, 'hello.c', '-o', 'prog2'], '/');
+    assert(rf.exitCode === 1, 'cc ' + flag + ' exited ' + rf.exitCode + ' — an unknown flag was not refused');
+    assert((rf.stderr || '').includes("unrecognized option '" + flag + "'"),
+      'the refusal does not name ' + flag + ': ' + rf.stderr);
+    assert(kfs.open('/prog2', 0, 0) === null, 'cc ' + flag + ' refused but still wrote output');
+  }
+  // -l gets the honest-path hint: there is no -l linking here.
+  const rl = compile(['cc', '-lm', 'hello.c'], '/');
+  assert(rl.exitCode === 1 && (rl.stderr || '').includes('__require_source'),
+    '-lm refusal lost the libraries-link-through-headers hint: ' + rl.stderr);
+
   // The driver's own usage line is the flag-surface seam; it and the doc
-  // must name the same flags.
+  // must name the same flags — INCLUDING -g, which /usr/doc/debugging.md
+  // instructs and the usage line omitted until #710.
   const usage = compile(['cc'], '/').stderr;
-  for (const flag of ['-o', '-I', '-D'])
+  for (const flag of ['-o', '-I', '-D', '-g'])
     assert(usage.includes(flag), 'driver usage lost ' + flag + ': ' + usage);
   for (const claim of ['-o OUT', '-IDIR', '-DNAME', '`-g`'])
     assert(doc.includes(claim), 'GCODE.md no longer documents ' + claim + ' — resync with createCcDriver');
+  assert(!doc.includes('silently IGNORED'),
+    'GCODE.md still claims silent-ignore — #710 made unknown flags refuse');
 });
 
 // ---- 4. the wmctl claims match os/wmctl.c's usage table ---------------
