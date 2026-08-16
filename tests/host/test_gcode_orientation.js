@@ -123,9 +123,9 @@ check('cc accepts -o/-g, refuses -Wall/-O2/-c/-std/-l by name (#710), emits wasm
   // must name the same flags — INCLUDING -g, which /usr/doc/debugging.md
   // instructs and the usage line omitted until #710.
   const usage = compile(['cc'], '/').stderr;
-  for (const flag of ['-o', '-I', '-D', '-g'])
+  for (const flag of ['-o', '-I', '-D', '-g', '--trap-null-dereference'])
     assert(usage.includes(flag), 'driver usage lost ' + flag + ': ' + usage);
-  for (const claim of ['-o OUT', '-IDIR', '-DNAME', '`-g`'])
+  for (const claim of ['-o OUT', '-IDIR', '-DNAME', '`-g`', '`--trap-null-dereference`'])
     assert(doc.includes(claim), 'GCODE.md no longer documents ' + claim + ' — resync with createCcDriver');
   assert(!doc.includes('silently IGNORED'),
     'GCODE.md still claims silent-ignore — #710 made unknown flags refuse');

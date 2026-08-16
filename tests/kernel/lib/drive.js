@@ -78,7 +78,7 @@ function driveBoot(script, opts = {}) {
   // deterministic-OOM knob for the comdlg-diag test; worker_threads
   // inherit the process's V8 flags).
   const args = [...(opts.nodeArgs || []), BOOT, '--image=' + image,
-                '--quiet', ...(opts.args || [])];
+                ...(opts.quiet === false ? [] : ['--quiet']), ...(opts.args || [])];
   const r = cp.spawnSync('node', args, spawnOpts);
   if (r.error) throw r.error;
   r.image = image;   // let a follow-up session reuse the same image
