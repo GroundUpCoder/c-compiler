@@ -16751,20 +16751,28 @@ class WasmModule {
     // passes may add locals or types, and sections 1/3 precede the code
     // section that serializes the trees.
     WAST.runPasses(this);
-    // Read-only post-pass inspection seam, parallel to lastPassStats. Tests
-    // use this exact module object to tie serialized names/sections back to
-    // remapped WCall targets after tree shaking.
-    WAST.lastModule = this;
-    WAST.lastPostPass = {
-      funcImports: this.funcImports.slice(),
-      funcDefs: this.funcDefs.map((d) => ({
-        typeId: d.typeId, locals: d.locals.slice(),
-        wast: d.wast ? d.wast.slice() : null, fnMeta: d.fnMeta,
-      })),
-      funcNames: this.funcNames.map((n) => ({ idx: n.idx, name: n.name })),
-      tableLayout: this.tableLayout,
-      passStats: this.passStats,
-    };
+    // Narrow test-only observation seam. Ordinary compilation never installs
+    // this callback and retains no module/WAST reference. Even when present,
+    // expose only frozen scalar metadata, clear the callback before invoking
+    // it, and retain nothing after it returns; final binary structure is
+    // tested by decoding the emitted bytes.
+    const postPassObserver = this._postPassObserver;
+    this._postPassObserver = null;
+    if (typeof postPassObserver === "function") {
+      const traps = [];
+      for (let i = 0; i < this.funcDefs.length; i++) {
+        const m = this.funcDefs[i].fnMeta;
+        if (m && m.generatedNullTrap) traps.push(Object.freeze({
+          funcIdx: this.funcImports.length + i,
+          generatedNullTrap: true,
+          noinline: !!m.noinline,
+        }));
+      }
+      postPassObserver(Object.freeze({
+        noinlineRefused: this.passStats.inline.refused.noinline,
+        traps: Object.freeze(traps),
+      }));
+    }
 
     const out = [];
     // WASM magic + version
@@ -21748,6 +21756,12 @@ function generateCode(units, outputFile, options) {
     wmod.embeddedSources = sources;
   }
 
+  // Tests may observe only the small frozen pass summary above. Keep this
+  // outside compilerOptions (the user-visible semantic option surface), and
+  // never retain the callback after emit begins.
+  if (options && typeof options.postPassObserver === 'function') {
+    wmod._postPassObserver = options.postPassObserver;
+  }
   const bytes = wmod.emit();
 
   // Backstop: ask the WASM engine whether we produced legal bytecode.
