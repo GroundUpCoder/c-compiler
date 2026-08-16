@@ -21738,8 +21738,10 @@ typedef unsigned long long Uint64;
 typedef unsigned int Uint32;
 typedef unsigned short Uint16;
 typedef unsigned char Uint8;
+typedef long long Sint64;
 typedef int Sint32;
-typedef short Sint16;   /* gamepad axis values (#607) */
+typedef short Sint16;   /* SDL_AUDIO_S16 samples, gamepad axis values (#607) */
+typedef signed char Sint8;   /* SDL_AUDIO_S8 samples (#707) */
 
 typedef Uint32 SDL_WindowID;
 typedef Uint32 SDL_KeyboardID;

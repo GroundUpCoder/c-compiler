@@ -151,5 +151,19 @@ check('the documented alternatives compile (incl. #672’s SDL_RenderTextureRota
   assert(r4.exitCode === 0, 'SDL_RenderDebugText/SDL_RenderDebugTextFormat no longer compile — #494 regressed: ' + r4.stderr);
 });
 
+check('the signed int family is complete (#707: Sint8/Sint16/Sint32/Sint64)', () => {
+  // #707 filled the Sint8/Sint64 gap (Sint16 arrived with #607). The sizes are
+  // pinned at compile time: an SDL_AUDIO_S16 buffer is an array of Sint16 and
+  // a wrong width would corrupt PCM silently, far from the typedef.
+  const r = ccHarness('#include <SDL.h>\n'
+    + '_Static_assert(sizeof(Sint8) == 1, "Sint8");\n'
+    + '_Static_assert(sizeof(Sint16) == 2, "Sint16");\n'
+    + '_Static_assert(sizeof(Sint32) == 4, "Sint32");\n'
+    + '_Static_assert(sizeof(Sint64) == 8, "Sint64");\n'
+    + '_Static_assert((Sint8)-1 < 0 && (Sint64)-1 < 0, "signed");\n'
+    + 'int main(void){ Sint8 a = -1; Sint16 b = -2; Sint64 c = -3; return (int)(a + b + c + 6); }\n');
+  assert(r.exitCode === 0, 'the Sint family no longer compiles: ' + r.stderr);
+});
+
 console.log(failures ? '\n' + failures + ' sdl-api-index check(s) FAILED' : '\nAll sdl-api-index checks passed');
 process.exit(failures ? 1 : 0);
