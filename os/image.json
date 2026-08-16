@@ -1,5 +1,5 @@
 {
-  "version": 268,
+  "version": 269,
   "defaultPackages": ["doom", "gcode", "calc", "paint"],
   "overlays": [
     {
@@ -84,6 +84,9 @@
       },
       "/usr/bin/strace": {
         "c": "strace.c"
+      },
+      "/usr/bin/padbox": {
+        "c": "padbox.c"
       },
       "/usr/bin/clip": {
         "c": "clip.c",

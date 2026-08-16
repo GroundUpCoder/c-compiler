@@ -626,6 +626,23 @@ lost-wakeup era are retired) gets exactly one wake per event.
 autostart): parentless (ppid 0), own session, auto-reaped on exit —
 `_exitProcess` reaps ppid-0 zombies since no one will ever wait on them.
 
+The kernel is also the gamepad registry (#607): `padConnect`/`padDisconnect`/
+`padButton`/`padAxis` are the ONE entry set for both producers — the os.html
+Gamepad API poller (rAF, page-side diff, `{user:true}` stamps the idle clock)
+and the WMP `PAD_*` injection ops 0x24–0x27 behind `wmctl pad` (no stamp, the
+INJECT_KEY agent rule). Pad state routes to the FOCUSED surface's process as
+input-ring records carrying the SDL3 gamepad event numbers verbatim
+(0x650–0x654; layout in kernel.js's ring comment, cross-checked by the
+WM_SAB_LAYOUT tripwire); an unfocused process's view FREEZES, and
+`_wmSetFocus` reconciles the new owner via `_padSyncTo` (per-pcb `padView`
+diff → synthetic added/removed/button/axis deltas — the Chrome per-page
+model). Instance ids are monotonic and never reused; names travel over the
+`PAD_NAME` RPC (0x2101) because an 8-word ring record cannot carry a string,
+and outlive disconnect in a bounded cache so an open SDL handle can still
+answer `SDL_GetGamepadName` after REMOVED. Pushes ride `_wmPushEvent`, so
+ring-futex, doorbell and unified-WAIT wakes come for free. Tests:
+`tests/kernel/test_gamepad_e2e.js`.
+
 ### What may leave the kernel — the single-writer rule (2026-07-14)
 
 The expensive part of a syscall in this system is the cross-WORKER hop

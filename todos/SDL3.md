@@ -360,7 +360,7 @@ block over the OS input ring (see "SDL_WaitEvent … are a REAL block" above —
 processes are workers, so no JSPI needed). Missing: `SDL_PushEvent`,
 `SDL_PeepEvents`, event filters/watchers
 (`SetEventFilter`), `SDL_FlushEvents`, and event *types*: window events, text
-input/editing (IME), gamepad/joystick, touch, pen, drop (file drag-drop),
+input/editing (IME), joystick (gamepad landed at #607), touch, pen, drop (file drag-drop),
 clipboard-update, render-targets-reset. Web: DOM event listeners already feed the
 queue; extend the producers.
 
@@ -389,10 +389,24 @@ X Y`). Missing: `SDL_GetMouseState` / `GetRelativeMouseState`,
 `SDL_CreateCursor` (custom pixel cursors — out of scope, system shapes only),
 `SDL_WarpMouseInWindow`, mouse capture. Web: CSS cursors.
 
-### Gamepad / Joystick (SDL_gamepad, SDL_joystick) — ✗ missing — P1
-Entire subsystem absent. `SDL_GetGamepads`, open, button/axis state + events,
-mappings, rumble. Web: **Gamepad API** (poll-based — fits the frame callback),
-`GamepadHapticActuator` for rumble.
+### Gamepad (SDL_gamepad) — ✓ have (#607) / Joystick (SDL_joystick) — ✗ absent by design
+Have (#607): the full gamepad object model — `SDL_GetGamepads`/`Has`/`Is`/
+`Open`/`Close`/`FromID`/`ID`/`Name`/`NameForID`/`Connected`/`Type`/
+`GetGamepadButton`/`GetGamepadAxis`/`HasButton`/`HasAxis`/`UpdateGamepads`/
+string↔enum tables/`SetGamepadEventsEnabled`, events 0x650–0x654, SDL3-verbatim
+enums. Backend: os.html polls the Web Gamepad API per rAF (Window-only, so the
+page — not the frame callback — hosts the poll), diffs, and feeds the kernel
+pad registry; input follows the FOCUSED window's process (freeze-on-unfocus +
+reconcile-on-focus-gain, the Chrome per-page model); headless injection =
+`wmctl pad connect|disconnect|button|press|axis` over WMP `PAD_*` 0x24–0x27.
+Standard-mapping pads only (the browser owns mapping — no mapping-DB API).
+Missing, tracked: rumble via `GamepadHapticActuator` (**#714**), pads on the
+standalone non-OS page path (**#715**). Missing, documented absences (no
+scheduled work): the joystick-level API — this runtime has no unmapped-device
+view, so `SDL_INIT_JOYSTICK` still fails loud and, **unlike upstream, is NOT
+implied by `SDL_INIT_GAMEPAD`** (declared divergence: SDL.h gamepad section,
+sdl-api-index, dev log 2026-08-16) — plus touchpad/sensor/LED/battery and
+`SDL_GetGamepadPlayerIndex`.
 
 ### Touch / Pen (SDL_touch, SDL_pen) — ✗ missing — P2
 `SDL_GetTouchDevices`, finger events, pressure. Web: Pointer/Touch events.
@@ -460,7 +474,7 @@ global string). `SDL_GetVersion`, `SDL_GetPlatform` ("Emscripten"-like).
 
 ### Power / Sensors / Haptics / Locale / Misc — ✗ missing — P3
 `SDL_GetPowerInfo` (navigator.getBattery), sensors (DeviceOrientation),
-haptics (gamepad rumble — see Gamepad), `SDL_GetPreferredLocales`,
+haptics (gamepad rumble — #714), `SDL_GetPreferredLocales`,
 `SDL_OpenURL` (window.open), message boxes / `SDL_ShowMessageBox` /
 `SDL_Dialog` open-file (DOM `<input type=file>` / `alert`).
 
@@ -486,7 +500,8 @@ future, tracked separately).
    perf — `todos/WEBGPU.md`.)
 3. **Timing + IO + properties + hints (P1/P2):** high-res timers; `SDL_IOFromFile`
    bridged to the existing FS; the properties + hints stores.
-4. **Gamepad (P1):** Web Gamepad API, poll in the frame callback.
+4. **Gamepad:** ✓ landed (#607) — os.html Gamepad API poller (Window-only, so
+   the page hosts the poll, not the frame callback); rumble is #714.
 5. **Audio completeness (P1):** capture, WAV load, gain, device enum.
 6. **SDL_GPU (P1) — JSPI-gated:** map onto `webgpu.h`; bulk deferred to JSPI on
    iOS (shares the renderer-unification blocker).

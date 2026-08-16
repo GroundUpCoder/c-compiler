@@ -57,6 +57,8 @@ bool SDL_HasEvents(Uint32 minType, Uint32 maxType);
 void SDL_FlushEvent(Uint32 type);
 void SDL_FlushEvents(Uint32 minType, Uint32 maxType);
 int SDL_PeepEvents(SDL_Event *events, int numevents, SDL_EventAction action, Uint32 minType, Uint32 maxType);
+void SDL_SetGamepadEventsEnabled(bool enabled);
+bool SDL_GamepadEventsEnabled(void);
 ```
 
 ### Input state (keyboard / mouse snapshots)
@@ -180,6 +182,33 @@ void SDL_DestroyCursor(SDL_Cursor *cursor);
 bool SDL_ShowCursor(void);
 bool SDL_HideCursor(void);
 bool SDL_CursorVisible(void);
+```
+
+### Gamepads (#607)
+
+Requires SDL_Init(SDL_INIT_GAMEPAD). Web standard-mapping pads only (the browser did the mapping; SDL_GAMEPAD_TYPE_STANDARD, buttons SOUTH..DPAD_RIGHT + all six axes; sticks -32768..32767, triggers 0..32767). Pads follow the FOCUSED window’s process; an unfocused process sees frozen state and is reconciled on focus gain. BUTTON/AXIS events are delivered only for pads you SDL_OpenGamepad’d (ADDED/REMOVED always). Headless/tests: `wmctl pad connect|button|axis`. NB unlike upstream, SDL_INIT_GAMEPAD does NOT imply SDL_INIT_JOYSTICK — there is no joystick subsystem here (declared divergence).
+
+```c
+SDL_JoystickID *SDL_GetGamepads(int *count);
+bool SDL_HasGamepad(void);
+bool SDL_IsGamepad(SDL_JoystickID instance_id);
+SDL_Gamepad *SDL_OpenGamepad(SDL_JoystickID instance_id);
+void SDL_CloseGamepad(SDL_Gamepad *gamepad);
+SDL_Gamepad *SDL_GetGamepadFromID(SDL_JoystickID instance_id);
+SDL_JoystickID SDL_GetGamepadID(SDL_Gamepad *gamepad);
+const char *SDL_GetGamepadName(SDL_Gamepad *gamepad);
+const char *SDL_GetGamepadNameForID(SDL_JoystickID instance_id);
+bool SDL_GamepadConnected(SDL_Gamepad *gamepad);
+SDL_GamepadType SDL_GetGamepadType(SDL_Gamepad *gamepad);
+bool SDL_GetGamepadButton(SDL_Gamepad *gamepad, SDL_GamepadButton button);
+Sint16 SDL_GetGamepadAxis(SDL_Gamepad *gamepad, SDL_GamepadAxis axis);
+bool SDL_GamepadHasButton(SDL_Gamepad *gamepad, SDL_GamepadButton button);
+bool SDL_GamepadHasAxis(SDL_Gamepad *gamepad, SDL_GamepadAxis axis);
+void SDL_UpdateGamepads(void);
+const char *SDL_GetGamepadStringForButton(SDL_GamepadButton button);
+SDL_GamepadButton SDL_GetGamepadButtonFromString(const char *str);
+const char *SDL_GetGamepadStringForAxis(SDL_GamepadAxis axis);
+SDL_GamepadAxis SDL_GetGamepadAxisFromString(const char *str);
 ```
 
 ### Error handling
@@ -312,9 +341,11 @@ typedef unsigned int Uint32;
 typedef unsigned short Uint16;
 typedef unsigned char Uint8;
 typedef int Sint32;
+typedef short Sint16;
 typedef Uint32 SDL_WindowID;
 typedef Uint32 SDL_KeyboardID;
 typedef Uint32 SDL_MouseID;
+typedef Uint32 SDL_JoystickID;
 typedef Uint32 SDL_Scancode;
 typedef Uint32 SDL_Keycode;
 typedef Uint16 SDL_Keymod;
@@ -337,7 +368,10 @@ typedef struct SDL_MouseButtonEvent { Uint32 type; Uint32 reserved; Uint64 times
 typedef struct SDL_MouseWheelEvent { Uint32 type; Uint32 reserved; Uint64 timestamp; SDL_WindowID windowID; SDL_MouseID which; float x; float y; Uint32 direction; float mouse_x; float mouse_y; } SDL_MouseWheelEvent;
 typedef struct SDL_WindowEvent { Uint32 type; Uint32 reserved; Uint64 timestamp; SDL_WindowID windowID; Sint32 data1; Sint32 data2; } SDL_WindowEvent;
 typedef struct SDL_UserEvent { Uint32 type; Uint32 reserved; Uint64 timestamp; SDL_WindowID windowID; Sint32 code; void *data1; void *data2; } SDL_UserEvent;
-typedef union SDL_Event { Uint32 type; SDL_CommonEvent common; SDL_KeyboardEvent key; SDL_MouseMotionEvent motion; SDL_MouseButtonEvent button; SDL_MouseWheelEvent wheel; SDL_WindowEvent window; SDL_UserEvent user; Uint8 padding[128]; } SDL_Event;
+typedef struct SDL_GamepadDeviceEvent { Uint32 type; Uint32 reserved; Uint64 timestamp; SDL_JoystickID which; } SDL_GamepadDeviceEvent;
+typedef struct SDL_GamepadButtonEvent { Uint32 type; Uint32 reserved; Uint64 timestamp; SDL_JoystickID which; Uint8 button; bool down; Uint8 padding1; Uint8 padding2; } SDL_GamepadButtonEvent;
+typedef struct SDL_GamepadAxisEvent { Uint32 type; Uint32 reserved; Uint64 timestamp; SDL_JoystickID which; Uint8 axis; Uint8 padding1; Uint8 padding2; Uint8 padding3; Sint16 value; Uint16 padding4; } SDL_GamepadAxisEvent;
+typedef union SDL_Event { Uint32 type; SDL_CommonEvent common; SDL_KeyboardEvent key; SDL_MouseMotionEvent motion; SDL_MouseButtonEvent button; SDL_MouseWheelEvent wheel; SDL_WindowEvent window; SDL_GamepadDeviceEvent gdevice; SDL_GamepadButtonEvent gbutton; SDL_GamepadAxisEvent gaxis; SDL_UserEvent user; Uint8 padding[128]; } SDL_Event;
 typedef Uint32 SDL_InitFlags;
 typedef Uint64 SDL_WindowFlags;
 typedef Uint32 SDL_MouseButtonFlags;
@@ -346,6 +380,7 @@ typedef Uint32 SDL_AudioDeviceID;
 typedef struct SDL_AudioSpec { SDL_AudioFormat format; int channels; int freq; } SDL_AudioSpec;
 typedef struct SDL_AudioStream SDL_AudioStream;   /* opaque */
 typedef void (*SDL_AudioStreamCallback)(void *userdata, SDL_AudioStream *stream, int additional_amount, int total_amount);
+typedef struct SDL_Gamepad SDL_Gamepad;   /* opaque */
 typedef struct SDL_Cursor SDL_Cursor;   /* opaque */
 typedef struct TTF_Font TTF_Font;   /* opaque */
 typedef Uint32 TTF_FontStyleFlags;
@@ -359,6 +394,9 @@ typedef enum SDL_BlendMode { SDL_BLENDMODE_NONE = 0, SDL_BLENDMODE_BLEND = 1, SD
 typedef enum SDL_ScaleMode { SDL_SCALEMODE_NEAREST = 0, SDL_SCALEMODE_LINEAR = 1 } SDL_ScaleMode;
 typedef enum SDL_FlipMode { SDL_FLIP_NONE = 0, SDL_FLIP_HORIZONTAL = 1, SDL_FLIP_VERTICAL = 2 } SDL_FlipMode;
 typedef enum SDL_EventAction { SDL_ADDEVENT, SDL_PEEKEVENT, SDL_GETEVENT } SDL_EventAction;
+typedef enum SDL_GamepadType { SDL_GAMEPAD_TYPE_UNKNOWN = 0, SDL_GAMEPAD_TYPE_STANDARD, SDL_GAMEPAD_TYPE_COUNT } SDL_GamepadType;
+typedef enum SDL_GamepadButton { SDL_GAMEPAD_BUTTON_INVALID = -1, SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_BUTTON_WEST, SDL_GAMEPAD_BUTTON_NORTH, SDL_GAMEPAD_BUTTON_BACK, SDL_GAMEPAD_BUTTON_GUIDE, SDL_GAMEPAD_BUTTON_START, SDL_GAMEPAD_BUTTON_LEFT_STICK, SDL_GAMEPAD_BUTTON_RIGHT_STICK, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, SDL_GAMEPAD_BUTTON_DPAD_UP, SDL_GAMEPAD_BUTTON_DPAD_DOWN, SDL_GAMEPAD_BUTTON_DPAD_LEFT, SDL_GAMEPAD_BUTTON_DPAD_RIGHT, SDL_GAMEPAD_BUTTON_MISC1, SDL_GAMEPAD_BUTTON_RIGHT_PADDLE1, SDL_GAMEPAD_BUTTON_LEFT_PADDLE1, SDL_GAMEPAD_BUTTON_RIGHT_PADDLE2, SDL_GAMEPAD_BUTTON_LEFT_PADDLE2, SDL_GAMEPAD_BUTTON_TOUCHPAD, SDL_GAMEPAD_BUTTON_MISC2, SDL_GAMEPAD_BUTTON_MISC3, SDL_GAMEPAD_BUTTON_MISC4, SDL_GAMEPAD_BUTTON_MISC5, SDL_GAMEPAD_BUTTON_MISC6, SDL_GAMEPAD_BUTTON_COUNT } SDL_GamepadButton;
+typedef enum SDL_GamepadAxis { SDL_GAMEPAD_AXIS_INVALID = -1, SDL_GAMEPAD_AXIS_LEFTX, SDL_GAMEPAD_AXIS_LEFTY, SDL_GAMEPAD_AXIS_RIGHTX, SDL_GAMEPAD_AXIS_RIGHTY, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, SDL_GAMEPAD_AXIS_COUNT } SDL_GamepadAxis;
 typedef enum SDL_SystemCursor { SDL_SYSTEM_CURSOR_DEFAULT, SDL_SYSTEM_CURSOR_TEXT, SDL_SYSTEM_CURSOR_WAIT, SDL_SYSTEM_CURSOR_CROSSHAIR, SDL_SYSTEM_CURSOR_PROGRESS, SDL_SYSTEM_CURSOR_NWSE_RESIZE, SDL_SYSTEM_CURSOR_NESW_RESIZE, SDL_SYSTEM_CURSOR_EW_RESIZE, SDL_SYSTEM_CURSOR_NS_RESIZE, SDL_SYSTEM_CURSOR_MOVE, SDL_SYSTEM_CURSOR_NOT_ALLOWED, SDL_SYSTEM_CURSOR_POINTER, SDL_SYSTEM_CURSOR_NW_RESIZE, SDL_SYSTEM_CURSOR_N_RESIZE, SDL_SYSTEM_CURSOR_NE_RESIZE, SDL_SYSTEM_CURSOR_E_RESIZE, SDL_SYSTEM_CURSOR_SE_RESIZE, SDL_SYSTEM_CURSOR_S_RESIZE, SDL_SYSTEM_CURSOR_SW_RESIZE, SDL_SYSTEM_CURSOR_W_RESIZE, SDL_SYSTEM_CURSOR_COUNT } SDL_SystemCursor;
 typedef enum SDL_AppResult { SDL_APP_CONTINUE, SDL_APP_SUCCESS, SDL_APP_FAILURE } SDL_AppResult;
 typedef enum TTF_HintingFlags { TTF_HINTING_INVALID = -1, TTF_HINTING_NORMAL = 0, TTF_HINTING_LIGHT = 1, TTF_HINTING_MONO = 2, TTF_HINTING_NONE = 3 } TTF_HintingFlags;
@@ -398,8 +436,11 @@ SDL_EVENT_WINDOW_RESIZED=0x206  SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED=0x207
 SDL_EVENT_WINDOW_FOCUS_GAINED=0x20E  SDL_EVENT_WINDOW_FOCUS_LOST=0x20F
 SDL_EVENT_WINDOW_CLOSE_REQUESTED=0x210  SDL_EVENT_KEY_DOWN=0x300  SDL_EVENT_KEY_UP=0x301
 SDL_EVENT_MOUSE_MOTION=0x400  SDL_EVENT_MOUSE_BUTTON_DOWN=0x401
-SDL_EVENT_MOUSE_BUTTON_UP=0x402  SDL_EVENT_MOUSE_WHEEL=0x403  SDL_EVENT_FIRST=0x0
-SDL_EVENT_USER=0x8000  SDL_EVENT_LAST=0xFFFF
+SDL_EVENT_MOUSE_BUTTON_UP=0x402  SDL_EVENT_MOUSE_WHEEL=0x403
+SDL_EVENT_GAMEPAD_AXIS_MOTION=0x650  SDL_EVENT_GAMEPAD_BUTTON_DOWN=0x651
+SDL_EVENT_GAMEPAD_BUTTON_UP=0x652  SDL_EVENT_GAMEPAD_ADDED=0x653
+SDL_EVENT_GAMEPAD_REMOVED=0x654  SDL_EVENT_FIRST=0x0  SDL_EVENT_USER=0x8000
+SDL_EVENT_LAST=0xFFFF
 ```
 
 Of the WINDOW_* block only RESIZED, FOCUS_GAINED/LOST and CLOSE_REQUESTED are delivered today; the rest exist for source compatibility.
@@ -591,7 +632,7 @@ An absent symbol fails loud at compile time (“Undeclared identifier”).
 - SDL_ttf modern API: `TTF_Text` / `TTF_TextEngine` (`TTF_CreateText`, `TTF_CreateSurfaceTextEngine`, `TTF_CreateRendererTextEngine`, `TTF_DrawSurfaceText`, `TTF_DrawRendererText`) do not exist — only the classic render-to-surface API above. Also absent: `TTF_OpenFontIO` (no SDL_IOStream), `TTF_SetFontOutline`, the `TTF_RenderText_LCD*` family, and `TTF_HINTING_LIGHT_SUBPIXEL`.
 - Texture pixel access: `SDL_LockTexture` / `SDL_UnlockTexture` — upload with SDL_UpdateTexture instead.
 - Renderer state: `SDL_SetRenderViewport`, `SDL_SetRenderClipRect`, `SDL_SetRenderScale`, `SDL_SetRenderLogicalPresentation`, `SDL_RenderReadPixels`, `SDL_GetRenderOutputSize` — none exist; draw in window pixels 1:1.
-- Gamepad / joystick: no device API at all (`SDL_OpenGamepad`, `SDL_GetGamepads`, `SDL_OpenJoystick`, …). The SDL_INIT_GAMEPAD / SDL_INIT_JOYSTICK flag constants exist, but input is keyboard + mouse only.
+- Joystick-level API: `SDL_OpenJoystick`, `SDL_GetJoysticks`, `SDL_GetJoystickAxis` — the gamepad API above is the only pad surface (this runtime has no unmapped-device view, so SDL_INIT_JOYSTICK still fails loud and, unlike upstream, is NOT implied by SDL_INIT_GAMEPAD). Also absent from the gamepad surface: `SDL_RumbleGamepad` (#714), the mapping DB (`SDL_AddGamepadMapping`, `SDL_GetGamepadMapping` — the browser owns mapping), `SDL_GetGamepadPlayerIndex`, and the touchpad/sensor/LED extras.
 - Surface toolkit: `SDL_CreateSurface`, `SDL_BlitSurface`, `SDL_FillSurfaceRect`, `SDL_ConvertSurface`, `SDL_LoadBMP` — the only SDL_Surfaces are window surfaces and IMG_Load results; write `->pixels` directly.
 - Audio files & mixing: `SDL_LoadWAV` and SDL_mixer (`Mix_*`) — parse audio data yourself and push PCM through SDL_PutAudioStreamData (one stream per concurrent sound; the OS mixes).
 - Window management: `SDL_ShowWindow`, `SDL_HideWindow`, `SDL_RaiseWindow`, `SDL_MinimizeWindow`, `SDL_MaximizeWindow`, `SDL_SetWindowFullscreen` — the WM owns placement and chrome.
