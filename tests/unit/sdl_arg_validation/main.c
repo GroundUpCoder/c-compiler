@@ -96,5 +96,41 @@ int main(void) {
 
     /* live window still fine after all of the above */
     printf("live window title ok: %d\n", SDL_SetWindowTitle(w, "still here") == 1);
+
+    /* -- #711: destroyed RENDERER use (the #497 residue) -- the ticket's
+       mode-1 table: every one of these reported success with an empty
+       SDL_GetError() on a dangling renderer. Positive control first. */
+    printf("live renderer clear ok: %d\n", SDL_RenderClear(r) == 1);
+    SDL_DestroyRenderer(r);
+    SDL_ClearError();
+    printf("dead rdr fillrect rejected: %d err: %d\n",
+           SDL_RenderFillRect(r, NULL) == 0, SDL_GetError()[0] != '\0');
+    printf("dead rdr clear rejected: %d\n", SDL_RenderClear(r) == 0);
+    printf("dead rdr drawcolor rejected: %d\n", SDL_SetRenderDrawColor(r, 1, 2, 3, 4) == 0);
+    printf("dead rdr line rejected: %d\n", SDL_RenderLine(r, 0, 0, 8, 8) == 0);
+    printf("dead rdr debugtext rejected: %d\n", SDL_RenderDebugText(r, 0, 0, "x") == 0);
+    printf("dead rdr present rejected: %d\n", SDL_RenderPresent(r) == 0);
+    printf("dead rdr createtex rejected: %d\n",
+           SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, 8, 8) == NULL);
+    printf("dead rdr settarget rejected: %d\n", SDL_SetRenderTarget(r, NULL) == 0);
+    printf("dead rdr setvsync rejected: %d\n", SDL_SetRenderVSync(r, 0) == 0);
+    SDL_ClearError();
+    SDL_DestroyRenderer(r);    /* double-destroy: error, not double-free */
+    printf("rdr double destroy loud: %d\n", SDL_GetError()[0] != '\0');
+
+    /* -- #711 mode 3: destroyed WINDOW, renderer left alive -- upstream
+       destroys the renderer with its window; here the dangling backref must
+       read as a dead renderer, not keep succeeding at a freed surface. */
+    SDL_Renderer *r3 = SDL_CreateRenderer(w, NULL);
+    printf("renderer on live window ok: %d\n", r3 != NULL);
+    SDL_DestroyWindow(w);
+    SDL_ClearError();
+    printf("dead window rdr fillrect rejected: %d err: %d\n",
+           SDL_RenderFillRect(r3, NULL) == 0, SDL_GetError()[0] != '\0');
+    printf("dead window rdr present rejected: %d\n", SDL_RenderPresent(r3) == 0);
+    /* teardown after the window is still a working reclaim, silently */
+    SDL_ClearError();
+    SDL_DestroyRenderer(r3);
+    printf("rdr destroy after window ok: %d\n", SDL_GetError()[0] == '\0');
     return 0;
 }

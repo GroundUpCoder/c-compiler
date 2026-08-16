@@ -28973,7 +28973,24 @@ struct SDL_Renderer {
                             create-time default per upstream SDL3. GetRenderVSync
                             round-trips THIS value — what was set, never the
                             platform's own cadence. */
+    Uint32 __magic;       /* __SDL_REN_MAGIC while live; cleared by
+                            SDL_DestroyRenderer before the free (#711 — the
+                            __SDL_TEX_MAGIC pattern, same best-effort caveat) */
 };
+
+/* Renderer liveness (#711, closing #497's residue): every entry point taking
+   an SDL_Renderer* validates it here, so a draw call on a DESTROYED renderer
+   — the ordinary destroy-then-one-more-frame bug of a level transition or
+   restart path — fails with "Parameter 'renderer' is invalid" instead of
+   reporting success with an empty SDL_GetError(). The window conjunct makes
+   a renderer whose WINDOW was destroyed equally dead (upstream destroys the
+   renderer with its window; here the dangling backref would otherwise keep
+   "succeeding" against a freed surface). Magic check is best-effort against
+   freed memory, exactly like __sdl_texture_live. */
+#define __SDL_REN_MAGIC 0x5352454eu  /* 'SREN' */
+static bool __sdl_renderer_live(SDL_Renderer *r) {
+    return r && r->__magic == __SDL_REN_MAGIC && __sdl_window_live(r->window);
+}
 
 /* ---- Hints (#551): a tiny grow-only store. SDL_GetHint prefers the
    process ENVIRONMENT — upstream gives an env var of the hint's own name
@@ -29046,12 +29063,22 @@ SDL_Renderer *SDL_CreateRenderer(SDL_Window *window, const char *name) {
     r->target = NULL;
     r->debug_atlas = NULL;
     r->vsync = 0;   /* SDL3: vsync defaults to SDL_RENDERER_VSYNC_DISABLED (#500) */
+    r->__magic = __SDL_REN_MAGIC;
     window->renderer = r;
     return r;
 }
 
 void SDL_DestroyRenderer(SDL_Renderer *renderer) {
-    if (!renderer) return;
+    /* NULL is SDL3's documented no-op; a dead tag is a double-destroy —
+       refuse it rather than double-free (#711, the SDL_DestroyTexture
+       convention). NB only the magic gates here, not __sdl_renderer_live:
+       destroying a live renderer AFTER its window is the ordinary teardown
+       order and must still reclaim. */
+    if (!renderer || renderer->__magic != __SDL_REN_MAGIC) {
+        if (renderer) SDL_InvalidParamError("renderer");
+        return;
+    }
+    renderer->__magic = 0;
     if (renderer->debug_atlas) {
         SDL_DestroyTexture(renderer->debug_atlas);  /* before the window backref
                             clears — DestroyTexture walks it for #496 unbinding */
@@ -29064,7 +29091,7 @@ void SDL_DestroyRenderer(SDL_Renderer *renderer) {
 }
 
 SDL_Texture *SDL_CreateTexture(SDL_Renderer *renderer, SDL_PixelFormat format, SDL_TextureAccess access, int w, int h) {
-    if (!renderer) { SDL_InvalidParamError("renderer"); return NULL; }
+    if (!__sdl_renderer_live(renderer)) { SDL_InvalidParamError("renderer"); return NULL; }
     /* SDL3 rejects degenerate and absurd dimensions at create (#497): a 0x0 or
        negative texture is the classic failed-config-parse output, and a huge
        one would defer a multi-GB failure to far from the call that was wrong.
@@ -29095,7 +29122,7 @@ SDL_Texture *SDL_CreateTexture(SDL_Renderer *renderer, SDL_PixelFormat format, S
 }
 
 SDL_Texture *SDL_CreateTextureFromSurface(SDL_Renderer *renderer, SDL_Surface *surface) {
-    if (!renderer) { SDL_InvalidParamError("renderer"); return NULL; }
+    if (!__sdl_renderer_live(renderer)) { SDL_InvalidParamError("renderer"); return NULL; }
     if (!surface) { SDL_InvalidParamError("surface"); return NULL; }
     SDL_Texture *t = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32,
                                        SDL_TEXTUREACCESS_STATIC, surface->w, surface->h);
@@ -29179,7 +29206,7 @@ bool SDL_GetTextureScaleMode(SDL_Texture *texture, SDL_ScaleMode *scaleMode) {
 }
 
 bool SDL_SetRenderDrawColor(SDL_Renderer *renderer, Uint8 r, Uint8 g, Uint8 b, Uint8 a) {
-    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     renderer->draw_r = r;
     renderer->draw_g = g;
     renderer->draw_b = b;
@@ -29189,7 +29216,7 @@ bool SDL_SetRenderDrawColor(SDL_Renderer *renderer, Uint8 r, Uint8 g, Uint8 b, U
 }
 
 bool SDL_GetRenderDrawColor(SDL_Renderer *renderer, Uint8 *r, Uint8 *g, Uint8 *b, Uint8 *a) {
-    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     if (r) *r = renderer->draw_r;
     if (g) *g = renderer->draw_g;
     if (b) *b = renderer->draw_b;
@@ -29198,13 +29225,13 @@ bool SDL_GetRenderDrawColor(SDL_Renderer *renderer, Uint8 *r, Uint8 *g, Uint8 *b
 }
 
 bool SDL_SetRenderDrawBlendMode(SDL_Renderer *renderer, SDL_BlendMode blendMode) {
-    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     __sdl_set_draw_blend_mode(renderer->handle, (int)blendMode);
     return 1;
 }
 
 bool SDL_RenderClear(SDL_Renderer *renderer) {
-    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     __sdl_render_clear(renderer->handle);
     return 1;
 }
@@ -29218,7 +29245,7 @@ static void __sdl_quad_rect(int r, int texH, float dx, float dy, float dw, float
 
 bool SDL_RenderTexture(SDL_Renderer *renderer, SDL_Texture *texture,
                        const SDL_FRect *srcrect, const SDL_FRect *dstrect) {
-    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     if (!__sdl_texture_live(texture)) return SDL_InvalidParamError("texture");
     if (texture == renderer->target)
         return SDL_SetError("texture is the current render target — it cannot be its own source");
@@ -29241,7 +29268,7 @@ bool SDL_RenderTexture(SDL_Renderer *renderer, SDL_Texture *texture,
 bool SDL_RenderTextureRotated(SDL_Renderer *renderer, SDL_Texture *texture,
                               const SDL_FRect *srcrect, const SDL_FRect *dstrect,
                               double angle, const SDL_FPoint *center, SDL_FlipMode flip) {
-    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     if (!__sdl_texture_live(texture)) return SDL_InvalidParamError("texture");
     if (texture == renderer->target)
         return SDL_SetError("texture is the current render target — it cannot be its own source");
@@ -29278,7 +29305,7 @@ bool SDL_RenderTextureRotated(SDL_Renderer *renderer, SDL_Texture *texture,
 }
 
 bool SDL_RenderFillRect(SDL_Renderer *renderer, const SDL_FRect *rect) {
-    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     float dx = 0, dy = 0, dw = 0, dh = 0;
     if (rect) { dx = rect->x; dy = rect->y; dw = rect->w; dh = rect->h; }
     __sdl_quad_rect(renderer->handle, 0, dx, dy, dw, dh, 0, 0, 1, 1);
@@ -29286,7 +29313,7 @@ bool SDL_RenderFillRect(SDL_Renderer *renderer, const SDL_FRect *rect) {
 }
 
 bool SDL_RenderRect(SDL_Renderer *renderer, const SDL_FRect *rect) {
-    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     if (!rect) return 1;
     float x = rect->x, y = rect->y, w = rect->w, h = rect->h;
     __sdl_quad_rect(renderer->handle, 0, x, y, w, 1, 0, 0, 1, 1);          /* top */
@@ -29297,7 +29324,7 @@ bool SDL_RenderRect(SDL_Renderer *renderer, const SDL_FRect *rect) {
 }
 
 bool SDL_RenderLine(SDL_Renderer *renderer, float x1, float y1, float x2, float y2) {
-    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     float ddx = x2 - x1, ddy = y2 - y1;
     float len = (float)sqrt(ddx * ddx + ddy * ddy);
     if (len < 0.0001f) {
@@ -29313,7 +29340,7 @@ bool SDL_RenderLine(SDL_Renderer *renderer, float x1, float y1, float x2, float 
 }
 
 bool SDL_RenderPoint(SDL_Renderer *renderer, float x, float y) {
-    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     __sdl_quad_rect(renderer->handle, 0, x, y, 1, 1, 0, 0, 1, 1);
     return 1;
 }
@@ -29323,7 +29350,7 @@ bool SDL_RenderPoint(SDL_Renderer *renderer, float x, float y) {
    < 2 for the polyline — draws nothing and succeeds). ---- */
 
 bool SDL_RenderFillRects(SDL_Renderer *renderer, const SDL_FRect *rects, int count) {
-    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     if (!rects) return SDL_InvalidParamError("rects");
     for (int i = 0; i < count; i++)
         if (!SDL_RenderFillRect(renderer, &rects[i])) return 0;
@@ -29331,7 +29358,7 @@ bool SDL_RenderFillRects(SDL_Renderer *renderer, const SDL_FRect *rects, int cou
 }
 
 bool SDL_RenderRects(SDL_Renderer *renderer, const SDL_FRect *rects, int count) {
-    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     if (!rects) return SDL_InvalidParamError("rects");
     for (int i = 0; i < count; i++)
         if (!SDL_RenderRect(renderer, &rects[i])) return 0;
@@ -29339,7 +29366,7 @@ bool SDL_RenderRects(SDL_Renderer *renderer, const SDL_FRect *rects, int count) 
 }
 
 bool SDL_RenderPoints(SDL_Renderer *renderer, const SDL_FPoint *points, int count) {
-    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     if (!points) return SDL_InvalidParamError("points");
     for (int i = 0; i < count; i++)
         if (!SDL_RenderPoint(renderer, points[i].x, points[i].y)) return 0;
@@ -29348,7 +29375,7 @@ bool SDL_RenderPoints(SDL_Renderer *renderer, const SDL_FPoint *points, int coun
 
 /* count-1 CONNECTED segments (a polyline), per SDL3 — not count/2 pairs. */
 bool SDL_RenderLines(SDL_Renderer *renderer, const SDL_FPoint *points, int count) {
-    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     if (!points) return SDL_InvalidParamError("points");
     for (int i = 0; i + 1 < count; i++)
         if (!SDL_RenderLine(renderer, points[i].x, points[i].y,
@@ -29359,7 +29386,7 @@ bool SDL_RenderLines(SDL_Renderer *renderer, const SDL_FPoint *points, int count
 bool SDL_RenderGeometry(SDL_Renderer *renderer, SDL_Texture *texture,
                         const SDL_Vertex *vertices, int num_vertices,
                         const int *indices, int num_indices) {
-    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     if (texture && !__sdl_texture_live(texture)) return SDL_InvalidParamError("texture");
     if (texture && texture == renderer->target)
         return SDL_SetError("texture is the current render target — it cannot be its own source");
@@ -29396,7 +29423,7 @@ bool SDL_RenderGeometry(SDL_Renderer *renderer, SDL_Texture *texture,
 /* bool per upstream SDL3 (#496): the documented present-while-target-bound
    failure has to be reportable. */
 bool SDL_RenderPresent(SDL_Renderer *renderer) {
-    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     if (renderer->target)
         return SDL_SetError("SDL_RenderPresent: a render target is bound — call SDL_SetRenderTarget(renderer, NULL) first (presenting to a texture target is not supported)");
     __sdl_render_present(renderer->handle);
@@ -29406,7 +29433,7 @@ bool SDL_RenderPresent(SDL_Renderer *renderer) {
 /* ---- Render targets (#496) ---- */
 
 bool SDL_SetRenderTarget(SDL_Renderer *renderer, SDL_Texture *texture) {
-    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     if (texture) {
         if (!__sdl_texture_live(texture)) return SDL_InvalidParamError("texture");
         if (texture->__access != SDL_TEXTUREACCESS_TARGET)
@@ -29419,14 +29446,14 @@ bool SDL_SetRenderTarget(SDL_Renderer *renderer, SDL_Texture *texture) {
 }
 
 SDL_Texture *SDL_GetRenderTarget(SDL_Renderer *renderer) {
-    if (!renderer) { SDL_InvalidParamError("renderer"); return NULL; }
+    if (!__sdl_renderer_live(renderer)) { SDL_InvalidParamError("renderer"); return NULL; }
     return renderer->target;
 }
 
 /* ---- Renderer vsync (#500) ---- */
 
 bool SDL_SetRenderVSync(SDL_Renderer *renderer, int vsync) {
-    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     if (vsync < 0)   /* adaptive (-1) and friends: nothing here can late-tear */
         return SDL_SetError("SDL_SetRenderVSync: adaptive vsync is not supported (mode unchanged)");
     if (!__sdl_set_render_vsync(renderer->handle, vsync))
@@ -29436,7 +29463,7 @@ bool SDL_SetRenderVSync(SDL_Renderer *renderer, int vsync) {
 }
 
 bool SDL_GetRenderVSync(SDL_Renderer *renderer, int *vsync) {
-    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     if (vsync) *vsync = renderer->vsync;
     return 1;
 }
@@ -29737,7 +29764,7 @@ static Uint32 __sdl_step_utf8(const char **p, const char *end) {
 }
 
 bool SDL_RenderDebugText(SDL_Renderer *renderer, float x, float y, const char *str) {
-    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     if (!str) return SDL_InvalidParamError("str");
     if (!renderer->debug_atlas && !__sdl_debug_atlas_create(renderer)) return 0;
     bool result = 1;
@@ -29757,7 +29784,7 @@ bool SDL_RenderDebugText(SDL_Renderer *renderer, float x, float y, const char *s
 }
 
 bool SDL_RenderDebugTextFormat(SDL_Renderer *renderer, float x, float y, const char *fmt, ...) {
-    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     if (!fmt) return SDL_InvalidParamError("fmt");
     /* Format through libc vsnprintf — SDL and libc share one heap here, and
        upstream's "%s" fast path is an optimization, not contract. */

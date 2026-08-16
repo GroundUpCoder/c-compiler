@@ -21,3 +21,18 @@ dead window title rejected: 1 err: 1
 dead window surface rejected: 1
 window double destroy loud: 1
 live window title ok: 1
+live renderer clear ok: 1
+dead rdr fillrect rejected: 1 err: 1
+dead rdr clear rejected: 1
+dead rdr drawcolor rejected: 1
+dead rdr line rejected: 1
+dead rdr debugtext rejected: 1
+dead rdr present rejected: 1
+dead rdr createtex rejected: 1
+dead rdr settarget rejected: 1
+dead rdr setvsync rejected: 1
+rdr double destroy loud: 1
+renderer on live window ok: 1
+dead window rdr fillrect rejected: 1 err: 1
+dead window rdr present rejected: 1
+rdr destroy after window ok: 1
