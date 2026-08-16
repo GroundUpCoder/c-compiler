@@ -29318,38 +29318,56 @@ bool SDL_RenderTextureRotated(SDL_Renderer *renderer, SDL_Texture *texture,
     return 1;
 }
 
-bool SDL_RenderFillRect(SDL_Renderer *renderer, const SDL_FRect *rect) {
-    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
+/* Unguarded draw bodies (#712 finding A): each singular entry point is its
+   liveness guard plus one of these; the batch entry points validate the
+   renderer ONCE and loop the bodies directly — liveness cannot change
+   mid-loop, and __sdl_renderer_live walks the window registry per call, so
+   an N-element batch used to pay a redundant 32N-compare scan. Post-guard a
+   body cannot fail, which is why the singulars always return 1. */
+static void __sdl_draw_fill_rect(SDL_Renderer *renderer, const SDL_FRect *rect) {
     float dx = 0, dy = 0, dw = 0, dh = 0;
     if (rect) { dx = rect->x; dy = rect->y; dw = rect->w; dh = rect->h; }
     __sdl_quad_rect(renderer->handle, 0, dx, dy, dw, dh, 0, 0, 1, 1);
-    return 1;
 }
 
-bool SDL_RenderRect(SDL_Renderer *renderer, const SDL_FRect *rect) {
-    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
-    if (!rect) return 1;
+static void __sdl_draw_rect(SDL_Renderer *renderer, const SDL_FRect *rect) {
+    if (!rect) return;
     float x = rect->x, y = rect->y, w = rect->w, h = rect->h;
     __sdl_quad_rect(renderer->handle, 0, x, y, w, 1, 0, 0, 1, 1);          /* top */
     __sdl_quad_rect(renderer->handle, 0, x, y + h - 1, w, 1, 0, 0, 1, 1);  /* bottom */
     __sdl_quad_rect(renderer->handle, 0, x, y, 1, h, 0, 0, 1, 1);          /* left */
     __sdl_quad_rect(renderer->handle, 0, x + w - 1, y, 1, h, 0, 0, 1, 1);  /* right */
-    return 1;
 }
 
-bool SDL_RenderLine(SDL_Renderer *renderer, float x1, float y1, float x2, float y2) {
-    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
+static void __sdl_draw_line(SDL_Renderer *renderer, float x1, float y1, float x2, float y2) {
     float ddx = x2 - x1, ddy = y2 - y1;
     float len = (float)sqrt(ddx * ddx + ddy * ddy);
     if (len < 0.0001f) {
         __sdl_quad_rect(renderer->handle, 0, x1, y1, 1, 1, 0, 0, 1, 1);
-        return 1;
+        return;
     }
     /* a 1px-thick quad along the line (perpendicular half-width 0.5) */
     float nx = -ddy / len * 0.5f, ny = ddx / len * 0.5f;
     __sdl_render_quad(renderer->handle, 0,
                       x1 + nx, y1 + ny, x2 + nx, y2 + ny, x2 - nx, y2 - ny, x1 - nx, y1 - ny,
                       0, 0, 1, 1);
+}
+
+bool SDL_RenderFillRect(SDL_Renderer *renderer, const SDL_FRect *rect) {
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
+    __sdl_draw_fill_rect(renderer, rect);
+    return 1;
+}
+
+bool SDL_RenderRect(SDL_Renderer *renderer, const SDL_FRect *rect) {
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
+    __sdl_draw_rect(renderer, rect);
+    return 1;
+}
+
+bool SDL_RenderLine(SDL_Renderer *renderer, float x1, float y1, float x2, float y2) {
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
+    __sdl_draw_line(renderer, x1, y1, x2, y2);
     return 1;
 }
 
@@ -29359,7 +29377,7 @@ bool SDL_RenderPoint(SDL_Renderer *renderer, float x, float y) {
     return 1;
 }
 
-/* ---- Batch draw calls (#601): loops over the singular primitives, with
+/* ---- Batch draw calls (#601): loops over the singular bodies, with
    upstream's argument contract (a NULL array is an error; count < 1 — or
    < 2 for the polyline — draws nothing and succeeds). ---- */
 
@@ -29367,7 +29385,7 @@ bool SDL_RenderFillRects(SDL_Renderer *renderer, const SDL_FRect *rects, int cou
     if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     if (!rects) return SDL_InvalidParamError("rects");
     for (int i = 0; i < count; i++)
-        if (!SDL_RenderFillRect(renderer, &rects[i])) return 0;
+        __sdl_draw_fill_rect(renderer, &rects[i]);
     return 1;
 }
 
@@ -29375,7 +29393,7 @@ bool SDL_RenderRects(SDL_Renderer *renderer, const SDL_FRect *rects, int count) 
     if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     if (!rects) return SDL_InvalidParamError("rects");
     for (int i = 0; i < count; i++)
-        if (!SDL_RenderRect(renderer, &rects[i])) return 0;
+        __sdl_draw_rect(renderer, &rects[i]);
     return 1;
 }
 
@@ -29383,7 +29401,7 @@ bool SDL_RenderPoints(SDL_Renderer *renderer, const SDL_FPoint *points, int coun
     if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     if (!points) return SDL_InvalidParamError("points");
     for (int i = 0; i < count; i++)
-        if (!SDL_RenderPoint(renderer, points[i].x, points[i].y)) return 0;
+        __sdl_quad_rect(renderer->handle, 0, points[i].x, points[i].y, 1, 1, 0, 0, 1, 1);
     return 1;
 }
 
@@ -29392,8 +29410,8 @@ bool SDL_RenderLines(SDL_Renderer *renderer, const SDL_FPoint *points, int count
     if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
     if (!points) return SDL_InvalidParamError("points");
     for (int i = 0; i + 1 < count; i++)
-        if (!SDL_RenderLine(renderer, points[i].x, points[i].y,
-                            points[i + 1].x, points[i + 1].y)) return 0;
+        __sdl_draw_line(renderer, points[i].x, points[i].y,
+                        points[i + 1].x, points[i + 1].y);
     return 1;
 }
 
