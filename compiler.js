@@ -10979,7 +10979,21 @@ class Parser {
       else if (isUnsigned) type = Types.TUINT;
       else {
         if (!hasBase && !this._allowImplicitInt) {
-          this.error(this.peek(), "type specifier missing (implicit int is not allowed in C99)");
+          // #708: the specifier loop broke on this token without consuming
+          // it. When it is an identifier that reads as a type name followed
+          // by a declarator (`static Zzz x;`, `Zzz *p;`, `Zzz f(void);`),
+          // NAME it — an unknown type is the most common C error, and the
+          // bare "type specifier missing" forced a bisect of the line (a
+          // misspelled or unincluded type at file scope always lands here;
+          // only the bare block-scope `Zzz x;` reaches the expression
+          // path's "Undeclared identifier" instead). A genuinely bare
+          // declarator (`static x;`) keeps the implicit-int wording.
+          const t0 = this.peek(), t1 = this.peek(1);
+          if (t0.kind === Lexer.TokenKind.IDENT &&
+              (t1.kind === Lexer.TokenKind.IDENT || t1.text === '*'))
+            this.error(t0, `unknown type name '${t0.text}'`);
+          else
+            this.error(t0, "type specifier missing (implicit int is not allowed in C99)");
         }
         type = Types.TINT;
       }
@@ -24002,8 +24016,8 @@ void __run_atexits(void);
  *
  * CPython — like musl and wasi-libc — expects these visible via
  * <sys/types.h> before it reaches Include/cpython/pthread_stubs.h, and the
- * symptom of their absence is a baffling "type specifier missing" pointing
- * at pthread_stubs.h:78 rather than at the missing type.
+ * symptom of their absence used to be a baffling "type specifier missing"
+ * pointing at pthread_stubs.h:78; since #708 it names the missing type.
  *
  * It is a separate header, rather than <sys/types.h> including <time.h>,
  * because <time.h> carries __require_source("__time.c") and <sys/types.h>
