@@ -64,6 +64,15 @@ Use `wmctl wait` in scripts instead of sleeping.
 Read `toolchain.md`, "Diagnostics" — the common error shapes are listed
 there with their usual causes.
 
+## Null pointer traps
+
+Build a suspect program with `cc -g --trap-null-dereference game.c -o game`.
+An evaluated null read, write, member/subscript use, or indirect call traps
+before the access. The crash log's top frame is named
+`__cc_null_dereference[FILE:LINE:KIND]`; `-g` also names the C caller frames,
+and the shell reports 139. Ordinary builds keep C's default undefined
+behavior and carry no trap metadata or cost.
+
 ## What does not exist
 
 There is no interactive debugger and no core dump. Use `printf` to

@@ -9,7 +9,8 @@ WebAssembly module built by the in-OS C compiler. Facts you cannot guess:
   implementation. Known system libraries (SDL, libpng, zlib, freetype) pull
   their own sources automatically via the compiler's `__require_source`
   mechanism when you include their headers.
-- `cc` understands only `-o OUT`, `-IDIR`, `-DNAME[=VAL]` and `-g`. Every
+- `cc` understands `-o OUT`, `-IDIR`, `-DNAME[=VAL]`, `-g`, and the optional
+  null-use debugging flag `--trap-null-dereference`. Every
   other flag (`-Wall`, `-O2`, `-c`, `-std=…`, `-l…`) is REFUSED by name
   (exit 1) — do not pass them. There is no separate compile/link step: one `cc`
   command takes all the .c files and writes the runnable output (default

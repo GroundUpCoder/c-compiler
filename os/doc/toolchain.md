@@ -7,7 +7,7 @@ files, no archives (`.a`), no shared objects (`.so`), and no `make`.
 ## The command line
 
 ```
-cc [-o OUT] [-IPATH] [-DNAME[=VAL]] [-g] FILE.c ...
+cc [-o OUT] [-IPATH] [-DNAME[=VAL]] [-g] [--trap-null-dereference] FILE.c ...
 ```
 
 | Flag | Effect |
@@ -16,6 +16,15 @@ cc [-o OUT] [-IPATH] [-DNAME[=VAL]] [-g] FILE.c ...
 | `-IPATH` | Add an include directory. Joined form only: `-Isrc`, not `-I src`. |
 | `-DNAME[=VAL]` | Define a preprocessor macro. |
 | `-g` | Emit a name section for readable stack traces. |
+| `--trap-null-dereference` | Trap before an evaluated access or indirect call through a null pointer. |
+
+The null trap is a custom, default-off debugging mode. It covers scalar and
+aggregate reads/writes, member access, subscripting, bitfields/RMW, volatile
+pointees, and indirect calls. It deliberately does not reject forming,
+copying, comparing, casting, or doing arithmetic with a null pointer; `&*p`
+and unevaluated operands remain non-trapping. A failure names the source site
+and exits 139. This is not UBSan: `-fsanitize=null` is refused rather than
+approximately implemented.
 
 Every other dash option is refused by name: `cc -O2 game.c` exits 1 with
 `cc: error: unrecognized option '-O2'`. `-c`, `-Wall`, `-std=…` and
