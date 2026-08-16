@@ -3,6 +3,7 @@
 import { openOsSession } from './lib/os-harness.mjs';
 const PORT = 3369;
 const SRC = 'struct S{int x;};\nstatic int f(struct S*p){return p->x;}\nint main(void){struct S*p=0;return f(p);}\n';
+const SAFE = 'struct S{int x;};\nint main(void){struct S s={7};struct S*p=&s;return p->x==7?0:1;}\n';
 const s = await openOsSession({ port: PORT, readyLabel: 'boots to ready' });
 const { page, check, setVt, waitOut } = s;
 try {
@@ -16,7 +17,13 @@ try {
   const out = await page.evaluate(() => window.__osOut || '');
   const logs = await page.evaluate(() => (window.__osLogs || []).join('\n'));
   check('browser crash carries generated source marker', /__cc_null_dereference\[\/root\/null\.c:2:member\]/.test(logs), logs.slice(-1200));
+  check('browser crash carries a named C caller', /\n\s*at (?:f|main) /.test(logs), logs.slice(-1200));
   check('browser shell reports 139', /NULL-RC=139/.test(out), out.slice(-500));
+  await page.evaluate(src => navigator.clipboard.writeText(src), SAFE);
+  await page.keyboard.type("pbpaste > /root/safe.c && cc -g --trap-null-dereference /root/safe.c -o /root/safe.out && /root/safe.out; echo SAFE-RC=$?\r");
+  await page.waitForFunction(() => /SAFE-RC=\d+/.test(window.__osOut || ''), { timeout: 60000, polling: 'raf' });
+  const out2 = await page.evaluate(() => window.__osOut || '');
+  check('browser enabled non-null control exits 0', /SAFE-RC=0/.test(out2), out2.slice(-500));
 } catch (e) { s.fail(e); }
 finally { await s.close(); }
 s.finish('os null-use trap (browser)');

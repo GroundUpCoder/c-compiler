@@ -16751,6 +16751,20 @@ class WasmModule {
     // passes may add locals or types, and sections 1/3 precede the code
     // section that serializes the trees.
     WAST.runPasses(this);
+    // Read-only post-pass inspection seam, parallel to lastPassStats. Tests
+    // use this exact module object to tie serialized names/sections back to
+    // remapped WCall targets after tree shaking.
+    WAST.lastModule = this;
+    WAST.lastPostPass = {
+      funcImports: this.funcImports.slice(),
+      funcDefs: this.funcDefs.map((d) => ({
+        typeId: d.typeId, locals: d.locals.slice(),
+        wast: d.wast ? d.wast.slice() : null, fnMeta: d.fnMeta,
+      })),
+      funcNames: this.funcNames.map((n) => ({ idx: n.idx, name: n.name })),
+      tableLayout: this.tableLayout,
+      passStats: this.passStats,
+    };
 
     const out = [];
     // WASM magic + version
@@ -38411,7 +38425,16 @@ function main() {
       // change — emitted pages always use BLOCK_FS now.
       console.error("warning: --browser-fs/--no-block-fs is no longer supported; the legacy full-OPFS backend was removed. Emitting a BLOCK_FS page.");
     } else if (args[i].startsWith("-")) {
-      // Silently ignore unknown options
+      // The sanitizer/custom-diagnostic namespace must fail loud: accepting
+      // one of these as a no-op falsely claims a safety contract. Preserve
+      // the older host CLI's compatibility for unrelated ignored flags.
+      if (args[i].startsWith("-fsanitize") || args[i].startsWith("-fno-sanitize") ||
+          args[i].startsWith("--trap-null")) {
+        process.stderr.write(`error: unrecognized option '${args[i]}'\n`);
+        process.exit(1);
+      }
+      // Legacy host CLI compatibility: unrelated unknown options remain
+      // ignored. The in-OS driver has the stricter all-unknown refusal.
     } else {
       inputFiles.push(args[i]);
     }

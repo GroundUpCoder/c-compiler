@@ -6,9 +6,12 @@ const lines = [
   "cat > /root/null.c << 'EOF'", 'struct S{int x;};',
   'static int f(struct S*p){return p->x;}',
   'int main(void){struct S*p=0;return f(p);}', 'EOF',
+  "cat > /root/safe.c << 'EOF'", 'struct S{int x;};',
+  'int main(void){struct S s={7};struct S*p=&s;return p->x==7?0:1;}', 'EOF',
   'cd /root && cc -g --trap-null-dereference null.c -o null.out',
   'echo ==run', './null.out; echo RC=$?', 'echo ==done',
-  'cc null.c -o plain.out && echo PLAIN-COMPILED', 'exit',
+  'cc null.c -o plain.out && echo PLAIN-COMPILED',
+  'cc -g --trap-null-dereference safe.c -o safe.out && ./safe.out; echo SAFE-RC=$?', 'exit',
 ];
 const r = driveBoot(lines, { prefix: 'os-null-trap-', timeout: 600000, quiet: false });
 const out = section(r.stdout, 'run') + '\n' + String(r.stderr || '');
@@ -19,4 +22,5 @@ check('generated source marker reaches crash log', /__cc_null_dereference\[\/roo
 check('named C caller follows marker', /at f /.test(out) || /at main /.test(out));
 check('shell reports SIGSEGV convention 139', /RC=139/.test(out));
 check('default-off compile succeeds', /PLAIN-COMPILED/.test(String(r.stdout)));
+check('enabled non-null control exits 0', /SAFE-RC=0/.test(String(r.stdout)));
 process.exit(failures ? 1 : 0);
