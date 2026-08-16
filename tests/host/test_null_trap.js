@@ -105,6 +105,35 @@ function decodeWasm(bytes) {
   return { b, funcImports, types, funcTypes, exports, names, bodies, table, sourceMap };
 }
 
+// Boundary-aware decoder for the MVP instructions emitted by the small
+// structural fixture. Unknown opcodes fail loud; extending the fixture cannot
+// silently turn this back into a byte-pattern search.
+function decodeInstructions(body) {
+  const b = body.bytes, out = []; let i = 0;
+  const u = () => { let v = 0, s = 0, x; do { assert(i < b.length, 'truncated ULEB'); x = b[i++]; v |= (x & 127) << s; s += 7; } while (x & 128); return v >>> 0; };
+  const s = () => { let v = 0, sh = 0, x; do { assert(i < b.length, 'truncated SLEB'); x = b[i++]; v |= (x & 127) << sh; sh += 7; } while (x & 128); if (sh < 32 && (x & 64)) v |= (~0 << sh); return v | 0; };
+  const blockType = () => {
+    const x = b[i];
+    if (x === 0x40 || x === 0x7f || x === 0x7e || x === 0x7d || x === 0x7c) { i++; return x; }
+    return s();
+  };
+  while (i < b.length) {
+    const rel = i, opcode = b[i++], ins = { opcode, rel, off: body.start + rel };
+    if (opcode === 0x02 || opcode === 0x03 || opcode === 0x04) ins.blockType = blockType();
+    else if (opcode === 0x0c || opcode === 0x0d || opcode === 0x10 ||
+             (opcode >= 0x20 && opcode <= 0x24)) ins.imm = u();
+    else if (opcode >= 0x28 && opcode <= 0x3e) ins.imm = { align: u(), offset: u() };
+    else if (opcode === 0x41) ins.imm = s();
+    else if (opcode === 0x00 || opcode === 0x05 || opcode === 0x0b ||
+             opcode === 0x0f || opcode === 0x1a ||
+             (opcode >= 0x45 && opcode <= 0x4f) ||
+             (opcode >= 0x67 && opcode <= 0x78)) { /* no immediate */ }
+    else throw new Error('fixture decoder: unsupported opcode 0x' + opcode.toString(16) + ' at +' + rel);
+    ins.end = body.start + i; out.push(ins);
+  }
+  return out;
+}
+
 async function run(src, options) {
   const bytes = compile(src, options);
   const instance = await WebAssembly.instantiate(bytes, { c: {} });
@@ -212,8 +241,13 @@ async function run(src, options) {
   // bytes to the exact remapped WCall target retained in the final module.
   let observed = null;
   const structural = compile(
-    'struct S{int x;};__attribute__((noinline)) static int dead(void){return 1;}' +
-    '__attribute__((noinline)) static int f(struct S*p){return p->x;}int main(void){return f(0);}',
+    'struct S{int x;};\n' +
+    '__attribute__((noinline)) static int dead(void){return 1;}\n' +
+    '__attribute__((noinline)) static int f(struct S*p)\n' +
+    '{\n' +
+    '  return p->x; /* unique checked null-use line */\n' +
+    '}\n' +
+    'int main(void){return f(0);}\n',
     { trapNullDereference: true, emitNames: true }, x => { observed = x; });
   assert(Object.isFrozen(observed) && Object.isFrozen(observed.traps), 'post-pass observer result is not immutable');
   assert.strictEqual(observed.traps.length, 1, 'expected one observed generated thunk');
@@ -226,7 +260,7 @@ async function run(src, options) {
 
   const dw = decodeWasm(structural), trapIdx = observed.traps[0].funcIdx;
   const trapName = dw.names.get(trapIdx);
-  assert(trapName && trapName.includes('__cc_null_dereference[/null-trap.c:1:member]'),
+  assert(trapName && trapName.includes('__cc_null_dereference[/null-trap.c:5:member]'),
     'serialized exact-index thunk name missing');
   const trapType = dw.types[dw.funcTypes[trapIdx - dw.funcImports]];
   assert(trapType && trapType.params.length === 0 && trapType.results.length === 0,
@@ -236,12 +270,28 @@ async function run(src, options) {
   assert.strictEqual(dw.table.get(trapIdx + 1), trapIdx,
     'serialized element segment does not install the thunk at its table slot');
   const fIdx = [...dw.names].find(([, n]) => n === 'f')[0], fbody = dw.bodies.get(fIdx);
-  const call = Buffer.from([0x10, trapIdx]); // fixture indices stay single-byte LEB
-  assert(fbody.bytes.includes(call), 'serialized checked caller does not directly call exact thunk index');
+  const decoded = decodeInstructions(fbody);
+  const calls = decoded.filter(ins => ins.opcode === 0x10 && ins.imm === trapIdx);
+  assert.strictEqual(calls.length, 1, 'decoded checked caller does not directly call exact thunk index once');
+  const call = calls[0];
   const fileIdx = dw.sourceMap.files.indexOf('/null-trap.c');
   assert(fileIdx >= 0, 'serialized source map lost fixture filename');
-  assert(dw.sourceMap.entries.some(e => e.file === fileIdx && e.line === 1 && e.off >= fbody.start && e.off < fbody.end),
-    'serialized source map does not identify the checked caller/site after remap');
+  // c.sourcemap entries mark the source location active from that byte until
+  // the next entry. Resolve the call's exact absolute offset by predecessor,
+  // rather than accepting any same-line entry somewhere in f.
+  const active = dw.sourceMap.entries.filter(e => e.off <= call.off).at(-1);
+  assert(active && active.file === fileIdx && active.line === 5 &&
+         active.off >= fbody.start && active.off <= call.off,
+    'source location active at the decoded call is not /null-trap.c:5');
+
+  // RED control for the review finding: raw [call,target] bytes can straddle
+  // an i32.const immediate and the following loop opcode. The old includes()
+  // logic says "call 3"; boundary decoding correctly finds no call.
+  const falsePositive = { start: 100, bytes: Buffer.from([0x41, 0x10, 0x03, 0x40, 0x0b]) };
+  assert(falsePositive.bytes.includes(Buffer.from([0x10, 0x03])),
+    'negative control no longer exercises the old raw-byte matcher');
+  assert.strictEqual(decodeInstructions(falsePositive).filter(i => i.opcode === 0x10).length, 0,
+    'boundary decoder falsely treated immediate/opcode bytes as a call');
   const ss = sectionSizes(structural);
   assert(ss.get(3) > 0 && ss.get(9) > 0 && ss.get(10) > 0 && ss.get('custom:name') > 0,
     'serialized function/element/code/name sections missing');
