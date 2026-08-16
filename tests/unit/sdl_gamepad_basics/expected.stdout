@@ -1,0 +1,15 @@
+preinit_list=1 cnt=0 err_nonempty=1
+preinit_has=0
+init=1
+wasinit=1 events=1
+list=1 cnt=0 zterm=1
+has=0 is=0
+open=1 err_nonempty=1
+fromid=1
+btn_a=[a] btn_dpup=[dpup] btn_misc6=[misc6]
+btn_bad=1
+from_a=0 from_B=1 from_junk=-1
+ax_lx=[leftx] ax_rt=[righttrigger] from_lefty=1 from_junk=-1
+ev_default=1
+ev_off=0
+enums=26 6 1616 1619 1620
