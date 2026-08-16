@@ -16,6 +16,13 @@ whole desktop goes black. gucOS therefore refuses the combination
 fatal message and exit status 69, before the countdown starts. Only the
 offending program dies; the desktop is unaffected.
 
+Both hosts enforce this rule identically: the desktop and the headless
+`node os/boot.js` dev loop refuse the same shape with the same message
+and the same exit status, so a headless run is real evidence about it —
+a program that runs headlessly will not die at its second frame on the
+desktop. The explicit software renderer (Option 2 below) is exempt in
+both hosts.
+
 There are two sanctioned ways to write an SDL3 program here. Both are
 standard SDL3 — the same source runs on desktop SDL3 unchanged.
 
