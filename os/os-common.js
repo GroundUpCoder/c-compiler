@@ -79,7 +79,8 @@ function writeFile(kfs, path, data, mode) {
  *
  * Returns compile(argv, cwd) -> {exitCode, stdout, stderr} — exactly the
  * kernel's opts.compile contract (the __compile RPC behind /bin/cc). Flag
- * surface is the useful subset of the CLI: -o, -I, -D, -g; an unrecognised
+ * surface is the useful subset of the CLI: -o, -I, -D, -g,
+ * --trap-null-dereference; an unrecognised
  * dash option is refused by name (#710 — the silent discard sent developers
  * to measure their own code after `cc -O2` delivered nothing). Default
  * output is ./a.out — spawnable directly, since every binary here is a wasm
@@ -137,6 +138,7 @@ function createCcDriver(CompilerJS, kfs) {
         else pp.defines.set(def, '1');
       }
       else if (a === '-g' || a === '-g1') { compilerOptions.emitNames = true; }
+      else if (a === '--trap-null-dereference') { compilerOptions.trapNullDereference = true; }
       else if (a.charCodeAt(0) === 45) {
         // #710: an unrecognised option is refused BY NAME, never silently
         // dropped — `cc -O2` reporting success while delivering nothing sent
@@ -152,7 +154,7 @@ function createCcDriver(CompilerJS, kfs) {
       else sources.push(abs(a));
     }
     if (!sources.length) {
-      return { exitCode: 1, stdout: '', stderr: 'usage: cc [-o out] [-Ipath] [-Dname[=val]] [-g] file.c...\n' };
+      return { exitCode: 1, stdout: '', stderr: 'usage: cc [-o out] [-Ipath] [-Dname[=val]] [-g] [--trap-null-dereference] file.c...\n' };
     }
 
     // parseAllUnits reads the top-level sources through its `fs` parameter

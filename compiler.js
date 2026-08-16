@@ -16253,6 +16253,9 @@ function inlineFunctions(wmod, optsIn) {
       const callee = defs[ei];
       const meta = callee.fnMeta;
       if (!callee.wast || !meta) { refuse('noBody'); continue; }
+      if (meta.generatedNullTrap && !meta.noinline) {
+        throw new Error("WAST inline: generated null trap lost its noinline invariant");
+      }
       if (meta.noinline) { refuse('noinline'); continue; }
       if (meta.variadic) { refuse('variadic'); continue; }
       if (meta.usesAlloca) { refuse('alloca'); continue; }
@@ -17910,6 +17913,10 @@ class CodeGenerator {
     this.sourceMapFiles = [];
     this.sourceMapFileIndex = new Map();
     this.emitSrcLocMarkers = false;
+    // #709: source site -> compiler-generated, non-inline null trap thunk.
+    // The thunks are registered lazily while bodies are emitted, after all C
+    // definitions have stable indices but before the WAST passes run.
+    this.nullTrapThunks = new Map();
   }
 
   // --- Local allocator ---
@@ -17958,6 +17965,44 @@ class CodeGenerator {
       this.localScopeStack[this.localScopeStack.length - 1].push([key, idx]);
     }
     return idx;
+  }
+
+  _nullTrapName(loc, kind) {
+    const file = loc && loc.filename ? String(loc.filename) : '<unknown>';
+    const line = loc && loc.line ? loc.line : 0;
+    return `__cc_null_dereference[${file}:${line}:${kind}]`;
+  }
+
+  _getNullTrapThunk(loc, kind) {
+    const name = this._nullTrapName(loc, kind);
+    let funcIdx = this.nullTrapThunks.get(name);
+    if (funcIdx !== undefined) return funcIdx;
+    const typeId = this.wmod.addFunctionTypeId([], []);
+    funcIdx = this.wmod.addFunctionDefinition(typeId);
+    const def = this.wmod.funcDefs[funcIdx - this.wmod.funcImports.length];
+    def.wast = [new WAST.WUnreachable()];
+    def.fnMeta = {
+      variadic: false, frameSize: 0, overAligned: false, structRet: false,
+      usesAlloca: false, noinline: true, alwaysInline: false,
+      inlineHint: false, generatedNullTrap: true,
+    };
+    this.wmod.funcNames.push({ idx: funcIdx, name });
+    this.nullTrapThunks.set(name, funcIdx);
+    return funcIdx;
+  }
+
+  // Consume and reproduce the i32 pointer on the value stack. The temporary
+  // makes the source expression single-evaluation and keeps the caller's
+  // established evaluation order intact.
+  emitNullUseCheck(loc, kind) {
+    if (!this.compilerOptions.trapNullDereference) return;
+    const tmp = this.allocLocal(WT_I32);
+    this.body.localTee(tmp);
+    this.body.aop(WT_I32, ALU.OP_EQZ);
+    this.body.if_(WT_EMPTY);
+    this.body.call(this._getNullTrapThunk(loc, kind));
+    this.body.end();
+    this.body.localGet(tmp);
   }
 
   pushLocalScope() { this.localScopeStack.push([]); }
@@ -19847,9 +19892,7 @@ class CodeGenerator {
           savedRefLocal: refLocal, savedIdxLocal: idxLocal,
         };
       }
-      this.emitExpr(expr.array);
-      this.emitPointerOffset(expr.index, expr.type);
-      this.body.aop(WT_I32, ALU.OP_ADD);
+      this.emitAddressOf(expr);
       const lv = { kind: LV_MEMORY, type: expr.type, addrSource: LV_ADDR_LOCAL };
       lv.savedLocal = this.allocLocal(WT_I32);
       this.body.localSet(lv.savedLocal);
@@ -19857,6 +19900,7 @@ class CodeGenerator {
     }
     if (expr instanceof AST.EUnary && expr.op === "OP_DEREF") {
       this.emitExpr(expr.operand);
+      this.emitNullUseCheck(expr.loc, 'dereference');
       const lv = { kind: LV_MEMORY, type: expr.type, addrSource: LV_ADDR_LOCAL };
       lv.savedLocal = this.allocLocal(WT_I32);
       this.body.localSet(lv.savedLocal);
@@ -19961,6 +20005,7 @@ class CodeGenerator {
     }
     if (expr instanceof AST.EArrow) {
       this.emitExpr(expr.base);
+      this.emitNullUseCheck(expr.loc, 'member');
       const baseType = expr.base.type.baseType;
       const tag = baseType.tagDecl;
       const offset = this.getFieldOffset(tag, expr.memberDecl);
@@ -19969,6 +20014,7 @@ class CodeGenerator {
     }
     if (expr instanceof AST.ESubscript) {
       this.emitExpr(expr.array);
+      this.emitNullUseCheck(expr.loc, 'subscript');
       this.emitPointerOffset(expr.index, expr.type);
       this.body.aop(WT_I32, ALU.OP_ADD);
       return;
@@ -20304,6 +20350,7 @@ class CodeGenerator {
             this.emitIncDec(expr, ctx); return;
           case "OP_DEREF":
             this.emitExpr(expr.operand);
+            this.emitNullUseCheck(expr.loc, 'dereference');
             this.emitLoadIfScalar(expr.type);
             break;
           case "OP_ADDR":
@@ -20578,6 +20625,7 @@ class CodeGenerator {
             }
             this.body.localGet(argBlockBase);
             this.emitExpr(expr.callee);
+            this.emitNullUseCheck(expr.loc, 'indirect-call');
             this.body.callIndirect(typeId);
             if (varStructRet) {
               this.body.localGet(argBlockBase);
@@ -20621,6 +20669,7 @@ class CodeGenerator {
             }
             for (let i = 0; i < expr.arguments.length; i++) this.emitExpr(expr.arguments[i]);
             this.emitExpr(expr.callee);
+            this.emitNullUseCheck(expr.loc, 'indirect-call');
             this.body.callIndirect(typeId);
             if (structRet) this.structRetDeferred += structRetAllocSize;
             this.callNesting--;
@@ -20650,6 +20699,7 @@ class CodeGenerator {
         }
         const elemType = expr.type;
         this.emitExpr(expr.array);
+        this.emitNullUseCheck(expr.loc, 'subscript');
         this.emitPointerOffset(expr.index, elemType);
         this.body.aop(WT_I32, ALU.OP_ADD);
         this.emitLoadIfScalar(elemType);
@@ -20677,6 +20727,7 @@ class CodeGenerator {
       }
       case AST.EArrow: {
         this.emitExpr(expr.base);
+        this.emitNullUseCheck(expr.loc, 'member');
         const field = expr.memberDecl;
         const baseType = expr.base.type.baseType;
         const tag = baseType.tagDecl;
@@ -38280,6 +38331,8 @@ function main() {
       compilerOptions.forceIrreducibleLowering = true;
     } else if (args[i] === "--trapping-float-conversions") {
       compilerOptions.trappingFloatConversions = true;
+    } else if (args[i] === "--trap-null-dereference") {
+      compilerOptions.trapNullDereference = true;
     } else if (args[i] === "--dedup-literals" || args[i] === "-fmerge-constants") {
       // todos/0228: opt back into content-keyed string-literal merging (off
       // by default, so a UB write through one literal can't corrupt every
