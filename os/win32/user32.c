@@ -85,6 +85,7 @@
 #undef UNICODE
 #undef _UNICODE
 #include <windows.h>
+#include "gucedit.h"
 #include <mmsystem.h>
 #include <SDL.h>
 #include <errno.h>
@@ -3771,6 +3772,10 @@ typedef struct {
     char *undoText;             /* ...then re-inserts these bytes at undoPos */
     int undoIns;                /* count of undoText bytes */
     int undoAnchor, undoCaret;  /* selection the undo restores */
+    uint32_t textGeneration;    /* gucedit.h: nonzero, byte-change bound */
+    char *generationBytes;      /* exact last-notified bytes (no hash claim) */
+    int generationLen, generationCap;
+    GUCEDIT_BATCH_V1 *styles;   /* validated, process-private copy */
 } EditState;
 
 #define EDIT_PAD 3
@@ -3807,9 +3812,13 @@ static int edit_normalize(char *dst, const char *s, int n) {
 }
 
 static int edit_ensure(EditState *st, int need) {
-    if (st->cap >= need) return 1;
+    if (st->cap >= need && st->generationCap >= need) return 1;
     int nc = st->cap ? st->cap * 2 : 64;
     while (nc < need) nc *= 2;
+    char *gb = (char *)realloc(st->generationBytes, (size_t)nc);
+    if (!gb) return 0;
+    st->generationBytes = gb;
+    st->generationCap = nc;
     char *nb = (char *)realloc(st->buf, (size_t)nc);
     if (!nb) return 0;
     st->buf = nb;
@@ -4042,7 +4051,86 @@ static void edit_draw_run(HWND h, EditState *st, HDC dc, int baseX, int y,
                 st->buf + seg, to - seg);
 }
 
+static int edit_style_index(EditState *st, int pos) {
+    if (!st->styles || st->styles->text_generation != st->textGeneration) return -1;
+    uint32_t lo = 0, hi = st->styles->count;
+    while (lo < hi) {
+        uint32_t m = lo + (hi - lo) / 2;
+        GUCEDIT_STYLE_V1 *sp = &st->styles->styles[m];
+        if ((uint32_t)pos < sp->start) hi = m;
+        else if ((uint32_t)pos >= sp->end) lo = m + 1;
+        else return (int)m;
+    }
+    return -1;
+}
+
+/* Styled text for one LF-free line. Selection is deliberately resolved in
+ * this routine so syntax backgrounds never cover the system selection. */
+static void edit_draw_styled(HWND h, EditState *st, HDC dc, int baseX, int y,
+                             int lineStart, int from, int to, int selS, int selE,
+                             int focused, int lineH) {
+    int p = from;
+    while (p < to) {
+        int si = edit_style_index(st, p);
+        GUCEDIT_STYLE_V1 *sp = si >= 0 ? &st->styles->styles[si] : NULL;
+        int q = sp ? (int)sp->end : to;
+        if (!sp && st->styles && st->styles->text_generation == st->textGeneration) {
+            for (uint32_t k = 0; k < st->styles->count; k++) {
+                if ((int)st->styles->styles[k].start > p) {
+                    q = (int)st->styles->styles[k].start;
+                    break;
+                }
+            }
+        }
+        if (q > to) q = to;
+        if (focused && selE > selS) {
+            if (p < selS && q > selS) q = selS;
+            else if (p < selE && q > selE) q = selE;
+        }
+        int selected = focused && selE > selS && p >= selS && p < selE;
+        int x0 = baseX + edit_x_of(h, st, dc, lineStart, p);
+        int x1 = baseX + edit_x_of(h, st, dc, lineStart, q);
+        if (selected) {
+            SetTextColor(dc, GetSysColor(COLOR_HIGHLIGHTTEXT));
+        } else {
+            SetTextColor(dc, sp ? (COLORREF)sp->foreground :
+                         GetSysColor(hwnd_able(h) ? COLOR_WINDOWTEXT : COLOR_GRAYTEXT));
+            if (sp && (sp->flags & GUES_BG_VALID)) {
+                HBRUSH b = CreateSolidBrush((COLORREF)sp->background);
+                RECT rr; SetRect(&rr, x0, y, x1, y + lineH);
+                FillRect(dc, &rr, b); DeleteObject(b);
+            }
+        }
+        edit_draw_run(h, st, dc, baseX, y, lineStart, p, q);
+        if (sp && !selected && (sp->flags & (GUES_UNDERLINE | GUES_BOX))) {
+            COLORREF mark = sp->foreground;
+            HPEN pen = CreatePen(PS_SOLID, 1, mark);
+            HPEN old = (HPEN)SelectObject(dc, pen);
+            if (sp->flags & GUES_UNDERLINE) {
+                MoveToEx(dc, x0, y + lineH - 2, NULL); LineTo(dc, x1, y + lineH - 2);
+            }
+            if (sp->flags & GUES_BOX) {
+                MoveToEx(dc, x0, y, NULL); LineTo(dc, x1 - 1, y);
+                LineTo(dc, x1 - 1, y + lineH - 1); LineTo(dc, x0, y + lineH - 1);
+                LineTo(dc, x0, y);
+            }
+            SelectObject(dc, old); DeleteObject(pen);
+        }
+        if (q <= p) break;
+        p = q;
+    }
+}
+
 static void edit_notify(HWND h, int code) {
+    EditState *st = (EditState *)h->ctl;
+    if (code == EN_CHANGE && st) {
+        if (st->len != st->generationLen ||
+            (st->len && memcmp(st->buf, st->generationBytes, (size_t)st->len))) {
+            memcpy(st->generationBytes, st->buf, (size_t)st->len);
+            st->generationLen = st->len;
+            if (++st->textGeneration == 0) st->textGeneration = 1;
+        }
+    }
     if (h->parent)
         SendMessage(h->parent, WM_COMMAND, MAKEWPARAM(h->id, code), (LPARAM)h);
 }
@@ -4230,16 +4318,7 @@ static void edit_paint(HWND h) {
                     FillRect(dc, &sr, GetSysColorBrush(COLOR_HIGHLIGHT));
                 }
             }
-            SetTextColor(dc, GetSysColor(hwnd_able(h) ? COLOR_WINDOWTEXT : COLOR_GRAYTEXT));
-            edit_draw_run(h, st, dc, x, y, i, i, end);   /* tab-aware (0274) */
-            /* selection text repaint in highlight color */
-            if (focused && e > s) {
-                int ss = s > i ? s : i, se = e < end ? e : end;
-                if (se > ss) {
-                    SetTextColor(dc, GetSysColor(COLOR_HIGHLIGHTTEXT));
-                    edit_draw_run(h, st, dc, x, y, i, ss, se);
-                }
-            }
+            edit_draw_styled(h, st, dc, x, y, i, i, end, s, e, focused, lh);
             /* solid caret */
             if (focused && s == e && st->caret >= i && st->caret <= end) {
                 int cx = x + edit_x_of(h, st, dc, i, st->caret);
@@ -4496,7 +4575,51 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         int n = (int)strlen(t);
         if (n && edit_ensure(st, n + 1))
             st->len = edit_normalize(st->buf, t, n);
+        st->textGeneration = 1;
+        if (st->len) memcpy(st->generationBytes, st->buf, (size_t)st->len);
+        st->generationLen = st->len;
         return 0;
+    }
+    case GEM_GETTEXTGEN:
+        if (wp || lp) { SetLastError(ERROR_INVALID_PARAMETER); return 0; }
+        return st ? (LRESULT)st->textGeneration : 0;
+    case GEM_CLEARSTYLES:
+        if (wp || lp) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+        free(st->styles); st->styles = NULL;
+        InvalidateRect(h, NULL, TRUE);
+        return TRUE;
+    case GEM_SETSTYLES: {
+        const GUCEDIT_BATCH_V1 *b = (const GUCEDIT_BATCH_V1 *)lp;
+        if (wp || !b || b->version != GUCEDIT_ABI_VERSION ||
+            b->count > GUCEDIT_MAX_STYLES || b->count > (uint32_t)st->len ||
+            (uint64_t)b->count * sizeof(GUCEDIT_STYLE_V1) + sizeof(*b) != b->size) {
+            SetLastError(ERROR_INVALID_PARAMETER); return FALSE;
+        }
+        if (b->text_generation != st->textGeneration) {
+            SetLastError(GUCEDIT_ERROR_STALE_GENERATION); return FALSE;
+        }
+        uint32_t prev = 0;
+        for (uint32_t k = 0; k < b->count; k++) {
+            const GUCEDIT_STYLE_V1 *sp = &b->styles[k];
+            if (sp->start >= sp->end || sp->end > (uint32_t)st->len ||
+                (k && sp->start < prev) || (sp->flags & ~GUES_VALID_MASK) ||
+                (sp->foreground & 0xff000000u) || (sp->background & 0xff000000u) ||
+                (sp->start && ((unsigned char)st->buf[sp->start] & 0xc0) == 0x80) ||
+                (sp->end < (uint32_t)st->len && ((unsigned char)st->buf[sp->end] & 0xc0) == 0x80) ||
+                memchr(st->buf + sp->start, '\n', sp->end - sp->start) ||
+                ((sp->flags & GUES_BOX) &&
+                 (__u8_fwd(st->buf, st->len, (int)sp->start) != (int)sp->end ||
+                  st->buf[sp->start] == '\t'))) {
+                SetLastError(ERROR_INVALID_PARAMETER); return FALSE;
+            }
+            prev = sp->end;
+        }
+        GUCEDIT_BATCH_V1 *copy = (GUCEDIT_BATCH_V1 *)malloc(b->size);
+        if (!copy) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return FALSE; }
+        memcpy(copy, b, b->size);
+        free(st->styles); st->styles = copy;
+        InvalidateRect(h, NULL, TRUE);
+        return TRUE;
     }
     case WM_PAINT:
         edit_paint(h);
@@ -5018,10 +5141,13 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (st) {
             free(st->buf);
             st->buf = NULL;
+            free(st->generationBytes);
+            st->generationBytes = NULL;
             free(st->tabs);
             st->tabs = NULL;
             st->ntabs = 0;
             edit_undo_clear(st);
+            free(st->styles); st->styles = NULL;
             if (st->hlocal) { LocalFree(st->hlocal); st->hlocal = NULL; }
         }
         return 0;
