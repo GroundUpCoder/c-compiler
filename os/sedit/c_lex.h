@@ -13,7 +13,9 @@ typedef struct {
     SeditPair *pairs; size_t pair_count, pair_cap;
     uint64_t *stack; size_t stack_count, stack_cap;
     int state, escape, line_start, directive_cont;
+    int block_star;
     uint32_t token_start, offset;
+    char word[64]; size_t word_len;
     int failed;
 } SeditLexer;
 

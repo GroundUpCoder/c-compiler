@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 
 #define SEDIT_MAX_FILE (8u * 1024u * 1024u)
 enum SeditEol { SEDIT_EOL_LF, SEDIT_EOL_CRLF, SEDIT_EOL_CR, SEDIT_EOL_MIXED };
@@ -15,6 +16,18 @@ typedef struct {
     enum SeditEol eol; int bom, dirty, have_snapshot;
     char error[512];
 } SeditDocument;
+
+#ifdef SEDIT_TEST
+typedef struct {
+    int (*lstat_fn)(const char *, struct stat *); int (*stat_fn)(const char *, struct stat *);
+    char *(*realpath_fn)(const char *, char *); int (*open_fn)(const char *, int, mode_t);
+    ssize_t (*read_fn)(int, void *, size_t); ssize_t (*write_fn)(int, const void *, size_t);
+    int (*close_fn)(int); int (*fchmod_fn)(int, mode_t); int (*fsync_fn)(int);
+    int (*rename_fn)(const char *, const char *); int (*unlink_fn)(const char *);
+    int (*sha256_path_fn)(const char *, char[65]);
+} SeditIOOps;
+void sedit_document_test_io(const SeditIOOps *ops);
+#endif
 
 void sedit_document_init(SeditDocument *d);
 void sedit_document_free(SeditDocument *d);

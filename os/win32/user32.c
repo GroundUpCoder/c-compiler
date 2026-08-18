@@ -93,6 +93,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#ifdef GUCEDIT_TEST
+static int gucedit_fail_after = -1;
+void gucedit_test_fail_alloc_after(int calls) { gucedit_fail_after = calls; }
+static void *gucedit_alloc(size_t n) {
+    if (gucedit_fail_after == 0) return NULL;
+    if (gucedit_fail_after > 0) gucedit_fail_after--;
+    return malloc(n);
+}
+#else
+#define gucedit_alloc malloc
+#endif
 #include <sys/socket.h>
 #include <sys/select.h>
 #include <sys/stat.h>
@@ -4102,8 +4114,8 @@ static void edit_draw_styled(HWND h, EditState *st, HDC dc, int baseX, int y,
             }
         }
         edit_draw_run(h, st, dc, baseX, y, lineStart, p, q);
-        if (sp && !selected && (sp->flags & (GUES_UNDERLINE | GUES_BOX))) {
-            COLORREF mark = sp->foreground;
+        if (sp && (sp->flags & (GUES_UNDERLINE | GUES_BOX))) {
+            COLORREF mark = selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : sp->foreground;
             HPEN pen = CreatePen(PS_SOLID, 1, mark);
             HPEN old = (HPEN)SelectObject(dc, pen);
             if (sp->flags & GUES_UNDERLINE) {
@@ -4318,7 +4330,21 @@ static void edit_paint(HWND h) {
                     FillRect(dc, &sr, GetSysColorBrush(COLOR_HIGHLIGHT));
                 }
             }
-            edit_draw_styled(h, st, dc, x, y, i, i, end, s, e, focused, lh);
+            if (!st->styles || st->styles->text_generation != st->textGeneration) {
+                /* Exact legacy paint path: an absent/stale batch is pixel-parity,
+                 * not merely a styled loop that happens to choose defaults. */
+                SetTextColor(dc, GetSysColor(hwnd_able(h) ? COLOR_WINDOWTEXT : COLOR_GRAYTEXT));
+                edit_draw_run(h, st, dc, x, y, i, i, end);
+                if (focused && e > s) {
+                    int ss = s > i ? s : i, se = e < end ? e : end;
+                    if (se > ss) {
+                        SetTextColor(dc, GetSysColor(COLOR_HIGHLIGHTTEXT));
+                        edit_draw_run(h, st, dc, x, y, i, ss, se);
+                    }
+                }
+            } else {
+                edit_draw_styled(h, st, dc, x, y, i, i, end, s, e, focused, lh);
+            }
             /* solid caret */
             if (focused && s == e && st->caret >= i && st->caret <= end) {
                 int cx = x + edit_x_of(h, st, dc, i, st->caret);
@@ -4590,34 +4616,20 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         return TRUE;
     case GEM_SETSTYLES: {
         const GUCEDIT_BATCH_V1 *b = (const GUCEDIT_BATCH_V1 *)lp;
-        if (wp || !b || b->version != GUCEDIT_ABI_VERSION ||
-            b->count > GUCEDIT_MAX_STYLES || b->count > (uint32_t)st->len ||
-            (uint64_t)b->count * sizeof(GUCEDIT_STYLE_V1) + sizeof(*b) != b->size) {
+        if (wp) {
             SetLastError(ERROR_INVALID_PARAMETER); return FALSE;
         }
-        if (b->text_generation != st->textGeneration) {
+        int checked = gucedit_check_batch(b, st->buf, (uint32_t)st->len,
+                                          st->textGeneration);
+        if (checked == GUCEDIT_CHECK_STALE) {
             SetLastError(GUCEDIT_ERROR_STALE_GENERATION); return FALSE;
         }
-        uint32_t prev = 0;
-        for (uint32_t k = 0; k < b->count; k++) {
-            const GUCEDIT_STYLE_V1 *sp = &b->styles[k];
-            if (sp->start >= sp->end || sp->end > (uint32_t)st->len ||
-                (k && sp->start < prev) || (sp->flags & ~GUES_VALID_MASK) ||
-                (sp->foreground & 0xff000000u) || (sp->background & 0xff000000u) ||
-                (sp->start && ((unsigned char)st->buf[sp->start] & 0xc0) == 0x80) ||
-                (sp->end < (uint32_t)st->len && ((unsigned char)st->buf[sp->end] & 0xc0) == 0x80) ||
-                memchr(st->buf + sp->start, '\n', sp->end - sp->start) ||
-                ((sp->flags & GUES_BOX) &&
-                 (__u8_fwd(st->buf, st->len, (int)sp->start) != (int)sp->end ||
-                  st->buf[sp->start] == '\t'))) {
-                SetLastError(ERROR_INVALID_PARAMETER); return FALSE;
-            }
-            prev = sp->end;
+        if (checked != GUCEDIT_CHECK_OK) {
+            SetLastError(ERROR_INVALID_PARAMETER); return FALSE;
         }
-        GUCEDIT_BATCH_V1 *copy = (GUCEDIT_BATCH_V1 *)malloc(b->size);
-        if (!copy) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return FALSE; }
-        memcpy(copy, b, b->size);
-        free(st->styles); st->styles = copy;
+        if (!gucedit_replace_batch(&st->styles, b, gucedit_alloc)) {
+            SetLastError(ERROR_NOT_ENOUGH_MEMORY); return FALSE;
+        }
         InvalidateRect(h, NULL, TRUE);
         return TRUE;
     }

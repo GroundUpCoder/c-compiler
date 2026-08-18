@@ -78,3 +78,49 @@ waits showed the actual earlier failure: the in-OS compiler could not resolve
 later readiness markers were unconditional shell echoes.  The styled EDIT ABI
 header is now explicitly part of the win32 package's `src/win32` payload, the
 same physical tree used by the `win32` source-root mapping.
+
+# Contract-completion counter-pass (2026-08-19)
+
+Independent review found that the first tip's green tests did not cover the
+whole approved v2 contract. The corrected mapping is explicit:
+
+- Commands: Search/Find now has both menu dispatch and Ctrl+F, a modal query,
+  wrapped next-match selection, and deterministic focus return to the document.
+  Headless and headed automation drive the accelerator and dialog lifecycle.
+- Save identity: ordinary Save retains the spelling the user opened and
+  re-resolves it before every overwrite. Missing, retargeted, inode-changed, or
+  same-inode byte-changed targets return the same external-conflict result; the
+  UI names the captured physical target before Overwrite / Save As / Cancel.
+  The core probe retargets a real symlink and proves both old and new targets
+  remain unchanged.
+- Atomic I/O: `SeditIOOps` exists only under `SEDIT_TEST`; production binds the
+  POSIX operations directly. Executable controls cover partial write, EINTR,
+  create/write ENOSPC, chmod/fsync/close/rename failures, cleanup, content-hash
+  conflict, hard-link refusal/break, CRLF preservation, explicit mixed-EOL
+  choice, BOM, and no-final-newline. The fake selector is absent from baked code.
+- Streaming scan: identifier, number, pending slash/comment opener, block-close,
+  quote escape, directive continuation, delimiter stack, and byte offset survive
+  feeds. Every split of fixed UTF-8/comment/token/delimiter witnesses equals the
+  one-feed result. UI work is capped by 32 KiB feeds, 256 KiB per turn, and an
+  elapsed 8 ms deadline, with continuation only through posted `WM_RESTYLE`.
+- Styled EDIT: batch arithmetic, count, generation, flags, colors, UTF-8
+  boundaries, LF crossing, overlap ordering, and BOX single-scalar/tab rules
+  live in `gucedit_core.c` and run as a native executable matrix. Replacement
+  allocation is commit-after-copy, with executable OOM preservation. Production
+  has no test allocator export. Selection owns syntax fg/bg; UNDERLINE/BOX draw
+  afterward in `COLOR_HIGHLIGHTTEXT`, so match marks remain visible.
+- Generation and lifetime: exact byte snapshots advance only after a real byte
+  change; stale batches have their distinct error; invalid and allocation-failed
+  replacements preserve the installed batch; destruction frees both snapshot
+  and styles. The executable core plus real Win32 headed/headless paths cover the
+  reachable halves.
+- Navigation/text formats: positive line, FILE:LINE, primary error/warning, and
+  link `at` forms pass; zero/overflow/column/multiline/unrelated forms reject.
+  UTF-8 validity, mixed EOL choice, BOM, and no-final-newline are byte-asserted.
+- Integration/rollback: `/bin/sedit`, Development menu activation, c+h
+  associations, Notepad/vi defaults, package source closure, and binary-absent
+  resolver rollback remain covered by the original headless/headed acceptance.
+
+The provenance fence remained absolute: no user-owned `projects/` material or
+shared untracked `tests/browser/*sedit*` fixture contributed implementation or
+test content.

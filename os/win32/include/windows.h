@@ -2120,6 +2120,7 @@ int  SetMapMode(HDC hdc, int mode);
  * errors). */
 #ifndef WIN32_NO_REQUIRE_SOURCES
 __require_source("win32/user32.c");
+__require_source("win32/gucedit_core.c");
 __require_source("win32/gdi32.c");
 __require_source("win32/gdi32w.c");
 __require_source("win32/menucore.c");

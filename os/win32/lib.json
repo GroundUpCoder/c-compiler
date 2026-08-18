@@ -14,6 +14,7 @@
   "srcRoots": { "win32": "." },
   "sources": [
     "user32.c",
+    "gucedit_core.c",
     "gdi32w.c",
     "kernel32.c",
     "advapi32.c",
