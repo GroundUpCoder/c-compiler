@@ -8,7 +8,8 @@
 #define SEDIT_MAX_FILE (8u * 1024u * 1024u)
 enum SeditEol { SEDIT_EOL_LF, SEDIT_EOL_CRLF, SEDIT_EOL_CR, SEDIT_EOL_MIXED };
 enum SeditSaveResult { SEDIT_SAVE_OK=0, SEDIT_SAVE_ERROR=-1,
-    SEDIT_SAVE_CONFLICT=-2, SEDIT_SAVE_HARDLINK=-3 };
+    SEDIT_SAVE_CONFLICT=-2, SEDIT_SAVE_HARDLINK=-3,
+    SEDIT_SAVE_PUBLISHED_REFRESH_FAILED=-4 };
 typedef struct {
     char *text; size_t len;
     char user_path[1024], target_path[1024];

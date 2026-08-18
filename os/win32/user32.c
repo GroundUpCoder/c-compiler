@@ -4102,20 +4102,17 @@ static void edit_draw_styled(HWND h, EditState *st, HDC dc, int baseX, int y,
         int selected = focused && selE > selS && p >= selS && p < selE;
         int x0 = baseX + edit_x_of(h, st, dc, lineStart, p);
         int x1 = baseX + edit_x_of(h, st, dc, lineStart, q);
-        if (selected) {
-            SetTextColor(dc, GetSysColor(COLOR_HIGHLIGHTTEXT));
-        } else {
-            SetTextColor(dc, sp ? (COLORREF)sp->foreground :
-                         GetSysColor(hwnd_able(h) ? COLOR_WINDOWTEXT : COLOR_GRAYTEXT));
-            if (sp && (sp->flags & GUES_BG_VALID)) {
-                HBRUSH b = CreateSolidBrush((COLORREF)sp->background);
+        GUCEDIT_PAINT_SPAN paint;
+        gucedit_paint_span(sp,1,selected,(uint32_t)GetSysColor(hwnd_able(h)?COLOR_WINDOWTEXT:COLOR_GRAYTEXT),(uint32_t)GetSysColor(COLOR_HIGHLIGHTTEXT),x0,x1,y,lineH,&paint);
+        SetTextColor(dc,(COLORREF)paint.foreground);
+        if (paint.fill_background) {
+                HBRUSH b = CreateSolidBrush((COLORREF)paint.background);
                 RECT rr; SetRect(&rr, x0, y, x1, y + lineH);
                 FillRect(dc, &rr, b); DeleteObject(b);
-            }
         }
         edit_draw_run(h, st, dc, baseX, y, lineStart, p, q);
-        GUCEDIT_MARK_PLAN mp;
-        if (gucedit_mark_plan(sp,selected,(uint32_t)GetSysColor(COLOR_HIGHLIGHTTEXT),x0,x1,y,lineH,&mp)) {
+        GUCEDIT_MARK_PLAN mp=paint.mark;
+        if (paint.has_mark) {
             HPEN pen = CreatePen(PS_SOLID, 1, (COLORREF)mp.color);
             HPEN old = (HPEN)SelectObject(dc, pen);
             if (mp.flags & GUES_UNDERLINE) {
@@ -4333,7 +4330,7 @@ static void edit_paint(HWND h) {
             if (!st->styles || st->styles->text_generation != st->textGeneration) {
                 /* Exact legacy paint path: an absent/stale batch is pixel-parity,
                  * not merely a styled loop that happens to choose defaults. */
-                SetTextColor(dc, GetSysColor(hwnd_able(h) ? COLOR_WINDOWTEXT : COLOR_GRAYTEXT));
+                GUCEDIT_PAINT_SPAN plain;gucedit_paint_span(NULL,0,0,(uint32_t)GetSysColor(hwnd_able(h)?COLOR_WINDOWTEXT:COLOR_GRAYTEXT),(uint32_t)GetSysColor(COLOR_HIGHLIGHTTEXT),0,1,0,lh,&plain);SetTextColor(dc,(COLORREF)plain.foreground);
                 edit_draw_run(h, st, dc, x, y, i, i, end);
                 if (focused && e > s) {
                     int ss = s > i ? s : i, se = e < end ? e : end;

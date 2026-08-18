@@ -16,6 +16,7 @@ static Batch good(const char *text) {
 }
 static void line(unsigned char*p,int w,int x0,int y0,int x1,int y1,unsigned char c){if(y0==y1)for(int x=x0;x<=x1;x++)p[y0*w+x]=c;else if(x0==x1)for(int y=y0;y<=y1;y++)p[y*w+x0]=c;}
 static void paint_mark(unsigned char*p,int w,const GUCEDIT_MARK_PLAN*m){if(m->flags&GUES_UNDERLINE)line(p,w,m->x0,m->underline_y,m->x1,m->underline_y,(unsigned char)m->color);if(m->flags&GUES_BOX){line(p,w,m->x0,m->top,m->x1,m->top,(unsigned char)m->color);line(p,w,m->x1,m->top,m->x1,m->bottom,(unsigned char)m->color);line(p,w,m->x0,m->bottom,m->x1,m->bottom,(unsigned char)m->color);line(p,w,m->x0,m->top,m->x0,m->bottom,(unsigned char)m->color);}}
+static void paint_span(unsigned char*p,int w,int h,const GUCEDIT_PAINT_SPAN*s){if(s->fill_background)for(int y=s->top;y<=s->bottom&&y<h;y++)for(int x=s->x0;x<=s->x1&&x<w;x++)p[y*w+x]=(unsigned char)s->background;if(s->x0+1<w&&s->top+1<h)p[(s->top+1)*w+s->x0+1]=(unsigned char)s->foreground;if(s->has_mark)paint_mark(p,w,&s->mark);}
 int main(void) {
     const char *text="a\té\nZ"; Batch x=good(text);
     OK("valid batch",gucedit_check_batch(B(x),text,6,7)==GUCEDIT_CHECK_OK);
@@ -33,6 +34,9 @@ int main(void) {
     unsigned char box[20*12]={0},under[20*12]={0};GUCEDIT_MARK_PLAN mp;x=good(text);x.s[0].flags=GUES_BOX;OK("selected BOX plan uses highlight contrast",gucedit_mark_plan(&x.s[0],1,9,2,8,1,9,&mp)&&mp.color==9);paint_mark(box,20,&mp);OK("selected BOX pixels cover exact rectangle",box[1*20+2]==9&&box[1*20+7]==9&&box[9*20+2]==9&&box[5*20+7]==9&&box[5*20+4]==0);
     x.s[0].flags=GUES_UNDERLINE;OK("selected UNDERLINE plan uses highlight contrast",gucedit_mark_plan(&x.s[0],1,7,2,8,1,9,&mp)&&mp.color==7);paint_mark(under,20,&mp);OK("selected UNDERLINE pixels occupy baseline only",under[8*20+2]==7&&under[8*20+7]==7&&under[7*20+4]==0);
     OK("tab segmentation advances to exact stops",gucedit_tab_advance(3,8)==8&&gucedit_tab_advance(8,8)==16&&gucedit_tab_advance(15,8)==16);
-    unsigned char legacy[32],nostyle[32];for(int i=0;i<32;i++)legacy[i]=nostyle[i]=(unsigned char)(i*3);OK("empty style batch has exact no-style pixel parity",!memcmp(legacy,nostyle,sizeof legacy));
+    unsigned char styled[20*12]={0},selected[20*12]={0},stale[20*12]={0},nostyle[20*12]={0};GUCEDIT_PAINT_SPAN ps;x=good(text);x.s[0].flags=GUES_BG_VALID|GUES_UNDERLINE;x.s[0].foreground=3;x.s[0].background=5;gucedit_paint_span(&x.s[0],1,0,1,9,2,8,1,9,&ps);paint_span(styled,20,12,&ps);OK("syntax foreground background and underline produce exact pixels",styled[2*20+3]==3&&styled[4*20+4]==5&&styled[8*20+4]==3);
+    gucedit_paint_span(&x.s[0],1,1,1,9,2,8,1,9,&ps);paint_span(selected,20,12,&ps);OK("selected syntax suppresses background and uses highlight for glyph plus underline",selected[2*20+3]==9&&selected[4*20+4]==0&&selected[8*20+4]==9);
+    int tx=gucedit_tab_advance(3,8);gucedit_paint_span(&x.s[0],1,0,1,9,3,tx,1,9,&ps);paint_span(stale,20,12,&ps);OK("styled tab gap background and underline cover real advance",stale[4*20+6]==5&&stale[8*20+6]==3);
+    memset(stale,0,sizeof stale);gucedit_paint_span(&x.s[0],0,0,1,9,2,8,1,9,&ps);paint_span(stale,20,12,&ps);gucedit_paint_span(NULL,0,0,1,9,2,8,1,9,&ps);paint_span(nostyle,20,12,&ps);OK("stale generation has exact no-style pixel parity",!memcmp(stale,nostyle,sizeof stale));OK("styled pixels are discriminating from no-style red control",memcmp(styled,nostyle,sizeof styled)!=0);
     return fails?1:0;
 }

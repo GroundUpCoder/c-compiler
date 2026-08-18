@@ -155,3 +155,45 @@ seam consumed by production `user32.c`. The executable ABI probe rasterizes the
 returned plans and checks exact selected-mark pixels, highlight contrast, tab
 stops, and the empty-style no-style pixel control; the prior source-regex mark
 claim was removed.
+
+## Counter-pass 4 — current navigation text, published-save state, paint spans
+
+Same-reviewer re-review of `5bc4383a` found four remaining evidence and state
+gaps. Bare-line navigation now takes one fresh EDIT snapshot after parsing the
+target and uses that same allocation for bounds and offset selection; it no
+longer falls back to the loaded document buffer when an edit cancelled the
+lexer snapshot. The existing registered Ctrl+G acceptance remains green. An
+attempted additive growth/shrink UI control was kept RED while diagnosing
+`wmctl` multiline and focus behavior, then removed rather than claiming flaky
+evidence; the current-text invariant is enforced directly by the production
+snapshot lifetime and line-offset core controls.
+
+Atomic save now distinguishes pre-publication failure from successful rename
+followed by identity-refresh failure. Post-rename stat/hash faults return a
+published-but-refresh-failed result, retain dirty state, invalidate the cached
+identity, and surface a distinct UI title. Cleanup-unlink failure is appended to
+the primary failure instead of replacing or hiding it. Native fault controls
+assert published bytes, inode and snapshot state, retained temp state, and the
+combined primary/cleanup diagnostic.
+
+Styled EDIT now resolves foreground, background fill, selection precedence,
+tab geometry, and BOX/UNDERLINE mark output through one complete paint-span
+operation consumed by production drawing. The executable probe materializes
+those spans into exact pixels and proves syntax fg/bg/underline, selected
+highlight precedence, tab-gap background/underline, stale/no-style equality,
+and a discriminating styled-vs-default control.
+
+Every seeded randomized lexer schedule is now compared to the independently
+implemented reference scanner, not merely to another production feeding mode.
+A fixed independently encoded comment/string/delimiter witness and a deliberately
+broken reference control prove that token spans and pair maps discriminate the
+defect class.
+
+Counter-pass 4 evidence before the authoritative candidate gate:
+
+- standalone core and ABI probes: green
+- native `os/sedit/bin.json` compile: green
+- focused kernel: 3/3
+- focused browser: 1/1 (`os-sedit`)
+- kernel e2e under load: 3/3, 0% flake
+- browser e2e under load: 3/3, 0% flake

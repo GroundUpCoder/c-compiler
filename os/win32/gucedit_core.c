@@ -63,3 +63,17 @@ int gucedit_mark_plan(const GUCEDIT_STYLE_V1 *style, int selected,
     out->flags=style->flags&(GUES_UNDERLINE|GUES_BOX);
     return 1;
 }
+
+void gucedit_paint_span(const GUCEDIT_STYLE_V1 *style, int styles_current,
+                        int selected, uint32_t default_foreground,
+                        uint32_t highlight_text, int x0, int x1, int y,
+                        int line_height, GUCEDIT_PAINT_SPAN *out) {
+    memset(out,0,sizeof *out);
+    out->x0=x0;out->x1=x1-1;out->top=y;out->bottom=y+line_height-1;
+    if (!styles_current) style=NULL;
+    out->foreground=selected?highlight_text:(style?style->foreground:default_foreground);
+    if (style&&!selected&&(style->flags&GUES_BG_VALID)) {
+        out->background=style->background; out->fill_background=1;
+    }
+    out->has_mark=gucedit_mark_plan(style,selected,highlight_text,x0,x1,y,line_height,&out->mark);
+}
