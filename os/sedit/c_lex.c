@@ -41,7 +41,7 @@ static int lex_normal_run(SeditLexer*l,const char*s,size_t*i) {
     if(c=='/'){l->state=L_SLASH;l->token_start=at;(*i)++;return 1;}
     if(c=='"'||c=='\''){l->state=c=='"'?L_STRING:L_CHAR;l->token_start=at;l->escape=0;(*i)++;return 1;}
     if(isident0(c)){l->state=L_IDENT;l->token_start=at;l->word_len=0;return 1;}
-    if(isdigit(c)){l->state=L_NUMBER;l->token_start=at;return 1;}
+    if(isdigit(c)){l->state=L_NUMBER;l->token_start=at;l->number_exp=0;return 1;}
     if(c=='.'){l->state=L_DOT;l->token_start=at;(*i)++;return 1;}
     if(strchr("()[]{}",c)){
         if(strchr("([{",c)){if(!grow((void**)&l->stack,&l->stack_cap,l->stack_count+1,sizeof(*l->stack)))return 0;l->stack[l->stack_count++]=((uint64_t)at<<8)|c;}
@@ -57,8 +57,8 @@ int sedit_lex_feed(SeditLexer*l,const char*s,size_t n){
     while(i<n){char c=s[i];uint32_t end=l->offset+(uint32_t)i+1;
         if(l->state==L_NORMAL){if(!lex_normal_run(l,s,&i))goto oom;continue;}
         if(l->state==L_IDENT){if(isident((unsigned char)c)){if(l->word_len<sizeof l->word)l->word[l->word_len++]=c;i++;continue;}int ty=0;if(l->word_len<sizeof l->word&&kw(l->word,l->word_len,&ty)&&!tok(l,l->token_start,l->offset+(uint32_t)i,ty?SEDIT_T_TYPE:SEDIT_T_KEYWORD))goto oom;l->state=L_NORMAL;continue;}
-        if(l->state==L_NUMBER){if(isalnum((unsigned char)c)||strchr("._+-",c)){i++;continue;}if(!tok(l,l->token_start,l->offset+(uint32_t)i,SEDIT_T_NUMBER))goto oom;l->state=L_NORMAL;continue;}
-        if(l->state==L_DOT){if(isdigit((unsigned char)c)){l->state=L_NUMBER;continue;}l->state=L_NORMAL;continue;}
+        if(l->state==L_NUMBER){if(isalnum((unsigned char)c)||c=='.'){l->number_exp=(c=='e'||c=='E'||c=='p'||c=='P');i++;continue;}if((c=='+'||c=='-')&&l->number_exp){l->number_exp=0;i++;continue;}if(!tok(l,l->token_start,l->offset+(uint32_t)i,SEDIT_T_NUMBER))goto oom;l->state=L_NORMAL;continue;}
+        if(l->state==L_DOT){if(isdigit((unsigned char)c)){l->state=L_NUMBER;l->number_exp=0;continue;}l->state=L_NORMAL;continue;}
         if(l->state==L_SLASH){if(c=='*'){l->state=L_BLOCK;l->block_star=0;i++;continue;}if(c=='/'){l->state=L_LINE;i++;continue;}l->state=L_NORMAL;continue;}
         if(l->state==L_BLOCK){if(l->block_star&&c=='/'){i++;if(!tok(l,l->token_start,l->offset+(uint32_t)i,SEDIT_T_COMMENT))goto oom;l->state=L_NORMAL;l->block_star=0;}else{l->block_star=c=='*';i++;}continue;}
         if(l->state==L_LINE){if(c=='\n'){if(!tok(l,l->token_start,end-1,SEDIT_T_COMMENT))goto oom;l->state=L_NORMAL;l->line_start=1;}i++;continue;}

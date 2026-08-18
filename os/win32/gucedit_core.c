@@ -46,3 +46,20 @@ int gucedit_replace_batch(GUCEDIT_BATCH_V1 **slot,
     memcpy(copy, batch, batch->size);
     free(*slot); *slot = copy; return 1;
 }
+
+int gucedit_tab_advance(int x, int tab_width) {
+    if (tab_width <= 0) return x;
+    return ((x / tab_width) + 1) * tab_width;
+}
+
+int gucedit_mark_plan(const GUCEDIT_STYLE_V1 *style, int selected,
+                      uint32_t highlight_text, int x0, int x1, int y,
+                      int line_height, GUCEDIT_MARK_PLAN *out) {
+    if (!style || !out || x1 <= x0 || line_height <= 1 ||
+        !(style->flags & (GUES_UNDERLINE | GUES_BOX))) return 0;
+    out->x0=x0; out->x1=x1-1; out->top=y; out->bottom=y+line_height-1;
+    out->underline_y=y+line_height-2;
+    out->color=selected?highlight_text:style->foreground;
+    out->flags=style->flags&(GUES_UNDERLINE|GUES_BOX);
+    return 1;
+}

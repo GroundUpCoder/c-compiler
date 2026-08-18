@@ -124,3 +124,34 @@ whole approved v2 contract. The corrected mapping is explicit:
 The provenance fence remained absolute: no user-owned `projects/` material or
 shared untracked `tests/browser/*sedit*` fixture contributed implementation or
 test content.
+
+## Counter-pass 3 — exact-target overwrite, atomic locations, independent controls
+
+Same-reviewer re-review of `2a700722` found three remaining contract gaps. The
+save conflict detector noticed symlink retargeting, but explicit Overwrite still
+published to the captured old physical target. Overwrite now resolves the user
+path again at confirmation, takes mode/link policy from that current target,
+atomically replaces that target without replacing the symlink, and refreshes the
+document identity. Native controls cover Cancel, Overwrite, and Save As and name
+the exact target/inode invariants.
+
+Path-bearing Ctrl+G and CLI locations are now distinct from bare line numbers.
+Missing paths report a named error, and another document's requested line is
+validated before the loaded document is committed. The registered kernel member
+drives real Ctrl+G and CLI missing/out-of-range/literal-colon cases and asserts
+the original document and caret remain unchanged on failure.
+
+The lexer control now includes a separately written slow scanner which calls no
+production lexer helpers. Seeded insert/delete/replace/split/join sequences are
+compared after every edit and every feed split. The production pp-number state
+admits `+`/`-` only immediately after `e/E/p/P`, with `1+2`, `1e+2`, and
+`0x1p-3` as readable witnesses. The I/O fault matrix now executes hash and
+cleanup-unlink faults as well as create/write/chmod/fsync/close/rename, asserting
+dirty state, exact operation text, unchanged original bytes, and the precise
+temp cleanup state after every injected failure.
+
+Selected BOX/UNDERLINE and tab geometry moved into `gucedit_core.c`, the same
+seam consumed by production `user32.c`. The executable ABI probe rasterizes the
+returned plans and checks exact selected-mark pixels, highlight contrast, tab
+stops, and the empty-style no-style pixel control; the prior source-regex mark
+claim was removed.

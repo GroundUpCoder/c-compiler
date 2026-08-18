@@ -51,5 +51,13 @@ typedef void *(*GUCEDIT_ALLOC_FN)(size_t);
 int gucedit_replace_batch(GUCEDIT_BATCH_V1 **slot,
                           const GUCEDIT_BATCH_V1 *batch,
                           GUCEDIT_ALLOC_FN alloc_fn);
+typedef struct GUCEDIT_MARK_PLAN {
+    int x0, x1, top, bottom, underline_y;
+    uint32_t color, flags;
+} GUCEDIT_MARK_PLAN;
+int gucedit_tab_advance(int x, int tab_width);
+int gucedit_mark_plan(const GUCEDIT_STYLE_V1 *style, int selected,
+                      uint32_t highlight_text, int x0, int x1, int y,
+                      int line_height, GUCEDIT_MARK_PLAN *out);
 
 #endif

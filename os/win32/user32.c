@@ -4016,7 +4016,7 @@ static int edit_next_tab(HDC dc, EditState *st, int x) {
                    ? st->tabs[0] * avg / 4
                    : avg * 8;                      /* default 8-char grid */
     if (step <= 0) step = avg * 8;
-    return (x / step + 1) * step;
+    return gucedit_tab_advance(x, step);
 }
 
 /* Pixel x-offset of byte `pos` within the line starting at `lineStart`,
@@ -4114,17 +4114,17 @@ static void edit_draw_styled(HWND h, EditState *st, HDC dc, int baseX, int y,
             }
         }
         edit_draw_run(h, st, dc, baseX, y, lineStart, p, q);
-        if (sp && (sp->flags & (GUES_UNDERLINE | GUES_BOX))) {
-            COLORREF mark = selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : sp->foreground;
-            HPEN pen = CreatePen(PS_SOLID, 1, mark);
+        GUCEDIT_MARK_PLAN mp;
+        if (gucedit_mark_plan(sp,selected,(uint32_t)GetSysColor(COLOR_HIGHLIGHTTEXT),x0,x1,y,lineH,&mp)) {
+            HPEN pen = CreatePen(PS_SOLID, 1, (COLORREF)mp.color);
             HPEN old = (HPEN)SelectObject(dc, pen);
-            if (sp->flags & GUES_UNDERLINE) {
-                MoveToEx(dc, x0, y + lineH - 2, NULL); LineTo(dc, x1, y + lineH - 2);
+            if (mp.flags & GUES_UNDERLINE) {
+                MoveToEx(dc, mp.x0, mp.underline_y, NULL); LineTo(dc, mp.x1+1, mp.underline_y);
             }
-            if (sp->flags & GUES_BOX) {
-                MoveToEx(dc, x0, y, NULL); LineTo(dc, x1 - 1, y);
-                LineTo(dc, x1 - 1, y + lineH - 1); LineTo(dc, x0, y + lineH - 1);
-                LineTo(dc, x0, y);
+            if (mp.flags & GUES_BOX) {
+                MoveToEx(dc, mp.x0, mp.top, NULL); LineTo(dc, mp.x1, mp.top);
+                LineTo(dc, mp.x1, mp.bottom); LineTo(dc, mp.x0, mp.bottom);
+                LineTo(dc, mp.x0, mp.top);
             }
             SelectObject(dc, old); DeleteObject(pen);
         }

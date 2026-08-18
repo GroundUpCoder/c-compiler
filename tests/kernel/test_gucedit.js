@@ -11,7 +11,6 @@ ok('stale generation has distinct error',/GUCEDIT_ERROR_STALE_GENERATION/.test(u
 ok('production delegates validation to executable core',/gucedit_check_batch\(b, st->buf/.test(u));
 ok('production uses preservation-tested replacement core',/gucedit_replace_batch\(&st->styles/.test(u));
 ok('destroy frees styles',/free\(st->styles\); st->styles = NULL/.test(u));
-ok('selected mark layer uses highlight contrast',/COLOR_HIGHLIGHTTEXT/.test(u)&&/sp && \(sp->flags/.test(u));
 ok('test allocator override is compile-time only',/#ifdef GUCEDIT_TEST/.test(u)&&/#define gucedit_alloc malloc/.test(u));
 const wasm=path.join(os.tmpdir(),`gucedit-prod-${process.pid}.wasm`),bc=cp.spawnSync('node',['compiler.js','os/sedit/bin.json','-o',wasm],{cwd:ROOT,encoding:'utf8'});let absent=false;if(bc.status===0){const mod=new WebAssembly.Module(fs.readFileSync(wasm)),names=WebAssembly.Module.exports(mod).map(x=>x.name);absent=!names.some(x=>x.includes('gucedit_test_fail_alloc')||x.includes('sedit_document_test_io'));fs.rmSync(wasm,{force:true});}ok('baked production has no test override export',bc.status===0&&absent);
 process.exit(fails?1:0);
