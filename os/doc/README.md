@@ -12,6 +12,7 @@ symlink.
 | File | Contents |
 |---|---|
 | `toolchain.md` | The C compiler: flags, headers, libraries, diagnostics |
+| `editor.md` | Source Editor: C highlighting, delimiter matching, save and diagnostic navigation |
 | `packages.md` | gucman, package anatomy, sources packages, rebuilds |
 | `git.md` | The in-OS git: commands, network, credentials |
 | `publish.md` | How to publish a package from inside gucOS |

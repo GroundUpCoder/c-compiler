@@ -1,5 +1,5 @@
 {
-  "version": 272,
+  "version": 273,
   "defaultPackages": ["doom", "gcode", "calc", "paint"],
   "overlays": [
     {
@@ -22,6 +22,7 @@
       "/usr/share/gucman",
       "/usr/share/menu",
       "/usr/share/menu/Accessories",
+      "/usr/share/menu/Development",
       "/usr/share/menu/Demos",
       "/usr/share/menu/Games",
       "/usr/share/mgp",
@@ -41,6 +42,9 @@
       },
       "/usr/share/doc/toolchain.md": {
         "bin": "os/doc/toolchain.md"
+      },
+      "/usr/share/doc/editor.md": {
+        "bin": "os/doc/editor.md"
       },
       "/usr/share/doc/packages.md": {
         "bin": "os/doc/packages.md"
@@ -227,6 +231,9 @@
       "/usr/bin/notepad": {
         "project": "vendor/notepad/bin.json"
       },
+      "/usr/bin/sedit": {
+        "project": "os/sedit/bin.json"
+      },
       "/usr/bin/notepad.res": {
         "bin": "vendor/notepad/notepad.res"
       },
@@ -247,6 +254,9 @@
       },
       "/usr/share/menu/Accessories/notepad": {
         "link": "/usr/bin/notepad"
+      },
+      "/usr/share/menu/Development/Source Editor": {
+        "link": "/usr/bin/sedit"
       },
       "/usr/share/menu/Accessories/fileman": {
         "link": "/usr/bin/fileman"
@@ -327,7 +337,7 @@
         "bin": "os/sounds/chimes.wav"
       },
       "/usr/share/openwith": {
-        "content": "# File associations (todos/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). Three layers overlaid per key, highest wins:\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\ndeck\t/bin/deck\nmgp\t/bin/mgp\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"
+        "content": "# File associations (todos/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). Three layers overlaid per key, highest wins:\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\nc\t/bin/sedit\nh\t/bin/sedit\ndeck\t/bin/deck\nmgp\t/bin/mgp\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"
       },
       "/usr/share/net": {
         "content": "# Network (HTTP bridge) configuration (tickets #349/#391), consulted by\n# the kernel embedder's fetch wrapper (os/os-common.js netConfig) and the\n# Control Panel Network applet through os/netcfg.h. Three layers overlaid\n# per key, highest wins: ~/.config/net, /etc/net, /usr/share/net. Keys:\n# bridge (on | off — route off-origin kernel HTTP transfers through the\n# localhost bridge process, tools/net-bridge.js; same-origin fetches\n# always take the direct path, #391), url (the bridge's base URL). The\n# bridge is NOT part of the OS image — the user runs it themselves.\nbridge\toff\nurl\thttp://127.0.0.1:8199\n"

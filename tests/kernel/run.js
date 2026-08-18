@@ -155,6 +155,9 @@ const tests = [
   ['test_winmine_e2e.js', BOOT, IMG],  // 0068: winmine playable — sidecar resources, menu bar/popups, SURFACE_RESIZE, dialogs from templates, WM_TIMER, registry persistence
   ['test_calc_e2e.js', BOOT, IMG],     // 0048: calc usable — WRES v2 template menus, owner-draw keypad, clipboard file + menu re-gray, keyboard translation, TrackPopupMenu agent path
   ['test_notepad_e2e.js', BOOT, IMG],  // 0048: notepad usable — EDIT-around-a-file (EM_*HANDLE), comdlg32 file dialogs + find/replace protocol, status bar, MB_YESNOCANCEL, ShellExecuteW
+  ['test_gucedit.js'],                 // #718: private generation-bound styled EDIT ABI validation contract
+  ['test_sedit_core.js'],              // #718: C lexer/pair oracle + location/EOL/atomic-save core
+  ['test_sedit_e2e.js', BOOT, IMG],    // #718: baked native editor, FILE:LINE, edit/save, menu and c+h associations
   ['test_notepad_menu_e2e.js', BOOT, IMG], // 0222: EVERY notepad menu item — effect or loud refusal (grayed items refuse agent clicks; Font/Print/PageSetup report unsupported), WM_SETTEXT caret-to-start, the win32rc \r fix pinned
   ['test_edit_punct_repro.js', BOOT, IMG], // #430: punctuation keysym→VK collisions (' = VK_RIGHT, . = VK_DELETE) — 13-key EOL insert matrix + type-over-selection replaces; RED until #430's vk_of OEM remap lands
   ['test_comdlg_diag_e2e.js', BOOT, IMG], // 0255 R4: short listings say so — list_dir TRUE count past the fill cap, deleted-cwd "(cannot open directory)", 520-entry "(8 more...)" marker (dialog + fileman, TRUE status count), and a REAL OOM "(cannot allocate...)" row via the heap-ballast fixture under --wasm-max-mem-pages

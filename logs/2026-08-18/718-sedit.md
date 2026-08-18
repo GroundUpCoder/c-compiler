@@ -1,0 +1,69 @@
+# #718 — native C-aware Source Editor
+
+Base: `eee46a7a979b6f318fd74f2e7d82c6fb043fc6b5` (exact `origin/main` at
+kickoff). Epic argument: #713 measured missing syntax highlighting, delimiter
+matching and compiler-diagnostic navigation across two real C+SDL3 authoring
+loops; this closes that manual edit/build/debug friction without changing the
+global vi/notepad defaults.
+
+## Shape
+
+- `gucedit.h` is a private, synchronous, generation-bound styled EDIT ABI.
+  Generation is compared against an exact reserved byte snapshot at the
+  existing `EN_CHANGE` seam, so legacy no-op notifications do not advance it.
+- `sedit` owns C policy. It copies text only from a posted private message,
+  scans from byte zero in bounded chunks, and publishes only a complete current
+  generation. EDIT stays authoritative for input, selection, undo and paint.
+- The file layer accepts regular UTF-8 files up to 8 MiB, records a whole-file
+  EOL choice, preserves BOM, follows symlinks, detects external byte changes,
+  names the physical target, refuses hard-link breaking without consent, and
+  fsyncs a same-directory temp before atomic rename. It does not claim directory
+  entry crash durability.
+- Navigation deliberately follows current `cc` line-only contracts. CLI uses
+  literal-`lstat` first; Ctrl+G accepts a positive line, `FILE:LINE`, or one
+  complete error/warning/link diagnostic. Column-shaped diagnostics are loud
+  refusals.
+
+## Provenance fence
+
+Implementation and fixtures were independently authored from tracked source
+and the approved v2 design. The user-owned untracked `projects/` tree and all
+user-owned `tests/browser/*sedit*` paths were not read, run, copied, adopted,
+edited, cleaned, staged, or used. `os/sha256.h` is the only reused algorithmic
+source; its tracked provenance is retained. No ReactOS Notepad, CodeMirror, or
+BusyBox vi code/fixtures were copied.
+
+## RED controls and focused evidence
+
+Exact-base absence controls:
+
+- `git cat-file -e eee46a7a…:os/sedit/bin.json` → 128 (absent)
+- `git cat-file -e eee46a7a…:os/win32/gucedit.h` → 128 (absent)
+- base image search for binary and c/h associations → 1 (absent)
+
+Development REDs were kept and explained, never retried away: an unparenthesized
+mixed logical expression; a line/column grammar ambiguity; a missing browser
+launch barrier; tty newline parsing; unsynchronized input under load; and a
+missing first-styled-frame barrier. Each correction targeted the observed
+instrument rather than weakening acceptance. Browser red logs are preserved by
+the suite runner under `build/test-browser/`.
+
+GREEN evidence before candidate gate:
+
+- native project compile: `sedit wasm bytes=626244`
+- focused kernel: 3/3 (`test_gucedit`, `test_sedit_core`, `test_sedit_e2e`)
+- focused browser: 1/1 (`os-sedit`)
+- kernel e2e under load: 3/3, 0% flake
+- browser e2e under load: 3/3, 0% flake
+
+The 262,144-byte work cap is a responsiveness mechanism, not a performance or
+correctness budget. No machine-time assertion is used.
+
+## Rollback
+
+Remove the v273 image binary, Development menu entry and c/h associations
+first; defaults stay `default.gui=/bin/notepad` and `default.term=vi`. Then
+remove app/docs/tests. Remove `gucedit.h`/user32 support only after confirming no
+remaining tracked consumer. A stale explicit user override continues to name
+the missing `/bin/sedit` and fails loudly; removing/replacing that override
+restores baked/default resolution.
