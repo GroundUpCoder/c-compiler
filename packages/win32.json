@@ -15,6 +15,7 @@
     "src/listdir.h":        { "text": "listdir.h" },
     "src/cfgstore.h":       { "text": "cfgstore.h" },
     "src/win32/user32.c":   { "text": "win32/user32.c" },
+    "src/win32/gucedit.h":  { "text": "win32/gucedit.h" },
     "src/win32/gdi32.c":    { "text": "win32/gdi32.c" },
     "src/win32/gdi32w.c":   { "text": "win32/gdi32w.c" },
     "src/win32/kernel32.c": { "text": "win32/kernel32.c" },

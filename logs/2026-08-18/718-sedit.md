@@ -67,3 +67,14 @@ remove app/docs/tests. Remove `gucedit.h`/user32 support only after confirming n
 remaining tracked consumer. A stale explicit user override continues to name
 the missing `/bin/sedit` and fails loudly; removing/replacing that override
 restores baked/default resolution.
+
+# Readiness counter-pass (2026-08-19)
+
+The authoritative diff gate exposed two `wmctl` readiness timeouts in the
+unchanged Win32 source-library e2e.  Candidate/base attribution made the
+failure candidate-specific.  A diagnostic boot preserving the legacy 15 s
+waits showed the actual earlier failure: the in-OS compiler could not resolve
+`gucedit.h` beside packaged `user32.c`, so neither test binary existed.  The
+later readiness markers were unconditional shell echoes.  The styled EDIT ABI
+header is now explicitly part of the win32 package's `src/win32` payload, the
+same physical tree used by the `win32` source-root mapping.
