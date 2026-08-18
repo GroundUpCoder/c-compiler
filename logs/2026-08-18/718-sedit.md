@@ -197,3 +197,37 @@ Counter-pass 4 evidence before the authoritative candidate gate:
 - focused browser: 1/1 (`os-sedit`)
 - kernel e2e under load: 3/3, 0% flake
 - browser e2e under load: 3/3, 0% flake
+
+## Counter-pass 5 — durable navigation evidence and invalid identity retries
+
+Same-reviewer exact-tip review of `61ea2895` accepted the source-level current
+EDIT fix but required a production-consumed executable seam. Navigation now
+routes the one authoritative post-dialog EDIT allocation through
+`sedit_navigation_apply`. The native control models immediate post-EN_CHANGE
+growth and shrink directly: a newly added fourth line is accepted at its exact
+offset, while a removed fourth line is rejected without changing selection or
+the status/navigation line. The initial control was captured RED because the
+production seam did not yet exist, then GREEN after `prompt_line` consumed it.
+
+Published-but-unrefreshed saves now set an explicit `identity_invalid` state.
+An ordinary retry returns the conflict disposition before any temp creation or
+publication; only explicit Overwrite or Save As can proceed. A sequenced native
+control injects post-publication refresh failure, performs an external rewrite,
+proves an ordinary retry preserves those external bytes, then proves explicit
+Overwrite refreshes the original lane. A second post-hash sequence proves Save
+As refreshes the new lane while preserving the externally rewritten original.
+
+The lexer's negative control is now an actual test-local scanner implementation
+with no block-comment state. On the independently encoded fixed witness, the
+correct reference and production token/pair maps agree while the broken scanner
+treats comment contents as live source and disagrees. Randomized independent
+reference comparisons and fixed expected spans/pairs remain intact.
+
+Counter-pass 5 focused evidence:
+
+- native sedit core and gucedit probes: green
+- native `os/sedit/bin.json` compile: green
+- focused kernel: 3/3
+- focused browser: 1/1 (`os-sedit`)
+- kernel e2e under load: 3/3, 0% flake
+- browser e2e under load: 3/3, 0% flake

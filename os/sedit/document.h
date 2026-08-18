@@ -14,7 +14,7 @@ typedef struct {
     char *text; size_t len;
     char user_path[1024], target_path[1024];
     char opened_hash[65]; struct stat opened_stat;
-    enum SeditEol eol; int bom, dirty, have_snapshot;
+    enum SeditEol eol; int bom, dirty, have_snapshot, identity_invalid;
     char error[512];
 } SeditDocument;
 
@@ -38,6 +38,8 @@ int sedit_document_new(SeditDocument *d);
 int sedit_document_location(const char *arg,char *path,size_t cap,uint32_t *line);
 int sedit_document_diagnostic(const char *text,char *path,size_t cap,uint32_t *line);
 int sedit_document_line_offset(const char *text,size_t len,uint32_t line,uint32_t *off,uint32_t *lines);
+int sedit_navigation_apply(const char *current_text,size_t current_len,uint32_t line,
+    uint32_t *selection,uint32_t *navigation_line,uint32_t *visible_lines);
 enum SeditSaveResult sedit_document_save(SeditDocument *d,const char *path,
     const char *lf_text,size_t len,int overwrite,int break_links);
 #endif
