@@ -1,0 +1,17 @@
+warmed
+null-path: err="Parameter 'path' is invalid" buf-null=1 len=0 spec-zeroed=1
+bad-path: err="Couldn't open /no/such/dir/x.wav" buf-null=1 len=0 spec-zeroed=1
+null-spec: err="Parameter 'spec' is invalid" buf-null=1 len=0
+null-buf: err="Parameter 'audio_buf' is invalid" len=0 spec-zeroed=1
+null-len: err="Parameter 'audio_len' is invalid" buf-null=1 spec-zeroed=1
+decode-fail: err="Unknown WAVE format tag: 0x1234" buf-null=1 len=0 spec-zeroed=1
+zero-data: ok format=32784 channels=1 freq=8000 buf-null=1 len=0
+load[0]: format=32784 channels=2 freq=22050 len=100 crc=ea1dcdf0
+load[1]: format=32784 channels=2 freq=22050 len=100 crc=ea1dcdf0
+alloc-sites[0]=4
+alloc-sites[1]=5
+alloc-sites[2]=5
+alloc-sites[3]=6
+alloc-sites[4]=6
+convert: in=37 out=74 crc=63b3c5d3
+heap-balanced=1
