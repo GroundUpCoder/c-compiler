@@ -1,0 +1,15 @@
+== RED on exact base 36e6a26ff6ed47a3d5908740639c0c54af0cc7b1 ==
+$ node compiler.js red-723.c -o red-723.wasm
+Got 1 parse errors in logs/2026-08-20/529b-evidence/red-723.c.
+logs/2026-08-20/529b-evidence/red-723.c:7: error: Undeclared identifier 'SDL_LoadWAV'
+exit=1
+== absence pins on exact base 36e6a26f ==
+$ node tools/mksdlindex.js --check
+sdl-api-index in sync
+exit=0
+(the ABSENT list in tools/mksdlindex.js line ~167 pins SDL_LoadWAV absent and is re-verified at every generation — filling the absence must invert it in the same change)
+
+$ address-taken RED
+Got 1 parse errors in /tmp/red723b.c.
+/tmp/red723b.c:3: error: Undeclared identifier 'SDL_LoadWAV'
+exit=1

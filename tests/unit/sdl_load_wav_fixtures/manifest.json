@@ -1,0 +1,633 @@
+{
+ "_meta": {
+  "pin": "libsdl-org/SDL release-3.4.0 @ a962f40bbba175e9716557a25d5d7965f134a3d3",
+  "oracle": "oracle.c built natively against the pinned upstream static SDL3 (recipe in oracle.c); no hints set (upstream 3.4.0 defaults)",
+  "generator": "gen-fixtures.mjs (deterministic; seeded LCG per fixture name) + sample.wav/sword.wav imported verbatim from the pinned SDL test/ tree (zlib license)",
+  "fixtures": 92
+ },
+ "fixtures": {
+  "alaw_mono.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 8000,
+   "len": 82,
+   "bufnull": false,
+   "sha256": "473ab37381458f2a0388244d32397a96b2e9c2e7cc62201ca0d7631ca5176e3e"
+  },
+  "alaw_stereo.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 2,
+   "freq": 8000,
+   "len": 92,
+   "bufnull": false,
+   "sha256": "585ee2d6af446665bf786afff68f00b57d1c34ab15394a2838686f28687e69bb"
+  },
+  "channels_zero.wav": {
+   "ok": false,
+   "error": "Invalid number of channels"
+  },
+  "chunk_flood.wav": {
+   "ok": false,
+   "error": "Chunk count in WAVE file exceeds limit of 10000"
+  },
+  "data_before_fmt.wav": {
+   "ok": false,
+   "error": "fmt chunk after data chunk in WAVE file"
+  },
+  "data_odd_len.wav": {
+   "ok": true,
+   "format": 8,
+   "channels": 1,
+   "freq": 8000,
+   "len": 15,
+   "bufnull": false,
+   "sha256": "7c9d16f3e9c6206e3e79f506a34b085fcf02372e2b1681fd3ecf2b7563fa8740"
+  },
+  "empty_file.wav": {
+   "ok": false,
+   "error": "Could not read RIFF header"
+  },
+  "ext_alaw_mono.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 8000,
+   "len": 54,
+   "bufnull": false,
+   "sha256": "51c653cded724ec2957dc86ee6206fa189f0d435a21ffa6716e971f1595427ff"
+  },
+  "ext_float32_mono.wav": {
+   "ok": true,
+   "format": 33056,
+   "channels": 1,
+   "freq": 48000,
+   "len": 68,
+   "bufnull": false,
+   "sha256": "23e5706d87cfab804c6add4a67f28e3fce006345a4dd2f10c9cf61a0a3d84aab"
+  },
+  "ext_imaadpcm_mono.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 22050,
+   "len": 260,
+   "bufnull": false,
+   "sha256": "ae53c9f37fb3774150c7118f39018035dc1defb8b383ad0f295823d0a7e10b11"
+  },
+  "ext_pcm16_stereo.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 2,
+   "freq": 44100,
+   "len": 84,
+   "bufnull": false,
+   "sha256": "823c7cfad7c5ad0189c69e65bd2f2bb89099085e8e5e785ef2824ea7645f3343"
+  },
+  "ext_too_small.wav": {
+   "ok": false,
+   "error": "Extensible WAVE header too small"
+  },
+  "ext_unknown_guid.wav": {
+   "ok": false,
+   "error": "Unknown WAVE format GUID: 604334eb-bbe4-d447-7c76100a6b927ebc"
+  },
+  "fact_after_data.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 16000,
+   "len": 40,
+   "bufnull": false,
+   "sha256": "9aa8b6b6919134bb4b6d20f0b473c937b320ba4d4f34f645cfebcc687771fcbc"
+  },
+  "fact_lying_large.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 16000,
+   "len": 40,
+   "bufnull": false,
+   "sha256": "c0605838dd419f1d7e0dd5c4555f31004278ce4e560ae98d97dfb5559973dbfd"
+  },
+  "fact_short.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 16000,
+   "len": 40,
+   "bufnull": false,
+   "sha256": "52cd68222f51622ef30a4c62fda3d7ccbe092ee5180bd04f5fba71ddcd05ece8"
+  },
+  "fact_valid_pcm.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 16000,
+   "len": 40,
+   "bufnull": false,
+   "sha256": "96f0efc6e385a947afdfd77eb2e95300501576bc5494fa3c55d32af10ac7cf18"
+  },
+  "fact_zero.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 16000,
+   "len": 40,
+   "bufnull": false,
+   "sha256": "f0bd6213c2870b05798c78f8706ed28c64d920ecbe036f9dd5f6a1878cc8b906"
+  },
+  "float32_mono.wav": {
+   "ok": true,
+   "format": 33056,
+   "channels": 1,
+   "freq": 44100,
+   "len": 116,
+   "bufnull": false,
+   "sha256": "277a8b7979678ab3b65391dc41143866ffd7254aa5299919fed9cf022ea3b7c1"
+  },
+  "float32_stereo.wav": {
+   "ok": true,
+   "format": 33056,
+   "channels": 2,
+   "freq": 48000,
+   "len": 144,
+   "bufnull": false,
+   "sha256": "2baf561a1e4b4aa96c511228f7eca37d635bb1891a36d9b19b72f87585100274"
+  },
+  "float64.wav": {
+   "ok": false,
+   "error": "64-bit IEEE floating-point format not supported"
+  },
+  "fmt_missing_bps.wav": {
+   "ok": false,
+   "error": "Missing wBitsPerSample field in WAVE fmt chunk"
+  },
+  "fmt_too_short_len.wav": {
+   "ok": false,
+   "error": "Invalid WAVE fmt chunk length (too small)"
+  },
+  "freq_over_intmax.wav": {
+   "ok": false,
+   "error": "Sample rate exceeds limit of 2147483647"
+  },
+  "freq_zero.wav": {
+   "ok": false,
+   "error": "Invalid sample rate"
+  },
+  "header_only.wav": {
+   "ok": false,
+   "error": "Missing fmt chunk in WAVE file"
+  },
+  "ima_align_odd.wav": {
+   "ok": false,
+   "error": "Invalid IMA ADPCM block size (nBlockAlign)"
+  },
+  "ima_align_small.wav": {
+   "ok": false,
+   "error": "Invalid IMA ADPCM block size (nBlockAlign)"
+  },
+  "ima_bits3.wav": {
+   "ok": false,
+   "error": "3-bit IMA ADPCM currently not supported"
+  },
+  "ima_bits8.wav": {
+   "ok": false,
+   "error": "Invalid IMA ADPCM bits per sample of 8"
+  },
+  "ima_fact_valid.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 22050,
+   "len": 260,
+   "bufnull": false,
+   "sha256": "060e5db33eb1246d3be911125d9dd462bd6b12bbe5ca21e520b5d617ce108ce8"
+  },
+  "ima_spb_toobig.wav": {
+   "ok": false,
+   "error": "Invalid number of samples per IMA ADPCM block (wSamplesPerBlock)"
+  },
+  "ima_trunc_block.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 22050,
+   "len": 260,
+   "bufnull": false,
+   "sha256": "024d0ce7162a55774ff235082fd49e1344c4da156e9a40567d34a6c0635d80a8"
+  },
+  "ima_zero_data.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 8000,
+   "len": 0,
+   "bufnull": true,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "imaadpcm_4ch.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 4,
+   "freq": 16000,
+   "len": 1040,
+   "bufnull": false,
+   "sha256": "b52b75e4af7b278862ff567b195866ff6285e91c79e19a6d395846da7a4e55e0"
+  },
+  "imaadpcm_mono.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 22050,
+   "len": 390,
+   "bufnull": false,
+   "sha256": "cddedec8555351be2d4d8b8ccc7a321403a7ce70bc639c0d4e1ad6c2040f6310"
+  },
+  "imaadpcm_stereo.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 2,
+   "freq": 44100,
+   "len": 520,
+   "bufnull": false,
+   "sha256": "935445b3da4b89ef41ef8417ae03665ec27c42c388ace94d1526e44e25b9fc35"
+  },
+  "junk_odd_chunk.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 22050,
+   "len": 46,
+   "bufnull": false,
+   "sha256": "1ce12b354cf2ac86ccea3d03fdfec6732edcd8a4711abb8e225a192147bda6dc"
+  },
+  "law_badalign.wav": {
+   "ok": false,
+   "error": "Unsupported block alignment"
+  },
+  "law_bits16.wav": {
+   "ok": false,
+   "error": "Invalid companded bits per sample of 16"
+  },
+  "law_zero_data.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 8000,
+   "len": 0,
+   "bufnull": true,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "mpeg3_code.wav": {
+   "ok": false,
+   "error": "MPEG formats not supported"
+  },
+  "mpeg_code.wav": {
+   "ok": false,
+   "error": "MPEG formats not supported"
+  },
+  "ms_align_small.wav": {
+   "ok": false,
+   "error": "Invalid MS ADPCM block size (nBlockAlign)"
+  },
+  "ms_badcoeffindex.wav": {
+   "ok": false,
+   "error": "Invalid MS ADPCM coefficient index in block header"
+  },
+  "ms_bits8.wav": {
+   "ok": false,
+   "error": "Invalid MS ADPCM bits per sample of 8"
+  },
+  "ms_coeff_missing.wav": {
+   "ok": false,
+   "error": "Missing required coefficients in MS ADPCM format header"
+  },
+  "ms_coeff_shortchunk.wav": {
+   "ok": false,
+   "error": "Could not read custom coefficients in MS ADPCM format header"
+  },
+  "ms_coeff_wrongpreset.wav": {
+   "ok": false,
+   "error": "Wrong preset coefficients in MS ADPCM format header"
+  },
+  "ms_ext_header.wav": {
+   "ok": false,
+   "error": "MS ADPCM with the extensible header is not supported"
+  },
+  "ms_extsize_small.wav": {
+   "ok": false,
+   "error": "Invalid MS ADPCM format header (too small)"
+  },
+  "ms_hdr_short.wav": {
+   "ok": false,
+   "error": "Could not read MS ADPCM format header"
+  },
+  "ms_spb_one.wav": {
+   "ok": false,
+   "error": "Invalid number of samples per MS ADPCM block (wSamplesPerBlock)"
+  },
+  "ms_spb_toobig.wav": {
+   "ok": false,
+   "error": "Invalid number of samples per MS ADPCM block (wSamplesPerBlock)"
+  },
+  "ms_trunc_block.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 22050,
+   "len": 208,
+   "bufnull": false,
+   "sha256": "b2215784bddb43a317d8300421ffb11b4d9726022e2760809087911a0448d26e"
+  },
+  "ms_trunc_header.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 22050,
+   "len": 208,
+   "bufnull": false,
+   "sha256": "b3acf0cf4f0c6e7360edcd5f4dfd6107a56100864bd38b7a8e2b1cdfc1c627ad"
+  },
+  "ms_zero_data.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 8000,
+   "len": 0,
+   "bufnull": true,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "msadpcm_custom_coeffs.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 11025,
+   "len": 208,
+   "bufnull": false,
+   "sha256": "2b3ad3e342f15eb86d968cce40d02876af3730c1a05d1513616ee5daedfb7477"
+  },
+  "msadpcm_mono.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 22050,
+   "len": 312,
+   "bufnull": false,
+   "sha256": "961d082efaae81937d08b23e0bc86faeb89b747c7ab55015522957e7256fade1"
+  },
+  "msadpcm_stereo.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 2,
+   "freq": 44100,
+   "len": 416,
+   "bufnull": false,
+   "sha256": "11599b259f1609d12147a4a05bf16c278ecc432abeb7214bacde7cf711c6bf45"
+  },
+  "mulaw_mono.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 8000,
+   "len": 78,
+   "bufnull": false,
+   "sha256": "725adf81434b61a2ccacba3c964a557c4dbd67d6c722a6ec936a84976eb8962b"
+  },
+  "mulaw_stereo.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 2,
+   "freq": 11025,
+   "len": 88,
+   "bufnull": false,
+   "sha256": "17a7d04ac9f3c30e11495ae01adb88fe4dd64dbf047fc1328a82dbde1bbeca3a"
+  },
+  "multiple_data.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 8000,
+   "len": 18,
+   "bufnull": false,
+   "sha256": "f576820b4f00a96ef472121febdda1185de5f163d21bdc015fadf4e849cac3a8"
+  },
+  "multiple_fact.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 8000,
+   "len": 18,
+   "bufnull": false,
+   "sha256": "f37f231069a4e9087f3eb4a12237121cd0b12de42caecf11ca9e5b844210b40d"
+  },
+  "multiple_fmt.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 8000,
+   "len": 22,
+   "bufnull": false,
+   "sha256": "c640dc36e1db3b2709dd248b14d24d2da9de0f58230eb25f63b7aa0b7dceb5de"
+  },
+  "no_data.wav": {
+   "ok": false,
+   "error": "Missing data chunk in WAVE file"
+  },
+  "no_fmt.wav": {
+   "ok": false,
+   "error": "Missing fmt chunk in WAVE file"
+  },
+  "not_riff.wav": {
+   "ok": false,
+   "error": "Could not find RIFF or WAVE identifiers (not a Waveform file)"
+  },
+  "pcm_badalign.wav": {
+   "ok": false,
+   "error": "Unsupported block alignment"
+  },
+  "pcm_bits0.wav": {
+   "ok": false,
+   "error": "Invalid bits per sample"
+  },
+  "pcm_bits12.wav": {
+   "ok": false,
+   "error": "12-bit PCM format not supported"
+  },
+  "pcm_s16_3ch.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 3,
+   "freq": 16000,
+   "len": 114,
+   "bufnull": false,
+   "sha256": "e30f9f2e6b827085336bbdaa10caf0297c08b8643c8c605d7156a664644e7b74"
+  },
+  "pcm_s16_mono.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 44100,
+   "len": 66,
+   "bufnull": false,
+   "sha256": "1ad9fca27276c2625a40bb6c9ea5e30abbe3bcf738d70f8a6ddadba2f88b1210"
+  },
+  "pcm_s16_stereo.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 2,
+   "freq": 22050,
+   "len": 100,
+   "bufnull": false,
+   "sha256": "d3357b1136b4235029f7c69ce18abb63c77d0d72dc563af0c769321ae5526455"
+  },
+  "pcm_s16_trunc.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 2,
+   "freq": 22050,
+   "len": 37,
+   "bufnull": false,
+   "sha256": "630e9a4500292102bc75b603f5c8f47f8283a0d0482f09af92c0047d04b7d3f9"
+  },
+  "pcm_s16_trunc_ba.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 2,
+   "freq": 22050,
+   "len": 36,
+   "bufnull": false,
+   "sha256": "bb5539f4227f973dfbe1c27a304f86bfd7fce925593ff3be32c67848dc27dd6c"
+  },
+  "pcm_s24_mono.wav": {
+   "ok": true,
+   "format": 32800,
+   "channels": 1,
+   "freq": 48000,
+   "len": 84,
+   "bufnull": false,
+   "sha256": "8456f963f4b1e02039820b79863d99888852eca864b57fb8c4715f3a13ebe647"
+  },
+  "pcm_s24_stereo.wav": {
+   "ok": true,
+   "format": 32800,
+   "channels": 2,
+   "freq": 44100,
+   "len": 136,
+   "bufnull": false,
+   "sha256": "493c12ff1216869be3fe78b475446a6f7ef0a2fcabf514bf0296b3b798d89a35"
+  },
+  "pcm_s32_mono.wav": {
+   "ok": true,
+   "format": 32800,
+   "channels": 1,
+   "freq": 96000,
+   "len": 60,
+   "bufnull": false,
+   "sha256": "d31dbfa3deb92686fecc8471946b7e112d99a77923f23ddd453d4485f1cc2053"
+  },
+  "pcm_s32_stereo.wav": {
+   "ok": true,
+   "format": 32800,
+   "channels": 2,
+   "freq": 48000,
+   "len": 104,
+   "bufnull": false,
+   "sha256": "75c93df97f73c7857db59038c23221c498c570f2475930272df4977dfcdc066b"
+  },
+  "pcm_u8_mono.wav": {
+   "ok": true,
+   "format": 8,
+   "channels": 1,
+   "freq": 8000,
+   "len": 37,
+   "bufnull": false,
+   "sha256": "02724d14e4a06a64e4e137ee108ec36f39604199ff4b2c6c3341c1a6ac8aef23"
+  },
+  "pcm_u8_stereo.wav": {
+   "ok": true,
+   "format": 8,
+   "channels": 2,
+   "freq": 11025,
+   "len": 48,
+   "bufnull": false,
+   "sha256": "365e2f4d1e1a956f40985dfb96e326763666eb3f698e00b72f20a6a7241f6d8b"
+  },
+  "pcm_zero_data.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 8000,
+   "len": 0,
+   "bufnull": true,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "riff_not_wave.wav": {
+   "ok": false,
+   "error": "RIFF form type is not WAVE (not a Waveform file)"
+  },
+  "riff_size_lying_large.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 22050,
+   "len": 46,
+   "bufnull": false,
+   "sha256": "e5688b4de0b4ef9cdd921572a86ca9bcc13b12cdaa4aaea1497356a77ea193e6"
+  },
+  "riff_size_zero.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 22050,
+   "len": 46,
+   "bufnull": false,
+   "sha256": "c11e0ab5030c3d4115c79a9a96e19e2c705994c4cd0f9729048f6fa21050333f"
+  },
+  "sample.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 22050,
+   "len": 481712,
+   "bufnull": false,
+   "sha256": "6f1f6640ed877820ecbc9f378cf991e7a7fc0757e01a2bf705c438b39314894e"
+  },
+  "sword.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 44100,
+   "len": 91314,
+   "bufnull": false,
+   "sha256": "649b148e7061483c2f3cd48c8691368c8b0a699beac9011381ec03100d5add96"
+  },
+  "trailing_garbage.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 22050,
+   "len": 46,
+   "bufnull": false,
+   "sha256": "698fdd42668a7a24ac61b1623b44a77133ac777163cf72915d21d27f289003ca"
+  },
+  "unknown_chunks.wav": {
+   "ok": true,
+   "format": 32784,
+   "channels": 1,
+   "freq": 22050,
+   "len": 46,
+   "bufnull": false,
+   "sha256": "a4e0baddbd78ed34be1a766c6f0eccd5ce3f7a832828ebb297eae401aefc106b"
+  },
+  "unknown_tag.wav": {
+   "ok": false,
+   "error": "Unknown WAVE format tag: 0x1234"
+  },
+  "wave_form_only.wav": {
+   "ok": false,
+   "error": "Missing fmt chunk in WAVE file"
+  }
+ }
+}
