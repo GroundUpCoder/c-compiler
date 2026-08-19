@@ -1,0 +1,9 @@
+Got 8 parse errors in /tmp/red-722.c.
+/tmp/red-722.c:5: error: Undeclared identifier 'SDL_CreateAudioStream'
+/tmp/red-722.c:5: error: incompatible types: cannot implicitly convert 'int' to '*struct SDL_AudioStream'
+/tmp/red-722.c:6: error: Undeclared identifier 'SDL_SetAudioStreamFormat'
+/tmp/red-722.c:7: error: Undeclared identifier 'SDL_GetAudioStreamFormat'
+/tmp/red-722.c:9: error: Undeclared identifier 'SDL_GetAudioStreamData'
+/tmp/red-722.c:10: error: Undeclared identifier 'SDL_GetAudioStreamAvailable'
+/tmp/red-722.c:11: error: Undeclared identifier 'SDL_FlushAudioStream'
+/tmp/red-722.c:12: error: Undeclared identifier 'SDL_MixAudio'

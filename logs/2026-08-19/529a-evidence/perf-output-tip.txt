@@ -1,0 +1,5 @@
+convert s16/44.1k->f32/48k 4096fr: p50 56us p95 61us p99 141us (290.2 MB/s at p50)
+convert s16-5.1/44.1k->f32-st/48k 4096fr: p50 108us p95 111us p99 143us (454.6 MB/s at p50)
+passthrough f32/48k 4096fr: p50 1us p95 1us p99 2us (30228.8 MB/s at p50)
+mix f32 4096fr: p50 10us p95 10us p99 102us (3060.4 MB/s at p50)
+mix s16 4096fr: p50 11us p95 11us p99 12us (1430.0 MB/s at p50)

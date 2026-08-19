@@ -145,31 +145,80 @@ Pinned facts adopted verbatim:
   an out-pointer struct because the null-SDL host flavor has no memory
   handle; three tiny calls at open only.
 
+## Counter-pass (review of 9af3d6d7..0248cd16, two findings, both fixed)
+
+**Finding 1 — the default/shipping path violated zero-bytes.** Correct: the
+bake (os-common.js) passes no `--gc-sections`, and the wasm-level tree-shake
+dropped only CODE — interned literals of dropped functions stayed in the
+data section (+1758 B on every SDL binary). Fixed generally, not by flipping
+a global default: `computeLiveFunctions` (the shake's reachability,
+extracted and shared), literal OWNERSHIP recorded at intern time
+(getStringAddress: the emitting function owns the range; later users add
+owners; any use outside a function — a global initializer — pins it
+forever), and before the sparse segment emitter runs, every range whose
+owners are all dead is ZEROED. Zeros cost no binary bytes in the sparse
+emitter, no address moves (the only references lived in dropped code), and
+the pre-inline live set is a superset of the shake's post-inline one, so an
+address immediate the wasm inliner copies into a survivor always points at
+a kept range. Measured on the corrected tip, DEFAULT flags: the no-audio
+SDL program is 18346 B vs 26024 B on base — zero #529-A bytes AND ~7.7 KB
+of pre-existing leaked literals gone from every SDL binary. Standing
+witness: `tests/host/test_sdl_deadstrip.js` (registered in the host suite) —
+no #529-A literal in a no-audio binary, positive controls for referenced /
+global-pinned / address-taken literals, and a run smoke.
+
+**Finding 2 — DEVICE put was not atomic across allocation failure.**
+Correct: the identity path could submit ring bytes or grow the backlog
+before the ledger allocation, and the converted path linked ledger/extent
+state before the fallible backlog reserve. Fixed by reserve-then-commit:
+every fallible allocation (ledger node pre-allocated unlinked, extent
+reserve — in-place capacity growth or a detached node carrying the copied
+bytes, backlog capacity for the whole eager emit) completes before ANY host
+submission, backlog byte, ledger/original-byte mutation, or converter-state
+change. Capacity growth is the one retained effect of a failed put, and it
+is not state: no accounting word, offset, or fingerprint field changes —
+the allocation counter itself moves only at commit. Proof by deterministic
+injection: `__sdl_audiostream_failalloc(n)` (production-unreachable — only
+extern-declared by tests) fails the n-th engine allocation. Unit legs walk
+every allocation depth of the identity (2), converted (4), and MEMORY (2)
+paths — fingerprint + Queued byte-equality on failure, clean-retry success,
+and zero-allocation steady states proven by putting with the injector armed.
+The `ringfail` e2e legs prove it against the real transport: a 300 K put the
+ring would partially accept submits NOTHING under injection (ring readback
+zero), and fail-then-retry on one stream submits exactly the 256 K prefix.
+
+**Evidence-limit remediations from the same review:** the RED probe source
+and its verbatim base transcript, the no-audio witness program, the
+conversion/MixAudio benchmark source, and the pump A/B benchmark are now
+committed under `logs/2026-08-19/529a-evidence/` with the corrected-tip
+perf output.
+
+The interrupted first diff gate (tip 0248cd16) is preserved at
+/tmp/gate-0248cd16-interrupted-summary.json: its `host` row died by SIGTERM
+when the driving session was killed mid-run (an account-cap kill, not a test
+red), the py leg never produced a summary, and the kernel row had absorbed a
+stale filtered checkpoint. It is evidence of an interruption, not of the
+tree; the corrected tip gets a fresh unfiltered, unresumed gate below.
+
 ## Zero-bytes acceptance — measured
 
 Instrument: `/tmp/sdlmin.c` (SDL window + ticks, NO audio API), identical
 source compiled on base and tip.
 
-| build | base | tip | delta |
+| build | base | tip (post counter-pass) | delta |
 |---|---|---|---|
 | sdlmin `--gc-sections` | 11305 B, sha `3c359cd7…` | 11305 B, sha `3c359cd7…` | **byte-identical (zero)** |
-| sdlmin default flags | 26024 B | 27782 B | +1758 B |
-| sdl_audio_queue (DEVICE user) default | 28011 B | 47124 B | +19113 B (A is referenced) |
-| sdl_audio_queue `--gc-sections` | 14055 B | 31839 B | +17784 B (A is referenced) |
+| sdlmin default flags | 26024 B | 18346 B | **−7678 B** (zero A bytes; pre-existing leaked literals pruned too) |
+| sdl_audio_queue (DEVICE user) default | 28011 B | 39467 B | +11456 B (A is referenced) |
 | compile time (sdlmin, warm) | 0.24 s | 0.26–0.27 s | +~10 % |
 
-The unreferenced case is exactly zero under `--gc-sections` (the
-whole-program shake). The +1758 B default-flag delta is NOT new code — the
-wasm-level tree-shake drops every unreferenced function body — it is the
-rodata literals (error strings) of AST-live-but-wasm-dropped functions, a
-pre-existing compiler behavior class that every existing `__SDL.c` function
-already exhibits (e.g. the pull-mode refusal text rides every SDL binary
-today). All #722 bulk data lives in CODE (the channel matrix is immediates
-in a switch), precisely so this class stays capped at strings. Closing the
-literal-leak class generally (pruning data segments owned by dropped
-functions, or defaulting the bake to `--gc-sections`) is a compiler-wide
-follow-up, deliberately NOT smuggled into this lane; flagged for the
-reviewer/coordinator to file if wanted.
+The unreferenced case is exactly zero on BOTH paths now: byte-identical
+under `--gc-sections`, and under the bake's default flags the dead-literal
+prune (counter-pass, above) removes every #529-A byte — the binary SHRINKS
+against base because the same prune retires the pre-existing literal leaks
+of every other dropped function. All #722 bulk data lives in CODE (the
+channel matrix is immediates in a switch, never a function-pointer table),
+so nothing of A survives as data in a program that does not reference it.
 
 The DEVICE-user growth is real referenced machinery: a device stream's put
 path now reaches the epoch converter (a later `SDL_SetAudioStreamFormat`
