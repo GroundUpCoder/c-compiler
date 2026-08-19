@@ -153,6 +153,43 @@ accepts the data, so on a headless boot the queue grows without bound.
 With the bounded pattern the same program plays sound in the browser
 and runs silently, with bounded memory, on a headless boot.
 
+## Music + SFX: convert with device-less streams, mix with SDL_MixAudio
+
+`SDL_CreateAudioStream(&src_spec, &dst_spec)` makes a DEVICE-LESS
+converter: put source bytes in one format/rate/channel count, get
+converted bytes back. It accepts the five published formats, 1 to 8
+channels (SDL's default channel-conversion matrix), and any positive
+rate. `SDL_MixAudio(dst, src, fmt, len, volume)` adds one buffer into
+another with saturation. The supported way to play several sounds at
+once is: convert each source to one common spec, mix, push into ONE
+device stream:
+
+```c
+/* each frame: pull converted music + sfx, mix, push */
+int n = SDL_GetAudioStreamData(music, mixbuf, sizeof mixbuf);
+int m = SDL_GetAudioStreamData(sfx, sfxbuf, n);
+if (m > 0) SDL_MixAudio(mixbuf, sfxbuf, SDL_AUDIO_F32, m, 0.8f);
+if (n > 0) SDL_PutAudioStreamData(device_stream, mixbuf, n);
+```
+
+Rules that matter here:
+
+- Reads return whole destination frames only; a buffer too short for
+  one frame reads 0. `SDL_GetAudioStreamAvailable` reports exactly what
+  a read could return right now.
+- `SDL_FlushAudioStream` marks the end of the pushed data so the
+  resampler tail becomes readable. It is not EOF — put again afterwards
+  and conversion continues in a new generation.
+- Format changes are epoched: bytes already queued keep the specs they
+  were put under; a new `SDL_SetAudioStreamFormat` applies to future
+  puts only. Nothing queued is ever reinterpreted.
+- On DEVICE streams (`SDL_OpenAudioDeviceStream`), GetData/Available
+  are refused — the OS consumes the converted side. A source-format
+  change there converts future puts to the device's open spec; a
+  destination change is ignored (the device owns that side).
+- `SDL_LoadWAV` does not exist yet — decode audio files yourself, then
+  convert/mix/push as above.
+
 ## Text: SDL_ttf (the classic API) over FreeType
 
 `#include <SDL3_ttf/SDL_ttf.h>` is the sanctioned text path: the classic

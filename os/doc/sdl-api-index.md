@@ -146,9 +146,9 @@ Uint64 SDL_GetPerformanceCounter(void);
 Uint64 SDL_GetPerformanceFrequency(void);
 ```
 
-### Audio (push model)
+### Audio (push model + device-less conversion/mixing)
 
-Push PCM with SDL_PutAudioStreamData. On a HEADLESS boot the queue never drains — top up only while SDL_GetAudioStreamQueued is below a cap, never wait for drain (sdl-gucos.md).
+Push PCM with SDL_PutAudioStreamData. On a HEADLESS boot the queue never drains — top up only while SDL_GetAudioStreamQueued is below a cap, never wait for drain (sdl-gucos.md). Music + SFX (#722): SDL_CreateAudioStream makes a DEVICE-LESS converter (5 formats, 1..8 channels, any positive rate — put source bytes, get converted bytes), SDL_MixAudio mixes two buffers with saturation — convert each source, mix, push into ONE device stream. GetData/GetAvailable work only on device-less streams; Pause/Resume only on device streams.
 
 ```c
 SDL_AudioStream *SDL_OpenAudioDeviceStream(SDL_AudioDeviceID devid, const SDL_AudioSpec *spec, SDL_AudioStreamCallback callback, void *userdata);
@@ -158,6 +158,13 @@ bool SDL_ClearAudioStream(SDL_AudioStream *stream);
 bool SDL_ResumeAudioStreamDevice(SDL_AudioStream *stream);
 bool SDL_PauseAudioStreamDevice(SDL_AudioStream *stream);
 void SDL_DestroyAudioStream(SDL_AudioStream *stream);
+SDL_AudioStream *SDL_CreateAudioStream(const SDL_AudioSpec *src_spec, const SDL_AudioSpec *dst_spec);
+bool SDL_SetAudioStreamFormat(SDL_AudioStream *stream, const SDL_AudioSpec *src_spec, const SDL_AudioSpec *dst_spec);
+bool SDL_GetAudioStreamFormat(SDL_AudioStream *stream, SDL_AudioSpec *src_spec, SDL_AudioSpec *dst_spec);
+int SDL_GetAudioStreamData(SDL_AudioStream *stream, void *buf, int len);
+int SDL_GetAudioStreamAvailable(SDL_AudioStream *stream);
+bool SDL_FlushAudioStream(SDL_AudioStream *stream);
+bool SDL_MixAudio(Uint8 *dst, const Uint8 *src, SDL_AudioFormat format, Uint32 len, float volume);
 ```
 
 ### Clipboard
@@ -636,7 +643,7 @@ An absent symbol fails loud at compile time (“Undeclared identifier”).
 - Renderer state: `SDL_SetRenderViewport`, `SDL_SetRenderClipRect`, `SDL_SetRenderScale`, `SDL_SetRenderLogicalPresentation`, `SDL_RenderReadPixels`, `SDL_GetRenderOutputSize` — none exist; draw in window pixels 1:1.
 - Joystick-level API: `SDL_OpenJoystick`, `SDL_GetJoysticks`, `SDL_GetJoystickAxis` — the gamepad API above is the only pad surface (this runtime has no unmapped-device view, so SDL_INIT_JOYSTICK still fails loud and, unlike upstream, is NOT implied by SDL_INIT_GAMEPAD). Also absent from the gamepad surface: `SDL_RumbleGamepad` (#714), the mapping DB (`SDL_AddGamepadMapping`, `SDL_GetGamepadMapping` — the browser owns mapping), `SDL_GetGamepadPlayerIndex`, and the touchpad/sensor/LED extras.
 - Surface toolkit: `SDL_CreateSurface`, `SDL_BlitSurface`, `SDL_FillSurfaceRect`, `SDL_ConvertSurface`, `SDL_LoadBMP` — the only SDL_Surfaces are window surfaces and IMG_Load results; write `->pixels` directly.
-- Audio files & mixing: `SDL_LoadWAV` and SDL_mixer (`Mix_*`) — parse audio data yourself and push PCM through SDL_PutAudioStreamData (one stream per concurrent sound; the OS mixes).
+- Audio files: `SDL_LoadWAV` and SDL_mixer (`Mix_*`) do not exist — parse audio data yourself, then convert with SDL_CreateAudioStream, mix with SDL_MixAudio, and push PCM through SDL_PutAudioStreamData.
 - Window management: `SDL_ShowWindow`, `SDL_HideWindow`, `SDL_RaiseWindow`, `SDL_MinimizeWindow`, `SDL_MaximizeWindow`, `SDL_SetWindowFullscreen` — the WM owns placement and chrome.
 - Text input & custom cursors: `SDL_StartTextInput` (use key events — event.key.key is already the applied character) and `SDL_CreateCursor` (system cursor shapes only, via SDL_CreateSystemCursor).
 - stdinc wrappers: `SDL_snprintf`, `SDL_strlcpy`, `SDL_memcpy`, `SDL_sinf`, … — use libc (`<stdio.h>`, `<string.h>`, `<math.h>`); SDL and libc share one heap here.
