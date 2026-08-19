@@ -1,0 +1,31 @@
+ok open
+ok getformat
+ok src is the open spec
+ok dst is the reported device format
+ok device getdata refused
+ok device available refused
+ok identity put
+ok queued 16
+ok 1-byte put ok (byte-oriented device contract)
+ok queued 17
+ok src change refused on partial frame
+ok complete the frame
+ok src change ok on frame boundary
+ok dst change ignored without error
+ok dst really unchanged
+ok invalid ignored dst still refused
+ok misaligned converted put refused
+ok converted put
+ok queued counts original bytes across epochs
+ok flush emits the tail without changing queued
+ok repeated flush is a no-op
+ok clear is transactional
+ok queued 0 after clear
+ok put after clear begins a clean epoch
+ok queued 8
+ok resume legal on device
+ok pause legal on device
+ok destroy returned
+ok memory resume refused
+ok memory pause refused
+ok pull callback refused

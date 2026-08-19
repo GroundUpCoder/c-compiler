@@ -1,0 +1,61 @@
+ok create null/null
+ok create src-only
+ok create dst-only
+ok create bad src refused
+ok create bad dst refused
+ok 9 channels refused
+ok freq 0 refused
+ok 8 channels accepted
+ok extreme rate accepted at set
+ok put refused unset dst
+ok get refused unset dst
+ok get len0 is 0 even unset
+ok avail refused unset dst
+ok flush refused unset dst
+ok queued 0 on unset
+ok clear ok on unset
+ok set both null noop
+ok set bad dst refused
+ok atomic: src unchanged after refusal
+ok set src only
+ok src changed dst kept
+ok getformat validity query
+ok getformat unset src fails
+ok unset src zeroed
+ok getformat dst-only ok
+ok getformat null stream
+ok null stream zeroes outputs
+ok put null stream
+ok put null buf
+ok put negative len
+ok put len0 ok
+ok len0 created no epoch
+ok put misaligned refused
+ok nothing queued after refusals
+ok queued = both epochs' original bytes
+ok avail spans epochs
+ok partial read stops at epoch boundary
+ok epoch A decoded with captured specs
+ok epoch B follows in its own format
+ok epoch B is S16 stereo
+ok queued 8 before get
+ok queued retires consumed frames
+ok queued 0 after full drain
+ok available repeats stable
+ok available mutated nothing
+ok available allocated nothing
+ok queued unchanged by available
+ok get equals the available promise
+ok control stream got identical bytes
+ok post-get fingerprints identical
+ok logical size clamps to INT_MAX
+ok clamp allocated no payload
+ok queued stays original bytes
+ok flush empty stream ok
+ok repeated flush emits nothing new
+ok put after flush begins new epoch
+ok avail covers both generations
+ok clear keeps specs
+ok avail 0 after clear
+ok put works after clear
+ok destroy null safe

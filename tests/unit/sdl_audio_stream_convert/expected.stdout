@@ -1,0 +1,73 @@
+ch 1->1 423c0a11
+ch 1->2 455dac4a
+ch 1->3 271f888c
+ch 1->4 52be6482
+ch 1->5 b9cb9df4
+ch 1->6 7cf4731a
+ch 1->7 b6fe5b3c
+ch 1->8 f00dc012
+ch 2->1 9919e93d
+ch 2->2 43a77869
+ch 2->3 86110558
+ch 2->4 02cd88c4
+ch 2->5 0aa04e48
+ch 2->6 fa9ad994
+ch 2->7 8fc2f9b8
+ch 2->8 a1ee2864
+ch 3->1 796615d5
+ch 3->2 90ccd651
+ch 3->3 2e5feb52
+ch 3->4 ea6a7e56
+ch 3->5 dbd47a9c
+ch 3->6 d341a862
+ch 3->7 6d7066f8
+ch 3->8 65e29d1a
+ch 4->1 bb09ab20
+ch 4->2 9bdbb554
+ch 4->3 e386e0ee
+ch 4->4 1e1d3001
+ch 4->5 c3f13496
+ch 4->6 56a284da
+ch 4->7 f6a2fbe2
+ch 4->8 08c5e5da
+ch 5->1 9080f9b7
+ch 5->2 8ff6b4cb
+ch 5->3 915710f7
+ch 5->4 d418e845
+ch 5->5 ac27f9d1
+ch 5->6 09360082
+ch 5->7 f216d151
+ch 5->8 f8680df2
+ch 6->1 bff140e8
+ch 6->2 dff72fc8
+ch 6->3 72306591
+ch 6->4 c0e57206
+ch 6->5 f6d04432
+ch 6->6 f359b711
+ch 6->7 c129210b
+ch 6->8 b96be343
+ch 7->1 1340ca24
+ch 7->2 dd817837
+ch 7->3 34d09f6e
+ch 7->4 53549df5
+ch 7->5 79425129
+ch 7->6 1c56b6b5
+ch 7->7 b7f01b7c
+ch 7->8 9bdc7a64
+ch 8->1 b5f03326
+ch 8->2 4e86f767
+ch 8->3 d6d5aea5
+ch 8->4 fd9808ec
+ch 8->5 6de504db
+ch 8->6 da0a25b3
+ch 8->7 bfb6c1a6
+ch 8->8 7d888745
+total 71f89a09
+chunk invariance MATCH (152 bytes)
+sat U8 4: 255 0 255 0
+sat S8 4: 127 -128 127 -128
+sat S16 8: 32767 -32768 32767 -32768
+sat S32 16: 2147483647 -2147483648 2147483647 -2147483648
+tail avail unflushed 14
+tail avail flushed 18
+tail got 18: 300 400 500 600 700 800 900 900 900
