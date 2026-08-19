@@ -1,0 +1,116 @@
+{
+  "ticket": 723,
+  "tranche": "#529-B complete path-based SDL_LoadWAV",
+  "pin": {
+    "repo": "https://github.com/libsdl-org/SDL",
+    "tag": "release-3.4.0",
+    "commit": "a962f40bbba175e9716557a25d5d7965f134a3d3"
+  },
+  "imported": [
+    {
+      "path": "src/audio/SDL_wave.c",
+      "bytes": 76624,
+      "sha256": "add3e834af400f913864b8e9dee5985e8cf3fd8d8d2cb6949a64380a0d1014c0",
+      "pristineCopy": "logs/2026-08-20/529b-evidence/upstream/SDL_wave.c"
+    },
+    {
+      "path": "src/audio/SDL_wave.h",
+      "bytes": 5302,
+      "sha256": "9f7d01071f8100f35f552b5ea8605cf2a3af8bd25cadbc360fa4ab5e1b977214",
+      "pristineCopy": "logs/2026-08-20/529b-evidence/upstream/SDL_wave.h"
+    },
+    {
+      "path": "LICENSE.txt",
+      "bytes": 884,
+      "sha256": "97f35b302b361680ec1e891e95d2d52097bb95abff361434916d99dc1305f127",
+      "pristineCopy": "logs/2026-08-20/529b-evidence/upstream/LICENSE.txt",
+      "note": "zlib license; the notice is retained verbatim at the top of the adapted __SDL_wave.c/.h, with the altered-source marking the license requires"
+    },
+    {
+      "path": "test/sample.wav",
+      "note": "imported verbatim into tests/unit/sdl_load_wav_fixtures/ (zlib-licensed upstream test asset)"
+    },
+    {
+      "path": "test/sword.wav",
+      "note": "imported verbatim into tests/unit/sdl_load_wav_fixtures/ (zlib-licensed upstream test asset)"
+    }
+  ],
+  "adaptedInto": "compiler.js builtin sources \"__SDL_wave.h\" + \"__SDL_wave.c\" (demand-linked via __require_source_if(\"SDL_LoadWAV\", \"__SDL_wave.c\") in <SDL.h>)",
+  "mechanicalTransform": "logs/2026-08-20/529b-evidence/adapt.mjs regenerates both adapted files from the pristine copies; every edit is an exact-string replacement asserted to apply exactly once. logs/2026-08-20/529b-evidence/embed.mjs splices them into compiler.js. Run both and diff to verify the decoder body is upstream-verbatim outside this ledger.",
+  "frozenHintDefaults": {
+    "SDL_HINT_WAVE_RIFF_CHUNK_SIZE": "RiffSizeNoHint (ignore a zero RIFF size, otherwise honor it; upstream default branch)",
+    "SDL_HINT_WAVE_TRUNCATION": "TruncNoHint (behaves as dropblock: a truncated final ADPCM block is dropped whole; upstream default)",
+    "SDL_HINT_WAVE_FACT_CHUNK": "FactNoHint (fact chunk parsed but never truncates; upstream default)",
+    "SDL_HINT_WAVE_CHUNK_LIMIT": "10000 (upstream default)",
+    "note": "the gucOS hint store round-trips any name but this loader consults none of these — SDL_SetHint(SDL_HINT_WAVE_*) has no effect (declared divergence; upstream honors them)"
+  },
+  "ledger": [
+    {
+      "id": "H1",
+      "edit": "SDL_wave.h: #include \"SDL_internal.h\" -> #pragma once + provenance/altered-source marker; types (Uint8/Sint64/...) come from <SDL.h>, included first by the TU"
+    },
+    {
+      "id": "E1",
+      "edit": "SDL_wave.c: ALTERED SOURCE marking inserted directly after the zlib notice (license requirement)"
+    },
+    {
+      "id": "E2",
+      "edit": "SDL_wave.c: #include \"SDL_internal.h\" -> builtin includes (<SDL.h>, <stdbool.h>, <stdio.h>, <stdlib.h>, <string.h>, <limits.h>, <stdint.h>) + a fenced adaptation prelude: SDL_zero/zerop/zeroa -> memset; SDL_memcmp -> memcmp; SDL_arraysize; SDL_Swap32LE -> identity (wasm32 is little-endian); SDL_MAX_SINT32/SINT64/UINT32 literals; SDL_PRIu32 -> \"u\"; SDL_FALLTHROUGH -> empty; CHECK_PARAM(x) -> if (x) (the upstream default build shape: neither SDL_DISABLE_INVALID_PARAMS nor SDL_ASSERT_INVALID_PARAMS defined); SDL_AUDIO_UNKNOWN/S16LE/S32LE/F32LE as private spellings of the upstream values (<SDL.h> publishes no *LE names; identical values on LE); allocation seam wave_malloc/calloc/realloc over SDL_malloc/calloc/realloc with the __sdl_wave_alloc_countdown failure-injection knob; a private FILE*/const-mem IO adapter (TU-local statics spelled with the upstream names SDL_IOStream/SDL_ReadIO/SDL_SeekIO/SDL_TellIO/SDL_GetIOSize/SDL_ReadU8/U16LE/U32LE/SDL_IOFromConstMem/SDL_IOFromFile/SDL_CloseIO so every decoder call site stays byte-verbatim)"
+    },
+    {
+      "id": "E3",
+      "edit": "SDL_wave.c: '#ifdef HAVE_LIMITS_H #include <limits.h> #endif' -> unconditional <limits.h> in E2's include block; the '#ifndef INT_MAX' / '#ifndef SIZE_MAX' fallback guards stay verbatim (dead: both are defined)"
+    },
+    {
+      "id": "E4",
+      "edit": "SDL_wave.c: #include \"SDL_wave.h\" -> <__SDL_wave.h>; #include \"SDL_sysaudio.h\" removed (nothing this TU uses comes from it)"
+    },
+    {
+      "id": "E5",
+      "edit": "SDL_wave.c: the SDL_WAVE_DEBUG_LOG_FORMAT and SDL_WAVE_DEBUG_DUMP_FORMAT functions and their #ifdef'd call sites removed (debug logging, per the adaptation boundary; both are compiled out upstream by default)"
+    },
+    {
+      "id": "E6",
+      "edit": "SDL_wave.c: WaveGetRiffSizeHint/WaveGetTruncationHint/WaveGetFactChunkHint bodies frozen to their upstream 3.4.0 defaults (RiffSizeNoHint/TruncNoHint/FactNoHint) — the SDL_GetHint lookups are gone"
+    },
+    {
+      "id": "E7",
+      "edit": "SDL_wave.c: the SDL_HINT_WAVE_CHUNK_LIMIT lookup (SDL_GetHint + SDL_sscanf) removed; chunkcountlimit stays the upstream default 10000; the now-unused 'const char *hint' local removed"
+    },
+    {
+      "id": "E8",
+      "edit": "SDL_wave.c: SDL_LoadWAV_IO made static — public SDL_IOStream is ABSENT, so the public surface gains only SDL_LoadWAV (absence is honest, todos/PRINCIPLES.md)"
+    }
+  ],
+  "declaredDivergences": [
+    {
+      "id": "A1",
+      "what": "OOM failures always set the SDL error (\"Out of memory\") via the allocation seam; upstream SDL_LoadWAV can surface OOM with a stale/empty error string (its decoders return false on a NULL allocation without setting one)",
+      "why": "the #529-B contract requires every failure path to set the SDL error; strictly more informative, never changes success/failure"
+    },
+    {
+      "id": "A2",
+      "what": "IO positions clamp to this ILP32 libc's 31-bit long (fseek/ftell): a WAV needing seeks past 2 GiB fails its seek loudly instead of decoding; upstream on 64-bit hosts can address larger files. size_t is 32-bit, so the upstream size/overflow guards fire earlier here — on the same \"WAVE file too big\" error paths",
+      "why": "wasm32 address space could not hold such a decode anyway; failure stays loud and named"
+    },
+    {
+      "id": "A3",
+      "what": "IO-layer error strings are this adapter's own (\"Couldn't open %s\", SDL_InvalidParamError(\"path\")); upstream's come from SDL_IOFromFile with platform errno text",
+      "why": "the IO layer is the one replaced scaffolding layer; decoder-level error strings remain upstream-verbatim (the differential suite compares them exactly)"
+    },
+    {
+      "id": "A4",
+      "what": "upstream's WaveReadFormat leaks its const-mem IO stream on ReadU16/U32 failure paths; preserved verbatim — the paths are unreachable (the caller guards chunk->size >= 14 and every guarded read fits)",
+      "why": "adaptation boundary: no upstream decision is rewritten, and the paths cannot execute"
+    }
+  ],
+  "publicSurface": {
+    "added": "bool SDL_LoadWAV(const char *path, SDL_AudioSpec *spec, Uint8 **audio_buf, Uint32 *audio_len)",
+    "deliberatelyAbsent": "SDL_LoadWAV_IO (no public SDL_IOStream), SDL_HINT_WAVE_* effect on this loader",
+    "testSeam": "int __sdl_wave_alloc_countdown (reserved __ name, declared in no header): N >= 0 fails the (N+1)th allocation in the decoder TU once, then disarms; -1 rests"
+  },
+  "oracle": {
+    "what": "logs/2026-08-20/529b-evidence/oracle.c built natively against the pinned upstream static SDL3; gen-manifest.mjs collects its verdicts into the committed manifest.json",
+    "buildRecipe": "see oracle.c header comment (cmake static build at the pin, macOS host)"
+  }
+}

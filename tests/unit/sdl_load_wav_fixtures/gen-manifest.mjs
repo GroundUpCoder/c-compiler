@@ -5,7 +5,7 @@
 //   node gen-manifest.mjs <path-to-native-oracle-binary>
 //
 // The oracle binary is built OUT OF TREE against upstream SDL at the pin —
-// build recipe in oracle.c and ../sdl_load_wav/upstream.json. This script is
+// build recipe in logs/2026-08-20/529b-evidence/oracle.c and ../sdl_load_wav/upstream.json. This script is
 // committed for provenance; CI never runs it (the committed manifest IS the
 // pinned upstream truth; regenerating it requires rebuilding the oracle).
 //
