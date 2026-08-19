@@ -58,4 +58,11 @@ ok avail covers both generations
 ok clear keeps specs
 ok avail 0 after clear
 ok put works after clear
+ok memory put atomic under injected failure
+ok memory put clean retry succeeds
+ok memory put atomic under injected failure
+ok memory put clean retry succeeds
+ok memory put allocation depth is two
+ok both memory allocations were exercised
+ok coalescing memory put into reserved capacity allocates nothing
 ok destroy null safe

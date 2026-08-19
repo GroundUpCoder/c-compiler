@@ -28,4 +28,23 @@ ok pause legal on device
 ok destroy returned
 ok memory resume refused
 ok memory pause refused
+ok identity put atomic under failalloc(1)
+ok clean retry succeeds after injected failure
+ok identity put atomic under failalloc(2)
+ok clean retry succeeds after injected failure
+ok first uninjected allocation depth reached
+ok post-injection put advanced normally
+ok both identity allocations were exercised
+ok converted put atomic under failalloc(1)
+ok clean retry succeeds after injected failure
+ok converted put atomic under failalloc(2)
+ok clean retry succeeds after injected failure
+ok converted put atomic under failalloc(3)
+ok clean retry succeeds after injected failure
+ok converted put atomic under failalloc(4)
+ok clean retry succeeds after injected failure
+ok first uninjected allocation depth reached
+ok post-injection put advanced normally
+ok all four converted allocations were exercised
+ok steady-state identity put allocates nothing
 ok pull callback refused

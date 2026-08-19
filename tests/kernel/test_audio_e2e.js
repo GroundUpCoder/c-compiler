@@ -154,6 +154,39 @@ static void ring(void) {
     fflush(stdout);
 }
 
+extern int __sdl_audiostream_failalloc(int nth);
+
+/* ringfail (review finding 2 against the REAL ring): phase 1 arms each of
+   the identity put's two allocations in turn against a 300K put the ring
+   would partially accept — nothing may reach the SAB ring (the driver
+   verifies ring emptiness while this app parks). Phase 2 proves the
+   fail-then-clean-retry sequence on ONE stream: the armed put accepts
+   nothing, the retry submits exactly the 256K prefix and backlogs the rest. */
+static void ringfail(int phase) {
+    SDL_AudioSpec dspec = { SDL_AUDIO_S16, 2, 48000 };
+    static short frames[76800 * 2];
+    int i, r1, r2;
+    dev = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &dspec, 0, 0);
+    if (!dev) { printf("NOSTREAM\n"); exit(3); }
+    for (i = 0; i < 76800; i++) { frames[i * 2] = (short)(i % 32000); frames[i * 2 + 1] = (short)(i / 32000); }
+    if (phase == 1) {
+        __sdl_audiostream_failalloc(1);   /* the ledger node */
+        r1 = SDL_PutAudioStreamData(dev, frames, (int)sizeof frames);
+        __sdl_audiostream_failalloc(2);   /* node ok, the backlog reserve */
+        r2 = SDL_PutAudioStreamData(dev, frames, (int)sizeof frames);
+        __sdl_audiostream_failalloc(0);
+        printf("FAILPUTS %d %d queued %d\n", r1, r2, SDL_GetAudioStreamQueued(dev));
+        fflush(stdout);
+        return;   /* park with the stream open; the driver inspects the ring */
+    }
+    __sdl_audiostream_failalloc(1);
+    r1 = SDL_PutAudioStreamData(dev, frames, (int)sizeof frames);
+    __sdl_audiostream_failalloc(0);
+    r2 = SDL_PutAudioStreamData(dev, frames, (int)sizeof frames);
+    printf("RETRY %d %d queued %d\n", r1, r2, SDL_GetAudioStreamQueued(dev));
+    fflush(stdout);
+}
+
 static void park(void) {
     for (;;) sleep(3600);   /* pid-1 init parks so later boots stay legal */
 }
@@ -210,6 +243,8 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "init") == 0) park();
     else if (strcmp(argv[1], "tones") == 0) tones();
     else if (strcmp(argv[1], "ring") == 0) ring();
+    else if (strcmp(argv[1], "ringfail1") == 0) ringfail(1);
+    else if (strcmp(argv[1], "ringfail2") == 0) ringfail(2);
     else if (strcmp(argv[1], "ring2") == 0) ring2();
     else if (strcmp(argv[1], "epochs") == 0) epochs();
     else return 2;
@@ -427,6 +462,29 @@ const watchdog = setTimeout(() => {
           got >= 1024 && near(capC[0], 0.25) && near(capC[2046], 0.25), got);
   }
   kernel.kill(pidR2, 9, null);
+  await reapAll();
+
+  // -- ringfail: injected allocation failure inside a partial-ring put
+  // submits NOTHING to the SAB ring (finding 2's atomicity, proven against
+  // the real transport); then fail-and-clean-retry on one stream submits
+  // exactly the prefix. --
+  const pidRF = await kernel.boot({ path: '/bin/app2', argv: ['app2', 'ringfail1'], envp: [], cwd: '/' });
+  await waitOut('FAILPUTS 0 0 queued 0');   // the app is parked now: state is at rest
+  {
+    const l = kernel.audioList();
+    check('ringfail: failed puts submitted nothing to the ring',
+          l.length === 1 && l[0].queued === 0, JSON.stringify(l));
+  }
+  kernel.kill(pidRF, 9, null);
+  await reapAll();
+  const pidRF2 = await kernel.boot({ path: '/bin/app2', argv: ['app2', 'ringfail2'], envp: [], cwd: '/' });
+  await waitOut('RETRY 0 1 queued 307200');
+  {
+    const l = kernel.audioList();
+    check('ringfail: clean retry submitted exactly the ring prefix',
+          l.length === 1 && l[0].queued === 262144, JSON.stringify(l));
+  }
+  kernel.kill(pidRF2, 9, null);
   await reapAll();
 
   // -- epochs: three converted source epochs, partial frame-aligned kernel

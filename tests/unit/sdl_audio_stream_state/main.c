@@ -15,6 +15,7 @@
 #include <string.h>
 
 extern int __sdl_audiostream_fp(SDL_AudioStream *s, unsigned int *out, int cap);
+extern int __sdl_audiostream_failalloc(int nth);
 
 static void expect(const char *what, int cond) { printf("%s %s\n", cond ? "ok" : "FAIL", what); }
 
@@ -219,6 +220,49 @@ int main(void) {
         expect("avail 0 after clear", SDL_GetAudioStreamAvailable(s) == 0);
         expect("put works after clear", SDL_PutAudioStreamData(s, pcm, 8));
         SDL_DestroyAudioStream(s);
+    }
+
+    /* -- review finding 2 on the MEMORY path: an injected allocation
+       failure leaves put atomic (extent node, then extent bytes), and a
+       coalescing put into reserved capacity allocates nothing at all -- */
+    {
+        int k, failed = 0;
+        short pcm[4] = { 9, 8, 7, 6 };
+        for (k = 1; k <= 3; k++) {
+            SDL_AudioStream *s = SDL_CreateAudioStream(&s16m48, &f32s48);
+            unsigned int b[14], a[14];
+            int r;
+            __sdl_audiostream_fp(s, b, 14);
+            __sdl_audiostream_failalloc(k);
+            r = SDL_PutAudioStreamData(s, pcm, 8);
+            __sdl_audiostream_failalloc(0);
+            __sdl_audiostream_fp(s, a, 14);
+            if (!r) {
+                failed++;
+                expect("memory put atomic under injected failure",
+                       memcmp(b, a, sizeof b) == 0 && SDL_GetAudioStreamQueued(s) == 0);
+                expect("memory put clean retry succeeds",
+                       SDL_PutAudioStreamData(s, pcm, 8) && SDL_GetAudioStreamQueued(s) == 8);
+            } else {
+                expect("memory put allocation depth is two", k == 3);
+            }
+            SDL_DestroyAudioStream(s);
+        }
+        expect("both memory allocations were exercised", failed == 2);
+        {
+            /* capacity doubling reaches surplus at the fourth same-size put
+               (8 -> 16 -> 32 covers 32 queued bytes), which then reserves
+               nothing: an armed injector is never reached. */
+            SDL_AudioStream *s = SDL_CreateAudioStream(&s16m48, &f32s48);
+            SDL_PutAudioStreamData(s, pcm, 8);
+            SDL_PutAudioStreamData(s, pcm, 8);
+            SDL_PutAudioStreamData(s, pcm, 8);
+            __sdl_audiostream_failalloc(1);
+            expect("coalescing memory put into reserved capacity allocates nothing",
+                   SDL_PutAudioStreamData(s, pcm, 8) && SDL_GetAudioStreamQueued(s) == 32);
+            __sdl_audiostream_failalloc(0);
+            SDL_DestroyAudioStream(s);
+        }
     }
 
     /* -- destroy tolerates NULL -- */

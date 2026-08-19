@@ -16363,18 +16363,21 @@ const shakeDefaults = {
   enabled: true,
 };
 
-function treeShakeFunctions(wmod, optsIn) {
-  const opts = Object.assign({}, shakeDefaults, optsIn || {});
-  const stats = { deleted: 0, kept: wmod.funcDefs.length, aborted: null };
-  if (!opts.enabled) { stats.aborted = 'disabled'; return stats; }
+// The tree-shake's reachability, callable on its own (#722): roots are
+// function exports + address-taken functions, edges are WCall immediates.
+// Returns a Uint8Array over funcDefs indices, or null when any body is raw
+// (WRaw) — the same abort rule as the shake itself. generateCode calls this
+// BEFORE emitting data segments to zero string-literal ranges owned only by
+// functions the shake will drop; that pre-inline live set is a superset of
+// the shake's post-inline one, so the prune can only under-drop, never
+// remove data a surviving function (or an inlined copy of one) references.
+function computeLiveFunctions(wmod) {
   const defs = wmod.funcDefs;
   const nImp = wmod.funcImports ? wmod.funcImports.length : 0;
   const N = defs.length;
   for (const def of defs) {
-    if (!def.wast) { stats.aborted = 'rawBody'; return stats; }
+    if (!def.wast) return null;
   }
-
-  // Roots: function exports + address-taken functions.
   const live = new Uint8Array(N);
   const q = [];
   const root = (defIdx) => {
@@ -16394,6 +16397,18 @@ function treeShakeFunctions(wmod, optsIn) {
       if (n instanceof WCall && n.funcIdx >= nImp) root(n.funcIdx - nImp);
     }
   }
+  return live;
+}
+
+function treeShakeFunctions(wmod, optsIn) {
+  const opts = Object.assign({}, shakeDefaults, optsIn || {});
+  const stats = { deleted: 0, kept: wmod.funcDefs.length, aborted: null };
+  if (!opts.enabled) { stats.aborted = 'disabled'; return stats; }
+  const defs = wmod.funcDefs;
+  const nImp = wmod.funcImports ? wmod.funcImports.length : 0;
+  const N = defs.length;
+  const live = computeLiveFunctions(wmod);
+  if (!live) { stats.aborted = 'rawBody'; return stats; }
 
   const newIdx = new Int32Array(N).fill(-1);
   let nn = 0;
@@ -16511,7 +16526,7 @@ return {
   // WAST proper
   WastBuilder, serialize, validate, runPasses, lastPassStats,
   inlineFunctions, inlineDefaults,
-  treeShakeFunctions, shakeDefaults,
+  treeShakeFunctions, shakeDefaults, computeLiveFunctions,
   WBlock, WLoop, WIf, WElse, WEnd, WTryTable, WBr, WBrIf, WBrTable,
   WReturn, WCall, WCallIndirect, WConst, WLocalGet, WLocalSet, WLocalTee,
   WGlobalGet, WGlobalSet, WAop, WMop, WTruncSat, WMemorySize, WMemoryGrow,
@@ -17876,6 +17891,8 @@ class CodeGenerator {
     this.fileScopeCompoundLiteralAddrs = new Map();
     this.stackPages = 1;
     this.staticDataOffset = 0;
+    this.literalRanges = [];          // {start,len,owners} for the dead-literal prune (#722)
+    this.literalRangeByAddr = new Map();
     this.staticData = [];
     this.stringLiteralAddrs = new Map();
     // todos/0228: literal-merge policy. OFF by default — each lexical string
@@ -18054,12 +18071,34 @@ class CodeGenerator {
     if (this.dedupLiterals) key = "c:" + Array.from(valueArray).join(",");
     else if (node) key = node;
     else key = {};
-    if (this.stringLiteralAddrs.has(key)) return this.stringLiteralAddrs.get(key);
+    // Ownership for the dead-literal prune (#722): while a function body is
+    // being emitted, the literal belongs to that function; every later use
+    // (an AST-inline-shared node, a dedup hit) ADDS its user. A use outside
+    // any function (a global initializer) pins the literal forever
+    // (owners = null). generateCode zeroes the bytes of ranges whose every
+    // owner the tree-shake drops — zeros cost no binary bytes.
+    const owner = this.currentFuncDef
+      ? this.funcDefToWasmFuncIdx.get(this.currentFuncDef) : undefined;
+    if (this.stringLiteralAddrs.has(key)) {
+      const addr = this.stringLiteralAddrs.get(key);
+      const r = this.literalRangeByAddr.get(addr);
+      if (r && r.owners) {
+        if (owner === undefined) r.owners = null;
+        else r.owners.add(owner);
+      }
+      return addr;
+    }
     const baseAddr = this.stackPages * 65536;
     const addr = baseAddr + this.staticDataOffset;
     this.stringLiteralAddrs.set(key, addr);
     for (const b of valueArray) this.staticData.push(b);
     this.staticDataOffset += valueArray.length;
+    {
+      const r = { start: addr - baseAddr, len: valueArray.length,
+                  owners: owner === undefined ? null : new Set([owner]) };
+      this.literalRangeByAddr.set(addr, r);
+      this.literalRanges.push(r);
+    }
     return addr;
   }
 
@@ -21718,6 +21757,33 @@ function generateCode(units, outputFile, options) {
   // on a zero run long enough to pay for a new segment. Trailing zeros in a span
   // are dropped (the segment ends at its last non-zero byte). An all-zero
   // staticData emits no segments at all.
+  // Dead-literal prune (#722): the code of a function nothing references is
+  // dropped by the wasm-level tree-shake, but its string literals were
+  // interned into staticData during emission and (before this) shipped in
+  // every binary. Zero the ranges whose every owner is dead — the sparse
+  // emitter below skips zeros, so a dead run costs no binary bytes, and
+  // nothing moves (kept addresses are untouched; the only references to a
+  // zeroed range lived in dropped code). The live set here is PRE-inline,
+  // a superset of the shake's post-inline set, so an address immediate the
+  // wasm inliner later copies into a survivor can only belong to a range
+  // this pass already kept.
+  if (WAST.shakeDefaults.enabled && cg.literalRanges.length > 0) {
+    const live = WAST.computeLiveFunctions(wmod);
+    if (live) {
+      const nImp = wmod.funcImports.length;
+      for (const r of cg.literalRanges) {
+        if (!r.owners || r.owners.size === 0) continue;
+        let keep = false;
+        for (const fi of r.owners) {
+          const di = fi - nImp;
+          if (di < 0 || di >= live.length || live[di]) { keep = true; break; }
+        }
+        if (!keep) {
+          for (let i = 0; i < r.len; i++) cg.staticData[r.start + i] = 0;
+        }
+      }
+    }
+  }
   if (cg.staticData.length > 0) {
     const data = cg.staticData;
     const MIN_ZERO_RUN = 64;
@@ -29145,6 +29211,22 @@ typedef struct __SDL_AuLedger {
    fingerprint reads it through __sdl_audiostream_fp). */
 static int __au_alloc_count;
 
+/* Deterministic allocation-failure injection (review finding 2 tests).
+   Production-unreachable: nothing in this file or any header calls the arm
+   function; a test declares it 'extern' and arms the Nth allocation from
+   now to fail. Every fallible allocation in the audio engine routes through
+   these seams, and every put pre-reserves through them BEFORE any
+   observable or internal mutation, so an armed failure proves atomicity. */
+static int __au_fail_after;
+int __sdl_audiostream_failalloc(int nth) { __au_fail_after = nth; return 0; }
+static int __au_fail_hit(void) {
+    if (__au_fail_after > 0 && --__au_fail_after == 0) return 1;
+    return 0;
+}
+static void *__au_malloc(size_t n) { return __au_fail_hit() ? NULL : malloc(n); }
+static void *__au_calloc(size_t n, size_t m) { return __au_fail_hit() ? NULL : calloc(n, m); }
+static void *__au_realloc(void *p, size_t n) { return __au_fail_hit() ? NULL : realloc(p, n); }
+
 struct SDL_AudioStream {
     int kind;                 /* 0 = MEMORY, 1 = DEVICE */
     int has_src, has_dst;
@@ -29272,79 +29354,81 @@ static void __au_free_ledger(SDL_AudioStream *s) {
     s->led_head = s->led_tail = NULL;
 }
 
-/* Append 'len' bytes under the CURRENT specs: coalesce with a same-spec,
-   unflushed tail (the epoch simply grows — the rational phase needs no
-   fixup), else start a new immutable epoch. Fails atomically on OOM. */
-static bool __au_put_extent(SDL_AudioStream *s, const SDL_AudioSpec *dst,
-                            const unsigned char *bytes, int len) {
+/* Reserve, then commit (review finding 2: a put must complete every
+   fallible allocation BEFORE any observable or internal mutation, so a
+   false return means zero bytes were accepted anywhere). Reserve either
+   grows the coalescible tail's capacity in place (capacity is not state —
+   no accounting word, offset, or fingerprint field changes; only committed
+   reservations bump the allocation counter, via *allocs) or builds a
+   DETACHED extent already carrying the copied bytes. Commit links/appends
+   and cannot fail. */
+static int __au_extent_coalesces(const SDL_AudioStream *s, const SDL_AudioSpec *dst) {
+    const __SDL_AuExtent *e = s->tail;
+    return e && !e->flushed && __au_spec_eq(&e->src, &s->src) && __au_spec_eq(&e->dst, dst);
+}
+
+static bool __au_extent_reserve(SDL_AudioStream *s, const SDL_AudioSpec *dst,
+                                const unsigned char *bytes, int len,
+                                __SDL_AuExtent **detached, int *allocs) {
     int sfb = __au_frame_bytes(&s->src);
-    __SDL_AuExtent *e = s->tail;
-    if (e && !e->flushed && __au_spec_eq(&e->src, &s->src) && __au_spec_eq(&e->dst, dst)) {
-        long long need = (e->frames * (long long)sfb) + len;
-        if (need > e->cap) {
-            long long ncap = e->cap ? e->cap : 4096;
-            unsigned char *nd;
-            while (ncap < need) ncap *= 2;
-            nd = (unsigned char *)realloc(e->data, (size_t)ncap);
-            if (!nd) return SDL_SetError("Out of memory");
-            __au_alloc_count++;
-            e->data = nd;
-            e->cap = ncap;
+    __SDL_AuExtent *e;
+    *detached = NULL;
+    if (__au_extent_coalesces(s, dst)) {
+        e = s->tail;
+        {
+            long long need = (e->frames * (long long)sfb) + len;
+            if (need > e->cap) {
+                long long ncap = e->cap ? e->cap : 4096;
+                unsigned char *nd;
+                while (ncap < need) ncap *= 2;
+                nd = (unsigned char *)__au_realloc(e->data, (size_t)ncap);
+                if (!nd) return SDL_SetError("Out of memory");
+                (*allocs)++;
+                e->data = nd;
+                e->cap = ncap;
+            }
         }
-        memcpy(e->data + e->frames * sfb, bytes, (size_t)len);
-        e->frames += len / sfb;
         return 1;
     }
-    e = (__SDL_AuExtent *)malloc(sizeof(__SDL_AuExtent));
+    e = (__SDL_AuExtent *)__au_malloc(sizeof(__SDL_AuExtent));
     if (!e) return SDL_SetError("Out of memory");
-    e->data = (unsigned char *)malloc((size_t)len);
+    e->data = (unsigned char *)__au_malloc((size_t)len);
     if (!e->data) { free(e); return SDL_SetError("Out of memory"); }
-    __au_alloc_count += 2;
+    *allocs += 2;
     memcpy(e->data, bytes, (size_t)len);
     e->cap = len;
     e->src = s->src;
     e->dst = *dst;
-    e->frames = len / sfb;
+    e->frames = 0;            /* counted at commit */
     e->base = 0;
     e->k = 0;
     e->retired = 0;
     e->flushed = 0;
     e->next = NULL;
-    if (s->tail) s->tail->next = e; else s->head = e;
-    s->tail = e;
+    *detached = e;
     return 1;
+}
+
+static void __au_extent_commit(SDL_AudioStream *s, __SDL_AuExtent *detached,
+                               const unsigned char *bytes, int len) {
+    int sfb = __au_frame_bytes(&s->src);
+    if (detached) {
+        detached->frames = len / sfb;
+        if (s->tail) s->tail->next = detached; else s->head = detached;
+        s->tail = detached;
+        return;
+    }
+    memcpy(s->tail->data + s->tail->frames * sfb, bytes, (size_t)len);
+    s->tail->frames += len / sfb;
 }
 
 /* -- DEVICE receipt ledger + reconcile ------------------------------------ */
 
-/* Extend (or open) the identity ledger tail: src == device-ingest spec, so
-   one device byte is one original byte and retirement is byte-granular —
-   exactly the pre-#529 observable (Queued == ring + backlog). */
-static bool __au_led_identity(SDL_AudioStream *s, int len) {
-    __SDL_AuLedger *L = s->led_tail;
-    if (L && L->identity && !L->closed) { L->dev_bytes += len; return 1; }
-    L = (__SDL_AuLedger *)calloc(1, sizeof(__SDL_AuLedger));
-    if (!L) return SDL_SetError("Out of memory");
-    __au_alloc_count++;
-    L->identity = 1;
-    L->dev_bytes = len;
+/* Link a pre-allocated ledger node as the new tail, closing the old tail.
+   Allocation happens at the put's reserve step; linking cannot fail. */
+static void __au_led_link(SDL_AudioStream *s, __SDL_AuLedger *L) {
     if (s->led_tail) { s->led_tail->closed = 1; s->led_tail->next = L; } else s->led_head = L;
     s->led_tail = L;
-    return 1;
-}
-
-/* Open a conversion ledger node for a new source epoch. */
-static bool __au_led_conv(SDL_AudioStream *s) {
-    __SDL_AuLedger *L = (__SDL_AuLedger *)calloc(1, sizeof(__SDL_AuLedger));
-    if (!L) return SDL_SetError("Out of memory");
-    __au_alloc_count++;
-    L->src_fb = __au_frame_bytes(&s->src);
-    L->dev_fb = __au_frame_bytes(&s->ingest);
-    L->src_freq = s->src.freq;
-    L->dev_freq = s->ingest.freq;
-    if (s->led_tail) { s->led_tail->closed = 1; s->led_tail->next = L; } else s->led_head = L;
-    s->led_tail = L;
-    return 1;
 }
 
 /* One synchronous host acknowledgement read: consumed = baseline + newly
@@ -29419,7 +29503,7 @@ static void __sdl_stream_pump(SDL_AudioStream *s) {
     s->backlog_len -= accepted;
 }
 
-static bool __au_backlog_reserve(SDL_AudioStream *s, int add) {
+static bool __au_backlog_reserve(SDL_AudioStream *s, int add, int *allocs) {
     if (add > 0x7FFFFFFF - s->backlog_len) return SDL_SetError("audio backlog overflow");
     if (s->backlog_len + add > s->backlog_cap) {
         int ncap = s->backlog_cap ? s->backlog_cap : 65536;
@@ -29428,9 +29512,9 @@ static bool __au_backlog_reserve(SDL_AudioStream *s, int add) {
             if (ncap > 0x40000000) { ncap = 0x7FFFFFFF; break; }
             ncap *= 2;
         }
-        nb = (unsigned char *)realloc(s->backlog, (size_t)ncap);
+        nb = (unsigned char *)__au_realloc(s->backlog, (size_t)ncap);
         if (!nb) return SDL_SetError("Out of memory");
-        __au_alloc_count++;
+        (*allocs)++;
         s->backlog = nb;
         s->backlog_cap = ncap;
     }
@@ -29441,9 +29525,11 @@ static bool __au_backlog_reserve(SDL_AudioStream *s, int add) {
    and record them on the ledger tail. */
 static bool __au_dev_emit(SDL_AudioStream *s, __SDL_AuExtent *e, long long n) {
     int ifb = __au_frame_bytes(&s->ingest);
+    int allocs = 0;
     if (n <= 0) return 1;
     if (n > (long long)(0x7FFFFFFF) / ifb) return SDL_SetError("audio backlog overflow");
-    if (!__au_backlog_reserve(s, (int)(n * ifb))) return 0;
+    if (!__au_backlog_reserve(s, (int)(n * ifb), &allocs)) return 0;
+    __au_alloc_count += allocs;
     __au_convert(e, n, s->backlog + s->backlog_len);
     s->backlog_len += (int)(n * ifb);
     s->led_tail->dev_frames += n;
@@ -29475,7 +29561,7 @@ SDL_AudioStream *SDL_CreateAudioStream(const SDL_AudioSpec *src_spec,
     SDL_AudioStream *s;
     if (src_spec && !__au_validate_side(src_spec, 1)) return NULL;
     if (dst_spec && !__au_validate_side(dst_spec, 0)) return NULL;
-    s = (SDL_AudioStream *)calloc(1, sizeof(SDL_AudioStream));
+    s = (SDL_AudioStream *)__au_calloc(1, sizeof(SDL_AudioStream));
     if (!s) { SDL_SetError("Out of memory"); return NULL; }
     if (src_spec) { s->src = *src_spec; s->has_src = 1; }
     if (dst_spec) { s->dst = *dst_spec; s->has_dst = 1; }
@@ -29542,37 +29628,55 @@ bool SDL_PutAudioStreamData(SDL_AudioStream *stream, const void *buf, int len) {
     if (!buf) return SDL_InvalidParamError("buf");
     if (len < 0) return SDL_InvalidParamError("len");
     if (len == 0) return 1;   /* nothing to do — and no epoch is created */
+    /* ATOMICITY (review finding 2): every fallible allocation/reservation in
+       each branch below completes BEFORE any host submission, backlog byte,
+       ledger/original-byte mutation, or converter-state change. A false
+       return therefore accepted zero caller bytes and left every observable
+       and internal word — the allocation counter included — unchanged. */
     if (stream->kind == 0) {
+        __SDL_AuExtent *det;
+        int allocs = 0;
         if (!stream->has_src) return SDL_SetError("Stream has no source format");
         if (!stream->has_dst) return SDL_SetError("Stream has no destination format");
         if (len % __au_frame_bytes(&stream->src) != 0)
             return SDL_SetError("Can't add partial sample frames");
-        return __au_put_extent(stream, &stream->dst, (const unsigned char *)buf, len);
+        if (!__au_extent_reserve(stream, &stream->dst, (const unsigned char *)buf, len, &det, &allocs))
+            return 0;
+        __au_extent_commit(stream, det, (const unsigned char *)buf, len);
+        __au_alloc_count += allocs;
+        return 1;
     }
     /* DEVICE */
     if (stream->head == NULL && __au_spec_eq(&stream->src, &stream->ingest)) {
-        /* Identity fast path — the pre-#529 behavior, byte-for-byte. Drain
-           any backlog first so the ring is as empty as possible; only write
-           the new data straight to the ring if the backlog is empty (FIFO). */
+        /* Identity fast path — the pre-#529 behavior, byte-for-byte. Reserve
+           first: a ledger tail if none is open, and worst-case backlog
+           capacity (the ring may accept nothing). Then drain any backlog so
+           the ring is as empty as possible; only write the new data straight
+           to the ring if the backlog is empty (FIFO). */
+        __SDL_AuLedger *pre = NULL;
+        int allocs = 0;
         int accepted = 0;
+        if (!(stream->led_tail && stream->led_tail->identity && !stream->led_tail->closed)) {
+            pre = (__SDL_AuLedger *)__au_calloc(1, sizeof(__SDL_AuLedger));
+            if (!pre) return SDL_SetError("Out of memory");
+            pre->identity = 1;
+        }
+        if (!__au_backlog_reserve(stream, len, &allocs)) { free(pre); return 0; }
+        /* commit — nothing below can fail */
+        __au_alloc_count += allocs;
         __sdl_stream_pump(stream);
         if (stream->backlog_len == 0) {
             accepted = __sdl_queue_audio(stream->dev, buf, len);
             if (accepted < 0) accepted = 0;
             stream->submitted_dev += accepted;
         }
-        if (accepted > 0) {
-            if (!__au_led_identity(stream, accepted)) return 0;
-            stream->put_orig += accepted;
-        }
+        if (pre) { __au_led_link(stream, pre); __au_alloc_count++; }
+        stream->led_tail->dev_bytes += len;
+        stream->put_orig += len;
         if (accepted < len) {
-            int rem = len - accepted;
-            if (!__au_backlog_reserve(stream, rem)) return 0;
             memcpy(stream->backlog + stream->backlog_len,
-                   (const unsigned char *)buf + accepted, (size_t)rem);
-            stream->backlog_len += rem;
-            if (!__au_led_identity(stream, rem)) return 0;
-            stream->put_orig += rem;
+                   (const unsigned char *)buf + accepted, (size_t)(len - accepted));
+            stream->backlog_len += len - accepted;
         }
         return 1;
     }
@@ -29581,21 +29685,47 @@ bool SDL_PutAudioStreamData(SDL_AudioStream *stream, const void *buf, int len) {
        frame-aligned like MEMORY puts; complete frames convert eagerly
        (interpolation lookahead held until flush), converted ingest bytes
        join the unchanged backlog/ring, and the ledger records the epoch. */
-    if (len % __au_frame_bytes(&stream->src) != 0)
-        return SDL_SetError("Can't add partial sample frames");
-    if (stream->head == NULL) {
-        if (!__au_led_conv(stream)) return 0;
-    }
-    if (!__au_put_extent(stream, &stream->ingest, (const unsigned char *)buf, len)) return 0;
-    stream->put_orig += len;
-    stream->led_tail->orig_frames = stream->head->base + stream->head->frames;
     {
-        __SDL_AuExtent *e = stream->head;
-        long long total = __au_emit_total(e->base + e->frames, e->src.freq, e->dst.freq, 0);
-        if (!__au_dev_emit(stream, e, total - e->k)) return 0;
+        int sfb = __au_frame_bytes(&stream->src);
+        int ifb = __au_frame_bytes(&stream->ingest);
+        __SDL_AuExtent *ehead = stream->head;
+        __SDL_AuLedger *node = NULL;
+        __SDL_AuExtent *det = NULL;
+        int allocs = 0;
+        long long total_after, n_emit;
+        if (len % sfb != 0)
+            return SDL_SetError("Can't add partial sample frames");
+        /* the eager emit this put will produce, reserved up front */
+        total_after = (ehead ? ehead->base + ehead->frames : 0) + len / sfb;
+        n_emit = __au_emit_total(total_after, stream->src.freq, stream->ingest.freq, 0)
+                 - (ehead ? ehead->k : 0);
+        if (n_emit < 0) n_emit = 0;
+        if (n_emit > (long long)(0x7FFFFFFF) / ifb)
+            return SDL_SetError("audio backlog overflow");
+        if (!__au_backlog_reserve(stream, (int)(n_emit * ifb), &allocs)) return 0;
+        if (ehead == NULL) {
+            node = (__SDL_AuLedger *)__au_calloc(1, sizeof(__SDL_AuLedger));
+            if (!node) return SDL_SetError("Out of memory");
+            node->src_fb = sfb;
+            node->dev_fb = ifb;
+            node->src_freq = stream->src.freq;
+            node->dev_freq = stream->ingest.freq;
+        }
+        if (!__au_extent_reserve(stream, &stream->ingest, (const unsigned char *)buf, len, &det, &allocs)) {
+            free(node);
+            return 0;
+        }
+        /* commit — nothing below can fail: the backlog capacity for the whole
+           eager emit is reserved, so __au_dev_emit's reserve is a no-op */
+        __au_alloc_count += allocs;
+        if (node) { __au_led_link(stream, node); __au_alloc_count++; }
+        __au_extent_commit(stream, det, (const unsigned char *)buf, len);
+        stream->put_orig += len;
+        stream->led_tail->orig_frames = stream->head->base + stream->head->frames;
+        __au_dev_emit(stream, stream->head, n_emit);
+        __sdl_stream_pump(stream);
+        return 1;
     }
-    __sdl_stream_pump(stream);
-    return 1;
 }
 
 int SDL_GetAudioStreamData(SDL_AudioStream *stream, void *voidbuf, int len) {
@@ -29810,7 +29940,7 @@ SDL_AudioStream *SDL_OpenAudioDeviceStream(SDL_AudioDeviceID devid,
             SDL_SetError("SDL_OpenAudioDeviceStream: host cannot report the device's destination format");
             return NULL;
         }
-        s = (SDL_AudioStream *)calloc(1, sizeof(SDL_AudioStream));
+        s = (SDL_AudioStream *)__au_calloc(1, sizeof(SDL_AudioStream));
         if (!s) { __sdl_close_audio_device(dev); SDL_SetError("Out of memory"); return NULL; }
         s->kind = 1;
         s->dev = dev;
