@@ -5223,7 +5223,12 @@ Kernel.prototype._audioRpc = function (pcb, op, req) {
       });
       pcb.audios.add(aid);
       this._onAudioStream();
-      this._respond(pcb, { aid: aid });
+      // #529-A: report the mixer sink's native spec alongside the aid — a
+      // read-only fact (the output ring is fixed F32/stereo/AU_OUT_FREQ),
+      // no transport policy. host.js answers SDL's destination-format
+      // query from it; production audio bytes are unchanged.
+      this._respond(pcb, { aid: aid, sinkFormat: AU_FMT_F32,
+                           sinkChannels: AU_OUT_CHANNELS, sinkFreq: AU_OUT_FREQ });
       break;
     }
     case OP.AUDIO_CLOSE: {

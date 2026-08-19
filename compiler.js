@@ -22655,6 +22655,35 @@ bool SDL_ResumeAudioStreamDevice(SDL_AudioStream *stream);
 bool SDL_PauseAudioStreamDevice(SDL_AudioStream *stream);
 void SDL_DestroyAudioStream(SDL_AudioStream *stream);
 
+/* ---- Device-less audio streams + buffer mixing (#529-A) ----
+   SDL_CreateAudioStream makes a MEMORY stream: a device-less format/rate/
+   channel converter — put source bytes, get converted bytes back.
+   Validation is SDL 3.4.0's: the five formats above, 1..8 channels (SDL's
+   default channel-conversion matrix), any positive rate. Format changes are
+   EPOCHED: queued bytes keep the specs they were put under; new specs apply
+   to future puts (GetFormat reports the CURRENT configuration, so a reader
+   crossing an epoch boundary sees the documented sequential format
+   transition). SDL_GetAudioStreamData returns whole destination frames only
+   (a buffer too short for one frame reads 0); SDL_GetAudioStreamAvailable
+   reports exactly what GetData could return right now, without an implicit
+   flush. SDL_FlushAudioStream marks a generation end (the finite resampler
+   tail becomes readable) — not EOF: a later put starts a new epoch. On
+   DEVICE streams (SDL_OpenAudioDeviceStream) GetData/Available are refused
+   (the device consumes the converted side), a source-format change converts
+   future puts to the device's open spec, a destination change is ignored as
+   SDL specifies, and Pause/Resume remain device-only (MEMORY streams refuse
+   them). SDL_MixAudio mixes src into dst with pinned SDL 3.4.0 semantics:
+   volume quantized to 1/128 steps (0 = successful no-op, deliberately
+   unclamped), truncating integer scaling, saturation to the integer range,
+   float clamp to [-1, 1]; len must be a multiple of the sample width. */
+SDL_AudioStream *SDL_CreateAudioStream(const SDL_AudioSpec *src_spec, const SDL_AudioSpec *dst_spec);
+bool SDL_SetAudioStreamFormat(SDL_AudioStream *stream, const SDL_AudioSpec *src_spec, const SDL_AudioSpec *dst_spec);
+bool SDL_GetAudioStreamFormat(SDL_AudioStream *stream, SDL_AudioSpec *src_spec, SDL_AudioSpec *dst_spec);
+int SDL_GetAudioStreamData(SDL_AudioStream *stream, void *buf, int len);
+int SDL_GetAudioStreamAvailable(SDL_AudioStream *stream);
+bool SDL_FlushAudioStream(SDL_AudioStream *stream);
+bool SDL_MixAudio(Uint8 *dst, const Uint8 *src, SDL_AudioFormat format, Uint32 len, float volume);
+
 /* ---- Error handling ----
    SDL keeps a per-thread error string; this runtime is single-threaded, so it's
    a single global. SDL_GetError never returns NULL (empty when no error).
@@ -28543,34 +28572,1201 @@ void SDL_FlushEvent(Uint32 type) {
 }
 
 /* ---- Audio ----
-   SDL3 replaced the SDL2 device + queue API with SDL_AudioStream. We keep the
-   host's primitive __sdl_* audio imports (one device == one ring) and model a
-   stream as a thin wrapper over a device id. Push-only: the optional stream
-   callback is ignored (NULL is the idiomatic SDL3 push path). SDL3 streams
-   start paused, so callers must SDL_ResumeAudioStreamDevice to hear output —
-   same as the old SDL_PauseAudioDevice(dev, 0). */
+   SDL3 replaced the SDL2 device + queue API with SDL_AudioStream. Two stream
+   kinds share one public type (#529-A, ticket #722):
+
+   DEVICE streams (SDL_OpenAudioDeviceStream) keep the original push-only
+   contract over the host's primitive __sdl_* audio imports (one device ==
+   one ring). Push-only: the optional stream callback is ignored (NULL is the
+   idiomatic SDL3 push path). SDL3 streams start paused, so callers must
+   SDL_ResumeAudioStreamDevice to hear output — same as the old
+   SDL_PauseAudioDevice(dev, 0). What doesn't fit the fixed SAB ring is held
+   in a C-side backlog and re-pumped (SDL_AudioStream is an UNBOUNDED queue —
+   src/audio/SDL_audioqueue.c grows rather than drops), so
+   SDL_PutAudioStreamData never drops bytes. New at #529-A: a receipt LEDGER
+   maps device-ingest bytes the host acknowledges consumed back to ORIGINAL
+   application input bytes, so SDL_GetAudioStreamQueued reports exact
+   original bytes not yet fully processed (for the universal src == open-spec
+   case that is byte-for-byte the old ring+backlog number). A source-format
+   change (SDL_SetAudioStreamFormat) converts FUTURE puts in C to the
+   stream's immutable device-ingest spec before they enter the unchanged
+   backlog/ring; a destination change is ignored without error, exactly as
+   SDL specifies for the device-controlled side. The reported destination
+   format is a read-only host query made at open (__sdl_audio_dst_query):
+   the gucOS kernel sink is F32/stereo/48000, a standalone page reports its
+   receiver's Web Audio graph format, and a sink-less host reports the
+   requested spec — SDL's own dummy driver contract ("don't change reported
+   device format"). A host that cannot answer makes open FAIL rather than
+   invent a format.
+
+   MEMORY streams (SDL_CreateAudioStream) are device-less converters:
+   put source bytes, get converted bytes. Validation follows pinned SDL
+   release-3.4.0: the five published formats, 1..8 channels, any positive
+   rate. Format state is EPOCHED: every put snapshots the current src/dst
+   specs into an immutable input extent (coalescing only with a same-spec,
+   unflushed tail), SDL_SetAudioStreamFormat changes only the CURRENT specs,
+   and queued bytes are always decoded/encoded with their captured specs —
+   nothing queued is ever reinterpreted. Conversion is LAZY: only
+   SDL_GetAudioStreamData converts, and it converts exactly what the caller's
+   buffer holds (whole destination frames of the head epoch; it crosses into
+   a later epoch only when at least one whole frame of that epoch fits), so
+   no hidden converted buffers exist. SDL_GetAudioStreamAvailable is a pure
+   size SIMULATION over the epoch list — allocation-free, mutation-free.
+   The pipeline is float: pinned scalar sample codecs (release-3.4.0
+   SDL_audiotypecvt.c bit-exact bodies), the pinned SDL default 1..8
+   channel-conversion matrix, then persistent-phase linear-interpolation
+   resampling with an exact integer-rational phase (output frame k of an
+   epoch samples source position k*src_freq/dst_freq — chunk-boundary
+   invariant by construction). A flush marks the tail epoch's end so its
+   finite resampler tail (hold-last-frame extrapolation) becomes emittable;
+   it is a generation marker, not EOF — a later put starts a new epoch.
+   An epoch that can no longer grow (a newer epoch follows it) emits its
+   tail the same way, so no queued byte is ever stranded. */
+
+__import int __sdl_audio_dst_query(int dev, int sel);   /* sel 0=format 1=channels 2=freq; <=0 = cannot report */
+
+/* -- format helpers ------------------------------------------------------ */
+
+static int __au_fmt_bytes(int f) {
+    switch (f) {
+    case SDL_AUDIO_U8: case SDL_AUDIO_S8: return 1;
+    case SDL_AUDIO_S16: return 2;
+    case SDL_AUDIO_S32: case SDL_AUDIO_F32: return 4;
+    }
+    return 0;
+}
+
+static int __au_frame_bytes(const SDL_AudioSpec *s) {
+    return __au_fmt_bytes(s->format) * s->channels;
+}
+
+static int __au_spec_eq(const SDL_AudioSpec *a, const SDL_AudioSpec *b) {
+    return a->format == b->format && a->channels == b->channels && a->freq == b->freq;
+}
+
+/* Pinned MEMORY-side validation (SDL release-3.4.0 SDL_audiocvt.c
+   SDL_IsSupportedAudioFormat / SDL_IsSupportedChannelCount / freq > 0):
+   five formats, 1..8 channels, any positive int rate — deliberately no
+   host-derived maximum. DEVICE transport limits (4000..192000 Hz, 1..2
+   channels) are enforced by the host at open, never here. */
+static bool __au_validate_side(const SDL_AudioSpec *s, int is_src) {
+    if (!__au_fmt_bytes(s->format))
+        return is_src ? SDL_InvalidParamError("src_spec->format") : SDL_InvalidParamError("dst_spec->format");
+    if (s->channels < 1 || s->channels > 8)
+        return is_src ? SDL_InvalidParamError("src_spec->channels") : SDL_InvalidParamError("dst_spec->channels");
+    if (s->freq <= 0)
+        return is_src ? SDL_InvalidParamError("src_spec->freq") : SDL_InvalidParamError("dst_spec->freq");
+    return 1;
+}
+
+/* -- pinned scalar sample codecs (release-3.4.0 SDL_audiotypecvt.c) -------
+   Decoders are the arithmetic equivalents of upstream's bit tricks (both
+   are exact: the scales are powers of two). Encoders are upstream's scalar
+   bodies verbatim — they round to nearest-even and saturate to the exact
+   integer range, and their NaN/overflow behavior is pinned by construction.
+   F32 destinations store the computed value unclamped, as upstream does. */
+
+static float __au_dec_sample(const unsigned char *p, int fmt) {
+    switch (fmt) {
+    case SDL_AUDIO_F32: { float v; memcpy(&v, p, 4); return v; }
+    case SDL_AUDIO_S32: { int v; memcpy(&v, p, 4); return (float)v * 0.0000000004656612873077392578125f; }
+    case SDL_AUDIO_S16: { short v; memcpy(&v, p, 2); return (float)v * 0.000030517578125f; }
+    case SDL_AUDIO_S8:  return (float)(signed char)p[0] * 0.0078125f;
+    default:            return (float)((int)p[0] - 128) * 0.0078125f;   /* U8 */
+    }
+}
+
+#define __AU_SIGNMASK(x) ((unsigned int)(0u - ((unsigned int)(x) >> 31)))
+
+static void __au_enc_sample(unsigned char *p, int fmt, float v) {
+    union { float f; unsigned int u; } x;
+    unsigned int y, z;
+    switch (fmt) {
+    case SDL_AUDIO_F32:
+        memcpy(p, &v, 4);
+        return;
+    case SDL_AUDIO_S32:
+        x.f = v;
+        y = x.u + 0x0F800000u;
+        z = y - 0xCF000000u;
+        z &= __AU_SIGNMASK(y ^ z);
+        x.u = y - z;
+        { int out = (int)x.f ^ (int)__AU_SIGNMASK(z); memcpy(p, &out, 4); }
+        return;
+    case SDL_AUDIO_S16:
+        x.f = v + 384.0f;
+        y = x.u - 0x43C00000u;
+        z = 0x7FFFu - (y ^ __AU_SIGNMASK(y));
+        y = y ^ (z & __AU_SIGNMASK(z));
+        { short out = (short)(y & 0xFFFFu); memcpy(p, &out, 2); }
+        return;
+    case SDL_AUDIO_S8:
+        x.f = v + 98304.0f;
+        y = x.u - 0x47C00000u;
+        z = 0x7Fu - (y ^ __AU_SIGNMASK(y));
+        y = y ^ (z & __AU_SIGNMASK(z));
+        p[0] = (unsigned char)(y & 0xFFu);
+        return;
+    default:   /* U8 */
+        x.f = v + 98304.0f;
+        y = x.u - 0x47C00000u;
+        z = 0x7Fu - (y ^ __AU_SIGNMASK(y));
+        y = (y ^ 0x80u) ^ (z & __AU_SIGNMASK(z));
+        p[0] = (unsigned char)(y & 0xFFu);
+        return;
+    }
+}
+
+/* One frame of the pinned SDL default channel-conversion matrix
+   (libsdl-org/SDL release-3.4.0 src/audio/SDL_audio_channel_converters.h,
+   generated there from the FAudio matrix_defaults table; zlib license, see
+   the provenance note above). Mechanically re-emitted as one per-frame
+   switch of direct assignments — same coefficients, same ascending-source
+   accumulation order, so values are bit-identical to the upstream scalar
+   converters. A switch (not upstream's function-pointer table) keeps every
+   case a direct call target: nothing here is address-taken, so an app that
+   never converts channels links none of it. Identity counts (from == to)
+   never reach this function. */
+static void __au_chcvt_frame(int from, int to, const float *in, float *out) {
+    switch (from * 16 + to) {
+    case 18: /* Mono -> Stereo */
+        out[0] = in[0];
+        out[1] = in[0];
+        return;
+    case 19: /* Mono -> 21 */
+        out[0] = in[0];
+        out[1] = in[0];
+        out[2] = 0.0f;
+        return;
+    case 20: /* Mono -> Quad */
+        out[0] = in[0];
+        out[1] = in[0];
+        out[2] = 0.0f;
+        out[3] = 0.0f;
+        return;
+    case 21: /* Mono -> 41 */
+        out[0] = in[0];
+        out[1] = in[0];
+        out[2] = 0.0f;
+        out[3] = 0.0f;
+        out[4] = 0.0f;
+        return;
+    case 22: /* Mono -> 51 */
+        out[0] = in[0];
+        out[1] = in[0];
+        out[2] = 0.0f;
+        out[3] = 0.0f;
+        out[4] = 0.0f;
+        out[5] = 0.0f;
+        return;
+    case 23: /* Mono -> 61 */
+        out[0] = in[0];
+        out[1] = in[0];
+        out[2] = 0.0f;
+        out[3] = 0.0f;
+        out[4] = 0.0f;
+        out[5] = 0.0f;
+        out[6] = 0.0f;
+        return;
+    case 24: /* Mono -> 71 */
+        out[0] = in[0];
+        out[1] = in[0];
+        out[2] = 0.0f;
+        out[3] = 0.0f;
+        out[4] = 0.0f;
+        out[5] = 0.0f;
+        out[6] = 0.0f;
+        out[7] = 0.0f;
+        return;
+    case 33: /* Stereo -> Mono */
+        out[0] = (in[0] * 0.500000000f) + (in[1] * 0.500000000f);
+        return;
+    case 35: /* Stereo -> 21 */
+        out[0] = in[0];
+        out[1] = in[1];
+        out[2] = 0.0f;
+        return;
+    case 36: /* Stereo -> Quad */
+        out[0] = in[0];
+        out[1] = in[1];
+        out[2] = 0.0f;
+        out[3] = 0.0f;
+        return;
+    case 37: /* Stereo -> 41 */
+        out[0] = in[0];
+        out[1] = in[1];
+        out[2] = 0.0f;
+        out[3] = 0.0f;
+        out[4] = 0.0f;
+        return;
+    case 38: /* Stereo -> 51 */
+        out[0] = in[0];
+        out[1] = in[1];
+        out[2] = 0.0f;
+        out[3] = 0.0f;
+        out[4] = 0.0f;
+        out[5] = 0.0f;
+        return;
+    case 39: /* Stereo -> 61 */
+        out[0] = in[0];
+        out[1] = in[1];
+        out[2] = 0.0f;
+        out[3] = 0.0f;
+        out[4] = 0.0f;
+        out[5] = 0.0f;
+        out[6] = 0.0f;
+        return;
+    case 40: /* Stereo -> 71 */
+        out[0] = in[0];
+        out[1] = in[1];
+        out[2] = 0.0f;
+        out[3] = 0.0f;
+        out[4] = 0.0f;
+        out[5] = 0.0f;
+        out[6] = 0.0f;
+        out[7] = 0.0f;
+        return;
+    case 49: /* 21 -> Mono */
+        out[0] = (in[0] * 0.333333343f) + (in[1] * 0.333333343f) + (in[2] * 0.333333343f);
+        return;
+    case 50: /* 21 -> Stereo */
+        out[0] = (in[0] * 0.800000012f) + (in[2] * 0.200000003f);
+        out[1] = (in[1] * 0.800000012f) + (in[2] * 0.200000003f);
+        return;
+    case 52: /* 21 -> Quad */
+        out[0] = (in[2] * 0.111111112f) + (in[0] * 0.888888896f);
+        out[1] = (in[2] * 0.111111112f) + (in[1] * 0.888888896f);
+        out[2] = (in[2] * 0.111111112f);
+        out[3] = (in[2] * 0.111111112f);
+        return;
+    case 53: /* 21 -> 41 */
+        out[0] = in[0];
+        out[1] = in[1];
+        out[2] = in[2];
+        out[3] = 0.0f;
+        out[4] = 0.0f;
+        return;
+    case 54: /* 21 -> 51 */
+        out[0] = in[0];
+        out[1] = in[1];
+        out[2] = 0.0f;
+        out[3] = in[2];
+        out[4] = 0.0f;
+        out[5] = 0.0f;
+        return;
+    case 55: /* 21 -> 61 */
+        out[0] = in[0];
+        out[1] = in[1];
+        out[2] = 0.0f;
+        out[3] = in[2];
+        out[4] = 0.0f;
+        out[5] = 0.0f;
+        out[6] = 0.0f;
+        return;
+    case 56: /* 21 -> 71 */
+        out[0] = in[0];
+        out[1] = in[1];
+        out[2] = 0.0f;
+        out[3] = in[2];
+        out[4] = 0.0f;
+        out[5] = 0.0f;
+        out[6] = 0.0f;
+        out[7] = 0.0f;
+        return;
+    case 65: /* Quad -> Mono */
+        out[0] = (in[0] * 0.250000000f) + (in[1] * 0.250000000f) + (in[2] * 0.250000000f) + (in[3] * 0.250000000f);
+        return;
+    case 66: /* Quad -> Stereo */
+        out[0] = (in[0] * 0.421000004f) + (in[2] * 0.358999997f) + (in[3] * 0.219999999f);
+        out[1] = (in[1] * 0.421000004f) + (in[2] * 0.219999999f) + (in[3] * 0.358999997f);
+        return;
+    case 67: /* Quad -> 21 */
+        out[0] = (in[0] * 0.421000004f) + (in[2] * 0.358999997f) + (in[3] * 0.219999999f);
+        out[1] = (in[1] * 0.421000004f) + (in[2] * 0.219999999f) + (in[3] * 0.358999997f);
+        out[2] = 0.0f;
+        return;
+    case 69: /* Quad -> 41 */
+        out[0] = in[0];
+        out[1] = in[1];
+        out[2] = 0.0f;
+        out[3] = in[2];
+        out[4] = in[3];
+        return;
+    case 70: /* Quad -> 51 */
+        out[0] = in[0];
+        out[1] = in[1];
+        out[2] = 0.0f;
+        out[3] = 0.0f;
+        out[4] = in[2];
+        out[5] = in[3];
+        return;
+    case 71: /* Quad -> 61 */
+        out[0] = (in[0] * 0.939999998f);
+        out[1] = (in[1] * 0.939999998f);
+        out[2] = 0.0f;
+        out[3] = 0.0f;
+        out[4] = (in[3] * 0.500000000f) + (in[2] * 0.500000000f);
+        out[5] = (in[2] * 0.796000004f);
+        out[6] = (in[3] * 0.796000004f);
+        return;
+    case 72: /* Quad -> 71 */
+        out[0] = in[0];
+        out[1] = in[1];
+        out[2] = 0.0f;
+        out[3] = 0.0f;
+        out[4] = in[2];
+        out[5] = in[3];
+        out[6] = 0.0f;
+        out[7] = 0.0f;
+        return;
+    case 81: /* 41 -> Mono */
+        out[0] = (in[0] * 0.200000003f) + (in[1] * 0.200000003f) + (in[2] * 0.200000003f) + (in[3] * 0.200000003f) + (in[4] * 0.200000003f);
+        return;
+    case 82: /* 41 -> Stereo */
+        out[0] = (in[0] * 0.374222219f) + (in[2] * 0.111111112f) + (in[3] * 0.319111109f) + (in[4] * 0.195555553f);
+        out[1] = (in[1] * 0.374222219f) + (in[2] * 0.111111112f) + (in[3] * 0.195555553f) + (in[4] * 0.319111109f);
+        return;
+    case 83: /* 41 -> 21 */
+        out[0] = (in[0] * 0.421000004f) + (in[3] * 0.358999997f) + (in[4] * 0.219999999f);
+        out[1] = (in[1] * 0.421000004f) + (in[3] * 0.219999999f) + (in[4] * 0.358999997f);
+        out[2] = in[2];
+        return;
+    case 84: /* 41 -> Quad */
+        out[0] = (in[0] * 0.941176474f) + (in[2] * 0.058823530f);
+        out[1] = (in[1] * 0.941176474f) + (in[2] * 0.058823530f);
+        out[2] = (in[2] * 0.058823530f) + (in[3] * 0.941176474f);
+        out[3] = (in[2] * 0.058823530f) + (in[4] * 0.941176474f);
+        return;
+    case 86: /* 41 -> 51 */
+        out[0] = in[0];
+        out[1] = in[1];
+        out[2] = 0.0f;
+        out[3] = in[2];
+        out[4] = in[3];
+        out[5] = in[4];
+        return;
+    case 87: /* 41 -> 61 */
+        out[0] = (in[0] * 0.939999998f);
+        out[1] = (in[1] * 0.939999998f);
+        out[2] = 0.0f;
+        out[3] = in[2];
+        out[4] = (in[4] * 0.500000000f) + (in[3] * 0.500000000f);
+        out[5] = (in[3] * 0.796000004f);
+        out[6] = (in[4] * 0.796000004f);
+        return;
+    case 88: /* 41 -> 71 */
+        out[0] = in[0];
+        out[1] = in[1];
+        out[2] = 0.0f;
+        out[3] = in[2];
+        out[4] = in[3];
+        out[5] = in[4];
+        out[6] = 0.0f;
+        out[7] = 0.0f;
+        return;
+    case 97: /* 51 -> Mono */
+        out[0] = (in[0] * 0.166666672f) + (in[1] * 0.166666672f) + (in[2] * 0.166666672f) + (in[3] * 0.166666672f) + (in[4] * 0.166666672f) + (in[5] * 0.166666672f);
+        return;
+    case 98: /* 51 -> Stereo */
+        out[0] = (in[0] * 0.294545442f) + (in[2] * 0.208181813f) + (in[3] * 0.090909094f) + (in[4] * 0.251818180f) + (in[5] * 0.154545456f);
+        out[1] = (in[1] * 0.294545442f) + (in[2] * 0.208181813f) + (in[3] * 0.090909094f) + (in[4] * 0.154545456f) + (in[5] * 0.251818180f);
+        return;
+    case 99: /* 51 -> 21 */
+        out[0] = (in[0] * 0.324000001f) + (in[2] * 0.229000002f) + (in[4] * 0.277000010f) + (in[5] * 0.170000002f);
+        out[1] = (in[1] * 0.324000001f) + (in[2] * 0.229000002f) + (in[4] * 0.170000002f) + (in[5] * 0.277000010f);
+        out[2] = in[3];
+        return;
+    case 100: /* 51 -> Quad */
+        out[0] = (in[0] * 0.558095276f) + (in[2] * 0.394285709f) + (in[3] * 0.047619049f);
+        out[1] = (in[1] * 0.558095276f) + (in[2] * 0.394285709f) + (in[3] * 0.047619049f);
+        out[2] = (in[3] * 0.047619049f) + (in[4] * 0.558095276f);
+        out[3] = (in[3] * 0.047619049f) + (in[5] * 0.558095276f);
+        return;
+    case 101: /* 51 -> 41 */
+        out[0] = (in[0] * 0.586000025f) + (in[2] * 0.414000005f);
+        out[1] = (in[1] * 0.586000025f) + (in[2] * 0.414000005f);
+        out[2] = in[3];
+        out[3] = (in[4] * 0.586000025f);
+        out[4] = (in[5] * 0.586000025f);
+        return;
+    case 103: /* 51 -> 61 */
+        out[0] = (in[0] * 0.939999998f);
+        out[1] = (in[1] * 0.939999998f);
+        out[2] = (in[2] * 0.939999998f);
+        out[3] = in[3];
+        out[4] = (in[5] * 0.500000000f) + (in[4] * 0.500000000f);
+        out[5] = (in[4] * 0.796000004f);
+        out[6] = (in[5] * 0.796000004f);
+        return;
+    case 104: /* 51 -> 71 */
+        out[0] = in[0];
+        out[1] = in[1];
+        out[2] = in[2];
+        out[3] = in[3];
+        out[4] = in[4];
+        out[5] = in[5];
+        out[6] = 0.0f;
+        out[7] = 0.0f;
+        return;
+    case 113: /* 61 -> Mono */
+        out[0] = (in[0] * 0.143142849f) + (in[1] * 0.143142849f) + (in[2] * 0.143142849f) + (in[3] * 0.142857149f) + (in[4] * 0.143142849f) + (in[5] * 0.143142849f) + (in[6] * 0.143142849f);
+        return;
+    case 114: /* 61 -> Stereo */
+        out[0] = (in[0] * 0.247384623f) + (in[2] * 0.174461529f) + (in[3] * 0.076923080f) + (in[4] * 0.174461529f) + (in[5] * 0.226153851f) + (in[6] * 0.100615382f);
+        out[1] = (in[1] * 0.247384623f) + (in[2] * 0.174461529f) + (in[3] * 0.076923080f) + (in[4] * 0.174461529f) + (in[5] * 0.100615382f) + (in[6] * 0.226153851f);
+        return;
+    case 115: /* 61 -> 21 */
+        out[0] = (in[0] * 0.268000007f) + (in[2] * 0.188999996f) + (in[4] * 0.188999996f) + (in[5] * 0.245000005f) + (in[6] * 0.108999997f);
+        out[1] = (in[1] * 0.268000007f) + (in[2] * 0.188999996f) + (in[4] * 0.188999996f) + (in[5] * 0.108999997f) + (in[6] * 0.245000005f);
+        out[2] = in[3];
+        return;
+    case 116: /* 61 -> Quad */
+        out[0] = (in[0] * 0.463679999f) + (in[2] * 0.327360004f) + (in[3] * 0.040000003f) + (in[5] * 0.168960005f);
+        out[1] = (in[1] * 0.463679999f) + (in[2] * 0.327360004f) + (in[3] * 0.040000003f) + (in[6] * 0.168960005f);
+        out[2] = (in[3] * 0.040000003f) + (in[4] * 0.327360004f) + (in[5] * 0.431039989f);
+        out[3] = (in[3] * 0.040000003f) + (in[4] * 0.327360004f) + (in[6] * 0.431039989f);
+        return;
+    case 117: /* 61 -> 41 */
+        out[0] = (in[0] * 0.483000010f) + (in[2] * 0.340999991f) + (in[5] * 0.175999999f);
+        out[1] = (in[1] * 0.483000010f) + (in[2] * 0.340999991f) + (in[6] * 0.175999999f);
+        out[2] = in[3];
+        out[3] = (in[4] * 0.340999991f) + (in[5] * 0.449000001f);
+        out[4] = (in[4] * 0.340999991f) + (in[6] * 0.449000001f);
+        return;
+    case 118: /* 61 -> 51 */
+        out[0] = (in[0] * 0.611000001f) + (in[5] * 0.223000005f);
+        out[1] = (in[1] * 0.611000001f) + (in[6] * 0.223000005f);
+        out[2] = (in[2] * 0.611000001f);
+        out[3] = in[3];
+        out[4] = (in[4] * 0.432000011f) + (in[5] * 0.568000019f);
+        out[5] = (in[4] * 0.432000011f) + (in[6] * 0.568000019f);
+        return;
+    case 120: /* 61 -> 71 */
+        out[0] = in[0];
+        out[1] = in[1];
+        out[2] = in[2];
+        out[3] = in[3];
+        out[4] = (in[4] * 0.707000017f);
+        out[5] = (in[4] * 0.707000017f);
+        out[6] = in[5];
+        out[7] = in[6];
+        return;
+    case 129: /* 71 -> Mono */
+        out[0] = (in[0] * 0.125125006f) + (in[1] * 0.125125006f) + (in[2] * 0.125125006f) + (in[3] * 0.125000000f) + (in[4] * 0.125125006f) + (in[5] * 0.125125006f) + (in[6] * 0.125125006f) + (in[7] * 0.125125006f);
+        return;
+    case 130: /* 71 -> Stereo */
+        out[0] = (in[0] * 0.211866662f) + (in[2] * 0.150266662f) + (in[3] * 0.066666670f) + (in[4] * 0.181066677f) + (in[5] * 0.111066669f) + (in[6] * 0.194133341f) + (in[7] * 0.085866667f);
+        out[1] = (in[1] * 0.211866662f) + (in[2] * 0.150266662f) + (in[3] * 0.066666670f) + (in[4] * 0.111066669f) + (in[5] * 0.181066677f) + (in[6] * 0.085866667f) + (in[7] * 0.194133341f);
+        return;
+    case 131: /* 71 -> 21 */
+        out[0] = (in[0] * 0.226999998f) + (in[2] * 0.160999998f) + (in[4] * 0.194000006f) + (in[5] * 0.119000003f) + (in[6] * 0.208000004f) + (in[7] * 0.092000000f);
+        out[1] = (in[1] * 0.226999998f) + (in[2] * 0.160999998f) + (in[4] * 0.119000003f) + (in[5] * 0.194000006f) + (in[6] * 0.092000000f) + (in[7] * 0.208000004f);
+        out[2] = in[3];
+        return;
+    case 132: /* 71 -> Quad */
+        out[0] = (in[0] * 0.466344833f) + (in[2] * 0.329241365f) + (in[3] * 0.034482758f) + (in[6] * 0.169931039f);
+        out[1] = (in[1] * 0.466344833f) + (in[2] * 0.329241365f) + (in[3] * 0.034482758f) + (in[7] * 0.169931039f);
+        out[2] = (in[3] * 0.034482758f) + (in[4] * 0.466344833f) + (in[6] * 0.433517247f);
+        out[3] = (in[3] * 0.034482758f) + (in[5] * 0.466344833f) + (in[7] * 0.433517247f);
+        return;
+    case 133: /* 71 -> 41 */
+        out[0] = (in[0] * 0.483000010f) + (in[2] * 0.340999991f) + (in[6] * 0.175999999f);
+        out[1] = (in[1] * 0.483000010f) + (in[2] * 0.340999991f) + (in[7] * 0.175999999f);
+        out[2] = in[3];
+        out[3] = (in[4] * 0.483000010f) + (in[6] * 0.449000001f);
+        out[4] = (in[5] * 0.483000010f) + (in[7] * 0.449000001f);
+        return;
+    case 134: /* 71 -> 51 */
+        out[0] = (in[0] * 0.518000007f) + (in[6] * 0.188999996f);
+        out[1] = (in[1] * 0.518000007f) + (in[7] * 0.188999996f);
+        out[2] = (in[2] * 0.518000007f);
+        out[3] = in[3];
+        out[4] = (in[4] * 0.518000007f) + (in[6] * 0.481999993f);
+        out[5] = (in[5] * 0.518000007f) + (in[7] * 0.481999993f);
+        return;
+    case 135: /* 71 -> 61 */
+        out[0] = (in[0] * 0.541000009f);
+        out[1] = (in[1] * 0.541000009f);
+        out[2] = (in[2] * 0.541000009f);
+        out[3] = in[3];
+        out[4] = (in[4] * 0.287999988f) + (in[5] * 0.287999988f);
+        out[5] = (in[4] * 0.458999991f) + (in[6] * 0.541000009f);
+        out[6] = (in[5] * 0.458999991f) + (in[7] * 0.541000009f);
+        return;
+    }
+}
+
+/* -- immutable input extents (format epochs) ------------------------------
+   One extent = one run of source bytes put under one (src, dst) spec pair.
+   'base' is the source-frame index of data[0]: the consumed prefix a get no
+   longer needs is compacted away (memmove) so a long-lived stream holds a
+   bounded window, never the whole history. 'k' is the epoch's persistent
+   resampler phase: output frame k samples exact source position
+   k*src.freq/dst.freq (integer rational — no float drift, chunk-invariant).
+   'retired' counts source frames conversion has fully consumed (the Queued
+   instrument). 'flushed' marks the epoch's generation end. */
+typedef struct __SDL_AuExtent {
+    struct __SDL_AuExtent *next;
+    SDL_AudioSpec src, dst;
+    unsigned char *data;
+    long long cap;            /* allocated bytes */
+    long long frames;         /* whole source frames present (epoch total so far) */
+    long long base;           /* source-frame index of data[0] */
+    long long k;              /* destination frames already emitted */
+    long long retired;        /* source frames retired (no longer needed) */
+    int flushed;
+} __SDL_AuExtent;
+
+/* DEVICE receipt ledger: one node per conversion epoch, FIFO. Identity
+   nodes (src == device-ingest spec, the pre-#529 universal case) are
+   byte-granular: one acknowledged device byte retires one original byte.
+   Conversion nodes are frame-granular: after the host acknowledges 'a'
+   device frames of this epoch, source frames below floor(a*src_freq/
+   dev_freq) can never be needed again (the interpolation lookahead stays
+   charged until its last dependent device frame is acknowledged), and a
+   final (flushed) node retires everything at full acknowledgement. No
+   fractional original frame is ever retired from a conversion node. */
+typedef struct __SDL_AuLedger {
+    struct __SDL_AuLedger *next;
+    int identity;
+    int closed;               /* no longer the growing tail */
+    int final;                /* flush tail emitted: full ack retires all */
+    int src_fb, dev_fb;
+    long long src_freq, dev_freq;
+    long long dev_bytes;      /* device bytes recorded (identity: == orig bytes) */
+    long long acked_bytes;
+    long long orig_frames;    /* conversion nodes: source frames recorded */
+    long long dev_frames;     /* conversion nodes: device frames recorded */
+    long long retired_frames;
+} __SDL_AuLedger;
+
+/* Extent/ledger allocation counter: a strictly observational
+   SDL_GetAudioStreamAvailable must never move it (the Available oracle's
+   fingerprint reads it through __sdl_audiostream_fp). */
+static int __au_alloc_count;
+
 struct SDL_AudioStream {
+    int kind;                 /* 0 = MEMORY, 1 = DEVICE */
+    int has_src, has_dst;
+    SDL_AudioSpec src, dst;   /* current configuration (DEVICE dst = host-reported sink) */
+    __SDL_AuExtent *head, *tail;
+
+    /* DEVICE only */
     int dev;
-    /* Overflow buffer: bytes the host ring couldn't accept yet. SDL_AudioStream is
-       an UNBOUNDED queue (src/audio/SDL_audioqueue.c grows new tracks rather than
-       dropping), so we must never drop — what doesn't fit the fixed SAB ring is
-       held here and pumped into the ring on the next Put as the audio thread
-       drains it. Preserves FIFO order; SDL_PutAudioStreamData always succeeds. */
-    unsigned char *backlog;
+    SDL_AudioSpec ingest;     /* immutable device-ingest spec (the open spec) */
+    unsigned char *backlog;   /* converted device-ingest bytes the ring hasn't accepted */
     int backlog_len;
     int backlog_cap;
+    __SDL_AuLedger *led_head, *led_tail;
+    long long submitted_dev;             /* cum device bytes accepted by the host ring */
+    long long last_host_queued;          /* reconcile baseline pair */
+    long long submitted_at_last_query;
+    long long ack_carry;                 /* sub-frame acknowledged bytes carried to the next reconcile */
+    long long put_orig;                  /* cum original bytes put */
+    long long retired_orig;              /* cum original bytes retired */
 };
 
-/* Push as much of the backlog into the host ring as it will currently accept,
-   then compact the remainder to the front. __sdl_queue_audio returns the number
-   of bytes the ring actually accepted. */
+/* -- epoch arithmetic ------------------------------------------------------
+   For an epoch with N source frames at rates sf -> df:
+   output frame k samples source position pos = k*sf/df: left index
+   i = floor(pos), fraction r/df with r = (k*sf) % df. Without a flush the
+   epoch holds back frames that would need a source sample that may still
+   arrive (r == 0 needs i < N; r > 0 needs i+1 < N), giving
+   floor((N-1)*df/sf) + 1 emittable frames. A final epoch extrapolates by
+   holding the last source frame, giving ceil(N*df/sf). All in 64-bit:
+   N and df are < 2^31 so N*df < 2^62. */
+
+static long long __au_emit_total(long long N, long long sf, long long df, int final) {
+    if (N <= 0) return 0;
+    if (final) return (N * df + sf - 1) / sf;
+    return (N - 1) * df / sf + 1;
+}
+
+/* A non-tail epoch can never grow (puts coalesce only with the tail), so it
+   behaves as flushed — otherwise its resampler tail would be stranded. */
+static int __au_extent_final(const SDL_AudioStream *s, const __SDL_AuExtent *e) {
+    (void)s;
+    return e->flushed || e->next != NULL;
+}
+
+/* Decode source frame 'idx' (absolute epoch index) of 'e' into out[ch],
+   clamping to the last frame for the final-tail extrapolation. */
+static void __au_dec_frame(const __SDL_AuExtent *e, long long idx, float *out) {
+    int sb = __au_fmt_bytes(e->src.format);
+    int fb = sb * e->src.channels;
+    const unsigned char *p;
+    int c;
+    if (idx > e->base + e->frames - 1) idx = e->base + e->frames - 1;
+    p = e->data + (long long)(idx - e->base) * fb;
+    for (c = 0; c < e->src.channels; c++)
+        out[c] = __au_dec_sample(p + (long long)c * sb, e->src.format);
+}
+
+/* Convert 'n' destination frames from epoch 'e' into 'out' (contiguous
+   dst-spec frames), advancing the epoch phase. The caller guarantees
+   n <= emittable. Pipeline per frame: decode both source frames, apply the
+   pinned channel matrix, then linear-interpolate at the exact rational
+   fraction. Same-spec fast path is a straight memcpy. */
+static void __au_convert(__SDL_AuExtent *e, long long n, unsigned char *out) {
+    long long sf = e->src.freq, df = e->dst.freq;
+    int dch = e->dst.channels, sch = e->src.channels;
+    int dsb = __au_fmt_bytes(e->dst.format);
+    int dfb = dsb * dch;
+    long long j;
+    if (e->src.format == e->dst.format && sch == dch && sf == df) {
+        int sfb = __au_frame_bytes(&e->src);
+        memcpy(out, e->data + (e->k - e->base) * sfb, (size_t)(n * sfb));
+        e->k += n;
+    } else {
+        for (j = 0; j < n; j++, out += dfb) {
+            long long num = e->k * sf;
+            long long i = num / df, r = num % df;
+            float a[8], b[8], ca[8], cb[8];
+            int c;
+            __au_dec_frame(e, i, a);
+            if (sch == dch) {
+                for (c = 0; c < dch; c++) ca[c] = a[c];
+            } else {
+                __au_chcvt_frame(sch, dch, a, ca);
+            }
+            if (r != 0) {
+                float t = (float)((double)r / (double)df);
+                __au_dec_frame(e, i + 1, b);
+                if (sch == dch) {
+                    for (c = 0; c < dch; c++) cb[c] = b[c];
+                } else {
+                    __au_chcvt_frame(sch, dch, b, cb);
+                }
+                for (c = 0; c < dch; c++) ca[c] = ca[c] + (cb[c] - ca[c]) * t;
+            }
+            for (c = 0; c < dch; c++)
+                __au_enc_sample(out + (long long)c * dsb, e->dst.format, ca[c]);
+            e->k++;
+        }
+    }
+    /* Retire the source prefix conversion can never need again, and compact
+       it out of the buffer once it is worth a memmove. */
+    {
+        long long left = e->k * sf / df;
+        int sfb = __au_frame_bytes(&e->src);
+        if (left > e->frames + e->base) left = e->frames + e->base;
+        if (left > e->retired) e->retired = left;
+        if ((e->retired - e->base) * sfb >= 65536) {
+            long long dropf = e->retired - e->base;
+            memmove(e->data, e->data + dropf * sfb, (size_t)((e->frames - dropf) * sfb));
+            e->frames -= dropf;
+            e->base += dropf;
+        }
+    }
+}
+
+static void __au_free_extents(SDL_AudioStream *s) {
+    __SDL_AuExtent *e = s->head;
+    while (e) { __SDL_AuExtent *n = e->next; free(e->data); free(e); e = n; }
+    s->head = s->tail = NULL;
+}
+
+static void __au_free_ledger(SDL_AudioStream *s) {
+    __SDL_AuLedger *l = s->led_head;
+    while (l) { __SDL_AuLedger *n = l->next; free(l); l = n; }
+    s->led_head = s->led_tail = NULL;
+}
+
+/* Append 'len' bytes under the CURRENT specs: coalesce with a same-spec,
+   unflushed tail (the epoch simply grows — the rational phase needs no
+   fixup), else start a new immutable epoch. Fails atomically on OOM. */
+static bool __au_put_extent(SDL_AudioStream *s, const SDL_AudioSpec *dst,
+                            const unsigned char *bytes, int len) {
+    int sfb = __au_frame_bytes(&s->src);
+    __SDL_AuExtent *e = s->tail;
+    if (e && !e->flushed && __au_spec_eq(&e->src, &s->src) && __au_spec_eq(&e->dst, dst)) {
+        long long need = (e->frames * (long long)sfb) + len;
+        if (need > e->cap) {
+            long long ncap = e->cap ? e->cap : 4096;
+            unsigned char *nd;
+            while (ncap < need) ncap *= 2;
+            nd = (unsigned char *)realloc(e->data, (size_t)ncap);
+            if (!nd) return SDL_SetError("Out of memory");
+            __au_alloc_count++;
+            e->data = nd;
+            e->cap = ncap;
+        }
+        memcpy(e->data + e->frames * sfb, bytes, (size_t)len);
+        e->frames += len / sfb;
+        return 1;
+    }
+    e = (__SDL_AuExtent *)malloc(sizeof(__SDL_AuExtent));
+    if (!e) return SDL_SetError("Out of memory");
+    e->data = (unsigned char *)malloc((size_t)len);
+    if (!e->data) { free(e); return SDL_SetError("Out of memory"); }
+    __au_alloc_count += 2;
+    memcpy(e->data, bytes, (size_t)len);
+    e->cap = len;
+    e->src = s->src;
+    e->dst = *dst;
+    e->frames = len / sfb;
+    e->base = 0;
+    e->k = 0;
+    e->retired = 0;
+    e->flushed = 0;
+    e->next = NULL;
+    if (s->tail) s->tail->next = e; else s->head = e;
+    s->tail = e;
+    return 1;
+}
+
+/* -- DEVICE receipt ledger + reconcile ------------------------------------ */
+
+/* Extend (or open) the identity ledger tail: src == device-ingest spec, so
+   one device byte is one original byte and retirement is byte-granular —
+   exactly the pre-#529 observable (Queued == ring + backlog). */
+static bool __au_led_identity(SDL_AudioStream *s, int len) {
+    __SDL_AuLedger *L = s->led_tail;
+    if (L && L->identity && !L->closed) { L->dev_bytes += len; return 1; }
+    L = (__SDL_AuLedger *)calloc(1, sizeof(__SDL_AuLedger));
+    if (!L) return SDL_SetError("Out of memory");
+    __au_alloc_count++;
+    L->identity = 1;
+    L->dev_bytes = len;
+    if (s->led_tail) { s->led_tail->closed = 1; s->led_tail->next = L; } else s->led_head = L;
+    s->led_tail = L;
+    return 1;
+}
+
+/* Open a conversion ledger node for a new source epoch. */
+static bool __au_led_conv(SDL_AudioStream *s) {
+    __SDL_AuLedger *L = (__SDL_AuLedger *)calloc(1, sizeof(__SDL_AuLedger));
+    if (!L) return SDL_SetError("Out of memory");
+    __au_alloc_count++;
+    L->src_fb = __au_frame_bytes(&s->src);
+    L->dev_fb = __au_frame_bytes(&s->ingest);
+    L->src_freq = s->src.freq;
+    L->dev_freq = s->ingest.freq;
+    if (s->led_tail) { s->led_tail->closed = 1; s->led_tail->next = L; } else s->led_head = L;
+    s->led_tail = L;
+    return 1;
+}
+
+/* One synchronous host acknowledgement read: consumed = baseline + newly
+   submitted - currently queued. Acknowledged bytes walk the ledger FIFO;
+   identity nodes retire byte-for-byte, conversion nodes retire only whole
+   original frames at floor(acked_frames * src_freq / dev_freq) (all frames
+   at full acknowledgement of a final node). Sub-frame acknowledgement (a
+   host quirk — both shipped consumers drain whole frames) carries to the
+   next reconcile rather than over-retiring. */
+static void __au_dev_reconcile(SDL_AudioStream *s) {
+    long long cur = __sdl_get_queued_audio_size(s->dev);
+    long long consumed;
+    if (cur < 0) cur = 0;
+    consumed = s->last_host_queued + (s->submitted_dev - s->submitted_at_last_query) - cur;
+    s->last_host_queued = cur;
+    s->submitted_at_last_query = s->submitted_dev;
+    if (consumed <= 0) return;
+    consumed += s->ack_carry;
+    s->ack_carry = 0;
+    while (consumed > 0 && s->led_head) {
+        __SDL_AuLedger *L = s->led_head;
+        long long avail, take;
+        if (L->identity) {
+            avail = L->dev_bytes - L->acked_bytes;
+            take = consumed < avail ? consumed : avail;
+            L->acked_bytes += take;
+            s->retired_orig += take;
+            consumed -= take;
+        } else {
+            long long recorded = L->dev_frames * L->dev_fb;
+            long long af, mark, delta;
+            avail = recorded - L->acked_bytes;
+            take = consumed < avail ? consumed : avail;
+            L->acked_bytes += take;
+            consumed -= take;
+            af = L->acked_bytes / L->dev_fb;
+            if (L->final && L->closed && L->acked_bytes == recorded) {
+                mark = L->orig_frames;
+            } else {
+                mark = af * L->src_freq / L->dev_freq;
+                if (mark > L->orig_frames) mark = L->orig_frames;
+            }
+            delta = mark - L->retired_frames;
+            if (delta > 0) {
+                L->retired_frames = mark;
+                s->retired_orig += delta * L->src_fb;
+            }
+        }
+        if (L->closed && L->acked_bytes == (L->identity ? L->dev_bytes : L->dev_frames * L->dev_fb)) {
+            s->led_head = L->next;
+            if (!s->led_head) s->led_tail = NULL;
+            free(L);
+            continue;
+        }
+        break;   /* an open tail (or a partial ack) ends the walk */
+    }
+    if (consumed > 0) s->ack_carry = consumed;
+}
+
+/* Push as much of the backlog into the host ring as it will currently
+   accept, then compact the remainder to the front. __sdl_queue_audio returns
+   the number of bytes the ring actually accepted; those count as SUBMITTED
+   for the acknowledgement baseline. */
 static void __sdl_stream_pump(SDL_AudioStream *s) {
+    int accepted;
     if (s->backlog_len <= 0) return;
-    int accepted = __sdl_queue_audio(s->dev, s->backlog, s->backlog_len);
+    accepted = __sdl_queue_audio(s->dev, s->backlog, s->backlog_len);
     if (accepted <= 0) return;
+    s->submitted_dev += accepted;
     if (accepted >= s->backlog_len) { s->backlog_len = 0; return; }
     memmove(s->backlog, s->backlog + accepted, (size_t)(s->backlog_len - accepted));
     s->backlog_len -= accepted;
+}
+
+static bool __au_backlog_reserve(SDL_AudioStream *s, int add) {
+    if (add > 0x7FFFFFFF - s->backlog_len) return SDL_SetError("audio backlog overflow");
+    if (s->backlog_len + add > s->backlog_cap) {
+        int ncap = s->backlog_cap ? s->backlog_cap : 65536;
+        unsigned char *nb;
+        while (ncap < s->backlog_len + add) {
+            if (ncap > 0x40000000) { ncap = 0x7FFFFFFF; break; }
+            ncap *= 2;
+        }
+        nb = (unsigned char *)realloc(s->backlog, (size_t)ncap);
+        if (!nb) return SDL_SetError("Out of memory");
+        __au_alloc_count++;
+        s->backlog = nb;
+        s->backlog_cap = ncap;
+    }
+    return 1;
+}
+
+/* Convert 'n' device-ingest frames from the pending epoch into the backlog
+   and record them on the ledger tail. */
+static bool __au_dev_emit(SDL_AudioStream *s, __SDL_AuExtent *e, long long n) {
+    int ifb = __au_frame_bytes(&s->ingest);
+    if (n <= 0) return 1;
+    if (n > (long long)(0x7FFFFFFF) / ifb) return SDL_SetError("audio backlog overflow");
+    if (!__au_backlog_reserve(s, (int)(n * ifb))) return 0;
+    __au_convert(e, n, s->backlog + s->backlog_len);
+    s->backlog_len += (int)(n * ifb);
+    s->led_tail->dev_frames += n;
+    return 1;
+}
+
+/* Finalize the pending DEVICE source epoch: emit every remaining complete
+   frame plus the finite resampler tail, mark its ledger node final, and
+   free the extent. Runs at flush and at a source-format transition; a
+   second flush with no new put finds nothing and emits nothing. */
+static bool __au_dev_finalize_epoch(SDL_AudioStream *s) {
+    __SDL_AuExtent *e = s->head;
+    if (e) {
+        long long total = __au_emit_total(e->base + e->frames, e->src.freq, e->dst.freq, 1);
+        if (!__au_dev_emit(s, e, total - e->k)) return 0;
+        s->led_tail->final = 1;
+        s->led_tail->closed = 1;
+        s->head = s->tail = NULL;
+        free(e->data);
+        free(e);
+    }
+    return 1;
+}
+
+/* -- public API ------------------------------------------------------------ */
+
+SDL_AudioStream *SDL_CreateAudioStream(const SDL_AudioSpec *src_spec,
+                                       const SDL_AudioSpec *dst_spec) {
+    SDL_AudioStream *s;
+    if (src_spec && !__au_validate_side(src_spec, 1)) return NULL;
+    if (dst_spec && !__au_validate_side(dst_spec, 0)) return NULL;
+    s = (SDL_AudioStream *)calloc(1, sizeof(SDL_AudioStream));
+    if (!s) { SDL_SetError("Out of memory"); return NULL; }
+    if (src_spec) { s->src = *src_spec; s->has_src = 1; }
+    if (dst_spec) { s->dst = *dst_spec; s->has_dst = 1; }
+    return s;
+}
+
+bool SDL_SetAudioStreamFormat(SDL_AudioStream *stream,
+                              const SDL_AudioSpec *src_spec,
+                              const SDL_AudioSpec *dst_spec) {
+    if (!stream) return SDL_InvalidParamError("stream");
+    /* Validate every non-NULL replacement BEFORE changing either side, so
+       the operation is atomic — including a destination a device stream
+       will then ignore (upstream validates first, ignores second). */
+    if (src_spec && !__au_validate_side(src_spec, 1)) return 0;
+    if (dst_spec && !__au_validate_side(dst_spec, 0)) return 0;
+    if (stream->kind == 1) {
+        dst_spec = NULL;   /* device-controlled side: quietly not changed */
+        if (src_spec && !__au_spec_eq(src_spec, &stream->src)) {
+            /* Identity mode may hold a dangling partial ingest frame (device
+               puts are byte-oriented); changing the source spec would shift
+               every later frame boundary in the byte stream. Refuse — the
+               bytes are the app's, never reinterpreted. */
+            if (!stream->head && stream->led_tail && stream->led_tail->identity &&
+                (stream->led_tail->dev_bytes % __au_frame_bytes(&stream->ingest)) != 0)
+                return SDL_SetError("SDL_SetAudioStreamFormat: a partial device frame is pending; complete the frame before changing the source format");
+            if (!__au_dev_finalize_epoch(stream)) return 0;
+            if (stream->led_tail && !stream->led_tail->closed) stream->led_tail->closed = 1;
+            stream->src = *src_spec;
+            return 1;
+        }
+        return 1;
+    }
+    if (src_spec) { stream->src = *src_spec; stream->has_src = 1; }
+    if (dst_spec) { stream->dst = *dst_spec; stream->has_dst = 1; }
+    return 1;
+}
+
+bool SDL_GetAudioStreamFormat(SDL_AudioStream *stream,
+                              SDL_AudioSpec *src_spec,
+                              SDL_AudioSpec *dst_spec) {
+    if (!stream) {
+        if (src_spec) memset(src_spec, 0, sizeof *src_spec);
+        if (dst_spec) memset(dst_spec, 0, sizeof *dst_spec);
+        return SDL_InvalidParamError("stream");
+    }
+    /* Fill each requested side with its CURRENT configuration (a zeroed spec
+       for an unset MEMORY side — pinned upstream shape), then report the
+       unset side as the error, source first, as upstream does. */
+    if (src_spec) {
+        if (stream->has_src) *src_spec = stream->src;
+        else memset(src_spec, 0, sizeof *src_spec);
+    }
+    if (dst_spec) {
+        if (stream->has_dst) *dst_spec = stream->dst;
+        else memset(dst_spec, 0, sizeof *dst_spec);
+    }
+    if (src_spec && !stream->has_src) return SDL_SetError("Stream has no source format");
+    if (dst_spec && !stream->has_dst) return SDL_SetError("Stream has no destination format");
+    return 1;
+}
+
+bool SDL_PutAudioStreamData(SDL_AudioStream *stream, const void *buf, int len) {
+    if (!stream) return SDL_InvalidParamError("stream");
+    if (!buf) return SDL_InvalidParamError("buf");
+    if (len < 0) return SDL_InvalidParamError("len");
+    if (len == 0) return 1;   /* nothing to do — and no epoch is created */
+    if (stream->kind == 0) {
+        if (!stream->has_src) return SDL_SetError("Stream has no source format");
+        if (!stream->has_dst) return SDL_SetError("Stream has no destination format");
+        if (len % __au_frame_bytes(&stream->src) != 0)
+            return SDL_SetError("Can't add partial sample frames");
+        return __au_put_extent(stream, &stream->dst, (const unsigned char *)buf, len);
+    }
+    /* DEVICE */
+    if (stream->head == NULL && __au_spec_eq(&stream->src, &stream->ingest)) {
+        /* Identity fast path — the pre-#529 behavior, byte-for-byte. Drain
+           any backlog first so the ring is as empty as possible; only write
+           the new data straight to the ring if the backlog is empty (FIFO). */
+        int accepted = 0;
+        __sdl_stream_pump(stream);
+        if (stream->backlog_len == 0) {
+            accepted = __sdl_queue_audio(stream->dev, buf, len);
+            if (accepted < 0) accepted = 0;
+            stream->submitted_dev += accepted;
+        }
+        if (accepted > 0) {
+            if (!__au_led_identity(stream, accepted)) return 0;
+            stream->put_orig += accepted;
+        }
+        if (accepted < len) {
+            int rem = len - accepted;
+            if (!__au_backlog_reserve(stream, rem)) return 0;
+            memcpy(stream->backlog + stream->backlog_len,
+                   (const unsigned char *)buf + accepted, (size_t)rem);
+            stream->backlog_len += rem;
+            if (!__au_led_identity(stream, rem)) return 0;
+            stream->put_orig += rem;
+        }
+        return 1;
+    }
+    /* Converted mode: the current source spec differs from the immutable
+       device-ingest spec (or an epoch is already pending). Puts are
+       frame-aligned like MEMORY puts; complete frames convert eagerly
+       (interpolation lookahead held until flush), converted ingest bytes
+       join the unchanged backlog/ring, and the ledger records the epoch. */
+    if (len % __au_frame_bytes(&stream->src) != 0)
+        return SDL_SetError("Can't add partial sample frames");
+    if (stream->head == NULL) {
+        if (!__au_led_conv(stream)) return 0;
+    }
+    if (!__au_put_extent(stream, &stream->ingest, (const unsigned char *)buf, len)) return 0;
+    stream->put_orig += len;
+    stream->led_tail->orig_frames = stream->head->base + stream->head->frames;
+    {
+        __SDL_AuExtent *e = stream->head;
+        long long total = __au_emit_total(e->base + e->frames, e->src.freq, e->dst.freq, 0);
+        if (!__au_dev_emit(stream, e, total - e->k)) return 0;
+    }
+    __sdl_stream_pump(stream);
+    return 1;
+}
+
+int SDL_GetAudioStreamData(SDL_AudioStream *stream, void *voidbuf, int len) {
+    unsigned char *buf = (unsigned char *)voidbuf;
+    int written = 0;
+    if (!stream) { SDL_InvalidParamError("stream"); return -1; }
+    if (!buf) { SDL_InvalidParamError("buf"); return -1; }
+    if (len < 0) { SDL_InvalidParamError("len"); return -1; }
+    if (len == 0) return 0;
+    if (stream->kind == 1) {
+        SDL_SetError("SDL_GetAudioStreamData: not supported on a device stream (the device consumes the converted side)");
+        return -1;
+    }
+    if (!stream->has_src) { SDL_SetError("Stream has no source format"); return -1; }
+    if (!stream->has_dst) { SDL_SetError("Stream has no destination format"); return -1; }
+    while (stream->head) {
+        __SDL_AuExtent *e = stream->head;
+        int final = __au_extent_final(stream, e);
+        long long total = __au_emit_total(e->base + e->frames, e->src.freq, e->dst.freq, final);
+        long long remain = total - e->k;
+        int dfb = __au_frame_bytes(&e->dst);
+        long long fit = (long long)(len - written) / dfb;
+        long long n;
+        if (remain <= 0) {
+            if (final) {   /* fully drained epoch: release it, walk on */
+                stream->head = e->next;
+                if (!stream->head) stream->tail = NULL;
+                free(e->data);
+                free(e);
+                continue;
+            }
+            break;         /* unflushed tail — more input may still arrive */
+        }
+        if (fit <= 0) break;   /* only whole frames of the HEAD epoch; a later
+                                  epoch is reached only when a whole frame of
+                                  it still fits */
+        n = remain < fit ? remain : fit;
+        __au_convert(e, n, buf + written);
+        written += (int)(n * dfb);
+        if (final && e->k >= total) {
+            stream->head = e->next;
+            if (!stream->head) stream->tail = NULL;
+            free(e->data);
+            free(e);
+        }
+    }
+    return written;
+}
+
+int SDL_GetAudioStreamAvailable(SDL_AudioStream *stream) {
+    long long sum = 0;
+    const __SDL_AuExtent *e;
+    if (!stream) { SDL_InvalidParamError("stream"); return -1; }
+    if (stream->kind == 1) {
+        SDL_SetError("SDL_GetAudioStreamAvailable: not supported on a device stream (poll SDL_GetAudioStreamQueued)");
+        return -1;
+    }
+    if (!stream->has_src) { SDL_SetError("Stream has no source format"); return -1; }
+    if (!stream->has_dst) { SDL_SetError("Stream has no destination format"); return -1; }
+    /* A pure size simulation over the epoch list: local scalars only — no
+       decode, no allocation, no phase advance, no host call. Exactly what a
+       GetData now could return without an implicit flush, clamped. */
+    for (e = stream->head; e; e = e->next) {
+        long long total = __au_emit_total(e->base + e->frames, e->src.freq, e->dst.freq,
+                                          __au_extent_final(stream, e));
+        long long remain = total - e->k;
+        int dfb = __au_frame_bytes(&e->dst);
+        if (remain <= 0) continue;
+        if (remain > (0x7FFFFFFFLL - sum) / dfb) return 0x7FFFFFFF;
+        sum += remain * dfb;
+    }
+    return (int)sum;
+}
+
+int SDL_GetAudioStreamQueued(SDL_AudioStream *stream) {
+    if (!stream) { SDL_InvalidParamError("stream"); return -1; }
+    if (stream->kind == 0) {
+        /* Exact original bytes not yet fully consumed by conversion. */
+        long long sum = 0;
+        const __SDL_AuExtent *e;
+        for (e = stream->head; e; e = e->next) {
+            long long left = (e->base + e->frames - e->retired) * __au_frame_bytes(&e->src);
+            sum += left;
+            if (sum >= 0x7FFFFFFFLL) return 0x7FFFFFFF;
+        }
+        return (int)sum;
+    }
+    /* DEVICE: reconcile the host once, then report exact original bytes not
+       yet acknowledged consumed (identity streams: byte-identical to the old
+       ring + backlog number). */
+    __au_dev_reconcile(stream);
+    {
+        long long q = stream->put_orig - stream->retired_orig;
+        if (q < 0) q = 0;
+        if (q > 0x7FFFFFFFLL) q = 0x7FFFFFFFLL;
+        return (int)q;
+    }
+}
+
+bool SDL_FlushAudioStream(SDL_AudioStream *stream) {
+    if (!stream) return SDL_InvalidParamError("stream");
+    if (stream->kind == 0) {
+        if (!stream->has_src) return SDL_SetError("Stream has no source format");
+        if (!stream->has_dst) return SDL_SetError("Stream has no destination format");
+        /* An idempotent end-of-generation marker: the tail epoch's finite
+           resampler tail becomes emittable; nothing converts here. NOT a
+           permanent EOF — the next put starts a new epoch. */
+        if (stream->tail && !stream->tail->flushed) stream->tail->flushed = 1;
+        return 1;
+    }
+    __au_dev_reconcile(stream);
+    if (!__au_dev_finalize_epoch(stream)) return 0;
+    __sdl_stream_pump(stream);
+    return 1;
+}
+
+bool SDL_ClearAudioStream(SDL_AudioStream *stream) {
+    if (!stream) return SDL_InvalidParamError("stream");
+    if (stream->kind == 0) {
+        __au_free_extents(stream);   /* input, carry, and flush markers; specs stay */
+        return 1;
+    }
+    /* DEVICE — one API-visible transaction: reconcile the latest drain,
+       transport-clear, verify the host really cleared, only then zero the
+       accounting. On a failed verify the reconciled ledger is retained and
+       the call reports failure — accounting is never zeroed while device
+       bytes remain. */
+    __au_dev_reconcile(stream);
+    __sdl_clear_queued_audio(stream->dev);
+    if (__sdl_get_queued_audio_size(stream->dev) != 0)
+        return SDL_SetError("SDL_ClearAudioStream: the device did not clear its queue");
+    __au_free_extents(stream);
+    __au_free_ledger(stream);
+    stream->backlog_len = 0;
+    stream->submitted_dev = 0;
+    stream->last_host_queued = 0;
+    stream->submitted_at_last_query = 0;
+    stream->ack_carry = 0;
+    stream->put_orig = 0;
+    stream->retired_orig = 0;
+    return 1;
+}
+
+bool SDL_ResumeAudioStreamDevice(SDL_AudioStream *stream) {
+    if (!stream) return SDL_InvalidParamError("stream");
+    if (stream->kind != 1) return SDL_SetError("Stream isn't bound to an audio device");
+    __sdl_pause_audio_device(stream->dev, 0);
+    return 1;
+}
+
+bool SDL_PauseAudioStreamDevice(SDL_AudioStream *stream) {
+    if (!stream) return SDL_InvalidParamError("stream");
+    if (stream->kind != 1) return SDL_SetError("Stream isn't bound to an audio device");
+    __sdl_pause_audio_device(stream->dev, 1);
+    return 1;
+}
+
+void SDL_DestroyAudioStream(SDL_AudioStream *stream) {
+    if (!stream) return;
+    if (stream->kind == 1) {
+        /* One last honest accounting read, then CANCEL: unsubmitted input,
+           converter carry, converted backlog, receipts — all discarded
+           without another pump. Only SAB-accepted bytes reach AUDIO_CLOSE
+           and the kernel's dying-source drain; destroy never waits. */
+        __au_dev_reconcile(stream);
+        __sdl_close_audio_device(stream->dev);
+    }
+    __au_free_extents(stream);
+    __au_free_ledger(stream);
+    free(stream->backlog);
+    free(stream);
 }
 
 SDL_AudioStream *SDL_OpenAudioDeviceStream(SDL_AudioDeviceID devid,
@@ -28596,77 +29792,173 @@ SDL_AudioStream *SDL_OpenAudioDeviceStream(SDL_AudioDeviceID devid,
             "Web Audio.");
         return NULL;
     }
-    int dev = __sdl_open_audio_device(spec->freq, spec->format, spec->channels);
-    if (dev <= 0) { SDL_SetError("SDL_OpenAudioDeviceStream: host failed to open an audio device"); return NULL; }
-    SDL_AudioStream *s = (SDL_AudioStream *)malloc(sizeof(SDL_AudioStream));
-    if (!s) { SDL_SetError("Out of memory"); return NULL; }
-    s->dev = dev;
-    s->backlog = NULL;
-    s->backlog_len = 0;
-    s->backlog_cap = 0;
-    return s;
-}
-
-bool SDL_PutAudioStreamData(SDL_AudioStream *stream, const void *buf, int len) {
-    if (!stream) return SDL_InvalidParamError("stream");
-    if (!buf) return SDL_InvalidParamError("buf");
-    if (len <= 0) return 1;
-    /* Drain any backlog first so the ring is as empty as possible. */
-    __sdl_stream_pump(stream);
-    int accepted = 0;
-    /* Only write the new data straight to the ring if the backlog is empty —
-       otherwise it would jump ahead of already-queued samples (FIFO violation). */
-    if (stream->backlog_len == 0) {
-        accepted = __sdl_queue_audio(stream->dev, buf, len);
-        if (accepted < 0) accepted = 0;
-    }
-    if (accepted < len) {
-        int rem = len - accepted;
-        if (stream->backlog_len + rem > stream->backlog_cap) {
-            int newcap = stream->backlog_cap ? stream->backlog_cap : 65536;
-            while (newcap < stream->backlog_len + rem) newcap *= 2;
-            unsigned char *nb = (unsigned char *)realloc(stream->backlog, (size_t)newcap);
-            if (!nb) return SDL_SetError("Out of memory");
-            stream->backlog = nb;
-            stream->backlog_cap = newcap;
+    {
+        int dev = __sdl_open_audio_device(spec->freq, spec->format, spec->channels);
+        int df, dc, dq;
+        SDL_AudioStream *s;
+        if (dev <= 0) { SDL_SetError("SDL_OpenAudioDeviceStream: host failed to open an audio device"); return NULL; }
+        /* Read-only destination query (#529-A): the kernel sink reports
+           F32/stereo/48000, a standalone page its Web Audio graph format, a
+           sink-less host the requested spec (SDL's dummy-driver contract).
+           A host that cannot answer fails the open — a device with an
+           uninventable format is not a device. */
+        df = __sdl_audio_dst_query(dev, 0);
+        dc = __sdl_audio_dst_query(dev, 1);
+        dq = __sdl_audio_dst_query(dev, 2);
+        if (__au_fmt_bytes(df) == 0 || dc <= 0 || dq <= 0) {
+            __sdl_close_audio_device(dev);
+            SDL_SetError("SDL_OpenAudioDeviceStream: host cannot report the device's destination format");
+            return NULL;
         }
-        memcpy(stream->backlog + stream->backlog_len, (const unsigned char *)buf + accepted, (size_t)rem);
-        stream->backlog_len += rem;
+        s = (SDL_AudioStream *)calloc(1, sizeof(SDL_AudioStream));
+        if (!s) { __sdl_close_audio_device(dev); SDL_SetError("Out of memory"); return NULL; }
+        s->kind = 1;
+        s->dev = dev;
+        s->ingest = *spec;
+        s->src = *spec;
+        s->has_src = 1;
+        s->dst.format = df;
+        s->dst.channels = dc;
+        s->dst.freq = dq;
+        s->has_dst = 1;
+        return s;
+    }
+}
+
+/* Test-only introspection — deliberately NOT declared in <SDL.h>; oracle
+   tests declare the prototype themselves. Pure reads (no host call, no
+   allocation): the Available oracle fingerprints stream state before/after.
+   Words: [0] kind, [1] has_src, [2] has_dst, [3] extent count, [4]
+   head.frames, [5] head.base, [6] head.k, [7] head.retired, [8]
+   head.flushed, [9] extent/ledger alloc counter, [10] backlog_len, [11]
+   ledger node count, [12] put_orig, [13] retired_orig (64-bit values
+   truncate to 32). Returns the number of words filled. */
+int __sdl_audiostream_fp(SDL_AudioStream *s, unsigned int *out, int cap) {
+    unsigned int w[14];
+    int n = 14, i, ec = 0, lc = 0;
+    const __SDL_AuExtent *e;
+    const __SDL_AuLedger *L;
+    if (!s || !out) return 0;
+    for (e = s->head; e; e = e->next) ec++;
+    for (L = s->led_head; L; L = L->next) lc++;
+    w[0] = (unsigned int)s->kind;
+    w[1] = (unsigned int)s->has_src;
+    w[2] = (unsigned int)s->has_dst;
+    w[3] = (unsigned int)ec;
+    w[4] = s->head ? (unsigned int)s->head->frames : 0u;
+    w[5] = s->head ? (unsigned int)s->head->base : 0u;
+    w[6] = s->head ? (unsigned int)s->head->k : 0u;
+    w[7] = s->head ? (unsigned int)s->head->retired : 0u;
+    w[8] = s->head ? (unsigned int)s->head->flushed : 0u;
+    w[9] = (unsigned int)__au_alloc_count;
+    w[10] = (unsigned int)s->backlog_len;
+    w[11] = (unsigned int)lc;
+    w[12] = (unsigned int)s->put_orig;
+    w[13] = (unsigned int)s->retired_orig;
+    if (n > cap) n = cap;
+    for (i = 0; i < n; i++) out[i] = w[i];
+    return n;
+}
+
+/* -- SDL_MixAudio (pinned release-3.4.0 src/audio/SDL_mixer.c) -------------
+   Volume and overlap behavior mirror the pinned source exactly: volume
+   quantizes to round-half-away(fvolume * 128) — 0 is a successful no-op and
+   the value is deliberately NOT clamped (negative inverts, > 1 amplifies,
+   with upstream's exact truncating integer scaling and cast wrap); the F32
+   path scales by the raw float volume. Samples process forward one at a
+   time, so overlapping regions (dst == src included) get upstream's exact
+   forward-iteration result. Integer destinations saturate to their exact
+   range; U8 mixes through the arithmetic form of upstream's mix8 bias table
+   (clamp(dst + adjusted - 128, 0, 255) — identical values, no 511-byte
+   table). Two validations the proposal adds over upstream (which silently
+   truncates): a NULL pointer and a length not divisible by the sample width
+   are refused with an error. */
+bool SDL_MixAudio(Uint8 *dst, const Uint8 *src, SDL_AudioFormat format,
+                  Uint32 len, float volume) {
+    int samp = __au_fmt_bytes(format);
+    int vol;
+    if (!dst) return SDL_InvalidParamError("dst");
+    if (!src) return SDL_InvalidParamError("src");
+    if (!samp) return SDL_SetError("SDL_MixAudio(): unknown audio format");
+    if (len % (Uint32)samp != 0)
+        return SDL_SetError("SDL_MixAudio(): length is not a multiple of the sample size");
+    {   /* (int)SDL_roundf(volume * 128): round half away from zero, in f32 */
+        float x = volume * 128.0f;
+        vol = (int)(x >= 0.0f ? x + 0.5f : x - 0.5f);
+    }
+    if (vol == 0) return 1;
+    switch (format) {
+    case SDL_AUDIO_U8: {
+        Uint32 n = len;
+        while (n--) {
+            int s = ((((int)*src - 128) * vol) / 128) + 128;
+            int m = (int)*dst + (int)(Uint8)s - 128;
+            if (m < 0) m = 0; else if (m > 255) m = 255;
+            *dst = (Uint8)m;
+            ++dst; ++src;
+        }
+        break;
+    }
+    case SDL_AUDIO_S8: {
+        const signed char *s8 = (const signed char *)src;
+        signed char *d8 = (signed char *)dst;
+        Uint32 n = len;
+        while (n--) {
+            int sv = (signed char)(((int)*s8 * vol) / 128);
+            int m = (int)*d8 + sv;
+            if (m > 127) m = 127; else if (m < -128) m = -128;
+            *d8 = (signed char)m;
+            ++d8; ++s8;
+        }
+        break;
+    }
+    case SDL_AUDIO_S16: {
+        Uint32 n = len / 2;
+        while (n--) {
+            short a, b;
+            int m;
+            memcpy(&a, src, 2);
+            memcpy(&b, dst, 2);
+            a = (short)(((int)a * vol) / 128);
+            m = (int)a + (int)b;
+            if (m > 32767) m = 32767; else if (m < -32768) m = -32768;
+            b = (short)m;
+            memcpy(dst, &b, 2);
+            src += 2; dst += 2;
+        }
+        break;
+    }
+    case SDL_AUDIO_S32: {
+        Uint32 n = len / 4;
+        while (n--) {
+            int a, b;
+            long long m;
+            memcpy(&a, src, 4);
+            memcpy(&b, dst, 4);
+            m = ((long long)a * vol) / 128 + (long long)b;
+            if (m > 2147483647LL) m = 2147483647LL;
+            else if (m < -2147483648LL) m = -2147483648LL;
+            a = (int)m;
+            memcpy(dst, &a, 4);
+            src += 4; dst += 4;
+        }
+        break;
+    }
+    default: {   /* SDL_AUDIO_F32 */
+        Uint32 n = len / 4;
+        while (n--) {
+            float a, b, m;
+            memcpy(&a, src, 4);
+            memcpy(&b, dst, 4);
+            m = a * volume + b;
+            if (m > 1.0f) m = 1.0f; else if (m < -1.0f) m = -1.0f;
+            memcpy(dst, &m, 4);
+            src += 4; dst += 4;
+        }
+        break;
+    }
     }
     return 1;
-}
-
-int SDL_GetAudioStreamQueued(SDL_AudioStream *stream) {
-    if (!stream) { SDL_InvalidParamError("stream"); return -1; }
-    int ring = __sdl_get_queued_audio_size(stream->dev);
-    if (ring < 0) ring = 0;
-    return ring + stream->backlog_len;
-}
-
-bool SDL_ClearAudioStream(SDL_AudioStream *stream) {
-    if (!stream) return SDL_InvalidParamError("stream");
-    stream->backlog_len = 0;
-    __sdl_clear_queued_audio(stream->dev);
-    return 1;
-}
-
-bool SDL_ResumeAudioStreamDevice(SDL_AudioStream *stream) {
-    if (!stream) return SDL_InvalidParamError("stream");
-    __sdl_pause_audio_device(stream->dev, 0);
-    return 1;
-}
-
-bool SDL_PauseAudioStreamDevice(SDL_AudioStream *stream) {
-    if (!stream) return SDL_InvalidParamError("stream");
-    __sdl_pause_audio_device(stream->dev, 1);
-    return 1;
-}
-
-void SDL_DestroyAudioStream(SDL_AudioStream *stream) {
-    if (!stream) return;
-    free(stream->backlog);
-    __sdl_close_audio_device(stream->dev);
-    free(stream);
 }
 
 void SDL_DestroyWindow(SDL_Window *window) {

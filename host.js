@@ -7151,6 +7151,8 @@ function createNullSDL() {
   const nullTextures = [];   // 1-based; tracks per-texture state observable headless
                              // (scale mode), so the C↔host contract is testable
                              // without a GPU. Same fail-loud rules as createBrowserSDL.
+  const nullAudioDevs = [];  // 1-based; the requested spec IS the reported
+                             // device format here (#529-A dst query below).
   return {
     getAnimationFrameFunc: function () { return animationFrameFunc; },
     [ENV_KEY]: {
@@ -7208,12 +7210,23 @@ function createNullSDL() {
       __sdl_push_mouse_motion_event: function () {},
       __sdl_push_mouse_wheel_event: function () {},
       __sdl_push_quit_event: function () {},
-      __sdl_open_audio_device: function () { return 1; },
+      __sdl_open_audio_device: function (freq, format, channels) {
+        nullAudioDevs.push({ freq: freq | 0, format: format | 0, channels: channels | 0 });
+        return nullAudioDevs.length;
+      },
       __sdl_queue_audio: function () { return 0; },
       __sdl_get_queued_audio_size: function () { return 0; },
       __sdl_clear_queued_audio: function () {},
       __sdl_pause_audio_device: function () {},
       __sdl_close_audio_device: function () {},
+      // #529-A destination-format query: no sink here, so report the
+      // requested spec — SDL's own dummy-driver contract ("don't change
+      // reported device format"). sel 0=format 1=channels 2=freq.
+      __sdl_audio_dst_query: function (dev, sel) {
+        const d = nullAudioDevs[dev - 1];
+        if (!d) return -1;
+        return sel === 0 ? d.format : sel === 1 ? d.channels : d.freq;
+      },
       // SDL_GetTicks: ms since SDL_Init, full range (C casts to Uint64; no 32-bit
       // wrap). Lazily baseline if a program reads ticks before SDL_Init.
       __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = performance.now(); return performance.now() - sdlTicksBase; },
@@ -7424,13 +7437,24 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
   function buildAudioEnv() {
     if (typeof hooks.audioOpen !== 'function') {
       let nullGain = 100;                        // no mixer: remember-only
+      const nullDevs = [];                       // requested spec = reported format
       return {
-        __sdl_open_audio_device: function () { return 1; },
+        __sdl_open_audio_device: function (freq, format, channels) {
+          nullDevs.push({ freq: freq | 0, format: format | 0, channels: channels | 0 });
+          return nullDevs.length;
+        },
         __sdl_queue_audio: function () { return 0; },
         __sdl_get_queued_audio_size: function () { return 0; },
         __sdl_clear_queued_audio: function () {},
         __sdl_pause_audio_device: function () {},
         __sdl_close_audio_device: function () {},
+        // #529-A dst query: no mixer sink — the dummy-driver contract
+        // (report the requested spec). sel 0=format 1=channels 2=freq.
+        __sdl_audio_dst_query: function (dev, sel) {
+          const d = nullDevs[dev - 1];
+          if (!d) return -1;
+          return sel === 0 ? d.format : sel === 1 ? d.channels : d.freq;
+        },
         __audio_gain: function (gain) {
           if (gain >= 0) nullGain = Math.min(200, gain | 0);
           return nullGain;
@@ -7451,8 +7475,21 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
           ring: new Uint8Array(sab, WMAU_HDR_BYTES, WMAUDIO_RING_BYTES),
           cap: WMAUDIO_RING_BYTES,
           frameBytes: bytesPerSample * channels,
+          // #529-A: the mixer sink's native spec, reported by AUDIO_OPEN.
+          // A kernel that does not report one leaves this undefined and the
+          // dst query below answers -1 — C then fails the open loud rather
+          // than inventing a destination format.
+          sink: (r.sinkFormat > 0 && r.sinkChannels > 0 && r.sinkFreq > 0)
+            ? { format: r.sinkFormat | 0, channels: r.sinkChannels | 0, freq: r.sinkFreq | 0 }
+            : null,
         });
         return audioDevices.length;
+      },
+      // #529-A destination-format query (sel 0=format 1=channels 2=freq).
+      __sdl_audio_dst_query: function (dev, sel) {
+        const d = audioDevices[dev - 1];
+        if (!d || !d.sink) return -1;
+        return sel === 0 ? d.sink.format : sel === 1 ? d.sink.channels : d.sink.freq;
       },
       __sdl_queue_audio: function (dev, dataPtr, len) {
         const d = audioDevices[dev - 1];
@@ -9745,6 +9782,16 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         const id = sdlAudioDevices.length;
         if (notifyAudio) notifyAudio({ type: 'audio-open', id: id, freq: freq, format: format, channels: channels });
         return id;
+      },
+      // #529-A destination-format query (sel 0=format 1=channels 2=freq):
+      // the page receiver builds its Web Audio graph at the requested rate
+      // and channel count and decodes into float32 AudioBuffers
+      // (createAudioReceiver), so the real destination is F32 at the
+      // requested channels/rate.
+      __sdl_audio_dst_query: function (dev, sel) {
+        const d = sdlAudioDevices[dev - 1];
+        if (!d) return -1;
+        return sel === 0 ? 0x8120 : sel === 1 ? d.channels : d.freq;
       },
       // Returns the number of bytes ACCEPTED into the ring (may be a partial fill
       // when the ring is nearly full). The C SDL_AudioStream holds whatever isn't
