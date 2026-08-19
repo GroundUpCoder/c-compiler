@@ -1,0 +1,6 @@
+/tmp/723-perf/perf_float32.wav bytes=1764000 min=1.01ms p50=1.05ms live-heap=1764016 balanced=1
+/tmp/723-perf/perf_imaadpcm.wav bytes=441378 min=3.43ms p50=3.46ms live-heap=441400 balanced=1
+/tmp/723-perf/perf_msadpcm.wav bytes=441232 min=1.70ms p50=1.72ms live-heap=441248 balanced=1
+/tmp/723-perf/perf_mulaw.wav bytes=882000 min=1.58ms p50=1.59ms live-heap=882016 balanced=1
+/tmp/723-perf/perf_pcm16.wav bytes=882000 min=0.42ms p50=0.43ms live-heap=882016 balanced=1
+/tmp/723-perf/perf_pcm24.wav bytes=1764000 min=1.32ms p50=1.33ms live-heap=1764016 balanced=1

@@ -78,6 +78,15 @@ int main(void) {
 //            prints SDL_GetAudioStreamQueued whenever it changes, so the
 //            driver can force partial frame-aligned kernel drains and
 //            compare exact original-byte retirement against a model.
+//   loadwav — the #723 (#529-B) integration: two COMMITTED WAV fixtures are
+//            planted at real filesystem paths (fwrite through the process
+//            fs), decoded by the demand-linked upstream SDL_LoadWAV, and
+//            pushed into ONE device stream — float32_stereo.wav (F32/2/48k,
+//            the device-ingest spec: its decoded bytes must reach the ring
+//            IDENTITY) and imaadpcm_mono.wav (decodes S16/1/22050, converted
+//            by a #722 MEMORY stream to the device spec; the app prints the
+//            crc of exactly what it pushed and the driver checks the ring
+//            against it). Headless-deterministic; no acoustic inference.
 const APP2_C = `
 #include <SDL.h>
 #include <stdio.h>
@@ -86,9 +95,67 @@ const APP2_C = `
 #include <math.h>
 #include <unistd.h>
 
+/*__FIXTURE_ARRAYS__*/
+
 static SDL_AudioStream *dev;
 
 static void flush_cb(void) { SDL_FlushAudioStream(dev); }
+
+static unsigned crc32b(const unsigned char *p, unsigned n) {
+    unsigned crc = 0xffffffffu, i;
+    for (i = 0; i < n; i++) {
+        int b;
+        crc ^= p[i];
+        for (b = 0; b < 8; b++)
+            crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+    }
+    return ~crc;
+}
+
+static void plant(const char *pathn, const unsigned char *b, unsigned n) {
+    FILE *f = fopen(pathn, "wb");
+    if (!f || fwrite(b, 1, n, f) != n) { printf("PLANTFAIL %s\\n", pathn); exit(3); }
+    fclose(f);
+}
+
+static void loadwav_mode(void) {
+    SDL_AudioSpec dspec = { SDL_AUDIO_F32, 2, 48000 };
+    SDL_AudioSpec spec;
+    Uint8 *buf;
+    Uint32 len;
+    static unsigned char conv[65536];
+    plant("/float32_stereo.wav", fix_f32, (unsigned)sizeof fix_f32);
+    plant("/imaadpcm_mono.wav", fix_ima, (unsigned)sizeof fix_ima);
+    dev = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &dspec, 0, 0);
+    if (!dev) { printf("NOSTREAM\\n"); exit(3); }
+    /* leg 1: the WAV already matches the device-ingest spec — decoded bytes
+       must reach the output ring byte-exact vs the committed fixture. */
+    if (!SDL_LoadWAV("/float32_stereo.wav", &spec, &buf, &len)) { printf("LOADFAIL %s\\n", SDL_GetError()); exit(3); }
+    if (spec.format != SDL_AUDIO_F32 || spec.channels != 2 || spec.freq != 48000) { printf("BADSPEC1\\n"); exit(3); }
+    SDL_PutAudioStreamData(dev, buf, (int)len);
+    printf("WAV1 %u\\n", (unsigned)len);
+    SDL_free(buf);
+    /* leg 2: IMA ADPCM -> S16/1/22050 -> #722 MEMORY conversion to the device
+       spec; the crc printed here is the driver's ring oracle. */
+    if (!SDL_LoadWAV("/imaadpcm_mono.wav", &spec, &buf, &len)) { printf("LOADFAIL %s\\n", SDL_GetError()); exit(3); }
+    if (spec.format != SDL_AUDIO_S16 || spec.channels != 1 || spec.freq != 22050) { printf("BADSPEC2\\n"); exit(3); }
+    {
+        SDL_AudioStream *cv = SDL_CreateAudioStream(&spec, &dspec);
+        int got, total = 0;
+        if (!cv) { printf("NOSTREAM\\n"); exit(3); }
+        SDL_PutAudioStreamData(cv, buf, (int)len);
+        SDL_FlushAudioStream(cv);
+        while ((got = SDL_GetAudioStreamData(cv, conv + total, (int)(sizeof conv - (unsigned)total))) > 0) total += got;
+        SDL_DestroyAudioStream(cv);
+        SDL_PutAudioStreamData(dev, conv, total);
+        printf("WAV2 %d %08x\\n", total, crc32b(conv, (unsigned)total));
+    }
+    SDL_free(buf);
+    SDL_ResumeAudioStreamDevice(dev);
+    __setAnimationFrameFunc(flush_cb);
+    printf("WAVS READY\\n");
+    fflush(stdout);
+}
 
 static void tones(void) {
     SDL_AudioSpec dspec = { SDL_AUDIO_F32, 2, 48000 };
@@ -247,6 +314,7 @@ int main(int argc, char **argv) {
     else if (strcmp(argv[1], "ringfail2") == 0) ringfail(2);
     else if (strcmp(argv[1], "ring2") == 0) ring2();
     else if (strcmp(argv[1], "epochs") == 0) epochs();
+    else if (strcmp(argv[1], "loadwav") == 0) loadwav_mode();
     else return 2;
     return 0;
 }
@@ -260,7 +328,15 @@ cp.execFileSync('node', [path.join(ROOT, 'compiler.js'), cfile, '-o', wasm], { s
 const image = fs.readFileSync(wasm);
 const cfile2 = path.join(tmp, 'app2.c');
 const wasm2 = path.join(tmp, 'app2.wasm');
-fs.writeFileSync(cfile2, APP2_C);
+// The loadwav mode's fixture bytes come from the COMMITTED corpus (the same
+// files the #723 differential suite pins against the upstream oracle).
+const FIXDIR = path.join(ROOT, 'tests/unit/sdl_load_wav_fixtures');
+const fixF32 = fs.readFileSync(path.join(FIXDIR, 'float32_stereo.wav'));
+const fixIma = fs.readFileSync(path.join(FIXDIR, 'imaadpcm_mono.wav'));
+const cArray = (name, buf) =>
+  `static const unsigned char ${name}[] = {${Array.from(buf).join(',')}};`;
+fs.writeFileSync(cfile2, APP2_C.replace('/*__FIXTURE_ARRAYS__*/',
+  cArray('fix_f32', fixF32) + '\n' + cArray('fix_ima', fixIma)));
 cp.execFileSync('node', [path.join(ROOT, 'compiler.js'), cfile2, '-o', wasm2], { stdio: 'pipe' });
 const image2 = fs.readFileSync(wasm2);
 
@@ -538,6 +614,58 @@ const watchdog = setTimeout(() => {
   kernel.kill(pidE, 9, null);
   await reapAll();
   check('all #722 sources reclaimed', kernel.audioList().length === 0);
+
+  // ==================== #723 (#529-B) leg ====================
+  // Committed WAV fixtures through REAL filesystem paths -> the demand-linked
+  // upstream decoder -> (#722 conversion where the spec differs) -> the one
+  // device stream -> the captured kernel output ring, byte-exact.
+  const pidW = await kernel.boot({ path: '/bin/app2', argv: ['app2', 'loadwav'], envp: [], cwd: '/' });
+  await waitOut('WAVS READY');
+  {
+    const m1 = /WAV1 (\d+)\n/.exec(out);
+    const m2 = /WAV2 (\d+) ([0-9a-f]{8})\n/.exec(out);
+    check('loadwav: both fixtures decoded in-OS', !!(m1 && m2), JSON.stringify(out.slice(-200)));
+    const len1 = m1 ? Number(m1[1]) : 0;
+    const len2 = m2 ? Number(m2[1]) : 0;
+    // leg 1 expectation: the committed fixture's own data chunk (PCM float is
+    // pass-through: RIFF(12) + fmt(8+16) + data hdr(8) = offset 44), through
+    // the mixer's [-1,1] clamp. Byte-exact, from the file the repo ships.
+    const fixFloats = new Float32Array(len1 / 4);
+    for (let i = 0; i < fixFloats.length; i++) fixFloats[i] = Math.fround(fixF32.readFloatLE(44 + i * 4));
+    check('loadwav: fixture decode length matches the committed data chunk',
+          len1 === fixF32.length - 44, `${len1} vs ${fixF32.length - 44}`);
+
+    const wantFrames = (len1 + len2) / 8;
+    const cap = new Float32Array(wantFrames * 2);
+    let got = 0, idle = 0;
+    while (got < wantFrames && idle < 800) {
+      kernel.audioPump(512);
+      const n = drainOut(cap, got);
+      if (n === 0) { idle++; await sleep(5); continue; }
+      idle = 0;
+      got += n;
+    }
+    check('loadwav: captured the full pushed program', got === wantFrames, got);
+
+    let exact = true, firstBad = -1;
+    for (let i = 0; i < len1 / 4; i++) {
+      const want = Math.max(-1, Math.min(1, fixFloats[i]));
+      if (!Object.is(Math.fround(want), cap[i])) { exact = false; firstBad = i; break; }
+    }
+    check('loadwav: F32 fixture bytes reached the ring byte-exact', exact, 'first bad sample ' + firstBad);
+
+    // leg 2 expectation: crc32 of the ring bytes after leg 1 == the crc the
+    // app printed of EXACTLY what #722's converter handed it.
+    const zlib = require('zlib');
+    const leg2 = Buffer.alloc(len2);
+    for (let i = 0; i < len2 / 4; i++) leg2.writeFloatLE(cap[len1 / 4 + i], i * 4);
+    const gotCrc = (zlib.crc32(leg2) >>> 0).toString(16).padStart(8, '0');
+    check('loadwav: converted IMA program reached the ring byte-exact (crc)',
+          m2 && gotCrc === m2[2], `ring crc ${gotCrc} vs app ${m2 && m2[2]}`);
+  }
+  kernel.kill(pidW, 9, null);
+  await reapAll();
+  check('loadwav: sources reclaimed', kernel.audioList().length === 0);
 
   clearTimeout(watchdog);
   fs.rmSync(tmp, { recursive: true, force: true });

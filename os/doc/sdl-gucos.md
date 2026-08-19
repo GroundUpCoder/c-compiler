@@ -187,8 +187,17 @@ Rules that matter here:
   are refused — the OS consumes the converted side. A source-format
   change there converts future puts to the device's open spec; a
   destination change is ignored (the device owns that side).
-- `SDL_LoadWAV` does not exist yet — decode audio files yourself, then
-  convert/mix/push as above.
+- `SDL_LoadWAV(path, &spec, &buf, &len)` loads a WAV file — the complete
+  upstream SDL 3.4.0 decoder: PCM 8/16/24/32 (24-bit comes back as S32),
+  IEEE float32, MS ADPCM, IMA ADPCM, A-law, mu-law (compressed formats
+  decode to S16). Free the buffer with `SDL_free`. A zero-sample file
+  SUCCEEDS with a NULL buffer and length 0 — check the length, not the
+  pointer. On failure every output is zeroed and `SDL_GetError()` names
+  the reason. Typical shape: load each asset once at startup, convert it
+  to one common spec with `SDL_CreateAudioStream`, keep the converted
+  buffers, then `SDL_MixAudio` + push into your one device stream.
+  `SDL_LoadWAV_IO` does not exist (there is no `SDL_IOStream`), and the
+  upstream `SDL_HINT_WAVE_*` hints are fixed at their defaults here.
 
 ## Text: SDL_ttf (the classic API) over FreeType
 
