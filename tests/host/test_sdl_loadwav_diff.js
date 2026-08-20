@@ -260,6 +260,57 @@ int main(void) { printf("ok\\n"); return 0; }
   assert.strictEqual(run(w).trim(), 'ok');
   assert(!fs.readFileSync(w).includes(Buffer.from(WAVE_LITERAL, 'utf8')), 'dead-literal prune failed to shed the conservatively-linked decoder');
 });
+// Linkage legs (second counter-pass): an INTERNAL-linkage (`static`)
+// file-scope entity of the keyed spelling is a DIFFERENT symbol — it must
+// neither suppress the demand link (the reviewer's reproduction) nor block
+// the withdrawal (the same test had drifted into both sites). NB
+// definedVariables is not split by linkage the way the function lists are —
+// it holds external AND static file-scope objects — which is the asymmetry
+// that produced the bug.
+function compileMulti(name, sources, flags) {
+  const files = sources.map((src, i) => {
+    const c = path.join(tmp, name + '_' + i + '.c');
+    fs.writeFileSync(c, src);
+    return c;
+  });
+  const w = path.join(tmp, name + '.wasm');
+  cp.execFileSync('node', [path.join(ROOT, 'compiler.js')].concat(files, ['-o', w], flags || []), { stdio: 'pipe' });
+  return w;
+}
+const STATIC_VAR_SHADOW = `
+static int SDL_LoadWAV = 7;
+int shadow_value(void) { return SDL_LoadWAV; }
+`;
+const REAL_USER = `
+#include <SDL.h>
+#include <stdio.h>
+int main(void) {
+    SDL_AudioSpec s; Uint8 *b; Uint32 n;
+    if (!SDL_LoadWAV("tests/unit/sdl_load_wav_fixtures/pcm_s16_stereo.wav", &s, &b, &n)) {
+        printf("err %s\\n", SDL_GetError());
+        return 1;
+    }
+    printf("ok len=%u\\n", (unsigned)n);
+    SDL_free(b);
+    return 0;
+}
+`;
+check('a static VARIABLE of the keyed spelling in another TU cannot suppress the demand', () => {
+  const w = compileMulti('shadowvar', [STATIC_VAR_SHADOW, REAL_USER]);
+  assert.strictEqual(run(w).trim(), 'ok len=100');
+});
+check('a static FUNCTION of the keyed spelling in another TU cannot suppress it either', () => {
+  const w = compileMulti('shadowfn', [`
+static int SDL_LoadWAV(void) { return 7; }
+int shadow_call(void) { return SDL_LoadWAV(); }
+`, REAL_USER]);
+  assert.strictEqual(run(w).trim(), 'ok len=100');
+});
+check('a static shadow cannot block WITHDRAWAL either (--no-fold, non-referencing SDL TU)', () => {
+  const w = compileMulti('shadowwd', [STATIC_VAR_SHADOW, NOLOAD_SRC], ['--no-fold']);
+  assert(run(w).includes('ticks='), 'non-referencing program did not run');
+  assert(!fs.readFileSync(w).includes(Buffer.from(WAVE_LITERAL, 'utf8')), 'decoder leaked past the withdrawal');
+});
 check('a user definition of SDL_LoadWAV suppresses the builtin (no duplicate symbol)', () => {
   const w = compile('userdef', `
 #include <SDL.h>

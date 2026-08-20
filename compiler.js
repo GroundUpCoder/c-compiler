@@ -41058,9 +41058,11 @@ function parseAllUnits(fs, pp, inputFiles, options) {
   // (#723 counter-pass; the decl-list form was function-only and degraded
   // to always-link in those modes).
   //
-  // SUPPRESSED when any unit defines (or imports) the name — functions AND
-  // variables: linking the builtin over a user definition would be a
-  // duplicate-symbol error.
+  // SUPPRESSED when any unit carries an EXTERNAL-LINKAGE definition (or
+  // import) of the name — functions AND variables: linking the builtin over
+  // a user definition would be a duplicate-symbol error. Internal-linkage
+  // (`static`) file-scope entities of the same spelling are DIFFERENT
+  // symbols and never suppress (see demandSymbolDefined below).
   //
   // WANTED when the name is referenced from any potentially-live root: a
   // defined or static function's body, a static local's initializer (the
@@ -41072,17 +41074,36 @@ function parseAllUnits(fs, pp, inputFiles, options) {
   // function still can — its reference is real until the whole-program
   // link decides its fate — which is conservative, and the dead-literal
   // prune sheds the bytes if the function dies.
+  // EXTERNAL-LINKAGE definition/import test, shared by demand suppression and
+  // declaration withdrawal so the two sites cannot drift apart (#723 second
+  // counter-pass — they had already drifted into the same bug twice). A
+  // file-scope `static` has INTERNAL linkage: it cannot define, satisfy, or
+  // conflict with an external symbol of the same spelling in another TU, so
+  // it must neither suppress a demand link nor block a withdrawal. NB the
+  // VARIABLE lists are not split by linkage the way the function lists are:
+  // the parser routes only EXTERN declarations to externVariables, so
+  // definedVariables holds external AND static file-scope objects (it is the
+  // analogue of definedFunctions PLUS staticFunctions) — hence the explicit
+  // storage-class check here, where definedFunctions needs none (statics
+  // live in staticFunctions) and importedFunctions are external by nature.
+  const demandSymbolDefined = (name) => {
+    for (const unit of units) {
+      for (const f of unit.definedFunctions) if (f.name === name) return true;
+      for (const f of unit.importedFunctions) if (f.name === name) return true;
+      for (const v of unit.definedVariables) {
+        if (v.name === name && v.storageClass !== Types.StorageClass.STATIC) return true;
+      }
+    }
+    return false;
+  };
+
   const demandSymbolWanted = (name) => {
     const bagHas = (node) => {
       for (const f of node.referencedFunctions) if (f.name === name) return true;
       for (const v of node.referencedVariables) if (v.name === name) return true;
       return false;
     };
-    for (const unit of units) {
-      for (const f of unit.definedFunctions) if (f.name === name) return false;
-      for (const f of unit.importedFunctions) if (f.name === name) return false;
-      for (const v of unit.definedVariables) if (v.name === name) return false;
-    }
+    if (demandSymbolDefined(name)) return false;
     for (const unit of units) {
       for (const list of [unit.definedFunctions, unit.staticFunctions]) {
         for (const f of list) {
@@ -41170,13 +41191,10 @@ function parseAllUnits(fs, pp, inputFiles, options) {
   // own and keep their decls.
   for (const cs of conditionalSources) {
     if (requiredSources.has(cs.source)) continue;
-    let userDefined = false;
-    for (const unit of units) {
-      for (const f of unit.definedFunctions) if (f.name === cs.symbol) userDefined = true;
-      for (const f of unit.importedFunctions) if (f.name === cs.symbol) userDefined = true;
-      for (const v of unit.definedVariables) if (v.name === cs.symbol) userDefined = true;
-    }
-    if (userDefined) continue;
+    // The same EXTERNAL-linkage test as suppression (an internal-linkage
+    // static of the keyed spelling is a different symbol — it neither
+    // satisfies the declaration nor excuses leaving it dangling).
+    if (demandSymbolDefined(cs.symbol)) continue;
     for (const unit of units) {
       unit.declaredFunctions = unit.declaredFunctions.filter((f) => f.name !== cs.symbol || f.body);
       unit.localDeclaredFunctions = unit.localDeclaredFunctions.filter((f) => f.name !== cs.symbol || f.body);

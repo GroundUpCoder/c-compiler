@@ -235,6 +235,68 @@ test-build-only seam would mean the shipped decoder is not the decoder the
 injection suite tested, and #722's identical seam is already in main —
 filed as #727, one decision for the class.
 
+## Second counter-pass (re-review round 2: RED, one blocking finding — FIXED)
+
+The re-reviewer found a real C **linkage bug** in the first counter-pass:
+demand suppression (and the withdrawal pass, which repeated the identical
+test) treated ANY `definedVariables` entry of the keyed spelling as a
+program-wide definition — including **internal-linkage (`static`) file-scope
+variables**, which cannot define, satisfy, or conflict with an external
+symbol of the same spelling in another TU. Reproduction: an unrelated TU with
+`static int SDL_LoadWAV = 7;` made a legal SDL_LoadWAV-calling TU fail
+`Undefined symbol` at link.
+
+**Root cause — a data-model asymmetry worth remembering:** the FUNCTION lists
+are split by linkage (`definedFunctions` vs `staticFunctions`), but the
+VARIABLE lists are NOT — the parser routes only `EXTERN` declarations to
+`externVariables`, so **`definedVariables` holds external AND static
+file-scope objects: it is the analogue of `definedFunctions` PLUS
+`staticFunctions`**. "Treat variables exactly like functions" was the right
+intent applied to the wrong list shape. The next person touching these lists
+will make the same assumption — hence this paragraph.
+
+**Fix:** one linkage-aware helper, `demandSymbolDefined` (external-linkage
+definitions and imports only; a `static` variable is excluded by an explicit
+storage-class check), now used by BOTH suppression and withdrawal — the two
+sites had drifted into the same bug twice, so they no longer have separate
+copies of the test to drift.
+
+**Class answers** (asked by the review, answered empirically on the defective
+tip before fixing, all pinned as legs in `test_sdl_loadwav_diff.js` — 20 legs
+now):
+
+- **Static FUNCTION shadow: was NEVER broken.** Suppression reads
+  `definedFunctions`/`importedFunctions`; a `static int SDL_LoadWAV(void)`
+  lives in `staticFunctions` and never suppressed. Correct by list
+  construction — proven on the defective tip (`ok len=100`) and pinned as a
+  leg anyway.
+- **`importedFunctions` is linkage-correct:** an IMPORT is a host-provided
+  external symbol by nature (`StorageClass.IMPORT` — there is no static
+  import), and linking the builtin over one would produce a duplicate.
+  Suppressing on imports stands.
+- **Withdrawal's name-only filters on `externVariables`/
+  `localExternVariables` cannot hit a different legitimate symbol:**
+  withdrawal only runs when the name is unreferenced (the bags) and not
+  externally defined, an extern declaration of exactly that spelling in that
+  state is dead weight (precisely what the default-mode tree-shake removes),
+  and internal-linkage entities of the name live in lists withdrawal never
+  touches (`definedVariables`, `staticLocals`).
+- **The withdrawal drift site was live**, not theoretical: the same static
+  shadow plus a NON-referencing SDL TU under `--no-fold` reproduced the
+  undefined-symbol error on `b9ca346c` (withdrawal skipped for the same wrong
+  reason) — fixed by the shared helper and pinned as a leg.
+
+**Deliberate non-fix, per the coordinator:** `git diff --check` flags trailing
+whitespace / EOF blanks in the committed pristine upstream copies
+(`529b-evidence/upstream/`). Those bytes are upstream's, byte-for-byte, and
+the SHA-256 provenance plus `adapt.mjs`'s regeneration property depend on
+them staying exact. They stay.
+
+**Honest gap declared by the re-review, not yet closed:** the seven
+first-counter-pass legs (and by extension the three new linkage legs) have
+not each been mutation-broken to prove red-control sensitivity. Not claimed
+proven.
+
 ## Suites run
 
 - At `5c10caa8` (pre-counter-pass tip): the coordinator's authoritative FULL

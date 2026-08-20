@@ -16,3 +16,7 @@ exit=1
 (same result under --no-undefined: these modes skip the per-TU tree-shake, so ANY
  unused undefined declaration is a link error there — which is why the never-fired
  conditional declaration must be WITHDRAWN, not merely left unlinked)
+== #723 second counter-pass mode matrix (same protocol) ==
+default: base=18407 B tip=18407 B  cmp exit 0 (BYTE-IDENTICAL)
+--no-fold: base=22771 B tip=22771 B  cmp exit 0 (BYTE-IDENTICAL)
+--no-undefined: base=22116 B tip=22116 B  cmp exit 0 (BYTE-IDENTICAL)
