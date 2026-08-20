@@ -10,10 +10,14 @@
 #include <dirent.h>
 #include "../../os/sedit/c_lex.h"
 #include "../../os/sedit/document.h"
+#include "../../os/sedit/styles.h"
 #include "../../os/sha256.h"
 
 static int fail;
 #define OK(n,x) do{if(x)printf("ok %s\n",n);else{printf("FAIL %s\n",n);fail++;}}while(0)
+/* Independent per-line run count for a token span (#728 oracle). */
+static uint32_t ref_line_runs(const char*t,uint32_t a,uint32_t e){uint32_t n=0;while(a<e){uint32_t q=a;while(q<e&&t[q]!='\n')q++;if(q>a)n++;a=q<e?q+1:q;}return n;}
+static uint64_t ref_runs_total(const SeditLexer*l,const char*t){uint64_t n=0;for(size_t i=0;i<l->token_count;i++)n+=ref_line_runs(t,l->tokens[i].start,l->tokens[i].end);return n;}
 static int has(const SeditLexer*l,int k,const char*s,const char*src){for(size_t i=0;i<l->token_count;i++)if(l->tokens[i].kind==k&&l->tokens[i].end-l->tokens[i].start==strlen(s)&&!memcmp(src+l->tokens[i].start,s,strlen(s)))return 1;return 0;}
 static int lex_equal(const SeditLexer*a,const SeditLexer*b){return a->token_count==b->token_count&&a->pair_count==b->pair_count&&!memcmp(a->tokens,b->tokens,a->token_count*sizeof(*a->tokens))&&!memcmp(a->pairs,b->pairs,a->pair_count*sizeof(*a->pairs));}
 typedef struct { SeditToken t[4096]; size_t nt; SeditPair p[4096]; size_t np; } Ref;
@@ -53,6 +57,34 @@ int main(int argc,char**argv){
  char p[1024];uint32_t line;OK("arg location",!sedit_document_location("colon:name.c:42",p,sizeof p,&line)&&!strcmp(p,"colon:name.c")&&line==42);OK("primary diagnostic",!sedit_document_diagnostic("colon:name.c:9: error: bad",p,sizeof p,&line)&&line==9);OK("link diagnostic",!sedit_document_diagnostic("  at colon:name.c:7",p,sizeof p,&line)&&line==7);OK("reject column",sedit_document_diagnostic("a.c:2:3: error: bad",p,sizeof p,&line)!=0);
  OK("reject zero line",sedit_document_location("a.c:0",p,sizeof p,&line)!=0);OK("reject overflow line",sedit_document_location("a.c:4294967296",p,sizeof p,&line)!=0);OK("reject multiline diagnostic",sedit_document_diagnostic("a.c:2: error: x\nmore",p,sizeof p,&line)!=0);OK("reject unrelated text",sedit_document_diagnostic("a.c:2: note: x",p,sizeof p,&line)!=0);
  uint32_t selection=2,navigation=3,visible_lines=0;const char*grown="one\ntwo\nthree\nfour";OK("immediate post-change growth accepts line from authoritative snapshot",!sedit_navigation_apply(grown,strlen(grown),4,&selection,&navigation,&visible_lines)&&selection==14&&navigation==4&&visible_lines==4);selection=14;navigation=4;OK("immediate post-change shrink rejects removed line",sedit_navigation_apply("one",3,4,&selection,&navigation,&visible_lines)!=0);OK("navigation rejection preserves selection and status state",selection==14&&navigation==4&&visible_lines==1);
+ /* #728: the style batch is written per LINE RUN; sizing it per token
+  * overflows the heap the moment one token spans many lines (unterminated
+  * block comment = ordinary typing). The batch must satisfy the consumer's
+  * own independent validator and carry exactly one entry per line run. */
+ {size_t bcap=64*1024,bn=0;char*bsrc=malloc(bcap);bn+=(size_t)snprintf(bsrc+bn,bcap-bn,"int head(void){return 0;}\n/*\n");for(int ln=0;ln<500;ln++)bn+=(size_t)snprintf(bsrc+bn,bcap-bn,"  comment line %d with words\n",ln);
+  SeditLexer sl;sedit_lex_init(&sl);sedit_lex_feed(&sl,bsrc,bn);sedit_lex_finish(&sl);uint64_t runs=ref_runs_total(&sl,bsrc);int tr=-1;
+  GUCEDIT_BATCH_V1*bb=sedit_styles_build(&sl,bsrc,bn,0,42,&tr);
+  OK("unterminated block comment batch built",bb!=NULL&&runs>500);
+  OK("unterminated block comment batch is one entry per line run and validator-clean",bb&&tr==0&&bb->count==runs&&gucedit_check_batch(bb,bsrc,(uint32_t)bn,42)==GUCEDIT_CHECK_OK);
+  free(bb);sedit_lex_free(&sl);free(bsrc);}
+ {const char*s2="int f(){}\n";SeditLexer s2l;sedit_lex_init(&s2l);sedit_lex_feed(&s2l,s2,strlen(s2));sedit_lex_finish(&s2l);int tr=-1;
+  GUCEDIT_BATCH_V1*bb=sedit_styles_build(&s2l,s2,strlen(s2),5,7,&tr);
+  int boxes=0;if(bb)for(uint32_t i=0;i<bb->count;i++)if(bb->styles[i].flags&GUES_BOX)boxes++;
+  OK("caret delimiter mate boxes survive in a validator-clean batch",bb&&tr==0&&boxes==2&&gucedit_check_batch(bb,s2,(uint32_t)strlen(s2),7)==GUCEDIT_CHECK_OK);
+  free(bb);sedit_lex_free(&s2l);}
+ OK("repo header path supplied",argc>=3);
+ if(argc>=3){FILE*hf=fopen(argv[2],"rb");OK("repo header opens",hf!=NULL);if(hf){fseek(hf,0,SEEK_END);long hn=ftell(hf);fseek(hf,0,SEEK_SET);char*hs=malloc((size_t)hn);size_t got=fread(hs,1,(size_t)hn,hf);fclose(hf);
+  SeditLexer hl;sedit_lex_init(&hl);sedit_lex_feed(&hl,hs,got);sedit_lex_finish(&hl);uint64_t runs=ref_runs_total(&hl,hs);int tr=-1;
+  GUCEDIT_BATCH_V1*bb=sedit_styles_build(&hl,hs,got,0,9,&tr);
+  OK("repo header batch built",bb!=NULL&&got>100000&&runs>10000);
+  OK("repo header batch is one entry per line run and validator-clean",bb&&tr==0&&bb->count==runs&&gucedit_check_batch(bb,hs,(uint32_t)got,9)==GUCEDIT_CHECK_OK);
+  free(bb);sedit_lex_free(&hl);free(hs);}}
+ {size_t rn=(size_t)GUCEDIT_MAX_STYLES+100000;size_t tn=3+2*rn;char*ts=malloc(tn);ts[0]='/';ts[1]='*';ts[2]='\n';for(size_t i=0;i<rn;i++){ts[3+2*i]='x';ts[4+2*i]='\n';}
+  SeditLexer tl;sedit_lex_init(&tl);sedit_lex_feed(&tl,ts,tn);sedit_lex_finish(&tl);int tr=-1;
+  GUCEDIT_BATCH_V1*bb=sedit_styles_build(&tl,ts,tn,0,11,&tr);
+  OK("over-limit batch built",bb!=NULL);
+  OK("over-limit batch truncates honestly at the ABI style cap",bb&&tr==1&&bb->count==GUCEDIT_MAX_STYLES&&gucedit_check_batch(bb,ts,(uint32_t)tn,11)==GUCEDIT_CHECK_OK);
+  free(bb);sedit_lex_free(&tl);free(ts);}
  if(argc<2)return 2;char f[1024],f2[1024],linkp[1024],hard[1024];snprintf(f,sizeof f,"%s/a.c",argv[1]);snprintf(f2,sizeof f2,"%s/b.c",argv[1]);snprintf(linkp,sizeof linkp,"%s/l.c",argv[1]);snprintf(hard,sizeof hard,"%s/h.c",argv[1]);FILE*fp=fopen(f,"wb");fwrite("a\r\nb\r\n",1,6,fp);fclose(fp);symlink("a.c",linkp);SeditDocument d;sedit_document_init(&d);OK("load symlink",!sedit_document_load(&d,linkp));OK("CRLF detected",d.eol==SEDIT_EOL_CRLF);OK("physical target",strstr(d.target_path,"/a.c")!=NULL);OK("atomic save",sedit_document_save(&d,NULL,"a\nbb\n",5,0,0)==SEDIT_SAVE_OK);char b[32]={0};fp=fopen(f,"rb");size_t n=fread(b,1,sizeof b,fp);fclose(fp);OK("CRLF preserved",n==7&&!memcmp(b,"a\r\nbb\r\n",7));OK("symlink preserved",lstat(linkp,&d.opened_stat)==0&&S_ISLNK(d.opened_stat.st_mode));
  stat(f,&d.opened_stat);fp=fopen(f2,"wb");fwrite("other",1,5,fp);fclose(fp);unlink(linkp);symlink("b.c",linkp);OK("symlink retarget is conflict",sedit_document_save(&d,NULL,"mine",4,0,0)==SEDIT_SAVE_CONFLICT);memset(b,0,sizeof b);fp=fopen(f,"rb");n=fread(b,1,sizeof b,fp);fclose(fp);OK("Cancel preserves old physical target",n==7&&!memcmp(b,"a\r\nbb\r\n",7));fp=fopen(f2,"rb");n=fread(b,1,sizeof b,fp);fclose(fp);OK("Cancel preserves current physical target",n==5&&!memcmp(b,"other",5));struct stat link_before,b_before;stat(f2,&b_before);lstat(linkp,&link_before);OK("Overwrite publishes to currently resolved target",sedit_document_save(&d,NULL,"mine",4,1,0)==SEDIT_SAVE_OK&&strstr(d.target_path,"/b.c")!=NULL);struct stat link_after,b_after;lstat(linkp,&link_after);stat(f2,&b_after);OK("Overwrite preserves symlink and replaces current target inode",S_ISLNK(link_after.st_mode)&&b_before.st_ino!=b_after.st_ino);fp=fopen(f,"rb");n=fread(b,1,sizeof b,fp);fclose(fp);OK("Overwrite leaves former target exact",n==7&&!memcmp(b,"a\r\nbb\r\n",7));char saveas[1024];snprintf(saveas,sizeof saveas,"%s/save-as.c",argv[1]);OK("Save As publishes only chosen path",sedit_document_save(&d,saveas,"copy",4,0,0)==SEDIT_SAVE_OK);fp=fopen(f2,"rb");n=fread(b,1,sizeof b,fp);fclose(fp);OK("Save As leaves symlink target exact",n==4&&!memcmp(b,"mine",4));lstat(linkp,&link_after);OK("Save As leaves symlink intact",S_ISLNK(link_after.st_mode));unlink(linkp);symlink("a.c",linkp);sedit_document_free(&d);sedit_document_init(&d);OK("reload original lane for fault tests",!sedit_document_load(&d,linkp));
 #ifdef SEDIT_TEST
