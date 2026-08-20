@@ -3,5 +3,5 @@
   "description": "Native gucOS C source editor (#718): generation-bound styled EDIT, C lexical highlighting, delimiter matching, line diagnostic navigation, and atomic conflict-aware saves",
   "deps": ["../win32/lib.json"],
   "includes": ["../win32", ".."],
-  "sources": ["sedit.c", "c_lex.c", "document.c"]
+  "sources": ["sedit.c", "c_lex.c", "document.c", "styles.c"]
 }

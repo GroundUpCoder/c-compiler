@@ -13,6 +13,7 @@
 #include "../win32/gucedit.h"
 #include "c_lex.h"
 #include "document.h"
+#include "styles.h"
 
 #define WM_RESTYLE (WM_APP + 0x18)
 enum { ID_EDIT=100,ID_STATUS,ID_NEW=200,ID_OPEN,ID_SAVE,ID_SAVEAS,ID_EXIT,
@@ -29,18 +30,13 @@ static void title(void){char b[1200];const char*p=doc.user_path[0]?doc.user_path
 static void get_text(char**p,size_t*n){int z=GetWindowTextLength(edit);char*b=malloc((size_t)z+1);if(!b){*p=NULL;*n=0;return;}GetWindowText(edit,b,z+1);*p=b;*n=(size_t)z;}
 static void cancel_scan(void){free(scan_text);scan_text=NULL;scan_len=scan_off=0;sedit_lex_free(&lex);scan_active=0;}
 static void post_restyle(void){if(!restyle_posted&&!destroying){restyle_posted=1;PostMessage(win,WM_RESTYLE,0,0);}}
-static COLORREF color_for(int k){switch(k){case SEDIT_T_KEYWORD:return RGB(0,0,170);case SEDIT_T_TYPE:return RGB(95,0,111);case SEDIT_T_NUMBER:return RGB(122,31,93);case SEDIT_T_STRING:case SEDIT_T_CHAR:return RGB(139,0,0);case SEDIT_T_COMMENT:return RGB(0,100,0);case SEDIT_T_PREPROCESSOR:return RGB(107,62,0);case SEDIT_T_ERROR:return RGB(170,0,0);default:return RGB(35,35,35);}}
-static int append_style(GUCEDIT_BATCH_V1*b,uint32_t*count,uint32_t a,uint32_t e,COLORREF c,uint32_t flags){while(a<e){uint32_t q=a;while(q<e&&scan_text[q]!='\n')q++;if(q>a){GUCEDIT_STYLE_V1*s=&b->styles[(*count)++];*s=(GUCEDIT_STYLE_V1){a,q,(uint32_t)c,0,flags};}a=q<e?q+1:q;}return 1;}
 static void publish_styles(void){
- size_t cap=lex.token_count+lex.pair_count+16;GUCEDIT_BATCH_V1*b=malloc(sizeof(*b)+cap*sizeof(GUCEDIT_STYLE_V1));if(!b){status_text("Highlighting unavailable: out of memory");return;}uint32_t c=0;
- for(size_t i=0;i<lex.token_count;i++)append_style(b,&c,lex.tokens[i].start,lex.tokens[i].end,color_for(lex.tokens[i].kind),0);
- DWORD a=0,z=0;SendMessage(edit,EM_GETSEL,(WPARAM)&a,(LPARAM)&z);uint32_t pos=(uint32_t)z,at=UINT32_MAX,mate=0;int unmatched=0;if(pos<scan_len&&strchr("()[]{}",scan_text[pos]))at=pos;else if(pos&&strchr("()[]{}",scan_text[pos-1]))at=pos-1;
- if(at!=UINT32_MAX&&sedit_pair_mate(&lex,at,&mate,&unmatched)){append_style(b,&c,at,at+1,unmatched?RGB(180,0,0):RGB(0,70,160),GUES_BOX);if(!unmatched&&mate!=at)append_style(b,&c,mate,mate+1,RGB(0,70,160),GUES_BOX);}
- /* token order is lexical; caret boxes can be out of order. Sort and drop
-  * token overlap at boxed delimiters (punctuation has no semantic color). */
- for(uint32_t i=1;i<c;i++){GUCEDIT_STYLE_V1 v=b->styles[i];uint32_t j=i;while(j&&b->styles[j-1].start>v.start){b->styles[j]=b->styles[j-1];j--;}b->styles[j]=v;}
- uint32_t w=0;for(uint32_t i=0;i<c;i++){if(w&&b->styles[i].start<b->styles[w-1].end){if(b->styles[i].flags&GUES_BOX)b->styles[w-1]=b->styles[i];continue;}b->styles[w++]=b->styles[i];}c=w;
- b->size=(uint32_t)(sizeof(*b)+c*sizeof(GUCEDIT_STYLE_V1));b->version=1;b->text_generation=scan_gen;b->count=c;if(!SendMessage(edit,GEM_SETSTYLES,0,(LPARAM)b))status_text(GetLastError()==GUCEDIT_ERROR_STALE_GENERATION?"Highlighting restarted after edit":"Highlighting unavailable");free(b);
+ DWORD a=0,z=0;SendMessage(edit,EM_GETSEL,(WPARAM)&a,(LPARAM)&z);int truncated=0;
+ GUCEDIT_BATCH_V1*b=sedit_styles_build(&lex,scan_text,scan_len,(uint32_t)z,scan_gen,&truncated);
+ if(!b){status_text("Highlighting unavailable: out of memory");return;}
+ if(!SendMessage(edit,GEM_SETSTYLES,0,(LPARAM)b))status_text(GetLastError()==GUCEDIT_ERROR_STALE_GENERATION?"Highlighting restarted after edit":"Highlighting unavailable");
+ else if(truncated)status_text("Highlighting truncated: style limit reached");
+ free(b);
 }
 static void restyle_step(void){
  restyle_posted=0;UINT g=(UINT)SendMessage(edit,GEM_GETTEXTGEN,0,0);if(scan_active&&g!=scan_gen)cancel_scan();
