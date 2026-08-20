@@ -174,12 +174,75 @@ changed).
   are upstream-verbatim and the lying-length fixtures pin the reachable
   clamping behavior.
 
-## Suites run at this tip (heavy suites embargoed — coordinator holds the lock)
+## Counter-pass (review round 1: RED, two blocking findings — both FIXED with one mechanism)
 
-- host: ALL PASS (includes the new differential + the api-index/gcode doc
-  guards + #722's deadstrip witness).
-- unit (incl. the new sdl_load_wav contract test), todos, blockfs, and the
-  full non-heavy `--diff` set: recorded in `build/test-run/summary.json` at
-  report time.
-- kernel/sweep: awaiting coordinator clearance (#722 gate holds the machine
-  heavy lock); `test_audio_e2e.js` verified solo (lock-free by construction).
+The independent review (thread `01a01c50-…`) confirmed the adaptation,
+provenance, and 92/92 differential independently (it rebuilt the oracle and
+re-derived every row), and returned two real findings against the demand-link
+hook. Both were fixed by ONE change rather than rebutted, because a fix
+strictly better than the available rebuttal existed:
+
+1. **Function-only generality (blocking).** `demandSymbolWanted` read only the
+   function decl lists, so a variable-keyed `__require_source_if` silently
+   never fired. **Fix:** the decision now reads the AST REFERENCE BAGS
+   (`referencedFunctions`/`referencedVariables` — pure on-demand AST getters,
+   the same bags `gcSectionsPass` walks), and suppression consults
+   `definedVariables` alongside functions/imports. Variables now fire and
+   suppress exactly like functions.
+2. **Mode-dependent cost (blocking).** Under `--no-fold`/`--no-undefined` the
+   old decl-list read degraded to always-link: +458 B and the decoder TU's
+   compile cost for non-referencing programs (reviewer's tip-vs-base
+   measurement). The bag read alone was NOT sufficient: those modes skip the
+   per-TU tree-shake, and this linker demands a definition for EVERY surviving
+   declaration — a **pre-existing property of the modes**, measured on the
+   base compiler with no #723 code (`529b-evidence/mode-matrix-counterpass.txt`:
+   any unused undefined declaration is a link error there). So the fix has a
+   second half: **a conditional declaration that never fired is WITHDRAWN**
+   before link (bodiless decls dropped — exactly what the default-mode
+   tree-shake would have done; user definitions keep theirs; referencing
+   programs fired anyway). Result, on the reviewer's exact test file
+   (`tests/unit/sdl_get_ticks/main.c`), tip-vs-base: **cmp exit 0 in ALL THREE
+   modes** (default 18,407 B; `--no-fold` 22,771 B; `--no-undefined` 22,116 B —
+   identical to the reviewer's base figures). The "degrades to always-link"
+   caveat is deleted with the behavior.
+
+Reference-route determinations the review asked for, proven behaviorally in
+`test_sdl_loadwav_diff.js` (16 legs now):
+
+- **EInitList / designated initializers bubble**: `static struct ops O =
+  { .load = SDL_LoadWAV }` fires (the bag getters recompute from current
+  children, so the parser-mutated init lists are covered) — proven, not
+  assumed.
+- **Dead STATICS cannot over-link in default mode**: the per-TU tree-shake
+  prunes them (and static globals) from the very lists the bag walk reads,
+  BEFORE the demand check runs — so this is "not fired", not
+  "fired-then-stripped". Proven by the dead-static leg.
+- **An extern-linkage never-called function DOES fire** — its reference is
+  real until the whole-program link decides its fate (per-TU cannot know), so
+  this is deliberately CONSERVATIVE: the TU compiles (cost paid) and the
+  dead-literal prune sheds every byte (leg proves zero decoder bytes shipped).
+  Under `--no-fold`, dead statics fire too — consistent with a mode whose
+  point is keeping everything.
+- The variable-keyed test legs key on `__sdl_wave_alloc_countdown`, the
+  subject of follow-up **#727** (the production-linked-seam class, filed to
+  cover #722's `__sdl_audiostream_failalloc` and this seam together). If #727
+  later moves or renames the seam, those two legs break FROM THAT COUPLING,
+  not from a demand-link regression — re-key them to whatever variable the
+  decoder TU then defines.
+
+The P2 (seam production-linked) was REBUTTED and the rebuttal accepted: a
+test-build-only seam would mean the shipped decoder is not the decoder the
+injection suite tested, and #722's identical seam is already in main —
+filed as #727, one decision for the class.
+
+## Suites run
+
+- At `5c10caa8` (pre-counter-pass tip): the coordinator's authoritative FULL
+  gate ran GREEN — 26 suites unfiltered/unresumed, kernel 192/192, sweep
+  65/65 (preserved at `~/git/meta/meta/notes/723-evidence/
+  control-5c10caa8-GREEN/`), so any red on the counter-pass tip is
+  attributable to the fix. Author-side at that tip: host, unit, todos,
+  blockfs, and all 19 py categories green.
+- At the counter-pass tip: host suite (incl. the 16-leg differential), unit
+  `sdl_load_wav`, `test_audio_e2e.js` solo, and the three-mode cmp matrix —
+  green; the coordinator re-gates the tip in full.

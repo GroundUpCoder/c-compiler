@@ -14280,13 +14280,15 @@ function parseTokens(tokens, options) {
         continue;
       }
       // __require_source_if("symbol", "source.c") — a DEMAND-linked source
-      // (#723): the named source joins the TU set only when `symbol` ends the
-      // require drain referenced-but-undefined across the whole program (see
-      // parseAllUnits). This is what lets <SDL.h> declare SDL_LoadWAV while a
-      // program that never references it pays ZERO compile cost and zero wasm
-      // bytes for the ~74 KB decoder TU (#529-B "link shape") — the plain
-      // __require_source form compiles its source into every including
-      // program unconditionally.
+      // (#723): the named source joins the TU set only when `symbol` — a
+      // FUNCTION or a VARIABLE — ends the require drain referenced by the
+      // program (AST reference bags) and defined nowhere in it (see
+      // parseAllUnits' demandSymbolWanted). The decision is independent of
+      // --no-fold / --no-undefined. This is what lets <SDL.h> declare
+      // SDL_LoadWAV while a program that never references it pays ZERO
+      // compile cost and zero wasm bytes for the ~74 KB decoder TU in EVERY
+      // mode (#529-B "link shape") — the plain __require_source form
+      // compiles its source into every including program unconditionally.
       if (parser.atKW(Lexer.Keyword.X_REQUIRE_SOURCE_IF)) {
         parser.advance();
         parser.expect("(");
@@ -41048,30 +41050,62 @@ function parseAllUnits(fs, pp, inputFiles, options) {
     return { searched };
   };
 
-  // Whether a demand-linked symbol (__require_source_if) wants its source:
-  // referenced-but-undefined across the parsed set. The reference test reads
-  // the post-tree-shake decl lists — INLINER.optimize (in processSource)
-  // prunes unreferenced declarations per TU — so a program that merely SEES
-  // the declaration in a header never pulls the source. A unit that defines
-  // (or imports) the symbol itself also never pulls it: linking the builtin
-  // over a user definition would be a duplicate-symbol error. Under
-  // --no-fold / --no-undefined the decl lists keep every declaration and
-  // this degrades, conservatively, to always-link (#723).
+  // Whether a demand-linked symbol (__require_source_if) wants its source.
+  // The decision reads the AST REFERENCE BAGS (referencedFunctions /
+  // referencedVariables — the same on-demand pure-AST bags gcSectionsPass
+  // walks), NOT the post-tree-shake decl lists, so it is independent of
+  // --no-fold / --no-undefined and treats VARIABLES exactly like functions
+  // (#723 counter-pass; the decl-list form was function-only and degraded
+  // to always-link in those modes).
+  //
+  // SUPPRESSED when any unit defines (or imports) the name — functions AND
+  // variables: linking the builtin over a user definition would be a
+  // duplicate-symbol error.
+  //
+  // WANTED when the name is referenced from any potentially-live root: a
+  // defined or static function's body, a static local's initializer (the
+  // function-pointer-table path), a global initializer (address-taken and
+  // designated-initializer references, incl. EInitList), or an export
+  // directive (an export roots a definition). In default mode the per-TU
+  // tree-shake has already pruned dead STATICS from these lists, so dead
+  // TU-internal code cannot fire a link; an unreferenced EXTERN-LINKAGE
+  // function still can — its reference is real until the whole-program
+  // link decides its fate — which is conservative, and the dead-literal
+  // prune sheds the bytes if the function dies.
   const demandSymbolWanted = (name) => {
+    const bagHas = (node) => {
+      for (const f of node.referencedFunctions) if (f.name === name) return true;
+      for (const v of node.referencedVariables) if (v.name === name) return true;
+      return false;
+    };
     for (const unit of units) {
       for (const f of unit.definedFunctions) if (f.name === name) return false;
       for (const f of unit.importedFunctions) if (f.name === name) return false;
+      for (const v of unit.definedVariables) if (v.name === name) return false;
     }
     for (const unit of units) {
-      for (const f of unit.declaredFunctions) if (f.name === name) return true;
-      for (const f of unit.localDeclaredFunctions) if (f.name === name) return true;
+      for (const list of [unit.definedFunctions, unit.staticFunctions]) {
+        for (const f of list) {
+          if (f.body && bagHas(f.body)) return true;
+          for (const sl of (f.staticLocals || [])) {
+            if (sl.initExpr && bagHas(sl.initExpr)) return true;
+          }
+        }
+      }
+      for (const v of unit.definedVariables) {
+        if (v.initExpr && bagHas(v.initExpr)) return true;
+      }
+      for (const [ename, decl] of unit.exportDirectives) {
+        if (ename === name || (decl && decl.name === name)) return true;
+      }
     }
     return false;
   };
 
   // Drain required sources to a fixed point; then fire any demand-linked
-  // sources whose symbol is wanted, and drain again — a fired source can
-  // require (or demand) further sources of its own.
+  // sources whose symbol is wanted (see demandSymbolWanted above — reference
+  // bags, all modes), and drain again — a fired source can require (or
+  // demand) further sources of its own.
   for (;;) {
   while (pendingRequiredSources.length > 0) {
     const name = pendingRequiredSources.shift();
@@ -41120,6 +41154,35 @@ function parseAllUnits(fs, pp, inputFiles, options) {
     fired = true;
   }
   if (!fired) break;
+  }
+
+  // A conditional declaration that never fired is WITHDRAWN. This linker
+  // demands a definition for every declaration that survives to link, and
+  // --no-fold / --no-undefined skip the per-TU tree-shake that prunes unused
+  // ones — a pre-existing property of those modes (any unused undefined
+  // declaration is a link error there; measured on base). A demand-linked
+  // header declaration must not become that dangling requirement in the very
+  // programs that don't use it, so __require_source_if owns its symbol's
+  // declaration lifecycle: not fired and not user-defined ⇒ the bodiless
+  // decls are dropped (exactly what the default-mode tree-shake would have
+  // done), and the non-referencing program compiles byte-identical in every
+  // mode. Referencing programs fired above; user definitions stand on their
+  // own and keep their decls.
+  for (const cs of conditionalSources) {
+    if (requiredSources.has(cs.source)) continue;
+    let userDefined = false;
+    for (const unit of units) {
+      for (const f of unit.definedFunctions) if (f.name === cs.symbol) userDefined = true;
+      for (const f of unit.importedFunctions) if (f.name === cs.symbol) userDefined = true;
+      for (const v of unit.definedVariables) if (v.name === cs.symbol) userDefined = true;
+    }
+    if (userDefined) continue;
+    for (const unit of units) {
+      unit.declaredFunctions = unit.declaredFunctions.filter((f) => f.name !== cs.symbol || f.body);
+      unit.localDeclaredFunctions = unit.localDeclaredFunctions.filter((f) => f.name !== cs.symbol || f.body);
+      unit.externVariables = unit.externVariables.filter((v) => v.name !== cs.symbol);
+      unit.localExternVariables = unit.localExternVariables.filter((v) => v.name !== cs.symbol);
+    }
   }
 
   if (hasErrors) {

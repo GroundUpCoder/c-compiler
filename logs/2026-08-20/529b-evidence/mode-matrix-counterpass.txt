@@ -1,0 +1,18 @@
+== #723 counter-pass mode matrix — tip-vs-base on tests/unit/sdl_get_ticks/main.c ==
+base compiler: git show 36e6a26f:compiler.js; tip: the working tree at the counter-pass fix
+default: base=18407 B tip=18407 B  cmp exit 0 (BYTE-IDENTICAL)
+--no-fold: base=22771 B tip=22771 B  cmp exit 0 (BYTE-IDENTICAL)
+--no-undefined: base=22116 B tip=22116 B  cmp exit 0 (BYTE-IDENTICAL)
+
+== pre-existing mode property (measured on the BASE compiler, no #723 code) ==
+$ printf 'int foo_never_defined(void);
+int main(void){return 0;}
+' > t.c
+$ node base-compiler.js --no-fold t.c
+Got 1 link errors.
+Link error: Undefined symbol 'foo_never_defined' during linking
+  at /tmp/t723c.c:1
+exit=1
+(same result under --no-undefined: these modes skip the per-TU tree-shake, so ANY
+ unused undefined declaration is a link error there — which is why the never-fired
+ conditional declaration must be WITHDRAWN, not merely left unlinked)

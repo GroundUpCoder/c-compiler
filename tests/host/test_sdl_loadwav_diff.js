@@ -153,11 +153,14 @@ check('red control: a perturbed error expectation fails', () => {
 });
 
 // The demand-link zero-byte witness (the #722 deadstrip pattern, B edition):
-// a no-LoadWAV SDL program must carry no decoder literal — under DEFAULT
-// flags — because the decoder TU was never even compiled in.
+// a no-LoadWAV SDL program must carry no decoder literal — in EVERY mode —
+// because the decoder TU was never even compiled in, and the never-fired
+// conditional declaration is WITHDRAWN before link (the counter-pass fix:
+// --no-fold / --no-undefined keep unreferenced decls and error on undefined
+// ones, a pre-existing property of those modes, so the withdrawal is what
+// keeps a non-referencing program compiling byte-identical there).
 const WAVE_LITERAL = 'Could not find RIFF or WAVE identifiers';
-check('a no-LoadWAV SDL program carries no decoder literal (TU not compiled)', () => {
-  const w = compile('noload', `
+const NOLOAD_SRC = `
 #include <SDL.h>
 #include <stdio.h>
 int main(void) {
@@ -166,13 +169,96 @@ int main(void) {
     SDL_Quit();
     return 0;
 }
-`);
-  const wasm = fs.readFileSync(w);
+`;
+check('a no-LoadWAV SDL program carries no decoder literal (TU not compiled)', () => {
+  const wasm = fs.readFileSync(compile('noload', NOLOAD_SRC));
   assert(!wasm.includes(Buffer.from(WAVE_LITERAL, 'utf8')), 'decoder literal leaked into a non-referencing program');
+});
+check('--no-fold: a no-LoadWAV SDL program still compiles clean of the decoder', () => {
+  const wasm = fs.readFileSync(compile('noload_nofold', NOLOAD_SRC, ['--no-fold']));
+  assert(!wasm.includes(Buffer.from(WAVE_LITERAL, 'utf8')), 'decoder literal leaked under --no-fold');
+});
+check('--no-undefined: a no-LoadWAV SDL program still compiles clean of the decoder', () => {
+  const wasm = fs.readFileSync(compile('noload_noundef', NOLOAD_SRC, ['--no-undefined']));
+  assert(!wasm.includes(Buffer.from(WAVE_LITERAL, 'utf8')), 'decoder literal leaked under --no-undefined');
+});
+check('--no-fold positive control: a REFERENCING program carries the decoder', () => {
+  const wasm = fs.readFileSync(compile('dumper_nofold', DUMPER, ['--no-fold']));
+  assert(wasm.includes(Buffer.from(WAVE_LITERAL, 'utf8')), 'demand link did not fire under --no-fold');
 });
 check('positive control: the referencing dumper really carries that literal', () => {
   const wasm = fs.readFileSync(dumperWasm);
   assert(wasm.includes(Buffer.from(WAVE_LITERAL, 'utf8')), 'probe literal not found (decoder rewording?)');
+});
+// Symbol-generality legs (counter-pass): __require_source_if keys on
+// VARIABLES exactly like functions, and every reference route the bag walk
+// claims is proven behaviorally against the real builtin TU.
+function run(wasmPath, args) {
+  return cp.execFileSync('node', [path.join(ROOT, 'host.js'), wasmPath].concat(args || []),
+                         { cwd: ROOT, encoding: 'utf8' });
+}
+check('a VARIABLE-keyed directive fires on an extern read (symbol-general)', () => {
+  // cd=-1 is the initializer inside __SDL_wave.c — printing it proves the
+  // demand fired and the TU linked (an unfired demand would be a loud
+  // undefined-symbol error here, never a silent 0). The decoder LITERAL is
+  // legitimately absent: no decoder function is live, so the dead-literal
+  // prune sheds it — the variable alone was wanted.
+  const w = compile('varfire', `
+#include <SDL.h>
+#include <stdio.h>
+__require_source_if("__sdl_wave_alloc_countdown", "__SDL_wave.c");
+extern int __sdl_wave_alloc_countdown;
+int main(void) { printf("cd=%d\\n", __sdl_wave_alloc_countdown); return 0; }
+`);
+  assert.strictEqual(run(w).trim(), 'cd=-1');
+});
+check('a user DEFINITION of the keyed variable suppresses the builtin', () => {
+  const w = compile('varsupp', `
+#include <SDL.h>
+#include <stdio.h>
+__require_source_if("__sdl_wave_alloc_countdown", "__SDL_wave.c");
+int __sdl_wave_alloc_countdown = 42;
+int main(void) { printf("cd=%d\\n", __sdl_wave_alloc_countdown); return 0; }
+`);
+  assert.strictEqual(run(w).trim(), 'cd=42');
+  assert(!fs.readFileSync(w).includes(Buffer.from(WAVE_LITERAL, 'utf8')), 'builtin linked over a user variable definition');
+});
+check('an address-taken-only reference in a global initializer fires', () => {
+  const w = compile('addrfire', `
+#include <SDL.h>
+bool (*g_loader)(const char *, SDL_AudioSpec *, Uint8 **, Uint32 *) = SDL_LoadWAV;
+int main(void) { return g_loader == 0; }
+`);
+  assert(fs.readFileSync(w).includes(Buffer.from(WAVE_LITERAL, 'utf8')), 'global-initializer reference did not fire');
+});
+check('a designated-initializer reference (EInitList) bubbles up and fires', () => {
+  const w = compile('initfire', `
+#include <SDL.h>
+struct ops { int tag; bool (*load)(const char *, SDL_AudioSpec *, Uint8 **, Uint32 *); };
+static struct ops O = { .load = SDL_LoadWAV };
+int main(void) { return O.load == 0; }
+`);
+  assert(fs.readFileSync(w).includes(Buffer.from(WAVE_LITERAL, 'utf8')), 'EInitList reference did not bubble to the bag');
+});
+check('default mode: a DEAD STATIC referencing SDL_LoadWAV does not fire (pruned first)', () => {
+  const w = compile('deadstatic', `
+#include <SDL.h>
+#include <stdio.h>
+static void never_used(void) { SDL_AudioSpec s; Uint8 *b; Uint32 n; SDL_LoadWAV("x", &s, &b, &n); }
+int main(void) { printf("ok\\n"); return 0; }
+`);
+  assert.strictEqual(run(w).trim(), 'ok');
+  assert(!fs.readFileSync(w).includes(Buffer.from(WAVE_LITERAL, 'utf8')), 'dead static over-linked the decoder');
+});
+check('an extern-linkage never-called function fires (conservative) but ships zero decoder bytes', () => {
+  const w = compile('deadextern', `
+#include <SDL.h>
+#include <stdio.h>
+void helper_never_called(void) { SDL_AudioSpec s; Uint8 *b; Uint32 n; SDL_LoadWAV("x", &s, &b, &n); }
+int main(void) { printf("ok\\n"); return 0; }
+`);
+  assert.strictEqual(run(w).trim(), 'ok');
+  assert(!fs.readFileSync(w).includes(Buffer.from(WAVE_LITERAL, 'utf8')), 'dead-literal prune failed to shed the conservatively-linked decoder');
 });
 check('a user definition of SDL_LoadWAV suppresses the builtin (no duplicate symbol)', () => {
   const w = compile('userdef', `
