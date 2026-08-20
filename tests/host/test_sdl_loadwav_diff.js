@@ -333,12 +333,11 @@ int main(void) { return 0; }
 `);
 });
 check('withdrawal keeps a STATIC forward declaration of the spelling (different symbol)', () => {
-  // Pins the end-to-end behavior (a static forward-decl program with the
-  // keyed spelling compiles + runs, no false fire). NB the keep-statics
-  // guard inside withdrawal is CONTRACTUAL, not behaviorally load-bearing:
-  // mutation M5 (guard removed) produces no observable failure under
-  // today's codegen in either mode — recorded in the mutation ledger, not
-  // claimed as covered by this leg.
+  // Pins the DEFINED-static end-to-end behavior (compiles + runs, no false
+  // fire). This leg cannot see the keep-statics guard itself — the later
+  // definition makes the guard unobservable here; the guard's load-bearing
+  // half (preserving the undefined-static diagnostic) is pinned by the
+  // p_m5_undef_static leg below (round-4 correction; mutation M5).
   compileAndRun('p_fwdstatic', PROBE('probe7') + `
 static int probe7(void);
 int main(void) { return probe7() - 7; }
@@ -366,6 +365,22 @@ int shadow_value10(void);
 int main(void) { return shadow_value10() - 7; }
 `], ['--no-fold']);
   run(w);
+});
+check('withdrawal must NOT swallow the undefined-static diagnostic (keep-statics guard)', () => {
+  // The round-4 pin, probe verbatim from the review: a static forward
+  // declaration of the keyed spelling that is NEVER defined. The guard
+  // keeps that decl through withdrawal, so the linker's real diagnostic
+  // survives; without the guard (mutation M5) the decl is withdrawn and the
+  // undefined internal function silently disappears (exit 0, wasm emitted).
+  // The discriminator is failure-with-'Undefined symbol' vs silent success —
+  // this is the leg the mutation ledger's original "M5 reddens nothing"
+  // claim was missing (both earlier probes supplied a definition).
+  const err = compileExpectFail('p_m5_undef_static', PROBE('probe_m5') + `
+static int probe_m5(void);      /* declared static, never defined */
+int main(void){ return 0; }
+`, ['--no-fold']);
+  assert(err.includes("Undefined symbol 'probe_m5'"), 'wrong failure: ' + err.slice(0, 200));
+  assert(!err.includes('unknown required source'), 'fired the demand instead of preserving the diagnostic');
 });
 check('cross-TU: a ROOTED static shadow in another TU does not ADMIT the source', () => {
   // The round-2 regression leg's shape under the ADMISSION oracle: the

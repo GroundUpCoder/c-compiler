@@ -341,7 +341,10 @@ what identity each uses now):
    the bare name — **deliberately conservative and loud**: an export
    surfaces an externally-visible symbol, so an unresolved one can only be
    satisfied by the demand source. A directive that resolved to a static
-   does NOT fire (the static satisfies the export internally).
+   does NOT fire (the static satisfies the export internally). The round-4
+   review established the no-decl fallback is currently UNREACHABLE
+   (`parseTokens` pushes an export directive only when lookup resolves a
+   DFunc) — it stays as declared defensive depth, not live surface.
 5. Withdrawal filters — `declaredFunctions`/`localDeclaredFunctions` by name
    with an explicit **keep-statics guard** (a static forward declaration of
    the spelling is a different symbol whose decl→definition pairing must
@@ -399,12 +402,34 @@ still not fire) and is now the one leg that pins node-identity matching —
 RED under M1, green on correct code. M2 (round-2 disease) reddens 3 legs,
 M3 (round-1 disease) 2 legs, M4 (withdrawal disabled) 4 legs, M6 (mechanism
 replaced by `return false`, the #718 vacuity analogue) 16 legs including the
-whole differential. M5 (the withdrawal keep-statics guard removed) reddens
-NOTHING — declared honestly: the guard is contractual (withdrawal must not
-remove declarations of a different symbol), not behaviorally load-bearing
-under today's codegen; probed by hand in both modes with a non-inlinable
-callee. Legs not mutation-broken are enumerated in the ledger rather than
-implied covered.
+whole differential. Legs not mutation-broken are enumerated in the ledger
+rather than implied covered.
+
+**Round-4 correction — the original M5 claim was WRONG.** This log (and the
+ledger) originally said M5 (the withdrawal keep-statics guard removed)
+reddens nothing and that the guard is "contractual, not behaviorally
+load-bearing / unpinnable-by-behavior". The round-4 review disproved it with
+a probe my selection missed: a static forward declaration of the keyed
+spelling that is **never defined**, compiled `--no-fold`. With the guard the
+linker's real diagnostic survives (`Undefined symbol 'probe_m5'`, no wasm);
+with M5 the declaration is withdrawn and the undefined internal function
+**silently disappears** (exit 0, wasm emitted). The guard is load-bearing —
+it preserves a compiler diagnostic — and M5 is directly pinnable. My two
+probes both supplied a later definition, which is precisely the input on
+which the guard is unobservable: the zero-red conclusion came from
+incomplete probe selection, not from the guard's nature. Pinned now by the
+`p_m5_undef_static` leg (probe verbatim from the review; RED verified under
+M5). The round-4 re-audit of the other "declared not proven" entries under
+the same lens converted two more to pinned — M7 (suppression dead → both
+user-definition suppression legs RED on duplicate definitions) and M8 (the
+alloc-injection seam disarmed inside the embedded TU → the unit sweep's
+pinned site counts collapse, RED) — leaving only two entries with
+principled coverage stories (the byte-witnesses delegate their byte half to
+#722's own pinned prune controls; the comparator red controls are
+self-testing by construction). Standing lesson, now general per the
+coordinator: **"unpinnable" carries the same evidentiary burden as
+"covered"** — it requires showing the discriminating probe does not exist,
+not that one's own probes did not fire.
 
 ## Suites run
 
