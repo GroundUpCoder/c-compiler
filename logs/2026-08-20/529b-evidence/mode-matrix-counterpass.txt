@@ -20,3 +20,8 @@ exit=1
 default: base=18407 B tip=18407 B  cmp exit 0 (BYTE-IDENTICAL)
 --no-fold: base=22771 B tip=22771 B  cmp exit 0 (BYTE-IDENTICAL)
 --no-undefined: base=22116 B tip=22116 B  cmp exit 0 (BYTE-IDENTICAL)
+
+== #723 third counter-pass mode matrix (same protocol) ==
+default: base=18407 B tip=18407 B  cmp exit 0 (BYTE-IDENTICAL)
+--no-fold: base=22771 B tip=22771 B  cmp exit 0 (BYTE-IDENTICAL)
+--no-undefined: base=22116 B tip=22116 B  cmp exit 0 (BYTE-IDENTICAL)

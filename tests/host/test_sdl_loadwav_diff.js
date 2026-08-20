@@ -240,7 +240,11 @@ int main(void) { return O.load == 0; }
 `);
   assert(fs.readFileSync(w).includes(Buffer.from(WAVE_LITERAL, 'utf8')), 'EInitList reference did not bubble to the bag');
 });
-check('default mode: a DEAD STATIC referencing SDL_LoadWAV does not fire (pruned first)', () => {
+// NB the two legs below assert RUNTIME OUTPUT + FINAL BYTES. Admission (did
+// the decoder TU get compiled at all?) is proven separately by the
+// missing-source probe legs above — a bytes check alone cannot distinguish
+// "never compiled" from "compiled then pruned".
+check('default mode: a dead static referencing SDL_LoadWAV ships no decoder bytes', () => {
   const w = compile('deadstatic', `
 #include <SDL.h>
 #include <stdio.h>
@@ -260,6 +264,124 @@ int main(void) { printf("ok\\n"); return 0; }
   assert.strictEqual(run(w).trim(), 'ok');
   assert(!fs.readFileSync(w).includes(Buffer.from(WAVE_LITERAL, 'utf8')), 'dead-literal prune failed to shed the conservatively-linked decoder');
 });
+// ---- SYMBOL-IDENTITY legs (third counter-pass) -----------------------------
+// The demand decision keys on EXTERNAL-LINKAGE SYMBOL IDENTITY, not spelling.
+// The INSTRUMENT here is source ADMISSION, not surviving bytes: each probe
+// keys a conditional on a deliberately MISSING source, so "unknown required
+// source missing_723_probe.c" is a loud, non-vacuous oracle for "the demand
+// FIRED" — dead-code/literal pruning can hide a wrongly-compiled TU from any
+// bytes-based check, but it cannot hide the admission error. (This is also
+// the standing positive control that the instrument itself works.)
+function compileExpectFail(name, source, flags) {
+  const c = path.join(tmp, name + '.c');
+  fs.writeFileSync(c, source);
+  try {
+    cp.execFileSync('node', [path.join(ROOT, 'compiler.js'), c, '-o', path.join(tmp, name + '.wasm')].concat(flags || []), { stdio: 'pipe' });
+  } catch (e) {
+    return (e.stderr || Buffer.alloc(0)).toString();
+  }
+  throw new Error(name + ': expected the compile to fail');
+}
+function compileAndRun(name, source, flags) {
+  return run(compile(name, source, flags));
+}
+const PROBE = (sym) => `__require_source_if("${sym}", "missing_723_probe.c");\n`;
+check('admission instrument works: an external reference FIRES, loudly', () => {
+  const err = compileExpectFail('p_extref', PROBE('probe4') + `
+int probe4(void);
+int main(void) { return probe4(); }
+`);
+  assert(err.includes('unknown required source missing_723_probe.c'), 'wrong failure: ' + err.slice(0, 200));
+});
+check('a live static VARIABLE of the spelling does NOT fire (round-3 repro)', () => {
+  compileAndRun('p_staticvar', PROBE('probe1') + `
+static int probe1 = 7;
+int getv(void) { return probe1; }
+int main(void) { return getv() - 7; }
+`);
+});
+check('a live static FUNCTION of the spelling does NOT fire', () => {
+  compileAndRun('p_staticfn', PROBE('probe2') + `
+static int probe2(void) { return 7; }
+int main(void) { return probe2() - 7; }
+`);
+});
+check('a block-scope LOCAL of the spelling does NOT fire (no linkage, no list)', () => {
+  compileAndRun('p_local', PROBE('probe3') + `
+int main(void) { int probe3 = 3; return probe3 - 3; }
+`);
+});
+check('a block-scope EXTERN declaration DOES fire (external linkage)', () => {
+  const err = compileExpectFail('p_localext', PROBE('probe8') + `
+int main(void) { extern int probe8; return probe8; }
+`);
+  assert(err.includes('unknown required source missing_723_probe.c'), 'wrong failure: ' + err.slice(0, 200));
+});
+check('ADMISSION proof: an extern-linkage never-called function fires (conservative)', () => {
+  const err = compileExpectFail('p_deadext', PROBE('probe5') + `
+int probe5(void);
+void helper_never_called(void) { probe5(); }
+int main(void) { return 0; }
+`);
+  assert(err.includes('unknown required source missing_723_probe.c'), 'wrong failure: ' + err.slice(0, 200));
+});
+check('ADMISSION proof: a dead STATIC does not fire in default mode (pruned first)', () => {
+  compileAndRun('p_deadstatic', PROBE('probe6') + `
+int probe6(void);
+static void never_used(void) { probe6(); }
+int main(void) { return 0; }
+`);
+});
+check('withdrawal keeps a STATIC forward declaration of the spelling (different symbol)', () => {
+  // Pins the end-to-end behavior (a static forward-decl program with the
+  // keyed spelling compiles + runs, no false fire). NB the keep-statics
+  // guard inside withdrawal is CONTRACTUAL, not behaviorally load-bearing:
+  // mutation M5 (guard removed) produces no observable failure under
+  // today's codegen in either mode — recorded in the mutation ledger, not
+  // claimed as covered by this leg.
+  compileAndRun('p_fwdstatic', PROBE('probe7') + `
+static int probe7(void);
+int main(void) { return probe7() - 7; }
+static int probe7(void) { return 7; }
+`);
+});
+check('IDENTITY, not spelling: a static ref does not fire even when an external decl of the name EXISTS', () => {
+  // The discriminating shape for node-identity matching: TU2 carries an
+  // UNREFERENCED external declaration of the spelling (so the external
+  // identity set is NON-empty — the ext-set-emptiness fast path cannot mask
+  // a spelling comparison), while TU1's rooted accessor references the
+  // internal static. Name-based matching fires the missing source here;
+  // identity-based matching must not (and withdrawal must clean TU2's
+  // dangling decl). Found by mutation M1 — the earlier probe legs all pass
+  // under a name-matching bagHas because their ext sets are empty. Compiled
+  // --no-fold so the unreferenced extern decl SURVIVES to the demand check
+  // (the default-mode per-TU prune would empty the ext set and mask the
+  // spelling comparison all over again).
+  const w = compileMulti('p_identity', [PROBE('probe10') + `
+static int probe10 = 7;
+int shadow_value10(void) { return probe10; }
+`, `
+extern int probe10;
+int shadow_value10(void);
+int main(void) { return shadow_value10() - 7; }
+`], ['--no-fold']);
+  run(w);
+});
+check('cross-TU: a ROOTED static shadow in another TU does not ADMIT the source', () => {
+  // The round-2 regression leg's shape under the ADMISSION oracle: the
+  // shadow's accessor is rooted (referenced from the other TU), so its body
+  // is walked — the reference must resolve to the internal static and never
+  // admit the conditional source. Compiles + runs = never fired.
+  const w = compileMulti('p_crosstu', [PROBE('probe9') + `
+static int probe9 = 7;
+int shadow_value(void) { return probe9; }
+`, `
+int shadow_value(void);
+int main(void) { return shadow_value() - 7; }
+`]);
+  run(w);
+});
+
 // Linkage legs (second counter-pass): an INTERNAL-linkage (`static`)
 // file-scope entity of the keyed spelling is a DIFFERENT symbol — it must
 // neither suppress the demand link (the reviewer's reproduction) nor block
@@ -296,6 +418,12 @@ int main(void) {
 }
 `;
 check('a static VARIABLE of the keyed spelling in another TU cannot suppress the demand', () => {
+  // Instrument scope: this leg pins SUPPRESSION, and link success IS the
+  // direct signal for that claim (a wrongly-suppressed demand is a loud
+  // Undefined-symbol failure here, which pruning cannot fake). The
+  // ADMISSION half of the same shape — the rooted static reference must not
+  // fire the source either — is pinned by the missing-source probe legs
+  // above (p_staticvar single-TU, p_crosstu cross-TU).
   const w = compileMulti('shadowvar', [STATIC_VAR_SHADOW, REAL_USER]);
   assert.strictEqual(run(w).trim(), 'ok len=100');
 });

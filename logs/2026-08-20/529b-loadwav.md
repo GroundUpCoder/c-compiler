@@ -297,6 +297,115 @@ first-counter-pass legs (and by extension the three new linkage legs) have
 not each been mutation-broken to prove red-control sensitivity. Not claimed
 proven.
 
+## Third counter-pass (re-review round 3: RED — the CLASS closed, not the instance)
+
+Round 3 found the mirror image of round 2: the **reference** side (`bagHas`)
+still matched by spelling, so a live reference to an internal `static` of the
+keyed spelling falsely FIRED the conditional source (compile cost paid; bytes
+hidden by the dead-literal prune — which is also why the bytes-based legs
+missed it). Rounds 1–3 were one disease: **the mechanism identified symbols
+by SPELLING where C identifies them by linkage.**
+
+**The class fix: external-linkage symbol identity throughout.** The parser's
+unit decl lists encode scope and linkage at construction (verified at the
+push sites, table in the code comment): `definedFunctions` /
+`staticFunctions` / `importedFunctions` / `externVariables` /
+`localExternVariables` are linkage-pure; `declaredFunctions` and
+`definedVariables` are MIXED (a `static int f(void);` forward decl lands in
+`declaredFunctions`; file-scope static objects land in `definedVariables`);
+**locals, params, and static locals are on NO list at all**. So
+`externalNodesNamed(X)` builds the set of AST decl nodes that DENOTE the
+external symbol X (mixed lists storage-class-guarded), and firing tests the
+reference bags by **node identity** against that set. A reference the parser
+resolved to an internal static, a static local, a parameter, or a block-scope
+auto can never fire, whatever it is spelled — the parser already did the
+scope resolution; the mechanism now respects it.
+
+**Every comparison site in the mechanism, enumerated** (the review's demand —
+what identity each uses now):
+
+1. `externalNodesNamed` — the ONLY spelling comparison left, used to BUILD
+   the identity set from linkage-known lists (explicit `storageClass !==
+   STATIC` guards on the two mixed lists; guards also on the pure lists
+   where a storage class exists, as drift-proofing). Never classifies a
+   reference.
+2. `bagHas` (firing) — **node identity** (`Set.has`) against
+   `externalNodesNamed(X)`. No names.
+3. `demandSymbolDefined` (suppression, shared with withdrawal) — names over
+   `definedFunctions` (external-pure by construction; guarded anyway),
+   `importedFunctions` (imports are external by nature — there is no static
+   import), and `definedVariables` (mixed; guarded). Linkage-sound.
+4. Export directives — fires on `ext.has(decl)` (identity). Two declared
+   fallbacks: a resolved decl not on any list fires on
+   name + non-static (defensive); a directive with NO resolved decl fires on
+   the bare name — **deliberately conservative and loud**: an export
+   surfaces an externally-visible symbol, so an unresolved one can only be
+   satisfied by the demand source. A directive that resolved to a static
+   does NOT fire (the static satisfies the export internally).
+5. Withdrawal filters — `declaredFunctions`/`localDeclaredFunctions` by name
+   with an explicit **keep-statics guard** (a static forward declaration of
+   the spelling is a different symbol whose decl→definition pairing must
+   survive — this was a live fourth instance found while closing the class,
+   pinned by the `fwd_static` leg); `externVariables`/`localExternVariables`
+   by name alone, which is identity-exact because those lists are
+   EXTERN-pure by construction.
+6. `conditionalSources` dedup and `requiredSources.has` — string comparisons
+   of directive ARGUMENTS and source names, not symbol resolution. No
+   linkage dimension exists there.
+
+No site relies on unstated list purity; the one bare-name site (export
+fallback, no decl) is declared and conservative-loud, never silent.
+
+**The instrument fix** (the review's second point): bytes-based legs cannot
+distinguish "never compiled" from "compiled then pruned". The suite now
+carries ADMISSION legs — each keys a conditional on a deliberately MISSING
+source, so `unknown required source missing_723_probe.c` is a loud oracle
+for "the demand fired". Eight probe legs: external ref fires (the
+instrument's own positive control), static var (round-3 repro) / static fn /
+block-scope local do NOT fire, block-scope `extern` DOES fire, dead
+extern-linkage fn fires (the conservative case, now PROVEN not claimed),
+dead static does not fire in default mode, and the static forward-decl
+pairing survives withdrawal. The bytes-based legs remain for the bytes half
+of the contract, renamed to claim only what they measure. 28 legs total.
+
+**Extra instances found and closed while sweeping the class** (not in the
+review): block-scope locals/params of the keyed spelling falsely fired
+(no linkage — now unreachable by construction), and withdrawal could strip a
+static forward declaration (see site 5).
+
+**The round-2 regression leg's instrument** (reviewer supplement): the
+`shadowvar` leg pins SUPPRESSION, and for that claim run-success is the
+direct signal (a wrongly-suppressed demand is a loud undefined-symbol
+failure, which pruning cannot fake) — its comment now says so. The ADMISSION
+half of the same shape is pinned by the missing-source probes: `p_staticvar`
+(single-TU) and the new `p_crosstu` (the exact cross-TU rooted-accessor
+shape under the admission oracle).
+
+**Corroborated independently by the re-review** (bounded "in the paths
+inspected", not exhaustive — recorded as such): `importedFunctions` is
+populated only with `StorageClass.IMPORT` DFuncs (supports
+import-is-external-by-nature), and no concrete wrong withdrawal of
+`externVariables`/`localExternVariables` was found.
+
+**Mutation-sensitivity campaign** (full ledger:
+`529b-evidence/mutation-ledger.txt`): six mutations, each reintroducing a
+defeated disease, run against the 31-leg suite with cmp-verified restores.
+M1 (name-based reference matching, the round-3 disease) initially produced
+**ZERO reds** — every probe leg's external-identity set is empty, so the
+ext-set-emptiness fast path masked the spelling comparison; the `p_identity`
+leg was added in response (unreferenced extern decl of the spelling keeps
+the set non-empty under `--no-fold`; rooted internal-static reference must
+still not fire) and is now the one leg that pins node-identity matching —
+RED under M1, green on correct code. M2 (round-2 disease) reddens 3 legs,
+M3 (round-1 disease) 2 legs, M4 (withdrawal disabled) 4 legs, M6 (mechanism
+replaced by `return false`, the #718 vacuity analogue) 16 legs including the
+whole differential. M5 (the withdrawal keep-statics guard removed) reddens
+NOTHING — declared honestly: the guard is contractual (withdrawal must not
+remove declarations of a different symbol), not behaviorally load-bearing
+under today's codegen; probed by hand in both modes with a non-inlinable
+callee. Legs not mutation-broken are enumerated in the ledger rather than
+implied covered.
+
 ## Suites run
 
 - At `5c10caa8` (pre-counter-pass tip): the coordinator's authoritative FULL

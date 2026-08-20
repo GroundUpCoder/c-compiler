@@ -14280,11 +14280,15 @@ function parseTokens(tokens, options) {
         continue;
       }
       // __require_source_if("symbol", "source.c") — a DEMAND-linked source
-      // (#723): the named source joins the TU set only when `symbol` — a
-      // FUNCTION or a VARIABLE — ends the require drain referenced by the
-      // program (AST reference bags) and defined nowhere in it (see
-      // parseAllUnits' demandSymbolWanted). The decision is independent of
-      // --no-fold / --no-undefined. This is what lets <SDL.h> declare
+      // (#723): the named source joins the TU set only when the program
+      // references the EXTERNAL-LINKAGE symbol of that name — function or
+      // variable — and defines it nowhere (see parseAllUnits'
+      // demandSymbolWanted: reference bags tested by node identity against
+      // the external-linkage decl set, so internal statics, locals, and
+      // params of the same spelling are different symbols and never
+      // participate). The decision is independent of --no-fold /
+      // --no-undefined, and a never-fired symbol's header declaration is
+      // withdrawn before link. This is what lets <SDL.h> declare
       // SDL_LoadWAV while a program that never references it pays ZERO
       // compile cost and zero wasm bytes for the ~74 KB decoder TU in EVERY
       // mode (#529-B "link shape") — the plain __require_source form
@@ -41050,74 +41054,113 @@ function parseAllUnits(fs, pp, inputFiles, options) {
     return { searched };
   };
 
-  // Whether a demand-linked symbol (__require_source_if) wants its source.
-  // The decision reads the AST REFERENCE BAGS (referencedFunctions /
-  // referencedVariables — the same on-demand pure-AST bags gcSectionsPass
-  // walks), NOT the post-tree-shake decl lists, so it is independent of
-  // --no-fold / --no-undefined and treats VARIABLES exactly like functions
-  // (#723 counter-pass; the decl-list form was function-only and degraded
-  // to always-link in those modes).
+  // ---- demand-linked sources key on EXTERNAL-LINKAGE SYMBOL IDENTITY ----
+  // (#723, third counter-pass.) Three review rounds established that every
+  // defect in this mechanism was one disease: comparing SPELLINGS where C
+  // compares SYMBOLS. The decision now keys on symbol identity throughout.
   //
-  // SUPPRESSED when any unit carries an EXTERNAL-LINKAGE definition (or
-  // import) of the name — functions AND variables: linking the builtin over
-  // a user definition would be a duplicate-symbol error. Internal-linkage
-  // (`static`) file-scope entities of the same spelling are DIFFERENT
-  // symbols and never suppress (see demandSymbolDefined below).
+  // The unit decl lists encode scope and linkage AT CONSTRUCTION (parser
+  // push sites, verified):
+  //   definedFunctions       function definitions, non-static   EXTERNAL pure
+  //   staticFunctions        static function definitions        INTERNAL pure
+  //   importedFunctions      __import declarations              EXTERNAL pure
+  //   declaredFunctions      bodiless FILE-SCOPE decls of ANY storage class —
+  //                          a `static int f(void);` forward decl lands here,
+  //                          so this list is MIXED and every traversal below
+  //                          carries an explicit storage-class guard
+  //   localDeclaredFunctions block-scope function decls (external linkage in
+  //                          C; guarded anyway so a future parser change
+  //                          cannot silently break this)
+  //   externVariables        file-scope `extern` decls           EXTERNAL pure
+  //   definedVariables       file-scope non-extern objects INCLUDING statics
+  //                          (the analogue of definedFunctions PLUS
+  //                          staticFunctions) — MIXED, guarded
+  //   localExternVariables   block-scope `extern` decls          EXTERNAL pure
+  //   staticLocals / params / block-scope autos — NO linkage, and on no list
+  //                          at all, so the set-identity test below can never
+  //                          reach them however they are spelled.
   //
-  // WANTED when the name is referenced from any potentially-live root: a
-  // defined or static function's body, a static local's initializer (the
-  // function-pointer-table path), a global initializer (address-taken and
-  // designated-initializer references, incl. EInitList), or an export
-  // directive (an export roots a definition). In default mode the per-TU
-  // tree-shake has already pruned dead STATICS from these lists, so dead
-  // TU-internal code cannot fire a link; an unreferenced EXTERN-LINKAGE
-  // function still can — its reference is real until the whole-program
-  // link decides its fate — which is conservative, and the dead-literal
-  // prune sheds the bytes if the function dies.
-  // EXTERNAL-LINKAGE definition/import test, shared by demand suppression and
-  // declaration withdrawal so the two sites cannot drift apart (#723 second
-  // counter-pass — they had already drifted into the same bug twice). A
-  // file-scope `static` has INTERNAL linkage: it cannot define, satisfy, or
-  // conflict with an external symbol of the same spelling in another TU, so
-  // it must neither suppress a demand link nor block a withdrawal. NB the
-  // VARIABLE lists are not split by linkage the way the function lists are:
-  // the parser routes only EXTERN declarations to externVariables, so
-  // definedVariables holds external AND static file-scope objects (it is the
-  // analogue of definedFunctions PLUS staticFunctions) — hence the explicit
-  // storage-class check here, where definedFunctions needs none (statics
-  // live in staticFunctions) and importedFunctions are external by nature.
-  const demandSymbolDefined = (name) => {
+  // externalNodesNamed(X) collects every AST decl node that DENOTES the
+  // external symbol X under those rules. This is the ONLY place a spelling
+  // comparison exists in the mechanism, and it is used to BUILD the identity
+  // set from linkage-known lists — never to classify a reference.
+  const externalNodesNamed = (name) => {
+    const S = Types.StorageClass.STATIC;
+    const set = new Set();
     for (const unit of units) {
-      for (const f of unit.definedFunctions) if (f.name === name) return true;
+      for (const f of unit.definedFunctions) if (f.name === name && f.storageClass !== S) set.add(f);
+      for (const f of unit.importedFunctions) if (f.name === name) set.add(f);
+      for (const f of unit.declaredFunctions) if (f.name === name && f.storageClass !== S) set.add(f);
+      for (const f of unit.localDeclaredFunctions) if (f.name === name && f.storageClass !== S) set.add(f);
+      for (const v of unit.definedVariables) if (v.name === name && v.storageClass !== S) set.add(v);
+      for (const v of unit.externVariables) if (v.name === name) set.add(v);
+      for (const v of unit.localExternVariables) if (v.name === name) set.add(v);
+    }
+    return set;
+  };
+
+  // SUPPRESSION: any unit carrying an external-linkage DEFINITION (or
+  // import) of the symbol means the builtin must not link — it would be a
+  // duplicate. Internal-linkage statics of the spelling are different
+  // symbols and never suppress. Shared with withdrawal below so the two
+  // sites cannot drift apart. (definedFunctions is external-pure by
+  // construction; the guard is uniformity + drift-proofing.)
+  const demandSymbolDefined = (name) => {
+    const S = Types.StorageClass.STATIC;
+    for (const unit of units) {
+      for (const f of unit.definedFunctions) if (f.name === name && f.storageClass !== S) return true;
       for (const f of unit.importedFunctions) if (f.name === name) return true;
       for (const v of unit.definedVariables) {
-        if (v.name === name && v.storageClass !== Types.StorageClass.STATIC) return true;
+        if (v.name === name && v.storageClass !== S) return true;
       }
     }
     return false;
   };
 
+  // FIRING: the symbol is wanted when a potentially-live root REFERENCES a
+  // node that denotes the external symbol — the reference bags are tested by
+  // NODE IDENTITY against externalNodesNamed(X), never by name, so a
+  // reference the parser resolved to an internal static, a static local, a
+  // parameter, or a block-scope auto of the same spelling can never fire.
+  // Roots: defined/static function bodies, static-local initializers
+  // (function-pointer tables), global initializers (address-taken and
+  // designated/EInitList references), and export directives. In default mode
+  // the per-TU tree-shake has pruned dead statics from these lists, so dead
+  // TU-internal code cannot fire; an unreferenced EXTERN-LINKAGE function
+  // still can — its reference is real until the whole-program link decides
+  // its fate — which is conservative, and the dead-literal prune sheds the
+  // bytes if the function dies. An export directive fires when its resolved
+  // decl denotes the external symbol; if it resolved to a static, that
+  // static satisfies the export internally (no fire). The bare-name fallback
+  // (no resolved decl on the directive) deliberately fires: an export
+  // surfaces an externally-visible symbol, so an unresolved one can only be
+  // satisfied by the demand source — conservative and loud, never silent.
   const demandSymbolWanted = (name) => {
+    if (demandSymbolDefined(name)) return false;
+    const ext = externalNodesNamed(name);
     const bagHas = (node) => {
-      for (const f of node.referencedFunctions) if (f.name === name) return true;
-      for (const v of node.referencedVariables) if (v.name === name) return true;
+      for (const f of node.referencedFunctions) if (ext.has(f)) return true;
+      for (const v of node.referencedVariables) if (ext.has(v)) return true;
       return false;
     };
-    if (demandSymbolDefined(name)) return false;
     for (const unit of units) {
-      for (const list of [unit.definedFunctions, unit.staticFunctions]) {
-        for (const f of list) {
-          if (f.body && bagHas(f.body)) return true;
-          for (const sl of (f.staticLocals || [])) {
-            if (sl.initExpr && bagHas(sl.initExpr)) return true;
+      if (ext.size > 0) {
+        for (const list of [unit.definedFunctions, unit.staticFunctions]) {
+          for (const f of list) {
+            if (f.body && bagHas(f.body)) return true;
+            for (const sl of (f.staticLocals || [])) {
+              if (sl.initExpr && bagHas(sl.initExpr)) return true;
+            }
           }
         }
-      }
-      for (const v of unit.definedVariables) {
-        if (v.initExpr && bagHas(v.initExpr)) return true;
+        for (const v of unit.definedVariables) {
+          if (v.initExpr && bagHas(v.initExpr)) return true;
+        }
       }
       for (const [ename, decl] of unit.exportDirectives) {
-        if (ename === name || (decl && decl.name === name)) return true;
+        if (decl
+            ? (ext.has(decl) || (decl.name === name && decl.storageClass !== Types.StorageClass.STATIC))
+            : ename === name) return true;
       }
     }
     return false;
@@ -41195,9 +41238,16 @@ function parseAllUnits(fs, pp, inputFiles, options) {
     // static of the keyed spelling is a different symbol — it neither
     // satisfies the declaration nor excuses leaving it dangling).
     if (demandSymbolDefined(cs.symbol)) continue;
+    // Withdrawal removes only declarations that DENOTE the external symbol:
+    // a `static` forward declaration of the same spelling (declaredFunctions
+    // is mixed — see the list table above) belongs to a different, internal
+    // symbol whose definition pairing must survive. externVariables /
+    // localExternVariables are EXTERN-pure by construction, so the name
+    // filter on them is already identity-exact.
+    const S = Types.StorageClass.STATIC;
     for (const unit of units) {
-      unit.declaredFunctions = unit.declaredFunctions.filter((f) => f.name !== cs.symbol || f.body);
-      unit.localDeclaredFunctions = unit.localDeclaredFunctions.filter((f) => f.name !== cs.symbol || f.body);
+      unit.declaredFunctions = unit.declaredFunctions.filter((f) => f.name !== cs.symbol || f.body || f.storageClass === S);
+      unit.localDeclaredFunctions = unit.localDeclaredFunctions.filter((f) => f.name !== cs.symbol || f.body || f.storageClass === S);
       unit.externVariables = unit.externVariables.filter((v) => v.name !== cs.symbol);
       unit.localExternVariables = unit.localExternVariables.filter((v) => v.name !== cs.symbol);
     }

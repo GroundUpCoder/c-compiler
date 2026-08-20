@@ -1,0 +1,55 @@
+== #723 mutation-sensitivity ledger (third counter-pass) ==
+Protocol: apply ONE mutation to compiler.js's demand-link mechanism, run
+tests/host/test_sdl_loadwav_diff.js (31 legs), record which legs go RED,
+restore (cmp-verified against the pre-mutation copy). A leg that no mutation
+can redden is recorded as such, not claimed as coverage.
+
+M1  bagHas reverts to NAME matching (the round-3 disease):
+      RED: "IDENTITY, not spelling: a static ref does not fire even when an
+            external decl of the name EXISTS"  (1 leg)
+    NOTE: the first campaign run of M1 produced ZERO reds — every earlier
+    probe leg has an EMPTY external-identity set, so the ext.size fast path
+    (a legitimate layer of the same semantics) masked the spelling
+    comparison. The p_identity leg was ADDED in response: unreferenced
+    extern decl of the spelling in TU2 (non-empty ext set, --no-fold so the
+    per-TU prune cannot empty it) + rooted internal-static reference in TU1.
+    This is the only leg that pins the node-identity comparison itself.
+
+M2  demandSymbolDefined drops the static guard on definedVariables (the
+    round-2 disease):
+      RED: p_identity; "a static VARIABLE ... cannot suppress the demand";
+           "a static shadow cannot block WITHDRAWAL either"  (3 legs)
+
+M3  bagHas ignores variable references (the round-1 disease, function-only):
+      RED: "a VARIABLE-keyed directive fires on an extern read";
+           "a block-scope EXTERN declaration DOES fire"  (2 legs)
+
+M4  declaration withdrawal disabled entirely:
+      RED: "--no-fold: a no-LoadWAV SDL program still compiles clean";
+           "--no-undefined: ... compiles clean"; p_identity;
+           "a static shadow cannot block WITHDRAWAL either"  (4 legs)
+
+M5  withdrawal keep-statics guard removed (the fourth-instance defense):
+      RED: none.  DECLARED HONESTLY: withdrawing a bodiless static forward
+      declaration produced NO observable failure in default OR --no-fold
+      mode, with both a trivial and a non-inlinable callee (probed by hand
+      beyond the suite). The guard is CONTRACTUAL — withdrawal's contract is
+      "remove only declarations that denote the external symbol", and a
+      static forward decl does not — rather than behaviorally load-bearing
+      under today's codegen. p_fwdstatic pins the end-to-end program
+      behavior but cannot distinguish this guard. Unpinnable-by-behavior at
+      present; not claimed as covered.
+
+M6  demandSymbolWanted replaced by `return false` (the #718 'if (0)'
+    vacuity analogue — the mechanism dead):
+      RED: 16 legs, including the entire 92-fixture differential (the
+      dumper no longer compiles), every positive control, every firing
+      probe, and both static-shadow suppression legs. The suite is not
+      vacuous wholesale.
+
+Legs deliberately NOT mutation-broken (declared, per the honesty rule):
+  the byte-witness legs (default/no-decoder-literal shapes), the alloc-
+  injection sweep in tests/unit/sdl_load_wav, varsupp/user-definition
+  suppression legs (their failure mode — wrongly linking the builtin —
+  is M2-adjacent but the exact double-definition shape was not separately
+  mutated), and the comparator red controls (self-testing by design).
