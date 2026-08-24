@@ -6,8 +6,11 @@ const r=driveBoot([
  'printf "one\\ntwo\\n" > /root/other.c','printf "literal-colon\\n" > "/root/colon:name.c"',
  'sedit /root/game.c:3 &','wmctl wait label EDIT:0 12000','echo ==tree','wmctl tree','echo ==cut',
  'SID=$(wmctl list | grep "Source Editor$" | sed "s/[^0-9].*//")','wmctl key $SID 9 102 64','wmctl wait label "Find text:" 8000','echo ==findtree','wmctl tree','echo ==cut','wmctl click Cancel',
- 'wmctl key $SID 9 103 64','for i in $(seq 1 80); do wmctl tree | grep -q "Line, FILE:LINE, or one cc diagnostic:" && break; sleep 0.1; done','wmctl settext EDIT:1 "/root/missing.c:8"','wmctl click Go','wmctl click OK','echo ==after-missing','wmctl gettext EDIT:0','wmctl gettext msctls_statusbar32:0','echo ==cut',
- 'wmctl key $SID 9 103 64','for i in $(seq 1 80); do wmctl tree | grep -q "Line, FILE:LINE, or one cc diagnostic:" && break; sleep 0.1; done','wmctl settext EDIT:1 "/root/other.c:9"','wmctl click Go','wmctl click OK','echo ==after-eof','wmctl gettext EDIT:0','wmctl gettext msctls_statusbar32:0','echo ==cut',
+ // The waits on the error boxes are load-bearing: before the BN_CLICKED
+ // dialog fix, settext's EN_CHANGE cancel-closed the dialog, Go clicked
+ // nothing, and these legs' unchanged-document asserts passed vacuously.
+ 'wmctl key $SID 9 103 64','for i in $(seq 1 80); do wmctl tree | grep -q "Line, FILE:LINE, or one cc diagnostic:" && break; sleep 0.1; done','wmctl settext EDIT:1 "/root/missing.c:8"','wmctl click Go',"wmctl wait label \"Cannot open location '/root/missing.c': No such file or directory\" 8000",'wmctl click OK','echo ==after-missing','wmctl gettext EDIT:0','wmctl gettext msctls_statusbar32:0','echo ==cut',
+ 'wmctl key $SID 9 103 64','for i in $(seq 1 80); do wmctl tree | grep -q "Line, FILE:LINE, or one cc diagnostic:" && break; sleep 0.1; done','wmctl settext EDIT:1 "/root/other.c:9"','wmctl click Go','wmctl wait label "location line 9 exceeds 3" 8000','wmctl click OK','echo ==after-eof','wmctl gettext EDIT:0','wmctl gettext msctls_statusbar32:0','echo ==cut',
  'wmctl gettext msctls_statusbar32:0','wmctl settext EDIT:0 "int main(void) { return 1; }"','wmctl click Save',
  'for i in $(seq 1 40); do grep -q "return 1" /root/game.c && break; sleep 0.05; done','echo ==file','cat /root/game.c','echo ==cut',
  'echo ==assoc','grep -E "^(c|h|default.gui|default.term)" /usr/share/openwith','echo ==cut',
