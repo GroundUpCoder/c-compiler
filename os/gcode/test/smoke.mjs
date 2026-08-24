@@ -1501,6 +1501,306 @@ async function main() {
     }
   }
 
+  // ---- test 15 (#670): read_image — real pixels in front of the model ----
+  // The #508 Pass B r2 finding: pixel statistics are mirror-invariant, so a
+  // game shipped with every glyph mirrored as "HUD confirmed". read_image
+  // transports a file's EXACT bytes as an image content block; these legs pin
+  // the transport (byte-exact base64, media type by magic), the capability
+  // gate, the honest refusals, and the strip-and-retry belt for providers
+  // that reject images. The transport legs are the verification-independence
+  // contract: the tool must never transform pixels, only carry them.
+  {
+    // minimal PNG writer (real zlib IDAT — the bytes must round-trip, and a
+    // hand-faked IDAT would still round-trip; what matters is the header is
+    // REAL so the sniff reads real dimensions)
+    const zlib = await import('node:zlib');
+    const crc32 = (buf) => {
+      let c; const table = [];
+      for (let n = 0; n < 256; n++) {
+        c = n;
+        for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+        table[n] = c >>> 0;
+      }
+      let crc = 0xFFFFFFFF;
+      for (const b of buf) crc = table[(crc ^ b) & 0xFF] ^ (crc >>> 8);
+      return (crc ^ 0xFFFFFFFF) >>> 0;
+    };
+    const chunk = (type, data) => {
+      const t = Buffer.from(type, 'ascii');
+      const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+      const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(Buffer.concat([t, data])));
+      return Buffer.concat([len, t, data, crc]);
+    };
+    const mkpng = (w, h) => {
+      const ihdr = Buffer.alloc(13);
+      ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4);
+      ihdr[8] = 8; ihdr[9] = 6;                       // 8-bit RGBA
+      const raw = Buffer.alloc(h * (1 + w * 4));
+      for (let y = 0; y < h; y++)
+        for (let x = 0; x < w; x++)
+          Buffer.from([255, 0, 0, 255]).copy(raw, y * (1 + w * 4) + 1 + x * 4);
+      return Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+        chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+    };
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gcode-670-'));
+    const pngPath = path.join(tmp, 'shot.png');
+    const pngBytes = mkpng(16, 8);
+    fs.writeFileSync(pngPath, pngBytes);
+    const lastToolResult = (body) => {
+      const m = body.messages[body.messages.length - 1];
+      return Array.isArray(m.content) ? m.content.find((b) => b.type === 'tool_result') : null;
+    };
+    const hasReadImage = (body) => (body.tools || []).some((t) => t.name === 'read_image');
+
+    // -- leg A: byte-exact transport + block shape (the core contract) ------
+    {
+      const srv = await startServer([
+        toolUseResponse('looking', 'toolu_670a', 'read_image', { path: pngPath }),
+        textResponse('I looked at it.'),
+      ]);
+      const { stderr } = await runCodeBoth(srv.url, ['-p', 'look at the shot', '--no-color', '--no-persist']);
+      srv.close();
+      check(hasReadImage(srv.bodies[0]), '#670: read_image is offered on the (vision) default model');
+      check(!/read_image.*disabled|does not support image input/.test(stderr),
+        '#670: no disabled-vision note on a vision model');
+      const tr = lastToolResult(srv.bodies[1]);
+      check(!!tr && tr.tool_use_id === 'toolu_670a' && Array.isArray(tr.content),
+        '#670: the image tool_result content is a block ARRAY');
+      const img = tr && Array.isArray(tr.content) ? tr.content[0] : null;
+      check(!!img && img.type === 'image' && img.source?.type === 'base64'
+        && img.source?.media_type === 'image/png',
+        '#670: image block shape — type/source/base64/media_type');
+      check(!!img && Buffer.from(img.source.data, 'base64').equals(pngBytes),
+        '#670: the base64 decodes to the EXACT file bytes (no transform, no re-encode)');
+      const capText = tr && Array.isArray(tr.content) ? tr.content[1] : null;
+      check(!!capText && capText.type === 'text' && capText.text.includes('16x8')
+        && capText.text.includes(`${pngBytes.length} bytes`),
+        '#670: the caption text block names dimensions and byte count');
+    }
+
+    // -- leg B: media type comes from the MAGIC, never the file name --------
+    {
+      const fakePng = path.join(tmp, 'liar.png');
+      // a JPEG header (SOI + APP0 + SOF0 500x800) wearing a .png name
+      fs.writeFileSync(fakePng, Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x04, 0, 0,
+        0xFF, 0xC0, 0x00, 0x0B, 8, 0x01, 0xF4, 0x03, 0x20, 1, 0, 0, 0]));
+      const srv = await startServer([
+        toolUseResponse('looking', 'toolu_670b', 'read_image', { path: fakePng }),
+        textResponse('ok.'),
+      ]);
+      await runCode(srv.url, ['-p', 'look', '--no-color', '--no-persist']);
+      srv.close();
+      const img = lastToolResult(srv.bodies[1])?.content?.[0];
+      check(!!img && img.source?.media_type === 'image/jpeg',
+        '#670: a JPEG named .png is sent as image/jpeg (content decides, not the name)');
+    }
+
+    // -- leg C: honest refusals, each a STRING result naming the reason -----
+    {
+      const textFile = path.join(tmp, 'notes.txt');
+      fs.writeFileSync(textFile, 'just text\n');
+      const hugePng = path.join(tmp, 'huge.png');       // header claims 9000 px
+      const hugeIhdr = Buffer.alloc(13);
+      hugeIhdr.writeUInt32BE(9000, 0); hugeIhdr.writeUInt32BE(10, 4);
+      hugeIhdr[8] = 8; hugeIhdr[9] = 6;
+      fs.writeFileSync(hugePng, Buffer.concat([
+        Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), chunk('IHDR', hugeIhdr)]));
+      const fatPng = path.join(tmp, 'fat.png');         // over the byte cap
+      fs.writeFileSync(fatPng, Buffer.concat([pngBytes, Buffer.alloc(4 * 1024 * 1024)]));
+      const srv = await startServer([
+        toolUseResponse('a', 'toolu_670c1', 'read_image', { path: textFile }),
+        toolUseResponse('b', 'toolu_670c2', 'read_image', { path: path.join(tmp, 'absent.png') }),
+        toolUseResponse('c', 'toolu_670c3', 'read_image', { path: hugePng }),
+        toolUseResponse('d', 'toolu_670c4', 'read_image', { path: fatPng }),
+        textResponse('done refusing.'),
+      ]);
+      await runCode(srv.url, ['-p', 'try them', '--no-color', '--no-persist']);
+      srv.close();
+      const trOf = (i) => lastToolResult(srv.bodies[i]);
+      check(typeof trOf(1)?.content === 'string' && trOf(1).content.includes('not a recognized image'),
+        '#670: a non-image refuses by content sniff (string result, no image block)');
+      check(typeof trOf(2)?.content === 'string' && trOf(2).content.startsWith('error: cannot open'),
+        '#670: a missing file errors with errno');
+      check(typeof trOf(3)?.content === 'string' && /9000x10.*8000/.test(trOf(3).content),
+        '#670: an over-dimension image refuses naming its size and the limit');
+      check(typeof trOf(4)?.content === 'string' && /larger than the \d+-byte cap/.test(trOf(4).content)
+        && trOf(4).content.includes('wmctl shot'),
+        '#670: an oversize image refuses naming the cap and the region-crop fix');
+      fs.rmSync(fatPng, { force: true });
+    }
+
+    // -- leg D: the capability gate (table + GCODE_VISION override) ---------
+    {
+      // deepseek: measured no-vision (images silently swallowed server-side)
+      let srv = await startServer([textResponse('hi.')]);
+      let r = await runCodeBoth(srv.url, ['-p', 'hi', '--no-color', '--no-persist',
+        '--model', 'deepseek-v4-flash']);
+      srv.close();
+      check(!hasReadImage(srv.bodies[0]), '#670: deepseek gets NO read_image tool');
+      check(r.stderr.includes('does not support image input'),
+        '#670: the disabled gate is LOUD at startup (deepseek)');
+      // read_file on an image under a blind model says so honestly
+      srv = await startServer([
+        toolUseResponse('r', 'toolu_670d1', 'read_file', { path: pngPath }),
+        textResponse('understood.'),
+      ]);
+      await runCode(srv.url, ['-p', 'read the png', '--no-color', '--no-persist',
+        '--model', 'deepseek-v4-flash']);
+      srv.close();
+      const tr = lastToolResult(srv.bodies[1]);
+      check(typeof tr?.content === 'string' && tr.content.includes('cannot show it')
+        && tr.content.includes('statistics'),
+        '#670: read_file on an image under a blind model says it cannot see (no statistics substitute)');
+      // GCODE_VISION=1 forces the tool on (the wrong-table escape hatch)
+      srv = await startServer([textResponse('hi.')]);
+      await runCode(srv.url, ['-p', 'hi', '--no-color', '--no-persist',
+        '--model', 'deepseek-v4-flash'], { GCODE_VISION: '1' });
+      srv.close();
+      check(hasReadImage(srv.bodies[0]), '#670: GCODE_VISION=1 forces read_image on');
+      // GCODE_VISION=0 forces it off, loudly, even on a vision model
+      srv = await startServer([textResponse('hi.')]);
+      r = await runCodeBoth(srv.url, ['-p', 'hi', '--no-color', '--no-persist'], { GCODE_VISION: '0' });
+      srv.close();
+      check(!hasReadImage(srv.bodies[0]) && r.stderr.includes('GCODE_VISION=0'),
+        '#670: GCODE_VISION=0 forces read_image off, loudly');
+      // an unknown model defaults off with the enable hint
+      srv = await startServer([textResponse('hi.')]);
+      r = await runCodeBoth(srv.url, ['-p', 'hi', '--no-color', '--no-persist',
+        '--model', 'mystery-9']);
+      srv.close();
+      check(!hasReadImage(srv.bodies[0]) && r.stderr.includes('not known to support image input'),
+        '#670: an unknown model defaults off with the GCODE_VISION=1 hint');
+      // a model that names the tool anyway (or a resumed session) is refused
+      srv = await startServer([
+        toolUseResponse('sneaky', 'toolu_670d2', 'read_image', { path: pngPath }),
+        textResponse('ok.'),
+      ]);
+      await runCode(srv.url, ['-p', 'look', '--no-color', '--no-persist',
+        '--model', 'deepseek-v4-flash']);
+      srv.close();
+      const tr2 = lastToolResult(srv.bodies[1]);
+      check(typeof tr2?.content === 'string' && tr2.content.includes('read_image is disabled'),
+        '#670: a gated-off read_image call is refused as a string, never an image block');
+    }
+
+    // -- leg E: read_file on an image redirects to read_image (vision on) ---
+    {
+      const srv = await startServer([
+        toolUseResponse('r', 'toolu_670e', 'read_file', { path: pngPath }),
+        textResponse('redirected.'),
+      ]);
+      await runCode(srv.url, ['-p', 'read the png', '--no-color', '--no-persist']);
+      srv.close();
+      const tr = lastToolResult(srv.bodies[1]);
+      check(typeof tr?.content === 'string' && tr.content.includes('image/png')
+        && tr.content.includes('read_image'),
+        '#670: read_file on an image redirects to read_image by content sniff');
+    }
+
+    // -- leg F: an image round persists and --resume replays it intact ------
+    {
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gcode-670f-'));
+      let srv = await startServer([
+        toolUseResponse('looking', 'toolu_670f', 'read_image', { path: pngPath }),
+        textResponse('seen.'),
+      ]);
+      await runCode(srv.url, ['-p', 'look', '--no-color'], { GCODE_STATE_DIR: stateDir });
+      srv.close();
+      const sessDir = path.join(stateDir, 'sessions');
+      const logFile = fs.readdirSync(sessDir).filter((f) => f.endsWith('.jsonl'))[0];
+      srv = await startServer([textResponse('resumed.')]);
+      const { stderr } = await runCodeBoth(srv.url,
+        ['--resume', path.join(sessDir, logFile), '-p', 'go on', '--no-color'],
+        { GCODE_STATE_DIR: stateDir });
+      srv.close();
+      const sent = srv.bodies[0] ? srv.bodies[0].messages : [];
+      const rtr = sent.flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+        .find((b) => b.type === 'tool_result' && b.tool_use_id === 'toolu_670f');
+      check(!!rtr && Array.isArray(rtr.content)
+        && Buffer.from(rtr.content[0]?.source?.data ?? '', 'base64').equals(pngBytes),
+        '#670: --resume replays the image block byte-identical');
+      check(!/session repaired|tool_result\(s\)/.test(stderr),
+        '#670: the resumed image round needs no repair (structurally valid history)');
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+
+    // -- leg G: compaction folds an image round to its caption --------------
+    // The #467 leg-A numbers with the image as round 1: the fold must drop
+    // the base64 payload and keep the caption line in the summary.
+    {
+      const usageToolNamed = (id, name, input, usage) =>
+        sse('message_start', { message: { id: `msg_${id}`, model: 'compact-model', usage: { input_tokens: 5, output_tokens: 0 } } })
+        + sse('content_block_start', { index: 0, content_block: { type: 'tool_use', id, name, input: {} } })
+        + sse('content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } })
+        + sse('content_block_stop', { index: 0 })
+        + sse('message_delta', { delta: { stop_reason: 'tool_use' }, usage })
+        + sse('message_stop', {});
+      const srv = await startServer([
+        usageToolNamed('t670g1', 'read_image', { path: pngPath },
+          { output_tokens: 2, input_tokens: 300, cache_read_input_tokens: 200 }),
+        usageToolNamed('t670g2', 'bash', { command: 'true' },
+          { output_tokens: 2, input_tokens: 200, cache_creation_input_tokens: 300, cache_read_input_tokens: 15800 }),
+        usageToolNamed('t670g3', 'bash', { command: 'true' },
+          { output_tokens: 2, input_tokens: 400, cache_read_input_tokens: 100 }),
+        textResponse('compacted past the image.'),
+      ]);
+      const imageData = pngBytes.toString('base64');
+      await runCodeBoth(srv.url, ['-p', 'long visual session', '--no-color', '--no-persist',
+        '--max-tokens', '2000'], { GCODE_CONTEXT_TOKENS: '20000' });
+      srv.close();
+      check(srv.bodies.length === 4, `#670: the compaction session ran all 4 rounds (${srv.bodies.length})`);
+      const sent = JSON.stringify(srv.bodies[2] ? srv.bodies[2].messages : []);
+      check(srv.bodies[1] && JSON.stringify(srv.bodies[1].messages).includes(imageData),
+        '#670: round 2 still carried the image payload');
+      check(sent.includes('[gcode: compacted history]') && !sent.includes(imageData),
+        '#670: the fold DROPS the base64 payload');
+      // NB the caption must be pinned by its ": media WxH" tail — the summary's
+      // "tool: read_image PATH" line already contains the substring
+      // "image PATH", so a path-only check is vacuous (caught by mutation).
+      check(sent.includes(`${pngPath}: image/png 16x8`) && !sent.includes('t670g1'),
+        '#670: the folded image round leaves its caption in the summary');
+    }
+
+    // -- leg H: a provider that REJECTS images -> strip and retry once ------
+    // (the belt; the DeepSeek measurement shows the silent-swallow case that
+    // only the gate can catch, so leg D is the primary defense)
+    {
+      const srv = await startServer([
+        toolUseResponse('looking', 'toolu_670h', 'read_image', { path: pngPath }),
+        { status: 400, body: '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0.image: this model does not support image input"}}' },
+        textResponse('recovered without the image.'),
+      ]);
+      const { stdout, stderr } = await runCodeBoth(srv.url,
+        ['-p', 'look then continue', '--no-color', '--no-persist'], { GCODE_VISION: '1' });
+      srv.close();
+      check(srv.bodies.length === 3, `#670: the image rejection retried exactly once (${srv.bodies.length} requests)`);
+      const rejected = JSON.stringify(srv.bodies[1] ? srv.bodies[1].messages : []);
+      const retried = JSON.stringify(srv.bodies[2] ? srv.bodies[2].messages : []);
+      check(rejected.includes('"image"'), '#670: the rejected request really carried the image');
+      check(!retried.includes('"type":"image"') && retried.includes('provider rejected image input'),
+        '#670: the retry carries the loud marker instead of the image');
+      check(stderr.includes('removed 1 image'), '#670: the strip says what it removed');
+      check(stdout.includes('recovered without the image.'),
+        '#670: the session SURVIVES the image rejection');
+    }
+
+    // -- leg H negative control: a 400 without image wording never strips ---
+    {
+      const srv = await startServer([
+        toolUseResponse('looking', 'toolu_670i', 'read_image', { path: pngPath }),
+        { status: 400, body: '{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: invalid value"}}' },
+      ]);
+      const { stderr } = await runCodeBoth(srv.url,
+        ['-p', 'look', '--no-color', '--no-persist']);
+      srv.close();
+      check(srv.bodies.length === 2, `#670 negative control: no strip-retry on an unrelated 400 (${srv.bodies.length} requests)`);
+      check(stderr.includes('retrying cannot succeed') && !stderr.includes('removed 1 image'),
+        '#670 negative control: the permanent verdict is unchanged, the images stay');
+    }
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+
   console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILURE(S)`);
   process.exit(failures === 0 ? 0 : 1);
 }
