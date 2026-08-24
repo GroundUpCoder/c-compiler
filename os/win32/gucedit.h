@@ -55,6 +55,12 @@ typedef struct GUCEDIT_MARK_PLAN {
     int x0, x1, top, bottom, underline_y;
     uint32_t color, flags;
 } GUCEDIT_MARK_PLAN;
+/* EN_CHANGE generation step: advance only on an exact byte change against
+ * the last-notified bytes (last, *last_len; capacity >= cur_len is the
+ * caller's invariant). Generations are nonzero — the advance skips 0. */
+uint32_t gucedit_generation_advance(uint32_t generation, const char *cur,
+                                    uint32_t cur_len, char *last,
+                                    uint32_t *last_len);
 int gucedit_tab_advance(int x, int tab_width);
 int gucedit_mark_plan(const GUCEDIT_STYLE_V1 *style, int selected,
                       uint32_t highlight_text, int x0, int x1, int y,

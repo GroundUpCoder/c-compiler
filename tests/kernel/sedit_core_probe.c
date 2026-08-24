@@ -29,6 +29,9 @@ static void ref_scan(const char*s,size_t n,Ref*r){memset(r,0,sizeof* r);struct{s
  * and words inside a block comment are treated as live source. */
 static void broken_scan_no_block_comments(const char*s,size_t n,Ref*r){memset(r,0,sizeof* r);struct{size_t at;char close;}st[1024];size_t ns=0;for(size_t i=0;i<n;){unsigned char c=s[i];if(c=='"'||c=='\''){char q=(char)c;size_t a=i++;int esc=0;while(i<n&&s[i]!='\n'){char z=s[i++];if(esc){esc=0;continue;}if(z=='\\'){esc=1;continue;}if(z==q)break;}rt(r,a,i,q=='"'?SEDIT_T_STRING:SEDIT_T_CHAR);continue;}if(isalpha(c)||c=='_'||c>=0x80){size_t a=i++;while(i<n&&((unsigned char)s[i]>=0x80||isalnum((unsigned char)s[i])||s[i]=='_'))i++;int k;if(ref_word(s+a,i-a,&k))rt(r,a,i,k);continue;}int close=ropen((char)c);if(close){st[ns].at=i;st[ns].close=(char)close;ns++;rt(r,i,i+1,SEDIT_T_PUNCT);i++;continue;}if(c==')'||c==']'||c=='}'){if(ns&&st[ns-1].close==(char)c){size_t a=st[--ns].at;r->p[r->np++]=(SeditPair){(uint32_t)a,(uint32_t)i,0};r->p[r->np++]=(SeditPair){(uint32_t)i,(uint32_t)a,0};}else r->p[r->np++]=(SeditPair){(uint32_t)i,(uint32_t)i,1};rt(r,i,i+1,SEDIT_T_PUNCT);i++;continue;}i++;}while(ns){size_t a=st[--ns].at;r->p[r->np++]=(SeditPair){(uint32_t)a,(uint32_t)a,1};}}
 static int lex_ref_equal(const SeditLexer*l,const Ref*r){return l->token_count==r->nt&&l->pair_count==r->np&&!memcmp(l->tokens,r->t,r->nt*sizeof*r->t)&&!memcmp(l->pairs,r->p,r->np*sizeof*r->p);}
+/* Injected turn clock (#729): counts calls, steps a fixed amount per call. */
+typedef struct { long long t, step; int calls; } FakeClock;
+static long long fake_now(void*p){FakeClock*c=(FakeClock*)p;c->calls++;long long v=c->t;c->t+=c->step;return v;}
 static int check_all_splits(const char*s,size_t n,const Ref*r){for(size_t cut=0;cut<=n;cut++){SeditLexer q;sedit_lex_init(&q);int ok=sedit_lex_feed(&q,s,cut)&&sedit_lex_feed(&q,s+cut,n-cut)&&sedit_lex_finish(&q)&&lex_ref_equal(&q,r);sedit_lex_free(&q);if(!ok)return 0;}return 1;}
 #ifdef SEDIT_TEST
 static int fault,eintr_once,unlinks,stat_calls,hash_calls;
@@ -85,6 +88,26 @@ int main(int argc,char**argv){
   OK("over-limit batch built",bb!=NULL);
   OK("over-limit batch truncates honestly at the ABI style cap",bb&&tr==1&&bb->count==GUCEDIT_MAX_STYLES&&gucedit_check_batch(bb,ts,(uint32_t)tn,11)==GUCEDIT_CHECK_OK);
   free(bb);sedit_lex_free(&tl);free(ts);}
+ { /* #729: the incremental-scan turn policy executes — byte cap, chunk
+    * granularity, time cap, and chunked-turn equality with a one-feed
+    * oracle. The turn clock is injected; production passes CLOCK_MONOTONIC. */
+  const char pat[]="int a=1;/* c */return(b);// zzz\n";size_t pn=strlen(pat);
+  size_t big_n=(size_t)SEDIT_SCAN_TURN_BYTES*4;char*big=malloc(big_n);
+  for(size_t i=0;i<big_n;i+=pn)memcpy(big+i,pat,pn<=big_n-i?pn:big_n-i);
+  FakeClock ck={0,0,0};SeditLexer sl;sedit_lex_init(&sl);size_t off=0;int turns=0,r0,cap_ok=1,calls_turn1=0;
+  while((r0=sedit_scan_turn(&sl,big,big_n,&off,fake_now,&ck))==SEDIT_SCAN_MORE){turns++;if(turns==1)calls_turn1=ck.calls;if(off!=(size_t)turns*SEDIT_SCAN_TURN_BYTES)cap_ok=0;if(turns>16)break;}
+  turns++;
+  OK("scan turn stops at the byte cap",cap_ok&&turns==4&&off==big_n&&r0==SEDIT_SCAN_DONE);
+  /* begun + one clock read per chunk, except the last: the byte-cap term
+   * short-circuits the condition before the clock on the capped chunk. */
+  OK("scan turn feeds in chunk-size steps",calls_turn1==(int)(SEDIT_SCAN_TURN_BYTES/SEDIT_SCAN_CHUNK));
+  OK("scan turns finish",sedit_lex_finish(&sl)!=0);
+  SeditLexer one;sedit_lex_init(&one);sedit_lex_feed(&one,big,big_n);sedit_lex_finish(&one);
+  OK("chunked turns equal the one-feed oracle",lex_equal(&one,&sl));
+  sedit_lex_free(&one);sedit_lex_free(&sl);
+  FakeClock slow={0,SEDIT_SCAN_TURN_NS+1,0};SeditLexer s2;sedit_lex_init(&s2);size_t off2=0;
+  OK("scan turn yields on the time cap after one chunk",sedit_scan_turn(&s2,big,big_n,&off2,fake_now,&slow)==SEDIT_SCAN_MORE&&off2==SEDIT_SCAN_CHUNK);
+  sedit_lex_free(&s2);free(big);}
  if(argc<2)return 2;char f[1024],f2[1024],linkp[1024],hard[1024];snprintf(f,sizeof f,"%s/a.c",argv[1]);snprintf(f2,sizeof f2,"%s/b.c",argv[1]);snprintf(linkp,sizeof linkp,"%s/l.c",argv[1]);snprintf(hard,sizeof hard,"%s/h.c",argv[1]);FILE*fp=fopen(f,"wb");fwrite("a\r\nb\r\n",1,6,fp);fclose(fp);symlink("a.c",linkp);SeditDocument d;sedit_document_init(&d);OK("load symlink",!sedit_document_load(&d,linkp));OK("CRLF detected",d.eol==SEDIT_EOL_CRLF);OK("physical target",strstr(d.target_path,"/a.c")!=NULL);OK("atomic save",sedit_document_save(&d,NULL,"a\nbb\n",5,0,0)==SEDIT_SAVE_OK);char b[32]={0};fp=fopen(f,"rb");size_t n=fread(b,1,sizeof b,fp);fclose(fp);OK("CRLF preserved",n==7&&!memcmp(b,"a\r\nbb\r\n",7));OK("symlink preserved",lstat(linkp,&d.opened_stat)==0&&S_ISLNK(d.opened_stat.st_mode));
  stat(f,&d.opened_stat);fp=fopen(f2,"wb");fwrite("other",1,5,fp);fclose(fp);unlink(linkp);symlink("b.c",linkp);OK("symlink retarget is conflict",sedit_document_save(&d,NULL,"mine",4,0,0)==SEDIT_SAVE_CONFLICT);memset(b,0,sizeof b);fp=fopen(f,"rb");n=fread(b,1,sizeof b,fp);fclose(fp);OK("Cancel preserves old physical target",n==7&&!memcmp(b,"a\r\nbb\r\n",7));fp=fopen(f2,"rb");n=fread(b,1,sizeof b,fp);fclose(fp);OK("Cancel preserves current physical target",n==5&&!memcmp(b,"other",5));struct stat link_before,b_before;stat(f2,&b_before);lstat(linkp,&link_before);OK("Overwrite publishes to currently resolved target",sedit_document_save(&d,NULL,"mine",4,1,0)==SEDIT_SAVE_OK&&strstr(d.target_path,"/b.c")!=NULL);struct stat link_after,b_after;lstat(linkp,&link_after);stat(f2,&b_after);OK("Overwrite preserves symlink and replaces current target inode",S_ISLNK(link_after.st_mode)&&b_before.st_ino!=b_after.st_ino);fp=fopen(f,"rb");n=fread(b,1,sizeof b,fp);fclose(fp);OK("Overwrite leaves former target exact",n==7&&!memcmp(b,"a\r\nbb\r\n",7));char saveas[1024];snprintf(saveas,sizeof saveas,"%s/save-as.c",argv[1]);OK("Save As publishes only chosen path",sedit_document_save(&d,saveas,"copy",4,0,0)==SEDIT_SAVE_OK);fp=fopen(f2,"rb");n=fread(b,1,sizeof b,fp);fclose(fp);OK("Save As leaves symlink target exact",n==4&&!memcmp(b,"mine",4));lstat(linkp,&link_after);OK("Save As leaves symlink intact",S_ISLNK(link_after.st_mode));unlink(linkp);symlink("a.c",linkp);sedit_document_free(&d);sedit_document_init(&d);OK("reload original lane for fault tests",!sedit_document_load(&d,linkp));
 #ifdef SEDIT_TEST

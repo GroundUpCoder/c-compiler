@@ -38,16 +38,13 @@ static void publish_styles(void){
  else if(truncated)status_text("Highlighting truncated: style limit reached");
  free(b);
 }
+static long long scan_clock(void*ctx){(void)ctx;struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec*1000000000LL+t.tv_nsec;}
 static void restyle_step(void){
  restyle_posted=0;UINT g=(UINT)SendMessage(edit,GEM_GETTEXTGEN,0,0);if(scan_active&&g!=scan_gen)cancel_scan();
  if(!scan_active){UINT g1=g;get_text(&scan_text,&scan_len);UINT g2=(UINT)SendMessage(edit,GEM_GETTEXTGEN,0,0);if(!scan_text)return;if(g1!=g2||g2!=wanted_gen){free(scan_text);scan_text=NULL;post_restyle();return;}scan_gen=g2;scan_off=0;sedit_lex_init(&lex);scan_active=1;}
- struct timespec begun,now;clock_gettime(CLOCK_MONOTONIC,&begun);size_t turn_start=scan_off;
- do{size_t end=scan_off+32768;if(end>scan_len)end=scan_len;
- if(!sedit_lex_feed(&lex,scan_text+scan_off,end-scan_off)){status_text("Highlighting unavailable: out of memory");cancel_scan();return;}scan_off=end;
- clock_gettime(CLOCK_MONOTONIC,&now);
- }while(scan_off<scan_len&&scan_off-turn_start<262144&&
-        (now.tv_sec-begun.tv_sec)*1000000000LL+now.tv_nsec-begun.tv_nsec<8000000LL);
- if(scan_off<scan_len){post_restyle();return;}if(!sedit_lex_finish(&lex)){cancel_scan();return;}if((UINT)SendMessage(edit,GEM_GETTEXTGEN,0,0)==scan_gen)publish_styles();scan_active=0; /* keep lexer/pairs + snapshot for Ctrl+] */
+ int r=sedit_scan_turn(&lex,scan_text,scan_len,&scan_off,scan_clock,NULL);
+ if(r==SEDIT_SCAN_OOM){status_text("Highlighting unavailable: out of memory");cancel_scan();return;}
+ if(r==SEDIT_SCAN_MORE){post_restyle();return;}if(!sedit_lex_finish(&lex)){cancel_scan();return;}if((UINT)SendMessage(edit,GEM_GETTEXTGEN,0,0)==scan_gen)publish_styles();scan_active=0; /* keep lexer/pairs + snapshot for Ctrl+] */
 }
 static int choose_eol(enum SeditEol*out){int r=MessageBox(win,"Mixed line endings. Yes: Edit and save as LF\nNo: choose CRLF or CR\nCancel: leave untouched","Mixed EOL",MB_YESNOCANCEL);if(r==IDCANCEL)return 0;if(r==IDYES){*out=SEDIT_EOL_LF;return 1;}r=MessageBox(win,"Yes: Edit and save as CRLF\nNo: Edit and save as CR","Mixed EOL",MB_YESNO);*out=r==IDYES?SEDIT_EOL_CRLF:SEDIT_EOL_CR;return 1;}
 static int open_path(const char*p,uint32_t line){SeditDocument nd;sedit_document_init(&nd);if(sedit_document_load(&nd,p)){MessageBox(win,nd.error,"Source Editor - Open",MB_OK);sedit_document_free(&nd);return 0;}uint32_t off,lines;if(sedit_document_line_offset(nd.text,nd.len,line,&off,&lines)){char b[128];snprintf(b,sizeof b,"location line %u exceeds %u",line,lines);MessageBox(win,b,"Source Editor",MB_OK);sedit_document_free(&nd);return 0;}if(nd.eol==SEDIT_EOL_MIXED&&!choose_eol(&nd.eol)){sedit_document_free(&nd);return 0;}sedit_document_free(&doc);doc=nd;SetWindowText(edit,doc.text);SendMessage(edit,EM_SETMODIFY,FALSE,0);SendMessage(edit,EM_SETSEL,off,off);goto_line=line;wanted_gen=(UINT)SendMessage(edit,GEM_GETTEXTGEN,0,0);post_restyle();title();return 1;}

@@ -34,6 +34,17 @@ int main(void) {
     unsigned char box[20*12]={0},under[20*12]={0};GUCEDIT_MARK_PLAN mp;x=good(text);x.s[0].flags=GUES_BOX;OK("selected BOX plan uses highlight contrast",gucedit_mark_plan(&x.s[0],1,9,2,8,1,9,&mp)&&mp.color==9);paint_mark(box,20,&mp);OK("selected BOX pixels cover exact rectangle",box[1*20+2]==9&&box[1*20+7]==9&&box[9*20+2]==9&&box[5*20+7]==9&&box[5*20+4]==0);
     x.s[0].flags=GUES_UNDERLINE;OK("selected UNDERLINE plan uses highlight contrast",gucedit_mark_plan(&x.s[0],1,7,2,8,1,9,&mp)&&mp.color==7);paint_mark(under,20,&mp);OK("selected UNDERLINE pixels occupy baseline only",under[8*20+2]==7&&under[8*20+7]==7&&under[7*20+4]==0);
     OK("tab segmentation advances to exact stops",gucedit_tab_advance(3,8)==8&&gucedit_tab_advance(8,8)==16&&gucedit_tab_advance(15,8)==16);
+    /* #729: the EN_CHANGE generation step executes here — advance on an exact
+     * byte change only, track the last-notified bytes, never yield gen 0. */
+    {char lastb[8];uint32_t ll=0,g=7;
+     g=gucedit_generation_advance(g,"ab",2,lastb,&ll);OK("first notified bytes advance the generation",g==8&&ll==2);
+     g=gucedit_generation_advance(g,"ab",2,lastb,&ll);OK("identical bytes do not advance the generation",g==8);
+     g=gucedit_generation_advance(g,"aB",2,lastb,&ll);OK("a byte change advances the generation",g==9);
+     g=gucedit_generation_advance(g,"aB",2,lastb,&ll);OK("the changed bytes become the new baseline",g==9);
+     g=gucedit_generation_advance(g,"aBc",3,lastb,&ll);OK("a length change advances the generation",g==10&&ll==3);
+     g=gucedit_generation_advance(g,"",0,lastb,&ll);OK("emptying the buffer advances the generation",g==11&&ll==0);
+     g=gucedit_generation_advance(g,"",0,lastb,&ll);OK("empty-to-empty does not advance the generation",g==11);
+     uint32_t wl=0;char wb[4];OK("the advance skips generation zero at wrap",gucedit_generation_advance(0xffffffffu,"q",1,wb,&wl)==1);}
     unsigned char styled[20*12]={0},selected[20*12]={0},stale[20*12]={0},nostyle[20*12]={0};GUCEDIT_PAINT_SPAN ps;x=good(text);x.s[0].flags=GUES_BG_VALID|GUES_UNDERLINE;x.s[0].foreground=3;x.s[0].background=5;gucedit_paint_span(&x.s[0],1,0,1,9,2,8,1,9,&ps);paint_span(styled,20,12,&ps);OK("syntax foreground background and underline produce exact pixels",styled[2*20+3]==3&&styled[4*20+4]==5&&styled[8*20+4]==3);
     gucedit_paint_span(&x.s[0],1,1,1,9,2,8,1,9,&ps);paint_span(selected,20,12,&ps);OK("selected syntax suppresses background and uses highlight for glyph plus underline",selected[2*20+3]==9&&selected[4*20+4]==0&&selected[8*20+4]==9);
     int tx=gucedit_tab_advance(3,8);gucedit_paint_span(&x.s[0],1,0,1,9,3,tx,1,9,&ps);paint_span(stale,20,12,&ps);OK("styled tab gap background and underline cover real advance",stale[4*20+6]==5&&stale[8*20+6]==3);

@@ -47,6 +47,17 @@ int gucedit_replace_batch(GUCEDIT_BATCH_V1 **slot,
     free(*slot); *slot = copy; return 1;
 }
 
+uint32_t gucedit_generation_advance(uint32_t generation, const char *cur,
+                                    uint32_t cur_len, char *last,
+                                    uint32_t *last_len) {
+    if (cur_len == *last_len && (!cur_len || !memcmp(cur, last, cur_len)))
+        return generation;
+    if (cur_len) memcpy(last, cur, cur_len);
+    *last_len = cur_len;
+    if (++generation == 0) generation = 1;
+    return generation;
+}
+
 int gucedit_tab_advance(int x, int tab_width) {
     if (tab_width <= 0) return x;
     return ((x / tab_width) + 1) * tab_width;

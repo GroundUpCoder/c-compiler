@@ -17,9 +17,15 @@ try{
  await page.waitForFunction(([x,y])=>{const c=document.getElementById('screen'),t=document.createElement('canvas');t.width=c.width;t.height=c.height;const q=t.getContext('2d');q.drawImage(c,0,0);const d=q.getImageData(x,y,700,120).data;let blue=0,green=0,red=0,purple=0;for(let i=0;i<d.length;i+=4){const R=d[i],G=d[i+1],B=d[i+2];if(B>90&&B>R*1.3)blue++;if(G>55&&G>R*1.25&&G>B*1.15)green++;if(R>90&&R>G*1.5)red++;if(R>60&&B>60&&G<70)purple++;}return blue>5&&green>5&&red>5&&purple>5;},[12,36+30],{timeout:30000,polling:'raf'});const hist=await page.evaluate(palette,[12,36+30]);
  check('headed syntax palette distinguishes C categories',hist.blue>5&&hist.green>5&&hist.red>5&&hist.purple>5,hist);
  // Ctrl+F must open a real modal search, Enter must select the next match,
- // and destroying the dialog must return focus to the document EDIT.
- await page.keyboard.press('Control+F');await setVt(1);await page.keyboard.type("wmctl wait label 'Find text:' 8000 && echo SEDIT-FIND-O''PEN\r");await page.waitForFunction(()=>window.__osOut.includes('SEDIT-FIND-OPEN'),{timeout:15000,polling:'raf'});await setVt(2);await page.keyboard.type('return');await page.keyboard.press('Enter');await page.keyboard.type('X');await page.keyboard.press('Control+Z');
- await setVt(1);await page.keyboard.type("wmctl wait nolabel 'Find text:' 8000 && wmctl gettext EDIT:0 && echo SEDIT-FIND-D''ONE\r");await page.waitForFunction(()=>window.__osOut.includes('SEDIT-FIND-DONE'),{timeout:15000,polling:'raf'});const findOut=await page.evaluate(()=>window.__osOut);check('Ctrl+F finds and returns focus to the editor',findOut.includes('/* green */ return 0;'),findOut.slice(-500));await setVt(2);
+ // and destroying the dialog must return focus to the document EDIT. The
+ // assert is behavioural (#729): typing after the find replaces exactly the
+ // selected match, so the gettext witness '/* green */ XFINDX 0;' can only
+ // come from a real selection plus focus return — the old witness matched
+ // the tty ECHO of the printf typed above and passed with Ctrl+F removed.
+ await page.keyboard.press('Control+F');await setVt(1);await page.keyboard.type("wmctl wait label 'Find text:' 8000 && echo SEDIT-FIND-O''PEN\r");await page.waitForFunction(()=>window.__osOut.includes('SEDIT-FIND-OPEN'),{timeout:15000,polling:'raf'});await setVt(2);await page.keyboard.type('return');await page.keyboard.press('Enter');
+ await setVt(1);await page.keyboard.type("wmctl wait nolabel 'Find text:' 8000 && echo SEDIT-FIND-CLO''SED\r");await page.waitForFunction(()=>window.__osOut.includes('SEDIT-FIND-CLOSED'),{timeout:15000,polling:'raf'});await setVt(2);
+ await page.keyboard.type('XFINDX');
+ await setVt(1);await page.keyboard.type("wmctl wait text EDIT:0 'XFINDX' 6000 && wmctl gettext EDIT:0 && echo SEDIT-FIND-D''ONE\r");await page.waitForFunction(()=>window.__osOut.includes('SEDIT-FIND-DONE'),{timeout:20000,polling:'raf'});const findOut=await page.evaluate(()=>window.__osOut);check('Ctrl+F selects the match and returns focus to the editor',findOut.includes('/* green */ XFINDX 0;'),findOut.slice(-500));await setVt(2);
  // Real keyboard path: select all, replace, save. The shell later verifies
  // bytes, so this is not a screenshot-only assertion.
  await page.mouse.click(rect.x+12+220,rect.y+36+30+55);await page.keyboard.press('Control+A');await page.keyboard.type('int main(void) { return 7; }');

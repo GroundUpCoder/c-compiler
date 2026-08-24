@@ -10,6 +10,13 @@ static uint32_t color_for(int k){switch(k){case SEDIT_T_KEYWORD:return SEDIT_RGB
  * heap on any token spanning many lines). */
 static uint32_t line_runs(const char*text,uint32_t a,uint32_t e){uint32_t n=0;while(a<e){uint32_t q=a;while(q<e&&text[q]!='\n')q++;if(q>a)n++;a=q<e?q+1:q;}return n;}
 static int append_style(GUCEDIT_BATCH_V1*b,uint32_t cap,uint32_t*count,const char*text,uint32_t a,uint32_t e,uint32_t col,uint32_t flags){while(a<e){uint32_t q=a;while(q<e&&text[q]!='\n')q++;if(q>a){if(*count==cap)return 0;GUCEDIT_STYLE_V1*s=&b->styles[(*count)++];*s=(GUCEDIT_STYLE_V1){a,q,col,0,flags};}a=q<e?q+1:q;}return 1;}
+int sedit_scan_turn(SeditLexer*lex,const char*text,size_t len,size_t*off,long long(*now_ns)(void*),void*clock_ctx){
+ long long begun=now_ns(clock_ctx);size_t turn_start=*off;
+ do{size_t end=*off+SEDIT_SCAN_CHUNK;if(end>len)end=len;
+  if(!sedit_lex_feed(lex,text+*off,end-*off))return SEDIT_SCAN_OOM;*off=end;
+ }while(*off<len&&*off-turn_start<SEDIT_SCAN_TURN_BYTES&&now_ns(clock_ctx)-begun<SEDIT_SCAN_TURN_NS);
+ return *off<len?SEDIT_SCAN_MORE:SEDIT_SCAN_DONE;
+}
 GUCEDIT_BATCH_V1 *sedit_styles_build(const SeditLexer*lex,const char*text,size_t len,uint32_t caret,uint32_t generation,int*truncated){
  *truncated=0;
  uint64_t need=2; /* at most two caret boxes, one line run each */

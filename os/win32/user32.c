@@ -4133,12 +4133,10 @@ static void edit_draw_styled(HWND h, EditState *st, HDC dc, int baseX, int y,
 static void edit_notify(HWND h, int code) {
     EditState *st = (EditState *)h->ctl;
     if (code == EN_CHANGE && st) {
-        if (st->len != st->generationLen ||
-            (st->len && memcmp(st->buf, st->generationBytes, (size_t)st->len))) {
-            memcpy(st->generationBytes, st->buf, (size_t)st->len);
-            st->generationLen = st->len;
-            if (++st->textGeneration == 0) st->textGeneration = 1;
-        }
+        uint32_t gl = (uint32_t)st->generationLen;
+        st->textGeneration = gucedit_generation_advance(st->textGeneration,
+            st->buf, (uint32_t)st->len, st->generationBytes, &gl);
+        st->generationLen = (int)gl;
     }
     if (h->parent)
         SendMessage(h->parent, WM_COMMAND, MAKEWPARAM(h->id, code), (LPARAM)h);
