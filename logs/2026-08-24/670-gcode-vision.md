@@ -40,6 +40,20 @@ Measured 2026-08-24 against `https://api.deepseek.com/anthropic`
 (deepseek-v4-flash AND deepseek-v4-pro; image blocks both in a plain user
 message and in a real tool_use/tool_result round-trip):
 
+> 🔴 **CORRECTED 2026-08-25 (coordinator).** The "every time" below is
+> OVERSTATED and the independent review caught it. Precise defensible result,
+> after the reviewer ran the missing pro round-trip itself:
+> **both** `deepseek-v4-flash` and `deepseek-v4-pro` return **HTTP 200 with an
+> explicit `[Unsupported Image]` substitution** on a *plain user image block*
+> AND on a *properly-formed tool_result round trip preserving the assistant
+> `thinking` block*. The early tool-result probes that returned **HTTP 400** did
+> so because they OMITTED that thinking block — they measure nothing about image
+> handling and must not be cited as image evidence. The conclusion (this route
+> cannot see; the client-side gate is the only possible defense) is unchanged;
+> the evidence statement was wrong. This was relayed to jku as decision evidence
+> before it was checked, so the correction is recorded here rather than amended
+> away.
+
 **HTTP 200 every time — the image is silently replaced server-side with a
 literal `[Unsupported Image]` placeholder.** The model's own output confirms
 it ("The tool returned an unsupported image result. I can't actually see
@@ -100,9 +114,67 @@ question both times ("does the text render correctly? Start with YES or NO"):
 - **mirrored.png → "NO. The text is horizontally mirrored (flipped
   left-to-right) … making the HUD unreadable."**
 
-First look, no hints, no statistics — the human's #508 verdict, now inside
-the loop. Evidence (fixtures, transcripts, generator):
+Evidence (fixtures, transcripts, generator):
 `s3://groundupcoder/gucos/670-vision/2026-08-24/`.
+
+### 🔴 CORRECTION (2026-08-25, coordinator) — the experiment above was INVALID
+
+The claim "first look, no hints" was **false for the preserved evidence**, and
+the independent review blocked on it. The model received the paths
+`/tmp/670-live/correct.png` and `/tmp/670-live/mirrored.png`. **The filenames
+disclosed the expected verdict**, so nothing above establishes that the model
+discriminated on pixels rather than on the path it was handed.
+
+The reviewer re-ran it properly: three ABBA sequences, twelve live calls,
+identical neutral basename in separate opaque directories, byte-identical
+prompts and request bodies, both presentation orders, ground truth stored
+outside anything the model could see. It also closed a residual side channel it
+found in its own replacement — the caption leaked the compressed byte counts
+(983 vs 993) — by padding both PNGs to exactly 1024 bytes and proving by decode
+that no pixel changed.
+
+**Under that clean control the model answered `NO` to all twelve** — correct
+fixtures falsely called mirrored 6/6, mirrored correctly called mirrored 6/6.
+The original green was the filename.
+
+### 🟢 The claim IS demonstrated — but only once the prompt stopped leading
+
+`NO` on everything is not what blindness looks like; it is what a leading
+question looks like. `"does the text render correctly? Start with YES or NO"`
+presupposes a fault and hands an unsure model a safe answer. The founding
+incident never asked for a verdict either — gcode ASSERTED a fact ("HUD
+confirmed: SCORE 0000 top-left"). The operative question is whether the model
+**reports the truth about what is on screen**, not whether it can judge.
+
+Round 3 asked it to transcribe instead, scored against ground truth outside the
+model, at two scales, same ABBA controls — **8/8 correct**:
+
+| fixture | transcription |
+|---|---|
+| small 372×54, correct | `SCORE 0000` — 2/2 |
+| small, mirrored | `ERGGE GGGG` / unreadable, and `EROCS 0000` — 2/2 |
+| large 1488×216, correct | `SCORE 0000` — 2/2 |
+| large, mirrored | explicitly reported mirrored/distorted — 2/2 |
+
+`EROCS 0000` is `SCORE` read backwards: the model was reading pixels and
+faithfully reporting what was actually there. Reviewer's verdict: *"This would
+have caught the founding mirrored-HUD defect."* No minimum-legible-size limit
+appeared — the 5×7 bitmap font read fine, so the fixture was never too small.
+
+One honest caveat: the literal transcription sentence alone produced **no tool
+call at all** — the model truthfully reported no image was attached. The
+controlling prompt needed the operational prefix *"Use the read_image tool to
+inspect input.png."* That is a prompt change and is recorded as one.
+
+Round-3 evidence:
+`s3://groundupcoder/gucos/670-vision/2026-08-25-independent-review-round3/`
+(the failed clean control is preserved at `…/2026-08-25-independent-review/`).
+
+**Why this correction is a separate section rather than an edit:** #670 exists
+because an instrument reported success on wrong output. An acceptance experiment
+that could have passed without seeing a pixel is that same failure wearing the
+fix's clothes, and quietly rewriting it would repeat the error the ticket
+documents.
 
 ## Mutation evidence (every mechanism shown RED)
 
