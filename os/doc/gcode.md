@@ -36,9 +36,20 @@ gcode [-p PROMPT] [--model M] [--system-prompt S]
 ## Tools
 
 The agent has: `bash`, `read_file`, `write_file`, `edit_file`,
-`list_dir`, `grep`, `glob`. Every tool result is size-capped, so a large
-file or a chatty command cannot destroy the context. The bash tool has a
-wall-time cap (default 120 s, env `GCODE_BASH_SECS`).
+`list_dir`, `grep`, `glob`, and — on models with vision — `read_image`.
+Every tool result is size-capped, so a large file or a chatty command
+cannot destroy the context. The bash tool has a wall-time cap (default
+120 s, env `GCODE_BASH_SECS`).
+
+`read_image` returns an image file (PNG, JPEG, GIF, WebP) as a real
+image the model can see — the closed visual verify loop for GUI work:
+`wmctl shot SID FILE`, then `read_image FILE`. The tool exists only on
+models with image input; gcode says so at startup when it is disabled.
+`GCODE_VISION=1/0` forces it on/off. The DeepSeek Anthropic-compatible
+endpoint has no image input (it silently replaces images with an
+"[Unsupported Image]" placeholder — measured 2026-08-24), so on that
+route gcode disables the tool and visual verification needs a
+vision-capable model.
 
 ## Context files
 

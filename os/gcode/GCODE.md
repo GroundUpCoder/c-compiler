@@ -70,5 +70,15 @@ WebAssembly module built by the in-OS C compiler. Facts you cannot guess:
   SDLK_LEFT, scancode 4 delivers 'a'); pass an explicit KEYSYM argument
   only for shifted characters (`wmctl key SID SCANCODE KEYSYM [MOD]`).
   `wmctl click SID X Y` clicks at window-local coordinates.
+- Rendering is verified by LOOKING, never by pixel statistics. Counts,
+  centroids and bounding boxes are identical for mirrored, flipped or
+  garbled output — a complete game once shipped with every glyph mirrored,
+  "verified" by exactly those statistics. After `wmctl shot SID FILE.png`,
+  view the screenshot with the `read_image` tool: the PNG is put in front
+  of you as a real image. Check it the way a human reviewer would — is the
+  text readable, is the layout right, do the sprites face the way the code
+  intends? If the `read_image` tool is not in your tool list, your model
+  cannot see images: say that visual verification needs a human (or a
+  vision-capable model) instead of claiming it from statistics.
 - Never run `find /` or `grep -r /`: the full-tree walk is catastrophically
   slow and cannot be interrupted. Search a specific directory instead.
