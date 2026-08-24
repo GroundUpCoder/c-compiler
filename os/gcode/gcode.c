@@ -18,6 +18,8 @@
  *   ANTHROPIC_AUTH_TOKEN -> Authorization: Bearer (takes precedence)
  *   ANTHROPIC_MODEL      default claude-opus-4-8
  *   GCODE_BASH_SECS      bash-tool wall-time cap (default CAP_BASH_SECS)
+ *   GCODE_VISION         1/0 forces the read_image tool on/off (#670;
+ *                        default: derived from the model's vision capability)
  * Flags: -p PROMPT (one-shot), --model, --system-prompt, --max-turns (opt-in
  *   turn cap; default unlimited, #353), --max-tokens, --context-tokens
  *   (#467: the model's context window override; env GCODE_CONTEXT_TOKENS,
@@ -54,6 +56,8 @@
 #define CAP_SEARCH_VISITS  20000
 #define CAP_SEARCH_DEPTH   64
 #define CAP_WHOLE_FILE   (4 * 1024 * 1024)
+#define CAP_IMAGE_BYTES  (3840 * 1024)   /* #670: 3.75 MB raw -> 5 MB base64, the API's per-image cap */
+#define CAP_IMAGE_PX     8000            /* #670: the API's max image dimension */
 #define MAX_BLOCKS       64
 
 /* #503: the bash cap, env-overridable (GCODE_BASH_SECS, positive seconds)
@@ -954,6 +958,207 @@ static int read_input_line(const char *prompt, char *buf, int cap) {
 #endif
 }
 
+/* ---- #670: read_image — put real pixels in front of the model ----------
+ * A game is a VISUAL artifact, and the statistics an agent can compute over
+ * a screenshot (pixel counts, centroids, bounding boxes) are mirror- and
+ * orientation-invariant: a complete Asteroids shipped with every glyph
+ * mirrored, "verified" by exactly those statistics (#508 Pass B r2). The
+ * fix is not a better statistic — it is eyes. read_image returns the
+ * file's bytes as a real image content block in the tool_result, so the
+ * model's own vision looks at the same PNG a human reviewer would.
+ *
+ * The tool renders NO verdict and applies NO transform: the bytes pass
+ * through exactly (base64 is a positional transport encoding — there is no
+ * pixel convention here to get wrong), so the verifying instrument shares
+ * zero code with the renderer under test or with any comparator the agent
+ * writes. A transport bug corrupts the image loudly (the provider rejects
+ * undecodable data); it cannot plausibly pass a wrong picture.
+ *
+ * Whether the model CAN see is a provider property, so the tool is gated
+ * by a capability table (substring-matched like pricing) with GCODE_VISION
+ * =1/0 as the override seam (the GCODE_BASH_SECS pattern). The gate must
+ * be CLIENT-side and conservative: MEASURED 2026-08-24 against
+ * api.deepseek.com/anthropic (deepseek-v4-flash AND -v4-pro, image blocks
+ * both in a plain user message and in a real tool_use/tool_result
+ * round-trip), the provider returns HTTP 200 and silently replaces the
+ * image with a literal "[Unsupported Image]" placeholder — no error ever
+ * comes back, so nothing downstream can catch a wrongly-open gate there.
+ * A known-off or unknown model gets a LOUD startup note, never a silently
+ * absent tool: an agent that half-believes it might see re-creates the
+ * exact false-verification this ticket is about. */
+static int g_vision;   /* 0 off, 1 on; resolved once by vision_resolve() */
+static int vision_enabled(void) { return g_vision == 1; }
+
+/* 1 = vision, 0 = no vision, -1 = not in the table */
+static int model_vision_table(const char *model) {
+    static const struct { const char *key; int vision; } V[] = {
+        { "claude",   1 },   /* every live Claude model (3 and later) has vision */
+        { "deepseek", 0 },   /* measured above: images silently swallowed, HTTP 200 */
+    };
+    if (model)
+        for (size_t i = 0; i < sizeof V / sizeof V[0]; i++)
+            if (strstr(model, V[i].key)) return V[i].vision;
+    return -1;
+}
+
+static void vision_resolve(const char *model) {
+    const char *s = getenv("GCODE_VISION");
+    if (s && *s) {
+        g_vision = atoi(s) ? 1 : 0;
+        if (!g_vision)
+            fprintf(stderr, "%sgcode: read_image disabled by GCODE_VISION=0%s\n", CDIM, CRST);
+        return;
+    }
+    int t = model_vision_table(model);
+    g_vision = t == 1;
+    if (t == 0)
+        fprintf(stderr, "%sgcode: %s does not support image input — the read_image tool is"
+                " disabled, so screenshots cannot be visually verified on this model%s\n",
+                CDIM, model, CRST);
+    else if (t < 0)
+        fprintf(stderr, "%sgcode: %s is not known to support image input — the read_image tool"
+                " is disabled (GCODE_VISION=1 enables it if the provider really has vision)%s\n",
+                CDIM, model, CRST);
+}
+
+static char *b64_encode(const unsigned char *p, size_t n) {
+    static const char T[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    char *out = malloc((n + 2) / 3 * 4 + 1);
+    if (!out) { fprintf(stderr, "gcode: out of memory\n"); exit(1); }
+    char *o = out;
+    size_t i = 0;
+    for (; i + 3 <= n; i += 3) {
+        unsigned v = (unsigned)p[i] << 16 | (unsigned)p[i + 1] << 8 | p[i + 2];
+        *o++ = T[v >> 18]; *o++ = T[(v >> 12) & 63]; *o++ = T[(v >> 6) & 63]; *o++ = T[v & 63];
+    }
+    if (n - i == 1) {
+        unsigned v = (unsigned)p[i] << 16;
+        *o++ = T[v >> 18]; *o++ = T[(v >> 12) & 63]; *o++ = '='; *o++ = '=';
+    } else if (n - i == 2) {
+        unsigned v = (unsigned)p[i] << 16 | (unsigned)p[i + 1] << 8;
+        *o++ = T[v >> 18]; *o++ = T[(v >> 12) & 63]; *o++ = T[(v >> 6) & 63]; *o++ = '=';
+    }
+    *o = 0;
+    return out;
+}
+
+static unsigned rd_be32(const unsigned char *p) { return (unsigned)p[0] << 24 | (unsigned)p[1] << 16 | (unsigned)p[2] << 8 | p[3]; }
+static unsigned rd_be16(const unsigned char *p) { return (unsigned)p[0] << 8 | p[1]; }
+static unsigned rd_le16(const unsigned char *p) { return (unsigned)p[1] << 8 | p[0]; }
+static unsigned rd_le24(const unsigned char *p) { return (unsigned)p[2] << 16 | (unsigned)p[1] << 8 | p[0]; }
+
+/* Identify an image by its MAGIC BYTES — never the file name; the bytes are
+ * what the provider will decode — and pull the pixel dimensions out of the
+ * header. Returns the media type (PNG/JPEG/GIF/WebP) or NULL for anything
+ * else; *w and *h are 0 when the header did not yield dimensions (accepted,
+ * undimensioned — the provider enforces its own pixel limit either way). */
+static const char *img_sniff(const unsigned char *p, size_t n, long *w, long *h) {
+    *w = *h = 0;
+    if (n >= 24 && !memcmp(p, "\x89PNG\r\n\x1a\n", 8)) {
+        if (!memcmp(p + 12, "IHDR", 4)) { *w = (long)rd_be32(p + 16); *h = (long)rd_be32(p + 20); }
+        return "image/png";
+    }
+    if (n >= 3 && p[0] == 0xFF && p[1] == 0xD8 && p[2] == 0xFF) {
+        /* walk the marker segments to the first SOFn frame header */
+        size_t i = 2;
+        while (i + 9 < n) {
+            if (p[i] != 0xFF) break;
+            unsigned m = p[i + 1];
+            if (m == 0xFF) { i++; continue; }                              /* fill byte */
+            if (m == 0xD8 || (m >= 0xD0 && m <= 0xD7) || m == 0x01) { i += 2; continue; }
+            if (m == 0xD9 || m == 0xDA) break;                             /* EOI / entropy data */
+            unsigned len = rd_be16(p + i + 2);
+            if (len < 2) break;
+            if (m >= 0xC0 && m <= 0xCF && m != 0xC4 && m != 0xC8 && m != 0xCC) {
+                *h = (long)rd_be16(p + i + 5); *w = (long)rd_be16(p + i + 7);
+                break;
+            }
+            i += 2 + len;
+        }
+        return "image/jpeg";
+    }
+    if (n >= 10 && (!memcmp(p, "GIF87a", 6) || !memcmp(p, "GIF89a", 6))) {
+        *w = (long)rd_le16(p + 6); *h = (long)rd_le16(p + 8);
+        return "image/gif";
+    }
+    if (n >= 30 && !memcmp(p, "RIFF", 4) && !memcmp(p + 8, "WEBP", 4)) {
+        if (!memcmp(p + 12, "VP8X", 4)) {
+            *w = (long)rd_le24(p + 24) + 1; *h = (long)rd_le24(p + 27) + 1;
+        } else if (!memcmp(p + 12, "VP8 ", 4) && p[23] == 0x9D && p[24] == 0x01 && p[25] == 0x2A) {
+            *w = (long)(rd_le16(p + 26) & 0x3FFF); *h = (long)(rd_le16(p + 28) & 0x3FFF);
+        } else if (!memcmp(p + 12, "VP8L", 4) && p[20] == 0x2F) {
+            unsigned b0 = p[21], b1 = p[22], b2 = p[23], b3 = p[24];
+            *w = (long)((b0 | ((b1 & 0x3F) << 8)) + 1);
+            *h = (long)(((b1 >> 6) | (b2 << 2) | ((b3 & 0x0F) << 10)) + 1);
+        }
+        return "image/webp";
+    }
+    return NULL;
+}
+
+/* On success sets *blocks_out to a content ARRAY — the image block first,
+ * then a one-line text caption (path, media type, dimensions, byte count)
+ * so the transcript and a later compaction summary can say what was shown
+ * — and returns the caption for display. On failure *blocks_out stays NULL
+ * and the return is the error string, like every other tool. */
+static char *tool_read_image(cJSON *in, cJSON **blocks_out) {
+    cJSON *jp = cJSON_GetObjectItem(in, "path");
+    if (!cJSON_IsString(jp)) return strdup("error: read_image needs a string 'path'");
+    const char *path = jp->valuestring;
+    FILE *f = fopen(path, "rb");
+    if (!f) { sb e = {0}; sb_puts(&e, "error: cannot open "); sb_puts(&e, path);
+              sb_puts(&e, ": "); sb_puts(&e, strerror(errno)); return e.p; }
+    sb raw = {0}; char buf[8192]; size_t rn; int over = 0;
+    while ((rn = fread(buf, 1, sizeof buf, f)) > 0) {
+        if (raw.len + rn > CAP_IMAGE_BYTES) { over = 1; break; }
+        sb_add(&raw, buf, rn);
+    }
+    fclose(f);
+    if (over) {
+        sb_free(&raw); sb e = {0}; char m[192];
+        snprintf(m, sizeof m, "error: image is larger than the %d-byte cap the API accepts — "
+                 "capture a smaller region instead (wmctl shot takes one: "
+                 "wmctl shot SID FILE X Y W H)", CAP_IMAGE_BYTES);
+        sb_puts(&e, m); return e.p;
+    }
+    long w = 0, h = 0;
+    const char *media = img_sniff((const unsigned char *)raw.p, raw.len, &w, &h);
+    if (!media) {
+        sb_free(&raw);
+        return strdup("error: not a recognized image — read_image accepts PNG, JPEG, GIF and "
+                      "WebP, identified by content, not file name. For text files use read_file.");
+    }
+    if (w > CAP_IMAGE_PX || h > CAP_IMAGE_PX) {
+        sb_free(&raw); sb e = {0}; char m[160];
+        snprintf(m, sizeof m, "error: image is %ldx%ld — the API rejects images over %d px on a "
+                 "side; capture a smaller region", w, h, CAP_IMAGE_PX);
+        sb_puts(&e, m); return e.p;
+    }
+    char *b64 = b64_encode((const unsigned char *)raw.p, raw.len);
+    size_t nbytes = raw.len;
+    sb_free(&raw);
+    char cap_line[512];
+    if (w && h)
+        snprintf(cap_line, sizeof cap_line, "image %s: %s %ldx%ld, %zu bytes", path, media, w, h, nbytes);
+    else
+        snprintf(cap_line, sizeof cap_line, "image %s: %s, %zu bytes", path, media, nbytes);
+    cJSON *arr = cJSON_CreateArray();
+    cJSON *ib = cJSON_CreateObject(), *src = cJSON_CreateObject();
+    cJSON_AddStringToObject(ib, "type", "image");
+    cJSON_AddStringToObject(src, "type", "base64");
+    cJSON_AddStringToObject(src, "media_type", media);
+    cJSON_AddStringToObject(src, "data", b64);
+    cJSON_AddItemToObject(ib, "source", src);
+    cJSON_AddItemToArray(arr, ib);
+    cJSON *tb = cJSON_CreateObject();
+    cJSON_AddStringToObject(tb, "type", "text");
+    cJSON_AddStringToObject(tb, "text", cap_line);
+    cJSON_AddItemToArray(arr, tb);
+    free(b64);
+    *blocks_out = arr;
+    return strdup(cap_line);
+}
+
 /* ---- file tools ------------------------------------------------------- */
 static char *tool_read_file(cJSON *in) {
     cJSON *jp = cJSON_GetObjectItem(in, "path");
@@ -966,6 +1171,30 @@ static char *tool_read_file(cJSON *in) {
     FILE *f = fopen(jp->valuestring, "rb");
     if (!f) { sb e = {0}; sb_puts(&e, "error: cannot open "); sb_puts(&e, jp->valuestring);
               sb_puts(&e, ": "); sb_puts(&e, strerror(errno)); return e.p; }
+    /* #670: an image is not text — a line-capped scrub of a PNG reads as
+     * U+FFFD garbage while LOOKING like a successful read. Redirect by
+     * CONTENT (magic bytes, never the file name) to the tool that can
+     * actually show it, or say honestly that this model cannot see. */
+    {
+        unsigned char magic[32]; long iw, ih;
+        size_t mn = fread(magic, 1, sizeof magic, f);
+        const char *media = img_sniff(magic, mn, &iw, &ih);
+        if (media) {
+            fclose(f);
+            sb e = {0};
+            sb_puts(&e, "error: "); sb_puts(&e, jp->valuestring);
+            sb_puts(&e, " is a binary image ("); sb_puts(&e, media); sb_puts(&e, "), not text. ");
+            if (vision_enabled())
+                sb_puts(&e, "Use the read_image tool to look at it.");
+            else
+                sb_puts(&e, "This model does not support image input, so gcode cannot show it "
+                            "to you. If a task needs the image visually verified, say you "
+                            "cannot see it — pixel statistics are not a substitute (they "
+                            "cannot catch mirrored, flipped or garbled rendering).");
+            return e.p;
+        }
+        rewind(f);
+    }
     sb out = {0}; char line[8192]; long n = 0; int bytes = 0, cut = 0;
     while (fgets(line, sizeof line, f)) {
         if (n++ < off) continue;
@@ -1223,9 +1452,15 @@ static char *tool_bash(cJSON *in) {
  * plus a visible trailer naming the count. NB an embedded NUL in tool
  * output still truncates at this char* boundary — known, separate defect
  * (needs a length-carrying return type; see ticket #386's adjacent
- * finding). */
-static char *execute_tool(const char *name, cJSON *input) {
+ * finding).
+ * #670: read_image returns STRUCTURED content through *blocks_out (an
+ * image block + a caption text block); the char* return is then just the
+ * caption for display. Every other tool leaves *blocks_out NULL. The
+ * blocks bypass the scrub below by construction: base64 and the caption
+ * are ASCII. */
+static char *execute_tool(const char *name, cJSON *input, cJSON **blocks_out) {
     char *raw;
+    if (blocks_out) *blocks_out = NULL;
     if      (!strcmp(name, "bash"))       raw = tool_bash(input);
     else if (!strcmp(name, "read_file"))  raw = tool_read_file(input);
     else if (!strcmp(name, "write_file")) raw = tool_write_file(input);
@@ -1233,6 +1468,18 @@ static char *execute_tool(const char *name, cJSON *input) {
     else if (!strcmp(name, "list_dir"))   raw = tool_list_dir(input);
     else if (!strcmp(name, "grep"))       raw = tool_grep(input);
     else if (!strcmp(name, "glob"))       raw = tool_glob(input);
+    else if (!strcmp(name, "read_image")) {
+        /* #670: refuse when vision is off — the tool is not offered then,
+         * but a resumed session or a model ignoring the tools array can
+         * still name it, and executing it would put a block in the history
+         * that the provider swallows silently (measured: DeepSeek) or
+         * rejects. */
+        if (!vision_enabled() || !blocks_out)
+            raw = strdup("error: read_image is disabled — this model is not known to support "
+                         "image input, so gcode cannot show it images");
+        else
+            raw = tool_read_image(input, blocks_out);
+    }
     else { sb r = {0}; sb_puts(&r, "error: unknown tool "); sb_puts(&r, name); raw = r.p; }
     if (!raw) return NULL;
     size_t n = strlen(raw);
@@ -1302,6 +1549,21 @@ static cJSON *build_tools(void) {
     p = cJSON_CreateObject();
     cJSON_AddItemToObject(p, "path", str_prop("Directory to list (default '.')."));
     { const char *r[] = {}; cJSON_AddItemToArray(tools, make_tool("list_dir", "List a directory (ls -la).", p, r, 0)); }
+
+    /* #670: only when the model can actually see (vision_resolve) —
+     * offering a tool that must always refuse teaches the model nothing
+     * but a wasted round, and on a provider that silently swallows images
+     * (measured: DeepSeek) it would manufacture false "I looked at it"
+     * rounds, the exact failure this tool exists to end. */
+    if (vision_enabled()) {
+        p = cJSON_CreateObject();
+        cJSON_AddItemToObject(p, "path", str_prop("Image file to view (PNG, JPEG, GIF or WebP — identified by content, not name)."));
+        { const char *r[] = {"path"}; cJSON_AddItemToArray(tools, make_tool("read_image",
+          "View an image file: it is returned as a real image you can SEE, not text. Use it on every "
+          "screenshot you take (wmctl shot SID FILE) to visually verify what a program rendered — "
+          "pixel statistics cannot catch mirrored, flipped, rotated or garbled drawing; only looking can.",
+          p, r, 1)); }
+    }
 
     p = cJSON_CreateObject();
     cJSON_AddItemToObject(p, "pattern", str_prop("Exact text to find (a fixed string, not a regex). Case-sensitive."));
@@ -1790,6 +2052,20 @@ static const char *find_invalid_tool_result(cJSON *messages) {
                 cJSON *id = cJSON_GetObjectItem(blk, "tool_use_id");
                 return cJSON_IsString(id) ? id->valuestring : "?";
             }
+            /* #670: structured (image) results — check their text blocks.
+             * The base64 data is ASCII by construction, but a hand-edited
+             * log could poison a caption like any other string. */
+            if (cJSON_IsArray(c)) {
+                cJSON *cb;
+                cJSON_ArrayForEach(cb, c) {
+                    cJSON *tt = cJSON_GetObjectItem(cb, "text");
+                    if (cJSON_IsString(tt) &&
+                        utf8_invalid_at(tt->valuestring, strlen(tt->valuestring)) >= 0) {
+                        cJSON *id = cJSON_GetObjectItem(blk, "tool_use_id");
+                        return cJSON_IsString(id) ? id->valuestring : "?";
+                    }
+                }
+            }
         }
     }
     return NULL;
@@ -2257,6 +2533,62 @@ static int err_is_context_length(const char *body) {
     return 0;
 }
 
+/* ---- #670: recover from a provider that rejects image input ------------
+ * The vision gate should keep an image block from ever reaching a provider
+ * that cannot decode one — but the gate is a table plus an env override,
+ * and a wrongly-open gate (or a forced GCODE_VISION=1) on a provider that
+ * REJECTS images would otherwise brick the session: the image stays in the
+ * history, so every later round 400s permanently (the #462 class). Same
+ * recovery contract as the #463 repair and the #467 compaction: mutate the
+ * history so the next attempt is structurally different, then retry ONCE
+ * on the shared per-turn budget. The strip is double-gated — the error
+ * body must mention images AND the history must actually carry one — so a
+ * stray "image" in an unrelated validation echo costs at most one bounded
+ * strip-and-retry, then goes permanent as before. Like the #463 repair the
+ * strip is not persisted: on a --resume the images reload, the provider
+ * rejects once, and the same recovery re-derives operationally.
+ * NB this is the BELT only. The measured DeepSeek behavior (HTTP 200, the
+ * image silently replaced by an "[Unsupported Image]" placeholder) never
+ * produces the 400 this path watches for — the capability gate is the one
+ * true defense there. */
+#define IMAGE_STRIP_MARKER "[gcode: an image was shown here, but the provider rejected image input" \
+                           " \xe2\x80\x94 this model cannot see images]"
+
+static int err_mentions_image(const char *body) {
+    return body && stristr(body, "image") != NULL;
+}
+
+/* Replace every image content block under `arr` (including inside
+ * tool_result nested content) with a text marker; returns blocks replaced. */
+static int strip_images_in(cJSON *arr) {
+    int stripped = 0, i = 0;
+    for (cJSON *blk = arr->child; blk; ) {
+        cJSON *next = blk->next;
+        if (blk_is(blk, "image")) {
+            cJSON *tb = cJSON_CreateObject();
+            cJSON_AddStringToObject(tb, "type", "text");
+            cJSON_AddStringToObject(tb, "text", IMAGE_STRIP_MARKER);
+            cJSON_ReplaceItemInArray(arr, i, tb);
+            stripped++;
+        } else if (blk_is(blk, "tool_result")) {
+            cJSON *c = cJSON_GetObjectItem(blk, "content");
+            if (cJSON_IsArray(c)) stripped += strip_images_in(c);
+        }
+        blk = next; i++;
+    }
+    return stripped;
+}
+
+static int history_strip_images(cJSON *messages) {
+    int stripped = 0;
+    cJSON *m;
+    cJSON_ArrayForEach(m, messages) {
+        cJSON *content = cJSON_GetObjectItem(m, "content");
+        if (cJSON_IsArray(content)) stripped += strip_images_in(content);
+    }
+    return stripped;
+}
+
 /* Largest prefix of s[0..cap) that ends on a UTF-8 boundary — a clip that
  * splits a sequence would poison the summary and trip the #387 pre-POST
  * guard on the very request the compaction was meant to save. */
@@ -2336,6 +2668,22 @@ static char *compact_summary_text(cJSON *messages, int from, int to, int *rounds
                 cJSON *c = cJSON_GetObjectItem(blk, "content");
                 if (cJSON_IsString(c) && *c->valuestring)
                     sum_add_clip(e, "  result: ", c->valuestring, 160);
+                else if (cJSON_IsArray(c)) {
+                    /* #670: an image result folds to its caption (the text
+                     * block read_image pairs with every image); a bare
+                     * image with no caption still leaves a visible trace. */
+                    cJSON *cb; int texted = 0;
+                    cJSON_ArrayForEach(cb, c) {
+                        if (blk_is(cb, "text")) {
+                            const char *t = blk_str(cb, "text");
+                            if (t && *t) { sum_add_clip(e, "  result: ", t, 160); texted = 1; }
+                        }
+                    }
+                    if (!texted) {
+                        cJSON_ArrayForEach(cb, c)
+                            if (blk_is(cb, "image")) { sum_add_clip(e, "  result: ", "[image]", 160); break; }
+                    }
+                }
             }
         }
     }
@@ -2653,6 +3001,21 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
             }
             repair_report_free(&rep);
             if (changed) { ret = -4; goto done; }
+            /* #670: a provider that rejects image input rejects the whole
+             * request — strip the images to loud text markers and retry
+             * once (the mutation IS the gate, exactly as above; see the
+             * history_strip_images block for why this is only the belt and
+             * the capability gate is the braces). */
+            if (err_mentions_image(errbody)) {
+                int stripped = history_strip_images(messages);
+                if (stripped) {
+                    fprintf(stderr, "%sgcode: the provider rejected image input — removed %d "
+                            "image(s) from the history, retrying this round once; this model "
+                            "cannot see images (the read_image tool should not be enabled for "
+                            "it: check GCODE_VISION)%s\n", R_ERRB, stripped, CRST);
+                    ret = -4; goto done;
+                }
+            }
             /* #467: a context-length rejection is REPAIRABLE by compaction —
              * but only that phrasing class, and only when the fold actually
              * shrinks the history (a no-op fold followed by a retry is an
@@ -2767,19 +3130,23 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
                             R_ERRB, ctx.stop_reason ? ctx.stop_reason : "(none)", CRST);
             }
             long tool_secs = 0;                  /* #507: shown on Result */
+            cJSON *rblocks = NULL;               /* #670: structured (image) result content */
             if (!refused) {
                 if (g_interrupted) {
                     result = strdup("[interrupted by user (^C) — tool not executed]");
                 } else {
                     time_t t0 = time(NULL);
-                    result = execute_tool(b->name ? b->name : "", input);
+                    result = execute_tool(b->name ? b->name : "", input, &rblocks);
                     tool_secs = (long)(time(NULL) - t0);
                 }
             }
             cJSON *tr = cJSON_CreateObject();
             cJSON_AddStringToObject(tr, "type", "tool_result");
             cJSON_AddStringToObject(tr, "tool_use_id", b->id ? b->id : "");
-            cJSON_AddStringToObject(tr, "content", result ? result : "");
+            /* #670: an image result's content is the block ARRAY; the char*
+             * result is then only the caption, for display and logs. */
+            if (rblocks) cJSON_AddItemToObject(tr, "content", rblocks);
+            else cJSON_AddStringToObject(tr, "content", result ? result : "");
             cJSON_AddItemToArray(tool_results, tr);
             render_tool_result(result, tool_secs);
             if (b->name && !strcmp(b->name, "edit_file") && result &&
@@ -3440,6 +3807,87 @@ static int compact_self_test(void) {
     return ok;
 }
 
+/* ---- #670 self-test: base64, image sniff, image strip ------------------ */
+static int vision_self_test(void) {
+    int ok = 1;
+    /* base64: the RFC 4648 test vectors + a binary (non-text) triple */
+    {
+        static const struct { const char *in, *out; } B[] = {
+            { "", "" }, { "f", "Zg==" }, { "fo", "Zm8=" }, { "foo", "Zm9v" },
+            { "foob", "Zm9vYg==" }, { "fooba", "Zm9vYmE=" }, { "foobar", "Zm9vYmFy" },
+        };
+        for (size_t i = 0; i < sizeof B / sizeof B[0]; i++) {
+            char *e = b64_encode((const unsigned char *)B[i].in, strlen(B[i].in));
+            if (strcmp(e, B[i].out)) {
+                ok = 0;
+                fprintf(stderr, "gcode self-test: b64(%s) = %s, want %s\n", B[i].in, e, B[i].out);
+            }
+            free(e);
+        }
+        unsigned char bin[3] = { 0x00, 0xFF, 0x10 };
+        char *e = b64_encode(bin, 3);
+        if (strcmp(e, "AP8Q")) { ok = 0; fprintf(stderr, "gcode self-test: b64 binary FAILED (%s)\n", e); }
+        free(e);
+    }
+    /* sniff: media by content, dimensions out of the real header layouts */
+    {
+        unsigned char png[24] = { 0x89,'P','N','G','\r','\n',0x1A,'\n', 0,0,0,13,
+                                  'I','H','D','R', 0,0,0x03,0x20, 0,0,0x01,0xF4 };
+        long w, h; const char *m = img_sniff(png, sizeof png, &w, &h);
+        if (!(m && !strcmp(m, "image/png") && w == 800 && h == 500))
+            { ok = 0; fprintf(stderr, "gcode self-test: png sniff FAILED\n"); }
+    }
+    {
+        unsigned char gif[10] = { 'G','I','F','8','9','a', 0x20,0x03, 0xF4,0x01 };
+        long w, h; const char *m = img_sniff(gif, sizeof gif, &w, &h);
+        if (!(m && !strcmp(m, "image/gif") && w == 800 && h == 500))
+            { ok = 0; fprintf(stderr, "gcode self-test: gif sniff FAILED\n"); }
+    }
+    {
+        /* SOI, APP0 (len 4), SOF0 (len 11): 8-bit 500x800 — height leads in a SOF */
+        unsigned char jpg[21] = { 0xFF,0xD8, 0xFF,0xE0, 0x00,0x04, 0,0,
+                                  0xFF,0xC0, 0x00,0x0B, 8, 0x01,0xF4, 0x03,0x20, 1, 0,0,0 };
+        long w, h; const char *m = img_sniff(jpg, sizeof jpg, &w, &h);
+        if (!(m && !strcmp(m, "image/jpeg") && w == 800 && h == 500))
+            { ok = 0; fprintf(stderr, "gcode self-test: jpeg sniff FAILED (%ldx%ld)\n", w, h); }
+    }
+    {
+        /* WebP VP8L: sig 0x2F, then 14+14 packed bits for (w-1, h-1) */
+        unsigned char webp[30] = { 'R','I','F','F', 22,0,0,0, 'W','E','B','P',
+                                   'V','P','8','L', 10,0,0,0, 0x2F, 0x1F,0xC3,0x7C,0x00,
+                                   0,0,0,0,0 };
+        long w, h; const char *m = img_sniff(webp, sizeof webp, &w, &h);
+        if (!(m && !strcmp(m, "image/webp") && w == 800 && h == 500))
+            { ok = 0; fprintf(stderr, "gcode self-test: webp sniff FAILED (%ldx%ld)\n", w, h); }
+    }
+    {
+        unsigned char junk[16] = "just some text\n";
+        long w, h;
+        if (img_sniff(junk, sizeof junk, &w, &h) != NULL)
+            { ok = 0; fprintf(stderr, "gcode self-test: junk sniffed as an image\n"); }
+    }
+    /* strip: every image block (nested tool_result content included) becomes
+     * the loud marker; idempotent; the count is the mutation gate. */
+    {
+        cJSON *hst = cJSON_Parse(
+            "[{\"role\":\"user\",\"content\":["
+              "{\"type\":\"tool_result\",\"tool_use_id\":\"t1\",\"content\":["
+                "{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\"AAAA\"}},"
+                "{\"type\":\"text\",\"text\":\"image x.png\"}]},"
+              "{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\"BBBB\"}}]},"
+             "{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}]");
+        int n1 = history_strip_images(hst);
+        int n2 = history_strip_images(hst);
+        char *s = cJSON_PrintUnformatted(hst);
+        if (!(n1 == 2 && n2 == 0 && s && !strstr(s, "\"image\"") &&
+              strstr(s, "rejected image input")))
+            { ok = 0; fprintf(stderr, "gcode self-test: image strip FAILED (%d/%d)\n  %s\n", n1, n2, s ? s : "?"); }
+        free(s); cJSON_Delete(hst);
+    }
+    if (!ok) fprintf(stderr, "gcode self-test: vision case FAILED\n");
+    return ok;
+}
+
 static int self_test(void) {
     /* #313: the dated Sonnet 5 intro rate ($2/$10 through 2026-08-31,
      * $3/$15 sticker after) — fixed dates so the check outlives the
@@ -3513,6 +3961,7 @@ static int self_test(void) {
      * invariant, the server-directed pass and its no-mutation gate, and
      * idempotence on every fixture. */
     ok &= repair_self_test();
+    ok &= vision_self_test();   /* #670: base64, image sniff, image strip */
     /* #467: window table, rejection matcher, ceiling arithmetic, and the
      * fold's pair-safety/idempotence/no-nesting invariants. */
     ok &= compact_self_test();
@@ -3620,7 +4069,10 @@ int main(int argc, char **argv) {
                    "            [--no-persist] [--no-context] [--verbose] [--no-color] [--color]\n"
                    "env: ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL,\n"
                    "     ANTHROPIC_MAX_TOKENS, GCODE_CONTEXT_TOKENS, GCODE_WARN_PCT, GCODE_COMPACT_PCT,\n"
-                   "     GCODE_STATE_DIR, XDG_STATE_HOME, NO_COLOR\n"
+                   "     GCODE_STATE_DIR, XDG_STATE_HOME, NO_COLOR, GCODE_VISION\n"
+                   "\n"
+                   "GCODE_VISION=1/0 forces the read_image tool on/off (default: derived from the\n"
+                   "model — a model without image input never gets the tool, loudly).\n"
                    "\n"
                    "--max-tokens N (env ANTHROPIC_MAX_TOKENS) is the per-response OUTPUT cap.\n"
                    "Default %d; values are clamped to [%d, %d] with a printed note.\n"
@@ -3664,6 +4116,7 @@ int main(int argc, char **argv) {
     intr_pipe_init();   /* #511: arm the interrupt self-pipe (native only) */
 #endif
     if (do_self_test) return self_test();
+    vision_resolve(cfg.model);   /* #670: before build_tools — the gate decides the tools array */
     if (!no_context) context_load(&cfg);   /* #530: after self_test — the self-test stays hermetic */
     if (!persist && (resume || do_continue)) { fprintf(stderr, "gcode: --no-persist cannot be used with resume\n"); return 2; }
     if (!cfg.api_key && !cfg.auth_token)
