@@ -65,13 +65,19 @@ function start(dir, extraArgs) {
     { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
   return new Promise((resolve, reject) => {
     let out = '';
-    const timer = setTimeout(() => reject(new Error('no URL within 5s; out: ' + out)), 5000);
+    let err = '';
+    // Consume stderr (#725): an unread pipe blocks a verbosely-failing child
+    // at ~64KB (serve.js's startup bake inherits these fds), and on failure
+    // stderr carries the actual reason — same fix as test_first_run.js.
+    child.stderr.on('data', (d) => { err += d.toString(); });
+    const evidence = () => '; out: ' + out + '; stderr: ' + (err || '(empty)');
+    const timer = setTimeout(() => reject(new Error('no URL within 5s' + evidence())), 5000);
     child.stdout.on('data', (d) => {
       out += d.toString();
       const m = out.match(/https?:\/\/\S+/);
       if (m) { clearTimeout(timer); resolve({ child, url: m[0], out: () => out }); }
     });
-    child.on('exit', (code) => { clearTimeout(timer); reject(new Error('serve exited early (' + code + '); out: ' + out)); });
+    child.on('exit', (code) => { clearTimeout(timer); reject(new Error('serve exited early (' + code + ')' + evidence())); });
   });
 }
 

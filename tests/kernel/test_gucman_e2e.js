@@ -860,7 +860,12 @@ async function main() {
   process.on('exit', () => { try { faultSrv.kill(); } catch (e) {} });
   const fport = await new Promise((resolve, reject) => {
     let buf = '';
-    const to = setTimeout(() => reject(new Error('fault-repo never announced a port: ' + buf)), 10000);
+    let ebuf = '';
+    // Consume stderr (#725): unread it is both a ~64KB blocking hazard and
+    // lost evidence on a leg whose entire purpose is fault diagnosis.
+    faultSrv.stderr.on('data', (d) => { ebuf += d; });
+    const to = setTimeout(() => reject(new Error('fault-repo never announced a port: ' + buf +
+      '; stderr: ' + (ebuf || '(empty)'))), 10000);
     faultSrv.stdout.on('data', (d) => {
       buf += d;
       const m = /port (\d+)/.exec(buf);
@@ -869,7 +874,8 @@ async function main() {
     // Without this, a spawn failure emits 'error' with no listener, which
     // throws as an uncaught exception instead of failing the leg.
     faultSrv.on('error', (e) => { clearTimeout(to); reject(new Error('fault-repo spawn failed: ' + e.message)); });
-    faultSrv.on('exit', (c) => { clearTimeout(to); reject(new Error('fault-repo exited ' + c)); });
+    faultSrv.on('exit', (c) => { clearTimeout(to); reject(new Error('fault-repo exited ' + c +
+      '; stdout: ' + (buf || '(empty)') + '; stderr: ' + (ebuf || '(empty)'))); });
   });
   console.log(`[gucman] fault-injecting repo :${fport}`);
 

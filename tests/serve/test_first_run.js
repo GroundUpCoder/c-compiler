@@ -29,8 +29,18 @@ function startAndGetUrl() {
     { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
   return new Promise((resolve, reject) => {
     let out = '';
+    let err = '';
+    // stderr must be CONSUMED, not just piped (#725): an unread pipe fills at
+    // ~64KB and blocks the child — a serve.js failing verbosely (its startup
+    // bake runs stdio-inherited into these pipes) would then hang instead of
+    // exiting, converting the real error into the 5s no-URL timeout below.
+    // And on failure stderr is the one stream that says WHY: the 2026-08-25
+    // ship-gate red ("exited early (code 1)") was unattributable because this
+    // handler was missing.
+    child.stderr.on('data', (d) => { err += d.toString(); });
+    const evidence = () => '; stdout: ' + out + '; stderr: ' + (err || '(empty)');
     const timer = setTimeout(() => {
-      reject(new Error('serve.js printed no URL within 5s; stdout: ' + out));
+      reject(new Error('serve.js printed no URL within 5s' + evidence()));
     }, 5000);
     child.stdout.on('data', (d) => {
       out += d.toString();
@@ -39,7 +49,7 @@ function startAndGetUrl() {
     });
     child.on('exit', (code) => {
       clearTimeout(timer);
-      reject(new Error('serve.js exited early (code ' + code + '); stdout: ' + out));
+      reject(new Error('serve.js exited early (code ' + code + ')' + evidence()));
     });
   });
 }

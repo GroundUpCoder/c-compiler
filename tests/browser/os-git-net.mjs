@@ -76,13 +76,20 @@ const bridge = spawn(process.execPath, [path.join(ROOT, 'tools', 'net-bridge.js'
   { stdio: ['ignore', 'pipe', 'pipe'] });
 const bridgeUrl = await new Promise((resolve, reject) => {
   let buf = '';
-  const to = setTimeout(() => reject(new Error('bridge never announced: ' + buf)), 10000);
+  let ebuf = '';
+  // Consume stderr (#725): unread it can block a verbosely-failing bridge at
+  // ~64KB, and on failure it carries the reason (a bind/TLS error) that the
+  // bare exit code cannot.
+  bridge.stderr.on('data', (d) => { ebuf += d; });
+  const to = setTimeout(() => reject(new Error('bridge never announced: ' + buf +
+    '; stderr: ' + (ebuf || '(empty)'))), 10000);
   bridge.stdout.on('data', (d) => {
     buf += d;
     const m = /listening on (http:\/\/127\.0\.0\.1:\d+)/.exec(buf);
     if (m) { clearTimeout(to); resolve(m[1]); }
   });
-  bridge.on('exit', (c) => { clearTimeout(to); reject(new Error('bridge exited ' + c)); });
+  bridge.on('exit', (c) => { clearTimeout(to); reject(new Error('bridge exited ' + c +
+    '; stdout: ' + (buf || '(empty)') + '; stderr: ' + (ebuf || '(empty)'))); });
 });
 process.on('exit', () => { try { bridge.kill(); } catch (e) {} try { gitsrv.kill(); } catch (e) {} });
 console.log('[git-net] net bridge on ' + bridgeUrl);

@@ -85,8 +85,12 @@ async function main() {
   // --- Leg 3: --max-seconds=0 DISABLES (the reaper-safety twin: prove the
   // guard only ever kills its own overrun, never a run someone chose to
   // leave unbounded) ------------------------------------------------------
+  // 'ignore', not 'pipe' (#725): nothing ever read these pipes, so the leg
+  // was safe only because LOOP_SRC happens to print nothing — a chatty child
+  // would fill the 64KB buffer, block, and pass the aliveAfter assertion for
+  // the wrong reason. 'ignore' states the intent the fixture relied on.
   const kid = cp.spawn('node', [HOST, loopWasm, '--max-seconds=0'],
-    { stdio: ['pipe', 'pipe', 'pipe'] });
+    { stdio: ['ignore', 'ignore', 'ignore'] });
   const aliveAfter = await new Promise((resolve) => {
     let exited = false;
     kid.on('exit', () => { exited = true; });

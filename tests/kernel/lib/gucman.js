@@ -126,8 +126,15 @@ function startServer(dir) {
       { stdio: ['ignore', 'pipe', 'pipe'] });
     servers.push(child);
     let buf = '';
+    let ebuf = '';
+    // Consume stderr (#725, the gitserve.js pattern): an unread pipe blocks a
+    // verbosely-failing serve.js at ~64KB (its startup bake inherits these
+    // fds), and on failure stderr carries the actual reason — before this,
+    // the exit path reported nothing but the code.
+    child.stderr.on('data', (d) => { ebuf += d; });
     const to = setTimeout(() => {
-      reject(new Error('serve.js never announced a port (stale output: ' + buf + ')'));
+      reject(new Error('serve.js never announced a port (stale output: ' + buf +
+        '; stderr: ' + (ebuf || '(empty)') + ')'));
     }, 10000);
     child.stdout.on('data', (d) => {
       buf += d;
@@ -135,7 +142,11 @@ function startServer(dir) {
       if (m) { clearTimeout(to); resolve(parseInt(m[1], 10)); }
     });
     child.on('error', (e) => { clearTimeout(to); reject(e); });
-    child.on('exit', (code) => { clearTimeout(to); reject(new Error('serve.js exited ' + code)); });
+    child.on('exit', (code) => {
+      clearTimeout(to);
+      reject(new Error('serve.js exited ' + code +
+        '; stdout: ' + (buf || '(empty)') + '; stderr: ' + (ebuf || '(empty)')));
+    });
   });
 }
 process.on('exit', () => { for (const s of servers) { try { s.kill(); } catch (e) {} } });
