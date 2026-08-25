@@ -99,31 +99,85 @@ let runId1 = null;
 }
 
 // ---- leg 3 (RED control): a live gate-lock refuses, runs nothing --------
+// The stand-in holder must LOOK like a dispatcher (counter-pass 2 finding
+// 3): liveness alone no longer suffices — a live pid whose command line is
+// not a tests/run.js dispatcher is treated as PID reuse and stolen. The
+// decoy carries 'tests/run.js' in its argv so ps shows it.
 {
+  const decoy = cp.spawn('node', ['-e', 'setInterval(() => {}, 1000)', 'decoy-arg', 'tests/run.js'],
+    { stdio: 'ignore' });
   const lockPath = path.join(outDir, '.gate-lock');
   fs.writeFileSync(lockPath, JSON.stringify({
-    pid: process.pid, startedAt: new Date().toISOString(), argv: ['stand-in'] }));
+    pid: decoy.pid, startedAt: new Date().toISOString(), argv: ['stand-in'] }));
   const sumBefore = statOrNull(path.join(outDir, 'summary.json'));
   const histBefore = listHistory();
   const r = gate(['todos']);
   check('leg 3: refused at exit 2 with the [gate-lock] marker',
     r.status === 2 && String(r.stderr).includes('[gate-lock]'),
     { status: r.status, stderr: String(r.stderr).slice(-300) });
-  check('leg 3: the refusal names the holder pid', String(r.stderr).includes('pid ' + process.pid));
+  check('leg 3: the refusal names the holder pid', String(r.stderr).includes('pid ' + decoy.pid));
   check('leg 3: NO suite ran (no suite banner)', !String(r.stdout).includes('━━━'));
   check('leg 3: summary untouched', statOrNull(path.join(outDir, 'summary.json')) === sumBefore);
   check('leg 3: no new history entry', JSON.stringify(listHistory()) === JSON.stringify(histBefore));
   check('leg 3: the LIVE holder\'s lock survives the refused contender',
     fs.existsSync(lockPath));
   fs.rmSync(lockPath, { force: true });
+  decoy.kill('SIGKILL');
 }
 
-// ---- leg 3b (#725 counter-pass): CONCURRENT dispatchers — exactly one ----
-// ---- wins. The pre-fix openSync+writeSync left the lock momentarily     ----
-// ---- EMPTY; a contender in that window parsed garbage and STOLE a live  ----
-// ---- acquisition (reviewer-reproduced: both gates ran over one dir).    ----
-// ---- With link()-atomic acquisition, any interleaving resolves to one   ----
-// ---- exit 0 and one exit-2 refusal.                                     ----
+// ---- leg 3a (#725 counter-pass 2, finding 1): ATOMIC PUBLICATION --------
+// The property linkSync buys is directly observable: the lock file is NEVER
+// readable without its holder JSON. The first race control (3b) proved only
+// mutual exclusion — the reviewer reverted linkSync alone, at natural
+// timing, and 3b stayed green because nothing forced a contender into the
+// microseconds-wide empty window. So: a driver child performs 300 real
+// acquire/release cycles while THIS process polls the lock as fast as it
+// can; ONE observation of an existing-but-empty/unparseable lock is a RED.
+// Against the openSync('wx')+write shape this fires at natural timing (the
+// window is real even when short, and 300 windows give the observer
+// thousands of chances); against link it is structurally impossible.
+// Anti-vacuity guard: the observer must actually have SEEN the lock present
+// many times, or it observed nothing and the pass would be manufactured by
+// its own setup.
+{
+  const doneFile = path.join(priv, 'inv-done');
+  const driver = cp.spawn(process.execPath, ['-e', `
+    const { acquireGateLock } = require(${JSON.stringify(RUN)});
+    process.setMaxListeners(0);
+    for (let i = 0; i < 300; i++) { const rel = acquireGateLock(${JSON.stringify(outDir)}); rel(); }
+    require('fs').writeFileSync(${JSON.stringify(doneFile)}, '1');
+  `], { cwd: ROOT, stdio: ['ignore', 'ignore', 'pipe'] });
+  let derr = '';
+  driver.stderr.on('data', (d) => { derr += d; });
+  const lockPath = path.join(outDir, '.gate-lock');
+  let seenPresent = 0;
+  let violations = 0;
+  let firstViolation = null;
+  const tEnd = Date.now() + 20000;
+  while (!fs.existsSync(doneFile) && Date.now() < tEnd) {
+    let txt = null;
+    try { txt = fs.readFileSync(lockPath, 'utf8'); } catch { continue; } // absent — between cycles
+    seenPresent++;
+    let ok = false;
+    try { ok = JSON.parse(txt) && typeof JSON.parse(txt).pid === 'number'; } catch { /* not JSON */ }
+    if (!ok) { violations++; if (!firstViolation) firstViolation = JSON.stringify(txt.slice(0, 40)); }
+  }
+  check('leg 3a: driver completed its 300 acquire/release cycles',
+    fs.existsSync(doneFile), derr.slice(-300));
+  check('leg 3a: the observer really observed the lock (anti-vacuity: present >= 20 reads)',
+    seenPresent >= 20, seenPresent);
+  check('leg 3a: 🔴 the lock was NEVER observable without its holder JSON (atomic publication)',
+    violations === 0, { violations, firstViolation, seenPresent });
+  fs.rmSync(doneFile, { force: true });
+}
+
+// ---- leg 3b: CONCURRENT dispatchers — exactly one wins. SCOPE (narrowed ----
+// ---- by counter-pass 2): this proves ordinary MUTUAL EXCLUSION under a  ----
+// ---- natural race; it does NOT prove atomic publication — the reviewer  ----
+// ---- reverted linkSync alone and this leg stayed green, because nothing ----
+// ---- forces a contender into the microseconds-wide empty window. The    ----
+// ---- atomic-publication property is leg 3a's, via the invariant         ----
+// ---- observer, where it fails at NATURAL timing.                        ----
 {
   // A tiny async driver child races the two dispatchers (this file is
   // linear/sync); each gate's exit code + stderr tail come back as JSON.
@@ -171,6 +225,59 @@ let runId1 = null;
   check('leg 3c: the steal is LOUD and names the age + grace', !!m, String(r.stderr).slice(0, 300));
   check('leg 3c: the REPORTED age proves the grace was waited out (>= 2s)',
     !!m && parseFloat(m[1]) >= 2, m && m[1]);
+}
+
+// ---- leg 3d (#725 counter-pass 2, finding 2): the pre-gate wait is ------
+// ---- BOUNDED and gives up LOUDLY. A foreign writer refreshing an        ----
+// ---- unparseable lock every 100ms used to hold the dispatcher forever,  ----
+// ---- silently — the ticket's own defect (a gate that cannot explain     ----
+// ---- itself) reintroduced by the grace logic. Now: exit 2 within the    ----
+// ---- acquisition budget, naming what it waited on and for how long.     ----
+{
+  const lockPath = path.join(outDir, '.gate-lock');
+  // The garbage lock must EXIST before the gate's first link attempt, and
+  // the toucher must already be refreshing it — otherwise the gate simply
+  // acquires an absent lock and runs (this leg's own first run went green
+  // that way: a setup that guaranteed the wrong outcome).
+  fs.writeFileSync(lockPath, '');
+  const toucher = cp.spawn(process.execPath, ['-e', `
+    const fs = require('fs');
+    const t = setInterval(() => { try { fs.writeFileSync(${JSON.stringify(lockPath)}, ''); } catch {} }, 100);
+    setTimeout(() => process.exit(0), 30000);
+  `], { stdio: 'ignore' });
+  cp.execSync('sleep 0.5');   // let the toucher boot before the gate starts
+  const t0 = Date.now();
+  const r = gate(['todos']);
+  const elapsed = Date.now() - t0;
+  toucher.kill('SIGKILL');
+  fs.rmSync(lockPath, { force: true });
+  check('leg 3d: a perpetually-refreshed garbage lock is REFUSED, not waited on forever',
+    r.status === 2, { status: r.status, elapsed });
+  check('leg 3d: …within the acquisition budget (bounded, not the harness timeout)',
+    elapsed >= 15000 && elapsed < 30000, elapsed);
+  check('leg 3d: the give-up is LOUD and names the wait',
+    /\[gate-lock\] REFUSING: waited [\d.]+s to acquire/.test(String(r.stderr)) &&
+      String(r.stderr).includes('gives up LOUDLY'),
+    String(r.stderr).slice(-400));
+  check('leg 3d: NO suite ran', !String(r.stdout).includes('━━━'));
+}
+
+// ---- leg 3e (#725 counter-pass 2, finding 3): PID reuse — a LIVE pid ----
+// ---- that is not actually a dispatcher is stolen loudly, not refused    ----
+// ---- until that unrelated process exits.                                ----
+{
+  const lockPath = path.join(outDir, '.gate-lock');
+  // THIS process is alive and is not a tests/run.js dispatcher — exactly
+  // the post-crash reuse shape.
+  fs.writeFileSync(lockPath, JSON.stringify({
+    pid: process.pid, startedAt: new Date().toISOString(), argv: ['stand-in'] }));
+  const r = gate(['todos']);
+  check('leg 3e: a live non-dispatcher pid is treated as PID reuse — the gate runs',
+    r.status === 0, { status: r.status, stderr: String(r.stderr).slice(-300) });
+  check('leg 3e: the steal is LOUD and names the mechanism',
+    String(r.stderr).includes('PID reuse') && String(r.stderr).includes('pid ' + process.pid),
+    String(r.stderr).slice(-300));
+  check('leg 3e: lock released after the run', !fs.existsSync(lockPath));
 }
 
 // ---- leg 4: a dead holder's lock is stolen ------------------------------

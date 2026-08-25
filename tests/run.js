@@ -1170,9 +1170,40 @@ function acquireGateLock(summaryDir) {
   // its content. The unparseable branch below then PROVES staleness by age
   // instead of assuming it.
   const GRACE_MS = 2000;
+  // Total acquisition budget (#725 counter-pass 2, finding 2). The grace
+  // loop re-derived the age from mtime every pass with NO overall deadline,
+  // so a foreign writer touching an empty .gate-lock every 100ms kept the
+  // dispatcher waiting FOREVER, SILENTLY — the ticket's own defect (a gate
+  // failing in a way that cannot explain itself), reintroduced by its fix.
+  // Past the budget: loud exit 2 naming what was waited on and for how long.
+  const ACQUIRE_MAX_MS = 15000;
+  // Backstop for finding 3 (PID reuse): no real gate holds a lock this long.
+  const HOLDER_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+  // Finding 3's discriminator, free in the holder record already: a LIVE pid
+  // whose actual command line is not a tests/run.js dispatcher is a recycled
+  // pid, not a holder. Verification failure (ps dead, EPERM, non-POSIX) is
+  // conservative: treat as the holder and refuse — never steal on ignorance.
+  const looksLikeDispatcher = (pid) => {
+    try {
+      const cmd = require('child_process').execFileSync('ps', ['-o', 'command=', '-p', String(pid)],
+        { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
+      return /tests[/\\]run\.js/.test(cmd);
+    } catch { return true; }
+  };
   const sleepMs = (ms) => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* fallthrough */ } };
   const tmp = lockPath + '.tmp-' + process.pid;
+  const tAcquire = Date.now();
   for (;;) {
+    if (Date.now() - tAcquire > ACQUIRE_MAX_MS) {
+      process.stderr.write(
+        `\n[gate-lock] REFUSING: waited ${((Date.now() - tAcquire) / 1000).toFixed(1)}s to acquire ` +
+        `${lockPath} and it never resolved.\n` +
+        `  Something keeps the lock unusable without holding it — an unparseable file being\n` +
+        `  refreshed by a foreign writer, or contention that never clears. A gate that waits\n` +
+        `  silently is the #725 defect itself, so this one gives up LOUDLY instead.\n` +
+        `  Inspect or remove ${lockPath}, or give this run its own dir with --out=DIR.\n\n`);
+      process.exit(2);
+    }
     let linked = false;
     try {
       fs.writeFileSync(tmp, JSON.stringify({
@@ -1188,6 +1219,24 @@ function acquireGateLock(summaryDir) {
     let h = null;
     try { h = JSON.parse(fs.readFileSync(lockPath, 'utf8')); } catch { /* unparseable */ }
     if (h && h.pid !== process.pid && pidAlive(h.pid)) {
+      // Finding 3: alive is not enough — after a crash plus PID reuse by a
+      // long-lived unrelated process, pidAlive() alone refuses until that
+      // process exits or a human deletes the file. Steal LOUDLY when the
+      // record is older than any real gate or the live pid is not actually
+      // a dispatcher.
+      const holderAgeMs = Date.now() - (Date.parse(h.startedAt) || 0);
+      if (holderAgeMs > HOLDER_MAX_AGE_MS) {
+        process.stderr.write(`[gate-lock] holder record is ${(holderAgeMs / 3600000).toFixed(1)}h old — ` +
+          `no gate runs that long; treating pid ${h.pid} as PID REUSE after a crash, stealing\n`);
+        try { fs.unlinkSync(lockPath); } catch { /* raced */ }
+        continue;
+      }
+      if (!looksLikeDispatcher(h.pid)) {
+        process.stderr.write(`[gate-lock] pid ${h.pid} is ALIVE but is not a tests/run.js dispatcher ` +
+          `(PID reuse after a crash) — stealing the stale lock\n`);
+        try { fs.unlinkSync(lockPath); } catch { /* raced */ }
+        continue;
+      }
       process.stderr.write(
         `\n[gate-lock] REFUSING: another tests/run.js is already writing ${summaryDir}\n` +
         `  held by pid ${h.pid} since ${h.startedAt} (argv: ${(h.argv || []).join(' ')})\n` +
@@ -1891,5 +1940,5 @@ if (require.main === module) {
                      browserPreflight, pythonPreflight, classify,
                      OS_BROWSER_ONLY, OS_HEADLESS_ONLY, OS_RUNTIME_ONLY,
                      TIERS, ALL_SUITES, checkSkipBaseline, BAKED_DOCS,
-                     attachHostSamples, makeRunId, HISTORY_KEEP };
+                     attachHostSamples, makeRunId, HISTORY_KEEP, acquireGateLock };
 }
