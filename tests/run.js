@@ -841,22 +841,35 @@ function parseArgs(argv) {
 
 // ---------- Diff resolution ----------
 
+// A git failure REFUSES the run (#725). Before this, any git error — a bad
+// user ref, a broken/absent git — returned null with stderr DISCARDED,
+// changedFiles coalesced that to "no changed files", and the --diff tier
+// planned an empty run and exited 0: a silent green whose cause was thrown
+// away. Exit 2 = refused before anything ran, nothing written — the
+// preflight family shape (#559/#483).
 function git(args) {
   const r = spawnSync('git', args, { cwd: ROOT, encoding: 'utf-8' });
-  if (r.status !== 0) return null;
+  if (r.error || r.status !== 0) {
+    process.stderr.write(
+      `[diff] git ${args.join(' ')} FAILED` +
+      (r.error ? ` (${r.error.message})` : ` (exit ${r.status})`) + ':\n' +
+      (r.stderr || '') +
+      `  Cannot derive a diff plan — refusing rather than planning an empty (green) run.\n`);
+    process.exit(2);
+  }
   return r.stdout.split('\n').map(s => s.trim()).filter(Boolean);
 }
 
 function changedFiles(ref) {
   if (ref) {
     // Everything that differs from `ref` (committed or not), plus untracked.
-    const diff = git(['diff', '--name-only', ref]) || [];
-    const untracked = git(['ls-files', '--others', '--exclude-standard']) || [];
+    const diff = git(['diff', '--name-only', ref]);
+    const untracked = git(['ls-files', '--others', '--exclude-standard']);
     return [...new Set([...diff, ...untracked])];
   }
   // Default: the working set — staged + unstaged vs HEAD, plus untracked.
-  const wt = git(['diff', '--name-only', 'HEAD']) || [];
-  const untracked = git(['ls-files', '--others', '--exclude-standard']) || [];
+  const wt = git(['diff', '--name-only', 'HEAD']);
+  const untracked = git(['ls-files', '--others', '--exclude-standard']);
   return [...new Set([...wt, ...untracked])];
 }
 

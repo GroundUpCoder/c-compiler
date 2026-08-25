@@ -153,7 +153,24 @@ let runId1 = null;
   check('leg 5: the OLDEST seeds are what got dropped', !runs.includes(seeded[0]) && !runs.includes(seeded[1]));
 }
 
-// ---- leg 6: attachHostSamples wiring (never-a-pass) ---------------------
+// ---- leg 6: a git failure refuses the diff plan (#725) ------------------
+// Before: a bad ref made git fail, stderr was DISCARDED, changedFiles
+// coalesced to "no changes", and `--diff <bad-ref>` exited 0 having planned
+// an empty run — a silent green. Now: exit 2, git's own stderr included.
+{
+  const r = gate(['--diff', 'no-such-ref-xyz-725', '--dry-run']);
+  check('leg 6: --diff on a bad ref refuses at exit 2', r.status === 2,
+    { status: r.status, stderr: String(r.stderr).slice(-300) });
+  check('leg 6: the refusal carries git\'s own stderr',
+    /unknown revision|bad revision|ambiguous argument/.test(String(r.stderr)), String(r.stderr).slice(-200));
+  check('leg 6: …and names the empty-green hazard',
+    String(r.stderr).includes('refusing rather than planning an empty'));
+  const ok = gate(['--diff', 'HEAD', '--dry-run']);
+  check('leg 6: a valid ref still plans normally', ok.status === 0,
+    { status: ok.status, stderr: String(ok.stderr).slice(-200) });
+}
+
+// ---- leg 7: attachHostSamples wiring (never-a-pass) ---------------------
 {
   const { attachHostSamples } = require('../run.js');
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gatehist-fake-'));
@@ -164,19 +181,19 @@ let runId1 = null;
   try {
     const failRow = attachHostSamples({ suite: 'x', status: 'fail', exit: 1 },
       { measured: true, pressure: 4, memFreePct: 4 });
-    check('leg 6: a failing row under pressure 4 gets hostSuspect',
+    check('leg 7: a failing row under pressure 4 gets hostSuspect',
       !!failRow.hostSuspect && failRow.hostSuspect.why.length > 0, failRow.hostSuspect);
-    check('leg 6: 🔴 the label NEVER touches status — the row is still literally \'fail\'',
+    check('leg 7: 🔴 the label NEVER touches status — the row is still literally \'fail\'',
       failRow.status === 'fail' && failRow.exit === 1, failRow);
     const passRow = attachHostSamples({ suite: 'x', status: 'pass' },
       { measured: true, pressure: 4, memFreePct: 4 });
-    check('leg 6: a PASSING row under the same degradation gets NO label',
+    check('leg 7: a PASSING row under the same degradation gets NO label',
       !('hostSuspect' in passRow) && passRow.status === 'pass');
     const healthyFail = attachHostSamples({ suite: 'x', status: 'fail' },
       { measured: true, pressure: 1, memFreePct: 68 });
     // after-sample is the fake (pressure 4), so this still labels — assert
     // the samples themselves were recorded either way.
-    check('leg 6: boundary samples recorded on every row', !!healthyFail.host.before && !!healthyFail.host.after);
+    check('leg 7: boundary samples recorded on every row', !!healthyFail.host.before && !!healthyFail.host.after);
   } finally {
     delete process.env.CC_HOST_HEALTH_FAKE;
     fs.rmSync(fakeDir, { recursive: true, force: true });
