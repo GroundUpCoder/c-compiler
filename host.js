@@ -11660,7 +11660,16 @@ const TRAP_FRAME_LIMIT = 64;
 /* `at NAME (wasm://wasm/HASH:wasm-function[IDX]:0xOFF)`, or the same without a
  * NAME when the module carries no name section. Only the index and the offset
  * are taken from the engine's text; the NAME is resolved from the name section
- * instead, so the output does not depend on how V8 chooses to render it. */
+ * instead, so the output does not depend on how V8 chooses to render it.
+ *
+ * The HASH is deliberately not matched. Every wasm frame on this stack
+ * belongs to the one module runModule instantiated — a process runs exactly
+ * one — so there is nothing to disambiguate against. If a future arrangement
+ * ever puts a SECOND module on the same JS stack (ss modules and the
+ * kernel-thread ksvc service are separate paths today and never reach this
+ * catch), this must start filtering on the hash, or the other module's frames
+ * would be symbolicated against THIS module's tables and silently
+ * mis-attributed. */
 const WASM_FRAME_RE = /wasm-function\[(\d+)\]:0x([0-9a-fA-F]+)/;
 
 /* Decode the `name` section's function-name subsection (id 1) and the
