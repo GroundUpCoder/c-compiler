@@ -175,6 +175,44 @@ const lowPct = { ...healthy, pressure: 1, memFreePct: 12 };
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// ---- verdict (#725 stage B) --------------------------------------------
+
+{
+  const v = (over) => HH.verdict({ ...healthy, ...over });
+  // Quiet direction: the calibration trap again — incident-lookalike raw
+  // numbers on a healthy box must be 'ok'.
+  const okv = HH.verdict(healthy);
+  check('verdict: healthy (incident-lookalike raw numbers) → ok', okv.level === 'ok' && okv.reasons.length === 0, okv);
+  // Refusal axes: the OS's own CRITICAL verdict, and the availability floor.
+  const p4 = v({ pressure: 4 });
+  check('verdict: pressure 4 → refuse naming the OS CRITICAL verdict',
+    p4.level === 'refuse' && /CRITICAL/.test(p4.reasons[0]), p4);
+  const low = v({ availGb: 0.5 });
+  check('verdict: availGb 0.5 → refuse naming the floor',
+    low.level === 'refuse' && /1 GB floor/.test(low.reasons[0]), low);
+  // Warn tier never refuses.
+  const p2 = v({ pressure: 2 });
+  check('verdict: pressure 2 → warn, NOT refuse', p2.level === 'warn', p2);
+  const pct = v({ pressure: 1, memFreePct: 12 });
+  check('verdict: memFreePct 12 (pressure normal) → warn, NOT refuse', pct.level === 'warn', pct);
+  // Absence discipline (#725 counter-pass finding 2): a null instrument is
+  // an unmeasured AXIS — it can neither refuse nor warn; a wholly
+  // unmeasured sample can NEVER refuse.
+  const nulls = HH.verdict({ measured: true, pressure: null, availGb: null, memFreePct: 5 });
+  check('verdict: null pressure/avail axes are silent; the measured axis still warns',
+    nulls.level === 'warn' && nulls.reasons.length === 1, nulls);
+  const un = HH.verdict({ measured: false });
+  check('verdict: unmeasured sample → ok + unmeasured flag (absence never refuses)',
+    un.level === 'ok' && un.unmeasured === true, un);
+  check('verdict: null sample → ok + unmeasured', HH.verdict(null).unmeasured === true);
+  // 🔴 Structural never-a-pass: the verdict vocabulary contains nothing a
+  // reader could take as a test outcome or directive.
+  for (const out of [okv, p4, p2, un]) {
+    check(`verdict output carries only level/reasons/unmeasured (${out.level})`,
+      Object.keys(out).every(k => ['level', 'reasons', 'unmeasured'].includes(k)), Object.keys(out));
+  }
+}
+
 // ---- sample() integration ----------------------------------------------
 
 {

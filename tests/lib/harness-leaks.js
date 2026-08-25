@@ -148,6 +148,20 @@ function parsePs(text) {
   return out;
 }
 
+// Every harness-owned process REGARDLESS of parentage (#725 stage B): the
+// host-health refusal names the live memory consumers so a blocked human
+// knows what to stop — report-only, NEVER a kill list (live-parent processes
+// are somebody's running work; only findOrphans below licenses a kill).
+function matchHarnessProcs(procs, selfPid = process.pid) {
+  const out = [];
+  for (const p of procs) {
+    if (p.pid === selfPid || p.pid <= 1) continue;
+    const hit = ORPHAN_PATTERNS.find(x => x.re(p.command));
+    if (hit) out.push({ ...p, what: hit.what });
+  }
+  return out;
+}
+
 // An orphan = reparented to init (ppid 1) AND one of ours. A live run's
 // serve.js has its test file as parent; a live test file has the runner.
 function findOrphans(procs, selfPid = process.pid) {
@@ -319,7 +333,7 @@ function preflight({ log = (m) => process.stdout.write(m + '\n'), dryRun = false
 
 module.exports = {
   preflight, reapTempDirs, reapImageTemps, reapOrphanProcs,
-  classifyTempDir, parsePs, findOrphans, isServeProc,
+  classifyTempDir, parsePs, findOrphans, isServeProc, matchHarnessProcs, listProcs,
   TEMP_DIR_RE, UNTAGGED_STALE_MS, PID_REUSE_MS,
 };
 

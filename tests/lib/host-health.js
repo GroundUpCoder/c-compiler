@@ -56,6 +56,19 @@ const os = require('os');
 const SUSPECT_PRESSURE = 2;
 const SUSPECT_FREE_PCT = 15;
 
+// Refusal thresholds (stage B). REFUSE only on the platform's own CRITICAL
+// verdict, with a reclaimable-inclusive hard floor as the backstop for a box
+// whose pressure sysctl is dead but whose vm_stat answers. The healthy box
+// measures pressure 1 / ~5.6-8.8 GB available (calibration comment + the
+// 2026-08-25 kernel-gate run-level samples), so both axes sit far from
+// their triggers on a real heavy workload. Honesty note: the 2026-08-20
+// incident recorded neither instrument, so these cannot be validated
+// against it retroactively — they are chosen to stay quiet on measured
+// healthy states and to fire on the OS's own verdict, not reverse-derived
+// from the incident's non-discriminating raw numbers.
+const REFUSE_PRESSURE = 4;
+const REFUSE_AVAIL_GB = 1.0;
+
 // ---------------------------------------------------------------- parsers
 // Pure, so the host suite can pin them on canned text (the same design as
 // harness-leaks.js's classifyTempDir/parsePs).
@@ -126,10 +139,18 @@ function runQuiet(cmd, args) {
 //   availGb, freeGb, swapUsedGb, compressorGb,   // evidence fields
 //   load1, totalGb
 // }
+let fakeIdx = 0;   // array-fake cursor (test seam; per-process, monotonic)
 function sample() {
   if (process.env.CC_HOST_HEALTH_FAKE) {
     try {
       const fake = JSON.parse(fs.readFileSync(process.env.CC_HOST_HEALTH_FAKE, 'utf8'));
+      // An ARRAY fake is consumed one element per sample() call, last
+      // element sticking — what lets a control script a healthy preflight
+      // followed by a degraded later row, deterministically, in one child.
+      if (Array.isArray(fake)) {
+        const el = fake[Math.min(fakeIdx++, fake.length - 1)];
+        return { t: new Date().toISOString(), fake: true, ...el };
+      }
       return { t: new Date().toISOString(), fake: true, ...fake };
     } catch (e) {
       // A named-but-unreadable fake is a broken TEST setup — fail loud, do
@@ -187,8 +208,42 @@ function suspectFromSamples(before, after) {
   return why.length ? { why } : null;
 }
 
+// ------------------------------------------------------------- the verdict
+
+// The stage-B decision: { level: 'ok'|'warn'|'refuse', reasons, unmeasured? }.
+// Pure — the host suite pins every tier against fixed samples.
+//
+// 🔴 A null instrument is an UNMEASURED AXIS, never a zero (#725 counter-
+// pass finding 2: availableBytes used to coerce a truncated vm_stat read
+// toward the refusal floor). And a wholly unmeasured sample can NEVER
+// refuse — refusing on absence would brick non-darwin hosts on missing
+// instruments, not on evidence.
+//
+// This function only ever stops a gate; there is deliberately no path from
+// any of its outputs to a pass, a suppressed row, or a retry (jku condition
+// 3 on #725 — the same property suspectFromSamples pins for labels).
+function verdict(s) {
+  if (!s || s.measured === false) return { level: 'ok', reasons: [], unmeasured: true };
+  const refuse = [];
+  if (s.pressure != null && s.pressure >= REFUSE_PRESSURE) {
+    refuse.push(`memory pressure level ${s.pressure} — the OS's own CRITICAL verdict (kern.memorystatus_vm_pressure_level)`);
+  }
+  if (s.availGb != null && s.availGb < REFUSE_AVAIL_GB) {
+    refuse.push(`available memory ${s.availGb} GB < ${REFUSE_AVAIL_GB} GB floor (free+inactive+speculative+purgeable)`);
+  }
+  if (refuse.length) return { level: 'refuse', reasons: refuse };
+  const warn = [];
+  if (s.pressure != null && s.pressure >= SUSPECT_PRESSURE) {
+    warn.push(`memory pressure level ${s.pressure} (OS warn tier)`);
+  }
+  if (s.memFreePct != null && s.memFreePct <= SUSPECT_FREE_PCT) {
+    warn.push(`memorystatus level ${s.memFreePct}% free (jetsam territory)`);
+  }
+  return warn.length ? { level: 'warn', reasons: warn } : { level: 'ok', reasons: [] };
+}
+
 module.exports = {
-  sample, suspectFromSamples,
+  sample, suspectFromSamples, verdict,
   parseVmStat, parseSwapUsage, availableBytes,
-  SUSPECT_PRESSURE, SUSPECT_FREE_PCT,
+  SUSPECT_PRESSURE, SUSPECT_FREE_PCT, REFUSE_PRESSURE, REFUSE_AVAIL_GB,
 };

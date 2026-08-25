@@ -1283,6 +1283,96 @@ function archiveRun(summaryDir, runId, results, summaryObj) {
   return dir;
 }
 
+// ---------- Host-health preflight (#725 stage B) ----------
+//
+// The gate is the mandatory landing authority; run on a memory-starved host
+// it reports unrelated product suites as hard tree failures (2026-08-20:
+// three full gates, crossed non-reproducible reds, ~102 MB free). So before
+// anything runs: sample the host, and if the PLATFORM'S OWN verdict says
+// critical (tests/lib/host-health.js verdict()), first try to RECOVER — reap
+// what is provably dead (dead-owner-gated, safe lock-free: the harness-leaks
+// manual-entry precedent; in the 2026-08-20 state this alone freed ~4.5 GB,
+// an adopted mkimage) — then resample, and only refuse what recovery could
+// not fix: exit 2, a [host-health] marker, a durable refusal record, and NO
+// summary.json ("absent = did not finish" stays intact). A warn-tier state
+// proceeds loudly; failing rows then carry hostSuspect. A wholly unmeasured
+// host can never refuse. CC_NO_HOST_HEALTH=1 disables the guard (stated in
+// the refusal message itself, with its cost).
+function hostHealthPreflight(runId, summaryDir) {
+  if (process.env.CC_NO_HOST_HEALTH === '1') {
+    process.stdout.write('[host-health] DISABLED by CC_NO_HOST_HEALTH=1 — ' +
+      'running unguarded; samples are still recorded\n');
+    return { disabled: true };
+  }
+  const HL = require('./lib/harness-leaks.js');
+  let s = HOST_HEALTH.sample();
+  let v = HOST_HEALTH.verdict(s);
+  let before = null;
+  let recovery = null;
+  if (v.level === 'refuse') {
+    before = s;
+    process.stdout.write(`[host-health] degraded (${v.reasons.join('; ')}) — ` +
+      'attempting recovery: reaping provably-dead harness leftovers…\n');
+    recovery = {
+      procs: HL.reapOrphanProcs({}).killed.map(p => ({ pid: p.pid, what: p.what })),
+      tempDirs: HL.reapTempDirs({}).found.length,
+      imageTemps: HL.reapImageTemps({}).found.length,
+    };
+    s = HOST_HEALTH.sample();
+    v = HOST_HEALTH.verdict(s);
+    if (v.level !== 'refuse') {
+      process.stdout.write(`[host-health] recovered — proceeding (reaped ` +
+        `${recovery.procs.length} proc(s), ${recovery.tempDirs} temp dir(s), ` +
+        `${recovery.imageTemps} image temp(s))\n`);
+    }
+  }
+  if (v.unmeasured) {
+    process.stdout.write('[host-health] instruments unmeasured on this platform — ' +
+      'no refusal possible; samples recorded as-is\n');
+  } else if (v.level === 'warn') {
+    process.stdout.write(`\x1b[33m[host-health] WARNING: ${v.reasons.join('; ')} — ` +
+      `the gate proceeds; failing rows will carry hostSuspect\x1b[0m\n`);
+  }
+  if (v.level !== 'refuse') {
+    return { sample: s, level: v.level, reasons: v.reasons, recovery: recovery || undefined };
+  }
+
+  // Refusal. The record is durable evidence (per-runId — a retry cannot
+  // clobber it); the message tells the blocked human what to do, including
+  // the override, because a dev log is not where a blocked human is standing.
+  const suspects = HL.matchHarnessProcs(HL.listProcs());
+  let holder = null;
+  try { holder = JSON.parse(fs.readFileSync(require('./lib/heavy-lock.js').LOCK_PATH, 'utf8')); }
+  catch { /* no heavy job */ }
+  const recPath = path.join(summaryDir, 'refusals', runId + '.json');
+  try {
+    fs.mkdirSync(path.dirname(recPath), { recursive: true });
+    fs.writeFileSync(recPath, JSON.stringify({
+      runId, t: new Date().toISOString(), classification: 'environmental — not a product verdict',
+      reasons: v.reasons, sampleBeforeRecovery: before, sampleAfterRecovery: s,
+      recovery, suspects, heavyLockHolder: holder,
+    }, null, 2));
+  } catch { /* the stderr block below still carries everything */ }
+  const fmt = (x) => x == null ? '?' : x;
+  process.stderr.write(
+    `\n[host-health] REFUSING to start the gate: this host cannot produce a trustworthy verdict.\n` +
+    v.reasons.map(r => `  - ${r}\n`).join('') +
+    `  sample: pressure=${fmt(s.pressure)} memFreePct=${fmt(s.memFreePct)} availGb=${fmt(s.availGb)}` +
+    ` swapUsedGb=${fmt(s.swapUsedGb)} compressorGb=${fmt(s.compressorGb)} load1=${fmt(s.load1)}\n` +
+    (recovery ? `  recovery reaped ${recovery.procs.length} proc(s), ${recovery.tempDirs} temp dir(s), ` +
+      `${recovery.imageTemps} image temp(s) — not enough\n` : '') +
+    (suspects.length ? `  live memory consumers (NOT killed — live parents):\n` +
+      suspects.slice(0, 6).map(p => `    pid ${p.pid} (ppid ${p.ppid}) ${p.what}: ${p.command.slice(0, 90)}\n`).join('') : '') +
+    (holder ? `  heavy-lock holder: ${holder.name} (pid ${holder.pid}) since ${holder.startedAt}\n` : '') +
+    `  A starved gate reports unrelated product suites as hard tree failures\n` +
+    `  (#725, 2026-08-20: three full gates, crossed non-reproducible reds).\n` +
+    `  Refusal record: ${path.relative(ROOT, recPath)}\n` +
+    `  Next: stop or wait out the consumers above, then re-run.\n` +
+    `  Override (isolated or accepted-risk host): CC_NO_HOST_HEALTH=1 — the gate\n` +
+    `  then runs UNGUARDED; its verdict may be untrustworthy; samples are still recorded.\n\n`);
+  process.exit(2);
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
 
@@ -1375,6 +1465,11 @@ async function main() {
   // this lock first), before the machine-wide heavy lock.
   const runId = makeRunId();
   const summaryDir = opts.out ? path.resolve(opts.out) : path.join(ROOT, 'build', 'test-run');
+  // Host-health preflight (#725 stage B) — after the exit-2 config
+  // preflights (their faults are the user's to fix regardless of host
+  // state), before the locks (a refused run must not take them). May exit 2
+  // with a [host-health] marker + refusal record; never writes a summary.
+  const hostHealth = hostHealthPreflight(runId, summaryDir);
   acquireGateLock(summaryDir);
   // A dispatcher killed from a NON-terminal source (cc-meta, a service
   // manager) must pass the signal on to its live suite child — with the old
@@ -1423,16 +1518,57 @@ async function main() {
   // so before this a host-suite red's evidence lived only in terminal scroll.
   const teeFor = (name) => path.join(summaryDir, 'history', runId, 'logs', name + '.log');
 
+  // Mid-run truncation (#725 stage B). Before each row, the row's own
+  // boundary sample gets a verdict; on the OS's critical verdict the current
+  // and remaining rows are recorded FAIL/'host-degraded' ("DID NOT RUN" — the
+  // heavy-lock-contended shape: literally non-pass, rule 5 stays red) and the
+  // gate stops burning hours on a box that cannot produce a trustworthy
+  // verdict (the 2026-08-20 detached control accumulated crossed reds for
+  // hours). 🔴 Honest coverage statement: samples are taken at ROW BOUNDARIES
+  // — the quietest instants of a run (the previous suite's children have
+  // exited). This protects a MULTI-suite run from grinding on an
+  // already-degraded host; it does NOT detect degradation developing
+  // mid-suite, and on a single-suite gate it adds nothing beyond the
+  // preflight. Sampling inside a running suite would make the gate an actor
+  // inside its own children — deliberately refused.
+  let truncated = null;
+  const truncateFrom = (idx, hostBefore, v) => {
+    truncated = { at: ordered[idx], reasons: v.reasons };
+    process.stdout.write(`\x1b[31m[host-health] TRUNCATING at '${ordered[idx]}': ${v.reasons.join('; ')}\x1b[0m\n` +
+      `  remaining suites recorded FAIL/host-degraded (DID NOT RUN) — a degraded host\n` +
+      `  cannot produce a trustworthy verdict (#725).\n`);
+    const restPy = [];
+    for (const rest of ordered.slice(idx)) {
+      if (SUITES[rest].pyTypes) { if (!pyBatchDone) restPy.push(SUITES[rest].pyTypes); continue; }
+      results.push({ suite: rest, status: 'fail', reason: 'host-degraded',
+        note: 'DID NOT RUN — ' + v.reasons.join('; '), host: { before: hostBefore } });
+    }
+    if (restPy.length) {
+      pyBatchDone = true;
+      results.push({ suite: `py[${restPy.join(',')}]`, status: 'fail', reason: 'host-degraded',
+        note: 'DID NOT RUN — ' + v.reasons.join('; '), host: { before: hostBefore } });
+    }
+  };
+  const degradedVerdict = (hostBefore) => {
+    if (hostHealth.disabled) return null;
+    const v = HOST_HEALTH.verdict(hostBefore);
+    return v.level === 'refuse' ? v : null;
+  };
+
   // Interleave native suites and the single py batch in RUN_ORDER position.
   let pyBatchDone = false;
-  for (const suite of ordered) {
+  for (let si = 0; si < ordered.length; si++) {
+    const suite = ordered[si];
     if (SUITES[suite].pyTypes) {
       if (pyBatchDone) continue;
+      const hostPy = HOST_HEALTH.sample();
+      const tvPy = degradedVerdict(hostPy);
+      if (tvPy) { truncateFrom(si, hostPy, tvPy); break; }
       pyBatchDone = true;
       const args = ['tests/run.py', `--types=${pyCats.join(',')}`];
       if (opts.filter != null) args.push(`--filter=${opts.filter}`);
       const tPy = Date.now();
-      const hostBefore = HOST_HEALTH.sample();
+      const hostBefore = hostPy;
       const r = await runProcess(pyPre.python, args, `run.py: ${pyCats.join(',')}`, teeFor('py'));
       const row = { suite: `py[${pyCats.join(',')}]`, ...classify(r) };
       // #582: attach run.py's own record (per-category tallies) and hold the
@@ -1451,6 +1587,8 @@ async function main() {
       ...(cmd0 === 'node' ? ['-r', PARENT_WATCH] : []),
       ...SUITES[suite].cmd.slice(1), ...suiteArgs(suite, opts, tierFilters)];
     const hostBefore = HOST_HEALTH.sample();
+    const tv = degradedVerdict(hostBefore);
+    if (tv) { truncateFrom(si, hostBefore, tv); break; }
     const r = await runProcess(cmd0, args, `${suite} suite`, teeFor(suite));
     const c = classify(r, !!SUITES[suite].heavyLock);
     // A contended suite never ran, so any artifact on disk is an EARLIER
@@ -1487,7 +1625,11 @@ async function main() {
   // minutes of a red (measured live, 2026-08-25 pre-deploy sweep).
   const summaryObj = writeMergedSummary(results, Date.now() - t0, opts, ordered, summaryDir,
                      { tier: opts.tier, tierFilters, omitted },
-                     { runId, host: { hostname: os.hostname(), start: hostStart, end: HOST_HEALTH.sample() } });
+                     { runId, host: { hostname: os.hostname(), start: hostStart, end: HOST_HEALTH.sample() },
+                       hostHealth: hostHealth.disabled ? { disabled: true }
+                         : { level: hostHealth.level, reasons: hostHealth.reasons,
+                             recovery: hostHealth.recovery },
+                       truncated });
   archiveRun(summaryDir, runId, results, summaryObj);
   printFinal(results, Date.now() - t0, path.join(summaryDir, 'summary.json'),
              opts.tier, omitted);
@@ -1565,6 +1707,11 @@ function writeMergedSummary(results, ms, opts, ordered, dir, tierInfo, identity)
       // per-row `host`/`hostSuspect` fields carry the row-level samples.
       runId: identity ? identity.runId : undefined,
       host: identity ? identity.host : undefined,
+      // #725 stage B: the preflight's verdict (or its disablement) and, when
+      // the run stopped early on a degraded host, where and why — the rows
+      // themselves carry reason 'host-degraded' + "DID NOT RUN".
+      hostHealth: identity ? identity.hostHealth : undefined,
+      truncated: identity && identity.truncated ? identity.truncated : undefined,
       filter: opts.filter == null ? null : opts.filter,
       // #576 F1: which formal tier this run was (null for hand-named suites)
       // and what it DELIBERATELY did not run. `tierFilters` records any
@@ -1638,7 +1785,8 @@ function printFinal(results, ms, summaryPath, tier, omitted) {
     // tag says what happened: the suite DID NOT RUN — the reader must not have
     // to hand-decode exit 3 to tell that from a genuine red (#561).
     const tag = r.status === 'pass' ? '\x1b[32mok  \x1b[0m'
-      : r.reason === 'heavy-lock-contended' ? '\x1b[31mLOCK\x1b[0m' : '\x1b[31mFAIL\x1b[0m';
+      : r.reason === 'heavy-lock-contended' ? '\x1b[31mLOCK\x1b[0m'
+      : r.reason === 'host-degraded' ? '\x1b[31mHOST\x1b[0m' : '\x1b[31mFAIL\x1b[0m';
     // #582: a skip count on the verdict line, colored when nonzero — the one
     // number that used to vanish into unpreserved stdout.
     const tal = r.tallies;
@@ -1653,9 +1801,11 @@ function printFinal(results, ms, summaryPath, tier, omitted) {
   const pass = results.filter(r => r.status === 'pass').length;
   const fail = results.filter(r => r.status === 'fail').length;
   const contended = results.filter(r => r.reason === 'heavy-lock-contended').length;
+  const degraded = results.filter(r => r.reason === 'host-degraded').length;
   const rel = path.relative(ROOT, summaryPath);
   process.stdout.write(`\n  ${pass} passed, ${fail} failed` +
     (contended ? ` (${contended} of those DID NOT RUN — heavy lock contended)` : '') +
+    (degraded ? ` (${degraded} of those DID NOT RUN — host degraded, #725)` : '') +
     `  (${fmtSecs(ms)})  → ${rel && !rel.startsWith('..') ? rel : summaryPath}\n`);
   // The tier restated AT THE VERDICT, not just in the banner a screenful up:
   // the last line is what a human (or a transcript excerpt) actually reads.
