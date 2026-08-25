@@ -123,3 +123,70 @@ candidates.
   artifact).
 - Sweep: embargoed, jku's call, over the combined range — doubling as B3's
   false-fire validation set.
+
+---
+
+# Counter-pass 2 addendum (on top of stage B, tip after this range's docs)
+
+## FINDING (generalized, per jku): a confident result manufactured by its own setup
+
+Fifth instance in one week of one shape, across unrelated work: filenames
+that disclosed the verdict; a prompt that made NO the only possible answer;
+a transcribe-vs-judge substitution; CPM4's false sentence matching a
+shape-only regex; and now **CPM1's amplified race window** — this lane
+reported the gate-lock race control RED after widening the empty-lock
+window to 500 ms. The reviewer reverted `linkSync` alone at NATURAL timing
+and the whole control stayed green: the mutation had measured the
+amplification, not the control. **The common shape: the setup guaranteed
+the outcome. In every one of the five, the catch came from someone
+RE-RUNNING the experiment, not from reading the report.** A mutation is
+only evidence if it reproduces the defect at its natural magnitude; CPM2's
+same-delay-in-the-fixed-shape green was the right kind of control
+(discriminates the mechanism), but it cannot rescue an amplified CPM1.
+
+The replacement control tests the INVARIANT rather than the race: leg 3a's
+observer polls the lock during 300 real acquire/release cycles and requires
+it NEVER be readable without its holder JSON, with an anti-vacuity floor
+(>= 20 present-reads — a pass may not be produced by observing nothing).
+Acceptance met at natural magnitude: `linkSync` reverted alone → RED with
+28 violations across 1097 present-reads, first violation the empty string.
+Leg 3d's own first run repeated the setup-guarantees-outcome shape in
+miniature (the garbage lock was never pre-created, so the gate simply
+acquired and ran) — caught and noted in the leg.
+
+## Stated production limitation (jku-mandated, belongs beside the threshold note)
+
+**The primary refusal signal — pressure >= 4 — has never been observed to
+fire on this box by any real means.** The bounded experiment could not move
+the instrument even to level 2, and level 4 is deliberately out of bounds.
+The refusal path's primary axis is validated ONLY by injection (the labeled
+proxy); `availGb` is the axis demonstrated to respond to real load. The
+failure direction is under-firing (safe), and deferring to the OS's own
+verdict remains right — but **the first real firing of this refusal will
+also be its first real test.** This sits next to the earlier admission that
+the 2026-08-20 incident recorded neither instrument: two of the same shape,
+deliberately together.
+
+Reusable mechanism note: **a compressible-fill allocator does not move
+macOS memory pressure — the compressor absorbs it** (6 GB of fill(1) pages:
+availGb plateaued ~5.27, pressure/memFreePct never moved). Synthetic
+pressure testing on this platform requires incompressible fill, which
+chases jetsam and was declined per the rails.
+
+## Counter-pass 2 changes + mutation ledger
+
+- Acquisition budget: 15s total, then loud exit-2 naming the wait (finding
+  2 — the unbounded silent grace loop was the ticket's own defect
+  reintroduced). Leg 3d: perpetually-refreshed garbage lock → refused in
+  ~15s, never the harness timeout.
+- PID-reuse discriminator (finding 3): a live holder pid whose ps command
+  is not a tests/run.js dispatcher is stolen loudly ('PID reuse'); ps
+  verification failure stays conservative (refuse — never steal on
+  ignorance); 6h holder-age cap as backstop. Leg 3's stand-in holder is now
+  a decoy that LOOKS like a dispatcher.
+
+| # | mutation | RED at |
+|---|---|---|
+| CP2M1 | linkSync reverted ALONE, natural timing (the acceptance criterion) | leg 3a: 28 violations / 1097 present-reads |
+| CP2M2 | acquisition budget removed | leg 3d: gate ground on 38.9s, no loud give-up |
+| CP2M3 | reuse discriminator removed | leg 3e: refused instead of stealing (3 legs) |
