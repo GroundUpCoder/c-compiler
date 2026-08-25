@@ -1179,16 +1179,16 @@ function acquireGateLock(summaryDir) {
   const ACQUIRE_MAX_MS = 15000;
   // Backstop for finding 3 (PID reuse): no real gate holds a lock this long.
   const HOLDER_MAX_AGE_MS = 6 * 60 * 60 * 1000;
-  // Finding 3's discriminator, free in the holder record already: a LIVE pid
-  // whose actual command line is not a tests/run.js dispatcher is a recycled
-  // pid, not a holder. Verification failure (ps dead, EPERM, non-POSIX) is
-  // conservative: treat as the holder and refuse — never steal on ignorance.
-  const looksLikeDispatcher = (pid) => {
+  // CP2 finding 3's discriminator, tri-state since CP4 finding 2: a LIVE pid
+  // whose actual command line IS a tests/run.js dispatcher is the holder; one
+  // that is NOT is a recycled pid. 'unknown' (ps dead, EPERM, non-POSIX) is
+  // its own answer — the age cap applies only there.
+  const dispatcherIdentity = (pid) => {
     try {
       const cmd = require('child_process').execFileSync('ps', ['-o', 'command=', '-p', String(pid)],
         { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
-      return /tests[/\\]run\.js/.test(cmd);
-    } catch { return true; }
+      return /tests[/\\]run\.js/.test(cmd) ? 'yes' : 'no';
+    } catch { return 'unknown'; }
   };
   const sleepMs = (ms) => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* fallthrough */ } };
   const tmp = lockPath + '.tmp-' + process.pid;
@@ -1219,23 +1219,33 @@ function acquireGateLock(summaryDir) {
     let h = null;
     try { h = JSON.parse(fs.readFileSync(lockPath, 'utf8')); } catch { /* unparseable */ }
     if (h && h.pid !== process.pid && pidAlive(h.pid)) {
-      // Finding 3: alive is not enough — after a crash plus PID reuse by a
-      // long-lived unrelated process, pidAlive() alone refuses until that
-      // process exits or a human deletes the file. Steal LOUDLY when the
-      // record is older than any real gate or the live pid is not actually
-      // a dispatcher.
-      const holderAgeMs = Date.now() - (Date.parse(h.startedAt) || 0);
-      if (holderAgeMs > HOLDER_MAX_AGE_MS) {
-        process.stderr.write(`[gate-lock] holder record is ${(holderAgeMs / 3600000).toFixed(1)}h old — ` +
-          `no gate runs that long; treating pid ${h.pid} as PID REUSE after a crash, stealing\n`);
-        try { fs.unlinkSync(lockPath); } catch { /* raced */ }
-        continue;
-      }
-      if (!looksLikeDispatcher(h.pid)) {
+      // CP2 finding 3 + CP4 finding 2: alive is not enough (PID reuse), but
+      // identity DOMINATES age — the first landing checked the 6h cap
+      // before ps, so a VERIFIED live dispatcher was robbed purely for
+      // running long, recreating the two-dispatchers-one-dir defect the
+      // lock exists to prevent. A stronger check must not queue behind the
+      // heuristic it supersedes: verify first; a confirmed dispatcher is
+      // authoritative REGARDLESS of age; a live non-dispatcher is stolen
+      // loudly; the age cap survives only where verification itself FAILS
+      // (ps missing/EPERM) — exactly where an ancient unverifiable lock
+      // would otherwise wedge forever.
+      const identity = dispatcherIdentity(h.pid);
+      if (identity === 'no') {
         process.stderr.write(`[gate-lock] pid ${h.pid} is ALIVE but is not a tests/run.js dispatcher ` +
           `(PID reuse after a crash) — stealing the stale lock\n`);
         try { fs.unlinkSync(lockPath); } catch { /* raced */ }
         continue;
+      }
+      if (identity === 'unknown') {
+        const holderAgeMs = Date.now() - (Date.parse(h.startedAt) || 0);
+        if (holderAgeMs > HOLDER_MAX_AGE_MS) {
+          process.stderr.write(`[gate-lock] cannot verify pid ${h.pid} (ps failed) and the holder ` +
+            `record is ${(holderAgeMs / 3600000).toFixed(1)}h old — no gate runs that long; ` +
+            `treating as PID REUSE after a crash, stealing\n`);
+          try { fs.unlinkSync(lockPath); } catch { /* raced */ }
+          continue;
+        }
+        // Unverifiable but plausibly-aged: conservative — refuse below.
       }
       process.stderr.write(
         `\n[gate-lock] REFUSING: another tests/run.js is already writing ${summaryDir}\n` +
@@ -1597,23 +1607,47 @@ async function main() {
   // mid-suite, and on a single-suite gate it adds nothing beyond the
   // preflight. Sampling inside a running suite would make the gate an actor
   // inside its own children — deliberately refused.
+  // Returns TRUE only when something genuinely unrun was truncated. 🔴 CP4
+  // finding 1: the first landing set `truncated` and printed TRUNCATING
+  // keyed on the next ordered TOKEN — but every selected python category
+  // runs inside ONE batch, so on an all-py selection the "next token" had
+  // already run: the artifact then claimed a truncation at a completed
+  // category, recorded no failing row, and exited 0 — a self-consistent-
+  // looking lie about the gate's own scope. The unrun set is computed FIRST
+  // now; an empty set declares nothing.
   let truncated = null;
-  const truncateFrom = (idx, hostBefore, v) => {
-    truncated = { at: ordered[idx], reasons: v.reasons };
-    process.stdout.write(`\x1b[31m[host-health] TRUNCATING at '${ordered[idx]}': ${v.reasons.join('; ')}\x1b[0m\n` +
+  const truncateFrom = (idx, sampleAtDecision, v) => {
+    const restNative = [];
+    const restPyCats = [];
+    for (const rest of ordered.slice(idx)) {
+      if (SUITES[rest].pyTypes) { if (!pyBatchDone) restPyCats.push(SUITES[rest].pyTypes); continue; }
+      restNative.push(rest);
+    }
+    if (!restNative.length && !restPyCats.length) return false;   // nothing unrun — no truncation exists
+    // `at` = the first thing that did NOT run, in execution order.
+    let firstUnrun = null;
+    for (const rest of ordered.slice(idx)) {
+      if (SUITES[rest].pyTypes) {
+        if (!pyBatchDone) { firstUnrun = `py[${restPyCats.join(',')}]`; break; }
+        continue;
+      }
+      firstUnrun = rest;
+      break;
+    }
+    truncated = { at: firstUnrun, reasons: v.reasons };
+    process.stdout.write(`\x1b[31m[host-health] TRUNCATING at '${firstUnrun}': ${v.reasons.join('; ')}\x1b[0m\n` +
       `  remaining suites recorded FAIL/host-degraded (DID NOT RUN) — a degraded host\n` +
       `  cannot produce a trustworthy verdict (#725).\n`);
-    const restPy = [];
-    for (const rest of ordered.slice(idx)) {
-      if (SUITES[rest].pyTypes) { if (!pyBatchDone) restPy.push(SUITES[rest].pyTypes); continue; }
+    for (const rest of restNative) {
       results.push({ suite: rest, status: 'fail', reason: 'host-degraded',
-        note: 'DID NOT RUN — ' + v.reasons.join('; '), host: { before: hostBefore } });
+        note: 'DID NOT RUN — ' + v.reasons.join('; '), host: { before: sampleAtDecision } });
     }
-    if (restPy.length) {
+    if (restPyCats.length) {
       pyBatchDone = true;
-      results.push({ suite: `py[${restPy.join(',')}]`, status: 'fail', reason: 'host-degraded',
-        note: 'DID NOT RUN — ' + v.reasons.join('; '), host: { before: hostBefore } });
+      results.push({ suite: `py[${restPyCats.join(',')}]`, status: 'fail', reason: 'host-degraded',
+        note: 'DID NOT RUN — ' + v.reasons.join('; '), host: { before: sampleAtDecision } });
     }
+    return true;
   };
   const degradedVerdict = (hostBefore) => {
     if (hostHealth.disabled) return null;
@@ -1649,7 +1683,10 @@ async function main() {
       // healthy again). The completed row keeps its own honest result;
       // only what has not run yet is truncated.
       const tvPyAfter = degradedVerdict(row.host.after);
-      if (tvPyAfter && si + 1 < ordered.length) { truncateFrom(si + 1, row.host.after, tvPyAfter); break; }
+      // truncateFrom is the authority on whether anything unrun remains
+      // (CP4 finding 1: on an all-py selection the following tokens have
+      // already run inside this batch) — break only on a real truncation.
+      if (tvPyAfter && truncateFrom(si + 1, row.host.after, tvPyAfter)) break;
       continue;
     }
     const cmd0 = SUITES[suite].cmd[0];
@@ -1681,7 +1718,7 @@ async function main() {
     // CP3 finding 2: evaluate the after-row sample (see the py-batch twin
     // above for the rationale).
     const tvAfter = degradedVerdict(row.host.after);
-    if (tvAfter && si + 1 < ordered.length) { truncateFrom(si + 1, row.host.after, tvAfter); break; }
+    if (tvAfter && truncateFrom(si + 1, row.host.after, tvAfter)) break;
   }
 
   // #561b: `--out=DIR` redirects the run-level record (summaryDir was

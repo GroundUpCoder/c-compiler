@@ -190,6 +190,64 @@ const statOrNull = (p) => { try { const s = fs.statSync(p); return s.mtimeMs + '
     s.truncated && s.truncated.at === 'netsurf-patch', s.truncated);
 }
 
+// ---- leg 6c (#725 CP4 finding 1): the BATCHED python path — the sibling ----
+// the native-path fix (and its controls) missed. All selected py categories
+// run inside ONE batch, so "the next ordered token" can already have run.
+{
+  // (a) All-py selection, critical AFTER the batch: NOTHING remains unrun,
+  // so there is NO truncation — the first landing declared one anyway
+  // ("TRUNCATING at '<second category>'", truncated.at set, no failing row,
+  // exit 0): a self-contradicting artifact. Map: (1) preflight, (2)
+  // hostStart, (3) py-before, (4) py-after CRITICAL, (5) end.
+  const r = gate(['disw', 'sourcemap'],
+    { CC_HOST_HEALTH_FAKE: fakePath('pyafter-a', [HEALTHY, HEALTHY, HEALTHY, CRITICAL, HEALTHY]) });
+  const out = String(r.stdout);
+  const s = readSummary();
+  check('leg 6c-a: all work ran — the gate exits by its results, with NO phantom truncation',
+    r.status === 0 && !out.includes('TRUNCATING'), { status: r.status });
+  check('leg 6c-a: summary declares NO truncation (artifact self-consistent)',
+    s.truncated === undefined && !s.results.some((x) => x.reason === 'host-degraded'),
+    s.truncated);
+  check('leg 6c-a: the py batch row keeps its honest result',
+    s.results.find((x) => /^py\[/.test(x.suite)).status === 'pass');
+  check('leg 6c-a: exact map (seam quiet)', !String(r.stderr).includes('exhausted')
+    && !String(r.stderr).includes('FAKE UNDER-CONSUMED'), String(r.stderr).slice(-200));
+}
+{
+  // (b) py batch followed by a genuinely unrun NATIVE suite (kernel is the
+  // only class that sorts after the py block; its runner NEVER spawns —
+  // truncation fires first — and the heavy lock is scoped to a private
+  // TMPDIR, the test_heavylock_gate isolation rule). The two CRITICAL
+  // elements carry DISTINCT availGb so the truncation row proves WHICH
+  // sample decided it: 0.4 = the py AFTER-sample (the fix), 0.3 = the next
+  // before-sample (what a regressed after-check would consume instead —
+  // and what keeps a regression from launching a real kernel suite here).
+  const hlockDir = path.join(priv, 'hlock');
+  fs.mkdirSync(hlockDir, { recursive: true });
+  const C_AFTER = { ...CRITICAL, availGb: 0.4 };
+  const C_NEXT = { ...CRITICAL, availGb: 0.3 };
+  const r = gate(['disw', 'kernel'], {
+    CC_HOST_HEALTH_FAKE: fakePath('pyafter-b', [HEALTHY, HEALTHY, HEALTHY, C_AFTER, C_NEXT]),
+    TMPDIR: hlockDir, CC_HEAVY_LOCK_PID: '', CC_NO_HEAVY_LOCK: '',
+  });
+  const out = String(r.stdout);
+  const s = readSummary();
+  const kRow = s.results.find((x) => x.suite === 'kernel');
+  check('leg 6c-b: py-after critical truncates the unrun kernel row — exit 1',
+    r.status === 1 && out.includes("TRUNCATING at 'kernel'"), { status: r.status });
+  check('leg 6c-b: the kernel suite NEVER started', !out.includes('━━━ kernel suite'));
+  check('leg 6c-b: the truncated row is fail/host-degraded/DID NOT RUN',
+    !!kRow && kRow.status === 'fail' && kRow.reason === 'host-degraded'
+      && /^DID NOT RUN/.test(kRow.note), kRow);
+  check('leg 6c-b: the decision came from the AFTER-sample (availGb 0.4, not the next before-sample\'s 0.3)',
+    !!kRow && kRow.host.before.availGb === 0.4, kRow && kRow.host.before.availGb);
+  check('leg 6c-b: truncated.at names the unrun suite', s.truncated && s.truncated.at === 'kernel', s.truncated);
+  check('leg 6c-b: the py row keeps its honest pass',
+    s.results.find((x) => /^py\[/.test(x.suite)).status === 'pass');
+  check('leg 6c-b: exact map (seam quiet)', !String(r.stderr).includes('exhausted')
+    && !String(r.stderr).includes('FAKE UNDER-CONSUMED'), String(r.stderr).slice(-200));
+}
+
 // ---- leg 8: the seam itself fails LOUDLY on misuse (both directions) ----
 // The red control for the vacuous-control class: a control whose sample map
 // is WRONG must go red, not pass off a sticky value.

@@ -280,6 +280,27 @@ let runId1 = null;
   check('leg 3e: lock released after the run', !fs.existsSync(lockPath));
 }
 
+// ---- leg 3f (#725 CP4 finding 2): identity DOMINATES age — a VERIFIED ----
+// ---- live dispatcher is authoritative however old its record. The      ----
+// ---- first landing checked the 6h age cap BEFORE the ps identity check, ----
+// ---- so a legitimately long-running gate was robbed and the             ----
+// ---- two-dispatchers-one-dir defect came back through the backstop.     ----
+{
+  const decoy = cp.spawn('node', ['-e', 'setInterval(() => {}, 1000)', 'decoy-arg', 'tests/run.js'],
+    { stdio: 'ignore' });
+  fs.writeFileSync(path.join(outDir, '.gate-lock'), JSON.stringify({
+    pid: decoy.pid,
+    startedAt: new Date(Date.now() - 7 * 3600 * 1000).toISOString(),   // 7h > the 6h cap
+    argv: ['stand-in'] }));
+  const r = gate(['todos']);
+  check('leg 3f: an AGED but VERIFIED live dispatcher still REFUSES (never robbed by the age cap)',
+    r.status === 2 && String(r.stderr).includes('[gate-lock] REFUSING'),
+    { status: r.status, stderr: String(r.stderr).slice(-300) });
+  check('leg 3f: no PID-reuse steal message fired', !String(r.stderr).includes('PID REUSE'));
+  fs.rmSync(path.join(outDir, '.gate-lock'), { force: true });
+  decoy.kill('SIGKILL');
+}
+
 // ---- leg 4: a dead holder's lock is stolen ------------------------------
 {
   // A just-exited child's pid: dead by construction, far too recent to be
