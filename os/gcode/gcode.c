@@ -2710,10 +2710,59 @@ static void repair_log(const repair_report *rep, const char *where) {
  *     unpersisted repair: a repair re-derives deterministically from the log,
  *     a compaction depends on usage numbers a re-reader may not reproduce. */
 
+/* #748: the window a model really has, so the compactor folds at the right
+ * point rather than a guessed one.
+ *
+ * The table used to be two substrings, and `claude` matched EVERY Claude model
+ * at 200000. That is right for exactly one current model (Haiku 4.5) and wrong
+ * for the rest: Opus 5 / 4.8 / 4.7 / 4.6, Sonnet 5 / 4.6, Fable 5 and Mythos 5
+ * all carry 1M. gcode warns at 75% and compacts at 85%, so on its own
+ * documented default model (claude-opus-4-8, 1M) it was folding history away at
+ * ~170k with 830k of real headroom unused — roughly 5.9x too early. In a long
+ * build that is the difference between the agent remembering the API it looked
+ * up in round 12 and re-deriving it in round 90.
+ *
+ * The fix is NOT to flip the blanket the other way. A blanket `claude` ->
+ * 1000000 is the same class of error, and the WORSE direction: over-stating a
+ * window means never compacting until the provider hard-400s the request,
+ * where under-stating only folds early. So: exact rows for the models whose
+ * window is known, a conservative `claude` family row for a Claude model this
+ * build has not heard of, and CTX_WINDOW_DEFAULT for everything else.
+ *
+ * MATCHING IS FIRST-MATCH SUBSTRING, so specific keys MUST precede general
+ * ones — the bare `claude` row is last, and a `claude-haiku` id must not be
+ * captured by it. That ordering hazard is what the self-test pins; substring
+ * rather than prefix so a provider-prefixed id (`anthropic.claude-opus-5` on
+ * Bedrock) and a dated full id both resolve. */
 static long context_window_for(const char *model) {
     static const struct { const char *key; long window; } W[] = {
-        { "claude",   200000 },
-        { "deepseek", 128000 },
+        /* 1M-context models, most specific first */
+        { "claude-opus-5",     1000000 },
+        { "claude-opus-4-8",   1000000 },
+        { "claude-opus-4-7",   1000000 },
+        { "claude-opus-4-6",   1000000 },
+        { "claude-sonnet-5",   1000000 },
+        { "claude-sonnet-4-6", 1000000 },
+        { "claude-fable-5",    1000000 },
+        { "claude-mythos-5",   1000000 },
+        /* 200k models. These rows are behaviourally INERT today — the family
+         * row below carries the same number, so deleting them changes no
+         * answer, and a mutation that deletes one is correctly not caught by
+         * a test asserting behaviour. They are kept because they are the
+         * difference between "we know this model is 200k" and "we have never
+         * heard of it": if the family row's value ever moves, these stay
+         * right. Explicit over inherited. */
+        { "claude-haiku",       200000 },
+        { "claude-opus-4-5",    200000 },
+        { "claude-opus-4-1",    200000 },
+        { "claude-sonnet-4-5",  200000 },
+        /* Family fallback: a Claude model this build does not know. 200000
+         * is a true lower bound rather than a guess — no shipped Claude model
+         * has ever had a window smaller than 200k — so an unrecognised one
+         * folds early rather than 400ing. `--context-tokens` /
+         * GCODE_CONTEXT_TOKENS is the operator override. MUST stay last. */
+        { "claude",             200000 },
+        { "deepseek",           128000 },
     };
     if (model)
         for (size_t i = 0; i < sizeof W / sizeof W[0]; i++)
@@ -3999,12 +4048,30 @@ static int compact_self_test(void) {
     /* The window table's unknown-model fallback is a LIVE ceiling — the
      * vacuous-green hazard is a compactor that silently never fires against
      * an off-table provider, which is exactly how gcode is live-tested. */
-    ok &= context_window_for("claude-opus-5") == 200000;
-    ok &= context_window_for("claude-fable-5") == 200000;
+    ok &= context_window_for("claude-opus-5") == 1000000;
+    ok &= context_window_for("claude-opus-4-8") == 1000000;   /* gcode's own default */
+    ok &= context_window_for("claude-sonnet-5") == 1000000;
+    ok &= context_window_for("claude-fable-5") == 1000000;
     ok &= context_window_for("deepseek-v4-pro") == 128000;
     ok &= context_window_for("totally-unknown-model") == CTX_WINDOW_DEFAULT;
     ok &= context_window_for(NULL) == CTX_WINDOW_DEFAULT;
     ok &= CTX_WINDOW_DEFAULT > 0;
+    /* #748: the FIRST-MATCH ordering hazard. The table is scanned in order,
+     * so a specific key placed after the broad `claude` row would be
+     * unreachable and its model would silently take the family number. These
+     * rows fail the moment the bare `claude` entry is moved up. */
+    ok &= context_window_for("claude-haiku-4-5") == 200000;
+    ok &= context_window_for("claude-opus-4-5") == 200000;
+    ok &= context_window_for("claude-sonnet-4-5") == 200000;
+    /* A Claude model this build has never heard of falls to the family row —
+     * conservative, so it folds early instead of 400ing. Deliberately NOT the
+     * optimistic 1M: over-stating a window is the worse direction. */
+    ok &= context_window_for("claude-opus-9") == 200000;
+    ok &= context_window_for("claude-something-new") == 200000;
+    /* Real-world id shapes must resolve, not fall through: a dated full id,
+     * and a provider-prefixed id. */
+    ok &= context_window_for("claude-opus-4-5-20251101") == 200000;
+    ok &= context_window_for("anthropic.claude-opus-5") == 1000000;
 
     /* The 400-recovery gate must catch the live phrasings and MUST NOT catch
      * a genuinely-permanent 400 — narrowing the permanent classifier is the
