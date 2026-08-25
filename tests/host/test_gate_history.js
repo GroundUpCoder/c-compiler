@@ -118,6 +118,58 @@ let runId1 = null;
   fs.rmSync(lockPath, { force: true });
 }
 
+// ---- leg 3b (#725 counter-pass): CONCURRENT dispatchers — exactly one ----
+// ---- wins. The pre-fix openSync+writeSync left the lock momentarily     ----
+// ---- EMPTY; a contender in that window parsed garbage and STOLE a live  ----
+// ---- acquisition (reviewer-reproduced: both gates ran over one dir).    ----
+// ---- With link()-atomic acquisition, any interleaving resolves to one   ----
+// ---- exit 0 and one exit-2 refusal.                                     ----
+{
+  // A tiny async driver child races the two dispatchers (this file is
+  // linear/sync); each gate's exit code + stderr tail come back as JSON.
+  const driver = cp.spawnSync(process.execPath, ['-e', `
+    const cp = require('child_process');
+    const go = () => new Promise((res) => {
+      const c = cp.spawn('node', [${JSON.stringify(RUN)}, 'todos', '--out=' + ${JSON.stringify(outDir)}],
+        { cwd: ${JSON.stringify(ROOT)} });
+      let err = '';
+      c.stderr.on('data', (d) => { err += d; });
+      c.stdout.resume();   // drain — an unread pipe is the #725 defect itself
+      c.on('exit', (code) => res({ code, err: err.slice(-1000) }));
+    });
+    Promise.all([go(), go()]).then(([a, b]) => console.log(JSON.stringify({ a, b })));
+  `], { encoding: 'utf8', timeout: 120000 });
+  let rr = null;
+  try { rr = JSON.parse(driver.stdout); } catch { /* driver died */ }
+  check('leg 3b: race driver completed', !!rr, { status: driver.status, err: String(driver.stderr).slice(-200) });
+  const codes = rr ? [rr.a.code, rr.b.code].sort() : [];
+  check('leg 3b: concurrent dispatchers — exactly one ran, one refused',
+    JSON.stringify(codes) === JSON.stringify([0, 2]), rr && { a: rr.a.code, b: rr.b.code });
+  const loser = rr && (rr.a.code === 2 ? rr.a : rr.b);
+  check('leg 3b: the loser refused via the gate-lock, not some other exit-2 path',
+    !!loser && loser.err.includes('[gate-lock]'), loser && loser.err.slice(-200));
+  check('leg 3b: the winner released the lock', !fs.existsSync(path.join(outDir, '.gate-lock')));
+  check('leg 3b: the winner\'s summary is valid', readSummary().results[0].status === 'pass');
+}
+
+// ---- leg 3c (#725 counter-pass): an UNPARSEABLE lock is stolen only ------
+// ---- past the age grace, loudly — mid-acquisition is indistinguishable  ----
+// ---- from abandoned garbage except by age, so staleness is PROVEN, not  ----
+// ---- assumed. (Post-fix our own writers never produce an empty lock;    ----
+// ---- this models a pre-fix leftover or a foreign truncated write.)      ----
+{
+  fs.writeFileSync(path.join(outDir, '.gate-lock'), '');   // fresh mtime, no JSON
+  const t0 = Date.now();
+  const r = gate(['todos']);
+  check('leg 3c: gate completes over aged-out garbage (steals past the grace)',
+    r.status === 0, { status: r.status, stderr: String(r.stderr).slice(-300) });
+  check('leg 3c: the steal is LOUD and names the age + grace',
+    /\[gate-lock\] unparseable lock file \(age [\d.]+s > 2s grace\)/.test(String(r.stderr)),
+    String(r.stderr).slice(0, 300));
+  check('leg 3c: the grace was actually waited out (>=2s before any suite output)',
+    Date.now() - t0 >= 2000);
+}
+
 // ---- leg 4: a dead holder's lock is stolen ------------------------------
 {
   // A just-exited child's pid: dead by construction, far too recent to be

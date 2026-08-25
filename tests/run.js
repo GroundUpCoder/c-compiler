@@ -1160,29 +1160,55 @@ function acquireGateLock(summaryDir) {
   const { pidAlive } = require('./lib/heavy-lock.js');
   const lockPath = path.join(summaryDir, '.gate-lock');
   fs.mkdirSync(summaryDir, { recursive: true });
+  // Atomic acquisition (#725 counter-pass). The first landing did
+  // openSync('wx') + writeSync — the lock existed EMPTY for a moment, and a
+  // contender arriving in that window parsed garbage, took the steal branch,
+  // and unlinked a lock whose owner was alive and about to write (reviewer-
+  // reproduced: both dispatchers then ran over one artifact dir). Now the
+  // holder JSON is written to a PRIVATE tmp and link()ed into place: link
+  // fails EEXIST atomically and the lock file can never be observed without
+  // its content. The unparseable branch below then PROVES staleness by age
+  // instead of assuming it.
+  const GRACE_MS = 2000;
+  const sleepMs = (ms) => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* fallthrough */ } };
+  const tmp = lockPath + '.tmp-' + process.pid;
   for (;;) {
+    let linked = false;
     try {
-      const fd = fs.openSync(lockPath, 'wx');
-      fs.writeSync(fd, JSON.stringify({
+      fs.writeFileSync(tmp, JSON.stringify({
         pid: process.pid, startedAt: new Date().toISOString(), argv: process.argv.slice(1),
       }));
-      fs.closeSync(fd);
-      break;
+      fs.linkSync(tmp, lockPath);
+      linked = true;
     } catch (e) {
-      if (e.code !== 'EEXIST') throw e;
-      let h = null;
-      try { h = JSON.parse(fs.readFileSync(lockPath, 'utf8')); } catch { /* garbage → steal */ }
-      if (h && h.pid !== process.pid && pidAlive(h.pid)) {
-        process.stderr.write(
-          `\n[gate-lock] REFUSING: another tests/run.js is already writing ${summaryDir}\n` +
-          `  held by pid ${h.pid} since ${h.startedAt} (argv: ${(h.argv || []).join(' ')})\n` +
-          `  Two dispatchers over one artifact dir interleave transcripts and race the\n` +
-          `  summary rename — the retry would destroy the running gate's evidence (#725).\n` +
-          `  Wait for it, or give this run its own dir with --out=DIR.\n\n`);
-        process.exit(2);
-      }
-      try { fs.unlinkSync(lockPath); } catch { /* raced with another stealer */ }
+      if (e.code !== 'EEXIST') { try { fs.unlinkSync(tmp); } catch { /* gone */ } throw e; }
     }
+    try { fs.unlinkSync(tmp); } catch { /* gone */ }
+    if (linked) break;
+    let h = null;
+    try { h = JSON.parse(fs.readFileSync(lockPath, 'utf8')); } catch { /* unparseable */ }
+    if (h && h.pid !== process.pid && pidAlive(h.pid)) {
+      process.stderr.write(
+        `\n[gate-lock] REFUSING: another tests/run.js is already writing ${summaryDir}\n` +
+        `  held by pid ${h.pid} since ${h.startedAt} (argv: ${(h.argv || []).join(' ')})\n` +
+        `  Two dispatchers over one artifact dir interleave transcripts and race the\n` +
+        `  summary rename — the retry would destroy the running gate's evidence (#725).\n` +
+        `  Wait for it, or give this run its own dir with --out=DIR.\n\n`);
+      process.exit(2);
+    }
+    if (h === null) {
+      // Unparseable. Post-fix our own writers never produce this state, but
+      // a pre-fix leftover or a foreign truncated write can. Mid-acquisition
+      // and abandoned garbage are indistinguishable except by AGE — so wait
+      // out a short grace and only steal what stays garbage past it, loudly.
+      let ageMs = Infinity;
+      try { ageMs = Date.now() - fs.statSync(lockPath).mtimeMs; } catch { continue; /* vanished — re-contend */ }
+      if (ageMs < GRACE_MS) { sleepMs(150); continue; }
+      process.stderr.write(`[gate-lock] unparseable lock file (age ${(ageMs / 1000).toFixed(1)}s > ` +
+        `${GRACE_MS / 1000}s grace) — treating as abandoned, stealing\n`);
+    }
+    // Dead holder, our own stale pid, or aged-out garbage → steal and re-contend.
+    try { fs.unlinkSync(lockPath); } catch { /* raced with another stealer */ }
   }
   let released = false;
   const release = () => {

@@ -84,6 +84,19 @@ Swapouts:                                   61943934.
   check('parseVmStat: missing label parses to null, not 0', noFree.free === null, noFree.free);
   check('availableBytes: null on a missing pillar (unmeasured, not zero)',
     HH.availableBytes(noFree) === null);
+  // #725 counter-pass: EVERY summed pillar is required, not just free. The
+  // first landing coerced a missing inactive/speculative/purgeable to 0, so
+  // the reviewer's truncated vm_stat (page size + free only) yielded a
+  // confident 1.6 MB — "nearly out of memory" — instead of "unmeasured".
+  // That error's direction aims at stage B's refusal floor: a truncated read
+  // on a healthy box would refuse the gate.
+  check('availableBytes: reviewer\'s truncated input (free only) → null, never 1.6 MB',
+    HH.availableBytes(HH.parseVmStat(
+      'Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                                     100.\n')) === null);
+  for (const pillar of ['Pages inactive', 'Pages speculative', 'Pages purgeable']) {
+    const cut = HH.parseVmStat(VM_STAT_REAL.replace(new RegExp('^' + pillar + ':.*\\n', 'm'), ''));
+    check(`availableBytes: null when ${pillar} is absent`, HH.availableBytes(cut) === null);
+  }
 
   check('parseSwapUsage: real format',
     HH.parseSwapUsage('vm.swapusage: total = 2048.00M  used = 846.12M  free = 1201.88M  (encrypted)')

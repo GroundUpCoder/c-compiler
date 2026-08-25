@@ -91,10 +91,16 @@ function parseSwapUsage(text) {
 
 // Reclaimable-inclusive available bytes — the backstop figure. free alone
 // understates by GBs on a healthy Mac (the calibration trap above).
+// 🔴 EVERY summed field must be genuinely present or the answer is null
+// (#725 counter-pass): the first landing coerced missing reclaimable fields
+// to 0, so a truncated vm_stat read produced a confident WRONG number — and
+// the error's direction (available looks smaller) points straight at stage
+// B's refusal floor. A partial read must degrade to "unmeasured", never to
+// "nearly out of memory".
 function availableBytes(vm) {
-  if (!vm || vm.pageSize == null || vm.free == null) return null;
-  const sum = vm.free + (vm.inactive || 0) + (vm.speculative || 0) + (vm.purgeable || 0);
-  return sum * vm.pageSize;
+  if (!vm || vm.pageSize == null || vm.free == null || vm.inactive == null ||
+      vm.speculative == null || vm.purgeable == null) return null;
+  return (vm.free + vm.inactive + vm.speculative + vm.purgeable) * vm.pageSize;
 }
 
 // ---------------------------------------------------------------- sampling
