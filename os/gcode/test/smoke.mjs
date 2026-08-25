@@ -138,6 +138,17 @@ function startServer(scripts, validate) {
   });
 }
 
+// #747 made `system` a cacheable block array (a bare JSON string cannot carry
+// a cache_control breakpoint). The #530 legs are about the system prompt TEXT,
+// not its container, so they read it through here and stay agnostic — and the
+// #747 legs assert the container shape directly.
+function systemText(body) {
+  const sys = body ? body.system : undefined;
+  if (typeof sys === 'string') return sys;
+  if (Array.isArray(sys)) return sys.map((b) => (b && typeof b.text === 'string') ? b.text : '').join('');
+  return '';
+}
+
 const execFileAsync = promisify(execFile);
 // MUST be async: the fake server shares this process's event loop, so a
 // synchronous spawn would deadlock (child waits on a server that can't run).
@@ -1151,7 +1162,7 @@ async function main() {
       await runCodeBoth(srv.url, ['-p', 'hi', '--no-color', '--no-persist'],
         { HOME: home, GCODE_CONTEXT_ROOT: emptyRoot }, cwd);
       srv.close();
-      const sys = srv.bodies[0] ? srv.bodies[0].system : undefined;
+      const sys = systemText(srv.bodies[0]);
       check(sys === BASE,
         '#530: with no GCODE.md anywhere the POSTed system prompt is the bare literal, byte-identical');
       check(typeof sys === 'string' && !sys.includes('SDL_MAIN_USE_CALLBACKS') && !sys.includes('gucOS'),
@@ -1178,7 +1189,7 @@ async function main() {
       await runCodeBoth(srv.url, ['-p', 'hi', '--no-color', '--no-persist'],
         { HOME: home, GCODE_CONTEXT_ROOT: ctxRoot }, sub);
       srv.close();
-      const sys = (srv.bodies[0] && srv.bodies[0].system) || '';
+      const sys = systemText(srv.bodies[0]);
       const order = ['USR-LAYER-530', 'ETC-LAYER-530', 'USER-LAYER-530', 'PROJ-TOP-530', 'PROJ-SUB-530']
         .map((m) => sys.indexOf(m));
       check(order.every((i) => i >= 0) && order.every((i, k) => k === 0 || i > order[k - 1]),
@@ -1193,7 +1204,7 @@ async function main() {
       await runCodeBoth(srv.url, ['-p', 'hi', '--no-color', '--no-persist', '--no-context'],
         { HOME: home, GCODE_CONTEXT_ROOT: ctxRoot }, sub);
       srv.close();
-      check(srv.bodies[0] && srv.bodies[0].system === BASE,
+      check(srv.bodies[0] && systemText(srv.bodies[0]) === BASE,
         '#530: --no-context sends the bare literal even with every layer present');
     }
 
@@ -1226,7 +1237,7 @@ async function main() {
       srv.close();
       check(!r2.stderr.includes('resumed system prompt differs'),
         '#530: editing a project GCODE.md does NOT make --resume warn (context excluded from the hash)');
-      check(srv.bodies[0] && srv.bodies[0].system.includes('EDITED-530 v2'),
+      check(srv.bodies[0] && systemText(srv.bodies[0]).includes('EDITED-530 v2'),
         '#530: the resumed request carries the freshly loaded (edited) context');
 
       srv = await startServer([textResponse('three')]);
@@ -1247,7 +1258,7 @@ async function main() {
       const r = await runCodeBoth(srv.url, ['-p', 'hi', '--no-color', '--no-persist'],
         { HOME: home, GCODE_CONTEXT_ROOT: emptyRoot }, s);
       srv.close();
-      const sys = (srv.bodies[0] && srv.bodies[0].system) || '';
+      const sys = systemText(srv.bodies[0]);
       check(sys.includes('[gcode: context truncated at the 49152-byte total cap]'),
         '#530: the file crossing the cap gets an in-band truncation marker');
       check(sys.length < BASE.length + 49152 + 300,
@@ -1269,7 +1280,7 @@ async function main() {
       await runCodeBoth(srv.url, ['-p', 'hi', '--no-color', '--no-persist'],
         { HOME: home, GCODE_CONTEXT_ROOT: emptyRoot }, d);
       srv.close();
-      const sys = (srv.bodies[0] && srv.bodies[0].system) || '';
+      const sys = systemText(srv.bodies[0]);
       check(sys.includes('NEAR-530'), '#530: a file inside the walk bound is read');
       check(!sys.includes('TOO-FAR-530'),
         '#530: a file 41 directories up is beyond the depth bound and is not read');
@@ -1942,6 +1953,114 @@ async function main() {
     }
 
     fs.rmSync(tmp738, { recursive: true, force: true });
+  }
+
+  // ---- #747: prompt-cache breakpoints ---------------------------------
+  // gcode sent no cache_control at all, so every round re-paid for every
+  // round before it. Measured cacheRead 0 across 7 Anthropic rounds (#678
+  // Pass B r3). Invisible on DeepSeek, which auto-caches server-side.
+  {
+    const tmp747 = fs.mkdtempSync(path.join(os.tmpdir(), 'gcode-747-'));
+    const bpsIn = (body) => {
+      let n = 0;
+      const walk = (blocks) => { for (const b of blocks || []) if (b && b.cache_control) n++; };
+      if (Array.isArray(body.system)) walk(body.system);
+      walk(body.tools);
+      for (const m of body.messages || []) if (Array.isArray(m.content)) walk(m.content);
+      return n;
+    };
+
+    // -- leg A: three rounds. Breakpoints in the right places, never over the
+    //    4-per-request ceiling, and the history one MOVES rather than piling up.
+    {
+      const srv = await startServer([
+        toolUseResponse('one', 'toolu_747a', 'write_file', { path: path.join(tmp747, '1'), content: 'x' }),
+        toolUseResponse('two', 'toolu_747b', 'write_file', { path: path.join(tmp747, '2'), content: 'x' }),
+        textResponse('all done.'),
+      ]);
+      const { stdout } = await runCodeBoth(srv.url, ['-p', 'go', '--no-color', '--no-persist']);
+      srv.close();
+      check(stdout.includes('all done.') && srv.bodies.length === 3,
+        `#747: the three-round turn completes (${srv.bodies.length} rounds)`);
+      const [r1, r2, r3] = srv.bodies;
+
+      // system carries the breakpoint that covers tools + system
+      check(Array.isArray(r1.system) && r1.system.length === 1
+            && r1.system[0].type === 'text'
+            && r1.system[0].cache_control && r1.system[0].cache_control.type === 'ephemeral',
+        '#747: system is a block array with an ephemeral breakpoint (tools+system prefix)');
+      check(typeof r1.system[0].text === 'string' && r1.system[0].text.length > 100,
+        '#747: the system prompt text is unchanged by the reshaping');
+
+      // round 1 has one message, so no history breakpoint yet
+      check(bpsIn(r1) === 1, `#747: round 1 marks the stable prefix only (${bpsIn(r1)} breakpoints)`);
+      // later rounds add exactly one moving history breakpoint
+      check(bpsIn(r2) === 2 && bpsIn(r3) === 2,
+        `#747: rounds 2-3 add exactly one history breakpoint (${bpsIn(r2)}, ${bpsIn(r3)})`);
+      check(bpsIn(r1) <= 4 && bpsIn(r2) <= 4 && bpsIn(r3) <= 4,
+        '#747: never exceeds the 4-breakpoint-per-request ceiling');
+
+      // the history breakpoint is on the LAST block of the LAST message, and
+      // it MOVED between rounds — a stationary one caches nothing new, and a
+      // stale one left behind is what would eventually blow the ceiling.
+      const lastMarked = (b) => {
+        const m = b.messages[b.messages.length - 1];
+        const c = Array.isArray(m.content) ? m.content : [];
+        return c.length && c[c.length - 1].cache_control ? b.messages.length : -1;
+      };
+      check(lastMarked(r2) === r2.messages.length && lastMarked(r3) === r3.messages.length,
+        '#747: the history breakpoint sits on the last block of the last message');
+      check(r3.messages.length > r2.messages.length,
+        `#747: and it moved forward with the conversation (${r2.messages.length} -> ${r3.messages.length})`);
+
+      // 🔴 The one that would rot silently: an EARLIER round's marker must not
+      // survive into a later request. `messages` is attached by reference and
+      // persisted, so a leaked marker accumulates one slot per round.
+      const stale = r3.messages.slice(0, -1)
+        .flatMap((m) => Array.isArray(m.content) ? m.content : [])
+        .filter((b) => b && b.cache_control).length;
+      check(stale === 0, `#747: no stale breakpoint left on earlier messages (${stale} found)`);
+    }
+
+    // -- leg B: the persisted session log must be marker-free ---------------
+    // The #348 record contract: `messages` is the live history AND the thing
+    // that gets written to disk. A marker left on it would be replayed by
+    // --resume, one per round, forever.
+    {
+      const state = fs.mkdtempSync(path.join(os.tmpdir(), 'gcode-747-state-'));
+      const srv = await startServer([
+        toolUseResponse('one', 'toolu_747c', 'write_file', { path: path.join(tmp747, '3'), content: 'x' }),
+        textResponse('logged.'),
+      ]);
+      await runCodeBoth(srv.url, ['-p', 'go', '--no-color'], { GCODE_STATE_DIR: state });
+      srv.close();
+      const logs = fs.readdirSync(path.join(state, 'sessions'));
+      const text = logs.map((f) => fs.readFileSync(path.join(state, 'sessions', f), 'utf8')).join('');
+      check(logs.length === 1 && text.length > 0 && !text.includes('cache_control'),
+        '#747: the persisted session log carries no cache_control marker');
+      fs.rmSync(state, { recursive: true, force: true });
+    }
+
+    // -- leg C: GCODE_CACHE=0 restores the byte-identical pre-#747 body -----
+    // The escape hatch exists because array-form `system` is canonical
+    // Messages API but untested against the third-party Anthropic-compatible
+    // endpoints gcode also targets — and one of those is the standing route.
+    {
+      const srv = await startServer([
+        toolUseResponse('one', 'toolu_747d', 'write_file', { path: path.join(tmp747, '4'), content: 'x' }),
+        textResponse('uncached.'),
+      ]);
+      const { stdout } = await runCodeBoth(srv.url,
+        ['-p', 'go', '--no-color', '--no-persist'], { GCODE_CACHE: '0' });
+      srv.close();
+      check(stdout.includes('uncached.'), '#747: the turn still completes with caching off');
+      check(typeof srv.bodies[0].system === 'string',
+        '#747: GCODE_CACHE=0 sends system as a bare string again');
+      check(srv.bodies.every((b) => bpsIn(b) === 0),
+        '#747: GCODE_CACHE=0 sends no breakpoint anywhere');
+    }
+
+    fs.rmSync(tmp747, { recursive: true, force: true });
   }
 
   console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILURE(S)`);

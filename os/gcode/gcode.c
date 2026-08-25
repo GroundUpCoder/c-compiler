@@ -20,6 +20,10 @@
  *   GCODE_BASH_SECS      bash-tool wall-time cap (default CAP_BASH_SECS)
  *   GCODE_VISION         1/0 forces the read_image tool on/off (#670;
  *                        default: derived from the model's vision capability)
+ *   GCODE_CACHE          0 disables the #747 prompt-cache breakpoints and
+ *                        sends `system` as a bare string again (the escape
+ *                        hatch for an Anthropic-compatible endpoint that
+ *                        rejects the block-array form)
  * Flags: -p PROMPT (one-shot), --model, --system-prompt, --max-turns (opt-in
  *   turn cap; default unlimited, #353), --max-tokens, --context-tokens
  *   (#467: the model's context window override; env GCODE_CONTEXT_TOKENS,
@@ -2069,6 +2073,102 @@ static size_t write_cb(char *ptr, size_t size, size_t nmemb, void *ud) {
     return n;
 }
 
+/* ---- #747: prompt-cache breakpoints -----------------------------------
+ *
+ * gcode sent NO cache_control anywhere, and the Messages API caches only what
+ * is explicitly marked — so every round re-sent the entire accumulated
+ * conversation as fresh, fully-priced input. Measured on the Anthropic route
+ * in #678 Pass B round 3: cacheRead 0 across all 7 rounds of a turn. gcode is
+ * agentic, so one turn is many rounds (5/8/13/17/24 measured), and round N
+ * re-pays for rounds 1..N-1: the cost of a session grows with the SQUARE of
+ * its round count rather than linearly. It survived because the standing live
+ * route is DeepSeek, which auto-caches server-side without being asked, so the
+ * defect is invisible on the only route the estate exercises.
+ *
+ * Placement. Render order is tools -> system -> messages, and caching is a
+ * PREFIX match, so:
+ *   1. a breakpoint on the last `system` block caches tools + system together
+ *      — the part that is fixed for the whole session, and the one that helps
+ *      every single round. That requires `system` to be an array of text
+ *      blocks rather than a bare string: a JSON string cannot carry
+ *      cache_control.
+ *   2. a breakpoint on the last content block of the last message caches the
+ *      settled history, so a growing conversation reads instead of re-paying.
+ *
+ * The second one MOVES each round, which is the documented multi-turn shape.
+ * It is therefore added at serialize time and removed immediately after — the
+ * #348 record contract is explicit that `messages` is attached to the body BY
+ * REFERENCE, so a key left on a message object would be persisted into the
+ * session log and would accumulate one stale breakpoint per round until the
+ * request blew the 4-breakpoint ceiling.
+ *
+ * Known limits, recorded rather than hidden:
+ *   - a breakpoint walks back at most 20 content blocks to find a prior entry,
+ *     so a single round that adds more than ~20 blocks (many parallel tool
+ *     calls) silently misses. gcode's tool use is near-serial, so this is a
+ *     ceiling on batch size, not a live fault.
+ *   - the minimum cacheable prefix is model-dependent (512 tokens on Opus 5,
+ *     but 4096 on Opus 4.6 and Haiku 4.5). Below it the breakpoint silently
+ *     does nothing — no error, no benefit.
+ *   - a cache WRITE costs ~1.25x. A one-round turn therefore pays a small
+ *     premium for nothing; every multi-round turn wins, and agentic turns are
+ *     the shape gcode has.
+ *
+ * GCODE_CACHE=0 turns the whole thing off. It exists because array-form
+ * `system` is canonical Messages API but is UNTESTED against the third-party
+ * Anthropic-compatible endpoints gcode also targets, and the standing live
+ * route is one of them; an operator who hits a compat wall needs a switch,
+ * not a rebuild. */
+static int cache_enabled(void) {
+    static int v;                       /* 0 unresolved, 1 on, -1 off */
+    if (!v) { const char *s = getenv("GCODE_CACHE"); v = (s && !atoi(s)) ? -1 : 1; }
+    return v == 1;
+}
+
+static cJSON *cache_control_new(void) {
+    cJSON *cc = cJSON_CreateObject();
+    cJSON_AddStringToObject(cc, "type", "ephemeral");
+    return cc;
+}
+
+/* The system prompt as a cacheable one-element block array. Returns NULL when
+ * there is no system prompt at all, in which case the caller marks the tool
+ * list instead — the goal is a breakpoint at the end of the STABLE prefix,
+ * wherever that prefix happens to end. */
+static cJSON *cache_system_blocks(const char *sysp) {
+    if (!sysp) return NULL;
+    cJSON *arr = cJSON_CreateArray();
+    cJSON *tb = cJSON_CreateObject();
+    cJSON_AddStringToObject(tb, "type", "text");
+    cJSON_AddStringToObject(tb, "text", sysp);
+    cJSON_AddItemToObject(tb, "cache_control", cache_control_new());
+    cJSON_AddItemToArray(arr, tb);
+    return arr;
+}
+
+/* Mark the last content block of the last message, so the settled history is
+ * read from cache next round. Returns the block that was marked (NULL if none
+ * was) so the caller can UNMARK it the moment the payload is serialized.
+ *
+ * Skipped while there is a single message: with one user turn there is no
+ * settled history yet, and a second breakpoint covering almost the same prefix
+ * as the system one just pays a second write for nothing. */
+static cJSON *cache_mark_history(cJSON *messages) {
+    if (cJSON_GetArraySize(messages) < 2) return NULL;
+    cJSON *last = cJSON_GetArrayItem(messages, cJSON_GetArraySize(messages) - 1);
+    cJSON *content = last ? cJSON_GetObjectItem(last, "content") : NULL;
+    if (!cJSON_IsArray(content) || !cJSON_GetArraySize(content)) return NULL;
+    cJSON *blk = cJSON_GetArrayItem(content, cJSON_GetArraySize(content) - 1);
+    if (!cJSON_IsObject(blk) || cJSON_GetObjectItem(blk, "cache_control")) return NULL;
+    cJSON_AddItemToObject(blk, "cache_control", cache_control_new());
+    return blk;
+}
+
+static void cache_unmark(cJSON *blk) {
+    if (blk) cJSON_DeleteItemFromObjectCaseSensitive(blk, "cache_control");
+}
+
+
 /* #738: map ONE accumulated content block to the JSON that goes back into the
  * history, for every kind that does not require running a tool. Returns NULL
  * when the block must be omitted, and says so on stderr when the omission is
@@ -3043,11 +3143,37 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
      * files found; the bare prompt goes out byte-identical). */
     {
         const char *sysp = cfg->system_sent ? cfg->system_sent : cfg->system_prompt;
-        if (sysp) cJSON_AddStringToObject(body, "system", sysp);
+        /* #747: as a cacheable block array when caching is on, so the
+         * breakpoint at its end covers tools + system — the prefix that is
+         * fixed for the whole session. Byte-identical bare string otherwise. */
+        cJSON *sysblocks = cache_enabled() ? cache_system_blocks(sysp) : NULL;
+        if (sysblocks)   cJSON_AddItemToObject(body, "system", sysblocks);
+        else if (sysp)   cJSON_AddStringToObject(body, "system", sysp);
     }
     cJSON_AddItemReferenceToObject(body, "messages", messages);
     cJSON_AddItemReferenceToObject(body, "tools", tools);
+    /* #747: with no system prompt the stable prefix ends at the tool list, so
+     * that is where the breakpoint belongs — marking nothing would mean
+     * caching nothing at all, and a silent zero is the failure mode this
+     * ticket is about. gcode's own CLI always supplies a system prompt, so
+     * this arm is for an embedder or a future config rather than today's
+     * command line; it is kept because the placement rule is "mark the end of
+     * the stable prefix", not "mark the system block". Idempotent: `tools` is
+     * long-lived across rounds and the marker is added at most once. */
+    if (cache_enabled() && !cJSON_GetObjectItem(body, "system")) {
+        int nt = cJSON_GetArraySize(tools);
+        cJSON *lt = nt ? cJSON_GetArrayItem(tools, nt - 1) : NULL;
+        if (lt && !cJSON_GetObjectItem(lt, "cache_control"))
+            cJSON_AddItemToObject(lt, "cache_control", cache_control_new());
+    }
+    /* #747: the moving history breakpoint. Added here and removed the instant
+     * the payload exists — `messages` is the live, persisted history and the
+     * #348 contract is that anything left on it is both SENT and written to
+     * the session log, so a breakpoint per round would accumulate past the
+     * 4-breakpoint ceiling and start 400ing. */
+    cJSON *histbp = cache_enabled() ? cache_mark_history(messages) : NULL;
     char *payload = cJSON_PrintUnformatted(body);
+    cache_unmark(histbp);
     cJSON_Delete(body);
     if (!payload) { fprintf(stderr, "%sgcode: could not serialize request body%s\n", R_ERRB, CRST); return -1; }
     size_t payload_len = strlen(payload);
@@ -4194,6 +4320,88 @@ static int blocks_self_test(void) {
     return ok;
 }
 
+
+/* ---- #747: prompt-cache breakpoint placement -------------------------- */
+static int cache_self_test(void) {
+    int ok = 1;
+
+    /* The system prompt must go out as a cacheable BLOCK ARRAY. A bare JSON
+     * string cannot carry cache_control, which is why the shape had to
+     * change at all — the defect was not a missing key, it was a container
+     * that could not hold one. */
+    {
+        cJSON *a = cache_system_blocks("SYS");
+        char *js = a ? cJSON_PrintUnformatted(a) : NULL;
+        ok &= js && !strcmp(js,
+            "[{\"type\":\"text\",\"text\":\"SYS\",\"cache_control\":{\"type\":\"ephemeral\"}}]");
+        free(js); cJSON_Delete(a);
+        ok &= cache_system_blocks(NULL) == NULL;   /* nothing to mark */
+    }
+
+    /* The history breakpoint lands on the LAST content block of the LAST
+     * message, and is a no-op on a single-message history: with one user turn
+     * there is no settled history yet, and a second breakpoint covering
+     * almost the same prefix as the system one buys a second cache WRITE for
+     * no read. */
+    {
+        cJSON *m = cJSON_Parse("[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"a\"}]}]");
+        ok &= cache_mark_history(m) == NULL;
+        char *js = cJSON_PrintUnformatted(m);
+        ok &= js && !strstr(js, "cache_control");
+        free(js); cJSON_Delete(m);
+    }
+    {
+        cJSON *m = cJSON_Parse(
+            "[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"a\"}]},"
+            " {\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"b\"},"
+            "                                     {\"type\":\"text\",\"text\":\"c\"}]}]");
+        cJSON *bp = cache_mark_history(m);
+        ok &= bp != NULL;
+        char *js = cJSON_PrintUnformatted(m);
+        /* on "c", the last block of the last message — not "a", not "b" */
+        ok &= js && strstr(js, "\"text\":\"c\",\"cache_control\"")
+                 && !strstr(js, "\"text\":\"a\",\"cache_control\"")
+                 && !strstr(js, "\"text\":\"b\",\"cache_control\"");
+        free(js);
+        /* And it must come straight back off. `messages` is the live history
+         * that gets PERSISTED (#348: anything left on a message object is both
+         * sent and logged), so a marker left behind would accumulate one stale
+         * breakpoint per round until the request blew the 4-breakpoint ceiling
+         * — a bug that would only show up several rounds into a long session,
+         * which is exactly where it would cost the most. */
+        cache_unmark(bp);
+        js = cJSON_PrintUnformatted(m);
+        ok &= js && !strstr(js, "cache_control");
+        free(js); cJSON_Delete(m);
+    }
+
+    /* Marking twice never doubles up (a second call finds the key already
+     * there and declines), so a retry path cannot silently spend a
+     * breakpoint slot. */
+    {
+        cJSON *m = cJSON_Parse(
+            "[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"a\"}]},"
+            " {\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"b\"}]}]");
+        cJSON *bp = cache_mark_history(m);
+        ok &= bp != NULL && cache_mark_history(m) == NULL;
+        cache_unmark(bp);
+        char *js = cJSON_PrintUnformatted(m);
+        ok &= js && !strstr(js, "cache_control");
+        free(js); cJSON_Delete(m);
+    }
+
+    /* A message whose content is a bare string (the API accepts that shape)
+     * has no block to mark; declining is correct and must not crash. */
+    {
+        cJSON *m = cJSON_Parse("[{\"role\":\"user\",\"content\":\"a\"},{\"role\":\"user\",\"content\":\"b\"}]");
+        ok &= cache_mark_history(m) == NULL;
+        cJSON_Delete(m);
+    }
+
+    if (!ok) fprintf(stderr, "gcode self-test: prompt-cache case FAILED\n");
+    return ok;
+}
+
 static int self_test(void) {
     /* #313: the dated Sonnet 5 intro rate ($2/$10 through 2026-08-31,
      * $3/$15 sticker after) — fixed dates so the check outlives the
@@ -4272,6 +4480,7 @@ static int self_test(void) {
      * fold's pair-safety/idempotence/no-nesting invariants. */
     ok &= compact_self_test();
     ok &= blocks_self_test();   /* #738: content-block parse + replay mapping */
+    ok &= cache_self_test();    /* #747: prompt-cache breakpoint placement */
     char tmp[] = "/tmp/gcode-step2-test-XXXXXX"; if (!mkdtemp(tmp)) return 1; setenv("GCODE_STATE_DIR", tmp, 1);
     config cfg = { "https://example.invalid", NULL, NULL, "requested-alias", "fixture-system", 123, 4, 0, 0, NULL, NULL };
     session s; cJSON *messages = cJSON_CreateArray();
