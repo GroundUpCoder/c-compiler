@@ -86,6 +86,7 @@ fs.writeFileSync(path.join(WWW, 'doom-extract.html'), src.slice(0, i + 6) + '\n'
 log('built doom-extract.html');
 
 const server = spawn('node', [path.join(__dirname, 'server.mjs'), String(PORT)], { stdio: ['ignore','pipe','pipe'] });
+server.stdout.on('data', d => process.stderr.write('[server] ' + d));  // #725: was piped-and-unread
 server.stderr.on('data', d => process.stderr.write('[server] ' + d));
 for (let k=0;k<50;k++){ try{ if((await fetch(URL)).ok) break; }catch{} await sleep(100); }
 

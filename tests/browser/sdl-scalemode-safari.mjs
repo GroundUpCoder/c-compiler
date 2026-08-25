@@ -36,6 +36,10 @@ watchdog.unref();
 const step = (m) => console.log(`[safari] ${m}`);
 
 const server = spawn('node', [path.join(__dirname, 'server.mjs'), String(PORT)], { stdio: ['ignore', 'pipe', 'pipe'] });
+// Forward server logs so a "port in use" death is visible instead of a bare
+// downstream ERR_CONNECTION_REFUSED (#725; the quake-renders.mjs pattern).
+server.stdout.on('data', d => process.stderr.write('[server] ' + d));
+server.stderr.on('data', d => process.stderr.write('[server] ' + d));
 step('waiting for server …');
 for (let i = 0; i < 50; i++) { try { if ((await fetch(URL)).ok) break; } catch {} await new Promise(r => setTimeout(r, 100)); }
 

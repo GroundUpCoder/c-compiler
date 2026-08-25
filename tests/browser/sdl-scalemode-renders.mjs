@@ -22,6 +22,10 @@ const r = spawnSync('node', [path.join(ROOT, 'compiler.js'),
 if (r.status !== 0) { console.error('[sdl-scalemode] compile failed'); process.exit(1); }
 
 const server = spawn('node', [path.join(__dirname, 'server.mjs'), String(PORT)], { stdio: ['ignore', 'pipe', 'pipe'] });
+// Forward server logs so a "port in use" death is visible instead of a bare
+// downstream ERR_CONNECTION_REFUSED (#725; the quake-renders.mjs pattern).
+server.stdout.on('data', d => process.stderr.write('[server] ' + d));
+server.stderr.on('data', d => process.stderr.write('[server] ' + d));
 const browser = await chromium.launch({ args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan'] });
 const page = await (await browser.newContext({ viewport: { width: 700, height: 560 } })).newPage();
 const log = [];

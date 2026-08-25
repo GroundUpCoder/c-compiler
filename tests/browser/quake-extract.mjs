@@ -17,6 +17,7 @@ const log = (s) => process.stderr.write(`[quake-x] ${s}\n`);
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 const server = spawn('node', [path.join(__dirname, 'server.mjs'), String(PORT)], { stdio: ['ignore','pipe','pipe'] });
+server.stdout.on('data', d => process.stderr.write('[server] ' + d));  // #725: was piped-and-unread
 server.stderr.on('data', d => process.stderr.write('[server] ' + d));
 for (let k=0;k<50;k++){ try{ if((await fetch(URL)).ok) break; }catch{} await sleep(100); }
 

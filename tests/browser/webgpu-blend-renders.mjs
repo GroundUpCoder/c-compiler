@@ -26,6 +26,10 @@ const r = spawnSync('node', [path.join(ROOT, 'compiler.js'),
 if (r.status !== 0) { console.error('[webgpu-blend] compile failed'); process.exit(1); }
 
 const server = spawn('node', [path.join(__dirname, 'server.mjs'), String(PORT)], { stdio: ['ignore', 'pipe', 'pipe'] });
+// Forward server logs so a "port in use" death is visible instead of a bare
+// downstream ERR_CONNECTION_REFUSED (#725; the quake-renders.mjs pattern).
+server.stdout.on('data', d => process.stderr.write('[server] ' + d));
+server.stderr.on('data', d => process.stderr.write('[server] ' + d));
 
 // Bundled Chromium DOES have WebGPU; default headless just surfaces no GPU
 // adapter. These flags give it one (Vulkan backend). No system-Chrome dependency.
