@@ -262,7 +262,14 @@ fs.writeFileSync(scriptPath, JSON.stringify([
     check('#530: /usr/share/gcode/GCODE.md is baked into the image',
       ctx530.includes('CTX530-BAKED'), JSON.stringify(ctx530));
     {
-      const sys = (bodies[0] && bodies[0].system) || '';
+      // #747 made `system` a cacheable block array (a bare JSON string cannot
+      // carry a cache_control breakpoint). These legs are about the system
+      // prompt TEXT, not its container, so read through both shapes.
+      const rawSys = bodies[0] ? bodies[0].system : undefined;
+      const sys = typeof rawSys === 'string' ? rawSys
+        : Array.isArray(rawSys)
+          ? rawSys.map((b) => (b && typeof b.text === 'string') ? b.text : '').join('')
+          : '';
       check('#530: in-OS gcode loads the baked platform layer into the system prompt',
         sys.includes('[GCODE.md context: /usr/share/gcode/GCODE.md]'), sys.slice(0, 200));
       // The #551 SDL rule MOVED from the C literal to the file — present
