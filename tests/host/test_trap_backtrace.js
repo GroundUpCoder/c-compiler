@@ -125,7 +125,7 @@ function buildAndRun(opts) {
 
   return runModule({
     bytes: bytes,
-    args: [srcName],
+    args: ['/a.wasm'],   // a program is invoked by its binary name, not its source
     blockFsFactory: function (ctx) {
       var env = BLOCK_FS.BlockFS.prototype.toWasmEnv.call(kfs, ctx);
       if (opts.redirectErr) {
