@@ -190,3 +190,55 @@ chases jetsam and was declined per the rails.
 | CP2M1 | linkSync reverted ALONE, natural timing (the acceptance criterion) | leg 3a: 28 violations / 1097 present-reads |
 | CP2M2 | acquisition budget removed | leg 3d: gate ground on 38.9s, no loud give-up |
 | CP2M3 | reuse discriminator removed | leg 3e: refused instead of stealing (3 legs) |
+
+---
+
+# Counter-pass 3 addendum
+
+## How the "dead-owner-gated" claim got made without being checked (finding 1, the answer jku required)
+
+The stage-B design asserted recovery "reaps what is provably dead
+(dead-owner-gated)". The claim's source was harness-leaks.js's own header —
+"Reaping is never 'looks old' — it is 'the owning process is DEAD'" — read
+during stage-A work and carried into the design ON FAITH. The header itself
+overstated its code: classifyTempDir has two age-based branches (live-pid
+past PID_REUSE_MS; untagged past UNTAGGED_STALE_MS) that reap without a
+death proof, and a test in the tree explicitly pins the live-owner age
+override. So this was PRINCIPLES' "a mechanism claim is a hypothesis until
+re-derived from current source" failed twice over: I re-derived nothing at
+the new call site, and the summary I trusted was itself wrong. Both are now
+fixed — the header names its exceptions, and the automatic gate-time caller
+uses provableOnly (age heuristics become KEEPS, named in the refusal
+evidence as un-reclaimable suspects; the human-invoked default is
+unchanged, and the two policies are pinned apart by paired legs).
+
+**The symmetric principle, now recorded beside condition 3: no path may
+soften a red — and no path may MANUFACTURE one.** An automatic recovery
+that deletes a live run's fixture manufactures that run's failure: #725's
+false-red class in destructive form, from inside the fix.
+
+## The vacuous-control CLASS fix (finding 2's seam ruling)
+
+Third vacuous control in one ticket (CPM4's false sentence; leg 3b at
+natural timing; leg 6's wrong call map passing off the sticky last array
+element). Per jku: fix the class, not the instance. The array fake now
+fails loudly on misuse in BOTH directions — exhaustion THROWS naming the
+count, unconsumed elements are reported at process exit — and leg 8 is the
+seam's own red control. Legs 6/6b carry EXACT re-derived sample maps and
+assert seam silence. During CP3M2a (after-check removed) the seam's
+exhaustion throw fired mid-run on the map mismatch — the class fix
+compounding the specific control's detection, observed working.
+
+The near-fourth instance, caught in the same pass: the exact-bytes fix's
+refusal message rendered 0.9999 GB as "1.000 GB < 1 GB floor" via
+.toFixed(3) — a false sentence in a diagnostic, CPM4's shape exactly. The
+dead-zone control caught it because it parses the number, not the shape.
+
+## CP3 mutation ledger
+
+| # | mutation | RED at |
+|---|---|---|
+| CP3M1 | provableOnly ignored | 2 provableOnly legs (live-owner reaped again) |
+| CP3M2a | after-row verdict removed | leg 6b (suite 2 ran; + the seam threw mid-run on the now-wrong map) |
+| CP3M2b | sticky last element restored | leg 8 (no crash; gate exited 0) |
+| CP3M3 | rounded floor comparison restored | dead-zone leg (0.9999 GB read ok) |
