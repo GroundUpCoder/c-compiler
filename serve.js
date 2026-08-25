@@ -204,8 +204,20 @@ function ensureSystemImage(dir, plan) {
   }
   if (!why) why = `${baked < 0 ? 'missing' : 'is v' + baked} < manifest v${wanted}`;
   console.log(`os/${imageName} ${why} — baking${wantOverlays.length ? ' (+' + wantOverlays.join(',') + ')' : ''}…`);
+  // `-r parent-watch` (#725): this process is BLOCKED in spawnSync for the
+  // whole bake — its own parent watchdog cannot fire — so a serve.js that
+  // dies here (test torn down mid-startup) used to leave the bake running
+  // for minutes as an adopted orphan (the 2026-08-20 gate incident). The
+  // preload makes the bake exit itself ~1s after its parent vanishes. A
+  // human's serve.js in a live terminal is untouched (parent alive).
+  // Resolved from the SERVED tree like mkimagePath; absent (non-repo dir)
+  // → no preload, the pre-#725 behavior.
+  const parentWatch = path.join(dir, 'tests', 'lib', 'parent-watch.js');
+  const preload = fs.existsSync(parentWatch) ? ['-r', parentWatch] : [];
   const r = require('child_process').spawnSync(process.execPath,
-    [mkimagePath, `--out=${imgPath}`, ...overlayArgs, ...packagesArgs], { stdio: 'inherit' });
+    [...preload, mkimagePath, `--out=${imgPath}`, ...overlayArgs, ...packagesArgs],
+    { stdio: 'inherit',
+      env: { ...process.env, CC_HARNESS_GROUP_LEADER: '0' } });
   if (r.status !== 0) {
     console.error('mkimage failed — not serving a stale system image');
     process.exit(1);

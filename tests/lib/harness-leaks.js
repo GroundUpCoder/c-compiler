@@ -110,11 +110,27 @@ function classifyTempDir(name, mtimeMs, { isAlive = pidAlive, now = Date.now() }
 // would be catastrophic and is trivially avoidable: a real listener's argv0 is a
 // node binary. (Pinned by the self-match case in tests/host/test_harness_leaks.js.)
 const NODE_ARGV0 = /^(\S*[/\\])?node(\.exe)?\s/;
+const PYTHON_ARGV0 = /^(\S*[/\\])?[Pp]ython[\d.]*(\.exe)?\s/;
 const ORPHAN_PATTERNS = [
   { re: (c) => NODE_ARGV0.test(c) && /\bserve\.js\b/.test(c), what: 'serve.js listener' },
   { re: (c) => NODE_ARGV0.test(c) && /\btests[/\\]browser[/\\]os-[\w.-]+\.mjs\b/.test(c), what: 'browser sweep test file' },
   { re: (c) => NODE_ARGV0.test(c) && /\btests[/\\]kernel[/\\][\w.-]+\.js\b/.test(c), what: 'kernel suite test file' },
   { re: (c) => /^(\S*[/\\])?chrome-headless-shell\b/.test(c), what: 'headless Chromium' },
+  // Since #725. An ADOPTED mkimage.js was the concrete starvation of the
+  // 2026-08-20 gate incident: its launcher died, the bake ran on for
+  // minutes at multi-GB RSS, and stopping it freed ~4.5 GB. This inverts
+  // the earlier reading here ("a detached mkimage is a bake, not a leak"),
+  // and the premise is what changed: a deliberate bake ALWAYS has a live
+  // parent (a shell, serve.js, image-fixture — backgrounding builds is
+  // forbidden by standing rule), so a ppid-1 mkimage is by construction the
+  // orphan of a dead launcher, producing an image nobody will consume while
+  // starving the live run. Its half-written .img.tmp-<pid> is already
+  // reapImageTemps's territory.
+  { re: (c) => NODE_ARGV0.test(c) && /\btools[/\\]mkimage\.js\b/.test(c), what: 'mkimage.js bake' },
+  // The py batch (#725): python cannot preload tests/lib/parent-watch.js,
+  // so a run.py whose dispatcher was SIGKILLed lingers until reaped here —
+  // the same argv0 discipline (a shell that mentions run.py is not python).
+  { re: (c) => PYTHON_ARGV0.test(c) && /\btests[/\\]run\.py\b/.test(c), what: 'run.py batch' },
 ];
 
 // The same argv0 discipline for the "stray serve.js with a live parent" report:

@@ -36,6 +36,13 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const HOST_HEALTH = require('./lib/host-health.js');
+// Preloaded into every NODE suite runner (#725): a dispatcher SIGKILLed from
+// outside leaves its current runner alive (it is in our process group only
+// for terminal signals); the preload makes the runner notice the reparent
+// and exit, which cascades — its own test files carry the same preload and
+// group-kill their serve.js/Chromium. The py batch cannot be preloaded
+// (python), so its net is the harness-leaks orphan reaper's run.py pattern.
+const PARENT_WATCH = path.join(__dirname, 'lib', 'parent-watch.js');
 
 // Cross-tree preflight (todos/0341) — FIRST, before --diff reads git or any
 // suite is spawned. This dispatcher hands every sub-runner `cwd: ROOT`
@@ -928,7 +935,12 @@ function runProcess(cmd, args, label, teePath) {
       const finish = () => resolve(r);
       if (tee) tee.end(finish); else finish();
     };
-    const child = spawn(cmd, args, { cwd: ROOT, stdio: ['inherit', 'pipe', 'pipe'] });
+    // GROUP_LEADER cleared: suite runners are spawned in OUR group (not
+    // detached), and an inherited '1' from an enclosing suite-runner test
+    // file would aim the parent-watch preload's group kill at a group that
+    // is not the runner's own.
+    const child = spawn(cmd, args, { cwd: ROOT, stdio: ['inherit', 'pipe', 'pipe'],
+      env: { ...process.env, CC_HARNESS_GROUP_LEADER: '0' } });
     currentChild = child;
     child.stdout.on('data', (d) => { process.stdout.write(d); if (tee) tee.write(d); });
     child.stderr.on('data', (d) => { process.stderr.write(d); if (tee) tee.write(d); });
@@ -1392,9 +1404,15 @@ async function main() {
       results.push(row);
       continue;
     }
-    const args = [...SUITES[suite].cmd.slice(1), ...suiteArgs(suite, opts, tierFilters)];
+    const cmd0 = SUITES[suite].cmd[0];
+    const args = [
+      // The runner is not detached (not a group leader) — clear an inherited
+      // GROUP_LEADER before the preload reads it (runProcess passes env
+      // through; a nested gate inside a suite-runner test file carries '1').
+      ...(cmd0 === 'node' ? ['-r', PARENT_WATCH] : []),
+      ...SUITES[suite].cmd.slice(1), ...suiteArgs(suite, opts, tierFilters)];
     const hostBefore = HOST_HEALTH.sample();
-    const r = await runProcess(SUITES[suite].cmd[0], args, `${suite} suite`, teeFor(suite));
+    const r = await runProcess(cmd0, args, `${suite} suite`, teeFor(suite));
     const c = classify(r, !!SUITES[suite].heavyLock);
     // A contended suite never ran, so any artifact on disk is an EARLIER
     // run's — attaching it would dress a did-not-run row in another run's

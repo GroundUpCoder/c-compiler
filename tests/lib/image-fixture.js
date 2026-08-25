@@ -61,9 +61,18 @@ function ensurePrebakedImage(log) {
   if (st.fresh) { log(`[fixture] os/os-system.img fresh (v${st.version})`); return true; }
   log(`[fixture] os/os-system.img ${st.reason} — baking once (node tools/mkimage.js --packages=all)…`);
   const t0 = Date.now();
+  // `-r parent-watch` (#725): the caller is BLOCKED in this spawnSync for the
+  // whole bake, so if it is killed, nothing on the caller's side can reach the
+  // bake — the 2026-08-20 incident's adopted mkimage ran on for minutes at
+  // multi-GB RSS after its gate died. The preload makes the bake notice the
+  // reparent itself and exit within ~1s. GROUP_LEADER is cleared: this child
+  // is not detached, and an inherited '1' (a suite-runner test file's env)
+  // would aim the preload's group kill at a group that is not ours.
   const r = cp.spawnSync(process.execPath,
-    [path.join(ROOT, 'tools', 'mkimage.js'), '--quiet', '--packages=all'],
-    { stdio: ['ignore', 'inherit', 'inherit'] });
+    ['-r', path.join(__dirname, 'parent-watch.js'),
+     path.join(ROOT, 'tools', 'mkimage.js'), '--quiet', '--packages=all'],
+    { stdio: ['ignore', 'inherit', 'inherit'],
+      env: { ...process.env, CC_HARNESS_GROUP_LEADER: '0' } });
   if (r.status !== 0) {
     log('[fixture] mkimage FAILED — e2e boots will bake privately (expect slow failures)');
     return false;

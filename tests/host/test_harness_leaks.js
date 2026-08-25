@@ -70,8 +70,11 @@ const PS = [
   '  503     1 /Users/x/.../chrome-headless-shell --headless',        // orphan
   '  504     1 node /repo/tests/browser/os-wm.mjs',                   // orphan
   '  505   400 node /repo/tests/kernel/test_wm.js',                   // live parent
-  '  506     1 node /repo/tools/mkimage.js --packages=all',           // not ours to kill
+  '  506     1 node /repo/tools/mkimage.js --packages=all',           // orphan since #725
   '  507     1 /usr/sbin/cupsd -l',                                   // unrelated
+  '  510     1 /repo/.venv/bin/python3 tests/run.py --types=ast',     // orphan since #725
+  '  511   400 python3.12 tests/run.py --types=ast',                  // live parent
+  '  512     1 /bin/zsh -c python3 tests/run.py',                     // mention, not python
   // The self-match trap, hit for real during development: a shell whose command
   // line merely MENTIONS serve.js. `pgrep -f serve.js` matches this; a reaper
   // that did too would SIGKILL an operator's shell.
@@ -81,13 +84,13 @@ const PS = [
 
 check('parsePs reads pid/ppid/command', () => {
   const rows = parsePs(PS);
-  assert.strictEqual(rows.length, 9);
+  assert.strictEqual(rows.length, 12);
   assert.deepStrictEqual(rows[0], { pid: 501, ppid: 1, command: 'node /repo/serve.js /repo 3197' });
 });
 
 check('findOrphans takes only PPID-1 harness processes', () => {
   const got = findOrphans(parsePs(PS), /* selfPid */ 999).map(o => o.pid).sort();
-  assert.deepStrictEqual(got, [501, 503, 504]);
+  assert.deepStrictEqual(got, [501, 503, 504, 506, 510]);
 });
 
 check('a serve.js with a LIVE parent is never an orphan', () => {
@@ -102,7 +105,26 @@ check('a running kernel e2e is never an orphan', () => {
 check('unrelated PPID-1 processes are untouched', () => {
   const got = findOrphans(parsePs(PS), 999).map(o => o.pid);
   assert.ok(!got.includes(507), 'cupsd is not ours');
-  assert.ok(!got.includes(506), 'a detached mkimage is a bake, not a leak');
+});
+
+// #725 inverted the old "a detached mkimage is a bake, not a leak" reading:
+// the 2026-08-20 incident's concrete starvation WAS an adopted mkimage (its
+// launcher dead, multi-GB RSS, image nobody would consume). A deliberate
+// bake always has a live parent — backgrounding builds is forbidden — so
+// ppid 1 is decisive here exactly as for serve.js.
+check('an ORPHANED mkimage.js is reaped; one with a live parent never is', () => {
+  const got = findOrphans(parsePs(PS), 999);
+  assert.ok(got.some(o => o.pid === 506 && o.what === 'mkimage.js bake'));
+  assert.ok(!findOrphans(parsePs('  600   400 node /repo/tools/mkimage.js --quiet'), 999).length,
+    'a bake mid-flight under a live serve.js/image-fixture must never be killed');
+});
+
+check('an ORPHANED run.py batch is reaped; live-parent and mere mentions are not', () => {
+  const got = findOrphans(parsePs(PS), 999);
+  assert.ok(got.some(o => o.pid === 510 && o.what === 'run.py batch'),
+    'python cannot preload parent-watch — the reaper is its only net (#725)');
+  assert.ok(!got.some(o => o.pid === 511), 'a live runner\'s py batch is not an orphan');
+  assert.ok(!got.some(o => o.pid === 512), 'a shell that mentions run.py is not python');
 });
 
 check('a shell that merely MENTIONS serve.js is not a serve.js', () => {
@@ -172,5 +194,63 @@ check('an UNCAUGHT THROW still cleans up', () => {
   assert.ok(!fs.existsSync(dir), `throw path left ${dir} behind`);
 });
 
-console.log(failures ? `\n${failures} harness-leak check(s) FAILED` : '\nAll harness-leak checks passed');
-process.exit(failures ? 1 : 0);
+// ---- the #725 blocked-parent chain, live ----------------------------------
+// image-fixture.js / serve.js / tests/run.js now preload parent-watch into
+// the children they spawn, because a parent BLOCKED in spawnSync (or dead
+// outright) can never reach them — the 2026-08-20 adopted-mkimage incident.
+// This proves the chain those preloads rely on with real processes: a
+// launcher spawns a long-lived child under `-r parent-watch`, the launcher
+// is SIGKILLed (runs no handler, exactly the uncoverable case), and the
+// child must notice the reparent and exit on its own within the poll
+// interval. Cheap (no bake — the mechanism is identical for `-e` and
+// mkimage.js), ~2-3s.
+(async () => {
+  const cp = require('child_process');
+  const PW = path.resolve(__dirname, '../lib/parent-watch.js');
+  const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const launcherSrc = `
+    const cp = require('child_process');
+    const c = cp.spawn(process.execPath,
+      ['-r', ${JSON.stringify(PW)}, '-e', 'setInterval(() => {}, 100)'],
+      { stdio: 'ignore', env: { ...process.env, CC_HARNESS_GROUP_LEADER: '0' } });
+    console.log('CHILD=' + c.pid);
+    // Model the blocked parent: no event loop turns, nothing to service.
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60000);
+  `;
+  const launcher = cp.spawn(process.execPath, ['-e', launcherSrc],
+    { stdio: ['ignore', 'pipe', 'ignore'] });
+  const childPid = await new Promise((resolve) => {
+    let buf = '';
+    const to = setTimeout(() => resolve(null), 10000);
+    launcher.stdout.on('data', (d) => {
+      buf += d;
+      const m = /CHILD=(\d+)/.exec(buf);
+      if (m) { clearTimeout(to); resolve(+m[1]); }
+    });
+    launcher.on('exit', () => { clearTimeout(to); resolve(null); });
+  });
+  check('#725 preload chain: launcher spawned a live preloaded child', () => {
+    assert.ok(childPid, 'no CHILD= line from the launcher');
+    assert.ok(pidAlive(childPid), 'child died before the experiment started');
+  });
+  // Let the child's node BOOTSTRAP before orphaning it. parent-watch reads
+  // process.ppid once at startup and deliberately installs nothing when it
+  // is already 1 ("parentless at startup = intentional detach") — so a
+  // parent that dies inside the child's ~100ms bootstrap leaves the child
+  // unwatched. Found live by this control's first run. That window is a
+  // recorded limitation of the preload, not of this test: the startup
+  // reaper's mkimage/run.py/serve patterns are the net under it.
+  await new Promise((r) => setTimeout(r, 750));
+  launcher.kill('SIGKILL');
+  let died = false;
+  for (let i = 0; i < 50 && !(died = !pidAlive(childPid)); i++) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  check('#725 preload chain: the child exits ITSELF after its parent is SIGKILLed', () => {
+    if (!died && childPid) { try { process.kill(childPid, 'SIGKILL'); } catch {} }  // never leak the probe
+    assert.ok(died, `pid ${childPid} still alive 5s after its parent died — parent-watch did not fire`);
+  });
+
+  console.log(failures ? `\n${failures} harness-leak check(s) FAILED` : '\nAll harness-leak checks passed');
+  process.exit(failures ? 1 : 0);
+})();
