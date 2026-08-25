@@ -138,3 +138,87 @@ so a dated id (`claude-opus-4-5-20251101`) and a provider-prefixed one
 - **The targeted gate earned its keep**: `kernel --filter=gcode` went 5P/1F on
   the in-OS `#530` legs, a break the native smoke could not see because the
   break was in a different fake server.
+
+---
+
+# Addendum — the counter-pass, and what the production route was really losing
+
+Two things landed after the first review round. Both change the story.
+
+## The must-fix Codex found: "known delta name" is not "applicable delta"
+
+My `'?'` arm was built on a rule I stated correctly in the comment and then
+implemented wrongly. The comment says an unrecognised block is dropped when
+"a delta arrived that this build could not apply". The code tested whether the
+delta's NAME was in our table:
+
+    if      (text_delta)       ...
+    else if (input_json_delta) ...
+    else if (thinking_delta)   ...
+    else if (signature_delta)  ...
+    else if (b->type == '?')   b->lost = 1;      <-- last
+
+Those are different questions, and the gap between them is a live block type.
+`server_tool_use` is a real Messages API kind this build does not model, and it
+streams `input_json_delta` — exactly like `tool_use`. Matched on name it took
+the second arm: the payload accumulated into `b->json`, a field the `'?'`
+replay never reads; `lost` stayed clear; and the block went back as its start
+object with an **empty input**. A partial block presented as whole — the single
+failure the `'?'` arm exists to prevent, reintroduced by the arm's own
+ordering.
+
+The fix is to ask the right question, which means asking it FIRST:
+
+    if (b->type == '?') b->lost = 1;   /* before any delta name */
+
+For a block kind whose semantics we do not know, no delta is applicable however
+familiar its name looks. A known name tells us about the delta, not about the
+block it belongs to.
+
+**The lesson worth keeping is not "check ordering".** It is that my correction 2
+in the previous round fixed an *adjacent* path — malformed typeless blocks — and
+I let its plausibility stand in for coverage of the real mechanism. Two defects
+in the same arm, one fixed, and the fix made the other harder to see. The test I
+had written (`future_thing` with an *unknown* delta name) confirmed the
+behaviour I had implemented rather than the rule I had written down; the leg
+that catches this one uses a *known* delta name on an unknown block, which is
+the case the rule actually covers.
+
+## What #738 was costing on the route the estate actually uses
+
+The ticket says the defect is invisible on DeepSeek, because that endpoint
+accepts empty text blocks so there is no 400. Measured on
+`api.deepseek.com/anthropic` with `deepseek-v4-flash`, that is true and
+incomplete. DeepSeek returns real thinking blocks, with bodies:
+
+    persisted block kinds: {'text': 2, 'thinking': 3, 'tool_use': 2, 'tool_result': 2}
+    3 thinking blocks, ALL signed, 270 chars of thinking body
+
+Under the old code those three signed blocks were collapsed to
+`{"type":"text","text":""}` and replayed as nothing. **The model's own reasoning
+was being silently deleted from its replayed history on every round of every
+DeepSeek run**, with no error, no 400, and no symptom anyone could observe.
+
+So "no 400" was never "no harm", and #738's P0 case is stronger than the ticket
+argued: it is a hard failure on the metered routes *and* a silent
+context-quality loss on the standing one. A defect that only degrades quality
+is exactly the kind a forgiving provider will hide indefinitely — which is the
+same lesson as the top of this log, arriving by a second road.
+
+## #747 against the production route: neutral, and that is the right answer
+
+Same route, fixed binary. `system` as a block array is **accepted** — no 400,
+no compat wall — so the risk flagged in the first round is closed by
+measurement rather than argument. `GCODE_CACHE=0` also completes a full turn
+there, so the escape hatch is known-live rather than known-untested.
+
+    round 1: in=1099 out=94  cache_create=0 cache_read=0
+    round 2: in=61   out=50  cache_create=0 cache_read=1152
+    round 3: in=127  out=81  cache_create=0 cache_read=1152
+
+`cache_creation` is always 0: DeepSeek auto-caches server-side and does not
+report writes. The `GCODE_CACHE=0` run *also* showed `cache-read=3456`, i.e.
+the reads happen whether or not gcode asks. **#747 is therefore neutral on
+DeepSeek and wins on metered Anthropic routes** — which is what the ticket
+predicted, and it means the change carries no regression risk on the route that
+carries the traffic.

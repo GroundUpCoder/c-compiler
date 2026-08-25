@@ -1980,7 +1980,21 @@ static void dispatch_json(stream_ctx *ctx, const char *json) {
             cblock *b = &ctx->blocks[idx];
             cJSON *dt = cJSON_GetObjectItem(d, "type");
             const char *dtype = cJSON_IsString(dt) ? dt->valuestring : "";
-            if (!strcmp(dtype, "text_delta")) {
+            if (b->type == '?') {
+                /* 🔴 THIS TEST MUST COME FIRST, ahead of every delta name.
+                 * The question is not "do we know this delta's name" but "can
+                 * this build APPLY it to THIS block" — and for a block kind we
+                 * do not model, the answer is no for EVERY delta, however
+                 * familiar the name. `server_tool_use` is the live example: a
+                 * real block type that streams `input_json_delta` exactly like
+                 * `tool_use`. Matched on name it would accumulate into `json`,
+                 * a field the '?' replay never reads, leave `lost` clear, and
+                 * send the start object back with an EMPTY input — a partial
+                 * block presented as whole, which is the single failure this
+                 * arm exists to prevent. So: any delta at all on an
+                 * unrecognised block proves the verbatim copy incomplete. */
+                b->lost = 1;
+            } else if (!strcmp(dtype, "text_delta")) {
                 cJSON *tx = cJSON_GetObjectItem(d, "text");
                 if (cJSON_IsString(tx)) {
                     assistant_header(ctx);
@@ -2014,11 +2028,6 @@ static void dispatch_json(stream_ctx *ctx, const char *json) {
                  * manufactured signature is a rejected request. */
                 cJSON *sg = cJSON_GetObjectItem(d, "signature");
                 if (cJSON_IsString(sg)) sb_puts(&b->sig, sg->valuestring);
-            } else if (b->type == '?') {
-                /* An uninterpretable delta on an unrecognised block: the
-                 * verbatim copy of its start object is now provably
-                 * incomplete, so it must not be replayed as though whole. */
-                b->lost = 1;
             }
         }
     } else if (!strcmp(type, "content_block_stop")) {
@@ -4393,6 +4402,34 @@ static int blocks_self_test(void) {
         }
         free(d.stop_reason); free(d.message_id); free(d.response_model);
         cJSON_Delete(d.raw_usage); sb_free(&d.accum); sb_free(&d.raw); sb_free(&d.errmsg);
+    }
+
+    /* Leg 5b — 🔴 THE COUNTER-PASS MUST-FIX. A valid but UNRECOGNISED block
+     * type that streams a delta whose NAME we happen to know. `server_tool_use`
+     * is the live example: a real Messages API block kind this build does not
+     * model, which streams `input_json_delta` exactly like `tool_use` does.
+     *
+     * The rule has to be "can this build APPLY the delta to THIS block", not
+     * "is the delta name in our table". A known name says nothing about a
+     * block kind whose semantics we do not know — the payload lands in a
+     * field the '?' replay never reads, so the block would go back as its
+     * start object with an EMPTY input: a partial block presented as whole,
+     * which is the one thing the '?' arm exists to prevent. */
+    {
+        const char *fx =
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"server_tool_use\",\"id\":\"srvtoolu_1\",\"name\":\"web_search\",\"input\":{}}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"query\\\":\\\"x\\\"}\"}}\n\n";
+        stream_ctx c; memset(&c, 0, sizeof c);
+        write_cb((char *)fx, 1, strlen(fx), &c);
+        ok &= c.blocks[0].type == '?';
+        ok &= c.blocks[0].lost;                          /* the delta was not applicable */
+        ok &= block_replay_json(&c.blocks[0]) == NULL;   /* so it is dropped, loudly */
+        for (int i = 0; i < MAX_BLOCKS; i++) {
+            sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
+            cJSON_Delete(c.blocks[i].raw); free(c.blocks[i].id); free(c.blocks[i].name);
+        }
+        free(c.stop_reason); free(c.message_id); free(c.response_model);
+        cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
     }
 
     /* Leg 6 — a block carrying NO usable `type`. It can never be replayed
