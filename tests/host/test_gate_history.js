@@ -159,15 +159,18 @@ let runId1 = null;
 // ---- this models a pre-fix leftover or a foreign truncated write.)      ----
 {
   fs.writeFileSync(path.join(outDir, '.gate-lock'), '');   // fresh mtime, no JSON
-  const t0 = Date.now();
   const r = gate(['todos']);
   check('leg 3c: gate completes over aged-out garbage (steals past the grace)',
     r.status === 0, { status: r.status, stderr: String(r.stderr).slice(-300) });
-  check('leg 3c: the steal is LOUD and names the age + grace',
-    /\[gate-lock\] unparseable lock file \(age [\d.]+s > 2s grace\)/.test(String(r.stderr)),
-    String(r.stderr).slice(0, 300));
-  check('leg 3c: the grace was actually waited out (>=2s before any suite output)',
-    Date.now() - t0 >= 2000);
+  // PARSE the reported age rather than pattern-matching the sentence: an
+  // instant steal prints "age 0.0s > 2s grace" — a false statement that
+  // still matches any shape-only regex. (Found by CPM4: removing the grace
+  // branch left the original shape-only assert green. A wall-clock bound on
+  // gate() is no better — the ~7s todos run satisfies >=2s vacuously.)
+  const m = /\[gate-lock\] unparseable lock file \(age ([\d.]+)s > 2s grace\)/.exec(String(r.stderr));
+  check('leg 3c: the steal is LOUD and names the age + grace', !!m, String(r.stderr).slice(0, 300));
+  check('leg 3c: the REPORTED age proves the grace was waited out (>= 2s)',
+    !!m && parseFloat(m[1]) >= 2, m && m[1]);
 }
 
 // ---- leg 4: a dead holder's lock is stolen ------------------------------
