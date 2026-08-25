@@ -29,11 +29,13 @@
 // is indistinguishable from a run of one test file, which is exactly what a
 // sweep split into two `--filter` halves used to leave behind.
 
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
+const HOST_HEALTH = require('./lib/host-health.js');
 
 // Cross-tree preflight (todos/0341) — FIRST, before --diff reads git or any
 // suite is spawned. This dispatcher hands every sub-runner `cwd: ROOT`
@@ -892,12 +894,50 @@ function suiteArgs(suite, opts, tierFilters) {
   return args;
 }
 
-function runProcess(cmd, args, label) {
+// The one live suite child, so the dispatcher's signal handler (installed in
+// main()) can pass a SIGTERM on before exiting — a gate interrupted from a
+// non-terminal source must not leave its current runner orphaned mid-suite.
+let currentChild = null;
+
+// Async since #725: the child's stdout/stderr stream to OURS exactly as
+// before AND tee into a per-suite log under the run's history dir, so a
+// failing cheap suite (host has no per-file logs at all) leaves durable
+// evidence instead of terminal scroll — the 2026-08-25 serve.js ship-gate
+// red survived nowhere but the lane's transcript. `stdio: inherit` had to
+// go for that; the visible interleaving is unchanged (chunks forward as
+// they arrive). Resolves to the same {ms, status, signal, spawnError}
+// shape classify() reads. teePath null (e.g. --dry-run never gets here,
+// but a caller may opt out) = no tee, still async.
+function runProcess(cmd, args, label, teePath) {
   process.stdout.write(`\n\x1b[1m━━━ ${label} ━━━\x1b[0m\n$ ${cmd} ${args.join(' ')}\n\n`);
   const t = Date.now();
-  const r = spawnSync(cmd, args, { cwd: ROOT, stdio: 'inherit' });
-  const ms = Date.now() - t;
-  return { ms, status: r.status, signal: r.signal, spawnError: r.error };
+  return new Promise((resolve) => {
+    let tee = null;
+    if (teePath) {
+      try {
+        fs.mkdirSync(path.dirname(teePath), { recursive: true });
+        tee = fs.createWriteStream(teePath);
+        tee.write(`$ ${cmd} ${args.join(' ')}\n`);
+      } catch { tee = null; /* best-effort: evidence, not a gate condition */ }
+    }
+    let settled = false;
+    const settle = (r) => {
+      if (settled) return;
+      settled = true;
+      currentChild = null;
+      const finish = () => resolve(r);
+      if (tee) tee.end(finish); else finish();
+    };
+    const child = spawn(cmd, args, { cwd: ROOT, stdio: ['inherit', 'pipe', 'pipe'] });
+    currentChild = child;
+    child.stdout.on('data', (d) => { process.stdout.write(d); if (tee) tee.write(d); });
+    child.stderr.on('data', (d) => { process.stderr.write(d); if (tee) tee.write(d); });
+    child.on('error', (e) => settle({ ms: Date.now() - t, status: null, signal: null, spawnError: e }));
+    // 'close', not 'exit': close fires after the stdio streams have drained,
+    // so the tee cannot lose the child's final chunks.
+    child.on('close', (code, signal) =>
+      settle({ ms: Date.now() - t, status: code, signal, spawnError: undefined }));
+  });
 }
 
 // suite-runner-backed suites checkpoint a summary.json we can surface.
@@ -1062,7 +1102,137 @@ function attachPyRecord(row, opts, tStart) {
   }
 }
 
-function main() {
+// ---------- Run identity + evidence retention (#725) ----------
+//
+// Every run gets a runId (timestamp + pid — sortable, collision-free on one
+// host) and an append-only archive under <summaryDir>/history/<runId>/:
+// the dispatcher summary, each suite's tee'd transcript, the child suite
+// summaries, and the per-file logs of every non-pass row. The canonical
+// paths keep their exact fleet-trained semantics (latest run, atomic rename,
+// absent = did not finish) — history is what a RETRY can no longer destroy.
+// The concrete incident: the 2026-08-25 pre-deploy sweep's failing kernel
+// summary was merged over by the seven diagnostic reruns that followed, so
+// the red's own record had to be reconstructed from terminal scroll.
+
+function makeRunId() {
+  const iso = new Date().toISOString();               // 2026-08-25T04:15:45.123Z
+  return iso.slice(0, 19).replace(/[-:]/g, '').replace('T', '-') + '-' + process.pid;
+}
+
+// How many archived runs to keep per artifact dir. Non-pass logs only, so a
+// healthy history is ~KBs per run; 20 comfortably covers a day of gates.
+const HISTORY_KEEP = 20;
+
+// One dispatcher per artifact dir at a time (#725, plan item 4). Two
+// concurrent dispatchers writing ONE build/test-run interleave tee logs and
+// race the summary rename — the launchd double-submit hazard from the ticket
+// (a restarted job overwrote its first run's paths). Same pid-liveness +
+// stale-steal shape as tests/lib/heavy-lock.js, scoped to the summary dir,
+// so nested --out runs (guard tests) never contend with the canonical gate.
+// Refusal = exit 2 with a [gate-lock] marker, nothing written — a second
+// launcher must fail loudly, not truncate the first's evidence.
+function acquireGateLock(summaryDir) {
+  const { pidAlive } = require('./lib/heavy-lock.js');
+  const lockPath = path.join(summaryDir, '.gate-lock');
+  fs.mkdirSync(summaryDir, { recursive: true });
+  for (;;) {
+    try {
+      const fd = fs.openSync(lockPath, 'wx');
+      fs.writeSync(fd, JSON.stringify({
+        pid: process.pid, startedAt: new Date().toISOString(), argv: process.argv.slice(1),
+      }));
+      fs.closeSync(fd);
+      break;
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      let h = null;
+      try { h = JSON.parse(fs.readFileSync(lockPath, 'utf8')); } catch { /* garbage → steal */ }
+      if (h && h.pid !== process.pid && pidAlive(h.pid)) {
+        process.stderr.write(
+          `\n[gate-lock] REFUSING: another tests/run.js is already writing ${summaryDir}\n` +
+          `  held by pid ${h.pid} since ${h.startedAt} (argv: ${(h.argv || []).join(' ')})\n` +
+          `  Two dispatchers over one artifact dir interleave transcripts and race the\n` +
+          `  summary rename — the retry would destroy the running gate's evidence (#725).\n` +
+          `  Wait for it, or give this run its own dir with --out=DIR.\n\n`);
+        process.exit(2);
+      }
+      try { fs.unlinkSync(lockPath); } catch { /* raced with another stealer */ }
+    }
+  }
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    let h = null;
+    try { h = JSON.parse(fs.readFileSync(lockPath, 'utf8')); } catch { /* gone */ }
+    if (h && h.pid === process.pid) { try { fs.unlinkSync(lockPath); } catch { /* gone */ } }
+  };
+  process.on('exit', release);
+  return release;
+}
+
+// Boundary host samples per row (#725): what lets a red be told from host
+// exhaustion after the fact (~20ms per sample). 🔴 hostSuspect is an
+// evidence LABEL on an already-failing row — it never touches status, never
+// suppresses a row, never feeds a retry (jku condition 3 on #725; pinned by
+// tests/host/test_gate_history.js and the suspectFromSamples legs).
+function attachHostSamples(row, before) {
+  const after = HOST_HEALTH.sample();
+  row.host = { before, after };
+  if (row.status === 'fail') {
+    const sus = HOST_HEALTH.suspectFromSamples(before, after);
+    if (sus) row.hostSuspect = sus;
+  }
+  return row;
+}
+
+// Copy this run's evidence into history/<runId>/ and prune to HISTORY_KEEP.
+// Every step is best-effort by design: the archive is EXTRA evidence, and a
+// copy failure must never turn a finished gate red — but it says so, because
+// a silently absent archive would read as "nothing failed".
+function archiveRun(summaryDir, runId, results, summaryObj) {
+  const histRoot = path.join(summaryDir, 'history');
+  const dir = path.join(histRoot, runId);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    if (summaryObj) fs.writeFileSync(path.join(dir, 'summary.json'), JSON.stringify(summaryObj, null, 2));
+    for (const r of results) {
+      if (!r.artifact) continue;
+      const abs = path.join(ROOT, r.artifact);
+      const name = path.basename(path.dirname(abs)) + '-summary.json'; // test-kernel-summary.json
+      let child = null;
+      try {
+        fs.copyFileSync(abs, path.join(dir, name));
+        child = JSON.parse(fs.readFileSync(abs, 'utf8'));
+      } catch { continue; }
+      // The red evidence itself: per-file logs of every non-pass row, the
+      // artifacts a diagnostic rerun overwrites first. Green logs stay put
+      // (superseded greens are already handled by the runner's .redN rule).
+      for (const row of (child && child.results) || []) {
+        if (!row || row.status === 'pass' || !row.log) continue;
+        const src = path.resolve(ROOT, row.log);
+        const dst = path.join(dir, 'logs', path.basename(path.dirname(abs)), path.basename(src));
+        try {
+          fs.mkdirSync(path.dirname(dst), { recursive: true });
+          fs.copyFileSync(src, dst);
+        } catch { /* log already gone — the summary copy still names it */ }
+      }
+    }
+  } catch (e) {
+    process.stderr.write(`[history] archive of ${runId} incomplete: ${e.message}\n`);
+  }
+  // Prune oldest beyond HISTORY_KEEP. runIds sort chronologically by
+  // construction (timestamp prefix).
+  try {
+    const runs = fs.readdirSync(histRoot).filter(n => /^\d{8}-\d{6}-\d+$/.test(n)).sort();
+    for (const old of runs.slice(0, Math.max(0, runs.length - HISTORY_KEEP))) {
+      fs.rmSync(path.join(histRoot, old), { recursive: true, force: true });
+    }
+  } catch { /* no history dir */ }
+  return dir;
+}
+
+async function main() {
   const opts = parseArgs(process.argv.slice(2));
 
   if (opts.help) { printHelp(); process.exit(0); }
@@ -1146,6 +1316,28 @@ function main() {
   const pyPre = pythonPreflight(ordered);
   if (!pyPre.ok) { process.stderr.write(pyPre.message); process.exit(2); }
 
+  // Run identity + the artifact-dir gate lock (#725). The summary dir is
+  // resolved HERE, before anything runs, because the per-suite tee logs and
+  // the lock live under it. #561b's --out isolation is preserved: a nested
+  // dispatcher locks and archives its OWN dir, never the canonical one.
+  // After the exit-2 preflights (a misconfigured run should not take even
+  // this lock first), before the machine-wide heavy lock.
+  const runId = makeRunId();
+  const summaryDir = opts.out ? path.resolve(opts.out) : path.join(ROOT, 'build', 'test-run');
+  acquireGateLock(summaryDir);
+  // A dispatcher killed from a NON-terminal source (cc-meta, a service
+  // manager) must pass the signal on to its live suite child — with the old
+  // stdio-inherit spawnSync the child shared our foreground group and got
+  // terminal signals for free; that still holds, this covers the kill -TERM
+  // case. process.exit runs the lock releases registered above/below.
+  for (const sig of ['SIGINT', 'SIGTERM']) {
+    process.on(sig, () => {
+      if (currentChild) { try { currentChild.kill('SIGTERM'); } catch { /* already gone */ } }
+      process.exit(130);
+    });
+  }
+  const hostStart = HOST_HEALTH.sample();
+
   // Heavy-lock reservation (#561). The heavy suites take the host heavy-test
   // lock — but only when THEIR row starts, and RUN_ORDER puts them last. That
   // left two windows in which another heavy job could seize the lock and cost
@@ -1175,6 +1367,11 @@ function main() {
   const results = []; // { suite(s), status, ms, exit, ... }
   const t0 = Date.now();
 
+  // Per-suite tee target: the suite's full transcript, retained under this
+  // run's history dir (#725). The cheap suites keep no per-file logs at all,
+  // so before this a host-suite red's evidence lived only in terminal scroll.
+  const teeFor = (name) => path.join(summaryDir, 'history', runId, 'logs', name + '.log');
+
   // Interleave native suites and the single py batch in RUN_ORDER position.
   let pyBatchDone = false;
   for (const suite of ordered) {
@@ -1184,17 +1381,20 @@ function main() {
       const args = ['tests/run.py', `--types=${pyCats.join(',')}`];
       if (opts.filter != null) args.push(`--filter=${opts.filter}`);
       const tPy = Date.now();
-      const r = runProcess(pyPre.python, args, `run.py: ${pyCats.join(',')}`);
+      const hostBefore = HOST_HEALTH.sample();
+      const r = await runProcess(pyPre.python, args, `run.py: ${pyCats.join(',')}`, teeFor('py'));
       const row = { suite: `py[${pyCats.join(',')}]`, ...classify(r) };
       // #582: attach run.py's own record (per-category tallies) and hold the
       // skip set against the committed baseline — on an unfiltered run a
       // skip-set diff is a FAIL, not a stdout footnote.
       attachPyRecord(row, opts, tPy);
+      attachHostSamples(row, hostBefore);
       results.push(row);
       continue;
     }
     const args = [...SUITES[suite].cmd.slice(1), ...suiteArgs(suite, opts, tierFilters)];
-    const r = runProcess(SUITES[suite].cmd[0], args, `${suite} suite`);
+    const hostBefore = HOST_HEALTH.sample();
+    const r = await runProcess(SUITES[suite].cmd[0], args, `${suite} suite`, teeFor(suite));
     const c = classify(r, !!SUITES[suite].heavyLock);
     // A contended suite never ran, so any artifact on disk is an EARLIER
     // run's — attaching it would dress a did-not-run row in another run's
@@ -1207,23 +1407,31 @@ function main() {
       const tal = readSuiteTallies(path.join(ROOT, art));
       if (tal) c.tallies = tal;
     }
-    results.push({ suite, ...c });
+    const row = { suite, ...c };
+    attachHostSamples(row, hostBefore);
+    results.push(row);
   }
 
-  // #561b: `--out=DIR` redirects the run-level record. A NESTED dispatcher
-  // (a guard test driving refusal paths, a tool) must not fabricate its
-  // parent's completion record: build/test-run/summary.json existing with a
-  // fresh mtime and all-pass rows IS the fleet's "the gate completed" signal,
-  // and a child writing it mid-gate would hand a coordinator a green-looking
-  // artifact for a gate that later died (the #477 fake-green class through a
-  // side door). The redirect is fail-safe by construction: an --out run
-  // leaves the canonical path untouched, so a judge reading it sees a stale
-  // mtime — "did not finish", never a green. NB --out redirects only THIS
-  // dispatcher's record; the per-suite artifacts (build/test-kernel etc.) are
-  // written by the suite runners themselves and are not redirected.
-  const summaryDir = opts.out ? path.resolve(opts.out) : path.join(ROOT, 'build', 'test-run');
-  writeMergedSummary(results, Date.now() - t0, opts, ordered, summaryDir,
-                     { tier: opts.tier, tierFilters, omitted });
+  // #561b: `--out=DIR` redirects the run-level record (summaryDir was
+  // resolved before the run — the tee logs and the gate lock live under it).
+  // A NESTED dispatcher (a guard test driving refusal paths, a tool) must
+  // not fabricate its parent's completion record: build/test-run/summary.json
+  // existing with a fresh mtime and all-pass rows IS the fleet's "the gate
+  // completed" signal, and a child writing it mid-gate would hand a
+  // coordinator a green-looking artifact for a gate that later died (the
+  // #477 fake-green class through a side door). The redirect is fail-safe by
+  // construction: an --out run leaves the canonical path untouched, so a
+  // judge reading it sees a stale mtime — "did not finish", never a green.
+  // NB --out redirects only THIS dispatcher's record; the per-suite
+  // artifacts (build/test-kernel etc.) are written by the suite runners
+  // themselves and are not redirected — which is exactly why archiveRun
+  // copies them (and their non-pass logs) into history/<runId>/ here:
+  // a diagnostic rerun merges over the canonical child summary within
+  // minutes of a red (measured live, 2026-08-25 pre-deploy sweep).
+  const summaryObj = writeMergedSummary(results, Date.now() - t0, opts, ordered, summaryDir,
+                     { tier: opts.tier, tierFilters, omitted },
+                     { runId, host: { hostname: os.hostname(), start: hostStart, end: HOST_HEALTH.sample() } });
+  archiveRun(summaryDir, runId, results, summaryObj);
   printFinal(results, Date.now() - t0, path.join(summaryDir, 'summary.json'),
              opts.tier, omitted);
 
@@ -1288,12 +1496,18 @@ function classify(r, heavyLock) {
 // a single test file — which is exactly what a split sweep used to leave
 // behind. A reader must be able to see `filter: null` + `files.recorded: 40`
 // and know the whole suite was covered.
-function writeMergedSummary(results, ms, opts, ordered, dir, tierInfo) {
+function writeMergedSummary(results, ms, opts, ordered, dir, tierInfo, identity) {
+  let obj = null;
   try {
     fs.mkdirSync(dir, { recursive: true });
     const tmp = path.join(dir, 'summary.json.tmp');
-    fs.writeFileSync(tmp, JSON.stringify({
+    obj = {
       tool: 'tests/run.js', node: process.version, elapsedMs: ms,
+      // Run identity + boundary host telemetry (#725): what distinguishes
+      // this record from a retry's, and a red from host exhaustion. The
+      // per-row `host`/`hostSuspect` fields carry the row-level samples.
+      runId: identity ? identity.runId : undefined,
+      host: identity ? identity.host : undefined,
       filter: opts.filter == null ? null : opts.filter,
       // #576 F1: which formal tier this run was (null for hand-named suites)
       // and what it DELIBERATELY did not run. `tierFilters` records any
@@ -1307,9 +1521,11 @@ function writeMergedSummary(results, ms, opts, ordered, dir, tierInfo) {
       omitted: tierInfo && tierInfo.omitted ? tierInfo.omitted : undefined,
       suites: ordered,
       results,
-    }, null, 2));
+    };
+    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
     fs.renameSync(tmp, path.join(dir, 'summary.json'));
   } catch { /* best effort */ }
+  return obj;
 }
 
 // ---------- Output ----------
@@ -1458,12 +1674,15 @@ Suites: ${ALL_SUITES.join(', ')}, all
 }
 
 if (require.main === module) {
-  main();
+  // async since #725 (runProcess streams + tees instead of spawnSync). A
+  // rejection here is a dispatcher defect, not a suite verdict — fail loud.
+  main().catch((e) => { console.error(e); process.exit(1); });
 } else {
   // Required as a module (tests/host/test_diff_rules.js): expose the rule
   // table + the planner so the RULES closure is testable without a git diff.
   module.exports = { SUITES, PY_CATEGORIES, RULES, IGNORE, FORCE, planFromDiff,
                      browserPreflight, pythonPreflight, classify,
                      OS_BROWSER_ONLY, OS_HEADLESS_ONLY, OS_RUNTIME_ONLY,
-                     TIERS, ALL_SUITES, checkSkipBaseline, BAKED_DOCS };
+                     TIERS, ALL_SUITES, checkSkipBaseline, BAKED_DOCS,
+                     attachHostSamples, makeRunId, HISTORY_KEEP };
 }
