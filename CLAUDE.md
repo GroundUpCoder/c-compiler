@@ -273,6 +273,24 @@ resumed files to existence-only, loudly). So: registering a new kernel test in
 `tests/kernel/run.js` is not optional bookkeeping — the suite will not run
 without it.
 
+### Gate host-health + evidence retention (#725)
+
+The dispatcher refuses a memory-starved host BEFORE running product suites
+(exit 2 + a `[host-health]` marker + a refusal record under
+`build/test-run/refusals/` — after first attempting recovery by reaping
+provably-dead orphans), truncates a running gate at a suite boundary if the
+host goes critical mid-run (rows go `fail`/`host-degraded`/"DID NOT RUN" —
+never a soft status), and records per-row host samples + `hostSuspect`
+labels in `summary.json` (a red LABELLED with evidence, never forgiven).
+The verdict reads the OS's own instruments (`kern.memorystatus_vm_pressure_level`,
+reclaimable-inclusive available memory) — raw free/swap/compressor are
+non-discriminating on macOS and are recorded as evidence only. Every run
+gets a `runId` and an append-only archive under `build/test-run/history/`
+(dispatcher summary + child summaries + non-pass logs — a diagnostic rerun
+can no longer destroy a red's record); a `.gate-lock` refuses two
+dispatchers over one artifact dir. Escape hatch for an isolated host:
+`CC_NO_HOST_HEALTH=1` (the refusal message states it and its cost).
+
 ### Heavy-suite RAM policy — never run two at once (`tests/lib/heavy-lock.js`)
 
 The **kernel suite** (concurrent full-OS boots, each a nested `os/boot.js`
