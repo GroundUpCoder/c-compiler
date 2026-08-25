@@ -3168,45 +3168,57 @@ var BLOCK_FS = (function () {
     return n;
   };
 
-  /* Is `fd` one of the DEFAULT (non-redirected) console fds? (#759)
+  /* Where do bytes written to `fd` actually GO? (#759)
    *
-   * This exists because `write()` below deliberately SWALLOWS a write to an
-   * unredirected fd 1/2 and returns `count` — the console routing lives in the
-   * env-level `write`/`writev` imports (which have ctx.writeOut/writeErr),
-   * not here. So a JS-side caller writing to fd 2 on behalf of the program —
-   * the #551 blocking-present refusal, #759's trap backtrace — gets a
-   * success-shaped return for bytes that went nowhere. Such a caller must ask
-   * FIRST and use the host writer for the console case.
+   * 'backed'  — a real object (file, pipe, device, dup2'd entry). write()
+   *             delivers, and its return value means what it says.
+   * 'console' — a DEFAULT, non-redirected fd 1/2. write() SWALLOWS these and
+   *             returns `count`; the console routing lives in the env-level
+   *             `write`/`writev` imports, which hold ctx.writeOut/writeErr.
+   * 'absent'  — no fd-table entry: the program closed it, or never had it.
+   *             For fd 1/2 write() ALSO swallows (legacy shape); for any
+   *             other fd it is EBADF.
    *
-   * Keyed on the same positive `console === true` capability every other
-   * console site tests (CD27): absence means "not console", the safe default.
-   * A backend that lacks this method (RemoteFS, whose fd 2 really is delivered
-   * by the FS_WRITE RPC) is correctly treated as non-console by callers. */
-  BlockFS.prototype.isConsoleFd = function (fd) {
-    if (fd !== 1 && fd !== 2) return false;
+   * This exists because a success-shaped return from write() is NOT delivery
+   * for the two swallow cases, so a JS-side caller writing on the program's
+   * behalf — the #551 blocking-present refusal, #759's trap backtrace — must
+   * ask FIRST. It is a THREE-way answer and not a boolean because 'console'
+   * and 'absent' need OPPOSITE handling: a console fd 2 means "the host's
+   * stderr writer is this process's fd 2", while an absent fd 2 means the
+   * process has no stderr at all and writing to the console would put the
+   * diagnostic on a channel the process does not own.
+   *
+   * 🔴 write() below CALLS this for its own swallow decision, so the
+   * classification and the behaviour are one implementation rather than two
+   * copies of a rule that could drift. Keyed on the positive `console === true`
+   * capability every other console site tests (CD27): absence of the marker
+   * means "not console", the safe default.
+   *
+   * A backend that does not define this (RemoteFS, whose fd 2 really IS
+   * delivered by the FS_WRITE RPC) is correctly treated by callers as having
+   * no swallow to avoid. */
+  BlockFS.prototype.fdSink = function (fd) {
     var e = (fd >= 0 && fd < this._fdTable.length) ? this._fdTable[fd] : null;
-    // Mirrors BOTH of write()'s swallow branches below — the missing-entry
-    // one and the console-capability one — so the predicate and the behaviour
-    // it describes cannot drift apart. Keyed on `console === true` positively
-    // (CD27): absence of the marker means "not console", the safe default,
-    // which for a fd that HAS an entry means the write really is delivered.
-    return !e || e.console === true;
+    if (!e) return 'absent';
+    if ((fd === 1 || fd === 2) && e.console === true) return 'console';
+    return 'backed';
   };
 
   BlockFS.prototype.write = function (fd, buf, count) {
-    if (fd < 0 || fd >= this._fdTable.length || !this._fdTable[fd]) {
+    // The two swallow cases are classified by fdSink above — ONE definition,
+    // used both here and by the JS-side callers that must not mistake a
+    // success-shaped return for delivery.
+    var sink = this.fdSink(fd);
+    if (sink === 'absent') {
       // Default stdout/stderr with no real entry → swallow (handled externally).
       if (fd === 1 || fd === 2) return count;
       return this._setErr('EBADF');
     }
-    var entry = this._fdTable[fd];
-
     // Default (non-redirected) stdout/stderr go to the console (handled
-    // externally). A dup2'd pipe/file/dev entry on fd 1/2 falls through so the
-    // redirection actually takes effect.
-    if ((fd === 1 || fd === 2) && entry.console === true) {
-      return count;
-    }
+    // externally). A dup2'd pipe/file/dev entry on fd 1/2 is 'backed' and
+    // falls through so the redirection actually takes effect.
+    if (sink === 'console') return count;
+    var entry = this._fdTable[fd];
 
     // Access mode (todos/0376): O_RDONLY (0) can't write — this is the
     // corruption half: a defensive read-only open used to silently mutate
@@ -11785,23 +11797,31 @@ function formatTrapReport(err, module, progName) {
 function deliverTrapReport(text, ctx, writeErr) {
   const bytes = new TextEncoder().encode(text);
   const fs = ctx && ctx.fs;
+  const emit = () => { try { if (typeof writeErr === 'function') writeErr(bytes); } catch (e) {} };
   try {
-    /* An UNREDIRECTED fd 2 is the console, and BlockFS.write swallows those
-       (returning count for bytes that went nowhere — see isConsoleFd). For
-       that case the host's stderr writer IS the process's fd 2, so use it.
-       Asking first, rather than trusting write()'s return, is the whole point:
-       a success-shaped return is not delivery. */
-    if (fs && typeof fs.isConsoleFd === 'function' && fs.isConsoleFd(2)) {
-      if (typeof writeErr === 'function') { writeErr(bytes); return; }
-    }
-    /* Otherwise fd 2 is a real backing object — a redirected file or pipe, or
-       (under the kernel) a RemoteFS fd whose FS_WRITE RPC really delivers. */
+    /* Ask the fs where fd 2 actually goes, rather than trusting write()'s
+       return — for the swallow cases a success-shaped return is not delivery
+       (see fdSink). The three answers need three different behaviours: */
+    const sink = (fs && typeof fs.fdSink === 'function') ? fs.fdSink(2) : null;
+
+    /* 'console': fd 2 is the default, unredirected one, and the host's stderr
+       writer IS this process's fd 2 in that arrangement. */
+    if (sink === 'console') { emit(); return; }
+
+    /* 'absent': the program CLOSED its own fd 2 (or never had one). It has no
+       stderr, so there is nowhere honest to put this — writing to the console
+       would report successful delivery through a channel the process does not
+       own. Stay silent; the kernel's own crash log still records the fault. */
+    if (sink === 'absent') return;
+
+    /* 'backed', or a backend with no classifier at all (RemoteFS, whose fd 2
+       really is delivered by the FS_WRITE RPC): broker the write. */
     if (fs && typeof fs.write === 'function') {
       const n = fs.write(2, bytes, bytes.length);
       if (n !== null && n !== undefined && n >= 0) return;
     }
   } catch (e) { /* fall through to the host writer */ }
-  try { if (typeof writeErr === 'function') writeErr(bytes); } catch (e) {}
+  emit();
 }
 
 async function runModule({
@@ -13629,6 +13649,26 @@ async function runModule({
     typeof instance.exports._start === 'function' &&
     typeof instance.exports.main !== 'function';
 
+  /* #759: the ONE trap reporter. Both places a wasm trap can surface — the
+     main()/_start entry below, and the animation-frame callback further down —
+     route through this, so the two cannot diverge again. (They did: the first
+     cut of #759 reported only at the main catch, which meant a game whose
+     INITIALISATION succeeded and whose FRAME CALLBACK later trapped got
+     nothing at all — the principal gamedev execution model, and the exact case
+     this feature exists for.)
+
+     Once-only: a trap is reported at the first catch that sees it, so a future
+     refactor that routes one error through both paths cannot print twice. */
+  let trapReported = false;
+  const reportTrap = (e) => {
+    if (trapReported || !(e instanceof WebAssembly.RuntimeError)) return;
+    trapReported = true;
+    try {
+      const report = formatTrapReport(e, module, (args && args[0]) || null);
+      if (report) deliverTrapReport(report, ctx, writeErr);
+    } catch (e2) { /* a diagnostic must never mask the fault it describes */ }
+  };
+
   let exitCode;
   // #551: arm the blocking-loop present refusal for the span main() (or the
   // wasip1 _start) is on the stack — the surface backend refuses any
@@ -13781,12 +13821,7 @@ async function runModule({
          `new WebAssembly.Instance(...)` above, OUTSIDE this try, so they
          cannot reach here in the first place; the type test is the second
          line of defence, not the only one. */
-      if (e instanceof WebAssembly.RuntimeError) {
-        try {
-          const report = formatTrapReport(e, module, (args && args[0]) || null);
-          if (report) deliverTrapReport(report, ctx, writeErr);
-        } catch (e2) { /* a diagnostic must never mask the fault it describes */ }
-      }
+      reportTrap(e);
       throw e;
     }
   } finally {
@@ -13825,6 +13860,22 @@ async function runModule({
               resolve();
               return;
             }
+            /* #759: a trap inside the frame callback is the PRINCIPAL gamedev
+               crash — initialisation succeeded and the game died mid-loop —
+               so it gets the same backtrace as one at the main() entry.
+
+               🔴 SCOPE, stated rather than hidden: this reports the fault, it
+               does not change how the frame loop SETTLES. `doFrame` is invoked
+               from raf()/setTimeout(), so this rethrow lands in an unobserved
+               async call and the enclosing promise stays pending — measured on
+               `7d4f4d03`: 8 s after the trap the promise was still unsettled
+               and the rejection was unhandled. That lifecycle defect predates
+               this feature, is independent of it, and changing how the frame
+               loop terminates would alter process-exit semantics (the
+               sawFrameExit / __sdl_app_result / gpuDrain teardown below).
+               It is filed separately. Reporting first is strictly better than
+               the previous behaviour, which was to hang saying nothing. */
+            reportTrap(e);
             throw e;
           }
           if (sdl.getAnimationFrameFunc()) {

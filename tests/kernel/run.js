@@ -53,6 +53,7 @@ const BOOT = { boot: true };
 
 const tests = [
   ['test_kernel.js', LIGHT],       // process-table semantics over the real SAB protocol
+  ['test_trap_report_delivery.js', LIGHT],  // #759 (design #732): the trap report's fd-2 delivery under the KERNEL arrangement — the real RemoteFS.write(2,...) must issue ONE FS_WRITE naming fd 2 (no console fast path, no inherited BlockFS swallow), the kernel must put those bytes IN THE FILE byte-exact with nothing reaching the console sink, and RemoteFS must NOT define fdSink/isConsoleFd or every in-OS trap report would silently reroute to the console. Also owns acceptance clause 5 at the altitude it is written at: a `crashed` child is reaped by its PARENT as W_TERMSIG(SIG.SEGV), i.e. $? = 139, with a clean exit as the discriminator. LIGHT: fake workers, no wasm, no boot
   ['test_e2e.js', BOOT],          // real C programs in worker_threads via nodeCreateWorker
   ['test_signals_e2e.js', BOOT],  // Phase 2: async delivery, EINTR/SA_RESTART, pause, exit handshake
   ['test_itimer_e2e.js', BOOT],   // 0044: alarm/setitimer(ITIMER_REAL) -> SIGALRM — EINTR on blocked read, interval reload, DFL terminate
