@@ -242,3 +242,41 @@ dead-zone control caught it because it parses the number, not the shape.
 | CP3M2a | after-row verdict removed | leg 6b (suite 2 ran; + the seam threw mid-run on the now-wrong map) |
 | CP3M2b | sticky last element restored | leg 8 (no crash; gate exited 0) |
 | CP3M3 | rounded floor comparison restored | dead-zone leg (0.9999 GB read ok) |
+
+---
+
+# Counter-pass 4 addendum
+
+## Two generalizations for the record (jku ruling — same family as setup-guaranteed-outcome: the work was correct where you were looking)
+
+1. **When you fix a path, enumerate its siblings and state which ones you
+   checked.** CP3's after-sample fix was written and CONTROLLED against the
+   native row path; the batched python path — half the dispatcher, not an
+   edge case — was left with the sibling defect, and on an all-py selection
+   it produced a self-consistent-looking LIE: "TRUNCATING at '<category>'"
+   naming an already-completed category, truncated.at set, no failing row,
+   exit 0. An artifact that contradicts itself while looking healthy is
+   worse than a crash — nothing downstream can tell. Fix: truncateFrom
+   computes the unrun set FIRST and declares nothing when it is empty;
+   controls now cover the batched sibling (legs 6c-a/6c-b, the latter with
+   DISTINCT availGb values so the row proves WHICH sample decided — a
+   discriminator that also keeps the mutation run from launching a real
+   kernel suite).
+2. **A new authoritative check must dominate the heuristic it supersedes,
+   not queue behind it.** CP2's ps identity check was added precisely to
+   replace age-guessing — and was placed AFTER the 6h age cap, so a
+   VERIFIED live dispatcher got robbed for running long, recreating the
+   two-dispatchers-one-dir defect the lock exists to prevent. Order now:
+   identity first (verified dispatcher authoritative regardless of age;
+   live non-dispatcher stolen loudly); the age cap survives only where
+   verification itself FAILS — the one place an unverifiable ancient lock
+   would otherwise wedge forever. Control: leg 3f (7h-old record +
+   verified-live decoy → refused).
+
+## CP4 mutation ledger
+
+| # | mutation | RED at |
+|---|---|---|
+| CP4M1 | truncateFrom emptiness check removed | leg 6c-a: phantom TRUNCATING + self-contradicting summary |
+| CP4M1b | py-after verdict removed | leg 6c-b: decision sample 0.3 (next-before) instead of 0.4 (after); kernel STILL never launched — the distinct-value safety held under mutation |
+| CP4M2 | age cap restored ahead of identity | leg 3f: aged verified dispatcher robbed, gate exit 0 |
