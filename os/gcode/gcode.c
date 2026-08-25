@@ -1869,6 +1869,7 @@ typedef struct {
     cJSON *raw_usage;
     int  api_error; sb errmsg;
     int  hdr_shown, at_bol;         /* #302 append-only speaker/indent state */
+    int  k_open;                    /* #738: a streamed thinking line is open */
 } stream_ctx;
 
 /* Print the assistant speaker header once per message (ui.py:357 — the
@@ -1964,7 +1965,11 @@ static void dispatch_json(stream_ctx *ctx, const char *json) {
                  * NEXT block type from being this same bug. */
                 b->type = '?';
                 b->raw = cJSON_Duplicate(cb, 1);
-                if (!b->raw) b->lost = 1;
+                /* A block carrying no usable `type` can never be replayed
+                 * validly whatever we do with it, so mark it lost up front
+                 * and let the one drop path report it, rather than sending a
+                 * typeless object and letting the provider decide. */
+                if (!b->raw || !cJSON_IsString(cbt)) b->lost = 1;
             }
             if (idx + 1 > ctx->nblocks) ctx->nblocks = idx + 1;
         }
@@ -1997,10 +2002,11 @@ static void dispatch_json(stream_ctx *ctx, const char *json) {
                  * nothing to render. Printing it where it DOES arrive is
                  * what keeps a summary from being silently swallowed. */
                 cJSON *th = cJSON_GetObjectItem(d, "thinking");
-                if (cJSON_IsString(th)) {
+                if (cJSON_IsString(th) && *th->valuestring) {
                     sb_puts(&b->text, th->valuestring);
                     fprintf(stderr, "%s%s%s", CDIM, th->valuestring, CRST);
                     fflush(stderr);
+                    ctx->k_open = 1;      /* the line is mid-thinking */
                 }
             } else if (!strcmp(dtype, "signature_delta")) {
                 /* The signature is the part the API validates on replay. It
@@ -2015,6 +2021,10 @@ static void dispatch_json(stream_ctx *ctx, const char *json) {
                 b->lost = 1;
             }
         }
+    } else if (!strcmp(type, "content_block_stop")) {
+        /* #738: end the dim thinking line, so a streamed summary cannot run
+         * into the tool marker or the next thinking marker on the same row. */
+        if (ctx->k_open) { fputc('\n', stderr); fflush(stderr); ctx->k_open = 0; }
     } else if (!strcmp(type, "message_delta")) {
         cJSON *d = cJSON_GetObjectItem(e, "delta");
         if (d) {
@@ -2121,7 +2131,9 @@ static size_t write_cb(char *ptr, size_t size, size_t nmemb, void *ud) {
  * not a rebuild. */
 static int cache_enabled(void) {
     static int v;                       /* 0 unresolved, 1 on, -1 off */
-    if (!v) { const char *s = getenv("GCODE_CACHE"); v = (s && !atoi(s)) ? -1 : 1; }
+    /* An EMPTY value means UNSET, matching GCODE_VISION's `s && *s` rule —
+     * an exported-but-blank variable should not silently disable a feature. */
+    if (!v) { const char *s = getenv("GCODE_CACHE"); v = (s && *s && !atoi(s)) ? -1 : 1; }
     return v == 1;
 }
 
@@ -4381,6 +4393,46 @@ static int blocks_self_test(void) {
         }
         free(d.stop_reason); free(d.message_id); free(d.response_model);
         cJSON_Delete(d.raw_usage); sb_free(&d.accum); sb_free(&d.raw); sb_free(&d.errmsg);
+    }
+
+    /* Leg 6 — a block carrying NO usable `type`. It can never be replayed
+     * validly whatever we do, so it is marked lost at the start rather than
+     * sent as a typeless object for the provider to reject. */
+    {
+        const char *fx =
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"payload\":\"no type field\"}}\n\n";
+        stream_ctx c; memset(&c, 0, sizeof c);
+        write_cb((char *)fx, 1, strlen(fx), &c);
+        ok &= c.blocks[0].type == '?' && c.blocks[0].lost;
+        ok &= block_replay_json(&c.blocks[0]) == NULL;
+        for (int i = 0; i < MAX_BLOCKS; i++) {
+            sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
+            cJSON_Delete(c.blocks[i].raw); free(c.blocks[i].id); free(c.blocks[i].name);
+        }
+        free(c.stop_reason); free(c.message_id); free(c.response_model);
+        cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
+    }
+
+    /* Leg 7 — the streamed-thinking line is CLOSED at content_block_stop, so a
+     * summary cannot run into the tool marker that follows it on the same row.
+     * Display-only, but a run-on line is how the #301/#302 rendering bugs
+     * looked, and this is the same shape. */
+    {
+        const char *fx =
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"mulling\"}}\n\n";
+        stream_ctx c; memset(&c, 0, sizeof c);
+        write_cb((char *)fx, 1, strlen(fx), &c);
+        ok &= c.k_open == 1;                      /* the line is open mid-stream */
+        const char *stop = "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n";
+        write_cb((char *)stop, 1, strlen(stop), &c);
+        ok &= c.k_open == 0;                      /* and closed when it ends */
+        for (int i = 0; i < MAX_BLOCKS; i++) {
+            sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
+            cJSON_Delete(c.blocks[i].raw); free(c.blocks[i].id); free(c.blocks[i].name);
+        }
+        free(c.stop_reason); free(c.message_id); free(c.response_model);
+        cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
     }
 
     if (!ok) fprintf(stderr, "gcode self-test: content-block case FAILED\n");

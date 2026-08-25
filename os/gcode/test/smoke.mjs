@@ -1908,7 +1908,7 @@ async function main() {
           { path: path.join(tmp738, 'b.txt'), content: 'hi' }),
         textResponse('done b.'),
       ]);
-      const { stdout } = await runCodeBoth(srv.url,
+      const { stdout, stderr } = await runCodeBoth(srv.url,
         ['-p', 'build it', '--no-color', '--no-persist']);
       srv.close();
       const flat = (srv.bodies[1] ? srv.bodies[1].messages : [])
@@ -1921,6 +1921,12 @@ async function main() {
       // were the assistant's answer — that was the other half of the collapse.
       check(stdout.includes('done b.') && !stdout.includes('weigh the options'),
         '#738: thinking is not printed as assistant prose on stdout');
+      // It DOES reach stderr (a summary must not be silently swallowed), and
+      // its line is closed before the tool marker — a run-on there is the
+      // same rendering shape #301/#302 fixed.
+      const kline = stderr.split('\n').find((l) => l.includes('weigh the options'));
+      check(!!kline && !kline.includes('write_file'),
+        '#738: a streamed thinking summary reaches stderr on its own line');
     }
 
     // -- leg C: strict-server control — the rule really does reject ---------
@@ -2058,6 +2064,17 @@ async function main() {
         '#747: GCODE_CACHE=0 sends system as a bare string again');
       check(srv.bodies.every((b) => bpsIn(b) === 0),
         '#747: GCODE_CACHE=0 sends no breakpoint anywhere');
+    }
+
+    // -- leg D: an EMPTY GCODE_CACHE means UNSET, not off -------------------
+    // Matches the GCODE_VISION rule (`s && *s`). An exported-but-blank
+    // variable disabling a feature is a surprise nobody would debug quickly.
+    {
+      const srv = await startServer([textResponse('still cached.')]);
+      await runCodeBoth(srv.url, ['-p', 'go', '--no-color', '--no-persist'], { GCODE_CACHE: '' });
+      srv.close();
+      check(Array.isArray(srv.bodies[0].system) && bpsIn(srv.bodies[0]) === 1,
+        '#747: an empty GCODE_CACHE leaves caching ON (empty means unset)');
     }
 
     fs.rmSync(tmp747, { recursive: true, force: true });
