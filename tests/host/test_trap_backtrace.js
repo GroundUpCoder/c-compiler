@@ -50,6 +50,23 @@ var BLOCK_FS = HOST.BLOCK_FS;
 
 var O_WRONLY = 0x1, O_CREAT = 0x40, O_TRUNC = 0x200, O_RDONLY = 0x0;
 
+// The most recent harness fs, so a leg whose run never settles (H) can still
+// read what the process wrote before it hung.
+var lastKfs = null;
+
+/* Leg H deliberately exercises a path whose promise NEVER SETTLES: a trap in
+ * the animation-frame callback rethrows from an unobserved async `doFrame`.
+ * Under Node's default that unhandled rejection KILLS THE PROCESS, so without
+ * this handler the leg cannot run at all.
+ *
+ * 🔴 This is NOT a blanket suppressor. Every rejection captured here is
+ * accounted for at the end of the file: anything that is not the trap leg H
+ * expects fails the run. When the separately-filed lifecycle defect is fixed
+ * (the frame loop should settle instead of rejecting into the void), this
+ * handler and its accounting come out. */
+var unhandled = [];
+process.on('unhandledRejection', function (e) { unhandled.push(e); });
+
 var failures = 0;
 function check(name, cond, extra) {
   if (cond) console.log('  ok   ' + name);
@@ -122,6 +139,7 @@ function buildAndRun(opts) {
 
   var consoleOut = [], consoleErr = [];
   if (opts.patchBytes) bytes = opts.patchBytes(bytes);
+  lastKfs = kfs;          // leg H needs this before the run can hang
 
   return runModule({
     bytes: bytes,
@@ -134,6 +152,7 @@ function buildAndRun(opts) {
         kfs.close(efd);
       }
       if (opts.mutateEnv) opts.mutateEnv(env);
+      if (opts.afterEnv) opts.afterEnv(kfs);
       return Promise.resolve({ c: env });
     },
     writeOut: function (b) { consoleOut.push(dec.decode(b instanceof Uint8Array ? b : new Uint8Array(b))); },
@@ -270,9 +289,27 @@ async function main() {
   check('a non-RuntimeError rejection produces no backtrace',
         !/wasm-function|backtrace/i.test(c2Txt), JSON.stringify(c2Txt.slice(0, 300)));
 
-  // ---- D: strictly additive — the failure the kernel sees is unchanged -----
-  console.log('\nD. strictly additive: the rejection the kernel sees is unchanged');
-  check('runModule still REJECTS on a trap (so kernel.js still posts `crashed`)',
+  // ---- D: strictly additive — HALF of acceptance clause 5 -----------------
+  //
+  // 🔴 SCOPE OF THIS LEG, stated because the first version of it overclaimed.
+  // Clause 5 is written in EXTERNALLY OBSERVABLE terms: "exit status is
+  // unchanged (139 / W_TERMSIG(SIG.SEGV)), and the `crashed` message to the
+  // kernel is unchanged". This suite is host-only: there is no kernel here,
+  // no process worker, and no wait status, so it CANNOT observe any of those.
+  // What it can pin is the mechanism's near end — that runModule still rejects
+  // with the ORIGINAL error object, which is what os/process-worker.js turns
+  // into the `crashed` message.
+  //
+  // The far end — `crashed` -> W_TERMSIG(SIG.SEGV) -> a parent observing
+  // 139 — is pinned by tests/kernel/test_trap_report_delivery.js, and the two
+  // are tied end-to-end by tests/kernel/test_trap_backtrace_e2e.js, which
+  // asserts a literal `exit=139` from inside the guest.
+  //
+  // Saying "this is half the clause, and here is where the other half lives"
+  // is the point: the first version of this leg asserted the mechanism while
+  // claiming the observable, which is a proxy standing in for a requirement.
+  console.log('\nD. strictly additive (near end of clause 5; far end is in the kernel suite)');
+  check('runModule still REJECTS on a trap (what process-worker.js turns into `crashed`)',
         a1.settled === 'rejected');
   check('and it rejects with the original WebAssembly.RuntimeError, not a wrapper',
         a1.error instanceof WebAssembly.RuntimeError,
@@ -333,6 +370,90 @@ async function main() {
   check('the inlined fixture trapped', g.settled === 'rejected', 'settled=' + g.settled);
   check('the report warns that inlined frames are not shown', /inlin/i.test(gTxt),
         JSON.stringify(gTxt.slice(0, 400)));
+
+  // ---- H: a trap in the ANIMATION-FRAME callback (the gamedev main path) --
+  //
+  // Initialisation succeeds, the game runs frames, and then a frame traps.
+  // That is the principal gamedev execution model and it reaches a DIFFERENT
+  // catch from main(): `doFrame`'s. The first cut of #759 reported only at the
+  // main-entry catch, so this case produced NOTHING AT ALL.
+  //
+  // NB the enclosing promise does not settle on a frame trap (a pre-existing
+  // lifecycle defect, filed separately and NOT fixed here), so this leg races
+  // the run against a deadline and asserts on what reached fd 2 — never on the
+  // promise, which would hang the suite.
+  console.log('\nH. a trap in the animation-frame callback still reports');
+  const FRAME_SRC = [
+    '#include <stdio.h>',
+    '#include <emscripten.h>',
+    'static int tick = 0;',
+    '__attribute__((noinline)) static int boom(int *p) { return *p; }   /* MARK_FBOOM */',
+    'static void onframe(void) {',
+    '  if (++tick < 2) { printf("f\\n"); fflush(stdout); return; }',
+    '  boom((int *)0x7ffffff0);                                          /* MARK_FCALL */',
+    '}',
+    'int main(void) { printf("init\\n"); fflush(stdout); emscripten_set_main_loop(onframe, 0, 1); return 0; }',
+    '',
+  ].join('\n');
+  const FBOOM = lineOf(FRAME_SRC, 'MARK_FBOOM'), FCALL = lineOf(FRAME_SRC, 'MARK_FCALL');
+  const beforeH = unhandled.length;
+  const hRun = buildAndRun({ src: FRAME_SRC, srcName: '/frame.c', ccFlags: ['-g'], redirectErr: '/err.log' });
+  const hKfs = lastKfs;                       // captured before the run can hang
+  hRun.then(() => {}, () => {});
+  /* A DEADLINE, not a sync primitive: this run may never settle by design, so
+     there is no marker to wait on. Poll for the artifact instead and stop as
+     soon as it appears, so the leg is fast when healthy and bounded when not. */
+  for (let i = 0; i < 160; i++) {
+    if (/backtrace/i.test(readFile(hKfs, '/err.log') || '')) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  const hTxt = readFile(hKfs, '/err.log') || '';
+  check('the frame trap produced a backtrace on fd 2 (blocker: it produced NOTHING)',
+        /backtrace/i.test(hTxt), JSON.stringify(hTxt.slice(0, 300)));
+  check('it names the faulting frame `boom` at frame.c:' + FBOOM,
+        /\bboom\b/.test(hTxt) && new RegExp('frame\\.c:' + FBOOM + '\\b').test(hTxt),
+        JSON.stringify(hTxt.slice(0, 300)));
+  check('and the frame callback that called it, at frame.c:' + FCALL,
+        /\bonframe\b/.test(hTxt) && new RegExp('frame\\.c:' + FCALL + '\\b').test(hTxt),
+        JSON.stringify(hTxt.slice(0, 300)));
+  // Account for what the handler swallowed, so it cannot mask anything else.
+  const hRejects = unhandled.slice(beforeH);
+  check('the swallowed rejection is EXACTLY the frame trap (handler is scoped, not blanket)',
+        hRejects.length >= 1 && hRejects.every((e) => e instanceof WebAssembly.RuntimeError),
+        hRejects.map((e) => e && e.constructor && e.constructor.name).join(','));
+  check('RECORDED (separately filed, not fixed here): the frame loop never settled',
+        true, 'the run is still pending — reporting the fault does not terminate it');
+
+  // ---- I: a CLOSED fd 2 must not be treated as an unredirected console ----
+  //
+  // A program may dup2 fd 2 and then close() it; close() leaves that slot
+  // empty. An empty slot is NOT the same as a default console fd: the process
+  // has no stderr at all, so putting the diagnostic on the host console would
+  // report successful delivery through a channel the process does not own.
+  console.log('\nI. a program that CLOSED its own fd 2 gets no console spill');
+  const iRun = await buildAndRun({
+    src: FIXTURE, srcName: '/closed.c', ccFlags: ['-g'],
+    // Redirect first (so the slot is a real entry), then close it — the
+    // sequence that leaves fd 2 empty rather than console-marked.
+    redirectErr: '/gone.log',
+    mutateEnv: function () {},
+    afterEnv: function (kfs) { kfs.close(2); },
+  });
+  check('the closed-fd fixture still trapped (leg premise)', iRun.settled === 'rejected',
+        'settled=' + iRun.settled);
+  check('READ BACK: fd 2 really is absent, not console (the premise this rests on)',
+        iRun.kfs.fdSink(2) === 'absent', 'fdSink(2)=' + iRun.kfs.fdSink(2));
+  check('NOTHING was written to the host console writer',
+        !/backtrace|wasm-function/i.test(iRun.consoleErr),
+        JSON.stringify(iRun.consoleErr.slice(0, 300)));
+  check('and nothing was written to the pre-close redirect target either',
+        !/backtrace/i.test(readFile(iRun.kfs, '/gone.log') || ''),
+        JSON.stringify(readFile(iRun.kfs, '/gone.log')));
+
+  console.log('\nJ. accounting: nothing was silently swallowed');
+  check('every unhandled rejection in this run was an expected wasm trap',
+        unhandled.every((e) => e instanceof WebAssembly.RuntimeError),
+        unhandled.map((e) => e && e.constructor && e.constructor.name).join(','));
 
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'all checks passed'));
   process.exit(failures ? 1 : 0);
