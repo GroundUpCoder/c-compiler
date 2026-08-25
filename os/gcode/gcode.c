@@ -1821,9 +1821,39 @@ static void session_end(session *s, const char *reason) {
 }
 
 /* ---- SSE stream state ------------------------------------------------- */
+/* #738: the parser recognises every content-block type the Messages API can
+ * put on the wire, because the REPLAY is only as faithful as the parse. The
+ * old two-way split ('t'ext / 'u'se) collapsed `thinking` into text, and a
+ * thinking block accumulates no text (its deltas are thinking_delta, which
+ * was never read) — so gcode replayed it as {"type":"text","text":""} and
+ * the API rejected the whole request with
+ *   400 "messages: text content blocks must be non-empty".
+ *
+ * Preserve rather than discard: the Messages API contract is that thinking
+ * blocks are replayed UNCHANGED — signature included — when the conversation
+ * continues on the same model, and that the API rejects blocks whose content
+ * was modified. Blocks whose `thinking` text is EMPTY still count: `display`
+ * defaults to "omitted" on every current thinking model, so an empty-text
+ * block carrying a real signature is the normal case, not a degenerate one.
+ *
+ * `type` is the block kind:
+ *   't'  text                — `text` holds the body
+ *   'u'  tool_use            — `id`/`name` + `json` holds partial input JSON
+ *   'k'  thinking            — `text` holds the thinking, `sig` the signature
+ *   'r'  redacted_thinking   — `text` holds the opaque `data` payload
+ *   '?'  anything else       — `raw` holds the content_block VERBATIM
+ *
+ * The '?' arm is what keeps the next block type from becoming this bug again:
+ * an unrecognised block is replayed byte-for-byte from its content_block_start
+ * object, and is DROPPED (loudly) only if a delta arrived that we could not
+ * apply to it — because a partially-captured block replayed as whole is worse
+ * than an absent one. */
 typedef struct {
-    int active; char type;          /* 't'ext or 'u'se */
+    int active; char type;          /* 't'ext 'u'se thin'k'ing 'r'edacted '?'unknown */
     char *id, *name; sb text; sb json;
+    sb   sig;                       /* 'k': signature_delta accumulation */
+    cJSON *raw;                     /* '?': the verbatim content_block */
+    int  lost;                      /* '?': an uninterpretable delta arrived */
 } cblock;
 typedef struct {
     sb accum;                       /* unparsed SSE bytes */
@@ -1891,7 +1921,8 @@ static void dispatch_json(stream_ctx *ctx, const char *json) {
             cblock *b = &ctx->blocks[idx];
             b->active = 1;
             cJSON *cbt = cJSON_GetObjectItem(cb, "type");
-            if (cJSON_IsString(cbt) && !strcmp(cbt->valuestring, "tool_use")) {
+            const char *btype = cJSON_IsString(cbt) ? cbt->valuestring : "";
+            if (!strcmp(btype, "tool_use")) {
                 b->type = 'u';
                 cJSON *id = cJSON_GetObjectItem(cb, "id");
                 cJSON *nm = cJSON_GetObjectItem(cb, "name");
@@ -1903,8 +1934,33 @@ static void dispatch_json(stream_ctx *ctx, const char *json) {
                 assistant_header(ctx);
                 if (!ctx->at_bol) { fputc('\n', stdout); fflush(stdout); ctx->at_bol = 1; }
                 fprintf(stderr, "  %s\xe2\x97\x8f %s%s\n", R_TOOL, b->name ? b->name : "?", CRST);
-            } else {
+            } else if (!strcmp(btype, "text")) {
                 b->type = 't';
+            } else if (!strcmp(btype, "thinking")) {
+                /* #738: its own kind, never text. A provider that answers in
+                 * one shot can also put `thinking`/`signature` on the START
+                 * object rather than streaming deltas, so read both here. */
+                b->type = 'k';
+                cJSON *th = cJSON_GetObjectItem(cb, "thinking");
+                cJSON *sg = cJSON_GetObjectItem(cb, "signature");
+                if (cJSON_IsString(th) && *th->valuestring) sb_puts(&b->text, th->valuestring);
+                if (cJSON_IsString(sg) && *sg->valuestring) sb_puts(&b->sig, sg->valuestring);
+                fprintf(stderr, "  %s\xe2\x9c\xbb thinking%s\n", CDIM, CRST);
+            } else if (!strcmp(btype, "redacted_thinking")) {
+                /* Opaque and deltaless: the entire payload rides the start
+                 * object and goes back verbatim or not at all. */
+                b->type = 'r';
+                cJSON *da = cJSON_GetObjectItem(cb, "data");
+                if (cJSON_IsString(da)) sb_puts(&b->text, da->valuestring);
+            } else {
+                /* Not a kind this build knows. Keep the object VERBATIM so it
+                 * can be replayed exactly as received; `lost` (set by an
+                 * uninterpretable delta) decides whether that copy is still
+                 * whole when the round closes. This is the arm that stops the
+                 * NEXT block type from being this same bug. */
+                b->type = '?';
+                b->raw = cJSON_Duplicate(cb, 1);
+                if (!b->raw) b->lost = 1;
             }
             if (idx + 1 > ctx->nblocks) ctx->nblocks = idx + 1;
         }
@@ -1925,6 +1981,34 @@ static void dispatch_json(stream_ctx *ctx, const char *json) {
             } else if (!strcmp(dtype, "input_json_delta")) {
                 cJSON *pj = cJSON_GetObjectItem(d, "partial_json");
                 if (cJSON_IsString(pj)) sb_puts(&b->json, pj->valuestring);
+            } else if (!strcmp(dtype, "thinking_delta")) {
+                /* #738: the delta gcode never read. Without it a thinking
+                 * block accumulates NOTHING and — under the old
+                 * everything-else-is-text rule — replayed as an empty text
+                 * block, which is the exact body the API 400s on. The body
+                 * goes to stderr (beside the tool markers), never to the
+                 * stdout transcript: gcode does not request
+                 * thinking.display "summarized", so on every current model
+                 * the documented default leaves this empty and there is
+                 * nothing to render. Printing it where it DOES arrive is
+                 * what keeps a summary from being silently swallowed. */
+                cJSON *th = cJSON_GetObjectItem(d, "thinking");
+                if (cJSON_IsString(th)) {
+                    sb_puts(&b->text, th->valuestring);
+                    fprintf(stderr, "%s%s%s", CDIM, th->valuestring, CRST);
+                    fflush(stderr);
+                }
+            } else if (!strcmp(dtype, "signature_delta")) {
+                /* The signature is the part the API validates on replay. It
+                 * is accumulated, never displayed and never synthesised: a
+                 * manufactured signature is a rejected request. */
+                cJSON *sg = cJSON_GetObjectItem(d, "signature");
+                if (cJSON_IsString(sg)) sb_puts(&b->sig, sg->valuestring);
+            } else if (b->type == '?') {
+                /* An uninterpretable delta on an unrecognised block: the
+                 * verbatim copy of its start object is now provably
+                 * incomplete, so it must not be replayed as though whole. */
+                b->lost = 1;
             }
         }
     } else if (!strcmp(type, "message_delta")) {
@@ -1983,6 +2067,78 @@ static size_t write_cb(char *ptr, size_t size, size_t nmemb, void *ud) {
         ctx->accum.p[ctx->accum.len] = 0;
     }
     return n;
+}
+
+/* #738: map ONE accumulated content block to the JSON that goes back into the
+ * history, for every kind that does not require running a tool. Returns NULL
+ * when the block must be omitted, and says so on stderr when the omission is
+ * lossy. Factored out of do_turn so the self-test asserts the SAME mapping the
+ * turn ships — an assertion written against a re-implementation of the rule is
+ * an assertion about the test. `tool_use` stays inline in do_turn: its replay
+ * is entangled with executing the call. */
+static cJSON *block_replay_json(cblock *b) {
+    if (b->type == 't') {
+        /* #738 acceptance 1: NEVER emit an empty text block. The
+         * Messages API rejects the whole request with
+         *   400 "messages: text content blocks must be non-empty"
+         * and gcode reports that as permanent, so the turn dies. A text
+         * block that accumulated nothing carries no information, so
+         * dropping it is lossless — unlike dropping a thinking block,
+         * which the API validates. The empty-`content` array this can
+         * leave behind is closed by do_turn, at the point the assistant
+         * message is built. */
+        if (!b->text.len) return NULL;
+        cJSON *tb = cJSON_CreateObject();
+        cJSON_AddStringToObject(tb, "type", "text");
+        cJSON_AddStringToObject(tb, "text", b->text.p);
+        return tb;
+    } else if (b->type == 'k') {
+        /* #738: replay UNCHANGED, signature included. The contract is
+         * that a continuing conversation on the same model gets its
+         * thinking blocks back exactly as issued — the API rejects a
+         * modified block, and a DROPPED one can trip the ordering and
+         * signature checks on a tool-use turn. An EMPTY `thinking`
+         * string is the normal case, not a degenerate one:
+         * thinking.display defaults to "omitted", so the text is empty
+         * by contract while the signature is real. That is precisely
+         * why the emptiness test above must not be applied here.
+         *
+         * `signature` is emitted only when one was received. gcode never
+         * synthesises one: an invented signature is a rejected request,
+         * and a provider that issues thinking without a signature is
+         * replayed as faithfully as it spoke. */
+        cJSON *kb = cJSON_CreateObject();
+        cJSON_AddStringToObject(kb, "type", "thinking");
+        cJSON_AddStringToObject(kb, "thinking", b->text.p ? b->text.p : "");
+        if (b->sig.len) cJSON_AddStringToObject(kb, "signature", b->sig.p);
+        return kb;
+    } else if (b->type == 'r') {
+        /* Opaque payload, verbatim both ways. */
+        cJSON *rb = cJSON_CreateObject();
+        cJSON_AddStringToObject(rb, "type", "redacted_thinking");
+        cJSON_AddStringToObject(rb, "data", b->text.p ? b->text.p : "");
+        return rb;
+    } else if (b->type == '?') {
+        /* A block kind this build does not know. If nothing arrived that
+         * we could not apply, the captured start object IS the whole
+         * block and goes back byte-for-byte. Otherwise our copy is
+         * provably partial, and replaying a partial block as whole is
+         * worse than omitting it — so drop it, LOUDLY, naming the type
+         * so the next reader knows what to add rather than finding an
+         * unexplained gap in the history. */
+        if (b->raw && !b->lost) {
+            cJSON *raw = b->raw;
+            b->raw = NULL;                       /* the caller owns it now */
+            return raw;
+        } else {
+            cJSON *bt = b->raw ? cJSON_GetObjectItem(b->raw, "type") : NULL;
+            fprintf(stderr, "%sgcode: dropped an incomplete `%s` content block from the "
+                            "replayed history — this build does not know how to accumulate "
+                            "it, so the copy it holds is partial%s\n",
+                    R_ERRB, (bt && cJSON_IsString(bt)) ? bt->valuestring : "unknown", CRST);
+        }
+    }
+    return NULL;
 }
 
 /* ---- #348 record contract ---------------------------------------------
@@ -3055,12 +3211,10 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
     for (int i = 0; i < ctx.nblocks; i++) {
         cblock *b = &ctx.blocks[i];
         if (!b->active) continue;
-        if (b->type == 't') {
-            cJSON *tb = cJSON_CreateObject();
-            cJSON_AddStringToObject(tb, "type", "text");
-            cJSON_AddStringToObject(tb, "text", b->text.p ? b->text.p : "");
-            cJSON_AddItemToArray(acontent, tb);
-        } else if (b->type == 'u') {
+        if (b->type != 'u') {
+            cJSON *rb = block_replay_json(b);
+            if (rb) cJSON_AddItemToArray(acontent, rb);
+        } else {
             cJSON *input = b->json.len ? cJSON_Parse(b->json.p) : cJSON_CreateObject();
             /* #462: a partial input_json_delta does not parse. The old code
              * silently substituted {} and RAN THE TOOL ANYWAY — which is a
@@ -3158,6 +3312,20 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
             }
             free(result);
         }
+    }
+    /* #738: skipping empty text blocks above can leave `content` EMPTY, and
+     * an assistant message with no content blocks is refused by the same API
+     * that refuses the empty text block — so this trades one 400 for another
+     * unless it is closed here. The message is appended unconditionally a few
+     * lines below (it must be: a tool_use needs its assistant turn), so the
+     * fix belongs here rather than in the caller. The substitute NAMES what
+     * happened instead of inventing plausible assistant prose. */
+    if (!cJSON_GetArraySize(acontent)) {
+        cJSON *tb = cJSON_CreateObject();
+        cJSON_AddStringToObject(tb, "type", "text");
+        cJSON_AddStringToObject(tb, "text",
+            "[gcode: this round produced no replayable content blocks]");
+        cJSON_AddItemToArray(acontent, tb);
     }
     cJSON *amsg = cJSON_CreateObject();
     cJSON_AddStringToObject(amsg, "role", "assistant");
@@ -3265,6 +3433,9 @@ done:
     for (int i = 0; i < MAX_BLOCKS; i++) {
         free(ctx.blocks[i].id); free(ctx.blocks[i].name);
         sb_free(&ctx.blocks[i].text); sb_free(&ctx.blocks[i].json);
+        /* #738: `raw` is NULLed when the replay array adopted it, so this
+         * frees only the copies that were dropped or never used. */
+        sb_free(&ctx.blocks[i].sig); cJSON_Delete(ctx.blocks[i].raw);
     }
     free(ctx.stop_reason); free(ctx.message_id); free(ctx.response_model); cJSON_Delete(ctx.raw_usage);
     sb_free(&ctx.accum); sb_free(&ctx.raw); sb_free(&ctx.errmsg);
@@ -3888,6 +4059,141 @@ static int vision_self_test(void) {
     return ok;
 }
 
+
+/* ---- #738: content-block parse + replay -------------------------------
+ * The defect this pins: gcode collapsed EVERY non-tool_use block to text,
+ * never read thinking_delta, and replayed the result as
+ * {"type":"text","text":""} — which the Messages API refuses with
+ *   400 "messages: text content blocks must be non-empty"
+ * killing the turn. Reproduced 3/3 live on api.anthropic.com in #678 Pass B
+ * round 3. The legs below drive the REAL SSE reader (write_cb) and the REAL
+ * replay mapping (block_replay_json), so a regression cannot hide behind a
+ * re-implementation in the test. */
+static int blocks_self_test(void) {
+    int ok = 1;
+
+    /* Leg 1 — the exact shape that 400'd: a thinking block (thinking_delta +
+     * signature_delta, no text_delta at all) followed by a tool_use, with no
+     * assistant preamble text anywhere. */
+    {
+        const char *fx =
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"model\":\"claude-opus-5\"}}\n\n"
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"weigh\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\" it\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"SIGabc\"}}\n\n"
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n"
+            "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"bash\"}}\n\n"
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n";
+        stream_ctx c; memset(&c, 0, sizeof c);
+        write_cb((char *)fx, 1, strlen(fx), &c);
+        /* Parsed as its own kind, not as text — the root cause. */
+        ok &= c.nblocks == 2 && c.blocks[0].type == 'k' && c.blocks[1].type == 'u';
+        /* thinking_delta actually accumulated (it was dropped on the floor). */
+        ok &= c.blocks[0].text.p && !strcmp(c.blocks[0].text.p, "weigh it");
+        ok &= c.blocks[0].sig.p && !strcmp(c.blocks[0].sig.p, "SIGabc");
+        /* And the replay is a thinking block carrying its signature, NOT the
+         * empty text block the API rejects. */
+        cJSON *rb = block_replay_json(&c.blocks[0]);
+        char *js = rb ? cJSON_PrintUnformatted(rb) : NULL;
+        ok &= js && !strcmp(js, "{\"type\":\"thinking\",\"thinking\":\"weigh it\",\"signature\":\"SIGabc\"}");
+        free(js); cJSON_Delete(rb);
+        for (int i = 0; i < MAX_BLOCKS; i++) {
+            sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
+            cJSON_Delete(c.blocks[i].raw); free(c.blocks[i].id); free(c.blocks[i].name);
+        }
+        free(c.stop_reason); free(c.message_id); free(c.response_model);
+        cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
+    }
+
+    /* Leg 2 — an EMPTY thinking block still replays, signature and all. This
+     * is the normal case on every current thinking model: thinking.display
+     * defaults to "omitted", so the text is empty by contract while the
+     * signature is real, and dropping the block is what breaks the turn. The
+     * empty-text rule must NOT be generalised to thinking. */
+    {
+        cblock b; memset(&b, 0, sizeof b);
+        b.type = 'k'; b.active = 1; sb_puts(&b.sig, "SIGempty");
+        cJSON *rb = block_replay_json(&b);
+        char *js = rb ? cJSON_PrintUnformatted(rb) : NULL;
+        ok &= js && !strcmp(js, "{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"SIGempty\"}");
+        free(js); cJSON_Delete(rb); sb_free(&b.sig); sb_free(&b.text); sb_free(&b.json);
+    }
+
+    /* Leg 3 — an empty TEXT block is omitted (never emitted empty), and a
+     * non-empty one is unchanged. */
+    {
+        cblock b; memset(&b, 0, sizeof b); b.type = 't'; b.active = 1;
+        ok &= block_replay_json(&b) == NULL;
+        sb_puts(&b.text, "hi");
+        cJSON *rb = block_replay_json(&b);
+        char *js = rb ? cJSON_PrintUnformatted(rb) : NULL;
+        ok &= js && !strcmp(js, "{\"type\":\"text\",\"text\":\"hi\"}");
+        free(js); cJSON_Delete(rb); sb_free(&b.text); sb_free(&b.json); sb_free(&b.sig);
+    }
+
+    /* Leg 4 — redacted_thinking: the whole payload rides the start object and
+     * goes back verbatim. */
+    {
+        const char *fx =
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"redacted_thinking\",\"data\":\"OPAQUE==\"}}\n\n";
+        stream_ctx c; memset(&c, 0, sizeof c);
+        write_cb((char *)fx, 1, strlen(fx), &c);
+        ok &= c.blocks[0].type == 'r';
+        cJSON *rb = block_replay_json(&c.blocks[0]);
+        char *js = rb ? cJSON_PrintUnformatted(rb) : NULL;
+        ok &= js && !strcmp(js, "{\"type\":\"redacted_thinking\",\"data\":\"OPAQUE==\"}");
+        free(js); cJSON_Delete(rb);
+        for (int i = 0; i < MAX_BLOCKS; i++) {
+            sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
+            cJSON_Delete(c.blocks[i].raw); free(c.blocks[i].id); free(c.blocks[i].name);
+        }
+        free(c.stop_reason); free(c.message_id); free(c.response_model);
+        cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
+    }
+
+    /* Leg 5 — the FUTURE block type, both ways. A kind this build has never
+     * heard of replays byte-for-byte when nothing was streamed into it, and
+     * is dropped when an uninterpretable delta proves our copy partial. This
+     * is the leg that stops the next block type being this same bug: without
+     * it, "handle thinking" is a fix for one name rather than for the class. */
+    {
+        const char *whole =
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"future_thing\",\"payload\":\"whole\",\"n\":7}}\n\n";
+        stream_ctx c; memset(&c, 0, sizeof c);
+        write_cb((char *)whole, 1, strlen(whole), &c);
+        ok &= c.blocks[0].type == '?' && !c.blocks[0].lost;
+        cJSON *rb = block_replay_json(&c.blocks[0]);
+        char *js = rb ? cJSON_PrintUnformatted(rb) : NULL;
+        ok &= js && !strcmp(js, "{\"type\":\"future_thing\",\"payload\":\"whole\",\"n\":7}");
+        ok &= c.blocks[0].raw == NULL;      /* ownership moved to the caller */
+        free(js); cJSON_Delete(rb);
+        for (int i = 0; i < MAX_BLOCKS; i++) {
+            sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
+            cJSON_Delete(c.blocks[i].raw); free(c.blocks[i].id); free(c.blocks[i].name);
+        }
+        free(c.stop_reason); free(c.message_id); free(c.response_model);
+        cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
+
+        const char *partial =
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"future_thing\",\"payload\":\"\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"future_delta\",\"payload\":\"more\"}}\n\n";
+        stream_ctx d; memset(&d, 0, sizeof d);
+        write_cb((char *)partial, 1, strlen(partial), &d);
+        ok &= d.blocks[0].type == '?' && d.blocks[0].lost;
+        ok &= block_replay_json(&d.blocks[0]) == NULL;   /* dropped, loudly */
+        for (int i = 0; i < MAX_BLOCKS; i++) {
+            sb_free(&d.blocks[i].text); sb_free(&d.blocks[i].json); sb_free(&d.blocks[i].sig);
+            cJSON_Delete(d.blocks[i].raw); free(d.blocks[i].id); free(d.blocks[i].name);
+        }
+        free(d.stop_reason); free(d.message_id); free(d.response_model);
+        cJSON_Delete(d.raw_usage); sb_free(&d.accum); sb_free(&d.raw); sb_free(&d.errmsg);
+    }
+
+    if (!ok) fprintf(stderr, "gcode self-test: content-block case FAILED\n");
+    return ok;
+}
+
 static int self_test(void) {
     /* #313: the dated Sonnet 5 intro rate ($2/$10 through 2026-08-31,
      * $3/$15 sticker after) — fixed dates so the check outlives the
@@ -3965,6 +4271,7 @@ static int self_test(void) {
     /* #467: window table, rejection matcher, ceiling arithmetic, and the
      * fold's pair-safety/idempotence/no-nesting invariants. */
     ok &= compact_self_test();
+    ok &= blocks_self_test();   /* #738: content-block parse + replay mapping */
     char tmp[] = "/tmp/gcode-step2-test-XXXXXX"; if (!mkdtemp(tmp)) return 1; setenv("GCODE_STATE_DIR", tmp, 1);
     config cfg = { "https://example.invalid", NULL, NULL, "requested-alias", "fixture-system", 123, 4, 0, 0, NULL, NULL };
     session s; cJSON *messages = cJSON_CreateArray();
@@ -4006,7 +4313,9 @@ static int self_test(void) {
         cJSON_Delete(r);
     }
     if (f) fclose(f); free(line); close(resumed.fd); free(resumed.path); free(resumed.last_stop); free(resumed.response_model); mlist_free(&resumed.models); cJSON_Delete(loaded); free(path);
-    for (int i = 0; i < MAX_BLOCKS; i++) { sb_free(&ctx.blocks[i].text); sb_free(&ctx.blocks[i].json); free(ctx.blocks[i].id); free(ctx.blocks[i].name); }
+    for (int i = 0; i < MAX_BLOCKS; i++) { sb_free(&ctx.blocks[i].text); sb_free(&ctx.blocks[i].json);
+        sb_free(&ctx.blocks[i].sig); cJSON_Delete(ctx.blocks[i].raw);
+        free(ctx.blocks[i].id); free(ctx.blocks[i].name); }
     free(ctx.stop_reason); free(ctx.message_id); free(ctx.response_model); cJSON_Delete(ctx.raw_usage); sb_free(&ctx.accum); sb_free(&ctx.raw); sb_free(&ctx.errmsg);
     fprintf(stderr, "gcode self-test: %s\n", ok ? "PASS" : "FAIL"); return ok ? 0 : 1;
 }

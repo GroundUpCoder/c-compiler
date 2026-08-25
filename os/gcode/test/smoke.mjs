@@ -36,6 +36,26 @@ function textResponse(text) {
     + sse('message_delta', { delta: { stop_reason: 'end_turn' } })
     + sse('message_stop', {});
 }
+// #738: the shape that 400'd live, 3/3, on api.anthropic.com — a thinking
+// block (thinking_delta + signature_delta, and NO text_delta anywhere) then a
+// tool_use with no assistant preamble. `thinkingText` of '' is the DEFAULT
+// case, not an edge one: thinking.display defaults to "omitted", so a real
+// Opus 5 stream carries an empty thinking body and a real signature.
+function thinkingToolUseResponse(thinkingText, sig, id, name, inputObj) {
+  const json = JSON.stringify(inputObj);
+  let out = sse('message_start', { message: { id: 'msg_k', role: 'assistant', content: [] } })
+    + sse('content_block_start', { index: 0, content_block: { type: 'thinking', thinking: '' } });
+  if (thinkingText) out += sse('content_block_delta', { index: 0, delta: { type: 'thinking_delta', thinking: thinkingText } });
+  out += sse('content_block_delta', { index: 0, delta: { type: 'signature_delta', signature: sig } })
+    + sse('content_block_stop', { index: 0 })
+    + sse('content_block_start', { index: 1, content_block: { type: 'tool_use', id, name, input: {} } })
+    + sse('content_block_delta', { index: 1, delta: { type: 'input_json_delta', partial_json: json } })
+    + sse('content_block_stop', { index: 1 })
+    + sse('message_delta', { delta: { stop_reason: 'tool_use' } })
+    + sse('message_stop', {});
+  return out;
+}
+
 function toolUseResponse(preface, id, name, inputObj) {
   const json = JSON.stringify(inputObj);
   // split the input json into two partials to exercise accumulation
@@ -55,7 +75,27 @@ function toolUseResponse(preface, id, name, inputObj) {
 // A server that shifts one scripted response per POST, recording bodies.
 // An entry is an SSE string (200) or { status, body } for an error reply
 // (#305: the REPL-survives-a-failed-turn leg).
-function startServer(scripts) {
+// #738: the same server, but enforcing the ONE Messages API rule this ticket
+// is about — "text content blocks must be non-empty". A fake that accepts a
+// body the real API refuses turns the reproduction into a no-op, so the strict
+// variant answers an offending request with the REAL 400 wording instead of
+// the next script entry. This is what makes the leg a red control: gcode
+// before the fix constructs that body and dies here.
+function startStrictServer(scripts) {
+  return startServer(scripts, (body) => {
+    for (const m of body.messages || []) {
+      if (!Array.isArray(m.content)) continue;
+      for (const b of m.content)
+        if (b && b.type === 'text' && b.text === '')
+          return { status: 400, body: JSON.stringify({ type: 'error', error: {
+            type: 'invalid_request_error',
+            message: 'messages: text content blocks must be non-empty' } }) };
+    }
+    return null;
+  });
+}
+
+function startServer(scripts, validate) {
   const bodies = [];
   const raw = [];   // request bodies as Buffers — #386 asserts UTF-8 validity byte-level
   const server = http.createServer((req, res) => {
@@ -64,7 +104,14 @@ function startServer(scripts) {
     req.on('end', () => {
       const buf = Buffer.concat(chunks);
       raw.push(buf);
-      bodies.push(JSON.parse(buf.toString('utf8')));
+      const parsed = JSON.parse(buf.toString('utf8'));
+      bodies.push(parsed);
+      const reject = validate ? validate(parsed) : null;
+      if (reject) {
+        res.writeHead(reject.status, { 'content-type': 'application/json' });
+        res.end(reject.body);
+        return;
+      }
       const body = scripts.shift();
       if (body === undefined) { res.writeHead(500); res.end('no script'); return; }
       if (typeof body === 'object' && body.delay) {   // #507: slow first byte
@@ -1799,6 +1846,102 @@ async function main() {
     }
 
     fs.rmSync(tmp, { recursive: true, force: true });
+  }
+
+  // ---- #738: thinking blocks replay, empty text blocks never ship ------
+  // The defect: every non-tool_use block was collapsed to text, thinking_delta
+  // was never read, so a thinking block replayed as {"type":"text","text":""}
+  // and the Messages API refused the whole request. gcode reports that 400 as
+  // permanent, so the turn died. Reproduced 3/3 live (#678 Pass B round 3).
+  {
+    const tmp738 = fs.mkdtempSync(path.join(os.tmpdir(), 'gcode-738-'));
+
+    // -- leg A: the live reproduction, against a server that enforces the rule
+    {
+      const srv = await startStrictServer([
+        thinkingToolUseResponse('', 'SIGLIVE', 'toolu_738a', 'write_file',
+          { path: path.join(tmp738, 'a.txt'), content: 'hi' }),
+        textResponse('finished the build.'),
+      ]);
+      const { stdout, stderr } = await runCodeBoth(srv.url,
+        ['-p', 'build it', '--no-color', '--no-persist']);
+      srv.close();
+      // The turn COMPLETES: before the fix the strict server 400s round 2 and
+      // gcode prints "retrying cannot succeed" instead of ever reaching here.
+      check(stdout.includes('finished the build.'),
+        '#738: a thinking-then-tool_use round completes end to end');
+      check(!stderr.includes('retrying cannot succeed'),
+        '#738: no permanent-rejection verdict on the replayed round');
+      // Not a reproduction leg (base gcode also sends 2 requests — the second
+      // is the one that 400s). What it pins is the SHAPE of the fix: a
+      // repair-and-retry that let the bad body go out and recovered on the
+      // rebound would cost a third round, and would keep shipping a body the
+      // API refuses. The fix must be at construction, not at recovery.
+      check(srv.bodies.length === 2 && stdout.includes('finished the build.'),
+        `#738: two rounds, no 400-and-retry detour (${srv.bodies.length})`);
+      const replay = srv.bodies[1] ? srv.bodies[1].messages : [];
+      const flat = replay.flatMap((m) => Array.isArray(m.content) ? m.content : []);
+      check(!flat.some((b) => b.type === 'text' && b.text === ''),
+        '#738: the replayed history carries NO empty text block');
+      const think = flat.find((b) => b.type === 'thinking');
+      check(!!think && think.signature === 'SIGLIVE',
+        '#738: the thinking block is replayed as thinking, signature preserved');
+      check(!!think && think.thinking === '',
+        '#738: an empty thinking body is preserved, not dropped (display:"omitted")');
+    }
+
+    // -- leg B: a summarized thinking body round-trips unchanged -----------
+    {
+      const srv = await startStrictServer([
+        thinkingToolUseResponse('weigh the options', 'SIGSUM', 'toolu_738b', 'write_file',
+          { path: path.join(tmp738, 'b.txt'), content: 'hi' }),
+        textResponse('done b.'),
+      ]);
+      const { stdout } = await runCodeBoth(srv.url,
+        ['-p', 'build it', '--no-color', '--no-persist']);
+      srv.close();
+      const flat = (srv.bodies[1] ? srv.bodies[1].messages : [])
+        .flatMap((m) => Array.isArray(m.content) ? m.content : []);
+      const think = flat.find((b) => b.type === 'thinking');
+      check(stdout.includes('done b.') && !!think && think.thinking === 'weigh the options'
+            && think.signature === 'SIGSUM',
+        '#738: a summarized thinking body replays verbatim with its signature');
+      // The summary must not be laundered into the stdout transcript as if it
+      // were the assistant's answer — that was the other half of the collapse.
+      check(stdout.includes('done b.') && !stdout.includes('weigh the options'),
+        '#738: thinking is not printed as assistant prose on stdout');
+    }
+
+    // -- leg C: strict-server control — the rule really does reject ---------
+    // Proves the instrument can produce a RED. Without this leg a fake that
+    // silently accepted anything would make legs A and B vacuous.
+    {
+      const emptyText = sse('message_start', { message: { id: 'msg_e', role: 'assistant', content: [] } })
+        + sse('content_block_start', { index: 0, content_block: { type: 'text', text: '' } })
+        + sse('content_block_stop', { index: 0 })
+        + sse('content_block_start', { index: 1, content_block: { type: 'tool_use', id: 'toolu_738c', name: 'write_file', input: {} } })
+        + sse('content_block_delta', { index: 1, delta: { type: 'input_json_delta',
+            partial_json: JSON.stringify({ path: path.join(tmp738, 'c.txt'), content: 'hi' }) } })
+        + sse('content_block_stop', { index: 1 })
+        + sse('message_delta', { delta: { stop_reason: 'tool_use' } })
+        + sse('message_stop', {});
+      const srv = await startStrictServer([emptyText, textResponse('unreachable.')]);
+      const { stdout } = await runCodeBoth(srv.url,
+        ['-p', 'build it', '--no-color', '--no-persist']);
+      srv.close();
+      // gcode itself now drops the empty text block on the way out, so the
+      // strict server never sees one and the turn survives. What this leg
+      // pins is that the SERVER's rule is live: bodies[1] reaching it at all
+      // means the drop happened client-side.
+      const flat = (srv.bodies[1] ? srv.bodies[1].messages : [])
+        .flatMap((m) => Array.isArray(m.content) ? m.content : []);
+      check(srv.bodies.length === 2 && !flat.some((b) => b.type === 'text' && b.text === ''),
+        '#738: a genuinely empty text block from the provider is dropped, not forwarded');
+      check(stdout.includes('unreachable.'),
+        '#738: and the round it came from still completes');
+    }
+
+    fs.rmSync(tmp738, { recursive: true, force: true });
   }
 
   console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILURE(S)`);
