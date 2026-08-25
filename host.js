@@ -3168,6 +3168,31 @@ var BLOCK_FS = (function () {
     return n;
   };
 
+  /* Is `fd` one of the DEFAULT (non-redirected) console fds? (#759)
+   *
+   * This exists because `write()` below deliberately SWALLOWS a write to an
+   * unredirected fd 1/2 and returns `count` — the console routing lives in the
+   * env-level `write`/`writev` imports (which have ctx.writeOut/writeErr),
+   * not here. So a JS-side caller writing to fd 2 on behalf of the program —
+   * the #551 blocking-present refusal, #759's trap backtrace — gets a
+   * success-shaped return for bytes that went nowhere. Such a caller must ask
+   * FIRST and use the host writer for the console case.
+   *
+   * Keyed on the same positive `console === true` capability every other
+   * console site tests (CD27): absence means "not console", the safe default.
+   * A backend that lacks this method (RemoteFS, whose fd 2 really is delivered
+   * by the FS_WRITE RPC) is correctly treated as non-console by callers. */
+  BlockFS.prototype.isConsoleFd = function (fd) {
+    if (fd !== 1 && fd !== 2) return false;
+    var e = (fd >= 0 && fd < this._fdTable.length) ? this._fdTable[fd] : null;
+    // Mirrors BOTH of write()'s swallow branches below — the missing-entry
+    // one and the console-capability one — so the predicate and the behaviour
+    // it describes cannot drift apart. Keyed on `console === true` positively
+    // (CD27): absence of the marker means "not console", the safe default,
+    // which for a fd that HAS an entry means the write really is delivered.
+    return !e || e.console === true;
+  };
+
   BlockFS.prototype.write = function (fd, buf, count) {
     if (fd < 0 || fd >= this._fdTable.length || !this._fdTable[fd]) {
       // Default stdout/stderr with no real entry → swallow (handled externally).
@@ -11589,6 +11614,187 @@ async function runSsModule(bytes, opts) {
   return 0;
 }
 
+/* ---- post-trap diagnostics (#759; design #732) -----------------------------
+ *
+ * When a program hits a wasm trap (out-of-bounds, divide-by-zero, an indirect
+ * call whose signature does not match), the developer inside gucOS used to get
+ * `SEGV` and nothing else. The information was never missing — it was
+ * discarded: the JS exception's `.stack` already carries wasm frames, the
+ * process worker already ships it (os/process-worker.js), and kernel.js hands
+ * it to _log(), which in the browser is a one-line clipped status strip.
+ *
+ * WHY THIS NEEDS NO NEW FORMAT. V8 renders a wasm frame as
+ * `wasm-function[IDX]:0xOFF`, and that OFF is a MODULE-RELATIVE byte offset —
+ * which is exactly the coordinate space the compiler's own `c.sourcemap`
+ * custom section already uses (compiler.js emits each entry's offset as
+ * codeSectionContentStart + the function body's section-relative offset + the
+ * in-body offset). So `index -> name` is the standard `name` section and
+ * `offset -> file:line` is a lookup in a table we already emit under `-g`.
+ * No DWARF, no side table.
+ *
+ * Both sections are read off the `WebAssembly.Module`, NOT off the module
+ * bytes: the kernel's module cache (todos/0037) structured-clones a compiled
+ * Module and drops the bytes, and `WebAssembly.Module.customSections()` still
+ * works on the clone. Symbolication therefore costs no extra transfer.
+ *
+ * HONEST SHAPE (todos/PRINCIPLES.md, Principle 2). This reports only what it
+ * can actually derive, and says so when it cannot:
+ *   - no `name` section  -> frames are printed as `wasm-function[N]`, with a
+ *     note naming `cc -g` as the fix. No name is ever invented.
+ *   - no `c.sourcemap`   -> no source location is printed at all. A location
+ *     is never guessed.
+ *   - the inliner runs unconditionally and drops the callee's source markers,
+ *     so a frame can be attributed to the call site that inlined it. That is
+ *     stated in the report rather than left for the developer to discover.
+ * This is a diagnostic, not an implementation of a standard API: there is no
+ * `backtrace(3)`, no core file, and nothing here claims to be one.
+ */
+
+/* V8 captures at most Error.stackTraceLimit frames AT THROW TIME. The default
+ * of 10 truncates a deep chain and loses main(), which is usually the frame
+ * that tells you which subsystem you were in. Raised once per realm before the
+ * program runs (one process per realm). ExitStatus is a plain object, not an
+ * Error, so the ordinary exit path of every process pays nothing for this. */
+const TRAP_FRAME_LIMIT = 64;
+
+/* `at NAME (wasm://wasm/HASH:wasm-function[IDX]:0xOFF)`, or the same without a
+ * NAME when the module carries no name section. Only the index and the offset
+ * are taken from the engine's text; the NAME is resolved from the name section
+ * instead, so the output does not depend on how V8 chooses to render it. */
+const WASM_FRAME_RE = /wasm-function\[(\d+)\]:0x([0-9a-fA-F]+)/;
+
+/* Decode the `name` section's function-name subsection (id 1) and the
+ * `c.sourcemap` section into a lookup structure. Any malformed section is
+ * treated as absent — a diagnostic must never itself throw on the fatal path. */
+function readDebugSections(module) {
+  const out = { names: new Map(), files: [], entries: [] };
+  const dec = new TextDecoder();
+  const reader = function (buf) {
+    const b = new Uint8Array(buf);
+    let i = 0;
+    return {
+      eof: function () { return i >= b.length; },
+      pos: function () { return i; },
+      seek: function (n) { i = n; },
+      byte: function () { return b[i++]; },
+      u: function () { let v = 0, s = 0, x; do { x = b[i++]; v |= (x & 127) << s; s += 7; } while (x & 128); return v >>> 0; },
+      s: function () { let v = 0, s = 0, x; do { x = b[i++]; v |= (x & 127) << s; s += 7; } while (x & 128); if (s < 32 && (x & 64)) v |= (~0 << s); return v | 0; },
+      str: function () { const n = this.u(); const t = dec.decode(b.subarray(i, i + n)); i += n; return t; },
+    };
+  };
+  try {
+    const nm = WebAssembly.Module.customSections(module, 'name');
+    if (nm.length) {
+      const r = reader(nm[0]);
+      while (!r.eof()) {
+        const kind = r.byte(), len = r.u(), end = r.pos() + len;
+        if (kind === 1) { const c = r.u(); for (let j = 0; j < c; j++) { const idx = r.u(); out.names.set(idx, r.str()); } }
+        r.seek(end);
+      }
+    }
+  } catch (e) { out.names = new Map(); }
+  try {
+    const sm = WebAssembly.Module.customSections(module, 'c.sourcemap');
+    if (sm.length) {
+      const r = reader(sm[0]);
+      const nf = r.u();
+      for (let j = 0; j < nf; j++) out.files.push(r.str());
+      const n = r.u();
+      let off = 0, f = 0, line = 0;
+      for (let j = 0; j < n; j++) {
+        if (j === 0) { off = r.u(); f = r.u(); line = r.u(); }
+        else { off += r.u(); f += r.s(); line += r.s(); }
+        out.entries.push({ off: off, f: f, line: line });
+      }
+    }
+  } catch (e) { out.files = []; out.entries = []; }
+  return out;
+}
+
+/* A c.sourcemap entry states the location active FROM its byte until the next
+ * entry, so the answer for `off` is the last entry at or before it. The table
+ * is emitted sorted by absolute offset, so this is a binary search. */
+function locateSourceLine(dbg, off) {
+  const e = dbg.entries;
+  if (!e.length) return null;
+  let lo = 0, hi = e.length - 1, best = -1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (e[m].off <= off) { best = m; lo = m + 1; } else hi = m - 1; }
+  if (best < 0) return null;
+  const en = e[best];
+  const file = dbg.files[en.f];
+  if (file === undefined) return null;
+  return file + ':' + en.line;
+}
+
+/* Render the report. Returns null when the stack carries no wasm frames at all
+ * (nothing useful to say — stay quiet rather than emit an empty banner). */
+function formatTrapReport(err, module, progName) {
+  let dbg;
+  try { dbg = readDebugSections(module); } catch (e) { dbg = { names: new Map(), files: [], entries: [] }; }
+  const frames = [];
+  const lines = String((err && err.stack) || '').split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const m = WASM_FRAME_RE.exec(lines[i]);
+    if (m) frames.push({ idx: +m[1], off: parseInt(m[2], 16) });
+  }
+  if (!frames.length) return null;
+
+  const why = (err && err.message) ? err.message : String(err);
+  const out = [];
+  out.push((progName ? progName + ': ' : '') + 'fatal: wasm trap: ' + why);
+  out.push('  wasm backtrace (innermost frame first):');
+  for (let i = 0; i < frames.length; i++) {
+    const f = frames[i];
+    const name = dbg.names.get(f.idx);
+    const loc = locateSourceLine(dbg, f.off);
+    let head = '    #' + String(i) + '  ' + (name !== undefined ? name : 'wasm-function[' + f.idx + ']');
+    if (loc) head += '  at ' + loc;
+    out.push(head);
+    out.push('          [wasm-function[' + f.idx + '] +0x' + f.off.toString(16) + ']');
+  }
+  out.push('  note:');
+  if (dbg.names.size === 0) {
+    out.push('    - this binary carries no function names or source map.');
+    out.push('      Rebuild with `cc -g` to get names and file:line here.');
+  } else if (dbg.entries.length === 0) {
+    out.push('    - this binary carries names but no source map.');
+    out.push('      Rebuild with `cc -g` to get file:line here.');
+  }
+  out.push('    - frames removed by inlining are not shown, so a frame can be');
+  out.push('      attributed to the call site that inlined it rather than to the');
+  out.push('      statement that faulted. Mark the functions you are tracing');
+  out.push('      __attribute__((noinline)) to see the full chain.');
+  return out.join('\n') + '\n';
+}
+
+/* Deliver to the PROCESS'S OWN fd 2 — the seam #551 established: a synchronous
+ * brokered write that respects an ordinary `2>` redirection, so the app's own
+ * captured output names the cause. `ctx.fs` is registered by toWasmEnv, so it
+ * is present for every gucOS process and every --block-fs run; without one
+ * (the Node-fs flavor) fall back to the host's stderr writer, which is that
+ * arrangement's stderr. Never throws: this runs on the fatal path. */
+function deliverTrapReport(text, ctx, writeErr) {
+  const bytes = new TextEncoder().encode(text);
+  const fs = ctx && ctx.fs;
+  try {
+    /* An UNREDIRECTED fd 2 is the console, and BlockFS.write swallows those
+       (returning count for bytes that went nowhere — see isConsoleFd). For
+       that case the host's stderr writer IS the process's fd 2, so use it.
+       Asking first, rather than trusting write()'s return, is the whole point:
+       a success-shaped return is not delivery. */
+    if (fs && typeof fs.isConsoleFd === 'function' && fs.isConsoleFd(2)) {
+      if (typeof writeErr === 'function') { writeErr(bytes); return; }
+    }
+    /* Otherwise fd 2 is a real backing object — a redirected file or pipe, or
+       (under the kernel) a RemoteFS fd whose FS_WRITE RPC really delivers. */
+    if (fs && typeof fs.write === 'function') {
+      const n = fs.write(2, bytes, bytes.length);
+      if (n !== null && n !== undefined && n >= 0) return;
+    }
+  } catch (e) { /* fall through to the host writer */ }
+  try { if (typeof writeErr === 'function') writeErr(bytes); } catch (e) {}
+}
+
 async function runModule({
   bytes,
   // Pre-compiled Module (todos/0037): skips the parse+compile below. The
@@ -11646,6 +11852,14 @@ async function runModule({
      region long before an async pipe flush (CONFORMANCE-REMAINING
      "non-copied views into wasm memory"). One memcpy per write, same as
      native stdio. */
+  /* #759: raise the trap-frame budget before the program runs — V8 captures
+     frames AT THROW TIME, so this must be in effect before main() is entered.
+     Only V8 defines the property; elsewhere the assignment is inert. Never
+     lowered, so an embedder that already asked for more keeps it. */
+  if (typeof Error.stackTraceLimit === 'number' && Error.stackTraceLimit < TRAP_FRAME_LIMIT) {
+    Error.stackTraceLimit = TRAP_FRAME_LIMIT;
+  }
+
   if (!writeOut && typeof process !== 'undefined' && process.stdout) {
     installExitOnEpipe(process.stdout);
     writeOut = function (buf) {
@@ -13544,6 +13758,26 @@ async function runModule({
       // with its distinct status (the no-kernel twin of the __exit shape).
       return e.sdlRefusalExit;
     } else {
+      /* #759 (design #732): a real wasm trap. Report it on the process's own
+         fd 2 before unwinding, then rethrow UNCHANGED — the exit status, the
+         kernel's `crashed` message and every existing caller stay exactly as
+         they were. This is strictly additive.
+
+         Gated on RuntimeError, which is what a trap is. That test also keeps
+         this out of two adjacent failure classes that must NOT get a
+         backtrace: a LinkError from a missing host import (#558) and a
+         RangeError from a wasm memory the host could not allocate (#752) —
+         in both, the program never executed an instruction, so a backtrace
+         would describe a process that never ran. Those throw at the
+         `new WebAssembly.Instance(...)` above, OUTSIDE this try, so they
+         cannot reach here in the first place; the type test is the second
+         line of defence, not the only one. */
+      if (e instanceof WebAssembly.RuntimeError) {
+        try {
+          const report = formatTrapReport(e, module, (args && args[0]) || null);
+          if (report) deliverTrapReport(report, ctx, writeErr);
+        } catch (e2) { /* a diagnostic must never mask the fault it describes */ }
+      }
       throw e;
     }
   } finally {
