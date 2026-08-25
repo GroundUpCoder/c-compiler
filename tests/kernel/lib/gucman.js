@@ -127,10 +127,11 @@ function startServer(dir) {
     servers.push(child);
     let buf = '';
     let ebuf = '';
-    // Consume stderr (#725, the gitserve.js pattern): an unread pipe blocks a
-    // verbosely-failing serve.js at ~64KB (its startup bake inherits these
-    // fds), and on failure stderr carries the actual reason — before this,
-    // the exit path reported nothing but the code.
+    // Consume stderr (#725, the gitserve.js pattern): an unread pipe wedges
+    // a verbosely-failing serve.js once pipe+stream buffers fill (measured:
+    // 10 MB wedged, 123 KB passed; its startup bake inherits these fds), and
+    // on failure stderr carries the actual reason — before this, the exit
+    // path reported nothing but the code.
     child.stderr.on('data', (d) => { ebuf += d; });
     const to = setTimeout(() => {
       reject(new Error('serve.js never announced a port (stale output: ' + buf +

@@ -30,10 +30,11 @@ function startAndGetUrl() {
   return new Promise((resolve, reject) => {
     let out = '';
     let err = '';
-    // stderr must be CONSUMED, not just piped (#725): an unread pipe fills at
-    // ~64KB and blocks the child — a serve.js failing verbosely (its startup
-    // bake runs stdio-inherited into these pipes) would then hang instead of
-    // exiting, converting the real error into the 5s no-URL timeout below.
+    // stderr must be CONSUMED, not just piped (#725): once pipe+stream
+    // buffers fill, an unread pipe wedges the child (measured: 10 MB wedged,
+    // 123 KB passed) — a serve.js failing verbosely (its startup bake runs
+    // stdio-inherited into these pipes) would then hang instead of exiting,
+    // converting the real error into the 5s no-URL timeout below.
     // And on failure stderr is the one stream that says WHY: the 2026-08-25
     // ship-gate red ("exited early (code 1)") was unattributable because this
     // handler was missing.

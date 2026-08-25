@@ -861,7 +861,7 @@ async function main() {
   const fport = await new Promise((resolve, reject) => {
     let buf = '';
     let ebuf = '';
-    // Consume stderr (#725): unread it is both a ~64KB blocking hazard and
+    // Consume stderr (#725): unread it is both a wedge hazard (once buffers fill) and
     // lost evidence on a leg whose entire purpose is fault diagnosis.
     faultSrv.stderr.on('data', (d) => { ebuf += d; });
     const to = setTimeout(() => reject(new Error('fault-repo never announced a port: ' + buf +

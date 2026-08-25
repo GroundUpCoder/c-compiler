@@ -87,7 +87,7 @@ async function main() {
   // leave unbounded) ------------------------------------------------------
   // 'ignore', not 'pipe' (#725): nothing ever read these pipes, so the leg
   // was safe only because LOOP_SRC happens to print nothing — a chatty child
-  // would fill the 64KB buffer, block, and pass the aliveAfter assertion for
+  // would wedge on a filled buffer, and pass the aliveAfter assertion for
   // the wrong reason. 'ignore' states the intent the fixture relied on.
   const kid = cp.spawn('node', [HOST, loopWasm, '--max-seconds=0'],
     { stdio: ['ignore', 'ignore', 'ignore'] });

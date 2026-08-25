@@ -77,9 +77,9 @@ const bridge = spawn(process.execPath, [path.join(ROOT, 'tools', 'net-bridge.js'
 const bridgeUrl = await new Promise((resolve, reject) => {
   let buf = '';
   let ebuf = '';
-  // Consume stderr (#725): unread it can block a verbosely-failing bridge at
-  // ~64KB, and on failure it carries the reason (a bind/TLS error) that the
-  // bare exit code cannot.
+  // Consume stderr (#725): unread it can wedge a verbosely-failing bridge
+  // once pipe+stream buffers fill, and on failure it carries the reason (a
+  // bind/TLS error) that the bare exit code cannot.
   bridge.stderr.on('data', (d) => { ebuf += d; });
   const to = setTimeout(() => reject(new Error('bridge never announced: ' + buf +
     '; stderr: ' + (ebuf || '(empty)'))), 10000);
