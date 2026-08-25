@@ -30,6 +30,7 @@ var tests = [
   ['test_gpu_present_binding.js', []],   // per-window GPU present tail: canvasBySid + bind-at-GetWGPUSurface (A4)
   ['test_gpu_present_clamp.js', []],     // #484: producer-side present backpressure — one ship per vsync tick, held-frame flush at pump/park
   ['test_harness_leaks.js', []],         // the startup reaper's "never delete a LIVE run's fixture/server" contract
+  ['test_host_health.js', []],           // #725: the host-condition sampler — parsers on canned real output, the calibration trap (healthy raw numbers must NOT label suspect), suspectFromSamples fires on the OS pressure verdict and stays a LABEL (no verdict/directive fields — the never-a-pass property), the CC_HOST_HEALTH_FAKE seam (verbatim + fake:true; unreadable THROWS)
   ['test_tree_guard.js', []],            // the cross-tree preflight REFUSES a foreign-cwd launch (0341) — the positive control, run every time
   ['test_pp_spread_bounds.js', []],      // no unbounded call-argument spread survives in compiler.js (0320)
   ['test_source_date_epoch.js', []],     // #639: SOURCE_DATE_EPOCH — __DATE__/__TIME__ render the epoch in UTC (byte-identical across 25h-apart TZs), unset stays local wall clock, invalid values refuse loudly by the stated digits-and-cap rule (CLI + exported parser + cc-driver surfaces)
