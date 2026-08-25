@@ -195,6 +195,18 @@ const lowPct = { ...healthy, pressure: 1, memFreePct: 12 };
   check('verdict: pressure 2 → warn, NOT refuse', p2.level === 'warn', p2);
   const pct = v({ pressure: 1, memFreePct: 12 });
   check('verdict: memFreePct 12 (pressure normal) → warn, NOT refuse', pct.level === 'warn', pct);
+  // The rounding dead zone (#725 CP3 finding 3): verdict() must compare the
+  // EXACT bytes, not the two-decimal display figure — 0.9999 GB used to
+  // round to 1.0 and slide over the floor, a dead zone sitting precisely on
+  // the one axis the bounded experiment proved responds to real load.
+  const dz = v({ availGb: 1.0, availBytes: Math.floor(0.9999 * 2 ** 30) });
+  check('verdict: 0.9999 GB exact (displays as 1.0) → refuse — the dead zone is closed',
+    dz.level === 'refuse' && /0\.99\d* GB < 1 GB floor/.test(dz.reasons[0]), dz);
+  check('verdict: 1.0001 GB exact → ok (the floor is a floor, not a fuzz band)',
+    v({ availGb: 1.0, availBytes: Math.ceil(1.0001 * 2 ** 30) }).level === 'ok');
+  check('verdict: a fake carrying only availGb still compares as given',
+    v({ availGb: 0.5, availBytes: undefined }).level === 'refuse');
+
   // Absence discipline (#725 counter-pass finding 2): a null instrument is
   // an unmeasured AXIS — it can neither refuse nor warn; a wholly
   // unmeasured sample can NEVER refuse.

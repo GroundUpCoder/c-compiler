@@ -1362,10 +1362,24 @@ function hostHealthPreflight(runId, summaryDir) {
     before = s;
     process.stdout.write(`[host-health] degraded (${v.reasons.join('; ')}) — ` +
       'attempting recovery: reaping provably-dead harness leftovers…\n');
+    // 🔴 provableOnly (#725 CP3 finding 1): this reap runs AUTOMATICALLY,
+    // mid-preflight, on a box that may host someone's legitimate long run —
+    // so it may take ONLY what a dead owner proves abandoned. The default
+    // reapTempDirs policy also reaps live-pid-but-old and untagged-old dirs
+    // on age heuristics; deleting a live run's fixture from here would
+    // MANUFACTURE that run's failure — the exact false-red class this
+    // ticket exists to close, in destructive form. (The first landing
+    // called the default policy while claiming "dead-owner-gated" — the
+    // claim came from this module's own header summary, taken on faith
+    // instead of re-derived from classifyTempDir's branches.) What cannot
+    // be proved dead is left in place and NAMED in the refusal evidence.
+    const dirs = HL.reapTempDirs({ provableOnly: true });
     recovery = {
       procs: HL.reapOrphanProcs({}).killed.map(p => ({ pid: p.pid, what: p.what })),
-      tempDirs: HL.reapTempDirs({}).found.length,
+      tempDirs: dirs.found.length,
       imageTemps: HL.reapImageTemps({}).found.length,
+      unreclaimable: dirs.kept.filter(k => /UNPROVABLE|heuristic, not a proof/.test(k.why))
+        .map(k => `${k.name}: ${k.why}`),
     };
     s = HOST_HEALTH.sample();
     v = HOST_HEALTH.verdict(s);
@@ -1410,6 +1424,9 @@ function hostHealthPreflight(runId, summaryDir) {
     ` swapUsedGb=${fmt(s.swapUsedGb)} compressorGb=${fmt(s.compressorGb)} load1=${fmt(s.load1)}\n` +
     (recovery ? `  recovery reaped ${recovery.procs.length} proc(s), ${recovery.tempDirs} temp dir(s), ` +
       `${recovery.imageTemps} image temp(s) — not enough\n` : '') +
+    (recovery && recovery.unreclaimable.length ?
+      `  NOT reaped (abandonment unprovable — a live run may own these; inspect by hand):\n` +
+      recovery.unreclaimable.slice(0, 5).map(u => `    ${u}\n`).join('') : '') +
     (suspects.length ? `  live memory consumers (NOT killed — live parents):\n` +
       suspects.slice(0, 6).map(p => `    pid ${p.pid} (ppid ${p.ppid}) ${p.what}: ${p.command.slice(0, 90)}\n`).join('') : '') +
     (holder ? `  heavy-lock holder: ${holder.name} (pid ${holder.pid}) since ${holder.startedAt}\n` : '') +
@@ -1626,6 +1643,13 @@ async function main() {
       attachPyRecord(row, opts, tPy);
       attachHostSamples(row, hostBefore);
       results.push(row);
+      // CP3 finding 2: the AFTER-row sample must be evaluated, not just
+      // recorded — a critical state the gate observed and wrote down used
+      // to stop nothing (the next row's fresh before-sample could read
+      // healthy again). The completed row keeps its own honest result;
+      // only what has not run yet is truncated.
+      const tvPyAfter = degradedVerdict(row.host.after);
+      if (tvPyAfter && si + 1 < ordered.length) { truncateFrom(si + 1, row.host.after, tvPyAfter); break; }
       continue;
     }
     const cmd0 = SUITES[suite].cmd[0];
@@ -1654,6 +1678,10 @@ async function main() {
     const row = { suite, ...c };
     attachHostSamples(row, hostBefore);
     results.push(row);
+    // CP3 finding 2: evaluate the after-row sample (see the py-batch twin
+    // above for the rationale).
+    const tvAfter = degradedVerdict(row.host.after);
+    if (tvAfter && si + 1 < ordered.length) { truncateFrom(si + 1, row.host.after, tvAfter); break; }
   }
 
   // #561b: `--out=DIR` redirects the run-level record (summaryDir was

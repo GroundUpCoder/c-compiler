@@ -43,6 +43,37 @@ check('a pid-tagged dir whose owner is ALIVE is left alone', () => {
   assert.strictEqual(v.reap, false);
 });
 
+// ---- provableOnly (#725 CP3 finding 1): the automatic gate-time policy ----
+// The default policy reaps a LIVE-owner dir past PID_REUSE_MS and an
+// untagged dir on age alone — heuristics a human-invoked reap may take, but
+// an AUTOMATIC gate-time recovery may not: deleting a live run's fixture
+// manufactures that run's failure, #725's own false-red class in
+// destructive form. Under provableOnly, only a dead owner licenses a reap.
+check('provableOnly: a LIVE owner is never reaped, however old the dir', () => {
+  const v = classifyTempDir('os-e2e-4242-Ab3xYz', NOW - PID_REUSE_MS - 1,
+    { isAlive: alive, now: NOW, provableOnly: true });
+  assert.strictEqual(v.reap, false);
+  assert.match(v.why, /heuristic, not a proof/);
+  // …while the default policy DOES reap it (the human-invoked behavior,
+  // unchanged — this pair is what pins the two policies apart).
+  assert.strictEqual(classifyTempDir('os-e2e-4242-Ab3xYz', NOW - PID_REUSE_MS - 1,
+    { isAlive: alive, now: NOW }).reap, true);
+});
+check('provableOnly: an untagged old dir is kept and named unprovable', () => {
+  const v = classifyTempDir('os-e2e-XXXXXX', NOW - UNTAGGED_STALE_MS - 1,
+    { isAlive: dead, now: NOW, provableOnly: true });
+  assert.strictEqual(v.reap, false);
+  assert.match(v.why, /UNPROVABLE/);
+  assert.strictEqual(classifyTempDir('os-e2e-XXXXXX', NOW - UNTAGGED_STALE_MS - 1,
+    { isAlive: dead, now: NOW }).reap, true);
+});
+check('provableOnly: a DEAD owner still licenses the reap', () => {
+  const v = classifyTempDir('os-e2e-4242-Ab3xYz', NOW - 60_000,
+    { isAlive: dead, now: NOW, provableOnly: true });
+  assert.strictEqual(v.reap, true);
+  assert.match(v.why, /4242/);
+});
+
 check('a live-pid dir older than the pid-reuse horizon IS reaped', () => {
   // Otherwise a recycled pid pins an abandoned dir forever.
   const v = classifyTempDir('os-e2e-4242-Ab3xYz', NOW - PID_REUSE_MS - 1, { isAlive: alive, now: NOW });

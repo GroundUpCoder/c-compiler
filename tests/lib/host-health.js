@@ -140,24 +140,47 @@ function runQuiet(cmd, args) {
 //   load1, totalGb
 // }
 let fakeIdx = 0;   // array-fake cursor (test seam; per-process, monotonic)
+let fakeExitHook = false;
 function sample() {
   if (process.env.CC_HOST_HEALTH_FAKE) {
+    const fakePath = process.env.CC_HOST_HEALTH_FAKE;
+    let fake;
     try {
-      const fake = JSON.parse(fs.readFileSync(process.env.CC_HOST_HEALTH_FAKE, 'utf8'));
-      // An ARRAY fake is consumed one element per sample() call, last
-      // element sticking — what lets a control script a healthy preflight
-      // followed by a degraded later row, deterministically, in one child.
-      if (Array.isArray(fake)) {
-        const el = fake[Math.min(fakeIdx++, fake.length - 1)];
-        return { t: new Date().toISOString(), fake: true, ...el };
-      }
-      return { t: new Date().toISOString(), fake: true, ...fake };
+      fake = JSON.parse(fs.readFileSync(fakePath, 'utf8'));
     } catch (e) {
       // A named-but-unreadable fake is a broken TEST setup — fail loud, do
       // not silently fall through to real measurement under a control that
       // believes it injected a starved host.
-      throw new Error(`CC_HOST_HEALTH_FAKE=${process.env.CC_HOST_HEALTH_FAKE} unreadable: ${e.message}`);
+      throw new Error(`CC_HOST_HEALTH_FAKE=${fakePath} unreadable: ${e.message}`);
     }
+    // An ARRAY fake is consumed strictly one element per sample() call.
+    // 🔴 It FAILS LOUDLY on misuse in BOTH directions (#725 CP3, the
+    // vacuous-control class fix): the first landing let the last element
+    // stick, which silently absorbed off-by-N errors in a control's
+    // call-count map — a leg with wrong indices still passed as long as
+    // the interesting value happened to be last (three vacuous controls in
+    // one ticket trace to that shape). Now: exhaustion THROWS naming the
+    // count, and unconsumed elements are reported at process exit — a
+    // control must map the run's exact sample sequence or go red.
+    if (Array.isArray(fake)) {
+      if (!fakeExitHook) {
+        fakeExitHook = true;
+        process.on('exit', () => {
+          if (fakeIdx < fake.length) {
+            process.stderr.write(`[host-health] FAKE UNDER-CONSUMED: ` +
+              `${fake.length - fakeIdx} of ${fake.length} elements unused — ` +
+              `the control's sample-sequence map is wrong\n`);
+          }
+        });
+      }
+      if (fakeIdx >= fake.length) {
+        throw new Error(`CC_HOST_HEALTH_FAKE array exhausted after ${fake.length} sample(s) — ` +
+          `the control's sample-sequence map is wrong (a sticky last element would have hidden this)`);
+      }
+      const el = fake[fakeIdx++];
+      return { t: new Date().toISOString(), fake: true, ...el };
+    }
+    return { t: new Date().toISOString(), fake: true, ...fake };
   }
   const base = {
     t: new Date().toISOString(),
@@ -182,6 +205,12 @@ function sample() {
     measured: pressure != null || memFreePct != null || avail != null,
     pressure,
     memFreePct,
+    // availBytes is the EXACT figure verdict() compares (#725 CP3 finding
+    // 3: comparing the display-rounded availGb left a dead zone from
+    // 0.995 GB to just under the 1 GB floor — sitting precisely on the one
+    // axis the bounded experiment proved responds to real load). availGb
+    // stays as the display/telemetry field.
+    availBytes: avail,
     availGb: gb(avail),
     freeGb: vm.free != null && vm.pageSize != null ? gb(vm.free * vm.pageSize) : null,
     swapUsedGb: gb(swapUsed),
@@ -228,8 +257,16 @@ function verdict(s) {
   if (s.pressure != null && s.pressure >= REFUSE_PRESSURE) {
     refuse.push(`memory pressure level ${s.pressure} — the OS's own CRITICAL verdict (kern.memorystatus_vm_pressure_level)`);
   }
-  if (s.availGb != null && s.availGb < REFUSE_AVAIL_GB) {
-    refuse.push(`available memory ${s.availGb} GB < ${REFUSE_AVAIL_GB} GB floor (free+inactive+speculative+purgeable)`);
+  // Exact bytes when the sample carries them (#725 CP3 finding 3: the
+  // rounded display figure left a 0.995..1.0 GB dead zone under the floor);
+  // fakes may supply availGb alone and are compared as given.
+  const availExactGb = s.availBytes != null ? s.availBytes / 2 ** 30 : s.availGb;
+  if (availExactGb != null && availExactGb < REFUSE_AVAIL_GB) {
+    // Enough digits that the SENTENCE stays true (the CPM4 lesson, nearly
+    // repeated right here: .toFixed(3) rendered 0.9999 GB as "1.000 GB < 1
+    // GB floor" — a false statement in a diagnostic; the dead-zone control
+    // caught it because it parses the number, not the shape).
+    refuse.push(`available memory ${+availExactGb.toFixed(6)} GB < ${REFUSE_AVAIL_GB} GB floor (free+inactive+speculative+purgeable)`);
   }
   if (refuse.length) return { level: 'refuse', reasons: refuse };
   const warn = [];

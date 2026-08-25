@@ -44,11 +44,20 @@
 //                             still slips through or predates the fix, this
 //                             reaper on the NEXT run.
 //
-// SAFETY AGAINST A CONCURRENT RUN. Reaping is never "looks old" — it is
-// "the owning process is DEAD":
-//   - temp dirs carry their owner's pid in the name (harness-temp.mkdtempOwned);
+// SAFETY AGAINST A CONCURRENT RUN. The core rule is "the owning process is
+// DEAD" — with two deliberate AGE-BASED exceptions this header used to
+// gloss over (#725 CP3: a design cited this header's old "never 'looks
+// old'" summary as a safety proof, and the code below contradicted it):
+//   - temp dirs carry their owner's pid in the name (harness-temp.mkdtempOwned),
+//     and a DEAD owner is the normal reap licence — BUT a dir older than
+//     PID_REUSE_MS is reaped even with a live pid (recycled-pid heuristic),
+//     and an untagged dir is reaped on age alone past UNTAGGED_STALE_MS.
+//     Callers that need STRICTLY provable death (an automatic gate-time
+//     invocation, where deleting a live run's fixture would MANUFACTURE its
+//     failure — #725's own defect class) pass { provableOnly: true }, which
+//     disables both age branches and reports those dirs as kept instead.
 //   - a process is reaped only when its PPID is 1, i.e. the OS itself has
-//     already declared it parentless.
+//     already declared it parentless (no age exception on processes).
 // A live hand-run `node tests/kernel/test_wm.js` (which takes NO heavy lock) has
 // a living pid and a living parent, so nothing of its is touched. On top of
 // that, callers run preflight() AFTER the heavy-lock seam (joinHeavyLock since
@@ -84,17 +93,27 @@ const DISK_FAIL_GB = 3;
 
 // Decide one $TMPDIR entry's fate. Pure (isAlive/now injected) so the host
 // suite can test it without minting real dirs. -> { reap, why }
-function classifyTempDir(name, mtimeMs, { isAlive = pidAlive, now = Date.now() } = {}) {
+// `provableOnly` (#725 CP3): reap ONLY what a dead owner proves abandoned —
+// the two age-based branches (live-pid-but-old, untagged-and-old) become
+// KEEPS with a why naming the unprovability. An automatic gate-time caller
+// must never delete a live run's fixture on a heuristic: that manufactures
+// the victim's failure, the very defect class #725 exists to close.
+function classifyTempDir(name, mtimeMs, { isAlive = pidAlive, now = Date.now(), provableOnly = false } = {}) {
   const m = TEMP_DIR_RE.exec(name);
   const ageMs = now - mtimeMs;
   if (!m) {
-    return ageMs > UNTAGGED_STALE_MS
-      ? { reap: true, why: `untagged (pre-fix) and ${Math.round(ageMs / 3600000)}h old` }
-      : { reap: false, why: 'untagged but recent — may belong to a run in flight' };
+    if (ageMs <= UNTAGGED_STALE_MS) return { reap: false, why: 'untagged but recent — may belong to a run in flight' };
+    return provableOnly
+      ? { reap: false, why: `untagged and ${Math.round(ageMs / 3600000)}h old — abandonment UNPROVABLE (no owner pid); left for a human/manual reap` }
+      : { reap: true, why: `untagged (pre-fix) and ${Math.round(ageMs / 3600000)}h old` };
   }
   const pid = Number(m[1]);
   if (!isAlive(pid)) return { reap: true, why: `owner pid ${pid} is gone` };
-  if (ageMs > PID_REUSE_MS) return { reap: true, why: `pid ${pid} alive but dir is ${Math.round(ageMs / 3600000)}h old (pid reuse)` };
+  if (ageMs > PID_REUSE_MS) {
+    return provableOnly
+      ? { reap: false, why: `pid ${pid} ALIVE and dir ${Math.round(ageMs / 3600000)}h old — pid-reuse is a heuristic, not a proof; left for a human/manual reap` }
+      : { reap: true, why: `pid ${pid} alive but dir is ${Math.round(ageMs / 3600000)}h old (pid reuse)` };
+  }
   return { reap: false, why: `owner pid ${pid} is alive` };
 }
 
@@ -193,7 +212,7 @@ function freeBytes(p) {
 
 // --------------------------------------------------------------- the sweeps
 
-function reapTempDirs({ dryRun = false } = {}) {
+function reapTempDirs({ dryRun = false, provableOnly = false } = {}) {
   const tmp = os.tmpdir();
   const found = [], kept = [];
   let names = [];
@@ -204,7 +223,7 @@ function reapTempDirs({ dryRun = false } = {}) {
     let st;
     try { st = fs.statSync(full); } catch { continue; }
     if (!st.isDirectory()) continue;
-    const verdict = classifyTempDir(name, st.mtimeMs);
+    const verdict = classifyTempDir(name, st.mtimeMs, { provableOnly });
     if (!verdict.reap) { kept.push({ name, why: verdict.why }); continue; }
     const bytes = duBytes(full);
     found.push({ name, why: verdict.why, bytes });

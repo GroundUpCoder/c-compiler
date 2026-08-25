@@ -131,11 +131,16 @@ const statOrNull = (p) => { try { const s = fs.statSync(p); return s.mtimeMs + '
 }
 
 // ---- leg 6: mid-run truncation — deterministic via the array fake -------
-// Call order in the dispatcher: preflight(0), row-1 before(1), row-1
-// after(2), row-2 before(3) ← the first degraded sample. Suites: todos runs
-// first in RUN_ORDER, netsurf-patch second.
+// EXACT sample map, re-derived from the code and enforced by the seam
+// (#725 CP3: the first version of this leg omitted hostStart from its map
+// and passed only because the sticky last element papered over the
+// off-by-one — the third vacuous control of this ticket; the seam now
+// throws on exhaustion and reports under-consumption at exit, so a wrong
+// map cannot pass): (1) preflight, (2) hostStart, (3) todos before,
+// (4) todos after, (5) netsurf-patch before ← CRITICAL → truncate,
+// (6) summary end sample.
 {
-  const arr = fakePath('midrun', [HEALTHY, HEALTHY, HEALTHY, CRITICAL]);
+  const arr = fakePath('midrun', [HEALTHY, HEALTHY, HEALTHY, HEALTHY, CRITICAL, HEALTHY]);
   const r = gate(['todos', 'netsurf-patch'], { CC_HOST_HEALTH_FAKE: arr });
   const out = String(r.stdout);
   check('leg 6: truncated gate exits nonzero (rule 5 stays red)', r.status === 1, r.status);
@@ -143,6 +148,9 @@ const statOrNull = (p) => { try { const s = fs.statSync(p); return s.mtimeMs + '
   check('leg 6: suite 2 NEVER started (no banner)', !out.includes('━━━ netsurf-patch suite'));
   check('leg 6: the truncation is loud and names the reason',
     out.includes('[host-health] TRUNCATING') && /memory pressure level 4/.test(out));
+  check('leg 6: the sample map is EXACT (no exhaustion, no under-consumption)',
+    !String(r.stderr).includes('exhausted') && !String(r.stderr).includes('FAKE UNDER-CONSUMED'),
+    String(r.stderr).slice(-200));
   const s = readSummary();
   const row1 = s.results.find((x) => x.suite === 'todos');
   const row2 = s.results.find((x) => x.suite === 'netsurf-patch');
@@ -155,6 +163,50 @@ const statOrNull = (p) => { try { const s = fs.statSync(p); return s.mtimeMs + '
   check('leg 6: the run STARTED, so it IS summarized + archived (contrast the preflight refusal)',
     fs.existsSync(path.join(outDir, 'history', s.runId, 'summary.json')));
   check('leg 6: HOST tag on the verdict line', out.includes('HOST') && out.includes('host degraded'));
+}
+
+// ---- leg 6b (#725 CP3 finding 2): a critical AFTER-row sample stops -----
+// the run — a degraded state the gate OBSERVED AND RECORDED must never be
+// ignored just because the next row's fresh sample might read healthy.
+// Map: (1) preflight H, (2) hostStart H, (3) todos before H, (4) todos
+// after CRITICAL → truncate the remainder, (5) summary end sample.
+{
+  const arr = fakePath('afterrow', [HEALTHY, HEALTHY, HEALTHY, CRITICAL, HEALTHY]);
+  const r = gate(['todos', 'netsurf-patch'], { CC_HOST_HEALTH_FAKE: arr });
+  const out = String(r.stdout);
+  check('leg 6b: after-row critical truncates — gate exits nonzero', r.status === 1, r.status);
+  check('leg 6b: suite 2 never started', !out.includes('━━━ netsurf-patch suite'));
+  check('leg 6b: exact map (seam quiet)', !String(r.stderr).includes('exhausted')
+    && !String(r.stderr).includes('FAKE UNDER-CONSUMED'), String(r.stderr).slice(-200));
+  const s = readSummary();
+  const row1 = s.results.find((x) => x.suite === 'todos');
+  const row2 = s.results.find((x) => x.suite === 'netsurf-patch');
+  check('leg 6b: the COMPLETED row keeps its own honest result (it really ran)',
+    !!row1 && row1.status === 'pass' && row1.host.after.pressure === 4, row1 && row1.status);
+  check('leg 6b: the remainder is fail/host-degraded/DID NOT RUN',
+    !!row2 && row2.status === 'fail' && row2.reason === 'host-degraded'
+      && /^DID NOT RUN/.test(row2.note), row2);
+  check('leg 6b: truncated.at names the first unrun suite',
+    s.truncated && s.truncated.at === 'netsurf-patch', s.truncated);
+}
+
+// ---- leg 8: the seam itself fails LOUDLY on misuse (both directions) ----
+// The red control for the vacuous-control class: a control whose sample map
+// is WRONG must go red, not pass off a sticky value.
+{
+  // Too FEW elements: the third sample() call (todos before) must throw.
+  const r = gate(['todos'], { CC_HOST_HEALTH_FAKE: fakePath('short', [HEALTHY, HEALTHY]) });
+  check('leg 8: an exhausted fake array crashes the gate loudly',
+    r.status === 1 && String(r.stderr).includes('array exhausted after 2 sample(s)'),
+    { status: r.status, tail: String(r.stderr).slice(-200) });
+  check('leg 8: …naming what stickiness would have hidden',
+    String(r.stderr).includes('sticky last element would have hidden this'));
+  check('leg 8: the crashed gate released its lock', !fs.existsSync(path.join(outDir, '.gate-lock')));
+  // Too MANY elements: unconsumed remainder is reported at exit.
+  const r2 = gate(['todos'], { CC_HOST_HEALTH_FAKE: fakePath('long', Array(12).fill(HEALTHY)) });
+  check('leg 8: an under-consumed fake array is reported at exit',
+    r2.status === 0 && /FAKE UNDER-CONSUMED: 7 of 12 elements unused/.test(String(r2.stderr)),
+    { status: r2.status, tail: String(r2.stderr).slice(-200) });
 }
 
 // ---- leg 7: unmeasured never refuses ------------------------------------
