@@ -122,47 +122,50 @@ function readWholeFile(p) {
   return new TextDecoder().decode(b);
 }
 
+// #759 HALF 3 oracle, v2. Derives the fs methods deliverTrapReport consults.
+//
+// 🔴 ORDERING IS THE WHOLE FIX. v1 produced a comment/string-blanked `code`
+// and then went on scanning the RAW body anyway, so the sanitiser existed and
+// was bypassed. Two fail-open mutations followed from that, both reproduced:
+//   * a STALE COMMENT (`/* ...fs.fdSink */`) satisfied the guard while the real
+//     classifier went through a helper (`Reflect.get`) and was unguarded;
+//   * a `/* } */` comment moved the brace-matched body boundary, because brace
+//     matching also ran before blanking.
+// A SANITISER THAT IS BYPASSED IS WORSE THAN NO SANITISER: its presence reads
+// as protection, so a reviewer seeing `code` produced reasonably assumes it is
+// what gets scanned.
+//
+// v2 blanks ONCE, up front, over the whole source, and thereafter the blanked
+// text is the ONLY thing scanned — declaration search, brace matching, and
+// name extraction alike. The raw text survives for exactly two purposes, both
+// non-deciding: reading a bracket literal's name at an offset the blanked scan
+// already accepted, and quoting context in an error message.
 function deriveDispatchClassifiers(hostSrc) {
-  const bad = (reason) => ({ ok: false, reason, names: [], sawWrite: false });
+  const bad = (reason) => ({ ok: false, reason, names: [], sawWrite: false, bodyLen: 0 });
   if (typeof hostSrc !== 'string' || !hostSrc.length) return bad('host.js unreadable or empty');
 
-  // (2) EXACT name match. `\s*\(` after the identifier is what stops
-  // `deliverTrapReportRenamed` from satisfying this — mutation A.
-  const decl = /\bfunction\s+deliverTrapReport\s*\(/g;
-  const starts = [];
-  for (let m; (m = decl.exec(hostSrc)) !== null; ) starts.push(m.index);
-  if (starts.length === 0) return bad('no `function deliverTrapReport(` declaration found');
-  if (starts.length > 1) return bad('several `deliverTrapReport` declarations — "the body" is ambiguous');
-
-  // (3) Body by BRACE MATCHING, not a lazy `\n}`. Detects truncation and
-  // survives reshaping/indentation changes — mutation B.
-  const open = hostSrc.indexOf('{', starts[0]);
-  if (open < 0) return bad('declaration found but no opening brace');
-  let depth = 0, end = -1;
-  for (let i = open; i < hostSrc.length; i++) {
-    const c = hostSrc[i];
-    if (c === '{') depth++;
-    else if (c === '}') { depth--; if (depth === 0) { end = i; break; } }
-  }
-  if (end < 0) return bad('unbalanced braces — body truncated or unparseable');
-  const body = hostSrc.slice(open, end + 1);
-
-  // Comments and string bodies are BLANKED (length-preserving) before any
-  // scanning: the first draft of this oracle refused the real source because
-  // the word "fs" appears in a comment inside the dispatch. An oracle that
-  // reds a healthy tree is as useless as one that greens a broken one.
-  const blank = (src) => {
-    let out = src.split(''), i = 0, n = src.length;
+  // ---- step 1: blank comments and string CONTENTS, length-preserving, ONCE,
+  // over the whole source. Offsets stay aligned with hostSrc, so a span
+  // accepted on the blanked text can be read back from the raw text safely.
+  const blankAll = (src) => {
+    const out = src.split('');
+    const n = src.length;
+    let i = 0;
     while (i < n) {
       const c = src[i], d = src[i + 1];
-      if (c === '/' && d === '*') { const e = src.indexOf('*/', i + 2); const stop = e < 0 ? n : e + 2;
-        for (let k = i; k < stop; k++) if (out[k] !== '\n') out[k] = ' '; i = stop; continue; }
-      if (c === '/' && d === '/') { let e = src.indexOf('\n', i); if (e < 0) e = n;
-        for (let k = i; k < e; k++) out[k] = ' '; i = e; continue; }
+      if (c === '/' && d === '*') {
+        const e = src.indexOf('*/', i + 2), stop = e < 0 ? n : e + 2;
+        for (let k = i; k < stop; k++) if (out[k] !== '\n') out[k] = ' ';
+        i = stop; continue;
+      }
+      if (c === '/' && d === '/') {
+        let e = src.indexOf('\n', i); if (e < 0) e = n;
+        for (let k = i; k < e; k++) out[k] = ' ';
+        i = e; continue;
+      }
       if (c === '"' || c === "'" || c === '`') {
         let k = i + 1;
         while (k < n && src[k] !== c) { if (src[k] === '\\') k++; k++; }
-        // keep the quotes so fs['name'] still parses; blank only the contents
         for (let j = i + 1; j < Math.min(k, n); j++) if (out[j] !== '\n') out[j] = ' ';
         i = Math.min(k + 1, n); continue;
       }
@@ -170,54 +173,71 @@ function deriveDispatchClassifiers(hostSrc) {
     }
     return out.join('');
   };
-  const code = blank(body);
+  const blanked = blankAll(hostSrc);
 
-  // (4) Every recognised way the dispatch can reach a method on `fs`.
-  // Anything else is an UNRECOGNISED SHAPE and fails loud rather than
-  // silently contributing nothing — mutation C.
-  const forms = [
-    /\bfs\.([A-Za-z_$][\w$]*)/g,                       // fs.name        (call, typeof, alias)
-    /\bfs\?\.([A-Za-z_$][\w$]*)/g,                     // fs?.name
-    /\bfs\[\s*['"]([A-Za-z_$][\w$]*)['"]\s*\]/g,       // fs['name']
-    /\bconst\s*\{([^}]*)\}\s*=\s*fs\b/g,               // const { a, b } = fs
-  ];
+  // ---- step 2: locate the declaration IN THE BLANKED TEXT (so a commented-out
+  // or quoted declaration cannot be found), with an EXACT name boundary — the
+  // `\s*\(` is what stops `deliverTrapReportRenamed` matching by prefix.
+  const decl = /\bfunction\s+deliverTrapReport\s*\(/g;
+  const starts = [];
+  for (let m; (m = decl.exec(blanked)) !== null; ) starts.push(m.index);
+  if (starts.length === 0) return bad('no `function deliverTrapReport(` declaration found');
+  if (starts.length > 1) return bad('several `deliverTrapReport` declarations — "the body" is ambiguous');
+
+  // ---- step 3: brace-match IN THE BLANKED TEXT, so a brace inside a comment
+  // or a string cannot move the boundary.
+  const open = blanked.indexOf('{', starts[0]);
+  if (open < 0) return bad('declaration found but no opening brace');
+  let depth = 0, end = -1;
+  for (let i = open; i < blanked.length; i++) {
+    const c = blanked[i];
+    if (c === '{') depth++;
+    else if (c === '}') { depth--; if (depth === 0) { end = i; break; } }
+  }
+  if (end < 0) return bad('unbalanced braces — body truncated or unparseable');
+
+  // `code` is the ONLY thing scanned. `raw` is display/offset-read only and
+  // never decides anything.
+  const code = blanked.slice(open, end + 1);
+  const raw = hostSrc.slice(open, end + 1);
+
+  // ---- step 4: every recognised way the dispatch reaches a method on `fs`.
   const found = new Set();
   const consumed = [];
-  for (const re of forms) {
-    // Match on `body` (real text, so fs['name'] yields its name) but record
-    // spans; the unrecognised-use scan below runs on the blanked `code`, so a
-    // bare `fs` inside a comment or string can never be mistaken for a use.
-    for (let m; (m = re.exec(body)) !== null; ) {
-      consumed.push([m.index, m.index + m[0].length]);
-      if (re.source.startsWith('\\bconst')) {
-        for (const part of m[1].split(',')) {
-          const nm = part.split(':')[0].trim();
-          if (/^[A-Za-z_$][\w$]*$/.test(nm)) found.add(nm);
-        }
-      } else found.add(m[1]);
+  const eat = (m) => consumed.push([m.index, m.index + m[0].length]);
+  for (let m, re = /\bfs\s*\??\.\s*([A-Za-z_$][\w$]*)/g; (m = re.exec(code)) !== null; ) { eat(m); found.add(m[1]); }
+  // Bracket form: the literal's CONTENT is blanked, so accept the shape on
+  // `code` and read the name back from `raw` over the same accepted span.
+  for (let m, re = /\bfs\s*\[\s*['"][^'"\n]*['"]\s*\]/g; (m = re.exec(code)) !== null; ) {
+    eat(m);
+    const lit = /['"]([A-Za-z_$][\w$]*)['"]/.exec(raw.slice(m.index, m.index + m[0].length));
+    if (!lit) return bad('bracket access on `fs` with a non-identifier literal key');
+    found.add(lit[1]);
+  }
+  for (let m, re = /\bconst\s*\{([^}]*)\}\s*=\s*fs\b/g; (m = re.exec(code)) !== null; ) {
+    eat(m);
+    for (const part of m[1].split(',')) {
+      const nm = part.split(':')[0].trim();
+      if (/^[A-Za-z_$][\w$]*$/.test(nm)) found.add(nm);
     }
   }
-  // A bare `fs` is only interesting when it REACHES INTO the object. A
-  // truthiness guard (`fs &&`), a `typeof fs`, or passing it as a receiver
-  // (`fdSink.call(fs, 2)`) names no method and is not a dispatch shape — the
-  // first draft flagged all three and went red on healthy source. So: scan for
-  // fs followed by a property access, and require THAT to be recognised.
-  // A COMPUTED access (`fs[k]`) is deliberately unreadable to this oracle and
-  // fails loud rather than contributing nothing.
+
+  // ---- step 5: a bare `fs` is only interesting when it REACHES INTO the
+  // object. `fs &&`, `typeof fs`, and `pick(fs, k)` name no method. A reach
+  // this oracle cannot read (a computed key) fails LOUD.
   for (let m, re = /\bfs\b/g; (m = re.exec(code)) !== null; ) {
     const at = m.index;
-    const after = code.slice(at + 2).match(/^\s*(\?\.|\.|\[)?/);
-    const reach = after && after[1];
-    if (!reach) continue;                       // not a property access
-    if (consumed.some(([s2, e2]) => at >= s2 && at < e2)) continue;
-    const ctx = body.slice(Math.max(0, at - 45), at + 55).replace(/\s+/g, ' ');
-    return bad('unreadable property access on `fs` (computed key, or a shape ' +
-               'this oracle does not know) near: \u2026' + ctx + '\u2026');
+    const reach = (code.slice(at + 2).match(/^\s*(\?\.|\.|\[)?/) || [])[1];
+    if (!reach) continue;
+    if (consumed.some(([s, e]) => at >= s && at < e)) continue;
+    const ctx = raw.slice(Math.max(0, at - 45), at + 55).replace(/\s+/g, ' ');
+    return bad('unreadable property access on `fs` (computed key, or a shape this ' +
+               'oracle does not know) near: …' + ctx + '…');
   }
 
   const sawWrite = found.has('write');
-  found.delete('write');                                // the delivery call
-  return { ok: true, reason: null, names: [...found].sort(), sawWrite, bodyLen: body.length };
+  found.delete('write');
+  return { ok: true, reason: null, names: [...found].sort(), sawWrite, bodyLen: code.length };
 }
 
 (async () => {
