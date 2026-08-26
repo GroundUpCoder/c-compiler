@@ -27,6 +27,7 @@
 //
 // Run: node tests/kernel/test_trap_report_delivery.js
 'use strict';
+const fs = require('fs');
 const path = require('path');
 const K = require(path.resolve(__dirname, '../../kernel.js'));
 const HOST = require(path.resolve(__dirname, '../../host.js'));
@@ -123,12 +124,47 @@ function readWholeFile(p) {
   console.log('#759 — trap-report delivery under the KERNEL (RemoteFS -> FS_WRITE) arrangement');
 
   // ---- HALF 3 first: the property host.js's delivery choice depends on -----
-  console.log('\nHALF 3. RemoteFS must not look like a console-backed fs');
+  //
+  // deliverTrapReport asks the fs where fd 2 goes before writing. Under the
+  // kernel the answer must be "I have no opinion", so the write is brokered
+  // through FS_WRITE. If RemoteFS ever grew that classifier and answered
+  // 'console', every in-OS trap report would silently reroute to the console;
+  // if it answered 'absent', they would be silently DROPPED.
+  //
+  // 🔴 THIS ASSERTION IS LOAD-BEARING ON A SYMBOL NAME, so it names EVERY
+  // spelling the dispatch has ever used — not just the current one. The first
+  // cut guarded `isConsoleFd`, and then #759's own counter-pass renamed that
+  // method to `fdSink`. The tripwire KEPT PASSING while protecting nothing:
+  // it failed safe-looking rather than loud, which is the worst failure mode a
+  // regression control has. A control goes stale the instant you rename what
+  // it guards, and nothing about the rename tells you.
+  //
+  // The guard against the NEXT rename is the derivation below: the names are
+  // read out of host.js's actual dispatch line, so adding a third spelling
+  // without listing it here fails this leg instead of quietly widening the
+  // hole.
+  console.log('\nHALF 3. RemoteFS must not answer the fd-2 classifier at all');
   const rfsProto = K.RemoteFS.prototype;
-  check('RemoteFS does NOT define isConsoleFd, so deliverTrapReport brokers the write',
-        !Object.getOwnPropertyNames(rfsProto).includes('isConsoleFd') &&
-        typeof rfsProto.isConsoleFd !== 'function',
-        'if RemoteFS gains isConsoleFd, every in-OS trap report silently reroutes to the console');
+  const CLASSIFIER_NAMES = ['fdSink', 'isConsoleFd'];   // current + historical
+  for (const name of CLASSIFIER_NAMES) {
+    check('RemoteFS defines NO `' + name + '` (so deliverTrapReport brokers the write)',
+          !Object.getOwnPropertyNames(rfsProto).includes(name) &&
+          typeof rfsProto[name] !== 'function',
+          'if RemoteFS gains ' + name + ', in-OS trap reports reroute to the console or vanish');
+  }
+  // Keep the list honest against the code it mirrors: every fs-method name
+  // host.js's deliverTrapReport actually calls must appear above.
+  const hostSrc = fs.readFileSync(path.resolve(__dirname, '../../host.js'), 'utf8');
+  const dispatch = /function deliverTrapReport[\s\S]*?\n}/.exec(hostSrc);
+  check('located deliverTrapReport in host.js (leg premise)', !!dispatch);
+  const called = new Set();
+  if (dispatch) for (const m of dispatch[0].matchAll(/\bfs\.([A-Za-z_$][\w$]*)\s*\(/g)) called.add(m[1]);
+  called.delete('write');   // the delivery call itself, not a classifier
+  const unguarded = [...called].filter((n) => !CLASSIFIER_NAMES.includes(n));
+  check('every fs classifier deliverTrapReport calls is named in this guard',
+        unguarded.length === 0,
+        'unguarded classifier(s): ' + JSON.stringify(unguarded) +
+        ' — add them to CLASSIFIER_NAMES, or this tripwire is protecting nothing');
   check('RemoteFS does define write', typeof rfsProto.write === 'function');
 
   // ---- set up a process whose fd 2 is a FILE ------------------------------

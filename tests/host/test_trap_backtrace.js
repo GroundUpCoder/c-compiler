@@ -399,7 +399,8 @@ async function main() {
   const beforeH = unhandled.length;
   const hRun = buildAndRun({ src: FRAME_SRC, srcName: '/frame.c', ccFlags: ['-g'], redirectErr: '/err.log' });
   const hKfs = lastKfs;                       // captured before the run can hang
-  hRun.then(() => {}, () => {});
+  let hSettled = null;
+  hRun.then(() => { hSettled = 'resolved'; }, () => { hSettled = 'rejected'; });
   /* A DEADLINE, not a sync primitive: this run may never settle by design, so
      there is no marker to wait on. Poll for the artifact instead and stop as
      soon as it appears, so the leg is fast when healthy and bounded when not. */
@@ -416,13 +417,35 @@ async function main() {
   check('and the frame callback that called it, at frame.c:' + FCALL,
         /\bonframe\b/.test(hTxt) && new RegExp('frame\\.c:' + FCALL + '\\b').test(hTxt),
         JSON.stringify(hTxt.slice(0, 300)));
-  // Account for what the handler swallowed, so it cannot mask anything else.
+  /* Account for what the handler swallowed. 🔴 This must IDENTIFY the
+     rejection, not merely type-check it. The first cut accepted
+     `length >= 1` and `every(... instanceof RuntimeError)`, which means an
+     ADDITIONAL, UNEXPECTED unhandled wasm trap — precisely the defect class
+     this whole ticket is about — would have been swallowed with the suite
+     still green. A count of "at least one" cannot distinguish "the one I
+     caused" from "mine plus someone else's". */
   const hRejects = unhandled.slice(beforeH);
-  check('the swallowed rejection is EXACTLY the frame trap (handler is scoped, not blanket)',
-        hRejects.length >= 1 && hRejects.every((e) => e instanceof WebAssembly.RuntimeError),
-        hRejects.map((e) => e && e.constructor && e.constructor.name).join(','));
-  check('RECORDED (separately filed, not fixed here): the frame loop never settled',
-        true, 'the run is still pending — reporting the fault does not terminate it');
+  check('nothing was already pending before leg H (so the count below is attributable)',
+        beforeH === 0, 'saw ' + beforeH + ' earlier unhandled rejection(s): ' +
+        unhandled.slice(0, beforeH).map((e) => String(e && e.message).slice(0, 60)).join(' | '));
+  check('leg H produced EXACTLY ONE unhandled rejection, not "at least one"',
+        hRejects.length === 1, 'got ' + hRejects.length + ': ' +
+        hRejects.map((e) => String(e && e.message).slice(0, 60)).join(' | '));
+  const hErr = hRejects[0];
+  check('and it IS leg H\'s frame trap, identified by its own stack frames',
+        hErr instanceof WebAssembly.RuntimeError &&
+        /out of bounds/i.test(String(hErr.message)) &&
+        /\bboom\b/.test(String(hErr.stack)) && /\bonframe\b/.test(String(hErr.stack)),
+        (hErr && hErr.constructor && hErr.constructor.name) + ': ' +
+        String(hErr && hErr.stack).slice(0, 200));
+  /* Pin the #764 behaviour this leg rides on, rather than asserting `true`.
+     A frame trap currently does NOT settle the run — that is the separately
+     filed lifecycle defect. When #764 lands this flips, and it SHOULD fail
+     here: the leg must then be updated to expect a settled rejection and the
+     unhandledRejection handler above can be removed entirely. */
+  check('RECORDED (#764, not fixed here): the frame loop did not settle',
+        hSettled === null, 'settled as ' + hSettled +
+        ' — if #764 landed, update this leg and drop the rejection handler');
 
   // ---- I: a CLOSED fd 2 must not be treated as an unredirected console ----
   //
@@ -450,10 +473,18 @@ async function main() {
         !/backtrace/i.test(readFile(iRun.kfs, '/gone.log') || ''),
         JSON.stringify(readFile(iRun.kfs, '/gone.log')));
 
+  /* 🔴 The handler installed at the top of this file must be a SCOPED
+     allowance for leg H's one known-unsettling run, never a blanket
+     suppressor. So the whole-file total is pinned to exactly the rejection
+     leg H accounted for — by IDENTITY, not by type. Anything else that goes
+     unhandled anywhere in this file fails the run rather than disappearing. */
   console.log('\nJ. accounting: nothing was silently swallowed');
-  check('every unhandled rejection in this run was an expected wasm trap',
-        unhandled.every((e) => e instanceof WebAssembly.RuntimeError),
-        unhandled.map((e) => e && e.constructor && e.constructor.name).join(','));
+  check('the file produced exactly ONE unhandled rejection in total',
+        unhandled.length === 1, 'got ' + unhandled.length + ': ' +
+        unhandled.map((e) => String(e && e.message).slice(0, 60)).join(' | '));
+  check('and it is the SAME object leg H identified (not merely another RuntimeError)',
+        unhandled.length === 1 && unhandled[0] === hErr,
+        'total=' + unhandled.length + ' identical=' + (unhandled[0] === hErr));
 
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'all checks passed'));
   process.exit(failures ? 1 : 0);
