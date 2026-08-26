@@ -1870,7 +1870,13 @@ typedef struct {
     cJSON *raw_usage;
     int  api_error; sb errmsg;
     int  hdr_shown, at_bol;         /* #302 append-only speaker/indent state */
+    /* Two independent loss counters, deliberately NOT merged into one. They
+     * record different failures with different reader actions: `unplaceable`
+     * means the event's index could not be read, so where it belonged is
+     * unknown; `overflow` means the index was good and simply past this
+     * build's ceiling. One count could not say which fired. */
     int  unplaceable;               /* #765: block events whose index we cannot read */
+    int  overflow;                  /* #758: content blocks refused past MAX_BLOCKS */
     int  k_open;                    /* #738: a streamed thinking line is open */
 } stream_ctx;
 
@@ -2005,6 +2011,14 @@ static void dispatch_json(stream_ctx *ctx, const char *json) {
                 if (!b->raw || !cJSON_IsString(cbt)) b->lost = 1;
             }
             if (idx + 1 > ctx->nblocks) ctx->nblocks = idx + 1;
+        } else if (idx >= MAX_BLOCKS) {
+            /* #758: past the ceiling. The block is NOT captured and every
+             * delta addressed to it is ignored too, so the copy of this turn
+             * is provably incomplete — the same fact the '?' arm's `lost` flag
+             * records, arriving here by a different route. Counted now and
+             * reported once when the round closes: a turn that overran by
+             * thirty blocks is one diagnostic line, not thirty. */
+            ctx->overflow++;
         }
     } else if (!strcmp(type, "content_block_delta")) {
         int idx;
@@ -3465,16 +3479,22 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
     free(sess->last_stop); sess->last_stop = strdup(ctx.stop_reason ? ctx.stop_reason : "");
     fputc('\n', stdout);
 
-    /* #765: an event whose index could not be read was never placed, so its
-     * content is not in this turn's copy. Guarding the crash without saying so
-     * would trade a SEGV for a silent partial history — the exact trade the
-     * '?' arm's loud drop exists to refuse. Reported once per round. */
+    /* #765 and #758: two ways this round's copy can be short. Each report
+     * fires only for its own condition, and names that condition in its
+     * opening clause. They are NOT summed into a combined total: one number
+     * could not tell a malformed event from an overrun, and the two send a
+     * reader to different places. */
     if (ctx.unplaceable)
-        fprintf(stderr, "%sgcode: dropped %d content-block event%s from this turn — "
-                        "no usable `index`, so this build could not place %s; the "
-                        "replayed history of this turn is incomplete%s\n",
+        fprintf(stderr, "%sgcode: dropped %d content-block event%s with no usable `index` — "
+                        "this build could not place %s, so the replayed history of this "
+                        "turn is incomplete%s\n",
                 R_ERRB, ctx.unplaceable, ctx.unplaceable == 1 ? "" : "s",
                 ctx.unplaceable == 1 ? "it" : "them", CRST);
+    if (ctx.overflow)
+        fprintf(stderr, "%sgcode: dropped %d content block%s past the MAX_BLOCKS (%d) ceiling — "
+                        "the model sent more blocks than this build holds, so the replayed "
+                        "history of this turn is incomplete%s\n",
+                R_ERRB, ctx.overflow, ctx.overflow == 1 ? "" : "s", MAX_BLOCKS, CRST);
 
     /* build the assistant message from accumulated blocks */
     cJSON *acontent = cJSON_CreateArray();
@@ -4700,6 +4720,97 @@ static int blocks_self_test(void) {
         cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
     }
 
+    /* Leg 9 — #758: a turn that overruns MAX_BLOCKS is COUNTED, so the
+     * truncation can be reported instead of happening in silence.
+     *
+     * Reachability was measured before this leg was written, because the
+     * ticket asked for that first: across the 235 real API rounds of the #678
+     * round-2 Asteroids build (deepseek-v4-flash, extracted from gucOS as Pass
+     * B evidence) the worst turn held FOUR content blocks — p50 3, p99 4, and
+     * not one turn at or above 64. The ceiling is 16x the observed maximum, so
+     * it is NOT raised here. What this pins is the other half: that overrunning
+     * it says so. The measurement bounds the ceiling; it does not license
+     * silence, which todos/PRINCIPLES.md rules out independently of harm.
+     *
+     * RED CONTROL: unlike the #757 legs, this one cannot go red against the
+     * unfixed reader by construction — the defect IS the absence of any
+     * observable, so an assertion at the requirement's altitude has to name
+     * state the fix introduces. Its red control is therefore a mutation:
+     * removing the `ctx->overflow++` increment turns this leg red. */
+    {
+        const char *fx =
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"first\"}}\n\n"
+            /* index 64 is the 65th block — the first one past the ceiling. */
+            "data: {\"type\":\"content_block_start\",\"index\":64,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":64,\"delta\":{\"type\":\"text_delta\",\"text\":\"lost\"}}\n\n"
+            "data: {\"type\":\"content_block_start\",\"index\":65,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_x\",\"name\":\"bash\"}}\n\n";
+        stream_ctx c; memset(&c, 0, sizeof c);
+        write_cb((char *)fx, 1, strlen(fx), &c);
+        /* Two starts were refused, and both were counted. */
+        ok &= c.overflow == 2;
+        /* The ceiling still holds: nothing was captured past it, and nblocks
+         * never grows beyond MAX_BLOCKS (an out-of-range index must not widen
+         * the loop bound that later walks the array). */
+        ok &= c.nblocks == 1;
+        /* The blocks that DID fit are unharmed — this is a report, not a
+         * behaviour change to the captured prefix. */
+        ok &= c.blocks[0].type == 't' && c.blocks[0].text.p
+              && !strcmp(c.blocks[0].text.p, "first");
+        for (int i = 0; i < MAX_BLOCKS; i++) {
+            sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
+            cJSON_Delete(c.blocks[i].raw); cJSON_Delete(c.blocks[i].cites);
+            free(c.blocks[i].id); free(c.blocks[i].name);
+        }
+        free(c.stop_reason); free(c.message_id); free(c.response_model);
+        cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
+    }
+
+    /* Leg 9b — the ceiling's own boundary, so leg 9 cannot pass by an
+     * off-by-one: index 63 is the LAST block that fits and must be captured
+     * normally, contributing nothing to the overflow count. */
+    {
+        const char *fx =
+            "data: {\"type\":\"content_block_start\",\"index\":63,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":63,\"delta\":{\"type\":\"text_delta\",\"text\":\"edge\"}}\n\n";
+        stream_ctx c; memset(&c, 0, sizeof c);
+        write_cb((char *)fx, 1, strlen(fx), &c);
+        ok &= c.overflow == 0;
+        ok &= c.nblocks == MAX_BLOCKS && c.blocks[63].type == 't';
+        ok &= c.blocks[63].text.p && !strcmp(c.blocks[63].text.p, "edge");
+        for (int i = 0; i < MAX_BLOCKS; i++) {
+            sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
+            cJSON_Delete(c.blocks[i].raw); cJSON_Delete(c.blocks[i].cites);
+            free(c.blocks[i].id); free(c.blocks[i].name);
+        }
+        free(c.stop_reason); free(c.message_id); free(c.response_model);
+        cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
+    }
+
+    /* Leg 9c — the overflow count means what it says. A start event that is
+     * refused for a DIFFERENT reason (an in-range index carrying no
+     * `content_block` object — a malformed event, not an overrun) must not be
+     * counted as an overrun, or the diagnostic sends its reader to look at a
+     * ceiling that was never reached. */
+    {
+        const char *fx =
+            "data: {\"type\":\"content_block_start\",\"index\":0}\n\n"
+            "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n";
+        stream_ctx c; memset(&c, 0, sizeof c);
+        write_cb((char *)fx, 1, strlen(fx), &c);
+        ok &= c.overflow == 0;                    /* nothing overran anything */
+        ok &= c.blocks[1].type == 't' && c.blocks[1].text.p
+              && !strcmp(c.blocks[1].text.p, "ok");
+        for (int i = 0; i < MAX_BLOCKS; i++) {
+            sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
+            cJSON_Delete(c.blocks[i].raw); cJSON_Delete(c.blocks[i].cites);
+            free(c.blocks[i].id); free(c.blocks[i].name);
+        }
+        free(c.stop_reason); free(c.message_id); free(c.response_model);
+        cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
+    }
+
     /* ---- #765: a content-block event whose `index` cannot be read ---------
      * The defect these pin: `index` was the ONE field in dispatch_json read
      * without a guard —
@@ -4734,7 +4845,8 @@ static int blocks_self_test(void) {
         ok &= c.nblocks == 0 && c.blocks[0].active == 0;
         for (int i = 0; i < MAX_BLOCKS; i++) {
             sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
-            cJSON_Delete(c.blocks[i].raw); free(c.blocks[i].id); free(c.blocks[i].name);
+            cJSON_Delete(c.blocks[i].raw); cJSON_Delete(c.blocks[i].cites);
+            free(c.blocks[i].id); free(c.blocks[i].name);
         }
         free(c.stop_reason); free(c.message_id); free(c.response_model);
         cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
@@ -4756,7 +4868,8 @@ static int blocks_self_test(void) {
         ok &= c.blocks[0].text.p && !strcmp(c.blocks[0].text.p, "kept");
         for (int i = 0; i < MAX_BLOCKS; i++) {
             sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
-            cJSON_Delete(c.blocks[i].raw); free(c.blocks[i].id); free(c.blocks[i].name);
+            cJSON_Delete(c.blocks[i].raw); cJSON_Delete(c.blocks[i].cites);
+            free(c.blocks[i].id); free(c.blocks[i].name);
         }
         free(c.stop_reason); free(c.message_id); free(c.response_model);
         cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
@@ -4777,7 +4890,8 @@ static int blocks_self_test(void) {
         ok &= c.nblocks == 0 && c.blocks[0].active == 0;
         for (int i = 0; i < MAX_BLOCKS; i++) {
             sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
-            cJSON_Delete(c.blocks[i].raw); free(c.blocks[i].id); free(c.blocks[i].name);
+            cJSON_Delete(c.blocks[i].raw); cJSON_Delete(c.blocks[i].cites);
+            free(c.blocks[i].id); free(c.blocks[i].name);
         }
         free(c.stop_reason); free(c.message_id); free(c.response_model);
         cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
@@ -4799,7 +4913,8 @@ static int blocks_self_test(void) {
         ok &= c.nblocks == 2 && c.blocks[0].type == 't' && c.blocks[1].type == 'u';
         for (int i = 0; i < MAX_BLOCKS; i++) {
             sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
-            cJSON_Delete(c.blocks[i].raw); free(c.blocks[i].id); free(c.blocks[i].name);
+            cJSON_Delete(c.blocks[i].raw); cJSON_Delete(c.blocks[i].cites);
+            free(c.blocks[i].id); free(c.blocks[i].name);
         }
         free(c.stop_reason); free(c.message_id); free(c.response_model);
         cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
