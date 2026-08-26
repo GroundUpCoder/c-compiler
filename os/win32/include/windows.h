@@ -636,6 +636,13 @@ typedef struct tagCREATESTRUCT {
 #define WS_GROUP        0x00020000u       /* aliases MINIMIZEBOX (child ctx) */
 #define WS_TABSTOP      0x00010000u       /* aliases MAXIMIZEBOX (child ctx) */
 #define WS_EX_CLIENTEDGE 0x00000200u
+/* The taskbar/window-cycle ex-styles (#740). Both are READ by
+ * create_window_impl, which classifies a top-level window against the real
+ * Win32 rule — WS_EX_APPWINDOW lists it even when owned, WS_EX_TOOLWINDOW
+ * keeps an unowned floating palette out of the list. On a WS_CHILD window
+ * they mean nothing and are ignored, exactly as Windows ignores them. */
+#define WS_EX_TOOLWINDOW 0x00000080u
+#define WS_EX_APPWINDOW  0x00040000u
 
 #define CW_USEDEFAULT   ((int)0x80000000)
 

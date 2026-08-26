@@ -572,10 +572,13 @@ static void with_selected(void) {
     if (!sel_path(full, sizeof full, &isdir) || isdir) return;
     if (g_ow_win) DestroyWindow(g_ow_win);
     snprintf(g_ow_file, sizeof g_ow_file, "%s", full);
+    /* #740: an owned dialog of the File Manager window — declaring g_win as
+     * the owner is what keeps it off the taskbar. It is not a second
+     * application. */
     g_ow_win = CreateWindowEx(0, "OpenWith", "Open with",
                               WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                               CW_USEDEFAULT, CW_USEDEFAULT, 360, 160,
-                              NULL, NULL, NULL, NULL);
+                              g_win, NULL, NULL, NULL);
 }
 
 /* ---- file operations (todos/0092) ----
@@ -847,10 +850,13 @@ static void rename_selected(void) {
     if (!sel_path(full, sizeof full, &isdir)) return;
     if (g_rn_win) DestroyWindow(g_rn_win);
     snprintf(g_rn_file, sizeof g_rn_file, "%s", full);
+    /* #740: an owned dialog of the File Manager window — declaring g_win as
+     * the owner is what keeps it off the taskbar. It is not a second
+     * application. */
     g_rn_win = CreateWindowEx(0, "Rename", "Rename",
                               WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                               CW_USEDEFAULT, CW_USEDEFAULT, 360, 130,
-                              NULL, NULL, NULL, NULL);
+                              g_win, NULL, NULL, NULL);
 }
 
 /* ---- the context menu (0092, over the 0091 TrackPopupMenu) ----

@@ -325,10 +325,15 @@ static BOOL file_dialog(OPENFILENAMEW *ofn, int saving) {
     free(seed);
 
     char *title = ofn->lpstrTitle ? cd_w2a(ofn->lpstrTitle) : NULL;
+    /* #740: the common dialogs are OWNED windows — hwndOwner has always been
+     * read here for the modal enable/disable, but was not passed to
+     * CreateWindowEx, so the taskbar classification could not see it and
+     * Windows' own Open/Save/Find/Font boxes each took a taskbar button of
+     * their own. Declaring the owner is what keeps them out of it. */
     g_fd.win = CreateWindowEx(0, "WCFileDlg",
                               title && title[0] ? title : (saving ? "Save As" : "Open"),
                               WS_POPUP | WS_VISIBLE, 0, 0, FD_W, FD_H,
-                              NULL, NULL, NULL, NULL);
+                              ofn->hwndOwner, NULL, NULL, NULL);
     free(title);
     if (!g_fd.win) return FALSE;
     /* 20px-font retune: the row labels ("Directory:"/"File name:" = ~120px
@@ -468,9 +473,14 @@ static HWND fr_dialog(FINDREPLACEW *fr, int replace) {
     }
     g_frMsg = RegisterWindowMessageW(FINDMSGSTRINGW);
     int w = 340, hgt = replace ? 150 : 118;
+    /* #740: the common dialogs are OWNED windows — hwndOwner has always been
+     * read here for the modal enable/disable, but was not passed to
+     * CreateWindowEx, so the taskbar classification could not see it and
+     * Windows' own Open/Save/Find/Font boxes each took a taskbar button of
+     * their own. Declaring the owner is what keeps them out of it. */
     HWND dlg = CreateWindowEx(0, "WCFindDlg", replace ? "Replace" : "Find",
                               WS_POPUP | WS_VISIBLE, 0, 0, w, hgt,
-                              NULL, NULL, NULL, NULL);
+                              fr->hwndOwner, NULL, NULL, NULL);
     if (!dlg) return NULL;
     SetWindowLongPtr(dlg, GWLP_USERDATA, (LONG_PTR)fr);
     char what[512] = "";
@@ -739,9 +749,14 @@ BOOL ChooseFontW(CHOOSEFONTW *cf) {
     int pt0 = MulDiv(px, 72, 96);
     if (pt0 < 1) pt0 = 15;
 
+    /* #740: the common dialogs are OWNED windows — hwndOwner has always been
+     * read here for the modal enable/disable, but was not passed to
+     * CreateWindowEx, so the taskbar classification could not see it and
+     * Windows' own Open/Save/Find/Font boxes each took a taskbar button of
+     * their own. Declaring the owner is what keeps them out of it. */
     g_cf.win = CreateWindowEx(0, "WCFontDlg", "Font",
                               WS_POPUP | WS_VISIBLE, 0, 0, CFD_W, CFD_H,
-                              NULL, NULL, NULL, NULL);
+                              cf->hwndOwner, NULL, NULL, NULL);
     if (!g_cf.win) return FALSE;
     /* the fd row-height snap: lists show whole rows only */
     int rh = 30;

@@ -198,15 +198,19 @@ const out = boot([
   'echo ==statsel',
   'wmctl tree',
   'echo ==cut',
-  // ---- #740: the taskbar/cycle contract. calc's MAIN window is an UNOWNED
-  // "#32770" dialog (vendor/calc/winmain.c CreateDialog(..., NULL,
-  // DlgMainProc)) and its Statistics box is an OWNED one (..., hWnd,
-  // DlgStatProc) — the same class, opposite ownership, so this pair reads
-  // the rule off the real shipped app. Cycling with both up must land on
-  // Calculator and never on the owned box.
+  // ---- #740: the taskbar/cycle contract, as the ticket reproduced it.
+  // calc's MAIN window is an UNOWNED "#32770" dialog (vendor/calc/winmain.c
+  // CreateDialog(..., NULL, DlgMainProc)) and its Statistics box is an
+  // OWNED one (..., hWnd, DlgStatProc) — the same class, opposite
+  // ownership, so this pair reads the rule off the real shipped app.
+  // A SECOND app is what makes the cycle meaningful: /bin/wm's cycle()
+  // needs two cyclable windows to move focus at all, and it is exactly the
+  // "calc & ; notepad & ; wmctl cycle never comes back" report.
   'echo ==tb0',
   'wmctl list',
   'echo ==cut',
+  'notepad &',
+  'wmctl wait win "Untitled - Notepad" 20000',
   'wmctl cycle',
   'echo ==tbc0',
   'wmctl list',
@@ -403,8 +407,8 @@ check('stats box scrolls with the mouse (first visible row is item 1)',
       .find(l => l.split('\t').length >= 7 && (l.split('\t')[5] || '')[0] === 'f');
     if (line) visited.add(line.split('\t')[6]);
   }
-  check('#740: wmctl cycle returns focus to Calculator', visited.has('Calculator'),
-    [...visited].join(' | '));
+  check('#740: wmctl cycle returns focus to Calculator once a second app covers it',
+    visited.has('Calculator'), [...visited].join(' | '));
   check('#740: wmctl cycle never lands on the owned Statistics box',
     !visited.has('Statistics box'), [...visited].join(' | '));
 }
