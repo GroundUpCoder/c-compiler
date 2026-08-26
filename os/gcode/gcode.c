@@ -1871,10 +1871,13 @@ typedef struct {
     int  api_error; sb errmsg;
     int  hdr_shown, at_bol;         /* #302 append-only speaker/indent state */
     /* Two independent loss counters, deliberately NOT merged into one. They
-     * record different failures with different reader actions: `unplaceable`
-     * means the event's index could not be read, so where it belonged is
-     * unknown; `overflow` means the index was good and simply past this
-     * build's ceiling. One count could not say which fired. */
+     * record different failures: `unplaceable` means the event's index could
+     * not be read, so where it belonged is unknown; `overflow` means the index
+     * was good and simply past this build's ceiling. One count could not say
+     * which fired.
+     *
+     * (Not asserted by any leg — the reason it matters: the two lead a reader
+     * to different places.) */
     int  unplaceable;               /* #765: block events whose index we cannot read */
     int  overflow;                  /* #758: content blocks refused past MAX_BLOCKS */
     int  k_open;                    /* #738: a streamed thinking line is open */
@@ -3482,8 +3485,10 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
     /* #765 and #758: two ways this round's copy can be short. Each report
      * fires only for its own condition, and names that condition in its
      * opening clause. They are NOT summed into a combined total: one number
-     * could not tell a malformed event from an overrun, and the two send a
-     * reader to different places. */
+     * could not tell a malformed event from an overrun.
+     *
+     * (Not asserted by any leg — the reason it matters: the two lead a reader
+     * to different places.) */
     if (ctx.unplaceable)
         fprintf(stderr, "%sgcode: dropped %d content-block event%s with no usable `index` — "
                         "this build could not place %s, so the replayed history of this "
@@ -4927,8 +4932,10 @@ static int blocks_self_test(void) {
     /* Leg 9c — the overflow count means what it says. A start event that is
      * refused for a DIFFERENT reason (an in-range index carrying no
      * `content_block` object — a malformed event, not an overrun) must not be
-     * counted as an overrun, or the diagnostic sends its reader to look at a
-     * ceiling that was never reached. */
+     * counted as an overrun.
+     *
+     * (Not asserted here — the reason it matters: a wrong count sends a reader
+     * to look at a ceiling that was never reached.) */
     {
         const char *fx =
             "data: {\"type\":\"content_block_start\",\"index\":0}\n\n"
