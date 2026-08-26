@@ -198,6 +198,27 @@ const out = boot([
   'echo ==statsel',
   'wmctl tree',
   'echo ==cut',
+  // ---- #740: the taskbar/cycle contract. calc's MAIN window is an UNOWNED
+  // "#32770" dialog (vendor/calc/winmain.c CreateDialog(..., NULL,
+  // DlgMainProc)) and its Statistics box is an OWNED one (..., hWnd,
+  // DlgStatProc) — the same class, opposite ownership, so this pair reads
+  // the rule off the real shipped app. Cycling with both up must land on
+  // Calculator and never on the owned box.
+  'echo ==tb0',
+  'wmctl list',
+  'echo ==cut',
+  'wmctl cycle',
+  'echo ==tbc0',
+  'wmctl list',
+  'echo ==cut',
+  'wmctl cycle',
+  'echo ==tbc1',
+  'wmctl list',
+  'echo ==cut',
+  'wmctl cycle',
+  'echo ==tbc2',
+  'wmctl list',
+  'echo ==cut',
   '',
 ].join('\n'));
 
@@ -354,6 +375,38 @@ check('stats box scrolls with the mouse (first visible row is item 1)',
     check('no two stat-dialog controls overlap', overlaps.length === 0,
       JSON.stringify(overlaps));
   }
+}
+
+/* ---- #740: the taskbar/window-cycle contract is about OWNERSHIP, not the
+ * window class. calc's main window is an UNOWNED "#32770" dialog and its
+ * Statistics box is an OWNED one, so this pair separates the two readings
+ * on the real shipped app. Pre-fix user32 classified BOTH as transient
+ * (WMP_F_TRANSIENT, the 'U' in FLAGS) purely because of the class name:
+ * Calculator got no taskbar button, `wmctl cycle` skipped it, and once
+ * another window covered it there was no route back but clicking a still
+ * visible pixel. The rule itself is pinned in test_taskbar_owner_e2e.js. */
+{
+  const flagsOf = (sec, title) => {
+    const line = section(out, sec).split('\n').find(l => l.endsWith('\t' + title));
+    return line ? (line.split('\t')[5] || '') : null;
+  };
+  const tb0Calc = flagsOf('tb0', 'Calculator');
+  check('#740: the Calculator window is NOT transient (an unowned dialog is a real app window)',
+    tb0Calc !== null && !tb0Calc.includes('U'), 'FLAGS=' + tb0Calc);
+  const tb0Stat = flagsOf('tb0', 'Statistics box');
+  check('#740: the OWNED Statistics box stays transient (no second taskbar button)',
+    tb0Stat !== null && tb0Stat.includes('U'), 'FLAGS=' + tb0Stat);
+
+  const visited = new Set();
+  for (const sec of ['tbc0', 'tbc1', 'tbc2']) {
+    const line = section(out, sec).split('\n')
+      .find(l => l.split('\t').length >= 7 && (l.split('\t')[5] || '')[0] === 'f');
+    if (line) visited.add(line.split('\t')[6]);
+  }
+  check('#740: wmctl cycle returns focus to Calculator', visited.has('Calculator'),
+    [...visited].join(' | '));
+  check('#740: wmctl cycle never lands on the owned Statistics box',
+    !visited.has('Statistics box'), [...visited].join(' | '));
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });
