@@ -1,0 +1,11 @@
+{
+  "bin": true,
+  "name": "tbown",
+  "description": "#740 test fixture: one top-level window per branch of the Win32 taskbar/ownership rule, all sharing ONE window class (compiled by tests/kernel/test_taskbar_owner_e2e.js, never baked into the image)",
+  "deps": [
+    "../../../../os/win32/lib.json"
+  ],
+  "sources": [
+    "main.c"
+  ]
+}
