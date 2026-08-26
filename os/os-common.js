@@ -34,6 +34,10 @@
 //   newestBakeInput(...)             — the 0082 input-freshness scan: newest
 //     mtime across everything that can change the blob's bytes (toolchain,
 //     os/ tree, the manifest's vendor project/bin closure). Node-only.
+//   imageBakeTmpPath/imageInstallTmpPath/imageLockPath, isImageArtifactName
+//     — the image pair's on-disk sidecar NAMES (#739), owned here so the
+//     creators (tools/mkimage.js, os/boot.js) and the freshness walks that
+//     must EXCLUDE them as bake outputs cannot drift apart.
 
 'use strict';
 
@@ -2598,8 +2602,9 @@ function projectExternalDirs(proj, dir) {
  * whole life of todos/0293: with the default in-repo image the lock lands at
  * `os/os-root.img.lock`, INSIDE the os/ walk, with mtime `now` — so the blob
  * was always "input-stale" and the 0082 reuse path could not be taken at all
- * (measured 3m30s per boot against 6s). Nothing saw it because every test
- * boots with `--image=<mkdtemp>`, which puts the lock outside the walk.
+ * (measured on lane/739: 236s of re-bake per boot, against 0.12s to mount the
+ * blob it already had). Nothing saw it because every test in the estate boots
+ * with `--image=<mkdtemp>`, which puts the lock outside the walk.
  *
  * So the names live HERE, once: the creators call the builders, the walk
  * calls the predicate, and the two cannot drift apart. The predicate keys
