@@ -1869,6 +1869,7 @@ typedef struct {
     cJSON *raw_usage;
     int  api_error; sb errmsg;
     int  hdr_shown, at_bol;         /* #302 append-only speaker/indent state */
+    int  unplaceable;               /* #765: block events whose index we cannot read */
     int  k_open;                    /* #738: a streamed thinking line is open */
 } stream_ctx;
 
@@ -1905,6 +1906,29 @@ static void merge_usage(stream_ctx *ctx, cJSON *src) {
     ctx->round_usage = usage_from_json(ctx->raw_usage);
 }
 
+/* #765: read a content-block event's `index`. This was the one field in
+ * dispatch_json read without a guard —
+ *   int idx = (int)cJSON_GetObjectItem(e, "index")->valuedouble;
+ * — and cJSON_GetObjectItem returns NULL for an absent key, so an event with
+ * no `index` dereferenced NULL and killed the process (ASan: SEGV at
+ * dispatch_json, both the start and the delta arm). Every neighbouring field
+ * is read through a type test; this now is too.
+ *
+ * cJSON_IsNumber rather than a NULL check, because a NULL check alone is not
+ * enough: a `"index": "0"` string yields a live node, and reading valuedouble
+ * off it gives 0 — the event would be placed at block 0, silently corrupting
+ * a real block instead of crashing. A wrong answer is worse than a crash.
+ *
+ * Returns 1 and fills *out when the index is usable; 0 when the event cannot
+ * be placed. The caller must treat 0 as a LOSS and say so — see the round's
+ * close in do_turn. Skipping quietly is what #738 exists to forbid. */
+static int block_index(cJSON *e, int *out) {
+    cJSON *ix = cJSON_GetObjectItem(e, "index");
+    if (!cJSON_IsNumber(ix)) return 0;
+    *out = (int)ix->valuedouble;
+    return 1;
+}
+
 static void dispatch_json(stream_ctx *ctx, const char *json) {
     cJSON *e = cJSON_Parse(json);
     if (!e) return;
@@ -1920,9 +1944,11 @@ static void dispatch_json(stream_ctx *ctx, const char *json) {
             merge_usage(ctx, cJSON_GetObjectItem(m, "usage"));
         }
     } else if (!strcmp(type, "content_block_start")) {
-        int idx = (int)cJSON_GetObjectItem(e, "index")->valuedouble;
+        int idx;
         cJSON *cb = cJSON_GetObjectItem(e, "content_block");
-        if (idx >= 0 && idx < MAX_BLOCKS && cb) {
+        if (!block_index(e, &idx)) {
+            ctx->unplaceable++;                  /* #765: counted, reported at round close */
+        } else if (idx >= 0 && idx < MAX_BLOCKS && cb) {
             cblock *b = &ctx->blocks[idx];
             b->active = 1;
             cJSON *cbt = cJSON_GetObjectItem(cb, "type");
@@ -1974,9 +2000,13 @@ static void dispatch_json(stream_ctx *ctx, const char *json) {
             if (idx + 1 > ctx->nblocks) ctx->nblocks = idx + 1;
         }
     } else if (!strcmp(type, "content_block_delta")) {
-        int idx = (int)cJSON_GetObjectItem(e, "index")->valuedouble;
+        int idx;
         cJSON *d = cJSON_GetObjectItem(e, "delta");
-        if (idx >= 0 && idx < MAX_BLOCKS && d) {
+        if (!block_index(e, &idx)) {
+            /* #765: the SECOND site. Fixing only the start arm leaves the
+             * process just as killable — this one crashed identically. */
+            ctx->unplaceable++;
+        } else if (idx >= 0 && idx < MAX_BLOCKS && d) {
             cblock *b = &ctx->blocks[idx];
             cJSON *dt = cJSON_GetObjectItem(d, "type");
             const char *dtype = cJSON_IsString(dt) ? dt->valuestring : "";
@@ -3394,6 +3424,17 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
     free(sess->last_stop); sess->last_stop = strdup(ctx.stop_reason ? ctx.stop_reason : "");
     fputc('\n', stdout);
 
+    /* #765: an event whose index could not be read was never placed, so its
+     * content is not in this turn's copy. Guarding the crash without saying so
+     * would trade a SEGV for a silent partial history — the exact trade the
+     * '?' arm's loud drop exists to refuse. Reported once per round. */
+    if (ctx.unplaceable)
+        fprintf(stderr, "%sgcode: dropped %d content-block event%s from this turn — "
+                        "no usable `index`, so this build could not place %s; the "
+                        "replayed history of this turn is incomplete%s\n",
+                R_ERRB, ctx.unplaceable, ctx.unplaceable == 1 ? "" : "s",
+                ctx.unplaceable == 1 ? "it" : "them", CRST);
+
     /* build the assistant message from accumulated blocks */
     cJSON *acontent = cJSON_CreateArray();
     cJSON *tool_results = cJSON_CreateArray();   /* filled if any tool_use */
@@ -4464,6 +4505,111 @@ static int blocks_self_test(void) {
         const char *stop = "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n";
         write_cb((char *)stop, 1, strlen(stop), &c);
         ok &= c.k_open == 0;                      /* and closed when it ends */
+        for (int i = 0; i < MAX_BLOCKS; i++) {
+            sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
+            cJSON_Delete(c.blocks[i].raw); free(c.blocks[i].id); free(c.blocks[i].name);
+        }
+        free(c.stop_reason); free(c.message_id); free(c.response_model);
+        cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
+    }
+
+    /* ---- #765: a content-block event whose `index` cannot be read ---------
+     * The defect these pin: `index` was the ONE field in dispatch_json read
+     * without a guard —
+     *   int idx = (int)cJSON_GetObjectItem(e, "index")->valuedouble;
+     * — and cJSON_GetObjectItem returns NULL for an absent key, so an event
+     * with no `index` dereferenced NULL and took the process down. Measured,
+     * not inferred: ASan reports `SEGV on unknown address 0x000000000030 ...
+     * #0 dispatch_json gcode.c:1923` on the unfixed reader. The guard on the
+     * next line (`idx >= 0 && idx < MAX_BLOCKS && cb`) never ran — the crash
+     * happens while COMPUTING idx.
+     *
+     * The fix is not merely "do not crash". An event whose index cannot be
+     * read cannot be placed in the block array, so its content is not
+     * captured — which makes this the same class as the '?' arm's partial
+     * copy and #738's whole lesson. Guarding the dereference and then
+     * continuing quietly would trade a crash for a silent wrong answer, which
+     * is the worse of the two. So it is counted, and reported once when the
+     * round closes.
+     *
+     * RED CONTROL: the pre-fix behaviour is a SEGV, so the unfixed reader
+     * cannot run these legs at all — the crash IS the red, and it is recorded
+     * above from a real run. The ongoing control is by mutation: restoring the
+     * unguarded read crashes the suite; removing the counter turns these red. */
+
+    /* Leg 10 — content_block_start with NO `index` key: survives, is counted,
+     * and creates no block (an unplaceable event must not be placed anyway). */
+    {
+        const char *fx = "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\"}}\n\n";
+        stream_ctx c; memset(&c, 0, sizeof c);
+        write_cb((char *)fx, 1, strlen(fx), &c);
+        ok &= c.unplaceable == 1;
+        ok &= c.nblocks == 0 && c.blocks[0].active == 0;
+        for (int i = 0; i < MAX_BLOCKS; i++) {
+            sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
+            cJSON_Delete(c.blocks[i].raw); free(c.blocks[i].id); free(c.blocks[i].name);
+        }
+        free(c.stop_reason); free(c.message_id); free(c.response_model);
+        cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
+    }
+
+    /* Leg 10b — the SECOND site. content_block_delta has the identical
+     * unguarded read, and fixing only the start arm leaves the process just as
+     * killable. A block that WAS placed earlier must also come through
+     * untouched: an unplaceable delta is dropped, it does not corrupt state. */
+    {
+        const char *fx =
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"kept\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"lost\"}}\n\n";
+        stream_ctx c; memset(&c, 0, sizeof c);
+        write_cb((char *)fx, 1, strlen(fx), &c);
+        ok &= c.unplaceable == 1;
+        ok &= c.nblocks == 1 && c.blocks[0].type == 't';
+        ok &= c.blocks[0].text.p && !strcmp(c.blocks[0].text.p, "kept");
+        for (int i = 0; i < MAX_BLOCKS; i++) {
+            sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
+            cJSON_Delete(c.blocks[i].raw); free(c.blocks[i].id); free(c.blocks[i].name);
+        }
+        free(c.stop_reason); free(c.message_id); free(c.response_model);
+        cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
+    }
+
+    /* Leg 10c — present but NOT A NUMBER. The ticket's rule is "absent or
+     * non-numeric", and a key that exists is exactly what a NULL check alone
+     * would wave through: `cJSON_GetObjectItem` returns a live node for a
+     * string, so a `!ix` guard would then read `valuedouble` off it and place
+     * the block at index 0 — a wrong answer instead of a crash. */
+    {
+        const char *fx =
+            "data: {\"type\":\"content_block_start\",\"index\":\"0\",\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":null,\"delta\":{\"type\":\"text_delta\",\"text\":\"x\"}}\n\n";
+        stream_ctx c; memset(&c, 0, sizeof c);
+        write_cb((char *)fx, 1, strlen(fx), &c);
+        ok &= c.unplaceable == 2;
+        ok &= c.nblocks == 0 && c.blocks[0].active == 0;
+        for (int i = 0; i < MAX_BLOCKS; i++) {
+            sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
+            cJSON_Delete(c.blocks[i].raw); free(c.blocks[i].id); free(c.blocks[i].name);
+        }
+        free(c.stop_reason); free(c.message_id); free(c.response_model);
+        cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
+    }
+
+    /* Leg 10d — POSITIVE CONTROL for the counter itself. A well-formed stream
+     * must leave it at ZERO. Without this, a counter that incremented on every
+     * event would satisfy legs 10..10c and still be meaningless — the same
+     * empty-set trap as an expectation derived from nothing. */
+    {
+        const char *fx =
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"fine\"}}\n\n"
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n"
+            "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"bash\"}}\n\n";
+        stream_ctx c; memset(&c, 0, sizeof c);
+        write_cb((char *)fx, 1, strlen(fx), &c);
+        ok &= c.unplaceable == 0;
+        ok &= c.nblocks == 2 && c.blocks[0].type == 't' && c.blocks[1].type == 'u';
         for (int i = 0; i < MAX_BLOCKS; i++) {
             sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
             cJSON_Delete(c.blocks[i].raw); free(c.blocks[i].id); free(c.blocks[i].name);
