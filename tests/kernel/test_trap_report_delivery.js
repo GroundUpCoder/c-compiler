@@ -122,7 +122,7 @@ function readWholeFile(p) {
   return new TextDecoder().decode(b);
 }
 
-// #759 HALF 3 oracle, v3 — NARROW ACCEPT SET, FAIL CLOSED.
+// #759 HALF 3 oracle, v4 — NARROW ACCEPT SET, FAIL CLOSED.
 //
 // 🔴 WHY THE STRATEGY CHANGED, not just the pattern. This oracle was defeated
 // three times, each by a form nobody anticipated: a prefix match on a renamed
@@ -214,9 +214,25 @@ function deriveDispatchClassifiers(hostSrc) {
     const lead = /^\s*(\?\.|\.|\[)/.exec(rest);
     if (!lead) continue;                       // `fs &&`, `typeof fs`, `pick(fs, k)` — names nothing
 
-    // shape 1/2: fs.NAME and fs?.NAME
-    const dot = new RegExp('^\\s*\\??\\.\\s*(' + ID + ')').exec(rest);
-    if (dot) { found.add(dot[1]); re.lastIndex = at + 2 + dot[0].length; continue; }
+    // shape 1/2: fs.NAME and fs?.NAME.
+    //
+    // 🔴 Read the WHOLE JavaScript identifier (Unicode-aware), then refuse
+    // anything outside the accepted ASCII subset. v3 matched an ASCII ID with
+    // NO END BOUNDARY, so `fs.fdSink\u00e9` — real property `fdSink\u00e9` —
+    // yielded `fdSink` and went green: an ASCII PREFIX of a longer real name.
+    // That contradicted v3's own safety claim, in the fix written to satisfy
+    // it. Matching the full token first makes the refusal structural: there is
+    // no prefix to stop early at, because the pattern cannot stop early.
+    const dot = /^\s*\??\.\s*([\p{ID_Start}$_][\p{ID_Continue}$\u200C\u200D]*)/u.exec(rest);
+    if (dot) {
+      if (!new RegExp('^' + ID + '$').test(dot[1])) {
+        return bad('property name on `fs` is not a plain ASCII identifier ' +
+                   '(non-ASCII letter, zero-width joiner, or similar): ' + JSON.stringify(dot[1]));
+      }
+      found.add(dot[1]);
+      re.lastIndex = at + 2 + dot[0].length;
+      continue;
+    }
 
     // shape 3: fs['NAME'] / fs["NAME"] — accepted on the blanked text only to
     // find the SPAN, then VALIDATED ANCHORED END-TO-END on the raw text with a
@@ -240,14 +256,30 @@ function deriveDispatchClassifiers(hostSrc) {
                'refusing rather than guessing. near: …' + ctx + '…');
   }
 
-  // ---- simple destructuring, also narrow: identifiers (with an optional
-  // rename) only. A rest element or a nested pattern is refused.
-  for (let m, re = /\bconst\s*\{([^}]*)\}\s*=\s*fs\b/g; (m = re.exec(code)) !== null; ) {
-    for (const part of m[1].split(',')) {
+  // ---- destructuring, also narrow. Match ANY object-pattern binding from
+  // `fs` — whatever the declarator, parenthesised or not — and then REFUSE
+  // anything that is not the one supported shape.
+  //
+  // 🔴 Refusing DIRECTLY is the point. v3 matched only `const {…} = fs`, so
+  // `let {…} = fs` and `const {…} = (fs)` were not matched AT ALL: they derived
+  // nothing and went red LATER, via the exact-count premise. A red that arrives
+  // by accident is half the property — the message named the wrong thing, and
+  // the next human could not act on it.
+  for (let m, re = /\b(const|let|var)\s*\{([^}]*)\}\s*=\s*(\(?)\s*fs\b/g; (m = re.exec(code)) !== null; ) {
+    const [, kw, inner, paren] = m;
+    if (kw !== 'const') {
+      return bad('destructuring from `fs` with `' + kw + '` is not a shape this oracle ' +
+                 'reads (only `const { … } = fs`): ' + m[0].trim());
+    }
+    if (paren) {
+      return bad('parenthesised destructuring source is not a shape this oracle reads ' +
+                 '(only `const { … } = fs`): ' + m[0].trim());
+    }
+    for (const part of inner.split(',')) {
       const t = part.trim();
       if (!t) continue;
       const d2 = new RegExp('^(' + ID + ')(\\s*:\\s*' + ID + ')?$').exec(t);
-      if (!d2) return bad('destructuring from `fs` in a shape this oracle does not read: {' + m[1].trim() + '}');
+      if (!d2) return bad('destructuring from `fs` in a shape this oracle does not read: {' + inner.trim() + '}');
       found.add(d2[1]);
     }
   }
