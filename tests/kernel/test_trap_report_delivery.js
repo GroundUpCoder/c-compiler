@@ -122,70 +122,76 @@ function readWholeFile(p) {
   return new TextDecoder().decode(b);
 }
 
-// #759 HALF 3 oracle, v2. Derives the fs methods deliverTrapReport consults.
+// #759 HALF 3 oracle, v3 — NARROW ACCEPT SET, FAIL CLOSED.
 //
-// 🔴 ORDERING IS THE WHOLE FIX. v1 produced a comment/string-blanked `code`
-// and then went on scanning the RAW body anyway, so the sanitiser existed and
-// was bypassed. Two fail-open mutations followed from that, both reproduced:
-//   * a STALE COMMENT (`/* ...fs.fdSink */`) satisfied the guard while the real
-//     classifier went through a helper (`Reflect.get`) and was unguarded;
-//   * a `/* } */` comment moved the brace-matched body boundary, because brace
-//     matching also ran before blanking.
-// A SANITISER THAT IS BYPASSED IS WORSE THAN NO SANITISER: its presence reads
-// as protection, so a reviewer seeing `code` produced reasonably assumes it is
-// what gets scanned.
+// 🔴 WHY THE STRATEGY CHANGED, not just the pattern. This oracle was defeated
+// three times, each by a form nobody anticipated: a prefix match on a renamed
+// function; a stale comment plus a Reflect.get helper; and a bracket literal
+// with an embedded quote (`fs['-"fdSink"']`, whose real property name is
+// `-"fdSink"`, from which an unanchored regex happily lifted `fdSink`).
 //
-// v2 blanks ONCE, up front, over the whole source, and thereafter the blanked
-// text is the ONLY thing scanned — declaration search, brace matching, and
-// name extraction alike. The raw text survives for exactly two purposes, both
-// non-deciding: reading a bracket literal's name at an offset the blanked scan
-// already accepted, and quoting context in an error message.
+// The pattern IS the message. A regex scanner over JavaScript source has an
+// unbounded space of shapes that LOOK like a match and are not, and you cannot
+// enumerate your way out: each round widens the pattern, and the next reviewer
+// finds the next form. Widening again would just buy the next defeat.
+//
+// So v3 changes the requirement. The property this guard actually needs is NOT
+// "can read every form" — it is "NEVER GREEN ON A FORM I DID NOT READ". Those
+// are different requirements, and v1/v2 were building the harder one.
+//
+// v3 therefore accepts a DELIBERATELY TINY set and REFUSES everything else in
+// a property-access position:
+//     fs.NAME          fs?.NAME          fs['NAME']  /  fs["NAME"]
+// where NAME is a plain identifier and the bracket literal is validated
+// ANCHORED, END TO END, with a backreferenced quote — so a literal that is not
+// exactly a quoted identifier is refused rather than mined for a substring.
+// Template literals, concatenations, escapes, computed keys and anything else
+// in that position return ok:false.
+//
+// The cost of a false RED is one human minute. The cost of a false GREEN is a
+// guard that silently protects nothing — which has now happened three times.
+// That asymmetry is the whole argument.
+//
+// Raw source is read for exactly TWO purposes and BOTH are stated honestly:
+//   1. VERDICT-DECIDING: validating a bracket literal end to end. (v2's comment
+//      called this "non-deciding", which was simply wrong — the derived name
+//      comes from it — and that false reassurance is what let the eleventh
+//      shape through.)
+//   2. diagnostic-only: quoting context in an error message.
 function deriveDispatchClassifiers(hostSrc) {
   const bad = (reason) => ({ ok: false, reason, names: [], sawWrite: false, bodyLen: 0 });
   if (typeof hostSrc !== 'string' || !hostSrc.length) return bad('host.js unreadable or empty');
 
-  // ---- step 1: blank comments and string CONTENTS, length-preserving, ONCE,
-  // over the whole source. Offsets stay aligned with hostSrc, so a span
-  // accepted on the blanked text can be read back from the raw text safely.
+  // ---- blank comments and string CONTENTS once, length-preserving, over the
+  // whole source. Offsets stay aligned with hostSrc, so a span accepted on the
+  // blanked text can be read back from the raw text at the same place.
   const blankAll = (src) => {
-    const out = src.split('');
-    const n = src.length;
-    let i = 0;
+    const out = src.split(''); const n = src.length; let i = 0;
     while (i < n) {
       const c = src[i], d = src[i + 1];
-      if (c === '/' && d === '*') {
-        const e = src.indexOf('*/', i + 2), stop = e < 0 ? n : e + 2;
-        for (let k = i; k < stop; k++) if (out[k] !== '\n') out[k] = ' ';
-        i = stop; continue;
-      }
-      if (c === '/' && d === '/') {
-        let e = src.indexOf('\n', i); if (e < 0) e = n;
-        for (let k = i; k < e; k++) out[k] = ' ';
-        i = e; continue;
-      }
-      if (c === '"' || c === "'" || c === '`') {
-        let k = i + 1;
+      if (c === '/' && d === '*') { const e = src.indexOf('*/', i + 2), stop = e < 0 ? n : e + 2;
+        for (let k = i; k < stop; k++) if (out[k] !== '\n') out[k] = ' '; i = stop; continue; }
+      if (c === '/' && d === '/') { let e = src.indexOf('\n', i); if (e < 0) e = n;
+        for (let k = i; k < e; k++) out[k] = ' '; i = e; continue; }
+      if (c === '"' || c === "'" || c === '`') { let k = i + 1;
         while (k < n && src[k] !== c) { if (src[k] === '\\') k++; k++; }
         for (let j = i + 1; j < Math.min(k, n); j++) if (out[j] !== '\n') out[j] = ' ';
-        i = Math.min(k + 1, n); continue;
-      }
+        i = Math.min(k + 1, n); continue; }
       i++;
     }
     return out.join('');
   };
   const blanked = blankAll(hostSrc);
 
-  // ---- step 2: locate the declaration IN THE BLANKED TEXT (so a commented-out
-  // or quoted declaration cannot be found), with an EXACT name boundary — the
-  // `\s*\(` is what stops `deliverTrapReportRenamed` matching by prefix.
+  // ---- locate the declaration in the BLANKED text, exact name boundary.
   const decl = /\bfunction\s+deliverTrapReport\s*\(/g;
   const starts = [];
   for (let m; (m = decl.exec(blanked)) !== null; ) starts.push(m.index);
   if (starts.length === 0) return bad('no `function deliverTrapReport(` declaration found');
   if (starts.length > 1) return bad('several `deliverTrapReport` declarations — "the body" is ambiguous');
 
-  // ---- step 3: brace-match IN THE BLANKED TEXT, so a brace inside a comment
-  // or a string cannot move the boundary.
+  // ---- brace-match in the BLANKED text, so no comment/string brace can move
+  // the boundary.
   const open = blanked.indexOf('{', starts[0]);
   if (open < 0) return bad('declaration found but no opening brace');
   let depth = 0, end = -1;
@@ -195,44 +201,55 @@ function deriveDispatchClassifiers(hostSrc) {
     else if (c === '}') { depth--; if (depth === 0) { end = i; break; } }
   }
   if (end < 0) return bad('unbalanced braces — body truncated or unparseable');
-
-  // `code` is the ONLY thing scanned. `raw` is display/offset-read only and
-  // never decides anything.
   const code = blanked.slice(open, end + 1);
   const raw = hostSrc.slice(open, end + 1);
 
-  // ---- step 4: every recognised way the dispatch reaches a method on `fs`.
+  // ---- THE NARROW ACCEPT SET. Walk every property-access position on `fs`
+  // and accept only the shapes below; anything else fails CLOSED.
   const found = new Set();
-  const consumed = [];
-  const eat = (m) => consumed.push([m.index, m.index + m[0].length]);
-  for (let m, re = /\bfs\s*\??\.\s*([A-Za-z_$][\w$]*)/g; (m = re.exec(code)) !== null; ) { eat(m); found.add(m[1]); }
-  // Bracket form: the literal's CONTENT is blanked, so accept the shape on
-  // `code` and read the name back from `raw` over the same accepted span.
-  for (let m, re = /\bfs\s*\[\s*['"][^'"\n]*['"]\s*\]/g; (m = re.exec(code)) !== null; ) {
-    eat(m);
-    const lit = /['"]([A-Za-z_$][\w$]*)['"]/.exec(raw.slice(m.index, m.index + m[0].length));
-    if (!lit) return bad('bracket access on `fs` with a non-identifier literal key');
-    found.add(lit[1]);
-  }
-  for (let m, re = /\bconst\s*\{([^}]*)\}\s*=\s*fs\b/g; (m = re.exec(code)) !== null; ) {
-    eat(m);
-    for (const part of m[1].split(',')) {
-      const nm = part.split(':')[0].trim();
-      if (/^[A-Za-z_$][\w$]*$/.test(nm)) found.add(nm);
-    }
-  }
-
-  // ---- step 5: a bare `fs` is only interesting when it REACHES INTO the
-  // object. `fs &&`, `typeof fs`, and `pick(fs, k)` name no method. A reach
-  // this oracle cannot read (a computed key) fails LOUD.
+  const ID = '[A-Za-z_$][A-Za-z0-9_$]*';
   for (let m, re = /\bfs\b/g; (m = re.exec(code)) !== null; ) {
     const at = m.index;
-    const reach = (code.slice(at + 2).match(/^\s*(\?\.|\.|\[)?/) || [])[1];
-    if (!reach) continue;
-    if (consumed.some(([s, e]) => at >= s && at < e)) continue;
+    const rest = code.slice(at + 2);
+    const lead = /^\s*(\?\.|\.|\[)/.exec(rest);
+    if (!lead) continue;                       // `fs &&`, `typeof fs`, `pick(fs, k)` — names nothing
+
+    // shape 1/2: fs.NAME and fs?.NAME
+    const dot = new RegExp('^\\s*\\??\\.\\s*(' + ID + ')').exec(rest);
+    if (dot) { found.add(dot[1]); re.lastIndex = at + 2 + dot[0].length; continue; }
+
+    // shape 3: fs['NAME'] / fs["NAME"] — accepted on the blanked text only to
+    // find the SPAN, then VALIDATED ANCHORED END-TO-END on the raw text with a
+    // backreferenced quote. A literal that is not exactly a quoted identifier
+    // is REFUSED, never mined for an identifier-looking substring.
+    const brk = /^\s*\[\s*(['"])[^\n]*?\1\s*\]/.exec(rest);
+    if (brk) {
+      const span = raw.slice(at, at + 2 + brk[0].length);
+      const ok = new RegExp('^fs\\s*\\[\\s*([\'"])(' + ID + ')\\1\\s*\\]$').exec(span);
+      if (!ok) {
+        return bad('bracket access on `fs` whose literal is not exactly a quoted ' +
+                   'identifier (escape, embedded quote, concatenation, template…): ' + span);
+      }
+      found.add(ok[2]);
+      re.lastIndex = at + 2 + brk[0].length;
+      continue;
+    }
+
     const ctx = raw.slice(Math.max(0, at - 45), at + 55).replace(/\s+/g, ' ');
-    return bad('unreadable property access on `fs` (computed key, or a shape this ' +
-               'oracle does not know) near: …' + ctx + '…');
+    return bad('property access on `fs` in a shape this oracle does not read — ' +
+               'refusing rather than guessing. near: …' + ctx + '…');
+  }
+
+  // ---- simple destructuring, also narrow: identifiers (with an optional
+  // rename) only. A rest element or a nested pattern is refused.
+  for (let m, re = /\bconst\s*\{([^}]*)\}\s*=\s*fs\b/g; (m = re.exec(code)) !== null; ) {
+    for (const part of m[1].split(',')) {
+      const t = part.trim();
+      if (!t) continue;
+      const d2 = new RegExp('^(' + ID + ')(\\s*:\\s*' + ID + ')?$').exec(t);
+      if (!d2) return bad('destructuring from `fs` in a shape this oracle does not read: {' + m[1].trim() + '}');
+      found.add(d2[1]);
+    }
   }
 
   const sawWrite = found.has('write');
