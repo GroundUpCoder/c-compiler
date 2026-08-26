@@ -2821,9 +2821,12 @@ static void style_net(Class *cls, DWORD style, DWORD exStyle) {
     }
     /* exStyle: WS_EX_CLIENTEDGE is READ (#322 — nc_edge drives the DC
      * inset, GetClientRect/WM_SIZE, input mapping and the BeginPaint
-     * ring), so it is rightly quiet here. Every other bit is unread and
-     * reports. */
-    DWORD exUnk = exStyle & ~(DWORD)WS_EX_CLIENTEDGE & ~cls->exSeen;
+     * ring), and WS_EX_TOOLWINDOW/WS_EX_APPWINDOW are READ (#740 — they
+     * are two of the three inputs to the taskbar/cycle classification
+     * below), so those three are rightly quiet here. Every other bit is
+     * unread and reports. */
+    DWORD exUnk = exStyle & ~(DWORD)(WS_EX_CLIENTEDGE | WS_EX_TOOLWINDOW |
+                                     WS_EX_APPWINDOW) & ~cls->exSeen;
     if (exUnk) {
         cls->exSeen |= exUnk;
         __win32_unsupported("exStyle bits 0x%08X on class %s (unread — nothing "
@@ -2882,11 +2885,34 @@ static HWND create_window_impl(DWORD exStyle, LPCSTR className, LPCSTR windowNam
         static int sdlInited;
         if (!sdlInited) { SDL_Init(SDL_INIT_VIDEO); sdlInited = 1; }
         hw->top = hw;
-        /* Owned dialogs and MessageBoxes (the "#32770" class) are transient:
-         * SDL_WINDOW_UTILITY keeps them out of the taskbar and window cycle
-         * (todos/0281 — Win95 never lists owned modals). notepad's dirty-close
-         * "Save changes?" confirm must not add a second "Notepad" button. */
-        int transient = className && ci_eq(className, "#32770");
+        /* The taskbar/window-cycle classification (todos/0281, corrected by
+         * #740). SDL_WINDOW_UTILITY -> kernel surface flag bit4 ->
+         * WMP_F_TRANSIENT, which /bin/wm reads as "keep out of wins[]": no
+         * taskbar button, and skipped by cycle/cascade/tile/minimize-all.
+         *
+         * The Win95 rule this implements is about OWNERSHIP, not class:
+         *   WS_EX_APPWINDOW        -> listed, even when owned
+         *   else an owner          -> not listed (an owned modal/secondary)
+         *   else WS_EX_TOOLWINDOW  -> not listed (a floating palette)
+         *   else                   -> listed
+         * For a non-child window `parent` IS the owner (CreateWindowEx's
+         * hWndParent), so it is the whole question here.
+         *
+         * 0281 asked instead whether the class name was "#32770", which
+         * conflates "is of the dialog class" with "is an owned modal". The
+         * two diverge in BOTH directions and both shipped: calc's MAIN
+         * window is an UNOWNED "#32770" dialog (vendor/calc/winmain.c:
+         * CreateDialog(..., NULL, DlgMainProc)) and so lost its taskbar
+         * button entirely — unrecoverable once another window covered it —
+         * while sedit's owned Find/Goto and comdlg32's owned Open/Find/Font
+         * popups are not of that class and wrongly gained one.
+         *
+         * The producers must therefore DECLARE their owner; MessageBox,
+         * dlg_create and comdlg32 used to drop it on the floor. */
+        int owned = parent != NULL;
+        int transient = (exStyle & WS_EX_APPWINDOW)
+                            ? 0
+                            : (owned || (exStyle & WS_EX_TOOLWINDOW) != 0);
         hw->win = SDL_CreateWindow(windowName ? windowName : "", w, h,
                                    ((style & WS_THICKFRAME) ? SDL_WINDOW_RESIZABLE : 0) |
                                    (transient ? SDL_WINDOW_UTILITY : 0));
@@ -6294,9 +6320,13 @@ int MessageBox(HWND owner, LPCSTR text, LPCSTR caption, UINT type) {
     int hgt = textH + 34 + 40;
     if (hgt < 100) hgt = 100;
 
+    /* #740: the owner rides into CreateWindowEx, so the taskbar
+     * classification can see it. An owned box gets no taskbar button; a
+     * MessageBox(NULL, ...) is an unowned top-level and gets one, exactly
+     * as Windows does. It is also the truthful CREATESTRUCT.hwndParent. */
     HWND box = CreateWindowEx(0, "#32770", caption ? caption : "",
                               WS_POPUP | WS_VISIBLE, 0, 0, w, hgt,
-                              NULL, NULL, NULL, NULL);
+                              owner, NULL, NULL, NULL);
     if (!box) return 0;
     CreateWindowEx(0, "STATIC", text ? text : "", WS_CHILD | WS_VISIBLE,
                    20, 14, w - 40, textH + lineH, box, NULL, NULL, NULL);
@@ -6512,7 +6542,14 @@ static HWND dlg_create(HINSTANCE inst, LPCWSTR tmpl, HWND owner,
         : (WS_POPUP | WS_VISIBLE | (tstyle & (WS_THICKFRAME | WS_DISABLED)));
     /* template w/h are CLIENT dialog units — the window grows by the menu
      * strip and (v3) by a template-level WS_EX_CLIENTEDGE ring, exactly
-     * AdjustWindowRectEx's arithmetic */
+     * AdjustWindowRectEx's arithmetic.
+     * #740: `owner` goes in for BOTH shapes now. For a WS_CHILD template it
+     * is the hierarchy parent, as before; for a top-level it is the OWNER,
+     * which the taskbar classification reads. It used to be dropped
+     * (`child ? owner : NULL`), which is why an owned DialogBoxParamW dialog
+     * was only kept out of the taskbar by the coincidence of its class name
+     * — and why calc's UNOWNED main dialog was kept out by the same
+     * coincidence, wrongly. */
     int dE = (texstyle & WS_EX_CLIENTEDGE) ? 2 : 0;
     HWND dlg = CreateWindowEx(texstyle, "#32770", caption ? caption : "",
                               wstyle,
@@ -6520,7 +6557,7 @@ static HWND dlg_create(HINSTANCE inst, LPCWSTR tmpl, HWND owner,
                               child ? dyu * by / 8 : 0,
                               dw * bx / 4 + 2 * dE,
                               dh * by / 8 + (tmplMenu ? MENU_BAR_H : 0) + 2 * dE,
-                              child ? owner : NULL, tmplMenu, NULL, NULL);
+                              owner, tmplMenu, NULL, NULL);
     free(caption);
     if (!dlg && tmplMenu) DestroyMenu(tmplMenu);
     if (!dlg) { if (tf) DeleteObject((HGDIOBJ)tf); return NULL; }

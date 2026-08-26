@@ -137,7 +137,7 @@ thing this file exists to kill.
 ### L21 — the WMP_F_TRANSIENT flag's own doc defers min/max suppression to the same closed item
 - ticket: #107
 - file: os/wm_proto.h
-- anchor: boxes — not implemented here (0281 scope note). */
+- anchor: suppress its min/max title boxes — not implemented
 - defers-to: 0281
 - expired: 0281
 

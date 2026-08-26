@@ -280,13 +280,22 @@ typedef struct {
                                 stacking/minimize ops refuse it (EPERM) —
                                 policy never manages popups. */
 #define WMP_F_TRANSIENT 128  /* transient/owned window (todos/0281): a framed,
-                                focusable modal (MessageBox, dialogs) that Win95
-                                never lists in the taskbar. Unlike ANCHORED it
-                                keeps chrome + focus; /bin/wm just gives it no
-                                taskbar button and skips it when cycling (kept
-                                out of wins[], but still placed so it maps). The
-                                same flag could later suppress its min/max title
-                                boxes — not implemented here (0281 scope note). */
+                                focusable secondary window that Win95 never lists
+                                in the taskbar. Unlike ANCHORED it keeps chrome +
+                                focus; /bin/wm just gives it no taskbar button and
+                                skips it when cycling (kept out of wins[], but
+                                still placed so it maps). The same flag could later
+                                suppress its min/max title boxes — not implemented
+                                here (0281 scope note).
+                                🔴 The producing rule is about OWNERSHIP, never a
+                                window class (#740): user32 sets it for a top-level
+                                window that has an owner, or that asks for
+                                WS_EX_TOOLWINDOW, and clears it for WS_EX_APPWINDOW
+                                even when owned. "MessageBox and dialogs" is the
+                                common CASE, not the test — calc's main window is
+                                an UNOWNED dialog and must be listed, while sedit's
+                                Find box and comdlg32's Open box are owned
+                                non-dialog-class windows and must not be. */
 
 /* Frame header as read off the wire (after the length word). */
 typedef struct { uint32_t type; uint32_t plen; } wmp_hdr;
