@@ -2314,6 +2314,69 @@ async function main() {
       '#765: and it was never streamed to the user either');
   }
 
+  // ---- test 21 (#765 + #758): BOTH loss paths in ONE round ---------------
+  // The committed legs exercise the two paths in SEPARATE rounds, so nothing
+  // pinned the combined behaviour the round-close comments describe: that the
+  // counters stay independent, that each report fires only for its own
+  // condition, and that they are never summed. A change that conflated them
+  // ONLY when both counters are nonzero would have passed the whole suite.
+  //
+  // The two counts are deliberately DIFFERENT (2 unplaceable, 1 overflow) so
+  // the numbers themselves discriminate: summing reads 3 and 3, cross-reporting
+  // reads 1 and 2. Equal counts would have hidden both.
+  {
+    const N_TEXT = 62;                 // indices 0..62 -> 63 captured text blocks
+    const TOOL_IX = 63;                // last slot that fits
+    let both = sse('message_start', { message: { id: 'msg_both', role: 'assistant', content: [] } });
+    for (let i = 0; i <= N_TEXT; i++) {
+      both += sse('content_block_start', { index: i, content_block: { type: 'text', text: '' } })
+        + sse('content_block_delta', { index: i, delta: { type: 'text_delta', text: `b${i}. ` } })
+        + sse('content_block_stop', { index: i });
+    }
+    // #765 path, twice: a start and a delta, neither carrying a usable index.
+    both += 'event: content_block_start\ndata: '
+      + JSON.stringify({ type: 'content_block_start', content_block: { type: 'text', text: '' } }) + '\n\n';
+    both += 'event: content_block_delta\ndata: '
+      + JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'NOIDX' } }) + '\n\n';
+    // A tool_use inside the ceiling, so a second round exists to inspect.
+    both += sse('content_block_start', { index: TOOL_IX, content_block: { type: 'tool_use', id: 'toolu_both', name: 'read_file', input: {} } })
+      + sse('content_block_delta', { index: TOOL_IX, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ path: 'nope.txt' }) } })
+      + sse('content_block_stop', { index: TOOL_IX });
+    // #758 path, once: one block past the ceiling.
+    both += sse('content_block_start', { index: 64, content_block: { type: 'text', text: '' } })
+      + sse('content_block_delta', { index: 64, delta: { type: 'text_delta', text: 'OVER. ' } })
+      + sse('content_block_stop', { index: 64 });
+    both += sse('message_delta', { delta: { stop_reason: 'tool_use' } }) + sse('message_stop', {});
+
+    const srv = await startStrictServer([both, textResponse('both paths done.')]);
+    const { stdout, stderr } = await runCodeBoth(srv.url,
+      ['-p', 'both losses', '--no-color', '--no-persist']);
+    srv.close();
+
+    check(stdout.includes('both paths done.'),
+      '#765/#758: a round hitting BOTH loss paths still completes');
+    // Each report fires for its own condition, with its OWN count.
+    check(/dropped 2 content-block events with no usable `index`/.test(stderr),
+      '#765/#758: the malformed-index loss reports its own count (2), not a shared one');
+    check(/dropped 1 content block past the MAX_BLOCKS \(64\) ceiling/.test(stderr),
+      '#765/#758: the ceiling loss reports its own count (1), not a shared one');
+    // Never summed: 2 + 1 = 3 must appear in neither line.
+    check(!/dropped 3 /.test(stderr),
+      '#765/#758: the two counts are never summed into a combined total');
+    // Two lines, so one loss is not shown twice.
+    check((stderr.match(/gcode: dropped /g) || []).length === 2,
+      '#765/#758: exactly two report lines — neither loss is reported twice');
+    // Capture is undisturbed by either path firing.
+    const asst = (srv.bodies[1] ? srv.bodies[1].messages : [])
+      .filter((m) => m.role === 'assistant')
+      .flatMap((m) => Array.isArray(m.content) ? m.content : []);
+    const texts = asst.filter((b) => b && b.type === 'text').map((b) => b.text);
+    check(texts.length === N_TEXT + 1 && texts.every((t, i) => t === `b${i}. `),
+      `#765/#758: all 63 captured blocks survive both losses, in order (${texts.length})`);
+    check(!texts.some((t) => t.includes('NOIDX') || t.includes('OVER.')),
+      '#765/#758: neither lost block is silently placed in the replayed history');
+  }
+
   console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILURE(S)`);
   process.exit(failures === 0 ? 0 : 1);
 }
