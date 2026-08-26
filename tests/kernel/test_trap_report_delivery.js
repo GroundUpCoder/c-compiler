@@ -20,10 +20,12 @@
 //     resolves to.
 //
 // Plus the guard that keeps host.js's delivery choice correct in-OS:
-//   HALF 3 — RemoteFS does NOT define isConsoleFd, so deliverTrapReport's
-//     console branch cannot fire under the kernel and the write really is
-//     brokered. If RemoteFS ever grows that method, this fails loudly rather
-//     than silently rerouting every in-OS trap report to the console.
+//   HALF 3 — RemoteFS answers NONE of the fd-2 classifiers deliverTrapReport
+//     consults, so its console/absent branches cannot fire under the kernel and
+//     the write really is brokered. The classifier NAMES are derived from
+//     host.js itself (and that derivation is positive-controlled), because the
+//     first cut of this guard named one spelling and went stale the moment
+//     #759's own counter-pass renamed it.
 //
 // Run: node tests/kernel/test_trap_report_delivery.js
 'use strict';
@@ -120,6 +122,104 @@ function readWholeFile(p) {
   return new TextDecoder().decode(b);
 }
 
+function deriveDispatchClassifiers(hostSrc) {
+  const bad = (reason) => ({ ok: false, reason, names: [], sawWrite: false });
+  if (typeof hostSrc !== 'string' || !hostSrc.length) return bad('host.js unreadable or empty');
+
+  // (2) EXACT name match. `\s*\(` after the identifier is what stops
+  // `deliverTrapReportRenamed` from satisfying this — mutation A.
+  const decl = /\bfunction\s+deliverTrapReport\s*\(/g;
+  const starts = [];
+  for (let m; (m = decl.exec(hostSrc)) !== null; ) starts.push(m.index);
+  if (starts.length === 0) return bad('no `function deliverTrapReport(` declaration found');
+  if (starts.length > 1) return bad('several `deliverTrapReport` declarations — "the body" is ambiguous');
+
+  // (3) Body by BRACE MATCHING, not a lazy `\n}`. Detects truncation and
+  // survives reshaping/indentation changes — mutation B.
+  const open = hostSrc.indexOf('{', starts[0]);
+  if (open < 0) return bad('declaration found but no opening brace');
+  let depth = 0, end = -1;
+  for (let i = open; i < hostSrc.length; i++) {
+    const c = hostSrc[i];
+    if (c === '{') depth++;
+    else if (c === '}') { depth--; if (depth === 0) { end = i; break; } }
+  }
+  if (end < 0) return bad('unbalanced braces — body truncated or unparseable');
+  const body = hostSrc.slice(open, end + 1);
+
+  // Comments and string bodies are BLANKED (length-preserving) before any
+  // scanning: the first draft of this oracle refused the real source because
+  // the word "fs" appears in a comment inside the dispatch. An oracle that
+  // reds a healthy tree is as useless as one that greens a broken one.
+  const blank = (src) => {
+    let out = src.split(''), i = 0, n = src.length;
+    while (i < n) {
+      const c = src[i], d = src[i + 1];
+      if (c === '/' && d === '*') { const e = src.indexOf('*/', i + 2); const stop = e < 0 ? n : e + 2;
+        for (let k = i; k < stop; k++) if (out[k] !== '\n') out[k] = ' '; i = stop; continue; }
+      if (c === '/' && d === '/') { let e = src.indexOf('\n', i); if (e < 0) e = n;
+        for (let k = i; k < e; k++) out[k] = ' '; i = e; continue; }
+      if (c === '"' || c === "'" || c === '`') {
+        let k = i + 1;
+        while (k < n && src[k] !== c) { if (src[k] === '\\') k++; k++; }
+        // keep the quotes so fs['name'] still parses; blank only the contents
+        for (let j = i + 1; j < Math.min(k, n); j++) if (out[j] !== '\n') out[j] = ' ';
+        i = Math.min(k + 1, n); continue;
+      }
+      i++;
+    }
+    return out.join('');
+  };
+  const code = blank(body);
+
+  // (4) Every recognised way the dispatch can reach a method on `fs`.
+  // Anything else is an UNRECOGNISED SHAPE and fails loud rather than
+  // silently contributing nothing — mutation C.
+  const forms = [
+    /\bfs\.([A-Za-z_$][\w$]*)/g,                       // fs.name        (call, typeof, alias)
+    /\bfs\?\.([A-Za-z_$][\w$]*)/g,                     // fs?.name
+    /\bfs\[\s*['"]([A-Za-z_$][\w$]*)['"]\s*\]/g,       // fs['name']
+    /\bconst\s*\{([^}]*)\}\s*=\s*fs\b/g,               // const { a, b } = fs
+  ];
+  const found = new Set();
+  const consumed = [];
+  for (const re of forms) {
+    // Match on `body` (real text, so fs['name'] yields its name) but record
+    // spans; the unrecognised-use scan below runs on the blanked `code`, so a
+    // bare `fs` inside a comment or string can never be mistaken for a use.
+    for (let m; (m = re.exec(body)) !== null; ) {
+      consumed.push([m.index, m.index + m[0].length]);
+      if (re.source.startsWith('\\bconst')) {
+        for (const part of m[1].split(',')) {
+          const nm = part.split(':')[0].trim();
+          if (/^[A-Za-z_$][\w$]*$/.test(nm)) found.add(nm);
+        }
+      } else found.add(m[1]);
+    }
+  }
+  // A bare `fs` is only interesting when it REACHES INTO the object. A
+  // truthiness guard (`fs &&`), a `typeof fs`, or passing it as a receiver
+  // (`fdSink.call(fs, 2)`) names no method and is not a dispatch shape — the
+  // first draft flagged all three and went red on healthy source. So: scan for
+  // fs followed by a property access, and require THAT to be recognised.
+  // A COMPUTED access (`fs[k]`) is deliberately unreadable to this oracle and
+  // fails loud rather than contributing nothing.
+  for (let m, re = /\bfs\b/g; (m = re.exec(code)) !== null; ) {
+    const at = m.index;
+    const after = code.slice(at + 2).match(/^\s*(\?\.|\.|\[)?/);
+    const reach = after && after[1];
+    if (!reach) continue;                       // not a property access
+    if (consumed.some(([s2, e2]) => at >= s2 && at < e2)) continue;
+    const ctx = body.slice(Math.max(0, at - 45), at + 55).replace(/\s+/g, ' ');
+    return bad('unreadable property access on `fs` (computed key, or a shape ' +
+               'this oracle does not know) near: \u2026' + ctx + '\u2026');
+  }
+
+  const sawWrite = found.has('write');
+  found.delete('write');                                // the delivery call
+  return { ok: true, reason: null, names: [...found].sort(), sawWrite, bodyLen: body.length };
+}
+
 (async () => {
   console.log('#759 — trap-report delivery under the KERNEL (RemoteFS -> FS_WRITE) arrangement');
 
@@ -131,41 +231,71 @@ function readWholeFile(p) {
   // 'console', every in-OS trap report would silently reroute to the console;
   // if it answered 'absent', they would be silently DROPPED.
   //
-  // 🔴 THIS ASSERTION IS LOAD-BEARING ON A SYMBOL NAME, so it names EVERY
-  // spelling the dispatch has ever used — not just the current one. The first
-  // cut guarded `isConsoleFd`, and then #759's own counter-pass renamed that
-  // method to `fdSink`. The tripwire KEPT PASSING while protecting nothing:
-  // it failed safe-looking rather than loud, which is the worst failure mode a
-  // regression control has. A control goes stale the instant you rename what
-  // it guards, and nothing about the rename tells you.
+  // 🔴 THIS GUARD IS LOAD-BEARING ON A SYMBOL NAME, and the first cut of it
+  // went stale within the same ticket: #759's own counter-pass renamed
+  // isConsoleFd to fdSink, and the guard went on asserting the absence of a
+  // method that existed nowhere — passing while protecting nothing. An ABSENCE
+  // guard gets MORE true and less useful when its subject disappears, so it
+  // rots silently where a presence guard would break loudly.
   //
-  // The guard against the NEXT rename is the derivation below: the names are
-  // read out of host.js's actual dispatch line, so adding a third spelling
-  // without listing it here fails this leg instead of quietly widening the
-  // hole.
+  // The oracle above derives the names FROM host.js so a rename cannot repeat
+  // that. It is positive-controlled below, because an oracle that can return
+  // "nothing found" makes "nothing wrong here" and "I looked nowhere" the same
+  // green.
+
+  // The classifier spellings the dispatch has EVER used. Historical entries
+  // stay: an absence guard gets MORE true and less useful when the thing it
+  // names disappears, so dropping one silently widens the hole.
+  const GUARDED = ['fdSink', 'isConsoleFd'];
+  // How many classifiers the CURRENT dispatch consults. A bare "non-empty"
+  // check cannot tell one classifier from three, and adding a second without
+  // updating this line should be a decision, not a default.
+  const EXPECTED_CLASSIFIERS = 1;
+
   console.log('\nHALF 3. RemoteFS must not answer the fd-2 classifier at all');
-  const rfsProto = K.RemoteFS.prototype;
-  const CLASSIFIER_NAMES = ['fdSink', 'isConsoleFd'];   // current + historical
-  for (const name of CLASSIFIER_NAMES) {
-    check('RemoteFS defines NO `' + name + '` (so deliverTrapReport brokers the write)',
-          !Object.getOwnPropertyNames(rfsProto).includes(name) &&
-          typeof rfsProto[name] !== 'function',
-          'if RemoteFS gains ' + name + ', in-OS trap reports reroute to the console or vanish');
+
+  let hostSrc = '';
+  try { hostSrc = fs.readFileSync(path.resolve(__dirname, '../../host.js'), 'utf8'); }
+  catch (e) { hostSrc = ''; }
+  const d = deriveDispatchClassifiers(hostSrc);
+
+  // -- the instrument, positive-controlled BEFORE anything is concluded from it
+  check('ORACLE: deliverTrapReport located and its body parsed',
+        d.ok === true, d.reason || '(ok)');
+  check('ORACLE POSITIVE CONTROL: the parse reached the fs.write delivery call',
+        d.ok === true && d.sawWrite === true,
+        d.ok ? 'landmark fs.write NOT found — the body was truncated or reshaped'
+             : 'skipped: parse already failed');
+  check('ORACLE POSITIVE CONTROL: it derived EXACTLY ' + EXPECTED_CLASSIFIERS +
+        ' classifier call(s), not "some"',
+        d.ok === true && d.names.length === EXPECTED_CLASSIFIERS,
+        d.ok ? 'derived ' + JSON.stringify(d.names) +
+               ' — an EMPTY set satisfies every claim below, so this guard would ' +
+               'pass while checking nothing. If the dispatch really changed, update ' +
+               'EXPECTED_CLASSIFIERS and GUARDED together.'
+             : 'skipped: parse already failed');
+
+  // -- only now, the thing the oracle exists to support
+  const unguarded = (d.names || []).filter((n) => !GUARDED.includes(n));
+  check('every classifier the dispatch consults is named in GUARDED',
+        d.ok === true && unguarded.length === 0,
+        'unguarded: ' + JSON.stringify(unguarded) +
+        ' — add them to GUARDED, or this tripwire protects nothing');
+
+  // -- the requirement itself. Null-safe: if RemoteFS itself went missing this
+  //    must report ONE red leg, not throw and take the other twenty checks
+  //    down with it.
+  const rfsProto = (K && K.RemoteFS && K.RemoteFS.prototype) || null;
+  check('RemoteFS is exported and has a prototype (leg premise)', !!rfsProto);
+  const rfsOwn = rfsProto ? Object.getOwnPropertyNames(rfsProto) : [];
+  for (const name of GUARDED.concat(unguarded)) {
+    check('RemoteFS defines NO `' + name + '`, so the write stays brokered',
+          !!rfsProto && !rfsOwn.includes(name) && typeof rfsProto[name] !== 'function',
+          'if RemoteFS answers ' + name + ', in-OS trap reports reroute to the ' +
+          'console (\'console\') or vanish (\'absent\')');
   }
-  // Keep the list honest against the code it mirrors: every fs-method name
-  // host.js's deliverTrapReport actually calls must appear above.
-  const hostSrc = fs.readFileSync(path.resolve(__dirname, '../../host.js'), 'utf8');
-  const dispatch = /function deliverTrapReport[\s\S]*?\n}/.exec(hostSrc);
-  check('located deliverTrapReport in host.js (leg premise)', !!dispatch);
-  const called = new Set();
-  if (dispatch) for (const m of dispatch[0].matchAll(/\bfs\.([A-Za-z_$][\w$]*)\s*\(/g)) called.add(m[1]);
-  called.delete('write');   // the delivery call itself, not a classifier
-  const unguarded = [...called].filter((n) => !CLASSIFIER_NAMES.includes(n));
-  check('every fs classifier deliverTrapReport calls is named in this guard',
-        unguarded.length === 0,
-        'unguarded classifier(s): ' + JSON.stringify(unguarded) +
-        ' — add them to CLASSIFIER_NAMES, or this tripwire is protecting nothing');
-  check('RemoteFS does define write', typeof rfsProto.write === 'function');
+  check('RemoteFS does define write (so there IS a brokered path to take)',
+        !!rfsProto && typeof rfsProto.write === 'function');
 
   // ---- set up a process whose fd 2 is a FILE ------------------------------
   const pid = await kernel.boot({ path: '/bin/init', argv: ['init'], envp: [], cwd: '/' });
