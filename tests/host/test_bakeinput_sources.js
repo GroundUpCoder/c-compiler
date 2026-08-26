@@ -178,7 +178,8 @@ check('*.img.tmp-<pid> stays excluded (mkimage atomic-rename temp)', () => {
  * artifact in exactly that position and was simply missed: on a default
  * in-repo `node os/boot.js` the lock lands at `os/os-root.img.lock`, inside
  * the os/ walk, with mtime `now` — so the blob was ALWAYS input-stale and the
- * 0082 reuse path could never be taken at all (measured 3m30s vs 6s). The
+ * 0082 reuse path could never be taken at all (lane/739 measured 236s of
+ * re-bake per boot, against 0.12s to mount the blob it already had). The
  * whole test estate boots with `--image=<mkdtemp>`, which puts the lock
  * outside the walk, so nothing could see it. The install temp is the same
  * class, found while fixing this one. All three legs FAIL on the pre-#739
