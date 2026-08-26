@@ -2129,11 +2129,30 @@ async function main() {
     check(!!cb && Array.isArray(cb.citations) && cb.citations.length === 1
           && JSON.stringify(cb.citations[0]) === JSON.stringify(CITE),
       '#757: the citation round-trips verbatim, every field intact');
-    // The named collision: whatever the #747 breakpoint did to this message,
-    // it did not disturb the citations. Asserted without predicting WHERE the
-    // breakpoint lands, so the leg stays true if that placement changes.
-    check(!!cb && cb.text === 'The sky is blue.' && Array.isArray(cb.citations),
-      '#757: citations and the #747 cache breakpoint coexist on one message');
+    // The #747 interaction, named for what is actually tested.
+    //
+    // The previous name here claimed the two keys "coexist on one block", and
+    // the assertion never looked at cache_control — it re-checked text and
+    // citations. Worse than untested: MEASURED on this exact fixture, the
+    // breakpoint lands on msg[2] (user / tool_result) while the cited block is
+    // msg[1] (assistant / text). #747 marks the last content block of the LAST
+    // message, and in gcode the last message is always the user's, because
+    // gcode does not prefill an assistant turn. So citations and cache_control
+    // on the SAME block is unreachable, not merely unexercised, and a name
+    // claiming it would have stayed green forever while asserting nothing.
+    //
+    // What is real is that the breakpoint machinery WALKS this history — #747
+    // clears stale markers from earlier messages, so it visits the cited block
+    // — and must leave it untouched on the way past.
+    const marked = flat.filter((b) => b && b.cache_control);
+    // Vacuity guard FIRST: if no breakpoint were placed at all, "the cited
+    // block carries no marker" would be trivially true and would pin nothing.
+    check(marked.length === 1 && marked[0].type === 'tool_result',
+      '#757: the #747 breakpoint really was placed (1, on the last message) — so the next check is not vacuous');
+    check(!!cb && !('cache_control' in cb)
+          && Array.isArray(cb.citations) && cb.citations.length === 1
+          && cb.text === 'The sky is blue.',
+      '#757: the breakpoint walk leaves the cited block untouched — no marker, citations and text intact');
     // And an UNCITED block in the same replayed history gains no citations key
     // — the fix must not start emitting the field where none arrived.
     const plain = flat.find((b) => b && b.type === 'text' && b.text !== 'The sky is blue.');
