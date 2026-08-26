@@ -142,7 +142,9 @@ function resolveRequestedOverlays() {
 // Bake into a temp file and publish with an atomic rename: a concurrent
 // reader (the 0082 fixture copy in os/boot.js, a browser fetch through
 // serve.js) sees either the old blob or the new one, never a half-bake.
-const tmpPath = outPath + '.tmp-' + process.pid;
+// Derived through os-common so the name stays inside the freshness walks'
+// excluded output family (#739).
+const tmpPath = COMMON.imageBakeTmpPath(outPath, process.pid);
 
 async function main() {
   // The published blob's mtime is the bake START time (todos/0082): an

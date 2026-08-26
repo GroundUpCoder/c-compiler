@@ -2563,8 +2563,10 @@ function projectExternalDirs(proj, dir) {
  * Bakers stamp the blob's mtime with the bake START time (an input
  * edited mid-bake may or may not be reflected, so it must read newer).
  *
- * Deliberately excluded: *.img and *.img.tmp-<pid> (bake OUTPUTS — an
- * output counted as an input would perpetually self-stale the bake),
+ * Deliberately excluded: the BAKE_OUTPUT_NAME_RE family — *.img,
+ * *.img.tmp-<pid>, *.img.lock, *.img.installing (bake OUTPUTS and their
+ * runtime sidecars, #739 — an output counted as an input would
+ * perpetually self-stale the bake),
  * dotfiles, and os/'s runtime-only files (os.html, osk.js, boot.js, the
  * workers, the compositor). *.md is NOT excluded (#634): #566 baked
  * /usr/share/doc, so docs ARE blob bytes — the shipped ones are `bin`
@@ -2587,6 +2589,35 @@ var BAKE_INPUT_SKIP = {
   'os.html': 1, 'osk.js': 1, 'boot.js': 1, 'kernel-worker.js': 1,
   'process-worker.js': 1, 'compositor.js': 1,
 };
+/* ---- bake outputs and their runtime sidecars (#739) ----
+ * The one name family both freshness walks (newestBakeInput,
+ * newestPkgInput) exclude: the image blobs themselves (*.img), mkimage's
+ * atomic-rename temp (*.img.tmp-<pid>), boot.js's single-instance pair
+ * lock (*.img.lock, todos/0293) and its fixture-install temp
+ * (*.img.installing, #576 A3). All four derive from an image path, so the
+ * family is keyed on the `.img` stem — NOT a bare *.lock/*.tmp glob,
+ * which could silently swallow a genuine future source file, and a
+ * false "fresh" is worse than a slow re-bake. Even inside the family the
+ * exclusion narrows only walk DISCOVERY: a manifest entry naming such a
+ * file is statted directly, unfiltered.
+ *
+ * The lock is the load-bearing member: boot.js rewrites it with mtime=now
+ * on EVERY run, before the staleness scan, so counting it as an input
+ * made the blob perpetually input-stale — a default in-repo
+ * `node os/boot.js` re-baked every time (3m30s vs 6s) and the 0082 reuse
+ * path was structurally unreachable. Static strays (a native build
+ * dropped in os/, media/) stay deliberately IN: they cost at most one
+ * re-bake — the next blob is stamped newer — which is the documented
+ * over-invalidation policy, not the perpetual class.
+ *
+ * The writers derive their sidecar names through the helpers below
+ * (boot.js, tools/mkimage.js), so a renamed suffix cannot drift out of
+ * the exclusion; tests/host/test_bakeinput_sources.js pins both sides. */
+var BAKE_OUTPUT_NAME_RE = /\.img(\.tmp-\d+|\.lock|\.installing)?$/;
+function isBakeOutputName(name) { return BAKE_OUTPUT_NAME_RE.test(name); }
+function imageLockPath(rootImagePath) { return rootImagePath + '.lock'; }
+function imageInstallTmpPath(imagePath) { return imagePath + '.installing'; }
+function imageBakeTmpPath(outPath, pid) { return outPath + '.tmp-' + pid; }
 /* opts (all optional):
  *   defs — ordered definition-source roots (#614, the packageDefSources
  *          list minus the implicit source 0): a baker that folds sibling
@@ -2621,10 +2652,9 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest, opts) {
       if (e.name.charAt(0) === '.') return;
       if (skipNames && skipNames[e.name]) return;
       if (e.isDirectory()) walk(pathMod.join(dir, e.name), null);
-      // .img.tmp-<pid> is mkimage's atomic-rename temp (a bake OUTPUT):
-      // one left behind by a killed bake would read as an ever-newer
-      // "input" and make the published image perpetually stale.
-      else if (!/\.img$/.test(e.name) && !/\.img\.tmp-\d+$/.test(e.name)) statFile(pathMod.join(dir, e.name));
+      // Bake outputs and their runtime sidecars stay out (#739; the
+      // family and its rationale live at BAKE_OUTPUT_NAME_RE above).
+      else if (!isBakeOutputName(e.name)) statFile(pathMod.join(dir, e.name));
     });
   }
   var normalize = normalizeRelPath;   // "a/b/../c" -> "a/c" (buildProject's rule)
@@ -2758,9 +2788,11 @@ function newestPkgInput(fsMod, pathMod, rootDir, name, pkg, opts) {
     ents.forEach(function (e) {
       if (e.name.charAt(0) === '.') return;
       if (e.isDirectory()) walk(pathMod.join(dir, e.name));
-      // Bake OUTPUTS stay out (#634): demos.json's os-root project walks os/
-      // itself, where mkimage's blob and its atomic-rename temp land —
-      // counting either would perpetually restale that package. *.md is NOT
+      // Bake OUTPUTS stay out (#634, #739): demos.json's os-root project
+      // walks os/ itself, where mkimage's blob, its atomic-rename temp,
+      // and a default boot's pair-lock/install-temp sidecars land —
+      // counting any of them would perpetually restale that package (the
+      // family: BAKE_OUTPUT_NAME_RE above). *.md is NOT
       // excluded — no current package payload has a .md the walk is
       // responsible for (payload docs reach the scan through direct stats:
       // the tree enumeration carries libgit2's LICENCE.md, `bin`/`text` are
@@ -2768,7 +2800,7 @@ function newestPkgInput(fsMod, pathMod, rootDir, name, pkg, opts) {
       // dir-granular over-approximation by design and a per-extension hole
       // in it is a class of invisible inputs — over-invalidating is the
       // cheap direction.
-      else if (!/\.img$/.test(e.name) && !/\.img\.tmp-\d+$/.test(e.name)) statFile(pathMod.join(dir, e.name));
+      else if (!isBakeOutputName(e.name)) statFile(pathMod.join(dir, e.name));
     });
   }
   var normalize = normalizeRelPath;   // "a/b/../c" -> "a/c" (buildProject's rule)
@@ -3235,6 +3267,10 @@ var OS_COMMON = {
   projectExternalDirs: projectExternalDirs,
   newestBakeInput: newestBakeInput,
   newestPkgInput: newestPkgInput,
+  isBakeOutputName: isBakeOutputName,
+  imageLockPath: imageLockPath,
+  imageInstallTmpPath: imageInstallTmpPath,
+  imageBakeTmpPath: imageBakeTmpPath,
   initRootVolume: initRootVolume,
   seedHostKeyScheme: seedHostKeyScheme,
   writeHostPlatform: writeHostPlatform,
