@@ -81,6 +81,14 @@ const DOC_MD = w('os/doc/guide.md', '# guide\n');
 const EXT_MD = w('ext/lib/README.md', '# patch table\n');   // the vendor-README shape
 const OUT_IMG = w('os/os-system.img', 'IMG\n');
 const OUT_TMP = w('os/os-system.img.tmp-123', 'TMP\n');
+// #739 fixtures: the image pair's RUNTIME sidecars sit in the same position as
+// those two bake outputs. A boot holds `<root>.img.lock` for its whole life
+// (mtime always `now`) and an interrupted fixture install leaves
+// `<system>.img.installing`. Counted as inputs they self-stale the bake
+// perpetually. Beside them, a genuine `.lock` SOURCE that must stay an input.
+const OUT_LOCK = w('os/os-root.img.lock', '{"pid":1}\n');
+const OUT_INSTALLING = w('os/os-system.img.installing', 'HALF\n');
+const SRC_LOCK = w('ext/lib/deps.lock', 'pinned\n');
 
 const MANIFEST = { version: 1, system: { files: {
   '/bin/myapp': { project: 'os/myapp/bin.json' },
@@ -162,6 +170,93 @@ check('*.img.tmp-<pid> stays excluded (mkimage atomic-rename temp)', () => {
   const r = newestFor(OUT_TMP);
   assert.notStrictEqual(r.path, OUT_TMP,
     'a temp left by a killed bake must not read as an ever-newer input');
+});
+
+/* ---- leg A4: image-pair runtime sidecars (#739) -------------------------
+ * `*.img` / `*.img.tmp-<pid>` were excluded because an OUTPUT counted as an
+ * INPUT self-stales the bake forever. The 0293 boot lockfile is a runtime
+ * artifact in exactly that position and was simply missed: on a default
+ * in-repo `node os/boot.js` the lock lands at `os/os-root.img.lock`, inside
+ * the os/ walk, with mtime `now` — so the blob was ALWAYS input-stale and the
+ * 0082 reuse path could never be taken at all (measured 3m30s vs 6s). The
+ * whole test estate boots with `--image=<mkdtemp>`, which puts the lock
+ * outside the walk, so nothing could see it. The install temp is the same
+ * class, found while fixing this one. All three legs FAIL on the pre-#739
+ * os-common.js. */
+
+check('*.img.lock stays excluded (#739 red control — the boot lockfile)', () => {
+  const r = newestFor(OUT_LOCK);
+  assert.notStrictEqual(r.path, OUT_LOCK,
+    'os/boot.js holds a sidecar lock beside the writable root image for the ' +
+    'whole life of the boot, so its mtime is always `now`; counted as an ' +
+    'input it makes the 0082 reuse path unreachable on every in-repo boot');
+});
+
+check('*.img.installing stays excluded (interrupted fixture install)', () => {
+  const r = newestFor(OUT_INSTALLING);
+  assert.notStrictEqual(r.path, OUT_INSTALLING,
+    'the fixture-install temp is a bake OUTPUT; one left behind by a killed ' +
+    'install reads as an ever-newer input, exactly like *.img.tmp-<pid>');
+});
+
+check('a non-image *.lock IS a bake input (no bare *.lock glob)', () => {
+  const r = newestFor(SRC_LOCK);
+  assert.strictEqual(r.path, SRC_LOCK,
+    'the exclusion keys off the image-artifact name shape, never a bare ' +
+    '*.lock glob — that would silently drop a real lockfile source, got ' +
+    r.path);
+});
+
+/* The three legs above are only correct because os/boot.js and
+ * tools/mkimage.js really create those names. That agreement used to be
+ * independent string literals in three files, which is exactly how the
+ * lockfile shipped uncounted — the walk's exclusions were written against
+ * the names of the day. os-common now OWNS the sidecar names: the creators
+ * call the builders, the walk calls the predicate. These two legs assert the
+ * round trip instead of restating the literals. */
+
+check('every sidecar name os-common builds is excluded by its own predicate', () => {
+  const sys = '/anywhere/os-system.img', root = '/anywhere/os-root.img';
+  for (const p of [COMMON.imageLockPath(root),
+                   COMMON.imageInstallTmpPath(sys),
+                   COMMON.imageBakeTmpPath(sys, 4321)]) {
+    assert.ok(COMMON.isImageArtifactName(path.basename(p)),
+      'os-common builds ' + p + ' but the bake-input walk does not exclude it');
+  }
+});
+
+check('the lock os/boot.js REALLY creates is excluded (behavioural oracle)', () => {
+  // Derive the name from boot.js rather than from a literal: plant a lock
+  // held by a LIVE pid so the 0293 guard refuses at exit 5 — which happens
+  // before every heavy require, so this costs ~0.1s and takes no heavy lock
+  // — and read the path back out of its own refusal message.
+  const bt = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-bootlock-'));
+  try {
+    fs.writeFileSync(path.join(bt, 'os-root.img.lock'), JSON.stringify({
+      pid: process.ppid,   // alive, and not us: a genuine holder
+      image: path.join(bt, 'os-system.img'), startedAt: 'fixture', argv: [],
+    }));
+    const r = require('child_process').spawnSync(
+      process.execPath, [path.join(ROOT, 'os', 'boot.js'),
+                         '--image=' + path.join(bt, 'os-system.img')],
+      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+    assert.strictEqual(r.status, 5,
+      'expected the 0293 image-pair refusal (exit 5), got ' + r.status +
+      '\n' + r.stderr);
+    const m = /\(lock (.*)\)/.exec(r.stderr);
+    assert.ok(m, 'refusal did not name its lock path:\n' + r.stderr);
+    assert.ok(COMMON.isImageArtifactName(path.basename(m[1])),
+      'os/boot.js creates ' + m[1] + ', which the bake-input walk still ' +
+      'counts as an input — the #739 self-stale is back');
+  } finally { fs.rmSync(bt, { recursive: true, force: true }); }
+});
+
+check('a real source edit still restales the blob (#739 acceptance leg 3)', () => {
+  // The fix must not turn the gate off: the whole point of excluding OUTPUTS
+  // is that INPUTS keep working.
+  const r = newestFor(path.join(tmp, 'compiler.js'));
+  assert.strictEqual(r.path, path.join(tmp, 'compiler.js'),
+    'a touched compiler.js must still be the newest bake input, got ' + r.path);
 });
 
 /* ---- leg A2: sibling definition sources (#614) --------------------------
