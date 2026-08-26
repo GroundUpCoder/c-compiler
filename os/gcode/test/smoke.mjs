@@ -2129,30 +2129,40 @@ async function main() {
     check(!!cb && Array.isArray(cb.citations) && cb.citations.length === 1
           && JSON.stringify(cb.citations[0]) === JSON.stringify(CITE),
       '#757: the citation round-trips verbatim, every field intact');
-    // The #747 interaction, named for what is actually tested.
+    // The #747 interaction, named for what these two assertions would FAIL
+    // WITHOUT — nothing more. This comment has now overclaimed twice in
+    // opposite directions, so it states only what was read from source.
     //
-    // The previous name here claimed the two keys "coexist on one block", and
-    // the assertion never looked at cache_control — it re-checked text and
-    // citations. Worse than untested: MEASURED on this exact fixture, the
-    // breakpoint lands on msg[2] (user / tool_result) while the cited block is
-    // msg[1] (assistant / text). #747 marks the last content block of the LAST
-    // message, and in gcode the last message is always the user's, because
-    // gcode does not prefill an assistant turn. So citations and cache_control
-    // on the SAME block is unreachable, not merely unexercised, and a name
-    // claiming it would have stayed green forever while asserting nothing.
+    // First the name sat above the assertion: it claimed the two keys "coexist
+    // on one block" while the check looked at text and citations and never at
+    // cache_control. Then the replacement rationale sat above the MECHANISM:
+    // it claimed #747 "walks" the history and "visits" the cited block.
     //
-    // What is real is that the breakpoint machinery WALKS this history — #747
-    // clears stale markers from earlier messages, so it visits the cited block
-    // — and must leave it untouched on the way past.
+    // It does not walk. Read at this commit, cache_mark_history() indexes the
+    // LAST message and that message's LAST block directly — cJSON_GetArrayItem
+    // (..., size - 1), twice — adds the marker, and returns that block so the
+    // caller can cache_unmark() it the instant the payload is serialized. No
+    // iteration; no earlier message is ever visited. The reason no stale marker
+    // survives on earlier messages is that mark/unmark brackets serialization,
+    // not that anything sweeps them.
+    //
+    // Two consequences, and together they are why this leg exists:
+    //   * a cited ASSISTANT block can never carry the marker, because gcode's
+    //     last message is always the user's (no assistant-prefill path exists),
+    //     so a same-block coexistence check is unreachable rather than merely
+    //     unexercised — which is also why it is not filed as a follow-up;
+    //   * what IS observable is NON-INTERFERENCE: with caching active and the
+    //     breakpoint placed on a different block, the cited block still reaches
+    //     the provider unmarked, with its citations and text intact.
     const marked = flat.filter((b) => b && b.cache_control);
-    // Vacuity guard FIRST: if no breakpoint were placed at all, "the cited
-    // block carries no marker" would be trivially true and would pin nothing.
+    // Vacuity guard FIRST, so a red points at its cause: with no breakpoint
+    // placed anywhere, "the cited block carries no marker" is trivially true.
     check(marked.length === 1 && marked[0].type === 'tool_result',
-      '#757: the #747 breakpoint really was placed (1, on the last message) — so the next check is not vacuous');
+      '#757: one history breakpoint is placed, on the last message — so the next check is not vacuous');
     check(!!cb && !('cache_control' in cb)
           && Array.isArray(cb.citations) && cb.citations.length === 1
           && cb.text === 'The sky is blue.',
-      '#757: the breakpoint walk leaves the cited block untouched — no marker, citations and text intact');
+      '#757: the cited block is not the marked one and reaches the provider unmarked, citations and text intact');
     // And an UNCITED block in the same replayed history gains no citations key
     // — the fix must not start emitting the field where none arrived.
     const plain = flat.find((b) => b && b.type === 'text' && b.text !== 'The sky is blue.');
