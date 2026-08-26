@@ -20,16 +20,15 @@
 //     resolves to.
 //
 // Plus the guard that keeps host.js's delivery choice correct in-OS:
-//   HALF 3 — RemoteFS answers NONE of the fd-2 classifiers deliverTrapReport
-//     consults, so its console/absent branches cannot fire under the kernel and
-//     the write really is brokered. The classifier NAMES are derived from
-//     host.js itself (and that derivation is positive-controlled), because the
-//     first cut of this guard named one spelling and went stale the moment
-//     #759's own counter-pass renamed it.
+//   HALF 3 — RemoteFS defines neither 'fdSink' nor 'isConsoleFd', so
+//     deliverTrapReport's console/absent branches cannot fire under the kernel
+//     and the write really is brokered. 🔴 This is a LITERAL two-name check and
+//     is weaker than it looks: a rename to a third spelling leaves it green
+//     while protecting nothing. Deriving the names from host.js was tried and
+//     defeated six times; that work is #768. See the block comment at the leg.
 //
 // Run: node tests/kernel/test_trap_report_delivery.js
 'use strict';
-const fs = require('fs');
 const path = require('path');
 const K = require(path.resolve(__dirname, '../../kernel.js'));
 const HOST = require(path.resolve(__dirname, '../../host.js'));
@@ -122,173 +121,6 @@ function readWholeFile(p) {
   return new TextDecoder().decode(b);
 }
 
-// #759 HALF 3 oracle, v4 — NARROW ACCEPT SET, FAIL CLOSED.
-//
-// 🔴 WHY THE STRATEGY CHANGED, not just the pattern. This oracle was defeated
-// three times, each by a form nobody anticipated: a prefix match on a renamed
-// function; a stale comment plus a Reflect.get helper; and a bracket literal
-// with an embedded quote (`fs['-"fdSink"']`, whose real property name is
-// `-"fdSink"`, from which an unanchored regex happily lifted `fdSink`).
-//
-// The pattern IS the message. A regex scanner over JavaScript source has an
-// unbounded space of shapes that LOOK like a match and are not, and you cannot
-// enumerate your way out: each round widens the pattern, and the next reviewer
-// finds the next form. Widening again would just buy the next defeat.
-//
-// So v3 changes the requirement. The property this guard actually needs is NOT
-// "can read every form" — it is "NEVER GREEN ON A FORM I DID NOT READ". Those
-// are different requirements, and v1/v2 were building the harder one.
-//
-// v3 therefore accepts a DELIBERATELY TINY set and REFUSES everything else in
-// a property-access position:
-//     fs.NAME          fs?.NAME          fs['NAME']  /  fs["NAME"]
-// where NAME is a plain identifier and the bracket literal is validated
-// ANCHORED, END TO END, with a backreferenced quote — so a literal that is not
-// exactly a quoted identifier is refused rather than mined for a substring.
-// Template literals, concatenations, escapes, computed keys and anything else
-// in that position return ok:false.
-//
-// The cost of a false RED is one human minute. The cost of a false GREEN is a
-// guard that silently protects nothing — which has now happened three times.
-// That asymmetry is the whole argument.
-//
-// Raw source is read for exactly TWO purposes and BOTH are stated honestly:
-//   1. VERDICT-DECIDING: validating a bracket literal end to end. (v2's comment
-//      called this "non-deciding", which was simply wrong — the derived name
-//      comes from it — and that false reassurance is what let the eleventh
-//      shape through.)
-//   2. diagnostic-only: quoting context in an error message.
-function deriveDispatchClassifiers(hostSrc) {
-  const bad = (reason) => ({ ok: false, reason, names: [], sawWrite: false, bodyLen: 0 });
-  if (typeof hostSrc !== 'string' || !hostSrc.length) return bad('host.js unreadable or empty');
-
-  // ---- blank comments and string CONTENTS once, length-preserving, over the
-  // whole source. Offsets stay aligned with hostSrc, so a span accepted on the
-  // blanked text can be read back from the raw text at the same place.
-  const blankAll = (src) => {
-    const out = src.split(''); const n = src.length; let i = 0;
-    while (i < n) {
-      const c = src[i], d = src[i + 1];
-      if (c === '/' && d === '*') { const e = src.indexOf('*/', i + 2), stop = e < 0 ? n : e + 2;
-        for (let k = i; k < stop; k++) if (out[k] !== '\n') out[k] = ' '; i = stop; continue; }
-      if (c === '/' && d === '/') { let e = src.indexOf('\n', i); if (e < 0) e = n;
-        for (let k = i; k < e; k++) out[k] = ' '; i = e; continue; }
-      if (c === '"' || c === "'" || c === '`') { let k = i + 1;
-        while (k < n && src[k] !== c) { if (src[k] === '\\') k++; k++; }
-        for (let j = i + 1; j < Math.min(k, n); j++) if (out[j] !== '\n') out[j] = ' ';
-        i = Math.min(k + 1, n); continue; }
-      i++;
-    }
-    return out.join('');
-  };
-  const blanked = blankAll(hostSrc);
-
-  // ---- locate the declaration in the BLANKED text, exact name boundary.
-  const decl = /\bfunction\s+deliverTrapReport\s*\(/g;
-  const starts = [];
-  for (let m; (m = decl.exec(blanked)) !== null; ) starts.push(m.index);
-  if (starts.length === 0) return bad('no `function deliverTrapReport(` declaration found');
-  if (starts.length > 1) return bad('several `deliverTrapReport` declarations — "the body" is ambiguous');
-
-  // ---- brace-match in the BLANKED text, so no comment/string brace can move
-  // the boundary.
-  const open = blanked.indexOf('{', starts[0]);
-  if (open < 0) return bad('declaration found but no opening brace');
-  let depth = 0, end = -1;
-  for (let i = open; i < blanked.length; i++) {
-    const c = blanked[i];
-    if (c === '{') depth++;
-    else if (c === '}') { depth--; if (depth === 0) { end = i; break; } }
-  }
-  if (end < 0) return bad('unbalanced braces — body truncated or unparseable');
-  const code = blanked.slice(open, end + 1);
-  const raw = hostSrc.slice(open, end + 1);
-
-  // ---- THE NARROW ACCEPT SET. Walk every property-access position on `fs`
-  // and accept only the shapes below; anything else fails CLOSED.
-  const found = new Set();
-  const ID = '[A-Za-z_$][A-Za-z0-9_$]*';
-  for (let m, re = /\bfs\b/g; (m = re.exec(code)) !== null; ) {
-    const at = m.index;
-    const rest = code.slice(at + 2);
-    const lead = /^\s*(\?\.|\.|\[)/.exec(rest);
-    if (!lead) continue;                       // `fs &&`, `typeof fs`, `pick(fs, k)` — names nothing
-
-    // shape 1/2: fs.NAME and fs?.NAME.
-    //
-    // 🔴 Read the WHOLE JavaScript identifier (Unicode-aware), then refuse
-    // anything outside the accepted ASCII subset. v3 matched an ASCII ID with
-    // NO END BOUNDARY, so `fs.fdSink\u00e9` — real property `fdSink\u00e9` —
-    // yielded `fdSink` and went green: an ASCII PREFIX of a longer real name.
-    // That contradicted v3's own safety claim, in the fix written to satisfy
-    // it. Matching the full token first makes the refusal structural: there is
-    // no prefix to stop early at, because the pattern cannot stop early.
-    const dot = /^\s*\??\.\s*([\p{ID_Start}$_][\p{ID_Continue}$\u200C\u200D]*)/u.exec(rest);
-    if (dot) {
-      if (!new RegExp('^' + ID + '$').test(dot[1])) {
-        return bad('property name on `fs` is not a plain ASCII identifier ' +
-                   '(non-ASCII letter, zero-width joiner, or similar): ' + JSON.stringify(dot[1]));
-      }
-      found.add(dot[1]);
-      re.lastIndex = at + 2 + dot[0].length;
-      continue;
-    }
-
-    // shape 3: fs['NAME'] / fs["NAME"] — accepted on the blanked text only to
-    // find the SPAN, then VALIDATED ANCHORED END-TO-END on the raw text with a
-    // backreferenced quote. A literal that is not exactly a quoted identifier
-    // is REFUSED, never mined for an identifier-looking substring.
-    const brk = /^\s*\[\s*(['"])[^\n]*?\1\s*\]/.exec(rest);
-    if (brk) {
-      const span = raw.slice(at, at + 2 + brk[0].length);
-      const ok = new RegExp('^fs\\s*\\[\\s*([\'"])(' + ID + ')\\1\\s*\\]$').exec(span);
-      if (!ok) {
-        return bad('bracket access on `fs` whose literal is not exactly a quoted ' +
-                   'identifier (escape, embedded quote, concatenation, template…): ' + span);
-      }
-      found.add(ok[2]);
-      re.lastIndex = at + 2 + brk[0].length;
-      continue;
-    }
-
-    const ctx = raw.slice(Math.max(0, at - 45), at + 55).replace(/\s+/g, ' ');
-    return bad('property access on `fs` in a shape this oracle does not read — ' +
-               'refusing rather than guessing. near: …' + ctx + '…');
-  }
-
-  // ---- destructuring, also narrow. Match ANY object-pattern binding from
-  // `fs` — whatever the declarator, parenthesised or not — and then REFUSE
-  // anything that is not the one supported shape.
-  //
-  // 🔴 Refusing DIRECTLY is the point. v3 matched only `const {…} = fs`, so
-  // `let {…} = fs` and `const {…} = (fs)` were not matched AT ALL: they derived
-  // nothing and went red LATER, via the exact-count premise. A red that arrives
-  // by accident is half the property — the message named the wrong thing, and
-  // the next human could not act on it.
-  for (let m, re = /\b(const|let|var)\s*\{([^}]*)\}\s*=\s*(\(?)\s*fs\b/g; (m = re.exec(code)) !== null; ) {
-    const [, kw, inner, paren] = m;
-    if (kw !== 'const') {
-      return bad('destructuring from `fs` with `' + kw + '` is not a shape this oracle ' +
-                 'reads (only `const { … } = fs`): ' + m[0].trim());
-    }
-    if (paren) {
-      return bad('parenthesised destructuring source is not a shape this oracle reads ' +
-                 '(only `const { … } = fs`): ' + m[0].trim());
-    }
-    for (const part of inner.split(',')) {
-      const t = part.trim();
-      if (!t) continue;
-      const d2 = new RegExp('^(' + ID + ')(\\s*:\\s*' + ID + ')?$').exec(t);
-      if (!d2) return bad('destructuring from `fs` in a shape this oracle does not read: {' + inner.trim() + '}');
-      found.add(d2[1]);
-    }
-  }
-
-  const sawWrite = found.has('write');
-  found.delete('write');
-  return { ok: true, reason: null, names: [...found].sort(), sawWrite, bodyLen: code.length };
-}
-
 (async () => {
   console.log('#759 — trap-report delivery under the KERNEL (RemoteFS -> FS_WRITE) arrangement');
 
@@ -300,68 +132,45 @@ function deriveDispatchClassifiers(hostSrc) {
   // 'console', every in-OS trap report would silently reroute to the console;
   // if it answered 'absent', they would be silently DROPPED.
   //
-  // 🔴 THIS GUARD IS LOAD-BEARING ON A SYMBOL NAME, and the first cut of it
-  // went stale within the same ticket: #759's own counter-pass renamed
-  // isConsoleFd to fdSink, and the guard went on asserting the absence of a
-  // method that existed nowhere — passing while protecting nothing. An ABSENCE
-  // guard gets MORE true and less useful when its subject disappears, so it
-  // rots silently where a presence guard would break loudly.
+  // 🔴 READ THIS BEFORE TRUSTING THIS GUARD — IT IS WEAKER THAN IT LOOKS.
   //
-  // The oracle above derives the names FROM host.js so a rename cannot repeat
-  // that. It is positive-controlled below, because an oracle that can return
-  // "nothing found" makes "nothing wrong here" and "I looked nowhere" the same
-  // green.
-
-  // The classifier spellings the dispatch has EVER used. Historical entries
-  // stay: an absence guard gets MORE true and less useful when the thing it
-  // names disappears, so dropping one silently widens the hole.
-  const GUARDED = ['fdSink', 'isConsoleFd'];
-  // How many classifiers the CURRENT dispatch consults. A bare "non-empty"
-  // check cannot tell one classifier from three, and adding a second without
-  // updating this line should be a decision, not a default.
-  const EXPECTED_CLASSIFIERS = 1;
-
+  // This is a two-name literal check. It is LOAD-BEARING ON THE STRINGS
+  // 'fdSink' AND 'isConsoleFd' AND ON NOTHING ELSE. If deliverTrapReport is
+  // ever changed to consult a THIRD spelling, this leg stays GREEN while
+  // protecting nothing at all — the classifier it names would no longer be the
+  // classifier in use. It cannot detect that, and it will not tell you.
+  //
+  // That failure mode is not hypothetical: it already happened once in this
+  // ticket. #759's own counter-pass renamed isConsoleFd to fdSink, and the
+  // then-single-name guard went on asserting the absence of a method that
+  // existed nowhere, passing for a whole review cycle. An ABSENCE guard gets
+  // MORE true and less useful when its subject disappears, so it rots
+  // silently where a presence guard would break loudly.
+  //
+  // WHY IT IS THE NARROW CHECK ANYWAY. The obvious repair — derive the names
+  // from host.js's own dispatch — was built and defeated SIX TIMES, each by a
+  // JavaScript shape nobody anticipated (prefix-matched rename; stale comment
+  // plus a Reflect.get helper; a bracket literal with an embedded quote; an
+  // identifier prefix; an escaped code point in an identifier; assignment
+  // destructuring). A regex scanner over JS source has an unbounded space of
+  // shapes that LOOK like a match and are not. That work is now #768, to be
+  // done with a real parser — and #768 records that a written "not worth
+  // doing, the narrow check suffices" is a valid outcome there.
+  //
+  // So this guard is deliberately narrow and deliberately honest about it: a
+  // small guarantee stated plainly, rather than a broad one that keeps turning
+  // out false (todos/PRINCIPLES.md, honest shape). If you rename the
+  // classifier, UPDATE THE LIST BELOW — nothing will remind you.
   console.log('\nHALF 3. RemoteFS must not answer the fd-2 classifier at all');
-
-  let hostSrc = '';
-  try { hostSrc = fs.readFileSync(path.resolve(__dirname, '../../host.js'), 'utf8'); }
-  catch (e) { hostSrc = ''; }
-  const d = deriveDispatchClassifiers(hostSrc);
-
-  // -- the instrument, positive-controlled BEFORE anything is concluded from it
-  check('ORACLE: deliverTrapReport located and its body parsed',
-        d.ok === true, d.reason || '(ok)');
-  check('ORACLE POSITIVE CONTROL: the parse reached the fs.write delivery call',
-        d.ok === true && d.sawWrite === true,
-        d.ok ? 'landmark fs.write NOT found — the body was truncated or reshaped'
-             : 'skipped: parse already failed');
-  check('ORACLE POSITIVE CONTROL: it derived EXACTLY ' + EXPECTED_CLASSIFIERS +
-        ' classifier call(s), not "some"',
-        d.ok === true && d.names.length === EXPECTED_CLASSIFIERS,
-        d.ok ? 'derived ' + JSON.stringify(d.names) +
-               ' — an EMPTY set satisfies every claim below, so this guard would ' +
-               'pass while checking nothing. If the dispatch really changed, update ' +
-               'EXPECTED_CLASSIFIERS and GUARDED together.'
-             : 'skipped: parse already failed');
-
-  // -- only now, the thing the oracle exists to support
-  const unguarded = (d.names || []).filter((n) => !GUARDED.includes(n));
-  check('every classifier the dispatch consults is named in GUARDED',
-        d.ok === true && unguarded.length === 0,
-        'unguarded: ' + JSON.stringify(unguarded) +
-        ' — add them to GUARDED, or this tripwire protects nothing');
-
-  // -- the requirement itself. Null-safe: if RemoteFS itself went missing this
-  //    must report ONE red leg, not throw and take the other twenty checks
-  //    down with it.
+  const GUARDED = ['fdSink', 'isConsoleFd'];   // current + historical spellings
   const rfsProto = (K && K.RemoteFS && K.RemoteFS.prototype) || null;
   check('RemoteFS is exported and has a prototype (leg premise)', !!rfsProto);
   const rfsOwn = rfsProto ? Object.getOwnPropertyNames(rfsProto) : [];
-  for (const name of GUARDED.concat(unguarded)) {
+  for (const name of GUARDED) {
     check('RemoteFS defines NO `' + name + '`, so the write stays brokered',
           !!rfsProto && !rfsOwn.includes(name) && typeof rfsProto[name] !== 'function',
           'if RemoteFS answers ' + name + ', in-OS trap reports reroute to the ' +
-          'console (\'console\') or vanish (\'absent\')');
+          "console ('console') or vanish ('absent')");
   }
   check('RemoteFS does define write (so there IS a brokered path to take)',
         !!rfsProto && typeof rfsProto.write === 'function');
