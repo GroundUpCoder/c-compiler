@@ -1870,6 +1870,7 @@ typedef struct {
     cJSON *raw_usage;
     int  api_error; sb errmsg;
     int  hdr_shown, at_bol;         /* #302 append-only speaker/indent state */
+    int  overflow;                  /* #758: content blocks refused past MAX_BLOCKS */
     int  k_open;                    /* #738: a streamed thinking line is open */
 } stream_ctx;
 
@@ -1979,6 +1980,14 @@ static void dispatch_json(stream_ctx *ctx, const char *json) {
                 if (!b->raw || !cJSON_IsString(cbt)) b->lost = 1;
             }
             if (idx + 1 > ctx->nblocks) ctx->nblocks = idx + 1;
+        } else if (idx >= MAX_BLOCKS) {
+            /* #758: past the ceiling. The block is NOT captured and every
+             * delta addressed to it is ignored too, so the copy of this turn
+             * is provably incomplete — the same fact the '?' arm's `lost` flag
+             * records, arriving here by a different route. Counted now and
+             * reported once when the round closes: a turn that overran by
+             * thirty blocks is one diagnostic line, not thirty. */
+            ctx->overflow++;
         }
     } else if (!strcmp(type, "content_block_delta")) {
         int idx = (int)cJSON_GetObjectItem(e, "index")->valuedouble;
@@ -3435,6 +3444,20 @@ static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, us
     free(sess->last_stop); sess->last_stop = strdup(ctx.stop_reason ? ctx.stop_reason : "");
     fputc('\n', stdout);
 
+    /* #758: say so when the turn overran the block ceiling. A fixed ceiling
+     * is a legitimate engineering choice and this does not raise it — the
+     * measured worst case over 235 real rounds of the #678 Asteroids build is
+     * 4 blocks in a turn, 16x under it. What is not legitimate is truncating
+     * in silence: todos/PRINCIPLES.md names a loud documented failure as an
+     * honest option and silent partial data as not one, and this is the same
+     * class the '?' arm's loud drop closes. Reported once per round, naming
+     * the ceiling so a reader who hits it knows what to change. */
+    if (ctx.overflow)
+        fprintf(stderr, "%sgcode: dropped %d content block%s from this turn — the model "
+                        "sent more than MAX_BLOCKS (%d), so the replayed history of this "
+                        "turn is incomplete%s\n",
+                R_ERRB, ctx.overflow, ctx.overflow == 1 ? "" : "s", MAX_BLOCKS, CRST);
+
     /* build the assistant message from accumulated blocks */
     cJSON *acontent = cJSON_CreateArray();
     cJSON *tool_results = cJSON_CreateArray();   /* filled if any tool_use */
@@ -4650,6 +4673,97 @@ static int blocks_self_test(void) {
         /* Unchanged, signature included — the thinking block survives. */
         ok &= js && !strcmp(js, "{\"type\":\"thinking\",\"thinking\":\"hm\",\"signature\":\"SIG\"}");
         free(js); cJSON_Delete(rb);
+        for (int i = 0; i < MAX_BLOCKS; i++) {
+            sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
+            cJSON_Delete(c.blocks[i].raw); cJSON_Delete(c.blocks[i].cites);
+            free(c.blocks[i].id); free(c.blocks[i].name);
+        }
+        free(c.stop_reason); free(c.message_id); free(c.response_model);
+        cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
+    }
+
+    /* Leg 9 — #758: a turn that overruns MAX_BLOCKS is COUNTED, so the
+     * truncation can be reported instead of happening in silence.
+     *
+     * Reachability was measured before this leg was written, because the
+     * ticket asked for that first: across the 235 real API rounds of the #678
+     * round-2 Asteroids build (deepseek-v4-flash, extracted from gucOS as Pass
+     * B evidence) the worst turn held FOUR content blocks — p50 3, p99 4, and
+     * not one turn at or above 64. The ceiling is 16x the observed maximum, so
+     * it is NOT raised here. What this pins is the other half: that overrunning
+     * it says so. The measurement bounds the ceiling; it does not license
+     * silence, which todos/PRINCIPLES.md rules out independently of harm.
+     *
+     * RED CONTROL: unlike the #757 legs, this one cannot go red against the
+     * unfixed reader by construction — the defect IS the absence of any
+     * observable, so an assertion at the requirement's altitude has to name
+     * state the fix introduces. Its red control is therefore a mutation:
+     * removing the `ctx->overflow++` increment turns this leg red. */
+    {
+        const char *fx =
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"first\"}}\n\n"
+            /* index 64 is the 65th block — the first one past the ceiling. */
+            "data: {\"type\":\"content_block_start\",\"index\":64,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":64,\"delta\":{\"type\":\"text_delta\",\"text\":\"lost\"}}\n\n"
+            "data: {\"type\":\"content_block_start\",\"index\":65,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_x\",\"name\":\"bash\"}}\n\n";
+        stream_ctx c; memset(&c, 0, sizeof c);
+        write_cb((char *)fx, 1, strlen(fx), &c);
+        /* Two starts were refused, and both were counted. */
+        ok &= c.overflow == 2;
+        /* The ceiling still holds: nothing was captured past it, and nblocks
+         * never grows beyond MAX_BLOCKS (an out-of-range index must not widen
+         * the loop bound that later walks the array). */
+        ok &= c.nblocks == 1;
+        /* The blocks that DID fit are unharmed — this is a report, not a
+         * behaviour change to the captured prefix. */
+        ok &= c.blocks[0].type == 't' && c.blocks[0].text.p
+              && !strcmp(c.blocks[0].text.p, "first");
+        for (int i = 0; i < MAX_BLOCKS; i++) {
+            sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
+            cJSON_Delete(c.blocks[i].raw); cJSON_Delete(c.blocks[i].cites);
+            free(c.blocks[i].id); free(c.blocks[i].name);
+        }
+        free(c.stop_reason); free(c.message_id); free(c.response_model);
+        cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
+    }
+
+    /* Leg 9b — the ceiling's own boundary, so leg 9 cannot pass by an
+     * off-by-one: index 63 is the LAST block that fits and must be captured
+     * normally, contributing nothing to the overflow count. */
+    {
+        const char *fx =
+            "data: {\"type\":\"content_block_start\",\"index\":63,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":63,\"delta\":{\"type\":\"text_delta\",\"text\":\"edge\"}}\n\n";
+        stream_ctx c; memset(&c, 0, sizeof c);
+        write_cb((char *)fx, 1, strlen(fx), &c);
+        ok &= c.overflow == 0;
+        ok &= c.nblocks == MAX_BLOCKS && c.blocks[63].type == 't';
+        ok &= c.blocks[63].text.p && !strcmp(c.blocks[63].text.p, "edge");
+        for (int i = 0; i < MAX_BLOCKS; i++) {
+            sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
+            cJSON_Delete(c.blocks[i].raw); cJSON_Delete(c.blocks[i].cites);
+            free(c.blocks[i].id); free(c.blocks[i].name);
+        }
+        free(c.stop_reason); free(c.message_id); free(c.response_model);
+        cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
+    }
+
+    /* Leg 9c — the overflow count means what it says. A start event that is
+     * refused for a DIFFERENT reason (an in-range index carrying no
+     * `content_block` object — a malformed event, not an overrun) must not be
+     * counted as an overrun, or the diagnostic sends its reader to look at a
+     * ceiling that was never reached. */
+    {
+        const char *fx =
+            "data: {\"type\":\"content_block_start\",\"index\":0}\n\n"
+            "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n";
+        stream_ctx c; memset(&c, 0, sizeof c);
+        write_cb((char *)fx, 1, strlen(fx), &c);
+        ok &= c.overflow == 0;                    /* nothing overran anything */
+        ok &= c.blocks[1].type == 't' && c.blocks[1].text.p
+              && !strcmp(c.blocks[1].text.p, "ok");
         for (int i = 0; i < MAX_BLOCKS; i++) {
             sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
             cJSON_Delete(c.blocks[i].raw); cJSON_Delete(c.blocks[i].cites);
