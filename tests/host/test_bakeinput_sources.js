@@ -81,6 +81,11 @@ const DOC_MD = w('os/doc/guide.md', '# guide\n');
 const EXT_MD = w('ext/lib/README.md', '# patch table\n');   // the vendor-README shape
 const OUT_IMG = w('os/os-system.img', 'IMG\n');
 const OUT_TMP = w('os/os-system.img.tmp-123', 'TMP\n');
+// #739 fixtures: boot.js's runtime sidecars beside a default in-repo image
+// pair — the single-instance pair lock (todos/0293) and the fixture-install
+// temp (#576 A3). Both land INSIDE the os/ walk on a default boot.
+const OUT_LOCK = w('os/os-root.img.lock', '{"pid":1}\n');
+const OUT_INST = w('os/os-system.img.installing', 'HALF\n');
 
 const MANIFEST = { version: 1, system: { files: {
   '/bin/myapp': { project: 'os/myapp/bin.json' },
@@ -162,6 +167,64 @@ check('*.img.tmp-<pid> stays excluded (mkimage atomic-rename temp)', () => {
   const r = newestFor(OUT_TMP);
   assert.notStrictEqual(r.path, OUT_TMP,
     'a temp left by a killed bake must not read as an ever-newer input');
+});
+
+/* ---- #739: boot.js's runtime sidecars are OUTPUTS, not inputs ----------
+ * A default in-repo boot creates os/os-root.img.lock (todos/0293) BEFORE
+ * the staleness scan runs, so counting it as an input made the reuse path
+ * structurally dead: every `node os/boot.js` re-baked the whole image
+ * (measured 3m30s vs 6s). The install temp (#576 A3, <image>.img.installing)
+ * is the same class — and since the in-walk boot leg in test_os_boot.js it
+ * also appears TRANSIENTLY inside os/ under the suite, where a concurrent
+ * scan could see it. Both legs FAIL on the pre-#739 os-common.js. */
+
+check('*.img.lock stays excluded (boot pair lock — #739 red control)', () => {
+  const r = newestFor(OUT_LOCK);
+  assert.notStrictEqual(r.path, OUT_LOCK,
+    'boot.js writes the pair lock with mtime=now on EVERY run, before the ' +
+    'scan — counting it makes the blob perpetually input-stale and the ' +
+    'reuse/install path unreachable on a default in-repo boot');
+});
+
+check('*.img.installing stays excluded (fixture-install temp, #739)', () => {
+  const r = newestFor(OUT_INST);
+  assert.notStrictEqual(r.path, OUT_INST,
+    'an install temp left by a killed boot — or seen transiently by a ' +
+    'concurrent scan — must not read as an ever-newer input');
+});
+
+check('an excluded lock does not blind the scan to a newer source (#739)', () => {
+  // Both the lock and a real source postdate everything else; the source is
+  // the older of the two. The verdict must be the SOURCE — exclusion means
+  // "not an input", never "stop looking".
+  ageAll(tmp);
+  const t = Date.now() + 5000;
+  fs.utimesSync(EXT_C, t / 1000, t / 1000);
+  fs.utimesSync(OUT_LOCK, (t + 5000) / 1000, (t + 5000) / 1000);
+  const r = COMMON.newestBakeInput(fs, path, tmp, MANIFEST);
+  assert.strictEqual(r.path, EXT_C,
+    'with the lock excluded the touched source must still restale the blob, got ' + r.path);
+});
+
+check('boot.js sidecar names stay inside the excluded family (#739 drift pin)', () => {
+  // boot.js derives its sidecar paths through these helpers; the walks
+  // exclude by isBakeOutputName. If either side drifts (a renamed suffix,
+  // a new sidecar bypassing the family), this leg goes red before the
+  // perpetual-self-stale defect can return.
+  assert.strictEqual(typeof COMMON.isBakeOutputName, 'function',
+    'os-common must export isBakeOutputName');
+  for (const p of [COMMON.imageLockPath('os-root.img'),
+                   COMMON.imageInstallTmpPath('os-system.img'),
+                   COMMON.imageBakeTmpPath('os-system.img', 42)]) {
+    assert.ok(COMMON.isBakeOutputName(path.basename(p)),
+      p + ' is a runtime/output sidecar but the walks would count it as a bake input');
+  }
+  // ...and the exclusion stays anchored to the .img stem: a genuine future
+  // source file named *.lock must remain an input (the ticket's rule — an
+  // exclusion that can hide a real input is worse than a slow re-bake).
+  assert.ok(!COMMON.isBakeOutputName('flock.lock'),
+    'a bare *.lock name must NOT be excluded — only image-path sidecars are outputs');
+  assert.ok(!COMMON.isBakeOutputName('installing'), 'substring must not match');
 });
 
 /* ---- leg A2: sibling definition sources (#614) --------------------------
@@ -357,6 +420,8 @@ const P_STRAY = w2('elsewhere/nothing.c', 'int nothing2;\n');   // referenced by
 const P_PROJ_MD = w2('vendor/myproj/README.md', '# patch table\n');
 const P_OUT_IMG = w2('vendor/myproj/stale.img', 'IMG\n');
 const P_OUT_TMP = w2('vendor/myproj/stale.img.tmp-42', 'TMP\n');
+const P_OUT_LOCK = w2('vendor/myproj/stale-root.img.lock', '{"pid":1}\n');
+const P_OUT_INST = w2('vendor/myproj/stale.img.installing', 'HALF\n');
 
 const PKG = {
   name: 'mypkg', version: '1.0',
@@ -415,6 +480,21 @@ check('pkg: *.img.tmp-<pid> stays excluded (#634 — mkimage temp on the same wa
   assert.notStrictEqual(r.path, P_OUT_TMP,
     'a temp left in os/ by a killed bake must not read as an ever-newer ' +
     'package input — same output-as-input class as *.img');
+});
+
+check('pkg: *.img.lock stays excluded (#739 — boot pair lock on the same walk)', () => {
+  // demos.json's os-root project walks os/ itself, where a default boot's
+  // pair lock lives — counting it would perpetually restale that package
+  // (the newestBakeInput defect, duplicated in this walk).
+  const r = pkgNewestFor(P_OUT_LOCK);
+  assert.notStrictEqual(r.path, P_OUT_LOCK,
+    'a boot lockfile must not read as an ever-newer package input');
+});
+
+check('pkg: *.img.installing stays excluded (#739 — install temp on the same walk)', () => {
+  const r = pkgNewestFor(P_OUT_INST);
+  assert.notStrictEqual(r.path, P_OUT_INST,
+    'an install temp must not read as an ever-newer package input');
 });
 
 check('pkg: the os/ tree at large is NOT an input (narrow scope)', () => {

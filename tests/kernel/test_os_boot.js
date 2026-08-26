@@ -639,6 +639,39 @@ check('installed blob reuses cleanly', r.status === 0 &&
   !r.stderr.includes('installing prebaked') && !r.stderr.includes('baking system image'),
   String(r.status) + ' ' + r.stderr.slice(0, 400));
 
+// ---- #739: an IN-WALK image pair must not self-stale on its own lock ----
+// Every pair above lives in mkdtemp, so boot.js's sidecar lock
+// (imageLockPath: <root>.img.lock, todos/0293) lands OUTSIDE
+// newestBakeInput's os/ walk — which is why the estate never saw the
+// defect: a DEFAULT in-repo boot creates os/os-root.img.lock BEFORE the
+// staleness scan, the scan counted it as an ever-newer bake input, and the
+// reuse/install path was structurally unreachable (every `node os/boot.js`
+// re-baked: 3m30s vs 6s). This pair lives in the tree's os/ dir like the
+// default pair (the name matches the existing os/os-system.*.img gitignore
+// family), so the boot's own lock sits inside the walk. The fixture is
+// this test's own fresh bake, so the only file that can postdate it is
+// the lock itself: the verdict must be an install, and no verdict may
+// blame a lockfile. Runs BEFORE the aging legs — the fixture must still
+// be input-fresh here.
+const image3 = path.join(ROOT, 'os', 'os-system.t739-' + process.pid + '.img');
+try {
+  r = runBudgeted('in-walk pair boot [#739]',
+    [BOOT, '--image=' + image3, '--fixture=' + image],
+    { input: 'exit\n', encoding: 'utf8' });
+  check('in-walk pair installs the fixture (#739: own lock is not a bake input)',
+    r.status === 0 && r.stderr.includes('installing prebaked system image'),
+    String(r.status) + ' ' + r.stderr.slice(0, 400));
+  check('no staleness verdict blames a boot lockfile (#739)',
+    !/\.img\.lock is newer/.test(r.stderr), r.stderr.slice(0, 400));
+} finally {
+  // The pair, its lock, and a possible half-install temp all share the
+  // prefix; sweep them whatever state the boot died in.
+  for (const f of fs.readdirSync(path.join(ROOT, 'os'))) {
+    if (f.startsWith('os-system.t739-' + process.pid))
+      fs.rmSync(path.join(ROOT, 'os', f), { force: true });
+  }
+}
+
 // Input-stale private blob: aged below every bake input -> the next boot
 // re-materializes (the fixture is still fresh -> installed again).
 fs.utimesSync(image2, new Date(0), new Date(0));
