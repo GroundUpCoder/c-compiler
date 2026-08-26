@@ -2080,7 +2080,147 @@ async function main() {
     fs.rmSync(tmp747, { recursive: true, force: true });
   }
 
-  // ---- test 18 (#765): an unplaceable content-block event is LOUD --------
+  // ---- test 18 (#757): citations survive onto the WIRE ------------------
+  // The self-test already pins block_replay_json's output. What it cannot
+  // reach is everything after write_cb: block assembly in do_turn, the
+  // assistant message going into history, and the #747 cache breakpoint,
+  // which mutates the last content block of the last message — the same kind
+  // of object a cited text block is. "cJSON takes both keys" was reasoning,
+  // not measurement. This leg measures it, on the round-2 request body, which
+  // is the same instrument the #738 legs use for the same class of claim.
+  {
+    const CITE = { type: 'char_location', cited_text: 'the sky is blue',
+                   document_index: 0, document_title: 'Colours',
+                   start_char_index: 10, end_char_index: 25 };
+    // A cited text block, then a tool_use so the turn takes a SECOND round —
+    // the replayed history is only observable because round 2 happens.
+    const cited =
+      sse('message_start', { message: { id: 'msg_cite', role: 'assistant', content: [] } })
+      + sse('content_block_start', { index: 0, content_block: { type: 'text', text: '' } })
+      + sse('content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'The sky is blue.' } })
+      + sse('content_block_delta', { index: 0, delta: { type: 'citations_delta', citation: CITE } })
+      + sse('content_block_stop', { index: 0 })
+      + sse('content_block_start', { index: 1, content_block: { type: 'tool_use', id: 'toolu_cite', name: 'read_file', input: {} } })
+      + sse('content_block_delta', { index: 1, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ path: 'nope.txt' }) } })
+      + sse('content_block_stop', { index: 1 })
+      + sse('message_delta', { delta: { stop_reason: 'tool_use' } })
+      + sse('message_stop', {});
+
+    const srv = await startStrictServer([cited, textResponse('cited turn done.')]);
+    const { stdout } = await runCodeBoth(srv.url,
+      ['-p', 'cite something', '--no-color', '--no-persist']);
+    srv.close();
+
+    check(stdout.includes('cited turn done.'),
+      '#757: a turn carrying citations completes end to end');
+    const flat = (srv.bodies[1] ? srv.bodies[1].messages : [])
+      .flatMap((m) => Array.isArray(m.content) ? m.content : []);
+    const cb = flat.find((b) => b && b.type === 'text' && b.text === 'The sky is blue.');
+    check(!!cb, '#757: the cited text block reaches the replayed history');
+    // The metadata is on the wire, not merely in the mapping.
+    check(!!cb && Array.isArray(cb.citations) && cb.citations.length === 1,
+      '#757: the replayed text block carries its citations array');
+    // Verbatim and whole: a location union this build does not parse must
+    // round-trip key-for-key, or the next location kind is this bug again.
+    // Null-safe on purpose: if the citations array is missing, this leg must
+    // FAIL and let the rest of the suite run, not throw and abort it — a red
+    // that destroys the remaining coverage is a bad diagnostic (todos test-sync
+    // discipline: make the failure point at its cause).
+    check(!!cb && Array.isArray(cb.citations) && cb.citations.length === 1
+          && JSON.stringify(cb.citations[0]) === JSON.stringify(CITE),
+      '#757: the citation round-trips verbatim, every field intact');
+    // The named collision: whatever the #747 breakpoint did to this message,
+    // it did not disturb the citations. Asserted without predicting WHERE the
+    // breakpoint lands, so the leg stays true if that placement changes.
+    check(!!cb && cb.text === 'The sky is blue.' && Array.isArray(cb.citations),
+      '#757: citations and the #747 cache breakpoint coexist on one message');
+    // And an UNCITED block in the same replayed history gains no citations key
+    // — the fix must not start emitting the field where none arrived.
+    const plain = flat.find((b) => b && b.type === 'text' && b.text !== 'The sky is blue.');
+    check(!plain || !('citations' in plain),
+      '#757: an uncited text block gains no citations key on the wire');
+  }
+
+  // ---- test 19 (#758): the block-ceiling overrun is actually LOUD --------
+  // The self-test pins ctx.overflow — the COUNTER, which is the mechanism.
+  // The requirement is the stderr line emitted from do_turn, and no self-test
+  // leg reaches do_turn: they drive write_cb directly. Verified by mutation
+  // before this leg was written — short-circuiting the report to `if (0 &&
+  // ctx.overflow)` left BOTH suites green, so the whole deliverable could be
+  // deleted without a red. This leg is what closes that.
+  //
+  // The stream is CONTIGUOUS 0..65 rather than a sparse index, so it overruns
+  // the ceiling the way a real provider would, and it ends in tool_use with
+  // the tool_use INSIDE the ceiling (index 63, the last slot that fits). That
+  // second round is not decoration: it is the only way to observe the property
+  // #758 actually rests on — that reporting the overrun did not disturb what
+  // was captured, i.e. the captured prefix reaches the next request unchanged.
+  {
+    const N_FIT = 64, N_OVER = 2;          // 0..62 text, 63 tool_use, 64..65 refused
+    const LAST_TEXT = N_FIT - 2;           // index 62
+    let over = sse('message_start', { message: { id: 'msg_over', role: 'assistant', content: [] } });
+    for (let i = 0; i <= LAST_TEXT; i++) {
+      over += sse('content_block_start', { index: i, content_block: { type: 'text', text: '' } })
+        + sse('content_block_delta', { index: i, delta: { type: 'text_delta', text: `b${i}. ` } })
+        + sse('content_block_stop', { index: i });
+    }
+    over += sse('content_block_start', { index: N_FIT - 1, content_block: { type: 'tool_use', id: 'toolu_over', name: 'read_file', input: {} } })
+      + sse('content_block_delta', { index: N_FIT - 1, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ path: 'nope.txt' }) } })
+      + sse('content_block_stop', { index: N_FIT - 1 });
+    for (let i = N_FIT; i < N_FIT + N_OVER; i++) {
+      over += sse('content_block_start', { index: i, content_block: { type: 'text', text: '' } })
+        + sse('content_block_delta', { index: i, delta: { type: 'text_delta', text: `b${i}. ` } })
+        + sse('content_block_stop', { index: i });
+    }
+    over += sse('message_delta', { delta: { stop_reason: 'tool_use' } }) + sse('message_stop', {});
+
+    const srv = await startStrictServer([over, textResponse('overrun turn done.')]);
+    const { stdout, stderr } = await runCodeBoth(srv.url,
+      ['-p', 'overrun the ceiling', '--no-color', '--no-persist']);
+    srv.close();
+
+    // The turn is not killed by the overrun — this is a report, not a failure.
+    check(stdout.includes('overrun turn done.'),
+      '#758: a turn that overruns the ceiling still completes end to end');
+    check(stdout.includes('b0.') && stdout.includes(`b${LAST_TEXT}.`),
+      '#758: every block that FITS is still streamed (b0..b62)');
+    // The requirement itself: the truncation says so, on stderr, from the real
+    // binary. This is the assertion the self-test cannot make.
+    check(/dropped 2 content blocks/.test(stderr),
+      '#758: the overrun is REPORTED on stderr, with the count');
+    check(stderr.includes('MAX_BLOCKS'),
+      '#758: the report names MAX_BLOCKS, so a reader knows what to change');
+    // Reported ONCE per round, not once per refused block — a turn that
+    // overran by thirty must not print thirty lines. Round 2 has its own fresh
+    // context and must not re-report a previous round's overrun either.
+    check((stderr.match(/dropped \d+ content block/g) || []).length === 1,
+      '#758: reported once per round, not once per refused block');
+
+    // ---- the property #758 rests on: capture is UNDISTURBED ---------------
+    // Codex's must-fix clause. Reporting the overrun must not cost, reorder,
+    // or corrupt a single block that DID fit: the captured prefix has to reach
+    // the next request exactly as it was captured.
+    const asst = (srv.bodies[1] ? srv.bodies[1].messages : [])
+      .filter((m) => m.role === 'assistant')
+      .flatMap((m) => Array.isArray(m.content) ? m.content : []);
+    const texts = asst.filter((b) => b && b.type === 'text').map((b) => b.text);
+    check(texts.length === LAST_TEXT + 1,
+      `#758: all 63 captured text blocks survive into the next request (${texts.length})`);
+    check(texts[0] === 'b0. ' && texts[texts.length - 1] === `b${LAST_TEXT}. `,
+      '#758: the captured prefix survives IN ORDER, first and last intact');
+    check(texts.every((t, i) => t === `b${i}. `),
+      '#758: every captured block survives unchanged — none dropped or reordered');
+    check(asst.some((b) => b && b.type === 'tool_use' && b.id === 'toolu_over'),
+      '#758: the tool_use in the last slot that fits survives too');
+    // And the refused blocks are genuinely gone — the report describes a real
+    // loss rather than papering over a silent save.
+    check(!texts.includes(`b${N_FIT}. `) && !texts.includes(`b${N_FIT + 1}. `),
+      '#758: the refused blocks are absent from the replayed history, not silently kept');
+    check(!stdout.includes(`b${N_FIT}.`) && !stdout.includes(`b${N_FIT + 1}.`),
+      '#758: the refused blocks were never streamed either');
+  }
+
+  // ---- test 20 (#765): an unplaceable content-block event is LOUD --------
   // The self-test legs pin ctx.unplaceable — the COUNTER, which is the
   // mechanism. The requirement is that the loss is reported, and that report
   // is emitted from do_turn, which no self-test leg reaches (they drive
