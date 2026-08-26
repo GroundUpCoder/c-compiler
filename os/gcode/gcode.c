@@ -1841,7 +1841,7 @@ static void session_end(session *s, const char *reason) {
  * block carrying a real signature is the normal case, not a degenerate one.
  *
  * `type` is the block kind:
- *   't'  text                — `text` holds the body
+ *   't'  text                — `text` holds the body, `cites` its citations
  *   'u'  tool_use            — `id`/`name` + `json` holds partial input JSON
  *   'k'  thinking            — `text` holds the thinking, `sig` the signature
  *   'r'  redacted_thinking   — `text` holds the opaque `data` payload
@@ -1856,6 +1856,7 @@ typedef struct {
     int active; char type;          /* 't'ext 'u'se thin'k'ing 'r'edacted '?'unknown */
     char *id, *name; sb text; sb json;
     sb   sig;                       /* 'k': signature_delta accumulation */
+    cJSON *cites;                   /* #757: 't': accumulated `citations` array */
     cJSON *raw;                     /* '?': the verbatim content_block */
     int  lost;                      /* '?': an uninterpretable delta arrived */
 } cblock;
@@ -1967,6 +1968,12 @@ static void dispatch_json(stream_ctx *ctx, const char *json) {
                 fprintf(stderr, "  %s\xe2\x97\x8f %s%s\n", R_TOOL, b->name ? b->name : "?", CRST);
             } else if (!strcmp(btype, "text")) {
                 b->type = 't';
+                /* #757: as with `thinking` above, a provider that answers in
+                 * one shot can put the whole `citations` array on the START
+                 * object rather than streaming citations_delta, so read both. */
+                cJSON *ci = cJSON_GetObjectItem(cb, "citations");
+                if (cJSON_IsArray(ci) && cJSON_GetArraySize(ci) > 0)
+                    b->cites = cJSON_Duplicate(ci, 1);
             } else if (!strcmp(btype, "thinking")) {
                 /* #738: its own kind, never text. A provider that answers in
                  * one shot can also put `thinking`/`signature` on the START
@@ -2051,6 +2058,33 @@ static void dispatch_json(stream_ctx *ctx, const char *json) {
                     fprintf(stderr, "%s%s%s", CDIM, th->valuestring, CRST);
                     fflush(stderr);
                     ctx->k_open = 1;      /* the line is mid-thinking */
+                }
+            } else if (!strcmp(dtype, "citations_delta")) {
+                /* #757: the delta gcode never read. Citations ride a TEXT
+                 * block as an array built one entry per delta, so ignoring it
+                 * left the block's prose intact and its metadata gone — a
+                 * partial block replayed as whole, which is the #738 shape in
+                 * its narrowest form. Accumulated VERBATIM: a citation is
+                 * provider data whose location shape this build deliberately
+                 * does not parse (char_location / page_location /
+                 * content_block_location, and whatever comes next), so copying
+                 * it whole is what keeps the next location kind from being
+                 * this same bug.
+                 *
+                 * A citation cannot ride a block kind that does not carry one,
+                 * and that is NOT a reason to drop the block: dropping a text
+                 * block to save its metadata deletes the model's actual prose,
+                 * the strictly worse harm. Report it and replay what we have. */
+                cJSON *ct = cJSON_GetObjectItem(d, "citation");
+                if (ct) {
+                    if (b->type == 't') {
+                        if (!b->cites) b->cites = cJSON_CreateArray();
+                        cJSON_AddItemToArray(b->cites, cJSON_Duplicate(ct, 1));
+                    } else {
+                        fprintf(stderr, "%sgcode: dropped a citation from a `%c` content block "
+                                        "— citations ride text blocks, so this build has nowhere "
+                                        "faithful to replay it%s\n", R_ERRB, b->type, CRST);
+                    }
                 }
             } else if (!strcmp(dtype, "signature_delta")) {
                 /* The signature is the part the API validates on replay. It
@@ -2242,6 +2276,13 @@ static cJSON *block_replay_json(cblock *b) {
         cJSON *tb = cJSON_CreateObject();
         cJSON_AddStringToObject(tb, "type", "text");
         cJSON_AddStringToObject(tb, "text", b->text.p);
+        /* #757: replay the citations the model produced. Emitted only when
+         * some arrived, so an uncited turn's request bytes do not move —
+         * `citations` is absent, never present-and-empty. */
+        if (b->cites && cJSON_GetArraySize(b->cites) > 0) {
+            cJSON_AddItemToObject(tb, "citations", b->cites);
+            b->cites = NULL;                     /* the caller owns it now */
+        }
         return tb;
     } else if (b->type == 'k') {
         /* #738: replay UNCHANGED, signature included. The contract is
@@ -3673,6 +3714,9 @@ done:
         /* #738: `raw` is NULLed when the replay array adopted it, so this
          * frees only the copies that were dropped or never used. */
         sb_free(&ctx.blocks[i].sig); cJSON_Delete(ctx.blocks[i].raw);
+        /* #757: NULLed when the replayed text block adopted it, exactly as
+         * `raw` is — so this frees only the arrays that were never used. */
+        cJSON_Delete(ctx.blocks[i].cites);
     }
     free(ctx.stop_reason); free(ctx.message_id); free(ctx.response_model); cJSON_Delete(ctx.raw_usage);
     sb_free(&ctx.accum); sb_free(&ctx.raw); sb_free(&ctx.errmsg);
@@ -4355,7 +4399,8 @@ static int blocks_self_test(void) {
         free(js); cJSON_Delete(rb);
         for (int i = 0; i < MAX_BLOCKS; i++) {
             sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
-            cJSON_Delete(c.blocks[i].raw); free(c.blocks[i].id); free(c.blocks[i].name);
+            cJSON_Delete(c.blocks[i].raw); cJSON_Delete(c.blocks[i].cites);
+            free(c.blocks[i].id); free(c.blocks[i].name);
         }
         free(c.stop_reason); free(c.message_id); free(c.response_model);
         cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
@@ -4401,7 +4446,8 @@ static int blocks_self_test(void) {
         free(js); cJSON_Delete(rb);
         for (int i = 0; i < MAX_BLOCKS; i++) {
             sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
-            cJSON_Delete(c.blocks[i].raw); free(c.blocks[i].id); free(c.blocks[i].name);
+            cJSON_Delete(c.blocks[i].raw); cJSON_Delete(c.blocks[i].cites);
+            free(c.blocks[i].id); free(c.blocks[i].name);
         }
         free(c.stop_reason); free(c.message_id); free(c.response_model);
         cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
@@ -4425,7 +4471,8 @@ static int blocks_self_test(void) {
         free(js); cJSON_Delete(rb);
         for (int i = 0; i < MAX_BLOCKS; i++) {
             sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
-            cJSON_Delete(c.blocks[i].raw); free(c.blocks[i].id); free(c.blocks[i].name);
+            cJSON_Delete(c.blocks[i].raw); cJSON_Delete(c.blocks[i].cites);
+            free(c.blocks[i].id); free(c.blocks[i].name);
         }
         free(c.stop_reason); free(c.message_id); free(c.response_model);
         cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
@@ -4467,7 +4514,8 @@ static int blocks_self_test(void) {
         ok &= block_replay_json(&c.blocks[0]) == NULL;   /* so it is dropped, loudly */
         for (int i = 0; i < MAX_BLOCKS; i++) {
             sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
-            cJSON_Delete(c.blocks[i].raw); free(c.blocks[i].id); free(c.blocks[i].name);
+            cJSON_Delete(c.blocks[i].raw); cJSON_Delete(c.blocks[i].cites);
+            free(c.blocks[i].id); free(c.blocks[i].name);
         }
         free(c.stop_reason); free(c.message_id); free(c.response_model);
         cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
@@ -4485,7 +4533,8 @@ static int blocks_self_test(void) {
         ok &= block_replay_json(&c.blocks[0]) == NULL;
         for (int i = 0; i < MAX_BLOCKS; i++) {
             sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
-            cJSON_Delete(c.blocks[i].raw); free(c.blocks[i].id); free(c.blocks[i].name);
+            cJSON_Delete(c.blocks[i].raw); cJSON_Delete(c.blocks[i].cites);
+            free(c.blocks[i].id); free(c.blocks[i].name);
         }
         free(c.stop_reason); free(c.message_id); free(c.response_model);
         cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
@@ -4507,7 +4556,145 @@ static int blocks_self_test(void) {
         ok &= c.k_open == 0;                      /* and closed when it ends */
         for (int i = 0; i < MAX_BLOCKS; i++) {
             sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
-            cJSON_Delete(c.blocks[i].raw); free(c.blocks[i].id); free(c.blocks[i].name);
+            cJSON_Delete(c.blocks[i].raw); cJSON_Delete(c.blocks[i].cites);
+            free(c.blocks[i].id); free(c.blocks[i].name);
+        }
+        free(c.stop_reason); free(c.message_id); free(c.response_model);
+        cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
+    }
+
+    /* Leg 8 — #757: a TEXT block that also carries citations. `citations_delta`
+     * is a real Messages API delta: with citations enabled on a document, the
+     * response splits into text blocks and a cited block accumulates a
+     * `citations` ARRAY, one entry per delta. gcode modelled none of it — the
+     * delta matched no arm in the chain and fell off the end, so the metadata
+     * was dropped and the block replayed as a bare text block.
+     *
+     * That is the #738 pattern again — a partially-captured block replayed as
+     * though whole — and the narrow instance #757 was filed for. The block is
+     * NOT dropped: dropping a text block to save its metadata would delete the
+     * model's actual prose, a strictly worse harm. It is completed instead,
+     * which is also the contract-exact shape (`citations` is a documented
+     * optional field on a text content block).
+     *
+     * The assertion sits on block_replay_json's OUTPUT — the thing the
+     * requirement is about — so it goes RED against the unfixed reader without
+     * depending on any field the fix introduces. */
+    {
+        const char *fx =
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"The sky is blue.\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"citations_delta\",\"delta\":{\"type\":\"citations_delta\"},\"citation\":{\"type\":\"char_location\",\"cited_text\":\"the sky is blue\",\"document_index\":0,\"document_title\":\"Colours\",\"start_char_index\":10,\"end_char_index\":25}}}\n\n"
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n";
+        stream_ctx c; memset(&c, 0, sizeof c);
+        write_cb((char *)fx, 1, strlen(fx), &c);
+        ok &= c.nblocks == 1 && c.blocks[0].type == 't';
+        /* The prose is unaffected — this is metadata loss, not text loss. */
+        ok &= c.blocks[0].text.p && !strcmp(c.blocks[0].text.p, "The sky is blue.");
+        /* The requirement: the replayed block carries the citation the model
+         * produced, verbatim and in order. */
+        cJSON *rb = block_replay_json(&c.blocks[0]);
+        char *js = rb ? cJSON_PrintUnformatted(rb) : NULL;
+        ok &= js && !strcmp(js,
+            "{\"type\":\"text\",\"text\":\"The sky is blue.\","
+            "\"citations\":[{\"type\":\"char_location\",\"cited_text\":\"the sky is blue\","
+            "\"document_index\":0,\"document_title\":\"Colours\","
+            "\"start_char_index\":10,\"end_char_index\":25}]}");
+        free(js); cJSON_Delete(rb);
+        for (int i = 0; i < MAX_BLOCKS; i++) {
+            sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
+            cJSON_Delete(c.blocks[i].raw); cJSON_Delete(c.blocks[i].cites);
+            free(c.blocks[i].id); free(c.blocks[i].name);
+        }
+        free(c.stop_reason); free(c.message_id); free(c.response_model);
+        cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
+    }
+
+    /* Leg 8b — #757: SEVERAL citations on one block accumulate in arrival
+     * order (the API sends one delta per citation), and a text block with NO
+     * citations still replays byte-identically to before the fix — the key is
+     * absent, not present-and-empty, so an uncited turn's bytes do not move. */
+    {
+        const char *fx =
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"A\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"citations_delta\",\"citation\":{\"type\":\"page_location\",\"cited_text\":\"one\",\"document_index\":0,\"start_page_number\":1,\"end_page_number\":2}}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"citations_delta\",\"citation\":{\"type\":\"page_location\",\"cited_text\":\"two\",\"document_index\":1,\"start_page_number\":3,\"end_page_number\":4}}}\n\n"
+            "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"B\"}}\n\n";
+        stream_ctx c; memset(&c, 0, sizeof c);
+        write_cb((char *)fx, 1, strlen(fx), &c);
+        cJSON *rb = block_replay_json(&c.blocks[0]);
+        char *js = rb ? cJSON_PrintUnformatted(rb) : NULL;
+        ok &= js && !strcmp(js,
+            "{\"type\":\"text\",\"text\":\"A\",\"citations\":["
+            "{\"type\":\"page_location\",\"cited_text\":\"one\",\"document_index\":0,\"start_page_number\":1,\"end_page_number\":2},"
+            "{\"type\":\"page_location\",\"cited_text\":\"two\",\"document_index\":1,\"start_page_number\":3,\"end_page_number\":4}]}");
+        free(js); cJSON_Delete(rb);
+        /* The uncited sibling is untouched: no `citations` key at all. */
+        cJSON *rb2 = block_replay_json(&c.blocks[1]);
+        char *js2 = rb2 ? cJSON_PrintUnformatted(rb2) : NULL;
+        ok &= js2 && !strcmp(js2, "{\"type\":\"text\",\"text\":\"B\"}");
+        free(js2); cJSON_Delete(rb2);
+        for (int i = 0; i < MAX_BLOCKS; i++) {
+            sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
+            cJSON_Delete(c.blocks[i].raw); cJSON_Delete(c.blocks[i].cites);
+            free(c.blocks[i].id); free(c.blocks[i].name);
+        }
+        free(c.stop_reason); free(c.message_id); free(c.response_model);
+        cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
+    }
+
+    /* Leg 8c — #757: a provider that answers in ONE SHOT puts the finished
+     * `citations` array on the content_block_start object instead of streaming
+     * citations_delta at all. This mirrors the `thinking`/`signature`-on-start
+     * handling #738 added to the 'k' arm for exactly the same reason, and it
+     * is a distinct code path from leg 8: covering only the delta path would
+     * leave a shape that silently loses citations again. */
+    {
+        const char *fx =
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"Whole.\",\"citations\":[{\"type\":\"char_location\",\"cited_text\":\"w\",\"document_index\":0,\"start_char_index\":0,\"end_char_index\":1}]}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Whole.\"}}\n\n";
+        stream_ctx c; memset(&c, 0, sizeof c);
+        write_cb((char *)fx, 1, strlen(fx), &c);
+        cJSON *rb = block_replay_json(&c.blocks[0]);
+        char *js = rb ? cJSON_PrintUnformatted(rb) : NULL;
+        ok &= js && !strcmp(js,
+            "{\"type\":\"text\",\"text\":\"Whole.\",\"citations\":["
+            "{\"type\":\"char_location\",\"cited_text\":\"w\",\"document_index\":0,"
+            "\"start_char_index\":0,\"end_char_index\":1}]}");
+        free(js); cJSON_Delete(rb);
+        for (int i = 0; i < MAX_BLOCKS; i++) {
+            sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
+            cJSON_Delete(c.blocks[i].raw); cJSON_Delete(c.blocks[i].cites);
+            free(c.blocks[i].id); free(c.blocks[i].name);
+        }
+        free(c.stop_reason); free(c.message_id); free(c.response_model);
+        cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
+    }
+
+    /* Leg 8d — #757: a citation that arrives on a block kind that cannot carry
+     * one is REPORTED, and the block it landed on is still replayed intact.
+     * The alternative — dropping the block — is the failure this whole cluster
+     * exists to prevent, applied to the wrong victim. */
+    {
+        const char *fx =
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"hm\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"SIG\"}}\n\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"citations_delta\",\"citation\":{\"type\":\"char_location\",\"cited_text\":\"x\",\"document_index\":0,\"start_char_index\":0,\"end_char_index\":1}}}\n\n";
+        stream_ctx c; memset(&c, 0, sizeof c);
+        write_cb((char *)fx, 1, strlen(fx), &c);
+        ok &= c.blocks[0].type == 'k' && c.blocks[0].cites == NULL;
+        cJSON *rb = block_replay_json(&c.blocks[0]);
+        char *js = rb ? cJSON_PrintUnformatted(rb) : NULL;
+        /* Unchanged, signature included — the thinking block survives. */
+        ok &= js && !strcmp(js, "{\"type\":\"thinking\",\"thinking\":\"hm\",\"signature\":\"SIG\"}");
+        free(js); cJSON_Delete(rb);
+        for (int i = 0; i < MAX_BLOCKS; i++) {
+            sb_free(&c.blocks[i].text); sb_free(&c.blocks[i].json); sb_free(&c.blocks[i].sig);
+            cJSON_Delete(c.blocks[i].raw); cJSON_Delete(c.blocks[i].cites);
+            free(c.blocks[i].id); free(c.blocks[i].name);
         }
         free(c.stop_reason); free(c.message_id); free(c.response_model);
         cJSON_Delete(c.raw_usage); sb_free(&c.accum); sb_free(&c.raw); sb_free(&c.errmsg);
@@ -4826,6 +5013,9 @@ static int self_test(void) {
     if (f) fclose(f); free(line); close(resumed.fd); free(resumed.path); free(resumed.last_stop); free(resumed.response_model); mlist_free(&resumed.models); cJSON_Delete(loaded); free(path);
     for (int i = 0; i < MAX_BLOCKS; i++) { sb_free(&ctx.blocks[i].text); sb_free(&ctx.blocks[i].json);
         sb_free(&ctx.blocks[i].sig); cJSON_Delete(ctx.blocks[i].raw);
+        /* #757: NULLed when the replayed text block adopted it, exactly as
+         * `raw` is — so this frees only the arrays that were never used. */
+        cJSON_Delete(ctx.blocks[i].cites);
         free(ctx.blocks[i].id); free(ctx.blocks[i].name); }
     free(ctx.stop_reason); free(ctx.message_id); free(ctx.response_model); cJSON_Delete(ctx.raw_usage); sb_free(&ctx.accum); sb_free(&ctx.raw); sb_free(&ctx.errmsg);
     fprintf(stderr, "gcode self-test: %s\n", ok ? "PASS" : "FAIL"); return ok ? 0 : 1;
