@@ -2080,6 +2080,71 @@ async function main() {
     fs.rmSync(tmp747, { recursive: true, force: true });
   }
 
+  // ---- test 18 (#765): an unplaceable content-block event is LOUD --------
+  // The self-test legs pin ctx.unplaceable — the COUNTER, which is the
+  // mechanism. The requirement is that the loss is reported, and that report
+  // is emitted from do_turn, which no self-test leg reaches (they drive
+  // write_cb directly). Same altitude gap the #758 legs had; closed here at
+  // the same time as the fix rather than after a reviewer names it.
+  //
+  // The turn ends in tool_use so a SECOND round exists: that is the only way
+  // to observe the property the fix rests on — guarding the crash must not
+  // cost a block that WAS placed, so the captured prefix has to reach the next
+  // request unchanged.
+  {
+    const bad =
+      sse('message_start', { message: { id: 'msg_765', role: 'assistant', content: [] } })
+      + sse('content_block_start', { index: 0, content_block: { type: 'text', text: '' } })
+      + sse('content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'kept block. ' } })
+      + sse('content_block_stop', { index: 0 })
+      // The event that used to SEGV: no `index` at all.
+      + 'event: content_block_start\ndata: '
+        + JSON.stringify({ type: 'content_block_start', content_block: { type: 'text', text: '' } }) + '\n\n'
+      // ...and a delta addressed to it, equally unplaceable.
+      + 'event: content_block_delta\ndata: '
+        + JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'LOSTCONTENT' } }) + '\n\n'
+      + sse('content_block_start', { index: 1, content_block: { type: 'tool_use', id: 'toolu_765', name: 'read_file', input: {} } })
+      + sse('content_block_delta', { index: 1, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ path: 'nope.txt' }) } })
+      + sse('content_block_stop', { index: 1 })
+      + sse('message_delta', { delta: { stop_reason: 'tool_use' } })
+      + sse('message_stop', {});
+
+    const srv = await startStrictServer([bad, textResponse('survived the bad event.')]);
+    const { stdout, stderr } = await runCodeBoth(srv.url,
+      ['-p', 'send a bad event', '--no-color', '--no-persist']);
+    srv.close();
+
+    // #765 is a CRASH ticket: before the fix the process dies on that event and
+    // never reaches round 2, so this single assertion is the reproduction.
+    check(stdout.includes('survived the bad event.'),
+      '#765: a content-block event with no `index` no longer kills the turn');
+    check(!/SEGV|AddressSanitizer/.test(stderr),
+      '#765: no SEGV — the unguarded dereference is gone');
+    // Not merely "does not crash": the loss is REPORTED. Guarding the crash and
+    // continuing quietly would trade a SEGV for a silent partial history.
+    check(/dropped 2 content-block events/.test(stderr),
+      '#765: both unplaceable events are reported on stderr, with the count');
+    check(stderr.includes('index'),
+      '#765: the report names `index`, so a reader knows what was wrong');
+    check((stderr.match(/dropped \d+ content-block event/g) || []).length === 1,
+      '#765: reported once per round, not once per dropped event');
+
+    // ---- the captured prefix is undisturbed -----------------------------
+    const asst = (srv.bodies[1] ? srv.bodies[1].messages : [])
+      .filter((m) => m.role === 'assistant')
+      .flatMap((m) => Array.isArray(m.content) ? m.content : []);
+    const texts = asst.filter((b) => b && b.type === 'text').map((b) => b.text);
+    check(texts.includes('kept block. '),
+      '#765: the block that WAS placed survives into the next request unchanged');
+    check(asst.some((b) => b && b.type === 'tool_use' && b.id === 'toolu_765'),
+      '#765: a placed block AFTER the bad event survives too — the stream resyncs');
+    // The unplaceable content really is gone; the report describes a real loss.
+    check(!texts.some((t) => t.includes('LOSTCONTENT')),
+      '#765: the unplaceable content is absent, not silently placed somewhere');
+    check(!stdout.includes('LOSTCONTENT'),
+      '#765: and it was never streamed to the user either');
+  }
+
   console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILURE(S)`);
   process.exit(failures === 0 ? 0 : 1);
 }
