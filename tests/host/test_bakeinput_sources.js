@@ -452,6 +452,11 @@ const P_STRAY = w2('elsewhere/nothing.c', 'int nothing2;\n');   // referenced by
 const P_PROJ_MD = w2('vendor/myproj/README.md', '# patch table\n');
 const P_OUT_IMG = w2('vendor/myproj/stale.img', 'IMG\n');
 const P_OUT_TMP = w2('vendor/myproj/stale.img.tmp-42', 'TMP\n');
+// #739: the twin walks os/ too (its own comment says so — demos.json's
+// os-root project), so a live boot's lock and a killed install's temp land
+// squarely inside it and would perpetually restale that package.
+const P_OUT_LOCK = w2('vendor/myproj/stale.img.lock', '{"pid":1}\n');
+const P_OUT_INSTALLING = w2('vendor/myproj/stale.img.installing', 'HALF\n');
 
 const PKG = {
   name: 'mypkg', version: '1.0',
@@ -510,6 +515,20 @@ check('pkg: *.img.tmp-<pid> stays excluded (#634 — mkimage temp on the same wa
   assert.notStrictEqual(r.path, P_OUT_TMP,
     'a temp left in os/ by a killed bake must not read as an ever-newer ' +
     'package input — same output-as-input class as *.img');
+});
+
+check('pkg: *.img.lock stays excluded (#739 — the boot lock on the same walk)', () => {
+  const r = pkgNewestFor(P_OUT_LOCK);
+  assert.notStrictEqual(r.path, P_OUT_LOCK,
+    'newestPkgInput walks os/ as well, so a running headless boot holding ' +
+    'os/os-root.img.lock would restale every package build for as long as ' +
+    'it lives — the same defect as the blob self-stale, one walk over');
+});
+
+check('pkg: *.img.installing stays excluded (#739)', () => {
+  const r = pkgNewestFor(P_OUT_INSTALLING);
+  assert.notStrictEqual(r.path, P_OUT_INSTALLING,
+    'a killed fixture install must not restale package payloads either');
 });
 
 check('pkg: the os/ tree at large is NOT an input (narrow scope)', () => {

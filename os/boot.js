@@ -243,7 +243,7 @@ if (resolvedOverlays.length) {
 }
 
 /* ---- image directory must exist (#620) ---- */
-// The sidecar-lock opener below creates rootImagePath + '.lock' and handles
+// The sidecar-lock opener below creates COMMON.imageLockPath(rootImagePath) and handles
 // only EEXIST; with the image's parent directory missing, its ENOENT used to
 // escape as an uncaught stack blaming the LOCKFILE for a fault in --image=.
 // Nothing host-side ever creates this directory (bakes write INTO it), so
@@ -274,7 +274,10 @@ if (resolvedOverlays.length) {
 // Exit 5 = IMAGE PAIR BUSY (1 boot-fail, 2 bad args, 3 heavy lock held,
 // 4 cross-tree). Taken BEFORE the machine-wide heavy lock below: refuse
 // over the narrow resource before contending for the wide one.
-const IMAGE_LOCK_PATH = rootImagePath + '.lock';
+// The NAME is os-common's (#739): the bake-input walk must exclude exactly
+// what this creates, or a lock held for the whole life of the boot reads as
+// an ever-newer bake input and the 0082 reuse path dies.
+const IMAGE_LOCK_PATH = COMMON.imageLockPath(rootImagePath);
 {
   const { pidAlive } = require(path.join(ROOT, 'tests/lib/heavy-lock.js'));
   const readHolder = () => {
@@ -404,7 +407,7 @@ async function mountAndBoot() {
         // The clone runs BEFORE store.close() so a throw (ENOSPC, ...)
         // leaves the store open for the bake fallback; the finally reopens
         // it whatever the rename did, so no path exits with a dead fd.
-        const tmp = imagePath + '.installing';
+        const tmp = COMMON.imageInstallTmpPath(imagePath);   // #739: excluded as an output
         fs.rmSync(tmp, { force: true });
         fs.copyFileSync(fixturePath, tmp, fs.constants.COPYFILE_FICLONE);
         store.close();

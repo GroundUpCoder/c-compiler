@@ -2563,8 +2563,10 @@ function projectExternalDirs(proj, dir) {
  * Bakers stamp the blob's mtime with the bake START time (an input
  * edited mid-bake may or may not be reflected, so it must read newer).
  *
- * Deliberately excluded: *.img and *.img.tmp-<pid> (bake OUTPUTS — an
- * output counted as an input would perpetually self-stale the bake),
+ * Deliberately excluded: every image-pair artifact — *.img, mkimage's
+ * *.img.tmp-<pid>, boot.js's *.img.installing and *.img.lock (bake OUTPUTS
+ * and live-boot sidecars; one counted as an input would perpetually
+ * self-stale the bake — see isImageArtifactName below, #739) —
  * dotfiles, and os/'s runtime-only files (os.html, osk.js, boot.js, the
  * workers, the compositor). *.md is NOT excluded (#634): #566 baked
  * /usr/share/doc, so docs ARE blob bytes — the shipped ones are `bin`
@@ -2583,6 +2585,39 @@ function projectExternalDirs(proj, dir) {
  * these six files to the ONE host that can observe them; this list is the
  * oracle that rule's guard (tests/host/test_diff_rules.js) checks itself
  * against, so the two statements of "runtime-only" cannot drift apart. */
+/* ---- image-pair artifact NAMES (#739) ----------------------------------
+ * A system image is never alone on disk: the bake writes it through a temp,
+ * an install stages a copy, and a live headless boot holds a sidecar lock
+ * beside the writable root image (todos/0293). All three are OUTPUTS or
+ * RUNTIME state of the very pipeline whose freshness `newestBakeInput`
+ * judges, so counting one as an INPUT self-stales the bake forever.
+ *
+ * The exclusions used to be regexes written against the names of the day,
+ * while the names themselves were string literals in os/boot.js and
+ * tools/mkimage.js. That is how the boot lockfile shipped uncounted for the
+ * whole life of todos/0293: with the default in-repo image the lock lands at
+ * `os/os-root.img.lock`, INSIDE the os/ walk, with mtime `now` — so the blob
+ * was always "input-stale" and the 0082 reuse path could not be taken at all
+ * (measured 3m30s per boot against 6s). Nothing saw it because every test
+ * boots with `--image=<mkdtemp>`, which puts the lock outside the walk.
+ *
+ * So the names live HERE, once: the creators call the builders, the walk
+ * calls the predicate, and the two cannot drift apart. The predicate keys
+ * off the image-artifact shape (`<something>.img.<suffix>`) and NEVER a bare
+ * `*.lock` glob — a genuine lockfile source input must stay an input. */
+function imageBakeTmpPath(imagePath, pid) { return imagePath + '.tmp-' + pid; }
+function imageInstallTmpPath(imagePath) { return imagePath + '.installing'; }
+function imageLockPath(rootImagePath) { return rootImagePath + '.lock'; }
+/* True for a bake OUTPUT or a live-boot runtime sidecar: the image itself,
+ * mkimage's atomic-rename temp, boot.js's fixture-install temp, and boot.js's
+ * image-pair lock. Every suffix here must be produced by a builder above (the
+ * round trip is pinned by tests/host/test_bakeinput_sources.js). */
+function isImageArtifactName(name) {
+  return /\.img$/.test(name) ||
+         /\.img\.tmp-\d+$/.test(name) ||
+         /\.img\.installing$/.test(name) ||
+         /\.img\.lock$/.test(name);
+}
 var BAKE_INPUT_SKIP = {
   'os.html': 1, 'osk.js': 1, 'boot.js': 1, 'kernel-worker.js': 1,
   'process-worker.js': 1, 'compositor.js': 1,
@@ -2621,10 +2656,11 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest, opts) {
       if (e.name.charAt(0) === '.') return;
       if (skipNames && skipNames[e.name]) return;
       if (e.isDirectory()) walk(pathMod.join(dir, e.name), null);
-      // .img.tmp-<pid> is mkimage's atomic-rename temp (a bake OUTPUT):
-      // one left behind by a killed bake would read as an ever-newer
-      // "input" and make the published image perpetually stale.
-      else if (!/\.img$/.test(e.name) && !/\.img\.tmp-\d+$/.test(e.name)) statFile(pathMod.join(dir, e.name));
+      // Bake outputs and live-boot sidecars are never inputs (#739): one
+      // left behind by a killed bake — or held by the running boot that is
+      // asking — would read as an ever-newer "input" and make the published
+      // image perpetually stale. isImageArtifactName is the one rule.
+      else if (!isImageArtifactName(e.name)) statFile(pathMod.join(dir, e.name));
     });
   }
   var normalize = normalizeRelPath;   // "a/b/../c" -> "a/c" (buildProject's rule)
@@ -2758,9 +2794,12 @@ function newestPkgInput(fsMod, pathMod, rootDir, name, pkg, opts) {
     ents.forEach(function (e) {
       if (e.name.charAt(0) === '.') return;
       if (e.isDirectory()) walk(pathMod.join(dir, e.name));
-      // Bake OUTPUTS stay out (#634): demos.json's os-root project walks os/
-      // itself, where mkimage's blob and its atomic-rename temp land —
-      // counting either would perpetually restale that package. *.md is NOT
+      // Bake OUTPUTS and live-boot sidecars stay out (#634, #739): demos.json's
+      // os-root project walks os/ itself, where mkimage's blob, its
+      // atomic-rename temp, a killed install's temp and — for as long as a
+      // headless boot lives — its image-pair lock all land; counting any of
+      // them would perpetually restale that package. One rule, shared with
+      // newestBakeInput: isImageArtifactName. *.md is NOT
       // excluded — no current package payload has a .md the walk is
       // responsible for (payload docs reach the scan through direct stats:
       // the tree enumeration carries libgit2's LICENCE.md, `bin`/`text` are
@@ -2768,7 +2807,7 @@ function newestPkgInput(fsMod, pathMod, rootDir, name, pkg, opts) {
       // dir-granular over-approximation by design and a per-extension hole
       // in it is a class of invisible inputs — over-invalidating is the
       // cheap direction.
-      else if (!/\.img$/.test(e.name) && !/\.img\.tmp-\d+$/.test(e.name)) statFile(pathMod.join(dir, e.name));
+      else if (!isImageArtifactName(e.name)) statFile(pathMod.join(dir, e.name));
     });
   }
   var normalize = normalizeRelPath;   // "a/b/../c" -> "a/c" (buildProject's rule)
@@ -3233,6 +3272,10 @@ var OS_COMMON = {
   bakedPackages: bakedPackages,
   normalizeRelPath: normalizeRelPath,
   projectExternalDirs: projectExternalDirs,
+  imageBakeTmpPath: imageBakeTmpPath,
+  imageInstallTmpPath: imageInstallTmpPath,
+  imageLockPath: imageLockPath,
+  isImageArtifactName: isImageArtifactName,
   newestBakeInput: newestBakeInput,
   newestPkgInput: newestPkgInput,
   initRootVolume: initRootVolume,

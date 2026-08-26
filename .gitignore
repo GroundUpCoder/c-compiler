@@ -26,6 +26,8 @@ os/os-user.img
 media/
 os/os-root.img
 os/*.img.lock
+# boot.js's fixture-install temp (#739): a killed install leaves one behind.
+os/*.img.installing
 dist/
 
 # CPython writes bytecode caches next to the source it imports; the shipped
