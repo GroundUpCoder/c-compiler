@@ -14,6 +14,7 @@ var { assertMemberRegistry } = require('../lib/suite-runner.js');
 require('../lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/host/run.js' });
 
 var tests = [
+  ['test_objc.js', []], // #772 Objective-C compiler/runtime experiment
   ['test_epipe_listeners.js', []],       // runModule must not stack stream 'error' listeners
   ['test_stdout_flush.js', []],          // exit drains piped stdout; queued chunks survive memory.grow
   ['test_console_ring.js', []],          // console SAB ring blocks (pty backpressure), never overruns

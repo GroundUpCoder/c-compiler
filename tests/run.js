@@ -614,6 +614,7 @@ const RULES = [
   [/^tests\/tcc\//, ['tcc'], null],
   [/^tests\/sqlite\//, ['sqlite'], null],
   [/^tests\/fakegit\//, ['fakegit'], null],
+  [/^tests\/objc\//, ['host', 'kernel', 'sweep'], null],
   [/^tests\/ast\//, ['ast'], null],
   [/^tests\/ext\//, ['ext'], null],
   [/^tests\/extra\//, ['extra'], null],
