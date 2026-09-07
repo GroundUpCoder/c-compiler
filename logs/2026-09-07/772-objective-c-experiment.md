@@ -106,3 +106,33 @@ AppKit, responder chains, text/layout, documents and Interface Builder-style
 resources remain a much larger library/tooling decision. GNUstep is a research
 candidate, not a verified Wasm drop-in. This experiment changes none of those UI
 or library layers and schedules no desktop rewrite.
+
+## Stable-tip review corrections and a preserved red
+
+The first browser OS attempt did not boot. Its standalone Chromium corpus passed,
+but compiler.js had been edited after the fixture bake started. The fixture's
+published mtime was 19:55:45 +0900 while compiler.js was 19:56:19, so serve.js
+started a second bake and the 5-second waitForServer window expired. The sweep
+record is a real FAIL, 0/1 selected browser members passed; it is preserved as
+build/objc/browser-startup-red-{summary.json,member.log} and browser-startup-red.log.
+The orphan bake process 38008 was identified by its exact worktree command and
+stopped with SIGTERM; the next preflight reclaimed its 0.1 GB temporary file.
+No test timeout was weakened. The retry began after committing all source edits.
+
+Final source correction: 87c9562f threads Objective-C tokenization through
+predefined macros, prelude tokens, pragma text and token pasting. Clang's actual
+preprocessor confirmed `-DDECL=@NAME -DNAME=interface` expands `DECL A` to
+`@interface A`; the host regression now asserts that path and no __OBJC__ leakage.
+
+Five ordinary C controls (integer arithmetic, floating arithmetic, aggregate
+indirect returns, preprocessing and malloc/calloc/free) were compiled with both
+277b14fb and 87c9562f using the same filenames/options. Every resulting Wasm was
+byte-identical. Sizes/hashes are in build/objc/c-byte-identity.json. This is a
+small noninterference check, not a substitute for the selected regression gate.
+
+One additional design cost is already visible: this spike represents id as void*.
+A broader frontend should preserve distinct object type/ownership information
+before attempting ARC or stronger method type resolution. Static linear table
+lookup also has no dispatch cache; no performance target was measured here.
+These are explicit experiment boundaries, not claims that Cocoa or a full
+Objective-C toolchain is ready.
