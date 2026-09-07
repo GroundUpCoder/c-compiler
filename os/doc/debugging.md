@@ -75,6 +75,14 @@ behavior and carry no trap metadata or cost.
 
 ## What does not exist
 
+Source-built system and package binaries ship function names and source-line
+maps inside the wasm binary. Trap and abort reports can therefore identify
+platform frames as well as your own `cc -g` code. Debug metadata does not
+disable optimization; inlined calls may not appear as separate frames.
+Prebuilt binaries and overlays retain whatever debug information their
+producer supplied. A binary without it reports wasm function indices and
+offsets. There is no separate debug image or debug-file download to install.
+
 There is no interactive debugger and no core dump. Use `printf` to
 stderr, `strace`, and `cc -g` (readable function names in a crash's
 stack trace).

@@ -710,8 +710,8 @@ async function assembleTree(name, pkg, srcRoot) {
   await COMMON.seedEntries(mfs, section, {
     readAsset: (n) => fs.readFileSync(path.join(srcRoot, 'os', n), 'utf-8'),
     readBinary: (p) => fs.readFileSync(path.join(srcRoot, p)),
-    buildProject: (proj) => COMMON.buildProject(CompilerJS, proj,
-      (p) => fs.readFileSync(path.join(srcRoot, p), 'utf-8')),
+    buildProject: (proj, options) => COMMON.buildProject(CompilerJS, proj,
+      (p) => fs.readFileSync(path.join(srcRoot, p), 'utf-8'), options),
     compile: COMMON.createCcDriver(CompilerJS, mfs),
     log: () => {},
   });

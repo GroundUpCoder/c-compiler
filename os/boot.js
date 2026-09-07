@@ -194,8 +194,8 @@ const seedIo = {
   // bin entries (game data: gameboy ROMs) are repo-relative binaries
   readBinary: (p) => fs.readFileSync(path.join(ROOT, p)),
   // project entries (busybox hush) are repo-relative multi-file builds
-  buildProject: (proj) => COMMON.buildProject(CompilerJS, proj,
-    (p) => fs.readFileSync(path.join(ROOT, p), 'utf-8')),
+  buildProject: (proj, options) => COMMON.buildProject(CompilerJS, proj,
+    (p) => fs.readFileSync(path.join(ROOT, p), 'utf-8'), options),
   log: bootLog,
 };
 const rawManifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'image.json'), 'utf-8'));

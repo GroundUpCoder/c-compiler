@@ -675,7 +675,7 @@ async function boot() {
     // project entries build repo-relative bin.json trees; the compiler
     // needs a SYNCHRONOUS file reader, so use sync XHR — legal in a
     // worker, and baking is a one-off (cached in the blob afterwards).
-    buildProject: function (proj) {
+    buildProject: function (proj, options) {
       // Memoize reads INCLUDING misses: include resolution probes several
       // directories per #include across ~40 TUs, which is ~18k lookups for
       // the hush build but only a few hundred distinct paths — uncached,
@@ -698,7 +698,7 @@ async function boot() {
         }
         xhrCache.set(p, xhr.responseText);
         return xhr.responseText;
-      });
+      }, options);
     },
     log: function (m) { post({ type: 'boot-log', msg: m }); },
   };

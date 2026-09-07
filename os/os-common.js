@@ -207,13 +207,15 @@ function createCcDriver(CompilerJS, kfs) {
  * XHR in the kernel worker (legal in workers, and seeding is a boot-time
  * one-off). Returns the wasm bytes.
  */
-function buildProject(CompilerJS, projPath, readHostFile) {
+function buildProject(CompilerJS, projPath, readHostFile, options) {
   var err = '';
   var writeErr = function (s) { err += s; };
 
   var pp = CompilerJS.createDefaultPPRegistry();
   var sources = [];
   var compilerOptions = { requireSources: [], backend: 'default' };
+  // Optional metadata only; optimization remains independent of debug info.
+  if (options && options.debug) compilerOptions.emitNames = true;
   /* Normalize "a/b/../c" -> "a/c" so dep-relative paths stay readable in
    * errors and stable as XHR URLs. */
   function normalize(p) {
@@ -327,7 +329,7 @@ function buildProject(CompilerJS, projPath, readHostFile) {
  *   entry.link    — symlink target; /path becomes a symlink to it (the
  *                   coreutils applet names all point at /usr/bin/coreutils)
  * io: { readAsset(name) -> Promise<string>, compile(argv, cwd), log(msg),
- *       buildProject(projPath) -> wasm bytes,
+ *       buildProject(projPath, options) -> wasm bytes,
  *       readBinary(repoPath) -> Uint8Array | Promise<Uint8Array> }
  *   (readAsset is fetch() in the browser, fs.readFile under Node — both
  *   relative to the os/ directory; readBinary is repo-relative like
@@ -376,7 +378,8 @@ function seedEntries(kfs, section, io) {
         });
       }
       if (entry.project !== undefined) {
-        var wasm = io.buildProject(entry.project);
+        // #761: source-built distribution binaries carry their diagnostics.
+        var wasm = io.buildProject(entry.project, { debug: true });
         writeFile(kfs, path, wasm, 0o755);
         log('  ' + path + ' (built ' + entry.project + ', ' + wasm.length + ' bytes)');
         return undefined;
@@ -403,7 +406,7 @@ function seedEntries(kfs, section, io) {
             writeFile(kfs, hp, srcs[i + 1]);
             return hp;
           });
-          var r = io.compile(['cc', staged, '-o', path], '/');
+          var r = io.compile(['cc', '-g', staged, '-o', path], '/');
           kfs.unlink(staged);
           hdrPaths.forEach(function (hp) { kfs.unlink(hp); });
           if (r.exitCode !== 0) {

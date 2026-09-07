@@ -153,8 +153,8 @@ async function main() {
   await COMMON.bakeSystemImage(BLOCK_FS, CompilerJS, store, manifest, {
     readAsset: (name) => fs.readFileSync(path.join(OS_DIR, name), 'utf-8'),
     readBinary: (p) => fs.readFileSync(path.join(ROOT, p)),
-    buildProject: (proj) => COMMON.buildProject(CompilerJS, proj,
-      (p) => fs.readFileSync(path.join(ROOT, p), 'utf-8')),
+    buildProject: (proj, options) => COMMON.buildProject(CompilerJS, proj,
+      (p) => fs.readFileSync(path.join(ROOT, p), 'utf-8'), options),
     log,
     overlays: resolvedOverlays,
     overlayIo: COMMON.nodeOverlayIo(fs, path, require('crypto')),
