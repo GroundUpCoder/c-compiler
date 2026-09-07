@@ -50,23 +50,6 @@ var BLOCK_FS = HOST.BLOCK_FS;
 
 var O_WRONLY = 0x1, O_CREAT = 0x40, O_TRUNC = 0x200, O_RDONLY = 0x0;
 
-// The most recent harness fs, so a leg whose run never settles (H) can still
-// read what the process wrote before it hung.
-var lastKfs = null;
-
-/* Leg H deliberately exercises a path whose promise NEVER SETTLES: a trap in
- * the animation-frame callback rethrows from an unobserved async `doFrame`.
- * Under Node's default that unhandled rejection KILLS THE PROCESS, so without
- * this handler the leg cannot run at all.
- *
- * 🔴 This is NOT a blanket suppressor. Every rejection captured here is
- * accounted for at the end of the file: anything that is not the trap leg H
- * expects fails the run. When the separately-filed lifecycle defect is fixed
- * (the frame loop should settle instead of rejecting into the void), this
- * handler and its accounting come out. */
-var unhandled = [];
-process.on('unhandledRejection', function (e) { unhandled.push(e); });
-
 var failures = 0;
 function check(name, cond, extra) {
   if (cond) console.log('  ok   ' + name);
@@ -139,7 +122,6 @@ function buildAndRun(opts) {
 
   var consoleOut = [], consoleErr = [];
   if (opts.patchBytes) bytes = opts.patchBytes(bytes);
-  lastKfs = kfs;          // leg H needs this before the run can hang
 
   return runModule({
     bytes: bytes,
@@ -378,10 +360,8 @@ async function main() {
   // catch from main(): `doFrame`'s. The first cut of #759 reported only at the
   // main-entry catch, so this case produced NOTHING AT ALL.
   //
-  // NB the enclosing promise does not settle on a frame trap (a pre-existing
-  // lifecycle defect, filed separately and NOT fixed here), so this leg races
-  // the run against a deadline and asserts on what reached fd 2 — never on the
-  // promise, which would hang the suite.
+  // #764: this path must now reject through the caller, without a global
+  // unhandled-rejection handler or a permanently pending run.
   console.log('\nH. a trap in the animation-frame callback still reports');
   const FRAME_SRC = [
     '#include <stdio.h>',
@@ -396,19 +376,11 @@ async function main() {
     '',
   ].join('\n');
   const FBOOM = lineOf(FRAME_SRC, 'MARK_FBOOM'), FCALL = lineOf(FRAME_SRC, 'MARK_FCALL');
-  const beforeH = unhandled.length;
-  const hRun = buildAndRun({ src: FRAME_SRC, srcName: '/frame.c', ccFlags: ['-g'], redirectErr: '/err.log' });
-  const hKfs = lastKfs;                       // captured before the run can hang
-  let hSettled = null;
-  hRun.then(() => { hSettled = 'resolved'; }, () => { hSettled = 'rejected'; });
-  /* A DEADLINE, not a sync primitive: this run may never settle by design, so
-     there is no marker to wait on. Poll for the artifact instead and stop as
-     soon as it appears, so the leg is fast when healthy and bounded when not. */
-  for (let i = 0; i < 160; i++) {
-    if (/backtrace/i.test(readFile(hKfs, '/err.log') || '')) break;
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  const hTxt = readFile(hKfs, '/err.log') || '';
+  const h = await buildAndRun({ src: FRAME_SRC, srcName: '/frame.c', ccFlags: ['-g'], redirectErr: '/err.log' });
+  const hTxt = readFile(h.kfs, '/err.log') || '';
+  check('#764: the frame trap rejects through runModule',
+        h.settled === 'rejected' && h.error instanceof WebAssembly.RuntimeError,
+        'settled=' + h.settled);
   check('the frame trap produced a backtrace on fd 2 (blocker: it produced NOTHING)',
         /backtrace/i.test(hTxt), JSON.stringify(hTxt.slice(0, 300)));
   check('it names the faulting frame `boom` at frame.c:' + FBOOM,
@@ -417,36 +389,6 @@ async function main() {
   check('and the frame callback that called it, at frame.c:' + FCALL,
         /\bonframe\b/.test(hTxt) && new RegExp('frame\\.c:' + FCALL + '\\b').test(hTxt),
         JSON.stringify(hTxt.slice(0, 300)));
-  /* Account for what the handler swallowed. 🔴 This must IDENTIFY the
-     rejection, not merely type-check it. The first cut accepted
-     `length >= 1` and `every(... instanceof RuntimeError)`, which means an
-     ADDITIONAL, UNEXPECTED unhandled wasm trap — precisely the defect class
-     this whole ticket is about — would have been swallowed with the suite
-     still green. A count of "at least one" cannot distinguish "the one I
-     caused" from "mine plus someone else's". */
-  const hRejects = unhandled.slice(beforeH);
-  check('nothing was already pending before leg H (so the count below is attributable)',
-        beforeH === 0, 'saw ' + beforeH + ' earlier unhandled rejection(s): ' +
-        unhandled.slice(0, beforeH).map((e) => String(e && e.message).slice(0, 60)).join(' | '));
-  check('leg H produced EXACTLY ONE unhandled rejection, not "at least one"',
-        hRejects.length === 1, 'got ' + hRejects.length + ': ' +
-        hRejects.map((e) => String(e && e.message).slice(0, 60)).join(' | '));
-  const hErr = hRejects[0];
-  check('and it IS leg H\'s frame trap, identified by its own stack frames',
-        hErr instanceof WebAssembly.RuntimeError &&
-        /out of bounds/i.test(String(hErr.message)) &&
-        /\bboom\b/.test(String(hErr.stack)) && /\bonframe\b/.test(String(hErr.stack)),
-        (hErr && hErr.constructor && hErr.constructor.name) + ': ' +
-        String(hErr && hErr.stack).slice(0, 200));
-  /* Pin the #764 behaviour this leg rides on, rather than asserting `true`.
-     A frame trap currently does NOT settle the run — that is the separately
-     filed lifecycle defect. When #764 lands this flips, and it SHOULD fail
-     here: the leg must then be updated to expect a settled rejection and the
-     unhandledRejection handler above can be removed entirely. */
-  check('RECORDED (#764, not fixed here): the frame loop did not settle',
-        hSettled === null, 'settled as ' + hSettled +
-        ' — if #764 landed, update this leg and drop the rejection handler');
-
   // ---- I: a CLOSED fd 2 must not be treated as an unredirected console ----
   //
   // A program may dup2 fd 2 and then close() it; close() leaves that slot
@@ -472,19 +414,6 @@ async function main() {
   check('and nothing was written to the pre-close redirect target either',
         !/backtrace/i.test(readFile(iRun.kfs, '/gone.log') || ''),
         JSON.stringify(readFile(iRun.kfs, '/gone.log')));
-
-  /* 🔴 The handler installed at the top of this file must be a SCOPED
-     allowance for leg H's one known-unsettling run, never a blanket
-     suppressor. So the whole-file total is pinned to exactly the rejection
-     leg H accounted for — by IDENTITY, not by type. Anything else that goes
-     unhandled anywhere in this file fails the run rather than disappearing. */
-  console.log('\nJ. accounting: nothing was silently swallowed');
-  check('the file produced exactly ONE unhandled rejection in total',
-        unhandled.length === 1, 'got ' + unhandled.length + ': ' +
-        unhandled.map((e) => String(e && e.message).slice(0, 60)).join(' | '));
-  check('and it is the SAME object leg H identified (not merely another RuntimeError)',
-        unhandled.length === 1 && unhandled[0] === hErr,
-        'total=' + unhandled.length + ' identical=' + (unhandled[0] === hErr));
 
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'all checks passed'));
   process.exit(failures ? 1 : 0);

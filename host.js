@@ -13834,79 +13834,67 @@ async function runModule({
     const FRAME_MS = 1000 / 60;
     let nextDue = 0;
     let sawFrameExit = false;   // an explicit exit() inside a frame outranks __sdl_app_result
-    await new Promise(function (resolve) {
-      function scheduleFrame() {
-        const doFrame = async function () {
-          const animFunc = sdl.getAnimationFrameFunc();
-          if (!animFunc) {
-            resolve();
-            return;
-          }
-          // OS surface backend: pull kernel-routed input from the ring into
-          // the wasm event queue before the frame runs (todos/WM.md).
-          if (sdl.drainInput) {
-            try { sdl.drainInput(); } catch (e) { /* exports gone mid-teardown */ }
-          }
-          try {
-            if (hasJSPI) {
-              await WebAssembly.promising(table.get(animFunc))();
+    try {
+      await new Promise(function (resolve, reject) {
+        function scheduleFrame() {
+          const doFrame = async function () {
+            // Every scheduled invocation owns its rejection, including a
+            // scheduler failure while arming the next frame (#764).
+            try {
+              const animFunc = sdl.getAnimationFrameFunc();
+              if (!animFunc) { resolve(); return; }
+              // Pull kernel input into the wasm queue before running the frame.
+              if (sdl.drainInput) {
+                try { sdl.drainInput(); } catch (e) { /* exports gone mid-teardown */ }
+              }
+              if (hasJSPI) {
+                await WebAssembly.promising(table.get(animFunc))();
+              } else {
+                table.get(animFunc)();
+              }
+              if (sdl.getAnimationFrameFunc()) scheduleFrame();
+              else resolve();
+            } catch (e) {
+              if (e instanceof ExitStatus) {
+                exitCode = e.code;
+                sawFrameExit = true;
+                resolve();
+              } else {
+                reportTrap(e);
+                reject(e);
+              }
+            }
+          };
+          if (raf) {
+            raf(doFrame);
+          } else {
+            // Deadline-based pacer: a fixed setTimeout(16) AFTER the callback
+            // makes the tick period 16ms + callback time — an app whose frame
+            // work takes ~10ms then ticks at ~26ms while its own catch-up
+            // logic keeps game-time real, i.e. it silently presents only
+            // every other frame. Aim at an absolute 60Hz schedule instead;
+            // when the callback overruns a whole period, fire immediately
+            // and restart the cadence from now.
+            const now = Date.now();
+            if (nextDue <= now) {
+              nextDue = now + FRAME_MS;
+              setTimeout(doFrame, 0);
             } else {
-              table.get(animFunc)();
+              const delay = nextDue - now;
+              nextDue += FRAME_MS;
+              setTimeout(doFrame, delay);
             }
-          } catch (e) {
-            if (e instanceof ExitStatus) {
-              exitCode = e.code;
-              sawFrameExit = true;
-              resolve();
-              return;
-            }
-            /* #759: a trap inside the frame callback is the PRINCIPAL gamedev
-               crash — initialisation succeeded and the game died mid-loop —
-               so it gets the same backtrace as one at the main() entry.
-
-               🔴 SCOPE, stated rather than hidden: this reports the fault, it
-               does not change how the frame loop SETTLES. `doFrame` is invoked
-               from raf()/setTimeout(), so this rethrow lands in an unobserved
-               async call and the enclosing promise stays pending — measured on
-               `7d4f4d03`: 8 s after the trap the promise was still unsettled
-               and the rejection was unhandled. That lifecycle defect predates
-               this feature, is independent of it, and changing how the frame
-               loop terminates would alter process-exit semantics (the
-               sawFrameExit / __sdl_app_result / gpuDrain teardown below).
-               It is filed separately. Reporting first is strictly better than
-               the previous behaviour, which was to hang saying nothing. */
-            reportTrap(e);
-            throw e;
-          }
-          if (sdl.getAnimationFrameFunc()) {
-            scheduleFrame();
-          } else {
-            resolve();
-          }
-        };
-        if (raf) {
-          raf(doFrame);
-        } else {
-          // Deadline-based pacer: a fixed setTimeout(16) AFTER the callback
-          // makes the tick period 16ms + callback time — an app whose frame
-          // work takes ~10ms then ticks at ~26ms while its own catch-up
-          // logic keeps game-time real, i.e. it silently presents only
-          // every other frame. Aim at an absolute 60Hz schedule instead;
-          // when the callback overruns a whole period, fire immediately
-          // and restart the cadence from now.
-          const now = Date.now();
-          if (nextDue <= now) {
-            nextDue = now + FRAME_MS;
-            setTimeout(doFrame, 0);
-          } else {
-            const delay = nextDue - now;
-            nextDue += FRAME_MS;
-            setTimeout(doFrame, delay);
           }
         }
-      }
-      scheduleFrame();
-    });
+        scheduleFrame();
+      });
+    } finally {
+      // Drain before BOTH normal exit and rejection to the process worker.
+      // The latter posts `crashed`, which terminates the worker just like
+      // EXIT does. Pending Dawn work must not survive either handshake.
+      // A drain failure must not replace the original wasm trap.
+      if (ctx.gpuDrain) { try { await ctx.gpuDrain(); } catch (e) {} }
+    }
     // The loop stopped (frame func cleared, or exit() unwound a frame): now
     // run the deferred C exit path — atexits, and under kernel.js the EXIT
     // handshake. ExitStatus is how a host __exit stub reports the code.
@@ -13920,7 +13908,6 @@ async function runModule({
     if (!sawFrameExit && typeof instance.exports.__sdl_app_result === 'function') {
       try { exitCode = instance.exports.__sdl_app_result() | 0; } catch (e) {}
     }
-    if (ctx.gpuDrain) { try { await ctx.gpuDrain(); } catch (e) {} }
     try {
       if (instance.exports.exit) {
         instance.exports.exit(exitCode);
