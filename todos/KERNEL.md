@@ -1148,3 +1148,14 @@ deterministic. Kernel + `host.js` workers run under `worker_threads` with a
 - **Compile hook's future**: does `/bin/cc` stay a kernel RPC, or become a
   real spawned wasm once the compiler self-hosts into the image? (Cosmetic
   for this design; the opcode carries either.)
+
+### Worker startup failure (#752)
+
+A `runModule` rejection before its post-instantiation `onReady` hook is a
+failed image start, reported by both worker hosts as `start-failed`. The worker
+writes `gucOS: could not start <path>: <reason>` through its own fd 2 before
+posting the failure, so inherited pipes and file-action redirection apply.
+The parent observes normal exit status 127 (the asynchronous posix_spawn
+failed-exec convention), not a fabricated SIGSEGV. A rejection after
+instantiation retains the runtime-crash path. No arbitrary module is retried:
+a wasm start section can have side effects before instantiation throws.

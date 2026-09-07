@@ -3019,6 +3019,10 @@ Kernel.prototype._onWorkerMessage = function (pcb, msg) {
       break;
     case 'frame-idle': pcb.wantFrame = false; break;
     case 'exited': this._exitProcess(pcb, W_EXITCODE(msg.code | 0)); break;
+    case 'start-failed':
+      this._log('pid ' + pcb.pid + ' could not start: ' + msg.error);
+      this._exitProcess(pcb, W_EXITCODE(127));
+      break;
     case 'crashed':
       this._log('pid ' + pcb.pid + ' crashed: ' + msg.error);
       this._exitProcess(pcb, W_TERMSIG(SIG.SEGV));
@@ -9233,7 +9237,9 @@ var BOOT_SOURCE = [
   "function ship(fd) { return function (b) {",
   "  var u = (b instanceof Uint8Array) ? b : new Uint8Array(b);",
   "  wt.parentPort.postMessage({ type: 'out', fd: fd, bytes: u.slice() }); }; }",
+  "var instantiated = false;",
   "runModule({",
+  "  onReady: function () { instantiated = true; },",
   "  bytes: wd.image || undefined,",
   "  module: wd.module || undefined,   // pre-compiled Module (todos/0037)",
   "  args: wd.argv,",
@@ -9252,7 +9258,12 @@ var BOOT_SOURCE = [
   "}).then(function (code) {",
   "  wt.parentPort.postMessage({ type: 'exited', code: code });",
   "}, function (e) {",
-  "  wt.parentPort.postMessage({ type: 'crashed', error: String((e && e.stack) || e) });",
+  "  if (!instantiated) {",
+  "    var diagnostic = new TextEncoder().encode('gucOS: could not start ' + wd.path + ': ' + String(e) + '\\n');",
+  "    if (rfs) rfs.write(2, diagnostic, diagnostic.length);",
+  "    else ship(2)(diagnostic);",
+  "  }",
+  "  wt.parentPort.postMessage({ type: instantiated ? 'crashed' : 'start-failed', error: String((e && e.stack) || e) });",
   "});",
 ].join('\n');
 

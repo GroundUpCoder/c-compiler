@@ -99,7 +99,9 @@ self.onmessage = function (e) {
     };
   }
 
+  var instantiated = false;
   runModule({
+    onReady: function () { instantiated = true; },
     bytes: wd.image || undefined,
     module: wd.module || undefined,   // pre-compiled Module (todos/0037)
     args: wd.argv,
@@ -123,6 +125,12 @@ self.onmessage = function (e) {
     self.postMessage({ type: 'exited', code: code });
   }, function (err) {
     if (TR) self.postMessage({ type: 'spawn-trace', pid: wd.pid, tr: { tExit: __pwNow() } });
-    self.postMessage({ type: 'crashed', error: String((err && err.stack) || err) });
+    if (!instantiated) {
+      // #752: use the child's final fd table, including stderr redirection.
+      // The synchronous brokered write completes before process teardown.
+      var diagnostic = new TextEncoder().encode('gucOS: could not start ' + wd.path + ': ' + String(err) + '\n');
+      rfs.write(2, diagnostic, diagnostic.length);
+    }
+    self.postMessage({ type: instantiated ? 'crashed' : 'start-failed', error: String((err && err.stack) || err) });
   });
 };
