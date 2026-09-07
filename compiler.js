@@ -16216,10 +16216,16 @@ function foldMemOffsets(nodes) {
 // stats.refused by reason): imported target, missing wast/fnMeta (raw
 // hand-built bodies), self-recursion, variadic (dynamic arg-block ABI),
 // alloca (dynamic stack growth), over-aligned/masked frameBase,
-// struct-by-value return (sret ABI + caller-deferred SP restoration),
 // exception constructs (WTryTable/WThrow), WRaw (opaque bytes embed
 // un-relocatable local indices), multi-value results, and the two budget
-// caps. Budgets are DELIBERATELY CONSERVATIVE (coordinator decision,
+// caps. A struct-by-value return used to be refused here too: the caller
+// held an outstanding shadow-stack bump for the return temporary whose
+// release point was an expression-shaped counter, so splicing a callee body
+// interleaved two stack-pointer disciplines. #773 made those temporaries
+// static frame slots, which removed the caller-side bump entirely, so an
+// sret callee is now an ordinary callee — its hidden pointer is just its
+// first wasm parameter and the generic param-to-local splice below handles
+// it. Budgets are DELIBERATELY CONSERVATIVE (coordinator decision,
 // todos/0201): inline the small callees that fall out of the
 // representation cleanly; do NOT chase the big SameBoy hot callees
 // (GB_read_memory ~397 real nodes, GB_advance_cycles ~534, cycle_write
@@ -16341,7 +16347,7 @@ function inlineFunctions(wmod, optsIn) {
     singleUse: 0,     // budget-bypassed single-site inlines (subset of inlined)
     alwaysInline: 0,  // budget-bypassed always_inline inlines (subset of inlined)
     refused: { self: 0, imported: 0, noBody: 0, noinline: 0, variadic: 0,
-               alloca: 0, overAligned: 0, structRet: 0, eh: 0, raw: 0,
+               alloca: 0, overAligned: 0, eh: 0, raw: 0,
                multiResult: 0, budgetCallee: 0, budgetCaller: 0,
                budgetLocals: 0 },
   };
@@ -16472,7 +16478,6 @@ function inlineFunctions(wmod, optsIn) {
       if (meta.variadic) { refuse('variadic'); continue; }
       if (meta.usesAlloca) { refuse('alloca'); continue; }
       if (meta.overAligned) { refuse('overAligned'); continue; }
-      if (meta.structRet) { refuse('structRet'); continue; }
       const ct = wmod.typeDefs[callee.typeId];
       if (ct.results.length > 1) { refuse('multiResult'); continue; }
       const scan = scanCallee(ei);
@@ -18133,8 +18138,11 @@ class CodeGenerator {
     this.nextLocalIdx = 0;
     this.freeLocalsByType = new Map();
     this.localScopeStack = [];
-    this.structRetDeferred = 0;
-    this.callNesting = 0;
+    // #773: ECall node -> frame offset of that call site's aggregate-return
+    // temporary. Populated by assignLocals; read by the four call-emission
+    // paths. Replaces the runtime shadow-stack bump this convention used to
+    // perform inline at every aggregate-returning call site.
+    this.aggCallOffsets = new Map();
     this.blockDepth = 0;
     this.breakTarget = 0;
     this.continueTarget = 0;
@@ -18888,6 +18896,7 @@ class CodeGenerator {
     this.frameSize = 0;
     this.frameAlign = 16;
     this.frameBaseLocalIdx = -1;
+    this.aggCallOffsets.clear();
     // Eager peek: do we have any frame-scope compound literals?
     let hasFrameCompoundLiterals = false;
     if (funcDef.body) {
@@ -18898,7 +18907,53 @@ class CodeGenerator {
         }
       }
     }
-    if (memoryVars.length > 0 || memoryParams.length > 0 || hasFrameCompoundLiterals) {
+
+    // #773: aggregate-return temporaries are frame objects, like every other
+    // frame-resident object above. Number each aggregate-returning call site,
+    // then give each NUMBER one slot.
+    //
+    // Pooling rule. A temporary returned by a call lives until the end of the
+    // enclosing full expression (C11 6.2.4p8), so two calls need distinct
+    // slots exactly when both can be live at once — i.e. when they sit in the
+    // same expression (`f(g(), h())`, `f(g(h()))`). Calls in different
+    // statements never overlap, so the numbering RESETS at a statement
+    // boundary and their slots are shared. The reset is suppressed once we
+    // are inside an expression: a GNU statement expression nests statements
+    // under a live expression whose own temporaries are still outstanding, so
+    // resetting there would hand two live temporaries the same slot.
+    //
+    // Conservative in two places, both deliberate: sibling sub-expressions
+    // that are really sequenced (a `for` header's init/cond/incr) get
+    // distinct slots, and a statement expression's interior never reuses.
+    // Both cost frame bytes, never correctness.
+    const aggSlotSizes = [];
+    let aggSlotAlign = 16;
+    const aggCallSlotIndex = new Map();
+    const numberAggCalls = (node, counter, inExpr) => {
+      const kids = node.children;
+      if (kids) {
+        for (const kid of kids) {
+          if (!kid) continue;
+          const kidIsStmt = kid instanceof AST.Stmt;
+          if (kidIsStmt && !inExpr) numberAggCalls(kid, { next: 0 }, false);
+          else numberAggCalls(kid, counter, inExpr || !kidIsStmt);
+        }
+      }
+      if (node instanceof AST.ECall && isStructOrUnion(node.type)) {
+        const idx = counter.next++;
+        const a = this.alignOf(node.type);
+        if (a > aggSlotAlign) aggSlotAlign = a;
+        const need = (this.sizeOf(node.type) + 15) & ~15;
+        if (aggSlotSizes[idx] === undefined || aggSlotSizes[idx] < need) {
+          aggSlotSizes[idx] = need;
+        }
+        aggCallSlotIndex.set(node, idx);
+      }
+    };
+    if (funcDef.body) numberAggCalls(funcDef.body, { next: 0 }, false);
+
+    if (memoryVars.length > 0 || memoryParams.length > 0 ||
+        hasFrameCompoundLiterals || aggSlotSizes.length > 0) {
       this.savedSpLocalIdx = this.allocLocal(WT_I32);
       let offset = 0;
       let maxAlign = 16;
@@ -18927,6 +18982,19 @@ class CodeGenerator {
           offset = (offset + a - 1) & ~(a - 1);
           this.compoundLiteralOffsets.set(cl, offset);
           offset += this.sizeOf(cl.type);
+        }
+      }
+      // #773: aggregate-return slots, one per number assigned above.
+      if (aggSlotSizes.length > 0) {
+        if (aggSlotAlign > maxAlign) maxAlign = aggSlotAlign;
+        const aggSlotOffsets = [];
+        for (const size of aggSlotSizes) {
+          offset = (offset + aggSlotAlign - 1) & ~(aggSlotAlign - 1);
+          aggSlotOffsets.push(offset);
+          offset += size;
+        }
+        for (const [call, idx] of aggCallSlotIndex) {
+          this.aggCallOffsets.set(call, aggSlotOffsets[idx]);
         }
       }
       this.frameSize = (offset + 15) & ~15;
@@ -18976,9 +19044,7 @@ class CodeGenerator {
     this.body = new WAST.WastBuilder();
     this.currentFuncDef = funcDef;
     this.emitSrcLocMarkers = !!this.compilerOptions.emitNames;
-    this.structRetDeferred = 0;
     this.usesAlloca = false;
-    this.callNesting = 0;
     this.blockDepth = 0;
     this.gotoLabelDepths.clear();
     const gotoErrLenAtEntry = this.gotoErrors.length;
@@ -19941,23 +20007,22 @@ class CodeGenerator {
     else if (wtEquals(wt, WT_F64)) this.body.mop(MOP.F64_STORE, 0, 3);
   }
 
-  // Release a variadic call's arg block: SP = base + blockSize, which also
-  // reclaims the tracked struct-return temps deferred while evaluating the
-  // arguments (deferredDelta of them sit directly below the block). The
-  // release is CONDITIONAL on SP sitting exactly at base - deferredDelta —
-  // i.e. only tracked movement happened during argument evaluation. A
-  // callee that used alloca() returns with an UNTRACKED retained SP bump
-  // (the caller-frees contract: the alloca'd region below the block must
-  // survive this whole call), so on mismatch we leave SP alone and the
-  // block leaks until the function epilogue — the alloca contract's
-  // designated free point (todos/0208).
-  emitVaBlockRelease(argBlockBase, blockSize, deferredDelta) {
+  // Release a variadic call's arg block: SP = base + blockSize. The release
+  // is CONDITIONAL on SP sitting exactly at base — i.e. nothing moved the
+  // stack pointer while the arguments were evaluated. A callee that used
+  // alloca() returns with a retained SP bump (the caller-frees contract: the
+  // alloca'd region below the block must survive this whole call), so on
+  // mismatch we leave SP alone and the block leaks until the function
+  // epilogue — the alloca contract's designated free point (todos/0208).
+  //
+  // Before #773 this test carried a `deferredDelta` correction, because
+  // evaluating the arguments could ALSO bump SP for aggregate-return
+  // temporaries. Those are frame slots now, so argument evaluation moves SP
+  // only via alloca, and the bare equality is both simpler and a more precise
+  // statement of the condition actually being tested.
+  emitVaBlockRelease(argBlockBase, blockSize) {
     this.body.globalGet(this.stackPointerGlobalIdx);
     this.body.localGet(argBlockBase);
-    if (deferredDelta > 0) {
-      this.body.i32Const(deferredDelta);
-      this.body.aop(WT_I32, ALU.OP_SUB);
-    }
     this.body.aop(WT_I32, ALU.OP_EQ);
     this.body.if_(WT_EMPTY); this.blockDepth++;
     this.body.localGet(argBlockBase);
@@ -20664,8 +20729,6 @@ class CodeGenerator {
             }
             blockSize = (blockSize + 7) & ~7;
 
-            this.callNesting++;
-
             // Allocate arg block
             this.body.globalGet(this.stackPointerGlobalIdx);
             this.body.i32Const(blockSize);
@@ -20676,8 +20739,6 @@ class CodeGenerator {
             const argBlockBase = this.allocLocal(WT_I32);
             this.body.globalGet(this.stackPointerGlobalIdx);
             this.body.localSet(argBlockBase);
-
-            const deferredAtVaAlloc = this.structRetDeferred;
 
             // Store each argument
             for (let i = 0; i < expr.arguments.length; i++) {
@@ -20717,36 +20778,28 @@ class CodeGenerator {
 
             // Load return value from arg block
             if (varStructRet) {
+              // #773: a variadic aggregate result comes back INSIDE the arg
+              // block. Copy it into this call site's frame slot so the block
+              // can be released here like any other; before #773 the block
+              // itself was retained as the temporary, which is what made the
+              // release conditional on a deferred-bump correction.
+              const dst = this.aggCallOffsets.get(expr);
+              this.emitFrameAddr(dst);
               this.body.localGet(argBlockBase);
-              this.structRetDeferred += blockSize;
+              this.body.i32Const(this.sizeOf(varRetType));
+              this.body.memoryCopy();
+              this.emitVaBlockRelease(argBlockBase, blockSize);
+              this.emitFrameAddr(dst);
             } else if (varRetType !== Types.TVOID) {
               this.body.localGet(argBlockBase);
               this.emitVaArgLoad(varRetType);
-              this.emitVaBlockRelease(argBlockBase, blockSize,
-                this.structRetDeferred - deferredAtVaAlloc);
-              // The release also reclaims the struct-return temps deferred
-              // while evaluating the arguments — drop them from the counter
-              // so the callNesting==0 fixup doesn't restore them a second
-              // time and leak SP upward.
-              this.structRetDeferred = deferredAtVaAlloc;
+              this.emitVaBlockRelease(argBlockBase, blockSize);
             } else {
-              this.emitVaBlockRelease(argBlockBase, blockSize,
-                this.structRetDeferred - deferredAtVaAlloc);
+              this.emitVaBlockRelease(argBlockBase, blockSize);
               this.body.i32Const(0);
-              // See scalar-return branch above.
-              this.structRetDeferred = deferredAtVaAlloc;
             }
 
             this.popLocalScope();
-
-            this.callNesting--;
-            if (this.callNesting === 0 && this.structRetDeferred > 0) {
-              this.body.globalGet(this.stackPointerGlobalIdx);
-              this.body.i32Const(this.structRetDeferred);
-              this.body.aop(WT_I32, ALU.OP_ADD);
-              this.body.globalSet(this.stackPointerGlobalIdx);
-              this.structRetDeferred = 0;
-            }
           } else {
             // Non-variadic direct call
             const callRetType = funcType.getReturnType();
@@ -20790,17 +20843,10 @@ class CodeGenerator {
               break;
             }
             const structRet = isStructOrUnion(callRetType);
-            let structRetAllocSize = 0;
-            this.callNesting++;
-            if (structRet) {
-              const retSize = this.sizeOf(callRetType);
-              structRetAllocSize = (retSize + 15) & ~15;
-              this.body.globalGet(this.stackPointerGlobalIdx);
-              this.body.i32Const(structRetAllocSize);
-              this.body.aop(WT_I32, ALU.OP_SUB);
-              this.body.globalSet(this.stackPointerGlobalIdx);
-              this.body.globalGet(this.stackPointerGlobalIdx);
-            }
+            // #773: the hidden return pointer is this call site's own frame
+            // slot — a constant offset, no stack-pointer movement.
+            // emitFrameAddr fails loud if the frame walk missed this node.
+            if (structRet) this.emitFrameAddr(this.aggCallOffsets.get(expr));
             for (let i = 0; i < expr.arguments.length; i++) {
               this.emitExpr(expr.arguments[i]);
               if (viaUnprototyped && i < callParamTypes.length &&
@@ -20818,15 +20864,6 @@ class CodeGenerator {
               }
             }
             this.body.call(funcIdx);
-            if (structRet) this.structRetDeferred += structRetAllocSize;
-            this.callNesting--;
-            if (this.callNesting === 0 && this.structRetDeferred > 0) {
-              this.body.globalGet(this.stackPointerGlobalIdx);
-              this.body.i32Const(this.structRetDeferred);
-              this.body.aop(WT_I32, ALU.OP_ADD);
-              this.body.globalSet(this.stackPointerGlobalIdx);
-              this.structRetDeferred = 0;
-            }
           }
         } else {
           // Indirect call. expr.callee is already decayed by the parser
@@ -20866,7 +20903,6 @@ class CodeGenerator {
               blockSize += vaSlotSize(argType);
             }
             blockSize = (blockSize + 7) & ~7;
-            this.callNesting++;
             this.body.globalGet(this.stackPointerGlobalIdx);
             this.body.i32Const(blockSize);
             this.body.aop(WT_I32, ALU.OP_SUB);
@@ -20875,7 +20911,6 @@ class CodeGenerator {
             const argBlockBase = this.allocLocal(WT_I32);
             this.body.globalGet(this.stackPointerGlobalIdx);
             this.body.localSet(argBlockBase);
-            const deferredAtVaAlloc = this.structRetDeferred;
             for (let i = 0; i < expr.arguments.length; i++) {
               let storeType = i < numFixed ? paramTypes[i] : expr.arguments[i].type;
               if (storeType.removeQualifiers() === Types.TFLOAT) storeType = Types.TDOUBLE;
@@ -20901,58 +20936,32 @@ class CodeGenerator {
             this.emitNullUseCheck(expr.loc, 'indirect-call');
             this.body.callIndirect(typeId);
             if (varStructRet) {
+              // See the direct variadic path: copy out, then release.
+              const dst = this.aggCallOffsets.get(expr);
+              this.emitFrameAddr(dst);
               this.body.localGet(argBlockBase);
-              this.structRetDeferred += blockSize;
+              this.body.i32Const(this.sizeOf(varRetType));
+              this.body.memoryCopy();
+              this.emitVaBlockRelease(argBlockBase, blockSize);
+              this.emitFrameAddr(dst);
             } else if (varRetType !== Types.TVOID) {
               this.body.localGet(argBlockBase);
               this.emitVaArgLoad(varRetType);
-              this.emitVaBlockRelease(argBlockBase, blockSize,
-                this.structRetDeferred - deferredAtVaAlloc);
-              // See the direct variadic call path for the counter reset.
-              this.structRetDeferred = deferredAtVaAlloc;
+              this.emitVaBlockRelease(argBlockBase, blockSize);
             } else {
-              this.emitVaBlockRelease(argBlockBase, blockSize,
-                this.structRetDeferred - deferredAtVaAlloc);
+              this.emitVaBlockRelease(argBlockBase, blockSize);
               this.body.i32Const(0);
-              // See scalar-return branch above.
-              this.structRetDeferred = deferredAtVaAlloc;
             }
             this.popLocalScope();
-            this.callNesting--;
-            if (this.callNesting === 0 && this.structRetDeferred > 0) {
-              this.body.globalGet(this.stackPointerGlobalIdx);
-              this.body.i32Const(this.structRetDeferred);
-              this.body.aop(WT_I32, ALU.OP_ADD);
-              this.body.globalSet(this.stackPointerGlobalIdx);
-              this.structRetDeferred = 0;
-            }
           } else {
             // Non-vararg indirect call
             const structRet = isStructOrUnion(callRetType);
-            let structRetAllocSize = 0;
-            this.callNesting++;
-            if (structRet) {
-              const retSize = this.sizeOf(callRetType);
-              structRetAllocSize = (retSize + 15) & ~15;
-              this.body.globalGet(this.stackPointerGlobalIdx);
-              this.body.i32Const(structRetAllocSize);
-              this.body.aop(WT_I32, ALU.OP_SUB);
-              this.body.globalSet(this.stackPointerGlobalIdx);
-              this.body.globalGet(this.stackPointerGlobalIdx);
-            }
+            // #773: see the direct-call path.
+            if (structRet) this.emitFrameAddr(this.aggCallOffsets.get(expr));
             for (let i = 0; i < expr.arguments.length; i++) this.emitExpr(expr.arguments[i]);
             this.emitExpr(expr.callee);
             this.emitNullUseCheck(expr.loc, 'indirect-call');
             this.body.callIndirect(typeId);
-            if (structRet) this.structRetDeferred += structRetAllocSize;
-            this.callNesting--;
-            if (this.callNesting === 0 && this.structRetDeferred > 0) {
-              this.body.globalGet(this.stackPointerGlobalIdx);
-              this.body.i32Const(this.structRetDeferred);
-              this.body.aop(WT_I32, ALU.OP_ADD);
-              this.body.globalSet(this.stackPointerGlobalIdx);
-              this.structRetDeferred = 0;
-            }
           }
         }
         break;

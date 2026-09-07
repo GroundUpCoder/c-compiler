@@ -6,8 +6,10 @@
 // The instrument is the inliner's own refusal tally. Under the base convention
 // every aggregate-returning callee was refused (`refused.structRet > 0`) because
 // splicing a callee into a caller holding an outstanding deferred SP bump
-// interleaves two stack-pointer disciplines. Frame slots remove the bump, so that
-// refusal reason must go to zero AND the callees must actually inline.
+// interleaves two stack-pointer disciplines. Frame slots remove the bump, so an
+// sret callee becomes an ordinary callee and the refusal REASON is retired
+// outright — leg 1 requires the key to be gone, not merely zero, so a tally that
+// is silently never incremented cannot pass for a fix.
 //
 // Leg 3 is the RED CONTROL: the same program with __attribute__((noinline)) on the
 // aggregate-returning callees must still refuse them — by the `noinline` reason,
@@ -67,8 +69,8 @@ async function check(name, fn) {
   const pinned = build('__attribute__((noinline))');
 
   await check('aggregate-returning callees are no longer refused', () => {
-    assert.strictEqual(dflt.stats.refused.structRet, 0,
-      'inliner still refuses aggregate returns: ' + JSON.stringify(dflt.stats.refused));
+    assert(!('structRet' in dflt.stats.refused),
+      'the structRet refusal reason still exists: ' + JSON.stringify(dflt.stats.refused));
     assert(dflt.stats.inlined > 0, 'nothing inlined at all: ' + JSON.stringify(dflt.stats));
   });
 
@@ -82,9 +84,8 @@ async function check(name, fn) {
   await check('RED CONTROL: noinline still refuses, by its own reason', () => {
     assert(pinned.stats.refused.noinline > 0,
       'noinline attribute stopped being counted: ' + JSON.stringify(pinned.stats.refused));
-    assert.strictEqual(pinned.stats.refused.structRet, 0,
-      'a noinline callee must be refused as noinline, never as structRet: ' +
-      JSON.stringify(pinned.stats.refused));
+    assert(!('structRet' in pinned.stats.refused),
+      'the structRet refusal reason still exists: ' + JSON.stringify(pinned.stats.refused));
   });
 
   await check('the deferred shadow-stack bump is gone from the emitter', () => {
