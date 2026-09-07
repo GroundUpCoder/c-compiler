@@ -36,3 +36,23 @@ ordinary child `2>` redirection, preserve the assertion predicate/returning
 handler, and keep exit134 quiet. 760-signal passes both existing signal unit
 tests. 760-flake passes3/3 kernel and3/3 browser under load10; the browser
 runs took3.2/3.4/3.6s. Carried artifact rows are not counted as fresh execution.
+
+## Composed full-gate follow-up (2026-09-07)
+
+The first fresh full run at022a212b exposed a stale unit stderr golden:
+`stdlib/assert_fail` still expected only its assertion line, while #760 now
+adds an abort report. The full log preserves this RED; it was interrupted
+at the subsequent BlockFS leg and is not a completed full verdict.
+
+The message contract is now checked in `test_abort_backtrace.js` using the
+same unit C fixture: exact predicate/file/line, exact stdout, exit134, one
+abort report and an unsymbolized frame with the missing-metadata explanation.
+Only dynamic function indices/offsets avoid exact goldening. The unit corpus
+keeps its stdout/exit checks; removing its obsolete stderr golden does not
+remove the diagnostic assertion. Focused unit and host reruns pass.
+
+The same full run's registry guard caught #764's host frame-lifecycle test
+existing but not enrolled. Added it to the host member registry; standalone
+execution passes its frame trap/drain/exit/quit cases. This was missing
+validation enrollment, not a new claim of a product failure. The next full
+run must execute the entire host suite, which the initial run refused.
