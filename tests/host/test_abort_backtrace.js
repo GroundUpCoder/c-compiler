@@ -56,7 +56,7 @@ const bytes = COMMON.readFileBytes(kfs, '/abort.wasm');
   const unitBuilt = COMMON.createCcDriver(CC, kfs)(['cc', '/assert-unit.c', '-o', '/assert-unit.wasm'], '/');
   assert.strictEqual(unitBuilt.exitCode, 0, unitBuilt.stderr);
   let unitErr = '', unitOut = '';
-  const unitCode = await HOST({bytes: COMMON.readFileBytes(kfs, '/assert-unit.wasm'), args: ['/assert-unit.wasm'],
+  const unitCode = await HOST({fs, bytes: COMMON.readFileBytes(kfs, '/assert-unit.wasm'), args: ['/assert-unit.wasm'],
     writeErr: b => {unitErr += dec.decode(b);}, writeOut: b => {unitOut += dec.decode(b);}});
   const assertLine = unitSrc.split('\n').findIndex(line => line.includes('assert(1 == 2)')) + 1;
   assert.strictEqual(unitCode, Number(fs.readFileSync(path.join(unitDir, 'expected.exitcode'), 'utf8')));

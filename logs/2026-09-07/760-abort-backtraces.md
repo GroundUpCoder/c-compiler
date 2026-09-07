@@ -49,10 +49,15 @@ same unit C fixture: exact predicate/file/line, exact stdout, exit134, one
 abort report and an unsymbolized frame with the missing-metadata explanation.
 Only dynamic function indices/offsets avoid exact goldening. The unit corpus
 keeps its stdout/exit checks; removing its obsolete stderr golden does not
-remove the diagnostic assertion. Focused unit and host reruns pass.
+remove the diagnostic assertion. The focused unit rerun passed. The first
+host rerun failed because this new probe omitted the host filesystem imports
+(`c.remove`); the unit runner supplies `fs`, so the probe now does too. The
+initial journal statement that both reruns passed was premature and wrong.
 
 The same full run's registry guard caught #764's host frame-lifecycle test
 existing but not enrolled. Added it to the host member registry; standalone
 execution passes its frame trap/drain/exit/quit cases. This was missing
 validation enrollment, not a new claim of a product failure. The next full
 run must execute the entire host suite, which the initial run refused.
+The corrected host rerun then passed all five original modes plus the migrated
+unit fixture's full diagnostic contract (full-fix-abort-rerun.log).
