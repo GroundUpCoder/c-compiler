@@ -2223,6 +2223,23 @@ function preprocess(filename, initialTokens, ppRegistry) {
   }
 
   // --- 5. CORE PROCESSING ---
+  // C11 6.10.3p1-2: repeated definitions must have the same macro kind,
+  // parameter names and replacement tokens, including whitespace separation.
+  // The amount/kind of whitespace is immaterial, as is leading/trailing space.
+  function sameMacroDefinition(a, b) {
+    return a.isFunctionLike === b.isFunctionLike &&
+      a.isVariadic === b.isVariadic &&
+      (a.variadicName || "") === (b.variadicName || "") &&
+      a.params.length === b.params.length &&
+      a.params.every((name, i) => name === b.params[i]) &&
+      a.replacement.length === b.replacement.length &&
+      a.replacement.every((tok, i) => {
+        const other = b.replacement[i];
+        return tok.kind === other.kind && tok.text === other.text &&
+          (i === 0 || tok.flags.hasSpace === other.flags.hasSpace);
+      });
+  }
+
   function processTokens(state) {
     let lineOffset = 0;
     let fileOverride = null;
@@ -2411,6 +2428,13 @@ function preprocess(filename, initialTokens, ppRegistry) {
                 result.errors.push(new LexError(
                   "'##' cannot appear at either end of a macro expansion",
                   state.currentFile, dir.line));
+              }
+              const previous = macros.get(nameTok.text);
+              if (previous && !sameMacroDefinition(previous, m)) {
+                const loc = sourceToken(nameTok);
+                result.warnings.push(new LexError(
+                  `macro '${nameTok.text}' redefined with an incompatible definition`,
+                  loc.filename, loc.line));
               }
               macros.set(nameTok.text, m);
             }
@@ -40967,6 +40991,9 @@ function parseAllUnits(fs, pp, inputFiles, options) {
     const tLex = hrtime ? hrtime() : 0;
     const result = Lexer.tokenize(filenameInterned, source, pp);
     if (timing) timing.lexMs += hrtime() - tLex;
+    for (const w of result.warnings) {
+      writeErr(`${w.filename}:${w.line}: warning: ${w.message}\n`);
+    }
     if (result.errors.length > 0) {
       writeErr(`Got ${result.errors.length} lex errors in ${filename}.\n`);
       for (const err of result.errors) {

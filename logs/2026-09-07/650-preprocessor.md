@@ -54,3 +54,33 @@ Validation: all 844 unit tests passed (3 skipped), including the new native-outp
 comparison, in build/status-fixes/650-vaopt-unit.log. This remains focused
 validation; the aggregate gate is still pending. Redefinition diagnostics remain
 the last subissue of #650.
+
+## Redefinition diagnostics
+
+RED f1ebd90c tests incompatible object/function kinds, parameter names/counts,
+variadic status, token spelling and whitespace separation. Identical definitions,
+comments equivalent to spaces, empty definitions, inactive directives, and an
+intervening undef stay quiet. The comparison diagnoses incompatible definitions
+as warnings and preserves the conventional recovery of using the new definition.
+
+A real CLI probe exposed a second seam: parseAllUnits discarded preprocessor
+warnings even though parseSource retained them. Additional RED b76425e1 pins the
+actual compilation sink. parseAllUnits now forwards preprocessing warnings to
+writeErr, including when later parsing fails.
+
+Executed final focused validation:
+- AST: 142 passed, 0 failed (650-redefine-ast-final.log).
+- Unit: 844 passed, 0 failed, 3 skipped (650-redefine-unit-final.log).
+- Projects: 29 passed, 0 failed, 1 documented CPython skip, 239.7s; canonical
+  summary in build/status-fixes/650-projects-rerun/summary.json. A prior attempt
+  ended before writing a result and is not counted.
+- Actual original audit programs compiled and executed through host.js:
+  macroline prints `700 700`, vaopt prints `9`, redefine warns and prints `2`;
+  all exit 0 (650-original-repros-after.json).
+- Separate Lua compile captures successful-build stderr for warning inspection:
+  build/status-fixes/650-lua.stderr.
+
+All three #650 implementations are now present. The full shipping gate, final
+manual gucOS use, and the remaining serial audit fixes are still pending. This
+branch has not been merged to main or deployed, and #650 stays in progress until
+the required validation is complete.
