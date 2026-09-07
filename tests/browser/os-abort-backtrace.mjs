@@ -6,6 +6,11 @@ const s = await openOsSession({port: 3381, readyLabel: 'boots to ready'});
 const {page, setVt, check} = s;
 try {
   await setVt(1);
+  const helpStart = await page.evaluate(() => window.__osOut.length);
+  await page.keyboard.type('cc --help; echo HELP-RC=$?; echo H""ELP-DONE\r');
+  await page.waitForFunction(start => window.__osOut.slice(start).includes('HELP-DONE'), helpStart, {timeout: 30000});
+  const help = await page.evaluate(start => window.__osOut.slice(start), helpStart);
+  check('cc --help succeeds with supported controls', help.includes('HELP-RC=0') && help.includes('usage: cc') && help.includes('-fno-inline') && help.includes('__require_source'), help);
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.evaluate(src => navigator.clipboard.writeText(src), source);
   await page.keyboard.type('pbpaste > /root/abort.c; cc -g /root/abort.c -o /root/abort.out; echo BUILD-RC=$?\r');

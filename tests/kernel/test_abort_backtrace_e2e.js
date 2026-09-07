@@ -6,7 +6,7 @@ const path = require('path');
 const assert = require('assert');
 const {driveBoot, section} = require('./lib/drive.js');
 const src = fs.readFileSync(path.join(__dirname, '../fixtures/abort-backtrace.c'), 'utf8');
-const script = ["cat > /root/abort.c <<'EOF'", src, 'EOF', 'cc -g /root/abort.c -o /root/abort.out || exit 91'];
+const script = ['echo ==cli-help', 'cc --help; echo RC=$?', 'echo ==cut', "cat > /root/abort.c <<'EOF'", src, 'EOF', 'cc -g /root/abort.c -o /root/abort.out || exit 91'];
 for (const mode of ['abort', 'assert', 'exit', 'handled']) {
   script.push('echo ==' + mode, '/root/abort.out ' + mode + ' 2>/tmp/abort.err; echo RC=$?',
     'cat /tmp/abort.err', 'echo ==cut');
@@ -19,6 +19,8 @@ script.push("cat > /root/chain.c <<'EOF'", chain, 'EOF',
 const r = driveBoot(script, {prefix: 'abort-report-', timeout: 60000});
 assert.strictEqual(r.status, 0, r.stderr);
 assert(r.stdout.includes('HOST-SURVIVED'), r.stdout);
+const help = section(r.stdout, 'cli-help');
+assert(help.includes('RC=0') && help.includes('usage: cc') && help.includes('-fno-inline') && help.includes('__require_source'), help);
 for (const mode of ['abort', 'assert', 'exit', 'handled']) {
   const out = section(r.stdout, mode);
   assert(out.includes('RC=134'), out);

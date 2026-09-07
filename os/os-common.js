@@ -124,13 +124,16 @@ function createCcDriver(CompilerJS, kfs) {
     // MountFS and RemoteFS alike (todos/0263).
     pp.realpath = function (p) { return kfs.realpathPhysical(p); };
 
+    var usage = 'usage: cc [-o out] [-Ipath] [-Dname[=val]] [-g|-g2] [-fno-inline] [--trap-null-dereference] file.c...\n';
+    var showHelp = false;
     var outputFile = 'a.out';
     var sources = [];
     var compilerOptions = { requireSources: [], backend: 'default' };
     var warningFlags = { pointerDecay: false, circularDependency: false, largeStackFrame: true };
     for (var i = 1; i < argv.length; i++) {
       var a = argv[i];
-      if (a === '-o') { outputFile = argv[++i]; }
+      if (a === '--help') { showHelp = true; }
+      else if (a === '-o') { outputFile = argv[++i]; }
       else if (a.lastIndexOf('-I', 0) === 0) { pp.includePaths.push(abs(a.substring(2))); }
       else if (a.lastIndexOf('-D', 0) === 0) {
         var def = a.substring(2), eq = def.indexOf('=');
@@ -155,8 +158,21 @@ function createCcDriver(CompilerJS, kfs) {
       }
       else sources.push(abs(a));
     }
+    if (showHelp) {
+      return { exitCode: 0, stderr: '', stdout: usage +
+        '  --help       Show this help\n' +
+        '  -o out       Write executable (default: a.out)\n' +
+        '  -Ipath       Add an include directory\n' +
+        '  -Dname[=val] Define a preprocessor macro\n' +
+        '  -g, -g1      Embed function names and source locations\n' +
+        '  -g2          Also embed source text\n' +
+        '  -fno-inline  Disable inlining; independent of -g\n' +
+        '  --trap-null-dereference  Instrument null accesses\n' +
+        'Other options are refused, including -O levels, -Wall, -c, -std= and -l.\n' +
+        'Libraries link through headers (__require_source). See /usr/doc/toolchain.md\n' };
+    }
     if (!sources.length) {
-      return { exitCode: 1, stdout: '', stderr: 'usage: cc [-o out] [-Ipath] [-Dname[=val]] [-g|-g2] [-fno-inline] [--trap-null-dereference] file.c...\n' };
+      return { exitCode: 1, stdout: '', stderr: usage };
     }
 
     // parseAllUnits reads the top-level sources through its `fs` parameter

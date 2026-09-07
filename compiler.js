@@ -42343,6 +42343,26 @@ function main() {
     }
   }
 
+  const usage = "Usage: node compiler.js [-a <lex|parse|link|cfg|print|compile>] [-o output.wasm|.html|.js] [-Dname[=val]] [-Ipath] <files...>\n";
+  const help = usage +
+    "Inputs may also be bin.json projects (dependencies are expanded).\n" +
+    "  --help                 Show this help\n" +
+    "  -g, -g1                Embed function names and source locations\n" +
+    "  -g2                    Also embed source text\n" +
+    "  -fno-inline            Disable inlining; independent of -g\n" +
+    "  --trap-null-dereference Instrument null accesses\n" +
+    "  -W[no-]pointer-decay, -W[no-]circular-dependency,\n" +
+    "  -W[no-]large-stack-frame, -W[no-]empty-translation-unit\n" +
+    "                         Toggle the named warning\n" +
+    "  --require-source FILE  Add source to link (repeatable)\n" +
+    "  --srcroot NS=DIR       Register a source namespace (repeatable)\n" +
+    "  --allow-old-c          Enable legacy C declaration extensions\n" +
+    "  --gc-sections          Remove unreachable functions\n" +
+    "  --time-report, -v      Report compiler timings / verbose output\n" +
+    "Unsupported options are errors, including -O levels, -Wall, -c, -std= and -l.\n" +
+    "The optimizer uses its default pipeline unless an implemented control changes it.\n" +
+    "Libraries link through headers (__require_source); see os/doc/toolchain.md.\n";
+  let showHelp = false;
   let action = "compile";
   let outputFile = "a.wasm";
   const inputFiles = [];
@@ -42377,7 +42397,9 @@ function main() {
   };
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "-a" || args[i] === "--action") {
+    if (args[i] === "--help") {
+      showHelp = true;
+    } else if (args[i] === "-a" || args[i] === "--action") {
       action = args[++i];
     } else if (args[i].startsWith("-D")) {
       const def = args[i].substring(2);
@@ -42401,6 +42423,10 @@ function main() {
       else if (wflag === "no-large-stack-frame") warningFlags.largeStackFrame = false;
       else if (wflag === "empty-translation-unit") warningFlags.emptyTranslationUnit = true;
       else if (wflag === "no-empty-translation-unit") warningFlags.emptyTranslationUnit = false;
+      else {
+        process.stderr.write(`error: unrecognized option '${args[i]}'\n`);
+        process.exit(1);
+      }
     } else if (args[i] === "-g" || args[i] === "-g1") {
       compilerOptions.emitNames = true;
     } else if (args[i] === "-g2") {
@@ -42529,23 +42555,19 @@ function main() {
       // change — emitted pages always use BLOCK_FS now.
       console.error("warning: --browser-fs/--no-block-fs is no longer supported; the legacy full-OPFS backend was removed. Emitting a BLOCK_FS page.");
     } else if (args[i].startsWith("-")) {
-      // The sanitizer/custom-diagnostic namespace must fail loud: accepting
-      // one of these as a no-op falsely claims a safety contract. Preserve
-      // the older host CLI's compatibility for unrelated ignored flags.
-      if (args[i].startsWith("-fsanitize") || args[i].startsWith("-fno-sanitize") ||
-          args[i].startsWith("--trap-null")) {
-        process.stderr.write(`error: unrecognized option '${args[i]}'\n`);
-        process.exit(1);
-      }
-      // Legacy host CLI compatibility: unrelated unknown options remain
-      // ignored. The in-OS driver has the stricter all-unknown refusal.
+      process.stderr.write(`error: unrecognized option '${args[i]}'\n`);
+      process.exit(1);
     } else {
       inputFiles.push(args[i]);
     }
   }
 
+  if (showHelp) {
+    process.stdout.write(help);
+    return;
+  }
   if (!inputFiles.length && action === "compile") {
-    process.stderr.write("Usage: node compiler.js [-a <lex|parse|link|cfg|print|compile>] [-o output.wasm|.html|.js] [-Dname[=val]] [-Ipath] <files...>\n");
+    process.stderr.write(usage);
     process.exit(1);
   }
 

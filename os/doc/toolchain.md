@@ -7,7 +7,7 @@ files, no archives (`.a`), no shared objects (`.so`), and no `make`.
 ## The command line
 
 ```
-cc [-o OUT] [-IPATH] [-DNAME[=VAL]] [-g] [--trap-null-dereference] FILE.c ...
+cc [-o OUT] [-IPATH] [-DNAME[=VAL]] [-g|-g2] [-fno-inline] [--trap-null-dereference] FILE.c ...
 ```
 
 | Flag | Effect |
@@ -15,7 +15,10 @@ cc [-o OUT] [-IPATH] [-DNAME[=VAL]] [-g] [--trap-null-dereference] FILE.c ...
 | `-o OUT` | Write the output to OUT. Default: `./a.out`, mode 0755. |
 | `-IPATH` | Add an include directory. Joined form only: `-Isrc`, not `-I src`. |
 | `-DNAME[=VAL]` | Define a preprocessor macro. |
-| `-g` | Emit a name section for readable stack traces. |
+| `--help` | Print supported options and exit successfully. |
+| `-g`, `-g1` | Embed function names and source locations for readable stack traces. |
+| `-g2` | Also embed source text. |
+| `-fno-inline` | Disable inlining to preserve caller frames; independent of `-g`. |
 | `--trap-null-dereference` | Trap before an evaluated access or indirect call through a null pointer. |
 
 The null trap is a custom, default-off debugging mode. It covers scalar and
@@ -28,9 +31,14 @@ approximately implemented.
 
 Every other dash option is refused by name: `cc -O2 game.c` exits 1 with
 `cc: error: unrecognized option '-O2'`. `-c`, `-Wall`, `-std=…` and
-`-fanything` do not exist here. `-l…` is refused with an extra hint —
+unlisted `-f…` options do not exist here. `-l…` is refused with an extra hint —
 libraries link through headers (see below), never through `-l`. A `cc`
-command with no source file prints the usage line and exits 1.
+command with no source file prints the usage line and exits 1; `cc --help`
+prints help to stdout and exits 0.
+
+The host frontend (`node compiler.js --help`) also refuses unsupported flags,
+including `-O` levels. It has additional explicit controls and accepts project
+JSON inputs. Neither frontend implements GCC/Clang optimization levels.
 
 Name every project source file on the command line:
 
