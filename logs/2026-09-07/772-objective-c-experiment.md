@@ -156,3 +156,80 @@ experiment yet. Those mandatory checks, failure resolution, exact final artifact
 inspection and ticket closure pass to a real serial continuation; no internal
 agent or parallel implementation worker was used. All targeted sessions are
 closed before creating that continuation.
+
+## Completed fresh regression and flake gates — serial continuation
+
+The real continuation is cc thread 01a07b8e-f2c3-7b33-8ada-084561cbda9e.
+Its metadata was read through shell cc-meta and verified as executor `codex`,
+model `gpt-6-astra`; ticket #772's claim was transferred to this thread and
+re-read to verify both claimant and working-thread link. This continuation
+performed validation and documentation itself, with no internal agents or other
+implementation workers. No compiler or test source changed: both gates ran at
+HEAD a02713e61fb9d018653e30b638f0335baec70d14, source/test tip 87c9562f.
+
+Executed fresh, with no --resume or test filter:
+
+```
+node tests/run.js --diff 277b14fb --dry-run
+node tests/run.js --diff 277b14fb --out=build/objc/gate
+```
+
+Run `20260907-111042-38615` began 2026-09-07 11:10:42 UTC and ended
+12:12:15 UTC; elapsed 3,693,238 ms (61.6 minutes), exit 0. The actual new
+`build/objc/gate/summary.json` was checked before child artifacts: its mtime
+postdates the start, filter is null, it selects 25 suites, and all seven
+execution rows are literally `pass` (19 Python categories share one row).
+This is the mapper's **diff gate**, not the full ship tier: `netsurf-patch`
+is explicitly omitted. No deployment is being made.
+
+| Execution row | Fresh result |
+|---|---|
+| todos | pass |
+| unit | pass |
+| host, including Objective-C corpus | pass |
+| blockfs | 15/15 members pass |
+| Python batch, 19 categories | 904 pass, 0 fail, 111 baseline skips; skip-baseline check passes |
+| kernel | 200/200 members pass |
+| browser sweep | 70/70 members pass |
+
+The complete kernel/browser child manifests each have `done: true`, null filter,
+executed = recorded = total, zero resumed/carried, and only pass results. The
+fresh kernel Objective-C member passed in 0.7s; the browser Objective-C member
+passed in 4.6s. Its log records Chromium 149.0.7827.55 compiling/executing all ten
+positive cases and checking all 23 refusals, then compiling core.m via browser
+OS /bin/cc and executing it in a process worker with exit 0. These are fresh
+executions in the broad gate, not the earlier filtered results.
+
+Before the next gate, complete kernel/browser/BlockFS/Python artifact directories
+were copied under `build/objc/gate-children/`. Dispatcher history and transcript
+are under `build/objc/gate/history/`; full shell output is `build/objc/gate.log`.
+The earlier exploratory startup red remains preserved and separate.
+
+Then executed the standard `node tests/flake.js`, serially after the regression
+dispatcher exited. Exit 0 in 503.7s. Both legs used three repetitions under ten
+CPU load generators:
+
+- Kernel: wm_service, term, os_apps, comp_park; 12/12 fresh executions pass.
+- Browser: os-compositor, os-doompage-motion, os-doom, os-term, os-wm,
+  os-doompage-renders; 18/18 fresh executions pass. The standard substring filter
+  selects six members, including the two Doom-page variants.
+
+Every selected file has three pass records with repetition indexes 1/2/3; all
+reported flake rates are 0% for this sample. This does not claim universal flake
+freedom or a repeated Objective-C stress test. The flake manifests retain 196
+kernel and 64 browser nonselected results from the preceding gate; those carried
+records are **not** counted among the 30 fresh stress executions. Separate copies
+are under `build/objc/flake-children/`; full output is `build/objc/flake.log`.
+`build/objc/validation-final.json` records assertions, scope, and SHA-256 hashes
+of the compiler, matrix, logs and summaries.
+
+No regression or flake failure required a source fix. The final liability check
+passed (37 entries, two pinned historical deferrals, 31 funding tickets), and the
+register contains no #772 entry requiring retirement. Raw output is
+`build/objc/liabilities-final.log`. The subset boundaries in tests/objc/README.md
+remain experiment boundaries, not funded promises to implement Cocoa/ARC later.
+Ticket closure records this isolated experiment's completion; no merge, push or
+deployment occurred. The original checkout and its untracked browser/projects
+experiments remain untouched. Compiler/runtime follow-up costs and the separation
+between macOS-inspired UX, the existing POSIX-like filesystem/Win32 UI path, and
+Cocoa compatibility remain as assessed above.
