@@ -391,7 +391,7 @@ function startCompositor(kernel, canvas, device) {
           size: { width: w, height: h }, format: 'rgba8unorm',
           // RENDER_ATTACHMENT: copyExternalImageToTexture requires it.
           usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING |
-                 GPUTextureUsage.RENDER_ATTACHMENT,
+                 GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
         });
         c = { bmp: null, w: w, h: h, tex: tex, bind: bindFor(tex) };
         gpuCache.set(surf.sid, c);
@@ -401,6 +401,52 @@ function startCompositor(kernel, canvas, device) {
       c.bmp = bmp;
     }
     return c.bind;
+  }
+
+  // #751: submit the texture copy before yielding, so a new bitmap/resize
+  // or surface destruction cannot retarget an in-flight capture. Readbacks
+  // are on demand and bounded; never accumulate an unbounded staging queue.
+  var captureBytes = 0;
+  async function captureSurface(surf) {
+    if (deviceLost) throw Object.assign(new Error('compositor device unavailable'), { errno: 'EIO' });
+    if (!surf.bitmap || surf.bitmap.width !== surf.w || surf.bitmap.height !== surf.h)
+      throw Object.assign(new Error('surface frame is not ready at capture size'), { errno: 'EAGAIN' });
+    var stride = Math.ceil(surf.w * 4 / 256) * 256;
+    var size = stride * surf.h;
+    if (captureBytes + size > 64 * 1024 * 1024)
+      throw Object.assign(new Error('GPU capture staging limit reached'), { errno: 'EBUSY' });
+    captureBytes += size;
+    var dev = device, buffer, validation;
+    try {
+      dev.pushErrorScope('validation');
+      try {
+        gpuBindFor(surf);
+        var texture = gpuCache.get(surf.sid).tex;
+        buffer = dev.createBuffer({ size: size, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+        var encoder = dev.createCommandEncoder();
+        encoder.copyTextureToBuffer({ texture: texture }, { buffer: buffer, bytesPerRow: stride },
+          { width: surf.w, height: surf.h });
+        dev.queue.submit([encoder.finish()]);
+      } finally {
+        // Pop in the submitting turn: overlapping captures must not steal
+        // one another's device-wide error scopes.
+        validation = dev.popErrorScope();
+      }
+      var results = await Promise.all([buffer.mapAsync(GPUMapMode.READ), validation]);
+      if (results[1]) throw new Error(results[1].message);
+      if (dev !== device || deviceLost) throw new Error('compositor device lost during capture');
+      var mapped = new Uint8Array(buffer.getMappedRange());
+      var rgba = new Uint8Array(surf.w * surf.h * 4);
+      for (var y = 0; y < surf.h; y++)
+        rgba.set(mapped.subarray(y * stride, y * stride + surf.w * 4), y * surf.w * 4);
+      return { w: surf.w, h: surf.h, rgba: rgba };
+    } finally {
+      try { if (validation) await validation.catch(function () {}); }
+      finally {
+        if (buffer) buffer.destroy();
+        captureBytes -= size;
+      }
+    }
   }
 
   // ---- label textures: title text, the close 'x' and Exposé captions
@@ -881,7 +927,7 @@ function startCompositor(kernel, canvas, device) {
   // want-frame doorbells) re-arms the parked rAF through this hook.
   kernel.wmOnDamage(scheduleFrame);
   requestAnimationFrame(draw);
-  return { scheduleFrame: scheduleFrame, setFrozen: setFrozen, stats: stats,
+  return { captureSurface: captureSurface, scheduleFrame: scheduleFrame, setFrozen: setFrozen, stats: stats,
            // Test hook (#551, tests/browser/os-devloss.mjs): destroy the live
            // device — fires the REAL lost path, recovery included.
            killDevice: function () { try { device.destroy(); } catch (e) {} } };

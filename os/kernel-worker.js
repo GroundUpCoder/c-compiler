@@ -288,6 +288,7 @@ self.onmessage = function (e) {
     wmCanvas = m.canvas;
     kernel.wmSetScreen(m.canvas.width, m.canvas.height);
     compositor = OS_COMPOSITOR.startCompositor(kernel, m.canvas, gpuDevice);
+    kernel.captureSurface = compositor.captureSurface;
   } else if (m.type === 'screen-resize') {
     // Dynamic screen resolution (todos/0023): the page tracks the viewport;
     // the OffscreenCanvas is resized HERE (a transferred canvas can't be

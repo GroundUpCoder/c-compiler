@@ -189,6 +189,21 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('GPU thumbnail filters readback pixels', cap.w === 20 && cap.h === 12 && String(px(cap, 2, 2)) === '17,83,211,255');
   cap = await requestCapture(K.WMP.SHOT_SCREEN, []);
   check('GPU screen composite uses readback pixels', String(px(cap, gs.x + 2, gs.y + 2)) === '17,83,211,255');
+  kernel._wmOverview = {cells: [{sid: 1, x: 200, y: 200, w: 40, h: 24}], hoverSid: 0};
+  cap = await requestCapture(K.WMP.SHOT_SCREEN, []);
+  check('overview captures GPU miniatures', String(px(cap, 202, 202)) === '17,83,211,255');
+  kernel._wmOverview = null;
+  let releaseCapture;
+  kernel.captureSurface = surf => new Promise(resolve => {
+    releaseCapture = () => resolve({w: surf.w, h: surf.h, rgba: new Uint8Array(surf.w * surf.h * 4).fill(123)});
+  });
+  const pendingCapture = kernel.wmCapture(K.WMP.SHOT_SCREEN, 0);
+  const oldX = gs.x;
+  gs.x = 300;
+  releaseCapture();
+  cap = await pendingCapture;
+  check('pending capture retains request-time geometry across moves', px(cap, oldX + 2, gs.y + 2)[0] === 123 && px(cap, 302, gs.y + 2)[0] === 0);
+  gs.x = oldX;
   kernel.captureSurface = async () => { throw new Error('injected device loss'); };
   cap = await requestCapture(K.WMP.THUMB, [1, 20, 12]);
   check('readback rejection settles as an error, never an image', cap.type === K.WMP.R_ERR);

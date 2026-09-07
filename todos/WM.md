@@ -964,7 +964,7 @@ corners, animations, glass).**
   get neither.
 - **Aero Peek**: kernel-side `wmThumbnail` / **WMP THUMB 0x32** → R_SHOT
   (deterministic box filter, aspect-fit ≤ maxW×maxH, never upscaled —
-  goldenable; gpu-transport surfaces thumb black like SHOT). wm.c raises
+  goldenable; GPU surfaces use on-demand compositor readback like SHOT). wm.c raises
   a 160×120 "peek" popup on taskbar-button hover (borderless, top layer,
   focus handed straight back), refreshes it every 30 ticks, dismisses on
   click/motion-elsewhere/EV_SCREEN/150-tick idle backstop (the wm only
@@ -1403,3 +1403,16 @@ quake leg, browser `os-quake.mjs`; dev log
 ~9–13 sessions to the acceptance test. Sequencing rule: nothing in units
 2–7 may contradict a spike result — S1 in particular gates unit 4's `gpu`
 tail.
+
+### GPU capture (#751)
+
+`wmctl shot`, `wmctl thumb`, and `wmctl shot screen` read GPU surfaces through
+compositor texture-to-buffer readback. Requests snapshot scene geometry and
+submit GPU copies before yielding; thumbnails retain the deterministic box
+filter and anchored children, and screen captures retain the deterministic
+kernel chrome (glass, shadows and rounded corners remain browser furniture).
+The synchronous kernel pixel helpers require supplied readback pixels for GPU
+surfaces; `wmCapture` is the asynchronous entry shared by the WMP operations.
+Readback failure returns R_ERR (EIO), missing capability ENOSYS, an unready
+frame EAGAIN, and staging pressure EBUSY. No failed capture produces a PNG.
+Staging allocations are bounded to 64 MiB in flight and released after mapping.

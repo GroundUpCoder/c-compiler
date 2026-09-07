@@ -963,8 +963,7 @@ var WMP = {
                                         Aero Peek) -> R_SHOT { sid, w, h,
                                         rgba } aspect-fit inside maxW x maxH
                                         (never upscaled). Deterministic box
-                                        filter — CPU pixels, so gpu-transport
-                                        surfaces thumb black like wmScreenshot */
+                                        filter over shm or GPU readback pixels */
   SYSMENU: 0x33,                     /* { }: fire the window system-menu
                                         gesture (todos/0102) — the wmctl-sysmenu
                                         path into the same EV_SYSMENU the
@@ -1089,7 +1088,7 @@ var WMP = {
  * the name to its libc <errno.h> number for the R_ERR payload (numbers MUST
  * MATCH host.js's errnoMap / the libc errno.h). Semantics are documented at
  * the "R_ERR payload" line of the protocol comment above. */
-var WMP_ERRNO = { EPERM: 1, ESRCH: 3, EAGAIN: 11, ENODEV: 19, EINVAL: 22, ENOSYS: 38 };
+var WMP_ERRNO = { EPERM: 1, ESRCH: 3, EIO: 5, EBUSY: 16, EAGAIN: 11, ENODEV: 19, EINVAL: 22, ENOSYS: 38 };
 var WMP_REC_BYTES = 80;
 var WM_SOCK_PATH = '/run/wm.sock';
 
@@ -2189,6 +2188,10 @@ function Kernel(opts) {
   // nothing to read a font from) composites textless chrome. That is
   // capability ABSENCE, not a fallback renderer.
   this.textService = opts.textService || null;
+  // Optional GPU capture capability: synchronously submit a copy of surf.bitmap
+  // before returning a Promise<{w,h,rgba}>. The compositor owns GPU resources;
+  // the kernel owns thumbnail filtering and deterministic screen composition.
+  this.captureSurface = opts.captureSurface || null;
   // System clipboard (todos/0090): { fmt, bytes: Uint8Array } or null.
   // Kernel-owned so it outlives the copying process; see OP.CLIP_SET.
   this._clipboard = null;
@@ -6798,19 +6801,74 @@ Kernel.prototype._padSyncTo = function (pcb) {
   });
 };
 
-/* Screenshot one surface: a copy of its front (shm) framebuffer, at BUFFER
- * resolution — scaling (todos/0024) is a composite affordance; the app's
- * own pixels are what an agent wants here. gpu-kind surfaces have no CPU
- * pixels — the browser compositor owns readback for those (headless they
- * run shm, so tests are covered). */
-Kernel.prototype.wmScreenshot = function (sid) {
+/* A synchronous CPU-plane read, or pixels supplied by wmCapture. Never read
+ * the unused shm plane of a bitmap surface (#751). */
+Kernel.prototype.wmScreenshot = function (sid, pixels) {
   var s = this._surfaces.get(sid | 0);
   if (!s) return null;
+  if (pixels && pixels.has(s.sid)) return pixels.get(s.sid);
+  if (s.bitmap) throw Object.assign(new Error('GPU surface requires compositor readback'), { errno: 'ENOSYS' });
   var front = Atomics.load(s.i32, SH_FLIP) & 1;
   var bytes = s.w * s.h * 4;
   var rgba = new Uint8Array(bytes);
   rgba.set(s.u8.subarray(SH_HDR_BYTES + front * bytes, SH_HDR_BYTES + (front + 1) * bytes));
   return { w: s.w, h: s.h, rgba: rgba };
+};
+
+/* Capture a scene snapshot across asynchronous GPU readback. Geometry and CPU
+ * pixels are frozen before yielding; GPU copies are submitted in this same
+ * turn, before newer presents can close the bitmaps. Surface destruction or
+ * resize while mapping therefore cannot splice a new scene into old pixels.
+ * Only the surfaces consumed by this operation are read (including anchored
+ * children for thumbs, and minimized windows in overview). */
+Kernel.prototype.wmCapture = async function (type, sid, maxW, maxH) {
+  var snap = Object.assign(Object.create(Kernel.prototype), this);
+  snap._surfaces = new Map();
+  this._surfaces.forEach(function (s, id) {
+    snap._surfaces.set(id, Object.assign({}, s, { children: s.children.slice() }));
+  });
+  snap._zOrder = this._zOrder.slice();
+  snap._wmScreen = Object.assign({}, this._wmScreen);
+  if (this._wmOverview) snap._wmOverview = {
+    cells: this._wmOverview.cells.map(function (c) { return Object.assign({}, c); }),
+    hoverSid: this._wmOverview.hoverSid
+  };
+  var wanted = new Set();
+  var addKids = function (s) {
+    wanted.add(s.sid);
+    s.children.forEach(function (id) {
+      var c = snap._surfaces.get(id);
+      if (c && c.mapped) addKids(c);
+    });
+  };
+  if (type === WMP.SHOT_SCREEN) {
+    if (snap._wmOverview) snap._wmOverview.cells.forEach(function (c) { wanted.add(c.sid); });
+    else snap._surfaces.forEach(function (s) {
+      if (s.mapped && !s.minimized && !(s.parentSid && snap._wmAnchorHidden(s))) wanted.add(s.sid);
+    });
+  } else {
+    var s = snap._surfaces.get(sid | 0);
+    if (!s) return null;
+    if (type === WMP.THUMB) addKids(s); else wanted.add(s.sid);
+  }
+  var pixels = new Map();
+  var capture = this.captureSurface;
+  await Promise.all(Array.from(wanted, async function (id) {
+    var s = snap._surfaces.get(id);
+    if (!s) return;
+    var shot;
+    if (s.bitmap) {
+      if (!capture) throw Object.assign(new Error('GPU capture unavailable for surface ' + id), { errno: 'ENOSYS' });
+      shot = await capture(s);
+    } else shot = snap.wmScreenshot(id);
+    if (!shot || shot.w !== s.w || shot.h !== s.h ||
+        !(shot.rgba instanceof Uint8Array) || shot.rgba.length !== s.w * s.h * 4)
+      throw Object.assign(new Error('invalid readback for surface ' + id), { errno: 'EIO' });
+    pixels.set(id, shot);
+  }));
+  return type === WMP.SHOT_SCREEN ? snap.wmScreenshotScreen(pixels)
+    : type === WMP.THUMB ? snap.wmThumbnail(sid, maxW, maxH, pixels)
+    : snap.wmScreenshot(sid, pixels);
 };
 
 /* Label text into an RGBA composite (todos/0275): render via the ksvc blob
@@ -6854,7 +6912,7 @@ Kernel.prototype._blitLabel = function (out, W, H, x, y, text, maxW, rgba, opts)
  * shadows, rounded corners, glass). Row blits when unscaled; a
  * nearest-neighbor loop maps the buffer into the dst viewport when scaled
  * (todos/0024). */
-Kernel.prototype.wmScreenshotScreen = function () {
+Kernel.prototype.wmScreenshotScreen = function (pixels) {
   var W = this._wmScreen.w, H = this._wmScreen.h;
   var out = new Uint8Array(W * H * 4);
   var fill = function (x0, y0, w, h, c) {
@@ -6889,8 +6947,8 @@ Kernel.prototype.wmScreenshotScreen = function () {
       if (!os) continue;
       fill(oc.x - OVB, oc.y - OVB, oc.w + 2 * OVB, oc.h + 2 * OVB,
            oc.sid === hoverSid ? WM_COLORS.titleFocused : WM_COLORS.border);
-      var ofront = Atomics.load(os.i32, SH_FLIP) & 1;
-      var obase = SH_HDR_BYTES + ofront * os.w * os.h * 4;
+      var opixels = this.wmScreenshot(os.sid, pixels).rgba;
+      var obase = 0;
       var ox0 = Math.max(0, -oc.x), oy0 = Math.max(0, -oc.y);
       var ox1 = Math.min(oc.w, W - oc.x), oy1 = Math.min(oc.h, H - oc.y);
       for (var ody = oy0; ody < oy1; ody++) {
@@ -6899,8 +6957,8 @@ Kernel.prototype.wmScreenshotScreen = function () {
         for (var odx = ox0; odx < ox1; odx++) {
           var osi = osrow + Math.floor(odx * os.w / oc.w) * 4;
           var odi = odrow + odx * 4;
-          out[odi] = os.u8[osi]; out[odi + 1] = os.u8[osi + 1];
-          out[odi + 2] = os.u8[osi + 2]; out[odi + 3] = 255;
+          out[odi] = opixels[osi]; out[odi + 1] = opixels[osi + 1];
+          out[odi + 2] = opixels[osi + 2]; out[odi + 3] = 255;
         }
       }
       // Caption centered under the cell (compositor drawOverview's exact
@@ -6956,8 +7014,8 @@ Kernel.prototype.wmScreenshotScreen = function () {
       }
     }
     // Client pixels: front buffer rows, clipped to the screen.
-    var front = Atomics.load(s.i32, SH_FLIP) & 1;
-    var base = SH_HDR_BYTES + front * s.w * s.h * 4;
+    var srcPixels = this.wmScreenshot(s.sid, pixels).rgba;
+    var base = 0;
     var sx0 = Math.max(0, -s.x), sy0 = Math.max(0, -s.y);
     var sx1 = Math.min(dw, W - s.x), sy1 = Math.min(dh, H - s.y);
     if (s.hasAlpha) {
@@ -6971,10 +7029,10 @@ Kernel.prototype.wmScreenshotScreen = function () {
         for (var ax = sx0; ax < sx1; ax++) {
           var asi = arow + Math.floor(ax * s.w / dw) * 4;
           var adi = adrow + ax * 4;
-          var aa = s.u8[asi + 3], ainv = 255 - aa;
-          out[adi] = (s.u8[asi] * aa + out[adi] * ainv + 127) / 255 | 0;
-          out[adi + 1] = (s.u8[asi + 1] * aa + out[adi + 1] * ainv + 127) / 255 | 0;
-          out[adi + 2] = (s.u8[asi + 2] * aa + out[adi + 2] * ainv + 127) / 255 | 0;
+          var aa = srcPixels[asi + 3], ainv = 255 - aa;
+          out[adi] = (srcPixels[asi] * aa + out[adi] * ainv + 127) / 255 | 0;
+          out[adi + 1] = (srcPixels[asi + 1] * aa + out[adi + 1] * ainv + 127) / 255 | 0;
+          out[adi + 2] = (srcPixels[asi + 2] * aa + out[adi + 2] * ainv + 127) / 255 | 0;
           out[adi + 3] = 255;
         }
       }
@@ -6983,7 +7041,7 @@ Kernel.prototype.wmScreenshotScreen = function () {
       for (var sy = sy0; sy < sy1; sy++) {
         var src = base + (sy * s.w + sx0) * 4;
         var dst = ((s.y + sy) * W + (s.x + sx0)) * 4;
-        out.set(s.u8.subarray(src, src + (sx1 - sx0) * 4), dst);
+        out.set(srcPixels.subarray(src, src + (sx1 - sx0) * 4), dst);
       }
     } else {
       // Scaled (todos/0024): nearest-neighbor — src = floor(dst * buf/dst),
@@ -6995,8 +7053,8 @@ Kernel.prototype.wmScreenshotScreen = function () {
         for (var dx = sx0; dx < sx1; dx++) {
           var si = srow + Math.floor(dx * s.w / dw) * 4;
           var di = drow + dx * 4;
-          out[di] = s.u8[si]; out[di + 1] = s.u8[si + 1];
-          out[di + 2] = s.u8[si + 2]; out[di + 3] = s.u8[si + 3];
+          out[di] = srcPixels[si]; out[di + 1] = srcPixels[si + 1];
+          out[di + 2] = srcPixels[si + 2]; out[di + 3] = srcPixels[si + 3];
         }
       }
     }
@@ -7046,12 +7104,11 @@ Kernel.prototype.wmSetScreen = function (w, h) {
 };
 
 /* Downscaled front-buffer thumbnail (todos/0063, Aero Peek): the surface's
- * CPU pixels box-filtered to fit maxW x maxH, aspect preserved, never
- * upscaled. Deterministic (integer accumulate, floor divide) so agents can
- * golden it; gpu-transport surfaces thumb black, same caveat as
- * wmScreenshot. Serving it kernel-side keeps the WMP payload small — the
+ * pixels box-filtered to fit maxW x maxH, aspect preserved, never
+ * upscaled. Deterministic (integer accumulate, floor divide) over shm or
+ * compositor readback. Serving it kernel-side keeps the WMP payload small — the
  * WM asks for exactly the popup size instead of shipping full frames. */
-Kernel.prototype.wmThumbnail = function (sid, maxW, maxH) {
+Kernel.prototype.wmThumbnail = function (sid, maxW, maxH, pixels) {
   var s = this._surfaces.get(sid | 0);
   if (!s) return null;
   maxW = Math.max(1, Math.min((maxW | 0) || 96, 512));
@@ -7059,18 +7116,18 @@ Kernel.prototype.wmThumbnail = function (sid, maxW, maxH) {
   var scale = Math.min(maxW / s.w, maxH / s.h, 1);
   var tw = Math.max(1, Math.round(s.w * scale));
   var th = Math.max(1, Math.round(s.h * scale));
-  var front = Atomics.load(s.i32, SH_FLIP) & 1;
-  var base = SH_HDR_BYTES + front * s.w * s.h * 4;
+  var source = this.wmScreenshot(s.sid, pixels).rgba;
+  var base = 0;
   // Anchored children composite INTO the thumbnail (todos/0256, menu arch
   // A10): a window's thumbnail is the window as composited — the parent's
   // buffer plus its mapped anchored subtree at anchor positions, clipped to
   // the parent rect. Without this, a persistent child (the M1 menu bar)
   // would leave a stale strip in every Aero-Peek thumb. Child pixels blit
   // opaquely (the thumb is a box-filtered preview, not the exact composite).
-  var srcU8 = s.u8, srcBase = base;
+  var srcU8 = source, srcBase = base;
   if (s.children.length) {
     var comp = new Uint8Array(s.w * s.h * 4);
-    comp.set(s.u8.subarray(base, base + s.w * s.h * 4));
+    comp.set(source.subarray(base, base + s.w * s.h * 4));
     var self = this;
     var blitKids = function (p) {
       for (var i = 0; i < p.children.length; i++) {
@@ -7080,13 +7137,13 @@ Kernel.prototype.wmThumbnail = function (sid, maxW, maxH) {
         // buffer size maps 1:1 there (its dst rides the same ratio, A11).
         var bx = Math.round((c.x - s.x) * s.w / s.dstW);
         var by = Math.round((c.y - s.y) * s.h / s.dstH);
-        var cf = Atomics.load(c.i32, SH_FLIP) & 1;
-        var cbase = SH_HDR_BYTES + cf * c.w * c.h * 4;
+        var childPixels = self.wmScreenshot(c.sid, pixels).rgba;
+        var cbase = 0;
         var x0 = Math.max(0, -bx), y0 = Math.max(0, -by);
         var x1 = Math.min(c.w, s.w - bx), y1 = Math.min(c.h, s.h - by);
         for (var yy = y0; yy < y1; yy++) {
           var srow = cbase + (yy * c.w + x0) * 4;
-          comp.set(c.u8.subarray(srow, srow + (x1 - x0) * 4),
+          comp.set(childPixels.subarray(srow, srow + (x1 - x0) * 4),
                    ((by + yy) * s.w + (bx + x0)) * 4);
         }
         blitKids(c);
@@ -7379,17 +7436,20 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
     case WMP.PAD_BUTTON: ok(this.padButton(g(0), g(1), g(2) !== 0, null)); break;
     case WMP.PAD_AXIS: ok(this.padAxis(g(0), g(1), g(2), null)); break;
     case WMP.SHOT: case WMP.SHOT_SCREEN: case WMP.THUMB: {
-      var shot = type === WMP.SHOT ? this.wmScreenshot(g(0))
-        : type === WMP.THUMB ? this.wmThumbnail(g(0), g(1), g(2))   // 0063
-        : this.wmScreenshotScreen();
-      if (!shot) { ok('EINVAL'); break; }          // null = unknown sid
-      var head = new Uint8Array(12 + shot.rgba.length);
-      var hdv = new DataView(head.buffer);
-      hdv.setInt32(0, type === WMP.SHOT_SCREEN ? 0 : g(0), true);
-      hdv.setInt32(4, shot.w, true);
-      hdv.setInt32(8, shot.h, true);
-      head.set(shot.rgba, 12);
-      conn.peer.send(this._wmpFrame(WMP.R_SHOT, null, head));
+      var captureSid = g(0);
+      this.wmCapture(type, captureSid, g(1), g(2)).then(function (shot) {
+        if (!shot) { ok('EINVAL'); return; }
+        var head = new Uint8Array(12 + shot.rgba.length);
+        var hdv = new DataView(head.buffer);
+        hdv.setInt32(0, type === WMP.SHOT_SCREEN ? 0 : captureSid, true);
+        hdv.setInt32(4, shot.w, true);
+        hdv.setInt32(8, shot.h, true);
+        head.set(shot.rgba, 12);
+        conn.peer.send(self._wmpFrame(WMP.R_SHOT, null, head));
+      }).catch(function (e) {
+        self._log('wm: capture failed: ' + (e && e.message || e));
+        ok(e && e.errno || 'EIO');
+      });
       break;
     }
     default: ok('ENOSYS');                         // unknown op

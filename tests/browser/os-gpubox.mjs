@@ -30,6 +30,16 @@ const { check, state } = makeCheck();
 try {
   await waitForServer(URL);
   const context = await browser.newContext({ viewport: { width: 1100, height: 900 } });
+  // Force a real staging-buffer map failure on the second resized capture.
+  // No product-only testing hook: the routed source uses WebGPU.destroy().
+  await context.route('**/os/compositor.js', async route => {
+    const response = await route.fetch();
+    const source = await response.text();
+    const marker = 'var results = await Promise.all([buffer.mapAsync';
+    if (!source.includes(marker)) throw new Error('capture fault-injection seam moved');
+    await route.fulfill({ response, body: source.replace(marker,
+      "if (surf.w === 321 && (self.__captureResizeCount = (self.__captureResizeCount || 0) + 1) === 2) buffer.destroy();\n      " + marker) });
+  });
   const page = await context.newPage();
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
@@ -157,6 +167,40 @@ try {
     if (s1.some((v, j) => Math.abs(v - s0[j]) > 4)) { frozen = false; break; }
   }
   check('Options>Spin froze the cube (time-separated frame probes equal)', frozen);
+  // #751: read PNGs produced INSIDE gucOS, not page screenshots. The cube
+  // is frozen so independent page pixels are an exact-content oracle.
+  let captureId = 0;
+  const guestPng = async command => {
+    const id = ++captureId;
+    await setVt(1);
+    const start = await page.evaluate(() => window.__osOut.length);
+    await page.keyboard.type(command + ' /tmp/capture.png; echo CAPRC-' + id + '=$?; echo B""EGIN-' + id + '; base64 /tmp/capture.png; echo E""ND-' + id + '\r');
+    await page.waitForFunction(({start, id}) => window.__osOut.slice(start).includes('END-' + id), {start, id}, {timeout: 30000});
+    const out = await page.evaluate(start => window.__osOut.slice(start), start);
+    if (!out.includes('CAPRC-' + id + '=0')) throw new Error('guest capture failed: ' + out.slice(-1000));
+    const encoded = out.replace(/\r/g, '').split('BEGIN-' + id + '\n')[1]?.split('END-' + id)[0];
+    if (!encoded) throw new Error('PNG transfer marker missing: ' + out.slice(-1000));
+    const decoded = await page.evaluate(async encoded => {
+      const bytes = Uint8Array.from(atob(encoded.replace(/\s/g, '')), c => c.charCodeAt(0));
+      const bmp = await createImageBitmap(new Blob([bytes], {type: 'image/png'}));
+      const canvas = document.createElement('canvas');
+      canvas.width = bmp.width; canvas.height = bmp.height;
+      const ctx = canvas.getContext('2d'); ctx.drawImage(bmp, 0, 0); bmp.close();
+      return { w: canvas.width, h: canvas.height, rgba: Array.from(ctx.getImageData(0, 0, canvas.width, canvas.height).data) };
+    }, encoded);
+    await setVt(2);
+    return decoded;
+  };
+  const capturePixel = (p, x, y) => p.rgba.slice((y * p.w + x) * 4, (y * p.w + x) * 4 + 3);
+  const full = await guestPng('wmctl shot $SID');
+  check('guest GPU shot has live cube pixels matching the page', near(capturePixel(full, 128, BAR + 113), await sample(CX, CY), 2));
+  check('guest GPU shot preserves clear color', near(capturePixel(full, 4, BAR + 4), CLEAR, 2));
+  const thumb = await guestPng('wmctl thumb $SID 128 128');
+  check('guest GPU thumbnail contains cube pixels', near(capturePixel(thumb, Math.floor(128 * thumb.w / full.w), Math.floor((BAR + 113) * thumb.h / full.h)), await sample(CX, CY), 12));
+  check('GPU thumbnail includes anchored menu strip', near(capturePixel(thumb, thumb.w - 4, 3), MENUFACE, 2));
+  const desktop = await guestPng('wmctl shot screen');
+  check('guest screen capture includes the GPU cube', near(capturePixel(desktop, CX, CY), await sample(CX, CY), 2));
+  check('guest screen capture retains shm menu content', near(capturePixel(desktop, WX + 250, WY + 10), MENUFACE, 2));
   // spin back on: the demo keeps animating for the resize/close legs below
   await setVt(1);
   await page.keyboard.type('wmctl click Spin\r');
@@ -164,11 +208,11 @@ try {
   await setVt(2);
 
   // Client resize through the gpu transport (todos/0019): configure event ->
-  // gpubox reconfigures its canvas surface + depth at 320x200 -> the first
+  // gpubox reconfigures its canvas surface + depth at 321x200 -> the first
   // new-size ImageBitmap acks and the kernel geometry follows. The probe
   // point is desktop BEFORE the resize and render-pass clear AFTER it.
   await setVt(1);
-  await page.keyboard.type('SID=$(wmctl list | grep "gpubox$" | sed "s/[^0-9].*//"); wmctl resize $SID 320 200\r');
+  await page.keyboard.type('SID=$(wmctl list | grep "gpubox$" | sed "s/[^0-9].*//"); wmctl resize $SID 321 200\r');
   await setVt(2);
   const tR = Date.now();
   for (;;) {
@@ -177,7 +221,19 @@ try {
     if (Date.now() - tR > 30000) throw new Error(`resized client never composited; probe ${got}`);
     await new Promise(r => setTimeout(r, 250));
   }
-  check('wmctl resize renegotiated the gpu-transport window to 320x200', true);
+  check('wmctl resize renegotiated the gpu-transport window to 321x200', true);
+
+  const resizedShot = await guestPng('wmctl shot $SID');
+  check('GPU capture tracks resize with padded readback rows', resizedShot.w === 321 && resizedShot.h === 200 && near(capturePixel(resizedShot, 316, 196), CLEAR, 2));
+
+  await setVt(1);
+  const failStart = await page.evaluate(() => window.__osOut.length);
+  await page.keyboard.type('rm -f /tmp/failed.png; wmctl shot $SID /tmp/failed.png 2>/tmp/capture.err; echo FAILRC=$?; test -e /tmp/failed.png; echo EXISTSRC=$?; cat /tmp/capture.err; echo F""AULT-DONE\r');
+  await page.waitForFunction(start => window.__osOut.slice(start).includes('FAULT-DONE'), failStart, {timeout: 30000});
+  const failed = await page.evaluate(start => window.__osOut.slice(start), failStart);
+  check('real WebGPU map failure returns error and creates no PNG', failed.includes('FAILRC=1') && failed.includes('EXISTSRC=1') && /[Ii]nput\/output error/.test(failed), failed.slice(-1500));
+  const recoveredShot = await guestPng('wmctl shot $SID');
+  check('capture succeeds after a failed map (staging resources reclaimed)', near(capturePixel(recoveredShot, 316, 196), CLEAR, 2));
 
   // wmctl close from the shell -> SDL_EVENT_QUIT -> clean quit, window gone.
   await setVt(1);
