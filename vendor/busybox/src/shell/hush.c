@@ -9917,6 +9917,11 @@ static int run_list(struct pipe *pi)
 #if ENABLE_HUSH_IF
 		    rword == RES_IF || rword == RES_ELIF ||
 #endif
+#if ENABLE_HUSH_LOOPS
+		    /* WASM PORT #769: POSIX exempts every while/until condition
+		     * command from errexit, just as it exempts if/elif. */
+		    rword == RES_WHILE || rword == RES_UNTIL ||
+#endif
 		    pi->followup != PIPE_SEQ
 		) {
 			G.errexit_depth++;
