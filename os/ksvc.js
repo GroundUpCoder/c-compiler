@@ -161,6 +161,9 @@
       remove: trap('remove'), mkdir: trap('mkdir'), pipe: trap('pipe'),
       __spawn: trap('__spawn'), __spawn_wait: trap('__spawn_wait'),
       __spawn_kill: trap('__spawn_kill'), __exit: trap('__exit'),
+      // #760: this is a kernel service, not a process with fd2/signals.
+      // abort is fatal here just as the existing signal/exit imports are.
+      __abort_report: trap('abort'),
       __vsscanf_impl: trap('__vsscanf_impl'),
       __strtod_impl: trap('__strtod_impl'), __strtof_impl: trap('__strtof_impl'),
       __on_sigdisp: trap('__on_sigdisp'), __on_sigmask: trap('__on_sigmask'),

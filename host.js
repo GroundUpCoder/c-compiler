@@ -11749,7 +11749,7 @@ function locateSourceLine(dbg, off) {
 
 /* Render the report. Returns null when the stack carries no wasm frames at all
  * (nothing useful to say — stay quiet rather than emit an empty banner). */
-function formatTrapReport(err, module, progName) {
+function formatTrapReport(err, module, progName, kind) {
   let dbg;
   try { dbg = readDebugSections(module); } catch (e) { dbg = { names: new Map(), files: [], entries: [] }; }
   const frames = [];
@@ -11762,7 +11762,7 @@ function formatTrapReport(err, module, progName) {
 
   const why = (err && err.message) ? err.message : String(err);
   const out = [];
-  out.push((progName ? progName + ': ' : '') + 'fatal: wasm trap: ' + why);
+  out.push((progName ? progName + ': ' : '') + 'fatal: ' + (kind || 'wasm trap') + ': ' + why);
   out.push('  wasm backtrace (innermost frame first):');
   for (let i = 0; i < frames.length; i++) {
     const f = frames[i];
@@ -12998,6 +12998,15 @@ async function runModule({
     [ENV_KEY]: {
       __exit: function (status) {
         throw new ExitStatus(status);
+      },
+      // #760: diagnostic only. libc retains SIGABRT delivery/termination;
+      // capturing here sees callers before the kernel tears the worker down.
+      __abort_report: function () {
+        try {
+          const report = formatTrapReport(new Error('abort() called'), module,
+            (args && args[0]) || null, 'abort');
+          if (report) deliverTrapReport(report, ctx, writeErr);
+        } catch (e) { /* diagnostics cannot change abort's signal semantics */ }
       },
       sprintf: function (buf_ptr, fmt_ptr, va_args_ptr) {
         const str = formatString(fmt_ptr, va_args_ptr, defaultOnN);

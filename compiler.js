@@ -38953,10 +38953,15 @@ void exit(int status) {
 __export exit = exit;
 
 
+__import void __abort_report(void);
+
 void abort(void) {
   /* C11/POSIX: raise SIGABRT. If a handler is installed it runs (synchronous
      self-delivery); abort then terminates regardless (134 = 128+SIGABRT),
      bypassing atexit handlers. */
+  /* Capture the live callers before default SIGABRT can reap this worker.
+     A separate diagnostic import keeps ordinary exit(134) silent. */
+  __abort_report();
   raise(SIGABRT);
   __exit(134);
 }
