@@ -32,6 +32,11 @@ async function main() {
     console.log('PASS refusal', name);
   }
   const pp = C.createDefaultPPRegistry();
+  pp.defines.set('DECL', '@NAME'); pp.defines.set('NAME', 'interface');
+  const macro = C.tokenize('define.m', 'DECL A @end @implementation A @end', pp);
+  assert.equal(macro.errors.length, 0);
+  assert.equal(C.parseTokens(macro.tokens, { filename: 'define.m' }).errors.length, 0);
+  assert(!pp.defines.has('__OBJC__'));
   const c = C.tokenize('ordinary.c', '@interface A\n@end', pp);
   assert(c.errors.length, 'C must continue rejecting Objective-C');
   assert.throws(() => C.parseAllUnits({}, pp, ['a.m', 'b.m'], { compilerOptions: {} }), /one .m/);

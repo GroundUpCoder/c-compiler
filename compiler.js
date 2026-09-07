@@ -1391,7 +1391,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
   for (const [name, val] of ppRegistry.defines) {
     const m = { isFunctionLike: false, isVariadic: false, params: [], replacement: [] };
     if (val !== null) {
-      const lexRes = lex(name, val);
+      const lexRes = lex(name, val, undefined, ppRegistry.objectiveC);
       for (const t of lexRes.tokens) {
         if (t.kind !== TokenKind.EOS) m.replacement.push(t);
       }
@@ -1401,7 +1401,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
 
   // --- 1b. PROCESS PRELUDE ---
   if (ppRegistry.prelude) {
-    const preludeLex = lex("<prelude>", ppRegistry.prelude);
+    const preludeLex = lex("<prelude>", ppRegistry.prelude, undefined, ppRegistry.objectiveC);
     const preludeTokens = preludeLex.tokens.filter(t => t.kind !== TokenKind.EOS);
     initialTokens = [...preludeTokens, ...initialTokens];
   }
@@ -1515,7 +1515,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
   }
 
   function executePragmaOperator(strTok, currentFile) {
-    const lexed = lex(currentFile, destringize(strTok.text));
+    const lexed = lex(currentFile, destringize(strTok.text), undefined, ppRegistry.objectiveC);
     const toks = lexed.tokens.filter(tk =>
       tk.kind !== TokenKind.EOS && tk.kind !== TokenKind.NEWLINE);
     applyPragma(toks, currentFile);
@@ -1777,7 +1777,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
                   } else {
                     const merged = left.text + right.text;
                     const mergedSym = intern(merged);
-                    const lexed = lex(left.filename, mergedSym);
+                    const lexed = lex(left.filename, mergedSym, undefined, ppRegistry.objectiveC);
                     // C11 6.10.3.3p3: the concatenation must form ONE valid
                     // preprocessing token. It used to take the FIRST lexed
                     // token and silently DROP the rest (`x ## ++` became
