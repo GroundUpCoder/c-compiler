@@ -32,6 +32,10 @@ function check(name, ok, detail) {
   if (!ok) failures++;
 }
 
+const frameFixtureSuites = planFromDiff(['tests/fixtures/frame-lifecycle.c']).suites;
+check('#764 shared frame fixture gates both OS hosts',
+      frameFixtureSuites.has('kernel') && frameFixtureSuites.has('sweep'));
+
 // The constant itself must stay a real corpus list — every assertion below
 // quantifies over it, so an emptied/renamed PY_CATEGORIES must fail loud here
 // rather than make the closure checks vacuous.

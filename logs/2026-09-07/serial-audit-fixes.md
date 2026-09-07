@@ -48,3 +48,13 @@ Both host files pass. Kernel/browser external tests and real GPU checks are
 next; no full-gate claim is made. An in-frame explicit exit still has the
 pre-existing Dawn caveat: the C EXIT handshake precedes post-callback drain;
 this change does not redesign that separate path.
+
+Fresh external validation on 3802a828: three kernel files passed
+(frame_lifecycle, gpubox_menu, gpubox_dawn), two browser files passed
+(os-frame-lifecycle, os-gpubox). The new tests observe status139 + backtrace
+and window removal, plus explicit exit23 without a backtrace. Dawn actually
+ran: configured device, rendered two poses, resized and closed cleanly (no
+optional-tier skip). The injected host probe remains the evidence for drain
+ordering on the fault path. Prior carried rows are excluded from these counts.
+The shared fixture now maps to both hosts in the diff planner; its guard passes.
+Full campaign gate and final hands-on compiler/OS testing remain pending.

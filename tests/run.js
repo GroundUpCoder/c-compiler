@@ -585,6 +585,8 @@ const RULES = [
   [/^tests\/run-unit\.js$/, ['unit'], null],
   [/^tests\/blockfs\//, ['blockfs'], null],
   [/^tests\/kernel\//, ['kernel'], null],
+  [/^tests\/fixtures\/frame-lifecycle\.c$/, ['kernel', 'sweep'],
+    '#764 shared callback-fault fixture is compiled by both OS hosts'],
   // playwright-pin.cjs is the ONE implementation behind two gates: the sweep's
   // launch-time pin assert AND the dispatcher's gate-start pre-flight (#559),
   // whose decision logic is host-tested — so an edit here owes both suites.
