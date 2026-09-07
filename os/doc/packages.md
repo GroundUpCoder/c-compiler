@@ -96,7 +96,9 @@ one `cc` command by hand:
 
 Warning: `compilerArgs` can also carry `--allow-old-c`,
 `--gc-spill-locals`, or `--allow-zero-length-arrays`. The in-OS `cc`
-ignores them. If the build fails without them, report it.
+refuses these options by name. Omit them from the in-OS command, along
+with unsupported `-O`/`-W` options; do not copy `compilerArgs` verbatim.
+If the build fails without them, report it.
 
 ### Worked example: rebuild gcode
 

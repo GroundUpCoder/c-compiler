@@ -12,9 +12,10 @@ A full-fledged, almost-POSIX environment with a GUI and window manager that is
 compiler, running well as wasm — not an emulation of some other machine. It
 should feel like a complete OS living in a browser tab, with persistence.
 
-The core is the compiler (`compiler.js`), which targets C89/99/11/23 standards
-compliance plus the POSIX surface plus selected gcc/clang (and eventually msvc)
-extensions. Everything else in the repo serves that goal: `host.js` is the
+The core is the compiler (`compiler.js`), which advertises C11 and implements
+substantial earlier-C compatibility plus selected newer/GNU/custom Wasm
+extensions. Its explicit language boundaries include VLA, complex arithmetic,
+atomics and C threads; this is not a complete standards-conformance claim. Everything else in the repo serves that goal: `host.js` is the
 kernel-ish layer, BlockFS is the disk, vendored ports are the userland.
 
 "Almost POSIX" is deliberate: `fork()` is the one POSIX primitive we do not
@@ -153,22 +154,26 @@ pgid atomically at spawn).
    could be built on memory snapshot + JSPI/stack-switching. Big project, low
    priority, and per-port patching is almost always cheaper.
 
-## Where we are (2026-07)
+## Current implementation (source checked 2026-09-07)
 
-| Pillar | State |
+This table describes the local source, not a deployment or a fresh gate result.
+`os/image.json` owns image/package membership and version; `tests/run.js full`
+owns the current validation scope. Avoid mirroring line counts, test counts or
+SDL coverage percentages here: they drift independently of capability.
+
+| Pillar | Implementation and authoritative reference |
 |---|---|
-| Compiler | ~28k lines, C89/99/11/23 broadly solid; 694/694 unit tests; builds sqlite, doom, quake, lua, micropython, libgit2, freetype; tinyemu boots Linux. Residual QoI items in `CONFORMANCE-REMAINING.md`. |
-| Persistence | Done. BlockFS (inodes, TLSF, symlinks, pipes, device nodes) on OPFS, with independent fsck + differential fuzzer + dual-instance coherence. |
-| Processes | Done — kernel.js Phases 1–4 (todos/done/0001–0003, 0009): async signal delivery, EINTR, tty line discipline + control-char signals, kernel-owned fd tables + brokered fs, pipes as OFDs + SIGPIPE, job control (stop/cont, WUNTRACED/WCONTINUED, SIGTTIN). |
-| Terminal | Done for Phase 1 — the tty is a kernel object (termios, canonical/raw, echo, Ctrl-C→SIGINT, SIGWINCH); xterm.js is the dumb UI bridge (`os/os.html`). |
-| Reference build | **Boots** (todos/done/0004): `os/os.html` in a tab over OPFS, `os/boot.js` headless on stdio; first boot self-seeds from `os/image.json` (C sources compiled by the kernel's cc driver); `cc hello.c && ./a.out` works in-OS. |
-| Shell | **Done** (todos/done/0005): busybox 1.37.0 hush as `/bin/sh`, ported via the vfork-on-__spawn journaling shim (`vendor/busybox/`). Pipelines, `$( )`, redirects, here-docs, control flow, interactive mode with prompt/line editing, `popen()`/`system()` all live. |
-| Coreutils | **Done** (todos/done/0010, +0011): 28 busybox applets (ls cat cp mv rm mkdir grep sed sort vi … kill) as ONE multicall `/bin/coreutils` + `/bin` symlinks — hand-rolled dispatch, not appletlib (`vendor/busybox/coreutils.json`, `port/multicall_main.c`). |
-| Threads | **Deferred indefinitely** (`logs/2026-07-07/threads-atomics-deferral.md`, ticket 0006 removed from the queue 2026-07-09): processes are the parallelism unit. `_Atomic` is not accepted (`__STDC_NO_ATOMICS__` stays defined — fail loud, no shim); `pthread.h` absent; `threads.h` a one-line stub. |
-| Graphics | SDL3 ~90% of the 2D surface on WebGPU; WebGPU bindings core-complete (`todos/SDL3.md`, `todos/WEBGPU.md`). Single fullscreen canvas only. |
-| Window manager | **v1 LIVE, acceptance passed** (todos/0007 design + 0012/0013/0014/0015, 2026-07-07): kernel surfaces (shm + bitmap transports), input rings, Canvas2D compositor in the kernel worker, agent channel with headless screenshots; policy is a wasm client — `/bin/wm` (placement, taskbar, minimize) + `/bin/wmctl` over the kernel-owned AF_UNIX endpoint /run/wm.sock, autostarted via `Kernel.service()`, kernel-chrome as the crashed-WM fallback; **doom/snake/gameboy run windowed in-OS with zero source changes** (game data seeded via image.json `bin` entries; `tests/browser/os-wm.mjs` + `os-doom.mjs`); GPU apps via the `gpu` transport + the Dawn tier (0016); **audio live** (0017, 2026-07-08): the kernel sound server — per-process source rings mixed kernel-side into one page-owned output ring, doom/gameboy audible in-OS; **resize + resizable gating** (0019/0021), **quake windowed** with relative mouse/pointer lock (0018), **the wasm terminal `/bin/term` over kernel ptys** (0020), **VT switching** — tty=VT1 / desktop=VT2 tab bar (0022), **dynamic screen resolution** — full-viewport VT2, EV_SCREEN + position clamps (0023), **viewport scaling** — fixed-size windows scale via a per-surface dst rect, inverse-mapped input, drag → EV_SCALE_REQ → wm.c aspect-fit policy (0024), **maximize/restore** — title double-click → EV_TITLE_ACTIVATE → wm.c dispatches work-area configure vs centered scale-to-fit on the resizable bit, `wmctl max` (0025). Details: `todos/WM.md` status sections. |
-| Networking | **AF_UNIX done** (todos/done/0008): socket/bind/listen/accept/connect/send/recv/socketpair/shutdown between processes, S_IFSOCK rendezvous nodes in BlockFS, poll/select integration — IPC for the WM protocol is unlocked. AF_INET (WebSocket/WebTransport relay) still absent. |
-| Editor | **busybox vi is `/bin/vi`** (todos/done/0011) — full-screen editing in the terminal, e2e-tested through the kernel tty. CodeMirror stays vendored but unwired (a GUI editor is compositor-era work). |
+| Compiler | C to WebAssembly in `compiler.js`, with bundled headers/libc and source linking. Real ports live under `vendor/`; regression tests under `tests/unit/` and `tests/ast/`. `CONFORMANCE-REMAINING.md` is a historical findings register, not a conformance certificate. |
+| Persistence | BlockFS and MountFS on OPFS in the browser, file-backed storage headlessly; read-only sealed `/usr` plus writable root, independent fsck and differential/dual-instance fuzzing (`tests/blockfs/`). |
+| Processes | Owner-brokered spawn, kernel fd tables, pipes, signals, tty/job control and worker isolation (`KERNEL.md`). Faithful fork/exec is outside the chosen model. Startup failures and runtime faults are distinguished; traps and aborts report caller information when metadata is present. |
+| Terminal | Kernel tty and ptys, browser xterm bridge on VT1, and the windowed wasm `/bin/term` (`os/term/`); `os/boot.js` exposes the same OS on stdio. |
+| Reference build | `os/os.html` boots in a browser; `os/boot.js` is the headless twin. Both use `os/os-common.js` and the same image manifest. `cc hello.c && ./a.out` builds and runs in-OS. Source-built distribution binaries include names and source locations; direct developer builds opt in with `-g`/`-g2`. |
+| Shell and coreutils | BusyBox hush plus a multicall coreutils binary and manifest-declared applet links (`vendor/busybox/`, `os/image.json`). Pipelines, redirects, command substitution, interactive editing and shell control flow use the spawn substrate. |
+| Threads | Deferred indefinitely (`logs/2026-07-07/threads-atomics-deferral.md`). Processes are the parallelism unit; the compiler declares `__STDC_NO_ATOMICS__` and `__STDC_NO_THREADS__`. |
+| Graphics and audio | SDL3 subset with per-window software/GPU rendering, WebGPU bindings, kernel audio mixing and browser playback. `os/doc/sdl-api-index.md` lists actual SDL symbols; `os/doc/sdl-gucos.md` explains loop/backend contracts. Browser OS requires WebGPU; headless GPU rendering uses the optional Dawn tier. |
+| Window manager | Kernel-owned surfaces and input, WebGPU browser compositor (`os/compositor.js`), wasm `/bin/wm` policy and `/bin/wmctl` semantic control. Multi-window taskbar, resize/scale/maximize, menus and desktop are implemented. Surface, thumbnail and screen captures include GPU pixels through readback; headless composition is independently available (`WM.md`, kernel/browser suites). |
+| Networking | AF_UNIX IPC and HTTP through kernel fetch/curl are implemented. Browser HTTP follows CORS unless a bridge is configured. General AF_INET remains tracked by `NETWORK.md`; this is not Linux socket ABI compatibility. |
+| Editors | BusyBox vi on the tty, the windowed sedit C editor (`os/sedit/`), and Notepad are manifest/package-managed. C/H GUI associations select sedit; gcode provides the in-OS agent workflow. See `os/doc/` and the editor/browser tests. |
 
 ## Reference build: `os/` in this repo
 
@@ -263,8 +268,8 @@ The single highest-leverage project in the repo. **The substrate is DONE**
 - ~~Coreutils~~ DONE (0010): busybox multicall `/bin/coreutils` + symlinks
   (ls cat cp mv rm mkdir rmdir head tail wc sort pwd true false ln touch
   basename dirname grep egrep fgrep sed echo printf test `[` kill).
-- ~~REPLs~~ DONE (0036): `/bin/lua`, `/bin/micropython` (minimal port —
-  REPL only), `/bin/sqlite3` seeded from their vendor bin.json projects;
+- ~~REPLs~~ DONE (0036): `/bin/lua`, `micropython` (now a package with script and stdlib support;
+  see `vendor/micropython/README.md`), `/bin/sqlite3` seeded from their vendor bin.json projects;
   piped use EOF-exits cleanly, interactive use works at the hush prompt
   and over ptys (`tests/kernel/test_repl_pty_e2e.js`). sqlite3's
   file-backed journal fsync exposed and fixed the brokered-fs fsync crash
@@ -299,11 +304,10 @@ eventuality.
 
 ### Phase 3 — Compositor, window manager, GUI apps
 
-**Designed (2026-07-07, todos/0007): `todos/WM.md`** — Wayland-flavored as
-sketched below, with the axes made explicit (rendering backend × present
-transport, per-process WebGPU devices, kernel-worker compositing, headless
-tiers). Implementation queued from WM.md's plan (spikes first, todos/0012).
-The original sketch, kept for context:
+**Implemented; design history (2026-07-07, todos/0007): `todos/WM.md`.**
+Rendering backend and present transport remain separate axes, with per-process
+WebGPU devices, kernel-worker compositing and headless tiers.
+The original sketch below is historical context, not an unstarted queue:
 
 - **Compositor in the host**: each GUI process renders into an offscreen
   surface (shared-memory framebuffer or WebGPU texture); the host composites
@@ -356,9 +360,8 @@ The original sketch, kept for context:
   escape hatch. Apps render with their own real per-worker WebGPU device;
   no GPU virtualization.
 - ~~Who owns the xterm tty~~ DECIDED for v1 (0007, `todos/WM.md`):
-  xterm.js stays as a privileged DOM-kind surface positioned by the
-  kernel's scene list; a wasm terminal app (SDL + pty + freetype) is the
-  recorded v2.
+  xterm.js is the page-side VT1 bridge. The wasm terminal app
+  (SDL + pty + freetype) is implemented as `/bin/term` (todos/0020).
 - **msvc extensions**: which ones are actually worth it (`__declspec`?
   `#pragma pack` already?) — driven by ports, not speculation.
 - **Multi-tab**: todos/0045 (LANDED 2026-07-09) locks the disk to ONE

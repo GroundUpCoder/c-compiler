@@ -1,8 +1,9 @@
 # Conformance campaign — verified-but-unfixed remainder
 
 Leftovers from the July 2026 bug-hunt (see `logs/2026-07-05/conformance-campaign.md`).
-Every item below was **confirmed** during the review (repro'd or code-verified);
-they were deprioritized, not disproven. Fixed items live as green tests under
+Items were confirmed during that historical review (reproduced or source-checked);
+an unstruck entry is not fresh verification against the current tree. Re-derive
+its mechanism before selecting work, and retire it when the implementation lands. Fixed items live as green tests under
 `tests/unit/conformance/` and `tests/blockfs/test_posix.js`.
 
 ## host.js — Node output path (medium, user-visible)
@@ -111,16 +112,20 @@ get a spike + `*-check.mjs`/`*-renders.mjs` there, same as the unit corpus.
   23 is exactly that form, correctly stays skipped).
 - **GNU case ranges enumerate every value** (`case 0 ... 100000000:` builds a
   100M-entry table at compile time). Clamp/reject or emit range compares.
-- **Missing libm entry points** (hosted C requires them): `exp2`, `fma`/`fmaf`
-  (needs correctly-rounded impl — Dekker splitting), `remainder`, `remquo`,
+- **Implemented libm entries formerly listed as missing**: `exp2`/`exp2f`
+  (`logs/2026-07-11/0112-mgba-gba-core.md`) and `fma`/`fmaf`
+  (`tests/unit/stdlib/fma`, including bit-level rounding cases).
+- **Missing libm entry points** (hosted C requires them): `remainder`, `remquo`,
   `scalbn`, `llround`, `llrint`, and the `*l` long-double aliases (trivial:
   long double == double here). QoI: `erf/erfc` ~1e-7 (A&S 7.1.26),
   `lgamma(1.0)` not exactly +0, `clock()` wraps at ~35.8 min.
 - **wasm name section written as Latin-1** (spec requires UTF-8) — latent,
   C identifiers are ASCII in practice.
 - **Pretty-printer** (`-a print`, debug only): EComma prints as `0, 0`.
-- **Multichar constants** `'ab'` take the first char; gcc/clang pack bytes
-  (implementation-defined, but FourCC code silently misbehaves).
+- ~~**Multichar constants** took only the first character~~ — FIXED
+  (`tests/unit/conformance/multichar_char_const`,
+  `logs/2026-07-10/0085-multichar-constants.md`): GCC/Clang-style byte packing
+  is the chosen implementation-defined behavior, including in the preprocessor.
 - **Union bitfield static init writes the unmasked value** through
   `writeConstValueToStatic` (struct path was fixed; union path writes the
   whole unit without field masking). Edge case, found during review.
