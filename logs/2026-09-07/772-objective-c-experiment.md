@@ -136,3 +136,23 @@ before attempting ARC or stronger method type resolution. Static linear table
 lookup also has no dispatch cache; no performance target was measured here.
 These are explicit experiment boundaries, not claims that Cocoa or a full
 Objective-C toolchain is ready.
+
+## Stable browser result and serial validation boundary
+
+The stable retry at source/test tip 87c9562f passed os-objc.mjs: 1/70 browser
+members selected, executed and recorded, zero carried/resumed, status pass.
+The fixture baked in 225.4 seconds; the member took 5.1 seconds. Inside the
+member, Chromium compiled/executed all ten positive mode/case combinations
+and checked all 23 compiler refusals, then the real browser OS clipboard/tty
+path wrote core.m, /bin/cc compiled it with -g, and the process-worker execution
+reported OBJC-RESULT=0. The browser user agent reports HeadlessChrome
+149.0.7827.55. Copied evidence: build/objc/targeted-browser-summary.json,
+targeted-browser-member.log, os-browser-final.log and browser.json.
+
+The original checkout was not edited. This experiment remains isolated and
+committed; no merge, deployment or remote push occurred. #772 stays in progress.
+The broad 25-suite diff gate and the standard flake gate have NOT run for this
+experiment yet. Those mandatory checks, failure resolution, exact final artifact
+inspection and ticket closure pass to a real serial continuation; no internal
+agent or parallel implementation worker was used. All targeted sessions are
+closed before creating that continuation.
