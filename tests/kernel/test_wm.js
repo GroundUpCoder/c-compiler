@@ -158,6 +158,43 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('second present flips buffers', String(px(shot, 1, 1)) === '0,255,0,255', px(shot, 1, 1));
   check('frameSeq advanced', kernel.wmList()[0].frameSeq === 2, kernel.wmList()[0].frameSeq);
 
+  // #751: a bitmap surface must never silently read its unused shm plane.
+  // This is an injected readback contract test; the browser test uses real GPU.
+  const gs = kernel._surfaces.get(1);
+  gs.bitmap = { width: gs.w, height: gs.h };
+  const replies = [];
+  const conn = { peer: { send: b => replies.push(b) } };
+  const requestCapture = async (type, args) => {
+    replies.length = 0;
+    const frame = kernel._wmpFrame(type, args);
+    kernel._wmpDispatch(conn, type, new DataView(frame.buffer), args.length * 4);
+    for (let n = 0; !replies.length && n < 100; n++) await tick();
+    if (!replies.length) throw new Error('capture reply never settled');
+    const b = replies[0], dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+    return { type: dv.getInt32(4, true), errno: dv.getInt32(8, true),
+      w: b.length >= 20 ? dv.getInt32(12, true) : 0,
+      h: b.length >= 20 ? dv.getInt32(16, true) : 0, rgba: b.subarray(20) };
+  };
+  let cap = await requestCapture(K.WMP.SHOT, [1]);
+  check('GPU shot without readback refuses instead of a valid shm image', cap.type === K.WMP.R_ERR);
+  kernel.captureSurface = async surf => {
+    await tick();
+    const rgba = new Uint8Array(surf.w * surf.h * 4);
+    for (let i = 0; i < rgba.length; i += 4) rgba.set([17, 83, 211, 255], i);
+    return { w: surf.w, h: surf.h, rgba };
+  };
+  cap = await requestCapture(K.WMP.SHOT, [1]);
+  check('GPU shot uses asynchronous readback', cap.type === K.WMP.R_SHOT && String(px(cap, 2, 2)) === '17,83,211,255');
+  cap = await requestCapture(K.WMP.THUMB, [1, 20, 12]);
+  check('GPU thumbnail filters readback pixels', cap.w === 20 && cap.h === 12 && String(px(cap, 2, 2)) === '17,83,211,255');
+  cap = await requestCapture(K.WMP.SHOT_SCREEN, []);
+  check('GPU screen composite uses readback pixels', String(px(cap, gs.x + 2, gs.y + 2)) === '17,83,211,255');
+  kernel.captureSurface = async () => { throw new Error('injected device loss'); };
+  cap = await requestCapture(K.WMP.THUMB, [1, 20, 12]);
+  check('readback rejection settles as an error, never an image', cap.type === K.WMP.R_ERR);
+  gs.bitmap = null;
+  kernel.captureSurface = null;
+
   // ---- screen composite: desktop, chrome, client pixels ----
   const s1 = kernel.wmList()[0];
   let screen = kernel.wmScreenshotScreen();
