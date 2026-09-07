@@ -35,3 +35,74 @@ https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/Objec
 Proposed boundary: one Objective-C TU, static class metadata, explicit
 `guc_objc_alloc`/`guc_objc_dispose`, no ARC or automatic retain/release. Runtime ABI
 is gucOS-specific; no Apple/GNU binary ABI compatibility claim.
+
+## Implementation and targeted evidence
+
+Implementation commit 06b9ce16; receiver-type correction 8a2b6504. The complete
+support/refusal contract is tests/objc/README.md. Actual parsing builds the
+existing DFunc/DVar/type/body AST; a message lowers to a typed helper call. The
+runtime boilerplate and class-table initializers use the existing C parser.
+Selectors are TU-local integers; static class/metaclass tables chain by parent;
+lookup returns a generic IMP that the helper casts to its precise signature.
+Root objects have a compiler-owned class-pointer header, an explicit custom ABI
+choice. There is no Apple/GNU binary compatibility claim.
+
+Executed Node corpus: five source programs in both default and no-inline modes
+(all ten executions exit 0), and 23 expected compiler refusals. Covers i32/i64,
+f32/f64/long double under existing C representation, data/function pointers,
+mixed signatures, 1000 allocate/use/dispose iterations, typed superclass
+upcasts, implicit/explicit and public/protected/private ivars, local shadowing,
+recursive/nested sends, class-valued id, three-generation override/super,
+selector identity, nil results and single evaluation. C-mode and multi-.m
+refusals also pass. Raw output: build/objc/node.log.
+
+The real Chromium standalone harness compiles source inside the page, then runs
+its own resulting Wasm; it does not receive precompiled Node bytes. Earlier
+iterations passed; the final corpus is additionally enrolled in os-objc.mjs for
+the composed browser gate. build/objc/browser.json records the browser user
+agent, per-execution exit/byte size, and per-refusal result of its latest run.
+
+A headless gucOS /bin/cc test actually read core.m from BlockFS, compiled it,
+launched the executable in a fresh kernel process, and observed OBJC-RESULT=0.
+Its exploratory filtered run passed 1/200 kernel members; the first fixture bake
+and the member each took about 225 seconds (source edits during investigation
+made the first baked fixture stale). This is not an exact-tip broad gate.
+The copied record is build/objc/targeted-kernel-summary.json and member log.
+
+A separate dynamic-receiver probe whose actual class lacks the declared selector
+exited 134. With -g and no inlining, fd2 named abort -> __guc_objc_lookup ->
+__guc_objc_send_i1 -> main at unknown.m:1. The source and decoded output are
+build/objc/unknown-runtime.m and unknown-runtime.json. This is an intentional
+runtime refusal, not a compiler success assertion for message forwarding.
+
+Header preprocessing was also exercised directly: @interface in Probe.h included
+by a .m TU parsed without errors; __OBJC__ did not leak back into the registry.
+An aggregate method rejection named bad.m:2. Macro-expanded @ directives have a
+permanent positive fixture.
+
+## Aggregate ABI finding and next-step assessment
+
+Executed tests/objc/aggregate-abi.c through this compiler and its generated Node
+runner; exit 0. This is explicitly a C-only control. The emitter's
+getWasmFunctionTypeIdForCFunctionType adds an i32 hidden return pointer for
+aggregate returns; the inliner already refuses that return shape because of
+caller-deferred stack restoration. That foundation is real, but it does not
+establish Objective-C nil aggregate behavior, nested-send temporary lifetime,
+argument-copy behavior or override compatibility. The spike refuses aggregate
+method values at the parser instead of applying the scalar helper to them.
+
+The next compiler-sized extension would be a cross-TU class/selector ABI plus
+broader method type resolution. Current limitations are concrete: selectors
+are numbered per TU, tables are static, and each selector/kind has one global
+signature. Properties/categories/protocols would each add parser/type/runtime
+work beyond that foundation. ARC and Blocks are separate ownership/ABI projects,
+not syntax toggles. No measured implementation schedule follows from this spike.
+
+An Xcode-like experience can be pursued independently of Cocoa: project/build
+UI, editing, errors, and debugging can use the existing OS process/filesystem
+seams. The current Win32 widget veneer gives the existing UI path a head start;
+a macOS-inspired look does not require a kernel/filesystem rewrite. Foundation,
+AppKit, responder chains, text/layout, documents and Interface Builder-style
+resources remain a much larger library/tooling decision. GNUstep is a research
+candidate, not a verified Wasm drop-in. This experiment changes none of those UI
+or library layers and schedules no desktop rewrite.
