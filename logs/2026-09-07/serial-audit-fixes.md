@@ -58,3 +58,12 @@ optional-tier skip). The injected host probe remains the evidence for drain
 ordering on the fault path. Prior carried rows are excluded from these counts.
 The shared fixture now maps to both hosts in the diff planner; its guard passes.
 Full campaign gate and final hands-on compiler/OS testing remain pending.
+
+Final pre-tailcall checkpoint: the new ownership/frame tests each passed three
+repetitions under two CPU load generators (kernel: six runs across two files;
+browser: three runs of one file). The canonical `node tests/flake.js` then
+completed GREEN in 1767.0 seconds: four kernel files ×3 (12 passes) and six
+browser files ×3 (18 passes), ten CPU load generators. os-wm's repetitions
+were slow (342.6/359.7/370.9 seconds), but all passed; no timeout was recorded.
+Evidence: build/status-fixes/740-764-standard-flake.log. These are focused
+and flake results, not the pending whole-estate campaign ship gate.
