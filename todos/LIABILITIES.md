@@ -156,12 +156,6 @@ thing this file exists to kill.
 - file: os/win32/advapi32.c
 - anchor: tmp+rename, and there is no advisory lock, so two flushes landing in
 
-### L76 — setjmp p4 residue: do/for controlling expressions and nonzero-constant comparisons are still rejected after #117 accepted the common contexts
-- ticket: #432
-- file: todos/CONFORMANCE-REMAINING.md
-- anchor: - **setjmp p4 residue: do/for controlling expressions and comparisons against nonzero integer constants are still rejected**
-- provenance: 0311
-
 ### L33 — mouseover/mouseout/mouseenter/mouseleave and focusin/focusout are not generated
 - ticket: #120
 - file: vendor/netsurf/netsurf/content/handlers/html/interaction.c

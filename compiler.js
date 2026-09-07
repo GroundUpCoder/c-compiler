@@ -14739,6 +14739,101 @@ function lowerLongjmpInStmt(stmt, tag) {
   }
 }
 
+// The standard's controlling-expression forms, without our historical comma
+// and assignment extensions. Implicit arithmetic conversions are transparent
+// when locating the call; substitution keeps them in the evaluated condition.
+function standardSetjmpControl(expr) {
+  const direct = e => {
+    while (e instanceof AST.EImplicitCast) e = e.expr;
+    const r = getNamedCallWithPrefix(e, "setjmp");
+    return r && r.prefix.length === 0 ? r.call : null;
+  };
+  let call = direct(expr);
+  if (!call && expr instanceof AST.EUnary && expr.op === "OP_LNOT") call = direct(expr.operand);
+  if (!call && expr instanceof AST.EBinary && ["EQ", "NE", "LT", "LE", "GT", "GE"].includes(expr.op)) {
+    if (constEvalInt(expr.right) !== null) call = direct(expr.left);
+    if (!call && constEvalInt(expr.left) !== null) call = direct(expr.right);
+  }
+  return call;
+}
+
+// Redirect only transfers belonging to THIS loop. A nested switch owns break
+// but not continue; a nested iteration owns both. Existing labels/gotos remain
+// in their original body, with no duplicated body or declaration identities.
+function redirectSetjmpLoopTransfers(stmt, breakLabel, continueLabel, breakDepth = 0) {
+  const go = label => { const g = new AST.SGoto(stmt.loc, label.name); g.target = label; return g; };
+  if (stmt instanceof AST.SBreak) return breakDepth === 0 ? go(breakLabel) : stmt;
+  if (stmt instanceof AST.SContinue) return go(continueLabel);
+  if (stmt instanceof AST.SWhile || stmt instanceof AST.SDoWhile || stmt instanceof AST.SFor) return stmt;
+  if (stmt instanceof AST.SSwitch) {
+    return new AST.SSwitch(stmt.loc, stmt.expr,
+      redirectSetjmpLoopTransfers(stmt.body, breakLabel, continueLabel, breakDepth + 1));
+  }
+  if (stmt instanceof AST.SCompound) return new AST.SCompound(stmt.loc,
+    stmt.statements.map(s => redirectSetjmpLoopTransfers(s, breakLabel, continueLabel, breakDepth)), stmt.labels);
+  if (stmt instanceof AST.SIf) return new AST.SIf(stmt.loc, stmt.condition,
+    redirectSetjmpLoopTransfers(stmt.thenBranch, breakLabel, continueLabel, breakDepth),
+    stmt.elseBranch && redirectSetjmpLoopTransfers(stmt.elseBranch, breakLabel, continueLabel, breakDepth));
+  if (stmt instanceof AST.STryCatch) return new AST.STryCatch(stmt.loc,
+    redirectSetjmpLoopTransfers(stmt.tryBody, breakLabel, continueLabel, breakDepth),
+    stmt.catches.map(c => ({...c, body: redirectSetjmpLoopTransfers(c.body, breakLabel, continueLabel, breakDepth)})));
+  return stmt;
+}
+
+// A loop's setjmp arm and resume points are different: a normal iteration
+// re-arms and returns zero, whereas longjmp evaluates the SAME condition with
+// its supplied value, skipping init/body/increment. Keep one body, inside one
+// protected region with explicit control-flow labels. The existing goto/EH
+// lowering carries these transfers; no second exception mechanism is needed.
+function lowerSetjmpLoop(stmt, call, remaining, tag, counterVar) {
+  const loc = stmt.loc, suffix = ++__setjmpRetryCounter;
+  const compound = ss => new AST.SCompound(loc, ss);
+  const int = n => new AST.EInt(loc, Types.TINT, BigInt(n));
+  const variable = name => {
+    const v = new AST.DVar(Lexer.Loc.generated(), Lexer.intern(`__setjmp_${name}_${suffix}`), Types.TINT, Types.StorageClass.NONE, null);
+    v.definition = v; v.initExpr = int(0); return v;
+  };
+  const value = variable('value'), armed = variable('armed'), caught = variable('caught');
+  const id = variable('id'), val = variable('val');
+  const ref = v => new AST.EIdent(loc, Types.TINT, v);
+  const set = (v, e) => new AST.SExpr(loc, new AST.EBinary(loc, Types.TINT, 'ASSIGN', ref(v), e));
+  const label = name => {
+    const l = new AST.SLabel(loc, Lexer.intern(`__setjmp_${name}_${suffix}`), null);
+    l.hasGotos = true; l.labelKind = Types.LabelKind.BOTH; return l;
+  };
+  const retry = label('retry'), arm = label('arm'), condition = label('condition');
+  const body = label('body'), increment = label('increment'), done = label('done');
+  const go = l => { const g = new AST.SGoto(loc, l.name); g.target = l; return g; };
+  const neg = e => new AST.EUnary(loc, Types.TINT, 'OP_LNOT', e);
+  const cond = AST.walkExpr(stmt.condition, n => n === call ? ref(value) : undefined);
+  const ss = [new AST.SIf(loc, ref(caught), compound([set(caught, int(0)), go(condition)]), null)];
+  if (stmt instanceof AST.SFor && stmt.init) ss.push(stmt.init);
+  if (stmt instanceof AST.SDoWhile) ss.push(go(body));
+  ss.push(arm, makeSetBufIdStmt(call.arguments[0], counterVar), set(armed, int(1)), set(value, int(0)),
+    condition, new AST.SIf(loc, neg(cond), go(done), null), body,
+    redirectSetjmpLoopTransfers(stmt.body, done, stmt instanceof AST.SFor ? increment : arm), increment);
+  if (stmt instanceof AST.SFor && stmt.increment) ss.push(new AST.SExpr(loc, stmt.increment));
+  ss.push(go(arm), done, ...remaining);
+  const tryBody = lowerSetjmpInStmt(compound(ss), tag, counterVar);
+  // A do body's FIRST iteration (and a for initializer) has not armed this
+  // environment. An older setjmp using the same buffer must get that throw.
+  const rethrow = makeThrowLongJump(tag, ref(id), ref(val));
+  const catchBody = compound([
+    new AST.SIf(loc, neg(ref(armed)), rethrow, null),
+    makeCatchBody(tag, id, val, call.arguments[0], compound([
+      set(value, new AST.ETernary(loc, Types.TINT, ref(val), ref(val), int(1))), set(caught, int(1)),
+    ])),
+  ]);
+  const wrapper = compound([
+    new AST.SDecl(loc, [value, armed, caught]), retry,
+    new AST.STryCatch(loc, tryBody, [{tag, bindings:[id.name,val.name], bindingVars:[id,val], body:catchBody}]),
+    new AST.SIf(loc, ref(caught), go(retry), null),
+  ]);
+  retry.enclosingBlock = wrapper;
+  for (const l of [arm, condition, body, increment, done]) l.enclosingBlock = tryBody;
+  return wrapper;
+}
+
 // Lower setjmp patterns in a compound statement's children.
 function lowerSetjmpInCompound(compound, tag, counterVar) {
   const stmts = compound.statements;
@@ -14762,6 +14857,30 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
       }
     }
 
+    if (stmt instanceof AST.SWhile || stmt instanceof AST.SDoWhile || stmt instanceof AST.SFor) {
+      const call = standardSetjmpControl(stmt.condition);
+      if (call) {
+        stmts[i] = lowerSetjmpLoop(stmt, call, stmts.splice(i + 1), tag, counterVar);
+        continue;
+      }
+    }
+
+    // Comparisons need the actual returned value, not just the old zero/jump
+    // branch split. Reuse the arm-temp lowering used for switch below.
+    if (stmt instanceof AST.SIf && !extractSetjmpCall(stmt.condition).call) {
+      const call = standardSetjmpControl(stmt.condition);
+      if (call) {
+        const loc = stmt.loc;
+        const v = new AST.DVar(Lexer.Loc.generated(), Lexer.intern(`__setjmp_cmp_${++__setjmpRetryCounter}`), Types.TINT, Types.StorageClass.NONE, null);
+        v.definition = v; v.initExpr = new AST.EInt(loc, Types.TINT, 0n);
+        const ref = () => new AST.EIdent(loc, Types.TINT, v);
+        stmts.splice(i, 1, new AST.SDecl(loc, [v]),
+          new AST.SIf(loc, new AST.EBinary(loc, Types.TINT, 'ASSIGN', ref(), call), new AST.SEmpty(loc), null),
+          new AST.SIf(loc, AST.walkExpr(stmt.condition, n => n === call ? ref() : undefined), stmt.thenBranch, stmt.elseBranch));
+        i--; continue;
+      }
+    }
+
     // C11 7.13.1.1p4 form: setjmp as (part of) the entire controlling
     // expression of a while. Rewritten to the canonical if-shape; the
     // loop structure survives as a wrapper around the body:
@@ -14775,9 +14894,9 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
     // (continue re-evaluates a condition whose direct-path value is
     // constant). Not re-arming per iteration is unobservable here: the
     // catch matches on buf[0], which a re-arm would only refresh, and
-    // the resume point is identical. do/for controlling expressions
-    // are NOT handled (first-iteration break/continue cross the arm
-    // point) and fall through to the residual diagnostic.
+    // the resume point is identical. Standard forms now take the general
+    // loop lowering above; this legacy branch preserves comma/assignment
+    // extension behavior in while conditions.
     if (stmt instanceof AST.SWhile) {
       const m = extractSetjmpCall(stmt.condition);
       if (m.call) {
@@ -14803,6 +14922,7 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
     // if-position idioms.
     if (stmt instanceof AST.SSwitch) {
       const m = extractSetjmpCall(stmt.expr);
+      if (!m.call) { m.call = standardSetjmpControl(stmt.expr); m.prefix = []; }
       if (m.call && !m.assignTarget && m.prefix.length === 0) {
         const loc = stmt.loc;
         const svName = Lexer.intern(`__setjmp_sw_${++__setjmpRetryCounter}`);
@@ -15215,9 +15335,10 @@ function lowerSetjmpLongjmp(unit, exceptionTagRegistry) {
     if (residual) {
       fatalError(residual.loc,
         "unsupported use of setjmp — supported contexts: the entire " +
-        "controlling expression of an if or while ('setjmp(buf)', " +
-        "'!setjmp(buf)', 'setjmp(buf) == 0', '(v = setjmp(buf))'), the " +
-        "entire controlling expression of a switch ('switch (setjmp(buf))'), " +
+        "controlling expression of an if, switch, while, do, or for " +
+        "(a direct call, logical negation, or relational/equality comparison " +
+        "against an integer constant expression); historical if/while " +
+        "assignment/comma extensions; " +
         "or a full expression statement ('setjmp(buf);', '(void)setjmp(buf);')");
     }
   };

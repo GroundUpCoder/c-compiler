@@ -27,5 +27,12 @@ int main(void) {
   n=inc=0;
   for(;setjmp(b)==0;longjmp(b,1)) n++;
   printf("increment-jump=%d\n",n);
+  n=0;
+  for(volatile int local=7; setjmp(b)<2; local++) {
+    n += local;
+    if(local==7) continue;
+    longjmp(b,2);
+  }
+  printf("scoped-init=%d\n",n);
   return 0;
 }

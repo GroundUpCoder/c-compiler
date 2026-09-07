@@ -17,5 +17,13 @@ int main(void) {
   CHECK(setjmp(b) < 1U, -1);
   CHECK(setjmp(b) == sizeof(char), 0);
   CHECK(setjmp(b) == (long long)2, 2);
+  phase=0;
+  while(setjmp(b)<3) { phase++; if(phase==1) longjmp(b,2); longjmp(b,3); }
+  printf("while=%d\n",phase);
+  phase=0;
+  switch(setjmp(b)==2) {
+    case 0: phase++; longjmp(b,2);
+    case 1: printf("switch=%d\n",phase); break;
+  }
   return 0;
 }

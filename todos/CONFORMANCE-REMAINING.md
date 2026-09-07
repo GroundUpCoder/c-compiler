@@ -109,13 +109,6 @@ get a spike + `*-check.mjs`/`*-renders.mjs` there, same as the unit corpus.
   `diag_setjmp_assign_stmt` (the UB bare-assignment `r = setjmp(b);` STAYS
   rejected — it is not in p4's list, and the `setjmp` libc-test, whose line
   23 is exactly that form, correctly stays skipped).
-- **setjmp p4 residue: do/for controlling expressions and comparisons against nonzero integer constants are still rejected**
-  (`do ... while (setjmp(b) == 0);`, `for (;setjmp(b) == 0;)`,
-  `if (setjmp(b) == 2)`). p4 covers all iteration statements and any integer
-  constant expression as the comparison operand; the do/for rewrite needs a
-  scope-aware break/continue redirection (a first-iteration `break` must not
-  cross the arm point), the nonzero-constant shape generalizes from the #117
-  switch lowering. Loud diagnostic, never a miscompile. Funded by **#432**.
 - **GNU case ranges enumerate every value** (`case 0 ... 100000000:` builds a
   100M-entry table at compile time). Clamp/reject or emit range compares.
 - **Missing libm entry points** (hosted C requires them): `exp2`, `fma`/`fmaf`
