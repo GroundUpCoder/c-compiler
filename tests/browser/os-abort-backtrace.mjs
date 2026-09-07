@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import {openOsSession} from './lib/os-harness.mjs';
 const source = fs.readFileSync(new URL('../fixtures/abort-backtrace.c', import.meta.url), 'utf8');
-const s = await openOsSession({port: 3381, readyLabel: 'boots to ready'});
+const s = await openOsSession({port: 3384, readyLabel: 'boots to ready'});
 const {page, setVt, check} = s;
 try {
   await setVt(1);
