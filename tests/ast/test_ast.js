@@ -1341,6 +1341,18 @@ test('macro redefinitions diagnose incompatible definitions through parseSource'
   }
 });
 
+test('compilation pipeline delivers preprocessor warnings to its diagnostic sink', () => {
+  const source = '#define M 1\n#define M 2\nint main(void) { return M; }\n';
+  const pp = C.createDefaultPPRegistry();
+  const fsShim = { readFileSync: () => source };
+  let diagnostic = '';
+  const units = C.parseAllUnits(fsShim, pp, ['redefine.c'], {
+    compilerOptions: {}, warningFlags: {}, writeErr: s => { diagnostic += s; },
+  });
+  assert(units.length > 0, 'warning must not reject compilation');
+  assert(/redefine\.c:2: warning:.*M.*redefined/.test(diagnostic), diagnostic || 'warning lost');
+});
+
 // =============================================================================
 // runner output
 // =============================================================================
