@@ -1308,6 +1308,39 @@ test('#line maps raw and expanded token locations exactly once', () => {
   }
 });
 
+// BUG #650: 6.10.3 requires identical token spelling, separation, and
+// parameter names for a repeated definition; comments count as whitespace.
+test('macro redefinitions diagnose incompatible definitions through parseSource', () => {
+  const cases = [
+    ['object spelling', '#define M 1\n#define M 2', true],
+    ['object kind', '#define M 1\n#define M() 1', true],
+    ['parameter name', '#define M(x) x\n#define M(y) y', true],
+    ['parameter count', '#define M(x) 1\n#define M(x,y) 1', true],
+    ['variadic kind', '#define M(x) x\n#define M(x,...) x', true],
+    ['separation', '#define M(x) (x)\n#define M(x) ( x )', true],
+    ['token spelling', '#define M 1\n#define M 01', true],
+    ['identical object', '#define M 1\n#define M 1', false],
+    ['identical function', '#define M(x) (x)\n#define M(x) (x)', false],
+    ['comments and spacing', '#define M (1 + 2)\n#define M   (1/**/+\t2) ', false],
+    ['empty', '#define M\n#define M /* empty */', false],
+    ['variadic', '#define M(...) __VA_ARGS__\n#define M(...) __VA_ARGS__', false],
+    ['undef', '#define M 1\n#undef M\n#define M 2', false],
+    ['inactive', '#define M 1\n#if 0\n#define M 2\n#endif', false],
+  ];
+  for (const [label, source, warns] of cases) {
+    const r = C.parseSource('redefine.c', source + '\nint main(void) { return 0; }\n',
+      C.createDefaultPPRegistry());
+    assertEq(r.errors.length, 0, label + ' errors');
+    const diagnostics = r.warnings.filter(w => /redefin/i.test(w.message));
+    assertEq(diagnostics.length, warns ? 1 : 0, label + ' warnings');
+    if (warns) {
+      assert(diagnostics[0].message.includes('M'), label + ' macro name');
+      assertEq(diagnostics[0].filename, 'redefine.c', label + ' file');
+      assertEq(diagnostics[0].line, 2, label + ' line');
+    }
+  }
+});
+
 // =============================================================================
 // runner output
 // =============================================================================
