@@ -1752,6 +1752,81 @@ function preprocess(filename, initialTokens, ppRegistry) {
               return false;
             }
 
+            // Paste within each replacement list before joining it to its caller.
+            // Keep placemarkers until the entire outer replacement is complete.
+            function pasteTokens(substituted) {
+              for (let si = 0; si < substituted.length;) {
+                if (substituted[si].atPunct(Punct.HASH_HASH) && si > 0 && si + 1 < substituted.length) {
+                  const left = substituted[si - 1];
+                  const right = substituted[si + 1];
+                  if (left.kind === TokenKind.PLACEMARKER && right.kind === TokenKind.PLACEMARKER) {
+                    substituted.splice(si, 2);
+                  } else if (left.kind === TokenKind.PLACEMARKER) {
+                    substituted[si - 1] = right;
+                    substituted.splice(si, 2);
+                  } else if (right.kind === TokenKind.PLACEMARKER) {
+                    substituted.splice(si, 2);
+                  } else {
+                    const merged = left.text + right.text;
+                    const mergedSym = intern(merged);
+                    const lexed = lex(left.filename, mergedSym);
+                    // C11 6.10.3.3p3: the concatenation must form ONE valid
+                    // preprocessing token. It used to take the FIRST lexed
+                    // token and silently DROP the rest (`x ## ++` became
+                    // plain `x`) — diagnose instead (todos/0227 G22).
+                    const isOneToken = lexed.errors.length === 0 &&
+                      lexed.tokens.length > 0 && lexed.tokens[0].kind !== TokenKind.EOS &&
+                      (lexed.tokens.length < 2 || lexed.tokens[1].kind === TokenKind.EOS);
+                    if (isOneToken) {
+                      const newTok = cloneToken(lexed.tokens[0]);
+                      newTok.filename = left.filename;
+                      newTok.line = left.line;
+                      newTok.column = left.column;
+                      // Stringization spacing (C99 6.10.3.3p4): the pasted
+                      // token stands where `left` stood, so it keeps left's
+                      // leading-space flag rather than the lexer's default.
+                      newTok.flags.hasSpace = left.flags.hasSpace;
+                      substituted[si - 1] = newTok;
+                      substituted.splice(si, 2);
+                    } else {
+                      result.errors.push(new LexError(
+                        `pasting formed '${merged}', an invalid preprocessing token`,
+                        left.filename, left.line));
+                      // Recover: drop the '##' and keep both operands.
+                      substituted.splice(si, 1);
+                    }
+                  }
+                } else {
+                  si++;
+                }
+              }
+
+              return substituted;
+            }
+            function placemarker(tok) {
+              const pm = cloneToken(tok);
+              pm.kind = TokenKind.PLACEMARKER;
+              pm.text = "";
+              return pm;
+            }
+
+            function stringify(rawTokens, tok) {
+              let str = '"';
+              const visible = rawTokens.filter(t => t.kind !== TokenKind.PLACEMARKER);
+              for (let ai = 0; ai < visible.length; ++ai) {
+                if (ai > 0 && visible[ai].flags.hasSpace) str += ' ';
+                for (const c of visible[ai].text) {
+                  if (c === '"' || c === '\\') str += '\\';
+                  str += c;
+                }
+              }
+              str += '"';
+              const strTok = cloneToken(tok);
+              strTok.kind = TokenKind.STRING;
+              strTok.text = intern(str);
+              return strTok;
+            }
+
             // Substitute parameters in a replacement token list. Recurses for
             // __VA_OPT__ content (which may itself reference parameters).
             function substituteTokens(repl) {
@@ -1759,21 +1834,27 @@ function preprocess(filename, initialTokens, ppRegistry) {
               for (let ri = 0; ri < repl.length; ++ri) {
               const repTok = repl[ri];
 
-              // C23 __VA_OPT__(content): expands content iff the variadic
-              // arguments are non-empty.
-              if (m.isVariadic && repTok.kind === TokenKind.IDENT &&
-                  repTok.text === "__VA_OPT__" &&
-                  ri + 1 < repl.length && repl[ri + 1].atPunct(Punct.LPAREN)) {
-                let depth = 0, j = ri + 1;
+              // C23 6.10.4.1: an absent VA_OPT operand is a placemarker,
+              // not no tokens. Its content is a replacement list in its own
+              // right: finish its internal pastes while retaining placemarkers
+              // before an enclosing paste/stringization consumes the result.
+              const stringizedOpt = repTok.atPunct(Punct.HASH) &&
+                repl[ri + 1]?.atIdent("__VA_OPT__");
+              const optIndex = ri + (stringizedOpt ? 1 : 0);
+              if (m.isVariadic && repl[optIndex].atIdent("__VA_OPT__") &&
+                  repl[optIndex + 1]?.atPunct(Punct.LPAREN)) {
+                let depth = 0, j = optIndex + 1;
                 for (; j < repl.length; j++) {
                   if (repl[j].atPunct(Punct.LPAREN)) depth++;
                   else if (repl[j].atPunct(Punct.RPAREN)) { depth--; if (depth === 0) break; }
                 }
-                const content = repl.slice(ri + 2, j);
-                if (paramMap.get("__VA_ARGS__").length > 0) {
-                  pushAll(out, substituteTokens(content));
-                }
-                ri = j; // skip past ')'
+                const content = repl.slice(optIndex + 2, j);
+                const operand = paramMap.get("__VA_ARGS__").length > 0
+                  ? pasteTokens(substituteTokens(content)) : [];
+                if (operand.length === 0) operand.push(placemarker(repTok));
+                if (stringizedOpt) out.push(stringify(operand, repTok));
+                else pushAll(out, operand);
+                ri = j;
                 continue;
               }
 
@@ -1803,20 +1884,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
                   repl[ri + 1].kind === TokenKind.IDENT &&
                   rawParamMap.has(repl[ri + 1].text)) {
                 ri++;
-                const rawTokens = rawParamMap.get(repl[ri].text);
-                let str = '"';
-                for (let ai = 0; ai < rawTokens.length; ++ai) {
-                  if (ai > 0 && rawTokens[ai].flags.hasSpace) str += ' ';
-                  for (const c of rawTokens[ai].text) {
-                    if (c === '"' || c === '\\') str += '\\';
-                    str += c;
-                  }
-                }
-                str += '"';
-                const strTok = cloneToken(repTok);
-                strTok.kind = TokenKind.STRING;
-                strTok.text = intern(str);
-                out.push(strTok);
+                out.push(stringify(rawParamMap.get(repl[ri].text), repTok));
                 continue;
               }
 
@@ -1825,12 +1893,15 @@ function preprocess(filename, initialTokens, ppRegistry) {
                 const map = adjPaste ? rawParamMap : paramMap;
                 const argTokens = map.get(repTok.text);
                 if (argTokens.length === 0 && adjPaste) {
-                  const pm = cloneToken(repTok);
-                  pm.kind = TokenKind.PLACEMARKER;
-                  pm.text = "";
-                  out.push(pm);
-                } else {
-                  pushAll(out, argTokens);
+                  out.push(placemarker(repTok));
+                } else if (argTokens.length > 0) {
+                  // The first argument token occupies the parameter's position
+                  // in this replacement list. Preserve that separation for a
+                  // later stringization (including #__VA_OPT__).
+                  const first = cloneToken(argTokens[0]);
+                  first.flags.hasSpace = repTok.flags.hasSpace;
+                  out.push(first);
+                  pushAll(out, argTokens.slice(1));
                 }
               } else {
                 out.push(repTok);
@@ -1840,52 +1911,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
             }
             const substituted = substituteTokens(m.replacement);
 
-            // Token pasting (##) pass
-            for (let si = 0; si < substituted.length;) {
-              if (substituted[si].atPunct(Punct.HASH_HASH) && si > 0 && si + 1 < substituted.length) {
-                const left = substituted[si - 1];
-                const right = substituted[si + 1];
-                if (left.kind === TokenKind.PLACEMARKER && right.kind === TokenKind.PLACEMARKER) {
-                  substituted.splice(si, 2);
-                } else if (left.kind === TokenKind.PLACEMARKER) {
-                  substituted[si - 1] = right;
-                  substituted.splice(si, 2);
-                } else if (right.kind === TokenKind.PLACEMARKER) {
-                  substituted.splice(si, 2);
-                } else {
-                  const merged = left.text + right.text;
-                  const mergedSym = intern(merged);
-                  const lexed = lex(left.filename, mergedSym);
-                  // C11 6.10.3.3p3: the concatenation must form ONE valid
-                  // preprocessing token. It used to take the FIRST lexed
-                  // token and silently DROP the rest (`x ## ++` became
-                  // plain `x`) — diagnose instead (todos/0227 G22).
-                  const isOneToken = lexed.errors.length === 0 &&
-                    lexed.tokens.length > 0 && lexed.tokens[0].kind !== TokenKind.EOS &&
-                    (lexed.tokens.length < 2 || lexed.tokens[1].kind === TokenKind.EOS);
-                  if (isOneToken) {
-                    const newTok = cloneToken(lexed.tokens[0]);
-                    newTok.filename = left.filename;
-                    newTok.line = left.line;
-                    newTok.column = left.column;
-                    // Stringization spacing (C99 6.10.3.3p4): the pasted
-                    // token stands where `left` stood, so it keeps left's
-                    // leading-space flag rather than the lexer's default.
-                    newTok.flags.hasSpace = left.flags.hasSpace;
-                    substituted[si - 1] = newTok;
-                    substituted.splice(si, 2);
-                  } else {
-                    result.errors.push(new LexError(
-                      `pasting formed '${merged}', an invalid preprocessing token`,
-                      left.filename, left.line));
-                    // Recover: drop the '##' and keep both operands.
-                    substituted.splice(si, 1);
-                  }
-                }
-              } else {
-                si++;
-              }
-            }
+            pasteTokens(substituted);
 
             // Remove surviving placemarker tokens
             for (let si = substituted.length - 1; si >= 0; si--) {

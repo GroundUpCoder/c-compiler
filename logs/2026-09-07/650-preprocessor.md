@@ -36,3 +36,21 @@ Validation after the change: compiler units **843 pass, 0 fail, 3 skip**;
 AST tests **140 pass, 0 fail**; existing source-map line-number verifier
 passes. This is per-change evidence, **not an aggregate gate**. #650 remains
 open for its other two subissues and full validation.
+
+## Empty variadic operands and paste boundaries
+
+RED commit e016ec8e captures the reported dangling paste and related C23
+6.10.4.1 examples: left/right/chained empty operands, a macro-expanding-to-empty
+argument, nested pastes retaining placemarkers, empty VA_OPT contents, and
+stringized VA_OPT. Native Clang's actual output supplies the golden file.
+
+An empty VA_OPT now supplies a placemarker. Its contents undergo parameter
+substitution and internal pasting before they join the outer replacement; only
+the completed outer list loses placemarkers. Stringization shares the existing
+helper and removes placemarkers. Substituted parameters retain the leading
+spacing of their occurrence, so a later stringization preserves token separation.
+
+Validation: all 844 unit tests passed (3 skipped), including the new native-output
+comparison, in build/status-fixes/650-vaopt-unit.log. This remains focused
+validation; the aggregate gate is still pending. Redefinition diagnostics remain
+the last subissue of #650.
