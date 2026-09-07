@@ -2177,19 +2177,19 @@ function preprocess(filename, initialTokens, ppRegistry) {
 
   // rescanTrailingMacros: if expansion result ends with a function-like macro
   // name and source has '(' next, collect args and re-expand
-  function rescanTrailingMacros(expanded, state) {
+  function rescanTrailingMacros(expanded, state, sourceToken) {
     while (expanded.length > 0 && !state.atEnd && state.peek().atPunct(Punct.LPAREN)) {
       const last = expanded[expanded.length - 1];
       if (last.kind !== TokenKind.IDENT || last.noExpand || !macros.has(last.text) ||
           !macros.get(last.text).isFunctionLike)
         break;
       const combined = [...expanded];
-      combined.push(state.consume()); // '('
+      combined.push(sourceToken(state.consume())); // '('
       let depth = 1;
       while (!state.atEnd && depth > 0) {
         if (state.peek().atPunct(Punct.LPAREN)) depth++;
         else if (state.peek().atPunct(Punct.RPAREN)) depth--;
-        combined.push(state.consume());
+        combined.push(sourceToken(state.consume()));
       }
       expanded.length = 0;
       pushAll(expanded, expand(combined, new Set()));
@@ -2201,6 +2201,18 @@ function preprocess(filename, initialTokens, ppRegistry) {
     let lineOffset = 0;
     let fileOverride = null;
 
+    // Raw tokens retain physical locations for directive bookkeeping and
+    // include resolution. Convert them exactly once, BEFORE expansion:
+    // __LINE__/__FILE__ become literal values during macro rescanning, so
+    // adjusting only the emitted token's location cannot fix those values.
+    function sourceToken(tok) {
+      if (!lineOffset && fileOverride === null) return tok;
+      const mapped = cloneToken(tok);
+      mapped.line += lineOffset;
+      if (fileOverride !== null) mapped.filename = fileOverride;
+      return mapped;
+    }
+
     function emitToken(tok) {
       if (tok.kind === TokenKind.OTHER) {
         // An "other" pp-token survived preprocessing — only now is it an
@@ -2208,13 +2220,8 @@ function preprocess(filename, initialTokens, ppRegistry) {
         // dropped theirs).
         result.errors.push(new LexError(
           "Unexpected character: '" + tok.text + "'",
-          fileOverride || tok.filename, tok.line + lineOffset));
+          tok.filename, tok.line));
         return;
-      }
-      if (lineOffset || fileOverride) {
-        tok = cloneToken(tok);
-        tok.line = tok.line + lineOffset;
-        if (fileOverride) tok.filename = fileOverride;
       }
       output.push(tok);
     }
@@ -2263,7 +2270,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
             // nesting (C11 6.10p6) — expanding/evaluating them there would
             // diagnose expressions the standard says to ignore.
             if (isActive()) {
-              const expandedTokens = expand(resolveDefinedOperators(lineTokens), new Set());
+              const expandedTokens = expand(resolveDefinedOperators(lineTokens.map(sourceToken)), new Set());
               condition = evaluateExpression(expandedTokens, (msg) =>
                 result.errors.push(new LexError(msg, state.currentFile, dir.line))) !== 0n;
             }
@@ -2293,7 +2300,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
             // means the expression is ignored per C11 6.10p6.
             let condition = false;
             if (parentActive && !top.anyBranchRan) {
-              const expandedTokens = expand(resolveDefinedOperators(lineTokens), new Set());
+              const expandedTokens = expand(resolveDefinedOperators(lineTokens.map(sourceToken)), new Set());
               condition = evaluateExpression(expandedTokens, (msg) =>
                 result.errors.push(new LexError(msg, state.currentFile, dir.line))) !== 0n;
             }
@@ -2395,7 +2402,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
               let tokensToUse = lineTokens;
               if (tokensToUse.length > 0 && tokensToUse[0].kind !== TokenKind.STRING &&
                   !tokensToUse[0].atPunct(Punct.LT)) {
-                tokensToUse = expand(tokensToUse, new Set());
+                tokensToUse = expand(tokensToUse.map(sourceToken), new Set());
               }
               let rawPath;
               if (tokensToUse.length === 0) {
@@ -2510,9 +2517,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
       if (isActive()) {
         // Handle __FILE__ / __LINE__ / __DATE__ / __TIME__ / __COUNTER__
         if (isBuiltinMacro(t)) {
-          let tok = cloneToken(state.consume());
-          if (lineOffset) tok.line = tok.line + lineOffset;
-          if (fileOverride) tok.filename = fileOverride;
+          const tok = cloneToken(sourceToken(state.consume()));
           tryExpandBuiltinMacro(tok);
           output.push(tok);
           continue;
@@ -2552,21 +2557,21 @@ function preprocess(filename, initialTokens, ppRegistry) {
                 else if (argTok.atPunct(Punct.RPAREN)) parenDepth--;
                 invocation.push(state.consume());
               }
-              const expandedTokens = expand(invocation, new Set());
-              rescanTrailingMacros(expandedTokens, state);
+              const expandedTokens = expand(invocation.map(sourceToken), new Set());
+              rescanTrailingMacros(expandedTokens, state, sourceToken);
               emitExpandedTokens(expandedTokens);
             } else {
-              emitToken(invocation[0]);
+              emitToken(sourceToken(invocation[0]));
             }
           } else {
             // Object-like macro: consume BEFORE rescan
             state.consume();
-            const expandedTokens = expand([t], new Set());
-            rescanTrailingMacros(expandedTokens, state);
+            const expandedTokens = expand([sourceToken(t)], new Set());
+            rescanTrailingMacros(expandedTokens, state, sourceToken);
             emitExpandedTokens(expandedTokens);
           }
         } else if (t.kind !== TokenKind.NEWLINE) {
-          emitToken(state.consume());
+          emitToken(sourceToken(state.consume()));
         } else {
           state.consume();
         }

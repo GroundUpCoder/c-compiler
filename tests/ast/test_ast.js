@@ -1289,6 +1289,26 @@ test('EUnary rejects unknown op strings', () => {
 });
 
 // =============================================================================
+// #650: runtime __LINE__ values alone cannot catch a second application of
+// #line to token metadata, which corrupts diagnostics and source maps.
+// These locations are specified by the source, independently of expansion.
+// =============================================================================
+
+test('#line maps raw and expanded token locations exactly once', () => {
+  const r = C.tokenize('physical.c',
+    '#define DECL int expanded = __LINE__;\n' +
+    '#line 70 "virtual.c"\nDECL\nint raw = __LINE__;\n',
+    C.createDefaultPPRegistry());
+  assertEq(r.errors.length, 0);
+  for (const name of ['expanded', '70', 'raw', '71']) {
+    const t = r.tokens.find(t => t.text === name);
+    assert(t, `missing ${name}`);
+    assertEq(t.filename, 'virtual.c');
+    assertEq(t.line, name === 'expanded' || name === '70' ? 70 : 71);
+  }
+});
+
+// =============================================================================
 // runner output
 // =============================================================================
 
