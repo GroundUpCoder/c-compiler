@@ -2,6 +2,9 @@
 (() => {
 "use strict";
 
+// Objective-C class identity stays on types across AST lowering (#772).
+const objcClassTypes = new WeakMap();
+
 // ====================
 // Array append (spread-safe)
 // ====================
@@ -361,7 +364,7 @@ function hexVal(c) {
 // Raw lexer (phase 1)
 // ====================
 
-function lex(filename, source, lineOffsets) {
+function lex(filename, source, lineOffsets, objectiveC = String(filename).endsWith(".m")) {
   const textEncoder = new TextEncoder();
   const textDecoder = new TextDecoder();
   const bytes = textEncoder.encode(source);
@@ -709,6 +712,11 @@ function lex(filename, source, lineOffsets) {
       if (handled) continue;
     }
 
+    // Objective-C's @ is a separate preprocessing token: whitespace and
+    // macro expansion between it and a directive name remain meaningful.
+    if (objectiveC && peek() === 64) {
+      mark(); advance(); addToken(TokenKind.OTHER, '@'); continue;
+    }
     // Punctuation
     if (tryPunct()) continue;
 
@@ -1263,8 +1271,8 @@ function postProcess(lexResult) {
         else if (p && p.op === "pop") { if (stack.length) cur = stack.pop(); }
         continue; // drop the marker
       }
-      if (t.kind === TokenKind.KEYWORD &&
-          (t.keyword === Keyword.STRUCT || t.keyword === Keyword.UNION)) {
+      if (t.text === "@" || (t.kind === TokenKind.KEYWORD &&
+          (t.keyword === Keyword.STRUCT || t.keyword === Keyword.UNION))) {
         t.packValue = cur;
       }
       kept.push(t);
@@ -2129,7 +2137,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
       if (content === null) return null;
       const resolved = intern(fullPath);
       const { spliced, lineOffsets } = spliceLines(content);
-      return { lexResult: lex(resolved, spliced, lineOffsets), resolvedFile: resolved };
+      return { lexResult: lex(resolved, spliced, lineOffsets, ppRegistry.objectiveC), resolvedFile: resolved };
     };
 
     // Splice line continuations like the real-file path: inline core headers
@@ -2140,7 +2148,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
       if (!ppRegistry.standardHeaders.has(target)) return null;
       const resolved = intern(target);
       const { spliced, lineOffsets } = spliceLines(ppRegistry.standardHeaders.get(target));
-      return { lexResult: lex(resolved, spliced, lineOffsets), resolvedFile: resolved };
+      return { lexResult: lex(resolved, spliced, lineOffsets, ppRegistry.objectiveC), resolvedFile: resolved };
     };
 
     // Build the -I search-path list once.
@@ -2257,7 +2265,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
     }
 
     function emitToken(tok) {
-      if (tok.kind === TokenKind.OTHER) {
+      if (tok.kind === TokenKind.OTHER && !(ppRegistry.objectiveC && tok.text.startsWith("@"))) {
         // An "other" pp-token survived preprocessing — only now is it an
         // error (C11 6.4p1; skipped groups/unexpanded macros already
         // dropped theirs).
@@ -2680,15 +2688,37 @@ function cloneToken(t) {
 
 // Convenience: splice + lex + preprocess + post-process
 function tokenize(filename, source, ppRegistry) {
+  const objectiveC = String(filename).endsWith('.m');
   const { spliced, lineOffsets } = spliceLines(source);
-  const lexResult = lex(filename, spliced, lineOffsets);
-  if (lexResult.errors.length > 0) return lexResult;
+  let result = lex(filename, spliced, lineOffsets, objectiveC);
+  if (result.errors.length > 0) return result;
   if (ppRegistry) {
-    const ppResult = preprocess(filename, lexResult.tokens, ppRegistry);
-    if (ppResult.errors.length > 0) return ppResult;
-    return postProcess(ppResult);
+    const previousObjc = ppRegistry.objectiveC;
+    const previousDefine = ppRegistry.defines.get('__OBJC__');
+    ppRegistry.objectiveC = objectiveC;
+    if (objectiveC) ppRegistry.defines.set('__OBJC__', '1');
+    try { result = preprocess(filename, result.tokens, ppRegistry); }
+    finally {
+      ppRegistry.objectiveC = previousObjc;
+      if (previousDefine === undefined) ppRegistry.defines.delete('__OBJC__');
+      else ppRegistry.defines.set('__OBJC__', previousDefine);
+    }
+    if (result.errors.length > 0) return result;
   }
-  return postProcess(lexResult);
+  result = postProcess(result);
+  if (objectiveC) {
+    const tokens = [];
+    for (let i = 0; i < result.tokens.length; ++i) {
+      let tok = result.tokens[i];
+      if (tok.text === '@' && [TokenKind.IDENT, TokenKind.KEYWORD].includes(result.tokens[i + 1]?.kind)) {
+        const pack = tok.packValue;
+        tok = cloneToken(tok); tok.packValue = pack; tok.text = '@' + result.tokens[++i].text;
+      }
+      tokens.push(tok);
+    }
+    result.tokens = tokens;
+  }
+  return result;
 }
 
 // ====================
@@ -4887,6 +4917,11 @@ function typesAreAssignmentCompatible(srcType, targetType, expr) {
     if (sBase.isVoid() || tBase.isVoid()) return true;
     if (sBase.isConst && !tBase.isConst) return false;
     if (sBase.isVolatile && !tBase.isVolatile) return false;
+    const targetClass = objcClassTypes.get(t.baseType.removeQualifiers());
+    if (targetClass) {
+      for (let cls = objcClassTypes.get(s.baseType.removeQualifiers()); cls; cls = cls.parent)
+        if (cls === targetClass) return true;
+    }
     const su = sBase.removeQualifiers(), tu = tBase.removeQualifiers();
     if (su.isCompatibleWith(tu)) return true;
     if (isCharType(su) && isCharType(tu)) return true;
@@ -10497,6 +10532,318 @@ class Parser {
     this.warningFlags = { pointerDecay: false, circularDependency: false };
   }
 
+  // #772: Objective-C syntax is parsed here; only compiler-owned runtime
+  // boilerplate is fed back through the C declaration parser. Method bodies,
+  // message arguments and ivars always use the ordinary typed AST builders.
+  objcGenerated(source) {
+    const saved = [this.tokens, this.pos];
+    const result = Lexer.tokenize('<guc-objc-runtime>', source);
+    if (result.errors.length) this.error(this.peek(), result.errors[0].message);
+    this.tokens = result.tokens; this.pos = 0;
+    try { while (!this.atEnd()) this.parseExternalDeclaration(this.objc.unit); }
+    finally { [this.tokens, this.pos] = saved; }
+  }
+
+  objcInit(unit) {
+    this.objc = { unit, classes: new Map(), selectors: new Map(), methods: new Map(), current: null };
+    this.objcGenerated(`
+      typedef void *id;
+      typedef unsigned int SEL;
+      typedef struct __guc_objc_class *Class;
+      typedef void (*__guc_objc_imp)(void);
+      struct __guc_objc_method { SEL selector; __guc_objc_imp imp; };
+      struct __guc_objc_class {
+        Class isa; Class parent; unsigned int size;
+        struct __guc_objc_method *methods; unsigned int count;
+      };
+      void *calloc(unsigned long, unsigned long);
+      void free(void *);
+      void abort(void);
+      static id guc_objc_alloc(Class cls) {
+        if (!cls) return 0;
+        id object = calloc(1, cls->size);
+        if (object) *(Class *)object = cls;
+        return object;
+      }
+      static void guc_objc_dispose(id object) { free(object); }
+      static __guc_objc_imp __guc_objc_lookup(id object, SEL selector, Class start) {
+        Class cls = start ? start : *(Class *)object;
+        while (cls) {
+          for (unsigned int i = 0; i < cls->count; ++i)
+            if (cls->methods[i].selector == selector) return cls->methods[i].imp;
+          cls = cls->parent;
+        }
+        abort(); return 0;
+      }
+    `);
+    this.requiredSources.add('__stdlib.c');
+    this.objc.id = this.typeScope.get('id');
+    this.objc.sel = this.typeScope.get('SEL');
+    this.objc.cls = this.typeScope.get('Class');
+  }
+
+  objcSelector(name) {
+    if (!this.objc.selectors.has(name)) this.objc.selectors.set(name, this.objc.selectors.size + 1);
+    return this.objc.selectors.get(name);
+  }
+
+  objcType() {
+    this.expect('(', 'Objective-C experiment requires an explicit method type');
+    const specs = this.parseDeclSpecifiers();
+    const decl = this.parseDeclarator(specs.type);
+    this.expect(')');
+    const type = decl.type;
+    if (!(type.isVoid() || type.isArithmetic() || type.isPointer()) || type.isAggregate())
+      this.error(this.peek(-1), 'Objective-C experiment: aggregate/reference method ABI is unsupported');
+    return type;
+  }
+
+  objcSelectorWord() {
+    if (this.atKind(Lexer.TokenKind.IDENT) || this.atKind(Lexer.TokenKind.KEYWORD)) return this.advance().text;
+    this.error(this.peek(), 'Expected Objective-C selector name');
+  }
+
+  objcMethodSignature() {
+    const tok = this.advance(), classMethod = tok.text === '+';
+    const returnType = this.objcType();
+    let name = this.objcSelectorWord();
+    const params = [], names = [];
+    if (this.matchText(':')) {
+      name += ':';
+      while (true) {
+        const type = this.objcType();
+        if (type.isVoid()) this.error(this.peek(), 'Objective-C parameter cannot have void type');
+        params.push(type); names.push(this.expectKind(Lexer.TokenKind.IDENT).text);
+        if ((this.atKind(Lexer.TokenKind.IDENT) || this.atKind(Lexer.TokenKind.KEYWORD)) && this.peek(1).text === ':') {
+          name += this.advance().text + ':'; this.advance();
+        } else if (this.matchText(':')) name += ':';
+        else break;
+      }
+    }
+    if (this.atText(',')) this.error(this.peek(), 'Objective-C experiment: variadic methods are unsupported');
+    if (names.some(n => n === 'self' || n === '_cmd') || new Set(names).size !== names.length)
+      this.error(tok, 'Objective-C method has duplicate or reserved parameter names');
+    const type = Types.functionType(returnType, [this.objc.id, this.objc.sel, ...params], false, false);
+    const key = (classMethod ? '+' : '-') + name;
+    const existing = this.objc.methods.get(key);
+    if (existing && !existing.type.isCompatibleWith(type))
+      this.error(tok, `Objective-C experiment requires one signature per selector/kind: '${key}'`);
+    const selector = this.objcSelector(name);
+    const sig = existing || { name, key, type, selector, classMethod, helper: `__guc_objc_send_${classMethod ? 'c' : 'i'}${selector}` };
+    if (!existing) {
+      this.objc.methods.set(key, sig);
+      const ftype = Types.functionType(returnType, [this.objc.id, this.objc.cls, ...params], false, false);
+      sig.decl = new AST.DFunc(Lexer.Loc.fromTok(tok), sig.helper, ftype, [], Types.StorageClass.STATIC, false, null);
+      this.varScope.set(sig.helper, sig.decl);
+      this.objc.unit.declaredFunctions.push(sig.decl);
+    }
+    return { sig, names, tok };
+  }
+
+  objcClassAddress(cls, meta, loc) {
+    return AST.makeUnary(loc, 'OP_ADDR', new AST.EIdent(loc, (meta ? cls.meta : cls.variable).type, meta ? cls.meta : cls.variable));
+  }
+
+  parseObjcDeclaration(unit) {
+    const tok = this.advance();
+    if (tok.text !== '@interface' && tok.text !== '@implementation')
+      this.error(tok, `Objective-C experiment: unsupported directive '${tok.text}'`);
+    const name = this.expectKind(Lexer.TokenKind.IDENT).text;
+    if (this.atText('(') || this.atText('<'))
+      this.error(this.peek(), 'Objective-C experiment: categories/protocols are unsupported');
+    let cls = this.objc.classes.get(name);
+    if (tok.text === '@interface') {
+      if (tok.packValue) this.error(tok, 'Objective-C experiment: packed class layout is unsupported');
+      if (cls || this.typeScope.has(name) || this.varScope.has(name)) this.error(tok, `duplicate Objective-C class '${name}'`);
+      let parent = null;
+      if (this.matchText(':')) {
+        const p = this.expectKind(Lexer.TokenKind.IDENT);
+        parent = this.objc.classes.get(p.text);
+        if (!parent) this.error(p, 'Objective-C superclass must have a preceding interface');
+      }
+      const loc = Lexer.Loc.fromTok(tok);
+      const type = Types.createTagType(Types.TagKind.STRUCT, '__guc_objc_object_' + name);
+      cls = { name, type, parent, declared: new Map(), implemented: new Map(), complete: false, tok, ivars: new Map(parent ? parent.ivars : []) };
+      this.objc.classes.set(name, cls);
+      this.typeScope.set(name, type);
+      objcClassTypes.set(type, cls);
+      // Embed the entire base object (including tail padding), so inherited
+      // offsets cannot change when a subclass adds a more-aligned ivar.
+      const members = [new AST.DVar(loc, parent ? '__guc_base' : '__guc_isa', parent ? parent.type : this.objc.cls)];
+      if (this.matchText('{')) {
+        let visibility = 'protected';
+        while (!this.atText('}') && !this.atEnd()) {
+          if (this.atText('@public') || this.atText('@protected') || this.atText('@private')) {
+            visibility = this.advance().text.slice(1); continue;
+          }
+          const specs = this.parseDeclSpecifiers();
+          if (specs.storageClass !== Types.StorageClass.NONE || specs.requestedAlignment)
+            this.error(this.peek(), 'Objective-C experiment: ivar storage/alignment specifier is unsupported');
+          do {
+            const d = this.parseDeclarator(specs.type);
+            if (!d.name || d.name.startsWith('__guc_') || cls.ivars.has(d.name)) this.error(this.peek(), 'duplicate or reserved Objective-C ivar');
+            if (!d.type.isComplete || d.type.isVoid() || d.type.isFunction() || this.atText(':'))
+              this.error(this.peek(), 'Objective-C experiment: incomplete/function/bitfield ivars are unsupported');
+            const member = new AST.DVar(Lexer.Loc.fromTok(this.peek(-1)), d.name, d.type);
+            members.push(member); cls.ivars.set(d.name, { owner: cls, visibility, member });
+          } while (this.matchText(','));
+          this.expect(';');
+        }
+        this.expect('}');
+      }
+      const layout = Types.computeStructLayout(members, 0);
+      type.size = layout.size; type.align = layout.align; type.isComplete = true;
+      type.tagDecl = new AST.DTag(loc, Types.TagKind.STRUCT, type.tagName, true, members);
+      this.objcGenerated(`static struct __guc_objc_class __guc_objc_class_${name}; static struct __guc_objc_class __guc_objc_meta_${name};`);
+      cls.variable = this.varScope.get('__guc_objc_class_' + name);
+      cls.meta = this.varScope.get('__guc_objc_meta_' + name);
+      while (this.atText('-') || this.atText('+')) {
+        const { sig } = this.objcMethodSignature();
+        if (cls.declared.has(sig.key)) this.error(this.peek(), 'duplicate Objective-C method declaration');
+        cls.declared.set(sig.key, sig); this.expect(';');
+      }
+    } else {
+      if (!cls) this.error(tok, 'Objective-C implementation requires a preceding interface');
+      if (cls.complete) this.error(tok, 'duplicate Objective-C implementation');
+      cls.complete = true;
+      while (this.atText('-') || this.atText('+')) {
+        const { sig, names, tok: methodTok } = this.objcMethodSignature();
+        if (!cls.declared.has(sig.key)) this.error(methodTok, 'Objective-C experiment: method must be declared in its interface');
+        if (cls.implemented.has(sig.key)) this.error(methodTok, 'duplicate Objective-C method implementation');
+        const loc = Lexer.Loc.fromTok(methodTok);
+        const fname = `__guc_objc_method_${name}_${sig.classMethod ? 'c' : 'i'}${sig.selector}`;
+        const methodType = Types.functionType(sig.type.returnType, [sig.classMethod ? this.objc.cls : cls.type.pointer(), ...sig.type.paramTypes.slice(1)], false, false);
+        const params = ['self', '_cmd', ...names].map((n, i) => {
+          const p = new AST.DVar(loc, n, methodType.paramTypes[i], Types.StorageClass.AUTO);
+          p.definition = p; return p;
+        });
+        const fn = new AST.DFunc(loc, fname, methodType, params, Types.StorageClass.STATIC, false, null);
+        fn.definition = fn;
+        cls.implemented.set(sig.key, fn); this.varScope.set(fname, fn);
+        this.typeScope.push(); this.tagScope.push(); this.varScope.push();
+        for (const p of params) this.varScope.set(p.name, p);
+        const saved = this.currentParsingFunc;
+        this.currentParsingFunc = fn; this.objc.current = { cls, sig };
+        this.parsedLabels.clear(); this.pendingGotos.clear();
+        fn.body = this.parseCompoundStatement();
+        for (const [label] of this.pendingGotos) this.recoverableError(this.peek(), `Undefined label '${label}'`);
+        this.parsedLabels.clear(); this.pendingGotos.clear();
+        this.currentParsingFunc = saved; this.objc.current = null;
+        this.typeScope.pop(); this.tagScope.pop(); this.varScope.pop();
+        unit.staticFunctions.push(fn);
+        for (const v of fn.externLocals) unit.localExternVariables.push(v);
+        for (const f of fn.externLocalFuncs) unit.localDeclaredFunctions.push(f);
+      }
+    }
+    this.expect('@end', 'Objective-C experiment: expected @end (unsupported class form)');
+  }
+
+  objcIvar(base, cls, name, loc) {
+    const ivar = cls.ivars.get(name);
+    if (!ivar) this.error(this.peek(), `unknown Objective-C ivar '${name}'`);
+    const context = this.objc.current;
+    let permitted = ivar.visibility === 'public';
+    if (context && !context.sig.classMethod) {
+      for (let c = context.cls; c; c = c.parent) if (c === ivar.owner) permitted = true;
+      if (ivar.visibility === 'private') permitted = context.cls === ivar.owner;
+    }
+    if (!permitted) this.error(this.peek(), `Objective-C ivar '${name}' is ${ivar.visibility}`);
+    while (cls !== ivar.owner) {
+      base = AST.makeUnary(loc, 'OP_ADDR', AST.makeArrow(loc, base, '__guc_base'));
+      cls = cls.parent;
+    }
+    return AST.makeArrow(loc, base, name);
+  }
+
+  parseObjcMessage() {
+    const tok = this.advance(), loc = Lexer.Loc.fromTok(tok);
+    let receiver, start = new AST.EInt(loc, Types.TINT, 0n), cls = null, classMethod = false;
+    if (this.atText('super')) {
+      this.advance();
+      const context = this.objc.current;
+      if (!context || !context.cls.parent) this.error(tok, 'Objective-C super requires a method with a superclass');
+      cls = context.cls.parent; classMethod = context.sig.classMethod;
+      receiver = AST.makeIdent(loc, 'self', this.varScope);
+      start = this.objcClassAddress(cls, classMethod, loc);
+    } else {
+      if (this.objc.classes.has(this.peek().text) && !this.varScope.has(this.peek().text)) {
+        cls = this.objc.classes.get(this.peek().text); classMethod = true;
+      }
+      receiver = this.parseAssignmentExpression();
+      if (!cls && receiver.type.isPointer()) cls = objcClassTypes.get(receiver.type.baseType.removeQualifiers()) || null;
+      if (receiver.type.removeQualifiers() === this.objc.cls) classMethod = true;
+      if (this.objc.current && receiver instanceof AST.EIdent && receiver.decl === this.varScope.get('self')) {
+        cls = this.objc.current.cls; classMethod = this.objc.current.sig.classMethod;
+      }
+    }
+    if (!receiver.type.isPointer()) this.error(tok, 'Objective-C message receiver must be an object pointer');
+    let name = this.objcSelectorWord();
+    const args = [];
+    if (this.matchText(':')) {
+      name += ':';
+      while (true) {
+        args.push(this.parseAssignmentExpression());
+        if ((this.atKind(Lexer.TokenKind.IDENT) || this.atKind(Lexer.TokenKind.KEYWORD)) && this.peek(1).text === ':') {
+          name += this.advance().text + ':'; this.advance();
+        } else if (this.matchText(':')) name += ':';
+        else break;
+      }
+    }
+    this.expect(']', 'Objective-C experiment: expected ] (variadic messages unsupported)');
+    let key = (classMethod ? '+' : '-') + name;
+    if (!cls && receiver.type.removeQualifiers() === this.objc.id) {
+      const instance = this.objc.methods.get('-' + name), meta = this.objc.methods.get('+' + name);
+      if (instance && meta && !instance.type.isCompatibleWith(meta.type))
+        this.error(tok, `Objective-C experiment: ambiguous signature for dynamic receiver selector '${name}'`);
+      if (!instance && meta) key = '+' + name;
+    }
+    const sig = this.objc.methods.get(key);
+    if (!sig) this.error(tok, `Objective-C method '${key}' has no declared signature`);
+    if (cls) {
+      let found = false;
+      for (let c = cls; c; c = c.parent) if (c.declared.has(key)) found = true;
+      if (!found) this.error(tok, `Objective-C class '${cls.name}' does not declare '${key}'`);
+    }
+    return AST.makeCall(loc, new AST.EIdent(loc, sig.decl.type, sig.decl), [receiver, start, ...args]);
+  }
+
+  objcFinish() {
+    for (const cls of this.objc.classes.values()) {
+      if (!cls.complete) this.error(cls.tok, `Objective-C experiment: class '${cls.name}' has no implementation in this translation unit`);
+      for (const key of cls.declared.keys()) if (!cls.implemented.has(key))
+        this.error(cls.tok, `Objective-C method '${key}' has no implementation`);
+      for (const meta of [false, true]) {
+        const entries = [...cls.implemented].filter(([key]) => key.startsWith(meta ? '+' : '-'));
+        const table = `__guc_objc_table_${cls.name}_${meta ? 'c' : 'i'}`;
+        if (entries.length) this.objcGenerated(`static struct __guc_objc_method ${table}[] = { ${entries.map(([key, fn]) => `{ ${this.objc.methods.get(key).selector}, (__guc_objc_imp)${fn.name} }`).join(',')} };`);
+        const variable = meta ? cls.meta : cls.variable;
+        let root = cls; while (root.parent) root = root.parent;
+        const isa = meta ? root.meta.name : cls.meta.name;
+        const parent = cls.parent ? '&' + (meta ? cls.parent.meta.name : cls.parent.variable.name) : '0';
+        // Parse an initializer with the normal static-initializer machinery;
+        // retain the original declaration identity used by message ASTs.
+        const temp = '__guc_objc_init_' + variable.name;
+        this.objcGenerated(`static struct __guc_objc_class ${temp} = { &${isa}, ${parent}, ${meta ? 0 : cls.type.size}, ${entries.length ? table : '0'}, ${entries.length} };`);
+        variable.initExpr = this.varScope.get(temp).initExpr;
+        this.objc.unit.definedVariables = this.objc.unit.definedVariables.filter(v => v.name !== temp);
+      }
+    }
+    for (const sig of this.objc.methods.values()) {
+      const stem = sig.helper;
+      this.typeScope.set(stem + '_ret', sig.type.returnType);
+      const types = sig.type.paramTypes.slice(2);
+      types.forEach((t, i) => this.typeScope.set(stem + '_p' + i, t));
+      const args = types.map((t, i) => `${stem}_p${i} a${i}`);
+      const tail = types.map((t, i) => `a${i}`);
+      const voidReturn = sig.type.returnType.isVoid();
+      this.objcGenerated(`static ${stem}_ret ${stem}(id object, Class start${args.length ? ',' + args.join(',') : ''}) {
+        if (!object) ${voidReturn ? 'return;' : 'return 0;'}
+        ${voidReturn ? '' : 'return '} ((${stem}_ret (*)(id, SEL${types.map((t, i) => ',' + stem + '_p' + i).join('')}))
+          __guc_objc_lookup(object, ${sig.selector}, start))(object, ${sig.selector}${tail.length ? ',' + tail.join(',') : ''});
+      }`);
+    }
+  }
+
   // --- Lexer.Token helpers ---
   atEnd() { return this.pos >= this.tokens.length || this.tokens[this.pos].kind === Lexer.TokenKind.EOS; }
   peek(offset) {
@@ -11598,6 +11945,33 @@ class Parser {
 
   parsePrimaryExpression() {
     const t = this.peek();
+    if (this.objc) {
+      const loc = Lexer.Loc.fromTok(t);
+      if (this.atText('[')) return this.parseObjcMessage();
+      if (this.matchText('@selector')) {
+        this.expect('(');
+        let name = this.objcSelectorWord();
+        while (this.matchText(':')) {
+          name += ':';
+          if (this.atKind(Lexer.TokenKind.IDENT) || this.atKind(Lexer.TokenKind.KEYWORD)) name += this.advance().text;
+        }
+        this.expect(')');
+        return new AST.EInt(loc, this.objc.sel, BigInt(this.objcSelector(name)));
+      }
+      if (t.text.startsWith('@')) this.error(t, `Objective-C experiment: unsupported expression '${t.text}'`);
+      if (t.text === 'nil' || t.text === 'Nil') {
+        this.advance(); return AST.makeCast(loc, t.text === 'nil' ? this.objc.id : this.objc.cls, new AST.EInt(loc, Types.TINT, 0n));
+      }
+      if (this.objc.classes.has(t.text) && !this.varScope.has(t.text)) {
+        this.advance(); return this.objcClassAddress(this.objc.classes.get(t.text), false, loc);
+      }
+      const context = this.objc.current;
+      if (context && !context.sig.classMethod && context.cls.ivars.has(t.text) && this.varScope.getLevel(t.text) <= 0) {
+        this.advance();
+        const self = AST.makeCast(loc, context.cls.type.pointer(), AST.makeIdent(loc, 'self', this.varScope));
+        return this.objcIvar(self, context.cls, t.text, loc);
+      }
+    }
 
     // Integer literal (includes char literals converted by Lexer.postProcess)
     if (t.kind === Lexer.TokenKind.INT) {
@@ -12723,7 +13097,8 @@ class Parser {
       if (this.matchText("->")) {
         const arrowLoc = Lexer.Loc.fromTok(this.peek(-1));
         const name = this.expectKind(Lexer.TokenKind.IDENT).text;
-        expr = AST.makeArrow(arrowLoc, expr, name);
+        const objcClass = this.objc && expr.type.isPointer() && objcClassTypes.get(expr.type.baseType.removeQualifiers());
+        expr = objcClass ? this.objcIvar(expr, objcClass, name, arrowLoc) : AST.makeArrow(arrowLoc, expr, name);
         continue;
       }
       if (this.matchText("++")) {
@@ -13606,6 +13981,7 @@ class Parser {
   // --- External declaration parsing ---
 
   parseExternalDeclaration(unit) {
+    if (this.objc && this.peek().text.startsWith('@')) return this.parseObjcDeclaration(unit);
     const loc = Lexer.Loc.fromTok(this.peek());
     // GNU __extension__ before an external declaration
     // (`__extension__ typedef struct {...} x;`): semantic no-op.
@@ -14053,6 +14429,17 @@ class Parser {
   }
 
   // Override parseDeclarator to capture param names for functions
+  objcCheckValueType(type) {
+    if (!this.objc) return;
+    const t = type.removeQualifiers();
+    if (objcClassTypes.has(t)) this.error(this.peek(), 'Objective-C objects must be used through pointers');
+    if (t.isArray()) this.objcCheckValueType(t.baseType);
+    if (t.isFunction()) {
+      this.objcCheckValueType(t.returnType);
+      for (const p of t.paramTypes || []) this.objcCheckValueType(p);
+    }
+  }
+
   parseDeclarator(baseType, isTypedef) {
     let type = baseType;
     let ptrCount = 0;
@@ -14088,6 +14475,7 @@ class Parser {
       this.expect(")");
       type = this.parseDeclaratorSuffixWithNames(saved);
       const combined = this.combineDeclaratorTypes(inner.type, saved, type.type, inner._ptrCount);
+      if (!isTypedef) this.objcCheckValueType(combined);
       return { type: combined, name: inner.name, _paramNames: inner._paramNames || type._paramNames, _isKnR: inner._isKnR || type._isKnR, _ptrCount: ptrCount };
     }
 
@@ -14096,6 +14484,7 @@ class Parser {
     }
 
     const suffix = this.parseDeclaratorSuffixWithNames(type);
+    if (!isTypedef) this.objcCheckValueType(suffix.type);
     return { type: suffix.type, name, _paramNames: suffix._paramNames, _isKnR: suffix._isKnR, _ptrCount: ptrCount };
   }
 
@@ -14322,6 +14711,7 @@ function parseTokens(tokens, options) {
 
   withDiag(sink, () => {
   try {
+    if (String(options?.filename || tokens[0].filename).endsWith(".m")) parser.objcInit(unit);
     while (!parser.atEnd()) {
       // __require_source
       if (parser.atKW(Lexer.Keyword.X_REQUIRE_SOURCE)) {
@@ -14469,6 +14859,7 @@ function parseTokens(tokens, options) {
       }
       parser.parseExternalDeclaration(unit);
     }
+    if (parser.objc) parser.objcFinish();
   } catch (e) {
     // FatalDiag: error is already in the sink, just stop parsing.
     if (e instanceof FatalDiag) return;
@@ -41098,6 +41489,8 @@ function isValidRequireName(name) {
 }
 
 function parseAllUnits(fs, pp, inputFiles, options) {
+  if (inputFiles.filter(f => String(f).endsWith('.m')).length > 1)
+    throw new Error('Objective-C experiment: only one .m translation unit per program is supported');
   const units = [];
   const requiredSources = new Set();
   const pendingRequiredSources = [];
@@ -41127,7 +41520,12 @@ function parseAllUnits(fs, pp, inputFiles, options) {
     }
   }
 
+  let objcUnits = 0;
   const processSource = (filename, source) => {
+    if (String(filename).endsWith('.m') && ++objcUnits > 1) {
+      writeErr('Objective-C experiment: only one .m translation unit per program is supported\n');
+      hasErrors = true; return;
+    }
     pp.onceGuards = new Set();
     const filenameInterned = Lexer.intern(filename);
     const tLex = hrtime ? hrtime() : 0;
