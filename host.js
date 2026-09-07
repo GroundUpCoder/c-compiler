@@ -11655,7 +11655,7 @@ async function runSsModule(bytes, opts) {
  *     note naming `cc -g` as the fix. No name is ever invented.
  *   - no `c.sourcemap`   -> no source location is printed at all. A location
  *     is never guessed.
- *   - the inliner runs unconditionally and drops the callee's source markers,
+ *   - the default inliner drops the callee's source markers,
  *     so a frame can be attributed to the call site that inlined it. That is
  *     stated in the report rather than left for the developer to discover.
  * This is a diagnostic, not an implementation of a standard API: there is no
@@ -11783,8 +11783,8 @@ function formatTrapReport(err, module, progName, kind) {
   }
   out.push('    - frames removed by inlining are not shown, so a frame can be');
   out.push('      attributed to the call site that inlined it rather than to the');
-  out.push('      statement that faulted. Mark the functions you are tracing');
-  out.push('      __attribute__((noinline)) to see the full chain.');
+  out.push('      statement that faulted. Rebuild with `cc -g -fno-inline`');
+  out.push('      to see the full chain. Debug info alone does not disable inlining.');
   return out.join('\n') + '\n';
 }
 

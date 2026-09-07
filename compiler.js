@@ -16706,7 +16706,7 @@ function treeShakeFunctions(wmod, optsIn) {
 // Telemetry lands on wmod.passStats and mirrors to WAST.lastPassStats
 // (read by benches/tests after a compile; the compiler itself stays quiet).
 function runPasses(wmod) {
-  const inline = inlineFunctions(wmod);
+  const inline = inlineFunctions(wmod, wmod.inlineOptions);
   const shake = treeShakeFunctions(wmod);
   if (shake.deleted > 0) {
     for (const def of wmod.funcDefs) validate(def.wast, null);
@@ -21536,6 +21536,7 @@ function generateCode(units, outputFile, options) {
     spillScalarLocals(units);
   }
   const wmod = new WasmModule();
+  if (options?.compilerOptions?.noInline) wmod.inlineOptions = { enabled: false };
   const cg = new CodeGenerator(wmod, options);
 
   // Apply __minstack directives: take max across all TUs, round up to pages
@@ -42405,6 +42406,8 @@ function main() {
     } else if (args[i] === "-g2") {
       compilerOptions.emitNames = true;
       compilerOptions.embedSources = true;
+    } else if (args[i] === "-fno-inline") {
+      compilerOptions.noInline = true;
     } else if (args[i] === "--no-reuse-locals") {
       compilerOptions.noReuseLocals = true;
     } else if (args[i] === "--compiler-debug-switch") {

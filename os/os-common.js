@@ -138,6 +138,8 @@ function createCcDriver(CompilerJS, kfs) {
         else pp.defines.set(def, '1');
       }
       else if (a === '-g' || a === '-g1') { compilerOptions.emitNames = true; }
+      else if (a === '-g2') { compilerOptions.emitNames = true; compilerOptions.embedSources = true; }
+      else if (a === '-fno-inline') { compilerOptions.noInline = true; }
       else if (a === '--trap-null-dereference') { compilerOptions.trapNullDereference = true; }
       else if (a.charCodeAt(0) === 45) {
         // #710: an unrecognised option is refused BY NAME, never silently
@@ -154,7 +156,7 @@ function createCcDriver(CompilerJS, kfs) {
       else sources.push(abs(a));
     }
     if (!sources.length) {
-      return { exitCode: 1, stdout: '', stderr: 'usage: cc [-o out] [-Ipath] [-Dname[=val]] [-g] [--trap-null-dereference] file.c...\n' };
+      return { exitCode: 1, stdout: '', stderr: 'usage: cc [-o out] [-Ipath] [-Dname[=val]] [-g|-g2] [-fno-inline] [--trap-null-dereference] file.c...\n' };
     }
 
     // parseAllUnits reads the top-level sources through its `fs` parameter
@@ -183,6 +185,7 @@ function createCcDriver(CompilerJS, kfs) {
       }
       var wasm = CompilerJS.generateCode(units, outputFile, {
         compilerOptions: compilerOptions,
+        sourceBuffers: compilerOptions.embedSources ? pp.sourceBuffers : undefined,
         warningFlags: warningFlags,
         writeErr: writeErr,
         fatalExit: function (code) { var e = new Error('fatal'); e.__ccExit = code | 0; throw e; },

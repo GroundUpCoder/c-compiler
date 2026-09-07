@@ -3,12 +3,7 @@
 const assert = require('assert'), fs = require('fs'), os = require('os'), path = require('path');
 const {spawnSync} = require('child_process');
 const CC = require('../../compiler.js'), COMMON = require('../../os/os-common.js'), HOST = require('../../host.js');
-const source = [
-  'static void depth3(void) { __builtin_trap(); }',
-  'static void depth2(void) { depth3(); }',
-  'static void depth1(void) { depth2(); }',
-  'int main(void) { depth1(); return 0; }',
-].join('\n') + '\n';
+const source = fs.readFileSync(path.join(__dirname,'../fixtures/debug-flags.c'),'utf8');
 const kfs = HOST.BLOCK_FS.createV4(new HOST.BLOCK_FS.MemoryByteStore(8 << 20));
 const b = new TextEncoder().encode(source), fd = kfs.open('/chain.c', 0x241, 0o644);
 kfs.write(fd,b,b.length); kfs.close(fd);
@@ -24,7 +19,7 @@ async function report(bytes, full) {
 (async()=>{
   let failures=0;
   async function check(name,fn){try{await fn();console.log('ok '+name);}catch(e){failures++;console.error('FAIL '+name+': '+e.message);}}
-  for(const flags of [[],['-g'],['-g','-fno-inline'],['-g2','-fno-inline']]) await check('in-OS '+flags.join(' '),async()=>{
+  for(const flags of [[],['-g'],['-fno-inline'],['-g','-fno-inline'],['-g2','-fno-inline'],['-g']]) await check('in-OS '+flags.join(' '),async()=>{
     const r=driver(['cc',...flags,'/chain.c','-o','/chain'],'/');
     assert.strictEqual(r.exitCode,0,r.stderr);
     const bytes=COMMON.readFileBytes(kfs,'/chain'),disabled=flags.includes('-fno-inline');
@@ -32,8 +27,8 @@ async function report(bytes, full) {
     assert(disabled?stats.inlined===0:stats.inlined>=3,JSON.stringify(stats));
     const sections=WebAssembly.Module.customSections(new WebAssembly.Module(bytes),'c.sources');
     assert.strictEqual(sections.length,flags.includes('-g2')?1:0);
-    if(sections.length) assert(Buffer.from(sections[0]).includes(Buffer.from(source)));
-    if(flags.length)await report(bytes,disabled);
+    if(sections.length) assert.strictEqual(JSON.parse(Buffer.from(sections[0]).toString())['/chain.c'],source);
+    if(flags.some(f=>f.startsWith('-g')))await report(bytes,disabled);
   });
   for(const flag of ['-g3','-fno-inlien','--unknown']) await check('unknown '+flag,()=>{
     const r=driver(['cc',flag,'/chain.c'],'/');assert.notStrictEqual(r.exitCode,0);assert(r.stderr.includes(flag),r.stderr);

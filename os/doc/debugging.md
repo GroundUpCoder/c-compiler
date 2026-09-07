@@ -73,7 +73,7 @@ before the access. The crash log's top frame is named
 and the shell reports 139. Ordinary builds keep C's default undefined
 behavior and carry no trap metadata or cost.
 
-## What does not exist
+## Shipped debug information
 
 Source-built system and package binaries ship function names and source-line
 maps inside the wasm binary. Trap and abort reports can therefore identify
@@ -82,6 +82,13 @@ disable optimization; inlined calls may not appear as separate frames.
 Prebuilt binaries and overlays retain whatever debug information their
 producer supplied. A binary without it reports wasm function indices and
 offsets. There is no separate debug image or debug-file download to install.
+
+Use `cc -g -fno-inline game.c -o game` to preserve the C call chain while
+debugging. `-g2` additionally embeds referenced source text in `c.sources`;
+it is available in both the host compiler and in-OS `cc`. Neither `-g` nor
+`-g2` changes optimization by itself.
+
+## What does not exist
 
 There is no interactive debugger and no core dump. Use `printf` to
 stderr, `strace`, and `cc -g` (readable function names in a crash's

@@ -22,6 +22,16 @@ try {
     if (mode === 'assert') check('assert predicate preserved', out.includes('Assertion failed:'), out);
     if (mode === 'handled') check('SIGABRT handler still executes', out.includes('handled 6'), out);
   }
+  // #762: no per-function noinline attributes; the in-OS flag preserves frames.
+  const chain = fs.readFileSync(new URL('../fixtures/debug-flags.c', import.meta.url), 'utf8');
+  await page.evaluate(src => navigator.clipboard.writeText(src), chain);
+  const start = await page.evaluate(() => window.__osOut.length);
+  await page.keyboard.type('pbpaste > /root/chain.c; cc -g2 -fno-inline /root/chain.c -o /root/chain && /root/chain 2>/tmp/chain.err; echo CHAIN-RC=$?; cat /tmp/chain.err; echo D""ONE-chain\r');
+  await page.waitForFunction(start => window.__osOut.slice(start).includes('DONE-chain'), start, {timeout: 30000});
+  const out = await page.evaluate(start => window.__osOut.slice(start), start);
+  check('-g2 -fno-inline runs and traps', out.includes('CHAIN-RC=139'), out);
+  check('uninlined caller chain and actual trap line',
+    ['depth3','depth2','depth1','main'].every(n => new RegExp('#\\d+\\s+'+n+'\\s+at ').test(out)) && out.includes('/root/chain.c:1'), out);
 } catch (e) { s.fail(e); }
 finally { await s.close(); }
 s.finish('abort backtraces (browser)');
