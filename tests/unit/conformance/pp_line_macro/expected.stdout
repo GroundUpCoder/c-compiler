@@ -1,0 +1,9 @@
+outer.c:101:101
+outer.c:102:102
+103
+105
+included.c:50:50
+outer.c:107:107
+conditional-ok
+last.c:900:900
+last.c:10:10
