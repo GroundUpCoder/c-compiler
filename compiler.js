@@ -10776,7 +10776,9 @@ class Parser {
         cls = this.objc.current.cls; classMethod = this.objc.current.sig.classMethod;
       }
     }
-    if (!receiver.type.isPointer()) this.error(tok, 'Objective-C message receiver must be an object pointer');
+    const receiverType = receiver.type.removeQualifiers();
+    if (!receiverType.isPointer() || !(receiverType === this.objc.id || receiverType === this.objc.cls || objcClassTypes.has(receiverType.baseType.removeQualifiers())))
+      this.error(tok, 'Objective-C message receiver must be an object pointer');
     let name = this.objcSelectorWord();
     const args = [];
     if (this.matchText(':')) {

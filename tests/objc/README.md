@@ -21,7 +21,7 @@ There is no `-x`, `-fobjc-arc`, or Objective-C++ mode in this experiment.
 | Area | Support |
 |---|---|
 | Declarations | `@interface Name [: Parent]`, `@implementation Name`, `@end`; superclass interface precedes subclass; each class has one implementation in the same `.m` TU. Every implemented method is explicitly declared in its own interface. |
-| Objects | Distinct class pointer types (`Name *`), inherited object storage with base tail padding preserved, upcasts, `id`, `Class`, `nil`, `Nil`. The internal representation of `id` is `void *`; this is not full Objective-C static type checking. |
+| Objects | Distinct class pointer types (`Name *`), a compiler-owned class-pointer header before root ivars, inherited object storage with base tail padding preserved, upcasts, `id`, `Class`, `nil`, `Nil`. The internal representation of `id` is `void *`; this is not full Objective-C static type checking. |
 | Ivars | Complete ordinary C scalar/pointer/array/aggregate members; default protected visibility, `@private`, `@protected`, `@public`; implicit ivar names and `self->ivar`; local/parameter shadowing. |
 | Methods | Instance `-` and class `+` methods; explicit return/parameter types; void, integer including 64-bit, pointer including function pointers, float/double/long double using existing C scalar representation. Ordinary C method bodies. |
 | Selectors | Unary, keyword and empty subsequent keyword components; `@selector(...)`, `_cmd`, TU-local selector identity. One compatible signature per selector and method kind across the TU. |
