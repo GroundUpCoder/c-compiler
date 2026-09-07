@@ -98,6 +98,7 @@
     ['object-value', '@interface A @end @implementation A @end A object;', /through pointers/],
     ['ambiguous-id', '@interface A + (double)x; - (int)x; @end @implementation A + (double)x {return 1;} - (int)x {return 2;} @end int main(void){return [nil x];}', /ambiguous signature/],
     ['packed-class', '#pragma pack(1)\n@interface A { int x; } @end', /packed class/],
+    ['nonobject-receiver', 'int main(void) { int *p=0; return [p value]; }', /object pointer/],
     ['bitfield', '@interface A { int x:3; } @end', /bitfield/],
   ];
   const api = { positive, negative };
