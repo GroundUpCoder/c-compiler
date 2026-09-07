@@ -278,6 +278,9 @@ const out = boot([
   'echo ==prompt',
   'wmctl tree',
   'echo ==cut',
+  'echo ==promptlist',
+  'wmctl list',
+  'echo ==cut',
   'wmctl click No',
   'wmctl wait nowin "crlf.txt - Notepad" 6000',   // No discards -> notepad exits
   'echo ==list4',
@@ -447,6 +450,14 @@ check('New Window spawned a second notepad (ShellExecuteW)',
 
 /* the modified prompt */
 const prompt = section(out, 'prompt');
+const promptRows = section(out, 'promptlist').split('\n').map(l => l.split('\t'))
+  .filter(f => f.length >= 7 && f[0] !== 'SID');
+check('#740: dirty-close confirmation is transient',
+  promptRows.some(f => f[6] === 'Notepad' && f[5].includes('U')),
+  section(out, 'promptlist'));
+check('#740: dirty-close leaves exactly one taskbar-eligible application',
+  promptRows.filter(f => !f[5].includes('b') && !f[5].includes('U')).length === 1,
+  section(out, 'promptlist'));
 check('close on a modified doc asks Yes/No/Cancel (MB_YESNOCANCEL)',
   /has been modified/.test(prompt) && /text='Yes'/.test(prompt) &&
   /text='No'/.test(prompt) && /text='Cancel'/.test(prompt), prompt.slice(-400));
