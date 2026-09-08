@@ -20905,7 +20905,7 @@ class CodeGenerator {
             for (let i = 0; i < expr.arguments.length; i++) {
               argOffsets.push(blockSize);
               let argType = i < numFixed ? paramTypes[i] : expr.arguments[i].type;
-              if (argType.removeQualifiers() === Types.TFLOAT) argType = Types.TDOUBLE;
+              if (i >= numFixed && argType.removeQualifiers() === Types.TFLOAT) argType = Types.TDOUBLE;
               blockSize += vaSlotSize(argType);
             }
             blockSize = (blockSize + 7) & ~7;
@@ -20919,7 +20919,7 @@ class CodeGenerator {
             this.body.localSet(argBlockBase);
             for (let i = 0; i < expr.arguments.length; i++) {
               let storeType = i < numFixed ? paramTypes[i] : expr.arguments[i].type;
-              if (storeType.removeQualifiers() === Types.TFLOAT) storeType = Types.TDOUBLE;
+              if (i >= numFixed && storeType.removeQualifiers() === Types.TFLOAT) storeType = Types.TDOUBLE;
               this.body.localGet(argBlockBase);
               if (argOffsets[i] > 0) { this.body.i32Const(argOffsets[i]); this.body.aop(WT_I32, ALU.OP_ADD); }
               if (isStructOrUnion(storeType)) {
