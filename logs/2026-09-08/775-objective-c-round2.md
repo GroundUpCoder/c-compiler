@@ -314,3 +314,17 @@ P with double. Pre-fix linking accepted it (no execution claimed); red test
 against the canonical completed protocol closure, falling back to linked global
 candidates only if no protocol method applies. Focused Node passes in
 `build/775/forward-protocol-host.log`, now twelve negative link controls.
+
+The next independent review correctly separated forward protocol *adoption* from
+forward protocol *send completion*: a provider could adopt forward P without ever
+receiving P's methods from another unit. It also reproduced a safe inherited call
+wrongly checked as a subclass override. Red acceptance in the preceding test
+commit fails on that inherited call (`build/775/canonical-obligations-red.log`).
+
+Linking now unions class adoptions, rebuilds inherited/transitive requirements from
+canonical protocols, and uses canonical protocol closure in method subtyping.
+Signature records retain declaration/requirement/caller provenance; caller
+expectations still constrain actual implementations but do not invent overrides.
+Focused Node passes (`build/775/canonical-obligations-host.log`): 32 positive
+executions,28 refusals,16 cross-unit executions,14 negative link cases in both
+orders (28 records). Shared OS positives now24 programs; OS/browser gates pending.

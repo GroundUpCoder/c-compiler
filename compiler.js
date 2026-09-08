@@ -2770,12 +2770,27 @@ return {
 // Directional method contracts are separate from C function compatibility.
 // A caller's result guarantees may be strengthened; its accepted arguments
 // may be broadened. In particular, permissive id assignment is not subtyping.
-function objcObjectSubstitutable(actual, expected, classes = null) {
+function objcObjectSubstitutable(actual, expected, classes = null, protocolRegistry = null) {
   actual = actual.removeQualifiers(); expected = expected.removeQualifiers();
   if (!(actual instanceof Types.ObjcObjectPointerType) || !(expected instanceof Types.ObjcObjectPointerType)) return false;
   if (actual.ownership !== expected.ownership) return false;
-  const protocols = actual.protocolNames();
-  if ([...expected.protocolNames()].some(p => !protocols.has(p))) return false;
+  const protocolNames = type => {
+    if (!classes) return type.protocolNames();
+    const names = new Set(), seen = new Set();
+    const visit = name => {
+      if (names.has(name)) return;
+      names.add(name);
+      for (const parent of protocolRegistry?.get(name)?.parents || []) visit(parent);
+    };
+    for (const p of type.protocols) visit(p);
+    for (let cls=classes.get(type.className); cls && !seen.has(cls.name); cls=cls.parent && classes.get(cls.parent.name)) {
+      seen.add(cls.name);
+      for (const p of cls.protocols) visit(p);
+    }
+    return names;
+  };
+  const protocols = protocolNames(actual);
+  if ([...protocolNames(expected)].some(p => !protocols.has(p))) return false;
   if (!expected.className) return true;
   if (!actual.className) return false;
   const seen = new Set();
@@ -2786,10 +2801,10 @@ function objcObjectSubstitutable(actual, expected, classes = null) {
   }
   return actual.className === expected.className;
 }
-function objcMethodSatisfies(actual, expected, equal = (a,b) => a.isCompatibleWith(b), classes = null) {
+function objcMethodSatisfies(actual, expected, equal = (a,b) => a.isCompatibleWith(b), classes = null, protocolRegistry = null) {
   if (actual.isVarArg !== expected.isVarArg || actual.paramTypes.length !== expected.paramTypes.length) return false;
   const substitutable = (a,b) => a instanceof Types.ObjcObjectPointerType || b instanceof Types.ObjcObjectPointerType
-    ? objcObjectSubstitutable(a,b,classes) : equal(a,b);
+    ? objcObjectSubstitutable(a,b,classes,protocolRegistry) : equal(a,b);
   return substitutable(actual.returnType,expected.returnType) &&
     expected.paramTypes.slice(2).every((p,i) => substitutable(p,actual.paramTypes[i+2]));
 }
@@ -9997,13 +10012,13 @@ function linkTranslationUnits(units, compilerOptions) {
     else objcProtocols.set(protocol.name,protocol);
   }
   const objcClasses = new Map(), objcSignatures = new Map();
-  const recordObjcSignature = (name,key,sig,tok) => {
+  const recordObjcSignature = (name,key,sig,tok,kind='declaration') => {
     if (!objcSignatures.has(name)) objcSignatures.set(name,new Map());
     const signatures = objcSignatures.get(name), entries = signatures.get(key) || [];
-    const old = entries.find(e => !objcMethodSatisfies(e.sig.type,sig.type,objcABIEqual,objcClasses) && !objcMethodSatisfies(sig.type,e.sig.type,objcABIEqual,objcClasses));
+    const old = entries.find(e => !objcMethodSatisfies(e.sig.type,sig.type,objcABIEqual,objcClasses,objcProtocols) && !objcMethodSatisfies(sig.type,e.sig.type,objcABIEqual,objcClasses,objcProtocols));
     if (old)
       errors.push({message:`inconsistent Objective-C signature '${name} ${key}'`,locations:[Lexer.Loc.fromTok(old.tok),Lexer.Loc.fromTok(tok)]});
-    entries.push({sig,tok}); signatures.set(key,entries);
+    entries.push({sig,tok,kind}); signatures.set(key,entries);
   };
 
   for (const unit of units) for (const cls of unit.objc?.classes.values() || []) {
@@ -10014,12 +10029,34 @@ function linkTranslationUnits(units, compilerOptions) {
       if (!previous.interfaceComplete || cls.complete) objcClasses.set(cls.name, cls);
     } else objcClasses.set(cls.name, cls);
   }
+  // Every complete or partial declaration contributes adoptions. Rebuild
+  // their transitive method obligations using linked protocol identities.
+  for (const unit of units) for (const cls of unit.objc?.classes.values() || []) {
+    const canonical = objcClasses.get(cls.name);
+    objcClasses.set(cls.name,{...canonical,protocols:[...new Set([...canonical.protocols,...cls.protocols])]});
+  }
+  const objcRequirements = cls => {
+    const result = [], seen = new Set(), classes = new Set();
+    const visit = name => {
+      if (seen.has(name)) return;
+      seen.add(name);
+      const p = objcProtocols.get(name);
+      if (!p) return;
+      result.push(...p.declared.values());
+      for (const parent of p.parents) visit(parent);
+    };
+    for (let c=objcClasses.get(cls.name); c && !classes.has(c.name); c=c.parent && objcClasses.get(c.parent.name)) {
+      classes.add(c.name);
+      for (const p of c.protocols) visit(p);
+    }
+    return result;
+  };
   for (const unit of units) for (const cls of unit.objc?.classes.values() || []) {
     for (const [key,sig] of cls.declared) recordObjcSignature(cls.name,key,sig,cls.tok);
-    for (const sig of cls.requirements || []) recordObjcSignature(cls.name,sig.key,sig,cls.tok);
+    for (const sig of objcRequirements(cls)) recordObjcSignature(cls.name,sig.key,sig,cls.tok,'requirement');
   }
   for (const unit of units) for (const send of unit.objc?.sends || [])
-    if (send.staticClass) recordObjcSignature(send.staticClass.name,send.key,send.sig,send.tok);
+    if (send.staticClass) recordObjcSignature(send.staticClass.name,send.key,send.sig,send.tok,'caller');
 
   for (const unit of units) for (const send of unit.objc?.sends || []) {
     if (send.staticClass) continue;
@@ -10048,7 +10085,7 @@ function linkTranslationUnits(units, compilerOptions) {
   for (const unit of units) for (const declaration of unit.objc?.classes.values() || []) {
     const cls = objcClasses.get(declaration.name);
     if (!cls?.complete) continue;
-    for (const requirement of [...declaration.declared.values(), ...(declaration.requirements || [])]) {
+    for (const requirement of [...declaration.declared.values(), ...objcRequirements(declaration)]) {
       let found=false;
       const visited=new Set();
       for(let c=cls;c && !visited.has(c.name);c=c.parent && objcClasses.get(c.parent.name)) {
@@ -10064,8 +10101,9 @@ function linkTranslationUnits(units, compilerOptions) {
       if (visited.has(base.name)) { errors.push({message:`cyclic Objective-C superclass hierarchy at '${name}'`,locations:[]}); break; }
       visited.add(base.name);
       for (const [key,entries] of objcSignatures.get(name) || []) for (const entry of entries) {
+        if (entry.kind !== 'declaration') continue;
         for (const inherited of objcSignatures.get(base.name)?.get(key) || [])
-          if (!objcMethodSatisfies(entry.sig.type,inherited.sig.type,objcABIEqual,objcClasses))
+          if (!objcMethodSatisfies(entry.sig.type,inherited.sig.type,objcABIEqual,objcClasses,objcProtocols))
             errors.push({message:`inconsistent Objective-C override '${name} ${key}' of '${base.name}'`,locations:[Lexer.Loc.fromTok(entry.tok),Lexer.Loc.fromTok(inherited.tok)]});
       }
     }
@@ -10080,7 +10118,7 @@ function linkTranslationUnits(units, compilerOptions) {
         visited.add(c.name); implementation=c.implemented.get(key);
       }
       if (implementation) for (const entry of entries)
-        if (!objcMethodSatisfies(implementation.type,entry.sig.type,objcABIEqual,objcClasses))
+        if (!objcMethodSatisfies(implementation.type,entry.sig.type,objcABIEqual,objcClasses,objcProtocols))
           errors.push({message:`inconsistent Objective-C signature '${name} ${key}' implementation does not satisfy declaration`,locations:[implementation.loc,Lexer.Loc.fromTok(entry.tok)]});
     }
   }
