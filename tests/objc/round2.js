@@ -288,7 +288,12 @@
   };
   const cMainTU = {...crossTU, 'main.m':crossTU['main.m'].replace('int main(void)','int objc_check(void)'),
     'driver.c':'int objc_check(void); int main(void){return objc_check();}'};
+  const inheritedVarianceTU = {
+    'main.m':'@interface Base - (Base*)value; @end @interface Sub:Base @end int main(void){Sub*s=guc_objc_alloc(Sub);int bad=[s value]!=nil;guc_objc_dispose(s);return bad;}',
+    'impl.m':'@class Sub; @interface Base - (Sub*)value; @end @interface Sub:Base @end @implementation Base - (Sub*)value{return nil;} @end @implementation Sub @end',
+  };
   const crossPrograms = [
+    {name:'inherited caller variance',files:inheritedVarianceTU,orders:[['main.m','impl.m'],['impl.m','main.m']]},
     {name:'cross-TU',files:crossTU,orders:[['base.m','sub.m','main.m'],['main.m','sub.m','base.m']]},
     {name:'cross-TU covariance',files:varianceTU,orders:[['base.m','sub.m','main.m'],['main.m','sub.m','base.m']]},
     {name:'C-entry startup',files:cMainTU,orders:[['driver.c','main.m','sub.m','base.m'],['base.m','sub.m','main.m','driver.c']]},

@@ -46,6 +46,8 @@ async function main() {
     console.log('PASS',program.name,order.join(','));
   }
   for (const [name, files, expected] of [
+    ['forward-adopted-protocol-missing', ['@protocol P; @interface A<P> @end @implementation A @end id<P> make(void){return guc_objc_alloc(A);}', '@protocol P - (int)value; @end id<P> make(void); int main(void){return [make() value]!=7;}'], /required protocol method.*no implementation/],
+    ['forward-adopted-protocol-abi', ['@protocol P; @interface A<P> @end @implementation A - (double)value{return 7.0;} @end id<P> make(void){return guc_objc_alloc(A);}', '@protocol P - (int)value; @end id<P> make(void); int main(void){return [make() value]!=7;}'], /inconsistent Objective-C signature/],
     ['forward-protocol-send', ['@protocol P; @interface A - (int)value; @end id<P> make(void); int main(void){return [make() value]!=7;}', '@protocol P - (double)value; @end @interface B<P> - (double)value; @end @implementation B - (double)value{return 7.0;} @end id<P> make(void){return guc_objc_alloc(B);}'], /ambiguous signature.*across translation units/],
     ['dynamic-linked-signatures', ['@interface A - (int)value; @end id make(void); int main(void){return [make() value]!=7;}', '@interface B - (double)value; @end @implementation B - (double)value{return 7.0;} @end id make(void){return guc_objc_alloc(B);}'], /ambiguous signature.*across translation units/],
     ['dynamic-protocol-schema', ['@protocol P - (int)value; @end id<P> make(void); int main(void){id<P> p=make();return [p value]!=7;}', '@protocol P - (double)value; @end @interface A<P> - (double)value; @end @implementation A - (double)value{return 7.0;} @end id<P> make(void){return guc_objc_alloc(A);}'], /inconsistent Objective-C protocol/],
@@ -60,10 +62,12 @@ async function main() {
     ['missing', ['@interface A @end int main(void){return guc_objc_alloc(A)==0;}'], /Undefined symbol.*class_A/],
   ]) {
     const options={compilerOptions:{},warningFlags:{},writeErr:s=>{throw Error(s);}};
-    const units=C.parseAllUnits({readFileSync: p=>files[parseInt(p)]}, C.createDefaultPPRegistry(), files.map((_,i)=>i+'.m'),options);
+    for (const order of [files.map((_,i)=>i+'.m'),files.map((_,i)=>i+'.m').reverse()]) {
+    const units=C.parseAllUnits({readFileSync: p=>files[parseInt(p)]}, C.createDefaultPPRegistry(), order,options);
     const errors=C.linkTranslationUnits(units,options.compilerOptions).errors;
     assert(errors.some(e=>expected.test(e.message)), name+': '+JSON.stringify(errors));
-    console.log('PASS cross-TU refusal',name);
+    console.log('PASS cross-TU refusal',name,order.join(','));
+    }
   }
   {
     const tokens=C.tokenize('metadata.m','@protocol P; @interface A @end @implementation A @end const id object; A *typed; const __unsafe_unretained id<P> qualified;', C.createDefaultPPRegistry());
