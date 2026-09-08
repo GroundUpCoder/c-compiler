@@ -126,6 +126,34 @@
       int ok=[p value]==9 && [q value]==9 && [h.typed value]==9;
       guc_objc_dispose(a); return !ok;
     }`]);
+  // This provider is an ABI test fixture, not a Foundation implementation.
+  positive.push(['NSString-constant-payload', `
+    id early=@"A";
+    @interface NSString @end
+    @interface NSConstantString:NSString {
+      @public unsigned int flags, length, byteSize, hash;
+      const void *data;
+    } @end
+    @implementation NSString @end
+    @implementation NSConstantString @end
+    static NSString *unicode=@"a\\0😀" "z" @"!";
+    static NSString *empty=@"";
+    int loaded;
+    @interface Probe + (void)load; @end
+    @implementation Probe
+    + (void)load { NSConstantString *s=(NSConstantString*)early; loaded=s->length==1 && s->flags==0; }
+    @end
+    NSString *survive(void) {return @"alive";}
+    int main(void) {
+      NSConstantString *a=(NSConstantString*)unicode, *b=(NSConstantString*)empty;
+      if(sizeof *a!=24 || a->flags!=2 || a->length!=6 || a->byteSize!=12 || a->hash) return 1;
+      const unsigned short *p=a->data;
+      if(p[0]!='a' || p[1] || p[2]!=0xd83d || p[3]!=0xde00 || p[4]!='z' || p[5]!='!' || p[6]) return 2;
+      if(b->flags || b->length || b->byteSize || !b->data || *(char*)b->data) return 3;
+      NSString *saved=survive(); for(int i=0;i<100;i++) survive();
+      NSConstantString *c=(NSConstantString*)saved;
+      return !loaded || c->length!=5 || *(char*)c->data!='a';
+    }`]);
   const negative = [
     ['owning-qualifier', 'int main(void) { __weak id object; return 0; }', /owning qualifiers/],
     ['void-pointer-receiver', 'int main(void){ void *p=0; return [p x]; }', /object pointer/],
