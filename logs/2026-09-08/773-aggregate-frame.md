@@ -95,3 +95,51 @@ SThrow arguments must remain live together. Examined all current statement AST
 shapes to establish that distinction. All 14 host checks pass in the fixed tree.
 The a35036df gate was interrupted before edits and its log/artifacts preserved;
 review must settle before another broad gate begins.
+
+## Completed review and fresh regression gate
+
+Final code/test tip: `48eeee5dcabe8bd73570a3a3a584ae5cc0685afb`.
+The independent Codex reviewer cleared the complete `277b14fb..48eeee5d` range,
+including its own opposite-size, throw-argument lifetime, and large declarator
+initializer probes in both inline modes. After the user's Astra-only instruction,
+I explicitly pinned that external reviewer thread to `gpt-6-astra`, re-read its
+metadata to verify the model, and obtained a fresh exact-tip reconfirmation:
+no blocking findings, all 14 aggregate checks pass, clean worktree. This does not
+relabel the original Fable implementation or earlier unpinned review turns.
+
+The first complete-gate attempt stopped without a completion summary; it is not
+a pass. The final run used a detached persistent shell runner, preserving the
+start record and exit status independently of chat tool sessions:
+
+```
+node tests/run.js --diff 277b14fb --out=build/773/verified-gate
+```
+
+Run `20260908-024919-37535`: **exit 0**, elapsed **3,666,969 ms (61.1 min)**.
+Its own fresh dispatcher summary has a null filter, 25 selected suites and all
+seven execution rows literally `pass`. Nineteen Python categories share one row.
+This is the required **diff gate**, not the ship tier: `netsurf-patch` is omitted.
+No deployment is part of #773 completion.
+
+| Execution row | Verified result |
+|---|---|
+| todos | pass |
+| unit | 848 pass, 0 fail, 3 skip |
+| host | pass, including all 14 aggregate checks |
+| BlockFS | 15/15 pass |
+| Python batch | 903 pass, 0 fail, 112 skip; skip baseline checked, zero violations |
+| kernel | 199/199 pass |
+| browser sweep | 69/69 pass |
+
+The kernel, browser and BlockFS manifests are fresh, done, unfiltered, and have
+executed = selected = recorded = total, zero resumed/carried, and exclusively
+pass member results. The source commit and clean worktree were checked after
+completion. Compiler SHA-256:
+`8f5a052e8a2ecdc1f45748495e9747838f2a59b52ace4cd646b404b77cd84eef`.
+
+Evidence: `build/773/verified-gate/summary.json`, `verified-gate.log`,
+`verified-gate.exit`, `verified-gate-start.json`, and `validation-final.json`
+(the latter records scope and hashes of compiler, log and child manifests).
+Interrupted runs remain separately recorded and are not included in these counts.
+The closing documentation commit changes no code or tests; it requires a final
+exact-tip documentation review before push, not another unchanged-source gate.
