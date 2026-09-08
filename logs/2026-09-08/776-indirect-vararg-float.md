@@ -55,3 +55,27 @@ passing (3.75, fixed float through a volatile variadic function pointer), with a
 complete fresh mapper-selected diff gate and no reuse/resume of the red record.
 Independent C source approval remains pinned to fa602313; this commit changes
 only this journal. Current #776 is not ready to merge.
+
+## Fresh retry completed green
+
+Serial continuation 01a080d7-ee94-742a-8ee9-7e4f4be9359c (cc-meta metadata
+verified codex/gpt-6-astra) transferred and reread both #776 and #775 claims.
+Before the retry, the same-source sedit repetitions completed 3/3 passes under
+two CPU load workers. This establishes intermittency, not a root cause.
+
+Executed fresh `node tests/run.js --diff origin/main --out=build/776/gate2`
+at 4b83e5470e379cee500ac46ef8cd6f5771d52452, compiler unchanged from approved
+fa602313. Run 20260908-114234-43019 began 11:42:34 UTC and completed
+12:32:21 UTC, elapsed 2,986,849 ms, exit 0. Inspected the newly published
+run-level summary first: null filter, all 25 mapper-selected suites represented
+by seven literal-pass rows. The diff tier deliberately omits netsurf-patch.
+Then checked fresh child manifests: kernel 199/199, browser 69/69, BlockFS
+15/15, done true, null filters, selected=executed=recorded=total, zero
+resumed/carried, every file pass. Python 904 pass, 111 baseline skips, baseline
+checked with no violations. Host health remained okay. The formerly failing
+sedit member passed in 14.6s in this fresh broad run.
+
+Evidence is build/776/gate2/summary.json and its immutable history archive,
+gate2.log, gate2.exit, and gate2-audit.log. Original red and diagnostic logs
+remain preserved separately; no source or test was changed to make it pass.
+Final independent evidence assessment requested from the original C reviewer.
