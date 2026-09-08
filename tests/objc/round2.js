@@ -189,6 +189,21 @@
     @implementation A @end
     int main(void) {AP a=guc_objc_alloc(A); a->x=4; int ok=a->x==4 && sizeof *a==8; guc_objc_dispose(a);return !ok;}
   `]);
+  // Eighteen live selectors necessarily collide in the 16-slot class cache.
+  // Alternate two actual classes through one static type and repeat after warmup.
+  positive.push(['dispatch-cache-collision-and-dynamic-class', `
+    @interface CacheBase ${Array.from({length:18},(_,i)=>'- (int)m'+i+';').join(' ')} @end
+    @interface CacheMid:CacheBase @end
+    @interface CacheLeaf:CacheMid - (int)m17; @end
+    @implementation CacheBase ${Array.from({length:18},(_,i)=>'- (int)m'+i+' {return '+i+';}').join(' ')} @end
+    @implementation CacheMid @end
+    @implementation CacheLeaf - (int)m17 {return [super m17]+100;} @end
+    int main(void){CacheBase *a=guc_objc_alloc(CacheBase),*b=guc_objc_alloc(CacheLeaf);
+      for(int round=0;round<8;round++){CacheBase *x=round%2?b:a;
+        int sum=${Array.from({length:18},(_,i)=>'[x m'+i+']').join('+')};
+        if(sum!=(round%2?253:153))return 1;}
+      guc_objc_dispose(a);guc_objc_dispose(b);return 0;}
+  `]);
   const negative = [
     ['reverse-object-return', '@interface Base @end @interface Sub:Base @end @interface A - (Sub*)value; @end @interface B:A - (Base*)value; @end', /incompatible Objective-C override/],
     ['unrelated-object-return', '@interface X @end @interface Y @end @interface A - (X*)value; @end @interface B:A - (Y*)value; @end', /incompatible Objective-C override/],

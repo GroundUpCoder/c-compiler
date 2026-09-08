@@ -299,3 +299,10 @@ with Objective-C startup), 11 negative link cases and metadata/isolation control
 Reverse/unrelated object returns and narrowed arguments refuse. The shared OS
 script now includes 21 programs; its current expanded version has not yet run
 on either OS host. Current real Chromium and broad gates remain pending.
+
+Added a dispatch-cache execution control: eighteen selectors force collisions
+in sixteen slots; alternating base/leaf objects through a base static type checks
+warm-cache dynamic dispatch, inherited misses and lexical super. Focused Node
+passes at unchanged compiler source (`build/775/cache-host.log`), now 32 positive
+executions. The shared OS script contains 22 programs. This test-only extension
+postdates the 211b46fd source review request; no compiler source changed.
