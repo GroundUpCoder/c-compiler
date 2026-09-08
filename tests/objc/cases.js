@@ -77,7 +77,6 @@
       return 0;
     }`]);
   const negative = [
-    ['protocol', '@protocol P @end', /unsupported directive/],
     ['category', '@interface A (Extra) @end', /categories/],
     ['property', '@interface A @property int x; @end', /unsupported class form/],
     ['arc-pool', 'int main(void) { @autoreleasepool { } return 0; }', /unsupported expression/],

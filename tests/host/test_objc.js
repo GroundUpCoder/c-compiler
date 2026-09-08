@@ -58,7 +58,7 @@ async function main() {
     console.log('PASS cross-TU refusal',name);
   }
   {
-    const tokens=C.tokenize('metadata.m','@interface A @end @implementation A @end const id object; A *typed;', C.createDefaultPPRegistry());
+    const tokens=C.tokenize('metadata.m','@protocol P; @interface A @end @implementation A @end const id object; A *typed; const __unsafe_unretained id<P> qualified;', C.createDefaultPPRegistry());
     const parsed=C.parseTokens(tokens.tokens,{filename:'metadata.m'});
     assert.deepStrictEqual(parsed.errors,[]);
     const vars=parsed.translationUnit.definedVariables;
@@ -67,6 +67,9 @@ async function main() {
     assert.notEqual(object.removeQualifiers().constructor,C.Types.PointerType);
     assert.equal(object.removeQualifiers().ownership,'manual');
     assert.equal(typed.className,'A');
+    const qualified=vars.find(v=>v.name==='qualified').type;
+    assert.equal(qualified.removeQualifiers().ownership,'unsafe_unretained');
+    assert.deepStrictEqual(qualified.removeQualifiers().addVolatile().protocols,['P']);
     assert.deepStrictEqual(object.protocols,[]);
     assert.equal(object.removeQualifiers().addVolatile().ownership,'manual');
     console.log('PASS frontend object-pointer metadata');

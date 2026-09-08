@@ -153,3 +153,32 @@ Node suite passes in both modes (build/775/float-objc-host.log). Fresh gate and
 final review remain pending for both tickets. #776 adds no test registry entry;
 its independent instrument is the named C conformance fixture, while #775 is
 judged by Objective-C host/browser/OS acceptance.
+
+## Object types, startup and dispatch checkpoint
+
+Object pointers now have a distinct frontend subclass, preserving class name,
+protocol qualifier set and ownership through const/volatile cloning. id remains
+four bytes and is no longer void*. Added @class identities, protocol declarations
+and inherited protocol qualification, id<P> and Class<P>* source forms; explicit
+unsafe_unretained metadata carries manual lifetime while owning qualifiers refuse.
+Tests cover typedef/field/parameter/return/conditional storage and protocol-based
+signature selection despite unrelated conflicting selectors. Full protocol runtime
+reflection is not claimed by these type-system changes.
+
+An eager per-TU startup function roots every linked class; the linker emits the
+existing host __wasm_call_ctors export to call them. Own +load implementations run
+directly, superclass-first, without automatically invoking inherited +load or
+triggering +initialize. Lazy initialization uses shared descriptor state with
+active/pending/completed distinctions, inherited initializer calls per class and
+pending-child completion for parent/child reentry. Instance and class sends
+initialize the actual receiver class before lookup. A 16-slot per-descriptor cache
+serves repeated selector lookup, with the existing superclass fallback on misses;
+static receiver typing never selects an implementation. No method mutation or
+module loader API is introduced.
+
+Red eager-initialization control exited 1 (build/775/init-red.log); corrected its
+unrelated-class order assertion by making Unused a subclass, so only guaranteed
+superclass ordering is required. Focused Node corpus now passes 22 single-TU/mode
+executions, four cross-TU executions, 22 refusals, four link diagnostics and AST
+metadata controls (build/775/type-protocol-host.log). Browser execution, full gate,
+final independent review and merge still pending. String literal lowering is next.

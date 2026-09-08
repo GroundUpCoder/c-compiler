@@ -89,7 +89,7 @@
     int sequence, loads, initialized, childSeen;
     @interface Parent + (void)load; + (void)initialize; + (int)value; @end
     @interface Child:Parent @end
-    @interface Unused + (void)load; @end
+    @interface Unused:Parent + (void)load; @end
     @implementation Parent
     + (void)load {loads++; sequence=1;}
     + (void)initialize {
@@ -108,7 +108,26 @@
       if([Child value]!=7 || initialized!=11) return 3;
       return 0;
     }`]);
+  positive.push(['protocol-qualified-object-types', `
+    @protocol P;
+    @class A;
+    @protocol P - (int)value; @end
+    @protocol Q<P> @end
+    @interface A <Q> - (int)value; @end
+    @interface Other - (double)value; @end
+    @implementation A - (int)value {return 9;} @end
+    @implementation Other - (double)value {return 1.5;} @end
+    typedef const __unsafe_unretained id<Q> Qualified;
+    struct Holder { Qualified object; A<P> *typed; };
+    id<P> identity(id<P> x) {return x;}
+    int main(void) {
+      A *a=guc_objc_alloc(A); struct Holder h={a,a};
+      id<P> p=identity(h.object); id<P> q=p ? p : p;
+      int ok=[p value]==9 && [q value]==9 && [h.typed value]==9;
+      guc_objc_dispose(a); return !ok;
+    }`]);
   const negative = [
+    ['owning-qualifier', 'int main(void) { __weak id object; return 0; }', /owning qualifiers/],
     ['void-pointer-receiver', 'int main(void){ void *p=0; return [p x]; }', /object pointer/],
     ['late-ambiguous-id', `
       @interface A - (int)value; @end
