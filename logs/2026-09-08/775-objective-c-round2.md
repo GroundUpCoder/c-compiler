@@ -135,3 +135,21 @@ Executed focused Node corpus: 16 original/mode positive executions, four three-T
 executions (both orders, both inline modes), 21 syntax/semantic refusals and four
 cross-TU link diagnostics (layout, signature, duplicate, missing). All pass in
 build/775/cross-host.log. Chromium cross-TU corpus added, execution still pending.
+
+## #776 C prerequisite discovered by independent review
+
+Reviewer source inspection suggested fixed-float corruption in indirect variadic
+calls. Reproduced with a C-only volatile function-pointer control: Clang prints
+3.75; at 051fcc8e our compiler reports invalid Wasm, f64.store receiving f32.
+The first exploratory control put float last before ellipsis, which Clang warned
+makes va_start undefined; corrected to an int last named parameter before using
+it as evidence. Committed corrected red test as 9cd2e2f8. Filed/claimed #776,
+contract C11 6.5.2.2p7, P0 light, necessary to #775's inner indirect variadic call.
+
+Restricted indirect-call promotion to tail arguments, matching the direct path.
+Executed corrected C control through emitted JS/Wasm: prints 3.75. Added an
+Objective-C named-float+int+tail-double control to the shared fixture; focused
+Node suite passes in both modes (build/775/float-objc-host.log). Fresh gate and
+final review remain pending for both tickets. #776 adds no test registry entry;
+its independent instrument is the named C conformance fixture, while #775 is
+judged by Objective-C host/browser/OS acceptance.

@@ -50,8 +50,12 @@
     struct Pair { int x; double y; };
     @interface V
     - (struct Pair)sum:(int)n, ...;
+    - (double)float:(float)x count:(int)n, ...;
     @end
     @implementation V
+    - (double)float:(float)x count:(int)n, ... {
+      va_list ap; va_start(ap,n); double y=va_arg(ap,double); va_end(ap); return x+y;
+    }
     - (struct Pair)sum:(int)n, ... {
       va_list ap; va_start(ap,n);
       struct Pair p=va_arg(ap,struct Pair);
@@ -63,6 +67,7 @@
       V *v=guc_objc_alloc(V); struct Pair a={7,1.5};
       struct Pair b=[v sum:2,a,(char)3,2.5f,(short)4,4.0];
       if(b.x!=14 || b.y!=8 || a.x!=7) return 1;
+      if([v float:1.25f count:1,2.5f]!=3.75) return 3;
       int effect=0; V *n=nil;
       struct Pair z=[n sum:1,a,++effect,3.0];
       unsigned char *bytes=(unsigned char *)&z;
