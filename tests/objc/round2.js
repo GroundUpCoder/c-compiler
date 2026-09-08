@@ -86,7 +86,37 @@
       int main(void) { id object=nil; return [object value]; }
     `, /ambiguous signature/],
   ];
-  const api = { positive, negative };
+  const header = `
+    struct Value { int x; double y; };
+    @interface Base { @public int value; }
+    - (struct Value)get; - (SEL)selector;
+    @end
+    @interface Sub : Base - (struct Value)get; @end
+    id make(void); SEL otherSelector(void);
+  `;
+  const crossTU = {
+    'base.m': '#include "shared.h"\n' + `
+      @implementation Base
+      - (struct Value)get {struct Value v={value,2.5}; return v;}
+      - (SEL)selector {return _cmd;} @end
+      id make(void) {Sub *s=guc_objc_alloc(Sub); s->value=41; return s;}
+      SEL otherSelector(void) {return @selector(selector);}
+    `,
+    'sub.m': '#include "shared.h"\n' + `
+      @implementation Sub
+      - (struct Value)get {struct Value v=[super get]; v.x++; return v;}
+      @end
+    `,
+    'main.m': '#include "shared.h"\n' + `
+      int main(void) { Sub *s=make(); struct Value v=[s get];
+        int ok=v.x==42 && v.y==2.5 && [s selector]==otherSelector()
+          && otherSelector()==@selector(selector) && @selector(get)!=otherSelector();
+        guc_objc_dispose(s); return !ok;
+      }
+    `,
+    'shared.h': header,
+  };
+  const api = { positive, negative, crossTU };
   if (typeof module !== 'undefined') module.exports = api;
   else root.ObjcRound2 = api;
 })(globalThis);

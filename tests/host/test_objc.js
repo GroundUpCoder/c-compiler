@@ -32,6 +32,19 @@ async function main() {
     assert.throws(() => compile(source, name), expected, name);
     console.log('PASS refusal', name);
   }
+  for (const order of [['base.m','sub.m','main.m'], ['main.m','sub.m','base.m']]) {
+    const files=round2.crossTU;
+    const pp=C.createDefaultPPRegistry();
+    pp.includePaths.push('.');
+    const vfs={readFileSync: name => { const key=path.basename(name); if (!(key in files)) throw Error(name); return files[key]; }, existsSync: name => path.basename(name) in files};
+    pp.fileReader=name=>files[path.basename(name)] ?? null;
+    const options={compilerOptions:{gcSections:true},warningFlags:{},writeErr:s=>{throw Error(s);}};
+    const units=C.parseAllUnits(vfs,pp,order,options);
+    assert.deepStrictEqual(C.linkTranslationUnits(units, options.compilerOptions).errors, []);
+    const bytes=C.generateCode(units,'cross.wasm',options);
+    assert.equal(await runModule({bytes,fs,args:['cross']}),0);
+    console.log('PASS cross-TU',order.join(','));
+  }
   const pp = C.createDefaultPPRegistry();
   pp.defines.set('DECL', '@NAME'); pp.defines.set('NAME', 'interface');
   const macro = C.tokenize('define.m', 'DECL A @end @implementation A @end', pp);
