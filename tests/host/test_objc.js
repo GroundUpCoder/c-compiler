@@ -46,6 +46,8 @@ async function main() {
     console.log('PASS cross-TU',order.join(','));
   }
   for (const [name, files, expected] of [
+    ['dynamic-protocol-schema', ['@protocol P - (int)value; @end id<P> make(void); int main(void){id<P> p=make();return [p value]!=7;}', '@protocol P - (double)value; @end @interface A<P> - (double)value; @end @implementation A - (double)value{return 7.0;} @end id<P> make(void){return guc_objc_alloc(A);}'], /inconsistent Objective-C protocol/],
+    ['declared-missing-method', ['@interface A - (int)value; @end int main(void){A*a=guc_objc_alloc(A);return [a value];}', '@interface A @end @implementation A @end'], /Objective-C method.*no implementation/],
     ['layout', ['@interface A {int x;} @end @implementation A @end', '@interface A {double x;} @end int main(void){return 0;}'], /inconsistent Objective-C layout/],
     ['inherited-signature', ['@interface A - (int)value; @end @implementation A - (int)value{return 7;} @end id make(void); int main(void){A *a=make();return [a value]!=7;}', '@interface A @end @interface B:A - (double)value; @end @implementation B - (double)value{return 7.0;} @end id make(void){return guc_objc_alloc(B);}'], /inconsistent Objective-C override/],
     ['protocol-missing-method', ['@protocol P - (int)value; @end @interface A<P> @end int main(void){return 0;}', '@interface A @end @implementation A @end'], /required protocol method.*no implementation/],
