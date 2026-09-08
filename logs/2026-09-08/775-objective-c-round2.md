@@ -265,3 +265,10 @@ via cc-meta with explicit codex/gpt-6-astra and verified metadata; it APPROVED
 exact fa602313 after a focused conformance run and native Clang control. The
 prerequisite gate is still pending. Merge #776 first, rebase #775, then run its
 own fresh mapper-selected gate and flake checks. Neither ticket is done yet.
+
+Forward-qualified layout review regression: `ObjcClassType` now shares canonical
+layout through qualifier views, including typedefs created while the class is
+incomplete. The red acceptance was committed as 7e8d804c. After the fix,
+`node tests/host/test_objc.js` passed (28 positive executions, 25 refusals,
+four cross-TU executions and eight link diagnostics), recorded in
+`build/775/forward-qualified-host.log`. Broader current-source gates remain pending.

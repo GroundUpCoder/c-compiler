@@ -3191,7 +3191,7 @@ class TagType extends TypeInfo {
     this.tagKind = tagKind;
     this.tagName = tagName;
     this.tagDecl = null;
-    Object.seal(this);
+    if (new.target === TagType) Object.seal(this);
   }
   isTag()    { return true; }
   isStruct() { return this.tagKind === TagKind.STRUCT; }
@@ -3220,6 +3220,25 @@ class TagType extends TypeInfo {
     c.isComplete = this.isComplete;
     c.tagDecl = this.tagDecl;
     return c;
+  }
+}
+
+// Qualified/forward Objective-C class spellings share one live layout, rather
+// than copying an incomplete tag and stranding it when the interface completes.
+class ObjcClassType extends TagType {
+  constructor(name, canonical = null) {
+    super(TagKind.STRUCT,name,0,1);
+    this.canonical = canonical;
+    if (canonical) for (const field of ['size','align','isComplete','tagDecl'])
+      Object.defineProperty(this,field,{get:()=>canonical[field],enumerable:true,configurable:true});
+    Object.seal(this);
+  }
+  _cloneForQualifier() {
+    const clone = new ObjcClassType(this.tagName,this.canonical || this);
+    if (objcClassTypes.has(this)) objcClassTypes.set(clone,objcClassTypes.get(this));
+    if (objcClassQualifiers.has(this)) objcClassQualifiers.set(clone,objcClassQualifiers.get(this));
+    if (objcClassOwnership.has(this)) objcClassOwnership.set(clone,objcClassOwnership.get(this));
+    return clone;
   }
 }
 
@@ -3708,7 +3727,7 @@ return {
   TypeInfo,
   PrimitiveType, IntegerType, FloatingType,
   VoidType, AutoType, UnknownType, DivergentType,
-  PointerType, ObjcObjectPointerType, ArrayType, FunctionType, TagType,
+  PointerType, ObjcObjectPointerType, ArrayType, FunctionType, TagType, ObjcClassType,
   GCStructHeapType, GCStructRefType, GCArrayType,
   ExternRefType, RefExternType, EqRefType,
   TUNKNOWN, TVOID, TBOOL, TCHAR, TSCHAR, TUCHAR, TSHORT, TUSHORT,
@@ -10875,7 +10894,7 @@ class Parser {
   objcForwardClass(name, tok) {
     if (this.objc.classes.has(name)) return this.objc.classes.get(name);
     if (this.typeScope.has(name) || this.varScope.has(name)) this.error(tok, `duplicate Objective-C class '${name}'`);
-    const type = Types.createTagType(Types.TagKind.STRUCT, '__guc_objc_object_' + name);
+    const type = new Types.ObjcClassType('__guc_objc_object_' + name);
     const cls = {name, type, parent: null, protocols: [], protocolRegistry:this.objc.protocols, declared: new Map(), implemented: new Map(),
       complete: false, interfaceComplete: false, tok, ivars: new Map()};
     this.objc.classes.set(name, cls); this.typeScope.stack[0].set(name, type); objcClassTypes.set(type, cls);
