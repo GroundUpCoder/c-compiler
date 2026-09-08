@@ -2767,6 +2767,33 @@ return {
 // Parser — Type System
 // ====================
 
+// Directional method contracts are separate from C function compatibility.
+// A caller's result guarantees may be strengthened; its accepted arguments
+// may be broadened. In particular, permissive id assignment is not subtyping.
+function objcObjectSubstitutable(actual, expected, classes = null) {
+  actual = actual.removeQualifiers(); expected = expected.removeQualifiers();
+  if (!(actual instanceof Types.ObjcObjectPointerType) || !(expected instanceof Types.ObjcObjectPointerType)) return false;
+  if (actual.ownership !== expected.ownership) return false;
+  const protocols = actual.protocolNames();
+  if ([...expected.protocolNames()].some(p => !protocols.has(p))) return false;
+  if (!expected.className) return true;
+  if (!actual.className) return false;
+  const seen = new Set();
+  for (let cls = classes?.get(actual.className) || objcClassTypes.get(actual.baseType.removeQualifiers()); cls && !seen.has(cls.name);) {
+    if (cls.name === expected.className) return true;
+    seen.add(cls.name);
+    cls = cls.parent && (classes?.get(cls.parent.name) || cls.parent);
+  }
+  return actual.className === expected.className;
+}
+function objcMethodSatisfies(actual, expected, equal = (a,b) => a.isCompatibleWith(b), classes = null) {
+  if (actual.isVarArg !== expected.isVarArg || actual.paramTypes.length !== expected.paramTypes.length) return false;
+  const substitutable = (a,b) => a instanceof Types.ObjcObjectPointerType || b instanceof Types.ObjcObjectPointerType
+    ? objcObjectSubstitutable(a,b,classes) : equal(a,b);
+  return substitutable(actual.returnType,expected.returnType) &&
+    expected.paramTypes.slice(2).every((p,i) => substitutable(p,actual.paramTypes[i+2]));
+}
+
 const Types = (() => {
 
 const TagKind = Object.freeze({
@@ -9972,10 +9999,11 @@ function linkTranslationUnits(units, compilerOptions) {
   const objcClasses = new Map(), objcSignatures = new Map();
   const recordObjcSignature = (name,key,sig,tok) => {
     if (!objcSignatures.has(name)) objcSignatures.set(name,new Map());
-    const signatures = objcSignatures.get(name), old = signatures.get(key);
-    if (old && !objcABIEqual(old.sig.type,sig.type))
+    const signatures = objcSignatures.get(name), entries = signatures.get(key) || [];
+    const old = entries.find(e => !objcMethodSatisfies(e.sig.type,sig.type,objcABIEqual,objcClasses) && !objcMethodSatisfies(sig.type,e.sig.type,objcABIEqual,objcClasses));
+    if (old)
       errors.push({message:`inconsistent Objective-C signature '${name} ${key}'`,locations:[Lexer.Loc.fromTok(old.tok),Lexer.Loc.fromTok(tok)]});
-    else if (!old) signatures.set(key,{sig,tok});
+    entries.push({sig,tok}); signatures.set(key,entries);
   };
 
   for (const unit of units) for (const cls of unit.objc?.classes.values() || []) {
@@ -9985,12 +10013,22 @@ function linkTranslationUnits(units, compilerOptions) {
         errors.push({message: `inconsistent Objective-C layout for class '${cls.name}'`, locations: [Lexer.Loc.fromTok(previous.tok), Lexer.Loc.fromTok(cls.tok)]});
       if (!previous.interfaceComplete || cls.complete) objcClasses.set(cls.name, cls);
     } else objcClasses.set(cls.name, cls);
+  }
+  for (const unit of units) for (const cls of unit.objc?.classes.values() || []) {
     for (const [key,sig] of cls.declared) recordObjcSignature(cls.name,key,sig,cls.tok);
     for (const sig of cls.requirements || []) recordObjcSignature(cls.name,sig.key,sig,cls.tok);
   }
   for (const unit of units) for (const send of unit.objc?.sends || [])
     if (send.staticClass) recordObjcSignature(send.staticClass.name,send.key,send.sig,send.tok);
 
+  for (const unit of units) for (const send of unit.objc?.sends || []) {
+    if (send.staticClass || send.protocols.length) continue;
+    for (const other of units) for (const [key,candidates] of other.objc?.methods || []) {
+      if (send.dynamicId ? key.slice(1) !== send.name : key !== send.key) continue;
+      if (candidates.some(sig => !objcABIEqual(sig.type,send.sig.type)))
+        errors.push({message:`Objective-C ambiguous signature for dynamic receiver selector '${send.name}' across translation units`,locations:[Lexer.Loc.fromTok(send.tok)]});
+    }
+  }
   for (const unit of units) for (const declaration of unit.objc?.classes.values() || []) {
     const cls = objcClasses.get(declaration.name);
     if (!cls?.complete) continue;
@@ -10009,11 +10047,25 @@ function linkTranslationUnits(units, compilerOptions) {
     for (let base=cls.parent && objcClasses.get(cls.parent.name); base; base=base.parent && objcClasses.get(base.parent.name)) {
       if (visited.has(base.name)) { errors.push({message:`cyclic Objective-C superclass hierarchy at '${name}'`,locations:[]}); break; }
       visited.add(base.name);
-      for (const [key,entry] of objcSignatures.get(name) || []) {
-        const inherited = objcSignatures.get(base.name)?.get(key);
-        if (inherited && !objcABIEqual(entry.sig.type,inherited.sig.type))
-          errors.push({message:`inconsistent Objective-C override '${name} ${key}' of '${base.name}'`,locations:[Lexer.Loc.fromTok(entry.tok),Lexer.Loc.fromTok(inherited.tok)]});
+      for (const [key,entries] of objcSignatures.get(name) || []) for (const entry of entries) {
+        for (const inherited of objcSignatures.get(base.name)?.get(key) || [])
+          if (!objcMethodSatisfies(entry.sig.type,inherited.sig.type,objcABIEqual,objcClasses))
+            errors.push({message:`inconsistent Objective-C override '${name} ${key}' of '${base.name}'`,locations:[Lexer.Loc.fromTok(entry.tok),Lexer.Loc.fromTok(inherited.tok)]});
       }
+    }
+  }
+  for (const [name,contracts] of objcSignatures) {
+    const cls = objcClasses.get(name);
+    if (!cls?.complete) continue;
+    for (const [key,entries] of contracts) {
+      let implementation;
+      const visited = new Set();
+      for (let c=cls; c && !visited.has(c.name) && !implementation; c=c.parent && objcClasses.get(c.parent.name)) {
+        visited.add(c.name); implementation=c.implemented.get(key);
+      }
+      if (implementation) for (const entry of entries)
+        if (!objcMethodSatisfies(implementation.type,entry.sig.type,objcABIEqual,objcClasses))
+          errors.push({message:`inconsistent Objective-C signature '${name} ${key}' implementation does not satisfy declaration`,locations:[implementation.loc,Lexer.Loc.fromTok(entry.tok)]});
     }
   }
   if (units.some(u => u.objc?.literals.length)) {
@@ -11080,7 +11132,7 @@ class Parser {
         if (cls.declared.has(sig.key)) this.error(this.peek(), 'duplicate Objective-C method declaration');
         for (let base = cls.parent; base; base = base.parent) {
           const inherited = base.declared.get(sig.key);
-          if (inherited && !inherited.type.isCompatibleWith(sig.type))
+          if (inherited && !objcMethodSatisfies(sig.type,inherited.type))
             this.error(this.peek(), `incompatible Objective-C override '${sig.key}'`);
         }
         cls.declared.set(sig.key, sig); this.expect(';');
@@ -11094,12 +11146,12 @@ class Parser {
         if (!cls.declared.has(sig.key)) {
           for (let base=cls.parent; base; base=base.parent) {
             const inherited=base.declared.get(sig.key);
-            if (inherited && !inherited.type.isCompatibleWith(sig.type))
+            if (inherited && !objcMethodSatisfies(sig.type,inherited.type))
               this.error(methodTok, `incompatible Objective-C override '${sig.key}'`);
           }
           cls.declared.set(sig.key,sig);
         }
-        if (!cls.declared.get(sig.key).type.isCompatibleWith(sig.type))
+        if (!objcMethodSatisfies(sig.type,cls.declared.get(sig.key).type))
           this.error(methodTok, `Objective-C implementation signature differs from declaration '${sig.key}'`);
         if (cls.implemented.has(sig.key)) this.error(methodTok, 'duplicate Objective-C method implementation');
         const loc = Lexer.Loc.fromTok(methodTok);
@@ -11225,7 +11277,7 @@ class Parser {
     for (const send of this.objc.sends) {
       if (send.staticClass) {
         const final = this.objcStaticSignature(send.staticClass,send.protocols,send.key,send.tok);
-        if (!send.sig.type.isCompatibleWith(final.type))
+        if (!objcMethodSatisfies(final.type,send.sig.type))
           this.error(send.tok, `incompatible Objective-C signature '${send.key}' declared after this send`);
         continue;
       }
@@ -11245,7 +11297,7 @@ class Parser {
       for(const requirement of cls.requirements) {
         let actual;
         for(let c=cls;c && !actual;c=c.parent) actual=c.declared.get(requirement.key);
-        if (!actual || !actual.type.isCompatibleWith(requirement.type))
+        if (!actual || !objcMethodSatisfies(actual.type,requirement.type))
           this.error(cls.tok, `incompatible Objective-C protocol method signature '${requirement.key}' in '${cls.name}'`);
       }
       for (const key of cls.declared.keys()) if (!cls.implemented.has(key))

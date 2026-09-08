@@ -58,8 +58,8 @@ try {
       if (!expected.test(error)) throw Error(`${name}: wrong refusal: ${error}`);
       records.push({ name, refused: true });
     }
-    for (const noInline of [false, true]) for (const order of [['base.m','sub.m','main.m'], ['main.m','sub.m','base.m']]) {
-      const files=ObjcRound2.crossTU, pp=C.createDefaultPPRegistry();
+    for (const program of ObjcRound2.crossPrograms) for (const noInline of [false, true]) for (const order of program.orders) {
+      const files=program.files, pp=C.createDefaultPPRegistry();
       pp.fileReader=name=>files[name.replace(/^.*\//,'')] ?? null;
       const options={compilerOptions:{noInline},warningFlags:{},writeErr:s=>{throw Error(s);}};
       const units=C.parseAllUnits({readFileSync:name=>files[name]},pp,order,options);
@@ -69,11 +69,11 @@ try {
       const blockfs=BLOCK_FS.create(new BLOCK_FS.MemoryByteStore(8*1024*1024));
       const exit=await runModule({bytes,args:['cross'],blockFsFactory:ctx=>({c:blockfs.toWasmEnv(ctx)}),writeOut:()=>{},writeErr:s=>{throw Error(s);}});
       if(exit) throw Error('cross-TU exit '+exit);
-      records.push({name:'cross-TU '+order.join(','),noInline,exit});
+      records.push({name:program.name+' '+order.join(','),noInline,exit});
     }
     return { userAgent: navigator.userAgent, records };
   });
-  assert.equal(result.records.length, 28 + 25 + 4);
+  assert.equal(result.records.length, 30 + 28 + 12);
   fs.mkdirSync(new URL('build/objc/', root), { recursive: true });
   fs.writeFileSync(new URL('build/objc/browser.json', root), JSON.stringify(result, null, 2) + '\n');
   console.log(JSON.stringify(result, null, 2));

@@ -190,6 +190,10 @@
     int main(void) {AP a=guc_objc_alloc(A); a->x=4; int ok=a->x==4 && sizeof *a==8; guc_objc_dispose(a);return !ok;}
   `]);
   const negative = [
+    ['reverse-object-return', '@interface Base @end @interface Sub:Base @end @interface A - (Sub*)value; @end @interface B:A - (Base*)value; @end', /incompatible Objective-C override/],
+    ['unrelated-object-return', '@interface X @end @interface Y @end @interface A - (X*)value; @end @interface B:A - (Y*)value; @end', /incompatible Objective-C override/],
+    ['narrow-object-parameter', '@interface Base @end @interface Sub:Base @end @interface A - (void)take:(Base*)x; @end @interface B:A - (void)take:(Sub*)x; @end', /incompatible Objective-C override/],
+
     ['nonconforming-object-conversion', '@protocol P - (int)value; @end @interface A @end @implementation A @end int main(void){A *a=guc_objc_alloc(A); id<P> p=a; return 0;}', /incompatible/],
     ['late-protocol-implementation-mismatch', '@protocol P - (int)value; @end @interface A<P> @end int use(A *a){return [a value];} @implementation A - (double)value{return 1.0;} @end', /incompatible.*signature/],
     ['missing-string-provider', 'int main(void){ return @"hello"==nil; }', /require an NSString-compatible NSConstantString library provider/],
@@ -260,7 +264,21 @@
     `,
     'shared.h': header,
   };
-  const api = { positive, negative, crossTU };
+  const varianceTU = {
+    'base.m': '@interface Base - (Base*)value; @end @implementation Base - (Base*)value{return self;} @end',
+    'sub.m': '@interface Base - (Base*)value; @end @interface Sub:Base - (Sub*)value; @end @implementation Sub - (Sub*)value{return (Sub*)[super value];} @end',
+    'main.m': `@interface Base - (Base*)value; @end @interface Sub:Base - (Sub*)value; @end
+      int main(void){Sub*s=guc_objc_alloc(Sub);Base*b=s;Sub*n=nil;
+        int bad=[b value]!=s || [s value]!=s || [n value]!=nil;guc_objc_dispose(s);return bad;}`,
+  };
+  const cMainTU = {...crossTU, 'main.m':crossTU['main.m'].replace('int main(void)','int objc_check(void)'),
+    'driver.c':'int objc_check(void); int main(void){return objc_check();}'};
+  const crossPrograms = [
+    {name:'cross-TU',files:crossTU,orders:[['base.m','sub.m','main.m'],['main.m','sub.m','base.m']]},
+    {name:'cross-TU covariance',files:varianceTU,orders:[['base.m','sub.m','main.m'],['main.m','sub.m','base.m']]},
+    {name:'C-entry startup',files:cMainTU,orders:[['driver.c','main.m','sub.m','base.m'],['base.m','sub.m','main.m','driver.c']]},
+  ];
+  const api = { positive, negative, crossTU, crossPrograms };
   if (typeof module !== 'undefined') module.exports = api;
   else root.ObjcRound2 = api;
 })(globalThis);

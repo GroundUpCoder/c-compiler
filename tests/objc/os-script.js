@@ -14,10 +14,13 @@ for (const [i,[name,source]] of positives.entries()) {
   file('case'+i+'.m',source);
   lines.push('cc -g case'+i+'.m -o case.out && ./case.out || exit 1', "echo 'OBJC-PASS "+name+"'");
 }
-for (const [name,source] of Object.entries(round2.crossTU)) file(name,source);
-for (const order of ['base.m sub.m main.m','main.m sub.m base.m']) {
-  lines.push('cc -g '+order+' -o cross.out && ./cross.out || exit 1', "echo 'OBJC-PASS cross-TU "+order+"'");
+let count = positives.length;
+for (const program of round2.crossPrograms) {
+  for (const [name,source] of Object.entries(program.files)) file(name,source);
+  for (const order of program.orders) {
+    lines.push('cc -g '+order.join(' ')+' -o cross.out && ./cross.out || exit 1', "echo 'OBJC-PASS "+program.name+" "+order.join(' ')+"'");
+    count++;
+  }
 }
-const count = positives.length+2;
 lines.push('echo OBJC-COUNT='+count);
 module.exports = {source:lines.join('\n')+'\n',count};

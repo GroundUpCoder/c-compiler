@@ -22,8 +22,8 @@ compatibility or a complete Foundation/AppKit implementation.
 | Protocol types | Forward and method-bearing `@protocol` declarations, protocol inheritance, `id<P>` and `Name<P> *`; qualified dynamic receivers use protocol signatures. This is compile-time qualification, not runtime protocol reflection. |
 | Ivars | Root class-pointer header; inherited storage preserves base tail padding. Complete C scalar/pointer/array/aggregate fields, public/protected/private access; default protected, local/parameter shadowing. |
 | Methods | Instance/class methods, explicit C value types, complete struct/union parameters and returns, variadic methods. Fixed arguments retain declared types; tail arguments use C default promotions and the existing variadic arg-block ABI. |
-| Signature resolution | Static receiver class selects the nearest declaration; unrelated classes may use different types for the same selector. Dynamic receivers require compatible visible signatures, checked again after the whole TU to catch later declarations. Overrides and implementations must have compatible signatures. |
-| Linkage | One external initialized descriptor per class/metaclass definition. Opaque external selector objects are coalesced by spelling across TUs; SEL is their canonical address. Class layouts and declared method ABI shapes are checked across TUs; missing and duplicate definitions fail linking. |
+| Signature resolution | Static receiver class selects the nearest declaration; unrelated classes may use different types for the same selector. Dynamic receivers require compatible visible signatures, checked again after the whole TU and at link to catch later declarations. Overrides and implementations allow covariant object results and contravariant object parameters; non-object ABI types remain compatible. |
+| Linkage | One external initialized descriptor per class/metaclass definition. Opaque external selector objects are coalesced by spelling across TUs; SEL is their canonical address. Class layouts, protocol schemas and every declared method contract are checked across TUs; missing and duplicate definitions fail linking. |
 | Dispatch | Actual receiver determines implementation. `super` preserves self and starts lookup at the lexical superclass/metaclass. A shared per-descriptor 16-slot cache serves hits; misses retain superclass lookup. Static typing never devirtualizes an open receiver. Missing methods abort. |
 | Evaluation | Receiver and each argument evaluate once, including all operands of nil sends. Relative order follows the C call lowering; do not depend on a particular operand order. |
 | Nil | Zero scalar/pointer/floating result; void no-op after argument evaluation. Aggregate results are zero-filled, including padding: an explicit gucOS contract rather than a claim about every native Objective-C ABI. |
@@ -80,7 +80,8 @@ runtime binary compatibility. Foundation and AppKit remain separate library work
 Primary contracts: [Clang GNUstep code generation](https://github.com/llvm/llvm-project/blob/main/clang/lib/CodeGen/CGObjCGNU.cpp),
 [GNUstep NSString ABI](https://github.com/gnustep/libs-base/blob/master/Headers/Foundation/NSString.h),
 [Apple initialization implementation](https://github.com/apple-oss-distributions/objc4/blob/main/runtime/objc-initialize.mm),
-[Apple load scheduling](https://github.com/apple-oss-distributions/objc4/blob/main/runtime/objc-loadmethod.mm).
+[Apple load scheduling](https://github.com/apple-oss-distributions/objc4/blob/main/runtime/objc-loadmethod.mm),
+[Clang method substitutability](https://clang.llvm.org/doxygen/SemaDeclObjC_8cpp_source.html).
 
 ## Explicit boundaries
 
@@ -108,7 +109,7 @@ node tests/browser/os-sweep.mjs --filter=os-objc
 ```
 
 Node and real Chromium compile the shared `cases.js`/`round2.js` corpus in both
-inline modes, including three-TU programs in both link orders. `os-script.js`
+inline modes, including multi-TU covariance and C-entry startup programs in both link orders. `os-script.js`
 drives the positive corpus and multi-TU builds through actual `/bin/cc` and fresh
 process execution on both OS hosts. AST metadata and negative link controls run
 in the host test. `aggregate-abi.c` remains a C-only control; Objective-C aggregate

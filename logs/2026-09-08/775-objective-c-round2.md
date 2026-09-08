@@ -280,3 +280,22 @@ d08eb85c reproduce the missing protocol check. Linking now compares complete
 protocol schemas and resolves all declared methods through the canonical
 implemented class hierarchy. Focused Node acceptance passes in
 `build/775/protocol-link-host.log` (ten cross-TU refusal controls).
+
+Conventional method variance now uses a directional Objective-C contract,
+separate from C function compatibility: subclass/protocol-strengthened object
+results and broader object parameters, with unchanged scalar/aggregate ABI
+requirements. Linked contracts retain every caller declaration and compare the
+actual implementation against each. Class hierarchy collection precedes checking
+so source order does not change the result. Dynamic unqualified sends additionally
+check linked selector candidates. The contract follows Clang SemaDeclObjC.cpp
+`isObjCTypeSubstitutable` / `CheckMethodOverrideReturn` / `CheckMethodOverrideParam`:
+https://clang.llvm.org/doxygen/SemaDeclObjC_8cpp_source.html .
+
+The red variance program in 3d602a1a failed with incompatible override before the
+fix (`build/775/variance-red.log`). Current Node acceptance passes in
+`build/775/variance-linked-host.log`: 30 positive executions, 28 refusals,
+12 cross-unit executions (including both link orders of covariance and C main
+with Objective-C startup), 11 negative link cases and metadata/isolation controls.
+Reverse/unrelated object returns and narrowed arguments refuse. The shared OS
+script now includes 21 programs; its current expanded version has not yet run
+on either OS host. Current real Chromium and broad gates remain pending.

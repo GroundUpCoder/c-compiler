@@ -32,8 +32,8 @@ async function main() {
     assert.throws(() => compile(source, name), expected, name);
     console.log('PASS refusal', name);
   }
-  for (const noInline of [false,true]) for (const order of [['base.m','sub.m','main.m'], ['main.m','sub.m','base.m']]) {
-    const files=round2.crossTU;
+  for (const program of round2.crossPrograms) for (const noInline of [false,true]) for (const order of program.orders) {
+    const files=program.files;
     const pp=C.createDefaultPPRegistry();
     pp.includePaths.push('.');
     const vfs={readFileSync: name => { const key=path.basename(name); if (!(key in files)) throw Error(name); return files[key]; }, existsSync: name => path.basename(name) in files};
@@ -43,9 +43,10 @@ async function main() {
     assert.deepStrictEqual(C.linkTranslationUnits(units, options.compilerOptions).errors, []);
     const bytes=C.generateCode(units,'cross.wasm',options);
     assert.equal(await runModule({bytes,fs,args:['cross']}),0);
-    console.log('PASS cross-TU',order.join(','));
+    console.log('PASS',program.name,order.join(','));
   }
   for (const [name, files, expected] of [
+    ['dynamic-linked-signatures', ['@interface A - (int)value; @end id make(void); int main(void){return [make() value]!=7;}', '@interface B - (double)value; @end @implementation B - (double)value{return 7.0;} @end id make(void){return guc_objc_alloc(B);}'], /ambiguous signature.*across translation units/],
     ['dynamic-protocol-schema', ['@protocol P - (int)value; @end id<P> make(void); int main(void){id<P> p=make();return [p value]!=7;}', '@protocol P - (double)value; @end @interface A<P> - (double)value; @end @implementation A - (double)value{return 7.0;} @end id<P> make(void){return guc_objc_alloc(A);}'], /inconsistent Objective-C protocol/],
     ['declared-missing-method', ['@interface A - (int)value; @end int main(void){A*a=guc_objc_alloc(A);return [a value];}', '@interface A @end @implementation A @end'], /Objective-C method.*no implementation/],
     ['layout', ['@interface A {int x;} @end @implementation A @end', '@interface A {double x;} @end int main(void){return 0;}'], /inconsistent Objective-C layout/],
