@@ -17,10 +17,10 @@ const routes = new Map([
 ]);
 const server = http.createServer((req, res) => {
   if (req.url === '/') {
-    res.setHeader('content-type', 'text/html');
+    res.setHeader('content-type', 'text/html; charset=utf-8');
     res.end('<!doctype html><script src="/compiler.js"></script><script src="/host.js"></script><script src="/cases.js"></script><script src="/round2.js"></script>');
   } else if (routes.has(req.url)) {
-    res.setHeader('content-type', req.url.endsWith('.js') ? 'text/javascript' : 'text/plain');
+    res.setHeader('content-type', req.url.endsWith('.js') ? 'text/javascript; charset=utf-8' : 'text/plain; charset=utf-8');
     res.end(fs.readFileSync(routes.get(req.url)));
   } else { res.statusCode = 404; res.end(); }
 });
@@ -73,7 +73,7 @@ try {
     }
     return { userAgent: navigator.userAgent, records };
   });
-  assert.equal(result.records.length, 22 + 22 + 4);
+  assert.equal(result.records.length, 24 + 23 + 4);
   fs.mkdirSync(new URL('build/objc/', root), { recursive: true });
   fs.writeFileSync(new URL('build/objc/browser.json', root), JSON.stringify(result, null, 2) + '\n');
   console.log(JSON.stringify(result, null, 2));

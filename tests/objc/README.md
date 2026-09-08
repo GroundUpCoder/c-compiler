@@ -1,103 +1,104 @@
-# Objective-C compiler experiment (#772)
+# Objective-C compiler/runtime (#772, #775)
 
-## Round-two acceptance kickoff (#775, implementation in progress)
-
-The isolated `lane/775-objc-round2` integrates this experiment onto main's
-`9db2c3cf` aggregate-return foundation. The table below is acceptance to implement,
-not a claim of supported behavior. Existing refusal tests must be retired when
-their corresponding capability is implemented.
-
-| Contract | Required instrument |
-|---|---|
-| Distinct object-pointer frontend type, class/protocol/ownership metadata, i32 representation | AST assertions, qualifier preservation, conversion diagnostics, linear-memory size checks |
-| Resolve signatures from the receiver's static class; reject ambiguous dynamic `id` sends at the send site | `round2.js`: unrelated integer/double selectors and ambiguous dynamic receiver; add inherited/override and declaration-order checks |
-| Cross-TU class and selector identity | Separate `.m` sources and shared headers, reversed link order, inherited methods across TUs, `_cmd`/`@selector` identity, missing/duplicate definition diagnostics |
-| Aggregate arguments and results; nil results zero-filled including padding | `round2.js`: nested/sibling sends, override and lexical super, callee argument copies, every result byte zero for nil, argument side effects |
-| Improved dispatch with deliberate open/closed contract | Inspect generated dispatch path and exercise inheritance/missing-method behavior; exact algorithm awaits the scope decision |
-| Preprocessor fixes preserved | Existing macro/header and C-mode controls |
-| Both compiler hosts and in-OS compilation | Shared Node/Chromium corpus in both inline modes; cross-TU build/run through `/bin/cc` on Node and Chromium |
-
-User clarification (2026-09-08): follow conventional Objective-C behavior as
-closely as possible, and target NSString/Foundation conventions for strings.
-The earlier proposal for a public GUCConstantString class is withdrawn.
-Implement runtime initialization and variadic sends against their conventional
-contracts; dispatch optimizations must preserve dynamic semantics. Literal
-lowering must provide an NSString-compatible library seam, without claiming
-that emitting a constant object supplies the complete NSString library.
-Exceptions,
-`@finally`, Blocks, ARC, Objective-C++, Foundation and AppKit remain outside #775.
-The rest of this document describes the current integrated subset. The complete
-round-two acceptance table above has not passed yet.
-
-This branch experiments with an Objective-C subset in `compiler.js`. It is a
-compiler/runtime spike, not a complete Objective-C compiler, an Apple/GNU ABI,
-Foundation, AppKit, or Cocoa. It makes no desktop or IDE changes.
-
-Compile an ordinary `.m` file with the existing CLI:
+`.m` selects Objective-C; `.c` keeps C semantics. Both the Node CLI and gucOS
+`/bin/cc` compile ordinary multi-file programs:
 
 ```
-node compiler.js tests/objc/core.m -o build/objc/core.js
-node build/objc/core.js
+node compiler.js main.m model.m -o build/program.js
+node build/program.js
 ```
 
-`.m` selects the experimental frontend; `.c` keeps C semantics and rejects
-Objective-C syntax. `/bin/cc file.m -o program` uses the same frontend in gucOS.
-The compiler predefines `__OBJC__` while preprocessing that translation unit.
-There is no `-x`, `-fobjc-arc`, or Objective-C++ mode in this experiment.
+The frontend parses user declarations, bodies and messages directly into the
+existing typed AST. Compiler-owned runtime boilerplate uses the C parser. This
+is a scoped Objective-C frontend with a gucOS runtime ABI, not Apple/GNU binary
+compatibility or a complete Foundation/AppKit implementation.
 
 ## Implemented contract
 
-| Area | Support |
+| Area | Behavior |
 |---|---|
-| Declarations | `@interface Name [: Parent]`, `@implementation Name`, `@end`; superclass interface precedes subclass; each class has one implementation in the same `.m` TU. Every implemented method is explicitly declared in its own interface. |
-| Objects | Distinct class pointer types (`Name *`), a compiler-owned class-pointer header before root ivars, inherited object storage with base tail padding preserved, upcasts, `id`, `Class`, `nil`, `Nil`. The internal representation of `id` is `void *`; this is not full Objective-C static type checking. |
-| Ivars | Complete ordinary C scalar/pointer/array/aggregate members; default protected visibility, `@private`, `@protected`, `@public`; implicit ivar names and `self->ivar`; local/parameter shadowing. |
-| Methods | Instance `-` and class `+` methods; explicit return/parameter types; void, integer including 64-bit, pointer including function pointers, float/double/long double using existing C scalar representation; complete struct/union arguments and results through the C aggregate ABI. Ordinary C method bodies. |
-| Selectors | Unary, keyword and empty subsequent keyword components; `@selector(...)`, `_cmd`, TU-local selector identity. Statically typed receivers resolve the nearest declared method through their class hierarchy; unrelated classes may declare different signatures for the same selector. Overrides and implementations require compatible declared signatures. |
-| Messaging | Runtime lookup through class/metaclass inheritance; overrides; recursive/nested messages; class-valued `Class`/`id`; `super` starts at the lexical superclass and preserves the actual receiver. Dynamic `id` sends with conflicting instance/class signatures fail at compile time. |
-| Evaluation | Receiver and each argument evaluated once. Arguments still evaluate for nil. Relative evaluation order follows the existing C call lowering; callers must not depend on a particular order. |
-| Nil | Zero for supported integer/pointer/floating returns; zero-filled aggregate results including padding (explicit repo contract); void no-op after argument evaluation. |
-| Lifetime | `guc_objc_alloc(Class)` zero-allocates the class's instance size and sets its class pointer; nil class or allocation failure returns nil. `guc_objc_dispose(id)` frees the object, accepts nil. Both are custom experiment APIs, available in `.m` files without an additional header. |
-| C coexistence | Existing C expressions, statements, functions, preprocessing and source linking; C array brackets remain C subscripts. `@` is tokenized before macro expansion, including included headers. |
+| Classes | `@class`, `@interface Name [: Parent] [<Protocols>]`, `@implementation`, `@end`; superclass interface precedes subclass layout. Forward identity can be completed later. Implementations may add method declarations. |
+| Object types | Distinct frontend object-pointer type with class identity, protocol qualifiers and ownership metadata; `id` is not `void *`. Representation remains four-byte i32 pointers, usable in C fields, arrays, parameters and returns. Const/volatile and typedefs preserve metadata. |
+| Protocol types | Forward and method-bearing `@protocol` declarations, protocol inheritance, `id<P>` and `Name<P> *`; qualified dynamic receivers use protocol signatures. This is compile-time qualification, not runtime protocol reflection. |
+| Ivars | Root class-pointer header; inherited storage preserves base tail padding. Complete C scalar/pointer/array/aggregate fields, public/protected/private access; default protected, local/parameter shadowing. |
+| Methods | Instance/class methods, explicit C value types, complete struct/union parameters and returns, variadic methods. Fixed arguments retain declared types; tail arguments use C default promotions and the existing variadic arg-block ABI. |
+| Signature resolution | Static receiver class selects the nearest declaration; unrelated classes may use different types for the same selector. Dynamic receivers require compatible visible signatures, checked again after the whole TU to catch later declarations. Overrides and implementations must have compatible signatures. |
+| Linkage | One external initialized descriptor per class/metaclass definition. Opaque external selector objects are coalesced by spelling across TUs; SEL is their canonical address. Class layouts and declared method ABI shapes are checked across TUs; missing and duplicate definitions fail linking. |
+| Dispatch | Actual receiver determines implementation. `super` preserves self and starts lookup at the lexical superclass/metaclass. A shared per-descriptor 16-slot cache serves hits; misses retain superclass lookup. Static typing never devirtualizes an open receiver. Missing methods abort. |
+| Evaluation | Receiver and each argument evaluate once, including all operands of nil sends. Relative order follows the C call lowering; do not depend on a particular operand order. |
+| Nil | Zero scalar/pointer/floating result; void no-op after argument evaluation. Aggregate results are zero-filled, including padding: an explicit gucOS contract rather than a claim about every native Objective-C ABI. |
+| Eager initialization | All linked classes participate in startup, including unused classes. Runtime `+load` invokes only an own implementation, directly, superclass-first. No automatic inherited load and no implicit initialize merely for the direct load call. Messages from load use ordinary dispatch. Unrelated load order is unspecified. |
+| Lazy initialization | Before the first ordinary class or instance send, initialize the actual receiver class, superclass-first. An inherited `+initialize` runs with each subclass as self, once per class. Same-thread reentry is permitted; child completion waits for an active parent's completion. Nil and bare class/literal references do not initialize. Lookup/cache access follows initialization. |
+| Explicit lifetime | `guc_objc_alloc(Class)` zero-allocates an instance and sets isa; `guc_objc_dispose(id)` frees it and accepts nil. These existing custom allocation primitives do not send init/dealloc or manage ivar references. A library may implement ordinary alloc/init/dealloc/retain/release methods above them. |
+| Ownership | Manual by default; explicit `__unsafe_unretained` retains that unretained behavior and its type metadata. Owning/weak qualifiers fail loudly; no ARC, weak registry, or autorelease machinery is implied. |
+| C coexistence | C expressions, functions, preprocessing and source linking remain available. `__OBJC__` is scoped to each Objective-C TU, including headers/macros/token pasting; it does not leak into C compilation. |
 
-The runtime has static class/metaclass descriptors and method tables. Message
-ASTs call compiler-generated typed helpers, which perform lookup, cast the IMP
-to the method's exact signature, and invoke it through the existing Wasm
-indirect-call machinery. Method bodies and message operands are parsed directly
-into the existing typed AST. Compiler-owned runtime boilerplate uses the C parser;
-user Objective-C source is never rewritten into C text.
+Startup uses the existing exported `__wasm_call_ctors` host hook, after instance,
+memory and imports are bound and before main. `host.js` invokes it on both hosts.
+Embedders that instantiate Wasm directly must call this export before application
+entry. Startup is idempotent per instance. The runtime is single-threaded, matching
+the repository's no-shared-runtime-threads execution model; this is not a
+thread-safe libobjc implementation.
 
-Allocation does not send `init`, and disposal does not send `dealloc` or release
-ivar references. Ownership is entirely explicit. A root class may define its own
-`+alloc`, `-init`, `-dealloc`, or retain/release methods; those are ordinary user
-methods, not built-in NSObject behavior. Only live allocated objects or class
-objects are valid non-nil receivers; use-after-free and forged receivers have
-undefined behavior. A missing runtime method aborts the process; forwarding and
-method resolution hooks are not part of this contract.
+The dispatch cache and initialization state live in canonical class descriptors,
+so different TUs share state. No method-mutation or dynamic-module-loader API is
+supplied. A future runtime that adds either must invalidate affected inherited
+cache entries and intern selectors into the existing address namespace; it cannot
+independently invent TU-local selector numbers or assume static receiver types
+identify implementations. This records the boundary of this runtime, not a
+claim that dlopen already exists.
 
-## Refused/outside this experiment
+## NSString literal/library boundary
 
-- More than one Objective-C translation unit in a program; cross-TU class/selector
-  registration, dynamic class loading and runtime method replacement.
-- Variadic methods, GC reference
-  signatures, incomplete/function/bitfield ivars, packed class layouts, objects by value.
-- Forward class declarations, categories/extensions, protocols, properties and dot
-  messaging, synthesis/dynamic declarations, fast enumeration, exceptions/synchronization,
-  ARC/ownership qualifiers, autorelease pools, Blocks, Objective-C++.
-- Object strings/boxed literals/collection literals; Foundation/AppKit/NSObject and
-  Apple/GNU runtime headers or binary compatibility. There is no conventional
-  `<objc/objc.h>` or `<objc/runtime.h>` library supplied by this spike.
-- Implicit method types, undeclared method signatures, missing class/method implementations,
-  incompatible overrides/implementations, and ambiguous signatures at dynamic receiver sites.
+`@"..."` has static type `NSString *`, with an implicit forward NSString identity
+when needed. Adjacent ordinary/Objective-C literal tokens concatenate. Emitted
+objects and payloads have static lifetime; globals can use their addresses as
+constant initializers. No cross-TU literal-address deduplication is promised.
 
-Unsupported syntax fails compilation, sometimes through the ordinary C parser's
-source-located diagnostic. Class sends require class-method declarations; promoting root instance methods
-to class methods is outside this subset and is refused.
-Standard library classes/APIs are absent rather than
-success-reporting stubs. `__guc_objc_*` names are reserved implementation details.
-No implementation schedule or compatibility percentage is claimed.
+The concrete class is an externally supplied **NSConstantString**, descended from
+NSString. The compiler supplies neither class implementation nor string methods.
+Missing providers produce a named link diagnostic. Tests' provider classes are
+explicit ABI fixtures, not a bundled Foundation implementation.
 
-## Validation entry points
+The payload adopts the modern GNUstep constant-string layout for wasm32:
+
+| Offset | Field |
+|---|---|
+| 0 | Class isa, the concrete class descriptor's address |
+| 4 | uint32 flags: 0 for ASCII, 2 for UTF-16LE |
+| 8 | uint32 length in UTF-16 code units |
+| 12 | uint32 payload byte count, excluding terminator |
+| 16 | uint32 hash, initially zero |
+| 20 | pointer to terminated payload |
+
+Size is 24 bytes, alignment 4. ASCII payload alignment is 1; UTF-16 alignment is
+2. Embedded NULs and supplementary-character surrogate pairs are preserved.
+The linker checks the provider's complete inherited physical layout against this
+shape. Matching this payload is a compiler/library seam, not GNUstep/libobjc2
+runtime binary compatibility. Foundation and AppKit remain separate library work.
+
+Primary contracts: [Clang GNUstep code generation](https://github.com/llvm/llvm-project/blob/main/clang/lib/CodeGen/CGObjCGNU.cpp),
+[GNUstep NSString ABI](https://github.com/gnustep/libs-base/blob/master/Headers/Foundation/NSString.h),
+[Apple initialization implementation](https://github.com/apple-oss-distributions/objc4/blob/main/runtime/objc-initialize.mm),
+[Apple load scheduling](https://github.com/apple-oss-distributions/objc4/blob/main/runtime/objc-loadmethod.mm).
+
+## Explicit boundaries
+
+Categories/extensions, properties/dot messaging, synthesis, fast enumeration,
+optional protocol requirements and runtime protocol objects are not implemented.
+Exceptions/@finally, synchronization, ARC, Blocks and Objective-C++ remain outside
+this compiler round. Packed classes, bitfield/incomplete/function ivars and
+objects passed by value refuse. Boxing and collection literals are absent.
+Undeclared selectors, missing declared method implementations and incompatible
+signatures fail loudly. Promoting root instance methods to class methods,
+forwarding and dynamic method resolution are not supplied. Standard runtime
+headers and NSObject/Foundation/AppKit APIs are not bundled. `__guc_objc_*` names
+and `__wasm_call_ctors` are compiler implementation symbols.
+
+Only live allocated objects, class objects and valid library-provided constant
+objects are non-nil receivers; forged pointers and use-after-free are undefined.
+
+## Validation
 
 ```
 node tests/host/test_objc.js
@@ -106,13 +107,10 @@ node tests/kernel/run.js --filter=objc
 node tests/browser/os-sweep.mjs --filter=os-objc
 ```
 
-The Node and Chromium tests compile the same source corpus under default and
-no-inline settings and execute the resulting Wasm. `core.m` also builds/runs
-through `/bin/cc` on both OS hosts. The browser test is discovered by the normal
-sweep, the Node test is enrolled in host, and the OS test in kernel. `tests/objc/`
-changes map to all three suites. Actual execution records and gate scope belong
-in the committed #772 journal, not in this contract.
-
-`aggregate-abi.c` remains a **C-only control**. `round2.js` exercises actual
-Objective-C aggregate messages: hidden-return-pointer lifetime, argument copies,
-nested and sibling sends, overrides, lexical super and the zero-filled nil result.
+Node and real Chromium compile the shared `cases.js`/`round2.js` corpus in both
+inline modes, including three-TU programs in both link orders. `os-script.js`
+drives the positive corpus and multi-TU builds through actual `/bin/cc` and fresh
+process execution on both OS hosts. AST metadata and negative link controls run
+in the host test. `aggregate-abi.c` remains a C-only control; Objective-C aggregate
+coverage is in `round2.js`. Execution evidence, pending gates and review status
+belong in the #775 journal; this contract is not itself a green-gate record.

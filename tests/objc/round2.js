@@ -87,9 +87,9 @@
     }`]);
   positive.push(['load-and-initialize', `
     int sequence, loads, initialized, childSeen;
-    @interface Parent + (void)load; + (void)initialize; + (int)value; @end
+    @interface Parent + (void)load; + (int)value; @end
     @interface Child:Parent @end
-    @interface Unused:Parent + (void)load; @end
+    @interface Unused:Parent @end
     @implementation Parent
     + (void)load {loads++; sequence=1;}
     + (void)initialize {
@@ -155,6 +155,8 @@
       return !loaded || c->length!=5 || *(char*)c->data!='a';
     }`]);
   const negative = [
+    ['missing-string-provider', 'int main(void){ return @"hello"==nil; }', /require an NSString-compatible NSConstantString library provider/],
+    ['bad-string-provider', '@interface NSString @end @interface NSConstantString:NSString @end @implementation NSString @end @implementation NSConstantString @end int main(void){return @"hello"==nil;}', /does not match.*constant-string ABI/],
     ['owning-qualifier', 'int main(void) { __weak id object; return 0; }', /owning qualifiers/],
     ['void-pointer-receiver', 'int main(void){ void *p=0; return [p x]; }', /object pointer/],
     ['late-ambiguous-id', `
@@ -177,13 +179,26 @@
     struct Value { int x; double y; };
     @interface Base { @public int value; }
     - (struct Value)get; - (SEL)selector;
+    + (void)load; + (void)initialize; + (int)ping;
     @end
-    @interface Sub : Base - (struct Value)get; @end
+    @interface Sub : Base - (struct Value)get; + (void)load; @end
+    extern int loadMask, initializeMask;
     id make(void); SEL otherSelector(void);
+    /* Constant-string ABI provider fixture only, not a Foundation library. */
+    @interface NSString @end
+    @interface NSConstantString:NSString {
+      @public unsigned int flags,length,byteSize,hash; const void *data;
+    } @end
   `;
   const crossTU = {
     'base.m': '#include "shared.h"\n' + `
+      int loadMask, initializeMask;
+      @implementation NSString @end
+      @implementation NSConstantString @end
       @implementation Base
+      + (void)load { if(initializeMask) loadMask|=128; loadMask|=1; if([Sub ping]!=7) loadMask|=128; }
+      + (void)initialize { if(self==Base) initializeMask|=1; else if(self==Sub) initializeMask|=2; }
+      + (int)ping {return 7;}
       - (struct Value)get {struct Value v={value,2.5}; return v;}
       - (SEL)selector {return _cmd;} @end
       id make(void) {Sub *s=guc_objc_alloc(Sub); s->value=41; return s;}
@@ -191,12 +206,17 @@
     `,
     'sub.m': '#include "shared.h"\n' + `
       @implementation Sub
+      + (void)load { if(!(loadMask&1) || _cmd!=@selector(load)) loadMask|=128; loadMask|=2; }
       - (struct Value)get {struct Value v=[super get]; v.x++; return v;}
       @end
     `,
     'main.m': '#include "shared.h"\n' + `
+      static NSString *greeting=@"hi😀";
       int main(void) { Sub *s=make(); struct Value v=[s get];
-        int ok=v.x==42 && v.y==2.5 && [s selector]==otherSelector()
+        NSConstantString *literal=(NSConstantString*)greeting;
+        const unsigned short *text=literal->data;
+        int ok=loadMask==3 && initializeMask==3 && literal->length==4 && literal->flags==2
+          && text[0]=='h' && text[2]==0xd83d && text[3]==0xde00 && text[4]==0 && v.x==42 && v.y==2.5 && [s selector]==otherSelector()
           && otherSelector()==@selector(selector) && @selector(get)!=otherSelector();
         guc_objc_dispose(s); return !ok;
       }

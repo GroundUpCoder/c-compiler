@@ -182,3 +182,37 @@ superclass ordering is required. Focused Node corpus now passes 22 single-TU/mod
 executions, four cross-TU executions, 22 refusals, four link diagnostics and AST
 metadata controls (build/775/type-protocol-host.log). Browser execution, full gate,
 final independent review and merge still pending. String literal lowering is next.
+
+## NSString provider seam and focused Chromium execution
+
+Red fixture refused @ string syntax (build/775/string-red.log). Added NSString*
+literal typing with forward class identity and an external NSConstantString
+provider. The compiler emits static payloads using modern GNUstep's 24-byte
+wasm32 shape: isa, flags, UTF-16 length, byte size, hash, data. ASCII and UTF-16LE,
+embedded NUL, supplementary pairs and adjacent literal concatenation are covered.
+Linking validates the provider's complete inherited shape and names the missing
+library dependency. No NSString method implementation or Foundation is bundled;
+the test providers are explicitly ABI-only fixtures. Raw global payload arrays
+needed MEMORY allocation marks, matching C array declarations; an initial compile
+attempt diagnosed nonconstant payload address initializers before this correction.
+
+Extended cross-TU tests with a provider in a different source, static Unicode
+literal, superclass-first load, and a load-time send that triggers inherited
+initialization. Both source orders and both inline modes pass in Node
+(build/775/string-cross-host.log). Ordinary implementations may add method
+declarations, including load/initialize without an own interface declaration.
+
+Executed real Chromium standalone matrix. First run failed the Unicode literal
+payload test (build/775/browser-focused.log): fixture scripts were served without
+UTF-8 charset headers. Added explicit charset headers to the test HTTP server;
+compiler fixture unchanged. The rerun exited 0 and records 51 cases: 24 single-TU
+positive executions, 23 refusals and four cross-TU executions. Evidence:
+build/775/browser-focused-utf8.log and build/objc/browser.json. This is a focused
+browser run, not an OS or broad gate. The browser performed its own compilation.
+
+New shared os-script.js prepares all 12 positive programs plus both cross-TU
+orders for actual /bin/cc on Node/Chromium OS hosts (14 successful markers per
+host expected). Both OS test drivers now use it, but those expanded OS tests have
+not executed yet. README rewritten around implemented contracts and explicit
+library/runtime boundaries. Fresh mapper-selected gate, standard flake gate,
+Objective-C repetitions, final independent review and push/merge remain pending.

@@ -80,7 +80,6 @@
     ['category', '@interface A (Extra) @end', /categories/],
     ['property', '@interface A @property int x; @end', /unsupported class form/],
     ['arc-pool', 'int main(void) { @autoreleasepool { } return 0; }', /unsupported expression/],
-    ['object-string', 'int main(void) { id s = @"hello"; return 0; }', /unsupported expression/],
     ['missing-interface', '@implementation A @end', /preceding interface/],
     ['missing-method', '@interface A - (int)x; @end @implementation A @end', /no implementation/],
     ['unknown-superclass', '@interface A : Missing @end', /preceding interface/],

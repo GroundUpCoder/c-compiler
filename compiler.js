@@ -9923,14 +9923,34 @@ function linkTranslationUnits(units, compilerOptions) {
   for (const unit of units) for (const cls of unit.objc?.classes.values() || []) {
     const previous = objcClasses.get(cls.name);
     if (previous) {
-      if (previous.parent?.name !== cls.parent?.name || !objcABIEqual(previous.type, cls.type))
+      if (previous.interfaceComplete && cls.interfaceComplete && (previous.parent?.name !== cls.parent?.name || !objcABIEqual(previous.type, cls.type)))
         errors.push({message: `inconsistent Objective-C layout for class '${cls.name}'`, locations: [Lexer.Loc.fromTok(previous.tok), Lexer.Loc.fromTok(cls.tok)]});
       for (const [key, sig] of cls.declared) {
         const old = previous.declared.get(key);
         if (old && !objcABIEqual(old.type, sig.type))
           errors.push({message: `inconsistent Objective-C signature '${cls.name} ${key}'`, locations: [Lexer.Loc.fromTok(previous.tok), Lexer.Loc.fromTok(cls.tok)]});
       }
+      if (!previous.interfaceComplete || cls.complete) objcClasses.set(cls.name, cls);
     } else objcClasses.set(cls.name, cls);
+  }
+  if (units.some(u => u.objc?.literals.length)) {
+    const provider = objcClasses.get('NSConstantString');
+    if (provider?.complete) {
+      const fields = [];
+      const flatten = (type, base = 0) => {
+        for (const m of type.tagDecl.members) {
+          if (m.name === '__guc_base') flatten(m.type, base + m.byteOffset);
+          else fields.push({type:m.type, offset:base+m.byteOffset});
+        }
+      };
+      flatten(provider.type);
+      let base = provider.parent;
+      while (base && base.name !== 'NSString') base = base.parent;
+      if (!base || provider.type.size !== 24 || provider.type.align !== 4 || fields.length !== 6 ||
+          fields.some((f,i) => f.offset !== i*4 || (i === 0 || i === 5
+            ? !f.type.isPointer() : f.type.removeQualifiers() !== Types.TUINT)))
+        errors.push({message:'NSConstantString provider does not match the NSString constant-string ABI (24 bytes: isa, flags, UTF-16 length, byte size, hash, data)',locations:[Lexer.Loc.fromTok(provider.tok)]});
+    }
   }
 
   function addError(message, locations) { errors.push({ message, locations: locations || [] }); }
@@ -10628,7 +10648,7 @@ class Parser {
   }
 
   objcInit(unit) {
-    this.objc = { unit, classes: new Map(), protocols: new Map(), selectors: new Map(), methods: new Map(), sends: [], helpers: [], current: null };
+    this.objc = { unit, classes: new Map(), protocols: new Map(), selectors: new Map(), methods: new Map(), sends: [], helpers: [], literals: [], current: null };
     this.typeScope.set('id', new Types.ObjcObjectPointerType(Types.createTagType(Types.TagKind.STRUCT, '__guc_objc_object')));
     this.objcGenerated(`
       typedef struct __guc_objc_selector *SEL;
@@ -10642,6 +10662,9 @@ class Parser {
         Class owner; unsigned int initState; unsigned int loadState;
         Class pendingChildren; Class pendingNext;
         struct __guc_objc_method cache[16];
+      };
+      struct __guc_objc_constant_string {
+        Class isa; unsigned int flags, length, byteSize, hash; const void *data;
       };
       void *calloc(unsigned long, unsigned long);
       void free(void *);
@@ -10713,6 +10736,7 @@ class Parser {
     this.objc.id = this.typeScope.get('id');
     this.objc.sel = this.typeScope.get('SEL');
     this.objc.cls = this.typeScope.get('Class');
+    this.objc.constantType = this.tagScope.get('__guc_objc_constant_string');
   }
 
   objcSelector(name) {
@@ -10802,6 +10826,39 @@ class Parser {
       this.varScope.stack[0].set(variable.name, variable); this.objc.unit.externVariables.push(variable); cls[field] = variable;
     }
     return cls;
+  }
+
+  parseObjcString() {
+    const tok = this.peek(), loc = Lexer.Loc.fromTok(tok), bytes = [];
+    do {
+      this.expect('@');
+      if (!this.atKind(Lexer.TokenKind.STRING)) this.error(this.peek(), 'expected Objective-C string literal');
+      const literal = this.parseStringLiteral();
+      if (literal.type.baseType.size !== 1) this.error(tok, 'Objective-C string literal must contain UTF-8 source');
+      bytes.push(...literal.value.slice(0, -1));
+    } while (this.atText('@') && this.peek(1).kind === Lexer.TokenKind.STRING);
+    let value;
+    try { value = new TextDecoder('utf-8', {fatal:true}).decode(new Uint8Array(bytes)); }
+    catch (_) { this.error(tok, 'Objective-C string literal contains invalid UTF-8'); }
+    const ascii = bytes.every(b => b < 128), payload = ascii ? [...bytes,0] : [];
+    if (!ascii) {
+      for (let i=0; i<value.length; ++i) payload.push(value.charCodeAt(i)&255, value.charCodeAt(i)>>8);
+      payload.push(0,0);
+    }
+    const stringClass = this.objcForwardClass('NSString', tok);
+    const provider = this.objcForwardClass('NSConstantString', tok);
+    this.linkHints.push({prefix:'__guc_objc_class_NSConstantString', message:'Objective-C string literals require an NSString-compatible NSConstantString library provider (24-byte constant-string ABI)'});
+    const name = '__guc_objc_literal_' + this.objc.literals.length;
+    const dataType = Types.arrayOf((ascii ? Types.TCHAR : Types.TUSHORT).addConst(), ascii ? payload.length : payload.length/2);
+    const data = new AST.DVar(loc, name + '_data', dataType, Types.StorageClass.STATIC, new AST.EString(loc, dataType, payload));
+    data.allocClass = Types.AllocClass.MEMORY;
+    const type = this.objc.constantType;
+    const fields = [this.objcClassAddress(provider,false,loc),
+      ...[ascii ? 0 : 2, value.length, ascii ? bytes.length : value.length*2, 0].map(n => new AST.EInt(loc,Types.TUINT,BigInt(n))),
+      AST.maybeDecay(new AST.EIdent(loc,dataType,data))];
+    const object = new AST.DVar(loc,name,type,Types.StorageClass.STATIC,new AST.EInitList(loc,type,fields));
+    this.objc.unit.definedVariables.push(data,object); this.objc.literals.push(object);
+    return AST.makeCast(loc,stringClass.type.pointer(),AST.makeUnary(loc,'OP_ADDR',new AST.EIdent(loc,type,object)));
   }
 
   objcProtocolList() {
@@ -10917,7 +10974,14 @@ class Parser {
       cls.complete = true;
       while (this.atText('-') || this.atText('+')) {
         const { sig, names, tok: methodTok } = this.objcMethodSignature();
-        if (!cls.declared.has(sig.key)) this.error(methodTok, 'Objective-C experiment: method must be declared in its interface');
+        if (!cls.declared.has(sig.key)) {
+          for (let base=cls.parent; base; base=base.parent) {
+            const inherited=base.declared.get(sig.key);
+            if (inherited && !inherited.type.isCompatibleWith(sig.type))
+              this.error(methodTok, `incompatible Objective-C override '${sig.key}'`);
+          }
+          cls.declared.set(sig.key,sig);
+        }
         if (!cls.declared.get(sig.key).type.isCompatibleWith(sig.type))
           this.error(methodTok, `Objective-C implementation signature differs from declaration '${sig.key}'`);
         if (cls.implemented.has(sig.key)) this.error(methodTok, 'duplicate Objective-C method implementation');
@@ -12216,6 +12280,7 @@ class Parser {
     if (this.objc) {
       const loc = Lexer.Loc.fromTok(t);
       if (this.atText('[')) return this.parseObjcMessage();
+      if (this.atText('@') && this.peek(1).kind === Lexer.TokenKind.STRING) return this.parseObjcString();
       if (this.matchText('@selector')) {
         this.expect('(');
         let name = this.objcSelectorWord();
