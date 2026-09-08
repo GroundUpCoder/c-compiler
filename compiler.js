@@ -18918,8 +18918,8 @@ class CodeGenerator {
     // restart the cursor; within an expression it only advances, except that
     // mutually exclusive conditional arms fork and join at their maximum.
     // Suppress statement resets beneath expressions to preserve any live
-    // prefix even if a synthesized AST contains nested statements. Separate
-    // for-header expressions conservatively retain distinct storage.
+    // prefix even if a synthesized AST contains nested statements. For clauses
+    // and separate declarator initializers are distinct full expressions too.
     let aggAreaSize = 0;
     let aggAreaAlign = 16;
     const aggCallRelativeOffsets = new Map();
@@ -18942,7 +18942,11 @@ class CodeGenerator {
         for (const kid of kids) {
           if (!kid) continue;
           const kidIsStmt = kid instanceof AST.Stmt;
-          if (kidIsStmt && !inExpr) layoutAggCalls(kid, { next: 0 }, false);
+          // SFor's clauses and SDecl's individual initializers have separate
+          // full-expression lifetimes. Do not generalize to ALL statement
+          // children: SThrow's arguments, for example, must remain live together.
+          const separate = kidIsStmt || node instanceof AST.SFor || node instanceof AST.SDecl;
+          if (separate && !inExpr) layoutAggCalls(kid, { next: 0 }, !kidIsStmt);
           else layoutAggCalls(kid, counter, inExpr || !kidIsStmt);
         }
       }

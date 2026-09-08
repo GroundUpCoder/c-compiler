@@ -80,3 +80,18 @@ All 12 host checks now pass, including opposite-sized branches and independent
 statements, plus 64-byte aligned results after a small live prefix and before a
 live sibling. Both inline modes verify addresses and values. No stack limit was
 changed. A new exact-tip review and fresh gate must adjudicate this revision.
+
+## Third counter-pass: full-expression boundaries in for clauses
+
+My own follow-up probe found that a35036df still summed separate for condition
+and increment expressions (80,000-byte main frame for two 40,000-byte results).
+The CLI warned about the frame and execution trapped. Added a permanent red-first
+host test in `12f2ebe2`, including an aggregate call in the initializer too.
+
+The walk now resets the cursor for separate SFor clauses and SDecl initializers,
+as well as the existing statement boundaries, unless already nested beneath an
+expression. This is deliberately not a blanket rule for all statement children:
+SThrow arguments must remain live together. Examined all current statement AST
+shapes to establish that distinction. All 14 host checks pass in the fixed tree.
+The a35036df gate was interrupted before edits and its log/artifacts preserved;
+review must settle before another broad gate begins.
