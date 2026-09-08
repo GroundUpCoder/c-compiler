@@ -9995,7 +9995,8 @@ function linkTranslationUnits(units, compilerOptions) {
       if (a.size !== b.size || a.align !== b.align) return false;
       const am = a.tagDecl.members, bm = b.tagDecl.members;
       return am.length === bm.length && am.every((m, i) => m.name === bm[i].name &&
-        m.bitWidth === bm[i].bitWidth && objcABIEqual(m.type, bm[i].type, seen));
+        m.byteOffset === bm[i].byteOffset && m.bitOffset === bm[i].bitOffset &&
+        m.bitWidth === bm[i].bitWidth && m.bfAccessBytes === bm[i].bfAccessBytes && objcABIEqual(m.type, bm[i].type, seen));
     }
     return true;
   }

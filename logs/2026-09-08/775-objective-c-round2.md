@@ -350,3 +350,13 @@ guarantees and narrowed parameters still diagnose in both source orders and
 inline modes. All prior review findings resolved; no further material source
 finding in that bounded review. The reviewer made no edits or heavy runs.
 This is source approval only, not current Chromium/OS or full-gate approval.
+
+Self-audit after source approval found a narrow layout-check omission: nested C
+aggregates may have equal size/alignment and member types but different offsets
+(e.g. moving an _Alignas(8) from one char to another before an _Alignas(16) tail).
+Pre-fix linking accepted the two class layouts, reproduced by the preceding red
+test (`build/775/member-offset-red.log`). `objcABIEqual` now compares member byte
+and bit offsets and bitfield access widths as well as existing shape checks.
+Focused Node passes (`build/775/member-offset-host.log`), now15 negative-link
+cases in both orders (30 records). This compiler delta requires supplemental
+independent review; the previous approval remains correctly pinned to07cfca31.
