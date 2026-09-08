@@ -2,6 +2,11 @@
 (() => {
 "use strict";
 
+// Objective-C class identity stays on types across AST lowering (#772).
+const objcClassTypes = new WeakMap();
+const objcClassQualifiers = new WeakMap();
+const objcClassOwnership = new WeakMap();
+
 // ====================
 // Array append (spread-safe)
 // ====================
@@ -361,7 +366,7 @@ function hexVal(c) {
 // Raw lexer (phase 1)
 // ====================
 
-function lex(filename, source, lineOffsets) {
+function lex(filename, source, lineOffsets, objectiveC = String(filename).endsWith(".m")) {
   const textEncoder = new TextEncoder();
   const textDecoder = new TextDecoder();
   const bytes = textEncoder.encode(source);
@@ -709,6 +714,11 @@ function lex(filename, source, lineOffsets) {
       if (handled) continue;
     }
 
+    // Objective-C's @ is a separate preprocessing token: whitespace and
+    // macro expansion between it and a directive name remain meaningful.
+    if (objectiveC && peek() === 64) {
+      mark(); advance(); addToken(TokenKind.OTHER, '@'); continue;
+    }
     // Punctuation
     if (tryPunct()) continue;
 
@@ -1263,8 +1273,8 @@ function postProcess(lexResult) {
         else if (p && p.op === "pop") { if (stack.length) cur = stack.pop(); }
         continue; // drop the marker
       }
-      if (t.kind === TokenKind.KEYWORD &&
-          (t.keyword === Keyword.STRUCT || t.keyword === Keyword.UNION)) {
+      if (t.text === "@" || (t.kind === TokenKind.KEYWORD &&
+          (t.keyword === Keyword.STRUCT || t.keyword === Keyword.UNION))) {
         t.packValue = cur;
       }
       kept.push(t);
@@ -1383,7 +1393,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
   for (const [name, val] of ppRegistry.defines) {
     const m = { isFunctionLike: false, isVariadic: false, params: [], replacement: [] };
     if (val !== null) {
-      const lexRes = lex(name, val);
+      const lexRes = lex(name, val, undefined, ppRegistry.objectiveC);
       for (const t of lexRes.tokens) {
         if (t.kind !== TokenKind.EOS) m.replacement.push(t);
       }
@@ -1393,7 +1403,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
 
   // --- 1b. PROCESS PRELUDE ---
   if (ppRegistry.prelude) {
-    const preludeLex = lex("<prelude>", ppRegistry.prelude);
+    const preludeLex = lex("<prelude>", ppRegistry.prelude, undefined, ppRegistry.objectiveC);
     const preludeTokens = preludeLex.tokens.filter(t => t.kind !== TokenKind.EOS);
     initialTokens = [...preludeTokens, ...initialTokens];
   }
@@ -1507,7 +1517,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
   }
 
   function executePragmaOperator(strTok, currentFile) {
-    const lexed = lex(currentFile, destringize(strTok.text));
+    const lexed = lex(currentFile, destringize(strTok.text), undefined, ppRegistry.objectiveC);
     const toks = lexed.tokens.filter(tk =>
       tk.kind !== TokenKind.EOS && tk.kind !== TokenKind.NEWLINE);
     applyPragma(toks, currentFile);
@@ -1769,7 +1779,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
                   } else {
                     const merged = left.text + right.text;
                     const mergedSym = intern(merged);
-                    const lexed = lex(left.filename, mergedSym);
+                    const lexed = lex(left.filename, mergedSym, undefined, ppRegistry.objectiveC);
                     // C11 6.10.3.3p3: the concatenation must form ONE valid
                     // preprocessing token. It used to take the FIRST lexed
                     // token and silently DROP the rest (`x ## ++` became
@@ -2129,7 +2139,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
       if (content === null) return null;
       const resolved = intern(fullPath);
       const { spliced, lineOffsets } = spliceLines(content);
-      return { lexResult: lex(resolved, spliced, lineOffsets), resolvedFile: resolved };
+      return { lexResult: lex(resolved, spliced, lineOffsets, ppRegistry.objectiveC), resolvedFile: resolved };
     };
 
     // Splice line continuations like the real-file path: inline core headers
@@ -2140,7 +2150,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
       if (!ppRegistry.standardHeaders.has(target)) return null;
       const resolved = intern(target);
       const { spliced, lineOffsets } = spliceLines(ppRegistry.standardHeaders.get(target));
-      return { lexResult: lex(resolved, spliced, lineOffsets), resolvedFile: resolved };
+      return { lexResult: lex(resolved, spliced, lineOffsets, ppRegistry.objectiveC), resolvedFile: resolved };
     };
 
     // Build the -I search-path list once.
@@ -2257,7 +2267,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
     }
 
     function emitToken(tok) {
-      if (tok.kind === TokenKind.OTHER) {
+      if (tok.kind === TokenKind.OTHER && !(ppRegistry.objectiveC && tok.text.startsWith("@"))) {
         // An "other" pp-token survived preprocessing — only now is it an
         // error (C11 6.4p1; skipped groups/unexpanded macros already
         // dropped theirs).
@@ -2680,15 +2690,37 @@ function cloneToken(t) {
 
 // Convenience: splice + lex + preprocess + post-process
 function tokenize(filename, source, ppRegistry) {
+  const objectiveC = String(filename).endsWith('.m');
   const { spliced, lineOffsets } = spliceLines(source);
-  const lexResult = lex(filename, spliced, lineOffsets);
-  if (lexResult.errors.length > 0) return lexResult;
+  let result = lex(filename, spliced, lineOffsets, objectiveC);
+  if (result.errors.length > 0) return result;
   if (ppRegistry) {
-    const ppResult = preprocess(filename, lexResult.tokens, ppRegistry);
-    if (ppResult.errors.length > 0) return ppResult;
-    return postProcess(ppResult);
+    const previousObjc = ppRegistry.objectiveC;
+    const previousDefine = ppRegistry.defines.get('__OBJC__');
+    ppRegistry.objectiveC = objectiveC;
+    if (objectiveC) ppRegistry.defines.set('__OBJC__', '1');
+    try { result = preprocess(filename, result.tokens, ppRegistry); }
+    finally {
+      ppRegistry.objectiveC = previousObjc;
+      if (previousDefine === undefined) ppRegistry.defines.delete('__OBJC__');
+      else ppRegistry.defines.set('__OBJC__', previousDefine);
+    }
+    if (result.errors.length > 0) return result;
   }
-  return postProcess(lexResult);
+  result = postProcess(result);
+  if (objectiveC) {
+    const tokens = [];
+    for (let i = 0; i < result.tokens.length; ++i) {
+      let tok = result.tokens[i];
+      if (tok.text === '@' && [TokenKind.IDENT, TokenKind.KEYWORD].includes(result.tokens[i + 1]?.kind)) {
+        const pack = tok.packValue;
+        tok = cloneToken(tok); tok.packValue = pack; tok.text = '@' + result.tokens[++i].text;
+      }
+      tokens.push(tok);
+    }
+    result.tokens = tokens;
+  }
+  return result;
 }
 
 // ====================
@@ -2734,6 +2766,48 @@ return {
 // ====================
 // Parser — Type System
 // ====================
+
+// Directional method contracts are separate from C function compatibility.
+// A caller's result guarantees may be strengthened; its accepted arguments
+// may be broadened. In particular, permissive id assignment is not subtyping.
+function objcObjectSubstitutable(actual, expected, classes = null, protocolRegistry = null) {
+  actual = actual.removeQualifiers(); expected = expected.removeQualifiers();
+  if (!(actual instanceof Types.ObjcObjectPointerType) || !(expected instanceof Types.ObjcObjectPointerType)) return false;
+  if (actual.ownership !== expected.ownership) return false;
+  const protocolNames = type => {
+    if (!classes) return type.protocolNames();
+    const names = new Set(), seen = new Set();
+    const visit = name => {
+      if (names.has(name)) return;
+      names.add(name);
+      for (const parent of protocolRegistry?.get(name)?.parents || []) visit(parent);
+    };
+    for (const p of type.protocols) visit(p);
+    for (let cls=classes.get(type.className); cls && !seen.has(cls.name); cls=cls.parent && classes.get(cls.parent.name)) {
+      seen.add(cls.name);
+      for (const p of cls.protocols) visit(p);
+    }
+    return names;
+  };
+  const protocols = protocolNames(actual);
+  if ([...protocolNames(expected)].some(p => !protocols.has(p))) return false;
+  if (!expected.className) return true;
+  if (!actual.className) return false;
+  const seen = new Set();
+  for (let cls = classes?.get(actual.className) || objcClassTypes.get(actual.baseType.removeQualifiers()); cls && !seen.has(cls.name);) {
+    if (cls.name === expected.className) return true;
+    seen.add(cls.name);
+    cls = cls.parent && (classes?.get(cls.parent.name) || cls.parent);
+  }
+  return actual.className === expected.className;
+}
+function objcMethodSatisfies(actual, expected, equal = (a,b) => a.isCompatibleWith(b), classes = null, protocolRegistry = null) {
+  if (actual.isVarArg !== expected.isVarArg || actual.paramTypes.length !== expected.paramTypes.length) return false;
+  const substitutable = (a,b) => a instanceof Types.ObjcObjectPointerType || b instanceof Types.ObjcObjectPointerType
+    ? objcObjectSubstitutable(a,b,classes,protocolRegistry) : equal(a,b);
+  return substitutable(actual.returnType,expected.returnType) &&
+    expected.paramTypes.slice(2).every((p,i) => substitutable(p,actual.paramTypes[i+2]));
+}
 
 const Types = (() => {
 
@@ -2914,7 +2988,8 @@ class TypeInfo {
   // `T → T*`. Default builds a PointerType. GC kinds override.
   pointer() {
     if (this._pointer) return this._pointer;
-    const p = new PointerType(this);
+    const cls = objcClassTypes.get(this.removeQualifiers());
+    const p = cls ? new ObjcObjectPointerType(this, cls.name, objcClassQualifiers.get(this.removeQualifiers()) || [], objcClassOwnership.get(this.removeQualifiers()) || 'manual', cls.protocolRegistry) : new PointerType(this);
     this._pointer = p;
     return p;
   }
@@ -3045,12 +3120,48 @@ class PointerType extends TypeInfo {
   constructor(baseType) {
     super(4, 4, true);
     this.baseType = baseType;
-    Object.seal(this);
+    if (new.target === PointerType) Object.seal(this);
   }
   isPointer() { return true; }
   _toString() { return "*" + this.baseType.toString(); }
   _eqStructure(other, seen) { return this.baseType.isCompatibleWith(other.baseType, seen); }
   _cloneForQualifier() { return new PointerType(this.baseType); }
+}
+
+// Objective-C object pointers are still i32 linear-memory pointers. Identity,
+// protocol qualification and manual ownership survive ordinary type operations.
+class ObjcObjectPointerType extends PointerType {
+  constructor(baseType, className = null, protocols = [], ownership = 'manual', protocolRegistry = null) {
+    super(baseType);
+    this.className = className;
+    this.protocols = Object.freeze([...new Set(protocols)].sort());
+    this.ownership = ownership;
+    this.protocolRegistry = protocolRegistry;
+    Object.seal(this);
+  }
+  _toString() {
+    return (this.className ? this.className + '*' : 'id') +
+      (this.protocols.length ? '<' + this.protocols.join(',') + '>' : '');
+  }
+  _eqStructure(other) {
+    return this.className === other.className && this.ownership === other.ownership &&
+      this.protocols.length === other.protocols.length && this.protocols.every((p,i) => p === other.protocols[i]);
+  }
+  protocolNames() {
+    const result = new Set();
+    const visit = (name, registry) => {
+      if (result.has(name)) return;
+      result.add(name);
+      for (const p of registry?.get(name)?.parents || []) visit(p,registry);
+    };
+    for (const p of this.protocols) visit(p,this.protocolRegistry);
+    for (let cls=objcClassTypes.get(this.baseType.removeQualifiers()); cls; cls=cls.parent)
+      for (const p of cls.protocols) visit(p,cls.protocolRegistry);
+    return result;
+  }
+  _cloneForQualifier() {
+    return new ObjcObjectPointerType(this.baseType, this.className, this.protocols, this.ownership, this.protocolRegistry);
+  }
 }
 
 // `T[N]` — a C array of N elements of T (linear memory). N=0 marks an
@@ -3122,7 +3233,7 @@ class TagType extends TypeInfo {
     this.tagKind = tagKind;
     this.tagName = tagName;
     this.tagDecl = null;
-    Object.seal(this);
+    if (new.target === TagType) Object.seal(this);
   }
   isTag()    { return true; }
   isStruct() { return this.tagKind === TagKind.STRUCT; }
@@ -3151,6 +3262,25 @@ class TagType extends TypeInfo {
     c.isComplete = this.isComplete;
     c.tagDecl = this.tagDecl;
     return c;
+  }
+}
+
+// Qualified/forward Objective-C class spellings share one live layout, rather
+// than copying an incomplete tag and stranding it when the interface completes.
+class ObjcClassType extends TagType {
+  constructor(name, canonical = null) {
+    super(TagKind.STRUCT,name,0,1);
+    this.canonical = canonical;
+    if (canonical) for (const field of ['size','align','isComplete','tagDecl'])
+      Object.defineProperty(this,field,{get:()=>canonical[field],enumerable:true,configurable:true});
+    Object.seal(this);
+  }
+  _cloneForQualifier() {
+    const clone = new ObjcClassType(this.tagName,this.canonical || this);
+    if (objcClassTypes.has(this)) objcClassTypes.set(clone,objcClassTypes.get(this));
+    if (objcClassQualifiers.has(this)) objcClassQualifiers.set(clone,objcClassQualifiers.get(this));
+    if (objcClassOwnership.has(this)) objcClassOwnership.set(clone,objcClassOwnership.get(this));
+    return clone;
   }
 }
 
@@ -3639,7 +3769,7 @@ return {
   TypeInfo,
   PrimitiveType, IntegerType, FloatingType,
   VoidType, AutoType, UnknownType, DivergentType,
-  PointerType, ArrayType, FunctionType, TagType,
+  PointerType, ObjcObjectPointerType, ArrayType, FunctionType, TagType, ObjcClassType,
   GCStructHeapType, GCStructRefType, GCArrayType,
   ExternRefType, RefExternType, EqRefType,
   TUNKNOWN, TVOID, TBOOL, TCHAR, TSCHAR, TUCHAR, TSHORT, TUSHORT,
@@ -4885,8 +5015,25 @@ function typesAreAssignmentCompatible(srcType, targetType, expr) {
   if (s.isPointer() && t.isPointer()) {
     const sBase = s.baseType, tBase = t.baseType;
     if (sBase.isVoid() || tBase.isVoid()) return true;
+    if (s instanceof Types.ObjcObjectPointerType || t instanceof Types.ObjcObjectPointerType) {
+      const objectLike = p => p instanceof Types.ObjcObjectPointerType ||
+        p.baseType.removeQualifiers().tagName === '__guc_objc_class';
+      if (!objectLike(s) || !objectLike(t)) return false;
+      if (t instanceof Types.ObjcObjectPointerType && s instanceof Types.ObjcObjectPointerType &&
+          t.protocols.length && (s.className || s.protocols.length)) {
+        const provided = s.protocolNames();
+        if (t.protocols.some(p => !provided.has(p))) return false;
+      }
+      if ((s instanceof Types.ObjcObjectPointerType && !s.className) ||
+          (t instanceof Types.ObjcObjectPointerType && !t.className)) return true;
+    }
     if (sBase.isConst && !tBase.isConst) return false;
     if (sBase.isVolatile && !tBase.isVolatile) return false;
+    const targetClass = objcClassTypes.get(t.baseType.removeQualifiers());
+    if (targetClass) {
+      for (let cls = objcClassTypes.get(s.baseType.removeQualifiers()); cls; cls = cls.parent)
+        if (cls === targetClass) return true;
+    }
     const su = sBase.removeQualifiers(), tu = tBase.removeQualifiers();
     if (su.isCompatibleWith(tu)) return true;
     if (isCharType(su) && isCharType(tu)) return true;
@@ -5914,6 +6061,8 @@ class TUnit {
     this.minStackBytes = 0;
     this.exportDirectives = [];
     this.exceptionTags = [];
+    this.objc = null;
+    this.startupFunctions = [];
     Object.seal(this);
   }
 }
@@ -6690,6 +6839,7 @@ function optimize(unit, options) {
   // the tree-shake would drop the decl from `declaredFunctions` and the
   // linker would have nothing left to set `.definition` on.
   for (const [, decl] of unit.exportDirectives) enqueueFunc(decl);
+  for (const fn of unit.startupFunctions) enqueueFunc(fn);
   for (const v of unit.definedVariables) {
     if (v.storageClass !== Types.StorageClass.STATIC) enqueueVar(v);
   }
@@ -9813,7 +9963,192 @@ function gcSectionsPass(units, options) {
 
 function linkTranslationUnits(units, compilerOptions) {
   const errors = [];
+  // runModule invokes the existing constructor export after binding memory and
+  // imports, before main. Root every TU's eager initialization before GC/inlining.
+  if (!units.some(u => u.filename === '<guc-objc-startup>')) {
+    const startups = units.flatMap(u => u.startupFunctions);
+    if (startups.length) {
+      const loc = Lexer.Loc.generated();
+      const body = new AST.SCompound(loc, startups.map(f => new AST.SExpr(loc,
+        AST.makeCall(loc, new AST.EIdent(loc, f.type, f), []))));
+      const fn = new AST.DFunc(loc, '__wasm_call_ctors', Types.functionType(Types.TVOID, [], false, false), [], Types.StorageClass.NONE, false, body);
+      const unit = AST.makeTUnit('<guc-objc-startup>');
+      unit.definedFunctions.push(fn); unit.exportDirectives.push(['__wasm_call_ctors', fn]);
+      units.push(unit);
+    }
+  }
   const externScope = new Map();
+
+  // C's nominal tag comparison alone cannot validate Objective-C object
+  // layout across independently parsed headers. Check complete ABI shapes,
+  // including nested aggregates, before sharing any class descriptor.
+  function objcABIEqual(a, b, seen = new Map()) {
+    a = a.removeQualifiers(); b = b.removeQualifiers();
+    if (a === b) return true;
+    if (a.constructor !== b.constructor || !a.isCompatibleWith(b)) return false;
+    if (seen.get(a) === b) return true;
+    seen.set(a, b);
+    if (a.isFunction()) return objcABIEqual(a.returnType, b.returnType, seen) &&
+      a.paramTypes.every((t, i) => objcABIEqual(t, b.paramTypes[i], seen));
+    if (a.isPointer() || a.isArray()) return objcABIEqual(a.baseType, b.baseType, seen);
+    if (a.isAggregate() && a.isComplete && b.isComplete) {
+      if (a.size !== b.size || a.align !== b.align) return false;
+      const am = a.tagDecl.members, bm = b.tagDecl.members;
+      return am.length === bm.length && am.every((m, i) => m.name === bm[i].name &&
+        m.byteOffset === bm[i].byteOffset && m.bitOffset === bm[i].bitOffset &&
+        m.bitWidth === bm[i].bitWidth && m.bfAccessBytes === bm[i].bfAccessBytes && objcABIEqual(m.type, bm[i].type, seen));
+    }
+    return true;
+  }
+  // A qualified id shares its protocol identity across units even when no
+  // named class appears in the caller. Validate that identity's full schema.
+  const objcProtocols = new Map();
+  for (const unit of units) for (const protocol of unit.objc?.protocols.values() || []) {
+    if (!protocol.complete) continue;
+    const old = objcProtocols.get(protocol.name);
+    if (old && (old.parents.join(',') !== protocol.parents.join(',') ||
+        old.declared.size !== protocol.declared.size || [...old.declared].some(([key,sig]) =>
+          !protocol.declared.has(key) || !objcABIEqual(sig.type,protocol.declared.get(key).type))))
+      errors.push({message:`inconsistent Objective-C protocol '${protocol.name}'`,locations:[]});
+    else objcProtocols.set(protocol.name,protocol);
+  }
+  const objcClasses = new Map(), objcSignatures = new Map();
+  const recordObjcSignature = (name,key,sig,tok,kind='declaration') => {
+    if (!objcSignatures.has(name)) objcSignatures.set(name,new Map());
+    const signatures = objcSignatures.get(name), entries = signatures.get(key) || [];
+    // Independent object guarantees need not imply one another: an actual
+    // implementation may satisfy their intersection. Only physical ABI
+    // incompatibility is intrinsically inconsistent before checking that IMP.
+    const valueABIEqual = (a,b) => a instanceof Types.ObjcObjectPointerType && b instanceof Types.ObjcObjectPointerType || objcABIEqual(a,b);
+    const old = entries.find(e => e.sig.type.isVarArg !== sig.type.isVarArg ||
+      e.sig.type.paramTypes.length !== sig.type.paramTypes.length ||
+      !valueABIEqual(e.sig.type.returnType,sig.type.returnType) ||
+      e.sig.type.paramTypes.slice(2).some((p,i)=>!valueABIEqual(p,sig.type.paramTypes[i+2])));
+    if (old)
+      errors.push({message:`inconsistent Objective-C signature '${name} ${key}'`,locations:[Lexer.Loc.fromTok(old.tok),Lexer.Loc.fromTok(tok)]});
+    entries.push({sig,tok,kind}); signatures.set(key,entries);
+  };
+
+  for (const unit of units) for (const cls of unit.objc?.classes.values() || []) {
+    const previous = objcClasses.get(cls.name);
+    if (previous) {
+      if (previous.interfaceComplete && cls.interfaceComplete && (previous.parent?.name !== cls.parent?.name || !objcABIEqual(previous.type, cls.type)))
+        errors.push({message: `inconsistent Objective-C layout for class '${cls.name}'`, locations: [Lexer.Loc.fromTok(previous.tok), Lexer.Loc.fromTok(cls.tok)]});
+      if (!previous.interfaceComplete || cls.complete) objcClasses.set(cls.name, cls);
+    } else objcClasses.set(cls.name, cls);
+  }
+  // Every complete or partial declaration contributes adoptions. Rebuild
+  // their transitive method obligations using linked protocol identities.
+  for (const unit of units) for (const cls of unit.objc?.classes.values() || []) {
+    const canonical = objcClasses.get(cls.name);
+    objcClasses.set(cls.name,{...canonical,protocols:[...new Set([...canonical.protocols,...cls.protocols])]});
+  }
+  const objcRequirements = cls => {
+    const result = [], seen = new Set(), classes = new Set();
+    const visit = name => {
+      if (seen.has(name)) return;
+      seen.add(name);
+      const p = objcProtocols.get(name);
+      if (!p) return;
+      for (const signature of p.declared.values()) result.push(signature);
+      for (const parent of p.parents) visit(parent);
+    };
+    for (let c=objcClasses.get(cls.name); c && !classes.has(c.name); c=c.parent && objcClasses.get(c.parent.name)) {
+      classes.add(c.name);
+      for (const p of c.protocols) visit(p);
+    }
+    return result;
+  };
+  for (const unit of units) for (const cls of unit.objc?.classes.values() || []) {
+    for (const [key,sig] of cls.declared) recordObjcSignature(cls.name,key,sig,cls.tok);
+    for (const sig of objcRequirements(cls)) recordObjcSignature(cls.name,sig.key,sig,cls.tok,'requirement');
+  }
+  for (const unit of units) for (const send of unit.objc?.sends || [])
+    if (send.staticClass) recordObjcSignature(send.staticClass.name,send.key,send.sig,send.tok,'caller');
+
+  for (const unit of units) for (const send of unit.objc?.sends || []) {
+    if (send.staticClass) continue;
+    const protocolCandidates = [], visited = new Set();
+    const visitProtocol = name => {
+      if (visited.has(name)) return;
+      visited.add(name);
+      const p = objcProtocols.get(name);
+      if (!p) return;
+      for (const key of ['-' + send.name,'+' + send.name])
+        if (p.declared.has(key)) protocolCandidates.push(p.declared.get(key));
+      for (const parent of p.parents) visitProtocol(parent);
+    };
+    for (const name of send.protocols) visitProtocol(name);
+    if (protocolCandidates.length) {
+      if (protocolCandidates.some(sig => !objcABIEqual(sig.type,send.sig.type)))
+        errors.push({message:`Objective-C ambiguous signature for dynamic receiver selector '${send.name}' across translation units`,locations:[Lexer.Loc.fromTok(send.tok)]});
+      continue;
+    }
+    for (const other of units) for (const [key,candidates] of other.objc?.methods || []) {
+      if (send.dynamicId ? key.slice(1) !== send.name : key !== send.key) continue;
+      if (candidates.some(sig => !objcABIEqual(sig.type,send.sig.type)))
+        errors.push({message:`Objective-C ambiguous signature for dynamic receiver selector '${send.name}' across translation units`,locations:[Lexer.Loc.fromTok(send.tok)]});
+    }
+  }
+  for (const unit of units) for (const declaration of unit.objc?.classes.values() || []) {
+    const cls = objcClasses.get(declaration.name);
+    if (!cls?.complete) continue;
+    for (const requirement of [...declaration.declared.values(), ...objcRequirements(declaration)]) {
+      let found=false;
+      const visited=new Set();
+      for(let c=cls;c && !visited.has(c.name);c=c.parent && objcClasses.get(c.parent.name)) {
+        visited.add(c.name);
+        if(c.implemented.has(requirement.key)) {found=true;break;}
+      }
+      if(!found) errors.push({message:`Objective-C ${declaration.declared.has(requirement.key) ? 'method' : 'required protocol method'} '${declaration.name} ${requirement.key}' has no implementation`,locations:[Lexer.Loc.fromTok(declaration.tok)]});
+    }
+  }
+  for (const [name,cls] of objcClasses) {
+    const visited = new Set([name]);
+    for (let base=cls.parent && objcClasses.get(cls.parent.name); base; base=base.parent && objcClasses.get(base.parent.name)) {
+      if (visited.has(base.name)) { errors.push({message:`cyclic Objective-C superclass hierarchy at '${name}'`,locations:[]}); break; }
+      visited.add(base.name);
+      for (const [key,entries] of objcSignatures.get(name) || []) for (const entry of entries) {
+        if (entry.kind !== 'declaration') continue;
+        for (const inherited of objcSignatures.get(base.name)?.get(key) || [])
+          if (!objcMethodSatisfies(entry.sig.type,inherited.sig.type,objcABIEqual,objcClasses,objcProtocols))
+            errors.push({message:`inconsistent Objective-C override '${name} ${key}' of '${base.name}'`,locations:[Lexer.Loc.fromTok(entry.tok),Lexer.Loc.fromTok(inherited.tok)]});
+      }
+    }
+  }
+  for (const [name,contracts] of objcSignatures) {
+    const cls = objcClasses.get(name);
+    if (!cls?.complete) continue;
+    for (const [key,entries] of contracts) {
+      let implementation;
+      const visited = new Set();
+      for (let c=cls; c && !visited.has(c.name) && !implementation; c=c.parent && objcClasses.get(c.parent.name)) {
+        visited.add(c.name); implementation=c.implemented.get(key);
+      }
+      if (implementation) for (const entry of entries)
+        if (!objcMethodSatisfies(implementation.type,entry.sig.type,objcABIEqual,objcClasses,objcProtocols))
+          errors.push({message:`inconsistent Objective-C signature '${name} ${key}' implementation does not satisfy declaration`,locations:[implementation.loc,Lexer.Loc.fromTok(entry.tok)]});
+    }
+  }
+  if (units.some(u => u.objc?.literals.length)) {
+    const provider = objcClasses.get('NSConstantString');
+    if (provider?.complete) {
+      const fields = [];
+      const flatten = (type, base = 0) => {
+        for (const m of type.tagDecl.members) {
+          if (m.name === '__guc_base') flatten(m.type, base + m.byteOffset);
+          else fields.push({type:m.type, offset:base+m.byteOffset});
+        }
+      };
+      flatten(provider.type);
+      let base = provider.parent;
+      while (base && base.name !== 'NSString') base = base.parent;
+      if (!base || provider.type.size !== 24 || provider.type.align !== 4 || fields.length !== 6 ||
+          fields.some((f,i) => f.offset !== i*4 || (i === 0 || i === 5
+            ? !f.type.isPointer() : f.type.removeQualifiers() !== Types.TUINT)))
+        errors.push({message:'NSConstantString provider does not match the NSString constant-string ABI (24 bytes: isa, flags, UTF-16 length, byte size, hash, data)',locations:[Lexer.Loc.fromTok(provider.tok)]});
+    }
+  }
 
   function addError(message, locations) { errors.push({ message, locations: locations || [] }); }
 
@@ -10497,6 +10832,586 @@ class Parser {
     this.warningFlags = { pointerDecay: false, circularDependency: false };
   }
 
+  // #772: Objective-C syntax is parsed here; only compiler-owned runtime
+  // boilerplate is fed back through the C declaration parser. Method bodies,
+  // message arguments and ivars always use the ordinary typed AST builders.
+  objcGenerated(source) {
+    const saved = [this.tokens, this.pos];
+    const result = Lexer.tokenize('<guc-objc-runtime>', source);
+    if (result.errors.length) this.error(this.peek(), result.errors[0].message);
+    this.tokens = result.tokens; this.pos = 0;
+    try { while (!this.atEnd()) this.parseExternalDeclaration(this.objc.unit); }
+    finally { [this.tokens, this.pos] = saved; }
+  }
+
+  objcInit(unit) {
+    this.objc = { unit, classes: new Map(), protocols: new Map(), selectors: new Map(), methods: new Map(), sends: [], helpers: [], literals: [], current: null };
+    this.typeScope.set('id', new Types.ObjcObjectPointerType(Types.createTagType(Types.TagKind.STRUCT, '__guc_objc_object'),null,[],'manual',this.objc.protocols));
+    this.objcGenerated(`
+      typedef struct __guc_objc_selector *SEL;
+      struct __guc_objc_selector { unsigned int reserved; };
+      typedef struct __guc_objc_class *Class;
+      typedef void (*__guc_objc_imp)(void);
+      struct __guc_objc_method { SEL selector; __guc_objc_imp imp; };
+      struct __guc_objc_class {
+        Class isa; Class parent; unsigned int size;
+        struct __guc_objc_method *methods; unsigned int count;
+        Class owner; unsigned int initState; unsigned int loadState;
+        Class pendingChildren; Class pendingNext;
+        struct __guc_objc_method cache[16];
+      };
+      struct __guc_objc_constant_string {
+        Class isa; unsigned int flags, length, byteSize, hash; const void *data;
+      };
+      void *calloc(unsigned long, unsigned long);
+      void free(void *);
+      void abort(void);
+      static id guc_objc_alloc(Class cls) {
+        if (!cls) return 0;
+        id object = calloc(1, cls->size);
+        if (object) *(Class *)object = cls;
+        return object;
+      }
+      static void guc_objc_dispose(id object) { free(object); }
+      static __guc_objc_imp __guc_objc_find(Class cls, SEL selector) {
+        while (cls) {
+          for (unsigned int i = 0; i < cls->count; ++i)
+            if (cls->methods[i].selector == selector) return cls->methods[i].imp;
+          cls = cls->parent;
+        }
+        return 0;
+      }
+      static void __guc_objc_complete(Class cls) {
+        cls->initState = 3;
+        Class child = cls->pendingChildren;
+        cls->pendingChildren = 0;
+        while (child) {
+          Class next = child->pendingNext;
+          child->pendingNext = 0;
+          __guc_objc_complete(child);
+          child = next;
+        }
+      }
+      static void __guc_objc_initialize(Class cls, SEL selector) {
+        if (!cls || cls->initState) return;
+        __guc_objc_initialize(cls->parent, selector);
+        if (cls->initState) return;
+        cls->initState = 1;
+        __guc_objc_imp imp = __guc_objc_find(cls->isa, selector);
+        if (imp) ((void (*)(Class, SEL))imp)(cls, selector);
+        cls->initState = 2;
+        if (!cls->parent || cls->parent->initState == 3) __guc_objc_complete(cls);
+        else {
+          cls->pendingNext = cls->parent->pendingChildren;
+          cls->parent->pendingChildren = cls;
+        }
+      }
+      static void __guc_objc_load(Class cls, SEL selector) {
+        if (!cls || cls->loadState) return;
+        __guc_objc_load(cls->parent, selector);
+        cls->loadState = 1;
+        Class meta = cls->isa;
+        for (unsigned int i=0; i<meta->count; ++i)
+          if (meta->methods[i].selector == selector) {
+            ((void (*)(Class,SEL))meta->methods[i].imp)(cls,selector); break;
+          }
+      }
+      static __guc_objc_imp __guc_objc_lookup(id object, SEL selector, Class start, SEL initialize) {
+        Class actual = *(Class *)object;
+        __guc_objc_initialize(actual->owner, initialize);
+        Class cls = start ? start : actual;
+        unsigned int slot = ((unsigned int)selector >> 2) & 15;
+        if (cls->cache[slot].selector == selector) return cls->cache[slot].imp;
+        __guc_objc_imp imp = __guc_objc_find(cls, selector);
+        if (!imp) { abort(); return 0; }
+        cls->cache[slot].selector = selector; cls->cache[slot].imp = imp;
+        return imp;
+      }
+    `);
+    this.requiredSources.add('__stdlib.c');
+    unit.objc = this.objc;
+    this.objc.id = this.typeScope.get('id');
+    this.objc.sel = this.typeScope.get('SEL');
+    this.objc.cls = this.typeScope.get('Class');
+    this.objc.constantType = this.tagScope.get('__guc_objc_constant_string');
+  }
+
+  objcSelector(name) {
+    if (!this.objc.selectors.has(name)) {
+      // One external tentative object per spelling. The existing C linker
+      // coalesces these across TUs: SEL is the canonical object's address.
+      const symbol = '__guc_objc_selector_' + Array.from(name, c => c.codePointAt(0).toString(16)).join('_');
+      const variable = new AST.DVar(null, symbol, this.objc.sel.baseType, Types.StorageClass.NONE);
+      this.varScope.stack[0].set(symbol, variable);
+      this.objc.unit.definedVariables.push(variable);
+      this.objc.selectors.set(name, {symbol, variable, id: this.objc.selectors.size + 1});
+    }
+    return this.objc.selectors.get(name);
+  }
+
+  objcType() {
+    this.expect('(', 'Objective-C experiment requires an explicit method type');
+    const specs = this.parseDeclSpecifiers();
+    const decl = this.parseDeclarator(specs.type);
+    this.expect(')');
+    const type = decl.type;
+    if (!(type.isVoid() || type.isArithmetic() || type.isPointer() ||
+          ((type.isStruct() || type.isUnion()) && type.isComplete)))
+      this.error(this.peek(-1), 'Objective-C method requires a complete value type');
+    return type;
+  }
+
+  objcSelectorWord() {
+    if (this.atKind(Lexer.TokenKind.IDENT) || this.atKind(Lexer.TokenKind.KEYWORD)) return this.advance().text;
+    this.error(this.peek(), 'Expected Objective-C selector name');
+  }
+
+  objcMethodSignature() {
+    const tok = this.advance(), classMethod = tok.text === '+';
+    const returnType = this.objcType();
+    let name = this.objcSelectorWord();
+    const params = [], names = [];
+    if (this.matchText(':')) {
+      name += ':';
+      while (true) {
+        const type = this.objcType();
+        if (type.isVoid()) this.error(this.peek(), 'Objective-C parameter cannot have void type');
+        params.push(type); names.push(this.expectKind(Lexer.TokenKind.IDENT).text);
+        if ((this.atKind(Lexer.TokenKind.IDENT) || this.atKind(Lexer.TokenKind.KEYWORD)) && this.peek(1).text === ':') {
+          name += this.advance().text + ':'; this.advance();
+        } else if (this.matchText(':')) name += ':';
+        else break;
+      }
+    }
+    const variadic = this.matchText(',');
+    if (variadic) this.expect('...');
+    if (names.some(n => n === 'self' || n === '_cmd') || new Set(names).size !== names.length)
+      this.error(tok, 'Objective-C method has duplicate or reserved parameter names');
+    const type = Types.functionType(returnType, [this.objc.id, this.objc.sel, ...params], variadic, false);
+    const key = (classMethod ? '+' : '-') + name;
+    if (classMethod && (name === 'load' || name === 'initialize') && (!returnType.isVoid() || params.length || variadic))
+      this.error(tok, `Objective-C +${name} requires the signature (void)${name}`);
+    const signatures = this.objc.methods.get(key) || [];
+    const existing = signatures.find(sig => sig.type.isCompatibleWith(type));
+    const selectorInfo = this.objcSelector(name), selector = selectorInfo.id;
+    const sig = existing || { name, key, type, selector, selectorSymbol: selectorInfo.symbol, classMethod, helper: `__guc_objc_send_${classMethod ? 'c' : 'i'}${selector}_${signatures.length}` };
+    if (!existing) {
+      signatures.push(sig);
+      this.objc.methods.set(key, signatures);
+      const ftype = Types.functionType(returnType, [this.objc.id, this.objc.cls, ...params], variadic, false);
+      sig.decl = new AST.DFunc(Lexer.Loc.fromTok(tok), sig.helper, ftype, [], Types.StorageClass.STATIC, false, null);
+      this.varScope.set(sig.helper, sig.decl);
+      if (!variadic) this.objc.unit.declaredFunctions.push(sig.decl);
+      if (!variadic) this.objc.helpers.push(sig);
+    }
+    return { sig, names, tok };
+  }
+
+  objcClassReference(variable) {
+    if (variable.storageClass === Types.StorageClass.EXTERN && !this.objc.unit.externVariables.includes(variable))
+      this.objc.unit.externVariables.push(variable);
+  }
+
+  objcClassAddress(cls, meta, loc) {
+    this.objcClassReference(meta ? cls.meta : cls.variable);
+    return AST.makeUnary(loc, 'OP_ADDR', new AST.EIdent(loc, (meta ? cls.meta : cls.variable).type, meta ? cls.meta : cls.variable));
+  }
+
+  objcForwardClass(name, tok) {
+    if (this.objc.classes.has(name)) return this.objc.classes.get(name);
+    if (this.typeScope.has(name) || this.varScope.has(name)) this.error(tok, `duplicate Objective-C class '${name}'`);
+    const type = new Types.ObjcClassType('__guc_objc_object_' + name);
+    const cls = {name, type, parent: null, protocols: [], protocolRegistry:this.objc.protocols, declared: new Map(), implemented: new Map(),
+      complete: false, interfaceComplete: false, tok, ivars: new Map()};
+    this.objc.classes.set(name, cls); this.typeScope.stack[0].set(name, type); objcClassTypes.set(type, cls);
+    for (const [field, prefix] of [['variable','class'], ['meta','meta']]) {
+      const variable = new AST.DVar(Lexer.Loc.fromTok(tok), `__guc_objc_${prefix}_${name}`, this.objc.cls.baseType, Types.StorageClass.EXTERN);
+      this.varScope.stack[0].set(variable.name, variable); cls[field] = variable;
+    }
+    return cls;
+  }
+
+  parseObjcString() {
+    const tok = this.peek(), loc = Lexer.Loc.fromTok(tok), bytes = [];
+    do {
+      this.expect('@');
+      if (!this.atKind(Lexer.TokenKind.STRING)) this.error(this.peek(), 'expected Objective-C string literal');
+      const literal = this.parseStringLiteral();
+      if (literal.type.baseType.size !== 1) this.error(tok, 'Objective-C string literal must contain UTF-8 source');
+      for (let i=0; i<literal.value.length-1; ++i) bytes.push(literal.value[i]);
+    } while (this.atText('@') && this.peek(1).kind === Lexer.TokenKind.STRING);
+    let value;
+    try { value = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true}).decode(new Uint8Array(bytes)); }
+    catch (_) { this.error(tok, 'Objective-C string literal contains invalid UTF-8'); }
+    const ascii = bytes.every(b => b < 128), payload = ascii ? [...bytes,0] : [];
+    if (!ascii) {
+      for (let i=0; i<value.length; ++i) payload.push(value.charCodeAt(i)&255, value.charCodeAt(i)>>8);
+      payload.push(0,0);
+    }
+    const stringClass = this.objcForwardClass('NSString', tok);
+    const provider = this.objcForwardClass('NSConstantString', tok);
+    this.linkHints.push({prefix:'__guc_objc_class_NSConstantString', message:'Objective-C string literals require an NSString-compatible NSConstantString library provider (24-byte constant-string ABI)'});
+    const name = '__guc_objc_literal_' + this.objc.literals.length;
+    const dataType = Types.arrayOf((ascii ? Types.TCHAR : Types.TUSHORT).addConst(), ascii ? payload.length : payload.length/2);
+    const data = new AST.DVar(loc, name + '_data', dataType, Types.StorageClass.STATIC, new AST.EString(loc, dataType, payload));
+    data.allocClass = Types.AllocClass.MEMORY;
+    const type = this.objc.constantType;
+    const fields = [this.objcClassAddress(provider,false,loc),
+      ...[ascii ? 0 : 2, value.length, ascii ? bytes.length : value.length*2, 0].map(n => new AST.EInt(loc,Types.TUINT,BigInt(n))),
+      AST.maybeDecay(new AST.EIdent(loc,dataType,data))];
+    const object = new AST.DVar(loc,name,type,Types.StorageClass.STATIC,new AST.EInitList(loc,type,fields));
+    this.objc.unit.definedVariables.push(data,object); this.objc.literals.push(object);
+    return AST.makeCast(loc,stringClass.type.pointer(),AST.makeUnary(loc,'OP_ADDR',new AST.EIdent(loc,type,object)));
+  }
+
+  objcProtocolList() {
+    const names = [];
+    if (!this.matchText('<')) return names;
+    do {
+      const tok = this.expectKind(Lexer.TokenKind.IDENT), protocol = this.objc.protocols.get(tok.text);
+      if (!protocol) this.error(tok, `unknown Objective-C protocol '${tok.text}'`);
+      names.push(tok.text);
+    } while (this.matchText(','));
+    this.expect('>');
+    return [...new Set(names)].sort();
+  }
+
+  objcProtocolSignatures(protocols, keys) {
+    const result = [], visited = new Set();
+    const visit = name => {
+      if (visited.has(name)) return;
+      visited.add(name);
+      const p = this.objc.protocols.get(name);
+      if (!p) return;
+      for (const key of keys) if (p.declared.has(key)) result.push(p.declared.get(key));
+      for (const parent of p.parents) visit(parent);
+    };
+    for (const name of protocols) visit(name);
+    return result;
+  }
+
+  objcStaticSignature(cls, protocols, key, tok) {
+    const adopted = [...protocols];
+    for (let c=cls; c; c=c.parent) {
+      if (c.declared.has(key)) return c.declared.get(key);
+      pushAll(adopted, c.protocols);
+    }
+    const candidates = this.objcProtocolSignatures(adopted,[key]), sig = candidates[0];
+    if (sig && candidates.some(other => !sig.type.isCompatibleWith(other.type)))
+      this.error(tok, `Objective-C ambiguous protocol signature '${key}'`);
+    if (!sig) this.error(tok, `Objective-C class '${cls.name}' does not declare '${key}'`);
+    return sig;
+  }
+
+  objcQualifiedType(type, protocols, ownership = null) {
+    const uq = type.removeQualifiers();
+    if (uq instanceof Types.ObjcObjectPointerType) {
+      let result = new Types.ObjcObjectPointerType(uq.baseType, uq.className, protocols || uq.protocols, ownership || uq.ownership, this.objc.protocols);
+      if (type.isConst) result = result.addConst();
+      if (type.isVolatile) result = result.addVolatile();
+      return result;
+    }
+    if (objcClassTypes.has(uq)) {
+      const clone = uq._cloneForQualifier();
+      objcClassTypes.set(clone, objcClassTypes.get(uq)); objcClassQualifiers.set(clone, protocols || objcClassQualifiers.get(uq) || []);
+      objcClassOwnership.set(clone,ownership || objcClassOwnership.get(uq) || 'manual');
+      return clone;
+    }
+    this.error(this.peek(), 'Objective-C qualifier requires an object pointer');
+  }
+
+  parseObjcDeclaration(unit) {
+    const tok = this.advance();
+    if (tok.text === '@class') {
+      do { const t = this.expectKind(Lexer.TokenKind.IDENT); this.objcForwardClass(t.text, t); } while (this.matchText(','));
+      this.expect(';'); return;
+    }
+    if (tok.text === '@protocol') {
+      const t = this.expectKind(Lexer.TokenKind.IDENT);
+      if (this.atText(';') || this.atText(',')) {
+        if (!this.objc.protocols.has(t.text)) this.objc.protocols.set(t.text, {name:t.text, parents:[], declared:new Map(), complete:false});
+        while (this.matchText(',')) {
+          const n = this.expectKind(Lexer.TokenKind.IDENT).text;
+          if (!this.objc.protocols.has(n)) this.objc.protocols.set(n,{name:n,parents:[],declared:new Map(),complete:false});
+        }
+        this.expect(';'); return;
+      }
+      if (this.objc.protocols.get(t.text)?.complete) this.error(t, 'duplicate Objective-C protocol');
+      const p = {name:t.text, parents:this.objcProtocolList(), declared:new Map(), complete:true};
+      this.objc.protocols.set(t.text,p);
+      while (this.atText('-') || this.atText('+')) {
+        const {sig} = this.objcMethodSignature(); p.declared.set(sig.key,sig); this.expect(';');
+      }
+      this.expect('@end'); return;
+    }
+    if (tok.text !== '@interface' && tok.text !== '@implementation')
+      this.error(tok, `Objective-C experiment: unsupported directive '${tok.text}'`);
+    const name = this.expectKind(Lexer.TokenKind.IDENT).text;
+    if (this.atText('(')) this.error(this.peek(), 'Objective-C experiment: categories are unsupported');
+    let cls = this.objc.classes.get(name);
+    if (tok.text === '@interface') {
+      if (tok.packValue) this.error(tok, 'Objective-C experiment: packed class layout is unsupported');
+      if (cls?.interfaceComplete) this.error(tok, `duplicate Objective-C class '${name}'`);
+      cls = this.objcForwardClass(name, tok);
+      let parent = null;
+      if (this.matchText(':')) {
+        const p = this.expectKind(Lexer.TokenKind.IDENT);
+        parent = this.objc.classes.get(p.text);
+        if (!parent?.interfaceComplete) this.error(p, 'Objective-C superclass must have a preceding interface');
+      }
+      const loc = Lexer.Loc.fromTok(tok), type = cls.type;
+      cls.parent = parent; cls.protocols = this.objcProtocolList();
+      cls.ivars = new Map(parent ? parent.ivars : []); cls.interfaceComplete = true;
+      // Embed the entire base object (including tail padding), so inherited
+      // offsets cannot change when a subclass adds a more-aligned ivar.
+      const members = [new AST.DVar(loc, parent ? '__guc_base' : '__guc_isa', parent ? parent.type : this.objc.cls)];
+      if (this.matchText('{')) {
+        let visibility = 'protected';
+        while (!this.atText('}') && !this.atEnd()) {
+          if (this.atText('@public') || this.atText('@protected') || this.atText('@private')) {
+            visibility = this.advance().text.slice(1); continue;
+          }
+          const specs = this.parseDeclSpecifiers();
+          if (specs.storageClass !== Types.StorageClass.NONE || specs.requestedAlignment)
+            this.error(this.peek(), 'Objective-C experiment: ivar storage/alignment specifier is unsupported');
+          do {
+            const d = this.parseDeclarator(specs.type);
+            if (!d.name || d.name.startsWith('__guc_') || cls.ivars.has(d.name)) this.error(this.peek(), 'duplicate or reserved Objective-C ivar');
+            if (!d.type.isComplete || d.type.isVoid() || d.type.isFunction() || this.atText(':'))
+              this.error(this.peek(), 'Objective-C experiment: incomplete/function/bitfield ivars are unsupported');
+            const member = new AST.DVar(Lexer.Loc.fromTok(this.peek(-1)), d.name, d.type);
+            members.push(member); cls.ivars.set(d.name, { owner: cls, visibility, member });
+          } while (this.matchText(','));
+          this.expect(';');
+        }
+        this.expect('}');
+      }
+      const layout = Types.computeStructLayout(members, 0);
+      type.size = layout.size; type.align = layout.align; type.isComplete = true;
+      type.tagDecl = new AST.DTag(loc, Types.TagKind.STRUCT, type.tagName, true, members);
+      while (this.atText('-') || this.atText('+')) {
+        const { sig } = this.objcMethodSignature();
+        if (cls.declared.has(sig.key)) this.error(this.peek(), 'duplicate Objective-C method declaration');
+        for (let base = cls.parent; base; base = base.parent) {
+          const inherited = base.declared.get(sig.key);
+          if (inherited && !objcMethodSatisfies(sig.type,inherited.type))
+            this.error(this.peek(), `incompatible Objective-C override '${sig.key}'`);
+        }
+        cls.declared.set(sig.key, sig); this.expect(';');
+      }
+    } else {
+      if (!cls?.interfaceComplete) this.error(tok, 'Objective-C implementation requires a preceding interface');
+      if (cls.complete) this.error(tok, 'duplicate Objective-C implementation');
+      cls.complete = true;
+      while (this.atText('-') || this.atText('+')) {
+        const { sig, names, tok: methodTok } = this.objcMethodSignature();
+        if (!cls.declared.has(sig.key)) {
+          for (let base=cls.parent; base; base=base.parent) {
+            const inherited=base.declared.get(sig.key);
+            if (inherited && !objcMethodSatisfies(sig.type,inherited.type))
+              this.error(methodTok, `incompatible Objective-C override '${sig.key}'`);
+          }
+          cls.declared.set(sig.key,sig);
+        }
+        if (!objcMethodSatisfies(sig.type,cls.declared.get(sig.key).type))
+          this.error(methodTok, `Objective-C implementation signature differs from declaration '${sig.key}'`);
+        if (cls.implemented.has(sig.key)) this.error(methodTok, 'duplicate Objective-C method implementation');
+        const loc = Lexer.Loc.fromTok(methodTok);
+        const fname = `__guc_objc_method_${name}_${sig.classMethod ? 'c' : 'i'}${sig.selector}`;
+        const methodType = Types.functionType(sig.type.returnType, [sig.classMethod ? this.objc.cls : cls.type.pointer(), ...sig.type.paramTypes.slice(1)], sig.type.isVarArg, false);
+        const params = ['self', '_cmd', ...names].map((n, i) => {
+          const p = new AST.DVar(loc, n, methodType.paramTypes[i], Types.StorageClass.AUTO);
+          if (p.type.isAggregate()) p.allocClass = Types.AllocClass.MEMORY;
+          p.definition = p; return p;
+        });
+        const fn = new AST.DFunc(loc, fname, methodType, params, Types.StorageClass.STATIC, false, null);
+        fn.definition = fn;
+        cls.implemented.set(sig.key, fn); this.varScope.set(fname, fn);
+        this.typeScope.push(); this.tagScope.push(); this.varScope.push();
+        for (const p of params) this.varScope.set(p.name, p);
+        const saved = this.currentParsingFunc;
+        this.currentParsingFunc = fn; this.objc.current = { cls, sig };
+        this.parsedLabels.clear(); this.pendingGotos.clear();
+        fn.body = this.parseCompoundStatement();
+        for (const [label] of this.pendingGotos) this.recoverableError(this.peek(), `Undefined label '${label}'`);
+        this.parsedLabels.clear(); this.pendingGotos.clear();
+        this.currentParsingFunc = saved; this.objc.current = null;
+        this.typeScope.pop(); this.tagScope.pop(); this.varScope.pop();
+        unit.staticFunctions.push(fn);
+        for (const v of fn.externLocals) unit.localExternVariables.push(v);
+        for (const f of fn.externLocalFuncs) unit.localDeclaredFunctions.push(f);
+      }
+    }
+    this.expect('@end', 'Objective-C experiment: expected @end (unsupported class form)');
+  }
+
+  objcIvar(base, cls, name, loc) {
+    const ivar = cls.ivars.get(name);
+    if (!ivar) this.error(this.peek(), `unknown Objective-C ivar '${name}'`);
+    const context = this.objc.current;
+    let permitted = ivar.visibility === 'public';
+    if (context && !context.sig.classMethod) {
+      for (let c = context.cls; c; c = c.parent) if (c === ivar.owner) permitted = true;
+      if (ivar.visibility === 'private') permitted = context.cls === ivar.owner;
+    }
+    if (!permitted) this.error(this.peek(), `Objective-C ivar '${name}' is ${ivar.visibility}`);
+    while (cls !== ivar.owner) {
+      base = AST.makeUnary(loc, 'OP_ADDR', AST.makeArrow(loc, base, '__guc_base'));
+      cls = cls.parent;
+    }
+    return AST.makeArrow(loc, base, name);
+  }
+
+  parseObjcMessage() {
+    const tok = this.advance(), loc = Lexer.Loc.fromTok(tok);
+    let receiver, start = new AST.EInt(loc, Types.TINT, 0n), cls = null, classMethod = false;
+    if (this.atText('super')) {
+      this.advance();
+      const context = this.objc.current;
+      if (!context || !context.cls.parent) this.error(tok, 'Objective-C super requires a method with a superclass');
+      cls = context.cls.parent; classMethod = context.sig.classMethod;
+      receiver = AST.makeIdent(loc, 'self', this.varScope);
+      start = this.objcClassAddress(cls, classMethod, loc);
+    } else {
+      if (this.objc.classes.has(this.peek().text) && !this.varScope.has(this.peek().text)) {
+        cls = this.objc.classes.get(this.peek().text); classMethod = true;
+      }
+      receiver = this.parseAssignmentExpression();
+      if (!cls && receiver.type.isPointer()) cls = objcClassTypes.get(receiver.type.baseType.removeQualifiers()) || null;
+      if (receiver.type.removeQualifiers() === this.objc.cls) classMethod = true;
+      if (this.objc.current && receiver instanceof AST.EIdent && receiver.decl === this.varScope.get('self')) {
+        cls = this.objc.current.cls; classMethod = this.objc.current.sig.classMethod;
+      }
+    }
+    const receiverType = receiver.type.removeQualifiers();
+    if (!receiverType.isPointer() || !(receiverType instanceof Types.ObjcObjectPointerType || receiverType === this.objc.cls || objcClassTypes.has(receiverType.baseType.removeQualifiers())))
+      this.error(tok, 'Objective-C message receiver must be an object pointer');
+    let name = this.objcSelectorWord();
+    const args = [];
+    if (this.matchText(':')) {
+      name += ':';
+      while (true) {
+        args.push(this.parseAssignmentExpression());
+        if ((this.atKind(Lexer.TokenKind.IDENT) || this.atKind(Lexer.TokenKind.KEYWORD)) && this.peek(1).text === ':') {
+          name += this.advance().text + ':'; this.advance();
+        } else if (this.matchText(':')) name += ':';
+        else break;
+      }
+    }
+    while (this.matchText(',')) args.push(this.parseAssignmentExpression());
+    this.expect(']');
+    const key = (classMethod ? '+' : '-') + name;
+    let sig;
+    if (cls) {
+      sig = this.objcStaticSignature(cls,receiverType.protocols || [],key,tok);
+      this.objc.sends.push({tok,name,key,staticClass:cls,protocols:receiverType.protocols || [],sig});
+    } else {
+      const protocolCandidates = this.objcProtocolSignatures(receiverType.protocols || [],['-' + name,'+' + name]);
+      const candidates = protocolCandidates.length ? protocolCandidates : receiverType instanceof Types.ObjcObjectPointerType
+        ? [...(this.objc.methods.get('-' + name) || []), ...(this.objc.methods.get('+' + name) || [])]
+        : (this.objc.methods.get(key) || []);
+      sig = candidates[0];
+      if (sig && candidates.some(other => !sig.type.isCompatibleWith(other.type)))
+        this.error(tok, `Objective-C ambiguous signature for dynamic receiver selector '${name}'`);
+      if (!sig) this.error(tok, `Objective-C method '${key}' has no declared signature`);
+      this.objc.sends.push({tok, name, key, dynamicId: receiverType instanceof Types.ObjcObjectPointerType, protocols: receiverType.protocols || [], sig});
+    }
+    const call = AST.makeCall(loc, new AST.EIdent(loc, sig.decl.type, sig.decl), [receiver, start, ...args]);
+    if (sig.type.isVarArg) {
+      // Specialize the forwarding helper to this promoted argument list. The
+      // inner IMP call remains variadic and uses the ordinary C arg-block ABI;
+      // no va_list forwarding or source-expression re-evaluation is involved.
+      const helper = {...sig, helper: sig.helper + '_call' + this.objc.helpers.length,
+        argumentTypes: call.arguments.slice(2).map(a => a.type)};
+      const type = Types.functionType(sig.type.returnType,
+        [this.objc.id, this.objc.cls, ...helper.argumentTypes], false, false);
+      helper.decl = new AST.DFunc(loc, helper.helper, type, [], Types.StorageClass.STATIC, false, null);
+      this.varScope.stack[0].set(helper.helper, helper.decl);
+      this.objc.unit.declaredFunctions.push(helper.decl);
+      this.objc.helpers.push(helper);
+      return AST.makeCall(loc, new AST.EIdent(loc, type, helper.decl), call.arguments);
+    }
+    return call;
+  }
+
+  objcFinish() {
+    const load = this.objcSelector('load'), initialize = this.objcSelector('initialize');
+    for (const send of this.objc.sends) {
+      if (send.staticClass) {
+        const final = this.objcStaticSignature(send.staticClass,send.protocols,send.key,send.tok);
+        if (!objcMethodSatisfies(final.type,send.sig.type))
+          this.error(send.tok, `incompatible Objective-C signature '${send.key}' declared after this send`);
+        continue;
+      }
+      const protocolCandidates = this.objcProtocolSignatures(send.protocols,['-' + send.name,'+' + send.name]);
+      const candidates = protocolCandidates.length ? protocolCandidates : send.dynamicId
+        ? [...(this.objc.methods.get('-' + send.name) || []), ...(this.objc.methods.get('+' + send.name) || [])]
+        : (this.objc.methods.get(send.key) || []);
+      if (candidates.some(other => !send.sig.type.isCompatibleWith(other.type)))
+        this.error(send.tok, `Objective-C ambiguous signature for dynamic receiver selector '${send.name}'`);
+    }
+    for (const cls of this.objc.classes.values()) {
+      const adopted=[];
+      for(let c=cls;c;c=c.parent) pushAll(adopted, c.protocols);
+      const keys=[...this.objc.methods.keys()];
+      cls.requirements = this.objcProtocolSignatures(adopted,keys);
+      if (!cls.complete) continue;
+      for(const requirement of cls.requirements) {
+        let actual;
+        for(let c=cls;c && !actual;c=c.parent) actual=c.declared.get(requirement.key);
+        if (!actual || !objcMethodSatisfies(actual.type,requirement.type))
+          this.error(cls.tok, `incompatible Objective-C protocol method signature '${requirement.key}' in '${cls.name}'`);
+      }
+      for (const key of cls.declared.keys()) if (!cls.implemented.has(key))
+        this.error(cls.tok, `Objective-C method '${key}' has no implementation`);
+      for (const meta of [false, true]) {
+        const entries = [...cls.implemented].filter(([key]) => key.startsWith(meta ? '+' : '-'));
+        const table = `__guc_objc_table_${cls.name}_${meta ? 'c' : 'i'}`;
+        if (entries.length) this.objcGenerated(`static struct __guc_objc_method ${table}[] = { ${entries.map(([key, fn]) => `{ &${cls.declared.get(key).selectorSymbol}, (__guc_objc_imp)${fn.name} }`).join(',')} };`);
+        const variable = meta ? cls.meta : cls.variable;
+        let root = cls; while (root.parent) root = root.parent;
+        this.objcClassReference(meta ? root.meta : cls.meta);
+        if (cls.parent) this.objcClassReference(meta ? cls.parent.meta : cls.parent.variable);
+        const isa = meta ? root.meta.name : cls.meta.name;
+        const parent = cls.parent ? '&' + (meta ? cls.parent.meta.name : cls.parent.variable.name) : '0';
+        // Parse an initializer with the normal static-initializer machinery;
+        // retain the original declaration identity used by message ASTs.
+        const temp = '__guc_objc_init_' + variable.name;
+        this.objcGenerated(`static struct __guc_objc_class ${temp} = { &${isa}, ${parent}, ${meta ? 0 : cls.type.size}, ${entries.length ? table : '0'}, ${entries.length}, &${cls.variable.name} };`);
+        variable.initExpr = this.varScope.get(temp).initExpr;
+        variable.storageClass = Types.StorageClass.NONE;
+        this.objc.unit.externVariables = this.objc.unit.externVariables.filter(v => v !== variable);
+        this.objc.unit.definedVariables.push(variable);
+        this.objc.unit.definedVariables = this.objc.unit.definedVariables.filter(v => v.name !== temp);
+      }
+    }
+    const implemented = [...this.objc.classes.values()].filter(cls => cls.complete);
+    if (implemented.length) {
+      this.objcGenerated(`static void __guc_objc_startup(void) {
+        ${implemented.map(cls => `__guc_objc_load(&${cls.variable.name}, &${load.symbol});`).join('\n')}
+      }`);
+      this.objc.unit.startupFunctions.push(this.varScope.get('__guc_objc_startup'));
+    }
+    for (const sig of this.objc.helpers) {
+      const stem = sig.helper;
+      this.typeScope.set(stem + '_ret', sig.type.returnType);
+      const types = sig.argumentTypes || sig.type.paramTypes.slice(2);
+      types.forEach((t, i) => this.typeScope.set(stem + '_p' + i, t));
+      const args = types.map((t, i) => `${stem}_p${i} a${i}`);
+      const tail = types.map((t, i) => `a${i}`);
+      const voidReturn = sig.type.returnType.isVoid();
+      const nilReturn = sig.type.returnType.isAggregate()
+        ? `{ ${stem}_ret zero; unsigned char *p = (unsigned char *)&zero;
+             for (unsigned int i = 0; i < sizeof zero; ++i) p[i] = 0; return zero; }`
+        : (voidReturn ? 'return;' : 'return 0;');
+      this.objcGenerated(`static ${stem}_ret ${stem}(id object, Class start${args.length ? ',' + args.join(',') : ''}) {
+        if (!object) ${nilReturn}
+        ${voidReturn ? '' : 'return '} ((${stem}_ret (*)(id, SEL${sig.type.paramTypes.slice(2).map((t, i) => ',' + stem + '_p' + i).join('')}${sig.type.isVarArg ? ',...' : ''}))
+          __guc_objc_lookup(object, &${sig.selectorSymbol}, start, &${initialize.symbol}))(object, &${sig.selectorSymbol}${tail.length ? ',' + tail.join(',') : ''});
+      }`);
+    }
+  }
+
   // --- Lexer.Token helpers ---
   atEnd() { return this.pos >= this.tokens.length || this.tokens[this.pos].kind === Lexer.TokenKind.EOS; }
   peek(offset) {
@@ -10559,6 +11474,7 @@ class Parser {
   // --- isTypeName ---
   isTypeName() {
     const t = this.peek();
+    if (this.objc && ['__unsafe_unretained','__weak','__strong','__autoreleasing'].includes(t.text)) return true;
     if (t.kind === Lexer.TokenKind.KEYWORD) {
       switch (t.keyword) {
         case Lexer.Keyword.VOID: case Lexer.Keyword.BOOL: case Lexer.Keyword.CHAR:
@@ -10823,10 +11739,14 @@ class Parser {
     let hasChar = false, hasInt = false, hasFloat = false, hasDouble = false;
     let hasVoid = false, hasBool = false;
     let sawAuto = false;
+    let objcOwnership = null;
 
     while (!this.atEnd()) {
       const t = this.peek();
 
+      if (this.objc && this.matchText('__unsafe_unretained')) { objcOwnership = 'unsafe_unretained'; continue; }
+      if (this.objc && ['__weak','__strong','__autoreleasing'].includes(t.text))
+        this.error(t, 'Objective-C owning qualifiers require unsupported ARC/weak runtime support');
       // Storage class specifiers
       if (this.matchKW(Lexer.Keyword.TYPEDEF)) { storageClass = Types.StorageClass.TYPEDEF; continue; }
       if (this.matchKW(Lexer.Keyword.STATIC)) { storageClass = Types.StorageClass.STATIC; continue; }
@@ -11001,6 +11921,7 @@ class Parser {
       if (t.kind === Lexer.TokenKind.IDENT && this.typeScope.has(t.text) && type === null && !hasBase) {
         this.advance();
         type = this.typeScope.get(t.text);
+        if (this.objc && this.atText('<')) type = this.objcQualifiedType(type, this.objcProtocolList());
         continue;
       }
 
@@ -11067,6 +11988,7 @@ class Parser {
     const enumType = type.isEnum() ? type : null;
     if (type.isEnum()) type = Types.TINT;
 
+    if (objcOwnership) type = this.objcQualifiedType(type, null, objcOwnership);
     if (isConst) type = type.addConst();
     if (isVolatile) type = type.addVolatile();
 
@@ -11598,6 +12520,35 @@ class Parser {
 
   parsePrimaryExpression() {
     const t = this.peek();
+    if (this.objc) {
+      const loc = Lexer.Loc.fromTok(t);
+      if (this.atText('[')) return this.parseObjcMessage();
+      if (this.atText('@') && this.peek(1).kind === Lexer.TokenKind.STRING) return this.parseObjcString();
+      if (this.matchText('@selector')) {
+        this.expect('(');
+        let name = this.objcSelectorWord();
+        while (this.matchText(':')) {
+          name += ':';
+          if (this.atKind(Lexer.TokenKind.IDENT) || this.atKind(Lexer.TokenKind.KEYWORD)) name += this.advance().text;
+        }
+        this.expect(')');
+        const selector = this.objcSelector(name).variable;
+        return AST.makeUnary(loc, 'OP_ADDR', new AST.EIdent(loc, selector.type, selector));
+      }
+      if (t.text.startsWith('@')) this.error(t, `Objective-C experiment: unsupported expression '${t.text}'`);
+      if (t.text === 'nil' || t.text === 'Nil') {
+        this.advance(); return AST.makeCast(loc, t.text === 'nil' ? this.objc.id : this.objc.cls, new AST.EInt(loc, Types.TINT, 0n));
+      }
+      if (this.objc.classes.has(t.text) && !this.varScope.has(t.text)) {
+        this.advance(); return this.objcClassAddress(this.objc.classes.get(t.text), false, loc);
+      }
+      const context = this.objc.current;
+      if (context && !context.sig.classMethod && context.cls.ivars.has(t.text) && this.varScope.getLevel(t.text) <= 0) {
+        this.advance();
+        const self = AST.makeCast(loc, context.cls.type.pointer(), AST.makeIdent(loc, 'self', this.varScope));
+        return this.objcIvar(self, context.cls, t.text, loc);
+      }
+    }
 
     // Integer literal (includes char literals converted by Lexer.postProcess)
     if (t.kind === Lexer.TokenKind.INT) {
@@ -12723,7 +13674,8 @@ class Parser {
       if (this.matchText("->")) {
         const arrowLoc = Lexer.Loc.fromTok(this.peek(-1));
         const name = this.expectKind(Lexer.TokenKind.IDENT).text;
-        expr = AST.makeArrow(arrowLoc, expr, name);
+        const objcClass = this.objc && expr.type.isPointer() && objcClassTypes.get(expr.type.baseType.removeQualifiers());
+        expr = objcClass ? this.objcIvar(expr, objcClass, name, arrowLoc) : AST.makeArrow(arrowLoc, expr, name);
         continue;
       }
       if (this.matchText("++")) {
@@ -12807,6 +13759,20 @@ class Parser {
         return Types.usualArithmeticConversions(thenType, elseType);
       }
       return thenType;
+    }
+    const to = thenType.removeQualifiers(), eo = elseType.removeQualifiers();
+    if (to instanceof Types.ObjcObjectPointerType && eo instanceof Types.ObjcObjectPointerType) {
+      if (to.isCompatibleWith(eo)) return to;
+      let common = null;
+      if (to.className && eo.className) {
+        const ancestors = new Map();
+        for (let c=objcClassTypes.get(to.baseType.removeQualifiers()); c; c=c.parent) ancestors.set(c.name,c);
+        for (let c=objcClassTypes.get(eo.baseType.removeQualifiers()); c; c=c.parent)
+          if (ancestors.has(c.name)) {common=ancestors.get(c.name); break;}
+      }
+      const tp=to.protocolNames(), ep=eo.protocolNames(), protocols=[...tp].filter(p=>ep.has(p));
+      return new Types.ObjcObjectPointerType(common ? common.type : this.objc.id.baseType,
+        common ? common.name : null, protocols, to.ownership === eo.ownership ? to.ownership : 'manual', this.objc.protocols);
     }
     const tIsRef = thenType.removeQualifiers().isRef();
     const eIsRef = elseType.removeQualifiers().isRef();
@@ -13606,6 +14572,7 @@ class Parser {
   // --- External declaration parsing ---
 
   parseExternalDeclaration(unit) {
+    if (this.objc && this.peek().text.startsWith('@')) return this.parseObjcDeclaration(unit);
     const loc = Lexer.Loc.fromTok(this.peek());
     // GNU __extension__ before an external declaration
     // (`__extension__ typedef struct {...} x;`): semantic no-op.
@@ -14053,6 +15020,17 @@ class Parser {
   }
 
   // Override parseDeclarator to capture param names for functions
+  objcCheckValueType(type) {
+    if (!this.objc) return;
+    const t = type.removeQualifiers();
+    if (objcClassTypes.has(t)) this.error(this.peek(), 'Objective-C objects must be used through pointers');
+    if (t.isArray()) this.objcCheckValueType(t.baseType);
+    if (t.isFunction()) {
+      this.objcCheckValueType(t.returnType);
+      for (const p of t.paramTypes || []) this.objcCheckValueType(p);
+    }
+  }
+
   parseDeclarator(baseType, isTypedef) {
     let type = baseType;
     let ptrCount = 0;
@@ -14074,6 +15052,7 @@ class Parser {
         if (this.matchKW(Lexer.Keyword.CONST)) { type = type.addConst(); continue; }
         if (this.matchKW(Lexer.Keyword.VOLATILE)) { type = type.addVolatile(); continue; }
         if (this.matchKW(Lexer.Keyword.RESTRICT)) continue;
+        if (this.objc && this.matchText('__unsafe_unretained')) { type = this.objcQualifiedType(type, null, 'unsafe_unretained'); continue; }
         break;
       }
     }
@@ -14088,6 +15067,7 @@ class Parser {
       this.expect(")");
       type = this.parseDeclaratorSuffixWithNames(saved);
       const combined = this.combineDeclaratorTypes(inner.type, saved, type.type, inner._ptrCount);
+      if (!isTypedef) this.objcCheckValueType(combined);
       return { type: combined, name: inner.name, _paramNames: inner._paramNames || type._paramNames, _isKnR: inner._isKnR || type._isKnR, _ptrCount: ptrCount };
     }
 
@@ -14096,6 +15076,7 @@ class Parser {
     }
 
     const suffix = this.parseDeclaratorSuffixWithNames(type);
+    if (!isTypedef) this.objcCheckValueType(suffix.type);
     return { type: suffix.type, name, _paramNames: suffix._paramNames, _isKnR: suffix._isKnR, _ptrCount: ptrCount };
   }
 
@@ -14187,6 +15168,7 @@ class Parser {
                   if (this.matchKW(Lexer.Keyword.CONST)) pType = pType.addConst();
                   else if (this.matchKW(Lexer.Keyword.VOLATILE)) pType = pType.toggleVolatile();
                   else if (this.matchKW(Lexer.Keyword.RESTRICT)) { /* restrict is a hint; we don't model it */ }
+                  else if (this.objc && this.matchText('__unsafe_unretained')) pType = this.objcQualifiedType(pType,null,'unsafe_unretained');
                   else break;
                 }
               }
@@ -14322,6 +15304,7 @@ function parseTokens(tokens, options) {
 
   withDiag(sink, () => {
   try {
+    if (String(options?.filename || tokens[0].filename).endsWith(".m")) parser.objcInit(unit);
     while (!parser.atEnd()) {
       // __require_source
       if (parser.atKW(Lexer.Keyword.X_REQUIRE_SOURCE)) {
@@ -14469,6 +15452,7 @@ function parseTokens(tokens, options) {
       }
       parser.parseExternalDeclaration(unit);
     }
+    if (parser.objc) parser.objcFinish();
   } catch (e) {
     // FatalDiag: error is already in the sink, just stop parsing.
     if (e instanceof FatalDiag) return;
