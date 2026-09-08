@@ -157,7 +157,16 @@
       NSConstantString *c=(NSConstantString*)saved;
       return !loaded || c->length!=5 || *(char*)c->data!='a';
     }`]);
+  positive.push(['protocol-only-static-method', `
+    @protocol P - (int)value; @end
+    @interface A <P> @end
+    int use(A<P> *a) {return [a value];}
+    int adopted(A *a) {return [a value];}
+    @implementation A - (int)value {return 7;} @end
+    int main(void) {A *a=guc_objc_alloc(A); int ok=use(a)==7 && adopted(a)==7; guc_objc_dispose(a); return !ok;}
+  `]);
   const negative = [
+    ['late-protocol-implementation-mismatch', '@protocol P - (int)value; @end @interface A<P> @end int use(A *a){return [a value];} @implementation A - (double)value{return 1.0;} @end', /incompatible.*signature/],
     ['missing-string-provider', 'int main(void){ return @"hello"==nil; }', /require an NSString-compatible NSConstantString library provider/],
     ['bad-string-provider', '@interface NSString @end @interface NSConstantString:NSString @end @implementation NSString @end @implementation NSConstantString @end int main(void){return @"hello"==nil;}', /does not match.*constant-string ABI/],
     ['owning-qualifier', 'int main(void) { __weak id object; return 0; }', /owning qualifiers/],

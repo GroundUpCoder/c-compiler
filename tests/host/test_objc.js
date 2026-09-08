@@ -47,6 +47,7 @@ async function main() {
   }
   for (const [name, files, expected] of [
     ['layout', ['@interface A {int x;} @end @implementation A @end', '@interface A {double x;} @end int main(void){return 0;}'], /inconsistent Objective-C layout/],
+    ['masked-signature', ['@interface A @end int unused(void){return 0;}', '@interface A - (int)value; @end int main(void){A *a=guc_objc_alloc(A); return [a value]!=7;}', '@interface A - (double)value; @end @implementation A - (double)value{return 7.0;} @end'], /inconsistent Objective-C signature/],
     ['signature', ['@interface A - (int)x; @end @implementation A - (int)x{return 0;} @end', '@interface A - (double)x; @end int main(void){return 0;}'], /inconsistent Objective-C signature/],
     ['duplicate', ['@interface A @end @implementation A @end', '@interface A @end @implementation A @end int main(void){return 0;}'], /Duplicate definition/],
     ['missing', ['@interface A @end int main(void){return guc_objc_alloc(A)==0;}'], /Undefined symbol.*class_A/],
