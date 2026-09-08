@@ -422,3 +422,24 @@ comes after correct manual ownership and an assessment of complexity.
 Objective-C++ is explicitly unwanted and excluded. Broader Foundation comes later.
 Carry this authorization and sequence into continuations; proceed with #777
 following #775 merge while preserving independent review and separate gating.
+
+## First broad gate red: bounded argument-spread guard
+
+Fresh diff gate at 1ecb34c6 completed exit 1, run 20260908-124756-86236,
+elapsed 3,681,557 ms. The fresh dispatcher was inspected first: 25 selected
+suites, null filter, host FAIL and all other execution rows pass. Archived
+children confirm kernel 200/200, browser 70/70, BlockFS 15/15 all pass, complete
+and without resume/carry. Python 904 pass/111 baseline skips, baseline checked
+without violations. The original dispatcher, children and host failure output
+remain in build/775/gate/history/20260908-124756-86236. This is a RED gate.
+
+Host test_pp_spread_bounds.js identifies exactly three new unbounded call-argument
+spreads in Objective-C protocol requirement/adoption collection. Replaced the
+Map-values spread with an explicit iteration and the two array appends with the
+existing bounded pushAll helper. This preserves order and contents and removes
+the JavaScript argument-limit hazard without changing the guard. Existing guard
+is the committed red control. Executed it successfully after the fix
+(build/775/spread-guard.log), then the complete focused Objective-C suite passed
+(build/775/spread-objc.log). Supplemental independent review and a fresh complete
+mapper-selected gate are required for this compiler delta. Flake tests remain
+pending; neither current #775 acceptance nor merge is complete.

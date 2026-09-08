@@ -10050,7 +10050,7 @@ function linkTranslationUnits(units, compilerOptions) {
       seen.add(name);
       const p = objcProtocols.get(name);
       if (!p) return;
-      result.push(...p.declared.values());
+      for (const signature of p.declared.values()) result.push(signature);
       for (const parent of p.parents) visit(parent);
     };
     for (let c=objcClasses.get(cls.name); c && !classes.has(c.name); c=c.parent && objcClasses.get(c.parent.name)) {
@@ -11094,7 +11094,7 @@ class Parser {
     const adopted = [...protocols];
     for (let c=cls; c; c=c.parent) {
       if (c.declared.has(key)) return c.declared.get(key);
-      adopted.push(...c.protocols);
+      pushAll(adopted, c.protocols);
     }
     const candidates = this.objcProtocolSignatures(adopted,[key]), sig = candidates[0];
     if (sig && candidates.some(other => !sig.type.isCompatibleWith(other.type)))
@@ -11352,7 +11352,7 @@ class Parser {
     }
     for (const cls of this.objc.classes.values()) {
       const adopted=[];
-      for(let c=cls;c;c=c.parent) adopted.push(...c.protocols);
+      for(let c=cls;c;c=c.parent) pushAll(adopted, c.protocols);
       const keys=[...this.objc.methods.keys()];
       cls.requirements = this.objcProtocolSignatures(adopted,keys);
       if (!cls.complete) continue;
