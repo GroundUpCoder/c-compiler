@@ -28,3 +28,30 @@ here on lane/776-fixed-vararg-float from main 9db2c3cf before running any combin
 gate. Gamedev justification: reliable function-pointer/variadic compilation is
 required by app/editor code, and this existing C defect blocks #775's typed IMP
 calls. Fresh mapper-selected gate and final independent review are pending.
+
+The first fresh diff gate completed at source fa602313 with exit1, runId
+20260908-103345-97148, elapsed3922923ms. The run-level record was inspected first:
+25 selected suites, null filter, all executed via seven dispatcher rows (the
+Python categories are grouped); kernel alone failed. Child manifests are complete
+with no resumed/carried records: kernel199 (198pass,1fail), browser69pass,
+BlockFS15pass. Python904pass/111 baseline skips with no skip-baseline violations.
+The failed assertion is test_sedit_e2e.js's literal-colon filename marker. This
+record is RED and retained under build/776/gate/history/20260908-103345-97148;
+`build/776/gate-audit.log` records the manifest audit.
+
+A direct same-source diagnostic rerun passed all16 assertions, including the
+literal marker, exit0. It preloaded a build-only wrapper to retain driveBoot's
+returned stdout/stderr; the test and its boot command sequence were unchanged.
+Evidence: build/776/sedit-diagnostic.{log,stdout,stderr,json,exit}. The original
+failure and this pass establish an intermittent result, not its mechanism or
+whether product versus observation failed. The independent reviewer inspected
+the first red read-only and likewise found insufficient evidence to call it a
+timeout. No C or editor product source was changed in response.
+
+Before a fresh gate retry, the failing test is running three repetitions with
+two CPU-contention workers using the existing runner. The retry will start only
+if these pass. Expected #776 acceptance remains the C conformance regression
+passing (3.75, fixed float through a volatile variadic function pointer), with a
+complete fresh mapper-selected diff gate and no reuse/resume of the red record.
+Independent C source approval remains pinned to fa602313; this commit changes
+only this journal. Current #776 is not ready to merge.
