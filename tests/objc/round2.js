@@ -204,7 +204,16 @@
         if(sum!=(round%2?253:153))return 1;}
       guc_objc_dispose(a);guc_objc_dispose(b);return 0;}
   `]);
+  positive.push(['multiple-protocol-return-guarantees', `
+    @protocol P @end @protocol Q @end
+    @protocol X - (id<P>)value; @end @protocol Y - (id<Q>)value; @end
+    @interface A<X,Y> - (id<P,Q>)value; @end
+    @implementation A - (id<P,Q>)value{return nil;} @end
+    int main(void){A*a=guc_objc_alloc(A);int bad=[a value]!=nil;guc_objc_dispose(a);return bad;}
+  `]);
   const negative = [
+    ['missing-return-protocol-guarantee', '@protocol P @end @protocol Q @end @protocol X - (id<P>)value; @end @protocol Y - (id<Q>)value; @end @interface A<X,Y> - (id<P>)value; @end @implementation A - (id<P>)value{return nil;} @end', /incompatible Objective-C protocol method signature/],
+
     ['reverse-object-return', '@interface Base @end @interface Sub:Base @end @interface A - (Sub*)value; @end @interface B:A - (Base*)value; @end', /incompatible Objective-C override/],
     ['unrelated-object-return', '@interface X @end @interface Y @end @interface A - (X*)value; @end @interface B:A - (Y*)value; @end', /incompatible Objective-C override/],
     ['narrow-object-parameter', '@interface Base @end @interface Sub:Base @end @interface A - (void)take:(Base*)x; @end @interface B:A - (void)take:(Sub*)x; @end', /incompatible Objective-C override/],
