@@ -105,3 +105,19 @@ of semantic compiler complexity. Assessment: moderate frontend/runtime extension
 for round two; ownership automation/Blocks/exceptions would substantially expand
 the maintenance surface. Foundation belongs in library code. No final LOC or
 effort prediction was claimed.
+
+## Successor checkpoint: variadic methods and declaration-order validation
+
+Real serial successor 01a08074-581f-717a-88f3-4d0f50526df2, verified metadata
+codex/gpt-6-astra, claimed #775 with force and reread. Independent external
+read-only reviewer 01a08075-c875-7d8b-9af1-c85687c49d31 created through cc-meta,
+explicit codex/gpt-6-astra and verified metadata; contract review in progress.
+
+Added and executed a red variadic fixture (build/775/variadic-red.log). Implemented
+per-call forwarding helpers with promoted argument types; their inner typed IMP
+call uses C's variadic arg-block ABI, including aggregate arguments and results.
+Whole-TU validation rejects later declarations that make an earlier dynamic send
+ambiguous. Retired the variadic absence test. Focused Node run passes all 16
+positive executions and 22 refusals plus existing controls
+(build/775/variadic-host.log). Browser count updated but execution still pending.
+No broad gate, push or merge in this checkpoint.

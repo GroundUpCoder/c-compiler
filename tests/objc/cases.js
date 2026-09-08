@@ -77,7 +77,6 @@
       return 0;
     }`]);
   const negative = [
-    ['variadic', '@interface A - (int)log:(int)n, ...; @end', /variadic/],
     ['protocol', '@protocol P @end', /unsupported directive/],
     ['category', '@interface A (Extra) @end', /categories/],
     ['property', '@interface A @property int x; @end', /unsupported class form/],

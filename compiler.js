@@ -10545,7 +10545,7 @@ class Parser {
   }
 
   objcInit(unit) {
-    this.objc = { unit, classes: new Map(), selectors: new Map(), methods: new Map(), current: null };
+    this.objc = { unit, classes: new Map(), selectors: new Map(), methods: new Map(), sends: [], helpers: [], current: null };
     this.objcGenerated(`
       typedef void *id;
       typedef unsigned int SEL;
@@ -10621,10 +10621,11 @@ class Parser {
         else break;
       }
     }
-    if (this.atText(',')) this.error(this.peek(), 'Objective-C experiment: variadic methods are unsupported');
+    const variadic = this.matchText(',');
+    if (variadic) this.expect('...');
     if (names.some(n => n === 'self' || n === '_cmd') || new Set(names).size !== names.length)
       this.error(tok, 'Objective-C method has duplicate or reserved parameter names');
-    const type = Types.functionType(returnType, [this.objc.id, this.objc.sel, ...params], false, false);
+    const type = Types.functionType(returnType, [this.objc.id, this.objc.sel, ...params], variadic, false);
     const key = (classMethod ? '+' : '-') + name;
     const signatures = this.objc.methods.get(key) || [];
     const existing = signatures.find(sig => sig.type.isCompatibleWith(type));
@@ -10633,10 +10634,11 @@ class Parser {
     if (!existing) {
       signatures.push(sig);
       this.objc.methods.set(key, signatures);
-      const ftype = Types.functionType(returnType, [this.objc.id, this.objc.cls, ...params], false, false);
+      const ftype = Types.functionType(returnType, [this.objc.id, this.objc.cls, ...params], variadic, false);
       sig.decl = new AST.DFunc(Lexer.Loc.fromTok(tok), sig.helper, ftype, [], Types.StorageClass.STATIC, false, null);
       this.varScope.set(sig.helper, sig.decl);
-      this.objc.unit.declaredFunctions.push(sig.decl);
+      if (!variadic) this.objc.unit.declaredFunctions.push(sig.decl);
+      if (!variadic) this.objc.helpers.push(sig);
     }
     return { sig, names, tok };
   }
@@ -10720,7 +10722,7 @@ class Parser {
         if (cls.implemented.has(sig.key)) this.error(methodTok, 'duplicate Objective-C method implementation');
         const loc = Lexer.Loc.fromTok(methodTok);
         const fname = `__guc_objc_method_${name}_${sig.classMethod ? 'c' : 'i'}${sig.selector}`;
-        const methodType = Types.functionType(sig.type.returnType, [sig.classMethod ? this.objc.cls : cls.type.pointer(), ...sig.type.paramTypes.slice(1)], false, false);
+        const methodType = Types.functionType(sig.type.returnType, [sig.classMethod ? this.objc.cls : cls.type.pointer(), ...sig.type.paramTypes.slice(1)], sig.type.isVarArg, false);
         const params = ['self', '_cmd', ...names].map((n, i) => {
           const p = new AST.DVar(loc, n, methodType.paramTypes[i], Types.StorageClass.AUTO);
           if (p.type.isAggregate()) p.allocClass = Types.AllocClass.MEMORY;
@@ -10800,7 +10802,8 @@ class Parser {
         else break;
       }
     }
-    this.expect(']', 'Objective-C experiment: expected ] (variadic messages unsupported)');
+    while (this.matchText(',')) args.push(this.parseAssignmentExpression());
+    this.expect(']');
     const key = (classMethod ? '+' : '-') + name;
     let sig;
     if (cls) {
@@ -10814,11 +10817,34 @@ class Parser {
       if (sig && candidates.some(other => !sig.type.isCompatibleWith(other.type)))
         this.error(tok, `Objective-C ambiguous signature for dynamic receiver selector '${name}'`);
       if (!sig) this.error(tok, `Objective-C method '${key}' has no declared signature`);
+      this.objc.sends.push({tok, name, key, dynamicId: receiverType === this.objc.id, sig});
     }
-    return AST.makeCall(loc, new AST.EIdent(loc, sig.decl.type, sig.decl), [receiver, start, ...args]);
+    const call = AST.makeCall(loc, new AST.EIdent(loc, sig.decl.type, sig.decl), [receiver, start, ...args]);
+    if (sig.type.isVarArg) {
+      // Specialize the forwarding helper to this promoted argument list. The
+      // inner IMP call remains variadic and uses the ordinary C arg-block ABI;
+      // no va_list forwarding or source-expression re-evaluation is involved.
+      const helper = {...sig, helper: sig.helper + '_call' + this.objc.helpers.length,
+        argumentTypes: call.arguments.slice(2).map(a => a.type)};
+      const type = Types.functionType(sig.type.returnType,
+        [this.objc.id, this.objc.cls, ...helper.argumentTypes], false, false);
+      helper.decl = new AST.DFunc(loc, helper.helper, type, [], Types.StorageClass.STATIC, false, null);
+      this.varScope.stack[0].set(helper.helper, helper.decl);
+      this.objc.unit.declaredFunctions.push(helper.decl);
+      this.objc.helpers.push(helper);
+      return AST.makeCall(loc, new AST.EIdent(loc, type, helper.decl), call.arguments);
+    }
+    return call;
   }
 
   objcFinish() {
+    for (const send of this.objc.sends) {
+      const candidates = send.dynamicId
+        ? [...(this.objc.methods.get('-' + send.name) || []), ...(this.objc.methods.get('+' + send.name) || [])]
+        : (this.objc.methods.get(send.key) || []);
+      if (candidates.some(other => !send.sig.type.isCompatibleWith(other.type)))
+        this.error(send.tok, `Objective-C ambiguous signature for dynamic receiver selector '${send.name}'`);
+    }
     for (const cls of this.objc.classes.values()) {
       if (!cls.complete) this.error(cls.tok, `Objective-C experiment: class '${cls.name}' has no implementation in this translation unit`);
       for (const key of cls.declared.keys()) if (!cls.implemented.has(key))
@@ -10839,10 +10865,10 @@ class Parser {
         this.objc.unit.definedVariables = this.objc.unit.definedVariables.filter(v => v.name !== temp);
       }
     }
-    for (const sig of [...this.objc.methods.values()].flat()) {
+    for (const sig of this.objc.helpers) {
       const stem = sig.helper;
       this.typeScope.set(stem + '_ret', sig.type.returnType);
-      const types = sig.type.paramTypes.slice(2);
+      const types = sig.argumentTypes || sig.type.paramTypes.slice(2);
       types.forEach((t, i) => this.typeScope.set(stem + '_p' + i, t));
       const args = types.map((t, i) => `${stem}_p${i} a${i}`);
       const tail = types.map((t, i) => `a${i}`);
@@ -10853,7 +10879,7 @@ class Parser {
         : (voidReturn ? 'return;' : 'return 0;');
       this.objcGenerated(`static ${stem}_ret ${stem}(id object, Class start${args.length ? ',' + args.join(',') : ''}) {
         if (!object) ${nilReturn}
-        ${voidReturn ? '' : 'return '} ((${stem}_ret (*)(id, SEL${types.map((t, i) => ',' + stem + '_p' + i).join('')}))
+        ${voidReturn ? '' : 'return '} ((${stem}_ret (*)(id, SEL${sig.type.paramTypes.slice(2).map((t, i) => ',' + stem + '_p' + i).join('')}${sig.type.isVarArg ? ',...' : ''}))
           __guc_objc_lookup(object, ${sig.selector}, start))(object, ${sig.selector}${tail.length ? ',' + tail.join(',') : ''});
       }`);
     }
