@@ -1,0 +1,60 @@
+// #775 acceptance for the agreed static-type and aggregate contracts.
+(function(root) {
+  const positive = [
+    ['static-receiver-signatures', `
+      @interface IntegerBox - (int)value; @end
+      @interface DoubleBox - (double)value; @end
+      @implementation IntegerBox - (int)value { return 17; } @end
+      @implementation DoubleBox - (double)value { return 2.5; } @end
+      int main(void) {
+        IntegerBox *a=guc_objc_alloc(IntegerBox);
+        DoubleBox *b=guc_objc_alloc(DoubleBox);
+        int ok=[a value]==17 && [b value]==2.5;
+        guc_objc_dispose(a); guc_objc_dispose(b); return !ok;
+      }`],
+    ['aggregate-nested-sibling-override-and-nil', `
+      struct Pair { int x; double y; };
+      @interface Base
+      - (struct Pair)make:(int)x;
+      - (struct Pair)add:(struct Pair)a to:(struct Pair)b;
+      @end
+      @interface Sub : Base - (struct Pair)make:(int)x; @end
+      @implementation Base
+      - (struct Pair)make:(int)x { struct Pair p={x,x+0.5}; return p; }
+      - (struct Pair)add:(struct Pair)a to:(struct Pair)b {
+        struct Pair p={a.x+b.x,a.y+b.y}; a.x=999; b.y=999; return p;
+      }
+      @end
+      @implementation Sub
+      - (struct Pair)make:(int)x { struct Pair p=[super make:x]; p.x+=10; return p; }
+      @end
+      int combine(struct Pair a, struct Pair b) { return a.x+b.x; }
+      int main(void) {
+        Sub *s=guc_objc_alloc(Sub); Base *b=s;
+        struct Pair a=[b make:2], c=[b make:3];
+        struct Pair sum=[b add:[b make:4] to:[b make:5]];
+        if(a.x!=12 || a.y!=2.5 || c.x!=13 || c.y!=3.5 || sum.x!=29 || sum.y!=10) return 1;
+        if(combine([b make:6],[b make:7])!=33) return 2;
+        sum=[b add:a to:c];
+        if(a.x!=12 || c.y!=3.5 || sum.x!=25) return 3;
+        int effects=0; Base *n=nil;
+        struct Pair zero=[n make:++effects];
+        unsigned char *bytes=(unsigned char *)&zero;
+        for(unsigned int i=0;i<sizeof zero;i++) if(bytes[i]) return 4;
+        if(effects!=1) return 5;
+        guc_objc_dispose(s); return 0;
+      }`],
+  ];
+  const negative = [
+    ['ambiguous-instance-id-site', `
+      @interface A - (int)value; @end
+      @interface B - (double)value; @end
+      @implementation A - (int)value {return 1;} @end
+      @implementation B - (double)value {return 2;} @end
+      int main(void) { id object=nil; return [object value]; }
+    `, /ambiguous signature/],
+  ];
+  const api = { positive, negative };
+  if (typeof module !== 'undefined') module.exports = api;
+  else root.ObjcRound2 = api;
+})(globalThis);

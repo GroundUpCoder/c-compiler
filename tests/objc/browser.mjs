@@ -12,12 +12,13 @@ const routes = new Map([
   ['/compiler.js', new URL('compiler.js', root)],
   ['/host.js', new URL('host.js', root)],
   ['/cases.js', new URL('tests/objc/cases.js', root)],
+  ['/round2.js', new URL('tests/objc/round2.js', root)],
   ['/core.m', new URL('tests/objc/core.m', root)],
 ]);
 const server = http.createServer((req, res) => {
   if (req.url === '/') {
     res.setHeader('content-type', 'text/html');
-    res.end('<!doctype html><script src="/compiler.js"></script><script src="/host.js"></script><script src="/cases.js"></script>');
+    res.end('<!doctype html><script src="/compiler.js"></script><script src="/host.js"></script><script src="/cases.js"></script><script src="/round2.js"></script>');
   } else if (routes.has(req.url)) {
     res.setHeader('content-type', req.url.endsWith('.js') ? 'text/javascript' : 'text/plain');
     res.end(fs.readFileSync(routes.get(req.url)));
@@ -42,7 +43,7 @@ try {
       if (link.errors.length) throw Error(link.errors.map(e => e.message).join('\n'));
       return C.generateCode(units, name + '.wasm', options);
     }
-    const positives = [['core', await (await fetch('/core.m')).text()], ...ObjcCases.positive];
+    const positives = [['core', await (await fetch('/core.m')).text()], ...ObjcCases.positive, ...ObjcRound2.positive];
     for (const noInline of [false, true]) for (const [name, source] of positives) {
       const bytes = compile(source, name, noInline);
       if (!WebAssembly.validate(bytes)) throw Error('invalid wasm ' + name);
@@ -51,7 +52,7 @@ try {
       if (exit !== 0) throw Error(`${name}: exit ${exit}`);
       records.push({ name, noInline, exit, bytes: bytes.length });
     }
-    for (const [name, source, expected] of ObjcCases.negative) {
+    for (const [name, source, expected] of [...ObjcCases.negative, ...ObjcRound2.negative]) {
       let error = '';
       try { compile(source, name, false); } catch(e) { error = e.message; }
       if (!expected.test(error)) throw Error(`${name}: wrong refusal: ${error}`);
@@ -59,7 +60,7 @@ try {
     }
     return { userAgent: navigator.userAgent, records };
   });
-  assert.equal(result.records.length, 10 + 23);
+  assert.equal(result.records.length, 14 + 24);
   fs.mkdirSync(new URL('build/objc/', root), { recursive: true });
   fs.writeFileSync(new URL('build/objc/browser.json', root), JSON.stringify(result, null, 2) + '\n');
   console.log(JSON.stringify(result, null, 2));

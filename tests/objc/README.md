@@ -1,5 +1,28 @@
 # Objective-C compiler experiment (#772)
 
+## Round-two acceptance kickoff (#775, implementation pending)
+
+The isolated `lane/775-objc-round2` integrates this experiment onto main's
+`9db2c3cf` aggregate-return foundation. The table below is acceptance to implement,
+not a claim of supported behavior. Existing refusal tests must be retired when
+their corresponding capability is implemented.
+
+| Contract | Required instrument |
+|---|---|
+| Distinct object-pointer frontend type, class/protocol/ownership metadata, i32 representation | AST assertions, qualifier preservation, conversion diagnostics, linear-memory size checks |
+| Resolve signatures from the receiver's static class; reject ambiguous dynamic `id` sends at the send site | `round2.js`: unrelated integer/double selectors and ambiguous dynamic receiver; add inherited/override and declaration-order checks |
+| Cross-TU class and selector identity | Separate `.m` sources and shared headers, reversed link order, inherited methods across TUs, `_cmd`/`@selector` identity, missing/duplicate definition diagnostics |
+| Aggregate arguments and results; nil results zero-filled including padding | `round2.js`: nested/sibling sends, override and lexical super, callee argument copies, every result byte zero for nil, argument side effects |
+| Improved dispatch with deliberate open/closed contract | Inspect generated dispatch path and exercise inheritance/missing-method behavior; exact algorithm awaits the scope decision |
+| Preprocessor fixes preserved | Existing macro/header and C-mode controls |
+| Both compiler hosts and in-OS compilation | Shared Node/Chromium corpus in both inline modes; cross-TU build/run through `/bin/cc` on Node and Chromium |
+
+Before broad implementation, user input is pending on lazy `+initialize` versus
+absence, object-string literal policy, open-world dispatch, and variadic methods.
+No decision on these four is implied by this acceptance draft. Exceptions,
+`@finally`, Blocks, ARC, Objective-C++, Foundation and AppKit remain outside #775.
+The rest of this document remains the round-one baseline until implementation.
+
 This branch experiments with an Objective-C subset in `compiler.js`. It is a
 compiler/runtime spike, not a complete Objective-C compiler, an Apple/GNU ABI,
 Foundation, AppKit, or Cocoa. It makes no desktop or IDE changes.

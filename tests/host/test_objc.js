@@ -5,6 +5,7 @@ const path = require('path');
 const C = require('../../compiler.js');
 const runModule = require('../../host.js');
 const cases = require('../objc/cases.js');
+const round2 = require('../objc/round2.js');
 function compile(source, name, extra = {}) {
   if (!name.endsWith('.c')) name += '.m';
   const pp = C.createDefaultPPRegistry();
@@ -19,7 +20,7 @@ function compile(source, name, extra = {}) {
   return C.generateCode(units, name + '.wasm', options);
 }
 async function main() {
-  const positives = [['core', fs.readFileSync(path.join(__dirname, '../objc/core.m'), 'utf8')], ...cases.positive];
+  const positives = [['core', fs.readFileSync(path.join(__dirname, '../objc/core.m'), 'utf8')], ...cases.positive, ...round2.positive];
   for (const noInline of [false, true]) for (const [name, source] of positives) {
     const bytes = compile(source, name, { noInline });
     assert(WebAssembly.validate(bytes));
@@ -27,7 +28,7 @@ async function main() {
     assert.strictEqual(exit, 0, name);
     console.log('PASS', name, noInline ? 'no-inline' : 'default');
   }
-  for (const [name, source, expected] of cases.negative) {
+  for (const [name, source, expected] of [...cases.negative, ...round2.negative]) {
     assert.throws(() => compile(source, name), expected, name);
     console.log('PASS refusal', name);
   }
