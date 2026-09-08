@@ -27,7 +27,7 @@
 //     fold)
 // Refusals covered (site left as a call, stats bucket incremented):
 //   self, imported, noBody, noinline, variadic, alloca, overAligned,
-//   structRet, eh (WTryTable/WThrow), raw (WRaw), multiResult,
+//   eh (WTryTable/WThrow), raw (WRaw), multiResult,
 //   budgetCallee (real-node cap, WSrcLoc excluded), budgetCaller
 //   (growth ceiling), and enabled:false.
 //
@@ -339,13 +339,28 @@ refusalCase('overAligned', 'overAligned', (w) => {
   const caller = addFn(w, { params: [], results: [] }, b => { b.call(f); b.ret(); });
   return { callee: f, caller };
 });
-refusalCase('structRet', 'structRet', (w) => {
+// #773 (two-sided edit): this used to be refusalCase('structRet', ...), pinning
+// that an sret callee was NEVER inlined. That refusal existed because the CALLER
+// held an outstanding shadow-stack bump for the return temporary whose release
+// point was an expression-shaped counter, so splicing interleaved two
+// stack-pointer disciplines. Aggregate-return temporaries are static frame slots
+// now, the caller-side bump is gone, and an sret callee is an ordinary callee:
+// its hidden return pointer is simply its first wasm parameter, bound to a local
+// by the generic splice. The pin is therefore inverted into its positive guard —
+// the callee MUST inline, and the `structRet` refusal bucket must not exist.
+{
+  const w = mkWmod();
   const f = addFn(w, { params: [WT_I32], results: [WT_I32], meta: { structRet: true } }, b => {
     b.localGet(0); b.ret();
   });
   const caller = addFn(w, { params: [], results: [] }, b => { b.i32Const(0); b.call(f); b.drop(); b.ret(); });
-  return { callee: f, caller };
-});
+  const st = WAST.inlineFunctions(w, undefined);
+  const after = w.funcDefs[caller].wast;
+  ok('structRet-inlines', st.inlined === 1 && callsIn(after, f) === 0,
+     `inlined=${st.inlined} remainingCalls=${callsIn(after, f)}`);
+  ok('structRet-bucket-retired', !('structRet' in st.refused),
+     `refused=${JSON.stringify(st.refused)}`);
+}
 refusalCase('eh-trytable', 'eh', (w) => {
   const f = addFn(w, { params: [], results: [] }, b => {
     b.tryTable(WT_EMPTY, []); b.end(); b.ret();
