@@ -77,8 +77,6 @@
       return 0;
     }`]);
   const negative = [
-    ['aggregate-return', 'struct Pair { int x; double y; }; @interface A - (struct Pair)pair; @end', /aggregate/],
-    ['aggregate-argument', 'struct Pair { int x; }; @interface A - (void)take:(struct Pair)p; @end', /aggregate/],
     ['variadic', '@interface A - (int)log:(int)n, ...; @end', /variadic/],
     ['protocol', '@protocol P @end', /unsupported directive/],
     ['category', '@interface A (Extra) @end', /categories/],
@@ -89,7 +87,7 @@
     ['missing-implementation', '@interface A @end', /no implementation/],
     ['missing-method', '@interface A - (int)x; @end @implementation A @end', /no implementation/],
     ['unknown-superclass', '@interface A : Missing @end', /preceding interface/],
-    ['bad-override', '@interface A - (int)x; @end @interface B : A - (double)x; @end', /one signature/],
+    ['bad-override', '@interface A - (int)x; @end @interface B : A - (double)x; @end', /incompatible Objective-C override/],
     ['root-super', '@interface A - (int)x; @end @implementation A - (int)x { return [super x]; } @end', /super requires/],
     ['protected-ivar', '@interface A { int x; } @end @implementation A @end int main(void){ A *a=0; return a->x; }', /protected/],
     ['private-in-subclass', '@interface A { @private int x; } @end @implementation A @end @interface B:A - (int)y; @end @implementation B - (int)y { return x; } @end', /private/],

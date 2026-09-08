@@ -10593,8 +10593,9 @@ class Parser {
     const decl = this.parseDeclarator(specs.type);
     this.expect(')');
     const type = decl.type;
-    if (!(type.isVoid() || type.isArithmetic() || type.isPointer()) || type.isAggregate())
-      this.error(this.peek(-1), 'Objective-C experiment: aggregate/reference method ABI is unsupported');
+    if (!(type.isVoid() || type.isArithmetic() || type.isPointer() ||
+          ((type.isStruct() || type.isUnion()) && type.isComplete)))
+      this.error(this.peek(-1), 'Objective-C method requires a complete value type');
     return type;
   }
 
@@ -10625,13 +10626,13 @@ class Parser {
       this.error(tok, 'Objective-C method has duplicate or reserved parameter names');
     const type = Types.functionType(returnType, [this.objc.id, this.objc.sel, ...params], false, false);
     const key = (classMethod ? '+' : '-') + name;
-    const existing = this.objc.methods.get(key);
-    if (existing && !existing.type.isCompatibleWith(type))
-      this.error(tok, `Objective-C experiment requires one signature per selector/kind: '${key}'`);
+    const signatures = this.objc.methods.get(key) || [];
+    const existing = signatures.find(sig => sig.type.isCompatibleWith(type));
     const selector = this.objcSelector(name);
-    const sig = existing || { name, key, type, selector, classMethod, helper: `__guc_objc_send_${classMethod ? 'c' : 'i'}${selector}` };
+    const sig = existing || { name, key, type, selector, classMethod, helper: `__guc_objc_send_${classMethod ? 'c' : 'i'}${selector}_${signatures.length}` };
     if (!existing) {
-      this.objc.methods.set(key, sig);
+      signatures.push(sig);
+      this.objc.methods.set(key, signatures);
       const ftype = Types.functionType(returnType, [this.objc.id, this.objc.cls, ...params], false, false);
       sig.decl = new AST.DFunc(Lexer.Loc.fromTok(tok), sig.helper, ftype, [], Types.StorageClass.STATIC, false, null);
       this.varScope.set(sig.helper, sig.decl);
@@ -10700,6 +10701,11 @@ class Parser {
       while (this.atText('-') || this.atText('+')) {
         const { sig } = this.objcMethodSignature();
         if (cls.declared.has(sig.key)) this.error(this.peek(), 'duplicate Objective-C method declaration');
+        for (let base = cls.parent; base; base = base.parent) {
+          const inherited = base.declared.get(sig.key);
+          if (inherited && !inherited.type.isCompatibleWith(sig.type))
+            this.error(this.peek(), `incompatible Objective-C override '${sig.key}'`);
+        }
         cls.declared.set(sig.key, sig); this.expect(';');
       }
     } else {
@@ -10709,12 +10715,15 @@ class Parser {
       while (this.atText('-') || this.atText('+')) {
         const { sig, names, tok: methodTok } = this.objcMethodSignature();
         if (!cls.declared.has(sig.key)) this.error(methodTok, 'Objective-C experiment: method must be declared in its interface');
+        if (!cls.declared.get(sig.key).type.isCompatibleWith(sig.type))
+          this.error(methodTok, `Objective-C implementation signature differs from declaration '${sig.key}'`);
         if (cls.implemented.has(sig.key)) this.error(methodTok, 'duplicate Objective-C method implementation');
         const loc = Lexer.Loc.fromTok(methodTok);
         const fname = `__guc_objc_method_${name}_${sig.classMethod ? 'c' : 'i'}${sig.selector}`;
         const methodType = Types.functionType(sig.type.returnType, [sig.classMethod ? this.objc.cls : cls.type.pointer(), ...sig.type.paramTypes.slice(1)], false, false);
         const params = ['self', '_cmd', ...names].map((n, i) => {
           const p = new AST.DVar(loc, n, methodType.paramTypes[i], Types.StorageClass.AUTO);
+          if (p.type.isAggregate()) p.allocClass = Types.AllocClass.MEMORY;
           p.definition = p; return p;
         });
         const fn = new AST.DFunc(loc, fname, methodType, params, Types.StorageClass.STATIC, false, null);
@@ -10792,19 +10801,19 @@ class Parser {
       }
     }
     this.expect(']', 'Objective-C experiment: expected ] (variadic messages unsupported)');
-    let key = (classMethod ? '+' : '-') + name;
-    if (!cls && receiver.type.removeQualifiers() === this.objc.id) {
-      const instance = this.objc.methods.get('-' + name), meta = this.objc.methods.get('+' + name);
-      if (instance && meta && !instance.type.isCompatibleWith(meta.type))
-        this.error(tok, `Objective-C experiment: ambiguous signature for dynamic receiver selector '${name}'`);
-      if (!instance && meta) key = '+' + name;
-    }
-    const sig = this.objc.methods.get(key);
-    if (!sig) this.error(tok, `Objective-C method '${key}' has no declared signature`);
+    const key = (classMethod ? '+' : '-') + name;
+    let sig;
     if (cls) {
-      let found = false;
-      for (let c = cls; c; c = c.parent) if (c.declared.has(key)) found = true;
-      if (!found) this.error(tok, `Objective-C class '${cls.name}' does not declare '${key}'`);
+      for (let c = cls; c && !sig; c = c.parent) sig = c.declared.get(key);
+      if (!sig) this.error(tok, `Objective-C class '${cls.name}' does not declare '${key}'`);
+    } else {
+      const candidates = receiverType === this.objc.id
+        ? [...(this.objc.methods.get('-' + name) || []), ...(this.objc.methods.get('+' + name) || [])]
+        : (this.objc.methods.get(key) || []);
+      sig = candidates[0];
+      if (sig && candidates.some(other => !sig.type.isCompatibleWith(other.type)))
+        this.error(tok, `Objective-C ambiguous signature for dynamic receiver selector '${name}'`);
+      if (!sig) this.error(tok, `Objective-C method '${key}' has no declared signature`);
     }
     return AST.makeCall(loc, new AST.EIdent(loc, sig.decl.type, sig.decl), [receiver, start, ...args]);
   }
@@ -10817,7 +10826,7 @@ class Parser {
       for (const meta of [false, true]) {
         const entries = [...cls.implemented].filter(([key]) => key.startsWith(meta ? '+' : '-'));
         const table = `__guc_objc_table_${cls.name}_${meta ? 'c' : 'i'}`;
-        if (entries.length) this.objcGenerated(`static struct __guc_objc_method ${table}[] = { ${entries.map(([key, fn]) => `{ ${this.objc.methods.get(key).selector}, (__guc_objc_imp)${fn.name} }`).join(',')} };`);
+        if (entries.length) this.objcGenerated(`static struct __guc_objc_method ${table}[] = { ${entries.map(([key, fn]) => `{ ${cls.declared.get(key).selector}, (__guc_objc_imp)${fn.name} }`).join(',')} };`);
         const variable = meta ? cls.meta : cls.variable;
         let root = cls; while (root.parent) root = root.parent;
         const isa = meta ? root.meta.name : cls.meta.name;
@@ -10830,7 +10839,7 @@ class Parser {
         this.objc.unit.definedVariables = this.objc.unit.definedVariables.filter(v => v.name !== temp);
       }
     }
-    for (const sig of this.objc.methods.values()) {
+    for (const sig of [...this.objc.methods.values()].flat()) {
       const stem = sig.helper;
       this.typeScope.set(stem + '_ret', sig.type.returnType);
       const types = sig.type.paramTypes.slice(2);
@@ -10838,8 +10847,12 @@ class Parser {
       const args = types.map((t, i) => `${stem}_p${i} a${i}`);
       const tail = types.map((t, i) => `a${i}`);
       const voidReturn = sig.type.returnType.isVoid();
+      const nilReturn = sig.type.returnType.isAggregate()
+        ? `{ ${stem}_ret zero; unsigned char *p = (unsigned char *)&zero;
+             for (unsigned int i = 0; i < sizeof zero; ++i) p[i] = 0; return zero; }`
+        : (voidReturn ? 'return;' : 'return 0;');
       this.objcGenerated(`static ${stem}_ret ${stem}(id object, Class start${args.length ? ',' + args.join(',') : ''}) {
-        if (!object) ${voidReturn ? 'return;' : 'return 0;'}
+        if (!object) ${nilReturn}
         ${voidReturn ? '' : 'return '} ((${stem}_ret (*)(id, SEL${types.map((t, i) => ',' + stem + '_p' + i).join('')}))
           __guc_objc_lookup(object, ${sig.selector}, start))(object, ${sig.selector}${tail.length ? ',' + tail.join(',') : ''});
       }`);

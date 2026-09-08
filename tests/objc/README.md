@@ -1,6 +1,6 @@
 # Objective-C compiler experiment (#772)
 
-## Round-two acceptance kickoff (#775, implementation pending)
+## Round-two acceptance kickoff (#775, implementation in progress)
 
 The isolated `lane/775-objc-round2` integrates this experiment onto main's
 `9db2c3cf` aggregate-return foundation. The table below is acceptance to implement,
@@ -26,7 +26,8 @@ lowering must provide an NSString-compatible library seam, without claiming
 that emitting a constant object supplies the complete NSString library.
 Exceptions,
 `@finally`, Blocks, ARC, Objective-C++, Foundation and AppKit remain outside #775.
-The rest of this document remains the round-one baseline until implementation.
+The rest of this document describes the current integrated subset. The complete
+round-two acceptance table above has not passed yet.
 
 This branch experiments with an Objective-C subset in `compiler.js`. It is a
 compiler/runtime spike, not a complete Objective-C compiler, an Apple/GNU ABI,
@@ -51,11 +52,11 @@ There is no `-x`, `-fobjc-arc`, or Objective-C++ mode in this experiment.
 | Declarations | `@interface Name [: Parent]`, `@implementation Name`, `@end`; superclass interface precedes subclass; each class has one implementation in the same `.m` TU. Every implemented method is explicitly declared in its own interface. |
 | Objects | Distinct class pointer types (`Name *`), a compiler-owned class-pointer header before root ivars, inherited object storage with base tail padding preserved, upcasts, `id`, `Class`, `nil`, `Nil`. The internal representation of `id` is `void *`; this is not full Objective-C static type checking. |
 | Ivars | Complete ordinary C scalar/pointer/array/aggregate members; default protected visibility, `@private`, `@protected`, `@public`; implicit ivar names and `self->ivar`; local/parameter shadowing. |
-| Methods | Instance `-` and class `+` methods; explicit return/parameter types; void, integer including 64-bit, pointer including function pointers, float/double/long double using existing C scalar representation. Ordinary C method bodies. |
-| Selectors | Unary, keyword and empty subsequent keyword components; `@selector(...)`, `_cmd`, TU-local selector identity. One compatible signature per selector and method kind across the TU. |
+| Methods | Instance `-` and class `+` methods; explicit return/parameter types; void, integer including 64-bit, pointer including function pointers, float/double/long double using existing C scalar representation; complete struct/union arguments and results through the C aggregate ABI. Ordinary C method bodies. |
+| Selectors | Unary, keyword and empty subsequent keyword components; `@selector(...)`, `_cmd`, TU-local selector identity. Statically typed receivers resolve the nearest declared method through their class hierarchy; unrelated classes may declare different signatures for the same selector. Overrides and implementations require compatible declared signatures. |
 | Messaging | Runtime lookup through class/metaclass inheritance; overrides; recursive/nested messages; class-valued `Class`/`id`; `super` starts at the lexical superclass and preserves the actual receiver. Dynamic `id` sends with conflicting instance/class signatures fail at compile time. |
 | Evaluation | Receiver and each argument evaluated once. Arguments still evaluate for nil. Relative evaluation order follows the existing C call lowering; callers must not depend on a particular order. |
-| Nil | Zero for supported integer/pointer/floating returns; void no-op after argument evaluation. |
+| Nil | Zero for supported integer/pointer/floating returns; zero-filled aggregate results including padding (explicit repo contract); void no-op after argument evaluation. |
 | Lifetime | `guc_objc_alloc(Class)` zero-allocates the class's instance size and sets its class pointer; nil class or allocation failure returns nil. `guc_objc_dispose(id)` frees the object, accepts nil. Both are custom experiment APIs, available in `.m` files without an additional header. |
 | C coexistence | Existing C expressions, statements, functions, preprocessing and source linking; C array brackets remain C subscripts. `@` is tokenized before macro expansion, including included headers. |
 
@@ -78,7 +79,7 @@ method resolution hooks are not part of this contract.
 
 - More than one Objective-C translation unit in a program; cross-TU class/selector
   registration, dynamic class loading and runtime method replacement.
-- Aggregate arguments/returns in Objective-C methods, variadic methods, GC reference
+- Variadic methods, GC reference
   signatures, incomplete/function/bitfield ivars, packed class layouts, objects by value.
 - Forward class declarations, categories/extensions, protocols, properties and dot
   messaging, synthesis/dynamic declarations, fast enumeration, exceptions/synchronization,
@@ -87,7 +88,7 @@ method resolution hooks are not part of this contract.
   Apple/GNU runtime headers or binary compatibility. There is no conventional
   `<objc/objc.h>` or `<objc/runtime.h>` library supplied by this spike.
 - Implicit method types, undeclared method signatures, missing class/method implementations,
-  and selector signatures that conflict within a method kind.
+  incompatible overrides/implementations, and ambiguous signatures at dynamic receiver sites.
 
 Unsupported syntax fails compilation, sometimes through the ordinary C parser's
 source-located diagnostic. Class sends require class-method declarations; promoting root instance methods
@@ -112,9 +113,6 @@ sweep, the Node test is enrolled in host, and the OS test in kernel. `tests/objc
 changes map to all three suites. Actual execution records and gate scope belong
 in the committed #772 journal, not in this contract.
 
-`aggregate-abi.c` is explicitly a **C-only control** for the existing compiler's
-aggregate indirect-call ABI. It is not an Objective-C demo. The emitter adds a
-hidden return pointer for C aggregate returns; extending the Objective-C helpers
-requires defining the target's nil aggregate result and testing hidden-pointer
-lifetime, argument copies, nested sends and overrides. The current method parser
-refuses that ABI rather than applying the scalar helper to it.
+`aggregate-abi.c` remains a **C-only control**. `round2.js` exercises actual
+Objective-C aggregate messages: hidden-return-pointer lifetime, argument copies,
+nested and sibling sends, overrides, lexical super and the zero-filled nil result.

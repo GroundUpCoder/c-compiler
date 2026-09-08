@@ -71,3 +71,37 @@ superclass-first order, and inherited implementations being invoked for subclass
 Sources:
 https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/Strings/Articles/CreatingStrings.html
 https://developer.apple.com/documentation/objectivec/nsobject-swift.class/initialize()?language=objc
+
+## First implementation checkpoint: static signatures and aggregates
+
+Replaced the global single-signature slot with per-selector signature sets and
+typed helpers. Static receiver lookup selects the nearest class declaration;
+dynamic receivers reject incompatible visible candidates. Override and method
+implementation declarations are checked for compatibility. Complete structs and
+unions now use the C method-call ABI. Aggregate method parameters are marked
+MEMORY, matching the ordinary C parser's callee-copy handling. The initial run
+exposed the missing parameter storage mark with Cannot take address of REGISTER
+variable 'a'; fixed the method parameter construction, without changing codegen.
+Nil aggregate helpers explicitly clear every result byte before returning it.
+Retired the aggregate absence checks and updated the override diagnostic check.
+
+Executed `node tests/host/test_objc.js`: 14 positive executions (seven sources,
+default and no-inline), 22 refusal checks, preprocessor/C-mode and multi-TU
+refusal checks, C aggregate control all pass. `git diff --check` passes. This is
+an intermediate focused checkpoint. Browser and broad gate have not run on it;
+no independent review, push or merge has occurred for #775.
+
+Still outstanding: distinct frontend object-pointer types; cross-TU class and
+selector identities and ABI consistency; whole-TU dynamic ambiguity validation
+(current candidate selection sees declarations available at the send site);
+dispatch optimization; conventional initialization; NSString-compatible literal
+seam; variadic methods; expanded acceptance, both OS hosts, full selected gate,
+independent external review and final commit/push/merge. No scope reduction.
+
+Complexity discussion: directly measured before this checkpoint, the integrated
+experiment added 417 and removed 17 lines in compiler.js (43,274 current lines,
+including bundled libc/headers). That is footprint evidence, not a percentage
+of semantic compiler complexity. Assessment: moderate frontend/runtime extension
+for round two; ownership automation/Blocks/exceptions would substantially expand
+the maintenance surface. Foundation belongs in library code. No final LOC or
+effort prediction was claimed.
