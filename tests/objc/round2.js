@@ -45,7 +45,39 @@
         guc_objc_dispose(s); return 0;
       }`],
   ];
+  positive.push(['variadic-promotions-aggregate-and-nil', `
+    #include <stdarg.h>
+    struct Pair { int x; double y; };
+    @interface V
+    - (struct Pair)sum:(int)n, ...;
+    @end
+    @implementation V
+    - (struct Pair)sum:(int)n, ... {
+      va_list ap; va_start(ap,n);
+      struct Pair p=va_arg(ap,struct Pair);
+      for(int i=0;i<n;i++) { p.x+=va_arg(ap,int); p.y+=va_arg(ap,double); }
+      va_end(ap); return p;
+    }
+    @end
+    int main(void) {
+      V *v=guc_objc_alloc(V); struct Pair a={7,1.5};
+      struct Pair b=[v sum:2,a,(char)3,2.5f,(short)4,4.0];
+      if(b.x!=14 || b.y!=8 || a.x!=7) return 1;
+      int effect=0; V *n=nil;
+      struct Pair z=[n sum:1,a,++effect,3.0];
+      unsigned char *bytes=(unsigned char *)&z;
+      for(unsigned i=0;i<sizeof z;i++) if(bytes[i]) return 2;
+      guc_objc_dispose(v); return effect!=1;
+    }`]);
   const negative = [
+    ['late-ambiguous-id', `
+      @interface A - (int)value; @end
+      int use(id x) { return [x value]; }
+      @interface B - (double)value; @end
+      @implementation A - (int)value {return 1;} @end
+      @implementation B - (double)value {return 2;} @end
+      int main(void) {return 0;}
+    `, /ambiguous signature/],
     ['ambiguous-instance-id-site', `
       @interface A - (int)value; @end
       @interface B - (double)value; @end
