@@ -393,3 +393,32 @@ The fresh build/objc/browser.json contains 79 records: 34 positive mode runs,
 sources itself. These supersede the historical 51-record focused browser pass.
 Current expanded 25-program OS-host executions and broad/flake gates are next;
 no #775 merge or gate completion is claimed at this checkpoint.
+
+The focused OS executions completed at d5de09cb: kernel test exit 0, all 25
+programs compiled by actual /bin/cc and executed in fresh processes; browser
+os-objc exit 0, including the 79-record standalone corpus and all 25 /bin/cc
+programs. Filtered child manifests are complete for their one selected member,
+zero resume/carry: 1/200 kernel, 1/70 browser. These are focused results, not the
+broad gate. Logs/summary copies: build/775/focused-kernel* and focused-os-browser*.
+
+## Authorized small Foundation follow-on (user steering, 2026-09-08)
+
+The user now authorizes a real small Foundation subset alongside language
+development. It follows this separately gated compiler round, not a change to
+its running acceptance. Created and reread the concrete hard dependency chain:
+#775 -> #777 NSObject allocation/init/destruction/manual retain-release and
+nested autorelease pools -> #778 genuine NSString and NSConstantString provider
+with correct Unicode, permanent literals and ordinary heap strings -> #779 real
+collections with fast enumeration. Every ticket carries integration acceptance,
+P1/heavy classification and the game-development editor/toolchain justification.
+Detailed API design remains to be settled from contracts before implementation;
+this is current authorized follow-on work, not an implemented-library claim.
+
+Compiler, runtime and library responsibilities must stay explicit. Test ABI
+fixtures must never be presented as Foundation. Supported APIs must be real;
+unsupported APIs must not report false success. Properties/categories/extensions
+and Blocks are desired further language work using real library objects. ARC
+comes after correct manual ownership and an assessment of complexity.
+Objective-C++ is explicitly unwanted and excluded. Broader Foundation comes later.
+Carry this authorization and sequence into continuations; proceed with #777
+following #775 merge while preserving independent review and separate gating.
