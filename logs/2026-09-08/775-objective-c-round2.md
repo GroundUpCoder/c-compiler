@@ -121,3 +121,17 @@ ambiguous. Retired the variadic absence test. Focused Node run passes all 16
 positive executions and 22 refusals plus existing controls
 (build/775/variadic-host.log). Browser count updated but execution still pending.
 No broad gate, push or merge in this checkpoint.
+
+## Cross-TU checkpoint
+
+The red three-TU fixture reached the original one-.m refusal. Replaced static
+class declarations with external descriptors and selectors with external tentative
+opaque objects named by spelling. Existing linker coalescing gives one selector
+address across units, without a TU integer escaping as SEL. Added link-time class
+layout and method ABI consistency checks, recursively inspecting aggregate shapes.
+Retired the blanket multi-TU and interface-only implementation refusals.
+
+Executed focused Node corpus: 16 original/mode positive executions, four three-TU
+executions (both orders, both inline modes), 21 syntax/semantic refusals and four
+cross-TU link diagnostics (layout, signature, duplicate, missing). All pass in
+build/775/cross-host.log. Chromium cross-TU corpus added, execution still pending.

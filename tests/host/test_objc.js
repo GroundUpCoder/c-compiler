@@ -32,18 +32,30 @@ async function main() {
     assert.throws(() => compile(source, name), expected, name);
     console.log('PASS refusal', name);
   }
-  for (const order of [['base.m','sub.m','main.m'], ['main.m','sub.m','base.m']]) {
+  for (const noInline of [false,true]) for (const order of [['base.m','sub.m','main.m'], ['main.m','sub.m','base.m']]) {
     const files=round2.crossTU;
     const pp=C.createDefaultPPRegistry();
     pp.includePaths.push('.');
     const vfs={readFileSync: name => { const key=path.basename(name); if (!(key in files)) throw Error(name); return files[key]; }, existsSync: name => path.basename(name) in files};
     pp.fileReader=name=>files[path.basename(name)] ?? null;
-    const options={compilerOptions:{gcSections:true},warningFlags:{},writeErr:s=>{throw Error(s);}};
+    const options={compilerOptions:{gcSections:true,noInline},warningFlags:{},writeErr:s=>{throw Error(s);}};
     const units=C.parseAllUnits(vfs,pp,order,options);
     assert.deepStrictEqual(C.linkTranslationUnits(units, options.compilerOptions).errors, []);
     const bytes=C.generateCode(units,'cross.wasm',options);
     assert.equal(await runModule({bytes,fs,args:['cross']}),0);
     console.log('PASS cross-TU',order.join(','));
+  }
+  for (const [name, files, expected] of [
+    ['layout', ['@interface A {int x;} @end @implementation A @end', '@interface A {double x;} @end int main(void){return 0;}'], /inconsistent Objective-C layout/],
+    ['signature', ['@interface A - (int)x; @end @implementation A - (int)x{return 0;} @end', '@interface A - (double)x; @end int main(void){return 0;}'], /inconsistent Objective-C signature/],
+    ['duplicate', ['@interface A @end @implementation A @end', '@interface A @end @implementation A @end int main(void){return 0;}'], /Duplicate definition/],
+    ['missing', ['@interface A @end int main(void){return guc_objc_alloc(A)==0;}'], /Undefined symbol.*class_A/],
+  ]) {
+    const options={compilerOptions:{},warningFlags:{},writeErr:s=>{throw Error(s);}};
+    const units=C.parseAllUnits({readFileSync: p=>files[parseInt(p)]}, C.createDefaultPPRegistry(), files.map((_,i)=>i+'.m'),options);
+    const errors=C.linkTranslationUnits(units,options.compilerOptions).errors;
+    assert(errors.some(e=>expected.test(e.message)), name+': '+JSON.stringify(errors));
+    console.log('PASS cross-TU refusal',name);
   }
   const pp = C.createDefaultPPRegistry();
   pp.defines.set('DECL', '@NAME'); pp.defines.set('NAME', 'interface');
@@ -53,10 +65,9 @@ async function main() {
   assert(!pp.defines.has('__OBJC__'));
   const c = C.tokenize('ordinary.c', '@interface A\n@end', pp);
   assert(c.errors.length, 'C must continue rejecting Objective-C');
-  assert.throws(() => C.parseAllUnits({}, pp, ['a.m', 'b.m'], { compilerOptions: {} }), /one .m/);
   const aggregate = compile(fs.readFileSync(path.join(__dirname, '../objc/aggregate-abi.c'), 'utf8'), 'aggregate-abi.c');
   assert.equal(await runModule({ bytes: aggregate, fs, args: ['aggregate-abi.c'] }), 0);
   console.log('PASS C-only aggregate ABI control (not Objective-C support)');
-  console.log('PASS C-mode and multi-TU refusal');
+  console.log('PASS C-mode isolation');
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });

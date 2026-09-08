@@ -5949,6 +5949,7 @@ class TUnit {
     this.minStackBytes = 0;
     this.exportDirectives = [];
     this.exceptionTags = [];
+    this.objc = null;
     Object.seal(this);
   }
 }
@@ -9850,6 +9851,40 @@ function linkTranslationUnits(units, compilerOptions) {
   const errors = [];
   const externScope = new Map();
 
+  // C's nominal tag comparison alone cannot validate Objective-C object
+  // layout across independently parsed headers. Check complete ABI shapes,
+  // including nested aggregates, before sharing any class descriptor.
+  function objcABIEqual(a, b, seen = new Map()) {
+    a = a.removeQualifiers(); b = b.removeQualifiers();
+    if (a === b) return true;
+    if (a.constructor !== b.constructor || !a.isCompatibleWith(b)) return false;
+    if (seen.get(a) === b) return true;
+    seen.set(a, b);
+    if (a.isFunction()) return objcABIEqual(a.returnType, b.returnType, seen) &&
+      a.paramTypes.every((t, i) => objcABIEqual(t, b.paramTypes[i], seen));
+    if (a.isPointer() || a.isArray()) return objcABIEqual(a.baseType, b.baseType, seen);
+    if (a.isAggregate() && a.isComplete && b.isComplete) {
+      if (a.size !== b.size || a.align !== b.align) return false;
+      const am = a.tagDecl.members, bm = b.tagDecl.members;
+      return am.length === bm.length && am.every((m, i) => m.name === bm[i].name &&
+        m.bitWidth === bm[i].bitWidth && objcABIEqual(m.type, bm[i].type, seen));
+    }
+    return true;
+  }
+  const objcClasses = new Map();
+  for (const unit of units) for (const cls of unit.objc?.classes.values() || []) {
+    const previous = objcClasses.get(cls.name);
+    if (previous) {
+      if (previous.parent?.name !== cls.parent?.name || !objcABIEqual(previous.type, cls.type))
+        errors.push({message: `inconsistent Objective-C layout for class '${cls.name}'`, locations: [Lexer.Loc.fromTok(previous.tok), Lexer.Loc.fromTok(cls.tok)]});
+      for (const [key, sig] of cls.declared) {
+        const old = previous.declared.get(key);
+        if (old && !objcABIEqual(old.type, sig.type))
+          errors.push({message: `inconsistent Objective-C signature '${cls.name} ${key}'`, locations: [Lexer.Loc.fromTok(previous.tok), Lexer.Loc.fromTok(cls.tok)]});
+      }
+    } else objcClasses.set(cls.name, cls);
+  }
+
   function addError(message, locations) { errors.push({ message, locations: locations || [] }); }
 
   // __link_hint directives, unioned across every unit (a hint declared by a
@@ -10548,7 +10583,8 @@ class Parser {
     this.objc = { unit, classes: new Map(), selectors: new Map(), methods: new Map(), sends: [], helpers: [], current: null };
     this.objcGenerated(`
       typedef void *id;
-      typedef unsigned int SEL;
+      typedef struct __guc_objc_selector *SEL;
+      struct __guc_objc_selector { unsigned int reserved; };
       typedef struct __guc_objc_class *Class;
       typedef void (*__guc_objc_imp)(void);
       struct __guc_objc_method { SEL selector; __guc_objc_imp imp; };
@@ -10577,13 +10613,22 @@ class Parser {
       }
     `);
     this.requiredSources.add('__stdlib.c');
+    unit.objc = this.objc;
     this.objc.id = this.typeScope.get('id');
     this.objc.sel = this.typeScope.get('SEL');
     this.objc.cls = this.typeScope.get('Class');
   }
 
   objcSelector(name) {
-    if (!this.objc.selectors.has(name)) this.objc.selectors.set(name, this.objc.selectors.size + 1);
+    if (!this.objc.selectors.has(name)) {
+      // One external tentative object per spelling. The existing C linker
+      // coalesces these across TUs: SEL is the canonical object's address.
+      const symbol = '__guc_objc_selector_' + Array.from(name, c => c.codePointAt(0).toString(16)).join('_');
+      const variable = new AST.DVar(null, symbol, this.objc.sel.baseType, Types.StorageClass.NONE);
+      this.varScope.stack[0].set(symbol, variable);
+      this.objc.unit.definedVariables.push(variable);
+      this.objc.selectors.set(name, {symbol, variable, id: this.objc.selectors.size + 1});
+    }
     return this.objc.selectors.get(name);
   }
 
@@ -10629,8 +10674,8 @@ class Parser {
     const key = (classMethod ? '+' : '-') + name;
     const signatures = this.objc.methods.get(key) || [];
     const existing = signatures.find(sig => sig.type.isCompatibleWith(type));
-    const selector = this.objcSelector(name);
-    const sig = existing || { name, key, type, selector, classMethod, helper: `__guc_objc_send_${classMethod ? 'c' : 'i'}${selector}_${signatures.length}` };
+    const selectorInfo = this.objcSelector(name), selector = selectorInfo.id;
+    const sig = existing || { name, key, type, selector, selectorSymbol: selectorInfo.symbol, classMethod, helper: `__guc_objc_send_${classMethod ? 'c' : 'i'}${selector}_${signatures.length}` };
     if (!existing) {
       signatures.push(sig);
       this.objc.methods.set(key, signatures);
@@ -10697,7 +10742,7 @@ class Parser {
       const layout = Types.computeStructLayout(members, 0);
       type.size = layout.size; type.align = layout.align; type.isComplete = true;
       type.tagDecl = new AST.DTag(loc, Types.TagKind.STRUCT, type.tagName, true, members);
-      this.objcGenerated(`static struct __guc_objc_class __guc_objc_class_${name}; static struct __guc_objc_class __guc_objc_meta_${name};`);
+      this.objcGenerated(`extern struct __guc_objc_class __guc_objc_class_${name}; extern struct __guc_objc_class __guc_objc_meta_${name};`);
       cls.variable = this.varScope.get('__guc_objc_class_' + name);
       cls.meta = this.varScope.get('__guc_objc_meta_' + name);
       while (this.atText('-') || this.atText('+')) {
@@ -10846,13 +10891,13 @@ class Parser {
         this.error(send.tok, `Objective-C ambiguous signature for dynamic receiver selector '${send.name}'`);
     }
     for (const cls of this.objc.classes.values()) {
-      if (!cls.complete) this.error(cls.tok, `Objective-C experiment: class '${cls.name}' has no implementation in this translation unit`);
+      if (!cls.complete) continue;
       for (const key of cls.declared.keys()) if (!cls.implemented.has(key))
         this.error(cls.tok, `Objective-C method '${key}' has no implementation`);
       for (const meta of [false, true]) {
         const entries = [...cls.implemented].filter(([key]) => key.startsWith(meta ? '+' : '-'));
         const table = `__guc_objc_table_${cls.name}_${meta ? 'c' : 'i'}`;
-        if (entries.length) this.objcGenerated(`static struct __guc_objc_method ${table}[] = { ${entries.map(([key, fn]) => `{ ${cls.declared.get(key).selector}, (__guc_objc_imp)${fn.name} }`).join(',')} };`);
+        if (entries.length) this.objcGenerated(`static struct __guc_objc_method ${table}[] = { ${entries.map(([key, fn]) => `{ &${cls.declared.get(key).selectorSymbol}, (__guc_objc_imp)${fn.name} }`).join(',')} };`);
         const variable = meta ? cls.meta : cls.variable;
         let root = cls; while (root.parent) root = root.parent;
         const isa = meta ? root.meta.name : cls.meta.name;
@@ -10862,6 +10907,9 @@ class Parser {
         const temp = '__guc_objc_init_' + variable.name;
         this.objcGenerated(`static struct __guc_objc_class ${temp} = { &${isa}, ${parent}, ${meta ? 0 : cls.type.size}, ${entries.length ? table : '0'}, ${entries.length} };`);
         variable.initExpr = this.varScope.get(temp).initExpr;
+        variable.storageClass = Types.StorageClass.NONE;
+        this.objc.unit.externVariables = this.objc.unit.externVariables.filter(v => v !== variable);
+        this.objc.unit.definedVariables.push(variable);
         this.objc.unit.definedVariables = this.objc.unit.definedVariables.filter(v => v.name !== temp);
       }
     }
@@ -10880,7 +10928,7 @@ class Parser {
       this.objcGenerated(`static ${stem}_ret ${stem}(id object, Class start${args.length ? ',' + args.join(',') : ''}) {
         if (!object) ${nilReturn}
         ${voidReturn ? '' : 'return '} ((${stem}_ret (*)(id, SEL${sig.type.paramTypes.slice(2).map((t, i) => ',' + stem + '_p' + i).join('')}${sig.type.isVarArg ? ',...' : ''}))
-          __guc_objc_lookup(object, ${sig.selector}, start))(object, ${sig.selector}${tail.length ? ',' + tail.join(',') : ''});
+          __guc_objc_lookup(object, &${sig.selectorSymbol}, start))(object, &${sig.selectorSymbol}${tail.length ? ',' + tail.join(',') : ''});
       }`);
     }
   }
@@ -11997,7 +12045,8 @@ class Parser {
           if (this.atKind(Lexer.TokenKind.IDENT) || this.atKind(Lexer.TokenKind.KEYWORD)) name += this.advance().text;
         }
         this.expect(')');
-        return new AST.EInt(loc, this.objc.sel, BigInt(this.objcSelector(name)));
+        const selector = this.objcSelector(name).variable;
+        return AST.makeUnary(loc, 'OP_ADDR', new AST.EIdent(loc, selector.type, selector));
       }
       if (t.text.startsWith('@')) this.error(t, `Objective-C experiment: unsupported expression '${t.text}'`);
       if (t.text === 'nil' || t.text === 'Nil') {
@@ -41530,8 +41579,6 @@ function isValidRequireName(name) {
 }
 
 function parseAllUnits(fs, pp, inputFiles, options) {
-  if (inputFiles.filter(f => String(f).endsWith('.m')).length > 1)
-    throw new Error('Objective-C experiment: only one .m translation unit per program is supported');
   const units = [];
   const requiredSources = new Set();
   const pendingRequiredSources = [];
@@ -41561,12 +41608,7 @@ function parseAllUnits(fs, pp, inputFiles, options) {
     }
   }
 
-  let objcUnits = 0;
   const processSource = (filename, source) => {
-    if (String(filename).endsWith('.m') && ++objcUnits > 1) {
-      writeErr('Objective-C experiment: only one .m translation unit per program is supported\n');
-      hasErrors = true; return;
-    }
     pp.onceGuards = new Set();
     const filenameInterned = Lexer.intern(filename);
     const tLex = hrtime ? hrtime() : 0;
