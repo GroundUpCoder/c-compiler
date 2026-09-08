@@ -9957,6 +9957,18 @@ function linkTranslationUnits(units, compilerOptions) {
     }
     return true;
   }
+  // A qualified id shares its protocol identity across units even when no
+  // named class appears in the caller. Validate that identity's full schema.
+  const objcProtocols = new Map();
+  for (const unit of units) for (const protocol of unit.objc?.protocols.values() || []) {
+    if (!protocol.complete) continue;
+    const old = objcProtocols.get(protocol.name);
+    if (old && (old.parents.join(',') !== protocol.parents.join(',') ||
+        old.declared.size !== protocol.declared.size || [...old.declared].some(([key,sig]) =>
+          !protocol.declared.has(key) || !objcABIEqual(sig.type,protocol.declared.get(key).type))))
+      errors.push({message:`inconsistent Objective-C protocol '${protocol.name}'`,locations:[]});
+    else objcProtocols.set(protocol.name,protocol);
+  }
   const objcClasses = new Map(), objcSignatures = new Map();
   const recordObjcSignature = (name,key,sig,tok) => {
     if (!objcSignatures.has(name)) objcSignatures.set(name,new Map());
@@ -9982,14 +9994,14 @@ function linkTranslationUnits(units, compilerOptions) {
   for (const unit of units) for (const declaration of unit.objc?.classes.values() || []) {
     const cls = objcClasses.get(declaration.name);
     if (!cls?.complete) continue;
-    for (const requirement of declaration.requirements || []) {
+    for (const requirement of [...declaration.declared.values(), ...(declaration.requirements || [])]) {
       let found=false;
       const visited=new Set();
       for(let c=cls;c && !visited.has(c.name);c=c.parent && objcClasses.get(c.parent.name)) {
         visited.add(c.name);
         if(c.implemented.has(requirement.key)) {found=true;break;}
       }
-      if(!found) errors.push({message:`Objective-C required protocol method '${declaration.name} ${requirement.key}' has no implementation`,locations:[Lexer.Loc.fromTok(declaration.tok)]});
+      if(!found) errors.push({message:`Objective-C ${declaration.declared.has(requirement.key) ? 'method' : 'required protocol method'} '${declaration.name} ${requirement.key}' has no implementation`,locations:[Lexer.Loc.fromTok(declaration.tok)]});
     }
   }
   for (const [name,cls] of objcClasses) {

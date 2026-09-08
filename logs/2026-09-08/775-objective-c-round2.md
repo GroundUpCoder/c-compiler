@@ -272,3 +272,11 @@ incomplete. The red acceptance was committed as 7e8d804c. After the fix,
 `node tests/host/test_objc.js` passed (28 positive executions, 25 refusals,
 four cross-TU executions and eight link diagnostics), recorded in
 `build/775/forward-qualified-host.log`. Broader current-source gates remain pending.
+
+The second independent review found two further cross-unit contract gaps:
+protocol identity could hide different method schemas, and ordinary declared
+methods could escape missing-implementation diagnostics. Red regressions in
+d08eb85c reproduce the missing protocol check. Linking now compares complete
+protocol schemas and resolves all declared methods through the canonical
+implemented class hierarchy. Focused Node acceptance passes in
+`build/775/protocol-link-host.log` (ten cross-TU refusal controls).
