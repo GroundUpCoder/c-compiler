@@ -306,3 +306,11 @@ warm-cache dynamic dispatch, inherited misses and lexical super. Focused Node
 passes at unchanged compiler source (`build/775/cache-host.log`), now 32 positive
 executions. The shared OS script contains 22 programs. This test-only extension
 postdates the 211b46fd source review request; no compiler source changed.
+
+Additional link audit reproduced an unvalidated forward-protocol send: caller
+only forward-declares P and selects an int signature, while another unit completes
+P with double. Pre-fix linking accepted it (no execution claimed); red test
+4ff68334 captures that acceptance. Linking now resolves each dynamic protocol send
+against the canonical completed protocol closure, falling back to linked global
+candidates only if no protocol method applies. Focused Node passes in
+`build/775/forward-protocol-host.log`, now twelve negative link controls.

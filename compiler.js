@@ -10022,7 +10022,23 @@ function linkTranslationUnits(units, compilerOptions) {
     if (send.staticClass) recordObjcSignature(send.staticClass.name,send.key,send.sig,send.tok);
 
   for (const unit of units) for (const send of unit.objc?.sends || []) {
-    if (send.staticClass || send.protocols.length) continue;
+    if (send.staticClass) continue;
+    const protocolCandidates = [], visited = new Set();
+    const visitProtocol = name => {
+      if (visited.has(name)) return;
+      visited.add(name);
+      const p = objcProtocols.get(name);
+      if (!p) return;
+      for (const key of ['-' + send.name,'+' + send.name])
+        if (p.declared.has(key)) protocolCandidates.push(p.declared.get(key));
+      for (const parent of p.parents) visitProtocol(parent);
+    };
+    for (const name of send.protocols) visitProtocol(name);
+    if (protocolCandidates.length) {
+      if (protocolCandidates.some(sig => !objcABIEqual(sig.type,send.sig.type)))
+        errors.push({message:`Objective-C ambiguous signature for dynamic receiver selector '${send.name}' across translation units`,locations:[Lexer.Loc.fromTok(send.tok)]});
+      continue;
+    }
     for (const other of units) for (const [key,candidates] of other.objc?.methods || []) {
       if (send.dynamicId ? key.slice(1) !== send.name : key !== send.key) continue;
       if (candidates.some(sig => !objcABIEqual(sig.type,send.sig.type)))
