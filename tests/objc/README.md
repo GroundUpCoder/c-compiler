@@ -17,9 +17,14 @@ their corresponding capability is implemented.
 | Preprocessor fixes preserved | Existing macro/header and C-mode controls |
 | Both compiler hosts and in-OS compilation | Shared Node/Chromium corpus in both inline modes; cross-TU build/run through `/bin/cc` on Node and Chromium |
 
-Before broad implementation, user input is pending on lazy `+initialize` versus
-absence, object-string literal policy, open-world dispatch, and variadic methods.
-No decision on these four is implied by this acceptance draft. Exceptions,
+User clarification (2026-09-08): follow conventional Objective-C behavior as
+closely as possible, and target NSString/Foundation conventions for strings.
+The earlier proposal for a public GUCConstantString class is withdrawn.
+Implement runtime initialization and variadic sends against their conventional
+contracts; dispatch optimizations must preserve dynamic semantics. Literal
+lowering must provide an NSString-compatible library seam, without claiming
+that emitting a constant object supplies the complete NSString library.
+Exceptions,
 `@finally`, Blocks, ARC, Objective-C++, Foundation and AppKit remain outside #775.
 The rest of this document remains the round-one baseline until implementation.
 

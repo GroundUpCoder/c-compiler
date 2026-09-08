@@ -48,3 +48,26 @@ Actual dlopen and the ticket's named non-goals remain outside the proposal.
 User input is pending; none of these choices has been implemented or represented
 as accepted. This question is required by #775's decide-before-coding section
 and the supplied AGENTS instructions on material unanswered design choices.
+
+## User correction: compatibility is the default
+
+User clarified that actual Objective-C behavior should be followed as closely as
+possible and questioned introducing GUCConstantString instead of NSString.
+The assistant's proposal conflated a ticket boundary (no complete Foundation
+implementation in #775) with a reason to diverge from Foundation conventions.
+That inference was wrong; the public custom string-class proposal is withdrawn.
+The earlier pending proposal is superseded, not approved as a bundle.
+
+Compatibility is now the design direction: standard initialization behavior,
+variadic methods using the existing C ABI, dynamic dispatch semantics preserved
+through optimization, and an NSString-compatible constant-string seam. Full
+Foundation remains distinct library work; compiler literal support alone does
+not establish NSString API support. No implementation of these changes yet.
+
+Primary-source check executed: Apple's String Programming Guide describes
+`NSString *temp = @"Contrafibularity"`, Unicode string constants and program-long
+lifetime; NSObject initialize documentation specifies first-message triggering,
+superclass-first order, and inherited implementations being invoked for subclasses.
+Sources:
+https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/Strings/Articles/CreatingStrings.html
+https://developer.apple.com/documentation/objectivec/nsobject-swift.class/initialize()?language=objc
