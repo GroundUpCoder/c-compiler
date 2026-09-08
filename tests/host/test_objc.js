@@ -57,6 +57,20 @@ async function main() {
     assert(errors.some(e=>expected.test(e.message)), name+': '+JSON.stringify(errors));
     console.log('PASS cross-TU refusal',name);
   }
+  {
+    const tokens=C.tokenize('metadata.m','@interface A @end @implementation A @end const id object; A *typed;', C.createDefaultPPRegistry());
+    const parsed=C.parseTokens(tokens.tokens,{filename:'metadata.m'});
+    assert.deepStrictEqual(parsed.errors,[]);
+    const vars=parsed.translationUnit.definedVariables;
+    const object=vars.find(v=>v.name==='object').type;
+    const typed=vars.find(v=>v.name==='typed').type;
+    assert.notEqual(object.removeQualifiers().constructor,C.Types.PointerType);
+    assert.equal(object.removeQualifiers().ownership,'manual');
+    assert.equal(typed.className,'A');
+    assert.deepStrictEqual(object.protocols,[]);
+    assert.equal(object.removeQualifiers().addVolatile().ownership,'manual');
+    console.log('PASS frontend object-pointer metadata');
+  }
   const pp = C.createDefaultPPRegistry();
   pp.defines.set('DECL', '@NAME'); pp.defines.set('NAME', 'interface');
   const macro = C.tokenize('define.m', 'DECL A @end @implementation A @end', pp);

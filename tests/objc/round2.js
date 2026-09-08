@@ -74,7 +74,19 @@
       for(unsigned i=0;i<sizeof z;i++) if(bytes[i]) return 2;
       guc_objc_dispose(v); return effect!=1;
     }`]);
+  positive.push(['object-pointer-storage', `
+    @interface Object @end @implementation Object @end
+    typedef const id ReadonlyObject;
+    struct Stored { id object; Object *typed; };
+    id identity(id x) {return x;}
+    int main(void) {
+      Object *x=guc_objc_alloc(Object); ReadonlyObject y=x;
+      struct Stored s={identity(y),x};
+      int ok=sizeof(id)==4 && sizeof(Object*)==4 && sizeof s==8 && s.object==s.typed;
+      guc_objc_dispose(x); return !ok;
+    }`]);
   const negative = [
+    ['void-pointer-receiver', 'int main(void){ void *p=0; return [p x]; }', /object pointer/],
     ['late-ambiguous-id', `
       @interface A - (int)value; @end
       int use(id x) { return [x value]; }
