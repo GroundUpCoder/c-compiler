@@ -164,5 +164,31 @@ int main(void) {
     });
   }
 
+
+  // Per-ordinal max sizes also overallocate: [40000, 16] and [16, 40000]
+  // must share a ~40 KiB arena, not become [40000, 40000]. The large callee
+  // returns static storage so it does not itself need another 40 KiB frame.
+  const mixedSizeSource = `
+#include <stdio.h>
+typedef struct { int a[10000]; } Big;
+typedef struct { int a[2]; } Tiny;
+static Big big(int n) { static Big p; p.a[0] = n; return p; }
+static Tiny tiny(int n) { Tiny p = {{n, n + 1}}; return p; }
+static int pair(int *a, int *b) { return a[0] + b[0]; }
+int main(void) {
+  for (volatile int c = 0; c < 2; c++)
+    printf("%d\\n", c ? pair(big(10).a, tiny(20).a) : pair(tiny(30).a, big(40).a));
+  // Independent full expressions share the same arena too.
+  printf("%d\\n", pair(big(50).a, tiny(60).a));
+  printf("%d\\n", pair(tiny(70).a, big(80).a));
+  return 0;
+}`;
+  for (const noInline of [false, true]) {
+    await check(`opposite-sized paths share bytes, not ordinal maxima (noInline=${noInline})`, async () => {
+      const { bytes } = buildSource(mixedSizeSource, { noInline });
+      assert.strictEqual(await run(bytes), '70\n30\n110\n150\n');
+    });
+  }
+
   process.exit(failures ? 1 : 0);
 })();
