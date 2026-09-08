@@ -167,6 +167,13 @@
     @implementation A - (int)value {return 7;} @end
     int main(void) {A *a=guc_objc_alloc(A); int ok=use(a)==7 && adopted(a)==7 && choose(1,a,a)==7 && choose(0,a,a)==7 && owned(1,a,a)==7; guc_objc_dispose(a); return !ok;}
   `]);
+  positive.push(['forward-qualified-class-layout', `
+    @class A; @protocol P;
+    typedef A<P> *AP;
+    @interface A { @public int x; } @end
+    @implementation A @end
+    int main(void) {AP a=guc_objc_alloc(A); a->x=4; int ok=a->x==4 && sizeof *a==8; guc_objc_dispose(a);return !ok;}
+  `]);
   const negative = [
     ['nonconforming-object-conversion', '@protocol P - (int)value; @end @interface A @end @implementation A @end int main(void){A *a=guc_objc_alloc(A); id<P> p=a; return 0;}', /incompatible/],
     ['late-protocol-implementation-mismatch', '@protocol P - (int)value; @end @interface A<P> @end int use(A *a){return [a value];} @implementation A - (double)value{return 1.0;} @end', /incompatible.*signature/],
