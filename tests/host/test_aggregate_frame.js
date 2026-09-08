@@ -217,5 +217,22 @@ int main(void) {
     });
   }
 
+
+  const forSource = `
+#include <stdio.h>
+typedef struct { int a[10000]; } Big;
+static Big big(int n) { static Big p; p.a[0] = n; return p; }
+int main(void) {
+  for (int i = big(0).a[0]; big(1).a[0] && i < 2; i += big(1).a[0])
+    printf("%d\\n", i);
+  return 0;
+}`;
+  for (const noInline of [false, true]) {
+    await check(`for clauses reuse storage across full expressions (noInline=${noInline})`, async () => {
+      const { bytes } = buildSource(forSource, { noInline });
+      assert.strictEqual(await run(bytes), '0\n1\n');
+    });
+  }
+
   process.exit(failures ? 1 : 0);
 })();
