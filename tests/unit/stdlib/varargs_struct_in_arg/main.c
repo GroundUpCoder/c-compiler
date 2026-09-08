@@ -1,9 +1,8 @@
 // Test that a struct-returning call inside a variadic argument expression
 // doesn't corrupt the varargs base pointer.
 //
-// A struct-returning call increments structRetDeferred (the SP is not
-// restored until the outermost call completes).  The varargs reload
-// must account for this delta so the outer va_args pointer stays correct.
+// Aggregate results occupy caller frame slots (#773). Nested calls must
+// preserve the variadic argument block base while producing those results.
 
 #include <stdarg.h>
 #include <stdio.h>

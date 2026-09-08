@@ -18917,19 +18917,32 @@ class CodeGenerator {
     // slots exactly when both can be live at once — i.e. when they sit in the
     // same expression (`f(g(), h())`, `f(g(h()))`). Calls in different
     // statements never overlap, so the numbering RESETS at a statement
-    // boundary and their slots are shared. The reset is suppressed once we
-    // are inside an expression: a GNU statement expression nests statements
-    // under a live expression whose own temporaries are still outstanding, so
-    // resetting there would hand two live temporaries the same slot.
+    // boundary and their slots are shared. The generic walk suppresses that
+    // reset under an expression, preserving any enclosing live temporaries
+    // even if a synthesized AST contains nested statements.
     //
-    // Conservative in two places, both deliberate: sibling sub-expressions
-    // that are really sequenced (a `for` header's init/cond/incr) get
-    // distinct slots, and a statement expression's interior never reuses.
-    // Both cost frame bytes, never correctness.
+    // Conservative cases: sibling sub-expressions that are really sequenced
+    // (a `for` header's init/cond/incr) get distinct slots, as do statements
+    // nested under an expression.
+    // These retain distinct slots for potentially live temporaries. Conditional
+    // arms share slots: charging both paths can overflow the default stack.
     const aggSlotSizes = [];
     let aggSlotAlign = 16;
     const aggCallSlotIndex = new Map();
     const numberAggCalls = (node, counter, inExpr) => {
+      // Conditional arms are mutually exclusive, but their condition and
+      // surrounding expression may still own live temporaries. Start BOTH
+      // arms after that prefix, then reserve the larger arm for successors.
+      // Elvis's thenExpr aliases its condition and is not emitted twice.
+      if (node instanceof AST.ETernary) {
+        numberAggCalls(node.condition, counter, true);
+        const thenCounter = { next: counter.next };
+        const elseCounter = { next: counter.next };
+        if (!node.elvis) numberAggCalls(node.thenExpr, thenCounter, true);
+        numberAggCalls(node.elseExpr, elseCounter, true);
+        counter.next = Math.max(thenCounter.next, elseCounter.next);
+        return;
+      }
       const kids = node.children;
       if (kids) {
         for (const kid of kids) {

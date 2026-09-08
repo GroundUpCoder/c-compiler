@@ -100,7 +100,6 @@ async function check(name, fn) {
     }
   });
 
-
   // Both arms must remain in the AST (volatile condition), but only one can
   // execute. At 35 KiB per arm, summing their frame slots exceeds the default
   // 64 KiB stack. Check actual execution, with inlining both enabled/disabled.
@@ -121,6 +120,47 @@ int main(void) {
     await check(`exclusive aggregate arms fit the default stack (noInline=${noInline})`, async () => {
       const { bytes } = buildSource(branchSource, { noInline });
       assert.strictEqual(await run(bytes), '234 235 35\n134 135 70\n');
+    });
+  }
+
+
+  const lifetimeSource = `
+#include <stdio.h>
+#include <stdarg.h>
+typedef struct { int a[2]; } Small;
+typedef struct { int a[8]; } Large;
+static int *saved;
+static Small small(int n) { Small p = {{n, n + 1}}; return p; }
+static Large large(int n) { Large p = {{n, n + 1}}; return p; }
+static int check(int *a, int *b, int *c, int choose) {
+  return a[0] == 10 && a[1] == 11 && b[0] == (choose ? 20 : 30) &&
+    b[1] == b[0] + 1 && c[0] == 40 && c[1] == 41 && saved[0] == choose;
+}
+static Small variadic(int n, ...) {
+  va_list ap; va_start(ap, n); Small p = {{n, va_arg(ap, int)}};
+  va_end(ap); return p;
+}
+static int pair(int *a, int *b) { return a[0] + a[1] + b[0] + b[1]; }
+int main(void) {
+  Small (*fp)(int, ...) = variadic;
+  for (volatile int c = 0; c < 2; c++) {
+    // The condition's temporary and both sibling arguments stay live while
+    // the selected arm runs. Arms differ in size and number of call sites.
+    printf("%d ", check(small(10).a,
+      ((saved = small(c).a), saved[0]) ?
+        (c > 0 ? small(20).a : large(99).a) : (small(90), large(30).a),
+      large(40).a, c));
+    printf("%d\\n", small(c).a[0] ?: large(50).a[0]);
+  }
+  // Both variadic emission paths copy the result out before freeing their
+  // argument block; a later call must not overwrite either result.
+  printf("%d\\n", pair(variadic(1, small(2).a[0]).a, fp(3, 4).a));
+  return 0;
+}`;
+  for (const noInline of [false, true]) {
+    await check(`pooled slots preserve condition, siblings and variadic results (noInline=${noInline})`, async () => {
+      const { bytes } = buildSource(lifetimeSource, { noInline });
+      assert.strictEqual(await run(bytes), '1 50\n1 1\n10\n');
     });
   }
 

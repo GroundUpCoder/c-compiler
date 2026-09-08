@@ -347,9 +347,11 @@ replaces the standalone foldMemOffsets loop). Telemetry mirrors to
 
 Tarjan callee-before-caller order; the splice mechanism (arg drain,
 wrapper block, label-identity clone, fresh instances, live site counts);
-ALL soundness refusals (imported, noBody, variadic, alloca, overAligned,
-structRet, eh, raw, multiResult); `localCap`; `noinline` hard refusal;
+Soundness refusals (imported, noBody, variadic, alloca, overAligned,
+eh, raw, multiResult); `localCap`; `noinline` hard refusal;
 `alwaysInline` budget bypass; single-use bypass; tree-shake afterward.
+#773 retires the former `structRet` refusal: aggregate-return temporaries now
+occupy caller frame slots, so the hidden pointer uses the ordinary splice.
 The AST-level expression inliner (0188) also stays — it feeds per-TU
 shaking and is upstream of codegen; B is WAST-level only.
 
