@@ -368,3 +368,28 @@ verified rejection after the fix in both orders, exercised16 link assertions
 (including aggregate returns and equal nested bitfield layouts), and reran the
 complete focused Node suite. No material delta finding, edits or heavy runs.
 Current source review is approved; mapper-selected runtime gates remain pending.
+
+## Prerequisite merged; current-source runtime validation
+
+Continuation 01a080d7-ee94-742a-8ee9-7e4f4be9359c, verified codex/gpt-6-astra,
+transferred and reread both claims. #776 completed its separate fresh 25-suite
+gate, received final independent evidence approval, and merged/pushed as
+6f56fbf79c0de0b9dad07cca42fbbf0ee73aa491 (remote main verified); ticket done.
+Its original sedit red remains preserved, cause unknown; unchanged-source
+repetitions and the complete fresh retry passed. See the #776 journal.
+
+Rebased this lane onto that merge, producing 084be5ef. Git skipped the equivalent
+C red-test commit; no conflicts occurred. All 18 previously changed-path blobs
+are identical to the pre-rebase inventory, including compiler blob
+9d5e9c4afcd24674aa9699592393f4a429db3a5e and all Objective-C tests/journals.
+The mixed #776 development commit retains its Objective-C fixture and historical
+journal content. Original authorship remains in the rebased history. Reviewer
+was informed that its approved source is unchanged.
+
+Executed current focused Node suite successfully (build/775/post-rebase-host.log),
+then real Chromium standalone successfully (build/775/post-rebase-browser.log).
+The fresh build/objc/browser.json contains 79 records: 34 positive mode runs,
+29 refusals and 16 multi-TU mode/order runs; Chromium 149.0.7827.55 compiles the
+sources itself. These supersede the historical 51-record focused browser pass.
+Current expanded 25-program OS-host executions and broad/flake gates are next;
+no #775 merge or gate completion is claimed at this checkpoint.
