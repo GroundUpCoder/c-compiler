@@ -41,10 +41,13 @@ int main(void) {
 }
 
 function build(attr) {
-  const src = source(attr);
+  return buildSource(source(attr));
+}
+
+function buildSource(src, compilerOptions = {}) {
   const pp = CC.createDefaultPPRegistry();
   pp.fileReader = p => (p === NAME ? src : null);
-  const opts = { compilerOptions: {}, warningFlags: {}, writeErr: s => { throw new Error(s); } };
+  const opts = { compilerOptions, warningFlags: {}, writeErr: s => { throw new Error(s); } };
   const units = CC.parseAllUnits(
     { readFileSync: p => { if (p !== NAME) throw new Error(p); return src; } }, pp, [NAME], opts);
   assert.deepStrictEqual(CC.linkTranslationUnits(units, opts.compilerOptions).errors, []);
@@ -96,6 +99,30 @@ async function check(name, fn) {
         'without retiring the runtime bump it existed to protect');
     }
   });
+
+
+  // Both arms must remain in the AST (volatile condition), but only one can
+  // execute. At 35 KiB per arm, summing their frame slots exceeds the default
+  // 64 KiB stack. Check actual execution, with inlining both enabled/disabled.
+  const arm = start => Array.from({ length: 35 }, (_, i) => `mk(${start + i})`).join(', ');
+  const branchSource = `
+#include <stdio.h>
+typedef struct { int a[256]; } P;
+static int calls;
+static P mk(int n) { P p; p.a[0] = n; p.a[255] = n + 1; calls++; return p; }
+int main(void) {
+  for (volatile int c = 0; c < 2; c++) {
+    P p = c ? (${arm(100)}) : (${arm(200)});
+    printf("%d %d %d\\n", p.a[0], p.a[255], calls);
+  }
+  return 0;
+}`;
+  for (const noInline of [false, true]) {
+    await check(`exclusive aggregate arms fit the default stack (noInline=${noInline})`, async () => {
+      const { bytes } = buildSource(branchSource, { noInline });
+      assert.strictEqual(await run(bytes), '234 235 35\n134 135 70\n');
+    });
+  }
 
   process.exit(failures ? 1 : 0);
 })();
