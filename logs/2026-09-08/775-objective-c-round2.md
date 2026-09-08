@@ -360,3 +360,11 @@ and bit offsets and bitfield access widths as well as existing shape checks.
 Focused Node passes (`build/775/member-offset-host.log`), now15 negative-link
 cases in both orders (30 records). This compiler delta requires supplemental
 independent review; the previous approval remains correctly pinned to07cfca31.
+
+Supplemental independent source approval received for clean
+`48c64e78d745887696ffa86e99b3b7f9386c229d`, from the same verified external
+Astra reviewer thread. The reviewer reproduced acceptance at the earlier pin,
+verified rejection after the fix in both orders, exercised16 link assertions
+(including aggregate returns and equal nested bitfield layouts), and reran the
+complete focused Node suite. No material delta finding, edits or heavy runs.
+Current source review is approved; mapper-selected runtime gates remain pending.
