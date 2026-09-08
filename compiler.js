@@ -10015,7 +10015,14 @@ function linkTranslationUnits(units, compilerOptions) {
   const recordObjcSignature = (name,key,sig,tok,kind='declaration') => {
     if (!objcSignatures.has(name)) objcSignatures.set(name,new Map());
     const signatures = objcSignatures.get(name), entries = signatures.get(key) || [];
-    const old = entries.find(e => !objcMethodSatisfies(e.sig.type,sig.type,objcABIEqual,objcClasses,objcProtocols) && !objcMethodSatisfies(sig.type,e.sig.type,objcABIEqual,objcClasses,objcProtocols));
+    // Independent object guarantees need not imply one another: an actual
+    // implementation may satisfy their intersection. Only physical ABI
+    // incompatibility is intrinsically inconsistent before checking that IMP.
+    const valueABIEqual = (a,b) => a instanceof Types.ObjcObjectPointerType && b instanceof Types.ObjcObjectPointerType || objcABIEqual(a,b);
+    const old = entries.find(e => e.sig.type.isVarArg !== sig.type.isVarArg ||
+      e.sig.type.paramTypes.length !== sig.type.paramTypes.length ||
+      !valueABIEqual(e.sig.type.returnType,sig.type.returnType) ||
+      e.sig.type.paramTypes.slice(2).some((p,i)=>!valueABIEqual(p,sig.type.paramTypes[i+2])));
     if (old)
       errors.push({message:`inconsistent Objective-C signature '${name} ${key}'`,locations:[Lexer.Loc.fromTok(old.tok),Lexer.Loc.fromTok(tok)]});
     entries.push({sig,tok,kind}); signatures.set(key,entries);

@@ -328,3 +328,14 @@ expectations still constrain actual implementations but do not invent overrides.
 Focused Node passes (`build/775/canonical-obligations-host.log`): 32 positive
 executions,28 refusals,16 cross-unit executions,14 negative link cases in both
 orders (28 records). Shared OS positives now24 programs; OS/browser gates pending.
+
+Independent review reproduced valid multiple-protocol covariance rejected by a
+premature pairwise contract comparison: an id<P,Q> implementation can satisfy
+independent id<P> and id<Q> requirements. The new red shared positive failed at
+link (`build/775/multiple-protocol-red.log`); the accompanying negative promises
+both protocols but supplies only P. Signature collection now rejects incompatible
+physical method ABIs, then validates actual implementations against every object
+guarantee without requiring the guarantees to imply one another. Focused Node
+passes (`build/775/multiple-protocol-host.log`):34 positive executions,29 refusals,
+16 cross-TU executions and28 negative-link records. Shared OS corpus25 programs;
+current Chromium/OS and broad #775 gate remain pending.

@@ -73,7 +73,7 @@ try {
     }
     return { userAgent: navigator.userAgent, records };
   });
-  assert.equal(result.records.length, 32 + 28 + 16);
+  assert.equal(result.records.length, 34 + 29 + 16);
   fs.mkdirSync(new URL('build/objc/', root), { recursive: true });
   fs.writeFileSync(new URL('build/objc/browser.json', root), JSON.stringify(result, null, 2) + '\n');
   console.log(JSON.stringify(result, null, 2));
