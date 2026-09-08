@@ -85,6 +85,29 @@
       int ok=sizeof(id)==4 && sizeof(Object*)==4 && sizeof s==8 && s.object==s.typed;
       guc_objc_dispose(x); return !ok;
     }`]);
+  positive.push(['load-and-initialize', `
+    int sequence, loads, initialized, childSeen;
+    @interface Parent + (void)load; + (void)initialize; + (int)value; @end
+    @interface Child:Parent @end
+    @interface Unused + (void)load; @end
+    @implementation Parent
+    + (void)load {loads++; sequence=1;}
+    + (void)initialize {
+      if(self==Parent) { initialized++; if([Child value]!=7) childSeen=-10; }
+      else if(self==Child) {initialized+=10; childSeen++;}
+    }
+    + (int)value {return 7;}
+    @end
+    @implementation Child @end
+    @implementation Unused
+    + (void)load {loads++; if(sequence!=1) sequence=-10;}
+    @end
+    int main(void) {
+      if(loads!=2 || initialized || sequence!=1) return 1;
+      Class c=Parent; if([c value]!=7 || initialized!=11 || childSeen!=1) return 2;
+      if([Child value]!=7 || initialized!=11) return 3;
+      return 0;
+    }`]);
   const negative = [
     ['void-pointer-receiver', 'int main(void){ void *p=0; return [p x]; }', /object pointer/],
     ['late-ambiguous-id', `
