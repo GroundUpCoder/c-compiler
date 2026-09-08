@@ -216,3 +216,52 @@ host expected). Both OS test drivers now use it, but those expanded OS tests hav
 not executed yet. README rewritten around implemented contracts and explicit
 library/runtime boundaries. Fresh mapper-selected gate, standard flake gate,
 Objective-C repetitions, final independent review and push/merge remain pending.
+
+## Independent completed-source review corrections (318c5463)
+
+Reviewer 01a08075-c875-7d8b-9af1-c85687c49d31 pinned 318c5463 and ran bounded
+Node probes. Existing focused suite passed, but adversarial controls found real
+gaps: a method-empty first interface hid later cross-TU signature conflicts;
+partial superclass headers hid incompatible inherited overrides; static protocol
+receivers ignored protocol-only methods; equivalent separately constructed id<P>
+conditional arms lost object metadata; prefix unsafe_unretained Class* failed;
+forward-only classes gained link dependencies under noFold. Reviewer also
+independently reproduced U+FEFF literal stripping found in my own audit.
+
+Added regressions and corrected the mechanisms. Linker signatures accumulate
+all declarations, protocol requirements and static send contracts independently
+of the selected layout/implementation representative; inherited overrides are
+validated against that merged hierarchy. Protocol required implementations and
+conversion guarantees are checked. Static method lookup includes explicit and
+adopted protocols and is rechecked after the TU; protocol ancestry is traversed
+from its declarations. Conditional expressions form an object-pointer common
+type with shared protocol guarantees; cloning retains ownership/protocol context.
+Prefix/suffix unretained qualifiers work on class pointers, including function
+parameters. Forward declarations create runtime references only when used by a
+class address or an implemented descriptor's ancestry. Literal decoding preserves
+U+FEFF with ignoreBOM:true; byte accumulation avoids a call-argument spread limit.
+
+Executed own BOM red (build/775/string-bom-red.log, exit4); added regression
+212f875d before committing its correction. The other original adversarial reds
+are independent reviewer executions, recorded in #775 comments; expanded local
+Node corpus now passes all 26 positive executions, 25 refusals, 4 cross-TU runs,
+8 negative link controls, metadata checks and noFold forward-only control
+(build/775/review-complete-host.log). Chromium rerun awaits the heavy lock.
+The shared OS script now expects 15 programs because protocol-only static dispatch
+was added. No OS green or fresh broad Objective-C gate is claimed yet.
+
+## Separate prerequisite gate, correcting the earlier batching plan
+
+The #775 integration includes round-one registry enrollment changes. CLAUDE.md
+3a.3 forbids batching such a ticket with another ticket, so the earlier plan to
+share its gate with #776 was wrong. No combined gate was launched. Created isolated
+lane/776-fixed-vararg-float from main 9db2c3cf, retained red-test authorship by
+cherry-picking 9cd2e2f8, and split the C-only fix into fa602313. Its exact 25-suite
+diff gate runs detached at /Users/jku/git/c-compiler-vararg776, wrapper PID 97146,
+started 2026-09-08T10:33:45Z. Status/log/manifest files are build/776/gate.exit,
+gate.log and gate/summary.json there. That worktree must remain stable while it
+bakes/tests. Independent reviewer 01a08094-63e5-7c64-b622-e7f9d1e0ea50 was created
+via cc-meta with explicit codex/gpt-6-astra and verified metadata; it APPROVED
+exact fa602313 after a focused conformance run and native Clang control. The
+prerequisite gate is still pending. Merge #776 first, rebase #775, then run its
+own fresh mapper-selected gate and flake checks. Neither ticket is done yet.

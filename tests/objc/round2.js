@@ -161,11 +161,14 @@
     @protocol P - (int)value; @end
     @interface A <P> @end
     int use(A<P> *a) {return [a value];}
+    int choose(int condition,id<P> p,id<P> q) {return [(condition?p:q) value];}
+    int owned(int condition,__unsafe_unretained A *p,A *__unsafe_unretained q) {return [(condition?p:q) value];}
     int adopted(A *a) {return [a value];}
     @implementation A - (int)value {return 7;} @end
-    int main(void) {A *a=guc_objc_alloc(A); int ok=use(a)==7 && adopted(a)==7; guc_objc_dispose(a); return !ok;}
+    int main(void) {A *a=guc_objc_alloc(A); int ok=use(a)==7 && adopted(a)==7 && choose(1,a,a)==7 && choose(0,a,a)==7 && owned(1,a,a)==7; guc_objc_dispose(a); return !ok;}
   `]);
   const negative = [
+    ['nonconforming-object-conversion', '@protocol P - (int)value; @end @interface A @end @implementation A @end int main(void){A *a=guc_objc_alloc(A); id<P> p=a; return 0;}', /incompatible/],
     ['late-protocol-implementation-mismatch', '@protocol P - (int)value; @end @interface A<P> @end int use(A *a){return [a value];} @implementation A - (double)value{return 1.0;} @end', /incompatible.*signature/],
     ['missing-string-provider', 'int main(void){ return @"hello"==nil; }', /require an NSString-compatible NSConstantString library provider/],
     ['bad-string-provider', '@interface NSString @end @interface NSConstantString:NSString @end @implementation NSString @end @implementation NSConstantString @end int main(void){return @"hello"==nil;}', /does not match.*constant-string ABI/],
