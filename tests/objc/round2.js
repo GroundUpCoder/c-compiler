@@ -138,6 +138,7 @@
     @implementation NSConstantString @end
     static NSString *unicode=@"a\\0😀" "z" @"!";
     static NSString *empty=@"";
+    static NSString *bom=@"\\uFEFFx";
     int loaded;
     @interface Probe + (void)load; @end
     @implementation Probe
@@ -150,6 +151,8 @@
       const unsigned short *p=a->data;
       if(p[0]!='a' || p[1] || p[2]!=0xd83d || p[3]!=0xde00 || p[4]!='z' || p[5]!='!' || p[6]) return 2;
       if(b->flags || b->length || b->byteSize || !b->data || *(char*)b->data) return 3;
+      NSConstantString *d=(NSConstantString*)bom;
+      if(d->length!=2 || ((unsigned short*)d->data)[0]!=0xfeff || ((unsigned short*)d->data)[1]!='x') return 4;
       NSString *saved=survive(); for(int i=0;i<100;i++) survive();
       NSConstantString *c=(NSConstantString*)saved;
       return !loaded || c->length!=5 || *(char*)c->data!='a';
