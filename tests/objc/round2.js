@@ -45,6 +45,21 @@
         guc_objc_dispose(s); return 0;
       }`],
   ];
+  positive.push(['method-object-variance', `
+    @interface Base - (Base*)value; - (Base*)accept:(Base*)x; @end
+    @interface Sub:Base - (Sub*)value; - (Base*)accept:(id)x; @end
+    @implementation Base
+    - (Base*)value {return self;} - (Base*)accept:(Base*)x {return x;}
+    @end
+    @implementation Sub
+    - (Sub*)value {Base *b=[super value]; return (Sub*)b;}
+    - (Base*)accept:(id)x {return x;}
+    @end
+    int main(void) {
+      Sub *s=guc_objc_alloc(Sub); Base *b=s; Base *x=[b value]; Sub *y=[s value];
+      Base *n=nil; int bad=x!=s || y!=s || [n value]!=nil || [b accept:s]!=s;
+      guc_objc_dispose(s); return bad;
+    }`]);
   positive.push(['variadic-promotions-aggregate-and-nil', `
     #include <stdarg.h>
     struct Pair { int x; double y; };
