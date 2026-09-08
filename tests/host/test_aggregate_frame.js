@@ -190,5 +190,32 @@ int main(void) {
     });
   }
 
+
+  const alignedSource = `
+#include <stdio.h>
+#include <stdint.h>
+typedef struct { int a[2]; } Tiny;
+typedef struct __attribute__((aligned(64))) { int a[16]; } Wide;
+static Tiny tiny(int n) { Tiny p = {{n, n + 1}}; return p; }
+static Wide wide(int n) { static Wide p; p.a[0] = n; p.a[15] = n + 1; return p; }
+static int check(int *a, int *b, int *c, int n) {
+  return !((uintptr_t)b & 63) && !((uintptr_t)c & 63) && a[0] == 1 &&
+    b[0] == n && b[15] == n + 1 && c[0] == 4 && c[15] == 5;
+}
+int main(void) {
+  volatile char scratch[3]; scratch[0] = 7;
+  for (volatile int c = 0; c < 2; c++)
+    printf("%d\\n", check(tiny(1).a,
+      c ? wide(2).a : (tiny(90), wide(3).a), wide(4).a, c ? 2 : 3));
+  printf("%d\\n", scratch[0]);
+  return 0;
+}`;
+  for (const noInline of [false, true]) {
+    await check(`byte arena preserves over-alignment and live values (noInline=${noInline})`, async () => {
+      const { bytes } = buildSource(alignedSource, { noInline });
+      assert.strictEqual(await run(bytes), '1\n1\n7\n');
+    });
+  }
+
   process.exit(failures ? 1 : 0);
 })();

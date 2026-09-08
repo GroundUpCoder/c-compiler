@@ -57,3 +57,26 @@ its partial artifacts and log remain, and are not green evidence. The mapper's
 `--diff 277b14fb --dry-run` selects 25 suites, omitting `netsurf-patch`. A fresh
 exact-source diff gate and independent re-review are still required. No new
 browser/e2e test was introduced, so the new-e2e flake gate is not triggered.
+
+## Second counter-pass: byte layout, not ordinal maxima
+
+The independent re-review at `12923199` found that ordinal pooling still sums
+incompatible layouts: [large, small] versus [small, large] becomes two large
+slots. Accepted and reproduced in a second red-first commit `95891857`, with
+40,000-byte results returned from static callee storage (so the callee does not
+itself require another large stack frame). Both inline modes trapped. The
+reviewer separately verified its reproducer succeeds at `277b14fb` in both modes.
+The gate at `12923199` was stopped before further source edits; its partial
+artifacts remain under `build/773/takeover-gate` and are not completion evidence.
+
+The final allocator uses an aligned BYTE cursor per path and a high-water size
+for one shared frame arena. Each call has its own relative byte offset. Branch
+joins take max(cursor), statements start at zero, and the arena base aligns to
+the maximum required alignment. This also avoids opposite-sized slot inflation
+across independent statements. The full expression's live prefix is never reset
+at a conditional join. The generic walk retains its conservative lifetime rule.
+
+All 12 host checks now pass, including opposite-sized branches and independent
+statements, plus 64-byte aligned results after a small live prefix and before a
+live sibling. Both inline modes verify addresses and values. No stack limit was
+changed. A new exact-tip review and fresh gate must adjudicate this revision.

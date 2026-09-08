@@ -18908,38 +18908,32 @@ class CodeGenerator {
       }
     }
 
-    // #773: aggregate-return temporaries are frame objects, like every other
-    // frame-resident object above. Number each aggregate-returning call site,
-    // then give each NUMBER one slot.
+    // #773: aggregate-return temporaries occupy one caller-frame arena.
+    // The cursor counts BYTES, not numbered slots: exclusive layouts such as
+    // [large, small] and [small, large] need max(path bytes), not the sum of
+    // max(size at each ordinal), which can overflow an otherwise sufficient
+    // stack. Each call is aligned independently within the aligned arena.
     //
-    // Pooling rule. A temporary returned by a call lives until the end of the
-    // enclosing full expression (C11 6.2.4p8), so two calls need distinct
-    // slots exactly when both can be live at once — i.e. when they sit in the
-    // same expression (`f(g(), h())`, `f(g(h()))`). Calls in different
-    // statements never overlap, so the numbering RESETS at a statement
-    // boundary and their slots are shared. The generic walk suppresses that
-    // reset under an expression, preserving any enclosing live temporaries
-    // even if a synthesized AST contains nested statements.
-    //
-    // Conservative cases: sibling sub-expressions that are really sequenced
-    // (a `for` header's init/cond/incr) get distinct slots, as do statements
-    // nested under an expression.
-    // These retain distinct slots for potentially live temporaries. Conditional
-    // arms share slots: charging both paths can overflow the default stack.
-    const aggSlotSizes = [];
-    let aggSlotAlign = 16;
-    const aggCallSlotIndex = new Map();
-    const numberAggCalls = (node, counter, inExpr) => {
+    // Results remain live through the full expression. Statement boundaries
+    // restart the cursor; within an expression it only advances, except that
+    // mutually exclusive conditional arms fork and join at their maximum.
+    // Suppress statement resets beneath expressions to preserve any live
+    // prefix even if a synthesized AST contains nested statements. Separate
+    // for-header expressions conservatively retain distinct storage.
+    let aggAreaSize = 0;
+    let aggAreaAlign = 16;
+    const aggCallRelativeOffsets = new Map();
+    const layoutAggCalls = (node, counter, inExpr) => {
       // Conditional arms are mutually exclusive, but their condition and
       // surrounding expression may still own live temporaries. Start BOTH
       // arms after that prefix, then reserve the larger arm for successors.
       // Elvis's thenExpr aliases its condition and is not emitted twice.
       if (node instanceof AST.ETernary) {
-        numberAggCalls(node.condition, counter, true);
+        layoutAggCalls(node.condition, counter, true);
         const thenCounter = { next: counter.next };
         const elseCounter = { next: counter.next };
-        if (!node.elvis) numberAggCalls(node.thenExpr, thenCounter, true);
-        numberAggCalls(node.elseExpr, elseCounter, true);
+        if (!node.elvis) layoutAggCalls(node.thenExpr, thenCounter, true);
+        layoutAggCalls(node.elseExpr, elseCounter, true);
         counter.next = Math.max(thenCounter.next, elseCounter.next);
         return;
       }
@@ -18948,25 +18942,23 @@ class CodeGenerator {
         for (const kid of kids) {
           if (!kid) continue;
           const kidIsStmt = kid instanceof AST.Stmt;
-          if (kidIsStmt && !inExpr) numberAggCalls(kid, { next: 0 }, false);
-          else numberAggCalls(kid, counter, inExpr || !kidIsStmt);
+          if (kidIsStmt && !inExpr) layoutAggCalls(kid, { next: 0 }, false);
+          else layoutAggCalls(kid, counter, inExpr || !kidIsStmt);
         }
       }
       if (node instanceof AST.ECall && isStructOrUnion(node.type)) {
-        const idx = counter.next++;
-        const a = this.alignOf(node.type);
-        if (a > aggSlotAlign) aggSlotAlign = a;
-        const need = (this.sizeOf(node.type) + 15) & ~15;
-        if (aggSlotSizes[idx] === undefined || aggSlotSizes[idx] < need) {
-          aggSlotSizes[idx] = need;
-        }
-        aggCallSlotIndex.set(node, idx);
+        const a = Math.max(16, this.alignOf(node.type));
+        aggAreaAlign = Math.max(aggAreaAlign, a);
+        counter.next = (counter.next + a - 1) & ~(a - 1);
+        aggCallRelativeOffsets.set(node, counter.next);
+        counter.next += (this.sizeOf(node.type) + 15) & ~15;
+        aggAreaSize = Math.max(aggAreaSize, counter.next);
       }
     };
-    if (funcDef.body) numberAggCalls(funcDef.body, { next: 0 }, false);
+    if (funcDef.body) layoutAggCalls(funcDef.body, { next: 0 }, false);
 
     if (memoryVars.length > 0 || memoryParams.length > 0 ||
-        hasFrameCompoundLiterals || aggSlotSizes.length > 0) {
+        hasFrameCompoundLiterals || aggCallRelativeOffsets.size > 0) {
       this.savedSpLocalIdx = this.allocLocal(WT_I32);
       let offset = 0;
       let maxAlign = 16;
@@ -18997,18 +18989,15 @@ class CodeGenerator {
           offset += this.sizeOf(cl.type);
         }
       }
-      // #773: aggregate-return slots, one per number assigned above.
-      if (aggSlotSizes.length > 0) {
-        if (aggSlotAlign > maxAlign) maxAlign = aggSlotAlign;
-        const aggSlotOffsets = [];
-        for (const size of aggSlotSizes) {
-          offset = (offset + aggSlotAlign - 1) & ~(aggSlotAlign - 1);
-          aggSlotOffsets.push(offset);
-          offset += size;
+      // The whole arena shares the maximum path extent. Its base satisfies
+      // every call's alignment, so relative aligned offsets remain aligned.
+      if (aggCallRelativeOffsets.size > 0) {
+        maxAlign = Math.max(maxAlign, aggAreaAlign);
+        offset = (offset + aggAreaAlign - 1) & ~(aggAreaAlign - 1);
+        for (const [call, relativeOffset] of aggCallRelativeOffsets) {
+          this.aggCallOffsets.set(call, offset + relativeOffset);
         }
-        for (const [call, idx] of aggCallSlotIndex) {
-          this.aggCallOffsets.set(call, aggSlotOffsets[idx]);
-        }
+        offset += aggAreaSize;
       }
       this.frameSize = (offset + 15) & ~15;
       // Over-aligned frame: some local requested alignment beyond the
