@@ -9977,6 +9977,29 @@ function linkTranslationUnits(units, compilerOptions) {
       units.push(unit);
     }
   }
+  // #777: exact static identities are linker metadata, not an allocation
+  // registry. Actual DVar references preserve per-TU literal identity and are
+  // relocated by ordinary static initialization, before any +load can run.
+  if (units.some(u => u.objc) && !units.some(u => u.filename === '<guc-objc-lifetimes>')) {
+    const loc = Lexer.Loc.generated(), objects = [], classes = new Set();
+    for (const unit of units) if (unit.objc) {
+      for (const cls of unit.objc.classes.values()) if (cls.complete && !classes.has(cls.name)) {
+        classes.add(cls.name); objects.push(cls.variable, cls.meta);
+      }
+      pushAll(objects, unit.objc.literals);
+    }
+    const pointer = Types.TVOID.pointer();
+    const type = Types.arrayOf(pointer, Math.max(1, objects.length));
+    const values = objects.map(v => AST.makeCast(loc, pointer,
+      AST.makeUnary(loc, 'OP_ADDR', new AST.EIdent(loc, v.type, v))));
+    if (!values.length) values.push(AST.makeCast(loc, pointer, new AST.EInt(loc, Types.TINT, 0n)));
+    const table = new AST.DVar(loc, '__guc_objc_immortals', type, Types.StorageClass.NONE, new AST.EInitList(loc, type, values));
+    table.allocClass = Types.AllocClass.MEMORY;
+    const count = new AST.DVar(loc, '__guc_objc_immortal_count', Types.TUINT, Types.StorageClass.NONE,
+      new AST.EInt(loc, Types.TUINT, BigInt(objects.length)));
+    const unit = AST.makeTUnit('<guc-objc-lifetimes>');
+    unit.definedVariables.push(table, count); units.push(unit);
+  }
   const externScope = new Map();
 
   // C's nominal tag comparison alone cannot validate Objective-C object
@@ -10845,7 +10868,7 @@ class Parser {
   }
 
   objcInit(unit) {
-    this.objc = { unit, classes: new Map(), protocols: new Map(), selectors: new Map(), methods: new Map(), sends: [], helpers: [], literals: [], current: null };
+    this.objc = { unit, classes: new Map(), protocols: new Map(), selectors: new Map(), methods: new Map(), sends: [], helpers: [], literals: [], poolScopes: new WeakMap(), current: null };
     this.typeScope.set('id', new Types.ObjcObjectPointerType(Types.createTagType(Types.TagKind.STRUCT, '__guc_objc_object'),null,[],'manual',this.objc.protocols));
     this.objcGenerated(`
       typedef struct __guc_objc_selector *SEL;
@@ -10866,13 +10889,54 @@ class Parser {
       void *calloc(unsigned long, unsigned long);
       void free(void *);
       void abort(void);
+      extern void *__guc_objc_immortals[];
+      extern unsigned int __guc_objc_immortal_count;
+      id __guc_objc_pool_push(void);
+      void __guc_objc_pool_pop(id);
+      static int __guc_objc_is_immortal(id object) {
+        if ((unsigned long)object >= __builtin(heap_base)) return 0;
+        for (unsigned int i=0; i<__guc_objc_immortal_count; ++i)
+          if (object == __guc_objc_immortals[i]) return 1;
+        return 0;
+      }
+      static unsigned int *__guc_objc_refcount(id object) {
+        if (!object || __guc_objc_is_immortal(object)) return 0;
+        if ((unsigned long)object < __builtin(heap_base)) abort();
+        return (unsigned int *)object - 2;
+      }
       static id guc_objc_alloc(Class cls) {
-        if (!cls) return 0;
-        id object = calloc(1, cls->size);
-        if (object) *(Class *)object = cls;
+        if (!cls || cls->size > 0x40000000UL - 8) return 0;
+        unsigned int *base = calloc(1, cls->size + 8);
+        if (!base) return 0;
+        base[0] = 1;
+        id object = (id)(base + 2);
+        *(Class *)object = cls;
         return object;
       }
-      static void guc_objc_dispose(id object) { free(object); }
+      static void guc_objc_dispose(id object) {
+        unsigned int *count = __guc_objc_refcount(object);
+        if (count) free(count);
+      }
+      static id __guc_objc_retain(id object) {
+        unsigned int *count = __guc_objc_refcount(object);
+        if (count) {
+          if (!*count || *count == 0xffffffffU) abort();
+          ++*count;
+        }
+        return object;
+      }
+      static int __guc_objc_release(id object) {
+        unsigned int *count = __guc_objc_refcount(object);
+        if (!count) return 0;
+        if (!*count) abort();
+        --*count;
+        return *count == 0;
+      }
+      static unsigned int __guc_objc_retain_count(id object) {
+        if (!object) return 0;
+        unsigned int *count = __guc_objc_refcount(object);
+        return count ? *count : 0xffffffffU;
+      }
       static __guc_objc_imp __guc_objc_find(Class cls, SEL selector) {
         while (cls) {
           for (unsigned int i = 0; i < cls->count; ++i)
@@ -10934,6 +10998,8 @@ class Parser {
     this.objc.sel = this.typeScope.get('SEL');
     this.objc.cls = this.typeScope.get('Class');
     this.objc.constantType = this.tagScope.get('__guc_objc_constant_string');
+    this.objc.poolDeclarations = ['__guc_objc_pool_push', '__guc_objc_pool_pop'].map(n => this.varScope.get(n));
+    unit.declaredFunctions = unit.declaredFunctions.filter(f => !this.objc.poolDeclarations.includes(f));
   }
 
   objcSelector(name) {
@@ -11233,6 +11299,7 @@ class Parser {
         this.currentParsingFunc = fn; this.objc.current = { cls, sig };
         this.parsedLabels.clear(); this.pendingGotos.clear();
         fn.body = this.parseCompoundStatement();
+        this.objcLowerPools(fn);
         for (const [label] of this.pendingGotos) this.recoverableError(this.peek(), `Undefined label '${label}'`);
         this.parsedLabels.clear(); this.pendingGotos.clear();
         this.currentParsingFunc = saved; this.objc.current = null;
@@ -13935,6 +14002,92 @@ class Parser {
     return new AST.EInitList(Lexer.Loc.fromTok(startTok), type, elements, hasDesignators ? designators : null);
   }
 
+  // #777: preserve lexical pool boundaries until labels are resolved, then
+  // lower normal exits to ordinary typed AST before goto/optimizer passes.
+  // A synthetic loop would steal break/continue; an end-of-block call would
+  // miss directed exits. No exception or longjmp unwinding is implied here.
+  objcLowerPools(fn) {
+    const scopes = this.objc.poolScopes, labels = new Map();
+    let hasPools = false;
+    const collect = (node, stack, switchStack) => {
+      if (!(node instanceof AST.Stmt)) return;
+      const pool = scopes.get(node);
+      if (pool) { hasPools = true; stack = [...stack, pool]; }
+      if (node instanceof AST.SLabel) labels.set(node, stack);
+      if (node instanceof AST.SCase && switchStack && stack.length !== switchStack.length)
+        this.error(this.peek(), 'case dispatch cannot enter an @autoreleasepool scope');
+      const target = node instanceof AST.SSwitch ? stack : switchStack;
+      for (const child of node.children) collect(child, stack, target);
+    };
+    collect(fn.body, [], null);
+    if (!hasPools) return;
+    const call = (name, args, loc) => {
+      const f = this.varScope.stack[0].get(name);
+      return AST.makeCall(loc, new AST.EIdent(loc, f.type, f), args);
+    };
+    const pops = (stack, depth, loc) => stack.slice(depth).reverse().map(v =>
+      new AST.SExpr(loc, call('__guc_objc_pool_pop', [new AST.EIdent(loc, v.type, v)], loc)));
+    const rewrite = (node, stack, breakDepth, continueDepth) => {
+      if (!(node instanceof AST.Stmt)) return node;
+      const loc = node.loc, pool = scopes.get(node);
+      if (pool) stack = [...stack, pool];
+      if (node instanceof AST.SReturn) {
+        if (!stack.length) return node;
+        const statements = [];
+        let value = node.expr;
+        if (value) {
+          if (value.type.isVoid()) { statements.push(new AST.SExpr(loc, value)); value = null; }
+          else {
+            const v = new AST.DVar(loc, '__guc_objc_return_' + this.anonCounter++, value.type, Types.StorageClass.AUTO, value);
+            v.definition = v;
+            if (v.type.isAggregate()) v.allocClass = Types.AllocClass.MEMORY;
+            statements.push(new AST.SDecl(loc, [v])); value = new AST.EIdent(loc, v.type, v);
+          }
+        }
+        pushAll(statements, pops(stack, 0, loc)); statements.push(new AST.SReturn(loc, value));
+        return new AST.SCompound(loc, statements);
+      }
+      let depth;
+      if (node instanceof AST.SBreak) depth = breakDepth;
+      if (node instanceof AST.SContinue) depth = continueDepth;
+      if (node instanceof AST.SGoto && node.target) {
+        const target = labels.get(node.target) || [];
+        let common = 0;
+        while (common < stack.length && common < target.length && stack[common] === target[common]) common++;
+        if (common !== target.length)
+          this.error(this.peek(), 'goto cannot enter an @autoreleasepool scope');
+        depth = common;
+      }
+      if (depth !== undefined) {
+        const cleanup = pops(stack, depth, loc);
+        return cleanup.length ? new AST.SCompound(loc, [...cleanup, node]) : node;
+      }
+      if (node instanceof AST.SCompound) {
+        const statements = node.statements.map(n => rewrite(n, stack, breakDepth, continueDepth));
+        if (pool) {
+          pool.initExpr = call('__guc_objc_pool_push', [], loc);
+          statements.unshift(new AST.SDecl(loc, [pool]));
+          pushAll(statements, pops(stack, stack.length - 1, loc));
+        }
+        const result = new AST.SCompound(loc, statements, node.labels);
+        for (const label of node.labels) label.enclosingBlock = result;
+        return result;
+      }
+      if (node instanceof AST.SFor)
+        return new AST.SFor(loc, node.init, node.condition, node.increment,
+          rewrite(node.body, stack, stack.length, stack.length));
+      if (node instanceof AST.SWhile)
+        return new AST.SWhile(loc, node.condition, rewrite(node.body, stack, stack.length, stack.length));
+      if (node instanceof AST.SDoWhile)
+        return new AST.SDoWhile(loc, rewrite(node.body, stack, stack.length, stack.length), node.condition);
+      if (node instanceof AST.SSwitch)
+        return new AST.SSwitch(loc, node.expr, rewrite(node.body, stack, stack.length, continueDepth));
+      const children = node.children.map(n => rewrite(n, stack, breakDepth, continueDepth));
+      return children.some((n,i) => n !== node.children[i]) ? node._withChildren(children) : node;
+    };
+    fn.body = rewrite(fn.body, [], undefined, undefined);
+  }
+
   // --- Statement parsing ---
 
   parseStatement() {
@@ -13942,6 +14095,16 @@ class Parser {
   }
 
   _parseStatement(loc) {
+    if (this.objc && this.matchText('@autoreleasepool')) {
+      for (const f of this.objc.poolDeclarations)
+        if (!this.objc.unit.declaredFunctions.includes(f)) this.objc.unit.declaredFunctions.push(f);
+      const body = this.parseCompoundStatement();
+      const pool = new AST.DVar(loc, '__guc_objc_pool_' + this.anonCounter++, this.objc.id, Types.StorageClass.AUTO);
+      pool.definition = pool;
+      this.objc.poolScopes.set(body, pool);
+      this.requiredSources.add('foundation/NSAutoreleasePool.m');
+      return body;
+    }
     // Empty statement
     if (this.matchText(";")) return new AST.SEmpty(loc);
 
@@ -14760,6 +14923,7 @@ class Parser {
         this.pendingGotos.clear();
 
         funcDecl.body = this.parseCompoundStatement();
+        if (this.objc) this.objcLowerPools(funcDecl);
 
         // Check for unresolved gotos
         for (const [name] of this.pendingGotos) {

@@ -1,0 +1,13 @@
+{
+  "name": "foundation",
+  "version": "0.1.0",
+  "summary": "Small Foundation source library — NSObject, manual ownership and autorelease pools",
+  "files": {
+    "include/Foundation": { "tree": "os/foundation/Foundation" },
+    "src": { "tree": "os/foundation" }
+  },
+  "srclib": {
+    "include": ["include"],
+    "src": { "foundation": "src" }
+  }
+}

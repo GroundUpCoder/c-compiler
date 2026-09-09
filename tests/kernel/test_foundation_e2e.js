@@ -1,0 +1,10 @@
+'use strict';
+const assert=require('assert');
+const {driveBoot}=require('./lib/drive.js');
+const fixture=require('../foundation/os-script.js');
+const script=["cat > /root/foundation-test.sh <<'FOUNDATION_SCRIPT_END'",fixture.source,'FOUNDATION_SCRIPT_END','sh /root/foundation-test.sh','echo FOUNDATION-OS-RESULT=$?','exit'].join('\n');
+const r=driveBoot(script,{prefix:'os-foundation-',timeout:900000});
+assert.equal(r.status,0,String(r.stderr));
+assert.match(String(r.stdout),/FOUNDATION-OS-RESULT=0/,String(r.stdout));
+assert.match(String(r.stdout),new RegExp('FOUNDATION-OS-COUNT='+fixture.count),String(r.stdout));
+console.log('PASS Foundation installed source library + /bin/cc:',fixture.count,'programs');
