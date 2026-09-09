@@ -4484,14 +4484,21 @@ var BLOCK_FS = (function () {
     // instances (the spawn-pipeline case).
     if (ctx.pipeBroker) self._pipeBroker = ctx.pipeBroker;
 
-    function wrap(fn) {
+    function wrap(fn, restartable) {
       return function () {
-        var result = fn.apply(self, arguments);
-        if (result === null || result < 0) {
-          setErrnoName(self._lastError || 'EIO');
+        for (;;) {
+          var result = fn.apply(self, arguments);
+          if (result !== null && !(result < 0)) return result;
+          // Snapshot before a handler can change the backend error. Only an
+          // interrupted operation with no progress may be replayed; positive
+          // partial transfers are final. Re-enter the marshalling callback so
+          // memory growth in a handler cannot leave a stale buffer view.
+          var error = self._lastError || 'EIO';
+          if (restartable && error === 'EINTR' && ctx.deliverSignals &&
+              ctx.deliverSignals() === true) continue;
+          setErrnoName(error);
           return -1;
         }
-        return result;
       };
     }
 
@@ -4505,7 +4512,7 @@ var BLOCK_FS = (function () {
         var memory = getMemory();
         var buf = new Uint8Array(memory.buffer, buf_ptr, count);
         return this.read(fd, buf, count);
-      }),
+      }, true),
       write: wrap(function (fd, buf_ptr, count) {
         var memory = getMemory();
         var buf = new Uint8Array(memory.buffer, buf_ptr, count);
@@ -4524,7 +4531,7 @@ var BLOCK_FS = (function () {
           }
         }
         return this.write(fd, buf, count);
-      }),
+      }, true),
       // 64-bit lseek: offset arrives as BigInt, result returns as BigInt. The
       // prototype returns null on error, so map that to -1n + errno (the generic
       // wrap()'s number -1 would throw at the i64 boundary).
@@ -4648,7 +4655,7 @@ var BLOCK_FS = (function () {
       }),
       __sock_accept: wrap(function (fd) {
         return this.sockAccept(fd);
-      }),
+      }, true),
       __sock_connect: wrap(function (fd, path_ptr) {
         return this.sockConnect(fd, readString(path_ptr));
       }),

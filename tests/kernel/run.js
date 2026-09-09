@@ -60,6 +60,8 @@ const tests = [
   ['test_spawn_build_e2e.js', IMG], // #752: 40-module shell build
   ['test_start_failure_e2e.js'], // #752: forced Instance failure, parent wait status and child stderr
   ['test_e2e.js', BOOT],          // real C programs in worker_threads via nodeCreateWorker
+  ['test_shell_restart_e2e.js', BOOT], // #780: real hush interrupted substitution
+  ['test_syscall_restart_e2e.js', BOOT], // #780: blocked read/write/accept SA_RESTART
   ['test_signals_e2e.js', BOOT],  // Phase 2: async delivery, EINTR/SA_RESTART, pause, exit handshake
   ['test_itimer_e2e.js', BOOT],   // 0044: alarm/setitimer(ITIMER_REAL) -> SIGALRM — EINTR on blocked read, interval reload, DFL terminate
   ['test_tty.js', LIGHT],          // Phase 3: line discipline semantics (kernel-side, no wasm)
