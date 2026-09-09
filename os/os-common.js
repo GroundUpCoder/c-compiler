@@ -1498,6 +1498,8 @@ function checkReservedPackageFiles(pkg, label) {
  * zlib consumer had to install a PNG decoder, and the two packages could not
  * be installed together — gucman refuses to overwrite a planted link). */
 var SRCLIB_TABLE = [
+  { header: 'os/foundation/Foundation/NSObjCRuntime.h', lib: 'os/foundation/lib.json',
+    ns: 'foundation', pkg: 'packages/foundation.json', tree: 'os/foundation' },
   { header: 'vendor/freetype/demo/ft2build.h', lib: 'vendor/freetype/lib.json',
     ns: 'freetype', pkg: 'packages/freetype.json', tree: 'vendor/freetype/srclib' },
   { header: 'vendor/zlib/src/zlib.h', lib: 'vendor/zlib/lib.json',

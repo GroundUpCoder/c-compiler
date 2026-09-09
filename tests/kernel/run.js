@@ -52,6 +52,7 @@ const LIGHT = { light: true };
 const BOOT = { boot: true };
 
 const tests = [
+  ['test_foundation_e2e.js', IMG], // #777 installed Foundation source library
   ['test_objc_e2e.js', IMG], // #772 in-OS Objective-C build/run
 
   ['test_kernel.js', LIGHT],       // process-table semantics over the real SAB protocol
