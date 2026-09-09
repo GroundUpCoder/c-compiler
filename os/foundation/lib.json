@@ -1,0 +1,6 @@
+{
+  "type": "lib",
+  "includes": ["."],
+  "srcRoots": {"foundation": "."},
+  "sources": ["NSObject.m", "NSAutoreleasePool.m"]
+}

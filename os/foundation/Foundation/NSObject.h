@@ -1,0 +1,34 @@
+#ifndef GUC_FOUNDATION_NSOBJECT_H
+#define GUC_FOUNDATION_NSOBJECT_H
+#include <Foundation/NSObjCRuntime.h>
+@interface NSObject
++ (id)alloc;
++ (id)new;
+- (id)init;
+- (void)dealloc;
+- (id)retain;
+- (void)release;
+- (id)autorelease;
+- (NSUInteger)retainCount;
++ (id)retain;
++ (void)release;
++ (id)autorelease;
++ (NSUInteger)retainCount;
++ (Class)class;
+- (Class)class;
++ (Class)superclass;
+- (Class)superclass;
++ (id)self;
+- (id)self;
++ (BOOL)isEqual:(id)object;
+- (BOOL)isEqual:(id)object;
++ (NSUInteger)hash;
+- (NSUInteger)hash;
+- (BOOL)isKindOfClass:(Class)cls;
+- (BOOL)isMemberOfClass:(Class)cls;
++ (BOOL)isSubclassOfClass:(Class)cls;
++ (BOOL)respondsToSelector:(SEL)selector;
+- (BOOL)respondsToSelector:(SEL)selector;
++ (BOOL)instancesRespondToSelector:(SEL)selector;
+@end
+#endif
