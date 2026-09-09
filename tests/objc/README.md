@@ -29,8 +29,8 @@ compatibility or a complete Foundation/AppKit implementation.
 | Nil | Zero scalar/pointer/floating result; void no-op after argument evaluation. Aggregate results are zero-filled, including padding: an explicit gucOS contract rather than a claim about every native Objective-C ABI. |
 | Eager initialization | All linked classes participate in startup, including unused classes. Runtime `+load` invokes only an own implementation, directly, superclass-first. No automatic inherited load and no implicit initialize merely for the direct load call. Messages from load use ordinary dispatch. Unrelated load order is unspecified. |
 | Lazy initialization | Before the first ordinary class or instance send, initialize the actual receiver class, superclass-first. An inherited `+initialize` runs with each subclass as self, once per class. Same-thread reentry is permitted; child completion waits for an active parent's completion. Nil and bare class/literal references do not initialize. Lookup/cache access follows initialization. |
-| Explicit lifetime | `guc_objc_alloc(Class)` zero-allocates an instance and sets isa; `guc_objc_dispose(id)` frees it and accepts nil. These existing custom allocation primitives do not send init/dealloc or manage ivar references. A library may implement ordinary alloc/init/dealloc/retain/release methods above them. |
-| Ownership | Manual by default; explicit `__unsafe_unretained` retains that unretained behavior and its type metadata. Owning/weak qualifiers fail loudly; no ARC, weak registry, or autorelease machinery is implied. |
+| Explicit lifetime | `guc_objc_alloc(Class)` zero-allocates an instance and sets isa; `guc_objc_dispose(id)` frees it and accepts nil. These existing custom allocation primitives do not send init/dealloc or manage ivar references. The Foundation source library (#777) implements alloc/init/dealloc/retain/release above them. A private runtime prefix stores ownership without changing ivar offsets; known compiler class/literal objects are permanent and raw dispose accepts them as a no-op. |
+| Ownership | Manual by default; explicit `__unsafe_unretained` retains that unretained behavior and its type metadata. Owning/weak qualifiers fail loudly; no ARC or weak registry is implied. The separate Foundation library supplies manual autorelease pools; `@autoreleasepool` lowers all normal scope exits to that library. |
 | C coexistence | C expressions, functions, preprocessing and source linking remain available. `__OBJC__` is scoped to each Objective-C TU, including headers/macros/token pasting; it does not leak into C compilation. |
 
 Startup uses the existing exported `__wasm_call_ctors` host hook, after instance,
@@ -75,7 +75,7 @@ Size is 24 bytes, alignment 4. ASCII payload alignment is 1; UTF-16 alignment is
 2. Embedded NULs and supplementary-character surrogate pairs are preserved.
 The linker checks the provider's complete inherited physical layout against this
 shape. Matching this payload is a compiler/library seam, not GNUstep/libobjc2
-runtime binary compatibility. Foundation and AppKit remain separate library work.
+runtime binary compatibility. The small Foundation library now supplies NSObject and pools; real NSString/NSConstantString is the next authorized increment (#778). AppKit is outside this subset.
 
 Primary contracts: [Clang GNUstep code generation](https://github.com/llvm/llvm-project/blob/main/clang/lib/CodeGen/CGObjCGNU.cpp),
 [GNUstep NSString ABI](https://github.com/gnustep/libs-base/blob/master/Headers/Foundation/NSString.h),
@@ -93,7 +93,7 @@ objects passed by value refuse. Boxing and collection literals are absent.
 Undeclared selectors, missing declared method implementations and incompatible
 signatures fail loudly. Promoting root instance methods to class methods,
 forwarding and dynamic method resolution are not supplied. Standard runtime
-headers and NSObject/Foundation/AppKit APIs are not bundled. `__guc_objc_*` names
+headers and AppKit APIs are not bundled. NSObject and manual pools are supplied by the separately installed `foundation` source-library package; see `os/foundation/README.md`. `__guc_objc_*` names
 and `__wasm_call_ctors` are compiler implementation symbols.
 
 Only live allocated objects, class objects and valid library-provided constant
