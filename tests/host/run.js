@@ -14,6 +14,7 @@ var { assertMemberRegistry } = require('../lib/suite-runner.js');
 require('../lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/host/run.js' });
 
 var tests = [
+  ['test_small.js', []], // optional Small sibling and shared process ABI
   ['test_foundation.js', []], // #777 real manual-ownership library
   ['test_objc.js', []], // #772 Objective-C compiler/runtime experiment
   ['test_epipe_listeners.js', []],       // runModule must not stack stream 'error' listeners

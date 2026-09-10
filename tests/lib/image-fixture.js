@@ -37,7 +37,11 @@ function fixtureState() {
   const store = new COMMON.NodeFileStore(fs, IMG, false);
   const v = COMMON.bakedVersion(BLOCK_FS, store);
   const pkgs = COMMON.bakedPackages(BLOCK_FS, store);
+  const smallMatches = COMMON.bakedSmallSnapshot(BLOCK_FS, store) === (manifest.smallSnapshot || null);
   store.close();
+  if (!smallMatches) return { fresh: false, reason: 'Small sibling snapshot changed' };
+  if (!require('../../tools/small-sibling.js').metadataMatches(IMG, manifest.smallSnapshot))
+    return { fresh: false, reason: 'Small image metadata missing or stale' };
   if (v < (manifest.version | 0)) {
     return { fresh: false, reason: `${v < 0 ? 'unreadable' : 'v' + v} < manifest v${manifest.version}` };
   }

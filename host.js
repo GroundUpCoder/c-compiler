@@ -11839,6 +11839,7 @@ async function runModule({
   // don't). ss-flavored modules are never shipped this way (they recompile
   // from bytes with different options in runSsModule).
   module: precompiled,
+  smallRuntime, // optional reference host module for standalone embedders
   args,
   env,
   fs: fsModule,
@@ -13646,6 +13647,52 @@ async function runModule({
     await sdl.gpuRendererReady();
   }
 
+  // Small uses the SAME memory, C services, process startup and lifecycle.
+  // Only its reference-valued language helpers need another import namespace.
+  if (WebAssembly.Module.imports(module).some(function (im) { return im.module === 'small'; })) {
+    if (!smallRuntime) {
+      if (!ctx.fs) throw new Error('Small runtime unavailable: supply smallRuntime or an image containing /usr/lib/small');
+      const fd = ctx.fs.open('/usr/lib/small/runtime.js', 0, 0);
+      if (fd === null) throw new Error('Small runtime is not installed in this image');
+      let source;
+      try {
+        const st = ctx.fs.fstat(fd);
+        if (!st) throw new Error('cannot stat installed Small runtime');
+        const bytes = new Uint8Array(st.size);
+        let offset = 0;
+        while (offset < bytes.length) {
+          const n = ctx.fs.read(fd, bytes.subarray(offset), bytes.length - offset);
+          if (n === null || n <= 0) throw new Error('cannot read installed Small runtime');
+          offset += n;
+        }
+        source = new TextDecoder().decode(bytes);
+      } finally { ctx.fs.close(fd); }
+      // Installed build input, never code taken from the application module.
+      smallRuntime = new Function('return ' + source)();
+    }
+    const textEncoder = new TextEncoder();
+    const writeText = function (fd, text) {
+      if (typeof text !== 'string') throw new TypeError('Small output requires a string');
+      const bytes = textEncoder.encode(text);
+      if (!bytes.length) return;
+      const ptr = instance.exports.alloca(bytes.length);
+      if (!ptr) throw new Error('Small output allocation failed');
+      try {
+        new Uint8Array(instance.exports.memory.buffer, ptr, bytes.length).set(bytes);
+        let offset = 0;
+        while (offset < bytes.length) {
+          const n = imports[ENV_KEY].write(fd, ptr + offset, bytes.length - offset);
+          if (!Number.isInteger(n) || n <= 0 || n > bytes.length - offset) throw new Error('Small output write failed');
+          offset += n;
+        }
+      } finally { instance.exports.__small_free(ptr); }
+    };
+    imports.small = Object.assign({}, smallRuntime, {
+      stdout: function (text) { writeText(1, text); },
+      stderr: function (text) { writeText(2, text); },
+    });
+  }
+
   const instance = new WebAssembly.Instance(module, imports);
 
   if (ctx.bindSigDispatch) ctx.bindSigDispatch(instance.exports);
@@ -13936,7 +13983,7 @@ async function runModule({
     }
   }
 
-  return exitCode;
+  return exitCode === undefined && typeof instance.exports.__small_free === 'function' ? 0 : exitCode;
 }
 
 // @cc-strip-below — single-file emit boundary. compiler.js's emitters

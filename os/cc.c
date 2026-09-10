@@ -1,4 +1,4 @@
-/* /bin/cc — the C compiler as an OS binary. There is no wasm image to exec
+/* /bin/cc and /bin/small — compiler commands as OS binaries. There is no wasm image to exec
  * (the compiler is compiler.js, living in the kernel worker), so this is a
  * thin shim over the __compile syscall: ship argv+cwd to the kernel's
  * compile hook, then write the returned stdout/stderr to our OWN fds — so
@@ -16,7 +16,11 @@ int main(int argc, char **argv) {
     char cwd[512];
     if (!getcwd(cwd, sizeof cwd)) strcpy(cwd, "/");
     int n = __compile(cwd, argv, buf, sizeof buf);
-    if (n < 0) { perror("cc"); return 1; }
+    if (n < 0) {
+        const char *name = strrchr(argv[0], '/');
+        perror(name ? name + 1 : argv[0]);
+        return 1;
+    }
     int exit_code, out_len, err_len;
     memcpy(&exit_code, buf, 4);
     memcpy(&out_len, buf + 4, 4);

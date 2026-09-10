@@ -710,9 +710,29 @@ async function boot() {
   // path), else bake in-worker (the no-build-step dev path). New OPFS names
   // orphan the pre-flip os-system.v4.img/os-user.v4.img pair by design
   // (the 0026 precedent).
+  var expectedSmall = manifest.smallSnapshot;
+  if (expectedSmall === undefined) {
+    var smallMetadata = await fetch(manifest.smallMetadata || (manifest.image || 'os-system.img') + '.small.json', { cache: 'no-store' });
+    // Existing content-named publishers bake os-system.img into dist first,
+    // then copy that image to a hashed alias. mkimage's metadata remains next
+    // to the stable compatibility image. The fetched image is still checked
+    // against the metadata before installation, including across deployments.
+    if (smallMetadata.status === 404 && manifest.image && !manifest.smallMetadata)
+      smallMetadata = await fetch('os-system.img.small.json', { cache: 'no-store' });
+    if (smallMetadata.ok) {
+      var smallInfo = await smallMetadata.json();
+      if (smallInfo.format !== 1 || !(smallInfo.smallSnapshot === null || /^[a-f0-9]{64}$/.test(smallInfo.smallSnapshot)))
+        throw new Error('invalid Small image metadata');
+      expectedSmall = smallInfo.smallSnapshot;
+    } else if (smallMetadata.status !== 404 || manifest.smallSnapshotPolicy === 'required')
+      throw new Error('Small image metadata unavailable: publish the image with its .small.json metadata (HTTP ' + smallMetadata.status + ')');
+  }
   var sysStore = await opfsStore(SYS_IMG);
   var sysMode = 'reused';
-  if (OS_COMMON.bakedVersion(BLOCK_FS, sysStore) < (manifest.version | 0)) {
+  var smallMatches = function (store) {
+    return expectedSmall === undefined || OS_COMMON.bakedSmallSnapshot(BLOCK_FS, store) === expectedSmall;
+  };
+  if (OS_COMMON.bakedVersion(BLOCK_FS, sysStore) < (manifest.version | 0) || !smallMatches(sysStore)) {
     sysMode = null;
     try {
       // manifest.image (todos/0249): a DEPLOY may publish the blob under a
@@ -725,7 +745,7 @@ async function boot() {
         var blob = new Uint8Array(await r.arrayBuffer());
         var memStore = new BLOCK_FS.MemoryByteStore(blob.length);
         memStore.setBytes(0, blob);
-        if (OS_COMMON.bakedVersion(BLOCK_FS, memStore) >= (manifest.version | 0)) {
+        if (OS_COMMON.bakedVersion(BLOCK_FS, memStore) >= (manifest.version | 0) && smallMatches(memStore)) {
           post({ type: 'boot-log', msg: 'installing prebaked system image (v' +
             OS_COMMON.bakedVersion(BLOCK_FS, memStore) + ')…' });
           materializeBlob(sysStore, blob);
@@ -734,6 +754,7 @@ async function boot() {
       }
     } catch (e) { /* no prebaked blob served — fall through to the bake */ }
     if (!sysMode) {
+      if (expectedSmall) throw new Error('matching Small system image unavailable; rebuild and serve the image with its metadata');
       await OS_COMMON.bakeSystemImage(BLOCK_FS, CompilerJS, sysStore, manifest, seedIo);
       sysMode = 'baked';
     }

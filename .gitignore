@@ -36,3 +36,7 @@ vendor/cpython/**/__pycache__/
 # The native gcode oracle build (os/gcode/build-native.sh) — ~/.local/bin/gcode
 # symlinks to this artifact (#353).
 os/gcode/gcode
+
+# Generated Small image identity, published beside each system image.
+os/*.img.small.json
+os/*.img.small.json.tmp-*

@@ -75,6 +75,77 @@ function writeFile(kfs, path, data, mode) {
   kfs.close(fd);
 }
 
+// Compiler and library bytes are installed together in the sealed /usr image.
+function createSmallDriver(kfs) {
+  var Small = null;
+  function canon(p) {
+    var parts = [];
+    p.split('/').forEach(function (x) { if (x === '..') parts.pop(); else if (x && x !== '.') parts.push(x); });
+    return '/' + parts.join('/');
+  }
+  var roots = ['/usr/local/lib/small', '/usr/lib/small/root'];
+  function exists(p) { var st = kfs.stat(p); return st && (st.mode & 0xf000) === 0x8000; }
+  function locate(from, spec) {
+    if (from === null) return canon(spec);
+    if (spec.startsWith('./') || spec.startsWith('../')) return canon(from.slice(0, from.lastIndexOf('/') + 1) + spec);
+    for (var root of roots) { var p = canon(root + '/' + spec); if (kfs.stat(p)) return p; }
+    return null;
+  }
+  var loader = {
+    searchRoots: roots,
+    resolve: locate,
+    load: async function (p) { var s = readFileText(kfs, p); if (s === null) throw new Error('cannot read ' + p); return s; },
+    listDir: async function (from, spec) {
+      var dir = locate(from, spec);
+      if (!dir) return null;
+      var handle = kfs.opendir(dir);
+      if (handle === null) return null;
+      var names = [];
+      try { for (var ent; (ent = kfs.readdir(handle)) !== null;) {
+        if (ent.name !== '.' && ent.name !== '..') names.push(canon(dir + '/' + ent.name));
+      } } finally { kfs.closedir(handle); }
+      return names;
+    },
+  };
+  return async function (argv, cwd) {
+    try {
+      var file = null, output = 'a.out';
+      for (var i = 1; i < argv.length; i++) {
+        if (argv[i] === '-o' && i + 1 < argv.length) output = argv[++i];
+        else if (argv[i].startsWith('-')) throw new Error('unknown option ' + argv[i]);
+        else if (file === null) file = argv[i];
+        else throw new Error('expected one source file');
+      }
+      if (file === null) throw new Error('usage: small source.wc [-o program]');
+      if (!Small) {
+        var source = readFileText(kfs, '/usr/lib/small/compiler.js');
+        if (source === null) throw new Error('Small compiler is not installed in this image');
+        var m = { exports: {} };
+        var noRequire = function (name) { throw new Error('Node module unavailable in gucOS: ' + name); };
+        new Function('module', 'require', source.replace(/^#![^\n]*/, ''))(m, noRequire);
+        Small = m.exports;
+      }
+      var entry = canon(file.startsWith('/') ? file : cwd + '/' + file);
+      if (!exists(entry)) throw new Error('cannot read ' + entry);
+      var compiled = await Small.compileGucosProgram(entry, loader);
+      if (!compiled.module || compiled.errors.length) return { exitCode: 1, stdout: '', stderr: compiled.errors.map(function (e) {
+        return e.span.path + ':' + e.span.line + ':' + e.span.column + ': ' + e.message + '\n';
+      }).join('') };
+      var bytes = Small.emit(compiled.module, { includeNames: true, exportMemory: true });
+      writeFile(kfs, canon(output.startsWith('/') ? output : cwd + '/' + output), bytes, 0o755);
+      return { exitCode: 0, stdout: '', stderr: '' };
+    } catch (e) { return { exitCode: 1, stdout: '', stderr: 'small: ' + e.message + '\n' }; }
+  };
+}
+
+function bakedSmallSnapshot(BLOCK_FS, store) {
+  try {
+    var fs = BLOCK_FS.createV4(store, { readonly: true });
+    var text = readFileText(fs, '/lib/small/snapshot.json');
+    return text === null ? null : JSON.parse(text).sha256;
+  } catch (e) { return null; }
+}
+
 /* ---- the compile hook: a cc-style driver over the compiler library ----
  *
  * Returns compile(argv, cwd) -> {exitCode, stdout, stderr} — exactly the
@@ -87,7 +158,12 @@ function writeFile(kfs, path, data, mode) {
  * module.
  */
 function createCcDriver(CompilerJS, kfs) {
+  var smallCompile = null;
   return function compile(argv, cwd) {
+    if (argv[0] && argv[0].split('/').pop() === 'small') {
+      if (!smallCompile) smallCompile = createSmallDriver(kfs);
+      return smallCompile(argv, cwd);
+    }
     var err = '';
     var writeErr = function (s) { err += s; };
     var abs = function (p) {
@@ -1660,6 +1736,7 @@ function requireDriftErrors(readText) {
  * compiles through `project` (the sibling contract's compile vocabulary).
  * Such a def still BUILDS as an installable package via mkpkg. */
 function foldPackages(fsMod, pathMod, rootDir, manifest, which, opts) {
+  manifest = require("../tools/small-sibling.js").fold(rootDir, manifest);
   opts = opts || {};
   var pkgDir = opts.packagesDir || pathMod.join(rootDir, 'packages');
   var avail = listPackages(fsMod, pathMod, rootDir, { packagesDir: pkgDir, defs: opts.defs });
@@ -2648,7 +2725,7 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest, opts) {
       // .img.tmp-<pid> is mkimage's atomic-rename temp (a bake OUTPUT):
       // one left behind by a killed bake would read as an ever-newer
       // "input" and make the published image perpetually stale.
-      else if (!/\.img$/.test(e.name) && !/\.img\.tmp-\d+$/.test(e.name)) statFile(pathMod.join(dir, e.name));
+      else if (!/\.img$/.test(e.name) && !/\.img\.tmp-\d+$/.test(e.name) && !/\.img\.small\.json(?:\.tmp-\d+)?$/.test(e.name)) statFile(pathMod.join(dir, e.name));
     });
   }
   var normalize = normalizeRelPath;   // "a/b/../c" -> "a/c" (buildProject's rule)
@@ -2719,6 +2796,7 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest, opts) {
   // Desktop set into the system section, so its `bin` blobs (deck/mgp
   // data) are blob bytes now — the scan and the bake agree by
   // construction (the listTreeFiles rule).
+  statFile(pathMod.join(rootDir, 'tools/small-sibling.js'));
   var baked = foldDesktopDefaults(manifest);
   var files = (baked.system && baked.system.files) || {};
   Object.keys(files).forEach(function (fp) {
@@ -2792,7 +2870,7 @@ function newestPkgInput(fsMod, pathMod, rootDir, name, pkg, opts) {
       // dir-granular over-approximation by design and a per-extension hole
       // in it is a class of invisible inputs — over-invalidating is the
       // cheap direction.
-      else if (!/\.img$/.test(e.name) && !/\.img\.tmp-\d+$/.test(e.name)) statFile(pathMod.join(dir, e.name));
+      else if (!/\.img$/.test(e.name) && !/\.img\.tmp-\d+$/.test(e.name) && !/\.img\.small\.json(?:\.tmp-\d+)?$/.test(e.name)) statFile(pathMod.join(dir, e.name));
     });
   }
   var normalize = normalizeRelPath;   // "a/b/../c" -> "a/c" (buildProject's rule)
@@ -3226,6 +3304,8 @@ function writeNetStatus(kfs, st) {
 /* ---- environment exports (host.js discipline) ---- */
 var OS_COMMON = {
   createCcDriver: createCcDriver,
+  createSmallDriver: createSmallDriver,
+  bakedSmallSnapshot: bakedSmallSnapshot,
   buildProject: buildProject,
   seedEntries: seedEntries,
   seedBakedSeeds: seedBakedSeeds,

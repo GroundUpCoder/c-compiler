@@ -117,6 +117,7 @@ try {
   process.exit(2);
 }
 if (foldedPackages.length) log('folding packages: ' + foldedPackages.join(', '));
+log(manifest.smallSnapshot ? 'including Small snapshot ' + manifest.smallSnapshot : 'Small sibling absent; compiler omitted');
 
 // Resolve requested overlays against image.json `overlays[]`. An unknown id is
 // a usage error (exit 2), BEFORE any bake — the whole point is an explicit,
@@ -174,6 +175,12 @@ async function main() {
   store.close();
   fs.utimesSync(tmpPath, bakeStart, bakeStart);
   fs.renameSync(tmpPath, outPath);
+  // Ship beside the image (also when the deployment renames the image).
+  // Readers verify this expected snapshot against the bytes they fetch.
+  const metadataPath = outPath + '.small.json';
+  const metadataTmp = metadataPath + '.tmp-' + process.pid;
+  fs.writeFileSync(metadataTmp, JSON.stringify({ format: 1, smallSnapshot: manifest.smallSnapshot || null }) + '\n');
+  fs.renameSync(metadataTmp, metadataPath);
   log(`${outPath}: v${version}, ${(size / (1 << 20)).toFixed(1)} MiB, sealed`);
 }
 

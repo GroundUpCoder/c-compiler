@@ -198,3 +198,52 @@ Common shapes and their causes:
 
 All diagnostics go to stderr. `cc` exits 0 on success, nonzero on any
 error.
+
+## Small
+
+When the image builder finds a valid `../small` checkout, it installs a snapshot
+of the Small compiler, runtime helpers and standard library in `/usr/lib/small`,
+plus `/usr/bin/small`. An absent sibling leaves Small out; an incompatible or
+incomplete sibling is a build error. No network checkout or manual source copy
+is required. The installed image needs no access to the sibling.
+
+```
+small hello.wc -o hello
+./hello
+```
+
+The command accepts one source file and `-o` (default `a.out`). It uses the
+kernel's compilation service and filesystem, and compiler diagnostics respect
+shell redirection. Generated programs use the existing C process ABI:
+`main`, exported `memory`, and allocator-backed `alloca`. Small also exports
+`__small_free`, `__errno_set`, and `__set_environ`. Startup allocations last for
+the process lifetime; output buffers are freed immediately. The same allocator
+serves host and program allocations.
+
+`main` may return `int` (exit status) or `void` (status zero), and accept zero to
+three `int` parameters: argc, argv, envp. These last two are byte offsets to
+UTF-8 string-pointer arrays in exported memory. `gucos.Runtime.errno()` exposes
+the C error code and `gucos.Runtime.environment()` the environment pointer.
+Wasm GC classes/arrays and Small string references keep their representations.
+`System.out` and `System.err` use the process file descriptors, so pipelines and
+redirections work. Existing compatible host calls can be declared with
+`@import("c", "name")`; C struct layouts and callback tables still need bindings.
+This does not yet provide a Small graphics/widget library.
+
+For local cross-compilation in the sibling:
+
+```
+node small.js compile hello.wc --target=gucos -o hello.wasm
+```
+
+Build identity is recorded in `/usr/lib/small/snapshot.json`. `mkimage` emits
+`<image>.small.json` alongside its image; publish both (rename both together for
+a content-named image), or copy `smallSnapshot` into the published image manifest. Existing publishers
+that retain the stable `os-system.img` alias can retain its metadata name too;
+browser boot checks that fallback when hashed-name metadata is absent. An
+explicit `smallMetadata` manifest field can name another metadata URL.
+Browser boot uses that metadata to replace a different cached Small snapshot,
+and validates the fetched image against it. The current manifest requires metadata and a missing sidecar fails boot with a
+publication diagnostic. Older manifests without this requirement retain
+the preexisting version-based cache behavior. Node dev/fixture builds check the
+sibling hash and metadata, including addition, removal and source deletion.

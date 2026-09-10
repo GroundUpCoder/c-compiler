@@ -184,11 +184,14 @@ function ensureSystemImage(dir, plan) {
     baked = COMMON.bakedVersion(BLOCK_FS, store);
     const bakedOv = COMMON.bakedOverlays(BLOCK_FS, store);
     const bakedPk = COMMON.bakedPackages(BLOCK_FS, store);
+    const smallMatches = COMMON.bakedSmallSnapshot(BLOCK_FS, store) === (manifest.smallSnapshot || null);
     store.close();
     const overlaysMatch = bakedOv.length === wantOverlays.length &&
       bakedOv.every((id, i) => id === wantOverlays[i]);
     const packagesMatch = bakedPk.join(',') === wantPkgs.join(',');
-    if (baked >= wanted && !overlaysMatch) {
+    if (!smallMatches || !require('./tools/small-sibling.js').metadataMatches(imgPath, manifest.smallSnapshot)) {
+      why = 'Small sibling snapshot or image metadata changed';
+    } else if (baked >= wanted && !overlaysMatch) {
       why = `overlay set [${bakedOv.join(',') || 'base'}] != wanted [${wantOverlays.join(',') || 'base'}]`;
     } else if (baked >= wanted && !packagesMatch) {
       why = `package set [${bakedPk.join(',') || 'none'}] != wanted [${wantPkgs.join(',') || 'none'}]`;
@@ -372,6 +375,7 @@ const server = http.createServer((req, res) => {
   }
   if (!file.startsWith(root)) { res.writeHead(403); res.end(); return; }
   if (sidecarImgFile && path.resolve(file) === baseImgFile) file = sidecarImgFile;
+  if (sidecarImgFile && path.resolve(file) === baseImgFile + '.small.json') file = sidecarImgFile + '.small.json';
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404); res.end('Not found'); return; }
     res.writeHead(200, {

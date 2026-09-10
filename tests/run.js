@@ -308,6 +308,7 @@ const OS_BROWSER_ONLY_RE = new RegExp(
 // [regex, [suite, ...], why]. Order is irrelevant (union), but grouped by
 // concern for readability.
 const RULES = [
+  [/^tools\/small-sibling\.js$/, ['host', 'kernel', 'sweep']],
   // The liability register and its validator (the work queue itself moved to
   // the cc ticket tracker, 2026-07-30). Their only other trigger is the
   // per-clone-opt-in pre-commit hook, so without this rule they are
