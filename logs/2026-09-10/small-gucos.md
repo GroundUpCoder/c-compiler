@@ -40,3 +40,17 @@ Follow-up: the user freed disk space; 27 GiB is now available. The integration
 is being checkpointed separately from unrelated sedit files at the user’s
 request. Regression validation will be rerun against the checkpoint parent;
 this commit does not claim a completed gate or deployment.
+
+## Disk recovery and browser publication regression
+
+With 27 GiB free, test_heavylock_gate.js now passes and Small’s seven gucOS
+target tests pass again. The extended browser test initially failed after its
+compile/run/pipe checks. A diagnostic rerun reproduced Chromium’s DevTools
+pipe refusal: the route.fetch/fulfill image transport exceeded 104857600 bytes.
+The test now rewrites the alias request with route.continue so Chromium fetches
+the binary directly. All four checks pass in real Chromium, including the
+stable metadata fallback and missing-required-metadata boot refusal.
+Original failure and diagnostic logs are retained in /tmp/c-small-browser-recheck.log
+and /tmp/c-small-browser-diagnostic.log; passing run: /tmp/c-small-browser-fixed.log.
+A fresh mapped 23-suite diff gate against cee826008152435813358a49e9dc995d78b540bc
+has started; its result will be recorded separately.

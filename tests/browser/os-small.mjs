@@ -28,8 +28,9 @@ try {
       await route.fulfill({status:404, body:'Not found'});
     });
     await published.route('**/os/small-content-alias.img', async route => {
-      const response = await route.fetch({url:new URL('os-system.img', route.request().url()).href});
-      await route.fulfill({response});
+      // Let Chromium fetch the image directly: fulfilling a large binary through
+      // Playwright base64-encodes it onto the DevTools pipe (100 MiB limit).
+      await route.continue({url:new URL('os-system.img', route.request().url()).href});
     });
     const page = await published.newPage();
     await page.goto(s.url);
