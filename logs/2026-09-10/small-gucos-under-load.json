@@ -1,0 +1,32 @@
+[
+  {
+    "args": [
+      "tests/flake.js"
+    ],
+    "exit": 0,
+    "signal": null,
+    "elapsedMs": 515703
+  },
+  {
+    "args": [
+      "tests/kernel/run.js",
+      "--filter=test_small_e2e",
+      "--repeat=3",
+      "--under-load"
+    ],
+    "exit": 0,
+    "signal": null,
+    "elapsedMs": 2165
+  },
+  {
+    "args": [
+      "tests/browser/os-sweep.mjs",
+      "--filter=os-small",
+      "--repeat=3",
+      "--under-load"
+    ],
+    "exit": 0,
+    "signal": null,
+    "elapsedMs": 15955
+  }
+]

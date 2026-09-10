@@ -54,3 +54,43 @@ Original failure and diagnostic logs are retained in /tmp/c-small-browser-rechec
 and /tmp/c-small-browser-diagnostic.log; passing run: /tmp/c-small-browser-fixed.log.
 A fresh mapped 23-suite diff gate against cee826008152435813358a49e9dc995d78b540bc
 has started; its result will be recorded separately.
+
+## Completed mapped regression gate
+
+Run 20260910-122716-49617 completed at 2026-09-10T13:29:49Z, exit 0,
+3752.9 seconds. All seven dispatcher rows passed across 23 selected suites:
+todos 3/3; C unit 849 pass/3 skip; host PASS; BlockFS 15/15; consumers
+896 pass/0 fail/111 skip; kernel 204/204; browser 72/72. Kernel and browser
+evidence is complete, with no resumed/carried results. The Small tests passed
+inside both complete suites. This is the mapped diff gate, not the full ship
+gate: netsurf-patch, disw and sourcemap were deliberately omitted by the mapper.
+No push or deployment was performed.
+
+The mapped source was defdf29b plus the already-applied browser transport fix
+subsequently committed as 9d4ca336 during the run. No source was changed during
+the gate; only validation documentation and the commit boundary changed.
+The producer Small compiler is still the reviewed working copy, including
+pre-existing access-control edits; this gate is not evidence for pristine
+Small main without those edits.
+
+The full aggregate result is preserved in small-gucos-diff-result.json. Original
+child summaries and complete dispatcher logs remain under
+build/test-run/history/20260910-122716-49617/. Under-load validation is running
+separately; it must not overwrite the scope of this completed result.
+
+## Completed under-load validation
+
+All three commands exited 0: standard tests/flake.js (12 fresh kernel and
+18 fresh browser executions, each selected file repeated three times), focused
+Small kernel (3 fresh executions), and focused Small browser (3 fresh executions).
+All ran with the default 10 CPU load generators. Every selected file was stable
+3/3; carried records in filtered summaries are not counted as fresh executions.
+Commands, exits and durations are in small-gucos-under-load.json; the complete
+ANSI-stripped repetition log is in small-gucos-under-load.txt. The ordinary
+shared heavy lock covered these sequential commands and was released at exit.
+
+Final reviewed source pins still match: Small compiler and editor mirror
+e003be360683a81fb4c3230a01e372e315fb622da22751bbe92365807744923c;
+C browser test ef311776dfbb8fbd1715bd69945be07cac95f518079c0e31cc5105beb40907eb.
+The earlier disk interruption and browser transport failure remain historical
+failures, not relabeled passes. No unrelated worktree or source was removed.

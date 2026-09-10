@@ -1,0 +1,453 @@
+{
+  "tool": "tests/run.js",
+  "node": "v25.8.2",
+  "elapsedMs": 3752868,
+  "runId": "20260910-122716-49617",
+  "host": {
+    "hostname": "mftmm.local",
+    "start": {
+      "t": "2026-09-10T12:27:16.665Z",
+      "load1": 2.83,
+      "totalGb": 16,
+      "measured": true,
+      "pressure": 1,
+      "memFreePct": 63,
+      "availBytes": 6531858432,
+      "availGb": 6.08,
+      "freeGb": 2.26,
+      "swapUsedGb": 1.86,
+      "compressorGb": 2.81
+    },
+    "end": {
+      "t": "2026-09-10T13:29:49.538Z",
+      "load1": 6.12,
+      "totalGb": 16,
+      "measured": true,
+      "pressure": 1,
+      "memFreePct": 67,
+      "availBytes": 7935426560,
+      "availGb": 7.39,
+      "freeGb": 3.37,
+      "swapUsedGb": 1.86,
+      "compressorGb": 2.7
+    }
+  },
+  "hostHealth": {
+    "level": "ok",
+    "reasons": []
+  },
+  "filter": null,
+  "tier": "diff",
+  "omitted": [
+    "netsurf-patch",
+    "disw",
+    "sourcemap"
+  ],
+  "suites": [
+    "todos",
+    "unit",
+    "host",
+    "blockfs",
+    "ast",
+    "extra",
+    "ext",
+    "projects",
+    "zlib",
+    "lua",
+    "freetype",
+    "libpng",
+    "libjpeg",
+    "cairo",
+    "micropython",
+    "micropython-upstream",
+    "sqlite",
+    "tcc",
+    "libc",
+    "fuzz",
+    "fakegit",
+    "kernel",
+    "sweep"
+  ],
+  "results": [
+    {
+      "suite": "todos",
+      "status": "pass",
+      "ms": 7312,
+      "exit": 0,
+      "host": {
+        "before": {
+          "t": "2026-09-10T12:27:16.670Z",
+          "load1": 2.83,
+          "totalGb": 16,
+          "measured": true,
+          "pressure": 1,
+          "memFreePct": 63,
+          "availBytes": 6529368064,
+          "availGb": 6.08,
+          "freeGb": 2.25,
+          "swapUsedGb": 1.86,
+          "compressorGb": 2.81
+        },
+        "after": {
+          "t": "2026-09-10T12:27:23.986Z",
+          "load1": 2.85,
+          "totalGb": 16,
+          "measured": true,
+          "pressure": 1,
+          "memFreePct": 63,
+          "availBytes": 6512574464,
+          "availGb": 6.07,
+          "freeGb": 2.2,
+          "swapUsedGb": 1.86,
+          "compressorGb": 2.81
+        }
+      }
+    },
+    {
+      "suite": "unit",
+      "status": "pass",
+      "ms": 16913,
+      "exit": 0,
+      "host": {
+        "before": {
+          "t": "2026-09-10T12:27:23.992Z",
+          "load1": 2.85,
+          "totalGb": 16,
+          "measured": true,
+          "pressure": 1,
+          "memFreePct": 63,
+          "availBytes": 6510608384,
+          "availGb": 6.06,
+          "freeGb": 2.19,
+          "swapUsedGb": 1.86,
+          "compressorGb": 2.81
+        },
+        "after": {
+          "t": "2026-09-10T12:27:40.910Z",
+          "load1": 9.38,
+          "totalGb": 16,
+          "measured": true,
+          "pressure": 1,
+          "memFreePct": 56,
+          "availBytes": 8399011840,
+          "availGb": 7.82,
+          "freeGb": 5.15,
+          "swapUsedGb": 1.86,
+          "compressorGb": 3.95
+        }
+      }
+    },
+    {
+      "suite": "host",
+      "status": "pass",
+      "ms": 281799,
+      "exit": 0,
+      "host": {
+        "before": {
+          "t": "2026-09-10T12:27:40.918Z",
+          "load1": 9.38,
+          "totalGb": 16,
+          "measured": true,
+          "pressure": 1,
+          "memFreePct": 56,
+          "availBytes": 8379006976,
+          "availGb": 7.8,
+          "freeGb": 5.12,
+          "swapUsedGb": 1.86,
+          "compressorGb": 3.95
+        },
+        "after": {
+          "t": "2026-09-10T12:32:22.721Z",
+          "load1": 5.02,
+          "totalGb": 16,
+          "measured": true,
+          "pressure": 1,
+          "memFreePct": 64,
+          "availBytes": 5633654784,
+          "availGb": 5.25,
+          "freeGb": 0.26,
+          "swapUsedGb": 1.86,
+          "compressorGb": 2.97
+        }
+      }
+    },
+    {
+      "suite": "blockfs",
+      "status": "pass",
+      "ms": 89212,
+      "exit": 0,
+      "artifact": "build/test-blockfs/summary.json",
+      "files": {
+        "filter": null,
+        "total": 15,
+        "selected": 15,
+        "executed": 15,
+        "resumed": 0,
+        "carried": 0,
+        "recorded": 15
+      },
+      "tallies": {
+        "passed": 15,
+        "failed": 0,
+        "skipped": 0
+      },
+      "host": {
+        "before": {
+          "t": "2026-09-10T12:32:22.729Z",
+          "load1": 5.02,
+          "totalGb": 16,
+          "measured": true,
+          "pressure": 1,
+          "memFreePct": 64,
+          "availBytes": 5635915776,
+          "availGb": 5.25,
+          "freeGb": 0.26,
+          "swapUsedGb": 1.86,
+          "compressorGb": 2.97
+        },
+        "after": {
+          "t": "2026-09-10T12:33:51.947Z",
+          "load1": 3.63,
+          "totalGb": 16,
+          "measured": true,
+          "pressure": 1,
+          "memFreePct": 65,
+          "availBytes": 8105099264,
+          "availGb": 7.55,
+          "freeGb": 4.93,
+          "swapUsedGb": 1.86,
+          "compressorGb": 2.81
+        }
+      }
+    },
+    {
+      "suite": "py[ast,extra,ext,projects,zlib,lua,freetype,libpng,libjpeg,cairo,micropython,micropython-upstream,sqlite,tcc,libc,fuzz,fakegit]",
+      "status": "pass",
+      "ms": 424057,
+      "exit": 0,
+      "artifact": "build/test-py/summary.json",
+      "tallies": {
+        "passed": 896,
+        "failed": 0,
+        "skipped": 111,
+        "categories": {
+          "ast": {
+            "passed": 6,
+            "failed": 0,
+            "skipped": 0
+          },
+          "extra": {
+            "passed": 14,
+            "failed": 0,
+            "skipped": 0
+          },
+          "ext": {
+            "passed": 1,
+            "failed": 0,
+            "skipped": 0
+          },
+          "projects": {
+            "passed": 29,
+            "failed": 0,
+            "skipped": 1
+          },
+          "zlib": {
+            "passed": 3,
+            "failed": 0,
+            "skipped": 0
+          },
+          "lua": {
+            "passed": 26,
+            "failed": 0,
+            "skipped": 7
+          },
+          "freetype": {
+            "passed": 1,
+            "failed": 0,
+            "skipped": 0
+          },
+          "libpng": {
+            "passed": 27,
+            "failed": 0,
+            "skipped": 0
+          },
+          "libjpeg": {
+            "passed": 13,
+            "failed": 0,
+            "skipped": 0
+          },
+          "cairo": {
+            "passed": 3,
+            "failed": 0,
+            "skipped": 0
+          },
+          "micropython": {
+            "passed": 10,
+            "failed": 0,
+            "skipped": 0
+          },
+          "micropython-upstream": {
+            "passed": 574,
+            "failed": 0,
+            "skipped": 65
+          },
+          "sqlite": {
+            "passed": 10,
+            "failed": 0,
+            "skipped": 0
+          },
+          "tcc": {
+            "passed": 8,
+            "failed": 0,
+            "skipped": 0
+          },
+          "libc": {
+            "passed": 38,
+            "failed": 0,
+            "skipped": 38
+          },
+          "fuzz": {
+            "passed": 106,
+            "failed": 0,
+            "skipped": 0
+          },
+          "fakegit": {
+            "passed": 27,
+            "failed": 0,
+            "skipped": 0
+          }
+        }
+      },
+      "skipBaseline": {
+        "checked": true,
+        "violations": []
+      },
+      "host": {
+        "before": {
+          "t": "2026-09-10T12:33:51.952Z",
+          "load1": 3.63,
+          "totalGb": 16,
+          "measured": true,
+          "pressure": 1,
+          "memFreePct": 65,
+          "availBytes": 8102805504,
+          "availGb": 7.55,
+          "freeGb": 4.93,
+          "swapUsedGb": 1.86,
+          "compressorGb": 2.81
+        },
+        "after": {
+          "t": "2026-09-10T12:40:56.014Z",
+          "load1": 4.07,
+          "totalGb": 16,
+          "measured": true,
+          "pressure": 1,
+          "memFreePct": 67,
+          "availBytes": 8045723648,
+          "availGb": 7.49,
+          "freeGb": 4.4,
+          "swapUsedGb": 1.86,
+          "compressorGb": 2.54
+        }
+      }
+    },
+    {
+      "suite": "kernel",
+      "status": "pass",
+      "ms": 1321537,
+      "exit": 0,
+      "artifact": "build/test-kernel/summary.json",
+      "files": {
+        "filter": null,
+        "total": 204,
+        "selected": 204,
+        "executed": 204,
+        "resumed": 0,
+        "carried": 0,
+        "recorded": 204
+      },
+      "tallies": {
+        "passed": 204,
+        "failed": 0,
+        "skipped": 0
+      },
+      "host": {
+        "before": {
+          "t": "2026-09-10T12:40:56.021Z",
+          "load1": 4.07,
+          "totalGb": 16,
+          "measured": true,
+          "pressure": 1,
+          "memFreePct": 67,
+          "availBytes": 8047460352,
+          "availGb": 7.49,
+          "freeGb": 4.4,
+          "swapUsedGb": 1.86,
+          "compressorGb": 2.54
+        },
+        "after": {
+          "t": "2026-09-10T13:02:57.563Z",
+          "load1": 3.48,
+          "totalGb": 16,
+          "measured": true,
+          "pressure": 1,
+          "memFreePct": 66,
+          "availBytes": 7342522368,
+          "availGb": 6.84,
+          "freeGb": 1.54,
+          "swapUsedGb": 1.86,
+          "compressorGb": 2.34
+        }
+      }
+    },
+    {
+      "suite": "sweep",
+      "status": "pass",
+      "ms": 1611953,
+      "exit": 0,
+      "artifact": "build/test-browser/summary.json",
+      "files": {
+        "filter": null,
+        "total": 72,
+        "selected": 72,
+        "executed": 72,
+        "resumed": 0,
+        "carried": 0,
+        "recorded": 72
+      },
+      "tallies": {
+        "passed": 72,
+        "failed": 0,
+        "skipped": 0
+      },
+      "host": {
+        "before": {
+          "t": "2026-09-10T13:02:57.569Z",
+          "load1": 3.48,
+          "totalGb": 16,
+          "measured": true,
+          "pressure": 1,
+          "memFreePct": 66,
+          "availBytes": 7345422336,
+          "availGb": 6.84,
+          "freeGb": 1.54,
+          "swapUsedGb": 1.86,
+          "compressorGb": 2.34
+        },
+        "after": {
+          "t": "2026-09-10T13:29:49.526Z",
+          "load1": 6.12,
+          "totalGb": 16,
+          "measured": true,
+          "pressure": 1,
+          "memFreePct": 67,
+          "availBytes": 7937835008,
+          "availGb": 7.39,
+          "freeGb": 3.37,
+          "swapUsedGb": 1.86,
+          "compressorGb": 2.7
+        }
+      }
+    }
+  ]
+}
