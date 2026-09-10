@@ -2,5 +2,5 @@
   "type": "lib",
   "includes": ["."],
   "srcRoots": {"foundation": "."},
-  "sources": ["NSObject.m", "NSAutoreleasePool.m"]
+  "sources": ["NSObject.m", "NSAutoreleasePool.m", "NSString.m", "NSException.m"]
 }

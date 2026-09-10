@@ -75,7 +75,9 @@ Size is 24 bytes, alignment 4. ASCII payload alignment is 1; UTF-16 alignment is
 2. Embedded NULs and supplementary-character surrogate pairs are preserved.
 The linker checks the provider's complete inherited physical layout against this
 shape. Matching this payload is a compiler/library seam, not GNUstep/libobjc2
-runtime binary compatibility. The small Foundation library now supplies NSObject and pools; real NSString/NSConstantString is the next authorized increment (#778). AppKit is outside this subset.
+runtime binary compatibility. The separate Foundation source library supplies NSObject, pools and a real
+NSString/NSConstantString provider; see `os/foundation/README.md` for its supported
+API and current integration status. AppKit is outside this subset.
 
 Primary contracts: [Clang GNUstep code generation](https://github.com/llvm/llvm-project/blob/main/clang/lib/CodeGen/CGObjCGNU.cpp),
 [GNUstep NSString ABI](https://github.com/gnustep/libs-base/blob/master/Headers/Foundation/NSString.h),
