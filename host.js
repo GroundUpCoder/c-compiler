@@ -11690,6 +11690,11 @@ const TRAP_FRAME_LIMIT = 64;
  * would be symbolicated against THIS module's tables and silently
  * mis-attributed. */
 const WASM_FRAME_RE = /wasm-function\[(\d+)\]:0x([0-9a-fA-F]+)/;
+// JavaScriptCore also reports `NAME@wasm-function[IDX]` with NO byte
+// offset. Recognize that complete frame separately so an absent/malformed
+// V8 offset cannot be mistaken for a known location. The index can resolve
+// a name, but neither it nor the neighboring JS caller locates the fault.
+const WASM_INDEX_FRAME_RE = /^\s*[^@\r\n]*@wasm-function\[(\d+)\]\s*$/;
 
 /* Decode the `name` section's function-name subsection (id 1) and the
  * `c.sourcemap` section into a lookup structure. Any malformed section is
@@ -11764,6 +11769,10 @@ function formatTrapReport(err, module, progName, kind) {
   for (let i = 0; i < lines.length; i++) {
     const m = WASM_FRAME_RE.exec(lines[i]);
     if (m) frames.push({ idx: +m[1], off: parseInt(m[2], 16) });
+    else {
+      const indexOnly = WASM_INDEX_FRAME_RE.exec(lines[i]);
+      if (indexOnly) frames.push({ idx: +indexOnly[1], off: null });
+    }
   }
   if (!frames.length) return null;
 
@@ -11774,13 +11783,18 @@ function formatTrapReport(err, module, progName, kind) {
   for (let i = 0; i < frames.length; i++) {
     const f = frames[i];
     const name = dbg.names.get(f.idx);
-    const loc = locateSourceLine(dbg, f.off);
+    const loc = f.off === null ? null : locateSourceLine(dbg, f.off);
     let head = '    #' + String(i) + '  ' + (name !== undefined ? name : 'wasm-function[' + f.idx + ']');
     if (loc) head += '  at ' + loc;
     out.push(head);
-    out.push('          [wasm-function[' + f.idx + '] +0x' + f.off.toString(16) + ']');
+    out.push('          [wasm-function[' + f.idx + ']' +
+      (f.off === null ? '' : ' +0x' + f.off.toString(16)) + ']');
   }
   out.push('  note:');
+  if (frames.some(f => f.off === null)) {
+    out.push('    - the engine omitted byte offsets for some frames; those frames');
+    out.push('      have no source location, even when debug information is present.');
+  }
   if (dbg.names.size === 0) {
     out.push('    - this binary carries no function names or source map.');
     out.push('      Rebuild with `cc -g` to get names and file:line here.');
