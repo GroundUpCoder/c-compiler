@@ -2,6 +2,25 @@
 
 const ENV_KEY = "c";
 
+// A native trap remains uncatchable by Wasm EH after crossing JS frames:
+// https://github.com/WebAssembly/spec/blob/main/proposals/exception-handling/Exceptions.md#traps
+// Use that engine mechanism to cancel suspended continuations, including C
+// catch-all. A JS-created RuntimeError is catchable and is NOT equivalent.
+let runtimeCancellationTrapFunction;
+function makeRuntimeCancellationTrap() {
+  if (!runtimeCancellationTrapFunction) {
+    // (module (func (export "trap") unreachable)) — no memory or imports.
+    const bytes = new Uint8Array([
+      0,97,115,109,1,0,0,0, 1,4,1,96,0,0, 3,2,1,0,
+      7,8,1,4,116,114,97,112,0,0, 10,5,1,3,0,0,11
+    ]);
+    runtimeCancellationTrapFunction =
+      new WebAssembly.Instance(new WebAssembly.Module(bytes)).exports.trap;
+  }
+  try { runtimeCancellationTrapFunction(); } catch (trap) { return trap; }
+}
+
+
 // 64-bit lseek marshalling. With off_t widened to `long long`, the lseek import
 // crosses the wasm boundary as i64: its offset argument arrives as a BigInt and
 // its result MUST be returned as a BigInt (a plain number throws at the boundary).
@@ -108,6 +127,12 @@ ByteQueue.prototype.read = function (dst, n) {
  * @returns {Object} Object with WASM imports keyed by ENV_KEY.
  */
 function createFileSystem({ fs, ctx }) {
+  // #782: a fatal timer callback must unwind suspended Wasm too. Keep the
+  // cancellation boundary outside the filesystem's errno-catching bodies.
+  const suspendImport = fn => new WebAssembly.Suspending(function (...args) {
+    const pending = fn.apply(this, args);
+    return ctx.awaitImport ? ctx.awaitImport(pending) : pending;
+  });
   const { readString, createVaReader, setErrno, setErrnoName, getMemory, writeOut, writeErr } = ctx;
 
   /* POSIX fd table: entries for fds 0/1/2 (stdin/stdout/stderr) */
@@ -457,7 +482,7 @@ function createFileSystem({ fs, ctx }) {
         try { fs.fdatasyncSync(fdTable[fd].nativeFd); return 0; }
         catch (e) { setErrno(e); return -1; }
       },
-      sleep: new WebAssembly.Suspending(async function (seconds) {
+      sleep: suspendImport(async function (seconds) {
         await new Promise(resolve => setTimeout(resolve, seconds * 1000));
         return 0;
       }),
@@ -883,11 +908,11 @@ function createFileSystem({ fs, ctx }) {
       // Ptys need a kernel (todos/0020); the CLI runtime has none.
       __openpty: function (m_ptr, s_ptr) { void m_ptr; void s_ptr; setErrnoName('ENOSYS'); return -1; },
       __ioctl_tiocswinsz: function (fd, rows, cols) { void fd; void rows; void cols; setErrnoName('ENOTTY'); return -1; },
-      usleep: new WebAssembly.Suspending(async function (usec) {
+      usleep: suspendImport(async function (usec) {
         await new Promise(resolve => setTimeout(resolve, usec / 1000));
         return 0;
       }),
-      __nanosleep: new WebAssembly.Suspending(async function (sec, nsec) {
+      __nanosleep: suspendImport(async function (sec, nsec) {
         // No floor (#146): POSIX nanosleep with a zero request returns
         // immediately, and the block-FS/kernel-park flavors agree. A 0 ms
         // timer still yields the macrotask queue, same as usleep(0) above.
@@ -895,7 +920,7 @@ function createFileSystem({ fs, ctx }) {
         await new Promise(resolve => setTimeout(resolve, ms));
         return 0;
       }),
-      __select_impl: new WebAssembly.Suspending(async function (nfds, readfds_ptr, writefds_ptr, exceptfds_ptr, timeout_sec, timeout_usec, has_timeout) {
+      __select_impl: suspendImport(async function (nfds, readfds_ptr, writefds_ptr, exceptfds_ptr, timeout_sec, timeout_usec, has_timeout) {
         ensureStdinListening();
         const mem = new DataView(getMemory().buffer);
         const FDS_WORDS = 2;
@@ -971,7 +996,7 @@ function createFileSystem({ fs, ctx }) {
   const origWrite = result[ENV_KEY].write;
   const origClose = result[ENV_KEY].close;
 
-  result[ENV_KEY].read = new WebAssembly.Suspending(async function (fd, buf_ptr, count) {
+  result[ENV_KEY].read = suspendImport(async function (fd, buf_ptr, count) {
     if (fd >= 0 && fd < fdTable.length && fdTable[fd] && fdTable[fd].type === 'pipe') {
       /* POSIX: a zero-length read returns 0 IMMEDIATELY — even on an empty
          pipe with a live writer. Entering the wait loop here parked the
@@ -8485,6 +8510,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     if (refused) {                 // exit already reported; just keep unwinding
       const again = new Error(summary);
       again.sdlRefusalExit = BLOCKING_PRESENT_EXIT;
+      if (ctx.noteHostControl) ctx.noteHostControl(again);
       throw again;
     }
     refused = true;
@@ -8503,6 +8529,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     try { if (typeof hooks.exit === 'function') hooks.exit(BLOCKING_PRESENT_EXIT); } catch (e) {}
     const err = new Error(summary + ' — see stderr');
     err.sdlRefusalExit = BLOCKING_PRESENT_EXIT;
+    if (ctx.noteHostControl) ctx.noteHostControl(err);
     throw err;
   };
   // #551: second main-live present = a blocking loop (the first is the
@@ -12981,6 +13008,49 @@ async function runModule({
   }
 
   function ExitStatus(code) { this.code = code; }
+  let hostControl = null;
+  // #782: timer callbacks belong to this invocation. Their failures must
+  // settle the runtime just like an entry/frame failure, including drain.
+  let rejectAsyncCompletion;
+  const asyncCompletion = new Promise((resolve, reject) => {
+    rejectAsyncCompletion = reject;
+  });
+  // A callback can fail while main is suspended, before its lifetime wait.
+  // The original promise remains rejected for that wait to observe.
+  asyncCompletion.catch(() => {});
+  const asyncTimers = new Set();
+  const suspendedImports = new Set();
+  let asyncStopped = false;
+  let asyncStopReason;
+  let asyncCancellationTrap;
+  function cancellationTrap() {
+    return asyncCancellationTrap || (asyncCancellationTrap = makeRuntimeCancellationTrap());
+  }
+  function terminationReason(error) {
+    return asyncCancellationTrap && error === asyncCancellationTrap ? asyncStopReason : error;
+  }
+  function stopAsyncCallbacks(reason) {
+    if (asyncStopped) return;
+    asyncStopped = true;
+    asyncStopReason = arguments.length ? reason : hostControl || new ExitStatus(0);
+    for (const timer of asyncTimers) clearTimeout(timer);
+    asyncTimers.clear();
+    for (const reject of suspendedImports) reject(cancellationTrap());
+    suspendedImports.clear();
+  }
+  let invocationTerminated = false;
+  function terminateInvocation(reason) {
+    if (invocationTerminated) return;
+    invocationTerminated = true;
+    hostControl = reason;
+    asyncStopReason = reason;
+    stopAsyncCallbacks(reason);
+    rejectAsyncCompletion(reason);
+  }
+  function failAsyncCallback(error) {
+    if (!asyncStopped) terminateInvocation(error);
+  }
+
 
   /* log(Γ(x)) for x >= 0.5 — Lanczos approximation, g=7, n=9. Hoisted out
      of the import object because wasm invokes imports with `this`
@@ -13019,7 +13089,8 @@ async function runModule({
   const imports = {
     [ENV_KEY]: {
       __exit: function (status) {
-        throw new ExitStatus(status);
+        terminateInvocation(new ExitStatus(status));
+        throw cancellationTrap();
       },
       // #760: diagnostic only. libc retains SIGABRT delivery/termination;
       // capturing here sees callers before the kernel tears the worker down.
@@ -13221,15 +13292,19 @@ async function runModule({
       },
       /* Emscripten compatibility stubs */
       __emscripten_async_call: function (funcPtr, argPtr, millis) {
-        const table = instance.exports.__indirect_function_table;
-        setTimeout(function () {
-          const fn = table.get(funcPtr);
-          if (typeof WebAssembly.promising === 'function') {
-            WebAssembly.promising(fn)(argPtr);
-          } else {
-            fn(argPtr);
+        if (asyncStopped) return;
+        const timer = setTimeout(async function () {
+          asyncTimers.delete(timer);
+          if (asyncStopped) return;
+          try {
+            const fn = instance.exports.__indirect_function_table.get(funcPtr);
+            if (hasJSPI) await WebAssembly.promising(fn)(argPtr);
+            else fn(argPtr);
+          } catch (error) {
+            failAsyncCallback(error);
           }
         }, Math.max(millis, 0));
+        asyncTimers.add(timer);
       },
       __emscripten_random: function () {
         return Math.random();
@@ -13260,6 +13335,19 @@ async function runModule({
     setErrnoName: setErrnoName,
     getMemory: function () { return instance.exports.memory; },
     getExports: function () { return instance.exports; },
+    noteHostControl: function (error) { hostControl = error; },
+    awaitImport: function (pending) {
+      if (asyncStopped) {
+        Promise.resolve(pending).catch(() => {});
+        return Promise.reject(cancellationTrap());
+      }
+      return new Promise((resolve, reject) => {
+        suspendedImports.add(reject);
+        Promise.resolve(pending).then(
+          value => { suspendedImports.delete(reject); resolve(value); },
+          error => { suspendedImports.delete(reject); reject(error); });
+      });
+    },
     getIndirectFunctionTable: function () { return instance.exports.__indirect_function_table; },
     writeOut: writeOut,
     writeErr: writeErr,
@@ -13629,6 +13717,7 @@ async function runModule({
           Math.round((Date.now() - ceilT0) / 1000) + 's elapsed, limit ' +
           Math.round(maxWallMs / 1000) + 's)');
         e.wallClockExceeded = true;
+        hostControl = e;
         throw e;
       }
     };
@@ -13746,7 +13835,19 @@ async function runModule({
     } catch (e2) { /* a diagnostic must never mask the fault it describes */ }
   };
 
+  let drained = false;
+  async function drainRuntime() {
+    if (drained) return;
+    drained = true;
+    // Once teardown begins, no timer may add work while drain is awaiting.
+    stopAsyncCallbacks();
+    if (ctx.gpuDrain) { try { await ctx.gpuDrain(); } catch (e) {} }
+  }
+  // Cover every terminal path, including a main failure after scheduling
+  // timers and NO_EXIT_RUNTIME termination before entering a frame loop.
+  try {
   let exitCode;
+  let entryExited = false;
   // #551: arm the blocking-loop present refusal for the span main() (or the
   // wasip1 _start) is on the stack — the surface backend refuses any
   // GPU-transport present issued inside it (see createSurfaceSDL).
@@ -13858,7 +13959,7 @@ async function runModule({
           });
         } catch (_) { /* ignore stdin attach failures */ }
       }
-      await new Promise(() => { /* await indefinitely */ });
+      await asyncCompletion;
     }
     if (sdl && sdl.getAnimationFrameFunc()) {
       // emscripten_set_main_loop semantics: main returned with a frame
@@ -13870,14 +13971,16 @@ async function runModule({
       // Dawn tier: settle pending GPU promises before the EXIT handshake —
       // the kernel terminates the worker on EXIT, and worker.terminate() with
       // pending Dawn events aborts the whole Node process (WM.md spike S3).
-      if (ctx.gpuDrain) { try { await ctx.gpuDrain(); } catch (e) {} }
+      await drainRuntime();
       instance.exports.exit(exitCode);
     } else if (instance.exports.__run_atexits) {
       instance.exports.__run_atexits();
     }
   } catch (e) {
+    e = terminationReason(e);
     if (e instanceof ExitStatus) {
       exitCode = e.code;
+      entryExited = true;
     } else if (e && e.sdlRefusalExit !== undefined) {
       // #551 blocking-loop refusal: the surface backend already wrote the
       // message to fd 2 and reported the exit to the kernel — unwind clean
@@ -13905,33 +14008,37 @@ async function runModule({
     if (sdl && typeof sdl.setMainLive === 'function') sdl.setMainLive(false);
   }
 
-  if (sdl && sdl.getAnimationFrameFunc()) {
+  if (!entryExited && sdl && sdl.getAnimationFrameFunc()) {
     const table = ctx.getIndirectFunctionTable();
     const raf = sdl.requestAnimationFrame;
     const FRAME_MS = 1000 / 60;
     let nextDue = 0;
     let sawFrameExit = false;   // an explicit exit() inside a frame outranks __sdl_app_result
     try {
-      await new Promise(function (resolve, reject) {
+      await Promise.race([new Promise(function (resolve, reject) {
         function scheduleFrame() {
+          if (asyncStopped) { resolve(); return; }
           const doFrame = async function () {
             // Every scheduled invocation owns its rejection, including a
             // scheduler failure while arming the next frame (#764).
             try {
+              if (asyncStopped) { resolve(); return; }
               const animFunc = sdl.getAnimationFrameFunc();
               if (!animFunc) { resolve(); return; }
               // Pull kernel input into the wasm queue before running the frame.
               if (sdl.drainInput) {
                 try { sdl.drainInput(); } catch (e) { /* exports gone mid-teardown */ }
               }
+              const callback = table.get(animFunc);
               if (hasJSPI) {
-                await WebAssembly.promising(table.get(animFunc))();
+                await WebAssembly.promising(callback)();
               } else {
-                table.get(animFunc)();
+                callback();
               }
               if (sdl.getAnimationFrameFunc()) scheduleFrame();
               else resolve();
             } catch (e) {
+              e = terminationReason(e);
               if (e instanceof ExitStatus) {
                 exitCode = e.code;
                 sawFrameExit = true;
@@ -13964,13 +14071,22 @@ async function runModule({
           }
         }
         scheduleFrame();
-      });
+      }), asyncCompletion]);
+    } catch (error) {
+      if (error instanceof ExitStatus) {
+        exitCode = error.code;
+        sawFrameExit = true;
+      } else {
+        reportTrap(error);
+        throw error;
+      }
     } finally {
+      stopAsyncCallbacks();
       // Drain before BOTH normal exit and rejection to the process worker.
       // The latter posts `crashed`, which terminates the worker just like
       // EXIT does. Pending Dawn work must not survive either handshake.
       // A drain failure must not replace the original wasm trap.
-      if (ctx.gpuDrain) { try { await ctx.gpuDrain(); } catch (e) {} }
+      await drainRuntime();
     }
     // The loop stopped (frame func cleared, or exit() unwound a frame): now
     // run the deferred C exit path — atexits, and under kernel.js the EXIT
@@ -13992,12 +14108,17 @@ async function runModule({
         instance.exports.__run_atexits();
       }
     } catch (e) {
+      e = terminationReason(e);
       if (e instanceof ExitStatus) exitCode = e.code;
       else throw e;
     }
   }
 
   return exitCode === undefined && typeof instance.exports.__small_free === 'function' ? 0 : exitCode;
+  } finally {
+    stopAsyncCallbacks();
+    await drainRuntime();
+  }
 }
 
 // @cc-strip-below — single-file emit boundary. compiler.js's emitters
