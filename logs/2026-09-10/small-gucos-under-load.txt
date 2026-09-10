@@ -75,8 +75,8 @@ evidence: 6/6 selected members have logs post-dating the run start
 browser os sweep: 18 passed, 0 failed, 66 carried from earlier run(s)  (236.9s)  [6/72 selected, 72/72 recorded]  summary: build/test-browser/summary.json
 
 ━━━ flake gate summary (3× each, under load) ━━━
-  ok   kernel  
-  ok   browser 
+  ok   kernel
+  ok   browser
 
   flake gate green  (515.7s)
 

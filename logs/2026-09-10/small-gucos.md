@@ -86,7 +86,7 @@ Small kernel (3 fresh executions), and focused Small browser (3 fresh executions
 All ran with the default 10 CPU load generators. Every selected file was stable
 3/3; carried records in filtered summaries are not counted as fresh executions.
 Commands, exits and durations are in small-gucos-under-load.json; the complete
-ANSI-stripped repetition log is in small-gucos-under-load.txt. The ordinary
+repetition log with ANSI escapes and trailing whitespace removed is in small-gucos-under-load.txt. The ordinary
 shared heavy lock covered these sequential commands and was released at exit.
 
 Final reviewed source pins still match: Small compiler and editor mirror
@@ -94,3 +94,11 @@ e003be360683a81fb4c3230a01e372e315fb622da22751bbe92365807744923c;
 C browser test ef311776dfbb8fbd1715bd69945be07cac95f518079c0e31cc5105beb40907eb.
 The earlier disk interruption and browser transport failure remain historical
 failures, not relabeled passes. No unrelated worktree or source was removed.
+
+Final independent evidence review in external Codex/Astra thread
+01a08ae9-2cb9-72d1-a1e1-99696cc0b5e3 approved the handoff. It verified the
+archived aggregate against the journal copy, the 23-suite mapper plan, fresh
+204/204 kernel and 72/72 browser counts, all 36 fresh under-load executions,
+and the source pins. It inspected evidence only and did not execute heavy tests.
+Unrelated untracked C files remain excluded. The Small GUCOS.md clarification
+documents the reviewed metadata fallback; it is not a compiler-source change.
