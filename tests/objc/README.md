@@ -83,11 +83,45 @@ Primary contracts: [Clang GNUstep code generation](https://github.com/llvm/llvm-
 [Apple load scheduling](https://github.com/apple-oss-distributions/objc4/blob/main/runtime/objc-loadmethod.mm),
 [Clang method substitutability](https://clang.llvm.org/doxygen/SemaDeclObjC_8cpp_source.html).
 
+## Language/runtime exceptions (#781)
+
+`@try`, source-ordered `@catch(Class *e)` / `@catch(id e)` / `@catch(...)`,
+`@finally`, `@throw object` and lexical bare `@throw;` use native Wasm EH.
+Typed matching follows runtime class ancestry; nil reaches id/all handlers.
+Catch variables are ordinary assignable locals; rethrow preserves the original
+exception identity even after assignment or nested handlers. C catch-all handlers
+also consume Objective-C records across translation units.
+
+Each fresh throw holds its object until handled, suppressed or replaced. Runtime
+records are heap-owned. Normal and exceptional finalization supports return,
+break, continue and outward goto; scope-entry goto/switch dispatch is rejected.
+Return expressions are evaluated once before cleanup. The compiler does not elide
+named aggregate return slots: compare such cases with Clang's no-elide mode;
+default Apple Clang may expose aliasing of a named local through its return slot.
+Pools drain on normal directed exits, and remain undrained on exception escape.
+
+Foreign Wasm/host exceptions reach catch-all only; exact rethrow identity is
+preserved. Host process exit bypasses user handlers/finalizers, and genuine Wasm
+traps are not language exceptions. A longjmp crossing an Objective-C exception
+scope terminates with a diagnostic; local setjmp/longjmp stays supported. Record
+allocation failure and uncaught export/startup/callback exceptions diagnose and
+terminate with status 134. Internal calls to exported functions still propagate
+to their callers. Async callback failures settle their owning runtime, cancel
+queued callbacks, and preserve exit status or the original host error/trap;
+`tests/host/test_async_lifecycle.js` covers both Node callback engine modes (#782).
+Real NSException/string APIs belong to Foundation (#778).
+
+Portable corpus: `exceptions.js`; Node entry: `tests/host/test_objc_exceptions.js`;
+Chromium entry: `exceptions-browser.mjs`; actual `/bin/cc` on each OS host:
+`test_objc_exceptions_e2e.js` / `os-objc-exceptions.mjs`. Run manifests under
+`build/objc781` pin source and preserve failed attempts. These entrypoints are
+validation mechanisms, not claims that a particular gate has run.
+
 ## Explicit boundaries
 
 Categories/extensions, properties/dot messaging, synthesis, fast enumeration,
 optional protocol requirements and runtime protocol objects are not implemented.
-Exceptions/@finally, synchronization, ARC, Blocks and Objective-C++ remain outside
+Synchronization, ARC, Blocks and Objective-C++ remain outside
 this compiler round. Packed classes, bitfield/incomplete/function ivars and
 objects passed by value refuse. Boxing and collection literals are absent.
 Undeclared selectors, missing declared method implementations and incompatible

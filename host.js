@@ -13092,6 +13092,11 @@ async function runModule({
         terminateInvocation(new ExitStatus(status));
         throw cancellationTrap();
       },
+      // Wasm catch_all_ref also sees host throws. Private process termination
+      // must bypass Objective-C handlers and finally bodies at every boundary.
+      __guc_objc_eh_guard: function () {
+        if (hostControl) throw hostControl;
+      },
       // #760: diagnostic only. libc retains SIGABRT delivery/termination;
       // capturing here sees callers before the kernel tears the worker down.
       __abort_report: function () {
@@ -13297,7 +13302,8 @@ async function runModule({
           asyncTimers.delete(timer);
           if (asyncStopped) return;
           try {
-            const fn = instance.exports.__indirect_function_table.get(funcPtr);
+            const fn = instance.exports['__guc_objc_callback_' + funcPtr] ||
+              instance.exports.__indirect_function_table.get(funcPtr);
             if (hasJSPI) await WebAssembly.promising(fn)(argPtr);
             else fn(argPtr);
           } catch (error) {
@@ -14029,7 +14035,7 @@ async function runModule({
               if (sdl.drainInput) {
                 try { sdl.drainInput(); } catch (e) { /* exports gone mid-teardown */ }
               }
-              const callback = table.get(animFunc);
+              const callback = instance.exports['__guc_objc_callback_' + animFunc] || table.get(animFunc);
               if (hasJSPI) {
                 await WebAssembly.promising(callback)();
               } else {

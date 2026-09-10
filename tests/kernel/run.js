@@ -54,6 +54,7 @@ const BOOT = { boot: true };
 const tests = [
   ['test_small_e2e.js', IMG], // Small sibling compiler, C process ABI and pipes
   ['test_foundation_e2e.js', IMG], // #777 installed Foundation source library
+  ['test_objc_exceptions_e2e.js', IMG], // #781 exceptions through actual /bin/cc
   ['test_objc_e2e.js', IMG], // #772 in-OS Objective-C build/run
 
   ['test_kernel.js', LIGHT],       // process-table semantics over the real SAB protocol

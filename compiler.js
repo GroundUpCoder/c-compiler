@@ -3401,6 +3401,15 @@ class RefExternType extends TypeInfo {
   _cloneForQualifier() { return new RefExternType(); }
 }
 
+// Compiler-internal EH identity. Never stored in C linear memory or exposed
+// as a source-language object pointer.
+class ExceptionRefType extends TypeInfo {
+  constructor() { super(0, 0, false); Object.seal(this); }
+  isRef() { return true; }
+  _toString() { return "<exception reference>"; }
+  _cloneForQualifier() { return new ExceptionRefType(); }
+}
+
 // `__eqref` — the GC-universe top type (eq lattice). Singleton.
 class EqRefType extends TypeInfo {
   constructor() { super(0, 0, true); Object.seal(this); }
@@ -3436,6 +3445,7 @@ const TDOUBLE  = new FloatingType("double",      8, 8);
 const TLDOUBLE = new FloatingType("long double", 8, 8);
 const TEXTERNREF = new ExternRefType();
 const TREFEXTERN = new RefExternType();
+const TEXNREF = new ExceptionRefType();
 const TEQREF = new EqRefType();
 const TAUTO = new AutoType();
 
@@ -3773,7 +3783,7 @@ return {
   GCStructHeapType, GCStructRefType, GCArrayType,
   ExternRefType, RefExternType, EqRefType,
   TUNKNOWN, TVOID, TBOOL, TCHAR, TSCHAR, TUCHAR, TSHORT, TUSHORT,
-  TINT, TUINT, TLONG, TULONG, TLLONG, TULLONG, TFLOAT, TDOUBLE, TLDOUBLE, TEXTERNREF, TREFEXTERN, TEQREF, TAUTO,
+  TINT, TUINT, TLONG, TULONG, TLLONG, TULLONG, TFLOAT, TDOUBLE, TLDOUBLE, TEXTERNREF, TREFEXTERN, TEXNREF, TEQREF, TAUTO,
   TDIVERGENT,
   arrayOf, functionType, getOrCreateTagType, createTagType,
   getOrCreateGCStructType, gcArrayOf, validateNoHeapInValueType,
@@ -6840,6 +6850,8 @@ function optimize(unit, options) {
   // linker would have nothing left to set `.definition` on.
   for (const [, decl] of unit.exportDirectives) enqueueFunc(decl);
   for (const fn of unit.startupFunctions) enqueueFunc(fn);
+  // Link-time mixed-language catches and export boundaries need these helpers.
+  for (const fn of unit.objc?.ehFunctions?.values() || []) enqueueFunc(fn);
   for (const v of unit.definedVariables) {
     if (v.storageClass !== Types.StorageClass.STATIC) enqueueVar(v);
   }
@@ -7963,7 +7975,7 @@ function hoistDeclarations(funcDef) {
       // them by DVar identity from outside the catch's lexical scope).
       // Hoist them alongside the rest of the locals.
       for (const cc of stmt.catches) {
-        for (const bv of (cc.bindingVars || [])) {
+        for (const bv of [...(cc.bindingVars || []), ...(cc.exnVar ? [cc.exnVar] : [])]) {
           uniquify(bv);
           hoisted.push(bv);
         }
@@ -8248,6 +8260,7 @@ function buildSegments(body, tryCtx) {
         return {
           tag: cc.tag,
           userBindingVars: cc.bindingVars || [],
+          exnVar: cc.exnVar || null,
           entrySegId: allocId(),
         };
       });
@@ -8343,6 +8356,8 @@ function findDispatchEntry(regionId, tag, regions) {
 // an exception no active region handles propagates with tag and payload
 // intact.
 function makeDispatcherCatch(tag, tryCtx, loc, handlerVar, setState) {
+  const exnVar = new AST.DVar(loc, '__irreducible_exnref', Types.TEXNREF, Types.StorageClass.NONE, null);
+  exnVar.definition = exnVar;
   const paramTypes = (tag && tag.paramTypes) || [];
   const tempBindings = paramTypes.map((t, idx) => {
     const dv = new AST.DVar(loc,
@@ -8361,6 +8376,10 @@ function makeDispatcherCatch(tag, tryCtx, loc, handlerVar, setState) {
     const entry = findDispatchEntry(i, tag, tryCtx.regions);
     if (!entry) continue;
     const bodyStmts = [];
+    if (entry.exnVar) bodyStmts.push(new AST.SExpr(loc,
+      new AST.EBinary(loc, Types.TEXNREF, "ASSIGN",
+        new AST.EIdent(loc, Types.TEXNREF, entry.exnVar),
+        new AST.EIdent(loc, Types.TEXNREF, exnVar))));
     for (let j = 0; j < tempBindings.length && j < entry.userBindingVars.length; j++) {
       const userVar = entry.userBindingVars[j];
       const tmpVar = tempBindings[j];
@@ -8375,8 +8394,7 @@ function makeDispatcherCatch(tag, tryCtx, loc, handlerVar, setState) {
 
   // Build the if/else chain: each arm checks __irreducible_handler == R.
   // Final else: rethrow tag(tempBindings...).
-  const rethrowArgs = tempBindings.map(d => new AST.EIdent(loc, d.type, d));
-  let chain = new AST.SThrow(loc, tag, rethrowArgs);
+  let chain = new AST.SThrow(loc, null, [new AST.EIdent(loc, Types.TEXNREF, exnVar)]);
   for (let i = armStmts.length - 1; i >= 0; i--) {
     const arm = armStmts[i];
     const cond = new AST.EBinary(loc, Types.TINT, "EQ",
@@ -8389,6 +8407,7 @@ function makeDispatcherCatch(tag, tryCtx, loc, handlerVar, setState) {
     tag,
     bindings: tempBindingNames,
     bindingVars: tempBindings,
+    exnVar,
     // Codegen lowers this clause as catch_all_ref (capturing the
     // in-flight exception as an exnref) so the SThrow(null) rethrow in
     // the else arm can throw_ref it.
@@ -9158,7 +9177,7 @@ function dumpStmt(stmt, ctx, indent) {
       }
       break;
     case AST.SThrow:
-      ret += " " + stmt.tag.name;
+      ret += " " + (stmt.tag ? stmt.tag.name : "throw_ref");
       for (const arg of stmt.args) ret += dumpExpr(arg, ctx, indent + 1);
       break;
     case AST.SEmpty:
@@ -9679,7 +9698,7 @@ function printC(units, options) {
       return;
     }
     if (stmt instanceof AST.SThrow) {
-      w(ind + "__throw " + stmt.tag.name + "(" + stmt.args.map(a => emitExpr(a)).join(", ") + ");\n");
+      w(ind + "__throw " + (stmt.tag ? stmt.tag.name : "<throw_ref>") + "(" + stmt.args.map(a => emitExpr(a)).join(", ") + ");\n");
       return;
     }
     w(ind + "/* unknown stmt: " + stmt.constructor.name + " */\n");
@@ -9910,6 +9929,8 @@ function gcSectionsPass(units, options) {
   };
 
   // Seed cross-TU roots.
+  const objcRuntime = units.find(u => u.objc)?.objc;
+  if (objcRuntime) enqueueFunc(objcRuntime.ehFunctions.get('uncaught'));
   for (const unit of units) {
     for (const f of unit.definedFunctions) {
       if (f.name === "main" || f.name === "alloca") enqueueFunc(f);
@@ -9961,8 +9982,54 @@ function gcSectionsPass(units, options) {
 // Linker
 // ====================
 
+// A C catch-all may consume a record originating in another translation unit.
+// Extract its payload by rethrowing the exact reference into an internal typed
+// catch, then lower the one original handler through the common exit ladder.
+function lowerObjcLinkedCatches(units) {
+  const runtime = units.find(u => u.objc)?.objc;
+  if (!runtime) return;
+  const parser = Object.create(Parser.prototype);
+  parser.objc = {...runtime, poolScopes:new WeakMap(), ehScopes:new WeakMap(), ehBarriers:new WeakSet()};
+  parser.anonCounter = 0;
+  parser.peek = () => null;
+  parser.error = (tok, message) => { throw new Error(message); };
+  const loc = Lexer.Loc.generated();
+  const ref = v => new AST.EIdent(loc,v.type,v);
+  const seq = a => new AST.SCompound(loc,a);
+  const call = (name,args) => new AST.SExpr(loc,parser.objcEHCall(name,args,loc));
+  for (const unit of units) for (const fn of [...unit.definedFunctions,...unit.staticFunctions]) {
+    let changed = false;
+    const rewrite = node => {
+      if (!(node instanceof AST.Stmt)) return node;
+      if (node instanceof AST.SFor) return new AST.SFor(node.loc,node.init,node.condition,node.increment,rewrite(node.body));
+      const children = node.children.map(rewrite);
+      node = children.some((c,i)=>c!==node.children[i]) ? node._withChildren(children) : node;
+      if (node instanceof AST.SCompound) for (const label of node.labels) label.enclosingBlock=node;
+      if (!(node instanceof AST.STryCatch)) return node;
+      return new AST.STryCatch(node.loc,node.tryBody,node.catches.map(cc => {
+        if (!cc.sourceCatchAll) return cc;
+        changed = true;
+        const record=parser.objcEHVar(Types.TUINT,loc,new AST.EInt(loc,Types.TUINT,0n));
+        const payload=parser.objcEHVar(Types.TUINT,loc), exn=parser.objcEHVar(Types.TEXNREF,loc);
+        const classify = new AST.STryCatch(loc,new AST.SThrow(loc,null,[ref(exn)]),[
+          {tag:runtime.exceptionTag,bindings:[payload.name],bindingVars:[payload],body:new AST.SExpr(loc,
+            new AST.EBinary(loc,Types.TUINT,'ASSIGN',ref(record),ref(payload)))},
+          {tag:null,bindings:[],body:new AST.SEmpty(loc)}
+        ]);
+        const handler=seq([cc.body]);
+        parser.objc.ehScopes.set(handler,{cleanup:call('drop',[ref(record)]),exceptional:true,simple:true,jumpRecord:record});
+        return {...cc,sourceCatchAll:false,exnVar:exn,body:seq([
+          call('guard',[]),new AST.SDecl(loc,[record]),classify,handler])};
+      }));
+    };
+    if (fn.body) fn.body=rewrite(fn.body);
+    if (changed) parser.objcLowerEHScopes(fn);
+  }
+}
+
 function linkTranslationUnits(units, compilerOptions) {
   const errors = [];
+  lowerObjcLinkedCatches(units);
   // runModule invokes the existing constructor export after binding memory and
   // imports, before main. Root every TU's eager initialization before GC/inlining.
   if (!units.some(u => u.filename === '<guc-objc-startup>')) {
@@ -10868,7 +10935,7 @@ class Parser {
   }
 
   objcInit(unit) {
-    this.objc = { unit, classes: new Map(), protocols: new Map(), selectors: new Map(), methods: new Map(), sends: [], helpers: [], literals: [], poolScopes: new WeakMap(), current: null };
+    this.objc = { unit, classes: new Map(), protocols: new Map(), selectors: new Map(), methods: new Map(), sends: [], helpers: [], literals: [], poolScopes: new WeakMap(), ehScopes: new WeakMap(), ehBarriers: new WeakSet(), catchStack: [], current: null };
     this.typeScope.set('id', new Types.ObjcObjectPointerType(Types.createTagType(Types.TagKind.STRUCT, '__guc_objc_object'),null,[],'manual',this.objc.protocols));
     this.objcGenerated(`
       typedef struct __guc_objc_selector *SEL;
@@ -11000,6 +11067,205 @@ class Parser {
     this.objc.constantType = this.tagScope.get('__guc_objc_constant_string');
     this.objc.poolDeclarations = ['__guc_objc_pool_push', '__guc_objc_pool_pop'].map(n => this.varScope.get(n));
     unit.declaredFunctions = unit.declaredFunctions.filter(f => !this.objc.poolDeclarations.includes(f));
+    const registry = this._exceptionTagRegistry;
+    let tag = registry && registry.get('__guc_objc_exception');
+    if (!tag) {
+      tag = new AST.DExceptionTag(Lexer.Loc.generated(), '__guc_objc_exception', [Types.TUINT]);
+      tag.definition = tag;
+      if (registry) registry.set(tag.name, tag);
+    }
+    this.objc.exceptionTag = tag;
+    this.parsedExceptionTags.push(tag); unit.exceptionTags.push(tag);
+    let jumpTag=registry && registry.get('__LongJump');
+    if(!jumpTag) {
+      jumpTag=new AST.DExceptionTag(Lexer.Loc.generated(),'__LongJump',[Types.TINT,Types.TINT]);
+      jumpTag.definition=jumpTag;if(registry) registry.set(jumpTag.name,jumpTag);
+    }
+    this.objc.longJumpTag=jumpTag;
+    this.parsedExceptionTags.push(jumpTag);unit.exceptionTags.push(jumpTag);
+    const retain = this.objcSelector('retain').symbol;
+    const release = this.objcSelector('release').symbol;
+    const initialize = this.objcSelector('initialize').symbol;
+    this.objcGenerated(`
+      struct __guc_objc_eh_record { id object; unsigned int refs; };
+      __import long write(int, const void *, long);
+      __import void __guc_objc_eh_guard(void);
+      __import void __exit(int);
+      static void __guc_objc_eh_longjmp(void) {
+        write(2,"longjmp crosses an Objective-C exception scope\\n",sizeof("longjmp crosses an Objective-C exception scope\\n")-1); __exit(134);
+      }
+      static void __guc_objc_eh_fatal(void) {
+        write(2,"Objective-C exception record allocation failed\\n",sizeof("Objective-C exception record allocation failed\\n")-1); __exit(134);
+      }
+      static unsigned int __guc_objc_eh_new(id object) {
+        struct __guc_objc_eh_record *r=calloc(1,sizeof *r);
+        if (!r) { __guc_objc_eh_fatal(); return 0; }
+        r->object=object; r->refs=1;
+        if (object) ((id (*)(id,SEL))__guc_objc_lookup(object,&${retain},0,&${initialize}))(object,&${retain});
+        return (unsigned int)r;
+      }
+      static void __guc_objc_eh_hold(unsigned int address) {
+        struct __guc_objc_eh_record *r=(struct __guc_objc_eh_record *)address;
+        if (r) { if(r->refs==0xffffffffU) abort(); ++r->refs; }
+      }
+      static void __guc_objc_eh_drop(unsigned int address) {
+        struct __guc_objc_eh_record *r=(struct __guc_objc_eh_record *)address;
+        if (!r || --r->refs) return;
+        id object=r->object; free(r);
+        if (object) ((void (*)(id,SEL))__guc_objc_lookup(object,&${release},0,&${initialize}))(object,&${release});
+      }
+      static void __guc_objc_eh_uncaught(unsigned int address) {
+        write(2,"uncaught Objective-C exception\\n",sizeof("uncaught Objective-C exception\\n")-1);
+        __guc_objc_eh_drop(address); __exit(134);
+      }
+      static id __guc_objc_eh_object(unsigned int address) {
+        return ((struct __guc_objc_eh_record *)address)->object;
+      }
+      static int __guc_objc_eh_match(unsigned int address,Class cls) {
+        id object=__guc_objc_eh_object(address);
+        Class actual=object ? *(Class *)object : 0;
+        while(actual) { if(actual==cls) return 1; actual=actual->parent; }
+        return 0;
+      }
+    `);
+    this.objc.ehFunctions = new Map(['new','hold','drop','object','match','fatal','longjmp','guard','uncaught'].map(
+      name => [name,this.varScope.stack[0].get('__guc_objc_eh_' + name)]));
+    // Retain is user-dispatchable. If it throws, discard the untransferred
+    // record and propagate the original exception without acquiring ownership.
+    const loc=Lexer.Loc.generated(), ref=v=>new AST.EIdent(loc,v.type,v);
+    const seq=a=>new AST.SCompound(loc,a);
+    const call=(name,args)=>new AST.SExpr(loc,this.objcEHCall(name,args,loc));
+    const fresh=this.objc.ehFunctions.get('new');
+    const record=fresh.body.statements.find(s=>s instanceof AST.SDecl && s.declarations.some(v=>v.name==='r')).declarations.find(v=>v.name==='r');
+    fresh.body=seq(fresh.body.statements.map(stmt=>{
+      if (!(stmt instanceof AST.SIf) || !(stmt.condition instanceof AST.EIdent) || stmt.condition.decl.name!=='object') return stmt;
+      const exn=this.objcEHVar(Types.TEXNREF,loc), free=this.varScope.stack[0].get('free');
+      return new AST.STryCatch(loc,stmt,[{tag:null,bindings:[],exnVar:exn,body:seq([
+        new AST.SExpr(loc,AST.makeCall(loc,new AST.EIdent(loc,free.type,free),[ref(record)])),
+        new AST.SThrow(loc,null,[ref(exn)])])}]);
+    }));
+    // Dispose a handler hold while retaining any pending completion. If custom
+    // release throws, its exception replaces the pending one, whose hold must
+    // also be consumed. Recursion represents actual successive user throws,
+    // not a compile-time expansion or a nonthrowing-release assumption.
+    const params=[Types.TUINT,Types.TUINT,Types.TEXNREF,Types.TINT].map(t=>this.objcEHVar(t,loc));
+    const finish=new AST.DFunc(loc,'__guc_objc_eh_finish',Types.functionType(Types.TVOID,params.map(v=>v.type),false,false),params,Types.StorageClass.STATIC,false,null);
+    finish.definition=finish;unit.staticFunctions.push(finish);this.objc.ehFunctions.set('finish',finish);
+    const [old,pending,exn,throwing]=params;
+    const next=this.objcEHVar(Types.TUINT,loc), nextExn=this.objcEHVar(Types.TEXNREF,loc);
+    const resume=(value)=>seq([call('finish',[ref(pending),value,ref(nextExn),new AST.EInt(loc,Types.TINT,1n)]),new AST.SReturn(loc,null)]);
+    finish.body=seq([new AST.STryCatch(loc,call('drop',[ref(old)]),[
+      this.objcEHJumpGuard(loc),
+      {tag:this.objc.exceptionTag,bindings:[next.name],bindingVars:[next],exnVar:nextExn,body:resume(ref(next))},
+      {tag:null,bindings:[],exnVar:nextExn,body:seq([call('guard',[]),resume(new AST.EInt(loc,Types.TUINT,0n))])}
+    ]),new AST.SIf(loc,ref(throwing),new AST.SThrow(loc,null,[ref(exn)]),null)]);
+    const uncaught=this.objc.ehFunctions.get('uncaught');
+    const exit=this.varScope.stack[0].get('__exit');
+    const terminate=new AST.SExpr(loc,AST.makeCall(loc,new AST.EIdent(loc,exit.type,exit),[new AST.EInt(loc,Types.TINT,134n)]));
+    uncaught.body=new AST.STryCatch(loc,uncaught.body,[
+      {tag:this.objc.exceptionTag,bindings:[next.name],bindingVars:[next],body:call('uncaught',[ref(next)])},
+      {tag:null,bindings:[],body:terminate}
+    ]);
+  }
+
+  objcEHVar(type, loc, init = null) {
+    const v = new AST.DVar(loc, '__guc_objc_eh_' + this.anonCounter++, type, Types.StorageClass.AUTO, init);
+    v.definition = v;
+    if (type.isAggregate()) v.allocClass = Types.AllocClass.MEMORY;
+    return v;
+  }
+
+  objcEHCall(name, args, loc) {
+    const f = this.objc.ehFunctions?.get(name) || this.varScope.stack[0].get('__guc_objc_eh_' + name);
+    return AST.makeCall(loc, new AST.EIdent(loc, f.type, f), args);
+  }
+
+  objcEHJumpGuard(loc) {
+    const vars=[this.objcEHVar(Types.TINT,loc),this.objcEHVar(Types.TINT,loc)];
+    return {tag:this.objc.longJumpTag,bindings:vars.map(v=>v.name),bindingVars:vars,
+      body:new AST.SExpr(loc,this.objcEHCall('longjmp',[],loc))};
+  }
+
+  objcParseTry(loc) {
+    this.objc.hasEH = true;
+    const ref = v => new AST.EIdent(loc, v.type, v);
+    const record = this.objcEHVar(Types.TUINT, loc);
+    const exn = this.objcEHVar(Types.TEXNREF, loc);
+    const tryBody = this.parseCompoundStatement();
+    this.objc.ehBarriers.add(tryBody);
+    const handlers = [];
+    while (this.matchText('@catch')) {
+      this.expect('(');
+      this.typeScope.push(); this.tagScope.push(); this.varScope.push();
+      let variable = null, cls = null, all = false;
+      if (this.matchText('...')) all = true;
+      else {
+        const spec = this.parseDeclSpecifiers();
+        if (spec.storageClass !== Types.StorageClass.NONE || spec.isInline) this.error(this.peek(), '@catch binding cannot have a storage class or function specifier');
+        const decl = this.parseDeclarator(spec.type);
+        const type = decl.type.removeQualifiers();
+        if (!(type instanceof Types.ObjcObjectPointerType)) this.error(this.peek(), '@catch requires an Objective-C object pointer');
+        if (!decl.name) this.error(this.peek(), '@catch requires a binding name');
+        variable = new AST.DVar(loc, decl.name, decl.type, Types.StorageClass.AUTO);
+        variable.definition = variable; this.varScope.set(decl.name, variable);
+        if (type.className) cls = this.objc.classes.get(type.className);
+      }
+      this.expect(')');
+      this.objc.catchStack.push({record,exn});
+      const body = this.parseCompoundStatement();
+      this.objc.catchStack.pop();
+      this.typeScope.pop(); this.tagScope.pop(); this.varScope.pop();
+      this.objc.ehBarriers.add(body);
+      handlers.push({variable,cls,all,body});
+    }
+    let finalizer = null;
+    if (this.matchText('@finally')) {
+      finalizer = this.parseCompoundStatement();
+      this.objc.ehBarriers.add(finalizer);
+    }
+    if (!handlers.length && !finalizer) this.error(this.peek(), '@try requires @catch or @finally');
+    for (let i=0;i<handlers.length-1;i++) if(handlers[i].all) this.error(this.peek(), '@catch(...) must be last');
+    const wrapHandler = h => {
+      const statements = [];
+      if (h.variable) {
+        h.variable.initExpr = new AST.ECast(loc,h.variable.type,h.variable.type,this.objcEHCall('object',[ref(record)],loc));
+        statements.push(new AST.SDecl(loc,[h.variable]));
+      }
+      statements.push(h.body);
+      const body = new AST.SCompound(loc,statements);
+      this.objc.ehScopes.set(body,{cleanup:new AST.SExpr(loc,this.objcEHCall('drop',[ref(record)],loc)),exceptional:true,simple:true});
+      return body;
+    };
+    const all=handlers.find(h=>h.all);
+    const allLabel=all && new AST.SLabel(loc,'__guc_objc_all_'+this.anonCounter++);
+    const endLabel=all && new AST.SLabel(loc,'__guc_objc_end_'+this.anonCounter++);
+    const jump=label=>{const g=new AST.SGoto(loc,label.name);g.target=label;label.hasGotos=true;return g;};
+    const assign=(v,e)=>new AST.SExpr(loc,new AST.EBinary(loc,v.type,'ASSIGN',ref(v),e));
+    let dispatch = all ? jump(allLabel) : new AST.SThrow(loc,null,[ref(exn)]);
+    for(let i=handlers.length-1;i>=0;i--) {
+      const h=handlers[i];if(h.all) continue;
+      const body=wrapHandler(h);
+      if(!h.cls) dispatch=body;
+      else {
+        const clsAddress=this.objcClassAddress(h.cls,false,loc);
+        dispatch=new AST.SIf(loc,this.objcEHCall('match',[ref(record),clsAddress],loc),body,dispatch);
+      }
+    }
+    const catches=[this.objcEHJumpGuard(loc)];
+    if(handlers.length) {
+      const incoming=this.objcEHVar(Types.TUINT,loc),incomingExn=this.objcEHVar(Types.TEXNREF,loc);
+      catches.push({tag:this.objc.exceptionTag,bindings:[incoming.name],bindingVars:[incoming],exnVar:incomingExn,
+        body:new AST.SCompound(loc,[assign(record,ref(incoming)),assign(exn,ref(incomingExn)),dispatch])});
+      if(all) catches.push({tag:null,bindings:[],bindingVars:[],exnVar:incomingExn,body:new AST.SCompound(loc,[
+        new AST.SExpr(loc,this.objcEHCall('guard',[],loc)),
+        assign(record,new AST.EInt(loc,Types.TUINT,0n)),assign(exn,ref(incomingExn)),jump(allLabel)])});
+    }
+    const statements=[new AST.SDecl(loc,[record,exn]),new AST.STryCatch(loc,tryBody,catches)];
+    if(all) statements.push(jump(endLabel),allLabel,wrapHandler(all),endLabel);
+    const body=new AST.SCompound(loc,statements,all?[allLabel,endLabel]:[]);
+    if(all) {allLabel.enclosingBlock=body;endLabel.enclosingBlock=body;}
+    if(finalizer) this.objc.ehScopes.set(body,{cleanup:finalizer,exceptional:true});
+    return body;
   }
 
   objcSelector(name) {
@@ -14007,6 +14273,7 @@ class Parser {
   // A synthetic loop would steal break/continue; an end-of-block call would
   // miss directed exits. No exception or longjmp unwinding is implied here.
   objcLowerPools(fn) {
+    if (this.objc.hasEH) { this.objcLowerEHScopes(fn); return; }
     const scopes = this.objc.poolScopes, labels = new Map();
     let hasPools = false;
     const collect = (node, stack, switchStack) => {
@@ -14088,6 +14355,130 @@ class Parser {
     fn.body = rewrite(fn.body, [], undefined, undefined);
   }
 
+  // One normal-exit ladder for pools, exception handlers and finalizers.
+  // Completion branches leave the protected try_table before cleanup runs.
+  objcLowerEHScopes(fn) {
+    const loc=fn.loc, O=this.objc, descriptors=new WeakMap(), labels=new Map(), returnTemps=[];
+    const ref=v=>new AST.EIdent(loc,v.type,v);
+    const int=n=>new AST.EInt(loc,Types.TINT,BigInt(n));
+    const seq=statements=>new AST.SCompound(loc,statements);
+    const assign=(v,e)=>new AST.SExpr(loc,new AST.EBinary(loc,v.type,'ASSIGN',ref(v),e));
+    const call=(name,args)=>new AST.SExpr(loc,this.objcEHCall(name,args,loc));
+    const poolCall=(name,args)=>{
+      const f=this.varScope.stack[0].get(name);
+      return AST.makeCall(loc,new AST.EIdent(loc,f.type,f),args);
+    };
+    const descriptor=node=>{
+      if(descriptors.has(node)) return descriptors.get(node);
+      const pool=O.poolScopes.get(node), eh=O.ehScopes.get(node);
+      let d=null;
+      if(pool) d={pool,cleanup:new AST.SExpr(loc,poolCall('__guc_objc_pool_pop',[ref(pool)])),exceptional:false,simple:true};
+      else if(eh) d={...eh};
+      else if(O.ehBarriers.has(node)) d={barrier:true};
+      if(d) descriptors.set(node,d);
+      return d;
+    };
+    const collect=(node,stack,switchStack)=>{
+      if(!(node instanceof AST.Stmt)) return;
+      const d=descriptor(node), outer=stack;
+      if(d) stack=[...stack,d];
+      if(node instanceof AST.SLabel) labels.set(node,stack);
+      if(node instanceof AST.SCase && switchStack &&
+        (stack.length!==switchStack.length || stack.some((s,i)=>s!==switchStack[i])))
+        this.error(this.peek(),'case dispatch cannot enter an Objective-C protected scope');
+      for(const c of node.children) collect(c,stack,node instanceof AST.SSwitch ? stack : switchStack);
+      if(d && d.cleanup && !d.simple) collect(d.cleanup,outer,switchStack);
+    };
+    collect(fn.body,[],null);
+    const jump=label=>{const g=new AST.SGoto(loc,label.name);g.target=label;label.hasGotos=true;return g;};
+    const capture=(body,record,exn,action,jumpRecord)=>{
+      const r=this.objcEHVar(Types.TUINT,loc), e=this.objcEHVar(Types.TEXNREF,loc);
+      const common=[assign(exn,ref(e)),assign(action,int(-1))];
+      const jumpGuard=this.objcEHJumpGuard(loc);
+      if(jumpRecord) {
+        jumpGuard.exnVar=this.objcEHVar(Types.TEXNREF,loc);
+        jumpGuard.body=new AST.SIf(loc,ref(jumpRecord),jumpGuard.body,new AST.SThrow(loc,null,[ref(jumpGuard.exnVar)]));
+      }
+      return new AST.STryCatch(loc,body,[
+        jumpGuard,
+        {tag:O.exceptionTag,bindings:[r.name],bindingVars:[r],exnVar:e,body:seq([assign(record,ref(r)),...common])},
+        {tag:null,bindings:[],bindingVars:[],exnVar:e,body:seq([call('guard',[]),assign(record,int(0)),...common])}
+      ]);
+    };
+    const route=(terminal,stack,depth)=>{
+      for(let i=stack.length-1;i>=depth;i--) {
+        const d=stack[i]; if(d.barrier) continue;
+        const id=d.routes.length+1; d.routes.push({terminal,depth});
+        return seq([assign(d.action,int(id)),jump(d.label)]);
+      }
+      return terminal;
+    };
+    const rewrite=(node,stack,breakDepth,continueDepth,skipOwn=false)=>{
+      if(!(node instanceof AST.Stmt)) return node;
+      const d=skipOwn ? null : descriptor(node);
+      if(d) {
+        if(d.barrier) return rewrite(node,[...stack,d],breakDepth,continueDepth,true);
+        d.action=this.objcEHVar(Types.TINT,loc,int(0)); d.routes=[];
+        d.label=new AST.SLabel(loc,'__guc_objc_cleanup_'+this.anonCounter++);
+        const r=this.objcEHVar(Types.TUINT,loc,int(0)), e=this.objcEHVar(Types.TEXNREF,loc);
+        let body=rewrite(node,[...stack,d],breakDepth,continueDepth,true);
+        const declarations=[d.action];
+        if(d.exceptional) { declarations.push(r,e);body=capture(body,r,e,d.action,d.jumpRecord); }
+        let cleanup=d.cleanup;
+        if(d.exceptional && !d.simple) {
+          // The pending exception is owned during finally. Normal completion
+          // transfers its hold back to propagation; overrides consume it.
+          const guarded=seq([cleanup,call('hold',[ref(r)])]);
+          descriptors.set(guarded,{cleanup:call('drop',[ref(r)]),exceptional:true,simple:true});
+          collect(guarded,stack,null);
+          cleanup=rewrite(guarded,stack,breakDepth,continueDepth);
+        } else if(d.exceptional && d.simple) {
+          cleanup=call('finish',[d.cleanup.expr.arguments[0],ref(r),ref(e),new AST.EBinary(loc,Types.TINT,'EQ',ref(d.action),int(-1))]);
+        } else if(!d.simple) cleanup=rewrite(cleanup,stack,breakDepth,continueDepth);
+        const statements=[new AST.SDecl(loc,declarations)];
+        if(d.pool) {d.pool.initExpr=poolCall('__guc_objc_pool_push',[]);statements.push(new AST.SDecl(loc,[d.pool]));}
+        statements.push(body,d.label,cleanup);
+        if(d.exceptional) statements.push(new AST.SIf(loc,
+          new AST.EBinary(loc,Types.TINT,'EQ',ref(d.action),int(-1)),new AST.SThrow(loc,null,[ref(e)]),null));
+        for(let i=0;i<d.routes.length;i++) {
+          const entry=d.routes[i];
+          statements.push(new AST.SIf(loc,new AST.EBinary(loc,Types.TINT,'EQ',ref(d.action),int(i+1)),route(entry.terminal,stack,entry.depth),null));
+        }
+        const result=new AST.SCompound(loc,statements,[d.label]);d.label.enclosingBlock=result;
+        return result;
+      }
+      if(node instanceof AST.SReturn) {
+        if(!stack.some(d=>!d.barrier)) return node;
+        let value=node.expr;const statements=[];
+        if(value) {
+          if(value.type.isVoid()) {statements.push(new AST.SExpr(loc,value));value=null;}
+          else {const v=this.objcEHVar(value.type,loc);returnTemps.push(v);statements.push(assign(v,value));value=ref(v);}
+        }
+        statements.push(route(new AST.SReturn(loc,value),stack,0));return seq(statements);
+      }
+      let depth;
+      if(node instanceof AST.SBreak) depth=breakDepth;
+      if(node instanceof AST.SContinue) depth=continueDepth;
+      if(node instanceof AST.SGoto && node.target) {
+        const target=labels.get(node.target)||[];let common=0;
+        while(common<stack.length && common<target.length && stack[common]===target[common]) common++;
+        if(common!==target.length) this.error(this.peek(),'goto cannot enter an Objective-C protected scope');
+        depth=common;
+      }
+      if(depth!==undefined) return route(node,stack,depth);
+      if(node instanceof AST.SFor) return new AST.SFor(node.loc,node.init,node.condition,node.increment,rewrite(node.body,stack,stack.length,stack.length));
+      if(node instanceof AST.SWhile) return new AST.SWhile(node.loc,node.condition,rewrite(node.body,stack,stack.length,stack.length));
+      if(node instanceof AST.SDoWhile) return new AST.SDoWhile(node.loc,rewrite(node.body,stack,stack.length,stack.length),node.condition);
+      if(node instanceof AST.SSwitch) return new AST.SSwitch(node.loc,node.expr,rewrite(node.body,stack,stack.length,continueDepth));
+      const children=node.children.map(n=>rewrite(n,stack,breakDepth,continueDepth));
+      const result=children.some((n,i)=>n!==node.children[i]) ? node._withChildren(children) : node;
+      if(result instanceof AST.SCompound) for(const label of result.labels) label.enclosingBlock=result;
+      return result;
+    };
+    const body=rewrite(fn.body,[],undefined,undefined);
+    fn.body=returnTemps.length ? seq([new AST.SDecl(loc,returnTemps),body]) : body;
+  }
+
   // --- Statement parsing ---
 
   parseStatement() {
@@ -14095,6 +14486,20 @@ class Parser {
   }
 
   _parseStatement(loc) {
+    if (this.objc && this.matchText('@try')) return this.objcParseTry(loc);
+    if (this.objc && this.matchText('@throw')) {
+      this.objc.hasEH = true;
+      if (this.matchText(';')) {
+        const binding=this.objc.catchStack[this.objc.catchStack.length-1];
+        if(!binding) this.error(this.peek(),'@throw rethrow requires a lexical @catch');
+        const ref=v=>new AST.EIdent(loc,v.type,v);
+        return new AST.SCompound(loc,[new AST.SExpr(loc,this.objcEHCall('hold',[ref(binding.record)],loc)),
+          new AST.SThrow(loc,null,[ref(binding.exn)])]);
+      }
+      const value=this.parseExpression(); this.expect(';');
+      if(!(value.type.removeQualifiers() instanceof Types.ObjcObjectPointerType) && value.type.removeQualifiers()!==this.objc.cls) this.error(this.peek(),'@throw requires an Objective-C object pointer');
+      return new AST.SThrow(loc,this.objc.exceptionTag,[this.objcEHCall('new',[AST.makeCast(loc,this.typeScope.get('id'),value)],loc)]);
+    }
     if (this.objc && this.matchText('@autoreleasepool')) {
       for (const f of this.objc.poolDeclarations)
         if (!this.objc.unit.declaredFunctions.includes(f)) this.objc.unit.declaredFunctions.push(f);
@@ -14357,7 +14762,7 @@ class Parser {
         if (this.atText("{")) {
           // catch_all
           const body = this.parseCompoundStatement();
-          catches.push({ tag: null, bindings: [], body });
+          catches.push({ tag: null, bindings: [], body, sourceCatchAll: true });
         } else {
           // __catch TagName(binding1, binding2) { ... }
           const tagName = this.expectKind(Lexer.TokenKind.IDENT).text;
@@ -15569,6 +15974,7 @@ function parseTokens(tokens, options) {
       if (parser.atKW(Lexer.Keyword.X_EXCEPTION)) {
         parser.advance();
         const tagName = parser.expectKind(Lexer.TokenKind.IDENT).text;
+        if (tagName.startsWith('__guc_objc_')) parser.error(parser.peek(-1), 'reserved Objective-C exception tag');
         parser.expect("(");
         const paramTypes = [];
         if (!parser.atText(")")) {
@@ -18602,6 +19008,7 @@ function isStructOrUnion(type) {
 
 function cToWasmType(type, wmod) {
   type = type.removeQualifiers();
+  if (type === Types.TEXNREF) return WT_EXNREF;
   if (type === Types.TEXTERNREF) return WT_EXTERNREF;
   if (type === Types.TREFEXTERN) return WT_REFEXTERN;
   if (type === Types.TEQREF) return WT_EQREF;
@@ -20836,6 +21243,12 @@ class CodeGenerator {
       case AST.SEmpty: break;
       case AST.SThrow: {
         if (!stmt.tag) {
+          if (stmt.args.length) {
+            this.emitExpr(stmt.args[0]);
+            this.body.throwRef();
+            this.body.unreachable();
+            break;
+          }
           // Tag-less rethrow, synthesized only by the irreducible
           // catch-all dispatcher: re-raise the exnref captured by the
           // enclosing catch_all_ref clause.
@@ -20864,7 +21277,11 @@ class CodeGenerator {
         const catchBlockDepths = [];
         for (let i = numCatches - 1; i >= 0; i--) {
           const cc = tc.catches[i];
-          if (cc.catchAllRethrow) this.body.block(WT_EXNREF);
+          if (cc.exnVar && cc.tag) {
+            const results = [...cc.tag.paramTypes.map(pt => cToWasmType(pt, this.wmod)), WT_EXNREF];
+            this.body.block({ tag: "typeidx", idx: this.wmod.addFunctionTypeId([], results) });
+          }
+          else if (cc.catchAllRethrow || cc.exnVar) this.body.block(WT_EXNREF);
           else if (!cc.tag || cc.tag.paramTypes.length === 0) this.body.block();
           else if (cc.tag.paramTypes.length === 1) this.body.block(cToWasmType(cc.tag.paramTypes[0], this.wmod));
           else {
@@ -20882,7 +21299,8 @@ class CodeGenerator {
         for (let i = 0; i < numCatches; i++) {
           const cc = tc.catches[i];
           const labelIdx = this.blockDepth - catchBlockDepths[i];
-          if (cc.catchAllRethrow) catches.push([0x03, 0, labelIdx]);       // catch_all_ref
+          if (cc.exnVar && cc.tag) catches.push([0x01, this.exceptionToWasmTagIdx.get(cc.tag), labelIdx]);
+          else if (cc.catchAllRethrow || cc.exnVar) catches.push([0x03, 0, labelIdx]); // catch_all_ref
           else if (!cc.tag) catches.push([0x02, 0, labelIdx]);             // catch_all
           else catches.push([0x00, this.exceptionToWasmTagIdx.get(cc.tag), labelIdx]);
         }
@@ -20896,12 +21314,13 @@ class CodeGenerator {
           const cc = tc.catches[i];
           this.pushLocalScope();
           let savedExnrefLocal;
-          if (cc.catchAllRethrow) {
+          if (cc.catchAllRethrow || cc.exnVar) {
             // catch_all_ref delivered the in-flight exception as an
             // exnref on the stack — but BEFORE the stack-pointer
             // restore below can run, so capture it first.
             const exnLocal = this.allocLocal(WT_EXNREF);
             this.body.localSet(exnLocal);
+            if (cc.exnVar) this.localVarToWasmLocalIdx.set(cc.exnVar, exnLocal);
             savedExnrefLocal = this._catchAllExnrefLocal;
             this._catchAllExnrefLocal = exnLocal;
           }
@@ -20918,7 +21337,7 @@ class CodeGenerator {
             for (let j = bindLocals.length - 1; j >= 0; j--) this.body.localSet(bindLocals[j]);
           }
           this.emitStmt(cc.body);
-          if (cc.catchAllRethrow) this._catchAllExnrefLocal = savedExnrefLocal;
+          if (cc.catchAllRethrow || cc.exnVar) this._catchAllExnrefLocal = savedExnrefLocal;
           this.popLocalScope();
           if (i + 1 < numCatches) this.body.br(this.blockDepth - endDepth);
         }
@@ -20933,6 +21352,7 @@ class CodeGenerator {
   // --- Type helpers ---
   getBinaryWasmType(type) {
     type = type.removeQualifiers();
+    if (type === Types.TEXNREF) return WT_EXNREF;
     if (type === Types.TEXTERNREF) return WT_EXTERNREF;
     if (type === Types.TREFEXTERN) return WT_REFEXTERN;
     if (type === Types.TEQREF) return WT_EQREF;
@@ -23115,6 +23535,44 @@ function generateCode(units, outputFile, options) {
       writeErr(`${err.filename}:${err.line}: error: ${err.message}\n`);
     }
     fatalExit(1);
+  }
+
+  // Only crossings from the host are uncaught boundaries. Internal direct and
+  // indirect C calls retain the original indices so callers can still catch.
+  // Forward the physical Wasm ABI verbatim (including vararg/aggregate ABI).
+  const objcRuntime = units.find(u => u.objc)?.objc;
+  if (objcRuntime) {
+    const fatal = objcRuntime.ehFunctions.get('uncaught');
+    const fatalIdx = cg.funcDefToWasmFuncIdx.get(fatal.definition || fatal);
+    const tagIdx = cg.exceptionToWasmTagIdx.get(objcRuntime.exceptionTag);
+    // Host callback entrypoints use the same guarded ABI while the C table
+    // retains its original function identities for internal call_indirect.
+    for (const index of wmod.addrTakenFuncs) wmod.addExport('__guc_objc_callback_' + (index+1),0,index);
+    const wrappers = new Map();
+    for (const entry of wmod.exports) if (entry.kind === 0) {
+      const target = entry.index;
+      if (!wrappers.has(target)) {
+        const targetDef = target < wmod.funcImports.length ? wmod.funcImports[target] : wmod.funcDefs[target-wmod.funcImports.length];
+        const type = wmod.typeDefs[targetDef.typeId];
+        const index = wmod.addFunctionDefinition(targetDef.typeId);
+        const def = wmod.funcDefs[index-wmod.funcImports.length];
+        const body = new WAST.WastBuilder();
+        const sp = type.params.length, record = sp+1;
+        def.locals = [{type:WT_I32,count:2}];
+        body.globalGet(cg.stackPointerGlobalIdx);body.localSet(sp);
+        body.block(WT_I32);
+        body.tryTable(WT_EMPTY,[[0x00,tagIdx,0]]);
+        for (let i=0;i<type.params.length;i++) body.localGet(i);
+        body.call(target);body.ret();body.end();body.unreachable();body.end();
+        body.localSet(record);
+        body.localGet(sp);body.globalSet(cg.stackPointerGlobalIdx);
+        body.localGet(record);body.call(fatalIdx);body.unreachable();
+        def.wast = body.nodes;
+        wrappers.set(target,index);
+        if (options.compilerOptions.emitNames) wmod.funcNames.push({idx:index,name:'__objc_boundary_'+entry.name});
+      }
+      entry.index=wrappers.get(target);
+    }
   }
 
   // Finalize memory
