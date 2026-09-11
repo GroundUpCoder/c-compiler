@@ -58,7 +58,7 @@ self.onmessage = function (e) {
   var roFs = wd.ro
     ? BLOCK_FS.createV4(new BLOCK_FS.SabByteStore(wd.ro.sab), { readonly: true })
     : null;
-  var rfs = new KERNEL.RemoteFS(client, roFs ? { roFs: roFs, roPrefix: wd.ro.prefix } : null);
+  var rfs = new KERNEL.RemoteFS(client, roFs ? { roFs: roFs, roPrefix: wd.ro.prefix, roDev: wd.ro.dev, roLeaf: wd.ro.leaf } : null);
   if (TR) {
     // (d) first output — toWasmEnv dispatches via `this.`, so wrapping the
     // instance method catches every fd-1/2 write (RemoteFS has no console

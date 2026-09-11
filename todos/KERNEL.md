@@ -1159,3 +1159,36 @@ The parent observes normal exit status 127 (the asynchronous posix_spawn
 failed-exec convention), not a fabricated SIGSEGV. A rejection after
 instantiation retains the runtime-crash path. No arbitrary module is retried:
 a wasm start section can have side effects before instantiation throws.
+
+### Mounted filesystem identity (#785)
+
+The MountFS owner assigns checked device IDs in 1..0xffffffff for its live
+mounted namespace. Raw private BlockFS/ProcFS metadata explicitly uses dev=0;
+MountFS copies successful stat/lstat results with the final resolved volume's
+dev, and fstat uses the opened fd's retained volume. Inodes and C/WASI layouts
+are unchanged. Filesystem-backed device opens retain their existing file OFD
+and inode; the backend fd's dev field remains rdev for device I/O.
+
+Array mount descriptors may supply an opaque non-null object volumeKey to bind
+independent readers of one live inode namespace. The embedder owns that claim;
+equal image bytes do not prove shared identity. Default keys are fs objects.
+Duplicate prefixes or exact reader objects, invalid tokens/prefixes, and ID
+exhaustion refuse before hooks are installed. IDs are not persistent across
+owners/reboots. getVolumeIdentity(prefix) requires an exact configured mount
+and returns an immutable {dev, readonly, leaf} descriptor. leaf is true only when no configured
+mount is below that prefix (including child mounts below /).
+
+Kernel derives roImage.dev from that readonly owner descriptor and forwards
+{prefix, sab, dev, leaf:true} to every Node/browser process specification. SAB-to-volume
+correspondence is trusted embedding input, not byte authentication. RemoteFS
+accepts roDev plus explicit trusted roLeaf:true and qualifies local stat/lstat/fstat; brokered results already
+carry owner identity. Missing optional owner metadata or missing roDev disables
+the entire local RO path. Missing leaf authority or any descendant mount also
+disables the whole path, preserving owner routing for names and symlink targets.
+Manual RemoteFS embedders must explicitly attest leaf coverage with roLeaf:true;
+false or absent coverage stays brokered. Non-boolean explicit coverage throws.
+Explicit invalid configuration throws TypeError;
+out-of-range mounted IDs throw RangeError. Supplied contradictory dev is refused.
+C/WASI adapters validate dev and ino as uint32 before writing any stat output;
+invalid backend metadata returns EIO. This is separate from native identity
+(#787) and anonymous resource identity (#788), retained in the liability register.

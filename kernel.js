@@ -2095,6 +2095,45 @@ Tty.prototype.setattr = function (actions, t) {
  * ============================================================ */
 var STATE_RUNNING = 'running', STATE_STOPPED = 'stopped', STATE_ZOMBIE = 'zombie';
 
+// #785: owner-issued mounted identity, not a caller/worker allocation.
+function checkedVolumeDev(dev) {
+  if (!Number.isInteger(dev)) throw new TypeError('filesystem identity: dev must be an integer');
+  if (dev < 1 || dev > 0xffffffff) throw new RangeError('filesystem identity: dev outside uint32 mounted range');
+  return dev;
+}
+function checkedRoPrefix(prefix) {
+  if (typeof prefix !== 'string' || prefix[0] !== '/' || prefix.indexOf('\0') !== -1 || roNormalize(prefix) !== prefix)
+    throw new TypeError('filesystem identity: RO prefix must be canonical and absolute');
+  return prefix;
+}
+function ownerRoImage(fs, image) {
+  if (image == null) return null;
+  if (typeof image !== 'object' || !(image.sab instanceof SharedArrayBuffer))
+    throw new TypeError('filesystem identity: RO image requires a SharedArrayBuffer');
+  var prefix = checkedRoPrefix(image.prefix);
+  var supplied = Object.prototype.hasOwnProperty.call(image, 'dev');
+  if (supplied) checkedVolumeDev(image.dev);
+  // Capability absence disables the WHOLE local read path. No guessed dev.
+  if (!fs || typeof fs.getVolumeIdentity !== 'function') {
+    if (supplied) throw new TypeError('filesystem identity: no owner for supplied RO dev');
+    return null;
+  }
+  var identity = fs.getVolumeIdentity(prefix);
+  if (!identity || !Object.prototype.hasOwnProperty.call(identity, 'dev')) {
+    if (supplied) throw new TypeError('filesystem identity: no owner for supplied RO dev');
+    return null;
+  }
+  var dev = checkedVolumeDev(identity.dev);
+  if (identity.readonly !== true) throw new TypeError('filesystem identity: RO mount must be readonly');
+  if (supplied && image.dev !== dev) throw new TypeError('filesystem identity: contradictory RO dev');
+  if (Object.prototype.hasOwnProperty.call(identity, 'leaf') && typeof identity.leaf !== 'boolean')
+    throw new TypeError('filesystem identity: owner leaf coverage must be boolean');
+  // Missing topology authority or any nested mount disables ALL local reads,
+  // including symlink targets and local ENOENT answers beneath the prefix.
+  if (identity.leaf !== true) return null;
+  return Object.freeze({ prefix: prefix, sab: image.sab, dev: dev, leaf: true });
+}
+
 function Kernel(opts) {
   if (!opts || typeof opts.createWorker !== 'function') {
     throw new Error('Kernel: a createWorker capability is required');
@@ -2178,8 +2217,7 @@ function Kernel(opts) {
   // readonly), so reads under the prefix never cross the RPC boundary —
   // immutable data serves itself (KERNEL.md single-writer rule). Brokered
   // only: standalone processes already own a private in-process fs.
-  this._roImage = (this._brokered && opts.roImage && opts.roImage.sab &&
-                   opts.roImage.prefix) ? opts.roImage : null;
+  this._roImage = ownerRoImage(this._fs, opts.roImage);
   // Kernel text service (todos/0275): the ksvc blob handle (os/ksvc.js
   // load()), PUBLIC — the browser compositor reads kernel.textService, the
   // headless composite blits through _blitLabel. OS embedders (kernel-worker,
@@ -3943,13 +3981,15 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       if (o4.kind === 'file') {
         r = fs.fstat(o4.bfsFd);
         this._respond(pcb, r === null ? eFs() : { st: r });
+      // L82 / #788: anonymous resources still share legacy (dev,ino)=(0,0).
+      // Explicit metadata keeps serializers strict; this does not repair identity.
       } else if (o4.kind === 'pipe') {
-        this._respond(pcb, { st: { ino: 0, mode: 0x1000 | 0o600, nlink: 1, size: this._pipeAvail(o4.pipe), atime: 0, mtime: 0, ctime: 0, rdev: 0 } });
+        this._respond(pcb, { st: { dev: 0, ino: 0, mode: 0x1000 | 0o600, nlink: 1, size: this._pipeAvail(o4.pipe), atime: 0, mtime: 0, ctime: 0, rdev: 0 } });
       } else if (o4.kind === 'socket') {
-        this._respond(pcb, { st: { ino: 0, mode: S_IFSOCK_MODE | 0o777, nlink: 1, size: o4.st === 'conn' ? o4.rx.buf.length : 0, atime: 0, mtime: 0, ctime: 0, rdev: 0 } });
+        this._respond(pcb, { st: { dev: 0, ino: 0, mode: S_IFSOCK_MODE | 0o777, nlink: 1, size: o4.st === 'conn' ? o4.rx.buf.length : 0, atime: 0, mtime: 0, ctime: 0, rdev: 0 } });
       } else {
         // Character device (tty / console / null).
-        this._respond(pcb, { st: { ino: 0, mode: 0x2000 | 0o666, nlink: 1, size: 0, atime: 0, mtime: 0, ctime: 0, rdev: 0 } });
+        this._respond(pcb, { st: { dev: 0, ino: 0, mode: 0x2000 | 0o666, nlink: 1, size: 0, atime: 0, mtime: 0, ctime: 0, rdev: 0 } });
       }
       return;
     }
@@ -8617,9 +8657,22 @@ function RemoteFS(client, opts) {
   this._pipes = new Map();      // fd -> ring views {i32,u8,cap,sab,end} (todos/0181)
   // The read-only fast path (todos/0180; header comment above).
   this._ro = null;
-  if (opts && opts.roFs && opts.roPrefix) {
+  var hasRoDev = opts && Object.prototype.hasOwnProperty.call(opts, 'roDev');
+  if (hasRoDev) {
+    checkedVolumeDev(opts.roDev);
+    checkedRoPrefix(opts.roPrefix);
+    if (!opts.roFs || opts.roFs._readonly !== true)
+      throw new TypeError('filesystem identity: local RO reader must be readonly');
+  }
+  var hasRoLeaf = opts && Object.prototype.hasOwnProperty.call(opts, 'roLeaf');
+  if (hasRoLeaf && typeof opts.roLeaf !== 'boolean')
+    throw new TypeError('filesystem identity: RO leaf coverage must be boolean');
+  // Manual embedders must attest that this prefix has no descendant mounts.
+  // Without that trusted owner assertion, use the broker for every operation.
+  if (hasRoDev && opts.roLeaf === true) {
     var roFs = opts.roFs, prefix = opts.roPrefix;
     var owns = function (full) {
+      if (prefix === '/') return full;
       if (full === prefix) return '/';
       if (full.lastIndexOf(prefix + '/', 0) === 0) return full.slice(prefix.length);
       return null;
@@ -8629,7 +8682,7 @@ function RemoteFS(client, opts) {
     // __mountEscape, which _roLocal turns into the brokered fallback.
     roFs._mountPrefix = prefix;
     roFs._mountOwns = owns;
-    this._ro = { fs: roFs, prefix: prefix, owns: owns,
+    this._ro = { fs: roFs, prefix: prefix, dev: opts.roDev, owns: owns,
                  fds: new Map() };   // localFd -> { path } (full-namespace)
   }
 }
@@ -8910,20 +8963,20 @@ RemoteFS.prototype.lseek = function (fd, offset, whence) {
 RemoteFS.prototype.stat = function (p) {
   var self = this;
   return this._roPath(p,
-    function (fs, rel) { return fs.stat(rel); },
+    function (fs, rel) { var st = fs.stat(rel); return st === null ? null : Object.assign({}, st, { dev: self._ro.dev }); },
     function () { var r = self._ok(self._c.call(OP.FS_STAT, { path: p })); return r && r.st; });
 };
 RemoteFS.prototype.lstat = function (p) {
   var self = this;
   return this._roPath(p,
-    function (fs, rel) { return fs.lstat(rel); },
+    function (fs, rel) { var st = fs.lstat(rel); return st === null ? null : Object.assign({}, st, { dev: self._ro.dev }); },
     function () { var r = self._ok(self._c.call(OP.FS_LSTAT, { path: p })); return r && r.st; });
 };
 RemoteFS.prototype.fstat = function (fd) {
   if (this._roFd(fd)) {
     var lr = this._ro.fs.fstat(fd - RO_FD_BASE);
     if (lr === null) return this._setErr(this._ro.fs._lastError || 'EIO');
-    return lr;
+    return Object.assign({}, lr, { dev: this._ro.dev });
   }
   var r = this._ok(this._c.call(OP.FS_FSTAT, { fd: fd })); return r && r.st;
 };
@@ -9275,7 +9328,7 @@ var BOOT_SOURCE = [
   "  var roFs = wd.ro",
   "    ? BLOCK_FS.createV4(new BLOCK_FS.SabByteStore(wd.ro.sab), { readonly: true })",
   "    : null;",
-  "  rfs = new K.RemoteFS(client, roFs ? { roFs: roFs, roPrefix: wd.ro.prefix } : null);",
+  "  rfs = new K.RemoteFS(client, roFs ? { roFs: roFs, roPrefix: wd.ro.prefix, roDev: wd.ro.dev, roLeaf: wd.ro.leaf } : null);",
   "  // SPSC pipe rings for inherited fds (todos/0181): fast ops gate on the",
   "  // ring's PR_MODE word, so registering a still-brokered ring is free.",
   "  (wd.pipeRings || []).forEach(function (p) { rfs.registerPipeRing(p.fd, p.end, p.sab); });",
@@ -9610,11 +9663,11 @@ ProcFS.prototype._genBytes = function (hit) {
 ProcFS.prototype._statObj = function (path, hit) {
   var now = Math.floor(Date.now() / 1000);
   if (hit.dir) {
-    return { ino: this._ino(path), mode: 0x4000 | 0o555, nlink: 2, size: 0,
+    return { dev: 0, ino: this._ino(path), mode: 0x4000 | 0o555, nlink: 2, size: 0,
       atime: now, mtime: now, ctime: now, rdev: 0 };
   }
   var bytes = this._genBytes(hit);
-  return { ino: this._ino(path), mode: 0x8000 | 0o444, nlink: 1,
+  return { dev: 0, ino: this._ino(path), mode: 0x8000 | 0o444, nlink: 1,
     size: bytes ? bytes.length : 0, atime: now, mtime: now, ctime: now, rdev: 0 };
 };
 
@@ -9754,7 +9807,7 @@ ProcFS.prototype.fstat = function (fd) {
   var e = this._fdEntry(fd);
   if (!e) return this._setErr('EBADF');
   var now = Math.floor(Date.now() / 1000);
-  return { ino: e.ino, mode: 0x8000 | 0o444, nlink: 1, size: e.buf.length,
+  return { dev: 0, ino: e.ino, mode: 0x8000 | 0o444, nlink: 1, size: e.buf.length,
     atime: now, mtime: now, ctime: now, rdev: 0 };
 };
 

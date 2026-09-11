@@ -69,7 +69,7 @@ const fake = {
 };
 function rpcCount() { return calls.length; }
 
-const rfs = new K.RemoteFS(fake, { roFs: roFs, roPrefix: '/usr' });
+const rfs = new K.RemoteFS(fake, { roFs: roFs, roPrefix: '/usr', roDev: 7, roLeaf: true });
 const BASE = K.RO_FD_BASE;
 
 /* ---- zero-RPC reads under the prefix ---- */

@@ -14,6 +14,7 @@ var { assertMemberRegistry } = require('../lib/suite-runner.js');
 require('../lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/host/run.js' });
 
 var tests = [
+  ['test_stat_identity.js', []], // #785: mounted identity, RO ownership, C/WASI metadata contract (pure Node)
   ['test_small.js', []], // optional Small sibling and shared process ABI
   ['test_foundation.js', []], // #777 real manual-ownership library
   ['test_foundation_arrays.js', []], // #779 owning arrays and fast enumeration
