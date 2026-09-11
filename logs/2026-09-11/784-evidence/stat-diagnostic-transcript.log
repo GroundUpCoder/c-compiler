@@ -1,0 +1,133 @@
+==nopython
+gucman: installing 4 default package(s)
+python: no python implementation is installed
+       install one:  gucman install cpython-clang
+RC=127
+==cut
+==baked
+python	cpython-clang
+==cut
+==argv
+a b
+--help
+-c --version -
+==cut
+==two
+/root
+still-echo
+==cut
+==status
+RC=3
+SIG=143
+==cut
+==missing
+foo: no foo implementation is installed
+       install one:  gucman install nosuchprog
+RC=127
+==cut
+==missing2
+foo: 'nosuchprog' is not installed
+       available: /bin/echo
+       switch with:  cmdalt set foo /bin/echo
+                     (or Control Panel > Default Programs)
+RC=127
+==cut
+==layers
+etc-layer
+/tmp
+etc-again
+==cut
+==shebang
+/root/script.sh tail-arg
+==cut
+==selfdispatch
+foo: 'foo' is the command dispatcher itself — refusing (that would be a fork bomb)
+       pick a real implementation:  cmdalt set foo <program>
+RC=127
+==cut
+==list
+bar          -> /bin/pwd
+foo          -> /bin/echo
+python       -> cpython-clang   (not installed)
+==cut
+==which
+/bin/echo
+==cut
+STAT_IDENTITY 0 0 0 68 0 68
+==shadowwhich
+python: no python implementation is installed
+       install one:  gucman install cpython-clang
+RC=1
+==cut
+==shadowset
+==cut
+==shadowlist
+bar          -> /bin/pwd
+foo          -> /bin/echo
+python       -> /bin/echo
+             available: /bin/echo
+==cut
+==shadowruns
+SHADOW-RAN
+==cut
+
+__http_status: transfer failed: Failed to parse URL from /packages/index.json (Invalid URL)
+gucman: /packages/index.json: connection failed: Failed to parse URL from /packages/index.json (Invalid URL)
+gucman: 4 default package(s) not installed (will retry next boot)
+cmdalt: note: '/bin/nosuchprog' is not installed yet
+hush: can't execute 'chmod': No such file or directory
+hush: can't execute 'chmod': No such file or directory
+gucman: installing 4 default package(s)
+==before
+python: no python implementation is installed
+       install one:  gucman install cpython-clang
+RC=127
+==cut
+INSTALL=0
+==claim
+python	/usr/local/bin/micropython
+==cut
+==noalias
+HAS-IMPL-LINK
+NO-PYTHON-LINK
+==cut
+==which
+/usr/local/bin/micropython
+==cut
+==run
+2
+ARGV=['/root/t.py', 'alpha', 'beta']
+RC=7
+==cut
+==shebang
+SHEBANG=['/root/s.py', 'one', 'two']
+==cut
+==switch
+switched
+back
+==cut
+REMOVE=0
+==after
+STORE=1
+python: no python implementation is installed
+       install one:  gucman install cpython-clang
+RC=127
+==cut
+==shadowctl
+/usr/bin/cmdalt
+==cut
+==shadowinstall
+gucman: downloading shadowpkg 1.0...
+gucman: 'shadowpkg' bin python would shadow the command dispatcher at /usr/bin/python — refusing (declare a `commands` claim instead)
+RC=1
+==cut
+==shadowresidue
+NO-PYTHON-LINK
+NO-DB-RECORD
+NO-OPT-RESIDUE
+==cut
+
+__http_status: transfer failed: Failed to parse URL from /packages/index.json (Invalid URL)
+gucman: /packages/index.json: connection failed: Failed to parse URL from /packages/index.json (Invalid URL)
+gucman: 4 default package(s) not installed (will retry next boot)
+hush: can't execute 'chmod': No such file or directory

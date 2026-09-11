@@ -1,0 +1,38 @@
+[
+  {
+    "mode": "baseline",
+    "run": 1,
+    "exit": 0,
+    "log": "/tmp/784-sedit-baseline-1.log"
+  },
+  {
+    "mode": "current",
+    "run": 1,
+    "exit": 0,
+    "log": "/tmp/784-sedit-current-1.log"
+  },
+  {
+    "mode": "baseline",
+    "run": 2,
+    "exit": 0,
+    "log": "/tmp/784-sedit-baseline-2.log"
+  },
+  {
+    "mode": "current",
+    "run": 2,
+    "exit": 0,
+    "log": "/tmp/784-sedit-current-2.log"
+  },
+  {
+    "mode": "baseline",
+    "run": 3,
+    "exit": 1,
+    "log": "/tmp/784-sedit-baseline-3.log"
+  },
+  {
+    "mode": "current",
+    "run": 3,
+    "exit": 0,
+    "log": "/tmp/784-sedit-current-3.log"
+  }
+]

@@ -1,0 +1,17 @@
+AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
++ actual - expected
+
+  [
+-   1,
+    2
+  ]
+
+    at run (/Users/jku/git/c-compiler-small-callbacks/tests/host/test_callback_capture.js:52:12)
+    at async /Users/jku/git/c-compiler-small-callbacks/tests/host/test_callback_capture.js:59:5 {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: [Array],
+  expected: [Array],
+  operator: 'deepStrictEqual',
+  diff: 'simple'
+}
